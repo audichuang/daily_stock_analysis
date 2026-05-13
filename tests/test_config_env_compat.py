@@ -547,6 +547,28 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
     @patch("src.config.setup_env")
     @patch("src.config.urllib.request.urlopen")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_stock_list_fetch_api_malformed_url_falls_back_to_local_stock_list(
+        self,
+        _mock_parse_yaml,
+        mock_urlopen,
+        _mock_setup_env,
+    ) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "STOCK_LIST": "000001,300750",
+                "STOCK_LIST_FETCH_API": "http://[::1",
+            },
+            clear=True,
+        ):
+            config = Config._load_from_env()
+
+        mock_urlopen.assert_not_called()
+        self.assertEqual(config.stock_list, ["000001", "300750"])
+
+    @patch("src.config.setup_env")
+    @patch("src.config.urllib.request.urlopen")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
     def test_stock_list_fetch_api_invalid_charset_falls_back_to_local_stock_list(
         self,
         _mock_parse_yaml,

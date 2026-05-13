@@ -285,7 +285,11 @@ def _fetch_stock_list_from_api(url: Optional[str], *, timeout_seconds: float = 5
     if not value:
         return []
 
-    parsed = urlparse(value)
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        logger.warning("STOCK_LIST_FETCH_API 不是有效的 HTTP(S) URL，已忽略")
+        return []
     scheme = (parsed.scheme or "").lower()
     if scheme not in {"http", "https"} or not parsed.netloc:
         logger.warning("STOCK_LIST_FETCH_API 不是有效的 HTTP(S) URL，已忽略")
