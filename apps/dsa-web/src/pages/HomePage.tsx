@@ -162,7 +162,7 @@ const HomePage: React.FC = () => {
   );
 
   const handleAskFollowUp = useCallback(() => {
-    if (selectedReport?.meta.id === undefined) {
+    if (selectedReport?.meta.id === undefined || selectedReport.meta.reportType === 'market_review') {
       return;
     }
 
@@ -596,7 +596,7 @@ const HomePage: React.FC = () => {
                   <Button
                     variant="home-action-ai"
                     size="sm"
-                    disabled={selectedReport.meta.id === undefined}
+                    disabled={selectedReport.meta.id === undefined || isMarketReviewHistoryReport}
                     onClick={handleAskFollowUp}
                   >
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

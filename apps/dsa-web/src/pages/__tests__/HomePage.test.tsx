@@ -519,7 +519,7 @@ describe('HomePage', () => {
     }));
   });
 
-  it('disables stock reanalysis for market review history reports', async () => {
+  it('disables stock reanalysis and follow-up for market review history reports', async () => {
     vi.mocked(historyApi.getList).mockResolvedValue({
       total: 1,
       page: 1,
@@ -536,11 +536,15 @@ describe('HomePage', () => {
 
     await screen.findByText('大盘复盘摘要');
     const reanalyzeButton = screen.getByRole('button', { name: '重新分析' });
+    const followUpButton = screen.getByRole('button', { name: '追问 AI' });
 
     expect(reanalyzeButton).toBeDisabled();
+    expect(followUpButton).toBeDisabled();
 
     fireEvent.click(reanalyzeButton);
+    fireEvent.click(followUpButton);
 
     expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 });
