@@ -89,7 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 新增 `STOCK_LIST_FETCH_API`，支持从 HTTP(S) 获取远程股票列表，并在失败或为空时回退到 `STOCK_LIST`。
 - [修复] `STOCK_LIST_FETCH_API` 在重定向前校验目标地址，阻断 loopback、link-local 与云元数据地址，同时保留可访问的内网目标。
 - [修复] `STOCK_LIST_FETCH_API` 远程拉取不复用 `HTTP_PROXY` / `HTTPS_PROXY`，确保元数据与私有网关目标不会被代理路径绕过验证。
-- [文档] 补充 Issue #786 在 Actions/自托管场景下的回归兼容边界：`STOCK_LIST_FETCH_API` 仅影响自选股加载，不会改变模型/provider/Base URL 与 LiteLLM 运行时清理语义；回滚方式为清空该变量后回退 STOCK_LIST，并按既有发布路径回退历史版本。
+- [文档] 补充 Issue #786 在 Actions/自托管场景下的回归兼容边界：`STOCK_LIST_FETCH_API` 仅影响自选股加载，不会改变模型/provider/Base URL 与 LiteLLM 运行时清理语义；回滚方式为清空该变量后回退 STOCK_LIST，并按既有发布路径回退历史版本（兼容验证见 `tests/test_config_env_compat.py`、`tests/test_system_config_service.py`）。
 
 ## [3.17.1] - 2026-05-16
 

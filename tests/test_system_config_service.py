@@ -1534,6 +1534,41 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             "deepseek/deepseek-v4-flash",
         )
 
+    def test_update_stock_list_fetch_settings_does_not_mutate_llm_runtime_configuration(self) -> None:
+        self._rewrite_env(
+            "STOCK_LIST=600519,000001",
+            "STOCK_LIST_FETCH_API=https://example.com/watchlist.json",
+            "LITELLM_MODEL=openai/gpt-4o-mini",
+            "AGENT_LITELLM_MODEL=openai/gpt-4o-mini",
+            "VISION_MODEL=openai/gpt-4v",
+            "LITELLM_FALLBACK_MODELS=openai/gpt-4o,openai/gpt-4o-mini",
+            "LLM_TEMPERATURE=0.42",
+            "OPENAI_BASE_URL=https://api.openai.com/v1",
+            "OPENAI_API_KEYS=sk-test-old-value",
+        )
+
+        response = self.service.update(
+            config_version=self.manager.get_config_version(),
+            items=[
+                {"key": "STOCK_LIST", "value": "600519,000001,000001"},
+                {"key": "STOCK_LIST_FETCH_API", "value": "https://mirror.example.com/watchlist.txt"},
+            ],
+            reload_now=False,
+        )
+
+        self.assertTrue(response["success"])
+        current_map = self.manager.read_config_map()
+        self.assertEqual(current_map["LITELLM_MODEL"], "openai/gpt-4o-mini")
+        self.assertEqual(current_map["AGENT_LITELLM_MODEL"], "openai/gpt-4o-mini")
+        self.assertEqual(current_map["VISION_MODEL"], "openai/gpt-4v")
+        self.assertEqual(current_map["LITELLM_FALLBACK_MODELS"], "openai/gpt-4o,openai/gpt-4o-mini")
+        self.assertEqual(current_map["LLM_TEMPERATURE"], "0.42")
+        self.assertEqual(current_map["OPENAI_BASE_URL"], "https://api.openai.com/v1")
+        self.assertEqual(current_map["OPENAI_API_KEYS"], "sk-test-old-value")
+
+        warnings = "\n".join(response["warnings"])
+        self.assertNotIn("检测到已同步清理失效的运行时模型引用", warnings)
+
     @patch("litellm.completion")
     def test_test_llm_channel_does_not_persist_normalized_kimi_temperature(self, mock_completion) -> None:
         self._rewrite_env("LLM_TEMPERATURE=0.42")
