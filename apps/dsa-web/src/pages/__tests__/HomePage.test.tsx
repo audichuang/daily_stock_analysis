@@ -489,6 +489,45 @@ describe('HomePage', () => {
     expect(screen.getByText('正在抓取最新行情')).toBeInTheDocument();
   });
 
+  it('loads report markdown only after opening the full report drawer', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 1,
+      page: 1,
+      limit: 20,
+      items: [historyItem],
+    });
+    vi.mocked(historyApi.getDetail).mockResolvedValue(historyReport);
+    const reportText = getReportText(normalizeReportLanguage(historyReport.meta.reportLanguage));
+    let resolveMarkdown = (markdown: string): void => {
+      void markdown;
+    };
+    vi.mocked(historyApi.getMarkdown).mockImplementation(() => new Promise<string>((resolve) => {
+      resolveMarkdown = (markdown) => {
+        resolve(markdown);
+      };
+    }));
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    expect(vi.mocked(historyApi.getMarkdown)).not.toHaveBeenCalled();
+    expect(await screen.findByText('趋势维持强势')).toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: reportText.fullReport }));
+
+    expect(await screen.findByText(reportText.loadingReport)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(vi.mocked(historyApi.getMarkdown)).toHaveBeenCalledWith(1);
+    });
+
+    resolveMarkdown('# Loaded report markdown content');
+    expect(await screen.findByText('Loaded report markdown content')).toBeInTheDocument();
+    expect(screen.queryByText(reportText.loadingReport)).not.toBeInTheDocument();
+  });
+
   it('triggers reanalyze for the current report even if the search input has other text', async () => {
     vi.mocked(historyApi.getList).mockResolvedValue({
       total: 1,

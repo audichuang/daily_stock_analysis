@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [改进] Web 前端优化首页首包预算：为 Vite 打包补充 vendor manualChunks 分桶（含 React、Router、动画、图表、Markdown 与图标依赖），并将主页完整报告 Markdown 抽屉改为点击才 lazy 加载。
 
 ## [3.18.0] - 2026-05-21
 

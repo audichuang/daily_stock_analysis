@@ -1,16 +1,16 @@
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BarChart3, Check, SlidersHorizontal } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getParsedApiError, type ParsedApiError } from '../api/error';
 import { analysisApi } from '../api/analysis';
 import { agentApi, type SkillInfo } from '../api/agent';
 import { systemConfigApi } from '../api/systemConfig';
-import { ApiErrorAlert, ConfirmDialog, Button, EmptyState, InlineAlert } from '../components/common';
+import { ApiErrorAlert, ConfirmDialog, Button, Drawer, EmptyState, InlineAlert } from '../components/common';
 import { DashboardStateBlock } from '../components/dashboard';
 import { StockAutocomplete } from '../components/StockAutocomplete';
 import { HistoryList } from '../components/history';
-import { ReportMarkdown, ReportSummary } from '../components/report';
+import { ReportSummary } from '../components/report/ReportSummary';
 import { TaskPanel } from '../components/tasks';
 import { useDashboardLifecycle, useHomeDashboardState } from '../hooks';
 import type { SetupStatusResponse } from '../types/systemConfig';
@@ -21,6 +21,28 @@ type MarketReviewNotice = {
   title: string;
   message: string;
 } | null;
+
+const LazyReportMarkdown = lazy(() => import('../components/report/ReportMarkdown').then(
+  (module) => ({ default: module.ReportMarkdown }),
+));
+
+const ReportMarkdownLoadingFallback: React.FC<{ onClose: () => void; loadingText: string }> = ({
+  onClose,
+  loadingText,
+}) => (
+  <Drawer
+    isOpen
+    onClose={onClose}
+    width="max-w-3xl"
+    zIndex={100}
+    backdropClassName="bg-background/56 backdrop-blur-[2px]"
+  >
+    <div className="flex flex-col items-center justify-center h-64">
+      <div className="home-spinner h-10 w-10 animate-spin border-[3px]" />
+      <p className="mt-4 text-secondary-text text-sm">{loadingText}</p>
+    </div>
+  </Drawer>
+);
 
 const HomePage: React.FC = () => {
   const navigate = useNavigate();
@@ -844,13 +866,19 @@ const HomePage: React.FC = () => {
       </div>
 
       {markdownDrawerOpen && selectedReport?.meta.id ? (
-        <ReportMarkdown
-          recordId={selectedReport.meta.id}
-          stockName={selectedReport.meta.stockName || ''}
-          stockCode={selectedReport.meta.stockCode}
-          reportLanguage={reportLanguage}
-          onClose={closeMarkdownDrawer}
-        />
+        <Suspense fallback={
+          <ReportMarkdownLoadingFallback onClose={closeMarkdownDrawer} loadingText={reportText.loadingReport}
+          />
+        }
+        >
+          <LazyReportMarkdown
+            recordId={selectedReport.meta.id}
+            stockName={selectedReport.meta.stockName || ''}
+            stockCode={selectedReport.meta.stockCode}
+            reportLanguage={reportLanguage}
+            onClose={closeMarkdownDrawer}
+          />
+        </Suspense>
       ) : null}
 
       <ConfirmDialog
