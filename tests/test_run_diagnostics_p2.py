@@ -10,6 +10,8 @@ import unittest
 from datetime import datetime
 from types import SimpleNamespace
 
+from fastapi import HTTPException
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from api.v1.endpoints.history import get_history_diagnostics
@@ -123,6 +125,14 @@ class _FakeHistoryDb:
         return self.record if query_id == "query-p2" else None
 
 
+class _FailingHistoryDb:
+    def get_analysis_history_by_id(self, record_id: int):
+        raise RuntimeError("database unavailable")
+
+    def get_latest_analysis_by_query_id(self, query_id: str):
+        raise RuntimeError("database unavailable")
+
+
 class RunDiagnosticsP2TestCase(unittest.TestCase):
     def test_summary_classifies_provider_fallback_as_degraded_and_copy_text_is_sanitized(self) -> None:
         summary = build_run_diagnostic_summary(
@@ -208,6 +218,24 @@ class RunDiagnosticsP2TestCase(unittest.TestCase):
         self.assertIsNotNone(summary)
         self.assertEqual(summary["status"], "unknown")
         self.assertIn("copy_text", summary)
+
+    def test_history_diagnostics_endpoint_surfaces_lookup_errors(self) -> None:
+        with self.assertRaises(HTTPException) as ctx:
+            get_history_diagnostics("1", db_manager=_FailingHistoryDb())
+
+        self.assertEqual(ctx.exception.status_code, 500)
+
+    def test_history_diagnostics_endpoint_surfaces_malformed_payloads(self) -> None:
+        record = _history_record(context_snapshot=None)
+        record.context_snapshot = "{invalid-json"
+        db = _FakeHistoryDb(record)
+
+        with self.assertRaises(ValueError):
+            HistoryService(db).resolve_and_get_diagnostics("1")
+        with self.assertRaises(HTTPException) as ctx:
+            get_history_diagnostics("1", db_manager=db)
+
+        self.assertEqual(ctx.exception.status_code, 500)
 
 
 if __name__ == "__main__":
