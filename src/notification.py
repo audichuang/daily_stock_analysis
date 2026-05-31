@@ -1311,8 +1311,7 @@ class NotificationService(
     def _chat_text(value: Any, max_len: Optional[int] = None) -> str:
         if value is None:
             return ""
-        text = " ".join(str(value).split()).strip()
-        text = text.replace("｜", "，").replace("|", "，")
+        text = str(value).strip()
         if not text or text.upper() == "N/A":
             return ""
         if max_len is not None and len(text) > max_len:
@@ -1353,112 +1352,6 @@ class NotificationService(
                 parts.append(f"{label}：{text}")
         return "，".join(parts)
 
-    @staticmethod
-    def _chat_format_number(value: Any, *, decimals: int = 2) -> str:
-        num = _safe_float(value)
-        if num is None:
-            return ""
-        return f"{num:.{decimals}f}"
-
-    def _chat_clean_point(self, value: Any) -> str:
-        text = self._chat_text(self._clean_sniper_value(value), 60)
-        if not text:
-            return ""
-        return text.replace("（", "(").replace("）", ")")
-
-    @staticmethod
-    def _chat_unique(values: List[str], *, limit: int = 3) -> List[str]:
-        seen = set()
-        unique: List[str] = []
-        for value in values:
-            item = str(value or "").strip()
-            if not item or item in seen:
-                continue
-            seen.add(item)
-            unique.append(item)
-            if len(unique) >= limit:
-                break
-        return unique
-
-    @staticmethod
-    def _chat_item_mentions_capital_flow(text: str) -> bool:
-        return any(token in text for token in ("资金", "主力", "净流入", "净流出"))
-
-    @staticmethod
-    def _chat_item_is_unavailable_capital_flow(text: str) -> bool:
-        if not NotificationService._chat_item_mentions_capital_flow(text):
-            return False
-        return any(
-            token in text
-            for token in ("缺失", "不可用", "暂无", "未启用", "不支持", "无法", "未纳入")
-        )
-
-    @staticmethod
-    def _chat_item_is_positive_capital_flow_claim(text: str) -> bool:
-        if not NotificationService._chat_item_mentions_capital_flow(text):
-            return False
-        if NotificationService._chat_item_is_unavailable_capital_flow(text):
-            return False
-        return any(
-            token in text
-            for token in ("流入", "回流", "回暖", "改善", "恢复", "配合", "确认", "转强")
-        )
-
-    def _chat_capital_flow_unavailable(self, result: AnalysisResult, texts: List[str]) -> bool:
-        ctx = getattr(result, "fundamental_context", None)
-        if isinstance(ctx, dict):
-            coverage = ctx.get("coverage") if isinstance(ctx.get("coverage"), dict) else {}
-            coverage_status = str(coverage.get("capital_flow") or "").lower()
-            if coverage_status in {"missing", "partial", "failed", "not_supported", "unavailable"}:
-                return True
-
-            block = ctx.get("capital_flow")
-            if isinstance(block, dict):
-                status = str(block.get("status") or "").strip().lower()
-                normalized_status = status.replace("-", "_").replace(" ", "_")
-                if normalized_status in {
-                    "not_supported",
-                    "unsupported",
-                    "failed",
-                    "error",
-                    "empty",
-                    "missing",
-                    "unavailable",
-                    "timeout",
-                }:
-                    return True
-                data = block.get("data") if isinstance(block.get("data"), dict) else block
-                stock_flow = data.get("stock_flow") if isinstance(data, dict) else None
-                if not isinstance(stock_flow, dict) or not stock_flow:
-                    return True
-
-        return any(self._chat_item_is_unavailable_capital_flow(text) for text in texts)
-
-    def _chat_filter_items(
-        self,
-        items: Any,
-        *,
-        max_len: int = 90,
-        limit: int = 3,
-        capital_flow_unavailable: bool = False,
-    ) -> List[str]:
-        if isinstance(items, str):
-            raw_items = [items]
-        elif isinstance(items, (list, tuple)):
-            raw_items = list(items)
-        else:
-            raw_items = []
-
-        values: List[str] = []
-        for item in raw_items:
-            text = self._chat_text(item, max_len)
-            if not text:
-                continue
-            if capital_flow_unavailable and self._chat_item_is_positive_capital_flow_claim(text):
-                continue
-            values.append(text)
-        return self._chat_unique(values, limit=limit)
-
     def _chat_related_boards(self, result: AnalysisResult, *, limit: int = 5) -> str:
         boards = self._get_fundamental_blocks(result).get("belong_boards") or []
         names: List[str] = []
@@ -1478,16 +1371,11 @@ class NotificationService(
         report_date: Optional[str] = None,
         platform: str = "generic",
     ) -> str:
-        """Generate a decision-first report for IM-style channels.
-
-        Chat notifications are optimized as trading decision cards: answer
-        "what to do, at which levels, and what invalidates it" first, then put
-        supporting data below the fold.
-        """
+        """Generate a full but chat-optimized report for IM-style channels."""
         if report_date is None:
             report_date = datetime.now().strftime('%Y-%m-%d')
         if not results:
-            return f"**决策报告 {report_date}**\n\n暂无分析结果"
+            return f"## {report_date} 决策报告\n\n暂无分析结果"
 
         report_language = self._get_report_language(results)
         labels = get_report_labels(report_language)
@@ -1497,37 +1385,26 @@ class NotificationService(
         hold_count = sum(1 for r in results if getattr(r, 'decision_type', '') in ('hold', ''))
         normalized_platform = (platform or "generic").lower()
         bullet = "•" if normalized_platform in {"feishu", "slack"} else "-"
-        score_total = "100"
-        generated_at = datetime.now().strftime('%Y-%m-%d %H:%M')
-        title = "决策仪表盘" if report_language == "zh" else "Decision Dashboard"
-        conclusion_title = "结论" if report_language == "zh" else "Decision"
-        action_title = "操作" if report_language == "zh" else "Action"
-        levels_title = "关键位" if report_language == "zh" else "Key Levels"
-        risk_title = "主要风险" if report_language == "zh" else "Main Risks"
-        evidence_title = "看多依据" if report_language == "zh" else "Evidence"
-        trigger_title = "观察触发" if report_language == "zh" else "Watch Triggers"
-        detail_title = "详情" if report_language == "zh" else "Details"
+        separator = "────────"
+        score_suffix = "分" if report_language == "zh" else " pts"
 
         lines = [
-            f"**{title} {report_date}**",
-            f"{labels['buy_label']} {buy_count}，{labels['watch_label']} {hold_count}，"
-            f"{labels['sell_label']} {sell_count}",
+            f"**🎯 {report_date} {labels['dashboard_title']}**",
+            f"{len(results)} {labels['stock_unit']}：{labels['buy_label']} {buy_count}，"
+            f"{labels['watch_label']} {hold_count}，{labels['sell_label']} {sell_count}",
             "",
+            "**📌 结论速览**" if report_language == "zh" else "**📌 Summary**",
         ]
-        if len(sorted_results) > 1:
+        for result in sorted_results:
+            _, signal_emoji, _ = self._get_signal_level(result)
+            stock_name = self._get_display_name(result, report_language)
             lines.append(
-                f"**{conclusion_title}速览**" if report_language == "zh" else f"**{conclusion_title} Summary**"
+                f"{bullet} {signal_emoji} **{stock_name}({result.code})**："
+                f"建议 {localize_operation_advice(result.operation_advice, report_language)}，"
+                f"评分 {result.sentiment_score}{score_suffix}，"
+                f"趋势 {localize_trend_prediction(result.trend_prediction, report_language)}"
             )
-            for result in sorted_results:
-                _, signal_emoji, _ = self._get_signal_level(result)
-                stock_name = self._get_display_name(result, report_language)
-                lines.append(
-                    f"{signal_emoji} **{stock_name} {result.code}**："
-                    f"{localize_operation_advice(result.operation_advice, report_language)}，"
-                    f"{result.sentiment_score}/{score_total}，"
-                    f"趋势 {localize_trend_prediction(result.trend_prediction, report_language)}"
-                )
-            lines.append("")
+        lines.append("")
 
         for result in sorted_results:
             _, signal_emoji, _ = self._get_signal_level(result)
@@ -1538,201 +1415,142 @@ class NotificationService(
             data_persp = dashboard.get('data_perspective', {}) if dashboard else {}
             battle = dashboard.get('battle_plan', {}) if dashboard else {}
 
+            one_sentence = self._chat_text(core.get('one_sentence') or result.analysis_summary, 140)
+            time_sense = self._chat_text(core.get('time_sensitivity') or labels['default_time_sensitivity'])
+            confidence = self._chat_text(localize_confidence_level(result.confidence_level, report_language))
+            lines.extend([
+                separator,
+                f"**{signal_emoji} {stock_name} ({result.code})**",
+                (
+                    f"建议：**{localize_operation_advice(result.operation_advice, report_language)}**"
+                    f"；评分：{result.sentiment_score}{score_suffix}"
+                    f"；趋势：{localize_trend_prediction(result.trend_prediction, report_language)}"
+                    + (f"；置信：{confidence}" if confidence else "")
+                ),
+            ])
+            if one_sentence:
+                lines.extend(["", f"**一句话**：{one_sentence}"])
+            if time_sense:
+                lines.append(f"**时效**：{time_sense}")
+            lines.append("")
+
             price_data = data_persp.get('price_position', {}) if data_persp else {}
             trend_data = data_persp.get('trend_status', {}) if data_persp else {}
             vol_data = data_persp.get('volume_analysis', {}) if data_persp else {}
             chip_data = data_persp.get('chip_structure', {}) if data_persp else {}
-            pos_advice = core.get('position_advice', {}) if core else {}
-            sniper = battle.get('sniper_points', {}) if battle else {}
-            position = battle.get('position_strategy', {}) if battle else {}
-
-            raw_texts = [
-                self._chat_text(core.get('one_sentence')),
-                self._chat_text(result.analysis_summary),
-                self._chat_text(intel.get('sentiment_summary')),
-                self._chat_text(intel.get('latest_news')),
-            ]
-            capital_flow_unavailable = self._chat_capital_flow_unavailable(result, raw_texts)
-            one_sentence = self._chat_text(core.get('one_sentence') or result.analysis_summary, 120)
-            if capital_flow_unavailable and self._chat_item_is_positive_capital_flow_claim(one_sentence):
-                one_sentence = (
-                    "资金流数据缺失，当前只按技术与量价信号观察。"
-                    if report_language == "zh"
-                    else "Capital flow is unavailable; treat this as a technical setup only."
-                )
-            time_sense = self._chat_text(core.get('time_sensitivity') or labels['default_time_sensitivity'], 40)
-            confidence = self._chat_text(localize_confidence_level(result.confidence_level, report_language))
-            trend_text = localize_trend_prediction(result.trend_prediction, report_language)
-            lines.extend([
-                f"**{signal_emoji} {stock_name} {result.code}**",
-                (
-                    f"{localize_operation_advice(result.operation_advice, report_language)}，"
-                    f"{result.sentiment_score}/{score_total}，趋势：{trend_text}"
-                    + (f"，置信：{confidence}" if confidence else "")
-                    + (f"，时效：{time_sense}" if time_sense else "")
-                ),
-                "",
-            ])
-            if one_sentence:
-                lines.extend([f"**{conclusion_title}**", one_sentence, ""])
-
-            no_position = self._chat_text(
-                pos_advice.get('no_position') or localize_operation_advice(result.operation_advice, report_language),
-                90,
-            )
-            has_position = self._chat_text(pos_advice.get('has_position'), 90)
-            suggested_position = self._chat_text(position.get('suggested_position'), 40)
-            risk_control = self._chat_text(position.get('risk_control'), 90)
-            if no_position or has_position or suggested_position or risk_control:
-                lines.append(f"**{action_title}**")
-                if no_position:
-                    label = "空仓" if report_language == "zh" else "No position"
-                    lines.append(f"{bullet} {label}：{no_position}")
-                if has_position:
-                    label = "持仓" if report_language == "zh" else "Holding"
-                    lines.append(f"{bullet} {label}：{has_position}")
-                elif suggested_position:
-                    label = "仓位" if report_language == "zh" else "Size"
-                    lines.append(f"{bullet} {label}：{suggested_position}")
-                if risk_control:
-                    label = "风控" if report_language == "zh" else "Risk control"
-                    lines.append(f"{bullet} {label}：{risk_control}")
-                lines.append("")
-
             current_price = (
                 price_data.get('current_price')
                 or getattr(result, 'current_price', None)
                 or (getattr(result, 'market_snapshot', None) or {}).get('price')
             )
-            stop_loss = self._chat_clean_point(sniper.get('stop_loss')) if sniper else ""
-            take_profit = self._chat_clean_point(sniper.get('take_profit')) if sniper else ""
-            ideal_buy = self._chat_clean_point(sniper.get('ideal_buy')) if sniper else ""
-            secondary_buy = self._chat_clean_point(sniper.get('secondary_buy')) if sniper else ""
-            level_parts = []
-            price_line = self._chat_format_number(current_price)
-            if price_line:
-                level_parts.append(f"现价：{price_line}" if report_language == "zh" else f"Price: {price_line}")
-            support_values = self._chat_unique([
-                self._chat_format_number(price_data.get('support_level')),
-                ideal_buy,
-                stop_loss,
-            ], limit=3)
-            resistance_values = self._chat_unique([
-                self._chat_format_number(price_data.get('resistance_level')),
-                take_profit,
-            ], limit=2)
-            if support_values:
-                label = "支撑" if report_language == "zh" else "Support"
-                level_parts.append(f"{label}：{' / '.join(support_values)}")
-            if resistance_values:
-                label = "压力" if report_language == "zh" else "Resistance"
-                level_parts.append(f"{label}：{' / '.join(resistance_values)}")
-            if secondary_buy:
-                label = "次优" if report_language == "zh" else "Secondary"
-                level_parts.append(f"{label}：{secondary_buy}")
-            if level_parts:
-                lines.append(f"**{levels_title}**")
-                for item in level_parts:
-                    lines.append(f"{bullet} {item}")
-                lines.append("")
-
-            risk_items = self._chat_filter_items(
-                intel.get('risk_alerts', []),
-                limit=3,
-                capital_flow_unavailable=capital_flow_unavailable,
-            )
-            if capital_flow_unavailable:
-                risk_items.insert(
-                    0,
-                    "资金流数据缺失" if report_language == "zh" else "Capital flow data unavailable",
-                )
-            ma_alignment = self._chat_text(trend_data.get('ma_alignment'), 40)
-            if report_language == "zh" and ma_alignment and ("空头" in ma_alignment or "未形成多头" in ma_alignment):
-                risk_items.append("均线未形成多头，MA20 仍可能压制")
-            risk_items = self._chat_unique(risk_items, limit=3)
-            if risk_items:
-                lines.append(f"**{risk_title}**")
-                for item in risk_items:
-                    lines.append(f"⚠️ {item}")
-                lines.append("")
-
-            evidence_items = self._chat_filter_items(
-                intel.get('positive_catalysts', []),
-                limit=3,
-                capital_flow_unavailable=capital_flow_unavailable,
-            )
-            volume_meaning = self._chat_text(vol_data.get('volume_meaning'), 70)
-            if volume_meaning and not (
-                capital_flow_unavailable and self._chat_item_is_positive_capital_flow_claim(volume_meaning)
-            ):
-                evidence_items.insert(0, volume_meaning)
-            evidence_items = self._chat_unique(evidence_items, limit=3)
-            if evidence_items:
-                lines.append(f"**{evidence_title}**")
-                for item in evidence_items:
-                    lines.append(f"✅ {item}")
-                lines.append("")
-
-            checklist = self._chat_filter_items(
-                battle.get('action_checklist', []) if battle else [],
-                limit=3,
-                capital_flow_unavailable=capital_flow_unavailable,
-            )
-            if checklist:
-                lines.append(f"**{trigger_title}**")
-                for idx, item in enumerate(checklist, start=1):
-                    lines.append(f"{idx}. {item}")
-                lines.append("")
-
-            detail_lines: List[str] = []
-            trend_detail = self._chat_metric_line([
-                ("均线", ma_alignment),
+            data_line = self._chat_metric_line([
+                ("现价", current_price),
+                ("MA5", price_data.get('ma5')),
+                ("MA20", price_data.get('ma20')),
+                ("支撑", price_data.get('support_level')),
+                ("压力", price_data.get('resistance_level')),
+            ])
+            trend_line = self._chat_metric_line([
+                ("均线", trend_data.get('ma_alignment')),
                 ("强度", f"{trend_data.get('trend_score')}/100" if trend_data.get('trend_score') is not None else ""),
                 ("量比", vol_data.get('volume_ratio')),
                 ("换手", f"{vol_data.get('turnover_rate')}%" if vol_data.get('turnover_rate') is not None else ""),
             ])
-            if trend_detail:
-                detail_lines.append(f"技术：{trend_detail}" if report_language == "zh" else f"Technical: {trend_detail}")
-            if chip_data:
-                if is_chip_structure_unavailable(chip_data):
-                    detail_lines.append(
-                        f"筹码：{get_chip_unavailable_reason(chip_data, report_language)}"
-                        if report_language == "zh"
-                        else f"Chips: {get_chip_unavailable_reason(chip_data, report_language)}"
-                    )
+            if data_line or trend_line:
+                lines.append("**📊 数据透视**")
+                if data_line:
+                    lines.append(f"{bullet} {data_line}")
+                if trend_line:
+                    lines.append(f"{bullet} {trend_line}")
+                volume_meaning = self._chat_text(vol_data.get('volume_meaning'), 100)
+                if volume_meaning:
+                    lines.append(f"{bullet} 量能解读：{volume_meaning}")
+                if chip_data:
+                    if is_chip_structure_unavailable(chip_data):
+                        lines.append(f"{bullet} 筹码：{get_chip_unavailable_reason(chip_data, report_language)}")
+                    else:
+                        chip_line = self._chat_metric_line([
+                            ("获利盘", chip_data.get('profit_ratio')),
+                            ("成本", chip_data.get('avg_cost')),
+                            ("集中度", chip_data.get('concentration')),
+                        ])
+                        if chip_line:
+                            lines.append(f"{bullet} 筹码：{chip_line}")
                 else:
-                    chip_line = self._chat_metric_line([
-                        ("获利盘", chip_data.get('profit_ratio')),
-                        ("成本", chip_data.get('avg_cost')),
-                        ("集中度", chip_data.get('concentration')),
-                    ])
-                    if chip_line:
-                        detail_lines.append(f"筹码：{chip_line}" if report_language == "zh" else f"Chips: {chip_line}")
-            sentiment = self._chat_text(intel.get('sentiment_summary'), 80)
-            if sentiment and not (
-                capital_flow_unavailable and self._chat_item_is_positive_capital_flow_claim(sentiment)
-            ):
-                detail_lines.append(f"情绪：{sentiment}" if report_language == "zh" else f"Sentiment: {sentiment}")
-            earnings = self._chat_text(intel.get('earnings_outlook'), 80)
-            if earnings:
-                detail_lines.append(f"业绩：{earnings}" if report_language == "zh" else f"Earnings: {earnings}")
-            latest_news = self._chat_text(intel.get('latest_news'), 90)
-            if latest_news and not (
-                capital_flow_unavailable and self._chat_item_is_positive_capital_flow_claim(latest_news)
-            ):
-                detail_lines.append(f"最新：{latest_news}" if report_language == "zh" else f"News: {latest_news}")
-            boards = self._chat_related_boards(result)
-            if boards:
-                detail_lines.append(f"板块：{boards}" if report_language == "zh" else f"Boards: {boards}")
-            if detail_lines:
-                lines.append(f"**{detail_title}**")
-                for item in detail_lines[:5]:
+                    chip_unavailable_reason = get_chip_unavailable_reason(data_persp, report_language)
+                    if chip_unavailable_reason:
+                        lines.append(f"{bullet} 筹码：{chip_unavailable_reason}")
+                lines.append("")
+
+            pos_advice = core.get('position_advice', {}) if core else {}
+            if pos_advice:
+                lines.append("**🧭 操作建议**")
+                no_position = self._chat_text(
+                    pos_advice.get('no_position') or localize_operation_advice(result.operation_advice, report_language),
+                    110,
+                )
+                has_position = self._chat_text(pos_advice.get('has_position'), 110)
+                if no_position:
+                    lines.append(f"{bullet} 空仓：{no_position}")
+                if has_position:
+                    lines.append(f"{bullet} 持仓：{has_position}")
+                lines.append("")
+
+            sniper = battle.get('sniper_points', {}) if battle else {}
+            point_items = [
+                ("理想买入", self._clean_sniper_value(sniper.get('ideal_buy')) if sniper else ""),
+                ("次优买入", self._clean_sniper_value(sniper.get('secondary_buy')) if sniper else ""),
+                ("止损", self._clean_sniper_value(sniper.get('stop_loss')) if sniper else ""),
+                ("目标", self._clean_sniper_value(sniper.get('take_profit')) if sniper else ""),
+            ]
+            point_lines = [f"{label}：{value}" for label, value in point_items if self._chat_text(value)]
+            if point_lines:
+                lines.append("**🎯 关键点位**")
+                for item in point_lines:
                     lines.append(f"{bullet} {item}")
                 lines.append("")
 
+            position = battle.get('position_strategy', {}) if battle else {}
+            position_line = self._chat_text(position.get('suggested_position'))
+            entry_plan = self._chat_text(position.get('entry_plan'), 110)
+            risk_control = self._chat_text(position.get('risk_control'), 110)
+            if position_line or entry_plan or risk_control:
+                lines.append("**💰 仓位与风控**")
+                if position_line:
+                    lines.append(f"{bullet} 仓位：{position_line}")
+                if entry_plan:
+                    lines.append(f"{bullet} 建仓：{entry_plan}")
+                if risk_control:
+                    lines.append(f"{bullet} 风控：{risk_control}")
+                lines.append("")
+
+            self._append_chat_bullets(lines, "🚨 风险", intel.get('risk_alerts', []), limit=3, bullet=bullet)
+            self._append_chat_bullets(lines, "✨ 机会", intel.get('positive_catalysts', []), limit=3, bullet=bullet)
+
+            sentiment = self._chat_text(intel.get('sentiment_summary'), 100)
+            earnings = self._chat_text(intel.get('earnings_outlook'), 100)
+            latest_news = self._chat_text(intel.get('latest_news'), 120)
+            if sentiment or earnings or latest_news:
+                lines.append("**📰 消息与基本面**")
+                if sentiment:
+                    lines.append(f"{bullet} 情绪：{sentiment}")
+                if earnings:
+                    lines.append(f"{bullet} 业绩：{earnings}")
+                if latest_news:
+                    lines.append(f"{bullet} 最新：{latest_news}")
+                lines.append("")
+
+            checklist = battle.get('action_checklist', []) if battle else []
+            self._append_chat_bullets(lines, "✅ 检查清单", checklist, limit=6, bullet=bullet)
+
+            boards = self._chat_related_boards(result)
+            if boards:
+                lines.extend(["**🧩 关联板块**", boards, ""])
+
         models = self._collect_models_used(results)
         lines.extend([
-            f"*{labels['generated_at_label']}：{generated_at}*",
+            separator,
+            f"*{labels['generated_at_label']}：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
         ])
         if models:
             lines.append(f"*{labels['analysis_model_label']}：{', '.join(models)}*")

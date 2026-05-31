@@ -137,6 +137,7 @@ class _FakeWechatNotifier:
         self._markdown_to_image_channels = {"wechat"}
         self._markdown_to_image_max_chars = 15000
         self.generate_dashboard_report = MagicMock(return_value="dashboard-report")
+        self.generate_wechat_dashboard = MagicMock(return_value="dashboard-report")
         self.generate_chat_report = MagicMock(return_value="chat-report")
         self.save_report_to_file = MagicMock(return_value="/tmp/report.md")
         self.is_available = MagicMock(return_value=True)
@@ -158,7 +159,7 @@ class _FakeWechatNotifier:
 
 
 class TestPipelineWechatOnlyImageRouting(unittest.TestCase):
-    def test_send_notifications_wechat_only_converts_full_report_for_image(self):
+    def test_send_notifications_wechat_only_converts_legacy_dashboard_for_image(self):
         pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
         pipeline.notifier = _FakeWechatNotifier()
         pipeline.config = SimpleNamespace(stock_email_groups=[])
@@ -168,7 +169,7 @@ class TestPipelineWechatOnlyImageRouting(unittest.TestCase):
             pipeline._send_notifications(results, ReportType.SIMPLE)
 
         mock_md2img.assert_called_once_with(
-            "chat-report", max_chars=pipeline.notifier._markdown_to_image_max_chars
+            "dashboard-report", max_chars=pipeline.notifier._markdown_to_image_max_chars
         )
         pipeline.notifier._send_wechat_image.assert_called_once()
         pipeline.notifier.send_to_wechat.assert_not_called()
@@ -185,7 +186,7 @@ class TestPipelineWechatOnlyImageRouting(unittest.TestCase):
             pipeline._send_notifications(results, ReportType.SIMPLE)
 
         pipeline.notifier._send_wechat_image.assert_not_called()
-        pipeline.notifier.send_to_wechat.assert_called_once_with("chat-report")
+        pipeline.notifier.send_to_wechat.assert_called_once_with("dashboard-report")
         self.assertTrue(
             any("企业微信 Markdown 转图片失败" in str(call.args[0]) for call in mock_warning.call_args_list)
         )
@@ -196,6 +197,7 @@ class _FakeRoutedNotifier:
         self._markdown_to_image_channels = set(image_channels or [])
         self._markdown_to_image_max_chars = 15000
         self.generate_dashboard_report = MagicMock(side_effect=self._generate_dashboard_report)
+        self.generate_wechat_dashboard = MagicMock(side_effect=self._generate_dashboard_report)
         self.generate_chat_report = MagicMock(return_value="chat-report")
         self.save_report_to_file = MagicMock(return_value="/tmp/report.md")
         self.is_available = MagicMock(return_value=True)
@@ -257,10 +259,8 @@ class TestPipelineReportRouteFiltering(unittest.TestCase):
                 NotificationChannel.GOTIFY,
             ],
         )
-        pipeline.notifier.send_to_telegram.assert_called_once_with("chat-report")
-        pipeline.notifier.generate_chat_report.assert_called_once_with(
-            results, platform="telegram"
-        )
+        pipeline.notifier.send_to_telegram.assert_called_once_with("report:000001")
+        pipeline.notifier.generate_chat_report.assert_not_called()
         pipeline.notifier.send_to_wechat.assert_not_called()
         pipeline.notifier.send_to_email.assert_not_called()
         pipeline.notifier.evaluate_noise_control.assert_called_once()
@@ -285,7 +285,7 @@ class TestPipelineReportRouteFiltering(unittest.TestCase):
         pipeline.notifier.send_to_email.assert_called_once_with("report:000001")
         pipeline.notifier.send_to_telegram.assert_not_called()
 
-    def test_telegram_image_route_converts_chat_report(self):
+    def test_telegram_image_route_converts_full_report(self):
         pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
         pipeline.notifier = _FakeRoutedNotifier(
             [NotificationChannel.TELEGRAM],
@@ -298,7 +298,7 @@ class TestPipelineReportRouteFiltering(unittest.TestCase):
             pipeline._send_notifications(results, ReportType.SIMPLE)
 
         mock_md2img.assert_called_once_with(
-            "chat-report", max_chars=pipeline.notifier._markdown_to_image_max_chars
+            "report:000001", max_chars=pipeline.notifier._markdown_to_image_max_chars
         )
         pipeline.notifier._send_telegram_photo.assert_called_once_with(b"png")
         pipeline.notifier.send_to_telegram.assert_not_called()
@@ -376,7 +376,7 @@ class TestPipelineReportRouteFiltering(unittest.TestCase):
 
         pipeline._send_notifications(results, ReportType.SIMPLE)
 
-        pipeline.notifier.send_to_telegram.assert_called_once_with("chat-report")
+        pipeline.notifier.send_to_telegram.assert_called_once_with("report:000001")
         pipeline.notifier.send_to_email.assert_called_once_with("report:000001")
         pipeline.notifier.record_noise_control.assert_called_once()
         pipeline.notifier.release_noise_control.assert_not_called()
@@ -391,7 +391,7 @@ class TestPipelineReportRouteFiltering(unittest.TestCase):
 
         pipeline._send_notifications(results, ReportType.SIMPLE)
 
-        pipeline.notifier.send_to_telegram.assert_called_once_with("chat-report")
+        pipeline.notifier.send_to_telegram.assert_called_once_with("report:000001")
         pipeline.notifier.send_to_email.assert_called_once_with("report:000001")
         pipeline.notifier.record_noise_control.assert_not_called()
         pipeline.notifier.release_noise_control.assert_called_once()

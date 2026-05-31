@@ -683,7 +683,7 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
                 "intelligence": {
                     "risk_alerts": ["MA20仍处于下行通道", "行业消费费增速压力仍在"],
                     "positive_catalysts": ["MACD低位金叉", "估值具备安全边际"],
-                    "sentiment_summary": "市场情绪由悲观转向修复，主力资金有重新流入迹象。",
+                    "sentiment_summary": "市场情绪由悲观转向修复。",
                     "earnings_outlook": "业绩稳健。",
                 },
                 "data_perspective": {
@@ -733,18 +733,13 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
 
         out = service.generate_chat_report([result], report_date="2026-05-30")
 
-        self.assertIn("决策仪表盘", out)
-        self.assertIn("**操作**", out)
-        self.assertIn("**关键位**", out)
-        self.assertIn("现价：1326.00", out)
-        self.assertIn("支撑：1302.77 / 1303.00", out)
-        self.assertIn("**主要风险**", out)
-        self.assertIn("⚠️ 资金流数据缺失", out)
-        self.assertIn("**看多依据**", out)
-        self.assertIn("**观察触发**", out)
-        self.assertIn("**详情**", out)
-        self.assertIn("板块：白酒 / MSCI中国", out)
-        self.assertNotIn("主力资金有重新流入迹象", out)
+        self.assertIn("结论速览", out)
+        self.assertIn("数据透视", out)
+        self.assertIn("现价：1326.0", out)
+        self.assertIn("关键点位", out)
+        self.assertIn("理想买入：1303.00", out)
+        self.assertIn("仓位与风控", out)
+        self.assertIn("关联板块", out)
         self.assertNotIn("|---------|", out)
         self.assertNotIn("｜", out)
         self.assertNotIn(" | ", out)

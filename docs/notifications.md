@@ -37,16 +37,16 @@
 
 ## 报告渲染与分片
 
-通知报告默认仍发送完整报告，不默认改成 summary-only，也不改变现有渠道路由、降噪或图片 opt-in 语义。#1311 的报告渲染优化只做渠道适配：保留核心分析字段，但在 IM 文本里优先呈现交易决策，而不是复刻完整研究报告的章节顺序。
+通知报告默认仍沿用现有发送入口和可见版式，不默认改成 summary-only，也不改变现有渠道路由、降噪或图片 opt-in 语义。#1311 当前只做技术底座：补齐渠道能力画像、保留 legacy text fallback，并改善长消息分片的边界处理。
 
-聚合股票报告在企业微信、飞书、Telegram 和 Slack 文本路径会先生成 IM 专用报告：同源使用完整 `AnalysisResult`，但按「结论 / 操作 / 关键位 / 风险 / 依据 / 观察触发 / 详情」排序，首屏先回答能不能买、怎么买、错了怎么走。IM 报告正文不使用 `|` / `｜` 做表格式分隔；企业微信和 Telegram 使用短横列表，飞书和 Slack 使用圆点列表，并按平台分别生成文本。资金流数据缺失时，IM 渲染会保留“资金流缺失”风险提示，并过滤“主力资金重新流入”等资金流正向描述，避免同一条推送内出现自相矛盾。邮件、自定义 Webhook、ntfy、Gotify 等渠道仍使用原完整 Markdown 报告；IM 报告生成异常时会自动回退原报告，不影响通知主流程。
+企业微信仍走既有仪表盘文本，飞书、Telegram、Slack 仍使用聚合 Markdown 报告作为默认文本来源；当前不会自动切换到“决策卡片”或其他新 IM 版式。未来如启用平台专用 renderer，应先提供显式开关、样式对比和真实推送截图，再替换默认输出。
 
-渠道能力画像由 `src/notification_capabilities.py` 维护，包含 Markdown 类型、单条长度限制、card/image/file/link 支持情况和默认投递策略。发送前结果可用 `PreparedMessage` 表达，但现有发送器仍保留文本 fallback。
+渠道能力画像由 `src/notification_capabilities.py` 维护，包含 Markdown 类型、单条长度限制、card/image/file/link 支持情况和默认投递策略。发送前结果可用 `PreparedMessage` 表达，但现有发送器仍保留文本 fallback。`CHANNEL_RENDERER_PRESETS` 仅记录企业微信、飞书、Telegram、钉钉、Slack 的未来 renderer 预设，所有 preset 默认 `enabled_by_default=False`，当前运行时不读取这些 preset 改变报告内容。
 
 当前已接入的报告格式化规则：
 
 - 飞书：继续使用 interactive card + `lark_md`，标题转加粗、引用和分隔线降级，pipe table 转移动端可读 key-value 行；长报告使用结构感知分片，避免切坏代码块、行内代码和链接。
-- 企业微信：保持现有 markdown/text payload，但默认发送完整报告；pipe table 转移动端可读 key-value 行，超长消息分片切换为结构感知分片。
+- 企业微信：保持现有 markdown/text payload 和既有仪表盘摘要入口；pipe table 转移动端可读 key-value 行，超长消息分片切换为结构感知分片。
 - Telegram：继续使用 Bot API 文本消息和 plain-text fallback，报告先转 Telegram 可接受的 Markdown，表格转 key-value 行，并按 UTF-16 code units 分片。
 - Slack：发送前转 mrkdwn，标准 Markdown 链接转 `<url|text>`，表格转 key-value 行，Block Kit section 拆分不切断 Markdown 边界。
 - Email：仍作为完整 HTML 高保真载体，不受 IM 渠道格式化策略降级。

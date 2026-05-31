@@ -21,10 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] Windows 安装器重试旧卸载器时对 `_?=` 安装目录参数加引号，修复旧版本安装在带空格路径时返回 2 导致自动更新失败。
 - [修复] Windows 桌面端自动更新传给 NSIS 的 `/D=` 目录参数在包含空格时自动加引号，避免安装位置注册表被截断。
 - [chore] 新增通知报告渠道能力画像、PreparedMessage 与结构感知 Markdown 分片基础设施，为 #1311 全渠道渲染适配打底。
-- [改进] 优化飞书、企业微信、Telegram、Slack 通知报告格式化和结构感知分片，默认发送完整报告并改善表格、链接、代码块在 IM 渠道的可读性。
-- [改进] 聚合股票报告为企业微信、飞书、Telegram、Slack 新增 IM 专用版式，保留完整信息但改为分块短行展示，避免聊天窗口继续显示大段表格和重复字段。
-- [改进] IM 专用报告按企业微信、飞书、Telegram、Slack 分渠道生成文本，去除 `|` / `｜` 表格式分隔，并避免飞书报告出现“引用：”前缀。
-- [改进] IM 专用报告改为交易决策卡片顺序，首屏优先展示结论、操作、关键位与风险，并在资金流缺失时过滤资金流正向描述。
+- [chore] 预置企业微信、飞书、Telegram、钉钉、Slack 平台 renderer 元数据，暂不改变默认推送报告入口和可见版式。
+- [改进] 加固飞书、企业微信、Telegram、Slack 长消息分片与 Markdown 兼容处理，减少切断代码块、链接和行内代码的风险。
 
 - [修复] 加固 LLM channel base_url 校验，避免解析差异导致 SSRF 绕过。
 - [修复] 修正 efinance ETF 日线 Eastmoney secid 路由，避免沪市 ETF 被按深市 quote id 查询导致日线为空。
