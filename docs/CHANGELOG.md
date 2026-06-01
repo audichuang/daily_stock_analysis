@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] Web 设置页不再把 `ALPHASIFT_ENABLED` 作为普通数据源配置项重复展示，该值仅作为“开启选股”按钮背后的持久化状态。
 - [改进] AlphaSift 关闭时隐藏 Web 左侧“选股”导航入口，避免误导未开启用户。
 - [修复] AlphaSift 默认安装来源固定到受信任 commit，避免自动安装随默认分支变化而漂移。
-- [修复] AlphaSift 默认安装来源改为锁定 commit 的受信任 GitHub 地址，自动安装接口在普通 Web 部署中要求管理员会话、本机 loopback 与桌面本地模式放行，并限制安装来源。
+- [修复] AlphaSift 默认安装来源改为锁定 commit 的受信任 GitHub 地址，自动安装接口不再要求管理员会话，并继续限制安装来源。
 - [修复] 修复 Web 开启 AlphaSift 时先安装后写配置导致默认关闭状态无法开启的问题。
 - [修复] AlphaSift 状态与安装接口不再返回 `install_spec` 明文，仅返回 `install_spec_is_default` 等非敏感状态字段。
 - [修复] AlphaSift 状态探测区分可选依赖缺失与非预期异常，异常场景记录 warning 并返回非敏感诊断信息。

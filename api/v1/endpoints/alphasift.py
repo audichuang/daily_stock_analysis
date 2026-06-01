@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import importlib
 import inspect
-import ipaddress
 import logging
 import math
 import os
@@ -15,12 +14,11 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from api.deps import get_config_dep
 from src.config import Config, DEFAULT_ALPHASIFT_INSTALL_SPEC
-from src.auth import COOKIE_NAME, is_auth_enabled, verify_session
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -75,50 +73,9 @@ def alphasift_strategies(config: Config = Depends(get_config_dep)) -> Dict[str, 
     }
 
 
-def _require_admin_session_for_install(request: Request) -> None:
-    if os.getenv("DSA_DESKTOP_MODE") == "true" or _is_local_alphasift_install_request(request):
-        return
-
-    if not is_auth_enabled():
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "alphasift_install_auth_required",
-                "message": "自动安装 AlphaSift 需要先开启 ADMIN_AUTH_ENABLED 并完成管理员登录。",
-            },
-        )
-
-    session = request.cookies.get(COOKIE_NAME, "")
-    if not verify_session(session):
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": "alphasift_install_unauthorized",
-                "message": "自动安装 AlphaSift 需要有效的管理员会话。",
-            },
-        )
-
-
-def _is_local_alphasift_install_request(request: Request) -> bool:
-    client_host = getattr(getattr(request, "client", None), "host", "") or ""
-    url_hostname = getattr(getattr(request, "url", None), "hostname", "") or ""
-    return _is_loopback_host(client_host) and _is_loopback_host(url_hostname)
-
-
-def _is_loopback_host(host: str) -> bool:
-    normalized = (host or "").strip().strip("[]").lower()
-    if normalized == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(normalized).is_loopback
-    except ValueError:
-        return False
-
-
 @router.post("/install")
 def alphasift_install(
     config: Config = Depends(get_config_dep),
-    _: None = Depends(_require_admin_session_for_install),
 ) -> Dict[str, Any]:
     _ensure_alphasift_enabled(config)
     return _install_alphasift(config)
