@@ -201,6 +201,7 @@ const hasLlmInsight = (item: AlphaSiftCandidate) =>
 
 const StockScreeningPage: React.FC = () => {
   const [enabled, setEnabled] = useState(false);
+  const [available, setAvailable] = useState(false);
   const [market, setMarket] = useState('cn');
   const [strategy, setStrategy] = useState('dual_low');
   const [strategies, setStrategies] = useState<AlphaSiftStrategy[]>([]);
@@ -225,6 +226,8 @@ const StockScreeningPage: React.FC = () => {
       ? screenMessages
       : ['LLM 重排未完成或未返回判断，当前候选来自 AlphaSift 本地因子评分。']
     : screenMessages;
+  const isScreeningEnabled = enabled && available;
+  const statusText = isScreeningEnabled ? '选股已开启' : '选股未开启';
 
   const clearScreeningResults = () => {
     setCandidates([]);
@@ -261,13 +264,15 @@ const StockScreeningPage: React.FC = () => {
           return;
         }
         setEnabled(status.enabled);
-        if (status.enabled) {
+        setAvailable(status.available);
+        if (status.enabled && status.available) {
           void loadStrategies();
         }
       })
       .catch(() => {
         if (active) {
           setEnabled(false);
+          setAvailable(false);
         }
       });
     return () => {
@@ -281,13 +286,16 @@ const StockScreeningPage: React.FC = () => {
     try {
       await alphasiftApi.enable();
       setEnabled(true);
+      setAvailable(true);
       await loadStrategies();
     } catch (err) {
       try {
         const status = await alphasiftApi.getStatus();
         setEnabled(status.enabled);
+        setAvailable(status.available);
       } catch {
         setEnabled(false);
+        setAvailable(false);
       }
       setError(err instanceof Error ? err.message : '开启 AlphaSift 失败');
     } finally {
@@ -347,8 +355,8 @@ const StockScreeningPage: React.FC = () => {
         </div>
 
         <div className="inline-flex w-fit items-center gap-2 rounded-2xl border border-border/70 bg-card/80 px-4 py-2 text-sm shadow-soft-card">
-          <span className={`h-2.5 w-2.5 rounded-full ${enabled ? 'bg-success' : 'bg-warning'}`} />
-          <span className="font-medium text-secondary-text">{enabled ? '选股已开启' : '选股未开启'}</span>
+          <span className={`h-2.5 w-2.5 rounded-full ${isScreeningEnabled ? 'bg-success' : 'bg-warning'}`} />
+          <span className="font-medium text-secondary-text">{statusText}</span>
         </div>
       </div>
 
@@ -362,6 +370,14 @@ const StockScreeningPage: React.FC = () => {
               开启 AlphaSift
             </Button>
           }
+        />
+      ) : null}
+
+      {enabled && !available ? (
+        <InlineAlert
+          variant="warning"
+          title="AlphaSift 适配层不可用"
+          message="适配层当前不可用，请先确认后端已安装依赖并重启服务，必要时执行 pip install -r requirements.txt 或使用设置页/服务端 /install 接口进行修复安装。"
         />
       ) : null}
 
@@ -466,7 +482,7 @@ const StockScreeningPage: React.FC = () => {
             className="h-11 min-w-40"
             isLoading={loading}
             loadingText="筛选中..."
-            disabled={!enabled || loading}
+            disabled={!isScreeningEnabled || loading}
             onClick={() => void handleSubmit()}
           >
             <Play className="h-4 w-4" />
@@ -480,14 +496,14 @@ const StockScreeningPage: React.FC = () => {
           <div className="flex items-center gap-3">
             <span
               className={`grid h-7 w-7 place-items-center rounded-full ${
-                candidates.length > 0 ? 'text-success' : enabled ? 'text-cyan' : 'text-warning'
+                candidates.length > 0 ? 'text-success' : isScreeningEnabled ? 'text-cyan' : 'text-warning'
               }`}
             >
               {candidates.length > 0 ? <CheckCircle2 className="h-5 w-5" /> : <CircleAlert className="h-5 w-5" />}
             </span>
             <div>
               <h2 className="text-sm font-semibold text-foreground">
-                {candidates.length > 0 ? '选股完成' : enabled ? '等待运行' : '等待开启'}
+                {candidates.length > 0 ? '选股完成' : isScreeningEnabled ? '等待运行' : '等待开启'}
               </h2>
               <p className="mt-1 text-xs text-secondary-text">
                 当前策略：{displayedStrategy} · {MARKETS.find((item) => item.id === market)?.label}

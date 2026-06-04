@@ -66,15 +66,16 @@ describe('StockScreeningPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '开启 AlphaSift' }));
 
     await waitFor(() => expect(getAlphaSiftStatus).toHaveBeenCalledTimes(2));
-    expect(screen.getByText('选股已开启')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /运行选股/ })).not.toBeDisabled();
+    expect(screen.getByText('选股未开启')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /运行选股/ })).toBeDisabled();
+    expect(screen.getByText(/适配层当前不可用/)).toBeInTheDocument();
     expect(screen.getByText('AlphaSift 适配层不可用。请执行 pip install -r requirements.txt')).toBeInTheDocument();
   });
 
   it('shows input strategy when strategy is not in preset list', async () => {
     getAlphaSiftStatus.mockResolvedValueOnce({
       enabled: true,
-      available: false,
+      available: true,
       installSpecIsDefault: true,
     });
     screenStocks.mockResolvedValue({
@@ -111,7 +112,7 @@ describe('StockScreeningPage', () => {
     });
     getAlphaSiftStatus.mockResolvedValueOnce({
       enabled: true,
-      available: false,
+      available: true,
       installSpecIsDefault: true,
     });
     screenStocks.mockResolvedValue({
