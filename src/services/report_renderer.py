@@ -158,13 +158,14 @@ def render(
         )
 
     def market_status_line() -> str:
-        for result in sorted_results:
-            line = format_public_market_status_line(
-                getattr(result, "market_phase_summary", None),
-                report_language=report_language,
-            )
-            if line:
-                return line
+        for source_results in (results or [], sorted_results):
+            for result in source_results:
+                line = format_public_market_status_line(
+                    getattr(result, "market_phase_summary", None),
+                    report_language=report_language,
+                )
+                if line:
+                    return line
         return ""
 
     context: Dict[str, Any] = {
