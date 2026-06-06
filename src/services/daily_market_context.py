@@ -94,6 +94,7 @@ class DailyMarketContextService:
         search_service: Any = None,
         force_refresh: bool = False,
         allow_generate: bool = True,
+        persist_market_review_history: bool = True,
         target_date: Optional[date] = None,
     ) -> Optional[DailyMarketContext]:
         normalized_region = _normalize_region(region)
@@ -114,6 +115,18 @@ class DailyMarketContextService:
                 return history_context
 
         if not allow_generate:
+            if force_refresh:
+                with self._lock:
+                    cached = self._cache.get(cache_key)
+                    if cached is not None:
+                        return cached
+                    history_context = self._load_same_day_history(
+                        region=normalized_region,
+                        target_date=context_date,
+                    )
+                    if history_context is not None:
+                        self._cache[cache_key] = history_context
+                        return history_context
             return None
 
         with self._lock:
@@ -136,6 +149,7 @@ class DailyMarketContextService:
                 notifier=notifier,
                 analyzer=analyzer,
                 search_service=search_service,
+                persist_market_review_history=persist_market_review_history,
             )
             if generated is not None:
                 self._cache[cache_key] = generated
@@ -202,6 +216,7 @@ class DailyMarketContextService:
         notifier: Any,
         analyzer: Any = None,
         search_service: Any = None,
+        persist_market_review_history: bool = True,
     ) -> Optional[DailyMarketContext]:
         lock_token = try_acquire_market_review_lock(config)
         if lock_token is None:
@@ -220,6 +235,7 @@ class DailyMarketContextService:
                     override_region=region,
                     return_structured=True,
                     save_report_file=False,
+                    persist_history=persist_market_review_history,
                 )
             except Exception as exc:
                 logger.warning(

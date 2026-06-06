@@ -179,6 +179,78 @@ def test_get_context_skips_generation_when_market_review_lock_is_held() -> None:
     run_review.assert_not_called()
 
 
+def test_readonly_mode_can_still_use_cached_history_without_generation() -> None:
+    db = MagicMock()
+    db.get_analysis_history.return_value = [
+        _history_record(created_at=datetime(2026, 6, 6, 9, 30))
+    ]
+    service = DailyMarketContextService(
+        db_manager=db,
+        today_fn=lambda: date(2026, 6, 6),
+    )
+
+    with patch("src.services.daily_market_context.run_market_review") as run_review:
+        context = service.get_context(
+            region="cn",
+            config=SimpleNamespace(report_language="zh"),
+            notifier=MagicMock(),
+            analyzer=MagicMock(),
+            search_service=MagicMock(),
+            force_refresh=True,
+            allow_generate=False,
+        )
+
+    assert context is not None
+    assert context.source == "analysis_history"
+    run_review.assert_not_called()
+
+
+def test_prewarm_generation_does_not_persist_market_review_history() -> None:
+    db = MagicMock()
+    db.get_analysis_history.return_value = []
+    service = DailyMarketContextService(
+        db_manager=db,
+        today_fn=lambda: date(2026, 6, 6),
+    )
+    result = MarketReviewRunResult(
+        report="高风险退潮，仓位上限20%，等待确认。",
+        market_review_payload={
+            "kind": "market_review",
+            "region": "cn",
+            "sections": [
+                {
+                    "key": "overview",
+                    "title": "概览",
+                    "markdown": "高风险退潮，仓位上限20%，等待确认。",
+                }
+            ],
+        },
+    )
+
+    notifier = MagicMock()
+    analyzer = MagicMock()
+    search_service = MagicMock()
+    with patch(
+        "src.services.daily_market_context.run_market_review",
+        return_value=result,
+    ) as run_review:
+        context = service.get_context(
+            region="cn",
+            config=SimpleNamespace(report_language="zh"),
+            notifier=notifier,
+            analyzer=analyzer,
+            search_service=search_service,
+            force_refresh=True,
+            persist_market_review_history=False,
+        )
+
+    assert context is not None
+    assert context.source == "market_review_runtime"
+    run_review.assert_called_once()
+    kwargs = run_review.call_args.kwargs
+    assert kwargs["persist_history"] is False
+
+
 def test_force_refresh_runs_market_review_without_notification() -> None:
     db = MagicMock()
     db.get_analysis_history.return_value = [

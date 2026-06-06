@@ -94,6 +94,7 @@ def run_market_review(
     query_id: Optional[str] = None,
     return_structured: bool = False,
     save_report_file: bool = True,
+    persist_history: bool = True,
 ) -> Optional[str] | Optional[MarketReviewRunResult]:
     """
     执行大盘复盘分析
@@ -107,6 +108,7 @@ def run_market_review(
         override_region: 覆盖 config 的 market_review_region（Issue #373 交易日过滤后有效子集）
         query_id: 历史记录关联 ID；API 后台任务会传入 task_id，CLI/Bot 为空时自动生成
         save_report_file: 是否保存 Markdown 文件；上下文生成路径可关闭以避免多区域临时复盘互相覆盖
+        persist_history: 是否写入 analysis_history；预热路径可关闭以避免覆盖用户可见的同日大盘复盘记录
 
     Returns:
         复盘报告文本
@@ -189,15 +191,16 @@ def run_market_review(
                 )
                 logger.info(f"大盘复盘报告已保存: {filepath}")
 
-            _persist_market_review_history(
-                review_report=review_report,
-                markdown_report=markdown_report,
-                region=persist_region,
-                config=config,
-                query_id=query_id,
-                market_light_snapshots=market_light_snapshots,
-                market_review_payload=market_review_payload,
-            )
+            if persist_history:
+                _persist_market_review_history(
+                    review_report=review_report,
+                    markdown_report=markdown_report,
+                    region=persist_region,
+                    config=config,
+                    query_id=query_id,
+                    market_light_snapshots=market_light_snapshots,
+                    market_review_payload=market_review_payload,
+                )
             
             # 推送通知（合并模式下跳过，由 main 层统一发送）
             if merge_notification and send_notification:

@@ -495,7 +495,7 @@ def _prime_daily_market_context(
     allow_generate: bool,
 ) -> str:
     """Load/reuse today's market context for the run, avoiding unbounded background generation."""
-    if no_market_review or not region or not allow_generate:
+    if no_market_review or not region:
         return ""
 
     from src.services.daily_market_context import DailyMarketContextService
@@ -513,12 +513,13 @@ def _prime_daily_market_context(
         search_service=pipeline.search_service,
         force_refresh=False,
         allow_generate=allow_generate,
+        persist_market_review_history=False,
     )
     if context is None:
         return ""
 
-    # Skip extra report generation when we already have historical context.
-    if context.source == "analysis_history":
+    # Runtime context generation is preload-only and must not replace the full market review run.
+    if context.source != "analysis_history":
         return ""
 
     return str(getattr(context, "summary", ""))
