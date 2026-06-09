@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 修复历史报告运行流快照在混合时区事件时间戳下返回 500 的问题。
 - [改进] #1459 持仓管理页新增持仓账户删除入口，复用现有账户软删除接口，误建账户会从默认列表、快照、风险、录入入口和事件列表隐藏且不物理清理历史流水。
 - [修复] 修复运行流 live SSE 事件未复用快照层递归脱敏规则的问题，避免本地路径、prompt/raw response、代理头等敏感诊断字段在 refetch 前短暂暴露。
+- [改进] #1390 P0 为个股分析与历史/回测展示新增可选八态 `action` / `action_label` 建议动作字段，保留 `operation_advice` 自由文本和 `decision_type=buy|hold|sell` 统计口径，不新增迁移或配置项。
+- [修复] #1390 收紧建议动作 legacy fallback：英文 `not to ...` 与 `avoid selling/reducing/trimming ...` 等否定/回避表达不再误判为买卖动作，Web 旧记录不再把中文金融上下文、`buy or sell`、多 guard 歧义文本或 `buyback` / `buy-back` / `buy back` / `selloff` / `sell-off` / `sell off` 等英文复合词渲染成 action badge，并在有结构化 `action` 时让回测/历史趋势等入口按界面语言显示 action 标签。
+- [改进] 完善运行时日志上下文，补充 logger name、触发来源、市场统计与实时行情预取链路状态，便于排查调度、API、Bot 和数据源降级路径。
 - [修复] Web 英文界面补齐回测、组合风险与告警规则相关文案本地化，避免英文模式下残留中文筛选器、按钮和枚举标签。
 - [chore] 移除随 issue / PR 验收流程误入库的截图资产，并明确一次性截图证据应保留在 PR 描述、评论、附件或 artifact 中，不作为仓库文件合入。
 - [修复] 综合情报搜索中的机构分析与业绩预期维度改用 180 天 provider 请求窗口，避免默认短新闻窗口漏掉财报、研报等周期性财经材料。
@@ -57,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 改造 `main.py --webui-only` 启动行为：若 FastAPI 监听端口已被占用，启动即 fail-fast 抛出明确错误并退出，避免 Windows 下 `WinError 10048`。
 - [文档] 补充 `docs/alphasift-integration.md`：明确 AlphaSift 锁定 commit 来源、Hotspot 契约边界、LLM/LiteLLM 兼容语义与关闭开关下回退路径。
 - [修复] 为 THS 发酵路线补充列名兜底：当 `stock_board_concept_summary_ths` 返回缺列时仅跳过该来源富化，不影响 `/api/v1/alphasift/hotspots/{topic}` 返回。
-- [测试] 新增/更新后端回归：`python -m pytest tests/test_alphasift_api.py -q`、`python -m pytest tests/test_main_schedule_mode.py -q -k "start_api_server_fails_before_thread_when_port_is_busy"`。
+- [测试] 新增/更新后端回归：`python -m pytest tests/test_alphasift_api.py -q`、`python -m pytest tests/test_docker_entrypoint.py -q`、`python -m pytest tests/test_main_schedule_mode.py -q -k "start_api_server_fails_before_thread_when_port_is_busy"`。
 
 ## [3.21.0] - 2026-06-07
 
