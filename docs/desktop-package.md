@@ -74,6 +74,32 @@ powershell -ExecutionPolicy Bypass -File scripts\build-all.ps1
   - macOS Intel：`daily-stock-analysis-macos-x64-<tag>.dmg`
   - macOS Apple Silicon：`daily-stock-analysis-macos-arm64-<tag>.dmg`
 
+### macOS 签名、公证与“文件损坏”提示
+
+macOS 用户下载 DMG 后如果看到“文件已损坏，无法打开”或“应移到废纸篓”，不一定表示 DMG 二进制传输损坏。对从浏览器下载、带 quarantine 标记的未签名或未公证 `.app`，Gatekeeper 也可能展示同类文案。排查时先记录 macOS 版本、芯片架构、下载来源、DMG 文件大小或校验和，以及完整报错文案；例如本次 `daily-stock-analysis-macos-arm64-v3.22.0.dmg` 问题应先确认是否来自 GitHub Release、是否运行在 Apple Silicon，以及本地文件大小是否和 Release 附件一致。
+
+发布复核应在 macOS 真机或 macOS runner 上执行：
+
+```bash
+hdiutil verify daily-stock-analysis-macos-arm64-v3.22.0.dmg
+hdiutil attach -nobrowse daily-stock-analysis-macos-arm64-v3.22.0.dmg
+codesign --verify --deep --strict --verbose=2 "/Volumes/Daily Stock Analysis/Daily Stock Analysis.app"
+spctl --assess --type execute --verbose "/Volumes/Daily Stock Analysis/Daily Stock Analysis.app"
+```
+
+如果 `hdiutil verify` 通过，但 `codesign` 或 `spctl` 报 unsigned、rejected、not notarized 等问题，应按签名/公证缺失处理：维护者需要使用 Apple Developer ID 证书重新生成并替换 Release 附件，不能通过修改仓库里的 secret、证书或 workflow 权限绕过。当前打包脚本默认保持无证书环境可构建；当设置 `DSA_MAC_SIGN=true`，或提供 `CSC_LINK` / `CSC_NAME` 时，脚本会允许 electron-builder 自动发现签名身份，并在存在以下任一组公证凭据时执行 notarization：
+
+- Apple ID 方式：`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`
+- App Store Connect API Key 方式：`APPLE_API_KEY`、`APPLE_API_KEY_ID`、`APPLE_API_ISSUER`
+
+发布环境可额外设置 `DSA_MAC_NOTARIZE_REQUIRED=true`，让缺少公证凭据时直接失败，避免再次上传会触发 Gatekeeper 拦截的 DMG。用户临时自救只应在确认 DMG 来源和校验和可信后进行；可优先在“系统设置 -> 隐私与安全性”中允许打开，或自行清除本机 quarantine 标记：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Daily Stock Analysis.app"
+```
+
+该命令只影响用户本机，不代表 Release 资产已签名或已公证；正式发布仍应重新生成通过 `hdiutil`、`codesign` 和 `spctl` 验证的 DMG。
+
 建议发布流程：
 
 1. 合并代码到 `main`

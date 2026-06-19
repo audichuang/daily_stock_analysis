@@ -54,7 +54,11 @@
       "include": "installer.nsh"
     },
     "mac": {
-      "target": "dmg"
+      "target": "dmg",
+      "artifactName": "daily-stock-analysis-macos-${arch}-v${version}.${ext}",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "afterSign": "scripts/notarize.js"
     }
   }
 }

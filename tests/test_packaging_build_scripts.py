@@ -47,3 +47,14 @@ def test_macos_backend_build_script_collects_alphasift_adapter() -> None:
     assert 'normalized.startswith("alphasift/dsa_adapter.")' not in script
     assert "DSA_PACKAGED_ALPHASIFT_IMPORT_PROBE" in main_py
     assert 'importlib.import_module("alphasift.dsa_adapter")' in main_py
+
+
+def test_macos_desktop_build_script_allows_signed_release_builds() -> None:
+    script = _read_text(REPO_ROOT / "scripts" / "build-desktop-macos.sh")
+
+    assert "DSA_MAC_SIGN" in script
+    assert "CSC_LINK" in script
+    assert "CSC_NAME" in script
+    assert 'CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-true}"' in script
+    assert 'CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-false}"' in script
+    assert "macOS code signing disabled" in script

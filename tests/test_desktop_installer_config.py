@@ -44,3 +44,14 @@ def test_windows_auto_updater_reuses_current_install_directory() -> None:
     assert "updater.installDirectory = installDirectory;" in main_js
     assert 'updater.installDirectory = `"${installDirectory}"`' not in main_js
     assert "quoteNsisDirectoryArgument" not in main_js
+
+
+def test_macos_build_config_has_stable_dmg_name_and_notarization_hook() -> None:
+    package_json = json.loads((DESKTOP_DIR / "package.json").read_text(encoding="utf-8"))
+    mac = package_json.get("build", {}).get("mac", {})
+
+    assert mac.get("target") == "dmg"
+    assert mac.get("artifactName") == "daily-stock-analysis-macos-${arch}-v${version}.${ext}"
+    assert mac.get("hardenedRuntime") is True
+    assert mac.get("gatekeeperAssess") is False
+    assert mac.get("afterSign") == "scripts/notarize.js"

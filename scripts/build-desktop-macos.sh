@@ -4,8 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-export CSC_IDENTITY_AUTO_DISCOVERY="false"
 export ELECTRON_BUILDER_CACHE="${ROOT_DIR}/.electron-builder-cache"
+
+if [[ "${DSA_MAC_SIGN:-}" == "true" || -n "${CSC_LINK:-}" || -n "${CSC_NAME:-}" ]]; then
+  export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-true}"
+  echo "macOS code signing auto-discovery: ${CSC_IDENTITY_AUTO_DISCOVERY}"
+else
+  export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-false}"
+  echo "macOS code signing disabled; set DSA_MAC_SIGN=true or provide CSC_LINK/CSC_NAME for signed builds."
+fi
 
 echo "Building Electron desktop app (macOS)..."
 
