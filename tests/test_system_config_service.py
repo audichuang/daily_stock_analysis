@@ -2665,13 +2665,20 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             for warning in response["warnings"]
             if "SCHEDULE_ENABLED" in warning
         )
+        schedule_run_warning = next(
+            warning
+            for warning in response["warnings"]
+            if "SCHEDULE_RUN_IMMEDIATELY" in warning
+        )
 
         self.assertIn("非 schedule 模式", run_warning)
         self.assertNotIn("以 schedule 模式", run_warning)
-        self.assertIn("SCHEDULE_RUN_IMMEDIATELY", schedule_warning)
-        self.assertIn("不会因为本次保存启动、停止或重建 scheduler", schedule_warning)
-        self.assertIn("以 schedule 模式重新启动后生效", schedule_warning)
-        self.assertNotIn("它属于启动期单次运行配置", schedule_warning)
+        self.assertIn("runtime scheduler", schedule_warning)
+        self.assertIn("CLI schedule", schedule_warning)
+        self.assertIn("SCHEDULE_RUN_IMMEDIATELY", schedule_run_warning)
+        self.assertIn("不会因为本次保存启动、停止或重建 scheduler", schedule_run_warning)
+        self.assertIn("以 schedule 模式重新启动后生效", schedule_run_warning)
+        self.assertNotIn("它属于启动期单次运行配置", schedule_run_warning)
 
     def test_update_appends_schedule_time_runtime_rebind_warning(self) -> None:
         response = self.service.update(

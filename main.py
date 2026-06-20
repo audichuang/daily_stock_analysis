@@ -1086,6 +1086,36 @@ def _build_schedule_time_provider(default_schedule_time: str):
     return _provider
 
 
+def _build_schedule_times_provider(default_schedule_time: str):
+    """Read the latest SCHEDULE_TIMES with SCHEDULE_TIME fallback."""
+    from src.core.config_manager import ConfigManager
+    from src.scheduler import normalize_schedule_times
+
+    _SYSTEM_DEFAULT_SCHEDULE_TIME = "18:00"
+    manager = ConfigManager()
+
+    def _provider():
+        if "SCHEDULE_TIMES" in _INITIAL_PROCESS_ENV:
+            return normalize_schedule_times(
+                os.getenv("SCHEDULE_TIMES", ""),
+                fallback_time=os.getenv("SCHEDULE_TIME", default_schedule_time),
+            )
+        if "SCHEDULE_TIME" in _INITIAL_PROCESS_ENV:
+            return normalize_schedule_times(
+                os.getenv("SCHEDULE_TIMES", ""),
+                fallback_time=os.getenv("SCHEDULE_TIME", default_schedule_time),
+            )
+
+        config_map = manager.read_config_map()
+        schedule_time = (config_map.get("SCHEDULE_TIME", "") or "").strip() or _SYSTEM_DEFAULT_SCHEDULE_TIME
+        return normalize_schedule_times(
+            config_map.get("SCHEDULE_TIMES", ""),
+            fallback_time=schedule_time,
+        )
+
+    return _provider
+
+
 def main() -> int:
     """
     主入口函数
@@ -1272,6 +1302,7 @@ def main() -> int:
             from src.scheduler import run_with_schedule
             scheduled_stock_codes = _resolve_scheduled_stock_codes(stock_codes)
             schedule_time_provider = _build_schedule_time_provider(config.schedule_time)
+            schedule_times_provider = _build_schedule_times_provider(config.schedule_time)
 
             def scheduled_task():
                 runtime_config = _reload_runtime_config()
@@ -1297,13 +1328,17 @@ def main() -> int:
                     "name": "agent_event_monitor",
                 })
 
-            run_with_schedule(
-                task=scheduled_task,
-                schedule_time=config.schedule_time,
-                run_immediately=should_run_immediately,
-                background_tasks=background_tasks,
-                schedule_time_provider=schedule_time_provider,
-            )
+            schedule_kwargs = {
+                "task": scheduled_task,
+                "schedule_time": config.schedule_time,
+                "run_immediately": should_run_immediately,
+                "background_tasks": background_tasks,
+                "schedule_time_provider": schedule_time_provider,
+            }
+            if hasattr(config, "schedule_times"):
+                schedule_kwargs["schedule_times"] = config.schedule_times
+                schedule_kwargs["schedule_times_provider"] = schedule_times_provider
+            run_with_schedule(**schedule_kwargs)
             return 0
 
         # 模式3: 正常单次运行
