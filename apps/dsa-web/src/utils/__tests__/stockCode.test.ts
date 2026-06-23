@@ -52,11 +52,13 @@ describe('normalizeStockCode', () => {
     expect(normalizeStockCode('BRK.B')).toBe('BRK.B');
   });
 
-  it('keeps JP/KR Yahoo suffix codes in canonical uppercase suffix form', () => {
+  it('keeps JP/KR/TW Yahoo suffix codes in canonical uppercase suffix form', () => {
     expect(normalizeStockCode('7203.T')).toBe('7203.T');
     expect(normalizeStockCode('6758.t')).toBe('6758.T');
     expect(normalizeStockCode('005930.KS')).toBe('005930.KS');
     expect(normalizeStockCode('035720.kq')).toBe('035720.KQ');
+    expect(normalizeStockCode('2330.tw')).toBe('2330.TW');
+    expect(normalizeStockCode('6488.two')).toBe('6488.TWO');
     expect(normalizeStockCode('005930')).toBe('005930');
   });
 
@@ -85,6 +87,8 @@ describe('normalizeStockCode', () => {
     expect(areStockCodesEquivalent('aapl', 'AAPL')).toBe(true);
     expect(areStockCodesEquivalent('7203.t', '7203.T')).toBe(true);
     expect(areStockCodesEquivalent('005930.ks', '005930.KS')).toBe(true);
+    expect(areStockCodesEquivalent('2330.tw', '2330.TW')).toBe(true);
+    expect(areStockCodesEquivalent('6488.two', '6488.TWO')).toBe(true);
     expect(areStockCodesEquivalent('005930', '005930.KS')).toBe(false);
     expect(areStockCodesEquivalent('00700', 'HK01810')).toBe(false);
     expect(areStockCodesEquivalent('', 'HK00700')).toBe(false);

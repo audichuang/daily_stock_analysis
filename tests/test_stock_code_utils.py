@@ -58,6 +58,19 @@ class TestIsCodeLike:
     def test_suffix_sh_rejects_5_digit_base(self):
         assert is_code_like("00700.SH") is False
 
+    # --- Taiwan Yahoo suffix format ---
+    def test_suffix_tw(self):
+        assert is_code_like("2330.TW") is True
+
+    def test_suffix_two(self):
+        assert is_code_like("6488.TWO") is True
+
+    def test_suffix_tw_lowercase(self):
+        assert is_code_like("2330.tw") is True
+
+    def test_suffix_tw_rejects_non_4_digit_base(self):
+        assert is_code_like("02330.TW") is False
+
     # --- Exchange prefix format (Issue #6 fix) ---
     def test_prefix_sh_upper(self):
         assert is_code_like("SH600519") is True
@@ -145,6 +158,19 @@ class TestNormalizeCode:
 
     def test_suffix_sh_rejects_5_digit_base(self):
         assert normalize_code("00700.SH") is None
+
+    # --- Taiwan Yahoo suffix format ---
+    def test_suffix_tw_preserved(self):
+        assert normalize_code("2330.TW") == "2330.TW"
+
+    def test_suffix_two_preserved(self):
+        assert normalize_code("6488.TWO") == "6488.TWO"
+
+    def test_suffix_tw_lowercase_preserved_uppercase(self):
+        assert normalize_code("2330.tw") == "2330.TW"
+
+    def test_suffix_tw_rejects_non_4_digit_base(self):
+        assert normalize_code("02330.TW") is None
 
     # --- Exchange prefix format (Issue #6 fix) ---
     def test_prefix_sh_upper(self):

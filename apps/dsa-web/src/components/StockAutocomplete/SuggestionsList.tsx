@@ -82,6 +82,7 @@ const MARKET_BADGE_CONFIG = {
   US: { label: '美股', className: 'border-cyan/25 bg-cyan/10 text-cyan' },
   JP: { label: '日股', className: 'border-indigo-500/25 bg-indigo-500/10 text-indigo-500' },
   KR: { label: '韩股', className: 'border-rose-500/25 bg-rose-500/10 text-rose-500' },
+  TW: { label: '台股', className: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600' },
   INDEX: { label: '指数', className: 'border-purple/25 bg-purple/10 text-purple' },
   ETF: { label: 'ETF', className: 'border-warning/25 bg-warning/10 text-warning' },
   BSE: { label: '北交所', className: 'border-orange-500/25 bg-orange-500/10 text-orange-500' },

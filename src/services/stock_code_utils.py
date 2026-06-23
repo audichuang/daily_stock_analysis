@@ -30,9 +30,11 @@ _SUFFIX_DIGIT_LENS: dict = {
     ".T": (4, 5),
     ".KS": (6,),
     ".KQ": (6,),
+    ".TW": (4,),
+    ".TWO": (4,),
 }
 
-_PRESERVE_SUFFIXES = {".T", ".KS", ".KQ"}
+_PRESERVE_SUFFIXES = {".T", ".KS", ".KQ", ".TW", ".TWO"}
 
 
 def _valid_exchange_code(exchange: str, base: str, digit_lens: tuple[int, ...]) -> bool:

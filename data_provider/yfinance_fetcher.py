@@ -79,8 +79,8 @@ class YfinanceFetcher(BaseFetcher):
         pass
 
     @staticmethod
-    def _is_jp_kr_suffix_stock(stock_code: str) -> bool:
-        """Return True for supported JP/KR suffix-only Yahoo symbols."""
+    def _is_yahoo_suffix_stock(stock_code: str) -> bool:
+        """Return True for supported suffix-only Yahoo symbols."""
         code = (stock_code or "").strip().upper()
         if code.endswith(".T"):
             base = code[:-2]
@@ -88,7 +88,15 @@ class YfinanceFetcher(BaseFetcher):
         if code.endswith((".KS", ".KQ")):
             base = code.rsplit(".", 1)[0]
             return base.isdigit() and len(base) == 6
+        if code.endswith((".TW", ".TWO")):
+            base = code.rsplit(".", 1)[0]
+            return base.isdigit() and len(base) == 4
         return False
+
+    @staticmethod
+    def _is_jp_kr_suffix_stock(stock_code: str) -> bool:
+        """Backward-compatible alias for earlier JP/KR-only helper name."""
+        return YfinanceFetcher._is_yahoo_suffix_stock(stock_code)
 
     def _convert_stock_code(self, stock_code: str) -> str:
         """
@@ -127,9 +135,9 @@ class YfinanceFetcher(BaseFetcher):
             logger.debug(f"识别为美股代码: {code}")
             return code
 
-        # 日股/韩股 MVP：显式 Yahoo Finance suffix-only 代码，原样传给 Yahoo。
-        if self._is_jp_kr_suffix_stock(code):
-            logger.debug(f"识别为日韩 Yahoo suffix 代码: {code}")
+        # 海外 suffix-only MVP：显式 Yahoo Finance suffix-only 代码，原样传给 Yahoo。
+        if self._is_yahoo_suffix_stock(code):
+            logger.debug(f"识别为 Yahoo suffix 代码: {code}")
             return code
 
         # 港股：hk前缀 -> .HK后缀
@@ -336,7 +344,7 @@ class YfinanceFetcher(BaseFetcher):
 
     def get_main_indices(self, region: str = "cn") -> Optional[List[Dict[str, Any]]]:
         """
-        获取主要指数行情 (Yahoo Finance)，支持 A 股、美股与港股。
+        获取主要指数行情 (Yahoo Finance)，支持 A 股、美股、港股、日股、韩股与台股。
         region=us 时委托给 _get_us_main_indices。
         region=hk 时委托给 _get_hk_main_indices。
         """
@@ -350,6 +358,8 @@ class YfinanceFetcher(BaseFetcher):
             return self._get_jp_main_indices(yf)
         if region == "kr":
             return self._get_kr_main_indices(yf)
+        if region == "tw":
+            return self._get_tw_main_indices(yf)
 
         # A 股指数：akshare 代码 -> (yfinance 代码, 显示名称)
         yf_mapping = {
@@ -484,6 +494,29 @@ class YfinanceFetcher(BaseFetcher):
                 return results
         except Exception as e:
             logger.error(f"[Yfinance] 获取韩国指数行情失败: {e}")
+        return None
+
+    def _get_tw_main_indices(self, yf) -> Optional[List[Dict[str, Any]]]:
+        """获取台湾主要指数行情（台湾加权、柜买），复用 _fetch_yf_ticker_data。"""
+        tw_indices = {
+            'TWII': ('^TWII', '台湾加权指数'),
+            'TPEX': ('^TWOII', '柜买指数'),
+        }
+        results = []
+        try:
+            for code, (yf_symbol, name) in tw_indices.items():
+                try:
+                    item = self._fetch_yf_ticker_data(yf, yf_symbol, name, code)
+                    if item:
+                        results.append(item)
+                        logger.debug(f"[Yfinance] 获取台湾指数 {name} 成功")
+                except Exception as e:
+                    logger.warning(f"[Yfinance] 获取台湾指数 {name} 失败: {e}")
+            if results:
+                logger.info(f"[Yfinance] 成功获取 {len(results)} 个台湾指数行情")
+                return results
+        except Exception as e:
+            logger.error(f"[Yfinance] 获取台湾指数行情失败: {e}")
         return None
 
     def _is_us_stock(self, stock_code: str) -> bool:
@@ -732,13 +765,13 @@ class YfinanceFetcher(BaseFetcher):
 
     def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
         """
-        获取美股/美股指数实时行情数据
+        获取美股/美股指数及 suffix-only 海外股票实时行情数据
 
-        支持美股股票（AAPL、TSLA）和美股指数（SPX、DJI 等）。
+        支持美股股票（AAPL、TSLA）、美股指数（SPX、DJI 等）和 Yahoo suffix 代码（7203.T、005930.KS、2330.TW）。
         数据来源：yfinance Ticker.info
 
         Args:
-            stock_code: 美股代码或指数代码，如 'AMD', 'AAPL', 'SPX', 'DJI'
+            stock_code: 美股代码、指数代码或 suffix 代码，如 'AMD', 'AAPL', 'SPX', 'DJI', '2330.TW'
 
         Returns:
             UnifiedRealtimeQuote 对象，获取失败返回 None
@@ -754,9 +787,9 @@ class YfinanceFetcher(BaseFetcher):
                 index_name=index_name,
             )
 
-        # 仅处理美股股票或 JP/KR suffix-only 股票
-        if not (self._is_us_stock(stock_code) or self._is_jp_kr_suffix_stock(stock_code)):
-            logger.debug(f"[Yfinance] {stock_code} 不是美股或日韩 suffix 代码，跳过")
+        # 仅处理美股股票或 suffix-only 海外股票
+        if not (self._is_us_stock(stock_code) or self._is_yahoo_suffix_stock(stock_code)):
+            logger.debug(f"[Yfinance] {stock_code} 不是美股或 Yahoo suffix 代码，跳过")
             return None
 
         try:

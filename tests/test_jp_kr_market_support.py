@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression tests for Issue #1718 JP/KR suffix-only market support."""
+"""Regression tests for suffix-only offshore market support."""
 
 from unittest.mock import patch
 
@@ -42,44 +42,58 @@ class _FakeFetcher(BaseFetcher):
         )
 
 
-def test_normalize_and_detect_jp_kr_suffix_codes() -> None:
+def test_normalize_and_detect_jp_kr_tw_suffix_codes() -> None:
     assert normalize_stock_code("7203.t") == "7203.T"
     assert normalize_stock_code("005930.ks") == "005930.KS"
     assert normalize_stock_code("035720.kq") == "035720.KQ"
+    assert normalize_stock_code("2330.tw") == "2330.TW"
+    assert normalize_stock_code("6488.two") == "6488.TWO"
 
     assert detect_market("7203.T") == "jp"
     assert detect_market("6758.T") == "jp"
     assert detect_market("005930.KS") == "kr"
     assert detect_market("035720.KQ") == "kr"
+    assert detect_market("2330.TW") == "tw"
+    assert detect_market("6488.TWO") == "tw"
     assert detect_market("005930") == "cn"
 
     assert get_market_for_stock("7203.T") == "jp"
     assert get_market_for_stock("005930.KS") == "kr"
+    assert get_market_for_stock("2330.TW") == "tw"
+    assert get_market_for_stock("6488.TWO") == "tw"
     assert get_market_for_stock("005930") == "cn"
 
     assert is_code_like("7203.T") is True
     assert is_code_like("005930.KS") is True
+    assert is_code_like("2330.TW") is True
+    assert is_code_like("6488.TWO") is True
     assert normalize_code("035720.KQ") == "035720.KQ"
+    assert normalize_code("2330.TW") == "2330.TW"
+    assert normalize_code("6488.TWO") == "6488.TWO"
 
 
-def test_market_guidelines_for_jp_kr_exclude_a_share_specific_context() -> None:
+def test_market_guidelines_for_jp_kr_tw_exclude_a_share_specific_context() -> None:
     jp_guidelines = get_market_guidelines("7203.T")
     kr_guidelines = get_market_guidelines("005930.KS")
+    tw_guidelines = get_market_guidelines("2330.TW")
 
     assert "日股" in jp_guidelines
     assert "韩股" in kr_guidelines
-    for text in (jp_guidelines, kr_guidelines):
+    assert "台股" in tw_guidelines
+    for text in (jp_guidelines, kr_guidelines, tw_guidelines):
         assert "不要套用 A 股" in text
         assert "北向资金" in text
         assert "龙虎榜" in text
 
 
-def test_yfinance_keeps_jp_kr_suffix_codes_and_indices() -> None:
+def test_yfinance_keeps_jp_kr_tw_suffix_codes_and_indices() -> None:
     fetcher = YfinanceFetcher()
 
     assert fetcher._convert_stock_code("7203.T") == "7203.T"
     assert fetcher._convert_stock_code("005930.KS") == "005930.KS"
     assert fetcher._convert_stock_code("035720.KQ") == "035720.KQ"
+    assert fetcher._convert_stock_code("2330.TW") == "2330.TW"
+    assert fetcher._convert_stock_code("6488.TWO") == "6488.TWO"
 
     captured = []
 
@@ -91,16 +105,20 @@ def test_yfinance_keeps_jp_kr_suffix_codes_and_indices() -> None:
 
     jp_indices = fetcher.get_main_indices("jp") or []
     kr_indices = fetcher.get_main_indices("kr") or []
+    tw_indices = fetcher.get_main_indices("tw") or []
 
     assert {item["code"] for item in jp_indices} == {"N225", "TOPX"}
     assert {item["code"] for item in kr_indices} == {"KS11", "KQ11"}
+    assert {item["code"] for item in tw_indices} == {"TWII", "TPEX"}
     assert ("^N225", "日经225", "N225") in captured
     assert ("^TOPX", "东证指数", "TOPX") in captured
     assert ("^KS11", "KOSPI", "KS11") in captured
     assert ("^KQ11", "KOSDAQ", "KQ11") in captured
+    assert ("^TWII", "台湾加权指数", "TWII") in captured
+    assert ("^TWOII", "柜买指数", "TPEX") in captured
 
 
-def test_data_fetcher_manager_routes_jp_kr_daily_only_to_yfinance() -> None:
+def test_data_fetcher_manager_routes_jp_kr_tw_daily_only_to_yfinance() -> None:
     efinance = _FakeFetcher("EfinanceFetcher", should_fail=True)
     akshare = _FakeFetcher("AkshareFetcher", should_fail=True)
     yfinance = _FakeFetcher("YfinanceFetcher")
@@ -109,17 +127,21 @@ def test_data_fetcher_manager_routes_jp_kr_daily_only_to_yfinance() -> None:
     with patch("data_provider.base.record_provider_run_started"), patch("data_provider.base.record_provider_run"):
         jp_df, jp_source = manager.get_daily_data("7203.T")
         kr_df, kr_source = manager.get_daily_data("005930.KS")
+        tw_df, tw_source = manager.get_daily_data("2330.TW")
 
     assert jp_source == "YfinanceFetcher"
     assert kr_source == "YfinanceFetcher"
-    assert not jp_df.empty and not kr_df.empty
+    assert tw_source == "YfinanceFetcher"
+    assert not jp_df.empty and not kr_df.empty and not tw_df.empty
     assert efinance.calls == []
     assert akshare.calls == []
-    assert yfinance.calls == ["7203.T", "005930.KS"]
+    assert yfinance.calls == ["7203.T", "005930.KS", "2330.TW"]
 
 
-def test_trading_calendar_registers_jp_kr_exchanges_and_timezones() -> None:
+def test_trading_calendar_registers_jp_kr_tw_exchanges_and_timezones() -> None:
     assert MARKET_EXCHANGE["jp"] == "XTKS"
     assert MARKET_EXCHANGE["kr"] == "XKRX"
+    assert MARKET_EXCHANGE["tw"] == "XTAI"
     assert MARKET_TIMEZONE["jp"] == "Asia/Tokyo"
     assert MARKET_TIMEZONE["kr"] == "Asia/Seoul"
+    assert MARKET_TIMEZONE["tw"] == "Asia/Taipei"

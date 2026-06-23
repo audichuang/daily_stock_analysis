@@ -34,12 +34,14 @@ def detect_market(stock_code: Optional[str]) -> str:
     if code.isdigit() and len(code) == 5:
         return "hk"
 
-    # Japan/Korea suffix-only symbols supported by Yahoo Finance.
+    # Japan/Korea/Taiwan suffix-only symbols supported by Yahoo Finance.
     # Bare Korean six-digit codes remain A-share fallback to avoid collision.
     if re.match(r'^\d{4,5}\.T$', code):
         return "jp"
     if re.match(r'^\d{6}\.(KS|KQ)$', code):
         return "kr"
+    if re.match(r'^\d{4}\.(TW|TWO)$', code):
+        return "tw"
 
     # US stocks: 1-5 uppercase letters (AAPL, TSLA, GOOGL)
     # Also handles suffixed forms like BRK.B
@@ -72,6 +74,10 @@ _MARKET_ROLES = {
     "kr": {
         "zh": "韩股",
         "en": "Korea stock",
+    },
+    "tw": {
+        "zh": "台股",
+        "en": "Taiwan stock",
     },
 }
 
@@ -124,6 +130,16 @@ _MARKET_GUIDELINES = {
         "en": (
             "- This analysis covers a **Korea stock** (KOSPI/KOSDAQ suffix `.KS` / `.KQ`).\n"
             "- Use Korea-market context: KRW FX, Bank of Korea policy, semiconductor/internet cycles, and local trading rules; do not apply China A-share concepts such as daily price-limit boards, Northbound flows, Dragon Tiger lists, or margin-financing narratives."
+        ),
+    },
+    "tw": {
+        "zh": (
+            "- 本次分析对象为 **台股**（台湾证券交易所/柜买中心上市股票，Yahoo Finance suffix 如 `.TW` / `.TWO`）。\n"
+            "- 请按台湾市场语境分析，关注新台币汇率、台湾央行政策、半导体/电子产业周期与当地交易制度；不要套用 A 股涨跌停、北向资金、龙虎榜、融资融券等 A 股专属概念。"
+        ),
+        "en": (
+            "- This analysis covers a **Taiwan stock** (TWSE/TPEx suffix `.TW` / `.TWO`).\n"
+            "- Use Taiwan-market context: TWD FX, Taiwan central bank policy, semiconductor/electronics cycles, and local trading rules; do not apply China A-share concepts such as daily price-limit boards, Northbound flows, Dragon Tiger lists, or margin-financing narratives."
         ),
     },
 }

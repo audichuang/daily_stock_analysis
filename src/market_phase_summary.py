@@ -56,11 +56,17 @@ _MARKET_LABELS_ZH = {
     "cn": "A股",
     "hk": "港股",
     "us": "美股",
+    "jp": "日股",
+    "kr": "韩股",
+    "tw": "台股",
 }
 _MARKET_LABELS_EN = {
     "cn": "A-shares",
     "hk": "Hong Kong",
     "us": "US",
+    "jp": "Japan",
+    "kr": "Korea",
+    "tw": "Taiwan",
 }
 _PHASE_LABELS_ZH = {
     "premarket": "盘前",
@@ -129,9 +135,9 @@ def rebuild_market_phase_summary_for_stock_code(
     stock_code: Any,
     context_snapshot: Any,
 ) -> Optional[Dict[str, Any]]:
-    """Rebuild phase summary with derived fields for JP/KR display codes.
+    """Rebuild phase summary with derived fields for suffix-only offshore display codes.
 
-    Legacy CN snapshots on JP/KR stock records can retain CN-local values. This
+    Legacy CN snapshots on offshore stock records can retain CN-local values. This
     helper recomputes those derived fields using the target market context while
     preserving non-derived source fields when possible.
     """
@@ -140,7 +146,7 @@ def rebuild_market_phase_summary_for_stock_code(
         return None
 
     market = get_market_for_stock(str(stock_code or "").strip())
-    if market not in {"jp", "kr"}:
+    if market not in {"jp", "kr", "tw"}:
         return dict(summary)
 
     phase = str(summary.get("phase", "")).strip()

@@ -81,6 +81,7 @@ _STOCK_CODE_RE = re.compile(
     r"|\d{1,5}\.HK"                           # HK suffix format
     r"|HK\d{1,5}"                             # HK prefix format
     r"|\d{5}"                                 # bare 5-digit HK code
+    r"|\d{4}\.(?:TW|TWO)"                      # Taiwan Yahoo suffix format
     r"|[A-Z]{1,5}(?:\.(?:US|[A-Z]))?"         # US ticker
     r")$",
     re.IGNORECASE,

@@ -172,7 +172,7 @@ def test_validate_stock_index_payload_accepts_bse_market() -> None:
     assert service.validate_stock_index_payload(payload) is payload
 
 
-def test_validate_stock_index_payload_accepts_jp_and_kr_markets() -> None:
+def test_validate_stock_index_payload_accepts_jp_kr_and_tw_markets() -> None:
     payload = _stock_index_payload()
     payload[0][0] = "7203.T"
     payload[0][1] = "7203.T"
@@ -180,6 +180,9 @@ def test_validate_stock_index_payload_accepts_jp_and_kr_markets() -> None:
     payload[1][0] = "000660.KS"
     payload[1][1] = "000660.KS"
     payload[1][6] = "KR"
+    payload[2][0] = "2330.TW"
+    payload[2][1] = "2330.TW"
+    payload[2][6] = "TW"
 
     assert service.validate_stock_index_payload(payload) is payload
 
