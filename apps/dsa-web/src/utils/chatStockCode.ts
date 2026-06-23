@@ -62,7 +62,7 @@ export function extractStockCodesFromMessage(message: string): string[] {
     /\b(BJ\d{6})\b/gi,
     /\b(hk\d{4,5})\b/gi,
     /\b(\d{1,5}\.HK)\b/gi,
-    /\b(\d{4}\.(?:TW|TWO))\b/gi,
+    /\b(\d{4,6}\.(?:TW|TWO))\b/gi,
     /\b(\d{5,6})\b/g,
     /\b([A-Z]{2,5}\.[A-Z]{1,2})\b/g,
     /\b([A-Z]{2,5})\b/g,

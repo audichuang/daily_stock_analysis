@@ -90,7 +90,7 @@ class YfinanceFetcher(BaseFetcher):
             return base.isdigit() and len(base) == 6
         if code.endswith((".TW", ".TWO")):
             base = code.rsplit(".", 1)[0]
-            return base.isdigit() and len(base) == 4
+            return base.isdigit() and 4 <= len(base) <= 6
         return False
 
     @staticmethod

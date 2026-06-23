@@ -30,8 +30,8 @@ _SUFFIX_DIGIT_LENS: dict = {
     ".T": (4, 5),
     ".KS": (6,),
     ".KQ": (6,),
-    ".TW": (4,),
-    ".TWO": (4,),
+    ".TW": (4, 5, 6),
+    ".TWO": (4, 5, 6),
 }
 
 _PRESERVE_SUFFIXES = {".T", ".KS", ".KQ", ".TW", ".TWO"}

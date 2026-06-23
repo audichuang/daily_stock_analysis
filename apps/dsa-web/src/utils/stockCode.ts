@@ -76,7 +76,7 @@ export function normalizeStockCode(stockCode: string): string {
     if ((suffix === 'KS' || suffix === 'KQ') && /^\d{6}$/.test(base)) {
       return `${base}.${suffix}`;
     }
-    if ((suffix === 'TW' || suffix === 'TWO') && /^\d{4}$/.test(base)) {
+    if ((suffix === 'TW' || suffix === 'TWO') && /^\d{4,6}$/.test(base)) {
       return `${base}.${suffix}`;
     }
 

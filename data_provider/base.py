@@ -135,7 +135,7 @@ def normalize_stock_code(stock_code: str) -> str:
             return f"{base}.{suffix.upper()}"
         if suffix.upper() in ('KS', 'KQ') and base.isdigit() and len(base) == 6:
             return f"{base}.{suffix.upper()}"
-        if suffix.upper() in ('TW', 'TWO') and base.isdigit() and len(base) == 4:
+        if suffix.upper() in ('TW', 'TWO') and base.isdigit() and 4 <= len(base) <= 6:
             return f"{base}.{suffix.upper()}"
         if suffix.upper() == 'HK' and base.isdigit() and 1 <= len(base) <= 5:
             return f"HK{base.zfill(5)}"
@@ -200,7 +200,7 @@ def _is_tw_market(code: str) -> bool:
     if not normalized.endswith((".TW", ".TWO")):
         return False
     base = normalized.rsplit(".", 1)[0]
-    return base.isdigit() and len(base) == 4
+    return base.isdigit() and 4 <= len(base) <= 6
 
 
 def _is_etf_code(code: str) -> bool:

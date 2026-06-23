@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] #1595 P1.5 新增 Provider Cache Capability Registry，按 provider、api surface、gateway 和 verification status 建模 prompt cache 能力，未知 OpenAI-compatible route 默认 telemetry only。
 - [改进] #1595 P1 新增 prompt cache telemetry / analysis-path hints / diagnostics 最小配置，默认不改变 provider 请求 shape，并复用 LLM usage HMAC secret 做 domain-separated cache hint 派生。
 - [新功能] 新增台股 Yahoo 后缀代码（`.TW` / `.TWO`）分析支持，接入 YFinance 日线/基础行情、市场语境、交易日历、API/Web 校验与文档边界说明。
+- [改进] 台股 suffix 代码识别由仅 4 位放宽至 4~6 位，支持 `00878.TW`、`006208.TW` 等 5~6 位 ETF 代码（后端 + Web 校验同步）。
+- [新功能] 新增台股全量自动补全索引（约 2100 档上市櫃个股与 ETF，来源为台湾证交所/柜买中心官方公开清单），Web 搜索可按代码/中文名称/别名提示台股标的；新增 `scripts/fetch_tw_stock_list.py`（抓官方清单生成种子 CSV）与 `scripts/merge_tw_into_index.py`（合并进索引），索引生成器同步支持 `.TW`/`.TWO` 后缀与 `TW` 市场标签。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 

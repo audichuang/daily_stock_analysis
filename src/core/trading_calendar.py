@@ -143,7 +143,7 @@ def get_market_for_stock(code: str) -> Optional[str]:
             return "kr"
     if code.endswith((".TW", ".TWO")):
         base = code.rsplit(".", 1)[0]
-        if base.isdigit() and len(base) == 4:
+        if base.isdigit() and 4 <= len(base) <= 6:
             return "tw"
     # A-share: 6-digit numeric
     if code.isdigit() and len(code) == 6:

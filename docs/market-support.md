@@ -2,7 +2,16 @@
 
 ## 日本/韩国/台湾个股 suffix-only MVP（Issue #1718，Refs #1718）
 
-当前阶段支持手动输入日本、韩国、台湾股票的 Yahoo Finance 后缀代码，进入既有个股分析、历史保存和基础报告展示链路。Web 自动补全内置一批常用日股/韩股种子索引，支持按 suffix 代码、中英文名称或常用别名搜索；台股当前以手动输入 suffix 代码为主。
+当前阶段支持日本、韩国、台湾股票的 Yahoo Finance 后缀代码，进入既有个股分析、历史保存和基础报告展示链路。Web 自动补全内置一批常用日股/韩股种子索引；台股为全量索引（约 2100 档上市櫃个股与 ETF，来源为台湾证交所/柜买中心官方公开清单），支持按 suffix 代码、中文名称或别名搜索。未收录的标的仍可手动输入完整 suffix 代码（如 `2330.TW`）直接分析。
+
+台股索引维护流程（需联网）：
+
+```bash
+python3 scripts/fetch_tw_stock_list.py   # 抓官方清单 -> scripts/stock_index_seeds/stock_list_tw.csv
+python3 scripts/merge_tw_into_index.py   # 合并进 public/static/data-cache 三处 stocks.index.json
+```
+
+> 因 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` 默认从上游拉取（不含台股）会覆盖本地缓存，启用台股全量索引的部署需将其设为 `false`。
 
 支持格式：
 
@@ -11,6 +20,7 @@
 - 韩国 KOSDAQ：`035720.KQ`
 - 台湾上市：`2330.TW`
 - 台湾上柜：`6488.TWO`
+- 台湾 ETF（5~6 位代码）：`00878.TW`、`006208.TW`
 
 约束与边界：
 

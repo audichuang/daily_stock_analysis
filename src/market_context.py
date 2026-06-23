@@ -40,7 +40,7 @@ def detect_market(stock_code: Optional[str]) -> str:
         return "jp"
     if re.match(r'^\d{6}\.(KS|KQ)$', code):
         return "kr"
-    if re.match(r'^\d{4}\.(TW|TWO)$', code):
+    if re.match(r'^\d{4,6}\.(TW|TWO)$', code):
         return "tw"
 
     # US stocks: 1-5 uppercase letters (AAPL, TSLA, GOOGL)

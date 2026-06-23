@@ -68,8 +68,14 @@ class TestIsCodeLike:
     def test_suffix_tw_lowercase(self):
         assert is_code_like("2330.tw") is True
 
-    def test_suffix_tw_rejects_non_4_digit_base(self):
-        assert is_code_like("02330.TW") is False
+    def test_suffix_tw_etf_5_and_6_digit(self):
+        # 台股 ETF 代码为 5~6 位（00878 国泰永续高股息、006208 富邦台50）
+        assert is_code_like("00878.TW") is True
+        assert is_code_like("006208.TW") is True
+
+    def test_suffix_tw_rejects_out_of_range_base(self):
+        assert is_code_like("233.TW") is False
+        assert is_code_like("0062080.TW") is False
 
     # --- Exchange prefix format (Issue #6 fix) ---
     def test_prefix_sh_upper(self):
@@ -169,8 +175,14 @@ class TestNormalizeCode:
     def test_suffix_tw_lowercase_preserved_uppercase(self):
         assert normalize_code("2330.tw") == "2330.TW"
 
-    def test_suffix_tw_rejects_non_4_digit_base(self):
-        assert normalize_code("02330.TW") is None
+    def test_suffix_tw_etf_5_and_6_digit_preserved(self):
+        # 台股 ETF 代码为 5~6 位（00878 国泰永续高股息、006208 富邦台50）
+        assert normalize_code("00878.TW") == "00878.TW"
+        assert normalize_code("006208.tw") == "006208.TW"
+
+    def test_suffix_tw_rejects_out_of_range_base(self):
+        assert normalize_code("233.TW") is None
+        assert normalize_code("0062080.TW") is None
 
     # --- Exchange prefix format (Issue #6 fix) ---
     def test_prefix_sh_upper(self):
