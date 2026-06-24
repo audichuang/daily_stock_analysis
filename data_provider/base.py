@@ -629,6 +629,22 @@ class DataFetcherManager:
         "LongbridgeFetcher": {"hk", "us"},
         "FinnhubFetcher": {"us"},
         "AlphaVantageFetcher": {"us"},
+        # TwseFetcher 仅提供大盘统计，不参与任何市场的日线路由（空集合 -> 永远跳过）。
+        "TwseFetcher": set(),
+    }
+    # 大盘统计（get_market_stats）按市场路由所用的数据源支持表。
+    # name 不在表中 => 任意市场都允许（保持旧行为）；
+    # name 在表中 => 仅当 region 在集合内才参与该 region 的统计。
+    # A 股统计提供方限定为 cn，避免在 tw 复盘时误用 A 股口径；
+    # TwseFetcher 限定为 tw。
+    _STATS_MARKET_FETCHER_SUPPORT = {
+        "EfinanceFetcher": {"cn"},
+        "TencentFetcher": {"cn"},
+        "AkshareFetcher": {"cn"},
+        "TushareFetcher": {"cn"},
+        "PytdxFetcher": {"cn"},
+        "BaostockFetcher": {"cn"},
+        "TwseFetcher": {"tw"},
     }
     _daily_source_health = CircuitBreaker(failure_threshold=3, cooldown_seconds=300.0)
 
@@ -1151,6 +1167,7 @@ class DataFetcherManager:
         from .baostock_fetcher import BaostockFetcher
         from .yfinance_fetcher import YfinanceFetcher
         from .longbridge_fetcher import LongbridgeFetcher
+        from .twse_fetcher import TwseFetcher
         config = get_config()
         # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
         efinance = EfinanceFetcher()
@@ -1159,6 +1176,8 @@ class DataFetcherManager:
         pytdx = PytdxFetcher()      # 通达信数据源（可配 PYTDX_HOST/PYTDX_PORT）
         baostock = BaostockFetcher()
         yfinance = YfinanceFetcher()
+        # 台股上市大盘统计（免金钥，仅 get_market_stats，不参与日线路由）
+        twse = TwseFetcher()
         optional_fetchers: List[BaseFetcher] = []
 
         tushare_token = (getattr(config, "tushare_token", None) or "").strip()
@@ -1196,6 +1215,7 @@ class DataFetcherManager:
                 pytdx,
                 baostock,
                 yfinance,
+                twse,
                 *optional_fetchers,
             ]
 
@@ -2414,9 +2434,24 @@ class DataFetcherManager:
         return []
 
     def get_market_stats(self, *, purpose: str = "unspecified") -> Dict[str, Any]:
-        """获取市场涨跌统计（自动切换数据源）"""
+        """获取市场涨跌统计（自动切换数据源）
+
+        当 purpose 形如 ``market_review:<region>`` 时，按 region 路由：
+        - region == "tw" 时只调用 TwseFetcher（台股上市），并跳过 A 股统计源与 TickFlow；
+        - region 为其他值（cn/us/hk/...）或 purpose 不匹配该格式时，保持原有
+          全数据源遍历行为，不影响 cn/hk/us。
+        """
         logger.info("[MarketStats] component=market_stats action=start purpose=%s", purpose)
+
+        region: Optional[str] = None
+        if purpose.startswith("market_review:"):
+            parsed = purpose.split(":", 1)[1].strip()
+            region = parsed or None
+
         tickflow_fetcher = self._get_tickflow_fetcher()
+        # TickFlow 为 A 股统计源；region 明确为 tw 时跳过。
+        if region == "tw":
+            tickflow_fetcher = None
         if tickflow_fetcher is not None:
             started_at = time.monotonic()
             try:
@@ -2446,7 +2481,15 @@ class DataFetcherManager:
                     e,
                 )
 
-        for fetcher in self._fetchers:
+        fetchers = self._get_fetchers_snapshot()
+        if region:
+            # name 不在表中 => 任意 region 都允许；在表中 => 仅当 region 在集合内才保留。
+            fetchers = [
+                f
+                for f in fetchers
+                if region in self._STATS_MARKET_FETCHER_SUPPORT.get(f.name, {region})
+            ]
+        for fetcher in fetchers:
             started_at = time.monotonic()
             try:
                 data = fetcher.get_market_stats()

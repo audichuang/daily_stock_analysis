@@ -75,7 +75,7 @@ TW_PROFILE = MarketProfile(
         "台股 三大法人 买卖超",
     ],
     prompt_index_hint="分析加权指数、柜买指数等各指数走势特点，并关注半导体电子权值股（尤其台积电权重）对大盘的带动或拖累",
-    has_market_stats=False,
+    has_market_stats=True,
     has_sector_rankings=False,
 )
 

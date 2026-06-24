@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 新增台股全量自动补全索引（约 2100 档上市櫃个股与 ETF，来源为台湾证交所/柜买中心官方公开清单），Web 搜索可按代码/中文名称/别名提示台股标的；新增 `scripts/fetch_tw_stock_list.py`（抓官方清单生成种子 CSV）与 `scripts/merge_tw_into_index.py`（合并进索引），索引生成器同步支持 `.TW`/`.TWO` 后缀与 `TW` 市场标签。
 - [新功能] 大盘复盘支持台股市场：`MARKET_REVIEW_REGION` 新增 `tw` 选项，复盘加权指数/柜买指数并接入台股策略蓝图（三大法人买卖超、新台币汇率、半导体电子权值股）；`both` 由 A股+港股+美股 扩展为 A股+港股+美股+台股；交易日历 `compute_effective_region`/`get_open_markets_today` 与个股大盘语境 region 标签同步支持 tw。
 - [改进] 新增 `scripts/refresh_us_stock_index.py`：从 NASDAQ Trader 官方清单（免 key）增量补进缺失的美股新上市代码（如 SPCX），修复自动补全美股代码过时问题。
+- [新功能] 台股大盘复盘接入真实市场数据：新增 `data_provider/twse_fetcher.py`（免 key，TWSE 官方 OpenAPI/rwd），复盘报告新增上市涨跌家数、成交金额与三大法人（外资/投信/自营商）买卖超净额；`get_market_stats` 按 `market_review:<region>` 路由（tw 走 TwseFetcher、跳过 A 股统计源），`TW_PROFILE.has_market_stats` 改为 True，其他市场口径不变。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 

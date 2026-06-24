@@ -97,7 +97,10 @@ class MarketOverview:
     limit_down_count: int = 0           # 跌停家数
     total_amount: float = 0.0           # 两市成交额（亿元）
     # north_flow: float = 0.0           # 北向资金净流入（亿元）- 已废弃，接口不可用
-    
+    # 三大法人买卖超净额（仅台股有数据，单位与 total_amount 一致：亿新台币）
+    # 键: foreign_net / trust_net / dealer_net / total_net；其他市场保持 None。
+    institutional_net: Optional[Dict[str, float]] = None
+
     # 板块涨幅榜
     top_sectors: List[Dict] = field(default_factory=list)     # 涨幅前5板块
     bottom_sectors: List[Dict] = field(default_factory=list)  # 跌幅前5板块
@@ -454,6 +457,15 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 overview.limit_down_count = stats.get('limit_down_count', 0)
                 overview.total_amount = stats.get('total_amount', 0.0)
 
+                # 三大法人买卖超（仅台股提供；其他市场 stats 中无这些键，保持 None）
+                if any(k in stats for k in ('foreign_net', 'trust_net', 'dealer_net', 'total_net')):
+                    overview.institutional_net = {
+                        'foreign_net': stats.get('foreign_net', 0.0),
+                        'trust_net': stats.get('trust_net', 0.0),
+                        'dealer_net': stats.get('dealer_net', 0.0),
+                        'total_net': stats.get('total_net', 0.0),
+                    }
+
                 logger.info(
                     "[大盘] %s action=get_market_stats status=success up=%s down=%s flat=%s "
                     "limit_up=%s limit_down=%s amount=%.0f亿",
@@ -737,6 +749,8 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 "total_amount": overview.total_amount,
                 "turnover_unit": self._get_turnover_unit_label(),
             }
+            if overview.institutional_net:
+                payload["breadth"]["institutional_net"] = dict(overview.institutional_net)
 
         return payload
 
@@ -857,7 +871,12 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 
     def _build_stats_block(self, overview: MarketOverview) -> str:
         """Build market statistics block."""
-        has_stats = overview.up_count or overview.down_count or overview.total_amount
+        has_stats = (
+            overview.up_count
+            or overview.down_count
+            or overview.total_amount
+            or overview.institutional_net
+        )
         if not has_stats:
             return ""
         if self._get_review_language() == "en":
@@ -874,6 +893,17 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                     f"Limit-up {overview.limit_up_count} / Limit-down {overview.limit_down_count}; "
                     f"Turnover {overview.total_amount:.0f} ({self._get_turnover_unit_label()})",
                 ]
+                + (
+                    [
+                        f"- **Institutional net** ({self._get_turnover_unit_label()}): "
+                        f"Foreign {overview.institutional_net.get('foreign_net', 0.0):+.0f} / "
+                        f"Inv. trust {overview.institutional_net.get('trust_net', 0.0):+.0f} / "
+                        f"Dealer {overview.institutional_net.get('dealer_net', 0.0):+.0f} / "
+                        f"Total {overview.institutional_net.get('total_net', 0.0):+.0f}"
+                    ]
+                    if overview.institutional_net
+                    else []
+                )
             )
         light = self.build_market_light_snapshot(overview)
         score, label = light["score"], light["temperature_label"]
@@ -891,6 +921,16 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             f"| 涨停/跌停 | {overview.limit_up_count} / {overview.limit_down_count} | 涨跌停差 {limit_spread:+d} |",
             f"| 两市成交额 | {overview.total_amount:.0f} 亿 | {self._describe_turnover(overview.total_amount)} |",
         ]
+        if overview.institutional_net:
+            inst = overview.institutional_net
+            unit = self._get_turnover_unit_label()
+            lines.append(
+                f"| 三大法人净买卖（{unit}） | "
+                f"外资 {inst.get('foreign_net', 0.0):+.0f} / "
+                f"投信 {inst.get('trust_net', 0.0):+.0f} / "
+                f"自营商 {inst.get('dealer_net', 0.0):+.0f} | "
+                f"合计 {inst.get('total_net', 0.0):+.0f} |"
+            )
         return "\n".join(lines)
 
     def build_market_light_snapshot(self, overview: MarketOverview) -> Dict[str, Any]:
