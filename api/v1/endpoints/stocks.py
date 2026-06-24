@@ -25,6 +25,8 @@ from api.v1.schemas.stocks import (
     KLineData,
     StockHistoryResponse,
     StockQuote,
+    StockQuoteBatchItem,
+    StockQuoteBatchResponse,
 )
 from api.v1.schemas.history import WatchlistRequest, WatchlistResponse
 from api.v1.schemas.common import ErrorResponse
@@ -48,6 +50,9 @@ router = APIRouter()
 
 # 须在 /{stock_code} 路由之前定义
 ALLOWED_MIME_STR = ", ".join(ALLOWED_MIME)
+
+# 批次行情单次最大代码数（看板 watchlist 量级；超出回 400 而非静默截断）
+MAX_BATCH_CODES = 50
 
 
 def _read_watchlist_codes(service: SystemConfigService) -> list:
@@ -406,6 +411,69 @@ def remove_from_watchlist(
 
 
 @router.get(
+    "/quotes",
+    response_model=StockQuoteBatchResponse,
+    responses={
+        200: {"description": "批次行情数据"},
+        400: {"description": "请求参数错误", "model": ErrorResponse},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="批量获取实时行情",
+    description="逗号分隔代码批量取价，单个失败回 quote=null（看板用，永不 500 整批）"
+)
+def get_stock_quotes(
+    codes: str = Query(..., description="逗号分隔股票代码，如 2330.TW,2317.TW,AAPL"),
+) -> StockQuoteBatchResponse:
+    """批量实时行情。
+
+    单个代码无数据 -> quote=None, error="no_data"（不用 0.0 哨兵伪装真实价）。
+    """
+    # 解析：split -> strip -> 去空 -> 去重保序
+    parsed: list = []
+    seen = set()
+    for raw in codes.split(","):
+        code = raw.strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        parsed.append(code)
+
+    if not parsed:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "empty_codes", "message": "codes 不能为空"},
+        )
+    if len(parsed) > MAX_BATCH_CODES:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "too_many_codes", "message": f"最多 {MAX_BATCH_CODES} 个代码"},
+        )
+
+    try:
+        service = StockService()
+        rows = service.get_realtime_quotes(parsed)
+        items = []
+        for code, row in zip(parsed, rows):
+            if row is None:
+                items.append(StockQuoteBatchItem(stock_code=code, quote=None, error="no_data"))
+                continue
+            try:
+                items.append(StockQuoteBatchItem(stock_code=code, quote=StockQuote(**row)))
+            except Exception as e:  # 单列构造失败也不拖垮整批
+                logger.warning(f"批次行情构造失败 {code}: {e}")
+                items.append(StockQuoteBatchItem(stock_code=code, quote=None, error=str(e)[:200]))
+        return StockQuoteBatchResponse(items=items)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量获取实时行情失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"批量获取行情失败: {str(e)}"},
+        )
+
+
+@router.get(
     "/{stock_code}/quote",
     response_model=StockQuote,
     responses={
@@ -446,20 +514,10 @@ def get_stock_quote(stock_code: str) -> StockQuote:
                 }
             )
         
-        return StockQuote(
-            stock_code=result.get("stock_code", stock_code),
-            stock_name=result.get("stock_name"),
-            current_price=result.get("current_price", 0.0),
-            change=result.get("change"),
-            change_percent=result.get("change_percent"),
-            open=result.get("open"),
-            high=result.get("high"),
-            low=result.get("low"),
-            prev_close=result.get("prev_close"),
-            volume=result.get("volume"),
-            amount=result.get("amount"),
-            update_time=result.get("update_time")
-        )
+        # result 来自 _map_quote_to_dict / _get_placeholder_quote，键与 StockQuote 字段一一对应
+        # （含新增的 source/as_of/is_stale），直接展开，避免显式 kwargs 漏带新字段。
+        result.setdefault("stock_code", stock_code)
+        return StockQuote(**result)
         
     except HTTPException:
         raise

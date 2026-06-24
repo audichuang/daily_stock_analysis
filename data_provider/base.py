@@ -631,6 +631,8 @@ class DataFetcherManager:
         "AlphaVantageFetcher": {"us"},
         # TwseFetcher 仅提供大盘统计，不参与任何市场的日线路由（空集合 -> 永远跳过）。
         "TwseFetcher": set(),
+        # ShioajiFetcher 仅提供台股实时报价，不参与任何市场的日线路由。
+        "ShioajiFetcher": set(),
     }
     # 大盘统计（get_market_stats）按市场路由所用的数据源支持表。
     # name 不在表中 => 任意市场都允许（保持旧行为）；
@@ -1205,6 +1207,15 @@ class DataFetcherManager:
         else:
             logger.debug("[数据源初始化] 跳过未配置的 AlphaVantageFetcher")
 
+        # 台股 Shioaji 真即时报价（仅 realtime_quote）：无条件实例化，内部按套件/金钥自我停用。
+        # try/except 包裹 import：即使 shioaji_fetcher 模组本身导入异常，也不应连锁炸掉 base.py
+        # （否则 StockService 会落入 ImportError 分支返回 placeholder 假价）。
+        try:
+            from .shioaji_fetcher import ShioajiFetcher
+            optional_fetchers.append(ShioajiFetcher())
+        except Exception as e:
+            logger.warning("[数据源初始化] ShioajiFetcher 加载失败，台股实时降级 yfinance: %s", e)
+
         # 初始化数据源列表
         self._ensure_concurrency_guards()
         with self._fetchers_lock:
@@ -1639,6 +1650,7 @@ class DataFetcherManager:
             return "akshare_hk"
         mapping = {
             "LongbridgeFetcher": "longbridge",
+            "ShioajiFetcher": "shioaji",
             "YfinanceFetcher": "yfinance",
             "AkshareFetcher": "akshare",
             "FinnhubFetcher": "finnhub",
@@ -1729,8 +1741,8 @@ class DataFetcherManager:
         is_kr = (not is_us) and (not is_hk) and _is_kr_market(stock_code)
         is_tw = (not is_us) and (not is_hk) and _is_tw_market(stock_code)
 
-        if is_jp or is_kr or is_tw:
-            market_label = "日股" if is_jp else "韩股" if is_kr else "台股"
+        if is_jp or is_kr:
+            market_label = "日股" if is_jp else "韩股"
             quote = self._try_fetcher_quote(stock_code, "YfinanceFetcher")
             if quote is not None:
                 logger.info(f"[实时行情] {market_label} {stock_code} 成功获取 (来源: YfinanceFetcher)")
@@ -1740,6 +1752,38 @@ class DataFetcherManager:
                 )
             if log_final_failure:
                 logger.info(f"[实时行情] {market_label} {stock_code} 无可用数据源")
+            return None
+
+        if is_tw:
+            # 台股：Shioaji 真即时优先（已登录/可用时），否则 yfinance（约延迟 15-20 分钟）。
+            # _try_fetcher_quote -> _get_fetcher_by_name(capability="realtime_quote")：
+            # Shioaji 未安装/无金钥/熔断 OPEN 时被判定不可用，零网络代价跳过，
+            # 故所有降级态都收敛到同一条 cheap path，不需在此为它们各写 if。
+            primary_quote = self._try_fetcher_quote(stock_code, "ShioajiFetcher")
+            fallback_from = (
+                self._realtime_fetcher_token("ShioajiFetcher")
+                if primary_quote is None
+                else None
+            )
+            if primary_quote is not None:
+                logger.info(f"[实时行情] 台股 {stock_code} 成功获取 (来源: ShioajiFetcher)")
+            # primary 缺字段 -> 用 yfinance 补；primary=None -> yfinance 当唯一源
+            primary_quote = self._supplement_quote(stock_code, primary_quote, "YfinanceFetcher")
+            if primary_quote is not None:
+                enriched = self._enrich_realtime_quote(
+                    primary_quote,
+                    fallback_from=fallback_from,
+                    realtime_cache_ttl=getattr(config, "realtime_cache_ttl", None),
+                )
+                # honesty：非 Shioaji 源（yfinance 台股不带 provider_timestamp，_enrich 会把
+                # is_stale 设为 None）显式标记延迟。UI 仅凭 source + is_stale 即可诚实展示，
+                # 不需在前端硬编「source!=shioaji 即延迟」。
+                src_val = getattr(getattr(enriched, "source", None), "value", None)
+                if src_val != "shioaji" and getattr(enriched, "is_stale", None) is None:
+                    setattr(enriched, "is_stale", True)
+                return enriched
+            if log_final_failure:
+                logger.info(f"[实时行情] 台股 {stock_code} 无可用数据源")
             return None
 
         if is_us or is_hk:

@@ -29,7 +29,11 @@ class StockQuote(BaseModel):
     volume: Optional[float] = Field(None, description="成交量（股）")
     amount: Optional[float] = Field(None, description="成交额（元）")
     update_time: Optional[str] = Field(None, description="更新时间")
-    
+    # 行情来源与时效（additive，旧客户端忽略即可）
+    source: Optional[str] = Field(None, description="行情来源 (shioaji/fallback/efinance/akshare...)")
+    as_of: Optional[str] = Field(None, description="行情对应时间 (provider_timestamp 优先, 否则 fetched_at), ISO8601")
+    is_stale: Optional[bool] = Field(None, description="是否延迟/陈旧 (台股 yfinance 约延迟 15-20 分钟)")
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "stock_code": "600519",
@@ -43,9 +47,26 @@ class StockQuote(BaseModel):
             "prev_close": 1785.00,
             "volume": 10000000,
             "amount": 18000000000,
-            "update_time": "2024-01-01T15:00:00"
+            "update_time": "2024-01-01T15:00:00",
+            "source": "shioaji",
+            "as_of": "2024-01-01T15:00:00+08:00",
+            "is_stale": False
         }
     })
+
+
+class StockQuoteBatchItem(BaseModel):
+    """批次行情单项：quote 为 None 表示该代码取价失败（不用 0.0 哨兵伪装成真实价）"""
+
+    stock_code: str = Field(..., description="股票代码")
+    quote: Optional[StockQuote] = Field(None, description="行情数据，None 表示该代码无可用数据")
+    error: Optional[str] = Field(None, description="取价失败原因 (no_data/realtime_disabled/...)，成功时为 None")
+
+
+class StockQuoteBatchResponse(BaseModel):
+    """批次行情响应"""
+
+    items: List[StockQuoteBatchItem] = Field(default_factory=list, description="按请求代码顺序的行情结果")
 
 
 class KLineData(BaseModel):

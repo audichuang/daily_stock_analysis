@@ -18,6 +18,33 @@ from src.repositories.stock_repo import StockRepository
 logger = logging.getLogger(__name__)
 
 
+def _map_quote_to_dict(quote: Any, fallback_code: str) -> Dict[str, Any]:
+    """把 UnifiedRealtimeQuote 映射为 API 友好的 dict（单股/批次共用）。
+
+    全部用 getattr 安全访问，缺失字段为 None；新增 source/as_of/is_stale 用于
+    诚实标示行情来源与时效（台股 yfinance 约延迟 15-20 分钟）。
+    """
+    src = getattr(quote, "source", None)
+    return {
+        "stock_code": getattr(quote, "code", fallback_code),
+        "stock_name": getattr(quote, "name", None),
+        "current_price": getattr(quote, "price", 0.0) or 0.0,
+        "change": getattr(quote, "change_amount", None),
+        "change_percent": getattr(quote, "change_pct", None),
+        "open": getattr(quote, "open_price", None),
+        "high": getattr(quote, "high", None),
+        "low": getattr(quote, "low", None),
+        "prev_close": getattr(quote, "pre_close", None),
+        "volume": getattr(quote, "volume", None),
+        "amount": getattr(quote, "amount", None),
+        "update_time": datetime.now().isoformat(),
+        # provider_timestamp 优先（真实行情时间），否则退回 fetched_at（本系统获取时间）
+        "as_of": getattr(quote, "provider_timestamp", None) or getattr(quote, "fetched_at", None),
+        "source": src.value if src is not None else None,
+        "is_stale": getattr(quote, "is_stale", None),
+    }
+
+
 class StockService:
     """
     股票数据服务
@@ -29,61 +56,70 @@ class StockService:
         """初始化股票数据服务"""
         self.repo = StockRepository()
     
-    def get_realtime_quote(self, stock_code: str) -> Optional[Dict[str, Any]]:
+    def get_realtime_quote(
+        self, stock_code: str, *, manager: Optional[Any] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         获取股票实时行情
-        
+
         Args:
             stock_code: 股票代码
-            
+            manager: 可选，复用已建好的 DataFetcherManager（批次场景）；None 时自建
+
         Returns:
             实时行情数据字典
         """
         try:
-            # 调用数据获取器获取实时行情
-            from data_provider.base import DataFetcherManager
-            
-            manager = DataFetcherManager()
-            quote = manager.get_realtime_quote(stock_code)
-            
+            own_manager = manager is None
+            if own_manager:
+                from data_provider.base import DataFetcherManager
+
+                manager = DataFetcherManager()
+            try:
+                quote = manager.get_realtime_quote(stock_code)
+            finally:
+                if own_manager and hasattr(manager, "close"):
+                    manager.close()
+
             if quote is None:
                 logger.warning(f"获取 {stock_code} 实时行情失败")
                 return None
-            
-            # UnifiedRealtimeQuote 是 dataclass，使用 getattr 安全访问字段
-            # 字段映射: UnifiedRealtimeQuote -> API 响应
-            # - code -> stock_code
-            # - name -> stock_name
-            # - price -> current_price
-            # - change_amount -> change
-            # - change_pct -> change_percent
-            # - open_price -> open
-            # - high -> high
-            # - low -> low
-            # - pre_close -> prev_close
-            # - volume -> volume
-            # - amount -> amount
-            return {
-                "stock_code": getattr(quote, "code", stock_code),
-                "stock_name": getattr(quote, "name", None),
-                "current_price": getattr(quote, "price", 0.0) or 0.0,
-                "change": getattr(quote, "change_amount", None),
-                "change_percent": getattr(quote, "change_pct", None),
-                "open": getattr(quote, "open_price", None),
-                "high": getattr(quote, "high", None),
-                "low": getattr(quote, "low", None),
-                "prev_close": getattr(quote, "pre_close", None),
-                "volume": getattr(quote, "volume", None),
-                "amount": getattr(quote, "amount", None),
-                "update_time": datetime.now().isoformat(),
-            }
-            
+
+            return _map_quote_to_dict(quote, stock_code)
+
         except ImportError:
             logger.warning("DataFetcherManager 未找到，使用占位数据")
             return self._get_placeholder_quote(stock_code)
         except Exception as e:
             logger.error(f"获取实时行情失败: {e}", exc_info=True)
             return None
+
+    def get_realtime_quotes(self, codes: List[str]) -> List[Optional[Dict[str, Any]]]:
+        """批量获取实时行情（看板用）。
+
+        建一个 DataFetcherManager 复用全程；逐个取价，单个失败回 None（不拖垮整批）。
+        返回与 codes 等长、同序的列表，元素为 dict 或 None。
+
+        ponytail: sequential 迴圈即可（30s 輪詢 + watchlist 量級）；
+        台股 Shioaji 是模組級單一 session（序列化瓶頸），盲目併發無益。
+        watchlist 變大且實測偏慢時，再上 bounded ThreadPoolExecutor。
+        """
+        from data_provider.base import DataFetcherManager
+
+        manager = DataFetcherManager()
+        results: List[Optional[Dict[str, Any]]] = []
+        try:
+            for code in codes:
+                try:
+                    quote = manager.get_realtime_quote(code, log_final_failure=False)
+                    results.append(_map_quote_to_dict(quote, code) if quote is not None else None)
+                except Exception as e:  # 单个代码失败不影响其余
+                    logger.warning(f"批量行情: {code} 取价失败: {e}")
+                    results.append(None)
+        finally:
+            if hasattr(manager, "close"):
+                manager.close()
+        return results
     
     def get_history_data(
         self,
@@ -183,4 +219,7 @@ class StockService:
             "volume": None,
             "amount": None,
             "update_time": datetime.now().isoformat(),
+            "source": "placeholder",
+            "as_of": None,
+            "is_stale": None,
         }

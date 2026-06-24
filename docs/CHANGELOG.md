@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] `main.py --serve-only` 在低配主机上因 uvicorn 在 3.0s 启动自检窗口内才惰性 import 应用（litellm + 整个 app 树）导致超时退出、容器反复重启；改为在计时前于调用线程预先 import app 对象再交给 uvicorn，启动自检不再误杀慢启动。
 - [修复] Docker 镜像预置 efinance 缓存目录（efinance/data）属主给非 root 运行用户 dsa，修复 A 股 efinance 数据源因写 search-cache.json 触发 PermissionError 而每次抓取失败降级的问题。
 - [修复] Docker 部署中 Web 设置页保存自定义 Webhook 模板时自动转义 `$content_json` 等应用占位符，并在运行时还原，避免 Compose 重新部署将其展开为空。
+- [新功能] 新增「实时盯盘」看板页（Web `/board`）与批次行情接口 `GET /api/v1/stocks/quotes?codes=...`，复用自选队列，前端 30s 轮询 + 手动刷新，按 source/staleness 诚实标示实时/延迟/不可用。
+- [新功能] 新增台股 Shioaji 真即时行情数据源 `data_provider/shioaji_fetcher.py`（仅 realtime_quote，持久 session + 登入熔断），台股行情改为 Shioaji 优先、yfinance 补充/兜底；未安装 shioaji 套件或无金钥时自动降级 yfinance。
+- [改进] `StockQuote` schema 追加 `source`/`as_of`/`is_stale` 字段（additive，旧客户端忽略即可），单股与批次行情接口同时带出行情来源与时效；台股 yfinance 来源显式标记延迟。
+- [文档] `.env.example` 补充可选的 `SHIOAJI_API_KEY` / `SHIOAJI_SECRET_KEY` 占位（由 Doppler 注入，勿写真值），新增 `docs/realtime-board.md` 说明看板与 fallback 真值表。
 
 ## [3.23.0] - 2026-06-20
 
