@@ -163,10 +163,58 @@ HK_BLUEPRINT = MarketStrategyBlueprint(
 )
 
 
+TW_BLUEPRINT = MarketStrategyBlueprint(
+    region="tw",
+    title="台股市场三段式复盘策略",
+    positioning="聚焦加权指数与柜买指数趋势、三大法人买卖超资金动向与类股轮动，形成次日交易计划。",
+    principles=[
+        "先看加权指数与柜买指数方向，再看三大法人买卖超，最后看类股持续性。",
+        "留意半导体电子权值股（尤其台积电）对大盘指数的带动与背离。",
+        "结论必须映射到仓位、节奏与风险控制动作，仅用当日数据与近3日新闻，不臆测未验证信息。",
+    ],
+    dimensions=[
+        StrategyDimension(
+            name="趋势结构",
+            objective="判断市场处于上升、震荡还是防守阶段。",
+            checkpoints=[
+                "加权指数与柜买指数是否同向（大型权值股 vs 中小型股）",
+                "放量上涨或缩量下跌是否成立",
+                "关键支撑阻力（均线/前高前低）是否被突破",
+            ],
+        ),
+        StrategyDimension(
+            name="资金筹码",
+            objective="识别三大法人动向与市场风险偏好。",
+            checkpoints=[
+                "外资、投信、自营商买卖超方向与规模",
+                "新台币汇率走势与外资进出的连动",
+                "投信作帐与外资期货净部位偏多或偏空",
+            ],
+        ),
+        StrategyDimension(
+            name="主线类股",
+            objective="提炼可交易主线与规避方向。",
+            checkpoints=[
+                "半导体电子（台积电/IC设计/封测）主线趋势是否延续",
+                "金融、传产（航运/塑化等）是否有资金接棒轮动",
+                "领跌类股是否扩散、是否出现权值股拖累指数",
+            ],
+        ),
+    ],
+    action_framework=[
+        "进攻：加权与柜买指数共振上行 + 外资/投信持续买超 + 半导体电子主线强化。",
+        "均衡：指数分化或缩量震荡，法人买卖超方向不明，控制仓位并等待确认。",
+        "防守：指数转弱 + 外资卖超 + 领跌类股扩散，优先风控与减仓。",
+    ],
+)
+
+
 def get_market_strategy_blueprint(region: str) -> MarketStrategyBlueprint:
     """Return strategy blueprint by market region."""
     if region == "us":
         return US_BLUEPRINT
     if region == "hk":
         return HK_BLUEPRINT
+    if region == "tw":
+        return TW_BLUEPRINT
     return CN_BLUEPRINT

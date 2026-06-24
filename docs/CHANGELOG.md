@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 新增台股 Yahoo 后缀代码（`.TW` / `.TWO`）分析支持，接入 YFinance 日线/基础行情、市场语境、交易日历、API/Web 校验与文档边界说明。
 - [改进] 台股 suffix 代码识别由仅 4 位放宽至 4~6 位，支持 `00878.TW`、`006208.TW` 等 5~6 位 ETF 代码（后端 + Web 校验同步）。
 - [新功能] 新增台股全量自动补全索引（约 2100 档上市櫃个股与 ETF，来源为台湾证交所/柜买中心官方公开清单），Web 搜索可按代码/中文名称/别名提示台股标的；新增 `scripts/fetch_tw_stock_list.py`（抓官方清单生成种子 CSV）与 `scripts/merge_tw_into_index.py`（合并进索引），索引生成器同步支持 `.TW`/`.TWO` 后缀与 `TW` 市场标签。
+- [新功能] 大盘复盘支持台股市场：`MARKET_REVIEW_REGION` 新增 `tw` 选项，复盘加权指数/柜买指数并接入台股策略蓝图（三大法人买卖超、新台币汇率、半导体电子权值股）；`both` 由 A股+港股+美股 扩展为 A股+港股+美股+台股；交易日历 `compute_effective_region`/`get_open_markets_today` 与个股大盘语境 region 标签同步支持 tw。台股复盘暂不含涨跌家数与类股排行（资料源未提供，`has_market_stats`/`has_sector_rankings` 保持 False）。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 

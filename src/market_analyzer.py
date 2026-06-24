@@ -145,7 +145,7 @@ class MarketAnalyzer:
         self.search_service = search_service
         self.analyzer = analyzer
         self.data_manager = DataFetcherManager()
-        self.region = region if region in ("cn", "us", "hk") else "cn"
+        self.region = region if region in ("cn", "us", "hk", "tw") else "cn"
         self.profile: MarketProfile = get_profile(self.region)
         self.strategy = get_market_strategy_blueprint(self.region)
 
@@ -168,6 +168,8 @@ class MarketAnalyzer:
             return "US market" if review_language == "en" else "美股市场"
         if self.region == "hk":
             return "Hong Kong market" if review_language == "en" else "港股市场"
+        if self.region == "tw":
+            return "TW market" if review_language == "en" else "台股市场"
         if review_language == "en":
             return "A-share market"
         return "A股市场"
@@ -178,6 +180,8 @@ class MarketAnalyzer:
             return "USD bn" if self._get_review_language() == "en" else "十亿美元"
         if self.region == "hk":
             return "HKD bn" if self._get_review_language() == "en" else "十亿港元"
+        if self.region == "tw":
+            return "TWD 100m" if self._get_review_language() == "en" else "新台币亿元"
         return "CNY 100m" if self._get_review_language() == "en" else "亿"
 
     def _format_turnover_value(self, amount_raw: float) -> str:
@@ -200,7 +204,7 @@ class MarketAnalyzer:
 
     def _get_review_title(self, date: str) -> str:
         if self._get_review_language() == "en":
-            market_names = {"us": "US Market Recap", "hk": "HK Market Recap"}
+            market_names = {"us": "US Market Recap", "hk": "HK Market Recap", "tw": "TW Market Recap"}
             market_name = market_names.get(self.region, "A-share Market Recap")
             return f"## {date} {market_name}"
         return f"## {date} 大盘复盘"
@@ -211,6 +215,8 @@ class MarketAnalyzer:
                 return "Analyze the key moves in the S&P 500, Nasdaq, Dow, and other major indices."
             if self.region == "hk":
                 return "Analyze the key moves in the HSI, Hang Seng Tech, HSCEI, and other major indices."
+            if self.region == "tw":
+                return "Analyze the key moves in the TAIEX, TPEx, and other major indices, with attention to semiconductor and electronics heavyweights (notably TSMC) leading or dragging the index."
             return "Analyze the price action in the SSE, SZSE, ChiNext, and other major indices."
         return self.profile.prompt_index_hint
 
@@ -260,6 +266,33 @@ Focus on HSI trend, southbound flow dynamics, and sector rotation to define next
 - 进攻：主板块联动上行且量能/风险位同步改善。
 - 均衡：指数分化或量能未明显放大，仓位保守执行。
 - 防守：突破失守且波动率抬升时，优先减码并保留反弹可交易性。"""
+        if self.region == "tw" and self._get_review_language() == "en":
+            return """## Strategy Blueprint: Taiwan Market Three-Phase Recap Strategy
+Focus on TAIEX/TPEx trend, institutional flow (foreign/investment-trust/dealer), and sector rotation to shape the next-session trading plan.
+
+### Strategy Principles
+- Read TAIEX and TPEx direction first, then institutional net buy/sell, and finally sector persistence.
+- Watch how semiconductor and electronics heavyweights (notably TSMC) lead or diverge from the index.
+- Every conclusion must map to position sizing, pace, and risk control, using today's data and the latest 3-day news without inventing unverified information.
+
+### Analysis Dimensions
+- Trend Structure: Determine whether the market is in an uptrend, range, or defensive phase.
+  - Are TAIEX and TPEx aligned (large-cap heavyweights vs small/mid caps)
+  - Is the move on expanding volume or contracting volume
+  - Have key support/resistance levels (moving averages, prior highs/lows) been broken
+- Capital & Chips: Identify institutional flow and risk appetite.
+  - Foreign, investment-trust, and dealer net buy/sell direction and scale
+  - TWD exchange-rate trend and its linkage with foreign inflows/outflows
+  - Investment-trust window dressing and foreign futures net positioning
+- Leading Sectors: Distill tradable leadership and areas to avoid.
+  - Whether the semiconductor/electronics (TSMC/IC design/packaging-testing) leadership persists
+  - Whether financials and traditional sectors (shipping/petrochemical) pick up rotation
+  - Whether laggards broaden or heavyweights drag the index
+
+### Action Framework
+- Offensive: TAIEX and TPEx rise in sync + sustained foreign/investment-trust buying + strengthening semiconductor/electronics leadership.
+- Balanced: index divergence or low-volume consolidation with unclear institutional flow; keep sizing controlled and wait for confirmation.
+- Defensive: indices weaken + foreign selling + broadening laggards; prioritize risk control and de-risking."""
         if not (self.region == "cn" and self._get_review_language() == "en"):
             return self.strategy.to_prompt_block()
         return """## Strategy Blueprint: A-share Three-Phase Recap Strategy
@@ -302,6 +335,12 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 - **趋势结构**：判断市场在进攻、震荡与防守中的状态是否一致。
 - **资金与情绪**：结合波动率、宽度和主题轮动评估风险偏好。
 - **主题主线**：识别可延续和可放大的行业主线与防守线索。
+"""
+        if self.region == "tw" and review_language == "en":
+            return """### 6. Strategy Framework
+- **Trend Structure**: Judge whether TAIEX and TPEx are aligned and the market is in an uptrend, range, or defensive phase.
+- **Capital & Chips**: Track foreign/investment-trust/dealer net buy/sell and the TWD exchange-rate linkage for risk appetite.
+- **Leading Sectors**: Focus on semiconductor/electronics (notably TSMC) persistence and financials/traditional-sector rotation.
 """
         if not (self.region == "cn" and review_language == "en"):
             return self.strategy.to_markdown_block()
@@ -499,6 +538,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             "cn": "大盘" if review_language == "zh" else "A-share market",
             "us": "美股市场" if review_language == "zh" else "US market",
             "hk": "港股市场" if review_language == "zh" else "HK market",
+            "tw": "台股市场" if review_language == "zh" else "TW market",
         }
         
         try:
@@ -1434,7 +1474,7 @@ Output the report content directly, no extra commentary.
 - **Leaders**: {top_text or "N/A"}
 - **Laggards**: {bottom_text or "N/A"}
 """
-            market_names = {"us": "US Market Recap", "hk": "HK Market Recap"}
+            market_names = {"us": "US Market Recap", "hk": "HK Market Recap", "tw": "TW Market Recap"}
             market_name = market_names.get(self.region, "A-share Market Recap")
             report = f"""## {overview.date} {market_name}
 
@@ -1455,7 +1495,7 @@ Market conditions can change quickly. The data above is for reference only and d
 """
             return report
 
-        market_labels = {"cn": "A股", "us": "美股", "hk": "港股"}
+        market_labels = {"cn": "A股", "us": "美股", "hk": "港股", "tw": "台股"}
         market_label = market_labels.get(self.region, "A股")
         dashboard_block = self._build_stats_block(overview)
         indices_block = self._build_indices_block(overview)
