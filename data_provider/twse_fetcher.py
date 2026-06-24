@@ -22,7 +22,7 @@ TwseFetcher - 台股大盘统计数据源（仅市场统计，无日线）
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 import pandas as pd
 import requests
@@ -46,19 +46,6 @@ _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 )
-
-
-def _parse_int(value: Any) -> int:
-    """将可能含千分位逗号的字符串解析为 int；失败返回 0。"""
-    if value is None:
-        return 0
-    text = str(value).replace(",", "").strip()
-    if not text:
-        return 0
-    try:
-        return int(float(text))
-    except (ValueError, TypeError):
-        return 0
 
 
 def _parse_float(value: Any) -> float:
@@ -124,11 +111,11 @@ class TwseFetcher(BaseFetcher):
             return None
 
         return {
-            "up_count": _parse_int(target.get("上漲")),
-            "down_count": _parse_int(target.get("下跌")),
-            "flat_count": _parse_int(target.get("持平")),
-            "limit_up_count": _parse_int(target.get("漲停")),
-            "limit_down_count": _parse_int(target.get("跌停")),
+            "up_count": int(_parse_float(target.get("上漲"))),
+            "down_count": int(_parse_float(target.get("下跌"))),
+            "flat_count": int(_parse_float(target.get("持平"))),
+            "limit_up_count": int(_parse_float(target.get("漲停"))),
+            "limit_down_count": int(_parse_float(target.get("跌停"))),
         }
 
     def _fetch_total_amount(self) -> Optional[float]:
