@@ -39,6 +39,8 @@ from api.v1.schemas.stocks import (
     StockQuote,
     StockQuoteBatchItem,
     StockQuoteBatchResponse,
+    StockTrendResponse,
+    TrendPoint,
     StockHistoryResponse,
     KLineData,
 )
@@ -157,6 +159,8 @@ __all__ = [
     "StockQuote",
     "StockQuoteBatchItem",
     "StockQuoteBatchResponse",
+    "StockTrendResponse",
+    "TrendPoint",
     "StockHistoryResponse",
     "KLineData",
     # backtest

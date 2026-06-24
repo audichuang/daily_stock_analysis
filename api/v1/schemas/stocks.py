@@ -69,6 +69,22 @@ class StockQuoteBatchResponse(BaseModel):
     items: List[StockQuoteBatchItem] = Field(default_factory=list, description="按请求代码顺序的行情结果")
 
 
+class TrendPoint(BaseModel):
+    """走势图单点（折线用，非 K 线）"""
+
+    t: str = Field(..., description="时间点 (ISO8601)")
+    price: float = Field(..., description="价格（日/月/年为收盘价，分时为最新价）")
+
+
+class StockTrendResponse(BaseModel):
+    """股票价格走势（折线）：range=day 今日分时 / month 近一月日线 / year 近一年日线"""
+
+    stock_code: str = Field(..., description="股票代码")
+    range: str = Field(..., description="day / month / year")
+    source: Optional[str] = Field(None, description="数据来源说明（如 intraday 来自 yfinance，可能延迟）")
+    points: List[TrendPoint] = Field(default_factory=list, description="按时间升序的走势点")
+
+
 class KLineData(BaseModel):
     """K 线数据点"""
     

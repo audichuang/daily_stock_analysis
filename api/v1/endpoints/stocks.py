@@ -27,6 +27,8 @@ from api.v1.schemas.stocks import (
     StockQuote,
     StockQuoteBatchItem,
     StockQuoteBatchResponse,
+    StockTrendResponse,
+    TrendPoint,
 )
 from api.v1.schemas.history import WatchlistRequest, WatchlistResponse
 from api.v1.schemas.common import ErrorResponse
@@ -610,4 +612,36 @@ def get_stock_history(
                 "error": "internal_error",
                 "message": f"获取历史行情失败: {str(e)}"
             }
+        )
+
+
+@router.get(
+    "/{stock_code}/trend",
+    response_model=StockTrendResponse,
+    responses={
+        200: {"description": "价格走势折线"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="获取股票价格走势（折线）",
+    description="range=day 今日分时 / month 近一月日线 / year 近一年日线；失败回空 points"
+)
+def get_stock_trend(
+    stock_code: str,
+    range: str = Query("month", description="走势范围", pattern="^(day|month|year)$"),
+) -> StockTrendResponse:
+    """价格走势折线（看板 inline 图用）。取数失败回空 points，不抛 500（除非内部异常）。"""
+    try:
+        service = StockService()
+        points, source = service.get_price_trend(stock_code, range)
+        return StockTrendResponse(
+            stock_code=stock_code,
+            range=range,
+            source=source,
+            points=[TrendPoint(**p) for p in points],
+        )
+    except Exception as e:
+        logger.error(f"获取走势失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"获取走势失败: {str(e)}"},
         )

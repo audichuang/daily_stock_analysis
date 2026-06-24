@@ -10,8 +10,9 @@ import pytest
 import data_provider.shioaji_fetcher as sf
 from data_provider.realtime_types import RealtimeSource
 
-# 快照时间用「当下」，确保经 _enrich 后落在 ttl 内被判为 fresh
-_NOW_NS = int(time.time() * 1e9)
+# Shioaji 的 ts 是「台北裸值」纳秒：模拟「台北此刻」= UTC now + 8h 的裸 wall-clock，
+# 经 _ns_to_iso 贴 +08:00 还原后绝对时刻 ≈ 真实当下，确保 _enrich 后落在 ttl 内判 fresh。
+_NOW_NS = int((time.time() + 8 * 3600) * 1e9)
 
 
 class _FakeContract:
@@ -180,6 +181,37 @@ def test_stale_snapshot_failure_does_not_kill_newer_session(monkeypatch):
     assert sf._api is new_api
     assert sf._logged_in is True
     assert sf._login_breaker.get_status() == before
+
+
+def test_shioaji_trend_month_resamples_sorts_and_uses_taipei_date(monkeypatch):
+    import datetime as dt
+
+    monkeypatch.setattr(sf, "_HAS_SHIOAJI", True)
+
+    def taipei_ns(y, mo, d, h, mi):
+        # 模拟「台北裸值」：以 UTC 取该 wall-clock 的 epoch（_ns_to_iso 会再贴 +08:00 还原）
+        return int(dt.datetime(y, mo, d, h, mi, tzinfo=dt.timezone.utc).timestamp() * 1e9)
+
+    # 故意乱序、跨两个交易日；每日末根(13:30)即收盘
+    ts = [
+        taipei_ns(2026, 6, 24, 13, 30),  # d24 收 130
+        taipei_ns(2026, 6, 23, 9, 0),    # d23 开 100
+        taipei_ns(2026, 6, 24, 9, 0),    # d24 开 120
+        taipei_ns(2026, 6, 23, 13, 30),  # d23 收 110
+    ]
+    close = [130.0, 100.0, 120.0, 110.0]
+
+    class _Api:
+        Contracts = _FakeContracts()
+
+        def kbars(self, contract, start, end):
+            return {"ts": ts, "Close": close}
+
+    monkeypatch.setattr(sf, "_ensure_session", lambda: _Api())
+
+    pts = sf.shioaji_trend("2330.TW", "month")
+    assert [p["t"] for p in pts] == ["2026-06-23", "2026-06-24"]  # 台北日期、升序
+    assert [p["price"] for p in pts] == [110.0, 130.0]  # 每日末根=收盘
 
 
 def test_availability_probe_does_not_consume_breaker(monkeypatch):

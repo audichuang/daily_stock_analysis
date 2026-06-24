@@ -10,7 +10,7 @@
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 from src.repositories.stock_repo import StockRepository
@@ -120,6 +120,67 @@ class StockService:
             if hasattr(manager, "close"):
                 manager.close()
         return results
+
+    def get_price_trend(self, stock_code: str, range_: str) -> tuple:
+        """价格走势折线点（非 K 线）。返回 (points, source)。
+
+        台股优先走 Shioaji 真资料：day=今日分钟线、month=近30天日线（kbars 单次上限 30 天）。
+        year 超过 kbars 上限、或 Shioaji 不可用/非台股 → yfinance 兜底
+        （day=5m 分时约延迟，month/year=日线）。失败回 ([], source)。
+        """
+        # 1) 台股优先 Shioaji（真即时/真交易所历史）
+        try:
+            from data_provider.shioaji_fetcher import shioaji_trend
+
+            pts = shioaji_trend(stock_code, range_)
+            if pts:
+                return pts, "shioaji"
+        except Exception as e:
+            logger.debug(f"Shioaji 走势({range_}) {stock_code} 降级: {e}")
+
+        # 2) yfinance 兜底
+        if range_ == "day":
+            return self._intraday_trend(stock_code), "yfinance(intraday,可能延迟)"
+        days = 365 if range_ == "year" else 30
+        try:
+            hist = self.get_history_data(stock_code, days=days)
+        except Exception as e:
+            logger.warning(f"走势({range_}) {stock_code} 取历史失败: {e}")
+            return [], "yfinance(daily)"
+        points: List[Dict[str, Any]] = []
+        for d in hist.get("data", []):
+            close = d.get("close")
+            if close:
+                points.append({"t": str(d.get("date")), "price": float(close)})
+        return points, "yfinance(daily)"
+
+    @staticmethod
+    def _intraday_trend(stock_code: str) -> List[Dict[str, Any]]:
+        """今日分时折线（yfinance 5m）。台股经 yfinance 约延迟，仅供趋势一览。
+
+        ponytail: 直接用 yfinance 5m；台股盘中真分时可后续改走 Shioaji kbars，
+        但本图只为「趋势一眼」，延迟可接受（图例已标来源）。
+        """
+        try:
+            import yfinance as yf
+
+            df = yf.Ticker(stock_code).history(period="1d", interval="5m")
+            if df is None or df.empty:
+                return []
+            points: List[Dict[str, Any]] = []
+            for idx, row in df.iterrows():
+                try:
+                    val = float(row.get("Close"))
+                except (TypeError, ValueError):
+                    continue
+                if val != val:  # NaN
+                    continue
+                ts = idx.isoformat() if hasattr(idx, "isoformat") else str(idx)
+                points.append({"t": ts, "price": val})
+            return points
+        except Exception as e:
+            logger.warning(f"分时走势 {stock_code} 失败: {e}")
+            return []
     
     def get_history_data(
         self,

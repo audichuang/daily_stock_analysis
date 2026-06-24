@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 新增台股 Shioaji 真即时行情数据源 `data_provider/shioaji_fetcher.py`（仅 realtime_quote，持久 session + 登入熔断），台股行情改为 Shioaji 优先、yfinance 补充/兜底；未安装 shioaji 套件或无金钥时自动降级 yfinance。
 - [改进] `StockQuote` schema 追加 `source`/`as_of`/`is_stale` 字段（additive，旧客户端忽略即可），单股与批次行情接口同时带出行情来源与时效；台股 yfinance 来源显式标记延迟。
 - [文档] `.env.example` 补充可选的 `SHIOAJI_API_KEY` / `SHIOAJI_SECRET_KEY` 占位（由 Doppler 注入，勿写真值），新增 `docs/realtime-board.md` 说明看板与 fallback 真值表。
+- [新功能] 盯盘看板新增个股价格走势折线图（点列内联展开，日/月/年切换）；新增 `GET /api/v1/stocks/{code}/trend?range=day|month|year`。台股 day/month 走 Shioaji kbars 真资料（day 今日分钟、month 近30天 resample 日线，受 kbars 30 天/次上限），year 与非台股回 yfinance 日线。
+- [改进] 看板刷新改为分批并发 + 按代码就地合并（不再整页等最慢的批次、不清空重画），并加世代守卫丢弃迟到的旧轮询结果。
+- [修复] 修正 Shioaji `snapshot.ts` / `kbars.ts` 时区：其为台北裸值（非 UTC），改按 +08:00 还原绝对时刻，修复行情 `as_of`/走势时间轴差 8 小时、`is_stale` 恒为 0（假新鲜）的问题；`shioaji_trend` 取日期改用台北日期，kbars resample 先按时间排序。
 
 ## [3.23.0] - 2026-06-20
 

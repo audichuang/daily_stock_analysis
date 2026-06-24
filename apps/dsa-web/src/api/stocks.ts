@@ -127,4 +127,15 @@ export const stocksApi = {
       error: item.error,
     }));
   },
+
+  async getTrend(code: string, range: TrendRange): Promise<TrendPoint[]> {
+    const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/trend`, {
+      params: { range },
+    });
+    const data = response.data as { points?: Array<{ t: string; price: number }> };
+    return (data.points ?? []).map((p) => ({ t: p.t, price: p.price }));
+  },
 };
+
+export type TrendRange = 'day' | 'month' | 'year';
+export type TrendPoint = { t: string; price: number };

@@ -30,7 +30,7 @@ import logging
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import pandas as pd
@@ -49,9 +49,17 @@ logger = logging.getLogger(__name__)
 _BREAKER_KEY = "shioaji_login"
 _LOGIN_TIMEOUT_S = 20.0
 _SNAPSHOT_TIMEOUT_S = 8.0
+# Shioaji 的 snapshot.ts / kbars.ts 是「台北时间的裸值（纳秒）」，不是 UTC。
+# 必须按 +08:00 还原绝对时刻，否则 as_of/走势时间轴会差 8 小时、is_stale 也算错。
+_TAIPEI_TZ = timezone(timedelta(hours=8))
 
 # --- 模组级持久 session 状态 ---------------------------------------------
 _SESSION_LOCK = threading.RLock()
+# 快照专用锁：看板并发分批刷新会从多个请求线程并发调用同一 api.snapshots，
+# Shioaji SDK 的并发安全性未知；快照很快（~数十 ms），用独立锁串行化即可保证安全，
+# 又不与 _SESSION_LOCK（登入/重连）耦合。yfinance 等其他源不经此锁，仍可并发。
+# ponytail: 若日后改用单次批量 snapshot([...500 档])，此锁可去除。
+_SNAPSHOT_LOCK = threading.RLock()
 _api: Optional[Any] = None
 _logged_in = False
 _logout_registered = False
@@ -144,6 +152,77 @@ def _ensure_session() -> Optional[Any]:
         return _attempt_login()
 
 
+def _ns_to_iso(ns: Any) -> Optional[str]:
+    """Shioaji 台北裸值纳秒 -> ISO8601(+08:00)。失败回 None。"""
+    try:
+        # ts 的 wall-clock 是台北时间：先按 UTC 取出裸 wall-clock，再贴上 +08:00 还原绝对时刻。
+        naive = datetime.fromtimestamp(int(ns) / 1e9, tz=timezone.utc).replace(tzinfo=_TAIPEI_TZ)
+        return naive.isoformat()
+    except (ValueError, OSError, OverflowError, TypeError):
+        return None
+
+
+# Shioaji kbars 单次区间上限（官方限制：date range must not exceed 30 days）
+_KBARS_MAX_DAYS = 30
+
+
+def shioaji_trend(stock_code: str, range_: str):
+    """台股走势点（真资料，经 Shioaji kbars）。
+
+    range_: "day" 今日分钟线 / "month" 近 30 天分钟线 resample 成日线。
+    "year" 超过 kbars 30 天上限 -> 返回 None（调用方用 yfinance 日线兜底）。
+    非台股 / 未登入 / 失败 -> None（调用方降级）。返回 [{"t","price"}] 升序或 None。
+    """
+    if range_ not in ("day", "month") or not _HAS_SHIOAJI:
+        return None
+    api = _ensure_session()
+    if api is None:
+        return None
+    code = ShioajiFetcher._tw_code(stock_code)
+    try:
+        contract = api.Contracts.Stocks[code]
+    except Exception:
+        return None
+    if contract is None:
+        return None
+
+    # 以台北日期为准（server 可能跑在 UTC，date.today() 在台北午夜附近会抓错「今天」）
+    today = datetime.now(_TAIPEI_TZ).date()
+    start = today if range_ == "day" else today - timedelta(days=_KBARS_MAX_DAYS - 1)
+    try:
+        with _SNAPSHOT_LOCK:
+            fut = _executor.submit(api.kbars, contract, start.isoformat(), today.isoformat())
+            kb = fut.result(timeout=_SNAPSHOT_TIMEOUT_S)
+        data = {**kb}
+    except Exception as e:
+        logger.warning("[ShioajiFetcher] kbars %s 失败: %s", code, type(e).__name__)
+        return None
+
+    ts_list = data.get("ts") or []
+    close_list = data.get("Close") or []
+    if not ts_list:
+        return None
+
+    # 按 ts 升序（不假设 SDK 已排序：day 折线需有序、month「当日末根=收盘」需正确）
+    pairs = sorted(zip(ts_list, close_list), key=lambda x: x[0])
+
+    if range_ == "day":
+        points = []
+        for t, c in pairs:
+            iso = _ns_to_iso(t)
+            if iso is not None:
+                points.append({"t": iso, "price": float(c)})
+        return points
+
+    # month：分钟线 resample 成日线（按台北日期分桶，每日最后一根 Close 即当日收盘）
+    by_day: dict = {}
+    for t, c in pairs:
+        iso = _ns_to_iso(t)
+        if iso is not None:
+            by_day[iso[:10]] = float(c)  # pairs 已升序 -> 同日末值即收盘
+    return [{"t": d, "price": p} for d, p in sorted(by_day.items())]
+
+
 def _reset_for_tests() -> None:
     """清模组级状态 + 熔断器（供测试隔离）。"""
     global _api, _logged_in, _logout_registered
@@ -207,10 +286,12 @@ class ShioajiFetcher(BaseFetcher):
         if contract is None:
             return None
 
-        # 快照：不持 _SESSION_LOCK（避免整批序列化）；硬 timeout 防 SDK 卡死。
+        # 快照：不持 _SESSION_LOCK（避免与登入/重连耦合）；用 _SNAPSHOT_LOCK 串行化并发快照；
+        # 硬 timeout 防 SDK 卡死。
         try:
-            fut = _executor.submit(api.snapshots, [contract])
-            snaps = fut.result(timeout=_SNAPSHOT_TIMEOUT_S)
+            with _SNAPSHOT_LOCK:
+                fut = _executor.submit(api.snapshots, [contract])
+                snaps = fut.result(timeout=_SNAPSHOT_TIMEOUT_S)
         except Exception as e:
             # 可能 session 已死 → 标记重登（受 breaker 约束），记一次 failure。
             logger.warning("[ShioajiFetcher] 快照失败/超时 %s: %s", code, type(e).__name__)
@@ -242,13 +323,8 @@ class ShioajiFetcher(BaseFetcher):
         change_price = safe_float(getattr(snap, "change_price", None))
         # ts 为 epoch 纳秒；务必产生可被 _parse_realtime_timestamp 解析的 ISO 字符串，
         # 否则 _enrich_realtime_quote 会把 provider_timestamp 设 None → as_of 退回 fetched_at（假新鲜）。
-        ts = getattr(snap, "ts", None)
-        provider_ts: Optional[str] = None
-        if ts:
-            try:
-                provider_ts = datetime.fromtimestamp(int(ts) / 1e9, tz=timezone.utc).isoformat()
-            except (ValueError, OSError, OverflowError, TypeError):
-                provider_ts = None
+        # snapshot.ts 同为台北裸值纳秒，按 +08:00 还原（否则 as_of 差 8h、is_stale 恒为 0）
+        provider_ts = _ns_to_iso(getattr(snap, "ts", None))
         pre_close = None
         if close is not None and change_price is not None:
             pre_close = round(close - change_price, 4)
