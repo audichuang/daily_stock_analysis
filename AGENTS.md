@@ -57,7 +57,7 @@ python scripts/check_ai_assets.py
 
 ## 3. 仓库速览
 
-- 项目定位：股票智能分析系统，覆盖 A 股、港股、美股。
+- 项目定位：股票智能分析系统，覆盖 A 股、港股、美股、日股、韩股、台股。
 - 主流程：抓取数据 -> 技术分析/新闻检索 -> LLM 分析 -> 生成报告 -> 通知推送。
 - 关键入口：
   - `main.py`：分析任务主入口
@@ -69,8 +69,9 @@ python scripts/check_ai_assets.py
   - `src/core/`：主流程编排
   - `src/services/`：业务服务层
   - `src/repositories/`：数据访问层
-  - `src/reports/`：报告生成
+  - `src/notification_sender/`：通知渠道适配（飞书 / Discord / ntfy / 自定义 Webhook，含 Bark）
   - `src/schemas/`：Schema / 数据结构
+  - `src/llm/`：LLM 生成后端与 usage / provider 缓存
   - `data_provider/`：多数据源适配与 fallback
   - `api/`：FastAPI API
   - `bot/`：机器人接入
@@ -80,6 +81,10 @@ python scripts/check_ai_assets.py
   - `docs/`：文档与说明
 
 ## 4. 常用命令
+
+> 常用任务已封装在根目录 `Makefile`（统一以 `uv run` 执行）：`make help` 列出全部；
+> 常用如 `make serve` / `make review-tw` / `make analyze STOCKS=…` / `make test` / `make lint`。
+> 以下为底层命令，CI（`ci_gate.sh`）与不使用 uv 的环境仍以此为准。
 
 ### 运行应用
 
