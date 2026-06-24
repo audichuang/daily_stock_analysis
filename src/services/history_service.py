@@ -62,14 +62,14 @@ class MarkdownReportGenerationError(Exception):
 class HistoryService:
     """
     History Query Service
-    
+
     Encapsulates query logic for historical analysis records.
     """
-    
+
     def __init__(self, db_manager: Optional[DatabaseManager] = None):
         """
         Initialize the history query service.
-        
+
         Args:
             db_manager: Database manager (optional, defaults to singleton instance)
         """
@@ -150,7 +150,7 @@ class HistoryService:
                     add(f"SS{normalized}")
 
         return candidates
-    
+
     def get_history_list(
         self,
         stock_code: Optional[str] = None,
@@ -162,7 +162,7 @@ class HistoryService:
     ) -> Dict[str, Any]:
         """
         Get history analysis list.
-        
+
         Args:
             stock_code: Stock code filter
             report_type: Report type filter
@@ -170,7 +170,7 @@ class HistoryService:
             end_date: End date (YYYY-MM-DD)
             page: Page number
             limit: Items per page
-            
+
         Returns:
             Dictionary containing total count and items
         """
@@ -181,22 +181,22 @@ class HistoryService:
             # Parse date parameters
             start_dt = None
             end_dt = None
-            
+
             if start_date:
                 try:
                     start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
                 except ValueError:
                     logger.warning(f"无效的 start_date 格式: {start_date}")
-            
+
             if end_date:
                 try:
                     end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
                 except ValueError:
                     logger.warning(f"无效的 end_date 格式: {end_date}")
-            
+
             # Calculate offset
             offset = (page - 1) * limit
-            
+
             # Use new paginated query method
             records, total = self.db.get_analysis_history_paginated(
                 code=stock_code,
@@ -206,17 +206,17 @@ class HistoryService:
                 offset=offset,
                 limit=limit
             )
-            
+
             # Convert to response format
             items = []
             for record in records:
                 items.append(self._record_to_list_item_dict(record))
-            
+
             return {
                 "total": total,
                 "items": items,
             }
-            
+
         except Exception as e:
             logger.error(f"查询历史列表失败: {e}", exc_info=True)
             return {"total": 0, "items": []}
@@ -470,7 +470,7 @@ class HistoryService:
         """
         Get history report detail.
 
-        Uses database primary key for precise query, avoiding returning incorrect records 
+        Uses database primary key for precise query, avoiding returning incorrect records
         due to duplicate query_id in batch analysis.
 
         Args:
@@ -721,7 +721,7 @@ class HistoryService:
                 filtered.append(item)
 
         return filtered[:limit]
-    
+
     def _get_sentiment_label(self, score: int) -> str:
         """
         Get sentiment label based on score.
@@ -894,14 +894,33 @@ class HistoryService:
         report_time = record.created_at.strftime("%H:%M:%S") if record.created_at else datetime.now().strftime("%H:%M:%S")
         report_language = normalize_report_language(getattr(result, "report_language", "zh"))
         labels = get_report_labels(report_language)
-        analysis_date_label = "Analysis Date" if report_language == "en" else "分析日期"
-        report_time_label = "Report Time" if report_language == "en" else "报告生成时间"
-        reason_label = "Rationale" if report_language == "en" else "操作理由"
-        risk_warning_label = "Risk Warning" if report_language == "en" else "风险提示"
-        technical_heading = "Technicals" if report_language == "en" else "技术面"
-        ma_label = "Moving Averages" if report_language == "en" else "均线"
-        volume_analysis_label = "Volume" if report_language == "en" else "量能"
-        news_heading = "News Flow" if report_language == "en" else "消息面"
+        if report_language == "en":
+            analysis_date_label = "Analysis Date"
+            report_time_label = "Report Time"
+            reason_label = "Rationale"
+            risk_warning_label = "Risk Warning"
+            technical_heading = "Technicals"
+            ma_label = "Moving Averages"
+            volume_analysis_label = "Volume"
+            news_heading = "News Flow"
+        elif report_language == "zh-TW":
+            analysis_date_label = "分析日期"
+            report_time_label = "報告生成時間"
+            reason_label = "操作理由"
+            risk_warning_label = "風險提示"
+            technical_heading = "技術面"
+            ma_label = "均線"
+            volume_analysis_label = "量能"
+            news_heading = "消息面"
+        else:
+            analysis_date_label = "分析日期"
+            report_time_label = "报告生成时间"
+            reason_label = "操作理由"
+            risk_warning_label = "风险提示"
+            technical_heading = "技术面"
+            ma_label = "均线"
+            volume_analysis_label = "量能"
+            news_heading = "消息面"
 
         # Escape markdown special characters in stock name
         name_escaped = self._escape_md(

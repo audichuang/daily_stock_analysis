@@ -19,6 +19,12 @@ const REQUEST_PHASE_LABELS: Record<ReportLanguage, Record<AnalysisPhase, string>
     intraday: 'Intraday',
     postmarket: 'Post-market',
   },
+  'zh-TW': {
+    auto: '自動階段',
+    premarket: '盤前',
+    intraday: '盤中',
+    postmarket: '盤後',
+  },
 };
 
 const MARKET_PHASE_LABELS: Record<ReportLanguage, Record<MarketPhaseValue, string>> = {
@@ -40,6 +46,15 @@ const MARKET_PHASE_LABELS: Record<ReportLanguage, Record<MarketPhaseValue, strin
     non_trading: 'Non-trading',
     unknown: 'Unknown phase',
   },
+  'zh-TW': {
+    premarket: '盤前',
+    intraday: '盤中',
+    lunch_break: '午間休市',
+    closing_auction: '接近收盤',
+    postmarket: '盤後',
+    non_trading: '非交易日',
+    unknown: '階段未知',
+  },
 };
 
 const TEXT = {
@@ -52,6 +67,11 @@ const TEXT = {
     requestPrefix: 'Requested phase',
     finalPrefix: 'Market phase',
     partialBar: 'Partial bar',
+  },
+  'zh-TW': {
+    requestPrefix: '請求階段',
+    finalPrefix: '市場階段',
+    partialBar: '日線尚未完成',
   },
 } as const;
 

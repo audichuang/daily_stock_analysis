@@ -23,6 +23,10 @@ const NEWS_SOURCE_TEXT = {
     sourceLabel: 'Related news / follow-up retrieval',
     sourceHint: 'Source: supplemental report-page news; analysis input is shown in Input Blocks.',
   },
+  'zh-TW': {
+    sourceLabel: '相關資訊 / 後續檢索',
+    sourceHint: '來源：報告頁補充資訊；是否用於分析以輸入資料區塊為準。',
+  },
 } as const;
 
 /**

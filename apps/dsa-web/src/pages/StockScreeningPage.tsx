@@ -39,6 +39,8 @@ import {
 } from '../api/alphasift';
 import { formatParsedApiError, getParsedApiError, toApiErrorMessage, type ParsedApiError } from '../api/error';
 import { AppPage, Button, InlineAlert } from '../components/common';
+import { useUiLanguage } from '../contexts/UiLanguageContext';
+import { getIntlLocale } from '../i18n/intlLocale';
 
 const MARKETS = [{ id: 'cn', label: 'A 股' }];
 const SCREEN_TASK_STORAGE_KEY = 'dsa.alphasift.activeScreenTask.v1';
@@ -312,7 +314,7 @@ const hasLlmInsight = (item: AlphaSiftCandidate) =>
       item.llmCatalysts?.length,
   );
 
-const getRouteTimeLabel = (item: AlphaSiftHotspotDetail['route'][number]) => {
+const getRouteTimeLabel = (item: AlphaSiftHotspotDetail['route'][number], locale = 'zh-CN') => {
   const rawTime = item.publishedAt || item.date || item.time || '';
   if (!rawTime) {
     return item.source || '待确认';
@@ -322,7 +324,7 @@ const getRouteTimeLabel = (item: AlphaSiftHotspotDetail['route'][number]) => {
   }
   const parsed = new Date(rawTime);
   if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toLocaleString('zh-CN', {
+    return parsed.toLocaleString(locale, {
       month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
@@ -366,7 +368,7 @@ const formatStockChangeText = (value: unknown) => {
   return formatted === '-' ? '行情待取' : `${formatted}%`;
 };
 
-const formatHotspotUpdatedAt = (value: string | null) => {
+const formatHotspotUpdatedAt = (value: string | null, locale = 'zh-CN') => {
   if (!value) {
     return '待刷新';
   }
@@ -374,7 +376,7 @@ const formatHotspotUpdatedAt = (value: string | null) => {
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
-  return parsed.toLocaleString('zh-CN', {
+  return parsed.toLocaleString(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -434,6 +436,7 @@ const MiniSparkline: React.FC<{ score?: number | null; selected?: boolean }> = (
 };
 
 const StockScreeningPage: React.FC = () => {
+  const { language } = useUiLanguage();
   const navigate = useNavigate();
   const [restoredTask] = useState<PersistedScreenTask | null>(() => readPersistedScreenTask());
   const [enabled, setEnabled] = useState(false);
@@ -919,7 +922,7 @@ const StockScreeningPage: React.FC = () => {
               </Button>
               ) : null}
             </div>
-            <p className="text-xs text-secondary-text">更新时间：{formatHotspotUpdatedAt(hotspotsUpdatedAt)}</p>
+            <p className="text-xs text-secondary-text">更新时间：{formatHotspotUpdatedAt(hotspotsUpdatedAt, getIntlLocale(language))}</p>
           </div>
         </div>
 
@@ -1062,7 +1065,7 @@ const StockScreeningPage: React.FC = () => {
                       <div key={`${item.title}-${index}`} className="relative pb-4 last:pb-0">
                         <span className="absolute -left-4 top-1 h-2.5 w-2.5 rounded-full border border-orange-400 bg-card" />
                         <div className="rounded-lg border border-border/70 bg-card/80 p-3">
-                          <p className="text-[11px] font-semibold text-orange-500">{getRouteTimeLabel(item)}</p>
+                          <p className="text-[11px] font-semibold text-orange-500">{getRouteTimeLabel(item, getIntlLocale(language))}</p>
                           <p className="mt-1 text-xs font-semibold text-foreground">{item.title}</p>
                           <p className="mt-1 text-xs leading-5 text-secondary-text">{item.description}</p>
                           {item.source ? <p className="mt-2 text-[11px] text-secondary-text">来源 {item.source}</p> : null}

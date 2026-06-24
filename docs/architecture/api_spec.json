@@ -3791,7 +3791,8 @@
               "hk",
               "us",
               "jp",
-              "kr"
+              "kr",
+              "tw"
             ],
             "title": "Market"
           },
@@ -4115,6 +4116,7 @@
                 "type": "string",
                 "enum": [
                   "zh",
+                  "zh-TW",
                   "en"
                 ]
               },
@@ -5665,7 +5667,8 @@
                   "hk",
                   "us",
                   "jp",
-                  "kr"
+                  "kr",
+                  "tw"
                 ]
               },
               {

@@ -42,6 +42,12 @@ _PUBLIC_SOURCE_LABELS_ZH = {
     "evaluator_snapshot": "评估器快照",
     "legacy_text": "历史文本",
 }
+_PUBLIC_SOURCE_LABELS_ZHTW = {
+    "alert_trigger_market_context": "告警觸發上下文",
+    "analysis_history_snapshot": "最近分析快照",
+    "evaluator_snapshot": "評估器快照",
+    "legacy_text": "歷史文字",
+}
 _PUBLIC_SOURCE_LABELS_EN = {
     "alert_trigger_market_context": "alert trigger context",
     "analysis_history_snapshot": "recent analysis snapshot",
@@ -50,6 +56,7 @@ _PUBLIC_SOURCE_LABELS_EN = {
 }
 _MARKET_STATUS_PREFIX = {
     "zh": "市场状态",
+    "zh-TW": "市場狀態",
     "en": "Market status",
 }
 _MARKET_LABELS_ZH = {
@@ -58,6 +65,14 @@ _MARKET_LABELS_ZH = {
     "us": "美股",
     "jp": "日股",
     "kr": "韩股",
+    "tw": "台股",
+}
+_MARKET_LABELS_ZHTW = {
+    "cn": "A股",
+    "hk": "港股",
+    "us": "美股",
+    "jp": "日股",
+    "kr": "韓股",
     "tw": "台股",
 }
 _MARKET_LABELS_EN = {
@@ -76,6 +91,15 @@ _PHASE_LABELS_ZH = {
     "postmarket": "盘后",
     "non_trading": "非交易日",
     "unknown": "阶段未知",
+}
+_PHASE_LABELS_ZHTW = {
+    "premarket": "盤前",
+    "intraday": "盤中",
+    "lunch_break": "午間休市",
+    "closing_auction": "臨近收盤",
+    "postmarket": "盤後",
+    "non_trading": "非交易日",
+    "unknown": "階段未知",
 }
 _PHASE_LABELS_EN = {
     "premarket": "Pre-market",
@@ -194,7 +218,8 @@ def format_public_phase_pack_excerpt(
     overview = _as_mapping(analysis_context_pack_overview)
     if not phase_summary and not overview:
         return ""
-    lang = "en" if str(report_language or "").lower().startswith("en") else "zh"
+    from src.report_language import normalize_report_language as _norm_lang
+    lang = _norm_lang(report_language)
     source_label = _source_label(source, lang)
 
     lines: List[str] = []
@@ -213,6 +238,17 @@ def format_public_phase_pack_excerpt(
             lines.append("- " + " | ".join(parts))
             if phase_summary.get("is_partial_bar") is True:
                 lines.append("- partial-bar warning: intraday data may be incomplete")
+        elif lang == "zh-TW":
+            parts = [f"階段：{phase}"]
+            if market:
+                parts.append(f"市場：{market}")
+            if trigger_source:
+                parts.append(f"觸發來源：{trigger_source}")
+            if source_label:
+                parts.append(f"摘要來源：{source_label}")
+            lines.append("- " + " | ".join(parts))
+            if phase_summary.get("is_partial_bar") is True:
+                lines.append("- 盤中資料提示：當前 K 線可能未完結")
         else:
             parts = [f"阶段：{phase}"]
             if market:
@@ -229,10 +265,20 @@ def format_public_phase_pack_excerpt(
     if isinstance(quality, Mapping):
         level = _safe_text(quality.get("level"))
         if level:
-            lines.append(f"- {'data quality' if lang == 'en' else '数据质量'}: {level}")
+            if lang == "en":
+                lines.append(f"- data quality: {level}")
+            elif lang == "zh-TW":
+                lines.append(f"- 資料品質：{level}")
+            else:
+                lines.append(f"- 数据质量: {level}")
         limitations = _list_strings(quality.get("limitations"), limit=2)
         for item in limitations:
-            lines.append(f"- {'limitation' if lang == 'en' else '限制'}: {item}")
+            if lang == "en":
+                lines.append(f"- limitation: {item}")
+            elif lang == "zh-TW":
+                lines.append(f"- 限制：{item}")
+            else:
+                lines.append(f"- 限制: {item}")
 
     return "\n".join(lines)
 
@@ -250,9 +296,17 @@ def format_public_market_status_line(
     if phase is None:
         return ""
 
-    lang = "en" if str(report_language or "").lower().startswith("en") else "zh"
-    phase_labels = _PHASE_LABELS_EN if lang == "en" else _PHASE_LABELS_ZH
-    market_labels = _MARKET_LABELS_EN if lang == "en" else _MARKET_LABELS_ZH
+    from src.report_language import normalize_report_language as _norm_lang
+    lang = _norm_lang(report_language)
+    if lang == "en":
+        phase_labels = _PHASE_LABELS_EN
+        market_labels = _MARKET_LABELS_EN
+    elif lang == "zh-TW":
+        phase_labels = _PHASE_LABELS_ZHTW
+        market_labels = _MARKET_LABELS_ZHTW
+    else:
+        phase_labels = _PHASE_LABELS_ZH
+        market_labels = _MARKET_LABELS_ZH
     phase_label = phase_labels.get(phase, phase)
     market = _safe_text(phase_summary.get("market"))
     market_key = market.lower()
@@ -262,7 +316,8 @@ def format_public_market_status_line(
     else:
         value = phase_label
     separator = ": " if lang == "en" else "："
-    return f"{_MARKET_STATUS_PREFIX[lang]}{separator}{value}"
+    prefix = _MARKET_STATUS_PREFIX.get(lang) or _MARKET_STATUS_PREFIX["zh"]
+    return f"{prefix}{separator}{value}"
 
 
 def _as_mapping(value: Any) -> Optional[Mapping[str, Any]]:
@@ -286,7 +341,12 @@ def _source_label(value: Any, lang: str) -> Optional[str]:
     source = _safe_text(value)
     if not source:
         return None
-    labels = _PUBLIC_SOURCE_LABELS_EN if lang == "en" else _PUBLIC_SOURCE_LABELS_ZH
+    if lang == "en":
+        labels = _PUBLIC_SOURCE_LABELS_EN
+    elif lang == "zh-TW":
+        labels = _PUBLIC_SOURCE_LABELS_ZHTW
+    else:
+        labels = _PUBLIC_SOURCE_LABELS_ZH
     return labels.get(source, source)
 
 

@@ -5,6 +5,7 @@ import {
 } from '../UiLanguageContext';
 import {
   getRuntimeInitialLanguage,
+  normalizeUiLanguage,
   persistUiLanguage,
   resolveInitialUiLanguage,
   UI_LANGUAGE_STORAGE_KEY,
@@ -44,6 +45,52 @@ describe('UiLanguageContext', () => {
       storage: createStorage('en'),
       navigatorLike: { language: 'zh-CN', languages: ['zh-CN'] },
     })).toBe('en');
+  });
+
+  it('resolves explicit zh-TW storage choice regardless of browser language', () => {
+    expect(resolveInitialUiLanguage({
+      storage: createStorage('zh-TW'),
+      navigatorLike: { language: 'en-US', languages: ['en-US'] },
+    })).toBe('zh-TW');
+
+    expect(resolveInitialUiLanguage({
+      storage: createStorage('zh-TW'),
+      navigatorLike: { language: 'zh-CN', languages: ['zh-CN'] },
+    })).toBe('zh-TW');
+  });
+
+  it('detects zh-TW browser locale and resolves to zh-TW', () => {
+    expect(resolveInitialUiLanguage({
+      storage: createStorage(null),
+      navigatorLike: { language: 'zh-TW', languages: ['zh-TW'] },
+    })).toBe('zh-TW');
+
+    expect(resolveInitialUiLanguage({
+      storage: createStorage(null),
+      navigatorLike: { language: 'zh-HK', languages: ['zh-HK'] },
+    })).toBe('zh-TW');
+
+    expect(resolveInitialUiLanguage({
+      storage: createStorage(null),
+      navigatorLike: { language: 'zh-Hant-TW', languages: ['zh-Hant-TW'] },
+    })).toBe('zh-TW');
+  });
+
+  it('normalizeUiLanguage returns zh-TW for the canonical value', () => {
+    expect(normalizeUiLanguage('zh-TW')).toBe('zh-TW');
+  });
+
+  it('normalizeUiLanguage returns null for unrecognized values including lowercase zh-tw', () => {
+    // normalizeUiLanguage 只接受精確值 'zh' | 'en' | 'zh-TW'；小寫 'zh-tw' 不在其中
+    expect(normalizeUiLanguage('zh-tw')).toBeNull();
+    expect(normalizeUiLanguage('ZH-TW')).toBeNull();
+  });
+
+  it('falls back from invalid storage to zh-TW when browser language is zh-TW', () => {
+    expect(resolveInitialUiLanguage({
+      storage: createStorage('fr'),
+      navigatorLike: { language: 'zh-TW', languages: ['zh-TW', 'en-US'] },
+    })).toBe('zh-TW');
   });
 
   it('falls back from invalid storage to the first supported browser language and then zh', () => {

@@ -26,6 +26,8 @@ import {
 } from '../utils/chatFollowUp';
 import { isNearBottom } from '../utils/chatScroll';
 import { getReportText } from '../utils/reportLanguage';
+import { useUiLanguage } from '../contexts/UiLanguageContext';
+import { getIntlLocale } from '../i18n/intlLocale';
 import { extractStockCodesFromMessage } from '../utils/chatStockCode';
 import { findMatchingStockCode, includesStockCode, normalizeStockCode } from '../utils/stockCode';
 
@@ -150,6 +152,7 @@ const restoreActiveStockContextFromMessages = (messages: Message[]): ActiveStock
 };
 
 const ChatPage: React.FC = () => {
+  const { language } = useUiLanguage();
   const [searchParams, setSearchParams] = useSearchParams();
   const [input, setInput] = useState('');
   const [skills, setSkills] = useState<SkillInfo[]>([]);
@@ -825,7 +828,7 @@ const ChatPage: React.FC = () => {
                         <>
                           <span className="separator" />
                           <span className="meta">
-                            {new Date(s.last_active).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}
+                            {new Date(s.last_active).toLocaleDateString(getIntlLocale(language), { month: 'short', day: 'numeric' })}
                           </span>
                         </>
                       )}
@@ -950,7 +953,7 @@ const ChatPage: React.FC = () => {
                     <Button
                       variant="action-primary"
                       size="sm"
-                      onClick={() => downloadSession(messages)}
+                      onClick={() => downloadSession(messages, getIntlLocale(language))}
                       aria-label="导出会话为 Markdown 文件"
                     >
                       <svg
@@ -981,7 +984,7 @@ const ChatPage: React.FC = () => {
                         setSending(true);
                         setSendToast(null);
                         try {
-                          const content = formatSessionAsMarkdown(messages);
+                          const content = formatSessionAsMarkdown(messages, getIntlLocale(language));
                           await agentApi.sendChat(content);
                           showSendFeedback({ type: 'success', message: '已发送到通知渠道' }, 3000);
                         } catch (err) {

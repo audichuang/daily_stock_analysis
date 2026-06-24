@@ -213,8 +213,15 @@ def _legacy_audit_marker_specs(
     add("stock_code", code)
     add("stock_name", stock_name)
     add("analysis_date", context.get("date"))
-    add("market_phase", "## Market Phase Context" if report_language == "en" else "## 市场阶段上下文")
-    add("daily_market_context", "## Daily Market Context" if report_language == "en" else "## 大盘环境摘要")
+    if report_language == "en":
+        add("market_phase", "## Market Phase Context")
+        add("daily_market_context", "## Daily Market Context")
+    elif report_language == "zh-TW":
+        add("market_phase", "## 市場階段上下文")
+        add("daily_market_context", "## 大盤環境摘要")
+    else:
+        add("market_phase", "## 市场阶段上下文")
+        add("daily_market_context", "## 大盘环境摘要")
     add("analysis_context_pack", analysis_context_pack_summary)
     add("quote", "## 📈 技术面数据")
     add("news_context", "## 📰 舆情情报" if news_context else None)
@@ -356,28 +363,27 @@ def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) 
 
     report_language = normalize_report_language(getattr(result, "report_language", "zh"))
     placeholder = get_placeholder_text(report_language)
-    phase_decision_placeholders = {
-        "dashboard.phase_decision.action_window": (
-            "Model did not provide a phase action window"
-            if report_language == "en"
-            else "模型未提供阶段化行动窗口"
-        ),
-        "dashboard.phase_decision.immediate_action": (
-            "Model did not provide a phase-aware immediate action"
-            if report_language == "en"
-            else "模型未提供阶段化即时动作"
-        ),
-        "dashboard.phase_decision.next_check_time": (
-            "Model did not provide a next check point"
-            if report_language == "en"
-            else "模型未提供下一次检查点"
-        ),
-        "dashboard.phase_decision.confidence_reason": (
-            "Model did not provide a phase confidence rationale"
-            if report_language == "en"
-            else "模型未提供阶段化置信度理由"
-        ),
-    }
+    if report_language == "en":
+        phase_decision_placeholders = {
+            "dashboard.phase_decision.action_window": "Model did not provide a phase action window",
+            "dashboard.phase_decision.immediate_action": "Model did not provide a phase-aware immediate action",
+            "dashboard.phase_decision.next_check_time": "Model did not provide a next check point",
+            "dashboard.phase_decision.confidence_reason": "Model did not provide a phase confidence rationale",
+        }
+    elif report_language == "zh-TW":
+        phase_decision_placeholders = {
+            "dashboard.phase_decision.action_window": "模型未提供階段化行動視窗",
+            "dashboard.phase_decision.immediate_action": "模型未提供階段化即時動作",
+            "dashboard.phase_decision.next_check_time": "模型未提供下一次檢查點",
+            "dashboard.phase_decision.confidence_reason": "模型未提供階段化置信度理由",
+        }
+    else:
+        phase_decision_placeholders = {
+            "dashboard.phase_decision.action_window": "模型未提供阶段化行动窗口",
+            "dashboard.phase_decision.immediate_action": "模型未提供阶段化即时动作",
+            "dashboard.phase_decision.next_check_time": "模型未提供下一次检查点",
+            "dashboard.phase_decision.confidence_reason": "模型未提供阶段化置信度理由",
+        }
     for field in missing_fields:
         if field == "sentiment_score":
             result.sentiment_score = 50
@@ -2864,7 +2870,7 @@ class GeminiAnalyzer:
             return None
 
     def analyze(
-        self, 
+        self,
         context: Dict[str, Any],
         news_context: Optional[str] = None,
         progress_callback: Optional[Callable[[int, str], None]] = None,
@@ -2873,17 +2879,17 @@ class GeminiAnalyzer:
     ) -> AnalysisResult:
         """
         分析单只股票
-        
+
         流程：
         1. 格式化输入数据（技术面 + 新闻）
         2. 调用 Gemini API（带重试和模型切换）
         3. 解析 JSON 响应
         4. 返回结构化结果
-        
+
         Args:
             context: 从 storage.get_analysis_context() 获取的上下文数据
             news_context: 预先搜索的新闻内容（可选）
-            
+
         Returns:
             AnalysisResult 对象
         """
@@ -2900,14 +2906,14 @@ class GeminiAnalyzer:
         report_language = normalize_report_language(getattr(config, "report_language", "zh"))
         system_prompt = self._get_analysis_system_prompt(report_language, stock_code=code)
         skill_instructions, default_skill_policy, use_legacy_default_prompt = self._get_skill_prompt_sections()
-        
+
         # 请求前增加延时（防止连续请求触发限流）
         request_delay = config.gemini_request_delay
         if request_delay > 0:
             logger.debug(f"[LLM] 请求前等待 {request_delay:.1f} 秒...")
             _emit_progress(65, f"{code}：LLM 请求前等待 {request_delay:.1f} 秒")
             time.sleep(request_delay)
-        
+
         # 优先从上下文获取股票名称（由 main.py 传入）
         name = context.get('stock_name')
         if not name or name.startswith('股票'):
@@ -2932,6 +2938,14 @@ class GeminiAnalyzer:
                     f"Phase 1 only supports litellm for {field}; set it back to "
                     "litellm and retry."
                 )
+            elif report_language == "zh-TW":
+                summary = (
+                    "AI 分析功能無法使用：生成後端設定錯誤，"
+                    f"{field}={requested_backend}。"
+                )
+                risk_warning = (
+                    f"Phase 1 中 {field} 僅支援 litellm；請設回 litellm 後重試。"
+                )
             else:
                 summary = (
                     "AI 分析功能不可用：生成后端配置错误，"
@@ -2940,13 +2954,25 @@ class GeminiAnalyzer:
                 risk_warning = (
                     f"Phase 1 中 {field} 仅支持 litellm；请设回 litellm 后重试。"
                 )
+            if report_language == "en":
+                _trend_pred = 'Sideways'
+                _op_advice = 'Hold'
+                _conf_level = 'Low'
+            elif report_language == "zh-TW":
+                _trend_pred = '震盪'
+                _op_advice = '持有'
+                _conf_level = '低'
+            else:
+                _trend_pred = '震荡'
+                _op_advice = '持有'
+                _conf_level = '低'
             return AnalysisResult(
                 code=code,
                 name=name,
                 sentiment_score=50,
-                trend_prediction='Sideways' if report_language == "en" else '震荡',
-                operation_advice='Hold' if report_language == "en" else '持有',
-                confidence_level='Low' if report_language == "en" else '低',
+                trend_prediction=_trend_pred,
+                operation_advice=_op_advice,
+                confidence_level=_conf_level,
                 analysis_summary=summary,
                 risk_warning=risk_warning,
                 success=False,
@@ -2959,21 +2985,42 @@ class GeminiAnalyzer:
 
         # 如果模型不可用，返回默认结果
         if not self.is_available():
+            if report_language == "en":
+                _trend_pred = 'Sideways'
+                _op_advice = 'Hold'
+                _conf_level = 'Low'
+                _analysis_summary = 'AI analysis is unavailable because no API key is configured.'
+                _risk_warning = 'Configure an LLM API key (GEMINI_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY) and retry.'
+                _error_message = 'LLM API key is not configured'
+            elif report_language == "zh-TW":
+                _trend_pred = '震盪'
+                _op_advice = '持有'
+                _conf_level = '低'
+                _analysis_summary = 'AI 分析功能未啟用（未設定 API Key）'
+                _risk_warning = '請設定 LLM API Key（GEMINI_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY）後重試'
+                _error_message = 'LLM API Key 未設定'
+            else:
+                _trend_pred = '震荡'
+                _op_advice = '持有'
+                _conf_level = '低'
+                _analysis_summary = 'AI 分析功能未启用（未配置 API Key）'
+                _risk_warning = '请配置 LLM API Key（GEMINI_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY）后重试'
+                _error_message = 'LLM API Key 未配置'
             return AnalysisResult(
                 code=code,
                 name=name,
                 sentiment_score=50,
-                trend_prediction='Sideways' if report_language == "en" else '震荡',
-                operation_advice='Hold' if report_language == "en" else '持有',
-                confidence_level='Low' if report_language == "en" else '低',
-                analysis_summary='AI analysis is unavailable because no API key is configured.' if report_language == "en" else 'AI 分析功能未启用（未配置 API Key）',
-                risk_warning='Configure an LLM API key (GEMINI_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY) and retry.' if report_language == "en" else '请配置 LLM API Key（GEMINI_API_KEY/ANTHROPIC_API_KEY/OPENAI_API_KEY）后重试',
+                trend_prediction=_trend_pred,
+                operation_advice=_op_advice,
+                confidence_level=_conf_level,
+                analysis_summary=_analysis_summary,
+                risk_warning=_risk_warning,
                 success=False,
-                error_message='LLM API key is not configured' if report_language == "en" else 'LLM API Key 未配置',
+                error_message=_error_message,
                 model_used=None,
                 report_language=report_language,
             )
-        
+
         try:
             # 格式化输入（包含技术面数据和新闻）
             prompt = self._format_prompt(
@@ -3003,7 +3050,7 @@ class GeminiAnalyzer:
                     analysis_context_pack_summary=analysis_context_pack_summary,
                 ),
             }
-            
+
             config = self._get_runtime_config()
             model_name = config.litellm_model or "unknown"
             logger.info(f"========== AI 分析 {name}({code}) ==========")
@@ -3119,27 +3166,45 @@ class GeminiAnalyzer:
             logger.info(f"[LLM解析] {name}({code}) 分析完成: {result.trend_prediction}, 评分 {result.sentiment_score}")
 
             return result
-            
+
         except Exception as e:
             logger.error(f"AI 分析 {name}({code}) 失败: {e}")
+            if report_language == "en":
+                _trend_pred = 'Sideways'
+                _op_advice = 'Hold'
+                _conf_level = 'Low'
+                _analysis_summary = f'Analysis failed: {str(e)[:100]}'
+                _risk_warning = 'Analysis failed. Please retry later or review manually.'
+            elif report_language == "zh-TW":
+                _trend_pred = '震盪'
+                _op_advice = '持有'
+                _conf_level = '低'
+                _analysis_summary = f'分析過程出錯：{str(e)[:100]}'
+                _risk_warning = '分析失敗，請稍後重試或手動分析'
+            else:
+                _trend_pred = '震荡'
+                _op_advice = '持有'
+                _conf_level = '低'
+                _analysis_summary = f'分析过程出错: {str(e)[:100]}'
+                _risk_warning = '分析失败，请稍后重试或手动分析'
             return AnalysisResult(
                 code=code,
                 name=name,
                 sentiment_score=50,
-                trend_prediction='Sideways' if report_language == "en" else '震荡',
-                operation_advice='Hold' if report_language == "en" else '持有',
-                confidence_level='Low' if report_language == "en" else '低',
-                analysis_summary=(f'Analysis failed: {str(e)[:100]}' if report_language == "en" else f'分析过程出错: {str(e)[:100]}'),
-                risk_warning='Analysis failed. Please retry later or review manually.' if report_language == "en" else '分析失败，请稍后重试或手动分析',
+                trend_prediction=_trend_pred,
+                operation_advice=_op_advice,
+                confidence_level=_conf_level,
+                analysis_summary=_analysis_summary,
+                risk_warning=_risk_warning,
                 success=False,
                 error_message=str(e),
                 model_used=None,
                 report_language=report_language,
             )
-    
+
     def _format_prompt(
-        self, 
-        context: Dict[str, Any], 
+        self,
+        context: Dict[str, Any],
         name: str,
         news_context: Optional[str] = None,
         report_language: str = "zh",
@@ -3147,9 +3212,9 @@ class GeminiAnalyzer:
     ) -> str:
         """
         格式化分析提示词（决策仪表盘 v2.0）
-        
+
         包含：技术指标、实时行情（量比/换手率）、筹码分布、趋势分析、新闻
-        
+
         Args:
             context: 技术面数据上下文（包含增强数据）
             name: 股票名称（默认值，可能被上下文覆盖）
@@ -3158,12 +3223,12 @@ class GeminiAnalyzer:
         code = context.get('code', 'Unknown')
         report_language = normalize_report_language(report_language)
         _, _, use_legacy_default_prompt = self._get_skill_prompt_sections()
-        
+
         # 优先使用上下文中的股票名称（从 realtime_quote 获取）
         stock_name = context.get('stock_name', name)
         if not stock_name or stock_name == f'股票{code}':
             stock_name = STOCK_NAME_MAP.get(code, f'股票{code}')
-            
+
         today = context.get('today', {})
         unknown_text = get_unknown_text(report_language)
         no_data_text = get_no_data_text(report_language)
@@ -3192,7 +3257,7 @@ class GeminiAnalyzer:
             ]
         )
         quote_rows_text = "\n".join(quote_rows)
-        
+
         # ========== 构建决策仪表盘格式的输入 ==========
         prompt = f"""# 决策仪表盘分析请求
 
@@ -3234,7 +3299,7 @@ class GeminiAnalyzer:
 | MA20 | {today.get('ma20', 'N/A')} | 中期趋势线 |
 | 均线形态 | {context.get('ma_status', unknown_text)} | 多头/空头/缠绕 |
 """
-        
+
         # 添加实时行情数据（量比、换手率等）
         if 'realtime' in context:
             rt = context['realtime']
@@ -3377,7 +3442,7 @@ class GeminiAnalyzer:
 > {chip_unavailable_text}
 > {chip_instruction}
 """
-        
+
         # 添加趋势分析结果（仅隐式内建 bull_trend 默认回退保留旧口径）
         if 'trend_analysis' in context:
             trend = _sanitize_trend_analysis_for_prompt(
@@ -3445,7 +3510,7 @@ class GeminiAnalyzer:
 **一致性约束**：
 {chr(10).join('- ' + note for note in consistency_notes)}
 """
-        
+
         # 添加昨日对比数据
         if 'yesterday' in context:
             volume_change = context.get('volume_change_ratio', 'N/A')
@@ -3459,7 +3524,7 @@ class GeminiAnalyzer:
                 prompt += """
 - ⚠️ 量能异常提示：成交量较昨日放大超过10倍，可能受异常数据或一次性冲量影响，必须降权解读，不能机械视为强确认信号
 """
-        
+
         # 添加新闻搜索结果（重点区域）
         news_window_days: Optional[int] = None
         context_window = context.get("news_window_days")
@@ -3563,7 +3628,7 @@ class GeminiAnalyzer:
 - **检查清单**：每项用 ✅/⚠️/❌ 标记
 - **消息面时间合规**：`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或时间未知的信息
 - **技术面一致性**：严禁把“空头排列”和“多头排列”等互斥结论同时当作有效依据；若基本面/事件面与技术面冲突，必须明确写“事件先行、技术待确认”或“基本面偏多，但技术面尚未确认”
- 
+
 请输出完整的 JSON 格式决策仪表盘。"""
 
         if report_language == "en":
@@ -3577,6 +3642,15 @@ class GeminiAnalyzer:
 - Use the common English company name when you are confident. If not, keep the listed company name rather than inventing one.
 - When data is missing, explain it in English instead of Chinese.
 """
+        elif report_language == "zh-TW":
+            prompt += f"""
+
+### 輸出語言要求（最高優先級）
+- 所有 JSON 鍵名必須保持不變，不要翻譯鍵名。
+- `decision_type` 必須保持為 `buy`、`hold`、`sell`。
+- 所有面向使用者的人類可讀文本值必須使用繁體中文（台灣用語），不得使用簡體字。
+- 當資料缺失時，請使用繁體中文直接說明「{no_data_text}，無法判斷」。
+"""
         else:
             prompt += f"""
 
@@ -3586,9 +3660,9 @@ class GeminiAnalyzer:
 - 所有面向用户的人类可读文本值必须使用中文。
 - 当数据缺失时，请使用中文直接说明“{no_data_text}，无法判断”。
 """
-        
+
         return prompt
-    
+
     def _format_volume(self, volume: Optional[float]) -> str:
         """格式化成交量显示"""
         if volume is None:
@@ -3599,7 +3673,7 @@ class GeminiAnalyzer:
             return f"{volume / 1e4:.2f} 万股"
         else:
             return f"{volume:.0f} 股"
-    
+
     def _format_amount(self, amount: Optional[float]) -> str:
         """格式化成交额显示"""
         if amount is None:
@@ -3776,14 +3850,14 @@ class GeminiAnalyzer:
         apply_placeholder_fill(result, missing_fields)
 
     def _parse_response(
-        self, 
-        response_text: str, 
-        code: str, 
+        self,
+        response_text: str,
+        code: str,
         name: str
     ) -> AnalysisResult:
         """
         解析 Gemini 响应（决策仪表盘版）
-        
+
         尝试从响应中提取 JSON 格式的分析结果，包含 dashboard 字段
         如果解析失败，尝试智能提取或返回默认结果
         """
@@ -3797,17 +3871,17 @@ class GeminiAnalyzer:
                 cleaned_text = cleaned_text.replace('```json', '').replace('```', '')
             elif '```' in cleaned_text:
                 cleaned_text = cleaned_text.replace('```', '')
-            
+
             # 尝试找到 JSON 内容
             json_start = cleaned_text.find('{')
             json_end = cleaned_text.rfind('}') + 1
-            
+
             if json_start >= 0 and json_end > json_start:
                 json_str = cleaned_text[json_start:json_end]
-                
+
                 # 尝试修复常见的 JSON 问题
                 json_str = self._fix_json_string(json_str)
-                
+
                 data = json.loads(json_str)
 
                 # Schema validation (lenient: on failure, continue with raw dict)
@@ -3831,23 +3905,46 @@ class GeminiAnalyzer:
                 # 解析 decision_type，如果没有则根据 operation_advice 推断
                 decision_type = data.get('decision_type', '')
                 if not decision_type:
-                    op = data.get('operation_advice', 'Hold' if report_language == "en" else '持有')
+                    if report_language == "en":
+                        _default_op = 'Hold'
+                    else:
+                        _default_op = '持有'
+                    op = data.get('operation_advice', _default_op)
                     decision_type = infer_decision_type_from_advice(op, default='hold')
-                
+
                 explicit_action = data.get("action")
                 if explicit_action is None and isinstance(dashboard, dict):
                     explicit_action = dashboard.get("action")
+
+                if report_language == "en":
+                    _default_trend = 'Sideways'
+                    _default_op_advice = 'Hold'
+                    _default_conf = 'Medium'
+                    _default_summary = 'Analysis completed'
+                    _default_data_sources = 'Technical data'
+                elif report_language == "zh-TW":
+                    _default_trend = '震盪'
+                    _default_op_advice = '持有'
+                    _default_conf = '中'
+                    _default_summary = '分析完成'
+                    _default_data_sources = '技術面資料'
+                else:
+                    _default_trend = '震荡'
+                    _default_op_advice = '持有'
+                    _default_conf = '中'
+                    _default_summary = '分析完成'
+                    _default_data_sources = '技术面数据'
 
                 result = AnalysisResult(
                     code=code,
                     name=name,
                     # 核心指标
                     sentiment_score=int(data.get('sentiment_score', 50)),
-                    trend_prediction=data.get('trend_prediction', 'Sideways' if report_language == "en" else '震荡'),
-                    operation_advice=data.get('operation_advice', 'Hold' if report_language == "en" else '持有'),
+                    trend_prediction=data.get('trend_prediction', _default_trend),
+                    operation_advice=data.get('operation_advice', _default_op_advice),
                     decision_type=decision_type,
                     confidence_level=localize_confidence_level(
-                        data.get('confidence_level', 'Medium' if report_language == "en" else '中'),
+                        data.get('confidence_level', _default_conf),
                         report_language,
                     ),
                     report_language=report_language,
@@ -3871,13 +3968,13 @@ class GeminiAnalyzer:
                     market_sentiment=data.get('market_sentiment', ''),
                     hot_topics=data.get('hot_topics', ''),
                     # 综合
-                    analysis_summary=data.get('analysis_summary', 'Analysis completed' if report_language == "en" else '分析完成'),
+                    analysis_summary=data.get('analysis_summary', _default_summary),
                     key_points=data.get('key_points', ''),
                     risk_warning=data.get('risk_warning', ''),
                     buy_reason=data.get('buy_reason', ''),
                     # 元数据
                     search_performed=data.get('search_performed', False),
-                    data_sources=data.get('data_sources', 'Technical data' if report_language == "en" else '技术面数据'),
+                    data_sources=data.get('data_sources', _default_data_sources),
                     success=True,
                 )
                 return populate_decision_action_fields(result, explicit_action=explicit_action)
@@ -3885,29 +3982,29 @@ class GeminiAnalyzer:
                 # 没有找到 JSON，标记为失败
                 logger.warning(f"无法从响应中提取 JSON，标记为解析失败")
                 return self._parse_text_response(response_text, code, name)
-                
+
         except json.JSONDecodeError as e:
             logger.warning(f"JSON 解析失败: {e}，标记为解析失败")
             return self._parse_text_response(response_text, code, name)
-    
+
     def _fix_json_string(self, json_str: str) -> str:
         """修复常见的 JSON 格式问题"""
         import re
-        
+
         # 移除注释
         json_str = re.sub(r'//.*?\n', '\n', json_str)
         json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)
-        
+
         # 修复尾随逗号
         json_str = re.sub(r',\s*}', '}', json_str)
         json_str = re.sub(r',\s*]', ']', json_str)
-        
+
         # 确保布尔值是小写
         json_str = json_str.replace('True', 'true').replace('False', 'false')
-        
+
         # fix by json-repair
         json_str = repair_json(json_str)
-        
+
         return json_str
 
     def _validate_json_response(self, text: str) -> None:
@@ -3937,11 +4034,11 @@ class GeminiAnalyzer:
         json_str = cleaned[json_start:json_end]
         json_str = self._fix_json_string(json_str)
         json.loads(json_str)
-    
+
     def _parse_text_response(
-        self, 
-        response_text: str, 
-        code: str, 
+        self,
+        response_text: str,
+        code: str,
         name: str
     ) -> AnalysisResult:
         """从纯文本响应中尽可能提取分析信息"""
@@ -3950,34 +4047,75 @@ class GeminiAnalyzer:
         )
         # 尝试识别关键词来判断情绪
         sentiment_score = 50
-        trend = 'Sideways' if report_language == "en" else '震荡'
-        advice = 'Hold' if report_language == "en" else '持有'
-        
+        if report_language == "en":
+            trend = 'Sideways'
+            advice = 'Hold'
+        elif report_language == "zh-TW":
+            trend = '震盪'
+            advice = '持有'
+        else:
+            trend = '震荡'
+            advice = '持有'
+
         text_lower = response_text.lower()
-        
+
         # 简单的情绪识别
         positive_keywords = ['看多', '买入', '上涨', '突破', '强势', '利好', '加仓', 'bullish', 'buy']
         negative_keywords = ['看空', '卖出', '下跌', '跌破', '弱势', '利空', '减仓', 'bearish', 'sell']
-        
+
         positive_count = sum(1 for kw in positive_keywords if kw in text_lower)
         negative_count = sum(1 for kw in negative_keywords if kw in text_lower)
-        
+
         if positive_count > negative_count + 1:
             sentiment_score = 65
-            trend = 'Bullish' if report_language == "en" else '看多'
-            advice = 'Buy' if report_language == "en" else '买入'
+            if report_language == "en":
+                trend = 'Bullish'
+                advice = 'Buy'
+            elif report_language == "zh-TW":
+                trend = '看多'
+                advice = '買入'
+            else:
+                trend = '看多'
+                advice = '买入'
             decision_type = 'buy'
         elif negative_count > positive_count + 1:
             sentiment_score = 35
-            trend = 'Bearish' if report_language == "en" else '看空'
-            advice = 'Sell' if report_language == "en" else '卖出'
+            if report_language == "en":
+                trend = 'Bearish'
+                advice = 'Sell'
+            elif report_language == "zh-TW":
+                trend = '看空'
+                advice = '賣出'
+            else:
+                trend = '看空'
+                advice = '卖出'
             decision_type = 'sell'
         else:
             decision_type = 'hold'
-        
+
         # 截取前500字符作为摘要
-        summary = response_text[:500] if response_text else ('No analysis result' if report_language == "en" else '无分析结果')
-        
+        if response_text:
+            summary = response_text[:500]
+        elif report_language == "en":
+            summary = 'No analysis result'
+        elif report_language == "zh-TW":
+            summary = '無分析結果'
+        else:
+            summary = '无分析结果'
+
+        if report_language == "en":
+            _conf_level = 'Low'
+            _key_points = 'JSON parsing failed; treat this as best-effort output.'
+            _risk_warning = 'The result may be inaccurate. Cross-check with other information.'
+        elif report_language == "zh-TW":
+            _conf_level = '低'
+            _key_points = 'JSON 解析失敗，僅供參考'
+            _risk_warning = '分析結果可能不準確，建議結合其他資訊判斷'
+        else:
+            _conf_level = '低'
+            _key_points = 'JSON解析失败，仅供参考'
+            _risk_warning = '分析结果可能不准确，建议结合其他信息判断'
+
         result = AnalysisResult(
             code=code,
             name=name,
@@ -3985,44 +4123,44 @@ class GeminiAnalyzer:
             trend_prediction=trend,
             operation_advice=advice,
             decision_type=decision_type,
-            confidence_level='Low' if report_language == "en" else '低',
+            confidence_level=_conf_level,
             analysis_summary=summary,
-            key_points='JSON parsing failed; treat this as best-effort output.' if report_language == "en" else 'JSON解析失败，仅供参考',
-            risk_warning='The result may be inaccurate. Cross-check with other information.' if report_language == "en" else '分析结果可能不准确，建议结合其他信息判断',
+            key_points=_key_points,
+            risk_warning=_risk_warning,
             raw_response=response_text,
             success=False,
             error_message='LLM response is not valid JSON; analysis result will not be persisted',
             report_language=report_language,
         )
         return populate_decision_action_fields(result)
-    
+
     def batch_analyze(
-        self, 
+        self,
         contexts: List[Dict[str, Any]],
         delay_between: float = 2.0
     ) -> List[AnalysisResult]:
         """
         批量分析多只股票
-        
+
         注意：为避免 API 速率限制，每次分析之间会有延迟
-        
+
         Args:
             contexts: 上下文数据列表
             delay_between: 每次分析之间的延迟（秒）
-            
+
         Returns:
             AnalysisResult 列表
         """
         results = []
-        
+
         for i, context in enumerate(contexts):
             if i > 0:
                 logger.debug(f"等待 {delay_between} 秒后继续...")
                 time.sleep(delay_between)
-            
+
             result = self.analyze(context)
             results.append(result)
-        
+
         return results
 
 
@@ -4035,7 +4173,7 @@ def get_analyzer() -> GeminiAnalyzer:
 if __name__ == "__main__":
     # 测试代码
     logging.basicConfig(level=logging.DEBUG)
-    
+
     # 模拟上下文数据
     test_context = {
         'code': '600519',
@@ -4057,9 +4195,9 @@ if __name__ == "__main__":
         'volume_change_ratio': 1.3,
         'price_change_ratio': 1.5,
     }
-    
+
     analyzer = GeminiAnalyzer()
-    
+
     if analyzer.is_available():
         print("=== AI 分析测试 ===")
         result = analyzer.analyze(test_context)

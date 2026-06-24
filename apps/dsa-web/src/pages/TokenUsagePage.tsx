@@ -6,6 +6,7 @@ import { ApiErrorAlert, AppPage, Card, EmptyState, PageHeader, StatCard } from '
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import type { UiLanguage, UiTextKey, UiTextParams } from '../i18n/uiText';
 import { cn } from '../utils/cn';
+import { getIntlLocale } from '../i18n/intlLocale';
 
 type Translate = (key: UiTextKey, params?: UiTextParams) => string;
 
@@ -24,7 +25,7 @@ const CALL_TYPE_LABEL_KEYS: Record<string, UiTextKey> = {
 };
 
 function getLocale(language: UiLanguage): string {
-  return language === 'en' ? 'en-US' : 'zh-CN';
+  return getIntlLocale(language);
 }
 
 function formatNumber(value: number | null | undefined, language: UiLanguage): string {

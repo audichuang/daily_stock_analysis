@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [chore] 新增 `Makefile`（全部以 `uv run` 执行：serve/review-tw/analyze/test/lint 等）与 `pyproject.toml` 的 `[tool.ruff]` 配置；通知走 Doppler 注入（`make serve` 将 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`，secret 不落地 .env）。`make lint` 使用 ruff（E/F/W/I）。
 - [文档] 修正 `AGENTS.md` 仓库速览：市场覆盖补上日/韩/台股、移除不存在的 `src/reports/`（改列实际的 `src/notification_sender/`、`src/llm/`）、常用命令指向 `Makefile`。
 - [文档] `AGENTS.md` 新增「本 fork 专属约定」段：uv/Makefile、台股 TWSE/TPEx 免 key 数据源、自动补全索引须关闭远端更新、DeepSeek 须显式设 LITELLM_MODEL、Bark 走 Doppler 注入等上游没有的约定与踩雷。
+- [新功能] 新增 zh-TW(繁体中文)报告语言与 Web UI 界面语言，覆盖报告、通知、API 与前端固定文案。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 

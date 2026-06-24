@@ -81,19 +81,19 @@ const stripTopHeading = (markdown: string, title?: string): string => {
 
 const getSectionIcon = (title: string): typeof FileText => {
   const normalized = normalizeHeading(title);
-  if (/指数|index|overview|大盘/.test(normalized)) {
+  if (/指数|指數|index|overview|大盘|大盤/.test(normalized)) {
     return BarChart3;
   }
-  if (/情绪|赚钱|sentiment|breadth|temperature/.test(normalized)) {
+  if (/情绪|情緒|赚钱|賺錢|sentiment|breadth|temperature/.test(normalized)) {
     return Gauge;
   }
-  if (/行业|板块|主题|轮动|sector|theme|rotation/.test(normalized)) {
+  if (/行业|行業|板块|板塊|主题|主題|轮动|輪動|sector|theme|rotation/.test(normalized)) {
     return TrendingUp;
   }
-  if (/资金|成交|量能|flow|turnover|volume|capital/.test(normalized)) {
+  if (/资金|資金|成交|量能|flow|turnover|volume|capital/.test(normalized)) {
     return WalletCards;
   }
-  if (/风险|机会|观察|risk|watch|next/.test(normalized)) {
+  if (/风险|風險|机会|機會|观察|觀察|risk|watch|next/.test(normalized)) {
     return ShieldAlert;
   }
   return FileText;
@@ -254,6 +254,25 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
     last: 'Last',
     change: 'Change',
     highLow: 'High/Low',
+  },
+  'zh-TW': {
+    reviewSummary: '復盤摘要',
+    noReviewSummary: '暫無摘要',
+    noSentimentScore: '暫無評分',
+    rotationAndFunds: '輪動與資金',
+    noRotationView: '暫無輪動觀點',
+    riskAndWatch: '風險與觀察',
+    noRiskWatch: '暫無觀察重點',
+    structuredMarketData: '結構化大盤資料',
+    noBreadthData: '暫無資料',
+    advancers: '上漲家數',
+    decliners: '下跌家數',
+    limitUpDown: '漲停/跌停',
+    turnover: '成交額',
+    index: '指數',
+    last: '最新',
+    change: '漲跌幅',
+    highLow: '高/低',
   },
 };
 
