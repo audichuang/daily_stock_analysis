@@ -167,25 +167,26 @@ class MarketAnalyzer:
 
     def _get_market_scope_name(self, review_language: str | None = None) -> str:
         review_language = review_language or self._get_review_language()
-        if self.region == "us":
-            return "US market" if review_language == "en" else "美股市场"
-        if self.region == "hk":
-            return "Hong Kong market" if review_language == "en" else "港股市场"
-        if self.region == "tw":
-            return "TW market" if review_language == "en" else "台股市场"
-        if review_language == "en":
-            return "A-share market"
-        return "A股市场"
+        labels = {
+            "us": {"en": "US market", "zh-TW": "美股市場", "zh": "美股市场"},
+            "hk": {"en": "Hong Kong market", "zh-TW": "港股市場", "zh": "港股市场"},
+            "tw": {"en": "TW market", "zh-TW": "台股市場", "zh": "台股市场"},
+            "cn": {"en": "A-share market", "zh-TW": "A股市場", "zh": "A股市场"},
+        }
+        region_labels = labels.get(self.region, labels["cn"])
+        return region_labels.get(review_language, region_labels["zh"])
 
     def _get_turnover_unit_label(self) -> str:
         """Return the turnover unit label for the current market/language."""
-        if self.region == "us":
-            return "USD bn" if self._get_review_language() == "en" else "十亿美元"
-        if self.region == "hk":
-            return "HKD bn" if self._get_review_language() == "en" else "十亿港元"
-        if self.region == "tw":
-            return "TWD 100m" if self._get_review_language() == "en" else "新台币亿元"
-        return "CNY 100m" if self._get_review_language() == "en" else "亿"
+        review_language = self._get_review_language()
+        labels = {
+            "us": {"en": "USD bn", "zh-TW": "十億美元", "zh": "十亿美元"},
+            "hk": {"en": "HKD bn", "zh-TW": "十億港元", "zh": "十亿港元"},
+            "tw": {"en": "TWD 100m", "zh-TW": "新台幣億元", "zh": "新台币亿元"},
+            "cn": {"en": "CNY 100m", "zh-TW": "億", "zh": "亿"},
+        }
+        region_labels = labels.get(self.region, labels["cn"])
+        return region_labels.get(review_language, region_labels["zh"])
 
     def _format_turnover_value(self, amount_raw: float) -> str:
         """Format raw turnover according to market-specific units."""
@@ -206,10 +207,13 @@ class MarketAnalyzer:
         return "🟢" if change_pct > 0 else "🔴"
 
     def _get_review_title(self, date: str) -> str:
-        if self._get_review_language() == "en":
+        review_language = self._get_review_language()
+        if review_language == "en":
             market_names = {"us": "US Market Recap", "hk": "HK Market Recap", "tw": "TW Market Recap"}
             market_name = market_names.get(self.region, "A-share Market Recap")
             return f"## {date} {market_name}"
+        if review_language == "zh-TW":
+            return f"## {date} 大盤複盤"
         return f"## {date} 大盘复盘"
 
     def _get_index_hint(self) -> str:
@@ -965,6 +969,18 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 "red": "Risk is elevated; prioritize drawdown control and avoid chasing weak rebounds.",
             }
             reasons = self._build_market_light_reasons_en(overview, score)
+        elif self._get_review_language() == "zh-TW":
+            label_map = {
+                "green": "可進攻",
+                "yellow": "需觀察",
+                "red": "偏防守",
+            }
+            guidance_map = {
+                "green": "風險偏好尚可，關注主線延續與倉位紀律。",
+                "yellow": "訊號分化，控制倉位並等待量價確認。",
+                "red": "風險偏高，優先控制回撤，避免追高弱反彈。",
+            }
+            reasons = self._build_market_light_reasons_zh(overview, score)
         else:
             label_map = {
                 "green": "可进攻",
@@ -1197,8 +1213,13 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         if breadth_available:
             breadth_score = int(overview.up_count / participants * 100)
 
-        index_changes = [idx.change_pct for idx in overview.indices if idx.change_pct is not None]
-        index_available = bool(overview.indices and index_changes)
+        # 排除 VIX：它是波动率/恐慌指数而非方向性指数，纳入均值会让「恐慌飙升」被误算成 risk-on
+        index_changes = [
+            idx.change_pct
+            for idx in overview.indices
+            if idx.change_pct is not None and (getattr(idx, "code", "") or "").upper() != "VIX"
+        ]
+        index_available = bool(index_changes)
         index_score = 50
         if index_available:
             avg_change = sum(index_changes) / len(index_changes)
@@ -1223,8 +1244,23 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         else:
             data_quality = "partial"
 
-        score = int(round(breadth_score * 0.45 + index_score * 0.35 + limit_score * 0.20))
-        if self._get_review_language() == "en":
+        # 按「可用维度」的权重归一化：不可用维度（如美/日无涨跌家数与涨跌停）不再以固定 50
+        # 被算进去把分数拉向中性，其权重按比例重分配给可用维度，使指数型市场也能覆盖完整 0-100 区间。
+        # 全维度可用的市场（如 A 股）权重和为 1，结果与原公式完全一致。
+        _base_weights = {"breadth": 0.45, "index": 0.35, "limit": 0.20}
+        _available_weight = sum(
+            weight for key, weight in _base_weights.items() if dimensions[key]["available"]
+        )
+        if _available_weight > 0:
+            score = int(round(sum(
+                dimensions[key]["score"] * weight / _available_weight
+                for key, weight in _base_weights.items()
+                if dimensions[key]["available"]
+            )))
+        else:
+            score = 50
+        review_language = self._get_review_language()
+        if review_language == "en":
             if score >= 70:
                 label = "risk-on"
             elif score >= 55:
@@ -1233,6 +1269,15 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 label = "mixed"
             else:
                 label = "defensive"
+        elif review_language == "zh-TW":
+            if score >= 70:
+                label = "強勢"
+            elif score >= 55:
+                label = "偏暖"
+            elif score >= 40:
+                label = "震盪"
+            else:
+                label = "偏弱"
         else:
             if score >= 70:
                 label = "强势"
@@ -1414,6 +1459,76 @@ Lagging: {bottom_sectors_text if bottom_sectors_text else "N/A"}"""
 ---
 
 Output the report content directly, no extra commentary.
+"""
+
+        if review_language == "zh-TW":
+            return f"""你是一位專業的台股／港股／美股市場分析師，請根據以下資料生成一份結構化的{self._get_market_scope_name('zh-TW')}大盤複盤報告。
+
+【輸出語言要求（最高優先級）】
+- 全文必須使用繁體中文（台灣用語），不得使用簡體字或中國大陸用語。
+- 即使下方注入的資料、表格或策略藍圖出現簡體字，正文也必須改寫為繁體中文輸出。
+
+【重要】輸出要求：
+- 必須輸出純 Markdown 文字格式
+- 禁止輸出 JSON 格式
+- 禁止輸出程式碼區塊
+- emoji 僅在標題處少量使用（每個標題最多 1 個）
+- 報告要像交易員盤後工作台：先給結論，再按資料表、主線、催化、計畫展開
+- 不要重複列出已由系統注入的表格資料；正文負責解釋表格背後的含義
+
+---
+
+# 今日市場資料
+
+## 日期
+{overview.date}
+
+## 主要指數
+{indices_placeholder}
+
+{stats_block}
+
+{sector_block}
+
+## 市場新聞
+{news_placeholder}
+
+{data_no_indices_hint}
+
+{self._get_strategy_prompt_block()}
+
+---
+
+# 輸出格式模板（請嚴格按此格式輸出）
+
+## {overview.date} 大盤複盤
+
+> 一句話給出今日市場狀態、核心矛盾和明日優先觀察方向。
+
+### 一、盤面總覽
+（2-3 句話概括指數、漲跌家數、成交額和情緒溫度，明確「強勢／偏暖／震盪／偏弱」判斷）
+
+### 二、指數結構
+（{self._get_index_hint()}，說明誰在護盤、誰在拖累，以及關鍵支撐／壓力）
+
+### 三、板塊主線
+（分析領漲／領跌板塊背後的邏輯、持續性和是否形成主線）
+
+### 四、資金與情緒
+（解讀成交額、漲跌停結構、市場寬度和風險偏好）
+
+### 五、消息催化
+（結合近三日新聞，提煉真正影響明日交易的催化或擾動）
+
+### 六、明日交易計畫
+（給出進攻／均衡／防守結論、倉位區間、關注方向、迴避方向和一個觸發失效條件）
+
+### 七、風險提示
+（列出需要關注的風險點；最後補充「建議僅供參考，不構成投資建議」。）
+
+---
+
+請直接輸出複盤報告內容，不要輸出其他說明文字。
 """
 
         # A 股场景使用中文提示语

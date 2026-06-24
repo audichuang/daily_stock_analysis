@@ -104,6 +104,16 @@ def _get_market_review_text(language: str) -> dict[str, str]:
             "tw_title": "# TW Market Recap",
             "separator": "> Next market recap follows",
         }
+    if normalized == "zh-TW":
+        return {
+            "root_title": "# 🎯 大盤複盤",
+            "push_title": "🎯 大盤複盤",
+            "cn_title": "# A股大盤複盤",
+            "us_title": "# 美股大盤複盤",
+            "hk_title": "# 港股大盤複盤",
+            "tw_title": "# 台股大盤複盤",
+            "separator": "> 以下為下一市場大盤複盤",
+        }
     return {
         "root_title": "# 🎯 大盘复盘",
         "push_title": "🎯 大盘复盘",
@@ -122,12 +132,13 @@ def _resolve_market_review_regions(raw_region: Optional[str]) -> list[str]:
     if region == 'both':
         return list(_MARKET_REVIEW_REGION_ORDER)
     if ',' in region:
-        requested = {
-            item.strip().lower()
-            for item in region.split(',')
-            if item.strip().lower() in _VALID_MARKET_REVIEW_REGIONS
-        }
-        return [market for market in _MARKET_REVIEW_REGION_ORDER if market in requested] or ['cn']
+        # 保留使用者输入顺序（如 tw,us 即「台股在前、美股在后」），去重、过滤非法值
+        ordered: list[str] = []
+        for item in region.split(','):
+            token = item.strip().lower()
+            if token in _VALID_MARKET_REVIEW_REGIONS and token not in ordered:
+                ordered.append(token)
+        return ordered or ['cn']
     if region in _VALID_MARKET_REVIEW_REGIONS:
         return [region]
     return ['cn']
@@ -189,9 +200,10 @@ def run_market_review(
             parts = []
             market_light_snapshots: Dict[str, Dict[str, Any]] = {}
             market_review_payloads: Dict[str, Dict[str, Any]] = {}
-            for mkt, title_key, label in _MARKET_REVIEW_MARKETS:
-                if mkt not in run_markets:
-                    continue
+            # 依 run_markets 的顺序输出（保留使用者输入顺序，如 tw,us = 台股在前）
+            _market_meta = {mkt: (tk, lbl) for mkt, tk, lbl in _MARKET_REVIEW_MARKETS}
+            for mkt in run_markets:
+                title_key, label = _market_meta[mkt]
                 logger.info(
                     "[MarketReview] component=market_review action=build_report "
                     "trigger_source=%s query_id=%s region=%s label=%s",
@@ -528,15 +540,48 @@ def _persist_market_review_history(
             stock_name = "Market Review"
             operation_advice = "View review"
             trend_prediction = "Market review"
+        elif report_language == "zh-TW":
+            stock_name = "大盤複盤"
+            operation_advice = "查看複盤"
+            trend_prediction = "大盤複盤"
         else:
             stock_name = "大盘复盘"
             operation_advice = "查看复盘"
             trend_prediction = "大盘复盘"
 
+        # 用真实的 Market Light 盘面分数取代写死的 50，并让「轮动与资金」「风险与观察」卡片
+        # 显示真实读数而非占位字。多市场时按 region 输入顺序取第一个成功产出快照的市场
+        # （如 tw,us = 以台股为主），无任何快照时回退占位值。仅影响新记录，不回改历史列。
+        sentiment_score = 50
+        if market_light_snapshots:
+            ordered_regions = [
+                token.strip()
+                for token in str(region or "").split(",")
+                if token.strip()
+            ] or list(market_light_snapshots.keys())
+            primary_snapshot = next(
+                (
+                    market_light_snapshots[r]
+                    for r in ordered_regions
+                    if isinstance(market_light_snapshots.get(r), dict)
+                ),
+                None,
+            )
+            if primary_snapshot:
+                snapshot_score = primary_snapshot.get("score")
+                if isinstance(snapshot_score, (int, float)):
+                    sentiment_score = int(snapshot_score)
+                snapshot_guidance = primary_snapshot.get("guidance")
+                if isinstance(snapshot_guidance, str) and snapshot_guidance.strip():
+                    operation_advice = snapshot_guidance.strip()
+                snapshot_temp = primary_snapshot.get("temperature_label")
+                if isinstance(snapshot_temp, str) and snapshot_temp.strip():
+                    trend_prediction = snapshot_temp.strip()
+
         result = AnalysisResult(
             code=MARKET_REVIEW_HISTORY_CODE,
             name=stock_name,
-            sentiment_score=50,
+            sentiment_score=sentiment_score,
             trend_prediction=trend_prediction,
             operation_advice=operation_advice,
             analysis_summary=summary,
@@ -631,7 +676,12 @@ def _build_market_review_context_overview(
         metadata["trigger_source"] = diagnostic_snapshot.get("trigger_source") or metadata["trigger_source"]
         metadata["scope"] = diagnostic_snapshot.get("scope") or metadata["scope"]
 
-    label = "Market review" if report_language == "en" else "大盘复盘"
+    if report_language == "en":
+        label = "Market review"
+    elif report_language == "zh-TW":
+        label = "大盤複盤"
+    else:
+        label = "大盘复盘"
     return {
         "pack_version": "market_review/1.0",
         "created_at": datetime.now().isoformat(),
@@ -668,4 +718,8 @@ def _summarize_market_review(review_report: str, report_language: str) -> str:
         text = line.strip().lstrip("#").strip()
         if text and not text.startswith("---") and not text.startswith(">"):
             return text[:200]
-    return "Market review report generated." if report_language == "en" else "大盘复盘报告已生成。"
+    if report_language == "en":
+        return "Market review report generated."
+    if report_language == "zh-TW":
+        return "大盤複盤報告已生成。"
+    return "大盘复盘报告已生成。"

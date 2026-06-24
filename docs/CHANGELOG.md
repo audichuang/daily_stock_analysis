@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 大盘复盘修好三个失效摘要卡：①「市场情绪」不再永远写死 50，改用真实 Market Light 盘面分数（多市场按 region 输入顺序取主市场）；②「轮动与资金」「风险与观察」不再显示「查看复盘/大盘复盘」占位字，改填 Market Light 的操作指引与温度读数。
+- [修复] 大盘复盘盘面分数修正两处计分缺陷：①美股指数池含 VIX（恐慌指数），原先并入指数均值会让「恐慌飙升」被误判为 risk-on，现已将 VIX 排除在方向性指数评分之外；②指数型市场（美股，无涨跌家数/涨跌停）原先被固定 50 的缺失维度拉向中性、分数锁在 ~32.5–67.5，现按「可用维度」权重归一化重分配，使其覆盖完整 0–100 区间；全维度可用市场（A 股）分数与原公式完全一致。Market Light 的 label/guidance/temperature 补 zh-TW 繁体分支。
+- [新功能] 大盘复盘 `MARKET_REVIEW_REGION` 支持逗号组合并保留输入顺序（如 `tw,us` = 台股在前、美股在后），不再只能单市场或 `both`(全部)。`config._parse_market_review_region` 接受逗号清单（去重、过滤非法值）；`market_review._resolve_market_review_regions` 与多市场合并报告均按输入顺序输出；config_registry 选项新增 `tw,us`。`both` 行为不变。
 - [新功能] #1595 P1.5 新增 Provider Cache Capability Registry，按 provider、api surface、gateway 和 verification status 建模 prompt cache 能力，未知 OpenAI-compatible route 默认 telemetry only。
 - [改进] #1595 P1 新增 prompt cache telemetry / analysis-path hints / diagnostics 最小配置，默认不改变 provider 请求 shape，并复用 LLM usage HMAC secret 做 domain-separated cache hint 派生。
 - [新功能] 新增台股 Yahoo 后缀代码（`.TW` / `.TWO`）分析支持，接入 YFinance 日线/基础行情、市场语境、交易日历、API/Web 校验与文档边界说明。
@@ -27,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - [修复] 修复日股/韩股历史列表重建市场阶段摘要时将 non_trading 等结果阶段误传为 analysis_phase 导致列表查询失败的问题。
 - [新功能] 支持 SCHEDULE_TIMES 多时间定时推送，并让 Web/API/Desktop 长运行进程保存调度配置后热启停或重建 runtime scheduler。
+- [改进] Web 桌面侧边栏 rail 由「图标+标签整组居中」改为左对齐固定图标列，消除各项图标左缘参差不齐的问题，并将宽度由 136px 放宽至 172px 让标签更透气（仅样式与布局，不影响导航项与路由）。
+- [修复] 修复台股等经 yfinance 兜底的标的，在报告/即时看板显示 Yahoo 英文名（如 HANNSTAR DISPLAY CORP）而非本地索引中文名（彩晶）的问题：yfinance 实时行情名称优先取本地策划索引的本地化名称；分析流程不再用实时行情名称覆盖已取得的有效中文名称。注：已生成的历史报告名称为当时持久化结果，需重新分析后才会更新。
+- [新功能] 大盘复盘补齐 zh-TW（繁体中文/台湾用语）在地化：此前复盘子系统仅有 en 与简体两套分支，zh-TW 会落到简体。现 `_build_review_prompt` 新增 zh-TW 分支并注入「必须使用繁体中文（台湾用语），不得使用简体字」最高优先指示，市场范围名/成交额单位/复盘标题、`market_review.py` 复盘标题与历史标签、market-review API 提交提示，以及台股指数名（台灣加權指數/櫃買指數）均补 zh-TW。报告语言由全局 `REPORT_LANGUAGE` 控制（与 UI 语言解耦，沿用既有设计），设为 `zh-TW` 即输出繁体复盘。
 - [改进] Web 设置页以“定时任务”面板维护多时间定时推送、状态刷新和立即执行一次，不再向用户直接暴露 SCHEDULE_TIMES 等内部配置键。
 - [修复] 修复 `--serve --schedule` 下 CLI 调度器与 Web/API runtime scheduler 状态脱节的问题，并避免设置页把失败执行时间显示为上次成功。
 - [修复] runtime scheduler 的立即执行接口在已有分析运行时返回 409 忙碌状态，Web 设置页不再把未排队的请求提示为已提交。

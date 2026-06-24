@@ -48,6 +48,13 @@ except (ImportError, ModuleNotFoundError):
         n = str(name).strip()
         return bool(n and n.upper() != str(stock_code).strip().upper())
 
+# 可选导入本地策划的股票索引（含台股等本地化中文名），缺失时返回 None 兜底
+try:
+    from src.data.stock_index_loader import get_index_stock_name
+except (ImportError, ModuleNotFoundError):
+    def get_index_stock_name(stock_code: str) -> str | None:
+        return None
+
 import os
 
 logger = logging.getLogger(__name__)
@@ -498,9 +505,10 @@ class YfinanceFetcher(BaseFetcher):
 
     def _get_tw_main_indices(self, yf) -> Optional[List[Dict[str, Any]]]:
         """获取台湾主要指数行情（台湾加权、柜买），复用 _fetch_yf_ticker_data。"""
+        # ponytail: 台股专用指数，固定使用繁体名（台湾指数本就繁体）；若未来需要简体台股复盘再按 report_language 分流
         tw_indices = {
-            'TWII': ('^TWII', '台湾加权指数'),
-            'TPEX': ('^TWOII', '柜买指数'),
+            'TWII': ('^TWII', '台灣加權指數'),
+            'TPEX': ('^TWOII', '櫃買指數'),
         }
         results = []
         try:
@@ -850,9 +858,16 @@ class YfinanceFetcher(BaseFetcher):
             # 获取股票名称
             try:
                 info_name = ticker.info.get('shortName', '') or ticker.info.get('longName', '') or ''
-                name = info_name if is_meaningful_stock_name(info_name, symbol) else STOCK_NAME_MAP.get(symbol, '')
+                # 优先使用本地策划索引的本地化名称（如台股中文名），避免 Yahoo 返回英文名覆盖
+                index_name = get_index_stock_name(symbol)
+                if is_meaningful_stock_name(index_name, symbol):
+                    name = index_name
+                elif is_meaningful_stock_name(info_name, symbol):
+                    name = info_name
+                else:
+                    name = STOCK_NAME_MAP.get(symbol, '')
             except Exception:
-                name = STOCK_NAME_MAP.get(symbol, '')
+                name = get_index_stock_name(symbol) or STOCK_NAME_MAP.get(symbol, '')
 
             quote = UnifiedRealtimeQuote(
                 code=symbol,

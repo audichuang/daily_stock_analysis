@@ -501,9 +501,32 @@ def trigger_market_review(
         getattr(request, "report_language", None),
     )
 
+    review_language = normalize_report_language(getattr(runtime_config, "report_language", "zh"))
+    _mr_labels = {
+        "en": {
+            "name": "Market Review",
+            "submitted": "Market review task submitted",
+            "submitted_full": "Market review task submitted; the report will be saved and pushed per your settings once done.",
+            "running": "A market review is already running. Please try again shortly.",
+        },
+        "zh-TW": {
+            "name": "大盤複盤",
+            "submitted": "大盤複盤任務已提交",
+            "submitted_full": "大盤複盤任務已提交，完成後會儲存報告並按設定推播通知",
+            "running": "大盤複盤正在執行中，請稍後再試",
+        },
+        "zh": {
+            "name": "大盘复盘",
+            "submitted": "大盘复盘任务已提交",
+            "submitted_full": "大盘复盘任务已提交，完成后会保存报告并按配置推送通知",
+            "running": "大盘复盘正在执行中，请稍后再试",
+        },
+    }
+    mr_label = _mr_labels.get(review_language, _mr_labels["zh"])
+
     lock_token = _try_acquire_market_review_lock(runtime_config)
     if lock_token is None:
-        raise api_error(409, "duplicate_market_review", "大盘复盘正在执行中，请稍后再试")
+        raise api_error(409, "duplicate_market_review", mr_label["running"])
 
     try:
         task_id = uuid.uuid4().hex
@@ -523,8 +546,8 @@ def trigger_market_review(
                 query_id=task_id,
             ),
             stock_code="market_review",
-            stock_name="大盘复盘",
-            message="大盘复盘任务已提交",
+            stock_name=mr_label["name"],
+            message=mr_label["submitted"],
             task_id=task_id,
         )
     except Exception:
@@ -533,7 +556,7 @@ def trigger_market_review(
 
     return MarketReviewAccepted(
         status="accepted",
-        message="大盘复盘任务已提交，完成后会保存报告并按配置推送通知",
+        message=mr_label["submitted_full"],
         send_notification=request.send_notification,
         task_id=task.task_id,
         trace_id=_get_task_trace_id(task),

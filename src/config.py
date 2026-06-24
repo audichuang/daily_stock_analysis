@@ -2378,13 +2378,29 @@ class Config:
 
     @classmethod
     def _parse_market_review_region(cls, value: str) -> str:
-        """解析大盘复盘市场区域，非法值记录警告后回退为 cn"""
+        """解析大盘复盘市场区域，非法值记录警告后回退为 cn。
+
+        支持三种形式：单一市场（cn/us/hk/tw）、both（= 全部）、
+        以及逗号分隔的多市场组合（如 ``tw,us``，按输入顺序保留、去重、过滤非法值）。
+        逗号组合的展开与排序由 market_review._resolve_market_review_regions 负责，
+        此处只做合法性归一与告警。
+        """
         import logging
         v = (value or 'cn').strip().lower()
         if v in ('cn', 'us', 'hk', 'tw', 'both'):
             return v
+        if ',' in v:
+            valid = ('cn', 'us', 'hk', 'tw')
+            seen: list[str] = []
+            for item in v.split(','):
+                token = item.strip()
+                if token in valid and token not in seen:
+                    seen.append(token)
+            if seen:
+                return ','.join(seen)
         logging.getLogger(__name__).warning(
-            f"MARKET_REVIEW_REGION 配置值 '{value}' 无效，已回退为默认值 'cn'（合法值：cn / hk / us / tw / both）"
+            f"MARKET_REVIEW_REGION 配置值 '{value}' 无效，已回退为默认值 'cn'"
+            f"（合法值：cn / hk / us / tw / both，或逗号组合如 tw,us）"
         )
         return 'cn'
 

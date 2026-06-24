@@ -24,6 +24,7 @@ from typing import List, Dict, Any, Optional, Tuple, Callable
 import pandas as pd
 
 from src.config import FUNDAMENTAL_STAGE_TIMEOUT_SECONDS_DEFAULT, get_config, Config
+from src.data.stock_mapping import is_meaningful_stock_name
 from src.storage import get_db
 from data_provider import DataFetcherManager
 from data_provider.base import is_bse_code, normalize_stock_code
@@ -419,8 +420,9 @@ class StockAnalysisPipeline:
                 if self.config.enable_realtime_quote:
                     realtime_quote = self.fetcher_manager.get_realtime_quote(code, log_final_failure=False)
                     if realtime_quote:
-                        # 使用实时行情返回的真实股票名称
-                        if realtime_quote.name:
+                        # 仅当轻量名称路径没拿到有效名称时，才用实时行情名称兜底，
+                        # 避免实时源（如台股 yfinance 兜底）的英文名覆盖本地索引的中文名
+                        if realtime_quote.name and not is_meaningful_stock_name(stock_name, code):
                             stock_name = realtime_quote.name
                         # 兼容不同数据源的字段（有些数据源可能没有 volume_ratio）
                         volume_ratio = getattr(realtime_quote, 'volume_ratio', None)
