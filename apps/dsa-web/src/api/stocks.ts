@@ -12,6 +12,69 @@ export type ExtractFromImageResponse = {
   rawText?: string;
 };
 
+export type StockQuote = {
+  stockCode: string;
+  stockName?: string | null;
+  currentPrice: number;
+  change?: number | null;
+  changePercent?: number | null;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
+  prevClose?: number | null;
+  volume?: number | null;
+  amount?: number | null;
+  updateTime?: string | null;
+  source?: string | null;
+  asOf?: string | null;
+  isStale?: boolean | null;
+};
+
+export type StockQuoteBatchItem = {
+  stockCode: string;
+  quote?: StockQuote | null;
+  error?: string | null;
+};
+
+// 后端字段为 snake_case，这里转成前端 camelCase
+type RawQuote = {
+  stock_code: string;
+  stock_name?: string | null;
+  current_price: number;
+  change?: number | null;
+  change_percent?: number | null;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
+  prev_close?: number | null;
+  volume?: number | null;
+  amount?: number | null;
+  update_time?: string | null;
+  source?: string | null;
+  as_of?: string | null;
+  is_stale?: boolean | null;
+};
+
+function toQuote(raw: RawQuote): StockQuote {
+  return {
+    stockCode: raw.stock_code,
+    stockName: raw.stock_name,
+    currentPrice: raw.current_price,
+    change: raw.change,
+    changePercent: raw.change_percent,
+    open: raw.open,
+    high: raw.high,
+    low: raw.low,
+    prevClose: raw.prev_close,
+    volume: raw.volume,
+    amount: raw.amount,
+    updateTime: raw.update_time,
+    source: raw.source,
+    asOf: raw.as_of,
+    isStale: raw.is_stale,
+  };
+}
+
 export const stocksApi = {
   async extractFromImage(file: File): Promise<ExtractFromImageResponse> {
     const formData = new FormData();
@@ -51,4 +114,28 @@ export const stocksApi = {
     }
     throw new Error('请提供文件或粘贴文本');
   },
+
+  async getQuotes(codes: string[]): Promise<StockQuoteBatchItem[]> {
+    if (codes.length === 0) return [];
+    const response = await apiClient.get('/api/v1/stocks/quotes', {
+      params: { codes: codes.join(',') },
+    });
+    const data = response.data as { items?: Array<{ stock_code: string; quote?: RawQuote | null; error?: string | null }> };
+    return (data.items ?? []).map((item) => ({
+      stockCode: item.stock_code,
+      quote: item.quote ? toQuote(item.quote) : null,
+      error: item.error,
+    }));
+  },
+
+  async getTrend(code: string, range: TrendRange): Promise<TrendPoint[]> {
+    const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/trend`, {
+      params: { range },
+    });
+    const data = response.data as { points?: Array<{ t: string; price: number }> };
+    return (data.points ?? []).map((p) => ({ t: p.t, price: p.price }));
+  },
 };
+
+export type TrendRange = 'day' | 'month' | 'year';
+export type TrendPoint = { t: string; price: number };

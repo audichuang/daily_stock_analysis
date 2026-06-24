@@ -150,6 +150,9 @@ class TestFetcherSourceOptimization(unittest.TestCase):
                 "PytdxFetcher",
                 "BaostockFetcher",
                 "YfinanceFetcher",
+                # 始终注册、内部按能力/金钥自我停用的专用数据源（按 priority 排序）：
+                "ShioajiFetcher",  # 台股 realtime_quote（无套件/金钥时自我停用）
+                "TwseFetcher",     # 台股大盘统计（仅 get_market_stats）
             ],
         )
         mock_tushare.assert_not_called()

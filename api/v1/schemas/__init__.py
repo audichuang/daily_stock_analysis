@@ -37,6 +37,10 @@ from api.v1.schemas.history import (
 )
 from api.v1.schemas.stocks import (
     StockQuote,
+    StockQuoteBatchItem,
+    StockQuoteBatchResponse,
+    StockTrendResponse,
+    TrendPoint,
     StockHistoryResponse,
     KLineData,
 )
@@ -153,6 +157,10 @@ __all__ = [
     "ReportDetails",
     # stocks
     "StockQuote",
+    "StockQuoteBatchItem",
+    "StockQuoteBatchResponse",
+    "StockTrendResponse",
+    "TrendPoint",
     "StockHistoryResponse",
     "KLineData",
     # backtest
