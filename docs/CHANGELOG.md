@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 台股大盘复盘补入上柜（TPEx）数据：成交金额与三大法人改为上市+上柜合计（上柜无公开涨跌家数端点，家数仍为上市口径）；三大法人买卖超同时注入 LLM 复盘 prompt，使复盘正文据实引用法人动向。
 - [chore] 新增 `Makefile`（全部以 `uv run` 执行：serve/review-tw/analyze/test/lint 等）与 `pyproject.toml` 的 `[tool.ruff]` 配置；通知走 Doppler 注入（`make serve` 将 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`，secret 不落地 .env）。`make lint` 使用 ruff（E/F/W/I）。
 - [文档] 修正 `AGENTS.md` 仓库速览：市场覆盖补上日/韩/台股、移除不存在的 `src/reports/`（改列实际的 `src/notification_sender/`、`src/llm/`）、常用命令指向 `Makefile`。
+- [文档] `AGENTS.md` 新增「本 fork 专属约定」段：uv/Makefile、台股 TWSE/TPEx 免 key 数据源、自动补全索引须关闭远端更新、DeepSeek 须显式设 LITELLM_MODEL、Bark 走 Doppler 注入等上游没有的约定与踩雷。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
