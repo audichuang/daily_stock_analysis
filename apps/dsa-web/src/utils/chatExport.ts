@@ -2,10 +2,11 @@ import type { Message } from '../stores/agentChatStore';
 
 /**
  * Format chat messages as Markdown for export.
+ * @param locale BCP-47 locale for timestamp formatting, defaults to 'zh-CN'.
  */
-export function formatSessionAsMarkdown(messages: Message[]): string {
+export function formatSessionAsMarkdown(messages: Message[], locale = 'zh-CN'): string {
   const now = new Date();
-  const timeStr = now.toLocaleString('zh-CN', {
+  const timeStr = now.toLocaleString(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -38,9 +39,10 @@ export function formatSessionAsMarkdown(messages: Message[]): string {
 /**
  * Trigger browser download of session as .md file.
  * Revokes object URL after download to prevent memory leak.
+ * @param locale BCP-47 locale for timestamp formatting, defaults to 'zh-CN'.
  */
-export function downloadSession(messages: Message[]): void {
-  const content = formatSessionAsMarkdown(messages);
+export function downloadSession(messages: Message[], locale = 'zh-CN'): void {
+  const content = formatSessionAsMarkdown(messages, locale);
   const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');

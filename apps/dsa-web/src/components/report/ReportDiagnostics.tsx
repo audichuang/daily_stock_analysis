@@ -93,6 +93,36 @@ const TEXT = {
       skipped: 'Skipped',
     },
   },
+  'zh-TW': {
+    eyebrow: '執行診斷',
+    title: '執行狀態',
+    loading: '診斷載入中...',
+    unavailable: '執行診斷暫不可用',
+    noComponents: '暫無元件診斷',
+    components: '關鍵鏈路',
+    advanced: '進階欄位',
+    copy: '複製除錯資訊',
+    copied: '已複製',
+    scope: '抓取 / LLM / 儲存 / 通知鏈路',
+    trace: 'Trace',
+    task: 'Task',
+    query: 'Query',
+    trigger: '觸發來源',
+    overall: {
+      normal: '正常',
+      degraded: '部分降級',
+      failed: '失敗',
+      unknown: '未知',
+    },
+    component: {
+      ok: '正常',
+      degraded: '最近失敗後已降級',
+      failed: '失敗',
+      unknown: '未知',
+      not_configured: '未設定',
+      skipped: '已跳過',
+    },
+  },
 } as const;
 
 const OVERALL_STATUS_STYLE: Record<RunDiagnosticStatus, { variant: BadgeVariant; tone: StatusTone }> = {

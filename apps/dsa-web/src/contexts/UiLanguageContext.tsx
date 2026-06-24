@@ -12,7 +12,7 @@ type UiLanguageContextValue = {
 const fallbackContext: UiLanguageContextValue = {
   language: 'zh',
   setLanguage: () => undefined,
-  t: (key, params) => formatUiText(UI_TEXT.zh[key], params),
+  t: (key, params) => formatUiText((UI_TEXT.zh[key]) ?? key, params),
 };
 
 const UiLanguageContext = createContext<UiLanguageContextValue | null>(null);
@@ -27,14 +27,14 @@ export const UiLanguageProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
-      document.documentElement.lang = language === 'en' ? 'en' : 'zh-CN';
+      document.documentElement.lang = language === 'en' ? 'en' : language === 'zh-TW' ? 'zh-TW' : 'zh-CN';
     }
   }, [language]);
 
   const value = useMemo<UiLanguageContextValue>(() => ({
     language,
     setLanguage,
-    t: (key, params) => formatUiText(UI_TEXT[language][key], params),
+    t: (key, params) => formatUiText((UI_TEXT[language]?.[key]) ?? UI_TEXT.zh[key] ?? key, params),
   }), [language, setLanguage]);
 
   return (

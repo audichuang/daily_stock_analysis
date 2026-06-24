@@ -52,6 +52,14 @@ const BLOCK_LABELS: Record<ReportLanguage, Record<string, string>> = {
     fundamentals: 'fundamentals',
     chip: 'chip',
   },
+  'zh-TW': {
+    quote: '行情',
+    daily_bars: '日線',
+    technical: '技術',
+    news: '新聞',
+    fundamentals: '基本面',
+    chip: '籌碼',
+  },
 };
 
 const TEXT = {
@@ -115,6 +123,36 @@ const TEXT = {
       fetch_failed: 'Fetch failed',
     },
   },
+  'zh-TW': {
+    eyebrow: '資料上下文',
+    title: '輸入資料區塊',
+    counts: '狀態計數',
+    source: '來源',
+    warnings: '警示',
+    missingReasons: '缺漏原因',
+    inputScope: '本次分析輸入',
+    evidenceScope: '僅代表進入本次 LLM 的輸入，不等同於資料源執行成功',
+    qualityScore: '品質分',
+    limitations: '資料限制',
+    newsResultCount: '新聞結果數',
+    triggerSource: '觸發來源',
+    qualityLevel: {
+      good: '良好',
+      usable: '可用',
+      limited: '受限',
+      poor: '較差',
+    },
+    status: {
+      available: '可用',
+      missing: '缺漏',
+      not_supported: '不支援',
+      fallback: '降級',
+      stale: '過期',
+      estimated: '估算',
+      partial: '部分可用',
+      fetch_failed: '擷取失敗',
+    },
+  },
 } as const;
 
 const MISSING_REASON_LABELS: Record<ReportLanguage, Record<string, string>> = {
@@ -137,6 +175,16 @@ const MISSING_REASON_LABELS: Record<ReportLanguage, Record<string, string>> = {
     chip_distribution_missing: 'Not included in analysis input',
     today_missing: 'Today data not included in analysis input',
     yesterday_missing: 'Yesterday data not included in analysis input',
+  },
+  'zh-TW': {
+    daily_bars_missing: '未進入分析輸入',
+    news_context_missing: '未進入分析輸入',
+    realtime_quote_missing: '未進入分析輸入',
+    trend_result_missing: '未進入分析輸入',
+    fundamental_context_missing: '未進入分析輸入',
+    chip_distribution_missing: '未進入分析輸入',
+    today_missing: '今日資料未進入分析輸入',
+    yesterday_missing: '昨日資料未進入分析輸入',
   },
 };
 
@@ -167,7 +215,7 @@ const getCount = (
 const formatLimitation = (
   value: string,
   language: ReportLanguage,
-  text: typeof TEXT.zh | typeof TEXT.en,
+  text: (typeof TEXT)[ReportLanguage],
 ): string => {
   const [rawKey, ...statusParts] = value.split(':');
   if (!rawKey || statusParts.length === 0) {
@@ -182,7 +230,7 @@ const formatLimitation = (
 
   const label = BLOCK_LABELS[language][key] || key;
   const statusLabel = (text.status as Record<string, string>)[status] || status;
-  return language === 'zh' ? `${label}：${statusLabel}` : `${label}: ${statusLabel}`;
+  return language !== 'en' ? `${label}：${statusLabel}` : `${label}: ${statusLabel}`;
 };
 
 const formatMissingReason = (reason: string, language: ReportLanguage): string => {

@@ -3,14 +3,14 @@ import type { UiLanguage } from '../i18n/uiText';
 
 const categoryTitleMap: Record<UiLanguage, Record<SystemConfigCategory, string>> = {
   zh: {
-  base: '基础设置',
-  data_source: '数据源',
-  ai_model: 'AI 模型',
-  notification: '通知渠道',
-  system: '系统设置',
-  agent: 'Agent 设置',
-  backtest: '回测配置',
-  uncategorized: '其他',
+    base: '基础设置',
+    data_source: '数据源',
+    ai_model: 'AI 模型',
+    notification: '通知渠道',
+    system: '系统设置',
+    agent: 'Agent 设置',
+    backtest: '回测配置',
+    uncategorized: '其他',
   },
   en: {
     base: 'Base settings',
@@ -22,18 +22,28 @@ const categoryTitleMap: Record<UiLanguage, Record<SystemConfigCategory, string>>
     backtest: 'Backtest',
     uncategorized: 'Other',
   },
+  'zh-TW': {
+    base: '基礎設定',
+    data_source: '資料來源',
+    ai_model: 'AI 模型',
+    notification: '通知渠道',
+    system: '系統設定',
+    agent: 'Agent 設定',
+    backtest: '回測設定',
+    uncategorized: '其他',
+  },
 };
 
 const categoryDescriptionMap: Record<UiLanguage, Partial<Record<SystemConfigCategory, string>>> = {
   zh: {
-  base: '管理自选股与基础运行参数。',
-  data_source: '管理行情数据源与优先级策略。',
-  ai_model: '管理模型服务、模型名称与推理参数。',
-  notification: '管理机器人、Webhook 和消息推送配置。',
-  system: '管理调度、日志、端口等系统级参数。',
-  agent: '管理 Agent 模式、策略与多 Agent 编排配置。',
-  backtest: '管理回测开关、评估窗口和引擎参数。',
-  uncategorized: '其他未归类的配置项。',
+    base: '管理自选股与基础运行参数。',
+    data_source: '管理行情数据源与优先级策略。',
+    ai_model: '管理模型服务、模型名称与推理参数。',
+    notification: '管理机器人、Webhook 和消息推送配置。',
+    system: '管理调度、日志、端口等系统级参数。',
+    agent: '管理 Agent 模式、策略与多 Agent 编排配置。',
+    backtest: '管理回测开关、评估窗口和引擎参数。',
+    uncategorized: '其他未归类的配置项。',
   },
   en: {
     base: 'Manage watchlists and base runtime parameters.',
@@ -44,6 +54,16 @@ const categoryDescriptionMap: Record<UiLanguage, Partial<Record<SystemConfigCate
     agent: 'Manage Agent mode, strategies, and multi-agent orchestration.',
     backtest: 'Manage backtest switches, evaluation windows, and engine parameters.',
     uncategorized: 'Other uncategorized settings.',
+  },
+  'zh-TW': {
+    base: '管理自選股與基礎執行參數。',
+    data_source: '管理行情資料來源與優先順序策略。',
+    ai_model: '管理模型服務、模型名稱與推理參數。',
+    notification: '管理機器人、Webhook 與訊息推播設定。',
+    system: '管理排程、日誌、連接埠等系統級參數。',
+    agent: '管理 Agent 模式、策略與多 Agent 編排設定。',
+    backtest: '管理回測開關、評估視窗與引擎參數。',
+    uncategorized: '其他未分類的設定項。',
   },
 };
 
@@ -441,6 +461,90 @@ const fieldOptionLabelMap: Record<string, Record<string, string>> = {
   },
 };
 
+const fieldOptionLabelMapZhTw: Record<string, Record<string, string>> = {
+  NEWS_STRATEGY_PROFILE: {
+    ultra_short: '超短線（1 天）',
+    short: '短期（3 天）',
+    medium: '中期（7 天）',
+    long: '長期（30 天）',
+  },
+  REPORT_TYPE: {
+    simple: '精簡',
+    full: '完整',
+    brief: '簡報',
+  },
+  REPORT_LANGUAGE: {
+    zh: '簡體中文',
+    en: '英文',
+    'zh-tw': '繁體中文',
+    'zh_tw': '繁體中文',
+    chinese: '簡體中文',
+    english: '英文',
+    traditional: '繁體中文',
+    'traditional chinese': '繁體中文',
+  },
+  NOTIFICATION_MIN_SEVERITY: {
+    '': '未設定',
+    'not set': '未設定',
+    info: '資訊',
+    warning: '警告',
+    error: '錯誤',
+    critical: '嚴重',
+  },
+  MARKET_REVIEW_COLOR_SCHEME: {
+    green_up: '綠漲紅跌',
+    red_up: '紅漲綠跌',
+    'green up / red down': '綠漲紅跌',
+    'red up / green down': '紅漲綠跌',
+  },
+  GENERATION_BACKEND: {
+    litellm: '預設模型設定',
+  },
+  GENERATION_FALLBACK_BACKEND: {
+    litellm: '預設模型設定',
+  },
+  AGENT_GENERATION_BACKEND: {
+    auto: '自動',
+    litellm: '預設模型工具呼叫',
+  },
+  LOG_LEVEL: {
+    debug: '除錯',
+    info: '資訊',
+    warning: '警告',
+    error: '錯誤',
+    critical: '嚴重',
+  },
+  LLM_PROMPT_CACHE_DIAGNOSTICS_LEVEL: {
+    off: '關閉',
+    basic: '基礎',
+    debug: '除錯',
+  },
+  MARKET_REVIEW_REGION: {
+    cn: 'A 股',
+    hk: '港股',
+    us: '美股',
+    both: '全部市場',
+  },
+  AGENT_ARCH: {
+    single: '單 Agent',
+    multi: '多 Agent（編排）',
+    'single agent': '單 Agent',
+    'multi agent (orchestrator)': '多 Agent（編排）',
+  },
+  AGENT_ORCHESTRATOR_MODE: {
+    quick: '快速',
+    standard: '標準',
+    full: '完整',
+    specialist: '專家',
+  },
+  AGENT_SKILL_ROUTING: {
+    auto: '自動（依市場狀態）',
+    manual: '手動（使用 AGENT_SKILLS）',
+    'auto (regime-based)': '自動（依市場狀態）',
+    'manual (use agent_skills)': '手動（使用 AGENT_SKILLS）',
+  },
+};
+
 const fieldOptionLabelMapEn: Record<string, Record<string, string>> = {
   NEWS_STRATEGY_PROFILE: {
     ultra_short: 'Ultra short (1 day)',
@@ -559,7 +663,11 @@ export function getFieldOptionLabel(
   fallbackLabel?: string,
   locale: UiLanguage = 'zh',
 ): string {
-  const map = locale === 'en' ? fieldOptionLabelMapEn[key] : fieldOptionLabelMap[key];
+  const map = locale === 'en'
+    ? fieldOptionLabelMapEn[key]
+    : locale === 'zh-TW'
+      ? fieldOptionLabelMapZhTw[key]
+      : fieldOptionLabelMap[key];
   if (!map) {
     return fallbackLabel ?? value;
   }

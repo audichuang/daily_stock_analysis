@@ -39,7 +39,7 @@ export interface MarketReviewAccepted {
 
 // ============ Report Types ============
 
-export type ReportLanguage = 'zh' | 'en';
+export type ReportLanguage = 'zh' | 'en' | 'zh-TW';
 
 export type MarketPhaseValue =
   | 'premarket'
@@ -88,6 +88,10 @@ export type SentimentLabel =
   | '中性'
   | '乐观'
   | '极度乐观'
+  | '極度悲觀'
+  | '悲觀'
+  | '樂觀'
+  | '極度樂觀'
   | 'Very Bearish'
   | 'Bearish'
   | 'Neutral'
@@ -500,6 +504,13 @@ export const getSentimentLabel = (score: number, language: ReportLanguage = 'zh'
     if (score <= 60) return 'Neutral';
     if (score <= 80) return 'Bullish';
     return 'Very Bullish';
+  }
+  if (language === 'zh-TW') {
+    if (score <= 20) return '極度悲觀';
+    if (score <= 40) return '悲觀';
+    if (score <= 60) return '中性';
+    if (score <= 80) return '樂觀';
+    return '極度樂觀';
   }
   if (score <= 20) return '极度悲观';
   if (score <= 40) return '悲观';

@@ -22,6 +22,7 @@ import {
 } from '../components/settings';
 import { WEB_BUILD_INFO } from '../utils/constants';
 import { getCategoryDescription } from '../utils/systemConfigI18n';
+import { getIntlLocale } from '../i18n/intlLocale';
 import type {
   ConfigValidationIssue,
   SchedulerStatusResponse,
@@ -271,7 +272,7 @@ function formatSchedulerTimestamp(value: string | null | undefined, language: Ui
     return value;
   }
 
-  return new Intl.DateTimeFormat(language === 'en' ? 'en-US' : 'zh-CN', {
+  return new Intl.DateTimeFormat(getIntlLocale(language), {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
