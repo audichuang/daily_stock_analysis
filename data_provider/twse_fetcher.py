@@ -4,8 +4,9 @@
 TwseFetcher - 台股大盘统计数据源（仅市场统计，无日线）
 ===================================
 
-数据来源：台湾证券交易所（TWSE）公开 OpenAPI / RWD 端点，全部免金钥。
-覆盖范围：仅台股上市（TWSE 上市），不含上柜（TPEx）。
+数据来源：台湾证券交易所（TWSE）与柜买中心（TPEx）公开 OpenAPI / RWD 端点，全部免金钥。
+覆盖范围：涨跌家数为上市（TWSE）口径（上柜无公开涨跌家数端点）；成交金额与三大法人
+为上市+上柜合计。
 
 提供能力：
 - get_market_stats(): 涨跌家数、涨停跌停、成交金额，外加三大法人买卖超。
@@ -30,10 +31,14 @@ from .base import BaseFetcher
 
 logger = logging.getLogger(__name__)
 
-# TWSE 免金钥端点
+# TWSE 上市 免金钥端点
 _BREADTH_URL = "https://openapi.twse.com.tw/v1/opendata/twtazu_od"          # 涨跌家数
 _INSTITUTIONAL_URL = "https://www.twse.com.tw/rwd/zh/fund/BFI82U?response=json"  # 三大法人买卖超
 _TRADE_VALUE_URL = "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK"   # 成交金额 + 加权指数
+
+# TPEx 上柜 免金钥 OpenAPI 端点（上柜无公开「涨跌家数」端点，故仅补成交金额与三大法人）
+_TPEX_TRADE_VALUE_URL = "https://www.tpex.org.tw/openapi/v1/tpex_daily_trading_index"  # 上柜成交金额 + 柜买指数
+_TPEX_INSTITUTIONAL_URL = "https://www.tpex.org.tw/openapi/v1/tpex_3insti_summary"     # 上柜三大法人买卖超彙总
 
 # (connect timeout, read timeout)
 _TIMEOUT = (5, 10)
@@ -215,6 +220,62 @@ class TwseFetcher(BaseFetcher):
             "total_net": total_net,
         }
 
+    def _fetch_tpex_total_amount(self) -> Optional[float]:
+        """上柜成交金额（亿新台币）。失败返回 None。"""
+        try:
+            resp = self._session.get(_TPEX_TRADE_VALUE_URL, timeout=_TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, list) or not data:
+                logger.warning("[TwseFetcher] 上柜成交金额响应为空")
+                return None
+            latest = data[-1]  # 取最新一笔
+            amount_yuan = _parse_float(latest.get("TradeAmount"))
+            return amount_yuan / 1e8
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("[TwseFetcher] 上柜成交金额获取失败: %s", exc)
+            return None
+
+    def _fetch_tpex_institutional(self) -> Optional[Dict[str, float]]:
+        """上柜三大法人买卖超净额（亿新台币）。失败返回 None。"""
+        try:
+            resp = self._session.get(_TPEX_INSTITUTIONAL_URL, timeout=_TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, list) or not data:
+                logger.warning("[TwseFetcher] 上柜三大法人响应为空")
+                return None
+            foreign_net = trust_net = dealer_net = total_net = 0.0
+            matched = False
+            for row in data:
+                investor = str(row.get("Investor", "")).strip()
+                net = _parse_float(row.get("Net")) / 1e8
+                # 顶层汇总行（带前导全角空格的为细分子项，跳过避免重复累加）
+                if investor == "外資及陸資合計":
+                    foreign_net = net
+                    matched = True
+                elif investor == "投信":
+                    trust_net = net
+                    matched = True
+                elif investor == "自營商合計":
+                    dealer_net = net
+                    matched = True
+                elif investor.startswith("三大法人合計"):
+                    total_net = net
+                    matched = True
+            if not matched:
+                logger.warning("[TwseFetcher] 上柜三大法人未匹配到已知单位")
+                return None
+            return {
+                "foreign_net": foreign_net,
+                "trust_net": trust_net,
+                "dealer_net": dealer_net,
+                "total_net": total_net,
+            }
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("[TwseFetcher] 上柜三大法人获取失败: %s", exc)
+            return None
+
     # --- 对外接口 ---------------------------------------------------------
     def get_market_stats(self) -> Optional[Dict[str, Any]]:
         """
@@ -227,15 +288,20 @@ class TwseFetcher(BaseFetcher):
                   dealer_net/total_net（单位亿新台币）。
             {}:   所有端点均失败时返回空字典（绝不抛出异常）。
 
-        注意：仅覆盖 TWSE 上市，不含上柜（TPEx）。
+        覆盖范围：涨跌家数为 TWSE 上市口径（上柜无公开端点）；成交金额与三大法人
+        为上市+上柜合计。任一来源失败均部分降级，不影响其余字段。
         """
-        logger.info("[TwseFetcher] 获取台股上市大盘统计（不含上柜 TPEx）")
+        logger.info("[TwseFetcher] 获取台股大盘统计（上市涨跌家数 + 上市/上柜成交额与三大法人）")
 
+        # 上市
         breadth = self._fetch_breadth()
-        total_amount = self._fetch_total_amount()
-        institutional = self._fetch_institutional()
+        twse_amount = self._fetch_total_amount()
+        twse_inst = self._fetch_institutional()
+        # 上柜（无涨跌家数端点）
+        tpex_amount = self._fetch_tpex_total_amount()
+        tpex_inst = self._fetch_tpex_institutional()
 
-        if breadth is None and total_amount is None and institutional is None:
+        if all(x is None for x in (breadth, twse_amount, twse_inst, tpex_amount, tpex_inst)):
             logger.warning("[TwseFetcher] 所有端点均失败，返回空")
             return {}
 
@@ -248,30 +314,36 @@ class TwseFetcher(BaseFetcher):
             "total_amount": 0.0,
         }
 
+        # 涨跌家数：仅上市
         if breadth is not None:
             stats.update(breadth)
         else:
-            logger.warning("[TwseFetcher] 涨跌家数缺失，家数字段保持 0")
+            logger.warning("[TwseFetcher] 上市涨跌家数缺失，家数字段保持 0")
 
-        if total_amount is not None:
-            stats["total_amount"] = total_amount
+        # 成交金额：上市 + 上柜（各自可缺）
+        amount_parts = [a for a in (twse_amount, tpex_amount) if a is not None]
+        if amount_parts:
+            stats["total_amount"] = sum(amount_parts)
         else:
-            logger.warning("[TwseFetcher] 成交金额缺失，total_amount 保持 0.0")
+            logger.warning("[TwseFetcher] 上市/上柜成交金额均缺失，total_amount 保持 0.0")
 
-        if institutional is not None:
-            stats.update(institutional)
+        # 三大法人：上市 + 上柜逐项相加（各自可缺）
+        inst_parts = [i for i in (twse_inst, tpex_inst) if i is not None]
+        if inst_parts:
+            for key in ("foreign_net", "trust_net", "dealer_net", "total_net"):
+                stats[key] = sum(part.get(key, 0.0) for part in inst_parts)
         else:
-            logger.warning("[TwseFetcher] 三大法人缺失，省略法人字段（部分降级）")
+            logger.warning("[TwseFetcher] 上市/上柜三大法人均缺失，省略法人字段（部分降级）")
 
         logger.info(
-            "[TwseFetcher] 统计完成 up=%s down=%s flat=%s limit_up=%s limit_down=%s "
-            "amount=%.0f亿 institutional=%s",
+            "[TwseFetcher] 统计完成 up=%s down=%s amount=%.0f亿(上市%s+上柜%s) "
+            "institutional=上市%s/上柜%s",
             stats["up_count"],
             stats["down_count"],
-            stats["flat_count"],
-            stats["limit_up_count"],
-            stats["limit_down_count"],
             stats["total_amount"],
-            "yes" if institutional is not None else "no",
+            "有" if twse_amount is not None else "无",
+            "有" if tpex_amount is not None else "无",
+            "有" if twse_inst is not None else "无",
+            "有" if tpex_inst is not None else "无",
         )
         return stats

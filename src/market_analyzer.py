@@ -1284,6 +1284,15 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 - Advancers: {overview.up_count} | Decliners: {overview.down_count} | Flat: {overview.flat_count}
 - Limit-up: {overview.limit_up_count} | Limit-down: {overview.limit_down_count}
 - Turnover: {overview.total_amount:.0f} ({self._get_turnover_unit_label()})"""
+                if overview.institutional_net:
+                    _inst = overview.institutional_net
+                    stats_block += (
+                        f"\n- Institutional net ({self._get_turnover_unit_label()}): "
+                        f"Foreign {_inst.get('foreign_net', 0.0):+.0f} / "
+                        f"Inv. trust {_inst.get('trust_net', 0.0):+.0f} / "
+                        f"Dealer {_inst.get('dealer_net', 0.0):+.0f} / "
+                        f"Total {_inst.get('total_net', 0.0):+.0f}"
+                    )
             else:
                 stats_block = "## Market Breadth\n(No equivalent advance/decline statistics are available for this market.)"
 
@@ -1299,6 +1308,15 @@ Lagging: {bottom_sectors_text if bottom_sectors_text else "N/A"}"""
 - 上涨: {overview.up_count} 家 | 下跌: {overview.down_count} 家 | 平盘: {overview.flat_count} 家
 - 涨停: {overview.limit_up_count} 家 | 跌停: {overview.limit_down_count} 家
 - 两市成交额: {overview.total_amount:.0f} 亿元"""
+                if overview.institutional_net:
+                    _inst = overview.institutional_net
+                    stats_block += (
+                        f"\n- 三大法人买卖超（{self._get_turnover_unit_label()}）: "
+                        f"外资 {_inst.get('foreign_net', 0.0):+.0f} | "
+                        f"投信 {_inst.get('trust_net', 0.0):+.0f} | "
+                        f"自营商 {_inst.get('dealer_net', 0.0):+.0f} | "
+                        f"合计 {_inst.get('total_net', 0.0):+.0f}"
+                    )
             else:
                 stats_block = "## 市场概况\n（该市场暂无涨跌家数等统计）"
 

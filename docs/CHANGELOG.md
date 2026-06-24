@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 大盘复盘支持台股市场：`MARKET_REVIEW_REGION` 新增 `tw` 选项，复盘加权指数/柜买指数并接入台股策略蓝图（三大法人买卖超、新台币汇率、半导体电子权值股）；`both` 由 A股+港股+美股 扩展为 A股+港股+美股+台股；交易日历 `compute_effective_region`/`get_open_markets_today` 与个股大盘语境 region 标签同步支持 tw。
 - [改进] 新增 `scripts/refresh_us_stock_index.py`：从 NASDAQ Trader 官方清单（免 key）增量补进缺失的美股新上市代码（如 SPCX），修复自动补全美股代码过时问题。
 - [新功能] 台股大盘复盘接入真实市场数据：新增 `data_provider/twse_fetcher.py`（免 key，TWSE 官方 OpenAPI/rwd），复盘报告新增上市涨跌家数、成交金额与三大法人（外资/投信/自营商）买卖超净额；`get_market_stats` 按 `market_review:<region>` 路由（tw 走 TwseFetcher、跳过 A 股统计源），`TW_PROFILE.has_market_stats` 改为 True，其他市场口径不变。
+- [改进] 台股大盘复盘补入上柜（TPEx）数据：成交金额与三大法人改为上市+上柜合计（上柜无公开涨跌家数端点，家数仍为上市口径）；三大法人买卖超同时注入 LLM 复盘 prompt，使复盘正文据实引用法人动向。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
