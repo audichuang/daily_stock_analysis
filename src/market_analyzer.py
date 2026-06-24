@@ -321,6 +321,14 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 "strong_down": "clear weakness",
                 "range": "range-bound trading",
             }
+        elif review_language == "zh-TW":
+            mapping = {
+                "strong_up": "強勢上漲",
+                "mild_up": "小幅上漲",
+                "mild_down": "小幅下跌",
+                "strong_down": "明顯下跌",
+                "range": "震盪整理",
+            }
         else:
             mapping = {
                 "strong_up": "强势上涨",

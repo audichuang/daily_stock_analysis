@@ -32,14 +32,14 @@ AnalysisPhase = Literal["auto", "premarket", "intraday", "postmarket"]
 
 class AnalyzeRequest(BaseModel):
     """Analysis request parameters"""
-    
+
     stock_code: Optional[str] = Field(
-        None, 
-        description="单只股票代码", 
+        None,
+        description="单只股票代码",
         json_schema_extra={"example": "600519"},
     )
     stock_codes: Optional[List[str]] = Field(
-        None, 
+        None,
         description="多只股票代码（与 stock_code 二选一）",
         json_schema_extra={"example": ["600519", "000858"]},
     )
@@ -80,7 +80,7 @@ class AnalyzeRequest(BaseModel):
         True,
         description="是否发送推送通知（Telegram/企业微信等）"
     )
-    report_language: Optional[Literal["zh", "en"]] = Field(
+    report_language: Optional[Literal["zh", "zh-TW", "en"]] = Field(
         None,
         validation_alias=AliasChoices("report_language", "reportLanguage"),
         description="本次分析报告输出语言；未传时使用全局 REPORT_LANGUAGE",
@@ -116,7 +116,7 @@ class MarketReviewRequest(BaseModel):
         True,
         description="是否在大盘复盘完成后发送推送通知",
     )
-    report_language: Optional[Literal["zh", "en"]] = Field(
+    report_language: Optional[Literal["zh", "zh-TW", "en"]] = Field(
         None,
         validation_alias=AliasChoices("report_language", "reportLanguage"),
         description="本次大盘复盘报告输出语言；未传时使用全局 REPORT_LANGUAGE",
@@ -141,7 +141,7 @@ class MarketReviewAccepted(BaseModel):
 
 class AnalysisResultResponse(BaseModel):
     """分析结果响应模型"""
-    
+
     query_id: str = Field(..., description="分析记录唯一标识")
     trace_id: Optional[str] = Field(None, description="诊断 trace ID")
     stock_code: str = Field(..., description="股票代码")
@@ -149,7 +149,7 @@ class AnalysisResultResponse(BaseModel):
     report: Optional[Any] = Field(None, description="分析报告")
     diagnostic_summary: Optional[Any] = Field(None, description="运行诊断摘要")
     created_at: str = Field(..., description="创建时间")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "query_id": "abc123def456",
@@ -168,17 +168,17 @@ class AnalysisResultResponse(BaseModel):
 
 class TaskAccepted(BaseModel):
     """异步任务接受响应"""
-    
+
     task_id: str = Field(..., description="任务 ID，用于查询状态")
     trace_id: Optional[str] = Field(None, description="诊断 trace ID")
     status: str = Field(
-        ..., 
+        ...,
         description="任务状态",
         pattern="^(pending|processing)$"
     )
     message: Optional[str] = Field(None, description="提示信息")
     analysis_phase: AnalysisPhase = Field("auto", description="请求的分析阶段")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "task_id": "task_abc123",
@@ -262,21 +262,21 @@ class BatchTaskAcceptedResponse(BaseModel):
 
 class TaskStatus(BaseModel):
     """Task status model"""
-    
+
     task_id: str = Field(..., description="任务 ID")
     trace_id: Optional[str] = Field(None, description="诊断 trace ID")
     status: TaskStatusEnum = Field(
-        ..., 
+        ...,
         description="任务状态",
     )
     progress: Optional[int] = Field(
-        None, 
+        None,
         description="进度百分比 (0-100)",
         ge=0,
         le=100
     )
     result: Optional[AnalysisResultResponse] = Field(
-        None, 
+        None,
         description="分析结果（仅在 completed 时存在）"
     )
     market_review_report: Optional[str] = Field(
@@ -288,7 +288,7 @@ class TaskStatus(BaseModel):
         description="Structured market-review payload for API/Web consumers.",
     )
     error: Optional[str] = Field(
-        None, 
+        None,
         description="错误信息（仅在 failed 时存在）"
     )
     stock_name: Optional[str] = Field(None, description="股票名称")
@@ -303,7 +303,7 @@ class TaskStatus(BaseModel):
         description="请求的分析阶段；无持久化字段的历史 DB fallback 可能为空",
     )
     skills: Optional[List[str]] = Field(None, description="本次任务使用的策略 skill ID 列表")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "task_id": "task_abc123",
@@ -327,7 +327,7 @@ class TaskInfo(BaseModel):
 
     Used for task list and SSE event delivery
     """
-    
+
     task_id: str = Field(..., description="任务 ID")
     trace_id: Optional[str] = Field(None, description="诊断 trace ID")
     stock_code: str = Field(..., description="股票代码")
@@ -348,7 +348,7 @@ class TaskInfo(BaseModel):
     )
     analysis_phase: AnalysisPhase = Field("auto", description="请求的分析阶段")
     skills: Optional[List[str]] = Field(None, description="本次任务使用的策略 skill ID 列表")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "task_id": "abc123def456",
@@ -372,12 +372,12 @@ class TaskInfo(BaseModel):
 
 class TaskListResponse(BaseModel):
     """任务列表响应模型"""
-    
+
     total: int = Field(..., description="任务总数")
     pending: int = Field(..., description="等待中的任务数")
     processing: int = Field(..., description="处理中的任务数")
     tasks: List[TaskInfo] = Field(..., description="任务列表")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "total": 3,
@@ -390,12 +390,12 @@ class TaskListResponse(BaseModel):
 
 class DuplicateTaskErrorResponse(BaseModel):
     """重复任务错误响应模型"""
-    
+
     error: str = Field("duplicate_task", description="错误类型")
     message: str = Field(..., description="错误信息")
     stock_code: str = Field(..., description="股票代码")
     existing_task_id: str = Field(..., description="已存在的任务 ID")
-    
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "error": "duplicate_task",

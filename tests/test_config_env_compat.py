@@ -756,6 +756,37 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
 
         self.assertEqual(parsed, "zh")
 
+    def test_parse_report_language_zh_tw_lowercase_dash_resolves_to_zh_TW(self) -> None:
+        """zh-tw（小寫）應正規化為 'zh-TW'，且不觸發警告。"""
+        with self.assertNoLogs("src.config", level="WARNING"):
+            parsed = Config._parse_report_language("zh-tw")
+
+        self.assertEqual(parsed, "zh-TW")
+
+    def test_parse_report_language_zh_tw_underscore_resolves_to_zh_TW(self) -> None:
+        """zh_tw（底線）應正規化為 'zh-TW'，且不觸發警告。"""
+        with self.assertNoLogs("src.config", level="WARNING"):
+            parsed = Config._parse_report_language("zh_tw")
+
+        self.assertEqual(parsed, "zh-TW")
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_report_language_env_zh_tw_is_parsed_as_zh_TW(
+        self,
+        _mock_parse_yaml,
+        _mock_setup_env,
+    ) -> None:
+        """REPORT_LANGUAGE=zh-tw 環境變數應被解析為 'zh-TW'。"""
+        with patch.dict(
+            os.environ,
+            {"STOCK_LIST": "600519", "REPORT_LANGUAGE": "zh-tw"},
+            clear=True,
+        ):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.report_language, "zh-TW")
+
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
     def test_invalid_numeric_env_values_fall_back_to_defaults(

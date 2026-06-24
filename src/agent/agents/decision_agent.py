@@ -51,6 +51,8 @@ Requirements:
 """
             if report_language == "en":
                 return prompt + "\nAlways answer in English.\n"
+            if report_language == "zh-TW":
+                return prompt + "\n全程使用繁體中文（台灣用語）回答，不得使用簡體字或中國大陸用語。\n"
             return prompt + "\n默认使用中文回答。\n"
 
         skills = ""
@@ -125,6 +127,14 @@ limitation must be reflected in ``confidence_reason`` or ``data_limitations``.
 - Keep every JSON key unchanged.
 - `decision_type` must remain `buy|hold|sell`.
 - Write all human-readable JSON values in English.
+"""
+        if report_language == "zh-TW":
+            return prompt + """
+
+## 輸出語言
+- 所有 JSON 鍵名保持不變。
+- `decision_type` 必須保持為 `buy|hold|sell`。
+- 所有面向使用者的人類可讀文字值必須使用繁體中文（台灣用語），不得使用簡體字或中國大陸用語。
 """
         return prompt + """
 
