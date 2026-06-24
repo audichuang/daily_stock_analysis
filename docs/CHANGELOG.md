@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 新增 `scripts/refresh_us_stock_index.py`：从 NASDAQ Trader 官方清单（免 key）增量补进缺失的美股新上市代码（如 SPCX），修复自动补全美股代码过时问题。
 - [新功能] 台股大盘复盘接入真实市场数据：新增 `data_provider/twse_fetcher.py`（免 key，TWSE 官方 OpenAPI/rwd），复盘报告新增上市涨跌家数、成交金额与三大法人（外资/投信/自营商）买卖超净额；`get_market_stats` 按 `market_review:<region>` 路由（tw 走 TwseFetcher、跳过 A 股统计源），`TW_PROFILE.has_market_stats` 改为 True，其他市场口径不变。
 - [改进] 台股大盘复盘补入上柜（TPEx）数据：成交金额与三大法人改为上市+上柜合计（上柜无公开涨跌家数端点，家数仍为上市口径）；三大法人买卖超同时注入 LLM 复盘 prompt，使复盘正文据实引用法人动向。
+- [chore] 新增 `Makefile`（全部以 `uv run` 执行：serve/review-tw/analyze/test/lint 等）与 `pyproject.toml` 的 `[tool.ruff]` 配置；通知走 Doppler 注入（`make serve` 将 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`，secret 不落地 .env）。`make lint` 使用 ruff（E/F/W/I）。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 

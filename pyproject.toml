@@ -26,3 +26,14 @@ skip = [".git", "__pycache__", ".env", "venv", ".venv"]
 [tool.bandit]
 exclude_dirs = ["tests", "test_*.py"]
 skips = ["B101"]  # assert 语句在测试中是允许的
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+exclude = [".git", "__pycache__", ".venv", "venv", "build", "dist", "node_modules", "apps", "scratchpad"]
+
+[tool.ruff.lint]
+# 与现有 flake8 ci_gate 对齐的核心规则：pyflakes(F) + pycodestyle(E/W) + isort(I)。
+# 长行(E501)不阻断（仓库既有大量长行，与 black 120 共存）。
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
