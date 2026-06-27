@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 台股盘中看盘细节增强（白天看盘视角）：实时看板/报价 API 接上 Shioaji snapshot/contract 已返回但此前丢弃的关键字段——均价(VWAP，站上偏多/跌破偏空的多空分界)、涨跌停价 limit_up/limit_down 及距板%(±10% 板，触及板诚实显示「触及涨/跌停」而非「锁死」)、最佳一档委买委卖价+量(top-of-book，非五档)、最后一笔内外盘方向(last-tick，非累计内外盘比)、量比(开盘初段偏低失真，前端附提示)、振幅、现股当沖资格 day_trade(Yes/OnlyBuy/No)。看板新增「均价」列(多空着色)、价格列距板角标、名称旁「不可当沖/仅现沖买」示警角标，展开列新增「盘口明细」区块；贯穿 realtime_types→shioaji_fetcher→stock_service→StockQuote schema→web。
+- [新功能] 台股交易时段感知：`trading_calendar` 收盘集合竞价窗口加入 `tw:5`，13:25–13:30 收盘前集合竞价正确标记为 CLOSING_AUCTION（XTAI 13:30 收盘、无午休）；`decision_signal_service` intraday TTL 加入 `tw:4.5`（连续竞价 ~4.42h），避免信号在收盘集合竞价前过早过期。
+- [改进] 台股 LLM 分析提示新增当沖资格护栏：当 `day_trade` 为 `OnlyBuy`/`No`/未知时，不得给出（先卖／双向）当沖策略建议，避免对不可当沖标的推荐当沖。
+- [修复] zh-TW 补齐上游首次启动设定检查卡（#1788）缺失的 30 个 `settings.setupGuide*`/`setupStatus*` i18n key（合并后 zhTW 词典缺键导致 web 构建 TS 报错）；`RealtimeBoardPage` 分析按钮 `title` 改 `aria-label` 以满足 UI governance。
 - [chore] 同步上游 `ZhuLinsen/daily_stock_analysis` main（14 个 commit）。合并时保留 fork 增量：台股实时行情走 Shioaji 优先（不并入上游新增的 jp/kr/tw「yfinance-only」实时早退分支）、zh-TW 在地化分支（`_MARKET_LABELS_ZHTW`、analyzer 解析默认值、台股指数固定繁体名 + `TPEX` key）、日/韩市场标签；采纳上游：`_extract_analysis_json_object` JSON 抽取重构、`_infer_cn_exchange` 交易所推断、台股 DecisionSignal/Portfolio/Intelligence 服务层与 API 一级支持、longbridge docker 兼容版本钉定。
 - [修复] 大盘复盘修好三个失效摘要卡：①「市场情绪」不再永远写死 50，改用真实 Market Light 盘面分数（多市场按 region 输入顺序取主市场）；②「轮动与资金」「风险与观察」不再显示「查看复盘/大盘复盘」占位字，改填 Market Light 的操作指引与温度读数。
 - [修复] 大盘复盘盘面分数修正两处计分缺陷：①美股指数池含 VIX（恐慌指数），原先并入指数均值会让「恐慌飙升」被误判为 risk-on，现已将 VIX 排除在方向性指数评分之外；②指数型市场（美股，无涨跌家数/涨跌停）原先被固定 50 的缺失维度拉向中性、分数锁在 ~32.5–67.5，现按「可用维度」权重归一化重分配，使其覆盖完整 0–100 区间；全维度可用市场（A 股）分数与原公式完全一致。Market Light 的 label/guidance/temperature 补 zh-TW 繁体分支。

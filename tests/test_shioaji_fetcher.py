@@ -15,10 +15,20 @@ from data_provider.realtime_types import RealtimeSource
 _NOW_NS = int((time.time() + 8 * 3600) * 1e9)
 
 
+class _FakeDayTrade:
+    """模拟 Shioaji DayTrade 枚举（.value 为 'Yes'/'OnlyBuy'/'No'）。"""
+
+    def __init__(self, value):
+        self.value = value
+
+
 class _FakeContract:
     def __init__(self, code):
         self.code = code
         self.name = f"股票{code}"
+        self.limit_up = 1100.0
+        self.limit_down = 900.0
+        self.day_trade = _FakeDayTrade("Yes")
 
 
 class _FakeContracts:
@@ -40,6 +50,14 @@ class _FakeSnap:
     high = 1010.0
     low = 990.0
     ts = _NOW_NS  # epoch 纳秒（当下）
+    # 台股盘中专用字段（旧实现丢弃，现已接上）
+    average_price = 1002.5
+    volume_ratio = 1.8
+    buy_price = 999.0
+    buy_volume = 120
+    sell_price = 1001.0
+    sell_volume = 80
+    tick_type = 1
 
 
 def _make_fake_shioaji(*, login_raises=False, snaps=None):
@@ -112,6 +130,38 @@ def test_parses_snapshot_with_provider_timestamp(monkeypatch):
     assert quote.has_basic_data() is True
     # provider_timestamp 必须可被 _enrich 解析且 is_stale 计算正确（不被 None 掉）
     assert quote.provider_timestamp is not None
+
+
+def test_snapshot_maps_tw_intraday_fields(monkeypatch):
+    """台股盘中关键字段（均价/涨跌停/委买委卖/内外盘/振幅/量比/当沖资格）必须从 snapshot+contract 接上。"""
+    monkeypatch.setattr(sf, "_HAS_SHIOAJI", True)
+    monkeypatch.setenv("SHIOAJI_API_KEY", "k")
+    monkeypatch.setenv("SHIOAJI_SECRET_KEY", "s")
+    module, _ = _make_fake_shioaji()
+    monkeypatch.setitem(sys.modules, "shioaji", module)
+
+    quote = sf.ShioajiFetcher().get_realtime_quote("2330.TW")
+    assert quote is not None
+    assert quote.average_price == 1002.5          # 均价多空分界
+    assert quote.limit_up == 1100.0 and quote.limit_down == 900.0  # 来自 contract
+    assert quote.best_bid == 999.0 and quote.best_bid_volume == 120
+    assert quote.best_ask == 1001.0 and quote.best_ask_volume == 80
+    assert quote.last_tick_type == 1              # 最后一笔外盘主买
+    assert quote.volume_ratio == 1.8              # Shioaji 直接给（不触发 yfinance 补字段）
+    assert quote.amplitude == 2.02                # (1010-990)/990*100 四舍五入
+    assert quote.day_trade == "Yes"               # DayTrade 枚举 .value
+    # to_dict 必须把新字段带出（API 序列化依赖此）
+    d = quote.to_dict()
+    for k in ("average_price", "limit_up", "limit_down", "best_bid", "best_ask", "day_trade"):
+        assert k in d
+
+
+def test_normalize_day_trade_variants():
+    """day_trade 规范化：枚举 .value、裸字符串、未知值、None。"""
+    assert sf._normalize_day_trade(_FakeDayTrade("OnlyBuy")) == "OnlyBuy"
+    assert sf._normalize_day_trade("yes") == "Yes"     # 大小写规范化
+    assert sf._normalize_day_trade("No") == "No"
+    assert sf._normalize_day_trade(None) is None
 
 
 def test_persistent_session_logs_in_once(monkeypatch):

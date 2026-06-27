@@ -155,7 +155,19 @@ class UnifiedRealtimeQuote:
     change_60d: Optional[float] = None      # 60日涨跌幅(%)
     high_52w: Optional[float] = None        # 52周最高
     low_52w: Optional[float] = None         # 52周最低
-    
+
+    # === 台股盘中专用（目前仅 Shioaji 提供；其他源为 None，前端可忽略）===
+    # 这些是台股当沖/隔日冲盘中真正天天盯的字段，详见 docs/realtime-board.md。
+    average_price: Optional[float] = None   # 当日成交均价(VWAP)：站上=偏多 / 跌破=偏空 的多空分界
+    limit_up: Optional[float] = None        # 涨停价(contract 静态，开盘即定，全时段可靠)
+    limit_down: Optional[float] = None      # 跌停价
+    best_bid: Optional[float] = None        # 最佳一档委买价(top-of-book，非五档)
+    best_bid_volume: Optional[int] = None   # 最佳一档委买量(张/单位)
+    best_ask: Optional[float] = None        # 最佳一档委卖价
+    best_ask_volume: Optional[int] = None   # 最佳一档委卖量
+    day_trade: Optional[str] = None         # 现股当沖资格：Yes 可当沖 / OnlyBuy 仅可先买 / No 不可当沖
+    last_tick_type: Optional[int] = None    # 最后一笔成交方向(0中性/1外盘主买/2内盘主卖)；非累计内外盘比
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（过滤 None 值）"""
         result = {
@@ -171,7 +183,11 @@ class UnifiedRealtimeQuote:
             'volume_ratio', 'turnover_rate', 'amplitude',
             'open_price', 'high', 'low', 'pre_close',
             'pe_ratio', 'pb_ratio', 'total_mv', 'circ_mv',
-            'change_60d', 'high_52w', 'low_52w'
+            'change_60d', 'high_52w', 'low_52w',
+            # 台股盘中专用
+            'average_price', 'limit_up', 'limit_down',
+            'best_bid', 'best_bid_volume', 'best_ask', 'best_ask_volume',
+            'day_trade', 'last_tick_type',
         ]
         for f in optional_fields:
             val = getattr(self, f, None)

@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
   stocksApi,
+  type StockQuote,
   type StockQuoteBatchItem,
   type TrendPoint,
   type TrendRange,
@@ -25,6 +26,14 @@ const CHUNK = 8; // 每批并发请求的代码数：分批并发刷新，慢的
 function changeClass(value?: number | null): string {
   if (value == null || Number.isNaN(value) || value === 0) return 'text-secondary-text';
   return value > 0 ? 'text-red-500' : 'text-emerald-500';
+}
+
+// 均价多空分界：站上均价偏多(红)、跌破偏空(绿)。台股当沖盘中第一条纪律。
+function avgClass(price?: number | null, avg?: number | null): string {
+  if (price == null || avg == null || avg === 0) return 'text-secondary-text';
+  if (price > avg) return 'text-red-500';
+  if (price < avg) return 'text-emerald-500';
+  return 'text-secondary-text';
 }
 
 type Freshness = 'live' | 'delayed' | 'unavailable';
@@ -193,6 +202,100 @@ const RealtimeBoardPage: React.FC = () => {
     );
   };
 
+  // 距涨跌停板：触及板 → 实心标注；未触及 → 显示距较近一侧板的百分比（台股 ±10% 当沖最先看的盘口）
+  const limitInfo = (q?: StockQuote | null): { text: string; cls: string } | null => {
+    if (!q || q.limitUp == null || q.limitDown == null || !q.currentPrice) return null;
+    const price = q.currentPrice;
+    if (price >= q.limitUp) return { text: t('board.limit.hitUp'), cls: 'text-red-500 font-medium' };
+    if (price <= q.limitDown) return { text: t('board.limit.hitDown'), cls: 'text-emerald-500 font-medium' };
+    const toUp = ((q.limitUp - price) / price) * 100;
+    const toDown = ((price - q.limitDown) / price) * 100;
+    return toUp <= toDown
+      ? { text: `${t('board.limit.toUp')} ${toUp.toFixed(1)}%`, cls: 'text-red-400' }
+      : { text: `${t('board.limit.toDown')} ${toDown.toFixed(1)}%`, cls: 'text-emerald-400' };
+  };
+
+  // 现股当沖资格：仅在「非可双向当沖」时示警（Yes 为常态不显示，避免噪音）
+  const dayTradeBadge = (q?: StockQuote | null) => {
+    if (!q || !q.dayTrade || q.dayTrade === 'Yes') return null;
+    const isNo = q.dayTrade === 'No';
+    return (
+      <span
+        className={cn(
+          'ml-1.5 inline-flex rounded border px-1.5 py-0.5 text-[10px]',
+          isNo
+            ? 'border-red-500/25 bg-red-500/10 text-red-600'
+            : 'border-amber-500/25 bg-amber-500/10 text-amber-600',
+        )}
+      >
+        {isNo ? t('board.dayTrade.no') : t('board.dayTrade.onlyBuy')}
+      </span>
+    );
+  };
+
+  // 展开明细：台股盘中盘口（委买委卖一档、最后一笔内外盘、均价、涨跌停价、量比、振幅）。仅在有值时渲染。
+  const quoteDetail = (q?: StockQuote | null) => {
+    if (!q) return null;
+    const tick =
+      q.lastTickType === 1
+        ? { text: t('board.detail.tickBuy'), cls: 'text-red-500' }
+        : q.lastTickType === 2
+          ? { text: t('board.detail.tickSell'), cls: 'text-emerald-500' }
+          : { text: t('board.detail.tickNeutral'), cls: 'text-secondary-text' };
+    const fmt = (v?: number | null) => (v != null ? v.toFixed(2) : '—');
+    const lot = (v?: number | null) => (v != null ? v.toLocaleString() : '—');
+    const cells: Array<{ label: string; value: React.ReactNode } | null> = [
+      q.bestBid != null
+        ? {
+            label: t('board.detail.bid'),
+            value: (
+              <span className="text-emerald-500">
+                {fmt(q.bestBid)}
+                <span className="ml-1 text-secondary-text">{lot(q.bestBidVolume)}</span>
+              </span>
+            ),
+          }
+        : null,
+      q.bestAsk != null
+        ? {
+            label: t('board.detail.ask'),
+            value: (
+              <span className="text-red-500">
+                {fmt(q.bestAsk)}
+                <span className="ml-1 text-secondary-text">{lot(q.bestAskVolume)}</span>
+              </span>
+            ),
+          }
+        : null,
+      q.lastTickType != null ? { label: t('board.detail.tick'), value: <span className={tick.cls}>{tick.text}</span> } : null,
+      q.averagePrice != null
+        ? { label: t('board.detail.avg'), value: <span className={avgClass(q.currentPrice, q.averagePrice)}>{fmt(q.averagePrice)}</span> }
+        : null,
+      q.limitUp != null ? { label: t('board.detail.limitUp'), value: <span className="text-red-500">{fmt(q.limitUp)}</span> } : null,
+      q.limitDown != null ? { label: t('board.detail.limitDown'), value: <span className="text-emerald-500">{fmt(q.limitDown)}</span> } : null,
+      q.volumeRatio != null ? { label: t('board.detail.volumeRatio'), value: q.volumeRatio.toFixed(2) } : null,
+      q.amplitude != null ? { label: t('board.detail.amplitude'), value: `${q.amplitude.toFixed(2)}%` } : null,
+    ];
+    const visible = cells.filter((c): c is { label: string; value: React.ReactNode } => c !== null);
+    if (visible.length === 0) return null;
+    return (
+      <div className="px-3 pt-3">
+        <div className="mb-1 text-xs font-medium text-secondary-text">{t('board.detail.title')}</div>
+        <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm tabular-nums">
+          {visible.map((c) => (
+            <span key={c.label} className="inline-flex items-baseline gap-1">
+              <span className="text-xs text-secondary-text">{c.label}</span>
+              {c.value}
+            </span>
+          ))}
+        </div>
+        {q.volumeRatio != null ? (
+          <div className="mt-1 text-[10px] text-secondary-text">{t('board.detail.volumeRatioHint')}</div>
+        ) : null}
+      </div>
+    );
+  };
+
   const refreshButton = (
     <button
       type="button"
@@ -223,6 +326,7 @@ const RealtimeBoardPage: React.FC = () => {
                   <th className="px-3 py-2">{t('board.col.name')}</th>
                   <th className="px-3 py-2 text-right">{t('board.col.price')}</th>
                   <th className="px-3 py-2 text-right">{t('board.col.change')}</th>
+                  <th className="px-3 py-2 text-right">{t('board.col.avg')}</th>
                   <th className="px-3 py-2 text-right">{t('board.col.volume')}</th>
                   <th className="px-3 py-2">{t('board.col.status')}</th>
                   <th className="px-3 py-2">{t('board.asOf')}</th>
@@ -244,10 +348,22 @@ const RealtimeBoardPage: React.FC = () => {
                           {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                         </td>
                         <td className="px-3 py-2 font-mono">{code}</td>
-                        <td className="px-3 py-2">{q?.stockName ?? '—'}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{q ? q.currentPrice.toFixed(2) : '—'}</td>
+                        <td className="px-3 py-2">
+                          {q?.stockName ?? '—'}
+                          {dayTradeBadge(q)}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          <div>{q ? q.currentPrice.toFixed(2) : '—'}</div>
+                          {(() => {
+                            const li = limitInfo(q);
+                            return li ? <div className={cn('text-[10px]', li.cls)}>{li.text}</div> : null;
+                          })()}
+                        </td>
                         <td className={cn('px-3 py-2 text-right tabular-nums', changeClass(q?.changePercent))}>
                           {q ? formatSignedPct(q.changePercent) : '—'}
+                        </td>
+                        <td className={cn('px-3 py-2 text-right tabular-nums', avgClass(q?.currentPrice, q?.averagePrice))}>
+                          {q?.averagePrice != null ? q.averagePrice.toFixed(2) : '—'}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums">
                           {q?.volume != null ? q.volume.toLocaleString() : '—'}
@@ -258,7 +374,7 @@ const RealtimeBoardPage: React.FC = () => {
                           <button
                             type="button"
                             className="text-secondary-text hover:text-[hsl(var(--primary))]"
-                            title={t('board.analyze')}
+                            aria-label={t('board.analyze')}
                             onClick={(e) => {
                               e.stopPropagation();
                               navigate('/', { state: { stockCode: code } });
@@ -270,7 +386,8 @@ const RealtimeBoardPage: React.FC = () => {
                       </tr>
                       {isOpen ? (
                         <tr className="border-b border-border/50 bg-base/40">
-                          <td colSpan={9}>
+                          <td colSpan={10}>
+                            {quoteDetail(q)}
                             <TrendChart code={code} />
                           </td>
                         </tr>

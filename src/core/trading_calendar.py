@@ -58,7 +58,8 @@ MARKET_TIMEZONE = {
 # P0 market phase baseline (Issue #1386). This is an intentionally small
 # regular-session inference layer; it does not change existing fail-open
 # trading-day filtering or effective-date behavior.
-_CLOSING_AUCTION_WINDOW_MINUTES = {"cn": 3, "hk": 10, "us": 5}
+# tw: 台股连续竞价 09:00–13:25，13:25–13:30 为收盘前集合竞价（不可删单），XTAI session_close=13:30 无午休
+_CLOSING_AUCTION_WINDOW_MINUTES = {"cn": 3, "hk": 10, "us": 5, "tw": 5}
 _SUPPORTED_ANALYSIS_PHASES = {
     "auto",
     "premarket",

@@ -146,14 +146,19 @@ _MARKET_GUIDELINES = {
             "- 本次分析对象为 **台股**（台湾证券交易所上市 `.TW`，或台湾柜买中心上柜 `.TWO`）。\n"
             "- 请按台湾市场语境分析，关注新台币（TWD）汇率、台湾央行政策、半导体/电子代工产业链、"
             "三大法人（外资／投信／自营商）买卖超、融资融券与当冲，以及 TWSE/TPEx ±10% 涨跌停制度；"
-            "不要套用 A 股专属的北向资金、龙虎榜等概念（台股的法人结构与资金流口径与 A 股不同）。"
+            "不要套用 A 股专属的北向资金、龙虎榜等概念（台股的法人结构与资金流口径与 A 股不同）。\n"
+            "- 若实时行情提供「现股当沖资格」（day_trade）：仅 `Yes` 可双向当沖、`OnlyBuy` 仅可先买后卖（不可先卖）、"
+            "`No` 不可当沖；当资格为 `OnlyBuy`/`No` 或未知时，不得给出（先卖／双向）当沖策略建议。"
         ),
         "en": (
             "- This analysis covers a **Taiwan stock** (TWSE-listed `.TW`, or TPEx/OTC `.TWO`).\n"
             "- Use Taiwan-market context: TWD FX, Central Bank of the ROC policy, the semiconductor/"
             "electronics-foundry supply chain, the three institutional investor groups (foreign / "
             "investment-trust / dealer), margin trading and day trading, and the TWSE/TPEx ±10% daily "
-            "price limit; do not apply China A-share-specific concepts such as Northbound flows or Dragon Tiger lists."
+            "price limit; do not apply China A-share-specific concepts such as Northbound flows or Dragon Tiger lists.\n"
+            "- If the realtime quote carries a day-trade eligibility (`day_trade`): only `Yes` allows two-sided "
+            "intraday day-trading, `OnlyBuy` allows buy-first-only (no short-first), `No` forbids day-trading; "
+            "do NOT propose a (short-first or two-sided) day-trade plan when it is `OnlyBuy`/`No`/unknown."
         ),
     },
 }

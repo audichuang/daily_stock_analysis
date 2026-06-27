@@ -37,6 +37,18 @@ def _map_quote_to_dict(quote: Any, fallback_code: str) -> Dict[str, Any]:
         "prev_close": getattr(quote, "pre_close", None),
         "volume": getattr(quote, "volume", None),
         "amount": getattr(quote, "amount", None),
+        "volume_ratio": getattr(quote, "volume_ratio", None),
+        "amplitude": getattr(quote, "amplitude", None),
+        # 台股盘中专用（仅 Shioaji 有值，其他源为 None；旧客户端忽略即可）
+        "average_price": getattr(quote, "average_price", None),
+        "limit_up": getattr(quote, "limit_up", None),
+        "limit_down": getattr(quote, "limit_down", None),
+        "best_bid": getattr(quote, "best_bid", None),
+        "best_bid_volume": getattr(quote, "best_bid_volume", None),
+        "best_ask": getattr(quote, "best_ask", None),
+        "best_ask_volume": getattr(quote, "best_ask_volume", None),
+        "day_trade": getattr(quote, "day_trade", None),
+        "last_tick_type": getattr(quote, "last_tick_type", None),
         "update_time": datetime.now().isoformat(),
         # provider_timestamp 优先（真实行情时间），否则退回 fetched_at（本系统获取时间）
         "as_of": getattr(quote, "provider_timestamp", None) or getattr(quote, "fetched_at", None),

@@ -28,6 +28,18 @@ class StockQuote(BaseModel):
     prev_close: Optional[float] = Field(None, description="昨收价")
     volume: Optional[float] = Field(None, description="成交量（股）")
     amount: Optional[float] = Field(None, description="成交额（元）")
+    volume_ratio: Optional[float] = Field(None, description="量比（台股开盘初段约 ~10:30 前偏低失真）")
+    amplitude: Optional[float] = Field(None, description="振幅 (%)：(最高-最低)/昨收")
+    # 台股盘中专用（additive，仅 Shioaji 有值，旧客户端忽略即可）
+    average_price: Optional[float] = Field(None, description="当日成交均价(VWAP)：站上偏多/跌破偏空的多空分界")
+    limit_up: Optional[float] = Field(None, description="涨停价（±10%，开盘即定全时段可靠）")
+    limit_down: Optional[float] = Field(None, description="跌停价")
+    best_bid: Optional[float] = Field(None, description="最佳一档委买价（top-of-book，非五档）")
+    best_bid_volume: Optional[int] = Field(None, description="最佳一档委买量（张/单位）")
+    best_ask: Optional[float] = Field(None, description="最佳一档委卖价")
+    best_ask_volume: Optional[int] = Field(None, description="最佳一档委卖量")
+    day_trade: Optional[str] = Field(None, description="现股当沖资格：Yes 可当沖 / OnlyBuy 仅可先买 / No 不可当沖")
+    last_tick_type: Optional[int] = Field(None, description="最后一笔成交方向(0中性/1外盘主买/2内盘主卖)，非累计内外盘比")
     update_time: Optional[str] = Field(None, description="更新时间")
     # 行情来源与时效（additive，旧客户端忽略即可）
     source: Optional[str] = Field(None, description="行情来源 (shioaji/fallback/efinance/akshare...)")

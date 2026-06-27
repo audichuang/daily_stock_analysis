@@ -51,6 +51,7 @@ DEFAULT_INTRADAY_TTL_HOURS = {
     "cn": 4.0,
     "hk": 5.5,
     "us": 6.5,
+    "tw": 4.5,  # 台股连续竞价 09:00–13:25(~4.42h)，避免信号在收盘集合竞价前过早过期
 }
 
 logger = logging.getLogger(__name__)

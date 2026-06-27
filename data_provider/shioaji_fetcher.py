@@ -162,6 +162,21 @@ def _ns_to_iso(ns: Any) -> Optional[str]:
         return None
 
 
+def _normalize_day_trade(val: Any) -> Optional[str]:
+    """contract.day_trade（DayTrade 枚举 / 字符串）→ 规范化 'Yes'/'OnlyBuy'/'No'。
+
+    Shioaji 的 DayTrade 是枚举（.value 为 'Yes'/'OnlyBuy'/'No'）；防御性兼容裸字符串。
+    无法识别时返回 None（前端按「未知」处理，不臆造可当沖）。
+    """
+    if val is None:
+        return None
+    raw = str(getattr(val, "value", val)).strip()
+    for canonical in ("OnlyBuy", "Yes", "No"):
+        if raw.lower() == canonical.lower():
+            return canonical
+    return raw or None
+
+
 # Shioaji kbars 单次区间上限（官方限制：date range must not exceed 30 days）
 _KBARS_MAX_DAYS = 30
 
@@ -308,7 +323,7 @@ class ShioajiFetcher(BaseFetcher):
             _login_breaker.record_inconclusive(_BREAKER_KEY)
             return None
 
-        quote = self._snap_to_quote(stock_code, snaps[0], getattr(contract, "name", "") or "")
+        quote = self._snap_to_quote(stock_code, snaps[0], contract)
         if quote is not None and quote.has_basic_data():
             _login_breaker.record_success(_BREAKER_KEY)
             return quote
@@ -317,8 +332,13 @@ class ShioajiFetcher(BaseFetcher):
         return None
 
     @staticmethod
-    def _snap_to_quote(stock_code: str, snap: Any, name: str) -> Optional[UnifiedRealtimeQuote]:
-        """Shioaji snapshot → UnifiedRealtimeQuote。全部 getattr 防御，字段名以官方 Snapshot 为准。"""
+    def _snap_to_quote(stock_code: str, snap: Any, contract: Any = None) -> Optional[UnifiedRealtimeQuote]:
+        """Shioaji snapshot(+contract) → UnifiedRealtimeQuote。全部 getattr 防御，字段名以官方 Snapshot/Contract 为准。
+
+        除既有价量字段外，补齐台股盘中真正天天盯的字段（均价多空分界、涨跌停价、委买委卖一档、
+        现股当沖资格、最后一笔内外盘方向、量比/振幅）。这些字段 Shioaji snapshot/contract 已直接返回，
+        旧实现却丢弃；详见 docs/realtime-board.md。`contract` 为 None 时只缺 contract 来源字段（涨跌停/当沖）。
+        """
         close = safe_float(getattr(snap, "close", None))
         change_price = safe_float(getattr(snap, "change_price", None))
         # ts 为 epoch 纳秒；务必产生可被 _parse_realtime_timestamp 解析的 ISO 字符串，
@@ -328,6 +348,13 @@ class ShioajiFetcher(BaseFetcher):
         pre_close = None
         if close is not None and change_price is not None:
             pre_close = round(close - change_price, 4)
+        # 振幅(%)：(high-low)/昨收。Shioaji 不直接给振幅，按昨收基准自算（全时段可靠）。
+        high = safe_float(getattr(snap, "high", None))
+        low = safe_float(getattr(snap, "low", None))
+        amplitude = None
+        if high is not None and low is not None and pre_close:
+            amplitude = round((high - low) / pre_close * 100, 2)
+        name = (getattr(contract, "name", "") or "") if contract is not None else ""
         return UnifiedRealtimeQuote(
             code=stock_code,
             name=name,
@@ -337,9 +364,24 @@ class ShioajiFetcher(BaseFetcher):
             change_pct=safe_float(getattr(snap, "change_rate", None)),
             volume=safe_int(getattr(snap, "total_volume", None)),
             amount=safe_float(getattr(snap, "total_amount", None)),
+            # 量比 Shioaji 直接给（避免因缺此字段触发 base._quote_needs_supplement 的 yfinance 补字段往返）。
+            # 注意：Shioaji 量比是当日累计量/昨量，开盘初段(约 ~10:30 前)偏低失真，前端需谨慎解读。
+            volume_ratio=safe_float(getattr(snap, "volume_ratio", None)),
+            amplitude=amplitude,
             open_price=safe_float(getattr(snap, "open", None)),
-            high=safe_float(getattr(snap, "high", None)),
-            low=safe_float(getattr(snap, "low", None)),
+            high=high,
+            low=low,
             pre_close=pre_close,
             provider_timestamp=provider_ts,
+            # --- 台股盘中专用 ---
+            average_price=safe_float(getattr(snap, "average_price", None)),
+            best_bid=safe_float(getattr(snap, "buy_price", None)),
+            best_bid_volume=safe_int(getattr(snap, "buy_volume", None)),
+            best_ask=safe_float(getattr(snap, "sell_price", None)),
+            best_ask_volume=safe_int(getattr(snap, "sell_volume", None)),
+            last_tick_type=safe_int(getattr(snap, "tick_type", None)),
+            # contract 静态字段（开盘即定，全时段可靠）
+            limit_up=safe_float(getattr(contract, "limit_up", None)) if contract is not None else None,
+            limit_down=safe_float(getattr(contract, "limit_down", None)) if contract is not None else None,
+            day_trade=_normalize_day_trade(getattr(contract, "day_trade", None)) if contract is not None else None,
         )

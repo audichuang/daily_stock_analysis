@@ -24,6 +24,18 @@ export type StockQuote = {
   prevClose?: number | null;
   volume?: number | null;
   amount?: number | null;
+  volumeRatio?: number | null;
+  amplitude?: number | null;
+  // 台股盘中专用（仅 Shioaji 有值，其他源为 null）
+  averagePrice?: number | null;
+  limitUp?: number | null;
+  limitDown?: number | null;
+  bestBid?: number | null;
+  bestBidVolume?: number | null;
+  bestAsk?: number | null;
+  bestAskVolume?: number | null;
+  dayTrade?: string | null;
+  lastTickType?: number | null;
   updateTime?: string | null;
   source?: string | null;
   asOf?: string | null;
@@ -49,6 +61,17 @@ type RawQuote = {
   prev_close?: number | null;
   volume?: number | null;
   amount?: number | null;
+  volume_ratio?: number | null;
+  amplitude?: number | null;
+  average_price?: number | null;
+  limit_up?: number | null;
+  limit_down?: number | null;
+  best_bid?: number | null;
+  best_bid_volume?: number | null;
+  best_ask?: number | null;
+  best_ask_volume?: number | null;
+  day_trade?: string | null;
+  last_tick_type?: number | null;
   update_time?: string | null;
   source?: string | null;
   as_of?: string | null;
@@ -68,6 +91,17 @@ function toQuote(raw: RawQuote): StockQuote {
     prevClose: raw.prev_close,
     volume: raw.volume,
     amount: raw.amount,
+    volumeRatio: raw.volume_ratio,
+    amplitude: raw.amplitude,
+    averagePrice: raw.average_price,
+    limitUp: raw.limit_up,
+    limitDown: raw.limit_down,
+    bestBid: raw.best_bid,
+    bestBidVolume: raw.best_bid_volume,
+    bestAsk: raw.best_ask,
+    bestAskVolume: raw.best_ask_volume,
+    dayTrade: raw.day_trade,
+    lastTickType: raw.last_tick_type,
     updateTime: raw.update_time,
     source: raw.source,
     asOf: raw.as_of,
