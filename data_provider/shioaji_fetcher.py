@@ -29,6 +29,7 @@ import importlib.util
 import logging
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -60,6 +61,12 @@ _SESSION_LOCK = threading.RLock()
 # 又不与 _SESSION_LOCK（登入/重连）耦合。yfinance 等其他源不经此锁，仍可并发。
 # ponytail: 若日后改用单次批量 snapshot([...500 档])，此锁可去除。
 _SNAPSHOT_LOCK = threading.RLock()
+# 批次预热快照缓存：prime_snapshots 一次 api.snapshots([...N]) 写入，per-code 取价命中即零网络。
+# TTL 极短——看板一次刷新内的同批 code 都命中同一次批次结果；下次轮询（~30s 后）已过期重新预热，
+# 不会跨刷新喂旧值。键为台股裸码（2330），值为 (snap, contract, 写入时刻)。
+_SNAPSHOT_CACHE: dict = {}
+_SNAPSHOT_CACHE_LOCK = threading.RLock()
+_SNAPSHOT_CACHE_TTL = 5.0
 _api: Optional[Any] = None
 _logged_in = False
 _logout_registered = False
@@ -238,13 +245,91 @@ def shioaji_trend(stock_code: str, range_: str):
     return [{"t": d, "price": p} for d, p in sorted(by_day.items())]
 
 
+def _read_snapshot_cache(bare_code: str):
+    """读批次预热缓存：返回 (snap, contract) 或 None（缺失/过期）。"""
+    with _SNAPSHOT_CACHE_LOCK:
+        entry = _SNAPSHOT_CACHE.get(bare_code)
+        if entry is None:
+            return None
+        snap, contract, ts = entry
+        if time.time() - ts > _SNAPSHOT_CACHE_TTL:
+            return None
+        return snap, contract
+
+
+def prime_snapshots(codes) -> int:
+    """一次 api.snapshots([全部台股合约]) 预热快照缓存，取代逐档锁序列化。
+
+    看板批量取价前调用：把 N 档台股的快照折叠成一次网络往返（~单档耗时），
+    写入短 TTL 缓存供随后 per-code 路径零网络命中。返回写入缓存的档数。
+    未安装/无金钥/无 session 时 no-op 返回 0（per-code 路径照常单档兜底/降级 yfinance）。
+    熔断与失败语义对齐单档路径（见 get_realtime_quote）。
+    """
+    global _api, _logged_in
+    if not _HAS_SHIOAJI or not codes:
+        return 0
+    api = _ensure_session()
+    if api is None:
+        return 0
+
+    by_code: dict = {}
+    contracts = []
+    for raw in codes:
+        bare = ShioajiFetcher._tw_code(raw)
+        try:
+            contract = api.Contracts.Stocks[bare]
+        except Exception:
+            contract = None
+        if contract is not None and bare not in by_code:
+            by_code[bare] = contract
+            contracts.append(contract)
+    if not contracts:
+        return 0
+
+    try:
+        with _SNAPSHOT_LOCK:
+            fut = _executor.submit(api.snapshots, contracts)
+            # 批次 timeout 随档数放大但设上限，避免大 watchlist 卡死整批
+            snaps = fut.result(timeout=min(30.0, max(_SNAPSHOT_TIMEOUT_S, len(contracts) * 0.5)))
+    except Exception as e:
+        logger.warning("[ShioajiFetcher] 批次快照失败/超时 (%d 档): %s", len(contracts), type(e).__name__)
+        with _SESSION_LOCK:
+            if _api is api:  # 仅当仍是本次会话才作废，避免误清他线程新 session（race）
+                _api = None
+                _logged_in = False
+                _login_breaker.record_failure(_BREAKER_KEY, str(e)[:200])
+        return 0
+
+    if not snaps:
+        _login_breaker.record_inconclusive(_BREAKER_KEY)
+        return 0
+
+    now = time.time()
+    written = 0
+    any_valid = False
+    with _SNAPSHOT_CACHE_LOCK:
+        for snap in snaps:
+            scode = str(getattr(snap, "code", "") or "")
+            if not scode:
+                continue
+            _SNAPSHOT_CACHE[scode] = (snap, by_code.get(scode), now)
+            written += 1
+            if safe_float(getattr(snap, "close", None)):
+                any_valid = True
+    # 端到端拿到合法报价才算成功；否则不确定（午休/收盘无 tick），半开转回 OPEN 避免假复原。
+    _login_breaker.record_success(_BREAKER_KEY) if any_valid else _login_breaker.record_inconclusive(_BREAKER_KEY)
+    return written
+
+
 def _reset_for_tests() -> None:
-    """清模组级状态 + 熔断器（供测试隔离）。"""
+    """清模组级状态 + 熔断器 + 批次缓存（供测试隔离）。"""
     global _api, _logged_in, _logout_registered
     with _SESSION_LOCK:
         _api = None
         _logged_in = False
         _logout_registered = False
+    with _SNAPSHOT_CACHE_LOCK:
+        _SNAPSHOT_CACHE.clear()
     _login_breaker.reset()
 
 
@@ -287,11 +372,23 @@ class ShioajiFetcher(BaseFetcher):
         global _api, _logged_in
         if not _HAS_SHIOAJI:
             return None
+
+        code = self._tw_code(stock_code)
+
+        # 0) 命中批次预热缓存 → 零网络、零锁、零熔断交互（看板批量取价的快路径）。
+        #    prime_snapshots 已对该批做过一次网络与熔断记录；此处只是读已折叠的结果。
+        cached = _read_snapshot_cache(code)
+        if cached is not None:
+            snap, contract = cached
+            quote = self._snap_to_quote(stock_code, snap, contract)
+            if quote is not None and quote.has_basic_data():
+                return quote
+            # 缓存命中但无有效报价 → 落到下方单档兜底
+
         api = _ensure_session()
         if api is None:
             return None
 
-        code = self._tw_code(stock_code)
         # 查合约：查无属 transient（非 session 死），不记 breaker failure。
         try:
             contract = api.Contracts.Stocks[code]

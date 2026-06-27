@@ -109,25 +109,52 @@ class StockService:
     def get_realtime_quotes(self, codes: List[str]) -> List[Optional[Dict[str, Any]]]:
         """批量获取实时行情（看板用）。
 
-        建一个 DataFetcherManager 复用全程；逐个取价，单个失败回 None（不拖垮整批）。
-        返回与 codes 等长、同序的列表，元素为 dict 或 None。
+        建一个 DataFetcherManager 复用全程，bounded 并发取价；单个失败回 None
+        （不拖垮整批）。返回与 codes 等长、同序的列表，元素为 dict 或 None。
 
-        ponytail: sequential 迴圈即可（30s 輪詢 + watchlist 量級）；
-        台股 Shioaji 是模組級單一 session（序列化瓶頸），盲目併發無益。
-        watchlist 變大且實測偏慢時，再上 bounded ThreadPoolExecutor。
+        并发动机：盘后/未配置 Shioaji 时全部走 yfinance，单次取价是网络瓶颈
+        (~1-3s)，sequential N 档 = N 倍延迟（看板「整体很慢」的主因）。bounded
+        ThreadPoolExecutor 让 yfinance 真正并发；台股 Shioaji 经模组级
+        `_SNAPSHOT_LOCK` 串行化仍线程安全（只是不额外提速）。看板分批刷新本就
+        会从多个请求线程并发调用，故此并发不引入新的线程安全要求。
         """
+        from concurrent.futures import ThreadPoolExecutor
+
         from data_provider.base import DataFetcherManager
 
+        if not codes:
+            return []
+
+        # 台股 Shioaji 批次预热：一次 snapshots([全部台股]) 取代逐档锁序列化（看板慢的主因）。
+        # 写入短 TTL 缓存后，下方 per-code 路径命中即零网络；非台股/未配置 Shioaji 时 no-op。
+        tw_codes = [c for c in codes if str(c).strip().upper().endswith((".TW", ".TWO"))]
+        if tw_codes:
+            try:
+                from data_provider.shioaji_fetcher import prime_snapshots
+
+                prime_snapshots(tw_codes)
+            except Exception as e:  # 预热失败不影响取价（per-code 单档兜底）
+                logger.debug(f"批量行情: Shioaji 批次预热跳过: {e}")
+
         manager = DataFetcherManager()
-        results: List[Optional[Dict[str, Any]]] = []
+
+        def _fetch(code: str) -> Optional[Dict[str, Any]]:
+            try:
+                # skip_supplement：看板只展示 Shioaji 已有字段，跳过仅补市值的 yfinance 往返
+                # （台股有 Shioaji 报价时）。Shioaji 无报价时仍自动降级 yfinance（见 base.py）。
+                quote = manager.get_realtime_quote(code, log_final_failure=False, skip_supplement=True)
+                return _map_quote_to_dict(quote, code) if quote is not None else None
+            except Exception as e:  # 单个代码失败不影响其余
+                logger.warning(f"批量行情: {code} 取价失败: {e}")
+                return None
+
         try:
-            for code in codes:
-                try:
-                    quote = manager.get_realtime_quote(code, log_final_failure=False)
-                    results.append(_map_quote_to_dict(quote, code) if quote is not None else None)
-                except Exception as e:  # 单个代码失败不影响其余
-                    logger.warning(f"批量行情: {code} 取价失败: {e}")
-                    results.append(None)
+            # bounded 并发：上限 8，避免线程爆炸 / 过度并发打 yfinance。
+            # ex.map 保序，与输入 codes 一一对应。with 块退出前已 join 全部线程，
+            # 故 manager.close() 必在所有取价完成后执行。
+            max_workers = min(8, len(codes))
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="quotes") as ex:
+                results = list(ex.map(_fetch, codes))
         finally:
             if hasattr(manager, "close"):
                 manager.close()

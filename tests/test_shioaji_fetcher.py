@@ -156,6 +156,69 @@ def test_snapshot_maps_tw_intraday_fields(monkeypatch):
         assert k in d
 
 
+def test_prime_snapshots_batches_then_cache_hit_skips_per_code_snapshot(monkeypatch):
+    """prime 一次 snapshots([N]) 写缓存；随后 per-code get 命中缓存，不再各发一次快照。"""
+    monkeypatch.setattr(sf, "_HAS_SHIOAJI", True)
+    monkeypatch.setenv("SHIOAJI_API_KEY", "k")
+    monkeypatch.setenv("SHIOAJI_SECRET_KEY", "s")
+
+    snap_calls = {"n": 0, "batch_sizes": []}
+
+    class _Snap:
+        def __init__(self, code):
+            self.code = code
+            self.close = 1000.0
+            self.change_price = 10.0
+            self.change_rate = 1.0
+            self.total_volume = 5000
+            self.total_amount = 5_000_000.0
+            self.open = 995.0
+            self.high = 1010.0
+            self.low = 990.0
+            self.ts = _NOW_NS
+            self.average_price = 1002.5
+
+    class _Api:
+        def __init__(self):
+            self.Contracts = _FakeContracts()
+
+        def login(self, api_key=None, secret_key=None, **kw):
+            pass
+
+        def snapshots(self, contracts):
+            snap_calls["n"] += 1
+            snap_calls["batch_sizes"].append(len(contracts))
+            return [_Snap(c.code) for c in contracts]
+
+        def logout(self):
+            pass
+
+    module = types.ModuleType("shioaji")
+    module.Shioaji = _Api
+    monkeypatch.setitem(sys.modules, "shioaji", module)
+
+    codes = ["2330.TW", "2317.TW", "00878.TW"]
+    written = sf.prime_snapshots(codes)
+    assert written == 3
+    assert snap_calls["n"] == 1            # 仅一次批次网络往返
+    assert snap_calls["batch_sizes"] == [3]  # 一次带 3 档
+
+    fetcher = sf.ShioajiFetcher()
+    for code in codes:
+        q = fetcher.get_realtime_quote(code)
+        assert q is not None and q.source is RealtimeSource.SHIOAJI
+        assert q.average_price == 1002.5
+    assert snap_calls["n"] == 1            # 命中缓存，未再发任何单档快照
+
+
+def test_prime_snapshots_noop_without_keys(monkeypatch):
+    """无金钥时 prime no-op（不登入、不抛错）。"""
+    monkeypatch.setattr(sf, "_HAS_SHIOAJI", True)
+    monkeypatch.delenv("SHIOAJI_API_KEY", raising=False)
+    monkeypatch.delenv("SHIOAJI_SECRET_KEY", raising=False)
+    assert sf.prime_snapshots(["2330.TW"]) == 0
+
+
 def test_normalize_day_trade_variants():
     """day_trade 规范化：枚举 .value、裸字符串、未知值、None。"""
     assert sf._normalize_day_trade(_FakeDayTrade("OnlyBuy")) == "OnlyBuy"

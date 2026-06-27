@@ -868,19 +868,22 @@ class YfinanceFetcher(BaseFetcher):
             if high is not None and low is not None and prev_close is not None and prev_close > 0:
                 amplitude = ((high - low) / prev_close) * 100
 
-            # 获取股票名称
-            try:
-                info_name = ticker.info.get('shortName', '') or ticker.info.get('longName', '') or ''
-                # 优先使用本地策划索引的本地化名称（如台股中文名），避免 Yahoo 返回英文名覆盖
-                index_name = get_index_stock_name(symbol)
-                if is_meaningful_stock_name(index_name, symbol):
-                    name = index_name
-                elif is_meaningful_stock_name(info_name, symbol):
-                    name = info_name
-                else:
-                    name = STOCK_NAME_MAP.get(symbol, '')
-            except Exception:
-                name = get_index_stock_name(symbol) or STOCK_NAME_MAP.get(symbol, '')
+            # 获取股票名称：优先本地策划索引（台股中文名等，零网络），其次本地映射表；
+            # 仅当本地都查无名时才回退 yfinance `ticker.info`——后者是重量级 quoteSummary
+            # 网络调用(~1-3s，yfinance 最慢路径)，对已在本地索引的标的（如整个台股 watchlist）
+            # 其结果本就会被本地名覆盖，故能省则省，这是看板 yfinance 延迟的主因。
+            index_name = get_index_stock_name(symbol)
+            mapped_name = STOCK_NAME_MAP.get(symbol, '')
+            if is_meaningful_stock_name(index_name, symbol):
+                name = index_name
+            elif is_meaningful_stock_name(mapped_name, symbol):
+                name = mapped_name
+            else:
+                try:
+                    info_name = ticker.info.get('shortName', '') or ticker.info.get('longName', '') or ''
+                    name = info_name if is_meaningful_stock_name(info_name, symbol) else mapped_name
+                except Exception:
+                    name = mapped_name
 
             quote = UnifiedRealtimeQuote(
                 code=symbol,

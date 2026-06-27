@@ -1697,7 +1697,7 @@ class DataFetcherManager:
         setattr(quote, "is_stale", stale_seconds > int(ttl))
         return quote
     
-    def get_realtime_quote(self, stock_code: str, *, log_final_failure: bool = True):
+    def get_realtime_quote(self, stock_code: str, *, log_final_failure: bool = True, skip_supplement: bool = False):
         """
         获取实时行情数据（自动故障切换）
         
@@ -1773,8 +1773,14 @@ class DataFetcherManager:
             )
             if primary_quote is not None:
                 logger.info(f"[实时行情] 台股 {stock_code} 成功获取 (来源: ShioajiFetcher)")
-            # primary 缺字段 -> 用 yfinance 补；primary=None -> yfinance 当唯一源
-            primary_quote = self._supplement_quote(stock_code, primary_quote, "YfinanceFetcher")
+                # skip_supplement（看板批量）：Shioaji 已含看板所需全部字段（价/涨跌/均价/涨跌停/
+                # 委买委卖/量/振幅/当沖资格），yfinance 补充仅多填「市值」（看板不展示）。跳过即省每档
+                # 一次 yfinance 往返——这是看板逐档延迟的真正主因。单档/分析路径默认仍补（保留市值）。
+                if not skip_supplement:
+                    primary_quote = self._supplement_quote(stock_code, primary_quote, "YfinanceFetcher")
+            else:
+                # Shioaji 无报价 → yfinance 当唯一源（不受 skip_supplement 影响，否则整列空白）
+                primary_quote = self._supplement_quote(stock_code, None, "YfinanceFetcher")
             if primary_quote is not None:
                 enriched = self._enrich_realtime_quote(
                     primary_quote,
