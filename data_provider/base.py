@@ -86,8 +86,8 @@ def normalize_stock_code(stock_code: str) -> str:
     - '1810.HK'     -> 'HK01810'  (normalize HK suffix to canonical prefix form)
     - '7203.T'      -> '7203.T'   (keep Japan Yahoo suffix form)
     - '005930.KS'   -> '005930.KS' (keep Korea Yahoo suffix form)
-    - '2330.TW'     -> '2330.TW'  (keep Taiwan Yahoo suffix form)
-    - '6488.TWO'    -> '6488.TWO' (keep Taiwan OTC Yahoo suffix form)
+    - '2330.TW'     -> '2330.TW'  (keep Taiwan TWSE Yahoo suffix form)
+    - '6505.TWO'    -> '6505.TWO' (keep Taiwan TPEx Yahoo suffix form)
     - 'AAPL'        -> 'AAPL'     (keep US stock ticker as-is)
 
     This function is applied at the DataProviderManager layer so that
@@ -195,7 +195,11 @@ def _is_kr_market(code: str) -> bool:
 
 
 def _is_tw_market(code: str) -> bool:
-    """判定是否为台湾 Yahoo Finance suffix 代码（如 2330.TW / 6488.TWO）。"""
+    """判定是否为台湾 Yahoo Finance suffix 代码（TWSE 上市 2330.TW / TPEx 上柜 6505.TWO）。
+
+    台股 base 为 4-6 位（普通股 4 位，ETF/其他至 6 位，如 00878 / 006208）。
+    仅带 .TW/.TWO 后缀的代码才识别为台股，裸 6 位代码仍按 A 股语义处理。
+    """
     normalized = (code or "").strip().upper()
     if not normalized.endswith((".TW", ".TWO")):
         return False
@@ -1741,6 +1745,8 @@ class DataFetcherManager:
         is_kr = (not is_us) and (not is_hk) and _is_kr_market(stock_code)
         is_tw = (not is_us) and (not is_hk) and _is_tw_market(stock_code)
 
+        # 台股不走此分支：fork 为台股提供 Shioaji 真即时优先（见下方 `if is_tw:`），
+        # 只有日股/韩股是 yfinance-only suffix 市场。
         if is_jp or is_kr:
             market_label = "日股" if is_jp else "韩股"
             quote = self._try_fetcher_quote(stock_code, "YfinanceFetcher")

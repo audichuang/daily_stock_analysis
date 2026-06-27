@@ -105,6 +105,19 @@ class YfinanceFetcher(BaseFetcher):
         """Backward-compatible alias for earlier JP/KR-only helper name."""
         return YfinanceFetcher._is_yahoo_suffix_stock(stock_code)
 
+    @staticmethod
+    def _is_tw_suffix_stock(stock_code: str) -> bool:
+        """Return True for supported Taiwan suffix-only Yahoo symbols (TWSE `.TW` / TPEx `.TWO`).
+
+        Taiwan base codes are 4-6 digits (common stocks 4, ETFs/others up to 6,
+        e.g. 00878 / 006208), wider than the JP `.T` range.
+        """
+        code = (stock_code or "").strip().upper()
+        if code.endswith((".TW", ".TWO")):
+            base = code.rsplit(".", 1)[0]
+            return base.isdigit() and 4 <= len(base) <= 6
+        return False
+
     def _convert_stock_code(self, stock_code: str) -> str:
         """
         转换股票代码为 Yahoo Finance 格式
@@ -142,7 +155,7 @@ class YfinanceFetcher(BaseFetcher):
             logger.debug(f"识别为美股代码: {code}")
             return code
 
-        # 海外 suffix-only MVP：显式 Yahoo Finance suffix-only 代码，原样传给 Yahoo。
+        # 海外 suffix-only MVP：显式 Yahoo Finance suffix-only 代码（日股/韩股/台股），原样传给 Yahoo。
         if self._is_yahoo_suffix_stock(code):
             logger.debug(f"识别为 Yahoo suffix 代码: {code}")
             return code
@@ -795,7 +808,7 @@ class YfinanceFetcher(BaseFetcher):
                 index_name=index_name,
             )
 
-        # 仅处理美股股票或 suffix-only 海外股票
+        # 仅处理美股股票或 suffix-only 海外股票（日股/韩股/台股）
         if not (self._is_us_stock(stock_code) or self._is_yahoo_suffix_stock(stock_code)):
             logger.debug(f"[Yfinance] {stock_code} 不是美股或 Yahoo suffix 代码，跳过")
             return None

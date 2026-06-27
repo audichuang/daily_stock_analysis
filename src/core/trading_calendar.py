@@ -141,9 +141,15 @@ def get_market_for_stock(code: str) -> Optional[str]:
         base = code.rsplit(".", 1)[0]
         if base.isdigit() and len(base) == 6:
             return "kr"
-    if code.endswith((".TW", ".TWO")):
-        base = code.rsplit(".", 1)[0]
-        if base.isdigit() and 4 <= len(base) <= 6:
+    # Taiwan: TWSE `.TW` / TPEx `.TWO`, base 4-6 digits. Checked before the
+    # bare 6-digit A-share fallback so only the explicit suffix opts into TW.
+    if code.endswith(".TWO"):
+        base = code[:-4]
+        if base.isdigit() and len(base) in (4, 5, 6):
+            return "tw"
+    if code.endswith(".TW"):
+        base = code[:-3]
+        if base.isdigit() and len(base) in (4, 5, 6):
             return "tw"
     # A-share: 6-digit numeric
     if code.isdigit() and len(code) == 6:

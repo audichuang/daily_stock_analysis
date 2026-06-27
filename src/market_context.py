@@ -43,6 +43,15 @@ def detect_market(stock_code: Optional[str]) -> str:
     if re.match(r'^\d{4,6}\.(TW|TWO)$', code):
         return "tw"
 
+    # Taiwan suffix-only symbols supported by Yahoo Finance (TWSE `.TW`, TPEx `.TWO`).
+    # Base is 4-6 digits (common stocks 4, ETFs/others up to 6, e.g. 00878, 006208).
+    # Bare 4-digit codes remain A-share fallback to avoid collision; only the
+    # explicit `.TW`/`.TWO` suffix opts a code into the Taiwan market.
+    if re.match(r'^\d{4,6}\.TWO$', code):
+        return "tw"
+    if re.match(r'^\d{4,6}\.TW$', code):
+        return "tw"
+
     # US stocks: 1-5 uppercase letters (AAPL, TSLA, GOOGL)
     # Also handles suffixed forms like BRK.B
     if re.match(r'^[A-Z]{1,5}(\.[A-Z]{1,2})?$', code):
@@ -134,12 +143,17 @@ _MARKET_GUIDELINES = {
     },
     "tw": {
         "zh": (
-            "- 本次分析对象为 **台股**（台湾证券交易所/柜买中心上市股票，Yahoo Finance suffix 如 `.TW` / `.TWO`）。\n"
-            "- 请按台湾市场语境分析，关注新台币汇率、台湾央行政策、半导体/电子产业周期与当地交易制度；不要套用 A 股涨跌停、北向资金、龙虎榜、融资融券等 A 股专属概念。"
+            "- 本次分析对象为 **台股**（台湾证券交易所上市 `.TW`，或台湾柜买中心上柜 `.TWO`）。\n"
+            "- 请按台湾市场语境分析，关注新台币（TWD）汇率、台湾央行政策、半导体/电子代工产业链、"
+            "三大法人（外资／投信／自营商）买卖超、融资融券与当冲，以及 TWSE/TPEx ±10% 涨跌停制度；"
+            "不要套用 A 股专属的北向资金、龙虎榜等概念（台股的法人结构与资金流口径与 A 股不同）。"
         ),
         "en": (
-            "- This analysis covers a **Taiwan stock** (TWSE/TPEx suffix `.TW` / `.TWO`).\n"
-            "- Use Taiwan-market context: TWD FX, Taiwan central bank policy, semiconductor/electronics cycles, and local trading rules; do not apply China A-share concepts such as daily price-limit boards, Northbound flows, Dragon Tiger lists, or margin-financing narratives."
+            "- This analysis covers a **Taiwan stock** (TWSE-listed `.TW`, or TPEx/OTC `.TWO`).\n"
+            "- Use Taiwan-market context: TWD FX, Central Bank of the ROC policy, the semiconductor/"
+            "electronics-foundry supply chain, the three institutional investor groups (foreign / "
+            "investment-trust / dealer), margin trading and day trading, and the TWSE/TPEx ±10% daily "
+            "price limit; do not apply China A-share-specific concepts such as Northbound flows or Dragon Tiger lists."
         ),
     },
 }

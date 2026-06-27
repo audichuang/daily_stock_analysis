@@ -1464,7 +1464,7 @@ class StockAnalysisPipeline:
         }
 
     def _get_analysis_context_with_market_fallback(self, code: str) -> Optional[Dict[str, Any]]:
-        """Load analysis context, fetching suffix-only offshore daily bars when DB has no context."""
+        """Load analysis context, fetching JP/KR/TW daily bars when DB has no context."""
         context = self.db.get_analysis_context(code)
         if isinstance(context, dict) and context:
             return context

@@ -114,8 +114,8 @@ def test_yfinance_keeps_jp_kr_tw_suffix_codes_and_indices() -> None:
     assert ("^TOPX", "东证指数", "TOPX") in captured
     assert ("^KS11", "KOSPI", "KS11") in captured
     assert ("^KQ11", "KOSDAQ", "KQ11") in captured
-    assert ("^TWII", "台湾加权指数", "TWII") in captured
-    assert ("^TWOII", "柜买指数", "TPEX") in captured
+    assert ("^TWII", "台灣加權指數", "TWII") in captured
+    assert ("^TWOII", "櫃買指數", "TPEX") in captured
 
 
 def test_data_fetcher_manager_routes_jp_kr_tw_daily_only_to_yfinance() -> None:

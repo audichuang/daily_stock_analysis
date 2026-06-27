@@ -850,9 +850,6 @@ class NotificationService(
                     f"{labels['score_label']} {r.sentiment_score} | "
                     f"{localize_trend_prediction(r.trend_prediction, report_language)}"
                 )
-                signal_excerpt = self._decision_signal_excerpt(r, report_language)
-                if signal_excerpt:
-                    report_lines.append(signal_excerpt)
         else:
             report_lines.extend([f"## 📈 {labels['report_title']}", ""])
             # 逐个股票的详细分析
@@ -1022,6 +1019,72 @@ class NotificationService(
                 return value[len(prefix):]
         return value
 
+    @staticmethod
+    def _phase_decision_list(value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @classmethod
+    def _phase_decision_has_content(cls, phase_decision: Dict[str, Any]) -> bool:
+        text_keys = (
+            "action_window",
+            "immediate_action",
+            "next_check_time",
+            "confidence_reason",
+        )
+        if any(str(phase_decision.get(key) or "").strip() for key in text_keys):
+            return True
+        return bool(
+            cls._phase_decision_list(phase_decision.get("watch_conditions"))
+            or cls._phase_decision_list(phase_decision.get("data_limitations"))
+        )
+
+    def _append_phase_decision_block(
+        self,
+        report_lines: List[str],
+        dashboard: Dict[str, Any],
+        labels: Dict[str, str],
+    ) -> None:
+        phase_decision = dashboard.get("phase_decision") if dashboard else None
+        if not isinstance(phase_decision, dict):
+            return
+        if not self._phase_decision_has_content(phase_decision):
+            return
+
+        watch_conditions = self._phase_decision_list(phase_decision.get("watch_conditions"))
+        data_limitations = self._phase_decision_list(phase_decision.get("data_limitations"))
+
+        report_lines.extend([
+            f"### 🛡️ {labels['phase_decision_heading']}",
+            "",
+            f"| {labels['action_window_label']} | {labels['immediate_action_label']} | {labels['next_check_time_label']} |",
+            "|---------|---------|---------|",
+            f"| {phase_decision.get('action_window') or 'N/A'} | "
+            f"{phase_decision.get('immediate_action') or 'N/A'} | "
+            f"{phase_decision.get('next_check_time') or 'N/A'} |",
+            "",
+        ])
+
+        if watch_conditions:
+            report_lines.append(f"**{labels['watch_conditions_label']}**:")
+            for condition in watch_conditions:
+                report_lines.append(f"- {condition}")
+            report_lines.append("")
+
+        confidence_reason = str(phase_decision.get("confidence_reason") or "").strip()
+        if confidence_reason:
+            report_lines.extend([
+                f"**{labels['confidence_reason_label']}**: {confidence_reason}",
+                "",
+            ])
+
+        if data_limitations:
+            report_lines.append(f"**{labels['data_limitations_label']}**:")
+            for limitation in data_limitations:
+                report_lines.append(f"- {limitation}")
+            report_lines.append("")
+
     def _get_signal_level(self, result: AnalysisResult) -> tuple:
         """Get localized signal level and color based on operation advice."""
         return get_signal_level(
@@ -1105,9 +1168,6 @@ class NotificationService(
                     f"{labels['score_label']} {r.sentiment_score} | "
                     f"{localize_trend_prediction(r.trend_prediction, report_language)}"
                 )
-                signal_excerpt = self._decision_signal_excerpt(r, report_language)
-                if signal_excerpt:
-                    report_lines.append(signal_excerpt)
             report_lines.extend([
                 "",
                 "---",
@@ -1127,6 +1187,9 @@ class NotificationService(
                     f"## {signal_emoji} {stock_name} ({result.code})",
                     "",
                 ])
+                signal_excerpt = self._decision_signal_excerpt(result, report_language)
+                if signal_excerpt:
+                    report_lines.extend([signal_excerpt, ""])
                 
                 # ========== 舆情与基本面概览（放在最前面）==========
                 intel = dashboard.get('intelligence', {}) if dashboard else {}
@@ -1258,6 +1321,8 @@ class NotificationService(
                                 f"**{labels['chip_label']}**: {chip_unavailable_reason}",
                                 "",
                             ])
+
+                self._append_phase_decision_block(report_lines, dashboard, labels)
                 
                 # ========== 作战计划 ==========
                 battle = dashboard.get('battle_plan', {}) if dashboard else {}
@@ -1410,9 +1475,6 @@ class NotificationService(
                     f"{labels['score_label']} {r.sentiment_score} | "
                     f"{localize_trend_prediction(r.trend_prediction, report_language)}"
                 )
-                signal_excerpt = self._decision_signal_excerpt(r, report_language)
-                if signal_excerpt:
-                    lines.append(signal_excerpt)
         else:
             for result in sorted_results:
                 signal_text, signal_emoji, _ = self._get_signal_level(result)
@@ -1567,9 +1629,6 @@ class NotificationService(
                 f"{labels['score_label']}:{result.sentiment_score} | "
                 f"{localize_trend_prediction(result.trend_prediction, report_language)}"
             )
-            signal_excerpt = self._decision_signal_excerpt(result, report_language)
-            if signal_excerpt:
-                lines.append(signal_excerpt)
             
             # 操作理由（截断）
             if hasattr(result, 'buy_reason') and result.buy_reason:
@@ -1657,9 +1716,6 @@ class NotificationService(
                 f"{localize_operation_advice(r.operation_advice, report_language)} | "
                 f"{labels['score_label']} {r.sentiment_score} | {one}"
             )
-            signal_excerpt = self._decision_signal_excerpt(r, report_language)
-            if signal_excerpt:
-                lines.append(signal_excerpt)
         lines.append("")
         lines.append(f"*{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*")
         models = self._collect_models_used(results)

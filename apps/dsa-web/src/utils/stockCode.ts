@@ -76,6 +76,7 @@ export function normalizeStockCode(stockCode: string): string {
     if ((suffix === 'KS' || suffix === 'KQ') && /^\d{6}$/.test(base)) {
       return `${base}.${suffix}`;
     }
+    // TW Yahoo suffix-only codes (TWSE `.TW` / TPEx `.TWO`), base 4-6 digits.
     if ((suffix === 'TW' || suffix === 'TWO') && /^\d{4,6}$/.test(base)) {
       return `${base}.${suffix}`;
     }

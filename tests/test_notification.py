@@ -640,6 +640,67 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertIn("*分析模型：gemini/gemini-2.5-flash*", out)
 
     @mock.patch("src.notification.get_config")
+    def test_generate_dashboard_report_shows_phase_decision_in_default_renderer(
+        self, mock_get_config: mock.MagicMock
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
+        service = NotificationService()
+        result = AnalysisResult(
+            code="600519",
+            name="贵州茅台",
+            sentiment_score=72,
+            trend_prediction="看多",
+            operation_advice="持有",
+            analysis_summary="等待确认",
+            dashboard={
+                "core_conclusion": {"one_sentence": "等待确认"},
+                "phase_decision": {
+                    "action_window": "盘中跟踪",
+                    "immediate_action": "等待确认",
+                    "watch_conditions": ["放量突破"],
+                    "next_check_time": "14:30",
+                    "confidence_reason": "数据质量可用",
+                    "data_limitations": ["quote: stale"],
+                },
+            },
+        )
+
+        out = service.generate_dashboard_report([result], report_date="2026-02-01")
+
+        self.assertIn("盘中决策护栏", out)
+        self.assertIn("盘中跟踪", out)
+        self.assertIn("等待确认", out)
+        self.assertIn("放量突破", out)
+        self.assertIn("quote: stale", out)
+
+    @mock.patch("src.notification.get_config")
+    def test_generate_dashboard_report_skips_context_only_phase_decision_default_renderer(
+        self, mock_get_config: mock.MagicMock
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
+        service = NotificationService()
+        result = AnalysisResult(
+            code="600519",
+            name="贵州茅台",
+            sentiment_score=72,
+            trend_prediction="看多",
+            operation_advice="持有",
+            analysis_summary="等待确认",
+            dashboard={
+                "core_conclusion": {"one_sentence": "等待确认"},
+                "phase_decision": {
+                    "phase_context": {"phase": "intraday", "market": "cn"},
+                    "watch_conditions": [],
+                    "data_limitations": [],
+                },
+            },
+        )
+
+        out = service.generate_dashboard_report([result], report_date="2026-02-01")
+
+        self.assertNotIn("盘中决策护栏", out)
+
+    @mock.patch("src.notification.get_config")
     def test_generate_dashboard_report_appends_decision_signal_excerpt_fallback(
         self, mock_get_config: mock.MagicMock
     ):
@@ -656,10 +717,12 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
 
         out = service.generate_dashboard_report([result], report_date="2026-02-01")
 
-        self.assertIn("AI 决策信号", out)
-        self.assertIn("动作: 卖出", out)
-        self.assertIn("周期: 1d", out)
-        self.assertIn("理由: 技术面走弱", out)
+        summary_section, detail_section = out.split("---", 1)
+        self.assertNotIn("AI 决策信号", summary_section)
+        self.assertIn("AI 决策信号", detail_section)
+        self.assertIn("动作: 卖出", detail_section)
+        self.assertIn("周期: 1d", detail_section)
+        self.assertIn("理由: 技术面走弱", detail_section)
 
     @mock.patch("src.notification.get_config")
     def test_generate_daily_report_appends_decision_signal_excerpt_fallback(
@@ -679,10 +742,13 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
             service = NotificationService()
             service._report_summary_only = summary_only
             out = service.generate_daily_report([result], report_date="2026-02-01")
-            self.assertEqual(out.count("AI 决策信号"), 1)
-            self.assertIn("动作: 卖出", out)
-            self.assertIn("周期: 1d", out)
-            self.assertIn("理由: 技术面走弱", out)
+            self.assertEqual(out.count("AI 决策信号"), 0 if summary_only else 1)
+            if summary_only:
+                self.assertNotIn("动作: 卖出", out)
+            else:
+                self.assertIn("动作: 卖出", out)
+                self.assertIn("周期: 1d", out)
+                self.assertIn("理由: 技术面走弱", out)
 
     @mock.patch("src.notification.get_config")
     def test_generate_wechat_dashboard_appends_decision_signal_excerpt_fallback(
@@ -702,13 +768,16 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
             service = NotificationService()
             service._report_summary_only = summary_only
             out = service.generate_wechat_dashboard([result])
-            self.assertIn("AI 决策信号", out)
-            self.assertIn("动作: 卖出", out)
-            self.assertIn("周期: 1d", out)
-            self.assertIn("理由: 技术面走弱", out)
+            self.assertEqual(out.count("AI 决策信号"), 0 if summary_only else 1)
+            if summary_only:
+                self.assertNotIn("动作: 卖出", out)
+            else:
+                self.assertIn("动作: 卖出", out)
+                self.assertIn("周期: 1d", out)
+                self.assertIn("理由: 技术面走弱", out)
 
     @mock.patch("src.notification.get_config")
-    def test_generate_wechat_summary_appends_decision_signal_excerpt(
+    def test_generate_wechat_summary_omits_decision_signal_excerpt(
         self, mock_get_config: mock.MagicMock
     ):
         mock_get_config.return_value = _make_config(report_renderer_enabled=False)
@@ -724,10 +793,8 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
 
         out = service.generate_wechat_summary([result])
 
-        self.assertEqual(out.count("AI 决策信号"), 1)
-        self.assertIn("动作: 卖出", out)
-        self.assertIn("周期: 1d", out)
-        self.assertIn("理由: 技术面走弱", out)
+        self.assertNotIn("AI 决策信号", out)
+        self.assertNotIn("动作: 卖出", out)
 
     @mock.patch("src.notification.get_config")
     def test_generate_dashboard_report_appends_decision_signal_excerpt_with_renderer(
@@ -746,10 +813,12 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
 
         out = service.generate_dashboard_report([result], report_date="2026-02-01")
 
-        self.assertIn("AI 决策信号", out)
-        self.assertIn("动作: 卖出", out)
-        self.assertIn("周期: 1d", out)
-        self.assertIn("理由: 技术面走弱", out)
+        summary_section, detail_section = out.split("---", 1)
+        self.assertNotIn("AI 决策信号", summary_section)
+        self.assertIn("AI 决策信号", detail_section)
+        self.assertIn("动作: 卖出", detail_section)
+        self.assertIn("周期: 1d", detail_section)
+        self.assertIn("理由: 技术面走弱", detail_section)
 
     @mock.patch("src.notification.get_config")
     def test_aggregate_reports_show_compact_market_status_only(self, mock_get_config: mock.MagicMock):

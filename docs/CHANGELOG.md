@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [chore] 同步上游 `ZhuLinsen/daily_stock_analysis` main（14 个 commit）。合并时保留 fork 增量：台股实时行情走 Shioaji 优先（不并入上游新增的 jp/kr/tw「yfinance-only」实时早退分支）、zh-TW 在地化分支（`_MARKET_LABELS_ZHTW`、analyzer 解析默认值、台股指数固定繁体名 + `TPEX` key）、日/韩市场标签；采纳上游：`_extract_analysis_json_object` JSON 抽取重构、`_infer_cn_exchange` 交易所推断、台股 DecisionSignal/Portfolio/Intelligence 服务层与 API 一级支持、longbridge docker 兼容版本钉定。
 - [修复] 大盘复盘修好三个失效摘要卡：①「市场情绪」不再永远写死 50，改用真实 Market Light 盘面分数（多市场按 region 输入顺序取主市场）；②「轮动与资金」「风险与观察」不再显示「查看复盘/大盘复盘」占位字，改填 Market Light 的操作指引与温度读数。
 - [修复] 大盘复盘盘面分数修正两处计分缺陷：①美股指数池含 VIX（恐慌指数），原先并入指数均值会让「恐慌飙升」被误判为 risk-on，现已将 VIX 排除在方向性指数评分之外；②指数型市场（美股，无涨跌家数/涨跌停）原先被固定 50 的缺失维度拉向中性、分数锁在 ~32.5–67.5，现按「可用维度」权重归一化重分配，使其覆盖完整 0–100 区间；全维度可用市场（A 股）分数与原公式完全一致。Market Light 的 label/guidance/temperature 补 zh-TW 繁体分支。
 - [新功能] 大盘复盘 `MARKET_REVIEW_REGION` 支持逗号组合并保留输入顺序（如 `tw,us` = 台股在前、美股在后），不再只能单市场或 `both`(全部)。`config._parse_market_review_region` 接受逗号清单（去重、过滤非法值）；`market_review._resolve_market_review_regions` 与多市场合并报告均按输入顺序输出；config_registry 选项新增 `tw,us`。`both` 行为不变。
@@ -25,6 +26,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] 修正 `AGENTS.md` 仓库速览：市场覆盖补上日/韩/台股、移除不存在的 `src/reports/`（改列实际的 `src/notification_sender/`、`src/llm/`）、常用命令指向 `Makefile`。
 - [文档] `AGENTS.md` 新增「本 fork 专属约定」段：uv/Makefile、台股 TWSE/TPEx 免 key 数据源、自动补全索引须关闭远端更新、DeepSeek 须显式设 LITELLM_MODEL、Bark 走 Doppler 注入等上游没有的约定与踩雷。
 - [新功能] 新增 zh-TW(繁体中文)报告语言与 Web UI 界面语言，覆盖报告、通知、API 与前端固定文案。
+- [修复] 修复通知 Markdown 表格转换在空单元格后将后续内容错配到错误表头的问题。
+- [修复] 将 Docker 可安装的 Longbridge SDK 版本固定为 0.2.75，避免 `longbridge>=0.2.77` 从包索引消失后导致 docker-build 失败。
+- [修复] 持仓快照今日估值改为受限并发预取多只持仓实时价，减少持仓较多时 Web 组合页面刷新超时。
+- [修复] Web 首页重新分析完成后自动切换到同一股票最新生成的报告，避免仍停留在旧报告内容。
+
+- [修复] 默认通知报告补充展示 `dashboard.phase_decision` 盘中决策护栏字段，避免与模板渲染路径展示不一致。
+- [修复] 修复 Windows 环境下 Web/Desktop 静态 JS 资源可能被识别为 `text/plain` 导致前端黑屏的问题。
+- [改进] Web 设置页新增首次启动配置检查卡，串联基础配置状态、自选股入口、模型配置入口和一次简短试跑。
+- [改进] 通知报告的分析结果摘要不再展开 AI 决策信号明细，完整信号保留在个股详情和单股报告中。
+- [新功能] #1595 P1.5 新增 Provider Cache Capability Registry，按 provider、api surface、gateway 和 verification status 建模 prompt cache 能力，未知 OpenAI-compatible route 默认 telemetry only。
+- [改进] #1595 P1 新增 prompt cache telemetry / analysis-path hints / diagnostics 最小配置，默认不改变 provider 请求 shape，并复用 LLM usage HMAC secret 做 domain-separated cache hint 派生。
+- [改进] 将 Docker Compose 默认内存建议从 512M 提升到 1G，并补充低配部署说明。
+- [改进] 每日分析 workflow 兼容误将 `STOCK_LIST` 配到同名 Environment variables 的场景，同时保留 Repository variables 作为推荐配置入口。
+- [新功能] #1772 新增台湾（台股）suffix-only 个股分析 MVP（**市场识别与数据路由层**）：手输 `.TW`（TWSE 上市）/ `.TWO`（TPEx 上柜）代码可走 YFinance 日线与近实时行情，补充市场识别、交易日历（XTAI / Asia/Taipei）、Prompt 语义与能力边界文档；加权指数 `^TWII`、柜买指数 `^TWOII`。台股股票索引/种子、Web 自动补全与告警（大盘红绿灯）市场放行作为后续 PR。
+- [文档] #1772 明确本次为台股 suffix 仅路由兼容改造，对齐 #1718 日韩模式；不涉及 provider/model/base URL/运行时配置变更；回退方式为 revert 本次改动或移除 tw 入口恢复既有行为。
+- [新功能] #1772 台股 `tw` 纳入 DecisionSignal / Portfolio / Intelligence 服务层与 API 市场枚举（VALID_MARKETS / _ALLOWED_MARKETS + Pydantic Literal + api_spec.json），修复数据层 MVP 下 tw 分析在 pipeline 自动抽取 DecisionSignal 时被 _normalize_market 静默丢弃的缺陷，并同步放行 DecisionSignal/Portfolio 前端市场类型与筛选及相关专题文档，对齐 #1720 日韩；告警（大盘红绿灯）市场仍为 cn/hk/us。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
@@ -40,6 +57,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] Web/API runtime scheduler 接管 `--serve --schedule` 后保留 `--dry-run`、`--no-notify` 等启动参数语义。
 - [改进] Web 历史报告详情不再内嵌展示 AI 建议卡片，结构化决策信号集中在 AI 建议页查询，并保留按来源报告 ID 筛选或 URL 参数精确定位入口。
 - [改进] 新增 GenerationBackend Phase 1 抽象与 LiteLLM backend 配置，默认保持普通分析、`generate_text()` 和 Agent Chat 的 LiteLLM 行为不变。
+- [新功能] #1743 Phase 2 新增显式 opt-in 的 `codex_cli` 本地 CLI generation backend，固定安全 preset、结构化错误、fallback、stream 降级和 usage unavailable contract。
+- [改进] `GENERATION_BACKEND=codex_cli` 下普通分析与大盘复盘不再因缺少 LiteLLM API Key 被误判不可用，local CLI 失败会暴露结构化错误或按配置回退 LiteLLM。
+- [改进] `codex_cli` preset 改用 `--output-last-message` 文件读取最终响应，stdout/stderr 仅作为诊断预览，避免 Codex CLI session 元数据混入主分析 JSON。
+- [修复] `codex_cli` preset 不再把 Codex CLI 同时打印到 stdout 的最终响应重复计入输出上限，也不在 `stdout_preview` 暴露重复的最终响应内容。
+- [修复] 恢复主分析 JSON 解析的宽松 schema fallback 语义，完整报告 schema 校验失败时继续按 raw JSON 解析，避免有效字段被错误降级为文本 fallback。
+- [改进] 本地 CLI backend 对诊断 stdout/stderr 与最终响应实行执行期总量上限，并为新增 generation backend 数字配置补齐最大值校验。
+- [文档] 补充本地 CLI backend 隐私边界、非离线模型说明、Docker/CI 登录态限制，以及 `codex_cli` experimental/limited 状态。
 - [修复] unsupported `GENERATION_BACKEND` 在 `generate_text()` 与大盘复盘路径中显式报配置错误，避免被当成空响应或模板报告 fallback。
 - [改进] Web 设置页明确 `AGENT_GENERATION_BACKEND=auto` 当前使用 LiteLLM 工具调用路径，避免暗示已有动态 backend 选择。
 - [改进] Web 首页“任务已存在”重复分析提示新增手动关闭按钮与 5 秒后自动消失。
@@ -53,6 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 盯盘看板新增个股价格走势折线图（点列内联展开，日/月/年切换）；新增 `GET /api/v1/stocks/{code}/trend?range=day|month|year`。台股 day/month 走 Shioaji kbars 真资料（day 今日分钟、month 近30天 resample 日线，受 kbars 30 天/次上限），year 与非台股回 yfinance 日线。
 - [改进] 看板刷新改为分批并发 + 按代码就地合并（不再整页等最慢的批次、不清空重画），并加世代守卫丢弃迟到的旧轮询结果。
 - [修复] 修正 Shioaji `snapshot.ts` / `kbars.ts` 时区：其为台北裸值（非 UTC），改按 +08:00 还原绝对时刻，修复行情 `as_of`/走势时间轴差 8 小时、`is_stale` 恒为 0（假新鲜）的问题；`shioaji_trend` 取日期改用台北日期，kbars resample 先按时间排序。
+- [修复] 修复 Web 回测运行未传分析日期范围、股票代码未归一化导致后端成功返回但结果为空的问题，并为空候选和行情不足返回诊断信息。
+- [文档] 补充回测请求链路说明：`analysis_date_from/analysis_date_to` 与 `code` 的输入边界、归一化与筛选顺序，以及历史行情不足或候选集为空时回测返回成功响应，在 `message` 与 `diagnostics`（含 `empty_reason`）中提供可诊断信息，并同步更新 `docs/full-guide.md`、`docs/full-guide_EN.md` 示例。
+- [修复] 回测代码匹配新增非法市场后缀/长度兜底：如 `600519.HK`、`600519.SZ`、`SH000001` 不再静默回落到其它有效代码，并在日期筛选重跑时对齐旧回测结果的分析日期，避免历史快照日期命中但结果列表仍为空。
 
 ## [3.23.0] - 2026-06-20
 
