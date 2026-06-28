@@ -161,8 +161,14 @@ describe('UiLanguageContext', () => {
     const toggle = screen.getByRole('button', { name: '切换界面语言' });
     expect(screen.getByText('界面语言')).toBeInTheDocument();
 
+    // 三语循环 zh → zh-TW → en（本 fork 新增繁体）：首点 zh → zh-TW
     fireEvent.click(toggle);
+    expect(localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('zh-TW');
+    expect(screen.getByRole('button', { name: '切換介面語言' })).toBeInTheDocument();
+    expect(screen.getByText('繁體中文')).toBeInTheDocument();
 
+    // 再点一次 zh-TW → en
+    fireEvent.click(screen.getByRole('button', { name: '切換介面語言' }));
     expect(localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('en');
     expect(screen.getByRole('button', { name: 'Switch UI language' })).toBeInTheDocument();
     expect(screen.getByText('English')).toBeInTheDocument();
