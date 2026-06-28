@@ -29,6 +29,7 @@ from src.data.stock_mapping import STOCK_NAME_MAP, is_meaningful_stock_name
 from src.services.run_diagnostics import record_provider_run, record_provider_run_started
 from .fundamental_adapter import AkshareFundamentalAdapter
 from .yfinance_fundamental_adapter import YfinanceFundamentalAdapter
+from .twse_fundamental_adapter import TwseFundamentalAdapter
 from .realtime_types import CircuitBreaker
 
 # 配置日志
@@ -678,6 +679,8 @@ class DataFetcherManager:
             self._init_default_fetchers()
         self._fundamental_adapter = AkshareFundamentalAdapter()
         self._yfinance_fundamental_adapter = YfinanceFundamentalAdapter()
+        # 台股(.TW/.TWO) yfinance 不返回 PE/PB，用 TWSE/TPEx 免金钥估值快照补全。
+        self._twse_fundamental_adapter = TwseFundamentalAdapter()
         self._tickflow_fetcher = None
         self._tickflow_api_key: Optional[str] = None
         self._tickflow_lock = RLock()
@@ -2916,17 +2919,48 @@ class DataFetcherManager:
             "total_mv": getattr(quote_payload, "total_mv", None) if quote_payload else None,
             "circ_mv": getattr(quote_payload, "circ_mv", None) if quote_payload else None,
         }
+        # 台股(.TW/.TWO)：yfinance quote 不带 PE/PB，用 TWSE/TPEx 免金钥估值快照补全缺失字段。
+        # 全市场快照 + TTL 缓存（一次抓取覆盖当批所有台股）、fail-open，不影响其他市场与看板路径。
+        # 走 _run_with_retry 受 stage 预算约束：冷抓超时被调用方放弃（返回空，背景仍会暖缓存供后续命中），
+        # 避免补值绕过 fundamental 8s/3s 预算拖垮整阶段（adapter 内 socket timeout 仅是兜底下界）。
+        twse_valuation_used = False
+        twse_valuation_ms = 0
+        if market == "tw" and (
+            valuation_payload["pe_ratio"] is None or valuation_payload["pb_ratio"] is None
+        ):
+            twse_timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
+            if twse_timeout > 0:
+                twse_val, _twse_err, twse_valuation_ms = self._run_with_retry(
+                    lambda: self._twse_fundamental_adapter.get_valuation(stock_code),
+                    twse_timeout,
+                    "fundamental_valuation_twse",
+                )
+            else:
+                twse_val = {}
+            if not isinstance(twse_val, dict):
+                twse_val = {}
+            for field in ("pe_ratio", "pb_ratio"):
+                if valuation_payload.get(field) is None and twse_val.get(field) is not None:
+                    valuation_payload[field] = twse_val[field]
+                    twse_valuation_used = True
         valuation_status = self._infer_block_status(
             valuation_payload,
-            "partial" if quote_payload is not None else "not_supported",
+            "partial" if (quote_payload is not None or twse_valuation_used) else "not_supported",
         )
         if valuation_status == "partial" and valuation_err and not self._has_meaningful_payload(valuation_payload):
             valuation_status = "failed"
+        valuation_source_entries = [
+            {"provider": "realtime_quote", "result": valuation_status, "duration_ms": valuation_ms}
+        ]
+        if twse_valuation_used:
+            valuation_source_entries.append(
+                {"provider": "twse_fundamental", "result": valuation_status, "duration_ms": twse_valuation_ms}
+            )
         result_ctx["valuation"] = self._build_fundamental_block(
             valuation_status,
             valuation_payload,
             self._normalize_source_chain(
-                [{"provider": "realtime_quote", "result": valuation_status, "duration_ms": valuation_ms}],
+                valuation_source_entries,
                 "realtime_quote",
                 valuation_status,
                 valuation_ms,
@@ -2961,13 +2995,47 @@ class DataFetcherManager:
         earnings_payload = bundle_payload.get("earnings", {}) if isinstance(bundle_payload.get("earnings"), dict) else {}
         belong_boards = bundle_payload.get("belong_boards") if isinstance(bundle_payload.get("belong_boards"), list) else []
 
+        # 台股(.TW/.TWO)：一律附上 TWSE/TPEx 免金钥月营收（monthly_revenue / monthly_revenue_yoy /
+        # revenue_month）——月营收是台股最受重视的即时基本面指标，即使 yfinance 已有年度成长也值得并列。
+        # 另用月营收 YoY 兜底 yfinance 缺失的 revenue_yoy。走 _run_with_retry 受 stage 预算约束、fail-open。
+        growth_chain = bundle_chain
+        if market == "tw":
+            growth_timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
+            twse_growth, _g_err, twse_growth_ms = (
+                self._run_with_retry(
+                    lambda: self._twse_fundamental_adapter.get_growth(stock_code),
+                    growth_timeout,
+                    "fundamental_growth_twse",
+                )
+                if growth_timeout > 0
+                else ({}, "fundamental stage timeout", 0)
+            )
+            if not isinstance(twse_growth, dict):
+                twse_growth = {}
+            twse_growth_used = False
+            # 仅在有「实际月营收数字」时并入月营收三栏（distinct 字段，与 yfinance 年度 revenue_yoy 区分）。
+            # 不回填通用 revenue_yoy：月 YoY 与年度成长口径不同，回填会被下游「营收同比」标签误读为年增。
+            # 也避免「只剩 revenue_month 月份字串、无任何数值」被 _has_meaningful_payload 误判为 ok。
+            if twse_growth.get("monthly_revenue") is not None:
+                for field in ("monthly_revenue", "monthly_revenue_yoy", "revenue_month"):
+                    if twse_growth.get(field) is not None:
+                        growth_payload[field] = twse_growth[field]
+                twse_growth_used = True
+            if twse_growth_used:
+                growth_chain = list(bundle_chain) + self._normalize_source_chain(
+                    [{"provider": "twse_fundamental", "result": "partial", "duration_ms": twse_growth_ms}],
+                    "twse_fundamental",
+                    "partial",
+                    twse_growth_ms,
+                )
+
         growth_status = self._infer_block_status(growth_payload, str(bundle_payload.get("status", "not_supported")))
         earnings_status = self._infer_block_status(earnings_payload, str(bundle_payload.get("status", "not_supported")))
 
         result_ctx["growth"] = self._build_fundamental_block(
             growth_status,
             growth_payload,
-            bundle_chain,
+            growth_chain,
             list(adapter_errors),
         )
         result_ctx["earnings"] = self._build_fundamental_block(
