@@ -2151,9 +2151,34 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 .limit(limit)
             )
             results = session.execute(data_query).scalars().all()
-            
+
             return list(results), total
-    
+
+    def get_analysis_counts_by_code(
+        self, codes: Optional[List[str]] = None
+    ) -> Dict[str, int]:
+        """一次 GROUP BY 取 code 的全量分析次数 {code: count}。
+
+        用于个股栏批量计数，替代逐档 get_analysis_history_paginated(limit=1) 的 N+1。
+        语义与逐档计数一致：按 `code` 精确分组、全时段（无日期过滤）；调用方按
+        `_history_code_filter_candidates` 的候选 code 列表在内存求和（等价于原 `code IN (candidates)`）。
+        传入 `codes` 时只统计这些 code（应传当前页所展示股票的候选 code 集合），把聚合范围
+        收敛到展示范围，避免对全表做无界扫描 / 物化全部 distinct code。codes 为空列表 → 返回 {}。
+        """
+        from sqlalchemy import func
+
+        if codes is not None:
+            wanted = [c for c in codes if c]
+            if not wanted:
+                return {}
+        with self.get_session() as session:
+            stmt = select(AnalysisHistory.code, func.count(AnalysisHistory.id))
+            if codes is not None:
+                stmt = stmt.where(AnalysisHistory.code.in_(wanted))
+            stmt = stmt.group_by(AnalysisHistory.code)
+            rows = session.execute(stmt).all()
+            return {code: int(count) for code, count in rows if code}
+
     def get_analysis_history_by_id(self, record_id: int) -> Optional[AnalysisHistory]:
         """
         根据数据库主键 ID 查询单条分析历史记录

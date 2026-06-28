@@ -260,6 +260,33 @@ class AlertRepository:
                 .limit(1)
             ).scalar_one_or_none()
 
+    def get_rule_cooldown_summaries(
+        self,
+        keys: List[Tuple[int, str, Optional[str]]],
+    ) -> Dict[Tuple[int, str, Optional[str]], AlertCooldownRecord]:
+        """批量取一组 (rule_id, target, severity) 的最新冷却记录，单次查询替代逐条 N+1。
+
+        语义与 get_rule_cooldown_summary 一致：每个 key 取 updated_at（再 id）降序的第一条。
+        一次按 rule_id IN (...) 拉回该页所有冷却行（每规则行数很少），在内存按 key 取最新。
+        """
+        if not keys:
+            return {}
+        wanted = set(keys)
+        rule_ids = sorted({k[0] for k in wanted})
+        with self.db.get_session() as session:
+            rows = session.execute(
+                select(AlertCooldownRecord)
+                .where(AlertCooldownRecord.rule_id.in_(rule_ids))
+                .order_by(desc(AlertCooldownRecord.updated_at), desc(AlertCooldownRecord.id))
+            ).scalars().all()
+        # rows 已按 updated_at,id 降序 → 每个 key 首次出现即为最新
+        out: Dict[Tuple[int, str, Optional[str]], AlertCooldownRecord] = {}
+        for row in rows:
+            key = (row.rule_id, row.target, row.severity)
+            if key in wanted and key not in out:
+                out[key] = row
+        return out
+
     def list_triggers(
         self,
         *,

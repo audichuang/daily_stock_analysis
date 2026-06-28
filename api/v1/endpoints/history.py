@@ -280,9 +280,26 @@ def get_stock_bar(
             if norm_code not in seen or record.id > seen[norm_code].id:
                 seen[norm_code] = record
 
+        # 先截到 limit 再构建，避免为丢弃的股票做无谓工作（保持原插入顺序）
+        selected_records = list(seen.values())[:limit]
+
+        # 预计算本页所展示股票的候选 code，并把计数聚合收敛到这些 code（而非全表 GROUP BY）：
+        # 一次 SELECT code,COUNT(*) WHERE code IN(本页候选) GROUP BY code，替代逐档 N+1 计数查询，
+        # 且聚合范围 = 展示范围，避免高基数下的无界扫描。
+        record_candidates: Dict[int, List[str]] = {}
+        all_candidates: set = set()
+        for record in selected_records:
+            cands = HistoryService._history_code_filter_candidates(
+                service._display_stock_code(record.code)
+            )
+            record_candidates[record.id] = cands
+            all_candidates.update(cands)
+        analysis_counts_by_code = db_manager.get_analysis_counts_by_code(
+            codes=list(all_candidates)
+        )
+
         items = []
-        for norm_code in seen:
-            record = seen[norm_code]
+        for record in selected_records:
             raw_result = parse_json_field(getattr(record, "raw_result", None))
             model_used = raw_result.get("model_used") if isinstance(raw_result, dict) else None
             action_fields = build_action_fields(
@@ -298,10 +315,12 @@ def get_stock_bar(
             )
 
             display_stock_code = service._display_stock_code(record.code)
-            analysis_count = db_manager.get_analysis_history_paginated(
-                code=HistoryService._history_code_filter_candidates(display_stock_code),
-                limit=1,
-            )[1]
+            # 与原 get_analysis_history_paginated(code=candidates)[1] 等价：候选 code 计数求和
+            # （候选已在上方预计算，避免重复计算）
+            analysis_count = sum(
+                analysis_counts_by_code.get(candidate, 0)
+                for candidate in record_candidates.get(record.id, ())
+            )
             items.append(
                 StockBarItem(
                     id=record.id,
@@ -324,7 +343,7 @@ def get_stock_bar(
                 )
             )
 
-        items = items[:limit]
+        # selected_records 已截到 limit，items 与之等长，无需再切
         return StockBarResponse(total=len(items), items=items)
 
     except Exception as e:

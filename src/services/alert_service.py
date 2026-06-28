@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.agent.events import (
     EventMonitor,
@@ -162,8 +162,28 @@ class AlertService:
             page=page,
             page_size=page_size,
         )
+        # 批量预取冷却摘要：一次查询替代逐条 N+1（每条规则原本一次 cooldown 查询 + 各自 session）。
+        # None = 预取失败（回退逐条）；{} = 预取成功但无冷却记录（不应回退，否则又变 N+1）。
+        cooldown_records: Optional[Dict[Any, Any]] = {}
+        try:
+            keys = [self._cooldown_key(row) for row in rows]
+            cooldown_records = self.repo.get_rule_cooldown_summaries(keys)
+        except Exception as exc:  # 预取失败 → None → _serialize_rule 逐条查询兜底
+            logger.warning(
+                "[AlertService] Batch cooldown prefetch failed, falling back per-rule: %s",
+                self._sanitize_text(str(exc) or "cooldown prefetch failed"),
+            )
+            cooldown_records = None
+        items = []
+        for row in rows:
+            summary = None
+            if cooldown_records is not None:
+                summary = self._serialize_cooldown_summary(
+                    cooldown_records.get(self._cooldown_key(row))
+                )
+            items.append(self._serialize_rule(row, cooldown_summary=summary))
         return {
-            "items": [self._serialize_rule(row) for row in rows],
+            "items": items,
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -232,6 +252,25 @@ class AlertService:
     ) -> List[Dict[str, Any]]:
         semaphore = asyncio.Semaphore(8)
         daily_cache: Dict[Any, Any] = {}
+
+        # 台股批次预热：把多目标价格类规则的 .TW/.TWO 代码一次性 prime_snapshots，
+        # 随后各 symbol 的实时取价命中 5s TTL 缓存，避免逐档 Shioaji 锁序列化快照（看板同款）。
+        # 仅 price / price_change 规则消费实时快照；volume / technical 走日线，不预热（避免无谓
+        # Shioaji 登入+批次快照往返、白占 session 额度）。
+        try:
+            tw_codes = []
+            for payload in payloads:
+                if not isinstance(payload.rule, (PriceAlert, PriceChangeAlert)):
+                    continue
+                sc = getattr(payload.rule, "stock_code", None)
+                if sc and str(sc).strip().upper().endswith((".TW", ".TWO")):
+                    tw_codes.append(str(sc).strip())
+            if len(tw_codes) > 1:
+                from data_provider.shioaji_fetcher import prime_snapshots
+
+                await asyncio.to_thread(prime_snapshots, tw_codes)
+        except Exception as exc:  # 预热失败不影响评估（per-symbol 单档兜底）
+            logger.debug("[AlertService] Shioaji dry-run prime skipped: %s", exc)
 
         async def _evaluate_one(payload: RuntimeAlertPayload) -> Dict[str, Any]:
             async with semaphore:
@@ -1147,9 +1186,16 @@ class AlertService:
         canonical_params = json.dumps(parameters or {}, ensure_ascii=False, sort_keys=True)
         return f"{target_scope}:{target}:{alert_type}:{canonical_params}"
 
-    def _serialize_rule(self, row: AlertRuleRecord) -> Dict[str, Any]:
+    def _serialize_rule(
+        self,
+        row: AlertRuleRecord,
+        cooldown_summary: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         data = self._serialize_rule_base(row)
-        cooldown_summary = self._cooldown_summary_for_rule(row)
+        # 列表批量场景由调用方预取并传入 cooldown_summary（避免逐条 N+1）；
+        # 单条场景（get_rule 等）不传 → 退回逐条查询，行为不变。
+        if cooldown_summary is None:
+            cooldown_summary = self._cooldown_summary_for_rule(row)
         data.update({
             "last_triggered_at": cooldown_summary.get("last_triggered_at"),
             "cooldown_until": cooldown_summary.get("cooldown_until"),
@@ -1174,17 +1220,27 @@ class AlertService:
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
 
+    @staticmethod
+    def _cooldown_key(row: AlertRuleRecord) -> Tuple[int, str, Optional[str]]:
+        """规则对应的冷却查询键 (rule_id, target, severity)，列表批量与单条共用同一语义。"""
+        cooldown_target = (
+            portfolio_effective_target(str(row.target))
+            if str(row.target_scope) == "portfolio_account"
+            else str(row.target)
+        )
+        return (
+            int(row.id),
+            cooldown_target,
+            str(row.severity) if row.severity else None,
+        )
+
     def _cooldown_summary_for_rule(self, row: AlertRuleRecord) -> Dict[str, Any]:
         try:
-            cooldown_target = (
-                portfolio_effective_target(str(row.target))
-                if str(row.target_scope) == "portfolio_account"
-                else str(row.target)
-            )
+            rule_id, cooldown_target, severity = self._cooldown_key(row)
             cooldown = self.repo.get_rule_cooldown_summary(
-                rule_id=int(row.id),
+                rule_id=rule_id,
                 target=cooldown_target,
-                severity=str(row.severity) if row.severity else None,
+                severity=severity,
             )
         except Exception as exc:
             logger.warning(
