@@ -251,8 +251,8 @@ class PortfolioServiceTestCase(unittest.TestCase):
                 self._fetcher_call_lock = threading.Lock()
                 manager_instances.append(self)
 
-            def get_realtime_quote(self, symbol: str, log_final_failure: bool = True) -> SimpleNamespace:
-                del log_final_failure
+            def get_realtime_quote(self, symbol: str, log_final_failure: bool = True, **kwargs) -> SimpleNamespace:
+                del log_final_failure, kwargs
                 with self._fetcher_call_lock:
                     with lock:
                         called_symbols.append(symbol)
@@ -320,8 +320,8 @@ class PortfolioServiceTestCase(unittest.TestCase):
                 # "cache fully filled" signal the previous implementation trusted.
                 return len(stock_codes)
 
-            def get_realtime_quote(self, symbol: str, log_final_failure: bool = True) -> SimpleNamespace:
-                del log_final_failure
+            def get_realtime_quote(self, symbol: str, log_final_failure: bool = True, **kwargs) -> SimpleNamespace:
+                del log_final_failure, kwargs
                 with self._fetcher_call_lock:
                     with lock:
                         fetch_state["active"] += 1

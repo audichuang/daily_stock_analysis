@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] 续修两处与看板同类的「丢弃式」慢响应：①`/trend` 月/年线走 `get_history_data(include_name=False)`，不再为被丢弃的名称调用 `get_stock_name`（未入本地索引的美/港代码原会触发一次 ~1-3s 实时行情仅为取名）；②Portfolio `/snapshot` 持仓实时价改 `skip_supplement=True`，台股有 Shioaji 报价时跳过仅补市值（快照不展示）的 yfinance 往返。皆为丢弃无用工作、行为不变（Shioaji 无报价仍降级 yfinance）。
 - [改进] 实时看板批量取价大幅提速（6 档 ~2.4s → 休市 ~0.06s / 盘中预估 ~0.4-0.7s）：①`StockService.get_realtime_quotes` 由逐档 sequential 改 bounded ThreadPoolExecutor(max 8) 并发；②`YfinanceFetcher.get_realtime_quote` 取名逻辑重排——本地索引/映射有名即不再调用重量级 `ticker.info`(quoteSummary ~1-3s)，仅本地查无名才回退；③`ShioajiFetcher.prime_snapshots` 一次 `api.snapshots([全部台股])` 预热短 TTL 缓存，per-code 取价命中即零网络/零锁/零熔断交互（取代被 `_SNAPSHOT_LOCK` 逐档序列化的单档快照）；④台股 Shioaji 已有报价时看板路径 `skip_supplement` 跳过仅补市值（看板不展示）的 yfinance 往返。Shioaji 不可用/无报价时仍自动降级 yfinance；单档/分析路径默认仍补充市值，行为不变。
 - [新功能] 台股盘中看盘细节增强（白天看盘视角）：实时看板/报价 API 接上 Shioaji snapshot/contract 已返回但此前丢弃的关键字段——均价(VWAP，站上偏多/跌破偏空的多空分界)、涨跌停价 limit_up/limit_down 及距板%(±10% 板，触及板诚实显示「触及涨/跌停」而非「锁死」)、最佳一档委买委卖价+量(top-of-book，非五档)、最后一笔内外盘方向(last-tick，非累计内外盘比)、量比(开盘初段偏低失真，前端附提示)、振幅、现股当沖资格 day_trade(Yes/OnlyBuy/No)。看板新增「均价」列(多空着色)、价格列距板角标、名称旁「不可当沖/仅现沖买」示警角标，展开列新增「盘口明细」区块；贯穿 realtime_types→shioaji_fetcher→stock_service→StockQuote schema→web。
 - [新功能] 台股交易时段感知：`trading_calendar` 收盘集合竞价窗口加入 `tw:5`，13:25–13:30 收盘前集合竞价正确标记为 CLOSING_AUCTION（XTAI 13:30 收盘、无午休）；`decision_signal_service` intraday TTL 加入 `tw:4.5`（连续竞价 ~4.42h），避免信号在收盘集合竞价前过早过期。

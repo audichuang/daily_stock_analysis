@@ -182,7 +182,8 @@ class StockService:
             return self._intraday_trend(stock_code), "yfinance(intraday,可能延迟)"
         days = 365 if range_ == "year" else 30
         try:
-            hist = self.get_history_data(stock_code, days=days)
+            # 走势折线只用 close 序列，不需要股票名 → include_name=False 省一次取名往返
+            hist = self.get_history_data(stock_code, days=days, include_name=False)
         except Exception as e:
             logger.warning(f"走势({range_}) {stock_code} 取历史失败: {e}")
             return [], "yfinance(daily)"
@@ -225,7 +226,8 @@ class StockService:
         self,
         stock_code: str,
         period: str = "daily",
-        days: int = 30
+        days: int = 30,
+        include_name: bool = True,
     ) -> Dict[str, Any]:
         """
         获取股票历史行情
@@ -259,8 +261,9 @@ class StockService:
                 logger.warning(f"获取 {stock_code} 历史数据失败")
                 return {"stock_code": stock_code, "period": period, "data": []}
             
-            # 获取股票名称
-            stock_name = manager.get_stock_name(stock_code)
+            # 获取股票名称：走势折线（include_name=False）丢弃名称，跳过 get_stock_name——
+            # 后者对未入本地索引的代码会 allow_realtime 触发一次 ~1-3s 实时行情仅为取名（白费）。
+            stock_name = manager.get_stock_name(stock_code) if include_name else None
             
             # 转换为响应格式
             data = []

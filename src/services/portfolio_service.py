@@ -1168,7 +1168,11 @@ class PortfolioService:
             from data_provider.base import DataFetcherManager
 
             fetcher_manager = DataFetcherManager()
-            quote = fetcher_manager.get_realtime_quote(symbol, log_final_failure=False)
+            # 持仓快照只读 price + source（见下），跳过仅补市值的 yfinance 往返（台股有 Shioaji 报价时）；
+            # 与看板 /quotes 同一 skip 模式。Shioaji 无报价时 base.py 仍自动降级 yfinance 取价。
+            quote = fetcher_manager.get_realtime_quote(
+                symbol, log_final_failure=False, skip_supplement=True
+            )
         except Exception as exc:
             logger.warning("Failed to fetch realtime portfolio price for %s: %s", symbol, exc)
             return None, None

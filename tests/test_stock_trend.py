@@ -34,8 +34,9 @@ def test_get_price_trend_month_falls_back_to_daily_history(monkeypatch):
     monkeypatch.setattr(sf, "shioaji_trend", lambda code, rng: None)  # Shioaji 不可用 -> yfinance
     captured = {}
 
-    def fake_history(self, stock_code, period="daily", days=30):
+    def fake_history(self, stock_code, period="daily", days=30, include_name=True):
         captured["days"] = days
+        captured["include_name"] = include_name
         return {"data": [
             {"date": "2026-06-01", "close": 100.0},
             {"date": "2026-06-02", "close": None},   # 缺值跳过
@@ -45,6 +46,7 @@ def test_get_price_trend_month_falls_back_to_daily_history(monkeypatch):
     monkeypatch.setattr(StockService, "get_history_data", fake_history)
     points, source = StockService().get_price_trend("2330.TW", "month")
     assert captured["days"] == 30
+    assert captured["include_name"] is False  # 走势折线不取名，省一次 get_stock_name 往返
     assert [p["price"] for p in points] == [100.0, 102.0]  # None 被过滤
     assert source.startswith("yfinance")
 
@@ -54,7 +56,7 @@ def test_get_price_trend_year_uses_365_days(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         StockService, "get_history_data",
-        lambda self, stock_code, period="daily", days=30: captured.update(days=days) or {"data": []},
+        lambda self, stock_code, period="daily", days=30, include_name=True: captured.update(days=days) or {"data": []},
     )
     points, source = StockService().get_price_trend("2330.TW", "year")
     assert captured["days"] == 365
@@ -63,7 +65,7 @@ def test_get_price_trend_year_uses_365_days(monkeypatch):
 def test_get_price_trend_history_failure_returns_empty(monkeypatch):
     monkeypatch.setattr(sf, "shioaji_trend", lambda code, rng: None)
 
-    def boom(self, stock_code, period="daily", days=30):
+    def boom(self, stock_code, period="daily", days=30, include_name=True):
         raise RuntimeError("source down")
 
     monkeypatch.setattr(StockService, "get_history_data", boom)
