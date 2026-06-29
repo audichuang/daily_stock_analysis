@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 台股即时看板涨跌停价改由 live 参考价(pre_close)算 ±10% + tick 对齐(`tw_price_limits`)，取代可能与当日参考价不同步的 shioaji `contract.limit_up/limit_down` 静态值（实测 2330 contract 给 2625/2155，昨收 2340 的正确板价应为 2570/2110）；连带修正「距涨跌停」距离与展开明细的板价显示。
+- [改进] 即时看板「距涨跌停」仅在距任一侧板 ≤3% 时显示（常态离板远是噪音，当冲接近板才有意义）；走势图 X 轴补回时间刻度（日→时:分 / 月→月/日 / 年→年/月），tooltip 日期改用主题色（修复深色模式下日期文字看不到）。
+
 - [新功能] 新增互动式价值研究 skill（`.claude/skills/value-research`）与 `scripts/financial_rigor.py` 验算工具（vendor 自 xbtlin/ai-berkshire，MIT，纯 stdlib）：对单档做价值投资式深度研究，强制 financial_rigor 验算估值（市值勾稽/PE-PB-ROE/三情境/多源交叉/Benford）、套四大师视角，结论可接回既有 alert 监控。仅互动模式、不进每日排程，不改动 data_provider/agent/pipeline。
 - [新功能] 台股(.TW/.TWO)月营收补全：`TwseFundamentalAdapter` 新增 `get_growth`，用 TWSE `t187ap05_L`（上市）+ TPEx `mopsfin_t187ap05_O`（上柜）免金钥月营收快照，为台股 growth 区块**一律并列** `monthly_revenue`/`monthly_revenue_yoy`/`revenue_month`（月营收是台股最受重视的即时指标，与 yfinance 年度成长并存），并在 yfinance 缺 `revenue_yoy` 时用月营收 YoY 兜底。走 `_run_with_retry` 受 stage 预算约束、fail-open、4h 缓存。
 - [改进] 价值研究相关 skill（industry-funnel / earnings-review）补充服务前置说明（用到 `curl localhost:8000` 的步骤需先 `make serve`）。

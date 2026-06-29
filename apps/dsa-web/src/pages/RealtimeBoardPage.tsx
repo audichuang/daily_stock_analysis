@@ -45,6 +45,26 @@ function freshnessOf(item?: StockQuoteBatchItem): Freshness {
 }
 
 // 内联走势图：自管 range + 数据；展开时按 code 懒加载
+// 距涨跌停板：仅在距任一侧 <= 此百分比时显示（当冲接近板才有意义，常态显示是噪音）。
+const LIMIT_NEAR_PCT = 3;
+
+const _pad = (n: number) => String(n).padStart(2, '0');
+// X 轴刻度：日→时:分、月→月/日、年→年/月。
+const formatTrendTick = (raw: string, range: TrendRange): string => {
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  if (range === 'day') return `${_pad(d.getHours())}:${_pad(d.getMinutes())}`;
+  if (range === 'month') return `${d.getMonth() + 1}/${d.getDate()}`;
+  return `${d.getFullYear()}/${_pad(d.getMonth() + 1)}`;
+};
+// Tooltip 标签：日范围显示到分钟，月/年只到日期。
+const formatTrendLabel = (raw: string, range: TrendRange): string => {
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  const date = `${d.getFullYear()}/${_pad(d.getMonth() + 1)}/${_pad(d.getDate())}`;
+  return range === 'day' ? `${date} ${_pad(d.getHours())}:${_pad(d.getMinutes())}` : date;
+};
+
 const TrendChart: React.FC<{ code: string }> = ({ code }) => {
   const { t } = useUiLanguage();
   const [range, setRange] = useState<TrendRange>('month');
@@ -101,7 +121,15 @@ const TrendChart: React.FC<{ code: string }> = ({ code }) => {
       ) : (
         <ResponsiveContainer width="100%" height={180}>
           <LineChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
-            <XAxis dataKey="t" tick={false} axisLine={false} height={4} />
+            <XAxis
+              dataKey="t"
+              tick={{ fontSize: 10, fill: 'hsl(var(--secondary-text))' }}
+              axisLine={false}
+              tickLine={false}
+              height={18}
+              minTickGap={44}
+              tickFormatter={(v) => formatTrendTick(String(v), range)}
+            />
             <YAxis
               domain={['auto', 'auto']}
               width={52}
@@ -109,8 +137,17 @@ const TrendChart: React.FC<{ code: string }> = ({ code }) => {
               tickFormatter={(v) => Number(v).toFixed(1)}
             />
             <Tooltip
-              labelFormatter={(label) => formatDateTime(String(label))}
+              labelFormatter={(label) => formatTrendLabel(String(label), range)}
               formatter={(v) => [Number(v).toFixed(2), t('board.col.price')]}
+              contentStyle={{
+                background: 'hsl(var(--popover))',
+                border: '1px solid hsl(var(--border))',
+                borderRadius: 8,
+                fontSize: 12,
+                padding: '6px 10px',
+              }}
+              labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, marginBottom: 2 }}
+              itemStyle={{ color: 'hsl(var(--foreground))' }}
             />
             <Line
               type="monotone"
@@ -210,6 +247,8 @@ const RealtimeBoardPage: React.FC = () => {
     if (price <= q.limitDown) return { text: t('board.limit.hitDown'), cls: 'text-emerald-500 font-medium' };
     const toUp = ((q.limitUp - price) / price) * 100;
     const toDown = ((price - q.limitDown) / price) * 100;
+    // 离板远（两侧都 >3%）时不显示——对当冲只有接近板才有意义，常态显示是噪音。
+    if (toUp > LIMIT_NEAR_PCT && toDown > LIMIT_NEAR_PCT) return null;
     return toUp <= toDown
       ? { text: `${t('board.limit.toUp')} ${toUp.toFixed(1)}%`, cls: 'text-red-400' }
       : { text: `${t('board.limit.toDown')} ${toDown.toFixed(1)}%`, cls: 'text-emerald-400' };

@@ -27,6 +27,7 @@ DataFetcherManager 零网络代价跳过，台股自动降级 yfinance。
 
 import importlib.util
 import logging
+import math
 import os
 import threading
 import time
@@ -46,6 +47,37 @@ from .realtime_types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# 台股升降单位（价格区间 -> tick）；>=1000 为 5。
+_TW_TICK_BANDS = ((10.0, 0.01), (50.0, 0.05), (100.0, 0.1), (500.0, 0.5), (1000.0, 1.0))
+
+
+def _tw_tick_size(price: float) -> float:
+    for bound, tick in _TW_TICK_BANDS:
+        if price < bound:
+            return tick
+    return 5.0
+
+
+def tw_price_limits(reference: Optional[float]) -> tuple[Optional[float], Optional[float]]:
+    """由参考价（昨收/参考价）算台股当日涨跌停（±10%，按 tick 对齐：涨停向下取、跌停向上取）。
+
+    用 live 推得的参考价计算，取代 shioaji contract.limit_up/limit_down——后者来自每日
+    contract 静态档，若缓存过期会与当日参考价不同步（实测 2330 contract 给 2625/2155，
+    而昨收 2340 的正确涨跌停是 2570/2110）。台股 ±10% 规则对一般股可靠；IPO 前 5 日无涨跌停
+    等特例不适用，但本计算仅供盘口显示，且优于过期的 contract 值。
+    """
+    if not reference or reference <= 0:
+        return None, None
+    up_raw = reference * 1.1
+    down_raw = reference * 0.9
+    up_tick = _tw_tick_size(up_raw)
+    down_tick = _tw_tick_size(down_raw)
+    limit_up = math.floor(up_raw / up_tick + 1e-9) * up_tick     # 不超过 +10%
+    limit_down = math.ceil(down_raw / down_tick - 1e-9) * down_tick  # 不低于 -10%
+    return round(limit_up, 2), round(limit_down, 2)
+
 
 _BREAKER_KEY = "shioaji_login"
 _LOGIN_TIMEOUT_S = 20.0
@@ -452,6 +484,12 @@ class ShioajiFetcher(BaseFetcher):
         if high is not None and low is not None and pre_close:
             amplitude = round((high - low) / pre_close * 100, 2)
         name = (getattr(contract, "name", "") or "") if contract is not None else ""
+        # 涨跌停：用 live 参考价(pre_close)算 ±10%；pre_close 缺失才回退 contract 静态值。
+        _limit_up, _limit_down = tw_price_limits(pre_close)
+        if _limit_up is None and contract is not None:
+            _limit_up = safe_float(getattr(contract, "limit_up", None))
+        if _limit_down is None and contract is not None:
+            _limit_down = safe_float(getattr(contract, "limit_down", None))
         return UnifiedRealtimeQuote(
             code=stock_code,
             name=name,
@@ -477,8 +515,9 @@ class ShioajiFetcher(BaseFetcher):
             best_ask=safe_float(getattr(snap, "sell_price", None)),
             best_ask_volume=safe_int(getattr(snap, "sell_volume", None)),
             last_tick_type=safe_int(getattr(snap, "tick_type", None)),
-            # contract 静态字段（开盘即定，全时段可靠）
-            limit_up=safe_float(getattr(contract, "limit_up", None)) if contract is not None else None,
-            limit_down=safe_float(getattr(contract, "limit_down", None)) if contract is not None else None,
+            # 涨跌停：优先用 live 参考价(pre_close)算 ±10%（tick 对齐），contract 静态值仅兜底
+            # （contract 缓存可能与当日参考价不同步，实测会给出错误的板价）。
+            limit_up=_limit_up,
+            limit_down=_limit_down,
             day_trade=_normalize_day_trade(getattr(contract, "day_trade", None)) if contract is not None else None,
         )
