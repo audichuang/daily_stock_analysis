@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
   stocksApi,
+  type MarketIndex,
   type StockQuote,
   type StockQuoteBatchItem,
   type TrendPoint,
@@ -172,11 +173,19 @@ const RealtimeBoardPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ParsedApiError | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [indices, setIndices] = useState<MarketIndex[]>([]);
   const codesRef = useRef<string[]>([]);
   const refreshSeqRef = useRef(0); // 世代守卫：丢弃旧轮询迟到的 chunk，避免覆盖更新的数据
 
   // 分批并发刷新：每批回来就只 merge 那几列（in-place），不整页清空、不等最慢的
   const refresh = useCallback(() => {
+    // 大盘指数（盯盘辅助，失败不影响个股；沿用同一刷新 timer，不另开）
+    stocksApi
+      .getIndices('tw')
+      .then(setIndices)
+      .catch(() => {
+        /* 指数为辅助资料，失败保留旧值、不报错 */
+      });
     const seq = ++refreshSeqRef.current;
     const cs = codesRef.current;
     for (let i = 0; i < cs.length; i += CHUNK) {
@@ -350,6 +359,29 @@ const RealtimeBoardPage: React.FC = () => {
     <AppPage className="space-y-5">
       <PageHeader title={t('board.title')} description={t('board.delayNote')} actions={refreshButton} />
       {error ? <ApiErrorAlert error={error} onDismiss={() => setError(null)} /> : null}
+      {indices.length > 0 ? (
+        <Card variant="bordered" padding="md">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-sm font-medium">{t('board.indices.title')}</span>
+            <span className="text-xs text-secondary-text" title={t('board.indices.delay')}>
+              {t('board.source.delayed')}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-x-8 gap-y-2">
+            {indices.map((idx) => (
+              <div key={idx.code} className="inline-flex items-baseline gap-2 tabular-nums">
+                <span className="text-sm text-secondary-text">{idx.name}</span>
+                <span className="text-base font-medium">
+                  {idx.current != null ? idx.current.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                </span>
+                <span className={cn('text-sm', changeClass(idx.changePct))}>
+                  {idx.changePct != null ? formatSignedPct(idx.changePct) : '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
       <Card variant="bordered" padding="md">
         {loading ? (
           <Loading label={t('board.title')} />

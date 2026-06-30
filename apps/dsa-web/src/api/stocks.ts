@@ -48,6 +48,22 @@ export type StockQuoteBatchItem = {
   error?: string | null;
 };
 
+export type MarketIndex = {
+  code: string;
+  name: string;
+  current: number | null;
+  change: number | null;
+  changePct: number | null;
+};
+
+type RawIndex = {
+  code?: string;
+  name?: string;
+  current?: number | null;
+  change?: number | null;
+  change_pct?: number | null;
+};
+
 // 后端字段为 snake_case，这里转成前端 camelCase
 type RawQuote = {
   stock_code: string;
@@ -159,6 +175,18 @@ export const stocksApi = {
       stockCode: item.stock_code,
       quote: item.quote ? toQuote(item.quote) : null,
       error: item.error,
+    }));
+  },
+
+  async getIndices(region = 'tw'): Promise<MarketIndex[]> {
+    const response = await apiClient.get('/api/v1/stocks/indices', { params: { region } });
+    const data = response.data as { items?: RawIndex[] };
+    return (data.items ?? []).map((r) => ({
+      code: r.code ?? '',
+      name: r.name ?? '',
+      current: r.current ?? null,
+      change: r.change ?? null,
+      changePct: r.change_pct ?? null,
     }));
   },
 

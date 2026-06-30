@@ -476,6 +476,27 @@ def get_stock_quotes(
 
 
 @router.get(
+    "/indices",
+    responses={200: {"description": "大盘指数列表"}},
+    summary="获取大盘指数实时行情",
+    description="返回指定地区主要指数（台股：加权指数 TWII + 柜买指数 TPEX）。盯盘辅助资料，失败回空列表，永不 500。",
+)
+def get_main_indices(
+    region: str = Query("tw", description="地区，如 tw/cn/us/hk"),
+) -> dict:
+    """大盘指数列表（盯盘辅助）。失败 fail-open 回空列表，不拖垮页面。"""
+    try:
+        # 与 StockService.get_realtime_quotes 同款：每请求自建 manager 可接受
+        from data_provider.base import DataFetcherManager
+
+        data = DataFetcherManager().get_main_indices(region)
+        return {"items": data or [], "region": region}
+    except Exception as e:
+        logger.warning(f"获取大盘指数失败 region={region}: {e}")
+        return {"items": [], "region": region}
+
+
+@router.get(
     "/{stock_code}/quote",
     response_model=StockQuote,
     responses={
