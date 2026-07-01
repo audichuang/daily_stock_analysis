@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 个股分析 LLM prompt 本体在 `report_language == "zh-TW"` 时整段改用繁体中文（台湾用语）——此前 prompt 标签/区块标题/规则说明硬写简体，DeepSeek 跟着简体 context 仍输出简体；现 `_format_prompt`/`_phase_aware_quote_labels`/`_sanitize_trend_analysis_for_prompt` 依语言取值，zh-TW 出繁体、zh/en 路径 byte-for-byte 不变，JSON 键名/`decision_type` 契约不变；`_legacy_audit_marker_specs` 的 quote/news 标记同步复用共享 `_format_prompt_tech_section_title`，避免 prompt 与 audit 重建不一致（实测 2330.TW zh-TW 输出全繁体、600519 zh 仍简体）。
 - [修复] 台股即时看板涨跌停价改由 live 参考价(pre_close)算 ±10% + tick 对齐(`tw_price_limits`)，取代可能与当日参考价不同步的 shioaji `contract.limit_up/limit_down` 静态值（实测 2330 contract 给 2625/2155，昨收 2340 的正确板价应为 2570/2110）；连带修正「距涨跌停」距离与展开明细的板价显示。
 - [改进] 即时看板「距涨跌停」仅在距任一侧板 ≤3% 时显示（常态离板远是噪音，当冲接近板才有意义）；走势图 X 轴补回时间刻度（日→时:分 / 月→月/日 / 年→年/月），tooltip 日期改用主题色（修复深色模式下日期文字看不到）。
+- [修复] Discord 长报告推送按 2000 字符上限分片逐段发送，遇到 429 限流会按 `retry_after`/`Retry-After` 有限重试，避免中途失败后只收到前半段报告。
+- [改进] #1777 台股三大法人 fetcher（`TwInstitutionalFetcher`）增加缓存防击穿：并发同 (市场, 日期) 调用合并为单次上游请求，保护 TWSE T86 ~3 req/5s 限流额度；不同 key 仍并行；新增并发单次抓取、不同 key 各抓一次、HTTP 错误 fail-open 回归测试。
+- [修复] A 股个股分析遇到空 `belong_boards` 占位时会继续补查所属板块，关联板块模块在已有板块时稳定展示；对应涨跌幅缺失时只显示板块，不再输出占位涨跌幅。
+- [修复] 大盘复盘在 LLM 标题漂移或正文缺少板块段时，会从结构化 `sectors` 兜底渲染板块表，避免 Web 与推送报告偶发缺少板块主线。
 
 - [新功能] 新增互动式价值研究 skill（`.claude/skills/value-research`）与 `scripts/financial_rigor.py` 验算工具（vendor 自 xbtlin/ai-berkshire，MIT，纯 stdlib）：对单档做价值投资式深度研究，强制 financial_rigor 验算估值（市值勾稽/PE-PB-ROE/三情境/多源交叉/Benford）、套四大师视角，结论可接回既有 alert 监控。仅互动模式、不进每日排程，不改动 data_provider/agent/pipeline。
 - [新功能] 台股(.TW/.TWO)月营收补全：`TwseFundamentalAdapter` 新增 `get_growth`，用 TWSE `t187ap05_L`（上市）+ TPEx `mopsfin_t187ap05_O`（上柜）免金钥月营收快照，为台股 growth 区块**一律并列** `monthly_revenue`/`monthly_revenue_yoy`/`revenue_month`（月营收是台股最受重视的即时指标，与 yfinance 年度成长并存），并在 yfinance 缺 `revenue_yoy` 时用月营收 YoY 兜底。走 `_run_with_retry` 受 stage 预算约束、fail-open、4h 缓存。
