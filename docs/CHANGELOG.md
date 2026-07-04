@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 修复任务状态接口重建报告动作字段时把合法情绪分 `0` 当成空值的问题，确保低分报告能按评分口径纠正为卖出建议。
+- [修复] 修复 Agent 流式回复在未收到完成事件就断开时被显示为“（无内容）”的问题，改为提示流式响应中断并保留用户消息，避免误判为空回答。
 
 - [新功能] 台股财报季更 CLI：`python -m market_data.cli financials --year YYYY --season N` 下载当季 IFRS 财报 html 包、解析后以长格式 upsert 进 Postgres `market.financial_statement`（Q4 单季损益由「年报累计 − 库内 Q3 累计」推导），取代已退役 finlab repo 的 sqlite/pickle 管线；finlab 本地数据（sqlite + 34G 原始 html）经逐表/逐季与 Postgres 零差异核对后删除，Postgres 为台股历史数据唯一数据源。
 - [新功能] 台股 price 爬取新增截断防护与备援源：单日 TWSE+TPEx 合计低于附近 5 个交易日中位数九成时，先以 TWSE openapi `STOCK_DAY_ALL` 备援替换上市侧（仅最新交易日、全列同日才收、缺本益比栏以 COALESCE 保留旧值），仍不足则整天跳过等 resume 重试——消除「截断但非空」响应写入脏数据的事故类别（曾实际发生：单日少写 300+ 笔且数值错位）。
