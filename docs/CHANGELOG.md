@@ -8,8 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
-- [修复] 修复任务状态接口重建报告动作字段时把合法情绪分 `0` 当成空值的问题，确保低分报告能按评分口径纠正为卖出建议。
+
+- [修复] yfinance 分红解析：yfinance 1.2.x 将 `Ticker.dividends` 返回为单列 DataFrame（而非 Series），适配器按 Series 迭代 `.items()` 导致每笔分红被丢弃、TTM 每股分红与分红次数静默退回 `trailingAnnualDividendRate` 年率估算（如 24.0 / 分红次数 0，而非真实 TTM 合计）；现在迭代前强制转为 Series。影响所有 yfinance 后缀市场（美股/港股/日韩股/台股）。
+- [修复] Discord 长报告推送按 2000 字符上限分片逐段发送，遇到 429 限流会按 `retry_after`/`Retry-After` 有限重试，避免中途失败后只收到前半段报告。
+- [修复] 修复 Web 设置页定时任务“立即执行一次”后台线程未传 `stock_codes` 导致任务崩溃的问题。
+- [修复] 回测日线补全将 `605066.SH`、`SS605066`、`SS.605066` 等 A 股等价代码归一为裸代码抓取和写入，避免误向数据源请求 `SS605066` 导致回测数据不足。
 - [修复] 修复 Agent 流式回复在未收到完成事件就断开时被显示为“（无内容）”的问题，改为提示流式响应中断并保留用户消息，避免误判为空回答。
+- [改进] `STOCK_LIST` 自选股解析支持中文逗号、顿号、分号、空格和换行等常见粘贴分隔符，运行时、定时热刷新、CLI `--stocks`、Web 设置保存和自选 API 统一识别，并在写回时规范为英文逗号。
 
 - [新功能] 台股财报季更 CLI：`python -m market_data.cli financials --year YYYY --season N` 下载当季 IFRS 财报 html 包、解析后以长格式 upsert 进 Postgres `market.financial_statement`（Q4 单季损益由「年报累计 − 库内 Q3 累计」推导），取代已退役 finlab repo 的 sqlite/pickle 管线；finlab 本地数据（sqlite + 34G 原始 html）经逐表/逐季与 Postgres 零差异核对后删除，Postgres 为台股历史数据唯一数据源。
 - [新功能] 台股 price 爬取新增截断防护与备援源：单日 TWSE+TPEx 合计低于附近 5 个交易日中位数九成时，先以 TWSE openapi `STOCK_DAY_ALL` 备援替换上市侧（仅最新交易日、全列同日才收、缺本益比栏以 COALESCE 保留旧值），仍不足则整天跳过等 resume 重试——消除「截断但非空」响应写入脏数据的事故类别（曾实际发生：单日少写 300+ 笔且数值错位）。
@@ -22,10 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 个股分析 LLM prompt 本体在 `report_language == "zh-TW"` 时整段改用繁体中文（台湾用语）——此前 prompt 标签/区块标题/规则说明硬写简体，DeepSeek 跟着简体 context 仍输出简体；现 `_format_prompt`/`_phase_aware_quote_labels`/`_sanitize_trend_analysis_for_prompt` 依语言取值，zh-TW 出繁体、zh/en 路径 byte-for-byte 不变，JSON 键名/`decision_type` 契约不变；`_legacy_audit_marker_specs` 的 quote/news 标记同步复用共享 `_format_prompt_tech_section_title`，避免 prompt 与 audit 重建不一致（实测 2330.TW zh-TW 输出全繁体、600519 zh 仍简体）。
 - [修复] 台股即时看板涨跌停价改由 live 参考价(pre_close)算 ±10% + tick 对齐(`tw_price_limits`)，取代可能与当日参考价不同步的 shioaji `contract.limit_up/limit_down` 静态值（实测 2330 contract 给 2625/2155，昨收 2340 的正确板价应为 2570/2110）；连带修正「距涨跌停」距离与展开明细的板价显示。
 - [改进] 即时看板「距涨跌停」仅在距任一侧板 ≤3% 时显示（常态离板远是噪音，当冲接近板才有意义）；走势图 X 轴补回时间刻度（日→时:分 / 月→月/日 / 年→年/月），tooltip 日期改用主题色（修复深色模式下日期文字看不到）。
-- [修复] Discord 长报告推送按 2000 字符上限分片逐段发送，遇到 429 限流会按 `retry_after`/`Retry-After` 有限重试，避免中途失败后只收到前半段报告。
-- [改进] #1777 台股三大法人 fetcher（`TwInstitutionalFetcher`）增加缓存防击穿：并发同 (市场, 日期) 调用合并为单次上游请求，保护 TWSE T86 ~3 req/5s 限流额度；不同 key 仍并行；新增并发单次抓取、不同 key 各抓一次、HTTP 错误 fail-open 回归测试。
-- [修复] A 股个股分析遇到空 `belong_boards` 占位时会继续补查所属板块，关联板块模块在已有板块时稳定展示；对应涨跌幅缺失时只显示板块，不再输出占位涨跌幅。
-- [修复] 大盘复盘在 LLM 标题漂移或正文缺少板块段时，会从结构化 `sectors` 兜底渲染板块表，避免 Web 与推送报告偶发缺少板块主线。
 
 - [新功能] 新增互动式价值研究 skill（`.claude/skills/value-research`）与 `scripts/financial_rigor.py` 验算工具（vendor 自 xbtlin/ai-berkshire，MIT，纯 stdlib）：对单档做价值投资式深度研究，强制 financial_rigor 验算估值（市值勾稽/PE-PB-ROE/三情境/多源交叉/Benford）、套四大师视角，结论可接回既有 alert 监控。仅互动模式、不进每日排程，不改动 data_provider/agent/pipeline。
 - [新功能] 台股(.TW/.TWO)月营收补全：`TwseFundamentalAdapter` 新增 `get_growth`，用 TWSE `t187ap05_L`（上市）+ TPEx `mopsfin_t187ap05_O`（上柜）免金钥月营收快照，为台股 growth 区块**一律并列** `monthly_revenue`/`monthly_revenue_yoy`/`revenue_month`（月营收是台股最受重视的即时指标，与 yfinance 年度成长并存），并在 yfinance 缺 `revenue_yoy` 时用月营收 YoY 兜底。走 `_run_with_retry` 受 stage 预算约束、fail-open、4h 缓存。
@@ -109,87 +110,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 修复 Web 回测运行未传分析日期范围、股票代码未归一化导致后端成功返回但结果为空的问题，并为空候选和行情不足返回诊断信息。
 - [文档] 补充回测请求链路说明：`analysis_date_from/analysis_date_to` 与 `code` 的输入边界、归一化与筛选顺序，以及历史行情不足或候选集为空时回测返回成功响应，在 `message` 与 `diagnostics`（含 `empty_reason`）中提供可诊断信息，并同步更新 `docs/full-guide.md`、`docs/full-guide_EN.md` 示例。
 - [修复] 回测代码匹配新增非法市场后缀/长度兜底：如 `600519.HK`、`600519.SZ`、`SH000001` 不再静默回落到其它有效代码，并在日期筛选重跑时对齐旧回测结果的分析日期，避免历史快照日期命中但结果列表仍为空。
-- [修复] 修复 Web 首页个股栏在 stock-bar 摘要字段缺失或动作建议无法归类时隐藏情绪分与建议标识的问题。
-- [修复] 修复 Web 设置页定时任务“立即执行一次”后台线程未传 `stock_codes` 导致任务崩溃的问题。
-- [新功能] #1743 Phase 4 新增 `claude_code_cli` generation-only 本地 CLI backend，保留 LiteLLM 默认路径、Agent 工具调用边界、per-preset extractor、最小 env allowlist 与结构化错误。
-- [新功能] #1743 Phase 4 新增 `opencode_cli` generation-only 本地 CLI backend，使用 OpenCode `run --format json --file` prompt-file 路径、JSON event extractor、Agent 边界和 provider credential 不接管约束。
-- [修复] #1743 Phase 4 修正 `opencode_cli` 静态指令，避免全局 JSON-only 约束影响 `generate_text()` 与大盘复盘自由文本输出。
-- [文档] #1743 Phase 4 同步本地 CLI backend 隐私/部署边界：local CLI 不是离线模型，Docker/CI/远端需自行安装登录，DSA 不读取 Claude/OpenCode credential 文件。
-- [新功能] 台股报告接入三大法人：tw 个股分析报告的 institution 区块改为展示 TWSE T86 / TPEx 三大法人原始买卖超净额（外资/投信/自营/合计，单位:股）；tw-only、严格 additive（A股/港股/美股/日韩股 offshore 流程字节不变）、fail-open（取不到数据维持 not_supported，绝不中断分析）；不接 Web、不派生 capital_flow_signal、不改评分权重或 schema。
-- [修复] yfinance 分红解析：yfinance 1.2.x 将 `Ticker.dividends` 返回为单列 DataFrame（而非 Series），适配器按 Series 迭代 `.items()` 导致每笔分红被丢弃、TTM 每股分红与分红次数静默退回 `trailingAnnualDividendRate` 年率估算（如 24.0 / 分红次数 0，而非真实 TTM 合计）；现在迭代前强制转为 Series。影响所有 yfinance 后缀市场（美股/港股/日韩股/台股）。
-- [改进] 台股报告完整消费三大法人：tw 个股报告的 `institution` 区块现会在报告中渲染三大法人净买卖超表格，并注入 LLM 分析 prompt 作为台股筹码过滤器（此前仅接入数据层，报告与 prompt 均未消费，导致报告出现「筹码结构：数据缺失」）；同时三大法人整市场抓取改用剩余 stage 预算而非较小的 per-symbol fetch 超时，避免单股/首档分析因冷抓取（~4-5s）超时而降级为 not_supported。tw-only、严格 additive、fail-open。
-- [修复] 台股财务金额币别标示：TWD 金额此前落入默认「元」(在 A 股语境易误读为人民币)，`_CURRENCY_SUFFIX` 补入 TWD→「新台币」，营业收入/归母净利润/经营现金流/每股现金分红均正确标注新台币。
-- [改进] 台股三大法人 fetcher 韧性加固：(1) 接入熔断器（复用 `realtime_types.CircuitBreaker`，按市场 twse/tpex 分流，连续失败 3 次→冷却 ~5min→半开探测），TWSE/TPEx 端点异常时快速跳过网络往返并 fail-open，避免端点故障时每档个股都付 timeout+throttle；(2) TPEx OpenAPI 仅服务最新交易日，调用方传入与服务日期不符的明确日期时改为 fail-open（返回无数据），避免静默返回错日资料。
-- [修复] 回测日线补全将 `605066.SH`、`SS605066`、`SS.605066` 等 A 股等价代码归一为裸代码抓取和写入，避免误向数据源请求 `SS605066` 导致回测数据不足。
-
-- [修复] 台股（tw）市场阶段（`market_phase`）新增收盘集合竞价识别：`_CLOSING_AUCTION_WINDOW_MINUTES` 缺 `tw` 键时 `.get(market, 0)` 得零宽窗口，TWSE/TPEx 13:25–13:30 的 5 分钟收盘竞价此前永远无法判定为 `closing_auction`（收盘前一刻仍 `intraday`、13:30 直接 `postmarket`）；补 `"tw": 5` 修正，附阶段边界回归测试。仅 tw 加项，cn/hk/us 与 jp/kr 行为不变。
-
-## [3.24.1] - 2026-06-28
-
-### 修复
-
-- 修正 Longbridge SDK 版本约束为按平台选择可安装版本，避免桌面与 Docker 发布在 `pip install -r requirements.txt` 时因不存在的 `0.2.75` 版本失败。
-
-## [3.24.0] - 2026-06-28
-
-### 发布亮点
-
-- feat: 扩展台股、日股、韩股市场支持，覆盖台股 suffix-only 分析、台股三大法人资料层、JP/KR 大盘复盘和跨服务市场枚举。
-- feat: 新增 GenerationBackend 抽象、`codex_cli` 本地 CLI backend、reserved Hermes 本地 HTTP 渠道和 prompt cache capability registry。
-- feat: Web/API/Desktop 支持多时间定时推送与 runtime scheduler 热重建，Web 设置页补齐首次启动检查与定时任务面板。
-- feat: 报告链路补齐信号归因、单股信号时间线、概念板块排行和通知/报告关联板块展示。
-- fix: 修复 Docker/启动探针、静态资源 MIME、回测空结果、组合估值、通知 Markdown、AlphaSift 数据源和测试环境隔离等稳定性问题。
-
-### 新功能
-
-- 新增台股 suffix-only 个股分析 MVP：`.TW`/`.TWO` 代码可走 YFinance 日线与近实时行情，并补齐市场识别、交易日历和 Prompt 能力边界。
-- 台股 `tw` 纳入 DecisionSignal、Portfolio、Intelligence 服务层、API 枚举和 Web 筛选，避免台股分析信号被市场归一化静默丢弃。
-- 新增台股三大法人资料层 fetcher `TwInstitutionalFetcher`，支持 TWSE/TPEx 来源、日期转换、单日缓存和 fail-open 退化。
-- 大盘复盘新增 `jp`/`kr` 市场，支持日经225/TOPIX、KOSPI/KOSDAQ 指数复盘，并扩展 `MARKET_REVIEW_REGION`、交易日过滤和 Web 设置枚举。
-- 新增 GenerationBackend Phase 1 抽象和显式 opt-in 的 `codex_cli` 本地 CLI generation backend，提供结构化错误、fallback、stream 降级和 usage unavailable contract。
-- 新增 reserved Hermes 本地 HTTP generation 渠道，提供 JSON generation、no-proxy 本地调用和 saved secret endpoint 绑定。
-- 新增 Provider Cache Capability Registry，按 provider、API surface、gateway 与 verification status 建模 prompt cache 能力。
-- 支持 `SCHEDULE_TIMES` 多时间定时推送，长运行 Web/API/Desktop 进程保存调度配置后可热启停或重建 runtime scheduler。
-- 新增信号归因分析和 Web AI 建议页单股信号时间线，并为自动生成与历史回填的 DecisionSignal 写入默认 `decision_profile` metadata。
-- 大盘复盘、Web 报告页和通知关联板块补齐概念板块排行与概念信号展示。
-
-### 改进
-
-- TickFlow 扩展为可选 A 股日 K、实时行情、股票列表/名称数据源，并增加 count、完整性校验和批量预取缓存保护。
-- 硬化 JP/KR/TW suffix 识别、日韩股票种子索引、YFinance 报价/基本面上下文，以及 JP/KR Portfolio 与 Market Light 边界。
-- Web 设置页新增首次启动配置检查卡与定时任务面板，隐藏内部 `SCHEDULE_TIMES` 键，并改善重复任务提示的关闭与自动消失体验。
-- Web 历史报告详情不再内嵌 AI 建议卡片，结构化决策信号集中到 AI 建议页，并保留来源报告 ID/URL 参数精确定位。
-- `GENERATION_BACKEND=codex_cli` 下普通分析与大盘复盘不再因缺少 LiteLLM API Key 被误判不可用，并改用 `--output-last-message` 文件读取最终响应。
-- 本地 CLI backend 对 stdout/stderr 诊断预览和最终响应实行执行期总量上限，并补齐新增 generation backend 数字配置最大值校验。
-- AlphaSift 默认依赖 pin 更新到 `0a7b9cd59e81718f851890535241bc105d4ddc64`，并默认走 DSA EastMoney 兜底 provider、暴露 source health 诊断。
-- Docker Compose 默认内存建议提升到 1G；每日分析 workflow 兼容误将 `STOCK_LIST` 配到同名 Environment variables 的场景。
-- Agent 路径同步 signal attribution prompt，通知报告摘要不再展开 AI 决策信号明细，完整信号保留在个股详情与单股报告。
-
-### 修复
-
-- API 异步批量分析共享概念板块排行缓存，避免同批多股重复拉取全市场概念排行。
-- 修复通知 Markdown 表格转换在空单元格后将后续内容错配到错误表头的问题。
-- 修复 Market Light 区域归一化拒绝 `jp`/`kr`、日韩历史列表市场阶段摘要误传 `analysis_phase` 和默认通知报告缺少 `dashboard.phase_decision` 的问题。
-- 固定 Docker 可安装的 Longbridge SDK 版本为 0.2.75，并修复 Docker 镜像中 efinance 缓存目录属主导致 A 股数据源降级的问题。
-- 持仓快照今日估值改为受限并发预取实时价，减少持仓较多时 Web 组合页面刷新超时。
-- Web 首页重新分析完成后自动切换到同一股票最新报告，并修复 Windows 环境下 Web/Desktop 静态 JS 资源可能以 `text/plain` 返回导致黑屏的问题。
-- 修复 `--serve --schedule` 与 Web/API runtime scheduler 状态脱节、立即执行忙碌状态误提示、重建定时任务重复监听和启动参数语义丢失。
-- 修复 `main.py --serve-only` 在低配主机上因惰性 import 应用超出 uvicorn 启动自检窗口而反复重启的问题。
-- 修复 Web 回测未传分析日期范围、股票代码未归一化导致成功响应但结果为空的问题，并为空候选、行情不足和非法后缀提供诊断信息。
-- 修复 unsupported `GENERATION_BACKEND` 被当成空响应/模板 fallback、`codex_cli` stdout 重复计入输出上限和主分析 JSON schema fallback 语义回退的问题。
-- Docker 部署中 Web 设置页保存自定义 Webhook 模板时会转义 `$content_json` 等占位符，并在运行时还原，避免 Compose 重新部署展开为空。
-
-### 文档
-
-- 补齐概念板块排行字段契约、通知报告行业/概念类型列展示和数据源稳定性与故障处理图示。
-- 补充 JP/KR/TW suffix-only MVP、`MARKET_REVIEW_REGION` 保存/校验/回退矩阵、Market Light 边界和 PR 提交流程约束。
-- 补充本地 CLI backend 隐私边界、非离线模型说明、Docker/CI 登录态限制和 `codex_cli` experimental/limited 状态。
-- 补充回测请求链路说明，并同步更新 `docs/full-guide.md` 与 `docs/full-guide_EN.md` 示例。
-
-### 测试
-
-- 新增/更新台股、JP/KR 大盘复盘、GenerationBackend、`codex_cli`、Hermes、本地 CLI、runtime scheduler、回测和概念板块排行相关回归测试。
-- 加强 `tests/test_analysis_api_contract.py`、`tests/test_analysis_history.py` 与 `tests/test_backtest_service.py` 的临时 `.env` 隔离，避免本地真实 `.env` 污染系统配置测试。
 
 ## [3.23.0] - 2026-06-20
 

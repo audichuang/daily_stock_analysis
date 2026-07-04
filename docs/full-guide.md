@@ -151,7 +151,7 @@ daily_stock_analysis/
 
 | Secret 名称 | 说明 | 必填 |
 |------------|------|:----:|
-| `STOCK_LIST` | 自选股代码，如 `600519,300750,002594,7203.T,005930.KS,2330.TW` | ✅ |
+| `STOCK_LIST` | 自选股代码，如 `600519,300750,002594,7203.T,005930.KS,2330.TW`；推荐使用英文逗号，中文逗号、顿号、分号、空格和换行会被识别并规范为英文逗号 | ✅ |
 | `ANSPIRE_API_KEYS` | [Anspire AI Search](https://aisearch.anspire.cn/) 针对中文内容特别优化；同一 Key 可用于搜索与 Anspire 大模型网关的兜底示例（是否可用以控制台与账号权限为准） | 推荐 |
 | `SERPAPI_API_KEYS` | [SerpAPI](https://serpapi.com/baidu-search-api?utm_source=github_daily_stock_analysis) 搜索引擎结果补强，适合实时金融新闻 | 推荐 |
 | `TAVILY_API_KEYS` | [Tavily](https://tavily.com/) 搜索 API（新闻搜索） | 可选 |
@@ -1637,7 +1637,7 @@ A: 企业微信/飞书有消息长度限制，系统已自动分段发送。如�
 A: AkShare 使用爬虫机制，可能被临时限流。系统已配置重试机制，一般等待几分钟后重试即可。
 
 ### Q: 如何添加自选股？
-A: 修改 `STOCK_LIST` 环境变量，多个代码用逗号分隔。
+A: 修改 `STOCK_LIST` 环境变量，多个代码推荐用英文逗号分隔。系统也会识别中文逗号、顿号、分号、空格和换行，并在 Web 设置页保存或自选增删后规范为英文逗号。
 
 ### Q: GitHub Actions 没有执行？
 A: 检查是否启用了 Actions，以及 cron 表达式是否正确（注意是 UTC 时间）。

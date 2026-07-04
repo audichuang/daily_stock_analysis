@@ -22,6 +22,7 @@ import {
   SettingsSectionCard,
 } from '../components/settings';
 import { WEB_BUILD_INFO } from '../utils/constants';
+import { parseStockListValue } from '../utils/stockList';
 import { getCategoryDescription } from '../utils/systemConfigI18n';
 import { getIntlLocale } from '../i18n/intlLocale';
 import type {
@@ -244,10 +245,7 @@ function getConfigItem(items: SystemConfigItem[], key: string) {
 }
 
 function parseSetupStockList(value: unknown) {
-  return String(value ?? '')
-    .split(/[,\n\r;，、\s]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return parseStockListValue(String(value ?? ''));
 }
 
 function isEnabledConfigValue(value: unknown) {

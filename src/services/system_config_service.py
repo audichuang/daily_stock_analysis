@@ -60,6 +60,7 @@ from src.notification_contracts import (
 from src.notification_noise import validate_notification_timezone
 from src.notification_sender.gotify_sender import resolve_gotify_message_endpoint
 from src.notification_sender.ntfy_sender import resolve_ntfy_endpoint
+from src.services.stock_list_parser import split_stock_list
 
 logger = logging.getLogger(__name__)
 
@@ -2824,7 +2825,7 @@ class SystemConfigService:
         )
 
     def _build_setup_stock_list_check(self, effective_map: Dict[str, str]) -> Dict[str, Any]:
-        stocks = self._split_csv(effective_map.get("STOCK_LIST") or "")
+        stocks = split_stock_list(effective_map.get("STOCK_LIST") or "")
         if stocks:
             return self._setup_check(
                 "stock_list",
