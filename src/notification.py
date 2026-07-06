@@ -1871,7 +1871,11 @@ class NotificationService(
         mapping = self._SOURCE_DISPLAY_NAMES.get(raw_source)
         if not mapping:
             return raw_source
-        return mapping[normalize_report_language(language)]
+        # source display dicts only carry "zh"/"en"; bucket any zh-* (zh-TW/zh-CN)
+        # to "zh" so a Traditional-Chinese report doesn't KeyError.
+        lang = str(normalize_report_language(language) or "").lower()
+        key = "en" if lang.startswith("en") else "zh"
+        return mapping.get(key, raw_source)
 
     def _append_market_snapshot(self, lines: List[str], result: AnalysisResult) -> None:
         snapshot = getattr(result, 'market_snapshot', None)

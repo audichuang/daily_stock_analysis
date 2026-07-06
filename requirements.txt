@@ -6,6 +6,8 @@
 python-dotenv>=1.0.0        # Environment variable configuration
 tenacity>=8.2.0             # Retry support with exponential backoff
 sqlalchemy>=2.0.0           # ORM database access
+psycopg[binary]>=3.1.0     # PostgreSQL driver (unified stock DB)
+alembic>=1.13.0            # DB schema version management (market schema migrations)
 schedule>=1.2.0             # Scheduled task runner
 exchange-calendars>=4.13.0   # Trading calendars; 4.5.x is incompatible with pandas 3 Timedelta "T"
 

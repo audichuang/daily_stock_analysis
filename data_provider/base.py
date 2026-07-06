@@ -638,6 +638,8 @@ class DataFetcherManager:
         "TwseFetcher": set(),
         # ShioajiFetcher 仅提供台股实时报价，不参与任何市场的日线路由。
         "ShioajiFetcher": set(),
+        # MarketDBFetcher 只服务台股历史（本地 Postgres market schema）。
+        "MarketDBFetcher": {"tw"},
     }
     # 大盘统计（get_market_stats）按市场路由所用的数据源支持表。
     # name 不在表中 => 任意市场都允许（保持旧行为）；
@@ -1185,6 +1187,9 @@ class DataFetcherManager:
         pytdx = PytdxFetcher()      # 通达信数据源（可配 PYTDX_HOST/PYTDX_PORT）
         baostock = BaostockFetcher()
         yfinance = YfinanceFetcher()
+        # 台股历史优先读本地 Postgres（market schema），无数据时回退 yfinance
+        from .market_db_fetcher import MarketDBFetcher
+        market_db = MarketDBFetcher()
         # 台股上市大盘统计（免金钥，仅 get_market_stats，不参与日线路由）
         twse = TwseFetcher()
         optional_fetchers: List[BaseFetcher] = []
@@ -1232,6 +1237,7 @@ class DataFetcherManager:
                 akshare,
                 pytdx,
                 baostock,
+                market_db,
                 yfinance,
                 twse,
                 *optional_fetchers,
