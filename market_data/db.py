@@ -25,14 +25,21 @@ def database_url() -> str:
     return url
 
 
-@lru_cache(maxsize=4)
-def _engine_for(url: str):
-    return create_engine(url, pool_pre_ping=True, pool_recycle=1800, future=True)
+@lru_cache(maxsize=8)
+def _engine_for(url: str, statement_timeout_ms: int | None = None):
+    connect_args = {}
+    if statement_timeout_ms:
+        # Postgres per-connection statement timeout (psycopg): abort runaway reads.
+        connect_args["options"] = f"-c statement_timeout={int(statement_timeout_ms)}"
+    return create_engine(
+        url, pool_pre_ping=True, pool_recycle=1800, future=True,
+        connect_args=connect_args,
+    )
 
 
-def get_engine(url: str | None = None):
-    # cache per URL so repeated dashboard reads reuse one pool (no leak)
-    return _engine_for(url or database_url())
+def get_engine(url: str | None = None, statement_timeout_ms: int | None = None):
+    # cache per (URL, timeout) so repeated dashboard reads reuse one pool (no leak)
+    return _engine_for(url or database_url(), statement_timeout_ms)
 
 
 def get_sessionmaker(engine=None):

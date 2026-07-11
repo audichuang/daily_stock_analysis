@@ -50,6 +50,19 @@ def valuation(stock_id, start=None, end=None, engine=None):
     return _q(sql + " ORDER BY date", params, engine)
 
 
+def institutional(stock_id, start=None, end=None, engine=None):
+    sql = ("SELECT date, foreign_net, trust_net, dealer_net, total_net "
+           "FROM market.institutional WHERE stock_id = :sid")
+    params = {"sid": stock_id}
+    if start:
+        sql += " AND date >= :start"
+        params["start"] = start
+    if end:
+        sql += " AND date <= :end"
+        params["end"] = end
+    return _q(sql + " ORDER BY date", params, engine)
+
+
 def to_daily_frame(df):
     """Map price_history() output to the dashboard's normalized daily columns
     [date, open, high, low, close, volume, amount, pct_chg]."""

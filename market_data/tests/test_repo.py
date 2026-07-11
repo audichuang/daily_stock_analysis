@@ -59,3 +59,20 @@ def test_to_daily_frame_empty_stays_empty():
     import pandas as pd
 
     assert market_repo.to_daily_frame(pd.DataFrame()).empty
+
+
+def test_institutional_reader_returns_ordered_net_columns(pg_conn):
+    pg_conn.execute(text(
+        "INSERT INTO market.institutional "
+        "(stock_id, date, foreign_net, trust_net, dealer_net, total_net) VALUES "
+        "('2330', '1900-04-03', 200, 10, -5, 205), "
+        "('2330', '1900-04-02', 100, 0, 0, 100)"))
+    df = market_repo.institutional("2330", start="1900-04-01", end="1900-04-05",
+                                   engine=pg_conn)
+    assert list(df.columns) == ["date", "foreign_net", "trust_net", "dealer_net", "total_net"]
+    assert list(df["date"].astype(str)) == ["1900-04-02", "1900-04-03"]  # ORDER BY date
+    assert int(df.iloc[0]["foreign_net"]) == 100
+
+
+def test_institutional_unknown_stock_is_empty(pg_conn):
+    assert market_repo.institutional("ZZZZZ", engine=pg_conn).empty
