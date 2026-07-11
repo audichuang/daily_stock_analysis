@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 合并上游后收敛两处 vitest 回归：即时看板大盘指数「延迟」提示由原生 `title=` 改 `aria-label` 满足 UI governance 守卫；告警市场区域下拉测试对齐后端 `MARKET_LIGHT_ALERT_REGIONS`（仅 cn/hk/us，不含 jp/kr）。
+- [文档] 新增 `docs/upstream-sync-2026-07-11.md` 上游同步记录（v3.24→v3.25 基线/裁决原则/保留增量/采纳功能/关键裁决/回滚/下次同步备忘）。
 - [新功能] 台股個股分析 LLM prompt 追加三大法人歷史趨勢（外資/投信/自營/合計 連 N 日買賣超、近 5/20 日累計、合計佔股本比）：DB（`market.institutional` 14 年歷史）+ 當日網路值於 prompt 組裝層（`analyzer._format_prompt`）即時計算，tw-only、fail-open、僅進 prompt 不入持久化 context/schema/Web。新增 `market_repo.institutional()` reader（含 statement_timeout engine）與純函式 `data_provider/tw_institutional_trend.py`。
 - [chore] 同步上游 `ZhuLinsen/daily_stock_analysis` main（v3.24→v3.25，62 commits）。合并 50 个冲突文件，裁决原则：以上游为 base、重放 fork 台股(tw)与 zh-TW 繁体增量。保留 fork 关键增量：`stocks.index.json` 台股种子（并入上游 30 支日股 `.T` 种子）、`TwseFetcher` 大盘复盘台股统计路由、`MarketDBFetcher` priority=1、收盘集合竞价 `tw:5`、`split_stock_list` 自选股解析；采纳上游：三大法人 fetcher+institution wiring、评分收敛/信号归因/决策信号 profiles 等 decision-signal 家族、jp/kr 大盘复盘与市场支持、ko 报告语言、AlphaSift 加固、TickFlow A 股源。报告/UI 语言统一为 `{zh, zh-TW, en, ko}`（zh↔zh-TW 键数对齐），大盘复盘市场并为 `cn/hk/us/tw/jp/kr`。`longbridge` 改用上游 platform-conditional pin（Docker py3.11→0.2.74，dev py3.12→4.x），保留 `shioaji`。
 - [改进] 为 multi-agent DecisionAgent 增加内部低敏分歧摘要输入管线，作为 #1904 P1 解释输出的前置 plumbing；不改变 public API、dashboard schema 或最终解释字段。

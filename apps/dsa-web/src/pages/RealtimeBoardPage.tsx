@@ -363,7 +363,7 @@ const RealtimeBoardPage: React.FC = () => {
         <Card variant="bordered" padding="md">
           <div className="mb-2 flex items-center gap-2">
             <span className="text-sm font-medium">{t('board.indices.title')}</span>
-            <span className="text-xs text-secondary-text" title={t('board.indices.delay')}>
+            <span className="text-xs text-secondary-text" aria-label={t('board.indices.delay')}>
               {t('board.source.delayed')}
             </span>
           </div>

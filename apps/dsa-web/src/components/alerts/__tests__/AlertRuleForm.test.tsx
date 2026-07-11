@@ -234,16 +234,18 @@ describe('AlertRuleForm', () => {
     expect(screen.queryByText('组合回撤')).not.toBeInTheDocument();
   });
 
-  it('shows JP/KR options for market region in Chinese UI mode', () => {
+  it('limits market region options to cn/hk/us in Chinese UI mode (alerts exclude jp/kr)', () => {
     render(<AlertRuleForm onSubmit={onSubmit} />);
 
     fireEvent.change(screen.getByLabelText('目标范围'), { target: { value: 'market' } });
 
+    // Alert market regions align with backend MARKET_LIGHT_ALERT_REGIONS = {cn,hk,us};
+    // jp/kr market-light snapshots exist but alerts are intentionally scoped narrower.
     expect(screen.getByRole('option', { name: 'A 股（cn）' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: '港股（hk）' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: '美股（us）' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: '日股（jp）' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: '韩股（kr）' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '日股（jp）' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '韩股（kr）' })).not.toBeInTheDocument();
   });
 
   it('submits a market light status rule payload', async () => {
