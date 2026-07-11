@@ -1,14 +1,14 @@
-"""Parse downloaded IFRS financial-statement HTML into sqlite tables.
+"""Parse downloaded IFRS financial-statement HTML into wide quarter frames.
 
 Ported from the notebook-era module; parsing logic kept intact, deprecated
-pandas ``applymap`` replaced with ``map``.
+pandas ``applymap`` replaced with ``map``. Persistence lives in
+``crawl.crawl_financials`` (long-format upsert into Postgres); the old
+sqlite/pickle pipeline is gone.
 """
 
 import datetime
 import os
-import pickle
 import re
-import sqlite3
 
 import numpy as np
 import pandas as pd
@@ -143,104 +143,4 @@ def pack_htmls(year, season, directory):
     if season == 1:
         ret["income_sheet"] = ret["income_sheet_cumulate"].copy()
     ret["income_sheet_cumulate"].columns = "累計" + ret["income_sheet_cumulate"].columns
-
-    pickle.dump(
-        ret,
-        open(os.path.join("data", "financial_statement", f"pack{year}{season}.pickle"), "wb"),
-    )
     return ret
-
-
-def get_all_pickles(directory):
-    ret = {}
-    for i in os.listdir(directory):
-        if i[:4] != "pack":
-            continue
-        ret[i[4:9]] = pd.read_pickle(os.path.join(directory, i))
-    return ret
-
-
-def combine(d):
-    tnames = ["balance_sheet", "cash_flows", "income_sheet", "income_sheet_cumulate"]
-    tbs = {t: pd.DataFrame() for t in tnames}
-    for _, dfs in d.items():
-        for tname in tnames:
-            tbs[tname] = pd.concat([tbs[tname], dfs[tname]])
-    return tbs
-
-
-def fill_season4(tbs):
-    income_sheet = tbs["income_sheet"].copy()
-    c1 = set(tbs["income_sheet"].columns)
-    c2 = set(tbs["income_sheet_cumulate"].columns)
-    overlap_columns = ["累計" + i for i in c1 if "累計" + i in c2]
-
-    years = set(tbs["income_sheet_cumulate"].index.levels[1].year)
-    for y in years:
-        cum = tbs["income_sheet_cumulate"].reset_index("stock_id")
-        ys = cum.index.year == y
-        ds4 = cum.index.month == 3
-        df4 = (
-            tbs["income_sheet_cumulate"][ds4 & ys]
-            .apply(lambda s: pd.to_numeric(s, errors="coerce"))
-            .reset_index("date")
-        )
-        yps = cum.index.year == y - 1
-        ds3 = cum.index.month == 11
-        df3 = (
-            tbs["income_sheet_cumulate"][ds3 & yps]
-            .apply(lambda s: pd.to_numeric(s, errors="coerce"))
-            .reset_index("date")
-        )
-        if len(df3) == 0:
-            print("skip", y)
-            continue
-
-        diff = (df4 - df3).drop(["date"], axis=1)[overlap_columns]
-        diff.columns = diff.columns.str[2:]
-        diff["date"] = pd.to_datetime(f"{y}-03-31")
-        diff = diff[list(c1) + ["date"]].reset_index().set_index(["stock_id", "date"])
-        income_sheet = pd.concat([income_sheet, diff])
-
-    tbs["income_sheet"] = (
-        income_sheet.reset_index()
-        .sort_values(["stock_id", "date"])
-        .set_index(["stock_id", "date"])
-    )
-
-
-def to_db(tbs):
-    print("save table to db")
-    conn = sqlite3.connect(os.path.join("data", "data.db"))
-    for i, df in tbs.items():
-        print("  ", i)
-        df = (
-            df.reset_index()
-            .sort_values(["stock_id", "date"])
-            .drop_duplicates(["stock_id", "date"])
-            .set_index(["stock_id", "date"])
-        )
-        df[df.count().nlargest(900).index].to_sql(i, conn, if_exists="replace")
-    conn.close()
-
-
-def html2db(date):
-    year = date.year
-    if date.month == 3:
-        season, year = 4, year - 1
-    elif date.month == 5:
-        season = 1
-    elif date.month == 8:
-        season = 2
-    elif date.month == 11:
-        season = 3
-    else:
-        return None
-
-    directory = os.path.join("data", "financial_statement", f"{year}{season}")
-    pack_htmls(year, season, directory)
-    d = get_all_pickles(os.path.join("data", "financial_statement"))
-    tbs = combine(d)
-    fill_season4(tbs)
-    to_db(tbs)
-    return {}

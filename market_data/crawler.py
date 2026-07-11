@@ -20,8 +20,6 @@ import requests
 from requests.exceptions import ConnectionError, ReadTimeout
 from tqdm import tqdm
 
-from market_data.financial_statement import html2db
-
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 _UA = (
@@ -86,7 +84,7 @@ def crawl_price(date):
         return None
 
     content = r.text.replace("=", "")
-    lines = [l for l in content.split("\n") if len(l.split('",')) > 10]
+    lines = [ln for ln in content.split("\n") if len(ln.split('",')) > 10]
     content = "\n".join(lines)
     if content == "":
         return None
@@ -190,23 +188,3 @@ def crawl_finance_statement2019(year, season):
             os.rename(os.path.join(path, fold), dst)
         else:
             os.remove(os.path.join(path, fold))
-
-
-def crawl_finance_statement_by_date(date):
-    year = date.year
-    if date.month == 3:
-        season, year = 4, year - 1
-    elif date.month == 5:
-        season = 1
-    elif date.month == 8:
-        season = 2
-    elif date.month == 11:
-        season = 3
-    else:
-        return None
-
-    if year < 2019:
-        raise NotImplementedError("僅支援 2019 年(含)以後的 IFRS 財報")
-    crawl_finance_statement2019(year, season)
-    html2db(date)
-    return {}

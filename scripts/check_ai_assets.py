@@ -44,16 +44,16 @@ def ensure_file_exists(path: Path, description: str) -> None:
         fail(f"{description} is missing: {path.relative_to(ROOT)}")
 
 
-def ensure_symlink() -> None:
+def ensure_claude_import() -> None:
     ensure_file_exists(AGENTS, "canonical AGENTS.md")
     if not CLAUDE.exists():
         fail("CLAUDE.md is missing")
-    if not CLAUDE.is_symlink():
-        fail("CLAUDE.md must be a symlink to AGENTS.md")
+    if CLAUDE.is_symlink():
+        fail("CLAUDE.md must be a regular file containing '@AGENTS.md', not a symlink")
 
-    target = Path(CLAUDE.readlink())
-    if target != Path("AGENTS.md"):
-        fail(f"CLAUDE.md must point to AGENTS.md, found: {target}")
+    content = CLAUDE.read_text(encoding="utf-8").strip()
+    if content != "@AGENTS.md":
+        fail(f"CLAUDE.md must contain exactly '@AGENTS.md', found: {content[:80]!r}")
 
 
 def ensure_copilot_entry() -> None:
@@ -114,7 +114,7 @@ def ensure_no_tracked_claude_artifacts() -> None:
 
 
 def main() -> None:
-    ensure_symlink()
+    ensure_claude_import()
     ensure_copilot_entry()
     ensure_instruction_files()
     ensure_skill_files()

@@ -1,0 +1,45 @@
+# market_data — 台股行情爬取與統一 Postgres(market schema)
+
+> 共通規則見 repo 根 `AGENTS.md`,本檔只寫本模組的增量。
+
+## 模組定位
+
+爬取台股行情/籌碼/財報歷史,寫入外部 Postgres 的 `market` schema——台股歷史資料的**唯一資料源**(無本地備份,遺失只能從官方端點重爬)。面板經 `data_provider/market_db_fetcher.py` 讀取(priority=1,台股日線優先本地 DB,查無資料 fallback yfinance)。連線設定只有一個:`.env` 的 `DATABASE_URL`(gitignored,勿寫死)。
+
+## 檔案角色
+
+- `crawl.py`:orchestration(`crawl_day`/`crawl_range` 帶 resume、`daily_update` 營運入口)
+- `etl.py`:中文欄位→英文 typed 轉換;財報 melt 寬表→長格式
+- `writer.py`:INSERT…ON CONFLICT upsert(重爬冪等)
+- `market_repo.py`:面板讀取面(`price_history`/`to_daily_frame` 等)
+- `health.py`:完整性/新鮮度稽核(thin price days = 單邊市場缺漏偵測)
+- `migrations/`:Alembic,只管 `market` schema(不碰 `app`/`public`)
+- `sources.py`/`crawler.py`:TWSE/TPEx/MOPS 原始爬取邏輯(移植而來),盡量少動
+- `financial_statement.py`:IFRS 財報 html → 寬表解析(移植而來),盡量少動
+
+## 數據更新(操作指令)
+
+> 完整更新流程(何時 daily、何時 backfill、跑完怎麼用 health 驗收)見 skill `update-market-data`。以下為指令速查。
+
+- 每日增量+快照:`uv run python -m market_data.cli daily`(近 5 天 price/institutional/margin + valuation/index/stock_info 快照 + 上月營收 + 除權息滾動窗;停跑超過 5 天要用 backfill 補洞)
+- 補特定月營收/除權息:`… revenue --month 2026-06`、`… ex-dividend --start … --end …`
+- 區間回補:`uv run python -m market_data.cli backfill price --start 2026-01-01 --end 2026-01-31`
+- 財報季更:`uv run python -m market_data.cli financials --year 2026 --season 2`(下載該季 IFRS html 包 → 解析 → upsert;Q4 單季損益自「年報累計 − DB Q3 累計」推導,需 Q3 先在庫)
+- 健康稽核:`uv run python -m market_data.health`
+- 模組測試(免裝面板全依賴):
+  `export $(grep '^DATABASE_URL=' .env | xargs) && uv run --no-project --with sqlalchemy --with 'psycopg[binary]' --with pandas --with lxml --with requests --with tqdm --with pytest python -m pytest market_data/tests/ -q`
+
+## 進來改要遵守
+
+- schema 變更一律走 Alembic migration,不手改線上 DB。
+- price 一天必須 TWSE+TPEx **兩市場都抓到才寫**(單邊寫入會讓 resume 標記該日完成、另一邊永久缺)——不要「順手優化」成單邊也寫。
+- `MarketDBFetcher` 只准服務 `.TW`/`.TWO`;查無資料要 raise `DataSourceUnavailableError` 讓 chain fallback,不要回空 DataFrame。
+
+## 踩雷
+
+- `monthly_revenue.revenue` 單位是**千元**(MOPS 原始單位);對照 `twse_fundamental_adapter` 是 `*1000` 轉元後才用。
+- `monthly_revenue` **僅上市(sii)口徑**(歷史與現行皆同,上櫃全缺);要雙市場月營收請用 `twse_fundamental_adapter` 的即時快照。
+- `price.market` **全欄為 NULL**(TWSE/TPEx 在爬取端已合併,無法逐列區分上市/上櫃)。
+- 面板目前**只消費 `market.price`**(經 `MarketDBFetcher`);`market_repo` 雖已有 `monthly_revenue`/`valuation`/`stock_info` 讀取函式但尚無消費者——報告的基本面數字走 `twse_fundamental_adapter` 即時 API,不是這裡的資料。
+- 財報季更不在 `daily` 裡,要手動跑 `financials`(發布時點與 Q4 推導前提見「數據更新」)。
+- TWSE 可能回**截斷但非空**的回應(踩過:單日 price 少寫 300+ 筆且數值錯位);寫入後懷疑某日資料髒,`DELETE` 該日再重跑 backfill 即可(upsert 冪等)。

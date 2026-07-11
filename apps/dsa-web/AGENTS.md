@@ -1,0 +1,30 @@
+# dsa-web — 面板 Web 前端
+
+> 共通規則見 repo 根 `AGENTS.md`(含 lint/build 驗證矩陣),本檔只寫本模組增量。
+
+## 模組定位
+
+面板的 Web 前端:React 19 + Vite + TypeScript + Tailwind 4 + zustand。打後端 FastAPI(repo 根 `api/`),認證走 cookie session(axios `withCredentials`)。Electron 桌面端(`apps/dsa-desktop/`)包的就是這份建置產物。
+
+## 頁面業務地圖(`src/pages/`)
+
+- `/` HomePage:**最複雜的一頁**——發起分析任務、任務進度(run-flow/tasks 面板)、歷史報告與大盤複盤檢視都在這
+- `/board` RealtimeBoardPage:台股即時看板(Shioaji 行情+大盤指數條);**資料語意正本在 `docs/realtime-board.md`**(fallback、時區、kbars 30 天上限),別在這裡重查
+- `/chat` agent 對話、`/portfolio` 投組、`/decision-signals` 決策信號、`/screening` 選股、`/backtest` 回測、`/alerts` 警報、`/usage` LLM token 用量、`/settings` 設定——顧名思義
+- `/login` 登入頁(已登入時自動導回 `/`)
+
+## 進來改要遵守
+
+- API 呼叫一律走 `src/api/*`(共用 `api/index.ts` 的 axios 實例,自帶 `attachParsedApiError` 統一錯誤解析);**不要在元件裡直接 fetch/axios**。
+- 全域狀態:zustand(`src/stores/`);auth 與 UI 語言用 context(`src/contexts/`)。
+- UI 文案是 TS 常數表(`src/locales/*.ts`、`src/i18n/`),**每組文案 zh / en / zh-TW 三語都要補**,漏一語不會編譯錯但畫面會缺字。
+- 型別集中在 `src/types/`,與後端 schema 對齊;改後端 API 欄位時記得同步這裡。
+
+## 驗證
+
+- `npm run lint && npm run build`(根 AGENTS.md 的 web-gate 同款)
+- 單元測試:`npm run test`(vitest;根 AGENTS.md 沒列,但存在)
+
+## 踩雷
+
+- 看板行情異常(名稱變英文、延遲)通常不是前端問題——是後端 Shioaji 未裝/無金鑰時**靜默降級 yfinance**(見根 AGENTS.md §10 與 `docs/realtime-board.md`),先查後端再動前端。

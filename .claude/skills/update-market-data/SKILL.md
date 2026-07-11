@@ -1,0 +1,52 @@
+---
+name: "update-market-data"
+description: "更新/回補 market schema 的台股行情資料(price/institutional/margin/valuation/index/stock_info)。判斷該跑 daily 還是 backfill、執行、並用 health 稽核確認補齊。當使用者想『更新行情』『回補行情資料』『market data 太舊/停很久』『補資料庫缺口』『跑 daily update』時調用。"
+---
+
+# 行情資料更新 (Update Market Data)
+
+`market_data` 模組的更新 runbook。爬取皆 **resume**(冪等補洞),寫外部 Postgres 的 `market` schema(連線只認 `.env` 的 `DATABASE_URL`)。事實面——檔案角色、來源上限、欄位單位、踩雷——一律以 `market_data/AGENTS.md` 為準;本技能只定「怎麼跑、跑完怎麼算數」。
+
+## 前置
+
+- 在 repo 根目錄執行,`.env` 已設 `DATABASE_URL`。
+- **同時只跑一個爬取程序**(單一寫入者);並發會互鎖,也可能破壞「兩市場都到才寫」的規則。
+
+## 步驟
+
+### 1. 先稽核落差
+
+```
+uv run python -m market_data.health
+```
+
+輸出每表 `rows / start~end` 與 `thin price days`(單日列數 < 中位數一半 = 疑似單邊市場缺漏)。
+**完成判準**:能說出每個資料集落後到哪一天、以及 thin days 清單。
+
+### 2. 依落差選路徑
+
+- **落後 ≤ 5 天(例行)** → `uv run python -m market_data.cli daily`(近 5 天增量 + 快照 + 上月營收 + 除權息滾動窗)。
+- **補特定月營收/除權息區間** → `… revenue --month YYYY-MM` / `… ex-dividend --start … --end …`(月營收僅上市口徑)。
+- **落後 > 5 天,或有洞 / thin days** → 區間回補:
+  ```
+  uv run python -m market_data.cli backfill {price|institutional|margin} --start YYYY-MM-DD --end YYYY-MM-DD
+  ```
+  backfill 僅 price/institutional/margin;valuation/index/stock_info 走 `uv run python -m market_data.cli snapshot`。
+- 區間長(數月以上)→ 背景執行(禮貌延遲會跑數小時);中斷後**重跑同指令**即 resume 續補。
+- **財報落後一季以上**(monthly_revenue/financial_statement 的 end 過舊)→ 季更:
+  ```
+  uv run python -m market_data.cli financials --year YYYY --season {1..4}
+  ```
+  發布時點:Q1→5/15 後、Q2→8/14 後、Q3→11/14 後、Q4(年報)→隔年 3/31 後。
+  下載整季 IFRS html 包(約 1-2 GB,解析+upsert 後自動清除;除錯才加 `--keep-files`)。
+  Q4 單季損益由「年報累計 − DB 的 Q3 累計」推導,**跑 Q4 前確認同年 Q3 已在庫**。
+
+### 3. 驗證
+
+再跑 `uv run python -m market_data.health`。
+**完成判準**:目標資料集 `end` 已推進到預期交易日,且 **thin price days 沒有新增**。
+
+## 別踩(細節見 `market_data/AGENTS.md`)
+
+- **財報不在 `daily` 裡**:新季報要手動跑 `financials`(見步驟 2),別以為 `daily` 會補進財報。
+- **兩市場鐵則**:price 一天要 TWSE+TPEx 都抓到才寫。別「順手優化」成單邊也寫——會讓 resume 標記該日完成、另一市場永久缺,正是 thin days 的來源。

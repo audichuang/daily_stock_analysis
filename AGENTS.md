@@ -44,7 +44,7 @@
 ## 2. AI 协作资产治理
 
 - `AGENTS.md` 是仓库内 AI 协作规则的唯一真源。
-- `CLAUDE.md` 必须是指向 `AGENTS.md` 的软链接，用于兼容 Claude 生态。
+- `CLAUDE.md` 必须是内容为 `@AGENTS.md` 的普通文件（Claude 的 import 语法，禁止软链接），用于兼容 Claude 生态；模块级 `CLAUDE.md` 同样处理。
 - `.github/copilot-instructions.md` 与 `.github/instructions/*.instructions.md` 是 GitHub Copilot / Coding Agent 的镜像或分层补充；若与本文件冲突，以 `AGENTS.md` 为准。
 - 仓库协作 skill 存放在 `.claude/skills/`，分析产物存放在 `.claude/reviews/`；前者可以入库，后者默认视为本地产物。
 - 根目录 `SKILL.md` 与 `docs/openclaw-skill-integration.md` 属于产品或外部集成说明，不是仓库协作规则真源。
@@ -62,7 +62,7 @@ python scripts/check_ai_assets.py
 - 关键入口：
   - `main.py`：分析任务主入口
   - `server.py`：FastAPI 服务入口
-  - `apps/dsa-web/`：Web 前端
+  - `apps/dsa-web/`：Web 前端（页面地图与前端约定见 `apps/dsa-web/AGENTS.md`）
   - `apps/dsa-desktop/`：Electron 桌面端
   - `.github/workflows/`：CI、发布、每日任务
 - 核心职责：
@@ -73,6 +73,7 @@ python scripts/check_ai_assets.py
   - `src/schemas/`：Schema / 数据结构
   - `src/llm/`：LLM 生成后端与 usage / provider 缓存
   - `data_provider/`：多数据源适配与 fallback
+  - `market_data/`：台股行情爬取 → 统一 Postgres（market schema），细节见 `market_data/AGENTS.md`
   - `api/`：FastAPI API
   - `bot/`：机器人接入
   - `scripts/`：本地脚本
@@ -305,4 +306,5 @@ CI 通过只能说明自动检查通过，不能替代人工语义收敛，也�
 - **自动补全索引**：台股全量种子在 `scripts/stock_index_seeds/stock_list_tw.csv`（`make refresh-tw` 重建）。`.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` **必须保持 `false`**——否则运行时会从上游 GitHub 拉索引、覆盖掉本地台股/美股增量。
 - **LLM 主模型用 DeepSeek**：`.env` 须**显式**设 `LITELLM_MODEL=deepseek/deepseek-chat`。否则当 shell 环境导出了 `GEMINI_API_KEY` 时，`load_dotenv` 不覆盖既有环境变量，自动推断会优先选 Gemini。
 - **通知用 Bark，走 Doppler 注入**：`make serve` / `make review-tw` 用 `doppler run -p shioaji -c dev` 把 Doppler 的 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`（`custom_webhook_sender.py` 自动识别 `api.day.app`），secret 不落地 `.env`。
+- **台股历史数据（行情/筹码/财报）统一在 Postgres（`market` schema），且为唯一数据源（无本地备份）**：`DATABASE_URL` 在 `.env`。台股日线优先走 `MarketDBFetcher`（本地 DB，priority=1），无数据 fallback yfinance。爬取/数据更新（含财报季更 `financials`）/踩雷见 `market_data/AGENTS.md`。
 - **台股即时看板/走势用永丰 Shioaji，但 `shioaji` 是 optional 依赖**：未 `uv pip install shioaji`、或无金钥（同走 Doppler `shioaji/dev` 的 `SHIOAJI_API_KEY`/`SHIOAJI_SECRET_KEY`）时会**静默降级 yfinance**（行情延迟、名称变英文）——本 session 实际踩过。看板/批次行情/走势/fallback/Shioaji session 与 ts 时区、kbars 30 天上限等细节见 `docs/realtime-board.md`。

@@ -41,7 +41,6 @@ def report(engine=None):
 
 
 if __name__ == "__main__":
-    import json
 
     r = report()
     for t, info in r["tables"].items():

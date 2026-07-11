@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 台股财报季更 CLI：`python -m market_data.cli financials --year YYYY --season N` 下载当季 IFRS 财报 html 包、解析后以长格式 upsert 进 Postgres `market.financial_statement`（Q4 单季损益由「年报累计 − 库内 Q3 累计」推导），取代已退役 finlab repo 的 sqlite/pickle 管线；finlab 本地数据（sqlite + 34G 原始 html）经逐表/逐季与 Postgres 零差异核对后删除，Postgres 为台股历史数据唯一数据源。
+- [新功能] 补齐月营收/除权息更新路径：`market_data.cli` 新增 `revenue --month YYYY-MM`（MOPS 月营收，仅上市口径，与历史数据一致）与 `ex-dividend --start --end`（TWSE 除权息公告）；`daily` 例行更新顺带保鲜上月营收与除权息滚动窗（-30d~+90d），upsert 幂等。
 - [新功能] 即时盯盘页面新增「大盘指数」列（台股加权指数 TWII + 柜买指数 TPEX），载入时抓一次并沿用页面既有 30 秒轮询 timer 一起刷新（不另开 timer）；后端新增 `GET /api/v1/stocks/indices?region=tw`（数据走 `DataFetcherManager.get_main_indices`），盯盘辅助资料失败 fail-open 回空列表、前端空资料整列不显示，均不报错；涨跌沿用台股红涨绿跌惯例并标「延迟」提示（指数走 yfinance 约延迟 15-20 分，非个股 Shioaji 即时）。
 - [改进] 个股分析 LLM prompt 本体在 `report_language == "zh-TW"` 时整段改用繁体中文（台湾用语）——此前 prompt 标签/区块标题/规则说明硬写简体，DeepSeek 跟着简体 context 仍输出简体；现 `_format_prompt`/`_phase_aware_quote_labels`/`_sanitize_trend_analysis_for_prompt` 依语言取值，zh-TW 出繁体、zh/en 路径 byte-for-byte 不变，JSON 键名/`decision_type` 契约不变；`_legacy_audit_marker_specs` 的 quote/news 标记同步复用共享 `_format_prompt_tech_section_title`，避免 prompt 与 audit 重建不一致（实测 2330.TW zh-TW 输出全繁体、600519 zh 仍简体）。
 - [修复] 台股即时看板涨跌停价改由 live 参考价(pre_close)算 ±10% + tick 对齐(`tw_price_limits`)，取代可能与当日参考价不同步的 shioaji `contract.limit_up/limit_down` 静态值（实测 2330 contract 给 2625/2155，昨收 2340 的正确板价应为 2570/2110）；连带修正「距涨跌停」距离与展开明细的板价显示。

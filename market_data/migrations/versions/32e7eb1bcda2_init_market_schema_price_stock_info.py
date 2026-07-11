@@ -1,14 +1,13 @@
 """init market schema (price, stock_info)
 
 Revision ID: 32e7eb1bcda2
-Revises: 
+Revises:
 Create Date: 2026-07-05 11:14:03.486854
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision: str = '32e7eb1bcda2'
 down_revision: Union[str, None] = None
