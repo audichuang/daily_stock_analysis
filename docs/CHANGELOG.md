@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [文档] `market_data/AGENTS.md` 更新 market_repo 消费者踩雷：Phase 3 后 `institutional()`/`stock_info()` 已被 analyzer 三大法人历史趋势 prompt 消费（历史趋势走本 DB；估值/月营收/当日三大法人仍走即时 API/网路），修正原「market_repo 尚无消费者」的过时说明。
 - [修复] 合并上游后收敛两处 vitest 回归：即时看板大盘指数「延迟」提示由原生 `title=` 改 `aria-label` 满足 UI governance 守卫；告警市场区域下拉测试对齐后端 `MARKET_LIGHT_ALERT_REGIONS`（仅 cn/hk/us，不含 jp/kr）。
 - [文档] 新增 `docs/upstream-sync-2026-07-11.md` 上游同步记录（v3.24→v3.25 基线/裁决原则/保留增量/采纳功能/关键裁决/回滚/下次同步备忘）。
 - [新功能] 台股個股分析 LLM prompt 追加三大法人歷史趨勢（外資/投信/自營/合計 連 N 日買賣超、近 5/20 日累計、合計佔股本比）：DB（`market.institutional` 14 年歷史）+ 當日網路值於 prompt 組裝層（`analyzer._format_prompt`）即時計算，tw-only、fail-open、僅進 prompt 不入持久化 context/schema/Web。新增 `market_repo.institutional()` reader（含 statement_timeout engine）與純函式 `data_provider/tw_institutional_trend.py`。
