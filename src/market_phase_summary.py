@@ -220,6 +220,9 @@ def format_public_phase_pack_excerpt(
         return ""
     from src.report_language import normalize_report_language as _norm_lang
     lang = _norm_lang(report_language)
+    # Korean reuses the English structural summary; output language is set by directive.
+    if lang == "ko":
+        lang = "en"
     source_label = _source_label(source, lang)
 
     lines: List[str] = []
@@ -298,6 +301,9 @@ def format_public_market_status_line(
 
     from src.report_language import normalize_report_language as _norm_lang
     lang = _norm_lang(report_language)
+    # Korean reuses the English structural summary; output language is set by directive.
+    if lang == "ko":
+        lang = "en"
     if lang == "en":
         phase_labels = _PHASE_LABELS_EN
         market_labels = _MARKET_LABELS_EN

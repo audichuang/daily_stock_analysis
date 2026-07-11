@@ -143,7 +143,9 @@ def test_snapshot_maps_tw_intraday_fields(monkeypatch):
     quote = sf.ShioajiFetcher().get_realtime_quote("2330.TW")
     assert quote is not None
     assert quote.average_price == 1002.5          # 均价多空分界
-    assert quote.limit_up == 1100.0 and quote.limit_down == 900.0  # 来自 contract
+    # 涨跌停由 live 参考价(pre_close=990) ±10% + tick 对齐算出（tw_price_limits），
+    # 取代可能与当日参考价不同步的 contract.limit_up/limit_down 静态值(1100/900)。
+    assert quote.limit_up == 1085.0 and quote.limit_down == 891.0
     assert quote.best_bid == 999.0 and quote.best_bid_volume == 120
     assert quote.best_ask == 1001.0 and quote.best_ask_volume == 80
     assert quote.last_tick_type == 1              # 最后一笔外盘主买

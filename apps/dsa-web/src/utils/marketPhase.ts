@@ -25,6 +25,12 @@ const REQUEST_PHASE_LABELS: Record<ReportLanguage, Record<AnalysisPhase, string>
     intraday: '盤中',
     postmarket: '盤後',
   },
+  ko: {
+    auto: '자동 단계',
+    premarket: '장 시작 전',
+    intraday: '장중',
+    postmarket: '장 마감 후',
+  },
 };
 
 const MARKET_PHASE_LABELS: Record<ReportLanguage, Record<MarketPhaseValue, string>> = {
@@ -55,6 +61,15 @@ const MARKET_PHASE_LABELS: Record<ReportLanguage, Record<MarketPhaseValue, strin
     non_trading: '非交易日',
     unknown: '階段未知',
   },
+  ko: {
+    premarket: '장 시작 전',
+    intraday: '장중',
+    lunch_break: '점심 휴장',
+    closing_auction: '마감 임박',
+    postmarket: '장 마감 후',
+    non_trading: '비거래일',
+    unknown: '단계 불명',
+  },
 };
 
 const TEXT = {
@@ -72,6 +87,11 @@ const TEXT = {
     requestPrefix: '請求階段',
     finalPrefix: '市場階段',
     partialBar: '日線尚未完成',
+  },
+  ko: {
+    requestPrefix: '요청 단계',
+    finalPrefix: '시장 단계',
+    partialBar: '일봉 미완성',
   },
 } as const;
 

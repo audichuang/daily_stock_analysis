@@ -104,6 +104,13 @@ def _warn_if_public_webui_without_auth(host: str) -> None:
     )
 
 
+def _resolve_web_service_bind(args: argparse.Namespace, config: Config) -> Tuple[str, int]:
+    """Resolve the effective Web/API bind address from CLI first, then config."""
+    host = args.host if args.host is not None else (config.webui_host or "127.0.0.1")
+    port = args.port if args.port is not None else config.webui_port
+    return host, port
+
+
 def _read_active_env_values() -> Optional[Dict[str, str]]:
     env_path = _get_active_env_path()
     if not env_path.exists():
@@ -374,15 +381,15 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--port',
         type=int,
-        default=8000,
-        help='FastAPI 服务端口（默认 8000）'
+        default=None,
+        help='FastAPI 服务端口（默认使用 WEBUI_PORT，未配置时为 8000）'
     )
 
     parser.add_argument(
         '--host',
         type=str,
-        default='0.0.0.0',
-        help='FastAPI 服务监听地址（默认 0.0.0.0）'
+        default=None,
+        help='FastAPI 服务监听地址（默认使用 WEBUI_HOST，未配置时为 127.0.0.1）'
     )
 
     parser.add_argument(
@@ -583,16 +590,28 @@ def _can_reuse_market_context_for_review(summary: str, region: str) -> bool:
     return len(parts) <= 1
 
 
+def _resolve_daily_market_context_market(market: str, normalized_region: str) -> str:
+    if "," not in normalized_region:
+        return market
+    parts = [item.strip() for item in normalized_region.split(",") if item.strip()]
+    if parts and all(item in {"jp", "kr"} for item in parts):
+        return parts[0]
+    return market
+
+
 def _resolve_daily_market_context_target_date(
     region: str,
     current_time: datetime,
 ) -> date:
     normalized_region = str(region or "cn").strip().lower()
-    market = normalized_region if normalized_region in {"cn", "hk", "us", "tw"} else "cn"
+    market = normalized_region if normalized_region in {"cn", "hk", "us", "tw", "jp", "kr"} else "cn"
 
     from src.core.trading_calendar import get_effective_trading_date
 
-    return get_effective_trading_date(market, current_time=current_time)
+    return get_effective_trading_date(
+        _resolve_daily_market_context_market(market, normalized_region),
+        current_time=current_time,
+    )
 
 
 def _market_review_report_text(review_result: Any) -> str:
@@ -1290,12 +1309,8 @@ def main() -> int:
     # === 启动 Web 服务 (如果启用) ===
     start_serve = (args.serve or args.serve_only) and os.getenv("GITHUB_ACTIONS") != "true"
 
-    # 兼容旧版 WEBUI_HOST/WEBUI_PORT：如果用户未通过 --host/--port 指定，则使用旧变量
     if start_serve:
-        if args.host == '0.0.0.0' and os.getenv('WEBUI_HOST'):
-            args.host = os.getenv('WEBUI_HOST')
-        if args.port == 8000 and os.getenv('WEBUI_PORT'):
-            args.port = int(os.getenv('WEBUI_PORT'))
+        args.host, args.port = _resolve_web_service_bind(args, config)
         _warn_if_public_webui_without_auth(args.host)
 
     bot_clients_started = False

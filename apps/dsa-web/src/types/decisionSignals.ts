@@ -15,6 +15,8 @@ export type DecisionSignalOutcomeEvalStatus = 'completed' | 'unable';
 export type DecisionSignalOutcomeValue = 'hit' | 'miss' | 'neutral';
 export type DecisionSignalFeedbackValue = 'useful' | 'not_useful';
 export type DecisionSignalFeedbackSource = 'web' | 'api';
+export type DecisionProfile = 'conservative' | 'balanced' | 'aggressive';
+export type DecisionProfileDisplay = DecisionProfile | 'unknown';
 
 export interface DecisionSignalItem {
   id: number;
@@ -25,6 +27,7 @@ export interface DecisionSignalItem {
   sourceAgent?: string | null;
   sourceReportId?: number | null;
   traceId?: string | null;
+  decisionProfile?: DecisionProfile | null;
   marketPhase?: MarketPhaseValue | null;
   triggerSource: string;
   action: DecisionAction;
@@ -59,6 +62,7 @@ export interface DecisionSignalCreateRequest {
   sourceAgent?: string | null;
   sourceReportId?: number | null;
   traceId?: string | null;
+  decisionProfile?: DecisionProfile;
   marketPhase?: MarketPhaseValue | null;
   triggerSource: string;
   action: DecisionAction;
@@ -90,6 +94,7 @@ export interface DecisionSignalListParams {
   stockCode?: string;
   action?: DecisionAction;
   marketPhase?: MarketPhaseValue;
+  decisionProfile?: DecisionProfileDisplay;
   sourceType?: DecisionSignalSourceType;
   sourceReportId?: number;
   traceId?: string;
@@ -119,6 +124,42 @@ export interface DecisionSignalStatusUpdateRequest {
 export interface DecisionSignalMutationResponse {
   item: DecisionSignalItem;
   created: boolean;
+}
+
+export interface DecisionSignalWarning {
+  code: string;
+  message?: string | null;
+  params?: Record<string, unknown> | null;
+}
+
+export interface DecisionSignalReassessRequest {
+  sourceReportId: number;
+  decisionProfile: DecisionProfile;
+  persist?: false;
+}
+
+export interface DecisionSignalReassessPreview {
+  action: DecisionAction;
+  score?: number | null;
+  confidence?: number | null;
+  horizon?: DecisionSignalHorizon | null;
+  entryLow?: number | null;
+  entryHigh?: number | null;
+  stopLoss?: number | null;
+  targetPrice?: number | null;
+  invalidation?: string | null;
+  reason?: string | null;
+  riskSummary?: string | null;
+  watchConditions?: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface DecisionSignalReassessResponse {
+  preview: DecisionSignalReassessPreview;
+  item?: DecisionSignalItem | null;
+  created: false;
+  warnings: DecisionSignalWarning[];
+  blockedReason?: string | null;
 }
 
 export interface DecisionSignalListResponse {

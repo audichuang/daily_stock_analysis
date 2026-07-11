@@ -18,7 +18,16 @@ from src.schemas.decision_action import (
     DecisionAction,
     build_action_fields,
     localize_action_label,
+    normalize_decision_action,
 )
+from src.schemas.decision_profile import (
+    DecisionProfileFilter,
+    VALID_DECISION_PROFILES,
+    extract_legacy_decision_profile,
+    normalize_decision_profile,
+    normalize_decision_profile_filter,
+)
+from src.schemas.decision_scale import action_for_score, score_action_conflicts_without_guardrail
 from src.services.portfolio_service import VALID_MARKETS
 from src.storage import (
     AnalysisHistory,
@@ -105,6 +114,7 @@ class DecisionSignalService:
         market: Optional[str] = None,
         action: Optional[str] = None,
         market_phase: Optional[str] = None,
+        decision_profile: Optional[Any] = None,
         source_type: Optional[str] = None,
         source_report_id: Optional[Any] = None,
         trace_id: Optional[str] = None,
@@ -125,6 +135,7 @@ class DecisionSignalService:
         market_norm = self._normalize_optional_market(market)
         action_norm = self._normalize_optional_action(action)
         market_phase_norm = self._normalize_optional_enum(market_phase, MARKET_PHASES, "market_phase")
+        decision_profile_filter = normalize_decision_profile_filter(decision_profile)
         source_type_norm = self._normalize_optional_enum(source_type, SOURCE_TYPES, "source_type")
         source_report_id_norm = self._optional_int(source_report_id, "source_report_id")
         trace_id_norm = self._optional_identity_text(trace_id, "trace_id", max_length=64)
@@ -177,6 +188,7 @@ class DecisionSignalService:
             market=market_norm,
             action=action_norm,
             market_phase=market_phase_norm,
+            decision_profile_filter=decision_profile_filter,
             source_type=source_type_norm,
             source_report_id=source_report_id_norm,
             trace_id=trace_id_norm,
@@ -194,6 +206,7 @@ class DecisionSignalService:
             market=market_norm,
             action=action_norm,
             market_phase=market_phase_norm,
+            decision_profile_filter=decision_profile_filter,
             source_type=source_type_norm,
             source_report_id=source_report_id_norm,
             trace_id=trace_id_norm,
@@ -213,6 +226,7 @@ class DecisionSignalService:
                 market=market_norm,
                 action=action_norm,
                 market_phase=market_phase_norm,
+                decision_profile_filter=decision_profile_filter,
                 source_type=source_type_norm,
                 source_report_id=source_report_id_norm,
                 trace_id=trace_id_norm,
@@ -263,7 +277,6 @@ class DecisionSignalService:
         replace_metadata: bool = False,
     ) -> Dict[str, Any]:
         status_norm = self._normalize_enum(status, SIGNAL_STATUSES, "status")
-        metadata_json = self._json_dumps(metadata) if replace_metadata else None
         existing = self.repo.get(signal_id)
         if existing is None:
             raise DecisionSignalNotFoundError(f"Decision signal not found: {signal_id}")
@@ -271,6 +284,20 @@ class DecisionSignalService:
             existing.status in TERMINAL_STATUSES or self._is_expired(existing.expires_at)
         ):
             raise ValueError("terminal decision signal cannot be reactivated through status update")
+        metadata_json = None
+        if replace_metadata:
+            if isinstance(metadata, dict):
+                normalized_metadata = dict(metadata)
+                if existing.decision_profile is None:
+                    normalized_metadata.pop("decision_profile", None)
+                else:
+                    normalized_metadata = self._synchronize_metadata_decision_profile(
+                        normalized_metadata,
+                        existing.decision_profile,
+                    )
+                metadata_json = self._json_dumps(normalized_metadata)
+            else:
+                metadata_json = self._json_dumps(metadata)
         row = self.repo.update_status(
             signal_id,
             status=status_norm,
@@ -288,6 +315,7 @@ class DecisionSignalService:
         market: Optional[str],
         action: Optional[str],
         market_phase: Optional[str],
+        decision_profile_filter: DecisionProfileFilter,
         source_type: Optional[str],
         source_report_id: Optional[int],
         trace_id: Optional[str],
@@ -303,6 +331,13 @@ class DecisionSignalService:
         """Only lazy-backfill for the exact report section query used by Web."""
 
         if source_type != "analysis" or source_report_id is None:
+            return False
+        if decision_profile_filter.is_unknown:
+            return False
+        if (
+            not decision_profile_filter.is_all
+            and decision_profile_filter.profile != "balanced"
+        ):
             return False
         return not any(
             value not in (None, "", False)
@@ -383,6 +418,7 @@ class DecisionSignalService:
                 trace_id=str(getattr(record, "query_id", "") or source_report_id),
                 query_source="history",
                 report_type=str(getattr(record, "report_type", "") or "simple"),
+                profile_source="backfill_defaulted",
             )
             if payload is None:
                 return
@@ -421,13 +457,92 @@ class DecisionSignalService:
         normalized_action = str(raw_action).strip() if raw_action is not None else None
         if not normalized_action:
             normalized_action = None
+        score = DecisionSignalService._history_int(
+            raw.get("sentiment_score"),
+            getattr(record, "sentiment_score", None),
+            default=None,
+        )
+        raw_action_value = normalize_decision_action(normalized_action) or normalize_decision_action(
+            normalized_operation_advice
+        )
+        guardrail_reason = DecisionSignalService._history_guardrail_reason(
+            raw=raw,
+            operation_advice=normalized_operation_advice,
+            score=score,
+            raw_action=raw_action_value,
+        )
         action_fields = build_action_fields(
             operation_advice=normalized_operation_advice,
             explicit_action=normalized_action,
             report_type=getattr(record, "report_type", ""),
             report_language=raw.get("report_language"),
+            sentiment_score=score,
+            guardrail_reason=guardrail_reason,
+            align_with_score=True,
         )
         return action_fields["action"], action_fields["action_label"]
+
+    @staticmethod
+    def _history_guardrail_reason(
+        *,
+        raw: Dict[str, Any],
+        operation_advice: Optional[str],
+        score: Optional[int],
+        raw_action: Optional[str],
+    ) -> Optional[str]:
+        dashboard = raw.get("dashboard") if isinstance(raw.get("dashboard"), dict) else {}
+        calibration = (
+            dashboard.get("decision_score_calibration")
+            if isinstance(dashboard.get("decision_score_calibration"), dict)
+            else {}
+        )
+        stability = (
+            dashboard.get("decision_stability")
+            if isinstance(dashboard.get("decision_stability"), dict)
+            else {}
+        )
+        for candidate in (
+            calibration.get("guardrail_reason"),
+            stability.get("reason"),
+            raw.get("guardrail_reason"),
+        ):
+            text = str(candidate or "").strip()
+            if text:
+                return text
+
+        if score_action_conflicts_without_guardrail(score=score, action=raw_action):
+            candidates = [operation_advice]
+            if action_for_score(score) == "buy":
+                candidates.extend(
+                    [
+                        raw.get("analysis_summary"),
+                        raw.get("buy_reason"),
+                        raw.get("risk_warning"),
+                    ]
+                )
+            hints = (
+                "等待",
+                "待",
+                "需要确认",
+                "缺少确认",
+                "未确认",
+                "回踩",
+                "支撑",
+                "压力",
+                "风险",
+                "资金",
+                "突破",
+                "不追",
+                "不宜",
+            )
+            for candidate in candidates:
+                text = str(candidate or "").strip()
+                if not text:
+                    continue
+                normalized = text.lower()
+                if any(hint in normalized for hint in hints):
+                    return text
+        return None
 
     def _apply_history_backfill_lifecycle(
         self,
@@ -490,6 +605,7 @@ class DecisionSignalService:
             market=row.market,
             stock_code=row.stock_code,
             actions=sorted(opposing_actions),
+            decision_profile=row.decision_profile,
             exclude_signal_id=row.id,
         )
         for newer_row in newer_rows:
@@ -558,6 +674,23 @@ class DecisionSignalService:
         if not action_label:
             action_label = localize_action_label(action, report_language)
 
+        raw_metadata = payload.get("metadata")
+        if raw_metadata is None:
+            metadata: Dict[str, Any] = {}
+        elif isinstance(raw_metadata, dict):
+            metadata = dict(raw_metadata)
+        else:
+            raise ValueError("metadata must be an object")
+
+        if "decision_profile" in payload:
+            decision_profile = normalize_decision_profile(payload.get("decision_profile"))
+            if decision_profile is None:
+                allowed = ", ".join(VALID_DECISION_PROFILES)
+                raise ValueError(f"decision_profile must be one of: {allowed}")
+        else:
+            decision_profile = extract_legacy_decision_profile(metadata) or "balanced"
+        metadata = self._synchronize_metadata_decision_profile(metadata, decision_profile)
+
         confidence = self._optional_float(payload.get("confidence"), "confidence")
         if confidence is not None and not 0.0 <= confidence <= 1.0:
             raise ValueError("confidence must be between 0.0 and 1.0")
@@ -578,7 +711,7 @@ class DecisionSignalService:
             expires_at = self._default_expires_at(
                 horizon=horizon,
                 market=market,
-                metadata=payload.get("metadata"),
+                metadata=metadata,
             )
         created_at = self._parse_datetime(payload.get("_created_at_override"))
 
@@ -590,6 +723,7 @@ class DecisionSignalService:
             "source_agent": self._optional_public_text(payload.get("source_agent"), "source_agent", max_length=64),
             "source_report_id": self._optional_int(payload.get("source_report_id"), "source_report_id"),
             "trace_id": self._optional_identity_text(payload.get("trace_id"), "trace_id", max_length=64),
+            "decision_profile": decision_profile,
             "market_phase": market_phase,
             "trigger_source": self._normalize_trigger_source(payload.get("trigger_source")),
             "action": action,
@@ -610,7 +744,7 @@ class DecisionSignalService:
             "data_quality_summary_json": self._json_dumps(payload.get("data_quality_summary")),
             "status": self._normalize_optional_enum(payload.get("status"), SIGNAL_STATUSES, "status") or "active",
             "expires_at": expires_at,
-            "metadata_json": self._json_dumps(payload.get("metadata")),
+            "metadata_json": self._json_dumps(metadata),
         }
         if created_at is not None:
             fields["created_at"] = created_at
@@ -711,6 +845,7 @@ class DecisionSignalService:
             market=row.market,
             stock_code=row.stock_code,
             actions=sorted(opposing_actions),
+            decision_profile=row.decision_profile,
             exclude_signal_id=row.id,
         )
         for old_row in old_rows:
@@ -769,7 +904,21 @@ class DecisionSignalService:
             "invalidated_at": utc_naive_now().isoformat(),
             "previous_status": row.status,
         })
+        if row.decision_profile is not None:
+            metadata = self._synchronize_metadata_decision_profile(
+                metadata,
+                row.decision_profile,
+            )
         return self._json_dumps(metadata)
+
+    @staticmethod
+    def _synchronize_metadata_decision_profile(
+        metadata: Dict[str, Any],
+        decision_profile: str,
+    ) -> Dict[str, Any]:
+        normalized = dict(metadata)
+        normalized["decision_profile"] = decision_profile
+        return normalized
 
     @staticmethod
     def _metadata_for_invalidation(row: DecisionSignalRecord) -> Dict[str, Any]:
@@ -777,11 +926,12 @@ class DecisionSignalService:
             return {}
         try:
             value = json.loads(row.metadata_json)
-        except json.JSONDecodeError as exc:
+        except (TypeError, ValueError, RecursionError) as exc:
             logger.warning(
-                "Replacing invalid decision signal metadata during invalidation: id=%s error=%s",
+                "Replacing invalid decision signal metadata during invalidation: "
+                "id=%s error_type=%s",
                 row.id,
-                exc,
+                type(exc).__name__,
             )
             return {"metadata_replaced_due_to_invalid_json": True}
         if isinstance(value, dict):
@@ -1060,6 +1210,7 @@ class DecisionSignalService:
             "source_agent": row.source_agent,
             "source_report_id": row.source_report_id,
             "trace_id": row.trace_id,
+            "decision_profile": row.decision_profile,
             "market_phase": row.market_phase,
             "trigger_source": row.trigger_source,
             "action": row.action,

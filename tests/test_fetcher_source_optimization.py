@@ -147,6 +147,7 @@ class TestFetcherSourceOptimization(unittest.TestCase):
                 "EfinanceFetcher",
                 "TencentFetcher",
                 "AkshareFetcher",
+                "MarketDBFetcher",  # 台股历史 priority=1（本地 Postgres market schema；无 psycopg/DB 时自我熔断降级）
                 "PytdxFetcher",
                 "BaostockFetcher",
                 "YfinanceFetcher",

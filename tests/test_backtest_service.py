@@ -27,6 +27,19 @@ class BacktestServiceTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
         self._db_path = os.path.join(self._temp_dir.name, "test_backtest_service.db")
+        self._original_env = {
+            key: os.environ.get(key)
+            for key in (
+                "ENV_FILE",
+                "DATABASE_PATH",
+                "BACKTEST_EVAL_WINDOW_DAYS",
+            )
+        }
+        self._env_path = os.path.join(self._temp_dir.name, ".env")
+        with open(self._env_path, "w", encoding="utf-8") as env_file:
+            env_file.write("STOCK_LIST=600519,000001\n")
+
+        os.environ["ENV_FILE"] = self._env_path
         os.environ["DATABASE_PATH"] = self._db_path
         os.environ["BACKTEST_EVAL_WINDOW_DAYS"] = "3"
 
@@ -148,7 +161,13 @@ class BacktestServiceTestCase(unittest.TestCase):
             session.commit()
 
     def tearDown(self) -> None:
+        Config._instance = None
         DatabaseManager.reset_instance()
+        for key, value in self._original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         self._temp_dir.cleanup()
 
     def _count_results(self) -> int:
@@ -1787,6 +1806,35 @@ class BacktestServiceTestCase(unittest.TestCase):
         self.assertEqual(item["direction_expected"], "up")
         self.assertTrue(item["direction_correct"])
 
+    def test_get_recent_evaluations_aligns_neutral_advice_with_score(self) -> None:
+        service = BacktestService(self.db)
+        with self.db.get_session() as session:
+            history = session.query(AnalysisHistory).filter(AnalysisHistory.query_id == "q1").one()
+            history.operation_advice = "持有"
+            history.sentiment_score = 78
+            history.raw_result = None
+            result = self._make_backtest_result(
+                analysis_history_id=history.id,
+                analysis_date=date(2024, 1, 1),
+                eval_window_days=1,
+            )
+            result.operation_advice = "持有"
+            session.add(result)
+            session.commit()
+
+        data = service.get_recent_evaluations(
+            code="600519",
+            eval_window_days=1,
+            limit=10,
+            page=1,
+        )
+
+        self.assertEqual(data["total"], 1)
+        item = data["items"][0]
+        self.assertEqual(item["operation_advice"], "持有")
+        self.assertEqual(item["action"], "buy")
+        self.assertEqual(item["action_label"], "买入")
+
     def test_get_recent_evaluations_prefers_persisted_raw_action(self) -> None:
         service = BacktestService(self.db)
 
@@ -1798,6 +1846,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                     "operation_advice": "持有观察",
                     "action": "watch",
                     "action_label": "观望",
+                    "guardrail_reason": "市场风险较高，建议观望",
                 },
                 ensure_ascii=False,
             )
@@ -2029,7 +2078,12 @@ class BacktestServiceTestCase(unittest.TestCase):
         service = BacktestService(self.db)
         phase_snapshot = json.dumps({"market_phase_summary": {"phase": "intraday", "market": "cn"}})
         raw_result = json.dumps(
-            {"operation_advice": "持有观察", "action": "watch", "action_label": "观望"},
+            {
+                "operation_advice": "持有观察",
+                "action": "watch",
+                "action_label": "观望",
+                "guardrail_reason": "模型判定观望，保留原始动作",
+            },
             ensure_ascii=False,
         )
         rows = [
@@ -2041,6 +2095,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 phase_snapshot,
                 raw_result,
                 "simple",
+                78,
             )
             for idx in range(2)
         ]

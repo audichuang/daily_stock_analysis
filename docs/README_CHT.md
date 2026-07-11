@@ -60,7 +60,7 @@
 | 新聞搜尋 | [Anspire](https://open.anspire.cn/?share_code=QFBC0FYC)、[SerpAPI](https://serpapi.com/baidu-search-api?utm_source=github_daily_stock_analysis)、[Tavily](https://tavily.com/)、[Bocha](https://open.bocha.cn/)、[Brave](https://brave.com/search/api/)、[MiniMax](https://platform.minimaxi.com/)、SearXNG |
 | 社交輿情 | [Stock Sentiment API](https://api.adanos.org/docs)（Reddit / X / Polymarket，僅美股，可選） |
 
-> 完整規則見 [數據源配置](./full-guide.md#数据源配置)。
+> 專案預設內建 AkShare、Baostock、YFinance 等免費行情源，可零配置執行；免費源受上游限流、介面變動和網路波動影響，穩定性不保證。長期定時、批量分析或更穩定行情建議配置 TickFlow、Tushare、Longbridge 等 token 型數據源，適用市場、Actions 映射和 fallback 規則見 [數據源配置](./full-guide.md#数据源配置)。
 
 ## 🚀 快速開始
 
@@ -126,6 +126,18 @@
 
 更多搜尋源、社交輿情和降級規則見 [搜尋服務配置](./full-guide.md#搜索服务配置)。
 
+**行情數據源配置（可選）**
+
+> 預設使用 AkShare、Baostock、YFinance 等免費數據源，日誌中「未配置」的提示不影響執行。
+> 如需更穩定的行情，可按市場配置以下 Secret：
+
+| Secret 名稱 | 適用市場 | 說明 |
+|-------------|:--------:|------|
+| `TUSHARE_TOKEN` | A 股 | 提升歷史行情穩定性 |
+| `LONGBRIDGE_OAUTH_CLIENT_ID` + `LONGBRIDGE_OAUTH_TOKEN_CACHE_B64` | 港股/美股 | 補齊量比、換手率、PE 等欄位 |
+
+> 詳見 [數據源配置](./full-guide.md#数据源配置)。
+
 #### 3. 啟用 Actions
 
 `Actions` 標籤 -> `I understand my workflows, go ahead and enable them`
@@ -159,7 +171,7 @@ python main.py
 ```bash
 python main.py --debug
 python main.py --dry-run
-python main.py --stocks 600519,hk00700,AAPL
+python main.py --stocks 600519,hk00700,AAPL,2330.TW
 python main.py --market-review
 python main.py --schedule
 python main.py --serve-only

@@ -78,7 +78,9 @@ def format_market_phase_prompt_section(
     raw_phase = market_phase_context.get("phase")
     phase = raw_phase if isinstance(raw_phase, str) and raw_phase in _KNOWN_PHASES else "unknown"
 
-    if normalized == "en":
+    # Korean reuses the English structural context; the output-language
+    # directive (see decision agent) constrains the model to write in Korean.
+    if normalized in ("en", "ko"):
         return _format_en(market_phase_context, phase)
     if normalized == "zh-TW":
         return _format_zh_tw(market_phase_context, phase)

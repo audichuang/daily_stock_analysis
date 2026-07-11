@@ -17,6 +17,8 @@ import type {
   DecisionSignalOutcomeStatsBucket,
   DecisionSignalOutcomeStatsParams,
   DecisionSignalOutcomeStatsResponse,
+  DecisionSignalReassessRequest,
+  DecisionSignalReassessResponse,
   DecisionSignalStatusUpdateRequest,
 } from '../types/decisionSignals';
 
@@ -49,6 +51,19 @@ function toDecisionSignalItem(data: Record<string, unknown>): DecisionSignalItem
 function toDecisionSignalMutationResponse(data: Record<string, unknown>): DecisionSignalMutationResponse {
   const response = toCamelCase<DecisionSignalMutationResponse>(data);
   response.item = toDecisionSignalItem(data.item as Record<string, unknown>);
+  return response;
+}
+
+function toDecisionSignalReassessResponse(data: Record<string, unknown>): DecisionSignalReassessResponse {
+  const response = toCamelCase<DecisionSignalReassessResponse>(data);
+  const rawPreview = data.preview as Record<string, unknown> | undefined;
+  if (!rawPreview || typeof rawPreview !== 'object') {
+    throw new Error('DecisionSignal reassess response preview must be an object');
+  }
+  response.preview.metadata = (rawPreview.metadata as Record<string, unknown> | undefined) ?? {};
+  if (data.item) {
+    response.item = toDecisionSignalItem(data.item as Record<string, unknown>);
+  }
   return response;
 }
 
@@ -117,6 +132,7 @@ function toSnakeCreatePayload(payload: DecisionSignalCreateRequest): Record<stri
     source_agent: payload.sourceAgent,
     source_report_id: payload.sourceReportId,
     trace_id: payload.traceId,
+    decision_profile: payload.decisionProfile,
     market_phase: payload.marketPhase,
     trigger_source: payload.triggerSource,
     action: payload.action,
@@ -157,12 +173,21 @@ function toSnakeOutcomeRunPayload(payload: DecisionSignalOutcomeRunRequest): Rec
   });
 }
 
+function toSnakeReassessPayload(payload: DecisionSignalReassessRequest): Record<string, unknown> {
+  return {
+    source_report_id: payload.sourceReportId,
+    decision_profile: payload.decisionProfile,
+    persist: false,
+  };
+}
+
 function toListParams(params: DecisionSignalListParams = {}): Record<string, string | number | boolean> {
   return omitUndefined({
     market: params.market,
     stock_code: params.stockCode,
     action: params.action,
     market_phase: params.marketPhase,
+    decision_profile: params.decisionProfile,
     source_type: params.sourceType,
     source_report_id: params.sourceReportId,
     trace_id: params.traceId,
@@ -261,6 +286,14 @@ export const decisionSignalsApi = {
       { params: toLatestParams(params) },
     );
     return toDecisionSignalListResponse(response.data);
+  },
+
+  async reassess(payload: DecisionSignalReassessRequest): Promise<DecisionSignalReassessResponse> {
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/decision-signals/reassess',
+      toSnakeReassessPayload(payload),
+    );
+    return toDecisionSignalReassessResponse(response.data);
   },
 
   async updateStatus(

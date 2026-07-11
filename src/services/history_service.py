@@ -26,7 +26,6 @@ from src.report_language import (
     is_chip_structure_unavailable,
     localize_bias_status,
     localize_chip_health,
-    localize_operation_advice,
     localize_trend_prediction,
     normalize_report_language,
 )
@@ -36,12 +35,19 @@ from src.market_phase_summary import (
     extract_market_phase_summary,
     rebuild_market_phase_summary_for_stock_code,
 )
-from src.schemas.decision_action import build_action_fields
+from src.schemas.decision_action import (
+    display_action_fields,
+    display_action_fields_for_result,
+    display_operation_advice_for_result,
+)
+from src.schemas.decision_scale import extract_decision_guardrail_reason
 from src.utils.sniper_points import find_sniper_points
 from src.utils.data_processing import (
     extract_realtime_detail_fields,
     normalize_model_used,
     parse_json_field,
+    signal_attribution_has_content,
+    signal_attribution_weight_items,
 )
 
 if TYPE_CHECKING:
@@ -585,11 +591,14 @@ class HistoryService:
 
     def _decision_action_fields_for_record(self, record, raw_result: Any) -> Dict[str, Any]:
         raw = raw_result if isinstance(raw_result, dict) else {}
-        return build_action_fields(
+        return display_action_fields(
             operation_advice=raw.get("operation_advice") or getattr(record, "operation_advice", None),
             explicit_action=raw.get("action"),
+            action_label=raw.get("action_label"),
             report_type=getattr(record, "report_type", None),
             report_language=normalize_report_language(raw.get("report_language")),
+            sentiment_score=getattr(record, "sentiment_score", None),
+            guardrail_reason=extract_decision_guardrail_reason(raw),
         )
 
     def delete_history_records(self, record_ids: List[int]) -> int:
@@ -830,7 +839,7 @@ class HistoryService:
             dashboard = raw_result.get("dashboard", {})
 
             # Build AnalysisResult with available data
-            return AnalysisResult(
+            result = AnalysisResult(
                 code=raw_result.get("code", record.code),
                 name=raw_result.get("name", record.name),
                 sentiment_score=raw_result.get("sentiment_score", record.sentiment_score or 50),
@@ -868,6 +877,10 @@ class HistoryService:
                 change_pct=raw_result.get("change_pct"),
                 model_used=raw_result.get("model_used"),
             )
+            guardrail_reason = extract_decision_guardrail_reason(raw_result)
+            if guardrail_reason:
+                setattr(result, "guardrail_reason", guardrail_reason)
+            return result
         except Exception as e:
             logger.error(f"Failed to rebuild AnalysisResult: {e}", exc_info=True)
             return None
@@ -894,33 +907,24 @@ class HistoryService:
         report_time = record.created_at.strftime("%H:%M:%S") if record.created_at else datetime.now().strftime("%H:%M:%S")
         report_language = normalize_report_language(getattr(result, "report_language", "zh"))
         labels = get_report_labels(report_language)
-        if report_language == "en":
-            analysis_date_label = "Analysis Date"
-            report_time_label = "Report Time"
-            reason_label = "Rationale"
-            risk_warning_label = "Risk Warning"
-            technical_heading = "Technicals"
-            ma_label = "Moving Averages"
-            volume_analysis_label = "Volume"
-            news_heading = "News Flow"
-        elif report_language == "zh-TW":
-            analysis_date_label = "分析日期"
-            report_time_label = "報告生成時間"
-            reason_label = "操作理由"
-            risk_warning_label = "風險提示"
-            technical_heading = "技術面"
-            ma_label = "均線"
-            volume_analysis_label = "量能"
-            news_heading = "消息面"
-        else:
-            analysis_date_label = "分析日期"
-            report_time_label = "报告生成时间"
-            reason_label = "操作理由"
-            risk_warning_label = "风险提示"
-            technical_heading = "技术面"
-            ma_label = "均线"
-            volume_analysis_label = "量能"
-            news_heading = "消息面"
+
+        def _label(en: str, zh: str, ko: str, zh_tw: str = "") -> str:
+            if report_language == "en":
+                return en
+            if report_language == "ko":
+                return ko
+            if report_language == "zh-TW":
+                return zh_tw or zh
+            return zh
+
+        analysis_date_label = _label("Analysis Date", "分析日期", "분석일")
+        report_time_label = _label("Report Time", "报告生成时间", "생성 시각", "報告生成時間")
+        reason_label = _label("Rationale", "操作理由", "판단 근거")
+        risk_warning_label = _label("Risk Warning", "风险提示", "리스크 경고", "風險提示")
+        technical_heading = _label("Technicals", "技术面", "기술적 분석", "技術面")
+        ma_label = _label("Moving Averages", "均线", "이동평균", "均線")
+        volume_analysis_label = _label("Volume", "量能", "거래량")
+        news_heading = _label("News Flow", "消息面", "뉴스 흐름")
 
         # Escape markdown special characters in stock name
         name_escaped = self._escape_md(
@@ -994,7 +998,7 @@ class HistoryService:
             report_lines.extend([
                 f"| {labels['position_status_label']} | {labels['action_advice_label']} |",
                 "|---------|---------|",
-                f"| 🆕 **{labels['no_position_label']}** | {pos_advice.get('no_position', localize_operation_advice(result.operation_advice, report_language))} |",
+                f"| 🆕 **{labels['no_position_label']}** | {pos_advice.get('no_position', self._get_display_operation_advice(result, report_language))} |",
                 f"| 💼 **{labels['has_position_label']}** | {pos_advice.get('has_position', labels['continue_holding'])} |",
                 "",
             ])
@@ -1123,6 +1127,34 @@ class HistoryService:
                     report_lines.append(f"- {item}")
                 report_lines.append("")
 
+        # ========== 信号归因分析 ==========
+        signal_attr = dashboard.get('signal_attribution', {}) if dashboard else {}
+        if signal_attribution_has_content(signal_attr):
+            report_lines.extend([
+                f"### 🎯 {labels.get('signal_attribution_heading', '信号归因分析')}",
+                "",
+            ])
+            weight_items = signal_attribution_weight_items(signal_attr)
+            if weight_items:
+                report_lines.append(f"**{labels.get('attribution_weights_label', '归因权重')}**:")
+                weight_labels = {
+                    "technical_indicators": ("📈", labels.get('technical_indicators_label', '技术指标')),
+                    "news_sentiment": ("📰", labels.get('news_sentiment_label', '新闻舆情')),
+                    "fundamentals": ("📊", labels.get('fundamentals_label', '基本面')),
+                    "market_conditions": ("🌐", labels.get('market_conditions_label', '市场环境')),
+                }
+                for key, value in weight_items:
+                    icon, label = weight_labels[key]
+                    report_lines.append(f"- {icon} {label}: {value}%")
+                report_lines.append("")
+            bullish = signal_attr.get('strongest_bullish_signal')
+            bearish = signal_attr.get('strongest_bearish_signal')
+            if bullish:
+                report_lines.append(f"**🐂 {labels.get('strongest_bullish_signal_label', '最强看多信号')}**: {bullish}")
+            if bearish:
+                report_lines.append(f"**🐻 {labels.get('strongest_bearish_signal_label', '最强看空信号')}**: {bearish}")
+            report_lines.append("")
+
         # ========== 如果没有 dashboard，显示传统格式 ==========
         if not dashboard:
             # 操作理由
@@ -1182,12 +1214,42 @@ class HistoryService:
             return "N/A"
         return text
 
+    def _get_display_operation_advice(
+        self,
+        result: AnalysisResult,
+        report_language: Optional[str] = None,
+    ) -> str:
+        return display_operation_advice_for_result(
+            result,
+            report_language=report_language or getattr(result, "report_language", "zh"),
+        )
+
     def _get_signal_level(self, result: AnalysisResult) -> Tuple[str, str, str]:
-        """Get signal level based on sentiment score and decision type."""
-        return get_signal_level(
-            result.operation_advice,
+        """Get display text and signal metadata from the resolved action."""
+        report_language = getattr(result, "report_language", "zh")
+        display_fields = display_action_fields_for_result(
+            result,
+            report_language=report_language,
+        )
+        signal_advice = {
+            "buy": "buy",
+            "add": "buy",
+            "hold": "hold",
+            "reduce": "reduce",
+            "sell": "sell",
+            "watch": "watch",
+            "avoid": "hold",
+            "alert": "sell",
+        }.get(display_fields["action"])
+        _, emoji, signal_tag = get_signal_level(
+            signal_advice or self._get_display_operation_advice(result, report_language),
             result.sentiment_score,
-            getattr(result, "report_language", "zh"),
+            report_language,
+        )
+        return (
+            self._get_display_operation_advice(result, report_language),
+            emoji,
+            signal_tag,
         )
 
     @staticmethod

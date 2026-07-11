@@ -5,7 +5,7 @@
 ===================================
 
 职责：
-1. 按市场（A股/港股/美股）判断当日是否为交易日
+1. 按市场（A股/港股/美股/日股/韩股/台股）判断当日是否为交易日
 2. 按市场时区取“今日”日期，避免服务器 UTC 导致日期错误
 3. 支持 per-stock 过滤：只分析当日开市市场的股票
 4. 提供 regular-session 市场阶段推断基线，不改变现有分析入口行为
@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+
+from src.services.market_symbol_utils import get_suffix_market
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +60,18 @@ MARKET_TIMEZONE = {
 # P0 market phase baseline (Issue #1386). This is an intentionally small
 # regular-session inference layer; it does not change existing fail-open
 # trading-day filtering or effective-date behavior.
-# tw: 台股连续竞价 09:00–13:25，13:25–13:30 为收盘前集合竞价（不可删单），XTAI session_close=13:30 无午休
-_CLOSING_AUCTION_WINDOW_MINUTES = {"cn": 3, "hk": 10, "us": 5, "tw": 5}
+# tw: 台股连续竞价 09:00–13:25，13:25–13:30 为收盘前集合竞价（不可删单，5 min），XTAI session_close=13:30 无午休。
+# JP/KR use regular-session closing auction windows before the 15:30 close (JP 5 min, KR 10 min).
+# Without an entry here .get(market, 0) yields a zero-width window, so the last
+# regular-session minutes stay INTRADAY until POSTMARKET.
+_CLOSING_AUCTION_WINDOW_MINUTES = {
+    "cn": 3,
+    "hk": 10,
+    "us": 5,
+    "jp": 5,
+    "kr": 10,
+    "tw": 5,
+}
 _SUPPORTED_ANALYSIS_PHASES = {
     "auto",
     "premarket",
@@ -134,24 +146,9 @@ def get_market_for_stock(code: str) -> Optional[str]:
         return "us"
     if is_hk_stock_code(code):
         return "hk"
-    if code.endswith(".T"):
-        base = code[:-2]
-        if base.isdigit() and len(base) in (4, 5):
-            return "jp"
-    if code.endswith((".KS", ".KQ")):
-        base = code.rsplit(".", 1)[0]
-        if base.isdigit() and len(base) == 6:
-            return "kr"
-    # Taiwan: TWSE `.TW` / TPEx `.TWO`, base 4-6 digits. Checked before the
-    # bare 6-digit A-share fallback so only the explicit suffix opts into TW.
-    if code.endswith(".TWO"):
-        base = code[:-4]
-        if base.isdigit() and len(base) in (4, 5, 6):
-            return "tw"
-    if code.endswith(".TW"):
-        base = code[:-3]
-        if base.isdigit() and len(base) in (4, 5, 6):
-            return "tw"
+    suffix_market = get_suffix_market(code)
+    if suffix_market:
+        return suffix_market
     # A-share: 6-digit numeric
     if code.isdigit() and len(code) == 6:
         return "cn"
@@ -540,10 +537,10 @@ def get_open_markets_today() -> Set[str]:
     Get markets that are open today (by each market's local timezone).
 
     Returns:
-        Set of market keys ('cn', 'hk', 'us', 'tw') that are trading today
+        Set of market keys that are trading today
     """
     if not _XCALS_AVAILABLE:
-        return {"cn", "hk", "us", "tw"}
+        return set(MARKET_TIMEZONE)
     result: Set[str] = set()
     for mkt, tz_name in MARKET_TIMEZONE.items():
         try:
@@ -564,22 +561,43 @@ def compute_effective_region(
     Compute effective market review region given config and open markets.
 
     Args:
-        config_region: From MARKET_REVIEW_REGION ('cn' | 'hk' | 'us' | 'tw' | 'both')
+        config_region: From MARKET_REVIEW_REGION ('cn' | 'hk' | 'us' | 'tw' | 'jp' | 'kr' | 'both' or comma subset)
         open_markets: Markets open today
 
     Returns:
         None: caller uses config default (check disabled)
         '': all relevant markets closed, skip market review
-        'cn' | 'hk' | 'us' | 'tw' | 'both': effective subset for today
+        'cn' | 'hk' | 'us' | 'tw' | 'jp' | 'kr' | 'both': effective subset for today
     """
-    if config_region not in ("cn", "hk", "us", "tw", "both"):
-        config_region = "cn"
-    if config_region in ("cn", "hk", "us", "tw"):
-        return config_region if config_region in open_markets else ""
-    # both: return only the markets that are actually open today
-    parts = [m for m in ("cn", "hk", "us", "tw") if m in open_markets]
-    if not parts:
+    markets = ("cn", "hk", "us", "tw", "jp", "kr")
+    normalized = (config_region or "cn").strip().lower()
+    if not normalized:
+        normalized = "cn"
+
+    # Preserve explicit input order (fork semantics: e.g. "tw,us" => Taiwan first),
+    # de-dupe, drop invalid tokens; "both" expands to canonical order.
+    requested_order: List[str] = []
+    for item in normalized.split(","):
+        token = item.strip()
+        if token == "both":
+            requested_order = list(markets)
+            break
+        if token in markets and token not in requested_order:
+            requested_order.append(token)
+
+    if not requested_order:
+        # No valid market token left after filtering; follow parser fallback behavior.
+        requested_order = ["cn"]
+
+    # single explicit region: keep single-region return semantics (empty when closed)
+    if len(requested_order) == 1:
+        region = requested_order[0]
+        return region if region in open_markets else ""
+
+    # multi-region subset: keep only markets open today, preserving requested input order
+    open_selected = [m for m in requested_order if m in open_markets]
+    if not open_selected:
         return ""
-    if len(parts) == 1:
-        return parts[0]
-    return ",".join(parts)
+    if len(open_selected) == 1:
+        return open_selected[0]
+    return ",".join(open_selected)

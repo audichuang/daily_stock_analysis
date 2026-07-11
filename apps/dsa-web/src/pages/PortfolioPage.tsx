@@ -81,6 +81,26 @@ type PortfolioSignalLookupResult = {
   error: string | null;
 };
 
+type PortfolioPageLanguage = 'zh' | 'en' | 'zh-TW';
+
+const PORTFOLIO_LIMITATION_LABELS: Record<string, Record<PortfolioPageLanguage, string>> = {
+  realtime_quote_best_effort: {
+    zh: '实时行情为尽力获取',
+    en: 'Realtime quotes are best-effort',
+    'zh-TW': '即時行情為盡力取得',
+  },
+  fx_and_cost_basis_partial: {
+    zh: '汇率与成本基础为部分口径',
+    en: 'FX and cost basis are partial',
+    'zh-TW': '匯率與成本基礎為部分口徑',
+  },
+  sector_and_risk_metrics_limited: {
+    zh: '行业与风险指标覆盖有限',
+    en: 'Sector and risk metrics are limited',
+    'zh-TW': '產業與風險指標覆蓋有限',
+  },
+};
+
 type PendingDelete =
   | { eventType: 'trade'; id: number; message: string }
   | { eventType: 'cash'; id: number; message: string }
@@ -111,6 +131,10 @@ function getSignalTime(item: DecisionSignalItem): number {
 function isNewerSignal(left: DecisionSignalItem | undefined, right: DecisionSignalItem): boolean {
   if (!left) return true;
   return getSignalTime(right) > getSignalTime(left);
+}
+
+function formatPortfolioLimitation(limitation: string, language: PortfolioPageLanguage): string {
+  return PORTFOLIO_LIMITATION_LABELS[limitation]?.[language] ?? limitation;
 }
 
 const DECISION_SIGNAL_MARKETS = new Set<DecisionSignalMarket>(['cn', 'hk', 'us', 'jp', 'kr', 'tw']);
@@ -324,6 +348,7 @@ const PortfolioPage: React.FC = () => {
       const snapshotData = await portfolioApi.getSnapshot({
         accountId: queryAccountId,
         costMethod,
+        includeRealtime: false,
       });
       setSnapshot(snapshotData);
       setError(null);
@@ -332,6 +357,7 @@ const PortfolioPage: React.FC = () => {
         const riskData = await portfolioApi.getRisk({
           accountId: queryAccountId,
           costMethod,
+          includeRealtime: false,
         });
         setRisk(riskData);
       } catch (riskErr) {
@@ -834,6 +860,7 @@ const PortfolioPage: React.FC = () => {
       const snapshotData = await portfolioApi.getSnapshot({
         accountId: requestedAccountId,
         costMethod: requestedCostMethod,
+        includeRealtime: false,
       });
       if (!isActiveRefreshContext(requestedViewKey, requestedRequestId)) {
         return false;
@@ -845,6 +872,7 @@ const PortfolioPage: React.FC = () => {
         const riskData = await portfolioApi.getRisk({
           accountId: requestedAccountId,
           costMethod: requestedCostMethod,
+          includeRealtime: false,
         });
         if (!isActiveRefreshContext(requestedViewKey, requestedRequestId)) {
           return false;
@@ -926,6 +954,11 @@ const PortfolioPage: React.FC = () => {
       decisionActionLabels,
     ) ?? text.alert
   );
+  const snapshotQualityMessage = snapshot?.dataQuality === 'partial' && snapshot.limitations?.length
+    ? snapshot.limitations
+      .map((limitation) => formatPortfolioLimitation(limitation, language))
+      .join(language === 'en' ? '; ' : '；')
+    : null;
 
   return (
     <div className="portfolio-page min-h-screen space-y-4 p-4 md:p-6">
@@ -1100,6 +1133,15 @@ const PortfolioPage: React.FC = () => {
             </button>
           </form>
         </Card>
+      ) : null}
+
+      {snapshotQualityMessage ? (
+        <InlineAlert
+          variant="warning"
+          title={text.snapshotPartialTitle}
+          message={snapshotQualityMessage}
+          className="rounded-xl px-3 py-2 text-xs shadow-none"
+        />
       ) : null}
 
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">

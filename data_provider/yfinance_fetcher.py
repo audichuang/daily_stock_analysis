@@ -34,6 +34,7 @@ from tenacity import (
 from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, is_bse_code
 from .realtime_types import UnifiedRealtimeQuote, RealtimeSource
 from .us_index_mapping import get_us_index_yf_symbol, is_us_stock_code
+from src.services.market_symbol_utils import get_suffix_market, is_suffix_market_symbol
 
 # 可选导入本地股票映射补丁，若缺失则使用空字典兜底
 try:
@@ -112,11 +113,7 @@ class YfinanceFetcher(BaseFetcher):
         Taiwan base codes are 4-6 digits (common stocks 4, ETFs/others up to 6,
         e.g. 00878 / 006208), wider than the JP `.T` range.
         """
-        code = (stock_code or "").strip().upper()
-        if code.endswith((".TW", ".TWO")):
-            base = code.rsplit(".", 1)[0]
-            return base.isdigit() and 4 <= len(base) <= 6
-        return False
+        return is_suffix_market_symbol(stock_code, "tw")
 
     def _convert_stock_code(self, stock_code: str) -> str:
         """
@@ -367,6 +364,7 @@ class YfinanceFetcher(BaseFetcher):
         获取主要指数行情 (Yahoo Finance)，支持 A 股、美股、港股、日股、韩股与台股。
         region=us 时委托给 _get_us_main_indices。
         region=hk 时委托给 _get_hk_main_indices。
+        region=jp/kr/tw 时分别委托给对应市场指数方法。
         """
         import yfinance as yf
 
@@ -757,10 +755,31 @@ class YfinanceFetcher(BaseFetcher):
             if high is not None and low is not None and prev_close is not None and prev_close > 0:
                 amplitude = ((high - low) / prev_close) * 100
 
+            try:
+                ticker_info = ticker.info or {}
+            except Exception:
+                ticker_info = {}
+            missing_fields = [
+                field
+                for field, value in {
+                    "price": price,
+                    "prev_close": prev_close,
+                    "volume": volume,
+                    "amount": None,
+                    "pe_ratio": None,
+                    "pb_ratio": None,
+                }.items()
+                if value is None
+            ]
+
             quote = UnifiedRealtimeQuote(
                 code=user_code,
                 name=index_name or user_code,
                 source=RealtimeSource.FALLBACK,
+                market="us",
+                currency=str(ticker_info.get("currency") or "").upper() or None,
+                data_quality="partial" if missing_fields else "ok",
+                missing_fields=missing_fields or None,
                 price=price,
                 change_pct=round(change_pct, 2) if change_pct is not None else None,
                 change_amount=round(change_amount, 4) if change_amount is not None else None,
@@ -816,6 +835,7 @@ class YfinanceFetcher(BaseFetcher):
         try:
             symbol = self._convert_stock_code(stock_code)
             is_us_symbol = self._is_us_stock(symbol)
+            suffix_market = get_suffix_market(symbol)
             logger.debug(f"[Yfinance] 获取 {symbol} 实时行情")
 
             ticker = yf.Ticker(symbol)
@@ -872,6 +892,9 @@ class YfinanceFetcher(BaseFetcher):
             # 仅当本地都查无名时才回退 yfinance `ticker.info`——后者是重量级 quoteSummary
             # 网络调用(~1-3s，yfinance 最慢路径)，对已在本地索引的标的（如整个台股 watchlist）
             # 其结果本就会被本地名覆盖，故能省则省，这是看板 yfinance 延迟的主因。
+            # ticker_info 仅在回退路径填充；本地命名命中时保持为空，下游 currency 等 provider
+            # 元数据随之为空，这是为保住零网络快路径而做的取舍。
+            ticker_info = {}
             index_name = get_index_stock_name(symbol)
             mapped_name = STOCK_NAME_MAP.get(symbol, '')
             if is_meaningful_stock_name(index_name, symbol):
@@ -880,15 +903,35 @@ class YfinanceFetcher(BaseFetcher):
                 name = mapped_name
             else:
                 try:
-                    info_name = ticker.info.get('shortName', '') or ticker.info.get('longName', '') or ''
+                    ticker_info = ticker.info or {}
+                except Exception:
+                    ticker_info = {}
+                try:
+                    info_name = ticker_info.get('shortName', '') or ticker_info.get('longName', '') or ''
                     name = info_name if is_meaningful_stock_name(info_name, symbol) else mapped_name
                 except Exception:
                     name = mapped_name
 
+            missing_fields = [
+                field
+                for field, value in {
+                    "price": price,
+                    "prev_close": prev_close,
+                    "volume": volume,
+                    "amount": None,
+                    "pe_ratio": None,
+                    "pb_ratio": None,
+                }.items()
+                if value is None
+            ]
             quote = UnifiedRealtimeQuote(
                 code=symbol,
                 name=name,
                 source=RealtimeSource.FALLBACK,
+                market=suffix_market or ("us" if is_us_symbol else None),
+                currency=str(ticker_info.get("currency") or "").upper() or None,
+                data_quality="partial" if missing_fields else "ok",
+                missing_fields=missing_fields or None,
                 price=price,
                 change_pct=round(change_pct, 2) if change_pct is not None else None,
                 change_amount=round(change_amount, 4) if change_amount is not None else None,

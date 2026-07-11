@@ -53,6 +53,57 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_market_review_region_accepts_comma_separated_supported_values(
+        self, _mock_parse_litellm_yaml, _mock_setup_env
+    ):
+        with patch.dict(
+            os.environ,
+            {
+                "STOCK_LIST": "600519",
+                "MARKET_REVIEW_REGION": "cn,us,jp",
+            },
+            clear=True,
+        ):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.market_review_region, "cn,us,jp")
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_market_review_region_filters_invalid_values_in_comma_subset(
+        self, _mock_parse_litellm_yaml, _mock_setup_env
+    ):
+        with patch.dict(
+            os.environ,
+            {
+                "STOCK_LIST": "600519",
+                "MARKET_REVIEW_REGION": "cn,eu,us,kr,xx",
+            },
+            clear=True,
+        ):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.market_review_region, "cn,us,kr")
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_market_review_region_falls_back_to_cn_when_no_supported_tokens(
+        self, _mock_parse_litellm_yaml, _mock_setup_env
+    ):
+        with patch.dict(
+            os.environ,
+            {
+                "STOCK_LIST": "600519",
+                "MARKET_REVIEW_REGION": "eu,apac",
+            },
+            clear=True,
+        ):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.market_review_region, "cn")
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
     def test_load_from_env_keeps_default_behavior_without_tickflow_api_key(
         self, _mock_parse_litellm_yaml, _mock_setup_env
     ):
@@ -267,6 +318,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
             "NEWS_INTEL_RETENTION_DAYS": "45",
             "NEWS_INTEL_FETCH_TIMEOUT_SEC": "5.5",
             "NEWS_INTEL_MAX_ITEMS_PER_SOURCE": "25",
+            "NEWS_INTEL_AUTO_FETCH_ENABLED": "true",
             "NEWSNOW_BASE_URL": "https://newsnow.example.com/",
         })
         with patch.dict(os.environ, news_intel_env, clear=True):
@@ -280,7 +332,40 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         self.assertEqual(with_news_intel.news_intel_fetch_timeout_sec, 5.5)
         self.assertEqual(with_news_intel.news_intel_max_items_per_source, 25)
         self.assertEqual(with_news_intel.news_intel_retention_days, 45)
+        self.assertTrue(with_news_intel.news_intel_auto_fetch_enabled)
         self.assertEqual(with_news_intel.newsnow_base_url, "https://newsnow.example.com")
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_market_review_region_updates_do_not_change_llm_provider_model_contract(
+        self,
+        _mock_parse_litellm_yaml,
+        _mock_setup_env,
+    ) -> None:
+        base_env = {
+            "STOCK_LIST": "600519",
+            "MARKET_REVIEW_REGION": "cn",
+            "LITELLM_MODEL": "openai/gpt-4.1",
+            "OPENAI_MODEL": "gpt-4.1",
+            "OPENAI_BASE_URL": "https://openai.example.com/v1",
+            "OPENAI_API_KEY": "base-key-12345",
+            "LITELLM_FALLBACK_MODELS": "openai/gpt-5.5,openai/gpt-4o-mini",
+            "VISION_MODEL": "openai/gpt-4o-mini",
+        }
+        with patch.dict(os.environ, base_env, clear=True):
+            baseline = Config._load_from_env()
+
+        with_jpkr_env = dict(base_env)
+        with_jpkr_env["MARKET_REVIEW_REGION"] = "both"
+        with patch.dict(os.environ, with_jpkr_env, clear=True):
+            with_jpkr = Config._load_from_env()
+
+        self.assertEqual(with_jpkr.litellm_model, baseline.litellm_model)
+        self.assertEqual(with_jpkr.litellm_fallback_models, baseline.litellm_fallback_models)
+        self.assertEqual(with_jpkr.vision_model, baseline.vision_model)
+        self.assertEqual(with_jpkr.openai_model, baseline.openai_model)
+        self.assertEqual(with_jpkr.openai_api_key, baseline.openai_api_key)
+        self.assertEqual(with_jpkr.openai_base_url, baseline.openai_base_url)
 
     def test_env_example_alphasift_install_spec_matches_trusted_default(self):
         env_example = Path(__file__).resolve().parents[1] / ".env.example"
@@ -458,6 +543,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
                 "NEWS_INTEL_RETENTION_DAYS": "14",
                 "NEWS_INTEL_FETCH_TIMEOUT_SEC": "12",
                 "NEWS_INTEL_MAX_ITEMS_PER_SOURCE": "75",
+                "NEWS_INTEL_AUTO_FETCH_ENABLED": "yes",
                 "NEWSNOW_BASE_URL": "https://newsnow.example.com/base/",
             },
             clear=True,
@@ -470,6 +556,7 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         self.assertEqual(config.news_intel_retention_days, 14)
         self.assertEqual(config.news_intel_fetch_timeout_sec, 12.0)
         self.assertEqual(config.news_intel_max_items_per_source, 75)
+        self.assertTrue(config.news_intel_auto_fetch_enabled)
         self.assertEqual(config.newsnow_base_url, "https://newsnow.example.com/base")
 
     @patch("src.config.setup_env")
@@ -853,6 +940,28 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
             config = Config._load_from_env()
 
         self.assertEqual(config.report_language, "zh-TW")
+
+    def test_parse_market_review_region_accepts_jp_kr_values_and_comma_lists(self) -> None:
+        self.assertEqual(Config._parse_market_review_region("jp"), "jp")
+        self.assertEqual(Config._parse_market_review_region("KR"), "kr")
+        self.assertEqual(Config._parse_market_review_region("tw"), "tw")
+        # fork semantics: comma lists preserve input order (台股/多市场排序由用户输入决定)
+        self.assertEqual(
+            Config._parse_market_review_region("kr,jp,us"),
+            "kr,jp,us",
+        )
+        self.assertEqual(
+            Config._parse_market_review_region("us,tw"),
+            "us,tw",
+        )
+        self.assertEqual(
+            Config._parse_market_review_region("cn,eu,us"),
+            "cn,us",
+        )
+        self.assertEqual(
+            Config._parse_market_review_region("both"),
+            "cn,hk,us,tw,jp,kr",
+        )
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
