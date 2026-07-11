@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 - [新功能] 台股财报季更 CLI：`python -m market_data.cli financials --year YYYY --season N` 下载当季 IFRS 财报 html 包、解析后以长格式 upsert 进 Postgres `market.financial_statement`（Q4 单季损益由「年报累计 − 库内 Q3 累计」推导），取代已退役 finlab repo 的 sqlite/pickle 管线；finlab 本地数据（sqlite + 34G 原始 html）经逐表/逐季与 Postgres 零差异核对后删除，Postgres 为台股历史数据唯一数据源。
+- [新功能] 台股 price 爬取新增截断防护与备援源：单日 TWSE+TPEx 合计低于附近 5 个交易日中位数九成时，先以 TWSE openapi `STOCK_DAY_ALL` 备援替换上市侧（仅最新交易日、全列同日才收、缺本益比栏以 COALESCE 保留旧值），仍不足则整天跳过等 resume 重试——消除「截断但非空」响应写入脏数据的事故类别（曾实际发生：单日少写 300+ 笔且数值错位）。
+- [测试] market_data 新增 network smoke（`pytest -m network`）：TWSE/TPEx 双市场与备援/筹码端点活性、以及「面板台股历史必须走 MarketDBFetcher(Postgres) 而非静默降级 yfinance」全链验证；离线套件同步补守门/备援回归测试（38 passed）。经 Codex 审查 5 项 finding 全部修复并复验通过。
 - [新功能] 补齐月营收/除权息更新路径：`market_data.cli` 新增 `revenue --month YYYY-MM`（MOPS 月营收，仅上市口径，与历史数据一致）与 `ex-dividend --start --end`（TWSE 除权息公告）；`daily` 例行更新顺带保鲜上月营收与除权息滚动窗（-30d~+90d），upsert 幂等。
 - [新功能] 即时盯盘页面新增「大盘指数」列（台股加权指数 TWII + 柜买指数 TPEX），载入时抓一次并沿用页面既有 30 秒轮询 timer 一起刷新（不另开 timer）；后端新增 `GET /api/v1/stocks/indices?region=tw`（数据走 `DataFetcherManager.get_main_indices`），盯盘辅助资料失败 fail-open 回空列表、前端空资料整列不显示，均不报错；涨跌沿用台股红涨绿跌惯例并标「延迟」提示（指数走 yfinance 约延迟 15-20 分，非个股 Shioaji 即时）。
 - [改进] 个股分析 LLM prompt 本体在 `report_language == "zh-TW"` 时整段改用繁体中文（台湾用语）——此前 prompt 标签/区块标题/规则说明硬写简体，DeepSeek 跟着简体 context 仍输出简体；现 `_format_prompt`/`_phase_aware_quote_labels`/`_sanitize_trend_analysis_for_prompt` 依语言取值，zh-TW 出繁体、zh/en 路径 byte-for-byte 不变，JSON 键名/`decision_type` 契约不变；`_legacy_audit_marker_specs` 的 quote/news 标记同步复用共享 `_format_prompt_tech_section_title`，避免 prompt 与 audit 重建不一致（实测 2330.TW zh-TW 输出全繁体、600519 zh 仍简体）。

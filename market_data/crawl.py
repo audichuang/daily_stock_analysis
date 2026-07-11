@@ -16,15 +16,50 @@ from market_data.writer import upsert
 _VALID_ID = r"[0-9A-Za-z]{2,10}"
 
 
-def _price_all(d):
+def _price_all(d, expected=None):
     """上市 (TWSE) + 上櫃 (TPEx) 合併。兩者都要有資料才回傳,否則回 None:
     若只有一邊成功就寫入,resume 會把該日標記完成、另一邊永久缺(TWSE/TPEx 同交易
-    日),所以任一邊失敗就整天跳過,靠 date-not-in-table 下次重試。"""
+    日),所以任一邊失敗就整天跳過,靠 date-not-in-table 下次重試。
+
+    ``expected``(近幾日單日列數中位數)供截斷防護:TWSE 曾回「截斷但非空」的
+    MI_INDEX(踩過:整天少 300+ 筆且數值錯位),非空檢查擋不住。合計低於九成
+    先試 STOCK_DAY_ALL 備援換掉上市側,仍不足就整天跳過等下次重試。"""
     twse = crawler.crawl_price(d)
     otc = sources.crawl_tpex_price(d)
-    if twse is None or not len(twse) or otc is None or not len(otc):
+    if otc is None or not len(otc):
+        return None
+
+    def _low(t):
+        n = (0 if t is None else len(t)) + len(otc)
+        return expected is not None and n < 0.9 * expected
+
+    if twse is None or not len(twse) or _low(twse):
+        backup = sources.crawl_price_backup(d)
+        if backup is not None and len(backup) > (0 if twse is None else len(twse)):
+            print(f"**WARN price {d}: MI_INDEX missing/truncated, using STOCK_DAY_ALL backup")
+            twse = backup
+    if twse is None or not len(twse):
+        return None
+    if _low(twse):
+        print(f"**WARN price {d}: {len(twse) + len(otc)} rows < 90% of recent "
+              f"median {expected}, skipping day (will retry via resume)")
         return None
     return pd.concat([twse, otc])
+
+
+def _recent_price_median(conn, around, k=5):
+    """``around`` 附近 k 個交易日的單日列數中位數(截斷防護的期望值)。優先取
+    之前的日期;沒有(空庫 bootstrap、daily_update 由新到舊迭代)就取之後的,
+    否則倒序回補時除第一天外全程無防護。兩邊都沒有(全空庫第一天)回 None。"""
+    for cmp_, order in (("<", "DESC"), (">", "ASC")):
+        rows = conn.execute(text(
+            f"SELECT COUNT(*) FROM market.price WHERE date {cmp_} :d "
+            f"GROUP BY date ORDER BY date {order} LIMIT :k"),
+            {"d": around, "k": k}).fetchall()
+        if rows:
+            counts = sorted(r[0] for r in rows)
+            return counts[len(counts) // 2]
+    return None
 
 
 # date-based daily sources: name -> (fetch(date), transform, model, pk)
@@ -57,7 +92,7 @@ def _records(df, table):
     return _to_records(df, table, filter_stock_id=True)
 
 
-def _store(conn, raw, transform, model, pk):
+def _store(conn, raw, transform, model, pk, coalesce=()):
     if raw is None or not len(raw):
         return 0
     # finlab fetchers return frames indexed by (stock_id[, date]); the etl
@@ -65,11 +100,15 @@ def _store(conn, raw, transform, model, pk):
     if raw.index.names and raw.index.names[0] is not None:
         raw = raw.reset_index()
     recs = _records(transform(raw), model.__table__)
-    return upsert(conn, model.__table__, recs, pk)
+    return upsert(conn, model.__table__, recs, pk, coalesce=coalesce)
 
 
 def crawl_day(conn, source, d):
     fetch, transform, model, pk = DAILY[source]
+    if source == "price":
+        raw = _price_all(d, expected=_recent_price_median(conn, d))
+        # 備援源缺本益比;coalesce 讓重爬不會把既有 pe_ratio 抹成 NULL
+        return _store(conn, raw, transform, model, pk, coalesce=("pe_ratio",))
     return _store(conn, fetch(d), transform, model, pk)
 
 

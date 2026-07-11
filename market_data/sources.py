@@ -216,6 +216,34 @@ def crawl_ex_dividend(start, end):
         return None
 
 
+_BACKUP_PRICE_MAP = {
+    "TradeVolume": "成交股數", "TradeValue": "成交金額", "Transaction": "成交筆數",
+    "OpeningPrice": "開盤價", "HighestPrice": "最高價", "LowestPrice": "最低價",
+    "ClosingPrice": "收盤價", "Change": "漲跌價差",
+}
+
+
+def crawl_price_backup(date):
+    """上市 price 備援(openapi STOCK_DAY_ALL)。端點只提供最新交易日,逐列帶
+    民國 Date;僅當日期與 ``date`` 相符才可用,否則回 None(不能拿別天的資料
+    冒充)。無 本益比 欄(transform 會補 NA)。"""
+    data = _openapi_json("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL")
+    data = _valid_rows(data, {"Date", "Code", "ClosingPrice", "TradeVolume"})
+    if data is None:
+        return None
+    roc = f"{date.year - 1911}{date.month:02d}{date.day:02d}"
+    # 單日快照端點:任何一列日期不符即整包拒收(不能拿別天資料冒充,也不收混日包)
+    rows = [r for r in data if r.get("Date") == roc]
+    if not rows or len(rows) != len(data):
+        return None
+    df = pd.DataFrame(rows).rename(columns={"Code": "stock_id", **_BACKUP_PRICE_MAP})
+    for c in _BACKUP_PRICE_MAP.values():
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df[~df["收盤價"].isnull()]
+    df["date"] = pd.to_datetime(date)
+    return df.set_index(["stock_id", "date"])[list(_BACKUP_PRICE_MAP.values())]
+
+
 def crawl_stock_info():
     raw = _twse_csv("https://openapi.twse.com.tw/v1/opendata/t187ap03_L")
     if not raw:

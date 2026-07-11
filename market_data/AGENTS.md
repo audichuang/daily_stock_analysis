@@ -27,12 +27,14 @@
 - 財報季更:`uv run python -m market_data.cli financials --year 2026 --season 2`(下載該季 IFRS html 包 → 解析 → upsert;Q4 單季損益自「年報累計 − DB Q3 累計」推導,需 Q3 先在庫)
 - 健康稽核:`uv run python -m market_data.health`
 - 模組測試(免裝面板全依賴):
-  `export $(grep '^DATABASE_URL=' .env | xargs) && uv run --no-project --with sqlalchemy --with 'psycopg[binary]' --with pandas --with lxml --with requests --with tqdm --with pytest python -m pytest market_data/tests/ -q`
+  `export $(grep '^DATABASE_URL=' .env | xargs) && uv run --no-project --with sqlalchemy --with 'psycopg[binary]' --with pandas --with lxml --with requests --with tqdm --with pytest python -m pytest market_data/tests/ -q -m "not network"`
+- 真網路 smoke(端點活性 + 面板走 DB 驗證,CI network-smoke 也跑):同上指令改 `-m network`
 
 ## 進來改要遵守
 
 - schema 變更一律走 Alembic migration,不手改線上 DB。
 - price 一天必須 TWSE+TPEx **兩市場都抓到才寫**(單邊寫入會讓 resume 標記該日完成、另一邊永久缺)——不要「順手優化」成單邊也寫。
+- price 有**截斷防護**:單日合計低於附近 5 個交易日中位數九成(優先取之前的日期,無則取之後——倒序/空庫 bootstrap 也有基準;全空庫第一天無防護),先試 STOCK_DAY_ALL 備援(僅最新交易日、全列同日才收、缺本益比欄以 coalesce 保留舊值),仍不足整天跳過等 resume 重試——別移除這道門(TWSE 回過截斷但非空的回應)。
 - `MarketDBFetcher` 只准服務 `.TW`/`.TWO`;查無資料要 raise `DataSourceUnavailableError` 讓 chain fallback,不要回空 DataFrame。
 
 ## 踩雷
