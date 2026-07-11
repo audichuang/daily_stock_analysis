@@ -3789,6 +3789,73 @@ class GeminiAnalyzer:
                 report_language=report_language,
             )
 
+    def _tw_institutional_trend_lines(
+        self, code: str, institution_data: dict, report_language: str
+    ) -> str:
+        """Prompt-only: read TW institutional history, compute trend, format 2-language
+        lines. Returns '' on any failure / no data. NEVER persisted (prompt string only)."""
+        try:
+            from datetime import date, timedelta
+
+            from market_data import market_repo
+            from market_data.db import get_engine
+            from data_provider.market_db_fetcher import _stock_id
+            from data_provider.tw_institutional_trend import compute_institutional_trend
+
+            sid = _stock_id(code)
+            eng = get_engine(statement_timeout_ms=3000)
+            start = (date.today() - timedelta(days=90)).isoformat()
+            hist = market_repo.institutional(sid, start=start, engine=eng)
+            rows = hist.to_dict("records") if hist is not None and not hist.empty else []
+            info = market_repo.stock_info(sid, engine=eng) or {}
+            today = dict(institution_data)  # copy — never mutate the cached fetcher record
+            trend = compute_institutional_trend(rows, today, info.get("shares_outstanding"))
+        except Exception as exc:  # noqa: BLE001 - prompt enrichment is strictly fail-open
+            logger.warning("[tw-inst-trend] fail-open code=%s: %s", code, exc)
+            return ""
+        if not trend:
+            return ""
+
+        lang = normalize_report_language(report_language)
+
+        def L(zh_tw: str, zh: str) -> str:
+            return zh_tw if lang == "zh-TW" else zh
+
+        _dir = {
+            "buy": L("買超", "买超"),
+            "sell": L("賣超", "卖超"),
+            "flat": L("無明顯方向", "无明显方向"),
+        }
+        _label = {
+            "foreign": L("外資", "外资"),
+            "trust": L("投信", "投信"),
+            "dealer": L("自營商", "自营商"),
+            "total": L("三大法人合計", "三大法人合计"),
+        }
+        lines = []
+        for actor in ("foreign", "trust", "dealer", "total"):
+            a = trend.get(actor) or {}
+            streak = a.get("streak") or {}
+            days = streak.get("days", 0)
+            direction = _dir.get(streak.get("direction", "flat"), _dir["flat"])
+            ge = "≥" if streak.get("capped") else ""
+            cum20 = a.get("cum_20d")
+            parts = []
+            if days > 0:
+                parts.append(L(f"連 {ge}{days} 日{direction}", f"连 {ge}{days} 日{direction}"))
+            else:
+                parts.append(direction)
+            if cum20 is not None:
+                parts.append(L(f"近 20 日累計 {cum20:+d} 股", f"近 20 日累计 {cum20:+d} 股"))
+            if actor == "total" and a.get("pct_of_shares") is not None:
+                parts.append(L(f"佔股本 {a['pct_of_shares']:+.2f}%", f"占股本 {a['pct_of_shares']:+.2f}%"))
+            lines.append(f"- {_label[actor]}：{'；'.join(parts)}")
+        header = L(
+            f"三大法人近期趨勢（截至 {trend.get('as_of', 'N/A')}，共 {trend.get('sessions', 0)} 交易日）：",
+            f"三大法人近期趋势（截至 {trend.get('as_of', 'N/A')}，共 {trend.get('sessions', 0)} 交易日）：",
+        )
+        return "\n" + header + "\n" + "\n".join(lines) + "\n"
+
     def _format_prompt(
         self,
         context: Dict[str, Any],
@@ -4044,6 +4111,9 @@ class GeminiAnalyzer:
 
 > {L("三大法人是台股的籌碼過濾器（相當於 A 股主力資金/龍虎榜的角色，但口徑不同、不可混用）：外資與投信同向淨買支持價格、同向淨賣壓制價格。請據此判斷台股籌碼結構，不要在有本數據時寫「籌碼結構：數據缺失」。", "三大法人是台股的筹码过滤器（相当于 A 股主力资金/龙虎榜的角色，但口径不同、不可混用）：外资与投信同向净买支持价格、同向净卖压制价格。请据此判断台股筹码结构，不要在有本数据时写“筹码结构：数据缺失”。")}
 """
+            trend_lines = self._tw_institutional_trend_lines(code, institution_data, report_language)
+            if trend_lines:
+                prompt += trend_lines
 
         # 添加筹码分布数据
         if 'chip' in context:
