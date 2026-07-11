@@ -1,29 +1,42 @@
+from sqlalchemy import text
+
 from market_data import market_repo
 
+# 自種資料(隨 pg_conn rollback 清除),不依賴庫內既有資料——CI 的 ephemeral
+# Postgres 是空庫。market_repo 的 engine 參數收 Connection 即可同交易讀到種子。
 
-def test_price_history_reads_real_migrated_data(engine):
-    df = market_repo.price_history("2330", start="2024-01-02", end="2024-01-05",
-                                   engine=engine)
-    assert not df.empty
-    assert list(df["date"].astype(str))[0] == "2024-01-02"
-    # 2330 2024-01-02 close was 593 (verified during migration)
+
+def test_price_history_reads_seeded_rows(pg_conn):
+    pg_conn.execute(text(
+        "INSERT INTO market.price (stock_id, date, open, high, low, close, volume) "
+        "VALUES ('2330', '1900-04-02', 585, 593, 585, 593, 100), "
+        "       ('2330', '1900-04-03', 593, 595, 590, 594, 200)"))
+    df = market_repo.price_history("2330", start="1900-04-02", end="1900-04-05",
+                                   engine=pg_conn)
+    assert list(df["date"].astype(str)) == ["1900-04-02", "1900-04-03"]
     assert float(df.iloc[0]["close"]) == 593.0
     assert {"open", "high", "low", "close", "volume"} <= set(df.columns)
 
 
-def test_price_history_unknown_stock_is_empty(engine):
-    df = market_repo.price_history("ZZZZZ", engine=engine)
+def test_price_history_unknown_stock_is_empty(pg_conn):
+    df = market_repo.price_history("ZZZZZ", engine=pg_conn)
     assert df.empty
 
 
-def test_stock_info_returns_single_record(engine):
-    info = market_repo.stock_info("1101", engine=engine)
+def test_stock_info_returns_single_record(pg_conn):
+    # 用不存在的代碼:本地跑在真實 DB(1101 等已存在),CI 跑在空庫,都要能過
+    pg_conn.execute(text(
+        "INSERT INTO market.stock_info (stock_id, name) VALUES ('ZZ01', '測試泥')"))
+    info = market_repo.stock_info("ZZ01", engine=pg_conn)
     assert info is not None
-    assert info["name"] == "台泥"
+    assert info["name"] == "測試泥"
 
 
-def test_monthly_revenue_history_nonempty_for_known_stock(engine):
-    df = market_repo.monthly_revenue("2330", engine=engine)
+def test_monthly_revenue_history_reads_seeded_rows(pg_conn):
+    pg_conn.execute(text(
+        "INSERT INTO market.monthly_revenue (stock_id, revenue_month, revenue) "
+        "VALUES ('2330', '1900-04-01', 12345)"))
+    df = market_repo.monthly_revenue("2330", engine=pg_conn)
     assert not df.empty
     assert {"revenue_month", "revenue"} <= set(df.columns)
 

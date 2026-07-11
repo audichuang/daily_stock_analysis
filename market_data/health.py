@@ -35,6 +35,16 @@ def thin_days(day_counts, window=5, ratio=0.9):
 
 _THIN_TABLES = ["price", "institutional", "margin"]  # 每日全市場列數穩定的表
 
+# 已逐日與來源核對一致的合法稀疏日(補班日交易,法人/信用活動天然只剩一半):
+# 不是資料缺漏,白名單排除避免每次稽核重複告警。新 thin day 先跑修復流程
+# (backfill --force / 對源核對),確認合法才加進來。
+_VERIFIED_THIN = {
+    "institutional": {
+        "2012-12-22", "2013-02-23", "2013-09-14", "2014-12-27", "2016-06-04",
+        "2016-09-10", "2017-02-18", "2017-09-30", "2018-03-31", "2019-01-07",
+    },
+}
+
 
 def report(engine=None):
     engine = engine or get_engine()
@@ -51,7 +61,9 @@ def report(engine=None):
             day_counts = c.execute(text(
                 f"SELECT date, count(*) FROM market.{t} "
                 f"GROUP BY date ORDER BY date")).fetchall()
-            out["thin_days"][t] = thin_days(day_counts)
+            verified = _VERIFIED_THIN.get(t, set())
+            out["thin_days"][t] = [(d, n) for d, n in thin_days(day_counts)
+                                   if d not in verified]
     # 舊鍵別名,既有消費者/文件仍讀 thin_price_days
     out["thin_price_days"] = out["thin_days"]["price"]
     return out

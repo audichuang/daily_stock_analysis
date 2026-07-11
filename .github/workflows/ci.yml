@@ -42,6 +42,23 @@ jobs:
     name: backend-gate
     runs-on: ubuntu-latest
     needs: [ai-governance]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: stock_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # ephemeral Postgres for market_data DB-backed tests (schema via Alembic)
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/stock_test
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
@@ -73,6 +90,8 @@ jobs:
         run: ./scripts/ci_gate.sh flake8
       - name: ✅ Local deterministic checks
         run: ./scripts/ci_gate.sh deterministic
+      - name: 🗄️ Migrate market schema (ephemeral Postgres)
+        run: python -m alembic -c market_data/alembic.ini upgrade head
       - name: ✅ Offline test suite
         run: ./scripts/ci_gate.sh offline-tests
 
