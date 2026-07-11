@@ -20,18 +20,20 @@ description: "更新/回補 market schema 的台股行情資料(price/institutio
 uv run python -m market_data.health
 ```
 
-輸出每表 `rows / start~end` 與 `thin price days`(單日列數 < 中位數一半 = 疑似單邊市場缺漏)。
+輸出每表 `rows / start~end` 與 price/institutional/margin 的 `thin days`(單日列數低於前後交易日局部中位數九成 = 疑似單邊市場缺漏或截斷寫入)。
 **完成判準**:能說出每個資料集落後到哪一天、以及 thin days 清單。
 
 ### 2. 依落差選路徑
 
 - **落後 ≤ 5 天(例行)** → `uv run python -m market_data.cli daily`(近 5 天增量 + 快照 + 上月營收 + 除權息滾動窗)。
 - **補特定月營收/除權息區間** → `… revenue --month YYYY-MM` / `… ex-dividend --start … --end …`(月營收僅上市口徑)。
-- **落後 > 5 天,或有洞 / thin days** → 區間回補:
+- **落後 > 5 天,或有洞** → 區間回補:
   ```
   uv run python -m market_data.cli backfill {price|institutional|margin} --start YYYY-MM-DD --end YYYY-MM-DD
   ```
   backfill 僅 price/institutional/margin;valuation/index/stock_info 走 `uv run python -m market_data.cli snapshot`。
+- **health 報 thin days(該日有列但不完整)** → 對那幾天加 `--force` 整日換血:
+  `… backfill price --start <該日> --end <該日> --force`(resume 認「有列即完成」,不加 --force 補不動)。
 - 區間長(數月以上)→ 背景執行(禮貌延遲會跑數小時);中斷後**重跑同指令**即 resume 續補。
 - **財報落後一季以上**(monthly_revenue/financial_statement 的 end 過舊)→ 季更:
   ```
@@ -44,7 +46,7 @@ uv run python -m market_data.health
 ### 3. 驗證
 
 再跑 `uv run python -m market_data.health`。
-**完成判準**:目標資料集 `end` 已推進到預期交易日,且 **thin price days 沒有新增**。
+**完成判準**:目標資料集 `end` 已推進到預期交易日,且 **price/institutional/margin 的 thin days 都沒有新增**。
 
 ## 別踩(細節見 `market_data/AGENTS.md`)
 

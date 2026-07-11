@@ -12,7 +12,7 @@
 - `etl.py`:中文欄位→英文 typed 轉換;財報 melt 寬表→長格式
 - `writer.py`:INSERT…ON CONFLICT upsert(重爬冪等)
 - `market_repo.py`:面板讀取面(`price_history`/`to_daily_frame` 等)
-- `health.py`:完整性/新鮮度稽核(thin price days = 單邊市場缺漏偵測)
+- `health.py`:完整性/新鮮度稽核(thin price days 用**局部**中位數——全域中位數會被 16 年上市家數成長稀釋;報出的日子用 `backfill --force` 修)
 - `migrations/`:Alembic,只管 `market` schema(不碰 `app`/`public`)
 - `sources.py`/`crawler.py`:TWSE/TPEx/MOPS 原始爬取邏輯(移植而來),盡量少動
 - `financial_statement.py`:IFRS 財報 html → 寬表解析(移植而來),盡量少動
@@ -24,7 +24,8 @@
 - 每日增量+快照:`uv run python -m market_data.cli daily`(近 5 天 price/institutional/margin + valuation/index/stock_info 快照 + 上月營收 + 除權息滾動窗;停跑超過 5 天要用 backfill 補洞)
 - 補特定月營收/除權息:`… revenue --month 2026-06`、`… ex-dividend --start … --end …`
 - 區間回補:`uv run python -m market_data.cli backfill price --start 2026-01-01 --end 2026-01-31`
-- 財報季更:`uv run python -m market_data.cli financials --year 2026 --season 2`(下載該季 IFRS html 包 → 解析 → upsert;Q4 單季損益自「年報累計 − DB Q3 累計」推導,需 Q3 先在庫)
+- 修 partial/髒日(health 報 thin day):同上加 `--force`(忽略 resume、抓到完整資料才整日換血;不用手動 DELETE)
+- 財報季更:`uv run python -m market_data.cli financials --year 2026 --season 2`(下載該季 IFRS html 包 → 解析 → upsert;完整性 fail-fast:解析不足 1000 檔或 Q4 缺同年 Q3 累計都直接失敗、全季回滾、保留下載檔,不寫半套資料)
 - 健康稽核:`uv run python -m market_data.health`
 - 模組測試(免裝面板全依賴):
   `export $(grep '^DATABASE_URL=' .env | xargs) && uv run --no-project --with sqlalchemy --with 'psycopg[binary]' --with pandas --with lxml --with requests --with tqdm --with pytest python -m pytest market_data/tests/ -q -m "not network"`
@@ -44,5 +45,5 @@
 - `price.market` **全欄為 NULL**(TWSE/TPEx 在爬取端已合併,無法逐列區分上市/上櫃)。
 - 面板目前**只消費 `market.price`**(經 `MarketDBFetcher`);`market_repo` 雖已有 `monthly_revenue`/`valuation`/`stock_info` 讀取函式但尚無消費者——報告的基本面數字走 `twse_fundamental_adapter` 即時 API,不是這裡的資料。
 - 財報季更不在 `daily` 裡,要手動跑 `financials`(發布時點與 Q4 推導前提見「數據更新」)。
-- TWSE 可能回**截斷但非空**的回應(踩過:單日 price 少寫 300+ 筆且數值錯位);寫入後懷疑某日資料髒,`DELETE` 該日再重跑 backfill 即可(upsert 冪等)。
+- TWSE 可能回**截斷但非空**的回應(踩過:單日 price 少寫 300+ 筆且數值錯位);已寫入的髒日用 `backfill --start <該日> --end <該日> --force` 整日換血修復。
 - 面板 venv 缺 `psycopg` 時 `MarketDBFetcher` 會**靜默熔斷降級 yfinance**(歷史看似正常,但可能混入非交易日的幽靈 K 棒);懷疑沒走 DB,先 `uv pip install -r requirements.txt` 再驗 `get_daily_data` 的 source。

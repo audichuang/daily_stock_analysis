@@ -11,7 +11,7 @@ import pandas as pd
 from sqlalchemy import BigInteger, Integer, text
 
 from market_data import crawler, etl, financial_statement, models, sources
-from market_data.writer import upsert
+from market_data.writer import dedupe, upsert
 
 _VALID_ID = r"[0-9A-Za-z]{2,10}"
 
@@ -92,24 +92,47 @@ def _records(df, table):
     return _to_records(df, table, filter_stock_id=True)
 
 
-def _store(conn, raw, transform, model, pk, coalesce=()):
+def _prepare(raw, transform, table, pk):
+    """fetch 原始 frame -> 可寫入的 records(轉換+有效列過濾+PK 去重)。
+    去重要在這層先做:replace 的 50% 門檻必須用 unique 後的筆數判斷。"""
     if raw is None or not len(raw):
-        return 0
+        return []
     # finlab fetchers return frames indexed by (stock_id[, date]); the etl
     # transforms expect those as columns.
     if raw.index.names and raw.index.names[0] is not None:
         raw = raw.reset_index()
-    recs = _records(transform(raw), model.__table__)
+    return dedupe(_records(transform(raw), table), pk)
+
+
+def _store(conn, raw, transform, model, pk, coalesce=()):
+    recs = _prepare(raw, transform, model.__table__, pk)
     return upsert(conn, model.__table__, recs, pk, coalesce=coalesce)
 
 
-def crawl_day(conn, source, d):
+def crawl_day(conn, source, d, replace=False):
+    """抓一天並 upsert。``replace``:整日換血(同交易先刪該日既有列再寫)——修
+    partial/髒日用;upsert 蓋不掉鍵已錯位的殘留列,必須刪。刪除的前置條件是
+    「轉換+有效列過濾後真的有可寫資料,且不少於既有列數的一半」——來源回
+    非空垃圾(全 footer/壞 stock_id)或嚴重縮水時絕不能先刪好資料。"""
     fetch, transform, model, pk = DAILY[source]
     if source == "price":
         raw = _price_all(d, expected=_recent_price_median(conn, d))
-        # 備援源缺本益比;coalesce 讓重爬不會把既有 pe_ratio 抹成 NULL
-        return _store(conn, raw, transform, model, pk, coalesce=("pe_ratio",))
-    return _store(conn, fetch(d), transform, model, pk)
+        coalesce = ("pe_ratio",)  # 備援缺本益比,重爬不得抹成 NULL
+    else:
+        raw = fetch(d)
+        coalesce = ()
+    recs = _prepare(raw, transform, model.__table__, pk)
+    if replace and recs:
+        existing = conn.execute(text(
+            f"SELECT COUNT(*) FROM market.{model.__tablename__} "
+            f"WHERE date = :d"), {"d": d}).scalar()
+        if len(recs) < existing * 0.5:
+            print(f"**WARN {source} {d}: replace refused — new {len(recs)} rows "
+                  f"< 50% of existing {existing}, keeping current data")
+            return 0
+        conn.execute(text(
+            f"DELETE FROM market.{model.__tablename__} WHERE date = :d"), {"d": d})
+    return upsert(conn, model.__table__, recs, pk, coalesce=coalesce)
 
 
 def crawl_monthly_revenue(conn, month_date):
@@ -169,25 +192,41 @@ def _q4_income_sheet(conn, year, annual_cum):
     return diff.reset_index().set_index(["stock_id", "date"])
 
 
-def crawl_financials(engine, year, season, keep_files=False):
+def crawl_financials(engine, year, season, keep_files=False, min_stocks=1000):
     """財報季更:下載該季 IFRS html 包(目錄已存在則沿用)→ 解析成寬表 →
-    melt 長格式 upsert 進 market.financial_statement。冪等,可重跑。"""
+    melt 長格式 upsert 進 market.financial_statement。冪等,可重跑。
+
+    完整性 fail-fast(整季一個交易,失敗全回滾且保留下載檔供追查):
+    解析出的股票數低於 ``min_stocks``(歷史最少一季 1748 檔)視為 partial
+    quarter;Q4 需要同年 Q3 累計在庫才能推導單季損益,缺 Q3 直接失敗而不是
+    默默寫入缺 income_sheet 的半套季資料。"""
     directory = os.path.join("data", "financial_statement", f"{year}{season}")
     if not os.path.isdir(directory):
         if year < 2019:
             raise NotImplementedError("僅支援 2019 年(含)以後的 IFRS 財報")
         crawler.crawl_finance_statement2019(year, season)
     frames = financial_statement.pack_htmls(year, season, directory)
+    parsed = len(frames["balance_sheet"])
+    if parsed < min_stocks:
+        raise RuntimeError(
+            f"{year}Q{season}: only {parsed} stocks parsed (<{min_stocks}), "
+            f"quarter looks partial — nothing written, files kept at {directory}")
     table = models.FinancialStatement.__table__
     total = 0
     with engine.begin() as conn:
         if season == 4:
-            frames["income_sheet"] = _q4_income_sheet(
-                conn, year, frames["income_sheet_cumulate"])
+            q4 = _q4_income_sheet(conn, year, frames["income_sheet_cumulate"])
+            if q4 is None:
+                raise RuntimeError(
+                    f"{year}Q4 needs Q3 cumulate in DB to derive the single-quarter "
+                    f"income sheet — crawl season 3 first; nothing written")
+            frames["income_sheet"] = q4
         for name, df in frames.items():
             if df is None or not len(df):
                 continue
-            recs = _records(etl.melt_financial(df.reset_index(), name), table)
+            long = etl.melt_financial(df.reset_index(), name)
+            long = long.drop_duplicates(subset=_FINANCIAL_PK, keep="last")
+            recs = _records(long, table)
             # 一季約 35 萬列,單條 INSERT 會超出參數上限,分批送
             for i in range(0, len(recs), 5000):
                 total += upsert(conn, table, recs[i:i + 5000], _FINANCIAL_PK)
@@ -226,9 +265,10 @@ def _existing_dates(conn, table):
     return {r[0].isoformat() for r in rows}
 
 
-def crawl_range(engine, source, dates, resume=True):
+def crawl_range(engine, source, dates, resume=True, replace=False):
     """Crawl a list of dates for a daily source, upserting each; skips dates
-    already present when resume=True. Returns rows written."""
+    already present when resume=True (any row counts as done — partial days
+    need ``resume=False, replace=True`` to be repaired). Returns rows written."""
     table = DAILY[source][2].__tablename__
     total = 0
     with engine.begin() as conn:
@@ -237,5 +277,5 @@ def crawl_range(engine, source, dates, resume=True):
         if resume and d.isoformat() in have:
             continue
         with engine.begin() as conn:
-            total += crawl_day(conn, source, d)
+            total += crawl_day(conn, source, d, replace=replace)
     return total

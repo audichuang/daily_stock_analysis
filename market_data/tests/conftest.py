@@ -13,6 +13,9 @@ if _envf.exists():
 
 @pytest.fixture(scope="session")
 def engine():
+    if not os.environ.get("DATABASE_URL"):
+        pytest.skip("DATABASE_URL not set; market_data DB-backed tests need "
+                    "the market Postgres (see market_data/AGENTS.md)")
     from market_data.db import get_engine
 
     return get_engine()
