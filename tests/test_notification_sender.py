@@ -1208,13 +1208,40 @@ class TestCustomWebhookSender(unittest.TestCase):
             },
         )
 
-    def test_bark_payload_truncates_long_content(self):
+    def test_bark_payload_truncates_long_content_by_utf8_bytes(self):
+        """Bark 走 APNs（整包 ~4KB 上限），body 必须按 UTF-8 字节截断。
+
+        回归保护：原实现按字符截 4000，中文内容实际可达 ~12KB，
+        被 Bark 以 PayloadTooLarge / HTTP 500 拒绝。
+        """
         sender = CustomWebhookSender(_config())
 
         payload = sender._build_custom_webhook_payload("https://api.day.app/key", "x" * 5000)
 
-        self.assertEqual(len(payload["body"]), 4000)
-        self.assertEqual(payload["body"], "x" * 4000)
+        self.assertLessEqual(len(payload["body"].encode("utf-8")), 2900)
+        self.assertTrue(payload["body"].startswith("x" * 2800))
+        self.assertIn("截断", payload["body"])
+
+    def test_bark_payload_truncates_cjk_content_within_apns_limit(self):
+        """中文报告（每字 3 字节）截断后整包 JSON 必须留在 APNs 4KB 内。"""
+        import json as _json
+
+        sender = CustomWebhookSender(_config())
+
+        payload = sender._build_custom_webhook_payload("https://api.day.app/key", "股" * 4000)
+
+        body_bytes = len(payload["body"].encode("utf-8"))
+        self.assertLessEqual(body_bytes, 2900)
+        total_bytes = len(_json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        self.assertLessEqual(total_bytes, 4096)
+        self.assertIn("截断", payload["body"])
+
+    def test_bark_payload_short_content_not_truncated(self):
+        sender = CustomWebhookSender(_config())
+
+        payload = sender._build_custom_webhook_payload("https://api.day.app/key", "短内容")
+
+        self.assertEqual(payload["body"], "短内容")
 
     def test_custom_body_template_overrides_bark_auto_payload(self):
         cfg = _config(

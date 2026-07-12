@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] Bark（自定义 Webhook `api.day.app`）推送改按 UTF-8 字节截断 body（上限 2800 字节并附截断提示）：原按字符截 4000，中文报告实际可达 ~12KB，超出 APNs ~4KB 整包上限被 Bark 以 `PayloadTooLarge`/HTTP 500 拒绝，导致完整分析报告推送必败；现超长内容自动截断送达。
+- [chore] 重构三件（无用户可见行为变更）：pipeline 双路径收尾去重为共享 `_finalize_and_persist_result`；通知 14 渠道由 mixin 多重继承改 `Sender` protocol + 组合注册表（`src/notification_sender/base.py`）；`GeminiAnalyzer` 的 LLM transport 抽出为 `src/llm/client.py::LLMClient`（继承式兼容）。新增回归测试约 60 个，全量离线套件零新增失败。
 - [文档] `apps/dsa-web/AGENTS.md` 修正误导说明：UI 文案 `uiText.ts`/`locales/*.ts` 多为严格 `Record<UiLanguage, …>` 型别，漏一语 zh-TW 键会 **tsc build 失败**（非原文所称「不会编译错、仅画面缺字」）——本 session 合并上游新增文案时踩过两次。
 - [chore] 跟进上游后续增量 `01ebf70a` #1984（首页自选股工作区 home watchlist workspace）：`git merge upstream/main` 并进 main；补齐 fork 的 `zh-TW` 字典 38 个 `watchlist.*` 繁体键（维持 zh↔zh-TW 键数对齐、tsc 绿）。上游同步基线更新至 `01ebf70a`，记录见 `docs/upstream-sync-2026-07-11.md`。
 - [chore] 清理约 2.8k 行已验证死代码/重复：删除未接线的 `src/agent/tool_surface.py`、`src/agent/strategies/` 兼容 shim、`scripts/generate_stock_index.py`、`scripts/e2e_test_feishu_app.py`、未注册的 `bot/platforms/discord.py`（DiscordPlatform，非 ALL_PLATFORMS 成员）及多处零调用方的私有方法/别名/webhook 包装；将两份逐字复制的 `_enforce_rate_limit` 上提至 `BaseFetcher`、`_extract_guardrail_reason` 收敛到 `src/utils/data_processing.py`。均为内部实现，无用户可见行为、API/Schema/通知/报告结构变更。

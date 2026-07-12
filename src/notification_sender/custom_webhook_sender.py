@@ -316,9 +316,15 @@ class CustomWebhookSender:
         
         # Bark (iOS 推送)
         if 'api.day.app' in url_lower:
+            # APNs 整包上限约 4KB，须按 UTF-8 字节截断——中文每字 3 字节，
+            # 原先按字符截 4000 实际可达 ~12KB，被 Bark 以 PayloadTooLarge/HTTP 500 拒绝。
+            # 预留 title/group/JSON 结构开销，body 上限取 2800 字节。
+            body, remainder = slice_at_max_bytes(content, 2800)
+            if remainder:
+                body += "\n…（内容过长已截断）"
             return {
                 "title": "股票分析报告",
-                "body": content[:4000],  # Bark 限制
+                "body": body,
                 "group": "stock"
             }
         
