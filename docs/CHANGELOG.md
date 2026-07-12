@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [chore] 跟进上游后续增量 `01ebf70a` #1984（首页自选股工作区 home watchlist workspace）：`git merge upstream/main` 并进 main；补齐 fork 的 `zh-TW` 字典 38 个 `watchlist.*` 繁体键（维持 zh↔zh-TW 键数对齐、tsc 绿）。上游同步基线更新至 `01ebf70a`，记录见 `docs/upstream-sync-2026-07-11.md`。
 - [chore] 清理约 2.8k 行已验证死代码/重复：删除未接线的 `src/agent/tool_surface.py`、`src/agent/strategies/` 兼容 shim、`scripts/generate_stock_index.py`、`scripts/e2e_test_feishu_app.py`、未注册的 `bot/platforms/discord.py`（DiscordPlatform，非 ALL_PLATFORMS 成员）及多处零调用方的私有方法/别名/webhook 包装；将两份逐字复制的 `_enforce_rate_limit` 上提至 `BaseFetcher`、`_extract_guardrail_reason` 收敛到 `src/utils/data_processing.py`。均为内部实现，无用户可见行为、API/Schema/通知/报告结构变更。
 - [文档] `market_data/AGENTS.md` 更新 market_repo 消费者踩雷：Phase 3 后 `institutional()`/`stock_info()` 已被 analyzer 三大法人历史趋势 prompt 消费（历史趋势走本 DB；估值/月营收/当日三大法人仍走即时 API/网路），修正原「market_repo 尚无消费者」的过时说明。
 - [修复] 合并上游后收敛两处 vitest 回归：即时看板大盘指数「延迟」提示由原生 `title=` 改 `aria-label` 满足 UI governance 守卫；告警市场区域下拉测试对齐后端 `MARKET_LIGHT_ALERT_REGIONS`（仅 cn/hk/us，不含 jp/kr）。
@@ -18,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 推送报告、Jinja 报告与历史 Markdown 导出复用 Web/API 的评分-action 口径：高分但旧 `operation_advice` 仍为持有且无降级原因时，建议文案与三类统计展示为买入；有明确 guardrail reason 时继续保留持有/观望。
 - [改进] GitHub Actions 每日分析工作流补齐 TickFlow 数据源环境变量映射，并收敛 README 数据源稳定性说明到完整指南。
 - [修复] WebUI 启动时显式 `--host` / `--port` 不再被 `.env` 中的 `WEBUI_HOST` / `WEBUI_PORT` 覆盖，未传 CLI 参数时统一使用解析后的运行时配置。
+- [改进] Web 首页个股栏新增历史 / 自选 / 今日切换，保留历史分析默认视图，并支持在自选页一键分析全部或仅分析今日未覆盖股票、在今日页按评分查看当天分析排行；分块提交部分失败时保留已确认计数、停止后续提交并刷新任务列表。
+- [修复] Web 首页今日状态与排行使用带时区偏移的历史时间戳和完整分页数据，在查询失败、跨服务器时区边界或任务完成刷新时保持安全且准确。
+- [修复] Web 首页 stock bar 刷新序列化：并发/乱序返回时仅最新请求可清除 `stockBarRefreshFailed`，避免旧响应覆盖任务完成后的刷新结果。
 - [改进] GitHub Actions: 每日分析工作流（`00-daily-analysis.yml`）新增钉钉通知环境变量映射，支持在云端定时任务中直接使用钉钉机器人。
 - [修复] Web 持仓页首屏快照改用 `include_realtime=false` 快速估值，跳过逐票实时行情预取后先展示持仓列表，避免外部实时行情源变慢时长时间空白等待。
 - [修复] 修复任务状态接口重建报告动作字段时把合法情绪分 `0` 当成空值的问题，确保低分报告能按评分口径纠正为卖出建议。

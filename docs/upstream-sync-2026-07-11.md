@@ -57,8 +57,17 @@
 
 merge commit `0916f57a` 為單點；`git revert -m 1 0916f57a` 可回滾整個上游合併（Phase 3 增值在其後、可另 revert）。
 
+## 後續增量同步（2026-07-12）：`093057a1` → `01ebf70a`
+
+上游在本次整併後又推 1 個 commit，已跟進：
+- **`01ebf70a` #1984 `feat: add reliable home watchlist workspace`** —— 首頁自選股工作區（HomePage 重構 + `HomeStockWorkspace`、`stockPoolStore`、`useDashboardLifecycle`、批次分析提交、`history_service`/`/history` 端點小改）。
+- 合併方式：`git merge upstream/main` 進 main（自動合併無文字衝突）。
+- **fork 增量補齊**：#1984 給 `uiText.ts` 新增 38 個 `watchlist.*` 鍵（zh/en），fork 的 `zh-TW` 字典補上對應 38 個繁體鍵（自選/批次/送出/重新整理/載入/覆蓋 等台灣用語），維持 `zh↔zh-TW` 鍵數對齊、web `tsc` 綠。
+- 驗證：`tsc` 0 error、web build 綠、3 個受影響 vitest 檔隔離跑 147 passed（全套偶發 5s timeout 為機器負載 flaky，非回歸）、後端 `test_analysis_history`/`history_comparison`/`report_language` 93 passed。
+
 ## 下次同步備忘
 
-- 起點基線 = 本次同步後的 `093057a1`（上游）；下次 `git fetch upstream` 後從此向後看新 commits。
+- 起點基線 = 本次同步後的 `01ebf70a`（上游）；下次 `git fetch upstream` 後從此向後看新 commits。
 - `.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` 必須保持 `false`（防上游索引更新覆蓋台股/美股增量）。
 - 合併後務必 `uv pip install -r requirements.txt` 刷新 venv（longbridge/alphasift pin 會變）。
+- **上游新增 UI 文案時，`uiText.ts` 的 `zh-TW` 字典要同步補繁體鍵**（`Record<UiTextKey, string>` 少一鍵即 `tsc` 失敗；#1984 踩過）。
