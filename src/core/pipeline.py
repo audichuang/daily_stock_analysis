@@ -654,26 +654,27 @@ class StockAnalysisPipeline:
                 enhanced_context["portfolio_context"] = dict(portfolio_context)
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
+            legacy_artifacts = self._build_legacy_analysis_artifacts(
+                code=code,
+                stock_name=stock_name,
+                market=market,
+                phase=market_phase_context_dict,
+                context=context,
+                enhanced_context=enhanced_context,
+                realtime_quote=realtime_quote,
+                trend_result=trend_result,
+                chip_data=chip_data,
+                fundamental_context=fundamental_context,
+                news_context=news_context,
+                news_result_count=news_result_count,
+                query_id=query_id,
+                portfolio_context=portfolio_context,
+            )
             (
                 analysis_context_pack_summary,
                 analysis_context_pack_overview,
             ) = self._build_analysis_context_pack_outputs(
-                self._build_legacy_analysis_artifacts(
-                    code=code,
-                    stock_name=stock_name,
-                    market=market,
-                    phase=market_phase_context_dict,
-                    context=context,
-                    enhanced_context=enhanced_context,
-                    realtime_quote=realtime_quote,
-                    trend_result=trend_result,
-                    chip_data=chip_data,
-                    fundamental_context=fundamental_context,
-                    news_context=news_context,
-                    news_result_count=news_result_count,
-                    query_id=query_id,
-                    portfolio_context=portfolio_context,
-                ),
+                legacy_artifacts,
                 report_language=report_language,
                 code=code,
                 query_id=query_id,
@@ -744,92 +745,19 @@ class StockAnalysisPipeline:
             if result:
                 normalize_chip_structure_availability(result, chip_data)
 
-            # Step 7.7: price_position fallback
-            if result:
-                fill_price_position_if_needed(result, trend_result, realtime_quote)
-                action_source_advice = getattr(result, "operation_advice", None)
-                stabilize_decision_with_structure(result, trend_result, fundamental_context)
-                adjustments = apply_phase_decision_guardrails(
-                    result,
-                    market_phase_summary=market_phase_summary,
-                    analysis_context_pack_overview=analysis_context_pack_overview,
-                    report_language=getattr(result, "report_language", None)
-                    or getattr(self.config, "report_language", "zh"),
-                )
-                if adjustments:
-                    logger.info("[phase_decision_guardrail] Applied adjustments for %s: %s", code, adjustments)
-                market_context_adjustments = apply_daily_market_context_guardrail(
-                    result,
-                    daily_market_context=enhanced_context.get("daily_market_context"),
-                    report_language=getattr(result, "report_language", None)
-                    or getattr(self.config, "report_language", "zh"),
-                )
-                if market_context_adjustments:
-                    logger.info(
-                        "[daily_market_context_guardrail] Applied adjustments for %s: %s",
-                        code,
-                        market_context_adjustments,
-                    )
-                if isinstance(fundamental_context, dict):
-                    result.fundamental_context = fundamental_context
-                result.market_phase_summary = market_phase_summary
-                result.analysis_context_pack_overview = analysis_context_pack_overview
-                self._refresh_decision_action_for_final_result(
-                    result,
-                    report_type=report_type.value,
-                    previous_operation_advice=action_source_advice,
-                )
-
-            # Step 8: 保存分析历史记录
+            # Step 7.7 & Step 8: shared finalize-and-persist stage (guardrails,
+            # decision refresh, context snapshot, analysis history save).
             if result and result.success:
-                try:
-                    self._emit_progress(97, f"{stock_name}：正在保存分析报告")
-                    context_snapshot = self._build_context_snapshot(
-                        enhanced_context=enhanced_context,
-                        news_content=news_context,
-                        news_result_count=news_result_count,
-                        realtime_quote=realtime_quote,
-                        chip_data=chip_data,
-                        analysis_context_pack_overview=analysis_context_pack_overview,
-                        market_phase_summary=market_phase_summary,
-                    )
-                    result.diagnostic_context_snapshot = context_snapshot
-                    saved_history_id = self.db.save_analysis_history(
-                        result=result,
-                        query_id=query_id,
-                        report_type=report_type.value,
-                        news_content=news_context,
-                        context_snapshot=context_snapshot,
-                        save_snapshot=self.save_context_snapshot
-                    )
-                    valid_saved_history_id = (
-                        isinstance(saved_history_id, int)
-                        and not isinstance(saved_history_id, bool)
-                        and saved_history_id > 0
-                    )
-                    record_history_run(
-                        report_saved=bool(saved_history_id),
-                        metadata_saved=bool(saved_history_id),
-                        analysis_history_id=(
-                            saved_history_id if valid_saved_history_id else None
-                        ),
-                    )
-                    if valid_saved_history_id:
-                        self._extract_decision_signal_after_history_save(
-                            result=result,
-                            query_id=query_id,
-                            source_report_id=saved_history_id,
-                            report_type=report_type.value,
-                            context_snapshot=context_snapshot,
-                            portfolio_context=portfolio_context,
-                        )
-                except Exception as e:
-                    record_history_run(
-                        report_saved=False,
-                        metadata_saved=False,
-                        error_message=e,
-                    )
-                    logger.warning(f"{stock_name}({code}) 保存分析历史失败: {e}")
+                self._emit_progress(97, f"{stock_name}：正在保存分析报告")
+            result = self._finalize_and_persist_result(
+                result,
+                legacy_artifacts,
+                market_phase_summary=market_phase_summary,
+                analysis_context_pack_overview=analysis_context_pack_overview,
+                report_type=report_type.value,
+                snapshot_context=enhanced_context,
+                news_content_for_save=news_context,
+            )
 
             return result
 
@@ -1287,21 +1215,25 @@ class StockAnalysisPipeline:
 
             analysis_context = self._load_agent_analysis_context(code, stock_name)
             market = get_market_for_stock(normalize_stock_code(code))
+            artifacts = self._build_agent_analysis_artifacts(
+                code=code,
+                stock_name=stock_name,
+                market=market,
+                phase=market_phase_context,
+                initial_context=initial_context,
+                fundamental_context=fundamental_context,
+                query_id=query_id,
+                base_context=analysis_context,
+                portfolio_context=portfolio_context,
+                realtime_quote=realtime_quote,
+                trend_result=trend_result,
+                chip_data=chip_data,
+            )
             (
                 analysis_context_pack_summary,
                 analysis_context_pack_overview,
             ) = self._build_analysis_context_pack_outputs(
-                self._build_agent_analysis_artifacts(
-                    code=code,
-                    stock_name=stock_name,
-                    market=market,
-                    phase=market_phase_context,
-                    initial_context=initial_context,
-                    fundamental_context=fundamental_context,
-                    query_id=query_id,
-                    base_context=analysis_context,
-                    portfolio_context=portfolio_context,
-                ),
+                artifacts,
                 report_language=report_language,
                 code=code,
                 query_id=query_id,
@@ -1377,45 +1309,15 @@ class StockAnalysisPipeline:
             if result and chip_data is not None:
                 normalize_chip_structure_availability(result, chip_data)
 
-            # price_position fallback (same as non-agent path Step 7.7)
+            # price_position fallback current_price/change_pct assignment stays here
+            # (before the shared finalize call); fill_price_position_if_needed itself
+            # only reads trend_result/realtime_quote so this ordering is observationally
+            # identical to running it after fill_price_position_if_needed.
             if result:
-                fill_price_position_if_needed(result, trend_result, realtime_quote)
                 realtime_data = initial_context.get("realtime_quote", {})
                 if isinstance(realtime_data, dict):
                     result.current_price = realtime_data.get("price")
                     result.change_pct = realtime_data.get("change_pct")
-                action_source_advice = getattr(result, "operation_advice", None)
-                stabilize_decision_with_structure(result, trend_result, fundamental_context)
-                adjustments = apply_phase_decision_guardrails(
-                    result,
-                    market_phase_summary=market_phase_summary,
-                    analysis_context_pack_overview=analysis_context_pack_overview,
-                    report_language=getattr(result, "report_language", None)
-                    or getattr(self.config, "report_language", "zh"),
-                )
-                if adjustments:
-                    logger.info("[phase_decision_guardrail] Applied agent adjustments for %s: %s", code, adjustments)
-                market_context_adjustments = apply_daily_market_context_guardrail(
-                    result,
-                    daily_market_context=initial_context.get("daily_market_context"),
-                    report_language=getattr(result, "report_language", None)
-                    or getattr(self.config, "report_language", "zh"),
-                )
-                if market_context_adjustments:
-                    logger.info(
-                        "[daily_market_context_guardrail] Applied agent adjustments for %s: %s",
-                        code,
-                        market_context_adjustments,
-                    )
-                if isinstance(fundamental_context, dict):
-                    result.fundamental_context = fundamental_context
-                result.market_phase_summary = market_phase_summary
-                result.analysis_context_pack_overview = analysis_context_pack_overview
-                self._refresh_decision_action_for_final_result(
-                    result,
-                    report_type=report_type.value,
-                    previous_operation_advice=action_source_advice,
-                )
 
             resolved_stock_name = result.name if result and result.name else stock_name
 
@@ -1442,62 +1344,22 @@ class StockAnalysisPipeline:
                 except Exception as e:
                     logger.warning(f"[{code}] Agent 模式保存新闻情报失败: {e}")
 
-            # 保存分析历史记录
-            if result and result.success:
-                try:
-                    agent_context_snapshot = self._build_context_snapshot(
-                        enhanced_context={
-                            **self._without_runtime_prompt_context(initial_context),
-                            "stock_name": resolved_stock_name,
-                        },
-                        news_content=initial_context.get("news_context"),
-                        realtime_quote=realtime_quote,
-                        chip_data=chip_data,
-                        analysis_context_pack_overview=analysis_context_pack_overview,
-                        market_phase_summary=market_phase_summary,
-                    )
-                    result.diagnostic_context_snapshot = agent_context_snapshot
-                    agent_context_snapshot["stock_name"] = resolved_stock_name
-                    saved_history_id = self.db.save_analysis_history(
-                        result=result,
-                        query_id=query_id,
-                        report_type=report_type.value,
-                        news_content=None,
-                        context_snapshot=agent_context_snapshot,
-                        save_snapshot=self.save_context_snapshot,
-                    )
-                    valid_saved_history_id = (
-                        isinstance(saved_history_id, int)
-                        and not isinstance(saved_history_id, bool)
-                        and saved_history_id > 0
-                    )
-                    record_history_run(
-                        report_saved=bool(saved_history_id),
-                        metadata_saved=bool(saved_history_id),
-                        analysis_history_id=(
-                            saved_history_id if valid_saved_history_id else None
-                        ),
-                    )
-                    if valid_saved_history_id:
-                        self._extract_decision_signal_after_history_save(
-                            result=result,
-                            query_id=query_id,
-                            source_report_id=saved_history_id,
-                            report_type=report_type.value,
-                            context_snapshot=agent_context_snapshot,
-                            portfolio_context=portfolio_context,
-                        )
-                    latest_diagnostic_snapshot = current_diagnostic_snapshot()
-                    if latest_diagnostic_snapshot is not None:
-                        agent_context_snapshot["diagnostics"] = latest_diagnostic_snapshot
-                        result.diagnostic_context_snapshot = agent_context_snapshot
-                except Exception as e:
-                    record_history_run(
-                        report_saved=False,
-                        metadata_saved=False,
-                        error_message=e,
-                    )
-                    logger.warning(f"[{code}] 保存 Agent 分析历史失败: {e}")
+            # Step: shared finalize-and-persist stage (guardrails, decision refresh,
+            # context snapshot, analysis history save).
+            agent_snapshot_context = {
+                **self._without_runtime_prompt_context(initial_context),
+                "stock_name": resolved_stock_name,
+            }
+            result = self._finalize_and_persist_result(
+                result,
+                artifacts,
+                market_phase_summary=market_phase_summary,
+                analysis_context_pack_overview=analysis_context_pack_overview,
+                report_type=report_type.value,
+                snapshot_context=agent_snapshot_context,
+                news_content_for_save=None,
+                attach_agent_diagnostics=True,
+            )
 
             return result
 
@@ -2406,6 +2268,125 @@ class StockAnalysisPipeline:
                 exc_info=True,
             )
 
+    def _finalize_and_persist_result(
+        self,
+        result: Optional[AnalysisResult],
+        artifacts: PipelineAnalysisArtifacts,
+        *,
+        market_phase_summary: Optional[Dict[str, Any]],
+        analysis_context_pack_overview: Optional[Dict[str, Any]],
+        report_type: str,
+        snapshot_context: Dict[str, Any],
+        news_content_for_save: Optional[str],
+        attach_agent_diagnostics: bool = False,
+    ) -> Optional[AnalysisResult]:
+        """Shared finalize-and-persist stage for legacy and agent analysis paths.
+
+        Runs price-position fallback, decision guardrails, and persists the
+        analysis history + context snapshot. Both `analyze_stock` and
+        `_analyze_with_agent` build their own `PipelineAnalysisArtifacts`
+        and `snapshot_context` (enhanced_context for legacy, a sanitized
+        initial_context for agent) before calling this.
+        """
+        if not result:
+            return result
+
+        fill_price_position_if_needed(result, artifacts.trend_result, artifacts.realtime_quote)
+        action_source_advice = getattr(result, "operation_advice", None)
+        stabilize_decision_with_structure(result, artifacts.trend_result, artifacts.fundamental_context)
+        report_language = (
+            getattr(result, "report_language", None)
+            or getattr(self.config, "report_language", "zh")
+        )
+        adjustments = apply_phase_decision_guardrails(
+            result,
+            market_phase_summary=market_phase_summary,
+            analysis_context_pack_overview=analysis_context_pack_overview,
+            report_language=report_language,
+        )
+        if adjustments:
+            logger.info("[phase_decision_guardrail] Applied adjustments for %s: %s", artifacts.code, adjustments)
+        market_context_adjustments = apply_daily_market_context_guardrail(
+            result,
+            daily_market_context=snapshot_context.get("daily_market_context"),
+            report_language=report_language,
+        )
+        if market_context_adjustments:
+            logger.info(
+                "[daily_market_context_guardrail] Applied adjustments for %s: %s",
+                artifacts.code,
+                market_context_adjustments,
+            )
+        if isinstance(artifacts.fundamental_context, dict):
+            result.fundamental_context = artifacts.fundamental_context
+        result.market_phase_summary = market_phase_summary
+        result.analysis_context_pack_overview = analysis_context_pack_overview
+        self._refresh_decision_action_for_final_result(
+            result,
+            report_type=report_type,
+            previous_operation_advice=action_source_advice,
+        )
+
+        if result and result.success:
+            try:
+                context_snapshot = self._build_context_snapshot(
+                    enhanced_context=snapshot_context,
+                    news_content=artifacts.news_context,
+                    news_result_count=artifacts.news_result_count,
+                    realtime_quote=artifacts.realtime_quote,
+                    chip_data=artifacts.chip_data,
+                    analysis_context_pack_overview=analysis_context_pack_overview,
+                    market_phase_summary=market_phase_summary,
+                )
+                if attach_agent_diagnostics:
+                    # Agent path: the resolved (post-LLM) stock name must land in the
+                    # saved snapshot even though artifacts were built before the agent ran.
+                    context_snapshot["stock_name"] = snapshot_context.get("stock_name")
+                result.diagnostic_context_snapshot = context_snapshot
+                saved_history_id = self.db.save_analysis_history(
+                    result=result,
+                    query_id=artifacts.metadata.get("query_id"),
+                    report_type=report_type,
+                    news_content=news_content_for_save,
+                    context_snapshot=context_snapshot,
+                    save_snapshot=self.save_context_snapshot,
+                )
+                valid_saved_history_id = (
+                    isinstance(saved_history_id, int)
+                    and not isinstance(saved_history_id, bool)
+                    and saved_history_id > 0
+                )
+                record_history_run(
+                    report_saved=bool(saved_history_id),
+                    metadata_saved=bool(saved_history_id),
+                    analysis_history_id=(
+                        saved_history_id if valid_saved_history_id else None
+                    ),
+                )
+                if valid_saved_history_id:
+                    self._extract_decision_signal_after_history_save(
+                        result=result,
+                        query_id=artifacts.metadata.get("query_id"),
+                        source_report_id=saved_history_id,
+                        report_type=report_type,
+                        context_snapshot=context_snapshot,
+                        portfolio_context=artifacts.portfolio_context,
+                    )
+                if attach_agent_diagnostics:
+                    latest_diagnostic_snapshot = current_diagnostic_snapshot()
+                    if latest_diagnostic_snapshot is not None:
+                        context_snapshot["diagnostics"] = latest_diagnostic_snapshot
+                        result.diagnostic_context_snapshot = context_snapshot
+            except Exception as e:
+                record_history_run(
+                    report_saved=False,
+                    metadata_saved=False,
+                    error_message=e,
+                )
+                logger.warning(f"{artifacts.stock_name}({artifacts.code}) 保存分析历史失败: {e}")
+
+        return result
+
     @staticmethod
     def _build_notification_run_snapshot(
         *,
@@ -2585,6 +2566,9 @@ class StockAnalysisPipeline:
         query_id: str,
         base_context: Optional[Dict[str, Any]] = None,
         portfolio_context: Optional[Dict[str, Any]] = None,
+        realtime_quote: Optional[Any] = None,
+        trend_result: Optional[Any] = None,
+        chip_data: Optional[Any] = None,
     ) -> PipelineAnalysisArtifacts:
         context_candidate = base_context
         if not isinstance(context_candidate, dict):
@@ -2603,6 +2587,13 @@ class StockAnalysisPipeline:
                 "yesterday": {},
             }
 
+        # Prefer the caller's raw pre-conversion objects (identical to what
+        # `_analyze_with_agent` historically fed straight into
+        # fill_price_position_if_needed / stabilize_decision_with_structure /
+        # _build_context_snapshot) over the already-`_safe_to_dict`-converted
+        # copies stashed on initial_context for the LLM prompt payload. Falls
+        # back to initial_context so direct callers of this builder (e.g.
+        # tests exercising only initial_context) keep working.
         return PipelineAnalysisArtifacts(
             code=code,
             stock_name=stock_name,
@@ -2610,9 +2601,9 @@ class StockAnalysisPipeline:
             phase=phase,
             base_context=daily_context,
             enhanced_context={},
-            realtime_quote=initial_context.get("realtime_quote"),
-            trend_result=initial_context.get("trend_result"),
-            chip_data=initial_context.get("chip_distribution"),
+            realtime_quote=realtime_quote if realtime_quote is not None else initial_context.get("realtime_quote"),
+            trend_result=trend_result if trend_result is not None else initial_context.get("trend_result"),
+            chip_data=chip_data if chip_data is not None else initial_context.get("chip_distribution"),
             fundamental_context=fundamental_context,
             news_context=initial_context.get("news_context"),
             news_result_count=None,
