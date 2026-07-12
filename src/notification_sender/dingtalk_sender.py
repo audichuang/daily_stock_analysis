@@ -10,6 +10,7 @@ from typing import Optional
 
 from src.config import Config
 from src.formatters import chunk_content_by_max_bytes  # <-- 引入项目内置的切片器
+from src.notification_sender.base import OutboundMessage
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,14 @@ class DingtalkSender:
     def __init__(self, config: Config):
         self.webhook_url = config.dingtalk_webhook_url
         self.secret = config.dingtalk_secret
+
+    def is_configured(self) -> bool:
+        """检查钉钉 Webhook 是否已配置"""
+        return bool(self.webhook_url)
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: DingTalk only sends text."""
+        return self.send_to_dingtalk(msg.text)
 
     def send_to_dingtalk(self, content: str, title: str = "", timeout_seconds: int = 10) -> bool:
         """发送 Markdown 消息到钉钉群 (Send DingTalk Markdown message)"""

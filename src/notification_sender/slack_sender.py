@@ -14,6 +14,7 @@ import requests
 
 from src.config import Config
 from src.formatters import chunk_content_by_max_bytes
+from src.notification_sender.base import OutboundMessage
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,16 @@ class SlackSender:
     def _is_slack_configured(self) -> bool:
         """检查 Slack 配置是否完整（支持 Webhook 或 Bot API）"""
         return self._use_bot or bool(self._slack_webhook_url)
+
+    def is_configured(self) -> bool:
+        """Sender protocol: 包一层 `_is_slack_configured`"""
+        return self._is_slack_configured()
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: file upload (Bot only) or text fallback."""
+        if msg.image_bytes:
+            return self._send_slack_image(msg.image_bytes, fallback_content=msg.text)
+        return self.send_to_slack(msg.text)
 
     def send_to_slack(self, content: str, *, timeout_seconds: Optional[float] = None) -> bool:
         """

@@ -15,6 +15,7 @@ import requests
 
 from src.config import Config
 from src.formatters import chunk_content_by_max_bytes, slice_at_max_bytes
+from src.notification_sender.base import OutboundMessage
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,17 @@ class CustomWebhookSender:
         self._custom_webhook_bearer_token = getattr(config, 'custom_webhook_bearer_token', None)
         self._custom_webhook_body_template = getattr(config, 'custom_webhook_body_template', None)
         self._webhook_verify_ssl = getattr(config, 'webhook_verify_ssl', True)
- 
+
+    def is_configured(self) -> bool:
+        """检查是否配置了至少一个自定义 Webhook"""
+        return bool(self._custom_webhook_urls)
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: image (Discord fallback) or text."""
+        if msg.image_bytes:
+            return self._send_custom_webhook_image(msg.image_bytes, fallback_content=msg.text)
+        return self.send_to_custom(msg.text)
+
     def send_to_custom(self, content: str) -> bool:
         """
         推送消息到自定义 Webhook

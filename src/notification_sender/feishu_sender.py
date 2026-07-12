@@ -27,6 +27,7 @@ from src.formatters import (
     chunk_content_by_max_bytes,
     format_feishu_markdown,
 )
+from src.notification_sender.base import OutboundMessage
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,22 @@ class FeishuSender:
 
         self._app_client: Any = _NO_CLIENT
         self._app_client_lock = threading.Lock()
+
+    def is_configured(self) -> bool:
+        """Return whether either the webhook or the App Bot triad is set.
+
+        Mirrors ``src.notification_contracts.is_feishu_static_configured``,
+        evaluated against this instance's already-parsed config fields.
+        """
+        return bool(self._feishu_url) or bool(
+            self._feishu_app_id and self._feishu_app_secret and self._feishu_chat_id
+        )
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: file upload when staged, else text."""
+        if msg.file_path:
+            return self.send_feishu_file(msg.file_path)
+        return self.send_to_feishu(msg.text)
 
     # ------------------------------------------------------------------
     # Shared helpers

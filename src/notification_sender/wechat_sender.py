@@ -15,6 +15,7 @@ from typing import Optional
 
 from src.config import Config
 from src.formatters import chunk_content_by_max_bytes
+from src.notification_sender.base import OutboundMessage
 
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 WECHAT_IMAGE_MAX_BYTES = 2 * 1024 * 1024
 
 class WechatSender:
-    
+
     def __init__(self, config: Config):
         """
         初始化企业微信配置
@@ -36,7 +37,17 @@ class WechatSender:
         self._wechat_max_bytes = getattr(config, 'wechat_max_bytes', 4000)
         self._wechat_msg_type = getattr(config, 'wechat_msg_type', 'markdown')
         self._webhook_verify_ssl = getattr(config, 'webhook_verify_ssl', True)
-        
+
+    def is_configured(self) -> bool:
+        """检查企业微信 Webhook 是否已配置"""
+        return bool(self._wechat_url)
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: image when small enough, else text."""
+        if msg.image_bytes and len(msg.image_bytes) <= WECHAT_IMAGE_MAX_BYTES:
+            return self._send_wechat_image(msg.image_bytes)
+        return self.send_to_wechat(msg.text)
+
     def send_to_wechat(self, content: str, *, timeout_seconds: Optional[float] = None) -> bool:
         """
         推送消息到企业微信机器人

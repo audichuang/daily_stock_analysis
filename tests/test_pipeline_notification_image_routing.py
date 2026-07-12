@@ -16,6 +16,7 @@ from tests.litellm_stub import ensure_litellm_stub
 ensure_litellm_stub()
 
 from src.core.pipeline import StockAnalysisPipeline, NotificationChannel
+from src.notification_sender import WECHAT_IMAGE_MAX_BYTES
 from src.services.run_diagnostics import (
     activate_run_diagnostic_context,
     build_run_diagnostic_summary,
@@ -23,6 +24,33 @@ from src.services.run_diagnostics import (
     reset_run_diagnostic_context,
 )
 from src.enums import ReportType
+
+
+class _FakeSender:
+    """Stand-in for one composed channel Sender (``self._senders[channel]``).
+
+    The fake notifier classes below alias their legacy per-channel method
+    attributes (``send_to_wechat``, ``_send_wechat_image``, ...) directly to
+    these MagicMocks and register them under ``_senders``, mirroring how
+    ``NotificationService``'s real compat delegators forward
+    (``self._senders[channel].send_to_wechat(...)``). This exercises the same
+    registry-wiring pattern instead of stubbing methods straight onto a bare
+    notifier double.
+    """
+
+    def __init__(self, **method_returns):
+        for name, value in method_returns.items():
+            setattr(self, name, MagicMock(return_value=value))
+
+    def send(self, msg):
+        # ponytail: only the WeChat fake's send() is ever exercised — pipeline.py's
+        # WeChat branch is the only one routed through sender.send(OutboundMessage)
+        # today (image-vs-text is WechatSender.send()'s own decision, see
+        # src/notification_sender/wechat_sender.py). Mirrors that exact logic so
+        # the pre-existing _send_wechat_image/send_to_wechat assertions keep working.
+        if msg.image_bytes and len(msg.image_bytes) <= WECHAT_IMAGE_MAX_BYTES:
+            return self._send_wechat_image(msg.image_bytes)
+        return self.send_to_wechat(msg.text)
 
 
 class _FakeNotifier:
@@ -44,8 +72,10 @@ class _FakeNotifier:
                 channel.value in self._markdown_to_image_channels and image_bytes is not None
             )
         )
-        self._send_email_with_inline_image = MagicMock(return_value=True)
-        self.send_to_email = MagicMock(return_value=True)
+        email_sender = _FakeSender(_send_email_with_inline_image=True, send_to_email=True)
+        self._senders = {NotificationChannel.EMAIL: email_sender}
+        self._send_email_with_inline_image = email_sender._send_email_with_inline_image
+        self.send_to_email = email_sender.send_to_email
 
     @staticmethod
     def _generate_dashboard_report(results):
@@ -153,8 +183,10 @@ class _FakeWechatNotifier:
                 channel.value in self._markdown_to_image_channels and image_bytes is not None
             )
         )
-        self._send_wechat_image = MagicMock(return_value=True)
-        self.send_to_wechat = MagicMock(return_value=True)
+        wechat_sender = _FakeSender(_send_wechat_image=True, send_to_wechat=True)
+        self._senders = {NotificationChannel.WECHAT: wechat_sender}
+        self._send_wechat_image = wechat_sender._send_wechat_image
+        self.send_to_wechat = wechat_sender.send_to_wechat
 
 
 class TestPipelineWechatOnlyImageRouting(unittest.TestCase):
@@ -224,14 +256,26 @@ class _FakeRoutedNotifier:
             )
         )
         self.generate_brief_report = MagicMock(return_value="brief-report")
-        self._send_wechat_image = MagicMock(return_value=True)
-        self.send_to_wechat = MagicMock(return_value=True)
-        self._send_telegram_photo = MagicMock(return_value=True)
-        self.send_to_telegram = MagicMock(return_value=True)
-        self._send_email_with_inline_image = MagicMock(return_value=True)
-        self.send_to_email = MagicMock(return_value=True)
-        self.send_to_ntfy = MagicMock(return_value=True)
-        self.send_to_gotify = MagicMock(return_value=True)
+        wechat_sender = _FakeSender(_send_wechat_image=True, send_to_wechat=True)
+        telegram_sender = _FakeSender(_send_telegram_photo=True, send_to_telegram=True)
+        email_sender = _FakeSender(_send_email_with_inline_image=True, send_to_email=True)
+        ntfy_sender = _FakeSender(send_to_ntfy=True)
+        gotify_sender = _FakeSender(send_to_gotify=True)
+        self._senders = {
+            NotificationChannel.WECHAT: wechat_sender,
+            NotificationChannel.TELEGRAM: telegram_sender,
+            NotificationChannel.EMAIL: email_sender,
+            NotificationChannel.NTFY: ntfy_sender,
+            NotificationChannel.GOTIFY: gotify_sender,
+        }
+        self._send_wechat_image = wechat_sender._send_wechat_image
+        self.send_to_wechat = wechat_sender.send_to_wechat
+        self._send_telegram_photo = telegram_sender._send_telegram_photo
+        self.send_to_telegram = telegram_sender.send_to_telegram
+        self._send_email_with_inline_image = email_sender._send_email_with_inline_image
+        self.send_to_email = email_sender.send_to_email
+        self.send_to_ntfy = ntfy_sender.send_to_ntfy
+        self.send_to_gotify = gotify_sender.send_to_gotify
 
     @staticmethod
     def _generate_dashboard_report(results):
@@ -538,6 +582,110 @@ class TestPipelineReportRouteFiltering(unittest.TestCase):
             "telegram",
             summary["components"]["notification"]["details"]["failed"],
         )
+
+
+class TestPipelineAggregateFeishuSlackBranches(unittest.TestCase):
+    """端到端回归：_send_notifications 的 Feishu 存档 / Slack 图片分支。
+
+    这两条分支经过「真 NotificationService 属性委派」整条链
+    （pipeline 读 notifier._feishu_send_as_file / _slack_bot_token /
+    _slack_channel_id -> property -> sender 属性），是 review 抓到的
+    两个回归路径（Slack AttributeError、Feishu 存档静默停用）。
+    fake notifier 测不到这条链，必须用真 NotificationService。
+    """
+
+    def _build_real_notifier(self, **config_overrides):
+        from src.config import Config
+        from src.notification import NotificationService
+
+        with patch("src.notification.get_config") as mock_cfg:
+            mock_cfg.return_value = Config(stock_list=[], **config_overrides)
+            notifier = NotificationService()
+        # 统一垫掉非本分支目标的入口，避免真网络/真渲染
+        notifier.generate_dashboard_report = MagicMock(return_value="aggregate-report")
+        notifier.generate_wechat_dashboard = MagicMock(return_value="wechat-dash")
+        notifier.generate_brief_report = MagicMock(return_value="brief")
+        notifier.send_to_context = MagicMock(return_value=False)
+        notifier.evaluate_noise_control = MagicMock(
+            return_value=SimpleNamespace(should_send=True, message="")
+        )
+        notifier.record_noise_control = MagicMock()
+        notifier.release_noise_control = MagicMock()
+        return notifier
+
+    def _build_pipeline(self, notifier):
+        pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.notifier = notifier
+        pipeline.config = SimpleNamespace(stock_email_groups=[])
+        return pipeline
+
+    def test_feishu_send_as_file_branch_saves_and_sends_file(self):
+        notifier = self._build_real_notifier(
+            feishu_webhook_url="https://open.feishu.cn/hook/x",
+            feishu_send_as_file=True,
+        )
+        feishu = notifier._senders[NotificationChannel.FEISHU]
+        feishu.send_feishu_file = MagicMock(return_value=True)
+        feishu.send_to_feishu = MagicMock(return_value=True)
+        notifier.save_report_to_file = MagicMock(return_value="/tmp/dash.md")
+
+        pipeline = self._build_pipeline(notifier)
+        pipeline._send_notifications([SimpleNamespace(code="000001")], ReportType.SIMPLE)
+
+        notifier.save_report_to_file.assert_called_once()
+        feishu.send_feishu_file.assert_called_once_with("/tmp/dash.md")
+        feishu.send_to_feishu.assert_not_called()
+
+    def test_feishu_text_branch_when_send_as_file_disabled(self):
+        notifier = self._build_real_notifier(
+            feishu_webhook_url="https://open.feishu.cn/hook/x",
+            feishu_send_as_file=False,
+        )
+        feishu = notifier._senders[NotificationChannel.FEISHU]
+        feishu.send_feishu_file = MagicMock(return_value=True)
+        feishu.send_to_feishu = MagicMock(return_value=True)
+        notifier.save_report_to_file = MagicMock(return_value="/tmp/dash.md")
+
+        pipeline = self._build_pipeline(notifier)
+        pipeline._send_notifications([SimpleNamespace(code="000001")], ReportType.SIMPLE)
+
+        feishu.send_to_feishu.assert_called_once()
+        feishu.send_feishu_file.assert_not_called()
+
+    def test_slack_image_branch_uploads_via_bot(self):
+        notifier = self._build_real_notifier(
+            slack_bot_token="xoxb-token",
+            slack_channel_id="C123",
+            markdown_to_image_channels=["slack"],
+        )
+        slack = notifier._senders[NotificationChannel.SLACK]
+        slack._send_slack_image = MagicMock(return_value=True)
+        slack.send_to_slack = MagicMock(return_value=True)
+
+        pipeline = self._build_pipeline(notifier)
+        with patch("src.md2img.markdown_to_image", return_value=b"png-bytes"):
+            pipeline._send_notifications([SimpleNamespace(code="000001")], ReportType.SIMPLE)
+
+        slack._send_slack_image.assert_called_once()
+        self.assertEqual(slack._send_slack_image.call_args.args[0], b"png-bytes")
+        slack.send_to_slack.assert_not_called()
+
+    def test_slack_text_branch_when_image_unavailable(self):
+        notifier = self._build_real_notifier(
+            slack_bot_token="xoxb-token",
+            slack_channel_id="C123",
+            markdown_to_image_channels=["slack"],
+        )
+        slack = notifier._senders[NotificationChannel.SLACK]
+        slack._send_slack_image = MagicMock(return_value=True)
+        slack.send_to_slack = MagicMock(return_value=True)
+
+        pipeline = self._build_pipeline(notifier)
+        with patch("src.md2img.markdown_to_image", return_value=None):
+            pipeline._send_notifications([SimpleNamespace(code="000001")], ReportType.SIMPLE)
+
+        slack.send_to_slack.assert_called_once()
+        slack._send_slack_image.assert_not_called()
 
 
 if __name__ == "__main__":

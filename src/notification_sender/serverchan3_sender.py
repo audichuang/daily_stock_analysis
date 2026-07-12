@@ -12,13 +12,14 @@ from datetime import datetime
 import re
 
 from src.config import Config
+from src.notification_sender.base import OutboundMessage
 
 
 logger = logging.getLogger(__name__)
 
 
 class Serverchan3Sender:
-    
+
     def __init__(self, config: Config):
         """
         初始化 Server酱3 配置
@@ -27,7 +28,15 @@ class Serverchan3Sender:
             config: 配置对象
         """
         self._serverchan3_sendkey = getattr(config, 'serverchan3_sendkey', None)
-        
+
+    def is_configured(self) -> bool:
+        """检查 Server酱3 SendKey 是否已配置"""
+        return bool(self._serverchan3_sendkey)
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: Server酱3 only sends text."""
+        return self.send_to_serverchan3(msg.text)
+
     def send_to_serverchan3(
         self,
         content: str,

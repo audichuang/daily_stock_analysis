@@ -13,6 +13,7 @@ import time
 import re
 
 from src.config import Config
+from src.notification_sender.base import OutboundMessage
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,16 @@ class TelegramSender:
     def _is_telegram_configured(self) -> bool:
         """检查 Telegram 配置是否完整"""
         return bool(self._telegram_config['bot_token'] and self._telegram_config['chat_id'])
+
+    def is_configured(self) -> bool:
+        """Sender protocol: 包一层 `_is_telegram_configured`"""
+        return self._is_telegram_configured()
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: photo or text."""
+        if msg.image_bytes:
+            return self._send_telegram_photo(msg.image_bytes)
+        return self.send_to_telegram(msg.text)
 
     def send_to_telegram(
         self,

@@ -11,6 +11,7 @@ from urllib.parse import unquote, urlparse, urlunparse
 import requests
 
 from src.config import Config
+from src.notification_sender.base import OutboundMessage
 
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,18 @@ class NtfySender:
 
     def _is_ntfy_configured(self) -> bool:
         return bool(self._ntfy_url)
+
+    def is_configured(self) -> bool:
+        """Sender protocol: requires a fully resolvable server URL + topic,
+        matching ``detect_configured_channels``' ``resolve_ntfy_endpoint()``
+        check (a bare non-empty URL without a topic path segment is not
+        enough to actually send)."""
+        server_url, topic = self._resolve_ntfy_endpoint()
+        return bool(server_url and topic)
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: ntfy only sends text (no image support)."""
+        return self.send_to_ntfy(msg.text)
 
     def _resolve_ntfy_endpoint(self) -> Tuple[Optional[str], Optional[str]]:
         return resolve_ntfy_endpoint(self._ntfy_url)

@@ -186,8 +186,8 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
         self.assertIn(NotificationChannel.WECHAT, service.get_available_channels())
         self.assertIn(NotificationChannel.CUSTOM, service.get_available_channels())
 
-        with mock.patch.object(service, "send_to_wechat", side_effect=RuntimeError("boom")), \
-             mock.patch.object(service, "send_to_custom", return_value=True) as mock_custom:
+        with mock.patch.object(service._senders[NotificationChannel.WECHAT], "send_to_wechat", side_effect=RuntimeError("boom")), \
+             mock.patch.object(service._senders[NotificationChannel.CUSTOM], "send_to_custom", return_value=True) as mock_custom:
             ok = service.send("content")
 
         self.assertTrue(ok)
@@ -203,8 +203,8 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
 
         service = NotificationService()
 
-        with mock.patch.object(service, "send_to_wechat", side_effect=RuntimeError("token=secret-token failed")), \
-             mock.patch.object(service, "send_to_custom", return_value=True):
+        with mock.patch.object(service._senders[NotificationChannel.WECHAT], "send_to_wechat", side_effect=RuntimeError("token=secret-token failed")), \
+             mock.patch.object(service._senders[NotificationChannel.CUSTOM], "send_to_custom", return_value=True):
             result = service.send_with_results("content")
 
         self.assertTrue(result.dispatched)
@@ -245,8 +245,8 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
 
         service = NotificationService()
 
-        with mock.patch.object(service, "send_to_wechat", return_value=True) as mock_wechat, \
-             mock.patch.object(service, "send_to_custom", return_value=True) as mock_custom:
+        with mock.patch.object(service._senders[NotificationChannel.WECHAT], "send_to_wechat", return_value=True) as mock_wechat, \
+             mock.patch.object(service._senders[NotificationChannel.CUSTOM], "send_to_custom", return_value=True) as mock_custom:
             ok = service.send("content", route_type="report")
 
         self.assertTrue(ok)
@@ -264,8 +264,8 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
 
         service = NotificationService()
 
-        with mock.patch.object(service, "send_to_wechat", return_value=True) as mock_wechat, \
-             mock.patch.object(service, "send_to_custom", return_value=True) as mock_custom:
+        with mock.patch.object(service._senders[NotificationChannel.WECHAT], "send_to_wechat", return_value=True) as mock_wechat, \
+             mock.patch.object(service._senders[NotificationChannel.CUSTOM], "send_to_custom", return_value=True) as mock_custom:
             ok = service.send("content", route_type="report")
 
         self.assertTrue(ok)
@@ -284,8 +284,8 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
 
         service = NotificationService()
 
-        with mock.patch.object(service, "send_to_wechat", return_value=True) as mock_wechat, \
-             mock.patch.object(service, "send_to_custom", return_value=True) as mock_custom:
+        with mock.patch.object(service._senders[NotificationChannel.WECHAT], "send_to_wechat", return_value=True) as mock_wechat, \
+             mock.patch.object(service._senders[NotificationChannel.CUSTOM], "send_to_custom", return_value=True) as mock_custom:
             self.assertTrue(service.send("alert", route_type="alert"))
             self.assertTrue(service.send("system", route_type="system_error"))
 
@@ -418,7 +418,7 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
         mock_get_config.return_value = cfg
         service = NotificationService()
 
-        with mock.patch.object(service, "send_to_feishu", return_value=True) as mock_webhook:
+        with mock.patch.object(service._senders[NotificationChannel.FEISHU], "send_to_feishu", return_value=True) as mock_webhook:
             result = service.send_with_results("content", route_type="report")
 
         self.assertTrue(result.dispatched)
@@ -435,7 +435,7 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
         )
         mock_get_config.return_value = cfg
         service = NotificationService()
-        with mock.patch.object(service, "send_feishu_file", return_value=True) as mock_file, \
+        with mock.patch.object(service._senders[NotificationChannel.FEISHU], "send_feishu_file", return_value=True) as mock_file, \
              mock.patch.object(service, "save_report_to_file", return_value="/tmp/report.md"):
             result = service.send_with_results("report content", route_type="report")
         self.assertTrue(result.success)
@@ -450,7 +450,7 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
         )
         mock_get_config.return_value = cfg
         service = NotificationService()
-        with mock.patch.object(service, "send_to_feishu", return_value=True) as mock_text, \
+        with mock.patch.object(service._senders[NotificationChannel.FEISHU], "send_to_feishu", return_value=True) as mock_text, \
              mock.patch.object(service, "save_report_to_file") as mock_save:
             result = service.send_with_results("alert content", route_type="alert")
         self.assertTrue(result.success)
@@ -466,7 +466,7 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
         )
         mock_get_config.return_value = cfg
         service = NotificationService()
-        with mock.patch.object(service, "send_to_feishu", return_value=True) as mock_text, \
+        with mock.patch.object(service._senders[NotificationChannel.FEISHU], "send_to_feishu", return_value=True) as mock_text, \
              mock.patch.object(service, "save_report_to_file") as mock_save:
             result = service.send_with_results("report content")
         self.assertTrue(result.success)
@@ -482,7 +482,7 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
         )
         mock_get_config.return_value = cfg
         service = NotificationService()
-        with mock.patch.object(service, "send_to_feishu", return_value=True) as mock_text, \
+        with mock.patch.object(service._senders[NotificationChannel.FEISHU], "send_to_feishu", return_value=True) as mock_text, \
              mock.patch.object(service, "save_report_to_file") as mock_save:
             result = service.send_with_results("report content", route_type="report")
         self.assertTrue(result.success)
@@ -499,8 +499,8 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
         )
         mock_get_config.return_value = cfg
         service = NotificationService()
-        with mock.patch.object(service, "send_feishu_file", return_value=True) as mock_file, \
-             mock.patch.object(service, "send_to_custom", return_value=True) as mock_custom, \
+        with mock.patch.object(service._senders[NotificationChannel.FEISHU], "send_feishu_file", return_value=True) as mock_file, \
+             mock.patch.object(service._senders[NotificationChannel.CUSTOM], "send_to_custom", return_value=True) as mock_custom, \
              mock.patch.object(service, "save_report_to_file", return_value="/tmp/report.md"):
             result = service.send_with_results("content", route_type="report")
         self.assertTrue(result.success)
@@ -516,7 +516,7 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
         )
         mock_get_config.return_value = cfg
         service = NotificationService()
-        with mock.patch.object(service, "send_to_feishu", return_value=True) as mock_text, \
+        with mock.patch.object(service._senders[NotificationChannel.FEISHU], "send_to_feishu", return_value=True) as mock_text, \
              mock.patch.object(service, "save_report_to_file") as mock_save:
             result = service.send_with_results("error", route_type="system_error")
         self.assertTrue(result.success)
@@ -533,7 +533,7 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
 
         service = NotificationService()
 
-        with mock.patch.object(service, "send_to_custom", return_value=True) as mock_custom:
+        with mock.patch.object(service._senders[NotificationChannel.CUSTOM], "send_to_custom", return_value=True) as mock_custom:
             self.assertTrue(service.send("content at 12:00", route_type="report", dedup_key="report:aggregate:simple:600519"))
             self.assertFalse(service.send("content at 12:01", route_type="report", dedup_key="report:aggregate:simple:600519"))
 
@@ -549,7 +549,7 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
 
         service = NotificationService()
 
-        with mock.patch.object(service, "send_to_custom", side_effect=[False, True]) as mock_custom:
+        with mock.patch.object(service._senders[NotificationChannel.CUSTOM], "send_to_custom", side_effect=[False, True]) as mock_custom:
             self.assertFalse(
                 service.send(
                     "content at 12:00",
@@ -578,7 +578,7 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
         service = NotificationService()
 
         with mock.patch.object(service, "send_to_context", return_value=True) as mock_context, \
-             mock.patch.object(service, "send_to_custom", return_value=True) as mock_custom:
+             mock.patch.object(service._senders[NotificationChannel.CUSTOM], "send_to_custom", return_value=True) as mock_custom:
             self.assertTrue(service.send("content at 12:00", route_type="report", dedup_key="report:aggregate:simple:600519"))
             self.assertTrue(service.send("content at 12:01", route_type="report", dedup_key="report:aggregate:simple:600519"))
 
@@ -593,7 +593,7 @@ class TestNotificationServiceSendToMethods(unittest.TestCase):
         service = NotificationService()
 
         with mock.patch("src.notification_noise._evaluate_notification_noise", side_effect=RuntimeError("boom")), \
-             mock.patch.object(service, "send_to_custom", return_value=True) as mock_custom:
+             mock.patch.object(service._senders[NotificationChannel.CUSTOM], "send_to_custom", return_value=True) as mock_custom:
             ok = service.send("content", route_type="report")
 
         self.assertTrue(ok)

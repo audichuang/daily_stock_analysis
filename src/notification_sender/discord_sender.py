@@ -13,6 +13,7 @@ import requests
 
 from src.config import Config
 from src.formatters import MIN_MAX_WORDS, chunk_content_by_max_words
+from src.notification_sender.base import OutboundMessage
 
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,15 @@ class DiscordSender:
         bot_ok = bool(self._discord_config['bot_token'] and self._discord_config['channel_id'])
         webhook_ok = bool(self._discord_config['webhook_url'])
         return bot_ok or webhook_ok
-    
+
+    def is_configured(self) -> bool:
+        """Sender protocol: 包一层 `_is_discord_configured`"""
+        return self._is_discord_configured()
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: Discord only sends text (image goes via custom webhook)."""
+        return self.send_to_discord(msg.text)
+
     def send_to_discord(self, content: str, *, timeout_seconds: Optional[float] = None) -> bool:
         """
         推送消息到 Discord（支持 Webhook 和 Bot API）

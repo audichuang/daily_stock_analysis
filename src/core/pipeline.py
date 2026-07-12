@@ -38,6 +38,7 @@ from src.analyzer import (
     stabilize_decision_with_structure,
 )
 from src.notification import NotificationService, NotificationChannel
+from src.notification_sender import OutboundMessage
 from src.report_language import (
     get_placeholder_text,
     get_unknown_text,
@@ -3321,12 +3322,12 @@ class StockAnalysisPipeline:
                                     "企业微信 Markdown 转图片失败，将回退为文本发送。请检查 MARKDOWN_TO_IMAGE_CHANNELS 配置并安装 %s",
                                     _get_md2img_hint(),
                                 )
-                        use_image = self.notifier._should_use_image_for_channel(
-                            NotificationChannel.WECHAT, wechat_image_bytes
+                        # WeChat's ~2MB oversize -> text fallback is WechatSender.send()'s
+                        # own decision (single owner; see WechatSender.send in
+                        # src/notification_sender/wechat_sender.py), not this dispatcher.
+                        return self.notifier._senders[NotificationChannel.WECHAT].send(
+                            OutboundMessage(text=dashboard_content, image_bytes=wechat_image_bytes)
                         )
-                        if use_image:
-                            return self.notifier._send_wechat_image(wechat_image_bytes)
-                        return self.notifier.send_to_wechat(dashboard_content)
 
                     wechat_success, wechat_error = _send_channel_safely(
                         NotificationChannel.WECHAT.value,
@@ -3346,7 +3347,9 @@ class StockAnalysisPipeline:
                         continue
                     if channel == NotificationChannel.FEISHU:
                         def _send_feishu_report() -> bool:
-                            if getattr(self.notifier, "_feishu_send_as_file", False):
+                            # 直接读 NotificationService 的属性委派（fail-loud，
+                            # 不用 getattr 默认值——静默 False 会无声停用存档发送）。
+                            if self.notifier._feishu_send_as_file:
                                 date_str = datetime.now().strftime('%Y%m%d')
                                 filepath = self.notifier.save_report_to_file(
                                     report, filename=f"dashboard_{date_str}.md"

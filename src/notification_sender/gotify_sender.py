@@ -11,6 +11,7 @@ from urllib.parse import urlparse, urlunparse
 import requests
 
 from src.config import Config
+from src.notification_sender.base import OutboundMessage
 
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,17 @@ class GotifySender:
 
     def _is_gotify_configured(self) -> bool:
         return bool((self._gotify_url or "").strip() and (self._gotify_token or "").strip())
+
+    def is_configured(self) -> bool:
+        """Sender protocol: requires a resolvable ``/message`` endpoint +
+        token, matching ``detect_configured_channels``' validation via
+        ``resolve_gotify_message_endpoint()`` (a malformed/query-bearing URL
+        that fails resolution is not enough to actually send)."""
+        return bool(self._resolve_gotify_endpoint()) and bool((self._gotify_token or "").strip())
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: Gotify only sends text (no image support)."""
+        return self.send_to_gotify(msg.text)
 
     def _resolve_gotify_endpoint(self) -> Optional[str]:
         return resolve_gotify_message_endpoint(self._gotify_url)

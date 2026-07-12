@@ -15,13 +15,14 @@ import requests
 
 from src.config import Config
 from src.formatters import markdown_to_html_document
+from src.notification_sender.base import OutboundMessage
 
 
 logger = logging.getLogger(__name__)
 
 
 class AstrbotSender:
-    
+
     def __init__(self, config: Config):
         """
         初始化 AstrBot 配置
@@ -34,12 +35,20 @@ class AstrbotSender:
             'astrbot_token': getattr(config, 'astrbot_token', None),
         }
         self._webhook_verify_ssl = getattr(config, 'webhook_verify_ssl', True)
-        
+
     def _is_astrbot_configured(self) -> bool:
         """检查 AstrBot 配置是否完整（支持 Bot 或 Webhook）"""
         # 只要配置了 URL，即视为可用
         url_ok = bool(self._astrbot_config['astrbot_url'])
         return url_ok
+
+    def is_configured(self) -> bool:
+        """Sender protocol: 包一层 `_is_astrbot_configured`"""
+        return self._is_astrbot_configured()
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: AstrBot only sends text."""
+        return self.send_to_astrbot(msg.text)
 
     def send_to_astrbot(self, content: str, *, timeout_seconds: Optional[float] = None) -> bool:
         """

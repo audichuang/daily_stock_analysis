@@ -12,6 +12,7 @@ import requests
 
 from src.config import Config
 from src.formatters import markdown_to_plain_text
+from src.notification_sender.base import OutboundMessage
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,14 @@ class PushoverSender:
     def _is_pushover_configured(self) -> bool:
         """检查 Pushover 配置是否完整"""
         return bool(self._pushover_config['user_key'] and self._pushover_config['api_token'])
+
+    def is_configured(self) -> bool:
+        """Sender protocol: 包一层 `_is_pushover_configured`"""
+        return self._is_pushover_configured()
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: Pushover only sends text (no image support)."""
+        return self.send_to_pushover(msg.text)
 
     def send_to_pushover(
         self,

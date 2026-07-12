@@ -13,13 +13,14 @@ import requests
 
 from src.config import Config
 from src.formatters import chunk_content_by_max_bytes
+from src.notification_sender.base import OutboundMessage
 
 
 logger = logging.getLogger(__name__)
 
 
 class PushplusSender:
-    
+
     def __init__(self, config: Config):
         """
         初始化 PushPlus 配置
@@ -30,7 +31,15 @@ class PushplusSender:
         self._pushplus_token = getattr(config, 'pushplus_token', None)
         self._pushplus_topic = getattr(config, 'pushplus_topic', None)
         self._pushplus_max_bytes = getattr(config, 'pushplus_max_bytes', 20000)
-        
+
+    def is_configured(self) -> bool:
+        """检查 PushPlus Token 是否已配置"""
+        return bool(self._pushplus_token)
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: PushPlus only sends text."""
+        return self.send_to_pushplus(msg.text)
+
     def send_to_pushplus(
         self,
         content: str,

@@ -18,6 +18,7 @@ import smtplib
 from data_provider.base import normalize_stock_code
 from src.config import Config
 from src.formatters import markdown_to_html_document
+from src.notification_sender.base import OutboundMessage
 
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,17 @@ class EmailSender:
     def _is_email_configured(self) -> bool:
         """检查邮件配置是否完整（只需邮箱和授权码）"""
         return bool(self._email_config['sender'] and self._email_config['password'])
-    
+
+    def is_configured(self) -> bool:
+        """Sender protocol: 包一层 `_is_email_configured`"""
+        return self._is_email_configured()
+
+    def send(self, msg: OutboundMessage) -> bool:
+        """Sender protocol entry point: inline image or plain HTML/text."""
+        if msg.image_bytes:
+            return self._send_email_with_inline_image(msg.image_bytes, receivers=msg.email_receivers)
+        return self.send_to_email(msg.text, receivers=msg.email_receivers)
+
     def get_receivers_for_stocks(self, stock_codes: List[str]) -> List[str]:
         """
         Look up email receivers for given stock codes based on stock_email_groups.

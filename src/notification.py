@@ -69,13 +69,14 @@ from src.notification_sender import (
     FeishuSender,
     GotifySender,
     NtfySender,
+    OutboundMessage,
     PushoverSender,
     PushplusSender,
+    Sender,
     Serverchan3Sender,
     SlackSender,
     TelegramSender,
     WechatSender,
-    WECHAT_IMAGE_MAX_BYTES,
     resolve_gotify_message_endpoint,
     resolve_ntfy_endpoint,
 )
@@ -178,22 +179,7 @@ class ChannelDetector:
         return names.get(channel, "未知渠道")
 
 
-class NotificationService(
-    AstrbotSender,
-    CustomWebhookSender,
-    DingtalkSender,
-    DiscordSender,
-    EmailSender,
-    FeishuSender,
-    GotifySender,
-    NtfySender,
-    PushoverSender,
-    PushplusSender,
-    Serverchan3Sender,
-    SlackSender,
-    TelegramSender,
-    WechatSender
-):
+class NotificationService:
     """
     通知服务
 
@@ -236,21 +222,23 @@ class NotificationService(
         self._report_show_llm_model = getattr(config, 'report_show_llm_model', True)
         self._history_compare_cache: Dict[Tuple[int, str, Tuple[Tuple[str, str], ...]], Dict[str, List[Dict[str, Any]]]] = {}
 
-        # 初始化各渠道
-        AstrbotSender.__init__(self, config)
-        CustomWebhookSender.__init__(self, config)
-        DiscordSender.__init__(self, config)
-        EmailSender.__init__(self, config)
-        FeishuSender.__init__(self, config)
-        GotifySender.__init__(self, config)
-        NtfySender.__init__(self, config)
-        PushoverSender.__init__(self, config)
-        PushplusSender.__init__(self, config)
-        Serverchan3Sender.__init__(self, config)
-        SlackSender.__init__(self, config)
-        TelegramSender.__init__(self, config)
-        WechatSender.__init__(self, config)
-        DingtalkSender.__init__(self, config)
+        # 组合各渠道 sender（Sender protocol，取代 14-mixin 继承）
+        self._senders: Dict[NotificationChannel, Sender] = {
+            NotificationChannel.ASTRBOT: AstrbotSender(config),
+            NotificationChannel.CUSTOM: CustomWebhookSender(config),
+            NotificationChannel.DISCORD: DiscordSender(config),
+            NotificationChannel.EMAIL: EmailSender(config),
+            NotificationChannel.FEISHU: FeishuSender(config),
+            NotificationChannel.GOTIFY: GotifySender(config),
+            NotificationChannel.NTFY: NtfySender(config),
+            NotificationChannel.PUSHOVER: PushoverSender(config),
+            NotificationChannel.PUSHPLUS: PushplusSender(config),
+            NotificationChannel.SERVERCHAN3: Serverchan3Sender(config),
+            NotificationChannel.SLACK: SlackSender(config),
+            NotificationChannel.TELEGRAM: TelegramSender(config),
+            NotificationChannel.WECHAT: WechatSender(config),
+            NotificationChannel.DINGTALK: DingtalkSender(config),
+        }
 
         # 检测所有已配置的渠道
         self._available_channels = self._detect_all_channels()
@@ -265,6 +253,102 @@ class NotificationService(
             channel_names = [ChannelDetector.get_channel_name(ch) for ch in self._available_channels]
             channel_names.extend(self._context_channels)
             logger.info(f"已配置 {len(channel_names)} 个通知渠道：{', '.join(channel_names)}")
+
+    # ------------------------------------------------------------------
+    # Compat delegators — one-line forwards to the composed sender objects.
+    #
+    # These preserve the pre-refactor method surface for callers that reach
+    # past ``send()``/``send_with_results()`` into a specific channel method
+    # directly (``src/core/pipeline.py`` dashboard notification path,
+    # ``_send_to_static_channel`` below, ``_send_via_source_context``'s
+    # DingTalk session reply). Removing the 14-mixin inheritance means these
+    # methods are no longer inherited, so each needs a thin forward.
+    # ------------------------------------------------------------------
+
+    def send_to_wechat(self, *args, **kwargs):
+        return self._senders[NotificationChannel.WECHAT].send_to_wechat(*args, **kwargs)
+
+    def _send_wechat_image(self, *args, **kwargs):
+        return self._senders[NotificationChannel.WECHAT]._send_wechat_image(*args, **kwargs)
+
+    def send_to_dingtalk(self, *args, **kwargs):
+        return self._senders[NotificationChannel.DINGTALK].send_to_dingtalk(*args, **kwargs)
+
+    def _send_dingtalk_chunked(self, *args, **kwargs):
+        return self._senders[NotificationChannel.CUSTOM]._send_dingtalk_chunked(*args, **kwargs)
+
+    def send_to_feishu(self, *args, **kwargs):
+        return self._senders[NotificationChannel.FEISHU].send_to_feishu(*args, **kwargs)
+
+    def send_feishu_file(self, *args, **kwargs):
+        return self._senders[NotificationChannel.FEISHU].send_feishu_file(*args, **kwargs)
+
+    # 属性委派：pipeline 聚合通知路径（_send_notifications）直接读取这些
+    # 原 mixin 属性——Feishu 报告存档条件与 Slack 图片上传判断。
+    # 直接属性存取（不用 getattr 默认值）：sender 若重命名属性要在这里立刻炸出来，
+    # 而不是静默降级（Feishu 存档静默失效正是 review 抓到的回归形态）。
+    @property
+    def _feishu_send_as_file(self) -> bool:
+        return self._senders[NotificationChannel.FEISHU]._feishu_send_as_file
+
+    @property
+    def _slack_bot_token(self):
+        return self._senders[NotificationChannel.SLACK]._slack_bot_token
+
+    @property
+    def _slack_channel_id(self):
+        return self._senders[NotificationChannel.SLACK]._slack_channel_id
+
+    def send_to_telegram(self, *args, **kwargs):
+        return self._senders[NotificationChannel.TELEGRAM].send_to_telegram(*args, **kwargs)
+
+    def _send_telegram_photo(self, *args, **kwargs):
+        return self._senders[NotificationChannel.TELEGRAM]._send_telegram_photo(*args, **kwargs)
+
+    def send_to_email(self, *args, **kwargs):
+        return self._senders[NotificationChannel.EMAIL].send_to_email(*args, **kwargs)
+
+    def _send_email_with_inline_image(self, *args, **kwargs):
+        return self._senders[NotificationChannel.EMAIL]._send_email_with_inline_image(*args, **kwargs)
+
+    def get_all_email_receivers(self, *args, **kwargs):
+        return self._senders[NotificationChannel.EMAIL].get_all_email_receivers(*args, **kwargs)
+
+    def get_receivers_for_stocks(self, *args, **kwargs):
+        return self._senders[NotificationChannel.EMAIL].get_receivers_for_stocks(*args, **kwargs)
+
+    def send_to_custom(self, *args, **kwargs):
+        return self._senders[NotificationChannel.CUSTOM].send_to_custom(*args, **kwargs)
+
+    def _send_custom_webhook_image(self, *args, **kwargs):
+        return self._senders[NotificationChannel.CUSTOM]._send_custom_webhook_image(*args, **kwargs)
+
+    def send_to_discord(self, *args, **kwargs):
+        return self._senders[NotificationChannel.DISCORD].send_to_discord(*args, **kwargs)
+
+    def send_to_slack(self, *args, **kwargs):
+        return self._senders[NotificationChannel.SLACK].send_to_slack(*args, **kwargs)
+
+    def _send_slack_image(self, *args, **kwargs):
+        return self._senders[NotificationChannel.SLACK]._send_slack_image(*args, **kwargs)
+
+    def send_to_pushover(self, *args, **kwargs):
+        return self._senders[NotificationChannel.PUSHOVER].send_to_pushover(*args, **kwargs)
+
+    def send_to_ntfy(self, *args, **kwargs):
+        return self._senders[NotificationChannel.NTFY].send_to_ntfy(*args, **kwargs)
+
+    def send_to_gotify(self, *args, **kwargs):
+        return self._senders[NotificationChannel.GOTIFY].send_to_gotify(*args, **kwargs)
+
+    def send_to_pushplus(self, *args, **kwargs):
+        return self._senders[NotificationChannel.PUSHPLUS].send_to_pushplus(*args, **kwargs)
+
+    def send_to_serverchan3(self, *args, **kwargs):
+        return self._senders[NotificationChannel.SERVERCHAN3].send_to_serverchan3(*args, **kwargs)
+
+    def send_to_astrbot(self, *args, **kwargs):
+        return self._senders[NotificationChannel.ASTRBOT].send_to_astrbot(*args, **kwargs)
 
     def _normalize_report_type(self, report_type: Any) -> ReportType:
         """Normalize string/enum input into ReportType."""
@@ -403,6 +487,14 @@ class NotificationService(
         This intentionally mirrors sender availability without instantiating
         sender objects, so diagnostics and runtime use the same channel truth.
         Runtime-only context channels are handled by instance methods.
+
+        Each ``NotificationChannel`` branch below must stay in lockstep with
+        the corresponding sender's ``is_configured()`` (see
+        ``src/notification_sender/*.py``), which is the per-instance source
+        of truth used by ``self._senders``. Kept as a static/config-only
+        check (rather than instantiating 14 senders) since this is called
+        from diagnostics paths that only have a ``Config``, not a running
+        ``NotificationService``.
         """
         channels = []
 
@@ -2338,21 +2430,16 @@ class NotificationService(
         self, channel: NotificationChannel, image_bytes: Optional[bytes]
     ) -> bool:
         """
-        Decide whether to send as image for the given channel (Issue #289).
+        Decide whether the channel opted into Markdown-to-image (Issue #289).
 
-        Fallback rules (send as Markdown text instead of image):
+        Fallback rule (send as Markdown text instead of image):
         - image_bytes is None: conversion failed / imgkit not installed / content over max_chars
-        - WeChat: image exceeds ~2MB limit
+
+        Per-sender variant selection beyond membership (e.g. WeChat's ~2MB
+        oversize -> text fallback) belongs to each Sender.send() — see
+        ``WechatSender.send`` — not this dispatcher-level check.
         """
-        if channel.value not in self._markdown_to_image_channels or image_bytes is None:
-            return False
-        if channel == NotificationChannel.WECHAT and len(image_bytes) > WECHAT_IMAGE_MAX_BYTES:
-            logger.warning(
-                "企业微信图片超限 (%d bytes)，回退为 Markdown 文本发送",
-                len(image_bytes),
-            )
-            return False
-        return True
+        return channel.value in self._markdown_to_image_channels and image_bytes is not None
 
     @staticmethod
     def _sanitize_notification_diagnostics(text: Any) -> str:
@@ -2368,58 +2455,42 @@ class NotificationService(
         email_send_to_all: bool,
         route_type: Optional[str] = None,
     ) -> bool:
-        use_image = self._should_use_image_for_channel(channel, image_bytes)
-        if channel == NotificationChannel.WECHAT:
-            if use_image:
-                return self._send_wechat_image(image_bytes)
-            return self.send_to_wechat(content)
-        if channel == NotificationChannel.FEISHU:
-            if getattr(self, "_feishu_send_as_file", False) and route_type == "report":
-                date_str = datetime.now().strftime('%Y%m%d')
-                filepath = self.save_report_to_file(
-                    content, filename=f"report_{date_str}.md"
-                )
-                return self.send_feishu_file(filepath)
-            return self.send_to_feishu(content)
-        if channel == NotificationChannel.DINGTALK:
-            return self.send_to_dingtalk(content)
-        if channel == NotificationChannel.TELEGRAM:
-            if use_image:
-                return self._send_telegram_photo(image_bytes)
-            return self.send_to_telegram(content)
+        """Resolve service-layer strategy once, then dispatch through the
+        composed sender registry (``self._senders``). Per-channel transport
+        variant selection (image vs text, WeChat's oversize fallback, etc.)
+        lives in each ``Sender.send()`` — this method only resolves what a
+        Sender can't know on its own: image-channel membership, email
+        receiver groups, and feishu report file staging.
+        """
+        sender = self._senders.get(channel)
+        if sender is None:
+            logger.warning(f"不支持的通知渠道: {channel}")
+            return False
+
+        msg_image_bytes = image_bytes if self._should_use_image_for_channel(channel, image_bytes) else None
+
+        email_receivers = None
         if channel == NotificationChannel.EMAIL:
-            receivers = None
-            if email_send_to_all and self._stock_email_groups:
-                receivers = self.get_all_email_receivers()
-            elif email_stock_codes and self._stock_email_groups:
-                receivers = self.get_receivers_for_stocks(email_stock_codes)
-            if use_image:
-                return self._send_email_with_inline_image(image_bytes, receivers=receivers)
-            return self.send_to_email(content, receivers=receivers)
-        if channel == NotificationChannel.PUSHOVER:
-            return self.send_to_pushover(content)
-        if channel == NotificationChannel.NTFY:
-            return self.send_to_ntfy(content)
-        if channel == NotificationChannel.GOTIFY:
-            return self.send_to_gotify(content)
-        if channel == NotificationChannel.PUSHPLUS:
-            return self.send_to_pushplus(content)
-        if channel == NotificationChannel.SERVERCHAN3:
-            return self.send_to_serverchan3(content)
-        if channel == NotificationChannel.CUSTOM:
-            if use_image:
-                return self._send_custom_webhook_image(image_bytes, fallback_content=content)
-            return self.send_to_custom(content)
-        if channel == NotificationChannel.DISCORD:
-            return self.send_to_discord(content)
-        if channel == NotificationChannel.SLACK:
-            if use_image:
-                return self._send_slack_image(image_bytes, fallback_content=content)
-            return self.send_to_slack(content)
-        if channel == NotificationChannel.ASTRBOT:
-            return self.send_to_astrbot(content)
-        logger.warning(f"不支持的通知渠道: {channel}")
-        return False
+            # 直接属性存取：EmailSender.__init__ 保证设定，重命名时 fail-loud。
+            stock_email_groups = sender._stock_email_groups
+            if email_send_to_all and stock_email_groups:
+                email_receivers = self.get_all_email_receivers()
+            elif email_stock_codes and stock_email_groups:
+                email_receivers = self.get_receivers_for_stocks(email_stock_codes)
+
+        file_path = None
+        if channel == NotificationChannel.FEISHU:
+            if sender._feishu_send_as_file and route_type == "report":
+                date_str = datetime.now().strftime('%Y%m%d')
+                file_path = self.save_report_to_file(content, filename=f"report_{date_str}.md")
+
+        msg = OutboundMessage(
+            text=content,
+            image_bytes=msg_image_bytes,
+            file_path=file_path,
+            email_receivers=email_receivers,
+        )
+        return sender.send(msg)
 
     def send_with_results(
         self,

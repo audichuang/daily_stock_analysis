@@ -7,6 +7,7 @@
 提供各种通知发送服务
 """
 
+from .base import OutboundMessage, Sender
 from .astrbot_sender import AstrbotSender
 from .custom_webhook_sender import CustomWebhookSender
 from .discord_sender import DiscordSender
