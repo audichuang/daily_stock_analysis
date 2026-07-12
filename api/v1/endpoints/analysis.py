@@ -23,7 +23,6 @@ import logging
 import re
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Optional, Union, Dict, Any
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
@@ -59,7 +58,6 @@ from src.data.stock_index_loader import resolve_index_stock_code
 from src.config import Config
 from src.core.market_review_lock import (
     MarketReviewExecutionLock as _MarketReviewExecutionLock,
-    market_review_lock_path,
     release_market_review_lock as _release_market_review_lock,
     try_acquire_market_review_lock as _try_acquire_market_review_lock,
 )
@@ -91,6 +89,7 @@ from src.utils.data_processing import (
     extract_fundamental_detail_fields,
     extract_board_detail_fields,
     extract_realtime_detail_fields,
+    extract_guardrail_reason,
 )
 
 logger = logging.getLogger(__name__)
@@ -108,10 +107,6 @@ def _get_task_trace_id(task: Any) -> Optional[str]:
     if isinstance(task_id, str) and task_id.strip():
         return task_id
     return None
-
-
-def _market_review_lock_path(config: Config) -> Path:
-    return market_review_lock_path(config)
 
 
 def _build_market_review_runtime(config: Config, source_message: Optional[Any] = None) -> tuple[Any, Any, Any]:
@@ -171,38 +166,6 @@ def _run_market_review_background(
         return {"result": report}
     finally:
         _release_market_review_lock(lock_token)
-
-
-def _coalesce_text(*values: Any) -> Optional[str]:
-    for value in values:
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text:
-            return text
-    return None
-
-
-def _extract_guardrail_reason(raw_result: Any) -> Optional[str]:
-    if not isinstance(raw_result, dict):
-        return None
-    for reason in (
-        raw_result.get("guardrail_reason"),
-        raw_result.get("downgrade_reason"),
-        raw_result.get("decision_score_guardrail_reason"),
-    ):
-        if reason is not None:
-            text = str(reason).strip()
-            if text:
-                return text
-    metadata = raw_result.get("metadata")
-    if isinstance(metadata, dict):
-        metadata_reason = metadata.get("guardrail_reason") or metadata.get("downgrade_reason")
-        if metadata_reason is not None:
-            text = str(metadata_reason).strip()
-            if text:
-                return text
-    return None
 
 
 def _invalid_analysis_input_error() -> HTTPException:
@@ -936,7 +899,7 @@ def _ensure_report_action_fields(report_data: Dict[str, Any]) -> Dict[str, Any]:
             summary.get("sentiment_score"),
             raw_result.get("sentiment_score"),
         ),
-        guardrail_reason=_extract_guardrail_reason(raw_result),
+        guardrail_reason=extract_guardrail_reason(raw_result),
         align_with_score=True,
     )
     summary["action"] = action_fields["action"]
@@ -1188,7 +1151,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                 report_type=getattr(record, 'report_type', None),
                 report_language=report_language,
                 sentiment_score=record.sentiment_score if record.sentiment_score is not None else raw_dict.get("sentiment_score"),
-                guardrail_reason=_extract_guardrail_reason(raw_dict),
+                guardrail_reason=extract_guardrail_reason(raw_dict),
                 align_with_score=True,
             )
 
@@ -1380,7 +1343,7 @@ def _build_analysis_report(
             raw_result_data.get("sentiment_score"),
             details_data.get("sentiment_score"),
         ),
-        guardrail_reason=_extract_guardrail_reason(raw_result_data),
+        guardrail_reason=extract_guardrail_reason(raw_result_data),
         align_with_score=True,
     )
 

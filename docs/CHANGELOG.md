@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [chore] 清理约 2.8k 行已验证死代码/重复：删除未接线的 `src/agent/tool_surface.py`、`src/agent/strategies/` 兼容 shim、`scripts/generate_stock_index.py`、`scripts/e2e_test_feishu_app.py`、未注册的 `bot/platforms/discord.py`（DiscordPlatform，非 ALL_PLATFORMS 成员）及多处零调用方的私有方法/别名/webhook 包装；将两份逐字复制的 `_enforce_rate_limit` 上提至 `BaseFetcher`、`_extract_guardrail_reason` 收敛到 `src/utils/data_processing.py`。均为内部实现，无用户可见行为、API/Schema/通知/报告结构变更。
 - [文档] `market_data/AGENTS.md` 更新 market_repo 消费者踩雷：Phase 3 后 `institutional()`/`stock_info()` 已被 analyzer 三大法人历史趋势 prompt 消费（历史趋势走本 DB；估值/月营收/当日三大法人仍走即时 API/网路），修正原「market_repo 尚无消费者」的过时说明。
 - [修复] 合并上游后收敛两处 vitest 回归：即时看板大盘指数「延迟」提示由原生 `title=` 改 `aria-label` 满足 UI governance 守卫；告警市场区域下拉测试对齐后端 `MARKET_LIGHT_ALERT_REGIONS`（仅 cn/hk/us，不含 jp/kr）。
 - [文档] 新增 `docs/upstream-sync-2026-07-11.md` 上游同步记录（v3.24→v3.25 基线/裁决原则/保留增量/采纳功能/关键裁决/回滚/下次同步备忘）。

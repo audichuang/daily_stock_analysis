@@ -69,13 +69,10 @@ def requests_get(*args, **kwargs):
     return _request("get", *args, **kwargs)
 
 
-def requests_post(*args, **kwargs):
-    return _request("post", *args, **kwargs)
-
-
 def crawl_price(date):
     datestr = date.strftime("%Y%m%d")
-    r = requests_post(
+    r = _request(
+        "post",
         "https://www.twse.com.tw/exchangeReport/MI_INDEX"
         f"?response=csv&date={datestr}&type=ALLBUT0999"
     )

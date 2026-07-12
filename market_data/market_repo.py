@@ -29,27 +29,6 @@ def price_history(stock_id, start=None, end=None, engine=None):
     return _q(sql, params, engine)
 
 
-def monthly_revenue(stock_id, engine=None):
-    return _q(
-        "SELECT revenue_month, revenue, yoy, mom, announce_date "
-        "FROM market.monthly_revenue WHERE stock_id = :sid ORDER BY revenue_month",
-        {"sid": stock_id}, engine,
-    )
-
-
-def valuation(stock_id, start=None, end=None, engine=None):
-    sql = ("SELECT date, pe_ratio, pb_ratio, dividend_yield FROM market.valuation "
-           "WHERE stock_id = :sid")
-    params = {"sid": stock_id}
-    if start:
-        sql += " AND date >= :start"
-        params["start"] = start
-    if end:
-        sql += " AND date <= :end"
-        params["end"] = end
-    return _q(sql + " ORDER BY date", params, engine)
-
-
 def institutional(stock_id, start=None, end=None, engine=None):
     sql = ("SELECT date, foreign_net, trust_net, dealer_net, total_net "
            "FROM market.institutional WHERE stock_id = :sid")

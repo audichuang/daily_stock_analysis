@@ -13,7 +13,7 @@ import re
 import threading
 import time
 from collections import defaultdict
-from typing import Dict, List, Optional, Type, Callable
+from typing import Dict, List, Optional, Type
 
 from bot.models import BotMessage, BotResponse
 from bot.commands.base import BotCommand
@@ -65,19 +65,6 @@ class RateLimiter:
         self._requests[user_id].append(now)
         return True
 
-    def get_remaining(self, user_id: str) -> int:
-        """获取剩余可用请求数"""
-        now = time.time()
-        window_start = now - self.window_seconds
-
-        # 清理过期记录
-        self._requests[user_id] = [
-            t for t in self._requests[user_id]
-            if t > window_start
-        ]
-
-        return max(0, self.max_requests - len(self._requests[user_id]))
-
 
 class CommandDispatcher:
     """
@@ -118,9 +105,6 @@ class CommandDispatcher:
         self._aliases: Dict[str, str] = {}
         self._rate_limiter = RateLimiter(rate_limit_requests, rate_limit_window)
 
-        # 回调函数：获取帮助命令的命令列表
-        self._help_command_getter: Optional[Callable] = None
-
     def register(self, command: BotCommand) -> None:
         """
         注册命令
@@ -152,30 +136,6 @@ class CommandDispatcher:
             command_class: 命令类
         """
         self.register(command_class())
-
-    def unregister(self, name: str) -> bool:
-        """
-        注销命令
-
-        Args:
-            name: 命令名称
-
-        Returns:
-            是否成功注销
-        """
-        name = name.lower()
-
-        if name not in self._commands:
-            return False
-
-        command = self._commands.pop(name)
-
-        # 移除别名
-        for alias in command.aliases:
-            self._aliases.pop(alias.lower(), None)
-
-        logger.debug(f"[Dispatcher] 注销命令: {name}")
-        return True
 
     def get_command(self, name: str) -> Optional[BotCommand]:
         """
@@ -221,14 +181,6 @@ class CommandDispatcher:
     def is_admin(self, user_id: str) -> bool:
         """检查用户是否是管理员"""
         return user_id in self.admin_users
-
-    def add_admin(self, user_id: str) -> None:
-        """添加管理员"""
-        self.admin_users.add(user_id)
-
-    def remove_admin(self, user_id: str) -> None:
-        """移除管理员"""
-        self.admin_users.discard(user_id)
 
     def dispatch(self, message: BotMessage) -> BotResponse:
         """同步分发消息。
@@ -359,17 +311,6 @@ class CommandDispatcher:
             logger.error(f"[Dispatcher] 命令 {cmd_name} 执行失败: {e}")
             logger.exception(e)
             return BotResponse.error_response(f"命令执行失败: {str(e)[:100]}")
-
-    def set_help_command_getter(self, getter: Callable) -> None:
-        """
-        设置帮助命令的命令列表获取器
-
-        用于让 HelpCommand 获取命令列表。
-
-        Args:
-            getter: 回调函数，返回命令列表
-        """
-        self._help_command_getter = getter
 
     # ------------------------------------------------------------------ #
     #  Natural language routing (LLM-based)                              #

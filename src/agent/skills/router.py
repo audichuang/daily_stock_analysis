@@ -64,14 +64,6 @@ class SkillRouter:
         logger.info("[SkillRouter] using default skills: %s", default_skills)
         return default_skills
 
-    def select_strategies(
-        self,
-        ctx: AgentContext,
-        max_count: int = 3,
-    ) -> List[str]:
-        """Compatibility wrapper for legacy strategy-based callers."""
-        return self.select_skills(ctx, max_count=max_count)
-
     def _detect_regime(self, ctx: AgentContext) -> Optional[str]:
         for op in ctx.opinions:
             if op.agent_name != "technical":
@@ -108,10 +100,6 @@ class SkillRouter:
         except Exception:
             logger.warning("Failed to get routing mode, falling back to auto", exc_info=True)
             return "auto"
-
-    @staticmethod
-    def _get_available_ids() -> set:
-        return {skill.name for skill in SkillRouter._get_available_skills()}
 
     @staticmethod
     def _get_available_skills() -> list:
@@ -159,6 +147,4 @@ class SkillRouter:
         )
 
 
-StrategyRouter = SkillRouter
-_DEFAULT_STRATEGIES = tuple(get_default_router_skill_ids())
-_DEFAULT_SKILLS = _DEFAULT_STRATEGIES
+_DEFAULT_SKILLS = tuple(get_default_router_skill_ids())

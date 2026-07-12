@@ -64,8 +64,6 @@ def report(engine=None):
             verified = _VERIFIED_THIN.get(t, set())
             out["thin_days"][t] = [(d, n) for d, n in thin_days(day_counts)
                                    if d not in verified]
-    # 舊鍵別名,既有消費者/文件仍讀 thin_price_days
-    out["thin_price_days"] = out["thin_days"]["price"]
     return out
 
 

@@ -390,7 +390,3 @@ def _build_orchestrator(config, registry, llm_adapter, skill_manager, *, technic
         skill_manager=skill_manager,
         config=config,
     )
-
-
-# Keep legacy alias so any external callers using the old name still work.
-build_executor = build_agent_executor

@@ -3,7 +3,7 @@
 
 from fastapi import HTTPException
 
-from api.v1.errors import api_error, error_body, error_json_response
+from api.v1.errors import api_error, error_body
 
 
 def test_error_body_omits_empty_detail() -> None:
@@ -23,10 +23,3 @@ def test_api_error_uses_standard_detail_shape() -> None:
         "message": "missing",
         "detail": {"id": 1},
     }
-
-
-def test_error_json_response_uses_standard_content() -> None:
-    response = error_json_response(409, "conflict", "already exists")
-
-    assert response.status_code == 409
-    assert response.body == b'{"error":"conflict","message":"already exists"}'

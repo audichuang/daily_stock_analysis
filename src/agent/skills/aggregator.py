@@ -155,6 +155,3 @@ class SkillAggregator:
         except Exception:
             logger.debug("Failed to get backtest autoweight config, defaulting to True", exc_info=True)
             return True
-
-
-StrategyAggregator = SkillAggregator

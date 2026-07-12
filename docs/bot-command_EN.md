@@ -206,13 +206,13 @@ These routes are **not yet wired** into the FastAPI application — you must mou
 To mount the DingTalk webhook in your FastAPI app:
 
 ```python
-from bot.handler import handle_dingtalk_webhook
+from bot.handler import handle_webhook
 
 @app.post("/bot/dingtalk")
 async def dingtalk_webhook(request: Request):
     headers = dict(request.headers)
     body = await request.body()
-    return handle_dingtalk_webhook(headers, body)
+    return handle_webhook("dingtalk", headers, body)
 ```
 
 ---

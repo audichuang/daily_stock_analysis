@@ -10,37 +10,12 @@ API 依赖注入模块
 3. 提供服务层依赖
 """
 
-from typing import Generator
-
 from fastapi import Request
-from sqlalchemy.orm import Session
 
 from src.storage import DatabaseManager
 from src.config import get_config, Config
 from src.services.system_config_service import SystemConfigService
 from src.services.runtime_scheduler import RuntimeSchedulerService
-
-
-def get_db() -> Generator[Session, None, None]:
-    """
-    获取数据库 Session 依赖
-    
-    使用 FastAPI 依赖注入机制，确保请求结束后自动关闭 Session
-    
-    Yields:
-        Session: SQLAlchemy Session 对象
-        
-    Example:
-        @router.get("/items")
-        async def get_items(db: Session = Depends(get_db)):
-            ...
-    """
-    db_manager = DatabaseManager.get_instance()
-    session = db_manager.get_session()
-    try:
-        yield session
-    finally:
-        session.close()
 
 
 def get_config_dep() -> Config:

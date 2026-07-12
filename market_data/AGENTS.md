@@ -43,7 +43,7 @@
 - `monthly_revenue.revenue` 單位是**千元**(MOPS 原始單位);對照 `twse_fundamental_adapter` 是 `*1000` 轉元後才用。
 - `monthly_revenue` **僅上市(sii)口徑**(歷史與現行皆同,上櫃全缺);要雙市場月營收請用 `twse_fundamental_adapter` 的即時快照。
 - `price.market` **全欄為 NULL**(TWSE/TPEx 在爬取端已合併,無法逐列區分上市/上櫃)。
-- 面板日線仍只經 `MarketDBFetcher` 消費 `market.price`。`market_repo.institutional()` + `stock_info()` 已有消費者——台股個股報告的**三大法人歷史趨勢**(連 N 日/近 20 日累計/佔股本比)在 `analyzer._format_prompt` 即時讀本 DB 算好注入 LLM prompt(prompt-only、fail-open、不入持久化 context);`monthly_revenue`/`valuation` 讀取函式仍無消費者。踩雷:估值/月營收數字走 `twse_fundamental_adapter` 即時 API、三大法人**當日**買賣超走網路(`TwInstitutionalFetcher`),都不是本 DB——只有三大法人**歷史趨勢**走本 DB。
+- 面板日線仍只經 `MarketDBFetcher` 消費 `market.price`。`market_repo.institutional()` + `stock_info()` 已有消費者——台股個股報告的**三大法人歷史趨勢**(連 N 日/近 20 日累計/佔股本比)在 `analyzer._format_prompt` 即時讀本 DB 算好注入 LLM prompt(prompt-only、fail-open、不入持久化 context)。`market.monthly_revenue`/`market.valuation` 兩張表仍持續由 `daily`/`revenue` 更新入庫,但面板讀取層(`market_repo`)目前無消費者——估值/月營收數字一律走 `twse_fundamental_adapter` 即時 API,不讀本 DB(故先前的 `market_repo.valuation()`/`monthly_revenue()` 讀取函式已移除;要重新消費本 DB 再補回讀取面)。踩雷:估值/月營收數字走 `twse_fundamental_adapter` 即時 API、三大法人**當日**買賣超走網路(`TwInstitutionalFetcher`),都不是本 DB——只有三大法人**歷史趨勢**走本 DB。
 - 財報季更不在 `daily` 裡,要手動跑 `financials`(發布時點與 Q4 推導前提見「數據更新」)。
 - TWSE 可能回**截斷但非空**的回應(踩過:單日 price 少寫 300+ 筆且數值錯位);已寫入的髒日用 `backfill --start <該日> --end <該日> --force` 整日換血修復。
 - 面板 venv 缺 `psycopg` 時 `MarketDBFetcher` 會**靜默熔斷降級 yfinance**(歷史看似正常,但可能混入非交易日的幽靈 K 棒);懷疑沒走 DB,先 `uv pip install -r requirements.txt` 再驗 `get_daily_data` 的 source。

@@ -32,15 +32,6 @@ def test_stock_info_returns_single_record(pg_conn):
     assert info["name"] == "測試泥"
 
 
-def test_monthly_revenue_history_reads_seeded_rows(pg_conn):
-    pg_conn.execute(text(
-        "INSERT INTO market.monthly_revenue (stock_id, revenue_month, revenue) "
-        "VALUES ('2330', '1900-04-01', 12345)"))
-    df = market_repo.monthly_revenue("2330", engine=pg_conn)
-    assert not df.empty
-    assert {"revenue_month", "revenue"} <= set(df.columns)
-
-
 def test_to_daily_frame_maps_to_dashboard_columns():
     import pandas as pd
 

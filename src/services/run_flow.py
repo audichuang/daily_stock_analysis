@@ -6,12 +6,13 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from collections.abc import Mapping
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from api.v1.schemas.run_flow import RunFlowSnapshot
 from src.analysis_context_pack_overview import extract_analysis_context_pack_overview
 from src.services.run_diagnostics import (
+    _started_at_from_end_and_duration,
     safe_diagnostic_key,
     sanitize_diagnostic_metadata,
     sanitize_diagnostic_text,
@@ -952,7 +953,7 @@ def _append_active_flow_events(
         event = _as_mapping(raw_event)
         if not event:
             continue
-        metadata = _sanitize_metadata(event.get("metadata") or {})
+        metadata = sanitize_diagnostic_metadata(event.get("metadata") or {})
         node_payload = metadata.get("node") if isinstance(metadata, Mapping) else None
         node_id = _safe_key(event.get("node_id"))
 
@@ -971,7 +972,7 @@ def _append_active_flow_events(
                     started_at=node_payload.get("started_at")
                     or _started_at_from_end_and_duration(
                         node_payload.get("ended_at") or event.get("timestamp"),
-                        node_payload.get("duration_ms"),
+                        _safe_int(node_payload.get("duration_ms")),
                     ),
                     ended_at=node_payload.get("ended_at") or event.get("timestamp"),
                     duration_ms=node_payload.get("duration_ms"),
@@ -1039,7 +1040,7 @@ def _append_external_event(events: List[Dict[str, Any]], event: Dict[str, Any]) 
     event_id = _safe_text(event.get("id"), max_length=96) or f"flow_{len(events) + 1:04d}"
     if any(existing.get("id") == event_id for existing in events):
         return
-    metadata = _sanitize_metadata(event.get("metadata") or {})
+    metadata = sanitize_diagnostic_metadata(event.get("metadata") or {})
     if isinstance(metadata, Mapping) and "node" in metadata:
         metadata = {key: value for key, value in metadata.items() if key != "node"}
     events.append(
@@ -1272,7 +1273,7 @@ def _put_node(
         "attempts": _safe_int(attempts),
         "record_count": _safe_int(record_count),
         "message": _safe_text(message, max_length=220),
-        "metadata": _sanitize_metadata(metadata or {}),
+        "metadata": sanitize_diagnostic_metadata(metadata or {}),
     }
     nodes[node_id] = {key: value for key, value in payload.items() if value not in (None, {}, [])}
 
@@ -1299,7 +1300,7 @@ def _append_edge(
         safe_message = _safe_text(message, max_length=180)
         if safe_message:
             edge["message"] = safe_message
-        safe_metadata = _sanitize_metadata(metadata or {})
+        safe_metadata = sanitize_diagnostic_metadata(metadata or {})
         if safe_metadata:
             edge["metadata"] = safe_metadata
         return
@@ -1312,7 +1313,7 @@ def _append_edge(
             "status": _valid_status(status),
             "label": _safe_text(label, max_length=40),
             "message": _safe_text(message, max_length=180),
-            "metadata": _sanitize_metadata(metadata or {}),
+            "metadata": sanitize_diagnostic_metadata(metadata or {}),
         }
     )
 
@@ -1351,7 +1352,7 @@ def _append_event(
             "node_id": node_id,
             "title": _safe_text(title, max_length=100) or event_type,
             "message": _safe_text(message, max_length=220),
-            "metadata": _sanitize_metadata(metadata or {}),
+            "metadata": sanitize_diagnostic_metadata(metadata or {}),
         }
     )
 
@@ -1414,10 +1415,6 @@ def _safe_int(value: Any) -> Optional[int]:
     return parsed if parsed >= 0 else None
 
 
-def _sanitize_metadata(value: Any, *, depth: int = 0) -> Any:
-    return sanitize_diagnostic_metadata(value, depth=depth)
-
-
 def _as_mapping(value: Any) -> Dict[str, Any]:
     parsed = parse_json_field(value)
     if isinstance(parsed, Mapping):
@@ -1452,23 +1449,6 @@ def _elapsed_ms(start: Any, end: Any) -> Optional[int]:
     if seconds < 0:
         return None
     return int(seconds * 1000)
-
-
-def _started_at_from_end_and_duration(end: Any, duration_ms: Any) -> Optional[str]:
-    duration = _safe_int(duration_ms)
-    if duration is None:
-        return None
-    if isinstance(end, datetime):
-        parsed = end
-    elif isinstance(end, str) and "T" in end:
-        normalized = end[:-1] + "+00:00" if end.endswith("Z") else end
-        try:
-            parsed = datetime.fromisoformat(normalized)
-        except ValueError:
-            return None
-    else:
-        return None
-    return (parsed - timedelta(milliseconds=duration)).isoformat()
 
 
 def _local_timezone():

@@ -414,3 +414,27 @@ def signal_attribution_has_content(signal_attr: Any) -> bool:
     if any(value != 0 for _, value in signal_attribution_weight_items(signal_attr)):
         return True
     return any(bool(signal_attr.get(key)) for key in SIGNAL_ATTRIBUTION_SIGNAL_KEYS)
+
+
+def extract_guardrail_reason(raw_result: Any) -> Optional[str]:
+    """从分析结果（或其 metadata）中提取护栏/降级原因文本，无则返回 None。"""
+    if not isinstance(raw_result, dict):
+        return None
+    for reason in (
+        raw_result.get("guardrail_reason"),
+        raw_result.get("downgrade_reason"),
+        raw_result.get("decision_score_guardrail_reason"),
+    ):
+        if reason is not None:
+            text = str(reason).strip()
+            if text:
+                return text
+
+    metadata = raw_result.get("metadata")
+    if isinstance(metadata, dict):
+        metadata_reason = metadata.get("guardrail_reason") or metadata.get("downgrade_reason")
+        if metadata_reason is not None:
+            text = str(metadata_reason).strip()
+            if text:
+                return text
+    return None

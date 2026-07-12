@@ -104,11 +104,6 @@ class BotMessage:
         args = parts[1:] if len(parts) > 1 else []
         
         return command, args
-    
-    def is_command(self, prefix: str = "/") -> bool:
-        """检查消息是否是命令"""
-        cmd, _ = self.get_command_and_args(prefix)
-        return cmd is not None
 
 
 @dataclass

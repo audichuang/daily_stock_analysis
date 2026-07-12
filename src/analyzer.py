@@ -2359,7 +2359,6 @@ class GeminiAnalyzer:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
         *,
         config: Optional[Config] = None,
         skills: Optional[List[str]] = None,
@@ -2367,11 +2366,7 @@ class GeminiAnalyzer:
         default_skill_policy: Optional[str] = None,
         use_legacy_default_prompt: Optional[bool] = None,
     ):
-        """Initialize LLM Analyzer via LiteLLM.
-
-        Args:
-            api_key: Ignored (kept for backward compatibility). Keys are loaded from config.
-        """
+        """Initialize LLM Analyzer via LiteLLM. Keys are loaded from config."""
         self._config_override = config
         self._requested_skills = list(skills) if skills is not None else None
         self._skill_instructions_override = skill_instructions

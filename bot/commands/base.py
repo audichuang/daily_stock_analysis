@@ -130,7 +130,3 @@ class BotCommand(ABC):
             如果参数有效返回 None，否则返回错误信息
         """
         return None
-
-    def get_help_text(self) -> str:
-        """获取帮助文本"""
-        return f"**{self.name}** - {self.description}\n用法: `{self.usage}`"

@@ -113,6 +113,3 @@ Return **only** a JSON object:
             reasoning=parsed.get("reasoning", ""),
             raw_data=parsed,
         )
-
-
-StrategyAgent = SkillAgent

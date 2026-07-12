@@ -1406,13 +1406,6 @@ def _ensure_alphasift_enabled(config: Config) -> None:
         )
 
 
-def _ensure_alphasift_ready(config: Config, *, request: Request) -> None:
-    # Backward-compatible helper for tests/extensions. Normal strategies/screen
-    # calls no longer mutate the Python environment; AlphaSift is installed with
-    # project dependencies and `/install` remains an explicit repair action.
-    _ensure_alphasift_available_for_use()
-
-
 def _ensure_alphasift_available_for_use() -> None:
     _, available, diagnostics = _get_alphasift_status_snapshot()
     if available:

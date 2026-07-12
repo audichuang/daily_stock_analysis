@@ -967,26 +967,6 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
                 self.assertIn("理由: 技术面走弱", out)
 
     @mock.patch("src.notification.get_config")
-    def test_generate_wechat_summary_omits_decision_signal_excerpt(
-        self, mock_get_config: mock.MagicMock
-    ):
-        mock_get_config.return_value = _make_config(report_renderer_enabled=False)
-        service = NotificationService()
-        result = _attach_decision_signal_summary(AnalysisResult(
-            code="600519",
-            name="贵州茅台",
-            sentiment_score=72,
-            trend_prediction="看多",
-            operation_advice="持有",
-            analysis_summary="稳健",
-        ))
-
-        out = service.generate_wechat_summary([result])
-
-        self.assertNotIn("AI 决策信号", out)
-        self.assertNotIn("动作: 卖出", out)
-
-    @mock.patch("src.notification.get_config")
     def test_generate_dashboard_report_appends_decision_signal_excerpt_with_renderer(
         self, mock_get_config: mock.MagicMock
     ):
