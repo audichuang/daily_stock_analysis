@@ -69,9 +69,9 @@ python scripts/check_ai_assets.py
   - `src/core/`：主流程编排
   - `src/services/`：业务服务层
   - `src/repositories/`：数据访问层
-  - `src/notification_sender/`：通知渠道适配（飞书 / Discord / ntfy / 自定义 Webhook，含 Bark）
+  - `src/notification_sender/`：通知渠道适配（飞书 / Discord / ntfy / 自定义 Webhook，含 Bark）；新增渠道需实现 `base.py` 的 `Sender` protocol 并在 `NotificationService._senders` 注册
   - `src/schemas/`：Schema / 数据结构
-  - `src/llm/`：LLM 生成后端与 usage / provider 缓存
+  - `src/llm/`：LLM 生成后端、usage / provider 缓存，与 LLM transport 编排（`client.py::LLMClient`，backend fallback / 脱敏 / 流式；与 `GeminiAnalyzer` 的边界见该文件模块 docstring）
   - `data_provider/`：多数据源适配与 fallback
   - `market_data/`：台股行情爬取 → 统一 Postgres（market schema），细节见 `market_data/AGENTS.md`
   - `api/`：FastAPI API
@@ -231,11 +231,7 @@ gh run view <run_id> --log-failed
 
 ## 8. Issue / PR / Skill 工作流
 
-- 仓库内已有以下 skill，可优先复用：
-  - `.claude/skills/analyze-issue/SKILL.md`
-  - `.claude/skills/analyze-pr/SKILL.md`
-  - `.claude/skills/fix-issue/SKILL.md`
-- 如果任务明确是 issue 分析、PR 审查、issue 修复，优先按对应 skill 执行，并将产物保存到 `.claude/reviews/`。
+- issue 分析、PR 审查、issue 修复已有对应 skill（`.claude/skills/`，按 description 自动触发；此处不逐一列名，以目录为准），任务命中时优先按 skill 执行，并将产物保存到 `.claude/reviews/`。
 - skill 中的命令、模板、验证顺序和交付结构必须与 `AGENTS.md` 保持一致。
 - 每次进行 PR 创建 / 更新、PR 审查或 issue 分析前，必须先同步最新代码基线：先检查工作区状态并执行 `git fetch --all --prune`；若工作区干净且当前分支可 fast-forward，则执行 `git pull --ff-only`。如存在本地改动、冲突状态、未跟踪风险文件或无法 fast-forward，不得强行切分支、stash、reset 或覆盖本地状态；PR 审查 / issue 分析可改用已 fetch 的远端 refs/PR head 做分析，并在分析文档中明确记录未更新本地工作树的原因、当前本地 HEAD 与使用的远端基线；PR 创建 / 更新应先说明当前分支与目标基线差异，必要时请求用户确认 rebase、merge 或继续基于当前分支推进。
 - skill 默认优先读取 CI / 工作流证据，再决定是否补本地验证。
@@ -303,8 +299,9 @@ CI 通过只能说明自动检查通过，不能替代人工语义收敛，也�
 - **环境用 `uv`（不用 `python -m venv`）**：建环境 `uv venv --python 3.12`，依赖 `uv pip install -r requirements.txt`，执行一律 `uv run python …`。常用任务封装在根目录 `Makefile`（`make help`）。
 - **台股（`.TW` 上市 / `.TWO` 上柜）是新增重点**：个股走 yfinance；支持 4~6 位代码（含 5~6 位 ETF）。
 - **台股大盘复盘市场数据走 TWSE/TPEx 官方 OpenAPI（免 key）**：见 `data_provider/twse_fetcher.py`。涨跌家数仅上市口径（上柜无公开端点），成交额与三大法人为上市+上柜合计；`get_market_stats` 按 `purpose="market_review:<region>"` 路由（A 股统计源限 cn、TwseFetcher 限 tw）。
-- **自动补全索引**：台股全量种子在 `scripts/stock_index_seeds/stock_list_tw.csv`（`make refresh-tw` 重建）。`.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` **必须保持 `false`**——否则运行时会从上游 GitHub 拉索引、覆盖掉本地台股/美股增量。
+- **自动补全索引**：台股全量种子在 `scripts/stock_index_seeds/stock_list_tw.csv`（`make refresh-tw` 重建）。`.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` **必须保持 `false`**——否则运行时会从上游 GitHub 拉索引、覆盖掉本地台股/美股增量（`.env.example` 示例值是上游的 `true`，勿照抄）。
 - **LLM 主模型用 DeepSeek**：`.env` 须**显式**设 `LITELLM_MODEL=deepseek/deepseek-chat`。否则当 shell 环境导出了 `GEMINI_API_KEY` 时，`load_dotenv` 不覆盖既有环境变量，自动推断会优先选 Gemini。
-- **通知用 Bark，走 Doppler 注入**：`make serve` / `make review-tw` 用 `doppler run -p shioaji -c dev` 把 Doppler 的 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`（`custom_webhook_sender.py` 自动识别 `api.day.app`），secret 不落地 `.env`。
+- **通知用 Bark，走 Doppler 注入**：`make serve` / `make review-tw` 用 `doppler run -p shioaji -c dev` 把 Doppler 的 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`（`custom_webhook_sender.py` 自动识别 `api.day.app`），secret 不落地 `.env`。**`make analyze` 不含 Doppler 包装**——要 Bark 通知需手动包：`doppler run -p shioaji -c dev -- bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py --stocks 2330.TW'`；非交易日需加 `--force-run`。
+- **全量离线测试（`pytest -m "not network"`）约 30+ 分钟**，且 main 上存在少量既有失败与顺序敏感 flaky（单独跑绿、全量跑偶红）；回归判定用「相对 baseline 的差集」，不要求绝对全绿，也不要把全量当快速门槛（快速验证用受影响测试文件的子集）。
 - **台股历史数据（行情/筹码/财报）统一在 Postgres（`market` schema），且为唯一数据源（无本地备份）**：`DATABASE_URL` 在 `.env`。台股日线优先走 `MarketDBFetcher`（本地 DB，priority=1），无数据 fallback yfinance。爬取/数据更新（含财报季更 `financials`）/踩雷见 `market_data/AGENTS.md`。
 - **台股即时看板/走势用永丰 Shioaji，但 `shioaji` 是 optional 依赖**：未 `uv pip install shioaji`、或无金钥（同走 Doppler `shioaji/dev` 的 `SHIOAJI_API_KEY`/`SHIOAJI_SECRET_KEY`）时会**静默降级 yfinance**（行情延迟、名称变英文）——本 session 实际踩过。看板/批次行情/走势/fallback/Shioaji session 与 ts 时区、kbars 30 天上限等细节见 `docs/realtime-board.md`。
