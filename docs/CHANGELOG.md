@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 新增台股專屬策略 `strategies/tw_institutional_chips.yaml`(台股法人籌碼):依三大法人買賣超的方向、延續性與價格/新聞一致性判讀訊號,防止被單日籌碼雜訊誘導追高或恐慌減碼;六條規則移植自 stock-master-tw 已覆盤驗證的 playbook(2025-01~2026-06 約 30 次演練、80+ 筆建議追蹤)。`default_active: false`,不改變預設分析行為,需以 `AGENT_SKILLS=tw_institutional_chips` 顯式啟用;路由中繼資料已填齊,single/multi agent 模式通用。
 - [文档] `AGENTS.md` 同步近期重构与 fork 工作流踩雷：`src/llm/` 补 `client.py::LLMClient` transport 编排、通知渠道补 `Sender` protocol + `_senders` 注册契约、skill 列表去路径化（防目录漂移）、补 `make analyze` 不含 Doppler 包装与全量离线测试时长/flaky 判定原则、标注 `.env.example` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED=true` 勿照抄。
 - [修复] Bark（自定义 Webhook `api.day.app`）推送改按 UTF-8 字节截断 body（上限 2800 字节并附截断提示）：原按字符截 4000，中文报告实际可达 ~12KB，超出 APNs ~4KB 整包上限被 Bark 以 `PayloadTooLarge`/HTTP 500 拒绝，导致完整分析报告推送必败；现超长内容自动截断送达。
 - [chore] 重构三件（无用户可见行为变更）：pipeline 双路径收尾去重为共享 `_finalize_and_persist_result`；通知 14 渠道由 mixin 多重继承改 `Sender` protocol + 组合注册表（`src/notification_sender/base.py`）；`GeminiAnalyzer` 的 LLM transport 抽出为 `src/llm/client.py::LLMClient`（继承式兼容）。新增回归测试约 60 个，全量离线套件零新增失败。
