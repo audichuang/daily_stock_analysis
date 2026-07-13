@@ -106,7 +106,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] 个股报告不再单独展示“题材主线与个股位置”卡片，相关市场结构数据仍保留在分析上下文、模型 Prompt 与决策信号提取链路中。
 - [改进] 通知推送与完整 Markdown/微信报告不再重复附加“AI 决策信号”摘要，DecisionSignal 的存储、告警和 Web AI 建议页保持不变。
 - [改进] TickFlow 新增基于申万一级行业池的行业涨跌排行 fallback，并将基本面/市场结构单能力默认超时由 3 秒调整为 8 秒，降低正常慢响应被提前降级的概率。
-- [chore] 同步上游 `ZhuLinsen/daily_stock_analysis` main 至 v3.26.1（7 commits：市场结构上下文、历史按代码批次删除、Telegram 长消息按转义后 payload 分段、orjson/AkShare calendar 发行加固、概念排行负结果复用等）。合并保留 fork 增量（Sender protocol、LLMClient、Bark 字节截断、台股三大法人趋势 prompt、pipeline finalize-and-persist）；修复合并后 CHANGELOG 中 35 条 Unreleased 条目错位到 3.26.0 段后的问题。
+- [chore] 同步上游 `ZhuLinsen/daily_stock_analysis` main 至 v3.26.1（7 commits：市场结构上下文、历史按代码批次删除、Telegram 长消息按转义后 payload 分段、orjson/AkShare calendar 发行加固、概念排行负结果复用等）。合并保留 fork 增量（Sender protocol、LLMClient、Bark 字节截断、台股三大法人趋势 prompt、pipeline finalize-and-persist）；修复合并后 CHANGELOG 中 35 条 Unreleased 条目错位到 3.26.0 段后的问题。上游同步基线更新至 `e8a9ca77`，记录见 `docs/upstream-sync-2026-07-13.md`。
+- [文档] 新增 `docs/upstream-sync-2026-07-13.md` 上游同步记录（v3.25→v3.26.1 基线/裁决原则/保留增量/采纳功能/冲突处置/验证/回滚/下次同步备忘）。
 - [修复] 修复日股/韩股历史列表重建市场阶段摘要时将 non_trading 等结果阶段误传为 analysis_phase 导致列表查询失败的问题。
 - [新功能] 支持 SCHEDULE_TIMES 多时间定时推送，并让 Web/API/Desktop 长运行进程保存调度配置后热启停或重建 runtime scheduler。
 - [改进] Web 桌面侧边栏 rail 由「图标+标签整组居中」改为左对齐固定图标列，消除各项图标左缘参差不齐的问题，并将宽度由 136px 放宽至 172px 让标签更透气（仅样式与布局，不影响导航项与路由）。

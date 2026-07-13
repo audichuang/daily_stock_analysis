@@ -67,6 +67,8 @@ merge commit `0916f57a` 為單點；`git revert -m 1 0916f57a` 可回滾整個�
 
 ## 下次同步備忘
 
+> **已完成後續同步**：`01ebf70a` → `e8a9ca77`（v3.26.1）見 **`docs/upstream-sync-2026-07-13.md`**。下列備忘保留作 v3.25 當下快照，新基線以 2026-07-13 文件為準。
+
 - 起點基線 = 本次同步後的 `01ebf70a`（上游）；下次 `git fetch upstream` 後從此向後看新 commits。
 - `.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` 必須保持 `false`（防上游索引更新覆蓋台股/美股增量）。
 - 合併後務必 `uv pip install -r requirements.txt` 刷新 venv（longbridge/alphasift pin 會變）。
