@@ -110,7 +110,10 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         response.url = source_url
         response.headers = {}
         response.raise_for_status.return_value = None
-        response.iter_content.return_value = [self._feed_fixture(source_url)]
+        body = self._feed_fixture(source_url)
+        response.iter_content.return_value = [body]
+        response.content = body
+        response.close = Mock()
         return response
 
     def _mock_json_response(self, payload=NEWSNOW_FIXTURE, source_url: str = "https://newsnow.example.com/api/s?id=cls-hot"):
@@ -215,17 +218,32 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         bad = self.service.create_source({"name": "bad-feed", "url": "https://bad.example.com/rss.xml", "scope_type": "market"})
 
         def fake_get(url, **kwargs):
-            self.assertNotIn("trust_env", kwargs)
-            self.assertEqual(kwargs.get("proxies"), {"http": None, "https": None})
-            if "bad" in url:
+            # Do not use unittest assertions inside the fetch path: they become
+            # AssertionError and are sanitized to a generic upstream failure.
+            if "trust_env" in kwargs:
+                raise RuntimeError(f"unexpected trust_env in request kwargs: {sorted(kwargs)}")
+            proxies = kwargs.get("proxies")
+            if proxies != {"http": None, "https": None}:
+                raise RuntimeError(f"unexpected proxies in request kwargs: {proxies!r}")
+            if "bad" in str(url):
                 raise RuntimeError("network token=secret should not leak")
-            return self._mock_response()
-        with patch("src.services.intelligence_service.requests.get", side_effect=fake_get):
+            return self._mock_response(source_url=str(url))
+
+        # Patch requests.get (after proxies are injected). Also rebind the
+        # process-global getaddrinfo for the duration so concurrent suite
+        # pollution cannot force a real network path.
+        with patch(
+            "src.services.intelligence_service.requests.get",
+            side_effect=fake_get,
+        ), patch(
+            "src.services.intelligence_service.socket.getaddrinfo",
+            side_effect=self._mock_getaddrinfo,
+        ):
             result = self.service.fetch_enabled_sources()
         self.assertEqual(result["source_count"], 2)
-        self.assertEqual(result["saved_count"], 2)
+        self.assertEqual(result["saved_count"], 2, result)
         failures = [item for item in result["results"] if not item["ok"]]
-        self.assertEqual(len(failures), 1)
+        self.assertEqual(len(failures), 1, result)
         self.assertEqual(failures[0]["source_id"], bad["id"])
         self.assertNotIn("token=secret", failures[0]["error"])
         self.assertNotIn("secret", failures[0]["error"])

@@ -51,7 +51,6 @@ def _find_session():
 
 
 def _request(method, *args, **kwargs):
-    global _session
     if _session is None:
         _find_session()
     kwargs.setdefault("timeout", 10)

@@ -25,6 +25,24 @@ from src.services.system_config_service import ConfigConflictError, ConfigImport
 
 
 class SystemConfigServiceTestCase(unittest.TestCase):
+    # Keys commonly injected by developer .env / prior get_config() load_dotenv.
+    # validate() merges runtime os.environ into effective_map, so ambient values
+    # (e.g. LITELLM_MODEL=deepseek/...) must not leak into isolated temp-env tests.
+    _AMBIENT_ENV_ISOLATION_PREFIXES = (
+        "LITELLM_",
+        "AGENT_LITELLM_",
+        "VISION_",
+        "GENERATION_",
+        "AGENT_GENERATION_",
+        "LLM_",
+        "GEMINI_",
+        "OPENAI_",
+        "ANTHROPIC_",
+        "DEEPSEEK_",
+        "OLLAMA_",
+        "REPORT_LANGUAGE",
+    )
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.env_path = Path(self.temp_dir.name) / ".env"
@@ -41,6 +59,18 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             encoding="utf-8",
         )
         os.environ["ENV_FILE"] = str(self.env_path)
+        # Snapshot + clear ambient model/routing keys so runtime merge is hermetic.
+        # Tests that need runtime env re-inject via patch.dict / temp .env.
+        self._saved_ambient_env: Dict[str, str] = {}
+        for key in list(os.environ.keys()):
+            upper = key.upper()
+            if upper == "REPORT_LANGUAGE" or any(
+                upper == prefix.rstrip("_") or upper.startswith(prefix)
+                for prefix in self._AMBIENT_ENV_ISOLATION_PREFIXES
+                if prefix != "REPORT_LANGUAGE"
+            ):
+                self._saved_ambient_env[key] = os.environ.pop(key)
+        # Base fixture needs GEMINI_API_KEY in the temp file only; keep process clean.
         Config.reset_instance()
 
         self.manager = ConfigManager(env_path=self.env_path)
@@ -49,6 +79,18 @@ class SystemConfigServiceTestCase(unittest.TestCase):
     def tearDown(self) -> None:
         Config.reset_instance()
         os.environ.pop("ENV_FILE", None)
+        # Drop keys introduced during the test, then restore pre-test ambient values.
+        for key in list(os.environ.keys()):
+            upper = key.upper()
+            if upper == "REPORT_LANGUAGE" or any(
+                upper == prefix.rstrip("_") or upper.startswith(prefix)
+                for prefix in self._AMBIENT_ENV_ISOLATION_PREFIXES
+                if prefix != "REPORT_LANGUAGE"
+            ):
+                if key not in self._saved_ambient_env:
+                    os.environ.pop(key, None)
+        for key, value in self._saved_ambient_env.items():
+            os.environ[key] = value
         self.temp_dir.cleanup()
 
     def _rewrite_env(self, *lines: str) -> None:

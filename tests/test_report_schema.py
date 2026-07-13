@@ -164,6 +164,8 @@ class TestAnalyzerSchemaFallback(unittest.TestCase):
         self.assertEqual(result.action_label, "持有")
 
     def test_parse_response_preserves_explicit_action_in_raw_result(self) -> None:
+        from src.schemas.decision_action import localize_action_label
+
         analyzer = GeminiAnalyzer()
         response = json.dumps({
             "stock_name": "贵州茅台",
@@ -177,12 +179,14 @@ class TestAnalyzerSchemaFallback(unittest.TestCase):
 
         result = analyzer._parse_response(response, "600519", "股票600519")
         raw_result = result.to_dict()
+        # Label follows runtime REPORT_LANGUAGE (zh/zh-TW/en/ko); pin expectation to that.
+        expected_label = localize_action_label("watch", result.report_language)
 
         self.assertEqual(result.action, "watch")
-        self.assertEqual(result.action_label, "观望")
+        self.assertEqual(result.action_label, expected_label)
         self.assertEqual(result.decision_type, "hold")
         self.assertEqual(raw_result["action"], "watch")
-        self.assertEqual(raw_result["action_label"], "观望")
+        self.assertEqual(raw_result["action_label"], expected_label)
 
     def test_parse_response_keeps_unknown_dashboard_fields(self) -> None:
         analyzer = GeminiAnalyzer()

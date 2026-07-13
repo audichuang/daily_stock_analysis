@@ -95,6 +95,7 @@ from src.schemas.report_schema import AnalysisReportSchema
 from src.market_context import detect_market, get_market_role, get_market_guidelines
 from src.services.daily_market_context import format_daily_market_context_prompt_section
 from src.market_phase_prompt import format_market_phase_prompt_section
+from src.market_structure_prompt import format_market_structure_prompt_section
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +275,9 @@ def _legacy_audit_marker_specs(
     else:
         add("market_phase", "## 市场阶段上下文")
         add("daily_market_context", "## 大盘环境摘要")
+    # market_structure_prompt.py has no zh-TW variant yet: zh-TW falls through to
+    # _format_zh, so the simplified title is what the prompt actually contains.
+    add("market_structure_context", "## Market Structure Context" if report_language in ("en", "ko") else "## 市场结构上下文")
     add("analysis_context_pack", analysis_context_pack_summary)
     add("quote", _format_prompt_tech_section_title(report_language))
     add(
@@ -1798,6 +1802,7 @@ class AnalysisResult:
 
     # ========== 基本面上下文（仅运行时，用于通知拼装；不持久化到 to_dict）==========
     fundamental_context: Optional[Dict[str, Any]] = None
+    market_structure_context: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -1837,6 +1842,7 @@ class AnalysisResult:
             'current_price': self.current_price,
             'change_pct': self.change_pct,
             'model_used': self.model_used,
+            'market_structure_context': self.market_structure_context,
         }
 
     def get_core_conclusion(self) -> str:
@@ -3472,6 +3478,12 @@ class GeminiAnalyzer(LLMClient):
         )
         if daily_market_context_section:
             prompt += daily_market_context_section
+        market_structure_section = format_market_structure_prompt_section(
+            context.get("market_structure_context"),
+            report_language=report_language,
+        )
+        if market_structure_section:
+            prompt += market_structure_section
         if isinstance(analysis_context_pack_summary, str) and analysis_context_pack_summary:
             prompt += analysis_context_pack_summary
         prompt += f"""
