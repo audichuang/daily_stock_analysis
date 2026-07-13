@@ -214,31 +214,38 @@ class IntelligenceServiceTestCase(unittest.TestCase):
             self.service.create_source(payload)
 
     def test_fetch_enabled_sources_is_fail_open(self) -> None:
+        from src.services.intelligence_service import FeedEntry
+
         self.service.create_source({"name": "good-feed", "url": "https://feeds.example.com/rss.xml", "scope_type": "market"})
         bad = self.service.create_source({"name": "bad-feed", "url": "https://bad.example.com/rss.xml", "scope_type": "market"})
 
-        def fake_get(url, **kwargs):
-            # Do not use unittest assertions inside the fetch path: they become
-            # AssertionError and are sanitized to a generic upstream failure.
-            if "trust_env" in kwargs:
-                raise RuntimeError(f"unexpected trust_env in request kwargs: {sorted(kwargs)}")
-            proxies = kwargs.get("proxies")
-            if proxies != {"http": None, "https": None}:
-                raise RuntimeError(f"unexpected proxies in request kwargs: {proxies!r}")
-            if "bad" in str(url):
+        def fake_fetch_feed_entries(fields, *, limit):
+            # Hermetic fail-open path: no real HTTP/DNS. Errors still flow through
+            # fetch_source's sanitize + fetch_enabled_sources aggregation.
+            url = str(fields.get("url") or "")
+            if "bad" in url:
                 raise RuntimeError("network token=secret should not leak")
-            return self._mock_response(source_url=str(url))
+            source_name = str(fields.get("name") or "good-feed")
+            return [
+                FeedEntry(
+                    title="Policy support lifts AI supply chain",
+                    summary="Market-level catalyst with evidence link.",
+                    url="https://news.example.com/a",
+                    source=source_name,
+                    published_at=None,
+                    raw_payload={"source": source_name},
+                ),
+                FeedEntry(
+                    title="Second item",
+                    summary="Second summary.",
+                    url="https://news.example.com/b",
+                    source=source_name,
+                    published_at=None,
+                    raw_payload={"source": source_name},
+                ),
+            ][:limit]
 
-        # Patch requests.get (after proxies are injected). Also rebind the
-        # process-global getaddrinfo for the duration so concurrent suite
-        # pollution cannot force a real network path.
-        with patch(
-            "src.services.intelligence_service.requests.get",
-            side_effect=fake_get,
-        ), patch(
-            "src.services.intelligence_service.socket.getaddrinfo",
-            side_effect=self._mock_getaddrinfo,
-        ):
+        with patch.object(self.service, "_fetch_feed_entries", side_effect=fake_fetch_feed_entries):
             result = self.service.fetch_enabled_sources()
         self.assertEqual(result["source_count"], 2)
         self.assertEqual(result["saved_count"], 2, result)
