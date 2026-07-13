@@ -40,11 +40,17 @@ _FAKE_REC = {
     "total_net": 3576,
 }
 
+# Budgets are deliberately generous: these cases assert coverage/data wiring with an
+# instant mock fetcher, so the timeout must never be the thing under test here. Tight
+# budgets (previously 1.5s/0.8s) made these flaky on loaded CI runners where thread
+# scheduling alone could exceed 0.8s and trip the fail-open path ('ok' -> 'not_supported').
+# The timeout contract itself is covered by test_tw_institution_fetch_respects_stage_timeout,
+# which pins its own 0.3s slow_cfg and does not use this fixture.
 _OFFSHORE_CFG = SimpleNamespace(
     enable_fundamental_pipeline=True,
     fundamental_cache_ttl_seconds=0,
-    fundamental_stage_timeout_seconds=1.5,
-    fundamental_fetch_timeout_seconds=0.8,
+    fundamental_stage_timeout_seconds=30.0,
+    fundamental_fetch_timeout_seconds=30.0,
     fundamental_retry_max=1,
 )
 
