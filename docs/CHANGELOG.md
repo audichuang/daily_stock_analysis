@@ -143,6 +143,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 修复 Web 回测运行未传分析日期范围、股票代码未归一化导致后端成功返回但结果为空的问题，并为空候选和行情不足返回诊断信息。
 - [文档] 补充回测请求链路说明：`analysis_date_from/analysis_date_to` 与 `code` 的输入边界、归一化与筛选顺序，以及历史行情不足或候选集为空时回测返回成功响应，在 `message` 与 `diagnostics`（含 `empty_reason`）中提供可诊断信息，并同步更新 `docs/full-guide.md`、`docs/full-guide_EN.md` 示例。
 - [修复] 回测代码匹配新增非法市场后缀/长度兜底：如 `600519.HK`、`600519.SZ`、`SH000001` 不再静默回落到其它有效代码，并在日期筛选重跑时对齐旧回测结果的分析日期，避免历史快照日期命中但结果列表仍为空。
+- [文档] 补充 macOS 未签名、未公证 DMG 被 Gatekeeper 拦截时的架构选择、安全排查与官方安装包临时放行步骤。
+- [新功能] Web AI 建议页支持确认保存基于历史报告快照重算的决策风格信号，以 created/existing/refreshed 区分新建、原样复用和既有记录续期或维度补齐，复用 profile-aware 去重与失效语义，将历史信号的创建时间、有效期和相反信号失效顺序锚定来源报告时间，并提供可审计 guardrail 提示与阻断。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
