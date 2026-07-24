@@ -1,11 +1,11 @@
 ---
 name: "industry-funnel"
-description: "行業漏斗選股：從一個行業/主題篩出候選池，逐層用基本面與價值視角過濾、排序，產出值得深挖的候選清單。當使用者想『在某行業裡找標的』『選股』『篩出值得研究的公司』時調用。方法論移植自 ai-berkshire 的 industry-funnel。"
+description: "行業漏斗選股：從一個行業或主題篩出候選池，逐層用基本面與價值視角過濾、排序，產出值得深挖的候選清單。當使用者要在某個行業裡找標的、或要篩選股票時使用。"
 ---
 
 # 行業漏斗選股 (Industry Funnel)
 
-從一個行業/主題出發，**漏斗式逐層收斂**成「值得深挖的候選清單」，是「推薦」支柱的入口。產出的候選交給 `/value-research` 深挖、再用 `value_thesis_to_monitoring.py` 接進監控，形成 推薦→研究→監控 閉環。
+從一個行業/主題出發，**漏斗式逐層收斂**成「值得深挖的候選清單」，是「推薦」支柱的入口。產出的候選交給 `/value-research` 深挖、再用 `value_thesis_to_monitoring.py` 接進監控，形成 推薦→研究→監控 閉環。方法論移植自 [xbtlin/ai-berkshire](https://github.com/xbtlin/ai-berkshire) 的 industry-funnel。
 
 ## Usage
 

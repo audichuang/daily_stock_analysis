@@ -1,10 +1,8 @@
 # Repository Claude Skills
 
-本目录存放仓库级协作 skills，属于版本库资产。
+仓库级协作 skill，属版本库资产（`.gitignore` 只放行 `.claude/skills/`；`.claude/reviews/` 是本地分析产物）。
 
-- 规则真源：仓库根目录 `AGENTS.md`
-- 兼容入口：根目录 `CLAUDE.md`（应为指向 `AGENTS.md` 的软链接）
-- 本目录中的 skill 需要与 `AGENTS.md` 保持一致
-- `.claude/reviews/` 属于本地分析产物，不作为规则真源
+规则真源是仓库根目录 `AGENTS.md`，本目录的 skill 与它保持一致；治理关系（`CLAUDE.md` 的 `@AGENTS.md` import 写法、镜像文件、frontmatter、gitignore allowlist）由 `scripts/check_ai_assets.py` 确定性强制，细节见 `AGENTS.md` §2。
 
-如果未来需要兼容其他 agent 目录（如 `.agents/skills/` 或 `.github/skills/`），应先明确单一真源，再通过脚本或镜像同步，而不是手工长期维护多份同义内容。
+- 每个 `SKILL.md` 必须有 YAML frontmatter 的 `name` + `description`；缺了会退化成拿 H1 当描述、实务上不会被自动触发。
+- `shared/` 存放被多个 skill 指向的共用规则，本身不是 skill（没有 `SKILL.md`，不会被扫描）。

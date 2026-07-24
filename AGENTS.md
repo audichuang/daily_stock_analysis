@@ -12,6 +12,7 @@
   - 桌面端改动在 `apps/dsa-desktop/`
   - 部署与流水线改动在 `scripts/`、`.github/workflows/`、`docker/`
 - 未经明确确认，不执行 `git commit`、`git tag`、`git push`。
+- 同样需要先确认、不要默认执行的动作：安装或升级依赖（`uv pip install`、`npm install <pkg>`、改 `requirements.txt`）、删除文件或目录、改动 infra 与部署配置、跑全量离线测试（约 30+ 分钟，判定基准见 §10）。读代码、跑 §6 的快速门槛、生成分析文档属于可自主动作。
 - commit message 使用英文，不添加 `Co-Authored-By`。
 - 不写死密钥、账号、路径、模型名、端口或环境差异逻辑。
 - 优先复用现有模块、配置入口、脚本和测试，不新增平行实现。
@@ -38,22 +39,22 @@
 - 贡献质量以是否解决明确问题、是否最小化影响面、是否保持现有契约一致、是否覆盖真实风险路径为准；不以新增行数、文件数量、功能宣传或“看起来完整”为准。
 - 请不要把本仓库当作低成本试验场、简历展示场或 contribution farming 场所。任何 PR 都必须证明作者理解当前系统契约，并完成基本自审、集成和验证。
 - 使用 AI 辅助开发本身不是问题；问题是提交 AI 生成后未经人工语义审查、未验证、未收敛的代码。此类 PR 会按低质量提交处理。
-- review 反馈后，不接受只在被指出的位置追加局部 patch。作者必须重新检查同一业务语义涉及的所有入口、配置、测试、文档、workflow 和用户可见路径。
+- review 反馈后，不接受只在被指出的位置追加局部 patch；完整收敛程序见 skill `respond-to-review`。
 - 如果一个 PR 在多轮 review 后仍持续出现同类契约漂移、重复 fallback、测试绕过真实风险层、PR body 与实际 diff 不一致等问题，维护者可以要求关闭重做，而不是继续逐点 review。
 
 ## 2. AI 协作资产治理
 
-- `AGENTS.md` 是仓库内 AI 协作规则的唯一真源。
-- `CLAUDE.md` 必须是内容为 `@AGENTS.md` 的普通文件（Claude 的 import 语法，禁止软链接），用于兼容 Claude 生态；模块级 `CLAUDE.md` 同样处理。
-- `.github/copilot-instructions.md` 与 `.github/instructions/*.instructions.md` 是 GitHub Copilot / Coding Agent 的镜像或分层补充；若与本文件冲突，以 `AGENTS.md` 为准。
-- 仓库协作 skill 存放在 `.claude/skills/`，分析产物存放在 `.claude/reviews/`；前者可以入库，后者默认视为本地产物。
-- 根目录 `SKILL.md` 与 `docs/openclaw-skill-integration.md` 属于产品或外部集成说明，不是仓库协作规则真源。
-- 若未来新增 `.agents/skills/` 或其他 agent 专用目录，必须先明确单一真源，再通过脚本或镜像同步；禁止手工长期维护多份同义内容。
-- 修改 AI 协作治理资产时，执行：
+- `AGENTS.md` 是仓库内 AI 协作规则的唯一真源；`CLAUDE.md`（含模块级）只写一行 `@AGENTS.md` 做 import，`.github/copilot-instructions.md` 与 `.github/instructions/*.instructions.md` 是 GitHub Copilot / Coding Agent 的镜像或分层补充。**任一处与本文件冲突时，以 `AGENTS.md` 为准。**
+- 上述文件的存在性、`@AGENTS.md` 写法、软链接禁令、skill frontmatter 与 `.gitignore` allowlist 已由 `scripts/check_ai_assets.py` 确定性强制（CI job `ai-governance`，阻断）；本文件不重述这些机械规则，改动治理资产后跑它即可：
 
 ```bash
-python scripts/check_ai_assets.py
+uv run python scripts/check_ai_assets.py
 ```
+
+- 仓库协作 skill 存放在 `.claude/skills/`（入库）；分析产物存放在 `.claude/reviews/`（默认本地产物，已 gitignore）。
+- 根目录 `SKILL.md` 与 `docs/openclaw-skill-integration.md` 属于产品或外部集成说明，不是仓库协作规则真源。
+- 若未来新增 `.agents/skills/` 或其他 agent 专用目录，必须先明确单一真源，再通过脚本或镜像同步；禁止手工长期维护多份同义内容。
+- skill 内的命令、验证门槛与交付结构必须与本文件一致；改动 §6 验证门槛时要同步检查各 skill 的验证步骤。被多个 skill 共用的规则放 `.claude/skills/shared/`（不含 `SKILL.md`，因此不是 skill、不被扫描），各 skill 用相对路径指向，避免同一规则抄多份。
 
 ## 3. 仓库速览
 
@@ -65,27 +66,20 @@ python scripts/check_ai_assets.py
   - `apps/dsa-web/`：Web 前端（页面地图与前端约定见 `apps/dsa-web/AGENTS.md`）
   - `apps/dsa-desktop/`：Electron 桌面端
   - `.github/workflows/`：CI、发布、每日任务
-- 核心职责：
-  - `src/core/`：主流程编排
-  - `src/services/`：业务服务层
-  - `src/repositories/`：数据访问层
+- 核心职责（只列名字猜不到用途、或带额外契约的；**完整目录结构问 `tree` / codegraph，别依赖这份清单**）：
+  - `src/`：`core/` 主流程编排、`services/` 业务服务、`repositories/` 数据访问三层；另有 `schemas/` 数据结构、`utils/` 通用工具、`data/` 股票索引与代码映射、`patches/` 三方库补丁
   - `src/notification_sender/`：通知渠道适配（飞书 / Discord / ntfy / 自定义 Webhook，含 Bark）；新增渠道需实现 `base.py` 的 `Sender` protocol 并在 `NotificationService._senders` 注册
-  - `src/schemas/`：Schema / 数据结构
   - `src/llm/`：LLM 生成后端、usage / provider 缓存，与 LLM transport 编排（`client.py::LLMClient`，backend fallback / 脱敏 / 流式；与 `GeminiAnalyzer` 的边界见该文件模块 docstring）
+  - `src/agent/`：tool-calling agent（多轮对话、分歧检测、事件流），由 `AGENT_MODE=true` 启用；可插拔策略定义在根目录 `strategies/*.yaml`（见 `strategies/README.md`）
   - `data_provider/`：多数据源适配与 fallback
   - `market_data/`：台股行情爬取 → 统一 Postgres（market schema），细节见 `market_data/AGENTS.md`
-  - `api/`：FastAPI API
-  - `bot/`：机器人接入
-  - `scripts/`：本地脚本
-  - `.github/scripts/`：GitHub 自动化脚本
-  - `tests/`：pytest 测试
-  - `docs/`：文档与说明
 
 ## 4. 常用命令
 
 > 常用任务已封装在根目录 `Makefile`（统一以 `uv run` 执行）：`make help` 列出全部；
 > 常用如 `make serve` / `make review-tw` / `make analyze STOCKS=…` / `make test` / `make lint`。
 > 以下为底层命令，CI（`ci_gate.sh`）与不使用 uv 的环境仍以此为准。
+> **该跑哪个门槛见 §6**：本机开发默认用 §6 的快速门槛，不要默认跑这里的全量 `pytest`。
 
 ### 运行应用
 
@@ -134,14 +128,11 @@ gh run view <run_id> --log-failed
 
 ## 5. 默认工作流
 
-1. 先判断任务类型：`fix / feat / refactor / docs / chore / test / review`
-2. 先读现有实现、配置、测试、脚本、工作流和文档，再动手修改。
-3. 识别改动边界：后端 / API / Web / Desktop / Workflow / Docs / AI 协作资产。
-4. 先判断是否命中高风险区域：配置语义、API / Schema、数据源 fallback、报告结构、认证、调度、发布流程、桌面端启动链路。
-5. 只做和当前任务直接相关的最小改动，不顺手夹带无关重构。
-6. 如果发现文档、脚本、工作流描述不一致，优先信任实际代码与工作流，再决定是否顺手修正文档。
-7. 改完后按下面的验证矩阵执行检查。
-8. 最终交付默认要说明：
+1. 判断任务类型：`fix / feat / refactor / docs / chore / test / review`。
+2. 识别改动边界：后端 / API / Web / Desktop / Workflow / Docs / AI 协作资产。
+3. 判断是否命中高风险区域：配置语义、API / Schema、数据源 fallback、报告结构、认证、调度、发布流程、桌面端启动链路——命中时按 §7 的护栏逐项确认。
+4. 改完按 §6 验证矩阵执行检查。
+5. 交付六项：
    - 改了什么
    - 为什么这么改
    - 验证情况
@@ -170,8 +161,10 @@ gh run view <run_id> --log-failed
 
 - Python 后端改动：
   - 适用范围：`main.py`、`src/`、`data_provider/`、`api/`、`bot/`、`tests/`
-  - 优先执行：`./scripts/ci_gate.sh`
-  - 最低要求：`python -m py_compile <changed_python_files>`
+  - 快速门槛（开发中默认用这个）：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（实测 0.7s / 4s）。`ci_gate.sh` 接受 phase 参数 `all|syntax|flake8|deterministic|offline-tests`
+  - **本机必须带 `uv run`**：脚本内部调用裸 `python`，本 fork 无全局 python，直接跑 `./scripts/ci_gate.sh` 会 `python: command not found`；CI 环境有 python，直跑无碍
+  - 交付前完整门槛：`uv run ./scripts/ci_gate.sh`（不带参数 = `all`，第四阶段是 `pytest -m "not network"` 全量，约 30+ 分钟；回归判定基准见 §10）
+  - 最低要求：`uv run python -m py_compile <changed_python_files>`
   - 若影响 API、任务编排、报告生成、通知发送、数据源 fallback、认证、调度，交付说明中要写明是否覆盖了对应路径。
 
 - Web 前端改动：
@@ -193,7 +186,7 @@ gh run view <run_id> --log-failed
   - 适用范围：`README.md`、`docs/**`、`AGENTS.md`、`.github/copilot-instructions.md`、`.github/instructions/**`、`.claude/skills/**`
   - 不强制代码测试。
   - 需确认命令、配置项、文件名、工作流名称与实际仓库一致。
-  - 改动 AI 协作治理资产时，执行 `python scripts/check_ai_assets.py`。
+  - 改动 AI 协作治理资产时，执行 `uv run python scripts/check_ai_assets.py`。
 
 - 工作流 / 脚本 / Docker 改动：
   - 适用范围：`.github/**`、`scripts/**`、`docker/**`
@@ -231,62 +224,14 @@ gh run view <run_id> --log-failed
 
 ## 8. Issue / PR / Skill 工作流
 
-- issue 分析、PR 审查、issue 修复已有对应 skill（`.claude/skills/`，按 description 自动触发；此处不逐一列名，以目录为准），任务命中时优先按 skill 执行，并将产物保存到 `.claude/reviews/`。
-- skill 中的命令、模板、验证顺序和交付结构必须与 `AGENTS.md` 保持一致。
-- 每次进行 PR 创建 / 更新、PR 审查或 issue 分析前，必须先同步最新代码基线：先检查工作区状态并执行 `git fetch --all --prune`；若工作区干净且当前分支可 fast-forward，则执行 `git pull --ff-only`。如存在本地改动、冲突状态、未跟踪风险文件或无法 fast-forward，不得强行切分支、stash、reset 或覆盖本地状态；PR 审查 / issue 分析可改用已 fetch 的远端 refs/PR head 做分析，并在分析文档中明确记录未更新本地工作树的原因、当前本地 HEAD 与使用的远端基线；PR 创建 / 更新应先说明当前分支与目标基线差异，必要时请求用户确认 rebase、merge 或继续基于当前分支推进。
+- issue 分析、PR 审查、issue 修复、review 反馈收敛已有对应 skill（`.claude/skills/`，靠 frontmatter `description` 自动触发；此处不逐一列名，以目录为准）。任务命中时优先按 skill 执行，产物保存到 `.claude/reviews/`。
+- 开始 PR 创建 / 更新、PR 审查、issue 分析或修复前，先按 `.claude/skills/shared/baseline-sync.md` 同步基线；哪些 git 操作可自主、哪些必须先问，同样以该文件为准。
+- PR 审查的维度顺序、合入阻断条件与 `fix` 类 PR 的四项要求在 skill `analyze-pr` 内；收到 review 反馈后的收敛程序在 skill `respond-to-review`。
 - skill 默认优先读取 CI / 工作流证据，再决定是否补本地验证。
-- 除上述 PR 创建 / 更新、PR 审查 / issue 分析的安全 fast-forward 同步外，skill 不得默认执行 `git pull`、`git push`、`git tag`、`gh pr create` 等会改变远端或当前分支状态的操作；这些操作必须要求用户确认。
-- PR 审查默认顺序：
-  1. 必要性
-  2. 关联性
-  3. 标题建议（`<类型>: <修改内容>`，且不含工具/agent 前缀；不作为硬性阻断项）
-  4. 描述完整性（对照 `.github/PULL_REQUEST_TEMPLATE.md`）
-  5. 验证证据
-  6. 实现正确性
-  7. 合入判定
-- 对 `fix` 类 PR，必须说明：原问题、根因、修复点、回归风险。
-- 合入阻断条件：
-  - 正确性或安全性问题
-  - 阻断型 CI 未通过
-  - PR 描述与实际改动内容实质性矛盾
-  - 缺少回滚方案
-  - 反复出现未收敛的契约漂移、补丁堆叠或验证证据失真
-
-## 8.1 Review 反馈处理与补丁堆叠禁止
-
-当你处理 review 反馈时，禁止只在 reviewer 点名的位置追加局部 patch 后声称“已全部修复”。你必须先重新理解 reviewer 指出的业务契约，再检查同一语义涉及的所有入口、配置、测试、文档、workflow 和用户可见路径。
-
-收到 review 反馈后，必须按以下顺序处理：
-
-1. 逐条列出 reviewer 指出的原问题。
-2. 说明根因，不能只描述“改了哪几行”。
-3. 找出同一语义影响的所有相关路径，例如 runtime、API/Web、CLI、diagnostics、workflow、docs、tests。
-4. 修复完整契约，而不是只修复当前失败测试或当前评论行。
-5. 补充能覆盖 reviewer 反例的回归测试、最终入口验证，或明确说明无法验证的原因。
-6. 同步更新 PR body，保证 scope、验证结果、兼容性、风险和回滚方案与当前 head 一致。
-
-如果你无法完成上述收敛，不要继续堆叠补丁，不要声称 ready for merge。应主动说明当前 PR 需要拆分、关闭重做，或请求维护者确认新的最小范围。
-
-以下行为会被视为低质量 PR：
-
-- 用 broad fallback、静默降级、`return False/None/[]` 掩盖不清晰的契约。
-- 测试 mock 掉真实风险层，只证明局部实现通过。
-- CI 通过后声称问题已关闭，但没有覆盖 reviewer 指出的反例。
-- PR body 与实际 diff、验证结果或兼容风险不一致。
-- review 后继续追加零散 patch，而不是重新收敛完整语义。
-- 同一业务语义在 runtime、Web/API、docs、workflow、tests 中表现不一致。
-
-CI 通过只能说明自动检查通过，不能替代人工语义收敛，也不能单独证明 reviewer 指出的反例已经关闭。
 
 ## 9. 交付与发布
 
-- 默认交付结构：
-  - `改了什么`
-  - `为什么这么改`
-  - `验证情况`
-  - `未验证项`
-  - `风险点`
-  - `回滚方式`
+- 默认交付结构见 §5 的交付六项（改了什么 / 为什么这么改 / 验证情况 / 未验证项 / 风险点 / 回滚方式）。
 - 如果是 `docs` 任务，可直接写：`Docs only, tests not run`，但仍需说明是否核对了命令和文件名。
 - 自动 tag 默认不触发，只有 commit title 包含 `#patch`、`#minor`、`#major` 才会触发版本号更新。
 - 手动打 tag 必须使用 annotated tag。
@@ -304,4 +249,4 @@ CI 通过只能说明自动检查通过，不能替代人工语义收敛，也�
 - **通知用 Bark，走 Doppler 注入**：`make serve` / `make review-tw` 用 `doppler run -p shioaji -c dev` 把 Doppler 的 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`（`custom_webhook_sender.py` 自动识别 `api.day.app`），secret 不落地 `.env`。**`make analyze` 不含 Doppler 包装**——要 Bark 通知需手动包：`doppler run -p shioaji -c dev -- bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py --stocks 2330.TW'`；非交易日需加 `--force-run`。
 - **全量离线测试（`pytest -m "not network"`）约 30+ 分钟**，且 main 上存在少量既有失败与顺序敏感 flaky（单独跑绿、全量跑偶红）；回归判定用「相对 baseline 的差集」，不要求绝对全绿，也不要把全量当快速门槛（快速验证用受影响测试文件的子集）。
 - **台股历史数据（行情/筹码/财报）统一在 Postgres（`market` schema），且为唯一数据源（无本地备份）**：`DATABASE_URL` 在 `.env`。台股日线优先走 `MarketDBFetcher`（本地 DB，priority=1），无数据 fallback yfinance。爬取/数据更新（含财报季更 `financials`）/踩雷见 `market_data/AGENTS.md`。
-- **台股即时看板/走势用永丰 Shioaji，但 `shioaji` 是 optional 依赖**：未 `uv pip install shioaji`、或无金钥（同走 Doppler `shioaji/dev` 的 `SHIOAJI_API_KEY`/`SHIOAJI_SECRET_KEY`）时会**静默降级 yfinance**（行情延迟、名称变英文）——本 session 实际踩过。看板/批次行情/走势/fallback/Shioaji session 与 ts 时区、kbars 30 天上限等细节见 `docs/realtime-board.md`。
+- **台股即时看板/走势用永丰 Shioaji**：`shioaji` 已列入 `requirements.txt`（不需手动安装）。真正的降级触发点是**缺金钥**（同走 Doppler `shioaji/dev` 的 `SHIOAJI_API_KEY`/`SHIOAJI_SECRET_KEY`）——此时**静默降级 yfinance**，看板照样出数据但已是延迟报价、名称变英文。实际踩过：症状是「能跑但数字不对劲」，不是报错，排查先确认金钥有没有注入。看板/批次行情/走势/fallback/Shioaji session 与 ts 时区、kbars 30 天上限等细节见 `docs/realtime-board.md`。

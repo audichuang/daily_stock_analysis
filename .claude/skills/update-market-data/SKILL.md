@@ -1,6 +1,6 @@
 ---
 name: "update-market-data"
-description: "更新/回補 market schema 的台股行情資料(price/institutional/margin/valuation/index/stock_info)。判斷該跑 daily 還是 backfill、執行、並用 health 稽核確認補齊。當使用者想『更新行情』『回補行情資料』『market data 太舊/停很久』『補資料庫缺口』『跑 daily update』時調用。"
+description: "更新/回補 market schema 的台股行情資料(price/institutional/margin/valuation/index/stock_info)：判斷該跑 daily 還是 backfill，執行後用 health 稽核確認補齊。當使用者要更新行情、或發現 market data 停更/有缺口時使用。"
 ---
 
 # 行情資料更新 (Update Market Data)
@@ -9,7 +9,7 @@ description: "更新/回補 market schema 的台股行情資料(price/institutio
 
 ## 前置
 
-- 在 repo 根目錄執行,`.env` 已設 `DATABASE_URL`。
+- 在 repo 根目錄執行,`.env` 已設 `DATABASE_URL`。模組不自載 `.env`,指令一律帶 `--env-file .env`。
 - **同時只跑一個爬取程序**(單一寫入者);並發會互鎖,也可能破壞「兩市場都到才寫」的規則。
 
 ## 步驟
@@ -17,7 +17,7 @@ description: "更新/回補 market schema 的台股行情資料(price/institutio
 ### 1. 先稽核落差
 
 ```
-uv run python -m market_data.health
+uv run --env-file .env python -m market_data.health
 ```
 
 輸出每表 `rows / start~end` 與 price/institutional/margin 的 `thin days`(單日列數低於前後交易日局部中位數九成 = 疑似單邊市場缺漏或截斷寫入)。
@@ -25,19 +25,19 @@ uv run python -m market_data.health
 
 ### 2. 依落差選路徑
 
-- **落後 ≤ 5 天(例行)** → `uv run python -m market_data.cli daily`(近 5 天增量 + 快照 + 上月營收 + 除權息滾動窗)。
+- **落後 ≤ 5 天(例行)** → `uv run --env-file .env python -m market_data.cli daily`(近 5 天增量 + 快照 + 上月營收 + 除權息滾動窗)。
 - **補特定月營收/除權息區間** → `… revenue --month YYYY-MM` / `… ex-dividend --start … --end …`(月營收僅上市口徑)。
 - **落後 > 5 天,或有洞** → 區間回補:
   ```
-  uv run python -m market_data.cli backfill {price|institutional|margin} --start YYYY-MM-DD --end YYYY-MM-DD
+  uv run --env-file .env python -m market_data.cli backfill {price|institutional|margin} --start YYYY-MM-DD --end YYYY-MM-DD
   ```
-  backfill 僅 price/institutional/margin;valuation/index/stock_info 走 `uv run python -m market_data.cli snapshot`。
+  backfill 僅 price/institutional/margin;valuation/index/stock_info 走 `uv run --env-file .env python -m market_data.cli snapshot`。
 - **health 報 thin days(該日有列但不完整)** → 對那幾天加 `--force` 整日換血:
   `… backfill price --start <該日> --end <該日> --force`(resume 認「有列即完成」,不加 --force 補不動)。
 - 區間長(數月以上)→ 背景執行(禮貌延遲會跑數小時);中斷後**重跑同指令**即 resume 續補。
 - **財報落後一季以上**(monthly_revenue/financial_statement 的 end 過舊)→ 季更:
   ```
-  uv run python -m market_data.cli financials --year YYYY --season {1..4}
+  uv run --env-file .env python -m market_data.cli financials --year YYYY --season {1..4}
   ```
   發布時點:Q1→5/15 後、Q2→8/14 後、Q3→11/14 後、Q4(年報)→隔年 3/31 後。
   下載整季 IFRS html 包(約 1-2 GB,解析+upsert 後自動清除;除錯才加 `--keep-files`)。
@@ -45,7 +45,7 @@ uv run python -m market_data.health
 
 ### 3. 驗證
 
-再跑 `uv run python -m market_data.health`。
+再跑 `uv run --env-file .env python -m market_data.health`。
 **完成判準**:目標資料集 `end` 已推進到預期交易日,且 **price/institutional/margin 的 thin days 都沒有新增**。
 
 ## 別踩(細節見 `market_data/AGENTS.md`)

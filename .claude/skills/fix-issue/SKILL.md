@@ -1,3 +1,8 @@
+---
+name: fix-issue
+description: 按 issue 分析结论实现修复，并补齐验证、风险与回滚说明。当用户要动手修某个 issue 时使用。
+---
+
 # Fix Issue
 
 基于 issue 分析结果实现修复，并按仓库规则补齐验证、风险与回滚说明。
@@ -20,23 +25,9 @@
 
 检查 `.claude/reviews/issues/issue-<number>.md` 是否存在；如果不存在，先补做 issue 分析或在本次修复中补齐最小分析结论。
 
-### Step 2: 同步最新代码基线并选择安全的工作方式
+### Step 2: 同步基线
 
-开始修复或准备创建 / 更新 PR 前，先按 `AGENTS.md` 拉新：
-
-```bash
-git status --short
-git fetch --all --prune
-# 仅当工作区干净且当前分支可 fast-forward 时执行：
-git pull --ff-only
-```
-
-- 默认基于当前工作树做最小相关改动
-- 只有在工作区干净、当前分支有可 fast-forward 的上游时，才执行并接受 `git pull --ff-only` 的结果
-- 如存在本地改动、冲突状态、未跟踪风险文件、无上游分支或无法 fast-forward，不要执行 `stash`、`reset`、强制切分支或覆盖本地状态；先记录本地 HEAD、使用的远端基线与无法更新本地工作树的原因
-- 若后续要创建 / 更新 PR，先说明当前分支与目标基线差异；必要时请求用户确认 rebase、merge 或继续基于当前分支推进
-- 不要默认切换分支或改写用户当前工作状态
-- 如果用户明确要求建分支，再执行最小必要的分支操作
+按 [`../shared/baseline-sync.md`](../shared/baseline-sync.md) 执行。默认基于当前工作树做最小相关改动，保持用户当前工作状态不变；用户明确要求建分支时才动分支。
 
 ### Step 3: 实施修复
 
@@ -52,8 +43,9 @@ git pull --ff-only
 
 按 `AGENTS.md` 的验证矩阵执行最接近的检查：
 
-- 后端优先：`./scripts/ci_gate.sh`
-- 最低后端要求：`python -m py_compile <changed_python_files>`
+- 后端快速门槛：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（秒级，开发中默认用这个；本机必须带 `uv run`，否则 `python: command not found`）
+- 后端完整门槛：`uv run ./scripts/ci_gate.sh`（= `all`，含约 30+ 分钟全量离线测试；仅在交付前跑，判定基准见 `AGENTS.md` §10）
+- 最低后端要求：`uv run python -m py_compile <changed_python_files>`
 - 前端：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
 - 桌面端：先构建 Web，再构建桌面端
 
@@ -86,35 +78,16 @@ git pull --ff-only
 - 回滚方式：
 ```
 
-### Step 6: 需要确认的后续动作
+### Step 6: 交付说明
 
-如用户要求创建 PR、生成 PR 标题或整理 PR 描述，PR title 建议遵循 `AGENTS.md`：
+按 `AGENTS.md` §5 的交付六项写：改了什么 / 为什么这么改 / 验证情况 / 未验证项 / 风险点 / 回滚方式。
 
-- 使用 `<类型>: <修改内容>` 格式，例如 `fix: 修复大盘分析历史记录丢失`
-- 类型优先使用 `fix`/`feat`/`refactor`/`docs`/`chore`/`test`/`ci`
-- 标题只描述实际改动，建议不添加 `[codex]`、`codex`、`autocode`、`copilot` 或其他工具/agent 来源前缀
-- 该约定仅用于协作一致性，不应被单独当作 process blocker
+用户要求创建 PR 或整理 PR 描述时，PR title 按 `AGENTS.md` §1.1 的 `<类型>: <修改内容>` 格式给。
 
-只有在用户明确确认后，才执行：
+## 可自主执行
 
-- 建分支
-- `git commit`
-- `git push`
-- 创建 PR
-- 在 issue 下回复或关闭 issue
+阅读与分析代码、应用与当前任务直接相关的最小修复、运行非破坏性的本地验证、更新本地 issue 分析文档，以及 [`../shared/baseline-sync.md`](../shared/baseline-sync.md) 允许的 fast-forward 同步。
 
-## Allowed Auto-Actions (No Confirmation Needed)
+其余操作（建分支、切分支、`git commit`、`git push`、创建 PR、在 issue 下回复或关闭）按同一份文件的确认边界——一律先问。
 
-- 阅读和分析代码
-- 执行 `git fetch --all --prune`，并在工作区干净且可 fast-forward 时执行 `git pull --ff-only`
-- 应用与当前任务直接相关的最小修复
-- 运行非破坏性的本地验证
-- 更新本地 issue 分析文档
-
-## Actions Requiring Confirmation
-
-1. 切换或创建分支
-2. `git commit`
-3. `git push`
-4. 创建 PR
-5. 回复或关闭 issue
+修完后收到 review 反馈要继续改时，走 skill `respond-to-review`。

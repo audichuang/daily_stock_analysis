@@ -90,6 +90,34 @@ def ensure_skill_files() -> None:
                 fail(f"{path.relative_to(ROOT)} must reference AGENTS.md as the rule source")
 
 
+def ensure_skill_frontmatter() -> None:
+    """每个 SKILL.md 都必须有 YAML frontmatter 的 name + description。
+
+    缺 frontmatter 时 skill 会退化成拿 H1 标题当描述，实务上不会被自动触发，
+    AGENTS.md §8「任务命中时优先按 skill 执行」就形同失效。这里扫全部 skill
+    （不只 REQUIRED_SKILL_FILES），新增 skill 漏写同样会被挡下。
+    """
+    for path in sorted(CLAUDE_SKILLS_DIR.glob("*/SKILL.md")):
+        rel = path.relative_to(ROOT)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if not lines or lines[0].strip() != "---":
+            fail(f"{rel} must start with YAML frontmatter ('---'); without it the skill will not auto-trigger")
+
+        end = next((i for i, line in enumerate(lines[1:], start=1) if line.strip() == "---"), None)
+        if end is None:
+            fail(f"{rel} has an unterminated YAML frontmatter block")
+
+        frontmatter = {}
+        for line in lines[1:end]:
+            if ":" in line:
+                key, value = line.split(":", 1)
+                frontmatter[key.strip()] = value.strip()
+
+        for required in ("name", "description"):
+            if not frontmatter.get(required):
+                fail(f"{rel} frontmatter is missing a non-empty '{required}:'")
+
+
 def ensure_gitignore_rules() -> None:
     gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
     for snippet in REQUIRED_GITIGNORE_SNIPPETS:
@@ -118,6 +146,7 @@ def main() -> None:
     ensure_copilot_entry()
     ensure_instruction_files()
     ensure_skill_files()
+    ensure_skill_frontmatter()
     ensure_gitignore_rules()
     ensure_no_tracked_claude_artifacts()
     print("[ai-assets] OK")

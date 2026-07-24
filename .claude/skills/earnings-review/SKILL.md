@@ -1,11 +1,11 @@
 ---
 name: "earnings-review"
-description: "財報複盤：針對單一持有/觀察的公司，在財報發布後檢查業績是否驗證原投資論題、論題逆轉條件是否被觸發，並更新監控。當使用者想『複盤財報』『看這季財報有沒有變臉』『財報後要不要調整』時調用。方法論移植自 ai-berkshire 的 earnings-review。"
+description: "財報複盤：財報發布後檢查業績是否驗證原投資論題、逆轉條件是否被觸發，並更新監控。當使用者要複盤某家公司的財報、或判斷財報後要不要調整持倉時使用。"
 ---
 
 # 財報複盤 (Earnings Review)
 
-針對**已有投資論題**的公司，在財報後檢查「業績是否驗證論題、論題逆轉條件是否被觸發」，是「監控」支柱的定期複查。與 `/value-research`（首次建立論題）互補：value-research 立論，earnings-review 驗證/推翻。
+針對**已有投資論題**的公司，在財報後檢查「業績是否驗證論題、論題逆轉條件是否被觸發」，是「監控」支柱的定期複查。與 `/value-research`（首次建立論題）互補：value-research 立論，earnings-review 驗證/推翻。方法論移植自 [xbtlin/ai-berkshire](https://github.com/xbtlin/ai-berkshire) 的 earnings-review。
 
 ## Usage
 

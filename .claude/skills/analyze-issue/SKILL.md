@@ -1,3 +1,8 @@
+---
+name: analyze-issue
+description: 判断一个 GitHub Issue 是否成立、属不属于本仓库责任边界、值不值得处理。当用户要分析某个 issue 或决定要不要修它时使用。
+---
+
 # Analyze Issue
 
 分析 GitHub Issue，判断其真实性、优先级、仓库责任边界与建议动作。
@@ -14,20 +19,9 @@
 
 分析时使用简洁中文，优先遵循仓库根目录 `AGENTS.md`。
 
-### Step 1: 同步最新代码基线
+### Step 1: 同步基线
 
-分析 issue 前必须先刷新远端状态，并尽量把本地安全推进到最新基线：
-
-```bash
-git status --short
-git fetch --all --prune
-# 仅当工作区干净且当前分支可 fast-forward 时执行：
-git pull --ff-only
-```
-
-- 只有在工作区干净、当前分支有可 fast-forward 的上游时，才执行并接受 `git pull --ff-only` 的结果。
-- 如存在本地改动、冲突状态、未跟踪风险文件、无上游分支或无法 fast-forward，不要执行 `stash`、`reset`、强制切分支或覆盖本地状态；改用已 fetch 的 `origin/main` 或相关远端 refs 做分析。
-- 在输出文档的 `Evidence` 中记录同步结果：本地 HEAD、使用的远端基线，以及未更新本地工作树的原因（如有）。
+按 [`../shared/baseline-sync.md`](../shared/baseline-sync.md) 执行，并把结果记进输出文档的 `Evidence`。
 
 ### Step 2: 拉取 Issue 信息
 
@@ -126,18 +120,8 @@ gh issue view <issue_number> --repo ZhuLinsen/daily_stock_analysis --comments
 <建议回复内容>
 ```
 
-## Allowed Auto-Actions (No Confirmation Needed)
+## 可自主执行
 
-- 拉取 issue 详情与评论
-- 执行 `git fetch --all --prune`，并在工作区干净且可 fast-forward 时执行 `git pull --ff-only`
-- 阅读相关代码、配置、脚本、工作流和文档
-- 生成分析文档
+拉取 issue 详情与评论、阅读代码 / 配置 / 脚本 / 工作流 / 文档、生成分析文档，以及 [`../shared/baseline-sync.md`](../shared/baseline-sync.md) 允许的 fast-forward 同步。
 
-## Actions Requiring Confirmation
-
-执行以下动作前，先询问用户：
-
-1. 添加或修改标签
-2. 在 issue 下评论
-3. 关闭 issue
-4. 开始修复 issue
+改变远端状态或扩大范围的操作（增删标签、在 issue 下评论、关闭 issue、开始动手修复）一律先问——同一份文件的确认边界。开始修复走 skill `fix-issue`。

@@ -12,7 +12,7 @@ If any instruction in this file conflicts with `AGENTS.md`, follow `AGENTS.md`.
   - Desktop: `apps/dsa-desktop/`
   - Deployment/workflows: `scripts/`, `.github/workflows/`, `docker/`
 - Do not run `git commit`, `git tag`, or `git push` without explicit user confirmation.
-- Before creating/updating PRs, PR review, or issue analysis, refresh the latest code baseline with `git fetch --all --prune`; if the worktree is clean and the current branch can fast-forward, run `git pull --ff-only`. If local changes, conflicts, missing upstream, or non-fast-forward history make that unsafe, do not stash/reset/overwrite local state; analyze against fetched remote refs or record the baseline gap before proceeding.
+- Before creating/updating PRs, PR review, or issue analysis, refresh the latest code baseline with `git fetch --all --prune`; if the worktree is clean and the current branch can fast-forward, run `git pull --ff-only`. If local changes, conflicts, missing upstream, or non-fast-forward history make that unsafe, do not stash/reset/overwrite local state; analyze against fetched remote refs or record the baseline gap before proceeding. The full rules — including which git operations may run autonomously and which need confirmation — live in `.claude/skills/shared/baseline-sync.md`.
 - PR titles should use `<type>: <change summary>` such as `fix: 修复大盘分析历史记录丢失`; use `fix`/`feat`/`refactor`/`docs`/`chore`/`test`/`ci` where possible, and avoid `[codex]`, `codex`, `autocode`, `copilot`, or other tool/agent source prefixes. Treat this as process guidance and do not use title format mismatches as a hard review blocker.
 - Do not hardcode secrets, accounts, ports, model names, absolute environment-specific paths, or environment-specific branches.
 - Reuse existing modules, configuration entrypoints, scripts, and tests instead of adding parallel implementations.
@@ -24,11 +24,20 @@ If any instruction in this file conflicts with `AGENTS.md`, follow `AGENTS.md`.
 
 ## Validation
 
-- Backend changes: prefer `./scripts/ci_gate.sh`; at minimum run `python -m py_compile` on changed Python files and the closest deterministic tests.
+- Backend changes: use the fast gate `uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8` (measured 0.7s / 4s; the script takes a phase argument `all|syntax|flake8|deterministic|offline-tests`). Bare `./scripts/ci_gate.sh` means `all` and includes the full `pytest -m "not network"` suite (~30+ minutes) — run it only before delivery. At minimum run `uv run python -m py_compile` on changed Python files.
+- Locally the `uv run` prefix is required: the script calls bare `python`, which this fork does not provide globally (`python: command not found`). CI images do provide `python`, so the bare form is fine there.
 - Web changes: run `cd apps/dsa-web && npm ci && npm run lint && npm run build`.
 - Desktop changes: build web first, then desktop if feasible.
 - Review work should prioritize CI evidence (`gh pr checks`, workflow logs) before re-running local validation.
-- AI governance changes: run `python scripts/check_ai_assets.py`.
+- AI governance changes: run `uv run python scripts/check_ai_assets.py`.
+
+## Fork-Specific Conventions
+
+This repository is a personal fork (`audichuang/daily_stock_analysis`) that is **not merged back upstream**. The full list is `AGENTS.md` §10; these three are here because getting them wrong actively breaks things:
+
+- **Use `uv`, not `pip`/`python -m venv`**: `uv venv --python 3.12`, `uv pip install -r requirements.txt`, and run everything via `uv run python …`. Common tasks are wrapped in the root `Makefile` (`make help`).
+- **`STOCK_INDEX_REMOTE_UPDATE_ENABLED` must stay `false`** in `.env`. Setting it to `true` makes the runtime pull the stock index from upstream GitHub and **overwrite this fork's local TW/US index additions**. Note that `.env.example` still ships the upstream value `true` — do not copy it.
+- **`LITELLM_MODEL=deepseek/deepseek-chat` must be set explicitly** in `.env`. Otherwise, when the shell exports `GEMINI_API_KEY`, `load_dotenv` will not override the existing environment variable and model inference silently picks Gemini instead.
 
 ## AI Asset Governance
 
@@ -36,3 +45,4 @@ If any instruction in this file conflicts with `AGENTS.md`, follow `AGENTS.md`.
 - `CLAUDE.md` must be a regular file containing exactly `@AGENTS.md` (Claude import syntax; symlinks are not allowed).
 - Use `.github/instructions/*.instructions.md` for path-specific guidance.
 - Current repository collaboration skills live in `.claude/skills/`; keep them aligned with `AGENTS.md`.
+- Every `.claude/skills/*/SKILL.md` must have YAML frontmatter with a non-empty `name` and `description`; without it the skill degrades to using its H1 as the description and will not auto-trigger (enforced by `scripts/check_ai_assets.py`).

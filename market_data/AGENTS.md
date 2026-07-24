@@ -19,14 +19,15 @@
 
 ## 數據更新(操作指令)
 
-> 完整更新流程(何時 daily、何時 backfill、跑完怎麼用 health 驗收)見 skill `update-market-data`。以下為指令速查。
+> 完整更新流程(何時 daily、何時 backfill、跑完怎麼用 health 驗收)見 skill `update-market-data`。以下為指令速查。本模組**不自載 `.env`**(不同於面板的 load_dotenv),指令一律帶 `--env-file .env`,否則 `DATABASE_URL is not set`。
 
-- 每日增量+快照:`uv run python -m market_data.cli daily`(近 5 天 price/institutional/margin + valuation/index/stock_info 快照 + 上月營收 + 除權息滾動窗;停跑超過 5 天要用 backfill 補洞)
+- **自動更新**:本機 crontab 每天 15:00 跑 `daily`(cron 在 repo 外,log:`logs/market_data_cron.log`)。15:00 當日法人/融資融券尚未發布,由隔日 run resume 補齊(T+1);資料停更先查 `crontab -l` 與該 log。
+- 每日增量+快照:`uv run --env-file .env python -m market_data.cli daily`(近 5 天 price/institutional/margin + valuation/index/stock_info 快照 + 上月營收 + 除權息滾動窗;停跑超過 5 天要用 backfill 補洞)
 - 補特定月營收/除權息:`… revenue --month 2026-06`、`… ex-dividend --start … --end …`
-- 區間回補:`uv run python -m market_data.cli backfill price --start 2026-01-01 --end 2026-01-31`
+- 區間回補:`uv run --env-file .env python -m market_data.cli backfill price --start 2026-01-01 --end 2026-01-31`
 - 修 partial/髒日(health 報 thin day):同上加 `--force`(忽略 resume、抓到完整資料才整日換血;不用手動 DELETE)
-- 財報季更:`uv run python -m market_data.cli financials --year 2026 --season 2`(下載該季 IFRS html 包 → 解析 → upsert;完整性 fail-fast:解析不足 1000 檔或 Q4 缺同年 Q3 累計都直接失敗、全季回滾、保留下載檔,不寫半套資料)
-- 健康稽核:`uv run python -m market_data.health`
+- 財報季更:`uv run --env-file .env python -m market_data.cli financials --year 2026 --season 2`(下載該季 IFRS html 包 → 解析 → upsert;完整性 fail-fast:解析不足 1000 檔或 Q4 缺同年 Q3 累計都直接失敗、全季回滾、保留下載檔,不寫半套資料)
+- 健康稽核:`uv run --env-file .env python -m market_data.health`
 - 模組測試(免裝面板全依賴):
   `export $(grep '^DATABASE_URL=' .env | xargs) && uv run --no-project --with sqlalchemy --with 'psycopg[binary]' --with pandas --with lxml --with requests --with tqdm --with pytest python -m pytest market_data/tests/ -q -m "not network"`
 - 真網路 smoke(端點活性 + 面板走 DB 驗證,CI network-smoke 也跑):同上指令改 `-m network`

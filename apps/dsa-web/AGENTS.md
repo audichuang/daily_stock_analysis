@@ -17,7 +17,7 @@
 
 - API 呼叫一律走 `src/api/*`(共用 `api/index.ts` 的 axios 實例,自帶 `attachParsedApiError` 統一錯誤解析);**不要在元件裡直接 fetch/axios**。
 - 全域狀態:zustand(`src/stores/`);auth 與 UI 語言用 context(`src/contexts/`)。
-- UI 文案是 TS 常數表(`src/locales/*.ts`、`src/i18n/`),**每組文案 zh / en / zh-TW 三語都要補**。`i18n/uiText.ts`(`UI_TEXT: Record<UiLanguage, Record<UiTextKey, string>>`,`UiTextKey = keyof typeof zh`)與 `locales/*.ts` 多為嚴格 `Record` 型別——**漏一語會 tsc build 失敗**(合併上游最常踩:上游只加 zh/en,zh-TW 缺鍵即編譯錯,本 repo 已踩過兩次);少數鬆散表才只是畫面缺字。
+- UI 文案是 TS 常數表(`src/locales/*.ts`、`src/i18n/`),**每組文案 zh / en / zh-TW 三語都要補**。`i18n/uiText.ts`(`UI_TEXT: Record<UiLanguage, Record<UiTextKey, string>>`,`UiTextKey = keyof typeof zh`)與 `locales/*.ts` 多為嚴格 `Record` 型別——**漏一語會 tsc build 失敗**(合併上游最常踩:上游只加 zh/en,zh-TW 缺鍵即編譯錯,本 repo 已多次實踩);少數鬆散表才只是畫面缺字。
 - 型別集中在 `src/types/`,與後端 schema 對齊;改後端 API 欄位時記得同步這裡。
 
 ## 驗證

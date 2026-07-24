@@ -1,3 +1,8 @@
+---
+name: analyze-pr
+description: 审查 GitHub Pull Request 的必要性、验证证据、兼容性风险与合入判定。当用户要 review 某个 PR、或判断它能不能合入时使用。
+---
+
 # Analyze PR
 
 分析 GitHub Pull Request，评估必要性、描述完整性、验证证据、主要风险与是否可直接合入。
@@ -14,20 +19,11 @@
 
 分析时使用简洁中文，优先遵循仓库根目录 `AGENTS.md` 和 `.github/PULL_REQUEST_TEMPLATE.md`。
 
-### Step 1: 同步最新代码基线
+审查按这个维度顺序推进：**必要性 → 关联性（对应 issue）→ 标题建议 → 描述完整性 → 验证证据 → 实现正确性 → 合入判定**。输出文档的 `Summary` 要逐项覆盖这七个维度，缺项即视为审查未完成。
 
-分析 PR 前必须先刷新远端状态，并尽量把本地安全推进到最新基线：
+### Step 1: 同步基线
 
-```bash
-git status --short
-git fetch --all --prune
-# 仅当工作区干净且当前分支可 fast-forward 时执行：
-git pull --ff-only
-```
-
-- 只有在工作区干净、当前分支有可 fast-forward 的上游时，才执行并接受 `git pull --ff-only` 的结果。
-- 如存在本地改动、冲突状态、未跟踪风险文件、无上游分支或无法 fast-forward，不要执行 `stash`、`reset`、强制切分支或覆盖本地状态；改用已 fetch 的 `origin/main`、PR head 或 GitHub diff 做分析。
-- 在输出文档的 `Validation Evidence` 中记录同步结果：本地 HEAD、使用的远端基线，以及未更新本地工作树的原因（如有）。
+按 [`../shared/baseline-sync.md`](../shared/baseline-sync.md) 执行，并把结果记进输出文档的 `Validation Evidence`。
 
 ### Step 2: 拉取 PR 基本信息
 
@@ -82,7 +78,7 @@ gh run view <run_id> --log-failed
 
 如果必须补本地验证，按改动面选择最接近的检查，例如：
 
-- 后端：`./scripts/ci_gate.sh` 或 `python -m py_compile <changed_python_files>`
+- 后端：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（秒级快速门槛；本机必须带 `uv run`，否则 `python: command not found`）或 `uv run python -m py_compile <changed_python_files>`；**不要**在 review 场景跑不带参数的 `ci_gate.sh`，它等于 `all`、含约 30+ 分钟全量离线测试
 - 前端：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
 - 桌面端：先构建 Web，再构建 Electron
 
@@ -95,7 +91,19 @@ gh run view <run_id> --log-failed
 - 是否破坏 fallback、降级路径、通知链路或发布流程
 - 是否存在明显逻辑错误、异常吞没、安全问题、配置语义变化未同步文档
 
-### Step 6: 生成评审文档
+`fix` 类 PR 必须能回答四项：原问题、根因、修复点、回归风险。答不全即描述完整性不足。
+
+### Step 6: 合入判定
+
+出现以下任一项即判定为不可直接合入，并在 `Draft Review Comment` 写明卡在哪一项：
+
+- 正确性或安全性问题
+- 阻断型 CI 未通过（`ai-governance` / `backend-gate` / `docker-build`，以及前端改动触发时的 `web-gate`）
+- PR 描述与实际改动内容实质性矛盾
+- 缺少回滚方案
+- 反复出现未收敛的契约漂移、补丁堆叠或验证证据失真——这种情况建议关闭重做，而不是继续逐点 review；作者侧的收敛程序见 skill `respond-to-review`
+
+### Step 7: 生成评审文档
 
 保存到 `.claude/reviews/prs/pr-<number>.md`
 
@@ -119,6 +127,7 @@ gh run view <run_id> --log-failed
 - PR title：
 - description 完整性：
 - 验证情况：
+- 实现正确性：
 - 主要风险：
 - 是否可直接合入：
 
@@ -142,20 +151,8 @@ gh run view <run_id> --log-failed
 <建议评论内容>
 ```
 
-## Allowed Auto-Actions (No Confirmation Needed)
+## 可自主执行
 
-- 拉取 PR 元数据、diff、评论和 CI 状态
-- 执行 `git fetch --all --prune`，并在工作区干净且可 fast-forward 时执行 `git pull --ff-only`
-- 阅读相关代码、模板、工作流与文档
-- 在必要时执行最小化本地验证
-- 生成评审文档
+拉取 PR 元数据 / diff / 评论 / CI 状态、阅读代码与模板、执行 Step 4 的最小化本地验证、生成评审文档，以及 [`../shared/baseline-sync.md`](../shared/baseline-sync.md) 允许的 fast-forward 同步。
 
-## Actions Requiring Confirmation
-
-执行以下动作前，先询问用户：
-
-1. 发布评论
-2. Approve PR
-3. Request changes
-4. Merge PR
-5. 关闭 PR
+改变远端状态的操作（发布评论、approve、request changes、merge、关闭 PR）按同一份文件的确认边界执行——一律先问。
