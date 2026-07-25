@@ -12,6 +12,12 @@ jobs:
   changes:
     name: 🔎 Change Detection
     runs-on: ubuntu-latest
+    # fork 增量：本仓库 default_workflow_permissions=read（仅 contents/packages），
+    # dorny/paths-filter 在 pull_request 事件下要读 changed files，缺 pull-requests
+    # 权限会以 "Resource not accessible by integration" 失败，导致下游 job 全部 skip。
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       frontend: ${{ steps.filter.outputs.frontend }}
       futu_packaging: ${{ steps.filter.outputs.futu_packaging }}
