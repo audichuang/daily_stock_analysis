@@ -214,3 +214,5 @@ if ($packagedStrategyCount -ne $sourceStrategyCount) {
 }
 
 Write-Host 'Backend build completed.'
+
+# CI trigger touch (temporary verification branch, not for merge)
