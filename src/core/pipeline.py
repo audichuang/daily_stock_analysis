@@ -39,6 +39,7 @@ from src.analyzer import (
 )
 from src.notification import NotificationService, NotificationChannel
 from src.notification_sender import OutboundMessage
+from src.schemas.decision_action import normalize_decision_action
 from src.report_language import (
     get_placeholder_text,
     get_unknown_text,
@@ -53,6 +54,11 @@ from src.analysis_context_pack_prompt import format_analysis_context_pack_prompt
 from src.analysis_context_pack_overview import render_analysis_context_pack_overview
 from src.market_phase_summary import MARKET_PHASE_SUMMARY_KEY, render_market_phase_summary
 from src.daily_market_context_guardrail import apply_daily_market_context_guardrail
+from src.agent.final_explanation import (
+    PipelineActionAdjustment,
+    build_pipeline_final_explanation,
+    capture_pipeline_action_adjustment,
+)
 from src.phase_decision_guardrail import apply_phase_decision_guardrails
 from src.services.daily_market_context import (
     DailyMarketContext,
@@ -78,7 +84,10 @@ from src.services.run_diagnostics import (
     reset_run_diagnostic_context,
     sanitize_diagnostic_text,
 )
-from src.services.decision_signal_extractor import extract_and_persist_from_analysis_result
+from src.services.decision_signal_extractor import (
+    extract_and_persist_from_analysis_result,
+    resolve_decision_signal_action_fields,
+)
 from src.services.decision_signal_summary import summarize_decision_signal
 from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
@@ -1442,6 +1451,7 @@ class StockAnalysisPipeline:
                 snapshot_context=agent_snapshot_context,
                 news_content_for_save=None,
                 attach_agent_diagnostics=True,
+                runtime_facts=getattr(agent_result, "runtime_facts", None),
             )
 
             return result
@@ -1834,16 +1844,21 @@ class StockAnalysisPipeline:
         report_type: Any,
         previous_operation_advice: Any,
     ) -> AnalysisResult:
+        # A guardrail may rewrite the advice after the Agent action was parsed;
+        # discard that stale action before using the same resolver as the
+        # downstream DecisionSignal builder.
         previous_advice = str(previous_operation_advice or "").strip()
         current_advice = str(getattr(result, "operation_advice", None) or "").strip()
-        explicit_action = current_advice if previous_advice != current_advice else None
-        return populate_decision_action_fields(
+        if previous_advice != current_advice:
+            result.action = None
+            result.action_label = None
+        fields = resolve_decision_signal_action_fields(
             result,
-            explicit_action=explicit_action,
-            report_type=report_type,
-            use_existing_action=(previous_advice == current_advice),
-            align_with_score=(previous_advice == current_advice),
+            report_type=str(report_type or ""),
         )
+        result.action = fields["action"]
+        result.action_label = fields["action_label"]
+        return result
 
     @staticmethod
     def _agent_dashboard_value(
@@ -2306,6 +2321,42 @@ class StockAnalysisPipeline:
             snapshot["skills"] = list(self.analysis_skills)
         return snapshot
 
+    def _persist_skill_opinion_samples_after_history_save(
+        self,
+        *,
+        runtime_facts: Any,
+        analysis_history_id: int,
+        stock_code: str,
+        analysis_context_pack_overview: Optional[Dict[str, Any]],
+    ) -> None:
+        """Best-effort persistence for valid individual skill opinions."""
+        opinions = getattr(runtime_facts, "skill_opinions", ()) if runtime_facts else ()
+        if not opinions:
+            return
+
+        quality_level = None
+        if isinstance(analysis_context_pack_overview, dict):
+            quality = analysis_context_pack_overview.get("data_quality")
+            if isinstance(quality, dict):
+                quality_level = quality.get("level")
+
+        try:
+            from src.services.skill_opinion_sample_service import SkillOpinionSampleService
+
+            SkillOpinionSampleService(db_manager=self.db).persist(
+                analysis_history_id=analysis_history_id,
+                stock_code=stock_code,
+                opinions=opinions,
+                data_quality_level=quality_level,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Skill opinion sample persistence skipped after history save: "
+                "stock_code=%s error_type=%s",
+                stock_code,
+                type(exc).__name__,
+            )
+
     def _extract_decision_signal_after_history_save(
         self,
         *,
@@ -2365,6 +2416,7 @@ class StockAnalysisPipeline:
         snapshot_context: Dict[str, Any],
         news_content_for_save: Optional[str],
         attach_agent_diagnostics: bool = False,
+        runtime_facts: Any = None,
     ) -> Optional[AnalysisResult]:
         """Shared finalize-and-persist stage for legacy and agent analysis paths.
 
@@ -2373,17 +2425,64 @@ class StockAnalysisPipeline:
         `_analyze_with_agent` build their own `PipelineAnalysisArtifacts`
         and `snapshot_context` (enhanced_context for legacy, a sanitized
         initial_context for agent) before calling this.
+
+        `runtime_facts` is agent-only (upstream #2044): when present, every
+        guardrail's action change is captured so the dashboard can explain how
+        the agent's opening signal became the final action. The legacy path
+        passes None and skips both the explanation and the opinion samples.
+        `_refresh_decision_action_for_final_result` is idempotent, so running it
+        per guardrail instead of once at the end leaves the final action
+        unchanged for both paths.
         """
         if not result:
             return result
 
+        pipeline_adjustments: list[PipelineActionAdjustment] = []
+        pipeline_start_signal = getattr(result, "decision_type", "hold")
+        risk_application = (
+            getattr(runtime_facts, "risk_override_application", None)
+            if runtime_facts is not None
+            else None
+        )
+        if risk_application is not None:
+            pipeline_start_signal = risk_application.post_risk_signal.value
+        self._refresh_decision_action_for_final_result(
+            result,
+            report_type=report_type,
+            previous_operation_advice=getattr(result, "operation_advice", None),
+        )
+        pipeline_start_action = normalize_decision_action(getattr(result, "action", None))
+        action_chain_valid = pipeline_start_action is not None
+
+        def _capture(source: str, action_before: Any, advice_before: Any) -> None:
+            nonlocal action_chain_valid
+            self._refresh_decision_action_for_final_result(
+                result,
+                report_type=report_type,
+                previous_operation_advice=advice_before,
+            )
+            action_after = normalize_decision_action(getattr(result, "action", None))
+            if action_chain_valid and action_after is not None:
+                capture_pipeline_action_adjustment(
+                    pipeline_adjustments,
+                    source=source,
+                    before=action_before,
+                    after=action_after,
+                )
+            else:
+                action_chain_valid = False
+
         fill_price_position_if_needed(result, artifacts.trend_result, artifacts.realtime_quote)
-        action_source_advice = getattr(result, "operation_advice", None)
+        action_before_guardrail = getattr(result, "action", None)
+        advice_before_guardrail = getattr(result, "operation_advice", None)
         stabilize_decision_with_structure(result, artifacts.trend_result, artifacts.fundamental_context)
+        _capture("structure_and_fundamentals", action_before_guardrail, advice_before_guardrail)
         report_language = (
             getattr(result, "report_language", None)
             or getattr(self.config, "report_language", "zh")
         )
+        action_before_guardrail = getattr(result, "action", None)
+        advice_before_guardrail = getattr(result, "operation_advice", None)
         adjustments = apply_phase_decision_guardrails(
             result,
             market_phase_summary=market_phase_summary,
@@ -2392,6 +2491,9 @@ class StockAnalysisPipeline:
         )
         if adjustments:
             logger.info("[phase_decision_guardrail] Applied adjustments for %s: %s", artifacts.code, adjustments)
+        _capture("market_phase", action_before_guardrail, advice_before_guardrail)
+        action_before_guardrail = getattr(result, "action", None)
+        advice_before_guardrail = getattr(result, "operation_advice", None)
         market_context_adjustments = apply_daily_market_context_guardrail(
             result,
             daily_market_context=snapshot_context.get("daily_market_context"),
@@ -2403,6 +2505,7 @@ class StockAnalysisPipeline:
                 artifacts.code,
                 market_context_adjustments,
             )
+        _capture("daily_market_context", action_before_guardrail, advice_before_guardrail)
         if isinstance(artifacts.fundamental_context, dict):
             result.fundamental_context = artifacts.fundamental_context
         # Upstream #1981 attaches market_structure_context to the result in both
@@ -2412,11 +2515,29 @@ class StockAnalysisPipeline:
             result.market_structure_context = market_structure_context
         result.market_phase_summary = market_phase_summary
         result.analysis_context_pack_overview = analysis_context_pack_overview
-        self._refresh_decision_action_for_final_result(
-            result,
-            report_type=report_type,
-            previous_operation_advice=action_source_advice,
-        )
+        final_action = normalize_decision_action(getattr(result, "action", None))
+        if isinstance(result.dashboard, dict):
+            result.dashboard.pop("agent_disagreement_explanation", None)
+        if (
+            runtime_facts is not None
+            and action_chain_valid
+            and pipeline_start_action is not None
+            and final_action is not None
+        ):
+            if not isinstance(result.dashboard, dict):
+                result.dashboard = {}
+            result.dashboard["agent_disagreement_explanation"] = build_pipeline_final_explanation(
+                runtime_facts=runtime_facts,
+                pipeline_start_signal=pipeline_start_signal,
+                pipeline_start_action=pipeline_start_action,
+                final_action=final_action,
+                pipeline_adjustments=pipeline_adjustments,
+                data_quality=(
+                    analysis_context_pack_overview.get("data_quality")
+                    if isinstance(analysis_context_pack_overview, dict)
+                    else None
+                ),
+            )
 
         if result and result.success:
             try:
@@ -2455,6 +2576,12 @@ class StockAnalysisPipeline:
                     ),
                 )
                 if valid_saved_history_id:
+                    self._persist_skill_opinion_samples_after_history_save(
+                        runtime_facts=runtime_facts,
+                        analysis_history_id=saved_history_id,
+                        stock_code=artifacts.code,
+                        analysis_context_pack_overview=analysis_context_pack_overview,
+                    )
                     self._extract_decision_signal_after_history_save(
                         result=result,
                         query_id=artifacts.metadata.get("query_id"),

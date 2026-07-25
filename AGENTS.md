@@ -70,7 +70,7 @@ uv run python scripts/check_ai_assets.py
   - `src/`：`core/` 主流程编排、`services/` 业务服务、`repositories/` 数据访问三层；另有 `schemas/` 数据结构、`utils/` 通用工具、`data/` 股票索引与代码映射、`patches/` 三方库补丁
   - `src/notification_sender/`：通知渠道适配（飞书 / Discord / ntfy / 自定义 Webhook，含 Bark）；新增渠道需实现 `base.py` 的 `Sender` protocol 并在 `NotificationService._senders` 注册
   - `src/llm/`：LLM 生成后端、usage / provider 缓存，与 LLM transport 编排（`client.py::LLMClient`，backend fallback / 脱敏 / 流式；与 `GeminiAnalyzer` 的边界见该文件模块 docstring）
-  - `src/agent/`：tool-calling agent（多轮对话、分歧检测、事件流），由 `AGENT_MODE=true` 启用；可插拔策略定义在根目录 `strategies/*.yaml`（见 `strategies/README.md`）
+  - `src/agent/`：tool-calling agent（多轮对话、分歧检测、事件流），由 `AGENT_MODE=true` 启用；可插拔策略定义在根目录 `strategies/*.yaml`（见 `strategies/README.md`）。多策略审议/合成/调度（`skills/deliberation|synthesis|scheduler|engine`）的证据契约与字段语义在 `docs/multi-strategy-contract.md`；问股后端由 `AGENT_BACKEND` 选择（`auto` 走 LiteLLM 路径，`codex_app_server` 走本机 Codex）
   - `data_provider/`：多数据源适配与 fallback
   - `market_data/`：台股行情爬取 → 统一 Postgres（market schema），细节见 `market_data/AGENTS.md`
 
