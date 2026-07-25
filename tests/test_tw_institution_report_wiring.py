@@ -40,11 +40,17 @@ _FAKE_REC = {
     "total_net": 3576,
 }
 
+# Shared config for the coverage/shape cases below. The fetchers are mocked and
+# return immediately, so these budgets only need to be large enough that pipeline
+# overhead can never exhaust them — the earlier 1.5s/0.8s were tight enough that a
+# loaded CI runner timed the stage out and fail-open collapsed institution to
+# 'not_supported' (three tests red on GitHub Actions, green locally). Cases that
+# genuinely assert timeout behaviour define their own budgets instead of using this.
 _OFFSHORE_CFG = SimpleNamespace(
     enable_fundamental_pipeline=True,
     fundamental_cache_ttl_seconds=0,
-    fundamental_stage_timeout_seconds=1.5,
-    fundamental_fetch_timeout_seconds=0.8,
+    fundamental_stage_timeout_seconds=30.0,
+    fundamental_fetch_timeout_seconds=15.0,
     fundamental_retry_max=1,
 )
 
