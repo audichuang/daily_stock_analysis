@@ -1,0 +1,333 @@
+#!/usr/bin/env python3
+"""回驗 `tw-swing-research` 的判斷：AI 那一層到底有沒有加值。
+
+量化層的候選池已經是正期望值（974 個事件、均值 +10.30%），所以「進場的那些賺錢」證明不了
+任何事——**全收也會賺**。這支腳本因此不看命中率，看四個量：
+
+    E[R|enter] − E[R|全收]   選出來的比全收好多少（<0 就是這層在扣分）
+    E[R|pass]               放棄掉的後來漲了多少（機會成本）
+    Brier(conf) vs Brier(基準率)   `confidence` 有沒有比「一律報 20.7%」更準
+    可成交口徑               同樣 slots 個空位下「全收 vs 只收 enter」兩本帳
+
+最後一項不可省：事件均值可以被同日同題材的一堆訊號撐高，但真實帳戶只拿得到 slots 檔。
+前三項的結論一律要求 bootstrap 區間不跨零**且**已到期樣本過門檻，否則標為 inconclusive——
+差值本身永遠不等於零，「>0 就有加值」是空話。
+
+報酬定義與 `measure_signal_forward.py` 完全一致：**次一交易日開盤**買進、**第 60 個交易日
+收盤**賣出、扣 0.6% 來回成本、前復權價。進場日取「訊號日與 `decided_at` 兩者較晚者」的次一
+交易日——只看訊號日會讓「週五訊號、週一晚間才研究完」的判斷用到週一白天的開盤價。
+
+用法：
+    uv run --env-file .env python scripts/verify_swing_decisions.py
+    uv run --env-file .env python scripts/verify_swing_decisions.py --log path/to.jsonl
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from sqlalchemy import text
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from market_data.adjust import load_factors  # noqa: E402
+from market_data.db import get_engine  # noqa: E402
+from measure_signal_forward import COST  # noqa: E402
+
+LOG = Path("journal/swing-decisions.jsonl")   # 進版控：見 journal/README.md
+BASE_RATE = 0.207        # 候選池 P(第 60 日收盤淨報酬 ≥ +30%)，`confidence` 的比較基準
+MIN_MATURED = 20         # 低於這個數量的結論一律標為雜訊
+
+
+def read_log(path):
+    rows = []
+    for ln, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"{path}:{ln} 不是合法 JSON（一行一個決策）: {exc}")
+    return pd.DataFrame(rows)
+
+
+def window(cal, d, horizon, decided_at=None):
+    """(訊號日, 判斷時點) → (進場日, 出場日, 還差幾個交易日)。未到期時前兩者為 None。
+
+    進場日是**晚於「訊號日與判斷時點兩者較晚者」的第一個交易日**。只用訊號日是錯的：
+    週五的候選若到週一晚間才研究完，用週一開盤成交等於拿週一白天還不存在的判斷去下單
+    （`decided_at` 就是為了讓這件事可稽核才要求填的）。判斷時點只取到日，所以盤前做的
+    判斷會被保守地延後一天。
+
+    持有長度固定 `horizon` 個交易日（進場日算第 1 天），與 `measure_signal_forward` 的
+    「T+1 開盤 → T+h 收盤」逐格一致。
+    """
+    base = pd.Timestamp(d)
+    if decided_at is not None and not (isinstance(decided_at, float) and np.isnan(decided_at)):
+        da = pd.Timestamp(decided_at)
+        if da.tzinfo is not None:
+            da = da.tz_convert("Asia/Taipei").tz_localize(None)
+        base = max(base, da.normalize())
+    i = int(cal.searchsorted(base, side="right")) - 1
+    if i < 0:
+        return None, None, np.nan
+    if i + horizon >= len(cal):
+        return None, None, i + horizon - (len(cal) - 1)
+    return cal[i + 1], cal[i + horizon], 0
+
+
+def fill_ok(entry_px, entry_range):
+    """開盤價有沒有落在建議進場區間內（沒填區間就一律算成交）。
+
+    開盤跳空穿過區間**上界** = 這筆根本沒成交，算成「有成交」會把一個沒發生的決策計入
+    加值統計。區間下緣以下成交是更好的價格，仍算成交。
+    """
+    if not isinstance(entry_range, (list, tuple)) or not len(entry_range):
+        return True
+    return float(entry_px) <= float(max(entry_range))
+
+
+def realized(engine, df, horizon):
+    """把每個決策接上實際報酬；未滿 horizon 的標成 pending、跳空穿過區間的標成 no_fill。"""
+    ids = sorted(df["stock_id"].astype(str).unique())
+    lo = pd.to_datetime(df["date"]).min() - pd.Timedelta(days=10)
+    with engine.connect() as c:
+        px = pd.read_sql(text("select stock_id, date, open, close from market.price "
+                              "where date >= :lo and stock_id = any(:ids)"), c,
+                         params={"lo": lo.date(), "ids": ids}, parse_dates=["date"])
+        cal = pd.DatetimeIndex(sorted(r[0] for r in c.execute(text(
+            "select distinct date from market.price where date >= :lo"),
+            {"lo": lo.date()}).fetchall()))
+    if px.empty:
+        raise SystemExit("market.price 查不到這些標的——先確認 DATABASE_URL 與資料是否已更新")
+    op = px.pivot(index="date", columns="stock_id", values="open").astype(float)
+    cl = px.pivot(index="date", columns="stock_id", values="close").astype(float)
+    adj = load_factors(engine, cl.index, cl.columns)
+    op, cl = op * adj, cl * adj
+
+    out = []
+    for _, r in df.iterrows():
+        e_d, x_d, left = window(cal, r["date"], horizon, r.get("decided_at"))
+        rec = {"pending": True, "r": np.nan, "left": left, "no_fill": False,
+               "entry_date": pd.NaT, "entry_px": np.nan}
+        sid = str(r["stock_id"])
+        if e_d is not None and sid in op.columns and pd.notna(op.at[e_d, sid]):
+            entry = float(op.at[e_d, sid])
+            if not fill_ok(entry, r.get("entry_range")):
+                rec.update(pending=False, no_fill=True, entry_date=e_d, entry_px=entry)
+            else:
+                px_out = cl.at[x_d, sid]
+                if pd.isna(px_out):                      # 期間停止交易 → 最後成交價結算
+                    px_out = cl[sid].loc[:x_d].dropna().iloc[-1]
+                rec = {"pending": False, "no_fill": False, "left": 0,
+                       "r": float(px_out / entry - 1 - COST),
+                       "entry_date": e_d, "entry_px": entry}
+        out.append(rec)
+    return pd.concat([df.reset_index(drop=True), pd.DataFrame(out)], axis=1)
+
+
+def diff_ci(a, b, n=2000, seed=42):
+    """E[a] − E[b] 的 bootstrap 95% 區間（配對的兩組共用同一批重抽索引不成立，故各自重抽）。"""
+    if len(a) < 2 or len(b) < 2:
+        return float("nan"), float("nan")
+    rng = np.random.default_rng(seed)
+    av, bv = np.asarray(a, float), np.asarray(b, float)
+    d = [av[rng.integers(0, len(av), len(av))].mean()
+         - bv[rng.integers(0, len(bv), len(bv))].mean() for _ in range(n)]
+    return float(np.percentile(d, 2.5)), float(np.percentile(d, 97.5))
+
+
+def paired_portfolio(df, engine, horizon, slots):
+    """把決策放回組合：同樣 `slots` 個空位，比「全收」與「只收 enter」兩本帳。
+
+    事件均值不是可投資報酬——20 個同日同題材的訊號可以讓均值很漂亮，但真實帳戶只拿得到
+    `slots` 檔。這一段才是「AI 這層有沒有加值」的可成交版本。
+    """
+    from portfolio_walkforward import simulate           # 延遲載入，避免循環相依
+    ids = sorted(df["stock_id"].astype(str).unique())
+    lo = pd.to_datetime(df["date"]).min() - pd.Timedelta(days=10)
+    with engine.connect() as c:
+        px = pd.read_sql(text("select stock_id, date, open, close from market.price "
+                              "where date >= :lo and stock_id = any(:ids)"), c,
+                         params={"lo": lo.date(), "ids": ids}, parse_dates=["date"])
+    op = px.pivot(index="date", columns="stock_id", values="open").astype(float)
+    cl = px.pivot(index="date", columns="stock_id", values="close").astype(float)
+    adj = load_factors(engine, cl.index, cl.columns)
+    piv = {"open": op * adj, "close": cl * adj}
+    conf = {(pd.Timestamp(r["date"]), str(r["stock_id"])): float(r.get("confidence") or 0)
+            for _, r in df.iterrows()}
+
+    def build(rows):
+        s = pd.DataFrame(False, index=cl.index, columns=cl.columns)
+        for _, r in rows.iterrows():
+            d = pd.Timestamp(r["date"])
+            if d in s.index and str(r["stock_id"]) in s.columns:
+                s.at[d, str(r["stock_id"])] = True
+        return s
+
+    order = lambda d, sid: conf.get((d, sid), 0.0)       # noqa: E731 - 依 confidence 排序
+    res = {}
+    for label, rows in (("全收", df), ("只收 enter", df[df["verdict"] == "enter"])):
+        if not len(rows):
+            continue
+        eq, tr, _, _ = simulate(piv, build(rows), None, None, horizon, slots,
+                                cl.index[0], cl.index[-1], rank=order)
+        res[label] = (eq, tr)
+    return res
+
+
+def summarize(r, label):
+    if not len(r):
+        return {"組": label, "筆數": 0}
+    return {"組": label, "筆數": len(r), "均值": f"{r.mean() * 100:+.2f}%",
+            "中位": f"{r.median() * 100:+.2f}%", "勝率": f"{(r > 0).mean() * 100:.1f}%",
+            "P(≥30%)": f"{(r >= .3).mean() * 100:.1f}%",
+            "P(≤-20%)": f"{(r <= -.2).mean() * 100:.1f}%"}
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description="回驗波段研究判斷（Brier + 加值差值）")
+    p.add_argument("--log", default=str(LOG))
+    p.add_argument("--horizon", type=int, default=60, help="持有交易日數（與量測一致）")
+    p.add_argument("--slots", type=int, default=5,
+                   help="配對組合驗證的空位數（與 portfolio_walkforward 一致）")
+    a = p.parse_args(argv)
+
+    path = Path(a.log)
+    if not path.exists():
+        print(f"找不到 {path}——`tw-swing-research` 技能每做一次判斷會追加一行到這裡"
+              f"（見 journal/README.md）。還沒有判斷就沒有東西可回驗。")
+        return 0
+    df = read_log(path)
+    if not len(df):
+        print(f"{path} 是空的。")
+        return 0
+    need = {"date", "stock_id", "verdict"}
+    if miss := need - set(df.columns):
+        raise SystemExit(f"決策日誌缺欄位 {miss}——這些是回驗的必要欄位")
+    dup = df.duplicated(subset=["date", "stock_id"], keep=False)
+    if dup.any():
+        raise SystemExit(f"決策日誌有重複的 (date, stock_id)，會讓同一個決策被計兩次：\n"
+                         f"{df.loc[dup, ['date', 'stock_id', 'verdict']].to_string(index=False)}")
+    if "decided_at" not in df.columns or df["decided_at"].isna().any():
+        n = len(df) if "decided_at" not in df.columns else int(df["decided_at"].isna().sum())
+        print(f"**警告：{n} 筆沒有 `decided_at`**——這些筆只能用訊號日推進場日，"
+              f"無法證明判斷不是事後做的（skill 要求必填）。")
+
+    eng = get_engine()
+    df = realized(eng, df, a.horizon)
+    nf = df[df["no_fill"]]
+    mat, pend = df[~df["pending"] & ~df["no_fill"]], df[df["pending"]]
+    print(f"決策 {len(df)} 筆　已到期 {len(mat)} 筆　未到期 {len(pend)} 筆　"
+          f"跳空穿過區間未成交 {len(nf)} 筆（持有 {a.horizon} 交易日）")
+    if len(pend):
+        pv = pend.assign(剩餘交易日=pend["left"].astype("Int64"))
+        print(pv[["date", "stock_id", "verdict", "剩餘交易日"]].to_string(index=False))
+    if len(nf):
+        print("未成交（開盤已高於建議區間上界）:")
+        print(nf[["date", "stock_id", "entry_date", "entry_px"]].to_string(index=False))
+    if not len(mat):
+        print("\n還沒有到期且成交的決策，無法評估。")
+        return 0
+    thin = len(mat) < MIN_MATURED
+    if thin:
+        print(f"\n**已到期只有 {len(mat)} 筆（< {MIN_MATURED}）：以下全部是雜訊，"
+              f"不足以判定這一層有沒有加值。下面的判定一律標為 inconclusive。**")
+
+    ent = mat[mat["verdict"] == "enter"]
+    pas = mat[mat["verdict"] == "pass"]
+    print("\n=== 分布 ===")
+    print(pd.DataFrame([summarize(ent["r"], "enter"), summarize(pas["r"], "pass"),
+                        summarize(mat["r"], "全收（不篩選）")]).set_index("組").to_string())
+
+    print("\n=== 加值（事件均值口徑）===")
+    if len(ent):
+        add = ent["r"].mean() - mat["r"].mean()
+        lo, hi = diff_ci(ent["r"], mat["r"])
+        # 差值本身永遠不為零,所以「>0 就有加值」是空話。要有結論,區間必須不跨零、
+        # 且樣本量過門檻——否則一律 inconclusive。
+        sig_ = (not thin) and pd.notna(lo) and (lo > 0 or hi < 0)
+        verdict = ("**inconclusive**（區間跨零或樣本不足）" if not sig_ else
+                   "這一層有加值" if lo > 0 else "**這一層在扣分**")
+        print(f"E[R|enter] − E[R|全收] = {add * 100:+.2f}pp"
+              f"（bootstrap 95% {lo * 100:+.2f}pp ~ {hi * 100:+.2f}pp）→ {verdict}")
+    if len(pas):
+        print(f"E[R|pass] = {pas['r'].mean() * 100:+.2f}%"
+              f"　放棄 {len(pas)} 筆，其中 {(pas['r'] >= .3).sum()} 筆後來漲逾 30%（機會成本）")
+
+    # === 可成交口徑：同樣的空位限制下，全收 vs 只收 enter ===
+    try:
+        arms = paired_portfolio(df[~df["pending"] & ~df["no_fill"]], eng, a.horizon, a.slots)
+    except Exception as exc:                                  # noqa: BLE001
+        arms = {}
+        print(f"\n（配對組合驗證跳過：{exc}）")
+    if len(arms) == 2:
+        print(f"\n=== 加值（可成交口徑：{a.slots} 個空位、同日資金競爭）===")
+        rows = {}
+        for label, (eq, tr) in arms.items():
+            rows[label] = {"期末權益": f"{eq.iloc[-1] / eq.iloc[0]:.3f}x",
+                           "成交": len(tr),
+                           "均值": f"{tr['r'].mean() * 100:+.2f}%" if len(tr) else "—"}
+        print(pd.DataFrame(rows).T.to_string())
+        print("事件均值可以被同日同題材的一堆訊號撐高，但真實帳戶只拿得到 "
+              f"{a.slots} 檔——這一欄才是可投資的加值。")
+
+    if "confidence" in mat.columns:
+        cf = mat.dropna(subset=["confidence"])
+        if len(cf):
+            y = (cf["r"] >= 0.30).astype(float)
+            c = cf["confidence"].astype(float)
+            b, b0 = float(((c - y) ** 2).mean()), float(((BASE_RATE - y) ** 2).mean())
+            lo, hi = diff_ci((c - y) ** 2, (BASE_RATE - y) ** 2)
+            better = (not thin) and pd.notna(lo) and (lo > 0 or hi < 0)
+            print(f"\n=== confidence 校準（{len(cf)} 筆）===")
+            print(f"Brier {b:.4f}　vs 一律報基準率 {BASE_RATE:.3f} 的 {b0:.4f}"
+                  f"（差值 95% {lo:+.4f} ~ {hi:+.4f}）→ "
+                  + ("**inconclusive**" if not better else
+                     "**沒有比基準率準**" if lo > 0 else "比基準率準"))
+            print(f"（基準率 {BASE_RATE:.3f} 只在訊號版本與候選母體不變時才是公平對照——"
+                  f"日誌沒有記 batch 與版本，換過門檻就要重算）")
+            print(f"平均 confidence {c.mean():.3f}　實際命中率 {y.mean():.3f}"
+                  f"（差 {(c.mean() - y.mean()) * 100:+.1f}pp，>0 是過度自信）")
+            bins = pd.cut(c, [0, .2, .3, .4, 1.0], right=False)
+            g = pd.DataFrame({"conf": c, "hit": y}).groupby(bins, observed=True).agg(
+                筆數=("hit", "size"), 平均conf=("conf", "mean"), 實際命中率=("hit", "mean"))
+            print(g.round(3).to_string())
+
+    if {"exp_upside", "exp_downside"} <= set(mat.columns):
+        ev = mat.dropna(subset=["exp_upside", "exp_downside", "confidence"])
+        if len(ev):
+            pred = (ev["exp_upside"].astype(float) * ev["confidence"].astype(float)
+                    + ev["exp_downside"].astype(float) * (1 - ev["confidence"].astype(float)))
+            print(f"\n=== 期望值估計 ===")
+            print(f"預測均值 {pred.mean() * 100:+.2f}%　實際均值 {ev['r'].mean() * 100:+.2f}%"
+                  f"　偏差 {(pred.mean() - ev['r'].mean()) * 100:+.2f}pp")
+
+    # === 哪一類判斷比較準：按理由的分類拆開看 ===
+    # 這一段是「以後檢討怎樣比較好」的入口——它回答的不是「賺不賺」，是**哪一種理由撐得住**
+    # （可延續的催化劑真的比較好嗎？「已消化」的是不是真的該躲？主題有沒有押太集中？）。
+    for col, title in (("catalyst_type", "催化劑類型"), ("durable", "催化劑可否延續"),
+                       ("digested", "消化程度"), ("theme", "主題"),
+                       ("peer_confirm", "同業有無同步")):
+        if col not in mat.columns or not mat[col].notna().any():
+            continue
+        sub = mat.dropna(subset=[col])
+        g = sub.groupby(sub[col].astype(str))["r"].agg(
+            筆數="size", 均值="mean", 勝率=lambda s: (s > 0).mean(),
+            命中率=lambda s: (s >= .3).mean())
+        for c2 in ("均值", "勝率", "命中率"):
+            g[c2] = (g[c2] * 100).round(1)
+        print(f"\n=== 按{title}拆（enter+pass 都算，看的是判斷理由不是持倉）===")
+        print(g.to_string())
+        if thin:
+            print("（樣本不足，這張表只是先把管線接起來，別當結論）")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

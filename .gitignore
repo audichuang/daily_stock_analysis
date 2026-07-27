@@ -77,6 +77,8 @@ local/
 run.sh
 
 verify_*.py
+# 例外：这个是流水线第 4 层的常驻工具，不是一次性验证脚本（见 docs/tw-swing-pipeline.md）
+!scripts/verify_swing_decisions.py
 
 # ignore Claude workspace artifacts, but keep shared repo skills versioned
 .claude/*
