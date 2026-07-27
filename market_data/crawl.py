@@ -70,6 +70,10 @@ DAILY = {
                       ["stock_id", "date"]),
     "margin": (lambda d: sources.crawl_margin(d), etl.transform_margin,
                models.Margin, ["stock_id", "date"]),
+    # valuation 走 BWIBBU_d(帶日期,可回補);daily 的快照仍走 BWIBBU_ALL。
+    # fetch 已輸出 typed 英文欄位,故 transform 為 identity。
+    "valuation": (lambda d: sources.crawl_valuation_day(d), lambda df: df,
+                  models.Valuation, ["stock_id", "date"]),
 }
 
 
@@ -246,7 +250,14 @@ def daily_update(engine=None, asof=None, days=5):
 
     eng = engine or get_engine()
     asof = asof or _dt.date.today()
-    dates = [asof - _dt.timedelta(days=i) for i in range(days)]
+    # ``days`` 是**交易日**不是曆日:用 5 個曆日的話,週末＋連假一來實際只回補 2~3 個交易日,
+    # 而法人/融資是 T+1 才補齊的,窗口太窄會讓那幾天永久缺。asof 自己也要進去——當日的
+    # price 還沒入庫,不會出現在下面查到的歷史交易日裡。
+    with eng.begin() as conn:
+        recent = [r[0] for r in conn.execute(text(
+            "SELECT DISTINCT date FROM market.price WHERE date <= :d "
+            "ORDER BY date DESC LIMIT :n"), {"d": asof, "n": days}).fetchall()]
+    dates = sorted({asof, *recent})
     for source in ("price", "institutional", "margin"):
         crawl_range(eng, source, dates)
     with eng.begin() as conn:
@@ -260,22 +271,158 @@ def daily_update(engine=None, asof=None, days=5):
                           asof + _dt.timedelta(days=90))
 
 
+def pit_revenue_gaps(conn, start, end, only=None):
+    """回傳 [(stock_id, year, month)]:當月有交易、但 `monthly_revenue` 缺該月的組合。
+
+    只針對**已停止交易**的股票。這是修存活偏誤:月營收彙總報表 `t21sc03` 是動態產生的,
+    只列目前仍在申報的公司,所以後來下市的公司在歷史回補裡永久缺席——而選股要求
+    `yoy >= 20`,等於整個負尾被系統性移除。
+
+    **下市判定用 `price` 表最後交易日,不是「不在 `stock_info` 裡」**——`stock_info` 只含
+    上市(TWSE)約 1,100 檔,用它判定會把全部上櫃公司都當成下市(實測會從 70 檔暴增到 973 檔)。
+    上櫃公司的月營收缺漏是另一件事(彙總報表只走 `/sii/`),那是覆蓋範圍限制而非存活偏誤。
+    """
+    rows = conn.execute(text("""
+        with last_day as (select max(date) d from market.price),
+        traded as (
+          select p.stock_id,
+                 extract(year from p.date)::int  y,
+                 extract(month from p.date)::int m
+          from market.price p
+          where p.date between :s and :e
+            and length(p.stock_id) = 4 and p.stock_id ~ '^[0-9]{4}$'
+            and p.stock_id not like '00%' and p.stock_id not like '91%'
+            and p.stock_id in (
+              select stock_id from market.price
+              group by stock_id
+              having max(date) < (select d from last_day) - interval '14 days')
+          group by 1, 2, 3
+        )
+        select t.stock_id, t.y, t.m from traded t
+        where not exists (
+          select 1 from market.monthly_revenue r
+          where r.stock_id = t.stock_id
+            and extract(year from r.revenue_month)::int = t.y
+            and extract(month from r.revenue_month)::int = t.m)
+        order by t.stock_id, t.y, t.m
+    """), {"s": start, "e": end}).fetchall()
+    gaps = [(r[0], r[1], r[2]) for r in rows]
+    if only is not None:
+        want = set(only)
+        gaps = [g for g in gaps if g in want]
+    return gaps
+
+
+# 只有這兩個原因代表「這家公司真的補不回來」，可以跳過其餘月份。其他失敗（HTTP、解析、
+# 月份不符、單月無資料）都是暫時或個別月份的問題，不能據此放棄整檔——否則「補不回的
+# 公司數」會被 HTTP 失敗虛胖，而那個數字正是存活偏誤殘餘量的分母。
+_TERMINAL_REASONS = ("not_public", "foreign_exempt")
+
+
+def backfill_pit_revenue(engine, start, end, delay=3.0, limit=None, only=None):
+    """逐公司逐月補下市公司的月營收（MOPS 個別公司查詢）。回傳統計 dict。
+
+    `delay` 是每次請求後的間隔——MOPS 同屬 TWSE,密集請求會被擋。
+    失敗原因分開統計（見 `_TERMINAL_REASONS`）:只有「不繼續公開發行／外國發行人免申報」
+    才是硬邊界並跳過該公司其餘月份;HTTP 或解析失敗會留在 `retryable`,下次執行時
+    `pit_revenue_gaps` 仍會列出來重試。
+    """
+    import time as _time
+    from collections import Counter
+
+    with engine.begin() as conn:
+        gaps = pit_revenue_gaps(conn, start, end, only=only)
+    if limit:
+        gaps = gaps[:limit]
+    stats = {"requested": 0, "written": 0, "reasons": Counter(),
+             "stocks_ok": set(), "stocks_terminal": {}, "retryable": []}
+    for sid, y, m in gaps:
+        if sid in stats["stocks_terminal"]:
+            continue          # 整檔不繼續公開發行,不用逐月重試
+        rec, reason = sources.crawl_company_monthly_revenue(sid, y, m)
+        stats["requested"] += 1
+        stats["reasons"][reason] += 1
+        if rec is None:
+            if reason in _TERMINAL_REASONS:
+                stats["stocks_terminal"][sid] = reason
+            else:
+                stats["retryable"].append((sid, y, m, reason))
+            print(f"revenue-pit {sid} {y}-{m:02d} {reason}", flush=True)
+        else:
+            with engine.begin() as conn:
+                stats["written"] += upsert(
+                    conn, models.MonthlyRevenue.__table__, [rec],
+                    ["stock_id", "revenue_month"])
+            stats["stocks_ok"].add(sid)
+            print(f"revenue-pit {sid} {y}-{m:02d} yoy={rec['yoy']}", flush=True)
+        if delay:
+            _time.sleep(delay)
+    stats["stocks_ok"] = sorted(stats["stocks_ok"])
+    return stats
+
+
 def _existing_dates(conn, table):
     rows = conn.execute(text(f"SELECT DISTINCT date FROM market.{table}")).fetchall()
     return {r[0].isoformat() for r in rows}
 
 
-def crawl_range(engine, source, dates, resume=True, replace=False):
+_MAX_EMPTY_STREAK = 4
+# price 自己就是交易日曆的來源,沒有日曆可過濾假日,只能退回「擋週末」。此時零列的正常
+# 解釋還在(國定假日),門檻必須高過最長的連續平日休市——2024 春節休市 2/6~2/14 是連續
+# 7 個平日,取 10 留餘裕。踩過:用 4 去回補跨春節的 price 會被誤判成 IP 封鎖而中止。
+_MAX_EMPTY_STREAK_NO_CALENDAR = 10
+
+
+def _trading_dates(conn, start, end):
+    """``market.price`` 已存的交易日(唯一在庫的真實台股行事曆)。用它過濾回補區間,
+    才不會把請求額度花在假日上——猜不到的假日很多:2024 春節休市 2/6~2/14 就是連續
+    7 個平日,單靠 weekday 擋不掉。price 自己不能用這條(空庫 bootstrap 沒基準)。"""
+    rows = conn.execute(text(
+        "SELECT DISTINCT date FROM market.price WHERE date BETWEEN :s AND :e"),
+        {"s": start, "e": end}).fetchall()
+    return {r[0] for r in rows}
+
+
+def crawl_range(engine, source, dates, resume=True, replace=False, delay=0.0):
     """Crawl a list of dates for a daily source, upserting each; skips dates
     already present when resume=True (any row counts as done — partial days
-    need ``resume=False, replace=True`` to be repaired). Returns rows written."""
+    need ``resume=False, replace=True`` to be repaired). Returns rows written.
+
+    ``delay``:每次抓取後的間隔秒數。長區間回補務必給值——TWSE 會在密集請求後暫時
+    封鎖 IP,而失敗是**靜默**的(`requests_get` 回 None → 該日跳過、不報錯),
+    踩過:回補 1,600 天的 valuation 只寫進 40 天就被擋,輸出還是空的。
+
+    兩道省請求/止血機制:非交易日不發請求(見 ``_trading_dates``);連續 N 個**已知交易日**
+    回零列就 raise——過濾掉假日之後零列不再有正常解釋,不該安靜跳完剩下幾百天。門檻依
+    有沒有日曆而不同(見 ``_MAX_EMPTY_STREAK_NO_CALENDAR``)。
+    """
+    import time as _time
+
     table = DAILY[source][2].__tablename__
     total = 0
     with engine.begin() as conn:
         have = _existing_dates(conn, table) if resume else set()
+        cal = (_trading_dates(conn, min(dates), max(dates))
+               if source != "price" and dates else set())
+    limit = _MAX_EMPTY_STREAK if cal else _MAX_EMPTY_STREAK_NO_CALENDAR
+    unit = "trading days" if cal else "weekdays"
+    empty_streak = 0
     for d in dates:
+        if d.weekday() >= 5 or (cal and d not in cal):
+            continue
         if resume and d.isoformat() in have:
             continue
         with engine.begin() as conn:
-            total += crawl_day(conn, source, d, replace=replace)
+            n = crawl_day(conn, source, d, replace=replace)
+        total += n
+        print(f"{source} {d} {n:,} rows", flush=True)
+        empty_streak = 0 if n else empty_streak + 1
+        if empty_streak >= limit:
+            raise RuntimeError(
+                f"{source}: {empty_streak} consecutive {unit} returned 0 rows "
+                f"(last {d}) — likely IP-blocked or the endpoint changed. "
+                f"Stopping instead of silently skipping the rest; resume will "
+                f"pick up where this left off.")
+        if delay:
+            _time.sleep(delay)
     return total

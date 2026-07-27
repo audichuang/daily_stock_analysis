@@ -113,6 +113,32 @@ class ExDividend(Base):
     rights_type: Mapped[str | None] = mapped_column(String(8))  # 權/息/權息
 
 
+class PriceAdjustment(Base):
+    """前復權因子 (每股每事件日)——``price`` 是未還原價,算報酬/均線前要套這張表。
+
+    為什麼不直接用 ``ex_dividend``:那張表只有 TWSE 上市的息/權/權息,缺三類事件——
+    上櫃(TPEx)全部、股票分割(面額變更)、減資。缺了會讓除息/分割跳空被當成真實下跌
+    (0050 的 1:4 分割曾讓回測基準顯示 2025 年 -65.79%)。
+
+    ``factor`` = reference_price / close_before(<1 為除息/分割,>1 為減資)。
+    前復權時把 ``date`` **之前**的價格乘上 factor,最新價維持原值。
+
+    ``source`` 標明可信度:``twse_twt49u``/``twse_twtauu`` 為官方公告值;``inferred_price``
+    是由價格跳空回推——台股有 ±10% 漲跌幅限制(ETF 除外),故非 ETF 的單日 >15% 跳空
+    必為公司行動,但回推值含當日自身漲跌(誤差 ≤10%),優先權低於官方值。
+    """
+
+    __tablename__ = "price_adjustment"
+
+    stock_id: Mapped[str] = mapped_column(String(12), primary_key=True)
+    date: Mapped[_date] = mapped_column(Date, primary_key=True)  # 事件生效日(除權息日/恢復買賣日)
+    factor: Mapped[float] = mapped_column(Numeric(18, 10), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # dividend|split|reduction|inferred
+    source: Mapped[str] = mapped_column(String(24), nullable=False)  # twse_twt49u|twse_twtauu|inferred_price
+    close_before: Mapped[float | None] = mapped_column(Numeric(12, 4))
+    reference_price: Mapped[float | None] = mapped_column(Numeric(12, 4))
+
+
 class MonthlyRevenue(Base):
     """月營收 (每股,以營收所屬月份為 key)。"""
 

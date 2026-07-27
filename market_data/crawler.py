@@ -68,6 +68,11 @@ def requests_get(*args, **kwargs):
     return _request("get", *args, **kwargs)
 
 
+def requests_post(*args, **kwargs):
+    """POST 版本(MOPS 的個別公司查詢只吃 POST)。共用 `_request` 的 session/重試邏輯。"""
+    return _request("post", *args, **kwargs)
+
+
 def crawl_price(date):
     datestr = date.strftime("%Y%m%d")
     r = _request(

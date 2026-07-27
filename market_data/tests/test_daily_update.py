@@ -15,9 +15,13 @@ def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch):
     monkeypatch.setattr(crawl, "crawl_ex_dividend",
                         lambda conn, start, end: calls.append(("exd", start, end)))
 
+    class _Rows:
+        def fetchall(self): return []          # 空庫 bootstrap:查不到歷史交易日
+
     class _Conn:
         def __enter__(self): return self
         def __exit__(self, *a): return False
+        def execute(self, *a, **k): return _Rows()
 
     class _Eng:
         def begin(self): return _Conn()

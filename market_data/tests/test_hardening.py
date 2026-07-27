@@ -1,7 +1,8 @@
 """Regressions for the audit hardening: partial-day repair, financials
 fail-fast, duplicate-key dedupe, CLI validation, local-median thin days."""
 
-from datetime import date
+import contextlib
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
@@ -160,3 +161,59 @@ def test_thin_days_tolerates_slow_listing_growth():
     d0 = date(2026, 1, 1)
     days = [(d0 + timedelta(days=i), 1000 + i * 5) for i in range(60)]
     assert health.thin_days(days) == []
+
+
+class _FakeEngine:
+    """crawl_range 只用 engine.begin() 當 context manager。"""
+
+    @contextlib.contextmanager
+    def begin(self):
+        yield None
+
+
+def test_crawl_range_only_requests_known_trading_days(monkeypatch):
+    seen = []
+    # 2024 春節休市 2/6~2/14 是連續 7 個平日;只有 2/5、2/15 是交易日
+    cal = {date(2024, 2, 5), date(2024, 2, 15)}
+    monkeypatch.setattr(crawl, "_trading_dates", lambda conn, s, e: cal)
+    monkeypatch.setattr(crawl, "crawl_day",
+                        lambda conn, source, d, replace=False: seen.append(d) or 1)
+    dates = [date(2024, 2, 5) + __import__("datetime").timedelta(days=i)
+             for i in range(11)]
+    crawl.crawl_range(_FakeEngine(), "valuation", dates, resume=False)
+    assert seen == sorted(cal)  # 假日一個請求都不該發
+
+
+def test_crawl_range_raises_on_blocked_streak(monkeypatch):
+    """過濾掉假日之後,連續零列只剩「被封鎖/端點改版」一種解釋,不能安靜跳完。"""
+    monkeypatch.setattr(crawl, "_trading_dates",
+                        lambda conn, s, e: {date(2026, 3, d) for d in range(2, 21)})
+    monkeypatch.setattr(crawl, "crawl_day", lambda *a, **k: 0)
+    days = [date(2026, 3, d) for d in range(2, 21)]
+    with pytest.raises(RuntimeError, match="consecutive trading days returned 0"):
+        crawl.crawl_range(_FakeEngine(), "valuation", days, resume=False)
+
+
+def test_crawl_range_streak_threshold_is_looser_without_calendar():
+    """price 自己就是日曆來源,沒有日曆可過濾假日,零列還有「國定假日」這個正常解釋。
+
+    門檻必須高過最長的連續平日休市(2024 春節 2/6~2/14 是 7 個平日),否則跨春節回補
+    price 會被誤判成 IP 封鎖而中止。
+    """
+    assert crawl._MAX_EMPTY_STREAK_NO_CALENDAR > 7
+    assert crawl._MAX_EMPTY_STREAK_NO_CALENDAR > crawl._MAX_EMPTY_STREAK
+
+    seen = []
+
+    def fake_day(conn, source, d, replace=False):
+        seen.append(d)
+        return 0
+
+    import unittest.mock as _m
+    with _m.patch.object(crawl, "crawl_day", fake_day), \
+         _m.patch.object(crawl, "_trading_dates", lambda conn, s, e: set()):
+        # 2/5~2/15 共 9 個平日(含春節休市的 7 個)全部零列,不該中止
+        days = [date(2024, 2, 5) + timedelta(days=i) for i in range(11)]
+        crawl.crawl_range(_FakeEngine(), "price", days, resume=False)
+    assert len(seen) == 9                          # 週末仍然跳過,不浪費請求
+    assert all(d.weekday() < 5 for d in seen)

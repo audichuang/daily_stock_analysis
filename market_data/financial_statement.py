@@ -16,6 +16,15 @@ from tqdm import tqdm
 
 
 def afterIFRS(year, season):
+    """財報 `date` 欄用的公告截止日（一般公司：季報 45 日內、年報次年 3/31）。
+
+    **這是全公司一律套同一天的簡化，對金融保險業（金控／銀行／票券／保險）不成立**——
+    它們的季報截止日是 60 日內（Q1 5/30、Q3 11/29）、半年報 8/31，比這裡寫的早 15 天。
+    拿這張表做 point-in-time 對齊時，金融保險業會有約 15 天的前視。目前的回測與選股
+    都不讀 `financial_statement`，所以沒有實際影響；**要加 quality／ROE 因子時，
+    最省的處理是直接把金融保險業排除在該因子的宇宙外**（銀行保險的 ROE／PB 本來就
+    與工業股不可比，這是因子研究的標準做法），而不是為此維護一份晚報公司清單。
+    """
     season2date = [
         datetime.datetime(year, 5, 15),
         datetime.datetime(year, 8, 14),

@@ -33,12 +33,21 @@ def main(argv=None):
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("daily", help="近幾日增量 + 每日快照")
     b = sub.add_parser("backfill", help="回補某來源日期區間")
-    b.add_argument("source", choices=["price", "institutional", "margin"])
+    b.add_argument("source", choices=["price", "institutional", "margin", "valuation"])
     b.add_argument("--start", required=True)
     b.add_argument("--end", required=True)
     b.add_argument("--force", action="store_true",
                    help="忽略 resume 並整日換血(先刪該日再寫);修 partial/髒日用")
+    b.add_argument("--delay", type=float, default=0.0,
+                   help="每日抓取間隔秒數。長區間回補務必給(建議 3)——TWSE 密集請求會封 IP,"
+                        "且失敗是靜默的(該日直接跳過不報錯)")
     sub.add_parser("snapshot", help="valuation + index + stock_info 快照")
+    adj = sub.add_parser("adjust", help="重建 price_adjustment 前復權因子(除權息+減資+分割)")
+    adj.add_argument("--start", default="2013-01-01",
+                     help="推導起點。預設 2013：price 表 2010 上半年混有權證,見 adjust.py")
+    adj.add_argument("--no-reductions", action="store_true",
+                     help="跳過兩個需要網路的官方來源(TWTAUU 減資 + TPEx 上櫃除權息),"
+                          "改為沿用 DB 既有的那些列;離線重算價格推導部分時用,不會清空官方值")
     f = sub.add_parser("financials", help="財報季更(下載 IFRS html → financial_statement)")
     f.add_argument("--year", type=int, required=True, help="會計年度,如 2026")
     f.add_argument("--season", type=int, required=True, choices=[1, 2, 3, 4])
@@ -49,6 +58,17 @@ def main(argv=None):
     e = sub.add_parser("ex-dividend", help="除權息公告(日期區間)")
     e.add_argument("--start", required=True)
     e.add_argument("--end", required=True)
+    rp = sub.add_parser("revenue-pit",
+                        help="補下市公司的月營收(修存活偏誤;月營收彙總報表只列現存公司)")
+    rp.add_argument("--start", required=True)
+    rp.add_argument("--end", required=True)
+    rp.add_argument("--delay", type=float, default=3.0, help="每次請求間隔秒數(MOPS 會擋)")
+    rp.add_argument("--limit", type=int, default=None, help="只跑前 N 個缺口(試跑用)")
+    rp.add_argument("--dry-run", action="store_true", help="只列出缺口數量,不發請求")
+    rp.add_argument("--only-file", default=None,
+                    help="CSV(stock_id,year,month) 指定要補的缺口。月營收只在價格條件成立"
+                         "那幾天會被用到,全量補要數小時,精準補只要幾十個請求"
+                         "(用 scripts/measure_signal_forward.py --emit-revenue-gaps 產生)")
     args = p.parse_args(argv)
 
     eng = get_engine()
@@ -56,12 +76,18 @@ def main(argv=None):
         crawl.daily_update(eng)
     elif args.command == "backfill":
         crawl.crawl_range(eng, args.source, _dates(args.start, args.end),
-                          resume=not args.force, replace=args.force)
+                          resume=not args.force, replace=args.force, delay=args.delay)
     elif args.command == "snapshot":
         with eng.begin() as conn:
             crawl.crawl_valuation(conn)
             crawl.crawl_index(conn)
             crawl.crawl_stock_info(conn)
+    elif args.command == "adjust":
+        from market_data import adjust
+        res = adjust.rebuild(eng, start=args.start, with_reductions=not args.no_reductions)
+        print(f"price_adjustment rows upserted: {res.pop('written'):,}")
+        print(f"  by source: {res.pop('by_kind', {})}")
+        print(f"  {res}")
     elif args.command == "financials":
         n = crawl.crawl_financials(eng, args.year, args.season,
                                    keep_files=args.keep_files)
@@ -70,6 +96,36 @@ def main(argv=None):
         with eng.begin() as conn:
             n = crawl.crawl_monthly_revenue(conn, args.month)
         print(f"monthly_revenue rows upserted: {n:,}")
+    elif args.command == "revenue-pit":
+        s = datetime.date.fromisoformat(args.start)
+        e2 = datetime.date.fromisoformat(args.end)
+        only = None
+        if args.only_file:
+            import csv as _csv
+            with open(args.only_file, newline="") as f:
+                only = [(r[0], int(r[1]), int(r[2])) for r in _csv.reader(f)
+                        if r and not r[0].startswith("#")]
+        if args.dry_run:
+            with eng.begin() as conn:
+                gaps = crawl.pit_revenue_gaps(conn, s, e2, only=only)
+            stocks = sorted({g[0] for g in gaps})
+            print(f"缺口 {len(gaps):,} 個 (公司 {len(stocks)} 檔)")
+            print(f"預估耗時 {len(gaps) * (args.delay + 1.5) / 60:.0f} 分鐘"
+                  f" (delay={args.delay}s)")
+            print("公司:", " ".join(stocks))
+        else:
+            res = crawl.backfill_pit_revenue(eng, s, e2, delay=args.delay,
+                                             limit=args.limit, only=only)
+            print(f"\nmonthly_revenue rows upserted: {res['written']:,}"
+                  f"  requests: {res['requested']:,}")
+            print(f"  取得到的公司 ({len(res['stocks_ok'])}): {' '.join(res['stocks_ok'])}")
+            term = res["stocks_terminal"]
+            print(f"  硬邊界·不繼續公開發行/免申報 ({len(term)}): "
+                  f"{' '.join(sorted(term))}")
+            if res["retryable"]:
+                print(f"  **可重試 {len(res['retryable'])} 個（HTTP/解析/月份不符,"
+                      f"下次執行會再列出）**: {res['retryable'][:8]}")
+            print(f"  原因分布: {dict(res['reasons'])}")
     elif args.command == "ex-dividend":
         with eng.begin() as conn:
             n = crawl.crawl_ex_dividend(conn,

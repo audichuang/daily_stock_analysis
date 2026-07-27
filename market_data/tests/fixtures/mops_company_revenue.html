@@ -1,0 +1,95 @@
+
+
+
+<html>
+<head>
+	<title>公開資訊觀測站</title>
+	
+	
+	<link href="css/css2.css" rel="stylesheet" type="text/css" Media="Screen"/> 
+	
+	<script type="text/javascript" src="js/mops2.js"></script>
+	
+	
+	
+</head>
+
+<body>
+
+
+<div id="div01" >
+<tr><td class='reportCont' align='left'>
+<h3><u><a href='/mops/web/t21sc04_ifrs' alt='查詢彙總報表' >查詢彙總報表</a></u></h3>
+</td></tr>
+<table class='noBorder' style='width: 60%; margin-left: 20%;' align='center'><tr><td class='compName' align='center'><b>本資料由　(公開發行公司)康友-KY　公司提供</b></td></tr></table><table class='noBorder' style='width: 60%; margin-left: 20%;' align='center'><TD width=33%></TD><TD class='reportCont' width=33% align=center>民國109年06月</TD><TD class='reportCont' width=33% style='text-align:right !important;'>單位：新台幣仟元</TD></table><table class='hasBorder'><TR><TD align='center' class='tblHead' rowspan='2'>項目</TD><TD align='center' class='tblHead' colspan='2'>合併營業收入淨額</TD></TR><TR><TD align='center' class='tblHead'>新台幣</TD><TD align='center' class='tblHead'>功能性貨幣(人民幣)</TD></TR><tr><td class='tblHead'>本月</td><td align='right' class='odd'>            382,561</td><td align='right' class='odd'>             91,238.00</td></tr><tr><td class='tblHead'>去年同期</td><td align='right' class='even'>            431,949</td><td align='right' class='even'>             95,311.00</td></tr><tr><td class='tblHead'>增減金額</td><td align='right' class='odd'>            -49,388</td><td align='right' class='odd'>             -4,073.00</td></tr><tr><td class='tblHead'>增減百分比</td><td align='right' class='even'>                -11.43</td><td align='right' class='even'>                 -4.27</td></tr><tr><td class='tblHead'>本年累計</td><td align='right' class='odd'>          2,258,755</td><td align='right' class='odd'>            530,100.00</td></tr><tr><td class='tblHead'>去年累計</td><td align='right' class='even'>          2,383,876</td><td align='right' class='even'>            522,780.00</td></tr><tr><td class='tblHead'>增減金額</td><td align='right' class='odd'>           -125,121</td><td align='right' class='odd'>              7,320.00</td></tr><tr><td class='tblHead'>增減百分比</td><td align='right' class='even'>                 -5.25</td><td align='right' class='even'>                  1.40</td></tr><tr><td class='tblHead'>本月換算匯率：</td><td align='right' class='odd'>─</td><td align='right' class='odd'>                  4.1930</td></tr><tr><td class='tblHead'>本年累計換算匯率：</td><td align='right' class='even'>─</td><td align='right' class='even'>                  4.2610</td></tr><tr><td class='tblHead'>備註</td><td class='odd'>&nbsp;</td><td class='odd'>&nbsp;</td></tr></table><br><p>註1: 本月新台幣營業收入淨額＝本月功能性貨幣營業收入淨額×本月換算匯率<br>註2: 本年新台幣累計營業收入淨額＝本年功能性貨幣累計營業收入淨額×本年累計換算匯率</p>
+
+</div>
+
+
+</body>
+
+
+
+<script>
+	try {
+		if(!document.querySelector('#table01')){
+			var table01 = document.createElement("div");
+			table01.id = "table01"; 
+			document.body.appendChild(table01);
+			if(document.querySelector("#div01")){
+				table01.appendChild(div01);
+			};
+		};
+
+		if (document.autoForm!=null && document.autoForm!=undefined && document.autoForm.run.value==''){
+			ajax1(document.autoForm,'div01');
+			document.querySelector('form[name=autoForm]').remove();
+		};
+
+		if (document.autoForm1!=null && document.autoForm1!=undefined && document.autoForm1.run.value==''){
+			ajax1(document.autoForm1,'div01');
+			document.querySelector('form[name=autoForm1]').remove();
+		};
+
+		if (document.autoRunScript!=null && document.autoRunScript!=undefined && document.autoRunScript.run!=null && document.autoRunScript.run.value!=''){
+			let s = document.autoRunScript.run.value;
+			let script = document.createElement("script");
+
+			script.innerText = s;
+			document.body.appendChild(script);
+			document.querySelector('form[name=autoRunScript] > input[name=run]').remove();
+		};
+
+		if (document.autoRunScript1!=null && document.autoRunScript1!=undefined){
+			if (document.autoRunScript1.count!=null && document.autoRunScript1.count!=undefined && document.autoRunScript1.count.value!=''){
+				var count = parseInt(document.autoRunScript1.count.value);
+				for (var i=0;i<count;i++){
+					var run = eval("document.autoRunScript1.run"+i);
+					if (run!=null && run!=undefined && run.value!=''){
+						var s = run.value;
+
+						var script = document.createElement("script");
+						script.textContent = s;
+						document.querySelector("body").appendChild(script);
+
+						run.remove();
+					};
+				};
+			}else if (document.autoRunScript1.run!=null && document.autoRunScript1.run!=undefined && document.autoRunScript1.run.value!=''){
+				var s = document.autoRunScript1.run.value;
+				s = htmlEncode(s);
+				var script = document.createElement("script");
+				script.textContent = s;
+				document.querySelector("body").appendChild(script);
+
+				document.querySelector('form[name=autoRunScript1] > input[name=run]').remove();
+			};
+		};
+	} catch (error) {
+		console.error("Script Error:", error);
+	};
+</script>
+
+
+
+</html>
