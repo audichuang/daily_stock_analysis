@@ -24,7 +24,7 @@ DOPPLER_RUN = doppler run -p $(DOPPLER_PROJECT) -c $(DOPPLER_CONFIG) --
 
 .DEFAULT_GOAL := help
 .PHONY: help install serve serve-local review review-tw analyze schedule screen \
-        swing overnight measure portfolio portfolio-wf verify-decisions \
+        swing morning overnight measure portfolio portfolio-wf verify-decisions \
         test lint lint-fix format refresh-tw refresh-us
 
 help: ## 显示所有可用命令
@@ -68,6 +68,17 @@ swing: ## 每日波段流程第 1 步：更新台股资料 → 全市场筛选 �
 	@echo "下一步（第 2 层）：让 agent 执行 skill \`tw-swing-research\` 读这份 JSON 做事件面研究，"
 	@echo "判断会追加到 journal/swing-decisions.jsonl（进版控，当天就 commit——见 journal/README.md）。"
 	@echo "收盘后才有当日资料；台股 13:30 收盘、法人与融资 T+1 才补齐。"
+
+morning: ## 每天早上一键：补资料 → 昨晚国际盘 → 待触发计划 → 今日候选（之后跑 skill）
+	@uv run --env-file .env python -m market_data.cli daily
+	@echo "\n===== 昨晚国际盘 ====="
+	@tsmc=$$(uv run --env-file .env python -c "from market_data.db import get_engine;from sqlalchemy import text;print(get_engine().connect().execute(text(\"select close from market.price where stock_id='2330' order by date desc limit 1\")).scalar() or 0)" 2>/dev/null); \
+		uv run python scripts/overnight.py --tw-close $$tsmc
+	@echo "\n===== 待触发计划（已留档、未到期）====="
+	@uv run --env-file .env python scripts/verify_swing_decisions.py 2>/dev/null | sed -n '1,/^$$/p'
+	@echo "===== 今日候选 ====="
+	@$(MAKE) --no-print-directory screen
+	@echo "\n下一步：让 agent 跑 skill \`tw-swing-research\`（候选 0 档也要看上面的隔夜盘与待触发计划）"
 
 overnight: ## 昨晚国际盘数字（道琼/标普/纳指/费半/台积电ADR/油价/汇率，给 skill Step 0a 用）
 	uv run python scripts/overnight.py --tw-close $(TSMC_CLOSE)

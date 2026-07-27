@@ -181,6 +181,23 @@ def paired_portfolio(df, engine, horizon, slots):
     return res
 
 
+def _last_close(engine, ids):
+    """各標的最近一個交易日的收盤（前復權），給待觸發計畫的「現價 vs 進場區間」用。"""
+    if not ids:
+        return {}
+    with engine.connect() as c:
+        px = pd.read_sql(text(
+            "select stock_id, date, close from market.price "
+            "where stock_id = any(:ids) and date >= (select max(date) - interval '10 days' "
+            "from market.price)"), c, params={"ids": list(ids)}, parse_dates=["date"])
+    if px.empty:
+        return {}
+    cl = px.pivot(index="date", columns="stock_id", values="close").astype(float)
+    adj = load_factors(engine, cl.index, cl.columns)
+    cl = (cl * adj).ffill()
+    return {s: round(float(v), 2) for s, v in cl.iloc[-1].items() if pd.notna(v)}
+
+
 def summarize(r, label):
     if not len(r):
         return {"組": label, "筆數": 0}
@@ -226,8 +243,22 @@ def main(argv=None):
     print(f"決策 {len(df)} 筆　已到期 {len(mat)} 筆　未到期 {len(pend)} 筆　"
           f"跳空穿過區間未成交 {len(nf)} 筆（持有 {a.horizon} 交易日）")
     if len(pend):
+        # 未到期的那些不是「等結果」而已——它們的 entry_range / invalidation 是**今天早上要看的
+        # 待觸發計畫**。只印代號與剩餘天數的話，這一步就得靠人記得，而靠記憶的步驟遲早會漏。
         pv = pend.assign(剩餘交易日=pend["left"].astype("Int64"))
-        print(pv[["date", "stock_id", "verdict", "剩餘交易日"]].to_string(index=False))
+        cur = _last_close(eng, sorted(pend["stock_id"].astype(str).unique()))
+        pv["現價"] = [cur.get(str(s)) for s in pv["stock_id"]]
+        pv["進場區間"] = [f"{min(r)}~{max(r)}" if isinstance(r, (list, tuple)) and len(r)
+                        else "—" for r in pv.get("entry_range", [None] * len(pv))]
+        pv["落在區間內"] = ["—" if p2 is None or "~" not in rg else
+                       ("**是**" if float(rg.split("~")[0]) <= p2 <= float(rg.split("~")[1])
+                        else "否")
+                       for p2, rg in zip(pv["現價"], pv["進場區間"])]
+        cols = ["date", "stock_id", "verdict", "剩餘交易日", "現價", "進場區間", "落在區間內"]
+        print(pv[cols].to_string(index=False))
+        for _, r in pv.iterrows():
+            if r.get("invalidation"):
+                print(f"  {r['stock_id']} 失效條件：{r['invalidation']}")
     if len(nf):
         print("未成交（開盤已高於建議區間上界）:")
         print(nf[["date", "stock_id", "entry_date", "entry_px"]].to_string(index=False))

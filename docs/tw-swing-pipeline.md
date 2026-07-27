@@ -14,24 +14,27 @@
 **05:00**。所以**早上 06:00 之後**隔夜資訊已經全部到齊，07:00~08:30 是最合適的作業窗口。
 
 ```bash
-# ① 資料到齊了嗎（法人/融資/估值/大盘指数是 T+1，早上跑才补得到昨天的）
-uv run --env-file .env python -m market_data.health
-uv run --env-file .env python -m market_data.cli daily     # 落後就补；thin days 有值要用 --force 换血
+make morning          # 一键：补资料 → 昨晚国际盘 → 待触发计划 → 今日候选
+```
 
-# ② 先查昨晚国际盘（**无条件，不看候选数量**）
-make overnight TSMC_CLOSE=<台积电昨收>
-#   + 人工查一项脚本抓不到的：台指期夜盘 05:00 收盘 ÷ 前一交易日现货收盘 = 开盘预期缺口
-#   注意 17:00~21:30 的夜盘报价不含美股资讯，别拿来算缺口
+它依序做四件事，任何一件都不该跳过：
 
-# ③ 取得候选（②刚补过资料就不用再 make swing 重爬一次）
-make screen
+| 步骤 | 做什么 | 为什么不能省 |
+| --- | --- | --- |
+| ① `cli daily` | 补昨天的法人/融资/估值/大盘指数（T+1 才齐） | 只有 price 是当天写入的，其余四张早上跑才补得到 |
+| ② `overnight.py` | 道琼/标普/纳指/**费半**/**台积电 ADR**/油价/汇率，带日期戳 | DB 只到昨天 13:30，之后到开盘有约 20 小时盲区 |
+| ③ `verify-decisions` | **已留档、未到期**的判断：现价 vs 进场区间、失效条件 | 待触发的计划靠人记得就一定会漏 |
+| ④ `make screen` | 今日候选 | — |
 
-# ④ 第二层：让 agent 跑 skill `tw-swing-research`（建议 sonnet 子代理）
-#   0 档候选也**不能**跳过②——隔夜盘还决定「已留档但待触发的计划」今天成不成立
+之後**由 agent 跑 skill `tw-swing-research`**（建议 sonnet 子代理）做第 2 层，判断追加到
+`journal/swing-decisions.jsonl`，**当天 commit**：
 
-# ⑤ 判断留档后当天 commit
+```bash
 git add journal/ && git commit -m "journal: decisions for YYYY-MM-DD"
 ```
+
+脚本抓不到、仍要人工查一项：**台指期夜盘 05:00 收盘** ÷ 前一交易日现货收盘 = 开盘预期缺口
+（注意 17:00~21:30 的夜盘报价不含美股资讯）。
 
 **為什麼②不能省**：DB 只到昨天 13:30，之後到開盤有約 20 小時盲區。踩過两次——一次拿旧决策日志
 充当今天的答案，一次 0 档候选就跳过隔夜检查；两次结论都碰巧对，但推导过程是坏的。
