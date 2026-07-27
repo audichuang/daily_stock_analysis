@@ -11,10 +11,12 @@
   - Web 前端改动在 `apps/dsa-web/`
   - 桌面端改动在 `apps/dsa-desktop/`
   - 部署与流水线改动在 `scripts/`、`.github/workflows/`、`docker/`
+  - 台股波段流程的每日决策日志在 `journal/`（append-only、**进版控**，见 `journal/README.md`）；`data/`、`reports/`、`logs/` 都是 gitignore 的运行期目录，长期记录不要放那里
 - 未经明确确认，不执行 `git commit`、`git tag`、`git push`。
 - 同样需要先确认、不要默认执行的动作：安装或升级依赖（`uv pip install`、`npm install <pkg>`、改 `requirements.txt`）、删除文件或目录、改动 infra 与部署配置、跑全量离线测试（约 30+ 分钟，判定基准见 §10）。读代码、跑 §6 的快速门槛、生成分析文档属于可自主动作。
 - commit message 使用英文，不添加 `Co-Authored-By`。
 - 不写死密钥、账号、路径、模型名、端口或环境差异逻辑。
+- 新增文件后确认 `git status` 看得到它：`.gitignore` 有 `verify_*.py`、`local/`、`run.sh` 这类宽 pattern，命中就**静默消失**（写入成功、不报错、CI 也不会说），要保留就补 `!` 例外并注明理由。踩过：`scripts/verify_swing_decisions.py` 命中 `verify_*.py`，差点没进版本库。
 - 优先复用现有模块、配置入口、脚本和测试，不新增平行实现。
 - 默认稳定性优先于“顺手优化”；非当前任务直接需要的重构、抽象和基础设施迁移一律克制。
 - 新增配置项时，必须同步更新 `.env.example` 和相关文档。
@@ -41,6 +43,7 @@
 - 使用 AI 辅助开发本身不是问题；问题是提交 AI 生成后未经人工语义审查、未验证、未收敛的代码。此类 PR 会按低质量提交处理。
 - review 反馈后，不接受只在被指出的位置追加局部 patch；完整收敛程序见 skill `respond-to-review`。
 - 如果一个 PR 在多轮 review 后仍持续出现同类契约漂移、重复 fallback、测试绕过真实风险层、PR body 与实际 diff 不一致等问题，维护者可以要求关闭重做，而不是继续逐点 review。
+- 研究／回测类结论（超额、Sharpe、命中率、偏误上界）在写进文档前要过一轮对抗审查；**区间跨零或样本量不足时一律写 inconclusive**，不写方向性结论。被推翻的数字要在原处标明作废，不留两个版本各自流通——2026-07 的三轮审查各推翻一个 headline，其中一次把「与 0050 打平」变成「输给 0050」。
 
 ## 2. AI 协作资产治理
 
@@ -51,7 +54,7 @@
 uv run python scripts/check_ai_assets.py
 ```
 
-- 仓库协作 skill 存放在 `.claude/skills/`（入库）；分析产物存放在 `.claude/reviews/`（默认本地产物，已 gitignore）。
+- 仓库协作 skill 存放在 `.claude/skills/`（入库）；分析产物存放在 `.claude/reviews/`（默认本地产物，已 gitignore）——**长期结论必须沉澱到 `docs/*.md`**，留在 `.claude/reviews/` 等于没有交接。
 - 根目录 `SKILL.md` 与 `docs/openclaw-skill-integration.md` 属于产品或外部集成说明，不是仓库协作规则真源。
 - 若未来新增 `.agents/skills/` 或其他 agent 专用目录，必须先明确单一真源，再通过脚本或镜像同步；禁止手工长期维护多份同义内容。
 - skill 内的命令、验证门槛与交付结构必须与本文件一致；改动 §6 验证门槛时要同步检查各 skill 的验证步骤。被多个 skill 共用的规则放 `.claude/skills/shared/`（不含 `SKILL.md`，因此不是 skill、不被扫描），各 skill 用相对路径指向，避免同一规则抄多份。
