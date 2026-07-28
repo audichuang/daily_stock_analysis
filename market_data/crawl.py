@@ -173,8 +173,8 @@ def crawl_index(conn):
     return upsert(conn, models.MarketIndex.__table__, recs, ["index_id", "date"])
 
 
-def crawl_snapshots(conn):
-    """三個當日快照(valuation/index/stock_info),逐個印出 upsert 列數。
+def crawl_snapshots(engine):
+    """三個當日快照(valuation/index/stock_info),**每步一個交易**,逐個印出 upsert 列數。
 
     **唯一該呼叫快照的入口**——`daily_update` 與 `cli snapshot` 兩條路徑原本各自直接呼叫
     這三個函式且**把回傳值丟棄**,所以連成功都不印任何東西。少一個 `index 0 rows`,
@@ -182,8 +182,16 @@ def crawl_snapshots(conn):
     snapshot 全無輸出,得讀三層原始碼才知道是 FMTQIK 當日未發布)。輸出格式對齊
     `crawl_range` 的 `<source> <date> <n> rows`,方便同一份 cron log 一起 grep。
 
-    回傳 ``{name: rows}`` 供呼叫端判斷,但**印出是這個函式的職責**——回傳值再被丟棄
-    一次也不會退回全靜默。
+    **收 engine 而非 conn,而且一步一個交易**,理由有兩個,兩個都會讓 log 說謊:
+    1. 三步共用一個交易時,前兩步印完「寫了 N 列」之後第三步一 raise,`engine.begin()`
+       會把前兩步一起回滾——log 宣稱寫入、DB 其實沒有。印出的行必須代表**已 commit**。
+    2. `_snapshot_latest` 的稽核查詢若在同一個交易裡失敗,Postgres 會把整個交易標成
+       aborted;把例外吞掉並不會修復它,只會讓下一句 upsert 以「current transaction is
+       aborted」失敗並回滾全部。所以稽核走**另一條連線、在 commit 之後**。
+
+    三步互相獨立且 upsert 冪等,所以拆開沒有原子性損失:index 成功不該被 stock_info
+    失敗抹掉。回傳 ``{name: rows}``,但**印出是這個函式的職責**——回傳值再被丟棄一次也
+    不會退回全靜默。
 
     對應表刻意建在函式內:放在模組層會在 import 時就綁定函式物件,
     `monkeypatch.setattr(crawl, "crawl_index", …)` 就蓋不到(踩過,test_daily_update 紅)。
@@ -192,8 +200,9 @@ def crawl_snapshots(conn):
     for name, fn in (("valuation", crawl_valuation),
                      ("index", crawl_index),
                      ("stock_info", crawl_stock_info)):
-        out[name] = n = fn(conn)
-        print(f"{name} {n:,} rows{_snapshot_latest(conn, name)}")
+        with engine.begin() as conn:
+            out[name] = n = fn(conn)
+        print(f"{name} {n:,} rows{_snapshot_latest(engine, name)}")
     return out
 
 
@@ -203,12 +212,15 @@ def crawl_snapshots(conn):
 _SNAPSHOT_DATE_TABLES = {"valuation": "valuation", "index": "market_index"}
 
 
-def _snapshot_latest(conn, name):
+def _snapshot_latest(engine, name):
+    """稽核用:該快照表目前的最新日期。**開自己的連線**——見 `crawl_snapshots` 理由 2,
+    在寫入交易裡跑這句並吞掉例外會讓後續 upsert 全部回滾。"""
     table = _SNAPSHOT_DATE_TABLES.get(name)
     if table is None:                    # stock_info 無日期欄
         return ""
     try:
-        d = conn.execute(text(f"SELECT max(date) FROM market.{table}")).scalar()
+        with engine.connect() as c:
+            d = c.execute(text(f"SELECT max(date) FROM market.{table}")).scalar()
     except Exception as exc:             # noqa: BLE001 — 稽核訊息不該讓爬取失敗
         return f", latest unknown ({type(exc).__name__})"
     return f", latest {d}"
@@ -301,15 +313,16 @@ def daily_update(engine=None, asof=None, days=5):
     dates = sorted({asof, *recent})
     for source in ("price", "institutional", "margin"):
         crawl_range(eng, source, dates)
+    crawl_snapshots(eng)
+    # 月營收(上月整月)與除權息(滾動窗)順帶保鮮:各一個請求,upsert 冪等
+    prev_month = (asof.replace(day=1) - _dt.timedelta(days=1)).replace(day=1)
     with eng.begin() as conn:
-        crawl_snapshots(conn)
-        # 月營收(上月整月)與除權息(滾動窗)順帶保鮮:各一個請求,upsert 冪等
-        prev_month = (asof.replace(day=1) - _dt.timedelta(days=1)).replace(day=1)
-        n = crawl_monthly_revenue(conn, prev_month)
-        print(f"monthly_revenue {prev_month:%Y-%m} {n:,} rows")
-        n = crawl_ex_dividend(conn, asof - _dt.timedelta(days=30),
-                              asof + _dt.timedelta(days=90))
-        print(f"ex_dividend {n:,} rows")
+        rev = crawl_monthly_revenue(conn, prev_month)
+        exd = crawl_ex_dividend(conn, asof - _dt.timedelta(days=30),
+                                asof + _dt.timedelta(days=90))
+    # commit 之後才印——在交易內印,後面一 raise 就會回滾,log 卻已宣稱寫入
+    print(f"monthly_revenue {prev_month:%Y-%m} {rev:,} rows")
+    print(f"ex_dividend {exd:,} rows")
 
 
 def pit_revenue_gaps(conn, start, end, only=None):

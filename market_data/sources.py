@@ -190,7 +190,9 @@ def crawl_institutional(date):
         return None
     try:
         return parse_institutional(raw, date)
-    except ValueError:
+    except ValueError as exc:
+        print(f"**WARN: cannot parse T86 institutional for {date} ({exc})"
+              f" — HTTP 200 但內容不是預期的 CSV(封鎖頁/改版?)")
         return None
 
 
@@ -203,7 +205,9 @@ def crawl_margin(date):
         return None
     try:
         return parse_margin(raw, date)
-    except ValueError:
+    except ValueError as exc:
+        print(f"**WARN: cannot parse MI_MARGN margin for {date} ({exc})"
+              f" — HTTP 200 但內容不是預期的 CSV(封鎖頁/改版?)")
         return None
 
 
@@ -217,7 +221,9 @@ def crawl_ex_dividend(start, end):
         return None
     try:
         return parse_ex_dividend(raw)
-    except ValueError:
+    except ValueError as exc:
+        print(f"**WARN: cannot parse TWT49U ex-dividend {start}~{end} ({exc})"
+              f" — HTTP 200 但內容不是預期的 CSV(封鎖頁/改版?)")
         return None
 
 

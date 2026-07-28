@@ -108,13 +108,73 @@ def _panel(closes, stock_id="6166"):
 
 def test_ma_check_flags_when_the_logged_threshold_flips_the_verdict():
     """真實案例：6166 收 137.0，照日誌的 `MA10(136.7)` 看是未跌破，但當天 MA10 已漂到
-    138.70——其實**已經跌破**。日誌裡的數字是快照，比對一律要用重算值。"""
-    # 前 9 根 140、最後一根 137 → MA10 = (140*9 + 137)/10 = 139.7
-    lines = _ma_check(_panel([140.0] * 9 + [137.0]), "6166", "或跌破MA10(136.7)")
+    138.70——其實**已經跌破**。日誌裡的數字是快照，比對一律要用重算值。
+
+    刻意給 11 根、最舊那根是離群值：只餵剛好 n 根的話，「用全部列」或「用 n+1 列」的
+    實作也會通過，測不出視窗長度。
+    """
+    # 最舊 999 應被排除；其後 9 根 140、最後一根 137 → MA10 = (140*9 + 137)/10 = 139.7
+    lines = _ma_check(_panel([999.0] + [140.0] * 9 + [137.0]), "6166", "或跌破MA10(136.7)")
     assert len(lines) == 1
     assert "MA10 現在 139.70" in lines[0] and "日誌寫的是 136.70" in lines[0]
     assert "**已跌破**" in lines[0]
     assert "照日誌裡的舊值會判成相反結論" in lines[0]
+
+
+def test_ma_check_skips_non_trading_gaps_rather_than_counting_them():
+    """面板 index 是多檔股票的**聯集**交易日，某檔停牌那天是 NaN；那一列不能佔掉視窗名額。
+
+    6166 有剛好 10 根真實報價（100、140×8、137），倒數第二個聯集日停牌：
+    正確答案是 10 根真實的均值 `(100 + 140×8 + 137)/10 = 135.70`。把 NaN 當一列處理
+    （或補值）會丟掉最舊的離群值 100、得到 139.70，現價 137 也從「未跌破」翻成「已跌破」。
+    """
+    closes = [100.0] + [140.0] * 8 + [float("nan")] + [137.0]
+    lines = _ma_check(_panel(closes), "6166", "跌破MA10(136.7)")
+    assert "MA10 現在 135.70" in lines[0], f"NaN 那列被算進視窗了：{lines[0]}"
+    assert "未跌破" in lines[0] and "**已跌破**" not in lines[0]
+
+
+def test_adj_close_panel_does_not_forward_fill(monkeypatch):
+    """`_adj_close_panel` **不得** ffill——這是上一條測不到的那一半。
+
+    `_ma_check` 收到的面板若已被補值，它就再也分不出哪根是真實 K 棒（NaN 已經沒了），
+    最後 n 列會混進合成值並把最舊的真實那根推出視窗。所以「不補值」是這支函式的契約，
+    要在這裡釘住，不能只靠 `_ma_check` 的測試（那邊餵的面板是自己造的，永遠不含 ffill）。
+    """
+    import verify_swing_decisions as vsd
+
+    days = pd.to_datetime(["2026-07-24", "2026-07-27", "2026-07-28"])
+    raw = pd.DataFrame({                       # 6166 在 07-27 停牌，該格沒有列
+        "stock_id": ["2615", "2615", "2615", "6166", "6166"],
+        "date": [days[0], days[1], days[2], days[0], days[2]],
+        "close": [84.0, 83.0, 83.6, 150.0, 137.0],
+    })
+
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class _Eng:
+        def connect(self): return _Conn()
+
+    monkeypatch.setattr(vsd.pd, "read_sql", lambda *a, **k: raw)
+    monkeypatch.setattr(vsd, "load_factors",
+                        lambda eng, idx, cols: pd.DataFrame(1.0, index=idx, columns=cols))
+
+    panel = vsd._adj_close_panel(_Eng(), ["2615", "6166"])
+    assert pd.isna(panel.loc[days[1], "6166"]), "停牌那格被 ffill 補成合成 K 棒了"
+    # 但「現價」仍要拿得到最後一個有效報價（等價於原本的 ffill 語意）
+    from verify_swing_decisions import _last_close
+    assert _last_close(panel) == {"2615": 83.6, "6166": 137.0}
+
+
+def test_ma_check_reads_thousands_separators_and_skips_ema():
+    """`MA20(1,234.5)` 少了千分位處理只會匹配到裸 `MA20`，靜默丟掉門檻與翻轉警告；
+    而 `EMA10` 是另一種均線，被讀成 `MA10` 等於換了條件還宣稱驗過。"""
+    lines = _ma_check(_panel([1000.0] * 20, "2330"), "2330", "跌破MA20(1,234.5)")
+    assert "日誌寫的是 1234.50" in lines[0]
+    assert "照日誌裡的舊值會判成相反結論" in lines[0]   # 現價 1000 < 1234.5 但 > MA20 1000
+    assert _ma_check(_panel([140.0] * 10), "6166", "跌破EMA10(136.7)") == []
 
 
 def test_ma_check_stays_quiet_when_old_and_new_agree():

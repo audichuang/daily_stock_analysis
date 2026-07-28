@@ -189,6 +189,11 @@ def _adj_close_panel(engine, ids, days=150):
     （見 `market_data/AGENTS.md`），拿未還原價算的 MA 去比還原後的現價，只要區間橫跨一次
     除權息就差一個因子——而且不會報錯，只會給出一個看起來合理的錯判。150 曆日約 100 個
     交易日，夠算到 MA60。
+
+    **刻意不 ffill**：面板的 index 是多檔股票的**聯集**交易日，某檔停牌或那天沒成交時
+    ffill 會補出一根合成 K 棒。MA 取「最後 n 列」時就會吃到合成值、同時把最舊的一根真實
+    K 棒推出視窗——算出來的不是 n 根真實資料的均線，而且照樣不會報錯。要 ffill 的消費端
+    自己做（`_last_close`），需要真實 K 棒的消費端 `dropna()`（`_ma_check`）。
     """
     if not ids:
         return None
@@ -202,20 +207,29 @@ def _adj_close_panel(engine, ids, days=150):
         return None
     cl = px.pivot(index="date", columns="stock_id", values="close").astype(float)
     adj = load_factors(engine, cl.index, cl.columns)
-    return (cl * adj).ffill()
+    return cl * adj
 
 
 def _last_close(panel):
-    """各標的最近一個交易日的前復權收盤，給「現價 vs 進場區間」用。"""
+    """各標的最近一個有成交的交易日的前復權收盤，給「現價 vs 進場區間」用。
+
+    停牌或當天無量的個股取**最後一個有效報價**（等價於原本的 ffill 語意），與 `_ma_check`
+    比較用的 `px` 同源——兩邊都是「最後一根真實 K 棒」。
+    """
     if panel is None or panel.empty:
         return {}
-    return {s: round(float(v), 2) for s, v in panel.iloc[-1].items() if pd.notna(v)}
+    last = panel.ffill().iloc[-1]
+    return {s: round(float(v), 2) for s, v in last.items() if pd.notna(v)}
 
 
 # `invalidation` 是自由文字，裡面的均線門檻寫的是**做判斷當天**的值（例：`跌破MA20(79.85)`）。
 # MA 每天在動，隔幾天照舊值判就會判錯：2026-07-28 實測 6166 收 137.0，照日誌的 `MA10(136.7)`
 # 看是「未跌破」，但當天真正的 MA10 已經漂到 138.70，其實**已經跌破**。所以要即時重算。
-_MA_RE = re.compile(r"MA(\d+)\s*(?:[（(]\s*([\d.]+)\s*[）)])?")
+#
+# `(?<![A-Za-z])` 是必要的：沒有它 `跌破EMA10(136.7)` 會被讀成 `MA10`（指數移動平均與簡單
+# 移動平均是兩個不同的門檻，重算成 SMA 等於換了條件還宣稱驗過）。數值允許千分位逗號——
+# `MA20(1,234.5)` 少了它只會匹配到裸 `MA20`，靜默丟掉門檻連翻轉警告都不會出現。
+_MA_RE = re.compile(r"(?<![A-Za-z])MA(\d+)\s*(?:[（(]\s*([\d,.]+)\s*[）)])?")
 
 
 def _ma_check(panel, stock_id, invalidation):
@@ -236,14 +250,16 @@ def _ma_check(panel, stock_id, invalidation):
         if len(s) < n:
             out.append(f"MA{n}：歷史只有 {len(s)} 根，不足以重算")
             continue
+        # `s` 已 dropna，所以這 n 列都是真實 K 棒（面板刻意不 ffill，見 `_adj_close_panel`）
         now = float(s.iloc[-n:].mean())
         broke = px < now
         note = f"MA{n} 現在 {now:.2f}"
-        if written:
-            note += f"（日誌寫的是 {float(written):.2f}）"
+        old = float(written.replace(",", "")) if written else None
+        if old is not None:
+            note += f"（日誌寫的是 {old:.2f}）"
         note += f"，現價 {px:.2f} " + ("**已跌破**" if broke else "未跌破")
         # 只有「照舊值會得到相反結論」才是真的坑，明確標出來
-        if written and broke != (px < float(written)):
+        if old is not None and broke != (px < old):
             note += "　⚠ 照日誌裡的舊值會判成相反結論"
         out.append(note)
     return out

@@ -78,8 +78,7 @@ def main(argv=None):
         crawl.crawl_range(eng, args.source, _dates(args.start, args.end),
                           resume=not args.force, replace=args.force, delay=args.delay)
     elif args.command == "snapshot":
-        with eng.begin() as conn:
-            crawl.crawl_snapshots(conn)
+        crawl.crawl_snapshots(eng)      # 自己管交易:每步一個,印出即代表已 commit
     elif args.command == "adjust":
         from market_data import adjust
         res = adjust.rebuild(eng, start=args.start, with_reductions=not args.no_reductions)

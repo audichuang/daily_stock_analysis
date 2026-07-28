@@ -14,17 +14,36 @@ _URL = "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK"
 _REQUIRED = {"Date", "TAIEX", "Change", "TradeValue"}
 
 
-class _FakeConn:
-    """只需要應付 `_snapshot_latest` 的一句 SELECT max(date)。"""
+class _FakeEngine:
+    """`crawl_snapshots` 收 engine：`begin()` 給寫入交易、`connect()` 給稽核查詢。
+
+    兩者刻意是**不同物件**，用來釘住「稽核不在寫入交易裡跑」——在同一個交易裡跑
+    `SELECT max(date)` 而失敗會讓 Postgres 把交易標成 aborted，吞掉例外並不會修復它，
+    只會讓下一句 upsert 以「current transaction is aborted」失敗並回滾全部。
+    """
 
     def __init__(self, latest):
         self._latest = latest
+        self.begun = 0
+        self.connected = 0
 
-    def execute(self, *a, **k):
-        return self
+    def begin(self):
+        self.begun += 1
+        return _FakeConn(self._latest)
 
-    def scalar(self):
-        return self._latest
+    def connect(self):
+        self.connected += 1
+        return _FakeConn(self._latest)
+
+
+class _FakeConn:
+    def __init__(self, latest):
+        self._latest = latest
+
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def execute(self, *a, **k): return self
+    def scalar(self): return self._latest
 
 
 class _Resp:
@@ -87,21 +106,39 @@ def test_crawl_snapshots_always_prints_a_line_per_source(monkeypatch, capsys, ro
     for fn in ("crawl_valuation", "crawl_index", "crawl_stock_info"):
         monkeypatch.setattr(crawl, fn, lambda conn, _n=rows: _n)
 
-    out_map = crawl.crawl_snapshots(conn=_FakeConn("2026-07-27"))
+    eng = _FakeEngine("2026-07-27")
+    out_map = crawl.crawl_snapshots(eng)
     printed = capsys.readouterr().out
     assert out_map == {"valuation": rows, "index": rows, "stock_info": rows}
     for name in ("valuation", "index", "stock_info"):
         assert f"{name} {rows:,} rows" in printed
     # 有日期維度的兩張表要一併報最新日期,否則列數相同時分不出當日有沒有進來
     assert printed.count("latest 2026-07-27") == 2
+    # 三步各自一個交易:共用一個的話,第三步一 raise 會把前兩步已宣稱寫入的列一起回滾
+    assert eng.begun == 3
+    # 稽核走獨立連線(兩張有日期的表各一次),不在寫入交易裡
+    assert eng.connected == 2
 
 
-def test_snapshot_latest_failure_does_not_break_the_crawl(capsys):
-    """稽核查詢自己壞掉時只降級成 `latest unknown`,不能讓整個快照失敗。"""
+def test_snapshot_latest_runs_outside_the_write_transaction():
+    """稽核查詢必須開自己的連線。
+
+    在寫入交易裡跑 `SELECT max(date)` 而失敗時,Postgres 會把整個交易標成 aborted——
+    吞掉例外**不會**修復它,只會讓下一句 upsert 以「current transaction is aborted」失敗
+    並回滾前面所有寫入。這裡釘住它走 `engine.connect()`,不是寫入用的那條交易。
+    """
+    eng = _FakeEngine("2026-07-27")
+    assert crawl._snapshot_latest(eng, "index") == ", latest 2026-07-27"
+    assert eng.connected == 1 and eng.begun == 0
+    assert crawl._snapshot_latest(eng, "stock_info") == ""   # 無日期欄,不該白開連線
+    assert eng.connected == 1
+
+
+def test_snapshot_latest_failure_degrades_instead_of_breaking_the_crawl():
+    """稽核自己壞掉時只降級成 `latest unknown`——它是報告用的,不該拖垮爬取。"""
 
     class _Boom:
-        def execute(self, *a, **k):
+        def connect(self, *a, **k):
             raise RuntimeError("no such table")
 
     assert crawl._snapshot_latest(_Boom(), "index") == ", latest unknown (RuntimeError)"
-    assert crawl._snapshot_latest(_Boom(), "stock_info") == ""   # 本來就無日期欄
