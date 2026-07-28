@@ -173,6 +173,10 @@ def crawl_tpex_price(date):
 def _twse_csv(url):
     r = requests_get(url, headers={"User-Agent": _UA})
     if r is None:
+        print(f"**WARN: no response from {url} (連線失敗或 IP 被 TWSE 封鎖)")
+        return None
+    if r.status_code != 200:
+        print(f"**WARN: HTTP {r.status_code} from {url}")
         return None
     return r.content
 
@@ -228,8 +232,9 @@ def crawl_price_backup(date):
     """上市 price 備援(openapi STOCK_DAY_ALL)。端點只提供最新交易日,逐列帶
     民國 Date;僅當日期與 ``date`` 相符才可用,否則回 None(不能拿別天的資料
     冒充)。無 本益比 欄(transform 會補 NA)。"""
-    data = _openapi_json("https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL")
-    data = _valid_rows(data, {"Date", "Code", "ClosingPrice", "TradeVolume"})
+    url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+    data = _valid_rows(_openapi_json(url),
+                       {"Date", "Code", "ClosingPrice", "TradeVolume"}, url)
     if data is None:
         return None
     roc = f"{date.year - 1911}{date.month:02d}{date.day:02d}"
@@ -253,29 +258,55 @@ def crawl_stock_info():
 
 
 def _openapi_json(url):
+    """OpenAPI GET → 解析好的 JSON,失敗回 None **並印出原因**。
+
+    為什麼一定要印:這裡原本把「連線失敗/IP 被封」「HTTP 非 200」「回應不是 JSON」
+    三種情況全塌縮成同一個 `None`,上層再塌縮成 `return 0`,最外層又不印任何東西——
+    於是「TWSE 當日還沒發布」與「抓取真的壞了」的可觀測結果完全一樣(什麼都沒印、
+    DB 沒變)。踩過:2026-07-28 18:10 跑 snapshot 全無輸出,查了三層原始碼才確認是
+    FMTQIK 當日尚未發布而不是壞掉。
+    """
     r = requests_get(url, headers={"User-Agent": _UA})
     if r is None:
+        print(f"**WARN: no response from {url} (連線失敗或 IP 被 TWSE 封鎖)")
+        return None
+    if r.status_code != 200:
+        print(f"**WARN: HTTP {r.status_code} from {url}")
         return None
     try:
         return r.json()
     except ValueError:
+        print(f"**WARN: non-JSON body from {url}: {r.text[:120]!r}")
         return None
 
 
-def _valid_rows(data, required):
+def _valid_rows(data, required, url=""):
     """OpenAPI success = non-empty list of dicts carrying the expected keys.
-    Guards against TWSE returning an error object / changed shape."""
+    Guards against TWSE returning an error object / changed shape.
+
+    每個拒收分支都印出**可區分**的原因:空 list 通常只是當日資料還沒發布(等入夜重跑
+    即可),缺欄位則是端點改版(要改程式),兩者的處置完全不同,不能長得一樣。
+    """
+    where = url or "openapi"
+    if data is None:
+        return None                      # _openapi_json 已印過原因,不重複
     if not isinstance(data, list) or not data:
+        print(f"**WARN: empty or non-list payload from {where} "
+              f"(TWSE 多半是當日資料尚未發布,入夜後重跑即可)")
         return None
     if not isinstance(data[0], dict) or not required.issubset(data[0]):
+        missing = (required - set(data[0])) if isinstance(data[0], dict) else required
+        print(f"**WARN: unexpected shape from {where}, "
+              f"missing keys {sorted(missing)} (端點可能改版)")
         return None
     return data
 
 
 def fetch_valuation():
     """BWIBBU_ALL:上市個股 本益比/股價淨值比/殖利率(當日快照)。"""
-    data = _openapi_json("https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL")
-    return _valid_rows(data, {"Code", "Date", "PEratio", "PBratio", "DividendYield"})
+    url = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
+    return _valid_rows(_openapi_json(url),
+                       {"Code", "Date", "PEratio", "PBratio", "DividendYield"}, url)
 
 
 def _roc_slash_to_date(s):
@@ -567,5 +598,6 @@ def crawl_valuation_day(date):
 
 def fetch_index():
     """FMTQIK:加權指數 TAIEX + 市場成交金額(近日)。"""
-    data = _openapi_json("https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK")
-    return _valid_rows(data, {"Date", "TAIEX", "Change", "TradeValue"})
+    url = "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK"
+    return _valid_rows(_openapi_json(url),
+                       {"Date", "TAIEX", "Change", "TradeValue"}, url)

@@ -173,6 +173,47 @@ def crawl_index(conn):
     return upsert(conn, models.MarketIndex.__table__, recs, ["index_id", "date"])
 
 
+def crawl_snapshots(conn):
+    """三個當日快照(valuation/index/stock_info),逐個印出 upsert 列數。
+
+    **唯一該呼叫快照的入口**——`daily_update` 與 `cli snapshot` 兩條路徑原本各自直接呼叫
+    這三個函式且**把回傳值丟棄**,所以連成功都不印任何東西。少一個 `index 0 rows`,
+    「TWSE 還沒發布」與「IP 被封 / 端點改版」就無法區分(踩過:2026-07-28 18:10 跑
+    snapshot 全無輸出,得讀三層原始碼才知道是 FMTQIK 當日未發布)。輸出格式對齊
+    `crawl_range` 的 `<source> <date> <n> rows`,方便同一份 cron log 一起 grep。
+
+    回傳 ``{name: rows}`` 供呼叫端判斷,但**印出是這個函式的職責**——回傳值再被丟棄
+    一次也不會退回全靜默。
+
+    對應表刻意建在函式內:放在模組層會在 import 時就綁定函式物件,
+    `monkeypatch.setattr(crawl, "crawl_index", …)` 就蓋不到(踩過,test_daily_update 紅)。
+    """
+    out = {}
+    for name, fn in (("valuation", crawl_valuation),
+                     ("index", crawl_index),
+                     ("stock_info", crawl_stock_info)):
+        out[name] = n = fn(conn)
+        print(f"{name} {n:,} rows{_snapshot_latest(conn, name)}")
+    return out
+
+
+# 有日期維度的快照表:列數本身**分不出**「當日資料有沒有進來」——這兩個端點都是回近月/
+# 全市場的整包,TWSE 還沒發布當日資料時照樣回一樣多的列(實測 2026-07-28 18:10 拿到
+# `index 18 rows`,而最新一列仍是 07-27)。所以要一併印最新日期,否則就是換一種靜默。
+_SNAPSHOT_DATE_TABLES = {"valuation": "valuation", "index": "market_index"}
+
+
+def _snapshot_latest(conn, name):
+    table = _SNAPSHOT_DATE_TABLES.get(name)
+    if table is None:                    # stock_info 無日期欄
+        return ""
+    try:
+        d = conn.execute(text(f"SELECT max(date) FROM market.{table}")).scalar()
+    except Exception as exc:             # noqa: BLE001 — 稽核訊息不該讓爬取失敗
+        return f", latest unknown ({type(exc).__name__})"
+    return f", latest {d}"
+
+
 _FINANCIAL_PK = ["stock_id", "date", "statement_type", "account"]
 
 
@@ -261,14 +302,14 @@ def daily_update(engine=None, asof=None, days=5):
     for source in ("price", "institutional", "margin"):
         crawl_range(eng, source, dates)
     with eng.begin() as conn:
-        crawl_valuation(conn)
-        crawl_index(conn)
-        crawl_stock_info(conn)
+        crawl_snapshots(conn)
         # 月營收(上月整月)與除權息(滾動窗)順帶保鮮:各一個請求,upsert 冪等
         prev_month = (asof.replace(day=1) - _dt.timedelta(days=1)).replace(day=1)
-        crawl_monthly_revenue(conn, prev_month)
-        crawl_ex_dividend(conn, asof - _dt.timedelta(days=30),
-                          asof + _dt.timedelta(days=90))
+        n = crawl_monthly_revenue(conn, prev_month)
+        print(f"monthly_revenue {prev_month:%Y-%m} {n:,} rows")
+        n = crawl_ex_dividend(conn, asof - _dt.timedelta(days=30),
+                              asof + _dt.timedelta(days=90))
+        print(f"ex_dividend {n:,} rows")
 
 
 def pit_revenue_gaps(conn, start, end, only=None):

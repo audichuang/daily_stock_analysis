@@ -7,13 +7,18 @@ def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch):
     calls = []
     monkeypatch.setattr(crawl, "crawl_range",
                         lambda eng, src, dates, resume=True: calls.append(("range", src)))
-    monkeypatch.setattr(crawl, "crawl_valuation", lambda conn: calls.append(("val",)))
-    monkeypatch.setattr(crawl, "crawl_index", lambda conn: calls.append(("idx",)))
-    monkeypatch.setattr(crawl, "crawl_stock_info", lambda conn: calls.append(("info",)))
+    # `or 0`:真實 crawler 都回傳 upsert 列數,而 daily_update 會把它印出來
+    # (`crawl_snapshots` 與月營收/除權息兩行),回 None 的 fake 會在格式化時炸掉
+    monkeypatch.setattr(crawl, "crawl_valuation",
+                        lambda conn: calls.append(("val",)) or 0)
+    monkeypatch.setattr(crawl, "crawl_index",
+                        lambda conn: calls.append(("idx",)) or 0)
+    monkeypatch.setattr(crawl, "crawl_stock_info",
+                        lambda conn: calls.append(("info",)) or 0)
     monkeypatch.setattr(crawl, "crawl_monthly_revenue",
-                        lambda conn, month: calls.append(("rev", month)))
+                        lambda conn, month: calls.append(("rev", month)) or 0)
     monkeypatch.setattr(crawl, "crawl_ex_dividend",
-                        lambda conn, start, end: calls.append(("exd", start, end)))
+                        lambda conn, start, end: calls.append(("exd", start, end)) or 0)
 
     class _Rows:
         def fetchall(self): return []          # 空庫 bootstrap:查不到歷史交易日

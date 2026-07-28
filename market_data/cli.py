@@ -79,9 +79,7 @@ def main(argv=None):
                           resume=not args.force, replace=args.force, delay=args.delay)
     elif args.command == "snapshot":
         with eng.begin() as conn:
-            crawl.crawl_valuation(conn)
-            crawl.crawl_index(conn)
-            crawl.crawl_stock_info(conn)
+            crawl.crawl_snapshots(conn)
     elif args.command == "adjust":
         from market_data import adjust
         res = adjust.rebuild(eng, start=args.start, with_reductions=not args.no_reductions)
