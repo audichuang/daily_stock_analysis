@@ -80,6 +80,11 @@ verify_*.py
 # 例外：这个是流水线第 4 层的常驻工具，不是一次性验证脚本（见 docs/tw-swing-pipeline.md）
 !scripts/verify_swing_decisions.py
 
+# CodeGraph 索引:每台機器自己建（`codegraph init`），內容全是本機產物。
+# 上面的 `*.db` 已擋掉 codegraph.db，但 codegraph 自己放的 `.codegraph/.gitignore`
+# 不受它管，會讓整個目錄一直出現在 `git status`，所以整個目錄忽略。
+.codegraph/
+
 # ignore Claude workspace artifacts, but keep shared repo skills versioned
 .claude/*
 !.claude/skills/
