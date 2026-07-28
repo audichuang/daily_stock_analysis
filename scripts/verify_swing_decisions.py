@@ -24,6 +24,7 @@
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -181,21 +182,71 @@ def paired_portfolio(df, engine, horizon, slots):
     return res
 
 
-def _last_close(engine, ids):
-    """各標的最近一個交易日的收盤（前復權），給待觸發計畫的「現價 vs 進場區間」用。"""
+def _adj_close_panel(engine, ids, days=150):
+    """近 ``days`` 曆日的前復權收盤面板（index=date、columns=stock_id）。
+
+    「現價」與失效條件裡的均線**必須落在同一個復權基準**上：`market.price` 是未還原價
+    （見 `market_data/AGENTS.md`），拿未還原價算的 MA 去比還原後的現價，只要區間橫跨一次
+    除權息就差一個因子——而且不會報錯，只會給出一個看起來合理的錯判。150 曆日約 100 個
+    交易日，夠算到 MA60。
+    """
     if not ids:
-        return {}
+        return None
     with engine.connect() as c:
         px = pd.read_sql(text(
             "select stock_id, date, close from market.price "
-            "where stock_id = any(:ids) and date >= (select max(date) - interval '10 days' "
-            "from market.price)"), c, params={"ids": list(ids)}, parse_dates=["date"])
+            "where stock_id = any(:ids) and date >= (select max(date) - "
+            "(:days * interval '1 day') from market.price)"),
+            c, params={"ids": list(ids), "days": int(days)}, parse_dates=["date"])
     if px.empty:
-        return {}
+        return None
     cl = px.pivot(index="date", columns="stock_id", values="close").astype(float)
     adj = load_factors(engine, cl.index, cl.columns)
-    cl = (cl * adj).ffill()
-    return {s: round(float(v), 2) for s, v in cl.iloc[-1].items() if pd.notna(v)}
+    return (cl * adj).ffill()
+
+
+def _last_close(panel):
+    """各標的最近一個交易日的前復權收盤，給「現價 vs 進場區間」用。"""
+    if panel is None or panel.empty:
+        return {}
+    return {s: round(float(v), 2) for s, v in panel.iloc[-1].items() if pd.notna(v)}
+
+
+# `invalidation` 是自由文字，裡面的均線門檻寫的是**做判斷當天**的值（例：`跌破MA20(79.85)`）。
+# MA 每天在動，隔幾天照舊值判就會判錯：2026-07-28 實測 6166 收 137.0，照日誌的 `MA10(136.7)`
+# 看是「未跌破」，但當天真正的 MA10 已經漂到 138.70，其實**已經跌破**。所以要即時重算。
+_MA_RE = re.compile(r"MA(\d+)\s*(?:[（(]\s*([\d.]+)\s*[）)])?")
+
+
+def _ma_check(panel, stock_id, invalidation):
+    """把 `invalidation` 文字裡每個 `MA<n>` 門檻換算成今天的值，回傳可印的註記行。
+
+    **只處理均線**：`SCFI 連續第三週下跌`、`法人由買轉賣`、`費半連續兩日下跌逾2%` 這些要
+    外部資料或人工判斷，這裡不假裝能自動判定——把沒驗的條件印成「未觸發」比不印更糟。
+    """
+    if panel is None or stock_id not in panel.columns:
+        return []
+    s = panel[stock_id].dropna()
+    if not len(s):
+        return []
+    px = float(s.iloc[-1])
+    out = []
+    for n_str, written in _MA_RE.findall(invalidation or ""):
+        n = int(n_str)
+        if len(s) < n:
+            out.append(f"MA{n}：歷史只有 {len(s)} 根，不足以重算")
+            continue
+        now = float(s.iloc[-n:].mean())
+        broke = px < now
+        note = f"MA{n} 現在 {now:.2f}"
+        if written:
+            note += f"（日誌寫的是 {float(written):.2f}）"
+        note += f"，現價 {px:.2f} " + ("**已跌破**" if broke else "未跌破")
+        # 只有「照舊值會得到相反結論」才是真的坑，明確標出來
+        if written and broke != (px < float(written)):
+            note += "　⚠ 照日誌裡的舊值會判成相反結論"
+        out.append(note)
+    return out
 
 
 def summarize(r, label):
@@ -246,7 +297,8 @@ def main(argv=None):
         # 未到期的那些不是「等結果」而已——它們的 entry_range / invalidation 是**今天早上要看的
         # 待觸發計畫**。只印代號與剩餘天數的話，這一步就得靠人記得，而靠記憶的步驟遲早會漏。
         pv = pend.assign(剩餘交易日=pend["left"].astype("Int64"))
-        cur = _last_close(eng, sorted(pend["stock_id"].astype(str).unique()))
+        panel = _adj_close_panel(eng, sorted(pend["stock_id"].astype(str).unique()))
+        cur = _last_close(panel)
         pv["現價"] = [cur.get(str(s)) for s in pv["stock_id"]]
         pv["進場區間"] = [f"{min(r)}~{max(r)}" if isinstance(r, (list, tuple)) and len(r)
                         else "—" for r in pv.get("entry_range", [None] * len(pv))]
@@ -259,6 +311,8 @@ def main(argv=None):
         for _, r in pv.iterrows():
             if r.get("invalidation"):
                 print(f"  {r['stock_id']} 失效條件：{r['invalidation']}")
+                for line in _ma_check(panel, str(r["stock_id"]), r["invalidation"]):
+                    print(f"       {line}")
     if len(nf):
         print("未成交（開盤已高於建議區間上界）:")
         print(nf[["date", "stock_id", "entry_date", "entry_px"]].to_string(index=False))

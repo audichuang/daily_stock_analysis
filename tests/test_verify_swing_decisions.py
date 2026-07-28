@@ -19,7 +19,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from verify_swing_decisions import (  # noqa: E402
-    diff_ci, fill_ok, read_log, summarize, window,
+    _ma_check, diff_ci, fill_ok, read_log, summarize, window,
 )
 
 CAL = pd.bdate_range("2026-01-05", periods=30)      # 週一起算的營業日
@@ -99,3 +99,44 @@ def test_summarize_counts_the_tails():
     s = summarize(r, "enter")
     assert s["筆數"] == 4 and s["勝率"] == "50.0%"
     assert s["P(≥30%)"] == "25.0%" and s["P(≤-20%)"] == "25.0%"
+
+
+def _panel(closes, stock_id="6166"):
+    return pd.DataFrame({stock_id: closes},
+                        index=pd.bdate_range("2026-05-01", periods=len(closes)))
+
+
+def test_ma_check_flags_when_the_logged_threshold_flips_the_verdict():
+    """真實案例：6166 收 137.0，照日誌的 `MA10(136.7)` 看是未跌破，但當天 MA10 已漂到
+    138.70——其實**已經跌破**。日誌裡的數字是快照，比對一律要用重算值。"""
+    # 前 9 根 140、最後一根 137 → MA10 = (140*9 + 137)/10 = 139.7
+    lines = _ma_check(_panel([140.0] * 9 + [137.0]), "6166", "或跌破MA10(136.7)")
+    assert len(lines) == 1
+    assert "MA10 現在 139.70" in lines[0] and "日誌寫的是 136.70" in lines[0]
+    assert "**已跌破**" in lines[0]
+    assert "照日誌裡的舊值會判成相反結論" in lines[0]
+
+
+def test_ma_check_stays_quiet_when_old_and_new_agree():
+    """舊值與重算值得到同一個結論時不加警告——每筆都喊狼來了就沒人看了。"""
+    lines = _ma_check(_panel([80.0] * 19 + [83.6], "2615"), "2615", "跌破MA20(79.85)")
+    assert "未跌破" in lines[0] and "相反結論" not in lines[0]
+
+
+def test_ma_check_only_touches_moving_averages():
+    """SCFI／法人／費半這些要外部資料或人工判斷，不能假裝驗過——印成「未觸發」比不印更糟。"""
+    assert _ma_check(_panel([80.0] * 20, "2615"), "2615",
+                     "SCFI連續第三週下跌、法人買超中斷轉賣超") == []
+
+
+def test_ma_check_reports_insufficient_history_instead_of_a_short_window_mean():
+    """歷史不足 n 根時要說不足，不能拿 3 根的均值冒充 MA60（會給出一個看似合理的錯門檻）。"""
+    lines = _ma_check(_panel([100.0, 101.0, 99.0]), "6166", "跌破MA60(95)")
+    assert len(lines) == 1 and "不足以重算" in lines[0]
+
+
+def test_ma_check_handles_a_bare_ma_reference_and_missing_stock():
+    lines = _ma_check(_panel([100.0] * 10), "6166", "跌破MA10")
+    assert "MA10 現在 100.00" in lines[0] and "日誌寫的是" not in lines[0]
+    assert _ma_check(_panel([100.0] * 10), "9999", "跌破MA10") == []
+    assert _ma_check(None, "6166", "跌破MA10") == []
