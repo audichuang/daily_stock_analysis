@@ -102,7 +102,7 @@ uvicorn server:app --reload --host 0.0.0.0 --port 8000
 
 ```bash
 pip install -r requirements.txt
-pip install flake8 pytest
+pip install flake8 pytest pytest-timeout   # setup.cfg 的 addopts 帶 --timeout，缺 plugin 会直接中止
 ./scripts/ci_gate.sh
 python -m pytest -m "not network"
 python -m py_compile <changed_python_files>
@@ -251,6 +251,8 @@ gh run view <run_id> --log-failed
 - **LLM 主模型用 DeepSeek**：`.env` 须**显式**设 `LITELLM_MODEL=deepseek/deepseek-chat`。否则当 shell 环境导出了 `GEMINI_API_KEY` 时，`load_dotenv` 不覆盖既有环境变量，自动推断会优先选 Gemini。
 - **通知用 Bark，走 Doppler 注入**：`make serve` / `make review-tw` 用 `doppler run -p shioaji -c dev` 把 Doppler 的 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`（`custom_webhook_sender.py` 自动识别 `api.day.app`），secret 不落地 `.env`。**`make analyze` 不含 Doppler 包装**——要 Bark 通知需手动包：`doppler run -p shioaji -c dev -- bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py --stocks 2330.TW'`；非交易日需加 `--force-run`。
 - **全量离线测试（`uv run ./scripts/ci_gate.sh`，第四阶段 `pytest -m "not network"`）约 38 分钟，且现在应该全绿**：2026-07-30 实测 5202 passed / 0 failed / 8 deselected（`5e3d4bd3` 修掉最后一个顺序敏感 flaky——旧版在收集期算一次假时戳，跑到后段必然过 realtime TTL）。**所以红一个就是回归，不要再当 baseline 噪音放过**。别把全量当快速门槛（快速验证用受影响测试文件的子集）。
+- **单一测试 300 秒会 timeout**（`setup.cfg` 的 `addopts --timeout=300`，需 `pytest-timeout`）：踩过一次没有 timeout 的代价——一个**没有 `network` marker、却会真的连外网**的测试在离线套件里挂了 6 小时 21 分（`S` 状态、只用 30 秒 CPU、对外 HTTPS 连线 ESTABLISHED 但对方不回），没有任何东西会砍它。现在同样的情况会红在那个测试上并印出堆叠。
+- **「离线」测试连外的通用陷阱**：A 股那条链（`alphasift_service` 的 `DsaEastMoneyHotspotProvider`、`akshare`、`alphasift` 套件）**每个网路失败都被 `except` 接住再 fallback**，所以漏一格 mock 的测试**不管有没有网路都是绿的**，只有对方「收了连线却不回」时才炸。两个必踩的形状：`provider="akshare"` 会让未 patch 的 `_resolve_hotspot_provider` 造出真 provider；`FakeProvider(DsaEastMoneyHotspotProvider)` 会**继承**整条连外子树，覆写叶方法挡不住。查法见 `tests/test_alphasift_api.py` 的 `_no_outbound_network` fixture（守门刻意继承 `BaseException`，否则会被 `except Exception` 吞掉）。另外 **LiteLLM 在 import 时**会去 `raw.githubusercontent.com` 抓 model cost map（有本地 fallback，不会挂）。
 - **跑全量期间不要改档**：pytest 在收集期就 import 完模组，边跑边改等于验一个混合状态——踩过：改了 `TRADING_DAYS` 之后那份「全绿」其实验的是旧常数，结论作废、得重跑 38 分钟。要改就等它跑完。
 - **`--help` 不是安全探针**：`scripts/` 底下有脚本**完全没有 argparse**（`refresh_us_stock_index.py`、`merge_tw_into_index.py` 的 `main()` 直接做事、忽略 argv），拿 `--help` 扫一遍会**真的执行它们**——踩过：一次扫描连网抓了美股清单、重写进版控的 `apps/dsa-web/public/stocks.index.json`（+351 笔，所幸没丢本地增量）。要探能不能跑，先 `grep -c argparse`；真要修就给那两支补 argparse。
 - **台股历史数据（行情/筹码/财报）统一在 Postgres（`market` schema），且为唯一数据源（无本地备份）**：`DATABASE_URL` 在 `.env`。台股日线优先走 `MarketDBFetcher`（本地 DB，priority=1），无数据 fallback yfinance。爬取/数据更新（含财报季更 `financials`）/踩雷见 `market_data/AGENTS.md`。

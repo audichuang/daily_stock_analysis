@@ -9,6 +9,8 @@ import sys
 import tempfile
 import time
 import unittest
+
+import pytest
 from datetime import datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -30,6 +32,55 @@ from src.services import alphasift_service
 from src.services.task_queue import TaskInfo, TaskStatus as QueueTaskStatus
 
 DEFAULT_ALPHASIFT_TEST_SPEC = DEFAULT_ALPHASIFT_INSTALL_SPEC
+
+
+class _OfflineHotspotProvider:
+    """akshare 形狀的 provider stub：有 alphasift 期望的方法名，但一格都不連網。
+
+    刻意**不是** `DsaEastMoneyHotspotProvider` 的實例——`hotspots()` 用 `isinstance` 決定要不要
+    做 thin-rows fallback 與 metric enrichment，那兩條都會真的打 eastmoney。
+    """
+
+    def stock_board_concept_name_em(self):
+        return None
+
+    def stock_board_industry_name_em(self):
+        return None
+
+    def hotspot_rows(self, *, top: int = 0):
+        return []
+
+
+class _OutboundBlocked(BaseException):
+    """刻意繼承 `BaseException`：生產程式碼滿地 `except Exception` 會把守門吞掉。"""
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_network(monkeypatch):
+    """本檔任何測試一連外就紅——**不是為了整潔，是為了不再掛整夜**。
+
+    這裡的 provider 路徑會走到 eastmoney／akshare／sina，而每個網路失敗都被 `except` 接住
+    再 fallback，所以測試**不管有沒有網路都是綠的**：漏一格 mock 不會有人發現，直到某天對方
+    收了連線卻不回，離線套件就靜靜掛死（實測 6 小時 21 分、只用 30 秒 CPU）。
+
+    只擋非本機位址：Postgres（區網）與 `TestClient` 的行程內呼叫照常放行。
+    """
+    import socket as _socket
+
+    real_connect = _socket.socket.connect
+
+    def guard(self, address):
+        host = address[0] if isinstance(address, tuple) and address else ""
+        if isinstance(host, str) and (
+            host.startswith(("127.", "10.", "192.168.", "172.")) or host in ("localhost", "::1")
+        ):
+            return real_connect(self, address)
+        raise _OutboundBlocked(
+            f"離線測試嘗試連外 {address}；缺的那格 mock 通常是 "
+            "`src.services.alphasift_service._resolve_hotspot_provider`"
+        )
+
+    monkeypatch.setattr(_socket.socket, "connect", guard)
 
 
 def _alphasift_unavailable() -> HTTPException:
@@ -317,6 +368,10 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
             with (
                 patch("src.services.alphasift_service.DSA_ALPHASIFT_HOTSPOT_CACHE_PATH", cache_path),
                 patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                # `provider="akshare"` 会让未被 patch 的 `_resolve_hotspot_provider` 造出真的
+                # `DsaEastMoneyHotspotProvider`，后续 enrichment 就会**真的连 eastmoney**。
+                patch("src.services.alphasift_service._resolve_hotspot_provider",
+                      return_value=("akshare", _OfflineHotspotProvider())),
                 patch("src.services.alphasift_service._import_alphasift_hotspot", return_value=SimpleNamespace(discover_hotspots=discover)),
             ):
                 payload = self._hotspots(config=config, provider="akshare", top=1, refresh=True)
@@ -730,6 +785,9 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
             with (
                 patch.dict(os.environ, {"ALPHASIFT_DATA_DIR": str(data_dir)}, clear=False),
                 patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                # 见 test_hotspots_returns_alphasift_hotspot_summaries：不 patch 这个会连真 eastmoney
+                patch("src.services.alphasift_service._resolve_hotspot_provider",
+                      return_value=("akshare", _OfflineHotspotProvider())),
                 patch(
                     "src.services.alphasift_service._import_alphasift_hotspot",
                     return_value=SimpleNamespace(discover_hotspots=discover),
@@ -830,6 +888,12 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
             with (
                 patch.dict(os.environ, {"ALPHASIFT_DATA_DIR": str(data_dir)}, clear=False),
                 patch("src.services.alphasift_service._get_alphasift_status_snapshot", return_value=({}, True, {})),
+                # 这一格漏掉曾让离线套件挂 6 小时 21 分：`provider="akshare"` 造出真的
+                # `DsaEastMoneyHotspotProvider`，thin-rows fallback 与 metric enrichment
+                # 各自真的连 eastmoney；两边都被 except 接住，所以测试**不管有没有网路都绿**，
+                # 只有对方「收了连线却不回」时才会挂死。
+                patch("src.services.alphasift_service._resolve_hotspot_provider",
+                      return_value=("akshare", _OfflineHotspotProvider())),
                 patch(
                     "src.services.alphasift_service._import_alphasift_hotspot",
                     return_value=SimpleNamespace(discover_hotspots=MagicMock(return_value=rows)),
@@ -1293,6 +1357,16 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         config = self._config(enabled=True)
 
         class FakeProvider(alphasift_service.DsaEastMoneyHotspotProvider):
+            # 繼承真 provider 就連帶繼承整條 `_is_industry_hotspot` 子樹：它會先打 akshare 的
+            # board-change，失敗再退到 `stock_board_industry_name_em` → `_fetch_rankings`，兩條
+            # 都是真連 eastmoney。封在這一層才一次關掉整棵；本測試要驗的是成分股 fallback，
+            # 不是產業分類。
+            def _is_industry_hotspot(self, topic: str) -> bool:
+                return False
+
+            def _fetch_board_changes_raw(self) -> Any:
+                return pd.DataFrame()
+
             def _fetch_ths_constituents(self, topic: str) -> Any:
                 raise TimeoutError("ths timeout")
 
@@ -1421,6 +1495,13 @@ class AlphaSiftOpportunitiesApiTestCase(unittest.TestCase):
         config = self._config(enabled=True)
 
         class FakeProvider(alphasift_service.DsaEastMoneyHotspotProvider):
+            # 同上：覆寫 `_find_board_change` 擋不到 `_is_industry_hotspot` 那整條子樹。
+            def _is_industry_hotspot(self, topic: str) -> bool:
+                return False
+
+            def _fetch_board_changes_raw(self) -> Any:
+                return pd.DataFrame()
+
             def _find_board_change(self, topic: str) -> Dict[str, Any]:
                 raise TimeoutError("board change timeout")
 
