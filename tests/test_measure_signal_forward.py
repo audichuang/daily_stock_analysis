@@ -19,11 +19,14 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from measure_signal_forward import (  # noqa: E402
-    COST,
+    DEFAULT_POSITION_NOTIONAL,
+    block_bootstrap,
     forward_returns,
+    paired_block_bootstrap,
     pit_revenue_panel,
     to_events,
 )
+from tw_trade_costs import round_trip_return  # noqa: E402
 
 
 def _piv(n_days=20, price=100.0):
@@ -79,13 +82,101 @@ def test_events_dedupe_consecutive_triggers_of_same_stock():
     assert list(ev[ev["stock_id"] == "1111"]["ti"]) == [10, 30]
 
 
-def test_events_subtract_round_trip_cost():
+def test_events_use_exact_buy_and_sell_cashflows():
     piv = _piv(n_days=20)
     ret, _ = forward_returns(piv, 5, "last")
     sig = pd.DataFrame(False, index=piv["close"].index, columns=piv["close"].columns)
     sig.iloc[3, 0] = True
     raw, _ = to_events(sig, ret, 5, {})
-    assert raw["r"].iloc[0] == pytest.approx(ret.iloc[3, 0] - COST)
+    expected = round_trip_return(
+        1.0, 1.0 + ret.iloc[3, 0], entry_notional=DEFAULT_POSITION_NOTIONAL
+    )
+    assert raw["r"].iloc[0] == pytest.approx(expected)
+
+
+def test_paired_bootstrap_identical_arms_have_exact_zero_interval():
+    calendar = pd.bdate_range("2026-01-05", periods=12)
+    events = pd.DataFrame({
+        "date": [calendar[1], calendar[1], calendar[8], calendar[8]],
+        "diff": [0.0, 0.0, 0.0, 0.0],
+    })
+
+    assert paired_block_bootstrap(
+        events, calendar, n=200, block=3, seed=7
+    ) == (0.0, 0.0)
+
+
+def test_paired_bootstrap_is_inconclusive_when_events_fit_in_one_block():
+    calendar = pd.bdate_range("2026-01-05", periods=20)
+    events = pd.DataFrame({
+        "date": [calendar[2], calendar[4]],
+        "diff": [0.1, -0.2],
+    })
+
+    assert paired_block_bootstrap(
+        events, calendar, n=200, block=5, seed=7
+    ) is None
+
+
+def test_paired_bootstrap_keeps_the_same_day_cross_section_together():
+    calendar = pd.bdate_range("2026-01-05", periods=24)
+    events = pd.DataFrame({
+        "date": [calendar[1], calendar[1], calendar[18], calendar[18]],
+        "diff": [0.3, -0.3, 0.8, -0.8],
+    })
+
+    assert paired_block_bootstrap(
+        events, calendar, n=200, block=5, seed=11
+    ) == pytest.approx((0.0, 0.0), abs=1e-15)
+
+
+def test_paired_bootstrap_drops_unmatched_rows_instead_of_filling_zero():
+    calendar = pd.bdate_range("2026-01-05", periods=24)
+    events = pd.DataFrame({
+        "date": [calendar[1], calendar[1], calendar[18], calendar[18]],
+        "diff": [0.5, float("nan"), 0.5, float("nan")],
+    })
+
+    assert paired_block_bootstrap(
+        events, calendar, n=200, block=5, seed=11
+    ) == pytest.approx((0.5, 0.5))
+
+
+def test_paired_bootstrap_seed_is_reproducible():
+    calendar = pd.bdate_range("2026-01-05", periods=30)
+    events = pd.DataFrame({
+        "date": [calendar[1], calendar[1], calendar[12], calendar[25]],
+        "diff": [0.4, -0.2, -0.3, 0.2],
+    })
+
+    first = paired_block_bootstrap(events, calendar, n=200, block=5, seed=19)
+    second = paired_block_bootstrap(events, calendar, n=200, block=5, seed=19)
+
+    assert first == second
+
+
+def test_existing_bootstrap_report_is_inconclusive_when_blocks_are_insufficient():
+    events = pd.DataFrame({
+        "ti": [2, 4],
+        "r": [0.1, -0.2],
+    })
+
+    assert block_bootstrap(
+        events, range(20), n=200, block=5, seed=7
+    ) is None
+
+
+def test_existing_bootstrap_report_uses_ti_when_event_frame_also_has_date():
+    events = pd.DataFrame({
+        "date": pd.to_datetime(["2026-01-07", "2026-01-26"]),
+        "ti": [2, 15],
+        "stock_id": ["1111", "2222"],
+        "r": [0.1, -0.2],
+    })
+
+    result = block_bootstrap(events, range(20), n=200, block=5, seed=7)
+
+    assert result is not None
 
 
 def test_revenue_announcement_on_non_trading_day_is_visible_next_trading_day():

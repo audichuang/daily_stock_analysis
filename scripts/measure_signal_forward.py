@@ -11,8 +11,8 @@
 2. **下市結算**。訊號後 h 個交易日內停止交易時,`--delisting last` 用最後成交價結算,
    `zero` 假設 -100%（停牌後賣不掉的實況更接近後者）。舊版讓這些訊號變 NaN 被丟掉,
    等於把最壞的結果排除在分布外。
-3. **事件級去重**。同一檔在 h 個交易日內連續觸發是**同一個事件**,不是多個樣本
-   （實測 3,654 筆名目訊號只對應 855 個事件）。統計一律以事件為單位。
+3. **事件級去重**。同一檔在 h 個交易日內連續觸發是**同一個事件**,不是多個樣本；
+   統計一律以事件為單位。
 4. **區塊 bootstrap**。事件在時間上聚集（同一波行情、同一個產業循環），IID 區間是假精度。
    以「交易日區塊」重抽,整塊保留同日橫斷面。
 
@@ -40,8 +40,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from market_data.adjust import load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
+from tw_trade_costs import round_trip_return  # noqa: E402
 
-COST = 0.006          # 來回手續費 + 證交稅 + 滑價
+DEFAULT_POSITION_NOTIONAL = 200_000.0
 # 月營收保鮮期。**這個數字必須與 `screen_tw.REVENUE_STALE_DAYS` 相同**——量測與 live 用
 # 不同的保鮮期,就是在量一個不會下單的訊號集。
 REVENUE_STALE_DAYS = 45
@@ -168,7 +169,8 @@ def forward_returns(piv, h, delisting):
     return ret.where(~censored), delisted
 
 
-def to_events(sig, ret, h, extra):
+def to_events(sig, ret, h, extra, *, entry_notional=DEFAULT_POSITION_NOTIONAL,
+              fee_discount=1.0):
     """把訊號攤成長格式並做事件級去重（同檔 h 個交易日內只算一個事件）。"""
     idx = {d: i for i, d in enumerate(sig.index)}
     rows = []
@@ -177,7 +179,11 @@ def to_events(sig, ret, h, extra):
             r = ret.at[d, s]
             if pd.isna(r):
                 continue
-            rows.append({"date": d, "ti": idx[d], "stock_id": s, "r": float(r) - COST,
+            net = round_trip_return(
+                1.0, 1.0 + float(r), entry_notional=entry_notional,
+                fee_discount=fee_discount,
+            )
+            rows.append({"date": d, "ti": idx[d], "stock_id": s, "r": net,
                          **{k: float(v.at[d, s]) if pd.notna(v.at[d, s]) else np.nan
                             for k, v in extra.items()}})
     t = pd.DataFrame(rows)
@@ -198,33 +204,56 @@ def to_events(sig, ret, h, extra):
     return t, ev
 
 
-def block_bootstrap(ev, calendar, n=1000, block=60, seed=42):
-    """circular block bootstrap，重抽的是**交易日區塊**、整塊保留同日橫斷面。
+def paired_block_bootstrap(events, calendar, n=1000, block=60, seed=42):
+    """成對差異的 circular block bootstrap 95% CI；資料不足時回傳 ``None``。
 
-    `calendar` 必須是**完整交易日索引**，不是「有事件的日子」。舊版兩處都錯：起點只從
-    有事件的日期抽（把事件密集的區間過度取樣），截尾又用事件日數而非交易日數——實測
-    重抽中心值 7.09%，而樣本均值是 10.54%，也就是區間整體偏低，且換 seed 上下界會漂移
-    1pp 以上。circular（繞回開頭）才不會讓樣本兩端被系統性少抽。獨立審查指出。
+    ``events`` 每列須有 ``date`` 與已配對完成的 ``diff``。NaN 代表配對缺一臂，直接排除，
+    不補零。抽樣單位是完整 ``calendar`` 上的連續交易日區塊；同日所有股票會一起被抽中。
     """
+    if n < 2 or block < 1:
+        return None
+    calendar = pd.Index(calendar)
     rng = np.random.default_rng(seed)
     n_days = len(calendar)
     if n_days < block * 2:
-        return float("nan"), float("nan")
-    by_day = {d: g["r"].to_numpy() for d, g in ev.groupby("ti")}
+        return None
+    if not calendar.is_unique or not calendar.is_monotonic_increasing:
+        raise ValueError("calendar must be an ordered, unique full session index")
+
+    pairs = events.loc[:, ["date", "diff"]].dropna()
+    pairs = pairs[np.isfinite(pairs["diff"].astype(float))]
+    if not pairs["date"].isin(calendar).all() or pairs["date"].nunique() < 2:
+        return None
+    event_positions = calendar.get_indexer(pd.Index(pairs["date"].unique()))
+    if event_positions.max() - event_positions.min() < block:
+        return None
+    by_day = {d: g["diff"].to_numpy(dtype=float) for d, g in pairs.groupby("date")}
     n_blocks = int(np.ceil(n_days / block))
     means = []
     for _ in range(n):
         vals = []
+        sampled_days = 0
         for st in rng.integers(0, n_days, size=n_blocks):
             for k in range(block):
-                d = (st + k) % n_days          # circular
+                if sampled_days == n_days:
+                    break
+                d = calendar[(int(st) + k) % n_days]  # circular
                 if d in by_day:
                     vals.extend(by_day[d])
+                sampled_days += 1
         if vals:
             means.append(np.mean(vals))
-    if not means:
-        return float("nan"), float("nan")
+    if len(means) < 2:
+        return None
+    if np.all(np.asarray(means) == 0):
+        return 0.0, 0.0
     return float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5))
+
+
+def block_bootstrap(ev, calendar, n=1000, block=60, seed=42):
+    """相容舊報告的單臂均值區間；取樣核心同樣使用完整交易日曆。"""
+    paired = ev[["ti", "r"]].rename(columns={"ti": "date", "r": "diff"})
+    return paired_block_bootstrap(paired, calendar, n=n, block=block, seed=seed)
 
 
 def describe(ev, label):
@@ -253,7 +282,13 @@ def main(argv=None):
     p.add_argument("--yoy", type=float, default=20.0)
     p.add_argument("--delisting", default="last", choices=["last", "zero"],
                    help="訊號後 h 日內停止交易時的結算方式")
-    p.add_argument("--bootstrap", type=int, default=500, help="區塊 bootstrap 次數（0 關閉）")
+    p.add_argument("--bootstrap", type=int, default=2000, help="區塊 bootstrap 次數（0 關閉）")
+    p.add_argument("--bootstrap-seed", type=int, default=42,
+                   help="區塊 bootstrap 隨機種子（預設 42）")
+    p.add_argument("--position-notional", type=float, default=DEFAULT_POSITION_NOTIONAL,
+                   help="每筆事件的名目本金（元），用來正確套最低手續費")
+    p.add_argument("--fee-discount", type=float, default=1.0,
+                   help="券商手續費折數乘數，例如六折填 0.6")
     p.add_argument("--survivorship-bound", action="store_true",
                    help="加算「補不回月營收的下市公司」的上界（假設它們全部符合營收條件）")
     p.add_argument("--emit-revenue-gaps", default=None, metavar="PATH",
@@ -262,6 +297,10 @@ def main(argv=None):
                         "價格條件成立那幾天會被用到，全量補 3,102 個缺口要數小時，"
                         "精準補只要幾十個請求。")
     a = p.parse_args(argv)
+    if a.position_notional <= 0:
+        p.error("--position-notional must be positive")
+    if a.fee_discount < 0:
+        p.error("--fee-discount must be non-negative")
 
     eng = get_engine()
     piv, rv, info = load(eng, a.start, a.end)
@@ -307,37 +346,50 @@ def main(argv=None):
         return 0
     sig.loc[:pd.Timestamp(a.start)] = False
     ret, delisted = forward_returns(piv, a.horizon, a.delisting)
-    raw, ev = to_events(sig, ret, a.horizon, {k: extra[k] for k in ("d5", "vol_r")})
+    event_args = {"entry_notional": a.position_notional, "fee_discount": a.fee_discount}
+    raw, ev = to_events(sig, ret, a.horizon,
+                        {k: extra[k] for k in ("d5", "vol_r")}, **event_args)
 
+    flat_cost = -round_trip_return(
+        1.0, 1.0, entry_notional=a.position_notional, fee_discount=a.fee_discount)
     print(f"樣本 {a.start} ~ {a.end}　池 {len(keep)} 檔　前瞻 {a.horizon} 交易日　"
-          f"下市結算={a.delisting}　成本 {COST * 100:.1f}%")
-    print(f"名目訊號 {len(raw):,} 筆 → **事件 {len(ev):,} 個**"
+          f"下市結算={a.delisting}　名目本金 {a.position_notional:,.0f} 元　"
+          f"平盤來回成本約 {flat_cost * 100:.3f}%")
+    nominal = int(sig.sum().sum())
+    print(f"名目訊號 {nominal:,} 筆 → 可量測 {len(raw):,} 筆 → **事件 {len(ev):,} 個**"
           f"（同檔 {a.horizon} 交易日內算一個）")
     n_del = int((sig & delisted).sum().sum())
-    n_cens = int((sig & ret.isna()).sum().sum())
+    n_unavailable = nominal - len(raw)
     print(f"其中訊號後 {a.horizon} 日內真下市（已按 --delisting 結算）: {n_del} 筆；"
-          f"樣本右端截斷而排除: {n_cens} 筆\n")
+          f"無可用前瞻報酬而排除（本樣本為右端截斷）: {n_unavailable} 筆\n")
 
     rows = [describe(ev, "候選池")]
     # 同期同池的無條件基準（不套任何選股條件，只留流動性）
     base_sig = extra["liquid"].fillna(False).copy()
     base_sig.loc[:pd.Timestamp(a.start)] = False
-    _, base_ev = to_events(base_sig, ret, a.horizon, {})
+    _, base_ev = to_events(base_sig, ret, a.horizon, {}, **event_args)
     rows.append(describe(base_ev, "全流動股基準"))
     # 有月營收資料的子集（對等基準：候選池必然有 yoy，基準也該有）
     has_rev = base_sig & yoy.notna()
-    _, rev_ev = to_events(has_rev, ret, a.horizon, {})
+    _, rev_ev = to_events(has_rev, ret, a.horizon, {}, **event_args)
     rows.append(describe(rev_ev, "基準(限有月營收)"))
     print(pd.DataFrame(rows).set_index("組").to_string())
 
     if a.bootstrap:
-        lo, hi = block_bootstrap(ev, np.arange(len(close.index)),
-                                 n=a.bootstrap, block=a.horizon)
-        print(f"\n候選池均值的區塊 bootstrap 95% 區間（block={a.horizon} 交易日、"
-              f"{a.bootstrap} 次）: {lo * 100:+.2f}% ~ {hi * 100:+.2f}%")
-        iid = ev["r"].std() / np.sqrt(len(ev)) * 1.96
-        print(f"（同一批事件的 IID 區間是 {(ev['r'].mean() - iid) * 100:+.2f}% ~ "
-              f"{(ev['r'].mean() + iid) * 100:+.2f}%——事件在時間上聚集，IID 是假精度）")
+        ci = block_bootstrap(ev, np.arange(len(close.index)),
+                             n=a.bootstrap, block=a.horizon, seed=a.bootstrap_seed)
+        if ci is None:
+            print(f"\n候選池均值的區塊 bootstrap：inconclusive（至少需要跨越兩個 "
+                  f"{a.horizon} 日區塊的有效事件）")
+        else:
+            lo, hi = ci
+            print(f"\n候選池均值的區塊 bootstrap 95% 區間（block={a.horizon} 交易日、"
+                  f"{a.bootstrap} 次、seed={a.bootstrap_seed}）: {lo * 100:+.2f}% ~ {hi * 100:+.2f}%")
+            iid = ev["r"].std() / np.sqrt(len(ev)) * 1.96
+            print(f"（同一批事件的 IID 區間是 "
+                  f"{(ev['r'].mean() - iid) * 100:+.2f}% ~ "
+                  f"{(ev['r'].mean() + iid) * 100:+.2f}%——事件在時間上聚集，"
+                  "IID 是假精度）")
 
     print("\n=== 逐年（事件級）===")
     ev["y"] = ev["date"].dt.year
@@ -367,8 +419,8 @@ def main(argv=None):
         price_only = price_only.fillna(False)
         price_only.loc[:pd.Timestamp(a.start)] = False
         miss = price_only[[s for s in norev if s in price_only.columns]]
-        _, miss_ev = to_events(miss, ret, a.horizon, {})
-        print(f"\n=== 存活偏誤上界 ===")
+        _, miss_ev = to_events(miss, ret, a.horizon, {}, **event_args)
+        print("\n=== 存活偏誤上界 ===")
         print(f"補不回月營收的已下市公司 {len(norev)} 檔，其中符合**價格條件**的事件 "
               f"{len(miss_ev)} 個")
         if len(miss_ev):

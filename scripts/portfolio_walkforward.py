@@ -2,7 +2,7 @@
 """把訊號的前瞻分布壓成「有限資金真能拿到的那條權益曲線」。
 
 `measure_signal_forward.py` 證明的是**邊際**期望值：每個事件單獨看均值為正。它刻意不做部位
-模擬，所以答不出配置真錢前的最後一關——**前 12% 的事件貢獻總報酬 106%，這些右尾能不能被
+模擬，所以答不出配置真錢前的最後一關——**前 12% 的事件貢獻總報酬 105%，這些右尾能不能被
 有限資金實際持有**？只要同日訊號多於空位、而排擠掉的剛好是大贏家，邊際優勢就落不了地。
 
 因此這裡只回答三件事，其他一律不做（出場仍是固定持有 h 日，與量測一致）：
@@ -42,11 +42,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from market_data.db import get_engine  # noqa: E402
 from measure_signal_forward import (  # noqa: E402
-    COST, apply_thresholds, factors, forward_returns, load, pit_revenue_panel, to_events,
+    apply_thresholds, factors, forward_returns, load, pit_revenue_panel, to_events,
 )
 
-SIDE_COST = COST / 2      # 量測扣的是來回 0.6%，這裡拆成買賣各一半
-TRADING_DAYS = 245        # 台股年均交易日
+from tw_trade_costs import (  # noqa: E402
+    ETF_TRANSACTION_TAX_RATE,
+    TRADING_DAYS_PER_YEAR as TRADING_DAYS,
+    affordable_shares,
+    buy_cash_outflow,
+    buy_fill_price,
+    round_trip_return,
+    sell_cash_inflow,
+    sell_fill_price,
+)
+DEFAULT_CAPITAL = 1_000_000.0
 
 
 DEAD_DAYS = 20            # 連續無報價超過這麼多交易日才當下市（PIT，不看未來）
@@ -85,7 +94,8 @@ def daily_scores(sig, f, yoy):
 
 
 def simulate(piv, sig, f, yoy, h, slots, start, end, rank="score", seed=42,
-             delisting="last", skip_limit_gap=False, scores=None):
+             delisting="last", skip_limit_gap=False, scores=None,
+             capital=DEFAULT_CAPITAL, fee_discount=1.0):
     """T+1 開盤買、持有 h 個交易日後收盤賣，同時最多 `slots` 檔、等權。
 
     現金流時序刻意保守：**今天開盤的買進只能用昨天收盤前就有的現金**（今天賣出的錢要到
@@ -94,7 +104,8 @@ def simulate(piv, sig, f, yoy, h, slots, start, end, rank="score", seed=42,
     停牌與下市一律**不看未來**：出場日無報價就順延到下一個可成交日；連續 `DEAD_DAYS` 個
     交易日沒有報價才視為下市並結算（舊版用「這一列或之後還有沒有成交價」判定，那是前視——
     會在第一個缺價日就「知道」樣本內不再有報價而提前釋放資金）。樣本結束仍未成交的部位
-    列為 right-censored，不計入成交統計，但權益曲線照市值標記。
+    列為 right-censored、不計入成交統計；為了和期末賣出 0050 的基準對等，權益曲線最後一點
+    使用「以最後已知收盤全部清算」的淨值，扣掉賣出手續費與證交稅。
     """
     close, open_ = piv["close"], piv["open"]
     dates = close.index
@@ -105,10 +116,10 @@ def simulate(piv, sig, f, yoy, h, slots, start, end, rank="score", seed=42,
     i1 = int(dates.searchsorted(pd.Timestamp(end), side="right"))
     rng = np.random.default_rng(seed)
 
-    cash, pos = 1.0, {}
+    cash, pos = float(capital), {}
     eq_idx, eq_val, trades, skipped = [], [], [], []
     counts = {"entries": 0, "already_held": 0, "no_open": 0, "limit_gap": 0}
-    prev_equity = 1.0
+    prev_equity = float(capital)
     for i in range(max(i0, 1), i1):
         d, prev = dates[i], dates[i - 1]
         # 1) 進場：昨天收盤的訊號，今天開盤價成交
@@ -136,11 +147,15 @@ def simulate(piv, sig, f, yoy, h, slots, start, end, rank="score", seed=42,
                                     "reason": "no_slot" if j >= free else "no_cash"})
                     continue
                 alloc = min(cash, prev_equity / slots)
-                px = float(open_.at[d, s])
-                cash -= alloc
+                px = buy_fill_price(float(open_.at[d, s]))
+                qty = affordable_shares(alloc, px, fee_discount=fee_discount)
+                cost = buy_cash_outflow(qty, px, fee_discount=fee_discount)
+                if qty <= 0 or cost > cash + 1e-8:
+                    continue
+                cash -= cost
                 counts["entries"] += 1
-                pos[s] = {"qty": alloc * (1 - SIDE_COST) / px, "exit_i": i + h - 1,
-                          "entry": px, "entry_date": d, "cost": alloc, "stale": 0}
+                pos[s] = {"qty": qty, "exit_i": i + h - 1,
+                          "entry": px, "entry_date": d, "cost": cost, "stale": 0}
         # 2) 出場：到期且當日可成交；停牌則順延，連續 DEAD_DAYS 無報價才判下市
         for s, p in list(pos.items()):
             quoted = pd.notna(close.at[d, s])
@@ -150,10 +165,11 @@ def simulate(piv, sig, f, yoy, h, slots, start, end, rank="score", seed=42,
                 continue
             pos.pop(s)
             px = 0.0 if (dead and delisting == "zero") else float(lastc.at[d, s])
-            proceeds = p["qty"] * px * (1 - SIDE_COST)
+            fill = sell_fill_price(px)
+            proceeds = sell_cash_inflow(p["qty"], fill, fee_discount=fee_discount)
             cash += proceeds
             trades.append({"stock_id": s, "entry_date": p["entry_date"], "exit_date": d,
-                           "entry": p["entry"], "exit": px, "delisted": dead,
+                           "entry": p["entry"], "exit": fill, "delisted": dead,
                            "deferred": d != dates[min(p["exit_i"], len(dates) - 1)],
                            "r": proceeds / p["cost"] - 1})
         # 3) 收盤標記
@@ -162,42 +178,82 @@ def simulate(piv, sig, f, yoy, h, slots, start, end, rank="score", seed=42,
         eq_val.append(prev_equity)
     counts["closed"] = len(trades)
     counts["open_at_end"] = len(pos)
-    return (pd.Series(eq_val, index=pd.DatetimeIndex(eq_idx)),
+    if eq_val and pos:
+        terminal_day = eq_idx[-1]
+        terminal = cash
+        for stock_id, position in pos.items():
+            terminal_price = lastc.at[terminal_day, stock_id]
+            if pd.isna(terminal_price):
+                terminal_price = 0.0
+            terminal += sell_cash_inflow(
+                position["qty"], sell_fill_price(float(terminal_price)),
+                fee_discount=fee_discount)
+        eq_val[-1] = terminal
+    return (pd.Series(eq_val, index=pd.DatetimeIndex(eq_idx)) / float(capital),
             pd.DataFrame(trades), pd.DataFrame(skipped), counts)
 
 
 def metrics(eq):
+    """Metrics for an end-of-session equity curve normalized by original capital."""
     if len(eq) < 2:
         return {}
     yrs = len(eq) / TRADING_DAYS
-    dr = eq.pct_change().dropna()
-    dd = eq / eq.cummax() - 1
+    # The first point is already after that session's trades. Prepending original
+    # capital keeps an entry commission on day one from disappearing in eq/eq[0].
+    curve = pd.Series(np.r_[1.0, eq.astype(float).to_numpy()])
+    dr = curve.pct_change().dropna()
+    dd = curve / curve.cummax() - 1
     sharpe = dr.mean() / dr.std() * np.sqrt(TRADING_DAYS) if dr.std() else float("nan")
-    return {"總報酬": f"{(eq.iloc[-1] / eq.iloc[0] - 1) * 100:+.1f}%",
-            "年化": f"{((eq.iloc[-1] / eq.iloc[0]) ** (1 / yrs) - 1) * 100:+.1f}%",
+    return {"總報酬": f"{(eq.iloc[-1] - 1) * 100:+.1f}%",
+            "年化": f"{(eq.iloc[-1] ** (1 / yrs) - 1) * 100:+.1f}%",
             "年化波動": f"{dr.std() * np.sqrt(TRADING_DAYS) * 100:.1f}%",
             "Sharpe": f"{sharpe:.2f}", "最大回撤": f"{dd.min() * 100:.1f}%"}
 
 
-def bench_0050(piv_full, eq_index):
-    """0050 買進持有（前復權，含配息）。`load` 已把 price_adjustment 套上去。"""
+def yearly_returns(curve):
+    """逐年報酬（%）。第一年的分母是**原始本金 1.0**，不是第一列權益。
+
+    用第一列當分母會把首日進場成本從第一年抵掉——`metrics()` 已經是本金口徑，這裡不跟上
+    就會兩張表對不起來。
+    """
+    yearly = curve.resample("YE").last()
+    return (yearly / yearly.shift(1).fillna(1.0) - 1) * 100
+
+
+def bench_0050(piv_full, eq_index, *, capital=DEFAULT_CAPITAL, fee_discount=1.0):
+    """0050 買進持有，买卖两端使用和策略相同的現金流成本。
+
+    唯一刻意不同的是證交稅：0050 是 ETF，賣方稅率 **0.1%**（個股是 0.3%）。沿用個股稅率
+    會高估基準成本，而本策略的結論是「風險調整後輸給 0050」——那個偏誤方向對策略有利。
+    """
     if "0050" not in piv_full["close"].columns:
         return None
     s = piv_full["close"]["0050"].reindex(eq_index).ffill().dropna()
-    return s / s.iloc[0] if len(s) else None
+    if not len(s):
+        return None
+    entry = buy_fill_price(s.iloc[0])
+    shares = affordable_shares(capital, entry, fee_discount=fee_discount)
+    paid = buy_cash_outflow(shares, entry, fee_discount=fee_discount)
+    cash = float(capital) - paid
+    value = cash + shares * s
+    value.iloc[-1] = cash + sell_cash_inflow(
+        shares, sell_fill_price(s.iloc[-1]), fee_discount=fee_discount,
+        tax_rate=ETF_TRANSACTION_TAX_RATE)
+    return value / float(capital)
 
 
 GRID = {"d5": [0.03, 0.05, 0.08], "yoy": [10.0, 20.0, 30.0], "vol_hi": [2.0, 3.0]}
 
 
-def walk_forward_signals(close, f, yoy, ret, h, start, end, folds, vol_lo):
+def walk_forward_signals(close, f, yoy, ret, h, start, end, folds, vol_lo, *,
+                         entry_notional=200_000.0, fee_discount=1.0):
     """擴張窗選參：每折只用該折之前的事件均值挑門檻，回傳拼好的樣本外訊號面板。"""
     idx = close.index
     win = idx[(idx >= pd.Timestamp(start)) & (idx <= pd.Timestamp(end))]
     edges = [win[int(len(win) * k / folds)] for k in range(folds)] + [win[-1]]
     combos = [dict(zip(GRID, v)) for v in itertools.product(*GRID.values())]
     cache = {tuple(c.values()): apply_thresholds(close, f, yoy, c["d5"], vol_lo,
-                                                c["vol_hi"], c["yoy"]) for c in combos}
+                                                 c["vol_hi"], c["yoy"]) for c in combos}
     out = pd.DataFrame(False, index=close.index, columns=close.columns)
     picks = []
     for k in range(1, folds):                       # 第 0 折只當訓練期，不交易
@@ -210,7 +266,8 @@ def walk_forward_signals(close, f, yoy, ret, h, start, end, folds, vol_lo):
             s = cache[tuple(c.values())].copy()
             s.loc[:pd.Timestamp(start)] = False
             s.loc[cut:] = False                     # 只用報酬已實現的訊號
-            _, ev = to_events(s, ret, h, {})
+            _, ev = to_events(s, ret, h, {}, entry_notional=entry_notional,
+                              fee_discount=fee_discount)
             if len(ev) < 20:                        # 樣本太小的門檻組不可信
                 continue
             if ev["r"].mean() > best_m:
@@ -221,8 +278,9 @@ def walk_forward_signals(close, f, yoy, ret, h, start, end, folds, vol_lo):
         seg = (out.index > tr_end) & (out.index <= fo_end)
         out.loc[seg] = sel.loc[seg]
         picks.append({"折": k, "訓練截止": tr_end.date(), "樣本外至": fo_end.date(),
-                      "選中門檻": f"d5≥{best['d5']:.0%} yoy≥{best['yoy']:.0f} "
-                                  f"量比≤{best['vol_hi']}",
+                      "選中門檻": (
+                          f"d5≥{best['d5']:.0%} yoy≥{best['yoy']:.0f} "
+                          f"量比≤{best['vol_hi']}"),
                       "訓練事件": best_n, "訓練均值": f"{best_m * 100:+.2f}%"})
     return out, pd.DataFrame(picks), edges[1]
 
@@ -230,6 +288,10 @@ def walk_forward_signals(close, f, yoy, ret, h, start, end, folds, vol_lo):
 def main(argv=None):
     p = argparse.ArgumentParser(description="訊號的組合層驗證（資金競爭 + 走前驗證）")
     p.add_argument("--start", default="2020-01-01")
+    p.add_argument("--capital", type=float, default=DEFAULT_CAPITAL,
+                   help="組合起始本金（元），用來正確套最低手續費")
+    p.add_argument("--fee-discount", type=float, default=1.0,
+                   help="券商手續費折數乘數，例如六折填 0.6")
     p.add_argument("--end", default="2026-07-24")
     p.add_argument("--horizon", type=int, default=60, help="固定持有交易日數")
     p.add_argument("--slots", type=int, default=5, help="同時最多持有幾檔（等權）")
@@ -254,12 +316,19 @@ def main(argv=None):
                         "——不排除的話組合會買進 live 永遠不會買的標的，而全庫唯一過得了流動性"
                         "門檻的 7610 是 10 倍股，單它一檔就能把 Sharpe 撐高 0.2")
     p.add_argument("--skip-limit-gap", action="store_true",
-                   help=f"跳過開盤跳空 ≥{LIMIT_GAP:.1%} 的進場（貼近漲停，開盤有一筆成交不代表"
-                        f"整個部位吃得到那個價）。用來看 headline 對這個假設有多敏感")
+                   help=f"跳過開盤跳空 ≥{LIMIT_GAP * 100:.1f}%% 的進場（貼近漲停，開盤有一筆成交不代表"
+                        "整個部位吃得到那個價）。用來看 headline 對這個假設有多敏感")
     p.add_argument("--walk-forward", action="store_true",
                    help="擴張窗選參，只計樣本外")
     p.add_argument("--folds", type=int, default=5)
     a = p.parse_args(argv)
+
+    if a.capital <= 0:
+        p.error("--capital must be positive")
+    if a.fee_discount < 0:
+        p.error("--fee-discount must be non-negative")
+    if a.slots < 1:
+        p.error("--slots must be positive")
 
     eng = get_engine()
     piv_full, rv, info = load(eng, a.start, a.end)
@@ -281,7 +350,9 @@ def main(argv=None):
     start = a.start
     if a.walk_forward:
         sig, picks, start = walk_forward_signals(close, f, yoy, ret, a.horizon,
-                                                 a.start, a.end, a.folds, a.vol_lo)
+                                                 a.start, a.end, a.folds, a.vol_lo,
+                                                 entry_notional=a.capital / a.slots,
+                                                 fee_discount=a.fee_discount)
         print("=== 擴張窗選參（第 0 折只訓練不交易）===")
         print(picks.to_string(index=False) if len(picks) else "（沒有任何折有足夠事件）")
         print()
@@ -291,13 +362,16 @@ def main(argv=None):
 
     scores = daily_scores(sig, f, yoy)
     run = dict(rank=a.rank, seed=a.seed, delisting=a.delisting,
-               skip_limit_gap=a.skip_limit_gap, scores=scores)
+               skip_limit_gap=a.skip_limit_gap, scores=scores,
+               capital=a.capital, fee_discount=a.fee_discount)
     eq, tr, sk, cn = simulate(piv, sig, f, yoy, a.horizon, a.slots, start, a.end, **run)
     n_sig = int(sig.loc[eq.index[0]:eq.index[-1]].sum().sum())
+    flat_cost = -round_trip_return(1.0, 1.0, entry_notional=a.capital / a.slots,
+                                   fee_discount=a.fee_discount)
     print(f"樣本 {eq.index[0].date()} ~ {eq.index[-1].date()}　池 {len(keep)} 檔"
           f"{'（含創新板）' if a.include_tib else '（排除創新板）'}　"
           f"持有 {a.horizon} 交易日　空位 {a.slots}　排序={a.rank}　"
-          f"成本 {COST * 100:.1f}%（買賣各 {SIDE_COST * 100:.2f}%）")
+          f"本金 {a.capital:,.0f} 元　平盤來回成本約 {flat_cost * 100:.3f}%")
     print(f"名目訊號 {n_sig:,} 筆 → 進場 {cn['entries']} 次（已平倉 {cn['closed']}、"
           f"期末仍持有 {cn['open_at_end']}）；訊號落在已持股 {cn['already_held']} 筆、"
           f"無 T+1 開盤價 {cn['no_open']} 筆"
@@ -305,14 +379,17 @@ def main(argv=None):
           + f"；因空位不足放棄 {len(sk):,} 筆")
 
     if a.rank_test:
-        base = float(eq.iloc[-1] / eq.iloc[0])
+        # eq 已用原始本金正規化，所以期末權益就是總倍數；除以 eq[0] 會把首日進場成本
+        # 從分母裡抵掉（`metrics()` 同一個口徑）。
+        base = float(eq.iloc[-1])
         rs = []
         for k in range(a.rank_test):
             e2, t2, _, _ = simulate(piv, sig, f, yoy, a.horizon, a.slots, start, a.end,
                                     rank="random", seed=a.seed + k,
                                     delisting=a.delisting,
-                                    skip_limit_gap=a.skip_limit_gap, scores=scores)
-            rs.append(float(e2.iloc[-1] / e2.iloc[0]))
+                                    skip_limit_gap=a.skip_limit_gap, scores=scores,
+                                    capital=a.capital, fee_discount=a.fee_discount)
+            rs.append(float(e2.iloc[-1]))
         rs = np.array(rs)
         pct = float((rs < base).mean() * 100)
         # permutation p 值的下限是 1/(N+1)：N 太小的話「沒有優勢」與「檢定沒有效力」分不開
@@ -328,14 +405,16 @@ def main(argv=None):
             e2, t2, _, _ = simulate(piv, sig, f, yoy, a.horizon, a.slots, start, a.end,
                                     rank=a.rank, seed=a.seed + k,
                                     delisting=a.delisting,
-                                    skip_limit_gap=a.skip_limit_gap, scores=scores)
+                                    skip_limit_gap=a.skip_limit_gap, scores=scores,
+                                    capital=a.capital, fee_discount=a.fee_discount)
             rs.append({"seed": a.seed + k, **metrics(e2),
                        "成交": len(t2), "均值": f"{t2['r'].mean() * 100:+.2f}%"})
         print(f"\n=== {a.rank} 排序的 {a.seeds} 個 seed ===")
         print(pd.DataFrame(rs).to_string(index=False))
 
     rows = {"組合": metrics(eq)}
-    b = bench_0050(piv_full, eq.index)
+    b = bench_0050(piv_full, eq.index, capital=a.capital,
+                   fee_discount=a.fee_discount)
     if b is not None:
         rows["0050 買進持有"] = metrics(b)
     print("\n" + pd.DataFrame(rows).T.to_string())
@@ -373,10 +452,15 @@ def main(argv=None):
         took_p = [(close.index[di[d] - 1], s)
                   for d, s in zip(tr["entry_date"], tr["stock_id"])] if len(tr) else []
         miss_p = list(zip(sk["date"], sk["stock_id"]))
-        took = _r(took_p) - COST
-        miss_raw = _r(miss_p) - COST
-        miss = _r(_dedupe(miss_p)) - COST
-        print(f"\n=== 排擠成本（同一組前瞻報酬、扣 {COST * 100:.1f}%）===")
+
+        def _net(raw):
+            return raw.map(lambda r: round_trip_return(
+                1.0, 1.0 + r, entry_notional=a.capital / a.slots,
+                fee_discount=a.fee_discount))
+        took = _net(_r(took_p))
+        miss_raw = _net(_r(miss_p))
+        miss = _net(_r(_dedupe(miss_p)))
+        print("\n=== 排擠成本（同一組前瞻報酬、相同買賣現金流）===")
         print(f"買到的 {len(took)} 筆均值 {took.mean() * 100:+.2f}%　"
               f"P(≥30%) {(took >= .3).mean() * 100:.1f}%")
         print(f"沒買到的（事件去重）{len(miss)} 個均值 {miss.mean() * 100:+.2f}%　"
@@ -387,12 +471,9 @@ def main(argv=None):
               f"（>0 = 排序把好的擠掉了；用去重後的那一列）")
 
     print("\n=== 逐年（組合權益）===")
-    yr = eq.resample("YE").last()
-    yr = pd.concat([eq.iloc[:1], yr]).pct_change().dropna() * 100
-    out = pd.DataFrame({"組合%": yr.round(1)})
+    out = pd.DataFrame({"組合%": yearly_returns(eq).round(1)})
     if b is not None:
-        yb = pd.concat([b.iloc[:1], b.resample("YE").last()]).pct_change().dropna() * 100
-        out["0050%"] = yb.round(1).reindex(out.index)
+        out["0050%"] = yearly_returns(b).round(1).reindex(out.index)
     out.index = [d.year for d in out.index]
     print(out.to_string())
     return 0

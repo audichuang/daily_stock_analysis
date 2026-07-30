@@ -20,10 +20,13 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from backtest_screen import (  # noqa: E402
     FEE_RATE,
+    SLIPPAGE,
     MIN_FEE,
     TAX_RATE,
     _irr,
+    affordable_shares,
     build_indicators,
+    buy_hold_benchmark,
     buy_cost,
     exposure_matched_cagr,
     sell_net,
@@ -108,6 +111,44 @@ def test_fee_discount_reduces_cost():
 
 
 # --- 基準對等性 ---
+
+@pytest.mark.parametrize("script", [
+    "backtest_screen.py", "measure_signal_forward.py", "portfolio_walkforward.py",
+    "screen_tw.py", "verify_swing_decisions.py",
+])
+def test_every_pipeline_script_can_print_help(script):
+    """argparse 會對 help 字串做 `%` 格式化，所以裸 `%` 會讓 `--help` 直接 ValueError。
+
+    踩過兩次：`portfolio_walkforward --skip-limit-gap` 與 `backtest_screen --include-tib`。
+    第一次只在單支腳本加測試，第二支就漏掉了——所以這裡一次釘住全部入口。
+    `--help` 在 argparse 階段就結束，不會碰 DB。
+    """
+    import subprocess
+
+    r = subprocess.run([sys.executable, str(SCRIPTS_DIR / script), "--help"],
+                       capture_output=True, text=True, cwd=ROOT)
+    assert r.returncode == 0, f"{script} --help 失敗：{r.stderr[-500:]}"
+
+
+def test_buy_hold_benchmark_charges_entry_and_the_etf_exit_tax():
+    """0050 的賣出證交稅是 ETF 的 0.1%，不是 `sell_net` 預設的個股 0.3%。"""
+    from tw_trade_costs import ETF_TRANSACTION_TAX_RATE, sell_cash_inflow
+
+    days = pd.bdate_range("2026-01-01", periods=3)
+    price = pd.Series(100.0, index=days)
+
+    curve = buy_hold_benchmark(price, capital=200_000, fee_rate=FEE_RATE)
+
+    entry = 100 * (1 + SLIPPAGE)
+    shares = affordable_shares(200_000, entry, fee_rate=FEE_RATE)
+    cash = 200_000 - buy_cost(shares, entry, FEE_RATE)
+    expected = cash + sell_cash_inflow(shares, 100 * (1 - SLIPPAGE),
+                                       fee_rate=FEE_RATE,
+                                       tax_rate=ETF_TRANSACTION_TAX_RATE)
+    assert curve.iloc[-1] == pytest.approx(expected)
+    # 個股稅率會多扣 0.2%，基準被壓低
+    assert curve.iloc[-1] > cash + sell_net(shares, 100 * (1 - SLIPPAGE), FEE_RATE)
+
 
 def _ledger(cash_ratio):
     eq = pd.Series(100.0, index=DAYS)
@@ -228,47 +269,6 @@ def test_run_position_size_compounds_with_equity():
     late_cash_ratio = (ledger["cash"] / ledger["equity"]).iloc[-2]
     assert ledger["equity"].iloc[-1] > 1_000_000
     assert late_cash_ratio < 0.5
-
-
-def test_run_idle_yield_needs_two_legs():
-    """單一 close-to-close 序列會讓開盤成交的現金拿到錯的那一段，必須擋在型別層。"""
-    from backtest_screen import run
-    days, _, px, ind = _synthetic(n_days=10)
-    with pytest.raises(TypeError, match="兩段 Series"):
-        run(ind, px, days, {}, slots=5, rule="none", max_hold=250,
-            capital=1_000_000, idle_yield=pd.Series(0.10, index=days))
-
-
-def test_run_idle_yield_splits_overnight_and_intraday():
-    """停泊報酬拆兩段：隔夜段在開盤成交**前**計、盤中段在收盤計。
-
-    全程無持倉時兩段都該落在現金上，等於當日 close-to-close 複利。
-    """
-    from backtest_screen import run
-    days, _, px, ind = _synthetic(n_days=10)
-    over = pd.Series(0.05, index=days)
-    intra = pd.Series(0.02, index=days)
-    _, ledger = run(ind, px, days, {}, slots=5, rule="none",
-                    max_hold=250, capital=1_000_000, idle_yield=(over, intra))
-    assert ledger["equity"].iloc[0] == pytest.approx(1_000_000 * 1.05 * 1.02)
-    assert ledger["equity"].iloc[-1] == pytest.approx(1_000_000 * (1.05 * 1.02) ** len(days))
-
-
-def test_run_idle_intraday_not_credited_to_cash_spent_at_open():
-    """在開盤買掉的現金不該再領當日盤中段——那是它已經不在 0050 上的時段。"""
-    from backtest_screen import run
-    days, _, px, ind = _synthetic(n_days=6)
-    over = pd.Series(0.0, index=days)
-    intra = pd.Series(0.50, index=days)          # 盤中段給極大值放大差異
-    sig = {days[0]: ["1111"]}
-    _, ledger = run(ind, px, days, sig, slots=1, rule="none",
-                    max_hold=250, capital=1_000_000, idle_yield=(over, intra))
-    # 第 2 天開盤全額買進 → 當天現金幾乎為 0，盤中段幾乎沒東西可計
-    assert ledger["cash"].iloc[1] < 1_000
-    # 價格全程不動，所以第 2 天淨值只該比第 1 天少掉買進成本；若盤中段被錯誤記在
-    # 「已經拿去買股」的現金上，淨值會再膨脹 1.5 倍。
-    assert ledger["equity"].iloc[1] < ledger["equity"].iloc[0]
-    assert ledger["equity"].iloc[1] > 0.99 * ledger["equity"].iloc[0]
 
 
 def test_regime_gate_blocks_new_entries():

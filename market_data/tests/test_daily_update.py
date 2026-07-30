@@ -1,6 +1,8 @@
 from datetime import date
 
-from market_data import crawl
+import pytest
+
+from market_data import adjust, crawl
 
 
 class _Result:
@@ -37,6 +39,8 @@ def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch, capsys):
                         lambda conn, month: calls.append(("rev", month)) or 0)
     monkeypatch.setattr(crawl, "crawl_ex_dividend",
                         lambda conn, start, end: calls.append(("exd", start, end)) or 0)
+    monkeypatch.setattr(adjust, "refresh_recent",
+                        lambda engine, start, end: calls.append(("adjust", start, end)))
     # 只記錄再委派給真品:不這樣做的話,`daily_update` 退回「直接呼叫那三個函式」
     # 也會通過所有斷言,共用入口就白抽了(而共用入口正是「印出」不會再被漏掉的保證)
     real_snapshots = crawl.crawl_snapshots
@@ -52,9 +56,28 @@ def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch, capsys):
     # 上月營收(asof 6/5 -> 5 月)與除權息滾動窗(-30d ~ +90d)
     assert ("rev", date(2024, 5, 1)) in calls
     assert ("exd", date(2024, 5, 6), date(2024, 9, 3)) in calls
+    # 復權事件刷新與除權息共用 ±ADJUSTMENT_WINDOW_DAYS,不再各寫一個 90
+    assert ("adjust", date(2024, 3, 7), date(2024, 9, 3)) in calls
 
     # 每一段都要留下可觀測的行——`daily` 全靜默正是這次要修的病
     out = capsys.readouterr().out
     for expect in ("valuation 0 rows", "index 0 rows", "stock_info 0 rows",
                    "monthly_revenue 2024-05 0 rows", "ex_dividend 0 rows"):
         assert expect in out, f"{expect!r} 沒印出來：{out!r}"
+
+
+def test_recovery_dates_include_a_missing_weekday_between_stored_dates():
+    dates = crawl.recovery_dates(
+        date(2024, 6, 5),
+        [date(2024, 6, 5), date(2024, 6, 3), date(2024, 5, 31)],
+    )
+    assert date(2024, 6, 4) in dates
+    assert dates == [date(2024, 5, 31), date(2024, 6, 1), date(2024, 6, 2),
+                     date(2024, 6, 3), date(2024, 6, 4), date(2024, 6, 5)]
+
+
+def test_recovery_dates_reject_a_long_implicit_backfill():
+    with pytest.raises(RuntimeError, match="backfill explicitly"):
+        crawl.recovery_dates(
+            date(2024, 6, 5), [date(2024, 1, 2)],
+        )

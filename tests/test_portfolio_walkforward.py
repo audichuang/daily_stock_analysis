@@ -18,10 +18,22 @@ SCRIPTS_DIR = ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import portfolio_walkforward as portfolio  # noqa: E402
+
 from portfolio_walkforward import (  # noqa: E402
-    DEAD_DAYS, LIMIT_GAP, SIDE_COST, daily_scores, simulate, walk_forward_signals,
+    DEAD_DAYS, DEFAULT_CAPITAL, LIMIT_GAP, bench_0050, daily_scores, main,
+    metrics, simulate, walk_forward_signals, yearly_returns,
 )
 from measure_signal_forward import factors  # noqa: E402
+from tw_trade_costs import (  # noqa: E402
+    ETF_TRANSACTION_TAX_RATE,
+    STOCK_TRANSACTION_TAX_RATE,
+    affordable_shares,
+    buy_cash_outflow,
+    buy_fill_price,
+    sell_cash_inflow,
+    sell_fill_price,
+)
 
 
 def _piv(n=40, cols=("1111", "2222", "3333")):
@@ -38,6 +50,14 @@ def _blank(piv):
     f = factors(piv, 1e8)
     yoy = pd.DataFrame(30.0, index=close.index, columns=close.columns)
     return sig, f, yoy
+
+
+def test_help_renders_literal_percentage_without_loading_the_database(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--help"])
+
+    assert exc.value.code == 0
+    assert "9.5%" in capsys.readouterr().out
 
 
 def test_no_signal_means_flat_equity():
@@ -63,17 +83,97 @@ def test_slot_limit_blocks_same_day_competitors():
     assert eq.iloc[-1] > 1.0                  # 唯一那筆是賺的（面板單調上漲）
 
 
-def test_trade_return_is_open_to_close_minus_both_side_costs():
+def test_trade_return_uses_buy_commission_then_sell_commission_and_tax():
     piv = _piv()
     sig, f, yoy = _blank(piv)
     sig.iloc[10, 0] = True
     h = 5
     _, tr, _, _ = simulate(piv, sig, f, yoy, h, 5, "2026-01-05", "2026-02-20")
-    entry = piv["open"].iloc[11, 0]           # 訊號日的次一交易日開盤
-    exit_ = piv["close"].iloc[11 + h - 1, 0]  # 進場後持有 h 個交易日
-    expect = (exit_ / entry) * (1 - SIDE_COST) ** 2 - 1
+    entry = buy_fill_price(piv["open"].iloc[11, 0])
+    exit_ = sell_fill_price(piv["close"].iloc[11 + h - 1, 0])
+    budget = DEFAULT_CAPITAL / 5
+    shares = affordable_shares(budget, entry)
+    expect = sell_cash_inflow(shares, exit_) / buy_cash_outflow(shares, entry) - 1
     assert tr["r"].iloc[0] == pytest.approx(expect)
     assert tr["entry"].iloc[0] == pytest.approx(entry)
+
+
+def test_0050_benchmark_charges_buy_commission_and_the_etf_sell_tax():
+    """0050 是 ETF：賣方證交稅 0.1%，不是個股的 0.3%。沿用個股稅率會高估基準成本，
+    而這條流水線的結論正是「輸給 0050」——偏誤方向對策略有利，所以必須用對稅率。"""
+    days = pd.bdate_range("2026-01-01", periods=3)
+    piv = {"close": pd.DataFrame({"0050": [100.0, 100.0, 100.0]}, index=days)}
+    capital = 200_000.0
+
+    equity = bench_0050(piv, days, capital=capital)
+    entry = buy_fill_price(100.0)
+    shares = affordable_shares(capital, entry)
+    paid = buy_cash_outflow(shares, entry)
+    expected_end = capital - paid + sell_cash_inflow(
+        shares, sell_fill_price(100.0), tax_rate=ETF_TRANSACTION_TAX_RATE)
+
+    expected_after_buy = (capital - paid + shares * 100.0) / capital
+    assert equity.iloc[0] == pytest.approx(expected_after_buy)
+    assert equity.iloc[0] < 1.0
+    assert equity.iloc[-1] == pytest.approx(expected_end / capital)
+    assert equity.iloc[-1] < 1.0
+    # 用個股稅率會多扣 0.2% 的期末市值，基準因此被系統性壓低
+    stock_tax_end = capital - paid + sell_cash_inflow(
+        shares, sell_fill_price(100.0), tax_rate=STOCK_TRANSACTION_TAX_RATE)
+    assert equity.iloc[-1] > stock_tax_end / capital
+
+    # --- 手算的黃金值：**刻意不呼叫任何 tw_trade_costs helper** ---
+    # 上面的期望值和生產程式碼走同一批 helper，所以「helper 自己漏算手續費」的 mutation
+    # 會讓兩邊一起錯、測試照樣綠（獨立審查指出）。這裡改用純算術釘住：
+    #   entry = 100 × 1.0015 = 100.15；shares = 200000 / (100.15 × 1.001425) = 1994.162811
+    #   買進付光本金 → cash = 0
+    #   exit = 100 × 0.9985 = 99.85；net = gross × (1 − 0.001425 − 0.001) = 198634.2976
+    # 個股稅率 0.3% 會得到 0.9911803164，差得夠遠、不會被 rel=1e-9 混過去。
+    assert equity.iloc[-1] == pytest.approx(0.9931714880, rel=1e-9)
+
+
+def test_yearly_returns_start_the_first_year_from_original_capital():
+    """第一年若用第一列權益當分母，首日進場成本會被抵掉、逐年表跟 metrics 對不起來。"""
+    days = pd.bdate_range("2025-12-01", periods=40)
+    curve = pd.Series(0.99, index=days)
+    curve.loc[curve.index[curve.index.year == 2026]] = 1.05
+
+    yearly = yearly_returns(curve)
+
+    assert yearly.iloc[0] == pytest.approx(-1.0)      # 2025：1.0 → 0.99
+    assert yearly.iloc[1] == pytest.approx((1.05 / 0.99 - 1) * 100)
+
+
+def test_metrics_keeps_original_capital_as_the_return_baseline():
+    days = pd.bdate_range("2026-01-01", periods=2)
+    equity = pd.Series([0.99, 1.0], index=days)
+
+    result = metrics(equity)
+
+    assert result["總報酬"] == "+0.0%"
+    assert result["最大回撤"] == "-1.0%"
+
+
+def test_terminal_equity_deducts_exit_cost_for_right_censored_position():
+    piv = _piv(n=20, cols=("1111",))
+    for field in ("close", "open", "high", "low"):
+        piv[field].loc[:, "1111"] = 100.0
+    sig, f, yoy = _blank(piv)
+    sig.iloc[5, 0] = True
+
+    eq, trades, _, counts = simulate(
+        piv, sig, f, yoy, 60, 5, piv["close"].index[1], piv["close"].index[-1])
+
+    budget = DEFAULT_CAPITAL / 5
+    entry = buy_fill_price(100.0)
+    shares = affordable_shares(budget, entry)
+    paid = buy_cash_outflow(shares, entry)
+    expected = (DEFAULT_CAPITAL - paid
+                + sell_cash_inflow(shares, sell_fill_price(100.0))) / DEFAULT_CAPITAL
+    assert trades.empty
+    assert counts["open_at_end"] == 1
+    assert eq.iloc[-1] == pytest.approx(expected)
+    assert eq.iloc[-1] < 1.0
 
 
 def test_delisted_position_is_settled_not_held_forever():
@@ -107,7 +207,7 @@ def test_suspended_exit_day_defers_instead_of_selling_at_a_stale_price():
     assert len(tr) == 1
     assert tr["exit_date"].iloc[0] == piv["close"].index[17]   # 順延到復牌日
     assert bool(tr["deferred"].iloc[0]) and not bool(tr["delisted"].iloc[0])
-    assert tr["exit"].iloc[0] == pytest.approx(piv["close"].iloc[17, 0])
+    assert tr["exit"].iloc[0] == pytest.approx(sell_fill_price(piv["close"].iloc[17, 0]))
 
 
 def test_long_suspension_becomes_a_delisting_only_after_dead_days():
@@ -167,3 +267,29 @@ def test_walk_forward_never_trades_inside_its_own_training_window():
                                              close.index[0], close.index[-1], 5, 1.3)
     assert not out.loc[:pd.Timestamp(start)].to_numpy().any()
     assert start > close.index[0]
+
+
+def test_walk_forward_training_uses_requested_cost_assumptions(monkeypatch):
+    piv = _piv(n=300)
+    close = piv["close"]
+    f = factors(piv, 1e8)
+    yoy = pd.DataFrame(50.0, index=close.index, columns=close.columns)
+    ret = pd.DataFrame(0.1, index=close.index, columns=close.columns)
+    calls = []
+
+    def fake_to_events(sig, actual_ret, h, extra, **kwargs):
+        calls.append(kwargs)
+        events = pd.DataFrame({"r": [0.1] * 20})
+        return events.copy(), events
+
+    monkeypatch.setattr(portfolio, "to_events", fake_to_events)
+    portfolio.walk_forward_signals(
+        close, f, yoy, ret, 5, close.index[0], close.index[-1], 5, 1.3,
+        entry_notional=123_456, fee_discount=0.6,
+    )
+
+    assert calls
+    assert all(call == {
+        "entry_notional": 123_456,
+        "fee_discount": 0.6,
+    } for call in calls)

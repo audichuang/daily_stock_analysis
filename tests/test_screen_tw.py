@@ -126,6 +126,44 @@ def test_breakout_funnel_applies_volume_upper_bound():
     assert BREAKOUT["vol_ratio5_max"] == 2.0
 
 
+def test_momentum_score_survives_a_stale_valuation_table():
+    """估值缺日不能讓整個 score 變 NaN——那會讓 `--top N` 靜默退化成「代號最小的 N 檔」。
+
+    `valuation` 走 `BWIBBU_ALL`（無日期參數的當日快照），官方常盤後才發布，所以
+    `date = as_of` 查到 0 列是常態；左 join 後 `pe_ratio` 整欄 NaN，而舊版
+    `fillna(median())` 的 median 自己也是 NaN → rank 全 NaN → score 全 NaN。
+    實測 2026-07-30 momentum 寬掃 5 檔全是 score=None、順序 1101/1102/1216/1402/1476。
+    """
+    from screen_tw import funnel
+    base = {
+        "is_etf": False, "is_tib": False, "turnover20": 5e8, "close": 110.0,
+        "ma20": 105.0, "ma60": 100.0, "inst_5": 1.0, "bias20": 0.05,
+        "hi60_prior": 100.0, "d5": 0.10, "vol_ratio5": 1.5, "yoy": 30.0,
+        "pe_ratio": float("nan"),                      # 估值整欄缺
+    }
+    df = pd.DataFrame([
+        {**base, "stock_id": "9999", "d20": 0.30, "d1": 0.03},   # 動能最強、代號最大
+        {**base, "stock_id": "1101", "d20": 0.05, "d1": 0.00},   # 動能最弱、代號最小
+    ])
+
+    pool, _ = funnel(df, 2e8, "momentum")
+
+    assert pool["score"].notna().all(), "估值缺日時 score 不得為 NaN"
+    # 排序必須由其餘四項決定，不能退回代號序
+    assert list(pool["stock_id"]) == ["9999", "1101"]
+
+
+def test_pe_score_is_neutral_only_when_every_value_is_missing():
+    from screen_tw import _pe_score
+
+    allnan = _pe_score(pd.Series([float("nan")] * 3))
+    assert (allnan == 0.5).all()
+    # 有可用值時仍要低本益比得高分（且部分缺值走 median 補）
+    partial = _pe_score(pd.Series([10.0, 50.0, float("nan")]))
+    assert partial.iloc[0] > partial.iloc[1]
+    assert partial.notna().all()
+
+
 def test_breakout_funnel_requires_revenue_growth():
     """營收條件是唯一讓前瞻分布歪向右邊的東西——純價格突破是 16.4% 上 / 16.5% 下。"""
     from screen_tw import funnel

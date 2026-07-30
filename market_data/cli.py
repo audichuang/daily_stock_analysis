@@ -32,6 +32,9 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="market-crawl")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("daily", help="近幾日增量 + 每日快照")
+    h = sub.add_parser("health", help="資料完整性與近期缺口稽核")
+    h.add_argument("--strict", action="store_true",
+                   help="近期交易日或復權事件有缺口時回傳非零")
     b = sub.add_parser("backfill", help="回補某來源日期區間")
     b.add_argument("source", choices=["price", "institutional", "margin", "valuation"])
     b.add_argument("--start", required=True)
@@ -74,6 +77,9 @@ def main(argv=None):
     eng = get_engine()
     if args.command == "daily":
         crawl.daily_update(eng)
+    elif args.command == "health":
+        from market_data import health
+        raise SystemExit(health.run(eng, strict=args.strict))
     elif args.command == "backfill":
         crawl.crawl_range(eng, args.source, _dates(args.start, args.end),
                           resume=not args.force, replace=args.force, delay=args.delay)

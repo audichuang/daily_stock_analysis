@@ -294,11 +294,32 @@ def crawl_financials(engine, year, season, keep_files=False, min_stocks=1000):
     return total
 
 
-def daily_update(engine=None, asof=None, days=5):
+MAX_DAILY_RECOVERY_CALENDAR_DAYS = 31
+# `daily` 自動修復的交易日視窗。**`health` 的近期完整性檢查必須用同一個數字**：檢查得比
+# 修復得遠，就會出現「gate 擋住、但它叫你重跑的 daily 永遠補不到那一天」的死結。
+RECENT_SESSIONS = 5
+
+
+def recovery_dates(asof, recent, max_days=MAX_DAILY_RECOVERY_CALENDAR_DAYS):
+    """Build the bounded automatic repair window; long gaps need explicit backfill."""
+    import datetime as _dt
+
+    start = min(recent) if recent else asof
+    span = (asof - start).days
+    if span > max_days:
+        raise RuntimeError(
+            f"daily recovery would scan {span + 1} calendar days ({start}..{asof}); "
+            "run market_data.cli backfill explicitly for long gaps")
+    return [start + _dt.timedelta(days=i)
+            for i in range(span + 1)]
+
+
+def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
     """Operational entry (replaces finlab's backfill): refresh the last ``days``
     trading days of daily sources + the daily snapshots. Resumable/idempotent."""
     import datetime as _dt
 
+    from market_data import adjust
     from market_data.db import get_engine
 
     eng = engine or get_engine()
@@ -310,7 +331,7 @@ def daily_update(engine=None, asof=None, days=5):
         recent = [r[0] for r in conn.execute(text(
             "SELECT DISTINCT date FROM market.price WHERE date <= :d "
             "ORDER BY date DESC LIMIT :n"), {"d": asof, "n": days}).fetchall()]
-    dates = sorted({asof, *recent})
+    dates = recovery_dates(asof, recent)
     for source in ("price", "institutional", "margin"):
         crawl_range(eng, source, dates)
     crawl_snapshots(eng)
@@ -319,10 +340,18 @@ def daily_update(engine=None, asof=None, days=5):
     with eng.begin() as conn:
         rev = crawl_monthly_revenue(conn, prev_month)
         exd = crawl_ex_dividend(conn, asof - _dt.timedelta(days=30),
-                                asof + _dt.timedelta(days=90))
+                                asof + _dt.timedelta(days=adjust.ADJUSTMENT_WINDOW_DAYS))
     # commit 之後才印——在交易內印,後面一 raise 就會回滾,log 卻已宣稱寫入
     print(f"monthly_revenue {prev_month:%Y-%m} {rev:,} rows")
     print(f"ex_dividend {exd:,} rows")
+    try:
+        adjust.refresh_recent(
+            eng, asof - _dt.timedelta(days=adjust.ADJUSTMENT_WINDOW_DAYS),
+            asof + _dt.timedelta(days=adjust.ADJUSTMENT_WINDOW_DAYS))
+    except Exception as exc:
+        raise RuntimeError(
+            "daily source updates completed, but price_adjustment refresh failed; "
+            "fix the reported official source and rerun daily before screening") from exc
 
 
 def pit_revenue_gaps(conn, start, end, only=None):

@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """回驗 `tw-swing-research` 的判斷：AI 那一層到底有沒有加值。
 
-量化層的候選池已經是正期望值（974 個事件、均值 +10.30%），所以「進場的那些賺錢」證明不了
+量化層的候選池已經是正期望值（974 個事件、均值 +9.93%），所以「進場的那些賺錢」證明不了
 任何事——**全收也會賺**。這支腳本因此不看命中率，看四個量：
 
     E[R|enter] − E[R|全收]   選出來的比全收好多少（<0 就是這層在扣分）
     E[R|pass]               放棄掉的後來漲了多少（機會成本）
-    Brier(conf) vs Brier(基準率)   `confidence` 有沒有比「一律報 20.7%」更準
+    Brier(conf) vs Brier(基準率)   `confidence` 有沒有比「一律報 20.2%」更準
     可成交口徑               同樣 slots 個空位下「全收 vs 只收 enter」兩本帳
 
 最後一項不可省：事件均值可以被同日同題材的一堆訊號撐高，但真實帳戶只拿得到 slots 檔。
 前三項的結論一律要求 bootstrap 區間不跨零**且**已到期樣本過門檻，否則標為 inconclusive——
 差值本身永遠不等於零，「>0 就有加值」是空話。
 
-報酬定義與 `measure_signal_forward.py` 完全一致：**次一交易日開盤**買進、**第 60 個交易日
-收盤**賣出、扣 0.6% 來回成本、前復權價。進場日取「訊號日與 `decided_at` 兩者較晚者」的次一
+報酬定義與 `measure_signal_forward.py` 一致：前復權價、次一交易日開盤買進、第 60 個交易日
+收盤賣出，並計入雙邊滑價、手續費及賣出證交稅。進場日取「訊號日與 `decided_at` 兩者較晚者」的次一
 交易日——只看訊號日會讓「週五訊號、週一晚間才研究完」的判斷用到週一白天的開盤價。
 
 用法：
@@ -37,10 +37,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from market_data.adjust import load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
-from measure_signal_forward import COST  # noqa: E402
+from measure_signal_forward import (  # noqa: E402
+    DEFAULT_POSITION_NOTIONAL, paired_block_bootstrap,
+)
+from tw_trade_costs import round_trip_return  # noqa: E402
 
 LOG = Path("journal/swing-decisions.jsonl")   # 進版控：見 journal/README.md
-BASE_RATE = 0.207        # 候選池 P(第 60 日收盤淨報酬 ≥ +30%)，`confidence` 的比較基準
+BASE_RATE = 0.202        # 現行成本口徑 P(第 60 日收盤淨報酬 ≥ +30%)
 MIN_MATURED = 20         # 低於這個數量的結論一律標為雜訊
 
 
@@ -93,7 +96,14 @@ def fill_ok(entry_px, entry_range):
     return float(entry_px) <= float(max(entry_range))
 
 
-def realized(engine, df, horizon):
+def realized_return(entry, exit_, *, entry_notional=DEFAULT_POSITION_NOTIONAL,
+                    fee_discount=1.0):
+    return round_trip_return(
+        entry, exit_, entry_notional=entry_notional, fee_discount=fee_discount)
+
+
+def realized(engine, df, horizon, *, entry_notional=DEFAULT_POSITION_NOTIONAL,
+             fee_discount=1.0):
     """把每個決策接上實際報酬；未滿 horizon 的標成 pending、跳空穿過區間的標成 no_fill。"""
     ids = sorted(df["stock_id"].astype(str).unique())
     lo = pd.to_datetime(df["date"]).min() - pd.Timedelta(days=10)
@@ -126,24 +136,62 @@ def realized(engine, df, horizon):
                 if pd.isna(px_out):                      # 期間停止交易 → 最後成交價結算
                     px_out = cl[sid].loc[:x_d].dropna().iloc[-1]
                 rec = {"pending": False, "no_fill": False, "left": 0,
-                       "r": float(px_out / entry - 1 - COST),
+                       "r": realized_return(entry, px_out, entry_notional=entry_notional,
+                                            fee_discount=fee_discount),
                        "entry_date": e_d, "entry_px": entry}
         out.append(rec)
-    return pd.concat([df.reset_index(drop=True), pd.DataFrame(out)], axis=1)
+    result = pd.concat([df.reset_index(drop=True), pd.DataFrame(out)], axis=1)
+    result.attrs["calendar"] = cal
+    return result
 
 
-def diff_ci(a, b, n=2000, seed=42):
-    """E[a] − E[b] 的 bootstrap 95% 區間（配對的兩組共用同一批重抽索引不成立，故各自重抽）。"""
-    if len(a) < 2 or len(b) < 2:
-        return float("nan"), float("nan")
+def selection_lift_ci(events, calendar, n=2000, block=60, seed=42):
+    """同一批日曆區塊內重算 enter 與全收均值差；資料不足回 ``None``。"""
+    rows = events.loc[:, ["entry_date", "verdict", "r"]].dropna()
+    rows = rows[np.isfinite(rows["r"].astype(float))]
+    calendar = pd.Index(calendar)
+    if (n < 2 or block < 1 or len(calendar) < block * 2 or rows.empty
+            or not (rows["verdict"] == "enter").any()
+            or not rows["entry_date"].isin(calendar).all()
+            or rows["entry_date"].nunique() < 2):
+        return None
+    if not calendar.is_unique or not calendar.is_monotonic_increasing:
+        raise ValueError("calendar must be an ordered, unique full session index")
+    positions = calendar.get_indexer(pd.Index(rows["entry_date"].unique()))
+    if positions.max() - positions.min() < block:
+        return None
+
+    by_day = {
+        day: (group["r"].to_numpy(float),
+              group["verdict"].eq("enter").to_numpy(bool))
+        for day, group in rows.groupby("entry_date")
+    }
     rng = np.random.default_rng(seed)
-    av, bv = np.asarray(a, float), np.asarray(b, float)
-    d = [av[rng.integers(0, len(av), len(av))].mean()
-         - bv[rng.integers(0, len(bv), len(bv))].mean() for _ in range(n)]
-    return float(np.percentile(d, 2.5)), float(np.percentile(d, 97.5))
+    n_blocks = int(np.ceil(len(calendar) / block))
+    diffs = []
+    for _ in range(n):
+        values, selected = [], []
+        sampled = 0
+        for start in rng.integers(0, len(calendar), size=n_blocks):
+            for offset in range(block):
+                if sampled == len(calendar):
+                    break
+                pair = by_day.get(calendar[(int(start) + offset) % len(calendar)])
+                if pair is not None:
+                    values.extend(pair[0])
+                    selected.extend(pair[1])
+                sampled += 1
+        values, selected = np.asarray(values), np.asarray(selected, bool)
+        if len(values) and selected.any():
+            diffs.append(values[selected].mean() - values.mean())
+    if len(diffs) < 2:
+        return None
+    if np.all(np.asarray(diffs) == 0):
+        return 0.0, 0.0
+    return float(np.percentile(diffs, 2.5)), float(np.percentile(diffs, 97.5))
 
 
-def paired_portfolio(df, engine, horizon, slots):
+def paired_portfolio(df, engine, horizon, slots, *, fee_discount=1.0):
     """把決策放回組合：同樣 `slots` 個空位，比「全收」與「只收 enter」兩本帳。
 
     事件均值不是可投資報酬——20 個同日同題材的訊號可以讓均值很漂亮，但真實帳戶只拿得到
@@ -177,7 +225,8 @@ def paired_portfolio(df, engine, horizon, slots):
         if not len(rows):
             continue
         eq, tr, _, _ = simulate(piv, build(rows), None, None, horizon, slots,
-                                cl.index[0], cl.index[-1], rank=order)
+                                cl.index[0], cl.index[-1], rank=order,
+                                fee_discount=fee_discount)
         res[label] = (eq, tr)
     return res
 
@@ -280,7 +329,15 @@ def main(argv=None):
     p.add_argument("--horizon", type=int, default=60, help="持有交易日數（與量測一致）")
     p.add_argument("--slots", type=int, default=5,
                    help="配對組合驗證的空位數（與 portfolio_walkforward 一致）")
+    p.add_argument("--entry-notional", type=float, default=DEFAULT_POSITION_NOTIONAL,
+                   help="每筆進場名目本金（影響最低手續費）")
+    p.add_argument("--fee-discount", type=float, default=1.0,
+                   help="券商手續費折扣乘數")
     a = p.parse_args(argv)
+    if a.entry_notional <= 0:
+        p.error("--entry-notional must be positive")
+    if a.fee_discount < 0:
+        p.error("--fee-discount must be non-negative")
 
     path = Path(a.log)
     if not path.exists():
@@ -304,7 +361,9 @@ def main(argv=None):
               f"無法證明判斷不是事後做的（skill 要求必填）。")
 
     eng = get_engine()
-    df = realized(eng, df, a.horizon)
+    df = realized(eng, df, a.horizon, entry_notional=a.entry_notional,
+                  fee_discount=a.fee_discount)
+    calendar = df.attrs["calendar"]
     nf = df[df["no_fill"]]
     mat, pend = df[~df["pending"] & ~df["no_fill"]], df[df["pending"]]
     print(f"決策 {len(df)} 筆　已到期 {len(mat)} 筆　未到期 {len(pend)} 筆　"
@@ -316,8 +375,10 @@ def main(argv=None):
         panel = _adj_close_panel(eng, sorted(pend["stock_id"].astype(str).unique()))
         cur = _last_close(panel)
         pv["現價"] = [cur.get(str(s)) for s in pv["stock_id"]]
-        pv["進場區間"] = [f"{min(r)}~{max(r)}" if isinstance(r, (list, tuple)) and len(r)
-                        else "—" for r in pv.get("entry_range", [None] * len(pv))]
+        pv["進場區間"] = [
+            f"{min(r)}~{max(r)}" if isinstance(r, (list, tuple)) and len(r) else "—"
+            for r in pv.get("entry_range", [None] * len(pv))
+        ]
         pv["落在區間內"] = ["—" if p2 is None or "~" not in rg else
                        ("**是**" if float(rg.split("~")[0]) <= p2 <= float(rg.split("~")[1])
                         else "否")
@@ -349,21 +410,26 @@ def main(argv=None):
     print("\n=== 加值（事件均值口徑）===")
     if len(ent):
         add = ent["r"].mean() - mat["r"].mean()
-        lo, hi = diff_ci(ent["r"], mat["r"])
-        # 差值本身永遠不為零,所以「>0 就有加值」是空話。要有結論,區間必須不跨零、
-        # 且樣本量過門檻——否則一律 inconclusive。
-        sig_ = (not thin) and pd.notna(lo) and (lo > 0 or hi < 0)
-        verdict = ("**inconclusive**（區間跨零或樣本不足）" if not sig_ else
-                   "這一層有加值" if lo > 0 else "**這一層在扣分**")
-        print(f"E[R|enter] − E[R|全收] = {add * 100:+.2f}pp"
-              f"（bootstrap 95% {lo * 100:+.2f}pp ~ {hi * 100:+.2f}pp）→ {verdict}")
+        ci = selection_lift_ci(mat, calendar)
+        if ci is None:
+            print(f"E[R|enter] − E[R|全收] = {add * 100:+.2f}pp"
+                  "（paired calendar-block bootstrap：資料不足）→ **inconclusive**")
+        else:
+            lo, hi = ci
+            sig_ = (not thin) and (lo > 0 or hi < 0)
+            verdict = ("**inconclusive**（區間跨零或樣本不足）" if not sig_ else
+                       "這一層有加值" if lo > 0 else "**這一層在扣分**")
+            print(f"E[R|enter] − E[R|全收] = {add * 100:+.2f}pp"
+                  f"（paired calendar-block 95% {lo * 100:+.2f}pp ~ {hi * 100:+.2f}pp）→ {verdict}")
     if len(pas):
         print(f"E[R|pass] = {pas['r'].mean() * 100:+.2f}%"
               f"　放棄 {len(pas)} 筆，其中 {(pas['r'] >= .3).sum()} 筆後來漲逾 30%（機會成本）")
 
     # === 可成交口徑：同樣的空位限制下，全收 vs 只收 enter ===
     try:
-        arms = paired_portfolio(df[~df["pending"] & ~df["no_fill"]], eng, a.horizon, a.slots)
+        arms = paired_portfolio(
+            df[~df["pending"] & ~df["no_fill"]], eng, a.horizon, a.slots,
+            fee_discount=a.fee_discount)
     except Exception as exc:                                  # noqa: BLE001
         arms = {}
         print(f"\n（配對組合驗證跳過：{exc}）")
@@ -383,14 +449,24 @@ def main(argv=None):
         if len(cf):
             y = (cf["r"] >= 0.30).astype(float)
             c = cf["confidence"].astype(float)
-            b, b0 = float(((c - y) ** 2).mean()), float(((BASE_RATE - y) ** 2).mean())
-            lo, hi = diff_ci((c - y) ** 2, (BASE_RATE - y) ** 2)
-            better = (not thin) and pd.notna(lo) and (lo > 0 or hi < 0)
+            own_loss = (c - y) ** 2
+            base_loss = (BASE_RATE - y) ** 2
+            b, b0 = float(own_loss.mean()), float(base_loss.mean())
+            ci = paired_block_bootstrap(
+                pd.DataFrame({"date": cf["entry_date"], "diff": own_loss - base_loss}),
+                calendar, n=2000)
+            if ci is None:
+                interval = "—"
+                conclusion = "**inconclusive**（paired calendar blocks 不足）"
+            else:
+                lo, hi = ci
+                interval = f"{lo:+.4f} ~ {hi:+.4f}"
+                decisive = (not thin) and (lo > 0 or hi < 0)
+                conclusion = ("**inconclusive**" if not decisive else
+                              "**沒有比基準率準**" if lo > 0 else "比基準率準")
             print(f"\n=== confidence 校準（{len(cf)} 筆）===")
             print(f"Brier {b:.4f}　vs 一律報基準率 {BASE_RATE:.3f} 的 {b0:.4f}"
-                  f"（差值 95% {lo:+.4f} ~ {hi:+.4f}）→ "
-                  + ("**inconclusive**" if not better else
-                     "**沒有比基準率準**" if lo > 0 else "比基準率準"))
+                  f"（差值 95% {interval}）→ {conclusion}")
             print(f"（基準率 {BASE_RATE:.3f} 只在訊號版本與候選母體不變時才是公平對照——"
                   f"日誌沒有記 batch 與版本，換過門檻就要重算）")
             print(f"平均 confidence {c.mean():.3f}　實際命中率 {y.mean():.3f}"
@@ -405,7 +481,7 @@ def main(argv=None):
         if len(ev):
             pred = (ev["exp_upside"].astype(float) * ev["confidence"].astype(float)
                     + ev["exp_downside"].astype(float) * (1 - ev["confidence"].astype(float)))
-            print(f"\n=== 期望值估計 ===")
+            print("\n=== 期望值估計 ===")
             print(f"預測均值 {pred.mean() * 100:+.2f}%　實際均值 {ev['r'].mean() * 100:+.2f}%"
                   f"　偏差 {(pred.mean() - ev['r'].mean()) * 100:+.2f}pp")
 

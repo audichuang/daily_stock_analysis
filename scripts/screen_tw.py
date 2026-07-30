@@ -51,7 +51,8 @@ SEMI_LINKED = {"24", "26", "28", "25", "31"}
 # **改這裡就要同步 `scripts/measure_signal_forward.py` 的 `REVENUE_STALE_DAYS` 與
 # `pit_revenue_panel`**——兩邊口徑一差，量測到的就不是會下單的那組訊號，而那份數字是
 # 決策依據（獨立審查實測：視窗差 918 vs 925 個事件只有 877 重疊；交易列 vs 曆日差 44 個
-# signal cell、池子均值 +10.47% vs +10.30%）。同時公告日取**嚴格小於** as_of：月營收常在
+# signal cell、並改變一個事件——**當時那兩個池子均值是舊固定成本口徑，已作廢**，
+# 現行數字見 `docs/tw-swing-pipeline.md`）。同時公告日取**嚴格小於** as_of：月營收常在
 # 盤後才上 MOPS。契約與已驗證到什麼程度見 `docs/tw-swing-pipeline.md`。
 REVENUE_STALE_DAYS = 45
 
@@ -82,7 +83,7 @@ def compute_factors(g: pd.DataFrame) -> dict:
     vol20 = float(g["volume"].tail(20).mean())
     # 「剛起漲」要用**不含最近 5 天**的 60 日高當突破基準——含最近 5 天的話今天必然
     # 就是自己的高點，比不出「突破」。實測（前瞻報酬分布）以此定義的候選池 60 日內
-    # 漲逾 30% 的機率是 20.7%，同池有月營收的基準率只有 12.1%。
+    # 漲逾 30% 的機率是 20.2%，同池有月營收的基準率只有 12.0%。
     # 視窗是 61 根、t-65…t-5。**改這裡要同步 `measure_signal_forward.factors()` 的
     # `high.shift(5).rolling(61)`**：差一根就是量了一個不會下單的訊號（見 §REVENUE_STALE_DAYS
     # 上方的同步規則）。
@@ -239,8 +240,8 @@ def build(as_of, px, inst, mgn, val, rev, info, idx, min_turnover):
     return df, market_d1
 
 
-# 「剛起漲」的門檻。數字來自前瞻報酬分布量測（2013-2026、2,119 檔、排除 ETF/創新板）：
-# 60 個交易日內漲逾 30% 的機率，全池基準 10.6%，本組合 17.8%，而跌逾 20% 只有 14.6%。
+# 「剛起漲」門檻源自早期固定成本探索；下列負面 prior 保留作為「不要重試」的證據，
+# 現行現金流成本與滑價口徑的 headline 數字見 JSON measured_base_rate 與管線文件。
 # 對照組值得記住，因為它們反直覺：
 #   - 只看價格突破（不要求營收）是 16.4% 上 / 16.5% 下——**純技術訊號只把兩邊尾巴一起
 #     放大，沒有方向性優勢**，這解釋了為什麼純技術回測怎麼調都打平大盤。
@@ -267,7 +268,8 @@ def funnel(df, min_turnover, strategy="breakout"):
 
     `strategy="breakout"`（預設）是經前瞻報酬量測的「營收轉強 + 剛突破」；
     `strategy="momentum"` 是舊的多頭排列 + 法人買超，保留供對照——它在 13 年回測裡是
-    十個因子中同曝險超額最差的一個（-13.44%），不要當預設。
+    十個因子中同曝險超額最差的一個（約 -13%；排序免疫於年化常數，量級不必當精確值），
+    不要當預設。
     """
     steps = {"全市場有報價": len(df)}
     pool = df[~df["is_etf"] & ~df["is_tib"]].copy()
@@ -299,10 +301,25 @@ def funnel(df, min_turnover, strategy="breakout"):
         r = pool.rank(pct=True)
         pool["score"] = (
             r["d20"] + r["inst_5"] + r["d1"] * 0.8 + (1 - r["bias20"]) * 0.5
-            + (1 - pool["pe_ratio"].where(pool["pe_ratio"].between(0, 100)).fillna(
-                pool["pe_ratio"].median()).rank(pct=True)) * 0.5
+            + _pe_score(pool["pe_ratio"]) * 0.5
         )
     return pool.sort_values("score", ascending=False), steps
+
+
+def _pe_score(pe: pd.Series) -> pd.Series:
+    """本益比項（低者高分）。**整欄缺值時回中性 0.5，不能讓它把整個 score 變 NaN。**
+
+    `valuation` 走 `BWIBBU_ALL`——無日期參數的當日快照端點，官方常在盤後才發布，所以
+    `date = as_of` 查得到 0 列是常態（實測 2026-07-30 18:00 仍只有 07-29）。此時原本的
+    `fillna(median())` 的 median 自己就是 NaN，rank 全 NaN → **每一檔的 score 都變 NaN**，
+    而 `sort_values` 把 NaN 排在後面且維持原順序（SQL 是代號序），於是 `--top N` 靜默退化成
+    「代號最小的 N 檔」。實測 5 檔全是 score=None、順序 1101/1102/1216/1402/1476。
+    回中性值才能保住其餘四項（動能／籌碼／當日／位階）仍然有效排序。
+    """
+    usable = pe.where(pe.between(0, 100))
+    if not usable.notna().any():
+        return pd.Series(0.5, index=pe.index)
+    return 1 - usable.fillna(usable.median()).rank(pct=True)
 
 
 def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover):
@@ -374,8 +391,10 @@ def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover):
     thin = pool.head(top)[pool.head(top)["turnover20"] < 2e8]
     if len(thin):
         w(f"### ⚠ 量能偏薄（{len(thin)} 檔，日均額 < 2 億，出場流動性需自行評估）")
-        w("　" + "、".join(f"{r['stock_id']} {r['name']}（{r['turnover20'] / 1e8:.2f}億）"
-                          for _, r in thin.iterrows()) + "\n")
+        w("　" + "、".join(
+            f"{r['stock_id']} {r['name']}（{r['turnover20'] / 1e8:.2f}億）"
+            for _, r in thin.iterrows()
+        ) + "\n")
     w("### 逐檔查（前 5 名）")
     for _, r in pool.head(5).iterrows():
         q = [f"近 20 日 {r['d20'] * 100:+.1f}% 的題材是什麼？是否已被消化？"]
@@ -425,24 +444,24 @@ def to_json(as_of, pool, steps, market_d1, strategy, top):
         # 月營收、0 檔在 current stock_info）,所以後來下市的公司結構上不可能進到候選池,
         # 負尾被系統性移除。下面的數字是上界,不是可配置的預期報酬。
         "measured_base_rate": {
-            "sample": "2020-01 ~ 2026-04（右設限：需 60 交易日前瞻）、918 個事件"
-                      "（同股相隔 >60 交易日才算新事件；名目 3,663 筆訊號有大量重疊）。"
+            "sample": "2020-01 ~ 2026-04（結果資料至 2026-07-24）、974 個事件"
+                      "（同股相隔 >60 交易日才算新事件）。"
                       "事件仍非獨立——不同個股集中在相同行情與產業循環。",
-            "win_rate": 0.517, "breakeven_win_rate": 0.306, "payoff_ratio": 2.27,
-            "mean_60d_net_of_cost": 0.1054, "median_60d_net_of_cost": 0.0130,
-            "mean_ci95_block_bootstrap": [0.0158, 0.1161],
-            "mean_excl_31_events_over_100pct": 0.0566,
-            "top12pct_events_share_of_total_pnl": 1.06,
-            "p_close60_up_30pct": 0.202, "p_close60_down_20pct": 0.146,
-            "worst_single": -0.55,
+            "win_rate": 0.513, "breakeven_win_rate": 0.312, "payoff_ratio": 2.20,
+            "mean_60d_net_of_cost": 0.0993, "median_60d_net_of_cost": 0.0083,
+            "mean_ci95_block_bootstrap": [0.0314, 0.1669],
+            "mean_excl_28_events_over_100pct": 0.0569,
+            "top12pct_events_share_of_total_pnl": 1.08,
+            "p_close60_up_30pct": 0.202, "p_close60_down_20pct": 0.148,
+            "worst_single": -0.54,
             "matched_baseline_same_pool_with_revenue": {
-                "mean": 0.0416, "win_rate": 0.436, "p_close60_up_30pct": 0.131},
-            "positive_years": "5/7（2022 -3.4%、2024 +1.3%）",
-            "survivorship_bias_bound": -0.0029,
-            "note": "勝率 51.7% 遠高於損益兩平 30.6%，**池子本身即正期望值**——agent 的目標"
+                "mean": 0.0467, "win_rate": 0.485, "p_close60_up_30pct": 0.120},
+            "positive_years": "6/7（僅 2022 為 -3.3%；2024 +0.8%）",
+            "survivorship_bias_bound": -0.0032,
+            "note": "勝率 51.3% 高於損益兩平 31.2%，**池子本身即正期望值**——agent 的目標"
                     "不是讓候選及格，而是挑右尾、避左尾、避主題集中。存活偏誤已量化:"
-                    "補不回月營收的 82 檔下市公司只產生 15 個符合價格條件的事件、均值 -7.79%,"
-                    "全部併入的最壞情況讓均值由 +10.54% 變 +10.24%。排序（score）未經前瞻驗證。",
+                    "補不回月營收的 82 檔下市公司只產生 15 個符合價格條件的事件、均值 -7.23%,"
+                    "最差 11 筆併入讓均值由 +9.93% 變 +9.60%。排序尚未觀察到優勢。",
         } if strategy == "breakout" else None,
         "candidates": out,
         "blind_spots": [

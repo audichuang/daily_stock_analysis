@@ -19,7 +19,8 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from verify_swing_decisions import (  # noqa: E402
-    _ma_check, diff_ci, fill_ok, read_log, summarize, window,
+    _ma_check, fill_ok, read_log, realized_return, selection_lift_ci, summarize,
+    window,
 )
 
 CAL = pd.bdate_range("2026-01-05", periods=30)      # 週一起算的營業日
@@ -81,17 +82,29 @@ def test_gap_through_the_entry_range_is_a_no_fill():
     assert fill_ok(999.0, None)              # 沒填區間就不判定
 
 
-def test_diff_ci_needs_two_sided_evidence():
-    """差值本身永遠不為零,所以結論必須靠區間。明顯的差要不跨零、雜訊要跨零。"""
-    import numpy as np
-    big = pd.Series(np.r_[np.full(40, 0.5), np.full(40, 0.5)])
-    small = pd.Series(np.r_[np.full(40, -0.5), np.full(40, -0.5)])
-    lo, hi = diff_ci(big, small)
-    assert lo > 0 and hi > 0
-    noisy = pd.Series([0.1, -0.1] * 20)
-    lo2, hi2 = diff_ci(noisy, noisy)
-    assert lo2 < 0 < hi2
-    assert all(pd.isna(v) for v in diff_ci(pd.Series([0.1]), pd.Series([0.2])))
+def test_realized_return_uses_exact_cashflows():
+    from tw_trade_costs import round_trip_return
+
+    expected = round_trip_return(100.0, 110.0, entry_notional=200_000)
+    assert realized_return(100.0, 110.0) == pytest.approx(expected)
+
+
+def test_selection_lift_identical_arms_is_exactly_zero():
+    events = pd.DataFrame({
+        "entry_date": CAL[:20],
+        "verdict": ["enter"] * 20,
+        "r": [0.01, -0.02] * 10,
+    })
+    assert selection_lift_ci(events, CAL, n=200, block=5, seed=7) == (0.0, 0.0)
+
+
+def test_selection_lift_does_not_treat_missing_as_zero():
+    events = pd.DataFrame({
+        "entry_date": [CAL[0], CAL[10]],
+        "verdict": ["enter", "pass"],
+        "r": [float("nan"), 0.2],
+    })
+    assert selection_lift_ci(events, CAL, n=100, block=5, seed=7) is None
 
 
 def test_summarize_counts_the_tails():

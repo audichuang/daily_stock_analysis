@@ -6,15 +6,51 @@ e.g. one market missing) and stale tables.
     python -m market_data.health
 """
 
+import argparse
+import datetime
 import statistics
 
 from sqlalchemy import text
 
+from market_data.adjust import ADJUSTMENT_WINDOW_DAYS
+from market_data.crawl import RECENT_SESSIONS
 from market_data.db import get_engine
 
 _DATE_TABLES = ["price", "institutional", "margin", "monthly_revenue",
                 "ex_dividend", "valuation", "market_index"]
 _DATE_COL = {"monthly_revenue": "revenue_month"}
+_REQUIRED_TABLES = (
+    "price", "institutional", "margin", "monthly_revenue", "ex_dividend",
+    "valuation", "market_index")
+
+
+def missing_dates(reference, observed):
+    """Return reference dates that have no rows in the observed source."""
+    reference_keys = {str(value)[:10] for value in reference}
+    observed_keys = {str(value)[:10] for value in observed}
+    return sorted(reference_keys - observed_keys)
+
+
+def missing_adjustments(expected, stored):
+    """Return valid ex-dividend keys that have no adjustment event."""
+    def keys(rows):
+        return {(str(stock_id), str(day)[:10]) for stock_id, day in rows}
+
+    return sorted(keys(expected) - keys(stored))
+
+
+def recent_thin_days(thin_by_table, since):
+    """只回傳 ``since`` 之後的 thin day。
+
+    `thin_days` 掃全歷史，是稽核用的完整清單；但 strict gate 只能擋 `daily` 修得到的視窗。
+    否則 2014 年的一個半日交易會讓 `make morning` 每天早上死在門口，而重跑 daily 永遠沒用。
+    """
+    if not since:
+        return []
+    cutoff = str(since)[:10]
+    return sorted((table, day, rows)
+                  for table, days in thin_by_table.items()
+                  for day, rows in days if day >= cutoff)
 
 
 def thin_days(day_counts, window=5, ratio=0.9):
@@ -64,13 +100,102 @@ def report(engine=None):
             verified = _VERIFIED_THIN.get(t, set())
             out["thin_days"][t] = [(d, n) for d, n in thin_days(day_counts)
                                    if d not in verified]
+
+        # 視窗與 `crawl.daily_update` 的自動修復視窗**同一個常數**：檢查得比修復得遠，
+        # gate 就會擋在一個 daily 補不到的缺口上，而錯誤訊息叫你重跑的正是 daily。
+        recent_price_dates = [row[0] for row in c.execute(text(
+            "SELECT DISTINCT date FROM market.price ORDER BY date DESC LIMIT :n"
+        ), {"n": RECENT_SESSIONS}).fetchall()]
+        recent_index_dates = []
+        source_dates = {}
+        if recent_price_dates:
+            recent_index_dates = [row[0] for row in c.execute(text(
+                "SELECT DISTINCT date FROM market.market_index "
+                "WHERE index_id = 'TAIEX' AND date >= :start"
+            ), {"start": min(recent_price_dates)}).fetchall()]
+
+            for table in ("institutional", "margin"):
+                source_dates[table] = [row[0] for row in c.execute(text(
+                    f"SELECT DISTINCT date FROM market.{table} WHERE date >= :start"
+                ), {"start": min(recent_price_dates)}).fetchall()]
+        else:
+            source_dates = {"institutional": [], "margin": []}
+        today = datetime.date.today()
+        window = datetime.timedelta(days=ADJUSTMENT_WINDOW_DAYS)
+        expected_adjustments = c.execute(text(
+            "SELECT stock_id, date FROM market.ex_dividend "
+            "WHERE close_before > 0 AND reference_price > 0 "
+            "AND date BETWEEN :start AND :end"
+        ), {"start": today - window, "end": today + window}).fetchall()
+        stored_adjustments = c.execute(text(
+            "SELECT stock_id, date FROM market.price_adjustment WHERE date >= :start"
+        ), {"start": today - window}).fetchall()
+        out["integrity"] = {
+            # Price and TAIEX are independent official feeds; check both
+            # directions so a stale calendar cannot certify another stale table.
+            "missing_price_dates": missing_dates(
+                recent_index_dates, recent_price_dates),
+            "missing_index_dates": missing_dates(
+                recent_price_dates, recent_index_dates),
+            # 法人／融資是 T+1 資料；最新一個 price 交易日尚未發布屬正常延遲。
+            "missing_institutional_dates": missing_dates(
+                recent_price_dates[1:], source_dates["institutional"]),
+            "missing_margin_dates": missing_dates(
+                recent_price_dates[1:], source_dates["margin"]),
+            "missing_price_adjustments": missing_adjustments(
+                expected_adjustments, stored_adjustments),
+            # 全歷史 thin day 留在 out["thin_days"] 供稽核；strict 只擋這一段。
+            "thin_recent_days": recent_thin_days(
+                out["thin_days"],
+                min(recent_price_dates) if recent_price_dates else None),
+        }
     return out
 
 
-if __name__ == "__main__":
+def run(engine=None, strict=False):
+    """Print the report and return a process exit code."""
+    result = report(engine)
+    for table, info in result["tables"].items():
+        print(f"{table:16} {info['rows']:>10,}  {info['start'][:10]}~{info['end'][:10]}")
+    for table, days in result["thin_days"].items():
+        print(f"thin {table} days: {len(days)} -> {days[:10]}")
+    integrity = result.get("integrity", {})
+    missing_price = integrity.get("missing_price_dates", [])
+    missing_index = integrity.get("missing_index_dates", [])
+    missing_institutional = integrity.get("missing_institutional_dates", [])
+    missing_margin = integrity.get("missing_margin_dates", [])
+    missing_events = integrity.get("missing_price_adjustments", [])
+    print(f"missing price dates: {len(missing_price)} -> {missing_price[:10]}")
+    print(f"missing TAIEX dates: {len(missing_index)} -> {missing_index[:10]}")
+    print("missing institutional dates: "
+          f"{len(missing_institutional)} -> {missing_institutional[:10]}")
+    print(f"missing margin dates: {len(missing_margin)} -> {missing_margin[:10]}")
+    print(f"missing price adjustments: {len(missing_events)} -> {missing_events[:10]}")
+    empty_required = [table for table in _REQUIRED_TABLES
+                      if not result.get("tables", {}).get(table, {}).get("rows")]
+    print(f"empty required tables: {len(empty_required)} -> {empty_required}")
+    # strict 只擋 daily 修得到的近期視窗；全歷史 thin day 上面已印出來供稽核。
+    thin_recent = integrity.get("thin_recent_days", [])
+    print(f"thin days inside the daily window: {len(thin_recent)} -> {thin_recent[:10]}")
+    gaps = (missing_price, missing_index, missing_institutional,
+            missing_margin, missing_events, thin_recent, empty_required)
+    failed = any(gaps)
+    if strict and failed:
+        print("repair: uv run --env-file .env python -m market_data.cli daily")
+        print("verify: uv run --env-file .env python -m market_data.cli "
+              "health --strict")
+        print("long gaps require an explicit market_data.cli backfill date range; "
+              "the daily command intentionally refuses unbounded recovery")
+    return int(strict and failed)
 
-    r = report()
-    for t, info in r["tables"].items():
-        print(f"{t:16} {info['rows']:>10,}  {info['start'][:10]}~{info['end'][:10]}")
-    for t, days in r["thin_days"].items():
-        print(f"thin {t} days: {len(days)} -> {days[:10]}")
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--strict", action="store_true",
+                        help="return non-zero for thin, empty, or recent integrity gaps")
+    args = parser.parse_args(argv)
+    return run(strict=args.strict)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

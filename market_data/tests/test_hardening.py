@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from sqlalchemy import text
 
-from market_data import cli, crawl, health
+from market_data import cli, crawl, health, sources
 
 
 def _price_frame(stocks, d):
@@ -153,6 +153,231 @@ def test_thin_days_uses_local_median():
     days[10] = (date(2026, 1, 11), 1160)  # TPEx 整邊缺:剩 58%,舊版 0.5 門檻抓不到
     flagged = health.thin_days(days)
     assert flagged == [("2026-01-11", 1160)]
+
+
+def test_missing_dates_finds_a_price_gap_in_the_recent_trading_calendar():
+    reference = [date(2026, 7, 24), date(2026, 7, 27), date(2026, 7, 28)]
+    observed = [date(2026, 7, 24), date(2026, 7, 28)]
+
+    assert health.missing_dates(reference, observed) == ["2026-07-27"]
+
+
+def test_fetch_index_prefers_current_rwd_report(monkeypatch):
+    payload = {
+        "stat": "OK",
+        "fields": ["日期", "成交股數", "成交金額", "成交筆數",
+                   "發行量加權股價指數", "漲跌點數"],
+        "data": [["115/07/28", "1", "872,574,999,972", "2",
+                  "41,603.36", "-2,030.83"]],
+    }
+
+    class _Response:
+        def json(self):
+            return payload
+
+    monkeypatch.setattr(sources, "requests_get", lambda *args, **kwargs: _Response())
+    monkeypatch.setattr(
+        sources, "_openapi_json", lambda url: pytest.fail("stale fallback used"))
+    rows = sources.fetch_index(date(2026, 7, 28))
+
+    assert rows == [{
+        "Date": "1150728",
+        "TradeValue": "872,574,999,972",
+        "TAIEX": "41,603.36",
+        "Change": "-2,030.83",
+    }]
+
+
+def test_missing_adjustments_finds_valid_ex_dividend_without_event_factor():
+    expected = [("2330", date(2026, 7, 24)), ("2317", date(2026, 7, 28))]
+    stored = [("2317", date(2026, 7, 28))]
+
+    assert health.missing_adjustments(expected, stored) == [("2330", "2026-07-24")]
+
+
+def test_strict_health_returns_nonzero_for_integrity_gaps(monkeypatch):
+    monkeypatch.setattr(health, "report", lambda engine: {
+        "tables": {},
+        "thin_days": {},
+        "integrity": {
+            "missing_price_dates": ["2026-07-27"],
+            "missing_price_adjustments": [],
+        },
+    })
+
+    assert health.run(engine=object(), strict=True) == 1
+
+
+def _tables():
+    return {table: {"rows": 1, "start": "2026-07-27", "end": "2026-07-27"}
+            for table in health._REQUIRED_TABLES}
+
+
+def test_strict_health_rejects_a_thin_day_inside_the_daily_window(monkeypatch):
+    monkeypatch.setattr(health, "report", lambda engine: {
+        "tables": _tables(),
+        "thin_days": {"price": [("2026-07-27", 100)]},
+        "integrity": {"thin_recent_days": [("price", "2026-07-27", 100)]},
+    })
+
+    assert health.run(engine=object(), strict=True) == 1
+
+
+def test_strict_health_does_not_block_on_a_thin_day_daily_cannot_repair(monkeypatch):
+    """全歷史 thin day 只報不擋——否則 2014 年的半日交易會讓 make morning 天天死在門口，
+    而錯誤訊息叫你重跑的 daily 只補最近幾個交易日，永遠修不掉它。"""
+    monkeypatch.setattr(health, "report", lambda engine: {
+        "tables": _tables(),
+        "thin_days": {"price": [("2014-05-21", 100)]},
+        "integrity": {"thin_recent_days": []},
+    })
+
+    assert health.run(engine=object(), strict=True) == 0
+
+
+def test_recent_thin_days_keeps_only_the_repairable_window():
+    thin = {"price": [("2014-05-21", 100), ("2026-07-27", 100)],
+            "margin": [("2026-07-28", 90)]}
+
+    assert health.recent_thin_days(thin, date(2026, 7, 27)) == [
+        ("margin", "2026-07-28", 90), ("price", "2026-07-27", 100)]
+    assert health.recent_thin_days(thin, None) == []
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+class _RecordingConn:
+    """記錄 (壓平的 SQL, 參數) 並按 substring 回傳罐頭列。
+
+    比 monkeypatch `report()` 更進一步：`report()` 自己會被執行，所以「查詢用錯視窗」或
+    「算出來的 thin day 沒接到 integrity 欄位」這兩種 mutation 都逃不掉（獨立審查指出，
+    只 patch `report()` 的版本兩者都會綠）。
+    """
+
+    def __init__(self, plan, calls):
+        self.plan, self.calls = plan, calls
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, stmt, params=None):
+        sql = " ".join(str(stmt).split())
+        self.calls.append((sql, params))
+        for needle, rows in self.plan:
+            if needle in sql:
+                return _FakeResult(rows)
+        return _FakeResult([])
+
+
+def test_report_uses_the_shared_window_and_wires_recent_thin_days_to_the_gate():
+    """`report()` 必須(1)用 `RECENT_SESSIONS` 查、(2)把近期 thin day 接到 integrity。"""
+    sessions = [date(2026, 7, 21 + i) for i in range(6)]        # 最後一天列數偏低
+    counts = [(d, 100) for d in sessions[:-1]] + [(sessions[-1], 50)]
+    old_thin = [(date(2014, 5, 21), 50)] + [(date(2014, 5, 22 + i), 100) for i in range(5)]
+    calls = []
+    plan = [
+        ("count(*), min(", [(1, sessions[0], sessions[-1])]),
+        ("FROM market.price GROUP BY", counts),
+        ("FROM market.institutional GROUP BY", old_thin),
+        ("FROM market.margin GROUP BY", []),
+        ("FROM market.price ORDER BY date DESC", [(d,) for d in reversed(sessions)]),
+    ]
+
+    class _Engine:
+        def connect(self):
+            return _RecordingConn(plan, calls)
+
+    result = health.report(engine=_Engine())
+
+    limit_params = [p for sql, p in calls if "ORDER BY date DESC LIMIT :n" in sql]
+    assert limit_params == [{"n": crawl.RECENT_SESSIONS}], (
+        "health 的近期視窗必須就是 daily 的修復視窗，否則 gate 會擋在 daily 補不到的缺口上")
+
+    recent = result["integrity"]["thin_recent_days"]
+    assert ("price", "2026-07-26", 50) in recent          # 視窗內 → 進 gate
+    assert all(day >= str(sessions[0]) for _, day, _ in recent)
+    assert ("institutional", "2014-05-21", 50) not in recent   # daily 修不到 → 只報不擋
+    assert ("2014-05-21", 50) in result["thin_days"]["institutional"]  # 但仍列在稽核清單
+
+
+def test_health_and_daily_share_one_recent_window():
+    """視窗一旦漂開，就會出現「gate 擋住、但 daily 補不到那天」的死結。"""
+    import inspect
+
+    assert health.RECENT_SESSIONS == crawl.RECENT_SESSIONS      # health 沒有自己寫死
+    assert (inspect.signature(crawl.daily_update).parameters["days"].default
+            == crawl.RECENT_SESSIONS)
+
+
+def test_strict_health_rejects_empty_required_table(monkeypatch):
+    tables = {
+        table: {"rows": 1, "start": "2026-07-27", "end": "2026-07-27"}
+        for table in health._REQUIRED_TABLES
+    }
+    tables["monthly_revenue"]["rows"] = 0
+    monkeypatch.setattr(health, "report", lambda engine: {
+        "tables": tables,
+        "thin_days": {},
+        "integrity": {},
+    })
+
+    assert health.run(engine=object(), strict=True) == 1
+
+
+def test_non_strict_health_reports_but_does_not_fail(monkeypatch):
+    monkeypatch.setattr(health, "report", lambda engine: {
+        "tables": {},
+        "thin_days": {"price": [("2026-07-27", 100)]},
+        "integrity": {"missing_price_dates": ["2026-07-27"]},
+    })
+
+    assert health.run(engine=object(), strict=False) == 0
+
+@pytest.mark.parametrize("gap", [
+    "missing_index_dates",
+    "missing_institutional_dates",
+    "missing_margin_dates",
+])
+def test_strict_health_rejects_stale_secondary_source(monkeypatch, gap):
+    monkeypatch.setattr(health, "report", lambda engine: {
+        "tables": {},
+        "thin_days": {},
+        "integrity": {
+            gap: ["2026-07-27"],
+            "missing_price_adjustments": [],
+        },
+    })
+
+    assert health.run(engine=object(), strict=True) == 1
+
+
+def test_cli_health_strict_propagates_failure_exit(monkeypatch):
+    engine = object()
+    seen = []
+    monkeypatch.setattr(cli, "get_engine", lambda: engine)
+    monkeypatch.setattr(
+        health,
+        "run",
+        lambda actual_engine, strict=False: seen.append((actual_engine, strict)) or 1,
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["health", "--strict"])
+
+    assert exc.value.code == 1
+    assert seen == [(engine, True)]
 
 
 def test_thin_days_tolerates_slow_listing_growth():

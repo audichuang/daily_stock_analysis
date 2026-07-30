@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 
+from datetime import date
 import pandas as pd
 import pytest
 
-from market_data.adjust import _snap_to_split, factors_to_panel
+from market_data.adjust import _snap_to_split, factors_to_panel, merge_adjustment_rows
 from market_data.sources import parse_reduction
 
 DAYS = pd.date_range("2026-05-01", periods=10, freq="D")
@@ -39,6 +40,93 @@ def test_panel_is_cumulative_across_events():
     assert fac.loc[DAYS[0], "1234"] == pytest.approx(0.9 * 0.95)
     assert fac.loc[DAYS[5], "1234"] == pytest.approx(0.95)
     assert fac.loc[DAYS[8], "1234"] == pytest.approx(1.0)
+
+
+def test_merge_adjustment_rows_keeps_official_source_over_inference():
+    official = pd.DataFrame([{
+        "stock_id": "1234", "date": DAYS[3], "factor": 0.9,
+        "kind": "dividend", "source": "twse_twt49u",
+        "close_before": 100.0, "reference_price": 90.0,
+    }])
+    inferred = pd.DataFrame([{
+        "stock_id": "1234", "date": DAYS[3], "factor": 0.8,
+        "kind": "inferred", "source": "inferred_price",
+        "close_before": 100.0, "reference_price": 80.0,
+    }])
+    out = merge_adjustment_rows(official, inferred)
+    assert len(out) == 1
+    assert out.iloc[0]["source"] == "twse_twt49u"
+    assert out.iloc[0]["factor"] == pytest.approx(0.9)
+
+
+def test_refresh_recent_fetch_failure_happens_before_transaction(monkeypatch):
+    from market_data import adjust
+
+    state = {"began": False}
+
+    class _Ctx:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *args):
+            return False
+
+    class _Engine:
+        def connect(self):
+            return _Ctx()
+
+        def begin(self):
+            state["began"] = True
+            return _Ctx()
+
+    monkeypatch.setattr(adjust, "official_rows", lambda conn: pd.DataFrame())
+    monkeypatch.setattr(
+        adjust, "existing_official_rows", lambda conn, start: pd.DataFrame())
+    monkeypatch.setattr(
+        adjust,
+        "fetch_tpex_dividends",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("network failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="network failed"):
+        adjust.refresh_recent(_Engine(), date(2026, 7, 1), date(2026, 7, 31))
+    assert state["began"] is False
+
+
+def test_refresh_recent_refuses_to_erase_existing_official_source(monkeypatch):
+    from market_data import adjust
+
+    state = {"began": False}
+
+    class _Ctx:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *args):
+            return False
+
+    class _Engine:
+        def connect(self):
+            return _Ctx()
+
+        def begin(self):
+            state["began"] = True
+            return _Ctx()
+
+    existing = pd.DataFrame([{
+        "stock_id": "1234", "date": pd.Timestamp("2026-07-15"), "factor": 0.9,
+        "kind": "dividend", "source": "tpex_exdailyq",
+        "close_before": 100.0, "reference_price": 90.0,
+    }])
+    monkeypatch.setattr(adjust, "official_rows", lambda conn: pd.DataFrame())
+    monkeypatch.setattr(adjust, "existing_official_rows", lambda conn, start: existing)
+    monkeypatch.setattr(adjust, "fetch_tpex_dividends", lambda *args: pd.DataFrame())
+    monkeypatch.setattr(adjust, "fetch_reductions", lambda *args: pd.DataFrame())
+
+    with pytest.raises(RuntimeError, match="tpex_exdailyq"):
+        adjust.refresh_recent(_Engine(), date(2026, 7, 1), date(2026, 7, 31))
+    assert state["began"] is False
+
 
 
 def test_panel_handles_split_and_reduction_together():

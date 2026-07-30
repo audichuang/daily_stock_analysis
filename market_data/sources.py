@@ -602,8 +602,43 @@ def crawl_valuation_day(date):
     return parse_valuation_day(payload, date)
 
 
-def fetch_index():
+def parse_index_report(payload):
+    """日期型 FMTQIK JSON -> OpenAPI 相同欄位，供既有 ETL 直接使用。"""
+    fields = payload.get("fields") or []
+    idx = {name: i for i, name in enumerate(fields)}
+    names = ("日期", "成交金額", "發行量加權股價指數", "漲跌點數")
+    if not all(name in idx for name in names):
+        raise ValueError(f"FMTQIK 欄位不符預期: {fields}")
+    rows = []
+    for raw in payload.get("data") or []:
+        day = _roc_slash_to_date(raw[idx["日期"]])
+        rows.append({
+            "Date": f"{day.year - 1911:03d}{day.month:02d}{day.day:02d}",
+            "TradeValue": raw[idx["成交金額"]],
+            "TAIEX": raw[idx["發行量加權股價指數"]],
+            "Change": raw[idx["漲跌點數"]],
+        })
+    return rows
+
+
+def fetch_index(asof=None):
     """FMTQIK:加權指數 TAIEX + 市場成交金額(近日)。"""
+    asof = asof or datetime.date.today()
+    r = requests_get(
+        "https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK",
+        params={"date": asof.strftime("%Y%m%d"), "response": "json"},
+        headers={"User-Agent": _UA},
+    )
+    if r is not None:
+        try:
+            payload = r.json()
+            if payload.get("stat") == "OK":
+                rows = parse_index_report(payload)
+                if rows:
+                    return rows
+        except (ValueError, TypeError, IndexError):
+            pass
+    # fallback 的 WARN 要帶 url,否則「當日未發布」與「端點改版」在 log 裡長得一樣
     url = "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK"
     return _valid_rows(_openapi_json(url),
                        {"Date", "TAIEX", "Change", "TradeValue"}, url)

@@ -23,7 +23,10 @@
 > 完整更新流程(何時 daily、何時 backfill、跑完怎麼用 health 驗收)見 skill `update-market-data`。以下為指令速查。本模組**不自載 `.env`**(不同於面板的 load_dotenv),指令一律帶 `--env-file .env`,否則 `DATABASE_URL is not set`。
 
 - **自動更新**:本機 crontab 每天 15:00 跑 `daily`(cron 在 repo 外,log:`logs/market_data_cron.log`)。15:00 當日法人/融資融券尚未發布,由隔日 run resume 補齊(T+1);資料停更先查 `crontab -l` 與該 log。
-- 每日增量+快照:`uv run --env-file .env python -m market_data.cli daily`(近 5 天 price/institutional/margin + valuation/index/stock_info 快照 + 上月營收 + 除權息滾動窗;停跑超過 5 天要用 backfill 補洞)
+- 每日增量+快照:`uv run --env-file .env python -m market_data.cli daily`(近 `crawl.RECENT_SESSIONS`=5 個交易日的 price/institutional/margin,**該區間的每個曆日都補**、缺日會被連續補回 + valuation/index/stock_info 快照 + 上月營收 + 除權息滾動窗 + 近期 `price_adjustment` 復權事件重算)
+  - **復權事件是 daily 的一部分,不必另跑 `adjust`**:除權息抓取與 ±`adjust.ADJUSTMENT_WINDOW_DAYS`=90 天的因子替換在同一 transaction 完成,任一官方來源失敗就整包不寫、daily 直接報錯(不留半套因子)。只有修過 price 髒日或要重建全期,才需要下面的 `adjust`。
+  - **落後超過 31 個曆日會直接拒跑**(`MAX_DAILY_RECOVERY_CALENDAR_DAYS`),訊息會叫你指定區間 backfill——這是刻意的,避免無界回補偷偷跑幾小時。
+- 稽核:`uv run --env-file .env python -m market_data.cli health --strict`(`make morning`／`make swing` 已內建;近期缺日、TAIEX/法人/融資錯位、除權息缺因子、必備表為空就回非零)。它的近期視窗與 daily **共用 `RECENT_SESSIONS`**;全歷史 thin day 只報不擋(daily 修不到的東西不該擋每天的流程)。
 - 補特定月營收/除權息:`… revenue --month 2026-06`、`… ex-dividend --start … --end …`
 - 區間回補:`uv run --env-file .env python -m market_data.cli backfill price --start 2026-01-01 --end 2026-01-31`
 - 修 partial/髒日(health 報 thin day):同上加 `--force`(忽略 resume、抓到完整資料才整日換血;不用手動 DELETE)

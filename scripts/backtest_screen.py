@@ -32,20 +32,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from market_data.adjust import load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
+from tw_trade_costs import (  # noqa: E402
+    BROKER_FEE_RATE as FEE_RATE,
+    DEFAULT_SLIPPAGE_RATE as SLIPPAGE,
+    ETF_TRANSACTION_TAX_RATE as ETF_TAX_RATE,
+    MINIMUM_BROKER_FEE as MIN_FEE,
+    STOCK_TRANSACTION_TAX_RATE as TAX_RATE,
+    TRADING_DAYS_PER_YEAR as TRADING_DAYS,
+    affordable_shares,
+    buy_cash_outflow,
+    buy_fill_price,
+    sell_cash_inflow,
+    sell_fill_price,
+)
 
 REPO = Path(__file__).resolve().parent.parent
 
 # --- 台股交易成本（逐筆從現金扣，不是事後從報酬減）---
 # 先前的實作只把成本記在交易明細的 ret 欄，沒有從 cash 扣，淨值曲線因此系統性高估：
 # 以每年 6.6 個資金輪次計高估約 3.9%/年，高頻規則（hold5 每年 39 輪）高估逾 22%/年。
-FEE_RATE = 0.001425      # 券商手續費，買賣各一次（--fee-discount 可打折）
-MIN_FEE = 20             # 單筆最低手續費（元）——小額交易的實際成本遠高於費率
-TAX_RATE = 0.003         # 證交稅，僅賣出時課
-SLIPPAGE = 0.0015        # 單邊滑價
 # 二代健保補充保費 2.11%（單筆股利 ≥ 20,000 元）課的是**股利所得**，不是交易稅。
 # 本回測用前復權價（total return），股息已隱含在價格裡、無法逐筆分離，故未扣。
 # 這對策略與 0050 基準是同方向的高估，比較上大致抵銷；要精確處理需分離股息現金流。
-TRADING_DAYS = 252
+# 年化用的交易日數走 `tw_trade_costs.TRADING_DAYS_PER_YEAR`（245），不再自己寫死 252。
 
 # 出場規則以參數字典描述，避免十幾個 if 分支各寫一遍。
 #   ma / atr_buffer : 收盤跌破 MA(n) - buffer×ATR
@@ -317,15 +326,13 @@ def should_exit(ind, sid, day, pos, cfg, max_hold):
 
 
 def buy_cost(shares, price, fee_rate):
-    """買進總支出＝股票成本＋手續費（有最低收費）。"""
-    gross = shares * price
-    return gross + max(gross * fee_rate, MIN_FEE if gross > 0 else 0)
+    """向後相容 wrapper；現金流真源在 ``tw_trade_costs``。"""
+    return buy_cash_outflow(shares, price, fee_rate=fee_rate)
 
 
 def sell_net(shares, price, fee_rate):
-    """賣出淨收入＝股票收入－手續費－證交稅。"""
-    gross = shares * price
-    return gross - max(gross * fee_rate, MIN_FEE if gross > 0 else 0) - gross * TAX_RATE
+    """向後相容 wrapper；賣出扣手續費與證交稅，不扣二代健保。"""
+    return sell_cash_inflow(shares, price, fee_rate=fee_rate)
 
 
 def _mark(close, day, sid, last_px):
@@ -341,7 +348,7 @@ def _mark(close, day, sid, last_px):
 
 
 def run(ind, open_, days, sig, slots, rule, max_hold, capital,
-        fee_rate=FEE_RATE, max_new_per_day=None, idle_yield=None, entry_ok=None,
+        fee_rate=FEE_RATE, max_new_per_day=None, entry_ok=None,
         regime_exit=False):
     """事件驅動模擬。回傳 (交易明細 df, 每日淨值/持倉 df)。
 
@@ -352,17 +359,8 @@ def run(ind, open_, days, sig, slots, rule, max_hold, capital,
     出場規則走）。用 T 日收盤判斷、T+1 開盤成交，與訊號同一時序，無前視。動機是回撤：
     三個最佳出場規則的回撤都在 -53~-58%，而個股層的停損管不到「整個市場一起跌」。
 
-    `idle_yield` 啟用 core-satellite：閒置現金改為持有 0050 而非空放。必須傳 **(隔夜, 盤中)
-    兩段報酬**，不是單一日報酬——現金在 T+1 開盤被拿去買股，若把整段 close-to-close 報酬
-    都給它，等於「賣出後仍領到賣出前的隔夜跳空、買進的現金卻沒領到自己該有的隔夜報酬」。
-    拆成 `open/prev_close - 1`（開盤成交前計息）與 `close/open - 1`（收盤時計息）才對齊。
-    仍簡化未計 0050 本身的進出成本，故略為樂觀。
     """
     cfg = EXIT_RULES[rule]
-    if idle_yield is not None and not isinstance(idle_yield, tuple):
-        raise TypeError("idle_yield 要傳 (隔夜報酬, 盤中報酬) 兩段 Series；"
-                        "單一 close-to-close 序列會讓開盤成交的現金拿到錯的那一段")
-    overnight_r, intraday_r = idle_yield if idle_yield is not None else (None, None)
     cash = capital
     positions, trades, equity = {}, [], []
     pending_buy, pending_sell = [], []
@@ -377,12 +375,6 @@ def run(ind, open_, days, sig, slots, rule, max_hold, capital,
     last_equity = capital
 
     for i, day in enumerate(days):
-        # 停泊 0050 的現金先領隔夜段（open/prev_close）——這段在開盤成交前就已實現，
-        # 之後才輪到今天的買賣動用這筆現金。用當日收盤算的部分留到收盤再給。
-        if overnight_r is not None:
-            r = overnight_r.get(day)
-            if pd.notna(r):
-                cash *= (1 + r)
 
         # --- T+1 開盤成交（前一日收盤後決定的單子）---
         unfilled_sell = []
@@ -396,7 +388,7 @@ def run(ind, open_, days, sig, slots, rule, max_hold, capital,
                 unfilled_sell.append((sid, reason))
                 continue
             pos = positions.pop(sid)
-            exit_p = p * (1 - SLIPPAGE)
+            exit_p = sell_fill_price(p)
             net = sell_net(pos["shares"], exit_p, fee_rate)
             cash += net
             fees_paid += pos["shares"] * exit_p - net
@@ -420,8 +412,8 @@ def run(ind, open_, days, sig, slots, rule, max_hold, capital,
             budget = min(target, cash)
             if budget < target * 0.5:
                 continue
-            entry = p * (1 + SLIPPAGE)
-            shares = budget / (entry * (1 + fee_rate))  # 預留手續費，總支出不超過 budget
+            entry = buy_fill_price(p)
+            shares = affordable_shares(budget, entry, fee_rate=fee_rate)
             cost = buy_cost(shares, entry, fee_rate)
             if cost > cash or shares <= 0:
                 continue
@@ -449,12 +441,6 @@ def run(ind, open_, days, sig, slots, rule, max_hold, capital,
             held_ids = {s for s, _ in pending_sell}
             pending_sell += [(s, "regime出場") for s in positions if s not in held_ids]
 
-        # 停泊現金的盤中段（close/open）在收盤才實現，故留到這裡計。
-        if intraday_r is not None:
-            r = intraday_r.get(day)
-            if pd.notna(r):
-                cash *= (1 + r)
-
         # 停牌（close 為 NaN）用最後已知收盤價估值，不要當成 0
         mkt = sum(pos["shares"] * _mark(ind["close"], day, sid, last_px)
                   for sid, pos in positions.items())
@@ -472,9 +458,10 @@ def run(ind, open_, days, sig, slots, rule, max_hold, capital,
         p = _mark(ind["close"], last, sid, last_px)
         if not p:
             continue
-        net = sell_net(pos["shares"], p * (1 - SLIPPAGE), fee_rate)
+        exit_p = sell_fill_price(p)
+        net = sell_net(pos["shares"], exit_p, fee_rate)
         cash += net
-        fees_paid += pos["shares"] * p * (1 - SLIPPAGE) - net
+        fees_paid += pos["shares"] * exit_p - net
         trades.append({
             "stock_id": sid, "entry_day": pos["entry_day"], "exit_day": last,
             "held": pos["held"], "reason": "期末平倉",
@@ -506,6 +493,26 @@ def _irr(cashflows, lo=-0.99, hi=10.0, tol=1e-7):
     return (lo + hi) / 2
 
 
+def buy_hold_benchmark(price, capital, fee_rate=FEE_RATE):
+    """0050 buy-and-hold curve with entry commission and terminal sell costs.
+
+    賣出走 **ETF 稅率 0.1%**（`ETF_TAX_RATE`），不是個股的 0.3%——用個股稅率會高估基準
+    成本，讓「輸給 0050」的結論往對策略有利的方向偏。
+    """
+    price = price.dropna().astype(float)
+    if price.empty:
+        return price
+    entry = buy_fill_price(price.iloc[0])
+    shares = affordable_shares(capital, entry, fee_rate=fee_rate)
+    paid = buy_cost(shares, entry, fee_rate)
+    cash = capital - paid
+    curve = cash + shares * price
+    curve.iloc[-1] = cash + sell_cash_inflow(
+        shares, sell_fill_price(price.iloc[-1]), fee_rate=fee_rate,
+        tax_rate=ETF_TAX_RATE)
+    return curve
+
+
 def dca_benchmark(price, days, daily_amount, fee_rate=FEE_RATE):
     """0050 定期定額：每個交易日投入固定金額，期末全數賣出。
 
@@ -518,13 +525,13 @@ def dca_benchmark(price, days, daily_amount, fee_rate=FEE_RATE):
         p = price.get(d)
         if pd.isna(p) or p <= 0:
             continue
-        s = daily_amount / (p * (1 + fee_rate))
-        if buy_cost(s, p, fee_rate) > daily_amount:      # 最低手續費吃掉小額投入
-            s = max(0.0, (daily_amount - MIN_FEE) / p)
+        fill = buy_fill_price(p)
+        s = affordable_shares(daily_amount, fill, fee_rate=fee_rate)
         shares += s
         invested += daily_amount
         flows.append(((days[-1] - d).days / 365.25, -daily_amount))
-    final = sell_net(shares, float(price.loc[days[-1]]), fee_rate)
+    final = sell_cash_inflow(shares, sell_fill_price(float(price.loc[days[-1]])),
+                             fee_rate=fee_rate, tax_rate=ETF_TAX_RATE)
     flows.append((0.0, final))
     total_years = (days[-1] - days[0]).days / 365.25
     return {"invested": invested, "final": final,
@@ -546,9 +553,7 @@ def exposure_matched_cagr(bench_eq, ledger, years):
     return curve.iloc[-1] ** (1 / years) - 1 if len(curve) else float("nan")
 
 
-def stats(trades, ledger, capital, bench_eq, years, idle_parked=False):
-    """`idle_parked`：閒置現金已停泊 0050 時，cash 欄不再代表未投入資金，
-    曝險與同曝險基準會失真（實際曝險 100%），故標成 n/a，直接看年化超額。"""
+def stats(trades, ledger, capital, bench_eq, years):
     eq = ledger["equity"]
     if trades.empty:
         return {"交易筆數": 0}
@@ -558,16 +563,16 @@ def stats(trades, ledger, capital, bench_eq, years, idle_parked=False):
     vol = daily.std() * np.sqrt(TRADING_DAYS)
     dd = (eq / eq.cummax() - 1).min()
     wins, losses = trades[trades["ret"] > 0], trades[trades["ret"] <= 0]
-    bench_total = bench_eq.iloc[-1] / bench_eq.iloc[0] - 1
+    bench_total = bench_eq.iloc[-1] / capital - 1
     bench_cagr = (1 + bench_total) ** (1 / years) - 1
     fees = ledger["fees"].iloc[-1] if "fees" in ledger else 0.0
-    matched = float("nan") if idle_parked else exposure_matched_cagr(bench_eq, ledger, years)
+    matched = exposure_matched_cagr(bench_eq, ledger, years)
     return {
         "年化": f"{cagr * 100:+.2f}%",
         "0050年化": f"{bench_cagr * 100:+.2f}%",
         "年化超額": f"{(cagr - bench_cagr) * 100:+.2f}%",
-        "同曝險0050": "n/a" if idle_parked else f"{matched * 100:+.2f}%",
-        "同曝險超額": "n/a" if idle_parked else f"{(cagr - matched) * 100:+.2f}%",
+        "同曝險0050": f"{matched * 100:+.2f}%",
+        "同曝險超額": f"{(cagr - matched) * 100:+.2f}%",
         "總報酬": f"{total * 100:+.0f}%",
         "波動": f"{vol * 100:.1f}%",
         "Sharpe": f"{cagr / vol:.2f}" if vol > 0 else "—",
@@ -581,7 +586,7 @@ def stats(trades, ledger, capital, bench_eq, years, idle_parked=False):
         "勝率": f"{len(wins) / len(trades) * 100:.1f}%",
         "賺賠比": f"{abs(wins['ret'].mean() / losses['ret'].mean()):.2f}" if len(wins) and len(losses) else "—",
         "平均持有": f"{trades['held'].mean():.0f}日",
-        "曝險": "100%*" if idle_parked else f"{(1 - (ledger['cash'] / eq).mean()) * 100:.0f}%",
+        "曝險": f"{(1 - (ledger['cash'] / eq).mean()) * 100:.0f}%",
     }
 
 
@@ -609,8 +614,6 @@ def main(argv=None):
                    help="每日最多開倉數，限制交易頻率用（預設不限，受 slots 與訊號數自然約束）")
     p.add_argument("--daily-dca", type=float, default=1000.0,
                    help="0050 定期定額基準的每日投入金額（預設 1000）")
-    p.add_argument("--idle-to-bench", action="store_true",
-                   help="core-satellite：閒置現金停泊 0050 而非空放（同曝險超額為正時的務實解）")
     p.add_argument("--regime-ma", type=int, default=0,
                    help="大盤 regime 閘門：0050 收盤低於自身 MA(N) 的日子不開新倉（0 = 關）")
     p.add_argument("--regime-exit", action="store_true",
@@ -619,9 +622,11 @@ def main(argv=None):
                    help="跑 N 次隨機選股當虛無分布，判斷本因子的超額是選股力還是運氣")
     p.add_argument("--seed", type=int, default=42, help="隨機對照組的種子")
     p.add_argument("--include-tib", action="store_true",
+                   # argparse 會對 help 做 % 格式化，裸 % 會讓 `--help` 直接 ValueError：
+                   # 百分號一律寫 %%（`portfolio_walkforward` 的 --skip-limit-gap 同一個坑）
                    help="把創新板（名稱後綴 -創）放回選股池。預設排除：一般帳戶要簽風險預告"
                         "並符合資格才能買，且全庫 25 檔只有 1 檔過得了流動性門檻——那 1 檔"
-                        "（7610）在 2026 上半年 +1015%，一筆就佔 13 年總損益的 85%")
+                        "（7610）在 2026 上半年 +1015%%，一筆就佔 13 年總損益的 85%%")
     p.add_argument("--exclude-industry", default=None,
                    help="排除 TWSE 產業代碼（逗號分隔），做報酬歸因。例：03 排除塑膠類股")
     a = p.parse_args(argv)
@@ -667,7 +672,9 @@ def main(argv=None):
     print(f"回測 {days[0]:%Y-%m-%d} ~ {days[-1]:%Y-%m-%d}（{len(days)} 個交易日 / {years:.1f} 年）"
           f"　池 {close.shape[1]} 檔　top{a.top}／{a.slots} 槽")
 
-    bench = close["0050"].reindex(days).ffill()
+    fee = FEE_RATE * a.fee_discount
+    bench_price = close["0050"].reindex(days).ffill()
+    bench = buy_hold_benchmark(bench_price, a.capital, fee)
     # regime 均線要用**截斷前**的完整序列算，否則樣本前 N 天的均線是 NaN、比較為 False，
     # 會安靜地整段不開倉（看起來像策略在那段沒訊號）。
     bench_full = close["0050"].ffill()
@@ -676,14 +683,8 @@ def main(argv=None):
     if entry_ok is not None:
         print(f"regime 閘門 0050 > MA{a.regime_ma}：可開倉日 "
               f"{entry_ok.sum()}/{len(entry_ok)}（{entry_ok.mean() * 100:.0f}%）")
-    fee = FEE_RATE * a.fee_discount
-    dca = dca_benchmark(bench, days, a.daily_dca, fee)
-    # core-satellite 的停泊報酬拆成隔夜（開盤成交前實現）與盤中（收盤實現）兩段，
-    # 避免「賣出的現金還領到賣出前的隔夜跳空、買進的現金卻沒領到自己的隔夜報酬」。
-    bench_open = (piv["open"]["0050"].reindex(days).ffill() if a.idle_to_bench else None)
-    idle = ((bench_open / bench.shift(1) - 1, bench / bench_open - 1)
-            if a.idle_to_bench else None)
-    lump = (bench.iloc[-1] / bench.iloc[0]) ** (1 / years) - 1
+    dca = dca_benchmark(bench_price, days, a.daily_dca, fee)
+    lump = (bench.iloc[-1] / a.capital) ** (1 / years) - 1
     print(f"成本 手續費{fee * 100:.4f}%/邊(最低{MIN_FEE}元) 證交稅{TAX_RATE * 100:.1f}% "
           f"滑價{SLIPPAGE * 100:.2f}%/邊"
           + (f"　每日最多開倉 {a.max_new_per_day}" if a.max_new_per_day else ""))
@@ -693,7 +694,7 @@ def main(argv=None):
 
     if a.all_factors:
         # 固定出場規則，只換選股邏輯——出場已證實改善有限，瓶頸在進場因子。
-        bench_cagr = (bench.iloc[-1] / bench.iloc[0]) ** (1 / years) - 1
+        bench_cagr = (bench.iloc[-1] / a.capital) ** (1 / years) - 1
         print(f"固定出場規則 {a.exit}　0050 年化 {bench_cagr * 100:+.2f}%\n")
         rows = []
         for fac in sorted(FACTORS):
@@ -701,8 +702,8 @@ def main(argv=None):
             n = sum(len(v) for v in fsig.values())
             tr, led = run(ind, piv["open"], days, fsig, a.slots, a.exit, a.max_hold, a.capital,
                           fee_rate=fee, max_new_per_day=a.max_new_per_day,
-                          idle_yield=idle, entry_ok=entry_ok, regime_exit=a.regime_exit)
-            st = stats(tr, led, a.capital, bench, years, idle_parked=a.idle_to_bench)
+                          entry_ok=entry_ok, regime_exit=a.regime_exit)
+            st = stats(tr, led, a.capital, bench, years)
             rows.append((fac, n / max(len(days), 1), st))
         keys = [k for k in rows[0][2]]
         print(f"{'進場因子':<16}{'訊號/日':>9}" + "".join(f"{k:>10}" for k in keys))
@@ -722,14 +723,14 @@ def main(argv=None):
             "filter": FACTORS[a.factor]["filter"],
             "score": lambda r, f: pd.Series(np.random.rand(len(f)), index=f.index),
         }
-        key = "年化超額" if a.idle_to_bench else "同曝險超額"
+        key = "同曝險超額"
 
         def _excess(fac):
             fs = precompute_signals(ind, days, a.min_turnover * 1e8, a.top, etf_mask, fac)
             tr, led = run(ind, piv["open"], days, fs, a.slots, a.exit, a.max_hold, a.capital,
                           fee_rate=fee, max_new_per_day=a.max_new_per_day,
-                          idle_yield=idle, entry_ok=entry_ok, regime_exit=a.regime_exit)
-            st = stats(tr, led, a.capital, bench, years, idle_parked=a.idle_to_bench)
+                          entry_ok=entry_ok, regime_exit=a.regime_exit)
+            st = stats(tr, led, a.capital, bench, years)
             return float(str(st.get(key, "nan")).rstrip("%"))
 
         real = _excess(a.factor)
@@ -777,20 +778,20 @@ def main(argv=None):
         for s in starts:
             dsub = [d for d in days if d >= pd.Timestamp(s)]
             yrs = len(dsub) / TRADING_DAYS
-            bsub = close["0050"].reindex(dsub).ffill()
+            bsub = buy_hold_benchmark(
+                close["0050"].reindex(dsub).ffill(), a.capital, fee)
             col = {}
             for rule in rules:
                 tr, led = run(ind, piv["open"], dsub, sig, a.slots, rule, a.max_hold, a.capital,
                               fee_rate=fee, max_new_per_day=a.max_new_per_day,
-                              idle_yield=idle, entry_ok=entry_ok,
-                             regime_exit=a.regime_exit)
-                st = stats(tr, led, a.capital, bsub, yrs, idle_parked=a.idle_to_bench)
+                              entry_ok=entry_ok, regime_exit=a.regime_exit)
+                st = stats(tr, led, a.capital, bsub, yrs)
                 col[rule] = float(st.get("年化超額", "0%").rstrip("%")) if st.get("年化超額") else float("nan")
             grid[s] = col
             order_s = sorted(col, key=lambda r: -col[r])
             ranks[s] = {r: i + 1 for i, r in enumerate(order_s)}
             print(f"[{s}] {len(dsub)} 交易日 / {yrs:.1f} 年　0050 年化 "
-                  f"{((bsub.iloc[-1] / bsub.iloc[0]) ** (1 / yrs) - 1) * 100:+.2f}%")
+                  f"{((bsub.iloc[-1] / a.capital) ** (1 / yrs) - 1) * 100:+.2f}%")
 
         avg_rank = {r: sum(ranks[s][r] for s in starts) / len(starts) for r in rules}
         print(f"\n=== 年化超額 (%)　規則 × 樣本期　共 {len(rules)} 規則 ===")
@@ -805,9 +806,9 @@ def main(argv=None):
     for rule in rules:
         trades, ledger = run(ind, piv["open"], days, sig, a.slots, rule, a.max_hold, a.capital,
                              fee_rate=fee, max_new_per_day=a.max_new_per_day,
-                             idle_yield=idle, entry_ok=entry_ok,
+                             entry_ok=entry_ok,
                              regime_exit=a.regime_exit)
-        results[rule] = (trades, ledger, stats(trades, ledger, a.capital, bench, years, idle_parked=a.idle_to_bench))
+        results[rule] = (trades, ledger, stats(trades, ledger, a.capital, bench, years))
 
     keys = list(results.values())[0][2]
     print(f"{'出場規則':<14}" + "".join(f"{k:>10}" for k in keys))
@@ -830,11 +831,6 @@ def main(argv=None):
             # 總損益 <= 0 時「佔比」沒有意義（負分母會印出反向的百分比、零會除零）
             print(f"\n報酬集中度：總損益為 {tot:,.0f}（<= 0），佔比不適用；"
                   f"單筆最大 {top1:,.0f}、前 10 筆合計 {top10:,.0f}（共 {len(trades)} 筆）")
-        elif a.idle_to_bench:
-            # idle 模式下分母不含 0050 停泊收益，稱不上「組合總損益佔比」
-            print(f"\n報酬集中度（僅個股交易，不含 0050 停泊收益）：單筆最大佔 "
-                  f"{top1 / tot * 100:.0f}%、前 10 筆佔 {top10 / tot * 100:.0f}%"
-                  f"（共 {len(trades)} 筆）")
         else:
             # 集中度是「這是策略還是彩票」的直接檢查：單筆佔比到兩三成就別當可重複的能力
             print(f"\n報酬集中度：**單筆最大佔 {top1 / tot * 100:.0f}%**、前 10 筆佔 "
@@ -847,7 +843,7 @@ def main(argv=None):
             print(f"\n=== {best} 逐年報酬 vs 0050 ===")
             eq, ye = ledger["equity"], ledger["equity"].resample("YE").last()
             yb = bench.resample("YE").last()
-            pe_, pb_ = ye.shift(1).fillna(a.capital), yb.shift(1).fillna(bench.iloc[0])
+            pe_, pb_ = ye.shift(1).fillna(a.capital), yb.shift(1).fillna(a.capital)
             for (d, v), sv, bv, bp in zip(ye.items(), pe_.values, yb.values, pb_.values):
                 sr, br = v / sv - 1, bv / bp - 1
                 print(f"  {d:%Y}: 策略 {sr * 100:+7.2f}%   0050 {br * 100:+7.2f}%   超額 {(sr - br) * 100:+7.2f}%")

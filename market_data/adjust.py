@@ -57,12 +57,19 @@ SPLIT_RATIOS = (2, 3, 4, 5, 6, 7, 8, 10, 20, 25, 50, 100)
 MIN_BARS_BEFORE = 6     # 上市初期不推導（前 5 日無漲跌幅限制）
 STALE_GAP_DAYS = 14     # 距前一筆交易超過此天數視為停牌後恢復，不推導
 MAX_SPLIT_GAP_DAYS = 60  # 精確比例可越過 STALE_GAP_DAYS，但停牌超過此天數一律不推導
+ADJUSTMENT_COLUMNS = [
+    "stock_id", "date", "factor", "kind", "source", "close_before", "reference_price"]
+# `refresh_recent` 的前後視窗（曆日）。**`health` 檢查除權息是否都有因子時要用同一個數字**，
+# 否則會檢查到 daily 根本沒刷到的區間。
+ADJUSTMENT_WINDOW_DAYS = 90
 
 # 只有「受 ±10% 漲跌幅限制的普通股」能用價格推導。ETF／ETN／TDR 等依官方規則
 # 不受漲跌幅限制（部分海外 ETF、槓反產品、第二上市外國證券），推導必然誤判——
 # 踩過：00887 在 2024-10-08、10-14 的真實 -48%／-51% 崩跌（海外休市、溢價逾 200% 的
 # 價格異常）被判成兩次 1:2 分割，把跌幅改寫成 +3%／-2%，還讓之前的歷史價全乘 0.25。
 # 這批商品只接受官方值或下方人工核對清單。
+
+
 def is_common_stock(stock_id: str) -> bool:
     """四位純數字、且非 ETF/TDR 前綴，才視為受漲跌幅限制的普通股。
 
@@ -115,6 +122,21 @@ def official_rows(conn):
     df["kind"] = "dividend"
     df["source"] = "twse_twt49u"
     return df
+
+
+def merge_adjustment_rows(*parts):
+    """依傳入順序保留同股票同日的最高優先來源，並丟掉無效因子。"""
+    frames = [p.reindex(columns=ADJUSTMENT_COLUMNS) for p in parts
+              if p is not None and len(p)]
+    if not frames:
+        return pd.DataFrame(columns=ADJUSTMENT_COLUMNS)
+    merged = pd.concat(frames, ignore_index=True)
+    merged["date"] = pd.to_datetime(merged["date"], errors="coerce")
+    factors = pd.to_numeric(merged["factor"], errors="coerce")
+    merged = merged[merged["date"].notna() & np.isfinite(factors) & (factors > 0)].copy()
+    merged["factor"] = factors.loc[merged.index]
+    return (merged.drop_duplicates(subset=["stock_id", "date"], keep="first")
+            .reset_index(drop=True))
 
 
 def _fetch_by_year(crawl, start, end, chunk_days=365, delay=1.0):
@@ -246,6 +268,87 @@ def existing_official_rows(conn, start, sources_=_NETWORK_SOURCES):
         conn, params={"s": start, "src": list(sources_)}, parse_dates=["date"])
 
 
+def require_source_coverage(existing, fresh, source):
+    """Refuse a recent refresh that would silently delete known official events."""
+    old = existing[existing.get("source", pd.Series(dtype=str)) == source]
+    if old.empty:
+        return
+
+    def keys(frame):
+        if frame is None or frame.empty or not {"stock_id", "date"} <= set(frame.columns):
+            return set()
+        return {(str(sid), str(pd.Timestamp(day).date()))
+                for sid, day in zip(frame["stock_id"], frame["date"])}
+
+    missing = keys(old) - keys(fresh)
+    if missing:
+        raise RuntimeError(
+            f"{source} refresh omitted {len(missing)} existing official events; "
+            "aborted before changing price_adjustment")
+
+
+def refresh_recent(engine=None, start=None, end=None):
+    """原子重算近期事件因子；所有網路來源成功後才開始刪寫交易。
+
+    ``price_adjustment`` 存的是事件日因子，而非預先展開的每日累乘值，所以替換近期事件列
+    後，讀取端 ``factors_to_panel`` 會自動重算整條受影響歷史價格，不需另存一份調整鏈。
+    """
+    eng = engine or get_engine()
+    today = datetime.date.today()
+    start_d = start or today - datetime.timedelta(days=ADJUSTMENT_WINDOW_DAYS)
+    end_d = end or today + datetime.timedelta(days=ADJUSTMENT_WINDOW_DAYS)
+    if isinstance(start_d, str):
+        start_d = datetime.date.fromisoformat(start_d)
+    if isinstance(end_d, str):
+        end_d = datetime.date.fromisoformat(end_d)
+    if start_d > end_d:
+        raise ValueError("start must not be after end")
+
+    # 先完成全部讀取與網路請求；任何來源失敗都不會碰既有 price_adjustment。
+    with eng.connect() as conn:
+        off = official_rows(conn).reindex(columns=ADJUSTMENT_COLUMNS)
+        existing = existing_official_rows(conn, start_d)
+    if len(off):
+        dates = pd.to_datetime(off["date"], errors="coerce")
+        off = off[(dates >= pd.Timestamp(start_d)) & (dates <= pd.Timestamp(end_d))]
+    if len(existing):
+        dates = pd.to_datetime(existing["date"], errors="coerce")
+        existing = existing[dates <= pd.Timestamp(end_d)]
+    tpex = fetch_tpex_dividends(start_d, end_d)
+    reductions = fetch_reductions(start_d, end_d)
+    require_source_coverage(existing, tpex, "tpex_exdailyq")
+    require_source_coverage(existing, reductions, "twse_twtauu")
+    verified = pd.DataFrame([
+        {"stock_id": sid, "date": pd.Timestamp(day), "factor": factor,
+         "kind": "split", "source": "verified_manual",
+         "close_before": None, "reference_price": None}
+        for (sid, day), factor in VERIFIED_ACTIONS.items()
+        if start_d <= datetime.date.fromisoformat(day) <= end_d
+    ], columns=ADJUSTMENT_COLUMNS)
+
+    # 順序即來源優先序：上市公告 > 上櫃公告 > 減資公告 > 人工核對 > 價格推導。
+    merged = merge_adjustment_rows(off, tpex, reductions, verified)
+    known = set(zip(merged["stock_id"], merged["date"]))
+    with eng.connect() as conn:
+        inferred = infer_rows(conn, known, start_d)
+    if len(inferred):
+        inferred = inferred[pd.to_datetime(inferred["date"]) <= pd.Timestamp(end_d)]
+    final = merge_adjustment_rows(merged, inferred)
+    final["date"] = pd.to_datetime(final["date"]).dt.date
+    records = final.to_dict("records")
+
+    written = 0
+    with eng.begin() as conn:
+        conn.execute(text(
+            "delete from market.price_adjustment where date between :s and :e"),
+            {"s": start_d, "e": end_d})
+        for i in range(0, len(records), 5000):
+            written += upsert(conn, models.PriceAdjustment.__table__,
+                              records[i:i + 5000], ["stock_id", "date"])
+    return {"written": written, **final.groupby("source").size().to_dict(),
+            "by_kind": final.groupby("kind").size().to_dict()}
+
+
 def rebuild(engine=None, start="2013-01-01", with_reductions=True):
     """重建整張 price_adjustment。回傳各來源筆數。
 
@@ -255,7 +358,7 @@ def rebuild(engine=None, start="2013-01-01", with_reductions=True):
     """
     eng = engine or get_engine()
     start_d = datetime.date.fromisoformat(start) if isinstance(start, str) else start
-    cols = ["stock_id", "date", "factor", "kind", "source", "close_before", "reference_price"]
+    cols = ADJUSTMENT_COLUMNS
 
     with eng.connect() as conn:
         off = official_rows(conn)

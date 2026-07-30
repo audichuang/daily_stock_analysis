@@ -60,22 +60,24 @@ screen: ## 台股全市场量化筛选（读 market schema），同时出 markdo
 	uv run --env-file .env python scripts/screen_tw.py --top $(TOP) \
 		--min-turnover $(MIN_TURNOVER) --json .claude/reviews/screen-tw-latest.json
 
-swing: ## 每日波段流程第 1 步：更新台股资料 → 全市场筛选 → 产出候选 JSON（第 2 步交给 AI）
+swing: ## 每日波段流程第 1 步：更新并健检台股资料 → 全市场筛选 → 产出候选 JSON
 	uv run --env-file .env python -m market_data.cli daily
+	uv run --env-file .env python -m market_data.cli health --strict
 	$(MAKE) screen
 	@echo ""
 	@echo "候选 JSON: .claude/reviews/screen-tw-latest.json"
-	@echo "下一步（第 2 层）：让 agent 执行 skill \`tw-swing-research\` 读这份 JSON 做事件面研究，"
-	@echo "判断会追加到 journal/swing-decisions.jsonl（进版控，当天就 commit——见 journal/README.md）。"
+	@echo "下一步（第 2 层）：让 agent 执行 skill \`tw-swing-research\`，完整研究每一档候选，"
+	@echo "把每檔判斷各自追加一行到 journal/swing-decisions.jsonl（進版控，當天 commit——見 journal/README.md）。"
 	@echo "收盘后才有当日资料；台股 13:30 收盘、法人与融资 T+1 才补齐。"
 
 morning: ## 每天早上一键：补资料 → 昨晚国际盘 → 待触发计划 → 今日候选（之后跑 skill）
 	@uv run --env-file .env python -m market_data.cli daily
+	@uv run --env-file .env python -m market_data.cli health --strict
 	@echo "\n===== 昨晚国际盘 ====="
 	@tsmc=$$(uv run --env-file .env python -c "from market_data.db import get_engine;from sqlalchemy import text;print(get_engine().connect().execute(text(\"select close from market.price where stock_id='2330' order by date desc limit 1\")).scalar() or 0)" 2>/dev/null); \
 		uv run python scripts/overnight.py --tw-close $$tsmc
 	@echo "\n===== 待触发计划（已留档、未到期）====="
-	@uv run --env-file .env python scripts/verify_swing_decisions.py 2>/dev/null | sed -n '1,/^$$/p'
+	@bash -o pipefail -c "uv run --env-file .env python scripts/verify_swing_decisions.py | sed -n '1,/^$$/p'"
 	@echo "===== 今日候选 ====="
 	@$(MAKE) --no-print-directory screen
 	@echo "\n下一步：让 agent 跑 skill \`tw-swing-research\`（候选 0 档也要看上面的隔夜盘与待触发计划）"
