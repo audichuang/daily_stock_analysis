@@ -10,10 +10,8 @@ import pytest
 import data_provider.shioaji_fetcher as sf
 from data_provider.realtime_types import RealtimeSource
 
-# Shioaji 的 ts 是「台北裸值」纳秒：模拟「台北此刻」= UTC now + 8h 的裸 wall-clock，
-# 经 _ns_to_iso 贴 +08:00 还原后绝对时刻 ≈ 真实当下，确保 _enrich 后落在 ttl 内判 fresh。
-_NOW_NS = int((time.time() + 8 * 3600) * 1e9)
-
+# Shioaji 的 ts 是「台北裸值」纳秒；必须在快照建立时取值，不能在 pytest 收集时冻结。
+# 全量套件超过 10 分钟后，收集时的值会自然超过 realtime TTL，制造顺序敏感失败。
 
 class _FakeDayTrade:
     """模拟 Shioaji DayTrade 枚举（.value 为 'Yes'/'OnlyBuy'/'No'）。"""
@@ -39,7 +37,26 @@ class _FakeContracts:
     Stocks = _Stocks()
 
 
+def test_fake_snapshot_timestamp_is_read_at_construction_not_at_import(monkeypatch):
+    """把時戳搬進 `__init__` 是這輪修掉那個順序敏感 flaky 的**機制**，用測試釘住它。
+
+    舊版在模組層（收集期）算一次 `_NOW_NS`：全量套件跑超過 realtime TTL（600 秒）後，
+    這個檔案排在後面時時戳已經過期，`_enrich` 判 stale → 紅；單獨跑該檔只要幾秒 → 綠。
+    「跑一次全量是綠的」證明不了它修好了（獨立審查指出），能證明的是這個性質：
+    時戳必須跟著建構時的時鐘走。
+    """
+    seen = []
+    for fake_now in (1_000_000.0, 1_000_700.0):        # 相隔 700 秒 > 600 秒 TTL
+        monkeypatch.setattr(time, "time", lambda v=fake_now: v)
+        seen.append(_FakeSnap().ts)
+    assert seen[1] - seen[0] == int(700 * 1e9), (
+        "時戳沒跟著建構時的時鐘走——收集期就固定的話，全量跑到後段必然過 TTL")
+
+
 class _FakeSnap:
+    def __init__(self):
+        self.ts = int((time.time() + 8 * 3600) * 1e9)
+
     code = "2330"
     close = 1000.0
     change_price = 10.0
@@ -49,7 +66,6 @@ class _FakeSnap:
     open = 995.0
     high = 1010.0
     low = 990.0
-    ts = _NOW_NS  # epoch 纳秒（当下）
     # 台股盘中专用字段（旧实现丢弃，现已接上）
     average_price = 1002.5
     volume_ratio = 1.8
@@ -177,7 +193,7 @@ def test_prime_snapshots_batches_then_cache_hit_skips_per_code_snapshot(monkeypa
             self.open = 995.0
             self.high = 1010.0
             self.low = 990.0
-            self.ts = _NOW_NS
+            self.ts = int((time.time() + 8 * 3600) * 1e9)
             self.average_price = 1002.5
 
     class _Api:
