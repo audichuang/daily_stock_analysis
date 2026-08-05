@@ -1022,13 +1022,11 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 
     def _build_stats_block(self, overview: MarketOverview) -> str:
         """Build market statistics block."""
-        # institutional_net 也算「有统计」：台股复盘可能只有三大法人而无涨跌家数。
-        has_stats = bool(
-            overview.up_count
-            or overview.down_count
-            or overview.total_amount
-            or overview.institutional_net
-        )
+        # 涨跌家数／成交额与三大法人是两组独立的资料，缺一组时不能拿另一组的存在
+        # 当理由把它渲染成 0——那会让「没有资料」看起来像「资料是零」。
+        has_breadth = bool(overview.up_count or overview.down_count or overview.total_amount)
+        has_institutional = bool(overview.institutional_net)
+        has_stats = has_breadth or has_institutional
         has_market_signal = bool(self._supports_market_light() and (overview.indices or has_stats))
         if not has_stats and not has_market_signal:
             return ""
@@ -1044,7 +1042,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                         f"- **Guidance**: {light['guidance']}",
                     ]
                 )
-            if has_stats:
+            if has_breadth:
                 if lines:
                     lines.append("")
                 lines.append(
@@ -1080,16 +1078,16 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         if has_stats:
             if lines:
                 lines.append("")
-            lines.extend(
-                [
-                    "| 指标 | 数值 | 观察 |",
-                    "|------|------|------|",
-                    f"| 上涨/下跌/平盘 | {overview.up_count} / {overview.down_count} / {overview.flat_count} | 上涨占比(不含平盘) {up_ratio:.1%} |",
-                    f"| 涨停/跌停 | {overview.limit_up_count} / {overview.limit_down_count} | 涨跌停差 {limit_spread:+d} |",
-                    f"| 两市成交额 | {overview.total_amount:.0f} 亿 | {self._describe_turnover(overview.total_amount)} |",
-                ]
-            )
-            if overview.institutional_net:
+            lines.extend(["| 指标 | 数值 | 观察 |", "|------|------|------|"])
+            if has_breadth:
+                lines.extend(
+                    [
+                        f"| 上涨/下跌/平盘 | {overview.up_count} / {overview.down_count} / {overview.flat_count} | 上涨占比(不含平盘) {up_ratio:.1%} |",
+                        f"| 涨停/跌停 | {overview.limit_up_count} / {overview.limit_down_count} | 涨跌停差 {limit_spread:+d} |",
+                        f"| 两市成交额 | {overview.total_amount:.0f} 亿 | {self._describe_turnover(overview.total_amount)} |",
+                    ]
+                )
+            if has_institutional:
                 inst = overview.institutional_net
                 unit = self._get_turnover_unit_label()
                 lines.append(

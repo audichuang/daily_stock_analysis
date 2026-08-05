@@ -15,6 +15,7 @@ import traceback
 from typing import Callable
 
 from fastapi import Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -100,13 +101,21 @@ def add_error_handlers(app) -> None:
     
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
-        """处理请求验证异常"""
+        """处理请求验证异常
+
+        ``exc.errors()`` 里 ``value_error`` 类型的项会带着 ``ctx["error"]`` ——
+        那是**原始 ValueError 物件**，不是字串。直接塞进 JSONResponse 会抛
+        "Object of type ValueError is not JSON serializable"，被 general handler
+        接成 500，于是任何 ``field_validator`` 抛 ValueError 的欄位都拿不到该有的
+        422（踩过：market-review 的 ``region``）。``jsonable_encoder`` 与 FastAPI
+        自带的 handler 同一套做法，会把这类物件降成可序列化形式。
+        """
         return JSONResponse(
             status_code=422,
             content={
                 "error": "validation_error",
                 "message": "请求参数验证失败",
-                "detail": exc.errors()
+                "detail": jsonable_encoder(exc.errors())
             }
         )
     

@@ -46,6 +46,15 @@ def normalize_market_review_region_strict(value: str) -> str:
     Unlike persistent configuration parsing, request input is fail-fast: empty
     values, empty tokens, unknown tokens, and mixing ``both`` with other tokens
     raise ``ValueError`` instead of being filtered or defaulted.
+
+    Output is ordered by ``MARKET_REVIEW_REGION_ORDER``, **not** by caller input
+    order — deliberately unlike ``normalize_market_review_region_lenient``. The
+    fork's "caller order wins" rule belongs to the persistent
+    ``MARKET_REVIEW_REGION`` config, where the operator types the order once and
+    means it. Request-scoped input has no such author: the Web selector emits
+    checkbox state in canonical order regardless of click order, so honouring
+    "input order" here would only fabricate a primary-market choice the caller
+    never made.
     """
 
     normalized = value.strip().lower()
@@ -71,9 +80,5 @@ def normalize_market_review_region_strict(value: str) -> str:
             raise ValueError("region 中 both 必须单独使用，不能与其他市场混合")
         return MARKET_REVIEW_REGION_ALL
 
-    # 与 lenient 路径同语义：保留使用者输入顺序（tw,us => 台股先复盘），仅去重。
-    ordered: list[str] = []
-    for token in tokens:
-        if token not in ordered:
-            ordered.append(token)
-    return ",".join(ordered)
+    requested = set(tokens)
+    return ",".join(region for region in MARKET_REVIEW_REGION_ORDER if region in requested)

@@ -3633,3 +3633,100 @@ Index text.
         assert violations == [], (
             f"market_analyzer.py still accesses private Analyzer attributes: {violations}"
         )
+
+
+class TestBuildStatsBlockRegionAndDataSplit:
+    """`_build_stats_block` 的两条已实际踩过的回归。
+
+    1. 台股必须拿到盘面信号。上游 v3.29 把信号改成由 `_supports_market_light()`
+       闸住，而该集合原本不含 `tw`，合并后台股整组失去盘面信号／信号依据／
+       操作建议，报告照样生成、测试照样绿——典型的静默降级。
+    2. 缺资料不得渲染成 0。涨跌家数与三大法人是两组独立来源，只有其中一组时
+       不能拿另一组的存在当理由把缺的那组印成 `0 / 0 / 0`。
+    """
+
+    @staticmethod
+    def _overview(**kw):
+        from src.market_analyzer import MarketOverview
+
+        base = dict(
+            date="2026-08-05", indices=[], up_count=0, down_count=0, flat_count=0,
+            limit_up_count=0, limit_down_count=0, total_amount=0.0, institutional_net=None,
+        )
+        base.update(kw)
+        return MarketOverview(**base)
+
+    @staticmethod
+    def _render(overview, *, language="zh", supports_market_light=True):
+        from src.market_analyzer import MarketAnalyzer
+
+        analyzer = MarketAnalyzer.__new__(MarketAnalyzer)
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value=language), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"), \
+             patch.object(MarketAnalyzer, "_supports_market_light", return_value=supports_market_light), \
+             patch.object(MarketAnalyzer, "build_market_light_snapshot", return_value={
+                 "score": 42, "temperature_label": "偏冷", "label": "偏防守",
+                 "reasons": ["跌多涨少"], "guidance": "控制回撤",
+             }):
+            return MarketAnalyzer._build_stats_block(analyzer, overview)
+
+    def test_tw_is_inside_the_market_light_region_set(self):
+        """守门：`tw` 不在集合里就等于台股复盘没有盘面信号。"""
+        from src.schemas.market_light import MARKET_LIGHT_REGIONS
+        from src.services.market_light_service import MARKET_LIGHT_REGIONS as SERVICE_REGIONS
+
+        assert "tw" in MARKET_LIGHT_REGIONS
+        assert "tw" in SERVICE_REGIONS
+
+    def test_institutional_only_does_not_fabricate_zero_breadth(self):
+        overview = self._overview(
+            institutional_net={"foreign_net": -104.0, "trust_net": 296.0,
+                               "dealer_net": -193.0, "total_net": -1.0},
+        )
+        block = self._render(overview, supports_market_light=False)
+
+        assert "三大法人净买卖" in block
+        assert "| 指标 | 数值 | 观察 |" in block, "表头必须存在，法人列才是合法表格列"
+        assert "上涨/下跌/平盘" not in block, "没有涨跌家数就不该渲染该列"
+        assert "两市成交额" not in block, "没有成交额就不该印 0 亿"
+
+    def test_breadth_only_omits_the_institutional_row(self):
+        overview = self._overview(up_count=350, down_count=550, flat_count=80, total_amount=3400.0)
+        block = self._render(overview, supports_market_light=False)
+
+        assert "上涨/下跌/平盘 | 350 / 550 / 80" in block
+        assert "三大法人" not in block
+
+    def test_both_data_groups_render_breadth_then_institutional(self):
+        overview = self._overview(
+            up_count=350, down_count=550, flat_count=80, total_amount=3400.0,
+            institutional_net={"foreign_net": -104.0, "trust_net": 296.0,
+                               "dealer_net": -193.0, "total_net": -1.0},
+        )
+        block = self._render(overview, supports_market_light=False)
+
+        assert block.index("| 指标 |") < block.index("上涨/下跌/平盘") < block.index("三大法人")
+
+    def test_market_light_signal_renders_when_region_supports_it(self):
+        overview = self._overview(
+            up_count=350, down_count=550, flat_count=80, total_amount=3400.0,
+            institutional_net={"foreign_net": -104.0, "trust_net": 296.0,
+                               "dealer_net": -193.0, "total_net": -1.0},
+        )
+        block = self._render(overview, supports_market_light=True)
+
+        assert "盘面信号" in block and "信号依据" in block and "操作建议" in block
+
+    def test_english_institutional_only_omits_zero_breadth_line(self):
+        overview = self._overview(
+            institutional_net={"foreign_net": -104.0, "trust_net": 296.0,
+                               "dealer_net": -193.0, "total_net": -1.0},
+        )
+        block = self._render(overview, language="en", supports_market_light=False)
+
+        assert "Institutional net" in block
+        assert "Breadth" not in block, "没有涨跌家数就不该输出 Advancers 0 / Decliners 0"
+
+    def test_empty_overview_renders_nothing(self):
+        assert self._render(self._overview(), supports_market_light=False) == ""

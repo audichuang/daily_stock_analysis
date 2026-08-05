@@ -40,7 +40,7 @@ from src.services.task_queue import TaskInfo, TaskStatus as QueueTaskStatus
 
 
 class _OfflineHotspotProvider:
-    """akshare 形狀的 provider stub：有 alphasift 期望的方法名，但一格都不連網。
+    """akshare 形狀的 provider stub：有 screening hotspot 期望的方法名，但一格都不連網。
 
     刻意**不是** `DsaEastMoneyHotspotProvider` 的實例——`hotspots()` 用 `isinstance` 決定要不要
     做 thin-rows fallback 與 metric enrichment，那兩條都會真的打 eastmoney。
@@ -3868,6 +3868,60 @@ class ScreeningOpportunitiesApiTestCase(unittest.TestCase):
 
         self.assertEqual(caught.exception.status_code, 400)
         self.assertEqual(caught.exception.detail["error"], "screening_screen_rejected")
+
+
+class OutboundGuardPropagationTestCase(unittest.TestCase):
+    """守門例外必須能穿透 `_fetch_constituent_sources`。
+
+    上游那版在 `future.result()` 外圍捕 `BaseException`，會把本檔刻意繼承
+    `BaseException` 的 `_OutboundBlocked` 一起吞掉——於是「漏一格 mock」的測試
+    仍然是綠的，fail-loud 契約形同虛設，只有對方收了連線卻不回時才在 CI 掛死。
+    這個測試盯的就是那個 except 子句不會再放寬回 `BaseException`。
+    """
+
+    def test_base_exception_from_worker_is_not_swallowed(self):
+        from src.services import screening_service
+
+        provider = screening_service.DsaEastMoneyHotspotProvider.__new__(
+            screening_service.DsaEastMoneyHotspotProvider
+        )
+
+        def blocked(*_args, **_kwargs):
+            raise _OutboundBlocked("離線測試嘗試連外（模擬漏 mock）")
+
+        with patch.object(
+            screening_service.DsaEastMoneyHotspotProvider,
+            "_fetch_eastmoney_constituents",
+            blocked,
+        ), patch.object(
+            screening_service.DsaEastMoneyHotspotProvider,
+            "_fetch_ths_constituents",
+            blocked,
+        ):
+            with self.assertRaises(_OutboundBlocked):
+                provider._fetch_constituent_sources("AI算力", source="concept")
+
+    def test_ordinary_source_failure_is_still_isolated(self):
+        """一般外部來源失敗仍必須被吞掉並降級，不能因為上一個測試而改成 fail-fast。"""
+        from src.services import screening_service
+
+        provider = screening_service.DsaEastMoneyHotspotProvider.__new__(
+            screening_service.DsaEastMoneyHotspotProvider
+        )
+
+        def flaky(*_args, **_kwargs):
+            raise RuntimeError("upstream 500")
+
+        with patch.object(
+            screening_service.DsaEastMoneyHotspotProvider,
+            "_fetch_eastmoney_constituents",
+            flaky,
+        ), patch.object(
+            screening_service.DsaEastMoneyHotspotProvider,
+            "_fetch_ths_constituents",
+            flaky,
+        ):
+            self.assertEqual(provider._fetch_constituent_sources("AI算力", source="concept"), [])
 
 
 if __name__ == "__main__":

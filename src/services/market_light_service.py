@@ -17,15 +17,17 @@ from src.storage import AnalysisHistory, DatabaseManager
 
 logger = logging.getLogger(__name__)
 
-MARKET_LIGHT_REGIONS = frozenset({"cn", "hk", "us", "jp", "kr"})
+MARKET_LIGHT_REGIONS = frozenset({"cn", "hk", "us", "tw", "jp", "kr"})
 MARKET_LIGHT_ALERT_REGIONS = frozenset({"cn", "hk", "us"})
 MARKET_LIGHT_HISTORY_BATCH_SIZE = 100
+
+_MARKET_LIGHT_REGION_HINT = "cn, hk, us, tw, jp, kr"
 
 
 def normalize_market_region(region: str) -> str:
     value = str(region or "").strip().lower()
     if value not in MARKET_LIGHT_REGIONS:
-        raise ValueError(f"market target must be one of cn, hk, us, jp, kr: {region}")
+        raise ValueError(f"market target must be one of {_MARKET_LIGHT_REGION_HINT}: {region}")
     return value
 
 

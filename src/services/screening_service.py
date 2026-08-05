@@ -2313,7 +2313,11 @@ class DsaEastMoneyHotspotProvider:
                 label = futures[future]
                 try:
                     payload = future.result()
-                except BaseException as exc:  # noqa: BLE001 - external source failures are isolated.
+                except Exception as exc:  # noqa: BLE001 - external source failures are isolated.
+                    # 只吞 Exception。BaseException 会连带吞掉离线测试刻意继承
+                    # BaseException 的连外守门（见 tests/test_screening_api.py 的
+                    # _no_outbound_network），漏一格 mock 就会「有没有网路都绿」，
+                    # 只有对方收了连线不回时才在 CI 挂死。
                     logger.info("Screening %s constituent source failed for %s: %s", label, topic, exc)
                     continue
                 if payload is None or bool(getattr(payload, "empty", False)):

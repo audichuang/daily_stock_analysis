@@ -320,7 +320,8 @@ class MarketReviewLocalizationTestCase(unittest.TestCase):
         )
         self.assertEqual(
             set(persist_history.call_args.kwargs["market_light_snapshots"]),
-            {"cn", "hk", "us"},
+            # tw 在本 fork 也产生 Market Light（TWSE/TPEx 有完整涨跌家数与成交额）。
+            {"cn", "hk", "us", "tw"},
         )
         sent_content = notifier.send.call_args.args[0]
         self.assertTrue(sent_content.startswith("🎯 Market Review\n\n"))
