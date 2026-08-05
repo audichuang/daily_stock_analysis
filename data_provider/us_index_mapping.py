@@ -40,6 +40,13 @@ US_INDEX_MAPPING = {
     # 罗素 2000
     'RUT': ('^RUT', '罗素2000指数'),
     '^RUT': ('^RUT', '罗素2000指数'),
+    # 费城半导体指数。台股是半导体权重市场，它的解释力高於大盘三兄弟，是台股盘前判读
+    # （skill `tw-morning-call`、`scripts/overnight.py`）的核心指标之一。
+    # **不加进这张表会静默给错标的**：`SOX` 符合美股 1-5 字母的 pattern，於是被当成个股，
+    # 而 Yahoo 上 `SOX` 真的存在一档 Scanbox Asia Pacific Ltd ⇒ 不报错、有价格、有名字，
+    # 但那是一家亚太公司的报价。同时 `^SOX` 走不到指数路径会被转成 `$SOX` 而取不到。
+    'SOX': ('^SOX', '费城半导体指数'),
+    '^SOX': ('^SOX', '费城半导体指数'),
 }
 
 

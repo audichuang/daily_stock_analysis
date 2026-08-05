@@ -4,10 +4,20 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 
 ## 数据来源与时效
 
-| 市场 | 数据源 | 时效 |
-| --- | --- | --- |
-| 台股（`.TW` / `.TWO`） | Shioaji 优先，yfinance 兜底 | Shioaji 真即时；yfinance 约延迟 15-20 分钟 |
-| 其他（A股/港股/美股/日股/韩股） | 沿用既有 `get_realtime_quote` 路由 | 同各自既有数据源 |
+| 市场 | 个股代码格式 | 数据源 | 时效 | 指数即时 |
+| --- | --- | --- | --- | --- |
+| 台股 | `.TW` / `.TWO`（4~6 位数字） | Shioaji 优先，yfinance 兜底 | Shioaji 真即时；yfinance 约延迟 15-20 分钟 | ✗ 见踩雷 |
+| 美股 | 裸代码（1-5 字母，可选 `.B`） | yfinance（`get_realtime_quote` 路由） | 同 Yahoo | **✓ 走 `US_INDEX_MAPPING`** |
+| 韩股 | `.KS` / `.KQ`（6 位数字） | 同上 | 同上 | ✗ 见踩雷 |
+| 日股 | `.T`（4~5 位数字） | 同上 | 同上 | ✗ 见踩雷 |
+| 港股 | `hk00700` → `0700.HK` | 同上 | 同上 | ✗ 见踩雷 |
+| A股 | 6 位数字（`.SS`/`.SZ`/`.BJ` 自动补） | efinance／akshare 优先，yfinance 兜底 | 同各自数据源 | — |
+
+**这张表是 2026-08-03 实测出来的，不是从代码结构推的**：`MU`／`AAPL`／`TSM`／`^SOX`／
+`005930.KS`／`000660.KS` 六檔的 `price` 与 `change_pct` 都正确（误差 0.00pp）。
+**但 `source` 一律回 `fallback`、`provider_timestamp` 与 `is_stale` 都是 `None`**
+⇒ 这条路径给不出「这笔报价有多新」，盘中引用必须自己标时点。
+盘前要的**隔夜收盘＋近 5 日**仍走 `scripts/overnight.py`（需要序列，单点报价给不了）。
 
 ## 台股盘中字段（白天看盘视角，仅 Shioaji 提供）
 
@@ -61,6 +71,29 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 - **`shioaji` 是 optional 依赖**：未 `uv pip install shioaji` 或无金钥时数据源自我停用，台股**静默降级 yfinance**（行情延迟、走势 day 改用 yfinance 5m 也延迟、股票名变英文）。
 - **Shioaji `kbars` 单次区间上限 30 天**（超过回 400 `Kbars date range must not exceed 30 days`），故 year 走势走 yfinance、month 取近 30 天。
 - **Shioaji `snapshot.ts` / `kbars.ts` 是台北时间的裸值（非 UTC）**：必须按 `+08:00` 还原绝对时刻（见 `data_provider/shioaji_fetcher.py:_ns_to_iso`），否则 `as_of`/走势时间轴差 8 小时、`is_stale` 因 provider 时间「在未来」恒为 0（假新鲜）。
+- **只有美股指数走得通实时路径。** `US_INDEX_MAPPING` 只收美股（SPX／DJI／IXIC／NDX／VIX／RUT／
+  **SOX**），所以 `KS11`／`N225`／`TWII` 既不是美股指数也不是美股个股 ⇒ **落到 A 股路由**，
+  连问腾讯／新浪／efinance 全失败 ⇒ **三个 fetcher 熔断 300 秒，污染後续真正的 A 股请求**（实测）。
+  `HSI` 符合 1-5 字母 pattern 被判成美股个股、Yahoo 无此裸代码 ⇒ 回一个 `price=None` 的空 quote；
+  `^HSI` 走到 `_convert_stock_code` 的末端 ⇒ 被转成 **`^HSI.SZ`** 当深市 A 股。
+  **要国际指数请直接用 yfinance 的 `^` 符号**（`^KS11`／`^N225`／`^TWII`／`^HSI`），不要走
+  `get_realtime_quote`。注意 `YfinanceFetcher.get_main_indices(market)` **能列出**各市场主要指数
+  代码（us: SPX/IXIC/DJI/VIX、kr: KS11/KQ11、jp: N225、tw: TWII、hk: HSI/HSTECH/HSCEI），
+  所以「repo 知道这些指数存在」与「实时路径取不到它们」是两件事，别被前者误导。
+  修法是新增一张非美股指数映射，属设计决策，2026-08-03 决定先记录不修。
+- **`api.snapshots()` 回的是 `builtins.Snapshot`，没有 `_asdict()`**：用 `dict(s)` 转。写
+  `dict(s._asdict())` 会 `AttributeError`，若外面包了 `except` 就变成整批静默回空——2026-08-03
+  踩过，表格印出表头後一列资料都没有。安全写法 `dict(s._asdict()) if hasattr(s, "_asdict") else dict(s)`。
+  另 `json.dumps` 会因 `tick_type`／`change_type` 是 enum 而炸（`default=str` 挡不住），先把 value 全 `str()`。
+- **`limit_up`／`limit_down` 在 contract 上，不在 snapshot 上**：要判涨跌停得先留
+  `getattr(api.Contracts.Stocks[code], "limit_up", None)`，再和 snapshot 的 `close` 比。
+- **「涨停锁死」的可判条件是 `close == limit_up` 且 `sell_volume == 0`**（一档委卖挂量归零）。
+  这是「现在下单买不到」的直接证据，比涨幅百分比有用得多：2026-08-03 华邦电锁 143，
+  委买排队 **13,533 张**、委卖 **0 张**。锁板时 `buy_price`／`sell_price` 会同时回 `0.0`，
+  别拿它们当报价。本路径无五档，所以只能说「锁死」不能量化排队深度以外的结构。
+- **指数与期货也走同一个 `snapshots()`**：加权指数 `api.Contracts.Indexs.TSE["001"]`、
+  台指期近月 `api.Contracts.Futures.TXF["TXFR1"]`。盘中要算「现货 vs 期货逆价差」两个一起抓即可。
+  盘中即时 breadth 的现成工具见 `scripts/intraday_breadth.py`。
 
 ## Fallback 真值表（台股请求）
 

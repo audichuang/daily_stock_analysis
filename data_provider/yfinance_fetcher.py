@@ -108,6 +108,33 @@ class YfinanceFetcher(BaseFetcher):
         return YfinanceFetcher._is_yahoo_suffix_stock(stock_code)
 
     @staticmethod
+    def _prev_close_from_fast_info(info):
+        """從 `fast_info` 取**前一交易日的正規收盤**，用來算漲跌幅。
+
+        **必須優先 `regularMarketPreviousClose`。** yfinance 的 `previousClose` 對**美股個股**
+        在盤後／週末會退化成接近 `lastPrice` 的值，據此算出的漲跌幅**方向會相反**。
+        2026-08-03（週一台北、美股未開盤）實測：
+
+        | 標的 | 用 `previousClose` | 用 `regularMarketPreviousClose` | 日線真值 |
+        | --- | --: | --: | --: |
+        | MU | **+1.30%** | −5.90% | **−5.90%** |
+        | AAPL | **+0.51%** | −7.35% | **−7.35%** |
+        | TSM（ADR） | +0.06% | +0.23% | +0.23% |
+        | ^SOX（指數） | +0.07% | +0.07% | +0.07% |
+        | 005930.KS（韓股） | −8.76% | −8.76% | −8.76% |
+
+        指數與韓股兩個欄位相同、ADR 只差 0.17pp，所以這個錯誤**只在美股個股上顯形**——
+        而且不報錯、不缺欄位，只給一個反向的數字。台股走 Shioaji 所以不受影響。
+
+        另一個坑：`fast_info` 是 **dict-like**，camelCase 只能用 `[]` 取、屬性存取要 snake_case，
+        所以 `getattr(info, 'previousClose')` 一直回 None，真正生效的是 snake_case 那個候選。
+        """
+        return (getattr(info, 'regular_market_previous_close', None)
+                or getattr(info, 'regularMarketPreviousClose', None)
+                or getattr(info, 'previousClose', None)
+                or getattr(info, 'previous_close', None))
+
+    @staticmethod
     def _is_tw_suffix_stock(stock_code: str) -> bool:
         """Return True for supported Taiwan suffix-only Yahoo symbols (TWSE `.TW` / TPEx `.TWO`).
 
@@ -726,7 +753,7 @@ class YfinanceFetcher(BaseFetcher):
                 if info is None:
                     raise ValueError("fast_info is None")
                 price = getattr(info, 'lastPrice', None) or getattr(info, 'last_price', None)
-                prev_close = getattr(info, 'previousClose', None) or getattr(info, 'previous_close', None)
+                prev_close = self._prev_close_from_fast_info(info)
                 open_price = getattr(info, 'open', None)
                 high = getattr(info, 'dayHigh', None) or getattr(info, 'day_high', None)
                 low = getattr(info, 'dayLow', None) or getattr(info, 'day_low', None)
@@ -848,7 +875,7 @@ class YfinanceFetcher(BaseFetcher):
                     raise ValueError("fast_info is None")
 
                 price = getattr(info, 'lastPrice', None) or getattr(info, 'last_price', None)
-                prev_close = getattr(info, 'previousClose', None) or getattr(info, 'previous_close', None)
+                prev_close = self._prev_close_from_fast_info(info)
                 open_price = getattr(info, 'open', None)
                 high = getattr(info, 'dayHigh', None) or getattr(info, 'day_high', None)
                 low = getattr(info, 'dayLow', None) or getattr(info, 'day_low', None)
