@@ -3636,13 +3636,20 @@ Index text.
 
 
 class TestBuildStatsBlockRegionAndDataSplit:
-    """`_build_stats_block` 的两条已实际踩过的回归。
+    """`_build_stats_block` 的三条已实际踩过的回归。
 
     1. 台股必须拿到盘面信号。上游 v3.29 把信号改成由 `_supports_market_light()`
        闸住，而该集合原本不含 `tw`，合并后台股整组失去盘面信号／信号依据／
        操作建议，报告照样生成、测试照样绿——典型的静默降级。
-    2. 缺资料不得渲染成 0。涨跌家数与三大法人是两组独立来源，只有其中一组时
-       不能拿另一组的存在当理由把缺的那组印成 `0 / 0 / 0`。
+    2. 缺资料不得渲染成 0。涨跌家数、涨跌停、成交额、三大法人是四组独立来源，
+       只有其中几组时不能拿别组的存在当理由把缺的印成 0。
+    3. 评不出来就不得给分。所有维度 available=False 时评分器仍回一个分数为
+       预设 50 的完整快照；照印就是凭空生出「50/100 需观察」与操作建议，
+       那个 50 还会被 market_review 当成历史主市场分数。
+
+    **这里刻意不 patch `_supports_market_light` 与 `build_market_light_snapshot`**——
+    第一版就是把它们 patch 成固定值，正好遮住第 1 条，测试全绿而 bug 还在。
+    只设 `region` 与 `profile`，让真实判定跑起来。
     """
 
     @staticmethod
@@ -3657,76 +3664,134 @@ class TestBuildStatsBlockRegionAndDataSplit:
         return MarketOverview(**base)
 
     @staticmethod
-    def _render(overview, *, language="zh", supports_market_light=True):
+    def _index(change_pct=2.1):
+        from src.market_analyzer import MarketIndex
+
+        return MarketIndex(code="TAIEX", name="加權指數", current=24000.0,
+                           change=500.0, change_pct=change_pct)
+
+    @staticmethod
+    def _render(overview, *, region="tw", language="zh"):
+        """跑真实的 `_supports_market_light()`（= region in MARKET_LIGHT_REGIONS）。"""
         from src.market_analyzer import MarketAnalyzer
 
         analyzer = MarketAnalyzer.__new__(MarketAnalyzer)
+        analyzer.region = region
+        analyzer.profile = SimpleNamespace(has_market_stats=True, has_limit_stats=True)
         with patch.object(MarketAnalyzer, "_get_review_language", return_value=language), \
              patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
-             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"), \
-             patch.object(MarketAnalyzer, "_supports_market_light", return_value=supports_market_light), \
-             patch.object(MarketAnalyzer, "build_market_light_snapshot", return_value={
-                 "score": 42, "temperature_label": "偏冷", "label": "偏防守",
-                 "reasons": ["跌多涨少"], "guidance": "控制回撤",
-             }):
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"):
             return MarketAnalyzer._build_stats_block(analyzer, overview)
 
+    INST = {"foreign_net": -104.0, "trust_net": 296.0, "dealer_net": -193.0, "total_net": -1.0}
+
+    # ---- 1. 台股的市场集合 ----
+
     def test_tw_is_inside_the_market_light_region_set(self):
-        """守门：`tw` 不在集合里就等于台股复盘没有盘面信号。"""
         from src.schemas.market_light import MARKET_LIGHT_REGIONS
         from src.services.market_light_service import MARKET_LIGHT_REGIONS as SERVICE_REGIONS
 
         assert "tw" in MARKET_LIGHT_REGIONS
         assert "tw" in SERVICE_REGIONS
 
+    def test_tw_gets_a_market_signal_from_real_region_check(self):
+        """走真实 region 判定：tw 必须拿到盘面信号，与 cn 一致。"""
+        overview = self._overview(up_count=350, down_count=550, flat_count=80,
+                                  limit_up_count=43, limit_down_count=355,
+                                  total_amount=3400.0, indices=[self._index()])
+        for region in ("tw", "cn"):
+            block = self._render(overview, region=region)
+            assert "盘面信号" in block, f"{region} 应有盘面信号"
+            assert "操作建议" in block
+
+    def test_unsupported_region_has_no_market_signal_but_keeps_the_table(self):
+        overview = self._overview(up_count=350, down_count=550, total_amount=3400.0)
+        block = self._render(overview, region="eu")
+
+        assert "盘面信号" not in block
+        assert "上涨/下跌/平盘" in block
+
+    # ---- 2. 逐列的资料可用性 ----
+
     def test_institutional_only_does_not_fabricate_zero_breadth(self):
-        overview = self._overview(
-            institutional_net={"foreign_net": -104.0, "trust_net": 296.0,
-                               "dealer_net": -193.0, "total_net": -1.0},
-        )
-        block = self._render(overview, supports_market_light=False)
+        block = self._render(self._overview(institutional_net=self.INST))
 
         assert "三大法人净买卖" in block
         assert "| 指标 | 数值 | 观察 |" in block, "表头必须存在，法人列才是合法表格列"
-        assert "上涨/下跌/平盘" not in block, "没有涨跌家数就不该渲染该列"
-        assert "两市成交额" not in block, "没有成交额就不该印 0 亿"
+        assert "上涨/下跌/平盘" not in block
+        assert "涨停/跌停" not in block
+        assert "两市成交额" not in block
 
-    def test_breadth_only_omits_the_institutional_row(self):
-        overview = self._overview(up_count=350, down_count=550, flat_count=80, total_amount=3400.0)
-        block = self._render(overview, supports_market_light=False)
+    def test_limit_only_renders_just_the_limit_row(self):
+        """只有涨跌停时，整块不得消失，也不得补上 0/0/0 与 0 亿。"""
+        block = self._render(self._overview(limit_up_count=43, limit_down_count=355))
 
-        assert "上涨/下跌/平盘 | 350 / 550 / 80" in block
-        assert "三大法人" not in block
+        assert "涨停/跌停 | 43 / 355" in block
+        assert "上涨/下跌/平盘" not in block
+        assert "两市成交额" not in block
 
-    def test_both_data_groups_render_breadth_then_institutional(self):
-        overview = self._overview(
-            up_count=350, down_count=550, flat_count=80, total_amount=3400.0,
-            institutional_net={"foreign_net": -104.0, "trust_net": 296.0,
-                               "dealer_net": -193.0, "total_net": -1.0},
-        )
-        block = self._render(overview, supports_market_light=False)
+    def test_turnover_only_renders_just_the_turnover_row(self):
+        block = self._render(self._overview(total_amount=3400.0))
 
-        assert block.index("| 指标 |") < block.index("上涨/下跌/平盘") < block.index("三大法人")
+        assert "两市成交额 | 3400 亿" in block
+        assert "上涨/下跌/平盘" not in block
+        assert "涨停/跌停" not in block
 
-    def test_market_light_signal_renders_when_region_supports_it(self):
-        overview = self._overview(
-            up_count=350, down_count=550, flat_count=80, total_amount=3400.0,
-            institutional_net={"foreign_net": -104.0, "trust_net": 296.0,
-                               "dealer_net": -193.0, "total_net": -1.0},
-        )
-        block = self._render(overview, supports_market_light=True)
+    def test_all_groups_render_in_order(self):
+        overview = self._overview(up_count=350, down_count=550, flat_count=80,
+                                  limit_up_count=43, limit_down_count=355,
+                                  total_amount=3400.0, institutional_net=self.INST)
+        block = self._render(overview)
 
-        assert "盘面信号" in block and "信号依据" in block and "操作建议" in block
+        assert (block.index("| 指标 |") < block.index("上涨/下跌/平盘")
+                < block.index("涨停/跌停") < block.index("两市成交额") < block.index("三大法人"))
 
     def test_english_institutional_only_omits_zero_breadth_line(self):
-        overview = self._overview(
-            institutional_net={"foreign_net": -104.0, "trust_net": 296.0,
-                               "dealer_net": -193.0, "total_net": -1.0},
-        )
-        block = self._render(overview, language="en", supports_market_light=False)
+        block = self._render(self._overview(institutional_net=self.INST), language="en")
 
         assert "Institutional net" in block
         assert "Breadth" not in block, "没有涨跌家数就不该输出 Advancers 0 / Decliners 0"
 
+    def test_english_breadth_line_only_lists_available_groups(self):
+        block = self._render(self._overview(limit_up_count=43, limit_down_count=355),
+                             language="en")
+
+        assert "Limit-up 43 / Limit-down 355" in block
+        assert "Advancers" not in block
+        assert "Turnover" not in block
+
+    # ---- 3. 评不出来就不给分 ----
+
+    def test_no_scoreable_dimension_means_no_signal(self):
+        """只有三大法人时评分器每个维度都不可用，不得输出预设的 50/100。"""
+        block = self._render(self._overview(institutional_net=self.INST))
+
+        assert "盘面信号" not in block, "所有维度不可用时不得凭空给分"
+        assert "50/100" not in block
+        assert "操作建议" not in block
+
+    def test_partial_dimension_still_produces_a_real_signal(self):
+        """只有涨跌停：limit 维度真的可用，分数是评出来的，必须输出。"""
+        block = self._render(self._overview(limit_up_count=43, limit_down_count=355))
+
+        assert "盘面信号" in block
+        assert "50/100" not in block, "这是真读数，不该落在预设值上"
+
+    def test_market_light_has_reading_rejects_all_unavailable(self):
+        from src.market_analyzer import _market_light_has_reading
+
+        assert _market_light_has_reading(None) is False
+        assert _market_light_has_reading({}) is False
+        assert _market_light_has_reading(
+            {"score": 50, "dimensions": {"breadth": {"available": False},
+                                         "index": {"available": False},
+                                         "limit": {"available": False}}}
+        ) is False
+        assert _market_light_has_reading(
+            {"score": 10, "dimensions": {"breadth": {"available": False},
+                                         "index": {"available": False},
+                                         "limit": {"available": True}}}
+        ) is True
+
     def test_empty_overview_renders_nothing(self):
-        assert self._render(self._overview(), supports_market_light=False) == ""
+        assert self._render(self._overview()) == ""

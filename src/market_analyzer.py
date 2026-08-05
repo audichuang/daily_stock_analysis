@@ -118,6 +118,28 @@ class MarketLightReviewResult:
     structured_payload: Dict[str, Any] = field(default_factory=dict)
 
 
+def _market_light_has_reading(snapshot: Optional[Dict[str, Any]]) -> bool:
+    """快照里是否真有读数，而不只是评分器的预设值。
+
+    `_build_market_light_scores` 在**每个维度都 available=False** 时仍会回一个
+    结构完整的快照，分数是中性预设 50。那不是「盘面中性」，那是「没有资料」——
+    照它渲染或持久化，就是凭空生出一个 50 分的盘面判断。所有消费端都该先过这关。
+
+    判准是**有没有任何维度可用**，不是 `data_quality`：后者只要 index 维度缺失
+    就标 `unavailable`（见 `_build_market_light_scores`），所以美股以外的市场
+    只有涨跌家数时它也是 `unavailable`，但那时分数是真的评出来的。
+    """
+    if not isinstance(snapshot, dict):
+        return False
+    dimensions = snapshot.get("dimensions")
+    if not isinstance(dimensions, dict):
+        return False
+    return any(
+        (dim.get("available") if isinstance(dim, dict) else getattr(dim, "available", False))
+        for dim in dimensions.values()
+    )
+
+
 class MarketAnalyzer:
     """
     大盘复盘分析器
@@ -1022,15 +1044,25 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 
     def _build_stats_block(self, overview: MarketOverview) -> str:
         """Build market statistics block."""
-        # 涨跌家数／成交额与三大法人是两组独立的资料，缺一组时不能拿另一组的存在
-        # 当理由把它渲染成 0——那会让「没有资料」看起来像「资料是零」。
-        has_breadth = bool(overview.up_count or overview.down_count or overview.total_amount)
+        # 每一列各自判断自己有没有资料。用一个总布林盖住整组，缺的那几项就会被
+        # 渲染成 0——「没有资料」看起来会变成「资料是零」。
+        # ponytail: 这里只能靠数值 truthiness 猜，因为 MarketOverview 没有 availability
+        # 旗标；真的全零的交易日会被当成缺资料。要区分得先给 MarketOverview 加显式旗标。
+        has_advance_decline = bool(overview.up_count or overview.down_count or overview.flat_count)
+        has_limit = bool(overview.limit_up_count or overview.limit_down_count)
+        has_turnover = bool(overview.total_amount)
+        has_breadth = has_advance_decline or has_limit or has_turnover
         has_institutional = bool(overview.institutional_net)
         has_stats = has_breadth or has_institutional
-        has_market_signal = bool(self._supports_market_light() and (overview.indices or has_stats))
-        if not has_stats and not has_market_signal:
+        if not has_stats and not (self._supports_market_light() and overview.indices):
             return ""
-        light = self.build_market_light_snapshot(overview) if has_market_signal else None
+        # 盘面信号只在**评分器真的评得出来**时输出。不能拿 institutional_net 或
+        # total_amount 的存在当理由——评分器根本不看这两项，于是「只有三大法人」
+        # 会得到一个所有维度 available=False 的快照，而它的分数是预设的 50 分。
+        # 照印就是凭空生出「50/100 需观察」与操作建议，那个 50 还会进历史记录。
+        light = self.build_market_light_snapshot(overview) if self._supports_market_light() else None
+        if not _market_light_has_reading(light):
+            light = None
         if self._get_review_language() == "en":
             lines = []
             if isinstance(light, dict):
@@ -1045,12 +1077,21 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             if has_breadth:
                 if lines:
                     lines.append("")
-                lines.append(
-                    f"- **Breadth**: Advancers {overview.up_count} / Decliners {overview.down_count} / "
-                    f"Flat {overview.flat_count}; "
-                    f"Limit-up {overview.limit_up_count} / Limit-down {overview.limit_down_count}; "
-                    f"Turnover {overview.total_amount:.0f} ({self._get_turnover_unit_label()})"
-                )
+                parts = []
+                if has_advance_decline:
+                    parts.append(
+                        f"Advancers {overview.up_count} / Decliners {overview.down_count} / "
+                        f"Flat {overview.flat_count}"
+                    )
+                if has_limit:
+                    parts.append(
+                        f"Limit-up {overview.limit_up_count} / Limit-down {overview.limit_down_count}"
+                    )
+                if has_turnover:
+                    parts.append(
+                        f"Turnover {overview.total_amount:.0f} ({self._get_turnover_unit_label()})"
+                    )
+                lines.append(f"- **Breadth**: {'; '.join(parts)}")
             if overview.institutional_net:
                 inst = overview.institutional_net
                 lines.append(
@@ -1079,13 +1120,17 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             if lines:
                 lines.append("")
             lines.extend(["| 指标 | 数值 | 观察 |", "|------|------|------|"])
-            if has_breadth:
-                lines.extend(
-                    [
-                        f"| 上涨/下跌/平盘 | {overview.up_count} / {overview.down_count} / {overview.flat_count} | 上涨占比(不含平盘) {up_ratio:.1%} |",
-                        f"| 涨停/跌停 | {overview.limit_up_count} / {overview.limit_down_count} | 涨跌停差 {limit_spread:+d} |",
-                        f"| 两市成交额 | {overview.total_amount:.0f} 亿 | {self._describe_turnover(overview.total_amount)} |",
-                    ]
+            if has_advance_decline:
+                lines.append(
+                    f"| 上涨/下跌/平盘 | {overview.up_count} / {overview.down_count} / {overview.flat_count} | 上涨占比(不含平盘) {up_ratio:.1%} |"
+                )
+            if has_limit:
+                lines.append(
+                    f"| 涨停/跌停 | {overview.limit_up_count} / {overview.limit_down_count} | 涨跌停差 {limit_spread:+d} |"
+                )
+            if has_turnover:
+                lines.append(
+                    f"| 两市成交额 | {overview.total_amount:.0f} 亿 | {self._describe_turnover(overview.total_amount)} |"
                 )
             if has_institutional:
                 inst = overview.institutional_net

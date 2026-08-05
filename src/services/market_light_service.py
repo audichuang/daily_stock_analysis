@@ -13,21 +13,27 @@ from src.core.market_review import MARKET_REVIEW_HISTORY_CODE, MARKET_REVIEW_REP
 from src.market_analyzer import MarketAnalyzer
 from src.schemas.market_light import MarketLightSnapshot
 from src.storage import AnalysisHistory, DatabaseManager
+from src.utils.market_review_region import MARKET_REVIEW_REGION_ORDER
 
 
 logger = logging.getLogger(__name__)
 
-MARKET_LIGHT_REGIONS = frozenset({"cn", "hk", "us", "tw", "jp", "kr"})
+# 注意：这个 MARKET_LIGHT_REGIONS 与 `src.schemas.market_light.MARKET_LIGHT_REGIONS`
+# **同名但不同契约**（上游就是这样命名的，改名会在每次合并上游时付代价）：
+#   - 这里 = 可以「查询快照」的市场，等同大盘复盘覆盖的全部市场
+#   - schemas 那个 = 可以「评出分数」的市场，是更窄的子集（评分器需要涨跌家数）
+# 从 MARKET_REVIEW_REGION_ORDER 推导而不是手写，否则新增市场时这里会静默落后
+# ——上游 v3.29 合并时就是这样漏掉 tw 的。
+MARKET_LIGHT_REGIONS = frozenset(MARKET_REVIEW_REGION_ORDER)
 MARKET_LIGHT_ALERT_REGIONS = frozenset({"cn", "hk", "us"})
 MARKET_LIGHT_HISTORY_BATCH_SIZE = 100
-
-_MARKET_LIGHT_REGION_HINT = "cn, hk, us, tw, jp, kr"
 
 
 def normalize_market_region(region: str) -> str:
     value = str(region or "").strip().lower()
     if value not in MARKET_LIGHT_REGIONS:
-        raise ValueError(f"market target must be one of {_MARKET_LIGHT_REGION_HINT}: {region}")
+        hint = ", ".join(MARKET_REVIEW_REGION_ORDER)
+        raise ValueError(f"market target must be one of {hint}: {region}")
     return value
 
 

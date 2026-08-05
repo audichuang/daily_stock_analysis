@@ -20,7 +20,7 @@ import uuid
 
 from src.config import get_config
 from src.notification import NotificationService
-from src.market_analyzer import MarketAnalyzer
+from src.market_analyzer import MarketAnalyzer, _market_light_has_reading
 from src.report_language import normalize_report_language
 from src.search_service import SearchService
 from src.analyzer import AnalysisResult, GeminiAnalyzer
@@ -829,8 +829,12 @@ def _persist_market_review_history(
             trend_prediction = "大盘复盘"
 
         # 用真实的 Market Light 盘面分数取代写死的 50，并让「轮动与资金」「风险与观察」卡片
-        # 显示真实读数而非占位字。多市场时按 region 输入顺序取第一个成功产出快照的市场
+        # 显示真实读数而非占位字。多市场时按 region 输入顺序取第一个**真的有读数**的市场
         # （如 tw,us = 以台股为主），无任何快照时回退占位值。仅影响新记录，不回改历史列。
+        #
+        # `_market_light_has_reading` 这一关不能省：评分器在所有维度都不可用时仍回一个
+        # 结构完整、分数为预设 50、`data_quality="unavailable"` 的快照。少了它，
+        # 「资料全掛」会被记成一条看起来正常的 50 分盘面读数。
         sentiment_score = 50
         if market_light_snapshots:
             ordered_regions = [
@@ -842,7 +846,7 @@ def _persist_market_review_history(
                 (
                     market_light_snapshots[r]
                     for r in ordered_regions
-                    if isinstance(market_light_snapshots.get(r), dict)
+                    if _market_light_has_reading(market_light_snapshots.get(r))
                 ),
                 None,
             )

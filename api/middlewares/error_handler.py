@@ -15,7 +15,6 @@ import traceback
 from typing import Callable
 
 from fastapi import Request, Response
-from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -101,21 +100,40 @@ def add_error_handlers(app) -> None:
     
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
-        """处理请求验证异常
+        """处理请求验证异常。
 
-        ``exc.errors()`` 里 ``value_error`` 类型的项会带着 ``ctx["error"]`` ——
-        那是**原始 ValueError 物件**，不是字串。直接塞进 JSONResponse 会抛
-        "Object of type ValueError is not JSON serializable"，被 general handler
-        接成 500，于是任何 ``field_validator`` 抛 ValueError 的欄位都拿不到该有的
-        422（踩过：market-review 的 ``region``）。``jsonable_encoder`` 与 FastAPI
-        自带的 handler 同一套做法，会把这类物件降成可序列化形式。
+        回应只投影 ``type`` / ``loc`` / ``msg`` 三个栏位，**刻意丢掉 pydantic 的
+        ``input`` 与 ``ctx``**，理由是三个各自独立的问题：
+
+        1. ``input`` 是使用者送进来的原值。欄位本身校验失败时（型别不符、长度、
+           自订 validator）它会被整个回吐——`/api/v1/auth/login` 的 ``password``
+           送成非字串就会在 422 里看到明文密码。
+        2. ``input`` 不设上限。送 100,000 字元的非法 ``region``，回应就是 100KB，
+           等于给了一个零成本的回应放大面（`agent` 的 ``content`` 上限 50,000）。
+        3. ``ctx`` 会带**原始例外物件**（`value_error` 的 ``ctx["error"]`` 是
+           ValueError 本身）。直接序列化会抛 "not JSON serializable" 被 general
+           handler 接成 500，于是任何 ``field_validator`` 抛 ValueError 的欄位都
+           拿不到该有的 422（踩过：market-review 的 ``region``）。
+
+        前端 `apps/dsa-web/src/api/error.ts::extractValidationDetail` 只读 ``loc``
+        与 ``msg``，所以丢掉那两个栏位不影响任何既有消费端。
         """
+        max_errors = 20
+        max_message_chars = 500
+        detail = [
+            {
+                "type": str(error.get("type", "")),
+                "loc": [str(segment) for segment in (error.get("loc") or ())],
+                "msg": str(error.get("msg", ""))[:max_message_chars],
+            }
+            for error in exc.errors()[:max_errors]
+        ]
         return JSONResponse(
             status_code=422,
             content={
                 "error": "validation_error",
                 "message": "请求参数验证失败",
-                "detail": jsonable_encoder(exc.errors())
+                "detail": detail,
             }
         )
     

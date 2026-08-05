@@ -1,19 +1,24 @@
 # -*- coding: utf-8 -*-
-"""RequestValidationError 必须落成 422，即使 validator 抛的是 ValueError。
+"""共用 validation handler 的回应契约：422、不外泄、不放大。
 
-踩过：`pydantic` 把 `field_validator` 抛出的 `ValueError` 原样放进
-`exc.errors()[i]["ctx"]["error"]`——那是**物件**不是字串。旧版 handler 直接把
-`exc.errors()` 塞进 `JSONResponse`，序列化失败后被 general handler 接成 500，
-于是任何走 `field_validator` 的欄位都拿不到该有的 422。
+这个 handler 服务**所有**端点，所以它的错误回应形状是一条安全边界，不只是排障便利。
+四件各自独立、都实际踩过或重现过的事：
 
-实际发现路径：`POST /api/v1/analysis/market-review` 传 `region=eu`（上游 v3.29
-新增的 `region` 是这条链上第一个会抛 `ValueError` 的 validator），文件明写应回
-4xx，实际回 500。这个测试盯的是 handler 本身，所以任何未来新增的 validator 都
-被一起保护。
+1. `field_validator` 抛 `ValueError` 时必须回 422。pydantic 把原始 ValueError 物件
+   放进 `ctx["error"]`，旧版直接塞进 `JSONResponse` 会序列化失败 → 被 general
+   handler 接成 500。实际路径：`POST /api/v1/analysis/market-review` 传 `region=eu`，
+   文件明写应回 4xx，实际回 500。
+2. 回应不得回吐 `input`。`/api/v1/auth/login` 的 `password` 送成非字串时，
+   旧版会在 422 里回吐明文密码。
+3. 回应不得随输入放大。送 100,000 字元的非法值，旧版回应就是 100KB。
+4. `ctx` 不得外流——它可能带任意物件，序列化行为不可控。
+
+前端 `apps/dsa-web/src/api/error.ts::extractValidationDetail` 只读 `loc` 与 `msg`，
+所以投影成 allowlist 不影响既有消费端。
 """
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from api.middlewares.error_handler import add_error_handlers
 
@@ -23,7 +28,9 @@ def _build_app() -> FastAPI:
     add_error_handlers(app)
 
     class Payload(BaseModel):
-        region: str
+        region: str = "ok"
+        password: str = ""
+        note: str = Field(default="", max_length=64)
 
         @field_validator("region")
         @classmethod
@@ -39,23 +46,63 @@ def _build_app() -> FastAPI:
     return app
 
 
-def test_value_error_from_field_validator_returns_422_not_500():
-    client = TestClient(_build_app(), raise_server_exceptions=False)
+def _client() -> TestClient:
+    return TestClient(_build_app(), raise_server_exceptions=False)
 
-    response = client.post("/probe", json={"region": "eu"})
+
+def test_value_error_from_field_validator_returns_422_not_500():
+    response = _client().post("/probe", json={"region": "eu"})
 
     assert response.status_code == 422, response.text
     body = response.json()
     assert body["error"] == "validation_error"
-    # detail 必须是可序列化的结构，且保住 validator 的讯息（排障要靠它）。
+    # 保住 validator 的讯息——排障要靠它，投影不能把话也丢掉。
     assert isinstance(body["detail"], list) and body["detail"]
     assert "region 包含非法值：eu" in str(body["detail"])
 
 
-def test_valid_payload_still_passes_through():
-    client = TestClient(_build_app(), raise_server_exceptions=False)
+def test_response_never_echoes_the_submitted_value():
+    secret = "correct-horse-battery-staple"
+    # 型别不符（送 list 给 str 栏位）是 pydantic 核心错误，会带 input；
+    # `/api/v1/auth/login` 的 password 就是这个形状。
+    response = _client().post("/probe", json={"password": [secret]})
 
-    response = client.post("/probe", json={"region": "ok"})
+    assert response.status_code == 422
+    assert secret not in response.text
+    assert "input" not in response.text
+
+
+def test_response_does_not_amplify_with_input_size():
+    oversized = "x" * 100_000
+    response = _client().post("/probe", json={"region": oversized})
+
+    assert response.status_code == 422
+    # 旧版回应 ≈ 100KB（原样回吐）。新版只带 type/loc/msg，与输入大小无关。
+    assert len(response.content) < 2_000, f"回应被输入放大到 {len(response.content)} bytes"
+    assert oversized not in response.text
+
+
+def test_detail_items_expose_only_the_allowlisted_fields():
+    response = _client().post("/probe", json={"region": "eu"})
+
+    body = response.json()
+    for item in body["detail"]:
+        assert set(item) == {"type", "loc", "msg"}, item
+        assert isinstance(item["loc"], list)
+        assert all(isinstance(segment, str) for segment in item["loc"])
+
+
+def test_multiple_errors_are_capped():
+    # 一次送 60 个错误栏位，回应笔数必须被上限挡住。
+    payload = {"region": "eu", "password": [1], "note": "y" * 200}
+    response = _client().post("/probe", json=payload)
+
+    assert response.status_code == 422
+    assert len(response.json()["detail"]) <= 20
+
+
+def test_valid_payload_still_passes_through():
+    response = _client().post("/probe", json={"region": "ok"})
 
     assert response.status_code == 200
     assert response.json() == {"region": "ok"}
