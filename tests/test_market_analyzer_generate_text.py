@@ -3795,3 +3795,103 @@ class TestBuildStatsBlockRegionAndDataSplit:
 
     def test_empty_overview_renders_nothing(self):
         assert self._render(self._overview()) == ""
+
+
+class TestMarketLightReachesEveryConsumer:
+    """无读数的快照不得流进**任何**下游，不只是 Markdown。
+
+    第二批修复只在 `_build_stats_block` 与 `market_review` 的 primary score 上加了
+    闸门，漏掉第三条：`_run_daily_review_parts` 无条件建立 snapshot，它会进
+    `MarketLightReviewResult.market_light_snapshot`、structured payload
+    （`payload["market_light"]`）、`market_review_payload` API、历史纪录，并被
+    `daily_market_context` 读成「conservative / 等待确认」——一个没人量过的市场判断。
+
+    所以闸门要在**源头**，不是在每个消费端。这组测试盯的就是源头。
+    """
+
+    @staticmethod
+    def _analyzer(region="tw"):
+        from src.market_analyzer import MarketAnalyzer
+
+        analyzer = MarketAnalyzer.__new__(MarketAnalyzer)
+        analyzer.region = region
+        analyzer.profile = SimpleNamespace(has_market_stats=True, has_limit_stats=True)
+        return analyzer
+
+    @staticmethod
+    def _overview(**kw):
+        from src.market_analyzer import MarketOverview
+
+        base = dict(
+            date="2026-08-05", indices=[], up_count=0, down_count=0, flat_count=0,
+            limit_up_count=0, limit_down_count=0, total_amount=0.0, institutional_net=None,
+        )
+        base.update(kw)
+        return MarketOverview(**base)
+
+    INST = {"foreign_net": -104.0, "trust_net": 296.0, "dealer_net": -193.0, "total_net": -1.0}
+
+    def _run_parts(self, overview):
+        """跑真实的 `_run_daily_review_parts`，只垫掉取数与 LLM。"""
+        from src.market_analyzer import MarketAnalyzer
+
+        analyzer = self._analyzer()
+        with patch.object(MarketAnalyzer, "get_market_overview", return_value=overview), \
+             patch.object(MarketAnalyzer, "search_market_news", return_value=[]), \
+             patch.object(MarketAnalyzer, "_merge_persisted_market_intelligence",
+                          side_effect=lambda news: news), \
+             patch.object(MarketAnalyzer, "generate_market_review", return_value="# 台股大盤複盤\n\n正文"), \
+             patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"):
+            return MarketAnalyzer._run_daily_review_parts(analyzer)
+
+    def test_unreadable_snapshot_never_reaches_the_result_or_payload(self):
+        """只有三大法人：评分器每个维度都不可用，分数是预设 50。"""
+        result = self._run_parts(self._overview(institutional_net=self.INST))
+
+        assert result.market_light_snapshot is None, "无读数快照不得进 result"
+        assert "market_light" not in result.structured_payload, "无读数快照不得进 structured payload"
+
+    def test_real_reading_still_reaches_the_result_and_payload(self):
+        """有真读数时必须照常流下去——闸门不能顺手把正常路径也关掉。"""
+        overview = self._overview(up_count=350, down_count=550, flat_count=80,
+                                  limit_up_count=43, limit_down_count=355, total_amount=3400.0)
+        result = self._run_parts(overview)
+
+        assert isinstance(result.market_light_snapshot, dict)
+        assert result.market_light_snapshot["score"] != 50, "这应是评出来的分数"
+        assert result.structured_payload["market_light"] == result.market_light_snapshot
+
+    def test_unsupported_region_carries_no_snapshot(self):
+        from src.market_analyzer import MarketAnalyzer
+
+        analyzer = self._analyzer(region="eu")
+        overview = self._overview(up_count=350, down_count=550, total_amount=3400.0)
+        with patch.object(MarketAnalyzer, "get_market_overview", return_value=overview), \
+             patch.object(MarketAnalyzer, "search_market_news", return_value=[]), \
+             patch.object(MarketAnalyzer, "_merge_persisted_market_intelligence",
+                          side_effect=lambda news: news), \
+             patch.object(MarketAnalyzer, "generate_market_review", return_value="# Recap\n\nbody"), \
+             patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"):
+            result = MarketAnalyzer._run_daily_review_parts(analyzer)
+
+        assert result.market_light_snapshot is None
+        assert "market_light" not in result.structured_payload
+
+    def test_non_finite_index_change_is_not_a_reading(self):
+        """NaN/±inf 会通过 available 检查并把分数钉在 100 或 0，看起来像真读数。"""
+        from src.market_analyzer import MarketAnalyzer, MarketIndex
+
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            overview = self._overview(indices=[
+                MarketIndex(code="TAIEX", name="加權指數", current=24000.0,
+                            change=500.0, change_pct=bad)
+            ])
+            analyzer = self._analyzer()
+            with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"):
+                snapshot = MarketAnalyzer.build_market_light_snapshot(analyzer, overview)
+            index_dim = snapshot["dimensions"]["index"]
+            assert index_dim["available"] is False, f"{bad!r} 不该算成可用读数"

@@ -16,9 +16,11 @@
 前端 `apps/dsa-web/src/api/error.ts::extractValidationDetail` 只读 `loc` 与 `msg`，
 所以投影成 allowlist 不影响既有消费端。
 """
+from typing import Dict
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, create_model, field_validator
 
 from api.middlewares.error_handler import add_error_handlers
 
@@ -93,12 +95,46 @@ def test_detail_items_expose_only_the_allowlisted_fields():
 
 
 def test_multiple_errors_are_capped():
-    # 一次送 60 个错误栏位，回应笔数必须被上限挡住。
-    payload = {"region": "eu", "password": [1], "note": "y" * 200}
-    response = _client().post("/probe", json=payload)
+    """真的造出 60 笔错误——旧版只造了 3 笔，拿掉实作的上限也照样绿。"""
+    app = FastAPI()
+    add_error_handlers(app)
+
+    fields = {f"f{i}": (int, ...) for i in range(60)}
+    Wide = create_model("Wide", **fields)
+
+    @app.post("/wide")
+    async def wide(body: Wide):  # pragma: no cover - 只验错误路径
+        return {"ok": True}
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.post("/wide", json={f"f{i}": "not-an-int" for i in range(60)})
 
     assert response.status_code == 422
-    assert len(response.json()["detail"]) <= 20
+    assert len(response.json()["detail"]) == 20, "60 笔错误必须被截到上限"
+
+
+def test_invalid_mapping_key_does_not_leak_through_loc():
+    """`loc` 也承载使用者输入：mapping 栏位的非法 key 会被 pydantic 原样放进 loc。
+
+    只截 `msg` 不截 `loc`，等于把回吐与放大的路径从值搬到键。
+    """
+    app = FastAPI()
+    add_error_handlers(app)
+
+    class Mapped(BaseModel):
+        counts: Dict[int, int]
+
+    @app.post("/mapped")
+    async def mapped(body: Mapped):  # pragma: no cover - 只验错误路径
+        return {"ok": True}
+
+    oversized_key = "k" * 100_000
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.post("/mapped", json={"counts": {oversized_key: 1}})
+
+    assert response.status_code == 422
+    assert oversized_key not in response.text
+    assert len(response.content) < 2_000, f"回应被 loc 放大到 {len(response.content)} bytes"
 
 
 def test_valid_payload_still_passes_through():

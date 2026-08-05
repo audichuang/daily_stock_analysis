@@ -387,7 +387,11 @@ class StockBarResponse(BaseModel):
 class WatchlistRequest(BaseModel):
     """自选队列操作请求"""
 
-    stock_code: str = Field(..., description="股票代码", min_length=1)
+    # max_length 与 decision_signals 的既有约定一致（32）。少了它，
+    # `_validate_and_normalize_stock_code` 会把整个非法代码嵌进 HTTPException 讯息，
+    # 送 100,000 字元就得到 100KB 的 400 回应——回吐加放大。
+    # 最长的合法形态（`600519.SS` / `005930.KS` / `6505.TWO`）都远在 32 以内。
+    stock_code: str = Field(..., description="股票代码", min_length=1, max_length=32)
 
 
 class WatchlistResponse(BaseModel):

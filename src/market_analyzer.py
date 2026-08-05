@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from inspect import getattr_static
+from math import isfinite
 from typing import Optional, Dict, Any, List
 
 import pandas as pd
@@ -846,11 +847,18 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         language = self._get_output_language()
         sections = self._split_report_sections(report)
         title = self._extract_report_title(report) or self._get_review_title(overview.date).lstrip("# ").strip()
+        # 这里是快照进入结构化契约的**唯一入口**，所以闸门放这里而不是放呼叫端：
+        # 参数没传时本方法会自己补建一个，`or` 会把任何呼叫端的过滤直接抵销。
+        # 评分器在所有维度不可用时仍回一个分数为预设 50 的完整快照，那个 50 会一路
+        # 流进 `payload["market_light"]`、`market_review_payload` API、历史纪录，
+        # 并被 `daily_market_context` 读成「conservative / 等待确认」。
         light = (
             market_light_snapshot or self.build_market_light_snapshot(overview)
             if self._supports_market_light()
             else None
         )
+        if not _market_light_has_reading(light):
+            light = None
         breadth_dimensions = None
         if isinstance(light, dict):
             dimensions = light.get("dimensions")
@@ -1421,10 +1429,14 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             breadth_score = int(overview.up_count / participants * 100)
 
         # 排除 VIX：它是波动率/恐慌指数而非方向性指数，纳入均值会让「恐慌飙升」被误算成 risk-on
+        # `isfinite` 不是防御性冗余：NaN/±inf 会一路通过 available 检查，把分数钉在
+        # 100 或 0（NaN 因比较恒假而落在 min() 的上界），而那个分数看起来像真读数。
         index_changes = [
             idx.change_pct
             for idx in overview.indices
-            if idx.change_pct is not None and (getattr(idx, "code", "") or "").upper() != "VIX"
+            if idx.change_pct is not None
+            and isfinite(idx.change_pct)
+            and (getattr(idx, "code", "") or "").upper() != "VIX"
         ]
         index_available = bool(index_changes)
         index_score = 50
@@ -2074,7 +2086,14 @@ Market conditions can change quickly. The data above is for reference only and d
 
         # 3. 生成复盘报告
         report = self.generate_market_review(overview, news)
+        # 在**源头**就把无读数的快照压成 None，而不是让每个消费端各自防守。
+        # 评分器在所有维度不可用时仍回一个分数为预设 50 的完整快照；那个 50 会一路
+        # 流进 structured payload、`market_review_payload` API、历史纪录，并被
+        # `daily_market_context` 读成「conservative / 等待确认」——一个没人量过的
+        # 市场判断。这里挡住，下游三条路径就都拿到 None。
         snapshot = self.build_market_light_snapshot(overview) if self._supports_market_light() else None
+        if not _market_light_has_reading(snapshot):
+            snapshot = None
         structured_payload = self.build_market_review_payload(
             overview,
             news,

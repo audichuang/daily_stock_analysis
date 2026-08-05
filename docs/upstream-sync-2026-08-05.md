@@ -61,7 +61,18 @@
 
 ## Codex 審查後的修復
 
-合併後交由 Codex（gpt-5.6-sol / xhigh）獨立審查，判定 DO NOT SHIP。逐項驗證後修復：
+**三輪審查，每一輪都審上一輪的產物。** 這個結構是刻意的，因為前兩輪各有兩項發現是
+「**修復本身引入的新回歸**」——只審合併、不審修復，那兩項會直接出貨。
+
+| 輪次 | 審查標的 | 判定 | 其中「修復自己造成」的項數 |
+| --- | --- | --- | --- |
+| 1 | 合併 commit `a69d5da4` | DO NOT SHIP | — |
+| 2 | 第一批修復 `e4fe78c8` | DO NOT SHIP | 2 |
+| 3 | 第二批修復 `5ea16aa8` | 見下 | — |
+
+下面先記第一輪，第二輪另立一節。
+
+### 第一輪（審合併 commit）
 
 - **F1（High，合併引入的回歸）台股失去盤面信號。**
   `MARKET_LIGHT_REGIONS = {cn,hk,us}` 本身是既有的，但上游 v3.29 把 `_build_stats_block`
@@ -85,6 +96,45 @@
   `field_validator`，所以文件明寫的 4xx 實際回 500。修法在共用 handler 一處
   （`jsonable_encoder`，與 FastAPI 自帶 handler 同一套），涵蓋所有現有與未來的 validator。
 
+### 第二輪（審第一批修復 `e4fe78c8`）
+
+判定 DO NOT SHIP。**兩項是第一批修復自己造成的**：
+
+- **（High，修復自造）憑空生出 50/100 的盤面判斷。** 把 `institutional_net` 併進
+  `has_stats` 讓 `has_market_signal` 為真，但評分器（`_build_market_light_scores`）
+  **不看** `institutional_net` 也不看 `total_amount`。於是台股在「只有三大法人」時
+  三個維度全部 `available=False`，快照落在中性預設 **50 分**，報告卻印出
+  「50/100 需觀察」加操作建議——而那個 50 還會被 `market_review` 當成歷史主市場分數。
+
+  修法：新增 `_market_light_has_reading()`，在 `_build_stats_block` 與 `market_review`
+  兩個消費端各過一次。**判準是「有沒有任何維度 available」，不是 `data_quality`**——
+  後者只要 index 維度缺就標 `unavailable`，所以「只有漲跌停」（limit 維度真的評出
+  10/100）也會被誤殺。
+
+- **（High，修復自造）逐列判定退回單一布林又繞回原病。** 用一個 `has_breadth` 蓋住
+  整組，導致「只有漲跌停家數」時印出 `0 / 0 / 0` 與 `0 亿`——正是 F4 要修的東西。
+  改成 `has_advance_decline` / `has_limit` / `has_turnover` 逐列判定，en/zh 都改。
+
+- **（High）共用 validation handler 的回應契約不安全。** 第一批只修了序列化，沒改契約：
+  `input` 會回吐使用者送的原值（`/api/v1/auth/login` 的 `password` 送成非字串就在 422
+  裡看到明文），且不設上限（100,000 字元的非法輸入 → 100KB 回應，零成本放大面）。
+  改為投影成 `{type, loc, msg}` allowlist，錯誤筆數上限 20、訊息 500 字元。
+  前端 `error.ts::extractValidationDetail` 只讀 `loc`/`msg`，不影響既有消費端。
+  實測：100KB 輸入 → **176 bytes**，密碼不再出現。
+
+- **（Medium）第一批的新測試沒有牙齒。** `_render()` 把 `_supports_market_light` 與
+  `build_market_light_snapshot` 都 patch 掉，`tw` 被拿掉也不會紅——**正是本文件自己
+  在「下次同步備忘」寫下的原則**。改成只設 `region` 與 `profile`，跑真實判定。
+
+- **（Low）告警市場的文檔漂移。** `full-guide{,_EN}.md` 與 `decision-signals.md` 稱
+  Market Light 告警支援 `jp/kr`，後端 `MARKET_LIGHT_ALERT_REGIONS` 只收 `cn/hk/us`，
+  照文檔建立告警會被拒。三份已更正。
+
+- **（Standards）兩個同名 `MARKET_LIGHT_REGIONS` 契約不同**——`schemas` 那個是「評得出
+  分數」的窄集合，`services` 那個是「查得到快照」的全集合。**兩者都是上游命名**，改名
+  會在每次合併付代價，所以不改名；改成把 service 側從 `MARKET_REVIEW_REGION_ORDER`
+  推導（新增市場時不可能再落後），兩處各自註明差異。
+
 ### 已知未做（另開）
 
 - **F2（High）分享圖不認台股與繁體。** 上游新分享圖只辨識簡體「大盤複盤／市場複盤」標題、
@@ -100,25 +150,49 @@
 
 ## 新增的回歸守門
 
-- `tests/test_market_analyzer_generate_text.py::TestBuildStatsBlockRegionAndDataSplit`（7 項）
-  —— 盯 F1 的市場集合與 F4 的資料分組，含 en/zh 兩語與空 overview。
-- `tests/test_market_light_service.py::test_normalize_market_region_accepts_tw` —— 盯 F1。
-- `tests/test_screening_api.py::OutboundGuardPropagationTestCase`（2 項）—— 盯 F5，
-  已用 mutation 檢查確認「放寬回 `BaseException` 立刻紅」。
-- `tests/test_error_handler_validation.py`（2 項）—— 盯 500→422，同樣過 mutation 檢查。
+每一組都做過 mutation 檢查——**把修法改回舊寫法，測試必須立刻紅**。沒過這關的測試
+不算守門，只算裝飾。
+
+- `tests/test_market_analyzer_generate_text.py::TestBuildStatsBlockRegionAndDataSplit`（13 項）
+  —— 台股市場集合、逐列資料可用性、「評不出來就不給分」，含 en/zh 兩語與空 overview。
+  **刻意不 patch `_supports_market_light` 與 `build_market_light_snapshot`**。
+  三個變異各自被抓到：拿掉 `tw` → 3 紅、拿掉 reading gate → 1 紅、逐列退回單一布林 → 2 紅。
+- `tests/test_market_light_service.py::test_normalize_market_region_accepts_tw`。
+- `tests/test_screening_api.py::OutboundGuardPropagationTestCase`（2 項）—— 守門例外必須
+  穿透；放寬回 `except BaseException` 立刻紅。
+- `tests/test_error_handler_validation.py`（6 項）—— 422 而非 500、不回吐 `input`、
+  不隨輸入放大、只暴露 allowlist 欄位、筆數有上限。
 
 ## 驗證
 
-- `ci_gate.sh syntax` + `flake8`：綠
-- 受影響後端子集 16 檔：**1152 passed**
-- Web `lint` + `build` + `vitest`：**1062 passed**
-- Import smoke：`server` / `main` / 六個核心模組乾淨
-- 端到端（真實服務，未注入 Doppler 故不推播）：
+各 commit 的驗證涵蓋範圍不同，分開記，不要合併成一句「都綠」：
+
+| 驗證 | `e4fe78c8`（第一批修復） | `5ea16aa8`（第二批修復） |
+| --- | --- | --- |
+| `ci_gate.sh syntax` + `flake8` | 綠 | 綠 |
+| 全量離線 `pytest -m "not network"` | **6021 passed / 0 failed**（49 分 13 秒；合併前 baseline 5202） | 見「待補」 |
+| 受影響後端子集 | 16 檔 1152 passed | 17 檔 **1191 passed** |
+| Web `lint` + `build` + `vitest` | 1062 passed | 未重跑（本批未動前端） |
+
+- Import smoke：`server` / `main` / 六個核心模組乾淨。
+- 端到端（真實服務 `uvicorn` on 8099，未注入 Doppler 故不推播）：
   - `POST /market-review {"region":"tw"}` → 202、canonical region 正確、LLM 產出 zh-TW 報告、
     三大法人數字確實進了 prompt
-  - 非法 `region`（`eu` / `tw,,us` / `both,tw`）→ 422（修復前為 500）
-  - `region=us,tw` → canonical `us,tw`，兩市場複盤完成
-- 全量離線 `pytest -m "not network"`：見下方「待補」
+  - `region=us,tw` → canonical `us,tw`，兩市場複盤都完成
+  - 非法 `region`（`eu` / `tw,,us` / `both,tw`）→ 422（修復前 500）
+  - 100,000 字元非法 `region` → 回應 **176 bytes**、不含輸入（修復前 100KB 全文回吐）
+  - `/auth/login` 的 `password` 送成非字串 → 422 且**回應不含明文**
+  - `build_current_snapshot("tw")` → score=41、三維度全可用、`data_quality=ok`
+    （真讀數，不是評分器的預設 50）
+
+### 待補
+
+- `5ea16aa8` 的全量離線測試。此前兩次背景執行都被 session 任務管理中止（非測試失敗；
+  中止時分別跑到 6% 與 9%，0 failures）。改用 `setsid nohup` 完全脫離後重跑。
+- `docker-build`、桌面端打包未驗。
+- CI 的四個阻斷 job 一次都沒跑過——`ci.yml` 只在對 main 開 PR 時觸發，要驗滿得開一個
+  base=main 的臨時 PR（做法見上次同步記錄）。
+- Bark 推播未實測（e2e 刻意不注入 Doppler，避免誤發通知）。
 
 ## 回滾
 
@@ -133,8 +207,16 @@
 - **重點不是解衝突，是找靜默降級。** 具體做法：把上游新增的每個共用常數／helper 抓出來，
   逐個問「它的集合涵蓋 `tw` 嗎？涵蓋 `zh-TW` 嗎？」——本次三次踩雷全是這個形狀
   （`MARKET_REVIEW_REGION_ORDER`、`MARKET_LIGHT_REGIONS`、分享圖的市場集合）。
-- **驗證時不要 patch 掉你要驗的那個判定。** F1 之所以第一輪沒抓到，就是因為驗
+- **驗證時不要 patch 掉你要驗的那個判定。** F1 第一輪沒抓到，就是因為驗
   `_build_stats_block` 時把 `_supports_market_light` patch 成固定值，正好遮住它。
+  更糟的是**第一批修復附的測試又犯同一個錯**（第二輪審查抓到）——寫進文件不等於做得到，
+  所以現在的規矩是：新測試一律做 mutation 檢查，把修法改回舊寫法，紅了才算數。
+- **審查要審到修復本身，不是只審合併。** 前兩輪各有兩項發現是「修復自己引入的新回歸」
+  （憑空 50/100、逐列判定退回單一布林）。只審合併就會把它們直接出貨。每改一批就再送一輪。
+- **「補上缺的判定」與「別把缺資料當成零」是兩個相反方向的錯，很容易在修一個時犯另一個。**
+  本次在 `_build_stats_block` 上來回踩了三次：先漏判 → 補成單一布林（把缺的印成 0）→
+  拆開後又讓不相干欄位觸發評分（憑空 50 分）。判定的粒度要對齊**資料來源的粒度**，
+  而不是對齊「這段程式碼有幾個 if」。
 - `uiText.ts` 的 `zh-TW` 是嚴格 `Record<UiTextKey, string>`，上游只加 zh/en 就會 `tsc` 失敗；
   用腳本對三張表的 key 集合做差集比逐個看 tsc 錯誤快。
 - `.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` 必須保持 `false`。

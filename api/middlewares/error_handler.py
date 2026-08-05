@@ -120,10 +120,18 @@ def add_error_handlers(app) -> None:
         """
         max_errors = 20
         max_message_chars = 500
+        max_loc_segments = 16
+        max_loc_chars = 128
         detail = [
             {
-                "type": str(error.get("type", "")),
-                "loc": [str(segment) for segment in (error.get("loc") or ())],
+                "type": str(error.get("type", ""))[:max_message_chars],
+                # ``loc`` 同样承载使用者输入：mapping 类型栏位的**非法 key** 会被
+                # pydantic 原样放进 loc，所以「只截 msg、不截 loc」等于把回吐与
+                # 放大的路径从值搬到键。栏位路径本来就短，截断不影响可读性。
+                "loc": [
+                    str(segment)[:max_loc_chars]
+                    for segment in (error.get("loc") or ())[:max_loc_segments]
+                ],
                 "msg": str(error.get("msg", ""))[:max_message_chars],
             }
             for error in exc.errors()[:max_errors]
