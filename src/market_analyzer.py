@@ -54,6 +54,28 @@ _CHINESE_SECTION_PATTERNS = {
 }
 
 
+_NUMERIC_FIELDS_TO_SANITIZE = (
+    "current", "change", "change_pct", "open", "high", "low",
+    "prev_close", "volume", "amount", "amplitude",
+)
+
+
+def _finite_or_none(value: Any) -> Any:
+    """把 NaN／±inf 压成 None；其余原样返回。
+
+    非有限值进来的后果不是显示瑕疵，是**整个 API 回应 500**：
+    `JSONResponse` 对 NaN 抛 `Out of range float values are not JSON compliant`。
+    在此之前它还会先污染评分（NaN 因比较恒假而落在 `min()` 上界得 100 分）与
+    reason 文案（`+nan%`），而这些看起来都像真读数。
+
+    压成 None 而不是 0.0：0 是一个**有意义的读数**（平盘），None 才是「没有资料」，
+    下游的 `is not None` 检查也才拦得住。
+    """
+    if isinstance(value, float) and not isfinite(value):
+        return None
+    return value
+
+
 @dataclass
 class MarketIndex:
     """大盘指数数据"""
@@ -69,7 +91,14 @@ class MarketIndex:
     volume: float = 0.0          # 成交量（手）
     amount: float = 0.0          # 成交额（元）
     amplitude: float = 0.0       # 振幅(%)
-    
+
+    def __post_init__(self) -> None:
+        # 在**建构点**清掉非有限值，而不是在每个消费端各自防守——评分器、reason
+        # 文案、structured payload、to_dict() 是四个不同的出口，逐个补必然漏。
+        # 每条 provider 路径都会经过这里。
+        for name in _NUMERIC_FIELDS_TO_SANITIZE:
+            setattr(self, name, _finite_or_none(getattr(self, name)))
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             'code': self.code,
@@ -107,6 +136,22 @@ class MarketOverview:
     bottom_sectors: List[Dict] = field(default_factory=list)  # 跌幅前5板块
     top_concepts: List[Dict] = field(default_factory=list)    # 涨幅前5概念
     bottom_concepts: List[Dict] = field(default_factory=list) # 跌幅前5概念
+
+    def __post_init__(self) -> None:
+        # 同 MarketIndex：非有限值在建构点就清掉。`total_amount` 压成 0.0 而不是
+        # None，因为它是必填 float 且下游多处直接做 `:.0f` 格式化；0 会让
+        # `has_turnover` 判成「没有成交额」，语意与「资料缺失」一致。
+        if _finite_or_none(self.total_amount) is None:
+            self.total_amount = 0.0
+        if isinstance(self.institutional_net, dict):
+            cleaned = {
+                key: value
+                for key, value in self.institutional_net.items()
+                if _finite_or_none(value) is not None
+            }
+            # 三大法人是一组，任一格非有限就整组作废——只印部分栏位会让
+            # 「外资 -104 / 投信 +0」看起来像投信真的没动作。
+            self.institutional_net = cleaned if len(cleaned) == len(self.institutional_net) else None
 
 
 @dataclass

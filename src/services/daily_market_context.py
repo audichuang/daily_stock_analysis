@@ -894,9 +894,36 @@ def _extract_summary(payload: Mapping[str, Any], fallback_summary: Optional[str]
     return ""
 
 
+def _market_light_payload_has_reading(market_light: Mapping[str, Any]) -> bool:
+    """历史 payload 里的 market_light 是否真有读数。
+
+    写入端已经在快照进入结构化契约的入口挡掉「所有维度都不可用」的快照，但**既有
+    历史纪录挡不到**——旧版会为资料全掛的复盘写入一个 `score=50 / status=yellow /
+    每个维度 available=False` 的 payload。这里不验，那些旧纪录就会被下面读成
+    `conservative cautious wait for confirmation`，一个没人量过的市场判断继续影响
+    今天的决策上下文。
+
+    与写入端同一个判准（任一维度 available），但**只在 `dimensions` 真的存在时才判**。
+    缺 `dimensions` 的 payload 视为有读数：`MarketLightSnapshot.dimensions` 是必填栏位，
+    所以缺它的只有更旧的格式或手写的精简 fixture，两者都无从证明「没有读数」。把
+    「无法证明有读数」当成「证明没读数」会静默丢掉合法的历史上下文——那是另一个方向的
+    错，而且同样不报错。
+    """
+    dimensions = market_light.get("dimensions")
+    if not isinstance(dimensions, Mapping):
+        return True
+    return any(
+        bool(dim.get("available"))
+        for dim in dimensions.values()
+        if isinstance(dim, Mapping)
+    )
+
+
 def _extract_market_light_signal_text(payload: Mapping[str, Any]) -> str:
     market_light = payload.get("market_light")
     if not isinstance(market_light, Mapping):
+        return ""
+    if not _market_light_payload_has_reading(market_light):
         return ""
 
     parts: List[str] = []

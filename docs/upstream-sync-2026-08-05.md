@@ -12,6 +12,7 @@
 以上游為 base，重放 fork 的台股（`tw`）／`zh-TW` 增量。**這類合併的主要風險不是編譯錯誤，
 而是靜默降級**——fork 增量被上游版本悄悄蓋掉，程式照跑、測試照綠，只有台股那條路不再運作。
 本次實際踩到三次（見下），所以下次同步請把「找靜默降級」當成主要工作，而不是把衝突解完就算。
+第二個同樣重要的教訓在「Codex 審查後的修復」開頭：**修復本身也會製造回歸，而且會反覆犯同一種錯**。
 
 ## 保留的 fork 增量（裁決紅線）
 
@@ -61,16 +62,26 @@
 
 ## Codex 審查後的修復
 
-**三輪審查，每一輪都審上一輪的產物。** 這個結構是刻意的，因為前兩輪各有兩項發現是
-「**修復本身引入的新回歸**」——只審合併、不審修復，那兩項會直接出貨。
+**四輪審查，每一輪都審上一輪的產物。** 這個結構是刻意的，因為只審合併、不審修復，
+下面那些「修復自己造成的回歸」會直接出貨。
 
 | 輪次 | 審查標的 | 判定 | 其中「修復自己造成」的項數 |
 | --- | --- | --- | --- |
 | 1 | 合併 commit `a69d5da4` | DO NOT SHIP | — |
 | 2 | 第一批修復 `e4fe78c8` | DO NOT SHIP | 2 |
-| 3 | 第二批修復 `5ea16aa8` | 見下 | — |
+| 3 | 第二批修復 `5ea16aa8` | DO NOT SHIP | 1 |
+| 4 | 第三批修復 `0c7849f9` | DO NOT SHIP | 1 |
 
-下面先記第一輪，第二輪另立一節。
+**四輪裡有三輪在上一輪的修復裡找到新回歸，而且三次都是同一種錯：把修法放在呼叫端，
+而不是放在所有路徑匯流的那一點。** 這比任何單一 bug 都值得記住：
+
+| 輪次 | 我修在哪 | 真正該修的地方 |
+| --- | --- | --- |
+| 2 | `has_stats` 加上 `institutional_net` | 信號該問「評分器有沒有可用維度」，不是問「有沒有任何資料」 |
+| 3 | `_build_stats_block` 與 `market_review` 兩個消費端 | `build_market_review_payload` 會對 `None` 自己補建，`or` 抵銷呼叫端過濾 |
+| 4 | 評分器的 `index_changes` 加 `isfinite` | `MarketIndex` / `MarketOverview` 的建構點——reasons、payload、`to_dict()` 是另外三個出口 |
+
+下面逐輪記。
 
 ### 第一輪（審合併 commit）
 
@@ -135,6 +146,65 @@
   會在每次合併付代價，所以不改名；改成把 service 側從 `MARKET_REVIEW_REGION_ORDER`
   推導（新增市場時不可能再落後），兩處各自註明差異。
 
+### 第三輪（審第二批修復 `5ea16aa8`）
+
+判定 DO NOT SHIP。**一項是第二批修復自己造成的**：
+
+- **（High，修復自造）無讀數快照仍進 structured payload。** 第二批只在
+  `_build_stats_block` 與 `market_review` 的 primary score 加閘門，漏掉第三條——
+  `build_market_review_payload` 對 `None` 會**自己補建**
+  （`market_light_snapshot or self.build_market_light_snapshot(...)`），那個 `or`
+  把呼叫端的過濾直接抵銷。於是預設 50 分仍流進 `payload["market_light"]`、
+  `market_review_payload` API、歷史紀錄，並被 `daily_market_context` 讀成
+  「conservative / 等待確認」。修法：閘門移到快照進入結構化契約的**唯一入口**。
+- **（High）`loc` 未設上限。** 只截 `msg` 不截 `loc`，等於把回吐與放大的路徑從值搬到鍵——
+  mapping 欄位的非法 key 會被 pydantic 原樣放進 `loc`，100KB key → 100KB 回應。
+  `loc` 限 16 段 × 128 字元（實測 request body 最大 loc 深度為 4，無遞迴 schema）。
+- **（Medium）`NaN`/`±inf` 通過 available 檢查**，分數被釘在 100 或 0
+  （`NaN` 因比較恆假而落在 `min()` 上界）。
+- **（Medium）`HTTPException` 回吐 `stock_code`。** 修在輸入邊界
+  （`WatchlistRequest.stock_code` 補 `max_length=32`，與 `decision_signals` 既有約定一致），
+  而不是截斷所有 HTTPException detail——根因是輸入沒設上限。
+- **（Low）「20 筆上限」測試只造了 3 筆錯誤**，拿掉實作上限也照樣綠。改用 60 欄位模型。
+
+### 第四輪（審第三批修復 `0c7849f9`）
+
+判定 DO NOT SHIP。**一項是第三批修復自己造成的**：
+
+- **（High，修復自造）`isfinite` 放錯層。** 第三批只在評分器的 `index_changes` 過濾，
+  但 reason 文案、structured payload、`to_dict()` 是另外三個出口：實測有效 breadth 加
+  `change_pct=NaN` 得到 reason `+nan%`、payload 含 `nan`，而 `JSONResponse` 直接拋
+  `Out of range float values are not JSON compliant`——**整個 API 回應 500，不是顯示瑕疵**。
+  修法：`MarketIndex.__post_init__` 與 `MarketOverview.__post_init__` 在**建構點**清洗，
+  每條 provider 路徑都會經過。壓成 `None` 而不是 0.0，因為 0 是有意義的讀數（平盤）。
+  三大法人任一格非有限則整組作廢——只印部分欄位會讓「外資 -104 / 投信 +0」看起來像
+  投信真的沒動作。
+- **（High）既有歷史 payload 是這個缺陷的最後一個出口。** 寫入端擋住新資料，但舊紀錄
+  已存在「全維度 unavailable、預設 50、yellow」的 payload，`daily_market_context`
+  照樣讀成 `conservative cautious wait for confirmation`。已在讀取端
+  （`_extract_market_light_signal_text`）加同判準的守門。
+
+  **守門的範圍是「`dimensions` 存在且全部 unavailable」，不含「缺 `dimensions`」。**
+  第一版把缺 `dimensions` 也當成無讀數，紅了兩個既有測試——那是另一個方向的錯：
+  `MarketLightSnapshot.dimensions` 是必填，缺它的只有更舊的格式，無從證明「沒有讀數」。
+  把「無法證明有讀數」當成「證明沒讀數」會靜默丟掉合法的歷史上下文，而且同樣不報錯。
+- **（Low）斷言太弱。** `score != 50` 任何評分改動都能蒙過，改為斷言精確值 29。
+
+### 第四輪指出但刻意未修（附理由）
+
+- **報告與告警對「有讀數」的定義不同。** 報告用「任一維度 available」，告警用
+  `data_quality != unavailable`（而 `data_quality` 只要 index 維度缺就標 unavailable）。
+  CN 僅 breadth 可用時，報告發布 score 60，告警回 `skipped`。
+  **不改**：要讓兩者一致就得放寬告警，那會在「只有漲跌家數」的降級情境下**開出一個新的
+  告警面**——沒人要求、且風險不對稱（假告警的代價高於少一次告警）。告警比報告嚴格是
+  合理的分層，Codex 也確認它不會造成假告警。已在此記錄，避免下次被當成 bug「順手統一」。
+- **watchlist 的 `stock_code` validator 拒絕合法的台股 ETF 與日韓碼**
+  （實測 `00878.TW`／`006208.TW`／`009806.TWO`／`7203.T`／`005930.KS`／`035720.KQ` 全被拒），
+  與 `data_provider/base.py` 的 normalizer 及 `docs/market-support.md` 矛盾。
+  **這是既有 bug，非本次合併引入**，但正踩在 fork 主場（5~6 位台股 ETF）。
+  放寬一個輸入 validator 等於改變「哪些代碼算自選標的」，屬產品決定，另開處理。
+- **quote path 未設長度上限且把輸入原樣放進 404**（`stocks.py:511`）。同上，既有問題。
+
 ### 已知未做（另開）
 
 - **F2（High）分享圖不認台股與繁體。** 上游新分享圖只辨識簡體「大盤複盤／市場複盤」標題、
@@ -160,8 +230,15 @@
 - `tests/test_market_light_service.py::test_normalize_market_region_accepts_tw`。
 - `tests/test_screening_api.py::OutboundGuardPropagationTestCase`（2 項）—— 守門例外必須
   穿透；放寬回 `except BaseException` 立刻紅。
-- `tests/test_error_handler_validation.py`（6 項）—— 422 而非 500、不回吐 `input`、
-  不隨輸入放大、只暴露 allowlist 欄位、筆數有上限。
+- `tests/test_error_handler_validation.py`（8 項）—— 422 而非 500、不回吐 `input`、
+  不隨輸入放大、只暴露 allowlist 欄位、筆數上限（用 60 欄位模型真的造出 60 筆）、
+  `loc` 的每段長度與段數都有上限。
+- `tests/test_market_analyzer_generate_text.py::TestMarketLightReachesEveryConsumer`（6 項）
+  —— 無讀數快照不得進 result 或 structured payload、非有限值在建構點就清掉、
+  三大法人整組作廢、payload 必須能過 `JSONResponse`（舊版在此拋 ValueError）。
+- `tests/test_daily_market_context.py::TestHistoricalMarketLightWithoutReading`（4 項）
+  —— 既有歷史紀錄裡的預設 50 快照不得被讀成風險訊號；缺 `dimensions` 的更舊 payload
+  視為無讀數；真讀數仍照常產出。
 
 ## 驗證
 

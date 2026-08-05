@@ -137,6 +137,38 @@ def test_invalid_mapping_key_does_not_leak_through_loc():
     assert len(response.content) < 2_000, f"回应被 loc 放大到 {len(response.content)} bytes"
 
 
+def test_deeply_nested_loc_is_capped_by_segment_count():
+    """`loc` 段数也要有上限——只截每段长度，攻击面就搬到「段数」。"""
+    app = FastAPI()
+    add_error_handlers(app)
+
+    # 20 层嵌套 mapping，pydantic 会为最内层错误产出 20+ 段 loc。
+    Deep = Dict[str, Dict[str, Dict[str, Dict[str, Dict[str, Dict[str, Dict[str, Dict[
+        str, Dict[str, Dict[str, Dict[str, Dict[str, Dict[str, Dict[str, Dict[
+        str, Dict[str, Dict[str, Dict[str, Dict[str, Dict[str, int]]]]]]]]]]]]]]]]]]]]
+
+    class Nested(BaseModel):
+        deep: Deep
+
+    @app.post("/nested")
+    async def nested(body: Nested):  # pragma: no cover - 只验错误路径
+        return {"ok": True}
+
+    payload = {"deep": {}}
+    node = payload["deep"]
+    for _ in range(19):
+        node["k"] = {}
+        node = node["k"]
+    node["k"] = "not-an-int"
+
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.post("/nested", json=payload)
+
+    assert response.status_code == 422
+    for item in response.json()["detail"]:
+        assert len(item["loc"]) <= 16, f"loc 段数未受限：{len(item['loc'])}"
+
+
 def test_valid_payload_still_passes_through():
     response = _client().post("/probe", json={"region": "ok"})
 

@@ -3860,7 +3860,9 @@ class TestMarketLightReachesEveryConsumer:
         result = self._run_parts(overview)
 
         assert isinstance(result.market_light_snapshot, dict)
-        assert result.market_light_snapshot["score"] != 50, "这应是评出来的分数"
+        # 断言**精确值**而不是「不等于 50」——後者是弱断言，任何评分改动都能蒙过。
+        # 29 = breadth(39%) 与 limit(-312) 两个维度按权重归一化的结果（index 不可用）。
+        assert result.market_light_snapshot["score"] == 29
         assert result.structured_payload["market_light"] == result.market_light_snapshot
 
     def test_unsupported_region_carries_no_snapshot(self):
@@ -3881,17 +3883,61 @@ class TestMarketLightReachesEveryConsumer:
         assert result.market_light_snapshot is None
         assert "market_light" not in result.structured_payload
 
-    def test_non_finite_index_change_is_not_a_reading(self):
-        """NaN/±inf 会通过 available 检查并把分数钉在 100 或 0，看起来像真读数。"""
-        from src.market_analyzer import MarketAnalyzer, MarketIndex
+    def test_non_finite_values_are_cleaned_at_construction(self):
+        """NaN/±inf 在**建构点**就该消失，而不是靠每个消费端各自防守。
+
+        它们不只污染评分（NaN 因比较恒假而落在 min() 上界得 100），还会让
+        `JSONResponse` 抛 `Out of range float values are not JSON compliant`
+        ——整个 API 回应 500，不是显示瑕疵。
+        """
+        from src.market_analyzer import MarketIndex
 
         for bad in (float("nan"), float("inf"), float("-inf")):
-            overview = self._overview(indices=[
-                MarketIndex(code="TAIEX", name="加權指數", current=24000.0,
-                            change=500.0, change_pct=bad)
-            ])
-            analyzer = self._analyzer()
-            with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"):
-                snapshot = MarketAnalyzer.build_market_light_snapshot(analyzer, overview)
-            index_dim = snapshot["dimensions"]["index"]
-            assert index_dim["available"] is False, f"{bad!r} 不该算成可用读数"
+            index = MarketIndex(code="TAIEX", name="加權指數", current=24000.0,
+                                change=500.0, change_pct=bad)
+            assert index.change_pct is None, f"{bad!r} 应在建构时被压成 None"
+
+            overview = self._overview(total_amount=bad)
+            assert overview.total_amount == 0.0, f"total_amount={bad!r} 应压成 0"
+
+    def test_non_finite_institutional_value_voids_the_whole_group(self):
+        """三大法人是一组：任一格非有限就整组作废。
+
+        只丢掉坏的那格会让「外资 -104 / 投信 +0」看起来像投信真的没动作。
+        """
+        overview = self._overview(institutional_net={
+            "foreign_net": -104.0, "trust_net": float("nan"),
+            "dealer_net": -193.0, "total_net": -1.0,
+        })
+        assert overview.institutional_net is None
+
+    def test_non_finite_never_reaches_the_payload_or_json(self):
+        """端到端：非有限值不得出现在 structured payload，且 payload 必须可序列化。"""
+        import json
+
+        from fastapi.responses import JSONResponse
+
+        from src.market_analyzer import MarketAnalyzer, MarketIndex
+
+        analyzer = self._analyzer()
+        overview = self._overview(
+            up_count=350, down_count=550, flat_count=80,
+            limit_up_count=43, limit_down_count=355, total_amount=float("nan"),
+            indices=[MarketIndex(code="TAIEX", name="加權指數", current=24000.0,
+                                 change=0.0, change_pct=float("nan"))],
+        )
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"):
+            payload = MarketAnalyzer.build_market_review_payload(
+                analyzer, overview, [], "# 台股大盤複盤\n\n正文"
+            )
+
+        raw = json.dumps(payload, ensure_ascii=False, allow_nan=True)
+        assert "nan" not in raw.lower() and "infinity" not in raw.lower()
+        JSONResponse(content=payload)  # 旧版在这里抛 ValueError
+
+        light = payload.get("market_light")
+        assert light is not None, "breadth 与 limit 仍可用，应该还有读数"
+        assert "nan" not in " ".join(light["reasons"]).lower(), "reason 文案不得出现 +nan%"

@@ -1177,3 +1177,58 @@ def test_daily_market_context_keeps_jp_kr_regions_and_labels() -> None:
 
     assert "市场：日股（jp）" in jp_section
     assert "Region: Korea (kr)" in kr_section
+
+
+class TestHistoricalMarketLightWithoutReading:
+    """既有历史 payload 是「预设 50 分」缺陷的最后一个出口。
+
+    写入端已在快照进入结构化契约的入口挡掉「所有维度都不可用」的快照，但**旧纪录
+    挡不到**：旧版会为资料全掛的复盘写入 `score=50 / status=yellow / 每个维度
+    available=False`。读取端不验，那些纪录就会继续被读成
+    `conservative cautious wait for confirmation`，影响今天的决策上下文。
+    """
+
+    @staticmethod
+    def _payload(*, available, status="yellow"):
+        return {
+            "market_light": {
+                "score": 50,
+                "status": status,
+                "guidance": "信号分化，控制仓位并等待量价确认。",
+                "dimensions": {
+                    "breadth": {"score": 50, "available": available},
+                    "index": {"score": 50, "available": False},
+                    "limit": {"score": 50, "available": False},
+                },
+            }
+        }
+
+    def test_all_dimensions_unavailable_yields_no_signal_text(self):
+        from src.services.daily_market_context import _extract_market_light_signal_text
+
+        assert _extract_market_light_signal_text(self._payload(available=False)) == ""
+
+    def test_a_real_reading_still_yields_signal_text(self):
+        from src.services.daily_market_context import _extract_market_light_signal_text
+
+        text = _extract_market_light_signal_text(self._payload(available=True))
+        assert "conservative" in text
+        assert "等待量价确认" in text
+
+    def test_payload_without_dimensions_is_still_treated_as_a_reading(self):
+        """缺 `dimensions` 不等于「没有读数」。
+
+        `MarketLightSnapshot.dimensions` 是必填，所以缺它的只有更旧的格式。把
+        「无法证明有读数」当成「证明没读数」会静默丢掉合法的历史上下文——那是另一个
+        方向的错，而且同样不报错。守门只针对「dimensions 存在且全部 unavailable」。
+        """
+        from src.services.daily_market_context import _extract_market_light_signal_text
+
+        legacy = {"market_light": {"score": 50, "status": "yellow", "guidance": "观察"}}
+        assert "conservative" in _extract_market_light_signal_text(legacy)
+
+    def test_red_status_with_a_reading_is_preserved(self):
+        from src.services.daily_market_context import _extract_market_light_signal_text
+
+        text = _extract_market_light_signal_text(self._payload(available=True, status="red"))
+        assert "high risk" in text
