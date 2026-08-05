@@ -6,4 +6,4 @@ flake8
 pytest
 # setup.cfg 的 addopts 帶 --timeout，缺這個 plugin 會讓 pytest 直接以
 # "unrecognized arguments" 中止，所以它是硬相依而不是選配。
-pytest-timeout
+pytest-timeout>=2.3.0

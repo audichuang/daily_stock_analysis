@@ -20,6 +20,7 @@ function getChannelOptions(language: UiLanguage): Array<{ value: NotificationTes
   return [
     { value: 'wechat', label: isEnglish ? 'WeCom' : isTraditional ? '企業微信' : '企业微信' },
     { value: 'feishu', label: isEnglish ? 'Feishu Webhook' : isTraditional ? '飛書 Webhook' : '飞书 Webhook' },
+    { value: 'dingtalk', label: isEnglish ? 'DingTalk' : isTraditional ? '釘釘' : '钉钉' },
     { value: 'telegram', label: 'Telegram' },
     { value: 'email', label: isEnglish ? 'Email' : isTraditional ? '電子郵件' : '邮件' },
     { value: 'pushover', label: 'Pushover' },

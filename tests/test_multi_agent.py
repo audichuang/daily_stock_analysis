@@ -46,6 +46,22 @@ from src.config import AGENT_MAX_STEPS_DEFAULT, Config
 from src.storage import DatabaseManager
 
 
+class _FixedSkillWeightService:
+    """Deterministic local data source for Aggregator behavior tests."""
+
+    def __init__(self, weights=None, *, error=None):
+        self.weights = dict(weights or {})
+        self.error = error
+
+    def compute_weights(self, skill_ids):
+        if self.error is not None:
+            raise self.error
+        return {
+            skill_id: self.weights.get(skill_id, 1.0)
+            for skill_id in skill_ids
+        }
+
+
 # ============================================================
 # _extract_stock_code
 # ============================================================
@@ -517,6 +533,13 @@ class TestAgentRunStats(unittest.TestCase):
         d = stats.to_dict()
         self.assertIn("total_stages", d)
         self.assertIn("models_used", d)
+
+# ============================================================
+# 注：上游在此新增了 `src.agent.strategies.{router,aggregator}` 的 legacy
+# 相容测试（TestStrategyRouter / TestStrategyAggregator）。本 fork 的
+# 26b373c2 已把该 shim 作为已验证死代码删除，合并后全树仍无生产端引用，
+# 故不随上游恢复；等价行为由 `src.agent.skills.*` 的现有测试覆盖。
+# ============================================================
 
 
 # ============================================================

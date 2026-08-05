@@ -14,7 +14,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from src.config import Config
-from src.formatters import chunk_content_by_max_bytes, slice_at_max_bytes
+from src.formatters import (
+    chunk_content_by_max_bytes,
+    slice_at_max_bytes,
+    strip_hidden_markdown_metadata,
+)
 from src.notification_sender.base import OutboundMessage
 
 
@@ -283,7 +287,8 @@ class CustomWebhookSender:
         
         自动识别常见服务并使用对应格式
         """
-        templated_payload = self._build_custom_webhook_template_payload(content)
+        sanitized_content = strip_hidden_markdown_metadata(content).strip()
+        templated_payload = self._build_custom_webhook_template_payload(sanitized_content)
         if templated_payload is not None:
             return templated_payload
 
@@ -295,14 +300,18 @@ class CustomWebhookSender:
                 "msgtype": "markdown",
                 "markdown": {
                     "title": "股票分析报告",
-                    "text": content
+                    "text": sanitized_content
                 }
             }
         
         # Discord Webhook
         if 'discord.com/api/webhooks' in url_lower or 'discordapp.com/api/webhooks' in url_lower:
             # Discord 限制 2000 字符
-            truncated = content[:1900] + "..." if len(content) > 1900 else content
+            truncated = (
+                sanitized_content[:1900] + "..."
+                if len(sanitized_content) > 1900
+                else sanitized_content
+            )
             return {
                 "content": truncated
             }
@@ -310,7 +319,7 @@ class CustomWebhookSender:
         # Slack Incoming Webhook
         if 'hooks.slack.com' in url_lower:
             return {
-                "text": content,
+                "text": sanitized_content,
                 "mrkdwn": True
             }
         
@@ -319,7 +328,7 @@ class CustomWebhookSender:
             # APNs 整包上限约 4KB，须按 UTF-8 字节截断——中文每字 3 字节，
             # 原先按字符截 4000 实际可达 ~12KB，被 Bark 以 PayloadTooLarge/HTTP 500 拒绝。
             # 预留 title/group/JSON 结构开销，body 上限取 2800 字节。
-            body, remainder = slice_at_max_bytes(content, 2800)
+            body, remainder = slice_at_max_bytes(sanitized_content, 2800)
             if remainder:
                 body += "\n…（内容过长已截断）"
             return {
@@ -330,14 +339,15 @@ class CustomWebhookSender:
         
         # 通用格式（兼容大多数服务）
         return {
-            "text": content,
-            "content": content,
-            "message": content,
-            "body": content
+            "text": sanitized_content,
+            "content": sanitized_content,
+            "message": sanitized_content,
+            "body": sanitized_content
         }
 
     def _build_custom_webhook_template_payload(self, content: str) -> Optional[dict]:
         """Build payload from CUSTOM_WEBHOOK_BODY_TEMPLATE when configured."""
+        content = strip_hidden_markdown_metadata(content).strip()
         template = (self._custom_webhook_body_template or "").strip()
         if not template:
             return None
@@ -367,6 +377,7 @@ class CustomWebhookSender:
     
     def _send_dingtalk_chunked(self, url: str, content: str, max_bytes: int = 20000) -> bool:
         import time as _time
+        content = strip_hidden_markdown_metadata(content).strip()
 
         # 为 payload 开销预留空间，避免 body 超限
         budget = max(1000, max_bytes - 1500)
