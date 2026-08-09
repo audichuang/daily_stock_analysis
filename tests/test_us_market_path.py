@@ -285,6 +285,90 @@ class TestUsValuationSurvivesTheNameFastPath:
         assert "yfinance_fundamental_bundle" in providers, providers
 
 
+class TestValuationRatiosReachTheModelNotJustThePayload:
+    def test_prompt_falls_back_to_the_fundamental_block(self):
+        """把 pe/pb 補進 `fundamental_context` 但 prompt 讀 quote，等於沒補。
+
+        兩者來自同一次執行的 `ticker.info`，而 quote 的 yfinance 路徑在本地命中
+        股票名稱時會跳過那次抓取（美股幾乎必然命中）⇒ 模型看到的是「本益比 N/A」，
+        正確數字就在同一個 context 的另一個 key 裡。
+        """
+        from src.analyzer import GeminiAnalyzer
+
+        context = {
+            "code": "NVDA",
+            "stock_name": "英伟达",
+            "today": {"close": 223.96, "open": 220.0, "high": 225.0, "low": 219.0},
+            "realtime": {"price": 223.96, "pe_ratio": None, "pb_ratio": None},
+            "fundamental_context": {
+                "valuation": {"status": "ok", "data": {"pe_ratio": 34.24, "pb_ratio": 27.75}},
+            },
+        }
+        stub = MagicMock(spec=GeminiAnalyzer)
+        stub._get_skill_prompt_sections.return_value = ("", "", True)
+        stub._format_amount = GeminiAnalyzer._format_amount.__get__(stub)
+        prompt = GeminiAnalyzer._format_prompt(stub, context, "英伟达", report_language="zh-TW")
+
+        assert "34.24" in prompt, "本益比沒有進到 prompt"
+        assert "27.75" in prompt, "股價淨值比沒有進到 prompt"
+
+
+class TestYfinanceIsNotSelfLabelledAsDegradedWhereItIsThePrimary:
+    """`source=="fallback"` 會讓 `analysis_context_builder` 判定行情降級 ⇒ 品質分被扣、
+    報告印出「核心行情受限」、LLM 的「高」信心被改寫成「中」。美股每一次都吃這一刀，
+    而 yfinance 正是美股的指定主來源，什麼都沒降級。
+    """
+
+    @pytest.mark.parametrize("market,expected", [
+        ("us", "yfinance"), ("jp", "yfinance"), ("kr", "yfinance"),
+    ])
+    def test_primary_markets_report_yfinance(self, market, expected):
+        from data_provider.yfinance_fetcher import _source_for_market
+
+        assert _source_for_market(market).value == expected
+
+    @pytest.mark.parametrize("market", ["tw", "cn", "hk", None])
+    def test_taiwan_keeps_the_shioaji_downgrade_signal(self, market):
+        """台股必須維持 `fallback`：`source` 由 shioaji 變成它，正是本 fork 用來辨識
+        「金鑰沒注入、已靜默降級成延遲報價」的訊號（AGENTS.md §10）。
+        """
+        from data_provider.yfinance_fetcher import _source_for_market
+
+        assert _source_for_market(market).value == "fallback"
+
+
+class TestIndexAliasNamesMatchThePricesTheyCarry:
+    def test_djia_names_the_index_it_prices(self):
+        """`DJIA` 同時是道瓊的通用縮寫與一檔掛牌 ETF。行情走 US_INDEX_MAPPING 取到
+        ^DJI 的五萬多點，名稱若從 stocks.index.json 取就變成那檔 ETF ⇒ 標題與數字
+        差三個數量級，而且兩邊都「有值」。
+        """
+        from data_provider import DataFetcherManager
+
+        name = DataFetcherManager().get_stock_name("DJIA", allow_realtime=False)
+
+        assert name == "道琼斯工业指数", name
+        assert "ETF" not in (name or "")
+
+
+class TestUsDailyChainPrefersYfinance:
+    def test_alphavantage_does_not_sit_ahead_of_yfinance(self):
+        """AlphaVantage 回未復權價且單次上限 100 根；排在前面的話，設了金鑰之後
+        最近 100 根裡的除權息會印出錯的 pct_chg，同一天收盤價還會隨執行次數變動。
+        """
+        import inspect
+
+        from data_provider.base import DataFetcherManager
+
+        src = inspect.getsource(DataFetcherManager.get_daily_data)
+        order_line = next(
+            line for line in src.splitlines()
+            if "source_order = [" in line and "LongbridgeFetcher\"]" in line
+            and "prefer_lb" not in line and "Yfinance" in line and "AlphaVantage" in line
+        )
+        assert order_line.index("YfinanceFetcher") < order_line.index("AlphaVantageFetcher"), order_line
+
+
 class TestRecapIsDatedByTheMarketNotTheServerClock:
     def test_us_recap_uses_the_new_york_session_not_the_taipei_date(self):
         """台北時間任何時刻，美股最近收完的那場都是紐約的前一天。"""

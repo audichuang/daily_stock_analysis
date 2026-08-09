@@ -1835,13 +1835,24 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
 概念领涨: {top_concepts_text if top_concepts_text else "暂无数据"}
 概念领跌: {bottom_concepts_text if bottom_concepts_text else "暂无数据"}"""
 
+            # 这一段是**要模型照做的指令**，不是注入的行情资料，所以得跟着报告语言走。
+            # 其余注入区块（市场概况／板块表现）维持简体是刻意的：prompt 顶端已要求
+            # 「即使注入资料出现简体，正文也必须改写为繁体输出」。
+            _tw = review_language == "zh-TW"
             data_limit_lines = []
             if not self.profile.has_market_stats:
-                data_limit_lines.append("- 该市场暂无涨跌家数、涨跌停、成交额汇总、参与度或资金流信号。")
+                data_limit_lines.append(
+                    "- 該市場暫無漲跌家數、漲跌停、成交額彙總、參與度或資金流訊號。" if _tw
+                    else "- 该市场暂无涨跌家数、涨跌停、成交额汇总、参与度或资金流信号。"
+                )
             if not self.profile.has_sector_rankings:
-                data_limit_lines.append("- 该市场暂无行业板块/概念题材涨跌榜。")
+                data_limit_lines.append(
+                    "- 該市場暫無產業板塊／概念題材漲跌榜。" if _tw
+                    else "- 该市场暂无行业板块/概念题材涨跌榜。"
+                )
             if data_limit_lines:
-                data_limits_block = "## 数据边界\n" + "\n".join(data_limit_lines)
+                header = "## 資料邊界" if _tw else "## 数据边界"
+                data_limits_block = header + "\n" + "\n".join(data_limit_lines)
 
         data_no_indices_hint = (
             "注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。"

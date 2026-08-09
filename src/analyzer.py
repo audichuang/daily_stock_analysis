@@ -3441,6 +3441,25 @@ class GeminiAnalyzer(LLMClient):
         # 价格与成交额的币别跟着标的的市场走，不是跟着报告语言走。
         prompt_market = detect_market(code)
         ccy = _MARKET_CURRENCY.get(prompt_market, '元')
+
+        # 估值比率：quote 缺了就退到基本面区块。两者来自**同一次执行**的 `ticker.info`，
+        # 但 quote 的 yfinance 路径在本地命中股票名称时会跳过那次抓取（美股几乎必然命中）
+        # ⇒ 只读 quote 的话，模型看到的永远是「本益比 N/A」，而正确数字就在同一个
+        # context 的另一个 key 里。
+        _fund_valuation = {}
+        if isinstance(context, dict):
+            _fc = context.get("fundamental_context")
+            if isinstance(_fc, dict):
+                _vb = _fc.get("valuation")
+                if isinstance(_vb, dict) and isinstance(_vb.get("data"), dict):
+                    _fund_valuation = _vb["data"]
+
+        def V(quote_value: Any, field: str) -> Any:
+            """quote 值优先；None 时退到基本面区块；都没有才 N/A。"""
+            if quote_value is not None:
+                return quote_value
+            fallback = _fund_valuation.get(field)
+            return fallback if fallback is not None else 'N/A'
         hide_regular_session_ohlc = _should_hide_regular_session_ohlc(context)
         realtime_overlay_quote = hide_regular_session_ohlc and _today_has_realtime_overlay(today)
         pct_chg_label = L("即時漲跌幅", "实时涨跌幅") if realtime_overlay_quote else L("漲跌幅", "涨跌幅")
@@ -3524,8 +3543,8 @@ class GeminiAnalyzer(LLMClient):
 | {L("目前價格", "当前价格")} | {rt.get('price', 'N/A')} {ccy} | |
 | **{L("量比", "量比")}** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
 | **{L("週轉率", "换手率")}** | **{rt.get('turnover_rate', 'N/A')}%** | |
-| {L("本益比(動態)", "市盈率(动态)")} | {rt.get('pe_ratio', 'N/A')} | |
-| {L("股價淨值比", "市净率")} | {rt.get('pb_ratio', 'N/A')} | |
+| {L("本益比(動態)", "市盈率(动态)")} | {V(rt.get('pe_ratio'), 'pe_ratio')} | |
+| {L("股價淨值比", "市净率")} | {V(rt.get('pb_ratio'), 'pb_ratio')} | |
 | {L("總市值", "总市值")} | {self._format_amount(rt.get('total_mv'), prompt_market)} | |
 | {L("流通市值", "流通市值")} | {self._format_amount(rt.get('circ_mv'), prompt_market)} | |
 | {L("60日漲跌幅", "60日涨跌幅")} | {rt.get('change_60d', 'N/A')}% | {L("中期表現", "中期表现")} |

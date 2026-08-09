@@ -62,6 +62,26 @@ import os
 logger = logging.getLogger(__name__)
 
 
+# yfinance 在这些市场是 `base.py` 即时行情路由的**指定主来源**，不是降级兜底。
+# 自称 FALLBACK 的代价不是标签难看：`analysis_context_builder` 见到 source=="fallback"
+# 就把行情判成降级 ⇒ 品质分 65、报告印出「核心行情受限」、LLM 的「高」信心被改写成
+# 「中」——每一次美股分析都无条件吃这一刀，而实际上什么都没降级。
+#
+# **台股刻意不在这个集合里**：那里 Shioaji 才是主来源，`source` 从 shioaji 变成别的值
+# 正是本 fork 用来辨识「金钥没注入、已静默降级成延迟报价」的信号（AGENTS.md §10），
+# 而 tests/test_tw_realtime_fallback.py 把它钉成契约。港股同理（Longbridge/akshare 在前）。
+_YF_PRIMARY_MARKETS = frozenset({"us", "jp", "kr"})
+
+
+def _source_for_market(market: Optional[str]) -> RealtimeSource:
+    """yfinance 是这个市场的主来源就据实标示，否则维持 FALLBACK。"""
+    return (
+        RealtimeSource.YFINANCE
+        if (market or "") in _YF_PRIMARY_MARKETS
+        else RealtimeSource.FALLBACK
+    )
+
+
 class YfinanceFetcher(BaseFetcher):
     """
     Yahoo Finance 数据源实现
@@ -817,7 +837,7 @@ class YfinanceFetcher(BaseFetcher):
             quote = UnifiedRealtimeQuote(
                 code=user_code,
                 name=index_name or user_code,
-                source=RealtimeSource.FALLBACK,
+                source=_source_for_market("us"),
                 market="us",
                 currency=str(ticker_info.get("currency") or "").upper() or None,
                 data_quality="partial" if missing_fields else "ok",
@@ -973,7 +993,7 @@ class YfinanceFetcher(BaseFetcher):
             quote = UnifiedRealtimeQuote(
                 code=symbol,
                 name=name,
-                source=RealtimeSource.FALLBACK,
+                source=_source_for_market(suffix_market or ("us" if is_us_symbol else None)),
                 market=suffix_market or ("us" if is_us_symbol else None),
                 currency=str(ticker_info.get("currency") or "").upper() or None,
                 data_quality="partial" if missing_fields else "ok",

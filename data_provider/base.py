@@ -1386,7 +1386,13 @@ class DataFetcherManager:
             elif prefer_lb:
                 source_order = ["LongbridgeFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "YfinanceFetcher"]
             else:
-                source_order = ["FinnhubFetcher", "AlphaVantageFetcher", "YfinanceFetcher", "LongbridgeFetcher"]
+                # yfinance 在前。AlphaVantage 排前面是个地雷：它回**未复权**价且单次上限
+                # 100 根（alphavantage_fetcher.py:49），而 manager 只要拿到非空 DataFrame
+                # 就收下、`storage` 又按 (code, date) UPSERT ⇒ 设了金钥之後，最近 100 根
+                # 里发生除权除息就会印出错的 pct_chg，且同一天的收盘价会随执行次数变动。
+                # 目前没金钥所以是潜伏的，但 `.env.example` 邀请你设。
+                # `docs/data-source-stability.md:44` 本来就写着 yfinance 优先。
+                source_order = ["YfinanceFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "LongbridgeFetcher"]
             market_label = "美股指数" if is_us_index else "美股"
 
             for order_index, src_name in enumerate(source_order):
@@ -2376,6 +2382,16 @@ class DataFetcherManager:
         
         if is_meaningful_stock_name(static_name, stock_code):
             return self._cache_stock_name(stock_code, static_name) or static_name
+
+        # 美股指数别名优先于股票索引：`DJIA` 同时是道琼斯的通用缩写**和**一档挂牌 ETF
+        # （Global X Dow 30 Covered Call）。行情走 `US_INDEX_MAPPING` 取到 ^DJI 的
+        # 五万多点，名称却从 stocks.index.json 取到那档 ETF ⇒ 报告标题写 ETF、数字是指数，
+        # 两者差三个数量级而且都「有值」。名称与行情必须来自同一个判定。
+        from .us_index_mapping import get_us_index_yf_symbol
+
+        _, us_index_name = get_us_index_yf_symbol(stock_code)
+        if is_meaningful_stock_name(us_index_name, stock_code):
+            return self._cache_stock_name(stock_code, us_index_name) or us_index_name
 
         index_name = get_index_stock_name(stock_code)
         if is_meaningful_stock_name(index_name, stock_code):
