@@ -421,3 +421,111 @@ class TestEmptyLlmResponseNamesItsCause:
         empty = MagicMock()
         empty.choices = []
         assert client._finish_reason_of(empty) == ""
+
+
+class TestMarketGatingSpansTheDateLine:
+    """台北週一早上，紐約還是週日 ⇒ 只看市場當地日期會把 `us` 丟掉，
+    而週五那場美股收在台北週一 04:00，正是晨間例行要讀的東西。
+    實測破口：台北週六約 13:00 到週一約 12:00，其間 `tw,us` 會塌成 `tw`。
+    """
+
+    @staticmethod
+    def _at(day, hour):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from src.core.trading_calendar import get_open_markets_today
+
+        return get_open_markets_today(datetime(2026, 8, day, hour, 0, tzinfo=ZoneInfo("Asia/Taipei")))
+
+    def test_us_survives_taipei_monday_morning(self):
+        assert "us" in self._at(10, 9), "台北週一早上丟掉美股 = 晨間例行讀不到週五收盤"
+        assert "tw" in self._at(10, 9)
+
+    def test_taipei_saturday_morning_still_carries_the_friday_us_session(self):
+        """市場當地日期那半邊不能拿掉：台北週六早上紐約還是週五。"""
+        assert "us" in self._at(8, 9)
+
+    @pytest.mark.parametrize("day,hour", [(8, 14), (9, 10)])
+    def test_genuinely_dead_days_stay_closed(self, day, hour):
+        """修法是聯集不是放寬——真的沒有新資料的時段仍然不跑。"""
+        markets = self._at(day, hour)
+        assert "us" not in markets and "tw" not in markets
+
+
+class TestNoPhantomBarBeforeTheSessionOpens:
+    """台北 12:00~21:30 跑美股時，紐約當天是交易日但盤還沒開。舊的閘門只問
+    「今天是不是交易日」，於是會用「即時價」（其實是昨收）複製出一根 OHLC 與量
+    都跟前一根相同的假日線，指標全在它上面算。實測 AAPL signal_score 46→55。
+    """
+
+    @staticmethod
+    def _phase(market, day, hour):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from src.core.trading_calendar import infer_market_phase
+
+        return infer_market_phase(market, datetime(2026, 8, day, hour, 0, tzinfo=ZoneInfo("Asia/Taipei")))
+
+    @pytest.mark.parametrize("hour", [12, 14, 18])
+    def test_us_is_premarket_through_the_taipei_afternoon(self, hour):
+        from src.core.trading_calendar import MarketPhase
+
+        assert self._phase("us", 11, hour) is MarketPhase.PREMARKET
+
+    def test_post_close_is_not_blocked(self):
+        """收盤後那筆即時價就是當日收盤，DB 日線還沒進來時仍該補——不能一起關掉。"""
+        from src.core.trading_calendar import MarketPhase
+
+        assert self._phase("us", 11, 9) is MarketPhase.POSTMARKET
+        assert self._phase("tw", 11, 14) is MarketPhase.POSTMARKET
+
+    @staticmethod
+    def _run(phase):
+        """跑真正的 `_augment_historical_with_realtime`，只墊掉時鐘與市場判定。
+
+        兩個必須做對、否則測試會因為**別的理由**通過（mutation 檢查抓到過）：
+        quote 一定要有真的 `price`（否則函式在最前面就 return），且最後一根 K 棒的
+        日期必須**早於** market_today（否則走的是「更新最後一列」而不是 append）。
+        """
+        from datetime import date, datetime
+        from zoneinfo import ZoneInfo
+
+        import pandas as pd
+
+        from src.core.pipeline import StockAnalysisPipeline
+
+        df = pd.DataFrame({
+            "date": [date(2026, 8, 6), date(2026, 8, 7)],
+            "open": [310.0, 311.0], "high": [312.0, 313.0],
+            "low": [309.0, 310.0], "close": [311.0, 312.0], "volume": [1e6, 1.1e6],
+        })
+        quote = MagicMock(price=312.0, open_price=312.0, high=312.0, low=312.0,
+                          volume=0, amount=None, change_pct=0.0, pre_close=312.0)
+
+        stub = MagicMock(spec=StockAnalysisPipeline)
+        stub.config = MagicMock(enable_realtime_technical_indicators=True)
+        ny_now = datetime(2026, 8, 11, 8, 0, tzinfo=ZoneInfo("America/New_York"))
+        with patch("src.core.pipeline.get_market_for_stock", return_value="us"), \
+             patch("src.core.pipeline.get_market_now", return_value=ny_now), \
+             patch("src.core.pipeline.is_market_open", return_value=True), \
+             patch("src.core.pipeline.infer_market_phase", return_value=phase):
+            return df, StockAnalysisPipeline._augment_historical_with_realtime(stub, df, quote, "AAPL")
+
+    def test_premarket_appends_nothing(self):
+        from src.core.trading_calendar import MarketPhase
+
+        df, out = self._run(MarketPhase.PREMARKET)
+        assert len(out) == len(df), "開盤前補了一根假 K 棒"
+
+    @pytest.mark.parametrize("phase_name", ["INTRADAY", "LUNCH_BREAK", "CLOSING_AUCTION", "POSTMARKET"])
+    def test_every_phase_after_the_open_still_appends(self, phase_name):
+        """這個修法只擋開盤前。盤中疊即時價是它本來的用途；**收盤後那筆即時價就是
+        當日收盤**，DB 日線還沒進來時仍該補——台北 09:00 讀美股、14:00 讀台股都在
+        這一格，一起關掉會讓當天整個消失。
+        """
+        from src.core.trading_calendar import MarketPhase
+
+        df, out = self._run(getattr(MarketPhase, phase_name))
+        assert len(out) == len(df) + 1, f"{phase_name} 不再補當日 K 棒 = 修過頭"

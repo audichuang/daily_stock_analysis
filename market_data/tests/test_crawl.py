@@ -1,6 +1,7 @@
 from datetime import date
 
 import pandas as pd
+import pytest
 from sqlalchemy import text
 
 from market_data import crawl
@@ -88,3 +89,39 @@ def test_crawl_monthly_revenue_derives_month_key(pg_conn, monkeypatch):
         "WHERE stock_id='2330' AND revenue_month='2024-01-01'"  # 營收所屬月
     )).fetchone()
     assert row[0] == 2000000
+
+
+def test_partial_quarter_clears_the_download_so_a_rerun_refetches(tmp_path, monkeypatch):
+    """截止日前抓到的半季必須清掉，否則「目錄已存在則沿用」會讓重跑吃舊檔。
+
+    實測 2026-08-09（Q2 截止日 8/14 前 5 天）只有 525 檔申報，去年同季是 2582 檔。
+    留著那 525 檔的話，8/14 之後重跑會再失敗一次，看起來像 MOPS 沒發布。
+    """
+    import os
+    import shutil
+
+    import pandas as pd
+
+    from market_data import crawl
+
+    monkeypatch.chdir(tmp_path)
+    directory = os.path.join("data", "financial_statement", "20262")
+    os.makedirs(directory)
+    open(os.path.join(directory, "2330.html"), "w").close()
+
+    monkeypatch.setattr(
+        crawl.financial_statement, "pack_htmls",
+        lambda *a, **k: {"balance_sheet": pd.DataFrame(index=["2330", "2317"])},
+    )
+
+    with pytest.raises(RuntimeError, match="looks partial"):
+        crawl.crawl_financials(object(), 2026, 2)
+    assert not os.path.isdir(directory), "半季的下載檔沒被清掉，重跑會吃舊的"
+
+    # --keep-files 仍然保留，但訊息要明講得先刪
+    os.makedirs(directory)
+    open(os.path.join(directory, "2330.html"), "w").close()
+    with pytest.raises(RuntimeError, match="delete it before retrying"):
+        crawl.crawl_financials(object(), 2026, 2, keep_files=True)
+    assert os.path.isdir(directory)
+    shutil.rmtree(directory, ignore_errors=True)

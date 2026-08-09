@@ -94,10 +94,12 @@ from src.services.decision_signal_summary import summarize_decision_signal
 from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 from src.core.trading_calendar import (
+    MarketPhase,
     build_market_phase_context,
     get_effective_trading_date,
     get_market_for_stock,
     get_market_now,
+    infer_market_phase,
     is_market_open,
 )
 from data_provider.us_index_mapping import is_us_stock_code
@@ -2259,6 +2261,17 @@ class StockAnalysisPipeline:
         market = get_market_for_stock(code)
         market_today = get_market_now(market).date()
         if market and not is_market_open(market, market_today):
+            return df
+
+        # **開盤前不得補今天的 K 棒。** 上面只問「今天是不是交易日」，於是台北 12:00~21:30
+        # 跑美股時：紐約當天是交易日、但盤還沒開，`last_date < market_today` 成立 ⇒ 下面
+        # 會用「即時價」（此刻其實是昨收）複製出一根 OHLC 與量都和前一根相同的假日線，
+        # 指標全部在它上面算。實測 AAPL：ma5 309.91→311.89、bias_ma5 1.10→0.46、
+        # macd_dif 0.88→0.48、volume_status 由 SHRINK_VOLUME_UP 翻成 SHRINK_VOLUME_DOWN、
+        # signal_score 46→55。不報錯，只是分數不對。
+        # 只擋 PREMARKET：盤中／午休／收盤集合競價本來就該疊即時價，收盤後（POSTMARKET）
+        # 那筆即時價就是當日收盤，DB 日線還沒進來時仍該補，不能一起關掉。
+        if market and infer_market_phase(market) == MarketPhase.PREMARKET:
             return df
 
         last_val = df['date'].max()

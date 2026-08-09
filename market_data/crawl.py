@@ -265,9 +265,20 @@ def crawl_financials(engine, year, season, keep_files=False, min_stocks=1000):
     frames = financial_statement.pack_htmls(year, season, directory)
     parsed = len(frames["balance_sheet"])
     if parsed < min_stocks:
+        # partial quarter 的檔案**沒有追查價值**（只是家數少），留著反而害人：上面
+        # 「目錄已存在則沿用」意味著截止日過後重跑會直接吃這份舊的 525 檔，再失敗一次，
+        # 看起來像 MOPS 沒發布。所以這條路徑一律清掉目錄，讓重跑是真的重下載。
+        # `--keep-files` 仍然尊重，但訊息會明講要先刪。
+        hint = (f"files kept at {directory} — delete it before retrying, "
+                f"otherwise the rerun reuses this partial copy")
+        if not keep_files:
+            shutil.rmtree(directory, ignore_errors=True)
+            if os.path.exists("temp.zip"):
+                os.remove("temp.zip")
+            hint = "downloaded files removed so a rerun re-downloads"
         raise RuntimeError(
             f"{year}Q{season}: only {parsed} stocks parsed (<{min_stocks}), "
-            f"quarter looks partial — nothing written, files kept at {directory}")
+            f"quarter looks partial — nothing written, {hint}")
     table = models.FinancialStatement.__table__
     total = 0
     with engine.begin() as conn:
