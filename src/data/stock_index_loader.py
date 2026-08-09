@@ -289,6 +289,64 @@ def get_index_stock_name(stock_code: str) -> str | None:
     return None
 
 
+_US_ASSET_TYPE_CACHE: Dict[str, str] | None = None
+_US_ASSET_TYPE_LOCK = RLock()
+
+
+def _build_us_asset_type_map(raw_items: list) -> Dict[str, str]:
+    """{US symbol: 'etf'|'stock'} from the index's own type column.
+
+    美股限定：`type` 由 `scripts/refresh_us_stock_index.py` 從 NASDAQ Trader 的官方
+    ETF 欄位填，其餘市場整欄都是預設的 `stock`（沒帶資訊），據以判定會把台股 ETF
+    全判成個股。所以只收 `market == "US"` 的列。
+    """
+    out: Dict[str, str] = {}
+    for item in raw_items:
+        if not (isinstance(item, list) and len(item) > 7):
+            continue
+        if item[6] != "US":
+            continue
+        asset_type = str(item[7] or "").strip().lower()
+        if asset_type not in {"etf", "stock"}:
+            continue
+        for key in _build_lookup_keys(str(item[0] or ""), str(item[1] or "")):
+            out[key] = asset_type
+    return out
+
+
+def get_us_asset_type(stock_code: str) -> str | None:
+    """`'etf'` / `'stock'` for an indexed US symbol, else ``None``.
+
+    ``None`` means "the index has no opinion" — callers must fall back rather
+    than treat it as "not an ETF".
+    """
+    global _US_ASSET_TYPE_CACHE
+
+    code = str(stock_code or "").strip()
+    if not code:
+        return None
+
+    if _US_ASSET_TYPE_CACHE is None:
+        with _US_ASSET_TYPE_LOCK:
+            if _US_ASSET_TYPE_CACHE is None:
+                cache: Dict[str, str] = {}
+                for index_path in get_stock_index_candidate_paths():
+                    try:
+                        cache = _build_us_asset_type_map(_load_stock_index_payload(index_path))
+                    except (OSError, TypeError, ValueError) as exc:
+                        logger.debug("[股票类型] 读取股票索引失败 %s: %s", index_path, exc)
+                        continue
+                    if cache:
+                        break
+                _US_ASSET_TYPE_CACHE = cache
+
+    for key in _build_lookup_keys(code, code):
+        found = _US_ASSET_TYPE_CACHE.get(key)
+        if found:
+            return found
+    return None
+
+
 def resolve_index_stock_code(query: str) -> str | None:
     """Resolve an input code against the stock index pool.
 

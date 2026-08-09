@@ -80,12 +80,43 @@ class TestEtfDetectionDoesNotSwallowOperatingCompanies:
         ("UNH", "UNITEDHEALTH GROUP"),   # 'UNIT' 是 'UNITEDHEALTH' 的子字串
         ("UNP", "UNION PACIFIC"),
         ("AAPL", "APPLE INC"),
+        ("NTRS", "Northern Trust Corporation"),   # 整詞的 TRUST 也騙得過名稱啟發式
+        ("AAT", "AMERICAN ASSETS TRUST"),         # 約 192 檔 REIT 同形狀
     ])
     def test_operating_companies_are_not_flagged_as_etf(self, code, name):
         """被誤判成 ETF 的個股會**整組失去公司風險／財報／競爭檢索**，只剩指數式查詢。"""
         from src.search_service import SearchService
 
         assert SearchService.is_index_or_etf(code, name) is False
+
+    def test_us_verdict_comes_from_the_official_type_not_the_name(self):
+        """名稱關鍵詞分不開 `Northern Trust` 與 `Invesco QQQ Trust`——所以美股改讀
+        `stocks.index.json` 的 type（由 NASDAQ Trader 的 ETF 欄位填）。
+        """
+        from src.data.stock_index_loader import get_us_asset_type
+
+        assert get_us_asset_type("QQQ") == "etf"
+        assert get_us_asset_type("NTRS") == "stock"
+        # 其他市場整欄都是預設值，沒帶資訊 ⇒ 必須回 None 讓呼叫端 fallback，
+        # 否則台股 ETF 會被判成個股
+        assert get_us_asset_type("2330.TW") is None
+        assert get_us_asset_type("510300") is None
+
+    def test_a_share_etf_prefix_still_wins(self):
+        """A 股 ETF 靠代碼前綴判定，必須排在索引查詢之前。"""
+        from src.search_service import SearchService
+
+        assert SearchService.is_index_or_etf("510300", "沪深300ETF") is True
+
+    def test_us_index_names_are_readable_not_refinitiv_mangles(self):
+        """這串會變成報告標題、prompt 開頭與五個新聞檢索維度的搜尋字串。"""
+        from src.data.stock_index_loader import get_index_stock_name
+
+        for code, expected in [("AMAT", "Applied Materials"), ("TSM", "Taiwan Semiconductor"),
+                               ("UNH", "UnitedHealth"), ("AAPL", "Apple")]:
+            name = get_index_stock_name(code) or ""
+            assert expected in name, f"{code}: {name!r}"
+            assert "ADR" not in name and ":" not in name, f"{code}: {name!r}"
 
 
 class TestPricesAreQuotedInTheMarketsOwnCurrency:

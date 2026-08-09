@@ -34,6 +34,7 @@ from tenacity import (
 )
 
 from data_provider.us_index_mapping import is_us_index_code
+from src.data.stock_index_loader import get_us_asset_type
 from src.config import (
     NEWS_STRATEGY_WINDOWS,
     normalize_news_strategy_profile,
@@ -2665,7 +2666,17 @@ class SearchService:
         # US index (SPX, DJI, IXIC etc.)
         if is_us_index_code(code):
             return True
-        # US/HK ETF: foreign symbol + name contains fund-like keywords
+
+        # 美股走**官方 ETF 欄位**（stocks.index.json 的 type，由 NASDAQ Trader 填），
+        # 不再靠名稱猜。名稱啟發式無法把 `NORTHERN TRUST` 與 `Invesco QQQ Trust` 分開，
+        # 也擋不住約 192 檔 REIT（`AMERICAN ASSETS TRUST`）——被誤判的個股會整組失去
+        # 公司風險／財報／競爭檢索，報告看起來完整但風險那節系統性為空。
+        # 誤判方向不對稱：把 ETF 當個股只是多幾條無用查詢，把個股當 ETF 會刪掉真正的風險面。
+        indexed_type = get_us_asset_type(code)
+        if indexed_type is not None:
+            return indexed_type == "etf"
+
+        # 索引沒收錄（港股 ETF、OTC 等）才退回名稱關鍵詞
         if SearchService._is_foreign_stock(code):
             name_upper = (stock_name or '').upper()
             return bool(SearchService._ETF_NAME_PATTERN.search(name_upper))
