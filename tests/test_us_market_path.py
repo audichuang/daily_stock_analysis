@@ -384,3 +384,40 @@ class TestRecapIsDatedByTheMarketNotTheServerClock:
 
         spy.assert_called_once_with("us")
         assert overview.date == "2026-08-10"
+
+
+class TestEmptyLlmResponseNamesItsCause:
+    """「LLM returned empty response」在实测里同时对应两件完全不同的事：金钥／服务挂了，
+    以及**推理模型把 token 预算烧在推理上、还没产出内容就到顶**。後者的
+    `finish_reason` 是 `length`，不带上它就得另做一轮诊断才分得出来。
+
+    实测 `deepseek/deepseek-v4-flash`：`max_tokens=2048`（本仓库预设）0/3 有内容，
+    8192 下 2/3 有内容。
+    """
+
+    @staticmethod
+    def _response(finish_reason):
+        choice = MagicMock()
+        choice.finish_reason = finish_reason
+        choice.message.content = ""
+        choice.message.content_blocks = None
+        choice.content_blocks = None
+        choice.content = None
+        response = MagicMock()
+        response.choices = [choice]
+        return response
+
+    @pytest.mark.parametrize("reason", ["length", "stop"])
+    def test_finish_reason_is_reported(self, reason):
+        from src.llm.client import LLMClient
+
+        client = LLMClient.__new__(LLMClient)
+        assert client._finish_reason_of(self._response(reason)) == reason
+
+    def test_no_choices_does_not_raise(self):
+        from src.llm.client import LLMClient
+
+        client = LLMClient.__new__(LLMClient)
+        empty = MagicMock()
+        empty.choices = []
+        assert client._finish_reason_of(empty) == ""

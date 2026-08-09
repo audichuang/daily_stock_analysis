@@ -2941,7 +2941,18 @@ class GeminiAnalyzer(LLMClient):
                     if response_validator is not None:
                         response_validator(content)
                     return (content, model, usage)
-                raise ValueError("LLM returned empty response")
+                # 空回应最常见的原因不是模型挂了，而是**推理模型把 token 预算烧在
+                # 推理上、还没开始产出内容就到顶**——此时 `finish_reason` 是 `length`
+                # 而不是 `stop`。实测 `deepseek/deepseek-v4-flash` 在 `max_tokens=2048`
+                # （本仓库预设）下 0/3 有内容，8192 下 2/3 有内容。不带上 finish_reason
+                # 的话，「LLM returned empty response」看起来跟金钥失效／服务中断一样，
+                # 得另外做一轮诊断才分得出来。
+                raise ValueError(
+                    "LLM returned empty response "
+                    f"(finish_reason={self._finish_reason_of(response) or 'unknown'}; "
+                    "finish_reason=length 表示 token 预算在产出内容前就用完，"
+                    "请调高 LLM_MAX_TOKENS 或改用非推理模型)"
+                )
 
             except Exception as e:
                 safe_error = self._sanitize_litellm_exception_text(e, config=config, model=model)
