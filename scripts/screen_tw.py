@@ -355,16 +355,22 @@ def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover):
     w("| # | 代碼 | 名稱 | 產業 | 收盤 | 突破% | 量比 | 日%| 5日% | 20日% | 乖離20 | RSI | 日均額 | 法人5日 | 連買 | PE | PB | 殖利% | 營收YoY | 標籤 |")
     w("|--:|---|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|")
     for i, (_, r) in enumerate(pool.head(top).iterrows(), 1):
+        # 這三格先算好再進 f-string。原本寫成同引號的巢狀 f-string（PEP 701），
+        # **只有 Python 3.12+ 剖析得動**；CI 跑 3.11（`ci.yml` 的 `python-version`），
+        # 本機 venv 是 3.12（AGENTS.md §10），所以這個語法錯誤在本機永遠不會顯形。
+        break_pct = f"{r['break_pct'] * 100:+.1f}" if pd.notna(r['break_pct']) else '—'
+        vol_ratio5 = f"{r['vol_ratio5']:.1f}" if pd.notna(r['vol_ratio5']) else '—'
+        yoy = f"{r['yoy']:+.1f}" if pd.notna(r['yoy']) else '—'
         w(f"| {i} | {r['stock_id']} | {r['name']} | {INDUSTRY.get(r['industry'], '—')} | "
           f"{r['close']:.2f} | "
-          f"{f'{r["break_pct"] * 100:+.1f}' if pd.notna(r['break_pct']) else '—'} | "
-          f"{f'{r["vol_ratio5"]:.1f}' if pd.notna(r['vol_ratio5']) else '—'} | "
+          f"{break_pct} | "
+          f"{vol_ratio5} | "
           f"{r['d1'] * 100:+.1f} | {r['d5'] * 100:+.1f} | {r['d20'] * 100:+.1f} | "
           f"{r['bias20'] * 100:+.1f}% | {r['rsi14']:.0f} | {r['turnover20'] / 1e8:.1f}億 | "
           f"{r['inst_5'] / 1000:+,.0f}張 | {r['inst_streak']:.0f}天 | "
           f"{r['pe_ratio'] if pd.notna(r['pe_ratio']) else '—'} | {r['pb_ratio'] if pd.notna(r['pb_ratio']) else '—'} | "
           f"{r['dividend_yield'] if pd.notna(r['dividend_yield']) else '—'} | "
-          f"{f'{r["yoy"]:+.1f}' if pd.notna(r['yoy']) else '—'} | {' '.join(tag(r, market_d1)) or '—'} |")
+          f"{yoy} | {' '.join(tag(r, market_d1)) or '—'} |")
     w("")
 
     w("## 4. 參考價位（以基準日收盤計算，**未計入隔夜盤**）\n")
