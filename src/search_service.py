@@ -2256,7 +2256,9 @@ class SearchService:
     ANALYTICAL_INTEL_LOOKBACK_DAYS = 180
     ANALYTICAL_INTEL_DIMENSIONS = {"market_analysis", "earnings"}
     _CHINESE_TEXT_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
-    _US_STOCK_RE = re.compile(r"^[A-Za-z]{1,5}(\.[A-Za-z])?$")
+    # 类别股的点与连字号都要认（`BRK.B` / `BRK-B`）。只认一种会让另一种判不出美股，
+    # 於是新闻检索整组走中文／境内路径去查一档美股。
+    _US_STOCK_RE = re.compile(r"^[A-Za-z]{1,5}([.-][A-Za-z])?$")
     _DIRECT_NEWS_CATEGORY = "direct_company_news"
     _SECTOR_NEWS_CATEGORY = "sector_related_news"
     _MACRO_NEWS_CATEGORY = "macro_market_news"
@@ -2647,8 +2649,11 @@ class SearchService:
     # US/HK ETF name hints. **必须整词匹配**：子字串匹配会把 `UNIT` 命中
     # `UNITEDHEALTH`，於是 UNH 这种道指成分股被判成 ETF，公司风险／财报／竞争三组
     # 检索查询整组被换成指数式查询——报告照出，只是再也不看公司本身。
+    # 用「前後不是 ASCII 字母」而不是 `\b`：CJK 也是 word char，所以 `\bETF\b` 匹配不到
+    # `南方恒生科技ETF`（技與 E 之间没有边界），把港股中文 ETF 名整批漏掉。
+    # 同时仍然挡住 `NETFLIX`（ETF 前面是 N）与 `UNITEDHEALTH`（UNIT 後面是 E）。
     _ETF_NAME_PATTERN = re.compile(
-        r'\b(?:ETFS?|FUNDS?|TRUSTS?|INDEX|TRACKERS?|UNITS?)\b'
+        r'(?<![A-Za-z])(?:ETFS?|FUNDS?|TRUSTS?|INDEX|TRACKERS?|UNITS?)(?![A-Za-z])'
     )
 
     @staticmethod

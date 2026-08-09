@@ -16,6 +16,7 @@ YfinanceFetcher - 兜底数据源 (Priority 4)
 
 import csv
 import logging
+import re
 from datetime import datetime
 from io import StringIO
 from typing import Optional, List, Dict, Any
@@ -225,6 +226,15 @@ class YfinanceFetcher(BaseFetcher):
             hk_code = hk_code.zfill(4)
             logger.debug(f"识别裸港股代码: {stock_code} -> {hk_code}.HK")
             return f"{hk_code}.HK"
+
+        # 交易所後缀写法（`AAPL.US` / `AAPL-US`）：这些是**美股**，不是 A 股。
+        # 底下那串 A 股规则最後会 fall through 到「默认深市」，把 `AAPL-US` 变成
+        # `AAPL-US.SZ` 送给 Yahoo——不报错、查无资料、当成正常降级。`.US` 不是类别股，
+        # 所以不能靠 `is_us_stock_code`（它刻意只认单字母後缀）判，得在这里显式剥掉。
+        us_suffix = re.match(r'^([A-Z]{1,5})[.-]US$', code)
+        if us_suffix:
+            logger.debug(f"剥除美股交易所後缀: {code} -> {us_suffix.group(1)}")
+            return us_suffix.group(1)
 
         # 已经包含后缀的情况
         if '.SS' in code or '.SZ' in code or '.HK' in code or '.BJ' in code:

@@ -9,6 +9,8 @@
 每一項都做過 mutation 檢查：把修法改回舊寫法必須立刻紅。
 """
 
+import pathlib
+import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -560,3 +562,124 @@ class TestNoPhantomBarBeforeTheSessionOpens:
 
         df, out = self._run(getattr(MarketPhase, phase_name))
         assert len(out) == len(df) + 1, f"{phase_name} 不再補當日 K 棒 = 修過頭"
+
+
+class TestCodexReviewFindings:
+    """獨立對抗審查抓到的十項，全部在此釘住。"""
+
+    def test_recap_date_matches_the_session_the_prices_belong_to(self):
+        """兩個方向都會錯：用伺服器日期，美股永遠早一天；一律用「上一場已收盤」，
+        台股盤中會把當天正在形成的那根標成上週五，而 daily_market_context 直接信它。
+        """
+        from datetime import date, datetime
+        from zoneinfo import ZoneInfo
+
+        import src.market_analyzer as ma_mod
+        from src.core.trading_calendar import MarketPhase
+        from src.market_analyzer import MarketAnalyzer
+
+        stub = MagicMock(spec=MarketAnalyzer)
+        stub.region = "tw"
+        tw_now = datetime(2026, 8, 10, 10, 0, tzinfo=ZoneInfo("Asia/Taipei"))
+        with patch.object(ma_mod, "infer_market_phase", return_value=MarketPhase.INTRADAY), \
+             patch.object(ma_mod, "get_market_now", return_value=tw_now), \
+             patch.object(ma_mod, "get_effective_trading_date", return_value=date(2026, 8, 7)):
+            assert MarketAnalyzer._resolve_overview_date(stub) == date(2026, 8, 10)
+
+        with patch.object(ma_mod, "infer_market_phase", return_value=MarketPhase.PREMARKET), \
+             patch.object(ma_mod, "get_market_now", return_value=tw_now), \
+             patch.object(ma_mod, "get_effective_trading_date", return_value=date(2026, 8, 7)):
+            assert MarketAnalyzer._resolve_overview_date(stub) == date(2026, 8, 7)
+
+    def test_prompt_index_lines_never_print_nan(self):
+        """這是餵給 LLM 的那份，跟報告表格是兩個出口；之前只修了表格。"""
+        from src.market_analyzer import MarketAnalyzer, MarketIndex
+
+        ma = _analyzer("us")
+        overview = _overview(indices=[
+            MarketIndex(code="SPX", name="标普500指数", current=6400.0, change=30.0, change_pct=0.47),
+            MarketIndex(code="IXIC", name="纳斯达克", current=float("nan"), change=0.0,
+                        change_pct=float("nan")),
+        ])
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh-TW"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="zh-TW"), \
+             patch.object(MarketAnalyzer, "_get_strategy_prompt_block", return_value=""), \
+             patch.object(MarketAnalyzer, "_get_index_hint", return_value="H"):
+            prompt = MarketAnalyzer._build_review_prompt(ma, overview, [])
+
+        assert "nan" not in prompt.lower()
+        assert "标普500指数" in prompt, "有讀數的那檔不能一起被丟掉"
+
+    def test_nan_mood_index_is_not_read_as_a_decline(self):
+        """NaN 走完每個 `>` 比較都 False，會落到 else 被判成「明顯下跌」。"""
+        from src.market_analyzer import MarketAnalyzer, MarketIndex
+
+        ma = _analyzer("us")
+        overview = _overview(indices=[
+            MarketIndex(code="SPX", name="标普500指数", current=6400.0, change=0.0,
+                        change_pct=float("nan")),
+        ])
+        with patch.object(MarketAnalyzer, "_get_template_review_language", return_value="zh-TW"), \
+             patch.object(MarketAnalyzer, "_get_review_language", return_value="zh-TW"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="十億美元"):
+            text = MarketAnalyzer._generate_template_review(ma, overview, [])
+
+        assert "明顯下跌" not in text and "明显下跌" not in text, text[:400]
+
+    @pytest.mark.parametrize("code,expected", [("AAPL-US", "AAPL"), ("AAPL.US", "AAPL")])
+    def test_exchange_suffix_does_not_fall_through_to_shenzhen(self, code, expected):
+        """`AAPL-US` 落到 A 股預設會變成 `AAPL-US.SZ`——查無資料、當成正常降級。"""
+        from data_provider.yfinance_fetcher import YfinanceFetcher
+
+        assert YfinanceFetcher()._convert_stock_code(code) == expected
+
+    def test_search_service_recognises_the_hyphen_form(self):
+        """判不出美股，新聞檢索整組走中文／境內路徑去查一檔美股。"""
+        from src.search_service import SearchService
+
+        assert SearchService._is_us_stock("BRK-B") is True
+        assert SearchService._is_us_stock("BRK.B") is True
+
+    def test_chinese_etf_names_still_match(self):
+        """`\\b` 對 CJK 無效（CJK 也是 word char），會把港股中文 ETF 名整批漏掉。"""
+        from src.search_service import SearchService
+
+        assert SearchService._ETF_NAME_PATTERN.search("南方恒生科技ETF")
+        assert not SearchService._ETF_NAME_PATTERN.search("NETFLIX")
+        assert not SearchService._ETF_NAME_PATTERN.search("UNITEDHEALTH GROUP")
+
+    def test_symbols_outside_the_official_list_keep_the_name_fallback(self):
+        """官方清單外的真 ETF 若被當成權威的「不是 ETF」，就拿不到 ETF 式檢索。"""
+        from src.data.stock_index_loader import get_us_asset_type
+        from src.search_service import SearchService
+
+        assert get_us_asset_type("BLCN") is None, "清單外的列不該給出權威答案"
+        assert SearchService.is_index_or_etf("BLCN", "Siren Nasdaq NexGen Economy ETF") is True
+
+    def test_safe_float_rejects_infinity(self):
+        from data_provider.yfinance_fundamental_adapter import _safe_float
+
+        assert _safe_float(float("inf")) is None
+        assert _safe_float(float("-inf")) is None
+        assert _safe_float(float("nan")) is None
+        assert _safe_float(3.5) == 3.5
+
+    def test_clearing_the_index_cache_also_clears_the_type_cache(self):
+        import src.data.stock_index_loader as loader
+
+        loader.get_us_asset_type("SPY")
+        assert loader._US_ASSET_TYPE_CACHE is not None
+        loader.clear_stock_index_cache()
+        assert loader._US_ASSET_TYPE_CACHE is None
+
+    def test_duration_baseline_accepts_every_configured_test_root(self):
+        """重新產生時長基準表會含 market_data/tests 的條目，寫死單一前綴會開機即失敗。"""
+        import json
+
+        from scripts.ci_test_shard import TEST_ROOTS, load_durations
+
+        payload = {"schema_version": 1,
+                   "durations": {f"{root}/test_x.py": 1.0 for root in TEST_ROOTS}}
+        path = pathlib.Path(tempfile.mkdtemp()) / "d.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        assert len(load_durations(path)) == len(TEST_ROOTS)

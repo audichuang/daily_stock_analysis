@@ -28,6 +28,7 @@ mark the block as ``partial`` when only some fields are populated.
 from __future__ import annotations
 
 import logging
+from math import isfinite
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -59,7 +60,10 @@ def _safe_float(value: Any) -> Optional[float]:
         result = float(value)
     except (TypeError, ValueError):
         return None
-    if result != result:  # NaN guard
+    # NaN **和 ±inf 都要挡**：只挡 NaN 的话，`±inf` 会当成真读数流下去——进 prompt
+    # 印成 `inf`，进 `JSONResponse` 直接抛「Out of range float values are not JSON
+    # compliant」让整个 API 回 500。
+    if not isfinite(result):
         return None
     return result
 

@@ -307,6 +307,8 @@ def _build_us_asset_type_map(raw_items: list) -> Dict[str, str]:
         if item[6] != "US":
             continue
         asset_type = str(item[7] or "").strip().lower()
+        # 只收权威的两个值。`unknown` = 官方清单查无（多为 OTC），刻意不进表，
+        # 让 `get_us_asset_type` 回 None，呼叫端才会退回名称启发式——那批里有真 ETF。
         if asset_type not in {"etf", "stock"}:
             continue
         for key in _build_lookup_keys(str(item[0] or ""), str(item[1] or "")):
@@ -433,13 +435,15 @@ def get_stock_code_index_map() -> Dict[str, str]:
 
 def clear_stock_index_cache() -> None:
     """Clear the in-process stock index lookup cache."""
-    global _REMOTE_INDEX_VALIDITY_CACHE
+    global _REMOTE_INDEX_VALIDITY_CACHE, _US_ASSET_TYPE_CACHE
     global _STOCK_CODE_CANDIDATES_CACHE, _STOCK_CODE_LOOKUP_CACHE, _STOCK_INDEX_CACHE
     with _STOCK_INDEX_CACHE_LOCK:
         _STOCK_INDEX_CACHE = None
         _STOCK_CODE_LOOKUP_CACHE = None
         _STOCK_CODE_CANDIDATES_CACHE = None
         _REMOTE_INDEX_VALIDITY_CACHE = None
+        # 漏掉这个的话，索引重刷後 ETF 判定仍吃旧值，而且只在同一个 process 内显形
+        _US_ASSET_TYPE_CACHE = None
 
 
 def _clear_stock_index_cache_for_tests() -> None:

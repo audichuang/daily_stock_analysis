@@ -91,14 +91,14 @@ def test_crawl_monthly_revenue_derives_month_key(pg_conn, monkeypatch):
     assert row[0] == 2000000
 
 
-def test_partial_quarter_clears_the_download_so_a_rerun_refetches(tmp_path, monkeypatch):
-    """截止日前抓到的半季必須清掉，否則「目錄已存在則沿用」會讓重跑吃舊檔。
+def test_partial_quarter_keeps_evidence_but_forces_a_refetch(tmp_path, monkeypatch):
+    """家數不足有**兩個**成因，從錯誤點分不出來：截止日前的半季發布，以及解析器
+    對不上新版 markup。所以檔案要留著（後者需要它追查），但要標記，讓下次重跑
+    重新下載——不標的話，「目錄已存在則沿用」會讓截止日後的重跑再失敗一次。
 
-    實測 2026-08-09（Q2 截止日 8/14 前 5 天）只有 525 檔申報，去年同季是 2582 檔。
-    留著那 525 檔的話，8/14 之後重跑會再失敗一次，看起來像 MOPS 沒發布。
+    實測 2026-08-09（Q2 截止日 8/14 前 5 天）只有 525 檔申報，去年同季 2582 檔。
     """
     import os
-    import shutil
 
     import pandas as pd
 
@@ -113,15 +113,18 @@ def test_partial_quarter_clears_the_download_so_a_rerun_refetches(tmp_path, monk
         crawl.financial_statement, "pack_htmls",
         lambda *a, **k: {"balance_sheet": pd.DataFrame(index=["2330", "2317"])},
     )
+    downloads = []
+    monkeypatch.setattr(crawl.crawler, "crawl_finance_statement2019",
+                        lambda y, s: downloads.append((y, s)) or os.makedirs(directory, exist_ok=True))
 
+    with pytest.raises(RuntimeError, match="looks partial or the parser is out of date"):
+        crawl.crawl_financials(object(), 2026, 2)
+
+    assert os.path.isdir(directory), "解析失敗時需要這些檔案追查，不能刪"
+    assert os.path.exists(os.path.join(directory, ".partial-quarter")), "沒標記 = 重跑會沿用舊的"
+    assert downloads == [], "目錄本來就在，第一次不該重新下載"
+
+    # 重跑：標記在 ⇒ 必須重新下載，而不是沿用那份半季
     with pytest.raises(RuntimeError, match="looks partial"):
         crawl.crawl_financials(object(), 2026, 2)
-    assert not os.path.isdir(directory), "半季的下載檔沒被清掉，重跑會吃舊的"
-
-    # --keep-files 仍然保留，但訊息要明講得先刪
-    os.makedirs(directory)
-    open(os.path.join(directory, "2330.html"), "w").close()
-    with pytest.raises(RuntimeError, match="delete it before retrying"):
-        crawl.crawl_financials(object(), 2026, 2, keep_files=True)
-    assert os.path.isdir(directory)
-    shutil.rmtree(directory, ignore_errors=True)
+    assert downloads == [(2026, 2)], "帶標記的目錄沒有觸發重新下載"

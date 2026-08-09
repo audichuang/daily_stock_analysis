@@ -39,7 +39,11 @@ def load_durations(path: Path = DEFAULT_DURATIONS_PATH) -> dict[str, float]:
 
     durations: dict[str, float] = {}
     for test_file, duration in payload["durations"].items():
-        if not isinstance(test_file, str) or not test_file.startswith("tests/"):
+        # 必須接受**每一個** TEST_ROOTS，不是只有 `tests/`。寫死單一前綴的話，
+        # 重新產生時長基準表（會含 market_data/tests 的條目）就會讓分片開機即失敗。
+        if not isinstance(test_file, str) or not test_file.startswith(
+            tuple(f"{root}/" for root in TEST_ROOTS)
+        ):
             raise ValueError(f"Invalid test path in CI duration data: {test_file!r}")
         if not isinstance(duration, (int, float)) or duration <= 0:
             raise ValueError(f"Invalid duration for {test_file}: {duration!r}")

@@ -258,6 +258,11 @@ def crawl_financials(engine, year, season, keep_files=False, min_stocks=1000):
     quarter;Q4 需要同年 Q3 累計在庫才能推導單季損益,缺 Q3 直接失敗而不是
     默默寫入缺 income_sheet 的半套季資料。"""
     directory = os.path.join("data", "financial_statement", f"{year}{season}")
+    partial_marker = os.path.join(directory, ".partial-quarter")
+    # 目錄已存在則沿用——**除非**上次是被判為半季。截止日前抓到的那份不會自己長大，
+    # 沿用它會讓截止日後的重跑再失敗一次，看起來像交易所沒發布。
+    if os.path.isdir(directory) and os.path.exists(partial_marker):
+        shutil.rmtree(directory, ignore_errors=True)
     if not os.path.isdir(directory):
         if year < 2019:
             raise NotImplementedError("僅支援 2019 年(含)以後的 IFRS 財報")
@@ -265,20 +270,15 @@ def crawl_financials(engine, year, season, keep_files=False, min_stocks=1000):
     frames = financial_statement.pack_htmls(year, season, directory)
     parsed = len(frames["balance_sheet"])
     if parsed < min_stocks:
-        # partial quarter 的檔案**沒有追查價值**（只是家數少），留著反而害人：上面
-        # 「目錄已存在則沿用」意味著截止日過後重跑會直接吃這份舊的 525 檔，再失敗一次，
-        # 看起來像 MOPS 沒發布。所以這條路徑一律清掉目錄，讓重跑是真的重下載。
-        # `--keep-files` 仍然尊重，但訊息會明講要先刪。
-        hint = (f"files kept at {directory} — delete it before retrying, "
-                f"otherwise the rerun reuses this partial copy")
-        if not keep_files:
-            shutil.rmtree(directory, ignore_errors=True)
-            if os.path.exists("temp.zip"):
-                os.remove("temp.zip")
-            hint = "downloaded files removed so a rerun re-downloads"
+        # 家數不足有**兩個**成因，從這裡分不出來：截止日前的半季發布，以及解析器
+        # 對不上新版 markup。所以檔案要留著（後者需要它追查），但要標記成半季，
+        # 讓下次重跑重新下載而不是沿用——不標的話，截止日後重跑會再失敗一次。
+        with open(partial_marker, "w", encoding="utf-8") as fh:
+            fh.write(f"parsed={parsed} min_stocks={min_stocks}\n")
         raise RuntimeError(
             f"{year}Q{season}: only {parsed} stocks parsed (<{min_stocks}), "
-            f"quarter looks partial — nothing written, {hint}")
+            f"quarter looks partial or the parser is out of date — nothing written; "
+            f"files kept at {directory} for inspection and marked so a rerun re-downloads")
     table = models.FinancialStatement.__table__
     total = 0
     with engine.begin() as conn:

@@ -162,7 +162,13 @@ def main() -> int:
                     row[_I_TYPE] = want
                     retyped += 1
             else:
-                # 官方清单查无（多为 OTC），只能清掉 Refinitiv 尾巴
+                # 官方清单查无（多为 OTC）：**type 标成 unknown**，而不是留着预设的
+                # `stock`。留 `stock` 会让下游把它当成权威的「不是 ETF」，於是官方
+                # 清单外的真 ETF（Leverage Shares 那批、BLCN/KRMA/QRFT）拿不到 ETF
+                # 式检索。标 unknown 才会退回名称启发式。名字只能清掉 Refinitiv 尾巴。
+                if row[_I_TYPE] != "unknown":
+                    row[_I_TYPE] = "unknown"
+                    retyped += 1
                 cleaned = clean_name(before)
                 if cleaned and cleaned != before:
                     row[_I_NAME] = cleaned

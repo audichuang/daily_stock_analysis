@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from inspect import getattr_static
 from math import isfinite
 from typing import Optional, Dict, Any, List
@@ -31,7 +31,12 @@ from src.llm.backend_registry import (
     resolve_generation_fallback_backend_id,
 )
 from src.llm.generation_backend import GenerationError
-from src.core.trading_calendar import get_effective_trading_date
+from src.core.trading_calendar import (
+    MarketPhase,
+    get_effective_trading_date,
+    get_market_now,
+    infer_market_phase,
+)
 from src.schemas.market_light import MARKET_LIGHT_REGIONS, MarketLightSnapshot
 from src.services.run_diagnostics import record_llm_run, record_llm_run_started
 from src.services.intelligence_service import IntelligenceService
@@ -574,6 +579,30 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             }
         return mapping[mood_key]
 
+    def _resolve_overview_date(self) -> date:
+        """复盘该标哪一天——**跟着指数报价实际属于哪一场**，不是伺服器挂钟。
+
+        两边都会错，而且方向相反：
+        - 用伺服器（台北）日期：台北时间任何时刻，美股最近收完的那场都是纽约的前一天，
+          所以美股复盘永远比它自己的资料早一天，而这个日期一路进报告标题、
+          `payload['date']`、`market_light.trade_date` 与历史纪录。
+        - 一律用「最近一场**已收盘**的交易日」：台股盘中（周一 09:00~13:29）跑复盘时，
+          指数取到的是**当天正在形成**的那根，日期却标成上周五 ⇒ 把周一的价格存成
+          周五的历史，而 `daily_market_context` 直接信这个日期。
+
+        所以看盘势：开盘之後（盘中／午休／收盘集合竞价／收盘後）资料就是当天这一场，
+        标当天；开盘前与非交易日才回到最近一场已收盘的交易日。
+        """
+        phase = infer_market_phase(self.region)
+        if phase in {
+            MarketPhase.INTRADAY,
+            MarketPhase.LUNCH_BREAK,
+            MarketPhase.CLOSING_AUCTION,
+            MarketPhase.POSTMARKET,
+        }:
+            return get_market_now(self.region).date()
+        return get_effective_trading_date(self.region)
+
     def get_market_overview(self) -> MarketOverview:
         """
         获取市场概览数据
@@ -581,12 +610,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         Returns:
             MarketOverview: 市场概览数据对象
         """
-        # 用**该市场自己**最近一场已收盘的交易日，而不是伺服器（台北）的挂钟日期。
-        # 台北时间任何时刻，美股最近收完的那场都是纽约的前一天：09:00 跑复盘会把周一
-        # 收盘的资料标成周二，而这个日期一路进报告标题、`payload['date']`、
-        # `market_light.trade_date` 与历史纪录 ⇒ 之後回看会以为周二已经复过盘。
-        # 这也让复盘和 pipeline 其他地方（checkpoint／resume）用的是同一个日期定义。
-        today = get_effective_trading_date(self.region).strftime('%Y-%m-%d')
+        today = self._resolve_overview_date().strftime('%Y-%m-%d')
         overview = MarketOverview(date=today)
         
         # 1. 获取主要指数行情（按 region 切换 A 股/美股）
@@ -1753,6 +1777,12 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         # 指数行情信息（简洁格式，不用emoji）
         indices_text = ""
         for idx in overview.indices:
+            # 这一段是**喂给 LLM 的那份**，跟 `_build_indices_block`（报告表格）是两个出口。
+            # 之前只修了表格：这里的裸 `:.2f` 对 NaN 会写出 `nan (-nan%)`，而模型看不出
+            # 那是缺资料，会照着解读。缺值直接不列这一行——少一档指数是诚实的降级，
+            # 印一个 `nan` 不是。
+            if _is_missing_number(idx.current) or _is_missing_number(idx.change_pct):
+                continue
             direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
             indices_text += f"- {idx.name}: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
         
@@ -2106,6 +2136,10 @@ Output the report content directly, no extra commentary.
             ),
             None,
         )
+        # NaN 会一路走完下面每个 `>` 比较（全为 False）落到 else，被判成「明显下跌」
+        # ——一个凭空的方向判断。缺读数就当没有情绪指数。
+        if mood_index is not None and _is_missing_number(mood_index.change_pct):
+            mood_index = None
         if mood_index:
             if mood_index.change_pct > 1:
                 market_mood = self._get_market_mood_text("strong_up", template_language)
