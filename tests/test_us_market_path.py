@@ -30,6 +30,18 @@ class TestUsSymbolsSurviveEveryLayer:
         assert fetcher._convert_stock_code("hk00700") == "0700.HK"
         assert fetcher._convert_stock_code("600519") == "600519.SS"
 
+    def test_both_yfinance_symbol_converters_agree(self):
+        """有**兩份** yfinance 代碼轉換：行情 fetcher 一份，基本面 adapter 一份
+        （它的 docstring 自己說是「lightweight inline reproduction」）。只修一份的話
+        行情有了、基本面還是空的——實測就是這樣：報告出得來，估值那欄全是 N/A。
+        """
+        from data_provider.yfinance_fetcher import YfinanceFetcher
+        from data_provider.yfinance_fundamental_adapter import _convert_to_yf_symbol
+
+        fetcher = YfinanceFetcher()
+        for code in ("AAPL", "BRK.B", "BF.B", "2330.TW", "0700.HK", "HK00700"):
+            assert fetcher._convert_stock_code(code) == _convert_to_yf_symbol(code), code
+
     def test_exchange_suffix_is_not_mistaken_for_a_class_share(self):
         """`.US` 是交易所後綴不是類別股——認成類別股會造出 Yahoo 不懂的 `AAPL-US`。"""
         from data_provider import is_us_stock_code

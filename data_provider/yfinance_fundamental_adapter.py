@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from .us_index_mapping import is_us_stock_code
+
 logger = logging.getLogger(__name__)
 
 
@@ -129,6 +131,12 @@ def _convert_to_yf_symbol(stock_code: str) -> str:
     if code.startswith("HK"):
         digits = code[2:].lstrip("0") or "0"
         return f"{digits.zfill(4)}.HK"
+    # 美股类别股：Yahoo 用 `BRK-B`，传 `BRK.B` 回「possibly delisted」而拿不到任何
+    # 基本面。这一段必须在下面的 `"." in code` 直通之前——那一行会把 `BRK.B` 原样送出。
+    # 用 `is_us_stock_code` 判定而不是看有没有点：`2330.TW`／`600519.SS`／`0700.HK`
+    # 都含点但都不是美股，必须原样通过。
+    if is_us_stock_code(code):
+        return code.replace(".", "-")
     if "." in code:
         return code
     # Assume US ticker by default for non-HK / non-CN callers
