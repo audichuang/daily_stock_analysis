@@ -146,6 +146,7 @@ class YfinanceFundamentalAdapter:
     def get_fundamental_bundle(self, stock_code: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "status": "not_supported",
+            "valuation": {},
             "growth": {},
             "earnings": {},
             "institution": {},
@@ -182,6 +183,21 @@ class YfinanceFundamentalAdapter:
         # renderer can suffix per-block currency tags correctly.
         financial_currency = str(info.get("financialCurrency") or info.get("currency") or "").upper() or None
         dividend_currency = str(info.get("currency") or info.get("financialCurrency") or "").upper() or None
+
+        # ---------------- valuation block ----------------
+        # 同一个 `info` 已经抓好了，多读两个栏位是零额外请求。
+        # 为什麽这里也要有一份：估值本来只从 realtime quote 拿，而 quote 的 yfinance 路径
+        # **只在本地查不到股票名称时**才去抓 `ticker.info`（为了保住看板的零网络快路径）。
+        # 本 fork 补齐了美股名称索引之後，名称一律本地命中 ⇒ `ticker_info` 恒为空 ⇒
+        # 美股的 pe/pb **全部变成 None**，而 valuation 区块照样回报 status=ok。
+        # 索引补得越好，估值资料掉得越多——这是个会随时间恶化的静默降级。
+        valuation_payload: Dict[str, Any] = {
+            "pe_ratio": _safe_float(info.get("trailingPE")),
+            "pb_ratio": _safe_float(info.get("priceToBook")),
+        }
+        if any(v is not None for v in valuation_payload.values()):
+            result["valuation"] = valuation_payload
+            result["source_chain"].append("valuation:yfinance.info")
 
         # ---------------- growth block ----------------
         growth_payload: Dict[str, Any] = {

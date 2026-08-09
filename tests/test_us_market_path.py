@@ -200,6 +200,63 @@ class TestVixNeverEntersTheDirectionalAverage:
         assert "average major-index change -2.25%" in en, en
 
 
+class TestUsValuationSurvivesTheNameFastPath:
+    """美股的 pe/pb 以前恆為 None，而 valuation 區塊照樣回報 status=ok。
+
+    成因是兩個最佳化互撞：yfinance 的行情路徑**只在本地查不到股票名稱時**才抓
+    `ticker.info`（為了保住看板的零網路快路徑），而本 fork 補齊了美股名稱索引
+    ⇒ 名稱一律本地命中 ⇒ `ticker_info` 恆為空 ⇒ 估值跟著消失。索引補得越好、
+    估值掉得越多，而且下游看到的是「ok」。
+    """
+
+    def test_bundle_exposes_valuation_from_the_info_it_already_fetched(self):
+        from data_provider.yfinance_fundamental_adapter import YfinanceFundamentalAdapter
+
+        info = {"trailingPE": 35.97, "priceToBook": 42.57, "currency": "USD"}
+        ticker = MagicMock()
+        ticker.get_info.return_value = info
+        with patch("yfinance.Ticker", return_value=ticker):
+            bundle = YfinanceFundamentalAdapter().get_fundamental_bundle("AAPL")
+
+        assert bundle["valuation"] == {"pe_ratio": 35.97, "pb_ratio": 42.57}
+        assert "valuation:yfinance.info" in bundle["source_chain"]
+
+    def test_missing_quote_ratios_are_backfilled_from_the_bundle(self):
+        from types import SimpleNamespace
+
+        from data_provider import DataFetcherManager
+
+        manager = DataFetcherManager(fetchers=[])
+        cfg = SimpleNamespace(
+            enable_fundamental_pipeline=True,
+            fundamental_cache_ttl_seconds=0,
+            fundamental_stage_timeout_seconds=2.0,
+            fundamental_fetch_timeout_seconds=1.5,
+            fundamental_retry_max=1,
+        )
+        # 這就是實測到的形狀：市值有、比率全空
+        quote = SimpleNamespace(
+            pe_ratio=None, pb_ratio=None, total_mv=4.57e12, circ_mv=None,
+            source=SimpleNamespace(value="fallback"),
+        )
+        bundle = {
+            "status": "partial",
+            "valuation": {"pe_ratio": 35.97, "pb_ratio": 42.57},
+            "growth": {}, "earnings": {}, "belong_boards": [],
+            "source_chain": ["valuation:yfinance.info"], "errors": [],
+        }
+        with patch("src.config.get_config", return_value=cfg), \
+             patch.object(manager, "get_realtime_quote", return_value=quote), \
+             patch("data_provider.yfinance_fundamental_adapter."
+                   "YfinanceFundamentalAdapter.get_fundamental_bundle", return_value=bundle):
+            ctx = manager.get_fundamental_context("AAPL")
+
+        assert ctx["valuation"]["data"]["pe_ratio"] == 35.97
+        assert ctx["valuation"]["data"]["pb_ratio"] == 42.57
+        providers = [entry.get("provider") for entry in ctx["valuation"]["source_chain"]]
+        assert "yfinance_fundamental_bundle" in providers, providers
+
+
 class TestRecapIsDatedByTheMarketNotTheServerClock:
     def test_us_recap_uses_the_new_york_session_not_the_taipei_date(self):
         """台北時間任何時刻，美股最近收完的那場都是紐約的前一天。"""

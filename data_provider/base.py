@@ -3108,6 +3108,42 @@ class DataFetcherManager:
         earnings_payload = bundle_payload.get("earnings", {}) if isinstance(bundle_payload.get("earnings"), dict) else {}
         belong_boards = bundle_payload.get("belong_boards") if isinstance(bundle_payload.get("belong_boards"), list) else []
 
+        # 估值兜底：realtime quote 的 yfinance 路径只在本地查不到股票名称时才抓
+        # `ticker.info`，所以名称索引齐全的市场（本 fork 的美股）拿不到 pe/pb。bundle
+        # 这一步的 `info` 已经抓过了，直接补进来是零额外请求——与上面 tw 走 TWSE 补
+        # pe/pb 是同一个形状。补完必须**重算 status**，否则会从「说 ok 其实是空的」
+        # 换成「资料齐了却还标 partial」，一样是谎。
+        bundle_valuation = (
+            bundle_payload.get("valuation")
+            if isinstance(bundle_payload.get("valuation"), dict)
+            else {}
+        )
+        valuation_filled_from_bundle = False
+        for field in ("pe_ratio", "pb_ratio"):
+            if valuation_payload.get(field) is None and bundle_valuation.get(field) is not None:
+                valuation_payload[field] = bundle_valuation[field]
+                valuation_filled_from_bundle = True
+        if valuation_filled_from_bundle:
+            valuation_status = self._infer_block_status(valuation_payload, "partial")
+            valuation_source_entries.append(
+                {
+                    "provider": "yfinance_fundamental_bundle",
+                    "result": valuation_status,
+                    "duration_ms": bundle_ms,
+                }
+            )
+            result_ctx["valuation"] = self._build_fundamental_block(
+                valuation_status,
+                valuation_payload,
+                self._normalize_source_chain(
+                    valuation_source_entries,
+                    "realtime_quote",
+                    valuation_status,
+                    valuation_ms,
+                ),
+                [valuation_err] if valuation_err else [],
+            )
+
         # 台股(.TW/.TWO)：一律附上 TWSE/TPEx 免金钥月营收（monthly_revenue / monthly_revenue_yoy /
         # revenue_month）——月营收是台股最受重视的即时基本面指标，即使 yfinance 已有年度成长也值得并列。
         # 另用月营收 YoY 兜底 yfinance 缺失的 revenue_yoy。走 _run_with_retry 受 stage 预算约束、fail-open。
