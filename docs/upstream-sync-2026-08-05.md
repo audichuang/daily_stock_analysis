@@ -303,3 +303,52 @@
   用腳本對三張表的 key 集合做差集比逐個看 tsc 錯誤快。
 - `.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` 必須保持 `false`。
 - 合併後 `uv pip install -r requirements.txt` 刷新 venv。
+
+---
+
+# 追加同步：v3.29 → `ed848da6`（2026-08-09）
+
+## 範圍
+
+`a8f084bf..ed848da6`，5 個 commit：
+
+| commit | 內容 |
+| --- | --- |
+| `8052d1a0` | ci: 選擇性測試門檻（`changes` job 決定 backend 要不要跑） |
+| `4dda5d71` | feat: LLM channel 顯式 Responses API 路由（`src/config.py` +315 行） |
+| `03dd26ac` | ci: backend 測試分成 3 個 shard 平行跑（新增 `scripts/ci_test_shard.py` 與時長基準表） |
+| `ae19329d` | fix: watchlist 明細與 workspace 狀態（純前端） |
+| `ed848da6` | feat: Agent Chat 的 skill 選擇按 session 持久化 |
+
+## 衝突與裁決（2 處）
+
+- **`.github/workflows/ci.yml`** —— 上游把 `backend-tests` 改成 `matrix.shard [1,2,3]` 並掛上
+  `needs: [changes]` 閘門；本 fork 在同一個 job 上掛了 ephemeral Postgres service 與
+  `alembic upgrade head`（`market_data` 的 DB 測試要它）。**兩邊都要**：採上游的分片結構，
+  把 Postgres service、`DATABASE_URL` env 與 migrate step 疊回去。migrate step **不加**
+  `if: matrix.shard == 1`——DB 測試散在三個 shard 裡。
+- **`tests/test_intelligence_service.py::test_fetch_enabled_sources_is_fail_open`** ——
+  上游改成 patch `_validate_url` + `requests.get`；本 fork 早先改成 patch
+  `_fetch_feed_entries`（完全不碰 HTTP/DNS）。**取 fork 版**：上游自己的註解說目的是避免
+  耦合到 process-global 的 DNS patching，patch `_fetch_feed_entries` 把這件事做得更徹底。
+
+## 合併後修掉的兩個靜默降級
+
+兩個都不會報錯、不會變紅，只會少跑東西——正是上次備忘寫的那個形狀。
+
+- **`setup.cfg` 的 `testpaths` 從 `.` 被改成 `tests`**（隨上游分片 PR 進來），
+  會把 `market_data/tests/` 的 **13 個檔案**整組排除在離線套件外。改成
+  `testpaths = tests market_data/tests`。
+- **`scripts/ci_test_shard.py::discover_test_files` 把 `tests` 寫死**，同一個洞。
+  抽成 `TEST_ROOTS` 常數，並新增
+  `tests/test_ci_test_shard.py::test_shard_roots_match_the_pytest_testpaths_contract`
+  ——直接讀 `setup.cfg` 的 `testpaths` 做差集，下次上游再動就會紅。
+- `.github/ci-test-durations.json` 列了 `tests/test_discord_platform.py`，本 fork 在
+  `26b373c2` 連同 `bot/platforms/discord.py`（不在 `ALL_PLATFORMS` 的死代碼）一起刪了。
+  移除該筆；`src/notification_sender/discord_sender.py`（通知渠道）不受影響。
+
+## 下次同步備忘（追加）
+
+- **上游的 CI 重構會動到「要跑哪些測試」的定義**，而少跑測試看起來跟全綠一模一樣。
+  合併後固定檢查三處：`setup.cfg` 的 `testpaths`、分片腳本的 root 列表、
+  `ci.yml` 裡任何新的 `if:` 閘門有沒有把 fork 專屬的 step 一起關掉。

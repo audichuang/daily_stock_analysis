@@ -2124,9 +2124,15 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertTrue(ok)
         mock_post.assert_called_once()
         
+    @mock.patch("src.notification_sender.feishu_sender.time.sleep")
     @mock.patch("src.notification.get_config")
     @mock.patch("requests.post")
-    def test_send_to_feishu_via_notification_service_requires_chunking(self, mock_post: mock.MagicMock, mock_get_config: mock.MagicMock):
+    def test_send_to_feishu_via_notification_service_requires_chunking(
+        self,
+        mock_post: mock.MagicMock,
+        mock_get_config: mock.MagicMock,
+        mock_sleep: mock.MagicMock,
+    ):
         cfg = _make_config(feishu_webhook_url="https://feishu.example", feishu_max_bytes=2000)
         mock_get_config.return_value = cfg
         mock_post.return_value = _make_response(200, {"code": 0})
@@ -2138,6 +2144,7 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertAlmostEqual(mock_post.call_count, 4, delta=1)
+        self.assertEqual(mock_sleep.call_count, mock_post.call_count - 1)
 
     @mock.patch("src.notification.get_config")
     @mock.patch("requests.post")
@@ -2420,9 +2427,15 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertTrue(ok)
         mock_post.assert_called_once()
 
+    @mock.patch("src.notification_sender.wechat_sender.time.sleep")
     @mock.patch("src.notification.get_config")
     @mock.patch("requests.post")
-    def test_send_to_wechat_via_notification_service_requires_chunking(self, mock_post: mock.MagicMock, mock_get_config: mock.MagicMock):
+    def test_send_to_wechat_via_notification_service_requires_chunking(
+        self,
+        mock_post: mock.MagicMock,
+        mock_get_config: mock.MagicMock,
+        mock_sleep: mock.MagicMock,
+    ):
         cfg = _make_config(wechat_webhook_url="https://wechat.example", wechat_max_bytes=2000)
         mock_get_config.return_value = cfg
         mock_post.return_value = _make_response(200, {"errcode": 0})
@@ -2434,6 +2447,7 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertAlmostEqual(mock_post.call_count, 4, delta=1)
+        self.assertEqual(mock_sleep.call_count, mock_post.call_count - 1)
 
 
 if __name__ == "__main__":

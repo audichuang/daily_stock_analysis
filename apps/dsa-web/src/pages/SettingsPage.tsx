@@ -133,7 +133,7 @@ const GENERATION_BACKEND_STATUS_KEYS = new Set([
   'ANSPIRE_LLM_MODEL',
   'ANSPIRE_API_KEYS',
 ]);
-const LLM_CHANNEL_STATUS_KEY_PATTERN = /^LLM_[A-Z0-9_]+_(PROTOCOL|BASE_URL|API_KEY|API_KEYS|MODELS|EXTRA_HEADERS|ENABLED)$/;
+const LLM_CHANNEL_STATUS_KEY_PATTERN = /^LLM_[A-Z0-9_]+_(PROTOCOL|API_SURFACE|BASE_URL|API_KEY|API_KEYS|MODELS|EXTRA_HEADERS|ENABLED)$/;
 const AGENT_BACKEND_STATUS_KEYS = new Set([
   'AGENT_BACKEND',
   'AGENT_GENERATION_BACKEND',
@@ -915,6 +915,7 @@ const SettingsPage: React.FC = () => {
     refreshAfterExternalSave,
     configVersion,
     maskToken,
+    llmModelProviders,
   } = useSystemConfig();
 
   const currentChangedItems = getChangedItems();
@@ -1072,7 +1073,7 @@ const SettingsPage: React.FC = () => {
   // UI rendering rule only: hide channel-managed and legacy provider-specific
   // LLM keys from generic fields when channel mode is active. This does not
   // alter save/refresh payloads or config migration/rollback behavior.
-  const LLM_CHANNEL_KEY_RE = /^LLM_[A-Z0-9_]+_(PROTOCOL|BASE_URL|API_KEY|API_KEYS|MODELS|EXTRA_HEADERS|ENABLED)$/;
+  const LLM_CHANNEL_KEY_RE = /^LLM_[A-Z0-9_]+_(PROTOCOL|API_SURFACE|BASE_URL|API_KEY|API_KEYS|MODELS|EXTRA_HEADERS|ENABLED)$/;
   const AI_MODEL_HIDDEN_KEYS = new Set([
     'LLM_CHANNELS',
     'LLM_TEMPERATURE',
@@ -1808,6 +1809,7 @@ const SettingsPage: React.FC = () => {
                   items={rawActiveItems}
                   configVersion={configVersion}
                   maskToken={maskToken}
+                  modelProviderPrefixes={llmModelProviders}
                   onDraftItemsChange={handleLlmChannelDraftItemsChange}
                   onSaved={async (updatedItems) => {
                     setLlmChannelDraftItems([]);
