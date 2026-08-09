@@ -219,7 +219,10 @@ fetcher = YfinanceFetcher()
 test_cases = [
     ("AAPL", "AAPL", "美股"),
     ("tsla", "TSLA", "美股小写"),
-    ("BRK.B", "BRK.B", "美股特殊"),
+    # Yahoo 用连字号写类别股。这一格原本期望 `BRK.B -> BRK.B`，也就是把 bug 钉成契约：
+    # 传点号形式给 Yahoo 会回「possibly delisted」＋0 笔，而 0 笔在上游各层都被当成
+    # 正常降级 ⇒ 整档股票静默消失。见 tests/test_us_market_path.py。
+    ("BRK.B", "BRK-B", "美股类别股"),
     ("hk00700", "0700.HK", "港股"),
     ("HK09988", "9988.HK", "港股大写"),
     ("600519", "600519.SS", "A股沪市"),
