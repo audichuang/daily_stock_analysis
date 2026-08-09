@@ -237,8 +237,13 @@
   —— 無讀數快照不得進 result 或 structured payload、非有限值在建構點就清掉、
   三大法人整組作廢、payload 必須能過 `JSONResponse`（舊版在此拋 ValueError）。
 - `tests/test_daily_market_context.py::TestHistoricalMarketLightWithoutReading`（4 項）
-  —— 既有歷史紀錄裡的預設 50 快照不得被讀成風險訊號；缺 `dimensions` 的更舊 payload
-  視為無讀數；真讀數仍照常產出。
+  —— 既有歷史紀錄裡「`dimensions` 全部 unavailable」的預設 50 快照不得被讀成風險訊號；
+  **缺 `dimensions` 的更舊 payload 視為有讀數**（見上方理由）；真讀數仍照常產出。
+- `tests/test_market_analyzer_generate_text.py::TestNonFiniteValuesOnTheRealProviderPath`（5 項）
+  —— **刻意複製 provider 的「先建空物件、再逐欄賦值」形狀**，因為第一版的清洗放在
+  `__post_init__`，用 kwargs 建構的測試全綠而真實路徑完全沒保護。涵蓋 payload 可過
+  `JSONResponse`、四個報告出口都不印 `nan`/`inf`、指數表格不因缺失值崩潰、
+  缺失成交額不偽裝成 0、正常值不受影響。五個變異各自會紅。
 
 ## 驗證
 

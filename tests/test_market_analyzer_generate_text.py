@@ -3883,33 +3883,35 @@ class TestMarketLightReachesEveryConsumer:
         assert result.market_light_snapshot is None
         assert "market_light" not in result.structured_payload
 
-    def test_non_finite_values_are_cleaned_at_construction(self):
-        """NaN/±inf 在**建构点**就该消失，而不是靠每个消费端各自防守。
-
-        它们不只污染评分（NaN 因比较恒假而落在 min() 上界得 100），还会让
-        `JSONResponse` 抛 `Out of range float values are not JSON compliant`
-        ——整个 API 回应 500，不是显示瑕疵。
-        """
-        from src.market_analyzer import MarketIndex
-
-        for bad in (float("nan"), float("inf"), float("-inf")):
-            index = MarketIndex(code="TAIEX", name="加權指數", current=24000.0,
-                                change=500.0, change_pct=bad)
-            assert index.change_pct is None, f"{bad!r} 应在建构时被压成 None"
-
-            overview = self._overview(total_amount=bad)
-            assert overview.total_amount == 0.0, f"total_amount={bad!r} 应压成 0"
-
     def test_non_finite_institutional_value_voids_the_whole_group(self):
         """三大法人是一组：任一格非有限就整组作废。
 
         只丢掉坏的那格会让「外资 -104 / 投信 +0」看起来像投信真的没动作。
+        断言在**渲染与 payload**上，不在 dataclass 栏位上——provider 是建构之後才
+        逐栏赋值的，栏位层的清洗根本跑不到（见 `TestNonFiniteValuesOnTheRealProviderPath`）。
         """
-        overview = self._overview(institutional_net={
+        from src.market_analyzer import MarketAnalyzer
+
+        analyzer = self._analyzer()
+        overview = self._overview(
+            up_count=350, down_count=550, flat_count=80, total_amount=3400.0,
+        )
+        overview.institutional_net = {
             "foreign_net": -104.0, "trust_net": float("nan"),
             "dealer_net": -193.0, "total_net": -1.0,
-        })
-        assert overview.institutional_net is None
+        }
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"):
+            stats = MarketAnalyzer._build_stats_block(analyzer, overview)
+            payload = MarketAnalyzer.build_market_review_payload(
+                analyzer, overview, [], "# 台股大盤複盤\n\n正文"
+            )
+
+        assert "三大法人" not in stats, "坏了一格就整组不渲染，不能只印能印的那几格"
+        assert "-104" not in stats
+        assert "institutional_net" not in payload.get("breadth", {})
 
     def test_non_finite_never_reaches_the_payload_or_json(self):
         """端到端：非有限值不得出现在 structured payload，且 payload 必须可序列化。"""
@@ -3941,3 +3943,150 @@ class TestMarketLightReachesEveryConsumer:
         light = payload.get("market_light")
         assert light is not None, "breadth 与 limit 仍可用，应该还有读数"
         assert "nan" not in " ".join(light["reasons"]).lower(), "reason 文案不得出现 +nan%"
+
+
+class TestNonFiniteValuesOnTheRealProviderPath:
+    """非有限值必须走**provider 的真实赋值形状**来验，不是用 kwargs 建构。
+
+    `get_market_overview` 先建一个空的 `MarketOverview`，再把 provider 结果逐栏写回
+    （`total_amount`、三大法人、板块／概念排行都是建构**之後**才赋值）。所以
+    `__post_init__` 层的清洗根本跑不到——第一版就是这样：测试用 kwargs 建构，全绿，
+    真实路径完全没保护。这组测试刻意复制那个形状。
+
+    非有限值有两种不同的破坏方式，都要盯：
+    - `JSONResponse` 对 NaN 抛 `Out of range float values are not JSON compliant`
+      （整个 API 回应 500）
+    - 格式化写出 `nan`／`+nan%`，评分时 NaN 因比较恒假而落在 `min()` 上界得满分
+      ——两者看起来都像真读数
+    """
+
+    @staticmethod
+    def _analyzer():
+        """跟本檔既有 helper 同一套建构方式，但用台股 profile。"""
+        from src.core.market_profile import CN_PROFILE
+        from src.core.market_strategy import get_market_strategy_blueprint
+        from src.market_analyzer import MarketAnalyzer
+
+        cfg = MagicMock()
+        cfg.market_review_region = "tw"
+        cfg.market_review_color_scheme = "green_up"
+        cfg.report_language = "zh"
+
+        ma = MarketAnalyzer.__new__(MarketAnalyzer)
+        ma.analyzer = MagicMock()
+        ma.config = cfg
+        ma.profile = CN_PROFILE          # 有完整 breadth/limit/ranking 能力
+        ma.strategy = get_market_strategy_blueprint("cn")
+        ma.region = "tw"
+        return ma
+
+    @staticmethod
+    def _overview_assigned_after_construction(**assignments):
+        """复制 `get_market_overview` 的形状：先建空的，再逐栏赋值。"""
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        overview = MarketOverview(date="2026-08-05")
+        overview.up_count, overview.down_count, overview.flat_count = 350, 550, 80
+        overview.limit_up_count, overview.limit_down_count = 43, 355
+        overview.total_amount = 3400.0
+        overview.indices = [MarketIndex(code="TAIEX", name="加權指數", current=24000.0,
+                                        change=500.0, change_pct=2.1)]
+        for name, value in assignments.items():
+            setattr(overview, name, value)
+        return overview
+
+    @staticmethod
+    def _bad_index(**kw):
+        from src.market_analyzer import MarketIndex
+
+        base = dict(code="TAIEX", name="加權指數", current=24000.0, change=500.0, change_pct=2.1)
+        base.update(kw)
+        return [MarketIndex(**base)]
+
+    CASES = {
+        "total_amount 非有限": {"total_amount": float("nan")},
+        "成交额 +inf": {"total_amount": float("inf")},
+        "法人单栏 -inf": {"institutional_net": {
+            "foreign_net": -104.0, "trust_net": float("-inf"),
+            "dealer_net": -193.0, "total_net": -1.0}},
+        "板块排行 +inf": {"top_sectors": [{"name": "半導體", "change_pct": float("inf")}]},
+        "概念排行 NaN": {"top_concepts": [{"name": "AI", "change_pct": float("nan")}]},
+    }
+
+    def _render_all(self, overview):
+        """跑所有会吃到这些数值的出口，回传 (payload, 各区块文字)。"""
+        from src.market_analyzer import MarketAnalyzer
+
+        analyzer = self._analyzer()
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"):
+            blocks = {
+                "indices": MarketAnalyzer._build_indices_block(analyzer, overview),
+                "sector": MarketAnalyzer._build_sector_block(analyzer, overview),
+                "stats": MarketAnalyzer._build_stats_block(analyzer, overview),
+                "template": MarketAnalyzer._generate_template_review(analyzer, overview, []),
+            }
+            payload = MarketAnalyzer.build_market_review_payload(
+                analyzer, overview, [], "# 台股大盤複盤\n\n正文"
+            )
+        return payload, blocks
+
+    def test_payload_is_json_serialisable_for_every_non_finite_shape(self):
+        from fastapi.responses import JSONResponse
+
+        for label, assignments in self.CASES.items():
+            overview = self._overview_assigned_after_construction(**assignments)
+            payload, _ = self._render_all(overview)
+            # 旧版在这里抛 ValueError: Out of range float values are not JSON compliant
+            JSONResponse(content=payload)
+
+            def assert_finite(node, path=""):
+                if isinstance(node, dict):
+                    for key, item in node.items():
+                        assert_finite(item, f"{path}.{key}")
+                elif isinstance(node, list):
+                    for i, item in enumerate(node):
+                        assert_finite(item, f"{path}[{i}]")
+                elif isinstance(node, float):
+                    assert node == node and node not in (float("inf"), float("-inf")), \
+                        f"{label}: payload{path} 仍是非有限值"
+
+            assert_finite(payload)
+
+    def test_no_report_path_prints_nan_or_crashes(self):
+        for label, assignments in self.CASES.items():
+            overview = self._overview_assigned_after_construction(**assignments)
+            _, blocks = self._render_all(overview)   # 抛异常就是失败
+            for name, text in blocks.items():
+                assert "nan" not in text.lower(), f"{label}: {name} 区块写出了 nan"
+                assert "inf" not in text.lower().replace("info", ""), \
+                    f"{label}: {name} 区块写出了 inf"
+
+    def test_non_finite_index_does_not_crash_the_index_table(self):
+        """`None` 会让 `:.2f` 抛 TypeError、`>` 抛 TypeError——比 NaN 更糟。
+
+        所以栏位本身不改型别，改在格式化与可用性判断上认得缺失值。
+        """
+        for kw in ({"current": float("nan")}, {"change_pct": float("nan")},
+                   {"change_pct": float("inf")}, {"amplitude": float("nan")}):
+            overview = self._overview_assigned_after_construction(indices=self._bad_index(**kw))
+            _, blocks = self._render_all(overview)
+            assert "nan" not in blocks["indices"].lower()
+            assert "N/A" in blocks["indices"] or "⚪" in blocks["indices"]
+
+    def test_missing_turnover_is_not_reported_as_zero(self):
+        """缺失的成交额不得印成 `0 亿`——0 是平盘，是一个有意义的读数。"""
+        overview = self._overview_assigned_after_construction(total_amount=float("nan"))
+        _, blocks = self._render_all(overview)
+
+        assert "两市成交额 | 0 亿" not in blocks["stats"]
+        assert "两市成交额" not in blocks["stats"], "缺失时整列不该出现"
+
+    def test_normal_values_are_untouched(self):
+        overview = self._overview_assigned_after_construction()
+        payload, blocks = self._render_all(overview)
+
+        assert payload["breadth"]["total_amount"] == 3400.0
+        assert "两市成交额 | 3400 亿" in blocks["stats"]
+        assert "+2.10%" in blocks["indices"]

@@ -54,26 +54,53 @@ _CHINESE_SECTION_PATTERNS = {
 }
 
 
-_NUMERIC_FIELDS_TO_SANITIZE = (
-    "current", "change", "change_pct", "open", "high", "low",
-    "prev_close", "volume", "amount", "amplitude",
-)
+def _is_missing_number(value: Any) -> bool:
+    """`value` 是不是「缺失的数字」——None 或非有限值。
 
-
-def _finite_or_none(value: Any) -> Any:
-    """把 NaN／±inf 压成 None；其余原样返回。
-
-    非有限值进来的后果不是显示瑕疵，是**整个 API 回应 500**：
-    `JSONResponse` 对 NaN 抛 `Out of range float values are not JSON compliant`。
-    在此之前它还会先污染评分（NaN 因比较恒假而落在 `min()` 上界得 100 分）与
-    reason 文案（`+nan%`），而这些看起来都像真读数。
-
-    压成 None 而不是 0.0：0 是一个**有意义的读数**（平盘），None 才是「没有资料」，
-    下游的 `is not None` 检查也才拦得住。
+    NaN 与 ±inf 必须和 None 同等对待，因为它们在两个地方各有不同的破坏方式：
+    评分时 NaN 因比较恒假而落在 `min()` 的上界得满分，格式化时 `f"{nan:.0f}"`
+    印出 `nan`——两者看起来都像真读数。**注意 NaN 是 truthy**，所以 `bool(x)`
+    这类可用性判断挡不住它，必须显式问。
     """
+    if value is None:
+        return True
+    return isinstance(value, float) and not isfinite(value)
+
+
+def _scrub_non_finite(value: Any) -> Any:
+    """递归把结构里的 NaN／±inf 换成 None，供**序列化边界**使用。
+
+    这是非有限值真正的汇流点：`MarketOverview` 是先建空物件、再由 provider
+    逐栏赋值（`get_market_overview` 里 `total_amount`、法人、板块／概念排行都是
+    建构**之后**才写入），所以 `__post_init__` 拦不到；而把栏位本身改成 None 又会
+    让宣告为 float 的下游在 `>` 比较与 `:.2f` 格式化上抛 TypeError——比原本的
+    NaN 更糟。
+
+    在 payload 这一层清洗则两个问题都没有：dict 里的 None 就是 JSON null，
+    而且不管哪个栏位、什么时候被赋值、来自哪个 provider，都会经过这里。
+    没有它，`JSONResponse` 会抛 `Out of range float values are not JSON compliant`
+    ——整个 API 回应 500。
+    """
+    if isinstance(value, dict):
+        return {key: _scrub_non_finite(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_non_finite(item) for item in value]
     if isinstance(value, float) and not isfinite(value):
         return None
     return value
+
+
+def _has_institutional_reading(overview: "MarketOverview") -> bool:
+    """三大法人是**一组**读数：任一格缺失就整组作废。
+
+    只渲染能渲染的那几格会把「投信资料坏了」显示成「投信 +0」——一个看起来像
+    「投信今天没动作」的真读数。四个渲染出口（zh 表格列／en Breadth 行／中英两版
+    prompt）共用这一个判定，避免逐处补而漏。
+    """
+    values = getattr(overview, "institutional_net", None)
+    if not isinstance(values, dict) or not values:
+        return False
+    return all(not _is_missing_number(value) for value in values.values())
 
 
 @dataclass
@@ -91,13 +118,6 @@ class MarketIndex:
     volume: float = 0.0          # 成交量（手）
     amount: float = 0.0          # 成交额（元）
     amplitude: float = 0.0       # 振幅(%)
-
-    def __post_init__(self) -> None:
-        # 在**建构点**清掉非有限值，而不是在每个消费端各自防守——评分器、reason
-        # 文案、structured payload、to_dict() 是四个不同的出口，逐个补必然漏。
-        # 每条 provider 路径都会经过这里。
-        for name in _NUMERIC_FIELDS_TO_SANITIZE:
-            setattr(self, name, _finite_or_none(getattr(self, name)))
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -136,22 +156,6 @@ class MarketOverview:
     bottom_sectors: List[Dict] = field(default_factory=list)  # 跌幅前5板块
     top_concepts: List[Dict] = field(default_factory=list)    # 涨幅前5概念
     bottom_concepts: List[Dict] = field(default_factory=list) # 跌幅前5概念
-
-    def __post_init__(self) -> None:
-        # 同 MarketIndex：非有限值在建构点就清掉。`total_amount` 压成 0.0 而不是
-        # None，因为它是必填 float 且下游多处直接做 `:.0f` 格式化；0 会让
-        # `has_turnover` 判成「没有成交额」，语意与「资料缺失」一致。
-        if _finite_or_none(self.total_amount) is None:
-            self.total_amount = 0.0
-        if isinstance(self.institutional_net, dict):
-            cleaned = {
-                key: value
-                for key, value in self.institutional_net.items()
-                if _finite_or_none(value) is not None
-            }
-            # 三大法人是一组，任一格非有限就整组作废——只印部分栏位会让
-            # 「外资 -104 / 投信 +0」看起来像投信真的没动作。
-            self.institutional_net = cleaned if len(cleaned) == len(self.institutional_net) else None
 
 
 @dataclass
@@ -278,7 +282,8 @@ class MarketAnalyzer:
         return f"{amount_raw:.0f}"
 
     def _get_index_change_arrow(self, change_pct: float) -> str:
-        if change_pct == 0:
+        # 缺失值不该被判成下跌：`nan > 0` 是 False，会一路落到红色箭头。
+        if _is_missing_number(change_pct) or change_pct == 0:
             return "⚪"
         color_scheme = getattr(getattr(self, "config", None), "market_review_color_scheme", "green_up")
         if color_scheme == "red_up":
@@ -964,10 +969,14 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 "total_amount": overview.total_amount,
                 "turnover_unit": self._get_turnover_unit_label(),
             }
-            if overview.institutional_net:
+            if _has_institutional_reading(overview):
                 payload["breadth"]["institutional_net"] = dict(overview.institutional_net)
 
-        return payload
+        # 序列化边界：一次递归清掉整个 payload 里的非有限值。放在这里而不是各栏位，
+        # 因为 provider 是在 MarketOverview **建构之後**逐栏赋值的（total_amount、
+        # 法人、板块／概念排行都是），栏位层的清洗拦不到；而把栏位本身改 None 会让
+        # 宣告为 float 的下游在比较与格式化上抛 TypeError。
+        return _scrub_non_finite(payload)
 
     def _supports_market_light(self) -> bool:
         return self.region in MARKET_LIGHT_REGIONS
@@ -1103,9 +1112,11 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         # 旗标；真的全零的交易日会被当成缺资料。要区分得先给 MarketOverview 加显式旗标。
         has_advance_decline = bool(overview.up_count or overview.down_count or overview.flat_count)
         has_limit = bool(overview.limit_up_count or overview.limit_down_count)
-        has_turnover = bool(overview.total_amount)
+        # `bool(nan)` 是 True，所以不能只用 truthiness——那会让 `f"{nan:.0f} 亿"`
+        # 印进报告。缺失的成交额要当「没有资料」，不能补成 0（0 是平盘，是读数）。
+        has_turnover = not _is_missing_number(overview.total_amount) and bool(overview.total_amount)
         has_breadth = has_advance_decline or has_limit or has_turnover
-        has_institutional = bool(overview.institutional_net)
+        has_institutional = _has_institutional_reading(overview)
         has_stats = has_breadth or has_institutional
         if not has_stats and not (self._supports_market_light() and overview.indices):
             return ""
@@ -1145,7 +1156,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                         f"Turnover {overview.total_amount:.0f} ({self._get_turnover_unit_label()})"
                     )
                 lines.append(f"- **Breadth**: {'; '.join(parts)}")
-            if overview.institutional_net:
+            if _has_institutional_reading(overview):
                 inst = overview.institutional_net
                 lines.append(
                     f"- **Institutional net** ({self._get_turnover_unit_label()}): "
@@ -1271,7 +1282,11 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 reasons.append(f"上涨家数占比 {up_ratio:.0%}，亏钱效应较强")
             else:
                 reasons.append(f"上涨家数占比 {up_ratio:.0%}，市场分化")
-        index_changes = [idx.change_pct for idx in overview.indices if idx.change_pct is not None]
+        # 与评分器同一条件：`is not None` 挡不住 NaN／±inf，照走下去 reason 会写出 `+nan%`。
+        index_changes = [
+            idx.change_pct for idx in overview.indices
+            if not _is_missing_number(idx.change_pct)
+        ]
         if index_changes:
             avg_change = sum(index_changes) / len(index_changes)
             reasons.append(f"主要指数平均涨跌幅 {avg_change:+.2f}%")
@@ -1294,7 +1309,11 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 reasons.append(f"advancers ratio {up_ratio:.0%}, downside pressure dominates")
             else:
                 reasons.append(f"advancers ratio {up_ratio:.0%}, breadth is mixed")
-        index_changes = [idx.change_pct for idx in overview.indices if idx.change_pct is not None]
+        # 与评分器同一条件：`is not None` 挡不住 NaN／±inf，照走下去 reason 会写出 `+nan%`。
+        index_changes = [
+            idx.change_pct for idx in overview.indices
+            if not _is_missing_number(idx.change_pct)
+        ]
         if index_changes:
             avg_change = sum(index_changes) / len(index_changes)
             reasons.append(f"average major-index change {avg_change:+.2f}%")
@@ -1324,8 +1343,11 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             arrow = self._get_index_change_arrow(idx.change_pct)
             amount_raw = idx.amount or 0.0
             amount_str = self._format_turnover_value(amount_raw)
+            # `:.2f` 对 NaN 会写出 `nan`，对 None 直接抛 TypeError——两者都要走
+            # `_format_optional_*`，它们已经统一处理缺失值。
             lines.append(
-                f"| {idx.name} | {idx.current:.2f} | {arrow} {idx.change_pct:+.2f}% | "
+                f"| {idx.name} | {self._format_optional_number(idx.current)} | "
+                f"{arrow} {self._format_signed_pct(idx.change_pct)} | "
                 f"{self._format_optional_number(idx.open)} | {self._format_optional_number(idx.high)} | "
                 f"{self._format_optional_number(idx.low)} | {self._format_optional_pct(idx.amplitude)} | {amount_str} |"
             )
@@ -1424,17 +1446,34 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 
     @staticmethod
     def _format_optional_number(value: float) -> str:
-        return "N/A" if value in (None, 0, 0.0) else f"{value:.2f}"
+        # `value in (None, 0, 0.0)` 挡不住 NaN（NaN != NaN），照走下去印出 `nan`。
+        return "N/A" if _is_missing_number(value) or value in (0, 0.0) else f"{value:.2f}"
 
     @staticmethod
     def _format_optional_pct(value: float) -> str:
-        return "N/A" if value in (None, 0, 0.0) else f"{value:.2f}%"
+        return "N/A" if _is_missing_number(value) or value in (0, 0.0) else f"{value:.2f}%"
+
+    def _format_turnover(self, value: Any) -> str:
+        """格式化成交额；缺失时说「暫無資料」而不是印出 0 或 nan。
+
+        `f"{nan:.0f}"` 会写出 `nan 亿元`，而把缺失补成 `0 亿元` 更糟——那是一个有
+        明确市场意义的读数（零成交），会误导 LLM 与读报告的人。
+        """
+        if _is_missing_number(value):
+            return "暫無資料" if self._get_review_language() != "en" else "unavailable"
+        unit = self._get_turnover_unit_label()
+        return f"{float(value):.0f} {unit}"
 
     @staticmethod
     def _format_signed_pct(value: Any) -> str:
         try:
             numeric_value = float(value)
         except (TypeError, ValueError):
+            return "N/A"
+        # `float("nan")` 不会抛，所以上面的 try 挡不住它——照走下去会印出 `+nan%`。
+        # 板块／概念排行的 change_pct 来自 `pd.to_numeric` + `dropna`，而 dropna
+        # 不排除 ±inf，`nlargest` 甚至会优先选中 +inf。
+        if _is_missing_number(numeric_value):
             return "N/A"
         return f"{numeric_value:+.2f}%"
 
@@ -1684,8 +1723,8 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 stats_block = f"""## Market Breadth
 - Advancers: {overview.up_count} | Decliners: {overview.down_count} | Flat: {overview.flat_count}
 - Limit-up: {overview.limit_up_count} | Limit-down: {overview.limit_down_count}
-- Turnover: {overview.total_amount:.0f} ({self._get_turnover_unit_label()})"""
-                if overview.institutional_net:
+- Turnover: {self._format_turnover(overview.total_amount)}"""
+                if _has_institutional_reading(overview):
                     _inst = overview.institutional_net
                     stats_block += (
                         f"\n- Institutional net ({self._get_turnover_unit_label()}): "
@@ -1716,8 +1755,8 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
                 stats_block = f"""## 市场概况
 - 上涨: {overview.up_count} 家 | 下跌: {overview.down_count} 家 | 平盘: {overview.flat_count} 家
 - 涨停: {overview.limit_up_count} 家 | 跌停: {overview.limit_down_count} 家
-- 两市成交额: {overview.total_amount:.0f} 亿元"""
-                if overview.institutional_net:
+- 两市成交额: {self._format_turnover(overview.total_amount)}"""
+                if _has_institutional_reading(overview):
                     _inst = overview.institutional_net
                     stats_block += (
                         f"\n- 三大法人买卖超（{self._get_turnover_unit_label()}）: "
