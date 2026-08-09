@@ -165,7 +165,10 @@ def _is_hk_market(code: str) -> bool:
     """
     判定是否为港股代码。
 
-    支持 `HK00700` 及纯 5 位数字形式（A 股 ETF/股票常见为 6 位）。
+    支持 ``.HK`` 后缀、``HK00700`` 前缀形式，以及 4-5 位纯数字裸码
+    （A 股 ETF/股票为 6 位，与港股 4-5 位裸数字不冲突）。``YfinanceFetcher``
+    与 ``AkshareFetcher`` / ``LongbridgeFetcher`` 的 ``_is_hk_code`` 与本
+    函数对裸港股码的位数范围保持一致。
     """
     normalized = (code or "").strip().upper()
     if normalized.endswith(".HK"):
@@ -174,7 +177,7 @@ def _is_hk_market(code: str) -> bool:
     if normalized.startswith("HK"):
         digits = normalized[2:]
         return digits.isdigit() and 1 <= len(digits) <= 5
-    if normalized.isdigit() and len(normalized) == 5:
+    if normalized.isdigit() and 4 <= len(normalized) <= 5:
         return True
     return False
 
@@ -1197,6 +1200,7 @@ class DataFetcherManager:
           2. PytdxFetcher (Priority 2) - 通达信
           3. BaostockFetcher (Priority 3)
           4. YfinanceFetcher (Priority 4)
+          5. TencentFetcher (Priority 5) - A 股最终兜底
         """
         from src.config import get_config
         from .efinance_fetcher import EfinanceFetcher
@@ -1277,13 +1281,13 @@ class DataFetcherManager:
         with self._fetchers_lock:
             self._fetchers = [
                 efinance,
-                tencent,
                 akshare,
                 pytdx,
                 baostock,
                 market_db,
                 yfinance,
                 twse,
+                tencent,
                 *optional_fetchers,
             ]
 
@@ -1382,7 +1386,13 @@ class DataFetcherManager:
             elif prefer_lb:
                 source_order = ["LongbridgeFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "YfinanceFetcher"]
             else:
-                source_order = ["FinnhubFetcher", "AlphaVantageFetcher", "YfinanceFetcher", "LongbridgeFetcher"]
+                # yfinance 在前。AlphaVantage 排前面是个地雷：它回**未复权**价且单次上限
+                # 100 根（alphavantage_fetcher.py:49），而 manager 只要拿到非空 DataFrame
+                # 就收下、`storage` 又按 (code, date) UPSERT ⇒ 设了金钥之後，最近 100 根
+                # 里发生除权除息就会印出错的 pct_chg，且同一天的收盘价会随执行次数变动。
+                # 目前没金钥所以是潜伏的，但 `.env.example` 邀请你设。
+                # `docs/data-source-stability.md:44` 本来就写着 yfinance 优先。
+                source_order = ["YfinanceFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "LongbridgeFetcher"]
             market_label = "美股指数" if is_us_index else "美股"
 
             for order_index, src_name in enumerate(source_order):
@@ -2373,6 +2383,16 @@ class DataFetcherManager:
         if is_meaningful_stock_name(static_name, stock_code):
             return self._cache_stock_name(stock_code, static_name) or static_name
 
+        # 美股指数别名优先于股票索引：`DJIA` 同时是道琼斯的通用缩写**和**一档挂牌 ETF
+        # （Global X Dow 30 Covered Call）。行情走 `US_INDEX_MAPPING` 取到 ^DJI 的
+        # 五万多点，名称却从 stocks.index.json 取到那档 ETF ⇒ 报告标题写 ETF、数字是指数，
+        # 两者差三个数量级而且都「有值」。名称与行情必须来自同一个判定。
+        from .us_index_mapping import get_us_index_yf_symbol
+
+        _, us_index_name = get_us_index_yf_symbol(stock_code)
+        if is_meaningful_stock_name(us_index_name, stock_code):
+            return self._cache_stock_name(stock_code, us_index_name) or us_index_name
+
         index_name = get_index_stock_name(stock_code)
         if is_meaningful_stock_name(index_name, stock_code):
             return self._cache_stock_name(stock_code, index_name) or index_name
@@ -3103,6 +3123,42 @@ class DataFetcherManager:
         growth_payload = bundle_payload.get("growth", {}) if isinstance(bundle_payload.get("growth"), dict) else {}
         earnings_payload = bundle_payload.get("earnings", {}) if isinstance(bundle_payload.get("earnings"), dict) else {}
         belong_boards = bundle_payload.get("belong_boards") if isinstance(bundle_payload.get("belong_boards"), list) else []
+
+        # 估值兜底：realtime quote 的 yfinance 路径只在本地查不到股票名称时才抓
+        # `ticker.info`，所以名称索引齐全的市场（本 fork 的美股）拿不到 pe/pb。bundle
+        # 这一步的 `info` 已经抓过了，直接补进来是零额外请求——与上面 tw 走 TWSE 补
+        # pe/pb 是同一个形状。补完必须**重算 status**，否则会从「说 ok 其实是空的」
+        # 换成「资料齐了却还标 partial」，一样是谎。
+        bundle_valuation = (
+            bundle_payload.get("valuation")
+            if isinstance(bundle_payload.get("valuation"), dict)
+            else {}
+        )
+        valuation_filled_from_bundle = False
+        for field in ("pe_ratio", "pb_ratio"):
+            if valuation_payload.get(field) is None and bundle_valuation.get(field) is not None:
+                valuation_payload[field] = bundle_valuation[field]
+                valuation_filled_from_bundle = True
+        if valuation_filled_from_bundle:
+            valuation_status = self._infer_block_status(valuation_payload, "partial")
+            valuation_source_entries.append(
+                {
+                    "provider": "yfinance_fundamental_bundle",
+                    "result": valuation_status,
+                    "duration_ms": bundle_ms,
+                }
+            )
+            result_ctx["valuation"] = self._build_fundamental_block(
+                valuation_status,
+                valuation_payload,
+                self._normalize_source_chain(
+                    valuation_source_entries,
+                    "realtime_quote",
+                    valuation_status,
+                    valuation_ms,
+                ),
+                [valuation_err] if valuation_err else [],
+            )
 
         # 台股(.TW/.TWO)：一律附上 TWSE/TPEx 免金钥月营收（monthly_revenue / monthly_revenue_yoy /
         # revenue_month）——月营收是台股最受重视的即时基本面指标，即使 yfinance 已有年度成长也值得并列。

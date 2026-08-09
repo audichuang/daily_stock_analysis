@@ -17,17 +17,28 @@ import sys
 
 import yfinance as yf
 
-# 名稱、代碼、為什麼要看它
+# 名稱、代碼、為什麼要看它、市場組（日期一致性按組檢查）
 SERIES = [
-    ("道瓊", "^DJI", "分辨全面承壓還是族群輪動"),
-    ("標普500", "^GSPC", "同上"),
-    ("那斯達克", "^IXIC", "科技股整體"),
-    ("費城半導體", "^SOX", "台股是半導體權重市場，解釋力高於大盤三兄弟"),
-    ("台積電ADR", "TSM", "折算台積電開盤；它一檔佔加權指數約三成"),
-    ("VIX恐慌指數", "^VIX", "分辨族群殺盤與系統性 risk-off——費半崩而 VIX 不動，是前者"),
-    ("西德州原油", "CL=F", "對非電子（航運燃油、傳產、內需）方向常與電子相反"),
-    ("美元兌台幣", "TWD=X", "ADR 折算與外資匯入匯出"),
+    ("道瓊", "^DJI", "分辨全面承壓還是族群輪動", "us"),
+    ("標普500", "^GSPC", "同上", "us"),
+    ("那斯達克", "^IXIC", "科技股整體", "us"),
+    ("費城半導體", "^SOX", "台股是半導體權重市場，解釋力高於大盤三兄弟", "us"),
+    ("台積電ADR", "TSM", "折算台積電開盤；它一檔佔加權指數約三成", "us"),
+    ("美光", "MU", "**記憶體的隔夜代理**：台灣記憶體對它 t−1 相關 0.364，對費半同日只 0.123", "us"),
+    ("SK海力士", "000660.KS", "記憶體的同日代理，r=0.554（籃子 0.577）", "kr"),
+    ("三星電子", "005930.KS", "同上", "kr"),
+    ("KOSPI", "^KS11", "分辨韓國記憶體崩跌是族群現象還是全市場", "kr"),
+    ("VIX恐慌指數", "^VIX", "分辨族群殺盤與系統性 risk-off——費半崩而 VIX 不動，是前者", "cont"),
+    ("西德州原油", "CL=F", "對非電子（航運燃油、傳產、內需）方向常與電子相反", "cont"),
+    ("美元兌台幣", "TWD=X", "ADR 折算與外資匯入匯出", "cont"),
 ]
+GROUP_LABEL = {
+    "us": "美股（昨晚收盤）",
+    "kr": "韓股（同時段市場，見下方說明）",
+    # VIX／原油／匯率盤前就開始報價，日期正常會領先美股那組一天 ⇒ 不納入日期一致性檢查，
+    # 否則每天誤報一次。舊版只排除 TWD=X，所以原油與 VIX 一路在假告警。
+    "cont": "連續／盤前報價（日期可能領先美股一天）",
+}
 ADR_RATIO = 5          # 1 ADR = 5 股台積電普通股
 SOX_ALERT = -0.02      # 費半跌逾 2% → `semi_linked` 標的優先剔除（見 skill）
 VIX_PANIC = 30         # 30 以上＝系統性 risk-off；20 以下＝殺盤仍侷限在族群
@@ -44,20 +55,36 @@ def adr_implied(adr_px, fx, ratio=ADR_RATIO):
 
 def fetch(period="7d"):
     out = []
-    for name, ticker, why in SERIES:
+    for name, ticker, why, group in SERIES:
         try:
             h = yf.Ticker(ticker).history(period=period)["Close"].dropna()
             if len(h) < 2:
-                out.append({"名稱": name, "代碼": ticker, "狀態": "資料不足"})
+                out.append({"名稱": name, "代碼": ticker, "組": group, "狀態": "資料不足"})
                 continue
-            out.append({"名稱": name, "代碼": ticker, "日期": h.index[-1].date(),
+            out.append({"名稱": name, "代碼": ticker, "組": group, "日期": h.index[-1].date(),
                         "收盤": float(h.iloc[-1]),
                         "漲跌": float(h.iloc[-1] / h.iloc[-2] - 1),
                         "近5日": float(h.iloc[-1] / h.iloc[max(0, len(h) - 6)] - 1),
                         "why": why})
         except Exception as exc:                              # noqa: BLE001
-            out.append({"名稱": name, "代碼": ticker, "狀態": f"失敗 {type(exc).__name__}"})
+            out.append({"名稱": name, "代碼": ticker, "組": group, "狀態": f"失敗 {type(exc).__name__}"})
     return out
+
+
+def date_warnings(rows):
+    """日期一致性**按市場組分開檢查**，回傳警告字串列表（空＝一致）。
+
+    不能全部混在一起比：韓股與台股同時段（韓 09:00-15:30 KST），所以盤前跑到的韓股收盤
+    正常會比美股那組**晚一個日曆日**——混著比會每天誤報。反過來，同一組內日期不一致才是
+    真的抓到不同場次。`cont` 組（VIX／原油／匯率）盤前就報價、日期本來就領先，不檢查。
+    """
+    warns = []
+    for group in ("us", "kr"):
+        dates = {r["日期"] for r in rows if "狀態" not in r and r["組"] == group}
+        if len(dates) > 1:
+            warns.append(f"**警告：{GROUP_LABEL[group]} 各序列日期不一致 {sorted(dates)}"
+                         f"——可能混到不同交易日，不要直接引用**")
+    return warns
 
 
 def main(argv=None):
@@ -68,26 +95,39 @@ def main(argv=None):
 
     rows = fetch()
     bad = [r for r in rows if "狀態" in r]
-    print(f"{'名稱':<12}{'日期':<12}{'收盤':>12}{'漲跌':>9}{'近5日':>9}")
-    for r in rows:
-        if "狀態" in r:
-            print(f"{r['名稱']:<12}{r['狀態']}")
+    for group, label in GROUP_LABEL.items():
+        group_rows = [r for r in rows if r["組"] == group]
+        if not group_rows:
             continue
-        print(f"{r['名稱']:<12}{str(r['日期']):<12}{r['收盤']:>12,.2f}"
-              f"{r['漲跌'] * 100:>8.2f}%{r['近5日'] * 100:>8.2f}%")
+        print(f"\n── {label} ──")
+        print(f"{'名稱':<12}{'日期':<12}{'收盤':>12}{'漲跌':>9}{'近5日':>9}")
+        for r in group_rows:
+            if "狀態" in r:
+                print(f"{r['名稱']:<12}{r['狀態']}")
+                continue
+            print(f"{r['名稱']:<12}{str(r['日期']):<12}{r['收盤']:>12,.2f}"
+                  f"{r['漲跌'] * 100:>8.2f}%{r['近5日'] * 100:>8.2f}%")
 
     d = {r["代碼"]: r for r in rows if "狀態" not in r}
     print()
-    # 日期一致性：所有序列應該落在同一個美股交易日，不一致就是抓到不同場次
-    dates = {r["日期"] for r in rows if "狀態" not in r and r["代碼"] != "TWD=X"}
-    if len(dates) > 1:
-        print(f"**警告：各序列日期不一致 {sorted(dates)}——可能混到不同交易日，不要直接引用**")
+    for w in date_warnings(rows):
+        print(w)
 
     if "^SOX" in d:
         sox = d["^SOX"]["漲跌"]
         print(f"費半 {sox * 100:+.2f}%："
               + ("**跌逾 2%，`semi_linked` 標的今天優先剔除**" if sox <= SOX_ALERT
                  else "未達 -2% 的剔除門檻"))
+    if any(k in d for k in ("MU", "000660.KS", "005930.KS")):
+        parts = [f"{d[k]['名稱']} {d[k]['漲跌'] * 100:+.2f}%"
+                 for k in ("MU", "000660.KS", "005930.KS", "^KS11") if k in d]
+        print("記憶體代理：" + "、".join(parts)
+              + "　← 記憶體標的看這幾檔，**不要看費半**（同日 r 只有 0.123）")
+        # 刻意不設 alert 門檻：「韓國重挫 → 台灣次日」三個門檻的 bootstrap CI 全部跨零、
+        # 下跌比僅 52~57%（基準 50%）⇒ inconclusive。設門檻等於假裝它有預測力。
+        # 唯一可靠的用法是背離偵測：兩邊反向就不下注（739 交易日裡 0 例，無前例可循）。
+        print("  只讀方向、不讀成強弱訊號：條件分布的 CI 全部跨零（見 docs/tw-swing-pipeline.md"
+              " 的族群代理節）。**代理與台股同日反向時不下注。**")
     if "^VIX" in d:
         vix = d["^VIX"]
         # **看水位不看漲跌**：VIX 本身就是波動率，它的日漲跌率沒有 regime 意義，
@@ -106,6 +146,9 @@ def main(argv=None):
             imp = adr_implied(adr["收盤"], d["TWD=X"]["收盤"])
             print(f"  ADR 折算絕對價 {imp:,.0f} 元 vs 台股收盤 {a.tw_close:,.0f} 元"
                   f" = 溢價 {imp / a.tw_close - 1:+.1%}（**這是溢價，不是預期漲幅**）")
+    print("\n⚠ 韓股與台股**同時段**（韓 09:00-15:30 KST ＝ 台 08:00-14:30）：台北 08:00 前跑，"
+          "韓股那組是**前一交易日**收盤；08:00 之後跑會混進當日盤中值（看上表日期辨識）。"
+          "要判「今天韓國怎麼走」得在它開盤後另外查——這一格跟美股期貨同性質，本腳本抓不到。")
     print("\n這支腳本只給**收盤**數字。美股期貨與台指期夜盤要的是「現在」，日線抓不到"
           "（yfinance 在台北早上還沒切到次日場次，拿到的是昨天的期貨），需人工查即時報價——"
           "注意 17:00~21:30 的台指期夜盤**不含美股資訊**，別拿來算開盤缺口。"

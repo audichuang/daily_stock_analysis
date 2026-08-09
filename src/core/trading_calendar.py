@@ -255,6 +255,60 @@ def get_effective_trading_date(
         return fallback_date
 
 
+def resolve_historical_daily_bar_date(
+    market: Optional[str],
+    target_date: date,
+    phase: Optional[str],
+) -> Optional[date]:
+    """Resolve the completed daily bar that a historical phase could consume.
+
+    A persisted ``effective_daily_bar_date`` remains the primary authority.
+    This fallback is only for older snapshots that still contain a trustworthy
+    phase. It fails closed for missing, unknown, or calendar-inconsistent phases.
+    """
+    if market not in MARKET_EXCHANGE or not _XCALS_AVAILABLE:
+        return None
+
+    normalized_phase = str(phase or "").strip().lower()
+    if normalized_phase not in {
+        "premarket",
+        "intraday",
+        "lunch_break",
+        "closing_auction",
+        "postmarket",
+        "non_trading",
+    }:
+        return None
+
+    try:
+        cal = xcals.get_calendar(MARKET_EXCHANGE[market])
+        is_session = bool(cal.is_session(target_date))
+
+        if normalized_phase in {
+            "premarket",
+            "intraday",
+            "lunch_break",
+            "closing_auction",
+        }:
+            if not is_session:
+                return None
+            session = cal.date_to_session(target_date, direction="previous")
+            return cal.previous_session(session).date()
+
+        if normalized_phase == "postmarket":
+            return target_date if is_session else None
+
+        if is_session:
+            return None
+        return cal.date_to_session(target_date, direction="previous").date()
+    except Exception as e:
+        logger.warning(
+            "trading_calendar.resolve_historical_daily_bar_date fail-closed: %s",
+            e,
+        )
+        return None
+
+
 def _as_market_datetime(value: Any, tz_name: str) -> Optional[datetime]:
     """
     Convert exchange-calendar timestamps into market-local datetimes.
@@ -532,21 +586,37 @@ def build_market_phase_context(
     )
 
 
-def get_open_markets_today() -> Set[str]:
+def get_open_markets_today(current_time: Optional[datetime] = None) -> Set[str]:
     """
-    Get markets that are open today (by each market's local timezone).
+    Markets worth running today, judged on **both sides of the date line**.
+
+    A market counts if its own local date is a session **or** the server's local
+    date is a session on that market's calendar. The second half matters because
+    the run happens on the *operator's* day, not the market's: at 09:00 Asia/Taipei
+    on a Monday, New York is still Sunday, so the market-local test alone drops
+    ``us`` — even though Friday's US session closed at 04:00 Taipei that morning
+    and is exactly what a Taipei morning routine wants to read. Measured window:
+    ``us`` was excluded from Taipei Sat ~13:00 through Mon ~12:00, and in that
+    window ``MARKET_REVIEW_REGION=tw,us`` silently collapsed to ``tw``.
+
+    Union, not replacement: the market-local test still carries Taipei Saturday
+    morning (New York is Friday), which the server-date test alone would drop.
+    Neither test alone is right; both together drop only genuinely dead days.
 
     Returns:
-        Set of market keys that are trading today
+        Set of market keys worth analysing today
     """
     if not _XCALS_AVAILABLE:
         return set(MARKET_TIMEZONE)
+    # `current_time` 只為了可測（凍結時鐘）；正式路徑一律不帶。
+    reference = current_time or datetime.now().astimezone()
+    server_today = reference.astimezone().date()
     result: Set[str] = set()
     for mkt, tz_name in MARKET_TIMEZONE.items():
         try:
             tz = ZoneInfo(tz_name)
-            today = datetime.now(tz).date()
-            if is_market_open(mkt, today):
+            market_today = reference.astimezone(tz).date()
+            if is_market_open(mkt, market_today) or is_market_open(mkt, server_today):
                 result.add(mkt)
         except Exception as e:
             logger.warning("get_open_markets_today fail-open for %s: %s", mkt, e)

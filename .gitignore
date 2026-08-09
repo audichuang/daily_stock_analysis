@@ -94,7 +94,11 @@ verify_*.py
 static/
 /apps/dsa-desktop/dist/
 /apps/dsa-desktop/node_modules/
+/node_modules/
 docs/specs/
 
 # Shioaji SDK runtime log
 shioaji.log
+
+# MOPS 財報包的下載暫存檔（market_data/crawler.py 寫死這個檔名）
+temp.zip

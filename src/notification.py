@@ -62,6 +62,7 @@ from src.schemas.decision_action import (
 )
 from bot.models import BotMessage
 from src.utils.sanitize import sanitize_diagnostic_text
+from src.formatters import strip_hidden_markdown_metadata
 from src.utils.data_processing import (
     signal_attribution_has_content,
     signal_attribution_weight_items,
@@ -825,7 +826,8 @@ class NotificationService:
         feishu_info = self._extract_feishu_reply_info()
         if feishu_info:
             try:
-                if self._send_feishu_stream_reply(feishu_info["chat_id"], content):
+                sanitized_content = strip_hidden_markdown_metadata(content).strip()
+                if self._send_feishu_stream_reply(feishu_info["chat_id"], sanitized_content):
                     logger.info("已通过飞书会话（Stream）推送报告")
                     success = True
                 else:
@@ -879,6 +881,7 @@ class NotificationService:
 
             # 飞书文本消息有长度限制，需要分批发送
             max_bytes = getattr(config, 'feishu_max_bytes', 20000)
+            content = strip_hidden_markdown_metadata(content).strip()
             content_bytes = len(content.encode('utf-8'))
 
             if content_bytes > max_bytes:
@@ -2085,6 +2088,7 @@ class NotificationService:
         "sina": {"zh": "新浪财经", "en": "Sina Finance"},
         "stooq": {"zh": "Stooq", "en": "Stooq"},
         "longbridge": {"zh": "长桥", "en": "Longbridge"},
+        "yfinance": {"zh": "Yahoo Finance", "en": "Yahoo Finance"},
         "fallback": {"zh": "降级兜底", "en": "Fallback"},
     }
 
@@ -2546,12 +2550,17 @@ class NotificationService:
         lives in each ``Sender.send()`` — this method only resolves what a
         Sender can't know on its own: image-channel membership, email
         receiver groups, and feishu report file staging.
+
+        隐藏 markdown 元数据在**进 sender 之前**统一剥掉一次：各 sender 内部
+        仍各自 strip（幂等），但契约边界在这里——出了这个方法就不该再有
+        ``[dsa-market-region]`` 之类的内部标记流向任何渠道。
         """
         sender = self._senders.get(channel)
         if sender is None:
             logger.warning(f"不支持的通知渠道: {channel}")
             return False
 
+        content = strip_hidden_markdown_metadata(content).strip()
         msg_image_bytes = image_bytes if self._should_use_image_for_channel(channel, image_bytes) else None
 
         email_receivers = None
@@ -2586,6 +2595,7 @@ class NotificationService:
         severity: Optional[str] = None,
         dedup_key: Optional[str] = None,
         cooldown_key: Optional[str] = None,
+        structured_payload: Optional[Dict[str, Any]] = None,
     ) -> NotificationDispatchResult:
         """
         Send a notification and return per-channel diagnostics.
@@ -2606,6 +2616,7 @@ class NotificationService:
             severity: 通知严重级别；未设置时按路由类型推断
             dedup_key: 可选稳定去重 key；未设置时使用内容 hash
             cooldown_key: 可选冷却 key；未设置时使用路由/级别默认 key
+            structured_payload: 可选的个股或市场结构化结果，仅用于图片模板精确填充
 
         Returns:
             Structured dispatch diagnostics.
@@ -2701,7 +2712,9 @@ class NotificationService:
         if channels_needing_image:
             from src.md2img import markdown_to_image
             image_bytes = markdown_to_image(
-                content, max_chars=self._markdown_to_image_max_chars
+                content,
+                max_chars=self._markdown_to_image_max_chars,
+                structured_payload=structured_payload,
             )
             if image_bytes:
                 logger.info("Markdown 已转换为图片，将向 %s 发送图片",
@@ -2800,6 +2813,7 @@ class NotificationService:
         severity: Optional[str] = None,
         dedup_key: Optional[str] = None,
         cooldown_key: Optional[str] = None,
+        structured_payload: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         统一发送接口 - 向所有已配置的渠道发送。
@@ -2815,6 +2829,7 @@ class NotificationService:
             severity=severity,
             dedup_key=dedup_key,
             cooldown_key=cooldown_key,
+            structured_payload=structured_payload,
         )
         return bool(result.success)
 
@@ -2869,7 +2884,10 @@ class NotificationService:
         Returns:
             Whether the Feishu file upload succeeded.
         """
-        filepath = self.save_report_to_file(content, filename=filename)
+        filepath = self.save_report_to_file(
+            strip_hidden_markdown_metadata(content).strip(),
+            filename=filename,
+        )
         logger.info("将上传文件到飞书: %s", filepath)
         return self.send_feishu_file(filepath)
 

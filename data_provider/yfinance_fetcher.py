@@ -16,6 +16,7 @@ YfinanceFetcher - 兜底数据源 (Priority 4)
 
 import csv
 import logging
+import re
 from datetime import datetime
 from io import StringIO
 from typing import Optional, List, Dict, Any
@@ -60,6 +61,26 @@ except (ImportError, ModuleNotFoundError):
 import os
 
 logger = logging.getLogger(__name__)
+
+
+# yfinance 在这些市场是 `base.py` 即时行情路由的**指定主来源**，不是降级兜底。
+# 自称 FALLBACK 的代价不是标签难看：`analysis_context_builder` 见到 source=="fallback"
+# 就把行情判成降级 ⇒ 品质分 65、报告印出「核心行情受限」、LLM 的「高」信心被改写成
+# 「中」——每一次美股分析都无条件吃这一刀，而实际上什么都没降级。
+#
+# **台股刻意不在这个集合里**：那里 Shioaji 才是主来源，`source` 从 shioaji 变成别的值
+# 正是本 fork 用来辨识「金钥没注入、已静默降级成延迟报价」的信号（AGENTS.md §10），
+# 而 tests/test_tw_realtime_fallback.py 把它钉成契约。港股同理（Longbridge/akshare 在前）。
+_YF_PRIMARY_MARKETS = frozenset({"us", "jp", "kr"})
+
+
+def _source_for_market(market: Optional[str]) -> RealtimeSource:
+    """yfinance 是这个市场的主来源就据实标示，否则维持 FALLBACK。"""
+    return (
+        RealtimeSource.YFINANCE
+        if (market or "") in _YF_PRIMARY_MARKETS
+        else RealtimeSource.FALLBACK
+    )
 
 
 class YfinanceFetcher(BaseFetcher):
@@ -108,6 +129,33 @@ class YfinanceFetcher(BaseFetcher):
         return YfinanceFetcher._is_yahoo_suffix_stock(stock_code)
 
     @staticmethod
+    def _prev_close_from_fast_info(info):
+        """從 `fast_info` 取**前一交易日的正規收盤**，用來算漲跌幅。
+
+        **必須優先 `regularMarketPreviousClose`。** yfinance 的 `previousClose` 對**美股個股**
+        在盤後／週末會退化成接近 `lastPrice` 的值，據此算出的漲跌幅**方向會相反**。
+        2026-08-03（週一台北、美股未開盤）實測：
+
+        | 標的 | 用 `previousClose` | 用 `regularMarketPreviousClose` | 日線真值 |
+        | --- | --: | --: | --: |
+        | MU | **+1.30%** | −5.90% | **−5.90%** |
+        | AAPL | **+0.51%** | −7.35% | **−7.35%** |
+        | TSM（ADR） | +0.06% | +0.23% | +0.23% |
+        | ^SOX（指數） | +0.07% | +0.07% | +0.07% |
+        | 005930.KS（韓股） | −8.76% | −8.76% | −8.76% |
+
+        指數與韓股兩個欄位相同、ADR 只差 0.17pp，所以這個錯誤**只在美股個股上顯形**——
+        而且不報錯、不缺欄位，只給一個反向的數字。台股走 Shioaji 所以不受影響。
+
+        另一個坑：`fast_info` 是 **dict-like**，camelCase 只能用 `[]` 取、屬性存取要 snake_case，
+        所以 `getattr(info, 'previousClose')` 一直回 None，真正生效的是 snake_case 那個候選。
+        """
+        return (getattr(info, 'regular_market_previous_close', None)
+                or getattr(info, 'regularMarketPreviousClose', None)
+                or getattr(info, 'previousClose', None)
+                or getattr(info, 'previous_close', None))
+
+    @staticmethod
     def _is_tw_suffix_stock(stock_code: str) -> bool:
         """Return True for supported Taiwan suffix-only Yahoo symbols (TWSE `.TW` / TPEx `.TWO`).
 
@@ -148,10 +196,14 @@ class YfinanceFetcher(BaseFetcher):
             logger.debug(f"识别为美股指数: {code} -> {yf_symbol}")
             return yf_symbol
 
-        # 美股：1-5 个大写字母（可选 .X 后缀），原样返回
+        # 美股：1-5 个大写字母（可选 .X 后缀）。**类别股的点要换成连字号**——Yahoo 用
+        # `BRK-B`／`BF-B`，传 `BRK.B` 会回 "possibly delisted"、0 笔资料，而上游各层
+        # 都把「取不到」当成正常降级，於是整档股票**静默消失**（实测 BRK.B/BF.B 皆 0 笔，
+        # 换成连字号後分别是 521.80／28.52）。这里是我们的代码变成 Yahoo 符号的唯一转换点。
         if is_us_stock_code(code):
-            logger.debug(f"识别为美股代码: {code}")
-            return code
+            yf_code = code.replace('.', '-')
+            logger.debug(f"识别为美股代码: {code} -> {yf_code}")
+            return yf_code
 
         # 海外 suffix-only MVP：显式 Yahoo Finance suffix-only 代码（日股/韩股/台股），原样传给 Yahoo。
         if self._is_yahoo_suffix_stock(code):
@@ -164,6 +216,25 @@ class YfinanceFetcher(BaseFetcher):
             hk_code = hk_code.zfill(4)  # 补齐到4位
             logger.debug(f"转换港股代码: {stock_code} -> {hk_code}.HK")
             return f"{hk_code}.HK"
+
+        # 港股裸码：4-5 位纯数字（如 00700、02513、0001）按港股处理。
+        # A 股代码全部是 6 位，4-5 位裸数字不可能是 A 股或 BSE（BSE 是
+        # 4/8/920xxx 6 位），因此可以先于 .SZ 兜底分流到 .HK，避免 yfinance
+        # 把 02513 这类新港股误判为深市后缀导致 Yahoo 404。详见 issue #2091。
+        if code.isdigit() and 4 <= len(code) <= 5:
+            hk_code = code.lstrip('0') or '0'
+            hk_code = hk_code.zfill(4)
+            logger.debug(f"识别裸港股代码: {stock_code} -> {hk_code}.HK")
+            return f"{hk_code}.HK"
+
+        # 交易所後缀写法（`AAPL.US` / `AAPL-US`）：这些是**美股**，不是 A 股。
+        # 底下那串 A 股规则最後会 fall through 到「默认深市」，把 `AAPL-US` 变成
+        # `AAPL-US.SZ` 送给 Yahoo——不报错、查无资料、当成正常降级。`.US` 不是类别股，
+        # 所以不能靠 `is_us_stock_code`（它刻意只认单字母後缀）判，得在这里显式剥掉。
+        us_suffix = re.match(r'^([A-Z]{1,5})[.-]US$', code)
+        if us_suffix:
+            logger.debug(f"剥除美股交易所後缀: {code} -> {us_suffix.group(1)}")
+            return us_suffix.group(1)
 
         # 已经包含后缀的情况
         if '.SS' in code or '.SZ' in code or '.HK' in code or '.BJ' in code:
@@ -726,7 +797,7 @@ class YfinanceFetcher(BaseFetcher):
                 if info is None:
                     raise ValueError("fast_info is None")
                 price = getattr(info, 'lastPrice', None) or getattr(info, 'last_price', None)
-                prev_close = getattr(info, 'previousClose', None) or getattr(info, 'previous_close', None)
+                prev_close = self._prev_close_from_fast_info(info)
                 open_price = getattr(info, 'open', None)
                 high = getattr(info, 'dayHigh', None) or getattr(info, 'day_high', None)
                 low = getattr(info, 'dayLow', None) or getattr(info, 'day_low', None)
@@ -776,7 +847,7 @@ class YfinanceFetcher(BaseFetcher):
             quote = UnifiedRealtimeQuote(
                 code=user_code,
                 name=index_name or user_code,
-                source=RealtimeSource.FALLBACK,
+                source=_source_for_market("us"),
                 market="us",
                 currency=str(ticker_info.get("currency") or "").upper() or None,
                 data_quality="partial" if missing_fields else "ok",
@@ -848,7 +919,7 @@ class YfinanceFetcher(BaseFetcher):
                     raise ValueError("fast_info is None")
 
                 price = getattr(info, 'lastPrice', None) or getattr(info, 'last_price', None)
-                prev_close = getattr(info, 'previousClose', None) or getattr(info, 'previous_close', None)
+                prev_close = self._prev_close_from_fast_info(info)
                 open_price = getattr(info, 'open', None)
                 high = getattr(info, 'dayHigh', None) or getattr(info, 'day_high', None)
                 low = getattr(info, 'dayLow', None) or getattr(info, 'day_low', None)
@@ -932,7 +1003,7 @@ class YfinanceFetcher(BaseFetcher):
             quote = UnifiedRealtimeQuote(
                 code=symbol,
                 name=name,
-                source=RealtimeSource.FALLBACK,
+                source=_source_for_market(suffix_market or ("us" if is_us_symbol else None)),
                 market=suffix_market or ("us" if is_us_symbol else None),
                 currency=str(ticker_info.get("currency") or "").upper() or None,
                 data_quality="partial" if missing_fields else "ok",

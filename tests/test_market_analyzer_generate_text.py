@@ -2827,7 +2827,8 @@ class TestMarketAnalyzerBypassFix:
         assert "A-share Market Recap" in result
         assert "### 1. Market Summary" in result
         assert "### 3. Breadth & Liquidity" in result
-        assert "Turnover (CNY 100m)" in result
+        assert "- **Market Signal**:" in result
+        assert "Turnover 14567 (CNY 100m)" in result
         assert "### 4. Sector / Theme Highlights" in result
         assert "### 6. Strategy Framework" in result
         assert "### 一、市场总结" not in result
@@ -3077,6 +3078,116 @@ Sector text.
         assert "| 1 | AI算力 | +3.25% |" in result
         assert "#### 行业板块领跌 Top 5" in result
         assert "| 1 | 煤炭 | -1.12% |" in result
+
+    @pytest.mark.parametrize(
+        ("region", "profile_name", "index_code", "index_name", "report_title"),
+        [
+            ("us", "US_PROFILE", "SPX", "S&P 500", "US Market Recap"),
+            ("hk", "HK_PROFILE", "HSI", "Hang Seng Index", "HK Market Recap"),
+        ],
+    )
+    def test_inject_data_into_review_keeps_market_signal_for_markets_without_breadth(
+        self, region, profile_name, index_code, index_name, report_title
+    ):
+        import src.core.market_profile as market_profile
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="review")
+        ma.region = region
+        ma.profile = getattr(market_profile, profile_name)
+        ma.config.report_language = "en"
+        overview = MarketOverview(
+            date="2026-03-06",
+            indices=[MarketIndex(code=index_code, name=index_name, current=5000.0, change_pct=0.5)],
+        )
+        snapshot = ma.build_market_light_snapshot(overview)
+        review = f"""## 2026-03-06 {report_title}
+
+### 1. Market Summary
+Summary text.
+
+### 2. Major Indices
+Index text.
+"""
+
+        result = ma._inject_data_into_review(review, overview)
+
+        assert (
+            f"- **Market Signal**: {snapshot['score']}/100 "
+            f"({snapshot['temperature_label']}, {snapshot['label']})"
+        ) in result
+        assert f"- **Drivers**: {'; '.join(snapshot['reasons'])}" in result
+        assert f"- **Guidance**: {snapshot['guidance']}" in result
+        assert "- **Breadth**:" not in result
+
+    @pytest.mark.parametrize(
+        ("region", "profile_name", "index_code", "index_name"),
+        [
+            ("us", "US_PROFILE", "SPX", "S&P 500"),
+            ("hk", "HK_PROFILE", "HSI", "Hang Seng Index"),
+        ],
+    )
+    def test_template_review_keeps_market_signal_for_markets_without_breadth(
+        self, region, profile_name, index_code, index_name
+    ):
+        import src.core.market_profile as market_profile
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="review")
+        ma.region = region
+        ma.profile = getattr(market_profile, profile_name)
+        ma.config.report_language = "en"
+        overview = MarketOverview(
+            date="2026-03-06",
+            indices=[MarketIndex(code=index_code, name=index_name, current=5000.0, change_pct=0.5)],
+        )
+        snapshot = ma.build_market_light_snapshot(overview)
+
+        result = ma._generate_template_review(overview, [])
+
+        assert f"- **Market Signal**: {snapshot['score']}/100" in result
+        assert f"- **Guidance**: {snapshot['guidance']}" in result
+        assert "- **Breadth**:" not in result
+
+    def test_template_review_keeps_market_signal_for_hk_without_breadth_in_chinese(self):
+        from src.core.market_profile import HK_PROFILE
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="review")
+        ma.region = "hk"
+        ma.profile = HK_PROFILE
+        ma.config.report_language = "zh"
+        overview = MarketOverview(
+            date="2026-03-06",
+            indices=[MarketIndex(code="HSI", name="恒生指数", current=18200.0, change_pct=1.2)],
+        )
+        snapshot = ma.build_market_light_snapshot(overview)
+
+        result = ma._generate_template_review(overview, [])
+
+        assert f"- **盘面信号**：{snapshot['score']}/100" in result
+        assert f"- **操作建议**：{snapshot['guidance']}" in result
+        assert "| 上涨/下跌/平盘 |" not in result
+
+    def test_generate_template_review_uses_configured_red_up_markers_in_english_fallback(self):
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="review")
+        ma.region = "us"
+        ma.config.report_language = "en"
+        ma.config.market_review_color_scheme = "red_up"
+        overview = MarketOverview(
+            date="2026-07-31",
+            indices=[
+                MarketIndex(code="SPX", name="S&P 500", current=5000.0, change_pct=0.8),
+                MarketIndex(code="IXIC", name="Nasdaq", current=18000.0, change_pct=-0.2),
+            ],
+        )
+
+        result = ma._generate_template_review(overview, [])
+
+        assert "- **S&P 500**: 5000.00 (🔴 +0.80%)" in result
+        assert "- **Nasdaq**: 18000.00 (🟢 -0.20%)" in result
 
     def test_market_review_payload_sections_skip_top_report_title(self):
         from src.market_analyzer import MarketAnalyzer
@@ -3328,6 +3439,26 @@ Sector text.
 
         assert "breadth" not in payload
         assert payload["indices"][0]["code"] == "SPX"
+        assert payload["color_scheme"] == "green_up"
+
+    def test_market_review_payload_persists_red_up_color_scheme(self):
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        ma = self._make_market_analyzer_with_mock_generate_text(return_value="复盘结果")
+        ma.config.market_review_color_scheme = "red_up"
+
+        payload = ma.build_market_review_payload(
+            MarketOverview(
+                date="2026-08-01",
+                indices=[
+                    MarketIndex(code="000001", name="上证指数", current=3500, change_pct=0.8),
+                ],
+            ),
+            [],
+            "A股复盘报告",
+        )
+
+        assert payload["color_scheme"] == "red_up"
 
     def test_market_review_payload_omits_breadth_for_cn_market_without_available_stats(self):
         from src.market_analyzer import MarketIndex, MarketOverview
@@ -3502,3 +3633,460 @@ Sector text.
         assert violations == [], (
             f"market_analyzer.py still accesses private Analyzer attributes: {violations}"
         )
+
+
+class TestBuildStatsBlockRegionAndDataSplit:
+    """`_build_stats_block` 的三条已实际踩过的回归。
+
+    1. 台股必须拿到盘面信号。上游 v3.29 把信号改成由 `_supports_market_light()`
+       闸住，而该集合原本不含 `tw`，合并后台股整组失去盘面信号／信号依据／
+       操作建议，报告照样生成、测试照样绿——典型的静默降级。
+    2. 缺资料不得渲染成 0。涨跌家数、涨跌停、成交额、三大法人是四组独立来源，
+       只有其中几组时不能拿别组的存在当理由把缺的印成 0。
+    3. 评不出来就不得给分。所有维度 available=False 时评分器仍回一个分数为
+       预设 50 的完整快照；照印就是凭空生出「50/100 需观察」与操作建议，
+       那个 50 还会被 market_review 当成历史主市场分数。
+
+    **这里刻意不 patch `_supports_market_light` 与 `build_market_light_snapshot`**——
+    第一版就是把它们 patch 成固定值，正好遮住第 1 条，测试全绿而 bug 还在。
+    只设 `region` 与 `profile`，让真实判定跑起来。
+    """
+
+    @staticmethod
+    def _overview(**kw):
+        from src.market_analyzer import MarketOverview
+
+        base = dict(
+            date="2026-08-05", indices=[], up_count=0, down_count=0, flat_count=0,
+            limit_up_count=0, limit_down_count=0, total_amount=0.0, institutional_net=None,
+        )
+        base.update(kw)
+        return MarketOverview(**base)
+
+    @staticmethod
+    def _index(change_pct=2.1):
+        from src.market_analyzer import MarketIndex
+
+        return MarketIndex(code="TAIEX", name="加權指數", current=24000.0,
+                           change=500.0, change_pct=change_pct)
+
+    @staticmethod
+    def _render(overview, *, region="tw", language="zh"):
+        """跑真实的 `_supports_market_light()`（= region in MARKET_LIGHT_REGIONS）。"""
+        from src.market_analyzer import MarketAnalyzer
+
+        analyzer = MarketAnalyzer.__new__(MarketAnalyzer)
+        analyzer.region = region
+        analyzer.profile = SimpleNamespace(has_market_stats=True, has_limit_stats=True)
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value=language), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"):
+            return MarketAnalyzer._build_stats_block(analyzer, overview)
+
+    INST = {"foreign_net": -104.0, "trust_net": 296.0, "dealer_net": -193.0, "total_net": -1.0}
+
+    # ---- 1. 台股的市场集合 ----
+
+    def test_tw_is_inside_the_market_light_region_set(self):
+        from src.schemas.market_light import MARKET_LIGHT_REGIONS
+        from src.services.market_light_service import MARKET_LIGHT_REGIONS as SERVICE_REGIONS
+
+        assert "tw" in MARKET_LIGHT_REGIONS
+        assert "tw" in SERVICE_REGIONS
+
+    def test_tw_gets_a_market_signal_from_real_region_check(self):
+        """走真实 region 判定：tw 必须拿到盘面信号，与 cn 一致。"""
+        overview = self._overview(up_count=350, down_count=550, flat_count=80,
+                                  limit_up_count=43, limit_down_count=355,
+                                  total_amount=3400.0, indices=[self._index()])
+        for region in ("tw", "cn"):
+            block = self._render(overview, region=region)
+            assert "盘面信号" in block, f"{region} 应有盘面信号"
+            assert "操作建议" in block
+
+    def test_unsupported_region_has_no_market_signal_but_keeps_the_table(self):
+        overview = self._overview(up_count=350, down_count=550, total_amount=3400.0)
+        block = self._render(overview, region="eu")
+
+        assert "盘面信号" not in block
+        assert "上涨/下跌/平盘" in block
+
+    # ---- 2. 逐列的资料可用性 ----
+
+    def test_institutional_only_does_not_fabricate_zero_breadth(self):
+        block = self._render(self._overview(institutional_net=self.INST))
+
+        assert "三大法人净买卖" in block
+        assert "| 指标 | 数值 | 观察 |" in block, "表头必须存在，法人列才是合法表格列"
+        assert "上涨/下跌/平盘" not in block
+        assert "涨停/跌停" not in block
+        assert "两市成交额" not in block
+
+    def test_limit_only_renders_just_the_limit_row(self):
+        """只有涨跌停时，整块不得消失，也不得补上 0/0/0 与 0 亿。"""
+        block = self._render(self._overview(limit_up_count=43, limit_down_count=355))
+
+        assert "涨停/跌停 | 43 / 355" in block
+        assert "上涨/下跌/平盘" not in block
+        assert "两市成交额" not in block
+
+    def test_turnover_only_renders_just_the_turnover_row(self):
+        block = self._render(self._overview(total_amount=3400.0))
+
+        assert "两市成交额 | 3400 亿" in block
+        assert "上涨/下跌/平盘" not in block
+        assert "涨停/跌停" not in block
+
+    def test_all_groups_render_in_order(self):
+        overview = self._overview(up_count=350, down_count=550, flat_count=80,
+                                  limit_up_count=43, limit_down_count=355,
+                                  total_amount=3400.0, institutional_net=self.INST)
+        block = self._render(overview)
+
+        assert (block.index("| 指标 |") < block.index("上涨/下跌/平盘")
+                < block.index("涨停/跌停") < block.index("两市成交额") < block.index("三大法人"))
+
+    def test_english_institutional_only_omits_zero_breadth_line(self):
+        block = self._render(self._overview(institutional_net=self.INST), language="en")
+
+        assert "Institutional net" in block
+        assert "Breadth" not in block, "没有涨跌家数就不该输出 Advancers 0 / Decliners 0"
+
+    def test_english_breadth_line_only_lists_available_groups(self):
+        block = self._render(self._overview(limit_up_count=43, limit_down_count=355),
+                             language="en")
+
+        assert "Limit-up 43 / Limit-down 355" in block
+        assert "Advancers" not in block
+        assert "Turnover" not in block
+
+    # ---- 3. 评不出来就不给分 ----
+
+    def test_no_scoreable_dimension_means_no_signal(self):
+        """只有三大法人时评分器每个维度都不可用，不得输出预设的 50/100。"""
+        block = self._render(self._overview(institutional_net=self.INST))
+
+        assert "盘面信号" not in block, "所有维度不可用时不得凭空给分"
+        assert "50/100" not in block
+        assert "操作建议" not in block
+
+    def test_partial_dimension_still_produces_a_real_signal(self):
+        """只有涨跌停：limit 维度真的可用，分数是评出来的，必须输出。"""
+        block = self._render(self._overview(limit_up_count=43, limit_down_count=355))
+
+        assert "盘面信号" in block
+        assert "50/100" not in block, "这是真读数，不该落在预设值上"
+
+    def test_market_light_has_reading_rejects_all_unavailable(self):
+        from src.market_analyzer import _market_light_has_reading
+
+        assert _market_light_has_reading(None) is False
+        assert _market_light_has_reading({}) is False
+        assert _market_light_has_reading(
+            {"score": 50, "dimensions": {"breadth": {"available": False},
+                                         "index": {"available": False},
+                                         "limit": {"available": False}}}
+        ) is False
+        assert _market_light_has_reading(
+            {"score": 10, "dimensions": {"breadth": {"available": False},
+                                         "index": {"available": False},
+                                         "limit": {"available": True}}}
+        ) is True
+
+    def test_empty_overview_renders_nothing(self):
+        assert self._render(self._overview()) == ""
+
+
+class TestMarketLightReachesEveryConsumer:
+    """无读数的快照不得流进**任何**下游，不只是 Markdown。
+
+    第二批修复只在 `_build_stats_block` 与 `market_review` 的 primary score 上加了
+    闸门，漏掉第三条：`_run_daily_review_parts` 无条件建立 snapshot，它会进
+    `MarketLightReviewResult.market_light_snapshot`、structured payload
+    （`payload["market_light"]`）、`market_review_payload` API、历史纪录，并被
+    `daily_market_context` 读成「conservative / 等待确认」——一个没人量过的市场判断。
+
+    所以闸门要在**源头**，不是在每个消费端。这组测试盯的就是源头。
+    """
+
+    @staticmethod
+    def _analyzer(region="tw"):
+        from src.market_analyzer import MarketAnalyzer
+
+        analyzer = MarketAnalyzer.__new__(MarketAnalyzer)
+        analyzer.region = region
+        analyzer.profile = SimpleNamespace(has_market_stats=True, has_limit_stats=True)
+        return analyzer
+
+    @staticmethod
+    def _overview(**kw):
+        from src.market_analyzer import MarketOverview
+
+        base = dict(
+            date="2026-08-05", indices=[], up_count=0, down_count=0, flat_count=0,
+            limit_up_count=0, limit_down_count=0, total_amount=0.0, institutional_net=None,
+        )
+        base.update(kw)
+        return MarketOverview(**base)
+
+    INST = {"foreign_net": -104.0, "trust_net": 296.0, "dealer_net": -193.0, "total_net": -1.0}
+
+    def _run_parts(self, overview):
+        """跑真实的 `_run_daily_review_parts`，只垫掉取数与 LLM。"""
+        from src.market_analyzer import MarketAnalyzer
+
+        analyzer = self._analyzer()
+        with patch.object(MarketAnalyzer, "get_market_overview", return_value=overview), \
+             patch.object(MarketAnalyzer, "search_market_news", return_value=[]), \
+             patch.object(MarketAnalyzer, "_merge_persisted_market_intelligence",
+                          side_effect=lambda news: news), \
+             patch.object(MarketAnalyzer, "generate_market_review", return_value="# 台股大盤複盤\n\n正文"), \
+             patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"):
+            return MarketAnalyzer._run_daily_review_parts(analyzer)
+
+    def test_unreadable_snapshot_never_reaches_the_result_or_payload(self):
+        """只有三大法人：评分器每个维度都不可用，分数是预设 50。"""
+        result = self._run_parts(self._overview(institutional_net=self.INST))
+
+        assert result.market_light_snapshot is None, "无读数快照不得进 result"
+        assert "market_light" not in result.structured_payload, "无读数快照不得进 structured payload"
+
+    def test_real_reading_still_reaches_the_result_and_payload(self):
+        """有真读数时必须照常流下去——闸门不能顺手把正常路径也关掉。"""
+        overview = self._overview(up_count=350, down_count=550, flat_count=80,
+                                  limit_up_count=43, limit_down_count=355, total_amount=3400.0)
+        result = self._run_parts(overview)
+
+        assert isinstance(result.market_light_snapshot, dict)
+        # 断言**精确值**而不是「不等于 50」——後者是弱断言，任何评分改动都能蒙过。
+        # 29 = breadth(39%) 与 limit(-312) 两个维度按权重归一化的结果（index 不可用）。
+        assert result.market_light_snapshot["score"] == 29
+        assert result.structured_payload["market_light"] == result.market_light_snapshot
+
+    def test_unsupported_region_carries_no_snapshot(self):
+        from src.market_analyzer import MarketAnalyzer
+
+        analyzer = self._analyzer(region="eu")
+        overview = self._overview(up_count=350, down_count=550, total_amount=3400.0)
+        with patch.object(MarketAnalyzer, "get_market_overview", return_value=overview), \
+             patch.object(MarketAnalyzer, "search_market_news", return_value=[]), \
+             patch.object(MarketAnalyzer, "_merge_persisted_market_intelligence",
+                          side_effect=lambda news: news), \
+             patch.object(MarketAnalyzer, "generate_market_review", return_value="# Recap\n\nbody"), \
+             patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"):
+            result = MarketAnalyzer._run_daily_review_parts(analyzer)
+
+        assert result.market_light_snapshot is None
+        assert "market_light" not in result.structured_payload
+
+    def test_non_finite_institutional_value_voids_the_whole_group(self):
+        """三大法人是一组：任一格非有限就整组作废。
+
+        只丢掉坏的那格会让「外资 -104 / 投信 +0」看起来像投信真的没动作。
+        断言在**渲染与 payload**上，不在 dataclass 栏位上——provider 是建构之後才
+        逐栏赋值的，栏位层的清洗根本跑不到（见 `TestNonFiniteValuesOnTheRealProviderPath`）。
+        """
+        from src.market_analyzer import MarketAnalyzer
+
+        analyzer = self._analyzer()
+        overview = self._overview(
+            up_count=350, down_count=550, flat_count=80, total_amount=3400.0,
+        )
+        overview.institutional_net = {
+            "foreign_net": -104.0, "trust_net": float("nan"),
+            "dealer_net": -193.0, "total_net": -1.0,
+        }
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"):
+            stats = MarketAnalyzer._build_stats_block(analyzer, overview)
+            payload = MarketAnalyzer.build_market_review_payload(
+                analyzer, overview, [], "# 台股大盤複盤\n\n正文"
+            )
+
+        assert "三大法人" not in stats, "坏了一格就整组不渲染，不能只印能印的那几格"
+        assert "-104" not in stats
+        assert "institutional_net" not in payload.get("breadth", {})
+
+    def test_non_finite_never_reaches_the_payload_or_json(self):
+        """端到端：非有限值不得出现在 structured payload，且 payload 必须可序列化。"""
+        import json
+
+        from fastapi.responses import JSONResponse
+
+        from src.market_analyzer import MarketAnalyzer, MarketIndex
+
+        analyzer = self._analyzer()
+        overview = self._overview(
+            up_count=350, down_count=550, flat_count=80,
+            limit_up_count=43, limit_down_count=355, total_amount=float("nan"),
+            indices=[MarketIndex(code="TAIEX", name="加權指數", current=24000.0,
+                                 change=0.0, change_pct=float("nan"))],
+        )
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"):
+            payload = MarketAnalyzer.build_market_review_payload(
+                analyzer, overview, [], "# 台股大盤複盤\n\n正文"
+            )
+
+        raw = json.dumps(payload, ensure_ascii=False, allow_nan=True)
+        assert "nan" not in raw.lower() and "infinity" not in raw.lower()
+        JSONResponse(content=payload)  # 旧版在这里抛 ValueError
+
+        light = payload.get("market_light")
+        assert light is not None, "breadth 与 limit 仍可用，应该还有读数"
+        assert "nan" not in " ".join(light["reasons"]).lower(), "reason 文案不得出现 +nan%"
+
+
+class TestNonFiniteValuesOnTheRealProviderPath:
+    """非有限值必须走**provider 的真实赋值形状**来验，不是用 kwargs 建构。
+
+    `get_market_overview` 先建一个空的 `MarketOverview`，再把 provider 结果逐栏写回
+    （`total_amount`、三大法人、板块／概念排行都是建构**之後**才赋值）。所以
+    `__post_init__` 层的清洗根本跑不到——第一版就是这样：测试用 kwargs 建构，全绿，
+    真实路径完全没保护。这组测试刻意复制那个形状。
+
+    非有限值有两种不同的破坏方式，都要盯：
+    - `JSONResponse` 对 NaN 抛 `Out of range float values are not JSON compliant`
+      （整个 API 回应 500）
+    - 格式化写出 `nan`／`+nan%`，评分时 NaN 因比较恒假而落在 `min()` 上界得满分
+      ——两者看起来都像真读数
+    """
+
+    @staticmethod
+    def _analyzer():
+        """跟本檔既有 helper 同一套建构方式，但用台股 profile。"""
+        from src.core.market_profile import CN_PROFILE
+        from src.core.market_strategy import get_market_strategy_blueprint
+        from src.market_analyzer import MarketAnalyzer
+
+        cfg = MagicMock()
+        cfg.market_review_region = "tw"
+        cfg.market_review_color_scheme = "green_up"
+        cfg.report_language = "zh"
+
+        ma = MarketAnalyzer.__new__(MarketAnalyzer)
+        ma.analyzer = MagicMock()
+        ma.config = cfg
+        ma.profile = CN_PROFILE          # 有完整 breadth/limit/ranking 能力
+        ma.strategy = get_market_strategy_blueprint("cn")
+        ma.region = "tw"
+        return ma
+
+    @staticmethod
+    def _overview_assigned_after_construction(**assignments):
+        """复制 `get_market_overview` 的形状：先建空的，再逐栏赋值。"""
+        from src.market_analyzer import MarketIndex, MarketOverview
+
+        overview = MarketOverview(date="2026-08-05")
+        overview.up_count, overview.down_count, overview.flat_count = 350, 550, 80
+        overview.limit_up_count, overview.limit_down_count = 43, 355
+        overview.total_amount = 3400.0
+        overview.indices = [MarketIndex(code="TAIEX", name="加權指數", current=24000.0,
+                                        change=500.0, change_pct=2.1)]
+        for name, value in assignments.items():
+            setattr(overview, name, value)
+        return overview
+
+    @staticmethod
+    def _bad_index(**kw):
+        from src.market_analyzer import MarketIndex
+
+        base = dict(code="TAIEX", name="加權指數", current=24000.0, change=500.0, change_pct=2.1)
+        base.update(kw)
+        return [MarketIndex(**base)]
+
+    CASES = {
+        "total_amount 非有限": {"total_amount": float("nan")},
+        "成交额 +inf": {"total_amount": float("inf")},
+        "法人单栏 -inf": {"institutional_net": {
+            "foreign_net": -104.0, "trust_net": float("-inf"),
+            "dealer_net": -193.0, "total_net": -1.0}},
+        "板块排行 +inf": {"top_sectors": [{"name": "半導體", "change_pct": float("inf")}]},
+        "概念排行 NaN": {"top_concepts": [{"name": "AI", "change_pct": float("nan")}]},
+    }
+
+    def _render_all(self, overview):
+        """跑所有会吃到这些数值的出口，回传 (payload, 各区块文字)。"""
+        from src.market_analyzer import MarketAnalyzer
+
+        analyzer = self._analyzer()
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"):
+            blocks = {
+                "indices": MarketAnalyzer._build_indices_block(analyzer, overview),
+                "sector": MarketAnalyzer._build_sector_block(analyzer, overview),
+                "stats": MarketAnalyzer._build_stats_block(analyzer, overview),
+                "template": MarketAnalyzer._generate_template_review(analyzer, overview, []),
+            }
+            payload = MarketAnalyzer.build_market_review_payload(
+                analyzer, overview, [], "# 台股大盤複盤\n\n正文"
+            )
+        return payload, blocks
+
+    def test_payload_is_json_serialisable_for_every_non_finite_shape(self):
+        from fastapi.responses import JSONResponse
+
+        for label, assignments in self.CASES.items():
+            overview = self._overview_assigned_after_construction(**assignments)
+            payload, _ = self._render_all(overview)
+            # 旧版在这里抛 ValueError: Out of range float values are not JSON compliant
+            JSONResponse(content=payload)
+
+            def assert_finite(node, path=""):
+                if isinstance(node, dict):
+                    for key, item in node.items():
+                        assert_finite(item, f"{path}.{key}")
+                elif isinstance(node, list):
+                    for i, item in enumerate(node):
+                        assert_finite(item, f"{path}[{i}]")
+                elif isinstance(node, float):
+                    assert node == node and node not in (float("inf"), float("-inf")), \
+                        f"{label}: payload{path} 仍是非有限值"
+
+            assert_finite(payload)
+
+    def test_no_report_path_prints_nan_or_crashes(self):
+        for label, assignments in self.CASES.items():
+            overview = self._overview_assigned_after_construction(**assignments)
+            _, blocks = self._render_all(overview)   # 抛异常就是失败
+            for name, text in blocks.items():
+                assert "nan" not in text.lower(), f"{label}: {name} 区块写出了 nan"
+                assert "inf" not in text.lower().replace("info", ""), \
+                    f"{label}: {name} 区块写出了 inf"
+
+    def test_non_finite_index_does_not_crash_the_index_table(self):
+        """`None` 会让 `:.2f` 抛 TypeError、`>` 抛 TypeError——比 NaN 更糟。
+
+        所以栏位本身不改型别，改在格式化与可用性判断上认得缺失值。
+        """
+        for kw in ({"current": float("nan")}, {"change_pct": float("nan")},
+                   {"change_pct": float("inf")}, {"amplitude": float("nan")}):
+            overview = self._overview_assigned_after_construction(indices=self._bad_index(**kw))
+            _, blocks = self._render_all(overview)
+            assert "nan" not in blocks["indices"].lower()
+            assert "N/A" in blocks["indices"] or "⚪" in blocks["indices"]
+
+    def test_missing_turnover_is_not_reported_as_zero(self):
+        """缺失的成交额不得印成 `0 亿`——0 是平盘，是一个有意义的读数。"""
+        overview = self._overview_assigned_after_construction(total_amount=float("nan"))
+        _, blocks = self._render_all(overview)
+
+        assert "两市成交额 | 0 亿" not in blocks["stats"]
+        assert "两市成交额" not in blocks["stats"], "缺失时整列不该出现"
+
+    def test_normal_values_are_untouched(self):
+        overview = self._overview_assigned_after_construction()
+        payload, blocks = self._render_all(overview)
+
+        assert payload["breadth"]["total_amount"] == 3400.0
+        assert "两市成交额 | 3400 亿" in blocks["stats"]
+        assert "+2.10%" in blocks["indices"]

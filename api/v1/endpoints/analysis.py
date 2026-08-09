@@ -92,6 +92,7 @@ from src.utils.data_processing import (
     extract_realtime_detail_fields,
     extract_guardrail_reason,
 )
+from src.utils.market_review_region import normalize_market_review_region_lenient
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +128,11 @@ def _with_request_report_language(config: Config, report_language: Optional[str]
 
 def _run_market_review_background(
     send_notification: bool,
-    override_region: Optional[str] = None,
+    effective_region: str,
     lock_token: Optional[_MarketReviewExecutionLock] = None,
     config: Optional[Config] = None,
     query_id: Optional[str] = None,
-) -> None:
+) -> Dict[str, Any]:
     """Run market review after the API response has been accepted."""
     from src.core.market_review import run_market_review
 
@@ -144,7 +145,7 @@ def _run_market_review_background(
             "search_service": search_service,
             "config": runtime_config,
             "send_notification": send_notification,
-            "override_region": override_region,
+            "override_region": effective_region,
             "return_structured": True,
             "trigger_source": "api",
         }
@@ -154,7 +155,7 @@ def _run_market_review_background(
             "[MarketReview] component=market_review action=background_start "
             "trigger_source=api task_id=%s region=%s",
             query_id or "-",
-            override_region or getattr(runtime_config, "market_review_region", "cn") or "cn",
+            effective_region,
         )
         report = run_market_review(**review_kwargs)
         if not report:
@@ -163,8 +164,9 @@ def _run_market_review_background(
             return {
                 "result": report.report,
                 "market_review_payload": getattr(report, "market_review_payload", None),
+                "region": effective_region,
             }
-        return {"result": report}
+        return {"result": report, "region": effective_region}
     finally:
         _release_market_review_lock(lock_token)
 
@@ -498,9 +500,9 @@ def trigger_market_review(
     """Trigger market review from Web/API without blocking the request."""
     request = request or MarketReviewRequest()
 
-    runtime_config = _with_request_report_language(
-        config,
-        getattr(request, "report_language", None),
+    runtime_config = _with_request_report_language(config, request.report_language)
+    effective_region = request.region or (
+        normalize_market_review_region_lenient(runtime_config.market_review_region) or "cn"
     )
 
     review_language = normalize_report_language(getattr(runtime_config, "report_language", "zh"))
@@ -536,13 +538,13 @@ def trigger_market_review(
             "[MarketReview] component=market_review action=submit trigger_source=api "
             "task_id=%s region=%s send_notification=%s",
             task_id,
-            getattr(runtime_config, "market_review_region", "cn") or "cn",
+            effective_region,
             request.send_notification,
         )
         task = get_task_queue().submit_background_task(
             lambda: _run_market_review_background(
                 request.send_notification,
-                override_region=None,
+                effective_region=effective_region,
                 lock_token=lock_token,
                 config=runtime_config,
                 query_id=task_id,
@@ -551,6 +553,7 @@ def trigger_market_review(
             stock_name=mr_label["name"],
             message=mr_label["submitted"],
             task_id=task_id,
+            region=effective_region,
         )
     except Exception:
         _release_market_review_lock(lock_token)
@@ -560,6 +563,7 @@ def trigger_market_review(
         status="accepted",
         message=mr_label["submitted_full"],
         send_notification=request.send_notification,
+        region=effective_region,
         task_id=task.task_id,
         trace_id=_get_task_trace_id(task),
     )
@@ -627,6 +631,7 @@ def get_task_list(
             selection_source=t.selection_source,
             analysis_phase=t.analysis_phase,
             skills=getattr(t, "skills", None),
+            region=t.region,
         )
         for t in all_tasks
     ]
@@ -1062,6 +1067,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
             result=result,
             market_review_report=market_review_report,
             market_review_payload=market_review_payload,
+            region=task.region,
             error=task.error,
             stock_name=task.stock_name,
             original_query=task.original_query,
@@ -1083,10 +1089,18 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                 market_review_report = None
                 context_snapshot = parse_json_field(getattr(record, "context_snapshot", None))
                 market_review_payload = None
+                region = None
                 if isinstance(context_snapshot, dict):
+                    raw_region = context_snapshot.get("market_review_region")
+                    if isinstance(raw_region, str) and raw_region.strip():
+                        region = raw_region.strip()
                     payload = context_snapshot.get("market_review_payload")
                     if isinstance(payload, dict):
                         market_review_payload = payload
+                        if region is None:
+                            payload_region = payload.get("region")
+                            if isinstance(payload_region, str) and payload_region.strip():
+                                region = payload_region.strip()
                 if isinstance(raw_result, dict):
                     report_text = raw_result.get("raw_response") or raw_result.get("market_review_report")
                     if isinstance(report_text, str) and report_text.strip():
@@ -1102,6 +1116,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                     result=None,
                     market_review_report=market_review_report,
                     market_review_payload=market_review_payload,
+                    region=region,
                     error=None,
                     stock_name=record.name,
                 )

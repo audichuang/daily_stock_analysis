@@ -350,6 +350,19 @@ class LLMClient:
         result = "".join(parts)
         return result.strip() if strip else result
 
+    def _finish_reason_of(self, response: Any) -> str:
+        """Why the model stopped, for diagnosing empty responses.
+
+        `length` with no content means the token budget ran out **before** any
+        visible text — the usual shape for a reasoning model that spends the
+        budget thinking. Without it, an empty response is indistinguishable from
+        a dead key or an outage.
+        """
+        choices = self._get_response_field(response, "choices")
+        if not choices:
+            return ""
+        return str(self._get_response_field(choices[0], "finish_reason") or "")
+
     def _extract_completion_text(self, response: Any) -> str:
         """Extract text from non-stream LiteLLM completion responses."""
         choices = self._get_response_field(response, "choices")

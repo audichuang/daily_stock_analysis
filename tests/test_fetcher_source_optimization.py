@@ -118,7 +118,7 @@ class TestFetcherSourceOptimization(unittest.TestCase):
             },
         ), patch("data_provider.efinance_fetcher.EfinanceFetcher", return_value=_StubFetcher("EfinanceFetcher", 0)), patch(
             "data_provider.tencent_fetcher.TencentFetcher",
-            return_value=_StubFetcher("TencentFetcher", 0),
+            return_value=_StubFetcher("TencentFetcher", 5),
         ), patch(
             "data_provider.akshare_fetcher.AkshareFetcher",
             return_value=_StubFetcher("AkshareFetcher", 1),
@@ -145,12 +145,12 @@ class TestFetcherSourceOptimization(unittest.TestCase):
             manager.available_fetchers,
             [
                 "EfinanceFetcher",
-                "TencentFetcher",
                 "AkshareFetcher",
                 "MarketDBFetcher",  # 台股历史 priority=1（本地 Postgres market schema；无 psycopg/DB 时自我熔断降级）
                 "PytdxFetcher",
                 "BaostockFetcher",
                 "YfinanceFetcher",
+                "TencentFetcher",
                 # 始终注册、内部按能力/金钥自我停用的专用数据源（按 priority 排序）：
                 "ShioajiFetcher",  # 台股 realtime_quote（无套件/金钥时自我停用）
                 "TwseFetcher",     # 台股大盘统计（仅 get_market_stats）
@@ -158,6 +158,45 @@ class TestFetcherSourceOptimization(unittest.TestCase):
         )
         mock_tushare.assert_not_called()
         mock_longbridge.assert_not_called()
+
+    @patch("src.config.get_config")
+    def test_daily_fallback_tries_akshare_before_tencent(self, mock_get_config):
+        mock_get_config.return_value = SimpleNamespace()
+        DataFetcherManager.reset_daily_source_health()
+        try:
+            efinance = MagicMock()
+            efinance.name = "EfinanceFetcher"
+            efinance.priority = 0
+            efinance.get_daily_data.side_effect = RuntimeError("temporary failure")
+
+            akshare = MagicMock()
+            akshare.name = "AkshareFetcher"
+            akshare.priority = 1
+            akshare.get_daily_data.return_value = _make_daily_df()
+
+            tencent = MagicMock()
+            tencent.name = "TencentFetcher"
+            tencent.priority = 5
+            tencent.get_daily_data.return_value = _make_daily_df()
+
+            manager = DataFetcherManager(fetchers=[tencent, akshare, efinance])
+            df, source = manager.get_daily_data(
+                "000001",
+                start_date="2026-05-01",
+                end_date="2026-05-08",
+            )
+
+            self.assertFalse(df.empty)
+            self.assertEqual(source, "AkshareFetcher")
+            self.assertEqual(
+                manager.available_fetchers,
+                ["EfinanceFetcher", "AkshareFetcher", "TencentFetcher"],
+            )
+            efinance.get_daily_data.assert_called_once()
+            akshare.get_daily_data.assert_called_once()
+            tencent.get_daily_data.assert_not_called()
+        finally:
+            DataFetcherManager.reset_daily_source_health()
 
     @patch("src.config.get_config")
     def test_manager_enables_longbridge_with_oauth_client_id(self, mock_get_config):
@@ -171,7 +210,7 @@ class TestFetcherSourceOptimization(unittest.TestCase):
 
         with patch("data_provider.efinance_fetcher.EfinanceFetcher", return_value=_StubFetcher("EfinanceFetcher", 0)), patch(
             "data_provider.tencent_fetcher.TencentFetcher",
-            return_value=_StubFetcher("TencentFetcher", 0),
+            return_value=_StubFetcher("TencentFetcher", 5),
         ), patch(
             "data_provider.akshare_fetcher.AkshareFetcher",
             return_value=_StubFetcher("AkshareFetcher", 1),

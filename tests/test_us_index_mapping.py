@@ -188,6 +188,27 @@ class TestGetUsIndexYfSymbol(unittest.TestCase):
         self.assertEqual(get_us_index_yf_symbol('   '), (None, None))
 
 
+class TestSoxIsAnIndexNotAStock(unittest.TestCase):
+    """费半必须走指数路径——漏掉它会**静默**取到别家公司的报价。
+
+    `SOX` 符合美股 1-5 字母的 pattern，而 Yahoo 上 `SOX` 真的存在一档
+    Scanbox Asia Pacific Ltd：不报错、有价格、名字也在，只是标的完全不对。
+    台股盘前判读拿费半当半导体门槛，取错标的会直接翻转 regime 判定。
+    """
+
+    def test_sox_resolves_to_the_philadelphia_semiconductor_index(self):
+        for code in ('SOX', '^SOX', 'sox'):
+            with self.subTest(code=code):
+                symbol, name = get_us_index_yf_symbol(code)
+                self.assertEqual(symbol, '^SOX')
+                self.assertIn('半导体', name)
+
+    def test_sox_is_not_treated_as_a_us_stock(self):
+        """这一条是防 Scanbox 的那道门：判成个股就会去抓 `SOX` 这档股票。"""
+        self.assertFalse(is_us_stock_code('SOX'))
+        self.assertTrue(is_us_index_code('SOX'))
+
+
 class TestUsMappingCompleteness(unittest.TestCase):
     """Tests for US_INDEX_MAPPING completeness"""
 

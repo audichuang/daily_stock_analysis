@@ -58,10 +58,18 @@ class MarketLightServiceTestCase(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_normalize_market_region_rejects_unknown_regions(self) -> None:
-        for region in ("global", "tw"):
+        for region in ("global", "eu"):
             with self.subTest(region=region):
-                with self.assertRaisesRegex(ValueError, "cn, hk, us, jp, kr"):
+                with self.assertRaisesRegex(ValueError, "cn, hk, us, tw, jp, kr"):
                     normalize_market_region(region)
+
+    def test_normalize_market_region_accepts_tw(self) -> None:
+        """台股在本 fork 有完整涨跌家数与成交额，是合法的 Market Light 市场。
+
+        曾经不是——上游 v3.29 把大盘复盘的盘面信号改成由该集合闸住之后，漏掉
+        tw 会让台股复盘静默失去盘面信号／信号依据／操作建议。
+        """
+        self.assertEqual(normalize_market_region("TW"), "tw")
 
     def _add_history(self, *, created_at: datetime, context_snapshot: dict | None) -> None:
         with self.db.get_session() as session:

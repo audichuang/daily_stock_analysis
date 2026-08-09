@@ -4,6 +4,7 @@ Replaces finlab's sqlite pipeline. Daily/date-based sources go through
 ``crawl_day``; ``crawl_range`` loops dates and skips ones already stored.
 """
 
+import logging
 import os
 import shutil
 
@@ -258,6 +259,11 @@ def crawl_financials(engine, year, season, keep_files=False, min_stocks=1000):
     quarter;Q4 需要同年 Q3 累計在庫才能推導單季損益,缺 Q3 直接失敗而不是
     默默寫入缺 income_sheet 的半套季資料。"""
     directory = os.path.join("data", "financial_statement", f"{year}{season}")
+    partial_marker = os.path.join(directory, ".partial-quarter")
+    # 目錄已存在則沿用——**除非**上次是被判為半季。截止日前抓到的那份不會自己長大，
+    # 沿用它會讓截止日後的重跑再失敗一次，看起來像交易所沒發布。
+    if os.path.isdir(directory) and os.path.exists(partial_marker):
+        shutil.rmtree(directory, ignore_errors=True)
     if not os.path.isdir(directory):
         if year < 2019:
             raise NotImplementedError("僅支援 2019 年(含)以後的 IFRS 財報")
@@ -265,9 +271,20 @@ def crawl_financials(engine, year, season, keep_files=False, min_stocks=1000):
     frames = financial_statement.pack_htmls(year, season, directory)
     parsed = len(frames["balance_sheet"])
     if parsed < min_stocks:
+        # 家數不足有**兩個**成因，從這裡分不出來：截止日前的半季發布，以及解析器
+        # 對不上新版 markup。所以檔案要留著（後者需要它追查），但要標記成半季，
+        # 讓下次重跑重新下載而不是沿用——不標的話，截止日後重跑會再失敗一次。
+        try:
+            with open(partial_marker, "w", encoding="utf-8") as fh:
+                fh.write(f"parsed={parsed} min_stocks={min_stocks}\n")
+        except OSError as exc:
+            # 標記只是為了讓下次重跑重新下載，寫不進去不該蓋掉真正的錯誤——
+            # 那會把「這季只有 525 檔」變成一個看不懂的 FileNotFoundError。
+            logging.warning("could not mark %s as a partial quarter: %s", directory, exc)
         raise RuntimeError(
             f"{year}Q{season}: only {parsed} stocks parsed (<{min_stocks}), "
-            f"quarter looks partial — nothing written, files kept at {directory}")
+            f"quarter looks partial or the parser is out of date — nothing written; "
+            f"files kept at {directory} for inspection and marked so a rerun re-downloads")
     table = models.FinancialStatement.__table__
     total = 0
     with engine.begin() as conn:

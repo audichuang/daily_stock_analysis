@@ -12,6 +12,7 @@ A股自选股智能分析系统 - 核心分析流水线
 """
 
 import logging
+import inspect
 import threading
 import time
 import uuid
@@ -59,6 +60,7 @@ from src.agent.final_explanation import (
     build_pipeline_final_explanation,
     capture_pipeline_action_adjustment,
 )
+from src.formatters import strip_hidden_markdown_metadata
 from src.phase_decision_guardrail import apply_phase_decision_guardrails
 from src.services.daily_market_context import (
     DailyMarketContext,
@@ -92,10 +94,12 @@ from src.services.decision_signal_summary import summarize_decision_signal
 from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 from src.core.trading_calendar import (
+    MarketPhase,
     build_market_phase_context,
     get_effective_trading_date,
     get_market_for_stock,
     get_market_now,
+    infer_market_phase,
     is_market_open,
 )
 from data_provider.us_index_mapping import is_us_stock_code
@@ -103,6 +107,30 @@ from bot.models import BotMessage
 
 
 logger = logging.getLogger(__name__)
+
+
+def _share_image_payload(result: Any) -> Optional[Dict[str, Any]]:
+    """Return structured poster data when the result exposes the real contract."""
+
+    to_dict = getattr(result, "to_dict", None)
+    if not callable(to_dict):
+        return None
+    try:
+        payload = to_dict()
+    except Exception as exc:
+        logger.debug("构建分享图片结构化数据失败，回退 Markdown: %s", exc)
+        return None
+    return payload if isinstance(payload, dict) and payload else None
+
+
+def _supports_explicit_keyword(callable_obj: Any, keyword: str) -> bool:
+    """Avoid breaking custom notifier overrides that predate an optional kwarg."""
+
+    try:
+        return keyword in inspect.signature(callable_obj).parameters
+    except (TypeError, ValueError):
+        return False
+
 
 # 防御性 guard：当实例绕过 __init__（如测试中 __new__）构造时，
 # double-check 初始化 _single_stock_notify_lock 仍然线程安全。
@@ -2235,6 +2263,17 @@ class StockAnalysisPipeline:
         if market and not is_market_open(market, market_today):
             return df
 
+        # **開盤前不得補今天的 K 棒。** 上面只問「今天是不是交易日」，於是台北 12:00~21:30
+        # 跑美股時：紐約當天是交易日、但盤還沒開，`last_date < market_today` 成立 ⇒ 下面
+        # 會用「即時價」（此刻其實是昨收）複製出一根 OHLC 與量都和前一根相同的假日線，
+        # 指標全部在它上面算。實測 AAPL：ma5 309.91→311.89、bias_ma5 1.10→0.46、
+        # macd_dif 0.88→0.48、volume_status 由 SHRINK_VOLUME_UP 翻成 SHRINK_VOLUME_DOWN、
+        # signal_score 46→55。不報錯，只是分數不對。
+        # 只擋 PREMARKET：盤中／午休／收盤集合競價本來就該疊即時價，收盤後（POSTMARKET）
+        # 那筆即時價就是當日收盤，DB 日線還沒進來時仍該補，不能一起關掉。
+        if market and infer_market_phase(market) == MarketPhase.PREMARKET:
+            return df
+
         last_val = df['date'].max()
         last_date = (
             last_val.date() if hasattr(last_val, 'date') else
@@ -3282,14 +3321,16 @@ class StockAnalysisPipeline:
                     report_content = self.notifier.generate_single_stock_report(result)
                     logger.info(f"[{stock_code}] 使用精简报告格式")
 
-                sent = self.notifier.send(
-                    report_content,
-                    email_stock_codes=[stock_code],
-                    route_type="report",
-                    severity="info",
-                    dedup_key=f"report:single:{stock_code}:{report_type.value}",
-                    cooldown_key=f"report:single:{stock_code}:{report_type.value}",
-                )
+                send_kwargs: Dict[str, Any] = {
+                    "email_stock_codes": [stock_code],
+                    "route_type": "report",
+                    "severity": "info",
+                    "dedup_key": f"report:single:{stock_code}:{report_type.value}",
+                    "cooldown_key": f"report:single:{stock_code}:{report_type.value}",
+                }
+                if _supports_explicit_keyword(self.notifier.send, "structured_payload"):
+                    send_kwargs["structured_payload"] = _share_image_payload(result)
+                sent = self.notifier.send(report_content, **send_kwargs)
                 notification_run = self._build_notification_run_snapshot(
                     channel="report",
                     status="success" if sent else "failed",
@@ -3491,6 +3532,9 @@ class StockAnalysisPipeline:
                 non_wechat_channels_needing_image = {
                     ch for ch in channels_needing_image if ch != NotificationChannel.WECHAT
                 }
+                single_share_payload = (
+                    _share_image_payload(results[0]) if len(results) == 1 else None
+                )
 
                 def _get_md2img_hint() -> str:
                     try:
@@ -3504,9 +3548,12 @@ class StockAnalysisPipeline:
 
                 image_bytes = None
                 if non_wechat_channels_needing_image:
-                    image_bytes = markdown_to_image(
-                        report, max_chars=self.notifier._markdown_to_image_max_chars
-                    )
+                    image_kwargs: Dict[str, Any] = {
+                        "max_chars": self.notifier._markdown_to_image_max_chars,
+                    }
+                    if single_share_payload is not None:
+                        image_kwargs["structured_payload"] = single_share_payload
+                    image_bytes = markdown_to_image(report, **image_kwargs)
                     if image_bytes:
                         logger.info(
                             "Markdown 已转换为图片，将向 %s 发送图片",
@@ -3530,9 +3577,14 @@ class StockAnalysisPipeline:
                         logger.debug(f"企业微信推送内容:\n{dashboard_content}")
                         wechat_image_bytes = None
                         if NotificationChannel.WECHAT in channels_needing_image:
+                            wechat_image_kwargs: Dict[str, Any] = {
+                                "max_chars": self.notifier._markdown_to_image_max_chars,
+                            }
+                            if single_share_payload is not None:
+                                wechat_image_kwargs["structured_payload"] = single_share_payload
                             wechat_image_bytes = markdown_to_image(
                                 dashboard_content,
-                                max_chars=self.notifier._markdown_to_image_max_chars,
+                                **wechat_image_kwargs,
                             )
                             if wechat_image_bytes is None:
                                 logger.warning(
@@ -3569,7 +3621,8 @@ class StockAnalysisPipeline:
                             if self.notifier._feishu_send_as_file:
                                 date_str = datetime.now().strftime('%Y%m%d')
                                 filepath = self.notifier.save_report_to_file(
-                                    report, filename=f"dashboard_{date_str}.md"
+                                    strip_hidden_markdown_metadata(report).strip(),
+                                    filename=f"dashboard_{date_str}.md",
                                 )
                                 return self.notifier.send_feishu_file(filepath)
                             return self.notifier.send_to_feishu(report)
@@ -3629,9 +3682,19 @@ class StockAnalysisPipeline:
                                     grp_report = self._generate_aggregate_report(group_results, report_type)
                                     grp_image_bytes = None
                                     if channel.value in self.notifier._markdown_to_image_channels:
+                                        group_payload = (
+                                            _share_image_payload(group_results[0])
+                                            if len(group_results) == 1
+                                            else None
+                                        )
+                                        group_image_kwargs: Dict[str, Any] = {
+                                            "max_chars": self.notifier._markdown_to_image_max_chars,
+                                        }
+                                        if group_payload is not None:
+                                            group_image_kwargs["structured_payload"] = group_payload
                                         grp_image_bytes = markdown_to_image(
                                             grp_report,
-                                            max_chars=self.notifier._markdown_to_image_max_chars,
+                                            **group_image_kwargs,
                                         )
                                     use_image = self.notifier._should_use_image_for_channel(
                                         channel, grp_image_bytes
@@ -3641,7 +3704,8 @@ class StockAnalysisPipeline:
                                             grp_image_bytes, receivers=receivers
                                         )
                                     return self.notifier.send_to_email(
-                                        grp_report, receivers=receivers
+                                        strip_hidden_markdown_metadata(grp_report).strip(),
+                                        receivers=receivers,
                                     )
 
                                 email_label = (
@@ -3666,7 +3730,9 @@ class StockAnalysisPipeline:
                                 )
                                 if use_image:
                                     return self.notifier._send_email_with_inline_image(image_bytes)
-                                return self.notifier.send_to_email(report)
+                                return self.notifier.send_to_email(
+                                    strip_hidden_markdown_metadata(report).strip()
+                                )
 
                             channel_success, channel_error = _send_channel_safely(
                                 channel.value,

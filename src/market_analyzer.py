@@ -14,8 +14,9 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from inspect import getattr_static
+from math import isfinite
 from typing import Optional, Dict, Any, List
 
 import pandas as pd
@@ -30,6 +31,12 @@ from src.llm.backend_registry import (
     resolve_generation_fallback_backend_id,
 )
 from src.llm.generation_backend import GenerationError
+from src.core.trading_calendar import (
+    MarketPhase,
+    get_effective_trading_date,
+    get_market_now,
+    infer_market_phase,
+)
 from src.schemas.market_light import MARKET_LIGHT_REGIONS, MarketLightSnapshot
 from src.services.run_diagnostics import record_llm_run, record_llm_run_started
 from src.services.intelligence_service import IntelligenceService
@@ -53,6 +60,73 @@ _CHINESE_SECTION_PATTERNS = {
 }
 
 
+def _is_missing_number(value: Any) -> bool:
+    """`value` 是不是「缺失的数字」——None 或非有限值。
+
+    NaN 与 ±inf 必须和 None 同等对待，因为它们在两个地方各有不同的破坏方式：
+    评分时 NaN 因比较恒假而落在 `min()` 的上界得满分，格式化时 `f"{nan:.0f}"`
+    印出 `nan`——两者看起来都像真读数。**注意 NaN 是 truthy**，所以 `bool(x)`
+    这类可用性判断挡不住它，必须显式问。
+    """
+    if value is None:
+        return True
+    return isinstance(value, float) and not isfinite(value)
+
+
+def _scrub_non_finite(value: Any) -> Any:
+    """递归把结构里的 NaN／±inf 换成 None，供**序列化边界**使用。
+
+    这是非有限值真正的汇流点：`MarketOverview` 是先建空物件、再由 provider
+    逐栏赋值（`get_market_overview` 里 `total_amount`、法人、板块／概念排行都是
+    建构**之后**才写入），所以 `__post_init__` 拦不到；而把栏位本身改成 None 又会
+    让宣告为 float 的下游在 `>` 比较与 `:.2f` 格式化上抛 TypeError——比原本的
+    NaN 更糟。
+
+    在 payload 这一层清洗则两个问题都没有：dict 里的 None 就是 JSON null，
+    而且不管哪个栏位、什么时候被赋值、来自哪个 provider，都会经过这里。
+    没有它，`JSONResponse` 会抛 `Out of range float values are not JSON compliant`
+    ——整个 API 回应 500。
+    """
+    if isinstance(value, dict):
+        return {key: _scrub_non_finite(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_non_finite(item) for item in value]
+    if isinstance(value, float) and not isfinite(value):
+        return None
+    return value
+
+
+def _directional_index_changes(overview: "MarketOverview") -> List[float]:
+    """方向性指数的涨跌幅，供评分与 reason 文案**共用同一条件**。
+
+    两件事必须一起做，分开做就会让分数和它自己的依据互相矛盾：
+    - **排除 VIX**：它是波动率／恐慌指数而非方向性指数。美股 risk-off 当天
+      SPX/IXIC/DJI 全跌而 VIX +25%，把它算进平均会得到一个正数 ⇒ 报告写
+      「盘面信号 24/100（偏弱）」的同时印出「主要指数平均涨跌幅 +4.68%」。
+    - **排除非有限值**：NaN 因比较恒假而落在 `min()` 的上界得满分，`+inf` 同理，
+      而它们印出来是 `+nan%`——两者看起来都像真读数。
+    """
+    return [
+        idx.change_pct
+        for idx in overview.indices
+        if not _is_missing_number(idx.change_pct)
+        and (getattr(idx, "code", "") or "").upper() != "VIX"
+    ]
+
+
+def _has_institutional_reading(overview: "MarketOverview") -> bool:
+    """三大法人是**一组**读数：任一格缺失就整组作废。
+
+    只渲染能渲染的那几格会把「投信资料坏了」显示成「投信 +0」——一个看起来像
+    「投信今天没动作」的真读数。四个渲染出口（zh 表格列／en Breadth 行／中英两版
+    prompt）共用这一个判定，避免逐处补而漏。
+    """
+    values = getattr(overview, "institutional_net", None)
+    if not isinstance(values, dict) or not values:
+        return False
+    return all(not _is_missing_number(value) for value in values.values())
+
+
 @dataclass
 class MarketIndex:
     """大盘指数数据"""
@@ -68,7 +142,7 @@ class MarketIndex:
     volume: float = 0.0          # 成交量（手）
     amount: float = 0.0          # 成交额（元）
     amplitude: float = 0.0       # 振幅(%)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             'code': self.code,
@@ -116,6 +190,28 @@ class MarketLightReviewResult:
     report: str
     market_light_snapshot: Optional[Dict[str, Any]]
     structured_payload: Dict[str, Any] = field(default_factory=dict)
+
+
+def _market_light_has_reading(snapshot: Optional[Dict[str, Any]]) -> bool:
+    """快照里是否真有读数，而不只是评分器的预设值。
+
+    `_build_market_light_scores` 在**每个维度都 available=False** 时仍会回一个
+    结构完整的快照，分数是中性预设 50。那不是「盘面中性」，那是「没有资料」——
+    照它渲染或持久化，就是凭空生出一个 50 分的盘面判断。所有消费端都该先过这关。
+
+    判准是**有没有任何维度可用**，不是 `data_quality`：后者只要 index 维度缺失
+    就标 `unavailable`（见 `_build_market_light_scores`），所以美股以外的市场
+    只有涨跌家数时它也是 `unavailable`，但那时分数是真的评出来的。
+    """
+    if not isinstance(snapshot, dict):
+        return False
+    dimensions = snapshot.get("dimensions")
+    if not isinstance(dimensions, dict):
+        return False
+    return any(
+        (dim.get("available") if isinstance(dim, dict) else getattr(dim, "available", False))
+        for dim in dimensions.values()
+    )
 
 
 class MarketAnalyzer:
@@ -210,7 +306,8 @@ class MarketAnalyzer:
         return f"{amount_raw:.0f}"
 
     def _get_index_change_arrow(self, change_pct: float) -> str:
-        if change_pct == 0:
+        # 缺失值不该被判成下跌：`nan > 0` 是 False，会一路落到红色箭头。
+        if _is_missing_number(change_pct) or change_pct == 0:
             return "⚪"
         color_scheme = getattr(getattr(self, "config", None), "market_review_color_scheme", "green_up")
         if color_scheme == "red_up":
@@ -424,6 +521,16 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 - **Technology Cycle**: Track semiconductor, AI hardware, and global technology read-through for market risk appetite.
 - **Theme Signals**: Focus on battery, auto, internet-platform, and KOSDAQ growth-stock rotation.
 """
+        if self.region == "us" and review_language == "zh-TW":
+            # 沒有這個分支的話會落到 `to_markdown_block()`，它的標題只看 region：
+            # region == "us" 一律回英文 "### VI. Strategy Framework"，於是 zh-TW 的
+            # 美股模板報告會在「五、消息催化」與「七、风险提示」之間夾一段英文羅馬數字。
+            # 模板路徑不是罕見路徑——LLM 回空（實測 BRK.B）就會走到這裡。
+            return """### 六、策略框架
+- **趨勢結構**：判斷市場在進攻、震盪與防守中的狀態是否一致。
+- **資金與情緒**：結合波動率、寬度和主題輪動評估風險偏好。
+- **主題主線**：辨識可延續和可放大的產業主線與防守線索。
+"""
         if self.region == "us" and review_language == "zh":
             return """### 六、策略框架
 - **趋势结构**：判断市场在进攻、震荡与防守中的状态是否一致。
@@ -472,6 +579,30 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             }
         return mapping[mood_key]
 
+    def _resolve_overview_date(self) -> date:
+        """复盘该标哪一天——**跟着指数报价实际属于哪一场**，不是伺服器挂钟。
+
+        两边都会错，而且方向相反：
+        - 用伺服器（台北）日期：台北时间任何时刻，美股最近收完的那场都是纽约的前一天，
+          所以美股复盘永远比它自己的资料早一天，而这个日期一路进报告标题、
+          `payload['date']`、`market_light.trade_date` 与历史纪录。
+        - 一律用「最近一场**已收盘**的交易日」：台股盘中（周一 09:00~13:29）跑复盘时，
+          指数取到的是**当天正在形成**的那根，日期却标成上周五 ⇒ 把周一的价格存成
+          周五的历史，而 `daily_market_context` 直接信这个日期。
+
+        所以看盘势：开盘之後（盘中／午休／收盘集合竞价／收盘後）资料就是当天这一场，
+        标当天；开盘前与非交易日才回到最近一场已收盘的交易日。
+        """
+        phase = infer_market_phase(self.region)
+        if phase in {
+            MarketPhase.INTRADAY,
+            MarketPhase.LUNCH_BREAK,
+            MarketPhase.CLOSING_AUCTION,
+            MarketPhase.POSTMARKET,
+        }:
+            return get_market_now(self.region).date()
+        return get_effective_trading_date(self.region)
+
     def get_market_overview(self) -> MarketOverview:
         """
         获取市场概览数据
@@ -479,7 +610,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         Returns:
             MarketOverview: 市场概览数据对象
         """
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = self._resolve_overview_date().strftime('%Y-%m-%d')
         overview = MarketOverview(date=today)
         
         # 1. 获取主要指数行情（按 region 切换 A 股/美股）
@@ -824,11 +955,18 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         language = self._get_output_language()
         sections = self._split_report_sections(report)
         title = self._extract_report_title(report) or self._get_review_title(overview.date).lstrip("# ").strip()
+        # 这里是快照进入结构化契约的**唯一入口**，所以闸门放这里而不是放呼叫端：
+        # 参数没传时本方法会自己补建一个，`or` 会把任何呼叫端的过滤直接抵销。
+        # 评分器在所有维度不可用时仍回一个分数为预设 50 的完整快照，那个 50 会一路
+        # 流进 `payload["market_light"]`、`market_review_payload` API、历史纪录，
+        # 并被 `daily_market_context` 读成「conservative / 等待确认」。
         light = (
             market_light_snapshot or self.build_market_light_snapshot(overview)
             if self._supports_market_light()
             else None
         )
+        if not _market_light_has_reading(light):
+            light = None
         breadth_dimensions = None
         if isinstance(light, dict):
             dimensions = light.get("dimensions")
@@ -853,6 +991,11 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             "kind": "market_review",
             "region": self.region,
             "language": language,
+            "color_scheme": getattr(
+                getattr(self, "config", None),
+                "market_review_color_scheme",
+                "green_up",
+            ),
             "title": title,
             "generated_at": datetime.now().isoformat(),
             "date": overview.date,
@@ -884,10 +1027,14 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 "total_amount": overview.total_amount,
                 "turnover_unit": self._get_turnover_unit_label(),
             }
-            if overview.institutional_net:
+            if _has_institutional_reading(overview):
                 payload["breadth"]["institutional_net"] = dict(overview.institutional_net)
 
-        return payload
+        # 序列化边界：一次递归清掉整个 payload 里的非有限值。放在这里而不是各栏位，
+        # 因为 provider 是在 MarketOverview **建构之後**逐栏赋值的（total_amount、
+        # 法人、板块／概念排行都是），栏位层的清洗拦不到；而把栏位本身改 None 会让
+        # 宣告为 float 的下游在比较与格式化上抛 TypeError。
+        return _scrub_non_finite(payload)
 
     def _supports_market_light(self) -> bool:
         return self.region in MARKET_LIGHT_REGIONS
@@ -1017,66 +1164,106 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 
     def _build_stats_block(self, overview: MarketOverview) -> str:
         """Build market statistics block."""
-        has_stats = (
-            overview.up_count
-            or overview.down_count
-            or overview.total_amount
-            or overview.institutional_net
-        )
-        if not has_stats:
+        # 每一列各自判断自己有没有资料。用一个总布林盖住整组，缺的那几项就会被
+        # 渲染成 0——「没有资料」看起来会变成「资料是零」。
+        # ponytail: 这里只能靠数值 truthiness 猜，因为 MarketOverview 没有 availability
+        # 旗标；真的全零的交易日会被当成缺资料。要区分得先给 MarketOverview 加显式旗标。
+        has_advance_decline = bool(overview.up_count or overview.down_count or overview.flat_count)
+        has_limit = bool(overview.limit_up_count or overview.limit_down_count)
+        # `bool(nan)` 是 True，所以不能只用 truthiness——那会让 `f"{nan:.0f} 亿"`
+        # 印进报告。缺失的成交额要当「没有资料」，不能补成 0（0 是平盘，是读数）。
+        has_turnover = not _is_missing_number(overview.total_amount) and bool(overview.total_amount)
+        has_breadth = has_advance_decline or has_limit or has_turnover
+        has_institutional = _has_institutional_reading(overview)
+        has_stats = has_breadth or has_institutional
+        if not has_stats and not (self._supports_market_light() and overview.indices):
             return ""
+        # 盘面信号只在**评分器真的评得出来**时输出。不能拿 institutional_net 或
+        # total_amount 的存在当理由——评分器根本不看这两项，于是「只有三大法人」
+        # 会得到一个所有维度 available=False 的快照，而它的分数是预设的 50 分。
+        # 照印就是凭空生出「50/100 需观察」与操作建议，那个 50 还会进历史记录。
+        light = self.build_market_light_snapshot(overview) if self._supports_market_light() else None
+        if not _market_light_has_reading(light):
+            light = None
         if self._get_review_language() == "en":
-            light = self.build_market_light_snapshot(overview)
-            return "\n".join(
-                [
-                    f"- **Market Signal**: {light['score']}/100 "
-                    f"({light['temperature_label']}, {light['label']})",
-                    f"- **Drivers**: {'; '.join(light['reasons'])}",
-                    f"- **Guidance**: {light['guidance']}",
-                    "",
-                    f"- **Breadth**: Advancers {overview.up_count} / Decliners {overview.down_count} / "
-                    f"Flat {overview.flat_count}; "
-                    f"Limit-up {overview.limit_up_count} / Limit-down {overview.limit_down_count}; "
-                    f"Turnover {overview.total_amount:.0f} ({self._get_turnover_unit_label()})",
-                ]
-                + (
+            lines = []
+            if isinstance(light, dict):
+                lines.extend(
                     [
-                        f"- **Institutional net** ({self._get_turnover_unit_label()}): "
-                        f"Foreign {overview.institutional_net.get('foreign_net', 0.0):+.0f} / "
-                        f"Inv. trust {overview.institutional_net.get('trust_net', 0.0):+.0f} / "
-                        f"Dealer {overview.institutional_net.get('dealer_net', 0.0):+.0f} / "
-                        f"Total {overview.institutional_net.get('total_net', 0.0):+.0f}"
+                        f"- **Market Signal**: {light['score']}/100 "
+                        f"({light['temperature_label']}, {light['label']})",
+                        f"- **Drivers**: {'; '.join(light['reasons'])}",
+                        f"- **Guidance**: {light['guidance']}",
                     ]
-                    if overview.institutional_net
-                    else []
                 )
-            )
-        light = self.build_market_light_snapshot(overview)
-        score, label = light["score"], light["temperature_label"]
+            if has_breadth:
+                if lines:
+                    lines.append("")
+                parts = []
+                if has_advance_decline:
+                    parts.append(
+                        f"Advancers {overview.up_count} / Decliners {overview.down_count} / "
+                        f"Flat {overview.flat_count}"
+                    )
+                if has_limit:
+                    parts.append(
+                        f"Limit-up {overview.limit_up_count} / Limit-down {overview.limit_down_count}"
+                    )
+                if has_turnover:
+                    parts.append(
+                        f"Turnover {overview.total_amount:.0f} ({self._get_turnover_unit_label()})"
+                    )
+                lines.append(f"- **Breadth**: {'; '.join(parts)}")
+            if _has_institutional_reading(overview):
+                inst = overview.institutional_net
+                lines.append(
+                    f"- **Institutional net** ({self._get_turnover_unit_label()}): "
+                    f"Foreign {inst.get('foreign_net', 0.0):+.0f} / "
+                    f"Inv. trust {inst.get('trust_net', 0.0):+.0f} / "
+                    f"Dealer {inst.get('dealer_net', 0.0):+.0f} / "
+                    f"Total {inst.get('total_net', 0.0):+.0f}"
+                )
+            return "\n".join(lines)
+        lines = []
+        score = light["score"] if isinstance(light, dict) else None
+        label = light["temperature_label"] if isinstance(light, dict) else ""
         participation = overview.up_count + overview.down_count
         up_ratio = overview.up_count / participation if participation else 0.0
         limit_spread = overview.limit_up_count - overview.limit_down_count
-        lines = [
-            f"- **盘面信号**：{score}/100（{label}，{light['label']}）",
-            f"- **信号依据**：{'；'.join(light['reasons'])}",
-            f"- **操作建议**：{light['guidance']}",
-            "",
-            "| 指标 | 数值 | 观察 |",
-            "|------|------|------|",
-            f"| 上涨/下跌/平盘 | {overview.up_count} / {overview.down_count} / {overview.flat_count} | 上涨占比(不含平盘) {up_ratio:.1%} |",
-            f"| 涨停/跌停 | {overview.limit_up_count} / {overview.limit_down_count} | 涨跌停差 {limit_spread:+d} |",
-            f"| 两市成交额 | {overview.total_amount:.0f} 亿 | {self._describe_turnover(overview.total_amount)} |",
-        ]
-        if overview.institutional_net:
-            inst = overview.institutional_net
-            unit = self._get_turnover_unit_label()
-            lines.append(
-                f"| 三大法人净买卖（{unit}） | "
-                f"外资 {inst.get('foreign_net', 0.0):+.0f} / "
-                f"投信 {inst.get('trust_net', 0.0):+.0f} / "
-                f"自营商 {inst.get('dealer_net', 0.0):+.0f} | "
-                f"合计 {inst.get('total_net', 0.0):+.0f} |"
+        if isinstance(light, dict) and score is not None:
+            lines.extend(
+                [
+                    f"- **盘面信号**：{score}/100（{label}，{light['label']}）",
+                    f"- **信号依据**：{'；'.join(light['reasons'])}",
+                    f"- **操作建议**：{light['guidance']}",
+                ]
             )
+        if has_stats:
+            if lines:
+                lines.append("")
+            lines.extend(["| 指标 | 数值 | 观察 |", "|------|------|------|"])
+            if has_advance_decline:
+                lines.append(
+                    f"| 上涨/下跌/平盘 | {overview.up_count} / {overview.down_count} / {overview.flat_count} | 上涨占比(不含平盘) {up_ratio:.1%} |"
+                )
+            if has_limit:
+                lines.append(
+                    f"| 涨停/跌停 | {overview.limit_up_count} / {overview.limit_down_count} | 涨跌停差 {limit_spread:+d} |"
+                )
+            if has_turnover:
+                lines.append(
+                    f"| 两市成交额 | {overview.total_amount:.0f} 亿 | {self._describe_turnover(overview.total_amount)} |"
+                )
+            if has_institutional:
+                inst = overview.institutional_net
+                unit = self._get_turnover_unit_label()
+                lines.append(
+                    f"| 三大法人净买卖（{unit}） | "
+                    f"外资 {inst.get('foreign_net', 0.0):+.0f} / "
+                    f"投信 {inst.get('trust_net', 0.0):+.0f} / "
+                    f"自营商 {inst.get('dealer_net', 0.0):+.0f} | "
+                    f"合计 {inst.get('total_net', 0.0):+.0f} |"
+                )
         return "\n".join(lines)
 
     def build_market_light_snapshot(self, overview: MarketOverview) -> Dict[str, Any]:
@@ -1153,7 +1340,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 reasons.append(f"上涨家数占比 {up_ratio:.0%}，亏钱效应较强")
             else:
                 reasons.append(f"上涨家数占比 {up_ratio:.0%}，市场分化")
-        index_changes = [idx.change_pct for idx in overview.indices if idx.change_pct is not None]
+        index_changes = _directional_index_changes(overview)
         if index_changes:
             avg_change = sum(index_changes) / len(index_changes)
             reasons.append(f"主要指数平均涨跌幅 {avg_change:+.2f}%")
@@ -1176,7 +1363,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 reasons.append(f"advancers ratio {up_ratio:.0%}, downside pressure dominates")
             else:
                 reasons.append(f"advancers ratio {up_ratio:.0%}, breadth is mixed")
-        index_changes = [idx.change_pct for idx in overview.indices if idx.change_pct is not None]
+        index_changes = _directional_index_changes(overview)
         if index_changes:
             avg_change = sum(index_changes) / len(index_changes)
             reasons.append(f"average major-index change {avg_change:+.2f}%")
@@ -1197,17 +1384,27 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 f"| Index | Last | Change % | Open | High | Low | Amplitude | Turnover ({self._get_turnover_unit_label()}) |",
                 "|-------|------|----------|------|------|-----|-----------|-----------------|",
             ]
-        else:
+        elif self._get_review_language() == "zh-TW":
             lines = [
-                "| 指数 | 最新 | 涨跌幅 | 开盘 | 最高 | 最低 | 振幅 | 成交额(亿) |",
+                f"| 指數 | 最新 | 漲跌幅 | 開盤 | 最高 | 最低 | 振幅 | 成交額({self._get_turnover_unit_label()}) |",
+                "|------|------|--------|------|------|------|------|-----------|",
+            ]
+        else:
+            # 单位必须跟着市场走：`_format_turnover_value` 对 us/hk/jp/kr 除的是 1e9，
+            # 写死「亿」会把 USD bn 标成人民币亿元——数字与单位同时错，而且看起来像真读数。
+            lines = [
+                f"| 指数 | 最新 | 涨跌幅 | 开盘 | 最高 | 最低 | 振幅 | 成交额({self._get_turnover_unit_label()}) |",
                 "|------|------|--------|------|------|------|------|-----------|",
             ]
         for idx in overview.indices:
             arrow = self._get_index_change_arrow(idx.change_pct)
             amount_raw = idx.amount or 0.0
             amount_str = self._format_turnover_value(amount_raw)
+            # `:.2f` 对 NaN 会写出 `nan`，对 None 直接抛 TypeError——两者都要走
+            # `_format_optional_*`，它们已经统一处理缺失值。
             lines.append(
-                f"| {idx.name} | {idx.current:.2f} | {arrow} {idx.change_pct:+.2f}% | "
+                f"| {idx.name} | {self._format_optional_number(idx.current)} | "
+                f"{arrow} {self._format_signed_pct(idx.change_pct)} | "
                 f"{self._format_optional_number(idx.open)} | {self._format_optional_number(idx.high)} | "
                 f"{self._format_optional_number(idx.low)} | {self._format_optional_pct(idx.amplitude)} | {amount_str} |"
             )
@@ -1306,17 +1503,34 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 
     @staticmethod
     def _format_optional_number(value: float) -> str:
-        return "N/A" if value in (None, 0, 0.0) else f"{value:.2f}"
+        # `value in (None, 0, 0.0)` 挡不住 NaN（NaN != NaN），照走下去印出 `nan`。
+        return "N/A" if _is_missing_number(value) or value in (0, 0.0) else f"{value:.2f}"
 
     @staticmethod
     def _format_optional_pct(value: float) -> str:
-        return "N/A" if value in (None, 0, 0.0) else f"{value:.2f}%"
+        return "N/A" if _is_missing_number(value) or value in (0, 0.0) else f"{value:.2f}%"
+
+    def _format_turnover(self, value: Any) -> str:
+        """格式化成交额；缺失时说「暫無資料」而不是印出 0 或 nan。
+
+        `f"{nan:.0f}"` 会写出 `nan 亿元`，而把缺失补成 `0 亿元` 更糟——那是一个有
+        明确市场意义的读数（零成交），会误导 LLM 与读报告的人。
+        """
+        if _is_missing_number(value):
+            return "暫無資料" if self._get_review_language() != "en" else "unavailable"
+        unit = self._get_turnover_unit_label()
+        return f"{float(value):.0f} {unit}"
 
     @staticmethod
     def _format_signed_pct(value: Any) -> str:
         try:
             numeric_value = float(value)
         except (TypeError, ValueError):
+            return "N/A"
+        # `float("nan")` 不会抛，所以上面的 try 挡不住它——照走下去会印出 `+nan%`。
+        # 板块／概念排行的 change_pct 来自 `pd.to_numeric` + `dropna`，而 dropna
+        # 不排除 ±inf，`nlargest` 甚至会优先选中 +inf。
+        if _is_missing_number(numeric_value):
             return "N/A"
         return f"{numeric_value:+.2f}%"
 
@@ -1355,12 +1569,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         if breadth_available:
             breadth_score = int(overview.up_count / participants * 100)
 
-        # 排除 VIX：它是波动率/恐慌指数而非方向性指数，纳入均值会让「恐慌飙升」被误算成 risk-on
-        index_changes = [
-            idx.change_pct
-            for idx in overview.indices
-            if idx.change_pct is not None and (getattr(idx, "code", "") or "").upper() != "VIX"
-        ]
+        index_changes = _directional_index_changes(overview)
         index_available = bool(index_changes)
         index_score = 50
         if index_available:
@@ -1483,8 +1692,29 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             ])
             return "\n\n".join(sections)
 
+        # zh 与 zh-TW 共用同一套能力判定，只有字面不同。**zh-TW 以前完全不走这里**
+        # ——它的 prompt 把「板塊主線」「漲跌停結構」写死，所以美股（无板块榜、无涨跌
+        # 家数、根本没有涨跌停制度）会被要求分析三样它一格资料都没有的东西 ⇒ 模型编。
+        tw = review_language == "zh-TW"
+
+        def T(zh_tw: str, zh: str) -> str:
+            return zh_tw if tw else zh
+
         if self.profile.has_market_stats and self.profile.has_sector_rankings:
-            return """### 三、板块主线
+            return T("""### 三、板塊主線
+（區分產業板塊與概念題材，分析領漲／領跌背後的邏輯、持續性和是否形成主線）
+
+### 四、資金與情緒
+（解讀成交額、漲跌停結構、市場寬度和風險偏好）
+
+### 五、消息催化
+（結合近三日新聞，提煉真正影響明日交易的催化或擾動）
+
+### 六、明日交易計畫
+（給出進攻／均衡／防守結論、倉位區間、關注方向、迴避方向和一個觸發失效條件）
+
+### 七、風險提示
+（列出需要關注的風險點；最後補充「建議僅供參考，不構成投資建議」。）""", """### 三、板块主线
 （区分行业板块与概念题材，分析领涨/领跌背后的逻辑、持续性和是否形成主线）
 
 ### 四、资金与情绪
@@ -1497,7 +1727,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 （给出进攻/均衡/防守结论、仓位区间、关注方向、回避方向和一个触发失效条件）
 
 ### 七、风险提示
-（列出需要关注的风险点；最后补充“建议仅供参考，不构成投资建议”。）"""
+（列出需要关注的风险点；最后补充“建议仅供参考，不构成投资建议”。）""")
 
         numerals = ["一", "二", "三", "四", "五", "六", "七", "八"]
         section_number = 3
@@ -1509,15 +1739,32 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             section_number += 1
 
         if self.profile.has_sector_rankings:
-            add_section("板块主线", "（仅分析已提供的行业板块与概念题材榜单，不扩展未提供的数据）")
+            add_section(
+                T("板塊主線", "板块主线"),
+                T("（僅分析已提供的產業板塊與概念題材榜單，不擴展未提供的資料）",
+                  "（仅分析已提供的行业板块与概念题材榜单，不扩展未提供的数据）"),
+            )
         if self.profile.has_market_stats:
-            add_section("资金与情绪", "（仅解读已提供的成交额、涨跌停结构、市场宽度和风险偏好数据）")
+            add_section(
+                T("資金與情緒", "资金与情绪"),
+                T("（僅解讀已提供的成交額、漲跌停結構、市場寬度和風險偏好資料）",
+                  "（仅解读已提供的成交额、涨跌停结构、市场宽度和风险偏好数据）"),
+            )
         add_section(
-            "消息催化",
-            "（结合近三日新闻和指数表现，提炼真正影响明日交易的催化或扰动；不要推断未提供的资金流、市场宽度或板块榜）",
+            T("消息催化", "消息催化"),
+            T("（結合近三日新聞和指數表現，提煉真正影響明日交易的催化或擾動；不要推斷未提供的資金流、市場寬度或板塊榜）",
+              "（结合近三日新闻和指数表现，提炼真正影响明日交易的催化或扰动；不要推断未提供的资金流、市场宽度或板块榜）"),
         )
-        add_section("明日交易计划", "（给出进攻/均衡/防守结论、仓位区间、关注方向、回避方向和一个触发失效条件）")
-        add_section("风险提示", "（列出需要关注的风险点；最后补充“建议仅供参考，不构成投资建议”。）")
+        add_section(
+            T("明日交易計畫", "明日交易计划"),
+            T("（給出進攻／均衡／防守結論、倉位區間、關注方向、迴避方向和一個觸發失效條件）",
+              "（给出进攻/均衡/防守结论、仓位区间、关注方向、回避方向和一个触发失效条件）"),
+        )
+        add_section(
+            T("風險提示", "风险提示"),
+            T("（列出需要關注的風險點；最後補充「建議僅供參考，不構成投資建議」。）",
+              "（列出需要关注的风险点；最后补充“建议仅供参考，不构成投资建议”。）"),
+        )
         return "\n\n".join(sections)
 
     def _build_review_prompt(self, overview: MarketOverview, news: List) -> str:
@@ -1530,6 +1777,12 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         # 指数行情信息（简洁格式，不用emoji）
         indices_text = ""
         for idx in overview.indices:
+            # 这一段是**喂给 LLM 的那份**，跟 `_build_indices_block`（报告表格）是两个出口。
+            # 之前只修了表格：这里的裸 `:.2f` 对 NaN 会写出 `nan (-nan%)`，而模型看不出
+            # 那是缺资料，会照着解读。缺值直接不列这一行——少一档指数是诚实的降级，
+            # 印一个 `nan` 不是。
+            if _is_missing_number(idx.current) or _is_missing_number(idx.change_pct):
+                continue
             direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
             indices_text += f"- {idx.name}: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
         
@@ -1562,8 +1815,8 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 stats_block = f"""## Market Breadth
 - Advancers: {overview.up_count} | Decliners: {overview.down_count} | Flat: {overview.flat_count}
 - Limit-up: {overview.limit_up_count} | Limit-down: {overview.limit_down_count}
-- Turnover: {overview.total_amount:.0f} ({self._get_turnover_unit_label()})"""
-                if overview.institutional_net:
+- Turnover: {self._format_turnover(overview.total_amount)}"""
+                if _has_institutional_reading(overview):
                     _inst = overview.institutional_net
                     stats_block += (
                         f"\n- Institutional net ({self._get_turnover_unit_label()}): "
@@ -1594,8 +1847,8 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
                 stats_block = f"""## 市场概况
 - 上涨: {overview.up_count} 家 | 下跌: {overview.down_count} 家 | 平盘: {overview.flat_count} 家
 - 涨停: {overview.limit_up_count} 家 | 跌停: {overview.limit_down_count} 家
-- 两市成交额: {overview.total_amount:.0f} 亿元"""
-                if overview.institutional_net:
+- 两市成交额: {self._format_turnover(overview.total_amount)}"""
+                if _has_institutional_reading(overview):
                     _inst = overview.institutional_net
                     stats_block += (
                         f"\n- 三大法人买卖超（{self._get_turnover_unit_label()}）: "
@@ -1612,13 +1865,24 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
 概念领涨: {top_concepts_text if top_concepts_text else "暂无数据"}
 概念领跌: {bottom_concepts_text if bottom_concepts_text else "暂无数据"}"""
 
+            # 这一段是**要模型照做的指令**，不是注入的行情资料，所以得跟着报告语言走。
+            # 其余注入区块（市场概况／板块表现）维持简体是刻意的：prompt 顶端已要求
+            # 「即使注入资料出现简体，正文也必须改写为繁体输出」。
+            _tw = review_language == "zh-TW"
             data_limit_lines = []
             if not self.profile.has_market_stats:
-                data_limit_lines.append("- 该市场暂无涨跌家数、涨跌停、成交额汇总、参与度或资金流信号。")
+                data_limit_lines.append(
+                    "- 該市場暫無漲跌家數、漲跌停、成交額彙總、參與度或資金流訊號。" if _tw
+                    else "- 该市场暂无涨跌家数、涨跌停、成交额汇总、参与度或资金流信号。"
+                )
             if not self.profile.has_sector_rankings:
-                data_limit_lines.append("- 该市场暂无行业板块/概念题材涨跌榜。")
+                data_limit_lines.append(
+                    "- 該市場暫無產業板塊／概念題材漲跌榜。" if _tw
+                    else "- 该市场暂无行业板块/概念题材涨跌榜。"
+                )
             if data_limit_lines:
-                data_limits_block = "## 数据边界\n" + "\n".join(data_limit_lines)
+                header = "## 資料邊界" if _tw else "## 数据边界"
+                data_limits_block = header + "\n" + "\n".join(data_limit_lines)
 
         data_no_indices_hint = (
             "注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。"
@@ -1643,6 +1907,21 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
                 if self.profile.has_market_stats
                 else "2-3 sentences summarizing overall market tone, index moves, and available news context."
             )
+        elif review_language == "zh-TW":
+            indices_placeholder = indices_text if indices_text else "暫無指數資料（介面異常）"
+            news_placeholder = news_text if news_text else "暫無相關新聞"
+            # 美股／港股／日韓沒有漲跌家數、漲跌停與板塊榜。少了這段，模型會被下面的
+            # 模板要求寫「漲跌停結構」與「板塊主線」，而手上一格資料都沒有 ⇒ 它會編。
+            data_boundary_requirement = (
+                "- 嚴格遵守資料邊界：未提供漲跌家數、資金流、成交額彙總或板塊榜時，不要編造或過度解讀。\n"
+                if data_limits_block
+                else ""
+            )
+            market_summary_hint = (
+                "2-3 句話概括指數、漲跌家數、成交額和情緒溫度，明確「強勢／偏暖／震盪／偏弱」判斷"
+                if self.profile.has_market_stats
+                else "2-3 句話概括指數表現、新聞線索和整體風險狀態，不要補寫未提供的市場寬度或資金流資料"
+            )
         else:
             indices_placeholder = indices_text if indices_text else "暂无指数数据（接口异常）"
             news_placeholder = news_text if news_text else "暂无相关新闻"
@@ -1666,6 +1945,11 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
             "报告要像交易员盘后工作台：先给结论，再按数据表、主线、催化、计划展开"
             if self.profile.has_market_stats or self.profile.has_sector_rankings
             else "报告要像交易员盘后工作台：先给结论，再按指数、新闻催化和计划展开"
+        )
+        workflow_hint_tw = (
+            "報告要像交易員盤後工作台：先給結論，再按資料表、主線、催化、計畫展開"
+            if self.profile.has_market_stats or self.profile.has_sector_rankings
+            else "報告要像交易員盤後工作台：先給結論，再按指數、新聞催化和計畫展開"
         )
 
         if review_language == "en":
@@ -1734,9 +2018,9 @@ Output the report content directly, no extra commentary.
 - 禁止輸出 JSON 格式
 - 禁止輸出程式碼區塊
 - emoji 僅在標題處少量使用（每個標題最多 1 個）
-- 報告要像交易員盤後工作台：先給結論，再按資料表、主線、催化、計畫展開
+- {workflow_hint_tw}
 - 不要重複列出已由系統注入的表格資料；正文負責解釋表格背後的含義
-
+{data_boundary_requirement}
 ---
 
 # 今日市場資料
@@ -1750,6 +2034,8 @@ Output the report content directly, no extra commentary.
 {stats_block}
 
 {sector_block}
+
+{data_limits_block}
 
 ## 市場新聞
 {news_placeholder}
@@ -1767,25 +2053,12 @@ Output the report content directly, no extra commentary.
 > 一句話給出今日市場狀態、核心矛盾和明日優先觀察方向。
 
 ### 一、盤面總覽
-（2-3 句話概括指數、漲跌家數、成交額和情緒溫度，明確「強勢／偏暖／震盪／偏弱」判斷）
+（{market_summary_hint}）
 
 ### 二、指數結構
 （{self._get_index_hint()}，說明誰在護盤、誰在拖累，以及關鍵支撐／壓力）
 
-### 三、板塊主線
-（分析領漲／領跌板塊背後的邏輯、持續性和是否形成主線）
-
-### 四、資金與情緒
-（解讀成交額、漲跌停結構、市場寬度和風險偏好）
-
-### 五、消息催化
-（結合近三日新聞，提煉真正影響明日交易的催化或擾動）
-
-### 六、明日交易計畫
-（給出進攻／均衡／防守結論、倉位區間、關注方向、迴避方向和一個觸發失效條件）
-
-### 七、風險提示
-（列出需要關注的風險點；最後補充「建議僅供參考，不構成投資建議」。）
+{output_template_sections}
 
 ---
 
@@ -1863,6 +2136,10 @@ Output the report content directly, no extra commentary.
             ),
             None,
         )
+        # NaN 会一路走完下面每个 `>` 比较（全为 False）落到 else，被判成「明显下跌」
+        # ——一个凭空的方向判断。缺读数就当没有情绪指数。
+        if mood_index is not None and _is_missing_number(mood_index.change_pct):
+            mood_index = None
         if mood_index:
             if mood_index.change_pct > 1:
                 market_mood = self._get_market_mood_text("strong_up", template_language)
@@ -1878,8 +2155,8 @@ Output the report content directly, no extra commentary.
         # 指数行情（简洁格式）
         indices_text = ""
         for idx in overview.indices[:4]:
-            direction = "↑" if idx.change_pct > 0 else "↓" if idx.change_pct < 0 else "-"
-            indices_text += f"- **{idx.name}**: {idx.current:.2f} ({direction}{abs(idx.change_pct):.2f}%)\n"
+            marker = self._get_index_change_arrow(idx.change_pct)
+            indices_text += f"- **{idx.name}**: {idx.current:.2f} ({marker} {idx.change_pct:+.2f}%)\n"
         
         # 板块信息
         separator = ", " if template_language == "en" else "、"
@@ -1890,16 +2167,12 @@ Output the report content directly, no extra commentary.
 
         if template_language == "en":
             stats_section = ""
-            if self.profile.has_market_stats:
-                stats_section = f"""
+            if self._supports_market_light() or self.profile.has_market_stats:
+                stats_block = self._build_stats_block(overview)
+                if stats_block:
+                    stats_section = f"""
 ### 3. Breadth & Liquidity
-| Metric | Value |
-|--------|-------|
-| Advancers | {overview.up_count} |
-| Decliners | {overview.down_count} |
-| Limit-up | {overview.limit_up_count} |
-| Limit-down | {overview.limit_down_count} |
-| Turnover ({self._get_turnover_unit_label()}) | {overview.total_amount:.0f} |
+{stats_block}
 """
             sector_section = ""
             if self.profile.has_sector_rankings and (top_text or bottom_text or top_concept_text or bottom_concept_text):
@@ -1939,7 +2212,11 @@ Market conditions can change quickly. The data above is for reference only and d
 
         market_labels = {"cn": "A股", "us": "美股", "hk": "港股", "tw": "台股", "jp": "日股", "kr": "韩股"}
         market_label = market_labels.get(self.region, "A股")
-        dashboard_block = self._build_stats_block(overview) if self.profile.has_market_stats else ""
+        dashboard_block = (
+            self._build_stats_block(overview)
+            if self._supports_market_light() or self.profile.has_market_stats
+            else ""
+        )
         indices_block = self._build_indices_block(overview)
         sector_block = self._build_sector_block(overview) if self.profile.has_sector_rankings else ""
         summary_focus = (
@@ -2009,7 +2286,14 @@ Market conditions can change quickly. The data above is for reference only and d
 
         # 3. 生成复盘报告
         report = self.generate_market_review(overview, news)
+        # 在**源头**就把无读数的快照压成 None，而不是让每个消费端各自防守。
+        # 评分器在所有维度不可用时仍回一个分数为预设 50 的完整快照；那个 50 会一路
+        # 流进 structured payload、`market_review_payload` API、历史纪录，并被
+        # `daily_market_context` 读成「conservative / 等待确认」——一个没人量过的
+        # 市场判断。这里挡住，下游三条路径就都拿到 None。
         snapshot = self.build_market_light_snapshot(overview) if self._supports_market_light() else None
+        if not _market_light_has_reading(snapshot):
+            snapshot = None
         structured_payload = self.build_market_review_payload(
             overview,
             news,

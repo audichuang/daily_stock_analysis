@@ -15,6 +15,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > 保留只为记录踩过什么。**不要引用它们**；引用前一律回上述两处对齐。
 > 已删除的 `backtest_screen --idle-to-bench` 相关叙述已从本段移除（该 flag 已不存在）。
 
+- [新功能] 合并上游 v3.28.0 + v3.29.0（`aa68d45d`..`a8f084bf`，28 commits／233 檔）：AlphaSift 选股内化为 `src/services/screening/`、Web/API 按市场触发大盘复盘（新增请求级 `region` 栏位）、报告分享图与 Web 一键分享、offline pytest watchdog，以及 longbridge 位置参数、yfinance 裸港股码、腾讯日 K 兜底等修复。裁决原则与逐项分歧见 `docs/upstream-sync-2026-08-05.md`。
+- [修复] **合并上游後台股大盘复盘静默失去盘面信号。** 上游 v3.29 把 `_build_stats_block` 的盘面信号改成由 `_supports_market_light()` 闸住（合并前是无条件产生），而 `MARKET_LIGHT_REGIONS` 不含 `tw` ⇒ 台股复盘整组失去「盘面信号／信号依据／操作建议」，`tw,us` 组合还会误取美股分数当 primary，且 `build_current_snapshot("tw")` 直接抛 `ValueError`。**报告照样生成、测试照样绿**，是典型的静默降级。`tw` 已加入 `src/schemas/market_light.py` 与 `src/services/market_light_service.py` 的市场集合（告警范围 `MARKET_LIGHT_ALERT_REGIONS` 维持 `cn/hk/us` 不变）；实测台股快照 score=45／data_quality=ok。
+- [修复] **缺资料被渲染成 0。** 大盘复盘只有三大法人而无涨跌家数时（台股常见），`_build_stats_block` 会印出 `上涨/下跌/平盘 0 / 0 / 0` 与 `两市成交额 0 亿`，把「没有资料」表达成「资料是零」。拆成 `has_breadth` / `has_institutional` 两组独立判定，表头在任一表格列存在时才输出；en 路径同步修正（不再输出 `Advancers 0 / Decliners 0`）。
+- [修复] **`field_validator` 抛 `ValueError` 的欄位拿不到 422，一律回 500。** `api/middlewares/error_handler.py` 把 `exc.errors()` 直接塞进 `JSONResponse`，而 `value_error` 类型的项带着**原始 `ValueError` 物件**（不是字串）⇒ 序列化失败後被 general handler 接成 500。上游新增的 `region` 是这条链上第一个会抛 `ValueError` 的 validator，所以文件明写的 4xx 实际回 500（实测 `region=eu`／`tw,,us`／`both,tw` 全为 500）。改用 `jsonable_encoder`（与 FastAPI 自带 handler 同一套），一处修掉所有现有与未来的 validator。
+- [修复] **`screening_service` 的 `except BaseException` 会吞掉离线测试的连外守门。** `_fetch_constituent_sources` 在 `future.result()` 外围捕 `BaseException`，连带吞掉 `tests/test_screening_api.py` 刻意继承 `BaseException` 的 `_OutboundBlocked` ⇒ 未来漏一格 mock 仍然全绿，只有对方收了连线不回时才在 CI 挂死。收窄为 `except Exception`，一般外部来源失败仍照常隔离降级。
+- [改进] `MARKET_REVIEW_REGION` 与请求级 `region` 支援 `tw`，`both` 展开为 `cn,hk,us,tw,jp,kr`；Web 市场选择器、`MarketReviewRegion` 型别与 zh-TW 文案同步补齐台股。两条路径的顺序语义**刻意不同**：持久化设定保留输入顺序（`tw,us` = 台股先复盘），请求层按 canonical 排序（Web 选择器送的是 checkbox 状态、与点击顺序无关），已写进 docstring 与 OpenAPI 描述。
+- [修复] **无读数的 Market Light 快照会流进结构化契约与决策上下文。** 评分器在三个维度都不可用时仍回一个分数为**预设 50** 的完整快照；`build_market_review_payload` 又会在参数为 None 时自己补建一个（`or` 直接抵销呼叫端的过滤），于是那个 50 一路进 `payload["market_light"]`、`market_review_payload` API、历史纪录，并被 `daily_market_context` 读成「conservative／等待确认」——一个没人量过的市场判断。闸门改放在结构化契约的**唯一入口**，下游三条路径一次全对。判准是「有没有任何维度 available」而不是 `data_quality`：后者只要 index 维度缺就标 unavailable，会误杀「只有涨跌停」这种真读数（limit 维度评出 10/100）。
+- [修复] **`NaN`／`±inf` 的指数涨跌幅会通过可用性检查并把分数钉在 100 或 0。** `index_available` 只排除 `None`；`NaN` 因比较恒假而落在 `min()` 上界得 100，`+inf` 得 100、`-inf` 得 0，而这些看起来都像真读数。加 `isfinite` 过滤。
+- [修复] **共用 validation handler 仍能透过 `loc` 回吐并放大输入。** 只截 `msg` 不截 `loc` 等于把路径从值搬到键——mapping 型别栏位的**非法 key** 会被 pydantic 原样放进 `loc`，送 100,000 字元的 key 就得到 100KB 回应。`loc` 现在限 16 段 × 128 字元。
+- [修复] **`WatchlistRequest.stock_code` 没有长度上限**，`_validate_and_normalize_stock_code` 会把整个非法代码嵌进 HTTPException 讯息，送 100,000 字元得到 100KB 的 400 回应。补 `max_length=32`（与 `decision_signals` 的既有约定一致；最长合法形态远在 32 以内）。
+- [测试] 新增 `tests/test_error_handler_validation.py`（7 个：422 而非 500、不回吐 `input`、不随输入放大、只暴露 allowlist 栏位、笔数上限、`loc` 不外泄）、`tests/test_screening_api.py::OutboundGuardPropagationTestCase`（2 个）、`TestBuildStatsBlockRegionAndDataSplit`（13 个：台股市场集合、逐列资料可用性、评不出来就不给分，含 en/zh 两语）、`TestMarketLightReachesEveryConsumer`（4 个：无读数快照不得进 result／structured payload，含 NaN/inf）与 `test_normalize_market_region_accepts_tw`。**每一组都做过 mutation 检查**——把修法改回旧写法必须立刻红，没过这关的测试不算守门。
+- [文档] `docs/tw-swing-pipeline.md` 新增「族群代理」量测（2026-08-03，739 交易日）：**费半不是记忆体的代理**——台湾记忆体篮子（华邦电／南亚科／旺宏／晶豪科／群联等权，前复权日报酬）对费半同日 **r=0.123**，对韩国记忆体（SK海力士＋三星等权）**r=0.577**、对 SK海力士 0.554、对**隔夜美光 t−1 r=0.364**；韩台是**同步不是领先**（同时段交易，落後项 r=0.060、领先项 r=−0.115）。条件分布「韩国单日 ≤−3%／−5%／−7% 後台湾次日」均值 −0.43%／−0.56%／−1.35%（基准 +0.23%），方向一致为负且随跌幅加深更负，但三个门槛的 bootstrap CI **全部跨零**、下跌比仅 52~57%（基准 50%）⇒ **判 inconclusive，只能当「不下注」的理由，不能当方向性预测**。另记录「韩跌>5% 同日台涨>5%」在 739 日里 **0 例**（放宽 ±3% 仍 0 例）⇒ 2026-08-03 的 19pp 单日反向**无样本外前例、收敛方向不可预测**。这一条是使用者指出的缺口，不是流程自己发现的。
+- [修复] **`YfinanceFetcher` 的即时行情把美股个股的涨跌幅算成反向。** `fast_info` 有两个前收栏位，实作取的 `previousClose` 对**美股个股**在盘後／週末会退化成接近 `lastPrice` 的值：2026-08-03 实测 MU 用它算出 **+1.30%** 而真值是 **−5.90%**（正规前收 `regularMarketPreviousClose` 874.66），AAPL **+0.51% vs −7.35%**（差 7.86pp）。**不报错、不缺栏位，只给一个反向的数字**，而下游拿它当「隔夜美股方向」判 regime。抽出 `_prev_close_from_fast_info()` 优先取 `regularMarketPreviousClose`，**两处呼叫点（美股指数路径与个股路径）一起改**——原本是同一段程式码複制两份。修完六檔实测误差全为 0.00pp。顺带修正**原油 `CL=F`**（`previousClose` 79.79 vs 正规 84.67，差 **−5.76%**）与 A 股 `600519.SS`（+0.13%）；港股、台股、`^VIX`、四大指数两个栏位本来就相同，不受影响。另记录一个 API 形状陷阱：`fast_info` 是 **dict-like**，camelCase 只能用 `[]` 取、属性存取要 snake_case，所以原本 `getattr(info, 'previousClose')` 一直回 None，真正生效的是後面那个 snake_case 候选。
+- [修复] **`US_INDEX_MAPPING` 缺费半，导致 `SOX` 静默取到别家公司的报价。** `SOX` 符合美股 1-5 字母 pattern ⇒ 被判成个股，而 Yahoo 上 `SOX` 真的存在一档 **Scanbox Asia Pacific Ltd** ⇒ 不报错、有价格、有名字，标的却完全不对；同时 `^SOX` 走不到指数路径会被转成 `$SOX` 而回 None（实测两者皆已复现）。费半是台股盘前判读的核心指标（台股是半导体权重市场），补进映射後 `SOX`／`^SOX`／`sox` 都正确解析为 `^SOX` 费城半导体指数。
+- [测试] 新增 `tests/test_yfinance_prev_close.py`（5 个）钉住前收栏位的选择顺序（两者并存时必须取正规收盘、缺失时回 None 让上层走 history 兜底、0 不得盖掉真候选），以及 `tests/test_us_index_mapping.py` 新增 `TestSoxIsAnIndexNotAStock`（费半必须判成指数而非个股，否则会取到 Scanbox）。两个测试都不碰网路。
+- [改进] `scripts/overnight.py` 的 `SERIES` 新增**记忆体代理四檔**（`MU` 美光、`000660.KS` SK海力士、`005930.KS` 三星、`^KS11` KOSPI），并按市场分三组输出（`us` 美股昨晚收盘／`kr` 韩股同时段／`cont` 连续与盘前报价）。**原本的 8 檔结构上不可能给出记忆体的正确代理**——只有费半，而费半对台湾记忆体同日 r 仅 0.123（韩国 0.577、隔夜美光 0.364），2026-08-03 就因此把「美光 −5.90%＋SK海力士 −8.79%」的族群崩跌读成「杀盘局限」。同时**修掉一个一直在假告警的日期一致性检查**：旧版把所有序列混在一组比、只排除 `TWD=X`，於是**原油与 VIX 每天都触发「各序列日期不一致」**（两者盘前就报价、日期正常领先美股一天；实测 08-03 报 `[07-31, 08-03]`），而每天都报的警告等於没有警告。现在 `date_warnings()` 只在 `us`／`kr` **组内**比，韩股晚美股一个日历日属正常不告警。记忆体那段**刻意不设 alert 门槛**（不像费半的 −2%）：条件分布 CI 全部跨零 ⇒ 设门槛等於假装它有预测力，只印方向并提示「代理与台股同日反向时不下注」。
+- [测试] `tests/test_overnight.py` 从 2 个测试补到 5 个，钉住两类**静默出错**：新增 `date_warnings()` 的分组行为（韩股晚一天不告警／组内不一致仍告警）与「记忆体代理必须在 `SERIES` 里」。原本只测 ADR 折算方向。
+- [改进] skill `tw-morning-call` Step 2 新增「每个族群配自己的代理」小节与必查列（`MU`／`000660.KS`／`005930.KS`／`^KS11`），完成条件加上「今天要判的每个族群各自的代理数字」；Step 3 新增「代理与台股背离时不下注」；边界新增盘中判读条目。**修的是 skill 层缺陷不只是漏查**：原 regime 表用「费半连续两日下跌逾 2%」当半导体门槛，对记忆体标的近乎无效（r=0.123）。2026-08-03 实际後果是费半 +0.07% 判「杀盘局限於族群」，而同时间美光 −5.90%、SanDisk −5.09%、SK海力士 −8.79%、三星 −8.76%，台湾记忆体却全数涨停。
+- [新功能] 新增 `scripts/intraday_breadth.py`：盘中即时 breadth（Shioaji 批次 snapshot × `market` schema 前复权均线），印流动性池的即时涨跌家数、站上 MA20／MA60、中位涨跌、距 60 日高中位、**涨停锁死档数**；`--codes` 切换成指定族群的逐檔明细。补的是「盘前判读的数字全是前一交易日收盘，但被问『今天怎麼买』时需要现在」这一格。**盘中值不是收盘值**：2026-08-03 盘中 09:50 中位 +3.37%、上涨 445／下跌 100，收盘变成 +0.66%、1229／595（衝高回落把讯号翻面）⇒ 盘中留檔要标时点、`regime` 不可当收盘结论引用，且因预测与结果同日写入必然拿不到防竄改保证，直接标 `exclude_from_scoring`。
+- [新功能] 新增 `scripts/kr_tw_memory_watch.py`：盘中监看**台韩记忆体同日背离**（韩 yfinance `lastPrice` × 台 Shioaji snapshot），每 N 分钟採样一次写 JSONL，只在门槛触发时推 Bark（韩国个股 ±3pp／KOSPI ±2pp／台韩价差 ±3pp，用「级距只升不降」去重，同一件事不重推）。补的是 skill `tw-morning-call` Step 2 唯一人工的那一格——韩台**同时段**交易（韩 08:00-14:30 台北时间），`scripts/overnight.py` 只给到韩股前一交易日收盘，而台湾记忆体对韩国记忆体同日 **r=0.577**、对费半只有 0.123 ⇒ 韩国开盘後的方向是记忆体标的当日第一顺位输入，且必须盘中才拿得到。**新记录一个 yfinance 韩股陷阱**：`000660.KS` 的日 K 会整根缺（2026-08-04 实测最後一根停在 07-31、08-03 不见），`previousClose` 也跟著停在 07-31 ⇒ 拿它算涨跌会得到 **−8.79%，那是前一日的跌幅**；只有 `fast_info['lastPrice']` 正确。因此 baseline 一律在**韩股开盘前**用 `lastPrice` 锁住（此时它就是前一交易日收盘），开盘後才启动会拿到当日盘中值当基准 ⇒ 脚本直接拒跑而不是给一个错的数字。
+- [文档] `docs/tw-market-position.md` 新增 §三之二「主动式 ETF 能不能当核心：00981A vs 0050」（284 个共同交易日、前复权含配息）：总报酬 +175.2% vs +136.1%，但**报酬／波动 3.92 < 4.19**、最大回撤 **−26.3% vs −15.4%**、beta 1.15 ⇒ **右尾拿得到、风险调整後输**（与 `screen_tw` 组合层 Sharpe 1.07 vs 1.15 同一形状）。累积超额 +18.9% 但 bootstrap 95% CI **[−20.2%, +74.5%] 跨零**、样本仅 **1.1 个独立年** ⇒ inconclusive，而**费用差 1.14pp/年（1.49% vs 0.35%）是确定的**（20 年复利 25.5% 拖累）。季度分解显示超额来源：前四季全赢（+3.7／+11.0／+5.7／+14.9pp），**2026 Q3 第一次遇到下跌就吐回 −12.5pp**。两个天花板：整段历史只活在同期 0050 年化 +113.6% 的极端多头里（无空头样本）；同期 8 檔主动式台股 ETF 有 **00980A +116.7%、00982A +124.9% 都输 0050、00983A 只 +12.9%** ⇒ 00981A 是事後挑出的赢家（存活偏误）。
+- [文档] `docs/realtime-board.md` 的「数据来源与时效」表扩成**六市场实测表**（台／美／韩／日／港／A，含各市场的个股代码格式与「指数即时能不能取」），并注明这张表是 2026-08-03 实测而非从代码结构推的；同时记录该路径的两个限制：`source` 一律回 `fallback`、`provider_timestamp`／`is_stale` 恒为 `None`（**给不出报价有多新**，盘中引用要自己标时点），以及盘前要的「隔夜收盘＋近 5 日」仍走 `scripts/overnight.py`（单点报价给不了序列）。踩雷段新增一条**只有美股指数走得通实时路径**：`US_INDEX_MAPPING` 只收美股，`KS11`／`N225`／`TWII` 会落到 A 股路由 → 连问腾讯／新浪／efinance 失败 → **三个 fetcher 熔断 300s、污染後续真正的 A 股请求**（实测）；`HSI` 被判成美股个股回空 quote、`^HSI` 被转成 `^HSI.SZ`。并澄清一个会误导人的矛盾：`get_main_indices(market)` **能列出**各市场主要指数代码，但实时路径取不到它们，两件事不同。修法需新增一张非美股指数映射，属设计决策，**决定先记录不修**。`AGENTS.md` §3 的 `data_provider/` 条目加一行指针指向本档（走 `market_data/` 那条既有的指针模式，**不摘要内容**——doc 是正本，摘要会两处漂移）。
+- [文档] `docs/realtime-board.md` 踩雷段补 Shioaji snapshot 五项：**`api.snapshots()` 回 `builtins.Snapshot`、没有 `_asdict()`**（写 `dict(s._asdict())` 会 AttributeError，被 `except` 包住就整批静默回空——实测印出表头後零列资料）；`json.dumps` 会因 enum 栏位炸而 `default=str` 挡不住；**`limit_up`／`limit_down` 在 contract 上不在 snapshot 上**；**「涨停锁死」的可判条件是 `close == limit_up` 且 `sell_volume == 0`**（比涨幅有用得多——2026-08-03 华邦电锁 143、委买排队 13,533 张而委卖 0 张，就是「现在下单买不到」的直接证据；锁板时 `buy_price`／`sell_price` 同时回 `0.0`，别当报价）；加权指数与台指期走同一个 `snapshots()`（`Indexs.TSE["001"]`／`Futures.TXF["TXFR1"]`）。
+- [文档] 新增 `docs/tw-market-position.md`：台股**大盤层**位阶与长期进场时点的量测记录（个股 60/250 日讯号仍在 `tw-swing-pipeline.md`）。**① 唯一 CI 三期一致不跨零的位阶指标是「距 5 年线（60 月均）」**——Q1（低於 5 年线）在 1/3/5 年超额 **+10.0／+12.6／+13.0pp**、亏损机率 5%／**0%**／4%、有 5~6 个独立事件；Q5 最差（1 年 +1.4%、亏损机率 50%）；但**不通过严格单调性**，定位为「两端有意义、中间噪音」；**② 2026-07 的当前位置是第 99 百分位**（距 5 年线 **+86.3%**、过去 3 年报酬 **+132.9%**），距 5 年线历史前 8 高**有 7 个是 2026 年本身尚未到期**，唯一有後续的前例 2021-04 +59% → 之後 1 年 −5.5%，而 Q5 上缘只到 +59% ⇒ 现在超出整个历史测试区间、**不能据此预测方向，只能说「相对低点现在不存在」**；**③ 推翻「跌越深未来越好」**——回撤深度三期**都是 U 型**（两端好中间差），5 年期 **Q5 买在高点附近 +63.7% 胜过 Q1 跌最深 +48.7%**，而**浅到中度回撤 −15%~−39% 是所有持有期最差的进场区**；回撤 Q1 只有 **3 个独立危机事件**；**④ 部署方式：等回撤三期都最差**（1 年内回撤 10%/15%/20% 只有 **64%/44%/35%** 机率出现，中位数因此是 0.0%；「安全」是空手的假象），一次全押 > 分 2/3/6/12 批，且**分 2/3/6 批的最差情境比一次全押更差**；**⑤ 关键更正：「分批代价 8pp」是曝险时间不是择时效应**——12 期平均曝险 134.5/250 = **53.8%**，而 9.3/17.3 = **53.8%** 完全吻合，正常 6% 超额报酬下只会是约 2.8pp；**⑥ 有效样本 ≈ N/H**：1 年 ≈15 个独立周期、3 年 ≈4、5 年 ≈2 ⇒ 3/5 年的「亏损机率近 0」不可信；**⑦ 月份季节性 12 月弱正但与其他月份无法区分**（12 月 vs 其他月 |t| 1.19／1.78／1.84，三期都没过 1.96；上涨比例 79% 但真样本外只有 67%），并记录一个再犯的推论错误：把「异於零」当成「异於其他月份」。
+- [文档] `docs/tw-market-position.md` §五记录台指期与 yfinance 的取得方式与**五个会让结论反转的陷阱**：**① 期交所「盘後」列的交易日期是归属日（次一营业日）**，`盤後(D)` 实际是 D−1 15:00~D 05:00、**在 `一般(D)` 开盘前已知**，误判会把领先指标当成落後；**② 结算价 ≠ 收盘价**（2026-07-31 TX 202608 收盘 43,678／结算 43,727，外部报价的涨跌常以结算价为基准而「昨收」却是上一场夜盘收盘）；**③ 必须滤掉价差交易列**（到期月份含 `/`）；**④ yfinance 的 `0050.TW` 2014-01 还原价错误（单月 −75.5%）**，单独造成 0050 的 1 月均值 −2.05%，剔除後 +3.11% ⇒ 用 yfinance 的 0050 月报酬须先滤 |月报酬|>35%；**⑤ `^TWII` 不含股息**，绝对报酬低估约 3%/年。另记录端点与历史长度：`futDataDown` 的 TX 日行情 **1998/07/21 起 28 年**（含未冲销契约数与交易时段、**单月为上限**）、`futContractsDateDown` 的三大法人期货未平仓**仅 2023/09 起 2.9 年**（样本不足）、年度 ZIP **404 不通**；以及开盘缺口三种算法的实测误差（**skill `tw-morning-call` 的夜盘公式系统性高估 0.62pp**，因含既有正价差；**ADR×指数权重自下而上误差仅 0.10pp**，建议改以後者为主）。
+- [文档] `docs/tw-swing-pipeline.md` 的「站不住的部分」新增 2026-07-31 三轮追加量测（现行成本口径、事件级去重、block bootstrap 2000 次）：**① 持有期边界**——同一个冻结 breakout 讯号定义把前瞻由 60 拉到 **250 交易日**後优势消失且三项输基准（中位 -3.98% vs 有营收基准 +0.87%、胜率 46.6% vs 51.2%、P(≤-20%) 30.3% vs 24.0%），均值 +19.54% 由右尾主导（拿掉报酬 >100% 的 53 个事件後变 **-1.54%**），**这是 60 天波段工具、不是长期进场讯号**；**② 三个「买相对低点」定义全部输给 breakout**（P(≥30%) 16.1%／15.8%／11.0% vs 19.4%），其中「超卖反转 RSI<30」CI 与基准逐位重叠、**等於随机**，且它是唯一不用月营收因而无存活偏误的一组，否决最可信；**③ 外资／法人讯号无加值**——八组简单与复合讯号 CI 全部与基准重叠，「外资买+首次站回 MA60」（1,126 事件、中位 +0.33%）反而**比基准更差**，而决定性对照是 PB<1+外资买／PB<1 单独／PB<1+外资**卖**超 三臂中位数 +13.62%／+13.80%／+13.42% 几乎逐位相同 ⇒ **外资贡献为零**；**④ PB 分层五指标全单调（PB<0.7 中位 +27.78%／胜率 75.5% → PB≥2.0 中位 -4.11%／胜率 44.4%），但同日经对抗性复核已被推翻、数字作废**——单调性**只在绝对门槛成立**，换成时间中性的每日横断面五分位就消失（均值变 U 型），机制是 `PB<0.7` 的 106 个事件有 **38 个落在 2020 年** COVID 崩盘底部、前瞻 250 日吃到 V 型反弹，**它是伪装成选股因子的择时讯号**；**⑤ 因子层正式定论：11 个价值／基本面臂的同窗口成对超额点估计全部为负**（`PB<0.7` 超额中位 -11.31%、仅 38.7% 赢过 0050，同窗 0050 自己就是 +43.94%），`ROE`／`营益率`／`应计`／`月营收 YoY`／产业内 PB rank／PB 自身 3 年百分位全判噪音，`负债比` 与 `毛利率` **反向单调**（高杠杆低毛利＝产业循环押注非品质溢价），多因子 rank 合成全部没赢过单独 PB，唯一稳定加值是殖利率且**只加在下尾**（`PB<1&DY≥4` 把 P(≤-20%) 由 23.8% 压到 5.7%）；**⑥ 一个必须记住的方法论错误**：比较基准必须**同窗口成对**——用 0050 的 2010-2026 长期基准（1 年期中位 +14.6%）去比只在 2020-2025 发生的讯号会系统性高估，0050 在**同期**是中位 **+28.61%**／胜率 **79.6%**／P(≤-20%) **2.8%**（该段年化 +27.4% vs 2010-2018 约 +7.7%）；**⑦ 事件级去重只消除同一股票内部的重叠、未处理跨股票同期聚集**，加上 `market.valuation` 仅 2020-01 起（约 5.3 个独立年）、`block=250` 在 1,863 交易日上仅约 7 个独立区块，**所有 CI 都可能过窄**——这是所有区间跨零的根本原因，不是抽样运气。同时澄清 `screen_tw.py` 的 MA200 註解是「不要加大盤 regime 过滤」的论证，**不是**「等 0050 跌破 MA200 再进场」的择时规则。
 - [新功能] 新增 skill `tw-morning-call`：台股每日盤前判讀，把量化層定位成 **supplier 而不是 gate**——它供應數字，不決定今天能不能動。動機是一次实测缺口：2026-07-30 早上 `breakout` 池 **0 檔**（前一日大盤 -3.76%，突破新高的股票结构上不存在），而同一份 DB 用宽门槛掃得出 **48 檔「逆勢抗跌 + 法人買超」**，於是「0 檔」被当成「今天没事做」，同时漏掉那 48 檔携带的族群资讯与持仓今天该不该减。流程四步：`make morning` 一键取数 → 补美股即时期貨與台指期夜盤（`overnight.py` 只给收盘，期貨要的是「现在」）→ 判 **regime**（順風／rotation 輪動／broad selloff 全面承壓／capitulation 宣洩，用 breadth + VIX 水位 + 隔夜族群分化定位，**不用指數漲跌幅**——同樣的 -2% 可以是輪動也可以是崩盤）→ 給 **buy / reduce / hold / wait** 恰好一個動作 + 一個**可觀察的**翻轉條件，并追加一行到 `journal/morning-calls.jsonl`。`buy` 的標的只能來自 `breakout` 池並交棒 skill `tw-swing-research`；`momentum` 寬掃只當「資金往哪去」的觀測，**不讀它的 `score` 排序**（它在 13 年回測是十個因子裡同曝險超額最差的一個，-13.44%）。
 - [新功能] `journal/morning-calls.jsonl`（進版控）記錄每日 regime 判讀與動作，欄位語意見 `journal/README.md`。**回驗程式尚未寫**，所以欄位刻意全是事後可用 DB 算對錯的觀測值（`regime`／`gap_expected` 可對次日 `market.market_index` 驗）；累積到 20 筆再寫回驗，在那之前不聲稱 regime 判讀有經驗證的優勢。
 - [改进] `scripts/overnight.py` 加入 **VIX**（`^VIX`）並按水位分級：≥30 判系統性 risk-off、<20 判「殺盤仍侷限在族群」、其間待觀察。**看水位不看漲跌**——費半兩日崩 9.6% 而 VIX 只到 20.66 是族群殺盤，同樣的費半跌幅配 VIX 35 是系統性風險，兩者的正確動作相反。同一輪**試過又移除**標普／納指／日經期貨三檔：yfinance 日線在台北早上還沒切到次日場次，拿到的是「昨天的期貨」（實測標普期 -1.18%，而當時即時電子盤是 +0.26%，方向相反）且與現貨欄位高度重複，正確做法留在 skill 用即時來源人工查；輸出末尾改為明說腳本只給收盤數字，並附開盤缺口公式。
@@ -261,8 +287,160 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 新增 `--portfolio futu`，只读导入 Futu OpenD 真实账户的沪深 A 股、港股、美股 LONG 正股持仓作为分析列表。
 - [新功能] 多策略综合新增受控 deliberation v0、可注入 mediator/self-review v1-v2、只读 revision projection v3 与 multi-round v4；所有增强层相对上一层 baseline 只能保持或继续 softened，不覆盖权威最终信号。
 - [新功能] `specialist` 模式最多选择 4 个策略专家，并通过 `AGENT_SKILL_CONCURRENCY` 控制 1–4 个 worker 并发；worker 继承主管线冻结的 target date 等 `ContextVar` 状态，失败 skill 进入权威 Diagnostics 计数且不阻断其它策略或最终决策。
+- [新功能] Agent Chat 按会话持久化 Skill 选择，支持刷新和会话切换恢复，并区分省略 `skills`、显式空列表与非空选择；无持久化状态的历史会话继续使用运行时默认且不会被静默转为显式选择，复用分析 `context` 中残留的 legacy `skills` / `strategies` 也不会覆盖顶层三态或会话状态，非空但全部无效的 Skill 请求不会被当成显式空列表并清空既有选择
+- [改进] 后端 CI 在不跳过离线测试的前提下按完整测试文件分成三个独立 runner 并行执行，由单一 `backend-gate` 汇总门禁结果；实测文件耗时和首分片静态检查成本共同参与负载平衡，新测试文件自动纳入，现有 pip 安装和测试参数保持不变，避免 xdist 进程内并发的全局状态竞态。
+- [测试] 后端 CI 默认覆盖所有非 Web 改动，仅对已证明安全的纯 Web 路径跳过，并将整个 Web public 目录及前端渠道模板、设置帮助视为跨层运行合同；补充纯 Web、共享 Web 资产及 Web/非 Web 混合改动的过滤语义回归，明确 `predicate-quantifier: every` 按单文件匹配全部规则、再以任一匹配文件触发门禁。Docker CI 继续按构建输入过滤。离线测试保留稳定的串行执行与慢用例摘要，并移除重复用例和测试内真实等待。
+
+- [修复] Web 分享图改为用户点击“分享”后才按需生成，不再在报告加载时自动请求
+- [修复] 将 `SCREENING_ENABLED` 及 Web 选股功能开关归入“基础设置”，选股导航入口继续由该开关控制
+- [修复] 飞书交互机器人在 `FEISHU_DOMAIN=lark` 时让 Stream 长连接与消息回复统一使用 Lark 国际版 API 域名，避免 SDK 默认连接飞书国内域名并返回 `Incorrect domain name`（fixes #937）。
+- [修复] `scripts/ci_gate.sh` 的 `offline_test_suite` 给 `pytest -m "not network"` 加 `--timeout=120 -o timeout_method=thread` 与 `-o faulthandler_timeout=300`：单个测试（含其 teardown）超过 2 分钟直接 fail，单个测试（含其 teardown）超过 5 分钟时 dump 全部线程栈到 stderr。配合 `.github/requirements-ci.txt` 新增 `pytest-timeout>=2.3.0` 依赖。issue #2131 报告过 backend-gate 在 AlphaSift hotspot 用例附近间歇性无 traceback 卡住直到被 GitHub Actions 取消，此次修复让任何未来 CI hang 都会留下可定位的失败信息或 post-mortem 栈，而不是静默消亡。同步修正 `.github/workflows/docker-publish.yml` 的 `Install backend gate dependencies` 与 `setup-python cache-dependency-path` 对齐 `ci.yml` 的 backend-gate 依赖安装方式，避免发布流程跑同一个 `./scripts/ci_gate.sh` 时因缺少 `pytest-timeout` 而直接 fail。
+
+- [修复] 选股策略栏稳定展示完整中文策略列表，并保留自定义策略 ID 入口
+- [修复] 选股热点详情统一使用中文业务文案，不再显示内部类名、字段名和原始数据源错误
+- [改进] 选中热点后先展示榜单已有摘要和核心股，后台再补充完整详情，并将单次热点源等待上限收紧为 8 秒
+- [修复] 刷新热点榜单并保留当前题材时同步绕过详情缓存重拉该题材，避免新榜单继续搭配旧路线与成分股；详情质量可用且字段完整时不再展示底层数据源尝试失败
+- [改进] 热点成分股并行获取东方财富与同花顺数据，并按固定数据源优先级合并；AkShare 调用复用 DSA 的可终止子进程 timeout，同花顺 HTTP 调用设置 connect/read timeout，并以进程级并发槽限制活跃任务、在返回前回收 worker；题材详情可按需复用 DSA 原生搜索服务的数据源优先级、时效过滤、缓存与同请求合并补充安全且带链接的近期消息，真实供应商调用使用限流且可终止回收的子进程，并在本地压缩摘要以避免额外 LLM 等待与降级提示；显式搜索增强不写入热点详情共享缓存或 Web 页面缓存
+- [修复] 选股尾部轮换以分析器输入顺序为权威并保留并列分候选顺序；热点消息增强分别追加 `route` 与原始 `timeline`，同键搜索只允许缓存 owner 启动供应商链，子进程启动或清理失败也会释放全局容量；热点默认 provider 的正数超时配置覆盖板块、成分股及直接详情 fallback 并传递剩余硬截止，关闭外层预算仍保留单源安全上限；主动新闻搜索以同一绝对 deadline 覆盖缓存等待、重新竞争和 provider 执行，并区分有效空结果与运行失败
+- [改进] 精简选股页面的重复说明，将任务标识、快照统计和排序诊断折叠到运行详情
+- [新功能] SkillAggregator 基于独立满足 30 条 evaluated 门槛的真实 Skill Outcome bucket，使用 Beta 先验收缩、unable 惩罚和多周期证据加权生成有界运行时权重；缺失、低样本或异常统计保持中性。
+- [改进] 将参考 AlphaSift 实现的选股核心与策略正式纳入 DSA，统一使用 `ScreeningService`、`SCREENING_ENABLED` 和 `/api/v1/screening`，并保留 Apache-2.0 归因与来源版本记录。
+- [新功能] 选股结果按 `run_id` 持久化到 DSA 数据库，新增运行历史和数据源历史 API，接入公告事件上下文及其搜索缓存，并支持将候选连同筛选策略映射的 skill 交给单股深度分析。
+- [修复] Outcome 候选按上次尝试时间公平调度，避免持续新增的缺失 key 使旧 `pending` outcome 永久得不到重试。
+- [新功能] 新增按 skill、horizon 与 outcome engine version 独立聚合的只读 Skill Opinion 表现统计；少于 30 条 evaluated 样本时仅返回观察性计数，不输出表现指标或调整运行时权重。
+- [修复] 选股主模型返回空内容、非 JSON 或低覆盖结构时继续尝试备用模型；全部失败时明确展示确定性因子排序状态。最终 JSON 必须在 `content` 或 `output` 块中；`reasoning_content`（链式思考）被视为内部辅助，不作为最终结果。
+- [改进] Web 选股使用浏览器匿名种子与运行 ID 在最终评分后的有界近分池中生成每次运行的候选组合；Web Storage 不可用时在页面会话内存中复用同一临时种子；本地评分覆盖完整短名单，远程分析继续遵守数量上限，且只有完成相同后置分析的候选可参与轮换；原 Top-N 前半部分、明显领先候选、硬过滤、风险否决和得分保持不变。
+- [改进] 热点榜单刷新与选股长流程解除双向串行等待，热点详情改为选中后按需加载；选股默认复用 5 分钟内且数据源优先级一致的成功全市场快照，同一来源链中的后备源结果也可复用，并在后台任务中展示快照、候选上下文、LLM 重排、最终评分和新闻事件增强阶段。
+- [修复] 选股日线增强改用请求级 DSA-first fetcher 注入，不再临时替换进程级函数，避免重叠请求泄漏 wrapper 或重复执行 fallback；多个后置分析器按最新分数逐级重排，远程分析状态跟随实际提交候选，超限候选统一记录为 `skipped`，外部响应也不能改写未提交候选。
+- [修复] 统一等价股票代码的本地日线候选与同源窗口解析；冲突沪深交易所代码不再降级匹配裸码，回测仅接受快照或交易日历确认的起点，并在同一起点中优先完整的单一代码窗口。
+- [新功能] 新增按 individual SkillAgent 自身 signal、版本化 engine 与本地已存同源日线窗口计算并持久化 `skill_opinion_outcomes` 的核心服务。
+- [修复] #1970 关闭认证属于高风险操作，即使携带有效 session cookie 也强制要求再次输入当前管理员密码二次确认；后端 `auth_update_settings` 的 disable 分支统一走 currentPassword 校验，命中 rate limit 时与 enable 路径一致返回 429，前端 `AuthSettingsCard` 在关闭认证时如有缺失当前密码将阻止提交并给出内联提示。
+- [改进] 优化首页侧栏任务面板与自选股工作区：支持折叠任务摘要、自选股直接打开最新详情，并压缩头部操作以释放窄侧栏列表空间。
+- [修复] 收敛自选股行交互与今日状态语义：详情与移除操作使用独立可访问按钮，详情提示从当前行状态实时派生并区分查找中、查找失败和确认无详情，任何 stock-bar 请求及完成任务后的数据刷新都会在开始时进入待确认状态，旧 stock-bar 或 fallback 报告在重新确认或未知期间不会作为最新详情开放；刷新失败时不再把旧历史记录误标为今日分析，自选股刷新会显式重试列表、stock-bar 与逐股票详情查询，逐股票 fallback 使用固定 worker 并发上限并取消已失效的查询批次。
+- [新功能] 新增按 individual SkillAgent 自身 signal、版本化 engine 与本地已存同源日线窗口计算并持久化 `skill_opinion_outcomes` 的核心服务；本阶段不提供管理员 API、表现统计、样本充足度或权重调整。
+- [新功能] STOCK_LIST 解析新增 `parse_analysis_target()` 单条目解析契约，支持 sh/sz/bj/hk/us 前缀校验、裸码默认归股票、未命中前缀降级为股票三段语义；保留现有 `split_stock_list()`/`serialize_stock_list()` 行为不变，并对外暴露 `IndexRegistry`、`AnalysisTarget`、`ParseStatus`、`default_index_registry()` 以便上层注入自定义指数白名单（关联 issue #2063 Phase 1）
+- [修复] `parse_analysis_target()` 在显式交易所后缀输入被规范化层拒绝时（如 `600519.BJ`、`600000.HK`、`1234567.SH`、`abc.SH`），不再静默改写为 `sh<digits>` 或继续走裸码分类导致误判为 US，而是直接返回 `unsupported` 并携带可定位原因；保留 `000300.SH` / `sh000300.SH` 等已知 INDEX alias 的索引命中路径（关闭 PR #2122 review blocker OR-COR-607f1395 / OR-COR-26596201 / OR-COR-d6afd0d6）
+- [修复] `parse_analysis_target()` 收敛显式交易所后缀输入的 3 个新 correctness blocker：畸形混合 alias（如 `sh0x00300.SH`）不再被数字过滤后重建为已注册指数；dotted-prefix 形态（如 `SH.000999`）在 invalid base 时不被 strict-suffix 误拒，亦不静默降级为畸形 canonical stock，统一返回 `unsupported`（白名单交易所的合法 alias 通过 `sz399001.SZ` / `sz399006.SZ` 等命中 INDEX）；外盘半显式 suffix（.T/.KS/.KQ/.TW/.TWO）非法 base 不再静默回退到 US stock，而是返回 `unsupported` 并标记外盘 suffix（关闭 PR #2129 review blocker OR-COR-d83a3580 / OR-COR-b3e32200 / OR-COR-e21e9de5）
+- [修复] `parse_analysis_target()` 在 `us` 前缀分支按 Phase 1 contract（issue #2063 maintainer clarification 2026-08-01）统一收紧：`us` 前缀本身大小写不敏感（`us`/`US`/`uS`/`Us` 均可），但 ticker base 必须为 canonical uppercase US symbol 形态（regex `^[A-Z]{1,5}(\.[A-Z]{1,2})?$`，与 `data_provider/us_index_mapping.py` 和 `stock_code_utils._normalize_code_and_exchange` 一致）。`us` 前缀输入只要 base 不 match 该 regex——含任意小写字母（`usfd` / `usm` / `usibm` / `usamd` / `usge` / `usbk` / `usaapl` / `usshop` 全小写、`Usfd` / `USibm` / `Usaapl` / `uSfd` / `USaapl` mixed-case prefix + lowercase base）、含标点（`usbrk.b` / `usshop.us` lowercase base with punctuation）、含数字（`us1` / `us1a` / `us12a` lowercase base with digits、`US1` / `US12345` all-uppercase but invalid US shape）一律直接返回 `unsupported` 并提示用户使用 uppercase base（如 `usAAPL` / `usBRK.B` / `usSHOP.US`）或 bare 大写形态（如 `USFD`）。docstring 同步更新明确「exchange 前缀大小写不敏感，但 `us` 后 base 必须 match canonical US symbol shape」契约。该 contract 一致规则同时关闭 PR #2129 review blocker OR-COR-9c3d2c44（`usfd`/`usm` 全 lower 静默大写）、OR-COR-2f0d1a7e（`usibm`/`usge`/`usbk`/`usaapl` 长度依赖剥前缀分叉）、OR-COR-7b45f5c1（`Usfd`/`USibm`/`Usaapl` mixed-case prefix + lowercase base 绕过 lowercase-only guard）与 OR-COR-us-prefix-nonalpha-guard-gap（`usbrk.b`/`usshop.us`/`us1` lowercase/non-alphabetic base 绕过早期 `raw.isalpha()`-gated guard 走到 `_split_prefix` 异常剥前缀），无需 US ticker 白名单。mixed-case `usBRK` / `UsBRK` / `uSBRK` / `usFD` / `usM`（prefix any case + upper base）与全 upper `USAAPL` 等仍按显式前缀剥前缀；`USFD`/`USM` 等 ≤5 字母全 upper 仍按 bare ticker 保留
+- [修复] `_split_prefix()` 对带 `.US` 后缀的 bare 美股代码（`SHOP.US` / `HKD.US` / `BJRI.US` / `USFD.US` / `BRK.B` / `AAPL.US`）应用与裸 1-5 字母代码（`USFD` / `SHAK` / `AAPL`）相同的 short-circuit：只要 token 严格 match canonical US symbol shape regex `^[A-Z]{1,5}(\.[A-Z]{1,2})?$`，就不进入 `_KNOWN_PREFIXES_SORTED` 扫描。此前 short-circuit 只对纯字母 (1-5 ASCII uppercase letters) 生效，导致前两字符碰巧撞上 `sh` / `hk` / `bj` / `us` 已知前缀的 dotted `.US` 代码（`SHOP.US -> sh`+`OP.US`、`HKD.US -> hk`+`D.US`、`BJRI.US -> bj`+`RI.US`、`USFD.US -> us`+`FD.US`）被错误拆分，exchange 与 canonical_id 双双错位。mixed-case 显式前缀代码（`usAAPL` / `hk00700`）仍按原 prefix 路径处理。关闭 PR #2129 round-4 review blocker OR-COR-bare-us-suffix-prefix-collision
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [文档] FAQ 补充 macOS 桌面应用被 Gatekeeper quarantine 阻止启动时的受信任安装包临时放行步骤（refs #2113）。
+- [新功能] LLM 渠道新增显式 Chat Completions / Responses API Surface，支持 Anspire GPT-5.6 系列等 Responses-only 模型，并统一连接测试、主分析、筛选、图片识别与状态诊断路由；所有运行路径先按同一规则解析协议再校验 Surface，混合 Surface 的同名路由按未知能力保守处理；显式 Anspire 渠道独占共享 Key，非法 Surface 或协议不匹配时不会把该 Key 回退为旧版 Chat 部署，同时保留无关的 Gemini/OpenAI 等 legacy provider；本地 loopback 渠道可在图片识别路径继续无 Key 调用，远端渠道仍要求凭据；禁用渠道不会因残留 Surface 配置阻断其他兼容 fallback；Web 编辑器不会静默改写非法历史值，并允许将 Hermes 非法 Surface 修复为 Chat Completions。
+- [修复] 将 Responses 渠道的协议、模型 provider、公开 route alias 与 wire-model 构造收敛为统一路由契约，保存校验、运行时加载、状态诊断、选股入口和 Web 编辑器共同使用当前安装的 LiteLLM provider registry，拒绝 `openai` 协议下显式非 OpenAI provider 的模型、拒绝同一 alias 混用 Chat/Responses，并保留 OpenAI-compatible 网关自有的带斜杠模型 ID。
+- [chore] 合并上游 `a8f084bf..ed848da6`（5 commits）：backend 测试 3-way 分片、选择性测试门槛、Responses API 显式路由、watchlist workspace 状态修复、Agent Chat skill 按 session 持久化。两处冲突的裁决与合并後修掉的静默降级见 `docs/upstream-sync-2026-08-05.md` 的「追加同步」段。
+- [修复] **上游的 CI 分片把 `market_data/tests` 整组排除在离线套件外。** `setup.cfg` 的 `testpaths` 被上游从 `.` 改成 `tests`，`scripts/ci_test_shard.py::discover_test_files` 又把 `tests` 写死——本 fork 的 13 个台股 DB 测试档不报错、不变红，只是**不再跑**。改回双 root（`tests market_data/tests`）并抽出 `TEST_ROOTS`；新增 `test_shard_roots_match_the_pytest_testpaths_contract` 直接读 `setup.cfg` 做差集守门。
+- [修复] **美股类别股（`BRK.B`／`BF.B`）整档静默消失。** Yahoo 用 `BRK-B`，传 `BRK.B` 回「possibly delisted」＋0 笔，而 0 笔在上游各层都被当成正常降级 ⇒ 不报错、不缺栏位，只是那档股票不见了（实测 0 笔 → 521.80／28.52）。**两份**转换器都要改：`YfinanceFetcher._convert_stock_code` 与 `yfinance_fundamental_adapter._convert_to_yf_symbol`（後者 docstring 自称是前者的 "lightweight inline reproduction"，只修一份的话行情有了、基本面全空）。後者用 `is_us_stock_code` 判定而非「有没有点」，`2330.TW`／`600519.SS`／`0700.HK` 照样原样通过；新增测试断言两份转换器一致，避免第三份漂移。
+- [修复] **`BRK-B`（Yahoo 自己用的写法）被判成 A 股。** 三处美股 regex（`us_index_mapping`／`market_context.detect_market`／`stock_code_utils`）都只认点不认连字号 ⇒ 落到 A 股预设，prompt 开头写「你是一位 A 股投资分析师」并要模型按 ±10% 涨跌停与 T+1 交割推理一档美股。三处一起补上连字号；分隔符後仍只允许**一个**字母，以免 `.US` 这种交易所後缀被当成类别股而造出 Yahoo 不认得的 `AAPL-US`。
+- [修复] **`UNH` 被判成 ETF。** ETF 名称关键词用子字串匹配，`UNIT` 命中 `UNITEDHEALTH` ⇒ 公司风险／财报／竞争三组检索查询整组被换成指数式查询，报告照出、只是不再看公司本身。改整词匹配（`\b(?:ETFS?|FUNDS?|TRUSTS?|INDEX|TRACKERS?|UNITS?)\b`），真 ETF（SPY／QQQ／VOO／TRACKER FUND）仍照常判出。
+- [修复] **个股 prompt 与报告把所有市场都标成人民币。** AAPL 会以「收盤價 231.5 元」「成交額 115.75 亿元」进 prompt，而同一份 prompt 另一段说这是美股。币别改为跟着 `detect_market()` 走（us/hk/tw/jp/kr 各自币别）；**A 股与未知市场输出逐字未变**。
+- [修复] **大盘复盘用伺服器（台北）日期盖章。** 台北时间任何时刻，美股最近收完的那场都是纽约的前一天 ⇒ 每份美股复盘都比它自己的资料早一天，而这个日期一路进报告标题、`payload['date']`、`market_light.trade_date` 与历史纪录。改用 `get_effective_trading_date(region)`（pipeline 其他地方本来就用它）。
+- [修复] **指数表格的成交额栏位写死「亿」**，而 `_format_turnover_value` 对 us/hk/jp/kr 除的是 1e9 ⇒ 单位差 10 倍且币别错。改用 `_get_turnover_unit_label()`，并补 zh-TW 表头（原本连 zh-TW 也走简体表头）。
+- [修复] **Market Light 的分数与它自己的依据互相矛盾。** 评分器已排除 VIX（波动率指数不是方向性指数），但两处 reason 文案没有 ⇒ risk-off 当天报告印出「盘面信号 24/100（偏弱）」的同时写「主要指数平均涨跌幅 +6.83%」。抽出 `_directional_index_changes()` 供三处共用（同时统一非有限值过滤）。
+- [修复] **`zh-TW` 复盘 prompt 不看市场能力旗标。** 它把章节写死，所以 `REPORT_LANGUAGE=zh-TW`（本 fork 设定）跑美股时，模型被要求分析「漲跌停結構」与「板塊主線」——美股两样都没有资料，其中一样根本不存在这个制度——且缺少告诉它「这些资料没有」的资料边界区块 ⇒ 模型会编。zh-TW 改走与 zh/en 同一套 `_build_output_template_sections()` 能力判定，并补上 `data_limits_block` 与繁中版边界要求。
+- [修复] **美股估值比率全是 null 但 `valuation.status` 回报 `ok`。** 成因是两个最佳化互撞：yfinance 行情路径**只在本地查不到股票名称时**才抓 `ticker.info`（为保住看板零网络快路径），而本 fork 补齐美股名称索引後名称一律本地命中 ⇒ `ticker_info` 恒为空 ⇒ pe/pb（与 currency）跟着消失。**索引补得越好、估值掉得越多。** 基本面 bundle 阶段本来就抓了同一个 `info`，改从那里读 `trailingPE`／`priceToBook` 并在 quote 缺值时回填、重算 status（零额外请求，与上方 tw 走 TWSE 补 pe/pb 同一形状）。实测 AAPL 35.97／42.57、NVDA 34.24／27.75；`2330.TW`（31.86／10.43）与 `600519`（19.79／7.03）未变。
+- [修复] **估值比率进了 payload 却没进 prompt。** 上一条把 pe/pb 补进 `fundamental_context`，但 prompt 的估值列读的是 **quote**（`src/analyzer.py` 的 `rt.get('pe_ratio')`），而 quote 正是缺值的那一半 ⇒ 模型看到的仍是「本益比 N/A」，正确数字就在同一个 context 的另一个 key 里。prompt 改为 quote 缺值时退到基本面区块。
+- [修复] **美股行情被自己标成 `FALLBACK`，导致每次美股分析都无条件判为「核心行情受限」。** yfinance 是美股（与日股／韩股）在 `base.py` 即时行情路由里的**指定主来源**，却硬编 `source=RealtimeSource.FALLBACK` ⇒ `analysis_context_builder` 判定降级、品质分 65、报告印出限制说明、LLM 的「高」信心被改写成「中」，而实际上什么都没降级（真正降级的 Stooq EOD 反而得 100 分）。新增 `RealtimeSource.YFINANCE`，只用于 `us/jp/kr`；**台股刻意维持 `fallback`**——`source` 由 `shioaji` 变成它正是本 fork 用来辨识「金钥没注入、已静默降级成延迟报价」的信号（AGENTS.md §10），`tests/test_tw_realtime_fallback.py` 把它钉成契约，实测 2330.TW 仍是 `source=fallback`／`is_stale=True`。
+- [修复] **`DJIA` 的报告标题与数字差三个数量级。** `DJIA` 同时是道琼斯的通用缩写与一档挂牌 ETF（Global X Dow 30 Covered Call）。行情走 `US_INDEX_MAPPING` 取到 `^DJI` 的五万多点，名称却从 `stocks.index.json` 取到那档 ETF（约 $22.85）⇒ 标题写 ETF、数字是指数，两边都「有值」。名称解析改为美股指数别名优先于股票索引，与行情走同一个判定。
+- [修复] **AlphaVantage 排在 yfinance 前面**（`data_provider/base.py` 的美股日线链）。它回**未复权**价且单次上限 100 根，而 manager 只要拿到非空 DataFrame 就收下、`storage` 又按 `(code, date)` UPSERT ⇒ 设了金钥之後，最近 100 根里的除权除息会印出错的 `pct_chg`，同一天收盘价还会随执行次数变动。目前 `.env` 没金钥所以是潜伏的，但 `.env.example` 邀请你设。改回 yfinance 优先（与 `docs/data-source-stability.md` 本来的叙述一致）。
+- [修复] zh-TW 复盘 prompt 的资料边界区块改用繁体（`## 資料邊界`）——它是**要模型照做的指令**，不是注入的行情资料，得跟着报告语言走。
+- [测试] 新增 `tests/test_us_market_path.py`（37 项，断言可观察输出而非内部状态）。**十项修法逐一做过 mutation 检查**：把任一修法改回旧写法必须立刻红，没过这关的测试不算守门。
+- [修复] `.github/ci-test-durations.json` 移除 `tests/test_discord_platform.py`——该测试与 `bot/platforms/discord.py`（不在 `ALL_PLATFORMS` 的死代码）已在 `26b373c2` 删除，上游基准表仍列着它，导致 `test_duration_file_tracks_current_baseline_and_valid_paths` 失败。通知渠道 `discord_sender.py` 不受影响。
+
+## [3.29.0] - 2026-08-02
+
+### 发布亮点
+
+- feat: 将参考 AlphaSift 实现的选股核心与策略正式纳入 DSA，新增选股运行历史、数据源历史和候选深度分析链路。
+- feat: 新增 1080px 个股决策卡与高密度市场复盘分享图，支持 Web 原生分享和下载回退。
+- feat: 新增 Skill Opinion Outcome 计算、表现统计与基于真实样本的有界运行时权重。
+- improve: 优化选股快照复用、热点按需加载、多源并发和候选轮换，缩短长流程等待并提升结果多样性。
+- fix: 加固关闭认证、短凭证诊断脱敏、CI 超时取证和桌面冻结包启动链路。
+- fix: 修复 Longbridge 量比、股票代码窗口解析、选股后置重排及分享图交互等稳定性问题。
+
+### 新功能
+
+- SkillAggregator 基于独立满足 30 条 evaluated 门槛的真实 Skill Outcome bucket，使用 Beta 先验收缩、unable 惩罚和多周期证据加权生成有界运行时权重；缺失、低样本或异常统计保持中性。
+- 选股结果按 `run_id` 持久化到 DSA 数据库，新增运行历史和数据源历史 API，接入公告事件上下文及其搜索缓存，并支持将候选连同筛选策略映射的 skill 交给单股深度分析。
+- 新增按 skill、horizon 与 outcome engine version 独立聚合的只读 Skill Opinion 表现统计；少于 30 条 evaluated 样本时仅返回观察性计数，不输出表现指标或调整运行时权重。
+- 新增按 individual SkillAgent 自身 signal、版本化 engine 与本地已存同源日线窗口计算并持久化 `skill_opinion_outcomes` 的核心服务。
+
+### 改进
+
+- 选中热点后先展示榜单已有摘要和核心股，后台再补充完整详情，并将单次热点源等待上限收紧为 8 秒。
+- 热点成分股并行获取东方财富与同花顺数据，并按固定数据源优先级合并；真实供应商调用增加限流、可终止 timeout、并发槽和 worker 回收，题材详情可按需复用 DSA 原生搜索服务补充安全且带链接的近期消息。
+- 精简选股页面的重复说明，将任务标识、快照统计和排序诊断折叠到运行详情。
+- 将参考 AlphaSift 实现的选股核心与策略正式纳入 DSA，统一使用 `ScreeningService`、`SCREENING_ENABLED` 和 `/api/v1/screening`，并保留 Apache-2.0 归因与来源版本记录。
+- Web 选股使用浏览器匿名种子与运行 ID 在最终评分后的有界近分池中生成每次运行的候选组合；本地评分覆盖完整短名单，远程分析继续遵守数量上限，硬过滤、风险否决和得分保持不变。
+- 热点榜单刷新与选股长流程解除双向串行等待，热点详情改为选中后按需加载；选股默认复用 5 分钟内且数据源优先级一致的成功全市场快照，并展示快照、候选上下文、LLM 重排、最终评分和新闻事件增强阶段。
+- 图片报告改用独立的 1080px 个股决策卡和高密度市场复盘卡，优先从结构化 payload 精确填充数据并保留 Markdown 回退；小红书账号与二维码支持关闭或替换，Web 支持原生分享与下载回退。
+
+### 修复
+
+- Web 分享图在按需生成完成后通过第二次用户点击同步打开系统分享，避免首次异步生成使原生分享退化为下载。
+- Web 分享图改为用户点击“分享”后才按需生成，不再在报告加载时自动请求。
+- 移除基础设置选股卡片中仍跳转到“数据源”的过期“查看配置项”按钮，并将 `SCREENING_ENABLED` 及 Web 选股功能开关归入“基础设置”。
+- `scripts/ci_gate.sh` 的离线测试增加单测 timeout 与 faulthandler 取证，并同步 Docker 发布流程的 CI 依赖，避免无 traceback 卡住或发布门禁缺少 `pytest-timeout`。
+- 选股策略栏稳定展示完整中文策略列表，并保留自定义策略 ID 入口。
+- 选股热点详情统一使用中文业务文案，不再显示内部类名、字段名和原始数据源错误。
+- 刷新热点榜单并保留当前题材时同步绕过详情缓存重拉该题材，避免新榜单继续搭配旧路线与成分股。
+- 选股尾部轮换以分析器输入顺序为权威并保留并列分候选顺序；热点消息增强、共享缓存 owner、全局并发容量和新闻搜索 deadline 统一收敛。
+- Outcome 候选按上次尝试时间公平调度，避免持续新增的缺失 key 使旧 `pending` outcome 永久得不到重试。
+- 选股主模型返回空内容、非 JSON 或低覆盖结构时继续尝试备用模型；全部失败时明确展示确定性因子排序状态，且不把 `reasoning_content` 当作最终结果。
+- 选股日线增强改用请求级 DSA-first fetcher 注入，多个后置分析器按最新分数逐级重排，远程分析状态跟随实际提交候选，避免重叠请求泄漏 wrapper 或改写未提交候选。
+- 统一等价股票代码的本地日线候选与同源窗口解析；冲突沪深交易所代码不再降级匹配裸码，回测仅接受快照或交易日历确认的起点。
+- 关闭认证时强制再次校验当前管理员密码，命中 rate limit 时返回 429，前端在当前密码缺失时阻止提交并显示内联提示（#1970）。
+- 本地 CLI 的 `stdout_preview` / `stderr_preview` 按环境变量、JSON、YAML/日志标量与 URL 的独立契约脱敏短凭证，避免 API key、secret 或 token 进入诊断（refs #1784）。
+- PyInstaller 冻结包在 NLTK 3.10 导入保护下误判内置 `_internal` 标准库时不再启动失败；Windows/macOS 打包脚本统一接入兼容 runtime hook。
+- 分享图按字段合并历史结构化数据与 Markdown，多市场逐区域复用持久化 payload，隐藏不可用市场灯号维度并保留配色方案；中英韩模板跟随报告语言，原生分享失败时自动回退下载。
+- 飞书文件报告在写入或上传前清理隐藏的市场 metadata；桌面运行时默认隐藏未随包提供 renderer 的 Web 分享按钮。
+- `redact_diagnostic_text()` 的命令替换扫描不再吞掉尾随非敏感诊断字段，并统一 `export FOO=$(...)` 与 `FOO=$(...)` 的脱敏行为。
+- Longbridge 量比改用 adaptive keyword args 调用 `history_candlesticks_by_offset`，兼容 0.2.74 与 4.x SDK 参数顺序（fixes #2100）。
+
+## [3.28.0] - 2026-07-26
+
+### 发布亮点
+
+- feat: Multi-Agent 多策略综合支持分层 deliberation、mediator/self-review、revision projection 与 multi-round，并统一最终动作和解释契约。
+- feat: AI 建议页新增按决策风格分组的历史表现，specialist opinion 样本可持久化并用于后验评估。
+- feat: 新增 `--portfolio futu`，可只读导入 Futu OpenD 真实账户的沪深 A 股、港股和美股 LONG 正股持仓。
+- feat: Web 首页与 API 支持按单个或多个市场临时触发大盘复盘，不修改全局配置。
+- feat: Tushare 支持通过 `TUSHARE_HTTP_URL` 接入自建网关或兼容镜像。
+- fix: 改进港股行情路由与缓存、外股英文新闻匹配、数据源兜底顺序及桌面端发包稳定性。
+
+### 新功能
+
+- Multi-Agent 多策略综合新增受控 deliberation v0、可注入 mediator/self-review v1-v2、只读 revision projection v3 与 multi-round v4；增强层相对上一层 baseline 只能保持或继续 softened，不覆盖权威最终信号。
+- `specialist` 模式最多选择 4 个策略专家，并通过 `AGENT_SKILL_CONCURRENCY` 控制 1–4 个 worker 并发；worker 继承主管线冻结的 target date 等上下文，单个 skill 失败不阻断其它策略或最终决策。
+- Multi-Agent 报告按八态用户 action 追踪 Pipeline 最终调整，排除非法 Agent 意见；仅在 canonical action 可唯一解析时生成 explanation 与 DecisionSignal，并以同一个 `final_action` 统一最终动作契约。
+- specialist 在分析历史保存成功后持久化版本化、低敏且幂等的有效 opinion 样本，为后续后验评估提供真实数据；本阶段不计算 outcome、不统计表现、不调整权重。
+- AI 建议页新增决策风格历史表现，按每个分组独立的 30 个已完成样本门槛展示命中、区间涨跌、无法评估和最大不利波动，并保持旧统计接口兼容。
+- 新增 `--portfolio futu`，只读导入 Futu OpenD 真实账户的沪深 A 股、港股和美股 LONG 正股持仓作为分析列表。
+- Web 首页与 `POST /api/v1/analysis/market-review` 支持用严格校验的 `region` 临时选择单个或多个复盘市场；一次性覆盖不读写全局配置，并贯穿任务提交、状态、SSE、结果与历史记录。
+- Tushare 数据源支持通过 `TUSHARE_HTTP_URL` 自定义接入地址；留空时继续使用官方默认地址（fixes #1985）。
+
+### 改进
+
+- 暂停 PR Review 的自动触发，仅保留 `workflow_dispatch` 手动入口，避免辅助评审重复运行及评论权限失败产生误导性红灯；正式 CI 检查保持不变。
+- `.env.example` 与每日分析 workflow 同步映射 `TUSHARE_HTTP_URL`，保持本地和云端配置入口一致。
+
+### 修复
+
+- 修复外股代码映射到中文显示名时英文新闻相关性漏判，统一外股代码、英文名和别名解析，并对展开后的检索词去重（fixes #2026）。
+- 特权 `pull_request_target` 流程不再检出 fork PR head；敏感步骤仅执行主分支可信脚本，PR 元数据与 diff 通过 GitHub API 读取（fixes #2051）。
+- PR Review 事件载荷缺失、不可读或 JSON 非法时输出可定位且不泄露载荷的警告，并保留原有降级行为（fixes #2070）。
+- 修复 Windows 上 `mimetypes` 冷启动读取注册表导致进程卡死的问题。
+- 统一 `DataFetcherManager`、AkShare 与 Longbridge 对 4–5 位裸港股码的识别，避免 4 位代码被错误路由或静默失败（fixes #2091）。
+- AkShare 港股实时行情增加 20 分钟全市场缓存与并发冷启动 single-flight，热缓存命中不再等待网络限速，主接口异常时仍保留新浪备用接口降级（refs #1852）。
+- 将 `TencentFetcher` 默认优先级调整为 A 股日 K 数据源的最终兜底，并新增 `TENCENT_PRIORITY` 显式覆盖项（refs #2032）。
+- Web 设置页和通知测试入口补齐普通钉钉群机器人配置，支持安全遮罩保存 webhook 与 secret、查看帮助并发送测试通知（refs #1957）。
+- Agent Chat 普通与流式接口在请求未指定 `report_language` 时继承全局 `REPORT_LANGUAGE`，显式请求值仍优先。
+- WebUI 分开展示发布版本、代码版本与构建时间，并用构建输入摘要避免复用时间戳未变化的旧静态资源（fixes #2093）。
+- macOS unsigned 打包显式禁用 Electron 签名与 Hardened Runtime，在冻结后端和 electron-builder 阶段清理残缺签名，并审计原始应用与 DMG 产物；该缓解不替代 Apple Developer 签名与公证（refs #2075）。
+
+### 文档
+
+- 修复文档中的失效相对链接。
 - [修复] #2026 外股代码映射到中文显示名时英文新闻相关性判定漏判：新增同源 STOCK_ENGLISH_NAME_MAP 单一真源、canonicalize_foreign_stock_code 规范化入口与 _foreign_english_query_terms 别名解析，使 AAPL/00700/BABA 等 ticker 即使 stock_name 为中文也能在查询构建、相关性打分与多维度情报路径上复用 canonical 英文名，并补齐 .US/.HK suffix / HK 前缀全形式的归类与回归用例；同时在 _score_news_relevance 对 alias 展开 term 做去重，避免 legal alias 展开短名与显式 short alias 重复计分。
 - [新功能] Tushare 数据源支持通过 `TUSHARE_HTTP_URL` 环境变量自定义接入地址，便于网络无法直达 `api.tushare.pro` 时切换自建网关或第三方兼容镜像；留空保持官方默认地址不变（fixes #1985）
 - [文档] `.env.example` 与 `.github/workflows/00-daily-analysis.yml` 同步映射 `TUSHARE_HTTP_URL`，避免出现"配置项有但 workflow 漏映射"的半修状态
@@ -2294,7 +2472,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-[Unreleased]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.27.0...HEAD
+[Unreleased]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.29.0...HEAD
+[3.29.0]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.28.0...v3.29.0
+[3.28.0]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.27.0...v3.28.0
 [3.27.0]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.26.1...v3.27.0
 [3.26.1]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.25.0...v3.26.1
 [3.25.0]: https://github.com/ZhuLinsen/daily_stock_analysis/compare/v3.24.1...v3.25.0
