@@ -4,6 +4,7 @@ Replaces finlab's sqlite pipeline. Daily/date-based sources go through
 ``crawl_day``; ``crawl_range`` loops dates and skips ones already stored.
 """
 
+import logging
 import os
 import shutil
 
@@ -273,8 +274,13 @@ def crawl_financials(engine, year, season, keep_files=False, min_stocks=1000):
         # 家數不足有**兩個**成因，從這裡分不出來：截止日前的半季發布，以及解析器
         # 對不上新版 markup。所以檔案要留著（後者需要它追查），但要標記成半季，
         # 讓下次重跑重新下載而不是沿用——不標的話，截止日後重跑會再失敗一次。
-        with open(partial_marker, "w", encoding="utf-8") as fh:
-            fh.write(f"parsed={parsed} min_stocks={min_stocks}\n")
+        try:
+            with open(partial_marker, "w", encoding="utf-8") as fh:
+                fh.write(f"parsed={parsed} min_stocks={min_stocks}\n")
+        except OSError as exc:
+            # 標記只是為了讓下次重跑重新下載，寫不進去不該蓋掉真正的錯誤——
+            # 那會把「這季只有 525 檔」變成一個看不懂的 FileNotFoundError。
+            logging.warning("could not mark %s as a partial quarter: %s", directory, exc)
         raise RuntimeError(
             f"{year}Q{season}: only {parsed} stocks parsed (<{min_stocks}), "
             f"quarter looks partial or the parser is out of date — nothing written; "
