@@ -516,6 +516,16 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 - **Technology Cycle**: Track semiconductor, AI hardware, and global technology read-through for market risk appetite.
 - **Theme Signals**: Focus on battery, auto, internet-platform, and KOSDAQ growth-stock rotation.
 """
+        if self.region == "us" and review_language == "zh-TW":
+            # 沒有這個分支的話會落到 `to_markdown_block()`，它的標題只看 region：
+            # region == "us" 一律回英文 "### VI. Strategy Framework"，於是 zh-TW 的
+            # 美股模板報告會在「五、消息催化」與「七、风险提示」之間夾一段英文羅馬數字。
+            # 模板路徑不是罕見路徑——LLM 回空（實測 BRK.B）就會走到這裡。
+            return """### 六、策略框架
+- **趨勢結構**：判斷市場在進攻、震盪與防守中的狀態是否一致。
+- **資金與情緒**：結合波動率、寬度和主題輪動評估風險偏好。
+- **主題主線**：辨識可延續和可放大的產業主線與防守線索。
+"""
         if self.region == "us" and review_language == "zh":
             return """### 六、策略框架
 - **趋势结构**：判断市场在进攻、震荡与防守中的状态是否一致。

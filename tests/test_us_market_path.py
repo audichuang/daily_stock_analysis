@@ -178,6 +178,22 @@ class TestZhTwPromptRespectsMarketCapabilities:
         assert any("資金與情緒" in h for h in headings)
 
 
+class TestTemplateFallbackStaysInTheReportLanguage:
+    def test_us_zh_tw_strategy_block_is_not_english(self):
+        """模板路徑不是罕見路徑：LLM 回空（實測 BRK.B 連兩次）就會走到這裡。
+
+        `to_markdown_block()` 的標題只看 region，`us` 一律回英文，於是 zh-TW 的
+        美股模板報告會在兩個中文章節之間夾一段 "### VI. Strategy Framework"。
+        """
+        from src.market_analyzer import MarketAnalyzer
+
+        block = MarketAnalyzer._get_strategy_markdown_block(_analyzer("us"), "zh-TW")
+
+        assert "### 六、策略框架" in block, block
+        assert "Strategy Framework" not in block
+        assert "趨勢結構" in block, "zh-TW 應為繁體"
+
+
 class TestIndexTableUnitFollowsTheMarket:
     @pytest.mark.parametrize("region,unit", [
         ("us", "十億美元"), ("tw", "新台幣億元"), ("cn", "億"),
