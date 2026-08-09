@@ -2943,15 +2943,18 @@ class GeminiAnalyzer(LLMClient):
                     return (content, model, usage)
                 # 空回应最常见的原因不是模型挂了，而是**推理模型把 token 预算烧在
                 # 推理上、还没开始产出内容就到顶**——此时 `finish_reason` 是 `length`
-                # 而不是 `stop`。实测 `deepseek/deepseek-v4-flash` 在 `max_tokens=2048`
-                # （本仓库预设）下 0/3 有内容，8192 下 2/3 有内容。不带上 finish_reason
-                # 的话，「LLM returned empty response」看起来跟金钥失效／服务中断一样，
-                # 得另外做一轮诊断才分得出来。
+                # 而不是 `stop`。不带上 finish_reason 的话，「LLM returned empty
+                # response」看起来跟金钥失效／服务中断一样，得另做一轮诊断才分得出来。
+                #
+                # **别在讯息里叫人调 `LLM_MAX_TOKENS`**：那个环境变数只有选股 pipeline
+                # 读（`services/screening/config.py`），个股分析的预算是呼叫端写死的
+                # （`analyze()` 传 `max_output_tokens: 8192`）。实测 deepseek-v4-flash
+                # 在 8192 下仍有约 1/3 回空，所以真正的槓桿是换模型，不是加预算。
                 raise ValueError(
                     "LLM returned empty response "
-                    f"(finish_reason={self._finish_reason_of(response) or 'unknown'}; "
-                    "finish_reason=length 表示 token 预算在产出内容前就用完，"
-                    "请调高 LLM_MAX_TOKENS 或改用非推理模型)"
+                    f"(finish_reason={self._finish_reason_of(response) or 'unknown'}, "
+                    f"max_tokens={max_tokens}; finish_reason=length 表示 token 预算在产出"
+                    "内容前就用完——推理模型常见，换非推理模型比加预算有效)"
                 )
 
             except Exception as e:

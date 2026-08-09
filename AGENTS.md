@@ -42,6 +42,7 @@
 - 请不要把本仓库当作低成本试验场、简历展示场或 contribution farming 场所。任何 PR 都必须证明作者理解当前系统契约，并完成基本自审、集成和验证。
 - 使用 AI 辅助开发本身不是问题；问题是提交 AI 生成后未经人工语义审查、未验证、未收敛的代码。此类 PR 会按低质量提交处理。
 - review 反馈后，不接受只在被指出的位置追加局部 patch；完整收敛程序见 skill `respond-to-review`。
+- **新测试一律做 mutation 检查**：把修法改回旧写法，测试必须立刻红；没红就是它在为别的理由通过，不算守门。同时补**反向**检查（把修法改得过头也要红），否则「只擋了正確的一半」看不出来。实测这一条抓到过三次假守门：mock 的 quote 少给 `price` 让函式提前 return、少一个 phase 的断言让过度封锁照样绿、只跑受影响档案漏掉同一 guard 在另一个测试档的另一种 mock。
 - 如果一个 PR 在多轮 review 后仍持续出现同类契约漂移、重复 fallback、测试绕过真实风险层、PR body 与实际 diff 不一致等问题，维护者可以要求关闭重做，而不是继续逐点 review。
 - 研究／回测类结论（超额、Sharpe、命中率、偏误上界）在写进文档前要过一轮对抗审查；**区间跨零或样本量不足时一律写 inconclusive**，不写方向性结论。被推翻的数字要在原处标明作废，不留两个版本各自流通——2026-07 的三轮审查各推翻一个 headline，其中一次把「与 0050 打平」变成「输给 0050」。
 
@@ -79,54 +80,13 @@ uv run python scripts/check_ai_assets.py
 
 ## 4. 常用命令
 
-> 常用任务已封装在根目录 `Makefile`（统一以 `uv run` 执行）：`make help` 列出全部；
-> 常用如 `make serve` / `make review-tw` / `make analyze STOCKS=…` / `make test` / `make lint`。
-> 以下为底层命令，CI（`ci_gate.sh`）与不使用 uv 的环境仍以此为准。
-> **该跑哪个门槛见 §6**：本机开发默认用 §6 的快速门槛，不要默认跑这里的全量 `pytest`。
+指令清单不写在这里——`make help`、`main.py --help`、`package.json` 都拿得到，抄一份只会漂移。
+**该跑哪个验证门槛见 §6**（本机默认跑快速门槛，不要默认跑全量 `pytest`）。
 
-### 运行应用
+只记一个装不起来就整个中止、而且讯息看不出原因的坑：
 
 ```bash
-python main.py
-python main.py --debug
-python main.py --dry-run
-python main.py --stocks 600519,hk00700,AAPL
-python main.py --market-review
-python main.py --schedule
-python main.py --serve
-python main.py --serve-only
-uvicorn server:app --reload --host 0.0.0.0 --port 8000
-```
-
-### 后端验证
-
-```bash
-pip install -r requirements.txt
-pip install flake8 pytest pytest-timeout   # setup.cfg 的 addopts 帶 --timeout，缺 plugin 会直接中止
-./scripts/ci_gate.sh
-python -m pytest -m "not network"
-python -m py_compile <changed_python_files>
-```
-
-### Web / Desktop
-
-```bash
-cd apps/dsa-web
-npm ci
-npm run lint
-npm run build
-
-cd ../dsa-desktop
-npm install
-npm run build
-```
-
-### PR / CI 证据
-
-```bash
-gh pr view <pr_number>
-gh pr checks <pr_number>
-gh run view <run_id> --log-failed
+pip install flake8 pytest pytest-timeout   # setup.cfg 的 addopts 带 --timeout，缺 plugin 直接中止
 ```
 
 ## 5. 默认工作流
@@ -147,23 +107,21 @@ gh run view <run_id> --log-failed
 
 ### CI 覆盖原则
 
-**四个阻断 job 只在「对 `main` 开 PR」时触发**（`ci.yml` 的 `on:` 只有 `pull_request`、**没有 `push`**）。
-所以**直接 push 到 `main` 的改动一次阻断 CI 都没跑过**——本机 `ci_gate.sh` 与 CI 不等价，尤其
-相依安装那段只有 CI 装得起来才算数。走直接 merge 就要自己承担这个缺口并在交付说明写明；
-要在合入前验到，唯一的办法是开一个 base=main 的 PR。下面两个非阻断项**也不跟着 PR 跑**（见表内触发栏）。
+**阻断 job 只在「对 `main` 开 PR」时触发**（`ci.yml` 的 `on:` 只有 `pull_request`、**没有 `push`**），
+所以**直接 push 到 `main` 的改动一次阻断 CI 都没跑过**。要在合入前验到，唯一的办法是开一个
+base=main 的 PR；走直接 merge 就要自己承担这个缺口并在交付说明写明。
 
-当前仓库 CI 主要包含：
+**当前有哪些 job、哪些阻断，一律以 `gh pr checks <pr>` 为准**——上游会改（2026-08 就把
+`backend-gate` 拆成三个分片 job），这里列一份清单只会漂移。两个非阻断项**不跟着 PR 跑**：
+`network-smoke`（排程，平日 02:00 UTC + 手动）与 `pr-review`（纯手动 `workflow_dispatch`，要传 `pr_number`）。
 
-| 检查项 | 来源 | 触发 | 说明 | 是否阻断 |
-| --- | --- | --- | --- | --- |
-| `ai-governance` | `ci.yml` | PR → main | 校验 `AGENTS.md` / `CLAUDE.md` / `.github` 指令 / `.claude/skills` 关系 | 是 |
-| `backend-gate` | `ci.yml` | PR → main | 执行 `./scripts/ci_gate.sh` | 是 |
-| `docker-build` | `ci.yml` | PR → main | Docker 构建与关键模块导入 smoke | 是 |
-| `web-gate` | `ci.yml` | PR → main | 前端改动时执行 `npm run lint` + `npm run build` | 是（触发时） |
-| `network-smoke` | `network-smoke.yml` | **排程**（平日 02:00 UTC）+ 手动 | `pytest -m network` + `scripts/test.sh quick` | 否，观测项 |
-| `pr-review` | `pr-review.yml` | **纯手动**（`workflow_dispatch`，要传 `pr_number`） | PR 静态检查 + AI 审查 + 自动标签 | 否，辅助项 |
+**本机 `ci_gate.sh` 与 CI 不等价**，两处差异都会让本机全绿而 CI 红：
+- 相依安装只有 CI 装得起来才算数
+- **CI 的 backend-tests 跑 Python 3.11，本机 venv 是 3.12**（§10）。3.12-only 语法（PEP 701 的同引号巢状
+  f-string）在本机永远剖析得过——`scripts/screen_tw.py` 因此在 main 上坏了很久没人发现。已由
+  `tests/test_python_version_compat.py` 确定性挡住（它从 `ci.yml` 读版本，不写死）。
 
-若 PR 上已有对应 CI 结果，可直接引用 CI 结论；若 CI 未覆盖改动面，或本地与 CI 环境差异较大，需要补充说明本地验证与缺口。
+若 PR 上已有对应 CI 结果，可直接引用 CI 结论；若 CI 未覆盖改动面，需要补充说明本地验证与缺口。
 
 ### 按改动面执行
 
@@ -249,11 +207,13 @@ gh run view <run_id> --log-failed
 
 > 本仓库是个人 fork（`audichuang/daily_stock_analysis`），**不并回上游**，可按本 fork 需要自由演进。以下是上游没有、且从代码/工具推断不出的约定与踩雷：
 
+- **`gh pr create` 在 fork 里预设把 PR 开到上游**（`ZhuLinsen/daily_stock_analysis`）——与本节第一句「不并回上游」正好相反，而且它不会问你。先 `gh repo set-default audichuang/daily_stock_analysis`，或每次带 `--repo`。踩过：第一次开 PR 直接被上游 repo 接走，靠报错才发现。
 - **环境用 `uv`（不用 `python -m venv`）**：建环境 `uv venv --python 3.12`，依赖 `uv pip install -r requirements.txt`，执行一律 `uv run python …`。常用任务封装在根目录 `Makefile`（`make help`）。
 - **台股（`.TW` 上市 / `.TWO` 上柜）是新增重点**：个股走 yfinance；支持 4~6 位代码（含 5~6 位 ETF）。
 - **台股大盘复盘市场数据走 TWSE/TPEx 官方 OpenAPI（免 key）**：见 `data_provider/twse_fetcher.py`。涨跌家数仅上市口径（上柜无公开端点），成交额与三大法人为上市+上柜合计；`get_market_stats` 按 `purpose="market_review:<region>"` 路由（A 股统计源限 cn、TwseFetcher 限 tw）。
 - **自动补全索引**：台股全量种子在 `scripts/stock_index_seeds/stock_list_tw.csv`（`make refresh-tw` 重建）。`.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` **必须保持 `false`**——否则运行时会从上游 GitHub 拉索引、覆盖掉本地台股/美股增量（`.env.example` 示例值是上游的 `true`，勿照抄）。
-- **LLM 主模型用 DeepSeek**：`.env` 须**显式**设 `LITELLM_MODEL=deepseek/deepseek-chat`。否则当 shell 环境导出了 `GEMINI_API_KEY` 时，`load_dotenv` 不覆盖既有环境变量，自动推断会优先选 Gemini。
+- **LLM 主模型用 DeepSeek，且 `.env` 须显式设 `LITELLM_MODEL`**：否则当 shell 环境导出了 `GEMINI_API_KEY` 时，`load_dotenv` 不覆盖既有环境变量，自动推断会优先选 Gemini。**模型名以 `.env` 现值为准**（DeepSeek 停用过 `deepseek-chat`，写死在这里只会再过时一次）。
+- **推理模型的 token 预算会静默吃掉整个回应**：`deepseek-v4-flash` 这类会把预算花在推理上，内容为空而 `finish_reason=length`，症状是随机「分析未成功」，**台股美股都会中**。**加预算不是可用的槓桿**——个股分析的 `max_output_tokens` 由 `analyzer.analyze()` 写死 8192，`LLM_MAX_TOKENS` 只有选股 pipeline 读得到；实测 8192 下仍约 1/3 回空。要修就换 `LITELLM_MODEL`。
 - **通知用 Bark，走 Doppler 注入**：`make serve` / `make review-tw` 用 `doppler run -p shioaji -c dev` 把 Doppler 的 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`（`custom_webhook_sender.py` 自动识别 `api.day.app`），secret 不落地 `.env`。**`make analyze` 不含 Doppler 包装**——要 Bark 通知需手动包：`doppler run -p shioaji -c dev -- bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py --stocks 2330.TW'`；非交易日需加 `--force-run`。
 - **全量离线测试（`uv run ./scripts/ci_gate.sh`，第四阶段 `pytest -m "not network"`）约 38 分钟，且现在应该全绿**：2026-07-30 实测 5202 passed / 0 failed / 8 deselected（`5e3d4bd3` 修掉最后一个顺序敏感 flaky——旧版在收集期算一次假时戳，跑到后段必然过 realtime TTL）。**所以红一个就是回归，不要再当 baseline 噪音放过**。别把全量当快速门槛（快速验证用受影响测试文件的子集）。
 - **「离线」测试其实会连外，是这个 repo 最贵的一类坑**（踩过一次挂 **6 小时 21 分**：行程 `S` 状态、六小时只烧 30 秒 CPU、对外 HTTPS 连线 ESTABLISHED 但对方不回，而当时没有任何东西会砍它）。止血已就位：`setup.cfg` 的 `--timeout=300`（需 `pytest-timeout`）会让它红在那个测试上并印出堆叠。真正要记住的是下面这条为什么难发现——A 股那条链（`alphasift_service` 的 `DsaEastMoneyHotspotProvider`、`akshare`、`alphasift` 套件）**每个网路失败都被 `except` 接住再 fallback**，所以漏一格 mock 的测试**不管有没有网路都是绿的**，只有对方「收了连线却不回」时才炸。两个必踩的形状：`provider="akshare"` 会让未 patch 的 `_resolve_hotspot_provider` 造出真 provider；`FakeProvider(DsaEastMoneyHotspotProvider)` 会**继承**整条连外子树，覆写叶方法挡不住。查法见 `tests/test_alphasift_api.py` 的 `_no_outbound_network` fixture（守门刻意继承 `BaseException`，否则会被 `except Exception` 吞掉）。另外 **LiteLLM 在 import 时**会去 `raw.githubusercontent.com` 抓 model cost map（有本地 fallback，不会挂）。
