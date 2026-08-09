@@ -13,8 +13,12 @@
 
 import re
 
-# 美股代码正则：1-5 个大写字母，可选 .X 后缀（如 BRK.B）
-_US_STOCK_PATTERN = re.compile(r'^[A-Z]{1,5}(\.[A-Z])?$')
+# 美股代码正则：1-5 个大写字母，可选类别股后缀（如 BRK.B / BRK-B）。
+# **点与连字号都要认**：`BRK.B` 是通用写法，`BRK-B` 是 Yahoo／yfinance 自己用的写法，
+# 只认一种会让另一种掉出美股判定、一路 fallback 到 A 股链路（见 detect_market）。
+# 分隔符後**只允许一个字母**：`.US` 那种交易所後缀不是类别股，混进来会让
+# `_convert_stock_code` 造出 Yahoo 不认得的 `AAPL-US`。
+_US_STOCK_PATTERN = re.compile(r'^[A-Z]{1,5}([.-][A-Z])?$')
 
 
 # 用户输入 -> (Yahoo Finance 符号, 中文名称)

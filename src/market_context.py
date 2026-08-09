@@ -43,8 +43,11 @@ def detect_market(stock_code: Optional[str]) -> str:
         return suffix_market
 
     # US stocks: 1-5 uppercase letters (AAPL, TSLA, GOOGL)
-    # Also handles suffixed forms like BRK.B
-    if re.match(r'^[A-Z]{1,5}(\.[A-Z]{1,2})?$', code):
+    # Also handles suffixed forms like BRK.B and Yahoo's own BRK-B. Missing the dash
+    # form here is not a lookup miss — it falls through to the A-share default below,
+    # so the prompt opens "你是一位 A 股投资分析师" and reasons about ±10% 涨跌停 and T+1
+    # for a US stock. Wrong analysis, no error.
+    if re.match(r'^[A-Z]{1,5}([.-][A-Z]{1,2})?$', code):
         return "us"
 
     # Default: A-shares (6-digit numbers like 600519, 000001)

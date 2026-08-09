@@ -2643,7 +2643,12 @@ class SearchService:
 
     # A-share ETF code prefixes (Shanghai 51/52/56/58, Shenzhen 15/16/18)
     _A_ETF_PREFIXES = ('51', '52', '56', '58', '15', '16', '18')
-    _ETF_NAME_KEYWORDS = ('ETF', 'FUND', 'TRUST', 'INDEX', 'TRACKER', 'UNIT')  # US/HK ETF name hints
+    # US/HK ETF name hints. **必须整词匹配**：子字串匹配会把 `UNIT` 命中
+    # `UNITEDHEALTH`，於是 UNH 这种道指成分股被判成 ETF，公司风险／财报／竞争三组
+    # 检索查询整组被换成指数式查询——报告照出，只是再也不看公司本身。
+    _ETF_NAME_PATTERN = re.compile(
+        r'\b(?:ETFS?|FUNDS?|TRUSTS?|INDEX|TRACKERS?|UNITS?)\b'
+    )
 
     @staticmethod
     def is_index_or_etf(stock_code: str, stock_name: str) -> bool:
@@ -2663,7 +2668,7 @@ class SearchService:
         # US/HK ETF: foreign symbol + name contains fund-like keywords
         if SearchService._is_foreign_stock(code):
             name_upper = (stock_name or '').upper()
-            return any(kw in name_upper for kw in SearchService._ETF_NAME_KEYWORDS)
+            return bool(SearchService._ETF_NAME_PATTERN.search(name_upper))
         return False
 
     @property

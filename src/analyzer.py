@@ -97,6 +97,13 @@ from src.services.daily_market_context import format_daily_market_context_prompt
 from src.market_phase_prompt import format_market_phase_prompt_section
 from src.market_structure_prompt import format_market_structure_prompt_section
 
+# 个股 prompt／报告里的价格与成交额币别。key 是 `detect_market()` 的回传值。
+# 未知市场退回「元」，与改动前的写死行为一致。
+_MARKET_CURRENCY = {
+    'cn': '元', 'us': '美元', 'hk': '港元',
+    'tw': '新台币', 'jp': '日元', 'kr': '韩元',
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -3431,27 +3438,30 @@ class GeminiAnalyzer(LLMClient):
 
         tech_section_title = _format_prompt_tech_section_title(report_language)
         quote_section_title, close_price_label = _phase_aware_quote_labels(context, report_language)
+        # 价格与成交额的币别跟着标的的市场走，不是跟着报告语言走。
+        prompt_market = detect_market(code)
+        ccy = _MARKET_CURRENCY.get(prompt_market, '元')
         hide_regular_session_ohlc = _should_hide_regular_session_ohlc(context)
         realtime_overlay_quote = hide_regular_session_ohlc and _today_has_realtime_overlay(today)
         pct_chg_label = L("即時漲跌幅", "实时涨跌幅") if realtime_overlay_quote else L("漲跌幅", "涨跌幅")
         volume_label = L("即時成交量", "实时成交量") if realtime_overlay_quote else L("成交量", "成交量")
         amount_label = L("即時成交額", "实时成交额") if realtime_overlay_quote else L("成交額", "成交额")
         quote_rows = [
-            f"| {close_price_label} | {today.get('close', 'N/A')} 元 |",
+            f"| {close_price_label} | {today.get('close', 'N/A')} {ccy} |",
         ]
         if not hide_regular_session_ohlc:
             quote_rows.extend(
                 [
-                    f"| {L('開盤價', '开盘价')} | {today.get('open', 'N/A')} 元 |",
-                    f"| {L('最高價', '最高价')} | {today.get('high', 'N/A')} 元 |",
-                    f"| {L('最低價', '最低价')} | {today.get('low', 'N/A')} 元 |",
+                    f"| {L('開盤價', '开盘价')} | {today.get('open', 'N/A')} {ccy} |",
+                    f"| {L('最高價', '最高价')} | {today.get('high', 'N/A')} {ccy} |",
+                    f"| {L('最低價', '最低价')} | {today.get('low', 'N/A')} {ccy} |",
                 ]
             )
         quote_rows.extend(
             [
                 f"| {pct_chg_label} | {today.get('pct_chg', 'N/A')}% |",
                 f"| {volume_label} | {self._format_volume(today.get('volume'))} |",
-                f"| {amount_label} | {self._format_amount(today.get('amount'))} |",
+                f"| {amount_label} | {self._format_amount(today.get('amount'), prompt_market)} |",
             ]
         )
         quote_rows_text = "\n".join(quote_rows)
@@ -3511,13 +3521,13 @@ class GeminiAnalyzer(LLMClient):
 ### {L("即時行情增強資料", "实时行情增强数据")}
 | {L("指標", "指标")} | {L("數值", "数值")} | {L("解讀", "解读")} |
 |------|------|------|
-| {L("目前價格", "当前价格")} | {rt.get('price', 'N/A')} 元 | |
+| {L("目前價格", "当前价格")} | {rt.get('price', 'N/A')} {ccy} | |
 | **{L("量比", "量比")}** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
 | **{L("週轉率", "换手率")}** | **{rt.get('turnover_rate', 'N/A')}%** | |
 | {L("本益比(動態)", "市盈率(动态)")} | {rt.get('pe_ratio', 'N/A')} | |
 | {L("股價淨值比", "市净率")} | {rt.get('pb_ratio', 'N/A')} | |
-| {L("總市值", "总市值")} | {self._format_amount(rt.get('total_mv'))} | |
-| {L("流通市值", "流通市值")} | {self._format_amount(rt.get('circ_mv'))} | |
+| {L("總市值", "总市值")} | {self._format_amount(rt.get('total_mv'), prompt_market)} | |
+| {L("流通市值", "流通市值")} | {self._format_amount(rt.get('circ_mv'), prompt_market)} | |
 | {L("60日漲跌幅", "60日涨跌幅")} | {rt.get('change_60d', 'N/A')}% | {L("中期表現", "中期表现")} |
 """
 
@@ -3938,16 +3948,22 @@ class GeminiAnalyzer(LLMClient):
         else:
             return f"{volume:.0f} 股"
 
-    def _format_amount(self, amount: Optional[float]) -> str:
-        """格式化成交额显示"""
+    def _format_amount(self, amount: Optional[float], market: str = 'cn') -> str:
+        """格式化成交额显示。
+
+        `market` 决定币别。预设 `cn` 与旧行为逐字相同，所以没传的呼叫端不受影响。
+        写死「元」的後果不是排版问题：AAPL 的成交额会以「115.75 亿元」进 prompt，
+        而同一份 prompt 另一段告诉模型这是美股 ⇒ 模型拿到的是人民币计价的美股。
+        """
         if amount is None:
             return 'N/A'
+        currency = _MARKET_CURRENCY.get(market, '元')
         if amount >= 1e8:
-            return f"{amount / 1e8:.2f} 亿元"
+            return f"{amount / 1e8:.2f} 亿{currency}"
         elif amount >= 1e4:
-            return f"{amount / 1e4:.2f} 万元"
+            return f"{amount / 1e4:.2f} 万{currency}"
         else:
-            return f"{amount:.0f} 元"
+            return f"{amount:.0f} {currency}" if currency != '元' else f"{amount:.0f} 元"
 
     def _format_percent(self, value: Optional[float]) -> str:
         """格式化百分比显示"""
@@ -3969,6 +3985,7 @@ class GeminiAnalyzer(LLMClient):
 
     def _build_market_snapshot(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """构建当日行情快照（展示用）"""
+        snapshot_market = detect_market(context.get('code') or '')
         today = context.get('today', {}) or {}
         realtime = context.get('realtime', {}) or {}
         yesterday = context.get('yesterday', {}) or {}
@@ -4002,7 +4019,7 @@ class GeminiAnalyzer(LLMClient):
             "change_amount": self._format_price(change_amount),
             "amplitude": self._format_percent(amplitude),
             "volume": self._format_volume(today.get('volume')),
-            "amount": self._format_amount(today.get('amount')),
+            "amount": self._format_amount(today.get('amount'), snapshot_market),
         }
 
         if realtime:

@@ -204,7 +204,7 @@ def is_code_like(value: str) -> bool:
     explicit_parts = _split_explicit_exchange(text)
     if explicit_parts is not None:
         return _normalize_explicit_exchange_parts(explicit_parts) is not None
-    if re.match(r"^[A-Z]{1,5}(?:\.(?:US|[A-Z]))?$", text):
+    if re.match(r"^[A-Z]{1,5}(?:[.-](?:US|[A-Z]))?$", text):
         return True
     return False
 
@@ -239,7 +239,7 @@ def _normalize_code_and_exchange(raw: str) -> tuple[Optional[str], str]:
         return suffix_symbol, explicit_exchange
     if any(text.endswith(suffix) for suffix in _PRESERVE_SUFFIXES):
         return None, explicit_exchange
-    if re.match(r"^[A-Z]{1,5}(?:\.(?:US|[A-Z]))?$", text):
+    if re.match(r"^[A-Z]{1,5}(?:[.-](?:US|[A-Z]))?$", text):
         return text, explicit_exchange
     if explicit_code is not None:
         return explicit_code, explicit_exchange
@@ -420,7 +420,7 @@ def resolve_daily_stock_identity(
         market = suffix_market
     elif _is_us_index_code(normalized_code):
         market = "us"
-    elif re.fullmatch(r"[A-Z]{1,5}(?:\.(?:US|[A-Z]))?", normalized_code):
+    elif re.fullmatch(r"[A-Z]{1,5}(?:[.-](?:US|[A-Z]))?", normalized_code):
         market = "us"
     elif normalized_code.isdigit() and len(normalized_code) == 6:
         market = "cn"

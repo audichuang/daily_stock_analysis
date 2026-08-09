@@ -175,10 +175,14 @@ class YfinanceFetcher(BaseFetcher):
             logger.debug(f"识别为美股指数: {code} -> {yf_symbol}")
             return yf_symbol
 
-        # 美股：1-5 个大写字母（可选 .X 后缀），原样返回
+        # 美股：1-5 个大写字母（可选 .X 后缀）。**类别股的点要换成连字号**——Yahoo 用
+        # `BRK-B`／`BF-B`，传 `BRK.B` 会回 "possibly delisted"、0 笔资料，而上游各层
+        # 都把「取不到」当成正常降级，於是整档股票**静默消失**（实测 BRK.B/BF.B 皆 0 笔，
+        # 换成连字号後分别是 521.80／28.52）。这里是我们的代码变成 Yahoo 符号的唯一转换点。
         if is_us_stock_code(code):
-            logger.debug(f"识别为美股代码: {code}")
-            return code
+            yf_code = code.replace('.', '-')
+            logger.debug(f"识别为美股代码: {code} -> {yf_code}")
+            return yf_code
 
         # 海外 suffix-only MVP：显式 Yahoo Finance suffix-only 代码（日股/韩股/台股），原样传给 Yahoo。
         if self._is_yahoo_suffix_stock(code):

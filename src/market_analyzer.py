@@ -31,6 +31,7 @@ from src.llm.backend_registry import (
     resolve_generation_fallback_backend_id,
 )
 from src.llm.generation_backend import GenerationError
+from src.core.trading_calendar import get_effective_trading_date
 from src.schemas.market_light import MARKET_LIGHT_REGIONS, MarketLightSnapshot
 from src.services.run_diagnostics import record_llm_run, record_llm_run_started
 from src.services.intelligence_service import IntelligenceService
@@ -88,6 +89,24 @@ def _scrub_non_finite(value: Any) -> Any:
     if isinstance(value, float) and not isfinite(value):
         return None
     return value
+
+
+def _directional_index_changes(overview: "MarketOverview") -> List[float]:
+    """方向性指数的涨跌幅，供评分与 reason 文案**共用同一条件**。
+
+    两件事必须一起做，分开做就会让分数和它自己的依据互相矛盾：
+    - **排除 VIX**：它是波动率／恐慌指数而非方向性指数。美股 risk-off 当天
+      SPX/IXIC/DJI 全跌而 VIX +25%，把它算进平均会得到一个正数 ⇒ 报告写
+      「盘面信号 24/100（偏弱）」的同时印出「主要指数平均涨跌幅 +4.68%」。
+    - **排除非有限值**：NaN 因比较恒假而落在 `min()` 的上界得满分，`+inf` 同理，
+      而它们印出来是 `+nan%`——两者看起来都像真读数。
+    """
+    return [
+        idx.change_pct
+        for idx in overview.indices
+        if not _is_missing_number(idx.change_pct)
+        and (getattr(idx, "code", "") or "").upper() != "VIX"
+    ]
 
 
 def _has_institutional_reading(overview: "MarketOverview") -> bool:
@@ -552,7 +571,12 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         Returns:
             MarketOverview: 市场概览数据对象
         """
-        today = datetime.now().strftime('%Y-%m-%d')
+        # 用**该市场自己**最近一场已收盘的交易日，而不是伺服器（台北）的挂钟日期。
+        # 台北时间任何时刻，美股最近收完的那场都是纽约的前一天：09:00 跑复盘会把周一
+        # 收盘的资料标成周二，而这个日期一路进报告标题、`payload['date']`、
+        # `market_light.trade_date` 与历史纪录 ⇒ 之後回看会以为周二已经复过盘。
+        # 这也让复盘和 pipeline 其他地方（checkpoint／resume）用的是同一个日期定义。
+        today = get_effective_trading_date(self.region).strftime('%Y-%m-%d')
         overview = MarketOverview(date=today)
         
         # 1. 获取主要指数行情（按 region 切换 A 股/美股）
@@ -1282,11 +1306,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 reasons.append(f"上涨家数占比 {up_ratio:.0%}，亏钱效应较强")
             else:
                 reasons.append(f"上涨家数占比 {up_ratio:.0%}，市场分化")
-        # 与评分器同一条件：`is not None` 挡不住 NaN／±inf，照走下去 reason 会写出 `+nan%`。
-        index_changes = [
-            idx.change_pct for idx in overview.indices
-            if not _is_missing_number(idx.change_pct)
-        ]
+        index_changes = _directional_index_changes(overview)
         if index_changes:
             avg_change = sum(index_changes) / len(index_changes)
             reasons.append(f"主要指数平均涨跌幅 {avg_change:+.2f}%")
@@ -1309,11 +1329,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 reasons.append(f"advancers ratio {up_ratio:.0%}, downside pressure dominates")
             else:
                 reasons.append(f"advancers ratio {up_ratio:.0%}, breadth is mixed")
-        # 与评分器同一条件：`is not None` 挡不住 NaN／±inf，照走下去 reason 会写出 `+nan%`。
-        index_changes = [
-            idx.change_pct for idx in overview.indices
-            if not _is_missing_number(idx.change_pct)
-        ]
+        index_changes = _directional_index_changes(overview)
         if index_changes:
             avg_change = sum(index_changes) / len(index_changes)
             reasons.append(f"average major-index change {avg_change:+.2f}%")
@@ -1334,9 +1350,16 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 f"| Index | Last | Change % | Open | High | Low | Amplitude | Turnover ({self._get_turnover_unit_label()}) |",
                 "|-------|------|----------|------|------|-----|-----------|-----------------|",
             ]
-        else:
+        elif self._get_review_language() == "zh-TW":
             lines = [
-                "| 指数 | 最新 | 涨跌幅 | 开盘 | 最高 | 最低 | 振幅 | 成交额(亿) |",
+                f"| 指數 | 最新 | 漲跌幅 | 開盤 | 最高 | 最低 | 振幅 | 成交額({self._get_turnover_unit_label()}) |",
+                "|------|------|--------|------|------|------|------|-----------|",
+            ]
+        else:
+            # 单位必须跟着市场走：`_format_turnover_value` 对 us/hk/jp/kr 除的是 1e9，
+            # 写死「亿」会把 USD bn 标成人民币亿元——数字与单位同时错，而且看起来像真读数。
+            lines = [
+                f"| 指数 | 最新 | 涨跌幅 | 开盘 | 最高 | 最低 | 振幅 | 成交额({self._get_turnover_unit_label()}) |",
                 "|------|------|--------|------|------|------|------|-----------|",
             ]
         for idx in overview.indices:
@@ -1512,16 +1535,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         if breadth_available:
             breadth_score = int(overview.up_count / participants * 100)
 
-        # 排除 VIX：它是波动率/恐慌指数而非方向性指数，纳入均值会让「恐慌飙升」被误算成 risk-on
-        # `isfinite` 不是防御性冗余：NaN/±inf 会一路通过 available 检查，把分数钉在
-        # 100 或 0（NaN 因比较恒假而落在 min() 的上界），而那个分数看起来像真读数。
-        index_changes = [
-            idx.change_pct
-            for idx in overview.indices
-            if idx.change_pct is not None
-            and isfinite(idx.change_pct)
-            and (getattr(idx, "code", "") or "").upper() != "VIX"
-        ]
+        index_changes = _directional_index_changes(overview)
         index_available = bool(index_changes)
         index_score = 50
         if index_available:
@@ -1644,8 +1658,29 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             ])
             return "\n\n".join(sections)
 
+        # zh 与 zh-TW 共用同一套能力判定，只有字面不同。**zh-TW 以前完全不走这里**
+        # ——它的 prompt 把「板塊主線」「漲跌停結構」写死，所以美股（无板块榜、无涨跌
+        # 家数、根本没有涨跌停制度）会被要求分析三样它一格资料都没有的东西 ⇒ 模型编。
+        tw = review_language == "zh-TW"
+
+        def T(zh_tw: str, zh: str) -> str:
+            return zh_tw if tw else zh
+
         if self.profile.has_market_stats and self.profile.has_sector_rankings:
-            return """### 三、板块主线
+            return T("""### 三、板塊主線
+（區分產業板塊與概念題材，分析領漲／領跌背後的邏輯、持續性和是否形成主線）
+
+### 四、資金與情緒
+（解讀成交額、漲跌停結構、市場寬度和風險偏好）
+
+### 五、消息催化
+（結合近三日新聞，提煉真正影響明日交易的催化或擾動）
+
+### 六、明日交易計畫
+（給出進攻／均衡／防守結論、倉位區間、關注方向、迴避方向和一個觸發失效條件）
+
+### 七、風險提示
+（列出需要關注的風險點；最後補充「建議僅供參考，不構成投資建議」。）""", """### 三、板块主线
 （区分行业板块与概念题材，分析领涨/领跌背后的逻辑、持续性和是否形成主线）
 
 ### 四、资金与情绪
@@ -1658,7 +1693,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 （给出进攻/均衡/防守结论、仓位区间、关注方向、回避方向和一个触发失效条件）
 
 ### 七、风险提示
-（列出需要关注的风险点；最后补充“建议仅供参考，不构成投资建议”。）"""
+（列出需要关注的风险点；最后补充“建议仅供参考，不构成投资建议”。）""")
 
         numerals = ["一", "二", "三", "四", "五", "六", "七", "八"]
         section_number = 3
@@ -1670,15 +1705,32 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             section_number += 1
 
         if self.profile.has_sector_rankings:
-            add_section("板块主线", "（仅分析已提供的行业板块与概念题材榜单，不扩展未提供的数据）")
+            add_section(
+                T("板塊主線", "板块主线"),
+                T("（僅分析已提供的產業板塊與概念題材榜單，不擴展未提供的資料）",
+                  "（仅分析已提供的行业板块与概念题材榜单，不扩展未提供的数据）"),
+            )
         if self.profile.has_market_stats:
-            add_section("资金与情绪", "（仅解读已提供的成交额、涨跌停结构、市场宽度和风险偏好数据）")
+            add_section(
+                T("資金與情緒", "资金与情绪"),
+                T("（僅解讀已提供的成交額、漲跌停結構、市場寬度和風險偏好資料）",
+                  "（仅解读已提供的成交额、涨跌停结构、市场宽度和风险偏好数据）"),
+            )
         add_section(
-            "消息催化",
-            "（结合近三日新闻和指数表现，提炼真正影响明日交易的催化或扰动；不要推断未提供的资金流、市场宽度或板块榜）",
+            T("消息催化", "消息催化"),
+            T("（結合近三日新聞和指數表現，提煉真正影響明日交易的催化或擾動；不要推斷未提供的資金流、市場寬度或板塊榜）",
+              "（结合近三日新闻和指数表现，提炼真正影响明日交易的催化或扰动；不要推断未提供的资金流、市场宽度或板块榜）"),
         )
-        add_section("明日交易计划", "（给出进攻/均衡/防守结论、仓位区间、关注方向、回避方向和一个触发失效条件）")
-        add_section("风险提示", "（列出需要关注的风险点；最后补充“建议仅供参考，不构成投资建议”。）")
+        add_section(
+            T("明日交易計畫", "明日交易计划"),
+            T("（給出進攻／均衡／防守結論、倉位區間、關注方向、迴避方向和一個觸發失效條件）",
+              "（给出进攻/均衡/防守结论、仓位区间、关注方向、回避方向和一个触发失效条件）"),
+        )
+        add_section(
+            T("風險提示", "风险提示"),
+            T("（列出需要關注的風險點；最後補充「建議僅供參考，不構成投資建議」。）",
+              "（列出需要关注的风险点；最后补充“建议仅供参考，不构成投资建议”。）"),
+        )
         return "\n\n".join(sections)
 
     def _build_review_prompt(self, overview: MarketOverview, news: List) -> str:
@@ -1804,6 +1856,21 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
                 if self.profile.has_market_stats
                 else "2-3 sentences summarizing overall market tone, index moves, and available news context."
             )
+        elif review_language == "zh-TW":
+            indices_placeholder = indices_text if indices_text else "暫無指數資料（介面異常）"
+            news_placeholder = news_text if news_text else "暫無相關新聞"
+            # 美股／港股／日韓沒有漲跌家數、漲跌停與板塊榜。少了這段，模型會被下面的
+            # 模板要求寫「漲跌停結構」與「板塊主線」，而手上一格資料都沒有 ⇒ 它會編。
+            data_boundary_requirement = (
+                "- 嚴格遵守資料邊界：未提供漲跌家數、資金流、成交額彙總或板塊榜時，不要編造或過度解讀。\n"
+                if data_limits_block
+                else ""
+            )
+            market_summary_hint = (
+                "2-3 句話概括指數、漲跌家數、成交額和情緒溫度，明確「強勢／偏暖／震盪／偏弱」判斷"
+                if self.profile.has_market_stats
+                else "2-3 句話概括指數表現、新聞線索和整體風險狀態，不要補寫未提供的市場寬度或資金流資料"
+            )
         else:
             indices_placeholder = indices_text if indices_text else "暂无指数数据（接口异常）"
             news_placeholder = news_text if news_text else "暂无相关新闻"
@@ -1827,6 +1894,11 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
             "报告要像交易员盘后工作台：先给结论，再按数据表、主线、催化、计划展开"
             if self.profile.has_market_stats or self.profile.has_sector_rankings
             else "报告要像交易员盘后工作台：先给结论，再按指数、新闻催化和计划展开"
+        )
+        workflow_hint_tw = (
+            "報告要像交易員盤後工作台：先給結論，再按資料表、主線、催化、計畫展開"
+            if self.profile.has_market_stats or self.profile.has_sector_rankings
+            else "報告要像交易員盤後工作台：先給結論，再按指數、新聞催化和計畫展開"
         )
 
         if review_language == "en":
@@ -1895,9 +1967,9 @@ Output the report content directly, no extra commentary.
 - 禁止輸出 JSON 格式
 - 禁止輸出程式碼區塊
 - emoji 僅在標題處少量使用（每個標題最多 1 個）
-- 報告要像交易員盤後工作台：先給結論，再按資料表、主線、催化、計畫展開
+- {workflow_hint_tw}
 - 不要重複列出已由系統注入的表格資料；正文負責解釋表格背後的含義
-
+{data_boundary_requirement}
 ---
 
 # 今日市場資料
@@ -1911,6 +1983,8 @@ Output the report content directly, no extra commentary.
 {stats_block}
 
 {sector_block}
+
+{data_limits_block}
 
 ## 市場新聞
 {news_placeholder}
@@ -1928,25 +2002,12 @@ Output the report content directly, no extra commentary.
 > 一句話給出今日市場狀態、核心矛盾和明日優先觀察方向。
 
 ### 一、盤面總覽
-（2-3 句話概括指數、漲跌家數、成交額和情緒溫度，明確「強勢／偏暖／震盪／偏弱」判斷）
+（{market_summary_hint}）
 
 ### 二、指數結構
 （{self._get_index_hint()}，說明誰在護盤、誰在拖累，以及關鍵支撐／壓力）
 
-### 三、板塊主線
-（分析領漲／領跌板塊背後的邏輯、持續性和是否形成主線）
-
-### 四、資金與情緒
-（解讀成交額、漲跌停結構、市場寬度和風險偏好）
-
-### 五、消息催化
-（結合近三日新聞，提煉真正影響明日交易的催化或擾動）
-
-### 六、明日交易計畫
-（給出進攻／均衡／防守結論、倉位區間、關注方向、迴避方向和一個觸發失效條件）
-
-### 七、風險提示
-（列出需要關注的風險點；最後補充「建議僅供參考，不構成投資建議」。）
+{output_template_sections}
 
 ---
 
