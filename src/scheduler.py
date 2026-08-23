@@ -74,10 +74,24 @@ class GracefulShutdown:
         而 `logging` 自己也有一把 per-handler 的锁。
 
         踩过（2026-08-23 10:35:33，`dsa-schedule.service`）：旧版在 handler 里
-        `with self._lock` 并呼叫 `logger.info`。讯息印出来了（第一个 handler 已经写出），
-        然后行程**再无下文**——卡在第二个 logging handler 的锁上。systemd 仍报
-        `active (running)`，而当天 14:00 与隔天 14:00 的排程都没有触发，
+        `with self._lock` 并呼叫 `logger.info`。讯息印出来了，然后行程**再无下文**；
+        systemd 仍报 `active (running)`，当天 14:00 与隔天 14:00 的排程都没有触发，
         「调度器已停止」也从未印出。这种失败完全无声，只能靠心跳停掉才看得出来。
+
+        **确切机制需要两条执行绪**（单执行绪重现不出来，实测过）：
+        `logging.Handler.lock` 与 `logging._lock` 都是 **RLock**，所以在 handler 里
+        呼叫 logging 本身是安全的——RLock 对**持有者**可重入。环是这样成的：
+
+            背景执行绪：持有 logging 的 RLock（在 emit 里）-> 想要 self._lock
+            主执行绪  ：持有 self._lock（在 handler 里）   -> 想要 logging 的 RLock
+
+        RLock 只对持有者可重入，跨执行绪照样等，于是双方互等。卡死当下那个行程的
+        12 条执行绪全部停在 `futex_do_wait`、零对外连线，与这个环相符（若是网路呼叫
+        挂住，主执行绪会停在 `ep_poll`/`recvfrom`；若在 sleep 会是 `hrtimer_nanosleep`）。
+        两执行绪的重现脚本：旧版卡死且对后续 SIGTERM 无反应，本版 0.00s 乾净退出。
+
+        推论：**光把 logging 移出 handler 不够，`self._lock` 也必须移除**——只要
+        handler 还搶任何一把非可重入锁，另一条执行绪就能跟它成环。
 
         bool 与 int 的赋值在 CPython 下是单一 bytecode，本来就不需要锁；讯息移到
         主迴圈观察到旗标之后再印。
