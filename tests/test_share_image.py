@@ -63,22 +63,30 @@ def test_stock_share_image_omits_unconfigured_social_account():
     assert 'class="footer-brand full"' in html
 
 
-def test_runtime_branding_defaults_to_bundled_xiaohongshu_qr():
+def test_runtime_branding_draws_no_social_card_when_unconfigured():
+    """本 fork 把上游的内置默认（上游作者的个人账号 + 追踪 QR）清空了。
+
+    上游行为是「全部留空 ⇒ 显示上游作者的账号」；本 fork 是「全部留空 ⇒ 不画卡片」。
+    这个测试就是那条分歧的守门：任何一天默认值又被填回来，它会立刻红。
+    """
     branding = share_image_branding_from_config(object())
 
-    assert branding.xiaohongshu_handle == DEFAULT_XIAOHONGSHU_HANDLE
+    assert DEFAULT_XIAOHONGSHU_HANDLE == ""
+    assert DEFAULT_XIAOHONGSHU_QR_PATH == ""
+    assert branding.xiaohongshu_handle == ""
     assert branding.xiaohongshu_id == ""
-    assert branding.xiaohongshu_qr_path == DEFAULT_XIAOHONGSHU_QR_PATH
+    assert branding.xiaohongshu_qr_path == ""
+    assert branding.has_xiaohongshu is False
+
     html = build_share_image_html(
         "# 贵州茅台 600519 分析报告\n\n## 核心判断\n\n- 趋势偏多\n",
         generated_on=date(2026, 7, 31),
         branding=branding,
     )
 
-    assert html.count('class="qr-frame"') == 1
-    assert html.count("data:image/jpeg;base64,") == 1
-    assert f"<b>小红书</b>{DEFAULT_XIAOHONGSHU_HANDLE}" in html
-    assert " ID " not in html
+    assert 'class="qr-frame"' not in html
+    assert "小红书" not in html
+    assert "霸天土小豆" not in html
 
 
 def test_runtime_branding_does_not_mix_default_qr_with_custom_identity():
@@ -102,7 +110,7 @@ def test_runtime_branding_does_not_mix_default_qr_with_custom_identity():
     assert "<b>小红书</b>@自定义账号" in html
     assert "custom-id" not in html
     assert "data:image/jpeg;base64," not in html
-    assert DEFAULT_XIAOHONGSHU_HANDLE not in html
+    assert "霸天土小豆" not in html  # 上游内置默认的字面值，本 fork 已清空
 
 
 def test_runtime_branding_does_not_mix_default_pair_with_custom_handle_or_url():
@@ -126,7 +134,7 @@ def test_runtime_branding_does_not_mix_default_pair_with_custom_handle_or_url():
     assert "@自定义账号" in html
     assert 'href="https://example.com/custom"' in html
     assert "data:image/jpeg;base64," not in html
-    assert DEFAULT_XIAOHONGSHU_HANDLE not in html
+    assert "霸天土小豆" not in html  # 上游内置默认的字面值，本 fork 已清空
 
 
 def test_runtime_branding_does_not_mix_default_handle_with_custom_qr():
@@ -148,7 +156,7 @@ def test_runtime_branding_does_not_mix_default_handle_with_custom_qr():
     )
 
     assert html.count("data:image/jpeg;base64,") == 1
-    assert DEFAULT_XIAOHONGSHU_HANDLE not in html
+    assert "霸天土小豆" not in html  # 上游内置默认的字面值，本 fork 已清空
 
 
 def test_runtime_branding_treats_whitespace_only_values_as_unconfigured():
@@ -161,9 +169,29 @@ def test_runtime_branding_treats_whitespace_only_values_as_unconfigured():
         )
     )
 
-    assert branding.xiaohongshu_handle == DEFAULT_XIAOHONGSHU_HANDLE
+    # 全为空白 ⇒ 与「没设」等价；本 fork 的默认是空，所以不画卡片
+    assert branding.xiaohongshu_handle == ""
     assert branding.xiaohongshu_id == ""
-    assert branding.xiaohongshu_qr_path == DEFAULT_XIAOHONGSHU_QR_PATH
+    assert branding.xiaohongshu_qr_path == ""
+    assert branding.has_xiaohongshu is False
+
+
+def test_configured_social_identity_still_renders():
+    """反向守门：清空默认不能顺手把整个功能弄坏——设了自己的值还是要画出来。"""
+    branding = share_image_branding_from_config(
+        SimpleNamespace(
+            share_image_xiaohongshu_handle="@my_own_handle",
+            share_image_xiaohongshu_url="https://www.xiaohongshu.com/user/profile/mine",
+        )
+    )
+
+    assert branding.has_xiaohongshu is True
+    html = build_share_image_html(
+        "# 贵州茅台 600519 分析报告\n\n## 核心判断\n\n- 趋势偏多\n",
+        branding=branding,
+    )
+    assert "@my_own_handle" in html
+    assert "霸天土小豆" not in html
 
 
 def test_stock_share_image_does_not_link_unsafe_social_url():
