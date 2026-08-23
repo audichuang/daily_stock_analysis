@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from data_provider.realtime_types import UnifiedRealtimeQuote, RealtimeSource
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult, TrendStatus
 from src.core.pipeline import StockAnalysisPipeline
+from src.core.trading_calendar import MarketPhase
 
 
 def _make_realtime_quote(
@@ -121,8 +122,9 @@ class TestAugmentHistoricalWithRealtime(unittest.TestCase):
     @patch("src.core.pipeline.get_market_now")
     @patch("src.core.pipeline.is_market_open", return_value=True)
     @patch("src.core.pipeline.get_market_for_stock", return_value="cn")
+    @patch("src.core.pipeline.infer_market_phase", return_value=MarketPhase.INTRADAY)
     def test_appends_row_when_last_date_before_today(
-        self, _mock_market, _mock_open, mock_now
+        self, _mock_phase, _mock_market, _mock_open, mock_now
     ) -> None:
         today = date.today()
         # 固定市场时钟为 UTC 当日，使 pipeline 的 market_today 等于 date.today()，
@@ -141,8 +143,9 @@ class TestAugmentHistoricalWithRealtime(unittest.TestCase):
     @patch("src.core.pipeline.get_market_now")
     @patch("src.core.pipeline.is_market_open", return_value=True)
     @patch("src.core.pipeline.get_market_for_stock", return_value="cn")
+    @patch("src.core.pipeline.infer_market_phase", return_value=MarketPhase.INTRADAY)
     def test_updates_last_row_when_last_date_is_today(
-        self, _mock_market, _mock_open, mock_now
+        self, _mock_phase, _mock_market, _mock_open, mock_now
     ) -> None:
         today = date.today()
         # 固定市场时钟为当日，使 last_date >= market_today，从而更新最后一行而不是追加。
@@ -156,6 +159,67 @@ class TestAugmentHistoricalWithRealtime(unittest.TestCase):
         result = self.pipeline._augment_historical_with_realtime(df, quote, "600519")
         self.assertEqual(len(result), len(df))
         self.assertEqual(result.iloc[-1]["close"], 16.0)
+
+
+class TestPremarketGuard(unittest.TestCase):
+    """開盤前不得補當日 K 棒（`src/core/pipeline.py` 的 PREMARKET 早退）。
+
+    這道 guard 之前**零覆蓋**，所以上面兩個測試漏 patch `infer_market_phase` 才會
+    一直沒被發現——它們的成敗取決於真實時鐘落在哪個盤別。
+    """
+
+    def setUp(self) -> None:
+        # 與 TestAugmentHistoricalWithRealtime 同款：Config 走隔離的 sqlite 路徑。
+        self._db_path = os.path.join(
+            os.path.dirname(__file__), "..", "data", "test_issue234.db"
+        )
+        os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
+        with patch.dict(os.environ, {"DATABASE_PATH": self._db_path}):
+            from src.config import Config
+            Config._instance = None
+            self.config = Config._load_from_env()
+        self.pipeline = StockAnalysisPipeline(config=self.config)
+
+    @patch("src.core.pipeline.get_market_now")
+    @patch("src.core.pipeline.is_market_open", return_value=True)
+    @patch("src.core.pipeline.get_market_for_stock", return_value="us")
+    @patch("src.core.pipeline.infer_market_phase", return_value=MarketPhase.PREMARKET)
+    def test_premarket_does_not_fabricate_today_bar(
+        self, _mock_phase, _mock_market, _mock_open, mock_now
+    ) -> None:
+        """盤前的「即時價」其實是昨收，疊上去會造出一根假日線讓指標全錯。"""
+        today = date.today()
+        mock_now.return_value = datetime(
+            today.year, today.month, today.day, 10, 0, tzinfo=timezone.utc
+        )
+        df = _make_historical_df(last_date=today - timedelta(days=1))
+        result = self.pipeline._augment_historical_with_realtime(
+            df, _make_realtime_quote(price=999.0), "AAPL"
+        )
+        self.assertEqual(len(result), len(df))
+        self.assertNotEqual(result.iloc[-1]["close"], 999.0)
+
+    @patch("src.core.pipeline.get_market_now")
+    @patch("src.core.pipeline.is_market_open", return_value=True)
+    @patch("src.core.pipeline.get_market_for_stock", return_value="us")
+    @patch("src.core.pipeline.infer_market_phase", return_value=MarketPhase.POSTMARKET)
+    def test_postmarket_still_augments(
+        self, _mock_phase, _mock_market, _mock_open, mock_now
+    ) -> None:
+        """反向守門：只擋 PREMARKET。收盤後那筆即時價就是當日收盤，仍該補。
+
+        把 guard 寫成「非盤中一律擋」會讓這條紅。
+        """
+        today = date.today()
+        mock_now.return_value = datetime(
+            today.year, today.month, today.day, 10, 0, tzinfo=timezone.utc
+        )
+        df = _make_historical_df(last_date=today - timedelta(days=1))
+        result = self.pipeline._augment_historical_with_realtime(
+            df, _make_realtime_quote(price=999.0), "AAPL"
+        )
+        self.assertEqual(len(result), len(df) + 1)
+        self.assertEqual(result.iloc[-1]["close"], 999.0)
 
 
 class TestComputeMaStatus(unittest.TestCase):

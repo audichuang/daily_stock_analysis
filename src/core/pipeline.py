@@ -2318,7 +2318,13 @@ class StockAnalysisPipeline:
         if not enable_realtime_tech:
             return df
         market = get_market_for_stock(code)
-        market_today = get_market_now(market).date()
+        # **只讀一次時鐘。** 下面的 PREMARKET 判定要吃同一個 `market_now`，否則這個函式
+        # 會各自向時鐘問兩次：跨盤別／跨午夜邊界時兩次答案可能不一致，而且測試 patch 掉
+        # `get_market_now` 之後仍然控制不住 `infer_market_phase` 內部那次
+        # （踩過：2026-08-24 北京 01:40 是 cn 的 PREMARKET，
+        # tests/test_pipeline_realtime_indicators.py 兩個測試因此在平日凌晨必紅、週末必綠）。
+        market_now = get_market_now(market)
+        market_today = market_now.date()
         if market and not is_market_open(market, market_today):
             return df
 
@@ -2330,7 +2336,7 @@ class StockAnalysisPipeline:
         # signal_score 46→55。不報錯，只是分數不對。
         # 只擋 PREMARKET：盤中／午休／收盤集合競價本來就該疊即時價，收盤後（POSTMARKET）
         # 那筆即時價就是當日收盤，DB 日線還沒進來時仍該補，不能一起關掉。
-        if market and infer_market_phase(market) == MarketPhase.PREMARKET:
+        if market and infer_market_phase(market, market_now) == MarketPhase.PREMARKET:
             return df
 
         last_val = df['date'].max()
