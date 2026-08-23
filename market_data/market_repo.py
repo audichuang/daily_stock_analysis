@@ -47,12 +47,19 @@ def to_daily_frame(df):
     [date, open, high, low, close, volume, amount, pct_chg]."""
     if df is None or df.empty:
         return pd.DataFrame()
-    prev_close = df["close"] - df["change"]
+    # 昨收由 close 自己 shift 得出，**不要**用 `close - change` 回推：`market.price.change`
+    # 對上市股票沒有正負號（見 market_data/crawler.py 的 _SIGN_COL 註解），回推出來的昨收
+    # 在下跌日比 close 還低 ⇒ 每個下跌日都變成上漲。實測 2330 於 2026-08-19 收 2350
+    # （前日 2380，實際 -1.26%）會被算成 +1.29%。這個欄位會進台股個股分析的 LLM prompt。
+    # 視窗第一列沒有前一日 ⇒ pct_chg 為 NaN（缺資料），不用 change 兜——那會把可能錯的
+    # 符號放回來。消費端須以 pd.notna 判定，不能用 truthiness（`bool(nan)` 是 True）。
+    close = pd.to_numeric(df["close"], errors="coerce")
+    prev_close = close.shift(1)
     out = pd.DataFrame({
         "date": pd.to_datetime(df["date"]),
         "open": df["open"], "high": df["high"], "low": df["low"],
         "close": df["close"], "volume": df["volume"], "amount": df["turnover"],
-        "pct_chg": df["change"] / prev_close.where(prev_close != 0) * 100,
+        "pct_chg": (close / prev_close.where(prev_close != 0) - 1) * 100,
     })
     return out
 

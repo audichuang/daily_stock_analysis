@@ -21,8 +21,9 @@ TwseFetcher - 台股大盘统计数据源（仅市场统计，无日线）
    仍返回涨跌家数并省略法人字段；全部失败才返回 {}，绝不向上抛出异常。
 """
 
+import datetime
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 import requests
@@ -46,6 +47,17 @@ _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 )
+
+
+def _roc_date(value: Any) -> Optional[datetime.date]:
+    """民国 ``yyyymmdd``（如 ``1150605``）转 ``date``；无法解析返回 None。"""
+    text = str(value or "").strip()
+    if len(text) < 7 or not text.isdigit():
+        return None
+    try:
+        return datetime.date(int(text[:-4]) + 1911, int(text[-4:-2]), int(text[-2:]))
+    except ValueError:
+        return None
 
 
 def _parse_float(value: Any) -> float:
@@ -87,8 +99,20 @@ class TwseFetcher(BaseFetcher):
         raise NotImplementedError("TwseFetcher 仅提供大盘统计，不支持日线数据")
 
     # --- 各端点解析 -------------------------------------------------------
-    def _fetch_breadth(self) -> Optional[Dict[str, int]]:
-        """涨跌家数（整体市场）。返回 5 个家数键，失败返回 None。"""
+    def _fetch_breadth(self, expected_date: Optional[datetime.date]) -> Optional[Dict[str, int]]:
+        """涨跌家数（整体市场）。返回 5 个家数键，失败或数据过期返回 None。
+
+        ``expected_date`` 是同一次调用里由 FMTQIK 解析出的最新交易日。**必须逐次比对**：
+        这个 openapi 端点会停止更新却照样回 HTTP 200 与结构正确的 JSON——2026-08-23 实测
+        ``出表日期`` 仍是 ``1150605``（2026-06-05，冻结 79 天），而当时同一支 fetcher 的
+        另外四个端点都是最新交易日。不比对日期的后果不是报错，是 20 份台股大盘复盘印着
+        同一组家数、LLM 在上面叠出「跌停 355 家恐触发融资断头」这种完全虚构的叙事
+        （见 .claude/reviews/data-fetch-findings.md）。
+
+        拿不到参照日期时**一律拒收**（fail closed）：无法证明新鲜的家数不如没有家数——
+        ``_build_stats_block`` 的 ``has_advance_decline`` 用 truthiness 判定，家数保持 0
+        会被正确渲染成「没有资料」，而不是「资料是零」。
+        """
         try:
             resp = self._session.get(_BREADTH_URL, timeout=_TIMEOUT)
             resp.raise_for_status()
@@ -110,6 +134,29 @@ class TwseFetcher(BaseFetcher):
             logger.warning("[TwseFetcher] 涨跌家数未找到「整體市場」行")
             return None
 
+        snapshot_date = _roc_date(target.get("出表日期"))
+        if snapshot_date is None:
+            logger.warning(
+                "[TwseFetcher] 涨跌家数缺少可解析的「出表日期」(%r)，拒收",
+                target.get("出表日期"),
+            )
+            return None
+        if expected_date is None:
+            logger.warning(
+                "[TwseFetcher] 无最新交易日参照（成交金额端点失败），无法验证涨跌家数 "
+                "出表日期=%s 是否新鲜，拒收",
+                snapshot_date,
+            )
+            return None
+        if snapshot_date != expected_date:
+            logger.warning(
+                "[TwseFetcher] 涨跌家数已过期，拒收：出表日期=%s，最新交易日=%s（相差 %d 天）。"
+                "端点 %s 停止更新时会照样回 200，故一律以日期为准",
+                snapshot_date, expected_date, (expected_date - snapshot_date).days,
+                _BREADTH_URL,
+            )
+            return None
+
         return {
             "up_count": int(_parse_float(target.get("上漲"))),
             "down_count": int(_parse_float(target.get("下跌"))),
@@ -118,8 +165,12 @@ class TwseFetcher(BaseFetcher):
             "limit_down_count": int(_parse_float(target.get("跌停"))),
         }
 
-    def _fetch_total_amount(self) -> Optional[float]:
-        """成交金额（最新交易日），单位转换为「亿新台币」。失败返回 None。"""
+    def _fetch_total_amount(self) -> Optional[Tuple[Optional[datetime.date], float]]:
+        """最新交易日的 ``(交易日, 成交金额[亿新台币])``。失败返回 None。
+
+        交易日同时充当 ``_fetch_breadth`` 的新鲜度参照——FMTQIK 的最后一列就是 TWSE
+        自己认定的最新交易日，比自己算交易日历可靠（台股有连假，weekday 挡不掉）。
+        """
         try:
             resp = self._session.get(_TRADE_VALUE_URL, timeout=_TIMEOUT)
             resp.raise_for_status()
@@ -143,7 +194,7 @@ class TwseFetcher(BaseFetcher):
             return None
 
         # TradeValue 单位为「元」，消费方期望「亿」（与 A 股一致：sum/1e8）。
-        return trade_value_yuan / 1e8
+        return _roc_date(latest.get("Date")), trade_value_yuan / 1e8
 
     def _fetch_institutional(self) -> Optional[Dict[str, float]]:
         """三大法人买卖超（买卖差额），单位转换为「亿新台币」。失败返回 None。"""
@@ -280,9 +331,12 @@ class TwseFetcher(BaseFetcher):
         """
         logger.info("[TwseFetcher] 获取台股大盘统计（上市涨跌家数 + 上市/上柜成交额与三大法人）")
 
-        # 上市
-        breadth = self._fetch_breadth()
-        twse_amount = self._fetch_total_amount()
+        # 上市。成交金额先取，因为它顺带给出 TWSE 自己认定的最新交易日，
+        # 而涨跌家数必须拿它当新鲜度参照（见 _fetch_breadth 的 docstring）。
+        twse_trade = self._fetch_total_amount()
+        latest_trading_date = twse_trade[0] if twse_trade else None
+        twse_amount = twse_trade[1] if twse_trade else None
+        breadth = self._fetch_breadth(latest_trading_date)
         twse_inst = self._fetch_institutional()
         # 上柜（无涨跌家数端点）
         tpex_amount = self._fetch_tpex_total_amount()
@@ -305,7 +359,9 @@ class TwseFetcher(BaseFetcher):
         if breadth is not None:
             stats.update(breadth)
         else:
-            logger.warning("[TwseFetcher] 上市涨跌家数缺失，家数字段保持 0")
+            # 家数保持 0 是刻意的：_build_stats_block 的 has_advance_decline 用 truthiness
+            # 判定，全 0 会被渲染成「没有资料」而不是「资料是零」。
+            logger.warning("[TwseFetcher] 上市涨跌家数缺失或已过期，家数字段保持 0")
 
         # 成交金额：上市 + 上柜（各自可缺）
         amount_parts = [a for a in (twse_amount, tpex_amount) if a is not None]

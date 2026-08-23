@@ -57,6 +57,18 @@ def _map_quote_to_dict(quote: Any, fallback_code: str) -> Dict[str, Any]:
     }
 
 
+def _opt_float(value):
+    """NaN / None -> None，其餘轉 float。0 是合法讀數，不可當缺資料。"""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    # NaN 不等於自己——這樣就不必為了 pd.isna 在 service 層拉进 pandas。
+    return None if number != number else number
+
+
 class StockService:
     """
     股票数据服务
@@ -280,9 +292,12 @@ class StockService:
                     "high": float(row.get("high", 0)),
                     "low": float(row.get("low", 0)),
                     "close": float(row.get("close", 0)),
-                    "volume": float(row.get("volume", 0)) if row.get("volume") else None,
-                    "amount": float(row.get("amount", 0)) if row.get("amount") else None,
-                    "change_percent": float(row.get("pct_chg", 0)) if row.get("pct_chg") else None,
+                    # `if row.get(...)` 對 NaN 是 True（`bool(nan)` 為真），會把 NaN
+                    # 原封不動送進 JSON（非法 JSON）。缺資料的欄位必須落成 null，
+                    # 而 0 是合法讀數不能當缺資料，所以只能用 pd.notna 判定。
+                    "volume": _opt_float(row.get("volume")),
+                    "amount": _opt_float(row.get("amount")),
+                    "change_percent": _opt_float(row.get("pct_chg")),
                 })
             
             return {
