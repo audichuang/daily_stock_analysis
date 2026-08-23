@@ -14,6 +14,7 @@ from typing import Optional, List, Any, Dict, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from api.v1.schemas.market_phase import MarketPhaseSummary
+from src.report_language import SUPPORTED_REPORT_LANGUAGES
 from src.schemas.decision_action import DecisionAction
 
 
@@ -136,7 +137,12 @@ class ReportMeta(BaseModel):
     stock_code: str = Field(..., description="股票代码")
     stock_name: Optional[str] = Field(None, description="股票名称")
     report_type: Optional[str] = Field(None, description="报告类型")
-    report_language: Optional[str] = Field(None, description="报告输出语言（zh/en/ko）")
+    report_language: Optional[str] = Field(
+        None,
+        # 合法值由 SUPPORTED_REPORT_LANGUAGES 推导，不要手写字面——本 fork 多一个 zh-TW，
+        # 手写过的三处都漏了它（这是其中一处）。
+        description=f"报告输出语言（{'/'.join(SUPPORTED_REPORT_LANGUAGES)}）",
+    )
     created_at: Optional[str] = Field(None, description="创建时间")
     current_price: Optional[float] = Field(None, description="分析时股价")
     change_pct: Optional[float] = Field(None, description="分析时涨跌幅(%)")

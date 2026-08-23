@@ -382,7 +382,11 @@ class MarketAnalyzer:
         return normalized_fallback_model or backend
 
     def _get_output_language(self) -> str:
-        """Return the truthful report language (zh/en/ko) for payload and directives."""
+        """Return the truthful report language for payload and directives.
+
+        Legal values are SUPPORTED_REPORT_LANGUAGES; this fork adds zh-TW to
+        upstream's zh/en/ko, so do not hard-code the set here.
+        """
         return normalize_report_language(
             getattr(getattr(self, "config", None), "report_language", "zh")
         )

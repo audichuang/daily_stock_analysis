@@ -1212,7 +1212,14 @@ class AnspireSearchProvider(BaseSearchProvider):
         super().__init__(api_keys, "Anspire")
     
     def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7, region_mode: int = 2) -> SearchResponse:
-        """执行 Anspire 搜索"""
+        """执行 Anspire 搜索。
+
+        `region_mode`（官方文档的取值，不是本项目自定义的）：0 = 国内搜索（官方默认）、
+        1 = 海外搜索、2 = 国内+海外混合。上游 v3.30 把默认从 0 改成 2，方向是**放宽**
+        覆盖面而不是收紧——限制版反而是合并前的值。台股/美股新闻需要 1 或 2。
+        本 fork 目前未配置 `ANSPIRE_API_KEYS`，所以这个 provider 不会进 `_providers`；
+        真的配了 key 要留意它是 `insert(0, ...)` 进去的，会变成最高优先级。
+        """
         try:
             import requests
         except ImportError:

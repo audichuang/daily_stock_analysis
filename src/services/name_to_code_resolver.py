@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from src.data.stock_mapping import STOCK_NAME_MAP
+from src.services.market_symbol_utils import get_suffix_market
 from src.services.stock_code_utils import is_code_like, normalize_code
 
 logger = logging.getLogger(__name__)
@@ -377,7 +378,11 @@ stockDB: Dict[str, str] = dict(STOCK_NAME_MAP)
 # 避免证券改名后旧名称彻底不可解析。
 stockAliases: Dict[str, Set[str]] = {}
 
-_MARKET_ORDER: Dict[str, int] = {"a": 0, "hk": 1, "us": 2}
+# 上游只有 a/hk/us（`Stock` 的 docstring 自己寫明範圍是刻意的）；本 fork 補上
+# tw/jp/kr，否則 `_find_codes_for_name` 會把 market 為 None 的代碼**直接丟棄**，
+# 台股與日韓代碼在這條路上等於不存在。**附加在尾端**而不是插隊：既有三個市場的
+# 相對順序一動，這組 API 未來的呼叫端行為就跟著變，而現在沒有呼叫端可以驗。
+_MARKET_ORDER: Dict[str, int] = {"a": 0, "hk": 1, "us": 2, "tw": 3, "jp": 4, "kr": 5}
 
 # 已合并的 AkShare 缓存对象（幂等短路：同一份缓存不重复合并）
 _akshare_merged: Optional[Dict[str, str]] = None
@@ -563,10 +568,26 @@ def _fix_name(fragment: str, database: Dict[str, str]) -> List[str]:
 
 
 def _infer_code_market(code: str) -> Optional[str]:
-    """根据代码格式推断市场：6 位数字→"a"，5 位数字→"hk"，字母→"us"。"""
+    """根据代码格式推断市场。
+
+    顺序刻意如此：**先问后缀**（`.TW`/`.TWO`/`.T`/`.KS`/`.KQ`），再退回裸代码的长度。
+    后缀的唯一真源是 `src/services/market_symbol_utils.py`，不要在这里另写一份。
+
+    裸代码：4 位→台股普通股（上游三个市场都不用 4 位，不冲突）、5 位→港股、
+    6 位→A 股。**裸 6 位无法区分 A 股与韩股**（两者都可能 0 开头，如 005930 与
+    000001），沿用上游的 "a"；要正确解析韩股请带 `.KS`/`.KQ`。
+
+    已知未覆盖：**带字母的台股 ETF 两种写法都回 None**——`00631L` 与 `00631L.TW` 皆是。
+    后缀分支挡不住它，因为 `get_suffix_market` 要求 base 全为数字；而那个 helper 同时
+    服务 yfinance 路由、`stock_index_loader`、`stock_code_utils` 三条活路径，为这个休眠
+    API 去放宽它不划算。真要修，改 `market_symbol_utils` 并连带验那三条路径。
+    """
     c = code.strip()
+    suffix_market = get_suffix_market(c)
+    if suffix_market:
+        return suffix_market
     if c.isdigit():
-        return {5: "hk", 6: "a"}.get(len(c))
+        return {4: "tw", 5: "hk", 6: "a"}.get(len(c))
     return "us" if re.fullmatch(r"[A-Z]{1,5}(\.[A-Z])?", c) else None
 
 

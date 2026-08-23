@@ -892,10 +892,16 @@ class TestStorage(unittest.TestCase):
         instances = []
         query_values = []
         original_create_all = Base.metadata.create_all
+        # 只是「不要無限等」的上界，不是被驗證的性質。release 之後跑的是真的 create_all，
+        # 實測忙機器上 9.07s（load 4.10 紅 / load 2.63 綠），寫 5s 等於讓這個測試在
+        # 負載下必紅、而且看起來像回歸。真的死鎖永遠不會結束，所以放寬不會放掉守門。
+        # **`competitor_done.wait(timeout=0.2)` 不在此列**——那條斷言的是「競爭者此刻
+        # 仍被擋住」，值越大越嚴格、越小越寬鬆，不可以跟著放大。
+        join_timeout = 60
 
         def delayed_create_all(bind, *args, **kwargs):
             create_all_entered.set()
-            if not release_create_all.wait(timeout=5):
+            if not release_create_all.wait(timeout=join_timeout):
                 raise TimeoutError("Timed out waiting to release create_all")
             return original_create_all(bind, *args, **kwargs)
 
@@ -934,18 +940,18 @@ class TestStorage(unittest.TestCase):
                 competitor_thread = threading.Thread(target=use_manager)
 
                 init_thread.start()
-                self.assertTrue(create_all_entered.wait(timeout=5))
+                self.assertTrue(create_all_entered.wait(timeout=join_timeout))
 
                 competitor_thread.start()
-                self.assertTrue(competitor_entered.wait(timeout=5))
+                self.assertTrue(competitor_entered.wait(timeout=join_timeout))
                 self.assertFalse(
                     competitor_done.wait(timeout=0.2),
                     "DatabaseManager.get_instance() returned before initialization completed",
                 )
 
                 release_create_all.set()
-                init_thread.join(timeout=5)
-                competitor_thread.join(timeout=5)
+                init_thread.join(timeout=join_timeout)
+                competitor_thread.join(timeout=join_timeout)
 
                 self.assertFalse(init_thread.is_alive())
                 self.assertFalse(competitor_thread.is_alive())
@@ -981,13 +987,17 @@ class TestStorage(unittest.TestCase):
         instances = []
         query_values = []
         original_init = DatabaseManager.__init__
+        # 同 test_get_instance_waits_for_cold_start_initialization：這些只是「不要無限等」
+        # 的上界，release 之後跑的是真的 __init__（含 create_all，忙機器上約 9s）。
+        # `competitor_done.wait(timeout=0.2)` 同樣不在此列。
+        join_timeout = 60
 
         def delayed_direct_init(self, db_url=None):
             if db_url == direct_db_url:
                 direct_init_entered.set()
-                if not competitor_entered.wait(timeout=5):
+                if not competitor_entered.wait(timeout=join_timeout):
                     raise TimeoutError("Timed out waiting for competitor")
-                if not allow_direct_init.wait(timeout=5):
+                if not allow_direct_init.wait(timeout=join_timeout):
                     raise TimeoutError("Timed out waiting to initialize direct instance")
             return original_init(self, db_url=db_url)
 
@@ -1026,18 +1036,18 @@ class TestStorage(unittest.TestCase):
                 competitor_thread = threading.Thread(target=use_get_instance)
 
                 direct_thread.start()
-                self.assertTrue(direct_init_entered.wait(timeout=5))
+                self.assertTrue(direct_init_entered.wait(timeout=join_timeout))
 
                 competitor_thread.start()
-                self.assertTrue(competitor_entered.wait(timeout=5))
+                self.assertTrue(competitor_entered.wait(timeout=join_timeout))
                 self.assertFalse(
                     competitor_done.wait(timeout=0.2),
                     "get_instance() should not initialize over an in-flight direct construction",
                 )
 
                 allow_direct_init.set()
-                direct_thread.join(timeout=5)
-                competitor_thread.join(timeout=5)
+                direct_thread.join(timeout=join_timeout)
+                competitor_thread.join(timeout=join_timeout)
 
                 self.assertFalse(direct_thread.is_alive())
                 self.assertFalse(competitor_thread.is_alive())
