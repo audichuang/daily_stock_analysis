@@ -31,7 +31,7 @@ transport 混在一起）。本模块把其中可独立复用的部分抽出为 
 """
 
 import logging
-from typing import Optional, Dict, Any, List, Tuple, Callable
+from typing import Optional, Dict, Any, List, Tuple, Callable, Union
 
 from src.config import Config, get_api_keys_for_model
 from src.llm.hermes import (
@@ -52,6 +52,7 @@ from src.llm.generation_backend import (
     GenerationBackend,
     GenerationError,
     GenerationErrorCode,
+    GenerationResult,
 )
 from src.llm.usage import (
     attach_message_hmacs,
@@ -83,8 +84,9 @@ class _AllModelsFailedError(Exception):
     that *did* return a response (but whose JSON could not be validated), so
     callers can still attempt a best-effort text fallback.
 
-    ``last_model`` and ``last_usage`` record the model name and token usage
-    from the last attempt so callers can persist usage even on fallback.
+    ``last_model``, ``last_provider`` and ``last_usage`` record the resolved
+    route identity and token usage from the last attempt so callers can persist
+    diagnostics even on fallback.
     """
 
     def __init__(
@@ -93,11 +95,13 @@ class _AllModelsFailedError(Exception):
         *,
         last_response_text: Optional[str] = None,
         last_model: Optional[str] = None,
+        last_provider: Optional[str] = None,
         last_usage: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(message)
         self.last_response_text = last_response_text
         self.last_model = last_model
+        self.last_provider = last_provider
         self.last_usage = last_usage or {}
 
 
@@ -483,6 +487,18 @@ class LLMClient:
             litellm_completion_callable=self._call_litellm_impl,
         )
 
+    @staticmethod
+    def _promote_error_identity(details: Any) -> Dict[str, str]:
+        """Lift route/model diagnostics from nested GenerationError details."""
+        if not isinstance(details, dict):
+            return {}
+        promoted: Dict[str, str] = {}
+        for key in ("last_model", "route_name", "last_provider"):
+            candidate = str(details.get(key) or "").strip()
+            if candidate:
+                promoted[key] = candidate
+        return promoted
+
     def _call_litellm(
         self,
         prompt: str,
@@ -493,7 +509,8 @@ class LLMClient:
         stream_progress_callback: Optional[Callable[[int], None]] = None,
         response_validator: Optional[Callable[[str], None]] = None,
         audit_context: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, str, Dict[str, Any]]:
+        return_generation_result: bool = False,
+    ) -> Union[Tuple[str, str, Dict[str, Any]], GenerationResult]:
         """Compatibility wrapper around the configured generation backend."""
         preflight_error = self.get_generation_backend_config_error()
         if preflight_error is not None and not self._can_use_generation_fallback(preflight_error):
@@ -546,6 +563,7 @@ class LLMClient:
             except _AllModelsFailedError:
                 raise
             except GenerationError as fallback_exc:
+                fallback_identity = self._promote_error_identity(fallback_exc.details)
                 raise GenerationError(
                     error_code=fallback_exc.error_code,
                     stage="fallback",
@@ -555,6 +573,7 @@ class LLMClient:
                     provider=fallback_exc.provider,
                     details={
                         "reason": "fallback_backend_failed",
+                        **fallback_identity,
                         "primary_error": {
                             "error_code": exc.error_code.value,
                             "backend": exc.backend,
@@ -591,6 +610,8 @@ class LLMClient:
                         "fallback_error": str(fallback_exc),
                     },
                 ) from fallback_exc
+        if return_generation_result:
+            return result
         return result.text, result.model, result.usage
 
     def generate(
