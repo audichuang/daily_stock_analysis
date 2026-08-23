@@ -125,17 +125,13 @@ class TwseFetcher(BaseFetcher):
             logger.warning("[TwseFetcher] 涨跌家数返回结构异常: 非列表")
             return None
 
-        # 用「股票」列而不是「整體市場」：後者含權證／ETN，分母約 13,181，
-        # 而權證帶槓桿又無漲跌幅限制，會主導寬度判讀——實測 2026-06-05 那份
-        # 「整體市場」是 3144 漲 / 9578 跌 / 355 跌停，「股票」是 342 / 671 / 10。
-        # 報告寫的是「市場寬度」，那指的是股票，不是股票的衍生品。
         target = None
         for row in rows:
-            if isinstance(row, dict) and str(row.get("類型", "")).strip() == "股票":
+            if isinstance(row, dict) and row.get("類型") == "整體市場":
                 target = row
                 break
         if target is None:
-            logger.warning("[TwseFetcher] 涨跌家数未找到「股票」行")
+            logger.warning("[TwseFetcher] 涨跌家数未找到「整體市場」行")
             return None
 
         snapshot_date = _roc_date(target.get("出表日期"))
@@ -332,13 +328,6 @@ class TwseFetcher(BaseFetcher):
 
         覆盖范围：涨跌家数为 TWSE 上市口径（上柜无公开端点）；成交金额与三大法人
         为上市+上柜合计。任一来源失败均部分降级，不影响其余字段。
-
-        涨跌家数有两个可能来源，两者口径不同：
-        1. TWSE `twtazu_od` 的「股票」列（含涨跌停家数）——**必须通过日期比对**，
-           该端点会停止更新却照样回 200；
-        2. 上述被拒收时，退回 `tw_breadth.closing_breadth()` 由 `market` schema 前复权
-           收盘自算（上市普通股，**无涨跌停家数**）。
-        两者都不可用时家数保持 0，下游按 truthiness 判成「没有资料」。
         """
         logger.info("[TwseFetcher] 获取台股大盘统计（上市涨跌家数 + 上市/上柜成交额与三大法人）")
 
@@ -348,16 +337,6 @@ class TwseFetcher(BaseFetcher):
         latest_trading_date = twse_trade[0] if twse_trade else None
         twse_amount = twse_trade[1] if twse_trade else None
         breadth = self._fetch_breadth(latest_trading_date)
-        if breadth is None and latest_trading_date is not None:
-            # 端點過期／改版時退回 market schema 自己算。**口徑不同**（上市普通股、
-            # 無漲跌停家數），差異寫在 data_provider/tw_breadth.py 的 docstring。
-            from .tw_breadth import closing_breadth
-
-            breadth = closing_breadth(latest_trading_date)
-            if breadth is not None:
-                logger.info(
-                    "[TwseFetcher] 涨跌家数改用本地 market schema 计算（上市普通股，无涨跌停家数）"
-                )
         twse_inst = self._fetch_institutional()
         # 上柜（无涨跌家数端点）
         tpex_amount = self._fetch_tpex_total_amount()
