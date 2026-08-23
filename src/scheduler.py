@@ -57,7 +57,8 @@ class GracefulShutdown:
 
     def __init__(self, register_signals: bool = True):
         self.shutdown_requested = False
-        self._lock = threading.Lock()
+        # 收到的訊號編號，由主迴圈負責印訊息（handler 內不得呼叫 logging，見下）。
+        self.shutdown_signal: Optional[int] = None
         if not register_signals:
             return
 
@@ -66,17 +67,28 @@ class GracefulShutdown:
         signal.signal(signal.SIGTERM, self._signal_handler)
 
     def _signal_handler(self, signum, frame):
-        """信号处理函数"""
-        with self._lock:
-            if not self.shutdown_requested:
-                logger.info(f"收到退出信号 ({signum})，等待当前任务完成...")
-                self.shutdown_requested = True
+        """信号处理函数。**只设旗标，不做任何会抢锁的事。**
+
+        signal 是在主执行绪上递送的，所以 handler 里任何抢锁的动作都可能自我死锁：
+        `threading.Lock` 不可重入（主执行绪正持有它时 handler 再抢就永远等下去），
+        而 `logging` 自己也有一把 per-handler 的锁。
+
+        踩过（2026-08-23 10:35:33，`dsa-schedule.service`）：旧版在 handler 里
+        `with self._lock` 并呼叫 `logger.info`。讯息印出来了（第一个 handler 已经写出），
+        然后行程**再无下文**——卡在第二个 logging handler 的锁上。systemd 仍报
+        `active (running)`，而当天 14:00 与隔天 14:00 的排程都没有触发，
+        「调度器已停止」也从未印出。这种失败完全无声，只能靠心跳停掉才看得出来。
+
+        bool 与 int 的赋值在 CPython 下是单一 bytecode，本来就不需要锁；讯息移到
+        主迴圈观察到旗标之后再印。
+        """
+        self.shutdown_signal = signum
+        self.shutdown_requested = True
 
     @property
     def should_shutdown(self) -> bool:
-        """检查是否应该退出"""
-        with self._lock:
-            return self.shutdown_requested
+        """检查是否应该退出（读一个 bool，不需要锁——见 `_signal_handler`）。"""
+        return self.shutdown_requested
 
 
 class Scheduler:
@@ -388,6 +400,7 @@ class Scheduler:
         logger.info("调度器开始运行...")
         logger.info(f"下次执行时间: {self._get_next_run_time()}")
 
+        shutdown_logged = False
         while self._running and not self.shutdown_handler.should_shutdown:
             self._refresh_daily_schedule_if_needed()
             self.schedule.run_pending()
@@ -398,6 +411,13 @@ class Scheduler:
             if datetime.now().minute == 0 and datetime.now().second < 30:
                 logger.info(f"调度器运行中... 下次执行: {self._get_next_run_time()}")
 
+        # 退出讯息在这里印，而不是在 signal handler 里（见 GracefulShutdown._signal_handler）。
+        if self.shutdown_handler.should_shutdown and not shutdown_logged:
+            shutdown_logged = True
+            logger.info(
+                "收到退出信号 (%s)，等待当前任务完成...",
+                self.shutdown_handler.shutdown_signal,
+            )
         logger.info("调度器已停止")
 
     def _get_next_run_time(self) -> str:
