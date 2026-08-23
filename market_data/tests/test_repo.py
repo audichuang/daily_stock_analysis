@@ -35,15 +35,20 @@ def test_stock_info_returns_single_record(pg_conn):
 def test_to_daily_frame_maps_to_dashboard_columns():
     import pandas as pd
 
-    df = pd.DataFrame([{"date": "2024-01-02", "open": 585.0, "high": 593.0,
+    df = pd.DataFrame([{"date": "2024-01-01", "open": 580.0, "high": 586.0,
+                        "low": 578.0, "close": 585.0, "change": 3.0,
+                        "volume": 90, "turnover": 4000},
+                       {"date": "2024-01-02", "open": 585.0, "high": 593.0,
                         "low": 589.0, "close": 590.0, "change": 5.0,
                         "volume": 100, "turnover": 5000}])
     out = market_repo.to_daily_frame(df)
     assert set(out.columns) == {"date", "open", "high", "low", "close",
                                 "volume", "amount", "pct_chg"}
-    assert out.iloc[0]["amount"] == 5000
-    # pct_chg from 漲跌價差: change / prev_close * 100, prev = 590 - 5 = 585
-    assert round(float(out.iloc[0]["pct_chg"]), 4) == round(5.0 / 585.0 * 100, 4)
+    assert out.iloc[1]["amount"] == 5000
+    # pct_chg 由 close 自己 shift 得出（`change` 對上市股票無正負號，不可用來回推昨收）
+    assert round(float(out.iloc[1]["pct_chg"]), 4) == round((590.0 / 585.0 - 1) * 100, 4)
+    # 視窗第一列沒有前一日 ⇒ 缺資料
+    assert pd.isna(out.iloc[0]["pct_chg"])
 
 
 def test_to_daily_frame_empty_stays_empty():

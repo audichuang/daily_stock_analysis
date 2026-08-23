@@ -73,6 +73,10 @@ def requests_post(*args, **kwargs):
     return _request("post", *args, **kwargs)
 
 
+# MI_INDEX 的漲跌方向欄；`漲跌價差` 本身不帶號。
+_SIGN_COL = "漲跌(+/-)"
+
+
 def crawl_price(date):
     datestr = date.strftime("%Y%m%d")
     r = _request(
@@ -94,9 +98,19 @@ def crawl_price(date):
     df = df.astype(str).apply(lambda s: s.str.replace(",", ""))
     df["date"] = pd.to_datetime(date)
     df = df.rename(columns={"證券代號": "stock_id"}).set_index(["stock_id", "date"])
+    # `漲跌價差` 只有絕對值，正負號在獨立的 `漲跌(+/-)` 欄（實測 2026-08-21：`+` 706 /
+    # `-` 521 / 空(平盤) 139 / `X`(無比價) 11）。下面的 to_numeric 會把這欄整欄變 NaN、
+    # 再被 dropna-all 丟掉 ⇒ 符號永久遺失，下跌日在 DB 裡看起來跟上漲日一樣。
+    # 上櫃走 TPEx JSON（`漲跌` 本身帶號）不受影響，所以症狀只出現在上市。
+    sign = df[_SIGN_COL].astype(str).str.strip() if _SIGN_COL in df.columns else None
     df = df.apply(lambda s: pd.to_numeric(s, errors="coerce"))
     df = df[df.columns[~df.isnull().all()]]
     df = df[~df["收盤價"].isnull()]
+    if sign is not None and "漲跌價差" in df.columns:
+        sign = sign.reindex(df.index)
+        magnitude = df["漲跌價差"].abs()
+        # `X` = 無比價（新上市首日等），沒有可比基準 ⇒ NULL，不是 0（0 是平盤，是讀數）。
+        df["漲跌價差"] = magnitude.mask(sign == "-", -magnitude).mask(sign == "X")
     return df
 
 
