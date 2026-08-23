@@ -1,79 +1,113 @@
-"""`tw_breadth.closing_breadth` 的 DB 接線（需要 `DATABASE_URL`，CI 會 skip）。
+"""`tw_breadth.closing_breadth` 的 DB 接線。
 
-純計數語意在 `tests/test_tw_breadth_counting.py`（無 DB，CI 跑得到）。這裡只守
-三件 DB 相關的事：上市口徑、前復權、以及「market.price 停更時拒絕拿舊資料當今天」。
+純計數語意在 `tests/test_tw_breadth_counting.py`（無 DB，主套件跑）。這裡守三件
+只有接上 DB 才驗得到的事：**上市普通股口徑**、**前復權**、以及
+**`market.price` 停更時拒絕拿舊資料當今天**。
+
+自種資料（隨 `pg_conn` rollback 清除），不依賴庫內既有資料——CI 的 ephemeral
+Postgres 是空庫，而開發機是有 16 年真實資料的庫，兩邊都要能過。種子日期刻意放到
+2099：`closing_breadth` 的視窗是 `max(date) - 30 days`，把種子放成全庫最新，
+真實資料（到 2026）就落在視窗外，計數才會是確定值。
 """
 
-import pandas as pd
 from sqlalchemy import text
 
 from data_provider.tw_breadth import closing_breadth
 
+PREV = "2099-01-04"
+TODAY = "2099-01-05"
 
-def _latest(conn):
-    return conn.execute(text("select max(date) from market.price")).scalar()
+
+def _seed(conn, *, rows, info, adjustments=()):
+    for stock_id, name in info:
+        # 開發機的 stock_info 已有這些上市代碼（CI 空庫沒有），兩邊都要能種。
+        conn.execute(text(
+            "INSERT INTO market.stock_info (stock_id, name) VALUES (:s, :n) "
+            "ON CONFLICT (stock_id) DO NOTHING"),
+            {"s": stock_id, "n": name})
+    for stock_id, date, close in rows:
+        conn.execute(text(
+            "INSERT INTO market.price (stock_id, date, close) VALUES (:s, :d, :c)"),
+            {"s": stock_id, "d": date, "c": close})
+    for stock_id, date, factor in adjustments:
+        conn.execute(text(
+            "INSERT INTO market.price_adjustment (stock_id, date, factor, kind, source) "
+            "VALUES (:s, :d, :f, 'test', 'test')"),
+            {"s": stock_id, "d": date, "f": factor})
 
 
-def test_returns_counts_for_the_latest_session(pg_conn):
-    d = _latest(pg_conn)
-    out = closing_breadth(d, engine=pg_conn)
-    assert out is not None
-    assert set(out) == {"up_count", "down_count", "flat_count"}
-    # 上市普通股約 1,000 出頭；若不小心把上櫃或權證放進來會遠超這個量級
-    assert 500 < sum(out.values()) < 1300
-    # **不得**出現漲跌停家數（本地來源沒有官方參考價與 ±10% 規則）
+def _date(s):
+    import datetime
+
+    y, m, d = (int(x) for x in s.split("-"))
+    return datetime.date(y, m, d)
+
+
+def test_counts_only_listed_common_stocks(pg_conn):
+    """ETF（`00` 前綴）與不在 `stock_info` 的上櫃碼都不得計入。"""
+    _seed(
+        pg_conn,
+        info=[("2330", "台積電"), ("2317", "鴻海"), ("2454", "聯發科"),
+              ("2412", "中華電"), ("0050", "元大台灣50")],
+        rows=[
+            ("2330", PREV, 100), ("2330", TODAY, 110),   # 漲
+            ("2317", PREV, 200), ("2317", TODAY, 190),   # 跌
+            ("2454", PREV, 300), ("2454", TODAY, 300),   # 平
+            ("2412", PREV, 120),                          # 今日無成交 ⇒ 無比價
+            ("0050", PREV, 50), ("0050", TODAY, 60),      # ETF，is_common_stock 排除
+            ("6488", PREV, 800), ("6488", TODAY, 900),    # 上櫃，不在 stock_info
+        ],
+    )
+    out = closing_breadth(_date(TODAY), engine=pg_conn)
+    assert out == {"up_count": 1, "down_count": 1, "flat_count": 1}
+    # 反向守門：漏掉 stock_info join 會多算 6488（up 變 2）；
+    # 漏掉 is_common_stock 會多算 0050（up 變 2 或 3）。
+    assert sum(out.values()) == 3
     assert "limit_up_count" not in out and "limit_down_count" not in out
 
 
+def test_ex_dividend_day_uses_the_reference_price_not_the_raw_close(pg_conn):
+    """前復權必須真的被套上去。
+
+    2330 原始價 100 -> 95 是下跌；但當日有 factor 0.5 的公司行動，
+    前復權後昨收變 50、今收 95 ⇒ 官方口徑是**上漲**。沒套因子就會數成下跌。
+    """
+    _seed(
+        pg_conn,
+        info=[("2330", "台積電")],
+        rows=[("2330", PREV, 100), ("2330", TODAY, 95)],
+        adjustments=[("2330", TODAY, 0.5)],
+    )
+    assert closing_breadth(_date(TODAY), engine=pg_conn) == {
+        "up_count": 1, "down_count": 0, "flat_count": 0}
+
+
+def test_without_an_adjustment_the_same_prices_count_as_a_decline(pg_conn):
+    """上一個測試的對照組：同樣的價格、沒有公司行動 ⇒ 就是下跌。
+
+    兩個一起看才證明「因子有被乘上去」而不是「計數方向剛好反了」。
+    """
+    _seed(
+        pg_conn,
+        info=[("2330", "台積電")],
+        rows=[("2330", PREV, 100), ("2330", TODAY, 95)],
+    )
+    assert closing_breadth(_date(TODAY), engine=pg_conn) == {
+        "up_count": 0, "down_count": 1, "flat_count": 0}
+
+
 def test_stale_db_is_refused_instead_of_passed_off_as_today(pg_conn):
-    """market.price 停更（cron 掛掉／TWSE 封 IP，都是靜默的）不能重犯 twtazu_od 那個錯。"""
-    d = _latest(pg_conn)
-    assert closing_breadth(d + pd.Timedelta(days=1), engine=pg_conn) is None
+    """`market.price` 停更（cron 掛掉／TWSE 封 IP，都是靜默的）不能重犯 twtazu_od 那個錯。"""
+    _seed(
+        pg_conn,
+        info=[("2330", "台積電")],
+        rows=[("2330", PREV, 100), ("2330", TODAY, 110)],
+    )
+    assert closing_breadth(_date("2099-01-06"), engine=pg_conn) is None
+    # 反向守門：日期相符時必須回得出數字，否則上面那條會因為別的理由而通過
+    assert closing_breadth(_date(TODAY), engine=pg_conn) is not None
 
 
-def test_universe_is_listed_common_stock_only(pg_conn):
-    """上櫃不在 stock_info、ETF/權證被 is_common_stock 擋掉——用計數量級反證。
-
-    若 join 掉了（變成全市場），分母會從 ~1,000 跳到 ~1,800。
-    """
-    d = _latest(pg_conn)
-    listed_common = pg_conn.execute(text(
-        "select count(*) from market.price p "
-        "join market.stock_info s on s.stock_id = p.stock_id "
-        "where p.date = :d and length(p.stock_id) = 4 and p.stock_id ~ '^[0-9]+$' "
-        "  and p.stock_id not like '00%' and p.stock_id not like '91%'"
-    ), {"d": d}).scalar()
-    out = closing_breadth(d, engine=pg_conn)
-    # 分母 = 可比價檔數 ≤ 當日有報價的上市普通股數
-    assert sum(out.values()) <= listed_common
-    assert sum(out.values()) >= listed_common - 60
-
-
-def test_adjustment_panel_is_actually_applied(pg_conn, monkeypatch):
-    """守住「前復權有被套上去」這條接線。
-
-    除權息事件落在**視窗最後一天**才會改變計數，那種日子很稀少，所以不能靠實資料
-    守門。這裡改用假因子面板：把最後一列整體壓到 0.5，若因子真的被乘上去，
-    當日就會從「大量上漲」翻成「幾乎全跌」。
-    """
-    import data_provider.tw_breadth as mod
-    from market_data import adjust
-
-    d = _latest(pg_conn)
-    baseline = closing_breadth(d, engine=pg_conn)
-    assert baseline is not None
-
-    real = adjust.factors_to_panel
-
-    def half_last_row(adj, index, columns):
-        fac = real(adj, index, columns)
-        fac.iloc[-1] = fac.iloc[-1] * 0.5
-        return fac
-
-    monkeypatch.setattr(adjust, "factors_to_panel", half_last_row)
-    skewed = closing_breadth(d, engine=pg_conn)
-    assert skewed is not None
-    # 反向守門：若 closing_breadth 沒有乘上因子，skewed 會等於 baseline
-    assert skewed != baseline
-    assert skewed["down_count"] > baseline["down_count"]
-    assert mod  # 明示本測試針對的模組
+def test_single_session_cannot_produce_a_comparison(pg_conn):
+    _seed(pg_conn, info=[("2330", "台積電")], rows=[("2330", TODAY, 110)])
+    assert closing_breadth(_date(TODAY), engine=pg_conn) is None
