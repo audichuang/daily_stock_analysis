@@ -54,6 +54,35 @@ fork 的 `SUPPORTED_REPORT_LANGUAGES` 是 `("zh", "zh-TW", "en", "ko")`，因此
 - `_market_review_summary` 淨化器（#2242）：純 markdown regex，不比對市場名或標題語言
 - `systemConfigI18n.ts`（#2226）：只改一條既有描述文字，無新鍵，無 zh-TW 對齊缺口
 
+## 事後稽核找到的一項合併退化（已修）
+
+**分享圖被印上上游作者的個人小紅書帳號與可掃的追蹤 QR。** 上游 v3.30 的
+`share_image_branding_from_config()` 在沒有任何 `SHARE_IMAGE_XIAOHONGSHU_*` 設定時，
+會套用內建預設 `@霸天土小豆` + `src/assets/share_image/xiaohongshu_qr.jpg`。本 fork 一項都沒設，
+所以**每一張**分享圖都印上第三方帳號——包含合併前就存在的 Web「分享」按鈕
+（`apps/dsa-web/src/api/history.ts`），那條路的輸出在合併後靜默改變了。
+
+沒有任何測試會抓到：上游測試自己斷言那個預設。合併當時的四份 `docs/upstream-sync-*.md`
+對 `小红书 / xiaohongshu / 霸天土小豆 / branding` 的 grep 命中數全為 0——不是權衡後接受，
+是整批照抄進來沒人看到。
+
+**裁決**：把 `src/share_image.py` 的 `DEFAULT_XIAOHONGSHU_HANDLE` 與
+`DEFAULT_XIAOHONGSHU_QR_PATH` **留空**（不是刪掉那兩行——留著，下次上游改動這裡會撞成
+看得見的衝突，而不是靜默把帳號接回來）。`share_image_branding_from_config` 的 atomic-pair
+邏輯原樣保留，設了自己的 `SHARE_IMAGE_XIAOHONGSHU_*` 就照樣畫。行為分歧：
+
+| | 上游 | 本 fork |
+| --- | --- | --- |
+| 全部留空 | 顯示上游作者的帳號 + 內建 QR | **不畫這張卡片** |
+| 設了任一項 | 用你設的值 | 同上（未分歧） |
+
+三個上游測試原本斷言 `DEFAULT_XIAOHONGSHU_HANDLE not in html`；預設清空後 `"" not in html`
+恆為 False，改成斷言字面值 `"霸天土小豆"`——意圖（內建預設不得洩進自訂海報）保住，
+而且比常數更強：常數哪天被填回來也擋得住。
+
+**未動**：`PROJECT_URL` / `PROJECT_REPOSITORY` 仍指向上游 repo（`src/share_image.py:26-27`）。
+那是既有的、合併前就有的專案出處標註，性質與個人社群帳號不同，刻意不改。
+
 ## 已知的既有缺口（非本次引入，未修）
 
 `src/share_image.py` 的 `_MARKET_RE` / `_MARKET_SCOPE_RE` / 區域清單只認 `大盘复盘`（簡體）與

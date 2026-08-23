@@ -26,8 +26,17 @@ import markdown2
 PROJECT_URL = "https://github.com/ZhuLinsen/daily_stock_analysis"
 PROJECT_REPOSITORY = "ZhuLinsen/daily_stock_analysis"
 PROJECT_DISPLAY_NAME = "股票智能分析系统"
-DEFAULT_XIAOHONGSHU_QR_PATH = "src/assets/share_image/xiaohongshu_qr.jpg"
-DEFAULT_XIAOHONGSHU_HANDLE = "@霸天土小豆"
+# 本 fork 刻意留空：上游的預設值是**上游作者的個人小紅書帳號與一張可掃的追蹤 QR**
+# （`@霸天土小豆` + `src/assets/share_image/xiaohongshu_qr.jpg`，圖檔仍在 repo 裡）。
+# 那組預設在 v3.30 合併時整批照抄進來，於是本 fork 產出的每一張分享圖——包含合併前
+# 就存在的 Web「分享」按鈕（`apps/dsa-web/src/api/history.ts`）——都印上第三方的社群
+# 帳號。四份 `docs/upstream-sync-*.md` 對它 0 提及，不是審過的權衡。
+#
+# 留空而不是刪掉這兩行：下次合上游時，上游若再改動這裡會撞成**看得見的衝突**，
+# 而不是靜默把帳號接回來。要用自己的帳號就設 `SHARE_IMAGE_XIAOHONGSHU_*`
+# （見 `.env.example`）；`share_image_branding_from_config` 的 atomic-pair 邏輯原樣保留。
+DEFAULT_XIAOHONGSHU_QR_PATH = ""
+DEFAULT_XIAOHONGSHU_HANDLE = ""
 _MARKET_RE = re.compile(
     r"(?:大盘复盘|市场复盘|market\s+(?:review|recap)|시황\s*리뷰)", re.IGNORECASE
 )
