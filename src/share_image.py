@@ -38,10 +38,20 @@ PROJECT_DISPLAY_NAME = "股票智能分析系统"
 DEFAULT_XIAOHONGSHU_QR_PATH = ""
 DEFAULT_XIAOHONGSHU_HANDLE = ""
 _MARKET_RE = re.compile(
-    r"(?:大盘复盘|市场复盘|market\s+(?:review|recap)|시황\s*리뷰)", re.IGNORECASE
+    # 繁體是「大盤複盤」——複 U+8907，不是復 U+5FA9（實際輸出見
+    # src/core/market_review.py 的 zh-TW 標題表）。只補「復」修不到任何真實報告。
+    r"(?:大[盘盤][复複][盘盤]|[市場市场][场場][复複][盘盤]|market\s+(?:review|recap)|시황\s*리뷰)",
+    re.IGNORECASE,
 )
 _MARKET_SCOPE_RE = re.compile(
-    r"(?:A股|港股|美股|日股|韩股|中国\s*A주|미국|홍콩|일본|한국|\b(?:cn|hk|us|jp|kr)\b|a[-\s]?share|hong\s+kong|japan|korea|u\.?s\.?)",
+    # 台股（`台股` / `tw` / `taiwan` / 韓文「대만」）本 fork 才有，上游那組不含它。
+    # `tw` 用 lookbehind 擋掉代碼後綴：裸 `\btw\b` 會命中「台積電 2330.TW 分析報告」，
+    # 讓個股標題被判成有市場範圍（`_market_segments` 的 scoped_matches 會跟著改行為）。
+    # 上游那串 `cn|hk|us|jp|kr` 原樣不動——它同樣會命中 `0700.HK`，但那是既有行為，
+    # 這次不順手改，以免把不相關的分段邏輯一起動了。
+    r"(?:A股|港股|美股|日股|台股|韩股|韓股|中国\s*A주|미국|홍콩|일본|대만|한국"
+    r"|\b(?:cn|hk|us|jp|kr)\b|(?<![.\w])tw\b"
+    r"|a[-\s]?share|hong\s+kong|japan|korea|taiwan|u\.?s\.?)",
     re.IGNORECASE,
 )
 _DASHBOARD_RE = re.compile(r"(?:决策仪表盘|decision\s+dashboard)", re.IGNORECASE)
@@ -874,6 +884,7 @@ def _market_label_for_region(region: str) -> str:
         "cn": "A股",
         "hk": "港股",
         "us": "美股",
+        "tw": "台股",
         "jp": "日股",
         "kr": "韩股",
     }.get((region or "").strip().lower(), "")
