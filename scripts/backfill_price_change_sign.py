@@ -18,6 +18,14 @@ TWSE `MI_INDEX` 的 `漲跌價差` 只有絕對值，方向在獨立的 `漲跌(
   在**當日**的事件因子（無事件則 1.0）。`prev_close * factor` 就是官方參考價，
   這是等效於官方判定的最小改動。
 
+## 已知範圍限制
+
+`DEFAULT_START_YEAR = 2013`，與 `market_data/adjust.py` 的起算年一致（2013 之前的 `price`
+混有權證，且 `price_adjustment` 也沒有那段的因子）。實測 pre-2013 有 **283,482 列**符號仍錯，
+刻意不補：那段沒有復權因子，硬補會讓除權息日拿到「已知是錯的」方向——把「一律錯」換成
+「大部分對、除權息日錯」，而這一欄目前沒有任何程式碼在讀。要補就得先把 `price_adjustment`
+往前重建。
+
 ## 為什麼可以放心跑
 
 `market_repo.to_daily_frame` 已改成不再讀這一欄，所以**目前沒有任何程式碼依賴它**，
@@ -28,6 +36,7 @@ TWSE `MI_INDEX` 的 `漲跌價差` 只有絕對值，方向在獨立的 `漲跌(
 """
 
 import argparse
+import datetime
 import sys
 from pathlib import Path
 
@@ -46,7 +55,11 @@ EPS = 1e-6
 
 # 只挑「絕對值 > 0 且目前為正、但參考價比較說是跌」的列。平盤（change = 0）沒有符號
 # 問題；已經是負的列表示來源本來就帶號（上櫃 TPEx JSON），不要動。
-_SELECT = """
+# lag() 需要前一個交易日，所以讀取視窗要往前多含 LOOKBACK_DAYS；**更新仍只限目標區間**。
+# 少了這段回看，每檔每年的第一個交易日永遠拿不到 prev_close，會被靜默跳過。
+LOOKBACK_DAYS = 30
+
+_BASE_CTE = """
 with base as (
     select p.stock_id, p.date, p.close, p.change,
            lag(p.close) over (partition by p.stock_id order by p.date) as prev_close,
@@ -54,38 +67,27 @@ with base as (
     from market.price p
     left join market.price_adjustment pa
            on pa.stock_id = p.stock_id and pa.date = p.date
-    where p.date >= :start and p.date < :end
+    where p.date >= :lookback_start
+      and p.date < :end
 )
-select stock_id, date
-from base
-where prev_close is not null
-  and change is not null
-  and change > :eps
-  and close < prev_close * factor - :eps
 """
 
-_UPDATE = """
-update market.price p
-   set change = -abs(p.change)
- where (p.stock_id, p.date) in (
-    select stock_id, date from (
-        with base as (
-            select p2.stock_id, p2.date, p2.close, p2.change,
-                   lag(p2.close) over (partition by p2.stock_id order by p2.date) as prev_close,
-                   coalesce(pa.factor, 1.0) as factor
-            from market.price p2
-            left join market.price_adjustment pa
-                   on pa.stock_id = p2.stock_id and pa.date = p2.date
-            where p2.date >= :start and p2.date < :end
-        )
-        select stock_id, date from base
-        where prev_close is not null
-          and change is not null
-          and change > :eps
-          and close < prev_close * factor - :eps
-    ) t
- )
+_PREDICATE = """
+    where date >= :start
+      and prev_close is not null
+      and change is not null
+      and change > :eps
+      and close < prev_close * factor - :eps
 """
+
+_SELECT = _BASE_CTE + "select stock_id, date from base" + _PREDICATE
+
+_UPDATE = (
+    "update market.price p set change = -abs(p.change) "
+    "where (p.stock_id, p.date) in (select stock_id, date from ("
+    + _BASE_CTE + "select stock_id, date from base" + _PREDICATE
+    + ") t)"
+)
 
 
 def main() -> int:
@@ -108,7 +110,13 @@ def main() -> int:
 
     total = 0
     for year in range(args.start_year, end_year + 1):
-        params = {"start": f"{year}-01-01", "end": f"{year + 1}-01-01", "eps": EPS}
+        start = datetime.date(year, 1, 1)
+        params = {
+            "start": start,
+            "lookback_start": start - datetime.timedelta(days=LOOKBACK_DAYS),
+            "end": datetime.date(year + 1, 1, 1),
+            "eps": EPS,
+        }
         if args.apply:
             # 逐年一個 transaction：中斷只會少補幾年，不會留下半套符號。
             with eng.begin() as c:
