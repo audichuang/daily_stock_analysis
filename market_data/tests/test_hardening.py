@@ -25,7 +25,7 @@ def test_crawl_day_replace_repairs_partial_day(pg_conn, monkeypatch):
         "INSERT INTO market.price (stock_id, date, close) VALUES ('JUNK', :d, 227)"),
         {"d": d})
     monkeypatch.setattr(crawl, "_price_all",
-                        lambda day, expected=None: _price_frame(["2330", "2317"], day))
+                        lambda day, expected=None, conn=None: _price_frame(["2330", "2317"], day))
     n = crawl.crawl_day(pg_conn, "price", d, replace=True)
     assert n == 2
     rows = pg_conn.execute(text(
@@ -40,7 +40,8 @@ def test_crawl_day_replace_keeps_data_when_fetch_fails(pg_conn, monkeypatch):
     pg_conn.execute(text(
         "INSERT INTO market.price (stock_id, date, close) VALUES ('KEEP', :d, 1)"),
         {"d": d})
-    monkeypatch.setattr(crawl, "_price_all", lambda day, expected=None: None)
+    monkeypatch.setattr(crawl, "_price_all",
+                        lambda day, expected=None, conn=None: None)
     assert crawl.crawl_day(pg_conn, "price", d, replace=True) == 0
     kept = pg_conn.execute(text(
         "SELECT COUNT(*) FROM market.price WHERE date = :d"), {"d": d}).scalar()
@@ -54,7 +55,7 @@ def test_crawl_day_replace_refuses_garbage_payload(pg_conn, monkeypatch):
         "INSERT INTO market.price (stock_id, date, close) VALUES ('GOOD', :d, 1)"),
         {"d": d})
     monkeypatch.setattr(crawl, "_price_all",
-                        lambda day, expected=None: _price_frame(["電子工業合計指數彙總"], day))
+                        lambda day, expected=None, conn=None: _price_frame(["電子工業合計指數彙總"], day))
     assert crawl.crawl_day(pg_conn, "price", d, replace=True) == 0
     assert pg_conn.execute(text(
         "SELECT COUNT(*) FROM market.price WHERE date=:d"), {"d": d}).scalar() == 1
@@ -67,7 +68,7 @@ def test_crawl_day_replace_refuses_massive_shrink(pg_conn, monkeypatch):
             "INSERT INTO market.price (stock_id, date, close) VALUES (:s, :d, 1)"),
             {"s": s, "d": d})
     monkeypatch.setattr(crawl, "_price_all",
-                        lambda day, expected=None: _price_frame(["2330"], day))
+                        lambda day, expected=None, conn=None: _price_frame(["2330"], day))
     assert crawl.crawl_day(pg_conn, "price", d, replace=True) == 0  # 1 < 4*0.5
     assert pg_conn.execute(text(
         "SELECT COUNT(*) FROM market.price WHERE date=:d"), {"d": d}).scalar() == 4

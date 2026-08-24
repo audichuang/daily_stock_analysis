@@ -49,7 +49,7 @@ _MARKET_SCOPE_RE = re.compile(
     # 讓個股標題被判成有市場範圍（`_market_segments` 的 scoped_matches 會跟著改行為）。
     # 上游那串 `cn|hk|us|jp|kr` 原樣不動——它同樣會命中 `0700.HK`，但那是既有行為，
     # 這次不順手改，以免把不相關的分段邏輯一起動了。
-    r"(?:A股|港股|美股|日股|台股|韩股|韓股|中国\s*A주|미국|홍콩|일본|대만|한국"
+    r"(?:A股|港股|美股|日股|台股|韩股|韓股|(?:중국|中国)\s*A주|미국|홍콩|일본|대만|한국"
     r"|\b(?:cn|hk|us|jp|kr)\b|(?<![.\w])tw\b"
     r"|a[-\s]?share|hong\s+kong|japan|korea|taiwan|u\.?s\.?)",
     re.IGNORECASE,
@@ -169,6 +169,13 @@ _MARKET_LABEL_PATTERNS = (
     ),
     ("日股", re.compile(r"(?:日\s*股|japan|일본)", re.IGNORECASE)),
     ("韩股", re.compile(r"(?:韩\s*股|korea|한국)", re.IGNORECASE)),
+    (
+        # PR #11 補了 scope regex 與 region hint，漏了這張表——沒有它
+        # `_market_label('台股大盤複盤')` 回空字串，海報標題只能靠
+        # `[dsa-market-region]` 標記活命，標記不在就退回原始繁體標題。
+        "台股",
+        re.compile(r"(?:台\s*股|台灣|taiwan|대만)", re.IGNORECASE),
+    ),
 )
 
 
@@ -1968,6 +1975,7 @@ def _market_region_for_segment(segment: MarketSegment) -> str:
         "美股": "us",
         "日股": "jp",
         "韩股": "kr",
+        "台股": "tw",
     }.get(label, "")
 
 

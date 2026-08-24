@@ -76,6 +76,38 @@ class TwMarketReviewTitleTestCase(unittest.TestCase):
             with self.subTest(region=region):
                 self.assertEqual(_market_label_for_region(region), label)
 
+    def test_korean_cn_scope_matches_the_real_korean_heading(self):
+        """P3-1：scope regex 曾寫成簡體「中国」+韓文「A주」的混種字串，
+
+        而 market_review 的韓文輸出是全韓文「중국 A주 시황 리뷰」——判定回 False，
+        `_market_segments` 退回 fallback，多市場報告的中國段被丟掉。
+        """
+        self.assertTrue(_has_scope("중국 A주 시황 리뷰"))
+        # 反向守門：併入簡體變體不能把原 pattern 弄壞
+        self.assertTrue(_has_scope("中国 A주 리뷰"))
+
+    def test_tw_label_resolves_from_the_report_title_alone(self):
+        """P3-2：PR #11 補了 scope regex 卻漏了 `_MARKET_LABEL_PATTERNS`——
+
+        沒有它，`_market_label('台股大盤複盤')` 回空字串，海報標題只能靠
+        `[dsa-market-region]` 標記活命。
+        """
+        from src.share_image import _market_label
+
+        self.assertEqual(_market_label("台股大盤複盤"), "台股")
+        self.assertEqual(_market_label("대만 시황 리뷰"), "台股")
+        # 反向守門：其他語言標題不受影響
+        self.assertEqual(_market_label("A股大盘复盘"), "A股")
+
+    def test_tw_segment_resolves_to_a_region(self):
+        """label 解析不出 region 時分段拿不到樣式與 payload 配對。"""
+        from types import SimpleNamespace
+
+        from src.share_image import _market_region_for_segment
+
+        segment = SimpleNamespace(title="台股大盤複盤", markdown="內容")
+        self.assertEqual(_market_region_for_segment(segment), "tw")
+
 
 if __name__ == "__main__":
     unittest.main()

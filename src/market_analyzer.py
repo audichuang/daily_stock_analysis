@@ -131,6 +131,28 @@ def _has_institutional_reading(overview: "MarketOverview") -> bool:
     return all(not _is_missing_number(value) for value in values.values())
 
 
+def _breadth_availability(overview: "MarketOverview") -> Dict[str, bool]:
+    """涨跌家数三组读数各自「有没有资料」的判定，供所有出口共用同一组闸门。
+
+    报告表格（`_build_stats_block`）、餵 LLM 的 prompt 区块与结构化 payload 必须用
+    同一套判定：缺资料的栏位不能以 0 的形式出现在任何出口——0 是读数，
+    LLM 会把它解读成「涨跌停皆为 0，显示市场情绪温和」这类虚构结论
+    （2026-08-24 的台股复盘实证：本地宽度来源刻意不提供涨跌停家数）。
+    """
+    return {
+        "advance_decline": bool(
+            overview.up_count or overview.down_count or overview.flat_count
+        ),
+        "limit": bool(overview.limit_up_count or overview.limit_down_count),
+        # `bool(nan)` 是 True，所以不能只用 truthiness——那会把 NaN 格式化进报告。
+        # 缺失的成交额要当「没有资料」，不能补成 0（0 是平盘，是读数）。
+        "turnover": (
+            not _is_missing_number(overview.total_amount)
+            and bool(overview.total_amount)
+        ),
+    }
+
+
 @dataclass
 class MarketIndex:
     """大盘指数数据"""
@@ -724,16 +746,22 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 
         所以看盘势：开盘之後（盘中／午休／收盘集合竞价／收盘後）资料就是当天这一场，
         标当天；开盘前与非交易日才回到最近一场已收盘的交易日。
+
+        时钟只读一次再显式传给每个判定（`infer_market_phase` /
+        `get_effective_trading_date` 本来就收 ``current_time``）。三次独立读钟会让
+        跨午夜/跨收盘边界的同一批调用自相矛盾——PR #12 在
+        `_augment_historical_with_realtime` 修的就是同一个形状。
         """
-        phase = infer_market_phase(self.region)
+        now = get_market_now(self.region)
+        phase = infer_market_phase(self.region, current_time=now)
         if phase in {
             MarketPhase.INTRADAY,
             MarketPhase.LUNCH_BREAK,
             MarketPhase.CLOSING_AUCTION,
             MarketPhase.POSTMARKET,
         }:
-            return get_market_now(self.region).date()
-        return get_effective_trading_date(self.region)
+            return now.date()
+        return get_effective_trading_date(self.region, current_time=now)
 
     def get_market_overview(self) -> MarketOverview:
         """
@@ -1258,17 +1286,29 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             payload["market_light"] = light
 
         if has_breadth_data:
-            payload["breadth"] = {
-                "up_count": overview.up_count,
-                "down_count": overview.down_count,
-                "flat_count": overview.flat_count,
-                "limit_up_count": overview.limit_up_count,
-                "limit_down_count": overview.limit_down_count,
-                "total_amount": overview.total_amount,
-                "turnover_unit": self._get_turnover_unit_label(),
-            }
+            # 缺资料的键直接不给，而不是给 0——0 是读数，会顺着结构化契约
+            # （API/Web/分享图/历史记录）流下去被当真。web 端字段全 optional，
+            # 缺 key 渲染成 '-'；分享图按 truthiness 过滤，少一张卡而不是假读数。
+            avail_payload = _breadth_availability(overview)
+            breadth_payload: Dict[str, Any] = {}
+            if avail_payload["advance_decline"]:
+                breadth_payload.update({
+                    "up_count": overview.up_count,
+                    "down_count": overview.down_count,
+                    "flat_count": overview.flat_count,
+                })
+            if avail_payload["limit"]:
+                breadth_payload.update({
+                    "limit_up_count": overview.limit_up_count,
+                    "limit_down_count": overview.limit_down_count,
+                })
+            if avail_payload["turnover"]:
+                breadth_payload["total_amount"] = overview.total_amount
+                breadth_payload["turnover_unit"] = self._get_turnover_unit_label()
             if _has_institutional_reading(overview):
-                payload["breadth"]["institutional_net"] = dict(overview.institutional_net)
+                breadth_payload["institutional_net"] = dict(overview.institutional_net)
+            if breadth_payload:
+                payload["breadth"] = breadth_payload
 
         # 序列化边界：一次递归清掉整个 payload 里的非有限值。放在这里而不是各栏位，
         # 因为 provider 是在 MarketOverview **建构之後**逐栏赋值的（total_amount、
@@ -1404,15 +1444,14 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 
     def _build_stats_block(self, overview: MarketOverview) -> str:
         """Build market statistics block."""
-        # 每一列各自判断自己有没有资料。用一个总布林盖住整组，缺的那几项就会被
-        # 渲染成 0——「没有资料」看起来会变成「资料是零」。
+        # 每一列各自判断自己有没有资料；判定集中在 `_breadth_availability`，
+        # 与餵 LLM 的 prompt 区块、结构化 payload 共用同一组闸门。
         # ponytail: 这里只能靠数值 truthiness 猜，因为 MarketOverview 没有 availability
         # 旗标；真的全零的交易日会被当成缺资料。要区分得先给 MarketOverview 加显式旗标。
-        has_advance_decline = bool(overview.up_count or overview.down_count or overview.flat_count)
-        has_limit = bool(overview.limit_up_count or overview.limit_down_count)
-        # `bool(nan)` 是 True，所以不能只用 truthiness——那会让 `f"{nan:.0f} 亿"`
-        # 印进报告。缺失的成交额要当「没有资料」，不能补成 0（0 是平盘，是读数）。
-        has_turnover = not _is_missing_number(overview.total_amount) and bool(overview.total_amount)
+        avail_stats = _breadth_availability(overview)
+        has_advance_decline = avail_stats["advance_decline"]
+        has_limit = avail_stats["limit"]
+        has_turnover = avail_stats["turnover"]
         has_breadth = has_advance_decline or has_limit or has_turnover
         has_institutional = _has_institutional_reading(overview)
         has_stats = has_breadth or has_institutional
@@ -2045,26 +2084,44 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             meta = f" ({' / '.join(meta_parts)})" if meta_parts else ""
             url_line = f"\n   URL: {url}" if url else ""
             news_text += f"{i}. {title}{meta}\n   {snippet or '-'}{url_line}\n"
-        
+
+        # 三组读数「有没有资料」只判一次，供下面两个语言分支共用——缺资料的栏位
+        # 不能以 0 的形式进 prompt（LLM 会把「涨跌停皆为 0」写成虚构叙事）。
+        avail = _breadth_availability(overview)
         # 按 region 组装市场概况与板块区块（美股/港股/日韩无涨跌家数、板块数据）
         stats_block = ""
         sector_block = ""
         data_limits_block = ""
         if review_language == "en":
             if self.profile.has_market_stats:
-                stats_block = f"""## Market Breadth
-- Advancers: {overview.up_count} | Decliners: {overview.down_count} | Flat: {overview.flat_count}
-- Limit-up: {overview.limit_up_count} | Limit-down: {overview.limit_down_count}
-- Turnover: {self._format_turnover(overview.total_amount)}"""
+                stats_lines = []
+                if avail["advance_decline"]:
+                    stats_lines.append(
+                        f"- Advancers: {overview.up_count} | Decliners: "
+                        f"{overview.down_count} | Flat: {overview.flat_count}"
+                    )
+                if avail["limit"]:
+                    stats_lines.append(
+                        f"- Limit-up: {overview.limit_up_count} | "
+                        f"Limit-down: {overview.limit_down_count}"
+                    )
+                if avail["turnover"]:
+                    stats_lines.append(
+                        f"- Turnover: {self._format_turnover(overview.total_amount)}"
+                    )
+                # 法人也进 stats_lines 再一次组装：`stats_block +=` 在 stats_lines 为空
+                # 时会生出一串没有 `## Market Breadth` 标头的 bullet。
                 if _has_institutional_reading(overview):
                     _inst = overview.institutional_net
-                    stats_block += (
-                        f"\n- Institutional net ({self._get_turnover_unit_label()}): "
+                    stats_lines.append(
+                        f"- Institutional net ({self._get_turnover_unit_label()}): "
                         f"Foreign {_inst.get('foreign_net', 0.0):+.0f} / "
                         f"Inv. trust {_inst.get('trust_net', 0.0):+.0f} / "
                         f"Dealer {_inst.get('dealer_net', 0.0):+.0f} / "
                         f"Total {_inst.get('total_net', 0.0):+.0f}"
                     )
+                if stats_lines:
+                    stats_block = "\n".join(["## Market Breadth", *stats_lines])
 
             if self.profile.has_sector_rankings:
                 sector_block = f"""## Sector / Theme Performance
@@ -2078,25 +2135,58 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
                 data_limit_lines.append(
                     "- Market breadth, aggregate turnover, participation, and fund-flow signals are not available for this market."
                 )
+            else:
+                # 逐栏说明「今天没有」，而不是让那一行只是从 stats_block 消失——后者
+                # LLM 看不出差别，前者才配得上 prompt 顶端那句「未提供…不要编造或
+                # 过度解读」。这就是 2026-08-24 那份复盘写出「涨跌停皆为 0，显示市场
+                # 情绪温和」的根源：缺资料与读数为零对它是同一件事。
+                # 三大法人刻意不列：profile 没有 has_institutional 旗标，无法区分
+                # 「这个市场结构上没有」与「今天来源缺」，一律列会让 A 股每天多一行。
+                if not avail["advance_decline"]:
+                    data_limit_lines.append(
+                        "- Advance/decline counts are unavailable for this session; treat breadth as unknown, not neutral."
+                    )
+                if not avail["limit"]:
+                    data_limit_lines.append(
+                        "- Limit-up/limit-down counts are unavailable for this session; treat them as unknown, not zero."
+                    )
+                if not avail["turnover"]:
+                    data_limit_lines.append(
+                        "- Aggregate turnover is unavailable for this session."
+                    )
             if not self.profile.has_sector_rankings:
                 data_limit_lines.append("- Sector/theme ranking data is not available for this market.")
             if data_limit_lines:
                 data_limits_block = "## Data Limits\n" + "\n".join(data_limit_lines)
         else:
             if self.profile.has_market_stats:
-                stats_block = f"""## 市场概况
-- 上涨: {overview.up_count} 家 | 下跌: {overview.down_count} 家 | 平盘: {overview.flat_count} 家
-- 涨停: {overview.limit_up_count} 家 | 跌停: {overview.limit_down_count} 家
-- 两市成交额: {self._format_turnover(overview.total_amount)}"""
+                stats_lines = []
+                if avail["advance_decline"]:
+                    stats_lines.append(
+                        f"- 上涨: {overview.up_count} 家 | 下跌: {overview.down_count} 家"
+                        f" | 平盘: {overview.flat_count} 家"
+                    )
+                if avail["limit"]:
+                    stats_lines.append(
+                        f"- 涨停: {overview.limit_up_count} 家 | 跌停: {overview.limit_down_count} 家"
+                    )
+                if avail["turnover"]:
+                    stats_lines.append(
+                        f"- 两市成交额: {self._format_turnover(overview.total_amount)}"
+                    )
+                # 与 en 分支同理：法人先进 stats_lines，避免 stats_lines 为空时
+                # `stats_block +=` 生出没有 `## 市场概况` 标头的 bullet。
                 if _has_institutional_reading(overview):
                     _inst = overview.institutional_net
-                    stats_block += (
-                        f"\n- 三大法人买卖超（{self._get_turnover_unit_label()}）: "
+                    stats_lines.append(
+                        f"- 三大法人买卖超（{self._get_turnover_unit_label()}）: "
                         f"外资 {_inst.get('foreign_net', 0.0):+.0f} | "
                         f"投信 {_inst.get('trust_net', 0.0):+.0f} | "
                         f"自营商 {_inst.get('dealer_net', 0.0):+.0f} | "
                         f"合计 {_inst.get('total_net', 0.0):+.0f}"
                     )
+                if stats_lines:
+                    stats_block = "\n".join(["## 市场概况", *stats_lines])
 
             if self.profile.has_sector_rankings:
                 sector_block = f"""## 板块表现
@@ -2115,6 +2205,23 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
                     "- 該市場暫無漲跌家數、漲跌停、成交額彙總、參與度或資金流訊號。" if _tw
                     else "- 该市场暂无涨跌家数、涨跌停、成交额汇总、参与度或资金流信号。"
                 )
+            else:
+                # 与 en 分支同一组判定与同一个理由（见那边的注释）。
+                if not avail["advance_decline"]:
+                    data_limit_lines.append(
+                        "- 本場次無漲跌家數資料，寬度視為未知，不得當成中性。" if _tw
+                        else "- 本场次无涨跌家数数据，宽度视为未知，不得当成中性。"
+                    )
+                if not avail["limit"]:
+                    data_limit_lines.append(
+                        "- 本場次無漲跌停家數資料，視為未知，**不得當成 0 家**。" if _tw
+                        else "- 本场次无涨跌停家数数据，视为未知，**不得当成 0 家**。"
+                    )
+                if not avail["turnover"]:
+                    data_limit_lines.append(
+                        "- 本場次無成交額彙總資料。" if _tw
+                        else "- 本场次无成交额汇总数据。"
+                    )
             if not self.profile.has_sector_rankings:
                 data_limit_lines.append(
                     "- 該市場暫無產業板塊／概念題材漲跌榜。" if _tw

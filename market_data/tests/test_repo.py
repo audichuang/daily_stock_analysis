@@ -72,3 +72,40 @@ def test_institutional_reader_returns_ordered_net_columns(pg_conn):
 
 def test_institutional_unknown_stock_is_empty(pg_conn):
     assert market_repo.institutional("ZZZZZ", engine=pg_conn).empty
+
+
+def test_adjustment_multipliers_returns_one_unique_factor_per_event_date(pg_conn):
+    """每檔每事件日一個因子，且 **index 必須唯一**、**不得跨日累乘**。
+
+    同日多事件（除息 + 減資）不可能出現在這個回傳值裡：`price_adjustment` 的 PK 是
+    `(stock_id, date)`，而寫入端 `adjust.merge_adjustment_rows` 用
+    `drop_duplicates(keep="first")` 按來源優先序收斂。所以這裡能守的是另外三件事：
+
+    - **只取該檔**：漏掉 `stock_id = :sid` 會把別檔的事件日混進來
+    - **不跨日累乘**：寫成 `.cumprod()` 會讓 04-05 變成 0.45×0.9
+    - **index 唯一**：`to_daily_frame` 用 `Series.map`，重複 index 直接抛
+      `InvalidIndexError`（所以 `.prod()` 不能改成不做 groupby 的 `set_index`）
+    """
+    import pandas as pd
+    import pytest
+
+    pg_conn.execute(text(
+        "INSERT INTO market.price_adjustment (stock_id, date, factor, kind, source) "
+        "VALUES ('ZZ30', '1900-04-02', 0.45, 'dividend', 'twse_twt49u'), "
+        "       ('ZZ30', '1900-04-05', 0.9,  'reduction', 'twse_twtauu'), "
+        "       ('ZZ05', '1900-04-03', 0.99, 'dividend', 'tpex_exdailyq')"))
+    s = market_repo.adjustment_multipliers("ZZ30", engine=pg_conn)
+
+    assert float(s[pd.Timestamp("1900-04-02")]) == pytest.approx(0.45)
+    # 不是 0.45×0.9——每個事件日各自獨立，跨日累乘是 factors_to_panel 的事
+    assert float(s[pd.Timestamp("1900-04-05")]) == pytest.approx(0.9)
+    assert s.index.is_unique, "重複 index 會讓 to_daily_frame 的 Series.map 抛错"
+    # 只回該檔的事件日；別檔的列不會混進來
+    assert pd.Timestamp("1900-04-03") not in s.index
+    assert len(s) == 2
+
+
+def test_adjustment_multipliers_unknown_stock_is_empty(pg_conn):
+    """查無事件 ⇒ 空 Series，`to_daily_frame` 的 `len(event_factors)` 判 0 走未還原。"""
+    s = market_repo.adjustment_multipliers("ZZNONE", engine=pg_conn)
+    assert len(s) == 0

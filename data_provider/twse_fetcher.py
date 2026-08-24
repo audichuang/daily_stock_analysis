@@ -60,6 +60,17 @@ def _roc_date(value: Any) -> Optional[datetime.date]:
         return None
 
 
+def _west_date(value: Any) -> Optional[datetime.date]:
+    """西元 ``yyyymmdd``（如 BFI82U 回應的 ``date`` 欄 ``20260821``）转 ``date``。"""
+    text = str(value or "").strip()
+    if len(text) != 8 or not text.isdigit():
+        return None
+    try:
+        return datetime.date(int(text[:4]), int(text[4:6]), int(text[6:]))
+    except ValueError:
+        return None
+
+
 def _parse_float(value: Any) -> float:
     """将可能含千分位逗号的字符串解析为 float；失败返回 0.0。"""
     if value is None:
@@ -200,8 +211,16 @@ class TwseFetcher(BaseFetcher):
         # TradeValue 单位为「元」，消费方期望「亿」（与 A 股一致：sum/1e8）。
         return _roc_date(latest.get("Date")), trade_value_yuan / 1e8
 
-    def _fetch_institutional(self) -> Optional[Dict[str, float]]:
-        """三大法人买卖超（买卖差额），单位转换为「亿新台币」。失败返回 None。"""
+    def _fetch_institutional(
+        self, expected_date: Optional[datetime.date]
+    ) -> Optional[Dict[str, float]]:
+        """三大法人买卖超（买卖差额），单位转换为「亿新台币」。失败或数据过期返回 None。
+
+        ``expected_date`` 是同一次调用里由 FMTQIK 解析出的最新交易日。BFI82U 会停止
+        更新却照样回 200 与结构正确的 JSON（与 ``twtazu_od`` 冻结 79 天同一形状），
+        故与 ``_fetch_breadth`` 相同：逐次比对回应自带的 ``date`` 栏（西元 yyyymmdd），
+        不符/缺参照一律拒收（fail closed），让字段保持缺失而不是拿旧读数冒充当天。
+        """
         try:
             resp = self._session.get(_INSTITUTIONAL_URL, timeout=_TIMEOUT)
             resp.raise_for_status()
@@ -212,6 +231,28 @@ class TwseFetcher(BaseFetcher):
 
         if not isinstance(payload, dict):
             logger.warning("[TwseFetcher] 三大法人返回结构异常: 非字典")
+            return None
+
+        snapshot_date = _west_date(payload.get("date"))
+        if snapshot_date is None:
+            logger.warning(
+                "[TwseFetcher] 三大法人缺少可解析的 date 栏 (%r)，拒收",
+                payload.get("date"),
+            )
+            return None
+        if expected_date is None:
+            logger.warning(
+                "[TwseFetcher] 无最新交易日参照（成交金额端点失败），无法验证三大法人 "
+                "date=%s 是否新鲜，拒收",
+                snapshot_date,
+            )
+            return None
+        if snapshot_date != expected_date:
+            logger.warning(
+                "[TwseFetcher] 三大法人已过期，拒收：date=%s，最新交易日=%s（相差 %d 天）。"
+                "端点停止更新时会照样回 200，故一律以日期为准",
+                snapshot_date, expected_date, (expected_date - snapshot_date).days,
+            )
             return None
 
         data = payload.get("data")
@@ -262,8 +303,14 @@ class TwseFetcher(BaseFetcher):
             "total_net": total_net,
         }
 
-    def _fetch_tpex_total_amount(self) -> Optional[float]:
-        """上柜成交金额（亿新台币）。失败返回 None。"""
+    def _fetch_tpex_total_amount(
+        self, expected_date: Optional[datetime.date]
+    ) -> Optional[float]:
+        """上柜成交金额（亿新台币）。失败或数据过期返回 None。
+
+        回应每列带民国 ``Date``（``1150821``）。此端点与 TWSE 侧一样会停止更新却
+        照样回 200，故取 ``latest`` 前先比对日期，不符/缺参照拒收（fail closed）。
+        """
         try:
             resp = self._session.get(_TPEX_TRADE_VALUE_URL, timeout=_TIMEOUT)
             resp.raise_for_status()
@@ -272,20 +319,73 @@ class TwseFetcher(BaseFetcher):
                 logger.warning("[TwseFetcher] 上柜成交金额响应为空")
                 return None
             latest = data[-1]  # 取最新一笔
+            if not isinstance(latest, dict):
+                logger.warning("[TwseFetcher] 上柜成交金额最新行结构异常")
+                return None
+            snapshot_date = _roc_date(latest.get("Date"))
+            if snapshot_date is None:
+                logger.warning(
+                    "[TwseFetcher] 上柜成交金额缺少可解析的 Date (%r)，拒收",
+                    latest.get("Date"),
+                )
+                return None
+            if expected_date is None:
+                logger.warning(
+                    "[TwseFetcher] 无最新交易日参照，无法验证上柜成交金额 Date=%s "
+                    "是否新鲜，拒收",
+                    snapshot_date,
+                )
+                return None
+            if snapshot_date != expected_date:
+                logger.warning(
+                    "[TwseFetcher] 上柜成交金额已过期，拒收：Date=%s，最新交易日=%s"
+                    "（相差 %d 天）",
+                    snapshot_date, expected_date, (expected_date - snapshot_date).days,
+                )
+                return None
             amount_yuan = _parse_float(latest.get("TradeAmount"))
             return amount_yuan / 1e8
         except (requests.RequestException, ValueError) as exc:
             logger.warning("[TwseFetcher] 上柜成交金额获取失败: %s", exc)
             return None
 
-    def _fetch_tpex_institutional(self) -> Optional[Dict[str, float]]:
-        """上柜三大法人买卖超净额（亿新台币）。失败返回 None。"""
+    def _fetch_tpex_institutional(
+        self, expected_date: Optional[datetime.date]
+    ) -> Optional[Dict[str, float]]:
+        """上柜三大法人买卖超净额（亿新台币）。失败或数据过期返回 None。
+
+        每列带民国 ``Date``；正常整包同一天，出现多日混包或无法解析一律拒收。
+        """
         try:
             resp = self._session.get(_TPEX_INSTITUTIONAL_URL, timeout=_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
             if not isinstance(data, list) or not data:
                 logger.warning("[TwseFetcher] 上柜三大法人响应为空")
+                return None
+            snapshot_dates = {
+                _roc_date(row.get("Date")) for row in data if isinstance(row, dict)
+            }
+            if len(snapshot_dates) != 1 or None in snapshot_dates:
+                logger.warning(
+                    "[TwseFetcher] 上柜三大法人 Date 栏异常 (dates=%s)，拒收",
+                    sorted(str(d) for d in snapshot_dates),
+                )
+                return None
+            snapshot_date = snapshot_dates.pop()
+            if expected_date is None:
+                logger.warning(
+                    "[TwseFetcher] 无最新交易日参照，无法验证上柜三大法人 Date=%s "
+                    "是否新鲜，拒收",
+                    snapshot_date,
+                )
+                return None
+            if snapshot_date != expected_date:
+                logger.warning(
+                    "[TwseFetcher] 上柜三大法人已过期，拒收：Date=%s，最新交易日=%s"
+                    "（相差 %d 天）",
+                    snapshot_date, expected_date, (expected_date - snapshot_date).days,
+                )
                 return None
             foreign_net = trust_net = dealer_net = total_net = 0.0
             matched = False
@@ -331,7 +431,9 @@ class TwseFetcher(BaseFetcher):
             {}:   所有端点均失败时返回空字典（绝不抛出异常）。
 
         覆盖范围：涨跌家数为 TWSE 上市口径（上柜无公开端点）；成交金额与三大法人
-        为上市+上柜合计。任一来源失败均部分降级，不影响其余字段。
+        为上市+上柜合计。降级是**按栏位分组**的：家数、成交金额、三大法人三组各自
+        可缺而不影响其余；但成交金额与三大法人这两组各自要求上市与上柜**双边齐全**
+        ——单边和会被当成合计读下去，而它可能与合计反向（见下方赋值处的实测数字）。
 
         涨跌家数有两个可能来源，两者口径不同：
         1. TWSE `twtazu_od` 的「股票」列（含涨跌停家数）——**必须通过日期比对**，
@@ -358,10 +460,10 @@ class TwseFetcher(BaseFetcher):
                 logger.info(
                     "[TwseFetcher] 涨跌家数改用本地 market schema 计算（上市普通股，无涨跌停家数）"
                 )
-        twse_inst = self._fetch_institutional()
-        # 上柜（无涨跌家数端点）
-        tpex_amount = self._fetch_tpex_total_amount()
-        tpex_inst = self._fetch_tpex_institutional()
+        twse_inst = self._fetch_institutional(latest_trading_date)
+        # 上柜（无涨跌家数端点）；成交金额与法人同样以最新交易日当新鲜度参照
+        tpex_amount = self._fetch_tpex_total_amount(latest_trading_date)
+        tpex_inst = self._fetch_tpex_institutional(latest_trading_date)
 
         if all(x is None for x in (breadth, twse_amount, twse_inst, tpex_amount, tpex_inst)):
             logger.warning("[TwseFetcher] 所有端点均失败，返回空")
@@ -384,20 +486,41 @@ class TwseFetcher(BaseFetcher):
             # 判定，全 0 会被渲染成「没有资料」而不是「资料是零」。
             logger.warning("[TwseFetcher] 上市涨跌家数缺失或已过期，家数字段保持 0")
 
-        # 成交金额：上市 + 上柜（各自可缺）
-        amount_parts = [a for a in (twse_amount, tpex_amount) if a is not None]
-        if amount_parts:
-            stats["total_amount"] = sum(amount_parts)
+        # 成交金额与三大法人都是**上市 + 上柜合计**——栏位名、报告标签、payload 契约
+        # 都这么宣称，所以任一边缺就整格作废，绝不拿单边冒充合计。
+        #
+        # 实测 2026-08-21：上市外资净额 +283.05 亿、上柜 -7.00 亿、合计 +276.05 亿。
+        # 单边和会让报告写出「外资卖超 7 亿」——与「买超 276 亿」**方向相反**，而它
+        # 是复盘里最常被引用的那个数。成交额单边则是 21%（缺上柜）或 79%（缺上市）
+        # 的偏差，LLM 会读成「量能急冻」。
+        #
+        # 这个「各自可缺、活着的就相加」是既有契约（原本只有网路失败会触发，罕见），
+        # 但端点新鲜度检查让它变成常态触发：FMTQIK 通常比 BFI82U 与 TPEx 两支早发布，
+        # 于是每天都有一段「上市已更新、上柜还没」的窗口。宁可让
+        # `_breadth_availability` 判成没有资料，也不要送一个标签说谎的读数。
+        #
+        # 想保留单边读数的话，得先给 MarketOverview 加覆盖范围旗标、一路传到 prompt
+        # 与报告标签（「上市成交额」而非「两市成交额」），那是另一件事，不在这里偷偷做。
+        if twse_amount is not None and tpex_amount is not None:
+            stats["total_amount"] = twse_amount + tpex_amount
         else:
-            logger.warning("[TwseFetcher] 上市/上柜成交金额均缺失，total_amount 保持 0.0")
+            logger.warning(
+                "[TwseFetcher] 成交金额覆盖不全（上市%s／上柜%s），total_amount 保持 0.0"
+                "——单边和不能冒充上市+上柜合计",
+                "有" if twse_amount is not None else "无",
+                "有" if tpex_amount is not None else "无",
+            )
 
-        # 三大法人：上市 + 上柜逐项相加（各自可缺）
-        inst_parts = [i for i in (twse_inst, tpex_inst) if i is not None]
-        if inst_parts:
+        if twse_inst is not None and tpex_inst is not None:
             for key in ("foreign_net", "trust_net", "dealer_net", "total_net"):
-                stats[key] = sum(part.get(key, 0.0) for part in inst_parts)
+                stats[key] = twse_inst.get(key, 0.0) + tpex_inst.get(key, 0.0)
         else:
-            logger.warning("[TwseFetcher] 上市/上柜三大法人均缺失，省略法人字段（部分降级）")
+            logger.warning(
+                "[TwseFetcher] 三大法人覆盖不全（上市%s／上柜%s），省略法人字段"
+                "——单边净额与合计可能反向（实测上市 +283 亿 vs 上柜 -7 亿）",
+                "有" if twse_inst is not None else "无",
+                "有" if tpex_inst is not None else "无",
+            )
 
         logger.info(
             "[TwseFetcher] 统计完成 up=%s down=%s amount=%.0f亿(上市%s+上柜%s) "

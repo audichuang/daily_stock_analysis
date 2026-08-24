@@ -415,7 +415,11 @@ class TestRecapIsDatedByTheMarketNotTheServerClock:
              patch.object(MarketAnalyzer, "_get_main_indices", return_value=[]):
             overview = MarketAnalyzer.get_market_overview(ma)
 
-        spy.assert_called_once_with("us")
+        # P1-4：時鐘只讀一次，顯式傳給每個判定——斷言「同一個讀數有傳進去」，
+        # 而不是舊的不帶時間簽名（那會讓三次獨立讀鐘的矛盾無法被測到）
+        assert spy.call_count == 1
+        assert spy.call_args.args == ("us",)
+        assert spy.call_args.kwargs["current_time"].tzinfo is not None
         assert overview.date == "2026-08-10"
 
 
@@ -590,6 +594,190 @@ class TestCodexReviewFindings:
              patch.object(ma_mod, "get_market_now", return_value=tw_now), \
              patch.object(ma_mod, "get_effective_trading_date", return_value=date(2026, 8, 7)):
             assert MarketAnalyzer._resolve_overview_date(stub) == date(2026, 8, 7)
+
+    def test_overview_date_reads_the_clock_once(self):
+        """三次獨立讀鐘會在跨午夜／跨盤邊界自相矛盾——一次讀鐘，顯式傳給每個判定。
+
+        與 PR #12 修的 `_augment_historical_with_realtime` 同形狀：牆鐘在兩次
+        讀取之間跨過收盤邊界的話，phase 用舊時間、日期用新時間，決定就錯。
+        """
+        from datetime import date, datetime
+        from zoneinfo import ZoneInfo
+
+        import src.market_analyzer as ma_mod
+        from src.core.trading_calendar import MarketPhase
+        from src.market_analyzer import MarketAnalyzer
+
+        stub = MagicMock(spec=MarketAnalyzer)
+        stub.region = "tw"
+        t0 = datetime(2026, 8, 10, 13, 29, 59, tzinfo=ZoneInfo("Asia/Taipei"))
+        now_calls = []
+        phase_times = []
+        eff_times = []
+
+        def fake_now(region, current_time=None):
+            now_calls.append(current_time)
+            return t0
+
+        def fake_phase(market, current_time=None):
+            phase_times.append(current_time)
+            return MarketPhase.INTRADAY
+
+        with patch.object(ma_mod, "get_market_now", side_effect=fake_now), \
+             patch.object(ma_mod, "infer_market_phase", side_effect=fake_phase), \
+             patch.object(ma_mod, "get_effective_trading_date",
+                          side_effect=lambda m, current_time=None: eff_times.append(
+                              current_time) or date(2026, 8, 7)):
+            assert MarketAnalyzer._resolve_overview_date(stub) == t0.date()
+
+        assert len(now_calls) == 1, f"时钟被读了 {len(now_calls)} 次"
+        assert phase_times == [t0], "phase 判定必须用同一个时钟读数"
+        assert eff_times == [], "盘后路径不该再问 effective trading date"
+
+        # 開盤前分支：同一個時鐘讀數要一路傳到 effective_trading_date
+        with patch.object(ma_mod, "get_market_now", side_effect=fake_now), \
+             patch.object(ma_mod, "infer_market_phase",
+                          side_effect=lambda m, current_time=None:
+                              phase_times.append(current_time) or MarketPhase.PREMARKET), \
+             patch.object(ma_mod, "get_effective_trading_date",
+                          side_effect=lambda m, current_time=None: eff_times.append(
+                              current_time) or date(2026, 8, 7)):
+            assert MarketAnalyzer._resolve_overview_date(stub) == date(2026, 8, 7)
+        assert eff_times[-1] == t0
+
+    def test_missing_limit_counts_never_reach_prompt_or_payload_as_zero(self):
+        """P1-1：本地寬度來源刻意不提供漲跌停家數（tw_breadth docstring），
+
+        但 zh/en 兩份 prompt 區塊與結構化 payload 都無條件印 `limit_*_count`
+        ⇒ LLM 寫出「漲跌停皆為0，顯示市場情緒溫和」這種虛構結論
+        （reports/market_review_20260824.md 第 11、24 行實證）。
+        """
+        from src.market_analyzer import MarketAnalyzer
+
+        ma = _analyzer("tw")
+        overview = _overview(up_count=589, down_count=382, flat_count=104,
+                             total_amount=9526.0)
+        assert overview.limit_up_count == 0 and overview.limit_down_count == 0
+
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="zh-TW"):
+            prompt = MarketAnalyzer._build_review_prompt(ma, overview, [])
+
+        assert "上涨: 589" in prompt or "上漲: 589" in prompt, "有讀數的家數要照常進 prompt"
+        assert "涨停" not in prompt and "漲停" not in prompt, "缺資料的欄位不得以 0 進 prompt"
+
+        with patch.object(MarketAnalyzer, "_get_output_language", return_value="zh-TW"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"):
+            payload = MarketAnalyzer.build_market_review_payload(
+                ma, overview, [], "# 台股大盤複盤\n\n正文")
+
+        breadth = payload["breadth"]
+        assert breadth["up_count"] == 589
+        assert "limit_up_count" not in breadth and "limit_down_count" not in breadth, \
+            "缺資料要缺 key，不能給 0——0 是讀數，會順著 API/Web/分享圖流下去被當真"
+        assert breadth["total_amount"] == 9526.0
+
+    def test_missing_limit_counts_are_declared_as_a_data_limit(self):
+        """光是「不出现」不够：LLM 分不出「缺资料」与「读数是 0」，所以要在资料边界
+        里明说。prompt 顶端本来就有「未提供…不要编造或过度解读」那条纪律，这里是
+        让它有东西可以对齐。
+        """
+        from src.market_analyzer import MarketAnalyzer
+
+        ma = _analyzer("tw")
+        overview = _overview(up_count=589, down_count=382, flat_count=104,
+                             total_amount=9526.0)
+
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh-TW"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="zh-TW"):
+            prompt = MarketAnalyzer._build_review_prompt(ma, overview, [])
+
+        assert "本場次無漲跌停家數資料" in prompt
+        assert "資料邊界" in prompt
+        # 有讀數的兩欄不得被誤報成缺資料
+        assert "無漲跌家數資料" not in prompt
+        assert "無成交額彙總資料" not in prompt
+
+    def test_english_branch_declares_the_same_data_limit(self):
+        """en 与 zh 是两段各自独立的组装码，只测一边等于只修一边。"""
+        from src.market_analyzer import MarketAnalyzer
+
+        ma = _analyzer("tw")
+        overview = _overview(up_count=589, down_count=382, flat_count=104,
+                             total_amount=9526.0)
+
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="en"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="en"):
+            prompt = MarketAnalyzer._build_review_prompt(ma, overview, [])
+
+        assert "Limit-up/limit-down counts are unavailable" in prompt
+        assert "Data Limits" in prompt
+        # 缺资料的那一行不得同时以 0 的形式出现在 breadth 区块
+        assert "Limit-up: 0" not in prompt
+        # 有读数的两栏不得被误报成缺资料
+        assert "Advance/decline counts are unavailable" not in prompt
+        assert "Aggregate turnover is unavailable" not in prompt
+
+    def test_available_limit_counts_produce_no_data_limit_line(self):
+        """反向守門：把邊界寫成無條件輸出，這條會紅。"""
+        from src.market_analyzer import MarketAnalyzer
+
+        ma = _analyzer("tw")
+        overview = _overview(up_count=342, down_count=671, flat_count=59,
+                             limit_up_count=19, limit_down_count=10,
+                             total_amount=7549.0)
+
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh-TW"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="zh-TW"):
+            prompt = MarketAnalyzer._build_review_prompt(ma, overview, [])
+
+        assert "本場次無漲跌停家數資料" not in prompt
+
+    def test_institutional_only_stats_block_keeps_its_heading(self):
+        """三大法人是唯一读数时，区块不能变成没有标头的裸 bullet。
+
+        旧写法是 `stats_block += ...`，而 `stats_block` 只在 stats_lines 非空时才
+        被赋成带标头的字串，于是「家数/涨跌停/成交额全缺、只有法人」会产出一串
+        无主的 bullet 挂在 prompt 里。
+        """
+        from src.market_analyzer import MarketAnalyzer
+
+        ma = _analyzer("tw")
+        overview = _overview(institutional_net={
+            "foreign_net": 276.0, "trust_net": 34.0,
+            "dealer_net": 19.0, "total_net": 329.0})
+
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="zh-TW"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"):
+            prompt = MarketAnalyzer._build_review_prompt(ma, overview, [])
+
+        assert "三大法人买卖超" in prompt
+        head = prompt.index("## 市场概况")
+        assert head < prompt.index("三大法人买卖超"), "法人 bullet 必须挂在标头之下"
+
+    def test_present_limit_counts_still_flow_through(self):
+        """反向守門：真的有漲跌停讀數時（A股/twtazu_od 活著），閘門不能擋掉它。"""
+        from src.market_analyzer import MarketAnalyzer
+
+        ma = _analyzer("tw")
+        overview = _overview(up_count=342, down_count=671, flat_count=59,
+                             limit_up_count=19, limit_down_count=10,
+                             total_amount=7549.0)
+
+        with patch.object(MarketAnalyzer, "_get_review_language", return_value="zh"), \
+             patch.object(MarketAnalyzer, "_get_output_language", return_value="zh-TW"):
+            prompt = MarketAnalyzer._build_review_prompt(ma, overview, [])
+        assert "涨停: 19 家" in prompt
+
+        with patch.object(MarketAnalyzer, "_get_output_language", return_value="zh-TW"), \
+             patch.object(MarketAnalyzer, "_get_turnover_unit_label", return_value="亿"), \
+             patch.object(MarketAnalyzer, "_describe_turnover", return_value="-"):
+            payload = MarketAnalyzer.build_market_review_payload(
+                ma, overview, [], "# 台股大盤複盤\n\n正文")
+        assert payload["breadth"]["limit_up_count"] == 19
+        assert payload["breadth"]["limit_down_count"] == 10
 
     def test_prompt_index_lines_never_print_nan(self):
         """這是餵給 LLM 的那份，跟報告表格是兩個出口；之前只修了表格。"""

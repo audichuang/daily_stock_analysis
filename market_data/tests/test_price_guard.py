@@ -126,3 +126,72 @@ def test_crawl_price_backup_maps_to_transform_compatible_frame(monkeypatch):
     assert row["stock_id"] == "2330" and row["close"] == 900.5
     assert row["volume"] == 1000 and row["transactions"] == 10
     assert pd.isna(row["pe_ratio"])  # 備援無本益比,補 NA
+
+
+def _backup_frame(rows):
+    idx = pd.MultiIndex.from_tuples(
+        [(sid, pd.Timestamp("2026-08-21")) for sid, _ in rows],
+        names=["stock_id", "date"])
+    return pd.DataFrame(
+        {"漲跌價差": [chg for _, chg in rows], "收盤價": [140.5] * len(rows)}, index=idx)
+
+
+def test_backup_x_shaped_zero_change_is_masked_to_null(pg_conn):
+    """STOCK_DAY_ALL 把「無比價」列渲染成 Change='0.0000'，payload 內與真平盤
+    無法區分（實測 2026-08-21 的 2458）。藉 DB 前根收盤辨識：有動 ⇒ NULL。"""
+    from sqlalchemy import text
+    pg_conn.execute(text(
+        "INSERT INTO market.price (stock_id, date, open, high, low, close, volume) "
+        "VALUES ('ZZ58', '2026-08-20', 146.0, 148.0, 144.0, 146.0, 1), "
+        "       ('ZZ17', '2026-08-20', 24.5, 24.6, 24.4, 24.5, 1)"))
+    backup = _backup_frame([("ZZ58", 0.0), ("ZZ17", 0.0)])
+    backup.at[("ZZ17", pd.Timestamp("2026-08-21")), "收盤價"] = 24.5
+
+    out = crawl._mask_uncomparable_backup_changes(backup.copy(), date(2026, 8, 21), pg_conn)
+
+    # ZZ58 收盤 140.5 vs 前根 146.0 有動 ⇒ X 形狀 ⇒ NULL（對齊主路徑）
+    assert pd.isna(out.at[("ZZ58", pd.Timestamp("2026-08-21")), "漲跌價差"])
+    # ZZ17 收盤不動 ⇒ 真平盤是讀數，必須保留
+    assert out.at[("ZZ17", pd.Timestamp("2026-08-21")), "漲跌價差"] == 0.0
+
+
+def test_backup_first_day_zero_change_is_masked(pg_conn):
+    """該股當天之前沒有任何列 + Change==0 ⇒ 新上市首日的 X 語意 ⇒ NULL。"""
+    backup = _backup_frame([("ZZ99", 0.0)])
+
+    out = crawl._mask_uncomparable_backup_changes(backup.copy(), date(2026, 8, 21), pg_conn)
+
+    assert pd.isna(out.at[("ZZ99", pd.Timestamp("2026-08-21")), "漲跌價差"])
+
+
+def test_backup_nonzero_change_is_never_touched(pg_conn):
+    """帶號的非零 Change 是正常讀數，遮罩不得越界。"""
+    from sqlalchemy import text
+
+    pg_conn.execute(text(
+        "INSERT INTO market.price (stock_id, date, open, high, low, close, volume) "
+        "VALUES ('ZZ58', '2026-08-20', 146.0, 148.0, 144.0, 146.0, 1)"))
+    backup = _backup_frame([("ZZ58", -5.5)])
+
+    out = crawl._mask_uncomparable_backup_changes(backup.copy(), date(2026, 8, 21), pg_conn)
+
+    assert out.at[("ZZ58", pd.Timestamp("2026-08-21")), "漲跌價差"] == -5.5
+
+
+def test_price_all_passes_conn_to_backup_masking(monkeypatch, pg_conn):
+    """crawl_day 走的呼叫鏈必須真的把 conn 帶進遮罩——否則修復只在單測裡活著。"""
+    twse = _frame(30)
+    twse["漲跌價差"] = 0.0
+    monkeypatch.setattr(crawl.crawler, "crawl_price", lambda d: None)
+    monkeypatch.setattr(crawl.sources, "crawl_tpex_price", lambda d: _frame(40))
+    captured = {}
+
+    def fake_mask(frame, d, conn):
+        captured["conn"] = conn
+        return frame
+
+    monkeypatch.setattr(crawl.sources, "crawl_price_backup", lambda d: twse)
+    monkeypatch.setattr(crawl, "_mask_uncomparable_backup_changes", fake_mask)
+    crawl._price_all(date(2024, 6, 3), expected=None, conn=pg_conn)
+
+    assert captured["conn"] is pg_conn

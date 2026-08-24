@@ -89,3 +89,40 @@ def test_to_daily_frame_reports_down_days_as_negative():
     assert out.iloc[2]["pct_chg"] > 0
     # 視窗第一列沒有前一日 ⇒ 缺資料，不能用可能錯號的 change 兜
     assert pd.isna(out.iloc[0]["pct_chg"])
+
+
+def _two_day_frame():
+    return pd.DataFrame([
+        {"date": "2026-08-20", "open": 146.0, "high": 148.0, "low": 144.0,
+         "close": 146.0, "change": 0.5, "volume": 4562955, "turnover": 666},
+        {"date": "2026-08-21", "open": 141.5, "high": 142.0, "low": 139.0,
+         "close": 140.5, "change": 0.0, "volume": 2155868, "turnover": 302},
+    ])
+
+
+def test_to_daily_frame_applies_ex_dividend_factor_on_event_day():
+    """除權息日的價格斷崖不是真實跌幅：pct_chg 以還原後報酬為準（P1-2）。
+
+    2458 義隆 2026-08-21：前收 146.0、收 140.5、除息因子 0.969658。
+    未還原是 -3.77%；還原後 = 140.5/(146.0×0.969658)-1 ≈ -0.72%。
+    """
+    factors = pd.Series([0.969658], index=pd.DatetimeIndex(["2026-08-21"]))
+    out = market_repo.to_daily_frame(_two_day_frame(), event_factors=factors)
+
+    expected = (140.5 / (146.0 * 0.969658) - 1) * 100
+    assert round(float(out.iloc[1]["pct_chg"]), 4) == round(expected, 4)
+    assert abs(float(out.iloc[1]["pct_chg"])) < 1.0, "除息跳空不該被算成 -3.77% 的下跌"
+
+
+def test_to_daily_frame_factor_only_bites_the_event_day():
+    """沒有事件的日期乘 1，行為與未還原完全一致。"""
+    factors = pd.Series([0.969658], index=pd.DatetimeIndex(["2026-09-01"]))
+    out = market_repo.to_daily_frame(_two_day_frame(), event_factors=factors)
+
+    assert round(float(out.iloc[1]["pct_chg"]), 4) == round((140.5 / 146.0 - 1) * 100, 4)
+
+
+def test_to_daily_frame_without_factors_keeps_legacy_behavior():
+    """沒給因子（舊呼叫端/測試）→ 未還原報酬，行為同 P1-2 之前。"""
+    out = market_repo.to_daily_frame(_two_day_frame())
+    assert round(float(out.iloc[1]["pct_chg"]), 4) == round((140.5 / 146.0 - 1) * 100, 4)

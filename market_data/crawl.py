@@ -17,7 +17,49 @@ from market_data.writer import dedupe, upsert
 _VALID_ID = r"[0-9A-Za-z]{2,10}"
 
 
-def _price_all(d, expected=None):
+def _mask_uncomparable_backup_changes(backup, d, conn):
+    """把備援源的「無比價」列對齊成主路徑語意（NULL）。
+
+    STOCK_DAY_ALL 把 MI_INDEX 的 ``漲跌(+/-)=X`` 列渲染成 ``Change='0.0000'``，
+    payload 內與真平盤無法區分（實測 2026-08-21 的 2458 義隆：官方是 X/0.00，
+    備援源給 '0.0000'）。判準藉 DB 前根收盤：Change==0 且收盤相對前一根已存
+    收盤有動 ⇒ X 形狀改 NULL；該股當天之前沒有任何列（新上市首日）且 Change==0
+    ⇒ 同為主路徑 crawler.crawl_price 的 X 語意（NULL）。
+
+    **已知偽陽性**：官方 `漲跌價差` 比的是當日**參考價**，不是前一根收盤。所以除權息
+    當日收盤剛好落在參考價上的個股，官方給的 `0.00` 是真讀數，但這裡看到的是
+    `close != prev_close`（除權息斷崖）⇒ 會被誤遮成 NULL。要擋掉得把
+    `price_adjustment` 的因子也讀進來比對；目前刻意不做——這一欄沒有任何程式碼在讀
+    （`to_daily_frame` 已改用 `close.shift(1)`），誤遮的代價是 0，而多讀一張表會讓
+    爬取路徑多一個失敗點。改用途之前先把這條處理掉。
+    """
+    zeros = backup.index[backup["漲跌價差"].eq(0)]
+    if not len(zeros):
+        return backup
+    sids = sorted({sid for sid, _ in zeros})
+    rows = conn.execute(text(
+        "SELECT p.stock_id, p.close FROM market.price p "
+        "JOIN (SELECT stock_id, MAX(date) AS md FROM market.price "
+        "      WHERE date < :d GROUP BY stock_id) m "
+        "ON p.stock_id = m.stock_id AND p.date = m.md "
+        "WHERE p.stock_id = ANY(:sids)"
+    ), {"d": d, "sids": sids}).fetchall()
+    prev = {r[0]: float(r[1]) for r in rows}
+    masked = 0
+    for idx in zeros:
+        sid = idx[0]
+        close = float(backup.at[idx, "收盤價"])
+        prev_close = prev.get(sid)
+        if prev_close is None or abs(close - prev_close) > 1e-9:
+            backup.at[idx, "漲跌價差"] = float("nan")
+            masked += 1
+    if masked:
+        print(f"**WARN price {d}: backup Change==0 but close moved vs prev session "
+              f"(or first listing) -> treated as no-comparison-basis (NULL) x{masked}")
+    return backup
+
+
+def _price_all(d, expected=None, conn=None):
     """上市 (TWSE) + 上櫃 (TPEx) 合併。兩者都要有資料才回傳,否則回 None:
     若只有一邊成功就寫入,resume 會把該日標記完成、另一邊永久缺(TWSE/TPEx 同交易
     日),所以任一邊失敗就整天跳過,靠 date-not-in-table 下次重試。
@@ -38,7 +80,9 @@ def _price_all(d, expected=None):
         backup = sources.crawl_price_backup(d)
         if backup is not None and len(backup) > (0 if twse is None else len(twse)):
             print(f"**WARN price {d}: MI_INDEX missing/truncated, using STOCK_DAY_ALL backup")
-            twse = backup
+            # 備援源把「無比價」渲染成 Change='0.0000'，需借助前根收盤才能辨識；
+            # 沒給 conn（測試/離線）就維持舊行為，不猜。
+            twse = backup if conn is None else _mask_uncomparable_backup_changes(backup, d, conn)
     if twse is None or not len(twse):
         return None
     if _low(twse):
@@ -121,7 +165,7 @@ def crawl_day(conn, source, d, replace=False):
     非空垃圾(全 footer/壞 stock_id)或嚴重縮水時絕不能先刪好資料。"""
     fetch, transform, model, pk = DAILY[source]
     if source == "price":
-        raw = _price_all(d, expected=_recent_price_median(conn, d))
+        raw = _price_all(d, expected=_recent_price_median(conn, d), conn=conn)
         coalesce = ("pe_ratio",)  # 備援缺本益比,重爬不得抹成 NULL
     else:
         raw = fetch(d)
