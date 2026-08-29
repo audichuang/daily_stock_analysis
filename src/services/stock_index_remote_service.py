@@ -121,7 +121,15 @@ def validate_stock_index_payload(
             raise ValueError(f"stock index item {index} aliases must be a list")
         if market not in SUPPORTED_STOCK_INDEX_MARKETS:
             raise ValueError(f"stock index item {index} has unsupported market: {market!r}")
-        if asset_type not in {"stock", "index", "etf"}:
+        # fork 增量：`unknown`。`scripts/refresh_us_stock_index.py` 对官方清单查无的
+        # 美股（多为 OTC）刻意标 `unknown` 而不是 `stock`——留 `stock` 会让下游把它当成
+        # 权威的「不是 ETF」，於是清单外的真 ETF 拿不到 ETF 式检索。上游 #2258 新增的
+        # `_load_active_index_rows` 会对**每个**候选（含 bundled）跑这个校验，不认
+        # `unknown` 就让整个指数注册表在本 fork 变空（实测 18083 行 US `unknown`
+        # → registry 0 行、`--stocks` 板块指数与 CSI 路由全部失效）。
+        # `unknown` 不授予任何能力：索引行必须 `asset_type == "index"` 才会被
+        # `_extract_active_index_rows` 收下，Web 端也只认 `assetType === 'stock'`。
+        if asset_type not in {"stock", "index", "etf", "unknown"}:
             raise ValueError(f"stock index item {index} has unsupported asset type: {asset_type!r}")
         if not isinstance(active, bool):
             raise ValueError(f"stock index item {index} active flag must be boolean")

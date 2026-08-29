@@ -97,6 +97,7 @@ from src.services.decision_signal_extractor import (
     extract_and_persist_from_analysis_result,
     resolve_decision_signal_action_fields,
 )
+from src.services.stock_list_parser import AnalysisTarget, ParseStatus
 from src.services.decision_signal_summary import summarize_decision_signal
 from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
@@ -114,6 +115,22 @@ from bot.models import BotMessage
 
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Index capability matrix — the single authority for which analysis modules
+# are skipped for index targets (Story 1.5). Skipping must happen before any
+# composite service, snapshot persistence, or the traditional/Agent branch
+# split, so the underlying provider calls are never reached.
+# ---------------------------------------------------------------------------
+INDEX_SKIP_MODULES = frozenset({
+    "chip_distribution",
+    "fundamental",
+    "belong_boards",
+    "capital_flow",
+    "lhb",
+    "corporate_events",
+})
 
 
 def _share_image_payload(result: Any) -> Optional[Dict[str, Any]]:
@@ -364,6 +381,7 @@ class StockAnalysisPipeline:
         code: str,
         force_refresh: bool = False,
         current_time: Optional[datetime] = None,
+        analysis_target: Optional[AnalysisTarget] = None,
     ) -> Tuple[bool, Optional[str]]:
         """
         获取并保存单只股票数据
@@ -377,6 +395,7 @@ class StockAnalysisPipeline:
             code: 股票代码
             force_refresh: 是否强制刷新（忽略本地缓存）
             current_time: 本轮运行冻结的参考时间，用于统一断点续传目标交易日判断
+            analysis_target: 结构化分析目标（指数目标用于推导 market=cn 与日期语义）
             
         Returns:
             Tuple[是否成功, 错误信息]
@@ -387,7 +406,7 @@ class StockAnalysisPipeline:
             stock_name = self.fetcher_manager.get_stock_name(code, allow_realtime=False)
 
             target_date = self._resolve_resume_target_date(
-                code, current_time=current_time
+                code, current_time=current_time, analysis_target=analysis_target
             )
 
             # 断点续传检查：如果最新可复用交易日的数据已存在，则跳过
@@ -421,6 +440,7 @@ class StockAnalysisPipeline:
         report_type: ReportType,
         query_id: str,
         current_time: Optional[datetime] = None,
+        analysis_target: Optional[AnalysisTarget] = None,
     ) -> Optional[AnalysisResult]:
         """
         分析单只股票（增强版：含量比、换手率、筹码分析、多维度情报）
@@ -438,6 +458,7 @@ class StockAnalysisPipeline:
             code: 股票代码
             report_type: 报告类型
             current_time: 本轮运行冻结的参考时间，用于统一市场阶段上下文
+            analysis_target: 结构化分析目标（指数目标用于推导 market=cn 与能力矩阵）
             
         Returns:
             AnalysisResult 或 None（如果分析失败）
@@ -447,7 +468,15 @@ class StockAnalysisPipeline:
             portfolio_context = getattr(self, "portfolio_context", None)
             if not isinstance(portfolio_context, dict):
                 portfolio_context = None
-            market = get_market_for_stock(normalize_stock_code(code))
+            is_index = (
+                analysis_target is not None
+                and analysis_target.asset_type == ParseStatus.INDEX
+            )
+            market = (
+                "cn"
+                if is_index
+                else get_market_for_stock(normalize_stock_code(code))
+            )
             market_phase_context = build_market_phase_context(
                 market=market,
                 current_time=current_time,
@@ -473,7 +502,17 @@ class StockAnalysisPipeline:
 
             self._emit_progress(18, f"{code}：正在获取行情与筹码数据")
             # 获取股票名称（先走轻量名称路径，后续若 realtime_quote 有 name 再覆盖）
-            stock_name = self.fetcher_manager.get_stock_name(code, allow_realtime=False)
+            # 指数目标使用注册表中文显示名（matched_index.display_name），避免把
+            # raw alias / canonical code / 六码机器码带入搜索查询（Story 1.5 V7）。
+            if is_index and analysis_target is not None:
+                index_name = getattr(
+                    getattr(analysis_target, "matched_index", None),
+                    "display_name",
+                    None,
+                )
+                stock_name = index_name or analysis_target.display_code or code
+            else:
+                stock_name = self.fetcher_manager.get_stock_name(code, allow_realtime=False)
 
             # Step 1: 获取实时行情（量比、换手率等）- 使用统一入口，自动故障切换
             realtime_quote = None
@@ -481,9 +520,14 @@ class StockAnalysisPipeline:
                 if self.config.enable_realtime_quote:
                     realtime_quote = self.fetcher_manager.get_realtime_quote(code, log_final_failure=False)
                     if realtime_quote:
-                        # 仅当轻量名称路径没拿到有效名称时，才用实时行情名称兜底，
-                        # 避免实时源（如台股 yfinance 兜底）的英文名覆盖本地索引的中文名
-                        if realtime_quote.name and not is_meaningful_stock_name(stock_name, code):
+                        # 指数保持注册表中文名为权威显示名（上游 #2300）；股票则仅当轻量
+                        # 名称路径没拿到有效名称时才用实时行情名称兜底，避免实时源
+                        # （如台股 yfinance 兜底）的英文名覆盖本地索引的中文名。
+                        if (
+                            realtime_quote.name
+                            and not is_index
+                            and not is_meaningful_stock_name(stock_name, code)
+                        ):
                             stock_name = realtime_quote.name
                         # 兼容不同数据源的字段（有些数据源可能没有 volume_ratio）
                         volume_ratio = getattr(realtime_quote, 'volume_ratio', None)
@@ -503,16 +547,20 @@ class StockAnalysisPipeline:
                 stock_name = f'股票{code}'
 
             # Step 2: 获取筹码分布 - 使用统一入口，带熔断保护
+            # 指数目标跳过筹码分布（INDEX_SKIP_MODULES 能力矩阵）
             chip_data = None
-            try:
-                chip_data = self.fetcher_manager.get_chip_distribution(code)
-                if chip_data:
-                    logger.info(f"{stock_name}({code}) 筹码分布: 获利比例={chip_data.profit_ratio:.1%}, "
-                              f"90%集中度={chip_data.concentration_90:.2%}")
-                else:
-                    logger.debug(f"{stock_name}({code}) 筹码分布获取失败或已禁用")
-            except Exception as e:
-                logger.warning(f"{stock_name}({code}) 获取筹码分布失败: {e}")
+            if is_index and "chip_distribution" in INDEX_SKIP_MODULES:
+                logger.debug(f"{stock_name}({code}) 指数目标跳过筹码分布")
+            else:
+                try:
+                    chip_data = self.fetcher_manager.get_chip_distribution(code)
+                    if chip_data:
+                        logger.info(f"{stock_name}({code}) 筹码分布: 获利比例={chip_data.profit_ratio:.1%}, "
+                                  f"90%集中度={chip_data.concentration_90:.2%}")
+                    else:
+                        logger.debug(f"{stock_name}({code}) 筹码分布获取失败或已禁用")
+                except Exception as e:
+                    logger.warning(f"{stock_name}({code}) 获取筹码分布失败: {e}")
 
             # If agent mode is explicitly enabled, or specific agent skills are configured, use the Agent analysis pipeline.
             # NOTE: use config.agent_mode (explicit opt-in) instead of
@@ -536,24 +584,45 @@ class StockAnalysisPipeline:
             # Step 2.5: 基本面能力聚合（统一入口，异常降级）
             # - 失败时返回 partial/failed，不影响既有技术面/新闻链路
             # - 关闭开关时仍返回 not_supported 结构
+            # - 指数目标跳过基本面/板块/资金流/龙虎榜/公司事件（INDEX_SKIP_MODULES）
             fundamental_context = None
-            try:
-                fundamental_context = self.fetcher_manager.get_fundamental_context(
+            fundamental_modules = {
+                "fundamental",
+                "belong_boards",
+                "capital_flow",
+                "lhb",
+                "corporate_events",
+            }
+            if is_index and INDEX_SKIP_MODULES.intersection(fundamental_modules):
+                logger.debug(f"{stock_name}({code}) 指数目标跳过基本面聚合")
+                fundamental_context = self.fetcher_manager.build_not_supported_fundamental_context(
                     code,
-                    budget_seconds=getattr(
-                        self.config,
-                        'fundamental_stage_timeout_seconds',
-                        FUNDAMENTAL_STAGE_TIMEOUT_SECONDS_DEFAULT,
-                    ),
+                    "index target: fundamental modules skipped",
                 )
-            except Exception as e:
-                logger.warning(f"{stock_name}({code}) 基本面聚合失败: {e}")
-                fundamental_context = self.fetcher_manager.build_failed_fundamental_context(code, str(e))
+            else:
+                try:
+                    fundamental_context = self.fetcher_manager.get_fundamental_context(
+                        code,
+                        budget_seconds=getattr(
+                            self.config,
+                            'fundamental_stage_timeout_seconds',
+                            FUNDAMENTAL_STAGE_TIMEOUT_SECONDS_DEFAULT,
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning(f"{stock_name}({code}) 基本面聚合失败: {e}")
+                    fundamental_context = self.fetcher_manager.build_failed_fundamental_context(code, str(e))
 
-            fundamental_context = self._attach_belong_boards_to_fundamental_context(
-                code,
-                fundamental_context,
-            )
+            if is_index and "belong_boards" in INDEX_SKIP_MODULES:
+                logger.debug(f"{stock_name}({code}) 指数目标跳过板块归属")
+                if isinstance(fundamental_context, dict):
+                    fundamental_context = dict(fundamental_context)
+                    fundamental_context["belong_boards"] = []
+            else:
+                fundamental_context = self._attach_belong_boards_to_fundamental_context(
+                    code,
+                    fundamental_context,
+                )
             market_structure_context = self._build_market_structure_context(
                 code=code,
                 stock_name=stock_name,
@@ -564,16 +633,17 @@ class StockAnalysisPipeline:
             )
 
             # P0: write-only snapshot, fail-open, no read dependency on this table.
-            try:
-                self.db.save_fundamental_snapshot(
-                    query_id=query_id,
-                    code=code,
-                    payload=fundamental_context,
-                    source_chain=fundamental_context.get("source_chain", []),
-                    coverage=fundamental_context.get("coverage", {}),
-                )
-            except Exception as e:
-                logger.debug(f"{stock_name}({code}) 基本面快照写入失败: {e}")
+            if not is_index:
+                try:
+                    self.db.save_fundamental_snapshot(
+                        query_id=query_id,
+                        code=code,
+                        payload=fundamental_context,
+                        source_chain=fundamental_context.get("source_chain", []),
+                        coverage=fundamental_context.get("coverage", {}),
+                    )
+                except Exception as e:
+                    logger.debug(f"{stock_name}({code}) 基本面快照写入失败: {e}")
 
             # Step 3: 趋势分析（基于交易理念）— 在 Agent 分支之前执行，供两条路径共用
             trend_result: Optional[TrendAnalysisResult] = None
@@ -588,7 +658,9 @@ class StockAnalysisPipeline:
                     df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
                     # Issue #234: Augment with realtime for intraday MA calculation
                     if self.config.enable_realtime_quote and realtime_quote:
-                        df = self._augment_historical_with_realtime(df, realtime_quote, code)
+                        df = self._augment_historical_with_realtime(
+                            df, realtime_quote, code, market=market
+                        )
                     trend_result = self.trend_analyzer.analyze(df, code)
                     logger.info(f"{stock_name}({code}) 趋势分析: {trend_result.trend_status.value}, "
                               f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
@@ -612,6 +684,7 @@ class StockAnalysisPipeline:
                     daily_market_context=daily_market_context,
                     portfolio_context=portfolio_context,
                     market_structure_context=market_structure_context,
+                    analysis_target=analysis_target,
                 )
 
             # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
@@ -632,8 +705,10 @@ class StockAnalysisPipeline:
                 news_result_count = 0
 
                 # 使用多维度搜索（最多5次搜索）
+                # 指数目标：查询 subject 仅用注册表中文名称，不把 canonical code /
+                # 六码机器码带入查询（Story 1.5 V7）。
                 intel_results = self.search_service.search_comprehensive_intel(
-                    stock_code=code,
+                    stock_code=("" if is_index else code),
                     stock_name=stock_name,
                     max_searches=5
                 )
@@ -690,7 +765,9 @@ class StockAnalysisPipeline:
 
             # Step 5: 获取分析上下文（技术面数据）
             self._emit_progress(58, f"{stock_name}：正在整理分析上下文")
-            context = self._get_analysis_context_with_market_fallback(code)
+            context = self._get_analysis_context_with_market_fallback(
+                code, analysis_target=analysis_target
+            )
 
             if context is None:
                 logger.warning(f"{stock_name}({code}) 无法获取历史行情数据，将仅基于新闻和实时行情分析")
@@ -832,6 +909,11 @@ class StockAnalysisPipeline:
             if result:
                 normalize_chip_structure_availability(result, chip_data)
 
+            # 指数目标：把持久化的日线 provider 追加进 data_sources（上游 #2300）。
+            # 必须在 finalize 之前——历史保存在 finalize 内部，晚了就存不进去。
+            if result:
+                self._append_daily_data_source(result, context, analysis_target)
+
             # Step 7.7 & Step 8: shared finalize-and-persist stage (guardrails,
             # decision refresh, context snapshot, analysis history save).
             if result and result.success:
@@ -844,6 +926,7 @@ class StockAnalysisPipeline:
                 report_type=report_type.value,
                 snapshot_context=enhanced_context,
                 news_content_for_save=news_context,
+                analysis_target=analysis_target,
             )
 
             return result
@@ -1247,13 +1330,20 @@ class StockAnalysisPipeline:
             )
             return None
 
-    def _ensure_agent_history(self, code: str, min_days: int = 240) -> None:
+    def _ensure_agent_history(
+        self,
+        code: str,
+        min_days: int = 240,
+        analysis_target: Optional[AnalysisTarget] = None,
+    ) -> None:
         """Ensure at least *min_days* of K-line history is in DB for agent tools."""
         from src.services.history_loader import get_frozen_target_date
 
         target = get_frozen_target_date()
         if target is None:
-            target = self._resolve_resume_target_date(code)
+            target = self._resolve_resume_target_date(
+                code, analysis_target=analysis_target
+            )
         start = target - timedelta(days=int(min_days * 1.8))
         bars = self.db.get_data_range(code, start, target)
         if bars and len(bars) >= min(min_days, 200):
@@ -1266,6 +1356,43 @@ class StockAnalysisPipeline:
                 logger.info("[%s] Prefetched %d rows of history for agent (source: %s)", code, len(df), source)
         except Exception as e:
             logger.warning("[%s] Agent history prefetch failed: %s", code, e)
+
+    def _filter_agent_tools_for_index(self, executor: Any) -> Any:
+        """Return an executor whose tool registry excludes index-incompatible tools.
+
+        Maps ``INDEX_SKIP_MODULES`` to the agent tool names that would otherwise
+        invoke the skipped bottom-layer providers (chip distribution, fundamental
+        aggregation, capital flow). The filtered registry carries the source
+        category-timeout map so per-category ceilings survive the subset copy.
+        """
+        tool_modules = {
+            "get_chip_distribution": {"chip_distribution"},
+            "get_stock_info": {
+                "fundamental",
+                "belong_boards",
+                "lhb",
+                "corporate_events",
+            },
+            "get_capital_flow": {"capital_flow"},
+        }
+        index_skip_tool_names = {
+            name
+            for name, modules in tool_modules.items()
+            if INDEX_SKIP_MODULES.intersection(modules)
+        }
+        registry = getattr(executor, "tool_registry", None)
+        if registry is None:
+            return executor
+        from src.agent.tools.registry import ToolRegistry as _TR
+        filtered = _TR(category_timeout_map=registry.category_timeout_map)
+        for name in registry.list_names():
+            if name in index_skip_tool_names:
+                continue
+            tool_def = registry.get(name)
+            if tool_def is not None:
+                filtered.register(tool_def)
+        executor.tool_registry = filtered
+        return executor
 
     def _analyze_with_agent(
         self, 
@@ -1283,6 +1410,7 @@ class StockAnalysisPipeline:
         daily_market_context: Optional[DailyMarketContext] = None,
         portfolio_context: Optional[Dict[str, Any]] = None,
         market_structure_context: Optional[Dict[str, Any]] = None,
+        analysis_target: Optional[AnalysisTarget] = None,
     ) -> Optional[AnalysisResult]:
         """
         使用 Agent 模式分析单只股票。
@@ -1291,6 +1419,11 @@ class StockAnalysisPipeline:
             from src.agent.factory import build_agent_executor
             report_language = normalize_report_language(getattr(self.config, "report_language", "zh"))
 
+            is_index = (
+                analysis_target is not None
+                and analysis_target.asset_type == ParseStatus.INDEX
+            )
+
             requested_skills = (
                 self.analysis_skills
                 if self.analysis_skills is not None
@@ -1298,6 +1431,11 @@ class StockAnalysisPipeline:
             )
             # Build executor from shared factory (ToolRegistry and SkillManager prototype are cached)
             executor = build_agent_executor(self.config, requested_skills)
+
+            # 指数目标：从 Agent 工具面剔除与 INDEX_SKIP_MODULES 对应的底层 provider
+            # 工具（筹码/基本面/资金流），确保 Agent 分支同样零调用（Story 1.5 V6）。
+            if is_index:
+                executor = self._filter_agent_tools_for_index(executor)
 
             # Build initial context to avoid redundant tool calls
             initial_context = {
@@ -1349,7 +1487,7 @@ class StockAnalysisPipeline:
             persisted_intelligence_context = self._load_persisted_intelligence_context(
                 code=code,
                 stock_name=stock_name,
-                market=get_market_for_stock(normalize_stock_code(code)) or "cn",
+                market=("cn" if is_index else get_market_for_stock(normalize_stock_code(code)) or "cn"),
             )
             if persisted_intelligence_context:
                 existing = initial_context.get("news_context")
@@ -1361,10 +1499,15 @@ class StockAnalysisPipeline:
                 logger.info(f"[{code}] Agent mode: local intelligence evidence injected into news_context")
 
             # Issue #1066: ensure deep history is in DB before agent tools run
-            self._ensure_agent_history(code)
+            if analysis_target is None:
+                self._ensure_agent_history(code)
+            else:
+                self._ensure_agent_history(code, analysis_target=analysis_target)
 
-            analysis_context = self._load_agent_analysis_context(code, stock_name)
-            market = get_market_for_stock(normalize_stock_code(code))
+            analysis_context = self._load_agent_analysis_context(
+                code, stock_name, analysis_target=analysis_target
+            )
+            market = "cn" if is_index else get_market_for_stock(normalize_stock_code(code))
             artifacts = self._build_agent_analysis_artifacts(
                 code=code,
                 stock_name=stock_name,
@@ -1494,6 +1637,13 @@ class StockAnalysisPipeline:
                     result.current_price = realtime_data.get("price")
                     result.change_pct = realtime_data.get("change_pct")
 
+            if result:
+                self._append_daily_data_source(
+                    result,
+                    analysis_context,
+                    analysis_target,
+                )
+
             resolved_stock_name = result.name if result and result.name else stock_name
 
             # 保存新闻情报到数据库（Agent 工具结果仅用于 LLM 上下文，未持久化，Fixes #396）
@@ -1501,7 +1651,7 @@ class StockAnalysisPipeline:
             if self.search_service is not None and self.search_service.is_available:
                 try:
                     news_response = self.search_service.search_stock_news(
-                        stock_code=code,
+                        stock_code=("" if is_index else code),
                         stock_name=resolved_stock_name,
                         max_results=5
                     )
@@ -1539,6 +1689,7 @@ class StockAnalysisPipeline:
                 news_content_for_save=None,
                 attach_agent_diagnostics=True,
                 runtime_facts=getattr(agent_result, "runtime_facts", None),
+                analysis_target=analysis_target,
             )
 
             return result
@@ -1548,10 +1699,14 @@ class StockAnalysisPipeline:
             logger.exception(f"[{code}] Agent 详细错误信息:")
             return None
 
-    def _load_agent_analysis_context(self, code: str, stock_name: str) -> Dict[str, Any]:
+    def _load_agent_analysis_context(
+        self, code: str, stock_name: str, analysis_target: Optional[AnalysisTarget] = None
+    ) -> Dict[str, Any]:
         """Load daily-bar context for Agent pack summaries without blocking analysis."""
         try:
-            context = self._get_analysis_context_with_market_fallback(code)
+            context = self._get_analysis_context_with_market_fallback(
+                code, analysis_target=analysis_target
+            )
         except Exception as exc:
             logger.warning(
                 "[%s] Agent analysis context load failed; daily_bars will be marked missing: %s",
@@ -1575,13 +1730,18 @@ class StockAnalysisPipeline:
             "yesterday": {},
         }
 
-    def _get_analysis_context_with_market_fallback(self, code: str) -> Optional[Dict[str, Any]]:
+    def _get_analysis_context_with_market_fallback(
+        self, code: str, analysis_target: Optional[AnalysisTarget] = None
+    ) -> Optional[Dict[str, Any]]:
         """Load analysis context, fetching JP/KR/TW daily bars when DB has no context."""
         context = self.db.get_analysis_context(code)
         if isinstance(context, dict) and context:
             return context
 
-        market = get_market_for_stock(normalize_stock_code(code))
+        if analysis_target is not None and analysis_target.asset_type == ParseStatus.INDEX:
+            market = "cn"
+        else:
+            market = get_market_for_stock(normalize_stock_code(code))
         if market not in {"jp", "kr", "tw"}:
             return context
 
@@ -2079,6 +2239,48 @@ class StockAnalysisPipeline:
         }.get(signal_name)
 
     @staticmethod
+    def _append_daily_data_source(
+        result: AnalysisResult,
+        context: Any,
+        analysis_target: Optional[AnalysisTarget],
+    ) -> None:
+        """Append an index's persisted daily provider without inferring sources."""
+        if (
+            analysis_target is None
+            or analysis_target.asset_type != ParseStatus.INDEX
+        ):
+            return
+        if not isinstance(context, dict):
+            return
+        today = context.get("today")
+        if not isinstance(today, dict):
+            return
+        source = today.get("data_source")
+        if not isinstance(source, str):
+            return
+        source = source.strip()
+        if (
+            not source
+            or source.casefold() == "unknown"
+            or source.casefold().startswith("realtime:")
+        ):
+            return
+
+        existing = result.data_sources
+        if existing is None:
+            existing_tokens = []
+        elif isinstance(existing, str):
+            existing_tokens = [
+                item.strip() for item in existing.split(",") if item.strip()
+            ]
+        else:
+            return
+        token = f"daily:{source}"
+        if token in existing_tokens:
+            return
+        result.data_sources = ",".join([*existing_tokens, token])
+
+    @staticmethod
     def _mark_trend_fallback_source(result: AnalysisResult) -> None:
         if "trend:fallback" in (result.data_sources or ""):
             return
@@ -2297,7 +2499,11 @@ class StockAnalysisPipeline:
             return "震荡整理 ↔️"
 
     def _augment_historical_with_realtime(
-        self, df: pd.DataFrame, realtime_quote: Any, code: str
+        self,
+        df: pd.DataFrame,
+        realtime_quote: Any,
+        code: str,
+        market: Optional[str] = None,
     ) -> pd.DataFrame:
         """
         使用当日实时行情补齐历史 OHLCV，用于盘中 MA 计算。
@@ -2317,7 +2523,8 @@ class StockAnalysisPipeline:
         )
         if not enable_realtime_tech:
             return df
-        market = get_market_for_stock(code)
+        if market is None:
+            market = get_market_for_stock(code)
         # **只讀一次時鐘。** 下面的 PREMARKET 判定要吃同一個 `market_now`，否則這個函式
         # 會各自向時鐘問兩次：跨盤別／跨午夜邊界時兩次答案可能不一致，而且測試 patch 掉
         # `get_market_now` 之後仍然控制不住 `infer_market_phase` 內部那次
@@ -2470,6 +2677,7 @@ class StockAnalysisPipeline:
         report_type: str,
         context_snapshot: Dict[str, Any],
         portfolio_context: Optional[Dict[str, Any]] = None,
+        analysis_target: Optional[AnalysisTarget] = None,
     ) -> None:
         """Best-effort DecisionSignal extraction after analysis history is saved."""
 
@@ -2486,6 +2694,13 @@ class StockAnalysisPipeline:
                 or getattr(self, "trace_id", None)
                 or query_id
             )
+            # 指数目标：信号以 market=cn 持久化（canonical code / 中文名由 result 携带）
+            market_override = (
+                "cn"
+                if analysis_target is not None
+                and analysis_target.asset_type == ParseStatus.INDEX
+                else None
+            )
             signal_result = extract_and_persist_from_analysis_result(
                 result,
                 context_snapshot=context_snapshot,
@@ -2495,6 +2710,7 @@ class StockAnalysisPipeline:
                 report_type=report_type,
                 portfolio_context=portfolio_context,
                 profile_source="auto_default",
+                market_override=market_override,
             )
             if isinstance(signal_result, dict):
                 summary = summarize_decision_signal(signal_result.get("item"))
@@ -2521,6 +2737,7 @@ class StockAnalysisPipeline:
         news_content_for_save: Optional[str],
         attach_agent_diagnostics: bool = False,
         runtime_facts: Any = None,
+        analysis_target: Optional[AnalysisTarget] = None,
     ) -> Optional[AnalysisResult]:
         """Shared finalize-and-persist stage for legacy and agent analysis paths.
 
@@ -2693,6 +2910,7 @@ class StockAnalysisPipeline:
                         report_type=report_type,
                         context_snapshot=context_snapshot,
                         portfolio_context=artifacts.portfolio_context,
+                        analysis_target=analysis_target,
                     )
                 if attach_agent_diagnostics:
                     latest_diagnostic_snapshot = current_diagnostic_snapshot()
@@ -2989,12 +3207,20 @@ class StockAnalysisPipeline:
 
     @staticmethod
     def _resolve_resume_target_date(
-        code: str, current_time: Optional[datetime] = None
+        code: str, current_time: Optional[datetime] = None,
+        analysis_target: Optional[AnalysisTarget] = None,
     ) -> date:
         """
         Resolve the trading date used by checkpoint/resume checks.
+
+        For index targets the market is derived from the structured target
+        (``market=cn``) rather than from ``get_market_for_stock`` on the
+        canonical code, which would return ``None`` for CSI indices.
         """
-        market = get_market_for_stock(normalize_stock_code(code))
+        if analysis_target is not None and analysis_target.asset_type == ParseStatus.INDEX:
+            market = "cn"
+        else:
+            market = get_market_for_stock(normalize_stock_code(code))
         return get_effective_trading_date(market, current_time=current_time)
 
     @staticmethod
@@ -3071,6 +3297,7 @@ class StockAnalysisPipeline:
         report_type: ReportType = ReportType.SIMPLE,
         analysis_query_id: Optional[str] = None,
         current_time: Optional[datetime] = None,
+        analysis_target: Optional[AnalysisTarget] = None,
     ) -> Optional[AnalysisResult]:
         """
         处理单只股票的完整流程
@@ -3090,6 +3317,7 @@ class StockAnalysisPipeline:
             single_stock_notify: 是否启用单股推送模式（每分析完一只立即推送）
             report_type: 报告类型枚举（从配置读取，Issue #119）
             current_time: 本轮运行冻结的参考时间，用于统一断点续传目标交易日判断
+            analysis_target: 结构化分析目标（指数目标用于推导 market=cn 与能力矩阵）
 
         Returns:
             AnalysisResult 或 None
@@ -3097,7 +3325,9 @@ class StockAnalysisPipeline:
         logger.info(f"========== 开始处理 {code} ==========")
 
         from src.services.history_loader import set_frozen_target_date, reset_frozen_target_date
-        frozen_td = self._resolve_resume_target_date(code, current_time=current_time)
+        frozen_td = self._resolve_resume_target_date(
+            code, current_time=current_time, analysis_target=analysis_target
+        )
         token = set_frozen_target_date(frozen_td)
         effective_query_id = analysis_query_id or getattr(self, "query_id", None) or uuid.uuid4().hex
         effective_trace_id = getattr(self, "trace_id", None) or effective_query_id
@@ -3113,7 +3343,7 @@ class StockAnalysisPipeline:
             self._emit_progress(12, f"{code}：正在准备分析任务")
             # Step 1: 获取并保存数据
             success, error = self.fetch_and_save_stock_data(
-                code, current_time=current_time
+                code, current_time=current_time, analysis_target=analysis_target
             )
             
             if not success:
@@ -3130,6 +3360,8 @@ class StockAnalysisPipeline:
             analyze_kwargs = {"query_id": effective_query_id}
             if current_time is not None:
                 analyze_kwargs["current_time"] = current_time
+            if analysis_target is not None:
+                analyze_kwargs["analysis_target"] = analysis_target
             result = self.analyze_stock(code, report_type, **analyze_kwargs)
             
             if result and result.success:
@@ -3167,6 +3399,7 @@ class StockAnalysisPipeline:
         send_notification: bool = True,
         merge_notification: bool = False,
         current_time: Optional[datetime] = None,
+        analysis_targets: Optional[List[AnalysisTarget]] = None,
     ) -> List[AnalysisResult]:
         """
         运行完整的分析流程
@@ -3183,6 +3416,7 @@ class StockAnalysisPipeline:
             send_notification: 是否发送推送通知
             merge_notification: 是否合并推送（跳过本次推送，由 main 层合并个股+大盘后统一发送，Issue #190）
             current_time: 本轮运行冻结的参考时间；为空时在 run 内生成
+            analysis_targets: 与 stock_codes 对齐的结构化分析目标列表（可选，指数目标用于推导 market=cn 与能力矩阵）
 
         Returns:
             分析结果列表
@@ -3198,6 +3432,39 @@ class StockAnalysisPipeline:
             logger.error("未配置自选股列表，请在 .env 文件中设置 STOCK_LIST")
             return []
         
+        # 过滤 unsupported 目标并按 canonical identity 去重，均发生在
+        # prefetch/provider 调用前；无结构化 target 的旧入口保持原行为。
+        if analysis_targets is not None:
+            if len(analysis_targets) != len(stock_codes):
+                raise ValueError("analysis_targets must align with stock_codes")
+            supported_codes = []
+            supported_targets = []
+            seen_identities = set()
+            for code, target in zip(stock_codes, analysis_targets):
+                if target is not None and target.asset_type == ParseStatus.UNSUPPORTED:
+                    logger.warning(
+                        "跳过 unsupported 目标 %r（%s），不触发网络请求",
+                        code,
+                        target.unsupported_reason or "unsupported",
+                    )
+                    continue
+                identity = (
+                    target.canonical_id
+                    if target is not None and target.asset_type == ParseStatus.INDEX
+                    else code
+                )
+                if identity in seen_identities:
+                    logger.info("跳过重复分析目标 %s（canonical_id=%s）", code, identity)
+                    continue
+                seen_identities.add(identity)
+                supported_codes.append(code)
+                supported_targets.append(target)
+            stock_codes = supported_codes
+            analysis_targets = supported_targets
+            if not stock_codes:
+                logger.warning("批次中所有目标均 unsupported，无任务可执行")
+                return []
+
         logger.info(f"===== 开始分析 {len(stock_codes)} 只股票 =====")
         logger.info(f"股票列表: {', '.join(stock_codes)}")
         logger.info(f"并发数: {self.max_workers}, 模式: {'仅获取数据' if dry_run else '完整分析'}")
@@ -3251,18 +3518,28 @@ class StockAnalysisPipeline:
         # 注意：max_workers 设置较低（默认3）以避免触发反爬
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # 提交任务
-            future_to_code = {
-                executor.submit(
+            future_to_code = {}
+            for idx, code in enumerate(stock_codes):
+                target = (
+                    analysis_targets[idx]
+                    if analysis_targets is not None and idx < len(analysis_targets)
+                    else None
+                )
+                submit_kwargs = {
+                    "skip_analysis": dry_run,
+                    "single_stock_notify": False,
+                    "report_type": report_type,
+                    "analysis_query_id": uuid.uuid4().hex,
+                    "current_time": resume_reference_time,
+                }
+                if target is not None:
+                    submit_kwargs["analysis_target"] = target
+                future = executor.submit(
                     self.process_single_stock,
                     code,
-                    skip_analysis=dry_run,
-                    single_stock_notify=False,
-                    report_type=report_type,  # Issue #119: 传递报告类型
-                    analysis_query_id=uuid.uuid4().hex,
-                    current_time=resume_reference_time,
-                ): code
-                for code in stock_codes
-            }
+                    **submit_kwargs,
+                )
+                future_to_code[future] = code
             
             # 收集结果
             for idx, future in enumerate(as_completed(future_to_code)):
@@ -3301,16 +3578,22 @@ class StockAnalysisPipeline:
         # dry-run 模式下，数据获取成功即视为成功
         if dry_run:
             # 检查哪些股票的最新可复用交易日数据已存在
-            success_count = sum(
-                1
-                for code in stock_codes
+            success_count = 0
+            for idx, code in enumerate(stock_codes):
+                target = (
+                    analysis_targets[idx]
+                    if analysis_targets is not None and idx < len(analysis_targets)
+                    else None
+                )
                 if self.db.has_today_data(
                     code,
                     self._resolve_resume_target_date(
-                        code, current_time=resume_reference_time
+                        code,
+                        current_time=resume_reference_time,
+                        analysis_target=target,
                     ),
-                )
-            )
+                ):
+                    success_count += 1
             fail_count = len(stock_codes) - success_count
         else:
             success_count = len(results)

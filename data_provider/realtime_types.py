@@ -103,6 +103,7 @@ class RealtimeSource(Enum):
     SINA = "sina"                   # 新浪直连
     STOOQ = "stooq"                 # Stooq 美股兜底
     LONGBRIDGE = "longbridge"       # 长桥（美股/港股兜底）
+    FUTU = "futu"                   # 富途 OpenD（港股）
     SHIOAJI = "shioaji"             # 永丰金 Shioaji（台股真即时）
     YFINANCE = "yfinance"           # yfinance（美股/日股/韩股的指定主来源）
     FALLBACK = "fallback"           # 降级兜底

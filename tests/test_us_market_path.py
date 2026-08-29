@@ -401,6 +401,55 @@ class TestUsDailyChainPrefersYfinance:
         )
         assert order_line.index("YfinanceFetcher") < order_line.index("AlphaVantageFetcher"), order_line
 
+    def test_priority_resort_cannot_demote_the_pinned_first_source(self):
+        """上游 #2250 之后 `source_order` 会再过一次 `_order_us_sources_by_priority`。
+
+        预设优先级是 Finnhub=2 < AlphaVantage=3 < Yfinance=4，所以 `pin_first=False`
+        会把上面那条字面顺序**无声重排回去**、AlphaVantage 又跑到 yfinance 前面。
+        本 fork 三条链路的首选都是刻意锚定的，故呼叫点一律 `pin_first=True`。
+        """
+        import inspect
+        import threading
+
+        from data_provider.base import DataFetcherManager
+
+        src = inspect.getsource(DataFetcherManager.get_daily_data)
+        assert "_order_us_sources_by_priority(source_order, pin_first=True)" in src, (
+            "US 路由必须锚定首选；pin_first 一旦跟随上游改回 is_us_index/prefer_lb，"
+            "普通美股的 yfinance 首选就会被 *_PRIORITY 排序无声推翻"
+        )
+
+        # 锚定的行为面：预设优先级下 yfinance 仍在首位，其余兜底成员照样按优先级重排。
+        class _F:
+            def __init__(self, name, priority):
+                self.name, self.priority = name, priority
+
+        fetchers = [
+            _F("FinnhubFetcher", 2),
+            _F("AlphaVantageFetcher", 3),
+            _F("YfinanceFetcher", 4),
+            _F("LongbridgeFetcher", 5),
+        ]
+        manager = DataFetcherManager.__new__(DataFetcherManager)
+        manager._fetchers = list(fetchers)
+        manager._fetchers_lock = threading.RLock()
+        manager._fetchers_by_name = {f.name: f for f in fetchers}
+        manager._fetcher_call_locks = {}
+        manager._fetcher_call_locks_lock = manager._fetchers_lock
+        manager._stock_name_cache = {}
+        manager._stock_name_cache_lock = manager._fetchers_lock
+
+        fork_order = [
+            "YfinanceFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "LongbridgeFetcher",
+        ]
+        assert manager._order_us_sources_by_priority(fork_order, pin_first=True) == [
+            "YfinanceFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "LongbridgeFetcher",
+        ]
+        # 反向：不锚定就会被优先级推翻——这正是要挡的那个形状。
+        assert manager._order_us_sources_by_priority(fork_order, pin_first=False)[0] == (
+            "FinnhubFetcher"
+        )
+
 
 class TestRecapIsDatedByTheMarketNotTheServerClock:
     def test_us_recap_uses_the_new_york_session_not_the_taipei_date(self):
