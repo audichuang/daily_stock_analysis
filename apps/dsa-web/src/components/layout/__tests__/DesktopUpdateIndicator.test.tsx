@@ -155,7 +155,13 @@ describe('DesktopUpdateIndicator', () => {
     renderIndicator();
 
     const entry = await screen.findByRole('button', { name: '桌面端更新' });
-    expect(entry).toHaveAttribute('title', expect.stringContaining('42%'));
+    // fork 增量：入口不再用原生 `title`（`tests/ui_governance.test.ts` 挡下，
+    // 键盘与读屏都拿不到）。稳定名称留在 `aria-label`，动态细节改由
+    // `aria-describedby` 指向的 sr-only 文字承载——断言换到那段文字上，
+    // 「42% 有没有传到使用者眼前」这个意图完全保留。
+    const hintId = entry.getAttribute('aria-describedby');
+    expect(hintId).toBeTruthy();
+    expect(document.getElementById(hintId as string)?.textContent).toContain('42%');
     expect(desktopCheckForUpdates).not.toHaveBeenCalled();
   });
 });

@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] 新增 `docs/upstream-sync-2026-08-30.md`：v3.30 → v3.31.0 的 17 个 commit 同步记录、6 档冲突裁决、保留的 fork 分歧与找到的静默降级。
 - [修复] 台股带字母尾的代码（槓桿 `00631L.TW`、反向 `00632R.TW`、债券 ETF `00679B.TW`、特别股 `2887A.TW`）不再被判为 unsupported：`get_suffix_market` 与显式交易所后缀校验对台股先剥掉一个尾字母再判位数，`YfinanceFetcher._is_yahoo_suffix_stock` 的手写重复实作改为委派共用规则。此前上游新增的 unsupported 硬守门会在任何数据源跑起来之前就抛错。
 - [测试] `stop()` 的 process-tree 终止恢复守门：blocking worker 与其 descendant 的自然寿命拉到远超观察窗，否则它们自己睡完就退出，删掉终止调用测试照样绿。
+- [修复] 桌面端更新入口不再使用原生 `title` 属性（键盘与读屏都拿不到，且违反 Web UI governance 守门）：稳定的可及名称保留在 `aria-label`，版本与下载百分比等动态细节改由 `aria-describedby` 指向的 sr-only 文字承载。
+- [测试] TickFlow 本地化断言改绑 `getFieldDescriptionZh` 真源，不再重抄描述字面——上游改过该文案却未同步断言，导致该测试在上游即为红。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 - [新功能] 完善 Futu OpenD 港股数据源接入：系统设置支持 OpenD 地址、端口和港股实时数据源优先级，保留 Longbridge、AkShare、YFinance fallback。

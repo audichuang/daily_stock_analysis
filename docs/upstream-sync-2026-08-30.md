@@ -290,6 +290,49 @@ Mutation 验过：删掉终止调用，两条测试撑满 60s 后如期变红。
   `zh-TW` 的 html lang、对应的 `Noto Sans CJK TC` 规则、`_POSTER_TEXT` 的 zh-TW 文案块。
   刻意不在合并里顺手改。
 
+## Web 端：vitest 抓到的两处（已修）
+
+`npm ci` + `lint` + `build` 全绿。`vitest` 全跑 24 个档红，其中**两个是真的**，
+其余是本 repo 既有的高并发超时形状。
+
+### 上游 #2258 改了文案却没同步自己的断言
+
+`systemConfigI18n.ts` 的 `TICKFLOW_PRIORITY` 描述由「控制 TickFlow 在 A 股日 K 数据源
+回退链中的尝试顺序…」改成「…在普通 A 股日 K 回退链中的尝试顺序；已登记指数使用固定链…」，
+但 `SettingsField.test.tsx:71` 仍硬编码旧子串。**这条测试在上游就是红的**，本 fork 逐字继承。
+
+没有把字面抄成新的——那只会等下次上游再改文案时重演。断言改绑真源
+`getFieldDescriptionZh('TICKFLOW_PRIORITY')`（该测试档本来就 import 了它）：措辞再改不会误伤，
+而「退回后端英文 schema」这个真正要挡的失败仍然会红。Mutation 验过：删掉那条中文描述，
+断言立刻红并露出 `Priority for TickFlow daily K-line fetcher`。
+
+### 上游 #2274 的新组件违反本 fork 的无障碍守门
+
+`apps/dsa-web/tests/ui_governance.test.ts` 禁止在互动元素上使用原生 `title=`
+（键盘与读屏都不可靠）。上游新的 `DesktopUpdateIndicator` 入口按钮同时用了 `aria-label`
+与 `title={tooltip}`，而上游自己的测试断言 `title` 含下载百分比——两边直接冲突。
+（同形状在 2026-07-11 那次合并也踩过：`RealtimeBoardPage` 的 `title=` → `aria-label`。）
+
+裁决不是二选一：**稳定**的可及名称留在 `aria-label`（状态变化时不该跟着变，否则 AT 使用者
+每次轮询都听到一个新名字），动态细节（版本、下载百分比）移到 `aria-describedby` 指向的
+sr-only 文字——这是补充信息的标准做法，也正是 `title` 本来想达到的效果。上游测试的意图
+（42% 有没有传到使用者眼前）完整保留，只是换了载体断言。
+Mutation 验两次：加回 `title=` → governance 守门红；删掉 sr-only 文字 → 42% 断言红。
+
+### 其余 vitest 红：有基线数字，不是本次引入
+
+修掉上面两个之后全跑仍有 18 档红。**逐档在合并前的 fork main 上跑同一批做对照**
+（`git worktree` + 软链 `node_modules`）：
+
+| | Test Files |
+| --- | --- |
+| fork main（合并前，`11116673`） | **16 failed / 2 passed** |
+| 本分支（合并後） | **16 failed / 2 passed** |
+
+逐档清单**完全一致**（`diff` 为空），18 个档在 main 上也全部存在。失败讯息以
+`Test timed out in 5000ms` 为主，属于本 repo 既有的 vitest 高并发形状（CI 上不重现）。
+结论有数字支撑：这批红与本次合并无关。
+
 ## 回滚
 
 `git reset --hard 11116673`（合并前的 fork main，即本次 merge commit 的第一父）即可完全回退。

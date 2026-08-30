@@ -67,8 +67,12 @@ describe('SettingsField', () => {
       />
     );
 
-    expect(screen.getByLabelText('TickFlow 日 K 优先级')).toBeInTheDocument();
-    expect(screen.getByText(/控制 TickFlow 在 A 股日 K 数据源回退链中的尝试顺序/)).toBeInTheDocument();
+    expect(screen.getByLabelText(getFieldTitleZh('TICKFLOW_PRIORITY'))).toBeInTheDocument();
+    // 断言绑在真源上，不重抄字面：上游 #2258 改过这段描述却没同步这里的硬编码
+    // 断言（`控制 TickFlow 在 A 股日 K 数据源回退链中的尝试顺序` → `…在普通 A 股日 K
+    // 回退链中的…`），于是这条测试在上游就是红的、本 fork 逐字继承。绑真源之后，
+    // 措辞再改也不会误伤，而「退回后端英文」这个真正要挡的失败仍然会红。
+    expect(screen.getByText(getFieldDescriptionZh('TICKFLOW_PRIORITY'))).toBeInTheDocument();
     expect(screen.queryByText(/Priority for TickFlow daily K-line fetcher/)).not.toBeInTheDocument();
   });
   it('uses schema key for TickFlow localization when the runtime item key differs', () => {

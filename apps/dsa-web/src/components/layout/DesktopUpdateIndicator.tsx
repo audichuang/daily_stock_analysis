@@ -9,6 +9,13 @@ import { cn } from '../../utils/cn';
 import { Button } from '../common/Button';
 import { StatusDot } from '../common/StatusDot';
 
+// fork 增量：原生 `title` 被 `apps/dsa-web/tests/ui_governance.test.ts` 挡下——它对键盘
+// 与读屏都不可靠。上游 #2274 在入口按钮上同时用了 `aria-label` 与 `title`；这里保留
+// `aria-label` 作为**稳定**的可及名称（状态变化时不该跟着变，否则 AT 使用者每次轮询都
+// 听到一个新名字），把动态细节（版本、下载百分比）移到 `aria-describedby` 指向的
+// sr-only 文字里——这是补充信息的标准做法，也是上游 `title` 本来想达到的效果。
+const TOOLTIP_ID = 'desktop-update-entry-hint';
+
 export const DesktopUpdateIndicator: React.FC = () => {
   const { t } = useUiLanguage();
   const navigate = useNavigate();
@@ -78,7 +85,7 @@ export const DesktopUpdateIndicator: React.FC = () => {
         aria-label={t('layout.desktopUpdateEntry')}
         aria-expanded={open}
         aria-haspopup="dialog"
-        title={tooltip}
+        aria-describedby={TOOLTIP_ID}
         onClick={() => setOpen((current) => !current)}
       >
         {busy ? (
@@ -96,6 +103,9 @@ export const DesktopUpdateIndicator: React.FC = () => {
           />
         ) : null}
       </button>
+      <span id={TOOLTIP_ID} className="sr-only">
+        {tooltip}
+      </span>
 
       {open ? (
         <div
