@@ -15,6 +15,7 @@ from data_provider.base import canonical_stock_code
 from src.services.market_symbol_utils import (
     get_suffix_market,
     normalize_suffix_market_symbol,
+    strip_optional_tw_letter,
     suffix_base_lookup_allowed,
 )
 
@@ -150,6 +151,10 @@ def _is_us_index_code(code: str) -> bool:
 
 
 def _valid_exchange_code(exchange: str, base: str, digit_lens: tuple[int, ...]) -> bool:
+    if exchange in {"TW", "TWO"}:
+        # 台股代码可以带一个尾字母（槓桿/反向 ETF、債券 ETF、特別股），见
+        # `strip_optional_tw_letter`。剥掉之後仍按各自的位数规则判定。
+        base = strip_optional_tw_letter(base)
     if not (base.isdigit() and len(base) in digit_lens):
         return False
     if exchange in {"SH", "SS"}:

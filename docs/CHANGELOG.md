@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 指数注册表在本 fork 曾整个载入失败：上游新增的 `_load_active_index_rows` 会对每个索引候选跑资产类型校验，而本 fork 美股索引有 18083 笔刻意标记的 `asset_type="unknown"`（对官方清单查无的 OTC 代码，留 `stock` 会让下游误判"不是 ETF"），导致 bundled 索引被整份拒收、`--stocks` 板块指数与 CSI 路由静默失效。校验器白名单加入 `unknown`（不授予任何指数身分）。
 - [修复] 美股普通日线链路的首选来源恢复锚定 yfinance：上游按 `*_PRIORITY` 重排会把 AlphaVantage 排到 yfinance 之前，而 AlphaVantage 回未复权价且单次上限 100 根，设了金钥后会印出错的 `pct_chg`。兜底段仍按 `*_PRIORITY` 生效。
 - [文档] 新增 `docs/upstream-sync-2026-08-30.md`：v3.30 → v3.31.0 的 17 个 commit 同步记录、6 档冲突裁决、保留的 fork 分歧与找到的静默降级。
+- [修复] 台股带字母尾的代码（槓桿 `00631L.TW`、反向 `00632R.TW`、债券 ETF `00679B.TW`、特别股 `2887A.TW`）不再被判为 unsupported：`get_suffix_market` 与显式交易所后缀校验对台股先剥掉一个尾字母再判位数，`YfinanceFetcher._is_yahoo_suffix_stock` 的手写重复实作改为委派共用规则。此前上游新增的 unsupported 硬守门会在任何数据源跑起来之前就抛错。
+- [测试] `stop()` 的 process-tree 终止恢复守门：blocking worker 与其 descendant 的自然寿命拉到远超观察窗，否则它们自己睡完就退出，删掉终止调用测试照样绿。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 - [新功能] 完善 Futu OpenD 港股数据源接入：系统设置支持 OpenD 地址、端口和港股实时数据源优先级，保留 Longbridge、AkShare、YFinance fallback。

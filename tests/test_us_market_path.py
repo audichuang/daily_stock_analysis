@@ -424,8 +424,10 @@ class TestUsDailyChainPrefersYfinance:
             def __init__(self, name, priority):
                 self.name, self.priority = name, priority
 
+        # Finnhub 刻意給 7：兜底段的優先級順序必須與 `fork_order` 的字面順序**不同**，
+        # 否則期望值等於輸入值，一個「pin_first=True 就原樣回傳」的空實作也會過。
         fetchers = [
-            _F("FinnhubFetcher", 2),
+            _F("FinnhubFetcher", 7),
             _F("AlphaVantageFetcher", 3),
             _F("YfinanceFetcher", 4),
             _F("LongbridgeFetcher", 5),
@@ -442,12 +444,14 @@ class TestUsDailyChainPrefersYfinance:
         fork_order = [
             "YfinanceFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "LongbridgeFetcher",
         ]
+        # 首選鎖住，其餘三個按 priority 重排（3 < 5 < 7）——與輸入順序不同，
+        # 所以原樣回傳的空實作會紅。
         assert manager._order_us_sources_by_priority(fork_order, pin_first=True) == [
-            "YfinanceFetcher", "FinnhubFetcher", "AlphaVantageFetcher", "LongbridgeFetcher",
+            "YfinanceFetcher", "AlphaVantageFetcher", "LongbridgeFetcher", "FinnhubFetcher",
         ]
-        # 反向：不锚定就会被优先级推翻——这正是要挡的那个形状。
+        # 反向：不錨定就會被優先級推翻——這正是要擋的那個形狀。
         assert manager._order_us_sources_by_priority(fork_order, pin_first=False)[0] == (
-            "FinnhubFetcher"
+            "AlphaVantageFetcher"
         )
 
 
@@ -920,3 +924,61 @@ class TestCodexReviewFindings:
         path = pathlib.Path(tempfile.mkdtemp()) / "d.json"
         path.write_text(json.dumps(payload), encoding="utf-8")
         assert len(load_durations(path)) == len(TEST_ROOTS)
+
+
+class TestTaiwanLetterSuffixedCodesSurviveTheUnsupportedGate:
+    """`00631L.TW` 这类代码必须走完整条台股路径，而不是在 parser 就被判 unsupported。
+
+    上游 #2267 给 `DataFetcherManager.get_stock_data` 加了一道硬守门：
+    `parse_analysis_target` 判 UNSUPPORTED 就 `raise DataFetchError`，**在 fetcher 清单
+    建起来之前**。fork main 上没有这道守门（`git show 11116673:data_provider/base.py`
+    完全没有 `ParseStatus.UNSUPPORTED`），所以合并前这些代码是能跑的。
+
+    台股带尾字母的代码是真实存在且常用的：槓桿 `00631L`、反向 `00632R`、债券 ETF
+    `00679B`、特别股 `2887A`。四条路径都得认它，缺一条就会以不同形式失效。
+    """
+
+    CODES = ("00631L.TW", "00632R.TW", "00679B.TW", "2887A.TW", "00675L.TWO")
+
+    def test_parse_analysis_target_classifies_them_as_stock(self):
+        from src.services.stock_list_parser import parse_analysis_target
+
+        for code in self.CODES:
+            target = parse_analysis_target(code)
+            assert target.asset_type == "stock", (
+                code, target.asset_type, target.unsupported_reason
+            )
+
+    def test_suffix_market_resolves_to_tw(self):
+        from src.services.market_symbol_utils import get_suffix_market
+
+        for code in self.CODES:
+            assert get_suffix_market(code) == "tw", code
+
+    def test_yfinance_recognises_them_as_tw_suffix_stocks(self):
+        from data_provider.yfinance_fetcher import YfinanceFetcher
+
+        for code in self.CODES:
+            assert YfinanceFetcher._is_tw_suffix_stock(code) is True, code
+            assert YfinanceFetcher._is_yahoo_suffix_stock(code) is True, code
+
+    def test_normalization_keeps_the_letter_and_skips_hk_zfill(self):
+        """放行字母尾之後，base 必须原样带着字母出来，且不得掉进 HK 的 `zfill(5)`。"""
+        from data_provider.base import normalize_stock_code
+        from src.services.stock_code_utils import (
+            _normalize_explicit_exchange_parts,
+            _split_explicit_exchange,
+        )
+
+        for code in self.CODES:
+            assert normalize_stock_code(code) == code.upper(), code
+            base = _normalize_explicit_exchange_parts(_split_explicit_exchange(code.upper()))
+            assert base == code.upper().rsplit(".", 1)[0], (code, base)
+            assert not base.startswith("0000"), (code, base)  # HK zfill(5) 的指纹
+
+    def test_a_letter_base_is_still_not_a_free_pass(self):
+        """只放行「4~6 位数字 + 至多一个尾字母」，不是放行任意 base。"""
+        from src.services.market_symbol_utils import get_suffix_market
+
+        for bad in ("ABCDE.TW", "00631LL.TW", "631L.TWO", "1234567L.TW", "L0063.TW"):
+            assert get_suffix_market(bad) is None, bad

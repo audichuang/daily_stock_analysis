@@ -41,10 +41,22 @@ class InferCodeMarketTestCase(unittest.TestCase):
         """
         self.assertEqual(_infer_code_market("005930"), "a")
 
+    def test_letter_suffixed_tw_code_resolves_via_the_suffix(self):
+        """`00631L.TW` 必须解析成 tw——带后缀那一半此前是**记录在案的缺口**。
+
+        台股的槓桿/反向 ETF（`00631L` 元大台灣50正2、`00632R` 元大台灣50反1）、债券 ETF
+        （`00679B`）与特别股（`2887A`）代码都带一个尾字母。上游 #2267 之后
+        `DataFetcherManager.get_stock_data` 会对 `ParseStatus.UNSUPPORTED` 直接 raise，
+        所以这个缺口不再是休眠的：`get_suffix_market` 回 None → parser 判 unsupported →
+        分析在任何 fetcher 跑起来之前就失败。
+        """
+        self.assertEqual(_infer_code_market("00631L.TW"), "tw")
+        self.assertEqual(_infer_code_market("00632R.TWO"), "tw")
+        self.assertEqual(_infer_code_market("2887A.TW"), "tw")
+
     def test_documented_gaps_stay_none(self):
-        """带字母的台股 ETF 两种写法都不覆盖，docstring 有写明原因。"""
+        """裸代码（不带后缀）带字母时仍不猜，docstring 有写明原因。"""
         self.assertIsNone(_infer_code_market("00631L"))
-        self.assertIsNone(_infer_code_market("00631L.TW"))
         self.assertIsNone(_infer_code_market(""))
 
     def test_market_order_covers_every_market_the_classifier_can_return(self):

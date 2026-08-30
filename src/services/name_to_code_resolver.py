@@ -577,10 +577,13 @@ def _infer_code_market(code: str) -> Optional[str]:
     6 位→A 股。**裸 6 位无法区分 A 股与韩股**（两者都可能 0 开头，如 005930 与
     000001），沿用上游的 "a"；要正确解析韩股请带 `.KS`/`.KQ`。
 
-    已知未覆盖：**带字母的台股 ETF 两种写法都回 None**——`00631L` 与 `00631L.TW` 皆是。
-    后缀分支挡不住它，因为 `get_suffix_market` 要求 base 全为数字；而那个 helper 同时
-    服务 yfinance 路由、`stock_index_loader`、`stock_code_utils` 三条活路径，为这个休眠
-    API 去放宽它不划算。真要修，改 `market_symbol_utils` 并连带验那三条路径。
+    **带字母的台股代码已覆盖**（`00631L.TW` → `tw`）：`get_suffix_market` 现在对 tw 先剥掉
+    一个尾字母再判位数，见 `market_symbol_utils.strip_optional_tw_letter`。此前这里记录过
+    「为休眠 API 放宽不划算」——上游 #2267 给 `DataFetcherManager.get_stock_data` 加了
+    `ParseStatus.UNSUPPORTED` 硬守门（在建 fetcher 清单之前就 raise），把这个休眠缺口变成
+    台股槓桿/反向/债券 ETF 与特别股的直接故障，权衡因此翻转。
+    **裸 `00631L`（不带后缀）仍回 None**：裸代码分支只按长度判市场，而 `00631L` 既不是纯数字、
+    也没有后缀可问，猜错方向比不猜更糟。
     """
     c = code.strip()
     suffix_market = get_suffix_market(c)

@@ -45,6 +45,41 @@ class TestHKPrefixStillRoutesToHK:
         assert quote is not None
         assert quote.code == "0700.HK"
         assert quote.market == "hk"
+        # fork 增量：本地策划索引命中 -> 零网络快路径，**不碰 `ticker.info`**
+        # （那是 ~1-3s 的 quoteSummary 调用，看板 yfinance 延迟的主因）。
+        # 代价是 currency / PE / PB 这些 provider 元数据为空——见 yfinance_fetcher.py
+        # 「ticker_info 仅在回退路径填充」那段注释。上游没有这条快路径，所以它原本
+        # 在这里断言 `currency == "HKD"`；那条断言移到下面它真正可达的路径上。
+        assert quote.name == "腾讯控股"
+        assert quote.currency is None
+
+    @patch("data_provider.yfinance_fetcher.get_index_stock_name", return_value="")
+    @patch("yfinance.Ticker")
+    def test_hk_realtime_falls_back_to_ticker_info_when_local_index_misses(
+        self, ticker_factory: MagicMock, _index_name: MagicMock
+    ) -> None:
+        """本地索引查无名时才回退 `ticker.info`，此时 provider 元数据要填上。
+
+        这是上游 #2289 原始断言（`currency == "HKD"`）真正可达的路径。少了这条，
+        「快路径」和「回退路径整个坏掉」在测试里长得一模一样。
+        """
+        ticker = ticker_factory.return_value
+        ticker.fast_info = SimpleNamespace(
+            lastPrice=401.2,
+            previousClose=398.0,
+            open=399.0,
+            dayHigh=403.0,
+            dayLow=397.0,
+            lastVolume=12_345,
+            marketCap=3_800_000_000_000,
+        )
+        ticker.info = {"shortName": "Tencent", "currency": "HKD"}
+
+        quote = YfinanceFetcher().get_realtime_quote("HK00700")
+
+        assert quote is not None
+        assert quote.market == "hk"
+        assert quote.name == "Tencent"
         assert quote.currency == "HKD"
 
 

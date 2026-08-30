@@ -37,6 +37,31 @@ _SUFFIX_TO_SPEC = {
 }
 
 
+def strip_optional_tw_letter(base: str) -> str:
+    """Drop one trailing letter from a Taiwan base code, else return it unchanged.
+
+    Taiwan codes carry an optional single trailing uppercase letter and the letter is
+    load-bearing, not noise: leveraged / inverse ETFs (``00631L`` 元大台灣50正2,
+    ``00632R`` 元大台灣50反1), bond ETFs (``00679B``) and preferred shares (``2887A``)
+    all use it. The other suffix-only markets here (jp / kr) are digits-only, so this
+    is applied to ``tw`` / ``.TW`` / ``.TWO`` only.
+
+    Callers strip the letter and then apply their own digit-length rule, so the length
+    knowledge stays in one place (``SuffixMarketSpec.digit_lengths`` / the caller's
+    ``digit_lens``) instead of being duplicated into a regex here.
+
+    Widening this was deliberated once before and deferred — see the "已知未覆蓋" note
+    this replaces in ``src/services/name_to_code_resolver.py``. Upstream #2267 then
+    added a hard ``ParseStatus.UNSUPPORTED`` gate in ``DataFetcherManager.get_stock_data``
+    that raises before any fetcher runs, which turned the dormant gap into a Taiwan ETF
+    outage, so the trade-off flipped.
+    """
+    text = (base or "").strip().upper()
+    if len(text) > 1 and text[-1].isalpha() and text[:-1].isdigit():
+        return text[:-1]
+    return text
+
+
 def split_suffix_symbol(stock_code: str) -> tuple[str, str] | None:
     """Return ``(base, suffix)`` for dotted symbols, upper-cased and stripped."""
 
@@ -59,6 +84,8 @@ def get_suffix_market(stock_code: str) -> Optional[str]:
     spec = _SUFFIX_TO_SPEC.get(suffix)
     if spec is None:
         return None
+    if spec.market == "tw":
+        base = strip_optional_tw_letter(base)
     if not (base.isdigit() and len(base) in spec.digit_lengths):
         return None
     return spec.market

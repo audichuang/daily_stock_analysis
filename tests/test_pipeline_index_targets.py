@@ -27,6 +27,7 @@ from unittest.mock import MagicMock, patch
 from src.analyzer import AnalysisResult
 from src.config import Config
 from src.core.pipeline import StockAnalysisPipeline, INDEX_SKIP_MODULES
+from src.services.analysis_context_builder import PipelineAnalysisArtifacts
 from src.enums import ReportType
 from src.notification import NotificationService
 from src.search_service import SearchResponse, SearchService
@@ -462,10 +463,31 @@ class PipelineDailySourceAttributionTestCase(unittest.TestCase):
         pipeline.config.agent_litellm_model = "test-model"
         pipeline.config.report_integrity_enabled = False
         pipeline._ensure_agent_history = MagicMock()
-        pipeline._load_agent_analysis_context = MagicMock(
-            return_value={"today": {"data_source": "AkshareFetcher"}}
+        daily_context = {"today": {"data_source": "AkshareFetcher"}}
+        pipeline._load_agent_analysis_context = MagicMock(return_value=daily_context)
+        # fork 增量：上游這裡回 `{}` 就夠，因為上游只把 artifacts 餵給
+        # `_build_analysis_context_pack_outputs`。本 fork 把它一路帶進共用的
+        # `_finalize_and_persist_result`（`artifacts.trend_result` / `artifacts.code` /
+        # `artifacts.metadata["query_id"]`），`{}` 會 AttributeError 被 except 吞掉、
+        # `_analyze_with_agent` 回 None，於是這條測試以「result is None」的形式紅。
+        # 給一個真的 artifacts，上游的斷言意圖原樣保留，而且順帶驗到 fork 的接線。
+        pipeline._build_agent_analysis_artifacts = MagicMock(
+            return_value=PipelineAnalysisArtifacts(
+                code="csi930955",
+                stock_name="红利低波100",
+                market="cn",
+                phase=None,
+                base_context=daily_context,
+                enhanced_context={},
+                realtime_quote=None,
+                trend_result=None,
+                chip_data=None,
+                fundamental_context=None,
+                news_context=None,
+                news_result_count=None,
+                metadata={"query_id": "q-daily-agent"},
+            )
         )
-        pipeline._build_agent_analysis_artifacts = MagicMock(return_value={})
         pipeline._agent_result_to_analysis_result = MagicMock(
             return_value=_analysis_result(
                 "csi930955", "红利低波100", "agent:openai"

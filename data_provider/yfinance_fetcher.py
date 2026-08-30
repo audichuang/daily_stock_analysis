@@ -110,18 +110,15 @@ class YfinanceFetcher(BaseFetcher):
 
     @staticmethod
     def _is_yahoo_suffix_stock(stock_code: str) -> bool:
-        """Return True for supported suffix-only Yahoo symbols."""
-        code = (stock_code or "").strip().upper()
-        if code.endswith(".T"):
-            base = code[:-2]
-            return base.isdigit() and len(base) in (4, 5)
-        if code.endswith((".KS", ".KQ")):
-            base = code.rsplit(".", 1)[0]
-            return base.isdigit() and len(base) == 6
-        if code.endswith((".TW", ".TWO")):
-            base = code.rsplit(".", 1)[0]
-            return base.isdigit() and 4 <= len(base) <= 6
-        return False
+        """Return True for supported suffix-only Yahoo symbols (jp / kr / tw).
+
+        唯一真源是 `src/services/market_symbol_utils.py` 的 `_SUFFIX_MARKET_SPECS`。
+        这里曾经手写过一份同义规则（`.T` 4~5 位、`.KS`/`.KQ` 6 位、`.TW`/`.TWO` 4~6 位），
+        两份就会漂移：共用 spec 放行台股的尾字母（`00631L.TW` 槓桿 ETF）之後，这个
+        手写版仍要求 base 全为数字，於是 `get_realtime_quote` 的门槛照样把它挡掉——
+        parse 那关已经放行、这关还没有，症状是「代码认得出来但拿不到实时行情」。
+        """
+        return is_suffix_market_symbol(stock_code)
 
     @staticmethod
     def _is_jp_kr_suffix_stock(stock_code: str) -> bool:

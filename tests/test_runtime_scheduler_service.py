@@ -101,8 +101,13 @@ def _blocking_thread_runner(config, args, stock_codes):
     return True
 
 
+# fork 增量：自然壽命 180s，遠超本檔 60s 的觀察窗（見 RuntimeSchedulerServiceTestCase
+# 頂部的註解），這樣「沒被殺」就不可能偽裝成「被殺了」。上游用的 10s / 30s 配上放寬後的
+# 觀察窗，會讓 worker 自己睡完就退出，於是刪掉 `_terminate_analysis_process_tree` 測試
+# 照樣綠——被殺的正常路徑仍在 ~3.5s 內結束，所以這不會讓測試變慢。
+# 仍 < setup.cfg 的 `--timeout=300`，且相關測試的 finally 會 killpg 收尾。
 def _blocking_spawn_runner(result_queue, stock_codes, schedule_args_overrides):
-    time.sleep(10)
+    time.sleep(180)
 
 
 def _successful_spawn_runner(result_queue, stock_codes, schedule_args_overrides):
@@ -125,16 +130,18 @@ def _exit_with_live_descendant_spawn_runner(result_queue, stock_codes, schedule_
 
 
 def _block_with_isolated_descendant_spawn_runner(result_queue, stock_codes, schedule_args_overrides):
+    # 180s 同上：worker 與 descendant 都必須活過觀察窗，否則兩者自然死亡會冒充
+    # `stop()` 的 process-tree 終止。
     os.setsid()
     child = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"],
+        [sys.executable, "-c", "import time; time.sleep(180)"],
         start_new_session=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     pid_file = Path(os.environ["DSA_TEST_DESCENDANT_PID_FILE"])
     pid_file.write_text(f"{os.getpid()} {child.pid}", encoding="utf-8")
-    time.sleep(30)
+    time.sleep(180)
 
 
 class RuntimeSchedulerServiceTestCase(unittest.TestCase):

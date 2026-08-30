@@ -201,7 +201,100 @@ provider，本 fork 的 `MarketDBFetcher`（台股日线 priority=1）与 `Shioa
 不影响任何路由；台股在矩阵里已由 yfinance 覆盖，所以不会显示成「不支持」，
 只是少列了两个真实来源。刻意不在本次合并扩大范围。
 
+## 合并后的对抗稽核（6 lens / 49 agents，读取式）
+
+合并 commit 落地后跑了一轮唯读稽核（逐冲突档复核、auto-merge 语意冲突猎杀、tw/zh-TW
+覆盖重扫、指数注册表、provider 路由、测试守门品质），每条 finding 由三个不同角度的
+skeptic 独立尝试反驳，2/3 存活才收下。结果：1 blocker + 2 major + 3 minor + 3 完整性缺口。
+
+### BLOCKER：台股带字母尾的代码被合并挡死（已修）
+
+上游 #2267 给 `DataFetcherManager.get_stock_data` 加了一道硬守门——
+`parse_analysis_target` 判 `ParseStatus.UNSUPPORTED` 就直接 `raise DataFetchError`，
+**在 fetcher 清单建起来之前**。fork main 上完全没有这道守门
+（`git show 11116673:data_provider/base.py` 里没有任何 `ParseStatus.UNSUPPORTED`）。
+
+台股带尾字母的代码因此全数失效：槓桿 `00631L.TW`（元大台灣50正2）、反向 `00632R.TW`、
+债券 ETF `00679B.TW`、特别股 `2887A.TW`、上柜 `00675L.TWO`。
+
+根因是三处各自要求 base 全为数字，而其中两处是**同一条规则的两份实作**：
+
+| 位置 | 作用 |
+| --- | --- |
+| `market_symbol_utils.get_suffix_market` | 后缀市场判定（yfinance 路由、index loader、resolver 共用） |
+| `stock_code_utils._valid_exchange_code` | 显式交易所后缀校验（parser 的 UNSUPPORTED 判定） |
+| `yfinance_fetcher._is_yahoo_suffix_stock` | **手写的第三份**，`get_realtime_quote` 的门槛 |
+
+修法：在 `market_symbol_utils` 加共用的 `strip_optional_tw_letter()`（只放行「4~6 位数字
++ 至多一个 ASCII 大写字母」，且**只限 tw**，jp/kr spec 不动），前两处调用它；第三处
+**删掉手写实作**改为委派 `is_suffix_market_symbol` —— 两份同义规则注定漂移，这次就漂了：
+只修前两处的话，代码能被 parse 却拿不到实时行情，症状比原本的硬 raise 更难查。
+
+本 fork 的 `name_to_code_resolver.py` docstring 早就记录过这个缺口并判定
+「为休眠 API 放宽不划算」，同时写明「真要修，改 `market_symbol_utils` 并连带验那三条路径」。
+合并把它从休眠变致命，权衡因此翻转；该段 docstring 与对应的 decision-tripwire 测试
+（`test_documented_gaps_stay_none`）已一并收敛成新决定，理由写在原处。
+
+守门：`tests/test_us_market_path.py::TestTaiwanLetterSuffixedCodesSurviveTheUnsupportedGate`
+（parse / suffix / yfinance / 正规化四条路径各一条，外加「不是放行任意 base」的反向断言）。
+Mutation 验过四次，其中两次是分别拿掉两个半边——各自只让对应的测试红，证明三处是
+独立守住的，不是靠同一条断言兜底。
+
+### MAJOR ×2：把观察窗放宽到 60s 时，defang 了两个 `stop()` 测试（已修）
+
+`_blocking_spawn_runner` 自己 `sleep(10)`、`_block_with_isolated_descendant_spawn_runner`
+自己与其 descendant 各 `sleep(30)` —— 全部在 60s 观察窗内自然结束，所以就算删掉
+`stop()` 里的 `_terminate_analysis_process_tree(process)`，测试照样绿。
+
+修法不是缩窗口（那会把负载假红请回来），而是把**自然寿命**拉到 180s：远超观察窗，
+仍 < `setup.cfg` 的 `--timeout=300`，且相关测试的 `finally` 会 `killpg` 收尾。
+正常路径（被杀）仍在 ~3.5s 内结束，测试没有变慢。
+Mutation 验过：删掉终止调用，两条测试撑满 60s 后如期变红。
+
+### MINOR（已修）
+
+- `tests/test_us_market_path.py` 新增的 pin_first 守门，其正向断言退化：fixture 的兜底段
+  本来就照 priority 排序，期望值等于输入值，一个「`pin_first=True` 就原样回传」的空实作
+  也会过。Finnhub 改给 priority 7，期望值与输入顺序不同，空实作即红。
+- 本文档的回滚指令原本写 `git reset --hard b4770225`，把上游 merge-base 误标成
+  「合并前的 fork main」。两者相距 **128 个 fork commit**，照着跑会静默洗掉整条台股增量。
+  已更正为第一父 `11116673` 并注明为什么不能用 merge-base。
+- `docs/share-images.md` 称报告语言只支持 `zh|en|ko`；`.env.example` 称指数注册表只有 5 档。
+  两处都已对齐实际（zh-TW、31 档）。
+
+### 上游测试与 fork 增量的两处结构性冲突（已修，非产线缺陷）
+
+全量离线测试暴露的两条红，都是上游新测试的假设撞上 fork 的既有增量：
+
+- `test_pipeline_index_targets::test_v10_agent_branch_persists_and_renders_daily_source`
+  把 `_build_agent_analysis_artifacts` mock 成回 `{}`。上游只把 artifacts 餵给
+  `_build_analysis_context_pack_outputs`，`{}` 无害；本 fork 还把它带进共用的
+  `_finalize_and_persist_result`（要 `.trend_result` / `.code` / `.metadata["query_id"]`），
+  于是 `AttributeError` 被 `except` 吞掉、`_analyze_with_agent` 回 None，红的形式是
+  「result is None」——看起来像行为错误。产线路径已核对无误。改成回一个真的
+  `PipelineAnalysisArtifacts`，上游断言意图原样保留，且顺带验到 fork 的接线。
+- `test_yfinance_hk_bare_code::test_hk_code_executes_realtime_route` 断言
+  `currency == "HKD"`，但本 fork 在本地策划索引命中股名时**刻意不碰 `ticker.info`**
+  （~1-3s 的 quoteSummary 调用，看板 yfinance 延迟的主因），代价就是 currency / PE / PB
+  为空 —— 这个取舍在 `yfinance_fetcher.py` 里本来就写着。fork main 的门槛根本不收港股
+  （直接回 None），所以合并采用上游超集是对的，分歧只在这一格。把上游那条断言**移到
+  它真正可达的路径**（patch 掉本地索引、走回退路径），原测试改为断言快路径的实际行为。
+  少了新增那条，「快路径生效」与「回退路径整个坏掉」在测试里长得一模一样。
+
+### 记录但未修
+
+- **zh-TW 分享图会以简体字形渲染。** `_poster_language` 把 zh-TW 折叠成 `zh`、
+  `_poster_html_language("zh")` 回 `zh-CN`，这两步是既有的；但 #2270 **新**把
+  `Noto Sans CJK SC` 绑到 `html[lang="zh-CN"]` 上，并在 Dockerfile 里让该字体确实可选中。
+  所以这是「既有缺口被本次合并具体化」，不是纯 pre-existing。真要修需要三件事：
+  `zh-TW` 的 html lang、对应的 `Noto Sans CJK TC` 规则、`_POSTER_TEXT` 的 zh-TW 文案块。
+  刻意不在合并里顺手改。
+
 ## 回滚
 
-`git reset --hard b4770225`（合并前的 fork main）即可完全回退；
+`git reset --hard 11116673`（合并前的 fork main，即本次 merge commit 的第一父）即可完全回退。
+**不要用 `b4770225`**——那是本次合并的 merge-base（一个上游 commit），与合并前的 fork main
+之间隔着 **128 个 fork commit**，照着跑会静默洗掉整条台股增量（TWSE+TPEx 单边合计修复、
+scheduler signal deadlock 修复、TWSE 端点停更时的本地涨跌家数、移除上游作者的小红书品牌等），
+而且命令本身跑得干干净净、只有事后才看得出来。
 本次所有改动都在 `merge/upstream-v3.31` 分支上，未 push、未 FF `main`。
