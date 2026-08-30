@@ -155,7 +155,9 @@ def _valid_exchange_code(exchange: str, base: str, digit_lens: tuple[int, ...]) 
         # 台股代码可以带一个尾字母（槓桿/反向 ETF、債券 ETF、特別股），见
         # `strip_optional_tw_letter`。剥掉之後仍按各自的位数规则判定。
         base = strip_optional_tw_letter(base)
-    if not (base.isdigit() and len(base) in digit_lens):
+    # 同 `market_symbol_utils.get_suffix_market`：`isdigit()` 是 Unicode-aware，
+    # 必须配 `isascii()`，否则全形数字会被当成合法代码。
+    if not (base.isascii() and base.isdigit() and len(base) in digit_lens):
         return False
     if exchange in {"SH", "SS"}:
         return _infer_cn_exchange(base) == "SH"

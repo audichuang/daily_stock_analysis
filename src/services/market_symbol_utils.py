@@ -57,7 +57,13 @@ def strip_optional_tw_letter(base: str) -> str:
     outage, so the trade-off flipped.
     """
     text = (base or "").strip().upper()
-    if len(text) > 1 and text[-1].isalpha() and text[:-1].isdigit():
+    # **必须逐字比对 ASCII 范围，不能用 `isalpha()`／`isdigit()`。** 两者都是
+    # Unicode-aware：`'甲'.isalpha()` 与 `'Ｌ'.isalpha()` 都为 True，`'１'.isdigit()`
+    # 亦然，於是 `2330甲.TW` / `00631Ｌ.TW` 会被判成合法台股代码，一路穿过
+    # `parse_analysis_target` 与 unsupported 守门，带着无效字元送进 yfinance；
+    # 抓取失败时 pipeline 刻意 fail-open 继续跑，结果是一份静默缺资料的报告，
+    # 而不是一个明确的拒收。
+    if len(text) > 1 and "A" <= text[-1] <= "Z" and text[:-1].isascii() and text[:-1].isdigit():
         return text[:-1]
     return text
 
@@ -86,7 +92,10 @@ def get_suffix_market(stock_code: str) -> Optional[str]:
         return None
     if spec.market == "tw":
         base = strip_optional_tw_letter(base)
-    if not (base.isdigit() and len(base) in spec.digit_lengths):
+    # `.isascii()` 是必要的：`str.isdigit()` 是 Unicode-aware，`'００６３１'.isdigit()`
+    # 与 `'٠٠٦٣١'.isdigit()` 都为 True，於是全形／阿拉伯数字会被当成合法代码送进
+    # yfinance。这一层对 jp/kr 同样收紧，方向一致（`７２０３.T` 也不该是合法日股代码）。
+    if not (base.isascii() and base.isdigit() and len(base) in spec.digit_lengths):
         return None
     return spec.market
 

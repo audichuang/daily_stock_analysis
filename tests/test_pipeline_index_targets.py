@@ -431,6 +431,10 @@ class PipelineDailySourceAttributionTestCase(unittest.TestCase):
         pipeline.analyzer.analyze.return_value = _analysis_result(
             "sh000016", "上证50", "analysis:litellm"
         )
+        persisted_data_sources: list = []
+        pipeline.db.save_analysis_history.side_effect = (
+            lambda **kwargs: persisted_data_sources.append(kwargs["result"].data_sources) or 1
+        )
 
         result = pipeline.analyze_stock(
             "sh000016",
@@ -446,7 +450,12 @@ class PipelineDailySourceAttributionTestCase(unittest.TestCase):
         )
         history_result = pipeline.db.save_analysis_history.call_args.kwargs["result"]
         self.assertIs(history_result, result)
-        self.assertEqual(history_result.data_sources, result.data_sources)
+        # **在写入当下抓快照，不能在事後比对。** `call_args` 存的是同一个可变物件的
+        # 参照，所以 `history_result.data_sources == result.data_sources` 恒真——把
+        # `_append_daily_data_source()` 挪到 `save_analysis_history()` **之後**，这条
+        # 断言照样绿。而真实 storage 是同步序列化 `data_sources` 的（storage.py 的
+        # `save_analysis_history`），届时 DB 会少掉 `daily:*`，回传的报告却有它。
+        self.assertEqual(persisted_data_sources, ["analysis:litellm,daily:TencentFetcher"])
         # V8 — persisted history uses canonical code plus registry Chinese name.
         self.assertEqual(history_result.code, "sh000016")
         self.assertEqual(history_result.name, "上证50")
@@ -495,6 +504,11 @@ class PipelineDailySourceAttributionTestCase(unittest.TestCase):
         )
         pipeline._persist_skill_opinion_samples_after_history_save = MagicMock()
 
+        persisted_data_sources: list = []
+        pipeline.db.save_analysis_history.side_effect = (
+            lambda **kwargs: persisted_data_sources.append(kwargs["result"].data_sources) or 1
+        )
+
         agent_result = MagicMock()
         agent_result.model = "test-model"
         agent_result.runtime_facts = None
@@ -520,7 +534,12 @@ class PipelineDailySourceAttributionTestCase(unittest.TestCase):
         )
         history_result = pipeline.db.save_analysis_history.call_args.kwargs["result"]
         self.assertIs(history_result, result)
-        self.assertEqual(history_result.data_sources, result.data_sources)
+        # **在写入当下抓快照，不能在事後比对。** `call_args` 存的是同一个可变物件的
+        # 参照，所以 `history_result.data_sources == result.data_sources` 恒真——把
+        # `_append_daily_data_source()` 挪到 `save_analysis_history()` **之後**，这条
+        # 断言照样绿。而真实 storage 是同步序列化 `data_sources` 的（storage.py 的
+        # `save_analysis_history`），届时 DB 会少掉 `daily:*`，回传的报告却有它。
+        self.assertEqual(persisted_data_sources, ["agent:openai,daily:AkshareFetcher"])
         # V8 — persisted history uses canonical code plus registry Chinese name.
         self.assertEqual(history_result.code, "csi930955")
         self.assertEqual(history_result.name, "红利低波100")

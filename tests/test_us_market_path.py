@@ -982,3 +982,24 @@ class TestTaiwanLetterSuffixedCodesSurviveTheUnsupportedGate:
 
         for bad in ("ABCDE.TW", "00631LL.TW", "631L.TWO", "1234567L.TW", "L0063.TW"):
             assert get_suffix_market(bad) is None, bad
+
+    def test_unicode_letters_and_digits_do_not_sneak_through(self):
+        """**只认 ASCII。** `str.isalpha()` 与 `str.isdigit()` 都是 Unicode-aware：
+        `'甲'.isalpha()`、`'Ｌ'.isalpha()`、`'００６３１'.isdigit()`、`'٠٠٦٣١'.isdigit()`
+        全为 True。用它们判代码，`2330甲.TW` 会被判成合法台股一路穿过 unsupported
+        守门、带着无效字元送进 yfinance；抓取失败时 pipeline 刻意 fail-open 继续，
+        於是产出一份静默缺资料的报告，而不是一个明确的拒收。
+        """
+        from src.services.market_symbol_utils import get_suffix_market
+        from src.services.stock_list_parser import parse_analysis_target
+
+        for bad in (
+            "00631Ｌ.TW",    # 全形字母
+            "2330甲.TW",     # 漢字
+            "2330α.TW",      # 希臘字母
+            "００６３１.TW",    # 全形數字
+            "٠٠٦٣١.TW",      # 阿拉伯數字
+            "７２０３.T",       # jp 同樣收緊
+        ):
+            assert get_suffix_market(bad) is None, bad
+            assert parse_analysis_target(bad).asset_type == "unsupported", bad

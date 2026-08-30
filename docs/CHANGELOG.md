@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [测试] `stop()` 的 process-tree 终止恢复守门：blocking worker 与其 descendant 的自然寿命拉到远超观察窗，否则它们自己睡完就退出，删掉终止调用测试照样绿。
 - [修复] 桌面端更新入口不再使用原生 `title` 属性（键盘与读屏都拿不到，且违反 Web UI governance 守门）：稳定的可及名称保留在 `aria-label`，版本与下载百分比等动态细节改由 `aria-describedby` 指向的 sr-only 文字承载。
 - [测试] TickFlow 本地化断言改绑 `getFieldDescriptionZh` 真源，不再重抄描述字面——上游改过该文案却未同步断言，导致该测试在上游即为红。
+- [修复] 台股代码校验改为逐字 ASCII 比对：`str.isalpha()` / `str.isdigit()` 都是 Unicode-aware，此前 `2330甲.TW`、`00631Ｌ.TW`、`００６３１.TW` 会被判成合法代码并带着无效字元送进 yfinance，抓取失败时 pipeline fail-open 产出静默缺资料的报告。jp/kr 同步收紧。
+- [测试] 指数日线来源的持久化顺序改由 `save_analysis_history` 的 side_effect 当场抓快照：原断言比对的是同一个可变物件的两个参照，恒真，把 `_append_daily_data_source` 挪到写入之後也不会红。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 - [新功能] 完善 Futu OpenD 港股数据源接入：系统设置支持 OpenD 地址、端口和港股实时数据源优先级，保留 Longbridge、AkShare、YFinance fallback。

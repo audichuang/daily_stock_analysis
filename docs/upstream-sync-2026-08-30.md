@@ -196,10 +196,16 @@ AlphaVantage 在 yfinance 之前——正是 fork 刻意排掉的形状（AlphaV
 ## 已知缺口（未修）
 
 `src/services/data_capability_service.py`（上游 #2289）的能力矩阵只登记上游认得的
-provider，本 fork 的 `MarketDBFetcher`（台股日线 priority=1）与 `ShioajiFetcher`
-（台股实时）不在其中。该服务只被 `api/v1/endpoints/data.py` 消费，是**报表而非闸门**，
-不影响任何路由；台股在矩阵里已由 yfinance 覆盖，所以不会显示成「不支持」，
-只是少列了两个真实来源。刻意不在本次合并扩大范围。
+provider。本 fork 的 `MarketDBFetcher`（台股日线 priority=1）、`ShioajiFetcher`
+（台股实时）、`TwseFetcher` 与 TWSE 估值适配器都不在其中。该服务只被
+`api/v1/endpoints/data.py` 消费，是**报表而非闸门**，不影响任何路由。
+
+**但它错报的程度比第一版记录得严重**（Codex 终审更正）：未登记的 fetcher 会通过
+每一层市场过滤，最後以 `unknown` 停止评估，所以在 Postgres 与 Shioaji 都健康的情况下，
+`GET /api/v1/data/overview` 会把台股日线覆盖报成 unknown／降级；而 TW 实时在矩阵里
+**硬写成 yfinance**，与执行期优先 Shioaji 的事实相反。这是诊断资讯错误，不是路由故障，
+仍刻意不在本次合并扩大范围——要修需要补上 fork 的 provider 定义与 TW 专属的
+优先级／状态解析器。
 
 ## 合并后的对抗稽核（6 lens / 49 agents，读取式）
 
@@ -209,7 +215,7 @@ skeptic 独立尝试反驳，2/3 存活才收下。结果：1 blocker + 2 major 
 
 ### BLOCKER：台股带字母尾的代码被合并挡死（已修）
 
-上游 #2267 给 `DataFetcherManager.get_stock_data` 加了一道硬守门——
+上游 #2267 给 `DataFetcherManager.get_daily_data` 加了一道硬守门——
 `parse_analysis_target` 判 `ParseStatus.UNSUPPORTED` 就直接 `raise DataFetchError`，
 **在 fetcher 清单建起来之前**。fork main 上完全没有这道守门
 （`git show 11116673:data_provider/base.py` 里没有任何 `ParseStatus.UNSUPPORTED`）。
@@ -239,6 +245,16 @@ skeptic 独立尝试反驳，2/3 存活才收下。结果：1 blocker + 2 major 
 （parse / suffix / yfinance / 正规化四条路径各一条，外加「不是放行任意 base」的反向断言）。
 Mutation 验过四次，其中两次是分别拿掉两个半边——各自只让对应的测试红，证明三处是
 独立守住的，不是靠同一条断言兜底。
+
+**第一版这个放行是 Unicode 漏的**（Codex 终审抓到）：写的是 `text[-1].isalpha()`
+与 `base.isdigit()`，而两者都是 Unicode-aware——`'甲'.isalpha()`、`'Ｌ'.isalpha()`、
+`'００６３１'.isdigit()`、`'٠٠٦٣١'.isdigit()` 全为 True。於是 `2330甲.TW` / `00631Ｌ.TW` /
+`００６３１.TW` 都被判成合法台股代码，穿过 unsupported 守门、带着无效字元送进 yfinance；
+抓取失败时 pipeline 刻意 fail-open 继续跑，产出的是一份**静默缺资料的报告**而不是一个
+明确的拒收。**文档宣称 ASCII、实作却不是**，正是本文档一路在抓的那种形状。
+已改成逐字比对 `"A" <= c <= "Z"` 并在两处数字判定补 `.isascii()`（对 jp/kr 同样收紧，
+`７２０３.T` 也不该合法），守门测试补上全形字母／汉字／希腊字母／全形数字／阿拉伯数字
+五种负面案例，mutation 验过。
 
 ### MAJOR ×2：把观察窗放宽到 60s 时，defang 了两个 `stop()` 测试（已修）
 
