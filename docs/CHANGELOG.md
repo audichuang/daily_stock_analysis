@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [测试] TickFlow 本地化断言改绑 `getFieldDescriptionZh` 真源，不再重抄描述字面——上游改过该文案却未同步断言，导致该测试在上游即为红。
 - [修复] 台股代码校验改为逐字 ASCII 比对：`str.isalpha()` / `str.isdigit()` 都是 Unicode-aware，此前 `2330甲.TW`、`00631Ｌ.TW`、`００６３１.TW` 会被判成合法代码并带着无效字元送进 yfinance，抓取失败时 pipeline fail-open 产出静默缺资料的报告。jp/kr 同步收紧。
 - [测试] 指数日线来源的持久化顺序改由 `save_analysis_history` 的 side_effect 当场抓快照：原断言比对的是同一个可变物件的两个参照，恒真，把 `_append_daily_data_source` 挪到写入之後也不会红。
+- [文档] `docs/tw-swing-pipeline.md` 追加 2026-08-30 回验状态反思：第 2 层决策日志 0 笔到期、无法评估，并记录日志停摆、产出率算术（近期不会有可评估样本）、失效条件快照陷阱的实际重演，以及 Q2 财报补齐後唯一实仓的失效条件逐条判定。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 - [新功能] 完善 Futu OpenD 港股数据源接入：系统设置支持 OpenD 地址、端口和港股实时数据源优先级，保留 Longbridge、AkShare、YFinance fallback。
