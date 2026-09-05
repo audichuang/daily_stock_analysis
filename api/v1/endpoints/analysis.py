@@ -260,6 +260,20 @@ def _resolve_analysis_input(raw_value: str):
             return (target.canonical_id, target)
         return (resolve_index_stock_code_for_analysis(text), None)
 
+    # Registered index aliases the two branches above miss: the dotted forms
+    # ``000016.SH`` / ``SH.000016`` classify as ``is_code_like=False`` (the bare
+    # digits do not match the exchange's *stock* digit rules), so without this
+    # they fall past the gate below, past the 4-digit branch, and die in
+    # ``_is_obviously_invalid_analysis_input`` as a 400 — even though
+    # ``parse_analysis_target`` resolves them to ``sh000016`` perfectly well.
+    # Only an INDEX result short-circuits here: stock tokens and non-code names
+    # (``600519`` parses as stock, ``贵州茅台`` as stock) fall through to the
+    # existing paths untouched, so the legacy stock contract stays authoritative.
+    # This mirrors step 3 of ``AnalyzeCommand._resolve_analysis_target``.
+    index_target = parse_analysis_target(text)
+    if index_target.asset_type == ParseStatus.INDEX:
+        return (index_target.canonical_id, index_target)
+
     if is_code_like(text):
         target = parse_analysis_target(text)
         if target.asset_type == ParseStatus.INDEX:

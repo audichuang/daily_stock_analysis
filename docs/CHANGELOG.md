@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] REST 分析入口接受注册指数的带点 alias：`000016.SH` / `SH.000016` 原本 `is_code_like` 判 False（裸数字不符合交易所的**股票**位数规则），掉过闸门後死在无效输入检查变成 400，即使 `parse_analysis_target` 解得出 `sh000016`；改为在 `is_code_like` 之前问一次 parser，**只有 INDEX 才短路**，个股与股票名的既有路径不变
+- [修复] 自选股的等价键改为 asset-aware：`000016.SH`（上证50）与同码个股 `000016` 原本都被 `normalize_stock_code` 塌成 `000016`，加了指数後再加同码个股会被静默丢弃、删其中一个会删掉另一个；同时修正 add/remove 用正规化後的值算键（`.SH` 在算键前就被剥掉），改用原始输入，与既有条目的算法对称
+- [修复] 台股带尾字母的代码（槓桿 `00631L.TW` / 反向 `00632R.TW` / 债券 ETF `00679B.TWO` / 特别股 `2887A.TW`）现在可加入自选、可取得个股档案、可在对话中被识别：后端 `_STOCK_CODE_RE`、前端 `validation.ts` 与 `chatStockCode.ts` 三处一起放宽为「4~6 位数字 + 至多一个字母」，`normalize_stock_code` 的台股分支委派共用的 `is_suffix_market_symbol`，避免 `00631l.tw` 与 `00631L.TW` 两种写法并存
+- [修复] 选股历史的时间显示改用当前介面语系（原本写死 `zh-CN` 且写在函式体内，呼叫端覆写不了；本页另两个日期 helper 早就走 `getIntlLocale(language)`）
+- [chore] 移除零呼叫者的 `getPopularStocks` 与其测试（loader 不再全域过滤 index row 之後，它的 stock-only 契约只写在注解里、实作没有兑现）
 - [修复] 股票代码校验闸门（`api/v1/endpoints/stocks.py` 的 `_STOCK_CODE_RE`）改为只认 ASCII 数字与字母：Python 的 `\d` 预设 Unicode-aware，而它对齐的前端 `validateStockCode` 用的 JS `\d` 只认 ASCII，全角与阿拉伯-印度数字（`６００５１９`、`００７００.HK`、`٠٠٦٣١.TW`）因此穿过每一条数字分支并被正规化后送进下游 fetcher，抓取失败时 pipeline fail-open 产出静默缺资料的报告而非明确 400
 - [修复] 补齐 `apps/dsa-web/src/i18n/uiText.ts` 的 zh-TW 文案键 `watchlist.batchSubmittedWithRejected` 与 `watchlist.batchPartiallySubmittedWithRejected`（上游新增时只加了 zh/en，`Record<UiTextKey, string>` 使前端构建 tsc 失败）
 - [文档] 新增 `docs/upstream-sync-2026-09-05.md`（上游 v3.31.0 → 2026-09-04 共 10 个 commit 的合并记录、冲突裁决与验证）

@@ -139,8 +139,13 @@ def normalize_stock_code(stock_code: str) -> str:
             return f"{base}.{suffix.upper()}"
         if suffix.upper() in ('KS', 'KQ') and base.isdigit() and len(base) == 6:
             return f"{base}.{suffix.upper()}"
-        if suffix.upper() in ('TW', 'TWO') and base.isdigit() and 4 <= len(base) <= 6:
-            return f"{base}.{suffix.upper()}"
+        # 台股委派共用规则（`is_suffix_market_symbol` 内部走 `strip_optional_tw_letter`）：
+        # 带尾字母的代码（槓桿 00631L / 反向 00632R / 债券 ETF 00679B / 特别股 2887A）
+        # `base.isdigit()` 判不出来，会掉到函式底部原样返回，於是同一档在自选股里
+        # 可能同时以 `00631l.tw` 与 `00631L.TW` 两种写法存在。共用 helper 同时挡掉
+        # `isdigit()` 的 Unicode 漏洞（全形数字）。
+        if suffix.upper() in ('TW', 'TWO') and is_suffix_market_symbol(code, 'tw'):
+            return f"{base.upper()}.{suffix.upper()}"
         if suffix.upper() == 'HK' and base.isdigit() and 1 <= len(base) <= 5:
             return f"HK{base.zfill(5)}"
         if base.upper() in ('SH', 'SS', 'SZ', 'BJ') and suffix.isdigit():

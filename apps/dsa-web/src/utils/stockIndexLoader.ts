@@ -134,23 +134,6 @@ export function findStockInIndex(
 }
 
 /**
- * Get popular stocks list
- *
- * @param index - Stock index
- * @param limit - Number of results to return
- * @returns Popular stocks list
- */
-export function getPopularStocks(
-  index: StockIndexItem[],
-  limit: number = 20
-): StockIndexItem[] {
-  return [...index]
-    .filter(item => item.active)
-    .sort((a, b) => (b.popularity || 0) - (a.popularity || 0))
-    .slice(0, limit);
-}
-
-/**
  * Group stocks by market
  *
  * @param index - Stock index

@@ -15,7 +15,7 @@ const STOCK_CODE_PATTERNS = [
   /^\d{1,5}\.HK$/, // HK suffix format, for example 00700.HK
   /^\d{4,5}\.T$/, // Japan Yahoo suffix format, for example 7203.T
   /^\d{6}\.(KS|KQ)$/, // Korea Yahoo suffix format, for example 005930.KS or 035720.KQ
-  /^\d{4,6}\.(TW|TWO)$/, // Taiwan Yahoo suffix format, for example 2330.TW, 00878.TW or 006208.TW
+  /^\d{4,6}[A-Z]?\.(TW|TWO)$/, // Taiwan Yahoo suffix format, for example 2330.TW, 00878.TW, 006208.TW or 00631L.TW
   /^[A-Z]{1,5}(?:\.(?:US|[A-Z]))?$/, // Common US ticker format
   /^CSI\d{6}$/, // Registered CSI index canonical (e.g. csi930955)
   /^\d{6}\.CSI$/, // Registered CSI index display form (e.g. 930955.CSI)
