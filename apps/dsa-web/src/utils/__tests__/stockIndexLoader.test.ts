@@ -8,7 +8,6 @@ import {
   loadStockIndex,
   compressIndex,
   findStockInIndex,
-  getPopularStocks,
   groupStocksByMarket,
 } from '../stockIndexLoader';
 import type { StockIndexItem } from '../../types/stockIndex';
@@ -371,94 +370,6 @@ describe('stockIndexLoader', () => {
     });
   });
 
-  describe('getPopularStocks - Get popular stocks', () => {
-    test('sorts by popularity descending', () => {
-      const result = getPopularStocks(mockIndexData, 3);
-
-      expect(result).toHaveLength(3);
-      expect(result[0].canonicalCode).toBe('600519.SH'); // popularity: 100
-      expect(result[1].canonicalCode).toBe('AAPL.US');   // popularity: 98
-      expect(result[2].canonicalCode).toBe('00700.HK'); // popularity: 95
-    });
-
-    test('filters out inactive stocks', () => {
-      const result = getPopularStocks(mockIndexData, 10);
-
-      // 600000.SH is inactive, should not appear
-      const hasInactive = result.some(item => !item.active);
-      expect(hasInactive).toBe(false);
-    });
-
-    test('limits return count', () => {
-      const result = getPopularStocks(mockIndexData, 2);
-      expect(result.length).toBeLessThanOrEqual(2);
-    });
-
-    test('defaults to limit of 20', () => {
-      const result = getPopularStocks(mockIndexData);
-      expect(result.length).toBeLessThanOrEqual(20);
-    });
-
-    test('handles empty index', () => {
-      const result = getPopularStocks([]);
-      expect(result).toEqual([]);
-    });
-
-    test('handles all inactive stocks', () => {
-      const inactiveOnly: StockIndexItem[] = [
-        {
-          canonicalCode: 'TEST.US',
-          displayCode: 'TEST',
-          nameZh: '测试',
-          pinyinFull: 'test',
-          pinyinAbbr: 'test',
-          aliases: [],
-          market: 'US',
-          assetType: 'stock',
-          active: false,
-          popularity: 100,
-        },
-      ];
-
-      const result = getPopularStocks(inactiveOnly);
-      expect(result).toEqual([]);
-    });
-
-    test('maintains stable sorting for same popularity', () => {
-      const samePopularity: StockIndexItem[] = [
-        {
-          canonicalCode: 'A.US',
-          displayCode: 'A',
-          nameZh: 'A',
-          pinyinFull: 'a',
-          pinyinAbbr: 'a',
-          aliases: [],
-          market: 'US',
-          assetType: 'stock',
-          active: true,
-          popularity: 100,
-        },
-        {
-          canonicalCode: 'B.US',
-          displayCode: 'B',
-          nameZh: 'B',
-          pinyinFull: 'b',
-          pinyinAbbr: 'b',
-          aliases: [],
-          market: 'US',
-          assetType: 'stock',
-          active: true,
-          popularity: 100,
-        },
-      ];
-
-      const result = getPopularStocks(samePopularity, 2);
-      expect(result).toHaveLength(2);
-      expect(result[0].popularity).toBe(100);
-      expect(result[1].popularity).toBe(100);
-    });
-  });
-
   describe('groupStocksByMarket - Group stocks by market', () => {
     test('groups different markets correctly', () => {
       const result = groupStocksByMarket(mockIndexData);
@@ -543,7 +454,6 @@ describe('stockIndexLoader', () => {
 
       expect(() => compressIndex(largeIndex)).not.toThrow();
       expect(() => findStockInIndex('TEST5000.US', largeIndex)).not.toThrow();
-      expect(() => getPopularStocks(largeIndex, 10)).not.toThrow();
     });
 
     test('handles special characters', () => {

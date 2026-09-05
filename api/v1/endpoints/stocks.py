@@ -45,6 +45,7 @@ from src.services.import_parser import (
 )
 from src.services.stock_service import StockService
 from src.services.stock_profile_service import InvalidStockProfileCode, StockProfileService
+from src.services.stock_list_parser import ParseStatus, parse_analysis_target
 from src.services.run_diagnostics import sanitize_diagnostic_text
 from src.services.stock_list_parser import split_stock_list
 from src.services.system_config_service import SystemConfigService
@@ -94,7 +95,10 @@ _STOCK_CODE_RE = re.compile(
     r"|\d{5}"                                 # bare 5-digit HK code
     r"|\d{4,5}\.T"                            # Japan Yahoo suffix format
     r"|\d{6}\.(?:KS|KQ)"                     # Korea Yahoo suffix format
-    r"|\d{4,6}\.(?:TW|TWO)"                  # Taiwan Yahoo suffix format
+    # 4~6 digits plus at most one letter: 槓桿 00631L / 反向 00632R / 債券 ETF
+    # 00679B / 特別股 2887A。與 market_symbol_utils.strip_optional_tw_letter
+    # 同語意；normalize_stock_code 會把小寫尾字母正規化成大寫。
+    r"|\d{4,6}[A-Z]?\.(?:TW|TWO)"           # Taiwan Yahoo suffix format
     r"|[A-Z]{1,5}(?:\.(?:US|[A-Z]))?"         # US ticker
     r")$",
     # re.ASCII is load-bearing: Python's ``\d`` is Unicode-aware by default, so
@@ -128,8 +132,22 @@ def _validate_and_normalize_stock_code(code: str) -> str:
 
 
 def _watchlist_match_key(code: str) -> str:
-    """Return the equivalence key used for watchlist add/remove matching."""
-    normalized = normalize_stock_code(code.strip())
+    """Return the equivalence key used for watchlist add/remove matching.
+
+    注册指数用它自己的 canonical 当 key。`000016.SH`（上证50）与同码个股 `000016`
+    是两个不同的标的，但 `normalize_stock_code` 会把 `.SH` 后缀剥掉、两者都变成
+    `000016`：於是自选里已有指数时再加同码个股会被当成重复而**静默丢弃**（API 仍回
+    「已加入」），删其中一个则会删掉另一个。上游 #2312 已经让 Web 按 asset type
+    分别渲染两列，後端这道等价键不跟上就是前後端各说各话。
+
+    只有 INDEX 走 canonical：个股与解析不出来的输入保持原本的键，所以既有
+    STOCK_LIST 里的股票条目不会被重新编码。
+    """
+    stripped = code.strip()
+    target = parse_analysis_target(stripped)
+    if target.asset_type == ParseStatus.INDEX:
+        return target.canonical_id
+    normalized = normalize_stock_code(stripped)
     if re.fullmatch(r"\d{5}", normalized):
         return f"HK{normalized}"
     return normalized.upper()
@@ -370,10 +388,14 @@ def add_to_watchlist(
     service: SystemConfigService = Depends(get_system_config_service),
 ) -> WatchlistResponse:
     try:
-        validated = _validate_and_normalize_stock_code(request.stock_code)
+        # 只用来验证格式；等价键一律走**原始输入**（见下）。
+        _validate_and_normalize_stock_code(request.stock_code)
         codes = _read_watchlist_codes(service)
         existing_keys = [_watchlist_match_key(c) for c in codes]
-        if _watchlist_match_key(validated) not in existing_keys:
+        # 既有条目的键是拿**存进去的原始字串**算的，请求端就不能拿正规化後的值算：
+        # `_validate_and_normalize_stock_code("000016.SH")` 会把 `.SH` 剥成 `000016`，
+        # 指数身分在算键之前就没了，於是删 `000016.SH` 会删掉同码的**个股**那一列。
+        if _watchlist_match_key(request.stock_code) not in existing_keys:
             codes.append(request.stock_code.strip())
             _write_watchlist_codes(service, codes)
         return WatchlistResponse(stock_codes=codes, message=f"已加入 {request.stock_code.strip()}")
@@ -403,10 +425,11 @@ def remove_from_watchlist(
     service: SystemConfigService = Depends(get_system_config_service),
 ) -> WatchlistResponse:
     try:
-        validated = _validate_and_normalize_stock_code(request.stock_code)
+        # 同 add：验证与等价键分开，键走原始输入才留得住指数身分。
+        _validate_and_normalize_stock_code(request.stock_code)
         codes = _read_watchlist_codes(service)
         existing_keys = [_watchlist_match_key(c) for c in codes]
-        requested_key = _watchlist_match_key(validated)
+        requested_key = _watchlist_match_key(request.stock_code)
         if requested_key in existing_keys:
             idx = existing_keys.index(requested_key)
             codes.pop(idx)

@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
 """Watchlist API regressions for stock-code variant matching."""
 
-from api.v1.endpoints.stocks import add_to_watchlist, get_watchlist, remove_from_watchlist
+from api.v1.endpoints.stocks import (
+    _watchlist_match_key,
+    add_to_watchlist,
+    get_watchlist,
+    remove_from_watchlist,
+)
 from api.v1.schemas.history import WatchlistRequest
 
 
@@ -135,3 +140,87 @@ def test_non_ascii_digits_never_pass_the_stock_code_gate(code: str) -> None:
 def test_ascii_codes_still_pass_after_tightening(code: str, expected: str) -> None:
     assert _STOCK_CODE_RE.match(code) is not None
     assert _validate_and_normalize_stock_code(code) == expected
+
+
+# --- 台股带尾字母的代码必须整条链都通 ---------------------------------------
+#
+# 槓桿 `00631L` / 反向 `00632R` / 债券 ETF `00679B` / 特别股 `2887A` 的尾字母是
+# **载荷不是杂讯**。v3.31 那轮已经在 `market_symbol_utils.strip_optional_tw_letter`
+# 把它放行，但 API 这道闸门与前端 `validation.ts` 当时都没跟上，於是这些代码
+# 可以被分析、却不能加进自选、也拿不到 `/{stock_code}/profile`。
+#
+# 大小写那条同样是守门的一部分：闸门放行 `00631l.tw` 之後，若 `normalize_stock_code`
+# 不把它收敛成 `00631L.TW`，同一档会以两种写法同时存在於 STOCK_LIST。
+
+@pytest.mark.parametrize(
+    "code, expected",
+    [
+        ("00631L.TW", "00631L.TW"),    # 元大台湾50正2
+        ("00632R.TW", "00632R.TW"),    # 元大台湾50反1
+        ("00679B.TWO", "00679B.TWO"),  # 债券 ETF（上柜）
+        ("2887A.TW", "2887A.TW"),      # 台新金特别股
+        ("00631l.tw", "00631L.TW"),    # 大小写必须收敛到同一个 canonical
+        ("2887a.tw", "2887A.TW"),
+    ],
+)
+def test_taiwan_letter_suffixed_codes_pass_the_gate_and_normalize(code: str, expected: str) -> None:
+    assert _STOCK_CODE_RE.match(code) is not None
+    assert _validate_and_normalize_stock_code(code) == expected
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "00631LL.TW",   # 反向：只放行**一个**字母，不是任意多个
+        "631L.TW",      # 反向：数字位数仍受 4~6 位限制
+        "0063110.TW",   # 反向：7 位数字
+        "2330甲.TW",     # 汉字
+        "00631Ｌ.TW",    # 全形字母
+        "００６３１L.TW",   # 全形数字
+    ],
+)
+def test_taiwan_letter_widening_does_not_admit_anything_else(code: str) -> None:
+    assert _STOCK_CODE_RE.match(code) is None
+
+
+# --- 注册指数与同码个股必须能共存於自选 ---------------------------------------
+
+def test_watchlist_keeps_registered_index_and_same_digit_stock_apart() -> None:
+    """`000016.SH`（上证50）与 `000016`（个股）是两个标的，不是同一个的两种写法。
+
+    `normalize_stock_code` 会把 `.SH` 后缀剥掉，两者都塌成 `000016`；缺了 asset-aware
+    的等价键，加了指数之後再加同码个股会被判成重复而**静默丢弃**——API 照样回
+    「已加入」，列表却没变。上游 #2312 已让 Web 按 asset type 分别渲染两列。
+    """
+    service = FakeSystemConfigService("000016.SH")
+
+    response = add_to_watchlist(WatchlistRequest(stock_code="000016"), service=service)
+
+    assert response.stock_codes == ["000016.SH", "000016"]
+    assert service.stock_list == "000016.SH,000016"
+
+
+def test_watchlist_remove_targets_the_asset_the_caller_named() -> None:
+    """反向：删个股不能把同码指数一起删掉（反之亦然）。"""
+    service = FakeSystemConfigService("000016.SH,000016")
+
+    remove_from_watchlist(WatchlistRequest(stock_code="000016"), service=service)
+    assert service.stock_list == "000016.SH"
+
+    service2 = FakeSystemConfigService("000016.SH,000016")
+    remove_from_watchlist(WatchlistRequest(stock_code="000016.SH"), service=service2)
+    assert service2.stock_list == "000016"
+
+
+def test_stock_only_watchlist_equivalence_is_unchanged() -> None:
+    """反向守门：asset-aware 只能作用在 INDEX 上。
+
+    少了这条，一个「所有输入都改用 parse canonical」的过度实作也会过——而那会让
+    `600519` 的键变成 `sh600519`、`2330.TW` 变成别的东西，等於把既有 STOCK_LIST
+    的每一条都重新编码，旧资料一次全部对不上。
+    """
+    assert _watchlist_match_key("600519") == _watchlist_match_key("600519")
+    assert _watchlist_match_key("600519") == "600519"
+    assert _watchlist_match_key("00700") == _watchlist_match_key("00700.HK") == "HK00700"
+    assert _watchlist_match_key("aapl") == _watchlist_match_key("AAPL") == "AAPL"
+    assert _watchlist_match_key("2330.TW") == "2330.TW"

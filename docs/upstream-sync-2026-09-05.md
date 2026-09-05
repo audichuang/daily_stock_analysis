@@ -124,7 +124,9 @@ fork 既有守门全绿：`test_us_market_path.py` / `test_stock_index_loader.py
 `test_name_to_code_resolver.py` / `test_stock_code_utils.py` 合计 305 passed；
 `test_report_language.py` 36 passed（zh-TW 键数对齐，上游这轮没有新增语言键）。
 
-## 找到的 zh-TW 缺口（1 处，已修）
+## 找到的 zh-TW 缺口
+
+### 键缺失（1 处，已修）
 
 上游 #2312 给批量提交的 rejected 分支新增两个文案键
 （`watchlist.batchSubmittedWithRejected`、`watchlist.batchPartiallySubmittedWithRejected`），
@@ -137,7 +139,35 @@ fork 既有守门全绿：`test_us_market_path.py` / `test_stock_index_loader.py
 因为这轮上游只动了前端文案，没有新增 `report_language.py` 的键。
 两道守门覆盖的是不同侧，缺一不可。
 
-## 记录但未修
+### 硬编简中（合并当下**漏判**，Codex 终审抓到）
+
+第一版这份文档写「zh-TW 缺口 1 处且已修」，**这句话是错的**。`uiText` 的
+`Record<UiTextKey, string>` 只能抓到「键缺失」，抓不到「根本没走 i18n 的硬编字串」。
+
+上游 #2154 给 `StockScreeningPage.tsx` 新增的选股历史 UI 硬编了 12 条简中文案
+（`历史记录` / `加载中...` / `暂无历史选股记录` …）与一处写死的 `toLocaleString('zh-CN')`。
+
+量过之后结论要分成两半，不能混为一谈：
+
+| | 合并前 `659c4b1b` | 合并后 |
+| --- | --- | --- |
+| `t()` 呼叫 | **0** | 0 |
+| 硬编中文字串 | **142** | 154（+12） |
+| JSX 内硬编中文 | 35 | 35 |
+| 写死 `'zh-CN'` | 2（都是**预设参数**，呼叫端已用 `getIntlLocale(language)` 覆写） | 3（+1，**写死在函式体内、覆写不了**） |
+
+对照 `HomePage.tsx`（55 个 `t()`、0 硬编）与 `RealtimeBoardPage.tsx`（39 / 0）：
+**`StockScreeningPage` 是全 app 唯一一页从来没做过 i18n 的**，而且合并前就有 142 条。
+
+因此处置分开：
+
+- **已修**：`formatRunCreatedAt` 的 `locale` 改成参数（预设仍 `'zh-CN'`，与本页另两个
+  日期 helper 同款），呼叫端传 `getIntlLocale(language)`。这条与本页**自己的既有写法**
+  矛盾，是真缺陷。
+- **未修**，见 [#18](https://github.com/audichuang/daily_stock_analysis/issues/18)：那 154 + 35 条硬编字串。只翻 12/166 会让这一页更不一致，
+  不是更好；整页 i18n 是独立工作，不该混进上游合并的 PR。
+
+## 合并当下未修的项目（含後续处置）
 
 ### 台股带字母尾的代码过不了 API 闸门
 
@@ -146,19 +176,59 @@ fork 既有守门全绿：`test_us_market_path.py` / `test_stock_index_loader.py
 `_STOCK_CODE_RE` 与前端 `apps/dsa-web/src/utils/validation.ts` 两边都是
 `\d{4,6}\.(TW|TWO)`，**都不收字母尾**。
 
-结论：这是**既有的功能缺口，不是本次合并的回归**（合并前 fork 的
-`\d{4}\.(TW|TWO)` 同样拒收，而且连 `00878.TW` 都拒）。前后端一致，没有 drift。
-刻意不在合并里顺手改——只补后端会製造新的前后端分歧。
+是**既有的功能缺口，不是本次合并的回归**（合并前 fork 的 `\d{4}\.(TW|TWO)`
+同样拒收，而且连 `00878.TW` 都拒）。合并前后逐码实测确认这一格没有变化。
 
-真要修是三处一起：后端 `_STOCK_CODE_RE`、前端 `STOCK_CODE_PATTERNS`，
-两处都收敛到 `strip_optional_tw_letter` 已经定义好的语意
-（4~6 位 ASCII 数字 + 至多一个 ASCII 大写字母，仅限 tw）。
+**但第一版这份文档就停在这里，是记漏了半句**（Codex 终审补上的）：本次合并的
+`ee2c113a` 新增了 `/{stock_code}/profile`，它走的正是这道闸门，所以这个既有缺口
+**的爆炸半径被本次合并放大了**——与本文档「找到的静默降级」那节抓的是同一个形状
+（pre-existing 缺陷 + 上游新增的消费者 = 新断点），当时只对全形数字那一格套用了
+这个判准，对尾字母这一格没有。
+
+**已在後续 PR 修掉**，三处一起（只补后端会製造新的前後端漂移）：
+
+| 位置 | 修法 |
+| --- | --- |
+| `api/v1/endpoints/stocks.py::_STOCK_CODE_RE` | `\d{4,6}[A-Z]?\.(?:TW\|TWO)` |
+| `apps/dsa-web/src/utils/validation.ts` | `/^\d{4,6}[A-Z]?\.(TW\|TWO)$/` |
+| `apps/dsa-web/src/utils/chatStockCode.ts` | `/\b(\d{4,6}[A-Z]?\.(?:TW\|TWO))\b/gi` |
+
+外加 `data_provider/base.py::normalize_stock_code` 的台股分支委派共用的
+`is_suffix_market_symbol`——原本的 `base.isdigit()` 判不出尾字母，闸门放行之后
+`00631l.tw` 与 `00631L.TW` 会以两种写法同时存在於 STOCK_LIST。
 
 ### 上游 `data_capability_service` 仍未登记 fork 的 provider
 
 2026-08-30 记录的缺口原样保留（`MarketDBFetcher` / `ShioajiFetcher` / `TwseFetcher`
 不在能力矩阵，`GET /api/v1/data/overview` 会把台股日线覆盖错报成 unknown、
 TW 实时硬写成 yfinance）。本次上游没有改这块，仍是诊断资讯错误而非路由故障。
+
+## Codex 独立终审（read-only）与七条 finding 的处置
+
+合并 commit 落地後照惯例送 Codex 做对抗式复审（`/codex:handoff`，非编辑运行）。
+判定 **DO NOT SHIP**，1 blocker + 3 major + 3 minor。
+
+**它确认取对边的部分**：三个衝突裁决全部正确、`_market_review_lock_path` 确实零
+呼叫者、四个端点的 route ordering 不会互吃、`history_service.py` 只有 docstring、
+TaskQueue 的 asset-aware dedupe 本身正确、`re.ASCII` 没有收掉任何合法 ASCII 代码、
+两组 mutation guard 是真守门（它自己重现过 6 红 / 2 红）。
+
+**逐条处置**（「本次引入？」一栏是用 `git worktree` 退回 `659c4b1b` 逐码实测比对的，
+不是读 diff 推断）：
+
+| # | 严重度 | Finding | 本次引入？ | 处置 |
+| --- | --- | --- | --- | --- |
+| 1 | blocker | `000016.SH` / `SH.000016` 走 REST 分析入口回 400 | 上游新功能送进来就不完整（`_resolve_analysis_input` 合并前**不存在**） | **已修**：`is_code_like` 之前问一次 parser，只有 INDEX 短路 |
+| 2 | major | watchlist 把同码指数与个股折叠成一笔 | 否（合并前後 `_watchlist_match_key` 行为**逐码相同**）；本次新增的是上游 Web 开始承诺两者共存 | **已修**：等价键对 INDEX 走 canonical；并修正 add/remove 用正规化值算键（`.SH` 在算键前就被剥掉，删指数会删掉同码个股） |
+| 3 | major | profile 闸门拒绝 `00631L.TW` / `BRK-B` / 裸 4 位港股 | 缺口既有（合并前後逐码同为 REJECT），但 `/profile` 是本次新增的消费者 | 台股尾字母**已修**（三处 regex + `normalize_stock_code`）；`BRK-B` 与裸 4 位港股见 [#15](https://github.com/audichuang/daily_stock_analysis/issues/15) |
+| 4 | major | 日股 `130A.T`（JPX 2024 起英数码）不被接受 | 否 | [#16](https://github.com/audichuang/daily_stock_analysis/issues/16)：v3.31 明确保留 jp/kr 的纯数字 spec，翻案是决定不是清理 |
+| 5 | minor | 新选股历史 UI 硬编简中 | 12 条硬编是本次新增，但该页合并前已有 142 条、`t()` 为 0 | 日期 locale **已修**；整页 i18n 见 [#18](https://github.com/audichuang/daily_stock_analysis/issues/18) |
+| 6 | minor | `BJ600519` 过得了 watchlist 闸门却在分析入口 400 | 否（合并前後同为 PASS） | [#17](https://github.com/audichuang/daily_stock_analysis/issues/17)：要把 shared exchange validation 接进写入路径 |
+| 7 | minor | `getPopularStocks` 不过滤 index row | 否（loader 移除全域过滤是本次的，但该 helper 零 production caller） | **已删**：不给死代码加过滤器 |
+
+第一版这份文档有两句话讲得太满，已在上面各自更正：「zh-TW 缺口 1 处且已修」
+（漏了硬编字串那一类）、尾字母那段只说「不是本次回归」而没写出
+`/profile` 让它变成新的断点。
 
 ## 验证
 

@@ -15,6 +15,13 @@ describe('stock code validation', () => {
     ['6488.two', '6488.TWO'],
     ['00878.TW', '00878.TW'],
     ['006208.tw', '006208.TW'],
+    // 台股尾字母是载荷不是杂讯：槓桿 00631L / 反向 00632R / 债券 ETF 00679B /
+    // 特别股 2887A。後端 `_STOCK_CODE_RE` 与 `chatStockCode` 的抽取式必须同步放宽，
+    // 只改一边就是前後端漂移。
+    ['00631L.TW', '00631L.TW'],
+    ['00632r.tw', '00632R.TW'],
+    ['00679B.two', '00679B.TWO'],
+    ['2887a.TW', '2887A.TW'],
   ])('accepts JP/KR/TW Yahoo suffix code %s', (input, normalized) => {
     expect(looksLikeStockCode(input)).toBe(true);
     expect(validateStockCode(input)).toEqual({
@@ -24,7 +31,11 @@ describe('stock code validation', () => {
     expect(isObviouslyInvalidStockQuery(input)).toBe(false);
   });
 
-  test.each(['7203', '2330', '005930.K', '035720.KRX', '2330.TWOX'])(
+  test.each([
+    '7203', '2330', '005930.K', '035720.KRX', '2330.TWOX',
+    // 反向守门：放宽的是「至多一个字母」，不是任意多个，也不放宽位数
+    '00631LL.TW', '631L.TW', '0063110.TW',
+  ])(
     'does not treat ambiguous JP/KR/TW-like query %s as a valid suffix code',
     (input) => {
       const result = validateStockCode(input);

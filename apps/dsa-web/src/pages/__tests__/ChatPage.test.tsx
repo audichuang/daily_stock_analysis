@@ -2883,6 +2883,22 @@ describe('extractStockCodesFromMessage with index registry', () => {
     expect(extractStockCodesFromMessage('分析 sz399001', registeredIndex)).toEqual(['sz399001']);
   });
 
+  it('extracts Taiwan codes carrying their trailing letter as one token', () => {
+    // 尾字母是载荷不是杂讯（槓桿 00631L / 反向 00632R / 债券 ETF 00679B / 特别股 2887A）。
+    // 少了 `[A-Z]?` 就**整个抽不到**（实测 mutation 回 `[]`）：後面较宽松的
+    // `\b(\d{5,6})\b` 也救不了，尾随的 `L` 是 word char，`\b` 在那里不成立。
+    // 症状是使用者在对话里打了代码却完全没有被识别成个股。
+    expect(extractStockCodesFromMessage('分析 00631L.TW', registeredIndex)).toEqual(['00631L.TW']);
+    expect(extractStockCodesFromMessage('分析 00632R.TW', registeredIndex)).toEqual(['00632R.TW']);
+    expect(extractStockCodesFromMessage('分析 00679B.TWO', registeredIndex)).toEqual(['00679B.TWO']);
+    expect(extractStockCodesFromMessage('分析 2887A.TW', registeredIndex)).toEqual(['2887A.TW']);
+  });
+
+  it('keeps plain Taiwan codes unchanged by the letter widening', () => {
+    expect(extractStockCodesFromMessage('分析 2330.TW', registeredIndex)).toEqual(['2330.TW']);
+    expect(extractStockCodesFromMessage('分析 00878.TW', registeredIndex)).toEqual(['00878.TW']);
+  });
+
   it('keeps the bare same-code stock distinct from a registered index', () => {
     expect(extractStockCodesFromMessage('分析 000016', registeredIndex)).toEqual(['000016']);
     expect(extractStockCodesFromMessage('SH000016 和 000016', registeredIndex)).toEqual(['sh000016', '000016']);

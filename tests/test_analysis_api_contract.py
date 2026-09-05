@@ -4837,5 +4837,47 @@ class ImageStockExtractorContractTestCase(unittest.TestCase):
         mock_completion.assert_called_once()
 
 
+class RegisteredIndexAliasReachesTheRestEntryTestCase(unittest.TestCase):
+    """`000016.SH` / `SH.000016` 必须走得进 REST 分析入口。
+
+    上游 #2312 的 `_resolve_analysis_input` 只特判了不带点的 `sh000016`，其余输入
+    先过股票导向的 `is_code_like`。而带点的注册指数 alias `is_code_like` 判 False
+    （裸数字 `000016` 不符合交易所的**股票**位数规则），於是它们掉过闸门、掉过
+    4 位分支，最後死在 `_is_obviously_invalid_analysis_input` 变成 400——即使
+    `parse_analysis_target` 明明解得出 `sh000016`。
+
+    Web 的「分析全部」会真的送出 `000016.SH`（见 HomePage.test.tsx），所以这不是
+    理论缺口。修法是在 `is_code_like` 之前问一次 parser，**只有 INDEX 才短路**。
+    """
+
+    def test_dotted_index_aliases_resolve_to_their_canonical(self) -> None:
+        from api.v1.endpoints.analysis import _resolve_analysis_input
+
+        for raw in ("000016.SH", "SH.000016", "sh000016"):
+            with self.subTest(raw=raw):
+                resolved, target = _resolve_analysis_input(raw)
+                self.assertEqual(resolved, "sh000016")
+                self.assertIsNotNone(target)
+                self.assertEqual(target.canonical_id, "sh000016")
+
+    def test_stock_and_name_inputs_are_untouched_by_the_index_short_circuit(self) -> None:
+        """反向守门：短路只能吃 INDEX。
+
+        少了这几条，一个「先 parse、任何结果都短路」的过度实作也会过——而那会把
+        `600519` 改写成 parser canonical `sh600519`、把股票名整个吃掉。
+        """
+        from api.v1.endpoints.analysis import _resolve_analysis_input
+
+        for raw, expected in (("600519", "600519"), ("2330.TW", "2330.TW"), ("00700", "00700")):
+            with self.subTest(raw=raw):
+                resolved, target = _resolve_analysis_input(raw)
+                self.assertEqual(resolved, expected)
+                self.assertIsNone(target, "股票输入不得携带结构化 target")
+
+        resolved, target = _resolve_analysis_input("贵州茅台")
+        self.assertEqual(resolved, "600519")
+        self.assertIsNone(target)
+
+
 if __name__ == "__main__":
     unittest.main()

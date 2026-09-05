@@ -73,7 +73,9 @@ type PersistedScreenTask = {
   maxResults: number;
 };
 
-const formatRunCreatedAt = (value: string | null | undefined) => {
+// locale 走参数（预设与本页其余日期 helper 一致），呼叫端传 getIntlLocale(language)：
+// 写死 'zh-CN' 在函式体内的话呼叫端覆写不了，介面切到英文/繁中日期仍是简中格式。
+const formatRunCreatedAt = (value: string | null | undefined, locale = 'zh-CN') => {
   if (!value) {
     return '时间未知';
   }
@@ -81,7 +83,7 @@ const formatRunCreatedAt = (value: string | null | undefined) => {
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
-  return parsed.toLocaleString('zh-CN', {
+  return parsed.toLocaleString(locale, {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -2118,7 +2120,7 @@ const StockScreeningPage: React.FC = () => {
                   </span>
                 </span>
                 <span className="shrink-0 text-xs text-secondary-text">
-                  {formatRunCreatedAt(run.createdAt)}
+                  {formatRunCreatedAt(run.createdAt, getIntlLocale(language))}
                 </span>
               </button>
             ))}
