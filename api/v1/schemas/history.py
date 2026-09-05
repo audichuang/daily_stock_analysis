@@ -53,6 +53,10 @@ class HistoryItem(BaseModel):
         description="本次分析市场阶段低敏摘要",
     )
     created_at: Optional[str] = Field(None, description="创建时间")
+    asset_type: Optional[Literal["stock", "index"]] = Field(
+        None,
+        description="后端权威资产类型（stock/index）；由持久化代码经 parser 生成。旧客户端与 market review 可缺省。",
+    )
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -154,6 +158,10 @@ class ReportMeta(BaseModel):
     market_phase_summary: Optional[MarketPhaseSummary] = Field(
         None,
         description="本次分析市场阶段低敏摘要",
+    )
+    asset_type: Optional[Literal["stock", "index"]] = Field(
+        None,
+        description="后端权威资产类型（stock/index）；指数报告用于隐藏 stock-only 自选操作。market review 与旧客户端可缺省。",
     )
 
 
@@ -376,6 +384,10 @@ class StockBarItem(BaseModel):
     market_phase_summary: Optional[MarketPhaseSummary] = Field(
         None,
         description="最新分析市场阶段低敏摘要",
+    )
+    asset_type: Optional[Literal["stock", "index"]] = Field(
+        None,
+        description="后端权威资产类型（stock/index）；由持久化代码经 parser 生成。旧客户端可缺省。",
     )
     model_config = ConfigDict(json_schema_extra={
         "example": {

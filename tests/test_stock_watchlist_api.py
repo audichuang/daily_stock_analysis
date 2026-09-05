@@ -85,3 +85,53 @@ def test_watchlist_add_normalizes_existing_mixed_separators_on_write() -> None:
     assert response.stock_codes == ["600519", "300750", "AAPL"]
     assert service.stock_list == "600519,300750,AAPL"
     assert service.update_calls == ["600519,300750,AAPL"]
+
+
+# --- 代码闸门必须只认 ASCII 数字/字母 ---------------------------------------
+#
+# ``_STOCK_CODE_RE`` 的注释宣称 "aligned with frontend validateStockCode"，而前端
+# 那份 JS 正则的 ``\d`` 只认 ASCII。Python 的 ``\d`` 预设是 Unicode-aware，所以少了
+# ``re.ASCII`` 这道闸门会放行全形与阿拉伯数字，让无效字元带着一个"合法"的代码身分
+# 流进下游 fetcher —— 抓不到资料时 pipeline 刻意 fail-open，产出的是一份静默缺资料
+# 的报告而不是一个明确的 400。
+
+import pytest
+
+from api.v1.endpoints.stocks import _STOCK_CODE_RE, _validate_and_normalize_stock_code
+from fastapi import HTTPException
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "６００５１９",      # 全形 A 股 6 位
+        "００７００.HK",     # 全形港股（原本还会被正规化成 HK００７００）
+        "００６３１.TW",     # 全形台股 ETF
+        "٠٠٦٣١.TW",      # 阿拉伯-印度数字
+        "７２０３.T",       # 全形日股
+        "００５９３０.KS",   # 全形韩股
+    ],
+)
+def test_non_ascii_digits_never_pass_the_stock_code_gate(code: str) -> None:
+    assert _STOCK_CODE_RE.match(code) is None
+    with pytest.raises(HTTPException) as excinfo:
+        _validate_and_normalize_stock_code(code)
+    assert excinfo.value.detail["error"] == "invalid_stock_code"
+
+
+@pytest.mark.parametrize(
+    "code, expected",
+    [
+        ("2330.TW", "2330.TW"),
+        ("2330.tw", "2330.TW"),      # 大小写不敏感必须保住（反向：拿掉 IGNORECASE 会红）
+        ("00878.TW", "00878.TW"),
+        ("006208.TW", "006208.TW"),  # 上游 #2312 把台股放宽到 4~6 位，别被 re.ASCII 连坐
+        ("6488.TWO", "6488.TWO"),
+        ("aapl", "aapl"),  # normalize 不对美股 ticker 转大写，大小写在 _watchlist_match_key 收敛
+        ("600519", "600519"),
+        ("7203.T", "7203.T"),
+    ],
+)
+def test_ascii_codes_still_pass_after_tightening(code: str, expected: str) -> None:
+    assert _STOCK_CODE_RE.match(code) is not None
+    assert _validate_and_normalize_stock_code(code) == expected

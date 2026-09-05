@@ -29,6 +29,7 @@ from api.v1.schemas.analysis import (
     AnalysisResultResponse,
     TaskAccepted,
     BatchTaskAcceptedResponse,
+    RejectedTaskItem,
     TaskStatus,
 )
 from api.v1.schemas.history import (
@@ -52,6 +53,7 @@ from api.v1.schemas.stocks import (
     TrendPoint,
     StockHistoryResponse,
     KLineData,
+    StockProfileResponse,
 )
 from api.v1.schemas.backtest import (
     BacktestRunRequest,
@@ -171,6 +173,7 @@ __all__ = [
     "AnalysisResultResponse",
     "TaskAccepted",
     "BatchTaskAcceptedResponse",
+    "RejectedTaskItem",
     "TaskStatus",
     # history
     "HistoryItem",
@@ -192,6 +195,7 @@ __all__ = [
     "TrendPoint",
     "StockHistoryResponse",
     "KLineData",
+    "StockProfileResponse",
     # backtest
     "BacktestRunRequest",
     "BacktestRunResponse",
