@@ -457,13 +457,24 @@ class TestUsDailyChainPrefersYfinance:
 
 class TestRecapIsDatedByTheMarketNotTheServerClock:
     def test_us_recap_uses_the_new_york_session_not_the_taipei_date(self):
-        """台北時間任何時刻，美股最近收完的那場都是紐約的前一天。"""
+        """台北時間任何時刻，美股最近收完的那場都是紐約的前一天。
+
+        `infer_market_phase` 必須釘住：`_resolve_overview_date` 在盤中／午休／
+        收盤集合競價／盤後四個 phase 會短路回 `now.date()`，**根本不問**
+        `get_effective_trading_date`。不釘住就是拿真牆鐘當輸入——台北清晨
+        （紐約盤後）跑全量測試時 `spy.call_count` 會是 0 而紅，換個時段又綠，
+        看起來跟回歸一模一樣。同檔 `TestCodexReviewFindings` 那兩支都釘了。
+        """
         from datetime import date
 
+        import src.market_analyzer as ma_mod
+        from src.core.trading_calendar import MarketPhase
         from src.market_analyzer import MarketAnalyzer
 
         ma = _analyzer("us")
-        with patch("src.market_analyzer.get_effective_trading_date",
+        with patch.object(ma_mod, "infer_market_phase",
+                          return_value=MarketPhase.PREMARKET), \
+             patch("src.market_analyzer.get_effective_trading_date",
                    return_value=date(2026, 8, 10)) as spy, \
              patch.object(MarketAnalyzer, "_get_main_indices", return_value=[]):
             overview = MarketAnalyzer.get_market_overview(ma)

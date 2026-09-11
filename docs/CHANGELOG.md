@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] 新增 `docs/daily-report-backtest-2026-07.md`：每日分析报告机械化执行的回验（2026-07-06 ~ 09-04），含成本口径、与 0050 的成对比较，以及「结构化 verdict 与同一区块的文字结论互相矛盾」这一发现
 
 - [测试] 修复股票名称解析冷启动超时并发测试的同步竞态：在放行后台抓取前确认两个等待者均已结束并返回空结果，避免 Docker 发布门禁偶发失败。
+- [文档] 新增 `docs/upstream-sync-2026-09-12.md`（上游 v3.31.0 → v3.32.0 共 3 个 commit 的合并记录、`stocks.index.json` 冲突裁决，以及上游把「单一 token 不支援就跳过」改成「整批拒绝」的入口契约变更说明）
+- [测试] 釘住美股复盘日期守门的盘别：`test_us_recap_uses_the_new_york_session_not_the_taipei_date` 只 mock 了 `get_effective_trading_date` 却没釘 `infer_market_phase`，而 `_resolve_overview_date` 在盘中／午休／收盘集合竞价／盘後四个 phase 会短路回 `now.date()` 根本不问它，等於拿真牆钟当输入——台北清晨（纽约盘後）跑全量必红、其余时段必绿；改为与同档 `test_overview_date_*` 一致釘成 `PREMARKET`，生产程式码未改
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
@@ -77,8 +79,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 台股代码校验改为逐字 ASCII 比对：`str.isalpha()` / `str.isdigit()` 都是 Unicode-aware，此前 `2330甲.TW`、`00631Ｌ.TW`、`００６３１.TW` 会被判成合法代码并带着无效字元送进 yfinance，抓取失败时 pipeline fail-open 产出静默缺资料的报告。jp/kr 同步收紧。
 - [测试] 指数日线来源的持久化顺序改由 `save_analysis_history` 的 side_effect 当场抓快照：原断言比对的是同一个可变物件的两个参照，恒真，把 `_append_daily_data_source` 挪到写入之後也不会红。
 - [文档] `docs/tw-swing-pipeline.md` 追加 2026-08-30 回验状态反思：第 2 层决策日志 0 笔到期、无法评估，并记录日志停摆、产出率算术（近期不会有可评估样本）、失效条件快照陷阱的实际重演，以及 Q2 财报补齐後唯一实仓的失效条件逐条判定。
-<!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
-<!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 - [新功能] 完善 Futu OpenD 港股数据源接入：系统设置支持 OpenD 地址、端口和港股实时数据源优先级，保留 Longbridge、AkShare、YFinance fallback。
 - [测试] 增加 Futu 配置 schema、港股实时路由和 fallback 契约覆盖。
 
