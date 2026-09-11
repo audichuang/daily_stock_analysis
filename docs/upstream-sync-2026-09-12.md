@@ -138,7 +138,8 @@ per-token 过滤器还在，只是 CLI 入口再也走不到它了。
 | `ci_gate.sh flake8` | 绿（0） |
 | `scripts/check_ai_assets.py` | 绿 |
 | 针对性测试（上游改过的 4 档 + 索引相关 4 档 + 版本相容） | 465 passed |
-| **全量离线测试**（`pytest -m "not network"`） | **2 failed / 7377 passed / 8 deselected / 717 subtests，58 分 40 秒** |
+| **全量离线测试**（第一轮） | 2 failed / 7377 passed / 8 deselected / 717 subtests，58 分 40 秒 |
+| **全量离线测试**（修完牆钟假红後重跑） | **1 failed / 7378 passed / 8 deselected / 717 subtests，56 分 50 秒** |
 | `npm run lint` | 0 error（2 个既有 `react-hooks/exhaustive-deps` warning） |
 | `npm run build`（`tsc -b` + vite） | 绿 |
 | **vitest 全跑** | 1225 passed / 2 skipped / 103 档全绿 |
@@ -152,7 +153,7 @@ vitest 这次是单独跑的（pytest 全量尚未开始），103 档全绿—�
 2026-09-05 那轮与 pytest 并跑时的 2 failed，再次确认那是 `AGENTS.md` §10
 记的负载形状而不是回归。
 
-### 那 2 个 pytest 红都不是本次回归
+### 那 2 个 pytest 红都不是本次回归（重跑後剩 1）
 
 #### 1. `.env` 泄漏假红（`AGENTS.md` §10 第三种形状，原样重演）
 
@@ -188,6 +189,8 @@ spy 於是一次都没被呼叫。
 
 **修法**（同档 `TestCodexReviewFindings` 那两支本来就釘了 phase，只有这支漏了）：
 把 `infer_market_phase` 釘成 `MarketPhase.PREMARKET`，其余不动。
+修完在**同一个牆钟时段**（纽约盘後）重跑全量：`1 failed / 7378 passed`，
+只剩上面那个 `.env` 假红，且 passed 数正好 +1。
 
 Mutation 双向验过：
 
@@ -206,11 +209,30 @@ Mutation 双向验过：
 单独看这一支只擋了一半。会这样是因为本支釘的就是 `PREMARKET` 分支——
 过度修正不改这个分支的结果，它没有理由红。
 
+## 落地方式（与前几轮不同，**没有走 PR**）
+
+依使用者指示直接快转 `main` 并 push，没有开 PR：
+
+| | |
+| --- | --- |
+| `origin/main` | `cd6f6b6b` → `9675d8cd`（快转 5 个 commit，`git merge-base --is-ancestor` 验过是真 fast-forward，无历史改写） |
+| 分支 `merge/upstream-v3.32` | 同样推上 origin，内容与 `main` 相同，可随时删 |
+| 本机服务 | user unit `dsa-board` / `dsa-schedule` 都跑在这个工作树上，已重启吃到新码 |
+
+**代价要记下来**：`ci.yml` 的 `on:` 只有 `pull_request`、**没有 `push`**，
+所以这批改动**一次阻断 CI 都没跑过**（`backend-tests`、Web build、`ai-governance`
+全部没在云端验过）。本机等价验证见上一节，但本机与 CI 不等价——
+最明显的是 **CI 跑 Python 3.11、本机是 3.12**（`AGENTS.md` §6）。
+
 ## 回滚
 
-`git reset --hard cd6f6b6b`（本次 merge commit 的第一父，即合并前的 `main`）。
+`main` 已经 push，所以回滚要动远端：
+
+```bash
+git reset --hard cd6f6b6b          # 本次 merge commit 的第一父，即合并前的 main
+git push --force-with-lease origin main
+systemctl --user restart dsa-board dsa-schedule   # 让服务吃回旧码
+```
+
 **不要用 merge-base `e866cfa4`**——它是一个上游 commit，与合并前的 fork 之间隔着
 整条台股增量，照着跑会跑得乾乾净净、只有事后才看得出来。
-
-或者直接不合并这个分支：本轮全部改动都在 `merge/upstream-v3.32` 上，
-`main` 仍停在 `cd6f6b6b`，未 push、未开 PR。
