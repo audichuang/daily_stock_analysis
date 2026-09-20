@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 智能导入兼容带 UTF-8 BOM 的 CSV 与剪贴板文本，避免 `code` 表头被误当成数据并丢失有效股票代码。
 - [修复] 为 AkShare 大盘涨跌统计的东财与新浪降级调用增加可强制终止的子进程超时，避免外部接口无响应时长期占用分析线程（Fixes #2340）。
 
+- [文档] 新增 `docs/upstream-sync-2026-09-20.md`（上游 v3.32.0 → `f9e7b778` 共 4 个 commit 的合并记录、静默降级排查，以及超时部分完成通知写死简体文案对 `REPORT_LANGUAGE=zh-TW` 的影响说明）
+
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
