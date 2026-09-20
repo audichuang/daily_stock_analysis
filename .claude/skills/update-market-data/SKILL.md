@@ -22,6 +22,7 @@ uv run --env-file .env python -m market_data.health
 
 輸出每表 `rows / start~end` 與 price/institutional/margin 的 `thin days`(單日列數低於前後交易日局部中位數九成 = 疑似單邊市場缺漏或截斷寫入)。
 **完成判準**:能說出每個資料集落後到哪一天、以及 thin days 清單。
+財報看 `financial_statement` 的 `end` 與 `stale financial quarters` 那一行(它印的是會計期間 + 截止日 + 該跑的 `financials` 指令,**只報不擋**,exit code 不會反映它)。
 
 ### 2. 依落差選路徑
 

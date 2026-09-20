@@ -15,9 +15,11 @@ from sqlalchemy import text
 from market_data.adjust import ADJUSTMENT_WINDOW_DAYS
 from market_data.crawl import RECENT_SESSIONS
 from market_data.db import get_engine
+from market_data.financial_statement import afterIFRS
 
 _DATE_TABLES = ["price", "institutional", "margin", "monthly_revenue",
-                "ex_dividend", "valuation", "market_index"]
+                "ex_dividend", "valuation", "market_index",
+                "financial_statement"]
 _DATE_COL = {"monthly_revenue": "revenue_month"}
 _REQUIRED_TABLES = (
     "price", "institutional", "margin", "monthly_revenue", "ex_dividend",
@@ -37,6 +39,33 @@ def missing_adjustments(expected, stored):
         return {(str(stock_id), str(day)[:10]) for stock_id, day in rows}
 
     return sorted(keys(expected) - keys(stored))
+
+
+def stale_financial_quarters(stored_dates, today):
+    """已過公告截止日、但一列都沒有的財報季,回 ``(year, season, deadline)``。
+
+    財報季更**不在 `daily` 裡**(見 `market_data/AGENTS.md`),漏一季不會有任何
+    東西喊——這裡是唯一會喊的地方。截止日對映直接用
+    `financial_statement.afterIFRS`,不另抄一份日期表,避免兩份漂移。
+
+    只檢查**涵蓋範圍之內**的季:早於庫內第一季的不報(那是「還沒回補」不是
+    「停更」)、尚未到截止日的也不報。回傳的 ``season`` 是**會計期間**,Q4 的
+    截止日在隔年 3/31——`financials --year 2019 --season 4` 寫進去的是
+    `2020-03-31`,所以兩個都印出來,免得照著日期去猜參數猜錯年份。
+    """
+    stored = {str(value)[:10] for value in stored_dates}
+    if not stored:
+        return []
+    first = min(stored)
+    missing = []
+    for year in range(int(first[:4]) - 1, today.year + 1):
+        for season in (1, 2, 3, 4):
+            deadline = str(afterIFRS(year, season).date())
+            if deadline > str(today) or deadline < first:
+                continue
+            if deadline not in stored:
+                missing.append((year, season, deadline))
+    return missing
 
 
 def recent_thin_days(thin_by_table, since):
@@ -148,6 +177,12 @@ def report(engine=None):
             "thin_recent_days": recent_thin_days(
                 out["thin_days"],
                 min(recent_price_dates) if recent_price_dates else None),
+            # 只報不擋:財報要手動跑 `financials`(整季 IFRS html 包 1-2 GB),
+            # 擋住 `make morning` 只會讓人學會忽略 gate。
+            "stale_financial_quarters": stale_financial_quarters(
+                [row[0] for row in c.execute(text(
+                    "SELECT DISTINCT date FROM market.financial_statement"
+                )).fetchall()], today),
         }
     return out
 
@@ -177,6 +212,12 @@ def run(engine=None, strict=False):
     # strict 只擋 daily 修得到的近期視窗；全歷史 thin day 上面已印出來供稽核。
     thin_recent = integrity.get("thin_recent_days", [])
     print(f"thin days inside the daily window: {len(thin_recent)} -> {thin_recent[:10]}")
+    stale_financials = integrity.get("stale_financial_quarters", [])
+    print(f"stale financial quarters: {len(stale_financials)} -> "
+          + ", ".join(f"{y}Q{s} (date {d})" for y, s, d in stale_financials[:10]))
+    for year, season, _ in stale_financials[:10]:
+        print("  repair: uv run --env-file .env python -m market_data.cli "
+              f"financials --year {year} --season {season}")
     gaps = (missing_price, missing_index, missing_institutional,
             missing_margin, missing_events, thin_recent, empty_required)
     failed = any(gaps)

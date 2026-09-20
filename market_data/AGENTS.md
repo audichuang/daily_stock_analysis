@@ -26,7 +26,7 @@
 - 每日增量+快照:`uv run --env-file .env python -m market_data.cli daily`(近 `crawl.RECENT_SESSIONS`=5 個交易日的 price/institutional/margin,**該區間的每個曆日都補**、缺日會被連續補回 + valuation/index/stock_info 快照 + 上月營收 + 除權息滾動窗 + 近期 `price_adjustment` 復權事件重算)
   - **復權事件是 daily 的一部分,不必另跑 `adjust`**:除權息抓取與 ±`adjust.ADJUSTMENT_WINDOW_DAYS`=90 天的因子替換在同一 transaction 完成,任一官方來源失敗就整包不寫、daily 直接報錯(不留半套因子)。只有修過 price 髒日或要重建全期,才需要下面的 `adjust`。
   - **落後超過 31 個曆日會直接拒跑**(`MAX_DAILY_RECOVERY_CALENDAR_DAYS`),訊息會叫你指定區間 backfill——這是刻意的,避免無界回補偷偷跑幾小時。
-- 稽核:`uv run --env-file .env python -m market_data.cli health --strict`(`make morning`／`make swing` 已內建;近期缺日、TAIEX/法人/融資錯位、除權息缺因子、必備表為空就回非零)。它的近期視窗與 daily **共用 `RECENT_SESSIONS`**;全歷史 thin day 只報不擋(daily 修不到的東西不該擋每天的流程)。
+- 稽核:`uv run --env-file .env python -m market_data.cli health --strict`(`make morning`／`make swing` 已內建;近期缺日、TAIEX/法人/融資錯位、除權息缺因子、必備表為空就回非零)。它的近期視窗與 daily **共用 `RECENT_SESSIONS`**;全歷史 thin day 與 `stale financial quarters` 只報不擋(daily 修不到的東西不該擋每天的流程)。財報那一行列出**已過公告截止日卻沒有任何列**的季(截止日對映重用 `financial_statement.afterIFRS`,印的 `season` 是會計期間、Q4 在隔年 3/31),並附上該季的 `financials` 指令——財報季更不在 `daily` 裡,這是漏季唯一會喊的地方。
 - 補特定月營收/除權息:`… revenue --month 2026-06`、`… ex-dividend --start … --end …`
 - 區間回補:`uv run --env-file .env python -m market_data.cli backfill price --start 2026-01-01 --end 2026-01-31`
 - 修 partial/髒日(health 報 thin day):同上加 `--force`(忽略 resume、抓到完整資料才整日換血;不用手動 DELETE)

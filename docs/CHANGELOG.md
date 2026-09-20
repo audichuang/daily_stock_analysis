@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - [文档] 新增 `docs/upstream-sync-2026-09-20.md`（上游 v3.32.0 → `f9e7b778` 共 4 个 commit 的合并记录、静默降级排查，以及超时部分完成通知写死简体文案对 `REPORT_LANGUAGE=zh-TW` 的影响说明）
 
+- [改进] `market_data.health` 新增财报稽核：`financial_statement` 进入表清单（skill `update-market-data` 早就叫人看它的 `end`，但 health 从来没印过），并新增 `stale financial quarters` 一行列出**已过公告截止日却一列都没有**的季与对应的 `financials` 指令；财报季更不在 `daily` 里，漏一季原本完全静默。只报不挡（整季 IFRS html 包 1-2 GB，不该挡住 `make morning`）
+
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
