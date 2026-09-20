@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - [修复] 汇总报告表头新增失败揭露：过去表头的档数一直是 `len(results)`（= 成功数），掉一档的那一轮推出去的报告读起来是完整的——2026-09-18 排程请求 14 档、2308.TW 因 LLM 连两次回非法 JSON 被丢弃，`reports/report_20260918.md` 写「共分析 **13** 檔股票」且整份不含 `2308`，Bark 推送成功、持有人零讯号；现在 dashboard 与 brief 两种 `REPORT_TYPE` 都会在表头加一行「⚠️ 本輪有 N 檔未產出結果：<代码>」，成功数不被窜改，无失败时报告逐字元与先前相同；分组报告不带整轮清单
 
+- [测试] 补 `market_data.health` 的接线守门：纯函式 `stale_financial_quarters` 本来就有测试，但 `report()` 里把它接进 `integrity` 的那一行没有任何测试覆盖（删掉整套仍全绿）；改用 `test_hardening.py` 既有的假连线形状让 `report()` 真的被执行，删接线或把 SELECT 指到别张表都会红（该测试随 `0c75512d` 一起入库，该 commit 讯息只写了文档部分）
+
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
