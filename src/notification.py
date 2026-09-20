@@ -20,7 +20,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, Sequence, Tuple, TYPE_CHECKING
 from enum import Enum
 
 from src.config import Config, get_config
@@ -525,12 +525,19 @@ class NotificationService:
         results: List[AnalysisResult],
         report_type: Any,
         report_date: Optional[str] = None,
+        failed_codes: Optional[Sequence[str]] = None,
     ) -> str:
-        """Generate the aggregate report content used by merge/save/push paths."""
+        """Generate the aggregate report content used by merge/save/push paths.
+
+        ``failed_codes`` 是本輪請求了、但沒有產出結果的代碼。它必須從這個**唯一的
+        分派點**往下傳:直接改某一支 generator 等於只修到一種 `REPORT_TYPE`。
+        """
         normalized_type = self._normalize_report_type(report_type)
         if normalized_type == ReportType.BRIEF:
-            return self.generate_brief_report(results, report_date=report_date)
-        return self.generate_dashboard_report(results, report_date=report_date)
+            return self.generate_brief_report(
+                results, report_date=report_date, failed_codes=failed_codes)
+        return self.generate_dashboard_report(
+            results, report_date=report_date, failed_codes=failed_codes)
 
     def _collect_models_used(self, results: List[AnalysisResult]) -> List[str]:
         if not self._should_show_llm_model():
@@ -571,6 +578,29 @@ class NotificationService:
             lines.extend([status_line, ""])
         elif lines and lines[-1] != "":
             lines.append("")
+
+    @staticmethod
+    def _append_failed_stocks_line(
+        lines: List[str],
+        failed_codes: Optional[Sequence[str]],
+        labels: Dict[str, str],
+    ) -> None:
+        """把「這一輪有幾檔沒產出結果」寫進報告表頭。
+
+        表頭的檔數一直是 `len(results)`,也就是**成功的那幾檔**,於是掉一檔的那一輪
+        推出去的報告讀起來是完整的。實例:2026-09-18 排程請求 14 檔、2308.TW 因
+        `deepseek-v4-flash` 連兩次回非法 JSON 被丟棄(`pipeline` 記 `失败: 1`,但
+        `fail_count` 沒有任何消費者),報告寫「共分析 13 檔」、整份不含 `2308` 字樣,
+        Bark 推送成功——持有台達電的人完全沒有訊號。
+
+        這裡只補「說出來」那一半;LLM 那一半的槓桿是 `LITELLM_MODEL`(見 AGENTS.md §10,
+        `analyze()` 把 `max_output_tokens` 寫死 8192,加預算不是可用的槓桿)。
+        """
+        codes = [str(code).strip() for code in (failed_codes or []) if str(code).strip()]
+        if not codes:
+            return
+        label = labels.get("failed_stocks_label") or "⚠️ {count}"
+        lines.append(f"> {label.format(count=len(codes))}：{', '.join(codes)}")
 
     def _should_show_llm_model(self) -> bool:
         return bool(getattr(self._config, "report_show_llm_model", self._report_show_llm_model))
@@ -1347,7 +1377,8 @@ class NotificationService:
     def generate_dashboard_report(
         self,
         results: List[AnalysisResult],
-        report_date: Optional[str] = None
+        report_date: Optional[str] = None,
+        failed_codes: Optional[Sequence[str]] = None,
     ) -> str:
         """
         生成决策仪表盘格式的日报（详细版）
@@ -1407,6 +1438,7 @@ class NotificationService:
             f"> {labels['analyzed_prefix']} **{len(results)}** {labels['stock_unit']} | "
             f"🟢{labels['buy_label']}:{buy_count} 🟡{labels['watch_label']}:{hold_count} 🔴{labels['sell_label']}:{sell_count}",
         ]
+        self._append_failed_stocks_line(report_lines, failed_codes, labels)
         self._append_market_status_line(report_lines, results, report_language)
 
         # === 新增：分析结果摘要 (Issue #112) ===
@@ -1987,6 +2019,7 @@ class NotificationService:
         self,
         results: List[AnalysisResult],
         report_date: Optional[str] = None,
+        failed_codes: Optional[Sequence[str]] = None,
     ) -> str:
         """
         Generate brief report (3-5 sentences per stock) for mobile/push.
@@ -2024,6 +2057,7 @@ class NotificationService:
             "",
             f"> {len(results)} {labels['stock_unit_compact']} | 🟢{buy_count} 🟡{hold_count} 🔴{sell_count}",
         ]
+        self._append_failed_stocks_line(lines, failed_codes, labels)
         self._append_market_status_line(lines, results, report_language)
         for r in sorted_results:
             signal_text, emoji, _ = self._get_signal_level(r)

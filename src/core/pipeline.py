@@ -21,7 +21,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
-from typing import List, Dict, Any, Optional, Tuple, Callable
+from typing import List, Dict, Any, Optional, Sequence, Tuple, Callable
 
 import pandas as pd
 
@@ -3600,6 +3600,10 @@ class StockAnalysisPipeline:
             success_count = len(results)
             fail_count = len(stock_codes) - success_count
         
+        # `fail_count` 過去只進日誌、沒有任何消費者,於是掉一檔的那一輪推出去的報告
+        # 讀起來是完整的(表頭的檔數是 `len(results)` = 成功數)。存下代碼讓報告說得出來。
+        self._last_failed_codes = self._resolve_failed_codes(stock_codes, results)
+
         logger.info("===== 分析完成 =====")
         logger.info(f"成功: {success_count}, 失败: {fail_count}, 耗时: {elapsed_time:.2f} 秒")
         
@@ -4096,7 +4100,8 @@ class StockAnalysisPipeline:
                                     group_results=group_results,
                                     receivers=receivers,
                                 ) -> bool:
-                                    grp_report = self._generate_aggregate_report(group_results, report_type)
+                                    grp_report = self._generate_aggregate_report(
+                                        group_results, report_type, include_failures=False)
                                     grp_image_bytes = None
                                     if channel.value in self.notifier._markdown_to_image_channels:
                                         group_payload = (
@@ -4363,14 +4368,48 @@ class StockAnalysisPipeline:
             import traceback
             logger.error(f"发送通知失败: {e}\n{traceback.format_exc()}")
 
+    @staticmethod
+    def _resolve_failed_codes(
+        stock_codes: Optional[Sequence[str]],
+        results: List[AnalysisResult],
+    ) -> List[str]:
+        """本輪請求了、卻沒有產出結果的代碼(保留請求順序)。
+
+        比對用 `AnalysisResult.code`,也就是報告與歷史記錄用的同一個欄位,所以
+        「有沒有這一檔」與讀者看到的一致。
+        """
+        produced = {
+            str(getattr(item, "code", "") or "").strip()
+            for item in (results or [])
+        }
+        return [
+            code for code in (
+                str(raw).strip() for raw in (stock_codes or [])
+            ) if code and code not in produced
+        ]
+
     def _generate_aggregate_report(
         self,
         results: List[AnalysisResult],
         report_type: ReportType,
+        include_failures: bool = True,
     ) -> str:
-        """Generate aggregate report with backward-compatible notifier fallback."""
+        """Generate aggregate report with backward-compatible notifier fallback.
+
+        ``include_failures=False`` 給分組報告用:失敗清單是**整輪**的,寫進某一組的
+        報告裡會指到不屬於那一組的代碼。
+        """
+        failed_codes = (
+            list(getattr(self, "_last_failed_codes", []) or []) if include_failures else []
+        )
         generator = getattr(self.notifier, "generate_aggregate_report", None)
         if callable(generator):
+            if failed_codes:
+                try:
+                    return generator(results, report_type, failed_codes=failed_codes)
+                except TypeError:
+                    # 舊 notifier 不認這個參數——報告照出,只是少一行揭露。
+                    logger.warning("notifier 不支援 failed_codes，本輪失敗清單不會出现在报告里")
             return generator(results, report_type)
         if report_type == ReportType.BRIEF and hasattr(self.notifier, "generate_brief_report"):
             return self.notifier.generate_brief_report(results)

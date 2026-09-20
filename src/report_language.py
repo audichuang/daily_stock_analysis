@@ -370,6 +370,7 @@ _GENERIC_STOCK_NAME_BY_LANGUAGE = {
 
 _REPORT_LABELS: Dict[str, Dict[str, str]] = {
     "zh": {
+        "failed_stocks_label": "⚠️ 本轮有 {count} 只未产出结果",
         "dashboard_title": "决策仪表盘",
         "brief_title": "决策简报",
         "analyzed_prefix": "共分析",
@@ -505,6 +506,7 @@ _REPORT_LABELS: Dict[str, Dict[str, str]] = {
         "strategy_invalid_opinions_label": "另有 {count} 个策略解析失败",
     },
     "zh-TW": {
+        "failed_stocks_label": "⚠️ 本輪有 {count} 檔未產出結果",
         "dashboard_title": "決策儀表板",
         "brief_title": "決策簡報",
         "analyzed_prefix": "共分析",
@@ -640,6 +642,7 @@ _REPORT_LABELS: Dict[str, Dict[str, str]] = {
         "strategy_invalid_opinions_label": "另有 {count} 個策略解析失敗",
     },
     "en": {
+        "failed_stocks_label": "⚠️ {count} stock(s) produced no result this run",
         "dashboard_title": "Decision Dashboard",
         "brief_title": "Decision Brief",
         "analyzed_prefix": "Analyzed",
@@ -775,6 +778,7 @@ _REPORT_LABELS: Dict[str, Dict[str, str]] = {
         "strategy_invalid_opinions_label": "{count} additional strategies failed to produce valid signals",
     },
     "ko": {
+        "failed_stocks_label": "⚠️ 이번 실행에서 {count}개 종목이 결과를 내지 못했습니다",
         "dashboard_title": "결정 대시보드",
         "brief_title": "결정 브리핑",
         "analyzed_prefix": "분석 종목",
