@@ -18,9 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] 新增 `docs/upstream-sync-2026-09-05.md`（上游 v3.31.0 → 2026-09-04 共 10 个 commit 的合并记录、冲突裁决与验证）
 - [文档] 新增 `docs/daily-report-backtest-2026-07.md`：每日分析报告机械化执行的回验（2026-07-06 ~ 09-04），含成本口径、与 0050 的成对比较，以及「结构化 verdict 与同一区块的文字结论互相矛盾」这一发现
 
+- [新功能] Web/API runtime scheduler 硬超时后扫描已落库分析历史，**默认发送**部分完成通知（`DSA_TIMEOUT_PARTIAL_NOTIFY` 未设置或为 true；此前超时不推送已落库个股），并在 `last_error` 中记录 `completed/pending` 摘要；可用 `DSA_TIMEOUT_PARTIAL_NOTIFY=false` 关闭推送（Refs #2328）。
 - [测试] 修复股票名称解析冷启动超时并发测试的同步竞态：在放行后台抓取前确认两个等待者均已结束并返回空结果，避免 Docker 发布门禁偶发失败。
 - [文档] 新增 `docs/upstream-sync-2026-09-12.md`（上游 v3.31.0 → v3.32.0 共 3 个 commit 的合并记录、`stocks.index.json` 冲突裁决，以及上游把「单一 token 不支援就跳过」改成「整批拒绝」的入口契约变更说明）
 - [测试] 釘住美股复盘日期守门的盘别：`test_us_recap_uses_the_new_york_session_not_the_taipei_date` 只 mock 了 `get_effective_trading_date` 却没釘 `infer_market_phase`，而 `_resolve_overview_date` 在盘中／午休／收盘集合竞价／盘後四个 phase 会短路回 `now.date()` 根本不问它，等於拿真牆钟当输入——台北清晨（纽约盘後）跑全量必红、其余时段必绿；改为与同档 `test_overview_date_*` 一致釘成 `PREMARKET`，生产程式码未改
+- [文档] 将仓库内所有 SerpApi 链接统一更新为新的赞助转化追踪地址。
+- [修复] 智能导入兼容带 UTF-8 BOM 的 CSV 与剪贴板文本，避免 `code` 表头被误当成数据并丢失有效股票代码。
+- [修复] 为 AkShare 大盘涨跌统计的东财与新浪降级调用增加可强制终止的子进程超时，避免外部接口无响应时长期占用分析线程（Fixes #2340）。
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
