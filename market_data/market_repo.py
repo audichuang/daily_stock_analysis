@@ -116,3 +116,16 @@ def stock_info(stock_id, engine=None):
     df = _q("SELECT * FROM market.stock_info WHERE stock_id = :sid",
             {"sid": stock_id}, engine)
     return None if df.empty else df.iloc[0].to_dict()
+
+
+def market_index(index_id, date, engine=None):
+    """單一指數在單一場次的官方收盤（`close`/`change`/`turnover`）。
+
+    這張表是這條路上**唯一帶場次身分**的指數來源:即時報價拿不到「這根 K 棒屬於
+    哪一天」,而複盤要的正是那個。`change` 帶正負號(與 `price.change` 不同,後者
+    上市列只有絕對值),已逐場次對過 `close - lag(close)`。
+    """
+    df = _q("SELECT close, change, turnover FROM market.market_index "
+            "WHERE index_id = :iid AND date = :d",
+            {"iid": index_id, "d": str(date)[:10]}, engine)
+    return None if df.empty else df.iloc[0].to_dict()

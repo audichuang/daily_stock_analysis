@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - [改进] `market_data.health` 新增财报稽核：`financial_statement` 进入表清单（skill `update-market-data` 早就叫人看它的 `end`，但 health 从来没印过），并新增 `stale financial quarters` 一行列出**已过公告截止日却一列都没有**的季与对应的 `financials` 指令；财报季更不在 `daily` 里，漏一季原本完全静默。只报不挡（整季 IFRS html 包 1-2 GB，不该挡住 `make morning`）
 
+- [修复] 台股大盘复盘的表头加权指数改用 `market` schema 中**该场次**的官方收盘，不再直接采信没有场次身分的即时报价：非交易日 yfinance 的 `hist.iloc[-1]` 会回一根幽灵 K 棒（2026-09-20 实测 `47368.04 / +0.40%`，而该份报告复盘的 2026-09-18 官方收盘是 `47180.75 / +1.93%`），14:00 排程则相反——指数已有当日、TWSE 官方统计还停在前一场次，于是同一份报告的指数与涨跌家数分属两天；查无该场次的列时保留即时值并 warning（fail-open），仅作用于台股与表头那一档
+
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 

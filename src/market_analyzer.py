@@ -775,6 +775,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         
         # 1. 获取主要指数行情（按 region 切换 A 股/美股）
         overview.indices = self._get_main_indices()
+        self._pin_tw_indices_to_session(overview.indices, today)
 
         # 2. 获取涨跌统计（A 股有，美股无等效数据）
         if self.profile.has_market_stats:
@@ -832,6 +833,80 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             logger.error("[大盘] %s action=get_main_indices status=failed error=%s", self._log_context(), e)
 
         return indices
+
+    _TW_HEADLINE_INDEX_CODES = ("TWII", "^TWII", "TAIEX")
+
+    def _pin_tw_indices_to_session(self, indices: List[MarketIndex], session_date: str) -> None:
+        """台股複盤：把加權指數的表頭數字換成 `market` schema 中**那一場次**的官方收盤。
+
+        即時報價沒有場次身分,而複盤要的正是那個,所以這條路有兩個反向的失真:
+
+        - 非交易日:`yfinance` 的 `hist.iloc[-1]`（`yfinance_fetcher.py`）會回一根
+          幽靈 K 棒。2026-09-20（週日）實測 `current=47368.04 / +0.40%`,而那份
+          報告要複盤的 2026-09-18 官方收盤是 `47180.75 / +1.93%`——連漲跌幅的
+          量級都不對,而 LLM 會照著那個數字寫「溫和上漲」。
+        - 14:00 排程:反過來,即時源已有當日、TWSE 官方統計還停在前一場次,於是
+          同一份報告的指數與漲跌家數分屬兩天（`market_review_20260916.md` 標題
+          09-16、指數 45,848.90 是 09-16,家數 207漲/791跌 卻是 09-15 的）。
+
+        `market.market_index` 逐場次存 `close`/`change`/`turnover`,`change` 帶正負號
+        （與 `price.change` 不同,後者上市列只有絕對值）。這裡**只改台股、只改表頭
+        那一檔**,其餘指數與其他市場一律不碰。
+
+        缺該場次的列就保留即時值並 warning:複盤照出,只是回到舊行為（fail-open,
+        與 `analyzer._tw_institutional_trend_lines` 同一形狀）。
+        `open`/`high`/`low`/`amplitude` 官方表沒有,改成 `None` 讓格式化印 `N/A`
+        ——留著幽靈 K 棒的那幾格等於繼續發佈假讀數。
+        """
+        if self.region != "tw" or not indices:
+            return
+        headline = next(
+            (idx for idx in indices
+             if (getattr(idx, "code", "") or "").upper() in self._TW_HEADLINE_INDEX_CODES),
+            None,
+        )
+        if headline is None:
+            return
+        try:
+            from market_data import market_repo
+            from market_data.db import get_engine
+
+            row = market_repo.market_index(
+                "TAIEX", session_date, engine=get_engine(statement_timeout_ms=3000)
+            )
+        except Exception as exc:  # noqa: BLE001 - 複盤不該因為 DB 不可用而不出
+            logger.warning(
+                "[大盘] %s action=pin_index status=failed date=%s error=%s",
+                self._log_context(), session_date, exc,
+            )
+            return
+        if not row or row.get("close") is None:
+            logger.warning(
+                "[大盘] %s action=pin_index status=no_session_row date=%s "
+                "realtime_current=%s（保留即時值,數字可能不屬於這個場次）",
+                self._log_context(), session_date, headline.current,
+            )
+            return
+
+        close = float(row["close"])
+        change = float(row["change"] or 0.0)
+        prev_close = close - change
+        realtime_current = headline.current
+        headline.current = close
+        headline.change = change
+        headline.prev_close = prev_close
+        headline.change_pct = (change / prev_close * 100) if prev_close else 0.0
+        turnover = row.get("turnover")
+        headline.amount = float(turnover) if turnover is not None else headline.amount
+        headline.open = None
+        headline.high = None
+        headline.low = None
+        headline.amplitude = None
+        logger.info(
+            "[大盘] %s action=pin_index status=success date=%s close=%.2f change_pct=%.2f "
+            "realtime_was=%s",
+            self._log_context(), session_date, close, headline.change_pct, realtime_current,
+        )
 
     def _get_market_statistics(self, overview: MarketOverview):
         """获取市场涨跌统计"""
