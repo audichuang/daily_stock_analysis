@@ -79,9 +79,19 @@
 1 failed, 7398 passed, 8 deselected, 50 warnings, 717 subtests passed in 3385.16s (0:56:25)
 ```
 
-对照 09-12 那轮的 `1 failed / 7378 passed`：**passed +20**（上游本轮两个新测试档
-`test_akshare_market_stats_timeout.py` 14 + `test_analysis_timeout_partial_notify.py` 5
-+ `test_import_parser.py` 1，其余为 subtests 计数差），failed 数不变、且是同一支。
+对照 09-12 那轮的 `1 failed / 7378 passed`：**passed +20**，逐档实测
+（`pytest --collect-only -q`）正好对上，没有剩余项：
+
+| 档案 | 新增 |
+| --- | --- |
+| `tests/test_akshare_market_stats_timeout.py`（新档） | 3 |
+| `tests/test_analysis_timeout_partial_notify.py`（新档） | 16 |
+| `tests/test_import_parser.py`（既有档，上游加一支 BOM 案例） | 1 |
+| 合计 | **20** |
+
+subtests 两轮都是 717，没有差额。failed 数不变、且是同一支。
+
+两轮不是严格的 like-for-like：09-12 的 `7378` 是修掉盘别假红後的重跑值。
 
 唯一的红就是上面那支 `.env` 泄漏假红。三步判别全部成立：
 
