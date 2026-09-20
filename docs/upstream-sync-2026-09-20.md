@@ -72,7 +72,27 @@
 
 ## 全量结果
 
-（本节在全量跑完後补）
+`uv run ./scripts/ci_gate.sh`（不带参数 = all，第四阶段 `pytest -m "not network"`），
+2026-09-20 21:47 → 22:43 本机执行：
+
+```
+1 failed, 7398 passed, 8 deselected, 50 warnings, 717 subtests passed in 3385.16s (0:56:25)
+```
+
+对照 09-12 那轮的 `1 failed / 7378 passed`：**passed +20**（上游本轮两个新测试档
+`test_akshare_market_stats_timeout.py` 14 + `test_analysis_timeout_partial_notify.py` 5
++ `test_import_parser.py` 1，其余为 subtests 计数差），failed 数不变、且是同一支。
+
+唯一的红就是上面那支 `.env` 泄漏假红。三步判别全部成立：
+
+| 步骤 | 结果 |
+| --- | --- |
+| 单跑该测试 | **1 passed** |
+| `SEARXNG_PUBLIC_INSTANCES_ENABLED=true` 单跑 | **1 failed**（复现全量里的那一个 `'true' != 'false'`） |
+| 非因果：`git diff --name-only e321a00f..HEAD` | 合并**没有碰** `system_config` 或 searxng 任何一档 |
+
+跑的时候 load average 1.75 / 12 核，不是 `AGENTS.md` §10 的牆钟负载形状；
+也没有与 vitest 并跑。
 
 ## 落地方式
 
