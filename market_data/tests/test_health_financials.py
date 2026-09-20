@@ -48,3 +48,64 @@ def test_the_first_covered_quarter_is_the_lower_bound_not_an_exclusive_one():
 
 def test_an_empty_table_is_not_reported_as_every_quarter_missing():
     assert stale_financial_quarters([], _TODAY) == []
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+class _RecordingConn:
+    """同 `test_hardening.py` 的形狀:`report()` 自己被執行,所以接線本身也守得到。"""
+
+    def __init__(self, plan, calls):
+        self.plan, self.calls = plan, calls
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, stmt, params=None):
+        sql = " ".join(str(stmt).split())
+        self.calls.append((sql, params))
+        for needle, rows in self.plan:
+            if needle in sql:
+                return _FakeResult(rows)
+        return _FakeResult([])
+
+
+def test_report_wires_the_financial_audit_into_integrity():
+    """純函式綠、但 `report()` 忘了接它,整份稽核還是不會喊。
+
+    這一格擋的是接線:把 `report()` 裡那個 key 刪掉（或漏掉 SELECT）時必須紅。
+    """
+    calls = []
+    plan = [
+        ("count(*), min(", [(1, datetime.date(2019, 5, 15), datetime.date(2019, 8, 14))]),
+        ("SELECT DISTINCT date FROM market.financial_statement",
+         [(datetime.date(2019, 5, 15),), (datetime.date(2019, 8, 14),),
+          (datetime.date(2020, 3, 31),)]),
+    ]
+
+    class _Engine:
+        def connect(self):
+            return _RecordingConn(plan, calls)
+
+    from market_data import health
+
+    result = health.report(engine=_Engine())
+
+    assert any("FROM market.financial_statement" in sql for sql, _ in calls)
+    stale = result["integrity"]["stale_financial_quarters"]
+    # 2019-11-14（2019Q3）在涵蓋範圍內卻沒有列 → 必須被點名。
+    assert (2019, 3, "2019-11-14") in stale
+    # 範圍兩端不能誤報:2019Q1／Q2／Q4 都在庫裡。
+    assert not [q for q in stale if q[2] in ("2019-05-15", "2019-08-14", "2020-03-31")]
