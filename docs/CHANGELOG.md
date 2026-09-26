@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [测试] `DecisionSignalsPage` 的「过期信号续期後刷新 active views」测试改用相对时间：fixture 的 `createdAt` 写死 `2026-06-17`，而时间轴预设只取最近 90 天，自 2026-09-15 起该笔被滤出时间轴、测试必红（与改动无关）；改为与同档其他时间轴测试一致的 `Date.now() - 1 天`。已把整套 vitest 拨到 2026-12-31 / 2027 / 2030 各跑一次，没有其他随日期到期的测试
 - [修复] REST 分析入口接受注册指数的带点 alias：`000016.SH` / `SH.000016` 原本 `is_code_like` 判 False（裸数字不符合交易所的**股票**位数规则），掉过闸门後死在无效输入检查变成 400，即使 `parse_analysis_target` 解得出 `sh000016`；改为在 `is_code_like` 之前问一次 parser，**只有 INDEX 才短路**，个股与股票名的既有路径不变
 - [修复] 自选股的等价键改为 asset-aware：`000016.SH`（上证50）与同码个股 `000016` 原本都被 `normalize_stock_code` 塌成 `000016`，加了指数後再加同码个股会被静默丢弃、删其中一个会删掉另一个；同时修正 add/remove 用正规化後的值算键（`.SH` 在算键前就被剥掉），改用原始输入，与既有条目的算法对称
 - [修复] 台股带尾字母的代码（槓桿 `00631L.TW` / 反向 `00632R.TW` / 债券 ETF `00679B.TWO` / 特别股 `2887A.TW`）现在可加入自选、可取得个股档案、可在对话中被识别：后端 `_STOCK_CODE_RE`、前端 `validation.ts` 与 `chatStockCode.ts` 三处一起放宽为「4~6 位数字 + 至多一个字母」，`normalize_stock_code` 的台股分支委派共用的 `is_suffix_market_symbol`，避免 `00631l.tw` 与 `00631L.TW` 两种写法并存
