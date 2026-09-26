@@ -75,7 +75,7 @@ uv run python scripts/check_ai_assets.py
   - `src/notification_sender/`：通知渠道适配（飞书 / Discord / ntfy / 自定义 Webhook，含 Bark）；新增渠道需实现 `base.py` 的 `Sender` protocol 并在 `NotificationService._senders` 注册
   - `src/llm/`：LLM 生成后端、usage / provider 缓存，与 LLM transport 编排（`client.py::LLMClient`，backend fallback / 脱敏 / 流式；与 `GeminiAnalyzer` 的边界见该文件模块 docstring）
   - `src/agent/`：tool-calling agent（多轮对话、分歧检测、事件流），由 `AGENT_MODE=true` 启用；可插拔策略定义在根目录 `strategies/*.yaml`（见 `strategies/README.md`）。多策略审议/合成/调度（`skills/deliberation|synthesis|scheduler|engine`）的证据契约与字段语义在 `docs/multi-strategy-contract.md`；问股后端由 `AGENT_BACKEND` 选择（`auto` 走 LiteLLM 路径，`codex_app_server` 走本机 Codex）
-  - `data_provider/`：多数据源适配与 fallback；**实时报价的市场覆盖、代码格式与指数代码的坑**见 `docs/realtime-board.md`
+  - `data_provider/`：多数据源适配与 fallback；台股各类资料走哪条路、哪些约束不能动见 `data_provider/AGENTS.md`，**实时报价的市场覆盖、代码格式与指数代码的坑**见 `docs/realtime-board.md`
   - `market_data/`：台股行情爬取 → 统一 Postgres（market schema），细节见 `market_data/AGENTS.md`
 
 ## 4. 常用命令
@@ -119,7 +119,8 @@ base=main 的 PR；走直接 merge 就要自己承担这个缺口并在交付说
 - 相依安装只有 CI 装得起来才算数
 - **CI 的 backend-tests 跑 Python 3.11，本机 venv 是 3.12**（§10）。3.12-only 语法（PEP 701 的同引号巢状
   f-string）在本机永远剖析得过——`scripts/screen_tw.py` 因此在 main 上坏了很久没人发现。已由
-  `tests/test_python_version_compat.py` 确定性挡住（它从 `ci.yml` 读版本，不写死）。
+  `tests/test_python_version_compat.py` 挡住（它从 `ci.yml` 读版本，不写死）；但本机借不到那个版本时
+  它是 **skip 不是 fail**，本机看到它绿不等于 3.11 已经剖析过。
 
 若 PR 上已有对应 CI 结果，可直接引用 CI 结论；若 CI 未覆盖改动面，需要补充说明本地验证与缺口。
 
@@ -209,17 +210,17 @@ base=main 的 PR；走直接 merge 就要自己承担这个缺口并在交付说
 
 - **`gh pr create` 在 fork 里预设把 PR 开到上游**（`ZhuLinsen/daily_stock_analysis`）——与本节第一句「不并回上游」正好相反，而且它不会问你。先 `gh repo set-default audichuang/daily_stock_analysis`，或每次带 `--repo`。踩过：第一次开 PR 直接被上游 repo 接走，靠报错才发现。
 - **环境用 `uv`（不用 `python -m venv`）**：建环境 `uv venv --python 3.12`，依赖 `uv pip install -r requirements.txt`，执行一律 `uv run python …`。常用任务封装在根目录 `Makefile`（`make help`）。
-- **台股（`.TW` 上市 / `.TWO` 上柜）是新增重点**：个股走 yfinance；支持 4~6 位代码（含 5~6 位 ETF）。
-- **台股大盘复盘市场数据走 TWSE/TPEx 官方 OpenAPI（免 key）**：见 `data_provider/twse_fetcher.py`。成交额与三大法人为上市+上柜合计；`get_market_stats` 按 `purpose="market_review:<region>"` 路由（A 股统计源限 cn、TwseFetcher 限 tw）。**涨跌家数有两个来源，口径不同**：①`twtazu_od` 的「股票」列（上市、含涨跌停家数）——该端点会停止更新却照样回 200（2026-08 实测冻结 79 天），故**必须**通过与 FMTQIK 最新交易日的比对，不符即拒收；②拒收时退回 `data_provider/tw_breadth.py::closing_breadth()` 由 `market` schema 的前复权收盘自算（上市普通股、**无涨跌停家数**，故那两栏保持 0 = 缺资料）。两者都不可用时家数全 0，下游 `_build_stats_block` 按 truthiness 判成「没有资料」。
+- **台股（`.TW` 上市 / `.TWO` 上柜）是新增重点**：必须带后缀（裸 `2330` 不进台股语义）；代码是 4~6 位数字加至多一个大写字母（`00631L`、`2887A`）。
+- **TWSE/TPEx 官方端点会停止更新却照样回 200**（2026-08 实测涨跌家数端点冻结 79 天，连续 20 份复盘印同一组数字）。消费端一律比对回应自带的日期，拿不到参照就拒收——无法证明新鲜的数字不如没有数字。
 - **自动补全索引**：台股全量种子在 `scripts/stock_index_seeds/stock_list_tw.csv`（`make refresh-tw` 重建）。`.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` **必须保持 `false`**——否则运行时会从上游 GitHub 拉索引、覆盖掉本地台股/美股增量（`.env.example` 示例值是上游的 `true`，勿照抄）。
 - **LLM 主模型用 DeepSeek，且 `.env` 须显式设 `LITELLM_MODEL`**：否则当 shell 环境导出了 `GEMINI_API_KEY` 时，`load_dotenv` 不覆盖既有环境变量，自动推断会优先选 Gemini。**模型名以 `.env` 现值为准**（DeepSeek 停用过 `deepseek-chat`，写死在这里只会再过时一次）。
 - **推理模型的 token 预算会静默吃掉整个回应**：`deepseek-v4-flash` 这类会把预算花在推理上，内容为空而 `finish_reason=length`，症状是随机「分析未成功」，**台股美股都会中**。**加预算不是可用的槓桿**——个股分析的 `max_output_tokens` 由 `analyzer.analyze()` 写死 8192，`LLM_MAX_TOKENS` 只有选股 pipeline 读得到；实测 8192 下仍约 1/3 回空。要修就换 `LITELLM_MODEL`。
 - **通知用 Bark，走 Doppler 注入**：`make serve` / `make review-tw` 用 `doppler run -p shioaji -c dev` 把 Doppler 的 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`（`custom_webhook_sender.py` 自动识别 `api.day.app`），secret 不落地 `.env`。**`make analyze` 不含 Doppler 包装**——要 Bark 通知需手动包：`doppler run -p shioaji -c dev -- bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py --stocks 2330.TW'`；非交易日需加 `--force-run`。
-- **全量离线测试（`uv run ./scripts/ci_gate.sh`，第四阶段 `pytest -m "not network"`）约 38 分钟，且现在应该全绿**：2026-07-30 实测 5202 passed / 0 failed / 8 deselected（`5e3d4bd3` 修掉最后一个顺序敏感 flaky——旧版在收集期算一次假时戳，跑到后段必然过 realtime TTL）。**所以红一个就是回归，不要再当 baseline 噪音放过**。别把全量当快速门槛（快速验证用受影响测试文件的子集）。
-- **红一个不一定是回归，先排除「负载假红」再排除回归**：本 repo 有两处测试的失败是**墙钟负载敏感**而非顺序敏感，在忙机器上必红、在空机器上必绿，看起来跟回归一模一样。判别法：**把失败的档案单独在空机器上重跑**，以及看错误是不是 timeout 类（`Test timed out`、`assertFalse(thread.is_alive())`）而不是断言值不对。实测两例：①`tests/test_storage.py` 的冷启动测试原本写死 `join(timeout=5)`，而 release 之后跑的是真的 `create_all`（忙机器上 9.07s）——load 4.10 红 / load 2.63 绿，已于 2026-08-23 放宽到 60s（`competitor_done.wait(timeout=0.2)` **刻意不动**：那条断言的是「竞争者此刻仍被挡住」，值越大越严格）；②`apps/dsa-web` 的 vitest 在与 pytest 同时跑时 143 failed，空机器上 15 failed、单跑该档 2 failed、提高 timeout 剩 1 failed **而且换了一个测试**，CI 上则完全没重现——全部是 `Test timed out in 5000ms`。**别把两个重活并行跑**（pytest 全量 + vitest 全量），那会同时污染两份结果。
-- **「离线」测试其实会连外，是这个 repo 最贵的一类坑**（踩过一次挂 **6 小时 21 分**：行程 `S` 状态、六小时只烧 30 秒 CPU、对外 HTTPS 连线 ESTABLISHED 但对方不回，而当时没有任何东西会砍它）。止血已就位：`setup.cfg` 的 `--timeout=300`（需 `pytest-timeout`）会让它红在那个测试上并印出堆叠。真正要记住的是下面这条为什么难发现——A 股那条链（`alphasift_service` 的 `DsaEastMoneyHotspotProvider`、`akshare`、`alphasift` 套件）**每个网路失败都被 `except` 接住再 fallback**，所以漏一格 mock 的测试**不管有没有网路都是绿的**，只有对方「收了连线却不回」时才炸。两个必踩的形状：`provider="akshare"` 会让未 patch 的 `_resolve_hotspot_provider` 造出真 provider；`FakeProvider(DsaEastMoneyHotspotProvider)` 会**继承**整条连外子树，覆写叶方法挡不住。查法见 `tests/test_alphasift_api.py` 的 `_no_outbound_network` fixture（守门刻意继承 `BaseException`，否则会被 `except Exception` 吞掉）。另外 **LiteLLM 在 import 时**会去 `raw.githubusercontent.com` 抓 model cost map（有本地 fallback，不会挂）。
-- **第三种假红：本机 `.env` 漏进 `os.environ`，害「预设值」测试在全量里红、单跑绿。**2026-08-24 实测全量 1 failed / 6498 passed，红的是 `tests/test_system_config_service.py::...::test_get_config_defaults_public_searxng_instances_off`（`'true' != 'false'`）。原因不是顺序敏感也不是负载敏感：本机 `.env` 有 `SEARXNG_PUBLIC_INSTANCES_ENABLED=true`，而全量里任何较早跑的测试呼叫 `load_dotenv()` 就把它写进 `os.environ`，之后 `SystemConfigService.get_config` 就读到它当「预设」。**CI 没有 `.env`，所以那里永远不会红**——这类红只在本机出现。判别法：单跑该测试（绿）、再带 `<KEY>=<.env 里的值> pytest <该测试>`（红），两者都成立就是这个形状，不是回归；要再确认非因果，把改动 `git stash` 后重跑第二步，照样红。这类测试的真正修法是隔离 `os.environ`，但那是既有问题、CI 绿、不影响生产行为，别顺手改。
-- **跑全量期间不要改档**：pytest 在收集期就 import 完模组，边跑边改等于验一个混合状态——踩过：改了 `TRADING_DAYS` 之后那份「全绿」其实验的是旧常数，结论作废、得重跑 38 分钟。要改就等它跑完。
-- **`--help` 不是安全探针**：`scripts/` 底下有脚本**完全没有 argparse**（`refresh_us_stock_index.py`、`merge_tw_into_index.py` 的 `main()` 直接做事、忽略 argv），拿 `--help` 扫一遍会**真的执行它们**——踩过：一次扫描连网抓了美股清单、重写进版控的 `apps/dsa-web/public/stocks.index.json`（+351 笔，所幸没丢本地增量）。要探能不能跑，先 `grep -c argparse`；真要修就给那两支补 argparse。
-- **台股历史数据（行情/筹码/财报）统一在 Postgres（`market` schema），且为唯一数据源（无本地备份）**：`DATABASE_URL` 在 `.env`。台股日线优先走 `MarketDBFetcher`（本地 DB，priority=1），无数据 fallback yfinance。爬取/数据更新（含财报季更 `financials`）/踩雷见 `market_data/AGENTS.md`。
-- **台股即时看板/走势用永丰 Shioaji**：`shioaji` 已列入 `requirements.txt`（不需手动安装）。真正的降级触发点是**缺金钥**（同走 Doppler `shioaji/dev` 的 `SHIOAJI_API_KEY`/`SHIOAJI_SECRET_KEY`）——此时**静默降级 yfinance**，看板照样出数据但已是延迟报价。症状是「能跑但数字不对劲」，不是报错，排查先确认金钥有没有注入。**可辨识的降级信号是 `source` 由 `shioaji` 变 `fallback`、且 `limit_up`/`limit_down` 变 `None`（涨跌停是 Shioaji 专属字段）；名称不会变英文**——台股名称由本 fork 的股票索引（2124 档台股种子）补齐，降级后仍是中文，别拿名称语言判断有没有走 Shioaji（2026-07-25 live 对照实测）。看板/批次行情/走势/fallback/Shioaji session 与 ts 时区、kbars 30 天上限等细节见 `docs/realtime-board.md`。
+- **全量离线测试（`uv run ./scripts/ci_gate.sh`，第四阶段 `pytest -m "not network"`）约 38 分钟，应该全绿**。别把全量当快速门槛（快速验证用受影响测试文件的子集）。
+- **红了先排除四种假红，再判回归**——它们看起来跟回归一模一样：墙钟负载、离线测试连外、本机 `.env` 漏进 `os.environ`、测试吃到真实时段。第一步都是**把红的那个档单独在空机器上重跑**；每一种的特征与判别法在 `tests/AGENTS.md`。排除之后还红，就是回归，不要当 baseline 噪音放过。
+- **别把两个重活并行跑**（pytest 全量 + vitest 全量）：实测 vitest 从 15 failed 变 143 failed，全部是 timeout，两份结果同时被污染。
+- **「离线」测试其实会连外，是这个 repo 最贵的一类坑**（踩过一次挂 6 小时 21 分，只烧 30 秒 CPU）。止血已就位：单测有 timeout（直接打 `pytest` 是 `setup.cfg` 的 300 秒，经 `ci_gate.sh` 是 120 秒），会让它红在那个测试上并印出堆叠。另外 LiteLLM 在 import 时会去 `raw.githubusercontent.com` 抓 model cost map（有本地 fallback，不会挂）。
+- **跑全量期间不要改档**：pytest 在收集期就 import 完模组，边跑边改等于验一个混合状态——踩过：改了常数之后那份「全绿」其实验的是旧值，结论作废、得重跑 38 分钟。要改就等它跑完。
+- **`--help` 不是安全探针**：`scripts/` 底下有脚本**没有 argparse**，`main()` 直接做事、把参数忽略或当成路径——`merge_tw_into_index.py` 会改写进版控的索引，`migrate_sqlite_to_pg.py` 会对 `market` schema 做 `TRUNCATE`。拿 `--help` 扫一遍会**真的执行它们**（踩过：一次扫描重写了进版控的 `stocks.index.json`）。要探能不能跑，先 `grep -c argparse`。
+- **台股历史数据（行情/筹码/财报）统一在 Postgres（`market` schema），且为唯一数据源（无本地备份）**：`DATABASE_URL` 在 `.env`。爬取/数据更新（含财报季更 `financials`）/踩雷见 `market_data/AGENTS.md`。
+- **台股即时看板/走势用永丰 Shioaji，缺金钥时静默降级 yfinance**（金钥同走 Doppler `shioaji/dev`）：看板照样出数据但已是延迟报价，症状是「能跑但数字不对劲」，不是报错，排查先确认金钥有没有注入。可辨识的降级信号是 `source` 由 `shioaji` 变 `fallback`；细节见 `docs/realtime-board.md`。

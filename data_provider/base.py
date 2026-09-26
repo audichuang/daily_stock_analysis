@@ -4199,7 +4199,7 @@ class DataFetcherManager:
 
         # 台股(.TW/.TWO)：一律附上 TWSE/TPEx 免金钥月营收（monthly_revenue / monthly_revenue_yoy /
         # revenue_month）——月营收是台股最受重视的即时基本面指标，即使 yfinance 已有年度成长也值得并列。
-        # 另用月营收 YoY 兜底 yfinance 缺失的 revenue_yoy。走 _run_with_retry 受 stage 预算约束、fail-open。
+        # 月营收 YoY 不回填通用的 revenue_yoy（理由见下方并入处）。走 _run_with_retry 受 stage 预算约束、fail-open。
         growth_chain = bundle_chain
         if market == "tw":
             growth_timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))

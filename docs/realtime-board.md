@@ -15,8 +15,11 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 
 **这张表是 2026-08-03 实测出来的，不是从代码结构推的**：`MU`／`AAPL`／`TSM`／`^SOX`／
 `005930.KS`／`000660.KS` 六檔的 `price` 与 `change_pct` 都正确（误差 0.00pp）。
-**但 `source` 一律回 `fallback`、`provider_timestamp` 与 `is_stale` 都是 `None`**
+**但 `provider_timestamp` 与 `is_stale` 都是 `None`**
 ⇒ 这条路径给不出「这笔报价有多新」，盘中引用必须自己标时点。
+`source` 在实测当时一律回 `fallback`；2026-08-09 起美股／日股／韩股改标 `yfinance`
+（yfinance 本来就是它们的指定主来源，标成 `fallback` 会让每份分析都被判成行情降级）。
+**台股刻意维持 `fallback`**——那是辨识 Shioaji 金钥没注入的信号，见下方真值表。
 盘前要的**隔夜收盘＋近 5 日**仍走 `scripts/overnight.py`（需要序列，单点报价给不了）。
 
 ## 台股盘中字段（白天看盘视角，仅 Shioaji 提供）
@@ -26,7 +29,7 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 | 字段 | 来源 | 看盘意义 | 可靠性 |
 | --- | --- | --- | --- |
 | `average_price` 均价(VWAP) | snapshot | 站上=偏多 / 跌破=偏空 的多空分界 | 全时段可靠（开盘头一两分钟量未累积前偏噪） |
-| `limit_up` / `limit_down` 涨跌停价 | **contract**（开盘即定） | ±10% 板；看板算「距板% / 触及涨停 / 触及跌停」 | 全时段可靠；**触及板 ≠ 锁死**（锁板需五档佐证，本路径无五档，故只显示「触及」不显示「锁死」） |
+| `limit_up` / `limit_down` 涨跌停价 | **自算**：昨收 ±10% 按 tick 对齐（`tw_price_limits`）；昨收缺失才退回 contract 静态值 | ±10% 板；看板算「距板% / 触及涨停 / 触及跌停」 | 全时段可靠；contract 静态值会与当日参考价脱节（实测 2330 给 2625/2155，正确是 2570/2110），所以不直接用。**触及板 ≠ 锁死**（锁板需五档佐证，本路径无五档，故只显示「触及」不显示「锁死」） |
 | `best_bid`/`best_ask` (+`_volume`) 委买委卖 | snapshot | 一档排队张数 / 即时支撑压力（收盘集合竞价尤甚） | top-of-book 单档，**非五档**；集合竞价/锁板时挂量会失真 |
 | `last_tick_type` 内外盘 | snapshot | 最后一笔主买(外盘,1)/主卖(内盘,2)/中性(0) | **仅最后一笔方向，非累计内外盘比**；轮询会逐笔刷掉 |
 | `volume_ratio` 量比 | snapshot | 量能异动快筛 | **开盘初段（约 ~10:30 前）累计量小、偏低失真**，前端附提示 |
@@ -68,7 +71,7 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 
 ## 踩雷与限制
 
-- **`shioaji` 是 optional 依赖**：未 `uv pip install shioaji` 或无金钥时数据源自我停用，台股**静默降级 yfinance**（行情延迟、走势 day 改用 yfinance 5m 也延迟、股票名变英文）。
+- **缺金钥时数据源自我停用，台股静默降级 yfinance**（行情延迟、走势 day 改用 yfinance 5m 也延迟）。`shioaji` 套件已列入 `requirements.txt`，真正的触发点是金钥没注入。可辨识的信号是 `source` 由 `shioaji` 变 `fallback`、且 `limit_up`/`limit_down` 变 `None`；**名称不会变英文**——降级路径的名称先查本 fork 的股票索引，索引里有的台股仍是中文（2026-07-25 live 对照实测），只有索引没收录的代码才会落到 Yahoo 的英文名。
 - **Shioaji `kbars` 单次区间上限 30 天**（超过回 400 `Kbars date range must not exceed 30 days`），故 year 走势走 yfinance、month 取近 30 天。
 - **Shioaji `snapshot.ts` / `kbars.ts` 是台北时间的裸值（非 UTC）**：必须按 `+08:00` 还原绝对时刻（见 `data_provider/shioaji_fetcher.py:_ns_to_iso`），否则 `as_of`/走势时间轴差 8 小时、`is_stale` 因 provider 时间「在未来」恒为 0（假新鲜）。
 - **只有美股指数走得通实时路径。** `US_INDEX_MAPPING` 只收美股（SPX／DJI／IXIC／NDX／VIX／RUT／
@@ -96,6 +99,9 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
   盘中即时 breadth 的现成工具见 `scripts/intraday_breadth.py`。
 
 ## Fallback 真值表（台股请求）
+
+表中的「yfinance」指实际供数的来源；API 回应里 `source` 栏位的值是 `fallback`，不是 `yfinance`
+（`yfinance` 这个值只给美股／日股／韩股用）。
 
 | 状态 | UI source | staleness |
 | --- | --- | --- |

@@ -101,10 +101,10 @@ PY
 约束与边界：
 
 - **严格 suffix-only**：裸 `2330`、`00878` 等不带后缀的代码不会进入台股语义（`detect_market` / `get_market_for_stock` 仅在显式 `.TW`/`.TWO` 后缀时返回 `tw`）。Web 自动补全已内置台股全量种子索引（约 2100 档，可按代码/中文名/别名搜索并补上后缀）；未收录标的仍需手动输入完整 suffix 代码。
-- 台股日线和基础实时/近实时行情只走 `YfinanceFetcher`，不尝试 AkShare、Tushare、Efinance、Pytdx、Baostock 等 A 股专属数据源。
+- 台股日线优先读本地 Postgres `market` schema（`MarketDBFetcher`），查无资料才退 `YfinanceFetcher`；实时行情优先走永丰 Shioaji，缺金钥或无报价时退 `YfinanceFetcher`（见 [`realtime-board.md`](realtime-board.md)）。不尝试 AkShare、Tushare、Efinance、Pytdx、Baostock 等 A 股专属数据源。
 - 基本面复用既有 offshore yfinance 轻量路径；`institution` 区块额外消费台股三大法人资料并渲染到报告，A 股专属资金流、龙虎榜、板块等能力按 `not_supported` 降级。
 - 台股 valuation（PE/PB/殖利率）由 `TwseFundamentalAdapter` 用 TWSE BWIBBU_ALL（上市）+ TPEx peratio_analysis（上柜）免金钥全市场快照补全（yfinance 对台股不返回 PE/PB），在 `get_fundamental_context` 的 valuation 阶段叠加，source_chain 标记 `twse_fundamental`；全市场快照 4h TTL 缓存、fail-open，ETF 与查无代码回空。
-- 台股 growth 一律附月营收 `monthly_revenue`/`monthly_revenue_yoy`/`revenue_month`（TWSE t187ap05_L 上市 + TPEx mopsfin_t187ap05_O 上柜，单位千元已转元），并在 yfinance 缺 `revenue_yoy` 时用月营收 YoY 兜底。完整季报三表（资产负债/季净利明细）仍未覆盖（需 MOPS）。
+- 台股 growth 一律附月营收 `monthly_revenue`/`monthly_revenue_yoy`/`revenue_month`（TWSE t187ap05_L 上市 + TPEx mopsfin_t187ap05_O 上柜，单位千元已转元）。月营收 YoY **不回填**通用的 `revenue_yoy`：两者口径不同（月对年），回填会被下游「营收同比」标签读成年增。完整季报三表（资产负债/季净利明细）仍未覆盖（需 MOPS）。
 - 报告 Prompt 已增加台股市场语义（新台币、三大法人、TWSE/TPEx ±10% 涨跌停），并将三大法人净买卖超注入 LLM 分析上下文，避免套用 A 股北向资金、龙虎榜等概念。
 - 交易日历注册 `tw: XTAI / Asia/Taipei`。TWSE 为 09:00–13:30 连续交易、无午休；收盘集合竞价 13:25–13:30 已按 5 分钟启发式窗口建模（`_CLOSING_AUCTION_WINDOW_MINUTES["tw"]=5`，`market_phase` 可返回 `closing_auction`）。JP/KR 也已按常规交易时段补齐收盘集合竞价窗口（JP 15:25-15:30、KR 15:20-15:30）。若本地 `exchange-calendars` 版本缺少对应日历，既有 fail-open/fail-closed 语义保持不变。
 - 主要指数提供加权指数 `^TWII` 与柜买指数 `^TWOII`。
@@ -114,7 +114,7 @@ PY
 
 不承诺项：
 
-- 不承诺实时行情；Yahoo Finance 数据可能延迟或字段缺失。
+- 未注入 Shioaji 金钥时不承诺实时行情；此时走 Yahoo Finance，数据可能延迟或字段缺失。
 - 不承诺完整基本面、行业/板块、市场宽度或涨跌家数（台股涨跌家数仅上市口径）；`MARKET_REVIEW_REGION` 接受 `cn/hk/us/tw/jp/kr/both` 或这些市场的逗号子集（按输入顺序保留，如 `tw,us` = 台股在前）。台股大盘复盘已接入（TWSE/TPEx 官方 OpenAPI，见 `data_provider/twse_fetcher.py`）。
 - 台股股票索引/种子与 Web 自动补全已接入（约 2100 档上市櫃个股与 ETF）；但告警 MarketRegion 与后端 Market Light 告警仍限 `cn/hk/us`，未含 `tw/jp/kr`。
 - 不补齐 Portfolio 的 TWD 汇率、成本、市值完整口径；台股 Portfolio 当前属于 partial valuation 市场。
