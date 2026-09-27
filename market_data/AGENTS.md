@@ -49,7 +49,7 @@
 ## 踩雷
 
 - `monthly_revenue.revenue` 單位是**千元**(MOPS 原始單位);對照 `twse_fundamental_adapter` 是 `*1000` 轉元後才用。
-- `monthly_revenue` **僅上市(sii)口徑**(歷史與現行皆同,上櫃全缺);要雙市場月營收請用 `twse_fundamental_adapter` 的即時快照。
+- `monthly_revenue` 自 2026-09 起 `crawl_monthly_revenue` 上市(`/sii/`)＋上櫃(`/otc/`)各抓一份、**逐市場各自寫入**;之前入庫的歷史只有上市,上櫃歷史要逐月 `revenue --month` 補(同樣是動態產生的彙總報表,存活偏誤一樣在)。表內沒有市場欄——`scripts/screen_tw.exclude_otc_revenue` 用種子檔 `.TWO` 判定上櫃,選股與量測預設排除,**別把上櫃營收直接放進漏斗**,理由見該函式。
 - **月營收彙總報表有存活偏誤,而且是靜默的**:`crawler.crawl_monthly_report` 走的 `t21sc03_<民國年>_<月>.html` 看起來是按月存檔,實際是**動態產生**的,只列出目前仍在申報的公司。實測 2020-06 那份 979 家裡完全沒有 6452 康友、2448 晶電、2456 奇力新、5305 敦南、3698 隆達——這五檔當時全部還在交易。**用它回補歷史,後來下市的公司會永久缺席**,任何「要求營收成長」的選股條件都會把負尾系統性移除。修法是 `cli revenue-pit`(走 `sources.crawl_company_monthly_revenue`,MOPS 個別公司查詢),但只補得回**仍公開發行**的公司;被吸收合併的回「該公司不繼續公開發行」(如 2448 晶電併入富采),那部分是硬邊界,只能用敏感度分析給上界(`scripts/measure_signal_forward.py --survivorship-bound`)。
 - **判定「已下市」要用 `price` 表的最後交易日,不是「不在 `stock_info` 裡」**:`stock_info` 只含上市約 1,100 檔,用它判定會把全部上櫃公司都算成下市(實測 70 檔 → 973 檔)。
 - **`price.change` 對上市股票沒有正負號,算任何報酬都不要碰這一欄**——用 `close` 自己 diff。TWSE `MI_INDEX` 的 `漲跌價差` 只有絕對值,方向在獨立的 `漲跌(+/-)` 欄(`+`／`-`／空=平盤／`X`=無比價);`crawler.crawl_price` 曾把那欄 `to_numeric(errors="coerce")` 成 NaN 後被 dropna-all 整欄丟掉,**2013 起到 2026-08 入庫的上市列全部只有絕對值**(2026 年至今 95,211/353,563 列與 `close - lag(close)` 反號)。上櫃走 TPEx JSON(`漲跌` 本身帶號)沒中,`market_index.change` 走 FMTQIK 也沒中——所以症狀是「同一張表上市全正、上櫃正常」,不看市場別會以為資料沒問題。爬取端已於 2026-08-23 修好,2013 起的上市歷史列也已用 `scripts/backfill_price_change_sign.py` 回補正負號(2013 之前沒有復權因子,刻意不補);`to_daily_frame` 不再讀這欄,正確性不依賴它。**方向不能用 `close - lag(close)` 重算**——官方比的是當日參考價(前收 × 復權因子),除權息日兩者方向不同。踩過:`to_daily_frame` 舊版用 `close - change` 回推昨收,讓上市股票每個下跌日的 `pct_chg` 都變成上漲,而那個欄位會進台股個股分析的 LLM prompt。

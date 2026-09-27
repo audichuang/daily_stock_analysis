@@ -363,7 +363,7 @@ Replace the path if the app is not in `/Applications`. Never run `xattr` against
 **Method**:
 ```bash
 # Local run
-python main.py --market-only
+python main.py --market-review
 
 # GitHub Actions
 # Select mode: market-only when manually triggering

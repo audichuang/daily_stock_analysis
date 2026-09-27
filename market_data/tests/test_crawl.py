@@ -74,12 +74,16 @@ def test_price_all_requires_both_markets(monkeypatch):
     assert crawl._price_all(date(2024, 6, 3)) is None
 
 
+def _revenue_frame(stock_id, revenue, announce="2024-02-10"):
+    return pd.DataFrame([{
+        "stock_id": stock_id, "date": pd.to_datetime(announce),
+        "當月營收": revenue, "去年同月增減(%)": 12.3, "上月比較增減(%)": -1.1,
+    }]).set_index(["stock_id", "date"])
+
+
 def test_crawl_monthly_revenue_derives_month_key(pg_conn, monkeypatch):
-    def fake(month):
-        return pd.DataFrame([{
-            "stock_id": "2330", "date": pd.to_datetime("2024-02-10"),
-            "當月營收": 2000000, "去年同月增減(%)": 12.3, "上月比較增減(%)": -1.1,
-        }]).set_index(["stock_id", "date"])
+    def fake(month, market):
+        return _revenue_frame("2330", 2000000) if market == "sii" else None
 
     monkeypatch.setattr(crawl.crawler, "crawl_monthly_report", fake)
     n = crawl.crawl_monthly_revenue(pg_conn, date(2024, 1, 1))
@@ -89,6 +93,37 @@ def test_crawl_monthly_revenue_derives_month_key(pg_conn, monkeypatch):
         "WHERE stock_id='2330' AND revenue_month='2024-01-01'"  # 營收所屬月
     )).fetchone()
     assert row[0] == 2000000
+
+
+def test_crawl_monthly_revenue_writes_both_markets_and_survives_one_failing(pg_conn, monkeypatch):
+    """上櫃月營收曾整段缺席(彙總報表只抓 /sii/),`screen_tw` 的 YoY 門檻因此把整個上櫃
+    靜默篩掉。兩個市場都要抓;而其中一邊抓不到時,另一邊照寫。
+    種子用 1900 年:本機 pg_conn 連的是正式庫(rollback 交易),真實列不會落進這個月。"""
+    asked = []
+
+    def both(month, market):
+        asked.append(market)
+        return _revenue_frame("1101" if market == "sii" else "6488",
+                              111 if market == "sii" else 222, announce="1900-02-10")
+
+    monkeypatch.setattr(crawl.crawler, "crawl_monthly_report", both)
+    assert crawl.crawl_monthly_revenue(pg_conn, date(1900, 1, 1)) == 2
+    assert asked == ["sii", "otc"]
+    rows = dict(pg_conn.execute(text(
+        "SELECT stock_id, revenue FROM market.monthly_revenue "
+        "WHERE revenue_month='1900-01-01' AND stock_id IN ('1101','6488')")).fetchall())
+    assert rows == {"1101": 111, "6488": 222}
+
+    def otc_down(month, market):
+        return _revenue_frame("1101", 333, announce="1900-03-10") if market == "sii" else None
+
+    monkeypatch.setattr(crawl.crawler, "crawl_monthly_report", otc_down)
+    assert crawl.crawl_monthly_revenue(pg_conn, date(1900, 2, 1)) == 1
+
+
+def test_crawl_monthly_report_rejects_unknown_market():
+    with pytest.raises(ValueError):
+        crawl.crawler.crawl_monthly_report(date(2024, 1, 1), market="tw")
 
 
 def test_partial_quarter_keeps_evidence_but_forces_a_refetch(tmp_path, monkeypatch):

@@ -114,9 +114,16 @@ def crawl_price(date):
     return df
 
 
-def crawl_monthly_report(date):
+# MOPS 月營收彙總報表的市場段:sii=上市、otc=上櫃。兩者版面相同(實測 2026-09 皆為單表、
+# 同一組 MultiIndex 表頭),差別只在 URL 路徑。
+MONTHLY_REPORT_MARKETS = ("sii", "otc")
+
+
+def crawl_monthly_report(date, market="sii"):
+    if market not in MONTHLY_REPORT_MARKETS:
+        raise ValueError(f"unknown monthly-report market {market!r}")
     url = (
-        "https://mopsov.twse.com.tw/nas/t21/sii/t21sc03_"
+        f"https://mopsov.twse.com.tw/nas/t21/{market}/t21sc03_"
         f"{date.year - 1911}_{date.month}.html"
     )
     print(url)
