@@ -13,7 +13,9 @@
   會**擋掉** skills 以外任何被追蹤的 `.claude/` 檔案。放那裡等於這份記錄不存在。
 - **git history 就是防竄改機制**：`confidence` 是一個對未來的預測，只有在**結果出來之前**就已經
   commit，它才有意義。事後補記或改掉一個數字，回驗算出來的 Brier score 全是假的。
-  所以規則是：**當天研究完就 commit，不要累積幾天一起補。**
+  所以規則是：**當天研究完就 commit，不要累積幾天一起補；事後補的 `outcome` 另開一個 commit。**
+  踩過：2408／3017（08-13 的判斷）晚了 10 天才進版控；morning-calls 有 4 筆是 08-05 同一個 commit
+  補進來的，5 筆裡最後只有 1 筆可計分。
 
 ## 一行一個決策，欄位語意
 
@@ -25,6 +27,7 @@
 | `confidence` | 「進場後**第 60 個交易日收盤**淨報酬 ≥ +30%」的主觀機率。池子基準率 **20.2%** |
 | `exp_upside` / `exp_downside` | 命中／沒命中時的**條件均值**報酬。`exp_downside` 填負數 |
 | `entry_range` | 建議進場區間。開盤跳空高於上界 → 回驗判定**未成交**，不計入統計 |
+| `invalidation_legs` | 把 `invalidation` 拆成逐腿的陣列，每腿 `{"leg", "source", "true_at_write"}`。`source` 寫**去哪裡查得到**（DB 欄位如 `market.price.close`，或具名的外部來源如「SCFI 週報」）；`true_at_write` 是寫入當下這腿**是否已經成立**。規則與理由見 skill `tw-swing-research` Step 4 |
 | `invalidation` | 論題失效條件（催化劑破功、跌破結構），**不是**固定百分比停損。裡面的均線數值是**寫入當天的快照**，別照它判——`make verify-decisions` 會把每個 `MA<n>` 即時重算（前復權）並在「照舊值會得到相反結論」時標 ⚠。踩過：6166 在 07-28 收 137.0，照日誌的 `MA10(136.7)` 看是未跌破，當天真正的 MA10 是 138.70，其實已跌破 |
 | `catalyst` / `catalyst_type` / `durable` / `digested` | 催化劑本身、五類分類、可否延續、消化程度 |
 | `peer_confirm` / `peer_recent_12m` | 同業有沒有一起動、該產業近 12 個月訊號的實測結果 |
@@ -45,8 +48,10 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
 - `morning-calls.jsonl` — 每日盤前的 **regime 判讀與動作**（skill `tw-morning-call`），一天一行。
   跟上面兩個檔的層級不同：那是**逐檔**的 60 日進場預測，這是**當日大盤**的方向與動作。
   **回驗程式還沒寫**（`make verify-decisions` 只讀 `swing-decisions.jsonl`），所以欄位刻意都是
-  事後可用 DB 算對錯的觀測值（`regime`、`gap_expected` 都能對次日 `market.market_index` 驗）。
-  累積到 20 筆再寫回驗；在那之前不要聲稱 regime 判讀有經驗證的優勢。
+  事後能驗對錯的觀測值。`gap_expected` **不能對 `market.market_index` 驗**，那張表沒有開盤價；
+  要改對 TWSE 官方加權指數日資料（`MI_5MINS_HIST`，驗法見 skill `tw-morning-call` Step 4）。
+  每行都要明寫 `exclude_from_scoring`，累積到 20 筆**可計分**的判讀再寫回驗；在那之前，
+  不要聲稱 regime 判讀有經驗證的優勢。
 
 ## 怎麼用
 

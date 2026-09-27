@@ -50,6 +50,7 @@
 | [ResearchArtifact 结构化研究产物](research-artifact.md) | structured_report 字段、Thesis / Evidence / Invalidation / Next Action / Data Quality 契约和旧报告兼容边界 |
 | [资讯 / 情报源](intelligence-sources.md) | RSS/Atom 合规资讯源配置、测试、拉取、去重、存储、查询与安全边界 |
 | [分析上下文包契约、运行态消费与可见性](analysis-context-pack.md) | AnalysisContextPack 首版范围、字段质量状态、P1/P2 内部契约、P3 Prompt 摘要消费、P4 历史/API/Web 低敏可见性、P5 数据质量评分、P6 迁移回滚与源码锚点；完整指南补充 #1386 阶段感知分析、迁移与回滚入口 |
+| [台股操作手册](tw-operating-guide.md) | 每天几点做什么、每日报告怎么读（看文字结论与狙击点位、忽略买卖标签；没有持有期）、三条线（AI 报告／波段／价值）的分工与证据状态、上柜月营收的口径闸门 |
 | [台股波段候选流水线](tw-swing-pipeline.md) | 量化预筛 → AI 事件面研究 → 回验四层的契约：冻结的讯号定义、前瞻报酬分布与区块 bootstrap 区间、组合层（资金竞争／排序／走前验证）结论、回验指标，以及明确站不住的部分 |
 | [台股波段判断事后对帐 2026-08](tw-swing-hindsight-2026-08.md) | 2026-07-24 ~ 08-05 的 4 笔波段决策、5 笔盘前 regime、7 档筛选候选量到 2026-08-21 的中途对帐：逐档还原价报酬与同窗 0050 对照、过了对抗审查的误判、可知与不可知的盲点、该改与**不该改**的清单 |
 | [图片识别 Prompt](image-extract-prompt.md) | 图片识别股票信息的 Prompt 与使用边界 |

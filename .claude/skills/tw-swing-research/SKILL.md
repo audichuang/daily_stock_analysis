@@ -170,6 +170,8 @@ down=-0.18` 算出 +0.234 而放行，正確答案是 **-0.054、應該 pass**�
  "catalyst":"歐洲線運價 7 月連三週上漲、SCFI 站上 2200","catalyst_date":"2026-07-18",
  "catalyst_type":"產業循環","durable":true,"digested":"partial",
  "entry_range":[85.0,88.0],"invalidation":"SCFI 連兩週回落或跌破 MA20 (82.1)",
+ "invalidation_legs":[{"leg":"SCFI 連兩週回落","source":"SCFI 週報","true_at_write":false},
+                      {"leg":"收盤跌破 MA20 (82.1)","source":"market.price.close","true_at_write":false}],
  "peer_confirm":true,"peer_recent_12m":"航運近 12 個月 2 個事件、均值 -12%",
  "confidence":0.32,"exp_upside":0.45,"exp_downside":-0.18,"theme":"貨櫃運價",
  "decided_at":"2026-07-26T21:40+08:00",
@@ -178,6 +180,24 @@ down=-0.18` 算出 +0.234 而放行，正確答案是 **-0.054、應該 pass**�
 ```
 
 `verdict` 只有 `enter` 與 `pass` 兩種。另外補 `decided_at`（你做判斷的時點）讓資訊集可稽核。
+
+**`invalidation` 的兩條硬約束**（`enter` 與 `pass` 都適用，`pass` 的失效條件一樣會被回驗）：
+
+1. **每一腿都要查得到**：寫成 DB 查得到的量（收盤、MA、法人），或指名一個可查的外部來源
+   （「SCFI 週報」「公司重訊」）。「需求轉弱」「題材退燒」這類沒有來源的腿，事後誰來看都驗不了。
+2. **寫入當下不能已經成立**：每一腿都要在 `decided_at` 當下查一次。2615 萬海判 `pass`，失效條件的
+   SCFI 那一腿在寫入時就已經成立，所以那筆判斷從一開始就沒辦法被推翻。到 08-21 中途結算時，它是一筆漏掉的 +50%。
+   某一腿已經成立時，二選一：
+   - 換一條還沒發生的條件；
+   - 保留，但在該腿標 `true_at_write: true`，並在 `reasons` 說明為什麼仍然要寫它。
+
+`invalidation` 維持一段自由文字，`make verify-decisions` 會從裡面解析 `MA<n>(數值)`，不要改格式。
+逐腿的查證另外寫在 `invalidation_legs`：
+
+```json
+"invalidation_legs":[{"leg":"SCFI 連兩週回落","source":"SCFI 週報","true_at_write":false},
+                     {"leg":"收盤跌破 MA20 (82.1)","source":"market.price.close","true_at_write":false}]
+```
 
 回驗由 `make verify-decisions` 讀這個檔做：它算 `E[R|enter] − E[R|全收]`（這一層有沒有加值）、
 `E[R|pass]`（放棄機會的成本）、`Brier(confidence)` 對照「一律報基準率 20.2%」，以及**可成交
@@ -188,9 +208,12 @@ down=-0.18` 算出 +0.234 而放行，正確答案是 **-0.054、應該 pass**�
 兩者較晚者」的次一交易日（週五的訊號若週一晚間才研究完，用週一開盤成交等於用當天白天還
 不存在的判斷下單），而開盤跳空穿過 `entry_range` 上界的那筆會被標成**未成交**而不計入。
 
-**完成條件**：每檔一行、上述欄位齊全，且 `enter` 的每一檔都有 `entry_range`、`invalidation`、
-`exp_upside`、`exp_downside`、`theme`；最後**提醒使用者把 `journal/` commit 掉**——你不能自己
-commit，而這份預測只有在結果出來之前就進版控才有意義（理由見 `journal/README.md`）。
+**完成條件**：
+- 每檔一行、上述欄位齊全。
+- `enter` 的每一檔都有 `entry_range`、`invalidation`、`invalidation_legs`、`exp_upside`、`exp_downside`、`theme`。
+- 每一腿都有 `source`，而且都已經在寫入當下查過是否成立。
+- 最後**提醒使用者今天就把 `journal/` commit 掉**。你不能自己 commit，而這份預測只有在結果出來之前
+  就進版控才有意義（理由見 `journal/README.md`）；晚 10 天才 commit 的那兩筆就失去了這個保證。
 
 ## 邊界
 
@@ -199,8 +222,10 @@ commit，而這份預測只有在結果出來之前就進版控才有意義（�
 - **量化層只負責產生候選，不負責判斷。** 它給的每個欄位都是昨天 13:30 以前的歷史值；
   催化劑、隔夜盤、產業近況都在 DB 之外，**要去查**。只把數字重新排列組合再說一遍，
   等於沒有做第二層——那正是這個技能存在的理由。
-- 月營收僅上市（sii）口徑，上櫃股的 `yoy` 為 null 會在量化層就被篩掉——上櫃的波段這條
-  流程抓不到，這是已知缺口。產業別同樣只有上市有值（上櫃顯示 `—`）。
+- 月營收預設只用上市（sii）口徑，上櫃股的 `yoy` 為 null 會在量化層就被篩掉——上櫃的波段這條
+  流程預設抓不到。上櫃月營收已入庫，但候選池的基準（974 個事件、20.2% 錨點）是上市口徑量的；
+  `--include-otc-revenue` 放回上櫃時 JSON 不再給 `measured_base_rate`，在帶同一旗標重跑
+  `scripts/measure_signal_forward.py`（`make measure` 不帶旗標）取得新池子的基準之前，`confidence` 沒有可用的錨點。產業別同樣只有上市有值（上櫃顯示 `—`）。
 - 日均額低於 2 億的標的（放寬門檻才會出現）部位要壓到「能一次市價出清」的規模，或只列觀察。
 - 標籤欄的 `⚠` 是事實描述，不是自動剔除規則。
 - 候選池已排除 ETF 與**創新板**（名稱後綴 `-創`）：創新板一般帳戶要簽風險預告書並符合資格條件

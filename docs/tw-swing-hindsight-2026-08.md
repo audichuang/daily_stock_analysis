@@ -197,15 +197,15 @@
 
 ### 該改（每條綁一個過了對抗審查的發現）
 
-1. **失效條件加兩個硬約束**：(a) 每一腿必須 DB 可查或指名可查來源；(b) **寫入時不得已經成立**，若已成立就必須在該筆標記出來。
+1. **失效條件加兩個硬約束**（**2026-09-28 已處理**：skill `tw-swing-research`（`invalidation_legs`））：(a) 每一腿必須 DB 可查或指名可查來源；(b) **寫入時不得已經成立**，若已成立就必須在該筆標記出來。
    → 綁 §3.1（2615 的 SCFI 腿寫入即為真）。
-2. **commit 節奏**：判斷寫完就 commit 那一行、outcome 一律另一個 commit。現在 `swing-decisions.jsonl` 有兩筆（2408/3017）決策後 10 天未 commit、
+2. **commit 節奏**（**2026-09-28 已處理**：skill `tw-morning-call`、`journal/README.md`）：判斷寫完就 commit 那一行、outcome 一律另一個 commit。現在 `swing-decisions.jsonl` 有兩筆（2408/3017）決策後 10 天未 commit、
    `morning-calls.jsonl` 有 4/5 筆同一個 commit 進來、其中 08-04 那筆連 exclude 都沒標。→ 綁 §4(a)5、§5。
-3. **修文件指錯的驗證來源**：`journal/README.md` 與 `.claude/skills/tw-morning-call/SKILL.md:132-133` 都說 `gap_expected` 可以對 `market.market_index` 驗，
+3. **修文件指錯的驗證來源**（**2026-09-28 已處理**：改對 TWSE `MI_5MINS_HIST`）：`journal/README.md` 與 `.claude/skills/tw-morning-call/SKILL.md:132-133` 都說 `gap_expected` 可以對 `market.market_index` 驗，
    那張表沒有 open 欄。改成官方開盤指數，或把這句刪掉。→ 綁 §5。
 4. **`breadth_ma20` 拆欄或帶 universe 標記**（例如 `breadth_all` / `breadth_pool` + `breadth_asof`）。同一欄現在裝兩種不可比的量。→ 綁 §4(a)4。
 5. **漏斗輸出「0 檔」時必須同時輸出卡在哪一關與該關的中位距離**。→ 綁 §4(a)3。
-6. **標籤紀律**：定義門檻未過就不要掛那個標籤（08-05 的 tailwind）。降級成 rotation 或明確標「門檻未過」是可以的；
+6. **標籤紀律**（**2026-09-28 已處理**：skill `tw-morning-call` Step 3）：定義門檻未過就不要掛那個標籤（08-05 的 tailwind）。降級成 rotation 或明確標「門檻未過」是可以的；
    **改門檻本身現在沒有樣本支持**。→ 綁 §3.4。
 7. **（小）`fill_ok()` 的比較基準**：`entry_range` 是原始價、開盤價是還原價；窗口內除息會翻轉成交判定。本例（3017）兩種讀法都不成交，**沒有翻轉任何判定**。→ 綁 §4(a)6。
 
