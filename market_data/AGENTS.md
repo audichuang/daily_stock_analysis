@@ -36,7 +36,7 @@
 - 健康稽核:`uv run --env-file .env python -m market_data.health`
 - 模組測試(免裝面板全依賴):
   `export $(grep '^DATABASE_URL=' .env | xargs) && uv run --no-project --with sqlalchemy --with 'psycopg[binary]' --with pandas --with lxml --with requests --with tqdm --with pytest python -m pytest market_data/tests/ -q -m "not network"`
-- 真網路 smoke(端點活性 + 面板走 DB 驗證,CI network-smoke 也跑):同上指令改 `-m network`
+- 真網路 smoke(端點活性 + 面板走 DB 驗證):同上指令改 `-m network`。**「面板走 DB」那一支只有在本機才真的斷言**——PR 的 CI 用 `-m "not network"` 排除它,排程的 network-smoke 沒有 `DATABASE_URL` 所以 skip;別以為 CI 已經守住「靜默降級 yfinance」
 
 ## 進來改要遵守
 
@@ -44,6 +44,7 @@
 - price 一天必須 TWSE+TPEx **兩市場都抓到才寫**(單邊寫入會讓 resume 標記該日完成、另一邊永久缺)——不要「順手優化」成單邊也寫。
 - price 有**截斷防護**:單日合計低於附近 5 個交易日中位數九成(優先取之前的日期,無則取之後——倒序/空庫 bootstrap 也有基準;全空庫第一天無防護),先試 STOCK_DAY_ALL 備援(僅最新交易日、全列同日才收、缺本益比欄以 coalesce 保留舊值),仍不足整天跳過等 resume 重試——別移除這道門(TWSE 回過截斷但非空的回應)。
 - `MarketDBFetcher` 只准服務 `.TW`/`.TWO`;查無資料要 raise `DataSourceUnavailableError` 讓 chain fallback,不要回空 DataFrame。
+- **DB 測試一律用 `pg_conn` fixture 並自己種資料。**本機的 `market_data/tests/` 連的是**真的那一座**唯一資料源(conftest 會從 `.env` 讀 `DATABASE_URL`),`pg_conn` 包在必定 rollback 的交易裡;直接拿 `engine` 寫入就是寫進正式庫。CI 則是 schema 已遷移的**空庫**,讀庫內既有資料的斷言在那裡必紅——種子用遠離真實資料的年份(1900／2099),讓真實列落在查詢視窗外。
 
 ## 踩雷
 
@@ -51,7 +52,7 @@
 - `monthly_revenue` **僅上市(sii)口徑**(歷史與現行皆同,上櫃全缺);要雙市場月營收請用 `twse_fundamental_adapter` 的即時快照。
 - **月營收彙總報表有存活偏誤,而且是靜默的**:`crawler.crawl_monthly_report` 走的 `t21sc03_<民國年>_<月>.html` 看起來是按月存檔,實際是**動態產生**的,只列出目前仍在申報的公司。實測 2020-06 那份 979 家裡完全沒有 6452 康友、2448 晶電、2456 奇力新、5305 敦南、3698 隆達——這五檔當時全部還在交易。**用它回補歷史,後來下市的公司會永久缺席**,任何「要求營收成長」的選股條件都會把負尾系統性移除。修法是 `cli revenue-pit`(走 `sources.crawl_company_monthly_revenue`,MOPS 個別公司查詢),但只補得回**仍公開發行**的公司;被吸收合併的回「該公司不繼續公開發行」(如 2448 晶電併入富采),那部分是硬邊界,只能用敏感度分析給上界(`scripts/measure_signal_forward.py --survivorship-bound`)。
 - **判定「已下市」要用 `price` 表的最後交易日,不是「不在 `stock_info` 裡」**:`stock_info` 只含上市約 1,100 檔,用它判定會把全部上櫃公司都算成下市(實測 70 檔 → 973 檔)。
-- **`price.change` 對上市股票沒有正負號,算任何報酬都不要碰這一欄**——用 `close` 自己 diff。TWSE `MI_INDEX` 的 `漲跌價差` 只有絕對值,方向在獨立的 `漲跌(+/-)` 欄(`+`／`-`／空=平盤／`X`=無比價);`crawler.crawl_price` 曾把那欄 `to_numeric(errors="coerce")` 成 NaN 後被 dropna-all 整欄丟掉,**2013 起到 2026-08 入庫的上市列全部只有絕對值**(2026 年至今 95,211/353,563 列與 `close - lag(close)` 反號)。上櫃走 TPEx JSON(`漲跌` 本身帶號)沒中,`market_index.change` 走 FMTQIK 也沒中——所以症狀是「同一張表上市全正、上櫃正常」,不看市場別會以為資料沒問題。爬取端已於 2026-08-23 修好,但**歷史列沒有回補**(`to_daily_frame` 改成不再讀這欄,所以正確性不依賴回補);真要回補就用 `close - lag(close)` 重算。踩過:`to_daily_frame` 舊版用 `close - change` 回推昨收,讓上市股票每個下跌日的 `pct_chg` 都變成上漲,而那個欄位會進台股個股分析的 LLM prompt。
+- **`price.change` 對上市股票沒有正負號,算任何報酬都不要碰這一欄**——用 `close` 自己 diff。TWSE `MI_INDEX` 的 `漲跌價差` 只有絕對值,方向在獨立的 `漲跌(+/-)` 欄(`+`／`-`／空=平盤／`X`=無比價);`crawler.crawl_price` 曾把那欄 `to_numeric(errors="coerce")` 成 NaN 後被 dropna-all 整欄丟掉,**2013 起到 2026-08 入庫的上市列全部只有絕對值**(2026 年至今 95,211/353,563 列與 `close - lag(close)` 反號)。上櫃走 TPEx JSON(`漲跌` 本身帶號)沒中,`market_index.change` 走 FMTQIK 也沒中——所以症狀是「同一張表上市全正、上櫃正常」,不看市場別會以為資料沒問題。爬取端已於 2026-08-23 修好,2013 起的上市歷史列也已用 `scripts/backfill_price_change_sign.py` 回補正負號(2013 之前沒有復權因子,刻意不補);`to_daily_frame` 不再讀這欄,正確性不依賴它。**方向不能用 `close - lag(close)` 重算**——官方比的是當日參考價(前收 × 復權因子),除權息日兩者方向不同。踩過:`to_daily_frame` 舊版用 `close - change` 回推昨收,讓上市股票每個下跌日的 `pct_chg` 都變成上漲,而那個欄位會進台股個股分析的 LLM prompt。
 - **openapi 端點會停止更新卻照樣回 200**,消費端一律要比對回應自帶的民國日期欄。實測 2026-08-23:`opendata/twtazu_od`(漲跌家數)的 `出表日期` 還是 `1150605`,凍結 79 天,而同一時間 `FMTQIK`／`BFI82U`／兩支 TPEx 端點都是最新交易日。`sources.crawl_price_backup` 早就有這道門(註解寫「不能拿別天的資料冒充」),`data_provider/twse_fetcher.py::_fetch_breadth` 沒有,後果是台股大盤複盤連續 20 份印同一組家數、LLM 在上面疊出虛構敘事,而 exit code 一路正常。現已加上日期比對,並在拒收時退回 `data_provider/tw_breadth.py::closing_breadth()` 由本 schema 的前復權收盤自算(上市普通股、**無漲跌停家數**;上市名單只能取 `stock_info`,因為 `price.market` 全為 NULL)。
 - **`price` 是未還原價,算報酬/均線/乖離前一律先套 `market.price_adjustment`**(`adjust.load_factors()`)。不要直接拿 `ex_dividend` 當還原來源——那張表走 TWSE 的 TWT49U,**只有上市除權息**,缺三類:上櫃(TPEx)全部、股票分割(面額變更)、減資。踩過:0050 的 1:4 分割(2025-06-18,188.65→47.57)不在 `ex_dividend`,讓回測的 0050 基準在 2025 年顯示 -65.79%。
 - **上櫃除權息走 TPEx 官方端點 `bulletin/exDailyQ`**(`sources.crawl_tpex_ex_dividend`,吃**西元** `startDate`/`endDate`、回應日期是民國斜線格式,自 2008-01-02 起)。找它踩過四個坑:openapi `/tpex_exright_daily` 只回當日 13 筆;`/tpex_exright_prepost` 是預告表無參考價;`bulletin/exDailyQHis` 只涵蓋民國 89/9~96/12(頁面自己註明);舊版 `exDailyQ_result.php` 忽略日期參數。**找新站端點的通法**:抓舊 php URL(會 302 到新頁),在新頁 HTML 裡 grep `action:"..."`,拼成 `https://www.tpex.org.tw/www/zh-tw/<action>`。
