@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from market_data.adjust import load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
+from screen_tw import exclude_otc_revenue  # noqa: E402
 from tw_trade_costs import (  # noqa: E402
     BROKER_FEE_RATE as FEE_RATE,
     DEFAULT_SLIPPAGE_RATE as SLIPPAGE,
@@ -85,7 +86,7 @@ EXIT_RULES = {
 }
 
 
-def load_panel(engine, start, end):
+def load_panel(engine, start, end, include_otc_revenue=False):
     """拉回測期資料並前復權。回傳寬表面板（index=date, columns=stock_id）。
 
     前復權因子讀 ``market.price_adjustment``（除權息 + 減資 + 分割，見 market_data/adjust.py）。
@@ -114,6 +115,8 @@ def load_panel(engine, start, end):
             "select stock_id, announce_date as date, yoy from market.monthly_revenue "
             "where announce_date between :s and :e and yoy is not null"
         ), c, params={"s": hist_start, "e": end}, parse_dates=["date"])
+    if not include_otc_revenue:  # 與 live `screen_tw.load()` 同口徑，理由見 exclude_otc_revenue
+        rev = exclude_otc_revenue(rev)
     for col in ("open", "high", "low", "close", "turnover", "pe_ratio"):
         px[col] = px[col].astype(float)
 
@@ -214,7 +217,7 @@ FACTORS = {
         "filter": lambda a: a("d60").notna(),
         "score": lambda r, f: r["d60"] + r["d20"] * 0.5,
     },
-    # 營收動能：月營收 YoY（用 announce_date 對齊，僅上市有值）
+    # 營收動能：月營收 YoY（用 announce_date 對齊；預設只用上市，見 exclude_otc_revenue）
     "revenue": {
         "filter": lambda a: a("rev_yoy").notna() & (a("close") > a("ma60")),
         "score": lambda r, f: r["rev_yoy"] + r["d20"] * 0.3,
@@ -621,6 +624,8 @@ def main(argv=None):
     p.add_argument("--null-trials", type=int, default=0,
                    help="跑 N 次隨機選股當虛無分布，判斷本因子的超額是選股力還是運氣")
     p.add_argument("--seed", type=int, default=42, help="隨機對照組的種子")
+    p.add_argument("--include-otc-revenue", action="store_true",
+                   help="月營收放入上櫃（預設只用上市口徑，與 screen_tw 預設相同；放入後是另一個池子，數字不可與既有基準比較）")
     p.add_argument("--include-tib", action="store_true",
                    # argparse 會對 help 做 % 格式化，裸 % 會讓 `--help` 直接 ValueError：
                    # 百分號一律寫 %%（`portfolio_walkforward` 的 --skip-limit-gap 同一個坑）
@@ -637,7 +642,8 @@ def main(argv=None):
     engine = get_engine()
     starts = [s.strip() for s in a.periods.split(",")] if a.periods else None
     # 多期比較時載入最早起點的面板；訊號只用 <= T 的資料，各期可共用同一份 precompute
-    piv, inst, val, rev = load_panel(engine, min(starts) if starts else a.start, a.end)
+    piv, inst, val, rev = load_panel(engine, min(starts) if starts else a.start, a.end,
+                                     a.include_otc_revenue)
 
     if not a.include_tib:
         # 創新板（TWSE Innovation Board，名稱後綴「-創」）預設不進選股池：一般帳戶要簽風險

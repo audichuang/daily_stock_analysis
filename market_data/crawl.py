@@ -184,10 +184,16 @@ def crawl_day(conn, source, d, replace=False):
     return upsert(conn, model.__table__, recs, pk, coalesce=coalesce)
 
 
-def crawl_monthly_revenue(conn, month_date):
-    return _store(conn, crawler.crawl_monthly_report(month_date),
-                  etl.transform_monthly_revenue, models.MonthlyRevenue,
-                  ["stock_id", "revenue_month"])
+def crawl_monthly_revenue(conn, month_date, markets=crawler.MONTHLY_REPORT_MARKETS):
+    """上市與上櫃各抓一份彙總報表,**逐市場各自寫入**:一邊抓不到(回 None,crawler 已印
+    WARN)只少那一邊,不拖累另一邊。與 price 的「兩市場齊全才寫」相反,因為月營收沒有
+    resume 標記——單邊寫入不會讓缺的那邊被當成已完成,下次 daily 會照常重抓。"""
+    n = 0
+    for market in markets:
+        n += _store(conn, crawler.crawl_monthly_report(month_date, market),
+                    etl.transform_monthly_revenue, models.MonthlyRevenue,
+                    ["stock_id", "revenue_month"])
+    return n
 
 
 def crawl_stock_info(conn):
@@ -424,7 +430,7 @@ def pit_revenue_gaps(conn, start, end, only=None):
 
     **下市判定用 `price` 表最後交易日,不是「不在 `stock_info` 裡」**——`stock_info` 只含
     上市(TWSE)約 1,100 檔,用它判定會把全部上櫃公司都當成下市(實測會從 70 檔暴增到 973 檔)。
-    上櫃公司的月營收缺漏是另一件事(彙總報表只走 `/sii/`),那是覆蓋範圍限制而非存活偏誤。
+    上櫃公司的月營收缺漏是另一件事(彙總報表原本只走 `/sii/`,2026-09 起也抓 `/otc/`),那是覆蓋範圍限制而非存活偏誤。
     """
     rows = conn.execute(text("""
         with last_day as (select max(date) d from market.price),

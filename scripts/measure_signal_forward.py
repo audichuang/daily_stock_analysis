@@ -20,7 +20,8 @@
   - 月營收覆蓋:`crawl_monthly_report` 走的彙總報表只列目前仍在申報的公司,後來下市的
     公司歷史缺席。`cli revenue-pit` 能補回仍公開發行的部分,被吸收合併的補不回來
     （MOPS 回「不繼續公開發行」）。`--survivorship-bound` 會給補不回來那部分的上界。
-  - 上櫃全無月營收（彙總報表只走 `/sii/`）,所以 revenue 條件實質上把池子限縮在上市。
+  - 營收條件預設只用上市口徑（`screen_tw.exclude_otc_revenue`；量測當時上櫃全無月營收），
+    `--include-otc-revenue` 是另一個池子，結果不可與既有基準比較。
 
 用法：
     uv run --env-file .env python scripts/measure_signal_forward.py
@@ -40,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from market_data.adjust import load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
+from screen_tw import exclude_otc_revenue  # noqa: E402
 from tw_trade_costs import round_trip_return  # noqa: E402
 
 DEFAULT_POSITION_NOTIONAL = 200_000.0
@@ -49,7 +51,7 @@ REVENUE_STALE_DAYS = 45
 WARMUP_DAYS = 400     # 算 60 日高與 60 日均量要的暖機
 
 
-def load(engine, start, end):
+def load(engine, start, end, include_otc_revenue=False):
     hist = (pd.Timestamp(start) - pd.Timedelta(days=WARMUP_DAYS)).date()
     with engine.connect() as c:
         px = pd.read_sql(text(
@@ -61,6 +63,8 @@ def load(engine, start, end):
             "where announce_date between :s and :e and yoy is not null"), c,
             params={"s": hist, "e": end}, parse_dates=["date"])
         info = pd.read_sql(text("select stock_id, industry, name from market.stock_info"), c)
+    if not include_otc_revenue:  # 與 live `screen_tw.load()` 同口徑，理由見 exclude_otc_revenue
+        rv = exclude_otc_revenue(rv)
     for col in ("open", "high", "close", "volume", "turnover"):
         px[col] = px[col].astype(float)
     piv = {k: px.pivot(index="date", columns="stock_id", values=k).sort_index()
@@ -296,6 +300,8 @@ def main(argv=None):
                         "只列「已下市且符合價格條件」的股票在訊號當月與前一月——月營收只在"
                         "價格條件成立那幾天會被用到，全量補 3,102 個缺口要數小時，"
                         "精準補只要幾十個請求。")
+    p.add_argument("--include-otc-revenue", action="store_true",
+                   help="月營收放入上櫃（預設只用上市口徑，與 screen_tw 預設相同；放入後是另一個池子，數字不可與既有基準比較）")
     a = p.parse_args(argv)
     if a.position_notional <= 0:
         p.error("--position-notional must be positive")
@@ -303,7 +309,7 @@ def main(argv=None):
         p.error("--fee-discount must be non-negative")
 
     eng = get_engine()
-    piv, rv, info = load(eng, a.start, a.end)
+    piv, rv, info = load(eng, a.start, a.end, a.include_otc_revenue)
     close = piv["close"]
     # 池：四位數普通股（排除 ETF 00xx、TDR 91xx）。**創新板不在這裡排除**——用今天的名稱
     # 後綴判定歷史宇宙是前視；它的影響改用敏感度分析看（下方 `--include-tib` 對照）。

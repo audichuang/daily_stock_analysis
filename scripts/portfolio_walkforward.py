@@ -321,6 +321,8 @@ def main(argv=None):
     p.add_argument("--walk-forward", action="store_true",
                    help="擴張窗選參，只計樣本外")
     p.add_argument("--folds", type=int, default=5)
+    p.add_argument("--include-otc-revenue", action="store_true",
+                   help="月營收放入上櫃（預設只用上市口徑，與 screen_tw 預設相同；放入後是另一個池子，數字不可與既有基準比較）")
     a = p.parse_args(argv)
 
     if a.capital <= 0:
@@ -331,7 +333,7 @@ def main(argv=None):
         p.error("--slots must be positive")
 
     eng = get_engine()
-    piv_full, rv, info = load(eng, a.start, a.end)
+    piv_full, rv, info = load(eng, a.start, a.end, a.include_otc_revenue)
     close_full = piv_full["close"]
     keep = [s for s in close_full.columns
             if len(s) == 4 and s.isdigit() and not s.startswith(("00", "91"))]

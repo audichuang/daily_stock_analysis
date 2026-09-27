@@ -179,3 +179,99 @@ def test_breakout_funnel_requires_revenue_growth():
     ])
     pool, _ = funnel(df, 2e8, "breakout")
     assert list(pool["stock_id"]) == ["AAA"]
+
+
+# ---- 上櫃月營收的口徑閘門 ---------------------------------------------------------------
+# `monthly_revenue` 自 2026-09 起也收上櫃。live 漏斗與三支量測腳本必須**同一個口徑**：
+# 只閘 live 會讓基準數字量的是另一個池子，只閘量測則讓 live 下單的池子沒被量過。
+
+import screen_tw  # noqa: E402
+
+
+def _seed(tmp_path, monkeypatch):
+    seed = tmp_path / "stock_list_tw.csv"
+    seed.write_text("ts_code,symbol,name,enname,aliases\n"
+                    "1101.TW,1101.TW,台泥,,\n6488.TWO,6488.TWO,環球晶,,\n", encoding="utf-8")
+    monkeypatch.setattr(screen_tw, "SEED_CSV", seed)
+
+
+def test_exclude_otc_revenue_keeps_listed_and_delisted_rows(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    rev = pd.DataFrame({"stock_id": ["1101", "6488", "5305"], "yoy": [25.0, 40.0, 30.0]})
+    # 5305 不在種子檔（已下市）→ 由 revenue-pit 補的列照舊保留，池子與修改前逐列相同
+    assert screen_tw.exclude_otc_revenue(rev)["stock_id"].tolist() == ["1101", "5305"]
+
+
+def test_exclude_otc_revenue_refuses_to_guess_without_the_seed(tmp_path, monkeypatch):
+    monkeypatch.setattr(screen_tw, "SEED_CSV", tmp_path / "missing.csv")
+    with pytest.raises(FileNotFoundError):
+        screen_tw.exclude_otc_revenue(pd.DataFrame({"stock_id": ["1101"], "yoy": [1.0]}))
+
+
+class _Conn:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, *a, **k):
+        class _R:
+            def scalar(self):
+                return pd.Timestamp("2026-08-03")
+        return _R()
+
+
+class _Eng:
+    def connect(self):
+        return _Conn()
+
+
+def _fake_read_sql(sql, conn, params=None, parse_dates=None):
+    q = str(sql)
+    days = pd.date_range("2026-07-01", "2026-08-03", freq="D")
+    if "market.price" in q:
+        return pd.DataFrame([{"stock_id": s, "date": d, "open": 10.0, "high": 10.0, "low": 10.0,
+                              "close": 10.0, "volume": 1.0, "turnover": 1.0, "pe_ratio": 1.0}
+                             for s in ("1101", "6488") for d in days])
+    if "market.monthly_revenue" in q:
+        return pd.DataFrame({"stock_id": ["1101", "6488"],
+                             "date": [pd.Timestamp("2026-07-10")] * 2,
+                             "announce_date": [pd.Timestamp("2026-07-10")] * 2,
+                             "revenue_month": [pd.Timestamp("2026-06-01")] * 2,
+                             "yoy": [25.0, 40.0], "mom": [1.0, 1.0]})
+    return pd.DataFrame({"stock_id": [], "date": []})
+
+
+def _run_loader(name, monkeypatch, include):
+    monkeypatch.setattr(pd, "read_sql", _fake_read_sql)
+    factors = lambda eng, idx, cols: pd.DataFrame(2.0, index=idx, columns=cols)  # noqa: E731
+    if name == "screen_tw":
+        monkeypatch.setattr(screen_tw, "load_factors", factors)
+        return screen_tw.load(_Eng(), None, include)[5]
+    if name == "measure":
+        import measure_signal_forward as m
+        monkeypatch.setattr(m, "load_factors", factors)
+        return m.load(_Eng(), "2026-07-01", "2026-08-03", include)[1]
+    import backtest_screen as b
+    monkeypatch.setattr(b, "load_factors", factors)
+    return b.load_panel(_Eng(), "2026-07-01", "2026-08-03", include)[3]
+
+
+@pytest.mark.parametrize("loader", ["screen_tw", "measure", "backtest"])
+def test_every_revenue_loader_defaults_to_listed_only(loader, tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    assert set(_run_loader(loader, monkeypatch, False)["stock_id"]) == {"1101"}
+    # 反向：旗標要真的把上櫃放回來，否則「預設排除」其實是「永遠排除」
+    assert set(_run_loader(loader, monkeypatch, True)["stock_id"]) == {"1101", "6488"}
+
+
+def test_json_withholds_the_listed_base_rate_when_otc_revenue_is_included():
+    pool = pd.DataFrame(columns=["stock_id", "industry"])
+    listed = screen_tw.to_json(pd.Timestamp("2026-08-03"), pool, {}, 0.0, "breakout", 5)
+    mixed = screen_tw.to_json(pd.Timestamp("2026-08-03"), pool, {}, 0.0, "breakout", 5,
+                              include_otc_revenue=True)
+    assert listed["measured_base_rate"]["p_close60_up_30pct"] == 0.202
+    # 20.2% 是上市口徑量的錨點；池子換了還交給 agent，等於讓 confidence 錨在別的分布上
+    assert mixed["measured_base_rate"] is None
+    assert "measure_signal_forward.py" in " ".join(mixed["blind_spots"])

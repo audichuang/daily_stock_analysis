@@ -59,6 +59,34 @@ REVENUE_STALE_DAYS = 45
 MIN_BARS = 66  # 算 hi60_prior（不含最近 5 天的 60 日高）需要的最少 K 棒
 
 
+def exclude_otc_revenue(rev: pd.DataFrame) -> pd.DataFrame:
+    """拿掉**目前上櫃**公司的月營收列，讓營收條件維持上市口徑。
+
+    `market.monthly_revenue` 自 2026-09 起也收上櫃（`crawl_monthly_revenue` 抓 sii+otc），
+    但 `docs/tw-swing-pipeline.md` 的每一個基準數字（974 個事件、`confidence` 錨點 20.2%、
+    組合 Sharpe）都是在「上櫃 yoy 全為 null」的池子上量的。讓上櫃直接流進 live 漏斗等於
+    換了池子卻沿用舊池子的錨點——所以預設排除，要放進來得帶 `--include-otc-revenue`，
+    而且要先帶同一旗標重跑 `scripts/measure_signal_forward.py`（`make measure` 不帶旗標，量的還是舊池子）
+    取得新池子的基準，才能引用任何數字。
+
+    上櫃名單取種子檔的 `.TWO`（`price.market` 全為 NULL、`stock_info` 只有上市）。已下市的
+    上櫃公司不在種子檔裡，它們由 `cli revenue-pit` 補進來的列照舊保留——與修改前的池子逐列相同。
+    """
+    if not SEED_CSV.exists():
+        # 分不出誰是上櫃就不能宣稱池子沒變；靜默放行會讓錨點失效而沒人知道
+        raise FileNotFoundError(f"{SEED_CSV} 不存在，無法排除上櫃月營收（或改帶 --include-otc-revenue）")
+    codes = pd.read_csv(SEED_CSV, usecols=["ts_code"])["ts_code"].astype(str)
+    otc = set(codes[codes.str.endswith(".TWO")].str.split(".").str[0])
+    return rev[~rev["stock_id"].astype(str).isin(otc)]
+
+
+def revenue_scope_note(include_otc_revenue: bool) -> str:
+    if include_otc_revenue:
+        return ("月營收含上櫃（--include-otc-revenue）——池子已不同於基準數字量測時的上市口徑，"
+                "帶同一旗標重跑 measure_signal_forward.py 之前不要引用任何基準")
+    return "月營收只用上市(sii)口徑（上櫃營收即使入庫也預設排除）——上櫃股的 yoy 為 null 會被篩掉"
+
+
 def compute_factors(g: pd.DataFrame) -> dict:
     """單一標的的因子計算。g 需含 date/open/high/low/close/volume/turnover，且已按 date 升序。
 
@@ -137,7 +165,7 @@ def tag(r: pd.Series, market_d1: float) -> list:
     return t
 
 
-def load(engine, as_of: pd.Timestamp | None):
+def load(engine, as_of: pd.Timestamp | None, include_otc_revenue: bool = False):
     """拉基準日前 200 天的資料。**所有查詢都以 as_of 為上界**——指定歷史日期做回顧掃描時，
     少一個上界就是直接讀到未來資料（月營收與大盤指數都踩過）。
     """
@@ -166,6 +194,8 @@ def load(engine, as_of: pd.Timestamp | None):
         ), c, params={"s": (as_of - pd.Timedelta(days=REVENUE_STALE_DAYS)).date(),
                       "e": as_of.date()},
             parse_dates=["revenue_month"])
+        if not include_otc_revenue:
+            rev = exclude_otc_revenue(rev)
         info = pd.read_sql(text("select stock_id, name, industry from market.stock_info"), c)
         idx = pd.read_sql(text(
             "select date, close, change from market.market_index where date <= :e order by date"
@@ -322,7 +352,7 @@ def _pe_score(pe: pd.Series) -> pd.Series:
     return 1 - usable.fillna(usable.median()).rank(pct=True)
 
 
-def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover):
+def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover, include_otc_revenue=False):
     L = []
     w = L.append
     w(f"# 台股量化篩選 — {as_of:%Y-%m-%d}（收盤後）\n")
@@ -334,7 +364,7 @@ def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover):
         last = idx.iloc[-1]
         w(f"- 加權指數：**{last['close']:,.2f}**（{last['change']:+,.2f}，{market_d1 * 100:+.2f}%）")
     w(f"- 估值表覆蓋 {int(df['pe_ratio'].notna().sum())} 檔、月營收覆蓋 {int(df['yoy'].notna().sum())} 檔"
-      "（月營收僅上市 sii 口徑，上櫃全缺）\n")
+      f"（{revenue_scope_note(include_otc_revenue)}）\n")
 
     ind = df[~df["is_etf"]]
     w("## 1. 市場體檢\n")
@@ -417,7 +447,7 @@ def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover):
     return "\n".join(L)
 
 
-def to_json(as_of, pool, steps, market_d1, strategy, top):
+def to_json(as_of, pool, steps, market_d1, strategy, top, include_otc_revenue=False):
     """給 agent 消費的候選資料。markdown 是給人讀的,agent 要的是可程式化的欄位 +
     「為什麼入選」——後者決定它該去查什麼,不然它只能重新猜一遍篩選邏輯。"""
     cols = ["stock_id", "name", "industry", "close", "break_pct", "vol_ratio5", "d1", "d5",
@@ -468,11 +498,11 @@ def to_json(as_of, pool, steps, market_d1, strategy, top):
                     "不是讓候選及格，而是挑右尾、避左尾、避主題集中。存活偏誤已量化:"
                     "補不回月營收的 82 檔下市公司只產生 15 個符合價格條件的事件、均值 -7.23%,"
                     "最差 11 筆併入讓均值由 +9.93% 變 +9.60%。排序尚未觀察到優勢。",
-        } if strategy == "breakout" else None,
+        } if strategy == "breakout" and not include_otc_revenue else None,
         "candidates": out,
         "blind_spots": [
             "資料截止基準日 13:30 收盤，未含隔夜美股／台指期夜盤",
-            "月營收僅上市(sii)口徑，上櫃全缺——上櫃股的 yoy 為 null 會被篩掉",
+            revenue_scope_note(include_otc_revenue),
             "產業別僅上市有值",
         ],
     }
@@ -488,13 +518,16 @@ def main(argv=None):
                    help="breakout=營收轉強+剛突破（經前瞻報酬量測）；momentum=舊的多頭排列"
                         "+法人買超（13 年回測十個因子裡最差，僅供對照）")
     p.add_argument("--json", default=None, help="另存 JSON 給 agent 消費")
+    p.add_argument("--include-otc-revenue", action="store_true",
+                   help="月營收條件放入上櫃（預設只用上市口徑；放入後基準數字失效，需先帶同一旗標重跑 measure_signal_forward.py）")
     a = p.parse_args(argv)
 
     engine = get_engine()
-    as_of, px, inst, mgn, val, rev, info, idx = load(engine, a.date)
+    as_of, px, inst, mgn, val, rev, info, idx = load(engine, a.date, a.include_otc_revenue)
     df, market_d1 = build(as_of, px, inst, mgn, val, rev, info, idx, a.min_turnover * 1e8)
     pool, steps = funnel(df, a.min_turnover * 1e8, a.strategy)
-    md = render(as_of, df, pool, steps, market_d1, idx, a.top, a.min_turnover)
+    md = render(as_of, df, pool, steps, market_d1, idx, a.top, a.min_turnover,
+                a.include_otc_revenue)
 
     out = Path(a.out) if a.out else REPO / ".claude" / "reviews" / f"screen-tw-{as_of:%Y%m%d}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -502,7 +535,8 @@ def main(argv=None):
     if a.json:
         jp = Path(a.json)
         jp.parent.mkdir(parents=True, exist_ok=True)
-        jp.write_text(json.dumps(to_json(as_of, pool, steps, market_d1, a.strategy, a.top),
+        jp.write_text(json.dumps(to_json(as_of, pool, steps, market_d1, a.strategy, a.top,
+                                         a.include_otc_revenue),
                                  ensure_ascii=False, indent=1, default=float), encoding="utf-8")
         print(f"[screen_tw] JSON 已寫入 {jp}", file=sys.stderr)
     print(md)
