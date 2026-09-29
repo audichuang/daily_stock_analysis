@@ -56,6 +56,7 @@ from src.analysis_context_pack_prompt import format_analysis_context_pack_prompt
 from src.analysis_context_pack_overview import render_analysis_context_pack_overview
 from src.market_phase_summary import MARKET_PHASE_SUMMARY_KEY, render_market_phase_summary
 from src.daily_market_context_guardrail import apply_daily_market_context_guardrail
+from src.trade_cost_guardrail import apply_trade_cost_guardrail
 from src.agent.final_explanation import (
     PipelineActionAdjustment,
     build_pipeline_final_explanation,
@@ -1026,6 +1027,7 @@ class StockAnalysisPipeline:
                 'trend_strength': trend_result.trend_strength,
                 'bias_ma5': trend_result.bias_ma5,
                 'bias_ma10': trend_result.bias_ma10,
+                'atr14_pct': getattr(trend_result, 'atr14_pct', None),
                 'volume_status': trend_result.volume_status.value,
                 'volume_trend': trend_result.volume_trend,
                 'buy_signal': trend_result.buy_signal.value,
@@ -2828,6 +2830,20 @@ class StockAnalysisPipeline:
                 market_context_adjustments,
             )
         _capture("daily_market_context", action_before_guardrail, advice_before_guardrail)
+        # 放在所有會改動結論的護欄之後：扣完成本不划算的買入，不能再被後面的步驟升回來
+        action_before_guardrail = getattr(result, "action", None)
+        advice_before_guardrail = getattr(result, "operation_advice", None)
+        cost_adjustments = apply_trade_cost_guardrail(
+            result,
+            code=artifacts.code,
+            report_language=report_language,
+            min_net_rr=getattr(self.config, "trade_cost_min_net_rr", 1.0),
+            fee_discount=getattr(self.config, "tw_broker_fee_discount", 1.0),
+            atr_pct=getattr(artifacts.trend_result, "atr14_pct", None),
+        )
+        if cost_adjustments:
+            logger.info("[trade_cost_guardrail] Applied adjustments for %s: %s", artifacts.code, cost_adjustments)
+        _capture("trade_cost", action_before_guardrail, advice_before_guardrail)
         if isinstance(artifacts.fundamental_context, dict):
             result.fundamental_context = artifacts.fundamental_context
         # Upstream #1981 attaches market_structure_context to the result in both

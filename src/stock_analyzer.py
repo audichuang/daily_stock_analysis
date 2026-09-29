@@ -18,7 +18,7 @@
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from enum import Enum
 
 import pandas as pd
@@ -101,6 +101,9 @@ class TrendAnalysisResult:
     bias_ma5: float = 0.0            # (Close - MA5) / MA5 * 100
     bias_ma10: float = 0.0
     bias_ma20: float = 0.0
+
+    # 日常波动：ATR(14) / 收盘价 × 100。缺高低价或 K 棒不足时为 None（没有读数不是 0）
+    atr14_pct: Optional[float] = None
     
     # 量能分析
     volume_status: VolumeStatus = VolumeStatus.NORMAL
@@ -147,6 +150,7 @@ class TrendAnalysisResult:
             'bias_ma5': self.bias_ma5,
             'bias_ma10': self.bias_ma10,
             'bias_ma20': self.bias_ma20,
+            'atr14_pct': self.atr14_pct,
             'volume_status': self.volume_status.value,
             'volume_ratio_5d': self.volume_ratio_5d,
             'volume_trend': self.volume_trend,
@@ -238,6 +242,7 @@ class StockTrendAnalyzer:
         result.ma10 = float(latest['MA10'])
         result.ma20 = float(latest['MA20'])
         result.ma60 = float(latest.get('MA60', 0))
+        result.atr14_pct = self._calculate_atr_pct(df)
 
         # 1. 趋势判断
         self._analyze_trend(df, result)
@@ -273,6 +278,24 @@ class StockTrendAnalyzer:
         else:
             df['MA60'] = df['MA20']  # 数据不足时使用 MA20 替代
         return df
+
+    @staticmethod
+    def _calculate_atr_pct(df: pd.DataFrame, period: int = 14) -> Optional[float]:
+        """ATR(period) 占最新收盘价的百分比（简单平均的 True Range）。
+
+        给停损宽度一个参照：停损离买点比一天的正常波动还近，多半是被杂讯扫掉，
+        不是论点失效（2026-07~09 台股报告的停损中位 1.89%，进场时 ATR14 中位 4.95%）。
+        """
+        if not {"high", "low", "close"}.issubset(df.columns) or len(df) < period + 1:
+            return None
+        high, low, close = (pd.to_numeric(df[c], errors="coerce") for c in ("high", "low", "close"))
+        prev = close.shift()
+        tr = pd.concat([high - low, (high - prev).abs(), (low - prev).abs()], axis=1).max(axis=1, skipna=False)
+        atr = tr.iloc[-period:].mean()
+        last = close.iloc[-1]
+        if not (np.isfinite(atr) and np.isfinite(last)) or last <= 0:
+            return None
+        return round(float(atr / last * 100), 2)
 
     def _calculate_macd(self, df: pd.DataFrame) -> pd.DataFrame:
         """

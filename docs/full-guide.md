@@ -380,6 +380,8 @@ daily_stock_analysis/
 | `NEWS_STRATEGY_PROFILE` | 新闻策略窗口档位：`ultra_short`(1天)/`short`(3天)/`medium`(7天)/`long`(30天)；实际窗口取与 `NEWS_MAX_AGE_DAYS` 的最小值 | 默认 `short` |
 | `NEWS_MAX_AGE_DAYS` | 新闻最大时效（天），搜索时限制结果在近期内 | 默认 `3` |
 | `BIAS_THRESHOLD` | 乖离率阈值（%），超过提示不追高；强势趋势股自动放宽到 1.5 倍 | 默认 `5.0` |
+| `TRADE_COST_MIN_NET_RR` | 台股价位成本检核：扣掉手续费、证交税与滑价后的最低净风报比；低于它时报告标注「不划算」，买入结论降级为观望（只对 `.TW`/`.TWO`） | 默认 `1.0` |
+| `TW_BROKER_FEE_DISCOUNT` | 台股券商手续费折扣（6 折填 `0.6`），只影响成本检核与 prompt 里的成本说明 | 默认 `1.0` |
 
 > 行为说明：搜索服务与社交舆情服务为可选增强链路。任一服务初始化失败时，系统会记录 warning 并降级为跳过该服务，仅影响对应环节，不会阻塞技术面主链路和主任务流。
 

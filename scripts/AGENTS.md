@@ -4,11 +4,12 @@
 
 ## 模組定位
 
-這個目錄混了五種性質完全不同的腳本,動手前先認清手上這支是哪一種——副作用差很多:
+這個目錄混了六種性質完全不同的腳本,動手前先認清手上這支是哪一種——副作用差很多:
 
 | 類別 | 腳本 | 副作用 |
 |---|---|---|
 | 台股波段研究 | `screen_tw`、`measure_signal_forward`、`portfolio_walkforward`、`backtest_screen`、`verify_swing_decisions` | 唯讀本地 Postgres;`verify_swing_decisions` 只讀 `journal/`,沒有任何腳本會寫它 |
+| 每日報告回測 | `backtest_daily_report_levels` | 唯讀 `data/stock_analysis.db`(報告價位)與 Postgres(行情) |
 | 盤前／盤中取數 | `overnight`、`intraday_breadth`、`kr_tw_memory_watch` | 連網(yfinance／Shioaji),後兩支另讀 DB |
 | 股票索引 | `fetch_tw_stock_list`、`merge_tw_into_index`、`refresh_us_stock_index`、`refresh_stock_index`、`generate_index_from_csv` | **改寫進版控的索引檔與種子 CSV** |
 | 資料庫維運 | `migrate_sqlite_to_pg`、`backfill_price_change_sign` | **寫入 Postgres** |
@@ -19,7 +20,7 @@
 - **台股波段研究的契約正本是 `docs/tw-swing-pipeline.md`,成本口徑是 `docs/tw-trading-costs.md`。**改門檻、視窗、成本之前先讀,改完同步文件裡「凍結的訊號定義」。
 - **訊號定義是各寫各的,沒有共用 import,而且門檻也各存一份。**live 在 `screen_tw.py`(條件逐檔切片、門檻在 `BREAKOUT`);量測在 `measure_signal_forward.py`(整張面板 `shift`/`rolling`、門檻是它自己的 argparse 預設);`portfolio_walkforward.py` import 量測的訊號,但門檻預設與排序公式又各抄一份。**只改 `BREAKOUT` 不會讓 `make measure`／`make portfolio` 跟著變**——它們照常結束,印出來的是另一組訊號。踩過兩次口徑差(60 日高的視窗、月營收保鮮期是曆日不是交易列)。
 - **`backtest_screen.py` 不是 live 策略的回測。**檔名與說明寫著 screen_tw,但它有自己的 `FACTORS`、預設跑 `momentum`,沒有 `breakout`。別拿它當凍結訊號的正本。
-- **成本、稅率、滑價、年化天數一律走 `tw_trade_costs.py`**,不要在腳本裡自己寫常數。個股與 ETF 的證交稅率不同,0050 基準沿用個股稅率會高估基準成本,而那個誤差方向對策略有利。
+- **成本、稅率、滑價、年化天數一律走 `tw_trade_costs.py`**(真源在 `src/utils/`,這裡的同名檔只是 shim,因為每日報告的成本檢核也要用同一組費率),不要在腳本裡自己寫常數。個股與 ETF 的證交稅率不同,0050 基準沿用個股稅率會高估基準成本,而那個誤差方向對策略有利。
 - **價格面板不要 `ffill`**:索引是多檔交易日的聯集,補出來的假 K 棒會佔掉均線視窗的一格、擠掉最舊的真 K 棒,結果不報錯但足以翻轉「已跌破／未跌破」。
 - **argparse 的 help 字串裡百分號要寫成 `%%`。**裸的 `%` 會讓 `--help` 在進 `main` 之前就 `ValueError`(修過兩次)。
 

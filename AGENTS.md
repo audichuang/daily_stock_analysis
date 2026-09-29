@@ -221,6 +221,7 @@ base=main 的 PR；走直接 merge 就要自己承担这个缺口并在交付说
 - **别把两个重活并行跑**（pytest 全量 + vitest 全量）：实测 vitest 从 15 failed 变 143 failed，全部是 timeout，两份结果同时被污染。
 - **「离线」测试其实会连外，是这个 repo 最贵的一类坑**（踩过一次挂 6 小时 21 分，只烧 30 秒 CPU）。止血已就位：单测有 timeout（直接打 `pytest` 是 `setup.cfg` 的 300 秒，经 `ci_gate.sh` 是 120 秒），会让它红在那个测试上并印出堆叠。另外 LiteLLM 在 import 时会去 `raw.githubusercontent.com` 抓 model cost map（有本地 fallback，不会挂）。
 - **跑全量期间不要改档**：pytest 在收集期就 import 完模组，边跑边改等于验一个混合状态——踩过：改了常数之后那份「全绿」其实验的是旧值，结论作废、得重跑 38 分钟。要改就等它跑完。
+- **本机 `make serve`（port 7777）由 launchd `com.audichuang.dsa` 常驻，不要手动再起一份**：会和它抢 port，`address already in use` 后自己退出。直接改 `.env` 后要重启才生效，用 `launchctl kickstart -k gui/$(id -u)/com.audichuang.dsa`；只 kill 不可靠——plist 设 `KeepAlive.SuccessfulExit=false`，正常退出（exit 0）时 launchd 不会重拉。日志在 `logs/launchd.{out,err}.log`。
 - **`--help` 不是安全探针**：`scripts/` 底下有脚本**没有 argparse**，`main()` 直接做事、把参数忽略或当成路径——`merge_tw_into_index.py` 会改写进版控的索引，`migrate_sqlite_to_pg.py` 会对 `market` schema 做 `TRUNCATE`。拿 `--help` 扫一遍会**真的执行它们**（踩过：一次扫描重写了进版控的 `stocks.index.json`）。要探能不能跑，先 `grep -c argparse`。
 - **台股历史数据（行情/筹码/财报）统一在 Postgres（`market` schema），且为唯一数据源（无本地备份）**：`DATABASE_URL` 在 `.env`。爬取/数据更新（含财报季更 `financials`）/踩雷见 `market_data/AGENTS.md`。
 - **台股即时看板/走势用永丰 Shioaji，缺金钥时静默降级 yfinance**（金钥同走 Doppler `shioaji/dev`）：看板照样出数据但已是延迟报价，症状是「能跑但数字不对劲」，不是报错，排查先确认金钥有没有注入。可辨识的降级信号是 `source` 由 `shioaji` 变 `fallback`；细节见 `docs/realtime-board.md`。

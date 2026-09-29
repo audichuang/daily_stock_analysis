@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from src.analyzer import AnalysisResult
 from src.config import get_config
 from src.market_phase_summary import format_public_market_status_line, format_public_phase_pack_excerpt
+from src.trade_cost_guardrail import format_cost_check
 from src.report_language import (
     get_localized_stock_name,
     get_report_labels,
@@ -228,6 +229,7 @@ def render(
         "market_status_line": market_status_line(),
         "escape_md": _escape_md,
         "clean_sniper": _clean_sniper_value,
+        "cost_check_line": format_cost_check,
         "failed_checks": failed_checks,
         "phase_pack_excerpt": phase_pack_excerpt,
         "history_by_code": {},

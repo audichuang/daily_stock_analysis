@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改进] 台股报告新增价位成本检核（`src/trade_cost_guardrail.py`）：以狙击点位扣掉双边手续费、卖出证交税与买卖滑价后的净风报比写入 `dashboard.battle_plan.cost_check`，并在作战计划下方显示一行；低于 `TRADE_COST_MIN_NET_RR`（默认 1.0）时标注「不划算」，买入结论降级为观望（诊断来源 `trade_cost`）。台股 prompt 同步注入来回成本与 ATR14，要求目标价扣成本后仍划算、止损不窄于日常波动。新增 `TRADE_COST_MIN_NET_RR`、`TW_BROKER_FEE_DISCOUNT`；技术分析新增 `atr14_pct` 栏位（additive）
+- [chore] 台股交易成本模组真源由 `scripts/tw_trade_costs.py` 移到 `src/utils/tw_trade_costs.py`（原路径保留为转出 shim），让每日报告与研究脚本共用同一组费率
+- [文档] `docs/daily-report-backtest-2026-07.md` 新增「照报告价位挂单」回测（2026-07-06 ~ 09-24）与脚本 `scripts/backtest_daily_report_levels.py`：照价位 -8.50%、不计成本 -0.88%、同池持有 +0.42%、0050 +3.62%；停损 89% 落在 ATR14 以内；放慢节奏（锁价位、停损 ≥2×ATR、持有 N 日）最好约 +0.8%，与「不看买点」对照组差距在 ±2pp 内，无一赢 0050（inconclusive）；成本过滤的 in-sample 结果与其限制
 - [文档] 新增 `docs/tw-operating-guide.md` 台股操作手册：盘前／盘中／盘后／每月的动作、每日报告的正确读法（买卖标签与文字结论矛盾时以文字与狙击点位为准；`position_advice` 不读实际持仓；没有持有期）、三条线的证据状态；`docs/INDEX.md` 加入口；FAQ 中英文 Q16 的 `--market-only` 改为实际存在的 `--market-review`
 - [改进] 月营收爬取加入上柜：`crawl_monthly_revenue` 上市（`/sii/`）＋上柜（`/otc/`）各抓一份彙总报表、逐市场各自写入，一边失败只少那一边；`screen_tw`、`measure_signal_forward`、`portfolio_walkforward`、`backtest_screen` **预设排除上柜营收**以维持既有基准的上市口径，新增 `--include-otc-revenue` 放回（`screen_tw` 放回时 JSON 不再给上市口径的 `measured_base_rate`）；上柜历史需逐月 `cli revenue --month` 补
 - [改进] skill `tw-swing-research`：`invalidation` 每一腿要有可查来源、写入当下不得已成立，逐腿写进新栏位 `invalidation_legs`（`invalidation` 文字格式不变，回验仍解析其中的 `MA<n>`）；skill `tw-morning-call`：`gap_expected` 改对 TWSE `MI_5MINS_HIST` 官方开盘指数验（`market.market_index` 没有开盘价）、标签门槛未过不得挂标签、每行明写 `exclude_from_scoring`、判读与 outcome 分开 commit；`journal/README.md` 同步

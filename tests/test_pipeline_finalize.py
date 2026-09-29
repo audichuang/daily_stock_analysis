@@ -92,6 +92,40 @@ class FinalizeAndPersistResultTestCase(unittest.TestCase):
         self.assertEqual(result.decision_type, "hold")
         self.assertEqual(result.operation_advice, localize_operation_advice("观望", "zh"))
 
+    def _finalize_tw_buy(self, levels, trend_result=None):
+        pipeline = _make_pipeline()
+        result = _result(code="2330.TW", name="台積電", dashboard={
+            "battle_plan": {"sniper_points": {k: str(v) for k, v in levels.items()}}})
+        pipeline._finalize_and_persist_result(
+            result,
+            _artifacts(code="2330.TW", stock_name="台積電", market="tw", trend_result=trend_result),
+            market_phase_summary=None,
+            analysis_context_pack_overview=None,
+            report_type="simple",
+            snapshot_context={},
+            news_content_for_save=None,
+        )
+        return result
+
+    def test_trade_cost_guardrail_runs_in_the_finalize_sequence(self):
+        """台股買入的價位扣掉來回成本後賠比賺多（回測中位間距 +3.69%／-2.14%）→ 降為觀望。"""
+        result = self._finalize_tw_buy({"ideal_buy": 100, "stop_loss": 97.86, "take_profit": 103.69})
+        self.assertFalse(result.dashboard["battle_plan"]["cost_check"]["passed"])
+        self.assertEqual(result.decision_type, "hold")
+        self.assertIn("净风报比", result.risk_warning)
+
+    def test_trade_cost_guardrail_receives_the_trend_atr(self):
+        result = self._finalize_tw_buy({"ideal_buy": 100, "stop_loss": 96, "take_profit": 110},
+                                       trend_result=SimpleNamespace(atr14_pct=5.54))
+        check = result.dashboard["battle_plan"]["cost_check"]
+        self.assertEqual(check["atr14_pct"], 5.54)
+        self.assertTrue(check["stop_within_atr"])
+
+    def test_trade_cost_guardrail_leaves_a_worthwhile_buy_alone(self):
+        result = self._finalize_tw_buy({"ideal_buy": 100, "stop_loss": 96, "take_profit": 110})
+        self.assertTrue(result.dashboard["battle_plan"]["cost_check"]["passed"])
+        self.assertEqual(result.decision_type, "buy")
+
     def test_save_analysis_history_receives_none_news_content_for_save(self):
         """(b) news_content_for_save=None reaches save_analysis_history unchanged."""
         pipeline = _make_pipeline()

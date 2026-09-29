@@ -207,6 +207,11 @@
 | 🛑 {{ labels.stop_loss_label }} | {{ clean_sniper(sniper.get('stop_loss')) }} |
 | 🎊 {{ labels.take_profit_label }} | {{ clean_sniper(sniper.get('take_profit')) }} |
 {% endif %}
+{% set cost_line = cost_check_line(battle.get('cost_check'), report_language) %}
+{% if cost_line %}
+
+{{ cost_line }}
+{% endif %}
 
 {% set position = battle.get('position_strategy', {}) %}
 {% if position %}

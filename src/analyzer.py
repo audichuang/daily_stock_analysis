@@ -74,6 +74,7 @@ from src.llm.provider_cache import (
 )
 from src.storage import persist_llm_usage
 from src.data.stock_mapping import STOCK_NAME_MAP
+from src.trade_cost_guardrail import is_tw_code
 from src.report_language import (
     get_signal_level,
     get_no_data_text,
@@ -3998,6 +3999,30 @@ class GeminiAnalyzer(LLMClient):
             trend_lines = self._tw_institutional_trend_lines(code, institution_data, report_language)
             if trend_lines:
                 prompt += trend_lines
+
+        # 台股交易成本：上游 prompt 為 A 股寫的，台股來回成本是 A 股的數倍，模型不知道就會
+        # 給出扣完成本後賠比賺多的價位。事後還有 trade_cost_guardrail 確定性檢核，這段只讓
+        # 模型在出價位時就把成本算進去。
+        if is_tw_code(code):
+            from src.utils.tw_trade_costs import per_share_cost_multipliers
+
+            buy_mult, sell_mult = per_share_cost_multipliers(
+                is_etf=str(code).split(".")[0].startswith("00"),
+                fee_discount=getattr(self._get_runtime_config(), "tw_broker_fee_discount", 1.0),
+            )
+            round_trip = (1 - sell_mult / buy_mult) * 100
+            min_rr = getattr(self._get_runtime_config(), "trade_cost_min_net_rr", 1.0)
+            prompt += f"""
+### {L("台股交易成本（給價位前必須扣除）", "台股交易成本（给价位前必须扣除）")}
+- {L(f"一趟買進再賣出約 {round_trip:.2f}%（手續費雙邊、賣出證交稅、買賣滑價）。", f"一趟买进再卖出约 {round_trip:.2f}%（手续费双边、卖出证交税、买卖滑价）。")}
+- {L(f"目標價扣掉成本後的淨報酬，至少要是停損淨虧損的 {min_rr:g} 倍；做不到就不要給買入結論，改為觀望並說明要等哪個更低的買點。", f"目标价扣掉成本后的净报酬，至少要是止损净亏损的 {min_rr:g} 倍；做不到就不要给买入结论，改为观望并说明要等哪个更低的买点。")}
+- {L("目標價離買點太近（例如不到 2%）時，成本會吃掉大部分利潤；不要為了湊出風報比而把停損設得比日常波動還窄。", "目标价离买点太近（例如不到 2%）时，成本会吃掉大部分利润；不要为了凑出风报比而把止损设得比日常波动还窄。")}
+"""
+            trend_ctx = context.get("trend_analysis")
+            atr_pct = trend_ctx.get("atr14_pct") if isinstance(trend_ctx, dict) else None
+            if isinstance(atr_pct, (int, float)) and atr_pct > 0:
+                prompt += f"""- {L(f"這檔一天的正常波動（ATR14）約 {atr_pct:.2f}%。停損離買點若比這個還近，多半是被雜訊掃掉而不是論點失效。", f"这档一天的正常波动（ATR14）约 {atr_pct:.2f}%。止损离买点若比这个还近，多半是被杂讯扫掉而不是论点失效。")}
+"""
 
         # 添加筹码分布数据
         if 'chip' in context:

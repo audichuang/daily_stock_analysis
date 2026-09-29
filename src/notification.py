@@ -26,6 +26,7 @@ from enum import Enum
 from src.config import Config, get_config
 from src.enums import ReportType
 from src.market_phase_summary import format_public_market_status_line, format_public_phase_pack_excerpt
+from src.trade_cost_guardrail import format_cost_check
 from src.notification_routing import (
     get_notification_route_config,
     split_notification_route_channels,
@@ -1634,6 +1635,9 @@ class NotificationService:
                             f"| 🎊 {labels['take_profit_label']} | {self._clean_sniper_value(sniper.get('take_profit', 'N/A'))} |",
                             "",
                         ])
+                    cost_line = format_cost_check(battle.get('cost_check'), report_language)
+                    if cost_line:
+                        report_lines.extend([cost_line, ""])
                     # 仓位策略
                     position = battle.get('position_strategy', {})
                     if position:

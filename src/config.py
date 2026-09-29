@@ -999,6 +999,8 @@ class Config:
     news_intel_auto_fetch_enabled: bool = False  # 是否在分析前自动初始化并拉取本地资讯源
     newsnow_base_url: str = "https://newsnow.busiyi.world"  # NewsNow HTTP API base URL (数据源侧，不影响 LLM/provider base URL)
     bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
+    trade_cost_min_net_rr: float = 1.0  # 台股价位扣成本后的最低净风报比，低于它买入降级观望
+    tw_broker_fee_discount: float = 1.0  # 台股券商手续费折扣（6 折填 0.6），只影响成本检核
 
     # === Agent 模式配置 ===
     agent_backend: str = "auto"
@@ -1918,6 +1920,10 @@ class Config:
             ),
             newsnow_base_url=((os.getenv('NEWSNOW_BASE_URL') or '').strip().rstrip('/') or 'https://newsnow.busiyi.world'),
             bias_threshold=parse_env_float(os.getenv('BIAS_THRESHOLD'), 5.0, field_name='BIAS_THRESHOLD', minimum=1.0),
+            trade_cost_min_net_rr=parse_env_float(
+                os.getenv('TRADE_COST_MIN_NET_RR'), 1.0, field_name='TRADE_COST_MIN_NET_RR', minimum=0.0, maximum=10.0),
+            tw_broker_fee_discount=parse_env_float(
+                os.getenv('TW_BROKER_FEE_DISCOUNT'), 1.0, field_name='TW_BROKER_FEE_DISCOUNT', minimum=0.0, maximum=1.0),
             agent_backend=(os.getenv('AGENT_BACKEND', 'auto') or 'auto').strip().lower(),
             agent_generation_backend=agent_generation_backend,
             agent_litellm_model=agent_litellm_model,
