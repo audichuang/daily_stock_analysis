@@ -1421,6 +1421,19 @@ def test_env_allowlist_and_denylist(monkeypatch) -> None:
     assert "AUTHORIZATION" not in child_env
 
 
+def test_env_allowlist_keeps_posix_user_identity(monkeypatch) -> None:
+    """macOS 的 claude 靠 USER 找 login keychain；少了它，已登录的机器也会回 login_required。"""
+    monkeypatch.setenv("USER", "tester")
+    monkeypatch.setenv("LOGNAME", "tester")
+    monkeypatch.setenv("PUSHOVER_USER_KEY", "pushover-secret")
+
+    child_env = build_local_cli_env()
+
+    assert child_env["USER"] == "tester"
+    assert child_env["LOGNAME"] == "tester"
+    assert "PUSHOVER_USER_KEY" not in child_env
+
+
 def test_env_allowlist_preserves_windows_runtime_context() -> None:
     source = {
         "Path": r"C:\Users\tester\AppData\Local\Microsoft\WindowsApps",
