@@ -56,7 +56,22 @@
 
 ## 全量结果
 
-（待填）
+`uv run ./scripts/ci_gate.sh`（all，第四阶段 `pytest -m "not network"`），2026-09-29 本机执行，跑的期间未改档、未与 vitest 并跑：
+
+```
+1 failed, 7515 passed, 8 deselected, 51 warnings, 717 subtests passed in 260.39s (0:04:20)
+```
+
+唯一的红是 09-05 / 09-12 / 09-20 三轮都出现的同一支 `.env` 泄漏假红
+`tests/test_system_config_service.py::SystemConfigServiceTestCase::test_get_config_defaults_public_searxng_instances_off`：
+
+| 步骤 | 结果 |
+| --- | --- |
+| 单跑该测试 | **1 passed** |
+| `SEARXNG_PUBLIC_INSTANCES_ENABLED=true` 单跑 | **1 failed**（复现；本机 `.env:351` 即为 `true`） |
+| 非因果：`git diff --name-only 10fafec6..HEAD` | 没有碰 `system_config` 或 searxng 任何一档 |
+
+CI 无 `.env`，那里不会红。subtests 717 与 09-20 相同。
 
 ## 落地方式
 
