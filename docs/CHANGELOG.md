@@ -8,8 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 本地 CLI 生成后端的子进程环境 allowlist 补上 `USER`／`LOGNAME`：macOS 上 `claude` 靠 `USER` 找 login keychain，缺了会回「Not logged in」并被判成 `login_required`，即使本机已登录，`GENERATION_BACKEND=claude_code_cli` 因此在 macOS 无法使用
 - [修复] 台股大盘复盘的「最新交易日」参照改取 OpenAPI／rwd 两版 FMTQIK 中较新的一份：OpenAPI 版盘后常落后（2026-09-29 17:05 仍停在 09-24），旧写法因此把当日新鲜的三大法人、上柜成交额与本地涨跌家数全判过期拒收，成交金额也印成前一交易日
-- [新功能] 新增 `make daily-report`（`scripts/daily_report.sh`）：更新并健检台股资料 → 自选股分析 + 大盘复盘 → Bark；资料更新、健检或 LLM 预检失败时不出报告、改推「每日報告失敗」Bark；个股一档都没成功也视为失败（LLM 失效时 `main.py` 仍以 0 退出）。本机以 Orca automation 平日 18:00 触发（取代已失效的 15:00 crontab 资料更新）
+- [新功能] 新增 `make daily-report`（`scripts/daily_report.sh`）：更新并健检台股资料 → 自选股分析 + 大盘复盘 → Bark；资料更新、健检或 LLM 预检失败时不出报告、改推「每日報告失敗」Bark；个股一档都没成功也视为失败（LLM 失效时 `main.py` 仍以 0 退出）。`make daily-report-detached` 以 setsid 脱离呼叫者在背景跑完（Orca 叫起的 agent 结束一轮后 terminal 会被收掉，连同背景子行程一起砍），并以锁避免两轮重叠；本机以 Orca automation 平日 18:00 触发（取代已失效的 15:00 crontab 资料更新）；个股分析改由本机 Claude Code CLI 生成
 - [改进] 台股报告新增价位成本检核（`src/trade_cost_guardrail.py`）：以狙击点位扣掉双边手续费、卖出证交税与买卖滑价后的净风报比写入 `dashboard.battle_plan.cost_check`，并在作战计划下方显示一行；低于 `TRADE_COST_MIN_NET_RR`（默认 1.0）时标注「不划算」，买入结论降级为观望（诊断来源 `trade_cost`）。台股 prompt 同步注入来回成本与 ATR14，要求目标价扣成本后仍划算、止损不窄于日常波动。新增 `TRADE_COST_MIN_NET_RR`、`TW_BROKER_FEE_DISCOUNT`；技术分析新增 `atr14_pct` 栏位（additive）
 - [chore] 台股交易成本模组真源由 `scripts/tw_trade_costs.py` 移到 `src/utils/tw_trade_costs.py`（原路径保留为转出 shim），让每日报告与研究脚本共用同一组费率
 - [文档] `docs/daily-report-backtest-2026-07.md` 新增「照报告价位挂单」回测（2026-07-06 ~ 09-24）与脚本 `scripts/backtest_daily_report_levels.py`：照价位 -8.50%、不计成本 -0.88%、同池持有 +0.42%、0050 +3.62%；停损 89% 落在 ATR14 以内；放慢节奏（锁价位、停损 ≥2×ATR、持有 N 日）最好约 +0.8%，与「不看买点」对照组差距在 ±2pp 内，无一赢 0050（inconclusive）；成本过滤的 in-sample 结果与其限制

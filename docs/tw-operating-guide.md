@@ -79,10 +79,11 @@ A 線的投資觀是**趨勢追蹤＋回踩低吸**，規則寫死在 prompt 與
 
 ### 2.3 什麼時候跑
 
-- **平日 18:00 自動**：Orca automation「每日台股報告」跑 `make daily-report`——更新並健檢台股資料 →
+- **平日 18:00 自動**：Orca automation「每日台股報告」跑 `make daily-report-detached`（脫離呼叫它的 agent session，
+  agent 被收掉也照樣跑完；同一時間只會有一輪）——更新並健檢台股資料 →
   `STOCK_LIST` 自選股分析 + 大盤複盤（`MARKET_REVIEW_REGION`）→ 推 Bark。資料更新、健檢或 LLM 預檢沒過就
   **不出報告**，改推一則「每日報告失敗」；個股一檔都沒成功也推失敗（LLM 失效時 `main.py` 仍以 0 退出、
-  照推一份只有模板的複盤，別把那則當成報告）。非交易日由 `main.py` 自己跳過。手動補跑同一條指令即可。
+  照推一份只有模板的複盤，別把那則當成報告）。分析內容由本機已登入的 Claude Code CLI 產生（`GENERATION_BACKEND=claude_code_cli`），不需 API key。非交易日由 `main.py` 自己跳過。手動補跑同一條指令即可。
 - `make review-tw`：台股大盤複盤，推 Bark。13:30 收盤後跑；法人與融資 T+1 才補齊，盤後當天的籌碼數字
   不完整。
 - `make analyze STOCKS=2330.TW,2317.TW`：個股分析。**這個 target 不經 Doppler，不會推 Bark**，要推播的

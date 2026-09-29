@@ -22,7 +22,7 @@
 
 > 完整更新流程(何時 daily、何時 backfill、跑完怎麼用 health 驗收)見 skill `update-market-data`。以下為指令速查。本模組**不自載 `.env`**(不同於面板的 load_dotenv),指令一律帶 `--env-file .env`,否則 `DATABASE_URL is not set`。
 
-- **自動更新**:平日 18:00 由 Orca automation「每日台股報告」跑 `make daily-report`(`scripts/daily_report.sh`:`daily` → `health --strict` → 報告),daily 或 health 失敗就不出報告、改推 Bark 失敗通知(log:`logs/daily_report_*.log`)。18:00 當日融資融券尚未發布,由隔日 run resume 補齊(T+1)。原本的 15:00 crontab 已不存在(2026-09-25 最後一跑,之後停更 3 個交易日沒人發現);資料停更先查 `orca automations runs --id <id>` 與該 log。
+- **自動更新**:平日 18:00 由 Orca automation「每日台股報告」跑 `make daily-report-detached`(脫離 agent 的 session 在背景跑完;`scripts/daily_report.sh`:`daily` → `health --strict` → 報告),daily 或 health 失敗就不出報告、改推 Bark 失敗通知(log:`logs/daily_report_*.log`)。18:00 當日融資融券尚未發布,由隔日 run resume 補齊(T+1)。原本的 15:00 crontab 已不存在(2026-09-25 最後一跑,之後停更 3 個交易日沒人發現);資料停更先查 `orca automations runs --id <id>` 與該 log。
 - 每日增量+快照:`uv run --env-file .env python -m market_data.cli daily`(近 `crawl.RECENT_SESSIONS`=5 個交易日的 price/institutional/margin,**該區間的每個曆日都補**、缺日會被連續補回 + valuation/index/stock_info 快照 + 上月營收 + 除權息滾動窗 + 近期 `price_adjustment` 復權事件重算)
   - **復權事件是 daily 的一部分,不必另跑 `adjust`**:除權息抓取與 ±`adjust.ADJUSTMENT_WINDOW_DAYS`=90 天的因子替換在同一 transaction 完成,任一官方來源失敗就整包不寫、daily 直接報錯(不留半套因子)。只有修過 price 髒日或要重建全期,才需要下面的 `adjust`。
   - **落後超過 31 個曆日會直接拒跑**(`MAX_DAILY_RECOVERY_CALENDAR_DAYS`),訊息會叫你指定區間 backfill——這是刻意的,避免無界回補偷偷跑幾小時。
