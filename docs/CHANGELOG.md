@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 智能导入兼容带 UTF-8 BOM 的 CSV 与剪贴板文本，避免 `code` 表头被误当成数据并丢失有效股票代码。
 - [修复] 为 AkShare 大盘涨跌统计的东财与新浪降级调用增加可强制终止的子进程超时，避免外部接口无响应时长期占用分析线程（Fixes #2340）。
 
+- [文档] 新增 `docs/upstream-sync-2026-09-29.md`（上游 `f9e7b778` → `d3fee51a` 共 8 个 commit 的合并记录、4 个冲突档的裁决与静默降级排查）
 - [文档] 新增 `docs/upstream-sync-2026-09-20.md`（上游 v3.32.0 → `f9e7b778` 共 4 个 commit 的合并记录、静默降级排查，以及超时部分完成通知写死简体文案对 `REPORT_LANGUAGE=zh-TW` 的影响说明）
 
 - [改进] `market_data.health` 新增财报稽核：`financial_statement` 进入表清单（skill `update-market-data` 早就叫人看它的 `end`，但 health 从来没印过），并新增 `stale financial quarters` 一行列出**已过公告截止日却一列都没有**的季与对应的 `financials` 指令；财报季更不在 `daily` 里，漏一季原本完全静默。只报不挡（整季 IFRS html 包 1-2 GB，不该挡住 `make morning`）
