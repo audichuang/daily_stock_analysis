@@ -13,7 +13,7 @@
   - 部署与流水线改动在 `scripts/`、`.github/workflows/`、`docker/`
   - 台股波段流程的每日决策日志在 `journal/`（append-only、**进版控**，见 `journal/README.md`）；`data/`、`reports/`、`logs/` 都是 gitignore 的运行期目录，长期记录不要放那里
 - 未经明确确认，不执行 `git commit`、`git tag`、`git push`。
-- 同样需要先确认、不要默认执行的动作：安装或升级依赖（`uv pip install`、`npm install <pkg>`、改 `requirements.txt`）、删除文件或目录、改动 infra 与部署配置、跑全量离线测试（约 30+ 分钟，判定基准见 §10）。读代码、跑 §6 的快速门槛、生成分析文档属于可自主动作。
+- 同样需要先确认、不要默认执行的动作：安装或升级依赖（`uv pip install`、`npm install <pkg>`、改 `requirements.txt`）、删除文件或目录、改动 infra 与部署配置、跑全量离线测试（耗时与判定基准见 §10）。读代码、跑 §6 的快速门槛、生成分析文档属于可自主动作。
 - commit message 使用英文，不添加 `Co-Authored-By`。
 - 不写死密钥、账号、路径、模型名、端口或环境差异逻辑。
 - 新增文件后确认 `git status` 看得到它：`.gitignore` 有 `verify_*.py`、`local/`、`run.sh` 这类宽 pattern，命中就**静默消失**（写入成功、不报错、CI 也不会说），要保留就补 `!` 例外并注明理由。踩过：`scripts/verify_swing_decisions.py` 命中 `verify_*.py`，差点没进版本库。
@@ -130,7 +130,7 @@ base=main 的 PR；走直接 merge 就要自己承担这个缺口并在交付说
   - 适用范围：`main.py`、`src/`、`data_provider/`、`api/`、`bot/`、`tests/`
   - 快速门槛（开发中默认用这个）：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（实测 0.7s / 4s）。`ci_gate.sh` 接受 phase 参数 `all|syntax|flake8|deterministic|offline-tests`
   - **本机必须带 `uv run`**：脚本内部调用裸 `python`，本 fork 无全局 python，直接跑 `./scripts/ci_gate.sh` 会 `python: command not found`；CI 环境有 python，直跑无碍
-  - 交付前完整门槛：`uv run ./scripts/ci_gate.sh`（不带参数 = `all`，第四阶段是 `pytest -m "not network"` 全量，约 30+ 分钟；回归判定基准见 §10）
+  - 交付前完整门槛：`uv run ./scripts/ci_gate.sh`（不带参数 = `all`，第四阶段是 `pytest -m "not network"` 全量；耗时与回归判定基准见 §10）
   - 最低要求：`uv run python -m py_compile <changed_python_files>`
   - 若影响 API、任务编排、报告生成、通知发送、数据源 fallback、认证、调度，交付说明中要写明是否覆盖了对应路径。
 
@@ -209,6 +209,7 @@ base=main 的 PR；走直接 merge 就要自己承担这个缺口并在交付说
 > 本仓库是个人 fork（`audichuang/daily_stock_analysis`），**不并回上游**，可按本 fork 需要自由演进。以下是上游没有、且从代码/工具推断不出的约定与踩雷：
 
 - **`gh pr create` 在 fork 里预设把 PR 开到上游**（`ZhuLinsen/daily_stock_analysis`）——与本节第一句「不并回上游」正好相反，而且它不会问你。先 `gh repo set-default audichuang/daily_stock_analysis`，或每次带 `--repo`。踩过：第一次开 PR 直接被上游 repo 接走，靠报错才发现。
+- **同步上游用 merge、不用 rebase**（fork 已 push 上百个自有 commit，rebase 等于全部改写、只能 force push）；每轮以最近一份 `docs/upstream-sync-*.md` 为模板写纪录。其中**静默降级排查**不能省：上游新增的市场集合／语言集合常数，逐个问「涵盖 `tw` 吗？涵盖 `zh-TW` 吗？」——漏掉不会报错，台股／繁中路径只会安静地被跳过或退回简体。
 - **环境用 `uv`（不用 `python -m venv`）**：建环境 `uv venv --python 3.12`，依赖 `uv pip install -r requirements.txt`，执行一律 `uv run python …`。常用任务封装在根目录 `Makefile`（`make help`）。
 - **台股（`.TW` 上市 / `.TWO` 上柜）是新增重点**：必须带后缀（裸 `2330` 不进台股语义）；代码是 4~6 位数字加至多一个大写字母（`00631L`、`2887A`）。
 - **TWSE/TPEx 官方端点会停止更新却照样回 200**（2026-08 实测涨跌家数端点冻结 79 天，连续 20 份复盘印同一组数字）。消费端一律比对回应自带的日期，拿不到参照就拒收——无法证明新鲜的数字不如没有数字。
@@ -216,11 +217,11 @@ base=main 的 PR；走直接 merge 就要自己承担这个缺口并在交付说
 - **LLM 主模型用 DeepSeek，且 `.env` 须显式设 `LITELLM_MODEL`**：否则当 shell 环境导出了 `GEMINI_API_KEY` 时，`load_dotenv` 不覆盖既有环境变量，自动推断会优先选 Gemini。**模型名以 `.env` 现值为准**（DeepSeek 停用过 `deepseek-chat`，写死在这里只会再过时一次）。
 - **推理模型的 token 预算会静默吃掉整个回应**：`deepseek-v4-flash` 这类会把预算花在推理上，内容为空而 `finish_reason=length`，症状是随机「分析未成功」，**台股美股都会中**。**加预算不是可用的槓桿**——个股分析的 `max_output_tokens` 由 `analyzer.analyze()` 写死 8192，`LLM_MAX_TOKENS` 只有选股 pipeline 读得到；实测 8192 下仍约 1/3 回空。要修就换 `LITELLM_MODEL`。
 - **通知用 Bark，走 Doppler 注入**：`make serve` / `make review-tw` 用 `doppler run -p shioaji -c dev` 把 Doppler 的 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`（`custom_webhook_sender.py` 自动识别 `api.day.app`），secret 不落地 `.env`。**`make analyze` 不含 Doppler 包装**——要 Bark 通知需手动包：`doppler run -p shioaji -c dev -- bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py --stocks 2330.TW'`；非交易日需加 `--force-run`。
-- **全量离线测试（`uv run ./scripts/ci_gate.sh`，第四阶段 `pytest -m "not network"`）约 38 分钟，应该全绿**。别把全量当快速门槛（快速验证用受影响测试文件的子集）。
+- **全量离线测试（`uv run ./scripts/ci_gate.sh`，第四阶段 `pytest -m "not network"`）应该全绿**。耗时依机器差十几倍（实测：这台 Mac 2026-09-29 约 4 分钟、2026-09-20 另一台机器 56 分钟，测试数相当、都是单行程），别拿一个数字估另一台。别把全量当快速门槛（快速验证用受影响测试文件的子集）。
 - **红了先排除四种假红，再判回归**——它们看起来跟回归一模一样：墙钟负载、离线测试连外、本机 `.env` 漏进 `os.environ`、测试吃到真实时段。第一步都是**把红的那个档单独在空机器上重跑**；每一种的特征与判别法在 `tests/AGENTS.md`。排除之后还红，就是回归，不要当 baseline 噪音放过。
 - **别把两个重活并行跑**（pytest 全量 + vitest 全量）：实测 vitest 从 15 failed 变 143 failed，全部是 timeout，两份结果同时被污染。
 - **「离线」测试其实会连外，是这个 repo 最贵的一类坑**（踩过一次挂 6 小时 21 分，只烧 30 秒 CPU）。止血已就位：单测有 timeout（直接打 `pytest` 是 `setup.cfg` 的 300 秒，经 `ci_gate.sh` 是 120 秒），会让它红在那个测试上并印出堆叠。另外 LiteLLM 在 import 时会去 `raw.githubusercontent.com` 抓 model cost map（有本地 fallback，不会挂）。
-- **跑全量期间不要改档**：pytest 在收集期就 import 完模组，边跑边改等于验一个混合状态——踩过：改了常数之后那份「全绿」其实验的是旧值，结论作废、得重跑 38 分钟。要改就等它跑完。
+- **跑全量期间不要改档**：pytest 在收集期就 import 完模组，边跑边改等于验一个混合状态——踩过：改了常数之后那份「全绿」其实验的是旧值，结论作废、得整轮重跑。要改就等它跑完。
 - **本机 `make serve`（port 7777）由 launchd `com.audichuang.dsa` 常驻，不要手动再起一份**：会和它抢 port，`address already in use` 后自己退出。直接改 `.env` 后要重启才生效，用 `launchctl kickstart -k gui/$(id -u)/com.audichuang.dsa`；只 kill 不可靠——plist 设 `KeepAlive.SuccessfulExit=false`，正常退出（exit 0）时 launchd 不会重拉。日志在 `logs/launchd.{out,err}.log`。
 - **`--help` 不是安全探针**：`scripts/` 底下有脚本**没有 argparse**，`main()` 直接做事、把参数忽略或当成路径——`merge_tw_into_index.py` 会改写进版控的索引，`migrate_sqlite_to_pg.py` 会对 `market` schema 做 `TRUNCATE`。拿 `--help` 扫一遍会**真的执行它们**（踩过：一次扫描重写了进版控的 `stocks.index.json`）。要探能不能跑，先 `grep -c argparse`。
 - **台股历史数据（行情/筹码/财报）统一在 Postgres（`market` schema），且为唯一数据源（无本地备份）**：`DATABASE_URL` 在 `.env`。爬取/数据更新（含财报季更 `financials`）/踩雷见 `market_data/AGENTS.md`。

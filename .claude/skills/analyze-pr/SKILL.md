@@ -78,7 +78,7 @@ gh run view <run_id> --log-failed
 
 如果必须补本地验证，按改动面选择最接近的检查，例如：
 
-- 后端：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（秒级快速门槛；本机必须带 `uv run`，否则 `python: command not found`）或 `uv run python -m py_compile <changed_python_files>`；**不要**在 review 场景跑不带参数的 `ci_gate.sh`，它等于 `all`、含约 30+ 分钟全量离线测试
+- 后端：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（秒级快速门槛；本机必须带 `uv run`，否则 `python: command not found`）或 `uv run python -m py_compile <changed_python_files>`；**不要**在 review 场景跑不带参数的 `ci_gate.sh`，它等于 `all`、含全量离线测试（耗时见 `AGENTS.md` §10）
 - 前端：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
 - 桌面端：先构建 Web，再构建 Electron
 

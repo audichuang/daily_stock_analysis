@@ -11,7 +11,7 @@
 ## 寫新測試要遵守
 
 - **被測函式會讀市場時間時,日期與 phase 兩個都要釘住。**只 patch `get_market_now` 而沒管 `infer_market_phase`,phase 就吃真實牆鐘;有些 phase 還會短路、根本不問日曆。測試只在特定時段紅(踩過三次:A 股盤前、紐約盤中、台北清晨——後者正是 `make morning` 的時段)。這個 repo 不用 freezegun,一律 patch 這兩個函式或把 `current_time` 傳進去。
-- **時間戳在建構時取,不在模組 import 時取。**全量要跑 38 分鐘,收集期算好的時戳到執行時已超過 realtime TTL——單跑綠、全量紅。
+- **時間戳在建構時取,不在模組 import 時取。**全量在慢機器上要跑近一小時,收集期算好的時戳到執行時已超過 realtime TTL——單跑綠、全量紅。
 - **相對於「現在」的視窗用相對日期**;寫死日曆日會在某天開始必紅。DB 種子相反:用遠離真實資料的固定年份,見 `market_data/AGENTS.md`。
 - **不是被測性質的 timeout／budget 放寬到 30~60 秒**(mock 立即返回,不會變慢),否則忙機器與 CI runner 上會假紅。斷言「此刻仍被擋住」的那種 timeout 相反——值越大越嚴格,不要放寬。
 - **成對寫守門**:擋 PREMARKET 的測試要配一支「POSTMARKET 仍然放行」,否則把判斷寫成「非盤中一律擋」照樣綠。

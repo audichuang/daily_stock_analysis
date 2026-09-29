@@ -24,7 +24,7 @@ If any instruction in this file conflicts with `AGENTS.md`, follow `AGENTS.md`.
 
 ## Validation
 
-- Backend changes: use the fast gate `uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8` (measured 0.7s / 4s; the script takes a phase argument `all|syntax|flake8|deterministic|offline-tests`). Bare `./scripts/ci_gate.sh` means `all` and includes the full `pytest -m "not network"` suite (~30+ minutes) — run it only before delivery. At minimum run `uv run python -m py_compile` on changed Python files.
+- Backend changes: use the fast gate `uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8` (measured 0.7s / 4s; the script takes a phase argument `all|syntax|flake8|deterministic|offline-tests`). Bare `./scripts/ci_gate.sh` means `all` and includes the full `pytest -m "not network"` suite (minutes to an hour depending on the machine; see `AGENTS.md` §10) — run it only before delivery. At minimum run `uv run python -m py_compile` on changed Python files.
 - Locally the `uv run` prefix is required: the script calls bare `python`, which this fork does not provide globally (`python: command not found`). CI images do provide `python`, so the bare form is fine there.
 - Web changes: run `cd apps/dsa-web && npm ci && npm run lint && npm run build`.
 - Desktop changes: build web first, then desktop if feasible.

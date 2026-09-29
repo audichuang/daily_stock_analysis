@@ -44,7 +44,7 @@ description: 按 issue 分析结论实现修复，并补齐验证、风险与回
 按 `AGENTS.md` 的验证矩阵执行最接近的检查：
 
 - 后端快速门槛：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（秒级，开发中默认用这个；本机必须带 `uv run`，否则 `python: command not found`）
-- 后端完整门槛：`uv run ./scripts/ci_gate.sh`（= `all`，含约 30+ 分钟全量离线测试；仅在交付前跑，判定基准见 `AGENTS.md` §10）
+- 后端完整门槛：`uv run ./scripts/ci_gate.sh`（= `all`，含全量离线测试；仅在交付前跑，耗时与判定基准见 `AGENTS.md` §10）
 - 最低后端要求：`uv run python -m py_compile <changed_python_files>`
 - 前端：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
 - 桌面端：先构建 Web，再构建桌面端
