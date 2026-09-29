@@ -25,7 +25,7 @@ DOPPLER_RUN = doppler run -p $(DOPPLER_PROJECT) -c $(DOPPLER_CONFIG) --
 .DEFAULT_GOAL := help
 .PHONY: help install serve serve-local review review-tw analyze schedule screen \
         swing morning overnight measure portfolio portfolio-wf verify-decisions \
-        test lint lint-fix format refresh-tw refresh-us
+        test lint lint-fix format refresh-tw refresh-us daily-report
 
 help: ## 显示所有可用命令
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -40,6 +40,10 @@ serve: ## 启动 Web/API 服务（Doppler 注入 Bark 推播）
 
 serve-local: ## 启动 Web/API 服务（不含 Bark；纯本机调试）
 	uv run python main.py --serve-only --host $(HOST) --port $(PORT)
+
+# ---- 每日报告 ----
+daily-report: ## 每日本机报告：更新并健检台股资料 → 自选股分析 + 大盘复盘 → Bark（任一步失败也推 Bark）
+	DOPPLER_PROJECT=$(DOPPLER_PROJECT) DOPPLER_CONFIG=$(DOPPLER_CONFIG) bash scripts/daily_report.sh
 
 # ---- 大盘复盘 ----
 review-tw: ## 生成台股大盘复盘（Doppler 注入 Bark 推播）

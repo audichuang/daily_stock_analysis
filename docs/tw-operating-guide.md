@@ -79,12 +79,16 @@ A 線的投資觀是**趨勢追蹤＋回踩低吸**，規則寫死在 prompt 與
 
 ### 2.3 什麼時候跑
 
+- **平日 18:00 自動**：Orca automation「每日台股報告」跑 `make daily-report`——更新並健檢台股資料 →
+  `STOCK_LIST` 自選股分析 + 大盤複盤（`MARKET_REVIEW_REGION`）→ 推 Bark。資料更新、健檢或 LLM 預檢沒過就
+  **不出報告**，改推一則「每日報告失敗」；個股一檔都沒成功也推失敗（LLM 失效時 `main.py` 仍以 0 退出、
+  照推一份只有模板的複盤，別把那則當成報告）。非交易日由 `main.py` 自己跳過。手動補跑同一條指令即可。
 - `make review-tw`：台股大盤複盤，推 Bark。13:30 收盤後跑；法人與融資 T+1 才補齊，盤後當天的籌碼數字
   不完整。
 - `make analyze STOCKS=2330.TW,2317.TW`：個股分析。**這個 target 不經 Doppler，不會推 Bark**，要推播的
   包法見根目錄 `AGENTS.md` §10。
 - 代碼一定要帶 `.TW`／`.TWO`，裸 `2330` 不會進台股語義。
-- 要不要自動跑看 `.env` 的 `SCHEDULE_ENABLED`（`false` 就不會自動跑）。GitHub Actions 的每日任務
+- `.env` 的 `SCHEDULE_ENABLED` 是服務內建排程，與上面的 Orca 排程無關（本機為 `false`，避免同一天跑兩份）。GitHub Actions 的每日任務
   沒有設 `DATABASE_URL`，`MarketDBFetcher` 會退回下一個資料源（yfinance），台股日線可能跟本機不同。
 
 ---
