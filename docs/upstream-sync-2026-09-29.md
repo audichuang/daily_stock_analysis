@@ -75,14 +75,22 @@ CI 无 `.env`，那里不会红。subtests 717 与 09-20 相同。
 
 ## 落地方式
 
-分支 `feat/tw-trade-cost-guardrail`，未 push。推上去走 PR（base=main）才会跑阻断 CI（CI 跑 Python 3.11）。
+依使用者指示，分支 `feat/tw-trade-cost-guardrail` 以 fast-forward 合进 `main` 并 push：
+origin `main` `10fafec6` → `e081f1da`（push 前确认 `origin/main` 未前进）。
+
+代价同前几轮：`ci.yml` 的 `on:` 只有 `pull_request`，push 到 `main` 不触发，
+这批改动没有在云端 CI 跑过——**Python 3.11 未实际剖析**（本机 3.12，`tests/test_python_version_compat.py`
+借不到 3.11 时是 skip）。
 
 ## 回滚
 
-合进 `main` 之前：直接删分支即可，`main` 未动。
-
-合进 `main` 之后，只撤上游这一批、保留交易成本检核：
+只撤上游这一批、保留交易成本检核：
 
 ```bash
-git revert -m 1 <merge commit>     # 以第一父（fork 侧）为主线撤掉上游 8 个 commit
+git revert -m 1 114a70bc           # 以第一父（fork 侧 4ab64999）为主线撤掉上游 8 个 commit
+git push origin main
+launchctl kickstart -k gui/$(id -u)/com.audichuang.dsa
 ```
+
+连交易成本检核一起撤：`git revert -m 1 114a70bc && git revert 4ab64999`，同样要 push 并重启。
+**不要 `reset --hard` 再 force push**：`main` 已 push，revert 才不会让已拉过的副本分叉。
