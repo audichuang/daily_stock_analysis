@@ -1174,6 +1174,8 @@ class Config:
 
     # === 数据库配置 ===
     database_path: str = "./data/stock_analysis.db"
+    # 设定后改用这个 SQLAlchemy URL（例如 Postgres），DATABASE_PATH 不再生效
+    storage_database_url: str = ""
     sqlite_wal_enabled: bool = True
     sqlite_busy_timeout_ms: int = 5000
     sqlite_write_retry_max: int = 3
@@ -2140,6 +2142,7 @@ class Config:
             share_image_xiaohongshu_qr_path=(os.getenv('SHARE_IMAGE_XIAOHONGSHU_QR_PATH') or '').strip() or None,
             prefetch_realtime_quotes=os.getenv('PREFETCH_REALTIME_QUOTES', 'true').lower() == 'true',
             database_path=os.getenv('DATABASE_PATH', './data/stock_analysis.db'),
+            storage_database_url=(os.getenv('STORAGE_DATABASE_URL') or '').strip(),
             sqlite_wal_enabled=os.getenv('SQLITE_WAL_ENABLED', 'true').lower() == 'true',
             sqlite_busy_timeout_ms=parse_env_int(
                 os.getenv('SQLITE_BUSY_TIMEOUT_MS'),
@@ -3691,8 +3694,11 @@ class Config:
         """
         获取 SQLAlchemy 数据库连接 URL
 
-        自动创建数据库目录（如果不存在）
+        设了 STORAGE_DATABASE_URL 就原样使用；否则用 DATABASE_PATH 的 SQLite，
+        并自动创建数据库目录（如果不存在）
         """
+        if self.storage_database_url:
+            return self.storage_database_url
         db_path = Path(self.database_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         return f"sqlite:///{db_path.absolute()}"

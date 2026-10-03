@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 新增可选的 `STORAGE_DATABASE_URL`：应用库（分析历史、回测、决策信号、LLM 用量等）可改存 PostgreSQL，供多台机器共用同一份历史；不设定时仍是 `DATABASE_PATH` 的 SQLite。附 `scripts/migrate_storage_to_postgres.py` 把既有 SQLite 搬到指定 schema
+- [修复] 应用库在 PostgreSQL 上可建表与写入：会话状态、会话摘要、技能观点样本的 upsert 改按方言分派（原本写死 SQLite 语法）；三个超过 63 字元的 `decision_signals` index 名在 Postgres 上自动截断（SQLite 不变）；`backtest_results.eval_status` 放宽到 24 字元（`insufficient_data` 有 17 字元，SQLite 不检查长度所以一直没发现）
+- [修复] 数据库初始化日志不再印出连线 URL 里的密码；`*DATABASE_URL` 设定项在 Web 设定页改判为敏感栏位
 - [修复] 本地 CLI 生成后端的子进程环境 allowlist 补上 `USER`／`LOGNAME`：macOS 上 `claude` 靠 `USER` 找 login keychain，缺了会回「Not logged in」并被判成 `login_required`，即使本机已登录，`GENERATION_BACKEND=claude_code_cli` 因此在 macOS 无法使用
 - [修复] 台股大盘复盘的「最新交易日」参照改取 OpenAPI／rwd 两版 FMTQIK 中较新的一份：OpenAPI 版盘后常落后（2026-09-29 17:05 仍停在 09-24），旧写法因此把当日新鲜的三大法人、上柜成交额与本地涨跌家数全判过期拒收，成交金额也印成前一交易日
 - [新功能] 新增 `make daily-report`（`scripts/daily_report.sh`）：更新并健检台股资料 → 自选股分析 + 大盘复盘 → Bark；资料更新、健检或 LLM 预检失败时不出报告、改推「每日報告失敗」Bark；个股一档都没成功也视为失败（LLM 失效时 `main.py` 仍以 0 退出）。`make daily-report-detached` 以 setsid 脱离呼叫者在背景跑完（Orca 叫起的 agent 结束一轮后 terminal 会被收掉，连同背景子行程一起砍），并以锁避免两轮重叠；本机以 Orca automation 平日 18:00 触发（取代已失效的 15:00 crontab 资料更新）；个股分析改由本机 Claude Code CLI 生成

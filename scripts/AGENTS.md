@@ -9,10 +9,10 @@
 | 類別 | 腳本 | 副作用 |
 |---|---|---|
 | 台股波段研究 | `screen_tw`、`measure_signal_forward`、`portfolio_walkforward`、`backtest_screen`、`verify_swing_decisions` | 唯讀本地 Postgres;`verify_swing_decisions` 只讀 `journal/`,沒有任何腳本會寫它 |
-| 每日報告回測 | `backtest_daily_report_levels` | 唯讀 `data/stock_analysis.db`(報告價位)與 Postgres(行情) |
+| 每日報告回測 | `backtest_daily_report_levels` | 唯讀應用庫(報告價位;有 `STORAGE_DATABASE_URL` 就讀它,否則 `data/stock_analysis.db`)與 Postgres(行情) |
 | 盤前／盤中取數 | `overnight`、`intraday_breadth`、`kr_tw_memory_watch` | 連網(yfinance／Shioaji),後兩支另讀 DB |
 | 股票索引 | `fetch_tw_stock_list`、`merge_tw_into_index`、`refresh_us_stock_index`、`refresh_stock_index`、`generate_index_from_csv` | **改寫進版控的索引檔與種子 CSV** |
-| 資料庫維運 | `migrate_sqlite_to_pg`、`backfill_price_change_sign` | **寫入 Postgres** |
+| 資料庫維運 | `migrate_sqlite_to_pg`、`backfill_price_change_sign`、`migrate_storage_to_postgres` | **寫入 Postgres**;最後一支只碰 `--schema` 指定的應用庫表(分析歷史等),有 `--dry-run`,目標非空需 `--replace` |
 | 門檻／治理／打包 | `ci_gate.sh`、`ci_test_shard`、`check_ai_assets`、`test.sh`、`build-*`、`pyinstaller_runtime_compat` | CI 與發版流程直接呼叫,檔名被測試用字串釘住 |
 
 ## 進來改要遵守
