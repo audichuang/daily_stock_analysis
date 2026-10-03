@@ -59,3 +59,7 @@
 | 针对性测试（上游新增/改动 4 档、全部 `test_analyzer_*`、台股报告与交易成本、报告语言、`python_version_compat` 等） | 477 passed |
 | **zh／zh-TW prompt 逐字比对** | 合并前（`main` `256a44d9`，独立 worktree）与合并后，对 `zh`、`zh-TW` × `AAPL`／`2330.TW`／`600519` × legacy／skill × 有无新闻共 24 组 `_format_prompt` 整份比对：**24/24 逐字相同**（已确认两轮载入的是不同版本的 `analyzer.py`） |
 | **全量离线测试** | 未在本机跑，以 PR CI（Python 3.11、分三片）为准 |
+
+## 风险
+
+- `tests/test_analyzer_prompt_zh_tw.py` 直接 import 上游测试档的 `_cjk_chars`／`_make_analyzer`／`_rich_context`（刻意不复制一份）。上游改名会让 fork 测试 ImportError 变红（显性）；上游改 `_rich_context` 内容则可能让 fork 的繁体断言少覆盖某个区块（隐性）——下次同步若上游动了这个 fixture，重新核对 `_TW_MARKERS` 每一项仍会出现在 prompt 里。
