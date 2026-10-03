@@ -28,7 +28,7 @@ from src.agent.llm_adapter import (
     register_fallback_model_pricing,
 )
 from src.agent.provider_trace import resolved_model_provider_identity
-from src.agent.skills.defaults import CORE_TRADING_SKILL_POLICY_ZH
+from src.agent.skills.defaults import CORE_TRADING_SKILL_POLICY_EN, CORE_TRADING_SKILL_POLICY_ZH
 from src.config import (
     Config,
     extra_litellm_params,
@@ -91,6 +91,7 @@ from src.report_language import (
 )
 from src.schemas.decision_action import build_action_fields
 from src.schemas.decision_scale import (
+    CANONICAL_DECISION_SCALE_PROMPT_EN,
     CANONICAL_DECISION_SCALE_PROMPT_ZH,
     score_band_metadata,
 )
@@ -183,7 +184,28 @@ def _today_looks_complete_daily_bar(
     return True
 
 
-def _phase_aware_quote_labels(
+_QUOTE_LABELS_EN = {
+    "今日行情": "Today's Quote",
+    "收盘价": "Close",
+    "上一完整交易日行情": "Last Complete Trading Day Quote",
+    "上一完整交易日收盘价": "Last Complete Trading Day Close",
+    "最新行情": "Latest Quote",
+    "实时估算价": "Realtime Estimated Price",
+    "最新价": "Latest Price",
+    "盘中估算价": "Intraday Estimated Price",
+}
+
+
+def _phase_aware_quote_labels(context: Dict[str, Any], report_language: str = "zh") -> Tuple[str, str]:
+    """Choose quote-table labels that do not conflict with phase context."""
+    if normalize_report_language(report_language) in ("en", "ko"):
+        # _QUOTE_LABELS_EN is keyed by the simplified labels.
+        section_title, close_label = _phase_aware_quote_labels_zh(context)
+        return _QUOTE_LABELS_EN[section_title], _QUOTE_LABELS_EN[close_label]
+    return _phase_aware_quote_labels_zh(context, report_language)
+
+
+def _phase_aware_quote_labels_zh(
     context: Dict[str, Any],
     report_language: str = "zh",
 ) -> Tuple[str, str]:
@@ -289,15 +311,15 @@ def _legacy_audit_marker_specs(
     # _format_zh, so the simplified title is what the prompt actually contains.
     add("market_structure_context", "## Market Structure Context" if report_language in ("en", "ko") else "## 市场结构上下文")
     add("analysis_context_pack", analysis_context_pack_summary)
-    add("quote", _format_prompt_tech_section_title(report_language))
-    add(
-        "news_context",
-        (
-            ("## 📰 輿情情報" if report_language == "zh-TW" else "## 📰 舆情情报")
-            if news_context
-            else None
-        ),
-    )
+    english = report_language in ("en", "ko")
+    add("quote", "## 📈 Technical Data" if english else _format_prompt_tech_section_title(report_language))
+    if english:
+        news_marker = "## 📰 News Intelligence"
+    elif report_language == "zh-TW":
+        news_marker = "## 📰 輿情情報"
+    else:
+        news_marker = "## 📰 舆情情报"
+    add("news_context", news_marker if news_context else None)
     return markers
 
 
@@ -804,10 +826,11 @@ def _sanitize_trend_analysis_for_prompt(
     trend: Any,
     *,
     volume_change_ratio: Any = None,
-    report_language: str = "zh",
+    language: str = "zh",
 ) -> Dict[str, Any]:
     """Clean prompt-only trend hints on a derived copy without touching runtime/provider config."""
-    tw = normalize_report_language(report_language) == "zh-TW"
+    english = normalize_report_language(language) in ("en", "ko")
+    tw = normalize_report_language(language) == "zh-TW"
 
     def L(zh_tw: str, zh: str) -> str:
         return zh_tw if tw else zh
@@ -824,10 +847,17 @@ def _sanitize_trend_analysis_for_prompt(
             _BULLISH_TREND_HINTS + _WEAK_BULLISH_TREND_HINTS,
         )
         if len(filtered_signal_reasons) != len(signal_reasons):
-            prompt_notes.append(L("目前技術結構偏空，已剔除與空頭主判斷直接衝突的看多結構理由。", "当前技术结构偏空，已剔除与空头主判断直接冲突的看多结构理由。"))
+            prompt_notes.append(
+                "The technical structure is bearish; bullish structure reasons that directly conflict with the bearish view were removed."
+                if english
+                else L("目前技術結構偏空，已剔除與空頭主判斷直接衝突的看多結構理由。", "当前技术结构偏空，已剔除与空头主判断直接冲突的看多结构理由。")
+            )
         signal_reasons = filtered_signal_reasons
         prompt_notes.append(
-            L(
+            "If news, earnings or policy catalysts are positive, only describe them as \"event-led, technicals not yet confirmed\" "
+            "or \"fundamentals lean positive, but technicals are not yet confirmed\"; never present them as a definite buy point."
+            if english
+            else L(
                 "若新聞、業績或政策催化偏多，只能表述為「事件先行、技術待確認」或「基本面偏多，但技術面尚未確認」，嚴禁寫成確定性買點。",
                 "若新闻、业绩或政策催化偏多，只能表述为“事件先行、技术待确认”或“基本面偏多，但技术面尚未确认”，严禁写成确定性买点。",
             )
@@ -838,20 +868,31 @@ def _sanitize_trend_analysis_for_prompt(
             _BEARISH_TREND_HINTS + _WEAK_BEARISH_TREND_HINTS,
         )
         if len(filtered_signal_reasons) != len(signal_reasons):
-            prompt_notes.append(L("目前技術結構偏多，已剔除與多頭主判斷直接衝突的空頭結構理由。", "当前技术结构偏多，已剔除与多头主判断直接冲突的空头结构理由。"))
+            prompt_notes.append(
+                "The technical structure is bullish; bearish structure reasons that directly conflict with the bullish view were removed."
+                if english
+                else L("目前技術結構偏多，已剔除與多頭主判斷直接衝突的空頭結構理由。", "当前技术结构偏多，已剔除与多头主判断直接冲突的空头结构理由。")
+            )
         signal_reasons = filtered_signal_reasons
         filtered_risk_factors = _filter_conflicting_trend_items(
             risk_factors,
             _BEARISH_TREND_HINTS + _WEAK_BEARISH_TREND_HINTS,
         )
         if len(filtered_risk_factors) != len(risk_factors):
-            prompt_notes.append(L("目前技術結構偏多，已剔除與多頭主判斷直接衝突的空頭結構風險表述。", "当前技术结构偏多，已剔除与多头主判断直接冲突的空头结构风险表述。"))
+            prompt_notes.append(
+                "The technical structure is bullish; bearish structure risk statements that directly conflict with the bullish view were removed."
+                if english
+                else L("目前技術結構偏多，已剔除與多頭主判斷直接衝突的空頭結構風險表述。", "当前技术结构偏多，已剔除与多头主判断直接冲突的空头结构风险表述。")
+            )
         risk_factors = filtered_risk_factors
 
     parsed_volume_change = _safe_float(volume_change_ratio, default=math.nan)
     if math.isfinite(parsed_volume_change) and parsed_volume_change > 10:
         prompt_notes.append(
-            L(
+            f"Volume changed about {parsed_volume_change:.2f}x vs. the previous day, possibly due to bad data or a one-off spike; "
+            "down-weight the volume signal and do not treat it mechanically as strong confirmation."
+            if english
+            else L(
                 f"成交量較昨日變化約 {parsed_volume_change:.2f} 倍，可能存在異常資料或一次性衝量；量能訊號必須降權解讀，不能機械視為強確認。",
                 f"成交量较昨日变化约 {parsed_volume_change:.2f} 倍，可能存在异常数据或一次性冲量；量能信号必须降权解读，不能机械视为强确认。",
             )
@@ -2347,6 +2388,265 @@ class GeminiAnalyzer(LLMClient):
 - 建议输出可选展示字段 `dashboard.signal_attribution` 六字段；解释推荐理由的构成，包括技术指标、新闻舆情、基本面、市场环境的贡献度，以及最强看多/看空信号。
 - 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。"""
 
+    # English templates (REPORT_LANGUAGE=en/ko). They mirror LEGACY_DEFAULT_SYSTEM_PROMPT /
+    # SYSTEM_PROMPT section by section so smaller models are not biased toward Chinese output
+    # by a Chinese-dominant prompt (#2352). JSON keys and enum values must stay identical.
+    _DASHBOARD_JSON_HEAD_EN = """## Output Format: Decision Dashboard JSON
+
+Output strictly in the following JSON format. This is a complete Decision Dashboard:
+
+```json
+{
+    "stock_name": "Stock name (common English company name if known)",
+    "sentiment_score": integer 0-100,
+    "trend_prediction": "Strong Bullish/Bullish/Sideways/Bearish/Strong Bearish",
+    "operation_advice": "Buy/Add Position/Hold/Reduce/Sell/Watch",
+    "decision_type": "buy/hold/sell",
+    "action": "buy/add/hold/reduce/sell/watch/avoid/alert",
+    "guardrail_reason": "Reason for the downgrade/upgrade when the score band and the final action differ; otherwise leave empty",
+    "confidence_level": "High/Medium/Low",
+
+    "dashboard": {
+        "core_conclusion": {
+            "one_sentence": "One-sentence core conclusion (at most 30 words, tell the user exactly what to do)",
+            "signal_type": "🟢Buy Signal/🟡Hold and Watch/🔴Sell Signal/⚠️Risk Warning",
+            "time_sensitivity": "Act now/Today/This week/No rush",
+            "position_advice": {
+                "no_position": "Advice for those without a position: concrete action",
+                "has_position": "Advice for holders: concrete action"
+            }
+        },
+
+        "data_perspective": {
+            "trend_status": {
+                "ma_alignment": "Description of the moving-average alignment",
+                "is_bullish": true/false,
+                "trend_score": 0-100
+            },
+            "price_position": {
+                "current_price": current price number,
+                "ma5": MA5 number,
+                "ma10": MA10 number,
+                "ma20": MA20 number,
+                "bias_ma5": bias percentage number,
+                "bias_status": "Safe/Caution/Danger",
+                "support_level": support price,
+                "resistance_level": resistance price
+            },
+            "volume_analysis": {
+                "volume_ratio": volume ratio number,
+                "volume_status": "High volume/Low volume/Normal volume",
+                "turnover_rate": turnover rate percentage,
+                "volume_meaning": "Interpretation of volume (e.g. a low-volume pullback means selling pressure is easing)"
+            },
+            "chip_structure": {
+                "profit_ratio": profit ratio,
+                "avg_cost": average cost,
+                "concentration": chip concentration,
+                "chip_health": "Healthy/Average/Caution"
+            }
+        },
+
+        "intelligence": {
+            "latest_news": "[Latest News] summary of recent important news",
+            "risk_alerts": ["Risk 1: specific description", "Risk 2: specific description"],
+            "positive_catalysts": ["Catalyst 1: specific description", "Catalyst 2: specific description"],
+            "earnings_outlook": "Earnings outlook (based on earnings previews, flash reports, etc.)",
+            "sentiment_summary": "One-sentence summary of news sentiment"
+        },
+
+        "battle_plan": {
+            "sniper_points": {
+"""
+
+    _DASHBOARD_JSON_TAIL_EN = """
+        "phase_decision": {
+            "phase_context": {"phase": "premarket/intraday/lunch_break/closing_auction/postmarket/non_trading/unknown"},
+            "action_window": "Pre-market plan/Intraday tracking/Midday confirmation/Pre-close risk control/Post-market review/Non-trading-day watch",
+            "immediate_action": "Act now/Wait for confirmation/Watch/Stop-loss or take-profit alert/Do not chase/No intraday action",
+            "watch_conditions": ["Watch condition 1", "Watch condition 2"],
+            "next_check_time": "Next checkpoint or market-local time",
+            "confidence_reason": "Reason for the confidence level, including phase and data-quality limits",
+            "data_limitations": ["Phase or data-quality limitation 1", "Phase or data-quality limitation 2"]
+        },
+
+        "signal_attribution": {
+            "technical_indicators": technical indicator contribution (0-100),
+            "news_sentiment": news sentiment contribution (0-100),
+            "fundamentals": fundamentals contribution (0-100),
+            "market_conditions": market conditions contribution (0-100),
+            "strongest_bullish_signal": "Name of the strongest bullish signal",
+            "strongest_bearish_signal": "Name of the strongest bearish signal"
+        }
+    },
+
+    "analysis_summary": "Overall analysis summary (about 100 words)",
+    "key_points": "3-5 key points, comma separated",
+    "risk_warning": "Risk warning",
+    "buy_reason": "BUY_REASON_PLACEHOLDER",
+
+    "trend_analysis": "Price pattern analysis",
+    "short_term_outlook": "Short-term outlook (1-3 days)",
+    "medium_term_outlook": "Medium-term outlook (1-2 weeks)",
+    "technical_analysis": "Overall technical analysis",
+    "ma_analysis": "Moving-average analysis",
+    "volume_analysis": "Volume analysis",
+    "pattern_analysis": "Candlestick pattern analysis",
+    "fundamental_analysis": "Fundamental analysis",
+    "sector_position": "Sector and industry analysis",
+    "company_highlights": "Company highlights/risks",
+    "news_summary": "News summary",
+    "market_sentiment": "Market sentiment",
+    "hot_topics": "Related hot topics",
+
+    "search_performed": true/false,
+    "data_sources": "Description of data sources"
+}
+```
+"""
+
+    _DASHBOARD_PRINCIPLES_EN = """## Decision Dashboard Core Principles
+
+1. **Conclusion first**: say clearly in one sentence whether to buy or sell
+2. **Position-specific advice**: give different advice to those without a position and to holders
+3. **Precise sniper levels**: always give concrete prices, never vague wording
+4. **Visual checklist**: use ✅⚠️❌ to show the result of each check
+5. **Risk priority**: highlight risk points from the news clearly
+
+## Actionability and Stability Constraints
+
+- Do not flip between "Buy" and "Sell" just because of a single day's move or because the score crossed a threshold.
+- Operation advice must consider price position (support/resistance), volume/chips, main capital flow and risk events together.
+- When the price is between support and resistance and capital flow is unclear, prefer actionable neutral advice such as "Hold/Sideways/Watch/Shakeout watch"; `decision_type` stays `hold`.
+- Only give Buy near a confirmed support or after a valid breakout above resistance, with capital flow/volume confirming; never chase near resistance while capital flows out.
+- Only give Sell/Reduce after a break below key support, persistent main capital outflow, or a clear increase in risk.
+- `dashboard.phase_decision` must contain all seven fields; intraday, lunch break and near the close must give the current action, watch conditions and the next checkpoint.
+- The optional display field `dashboard.signal_attribution` (six fields) is recommended; explain what drives the recommendation, including the contribution of technical indicators, news sentiment, fundamentals and market conditions, and the strongest bullish/bearish signals.
+- Pre-market, on non-trading days or in an unknown phase, never fabricate today's intraday move; when quote/daily_bars/technical is stale, fallback, missing, fetch_failed, partial or estimated, `confidence_level` must not be High."""
+
+    LEGACY_DEFAULT_SYSTEM_PROMPT_EN = """You are a trend-trading focused {market_placeholder} analyst responsible for producing a professional Decision Dashboard analysis report.
+
+{guidelines_placeholder}
+
+""" + CORE_TRADING_SKILL_POLICY_EN + """
+
+""" + CANONICAL_DECISION_SCALE_PROMPT_EN + """
+
+""" + _DASHBOARD_JSON_HEAD_EN + """                "ideal_buy": "Ideal buy point: XX (near MA5)",
+                "secondary_buy": "Secondary buy point: XX (near MA10)",
+                "stop_loss": "Stop-loss: XX (break below MA20 or X%)",
+                "take_profit": "Target: XX (previous high/round-number level)"
+            },
+            "position_strategy": {
+                "suggested_position": "Suggested position: X/10",
+                "entry_plan": "Description of the staged entry plan",
+                "risk_control": "Description of the risk-control strategy"
+            },
+            "action_checklist": [
+                "✅/⚠️/❌ Check 1: bullish alignment",
+                "✅/⚠️/❌ Check 2: reasonable bias (may be relaxed for strong trends)",
+                "✅/⚠️/❌ Check 3: volume confirms",
+                "✅/⚠️/❌ Check 4: no major negative news",
+                "✅/⚠️/❌ Check 5: healthy chip structure",
+                "✅/⚠️/❌ Check 6: reasonable PE valuation"
+            ]
+        },
+""" + _DASHBOARD_JSON_TAIL_EN.replace(
+        "BUY_REASON_PLACEHOLDER", "Reason for the action, citing the trading principles"
+    ) + """
+## Scoring Criteria
+
+### Strong Buy (80-100):
+- ✅ Bullish alignment: MA5 > MA10 > MA20
+- ✅ Low bias: <2%, best entry
+- ✅ Low-volume pullback or high-volume breakout
+- ✅ Concentrated, healthy chips
+- ✅ Positive news catalyst
+
+### Buy (60-79):
+- ✅ Bullish or weakly bullish alignment
+- ✅ Bias <5%
+- ✅ Normal volume
+- ⚪ One minor condition may be unmet
+
+### Watch (40-59):
+- ⚠️ Bias >5% (chasing risk)
+- ⚠️ Tangled moving averages, unclear trend
+- ⚠️ Risk events present
+
+### Reduce (20-39):
+- ⚠️ Weakening trend or break below key moving averages
+- ⚠️ Weakening capital/volume, risk clearly outweighs reward
+- ⚠️ Focus on reducing the position and protecting gains
+
+### Sell (0-19):
+- ❌ Bearish alignment or clearly deteriorating trend
+- ❌ Break below key support/stop-loss
+- ❌ High-volume decline or major negative news
+
+""" + _DASHBOARD_PRINCIPLES_EN
+
+    SYSTEM_PROMPT_EN = """You are a {market_placeholder} analyst responsible for producing a professional Decision Dashboard analysis report.
+
+{guidelines_placeholder}
+
+{default_skill_policy_section}
+{skills_section}
+
+""" + CANONICAL_DECISION_SCALE_PROMPT_EN + """
+
+""" + _DASHBOARD_JSON_HEAD_EN + """                "ideal_buy": "Ideal entry: XX (main skill trigger conditions met)",
+                "secondary_buy": "Secondary entry: XX (more conservative or after confirmation)",
+                "stop_loss": "Stop-loss: XX (invalidation condition or X% risk)",
+                "take_profit": "Target: XX (based on resistance/risk-reward ratio)"
+            },
+            "position_strategy": {
+                "suggested_position": "Suggested position: X/10",
+                "entry_plan": "Description of the staged entry plan",
+                "risk_control": "Description of the risk-control strategy"
+            },
+            "action_checklist": [
+                "✅/⚠️/❌ Check 1: current structure meets the active skill conditions",
+                "✅/⚠️/❌ Check 2: entry position and risk-reward are reasonable",
+                "✅/⚠️/❌ Check 3: volume/volatility/chips support the view",
+                "✅/⚠️/❌ Check 4: no major negative news",
+                "✅/⚠️/❌ Check 5: clear position size and stop-loss plan",
+                "✅/⚠️/❌ Check 6: valuation/earnings/catalysts match the conclusion"
+            ]
+        },
+""" + _DASHBOARD_JSON_TAIL_EN.replace(
+        "BUY_REASON_PLACEHOLDER", "Reason for the action, citing the active skills or risk framework"
+    ) + """
+## Scoring Criteria
+
+### Strong Buy (80-100):
+- ✅ Several active skills support a positive conclusion at the same time
+- ✅ Upside, trigger conditions and risk-reward are clear
+- ✅ Key risks have been screened; position size and stop-loss plan are clear
+- ✅ Important data and intelligence conclusions are consistent
+
+### Buy (60-79):
+- ✅ The main signal is positive, but a few items still need confirmation
+- ✅ Controllable risks or a secondary entry point are acceptable
+- ✅ The report must state additional watch conditions
+
+### Watch (40-59):
+- ⚠️ Signals diverge widely or lack sufficient confirmation
+- ⚠️ Risk and opportunity are roughly balanced
+- ⚠️ Better to wait for trigger conditions or avoid uncertainty
+
+### Reduce (20-39):
+- ⚠️ The main conclusion is weakening; risk clearly outweighs reward
+- ⚠️ Some invalidation conditions are triggered; reduce exposure of existing positions
+- ⚠️ Protecting gains matters more than attacking
+
+### Sell (0-19):
+- ❌ Stop-loss/invalidation conditions or major negative news triggered
+- ❌ Trend or risk has clearly deteriorated
+- ❌ Existing positions should be exited first
+
+""" + _DASHBOARD_PRINCIPLES_EN
+
     TEXT_SYSTEM_PROMPT = """你是一位专业的股票分析助手。
 
 - 回答必须基于用户提供的数据与上下文
@@ -2456,8 +2756,14 @@ class GeminiAnalyzer(LLMClient):
         market_role = get_market_role(stock_code, lang)
         market_guidelines = get_market_guidelines(stock_code, lang)
         skill_instructions, default_skill_policy, use_legacy_default_prompt = self._get_skill_prompt_sections()
+        # Korean reuses the English scaffolding (same as market review / context pack);
+        # the Korean output directive is appended below.
+        use_english_template = lang in ("en", "ko")
         if use_legacy_default_prompt:
-            base_prompt = self.LEGACY_DEFAULT_SYSTEM_PROMPT.replace(
+            legacy_template = (
+                self.LEGACY_DEFAULT_SYSTEM_PROMPT_EN if use_english_template else self.LEGACY_DEFAULT_SYSTEM_PROMPT
+            )
+            base_prompt = legacy_template.replace(
                 "{market_placeholder}", market_role
             ).replace(
                 "{guidelines_placeholder}", market_guidelines
@@ -2465,12 +2771,16 @@ class GeminiAnalyzer(LLMClient):
         else:
             skills_section = ""
             if skill_instructions:
-                skills_section = f"## 激活的交易技能\n\n{skill_instructions}\n"
+                skills_header = "## Active Trading Skills" if use_english_template else "## 激活的交易技能"
+                skills_section = f"{skills_header}\n\n{skill_instructions}\n"
+            if use_english_template and default_skill_policy == CORE_TRADING_SKILL_POLICY_ZH:
+                default_skill_policy = CORE_TRADING_SKILL_POLICY_EN
             default_skill_policy_section = ""
             if default_skill_policy:
                 default_skill_policy_section = f"{default_skill_policy}\n"
+            template = self.SYSTEM_PROMPT_EN if use_english_template else self.SYSTEM_PROMPT
             base_prompt = (
-                self.SYSTEM_PROMPT.replace("{market_placeholder}", market_role)
+                template.replace("{market_placeholder}", market_role)
                 .replace("{guidelines_placeholder}", market_guidelines)
                 .replace("{default_skill_policy_section}", default_skill_policy_section)
                 .replace("{skills_section}", skills_section)
@@ -3674,20 +3984,24 @@ class GeminiAnalyzer(LLMClient):
             return ""
 
         lang = normalize_report_language(report_language)
+        # en/ko reuse the English prompt scaffolding (upstream #2368), so this block must too.
+        english = lang in ("en", "ko")
 
-        def L(zh_tw: str, zh: str) -> str:
+        def T(zh_tw: str, zh: str, en: str) -> str:
+            if english:
+                return en
             return zh_tw if lang == "zh-TW" else zh
 
         _dir = {
-            "buy": L("買超", "买超"),
-            "sell": L("賣超", "卖超"),
-            "flat": L("無明顯方向", "无明显方向"),
+            "buy": T("買超", "买超", "net buying"),
+            "sell": T("賣超", "卖超", "net selling"),
+            "flat": T("無明顯方向", "无明显方向", "no clear direction"),
         }
         _label = {
-            "foreign": L("外資", "外资"),
-            "trust": L("投信", "投信"),
-            "dealer": L("自營商", "自营商"),
-            "total": L("三大法人合計", "三大法人合计"),
+            "foreign": T("外資", "外资", "Foreign investors"),
+            "trust": T("投信", "投信", "Investment trusts"),
+            "dealer": T("自營商", "自营商", "Dealers"),
+            "total": T("三大法人合計", "三大法人合计", "Three institutions total"),
         }
         lines = []
         for actor in ("foreign", "trust", "dealer", "total"):
@@ -3699,17 +4013,19 @@ class GeminiAnalyzer(LLMClient):
             cum20 = a.get("cum_20d")
             parts = []
             if days > 0:
-                parts.append(L(f"連 {ge}{days} 日{direction}", f"连 {ge}{days} 日{direction}"))
+                parts.append(T(f"連 {ge}{days} 日{direction}", f"连 {ge}{days} 日{direction}", f"{direction} for {ge}{days} sessions in a row"))
             else:
                 parts.append(direction)
             if cum20 is not None:
-                parts.append(L(f"近 20 日累計 {cum20:+d} 股", f"近 20 日累计 {cum20:+d} 股"))
+                parts.append(T(f"近 20 日累計 {cum20:+d} 股", f"近 20 日累计 {cum20:+d} 股", f"20-day cumulative {cum20:+d} shares"))
             if actor == "total" and a.get("pct_of_shares") is not None:
-                parts.append(L(f"佔股本 {a['pct_of_shares']:+.2f}%", f"占股本 {a['pct_of_shares']:+.2f}%"))
-            lines.append(f"- {_label[actor]}：{'；'.join(parts)}")
-        header = L(
+                parts.append(T(f"佔股本 {a['pct_of_shares']:+.2f}%", f"占股本 {a['pct_of_shares']:+.2f}%", f"{a['pct_of_shares']:+.2f}% of shares outstanding"))
+            sep, colon = ("; ", ": ") if english else ("；", "：")
+            lines.append(f"- {_label[actor]}{colon}{sep.join(parts)}")
+        header = T(
             f"三大法人近期趨勢（截至 {trend.get('as_of', 'N/A')}，共 {trend.get('sessions', 0)} 交易日）：",
             f"三大法人近期趋势（截至 {trend.get('as_of', 'N/A')}，共 {trend.get('sessions', 0)} 交易日）：",
+            f"Recent institutional trend (as of {trend.get('as_of', 'N/A')}, {trend.get('sessions', 0)} sessions):",
         )
         return "\n" + header + "\n" + "\n".join(lines) + "\n"
 
@@ -3733,12 +4049,18 @@ class GeminiAnalyzer(LLMClient):
         """
         code = context.get('code', 'Unknown')
         report_language = normalize_report_language(report_language)
+        # Structural template language: Korean reuses the English scaffolding and only
+        # the final output-language directive differs (#2352).
+        english = report_language in ("en", "ko")
         _, _, use_legacy_default_prompt = self._get_skill_prompt_sections()
 
         # 优先使用上下文中的股票名称（从 realtime_quote 获取）
         stock_name = context.get('stock_name', name)
         if not stock_name or stock_name == f'股票{code}':
             stock_name = STOCK_NAME_MAP.get(code, f'股票{code}')
+
+        if english and stock_name == f'股票{code}':
+            stock_name = f'Stock {code}'
 
         today = context.get('today', {})
         unknown_text = get_unknown_text(report_language)
@@ -3777,31 +4099,55 @@ class GeminiAnalyzer(LLMClient):
             return fallback if fallback is not None else 'N/A'
         hide_regular_session_ohlc = _should_hide_regular_session_ohlc(context)
         realtime_overlay_quote = hide_regular_session_ohlc and _today_has_realtime_overlay(today)
-        pct_chg_label = L("即時漲跌幅", "实时涨跌幅") if realtime_overlay_quote else L("漲跌幅", "涨跌幅")
-        volume_label = L("即時成交量", "实时成交量") if realtime_overlay_quote else L("成交量", "成交量")
-        amount_label = L("即時成交額", "实时成交额") if realtime_overlay_quote else L("成交額", "成交额")
+        if english:
+            price_unit = ""
+            pct_chg_label = "Realtime Change" if realtime_overlay_quote else "Change"
+            volume_label = "Realtime Volume" if realtime_overlay_quote else "Volume"
+            amount_label = "Realtime Turnover" if realtime_overlay_quote else "Turnover"
+            open_label, high_label, low_label = "Open", "High", "Low"
+        else:
+            price_unit = f" {ccy}"
+            pct_chg_label = L("即時漲跌幅", "实时涨跌幅") if realtime_overlay_quote else L("漲跌幅", "涨跌幅")
+            volume_label = L("即時成交量", "实时成交量") if realtime_overlay_quote else L("成交量", "成交量")
+            amount_label = L("即時成交額", "实时成交额") if realtime_overlay_quote else L("成交額", "成交额")
+            open_label = L("開盤價", "开盘价")
+            high_label = L("最高價", "最高价")
+            low_label = L("最低價", "最低价")
         quote_rows = [
-            f"| {close_price_label} | {today.get('close', 'N/A')} {ccy} |",
+            f"| {close_price_label} | {today.get('close', 'N/A')}{price_unit} |",
         ]
         if not hide_regular_session_ohlc:
             quote_rows.extend(
                 [
-                    f"| {L('開盤價', '开盘价')} | {today.get('open', 'N/A')} {ccy} |",
-                    f"| {L('最高價', '最高价')} | {today.get('high', 'N/A')} {ccy} |",
-                    f"| {L('最低價', '最低价')} | {today.get('low', 'N/A')} {ccy} |",
+                    f"| {open_label} | {today.get('open', 'N/A')}{price_unit} |",
+                    f"| {high_label} | {today.get('high', 'N/A')}{price_unit} |",
+                    f"| {low_label} | {today.get('low', 'N/A')}{price_unit} |",
                 ]
             )
         quote_rows.extend(
             [
                 f"| {pct_chg_label} | {today.get('pct_chg', 'N/A')}% |",
-                f"| {volume_label} | {self._format_volume(today.get('volume'))} |",
-                f"| {amount_label} | {self._format_amount(today.get('amount'), prompt_market)} |",
+                f"| {volume_label} | {self._format_volume(today.get('volume'), report_language)} |",
+                f"| {amount_label} | {self._format_amount(today.get('amount'), prompt_market, report_language)} |",
             ]
         )
         quote_rows_text = "\n".join(quote_rows)
 
         # ========== 构建决策仪表盘格式的输入 ==========
-        prompt = f"""# {L("決策儀表盤分析請求", "决策仪表盘分析请求")}
+        if english:
+            prompt = f"""# Decision Dashboard Analysis Request
+
+## 📊 Stock Basics
+| Item | Data |
+|------|------|
+| Stock Code | **{code}** |
+| Stock Name | **{stock_name}** |
+| Analysis Date | {context.get('date', unknown_text)} |
+
+---
+"""
+        else:
+            prompt = f"""# {L("決策儀表盤分析請求", "决策仪表盘分析请求")}
 
 ## 📊 {L("股票基礎資訊", "股票基础信息")}
 | {L("項目", "项目")} | {L("資料", "数据")} |
@@ -3830,7 +4176,26 @@ class GeminiAnalyzer(LLMClient):
             prompt += market_structure_section
         if isinstance(analysis_context_pack_summary, str) and analysis_context_pack_summary:
             prompt += analysis_context_pack_summary
-        prompt += f"""
+        if english:
+            prompt += f"""
+
+## 📈 Technical Data
+
+### {quote_section_title}
+| Indicator | Value |
+|------|------|
+{quote_rows_text}
+
+### Moving Averages (key indicators)
+| MA | Value | Note |
+|------|------|------|
+| MA5 | {today.get('ma5', 'N/A')} | Short-term trend line |
+| MA10 | {today.get('ma10', 'N/A')} | Short-to-medium-term trend line |
+| MA20 | {today.get('ma20', 'N/A')} | Medium-term trend line |
+| MA Pattern | {context.get('ma_status', unknown_text)} | Bullish/Bearish/Tangled |
+"""
+        else:
+            prompt += f"""
 
 {tech_section_title}
 
@@ -3849,7 +4214,22 @@ class GeminiAnalyzer(LLMClient):
 """
 
         # 添加实时行情数据（量比、换手率等）
-        if 'realtime' in context:
+        if 'realtime' in context and english:
+            rt = context['realtime']
+            prompt += f"""
+### Realtime Quote Details
+| Indicator | Value | Interpretation |
+|------|------|------|
+| Current Price | {rt.get('price', 'N/A')} | |
+| **Volume Ratio** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
+| **Turnover Rate** | **{rt.get('turnover_rate', 'N/A')}%** | |
+| PE (TTM/dynamic) | {rt.get('pe_ratio', 'N/A')} | |
+| PB | {rt.get('pb_ratio', 'N/A')} | |
+| Total Market Cap | {self._format_amount(rt.get('total_mv'), prompt_market, report_language)} | |
+| Float Market Cap | {self._format_amount(rt.get('circ_mv'), prompt_market, report_language)} | |
+| 60-Day Change | {rt.get('change_60d', 'N/A')}% | Medium-term performance |
+"""
+        elif 'realtime' in context:
             rt = context['realtime']
             prompt += f"""
 ### {L("即時行情增強資料", "实时行情增强数据")}
@@ -3894,7 +4274,24 @@ class GeminiAnalyzer(LLMClient):
             ttm_cash = dividend_metrics.get("ttm_cash_dividend_per_share", "N/A")
             ttm_count = dividend_metrics.get("ttm_event_count", "N/A")
             report_date = financial_report.get("report_date", "N/A")
-            prompt += f"""
+            if english:
+                prompt += f"""
+### Financials and Dividends (value-investing view)
+| Indicator | Value | Note |
+|------|------|------|
+| Latest Report Period | {report_date} | From structured financial report fields |
+| Revenue | {financial_report.get('revenue', 'N/A')} | |
+| Net Profit Attributable to Parent | {financial_report.get('net_profit_parent', 'N/A')} | |
+| Operating Cash Flow | {financial_report.get('operating_cash_flow', 'N/A')} | |
+| ROE | {financial_report.get('roe', 'N/A')} | |
+| TTM Cash Dividend per Share | {ttm_cash} | Cash dividends only, pre-tax |
+| TTM Dividend Yield | {ttm_yield} | Formula: TTM cash dividend per share / current price × 100% |
+| TTM Dividend Events | {ttm_count} | |
+
+> If any field above is N/A or missing, state clearly "data unavailable, cannot judge"; never fabricate.
+"""
+            else:
+                prompt += f"""
 ### {L("財報與股利（價值投資口徑）", "财报与分红（价值投资口径）")}
 | {L("指標", "指标")} | {L("數值", "数值")} | {L("說明", "说明")} |
 |------|------|------|
@@ -3940,17 +4337,32 @@ class GeminiAnalyzer(LLMClient):
         if has_capital_flow:
             top_sectors = sector_flow.get("top", []) if isinstance(sector_flow, dict) else []
             bottom_sectors = sector_flow.get("bottom", []) if isinstance(sector_flow, dict) else []
-            top_sector_text = "、".join(
+            sector_separator = ", " if english else "、"
+            top_sector_text = sector_separator.join(
                 str(item.get("name", "")).strip()
                 for item in top_sectors[:3]
                 if isinstance(item, dict) and str(item.get("name", "")).strip()
             ) or "N/A"
-            bottom_sector_text = "、".join(
+            bottom_sector_text = sector_separator.join(
                 str(item.get("name", "")).strip()
                 for item in bottom_sectors[:3]
                 if isinstance(item, dict) and str(item.get("name", "")).strip()
             ) or "N/A"
-            prompt += f"""
+            if english:
+                prompt += f"""
+### Main Capital Flow (operation advice filter)
+| Indicator | Value | Decision Meaning |
+|------|------|----------|
+| Main Net Inflow | {stock_flow.get('main_net_inflow', 'N/A')} | Positive leans supportive, negative leans suppressive |
+| 5-Day Net Inflow | {stock_flow.get('inflow_5d', 'N/A')} | Used to judge flow persistence |
+| 10-Day Net Inflow | {stock_flow.get('inflow_10d', 'N/A')} | Used to judge flow persistence |
+| Top Inflow Sectors | {top_sector_text} | Sector flow resonance reference |
+| Top Outflow Sectors | {bottom_sector_text} | Sector risk reference |
+
+> Capital flow is only a filter on price position: never chase near resistance while main capital flows out; near support without a high-volume breakdown, prefer hold-and-watch, range-bound or shakeout-watch judgments.
+"""
+            else:
+                prompt += f"""
 ### {L("主力資金流向（操作建議過濾器）", "主力资金流向（操作建议过滤器）")}
 | {L("指標", "指标")} | {L("數值", "数值")} | {L("決策含義", "决策含义")} |
 |------|------|----------|
@@ -3984,7 +4396,21 @@ class GeminiAnalyzer(LLMClient):
                 for key in ("foreign_net", "trust_net", "dealer_net", "total_net")
             )
         ):
-            prompt += f"""
+            if english:
+                prompt += f"""
+### Three Major Institutional Investors (Taiwan chip filter, net buy/sell, unit: shares)
+| Institution | Net Buy/Sell | Decision Meaning |
+|------|------|----------|
+| Foreign Investors | {institution_data.get('foreign_net', 'N/A')} | Positive = net buying, leans supportive; negative = net selling, leans suppressive |
+| Investment Trusts | {institution_data.get('trust_net', 'N/A')} | Persistent trust buying often accompanies medium-term longs |
+| Dealers | {institution_data.get('dealer_net', 'N/A')} | Short-term hedging/proprietary direction reference |
+| Three Institutions Total | {institution_data.get('total_net', 'N/A')} | The most watched chip signal in Taiwan stocks |
+| Data Date | {institution_data.get('date', 'N/A')} | Source {institution_data.get('source', 'N/A')} |
+
+> The three major institutional investors are the chip filter for Taiwan stocks (similar in role to A-share main capital flow/Dragon Tiger list, but with a different definition that must not be mixed): foreign and investment-trust net buying in the same direction supports the price, net selling in the same direction suppresses it. Use this to judge the Taiwan chip structure; when this data is present, do not write "chip structure: data unavailable".
+"""
+            else:
+                prompt += f"""
 ### {L("三大法人動向（台股籌碼過濾器，淨買賣超，單位:股）", "三大法人动向（台股筹码过滤器，净买卖超，单位:股）")}
 | {L("法人", "法人")} | {L("淨買賣超", "净买卖超")} | {L("決策含義", "决策含义")} |
 |------|------|----------|
@@ -4012,7 +4438,15 @@ class GeminiAnalyzer(LLMClient):
             )
             round_trip = (1 - sell_mult / buy_mult) * 100
             min_rr = getattr(self._get_runtime_config(), "trade_cost_min_net_rr", 1.0)
-            prompt += f"""
+            if english:
+                prompt += f"""
+### Taiwan Trading Costs (deduct before giving price levels)
+- A round trip (buy then sell) costs about {round_trip:.2f}% (brokerage fee both ways, securities transaction tax on the sale, slippage on both sides).
+- The target's net return after costs must be at least {min_rr:g}x the stop-loss net loss; if it cannot be, do not give a buy conclusion — say hold-and-watch and name the lower entry to wait for.
+- When the target is too close to the entry (e.g. under 2%), costs eat most of the profit; do not tighten the stop below normal daily volatility just to make the risk/reward work.
+"""
+            else:
+                prompt += f"""
 ### {L("台股交易成本（給價位前必須扣除）", "台股交易成本（给价位前必须扣除）")}
 - {L(f"一趟買進再賣出約 {round_trip:.2f}%（手續費雙邊、賣出證交稅、買賣滑價）。", f"一趟买进再卖出约 {round_trip:.2f}%（手续费双边、卖出证交税、买卖滑价）。")}
 - {L(f"目標價扣掉成本後的淨報酬，至少要是停損淨虧損的 {min_rr:g} 倍；做不到就不要給買入結論，改為觀望並說明要等哪個更低的買點。", f"目标价扣掉成本后的净报酬，至少要是止损净亏损的 {min_rr:g} 倍；做不到就不要给买入结论，改为观望并说明要等哪个更低的买点。")}
@@ -4020,12 +4454,28 @@ class GeminiAnalyzer(LLMClient):
 """
             trend_ctx = context.get("trend_analysis")
             atr_pct = trend_ctx.get("atr14_pct") if isinstance(trend_ctx, dict) else None
-            if isinstance(atr_pct, (int, float)) and atr_pct > 0:
+            if isinstance(atr_pct, (int, float)) and atr_pct > 0 and english:
+                prompt += f"""- This stock's normal daily range (ATR14) is about {atr_pct:.2f}%. A stop closer to the entry than that is more likely to be shaken out by noise than invalidated by the thesis.
+"""
+            elif isinstance(atr_pct, (int, float)) and atr_pct > 0:
                 prompt += f"""- {L(f"這檔一天的正常波動（ATR14）約 {atr_pct:.2f}%。停損離買點若比這個還近，多半是被雜訊掃掉而不是論點失效。", f"这档一天的正常波动（ATR14）约 {atr_pct:.2f}%。止损离买点若比这个还近，多半是被杂讯扫掉而不是论点失效。")}
 """
 
         # 添加筹码分布数据
-        if 'chip' in context:
+        if 'chip' in context and english:
+            chip = context['chip']
+            profit_ratio = chip.get('profit_ratio', 0)
+            prompt += f"""
+### Chip Distribution (efficiency indicators)
+| Indicator | Value | Healthy Range |
+|------|------|----------|
+| **Profit Ratio** | **{profit_ratio:.1%}** | Be cautious at 70-90% |
+| Average Cost | {chip.get('avg_cost', 'N/A')} | Price should be 5-15% above |
+| 90% Chip Concentration | {chip.get('concentration_90', 0):.2%} | <15% means concentrated |
+| 70% Chip Concentration | {chip.get('concentration_70', 0):.2%} | |
+| Chip Status | {chip.get('chip_status', unknown_text)} | |
+"""
+        elif 'chip' in context:
             chip = context['chip']
             profit_ratio = chip.get('profit_ratio', 0)
             prompt += f"""
@@ -4052,8 +4502,13 @@ class GeminiAnalyzer(LLMClient):
                 )
             else:
                 chip_instruction = "请勿编造获利比例、平均成本或集中度；报告中只说明一次筹码数据不可用，不要把“数据缺失，无法判断”逐字段重复写入 `chip_structure`。"
+            chip_section_title = (
+                "Chip Distribution (efficiency indicators)"
+                if english
+                else L("籌碼分布資料（效率指標）", "筹码分布数据（效率指标）")
+            )
             prompt += f"""
-### {L("籌碼分布資料（效率指標）", "筹码分布数据（效率指标）")}
+### {chip_section_title}
 > {chip_unavailable_text}
 > {chip_instruction}
 """
@@ -4063,11 +4518,62 @@ class GeminiAnalyzer(LLMClient):
             trend = _sanitize_trend_analysis_for_prompt(
                 context['trend_analysis'],
                 volume_change_ratio=context.get('volume_change_ratio'),
-                report_language=report_language,
+                language=report_language,
             )
             consistency_notes = trend.get('prompt_consistency_notes', [])
             none_text = L("無", "无")
-            if use_legacy_default_prompt:
+            if english:
+                signal_reasons = trend.get('signal_reasons')
+                risk_factors = trend.get('risk_factors')
+                signal_reasons_text = (
+                    chr(10).join('- ' + r for r in signal_reasons) if signal_reasons else '- None'
+                )
+                risk_factors_text = chr(10).join('- ' + r for r in risk_factors) if risk_factors else '- None'
+                if use_legacy_default_prompt:
+                    bias_warning = (
+                        "🚨 Above 5%, do not chase!" if trend.get('bias_ma5', 0) > 5 else "✅ Safe range"
+                    )
+                    trend_title = "Trend Analysis Pre-judgment (based on trading principles)"
+                    alignment_note = "MA5>MA10>MA20 is bullish"
+                    bias_label = "Bias"
+                    reasons_label = "Buy reasons"
+                else:
+                    bias_warning = (
+                        "🚨 Large deviation, carefully assess chasing risk"
+                        if trend.get('bias_ma5', 0) > 5
+                        else "✅ Position relatively controlled"
+                    )
+                    trend_title = "Technical and Structure Analysis (reference for the active skills)"
+                    alignment_note = "Judge structure strength with the active skills"
+                    bias_label = "Price Position"
+                    reasons_label = "Supporting factors"
+                prompt += f"""
+### {trend_title}
+| Indicator | Value | Assessment |
+|------|------|------|
+| Trend Status | {trend.get('trend_status', unknown_text)} | |
+| MA Alignment | {trend.get('ma_alignment', unknown_text)} | {alignment_note} |
+| Trend Strength | {trend.get('trend_strength', 0)}/100 | |
+| **{bias_label} (MA5)** | **{trend.get('bias_ma5', 0):+.2f}%** | {bias_warning} |
+| {bias_label} (MA10) | {trend.get('bias_ma10', 0):+.2f}% | |
+| Volume Status | {trend.get('volume_status', unknown_text)} | {trend.get('volume_trend', '')} |
+| System Signal | {trend.get('buy_signal', unknown_text)} | |
+| System Score | {trend.get('signal_score', 0)}/100 | |
+
+#### System Analysis Reasons
+**{reasons_label}**:
+{signal_reasons_text}
+
+**Risk factors**:
+{risk_factors_text}
+"""
+                if consistency_notes:
+                    prompt += f"""
+
+**Consistency constraints**:
+{chr(10).join('- ' + note for note in consistency_notes)}
+"""
+            elif use_legacy_default_prompt:
                 bias_warning = (
                     L("🚨 超過5%，嚴禁追高！", "🚨 超过5%，严禁追高！")
                     if trend.get('bias_ma5', 0) > 5
@@ -4135,13 +4641,24 @@ class GeminiAnalyzer(LLMClient):
         # 添加昨日对比数据
         if 'yesterday' in context:
             volume_change = context.get('volume_change_ratio', 'N/A')
-            prompt += f"""
+            if english:
+                prompt += f"""
+### Volume and Price Change
+- Volume vs. previous day: {volume_change}x
+- Price vs. previous day: {context.get('price_change_ratio', 'N/A')}%
+"""
+            else:
+                prompt += f"""
 ### {L("量價變化", "量价变化")}
 - {L("成交量較昨日變化", "成交量较昨日变化")}：{volume_change}倍
 - {L("價格較昨日變化", "价格较昨日变化")}：{context.get('price_change_ratio', 'N/A')}%
 """
             parsed_volume_change = _safe_float(volume_change, default=math.nan)
-            if math.isfinite(parsed_volume_change) and parsed_volume_change > 10:
+            if math.isfinite(parsed_volume_change) and parsed_volume_change > 10 and english:
+                prompt += """
+- ⚠️ Abnormal volume: volume is more than 10x the previous day, possibly due to bad data or a one-off spike; down-weight it and do not treat it mechanically as strong confirmation
+"""
+            elif math.isfinite(parsed_volume_change) and parsed_volume_change > 10:
                 prompt += f"""
 - {L("⚠️ 量能異常提示：成交量較昨日放大超過10倍，可能受異常資料或一次性衝量影響，必須降權解讀，不能機械視為強確認訊號", "⚠️ 量能异常提示：成交量较昨日放大超过10倍，可能受异常数据或一次性冲量影响，必须降权解读，不能机械视为强确认信号")}
 """
@@ -4163,12 +4680,34 @@ class GeminiAnalyzer(LLMClient):
                 news_max_age_days=getattr(prompt_config, "news_max_age_days", 3),
                 news_strategy_profile=getattr(prompt_config, "news_strategy_profile", "short"),
             )
-        prompt += f"""
+        if english:
+            prompt += """
+---
+
+## 📰 News Intelligence
+"""
+        else:
+            prompt += f"""
 ---
 
 ## 📰 {L("輿情情報", "舆情情报")}
 """
-        if news_context:
+        if news_context and english:
+            prompt += f"""
+Below are the news search results for **{stock_name}({code})** from the last {news_window_days} days. Focus on extracting:
+1. 🚨 **Risk alerts**: shareholder reductions, penalties, negative news
+2. 🎯 **Positive catalysts**: earnings, contracts, policy
+3. 📊 **Earnings expectations**: annual report previews, earnings flash reports
+4. 🕒 **Time rules (mandatory)**:
+   - Every item written to `risk_alerts` / `positive_catalysts` / `latest_news` must include a specific date (YYYY-MM-DD)
+   - Ignore all news older than the last {news_window_days} days
+   - Ignore all news whose publication date is unknown or cannot be determined
+
+```
+{news_context}
+```
+"""
+        elif news_context:
             prompt += f"""
 {L("以下是", "以下是")} **{stock_name}({code})** {L(f"近{news_window_days}日的新聞搜尋結果，請重點提取", f"近{news_window_days}日的新闻搜索结果，请重点提取")}：
 1. 🚨 **{L("風險警報", "风险警报")}**：{L("減持、處罰、利空", "减持、处罚、利空")}
@@ -4183,13 +4722,24 @@ class GeminiAnalyzer(LLMClient):
 {news_context}
 ```
 """
+        elif english:
+            prompt += """
+No recent news was found for this stock. Base the analysis mainly on the technical data.
+"""
         else:
             prompt += f"""
 {L("未搜尋到該股票近期的相關新聞。請主要依據技術面資料進行分析。", "未搜索到该股票近期的相关新闻。请主要依据技术面数据进行分析。")}
 """
 
         # 注入缺失数据警告
-        if context.get('data_missing'):
+        if context.get('data_missing') and english:
+            prompt += """
+⚠️ **Missing data warning**
+Due to data source limits, complete realtime quote and technical indicator data is currently unavailable.
+**Ignore the N/A values in the tables above** and base the fundamental and sentiment analysis mainly on the news in **[📰 News Intelligence]**.
+When answering technical questions (such as moving averages or bias), state directly "data unavailable, cannot judge"; **never fabricate data**.
+"""
+        elif context.get('data_missing'):
             prompt += f"""
 {L("⚠️ **資料缺失警告**", "⚠️ **数据缺失警告**")}
 {L("由於介面限制，目前無法取得完整的即時行情和技術指標資料。", "由于接口限制，当前无法获取完整的实时行情和技术指标数据。")}
@@ -4198,14 +4748,32 @@ class GeminiAnalyzer(LLMClient):
 """
 
         # 明确的输出要求
-        prompt += f"""
+        if english:
+            prompt += f"""
+---
+
+## ✅ Analysis Task
+
+Generate the Decision Dashboard for **{stock_name}({code})**, output strictly in JSON format.
+"""
+        else:
+            prompt += f"""
 ---
 
 ## ✅ {L("分析任務", "分析任务")}
 
 {L("請為", "请为")} **{stock_name}({code})** {L("生成【決策儀表盤】，嚴格按照 JSON 格式輸出。", "生成【决策仪表盘】，严格按照 JSON 格式输出。")}
 """
-        if context.get('is_index_etf'):
+        if context.get('is_index_etf') and english:
+            prompt += """
+> ⚠️ **Index/ETF analysis constraints**: this instrument is an index-tracking ETF or a market index.
+> - Risk analysis only covers: **index trend, tracking error, market liquidity**
+> - Never include lawsuits, reputation or executive changes of the fund company in risk alerts
+> - Earnings expectations are based on **the overall performance of the index constituents**, not the fund company's financials
+> - `risk_alerts` must not contain operating risks of the fund manager
+
+"""
+        elif context.get('is_index_etf'):
             prompt += f"""
 > {L("⚠️ **指數/ETF 分析約束**：該標的為指數追蹤型 ETF 或市場指數。", "⚠️ **指数/ETF 分析约束**：该标的为指数跟踪型 ETF 或市场指数。")}
 > - {L("風險分析僅關注：**指數走勢、追蹤誤差、市場流動性**", "风险分析仅关注：**指数走势、跟踪误差、市场流动性**")}
@@ -4214,12 +4782,39 @@ class GeminiAnalyzer(LLMClient):
 > - {L("`risk_alerts` 中不得出現基金管理人相關的公司經營風險", "`risk_alerts` 中不得出现基金管理人相关的公司经营风险")}
 
 """
-        prompt += f"""
+        if english:
+            prompt += f"""
+### ⚠️ Important: output the correct stock name format
+The correct stock name format is "Stock name (stock code)", e.g. "Apple (AAPL)".
+If the stock name shown above is "Stock {code}" or incorrect, **state the correct company name explicitly** at the beginning of the analysis.
+"""
+        else:
+            prompt += f"""
 ### {L("⚠️ 重要：輸出正確的股票名稱格式", "⚠️ 重要：输出正确的股票名称格式")}
 {L("正確的股票名稱格式為「股票名稱（股票代碼）」，例如「貴州茅台（600519）」。", "正确的股票名称格式为“股票名称（股票代码）”，例如“贵州茅台（600519）”。")}
 {L(f'如果上方顯示的股票名稱為"股票{code}"或不正確，請在分析開頭**明確輸出該股票的正確中文全稱**。', f'如果上方显示的股票名称为"股票{code}"或不正确，请在分析开头**明确输出该股票的正确中文全称**。')}
 """
-        if use_legacy_default_prompt:
+        if english and use_legacy_default_prompt:
+            prompt += """
+
+### Key focus (must be answered explicitly):
+1. ❓ Is the MA5>MA10>MA20 bullish alignment met?
+2. ❓ Is the current bias within the safe range (<5%)? — above 5% must be marked "do not chase"
+3. ❓ Does volume confirm (low-volume pullback/high-volume breakout)?
+4. ❓ Is the chip structure healthy?
+5. ❓ Is there any major negative news? (shareholder reductions, penalties, earnings shocks, etc.)
+"""
+        elif english:
+            prompt += """
+
+### Key focus (must be answered explicitly):
+1. ❓ Does the current structure meet the key trigger conditions of the active skills?
+2. ❓ Are the current entry position and risk-reward reasonable? If the deviation is too large, state the waiting conditions explicitly
+3. ❓ Do volume, volatility and chip structure support the current conclusion?
+4. ❓ Is there any major negative news or information that conflicts with the skill conclusion?
+5. ❓ If the conclusion holds, what are the specific trigger conditions, stop-loss level and watch points?
+"""
+        elif use_legacy_default_prompt:
             prompt += f"""
 
 ### {L("重點關注（必須明確回答）", "重点关注（必须明确回答）")}：
@@ -4239,7 +4834,21 @@ class GeminiAnalyzer(LLMClient):
 4. ❓ {L("消息面有無重大利空或與技能結論衝突的資訊？", "消息面有无重大利空或与技能结论冲突的信息？")}
 5. ❓ {L("若結論成立，具體觸發條件、停損位、觀察點分別是什麼？", "若结论成立，具体触发条件、止损位、观察点分别是什么？")}
 """
-        prompt += f"""
+        if english:
+            prompt += f"""
+
+### Decision Dashboard requirements:
+- **Stock name**: must output the correct company name (e.g. "Apple" rather than "Stock AAPL")
+- **Core conclusion**: say clearly in one sentence whether to buy, sell or wait
+- **Position-specific advice**: what to do without a position vs. what to do as a holder
+- **Concrete sniper levels**: buy price, stop-loss price, target price (to two decimals)
+- **Checklist**: mark each item with ✅/⚠️/❌
+- **News time compliance**: `latest_news`, `risk_alerts` and `positive_catalysts` must not contain information older than the last {news_window_days} days or with an unknown date
+- **Technical consistency**: never use mutually exclusive conclusions such as "bearish alignment" and "bullish alignment" as valid evidence at the same time; if fundamentals/events conflict with technicals, state explicitly "event-led, technicals not yet confirmed" or "fundamentals lean positive, but technicals are not yet confirmed"
+
+Output the complete Decision Dashboard in JSON format."""
+        else:
+            prompt += f"""
 
 ### {L("決策儀表盤要求", "决策仪表盘要求")}：
 - **{L("股票名稱", "股票名称")}**：{L('必須輸出正確的中文全稱（如"貴州茅台"而非"股票600519"）', '必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）')}
@@ -4295,10 +4904,12 @@ class GeminiAnalyzer(LLMClient):
 
         return prompt
 
-    def _format_volume(self, volume: Optional[float]) -> str:
+    def _format_volume(self, volume: Optional[float], report_language: str = "zh") -> str:
         """格式化成交量显示"""
         if volume is None:
             return 'N/A'
+        if normalize_report_language(report_language) in ("en", "ko"):
+            return f"{self._format_scaled_number_en(volume)} shares"
         if volume >= 1e8:
             return f"{volume / 1e8:.2f} 亿股"
         elif volume >= 1e4:
@@ -4306,15 +4917,24 @@ class GeminiAnalyzer(LLMClient):
         else:
             return f"{volume:.0f} 股"
 
-    def _format_amount(self, amount: Optional[float], market: str = 'cn') -> str:
+    def _format_amount(
+        self,
+        amount: Optional[float],
+        market: str = 'cn',
+        report_language: str = "zh",
+    ) -> str:
         """格式化成交额显示。
 
         `market` 决定币别。预设 `cn` 与旧行为逐字相同，所以没传的呼叫端不受影响。
         写死「元」的後果不是排版问题：AAPL 的成交额会以「115.75 亿元」进 prompt，
         而同一份 prompt 另一段告诉模型这是美股 ⇒ 模型拿到的是人民币计价的美股。
+        `report_language` 是 en/ko 时改用英文量级（上游 #2368），**位置在 market 之後**：
+        上游签名是 `(amount, report_language)`，合并时所有呼叫端都已改成具名或三参数。
         """
         if amount is None:
             return 'N/A'
+        if normalize_report_language(report_language) in ("en", "ko"):
+            return self._format_scaled_number_en(amount)
         currency = _MARKET_CURRENCY.get(market, '元')
         if amount >= 1e8:
             return f"{amount / 1e8:.2f} 亿{currency}"
@@ -4322,6 +4942,17 @@ class GeminiAnalyzer(LLMClient):
             return f"{amount / 1e4:.2f} 万{currency}"
         else:
             return f"{amount:.0f} {currency}" if currency != '元' else f"{amount:.0f} 元"
+
+    @staticmethod
+    def _format_scaled_number_en(value: float) -> str:
+        """Format a large number with English magnitude suffixes (no currency unit)."""
+        if value >= 1e9:
+            return f"{value / 1e9:.2f}B"
+        if value >= 1e6:
+            return f"{value / 1e6:.2f}M"
+        if value >= 1e3:
+            return f"{value / 1e3:.2f}K"
+        return f"{value:.0f}"
 
     def _format_percent(self, value: Optional[float]) -> str:
         """格式化百分比显示"""
