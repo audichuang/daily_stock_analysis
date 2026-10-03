@@ -36,12 +36,12 @@
 from __future__ import annotations
 
 import argparse
-import sqlite3
+import os
 import sys
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -62,12 +62,14 @@ REPO = Path(__file__).resolve().parent.parent
 BEARISH_ADVICE = ("賣出", "減倉", "卖出", "减仓")
 
 
-def load_reports(db_path: Path) -> pd.DataFrame:
-    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as c:
-        df = pd.read_sql(
+def load_reports(source: str) -> pd.DataFrame:
+    """source 是 SQLAlchemy URL（如 STORAGE_DATABASE_URL）或 SQLite 档路径（唯读开启）。"""
+    url = source if "://" in source else f"sqlite:///file:{Path(source).resolve()}?mode=ro&uri=true"
+    with create_engine(url).connect() as c:
+        df = pd.read_sql(text(
             "select code, name, created_at, operation_advice, ideal_buy, stop_loss, take_profit "
             "from analysis_history where report_type = 'simple' "
-            "and (code like '%.TW' or code like '%.TWO')", c, parse_dates=["created_at"])
+            "and (code like '%.TW' or code like '%.TWO')"), c, parse_dates=["created_at"])
     df["stock_id"] = df["code"].str.split(".").str[0]
     df["day"] = df["created_at"].dt.normalize()
     return df.sort_values("created_at").groupby(["stock_id", "day"], as_index=False).last()
@@ -196,7 +198,8 @@ def buy_and_hold(stock_id, bars, adj, notional):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--db", default=str(REPO / "data" / "stock_analysis.db"), help="分析歷史 SQLite")
+    p.add_argument("--db", default=os.environ.get("STORAGE_DATABASE_URL") or str(REPO / "data" / "stock_analysis.db"),
+                   help="分析歷史：SQLAlchemy URL 或 SQLite 檔（預設 STORAGE_DATABASE_URL，未設才用 data/stock_analysis.db）")
     p.add_argument("--notional", type=float, default=100_000, help="每筆名目本金（元）")
     p.add_argument("--respect-advice", action="store_true",
                    help="最新報告建議為賣出／減倉時不進場（預設只看價位）")
@@ -213,7 +216,7 @@ def main(argv=None):
     p.add_argument("--csv", default=None, help="逐筆成交另存 CSV")
     a = p.parse_args(argv)
 
-    reports = load_reports(Path(a.db))
+    reports = load_reports(a.db)
     start = (reports["day"].min() - pd.Timedelta(days=1)).date()
     engine = get_engine()
     px, adj = load_bars(engine, reports["stock_id"].unique(), start)

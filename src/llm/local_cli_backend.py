@@ -96,6 +96,10 @@ _SENSITIVE_URL_KEY_PARTS = {
 _SAFE_ENV_EXACT = {
     "PATH",
     "HOME",
+    # macOS 上 claude 从 login keychain 读登录态要靠 USER；缺了会回「Not logged in」
+    # （被判成 login_required），即使本机已经登录。LOGNAME 是同义的 POSIX 身份变量。
+    "USER",
+    "LOGNAME",
     "TMPDIR",
     "TEMP",
     "TMP",

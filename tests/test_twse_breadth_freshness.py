@@ -56,6 +56,19 @@ def _fmtqik_rows(roc_date, trade_value="754905335886"):
              "TradeValue": trade_value}]
 
 
+# rwd 版 FMTQIK「当月尚无资料」的真实回应（月初收盘前）。既有测试登记它，
+# 让参照日期只由 OpenAPI 那份决定，维持各测试原本的语意。
+_RWD_NO_DATA = {"stat": "很抱歉，沒有符合條件的資料!"}
+
+
+def _fmtqik_rwd_payload(*slash_dates, trade_value="824,692,107,481"):
+    """rwd 版 FMTQIK 回应形状（实测 2026-09-29）：民国斜线日期、千分位逗号。"""
+    return {"stat": "OK",
+            "fields": ["日期", "成交股數", "成交金額", "成交筆數", "發行量加權股價指數", "漲跌點數"],
+            "data": [[d, "9,651,142,036", trade_value, "4,112,337", "48,318.52", "293.92"]
+                     for d in slash_dates]}
+
+
 class RocDateTestCase(unittest.TestCase):
     def test_parses_seven_digit_roc_date(self):
         self.assertEqual(_roc_date("1150605"), datetime.date(2026, 6, 5))
@@ -72,6 +85,7 @@ class BreadthFreshnessTestCase(unittest.TestCase):
         f = TwseFetcher()
         f._session = _FakeSession({
             twse_fetcher._BREADTH_URL: _breadth_rows(breadth_roc),
+            twse_fetcher._TRADE_VALUE_RWD_URL: _RWD_NO_DATA,
             twse_fetcher._TRADE_VALUE_URL: _fmtqik_rows(fmtqik_roc),
         })
         return f
@@ -115,6 +129,7 @@ class MarketStatsDegradationTestCase(unittest.TestCase):
         f = TwseFetcher()
         f._session = _FakeSession({
             twse_fetcher._BREADTH_URL: _breadth_rows(breadth_roc),
+            twse_fetcher._TRADE_VALUE_RWD_URL: _RWD_NO_DATA,
             twse_fetcher._TRADE_VALUE_URL: _fmtqik_rows("1150821"),
             twse_fetcher._INSTITUTIONAL_URL: {
                 "stat": "OK", "date": "20260821",
@@ -283,6 +298,7 @@ class SummedFieldCoverageTestCase(unittest.TestCase):
         f = TwseFetcher()
         f._session = _FakeSession({
             twse_fetcher._BREADTH_URL: _breadth_rows("1150821"),
+            twse_fetcher._TRADE_VALUE_RWD_URL: _RWD_NO_DATA,
             twse_fetcher._TRADE_VALUE_URL: _fmtqik_rows(
                 "1150821", trade_value=str(self.TWSE_AMOUNT)),
             twse_fetcher._INSTITUTIONAL_URL: _bfi82u_payload(
@@ -343,3 +359,69 @@ class SummedFieldCoverageTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TradingDayReferenceTestCase(unittest.TestCase):
+    """新鲜度参照取 OpenAPI／rwd 两版 FMTQIK 中日期较新的一份。
+
+    实测 2026-09-29 17:05：OpenAPI 版最后一列仍是 09-24，rwd 版已有 09-29。旧写法只看
+    OpenAPI，于是当日新鲜的 BFI82U（date=20260929）被判「相差 -5 天」拒收，上柜两支同样被拒，
+    成交金额印成 09-24 的——一份写着今天日期的复盘，法人栏全空、量能是上一个交易日的。
+    """
+
+    def setUp(self):
+        # 家数端点是冻结的那份，会触发本地宽度 fallback；这里不测它，也不让它连 DB。
+        patcher = mock.patch("data_provider.tw_breadth.closing_breadth", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _fetcher(self, *, openapi_roc="1150924", rwd=None, bfi="20260929"):
+        f = TwseFetcher()
+        f._session = _FakeSession({
+            twse_fetcher._BREADTH_URL: _breadth_rows("1150605"),
+            twse_fetcher._TRADE_VALUE_RWD_URL: rwd if rwd is not None else _RWD_NO_DATA,
+            twse_fetcher._TRADE_VALUE_URL: _fmtqik_rows(openapi_roc),
+            twse_fetcher._INSTITUTIONAL_URL: _bfi82u_payload(bfi),
+            twse_fetcher._TPEX_TRADE_VALUE_URL: _tpex_trade_rows("1150929"),
+            twse_fetcher._TPEX_INSTITUTIONAL_URL: _tpex_inst_rows("1150929"),
+        })
+        return f
+
+    def test_lagging_openapi_does_not_reject_todays_data(self):
+        """回归守门：退回「只看 OpenAPI」会让这个测试红。"""
+        f = self._fetcher(rwd=_fmtqik_rwd_payload("115/09/24", "115/09/29"))
+        day, amount = f._fetch_total_amount()
+        self.assertEqual(day, datetime.date(2026, 9, 29))
+        self.assertAlmostEqual(amount, 8246.92107481)
+        stats = f.get_market_stats()
+        self.assertIsNotNone(stats.get("foreign_net"), "当日 BFI82U 被落后的参照误判过期")
+
+    def test_newer_openapi_wins_over_older_rwd(self):
+        """反向守门：写成「一律用 rwd」会让这个测试红。"""
+        f = self._fetcher(openapi_roc="1150929", rwd=_fmtqik_rwd_payload("115/09/24"))
+        self.assertEqual(f._fetch_total_amount()[0], datetime.date(2026, 9, 29))
+
+    def test_rwd_without_current_month_falls_back_to_openapi(self):
+        f = self._fetcher(openapi_roc="1150930")
+        self.assertEqual(f._fetch_total_amount()[0], datetime.date(2026, 9, 30))
+
+    def test_unexpected_rwd_fields_fall_back_instead_of_raising(self):
+        f = self._fetcher(rwd={"stat": "OK", "fields": ["日期"], "data": [["115/09/29"]]})
+        self.assertEqual(f._fetch_total_amount()[0], datetime.date(2026, 9, 24))
+
+    def test_rwd_network_error_falls_back_to_openapi(self):
+        f = self._fetcher()
+        real_get = f._session.get
+
+        def get(url, **kwargs):
+            if url.startswith(twse_fetcher._TRADE_VALUE_RWD_URL):
+                raise twse_fetcher.requests.ConnectionError("boom")
+            return real_get(url, **kwargs)
+
+        f._session.get = get
+        self.assertEqual(f._fetch_total_amount()[0], datetime.date(2026, 9, 24))
+
+    def test_stale_both_sides_still_rejects_institutional(self):
+        """两份参照都落后时守门照旧：不是把守门拆掉。"""
+        f = self._fetcher(bfi="20260929", rwd=_fmtqik_rwd_payload("115/09/24"))
+        self.assertIsNone(f.get_market_stats().get("foreign_net"))

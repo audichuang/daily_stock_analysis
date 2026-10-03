@@ -1325,6 +1325,19 @@ Log file locations:
 
 Debug logs keep the app's own DEBUG messages, but LiteLLM internals default to `WARNING` to avoid token-level third-party noise during streaming generation. To inspect LiteLLM internals temporarily, set `LITELLM_LOG_LEVEL=DEBUG` in `.env`.
 
+### Using PostgreSQL for the App Database (Optional)
+
+By default the app database is the SQLite file at `DATABASE_PATH`. To let several machines share one analysis history (for example, scheduled runs on a workstation and the Web service on a NAS), set `STORAGE_DATABASE_URL` in `.env`; `DATABASE_PATH` is then ignored:
+
+```env
+STORAGE_DATABASE_URL=postgresql+psycopg://user:password@host:5432/stock?options=-csearch_path%3Ddsa
+```
+
+- Use a dedicated schema (`dsa` above) selected through the URL `search_path`; tables are created at startup.
+- Preview moving existing SQLite data with `uv run python scripts/migrate_storage_to_postgres.py --schema dsa --target-url "$STORAGE_DATABASE_URL" --dry-run`, then run it without `--dry-run`. It aborts when target tables are not empty unless `--replace` is given.
+- The `SQLITE_*` settings below only apply to SQLite.
+- File locks such as `market_review.lock` still live next to `DATABASE_PATH` and only guard concurrency on one machine.
+
 ### SQLite Write Stability
 
 For file-based SQLite databases, the app now enables `WAL` and sets `busy_timeout` on connection startup. `save_daily_data()` also uses a batch atomic upsert on `(code, date)` to reduce lock contention during bulk writes and concurrent callbacks.

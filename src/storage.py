@@ -48,7 +48,9 @@ from sqlalchemy import (
     MetaData,
     Table,
 )
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.schema import conv
 from sqlalchemy.orm import (
     declarative_base,
     sessionmaker,
@@ -422,7 +424,7 @@ class BacktestResult(Base):
     engine_version = Column(String(16), nullable=False, default='v1')
 
     # 状态
-    eval_status = Column(String(16), nullable=False, default='pending')
+    eval_status = Column(String(24), nullable=False, default='pending')  # 'insufficient_data' 17 字元；Postgres 会强制长度
     evaluated_at = Column(DateTime, default=datetime.now, index=True)
 
     # 建议快照（避免未来分析字段变化导致回测不可解释）
@@ -1067,11 +1069,13 @@ class DecisionSignalRecord(Base):
     updated_at = Column(DateTime, default=utc_naive_now, onupdate=utc_naive_now, index=True)
     metadata_json = Column(Text)
 
+    # 超过 Postgres 63 字元上限的 index 名用 conv() 包住：Postgres 上截成带 hash
+    # 的固定名称，SQLite 保持原名（既有库的 index 与下方按名称的补建逻辑不受影响）。
     __table_args__ = (
         Index('ix_decision_signal_stock_status_time', 'stock_code', 'status', 'created_at'),
         Index('ix_decision_signal_market_status_time', 'market', 'status', 'created_at'),
         Index(
-            'ix_decision_signal_report_type_market_stock_action_horizon_phase',
+            conv('ix_decision_signal_report_type_market_stock_action_horizon_phase'),
             'source_report_id',
             'source_type',
             'market',
@@ -1091,7 +1095,7 @@ class DecisionSignalRecord(Base):
             'market_phase',
         ),
         Index(
-            'ix_decision_signal_report_type_market_stock_profile_action_horizon_phase',
+            conv('ix_decision_signal_report_type_market_stock_profile_action_horizon_phase'),
             'source_report_id',
             'source_type',
             'market',
@@ -1102,7 +1106,7 @@ class DecisionSignalRecord(Base):
             'market_phase',
         ),
         Index(
-            'ix_decision_signal_trace_type_market_stock_profile_action_horizon_phase',
+            conv('ix_decision_signal_trace_type_market_stock_profile_action_horizon_phase'),
             'trace_id',
             'source_type',
             'market',
@@ -1387,7 +1391,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             self._ensure_intelligence_items_unique_index()
 
             self._initialized = True
-            logger.info(f"数据库初始化完成: {db_url}")
+            logger.info("数据库初始化完成: %s", self._engine.url.render_as_string(hide_password=True))
 
             # 注册退出钩子，确保程序退出时关闭数据库连接
             atexit.register(DatabaseManager._cleanup_engine, self._engine)
@@ -2177,6 +2181,19 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 logger.debug("数据库引擎已清理")
         except Exception as e:
             logger.warning(f"清理数据库引擎时出错: {e}")
+
+    def upsert_insert(self, table):
+        """按引擎方言返回支持 ``on_conflict_do_*`` 的 insert 构造器。
+
+        SQLite 与 PostgreSQL 的 ``on_conflict_do_update/do_nothing`` 签名一致，
+        调用方不必区分；其他方言没有这组 API，直接报错而不是静默写错。
+        """
+        dialect = self._engine.dialect.name
+        if dialect == "sqlite":
+            return sqlite_insert(table)
+        if dialect == "postgresql":
+            return postgresql_insert(table)
+        raise NotImplementedError(f"upsert 不支持的数据库方言: {dialect}")
 
     def _install_sqlite_pragma_handler(self) -> None:
         """为 SQLite 连接安装竞争保护参数。"""
@@ -3712,7 +3729,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     "created_at": now,
                     "updated_at": now,
                 }
-                stmt = sqlite_insert(ConversationSessionState).values(**values)
+                stmt = self.upsert_insert(ConversationSessionState).values(**values)
                 session.execute(
                     stmt.on_conflict_do_update(
                         index_elements=["session_id"],
@@ -3950,7 +3967,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 "estimated_tokens": int(estimated_tokens or 0),
                 "updated_at": now,
             }
-            stmt = sqlite_insert(ConversationSummary).values(**values)
+            stmt = self.upsert_insert(ConversationSummary).values(**values)
             session.execute(
                 stmt.on_conflict_do_update(
                     index_elements=["session_id"],

@@ -1498,6 +1498,19 @@ python main.py --debug
 
 调试日志默认保留项目自身 DEBUG 信息，但会将 LiteLLM 内部日志压低到 `WARNING`，避免流式生成时按 token 写入大量第三方调试日志；如需排查 LiteLLM 内部细节，可在 `.env` 中临时设置 `LITELLM_LOG_LEVEL=DEBUG`。
 
+### 应用库改用 PostgreSQL（可选）
+
+默认应用库是 `DATABASE_PATH` 指向的 SQLite 档。要让多台机器（例如本机跑排程、NAS 跑 Web 服务）共用同一份分析历史，可在 `.env` 设定 `STORAGE_DATABASE_URL`，设定后 `DATABASE_PATH` 不再生效：
+
+```env
+STORAGE_DATABASE_URL=postgresql+psycopg://user:password@host:5432/stock?options=-csearch_path%3Ddsa
+```
+
+- 建议放独立 schema（上例为 `dsa`），用 URL 的 `search_path` 指定；表由程式启动时自动建立。
+- 既有 SQLite 资料先用 `uv run python scripts/migrate_storage_to_postgres.py --schema dsa --target-url "$STORAGE_DATABASE_URL" --dry-run` 预览，确认后去掉 `--dry-run` 执行；目标表非空时会中止，需加 `--replace` 才会清空重搬。
+- 下方 `SQLITE_*` 参数只对 SQLite 生效。
+- `market_review.lock` 等档案锁仍放在 `DATABASE_PATH` 所在目录，只防同一台机器上的并发。
+
 ### SQLite 写入稳态配置
 
 默认文件型 SQLite 会在连接建立时启用 `WAL` 并设置 `busy_timeout`，`save_daily_data()` 也已改为按 `(code, date)` 批量原子 upsert，以降低批量更新和并发回写时的锁竞争。

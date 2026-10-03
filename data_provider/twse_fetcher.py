@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 _BREADTH_URL = "https://openapi.twse.com.tw/v1/opendata/twtazu_od"          # 涨跌家数
 _INSTITUTIONAL_URL = "https://www.twse.com.tw/rwd/zh/fund/BFI82U?response=json"  # 三大法人买卖超
 _TRADE_VALUE_URL = "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK"   # 成交金额 + 加权指数
+_TRADE_VALUE_RWD_URL = "https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK"  # 同上，按月查询；当日盘后比 OpenAPI 早更新
 
 # TPEx 上柜 免金钥 OpenAPI 端点（上柜无公开「涨跌家数」端点，故仅补成交金额与三大法人）
 _TPEX_TRADE_VALUE_URL = "https://www.tpex.org.tw/openapi/v1/tpex_daily_trading_index"  # 上柜成交金额 + 柜买指数
@@ -183,29 +184,74 @@ class TwseFetcher(BaseFetcher):
     def _fetch_total_amount(self) -> Optional[Tuple[Optional[datetime.date], float]]:
         """最新交易日的 ``(交易日, 成交金额[亿新台币])``。失败返回 None。
 
-        交易日同时充当 ``_fetch_breadth`` 的新鲜度参照——FMTQIK 的最后一列就是 TWSE
+        交易日同时充当 ``_fetch_breadth`` 等端点的新鲜度参照——FMTQIK 的最后一列就是 TWSE
         自己认定的最新交易日，比自己算交易日历可靠（台股有连假，weekday 挡不掉）。
+
+        **两个版本取日期较新的一份**：OpenAPI 版盘后常落后一整天以上（2026-09-29 17:05 实测
+        仍停在 09-24，rwd 版已有 09-29）。拿落后的当参照，当日新鲜的法人／上柜／本地宽度会全被
+        当成过期拒收，成交金额还会印成上一个交易日的。rwd 版按月查询，月初第一个交易日收盘前
+        当月没有资料，所以 OpenAPI 仍保留作为另一份候选。
         """
+        candidates = [
+            latest
+            for latest in (
+                self._latest_trade_value(self._fetch_fmtqik_rwd_rows(), "rwd"),
+                self._latest_trade_value(self._fetch_fmtqik_openapi_rows(), "openapi"),
+            )
+            if latest is not None
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item[0] or datetime.date.min)
+
+    def _fetch_fmtqik_openapi_rows(self) -> Optional[list]:
         try:
             resp = self._session.get(_TRADE_VALUE_URL, timeout=_TIMEOUT)
             resp.raise_for_status()
-            rows = resp.json()
+            return resp.json()
         except (requests.RequestException, ValueError) as e:
-            logger.warning("[TwseFetcher] 成交金额端点失败: %s", e)
+            logger.warning("[TwseFetcher] 成交金额端点失败（openapi）: %s", e)
             return None
 
+    def _fetch_fmtqik_rwd_rows(self) -> Optional[list]:
+        """rwd 版 FMTQIK 当月资料，转成与 OpenAPI 相同的栏位；当月尚无资料或失败返回 None。"""
+        from market_data.sources import parse_index_report
+
+        try:
+            resp = self._session.get(
+                _TRADE_VALUE_RWD_URL,
+                params={"date": datetime.date.today().strftime("%Y%m%d"), "response": "json"},
+                timeout=_TIMEOUT,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except (requests.RequestException, ValueError) as e:
+            logger.warning("[TwseFetcher] 成交金额端点失败（rwd）: %s", e)
+            return None
+        if not isinstance(payload, dict) or payload.get("stat") != "OK":
+            return None  # 月初收盘前回「很抱歉，沒有符合條件的資料!」
+        try:
+            return parse_index_report(payload)
+        except (ValueError, TypeError, IndexError, AttributeError) as e:
+            logger.warning("[TwseFetcher] 成交金额（rwd）结构不符预期: %s", e)
+            return None
+
+    @staticmethod
+    def _latest_trade_value(rows: Any, source: str) -> Optional[Tuple[Optional[datetime.date], float]]:
+        if rows is None:
+            return None
         if not isinstance(rows, list) or not rows:
-            logger.warning("[TwseFetcher] 成交金额返回结构异常或为空")
+            logger.warning("[TwseFetcher] 成交金额（%s）返回结构异常或为空", source)
             return None
 
         latest = rows[-1]
         if not isinstance(latest, dict):
-            logger.warning("[TwseFetcher] 成交金额最新行结构异常")
+            logger.warning("[TwseFetcher] 成交金额（%s）最新行结构异常", source)
             return None
 
         trade_value_yuan = _parse_float(latest.get("TradeValue"))
         if trade_value_yuan <= 0:
-            logger.warning("[TwseFetcher] 成交金额为 0 或无效")
+            logger.warning("[TwseFetcher] 成交金额（%s）为 0 或无效", source)
             return None
 
         # TradeValue 单位为「元」，消费方期望「亿」（与 A 股一致：sum/1e8）。

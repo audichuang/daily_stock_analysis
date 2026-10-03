@@ -5118,7 +5118,8 @@ def build_schema_response() -> Dict[str, Any]:
 
 
 def _is_sensitive_key(key: str) -> bool:
-    markers = ("KEY", "TOKEN", "SECRET", "PASSWORD")
+    # DATABASE_URL 内嵌帐密（market_data 的 DATABASE_URL、STORAGE_DATABASE_URL）
+    markers = ("KEY", "TOKEN", "SECRET", "PASSWORD", "DATABASE_URL")
     return any(marker in key for marker in markers)
 
 

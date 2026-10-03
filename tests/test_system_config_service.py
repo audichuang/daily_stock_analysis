@@ -40,6 +40,9 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         "ANTHROPIC_",
         "DEEPSEEK_",
         "OLLAMA_",
+        # 默认值断言（如 SEARXNG_PUBLIC_INSTANCES_ENABLED=false）会被本机 .env 经
+        # 较早测试的 load_dotenv() 漏进 os.environ 而误红；CI 无 .env 所以看不到。
+        "SEARXNG_",
         "REPORT_LANGUAGE",
     )
 
