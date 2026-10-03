@@ -73,7 +73,6 @@ export default {
           dim: 'hsl(var(--destructive) / 0.8)',
           glow: 'hsl(var(--destructive) / 0.3)',
         },
-        base: 'hsl(var(--background))',
         elevated: 'hsl(var(--elevated))',
         hover: 'hsl(var(--hover))',
         'secondary-bg': 'hsl(var(--secondary))',
@@ -98,7 +97,10 @@ export default {
         'subtle-hover': 'hsl(var(--border-subtle-raw) / 0.15)',
       },
       backgroundColor: {
-        subtle: 'hsl(var(--bg-subtle-raw) / 0.05)',
+        // 只给背景用：放在 colors 会让 Tailwind 把 `text-base`（字级）解析成「文字色 = 背景色」，
+        // 没另外指定文字色的 `text-base` 就整段隐形（盯盘页大盘指数点数）。
+        base: 'hsl(var(--background))',
+        subtle:'hsl(var(--bg-subtle-raw) / 0.05)',
         'subtle-hover': 'hsl(var(--bg-subtle-raw) / 0.1)',
         'subtle-soft': 'hsl(var(--bg-subtle-raw) / 0.03)',
         'subtle-active': 'hsl(var(--bg-subtle-raw) / 0.15)',
