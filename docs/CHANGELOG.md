@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 合并上游 #2368（`REPORT_LANGUAGE=en` 改用完整英文 prompt）后保住 zh-TW 繁体：英文分支用上游、非英文分支保留繁／简 `L()`；fork 增量的台股区块（三大法人近期趋势、台股交易成本与 ATR14 提示）补英文版，英文 prompt 不再夹中文；`_format_amount` 改为 `(amount, market, report_language)`，币别仍跟着市场走
 - [新功能] fork 新增 `.github/workflows/ghcr-main.yml`：push 到 `main`（或手动触发）时构建 `linux/amd64` 镜像推到 GHCR，标签 `git-<sha>` 与 `main`，job summary 印出可固定的 `…:git-<sha>@sha256:<digest>`；`docker/Dockerfile` 补拷 `market_data/*.py`（原本缺失，容器内台股 `market` schema 读取一律 `ModuleNotFoundError`，各调用点多半静默降级而不报错）与 `templates/`（`REPORT_RENDERER_ENABLED=true` 时的 Jinja2 模板）
 - [新功能] 新增可选的 `STORAGE_DATABASE_URL`：应用库（分析历史、回测、决策信号、LLM 用量等）可改存 PostgreSQL，供多台机器共用同一份历史；不设定时仍是 `DATABASE_PATH` 的 SQLite。附 `scripts/migrate_storage_to_postgres.py` 把既有 SQLite 搬到指定 schema
 - [修复] 应用库在 PostgreSQL 上可建表与写入：会话状态、会话摘要、技能观点样本的 upsert 改按方言分派（原本写死 SQLite 语法）；三个超过 63 字元的 `decision_signals` index 名在 Postgres 上自动截断（SQLite 不变）；`backtest_results.eval_status` 放宽到 24 字元（`insufficient_data` 有 17 字元，SQLite 不检查长度所以一直没发现）
@@ -34,10 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] 新增 `docs/upstream-sync-2026-09-05.md`（上游 v3.31.0 → 2026-09-04 共 10 个 commit 的合并记录、冲突裁决与验证）
 - [文档] 新增 `docs/daily-report-backtest-2026-07.md`：每日分析报告机械化执行的回验（2026-07-06 ~ 09-04），含成本口径、与 0050 的成对比较，以及「结构化 verdict 与同一区块的文字结论互相矛盾」这一发现
 
+- [修复] 个股资金流按沪深北市场请求并取最新有效交易日的主力净流入金额；去掉默认股票和市场排名的错误降级，行业排名仅使用有限金额，行业金额全部缺失或非有限时仍保留有效个股结果。
+
+- [修复] `REPORT_LANGUAGE=en` 时个股决策仪表盘的 system/user prompt 改用完整英文模板（`ko` 复用英文骨架并保留韩文输出指令），不再在中文模板末尾追加英文约束，避免本地小模型（如 `ollama/qwen3:14b`）受主语言影响仍输出中文；JSON 键名、`decision_type`/`action` 枚举与解析契约不变，中文模板保持逐字不变（Fixes #2352）。
+
 - [修复] 基本面适配按明确报告期调用 AkShare 业绩预告、快报及机构持股，修正十大股东市场代码并限制结果为目标股票；按真实指标生成快报摘要，避免旧默认日期、公告日期冒充摘要和跨指标错误降级。
+- [修复] 基本面财务摘要按“指标行 + 报告期列”解析最新报告期，兼容 AkShare 带单位的指标名及“归属净利润”口径，区分同比百分比与财务金额；全空指标和仅日期的结果不再标记成功，不跨报告期补值。
+- [修复] 财务摘要补齐新浪实网返回的收入增长率、归母利润增长率、ROE 和经营现金流四个明确指标别名，避免已有数据被误标为缺失。
 
 - [修复] 桌面后端打包完整收集 MiniRacer 原生运行文件，并在 Windows/macOS 冻结产物中实际执行 JavaScript，防止筹码分布因漏包或版本错配永久失败。
 
+- [修复] yfinance 基本面适配器按日期匹配去年同季度计算报表同比，不再固定取 `iloc[4]`；当 yfinance 缺少某一季度列时，不会再把更早一季误当作去年同期，找不到同期时回退到 `info` 同比。
 - [新功能] 支持 Multi-Agent 分阶段轨迹评估：保留既有扁平工具指标并增加阶段快照、局部/累计步数、完成/失败/跳过状态与可选期望阶段命中率，单 Agent 输出保持兼容（Refs #2347）。
 - [修复] Multi-Agent 各阶段的 `tool_metrics` 仅统计阶段本地调用，不再将样例级工具期望和步数预算错误应用到每个阶段。
 - [修复] Multi-Agent 顶层轨迹步数改由阶段快照累计，避免将 orchestrator 阶段数误判为 agent-loop 步数并漏报全局预算超限。
@@ -47,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] 新增 `docs/upstream-sync-2026-09-12.md`（上游 v3.31.0 → v3.32.0 共 3 个 commit 的合并记录、`stocks.index.json` 冲突裁决，以及上游把「单一 token 不支援就跳过」改成「整批拒绝」的入口契约变更说明）
 - [测试] 釘住美股复盘日期守门的盘别：`test_us_recap_uses_the_new_york_session_not_the_taipei_date` 只 mock 了 `get_effective_trading_date` 却没釘 `infer_market_phase`，而 `_resolve_overview_date` 在盘中／午休／收盘集合竞价／盘後四个 phase 会短路回 `now.date()` 根本不问它，等於拿真牆钟当输入——台北清晨（纽约盘後）跑全量必红、其余时段必绿；改为与同档 `test_overview_date_*` 一致釘成 `PREMARKET`，生产程式码未改
 - [文档] 将仓库内所有 SerpApi 链接统一更新为新的赞助转化追踪地址。
+- [修复] Codex 问股将当前激活的交易 Skill 指令传入最终请求，保留会话继承、显式清空及默认技能语义；限定在三个已保存数据工具内执行，缺失数据或能力时明确披露。
 - [修复] 智能导入兼容带 UTF-8 BOM 的 CSV 与剪贴板文本，避免 `code` 表头被误当成数据并丢失有效股票代码。
 - [修复] 为 AkShare 大盘涨跌统计的东财与新浪降级调用增加可强制终止的子进程超时，避免外部接口无响应时长期占用分析线程（Fixes #2340）。
 
