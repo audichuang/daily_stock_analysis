@@ -103,6 +103,10 @@ Docker 镜像启动入口会自动创建并修复 `./data`、`./logs`、`./repor
 
 如果你显式指定了 `--user` / Compose `user:`，或使用只读挂载、rootless Docker、NFS 等不允许容器修复属主的环境，请确保实际运行用户对这些目录具备写入权限。
 
+### 7. 本 fork 的预建镜像（GHCR main）
+
+本 fork 的 `.github/workflows/ghcr-main.yml` 在每次 push 到 `main`（或手动触发）时构建 `linux/amd64` 镜像，推到 `ghcr.io/audichuang/daily_stock_analysis`，标签为 `git-<7 位 commit sha>` 与 `main`。部署时请用 job summary 里印出的 `…:git-<sha>@sha256:<digest>` 固定版本，不要追 `main` 标签。镜像只含 Web/API 与读取台股 `market` schema 所需的 `market_data/`，不含 Claude Code CLI；LLM 定时报告仍在别处执行。
+
 ---
 
 ## 🖥️ 方案二：直接部署

@@ -57,6 +57,11 @@ COPY data_provider/ ./data_provider/
 COPY bot/ ./bot/
 COPY src/ ./src/
 COPY strategies/ ./strategies/
+# fork：台股行情 Postgres（market schema）的读取层，src/、data_provider/ 惰性 import；
+# 只带模块本体（*.py），不带 tests/、migrations/、alembic.ini
+COPY market_data/*.py ./market_data/
+# Jinja2 报告模板（REPORT_RENDERER_ENABLED=true 时读取，缺失会静默退回旧渲染）
+COPY templates/ ./templates/
 COPY --from=web-builder /app/static ./static/
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
