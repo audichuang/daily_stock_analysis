@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 - [修复] 合并上游 #2368（`REPORT_LANGUAGE=en` 改用完整英文 prompt）后保住 zh-TW 繁体：英文分支用上游、非英文分支保留繁／简 `L()`；fork 增量的台股区块（三大法人近期趋势、台股交易成本与 ATR14 提示）补英文版，英文 prompt 不再夹中文；`_format_amount` 改为 `(amount, market, report_language)`，币别仍跟着市场走
+- [修复] Web 深色主题下盯盘页「大盘指数」点数隐形：Tailwind 颜色 token `base`（= 背景色）与字级 `text-base` 同名，没另外指定文字色的 `text-base` 被解析成「文字色 = 背景色」且不带字级；`base` 改为只登记在 `backgroundColor`，`bg-base` 不变
 - [新功能] fork 新增 `.github/workflows/ghcr-main.yml`：push 到 `main`（或手动触发）时构建 `linux/amd64` 镜像推到 GHCR，标签 `git-<sha>` 与 `main`，job summary 印出可固定的 `…:git-<sha>@sha256:<digest>`；`docker/Dockerfile` 补拷 `market_data/*.py`（原本缺失，容器内台股 `market` schema 读取一律 `ModuleNotFoundError`，各调用点多半静默降级而不报错）与 `templates/`（`REPORT_RENDERER_ENABLED=true` 时的 Jinja2 模板）
 - [新功能] 新增可选的 `STORAGE_DATABASE_URL`：应用库（分析历史、回测、决策信号、LLM 用量等）可改存 PostgreSQL，供多台机器共用同一份历史；不设定时仍是 `DATABASE_PATH` 的 SQLite。附 `scripts/migrate_storage_to_postgres.py` 把既有 SQLite 搬到指定 schema
 - [修复] 应用库在 PostgreSQL 上可建表与写入：会话状态、会话摘要、技能观点样本的 upsert 改按方言分派（原本写死 SQLite 语法）；三个超过 63 字元的 `decision_signals` index 名在 Postgres 上自动截断（SQLite 不变）；`backtest_results.eval_status` 放宽到 24 字元（`insufficient_data` 有 17 字元，SQLite 不检查长度所以一直没发现）
