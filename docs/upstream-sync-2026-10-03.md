@@ -57,4 +57,5 @@
 | `ci_gate.sh syntax` / `flake8` | 绿 / 绿（0） |
 | `scripts/check_ai_assets.py` | 绿 |
 | 针对性测试（上游新增/改动 4 档、全部 `test_analyzer_*`、台股报告与交易成本、报告语言、`python_version_compat` 等） | 477 passed |
+| **zh／zh-TW prompt 逐字比对** | 合并前（`main` `256a44d9`，独立 worktree）与合并后，对 `zh`、`zh-TW` × `AAPL`／`2330.TW`／`600519` × legacy／skill × 有无新闻共 24 组 `_format_prompt` 整份比对：**24/24 逐字相同**（已确认两轮载入的是不同版本的 `analyzer.py`） |
 | **全量离线测试** | 未在本机跑，以 PR CI（Python 3.11、分三片）为准 |
