@@ -13,13 +13,52 @@ from functools import wraps
 from typing import Any, TypeVar
 from warnings import warn
 
+import os
+from pathlib import Path
+
 import anyio.to_thread
 import fastapi.testclient
 import httpx
+import pytest
+import sqlalchemy
+import sqlalchemy.engine
 import starlette.testclient
 from anyio._backends import _asyncio
+from dotenv import dotenv_values
 
 T = TypeVar("T")
+
+
+# 本机 .env 的 STORAGE_DATABASE_URL 指向 NAS 与本机共用的正式 Postgres 应用库。
+# 测试只把 DATABASE_PATH 指到暂存 SQLite，而 STORAGE_DATABASE_URL 优先，漏进行程
+# 就整批写进正式库（2026-10-08 踩过：告警规则、持仓、决策信号、LLM 用量）。
+# 两层：载入时就占住这个键（load_dotenv 不覆写已存在的键）；再在建 engine 的出口
+# 拒绝正式库 URL，挡住 patch.dict(clear=True) 之后又重载 .env 的路径。
+# market_data/tests 刻意连 DATABASE_URL 并以 rollback 保护，这里不碰它。
+_PROD_STORAGE_DATABASE_URL = (
+    dotenv_values(Path(__file__).resolve().parents[1] / ".env").get("STORAGE_DATABASE_URL") or ""
+).strip()
+os.environ["STORAGE_DATABASE_URL"] = ""
+
+_original_create_engine = sqlalchemy.create_engine
+
+
+def _create_engine_refusing_prod_storage(url, *args, **kwargs):
+    if _PROD_STORAGE_DATABASE_URL and str(url).strip() == _PROD_STORAGE_DATABASE_URL:
+        raise RuntimeError(
+            "tests must not connect to the production STORAGE_DATABASE_URL from .env"
+        )
+    return _original_create_engine(url, *args, **kwargs)
+
+
+sqlalchemy.create_engine = _create_engine_refusing_prod_storage
+sqlalchemy.engine.create_engine = _create_engine_refusing_prod_storage
+
+
+@pytest.fixture(autouse=True)
+def _keep_storage_database_url_unset():
+    os.environ["STORAGE_DATABASE_URL"] = ""
+    yield
 
 _original_call_soon_threadsafe = asyncio.BaseEventLoop.call_soon_threadsafe
 

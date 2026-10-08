@@ -31,6 +31,32 @@ def test_get_db_url_defaults_to_sqlite_path(tmp_path):
     assert db_path.parent.is_dir()
 
 
+def test_dotenv_storage_url_does_not_leak_into_test_process(tmp_path, monkeypatch):
+    """本机 .env 的 STORAGE_DATABASE_URL 是正式库；测试行程里重载 .env 也不能让它生效。"""
+    from src.config import setup_env
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("STORAGE_DATABASE_URL=postgresql+psycopg://u:p@db.invalid/leak\n", encoding="utf-8")
+    monkeypatch.setenv("ENV_FILE", str(env_file))
+
+    setup_env()
+
+    assert os.environ["STORAGE_DATABASE_URL"] == ""
+    assert Config._load_from_env().get_db_url().startswith("sqlite:")
+
+
+def test_storage_engine_refuses_production_url(monkeypatch):
+    """env 被 patch.dict(clear=True) 清掉再重载 .env 时，最后一道是建 engine 的出口。"""
+    import src.storage as storage
+
+    prod_url = "postgresql+psycopg://u:p@db.invalid:5432/prod?options=-csearch_path%3Ddsa"
+    monkeypatch.setitem(storage.create_engine.__globals__, "_PROD_STORAGE_DATABASE_URL", prod_url)
+
+    with pytest.raises(RuntimeError, match="production STORAGE_DATABASE_URL"):
+        storage.create_engine(prod_url)
+    storage.create_engine("postgresql+psycopg://u:p@db.invalid:5432/other")
+
+
 def _manager_for(url: str):
     return SimpleNamespace(_engine=create_engine(url))
 

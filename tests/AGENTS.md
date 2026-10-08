@@ -6,7 +6,7 @@
 
 測試根有兩個:`tests/`(主套件)與 `market_data/tests/`(台股 DB,本 fork 增量)。**這份清單寫在兩處,必須一致**:`setup.cfg` 的 `testpaths` 與 `scripts/ci_test_shard.py` 的 `TEST_ROOTS`——漏一處就是整個根被靜默排除,看起來跟通過一模一樣。新增測試檔不用登記時長表(沒紀錄的檔用中位數分片);改名或刪除已登記的檔才會紅。
 
-這裡沒有全域的隔離:`conftest.py` 沒有任何 autouse fixture,`os.environ`、時鐘、對外連線都不會自動還原或攔截。它做的是在 import 時把 `TestClient` 換成不開執行緒的版本。marker 只有 `network` 有作用(`unit`、`integration` 沒人用,標了也不會被 CI 跳過)。
+這裡幾乎沒有全域的隔離:`os.environ`、時鐘、對外連線都不會自動還原或攔截。`conftest.py` 只做兩件事:在 import 時把 `TestClient` 換成不開執行緒的版本;以及**把 `STORAGE_DATABASE_URL` 釘成空字串,並讓 `create_engine` 拒絕 `.env` 裡那條正式應用庫 URL**(守門測試在 `test_storage_database_url.py`)。marker 只有 `network` 有作用(`unit`、`integration` 沒人用,標了也不會被 CI 跳過)。
 
 ## 寫新測試要遵守
 
@@ -35,4 +35,5 @@
 - `.env` 有兩條漏入路徑:任何較早跑的測試呼叫 `load_dotenv()`;以及 `market_data/tests/conftest.py` 在收集期就把 `DATABASE_URL` 寫進行程且不還原——所以全量裡連的是本機真實庫,單跑 `tests/` 底下的檔則沒有。
 - 單測 timeout 直接打 `pytest` 是 300 秒,經 `ci_gate.sh` 是 120 秒。
 - `test_python_version_compat.py` 在本機拿不到 CI 那個 Python 版本時是 **skip 不是 fail**;看到它綠不代表 3.11 已經剖析過。
-- 連外與時段兩種要修。`.env` 漏入是既有問題、CI 綠、不影響生產行為,真正的修法是隔離 `os.environ`——記錄下來即可,不要順手改。
+- 連外與時段兩種要修。`.env` 漏入的「預設值」類假紅是既有問題、CI 綠,真正的修法是隔離 `os.environ`——記錄下來即可,不要順手改。
+- **例外:會指向正式資料的鍵不是假紅,是事故。**2026-10-08 全量把 `.env` 的 `STORAGE_DATABASE_URL`(NAS 共用的正式 `dsa` 應用庫)帶進行程,測試只改了 `DATABASE_PATH`,於是告警規則、持倉帳戶、決策信號、LLM 用量等 fixture 全寫進正式庫,還改到一筆真實訊號;症狀只是一個告警測試卡在連新浪。現已由 conftest 擋住;**以後 `.env` 新增任何指向正式服務的 URL/金鑰,要在 conftest 照樣中和**,別等它漏。`DATABASE_URL` 例外:`market_data/tests` 刻意連它並用 rollback 保護。
