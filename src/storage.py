@@ -1506,30 +1506,22 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         elif self._engine.dialect.name == "postgresql":
             # fork: 应用库在 Postgres（dsa schema），表早于本次欄位存在，create_all
             # 不会补欄；不补的话下面的 select 直接 UndefinedColumn、整个 DatabaseManager 初始化失败。
-            column_sql = {
-                "active_stock_code": "VARCHAR(32)",
-                "active_stock_canonical_id": "VARCHAR(32)",
-                "active_stock_asset_type": "VARCHAR(16)",
-                "active_stock_name": "VARCHAR(255)",
-                "active_stock_source_message_id": "INTEGER",
-                "active_stock_updated_at": "TIMESTAMP WITHOUT TIME ZONE",
-                "state_version": "INTEGER NOT NULL DEFAULT 0",
-                "session_generation": "VARCHAR(36)",
-                "last_accepted_user_message_id": "INTEGER",
-            }
-            existing = {
-                column["name"] for column in inspect(self._engine).get_columns(
-                    ConversationSessionState.__tablename__
-                )
-            }
-            missing = [name for name in column_sql if name not in existing]
-            if missing:
+            # 欄位定义直接取 ORM 模型，模型新增欄位时这里不必再改。
+            table = ConversationSessionState.__table__
+            existing = {column["name"] for column in inspect(self._engine).get_columns(table.name)}
+            clauses = []
+            for column in table.columns:
+                if column.name in existing:
+                    continue
+                clause = f"ADD COLUMN IF NOT EXISTS {column.name} {column.type.compile(dialect=self._engine.dialect)}"
+                if column.server_default is not None:
+                    clause += f" DEFAULT {column.server_default.arg.text}"
+                if not column.nullable:
+                    clause += " NOT NULL"
+                clauses.append(clause)
+            if clauses:
                 with self._engine.begin() as connection:
-                    for name in missing:
-                        connection.exec_driver_sql(
-                            f"ALTER TABLE conversation_session_states "
-                            f"ADD COLUMN IF NOT EXISTS {name} {column_sql[name]}"
-                        )
+                    connection.exec_driver_sql(f"ALTER TABLE {table.name} {', '.join(clauses)}")
 
         # Initialization precedes get_session() availability. Identity metadata
         # uses its own short transaction, never an accepted turn or a model call.
