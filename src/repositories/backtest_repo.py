@@ -11,7 +11,9 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import List, Optional, Tuple
 
-from sqlalchemy import and_, delete, desc, func, or_, select
+from sqlalchemy import String, and_, delete, desc, func, or_, select
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.functions import FunctionElement
 
 from src.core.backtest_engine import OVERALL_SENTINEL_CODE
 from src.services.stock_code_utils import resolve_daily_stock_identity
@@ -19,6 +21,36 @@ from src.services.stock_code_utils import resolve_daily_stock_identity
 from src.storage import BacktestResult, BacktestSummary, DatabaseManager, AnalysisHistory
 
 logger = logging.getLogger(__name__)
+
+
+class _snapshot_market(FunctionElement):
+    """``context_snapshot`` 内 ``market_phase_summary.market``；非法 JSON 视为缺值。
+
+    fork: 应用库在 Postgres（dsa schema），SQLite 的 json_valid／json_extract 在那里不存在，
+    按方言编译成等价 SQL。
+    """
+
+    type = String()
+    inherit_cache = True
+    name = "snapshot_market"
+
+
+@compiles(_snapshot_market)
+def _compile_snapshot_market(element, compiler, **kw):
+    arg = compiler.process(element.clauses, **kw)
+    return (
+        f"json_extract(CASE WHEN json_valid({arg}) THEN {arg} ELSE '{{}}' END, "
+        f"'$.market_phase_summary.market')"
+    )
+
+
+@compiles(_snapshot_market, "postgresql")
+def _compile_snapshot_market_pg(element, compiler, **kw):
+    arg = compiler.process(element.clauses, **kw)
+    return (
+        f"(CASE WHEN pg_input_is_valid({arg}, 'json') "
+        f"THEN ({arg})::json #>> '{{market_phase_summary,market}}' END)"
+    )
 
 MARKET_REVIEW_REPORT_TYPE = "market_review"
 BacktestResultContextRow = Tuple[
@@ -183,6 +215,7 @@ class BacktestRepository:
         days: Optional[int],
         offset: int,
         limit: int,
+        code_candidates: Optional[Tuple[str, ...]] = None,
     ) -> Tuple[List[BacktestResultContextRow], int]:
         with self.db.get_session() as session:
             conditions = self._build_result_conditions(
@@ -192,6 +225,7 @@ class BacktestRepository:
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
                 days=days,
+                code_candidates=code_candidates,
             )
 
             where_clause = and_(*conditions) if conditions else True
@@ -406,14 +440,30 @@ class BacktestRepository:
         code: Optional[str],
         eval_window_days: Optional[int] = None,
         engine_version: str,
+        code_candidates: Optional[Tuple[str, ...]] = None,
     ) -> Optional[BacktestSummary]:
         with self.db.get_session() as session:
             conditions = [
                 BacktestSummary.scope == scope,
                 BacktestSummary.engine_version == engine_version,
             ]
-            if code:
-                conditions.extend(self._build_code_conditions(BacktestSummary.code, code))
+            if code or code_candidates is not None:
+                conditions.extend(self._build_code_conditions(BacktestSummary.code, code, code_candidates))
+            numeric = tuple(value for value in code_candidates or () if value.isdigit())
+            if numeric:
+                # A numeric rollup has no identity column of its own. Its
+                # contributing results must witness this identity, without a
+                # conflicting numeric source in the same rollup bucket.
+                same_bucket = (
+                    BacktestResult.eval_window_days == BacktestSummary.eval_window_days,
+                    BacktestResult.engine_version == BacktestSummary.engine_version,
+                )
+                owned = self._strict_result_code_condition(code_candidates)
+                witness = select(BacktestResult.id).where(*same_bucket, owned).correlate(BacktestSummary).exists()
+                conflict = select(BacktestResult.id).where(
+                    *same_bucket, BacktestResult.code.in_(numeric), ~owned,
+                ).correlate(BacktestSummary).exists()
+                conditions.append(or_(BacktestSummary.code.not_in(numeric), and_(witness, ~conflict)))
             if eval_window_days is not None:
                 conditions.append(BacktestSummary.eval_window_days == eval_window_days)
 
@@ -487,9 +537,12 @@ class BacktestRepository:
         analysis_date_from: Optional[date],
         analysis_date_to: Optional[date],
         days: Optional[int],
+        code_candidates: Optional[Tuple[str, ...]] = None,
     ) -> List[object]:
         conditions = []
-        if code:
+        if code_candidates is not None:
+            conditions.append(BacktestRepository._strict_result_code_condition(code_candidates))
+        elif code:
             conditions.extend(BacktestRepository._build_code_conditions(BacktestResult.code, code))
         if eval_window_days is not None:
             conditions.append(BacktestResult.eval_window_days == eval_window_days)
@@ -505,7 +558,30 @@ class BacktestRepository:
         return conditions
 
     @staticmethod
-    def _build_code_conditions(column, code: str) -> List[object]:
+    def _strict_result_code_condition(code_candidates: Tuple[str, ...]):
+        """Use the fixed storage namespace and existing source FK, not an index.
+
+        Qualified keys retain their existing identity. Numeric CN writer keys
+        additionally require a same-object source code and no contrary persisted
+        market. Missing market uses the writer's bare-CN storage convention.
+        """
+        numeric = tuple(value for value in code_candidates if value.isdigit())
+        if not numeric:
+            return BacktestResult.code.in_(code_candidates)
+        qualified = tuple(value for value in code_candidates if not value.isdigit())
+        market = _snapshot_market(AnalysisHistory.context_snapshot)
+        source = select(AnalysisHistory.id).where(
+            AnalysisHistory.id == BacktestResult.analysis_history_id,
+            AnalysisHistory.code.in_(code_candidates),
+            or_(market.is_(None), func.lower(market) == "cn"),
+        ).correlate(BacktestResult).exists()
+        return or_(BacktestResult.code.in_(qualified), and_(BacktestResult.code.in_(numeric), source))
+
+    @staticmethod
+    def _build_code_conditions(column, code: Optional[str], code_candidates: Optional[Tuple[str, ...]] = None) -> List[object]:
+        if code_candidates is not None:
+            # An empty explicit constraint means no matches, not legacy/all rows.
+            return [column.in_(code_candidates)]
         if not code:
             return []
 

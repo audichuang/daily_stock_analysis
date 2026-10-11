@@ -1341,6 +1341,8 @@ class DataFetcherManager:
                         source=source_kind,
                     )
                 duration_ms = int((time.time() - attempt_start) * 1000)
+                if quote is not None and not self._quote_matches_target(quote, target, provider_symbol):
+                    raise ValueError("Index realtime provider returned another target")
                 if quote is not None and quote.has_basic_data():
                     record_provider_run(
                         data_type="realtime_quote",
@@ -1988,7 +1990,9 @@ class DataFetcherManager:
         stock_code: str,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        days: int = 30
+        days: int = 30,
+        *,
+        analysis_target: Optional[AnalysisTarget] = None,
     ) -> Tuple[pd.DataFrame, str]:
         """
         获取日线数据（自动切换数据源）
@@ -2015,7 +2019,11 @@ class DataFetcherManager:
         from .us_index_mapping import is_us_index_code, is_us_stock_code
 
         raw_stock_code = (stock_code or "").strip()
-        target = parse_analysis_target(raw_stock_code)
+        # Strict Chat's history loader already validated this immutable target;
+        # do not reclassify it through a registry that can change mid-call.
+        if analysis_target is not None and analysis_target.raw_input != raw_stock_code:
+            raise ValueError("Daily history identity does not match the requested code")
+        target = analysis_target if analysis_target is not None else parse_analysis_target(raw_stock_code)
         self._warn_bare_index_conflict(target)
         if target.asset_type == ParseStatus.UNSUPPORTED:
             reason = target.unsupported_reason or "unsupported analysis target"
@@ -2507,7 +2515,8 @@ class DataFetcherManager:
         setattr(quote, "is_stale", stale_seconds > int(ttl))
         return quote
     
-    def get_realtime_quote(self, stock_code: str, *, log_final_failure: bool = True, skip_supplement: bool = False):
+    def get_realtime_quote(self, stock_code: str, *, log_final_failure: bool = True, skip_supplement: bool = False,
+                           analysis_target: Optional[AnalysisTarget] = None):
         """
         获取实时行情数据（自动故障切换）
         
@@ -2547,7 +2556,8 @@ class DataFetcherManager:
         #   显式指数身份在 normalize 前解析，避免 sh000016 被剥成
         #   股票 000016 后误取同名股票行情。
         # ----------------------------------------------------------
-        index_target = parse_analysis_target(raw_stock_code)
+        index_target = analysis_target if analysis_target is not None else parse_analysis_target(raw_stock_code)
+        target_kwargs = {"analysis_target": analysis_target} if analysis_target is not None else {}
         if index_target.asset_type == ParseStatus.INDEX:
             return self._get_cn_index_realtime_quote(
                 index_target, log_final_failure=log_final_failure
@@ -2570,7 +2580,7 @@ class DataFetcherManager:
         # 只有日股/韩股是 yfinance-only suffix 市场。
         if is_jp or is_kr:
             market_label = "日股" if is_jp else "韩股"
-            quote = self._try_fetcher_quote(stock_code, "YfinanceFetcher")
+            quote = self._try_fetcher_quote(stock_code, "YfinanceFetcher", **target_kwargs)
             if quote is not None:
                 logger.info(f"[实时行情] {market_label} {stock_code} 成功获取 (来源: YfinanceFetcher)")
                 return self._enrich_realtime_quote(
@@ -2586,7 +2596,7 @@ class DataFetcherManager:
             # _try_fetcher_quote -> _get_fetcher_by_name(capability="realtime_quote")：
             # Shioaji 未安装/无金钥/熔断 OPEN 时被判定不可用，零网络代价跳过，
             # 故所有降级态都收敛到同一条 cheap path，不需在此为它们各写 if。
-            primary_quote = self._try_fetcher_quote(stock_code, "ShioajiFetcher")
+            primary_quote = self._try_fetcher_quote(stock_code, "ShioajiFetcher", **target_kwargs)
             fallback_from = (
                 self._realtime_fetcher_token("ShioajiFetcher")
                 if primary_quote is None
@@ -2598,10 +2608,10 @@ class DataFetcherManager:
                 # 委买委卖/量/振幅/当沖资格），yfinance 补充仅多填「市值」（看板不展示）。跳过即省每档
                 # 一次 yfinance 往返——这是看板逐档延迟的真正主因。单档/分析路径默认仍补（保留市值）。
                 if not skip_supplement:
-                    primary_quote = self._supplement_quote(stock_code, primary_quote, "YfinanceFetcher")
+                    primary_quote = self._supplement_quote(stock_code, primary_quote, "YfinanceFetcher", **target_kwargs)
             else:
                 # Shioaji 无报价 → yfinance 当唯一源（不受 skip_supplement 影响，否则整列空白）
-                primary_quote = self._supplement_quote(stock_code, None, "YfinanceFetcher")
+                primary_quote = self._supplement_quote(stock_code, None, "YfinanceFetcher", **target_kwargs)
             if primary_quote is not None:
                 enriched = self._enrich_realtime_quote(
                     primary_quote,
@@ -2669,7 +2679,7 @@ class DataFetcherManager:
                             "[实时行情] 港股 %s 未配置 FUTU_OPEND_HOST，跳过 futu 源", stock_code
                         )
                         continue
-                    quote = self._try_fetcher_quote(stock_code, fetcher_name, **fetcher_kw)
+                    quote = self._try_fetcher_quote(stock_code, fetcher_name, **fetcher_kw, **target_kwargs)
                     if quote is not None:
                         primary_quote = quote
                         primary_token = self._realtime_fetcher_token(fetcher_name, **fetcher_kw)
@@ -2689,7 +2699,7 @@ class DataFetcherManager:
                         if not self._quote_needs_supplement(primary_quote):
                             break
                         fetcher_name, fetcher_kw = mapped
-                        self._supplement_quote(stock_code, primary_quote, fetcher_name, **fetcher_kw)
+                        self._supplement_quote(stock_code, primary_quote, fetcher_name, **fetcher_kw, **target_kwargs)
                     return self._enrich_realtime_quote(
                         primary_quote,
                         fallback_from=fallback_from,
@@ -2699,7 +2709,7 @@ class DataFetcherManager:
                     logger.info("[实时行情] 港股 %s 无可用数据源", stock_code)
                 return None
             primary_token = self._realtime_fetcher_token(primary_src, **primary_kw)
-            primary_quote = self._try_fetcher_quote(stock_code, primary_src, **primary_kw)
+            primary_quote = self._try_fetcher_quote(stock_code, primary_src, **primary_kw, **target_kwargs)
             fallback_from = primary_token if primary_quote is None else None
             if primary_quote is not None:
                 logger.info(f"[实时行情] {market_label} {stock_code} 成功获取 (来源: {primary_src})")
@@ -2709,12 +2719,12 @@ class DataFetcherManager:
             # fallback or field supplement here.
             if not is_us_index:
                 primary_quote = self._supplement_quote(
-                    stock_code, primary_quote, secondary_src, **secondary_kw,
+                    stock_code, primary_quote, secondary_src, **secondary_kw, **target_kwargs,
                 )
             if is_us and not is_us_index and primary_quote is not None:
                 for extra_src in ["FinnhubFetcher", "AlphaVantageFetcher"]:
                     primary_quote = self._supplement_quote(
-                        stock_code, primary_quote, extra_src,
+                        stock_code, primary_quote, extra_src, **target_kwargs,
                     )
             if primary_quote is not None:
                 return self._enrich_realtime_quote(
@@ -2808,6 +2818,8 @@ class DataFetcherManager:
                         quote = self._call_fetcher_method(fetcher, 'get_realtime_quote', raw_stock_code or stock_code)
 
                 provider_name = fetcher.name if fetcher is not None else source
+                if analysis_target is not None and quote is not None and not self._quote_matches_target(quote, analysis_target):
+                    raise ValueError("Realtime provider returned another target")
                 
                 if quote is not None and quote.has_basic_data():
                     record_provider_run(
@@ -2956,7 +2968,24 @@ class DataFetcherManager:
             capability=capability,
         ) is not None
 
-    def _try_fetcher_quote(self, stock_code: str, fetcher_name: str, **kw):
+    @staticmethod
+    def _quote_matches_target(quote, target: AnalysisTarget, provider_symbol: Optional[str] = None) -> bool:
+        """Check explicit response IDs against the already validated route."""
+        from src.services.stock_list_parser import _normalize_index_key
+
+        code = getattr(quote, "code", None)
+        if code is None:
+            return True  # Some provider interfaces establish identity only by route.
+        aliases = {target.canonical_id, target.normalized_code}
+        if target.asset_type == ParseStatus.INDEX and provider_symbol:
+            aliases.add(provider_symbol)
+        if target.exchange == "HK":
+            aliases.add(f"HK{target.normalized_code}")
+            aliases.add(f"{target.normalized_code}.HK")
+        return _normalize_index_key(code) in {_normalize_index_key(alias) for alias in aliases if alias}
+
+    def _try_fetcher_quote(self, stock_code: str, fetcher_name: str,
+                           *, analysis_target: Optional[AnalysisTarget] = None, **kw):
         """Try to get a realtime quote from a named fetcher; returns quote or None."""
         fetcher = self._get_fetcher_by_name(fetcher_name, capability="realtime_quote")
         if fetcher is None or not hasattr(fetcher, 'get_realtime_quote'):
@@ -2977,6 +3006,8 @@ class DataFetcherManager:
                 operation="get_realtime_quote",
             )
             q = self._call_fetcher_method(fetcher, 'get_realtime_quote', stock_code, **kw)
+            if analysis_target is not None and q is not None and not self._quote_matches_target(q, analysis_target):
+                raise ValueError("Realtime provider returned another target")
             if q is not None and q.has_basic_data():
                 record_provider_run(
                     data_type="realtime_quote",
@@ -3153,7 +3184,8 @@ class DataFetcherManager:
         logger.warning(f"[筹码分布] {stock_code} 所有数据源均失败")
         return None
 
-    def get_stock_name(self, stock_code: str, allow_realtime: bool = True) -> Optional[str]:
+    def get_stock_name(self, stock_code: str, allow_realtime: bool = True,
+                       *, analysis_target: Optional[AnalysisTarget] = None) -> Optional[str]:
         """
         获取股票中文名称（自动切换数据源）
         
@@ -3173,7 +3205,7 @@ class DataFetcherManager:
             股票中文名称，所有数据源都失败则返回 None
         """
         raw_stock_code = (stock_code or "").strip()
-        target = parse_analysis_target(raw_stock_code)
+        target = analysis_target if analysis_target is not None else parse_analysis_target(raw_stock_code)
         self._warn_bare_index_conflict(target)
         if target.asset_type == ParseStatus.UNSUPPORTED:
             logger.warning(
@@ -3213,7 +3245,8 @@ class DataFetcherManager:
 
         # 2. 尝试从实时行情中获取（最快，可按需禁用）
         if allow_realtime:
-            quote = self.get_realtime_quote(raw_stock_code or stock_code, log_final_failure=False)
+            quote = self.get_realtime_quote(raw_stock_code or stock_code, log_final_failure=False,
+                                           **({"analysis_target": analysis_target} if analysis_target is not None else {}))
             if quote and hasattr(quote, 'name') and is_meaningful_stock_name(getattr(quote, 'name', ''), stock_code):
                 name = quote.name
                 self._cache_stock_name(stock_code, name)
@@ -4077,6 +4110,7 @@ class DataFetcherManager:
         stock_code: str,
         market: str,
         budget_seconds: Optional[float] = None,
+        analysis_target: Optional[AnalysisTarget] = None,
     ) -> Dict[str, Any]:
         """HK/US fundamental aggregation via yfinance.
 
@@ -4134,7 +4168,7 @@ class DataFetcherManager:
         valuation_timeout = min(fetch_timeout, stage_timeout) if stage_timeout > 0 else 0
         if valuation_timeout > 0:
             quote_payload, valuation_err, valuation_ms = self._run_with_retry(
-                lambda: self.get_realtime_quote(stock_code),
+                lambda: self.get_realtime_quote(stock_code, **({"analysis_target": analysis_target} if analysis_target is not None else {})),
                 valuation_timeout,
                 "fundamental_valuation",
             )
@@ -4521,7 +4555,8 @@ class DataFetcherManager:
     def get_fundamental_context(
         self,
         stock_code: str,
-        budget_seconds: Optional[float] = None
+        budget_seconds: Optional[float] = None,
+        *, analysis_target: Optional[AnalysisTarget] = None,
     ) -> Dict[str, Any]:
         """
         Aggregate fundamental blocks with fail-open semantics.
@@ -4543,6 +4578,7 @@ class DataFetcherManager:
                 stock_code,
                 market=market,
                 budget_seconds=budget_seconds,
+                **({"analysis_target": analysis_target} if analysis_target is not None else {}),
             )
 
         stage_timeout = float(
@@ -4588,7 +4624,7 @@ class DataFetcherManager:
         valuation_timeout = min(fetch_timeout, remaining_seconds)
         if valuation_timeout > 0:
             quote_payload, valuation_err, valuation_ms = self._run_with_retry(
-                lambda: self.get_realtime_quote(stock_code),
+                lambda: self.get_realtime_quote(stock_code, **({"analysis_target": analysis_target} if analysis_target is not None else {})),
                 valuation_timeout,
                 "fundamental_valuation",
             )
