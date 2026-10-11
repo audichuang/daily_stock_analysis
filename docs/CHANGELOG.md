@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 上游问股对象状态（#2397）在 Postgres 应用库上可运行：`conversation_session_states` 新增 9 栏只有 SQLite 迁移，Postgres 补 `ADD COLUMN IF NOT EXISTS`（否则 `DatabaseManager` 初始化即 `UndefinedColumn`）；用户回合 upsert 改按方言；严格回测的 `json_valid`／`json_extract` 在 Postgres 编译为 `pg_input_is_valid`＋`#>>`；对象状态 CAS 读取加 `FOR UPDATE`，Postgres 并发提交不再双双成功
+- [修复] 问股对象辨识认得台股上柜 `.TWO` 与带字母代码（`00631L.TW`、`2887A.TW`）
+- [chore] 合并上游 `ce364e45`..`c3349de4`（1 个 commit：#2397 问股服务端保存已确认讨论对象），补 Web zh-TW 文案 5 键；裁决与已知缺口见 `docs/upstream-sync-2026-10-11.md`
 - [测试] 测试行程不再连到本机 `.env` 的 `STORAGE_DATABASE_URL`（正式 Postgres 应用库）：`tests/conftest.py` 载入时把它钉成空字串，并让 `create_engine` 拒绝该 URL；此前全量离线测试会把告警、持仓、决策信号等 fixture 写进正式库
 - [chore] 合并上游 `be148f39`..`ce364e45`（22 个 commit：ETF 双动量轮动、数据能力中心、妙想数据源、持仓风险看板、自选股下一步、共享排程去重等），补齐 Web zh-TW 文案 58 键与持仓风险看板繁体字典；裁决与已知台股缺口见 `docs/upstream-sync-2026-10-08.md`
 - [修复] 合并上游 #2368（`REPORT_LANGUAGE=en` 改用完整英文 prompt）后保住 zh-TW 繁体：英文分支用上游、非英文分支保留繁／简 `L()`；fork 增量的台股区块（三大法人近期趋势、台股交易成本与 ATR14 提示）补英文版，英文 prompt 不再夹中文；`_format_amount` 改为 `(amount, market, report_language)`，币别仍跟着市场走
@@ -37,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 补齐 `apps/dsa-web/src/i18n/uiText.ts` 的 zh-TW 文案键 `watchlist.batchSubmittedWithRejected` 与 `watchlist.batchPartiallySubmittedWithRejected`（上游新增时只加了 zh/en，`Record<UiTextKey, string>` 使前端构建 tsc 失败）
 - [文档] 新增 `docs/upstream-sync-2026-09-05.md`（上游 v3.31.0 → 2026-09-04 共 10 个 commit 的合并记录、冲突裁决与验证）
 - [文档] 新增 `docs/daily-report-backtest-2026-07.md`：每日分析报告机械化执行的回验（2026-07-06 ~ 09-04），含成本口径、与 0050 的成对比较，以及「结构化 verdict 与同一区块的文字结论互相矛盾」这一发现
+
+- [修复] 当前 Bot 与 Web 交替问股复用服务端已确认对象及严格工具范围，普通追问／比较保留确认状态，切股进入待确认；Bot 提交校验快照版本及用户锚点，保留真正旧代码／旁路写入的保守失效边界。
+- [修复] 严格回测读取兼容正常 CN 写入器生成的数字汇总／明细键，按已验证对象与关联分析来源约束 SQL，保留跨市场隔离及总数／分页一致性。
+- [修复] 问股条件切股跨逗号保持澄清，否定比较不扩大工具范围；个股回测汇总及明细按已验证市场身份查询，保留同身份存储别名，不回退读取其他市场数据。
+- [修复] 问股实时与旧历史共享对象决策，否定／询问／引用不误确认；现有标的工具共用身份与适用性检查，向数据入口传递已验证目标，防止同码股票／指数混用与模型名称改变新闻对象。
+- [修复] 问股明确切股按操作词确认目的地，重复发送不反向切股；普通分析追问维持原对象并正常执行，旧历史恢复共享方向规则且仅由明确代码建立事实。
+- [修复] 问股混合代码／名称正确建立比较范围，明确切股排除旧对象；日线缓存读取保留股票／指数身份，Bot 回复绑定原会话实例，迟到初始列表不清空新接受状态或取消流。
+- [新功能] 问股由服务端保存已确认的主讨论对象，刷新、重开和会话切换可恢复；明确切股更新对象，比较与执行失败不覆盖确认状态，保留股票／指数和跨市场身份。
+- [修复] 问股接受事务统一保存消息、显式 Skill 与对象状态；拒绝旧会话实例和并发冲突，保护迟到摘要／回复，并保留显式空 Skill 的内置默认执行语义。
+- [文档] 补充问股对象确认、旧历史恢复、非破坏升级／回滚／再次升级及真实 Codex 门禁的边界说明。
 
 - [修复] ETF 轮动按真实 A 股交易日历保留全池缺报价日期及末尾缺口，防止调仓顺延、周末信号提前和动量窗口缩短；历史日历不可用时明确停止计算。
 
