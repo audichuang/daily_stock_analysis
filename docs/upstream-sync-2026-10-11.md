@@ -29,7 +29,7 @@
 
 上游只维护 SQLite；本 fork 应用库自 10-03 起在 Postgres `dsa` schema（本机报告与 NAS 共用）。逐项在本机拋弃式 PG17 上重现与验证：
 
-1. **`conversation_session_states` 缺栏 → 初始化失败**：上游的 `_ensure_chat_session_schema` 只在 SQLite 补栏，`create_all` 不会替既有表加栏。正式库这张表只有 4 栏；不补的话 `DatabaseManager` 初始化时的 `select(ConversationSessionState)` 直接 `UndefinedColumn`，**本机每日报告与 NAS Web 都会起不来**。补了 Postgres 分支 `ALTER TABLE … ADD COLUMN IF NOT EXISTS`（9 栏，`state_version INTEGER NOT NULL DEFAULT 0`）。实测：拿掉这段就重现初始化失败；补上之后在旧表上初始化、二次初始化（幂等）、旧会话回填 generation 都正常
+1. **`conversation_session_states` 缺栏 → 初始化失败**：上游的 `_ensure_chat_session_schema` 只在 SQLite 补栏，`create_all` 不会替既有表加栏。正式库这张表只有 4 栏；不补的话 `DatabaseManager` 初始化时的 `select(ConversationSessionState)` 直接 `UndefinedColumn`，**本机每日报告与 NAS Web 都会起不来**。补了 Postgres 分支：缺的栏位直接从 ORM 模型（`ConversationSessionState.__table__`）推出型别／`NOT NULL`／`server_default`，一条 `ALTER TABLE … ADD COLUMN IF NOT EXISTS …, …` 补齐（本轮是 9 栏，`state_version INTEGER DEFAULT 0 NOT NULL`）；不另抄一份栏位表，模型以后加栏也自动跟上，上游的 SQLite 分支一行不动。实测：拿掉这段就重现初始化失败；补上之后在旧表上初始化、二次初始化（幂等）、旧会话回填 generation 都正常
 2. **严格回测的 `json_valid`／`json_extract`**：Postgres 没有这两个函式。改成 `backtest_repo._snapshot_market`（`@compiles`）：SQLite 编译成与上游相同的 SQL，Postgres 编译成 `CASE WHEN pg_input_is_valid(x,'json') THEN x::json #>> '{market_phase_summary,market}' END`（PG16+，正式库是 17.7）。只在参数是**栏位**时安全——参数若是常数，PG 规划期的常数折叠会先做 cast 而报错；生产路径一律传 `AnalysisHistory.context_snapshot`
 3. **对象状态 CAS 在 Postgres 上会漏并发**：SQLite 靠 `BEGIN IMMEDIATE` 串行化，Postgres 预设 READ COMMITTED，「读 `state_version` → 比对 → 写」中间不锁。实测 6 条执行绪拿同一份快照同时提交，无锁时出现两条同时成功（lost update）。写入交易内读状态的 6 处改为 `session.get(…, with_for_update=True)`（SQLite 编译器会忽略），之后连跑 5 次都只有一条成功
 4. Web `uiText.ts`：上游新增 5 个问股对象文案只给 zh/en，`zhTW` 是严格 `Record`，`npm run build` 直接 tsc 失败；补齐繁体
