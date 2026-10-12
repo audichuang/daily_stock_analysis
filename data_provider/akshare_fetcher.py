@@ -1814,18 +1814,7 @@ class AkshareFetcher(BaseFetcher):
         """
         import akshare as ak
 
-        # 美股没有筹码分布数据（Akshare 不支持）
-        if _is_us_code(stock_code):
-            logger.debug(f"[API跳过] {stock_code} 是美股，无筹码分布数据")
-            return None
-
-        # 港股没有筹码分布数据（stock_cyq_em 是 A 股专属接口）
-        if _is_hk_code(stock_code):
-            logger.debug(f"[API跳过] {stock_code} 是港股，无筹码分布数据")
-            return None
-
-        # 台股/日股/韩股等其他非 A 股市场同样不支持；且 akshare 内部 requests.get
-        # 未带 timeout，对东方财富的请求一旦无响应会永久阻塞并占住本 fetcher 的调用锁
+        # stock_cyq_em 是 A 股专属接口：美股/港股/台股/日股/韩股都没有筹码分布数据
         if _is_non_cn_request(stock_code):
             logger.debug(f"[API跳过] {stock_code} 非A股，无筹码分布数据")
             return None
@@ -1844,7 +1833,13 @@ class AkshareFetcher(BaseFetcher):
             import time as _time
             api_start = _time.time()
             
-            df = ak.stock_cyq_em(symbol=stock_code)
+            # akshare 内部 requests.get 未带 timeout，东方财富无响应时会永久阻塞并占住本 fetcher 的调用锁
+            df = _akshare_call_with_timeout(
+                ak.stock_cyq_em,
+                symbol=stock_code,
+                timeout=self._history_call_timeout,
+                call_name="stock_cyq_em",
+            )
             
             api_elapsed = _time.time() - api_start
             

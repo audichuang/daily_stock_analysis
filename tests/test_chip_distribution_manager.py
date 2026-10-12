@@ -155,3 +155,17 @@ def test_manager_records_failed_chip_attempt_and_falls_back_to_next_fetcher():
         "provider_run_started",
         "provider_run",
     ]
+
+
+def test_manager_skips_non_cn_codes_before_any_chip_fetcher():
+    get_chip_circuit_breaker().reset()
+    fetcher = _ChipFetcher("AnyFetcher", 0, None)
+    manager = DataFetcherManager(fetchers=[fetcher])
+
+    with patch("src.config.get_config", return_value=SimpleNamespace(enable_chip_distribution=True)):
+        for code in ("2383.TW", "6116.TWO", "7203.T", "AAPL", "00700.HK"):
+            assert manager.get_chip_distribution(code) is None, code
+        assert fetcher.calls == 0
+        # 反向：A 股照常走数据源
+        manager.get_chip_distribution("600519")
+    assert fetcher.calls == 1
