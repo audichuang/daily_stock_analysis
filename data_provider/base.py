@@ -3099,6 +3099,11 @@ class DataFetcherManager:
             logger.debug(f"[筹码分布] 功能已禁用，跳过 {stock_code}")
             return None
 
+        # 现有筹码源（Akshare/Tushare/妙想）都是 A 股专属；与资金流补充共用同一市场口径
+        if _is_non_cn_request(stock_code):
+            logger.debug(f"[筹码分布] {stock_code} 非A股，跳过")
+            return None
+
         circuit_breaker = get_chip_circuit_breaker()
 
         candidate_fetchers = []

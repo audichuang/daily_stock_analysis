@@ -46,7 +46,7 @@ from tenacity import (
 from src.patches.eastmoney_patch import eastmoney_patch
 from src.config import get_config
 from src.services.stock_list_parser import ParseStatus, parse_analysis_target
-from .base import BaseFetcher, DataFetchError, RateLimitError, STANDARD_COLUMNS, is_bse_code, is_st_stock, is_kc_cy_stock, normalize_stock_code
+from .base import BaseFetcher, DataFetchError, RateLimitError, STANDARD_COLUMNS, _is_non_cn_request, is_bse_code, is_st_stock, is_kc_cy_stock, normalize_stock_code
 from .realtime_types import (
     UnifiedRealtimeQuote, ChipDistribution, RealtimeSource,
     get_realtime_circuit_breaker, get_chip_circuit_breaker,
@@ -1814,14 +1814,9 @@ class AkshareFetcher(BaseFetcher):
         """
         import akshare as ak
 
-        # 美股没有筹码分布数据（Akshare 不支持）
-        if _is_us_code(stock_code):
-            logger.debug(f"[API跳过] {stock_code} 是美股，无筹码分布数据")
-            return None
-
-        # 港股没有筹码分布数据（stock_cyq_em 是 A 股专属接口）
-        if _is_hk_code(stock_code):
-            logger.debug(f"[API跳过] {stock_code} 是港股，无筹码分布数据")
+        # stock_cyq_em 是 A 股专属接口：美股/港股/台股/日股/韩股都没有筹码分布数据
+        if _is_non_cn_request(stock_code):
+            logger.debug(f"[API跳过] {stock_code} 非A股，无筹码分布数据")
             return None
 
         # ETF/指数没有筹码分布数据
@@ -1838,7 +1833,13 @@ class AkshareFetcher(BaseFetcher):
             import time as _time
             api_start = _time.time()
             
-            df = ak.stock_cyq_em(symbol=stock_code)
+            # akshare 内部 requests.get 未带 timeout，东方财富无响应时会永久阻塞并占住本 fetcher 的调用锁
+            df = _akshare_call_with_timeout(
+                ak.stock_cyq_em,
+                symbol=stock_code,
+                timeout=self._history_call_timeout,
+                call_name="stock_cyq_em",
+            )
             
             api_elapsed = _time.time() - api_start
             
