@@ -28,15 +28,17 @@ from api.v1.schemas.portfolio import (
     PortfolioImportBrokerListResponse,
     PortfolioImportCommitResponse,
     PortfolioImportParseResponse,
+    PortfolioImportMissingCostItem,
     PortfolioImportTradeItem,
     PortfolioPositionAnalysisRequest,
     PortfolioRiskResponse,
     PortfolioSnapshotResponse,
+    PortfolioTextImportRequest,
     PortfolioTradeListResponse,
     PortfolioTradeCreateRequest,
 )
 from src.services.task_queue import get_task_queue
-from src.services.portfolio_import_service import PortfolioImportService
+from src.services.portfolio_import_service import TEXT_IMPORT_SOURCE, PortfolioImportService
 from src.services.portfolio_risk_service import PortfolioRiskService
 from src.services.portfolio_service import (
     PortfolioBusyError,
@@ -624,6 +626,68 @@ def commit_csv_import(
         raise _bad_request(exc)
     except Exception as exc:
         raise _internal_error("Commit CSV import failed", exc)
+
+
+def _parse_text_import(request: PortfolioTextImportRequest) -> dict:
+    account = PortfolioService().repo.get_account(request.account_id)
+    if account is None:
+        raise ValueError(f"Active account not found: {request.account_id}")
+    return PortfolioImportService().parse_holdings_text(
+        text=request.text,
+        market=account.market,
+        trade_date=request.trade_date or date.today(),
+    )
+
+
+@router.post(
+    "/imports/text/parse",
+    response_model=PortfolioImportParseResponse,
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Parse pasted holdings text (name/code, quantity, avg cost) into buy records",
+)
+def parse_text_import(request: PortfolioTextImportRequest) -> PortfolioImportParseResponse:
+    try:
+        parsed = _parse_text_import(request)
+        return PortfolioImportParseResponse(
+            broker=parsed["broker"],
+            record_count=parsed["record_count"],
+            skipped_count=parsed["skipped_count"],
+            error_count=parsed["error_count"],
+            records=[_serialize_import_record(item) for item in parsed.get("records", [])],
+            errors=list(parsed.get("errors", [])),
+            missing_cost=[PortfolioImportMissingCostItem(**item) for item in parsed.get("missing_cost", [])],
+        )
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Parse text import failed", exc)
+
+
+@router.post(
+    "/imports/text/commit",
+    response_model=PortfolioImportCommitResponse,
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Parse and commit pasted holdings text with dedup",
+)
+def commit_text_import(request: PortfolioTextImportRequest) -> PortfolioImportCommitResponse:
+    try:
+        parsed = _parse_text_import(request)
+        # 只提交干净的解析结果：缺成本或无法辨识的行若被静默略过，「写入 6 条」看起来就像全部成功。
+        missing = [item["symbol"] for item in parsed.get("missing_cost", [])]
+        if missing or parsed.get("errors"):
+            details = ([f"缺平均成本：{', '.join(missing)}"] if missing else []) + list(parsed.get("errors", []))
+            raise ValueError("粘贴内容有未完成的行，未写入任何记录；" + "；".join(details))
+        result = PortfolioImportService().commit_trade_records(
+            account_id=request.account_id,
+            broker=TEXT_IMPORT_SOURCE,
+            records=list(parsed.get("records", [])),
+            dry_run=request.dry_run,
+        )
+        return PortfolioImportCommitResponse(**result)
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Commit text import failed", exc)
 
 
 @router.post(

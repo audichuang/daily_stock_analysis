@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 持仓页台股不再整列缺价：快照估值的历史收盘原本只查应用库 `stock_daily`（只有被分析过的股票才有），Web 持仓页又固定不拉实时价，没分析过的台股一律显示缺价、无报酬率并从市值汇总排除；`.TW`/`.TWO` 现在同时查 `market.price`，两边取较新的一天（fail-open，查不到退回原结果）
+- [修复] 非人民币帐户的汇总不再以 1:1 冒充人民币：快照跨帐户汇总统一换算成 CNY，但「刷新汇率」只抓交易币别→帐户币别，从不抓帐户币别→CNY，台币／美元帐户的汇总因此走 1:1 回退（台币数字标成 CNY、整页标记汇率过期）；刷新现在会一并抓这一对
+- [修复] 持仓帐本在 Postgres 应用库上可写入：`portfolio_write_session` 原本写死 SQLite 的 `BEGIN IMMEDIATE`，Postgres 上每一笔交易／现金流水／公司行为的新增与删除都 SyntaxError（含 Web 手动录入与 CSV 导入）；改按方言分派，Postgres 用交易范围的 `pg_advisory_xact_lock` 串行化，卖出可用量校验仍在同一写锁内
+- [新功能] 持仓页新增「粘贴持仓导入」：每行「名称或代号 股数 平均成本 [日期]」（新接口 `POST /api/v1/portfolio/imports/text/parse|commit`），台股名称与裸代号按账户市场经股票索引解析（`00631L` 等带尾字母代号、上柜 `.TWO` 均可）；可直接粘贴券商库存表，缺成本的行列出待补、不会以现价入帐
 - [chore] 合并上游 `c3349de4`..`6cb86d6e`（3 个 commit：#2403 Modelflare 单 Key 接入、#2407 三语赞助横幅、#2399 引导按钮聚焦 `STOCK_LIST`）；不影响走本机 Claude Code CLI 的生成设定，裁决见 `docs/upstream-sync-2026-10-14.md`
 - [修复] 台股自动补全补齐带尾字母的代号与特别股：`fetch_tw_stock_list.py` 原本只收纯数字代号与 CFI `ES`/`CE`，槓桿／反向／债券／主动式 ETF（`00631L`、`00632R`、`00679B`、`00400A`）与特别股（CFI `EP`/`EF`，如 `8349A`）全数漏收；官方页改用 cp950 解码，修正 `宏碁`、`建碁`、`恒耀` 等 14 档名称乱码（原本索引里 `宏碁` 只剩「宏」，按名称搜不到）。台股索引 2124 → 2366 档。Web `normalizeStockCode` 同步把 `00631l.tw` 正规化为 `00631L.TW`；分享图标题不再把 `00631L.TW` 截成 `00631`
 - [修复] 每日报告不再被筹码分布卡死：`DataFetcherManager.get_chip_distribution` 对非 A 股（台/美/港/日/韩）直接跳过，所有筹码源（AkShare／Tushare／妙想）均为 A 股专属；AkShare 的 `ak.stock_cyq_em` 改经 `_akshare_call_with_timeout` 有界等待——akshare 内部 `requests.get` 未带 timeout，东方财富握手无响应时会永久阻塞并占住 `AkshareFetcher` 调用锁（2026-10-12 实测卡在 2383.TW）

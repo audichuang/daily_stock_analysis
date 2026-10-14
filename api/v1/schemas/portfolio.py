@@ -232,6 +232,13 @@ class PortfolioImportTradeItem(BaseModel):
     currency: Optional[str] = None
 
 
+class PortfolioImportMissingCostItem(BaseModel):
+    line: int
+    symbol: str
+    name: Optional[str] = None
+    quantity: float
+
+
 class PortfolioImportParseResponse(BaseModel):
     broker: str
     record_count: int
@@ -239,6 +246,15 @@ class PortfolioImportParseResponse(BaseModel):
     error_count: int
     records: List[PortfolioImportTradeItem] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
+    # 仅贴上文字匯入会填：辨识出股票与股数、但没有成本的列（不会被写入）。
+    missing_cost: List[PortfolioImportMissingCostItem] = Field(default_factory=list)
+
+
+class PortfolioTextImportRequest(BaseModel):
+    account_id: int
+    text: str = Field(..., min_length=1, max_length=200_000)
+    trade_date: Optional[date] = Field(None, description="行内未写日期时使用的建仓日期，默认今天")
+    dry_run: bool = False
 
 
 class PortfolioImportCommitResponse(BaseModel):

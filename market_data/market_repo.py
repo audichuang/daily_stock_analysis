@@ -29,6 +29,20 @@ def price_history(stock_id, start=None, end=None, engine=None):
     return _q(sql, params, engine)
 
 
+def latest_close(stock_id, as_of, engine=None):
+    """(close, date) of the last session on or before ``as_of``; None when absent.
+
+    Raw (unadjusted) close — what a holding is worth that day, not a return input.
+    """
+    df = _q("SELECT date, close FROM market.price WHERE stock_id = :sid AND date <= :d "
+            "AND close IS NOT NULL ORDER BY date DESC LIMIT 1",
+            {"sid": stock_id, "d": str(as_of)[:10]}, engine)
+    if df.empty:
+        return None
+    row = df.iloc[0]
+    return float(row["close"]), pd.Timestamp(row["date"]).date()
+
+
 def institutional(stock_id, start=None, end=None, engine=None):
     sql = ("SELECT date, foreign_net, trust_net, dealer_net, total_net "
            "FROM market.institutional WHERE stock_id = :sid")

@@ -38,6 +38,8 @@ VALID_CASH_DIRECTIONS = {"in", "out"}
 VALID_CORPORATE_ACTIONS = {"cash_dividend", "split_adjustment"}
 PORTFOLIO_FX_REFRESH_DISABLED_REASON = "portfolio_fx_update_disabled"
 PORTFOLIO_REALTIME_QUOTE_MAX_WORKERS = 4
+# 跨帐户汇总（快照 total_* 与风险页）统一换算到这个币别。
+PORTFOLIO_AGGREGATE_CURRENCY = "CNY"
 
 
 def _portfolio_limitations_for_market(market: str) -> List[str]:
@@ -488,7 +490,7 @@ class PortfolioService:
             account_rows = self.repo.list_accounts(include_inactive=False)
 
         accounts_payload: List[Dict[str, Any]] = []
-        aggregate_currency = "CNY"
+        aggregate_currency = PORTFOLIO_AGGREGATE_CURRENCY
         aggregate = {
             "total_cash": 0.0,
             "total_market_value": 0.0,
@@ -1530,32 +1532,37 @@ class PortfolioService:
             as_of_date=as_of_date,
             strict=refresh_enabled,
         )
+        base_currency = self._normalize_currency(account.base_currency)
+        pairs = [(currency, base_currency) for currency in refresh_currencies]
+        # 快照汇总要把帐户币别换成 CNY；不刷新这一对，非 CNY 帐户（如台币、美元）的汇总
+        # 只能走 1:1 回退，台币数字被标成人民币、整页标记汇率过期。
+        if base_currency != PORTFOLIO_AGGREGATE_CURRENCY:
+            pairs.append((base_currency, PORTFOLIO_AGGREGATE_CURRENCY))
         if not refresh_enabled:
             return {
-                "pair_count": len(refresh_currencies),
+                "pair_count": len(pairs),
                 "updated_count": 0,
                 "stale_count": 0,
                 "error_count": 0,
             }
 
-        base_currency = self._normalize_currency(account.base_currency)
         summary = {
-            "pair_count": len(refresh_currencies),
+            "pair_count": len(pairs),
             "updated_count": 0,
             "stale_count": 0,
             "error_count": 0,
         }
-        for from_currency in refresh_currencies:
+        for from_currency, to_currency in pairs:
             try:
                 rate = self._fetch_fx_rate_from_yfinance(
                     from_currency=from_currency,
-                    to_currency=base_currency,
+                    to_currency=to_currency,
                     as_of_date=as_of_date,
                 )
                 if rate is not None and rate > 0:
                     self.repo.save_fx_rate(
                         from_currency=from_currency,
-                        to_currency=base_currency,
+                        to_currency=to_currency,
                         rate_date=as_of_date,
                         rate=rate,
                         source="yfinance",
@@ -1567,20 +1574,20 @@ class PortfolioService:
                 logger.warning(
                     "FX online fetch failed for %s/%s on %s: %s",
                     from_currency,
-                    base_currency,
+                    to_currency,
                     as_of_date.isoformat(),
                     exc,
                 )
 
             fallback = self.repo.get_latest_fx_rate(
                 from_currency=from_currency,
-                to_currency=base_currency,
+                to_currency=to_currency,
                 as_of=as_of_date,
             )
             if fallback is not None and float(fallback.rate or 0.0) > 0:
                 self.repo.save_fx_rate(
                     from_currency=from_currency,
-                    to_currency=base_currency,
+                    to_currency=to_currency,
                     rate_date=as_of_date,
                     rate=float(fallback.rate),
                     source=(fallback.source or "cache_fallback"),

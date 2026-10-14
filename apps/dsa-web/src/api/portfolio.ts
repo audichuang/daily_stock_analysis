@@ -286,4 +286,28 @@ export const portfolioApi = {
     });
     return toCamelCase<PortfolioImportCommitResponse>(response.data);
   },
+
+  async parseTextImport(accountId: number, text: string, tradeDate?: string): Promise<PortfolioImportParseResponse> {
+    const response = await apiClient.post<Record<string, unknown>>('/api/v1/portfolio/imports/text/parse', {
+      account_id: accountId,
+      text,
+      trade_date: tradeDate || undefined,
+    });
+    return toCamelCase<PortfolioImportParseResponse>(response.data);
+  },
+
+  async commitTextImport(
+    accountId: number,
+    text: string,
+    tradeDate?: string,
+    dryRun = false,
+  ): Promise<PortfolioImportCommitResponse> {
+    const response = await apiClient.post<Record<string, unknown>>('/api/v1/portfolio/imports/text/commit', {
+      account_id: accountId,
+      text,
+      trade_date: tradeDate || undefined,
+      dry_run: dryRun,
+    });
+    return toCamelCase<PortfolioImportCommitResponse>(response.data);
+  },
 };

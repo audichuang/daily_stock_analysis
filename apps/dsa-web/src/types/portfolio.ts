@@ -300,6 +300,13 @@ export interface PortfolioImportTradeItem {
   currency?: string | null;
 }
 
+export interface PortfolioImportMissingCostItem {
+  line: number;
+  symbol: string;
+  name?: string | null;
+  quantity: number;
+}
+
 export interface PortfolioImportParseResponse {
   broker: string;
   recordCount: number;
@@ -307,6 +314,8 @@ export interface PortfolioImportParseResponse {
   errorCount: number;
   records: PortfolioImportTradeItem[];
   errors: string[];
+  /** 仅粘贴文字导入会填：已识别股票与股数、但缺平均成本的行（不会写入）。 */
+  missingCost?: PortfolioImportMissingCostItem[];
 }
 
 export interface PortfolioImportCommitResponse {

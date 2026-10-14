@@ -700,6 +700,13 @@ const PortfolioPage: React.FC = () => {
   const [csvCommitting, setCsvCommitting] = useState(false);
   const [csvParseResult, setCsvParseResult] = useState<PortfolioImportParseResponse | null>(null);
   const [csvCommitResult, setCsvCommitResult] = useState<PortfolioImportCommitResponse | null>(null);
+  const [pasteText, setPasteText] = useState('');
+  const [pasteTradeDate, setPasteTradeDate] = useState(getTodayIso());
+  const [pasteDryRun, setPasteDryRun] = useState(false);
+  const [pasteParsing, setPasteParsing] = useState(false);
+  const [pasteCommitting, setPasteCommitting] = useState(false);
+  const [pasteParseResult, setPasteParseResult] = useState<PortfolioImportParseResponse | null>(null);
+  const [pasteCommitResult, setPasteCommitResult] = useState<PortfolioImportCommitResponse | null>(null);
   const [brokerLoadWarning, setBrokerLoadWarning] = useState<string | null>(null);
 
   const [eventType, setEventType] = useState<EventType>('trade');
@@ -1227,6 +1234,54 @@ const PortfolioPage: React.FC = () => {
     } finally {
       setCsvCommitting(false);
     }
+  };
+
+  const handleParsePaste = async () => {
+    if (!pasteText.trim()) return;
+    if (!writableAccountId) {
+      setWriteWarning('请先在右上角选择具体账户：代号要按账户市场解析。');
+      return;
+    }
+    try {
+      setWriteWarning(null);
+      setPasteParsing(true);
+      setPasteParseResult(await portfolioApi.parseTextImport(writableAccountId, pasteText, pasteTradeDate));
+      setPasteCommitResult(null);
+    } catch (err) {
+      setError(getParsedApiError(err));
+    } finally {
+      setPasteParsing(false);
+    }
+  };
+
+  const handleCommitPaste = async () => {
+    if (!pasteText.trim()) return;
+    if (!writableAccountId) {
+      setWriteWarning('请先在右上角选择具体账户，再进行录入或导入提交。');
+      return;
+    }
+    try {
+      setWriteWarning(null);
+      setPasteCommitting(true);
+      const committed = await portfolioApi.commitTextImport(writableAccountId, pasteText, pasteTradeDate, pasteDryRun);
+      setPasteCommitResult(committed);
+      if (!pasteDryRun) {
+        await refreshPortfolioData();
+      }
+    } catch (err) {
+      setError(getParsedApiError(err));
+    } finally {
+      setPasteCommitting(false);
+    }
+  };
+
+  // 券商库存表没有成本：把解析结果改写成「代号 股数 成本 日期」范本，缺成本的行留空待填。
+  const handlePasteToTemplate = () => {
+    if (!pasteParseResult) return;
+    const ready = pasteParseResult.records.map((r) => `${r.symbol} ${r.quantity} ${r.price} ${r.tradeDate}`);
+    const pending = (pasteParseResult.missingCost ?? []).map((r) => `${r.symbol} ${r.quantity} `);
+    setPasteText([...ready, ...pending].join('\n'));
+    setPasteParseResult(null);
   };
 
   const openDeleteDialog = (item: PendingDelete) => {
@@ -2061,6 +2116,63 @@ const PortfolioPage: React.FC = () => {
                 variant={getCsvCommitVariant(csvCommitResult, csvDryRun)}
                 title={csvDryRun ? 'CSV 预演结果' : 'CSV 提交结果'}
                 message={`${csvDryRun ? '预演检查' : '实际写入'}：写入 ${csvCommitResult.insertedCount} 条，重复 ${csvCommitResult.duplicateCount} 条，失败 ${csvCommitResult.failedCount} 条。`}
+                className="rounded-lg px-3 py-2 text-xs shadow-none"
+              />
+            ) : null}
+          </div>
+
+          <h3 className="text-sm font-semibold text-foreground mt-5 mb-1">粘贴持仓导入</h3>
+          <p className="text-xs text-secondary mb-2">
+            每行「名称或代号 股数 平均成本 [日期]」，空格或 Tab 分隔；也可直接粘贴券商库存表，再用「转成待填范本」补成本。
+            平均成本请填券商的成本均价（已含买进手续费）。重复粘贴同一份内容会去重，持股变动后请改用交易录入。
+          </p>
+          <div className="space-y-2">
+            <textarea
+              className="input-surface input-focus-glow min-h-32 w-full rounded-xl border bg-transparent px-4 py-2 font-mono text-sm transition-all focus:outline-none"
+              placeholder={'元大台灣50 300 98.5\n2303 450 52.1 2025-03-10\n00631L.TW 2000 21.3'}
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+              aria-label="粘贴持仓"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input type="date" className={PORTFOLIO_INPUT_CLASS} value={pasteTradeDate}
+                onChange={(e) => setPasteTradeDate(e.target.value)} aria-label="默认建仓日期" />
+              <button type="button" className="btn-secondary" disabled={!pasteParseResult?.missingCost?.length}
+                onClick={handlePasteToTemplate}>
+                转成待填范本
+              </button>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-secondary">
+              <input id="paste-dry-run" type="checkbox" checked={pasteDryRun} onChange={(e) => setPasteDryRun(e.target.checked)} />
+              <label htmlFor="paste-dry-run">仅预演（不写入）</label>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" className="btn-secondary flex-1" disabled={!pasteText.trim() || pasteParsing}
+                onClick={() => void handleParsePaste()}>
+                {pasteParsing ? '解析中...' : '解析内容'}
+              </button>
+              <button type="button" className="btn-secondary flex-1"
+                disabled={!pasteText.trim() || !writableAccountId || pasteCommitting} onClick={() => void handleCommitPaste()}>
+                {pasteCommitting ? '提交中...' : '提交导入'}
+              </button>
+            </div>
+            {pasteParseResult ? (
+              <InlineAlert
+                variant={getCsvParseVariant(pasteParseResult)}
+                title="粘贴解析结果"
+                message={[
+                  `有效 ${pasteParseResult.recordCount} 条，缺成本 ${pasteParseResult.missingCost?.length ?? 0} 条，错误 ${pasteParseResult.errorCount} 条。`,
+                  ...(pasteParseResult.missingCost ?? []).map((r) => `缺成本：${r.name ?? ''} ${r.symbol} × ${r.quantity}`),
+                  ...pasteParseResult.errors,
+                ].join('\n')}
+                className="whitespace-pre-line rounded-lg px-3 py-2 text-xs shadow-none"
+              />
+            ) : null}
+            {pasteCommitResult ? (
+              <InlineAlert
+                variant={getCsvCommitVariant(pasteCommitResult, pasteDryRun)}
+                title={pasteDryRun ? '粘贴预演结果' : '粘贴提交结果'}
+                message={`${pasteDryRun ? '预演检查' : '实际写入'}：写入 ${pasteCommitResult.insertedCount} 条，重复 ${pasteCommitResult.duplicateCount} 条，失败 ${pasteCommitResult.failedCount} 条。`}
                 className="rounded-lg px-3 py-2 text-xs shadow-none"
               />
             ) : null}

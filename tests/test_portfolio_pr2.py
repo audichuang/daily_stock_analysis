@@ -762,6 +762,39 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertTrue(bool(latest.is_stale))
         self.assertAlmostEqual(float(latest.rate), 7.0, places=6)
 
+    def test_fx_refresh_fetches_base_to_aggregate_pair_for_non_cny_account(self) -> None:
+        # 只有台币帐户、交易也全是台币时，唯一需要的汇率是 TWD->CNY（快照汇总币别）。
+        # 不刷新这一对，汇总就走 1:1 回退：台币数字被标成 CNY 且整页 fx_stale。
+        account = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
+        aid = account["id"]
+        self.service.record_cash_ledger(
+            account_id=aid, event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="TWD"
+        )
+        calls = []
+
+        def fake_fetch(*, from_currency, to_currency, as_of_date):
+            calls.append((from_currency, to_currency))
+            return 0.2
+
+        with patch.object(PortfolioService, "_fetch_fx_rate_from_yfinance", side_effect=fake_fetch):
+            summary = self.service.refresh_fx_rates(account_id=aid, as_of=date(2026, 1, 2))
+
+        self.assertEqual(calls, [("TWD", "CNY")])
+        self.assertEqual((summary["pair_count"], summary["updated_count"]), (1, 1))
+        snapshot = self.service.get_portfolio_snapshot(as_of=date(2026, 1, 2), include_realtime=False)
+        self.assertEqual(snapshot["currency"], "CNY")
+        self.assertAlmostEqual(snapshot["total_cash"], 200.0, places=6)
+        self.assertFalse(snapshot["fx_stale"])
+
+    def test_fx_refresh_cny_account_does_not_fetch_aggregate_pair(self) -> None:
+        account = self.service.create_account(name="CN", broker="Demo", market="cn", base_currency="CNY")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="CNY"
+        )
+        with patch.object(PortfolioService, "_fetch_fx_rate_from_yfinance", side_effect=AssertionError("should not call")):
+            summary = self.service.refresh_fx_rates(account_id=account["id"], as_of=date(2026, 1, 2))
+        self.assertEqual(summary["pair_count"], 0)
+
     def test_fx_refresh_disabled_returns_real_pair_count_without_fetching(self) -> None:
         account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="CNY")
         aid = account["id"]
