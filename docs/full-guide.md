@@ -1944,6 +1944,7 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 - 在 `fifo` / `avg` 两种成本法之间切换，查看快照 KPI、风险摘要和 Top Positions 集中度图表。
 - 直接在 Web 页面新增账户、删除误建账户，或录入交易、现金流水、公司行动等事件。
 - 通过 CSV 导入持仓记录，支持先 `dry_run` 预览，再决定是否正式写入。
+- 粘贴持仓文字（「名称或代号 股数 平均成本 [日期]」）建立初始持仓，快照即据此计算平均成本、未实现盈亏与报酬率。
 - 在事件列表中按账户、日期、方向、代码等条件筛选，并对单账户事件做删除修正。
 
 ### 相关接口
@@ -1956,6 +1957,8 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 | `/api/v1/portfolio/cash-ledger` | GET | 分页查询现金流水 |
 | `/api/v1/portfolio/corporate-actions` | GET | 分页查询公司行动 |
 | `/api/v1/portfolio/imports/csv/brokers` | GET | 查询内建 CSV 券商解析器 |
+| `/api/v1/portfolio/imports/text/parse` | POST | 解析粘贴的持仓文字（JSON：`account_id`、`text`、`trade_date`），返回可写入记录与 `missing_cost` |
+| `/api/v1/portfolio/imports/text/commit` | POST | 解析并写入粘贴的持仓（同上，另有 `dry_run`） |
 | `/api/v1/portfolio/fx/refresh` | POST | 手动刷新汇率缓存 |
 | `/api/v1/portfolio/accounts/{account_id}` | DELETE | 删除/归档持仓账户 |
 | `/api/v1/portfolio/trades/{trade_id}` | DELETE | 删除交易记录 |
@@ -1967,11 +1970,14 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 ### 使用行为说明
 
 - CSV 导入内建 `huatai`、`citic`、`cmb` 解析器；若券商列表接口失败，Web 端会自动回退到这些内建选项。
+- 粘贴持仓导入：每行一档，Tab 或空白分隔，数字可带千分位逗号；名称与裸代号按**账户市场**在股票索引中解析——台股裸代号只接受索引里唯一存在的 `.TW` 或 `.TWO`（不盲目补 `.TW`），同市场同名多档直接报错要求改填完整代号。也可整列粘贴券商「库存」表格：一行有 4 个以上数值栏时只取第二栏「今日餘額」为股数；这类表没有成本，相关行列在 `missing_cost`、**不会写入**（不拿现价顶替成本，否则报酬率会被造成 0%），Web 端「转成待填范本」会改写成 `代号 股数 ` 供补填。提交接口只接受干净的解析结果：只要有缺成本或无法辨识的行，就整批返回 400、一笔都不写，避免「写入 6 条」看起来像全部成功。每行写成一笔 `buy`，`price` 为平均成本、手续费与税为 0，所以平均成本应填券商的成本均价（已含买进手续费）。去重哈希不含行号：同一天重贴同一份内容会被去重；但持股数量变动后再贴完整快照会**追加**而非覆盖，之后的变动请改用交易录入。
 - 导入流程会先把 CSV 解析成标准化记录，再逐条提交到持仓账本；遇到忙碌行会计入 `failed_count`，不会因为单行冲突让整批请求整体失败。
 - 删除账户使用软删除语义：默认账户列表、快照、风险、录入入口和事件列表不再显示该账户，但交易、现金流水和公司行动不会被物理清理；如需纠正单条流水，需在账户归档前使用事件列表里的删除修正入口。
 - 交易去重优先使用账户内唯一的 `trade_uid`，缺失时回退到基于日期、代码、方向、数量、价格、费用、税费、币种的确定性哈希。
 - 卖出会先校验可用数量，超卖返回 `409 portfolio_oversell`；并发写入冲突时可能返回 `409 portfolio_busy`。
 - 持仓快照的 `positions[]` 会返回 `price_source`、`price_date`、`price_stale`、`price_available` 等价格元信息；当天快照默认会先尝试实时行情，实时价不可用或非正值时再回退到 `as_of` 当天或之前最近的历史收盘价；传入 `include_realtime=false` 时会跳过实时行情并直接使用本地历史收盘价回退路径，Web 持仓页用该模式优先渲染持仓列表，避免外部实时行情源变慢时阻塞首屏。历史 `as_of` 快照不会拉取实时价，也不会再把成本价静默当作现价；缺价持仓会标记 `price_available=false` 并从市值与未实现盈亏汇总中排除。
+- 台股（`.TW`/`.TWO`）的历史收盘除了应用库 `stock_daily`，也会查 `market` schema 的 `market.price`（全市场每日收盘），两边取较新的一天；因此没跑过个股分析的台股持仓也有价格。`market` schema 不可用时静默退回只用 `stock_daily`。
+- 快照的跨帐户汇总（`currency`、`total_*`）固定换算成 CNY；「刷新汇率」除了交易币别→帐户币别，也会刷新帐户币别→CNY，非人民币帐户（如台币）需至少刷新一次，否则汇总以 1:1 回退并标记 `fx_stale`。
 - 汇率刷新会先尝试在线源；若在线获取失败，则回退到最近一次缓存并标记 `is_stale=true`，避免快照和风险页整体不可用。
 - 当 `PORTFOLIO_FX_UPDATE_ENABLED=false` 时，手动刷新接口会明确返回“在线刷新已禁用”，页面不会误导为“当前没有可刷新的汇率对”。
 - 风险摘要包含集中度、回撤、止损接近度等信息；`sector_concentration` 会优先尝试按板块归类，失败时降级到 `UNCLASSIFIED`，不会阻断风险结果返回。

@@ -25,6 +25,8 @@ const {
   deleteCorporateAction,
   parseCsvImport,
   commitCsvImport,
+  parseTextImport,
+  commitTextImport,
   createAccount,
   deleteAccount,
   analyzePosition,
@@ -47,6 +49,8 @@ const {
   deleteCorporateAction: vi.fn(),
   parseCsvImport: vi.fn(),
   commitCsvImport: vi.fn(),
+  parseTextImport: vi.fn(),
+  commitTextImport: vi.fn(),
   createAccount: vi.fn(),
   deleteAccount: vi.fn(),
   analyzePosition: vi.fn(),
@@ -79,6 +83,8 @@ vi.mock('../../api/portfolio', () => ({
     deleteCorporateAction,
     parseCsvImport,
     commitCsvImport,
+    parseTextImport,
+    commitTextImport,
     createAccount,
     deleteAccount,
     analyzePosition,
@@ -2402,6 +2408,33 @@ describe('PortfolioPage FX refresh', () => {
     expect(getSnapshot).toHaveBeenCalledTimes(snapshotCallsAfterSwitch);
     expect(getRisk).toHaveBeenCalledTimes(riskCallsAfterSwitch);
     expect(screen.queryByText('汇率已刷新，共更新 1 对。')).not.toBeInTheDocument();
+  });
+
+  it('turns pasted broker inventory rows without cost into a fill-in template instead of committing them', async () => {
+    parseTextImport.mockResolvedValueOnce({
+      broker: 'text',
+      recordCount: 1,
+      skippedCount: 1,
+      errorCount: 0,
+      records: [{ tradeDate: '2026-10-15', symbol: '2303.TW', side: 'buy', quantity: 450, price: 142.5, fee: 0, tax: 0, dedupHash: 'h' }],
+      errors: [],
+      missingCost: [{ line: 2, symbol: '00631L.TW', name: '元大台灣50正2', quantity: 2000 }],
+    });
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '1' } });
+
+    const textarea = screen.getByLabelText('粘贴持仓');
+    fireEvent.change(textarea, { target: { value: '元大台灣50正2\t2,000\t2,000\t\t79,560\n聯電 450 142.5' } });
+    fireEvent.click(screen.getByRole('button', { name: '解析内容' }));
+
+    await waitFor(() => expect(parseTextImport).toHaveBeenCalledWith(1, expect.stringContaining('聯電'), expect.any(String)));
+    expect(await screen.findByText(/缺成本：元大台灣50正2 00631L.TW × 2000/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '转成待填范本' }));
+    expect((textarea as HTMLTextAreaElement).value).toBe('2303.TW 450 142.5 2026-10-15\n00631L.TW 2000 ');
+    expect(commitTextImport).not.toHaveBeenCalled();
   });
 
   it('deactivates the selected account from the account toolbar and reloads accounts', async () => {

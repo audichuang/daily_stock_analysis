@@ -127,7 +127,7 @@ export function getFxRefreshFeedbackVariant(tone: FxRefreshFeedback['tone']): Po
 }
 
 export function getCsvParseVariant(result: PortfolioImportParseResponse): PortfolioAlertVariant {
-  return result.errorCount > 0 || result.skippedCount > 0 ? 'warning' : 'info';
+  return result.errorCount > 0 || result.skippedCount > 0 || (result.missingCost?.length ?? 0) > 0 ? 'warning' : 'info';
 }
 
 export function getCsvCommitVariant(result: PortfolioImportCommitResponse, isDryRun: boolean): PortfolioAlertVariant {

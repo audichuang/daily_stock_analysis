@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import unicodedata
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
@@ -13,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from data_provider.base import canonical_stock_code
+from src.data.stock_index_loader import get_chat_stock_lookup
 from src.repositories.portfolio_repo import PortfolioRepository
 from src.services.portfolio_service import (
     PortfolioBusyError,
@@ -22,6 +24,19 @@ from src.services.portfolio_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 贴上文字匯入不属于任何券商 CSV 格式，commit 时以此作为来源标记。
+TEXT_IMPORT_SOURCE = "text"
+
+# 裸代号依帐户市场补后缀；只认股票索引里真的存在的那一个，不盲目拼 .TW（上柜是 .TWO）。
+_BARE_CODE_SUFFIXES_BY_MARKET: Dict[str, Tuple[str, ...]] = {
+    "tw": (".TW", ".TWO"),
+}
+
+# 一行至少这么多个数值栏，就当作从券商「库存」表格整列复制过来的（昨日餘額、今日餘額、…、市值、即時價位），
+# 只取第二栏「今日餘額」当股数；这种表没有成本，必须另外补。
+_INVENTORY_TABLE_MIN_VALUES = 4
+
 
 @dataclass(frozen=True)
 class CsvParserSpec:
@@ -179,6 +194,116 @@ class PortfolioImportService:
             "errors": errors[:20],
         }
 
+    def parse_holdings_text(
+        self,
+        *,
+        text: str,
+        market: str,
+        trade_date: date,
+    ) -> Dict[str, Any]:
+        """Parse pasted holdings lines into buy trade records.
+
+        每行 ``名称或代号 股数 平均成本 [日期]``，以 Tab 或空白分隔（数字里的千分位逗号可保留）。
+        也接受从券商库存表整列复制的内容：取「今日餘額」当股数，成本缺失的列放进
+        ``missing_cost``，绝不拿现价顶替成本（那等于把报酬率造成 0%）。
+        """
+        market_norm = (market or "").strip().lower()
+        records: List[Dict[str, Any]] = []
+        missing_cost: List[Dict[str, Any]] = []
+        errors: List[str] = []
+        skipped = 0
+
+        for line_no, raw_line in enumerate((text or "").splitlines(), 1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            cells = [c.strip() for c in (line.split("\t") if "\t" in line else line.split())]
+            label, values = cells[0], [c for c in cells[1:] if c]
+            has_number = any(self._parse_float(v) is not None for v in values)
+
+            symbol, name, error = self._resolve_text_symbol(label, market_norm)
+            if symbol is None:
+                if has_number:
+                    errors.append(f"第 {line_no} 行：{error}")
+                else:
+                    skipped += 1  # 表头、说明文字
+                continue
+
+            if len(values) >= _INVENTORY_TABLE_MIN_VALUES:
+                quantity, cost, line_date = self._parse_float(values[1]), None, None
+            else:
+                quantity = self._parse_float(values[0]) if values else None
+                cost = self._parse_float(values[1]) if len(values) > 1 else None
+                line_date = self._parse_date(values[2]) if len(values) > 2 else None
+                if len(values) > 2 and line_date is None:
+                    errors.append(f"第 {line_no} 行：日期无法解析 '{values[2]}'")
+                    continue
+
+            if quantity is None or quantity <= 0:
+                errors.append(f"第 {line_no} 行：{label} 缺少有效股数")
+                continue
+            if cost is None:
+                missing_cost.append({"line": line_no, "symbol": symbol, "name": name, "quantity": float(quantity)})
+                continue
+            if cost <= 0:
+                errors.append(f"第 {line_no} 行：{label} 平均成本必须大于 0")
+                continue
+
+            record = {
+                "trade_date": line_date or trade_date,
+                "symbol": symbol,
+                "side": "buy",
+                "quantity": float(quantity),
+                "price": float(cost),
+                "fee": 0.0,
+                "tax": 0.0,
+                "trade_uid": None,
+                "currency": None,
+            }
+            # 不带行号：同一天重贴同一份持股会被去重，而不是把仓位翻倍。
+            record["dedup_hash"] = self._build_dedup_hash(record)
+            records.append(record)
+
+        return {
+            "broker": TEXT_IMPORT_SOURCE,
+            "record_count": len(records),
+            "skipped_count": skipped,
+            "error_count": len(errors),
+            "records": records,
+            "missing_cost": missing_cost,
+            "errors": errors[:20],
+        }
+
+    @staticmethod
+    def _resolve_text_symbol(label: str, market: str) -> Tuple[Optional[str], Optional[str], str]:
+        """Resolve a stock name or code against the stock index, scoped to the account market."""
+        lookup = get_chat_stock_lookup()
+        key = unicodedata.normalize("NFKC", label).strip()
+        suffixes = _BARE_CODE_SUFFIXES_BY_MARKET.get(market, ())
+
+        def in_market(code: str) -> bool:
+            return not suffixes or code.upper().endswith(suffixes)
+
+        code_hits = {ident[0]: ident[1] for ident in lookup["codes"].get(key.upper(), ()) if in_market(ident[0])}
+        if not code_hits and suffixes and "." not in key:
+            for suffix in suffixes:
+                for ident in lookup["codes"].get(f"{key.upper()}{suffix}", ()):
+                    code_hits[ident[0]] = ident[1]
+        if not code_hits:
+            name_hits = {ident[0]: ident[1] for ident in lookup["names"].get(key.casefold(), ()) if in_market(ident[0])}
+            code_hits = name_hits
+        if len(code_hits) == 1:
+            code, name = next(iter(code_hits.items()))
+            return canonical_stock_code(code), name, ""
+        if len(code_hits) > 1:
+            return None, None, f"'{label}' 对应多档股票（{', '.join(sorted(code_hits))}），请改填完整代号"
+        # 索引未收录但带了本市场后缀的代号（例如新上市）照样接受。
+        if suffixes and key.upper().endswith(suffixes):
+            return canonical_stock_code(key), None, ""
+        if not suffixes and key.isascii() and canonical_stock_code(key):
+            return canonical_stock_code(key), None, ""
+        return None, None, f"无法辨识 '{label}'"
+
     def commit_trade_records(
         self,
         *,
@@ -187,7 +312,11 @@ class PortfolioImportService:
         records: List[Dict[str, Any]],
         dry_run: bool = False,
     ) -> Dict[str, Any]:
-        broker_norm = self._normalize_broker(broker)
+        if broker == TEXT_IMPORT_SOURCE:
+            broker_norm, default_note = TEXT_IMPORT_SOURCE, "text_import"
+        else:
+            broker_norm = self._normalize_broker(broker)
+            default_note = f"csv_import:{broker_norm}"
 
         inserted_count = 0
         duplicate_count = 0
@@ -244,7 +373,7 @@ class PortfolioImportService:
                     currency=record.get("currency"),
                     trade_uid=trade_uid,
                     dedup_hash=dedup_hash_to_use,
-                    note=(record.get("note") or "").strip() or f"csv_import:{broker_norm}",
+                    note=(record.get("note") or "").strip() or default_note,
                 )
                 inserted_count += 1
             except PortfolioConflictError:

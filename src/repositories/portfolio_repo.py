@@ -29,6 +29,9 @@ from src.storage import (
 
 logger = logging.getLogger(__name__)
 
+# 持仓帐本在 Postgres 上的全域写锁 key（任意固定 bigint，只要不和其他 advisory lock 撞号）。
+PORTFOLIO_WRITE_ADVISORY_LOCK_KEY = 0x44534150  # "DSAP"
+
 
 class DuplicateTradeUidError(Exception):
     """Raised when trade_uid conflicts with existing record in one account."""
@@ -137,7 +140,7 @@ class PortfolioRepository:
     def portfolio_write_session(self):
         session = self.db.get_session()
         try:
-            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            self._acquire_portfolio_write_lock(session)
         except OperationalError as exc:
             session.close()
             if self._is_sqlite_locked_error(exc):
@@ -157,6 +160,21 @@ class PortfolioRepository:
             raise
         finally:
             session.close()
+
+    @staticmethod
+    def _acquire_portfolio_write_lock(session: Any) -> None:
+        """Serialize ledger writes so sell validation and the insert see one consistent state.
+
+        SQLite 用 ``BEGIN IMMEDIATE`` 拿全库写锁；Postgres 不认得这个语法（整个持仓写入
+        都会 SyntaxError），改用交易范围的 advisory lock，commit / rollback 时自动释放。
+        """
+        dialect = session.get_bind().dialect.name
+        if dialect == "sqlite":
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        elif dialect == "postgresql":
+            session.connection().exec_driver_sql(
+                f"SELECT pg_advisory_xact_lock({PORTFOLIO_WRITE_ADVISORY_LOCK_KEY})"
+            )
 
     def add_trade(
         self,
@@ -712,6 +730,31 @@ class PortfolioRepository:
         return close[0] if close is not None else None
 
     def get_latest_close_with_date(self, symbol: str, as_of: date) -> Optional[Tuple[float, date]]:
+        app_close = self._get_app_latest_close(symbol, as_of)
+        if not str(symbol).upper().endswith((".TW", ".TWO")):
+            return app_close
+        # 应用库的 stock_daily 只有被分析过的股票才有；台股全市场收盘在 market schema。
+        # 两边取较新的那一天，避免持仓页把没分析过的台股显示成缺价、或拿几天前的旧价估值。
+        market_close = self._get_tw_market_latest_close(symbol, as_of)
+        candidates = [c for c in (app_close, market_close) if c is not None and c[0] > 0]
+        if not candidates:
+            return app_close
+        return max(candidates, key=lambda c: c[1])
+
+    @staticmethod
+    def _get_tw_market_latest_close(symbol: str, as_of: date) -> Optional[Tuple[float, date]]:
+        try:
+            from market_data import market_repo
+            from market_data.db import get_engine
+
+            return market_repo.latest_close(
+                str(symbol).split(".")[0], as_of, engine=get_engine(statement_timeout_ms=3000)
+            )
+        except Exception as exc:  # noqa: BLE001 - 估值补价 fail-open，退回应用库结果
+            logger.debug("[portfolio] market schema close unavailable for %s: %s", symbol, exc)
+            return None
+
+    def _get_app_latest_close(self, symbol: str, as_of: date) -> Optional[Tuple[float, date]]:
         with self.db.get_session() as session:
             row = session.execute(
                 select(StockDaily)
