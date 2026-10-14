@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [chore] 合并上游 `c3349de4`..`6cb86d6e`（3 个 commit：#2403 Modelflare 单 Key 接入、#2407 三语赞助横幅、#2399 引导按钮聚焦 `STOCK_LIST`）；不影响走本机 Claude Code CLI 的生成设定，裁决见 `docs/upstream-sync-2026-10-14.md`
 - [修复] 台股自动补全补齐带尾字母的代号与特别股：`fetch_tw_stock_list.py` 原本只收纯数字代号与 CFI `ES`/`CE`，槓桿／反向／债券／主动式 ETF（`00631L`、`00632R`、`00679B`、`00400A`）与特别股（CFI `EP`/`EF`，如 `8349A`）全数漏收；官方页改用 cp950 解码，修正 `宏碁`、`建碁`、`恒耀` 等 14 档名称乱码（原本索引里 `宏碁` 只剩「宏」，按名称搜不到）。台股索引 2124 → 2366 档。Web `normalizeStockCode` 同步把 `00631l.tw` 正规化为 `00631L.TW`；分享图标题不再把 `00631L.TW` 截成 `00631`
 - [修复] 每日报告不再被筹码分布卡死：`DataFetcherManager.get_chip_distribution` 对非 A 股（台/美/港/日/韩）直接跳过，所有筹码源（AkShare／Tushare／妙想）均为 A 股专属；AkShare 的 `ak.stock_cyq_em` 改经 `_akshare_call_with_timeout` 有界等待——akshare 内部 `requests.get` 未带 timeout，东方财富握手无响应时会永久阻塞并占住 `AkshareFetcher` 调用锁（2026-10-12 实测卡在 2383.TW）
 - [修复] 上游问股对象状态（#2397）在 Postgres 应用库上可运行：`conversation_session_states` 新增 9 栏只有 SQLite 迁移，Postgres 补 `ADD COLUMN IF NOT EXISTS`（否则 `DatabaseManager` 初始化即 `UndefinedColumn`）；用户回合 upsert 改按方言；严格回测的 `json_valid`／`json_extract` 在 Postgres 编译为 `pg_input_is_valid`＋`#>>`；对象状态 CAS 读取加 `FOR UPDATE`，Postgres 并发提交不再双双成功
@@ -43,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] 新增 `docs/upstream-sync-2026-09-05.md`（上游 v3.31.0 → 2026-09-04 共 10 个 commit 的合并记录、冲突裁决与验证）
 - [文档] 新增 `docs/daily-report-backtest-2026-07.md`：每日分析报告机械化执行的回验（2026-07-06 ~ 09-04），含成本口径、与 0050 的成对比较，以及「结构化 verdict 与同一区块的文字结论互相矛盾」这一发现
 
+- [文档] 三语 README 分别使用 Modelflare 简体中文、英文及繁体中文赞助横幅，保持现有版式与链接。
+
+- [改进] Modelflare 只需 MODELFLARE_KEY，后端、Web、筛选及 Actions 统一自动识别渠道并补齐默认地址与模型，保留显式 YAML／渠道配置优先级和高级渠道 Key 兼容。
+
+- [改进] 单 Modelflare 渠道未填写主模型及渠道模型列表时默认使用 gpt-6.1-sol，只需渠道名与 API Key；三语 README 横幅恢复 720px、图片与文案紧接显示，并在 Modelflare 与 SerpAPI 之间添加分隔线。
+
+- [改进] 单 Modelflare 渠道可直接复用现有 LITELLM_MODEL 与 OpenAI 备用模型，后端统一推导模型声明，显式列表及多渠道规则保持优先；三语 README 赞助文案合为重点单段。
+- [修复] 模型设置预览、冒烟及保存的配置校验失败显示具体字段与修正提示，避免仅显示笼统请求失败；Modelflare 渠道说明补充客户端专属注册链接，与快速添加按钮共用 app UTM。
+- [改进] 新增首位 Modelflare LLM 渠道预设及条件注册链接，统一后端默认接入地址、简化三项配置，同步三语 README 紧凑赞助区（默认展开、可折叠，保留运营主体、模型范围、缓存补偿及充值优惠）和配置指南，保留 Anspire LLM 兼容、新闻搜索及 SerpAPI 赞助入口。
 - [修复] 当前 Bot 与 Web 交替问股复用服务端已确认对象及严格工具范围，普通追问／比较保留确认状态，切股进入待确认；Bot 提交校验快照版本及用户锚点，保留真正旧代码／旁路写入的保守失效边界。
 - [修复] 严格回测读取兼容正常 CN 写入器生成的数字汇总／明细键，按已验证对象与关联分析来源约束 SQL，保留跨市场隔离及总数／分页一致性。
 - [修复] 问股条件切股跨逗号保持澄清，否定比较不扩大工具范围；个股回测汇总及明细按已验证市场身份查询，保留同身份存储别名，不回退读取其他市场数据。
@@ -163,6 +173,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 - [修复] 告警规则创建、启停或删除期间切换筛选或分页后，列表刷新使用当前筛选条件，避免旧请求闭包覆盖当前视图。
+- [修复] 设置页首次启动引导的「维护自选股」按钮点击后滚动并聚焦到基础配置的 `STOCK_LIST` 字段，避免引导卡片仅在基础配置分类渲染时重复切换当前分类而无任何跳转或反馈；其余引导按钮的分类跳转语义不变。
 
 ## [3.32.0] - 2026-09-06
 

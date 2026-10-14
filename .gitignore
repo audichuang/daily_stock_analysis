@@ -102,3 +102,6 @@ shioaji.log
 
 # MOPS 財報包的下載暫存檔（market_data/crawler.py 寫死這個檔名）
 temp.zip
+
+# Orca 拖放的截图／附件暂存（本机工具产物，不进版控）
+.orca/

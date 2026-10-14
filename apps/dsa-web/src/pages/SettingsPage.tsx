@@ -79,6 +79,7 @@ const GENERATION_BACKEND_STATUS_KEYS = new Set([
   'DEEPSEEK_API_KEY',
   'DEEPSEEK_API_KEYS',
   'AIHUBMIX_KEY',
+  'MODELFLARE_KEY',
   'ANSPIRE_LLM_ENABLED',
   'ANSPIRE_LLM_BASE_URL',
   'ANSPIRE_LLM_MODEL',
@@ -198,6 +199,7 @@ type FirstRunSetupCardProps = {
   smokeSuccess: string;
   onRefresh: () => void | Promise<void>;
   onSelectCategory: (category: SystemConfigCategory) => void;
+  onEditStockList: () => void;
   onRunSmoke: () => void | Promise<void>;
   listSeparator: string;
   t: (key: UiTextKey, params?: Record<string, string | number>) => string;
@@ -214,6 +216,7 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
   smokeSuccess,
   onRefresh,
   onSelectCategory,
+  onEditStockList,
   onRunSmoke,
   listSeparator,
   t,
@@ -327,7 +330,7 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
           <Button type="button" variant="settings-secondary" size="sm" onClick={() => onSelectCategory('ai_model')}>
             {t('settings.setupGuideConfigureLlm')}
           </Button>
-          <Button type="button" variant="settings-secondary" size="sm" onClick={() => onSelectCategory('base')}>
+          <Button type="button" variant="settings-secondary" size="sm" onClick={() => onEditStockList()}>
             {t('settings.setupGuideAddStocks')}
           </Button>
           <Button type="button" variant="settings-secondary" size="sm" onClick={() => onSelectCategory('notification')}>
@@ -853,7 +856,8 @@ const SettingsPage: React.FC = () => {
   const screeningEnabled = String(screeningItem?.value ?? '').trim().toLowerCase() === 'true';
   const shouldShowFirstRunSetup = activeCategory === 'base';
   const shouldShowScreeningSettings = activeCategory === 'base' && Boolean(screeningItem);
-  const hasConfiguredChannels = Boolean((rawActiveItemMap.get('LLM_CHANNELS') || '').trim());
+  const hasConfiguredChannels = Boolean((rawActiveItemMap.get('LLM_CHANNELS') || '').trim()
+    || (rawActiveItemMap.get('MODELFLARE_KEY') || '').trim());
   const hasLitellmConfig = Boolean((rawActiveItemMap.get('LITELLM_CONFIG') || '').trim());
   const hasRuntimeSchedulerMismatch =
     schedulerRuntimeEnabled !== null
@@ -1146,6 +1150,15 @@ const SettingsPage: React.FC = () => {
     }
   };
 
+  // Setup guide renders only under the base category, so switching category changes
+  // nothing here: scroll to the SettingsField control for STOCK_LIST and focus it.
+  const handleEditSetupStockList = () => {
+    setActiveCategory('base');
+    const node = document.getElementById('setting-STOCK_LIST');
+    node?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    node?.focus({ preventScroll: true });
+  };
+
   const handleRunSetupSmoke = async () => {
     setSetupSmokeError(null);
     setSetupSmokeSuccess('');
@@ -1362,6 +1375,7 @@ const SettingsPage: React.FC = () => {
                 smokeSuccess={setupSmokeSuccess}
                 onRefresh={refreshSetupStatus}
                 onSelectCategory={setActiveCategory}
+                onEditStockList={handleEditSetupStockList}
                 onRunSmoke={handleRunSetupSmoke}
                 listSeparator={uiLanguage === 'en' ? ', ' : '、'}
                 t={t}
