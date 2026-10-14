@@ -33,4 +33,5 @@
 - **`YFINANCE_PRIORITY` 不是只影響美股。**設成小於 1 會讓 yfinance 排到本地 DB 前面,Yahoo 一有資料就不再讀 `market` schema。
 - **指數別名漏登記會被當成同字母的個股**:`SOX` 沒進 `us_index_mapping.py` 時解析成另一家真實公司,價格是真的、公司是錯的。非美股指數的坑見 `docs/realtime-board.md`。
 - **yfinance 報價路徑在本地名稱索引命中時不呼叫 `ticker.info`**(那是看板延遲的主因),所以 quote 上的 PE/PB/幣別為空是設計,估值由 fundamental 階段回填。別為了補欄位把 `ticker.info` 加回報價路徑。
+- **AkShare 內部的 `requests.get` 不帶 timeout,而 `DataFetcherManager` 呼叫 fetcher 時持有該實例的鎖**(`_call_fetcher_method`)。對端握手不回應時,這次呼叫永遠不返回,排在同一把鎖後面的其他股票也跟著停,整份報告卡死且不報錯(2026-10-12 實測卡在 `stock_cyq_em`)。新增或改動 `ak.*` 呼叫一律包 `_akshare_call_with_timeout`;目前仍未包的有 `stock_zh_a_hist`、`fund_etf_hist_em` 與幾個 spot 介面,只走 A 股/ETF 路徑。A 股專屬的補充資料(籌碼、資金流)在 manager 層用 `_is_non_cn_request` 擋掉非 A 股,別只在單一 fetcher 裡擋。
 - **`tw_institutional_fetcher.py` 檔頭說它「沒有接進報告」,那句是上游留下的舊描述**:實際已由 `base.py` 的基本面組裝呼叫,不是死碼,別依檔頭把呼叫端刪掉。
