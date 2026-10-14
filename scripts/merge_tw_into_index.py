@@ -65,10 +65,14 @@ def merge_into(path: Path, tw_rows):
         return
     items = json.load(open(path, encoding="utf-8"))
     before = len(items)
+    # 新 TW 段落放回旧 TW 段落的位置（没有旧条目才接在末尾）：其他脚本会在 TW 之后追加
+    # 美股/指数，若每次都搬到末尾，整段台股在 diff 里会全删全加，看不出实际增减。
+    first_tw = next((i for i, x in enumerate(items) if is_tw(x)), len(items))
+    insert_at = sum(1 for x in items[:first_tw] if not is_tw(x))
     kept = [x for x in items if not is_tw(x)]  # 去掉旧 TW 条目（幂等）
     seen = {str(x[0]).upper() for x in kept if isinstance(x, list) and x}
     added = [r for r in tw_rows if r[0].upper() not in seen]
-    merged = kept + added
+    merged = kept[:insert_at] + added + kept[insert_at:]
     with open(path, "w", encoding="utf-8") as f:
         f.write("[\n")
         for i, item in enumerate(merged):

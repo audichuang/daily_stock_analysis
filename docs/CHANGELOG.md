@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 台股自动补全补齐带尾字母的代号与特别股：`fetch_tw_stock_list.py` 原本只收纯数字代号与 CFI `ES`/`CE`，槓桿／反向／债券／主动式 ETF（`00631L`、`00632R`、`00679B`、`00400A`）与特别股（CFI `EP`/`EF`，如 `8349A`）全数漏收；官方页改用 cp950 解码，修正 `宏碁`、`建碁`、`恒耀` 等 14 档名称乱码（原本索引里 `宏碁` 只剩「宏」，按名称搜不到）。台股索引 2124 → 2366 档。Web `normalizeStockCode` 同步把 `00631l.tw` 正规化为 `00631L.TW`；分享图标题不再把 `00631L.TW` 截成 `00631`
 - [修复] 每日报告不再被筹码分布卡死：`DataFetcherManager.get_chip_distribution` 对非 A 股（台/美/港/日/韩）直接跳过，所有筹码源（AkShare／Tushare／妙想）均为 A 股专属；AkShare 的 `ak.stock_cyq_em` 改经 `_akshare_call_with_timeout` 有界等待——akshare 内部 `requests.get` 未带 timeout，东方财富握手无响应时会永久阻塞并占住 `AkshareFetcher` 调用锁（2026-10-12 实测卡在 2383.TW）
 - [修复] 上游问股对象状态（#2397）在 Postgres 应用库上可运行：`conversation_session_states` 新增 9 栏只有 SQLite 迁移，Postgres 补 `ADD COLUMN IF NOT EXISTS`（否则 `DatabaseManager` 初始化即 `UndefinedColumn`）；用户回合 upsert 改按方言；严格回测的 `json_valid`／`json_extract` 在 Postgres 编译为 `pg_input_is_valid`＋`#>>`；对象状态 CAS 读取加 `FOR UPDATE`，Postgres 并发提交不再双双成功
 - [修复] 问股对象辨识认得台股上柜 `.TWO` 与带字母代码（`00631L.TW`、`2887A.TW`）

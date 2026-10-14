@@ -2,13 +2,13 @@
 
 ## 日本/韩国/台湾个股 suffix-only MVP（Issue #1718，Refs #1718）
 
-当前阶段支持日本、韩国、台湾股票的 Yahoo Finance 后缀代码，进入既有个股分析、历史保存和基础报告展示链路。Web 自动补全内置一批常用日股/韩股种子索引；台股为全量索引（约 2100 档上市櫃个股与 ETF，来源为台湾证交所/柜买中心官方公开清单），支持按 suffix 代码、中文名称或别名搜索。未收录的标的仍可手动输入完整 suffix 代码（如 `2330.TW`）直接分析。
+当前阶段支持日本、韩国、台湾股票的 Yahoo Finance 后缀代码，进入既有个股分析、历史保存和基础报告展示链路。Web 自动补全内置一批常用日股/韩股种子索引；台股为全量索引（约 2360 档上市櫃普通股、特别股与 ETF，含槓桿／反向／债券 ETF 等带尾字母代号；权证、ETN、REITs 不收录；来源为台湾证交所/柜买中心官方公开清单），支持按 suffix 代码、中文名称或别名搜索。未收录的标的仍可手动输入完整 suffix 代码（如 `2330.TW`）直接分析。
 
 台股索引维护流程（需联网）：
 
 ```bash
 python3 scripts/fetch_tw_stock_list.py   # 抓官方清单 -> scripts/stock_index_seeds/stock_list_tw.csv
-python3 scripts/merge_tw_into_index.py   # 合并进 public/static/data-cache 三处 stocks.index.json
+python3 scripts/merge_tw_into_index.py   # 合并进 public/static/data-cache 三处 stocks.index.json（台股段落原位替换）
 ```
 
 > 因 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` 默认从上游拉取（不含台股）会覆盖本地缓存，启用台股全量索引的部署需将其设为 `false`。
@@ -21,6 +21,7 @@ python3 scripts/merge_tw_into_index.py   # 合并进 public/static/data-cache �
 - 台湾上市：`2330.TW`
 - 台湾上柜：`6488.TWO`
 - 台湾 ETF（5~6 位代码）：`00878.TW`、`006208.TW`
+- 台湾带尾字母代号（槓桿／反向／债券 ETF、特别股）：`00631L.TW`、`00632R.TW`、`00679B.TWO`、`2887A.TW`
 
 约束与边界：
 
@@ -35,7 +36,7 @@ python3 scripts/merge_tw_into_index.py   # 合并进 public/static/data-cache �
 
 - 不承诺实时行情；Yahoo Finance 数据可能延迟或字段缺失。
 - 不承诺完整基本面、行业/板块、市场宽度或涨跌家数。日/韩/台大盘复盘均已提供，但边界不同：JP/KR v1 仅主要指数+新闻线索+模板/LLM 复盘；台股复盘含上市涨跌家数、成交额与三大法人（TWSE/TPEx）。三者均不含完整市场宽度或板块排行。
-- 不承诺完整日/韩全市场股票列表；Web 自动补全对日韩仅覆盖各 30 只左右头部标的，对台股为全量索引（约 2100 档）；未命中时仍可手动输入 suffix 代码。
+- 不承诺完整日/韩全市场股票列表；Web 自动补全对日韩仅覆盖各 30 只左右头部标的，对台股为全量索引（约 2360 档）；未命中时仍可手动输入 suffix 代码。
 - 不补齐 Portfolio 的 JPY/KRW/TWD 汇率、成本、市值完整口径；相关字段仅放开市场类型以避免前后端校验拒绝。
 
 回滚方式：移除 `jp/kr/tw` 市场识别、交易日历注册、YFinance 路由扩展、Web/API 类型放行、`scripts/stock_index_seeds/` 日韩种子索引，并删除本文档中的能力声明。
@@ -90,7 +91,7 @@ PY
 
 当前阶段支持手动输入台湾股票的 Yahoo Finance 后缀代码，进入既有个股分析、历史保存、报告渲染、DecisionSignal、Portfolio 和 Intelligence 链路。TWSE 上市股票使用 `.TW` 后缀，TPEx 上柜（柜买）股票使用 `.TWO` 后缀，二者折叠为同一 `tw` 市场标签。
 
-近期台股链路已从早期 MVP 收敛为一等个股分析市场：市场识别、数据路由、交易日历/市场阶段、YFinance 日线与基础行情、主要指数、服务层/API/Web 市场枚举、TWD 币种标注、三大法人报告区块与 LLM prompt 消费、台股股票池种子/自动补全（约 2100 档上市櫃个股与 ETF）、大盘复盘 `MARKET_REVIEW_REGION=tw`（TWSE/TPEx 官方 OpenAPI）均已接入。仍需保留的边界是：Market Light 大盘红绿灯告警仍限 `cn/hk/us`（未含 `tw`）、完整台股市场宽度/板块排行尚未纳入。
+近期台股链路已从早期 MVP 收敛为一等个股分析市场：市场识别、数据路由、交易日历/市场阶段、YFinance 日线与基础行情、主要指数、服务层/API/Web 市场枚举、TWD 币种标注、三大法人报告区块与 LLM prompt 消费、台股股票池种子/自动补全（约 2360 档上市櫃普通股、特别股与 ETF）、大盘复盘 `MARKET_REVIEW_REGION=tw`（TWSE/TPEx 官方 OpenAPI）均已接入。仍需保留的边界是：Market Light 大盘红绿灯告警仍限 `cn/hk/us`（未含 `tw`）、完整台股市场宽度/板块排行尚未纳入。
 
 支持格式：
 
@@ -100,7 +101,7 @@ PY
 
 约束与边界：
 
-- **严格 suffix-only**：裸 `2330`、`00878` 等不带后缀的代码不会进入台股语义（`detect_market` / `get_market_for_stock` 仅在显式 `.TW`/`.TWO` 后缀时返回 `tw`）。Web 自动补全已内置台股全量种子索引（约 2100 档，可按代码/中文名/别名搜索并补上后缀）；未收录标的仍需手动输入完整 suffix 代码。
+- **严格 suffix-only**：裸 `2330`、`00878` 等不带后缀的代码不会进入台股语义（`detect_market` / `get_market_for_stock` 仅在显式 `.TW`/`.TWO` 后缀时返回 `tw`）。Web 自动补全已内置台股全量种子索引（约 2360 档，可按代码/中文名/别名搜索并补上后缀）；未收录标的仍需手动输入完整 suffix 代码。
 - 台股日线优先读本地 Postgres `market` schema（`MarketDBFetcher`），查无资料才退 `YfinanceFetcher`；实时行情优先走永丰 Shioaji，缺金钥或无报价时退 `YfinanceFetcher`（见 [`realtime-board.md`](realtime-board.md)）。不尝试 AkShare、Tushare、Efinance、Pytdx、Baostock 等 A 股专属数据源。
 - 基本面复用既有 offshore yfinance 轻量路径；`institution` 区块额外消费台股三大法人资料并渲染到报告，A 股专属资金流、龙虎榜、板块等能力按 `not_supported` 降级。
 - 台股 valuation（PE/PB/殖利率）由 `TwseFundamentalAdapter` 用 TWSE BWIBBU_ALL（上市）+ TPEx peratio_analysis（上柜）免金钥全市场快照补全（yfinance 对台股不返回 PE/PB），在 `get_fundamental_context` 的 valuation 阶段叠加，source_chain 标记 `twse_fundamental`；全市场快照 4h TTL 缓存、fail-open，ETF 与查无代码回空。
@@ -116,7 +117,7 @@ PY
 
 - 未注入 Shioaji 金钥时不承诺实时行情；此时走 Yahoo Finance，数据可能延迟或字段缺失。
 - 不承诺完整基本面、行业/板块、市场宽度或涨跌家数（台股涨跌家数仅上市口径）；`MARKET_REVIEW_REGION` 接受 `cn/hk/us/tw/jp/kr/both` 或这些市场的逗号子集（按输入顺序保留，如 `tw,us` = 台股在前）。台股大盘复盘已接入（TWSE/TPEx 官方 OpenAPI，见 `data_provider/twse_fetcher.py`）。
-- 台股股票索引/种子与 Web 自动补全已接入（约 2100 档上市櫃个股与 ETF）；但告警 MarketRegion 与后端 Market Light 告警仍限 `cn/hk/us`，未含 `tw/jp/kr`。
+- 台股股票索引/种子与 Web 自动补全已接入（约 2360 档上市櫃普通股、特别股与 ETF）；但告警 MarketRegion 与后端 Market Light 告警仍限 `cn/hk/us`，未含 `tw/jp/kr`。
 - 不补齐 Portfolio 的 TWD 汇率、成本、市值完整口径；台股 Portfolio 当前属于 partial valuation 市场。
 
 回滚方式：移除 `tw` 市场识别、交易日历注册、YFinance 路由扩展、三大法人资料层/报告消费、TWD 标注、服务层/API 市场枚举及前端市场类型放行，并删除本文档中的能力声明。
