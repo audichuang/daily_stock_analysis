@@ -6,8 +6,14 @@
   - 上市 TWSE: https://isin.twse.com.tw/isin/C_public.jsp?strMode=2  -> .TW
   - 上柜 TPEx: https://isin.twse.com.tw/isin/C_public.jsp?strMode=4  -> .TWO
 
-只保留普通股/特别股（CFICode 以 ES 开头）与 ETF（CE 开头），排除权证(RW)、
-存托凭证、债券等 yfinance 不稳定支持的标的。
+只保留普通股（CFICode 以 ES 开头）、特别股（EP / EF）与 ETF（CE），排除权证(RW)、
+ETN(CM)、REITs(CB)、资产基础证券(DA)、存托凭证、债券等 yfinance 不稳定支持的标的。
+
+代号是 4~6 位数字加至多一个大写尾字母（槓桿 00631L / 反向 00632R / 债券 ETF 00679B /
+主动式 ETF 00400A / 特别股 2887A）；权证同样带尾字母（03001T），所以挡它们的是 CFI 而不是代号格式。
+
+页面是 Big5，但必须用 cp950 解码：严格 big5 不认 0xF9xx 的倚天扩充字（碁、恒…），
+`宏碁` 会变成乱码，再被索引清洗成只剩「宏」，搜不到。
 
 输出：scripts/stock_index_seeds/stock_list_tw.csv（ts_code,symbol,name,enname,aliases）
 
@@ -17,6 +23,7 @@
 """
 import argparse
 import csv
+import re
 import sys
 from pathlib import Path
 
@@ -30,6 +37,12 @@ SOURCES = [
     ("https://isin.twse.com.tw/isin/C_public.jsp?strMode=2", "TW"),   # 上市
     ("https://isin.twse.com.tw/isin/C_public.jsp?strMode=4", "TWO"),  # 上柜
 ]
+
+# 与 api/v1/endpoints/stocks.py 的 _STOCK_CODE_RE 台股分支同语意；用 [0-9] 而非 \d / isdigit()，
+# 免得全形数字混进来。
+TW_CODE_RE = re.compile(r"[0-9]{4,6}[A-Z]?")
+# 普通股 ES / 特别股 EP、EF / ETF CE
+KEPT_CFI_PREFIXES = ("ES", "EP", "EF", "CE")
 
 # 少数大型权值股补充英文/常用别名，方便英文与简体搜索；其余仅以中文名+代码检索。
 ALIAS_OVERRIDE = {
@@ -46,11 +59,15 @@ ALIAS_OVERRIDE = {
 }
 
 
+def decode_big5(raw: bytes) -> str:
+    """ISIN 页面宣告 Big5，实际含 cp950 扩充字；严格 big5 会把「碁」「恒」解成乱码。"""
+    return raw.decode("cp950", errors="replace")
+
+
 def fetch(url: str) -> str:
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
-    resp.encoding = "big5"
-    return resp.text
+    return decode_big5(resp.content)
 
 
 def parse_rows(html: str, suffix: str):
@@ -65,10 +82,10 @@ def parse_rows(html: str, suffix: str):
         if len(parts) != 2:
             continue
         code, name = parts[0].strip(), parts[1].strip()
-        if not code.isdigit() or not (4 <= len(code) <= 6) or not name:
+        if not TW_CODE_RE.fullmatch(code) or not name:
             continue
         cfi = cells[5].strip()
-        if not (cfi.startswith("ES") or cfi.startswith("CE")):  # 普通/特别股 + ETF
+        if not cfi.startswith(KEPT_CFI_PREFIXES):
             continue
         out.append((f"{code}.{suffix}", name))
     return out
@@ -84,7 +101,7 @@ def main():
     seen = set()
     for i, (url, suffix) in enumerate(SOURCES):
         if args.from_cache:
-            html = Path(args.from_cache[i]).read_text(encoding="big5", errors="ignore")
+            html = decode_big5(Path(args.from_cache[i]).read_bytes())
         else:
             print(f"抓取 {url} ...")
             html = fetch(url)

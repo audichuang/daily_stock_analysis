@@ -12,6 +12,7 @@
  *   hk1810      → HK01810    1810.HK     → HK01810
  *   7203.T      → 7203.T     005930.KS   → 005930.KS
  *   2330.TW     → 2330.TW    6488.TWO    → 6488.TWO
+ *   00631l.tw   → 00631L.TW  8349a.two   → 8349A.TWO
  *   AAPL        → AAPL       TSLA        → TSLA
  */
 export function normalizeStockCode(stockCode: string): string {
@@ -76,9 +77,11 @@ export function normalizeStockCode(stockCode: string): string {
     if ((suffix === 'KS' || suffix === 'KQ') && /^\d{6}$/.test(base)) {
       return `${base}.${suffix}`;
     }
-    // TW Yahoo suffix-only codes (TWSE `.TW` / TPEx `.TWO`), base 4-6 digits.
-    if ((suffix === 'TW' || suffix === 'TWO') && /^\d{4,6}$/.test(base)) {
-      return `${base}.${suffix}`;
+    // TW Yahoo suffix-only codes (TWSE `.TW` / TPEx `.TWO`), base 4-6 digits plus
+    // at most one trailing letter (00631L / 00632R / 00679B / 2887A), uppercased
+    // like the backend so `00631l.tw` and `00631L.TW` are the same stock.
+    if ((suffix === 'TW' || suffix === 'TWO') && /^\d{4,6}[A-Z]?$/i.test(base)) {
+      return `${base.toUpperCase()}.${suffix}`;
     }
 
     // 00700.HK → HK00700

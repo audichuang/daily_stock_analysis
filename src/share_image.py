@@ -62,8 +62,10 @@ _MARKET_REGION_REF_RE = re.compile(
     r"^\[dsa-market-region\]:\s+#\s+\(\s*([a-z,]+)\s*\)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+# 台股 base 可带一个尾字母（槓桿 00631L / 反向 00632R / 债券 ETF 00679B / 特别股 8349A），
+# 漏掉会被后面的 ``\d{5,6}`` 截成 ``00631``，海报印出另一档代码。
 _SUFFIXED_NUMERIC_CODE_PATTERN = (
-    r"(?:\d{6}\.(?:SH|SZ|SS|BJ|KS|KQ)|\d{1,5}\.HK|\d{4,6}\.(?:TWO|TW)|\d{4,5}\.T)"
+    r"(?:\d{6}\.(?:SH|SZ|SS|BJ|KS|KQ)|\d{1,5}\.HK|\d{4,6}[A-Z]?\.(?:TWO|TW)|\d{4,5}\.T)"
 )
 _CODE_RE = re.compile(
     rf"(?:\(|（)?({_SUFFIXED_NUMERIC_CODE_PATTERN}|(?:(?i:sh|sz|bj|hk))?\d{{5,6}}(?:\.[A-Z]{{2}})?|(?<![A-Za-z])[A-Z]{{1,5}}(?:\.[A-Z])?(?![A-Za-z]))(?:\)|）)?",

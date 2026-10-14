@@ -78,6 +78,14 @@ describe('normalizeStockCode', () => {
     expect(normalizeStockCode('2330')).toBe('2330');
   });
 
+  it('uppercases TW codes with one trailing letter (leveraged / inverse / bond ETF, preferred)', () => {
+    expect(normalizeStockCode('00631l.tw')).toBe('00631L.TW');
+    expect(normalizeStockCode('00679b.two')).toBe('00679B.TWO');
+    expect(normalizeStockCode('2887A.TW')).toBe('2887A.TW');
+    // More than one trailing letter is not a TW code shape; leave it untouched.
+    expect(normalizeStockCode('2330ab.tw')).toBe('2330ab.tw');
+  });
+
   it('is case-insensitive for prefixes', () => {
     expect(normalizeStockCode('sh600519')).toBe('600519');
     expect(normalizeStockCode('sz000001')).toBe('000001');

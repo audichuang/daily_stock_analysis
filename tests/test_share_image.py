@@ -1155,6 +1155,8 @@ def test_dotted_us_ticker_is_preserved_in_stock_heading():
         ("## 台积电 (2330.TW)", "台积电", "2330.TW"),
         ("## 台塑化 (6505.TWO)", "台塑化", "6505.TWO"),
         ("## 国泰永续高股息 (00878.TW)", "国泰永续高股息", "00878.TW"),
+        ("## 元大台湾50正2 (00631L.TW)", "元大台湾50正2", "00631L.TW"),
+        ("## 恒耀甲特 (8349A.TWO)", "恒耀甲特", "8349A.TWO"),
     ],
 )
 def test_suffix_stock_code_is_preserved_in_stock_heading(heading, company, code):
