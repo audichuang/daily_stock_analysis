@@ -158,6 +158,7 @@ daily_stock_analysis/
 | Secret 名称 | 说明 | 必填 |
 |------------|------|:----:|
 | `STOCK_LIST` | 自选股代码，如 `600519,300750,002594,7203.T,005930.KS,2330.TW`；推荐使用英文逗号，中文逗号、顿号、分号、空格和换行会被识别并规范为英文逗号 | ✅ |
+| `ANALYZE_PORTFOLIO_HOLDINGS` | 默认 `false`。设为 `true` 时，未指定 `--stocks`/`--portfolio` 的运行（含定时任务）会把持仓账本（Web「持仓」页）中数量 > 0 的持股去重后附加到 `STOCK_LIST` 之后一起分析；持仓由账本交易流水唯读重播得出（只含启用中账户、不抓实时价、不写持仓缓存），所以刚录入的交易不必先打开持仓页；读不到账本时退回只分析 `STOCK_LIST`。代码无法判定为账户市场的持仓（如台股账户里不带后缀的 `2330` 会被识别成港股）会跳过并记 warning，请在账本使用 `2330.TW` 这类带后缀代码。与 `STOCK_LIST` 一样，`--schedule` / Web 定时任务每轮重新读取 `.env`，改了不必重启（经进程环境变量注入时除外）。GitHub Actions 每日工作流未映射此变量，设成 Secret 也不生效（其应用库也没有本地持仓） | 可选 |
 | `ANSPIRE_API_KEYS` | [Anspire AI Search](https://aisearch.anspire.cn/) 针对中文内容特别优化；同一 Key 可用于搜索与 Anspire 大模型网关的兜底示例（是否可用以控制台与账号权限为准） | 推荐 |
 | `SERPAPI_API_KEYS` | [SerpAPI](https://serpapi.com/github-daily-stock-analysis) 搜索引擎结果补强，适合实时金融新闻 | 推荐 |
 | `TAVILY_API_KEYS` | [Tavily](https://tavily.com/) 搜索 API（新闻搜索） | 可选 |

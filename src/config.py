@@ -976,6 +976,8 @@ class Config:
 
     # === 自选股配置 ===
     stock_list: List[str] = field(default_factory=list)
+    # 每日分析时把本地持仓账本（Web 持仓页）的持股并进 STOCK_LIST；仅作用于未指定 --stocks/--portfolio 的运行
+    analyze_portfolio_holdings: bool = False
 
     # === 飞书云文档配置 ===
     feishu_app_id: Optional[str] = None
@@ -1910,6 +1912,7 @@ class Config:
 
         return cls(
             stock_list=stock_list,
+            analyze_portfolio_holdings=parse_env_bool(os.getenv('ANALYZE_PORTFOLIO_HOLDINGS'), default=False),
             feishu_app_id=os.getenv('FEISHU_APP_ID'),
             feishu_app_secret=os.getenv('FEISHU_APP_SECRET'),
             feishu_folder_token=os.getenv('FEISHU_FOLDER_TOKEN'),

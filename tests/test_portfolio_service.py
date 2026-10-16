@@ -259,6 +259,77 @@ class PortfolioServiceTestCase(unittest.TestCase):
         self.assertTrue(pos["price_stale"])
         self.assertTrue(pos["price_available"])
 
+    def test_snapshot_positions_carry_stock_index_name(self) -> None:
+        today = date.today()
+        account = self.service.create_account(name="Main", broker="Demo", market="cn", base_currency="CNY")
+        aid = account["id"]
+        for symbol in ("600519", "000001"):
+            self.service.record_trade(
+                account_id=aid,
+                symbol=symbol,
+                trade_date=today,
+                side="buy",
+                quantity=10,
+                price=100,
+                market="cn",
+                currency="CNY",
+            )
+            self._save_close(symbol, today - timedelta(days=1), 100.0)
+
+        names = {"600519": "贵州茅台"}
+        with patch(
+            "src.services.portfolio_service.get_index_stock_name",
+            side_effect=lambda code: names.get(code),
+        ):
+            snapshot = self.service.get_portfolio_snapshot(
+                account_id=aid,
+                as_of=today,
+                cost_method="fifo",
+                include_realtime=False,
+            )
+
+        by_symbol = {pos["symbol"]: pos for pos in snapshot["accounts"][0]["positions"]}
+        self.assertEqual(by_symbol["600519"]["name"], "贵州茅台")
+        # Unknown symbols stay None so the UI falls back to the bare code.
+        self.assertIn("name", by_symbol["000001"])
+        self.assertIsNone(by_symbol["000001"]["name"])
+
+    def test_daily_holdings_merge_reads_ledger_even_after_write_wipes_position_cache(self) -> None:
+        import main
+
+        today = date.today()
+        tw = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
+        cn = self.service.create_account(name="CN", broker="Demo", market="cn", base_currency="CNY")
+        closed = self.service.create_account(name="Closed", broker="Demo", market="tw", base_currency="TWD")
+        trades = [
+            (tw["id"], "2303.TW", "buy", 450),
+            (tw["id"], "2408.TW", "buy", 160),
+            (tw["id"], "2408.TW", "sell", 160),  # fully sold: must not be analyzed
+            (cn["id"], "600519", "buy", 10),
+            (closed["id"], "3380.TW", "buy", 20000),
+        ]
+        for account_id, symbol, side, quantity in trades:
+            self.service.record_trade(
+                account_id=account_id,
+                symbol=symbol,
+                trade_date=today,
+                side=side,
+                quantity=quantity,
+                price=50,
+            )
+        self.service.deactivate_account(closed["id"])
+        # Every write wipes the account's position cache; nobody has opened the page since.
+        self.assertEqual(self.service.repo.list_cached_position_identities(), [])
+
+        config = SimpleNamespace(analyze_portfolio_holdings=True)
+        # Holdings selection needs no prices; keep the TW close lookup off the market Postgres.
+        with patch.object(PortfolioRepository, "_get_tw_market_latest_close", return_value=None):
+            merged = main._merge_portfolio_holdings(config, ["0050.TW", "2303.TW"])
+
+        self.assertEqual(merged, ["0050.TW", "2303.TW", "600519"])
+        # The read-only replay must not write the position cache as a side effect.
+        self.assertEqual(self.service.repo.list_cached_position_identities(), [])
+
     def test_current_snapshot_does_not_serialize_non_bulk_realtime_prefetch(self) -> None:
         today = date.today()
         account = self.service.create_account(name="Main", broker="Demo", market="cn", base_currency="CNY")

@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 每日分析可自动纳入持仓：新配置 `ANALYZE_PORTFOLIO_HOLDINGS=true` 时，未指定 `--stocks`/`--portfolio` 的运行会把持仓账本里的持股去重后附加到 `STOCK_LIST` 之后一起分析（默认关闭；持仓由账本流水唯读重播、不依赖持仓页缓存；代码无法判定为账户市场的持仓会跳过并记 warning；读不到账本时退回只分析自选股）
+- [改进] 持仓明细显示股票名称：`PortfolioPositionItem` 新增可选字段 `name`（取自本地股票索引，查不到为 `null`），持仓页在代码下方显示名称
 - [修复] 持仓页台股不再整列缺价：快照估值的历史收盘原本只查应用库 `stock_daily`（只有被分析过的股票才有），Web 持仓页又固定不拉实时价，没分析过的台股一律显示缺价、无报酬率并从市值汇总排除；`.TW`/`.TWO` 现在同时查 `market.price`，两边取较新的一天（fail-open，查不到退回原结果）
 - [修复] 非人民币帐户的汇总不再以 1:1 冒充人民币：快照跨帐户汇总统一换算成 CNY，但「刷新汇率」只抓交易币别→帐户币别，从不抓帐户币别→CNY，台币／美元帐户的汇总因此走 1:1 回退（台币数字标成 CNY、整页标记汇率过期）；刷新现在会一并抓这一对
 - [修复] 持仓帐本在 Postgres 应用库上可写入：`portfolio_write_session` 原本写死 SQLite 的 `BEGIN IMMEDIATE`，Postgres 上每一笔交易／现金流水／公司行为的新增与删除都 SyntaxError（含 Web 手动录入与 CSV 导入）；改按方言分派，Postgres 用交易范围的 `pg_advisory_xact_lock` 串行化，卖出可用量校验仍在同一写锁内
