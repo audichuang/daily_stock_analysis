@@ -97,6 +97,14 @@ def object_mentions(text: str, registry: IndexRegistry, lookup: dict) -> tuple[O
     return tuple(sorted(mentions, key=lambda item: (item.start, item.end)))
 
 
+# fork: 下面的動詞／問句／比較規則都是簡體字面量，繁體輸入（「怎麼樣」「換成」「診斷」）會全部比不到，
+# 最後落到 maintain、範圍為空、工具全被擋。謂語比對前先把這些字逐字轉成簡體；只做一對一字元
+# 替換，mention 的位置在轉換前算好，偏移不變。
+_TRADITIONAL_FOLD = str.maketrans(
+    "換診斷別無設麼則說順帶後並較對請現當還適買賣資樣數標異區個隻誰選風險勢術財務狀況嗎",
+    "换诊断别无设么则说顺带后并较对请现当还适买卖资样数标异区个只谁选风险势术财务状况吗",
+)
+
 _OPERATIONS = re.compile(r"换成|改看|切换到|分析|看看|研究|诊断|看")
 _SWITCHES = {"换成", "改看", "切换到"}
 _CLAUSE = re.compile(r"[，。！？!?；;,\n]")
@@ -153,6 +161,7 @@ def decide_chat_object(message: str, current: Optional[StockIdentity], registry:
     """One mutually exclusive decision; callers apply live/history fact eligibility."""
     text = unicodedata.normalize("NFKC", message)
     mentions = object_mentions(text, registry, lookup)
+    text = text.translate(_TRADITIONAL_FOLD)
     affirmative, uncertain, denied = [], False, False
     for operation in _OPERATIONS.finditer(text):
         qualification, prefix = _qualification(text, operation)
@@ -245,6 +254,14 @@ def decide_chat_object(message: str, current: Optional[StockIdentity], registry:
                             and item.identity is not None)
         if len(set(relevant)) > 1:
             return ObjectDecision("clarify")
+        # fork: 整句只指向一個、而且都解析得到的標的（「2330.TW 台積電現在價格多少？」「AAPL 怎麼看」），
+        # 就以它為本輪對象。上游要求先有「分析／看看」或固定問句，台股美股使用者的自然問法幾乎都落空。
+        unresolved = any(item.identity is None for item in mentions)
+        if len(set(relevant)) == 1 and not unresolved and not uncertain:
+            target = next(item for item in mentions if item.identity == relevant[0])
+            if target.identity == current:
+                return ObjectDecision("maintain")
+            return ObjectDecision("confirm", target=target, changes_target=True)
     if current is None and re.fullmatch(
         r"\s*(?:(?:分析|看看|研究|诊断)(?:一下子|一下|下)?\s*)?"
         r"(?:近期|最近|当前)?(?:风险|走势|估值|基本面|技术面|财务状况|盈利能力|它|还能买吗|怎么样)"

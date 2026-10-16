@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 問股（Agent）認不出台股／美股：繁體問法（「怎麼看」「換成」「別看」「哪個好」）先逐字折成簡體再比對謂語；整句只指向單一可解析標的時（「2330.TW 台積電現在價格多少？」「AAPL 最近怎麼樣」）直接以它為本輪對象。原本這類問句落到空範圍，工具全被擋，Agent 回答「只支援 A 股」
+- [修復] 問股首輪還沒有對象時不再預設 A 股：系統提示改用不分市場的角色與說明，依使用者給的代碼判斷市場；工具參數範例補上台股代碼
 - [新功能] 每日分析可自动纳入持仓：新配置 `ANALYZE_PORTFOLIO_HOLDINGS=true` 时，未指定 `--stocks`/`--portfolio` 的运行会把持仓账本里的持股去重后附加到 `STOCK_LIST` 之后一起分析（默认关闭；持仓由账本流水唯读重播、不依赖持仓页缓存；代码无法判定为账户市场的持仓会跳过并记 warning；读不到账本时退回只分析自选股）
 - [改进] 持仓明细显示股票名称：`PortfolioPositionItem` 新增可选字段 `name`（取自本地股票索引，查不到为 `null`），持仓页在代码下方显示名称
 - [修复] 持仓页台股不再整列缺价：快照估值的历史收盘原本只查应用库 `stock_daily`（只有被分析过的股票才有），Web 持仓页又固定不拉实时价，没分析过的台股一律显示缺价、无报酬率并从市值汇总排除；`.TW`/`.TWO` 现在同时查 `market.price`，两边取较新的一天（fail-open，查不到退回原结果）

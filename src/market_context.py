@@ -83,6 +83,26 @@ _MARKET_ROLES = {
     },
 }
 
+# fork: 問股首輪還沒有分析對象時（stock_code 為空），不要預設成 A 股——否則 Agent 會自稱
+# 「A 股分析師」並回答「只支援 A 股」。市場由使用者提到的代碼決定。
+_UNSCOPED_ROLE = {
+    "zh": "股票",
+    "en": "stock",
+}
+
+_UNSCOPED_GUIDELINES = {
+    "zh": (
+        "- 本輪尚未確定分析對象。請依使用者提到的股票代碼判斷市場（`.TW`/`.TWO` 為台股、純字母代碼為美股、"
+        "`.HK` 為港股、`.T` 為日股、`.KS`/`.KQ` 為韓股、6 位數字為 A 股），套用該市場的交易制度；"
+        "不要預設為任何單一市場，也不要聲稱只支援某個市場。"
+    ),
+    "en": (
+        "- No analysis target is fixed yet. Infer the market from the ticker the user gives (`.TW`/`.TWO` "
+        "Taiwan, plain letters US, `.HK` Hong Kong, `.T` Japan, `.KS`/`.KQ` Korea, 6 digits China A-share) "
+        "and apply that market's rules; do not assume any single market or claim only one market is supported."
+    ),
+}
+
 _MARKET_GUIDELINES = {
     "cn": {
         "zh": (
@@ -167,8 +187,10 @@ def get_market_role(stock_code: Optional[str], lang: str = "zh") -> str:
     Returns:
         Role string like 'A 股投资分析' or 'US stock investment analysis'.
     """
-    market = detect_market(stock_code)
     lang_key = "en" if lang in ("en", "ko") else "zh"
+    if not (stock_code or "").strip():
+        return _UNSCOPED_ROLE[lang_key]
+    market = detect_market(stock_code)
     return _MARKET_ROLES.get(market, _MARKET_ROLES["cn"])[lang_key]
 
 
@@ -182,6 +204,8 @@ def get_market_guidelines(stock_code: Optional[str], lang: str = "zh") -> str:
     Returns:
         Multi-line string with market-specific guidelines.
     """
-    market = detect_market(stock_code)
     lang_key = "en" if lang in ("en", "ko") else "zh"
+    if not (stock_code or "").strip():
+        return _UNSCOPED_GUIDELINES[lang_key]
+    market = detect_market(stock_code)
     return _MARKET_GUIDELINES.get(market, _MARKET_GUIDELINES["cn"])[lang_key]
