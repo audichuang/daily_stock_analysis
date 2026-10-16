@@ -27,7 +27,7 @@
 - `README.md` 只用于项目定位、核心能力总览、快速开始、主要入口、赞助/合作等首页级信息；非必要不更新 README，避免持续膨胀。
 - 更细的模块行为、页面交互、专题配置、排障说明、字段契约、实现语义和边界条件，优先更新对应 `docs/*.md` 或专题文档，不写入 README。
 - 变更中英双语文档之一时，需评估另一份是否需要同步；若未同步，交付说明里要写明原因。
-- 注释、docstring、日志文案以清晰准确为准，不强制要求英文，但应与文件语境保持一致。
+- 注释、docstring、日志文案以清晰准确为准，不强制要求英文。本 fork **新寫的**註解、提示詞、CHANGELOG 條目用繁體中文；既有簡體不必回頭改。
 
 ## 1.1 PR 标题规范（非阻断建议）
 
@@ -202,27 +202,27 @@ base=main 的 PR；走直接 merge 就要自己承担这个缺口并在交付说
 - 如果是 `docs` 任务，可直接写：`Docs only, tests not run`，但仍需说明是否核对了命令和文件名。
 - 自动 tag 默认不触发，只有 commit title 包含 `#patch`、`#minor`、`#major` 才会触发版本号更新。
 - 手动打 tag 必须使用 annotated tag。
-- 用户可见变更优先通过 PR 合入，并补齐 label 与验证说明。
+- 本 fork 不開 PR：在分支驗完、經使用者確認後 fast-forward 合進 `main` 並 push；交付說明寫明阻斷 CI 沒跑（§6）。
 
 ## 10. 本 fork 专属约定（与上游的增量）
 
 > 本仓库是个人 fork（`audichuang/daily_stock_analysis`），**不并回上游**，可按本 fork 需要自由演进。以下是上游没有、且从代码/工具推断不出的约定与踩雷：
 
 - **`gh pr create` 在 fork 里预设把 PR 开到上游**（`ZhuLinsen/daily_stock_analysis`）——与本节第一句「不并回上游」正好相反，而且它不会问你。先 `gh repo set-default audichuang/daily_stock_analysis`，或每次带 `--repo`。踩过：第一次开 PR 直接被上游 repo 接走，靠报错才发现。
-- **同步上游用 merge、不用 rebase**（fork 已 push 上百个自有 commit，rebase 等于全部改写、只能 force push）；每轮以最近一份 `docs/upstream-sync-*.md` 为模板写纪录。其中**静默降级排查**不能省：上游新增的市场集合／语言集合常数，逐个问「涵盖 `tw` 吗？涵盖 `zh-TW` 吗？」——漏掉不会报错，台股／繁中路径只会安静地被跳过或退回简体。
+- **同步上游用 merge、不用 rebase**（fork 已 push 上百个自有 commit，rebase 等于全部改写、只能 force push）；每轮以最近一份 `docs/upstream-sync-*.md` 为模板写纪录。其中**静默降级排查**不能省：上游新增的市场集合／语言集合常数，逐个问「涵盖 `tw` 吗？涵盖 `zh-TW` 吗？」——漏掉不会报错，台股／繁中路径只会安静地被跳过或退回简体。同類坑不只在常數：問股的對象判定曾經只比對簡體動詞／問句、無對象時提示詞預設 A 股，繁體問台股就整輪工具被擋。
 - **环境用 `uv`（不用 `python -m venv`）**：建环境 `uv venv --python 3.12`，依赖 `uv pip install -r requirements.txt`，执行一律 `uv run python …`。常用任务封装在根目录 `Makefile`（`make help`）。
 - **台股（`.TW` 上市 / `.TWO` 上柜）是新增重点**：必须带后缀（裸 `2330` 不进台股语义）；代码是 4~6 位数字加至多一个大写字母（`00631L`、`2887A`）。这条格式**没有单一来源**，前后端、报告渲染、索引种子脚本各有一份正则（踩过：`00631L` 搜不到、海报印成 `00631`）；同行写了位数与 `TW` 的正则由 `tests/test_tw_code_pattern_contract.py` 把关，不在同一行的写法（`isdigit()`、分开比对后缀）它看不到，查「带字母的台股不见了」时仍要全扫。
 - **TWSE/TPEx 官方端点会停止更新却照样回 200**（2026-08 实测涨跌家数端点冻结 79 天，连续 20 份复盘印同一组数字）。消费端一律比对回应自带的日期，拿不到参照就拒收——无法证明新鲜的数字不如没有数字。
 - **自动补全索引**：台股全量种子在 `scripts/stock_index_seeds/stock_list_tw.csv`（`make refresh-tw` 重建）。`.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` **必须保持 `false`**——否则运行时会从上游 GitHub 拉索引、覆盖掉本地台股/美股增量（`.env.example` 示例值是上游的 `true`，勿照抄）。
-- **个股分析与大盘复盘走本机 Claude Code CLI（`.env`：`GENERATION_BACKEND=claude_code_cli`、`GENERATION_FALLBACK_BACKEND=` 留空），不需 API key**：LiteLLM 那条的 DeepSeek key 2026-09-29 已失效，留着回退只会产出一份只有模板的复盘。问股 Agent 仍只能走 LiteLLM（local CLI 是 generation-only），所以 Web 问股目前不可用。要改回 LiteLLM 时 `.env` 须显式设 `LITELLM_MODEL`：否则 shell 导出了 `GEMINI_API_KEY` 时 `load_dotenv` 不覆盖既有变量，自动推断会优先选 Gemini。
+- **个股分析与大盘复盘走本机 Claude Code CLI（`.env`：`GENERATION_BACKEND=claude_code_cli`、`GENERATION_FALLBACK_BACKEND=` 留空），不需 API key**：LiteLLM 那条的 DeepSeek key 2026-09-29 已失效，留着回退只会产出一份只有模板的复盘。問股 Agent 只能走 LiteLLM（local CLI 是 generation-only）：NAS 用 Anthropic key（Periphery secret）＋ NAS `config/.env` 的 `LITELLM_MODEL`；本機 `.env` 沒有 key，本機問股不可用。要改回 LiteLLM 时 `.env` 须显式设 `LITELLM_MODEL`：否则 shell 导出了 `GEMINI_API_KEY` 时 `load_dotenv` 不覆盖既有变量，自动推断会优先选 Gemini。
 - **推理模型的 token 预算会静默吃掉整个回应**：`deepseek-v4-flash` 这类会把预算花在推理上，内容为空而 `finish_reason=length`，症状是随机「分析未成功」，**台股美股都会中**。**加预算不是可用的槓桿**——个股分析的 `max_output_tokens` 由 `analyzer.analyze()` 写死 8192，`LLM_MAX_TOKENS` 只有选股 pipeline 读得到；实测 8192 下仍约 1/3 回空。要修就换 `LITELLM_MODEL`。
-- **通知用 Bark，走 Doppler 注入**：`make serve` / `make review-tw` 用 `doppler run -p shioaji -c dev` 把 Doppler 的 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`（`custom_webhook_sender.py` 自动识别 `api.day.app`），secret 不落地 `.env`。**`make analyze` 不含 Doppler 包装**——要 Bark 通知需手动包：`doppler run -p shioaji -c dev -- bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py --stocks 2330.TW'`；非交易日需加 `--force-run`。
+- **通知用 Bark，走 Doppler 注入**：`make serve` / `make review-tw` / 每日報告用 `doppler run -p shioaji -c dev` 把 Doppler 的 `BARK_URL` 映射为 `CUSTOM_WEBHOOK_URLS`（`custom_webhook_sender.py` 自动识别 `api.day.app`），外層再疊 `doppler run -p finmind -c dev` 注入台股新聞用的 `FINMIND_TOKEN_*`；secret 不落地 `.env`。**`make analyze` 不含 Doppler 包装**——少了它不報錯，只會沒 Bark、台股新聞退回通用搜尋。手動包：`doppler run -p finmind -c dev -- doppler run -p shioaji -c dev -- bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py --stocks 2330.TW'`；非交易日需加 `--force-run`。
 - **全量离线测试（`uv run ./scripts/ci_gate.sh`，第四阶段 `pytest -m "not network"`）应该全绿**。耗时依机器差十几倍（实测：这台 Mac 2026-09-29 约 4 分钟、2026-09-20 另一台机器 56 分钟，测试数相当、都是单行程），别拿一个数字估另一台。别把全量当快速门槛（快速验证用受影响测试文件的子集）。
 - **红了先排除四种假红，再判回归**——它们看起来跟回归一模一样：墙钟负载、离线测试连外、本机 `.env` 漏进 `os.environ`、测试吃到真实时段。第一步都是**把红的那个档单独在空机器上重跑**；每一种的特征与判别法在 `tests/AGENTS.md`。排除之后还红，就是回归，不要当 baseline 噪音放过。
 - **别把两个重活并行跑**（pytest 全量 + vitest 全量）：实测 vitest 从 15 failed 变 143 failed，全部是 timeout，两份结果同时被污染。
 - **「离线」测试其实会连外，是这个 repo 最贵的一类坑**（踩过一次挂 6 小时 21 分，只烧 30 秒 CPU）。止血已就位：单测有 timeout（直接打 `pytest` 是 `setup.cfg` 的 300 秒，经 `ci_gate.sh` 是 120 秒），会让它红在那个测试上并印出堆叠。另外 LiteLLM 在 import 时会去 `raw.githubusercontent.com` 抓 model cost map（有本地 fallback，不会挂）。
 - **跑全量期间不要改档**：pytest 在收集期就 import 完模组，边跑边改等于验一个混合状态——踩过：改了常数之后那份「全绿」其实验的是旧值，结论作废、得整轮重跑。要改就等它跑完。
-- **Web 服务正式跑在 NAS（audinas，Komodo stack `dsa`），本机不再常驻**：launchd `com.audichuang.dsa` 已 `disable`，不要重新启用——两边会同时登入 Shioaji，且共用同一个应用库。发版是 push `main` → `ghcr-main.yml` 产出镜像（job summary 印出 `git-<sha7>@sha256:<digest>`）→ 照 ops repo `nas-ops`（ttnas Gitea `audichuang/nas-ops`，本机 `~/Project/nas-ops`；2026-10-06 由 `hindsight-ops` 改名，旧名只剩 301 转址）的 `hosts/audinas/dsa/manifest.md` 手动把 compose 的 `image:` 钉到新 digest、锁 SHA、经 Komodo 部署，并记入同目录 `deployments.md`——**push `main` 不会自动部署**，NAS 一直跑钉住的旧 digest；不要在 NAS 上用 SSH 跑 compose（会和 Komodo 抢同一个 project）。每日报告仍在本机（Orca 18:00 → `make daily-report-detached`）。
+- **Web 服务正式跑在 NAS（audinas，Komodo stack `dsa`），本机不再常驻**：launchd `com.audichuang.dsa` 已 `disable`，不要重新启用——两边会同时登入 Shioaji，且共用同一个应用库。发版是 push `main` → `ghcr-main.yml` 产出镜像（job summary 印出 `git-<sha7>@sha256:<digest>`）→ 照 ops repo `nas-ops`（ttnas Gitea `audichuang/nas-ops`，本机 `~/Project/nas-ops`；2026-10-06 由 `hindsight-ops` 改名，旧名只剩 301 转址）的 `hosts/audinas/dsa/manifest.md` 手动把 compose 的 `image:` 钉到新 digest、锁 SHA、经 Komodo 部署，并记入同目录 `deployments.md`——**push `main` 不会自动部署**，NAS 一直跑钉住的旧 digest；不要在 NAS 上用 SSH 跑 compose（会和 Komodo 抢同一个 project）。每日报告仍在本机（Orca 18:00 → `make daily-report-detached`）；盤前判讀是 Orca 平日 07:30，使用者授權它**只** commit＋push `journal/` 那兩個 jsonl（§1 commit 規則的唯一例外，為了讓預測當天進版控）。
 - **每日报告挂住时是静默的，而且会连带挡掉之后每一轮**：`scripts/daily_report.sh` 只在某一步非零退出时推 Bark，没有整体 timeout；行程挂住就不会出现 `daily report done` 或 `FAILED:`，也不推任何通知。它持有的 `logs/.daily_report.lock` 里 pid 还活着，所以隔天 18:00 那轮只会印「另一輪每日報告仍在執行…本次不重複跑」就退出。判别：log 长时间不增长、行程还在、CPU 近 0；本机没有 py-spy，用 `sample <pid>` 看卡在哪个系统呼叫（2026-10-12 实测卡在 AkShare 的 TLS 握手，见 `data_provider/AGENTS.md`）。
 - **新增会在 serve 路径被 import 的顶层 package／资料夹，要同步 `docker/Dockerfile` 的 COPY**：这里多是函数内惰性 import，`import server` 与所有 router 照样成功，容器里才 `ModuleNotFoundError`，且多数呼叫端吞掉错误、静默退回别的数据源（踩过：`market_data/` 漏拷，台股 `market` schema 在容器里一律读不到）。
 - **`--help` 不是安全探针**：`scripts/` 底下有脚本**没有 argparse**，`main()` 直接做事、把参数忽略或当成路径——`merge_tw_into_index.py` 会改写进版控的索引，`migrate_sqlite_to_pg.py` 会对 `market` schema 做 `TRUNCATE`。拿 `--help` 扫一遍会**真的执行它们**（踩过：一次扫描重写了进版控的 `stocks.index.json`）。要探能不能跑，先 `grep -c argparse`。
