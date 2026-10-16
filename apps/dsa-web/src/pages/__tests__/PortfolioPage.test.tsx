@@ -360,6 +360,24 @@ describe('PortfolioPage FX refresh', () => {
     expect(getRisk).toHaveBeenCalledWith({ accountId: undefined, costMethod: 'fifo', includeRealtime: false });
   });
 
+  it('shows the stock name under the code and falls back to the bare code when unknown', async () => {
+    getSnapshot.mockResolvedValueOnce(makeSnapshot({
+      fxStale: false,
+      positions: [
+        makePosition({ symbol: '5469.TW', market: 'tw', name: '瀚宇博' }),
+        makePosition({ symbol: '9999.TW', market: 'tw', name: null }),
+      ],
+    }));
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    const namedCell = (await screen.findByText('5469.TW')).closest('td') as HTMLElement;
+    expect(within(namedCell).getByText('瀚宇博')).toBeInTheDocument();
+    const unnamedCell = screen.getByText('9999.TW').closest('td') as HTMLElement;
+    expect(unnamedCell.textContent).toBe('9999.TW');
+  });
+
   it('renders stale FX status with a manual refresh button', async () => {
     render(<PortfolioPage />);
 

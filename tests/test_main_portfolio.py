@@ -741,5 +741,90 @@ class MainPortfolioTest(unittest.TestCase):
         self.assertEqual(status["last_error"], "OpenD unavailable")
 
 
+class MergePortfolioHoldingsTest(unittest.TestCase):
+    def _ledger(self, identities=None, error=None):
+        """Patch the ledger replay; identities are (market, symbol) per position."""
+        service = MagicMock()
+        if error is not None:
+            service.get_portfolio_snapshot.side_effect = error
+        else:
+            service.get_portfolio_snapshot.return_value = {
+                "accounts": [
+                    {"positions": [{"market": market, "symbol": symbol} for market, symbol in identities or []]}
+                ]
+            }
+        return patch("src.services.portfolio_service.PortfolioService", return_value=service)
+
+    def test_disabled_keeps_watchlist_and_skips_ledger(self):
+        config = SimpleNamespace(analyze_portfolio_holdings=False)
+        with self._ledger(error=AssertionError("ledger must not be read when disabled")):
+            result = main._merge_portfolio_holdings(config, ["2330.TW"])
+
+        self.assertEqual(result, ["2330.TW"])
+
+    def test_enabled_appends_holdings_after_watchlist_without_duplicates(self):
+        config = SimpleNamespace(analyze_portfolio_holdings=True)
+        identities = [("tw", "2330.TW"), ("tw", "00631L.TW"), ("tw", "3324.TWO"), ("us", "tsla")]
+        with self._ledger(identities):
+            result = main._merge_portfolio_holdings(config, ["2330.TW", "0050.TW"])
+
+        self.assertEqual(result, ["2330.TW", "0050.TW", "00631L.TW", "3324.TWO", "TSLA"])
+
+    def test_exchange_prefixed_a_share_dedupes_against_bare_watchlist_code(self):
+        config = SimpleNamespace(analyze_portfolio_holdings=True)
+        with self._ledger([("cn", "SH600519"), ("cn", "SZ000001")]):
+            result = main._merge_portfolio_holdings(config, ["600519"])
+
+        self.assertEqual(result, ["600519", "000001"])
+
+    def test_skips_holdings_whose_code_does_not_resolve_to_the_ledger_market(self):
+        # Bare 2330 / 7203 / 005930 would be analyzed as HK / HK / A-share.
+        config = SimpleNamespace(analyze_portfolio_holdings=True)
+        identities = [
+            ("tw", "2330"),
+            ("jp", "7203"),
+            ("kr", "005930"),
+            ("tw", "2303.TW"),
+            ("hk", "00700"),
+            ("jp", "7203.T"),
+        ]
+        with self._ledger(identities), self.assertLogs(main.logger, level="WARNING") as logs:
+            result = main._merge_portfolio_holdings(config, ["0050.TW"])
+
+        self.assertEqual(result, ["0050.TW", "2303.TW", "00700", "7203.T"])
+        self.assertEqual(sum("未并入本轮分析" in line for line in logs.output), 3)
+
+    def test_ledger_failure_degrades_to_watchlist(self):
+        config = SimpleNamespace(analyze_portfolio_holdings=True)
+        with self._ledger(error=RuntimeError("db down")):
+            result = main._merge_portfolio_holdings(config, ["2330.TW"])
+
+        self.assertEqual(result, ["2330.TW"])
+
+    def test_run_full_analysis_merges_holdings_only_for_config_watchlist(self):
+        args = SimpleNamespace(dry_run=False, no_market_review=True)
+        seen = []
+
+        def _capture_filter(_config, _args, codes):
+            seen.append(list(codes))
+            return [], None, True
+
+        for stock_codes, expected in ((None, ["2330.TW", "5469.TW"]), (["2317.TW"], ["2317.TW"])):
+            config = SimpleNamespace(
+                stock_list=["2330.TW"],
+                analyze_portfolio_holdings=True,
+                market_review_enabled=False,
+                refresh_stock_list=MagicMock(),
+            )
+            seen.clear()
+            with self._ledger([("tw", "5469.TW")]), patch.object(
+                main, "_refresh_stock_index_cache_for_analysis"
+            ), patch.object(main, "_compute_trading_day_filter", side_effect=_capture_filter), patch.object(
+                main, "_run_auto_backtest"
+            ):
+                main.run_full_analysis(config, args, stock_codes)
+            self.assertEqual(seen, [expected])
+
+
 if __name__ == "__main__":
     unittest.main()

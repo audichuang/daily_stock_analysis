@@ -635,6 +635,60 @@ def _resolve_portfolio_stock_codes(args: argparse.Namespace) -> Optional[List[st
     return stock_codes
 
 
+def _merge_portfolio_holdings(config: Config, stock_codes: List[str]) -> List[str]:
+    """Append local portfolio-ledger holdings to the configured watchlist.
+
+    Holdings come from a read-only replay of active accounts' ledger events, not
+    from the position cache: every trade/cash/corporate-action write wipes that
+    account's cache until a non-read-only snapshot rebuilds it, so the cache
+    would silently drop the whole account after any write. A ledger read failure
+    must not block the daily run, so it degrades to the watchlist alone.
+    """
+    if not getattr(config, "analyze_portfolio_holdings", False):
+        return stock_codes
+    try:
+        from src.services.portfolio_service import PortfolioService
+
+        snapshot = PortfolioService().get_portfolio_snapshot(include_realtime=False, read_only=True)
+    except Exception as exc:  # noqa: BLE001 - holdings are an optional enrichment.
+        logger.warning("读取持仓账本失败，本轮只分析 STOCK_LIST: %s", exc)
+        return stock_codes
+
+    from data_provider.base import normalize_stock_code
+    from src.core.trading_calendar import get_market_for_stock
+
+    def _analysis_code(code: str) -> str:
+        # SH600519 / 600519 must dedupe; .TW/.TWO/.T/.KS suffixes are kept.
+        return canonical_stock_code(normalize_stock_code(code))
+
+    merged = list(stock_codes)
+    seen = {_analysis_code(code) for code in merged}
+    added: List[str] = []
+    for account in snapshot.get("accounts") or []:
+        for position in account.get("positions") or []:
+            code = _analysis_code(str(position.get("symbol") or ""))
+            market = str(position.get("market") or "").strip().lower()
+            if not code or code in seen:
+                continue
+            # A bare code under-specifies the market (bare 2330 is inferred as HK,
+            # bare 7203 as HK, bare 005930 as A-share). Analyzing it would silently
+            # cover the wrong company, so skip instead of guessing.
+            if get_market_for_stock(code) != market:
+                logger.warning(
+                    "持仓 %s（账户市场 %s）无法从代码判定为该市场，未并入本轮分析；"
+                    "请在账本中使用带交易所后缀的代码（如 2330.TW / 7203.T）",
+                    code,
+                    market or "?",
+                )
+                continue
+            seen.add(code)
+            merged.append(code)
+            added.append(code)
+    if added:
+        logger.info("ANALYZE_PORTFOLIO_HOLDINGS: 已并入 %d 只持仓股: %s", len(added), ",".join(added))
+    return merged
+
+
 def _prime_daily_market_context(
     config: Config,
     pipeline: Any,
@@ -856,6 +910,8 @@ def run_full_analysis(
 
         using_config_stock_list = stock_codes is None and portfolio_stock_codes is None
         effective_codes = stock_codes if stock_codes is not None else config.stock_list
+        if using_config_stock_list:
+            effective_codes = _merge_portfolio_holdings(config, effective_codes)
         # Fail fast on an empty persisted watchlist before trading-day filtering.
         # Otherwise should_skip=True would mask the configuration error as success.
         if (

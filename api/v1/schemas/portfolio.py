@@ -151,6 +151,7 @@ class PortfolioCorporateActionListResponse(BaseModel):
 
 class PortfolioPositionItem(BaseModel):
     symbol: str
+    name: Optional[str] = Field(None, description="Display name from the local stock index; None when unknown")
     market: str
     currency: str
     quantity: float
