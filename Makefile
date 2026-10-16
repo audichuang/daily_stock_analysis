@@ -19,8 +19,8 @@ RANK            ?= score
 SLOTS           ?= 5
 TSMC_CLOSE      ?= 0
 
-# Doppler 包裹：注入 BARK_URL 并映射为 CUSTOM_WEBHOOK_URLS
-DOPPLER_RUN = doppler run -p $(DOPPLER_PROJECT) -c $(DOPPLER_CONFIG) --
+# Doppler 包裹：注入 BARK_URL 并映射为 CUSTOM_WEBHOOK_URLS；外層再疊 `finmind` 專案注入 FINMIND_TOKEN_*（台股新聞）
+DOPPLER_RUN = doppler run -p finmind -c dev -- doppler run -p $(DOPPLER_PROJECT) -c $(DOPPLER_CONFIG) --
 
 .DEFAULT_GOAL := help
 .PHONY: help install serve serve-local review review-tw analyze schedule screen \

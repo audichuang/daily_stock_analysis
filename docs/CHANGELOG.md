@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 台股個股新聞改由 FinMind 提供：設定 `FINMIND_TOKEN_1..N` 後，`.TW`/`.TWO` 的新聞搜尋（個股分析、問股、每日報告共用）先查 FinMind `TaiwanStockNews`（以代號查、繁中來源），濾掉 CMoney「股市爆料同學會」貼文與個股概覽頁、標題去重，查不到再退回原本的搜尋；多組 token 輪流使用，遇 402/429 換下一組；未設定時不發請求。`make serve`／`make review-tw`／每日報告外層多疊一層 Doppler `finmind` 專案注入 token
 - [修復] 問股（Agent）認不出台股／美股：繁體問法（「怎麼看」「換成」「別看」「哪個好」）先逐字折成簡體再比對謂語；整句只指向單一可解析標的時（「2330.TW 台積電現在價格多少？」「AAPL 最近怎麼樣」）直接以它為本輪對象。原本這類問句落到空範圍，工具全被擋，Agent 回答「只支援 A 股」
 - [修復] 問股首輪還沒有對象時不再預設 A 股：系統提示改用不分市場的角色與說明，依使用者給的代碼判斷市場；工具參數範例補上台股代碼
 - [新功能] 每日分析可自动纳入持仓：新配置 `ANALYZE_PORTFOLIO_HOLDINGS=true` 时，未指定 `--stocks`/`--portfolio` 的运行会把持仓账本里的持股去重后附加到 `STOCK_LIST` 之后一起分析（默认关闭；持仓由账本流水唯读重播、不依赖持仓页缓存；代码无法判定为账户市场的持仓会跳过并记 warning；读不到账本时退回只分析自选股）

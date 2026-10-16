@@ -104,7 +104,8 @@ log "daily report start (log: $LOG)"
 run_step "台股資料更新 (market_data daily)" uv run --env-file .env python -m market_data.cli daily
 run_step "台股資料健檢 (health --strict)" uv run --env-file .env python -m market_data.cli health --strict
 run_step "LLM 連線預檢" llm_preflight
-run_step "自選股分析 + 大盤復盤" "${DOPPLER_RUN[@]}" bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py'
+# 外層疊 Doppler `finmind` 專案：注入 FINMIND_TOKEN_*，台股個股新聞先查 FinMind。
+run_step "自選股分析 + 大盤復盤" doppler run -p finmind -c dev -- "${DOPPLER_RUN[@]}" bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py'
 run_step "個股分析至少一檔成功" require_stock_success
 touch "$DONE_MARK"
 log "daily report done"

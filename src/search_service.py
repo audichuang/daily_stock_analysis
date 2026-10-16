@@ -2249,6 +2249,123 @@ class SearXNGSearchProvider(BaseSearchProvider):
         )
 
 
+class FinMindNewsProvider(BaseSearchProvider):
+    """台股個股新聞（FinMind `TaiwanStockNews`，以股票代號查，fork）。
+
+    只服務 `.TW`／`.TWO` 的個股新聞，由 `SearchService.search_stock_news` 排在第一個嘗試；
+    不進 `_providers`，所以主題新聞、事件、價格兜底這些以關鍵字查的路徑完全不經過它。
+    資料集一次只給一天（帶 end_date 會 400），日期是 UTC，所以逐天查最近 days+1 個 UTC 日；
+    已過去的日子內容不會再變，按 (代號, 日) 快取。來源裡一大半是 CMoney「股市爆料同學會」
+    散戶貼文與「個股概覽」頁，不算新聞，整類濾掉；同一篇在多站轉載，用正規化標題去重。
+    多組 token（FINMIND_TOKEN_1..N）輪流使用；遇 402／429 換下一組。
+    """
+
+    _API_URL = "https://api.finmindtrade.com/api/v4/data"
+    _NOISE_PATTERN = re.compile(r"股市爆料同學會|個股概覽|個股 - 股市 - CMoney")
+    _TITLE_SUFFIX_PATTERN = re.compile(r"\s*[-|｜]\s*[^-|｜]{1,24}$")
+    _TW_CODE_PATTERN = re.compile(r"^(\d{4,6}[A-Z]?)\.(?:TW|TWO)$", re.IGNORECASE)
+    _day_cache: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    _day_cache_lock = threading.Lock()
+
+    def __init__(self, tokens: List[str], timeout_seconds: float = 15.0):
+        super().__init__([t for t in tokens if t], "FinMind")
+        self._token_cycle = cycle(self._api_keys)
+        self._token_lock = threading.Lock()
+        self._timeout_seconds = timeout_seconds
+
+    @classmethod
+    def stock_id_for(cls, stock_code: Optional[str]) -> Optional[str]:
+        match = cls._TW_CODE_PATTERN.match((stock_code or "").strip())
+        return match.group(1).upper() if match else None
+
+    def _next_token(self) -> str:
+        with self._token_lock:
+            return next(self._token_cycle)
+
+    def _fetch_day(self, stock_id: str, day: str, cacheable: bool) -> List[Dict[str, Any]]:
+        key = (stock_id, day)
+        if cacheable:
+            with self._day_cache_lock:
+                if key in self._day_cache:
+                    return self._day_cache[key]
+        last_error = "FinMind 请求失败"
+        for _ in range(len(self._api_keys)):
+            resp = requests.get(
+                self._API_URL,
+                params={"dataset": "TaiwanStockNews", "data_id": stock_id, "start_date": day},
+                headers={"Authorization": f"Bearer {self._next_token()}"},
+                timeout=self._timeout_seconds,
+            )
+            if resp.status_code == 200:
+                rows = resp.json().get("data") or []
+                if cacheable:
+                    with self._day_cache_lock:
+                        self._day_cache[key] = rows
+                return rows
+            last_error = f"HTTP {resp.status_code}: {resp.text[:120]}"
+            if resp.status_code not in (402, 429):
+                break
+        raise RuntimeError(last_error)
+
+    @classmethod
+    def _normalized_title(cls, title: str) -> str:
+        # 轉載常多掛一層分類（「… - 上市櫃 - 旺得富理財網」），去重時剝兩層尾綴。
+        base = title or ""
+        for _ in range(2):
+            base = cls._TITLE_SUFFIX_PATTERN.sub("", base)
+        return re.sub(r"[\s\W_]+", "", base).lower()
+
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+        raise NotImplementedError("FinMindNewsProvider 只接受 stock_code 查询")
+
+    def search(
+        self,
+        query: str,
+        max_results: int = 5,
+        days: int = 7,
+        stock_code: Optional[str] = None,
+    ) -> SearchResponse:
+        stock_id = self.stock_id_for(stock_code)
+        if stock_id is None:
+            return SearchResponse(query=query, results=[], provider=self._name, success=False,
+                                  error_message="FinMind 只支持台股代码")
+        started = time.time()
+        today_utc = datetime.now(timezone.utc).date()
+        rows: List[Dict[str, Any]] = []
+        try:
+            for offset in range(max(1, days) + 1):
+                day = today_utc - timedelta(days=offset)
+                rows.extend(self._fetch_day(stock_id, day.isoformat(), cacheable=offset > 0))
+        except Exception as exc:
+            logger.warning("[FinMind] %s 新闻查询失败: %s", stock_code, exc)
+            return SearchResponse(query=query, results=[], provider=self._name, success=False,
+                                  error_message=str(exc), search_time=time.time() - started)
+
+        results: List[SearchResult] = []
+        seen: set = set()
+        for row in sorted(rows, key=lambda item: str(item.get("date") or ""), reverse=True):
+            title = str(row.get("title") or "").strip()
+            if not title or self._NOISE_PATTERN.search(title):
+                continue
+            normalized = self._normalized_title(title)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            raw_date = str(row.get("date") or "").strip()
+            source = str(row.get("source") or "FinMind").strip()
+            results.append(SearchResult(
+                title=self._TITLE_SUFFIX_PATTERN.sub("", title) or title,
+                snippet=f"{source} 报道",
+                url=str(row.get("link") or ""),
+                source=source,
+                published_date=f"{raw_date.replace(' ', 'T')}+00:00" if raw_date else None,
+            ))
+            if len(results) >= max_results:
+                break
+        return SearchResponse(query=query, results=results, provider=self._name,
+                              search_time=time.time() - started)
+
+
 class SearchService:
     """
     搜索服务
@@ -2424,6 +2541,7 @@ class SearchService:
         searxng_timeout_seconds: Optional[int] = None,
         news_max_age_days: int = 3,
         news_strategy_profile: str = "short",
+        finmind_tokens: Optional[List[str]] = None,
     ):
         """
         初始化搜索服务
@@ -2452,8 +2570,14 @@ class SearchService:
             "searxng_timeout_seconds": searxng_timeout_seconds,
             "news_max_age_days": int(news_max_age_days),
             "news_strategy_profile": news_strategy_profile,
+            "finmind_tokens": list(finmind_tokens or []),
         }
         self._providers: List[BaseSearchProvider] = []
+        # fork: 台股個股新聞優先走 FinMind；只在設定了 FINMIND_TOKEN_* 時啟用（離線測試不會連外）。
+        finmind_token_list = [t for t in (finmind_tokens or []) if t]
+        self._finmind_provider: Optional[FinMindNewsProvider] = (
+            FinMindNewsProvider(finmind_token_list) if finmind_token_list else None
+        )
         self.news_max_age_days = max(1, news_max_age_days)
         raw_profile = (news_strategy_profile or "short").strip().lower()
         self.news_strategy_profile = normalize_news_strategy_profile(news_strategy_profile)
@@ -2515,7 +2639,10 @@ class SearchService:
             self._providers.insert(0, AnspireSearchProvider(anspire_keys))
             logger.info(f"已配置 Anspire Search 搜索，共 {len(anspire_keys)} 个 API Key")
             
-        if not self._providers:
+        if self._finmind_provider is not None:
+            logger.info("已配置 FinMind 台股新闻，共 %s 个 token", len(finmind_token_list))
+
+        if not self._providers and self._finmind_provider is None:
             logger.warning("未配置任何搜索能力，新闻搜索功能将不可用")
 
         # In-memory search result cache: {cache_key: (timestamp, SearchResponse)}
@@ -2721,7 +2848,13 @@ class SearchService:
     @property
     def is_available(self) -> bool:
         """检查是否有可用的搜索引擎"""
-        return any(p.is_available for p in self._providers)
+        return self._finmind_provider is not None or any(p.is_available for p in self._providers)
+
+    def _stock_news_providers(self, stock_code: str) -> List[BaseSearchProvider]:
+        """個股新聞的嘗試順序：台股代碼先走 FinMind，再走通用搜尋。"""
+        if self._finmind_provider is not None and FinMindNewsProvider.stock_id_for(stock_code):
+            return [self._finmind_provider, *self._providers]
+        return list(self._providers)
 
     def _cache_key(self, query: str, max_results: int, days: int) -> str:
         """Build a cache key from query parameters."""
@@ -4161,12 +4294,14 @@ class SearchService:
             had_provider_success = False
             best_ranked_response: Optional[SearchResponse] = None
             best_ranked_stats: Optional[Dict[str, int]] = None
-            for provider in self._providers:
+            for provider in self._stock_news_providers(stock_code):
                 if not provider.is_available:
                     continue
 
                 search_kwargs: Dict[str, Any] = {}
-                if isinstance(provider, TavilySearchProvider):
+                if isinstance(provider, FinMindNewsProvider):
+                    search_kwargs["stock_code"] = stock_code
+                elif isinstance(provider, TavilySearchProvider):
                     search_kwargs["topic"] = "news"
                 elif isinstance(provider, BraveSearchProvider):
                     search_kwargs.update(
@@ -4955,6 +5090,7 @@ def get_search_service() -> SearchService:
                     searxng_timeout_seconds=getattr(config, "searxng_timeout_seconds", None),
                     news_max_age_days=config.news_max_age_days,
                     news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
+                    finmind_tokens=getattr(config, "finmind_tokens", None),
                 )
     
     return _search_service

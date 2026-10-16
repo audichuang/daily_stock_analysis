@@ -1088,6 +1088,7 @@ class Config:
     bocha_api_keys: List[str] = field(default_factory=list)  # Bocha API Keys
     minimax_api_keys: List[str] = field(default_factory=list)  # MiniMax API Keys
     tavily_api_keys: List[str] = field(default_factory=list)  # Tavily API Keys
+    finmind_tokens: List[str] = field(default_factory=list)  # fork: FINMIND_TOKEN_1..N，台股個股新聞（FinMind）
     brave_api_keys: List[str] = field(default_factory=list)  # Brave Search API Keys
     serpapi_keys: List[str] = field(default_factory=list)  # SerpAPI Keys
     searxng_base_urls: List[str] = field(default_factory=list)  # SearXNG instance URLs (self-hosted, no quota)
@@ -1818,6 +1819,15 @@ class Config:
 
         tavily_keys_str = os.getenv('TAVILY_API_KEYS', '')
         tavily_api_keys = [k.strip() for k in tavily_keys_str.split(',') if k.strip()]
+        # fork: 沿用 Doppler `finmind` 專案的命名 FINMIND_TOKEN_1..N（多組輪流使用）
+        finmind_tokens = [
+            os.environ[name].strip()
+            for name in sorted(
+                (n for n in os.environ if re.fullmatch(r'FINMIND_TOKEN_\d+', n)),
+                key=lambda n: int(n.rsplit('_', 1)[1]),
+            )
+            if os.environ[name].strip()
+        ]
 
         serpapi_keys_str = os.getenv('SERPAPI_API_KEYS', '')
         serpapi_keys = [k.strip() for k in serpapi_keys_str.split(',') if k.strip()]
@@ -2003,6 +2013,7 @@ class Config:
             bocha_api_keys=bocha_api_keys,
             minimax_api_keys=minimax_api_keys,
             tavily_api_keys=tavily_api_keys,
+            finmind_tokens=finmind_tokens,
             brave_api_keys=brave_api_keys,
             serpapi_keys=serpapi_keys,
             searxng_base_urls=searxng_base_urls,
@@ -3179,6 +3190,7 @@ class Config:
             or self.bocha_api_keys
             or self.minimax_api_keys
             or self.tavily_api_keys
+            or self.finmind_tokens
             or self.brave_api_keys
             or self.serpapi_keys
             or self.has_searxng_enabled()
