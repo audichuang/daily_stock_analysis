@@ -158,7 +158,7 @@ def _store(conn, raw, transform, model, pk, coalesce=()):
     return upsert(conn, model.__table__, recs, pk, coalesce=coalesce)
 
 
-def crawl_day(conn, source, d, replace=False):
+def crawl_day(conn, source, d, replace=False, min_ratio=0.5):
     """抓一天並 upsert。``replace``:整日換血(同交易先刪該日既有列再寫)——修
     partial/髒日用;upsert 蓋不掉鍵已錯位的殘留列,必須刪。刪除的前置條件是
     「轉換+有效列過濾後真的有可寫資料,且不少於既有列數的一半」——來源回
@@ -172,16 +172,50 @@ def crawl_day(conn, source, d, replace=False):
         coalesce = ()
     recs = _prepare(raw, transform, model.__table__, pk)
     if replace and recs:
-        existing = conn.execute(text(
-            f"SELECT COUNT(*) FROM market.{model.__tablename__} "
-            f"WHERE date = :d"), {"d": d}).scalar()
-        if len(recs) < existing * 0.5:
+        old = _stored_rows(conn, model.__table__, d)
+        if len(recs) < len(old) * min_ratio:
             print(f"**WARN {source} {d}: replace refused — new {len(recs)} rows "
-                  f"< 50% of existing {existing}, keeping current data")
+                  f"< {min_ratio:.0%} of existing {len(old)}, keeping current data")
             return 0
+        revised = _count_revised(old, recs, pk)
+        if revised:
+            # grep 得到的訊號:官方事後改了已入庫的數字(見 refresh_range)
+            print(f"**REVISED {source} {d}: {revised:,} rows differ from stored "
+                  f"(stored {len(old):,} -> official {len(recs):,})")
         conn.execute(text(
             f"DELETE FROM market.{model.__tablename__} WHERE date = :d"), {"d": d})
     return upsert(conn, model.__table__, recs, pk, coalesce=coalesce)
+
+
+def _stored_rows(conn, table, d):
+    cols = ", ".join(c.name for c in table.columns)
+    return [dict(r) for r in conn.execute(text(
+        f"SELECT {cols} FROM market.{table.name} WHERE date = :d"),
+        {"d": d}).mappings()]
+
+
+def _same(a, b):
+    if a is None or b is None:
+        return a is None and b is None
+    try:
+        return abs(float(a) - float(b)) < 1e-9
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+
+
+def _count_revised(old, recs, pk):
+    """新舊兩份同日資料有幾列不同(新增、消失、任一欄值變動都算)。"""
+    def key(r):
+        return tuple(str(r[k])[:10] if k == "date" else str(r[k]) for k in pk)
+
+    before = {key(r): r for r in old}
+    after = {key(r): r for r in recs}
+    changed = len(before.keys() ^ after.keys())
+    for k in before.keys() & after.keys():
+        o, n = before[k], after[k]
+        if any(not _same(o.get(c), n.get(c)) for c in n if c not in pk):
+            changed += 1
+    return changed
 
 
 def crawl_monthly_revenue(conn, month_date, markets=crawler.MONTHLY_REPORT_MARKETS):
@@ -367,6 +401,51 @@ MAX_DAILY_RECOVERY_CALENDAR_DAYS = 31
 RECENT_SESSIONS = 5
 
 
+# 官方發布後還會改數字的來源。TWSE T86(三大法人)18:00 前後先出初版,之後才補齊:
+# 實測 2026-09-29~10-15 當晚抓的 10 個交易日,事後再比對全部對不上:投信欄 11~49 檔、
+# 外幣 ETF(00636K 等)晚到,3189 景碩 09-30 的外資甚至正負號相反;隔天才抓的 10-08、
+# 10-13 則逐檔一致。
+# resume 只看「該日有沒有列」,所以初版一旦入庫就永久凍結——這些來源每輪 daily 都要
+# 把近期已入庫的日子重抓、整日換血。融資(MI_MARGN)同期比對沒有修正,不列入。
+REVISED_SOURCES = ("institutional",)
+# T86 有約 3 req / 5 s 的非正式封鎖門檻(見 data_provider/tw_institutional_fetcher.py)
+REFRESH_DELAY_SECONDS = 2.0
+# 無人看守、每晚對唯一資料源整日換血,門檻要比人工 `--force` 的 50% 嚴:實測 13 天的修正
+# 只會「加列」(晚到的外幣 ETF),從沒少過列,所以新資料少於已存列數就當成截斷回應拒收。
+REFRESH_MIN_RATIO = 1.0
+
+
+def refresh_range(engine, source, dates, delay=REFRESH_DELAY_SECONDS):
+    """把 ``dates`` 裡**已入庫**的日子重抓並整日換血,吃進官方事後的修正。
+
+    與 ``crawl_range`` 的分工:那邊補缺日、連續零列會 raise(零列代表被封或改版);
+    這邊只碰已有資料的日子,抓不到就保留舊資料、只印 WARN,不中止——被封鎖不該讓
+    已經有的資料或整輪 daily 一起陪葬。換血走 ``crawl_day(replace=True)``,但門檻是
+    ``REFRESH_MIN_RATIO``(新資料不得少於已存列數),有改動時印 ``**REVISED``。
+    回傳重抓的日數。"""
+    import time as _time
+
+    table = DAILY[source][2].__tablename__
+    with engine.begin() as conn:
+        have = _existing_dates(conn, table)
+    done = 0
+    for d in dates:
+        if d.isoformat() not in have:
+            continue
+        if delay:
+            _time.sleep(delay)
+        with engine.begin() as conn:
+            n = crawl_day(conn, source, d, replace=True, min_ratio=REFRESH_MIN_RATIO)
+        if n:
+            done += 1
+        else:
+            print(f"**WARN refresh {source} {d}: kept stored rows "
+                  f"(fetch failed or replace refused)", flush=True)
+    print(f"refresh {source} {done}/{sum(d.isoformat() in have for d in dates)} days",
+          flush=True)
+    return done
+
+
 def recovery_dates(asof, recent, max_days=MAX_DAILY_RECOVERY_CALENDAR_DAYS):
     """Build the bounded automatic repair window; long gaps need explicit backfill."""
     import datetime as _dt
@@ -401,6 +480,9 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
     dates = recovery_dates(asof, recent)
     for source in ("price", "institutional", "margin"):
         crawl_range(eng, source, dates)
+    # asof 當天剛抓的就是初版,重抓它沒有意義;隔天這一輪才會把它換成定版
+    for source in REVISED_SOURCES:
+        refresh_range(eng, source, [d for d in dates if d < asof])
     crawl_snapshots(eng)
     # 月營收(上月整月)與除權息(滾動窗)順帶保鮮:各一個請求,upsert 冪等
     prev_month = (asof.replace(day=1) - _dt.timedelta(days=1)).replace(day=1)

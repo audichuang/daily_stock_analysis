@@ -163,3 +163,111 @@ def test_partial_quarter_keeps_evidence_but_forces_a_refetch(tmp_path, monkeypat
     with pytest.raises(RuntimeError, match="looks partial"):
         crawl.crawl_financials(object(), 2026, 2)
     assert downloads == [(2026, 2)], "帶標記的目錄沒有觸發重新下載"
+
+
+class _TxEngine:
+    """讓 `refresh_range` 的 `engine.begin()` 落在 pg_conn 那個必定 rollback 的交易裡。"""
+
+    def __init__(self, conn): self.conn = conn
+    def begin(self): return self
+    def __enter__(self): return self.conn
+    def __exit__(self, *a): return False
+
+
+def _t86(rows):
+    return lambda d: pd.DataFrame([{
+        "stock_id": sid, "date": pd.to_datetime(d), "名稱": sid,
+        "外陸資買賣超股數(不含外資自營商)": f, "外資買賣超股數": None,
+        "投信買賣超股數": t, "自營商買賣超股數": 0, "三大法人買賣超股數": f + t,
+    } for sid, f, t in rows]).set_index(["stock_id", "date"])
+
+
+def _seed_institutional(conn, d, rows):
+    for sid, f, t in rows:
+        conn.execute(text(
+            "INSERT INTO market.institutional VALUES (:s, :d, :f, :t, 0, :a)"),
+            {"s": sid, "d": d, "f": f, "t": t, "a": f + t})
+
+
+def _stored(conn, d):
+    return {r[0]: (r[1], r[2], r[3]) for r in conn.execute(text(
+        "SELECT stock_id, foreign_net, trust_net, total_net FROM market.institutional "
+        "WHERE date = :d"), {"d": d})}
+
+
+def test_refresh_range_replaces_stored_preliminary_day_with_revision(pg_conn, monkeypatch, capsys):
+    """T86 18:00 的初版入庫後,官方改了投信、補了一檔外幣 ETF——重抓要整日換成定版。
+    種子用 2099 年:本機 pg_conn 連的是正式庫(rollback 交易),真實列不會落進這天。"""
+    d = date(2099, 1, 5)
+    _seed_institutional(pg_conn, d, [("2330", -100, 3222), ("2454", 50, 7)])
+    monkeypatch.setattr(crawl.sources, "crawl_institutional",
+                        _t86([("2330", -100, 3235), ("2454", 50, 7), ("00636K", 0, 0)]))
+
+    assert crawl.refresh_range(_TxEngine(pg_conn), "institutional", [d], delay=0) == 1
+
+    assert _stored(pg_conn, d) == {"2330": (-100, 3235, 3135), "2454": (50, 7, 57),
+                                   "00636K": (0, 0, 0)}
+    out = capsys.readouterr().out
+    assert f"**REVISED institutional {d}: 2 rows differ" in out, out
+
+
+def test_refresh_range_accepts_a_same_size_revision(pg_conn, monkeypatch):
+    """最常見的修正是「列數不變、只改數字」(投信欄)。門檻收緊不能把它也擋掉。"""
+    d = date(2099, 1, 8)
+    _seed_institutional(pg_conn, d, [("2330", -100, 3222), ("2454", 50, 7)])
+    monkeypatch.setattr(crawl.sources, "crawl_institutional",
+                        _t86([("2330", -100, 3235), ("2454", 50, 7)]))
+
+    assert crawl.refresh_range(_TxEngine(pg_conn), "institutional", [d], delay=0) == 1
+
+    assert _stored(pg_conn, d)["2330"] == (-100, 3235, 3135)
+
+
+def test_refresh_range_unchanged_day_prints_no_revision(pg_conn, monkeypatch, capsys):
+    d = date(2099, 1, 6)
+    _seed_institutional(pg_conn, d, [("2330", -100, 3235)])
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", _t86([("2330", -100, 3235)]))
+
+    crawl.refresh_range(_TxEngine(pg_conn), "institutional", [d], delay=0)
+
+    assert "**REVISED" not in capsys.readouterr().out
+
+
+def test_refresh_range_keeps_stored_rows_when_every_fetch_fails(pg_conn, monkeypatch, capsys):
+    """被 TWSE 封鎖時(fetch 回 None)不能刪掉既有資料,也不能像 crawl_range 一樣連續零列
+    就 raise——重抓失敗不該讓整輪 daily 陪葬。"""
+    days = [date(2099, 1, d) for d in (5, 6, 7, 8, 9)]
+    for d in days:
+        _seed_institutional(pg_conn, d, [("2330", -100, 3222)])
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", lambda d: None)
+
+    assert crawl.refresh_range(_TxEngine(pg_conn), "institutional", days, delay=0) == 0
+
+    for d in days:
+        assert _stored(pg_conn, d) == {"2330": (-100, 3222, 3122)}
+    assert capsys.readouterr().out.count("**WARN refresh institutional") == len(days)
+
+
+def test_refresh_range_refuses_a_shrunken_response(pg_conn, monkeypatch):
+    """TWSE 回過「截斷但非空」的回應。人工 `--force` 容許縮到一半,但每晚無人看守的重抓
+    不行:修正只會加列,少了列就是截斷,定版資料不能被它換掉。"""
+    d = date(2099, 1, 7)
+    _seed_institutional(pg_conn, d, [("2330", -100, 3235), ("2454", 50, 7), ("2317", 1, 1)])
+    monkeypatch.setattr(crawl.sources, "crawl_institutional",
+                        _t86([("2330", -100, 9999), ("2454", 50, 7)]))
+
+    assert crawl.refresh_range(_TxEngine(pg_conn), "institutional", [d], delay=0) == 0
+
+    assert _stored(pg_conn, d) == {"2330": (-100, 3235, 3135), "2454": (50, 7, 57),
+                                   "2317": (1, 1, 2)}
+
+
+def test_refresh_range_does_not_fetch_days_that_are_not_stored(pg_conn, monkeypatch):
+    """缺日歸 crawl_range 補(有連續零列止血);這裡只碰已入庫的日子。"""
+    fetched = []
+    monkeypatch.setattr(crawl.sources, "crawl_institutional",
+                        lambda d: fetched.append(d))
+
+    crawl.refresh_range(_TxEngine(pg_conn), "institutional", [date(2099, 2, 2)], delay=0)
+
+    assert fetched == []

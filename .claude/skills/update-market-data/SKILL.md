@@ -26,7 +26,7 @@ uv run --env-file .env python -m market_data.health
 
 ### 2. 依落差選路徑
 
-- **落後 ≤ 5 天(例行)** → `uv run --env-file .env python -m market_data.cli daily`(近 5 天增量 + 快照 + 上月營收 + 除權息滾動窗)。
+- **落後 ≤ 5 天(例行)** → `uv run --env-file .env python -m market_data.cli daily`(近 5 天增量 + 快照 + 上月營收 + 除權息滾動窗;法人另把近期已入庫的日子重抓成證交所定版——stdout 的 `refresh institutional N/M days` 是重抓結果,`**REVISED` 表示官方改過數字並已換掉,`**WARN refresh` 表示沒抓到、保留舊資料)。
 - **補特定月營收/除權息區間** → `… revenue --month YYYY-MM` / `… ex-dividend --start … --end …`(月營收上市＋上櫃各抓一份彙總報表,一邊失敗只少那一邊——看 stdout 的 `**WARN`)。
 - **落後 > 5 天,或有洞** → 區間回補:
   ```

@@ -47,7 +47,12 @@ def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch, capsys):
     monkeypatch.setattr(crawl, "crawl_snapshots",
                         lambda eng: calls.append(("snapshots",)) or real_snapshots(eng))
 
+    monkeypatch.setattr(crawl, "refresh_range",
+                        lambda eng, src, dates: calls.append(("refresh", src, tuple(dates))))
+
     crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+
+    assert [c[1] for c in calls if c[0] == "refresh"] == ["institutional"]
 
     ranged = {c[1] for c in calls if c[0] == "range"}
     assert ranged == {"price", "institutional", "margin"}
@@ -64,6 +69,36 @@ def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch, capsys):
     for expect in ("valuation 0 rows", "index 0 rows", "stock_info 0 rows",
                    "monthly_revenue 2024-05 0 rows", "ex_dividend 0 rows"):
         assert expect in out, f"{expect!r} 沒印出來：{out!r}"
+
+
+class _RecentResult(_Result):
+    def fetchall(self): return [(date(2024, 6, 4),), (date(2024, 6, 3),)]
+
+
+class _RecentConn(_Conn):
+    def execute(self, *a, **k): return _RecentResult()
+
+
+class _RecentEng(_Eng):
+    def begin(self): return _RecentConn()
+    def connect(self): return _RecentConn()
+
+
+def test_daily_update_refreshes_recent_stored_days_but_not_asof(monkeypatch):
+    """T86 當晚先出初版、之後才修正:每輪 daily 要把近期的日子重抓成定版。asof 當天剛抓
+    的就是初版,重抓它只是多打一次 TWSE;它留給隔天那一輪。"""
+    refreshed = []
+    monkeypatch.setattr(crawl, "crawl_range", lambda eng, src, dates, resume=True: None)
+    monkeypatch.setattr(crawl, "refresh_range",
+                        lambda eng, src, dates: refreshed.append((src, list(dates))))
+    monkeypatch.setattr(crawl, "crawl_snapshots", lambda eng: {})
+    monkeypatch.setattr(crawl, "crawl_monthly_revenue", lambda conn, month: 0)
+    monkeypatch.setattr(crawl, "crawl_ex_dividend", lambda conn, start, end: 0)
+    monkeypatch.setattr(adjust, "refresh_recent", lambda engine, start, end: None)
+
+    crawl.daily_update(engine=_RecentEng(), asof=date(2024, 6, 5), days=3)
+
+    assert refreshed == [("institutional", [date(2024, 6, 3), date(2024, 6, 4)])]
 
 
 def test_recovery_dates_include_a_missing_weekday_between_stored_dates():
