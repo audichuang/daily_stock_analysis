@@ -74,6 +74,7 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 ## 踩雷与限制
 
 - **缺金钥时数据源自我停用，台股静默降级 yfinance**（行情延迟、走势 day 改用 yfinance 5m 也延迟）。`shioaji` 套件已列入 `requirements.txt`，真正的触发点是金钥没注入。可辨识的信号是 `source` 由 `shioaji` 变 `fallback`、且 `limit_up`/`limit_down` 变 `None`；**名称不会变英文**——降级路径的名称先查本 fork 的股票索引，索引里有的台股仍是中文（2026-07-25 live 对照实测），只有索引没收录的代码才会落到 Yahoo 的英文名。
+- **台股日线的权威是 `MarketDBFetcher` 的未还原列；yfinance 备援列不是纯未还原**：`YfinanceFetcher._fetch_raw_data` 对台股（`.TW`/`.TWO`）用 `auto_adjust=False`，去掉现金股利调整（否则与 MarketDB 未还原列混存会在 MA／RSI／MACD 边界出现假台阶），但 Yahoo 的 `Close` 仍含分割调整（台股股票股利在 Yahoo 多以 split 呈现），消费端须以 `data_source` 区分，不能把 yfinance 台股列当未还原价；备援路径上除权息日的 `pct_chg` 是未还原报酬。其他市场仍用还原价（`auto_adjust=True`）。
 - **Shioaji `kbars` 单次区间上限 30 天**（超过回 400 `Kbars date range must not exceed 30 days`），故 year 走势走 yfinance、month 取近 30 天。
 - **Shioaji `snapshot.ts` / `kbars.ts` 是台北时间的裸值（非 UTC）**：必须按 `+08:00` 还原绝对时刻（见 `data_provider/shioaji_fetcher.py:_ns_to_iso`），否则 `as_of`/走势时间轴差 8 小时、`is_stale` 因 provider 时间「在未来」恒为 0（假新鲜）。
 - **只有美股指数走得通实时路径。** `US_INDEX_MAPPING` 只收美股（SPX／DJI／IXIC／NDX／VIX／RUT／

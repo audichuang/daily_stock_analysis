@@ -285,6 +285,13 @@ class YfinanceFetcher(BaseFetcher):
 
         logger.debug(f"调用 yfinance.download({yf_code}, {start_date}, {end_date})")
 
+        # 台股 stock_daily 的權威是 MarketDBFetcher 的未還原列；yfinance 只是本地資料庫失效時的備援。
+        # 台股備援列改 auto_adjust=False 以去掉現金股利調整（否則與 MarketDB 未還原列混存會在
+        # MA／RSI／MACD 邊界出現假台階）；但 Yahoo 的 Close 在 auto_adjust=False 下仍含分割調整
+        # （台股股票股利在 Yahoo 多以 split 呈現），所以這些列「不是」純未還原，消費端須以
+        # data_source 區分。備援路徑上除權息日的 pct_chg 是未還原報酬。其他市場維持還原價。
+        auto_adjust = not self._is_tw_suffix_stock(stock_code)
+
         try:
             # 使用 yfinance 下载数据
             df = yf.download(
@@ -292,7 +299,7 @@ class YfinanceFetcher(BaseFetcher):
                 start=start_date,
                 end=end_date,
                 progress=False,  # 禁止进度条
-                auto_adjust=True,  # 自动调整价格（复权）
+                auto_adjust=auto_adjust,
                 multi_level_index=True
             )
 
