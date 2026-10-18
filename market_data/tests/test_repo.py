@@ -74,6 +74,43 @@ def test_institutional_unknown_stock_is_empty(pg_conn):
     assert market_repo.institutional("ZZZZZ", engine=pg_conn).empty
 
 
+def _seed_margin(pg_conn):
+    pg_conn.execute(text(
+        "INSERT INTO market.margin "
+        "(stock_id, date, margin_balance, margin_buy, margin_sell, "
+        "short_balance, short_buy, short_sell) VALUES "
+        "('2330', '2099-04-03', 1200, 30, 10, 55, 2, 7), "
+        "('2330', '2099-04-01', 1000, 20, 5, 50, 1, 3), "
+        "('2330', '2099-04-02', 1100, 25, 8, 52, 0, 2), "
+        "('2317', '2099-04-02', 999, 1, 1, 9, 1, 1)"))
+
+
+def test_margin_reader_ascending_only_that_stock(pg_conn):
+    _seed_margin(pg_conn)
+    df = market_repo.margin("2330", start="2099-04-01", end="2099-04-30", engine=pg_conn)
+    assert list(df.columns) == ["date", "margin_balance", "margin_buy", "margin_sell",
+                                "short_balance", "short_buy", "short_sell"]
+    assert list(df["date"].astype(str)) == ["2099-04-01", "2099-04-02", "2099-04-03"]
+    assert list(df["margin_balance"]) == [1000, 1100, 1200]  # 沒混進 2317 的 999
+    assert int(df.iloc[2]["short_sell"]) == 7
+
+
+def test_margin_reader_date_range_filters_both_ends(pg_conn):
+    _seed_margin(pg_conn)
+    df = market_repo.margin("2330", start="2099-04-02", end="2099-04-02", engine=pg_conn)
+    assert list(df["date"].astype(str)) == ["2099-04-02"]
+    df = market_repo.margin("2330", start="2099-04-02", engine=pg_conn)
+    assert list(df["date"].astype(str)) == ["2099-04-02", "2099-04-03"]
+    # 只給 end：庫內真實歷史會在前面，只驗尾端（2099-04-03 被排除）
+    df = market_repo.margin("2330", end="2099-04-02", engine=pg_conn)
+    assert list(df["date"].astype(str))[-2:] == ["2099-04-01", "2099-04-02"]
+
+
+def test_margin_reader_unknown_stock_is_empty(pg_conn):
+    _seed_margin(pg_conn)
+    assert market_repo.margin("ZZZZZ", engine=pg_conn).empty
+
+
 def test_adjustment_multipliers_returns_one_unique_factor_per_event_date(pg_conn):
     """每檔每事件日一個因子，且 **index 必須唯一**、**不得跨日累乘**。
 

@@ -56,6 +56,26 @@ def institutional(stock_id, start=None, end=None, engine=None):
     return _q(sql + " ORDER BY date", params, engine)
 
 
+def margin(stock_id, start=None, end=None, engine=None):
+    """單檔融資融券歷史（升序）：融資/融券的餘額、買進（融資）、賣出（融券）等六欄。
+
+    單位是**張**（交易單位，見 ``models.Margin``），不是股；餘額為「今日餘額」。
+    資料 T+1 發布（盤後爬取要隔個交易日才補上），所以最後一列通常落後最新收盤一天。
+    來源 TWSE MI_MARGN，**只有上市**；上櫃、興櫃股無資料，回空 DataFrame 而非 raise。
+    """
+    sql = ("SELECT date, margin_balance, margin_buy, margin_sell, "
+           "short_balance, short_buy, short_sell "
+           "FROM market.margin WHERE stock_id = :sid")
+    params = {"sid": stock_id}
+    if start:
+        sql += " AND date >= :start"
+        params["start"] = start
+    if end:
+        sql += " AND date <= :end"
+        params["end"] = end
+    return _q(sql + " ORDER BY date", params, engine)
+
+
 def adjustment_multipliers(stock_id, start=None, end=None, engine=None, sessions=None):
     """單檔的復權因子：date → 該事件日的 ``factor``（Series，index=date，唯一）。
 
