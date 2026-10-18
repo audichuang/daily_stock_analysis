@@ -974,7 +974,9 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         loader.assert_called_once_with()
 
-    def test_standalone_futu_downstream_failure_keeps_existing_exit_semantics(self) -> None:
+    def test_standalone_futu_downstream_failure_returns_nonzero(self) -> None:
+        # 持倉解析成功後的分析流程例外（runtime_error）過去退出 0，
+        # 每日報告因此把失敗顯示成完成；現改為非零（T25）。
         args = self._make_args(portfolio="futu")
         config = self._make_config(run_immediately=True)
 
@@ -994,8 +996,82 @@ class MainScheduleModeTestCase(unittest.TestCase):
         ):
             exit_code = main.main()
 
-        self.assertEqual(exit_code, 0)
+        self.assertEqual(exit_code, 1)
         loader.assert_called_once_with()
+
+    def test_standalone_run_returns_nonzero_for_market_review_and_runtime_failures(self) -> None:
+        # T25：複盤失敗 / 分析流程例外都必須讓 CLI 非零退出，每日報告才推失敗 Bark。
+        for reason in ("market_review_failed", "runtime_error"):
+            with self.subTest(reason=reason):
+                args = self._make_args()
+                config = self._make_config(run_immediately=True)
+
+                with patch("main.parse_arguments", return_value=args), \
+                     patch("main.get_config", return_value=config), \
+                     patch("main.setup_logging"), \
+                     patch.object(main, "_LAST_ANALYSIS_FAILURE_REASON", reason), \
+                     patch("main._run_analysis_with_runtime_scheduler_lock", return_value=False):
+                    exit_code = main.main()
+
+                self.assertEqual(exit_code, 1)
+
+    def test_serve_mode_keeps_exit_zero_for_market_review_and_runtime_failures(self) -> None:
+        # 成對：serve 模式啟動時的分析失敗只記錄、服務繼續，不能因 T25 變成非零。
+        for reason in ("market_review_failed", "runtime_error"):
+            with self.subTest(reason=reason):
+                args = self._make_args(serve=True, host="127.0.0.1", port=8000)
+                config = self._make_config(webui_enabled=False, run_immediately=True)
+
+                with patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}, clear=False), \
+                     patch("main.parse_arguments", return_value=args), \
+                     patch("main.get_config", return_value=config), \
+                     patch("main.setup_logging"), \
+                     patch("main.prepare_webui_frontend_assets", return_value=True), \
+                     patch("main.start_api_server"), \
+                     patch("main.start_bot_stream_clients"), \
+                     patch("main.time.sleep", side_effect=KeyboardInterrupt), \
+                     patch.object(main, "_LAST_ANALYSIS_FAILURE_REASON", reason), \
+                     patch("main._run_analysis_with_runtime_scheduler_lock", return_value=False) as run_with_lock:
+                    exit_code = main.main()
+
+                self.assertEqual(exit_code, 0)
+                run_with_lock.assert_called_once()
+
+    def test_scheduler_records_market_review_failure_and_keeps_loop_alive(self) -> None:
+        # T25：排程模式下複盤失敗由 scheduled_task raise，scheduler 記錄後續跑。
+        import schedule
+        from src.scheduler import Scheduler
+
+        args = self._make_args(schedule=True)
+        runtime_config = self._make_config(schedule_enabled=True, schedule_time="09:30")
+        scheduled_call = {}
+
+        def fake_run_with_schedule(task, schedule_time, run_immediately, **kwargs):
+            scheduled_call["task"] = task
+
+        outcomes = iter([False, True])
+        with patch("main.parse_arguments", return_value=args), \
+             patch("main.get_config", return_value=self._make_config(schedule_enabled=True, schedule_time="18:00")), \
+             patch("main._reload_runtime_config", return_value=runtime_config), \
+             patch("main._build_schedule_time_provider", return_value=lambda: "09:30"), \
+             patch("main.setup_logging"), \
+             patch("main.run_full_analysis", side_effect=lambda *a, **k: next(outcomes)) as run_full_analysis, \
+             patch.object(main, "_LAST_ANALYSIS_FAILURE_REASON", "market_review_failed"), \
+             patch("src.scheduler.run_with_schedule", side_effect=fake_run_with_schedule):
+            self.assertEqual(main.main(), 0)
+
+            scheduler = Scheduler(register_signals=False, pass_scheduled_for=True)
+            scheduler.schedule = schedule.Scheduler()
+            scheduler.set_daily_task(scheduled_call["task"], run_immediately=False)
+            with self.assertLogs("src.scheduler", level="ERROR") as logs:
+                scheduler._safe_run_task()
+            scheduler._safe_run_task()
+
+        self.assertIn(
+            "scheduled analysis reported failure: market_review_failed",
+            "\n".join(logs.output),
+        )
+        self.assertEqual(run_full_analysis.call_count, 2)
 
     def test_schedule_mode_reload_uses_latest_runtime_config(self) -> None:
         args = self._make_args(schedule=True)

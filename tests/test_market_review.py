@@ -935,5 +935,82 @@ class MarketReviewLocalizationTestCase(unittest.TestCase):
                     os.environ["DATABASE_PATH"] = old_db_path
 
 
+class MarketReviewMissingRegionsTestCase(unittest.TestCase):
+    """T25：多市場中某一市場報告為空時，合併報告仍非空，需另外記錄缺漏。"""
+
+    @staticmethod
+    def _notifier() -> MagicMock:
+        notifier = MagicMock()
+        notifier.save_report_to_file.return_value = "/tmp/market_review.md"
+        notifier.is_available.return_value = False
+        return notifier
+
+    @staticmethod
+    def _fake_analyzer(report):
+        analyzer = MagicMock()
+        analyzer.run_daily_review_with_snapshot.return_value = SimpleNamespace(
+            report=report,
+            market_light_snapshot={},
+        )
+        return analyzer
+
+    def _run(self, region, *reports):
+        with patch.object(
+            market_review_module,
+            "get_config",
+            return_value=SimpleNamespace(report_language="zh", market_review_region="cn"),
+        ), patch.object(
+            market_review_module,
+            "MarketAnalyzer",
+            side_effect=[self._fake_analyzer(r) for r in reports],
+        ), patch.object(market_review_module, "_persist_market_review_history"):
+            return run_market_review(
+                self._notifier(), send_notification=False, override_region=region
+            )
+
+    def test_multi_market_empty_tw_report_is_recorded_and_logged(self) -> None:
+        with self.assertLogs(market_review_module.logger, level="ERROR") as logs:
+            result = self._run("tw,us", "", "US body")
+
+        self.assertIn("US body", result)
+        self.assertNotIn("台股大盘复盘", result)
+        self.assertEqual(market_review_module.last_run_missing_regions(), ["tw"])
+        joined = "\n".join(logs.output)
+        self.assertIn("action=region_report_empty", joined)
+        self.assertIn("region=tw", joined)
+        self.assertNotIn("region=us", joined)
+
+    def test_multi_market_all_reports_present_records_nothing(self) -> None:
+        result = self._run("tw,us", "TW body", "US body")
+
+        self.assertIn("TW body", result)
+        self.assertEqual(market_review_module.last_run_missing_regions(), [])
+
+    def test_single_market_empty_report_is_recorded(self) -> None:
+        with self.assertLogs(market_review_module.logger, level="ERROR") as logs:
+            result = self._run("tw", "")
+
+        self.assertIsNone(result)
+        self.assertEqual(market_review_module.last_run_missing_regions(), ["tw"])
+        self.assertIn("action=region_report_empty", "\n".join(logs.output))
+
+    def test_missing_regions_are_reset_on_next_call(self) -> None:
+        with self.assertLogs(market_review_module.logger, level="ERROR"):
+            self._run("tw,us", "", "US body")
+        self.assertEqual(market_review_module.last_run_missing_regions(), ["tw"])
+
+        self._run("tw,us", "TW body", "US body")
+
+        self.assertEqual(market_review_module.last_run_missing_regions(), [])
+
+    def test_last_run_missing_regions_returns_a_copy(self) -> None:
+        with self.assertLogs(market_review_module.logger, level="ERROR"):
+            self._run("tw,us", "", "US body")
+
+        market_review_module.last_run_missing_regions().append("us")
+
+        self.assertEqual(market_review_module.last_run_missing_regions(), ["tw"])
+
+
 if __name__ == "__main__":
     unittest.main()

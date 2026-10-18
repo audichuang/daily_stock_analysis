@@ -15,7 +15,7 @@ import inspect
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import uuid
 
 from src.config import get_config
@@ -50,6 +50,27 @@ _MARKET_REVIEW_MARKETS = (
     ('kr', 'kr_title', '韩股'),
 )
 _MARKET_REVIEW_REGION_ORDER = MARKET_REVIEW_REGION_ORDER
+
+# 最近一次 run_market_review 中「沒產出報告」的市場（多市場時 tw,us 其一為空，
+# 合併後的 review_report 仍非空，呼叫端光看回傳值分不出缺了哪一份）。
+# 只服務 CLI 單執行緒路徑；run_market_review 進入時重設，serve 不讀。
+_LAST_RUN_MISSING_REGIONS: List[str] = []
+
+
+def last_run_missing_regions() -> List[str]:
+    """回傳最近一次 run_market_review 沒產出報告的市場代碼（複本）。"""
+    return list(_LAST_RUN_MISSING_REGIONS)
+
+
+def _record_missing_region(region: str, *, trigger_source: str, query_id: str) -> None:
+    _LAST_RUN_MISSING_REGIONS.append(region)
+    logger.error(
+        "[MarketReview] component=market_review action=region_report_empty "
+        "trigger_source=%s query_id=%s region=%s",
+        trigger_source,
+        query_id,
+        region,
+    )
 
 
 @dataclass
@@ -229,6 +250,7 @@ def run_market_review(
         else (getattr(runtime_config, 'market_review_region', 'cn') or 'cn')
     )
     run_markets = _resolve_market_review_regions(raw_region)
+    _LAST_RUN_MISSING_REGIONS.clear()
     persist_region = ','.join(run_markets) if len(run_markets) > 1 else run_markets[0]
     logger.info(
         "[MarketReview] component=market_review action=start trigger_source=%s query_id=%s region=%s",
@@ -275,6 +297,12 @@ def run_market_review(
                 )
                 if mkt_report:
                     parts.append(f"{review_text[title_key]}\n\n{mkt_report}")
+                else:
+                    _record_missing_region(
+                        mkt,
+                        trigger_source=trigger_source,
+                        query_id=history_query_id,
+                    )
             if parts:
                 review_report = f"\n\n---\n\n{review_text['separator']}\n\n".join(parts)
             else:
@@ -301,6 +329,12 @@ def run_market_review(
             )
             review_result = market_analyzer.run_daily_review_with_snapshot()
             review_report = review_result.report
+            if not review_report:
+                _record_missing_region(
+                    run_region,
+                    trigger_source=trigger_source,
+                    query_id=history_query_id,
+                )
             market_light_snapshots = {}
             _collect_market_light_snapshot(
                 market_light_snapshots,

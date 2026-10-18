@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import sys
+from datetime import date
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, call, patch
@@ -824,6 +825,186 @@ class MergePortfolioHoldingsTest(unittest.TestCase):
             ):
                 main.run_full_analysis(config, args, stock_codes)
             self.assertEqual(seen, [expected])
+
+
+class MainMarketReviewFailureTest(unittest.TestCase):
+    """T25：大盤複盤失敗不能被個股結果掩蓋（個股照推、報告照存，僅回 False）。"""
+
+    @staticmethod
+    def _args(**overrides):
+        values = dict(
+            portfolio=None,
+            single_notify=False,
+            no_context_snapshot=True,
+            no_market_review=False,
+            workers=1,
+            dry_run=False,
+            no_notify=False,
+            schedule=False,
+        )
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    @staticmethod
+    def _config(**overrides):
+        values = dict(
+            refresh_stock_list=MagicMock(),
+            single_stock_notify=False,
+            merge_email_notification=False,
+            market_review_enabled=True,
+            market_review_region="cn",
+            daily_market_context_enabled=False,
+            analysis_delay=0,
+            backtest_enabled=False,
+            report_type="simple",
+        )
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    @staticmethod
+    def _pipeline():
+        pipeline = MagicMock()
+        pipeline.run.return_value = [
+            SimpleNamespace(
+                code="2330.TW",
+                success=True,
+                sentiment_score=90,
+                name="台積電",
+                operation_advice="持有",
+                trend_prediction="震盪上行",
+                get_emoji=MagicMock(return_value="📈"),
+            )
+        ]
+        pipeline._last_local_report_path = "/tmp/report.md"
+        pipeline.notifier = MagicMock(
+            is_available=MagicMock(return_value=True),
+            generate_aggregate_report=MagicMock(return_value="dashboard"),
+            send=MagicMock(return_value=True),
+        )
+        return pipeline
+
+    def _run(self, *, args=None, config=None, pipeline=None, review_result=None,
+             missing_regions=(), prime=None, region="cn"):
+        args = args or self._args()
+        config = config or self._config()
+        pipeline = pipeline or self._pipeline()
+        patches = [
+            patch.object(main, "_refresh_stock_index_cache_for_analysis"),
+            patch.object(
+                main, "_compute_trading_day_filter",
+                return_value=(["2330.TW"], region, False),
+            ),
+            patch("src.core.pipeline.StockAnalysisPipeline", return_value=pipeline),
+            patch("src.core.market_review.run_market_review"),
+            patch(
+                "src.core.market_review.last_run_missing_regions",
+                return_value=list(missing_regions),
+            ),
+            patch("src.feishu_doc.FeishuDocManager"),
+            patch.object(main, "_run_auto_backtest"),
+            patch.object(
+                main, "_run_market_review_with_shared_lock", return_value=review_result
+            ),
+            patch.object(
+                main, "_resolve_daily_market_context_target_date",
+                return_value=date(2026, 10, 16),
+            ),
+        ]
+        if prime is not None:
+            patches.append(patch.object(main, "_prime_daily_market_context", side_effect=prime))
+        mocks = []
+        try:
+            for p in patches:
+                mocks.append(p.start())
+            mocks[5].return_value.is_configured.return_value = False
+            result = main.run_full_analysis(config, args, ["2330.TW"])
+            review_lock = mocks[7]
+        finally:
+            for p in reversed(patches):
+                p.stop()
+        return result, pipeline, review_lock
+
+    def test_review_none_with_stock_results_fails_but_stocks_still_pushed(self):
+        result, pipeline, review = self._run(review_result=None)
+
+        self.assertFalse(result)
+        self.assertEqual(main._LAST_ANALYSIS_FAILURE_REASON, "market_review_failed")
+        review.assert_called_once()
+        pipeline.run.assert_called_once()
+        self.assertTrue(pipeline.run.call_args.kwargs["send_notification"])
+
+    def test_review_exception_path_fails_with_runtime_error_reason(self):
+        pipeline = self._pipeline()
+        with patch.object(main, "_run_market_review_with_shared_lock", side_effect=RuntimeError("boom")):
+            args, config = self._args(), self._config()
+            with patch.object(main, "_refresh_stock_index_cache_for_analysis"), patch.object(
+                main, "_compute_trading_day_filter", return_value=(["2330.TW"], "cn", False)
+            ), patch("src.core.pipeline.StockAnalysisPipeline", return_value=pipeline), patch.object(
+                main, "_run_auto_backtest"
+            ):
+                result = main.run_full_analysis(config, args, ["2330.TW"])
+
+        self.assertFalse(result)
+        self.assertEqual(main._LAST_ANALYSIS_FAILURE_REASON, "runtime_error")
+
+    def test_multi_market_missing_region_fails_but_partial_review_still_merged(self):
+        config = self._config(merge_email_notification=True, market_review_region="tw,us")
+        result, pipeline, _ = self._run(
+            config=config,
+            region="tw,us",
+            review_result=SimpleNamespace(report="US body only"),
+            missing_regions=["tw"],
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(main._LAST_ANALYSIS_FAILURE_REASON, "market_review_failed")
+        pipeline.notifier.send.assert_called_once()
+        combined = pipeline.notifier.send.call_args.args[0]
+        self.assertIn("US body only", combined)
+        self.assertIn("dashboard", combined)
+
+    def test_complete_review_succeeds(self):
+        result, _, _ = self._run(
+            review_result=SimpleNamespace(report="full review"), missing_regions=[]
+        )
+
+        self.assertTrue(result)
+        self.assertIsNone(main._LAST_ANALYSIS_FAILURE_REASON)
+
+    def test_lock_contention_rescued_by_context_reread_is_not_a_failure(self):
+        calls = {"n": 0}
+
+        def prime(*_args, **kwargs):
+            calls["n"] += 1
+            full = bool(kwargs.get("return_full_report"))
+            if calls["n"] < 4:
+                return ("", "") if full else ""
+            return ("rescued summary", "rescued full report")
+
+        config = self._config(daily_market_context_enabled=True)
+        # 殘留的缺漏清單（上一輪遺留）在鎖競爭略過複盤時不得被讀成本輪失敗。
+        result, _, review = self._run(
+            config=config, review_result=None, prime=prime, missing_regions=["tw"]
+        )
+
+        self.assertTrue(result)
+        self.assertIsNone(main._LAST_ANALYSIS_FAILURE_REASON)
+        review.assert_called_once()
+        self.assertGreaterEqual(calls["n"], 4)
+
+    def test_no_market_review_flag_never_sets_market_review_failed(self):
+        result, pipeline, review = self._run(
+            args=self._args(no_market_review=True), review_result=None
+        )
+
+        self.assertTrue(result)
+        self.assertIsNone(main._LAST_ANALYSIS_FAILURE_REASON)
+        review.assert_not_called()
+
+    def test_dry_run_never_sets_market_review_failed(self):
+        result, _, _ = self._run(args=self._args(dry_run=True), review_result=None)
+
+        self.assertIsNone(main._LAST_ANALYSIS_FAILURE_REASON)
 
 
 if __name__ == "__main__":

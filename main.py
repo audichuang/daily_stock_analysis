@@ -888,7 +888,7 @@ def run_full_analysis(
 
     # Import pipeline modules outside the broad try/except so that import-time
     # failures propagate to the caller instead of being silently swallowed.
-    from src.core.market_review import run_market_review
+    from src.core.market_review import last_run_missing_regions, run_market_review
     from src.core.pipeline import StockAnalysisPipeline
 
     global _LAST_ANALYSIS_FAILURE_REASON
@@ -1087,6 +1087,7 @@ def run_full_analysis(
         analysis_delay = getattr(config, 'analysis_delay', 0)
 
         # 2. 运行大盘复盘（如果启用且不是仅个股模式）
+        review_result = None
         if should_run_market_review:
             schedule_mode = bool(
                 getattr(args, 'schedule', False)
@@ -1134,7 +1135,6 @@ def run_full_analysis(
                     else:
                         logger.warning("复用本轮大盘上下文推送大盘复盘失败")
 
-            review_result = None
             if not can_skip_market_review:
                 if analysis_delay > 0:
                     logger.info(f"等待 {analysis_delay} 秒后执行大盘复盘（避免API限流）...")
@@ -1200,6 +1200,21 @@ def run_full_analysis(
             not getattr(args, "dry_run", False)
             and should_run_market_review
         )
+        # 大盤複盤失敗不能被個股結果掩蓋：整份複盤沒產出，或多市場中某一市場
+        # 那份為空（合併後 market_report 仍非空，光看它分不出缺了台股）。
+        # 只在複盤本輪真的跑過（review_result 非空）才讀缺漏清單，避免鎖競爭
+        # 略過複盤時讀到上一輪殘留。個股照推、報告照存，僅改以非零結束。
+        missing_regions = last_run_missing_regions() if review_result else []
+        if expected_market_report and (not market_report or missing_regions):
+            if results or missing_regions:
+                if _LAST_ANALYSIS_FAILURE_REASON is None:
+                    _LAST_ANALYSIS_FAILURE_REASON = "market_review_failed"
+                logger.error(
+                    "本輪大盤複盤未完整產出：market_report_empty=%s missing_regions=%s",
+                    not market_report,
+                    ",".join(missing_regions) or "-",
+                )
+                deferred_failure_result = False
         if (expected_stock_report or expected_market_report) and not results and not market_report:
             _LAST_ANALYSIS_FAILURE_REASON = "no_report"
             logger.error(
@@ -1970,6 +1985,8 @@ def main() -> int:
                         "no_report",
                         "empty_stock_list",
                         "report_save_failed",
+                        "runtime_error",
+                        "market_review_failed",
                     }:
                         return 1
         else:
