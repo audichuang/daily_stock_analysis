@@ -19,7 +19,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from verify_swing_decisions import (  # noqa: E402
-    _ma_check, fill_ok, read_log, realized_return, selection_lift_ci, summarize,
+    _ma_check, _portfolio_signals, fill_ok, read_log, realized_return, selection_lift_ci, summarize,
     window,
 )
 
@@ -213,3 +213,120 @@ def test_ma_check_handles_a_bare_ma_reference_and_missing_stock():
     assert "MA10 現在 100.00" in lines[0] and "日誌寫的是" not in lines[0]
     assert _ma_check(_panel([100.0] * 10), "9999", "跌破MA10") == []
     assert _ma_check(None, "6166", "跌破MA10") == []
+
+
+# --- 可成交口徑（組合臂）：進場日與 conf 鍵要跟逐筆路徑一致 -------------------------------
+
+IDX = pd.bdate_range("2026-07-20", periods=12)
+
+
+def _dec(date, sid, entry_date, conf=None, verdict="enter"):
+    return {"date": date, "stock_id": sid, "verdict": verdict,
+            "entry_date": entry_date, "confidence": conf}
+
+
+def test_portfolio_signal_day_is_the_trading_day_before_entry_not_the_log_date():
+    """2408 形狀：判斷在 `date` 後的交易日上午才做完，逐筆路徑（`window`）的進場日是再下一日。
+
+    組合臂若仍以 `r['date']` 當訊號日，`simulate` 會在 date 的次一日開盤買進——那天判斷還不
+    存在（實例：2408 08-14 09:40 才決定，卻用 08-14 開盤 532 買進，高於區間上界 525）。
+    """
+    date, decided_day = IDX[3], IDX[4]
+    e_d, _, _ = window(IDX, date, 3, decided_at=f"{decided_day.date()}T09:40+08:00")
+    assert e_d == IDX[5]                                   # 逐筆路徑：決定日的次一交易日
+    sig, _, skipped = _portfolio_signals(pd.DataFrame([_dec(date, "2408", e_d)]), IDX)
+    assert skipped == 0
+    assert sig.at[decided_day, "2408"]                     # 訊號日 = 決定日，simulate 於 e_d 開盤買
+    assert not sig.at[date, "2408"]                        # 不是 r['date']
+    assert int(sig.to_numpy().sum()) == 1                  # 沒有往前多移（overdo 守門）
+
+
+def test_portfolio_conf_is_keyed_by_the_new_signal_day_so_ranking_survives():
+    rows = pd.DataFrame([_dec(IDX[3], "1101", IDX[5], conf=0.35),
+                         _dec(IDX[4], "2002", IDX[5], conf=0.55),
+                         _dec(IDX[3], "3008", IDX[5], conf=None)])
+    _, conf, _ = _portfolio_signals(rows, IDX)
+    assert conf[(IDX[4], "1101")] == pytest.approx(0.35)
+    assert conf[(IDX[4], "2002")] == pytest.approx(0.55)
+    assert conf[(IDX[4], "3008")] == 0.0                   # 缺值 → 0，不是 NaN（NaN 會讓排序失真）
+    assert (IDX[3], "1101") not in conf                    # 舊鍵（r['date']）查不到
+
+
+def test_portfolio_entry_on_the_first_index_day_is_skipped_and_counted():
+    rows = pd.DataFrame([_dec(IDX[0], "1101", IDX[0], conf=0.3),
+                         _dec(IDX[2], "2002", IDX[4], conf=0.3)])
+    sig, conf, skipped = _portfolio_signals(rows, IDX)
+    assert skipped == 1
+    assert not sig["1101"].any() and (IDX[0], "1101") not in conf
+    assert sig.at[IDX[3], "2002"]
+
+
+def test_portfolio_entry_date_missing_or_outside_index_is_skipped_not_raised():
+    rows = pd.DataFrame([_dec(IDX[2], "1101", pd.Timestamp("2026-09-01")),
+                         _dec(IDX[2], "2002", pd.NaT),
+                         _dec(IDX[2], "3008", IDX[4], conf=0.3)])
+    sig, _, skipped = _portfolio_signals(rows, IDX)
+    assert skipped == 2
+    assert int(sig.to_numpy().sum()) == 1 and sig.at[IDX[3], "3008"]
+
+
+class _Conn:
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+    def execute(self, *a, **k):
+        class _R:
+            @staticmethod
+            def fetchall():
+                return [(d,) for d in IDX]
+        return _R()
+
+
+class _Eng:
+    def connect(self): return _Conn()
+
+
+def _price_long(opens, closes=None):
+    """opens: {sid: [open per IDX day]}；收盤預設等於開盤。"""
+    closes = closes or opens
+    return pd.DataFrame([
+        {"stock_id": sid, "date": d, "open": opens[sid][i], "close": closes[sid][i]}
+        for sid in opens for i, d in enumerate(IDX)])
+
+
+def test_realized_fill_uses_the_unadjusted_open_but_returns_use_adjusted_prices(monkeypatch):
+    """除權息後還原開盤 94.5 低於上界 100，但當天名目開盤 105 其實沒成交。
+
+    `entry_range` 是判斷當下的名目價；拿還原價去比會把沒發生的成交算進統計。報酬仍須走前復權。
+    """
+    import verify_swing_decisions as vsd
+
+    n = len(IDX)
+    opens = {"1101": [105.0] * n, "2002": [99.0] * n}      # 1101 名目高於上界；2002 在區間內
+    monkeypatch.setattr(vsd.pd, "read_sql", lambda *a, **k: _price_long(opens))
+    monkeypatch.setattr(vsd, "load_factors",
+                        lambda eng, idx, cols: pd.DataFrame(0.9, index=idx, columns=cols))
+    df = pd.DataFrame([
+        {"date": IDX[1], "stock_id": "1101", "verdict": "enter", "entry_range": [95, 100]},
+        {"date": IDX[1], "stock_id": "2002", "verdict": "enter", "entry_range": [95, 100]},
+    ])
+    out = vsd.realized(_Eng(), df, 3).set_index("stock_id")
+    assert bool(out.at["1101", "no_fill"]) and out.at["1101", "entry_px"] == pytest.approx(105.0)
+    assert not bool(out.at["2002", "no_fill"]) and not bool(out.at["2002", "pending"])
+    # 收盤與開盤同為 99 × 0.9 → 前復權進出價相同，報酬 = 兩端成本；用名目進場價會多出 10%
+    assert out.at["2002", "r"] == pytest.approx(vsd.realized_return(89.1, 89.1))
+
+
+def test_paired_portfolio_enters_on_the_per_event_entry_day_and_ranks_by_confidence(monkeypatch):
+    """端到端接線：進場日 = 逐筆的 entry_date；同日搶一個空位時 confidence 高者勝。"""
+    import verify_swing_decisions as vsd
+
+    flat = {sid: [100.0] * len(IDX) for sid in ("1101", "2002")}
+    monkeypatch.setattr(vsd.pd, "read_sql", lambda *a, **k: _price_long(flat))
+    monkeypatch.setattr(vsd, "load_factors",
+                        lambda eng, idx, cols: pd.DataFrame(1.0, index=idx, columns=cols))
+    df = pd.DataFrame([_dec(IDX[3], "1101", IDX[5], conf=0.2),      # 字母序在前、信心低
+                       _dec(IDX[4], "2002", IDX[5], conf=0.9)])
+    _, trades = vsd.paired_portfolio(df, _Eng(), 3, 1)["只收 enter"]
+    assert list(trades["stock_id"]) == ["2002"]
+    assert trades["entry_date"].iloc[0] == IDX[5]

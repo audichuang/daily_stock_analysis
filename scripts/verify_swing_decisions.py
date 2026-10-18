@@ -119,6 +119,9 @@ def realized(engine, df, horizon, *, entry_notional=DEFAULT_POSITION_NOTIONAL,
     op = px.pivot(index="date", columns="stock_id", values="open").astype(float)
     cl = px.pivot(index="date", columns="stock_id", values="close").astype(float)
     adj = load_factors(engine, cl.index, cl.columns)
+    # 區間比對用**未還原**開盤：`entry_range` 是判斷當下的名目價，拿還原後的開盤去比，
+    # 除權息後會把「開盤其實高於上界、沒成交」的算成成交。報酬仍用前復權價。
+    op_raw = op
     op, cl = op * adj, cl * adj
 
     out = []
@@ -129,8 +132,9 @@ def realized(engine, df, horizon, *, entry_notional=DEFAULT_POSITION_NOTIONAL,
         sid = str(r["stock_id"])
         if e_d is not None and sid in op.columns and pd.notna(op.at[e_d, sid]):
             entry = float(op.at[e_d, sid])
-            if not fill_ok(entry, r.get("entry_range")):
-                rec.update(pending=False, no_fill=True, entry_date=e_d, entry_px=entry)
+            raw_open = float(op_raw.at[e_d, sid])
+            if not fill_ok(raw_open, r.get("entry_range")):
+                rec.update(pending=False, no_fill=True, entry_date=e_d, entry_px=raw_open)
             else:
                 px_out = cl.at[x_d, sid]
                 if pd.isna(px_out):                      # 期間停止交易 → 最後成交價結算
@@ -191,11 +195,44 @@ def selection_lift_ci(events, calendar, n=2000, block=60, seed=42):
     return float(np.percentile(diffs, 2.5)), float(np.percentile(diffs, 97.5))
 
 
+def _portfolio_signals(rows, index, columns=None):
+    """把已到期且成交的決策轉成 `simulate` 的訊號面板，回傳 (訊號面板, conf_map, 跳過筆數)。
+
+    `simulate` 是「昨天收盤的訊號、今天開盤買進」，所以訊號日必須是 `entry_date` 在 `index`
+    裡的**前一個交易日**，這樣組合臂才會在與逐筆路徑（`window()`，已含 `decided_at`）相同的
+    進場日成交。用 `r['date']` 當訊號日會無視 `decided_at`：判斷在進場日當天上午才做完
+    （2408：08-14 09:40 決定、開盤 532 已高於區間上界 525），組合臂卻照樣用那天開盤買進。
+
+    `conf_map` 以 (訊號日, stock_id) 為鍵，與 `simulate` 呼叫排序函式的 (prev, s) 一致；
+    仍以 `r['date']` 為鍵會全部查成 0、排序靜默失效。`entry_date` 不在 `index`（含缺值）
+    或就是 `index[0]`（沒有前一個交易日可當訊號日）的決策不進組合，回傳跳過筆數讓呼叫端揭露。
+    """
+    index = pd.DatetimeIndex(index)
+    if columns is None:
+        columns = sorted(rows["stock_id"].astype(str).unique()) if len(rows) else []
+    sig = pd.DataFrame(False, index=index, columns=columns)
+    conf, skipped = {}, 0
+    for _, r in rows.iterrows():
+        sid = str(r["stock_id"])
+        e_d = r.get("entry_date")
+        pos = index.get_indexer([e_d])[0] if pd.notna(e_d) else -1
+        if pos < 1 or sid not in sig.columns:
+            skipped += 1
+            continue
+        sig_day = index[pos - 1]
+        sig.at[sig_day, sid] = True
+        c = r.get("confidence")
+        conf[(sig_day, sid)] = 0.0 if c is None or pd.isna(c) else float(c)
+    return sig, conf, skipped
+
+
 def paired_portfolio(df, engine, horizon, slots, *, fee_discount=1.0):
     """把決策放回組合：同樣 `slots` 個空位，比「全收」與「只收 enter」兩本帳。
 
     事件均值不是可投資報酬——20 個同日同題材的訊號可以讓均值很漂亮，但真實帳戶只拿得到
     `slots` 檔。這一段才是「AI 這層有沒有加值」的可成交版本。
+
+    `df` 必須是已到期且成交的決策（含 `entry_date`），訊號日由 `_portfolio_signals` 推算。
     """
     from portfolio_walkforward import simulate           # 延遲載入，避免循環相依
     ids = sorted(df["stock_id"].astype(str).unique())
@@ -208,23 +245,18 @@ def paired_portfolio(df, engine, horizon, slots, *, fee_discount=1.0):
     cl = px.pivot(index="date", columns="stock_id", values="close").astype(float)
     adj = load_factors(engine, cl.index, cl.columns)
     piv = {"open": op * adj, "close": cl * adj}
-    conf = {(pd.Timestamp(r["date"]), str(r["stock_id"])): float(r.get("confidence") or 0)
-            for _, r in df.iterrows()}
-
-    def build(rows):
-        s = pd.DataFrame(False, index=cl.index, columns=cl.columns)
-        for _, r in rows.iterrows():
-            d = pd.Timestamp(r["date"])
-            if d in s.index and str(r["stock_id"]) in s.columns:
-                s.at[d, str(r["stock_id"])] = True
-        return s
+    _, conf, skipped = _portfolio_signals(df, cl.index, cl.columns)
+    if skipped:
+        print(f"（可成交口徑：{skipped} 筆決策的進場日不在價格面板內或為面板首日，"
+              f"沒有前一交易日可當訊號日，未納入組合）")
 
     order = lambda d, sid: conf.get((d, sid), 0.0)       # noqa: E731 - 依 confidence 排序
     res = {}
     for label, rows in (("全收", df), ("只收 enter", df[df["verdict"] == "enter"])):
         if not len(rows):
             continue
-        eq, tr, _, _ = simulate(piv, build(rows), None, None, horizon, slots,
+        sig, _, _ = _portfolio_signals(rows, cl.index, cl.columns)
+        eq, tr, _, _ = simulate(piv, sig, None, None, horizon, slots,
                                 cl.index[0], cl.index[-1], rank=order,
                                 fee_discount=fee_discount)
         res[label] = (eq, tr)
