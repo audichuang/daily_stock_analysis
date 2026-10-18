@@ -286,6 +286,50 @@ def test_daily_bars_uses_base_context_and_keeps_dates_out_of_timestamp() -> None
     assert one_bar.status == ContextFieldStatus.PARTIAL
 
 
+def test_daily_bars_marked_stale_when_pipeline_flags_history_lag() -> None:
+    stale_info = {"last_date": "2026-10-13", "expected": "2026-10-16", "missing_sessions": 3}
+    base = {
+        "code": "2330.TW",
+        "date": "2026-10-13",
+        "today": {"date": "2026-10-13", "close": 1000.0},
+        "yesterday": {"date": "2026-10-12", "close": 990.0},
+    }
+    block = AnalysisContextBuilder.build(
+        _artifacts(base_context={**base, "daily_history_stale": stale_info})
+    ).blocks["daily_bars"]
+
+    assert block.status == ContextFieldStatus.STALE
+    assert "daily_history_stale" in block.warnings
+    assert block.items["today"].status == ContextFieldStatus.STALE
+    assert block.items["today"].missing_reason == "daily_history_stale"
+    for key, value in stale_info.items():
+        assert block.metadata[key] == value
+        assert block.items["today"].metadata[key] == value
+    # 昨日 K 不標：只有「今天這根」落後
+    assert block.items["yesterday"].status == ContextFieldStatus.AVAILABLE
+
+    # 無旗標時維持 AVAILABLE（反向：不得無條件標 STALE）
+    clean = AnalysisContextBuilder.build(_artifacts(base_context=base)).blocks["daily_bars"]
+    assert clean.status == ContextFieldStatus.AVAILABLE
+    assert clean.items["today"].status == ContextFieldStatus.AVAILABLE
+    assert "daily_history_stale" not in clean.warnings
+
+
+def test_daily_bars_missing_stays_missing_even_with_stale_flag() -> None:
+    block = AnalysisContextBuilder.build(
+        _artifacts(
+            base_context={
+                "date": "2026-10-13",
+                "data_missing": True,
+                "today": {},
+                "yesterday": {},
+                "daily_history_stale": {"last_date": "2026-10-13", "expected": "2026-10-16", "missing_sessions": 3},
+            }
+        )
+    ).blocks["daily_bars"]
+    assert block.status == ContextFieldStatus.MISSING
+
+
 def test_technical_missing_and_realtime_overlay_statuses_are_explicit() -> None:
     missing = AnalysisContextBuilder.build(
         _artifacts(trend_result=None)

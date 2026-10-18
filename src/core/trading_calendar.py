@@ -291,6 +291,28 @@ def get_effective_trading_date(
         return fallback_date
 
 
+def count_missing_sessions(
+    market: Optional[str],
+    last_date: date,
+    current_time: Optional[datetime] = None,
+) -> Optional[int]:
+    """Count completed sessions in ``(last_date, effective trading date]``.
+
+    用來判斷日線歷史是否落後已收盤場次（爬取卡住時 DB 會停在舊日期）。
+    日曆不可用、市場未知或超出日曆範圍時回 None（不得當成 0 也不得猜），
+    讓呼叫端選擇不標記而不是誤報。
+    """
+    if market not in MARKET_EXCHANGE:
+        return None
+    effective = get_effective_trading_date(market, current_time=current_time)
+    if effective <= last_date:
+        return 0
+    sessions = get_trading_dates(market, last_date + timedelta(days=1), effective)
+    if sessions is None:
+        return None
+    return int(len(sessions))
+
+
 def resolve_historical_daily_bar_date(
     market: Optional[str],
     target_date: date,

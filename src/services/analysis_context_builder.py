@@ -232,10 +232,35 @@ def _build_daily_bars_block(artifacts: PipelineAnalysisArtifacts) -> AnalysisCon
         block_status = ContextFieldStatus.PARTIAL
     else:
         block_status = ContextFieldStatus.MISSING
+
+    # 日線歷史落後已收盤場次（pipeline 設的旗標）：降成 STALE，沿用「stale 不得高信心」規則
+    stale_info = context.get("daily_history_stale")
+    warnings: List[str] = []
+    if isinstance(stale_info, dict) and stale_info:
+        stale_meta = {
+            key: stale_info.get(key)
+            for key in ("last_date", "expected", "missing_sessions")
+            if stale_info.get(key) is not None
+        }
+        warnings.append("daily_history_stale")
+        metadata = {**metadata, **stale_meta}
+        today_item = items["today"]
+        if today_item.status == ContextFieldStatus.AVAILABLE:
+            items["today"] = today_item.model_copy(
+                update={
+                    "status": ContextFieldStatus.STALE,
+                    "missing_reason": "daily_history_stale",
+                    "metadata": {**today_item.metadata, **stale_meta},
+                    "warnings": list(today_item.warnings) + warnings,
+                }
+            )
+        if block_status != ContextFieldStatus.MISSING:
+            block_status = ContextFieldStatus.STALE
     return AnalysisContextBlock(
         status=block_status,
         items=items,
         source="storage.get_analysis_context",
+        warnings=warnings,
         metadata=metadata,
     )
 

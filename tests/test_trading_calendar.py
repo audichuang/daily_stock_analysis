@@ -995,5 +995,43 @@ class ComputeEffectiveRegionTestCase(unittest.TestCase):
         self.assertEqual(result, "cn")
 
 
+class CountMissingSessionsTestCase(unittest.TestCase):
+    """count_missing_sessions：用真實 XTAI 日曆（2026-10-10 國慶日為週六，10-12 補假與否以日曆為準）。"""
+
+    @staticmethod
+    def _tw(y, m, d, hh, mm):
+        return datetime(y, m, d, hh, mm, tzinfo=ZoneInfo("Asia/Taipei"))
+
+    def test_after_close_counts_sessions_since_last_bar(self):
+        # 10-16（週五）18:30，DB 停在 10-13：缺 10-14、10-15、10-16 共 3 場
+        self.assertEqual(
+            trading_calendar.count_missing_sessions("tw", date(2026, 10, 13), self._tw(2026, 10, 16, 18, 30)), 3
+        )
+
+    def test_intraday_excludes_unfinished_session(self):
+        # 10-16 10:30 effective 是 10-15：last=10-14 只缺 10-15 一場
+        self.assertEqual(
+            trading_calendar.count_missing_sessions("tw", date(2026, 10, 14), self._tw(2026, 10, 16, 10, 30)), 1
+        )
+
+    def test_up_to_date_and_weekend_are_zero(self):
+        # 週日中午 effective 是 10-16；last=10-16 → 0；last 比 effective 新也不得為負
+        self.assertEqual(
+            trading_calendar.count_missing_sessions("tw", date(2026, 10, 16), self._tw(2026, 10, 18, 12, 0)), 0
+        )
+        self.assertEqual(
+            trading_calendar.count_missing_sessions("tw", date(2026, 10, 20), self._tw(2026, 10, 18, 12, 0)), 0
+        )
+
+    def test_calendar_unavailable_or_unknown_market_returns_none(self):
+        with patch.object(trading_calendar, "_XCALS_AVAILABLE", False):
+            self.assertIsNone(
+                trading_calendar.count_missing_sessions("tw", date(2026, 10, 13), self._tw(2026, 10, 16, 18, 30))
+            )
+        self.assertIsNone(
+            trading_calendar.count_missing_sessions("xx", date(2026, 10, 13), self._tw(2026, 10, 16, 18, 30))
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

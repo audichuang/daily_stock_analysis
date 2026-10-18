@@ -106,6 +106,7 @@ from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 from src.core.trading_calendar import (
     MarketPhase,
     build_market_phase_context,
+    count_missing_sessions,
     get_effective_trading_date,
     get_market_for_stock,
     get_market_now,
@@ -258,6 +259,51 @@ def _symbol_scope_lookup_values(code: str, market: str) -> List[str]:
         add_case_variants(f"SS.{normalized}")
         add_case_variants(f"{normalized}.SS")
     return values
+
+
+
+def _mark_daily_history_staleness(
+    context: Dict[str, Any],
+    market: str,
+    current_time: Optional[datetime] = None,
+) -> None:
+    """日線歷史落後已收盤場次時，在 context 寫入 ``daily_history_stale``（原地修改）。
+
+    容忍 1 場僅限「effective 日 == 市場今天」（剛收盤、當日爬取尚未跑）；其餘情況 DB 最後一根
+    必須就是 effective 日。日曆不可用（None）或日期解析失敗一律不標、不拋出。
+    停牌股也會被標（只降信心，不擋分析）。
+    """
+    if not isinstance(context, dict) or context.get("data_missing"):
+        return
+    try:
+        raw = context.get("date")
+        if isinstance(raw, datetime):
+            last_date = raw.date()
+        elif isinstance(raw, date):
+            last_date = raw
+        else:
+            last_date = date.fromisoformat(str(raw)[:10])
+        missing = count_missing_sessions(market, last_date, current_time=current_time)
+        if missing is None:
+            return
+        effective = get_effective_trading_date(market, current_time)
+        tolerance = 1 if effective == get_market_now(market, current_time).date() else 0
+        if missing <= tolerance:
+            return
+        context["daily_history_stale"] = {
+            "last_date": last_date.isoformat(),
+            "expected": effective.isoformat(),
+            "missing_sessions": missing,
+        }
+        logger.warning(
+            "[%s] 日線歷史落後 %d 個已收盤交易日（DB 最後 %s，應至 %s），指標可能基於舊 K 線",
+            context.get("code") or market,
+            missing,
+            last_date.isoformat(),
+            effective.isoformat(),
+        )
+    except Exception as exc:
+        logger.debug("daily history staleness check skipped: %s", exc)
 
 
 class StockAnalysisPipeline:
@@ -1827,6 +1873,25 @@ class StockAnalysisPipeline:
         }
 
     def _get_analysis_context_with_market_fallback(
+        self, code: str, analysis_target: Optional[AnalysisTarget] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Load analysis context and flag TW daily history lagging completed sessions.
+
+        一般分析（:803）與 Agent pack（:1803）兩個呼叫點都經這裡，所以停更旗標只在此判定一次。
+        """
+        context = self._load_analysis_context_with_market_fallback(
+            code, analysis_target=analysis_target
+        )
+        if isinstance(context, dict) and context:
+            if analysis_target is not None and analysis_target.asset_type == ParseStatus.INDEX:
+                market = None
+            else:
+                market = get_market_for_stock(normalize_stock_code(code))
+            if market == "tw":
+                _mark_daily_history_staleness(context, market)
+        return context
+
+    def _load_analysis_context_with_market_fallback(
         self, code: str, analysis_target: Optional[AnalysisTarget] = None
     ) -> Optional[Dict[str, Any]]:
         """Load analysis context, fetching JP/KR/TW daily bars when DB has no context."""
