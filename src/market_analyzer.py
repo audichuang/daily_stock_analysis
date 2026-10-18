@@ -911,6 +911,57 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             self._log_context(), session_date, close, headline.change_pct, realtime_current,
         )
 
+    def _apply_tpex_index(self, overview: MarketOverview, tpex_index: Optional[Dict[str, Any]]) -> None:
+        """台股複盤：把 TPEx 官方櫃買指數放進 ``overview.indices``（取代 yfinance 的同代碼列）。
+
+        yfinance ``^TWOII`` 自 2026-07 起回 No data，複盤只剩加權指數而策略要先看兩個指數。
+        官方值只在盤後才有當日列、且經 ``get_market_stats`` 的場次比對才會進來，所以盤中
+        不會有——缺值就維持原樣並 warning，不用舊值湊。
+        ``open``/``high``/``low``/``amplitude`` 官方端點沒有，與 `_pin_tw_indices_to_session`
+        一樣用 None 讓格式化印 N/A。
+        """
+        if isinstance(tpex_index, dict):
+            try:
+                close = float(tpex_index['close'])
+                change = float(tpex_index['change'])
+                prev_close = close - change
+                tpex = MarketIndex(
+                    code='TPEX',
+                    name='櫃買指數',
+                    current=close,
+                    change=change,
+                    change_pct=(change / prev_close * 100) if prev_close else 0.0,
+                    open=None,
+                    high=None,
+                    low=None,
+                    prev_close=prev_close,
+                    amount=float(tpex_index.get('amount') or 0.0),
+                    amplitude=None,
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning(
+                    "[大盘] %s action=apply_tpex_index status=bad_payload error=%s",
+                    self._log_context(), exc,
+                )
+            else:
+                for pos, idx in enumerate(overview.indices):
+                    if (getattr(idx, 'code', '') or '').upper() == 'TPEX':
+                        overview.indices[pos] = tpex
+                        break
+                else:
+                    overview.indices.append(tpex)
+                logger.info(
+                    "[大盘] %s action=apply_tpex_index status=success date=%s close=%.2f change=%+.2f",
+                    self._log_context(), overview.date, close, change,
+                )
+                return
+        if not any((getattr(idx, 'code', '') or '').upper() == 'TPEX' for idx in overview.indices):
+            logger.warning(
+                "[大盘] %s configured TW index TPEX missing（官方櫃買指數尚未發布或不可用，"
+                "yfinance 亦無資料），複盤只有加權指數",
+                self._log_context(),
+            )
+
     def _get_market_statistics(self, overview: MarketOverview):
         """获取市场涨跌统计"""
         try:
@@ -937,6 +988,10 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                         'overview_date': overview.date,
                     }
                     return
+
+            if stats and self.region == 'tw':
+                # 場次比對已通過（上面不符就 return 了），tpex_index 與複盤同一天。
+                self._apply_tpex_index(overview, stats.get('tpex_index'))
 
             if stats:
                 overview.up_count = stats.get('up_count', 0)

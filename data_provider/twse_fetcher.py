@@ -16,13 +16,16 @@ TwseFetcher - 台股大盘统计数据源（仅市场统计，无日线）
    - 不实现真实的 _fetch_raw_data / _normalize_data 取数逻辑
    - is_available_for_request("daily_data") 返回 False
    - 在 DataFetcherManager._DAILY_MARKET_FETCHER_SUPPORT 中映射为空集合
-2. 大盘指数（^TWII / ^TWOII）由 YfinanceFetcher 提供，本数据源不返回指数。
+2. 加权指数（^TWII）由 YfinanceFetcher 提供；柜买指数 ``^TWOII`` 自 2026-07 起 yfinance 回
+   No data，改由本数据源从 TPEx ``tpex_daily_trading_index`` 取官方收盘，放在
+   ``get_market_stats()['tpex_index']``（与上柜成交金额同一次 GET、同一道日期比对）。
 3. 每个端点独立 try/except，部分降级：若三大法人失败但涨跌家数成功，
    仍返回涨跌家数并省略法人字段；全部失败才返回 {}，绝不向上抛出异常。
 """
 
 import datetime
 import logging
+import math
 from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
@@ -349,13 +352,18 @@ class TwseFetcher(BaseFetcher):
             "total_net": total_net,
         }
 
-    def _fetch_tpex_total_amount(
+    def _fetch_tpex_daily(
         self, expected_date: Optional[datetime.date]
-    ) -> Optional[float]:
-        """上柜成交金额（亿新台币）。失败或数据过期返回 None。
+    ) -> Optional[Tuple[float, Optional[Dict[str, Any]]]]:
+        """上柜成交金额（亿新台币）与柜买指数，同一次 GET、同一道日期比对。
+
+        返回 ``(amount_yi, index)``；失败或数据过期整个返回 None。``index`` 为
+        ``{date, close, change, amount}``（amount 单位元，与 ``market_index.turnover``
+        一致），指数栏位缺漏或无法解析时为 None，成交金额仍照常返回。
 
         回应每列带民国 ``Date``（``1150821``）。此端点与 TWSE 侧一样会停止更新却
-        照样回 200，故取 ``latest`` 前先比对日期，不符/缺参照拒收（fail closed）。
+        照样回 200，故取 ``latest`` 前先比对日期，不符/缺参照拒收（fail closed）；
+        成交额与指数共用这一道比对，不会各自放行不同天的读数。
         """
         try:
             resp = self._session.get(_TPEX_TRADE_VALUE_URL, timeout=_TIMEOUT)
@@ -390,10 +398,37 @@ class TwseFetcher(BaseFetcher):
                 )
                 return None
             amount_yuan = _parse_float(latest.get("TradeAmount"))
-            return amount_yuan / 1e8
+            return amount_yuan / 1e8, self._tpex_index_from_row(latest, snapshot_date, amount_yuan)
         except (requests.RequestException, ValueError) as exc:
             logger.warning("[TwseFetcher] 上柜成交金额获取失败: %s", exc)
             return None
+
+    @staticmethod
+    def _tpex_index_from_row(
+        row: Dict[str, Any], session_date: datetime.date, amount_yuan: float
+    ) -> Optional[Dict[str, Any]]:
+        """柜买指数读数；``TPExIndex`` / ``Change`` 缺漏或不是有限数字就回 None。
+
+        不用 ``_parse_float``：它把缺值读成 0.0，会把「没资料」变成「平盘 0 点」。
+        """
+        try:
+            close = float(str(row.get("TPExIndex")).replace(",", "").strip())
+            change = float(str(row.get("Change")).replace(",", "").strip())
+        except (TypeError, ValueError):
+            logger.warning(
+                "[TwseFetcher] 柜买指数栏位缺漏或无法解析 (TPExIndex=%r, Change=%r)，略过",
+                row.get("TPExIndex"), row.get("Change"),
+            )
+            return None
+        if not (math.isfinite(close) and math.isfinite(change)) or close <= 0:
+            logger.warning("[TwseFetcher] 柜买指数数值异常 (%r, %r)，略过", close, change)
+            return None
+        return {
+            "date": session_date.isoformat(),
+            "close": close,
+            "change": change,
+            "amount": amount_yuan,
+        }
 
     def _fetch_tpex_institutional(
         self, expected_date: Optional[datetime.date]
@@ -477,6 +512,8 @@ class TwseFetcher(BaseFetcher):
                   最新交易日有值时另附 ``trade_date``（ISO 日期字串）：上面所有读数
                   都已对齐到这一天，消费端须拿它与复盘日期比对，不同日就不采用
                   （盘中跑复盘时它是前一个交易日，不是今天）。
+                  上柜官方端点日期相符时另附 ``tpex_index``（``{date, close, change,
+                  amount}``，amount 单位元；日期与 ``trade_date`` 相同），否则无此键。
             {}:   所有端点均失败时返回空字典（绝不抛出异常）。
 
         覆盖范围：涨跌家数为 TWSE 上市口径（上柜无公开端点）；成交金额与三大法人
@@ -511,7 +548,9 @@ class TwseFetcher(BaseFetcher):
                 )
         twse_inst = self._fetch_institutional(latest_trading_date)
         # 上柜（无涨跌家数端点）；成交金额与法人同样以最新交易日当新鲜度参照
-        tpex_amount = self._fetch_tpex_total_amount(latest_trading_date)
+        tpex_daily = self._fetch_tpex_daily(latest_trading_date)
+        tpex_amount = tpex_daily[0] if tpex_daily else None
+        tpex_index = tpex_daily[1] if tpex_daily else None
         tpex_inst = self._fetch_tpex_institutional(latest_trading_date)
 
         if all(x is None for x in (breadth, twse_amount, twse_inst, tpex_amount, tpex_inst)):
@@ -570,6 +609,10 @@ class TwseFetcher(BaseFetcher):
                 "有" if twse_inst is not None else "无",
                 "有" if tpex_inst is not None else "无",
             )
+
+        # 櫃買指數：與上柜成交额同一次 GET、同一道日期比对，所以日期必为 trade_date。
+        if tpex_index is not None:
+            stats["tpex_index"] = tpex_index
 
         # 場次日期：消費端（market_analyzer）靠它判斷這批數字是不是複盤那一天的。
         # 拿不到 TWSE 認定的最新交易日就不寫——消費端對缺鍵一律拒收。

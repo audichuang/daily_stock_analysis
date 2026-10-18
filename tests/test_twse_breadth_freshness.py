@@ -205,9 +205,12 @@ def _bfi82u_payload(west_date, *, foreign=2, trust=1, dealer=0, total=3):
                      ["合計", "6", "3", str(total)]]}
 
 
-def _tpex_trade_rows(roc_date, amount="132226012483"):
-    """tpex_daily_trading_index 每列帶民國 Date（1150821）。"""
-    return [{"Date": roc_date, "TradeAmount": amount}]
+def _tpex_trade_rows(roc_date, amount="132226012483", **extra):
+    """tpex_daily_trading_index 每列帶民國 Date（1150821）。
+
+    ``extra`` 可補 ``TPExIndex`` / ``Change``（實測 2026-10-16：400.26 / 3.36）。
+    """
+    return [{"Date": roc_date, "TradeAmount": amount, **extra}]
 
 
 def _tpex_inst_rows(roc_date, *, foreign=-700227366, trust=1327087116,
@@ -254,12 +257,12 @@ class EndpointFreshnessTestCase(unittest.TestCase):
             self._fetcher(bfi="not-a-date")._fetch_institutional(self.EXPECTED))
 
     def test_fresh_tpex_amount_passes(self):
-        amount = self._fetcher()._fetch_tpex_total_amount(self.EXPECTED)
+        amount, _index = self._fetcher()._fetch_tpex_daily(self.EXPECTED)
         self.assertEqual(amount, 132226012483 / 1e8)
 
     def test_stale_tpex_amount_is_rejected(self):
         self.assertIsNone(
-            self._fetcher(tpex_trade="1150605")._fetch_tpex_total_amount(self.EXPECTED))
+            self._fetcher(tpex_trade="1150605")._fetch_tpex_daily(self.EXPECTED))
 
     def test_mixed_day_tpex_institutional_is_rejected(self):
         rows = (_tpex_inst_rows("1150820") + _tpex_inst_rows("1150821"))
@@ -270,6 +273,75 @@ class EndpointFreshnessTestCase(unittest.TestCase):
     def test_stale_tpex_institutional_is_rejected(self):
         self.assertIsNone(
             self._fetcher(tpex_inst="1150803")._fetch_tpex_institutional(self.EXPECTED))
+
+
+class _CountingSession(_FakeSession):
+    """記錄每個 URL 被 GET 幾次——「每輪只打一次」是契約，不是巧合。"""
+
+    def __init__(self, by_url):
+        super().__init__(by_url)
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append(url)
+        return super().get(url, **kwargs)
+
+
+class TpexIndexTestCase(unittest.TestCase):
+    """柜买指数与上柜成交额同源同日：yfinance ^TWOII 自 2026-07 起 No data，改取官方。"""
+
+    # 2026-10-16 實測：TPExIndex 400.26、Change +3.36、TradeAmount 221628372323 元。
+    ROWS = dict(TPExIndex="400.26", Change="3.36")
+
+    def setUp(self):
+        patcher = mock.patch("data_provider.tw_breadth.closing_breadth", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _fetcher(self, *, tpex_roc="1151016", fmtqik_roc="1151016", **row_extra):
+        f = TwseFetcher()
+        f._session = _CountingSession({
+            twse_fetcher._BREADTH_URL: _breadth_rows("1151016"),
+            twse_fetcher._TRADE_VALUE_RWD_URL: _RWD_NO_DATA,
+            twse_fetcher._TRADE_VALUE_URL: _fmtqik_rows(fmtqik_roc),
+            twse_fetcher._INSTITUTIONAL_URL: _bfi82u_payload("20261016"),
+            twse_fetcher._TPEX_TRADE_VALUE_URL: _tpex_trade_rows(
+                tpex_roc, amount="221628372323", **{**self.ROWS, **row_extra}),
+            twse_fetcher._TPEX_INSTITUTIONAL_URL: _tpex_inst_rows("1151016"),
+        })
+        return f
+
+    def test_matching_date_exposes_the_official_index_in_stats(self):
+        stats = self._fetcher().get_market_stats()
+        self.assertEqual(stats["trade_date"], "2026-10-16")
+        self.assertEqual(stats["tpex_index"], {
+            "date": "2026-10-16", "close": 400.26, "change": 3.36,
+            "amount": 221628372323.0,
+        })
+
+    def test_date_mismatch_rejects_index_and_turnover_together(self):
+        """反向：不得因為「指數沒有被問過」就放行最新一列。"""
+        stats = self._fetcher(tpex_roc="1151015").get_market_stats()
+        self.assertNotIn("tpex_index", stats)
+        self.assertEqual(stats["total_amount"], 0.0)
+
+    def test_tpex_endpoint_is_requested_once_per_round(self):
+        f = self._fetcher()
+        f.get_market_stats()
+        self.assertEqual(f._session.calls.count(twse_fetcher._TPEX_TRADE_VALUE_URL), 1)
+
+    def test_missing_or_garbled_index_columns_do_not_become_a_flat_reading(self):
+        for extra in ({"TPExIndex": ""}, {"Change": ""}, {"Change": "n/a"},
+                      {"TPExIndex": "0"}):
+            with self.subTest(extra=extra):
+                stats = self._fetcher(**extra).get_market_stats()
+                self.assertNotIn("tpex_index", stats)
+                # 成交額不受牽連
+                self.assertGreater(stats["total_amount"], 0.0)
+
+    def test_negative_change_keeps_its_sign(self):
+        stats = self._fetcher(TPExIndex="396.90", Change="-23.23").get_market_stats()
+        self.assertEqual(stats["tpex_index"]["change"], -23.23)
 
 
 class SummedFieldCoverageTestCase(unittest.TestCase):

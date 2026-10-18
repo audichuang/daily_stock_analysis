@@ -130,3 +130,114 @@ def test_non_headline_indices_are_left_alone():
 
     reader.assert_not_called()
     assert otc.current == 222.5
+
+
+# --- 官方櫃買指數（T23）------------------------------------------------------
+# yfinance ^TWOII 自 2026-07 起 No data，複盤只剩加權指數。官方值隨 get_market_stats
+# 的 `tpex_index` 進來，且只在場次日期（trade_date）與複盤日期相符時才採用。
+# 2026-10-16 實測：TPExIndex 400.26、Change +3.36、TradeAmount 221628372323 元。
+
+import logging  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from src.market_analyzer import MarketOverview  # noqa: E402
+
+TPEX_INDEX = {"date": "2026-10-16", "close": 400.26, "change": 3.36,
+              "amount": 221628372323.0}
+
+
+def _stats_analyzer(stats, region="tw"):
+    """假 data_manager 回 `stats`；_get_market_statistics 只用到 region 與 data_manager。"""
+    inst = _analyzer(region=region)
+    inst.data_manager = SimpleNamespace(get_market_stats=lambda purpose=None: stats)
+    return inst
+
+
+def _stats(trade_date="2026-10-16", tpex_index=TPEX_INDEX):
+    stats = {"up_count": 600, "down_count": 300, "flat_count": 50,
+             "limit_up_count": 0, "limit_down_count": 0, "total_amount": 6100.0}
+    if trade_date is not None:
+        stats["trade_date"] = trade_date
+    if tpex_index is not None:
+        stats["tpex_index"] = tpex_index
+    return stats
+
+
+def _taiex():
+    return MarketIndex(code="TWII", name="台灣加權指數", current=47000.0, change=100.0,
+                       change_pct=0.21)
+
+
+def test_official_tpex_index_is_added_when_session_matches():
+    overview = MarketOverview(date="2026-10-16", indices=[_taiex()])
+
+    _stats_analyzer(_stats())._get_market_statistics(overview)
+
+    tpex = {i.code: i for i in overview.indices}["TPEX"]
+    assert tpex.name == "櫃買指數"
+    assert tpex.current == 400.26
+    assert tpex.change == 3.36
+    assert round(tpex.prev_close, 2) == 396.90
+    assert round(tpex.change_pct, 3) == 0.847
+    assert tpex.amount == 221628372323.0
+    assert tpex.open is None and tpex.high is None and tpex.low is None
+    assert tpex.amplitude is None
+    assert [i.code for i in overview.indices] == ["TWII", "TPEX"]
+
+
+def test_official_tpex_index_replaces_a_yfinance_row():
+    stale = MarketIndex(code="TPEX", name="櫃買指數", current=1.0, change=1.0, change_pct=9.9,
+                        open=1.0, high=1.0, low=1.0)
+    overview = MarketOverview(date="2026-10-16", indices=[_taiex(), stale])
+
+    _stats_analyzer(_stats())._get_market_statistics(overview)
+
+    assert len(overview.indices) == 2
+    assert overview.indices[1].current == 400.26
+    assert overview.indices[1].open is None
+
+
+def test_session_mismatch_never_inserts_the_index():
+    overview = MarketOverview(date="2026-10-17", indices=[_taiex()])
+
+    _stats_analyzer(_stats(trade_date="2026-10-16"))._get_market_statistics(overview)
+
+    assert [i.code for i in overview.indices] == ["TWII"]
+
+
+def test_stats_without_trade_date_never_insert_the_index():
+    overview = MarketOverview(date="2026-10-16", indices=[_taiex()])
+
+    _stats_analyzer(_stats(trade_date=None))._get_market_statistics(overview)
+
+    assert [i.code for i in overview.indices] == ["TWII"]
+
+
+def test_missing_official_index_warns_and_keeps_indices(caplog):
+    overview = MarketOverview(date="2026-10-16", indices=[_taiex()])
+
+    with caplog.at_level(logging.WARNING, logger="src.market_analyzer"):
+        _stats_analyzer(_stats(tpex_index=None))._get_market_statistics(overview)
+
+    assert [i.code for i in overview.indices] == ["TWII"]
+    assert "configured TW index TPEX missing" in caplog.text
+
+
+def test_missing_official_index_keeps_an_existing_yfinance_row_silently(caplog):
+    existing = MarketIndex(code="TPEX", name="櫃買指數", current=399.0, change=1.0, change_pct=0.25)
+    overview = MarketOverview(date="2026-10-16", indices=[_taiex(), existing])
+
+    with caplog.at_level(logging.WARNING, logger="src.market_analyzer"):
+        _stats_analyzer(_stats(tpex_index=None))._get_market_statistics(overview)
+
+    assert overview.indices[1] is existing
+    assert "configured TW index TPEX missing" not in caplog.text
+
+
+def test_other_markets_never_get_a_tpex_row():
+    """對照：非台股的 stats 即使帶了這個鍵也不插入。"""
+    overview = MarketOverview(date="2026-10-16", indices=[_taiex()])
+
+    _stats_analyzer(_stats(), region="us")._get_market_statistics(overview)
+
+    assert [i.code for i in overview.indices] == ["TWII"]
