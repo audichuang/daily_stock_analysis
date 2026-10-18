@@ -42,10 +42,11 @@
 """
 
 import datetime
+from contextlib import nullcontext
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
+from sqlalchemy import Connection, text
 
 from market_data import models, sources
 from market_data.db import get_engine
@@ -495,6 +496,8 @@ def load_factors(engine, index, columns, start=None):
     if start is not None:
         sql += " where date >= :start"
         params["start"] = start
-    with engine.connect() as conn:
+    # engine 也可以是已開好的 Connection（測試用 rollback 連線；SA 2.x 的 Connection 沒有 connect()）
+    ctx = nullcontext(engine) if isinstance(engine, Connection) else engine.connect()
+    with ctx as conn:
         adj = pd.read_sql(text(sql), conn, params=params, parse_dates=["date"])
     return factors_to_panel(adj, index, columns)

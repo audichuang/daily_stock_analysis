@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 # 並容忍個股當日無成交（那種列會是 NaN，計數時自然被排除＝無比價）。
 _WINDOW_SESSIONS = 15
 
+# 本地 DB 讀取逾時（毫秒）。DB 被鎖或查詢失控時，讓寬度計算失敗降級（回 None），
+# 而不是把整個大盤統計卡住。
+_STATEMENT_TIMEOUT_MS = 5000
+
 # 浮點誤差容忍：台股最小跳動 0.01 元，1e-9 遠小於它，只用來吸收 float 乘法誤差。
 _FLAT_EPS = 1e-9
 
@@ -64,14 +68,15 @@ def closing_breadth(trading_date, engine=None) -> Optional[Dict[str, Any]]:
         import pandas as pd
         from sqlalchemy import text
 
-        from market_data.adjust import factors_to_panel, is_common_stock
+        from market_data import adjust
+        from market_data.adjust import is_common_stock
         from market_data.db import get_engine
     except Exception as exc:  # 缺相依（面板 venv 沒裝 psycopg 等）
         logger.warning("[TwBreadth] 相依不可用，跳過本地寬度計算: %s", exc)
         return None
 
     try:
-        eng = engine or get_engine()
+        eng = engine or get_engine(statement_timeout_ms=_STATEMENT_TIMEOUT_MS)
         # 只取上市：price.market 全為 NULL，唯一的上市名單是 stock_info。
         px = pd.read_sql(
             text(
@@ -112,11 +117,14 @@ def closing_breadth(trading_date, engine=None) -> Optional[Dict[str, Any]]:
         return None
 
     # 前復權：除權息當天的價格斷崖不是下跌。官方漲跌家數比的是參考價，等效於此。
-    adj = pd.read_sql(
-        text("select stock_id, date, factor from market.price_adjustment"),
-        eng, parse_dates=["date"],
-    )
-    closes = closes * factors_to_panel(adj, closes.index, closes.columns)
+    # 因子讀取失敗（含逾時）也要降級回 None——「絕不抛出」的承諾涵蓋這一步，否則例外會
+    # 穿過 TwseFetcher.get_market_stats，連已抓好的成交額與法人一起丟掉。
+    try:
+        closes = closes * adjust.load_factors(
+            eng, closes.index, closes.columns, start=closes.index[0])
+    except Exception as exc:
+        logger.warning("[TwBreadth] 讀取 price_adjustment 失敗，跳過本地寬度計算: %s", exc)
+        return None
 
     counts = count_advance_decline(closes.iloc[-1], closes.iloc[-2])
     if counts is None:

@@ -11,6 +11,22 @@ import pytest
 from data_provider.base import DataSourceUnavailableError
 
 
+@pytest.fixture(autouse=True)
+def engine_calls(monkeypatch):
+    """記錄 get_engine 的參數；不連 DB（沒有 DATABASE_URL 的環境也能跑）。"""
+    from market_data import db
+
+    calls = []
+    sentinel = object()
+
+    def fake_get_engine(url=None, statement_timeout_ms=None):
+        calls.append(statement_timeout_ms)
+        return sentinel
+
+    monkeypatch.setattr(db, "get_engine", fake_get_engine)
+    return calls, sentinel
+
+
 def _frame():
     return pd.DataFrame([
         {"date": "2026-08-20", "close": 146.0},
@@ -76,3 +92,33 @@ def test_normalize_data_pct_chg_uses_closed_day_event_on_next_session(monkeypatc
     })
     out = mod.MarketDBFetcher()._normalize_data(df, "2891.TW")
     assert out["pct_chg"].iloc[2] == pytest.approx(-1.32, abs=0.01)
+
+
+def test_reads_use_engine_with_statement_timeout(monkeypatch, engine_calls):
+    """價格與因子兩次讀取都必須帶 statement_timeout 的 engine，DB 被鎖時才會逾時降級。"""
+    from data_provider import market_db_fetcher as mod
+    from market_data import market_repo
+
+    calls, sentinel = engine_calls
+    seen = {}
+
+    def fake_history(sid, start=None, end=None, engine=None):
+        seen["history"] = engine
+        return _frame()
+
+    def fake_multipliers(sid, **kwargs):
+        seen["multipliers"] = kwargs.get("engine")
+        return pd.Series(dtype=float)
+
+    monkeypatch.setattr(market_repo, "price_history", fake_history)
+    monkeypatch.setattr(market_repo, "adjustment_multipliers", fake_multipliers)
+    monkeypatch.setattr(market_repo, "to_daily_frame", lambda df, event_factors=None: "FRAME")
+
+    fetcher = mod.MarketDBFetcher()
+    fetcher._fetch_raw_data("2458.TW", "2026-08-01", "2026-08-31")
+    fetcher._normalize_data(_frame(), "2458.TW")
+
+    assert seen["history"] is sentinel
+    assert seen["multipliers"] is sentinel
+    assert calls == [mod._STATEMENT_TIMEOUT_MS, mod._STATEMENT_TIMEOUT_MS]
+    assert mod._STATEMENT_TIMEOUT_MS == 15000

@@ -10,6 +10,17 @@ import pandas as pd
 from .base import BaseFetcher, DataSourceUnavailableError
 
 
+# 單檔讀取的 statement timeout（毫秒）：預設 engine 沒有逾時，DB 被鎖時同一個 fetcher
+# 之後所有台股都會卡住；逾時後以 DataSourceUnavailableError 讓鏈 fallback 到 yfinance。
+_STATEMENT_TIMEOUT_MS = 15000
+
+
+def _engine():
+    from market_data.db import get_engine
+
+    return get_engine(statement_timeout_ms=_STATEMENT_TIMEOUT_MS)
+
+
 def _stock_id(code: str) -> str:
     # '2330.TW' / '6505.TWO' -> '2330' / '6505'
     return str(code).split(".")[0]
@@ -33,7 +44,8 @@ class MarketDBFetcher(BaseFetcher):
                 f"MarketDBFetcher serves TW only, not {stock_code}")
         try:
             df = market_repo.price_history(_stock_id(stock_code),
-                                           start=start_date, end=end_date)
+                                           start=start_date, end=end_date,
+                                           engine=_engine())
         except Exception as e:  # missing DATABASE_URL / DB down -> let chain fall back
             raise DataSourceUnavailableError(f"market DB unavailable: {e}") from e
         if df is None or df.empty:
@@ -49,7 +61,7 @@ class MarketDBFetcher(BaseFetcher):
             # 沒有因子的日期乘 1，行為與未還原完全一致。見 market_repo.to_daily_frame。
             # sessions：颱風休市日公告的事件要移到下一個交易日，否則那天的 pct_chg 是假跌幅。
             factors = market_repo.adjustment_multipliers(
-                _stock_id(stock_code), sessions=pd.to_datetime(df["date"]))
+                _stock_id(stock_code), sessions=pd.to_datetime(df["date"]), engine=_engine())
         except Exception as e:  # 因子查詢失敗視同 DB 不可用 -> 讓鏈 fallback
             raise DataSourceUnavailableError(f"market DB unavailable: {e}") from e
         return market_repo.to_daily_frame(df, event_factors=factors)
