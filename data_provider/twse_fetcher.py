@@ -26,6 +26,7 @@ TwseFetcher - 台股大盘统计数据源（仅市场统计，无日线）
 import datetime
 import logging
 import math
+import re
 from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
@@ -40,6 +41,11 @@ _BREADTH_URL = "https://openapi.twse.com.tw/v1/opendata/twtazu_od"          # �
 _INSTITUTIONAL_URL = "https://www.twse.com.tw/rwd/zh/fund/BFI82U?response=json"  # 三大法人买卖超
 _TRADE_VALUE_URL = "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK"   # 成交金额 + 加权指数
 _TRADE_VALUE_RWD_URL = "https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK"  # 同上，按月查询；当日盘后比 OpenAPI 早更新
+
+# 大盤統計（type=MS）：「漲跌證券數合計」表帶漲跌停家數，回應自帶 `date`，是 twtazu_od 凍結後的第二來源
+_MI_INDEX_URL = "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX"
+# 「200(4)」＝ 200 家（其中 4 家漲／跌停）
+_COUNT_WITH_LIMIT_RE = re.compile(r"^\s*([\d,]+)\s*\(\s*([\d,]+)\s*\)\s*$")
 
 # TPEx 上柜 免金钥 OpenAPI 端点（上柜无公开「涨跌家数」端点，故仅补成交金额与三大法人）
 _TPEX_TRADE_VALUE_URL = "https://www.tpex.org.tw/openapi/v1/tpex_daily_trading_index"  # 上柜成交金额 + 柜买指数
@@ -183,6 +189,77 @@ class TwseFetcher(BaseFetcher):
             "limit_up_count": int(_parse_float(target.get("漲停"))),
             "limit_down_count": int(_parse_float(target.get("跌停"))),
         }
+
+    def _fetch_breadth_mi_index(self, expected_date: Optional[datetime.date]) -> Optional[Dict[str, int]]:
+        """涨跌家数（含涨跌停），取自 MI_INDEX ``type=MS`` 的「漲跌證券數合計」表。
+
+        ``twtazu_od`` 凍結（2026-06-05 起）後，家數只剩本地 ``tw_breadth``，**沒有漲跌停**，
+        複盤的漲跌停維度永久不可用。這支 rwd 端點回應自帶西元 ``date``，且依請求日期查詢，
+        所以可以**逐次比對**：``date`` 不等於 ``expected_date`` 就拒收（盤後尚未發布時
+        ``stat`` 不是 ``OK``，同樣回 None）。
+
+        取「股票」欄（與 ``_fetch_breadth`` 同口徑，不含權證／ETN 的「整體市場」欄）；
+        上漲／下跌格式為 ``200(4)``＝家數(漲跌停數)，持平為純整數。任何不符一律回 None，
+        絕不拋出、絕不猜測。
+        """
+        if expected_date is None:
+            return None
+        try:
+            resp = self._session.get(
+                _MI_INDEX_URL,
+                params={"date": expected_date.strftime("%Y%m%d"), "type": "MS", "response": "json"},
+                timeout=_TIMEOUT,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except (requests.RequestException, ValueError) as e:
+            logger.warning("[TwseFetcher] MI_INDEX 涨跌家数端点失败: %s", e)
+            return None
+
+        if not isinstance(payload, dict) or payload.get("stat") != "OK":
+            return None  # 盤後尚未發布／非交易日：「很抱歉，沒有符合條件的資料!」
+        response_date = _west_date(payload.get("date"))
+        if response_date != expected_date:
+            logger.warning(
+                "[TwseFetcher] MI_INDEX 涨跌家数日期不符，拒收：回应 date=%r，最新交易日=%s",
+                payload.get("date"), expected_date,
+            )
+            return None
+
+        try:
+            table = next(
+                t for t in payload.get("tables") or []
+                if isinstance(t, dict) and "漲跌證券數合計" in str(t.get("title") or "")
+            )
+            col = [str(f).strip() for f in table["fields"]].index("股票")
+            cells = {str(row[0]).strip(): str(row[col]).strip() for row in table["data"]}
+            up, limit_up = self._parse_count_with_limit(cells["上漲(漲停)"])
+            down, limit_down = self._parse_count_with_limit(cells["下跌(跌停)"])
+            flat_text = cells["持平"].replace(",", "")
+            if not flat_text.isdigit():
+                raise ValueError(f"持平欄非整數: {flat_text!r}")
+            flat = int(flat_text)
+        except (StopIteration, KeyError, IndexError, TypeError, ValueError, AttributeError) as e:
+            logger.warning("[TwseFetcher] MI_INDEX 涨跌家数结构不符预期，拒收: %r", e)
+            return None
+
+        if up + down + flat <= 0:
+            return None
+        return {
+            "up_count": up,
+            "down_count": down,
+            "flat_count": flat,
+            "limit_up_count": limit_up,
+            "limit_down_count": limit_down,
+        }
+
+    @staticmethod
+    def _parse_count_with_limit(text: str) -> Tuple[int, int]:
+        """``"200(4)"`` -> ``(200, 4)``；格式不符拋 ValueError（呼叫端轉成 None）。"""
+        m = _COUNT_WITH_LIMIT_RE.match(text)
+        if m is None:
+            raise ValueError(f"家數格式不符: {text!r}")
+        return int(m.group(1).replace(",", "")), int(m.group(2).replace(",", ""))
 
     def _fetch_total_amount(self) -> Optional[Tuple[Optional[datetime.date], float]]:
         """最新交易日的 ``(交易日, 成交金额[亿新台币])``。失败返回 None。
@@ -521,10 +598,12 @@ class TwseFetcher(BaseFetcher):
         可缺而不影响其余；但成交金额与三大法人这两组各自要求上市与上柜**双边齐全**
         ——单边和会被当成合计读下去，而它可能与合计反向（见下方赋值处的实测数字）。
 
-        涨跌家数有两个可能来源，两者口径不同：
+        涨跌家数有三个可能来源，依序尝试：
         1. TWSE `twtazu_od` 的「股票」列（含涨跌停家数）——**必须通过日期比对**，
            该端点会停止更新却照样回 200；
-        2. 上述被拒收时，退回 `tw_breadth.closing_breadth()` 由 `market` schema 前复权
+        2. 上述被拒收时，改用 `MI_INDEX?type=MS` 的「漲跌證券數合計」表「股票」欄
+           （含涨跌停家数，回应自带 `date`，须等于最新交易日）；
+        3. 仍不可用时，退回 `tw_breadth.closing_breadth()` 由 `market` schema 前复权
            收盘自算（上市普通股，**无涨跌停家数**）。
         两者都不可用时家数保持 0，下游按 truthiness 判成「没有资料」。
         """
@@ -536,8 +615,14 @@ class TwseFetcher(BaseFetcher):
         latest_trading_date = twse_trade[0] if twse_trade else None
         twse_amount = twse_trade[1] if twse_trade else None
         breadth = self._fetch_breadth(latest_trading_date)
+        if breadth is None:
+            # twtazu_od 過期／改版：先試 MI_INDEX type=MS（同為「股票」口徑、帶漲跌停、
+            # 回應自帶日期），再退回本地宽度。
+            breadth = self._fetch_breadth_mi_index(latest_trading_date)
+            if breadth is not None:
+                logger.info("[TwseFetcher] 涨跌家数改用 MI_INDEX type=MS（含涨跌停家数）")
         if breadth is None and latest_trading_date is not None:
-            # 端點過期／改版時退回 market schema 自己算。**口徑不同**（上市普通股、
+            # 兩支官方端點都不可用時退回 market schema 自己算。**口徑不同**（上市普通股、
             # 無漲跌停家數），差異寫在 data_provider/tw_breadth.py 的 docstring。
             from .tw_breadth import closing_breadth
 

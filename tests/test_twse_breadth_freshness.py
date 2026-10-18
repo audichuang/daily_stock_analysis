@@ -10,6 +10,8 @@
 """
 
 import datetime
+import json
+import os
 import unittest
 from unittest import mock
 
@@ -59,6 +61,18 @@ def _fmtqik_rows(roc_date, trade_value="754905335886"):
 # rwd 版 FMTQIK「当月尚无资料」的真实回应（月初收盘前）。既有测试登记它，
 # 让参照日期只由 OpenAPI 那份决定，维持各测试原本的语意。
 _RWD_NO_DATA = {"stat": "很抱歉，沒有符合條件的資料!"}
+# MI_INDEX 盤後尚未發布／非交易日的回應同形；既有「家數過期」測試登記它，
+# 讓第二來源不介入、維持各測試原本只測 twtazu_od → 本地宽度的語意。
+_MI_INDEX_NO_DATA = _RWD_NO_DATA
+
+# 2026-10-15 的真實 MI_INDEX?type=MS 回應（唯讀 GET 存檔）：股票欄 200(4)／805(21)／72。
+_MI_INDEX_FIXTURE = os.path.join(
+    os.path.dirname(__file__), "fixtures", "twse_mi_index_ms_20261015.json")
+
+
+def _mi_index_payload():
+    with open(_MI_INDEX_FIXTURE, encoding="utf-8") as fh:
+        return json.load(fh)
 
 
 def _fmtqik_rwd_payload(*slash_dates, trade_value="824,692,107,481"):
@@ -131,6 +145,7 @@ class MarketStatsDegradationTestCase(unittest.TestCase):
             twse_fetcher._BREADTH_URL: _breadth_rows(breadth_roc),
             twse_fetcher._TRADE_VALUE_RWD_URL: _RWD_NO_DATA,
             twse_fetcher._TRADE_VALUE_URL: _fmtqik_rows("1150821"),
+            twse_fetcher._MI_INDEX_URL: _MI_INDEX_NO_DATA,
             twse_fetcher._INSTITUTIONAL_URL: {
                 "stat": "OK", "date": "20260821",
                 # 单位名称必须用真实字面：BFI82U 的合计列是「合計」，
@@ -457,6 +472,7 @@ class TradingDayReferenceTestCase(unittest.TestCase):
         f._session = _FakeSession({
             twse_fetcher._BREADTH_URL: _breadth_rows("1150605"),
             twse_fetcher._TRADE_VALUE_RWD_URL: rwd if rwd is not None else _RWD_NO_DATA,
+            twse_fetcher._MI_INDEX_URL: _MI_INDEX_NO_DATA,
             twse_fetcher._TRADE_VALUE_URL: _fmtqik_rows(openapi_roc),
             twse_fetcher._INSTITUTIONAL_URL: _bfi82u_payload(bfi),
             twse_fetcher._TPEX_TRADE_VALUE_URL: _tpex_trade_rows("1150929"),
@@ -502,3 +518,117 @@ class TradingDayReferenceTestCase(unittest.TestCase):
         """两份参照都落后时守门照旧：不是把守门拆掉。"""
         f = self._fetcher(bfi="20260929", rwd=_fmtqik_rwd_payload("115/09/24"))
         self.assertIsNone(f.get_market_stats().get("foreign_net"))
+
+
+class MiIndexBreadthTestCase(unittest.TestCase):
+    """twtazu_od 凍結後的第二來源：MI_INDEX type=MS，回應自帶日期、帶漲跌停家數。
+
+    凍結的 twtazu_od 退回本地宽度時沒有漲跌停，market light 的漲跌停維度永久不可用
+    （2026-10-15 有 21 檔跌停卻印成「沒有資料」）。
+    """
+
+    DAY = datetime.date(2026, 10, 15)
+    EXPECTED = {"up_count": 200, "down_count": 805, "flat_count": 72,
+                "limit_up_count": 4, "limit_down_count": 21}
+
+    def setUp(self):
+        patcher = mock.patch("data_provider.tw_breadth.closing_breadth", return_value=None)
+        self.local = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _fetcher(self, mi_index=None, *, breadth_roc="1150605"):
+        f = TwseFetcher()
+        f._session = _CountingSession({
+            # twtazu_od 是凍結的那份 ⇒ 必須落到 MI_INDEX
+            twse_fetcher._BREADTH_URL: _breadth_rows(breadth_roc),
+            twse_fetcher._TRADE_VALUE_RWD_URL: _RWD_NO_DATA,
+            twse_fetcher._TRADE_VALUE_URL: _fmtqik_rows("1151015"),
+            twse_fetcher._MI_INDEX_URL: mi_index if mi_index is not None else _mi_index_payload(),
+            twse_fetcher._INSTITUTIONAL_URL: _bfi82u_payload("20261015"),
+            twse_fetcher._TPEX_TRADE_VALUE_URL: _tpex_trade_rows("1151015"),
+            twse_fetcher._TPEX_INSTITUTIONAL_URL: _tpex_inst_rows("1151015"),
+        })
+        return f
+
+    def test_real_fixture_parses_stock_column_with_limit_counts(self):
+        """「股票」欄而非「整體市場」(2,045(10)／15,229(186))；200(4) 是 200 家含 4 檔漲停。"""
+        self.assertEqual(self._fetcher()._fetch_breadth_mi_index(self.DAY), self.EXPECTED)
+
+    def test_stats_use_mi_index_when_twtazu_is_frozen(self):
+        """revert 守門：不呼叫 MI_INDEX ⇒ 漲跌停回到 0。"""
+        f = self._fetcher()
+        stats = f.get_market_stats()
+        for key, value in self.EXPECTED.items():
+            self.assertEqual(stats[key], value, key)
+        self.local.assert_not_called()   # 第二來源成功就不該再退回本地（會丟掉漲跌停）
+        self.assertEqual(f._session.calls.count(twse_fetcher._MI_INDEX_URL), 1)
+
+    def test_fresh_twtazu_does_not_spend_a_mi_index_request(self):
+        """反向守門：第一來源可用時不多打一個 TWSE 請求。"""
+        f = self._fetcher(breadth_roc="1151015")
+        stats = f.get_market_stats()
+        self.assertEqual(stats["up_count"], 342)
+        self.assertNotIn(twse_fetcher._MI_INDEX_URL, f._session.calls)
+
+    def test_date_mismatch_falls_through_to_local_breadth(self):
+        """回應日期 ≠ 最新交易日 ⇒ 拒收，退回 tw_breadth（無漲跌停）。"""
+        stale = _mi_index_payload()
+        stale["date"] = "20261014"
+        f = self._fetcher(stale)
+        self.assertIsNone(f._fetch_breadth_mi_index(self.DAY))
+        self.local.return_value = {"up_count": 589, "down_count": 382, "flat_count": 104}
+        stats = f.get_market_stats()
+        self.local.assert_called_once_with(self.DAY)
+        self.assertEqual(stats["up_count"], 589)
+        self.assertEqual(stats["limit_up_count"], 0)
+        self.assertEqual(stats["limit_down_count"], 0)
+
+    def test_unusable_responses_return_none_without_raising(self):
+        def table(**over):
+            p = _mi_index_payload()
+            t = next(t for t in p["tables"] if t.get("title") == "漲跌證券數合計")
+            t.update(over)
+            return p
+
+        bad = {
+            "no data": _MI_INDEX_NO_DATA,
+            "not a dict": [],
+            "missing date": {k: v for k, v in _mi_index_payload().items() if k != "date"},
+            "no table": {**_mi_index_payload(), "tables": [{}]},
+            "no 股票 column": table(fields=["類型", "整體市場"]),
+            "no limit parens": table(data=[["上漲(漲停)", "2,045(10)", "200"],
+                                           ["下跌(跌停)", "15,229(186)", "805(21)"],
+                                           ["持平", "300", "72"]]),
+            "garbled flat": table(data=[["上漲(漲停)", "2,045(10)", "200(4)"],
+                                        ["下跌(跌停)", "15,229(186)", "805(21)"],
+                                        ["持平", "300", "n/a"]]),
+            "row missing": table(data=[["上漲(漲停)", "2,045(10)", "200(4)"]]),
+            "all zero": table(data=[["上漲(漲停)", "0(0)", "0(0)"],
+                                    ["下跌(跌停)", "0(0)", "0(0)"],
+                                    ["持平", "0", "0"]]),
+        }
+        for name, payload in bad.items():
+            with self.subTest(name=name):
+                self.assertIsNone(self._fetcher(payload)._fetch_breadth_mi_index(self.DAY))
+
+    def test_network_error_returns_none(self):
+        f = self._fetcher()
+        real_get = f._session.get
+
+        def get(url, **kwargs):
+            if url.startswith(twse_fetcher._MI_INDEX_URL):
+                raise twse_fetcher.requests.ConnectionError("boom")
+            return real_get(url, **kwargs)
+
+        f._session.get = get
+        self.assertIsNone(f._fetch_breadth_mi_index(self.DAY))
+
+    def test_without_reference_date_it_does_not_request(self):
+        f = self._fetcher()
+        self.assertIsNone(f._fetch_breadth_mi_index(None))
+        self.assertNotIn(twse_fetcher._MI_INDEX_URL, f._session.calls)
+
+    def test_count_parser_keeps_limit_separate_from_count(self):
+        """「200(4)」不得被擠成 2004，千分位照解。"""
+        self.assertEqual(TwseFetcher._parse_count_with_limit("200(4)"), (200, 4))
+        self.assertEqual(TwseFetcher._parse_count_with_limit("15,229(186)"), (15229, 186))

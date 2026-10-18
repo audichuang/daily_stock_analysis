@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改進] 台股大盤複盤恢復漲停／跌停家數（證交所帶日期的官方表）：`twtazu_od` 自 2026-06-05 凍結後家數只剩本地寬度（無漲跌停），market light 的漲跌停維度永久不可用（10-15 有 21 檔跌停卻印成沒有資料）。`TwseFetcher` 在 `twtazu_od` 被拒收時改取 `MI_INDEX?type=MS` 的「漲跌證券數合計」表「股票」欄（`200(4)` 解析為 200 家、漲停 4），回應 `date` 必須等於最新交易日，日期不符或格式不符一律放棄並退回本地寬度；`twtazu_od` 仍可用時不多打請求，凍結時每次複盤多一個 TWSE 請求
 - [文件] 台股盤前與波段研究 skill 更正法人單位與指數長度、標明寬掃只涵蓋上市、同業報酬須先還原、基準率待重測：`tw-morning-call` 的 `market.institutional` 單位是股（與 T86 逐欄一致）、`market_index` 自 2026-07-01 起約 74 個交易日（夠算季線、不夠半年線），並註明 momentum 寬掃的法人／融資只涵蓋上市；`tw-swing-research` 的同業報酬查詢須先套 `adjust.load_factors` 前復權、不讀 `price.change`，20.2% 基準率旁標「休市日復權修正後待重測」
 - [修復] 盤中分析的「較昨日漲跌」不再拿即時價比前天收盤，與即時漲跌幅一致：DB 最新列是 T-1 時，報價屬於今天（交易日且非開盤前）才把原 today 平移成 yesterday，量比同一基準，即時有漲跌幅時直接用它（實測 3008 10-16 10:53：漲跌幅 -5.67 被算成 -9.45）；開盤前、非交易日與收盤後 DB 已有今天都不平移。台股除權息日的較昨日漲跌改用還原後漲跌幅（非即時路徑不再以未還原收盤相減）
 - [改進] 選股報告明講三大法人／融資／估值只涵蓋上市（momentum 的法人篩選等同排除上櫃）、印出法人／融資／估值的實際資料日與近 5 日統計實際涵蓋的場次數（與基準日不同才標註），缺值顯示「—」（0 照印，原本上櫃印成 `nan張 nan天`）；參考價表「20日高」實為 60 日高，欄名改正；估值改取基準日以前 7 曆日內最近一個有資料的交易日（原本只認基準日當天，18:00 幾乎必為空），所以 18:00 的高息／低估值標籤會開始觸發，候選清單文字會變
