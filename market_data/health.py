@@ -82,6 +82,27 @@ def missing_dates(reference, observed):
     return sorted(reference_keys - observed_keys)
 
 
+def full_history_gaps(price_dates, table_dates, exclude_latest=True):
+    """price 有、該表沒有的整日缺洞，**從該表首日起算**到 price 最新日。
+
+    `missing_*_dates` 只看最近 ``RECENT_SESSIONS`` 個交易日，整天沒列且滑出窗口後
+    就永久無聲（institutional 2026-01-22／01-30、margin 01-30 即如此）；這是全歷史
+    的稽核清單，**只報不擋**——daily 修不到窗口外的日子，擋了只會讓人學會忽略 gate。
+
+    - 該表首日之前的 price 日期不算（那是「還沒回補」，不是缺洞）。
+    - ``exclude_latest``：扣掉 price 的最新一個交易日（法人／融資／估值都是 T+1，
+      最新日尚未發布屬正常延遲）。
+    - 該表完全沒有列 → 回 []（沒有首日可言，空表由 `empty required tables` 管）。"""
+    price_keys = {str(value)[:10] for value in price_dates}
+    table_keys = {str(value)[:10] for value in table_dates}
+    if not price_keys or not table_keys:
+        return []
+    start = min(table_keys)
+    end = max(price_keys)
+    return sorted(day for day in price_keys - table_keys
+                  if day >= start and not (exclude_latest and day == end))
+
+
 def missing_adjustments(expected, stored):
     """Return valid ex-dividend keys that have no adjustment event."""
     def keys(rows):
@@ -147,6 +168,9 @@ def thin_days(day_counts, window=5, ratio=0.9):
     return thin
 
 
+# 全歷史整日缺洞／覆蓋率稽核的三張 T+1 表（只報不擋）。
+_HISTORY_TABLES = ("institutional", "margin", "valuation")
+
 _THIN_TABLES = ["price", "institutional", "margin"]  # 每日全市場列數穩定的表
 
 # 已逐日與來源核對一致的合法稀疏日(補班日交易,法人/信用活動天然只剩一半):
@@ -210,6 +234,42 @@ def report(engine=None, now=None, is_session=None):
                               "WHERE index_id = 'TAIEX' AND date = :d LIMIT 1")):
                 has[key] = c.execute(text(sql), {"d": expected}).fetchone() is not None
             expected_check = {"date": str(expected), **has}
+        # --- 只報不擋的全歷史稽核（不進 strict gate）---
+        price_all = [row[0] for row in c.execute(text(
+            "SELECT DISTINCT date FROM market.price ORDER BY date")).fetchall()]
+        table_all = {t: [row[0] for row in c.execute(text(
+            f"SELECT DISTINCT date FROM market.{t} ORDER BY date")).fetchall()]
+            for t in _HISTORY_TABLES}
+        out["history_gaps"] = {t: full_history_gaps(price_all, table_all[t])
+                               for t in _HISTORY_TABLES}
+        # 覆蓋率：各表與 price 的「最新共同日期」上，stock_id 數 / price 的 stock_id 數。
+        # 三張表只收上市（TWSE），上櫃是硬缺口，這個比例就是它的量化。
+        coverage = {}
+        price_keys = {str(d)[:10]: d for d in price_all}
+        for t in _HISTORY_TABLES:
+            shared = sorted(price_keys.keys() & {str(d)[:10] for d in table_all[t]})
+            if not shared:
+                continue
+            day = price_keys[shared[-1]]
+            counts = []
+            for table in (t, "price"):
+                row = c.execute(text(
+                    f"SELECT count(DISTINCT stock_id) FROM market.{table} "
+                    "WHERE date = :d"), {"d": day}).fetchone()
+                counts.append(int(row[0]) if row else 0)
+            coverage[t] = {"date": shared[-1], "stocks": counts[0],
+                           "price_stocks": counts[1]}
+        out["coverage"] = coverage
+        # 復權事件落在非交易日的筆數（讀取端已用 snap_events_to_sessions 移到下一
+        # 交易日，表內日期不動）；只數 ≤ price 最新日的，未來的預告事件不算。
+        adjustment_by_date = c.execute(text(
+            "SELECT date, count(*) FROM market.price_adjustment GROUP BY date"
+        )).fetchall()
+        latest_price = max(price_keys) if price_keys else None
+        out["offcalendar_adjustments"] = sum(
+            int(n) for d, n in adjustment_by_date
+            if latest_price and str(d)[:10] <= latest_price
+            and str(d)[:10] not in price_keys)
         today = datetime.date.today()
         window =datetime.timedelta(days=ADJUSTMENT_WINDOW_DAYS)
         expected_adjustments = c.execute(text(
@@ -302,6 +362,27 @@ def run(engine=None, strict=False, now=None, is_session=None):
     for year, season, _ in stale_financials[:10]:
         print("  repair: uv run --env-file .env python -m market_data.cli "
               f"financials --year {year} --season {season}")
+    # 以下三組只報不擋，刻意不進下面的 gaps：daily 修不到窗口外的日子，上櫃是設計上的缺。
+    history_gaps = result.get("history_gaps", {})
+    for table in _HISTORY_TABLES:
+        days = history_gaps.get(table, [])
+        # 列**最近** 10 筆：缺洞清單由舊到新，取前 10 會被 2012 年的老缺洞佔滿，
+        # 而最近的（2026-01-22／01-30）才是 backfill 補得回、也最影響現在的。
+        shown = days[-10:]
+        print(f"full-history gaps {table}: {len(days)} (latest {len(shown)}) -> {shown}")
+        for day in shown:
+            print(f"  repair: uv run --env-file .env python -m market_data.cli "
+                  f"backfill {table} --start {day} --end {day} --delay 3")
+    coverage = result.get("coverage", {})
+    if coverage:
+        print("coverage vs price (latest shared date; "
+              "institutional/margin/valuation 只收錄上市, 設計如此): "
+              + ", ".join(f"{t} {info['stocks']}/{info['price_stocks']} "
+                          f"({info['date']})" for t, info in coverage.items()))
+    offcalendar = result.get("offcalendar_adjustments")
+    if offcalendar is not None:
+        print(f"price_adjustment events on non-session dates: {offcalendar} "
+              "(約 242 筆屬預期且永久，讀取端已移到下一交易日，不要刪列)")
     gaps = (missing_expected, missing_price, missing_index, missing_institutional,
             missing_margin, missing_valuation, missing_events, thin_recent, empty_required)
     failed = any(gaps)

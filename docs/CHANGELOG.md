@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改進] 資料健檢會列出歷史上整天缺資料的日子（附回補指令）與各表只涵蓋上市的覆蓋率，只提示不擋流程：`market_data.health` 新增 `full-history gaps`（法人／融資／估值自各表首日起、price 有而整天沒列的日子，最近 10 筆附 `backfill` 指令）、`coverage vs price`（三張表只收上市，上櫃為設計上的缺）與非交易日復權事件數（約 242 筆屬預期且永久、勿刪列），三者皆不進 `--strict`；同步 `market_data/AGENTS.md` 與 `docs/tw-swing-pipeline.md`（momentum 因子比較含宇宙差異）
 - [改進] 融資融券解析改核對表頭順序，官方改欄位會直接報錯而非靜默錯位；「尚未發布／查無資料」（TWSE 短文字回覆）與「疑似被封鎖／改版」的警告訊息分開，三大法人與融資共用
 - [修復] 上市除權息公告抓取失敗時每日更新重試一次後直接報錯並推播，不再靜默用舊事件重算還原因子；月營收改為獨立交易，不受連帶回滾
 - [修復] 月底漏跑或指數晚發布時，下一輪每日更新會補回上個月的加權指數，健檢不再卡住好幾天

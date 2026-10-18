@@ -198,6 +198,7 @@ strict 会让盘后跑的 `make morning` 每天先红一次。代价是**当天 
 現行 row-shaped 格式不含完整候選 manifest，因此不能從日誌本身證明當天是否漏判；回驗只評估
 實際留檔的決策，不把不存在或未留檔的候選補成 0。樣本不足或區間跨零時一律 inconclusive。
 只有帶校準 prior 的 `breakout` 可寫正式日誌；`momentum` 僅供探索。
+`backtest_screen` 因子比較裡 `momentum`（與 `inst`）的濾網含法人買超（`inst5 > 0`），而 `market.institutional` **只有上市、沒有上櫃**（同理 `margin`、`valuation`），所以它的宇宙比其他因子小一圈：「momentum 最差」這類排名**有一部分是宇宙差異**（上櫃股被靜默剔除），不是純因子效果；要比因子本身，須先對共同宇宙去重再比，見 `market_data/AGENTS.md`。
 `confidence` 的語意鎖定為「進場後第 60 個交易日收盤淨報酬 ≥ +30%」的主觀機率，現行基準率為
 **20.2%**（2026-10 SW-F1 休市日復權修正後待重測，暫不可與新數字比較）。部位大小另看 `exp_upside`／`exp_downside`／`theme`；期望報酬是
 `upside × p + downside × (1 − p)`（加号，`exp_downside` 本身为负）。
