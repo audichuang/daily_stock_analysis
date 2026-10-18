@@ -192,12 +192,12 @@ def report(engine=None, now=None, is_session=None):
                 "WHERE index_id = 'TAIEX' AND date >= :start"
             ), {"start": min(recent_price_dates)}).fetchall()]
 
-            for table in ("institutional", "margin"):
+            for table in ("institutional", "margin", "valuation"):
                 source_dates[table] = [row[0] for row in c.execute(text(
                     f"SELECT DISTINCT date FROM market.{table} WHERE date >= :start"
                 ), {"start": min(recent_price_dates)}).fetchall()]
         else:
-            source_dates = {"institutional": [], "margin": []}
+            source_dates = {"institutional": [], "margin": [], "valuation": []}
         # 絕對新鮮度：上面兩個檢查只讓 price 與 TAIEX 互相比對，兩者同時缺今天
         # （同為 TWSE 來源、被封或盤中跑）時會一起通過；這裡對照日曆的「應有場次」。
         expected = expected_session(now, is_session)
@@ -237,6 +237,10 @@ def report(engine=None, now=None, is_session=None):
                 recent_price_dates[1:], source_dates["institutional"]),
             "missing_margin_dates": missing_dates(
                 recent_price_dates[1:], source_dates["margin"]),
+            # 估值走 BWIBBU_d，18:00 當天多半未發布，同樣容忍最新一日；
+            # 更早的缺日 daily 會補，補不到（被封）才擋。
+            "missing_valuation_dates": missing_dates(
+                recent_price_dates[1:], source_dates["valuation"]),
             "missing_price_adjustments": missing_adjustments(
                 expected_adjustments, stored_adjustments),
             # 全歷史 thin day 留在 out["thin_days"] 供稽核；strict 只擋這一段。
@@ -276,12 +280,15 @@ def run(engine=None, strict=False, now=None, is_session=None):
     missing_index = integrity.get("missing_index_dates", [])
     missing_institutional = integrity.get("missing_institutional_dates", [])
     missing_margin = integrity.get("missing_margin_dates", [])
+    missing_valuation = integrity.get("missing_valuation_dates", [])
     missing_events = integrity.get("missing_price_adjustments", [])
     print(f"missing price dates: {len(missing_price)} -> {missing_price[:10]}")
     print(f"missing TAIEX dates: {len(missing_index)} -> {missing_index[:10]}")
     print("missing institutional dates: "
           f"{len(missing_institutional)} -> {missing_institutional[:10]}")
     print(f"missing margin dates: {len(missing_margin)} -> {missing_margin[:10]}")
+    print("missing valuation dates: "
+          f"{len(missing_valuation)} -> {missing_valuation[:10]}")
     print(f"missing price adjustments: {len(missing_events)} -> {missing_events[:10]}")
     empty_required = [table for table in _REQUIRED_TABLES
                       if not result.get("tables", {}).get(table, {}).get("rows")]
@@ -296,7 +303,7 @@ def run(engine=None, strict=False, now=None, is_session=None):
         print("  repair: uv run --env-file .env python -m market_data.cli "
               f"financials --year {year} --season {season}")
     gaps = (missing_expected, missing_price, missing_index, missing_institutional,
-            missing_margin, missing_events, thin_recent, empty_required)
+            missing_margin, missing_valuation, missing_events, thin_recent, empty_required)
     failed = any(gaps)
     if strict and failed:
         if missing_expected:

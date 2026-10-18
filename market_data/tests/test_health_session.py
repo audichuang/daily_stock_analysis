@@ -127,7 +127,7 @@ class _Conn:
 
 
 def _engine(price_days, taiex_days):
-    """price／TAIEX 各自有的日子；法人與融資比 price 少最後一天（T+1，屬正常）。"""
+    """price／TAIEX 各自有的日子；法人／融資／估值比 price 少最後一天（T+1，屬正常）。"""
     calls = []
     ordered = sorted(price_days)
     plan = [
@@ -136,6 +136,7 @@ def _engine(price_days, taiex_days):
         ("index_id = 'TAIEX' AND date >= :start", [(d,) for d in taiex_days]),
         ("FROM market.institutional WHERE", [(d,) for d in ordered[:-1]]),
         ("FROM market.margin WHERE", [(d,) for d in ordered[:-1]]),
+        ("FROM market.valuation WHERE", [(d,) for d in ordered[:-1]]),
     ]
 
     class _Engine:

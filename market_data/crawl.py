@@ -478,7 +478,11 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
             "SELECT DISTINCT date FROM market.price WHERE date <= :d "
             "ORDER BY date DESC LIMIT :n"), {"d": asof, "n": days}).fetchall()]
     dates = recovery_dates(asof, recent)
-    for source in ("price", "institutional", "margin"):
+    # valuation 走帶日期的 BWIBBU_d,補窗口內缺的日子(BWIBBU_ALL 快照無日期、18:00 仍回 D-1,
+    # 某晚沒跑那天就永久缺)。18:00 當天的 BWIBBU_d 多半還沒發布 → 0 列,計入 empty_streak
+    # (遠小於上限,不中止),隔天這一輪補上;回應日期不符時 sources 端已拒收。
+    # valuation 不進 REVISED_SOURCES:它沒有「初版→定版」的修正語意。
+    for source in ("price", "institutional", "margin", "valuation"):
         crawl_range(eng, source, dates)
     # asof 當天剛抓的就是初版,重抓它沒有意義;隔天這一輪才會把它換成定版
     for source in REVISED_SOURCES:

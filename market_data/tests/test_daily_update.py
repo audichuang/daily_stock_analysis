@@ -55,7 +55,8 @@ def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch, capsys):
     assert [c[1] for c in calls if c[0] == "refresh"] == ["institutional"]
 
     ranged = {c[1] for c in calls if c[0] == "range"}
-    assert ranged == {"price", "institutional", "margin"}
+    # valuation 也走 crawl_range（BWIBBU_d 補窗口內缺日）；但不進 REVISED_SOURCES
+    assert ranged == {"price", "institutional", "margin", "valuation"}
     assert calls.count(("snapshots",)) == 1        # 走共用入口,不是三個直接呼叫
     assert ("val",) in calls and ("idx",) in calls and ("info",) in calls
     # 上月營收(asof 6/5 -> 5 月)與除權息滾動窗(-30d ~ +90d)

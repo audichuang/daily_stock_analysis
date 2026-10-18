@@ -313,6 +313,58 @@ def test_report_uses_the_shared_window_and_wires_recent_thin_days_to_the_gate():
     assert ("2014-05-21", 50) in result["thin_days"]["institutional"]  # 但仍列在稽核清單
 
 
+def test_report_tolerates_latest_day_missing_valuation_but_not_older_days():
+    """估值（BWIBBU_d）18:00 當天多半未發布：最新一日缺不報，次新日缺要報。"""
+    sessions = [date(2026, 10, 12 + i) for i in range(5)]       # 10/12 ~ 10/16
+    newest_first = [(d,) for d in reversed(sessions)]
+
+    def run(valuation_days):
+        plan = [
+            ("count(*), min(", [(1, sessions[0], sessions[-1])]),
+            ("FROM market.price ORDER BY date DESC", newest_first),
+            ("FROM market.institutional WHERE", [(d,) for d in sessions]),
+            ("FROM market.margin WHERE", [(d,) for d in sessions]),
+            ("FROM market.valuation WHERE", [(d,) for d in valuation_days]),
+        ]
+
+        class _Engine:
+            def connect(self):
+                return _RecordingConn(plan, [])
+
+        return health.report(engine=_Engine())["integrity"]["missing_valuation_dates"]
+
+    assert run(sessions[:-1]) == []                              # 最新日缺 → 容忍
+    assert run(sessions[:1] + sessions[2:]) == ["2026-10-13"]    # 次新日缺 → 要報
+    assert run(sessions[1:]) == ["2026-10-12"]                   # 窗口最舊日缺 → 要報
+
+
+def _healthy_tables():
+    return {table: {"rows": 1, "start": "2026-07-27", "end": "2026-07-27"}
+            for table in health._REQUIRED_TABLES}
+
+
+@pytest.mark.parametrize("missing, code", [(["2026-10-12"], 1), ([], 0)])
+def test_strict_gate_depends_on_missing_valuation_dates_alone(monkeypatch, missing, code):
+    """下面那個 parametrize 的 tables 是空的 → empty_required 恆為真，它擋不住『gate 漏接
+    某個欄位』；這裡讓其他一切健康，只有 valuation 缺日決定結果。"""
+    monkeypatch.setattr(health, "report", lambda engine, **_: {
+        "tables": _healthy_tables(), "thin_days": {},
+        "integrity": {"missing_valuation_dates": missing},
+    })
+
+    assert health.run(engine=object(), strict=True) == code
+
+
+def test_run_prints_missing_valuation_dates_line(monkeypatch, capsys):
+    monkeypatch.setattr(health, "report", lambda engine, **_: {
+        "tables": {}, "thin_days": {},
+        "integrity": {"missing_valuation_dates": ["2026-10-12"]},
+    })
+
+    assert health.run(engine=object(), strict=False) == 0
+    assert "missing valuation dates: 1 -> ['2026-10-12']" in capsys.readouterr().out
+
+
 def test_health_and_daily_share_one_recent_window():
     """視窗一旦漂開，就會出現「gate 擋住、但 daily 補不到那天」的死結。"""
     import inspect
@@ -350,6 +402,7 @@ def test_non_strict_health_reports_but_does_not_fail(monkeypatch):
     "missing_index_dates",
     "missing_institutional_dates",
     "missing_margin_dates",
+    "missing_valuation_dates",
 ])
 def test_strict_health_rejects_stale_secondary_source(monkeypatch, gap):
     monkeypatch.setattr(health, "report", lambda engine, **_: {

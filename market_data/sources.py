@@ -599,6 +599,15 @@ def crawl_valuation_day(date):
         return None
     if payload.get("stat") != "OK":
         return None  # 非交易日回 "很抱歉,沒有符合條件的資料!"
+    # `parse_valuation_day` 會把列蓋上「請求的日期」。TWSE 若對尚未發布的日子回 stat OK
+    # 加前一日的表,D-1 的值就會被存成 D、resume 再把 D 視為已完成而永不重抓。
+    # 所以一律比對回應自帶的日期;沒有日期欄也拒收(無法證明新鮮的數字不如沒有)。
+    want = date.strftime("%Y%m%d")
+    got = str(payload.get("date") or "")
+    if got != want:
+        print(f"**WARN: BWIBBU_d 回應日期 {got or '(無)'} ≠ 請求日 {want},拒收"
+              "(多半是尚未發布)", flush=True)
+        return None
     return parse_valuation_day(payload, date)
 
 
