@@ -4092,6 +4092,87 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         )
         return "\n" + header + "\n" + "\n".join(lines) + "\n"
 
+    def _tw_margin_lines(self, code: str, report_language: str) -> str:
+        """Prompt-only：台股融資融券（本地 market.margin，單位張，T+1 發布）三語系行文。
+
+        上櫃（.TWO）本地庫沒有資料，回固定揭露句（不查 DB）；上市查不到或任何例外回 ''。
+        與三大法人是否取得成功無關，由呼叫端在法人區塊之外注入。NEVER persisted。"""
+        lang = normalize_report_language(report_language)
+        english = lang in ("en", "ko")
+
+        def T(zh_tw: str, zh: str, en: str) -> str:
+            if english:
+                return en
+            return zh_tw if lang == "zh-TW" else zh
+
+        if str(code).upper().endswith(".TWO"):
+            return "\n" + T(
+                "融資融券：上櫃個股沒有本地融資融券資料（資料庫只收錄上市），不得推論融資動向。",
+                "融资融券：上柜个股没有本地融资融券资料（数据库只收录上市），不得推论融资动向。",
+                "Margin trading: there is no local margin/short data for TPEx-listed stocks (the database only covers TWSE-listed ones); do not infer margin-financing trends.",
+            ) + "\n"
+
+        try:
+            from datetime import date, timedelta
+
+            from market_data import market_repo
+            from market_data.db import get_engine
+            from data_provider.market_db_fetcher import _stock_id
+            from data_provider.tw_margin_trend import compute_margin_trend
+
+            eng = get_engine(statement_timeout_ms=3000)
+            start = (date.today() - timedelta(days=60)).isoformat()
+            hist = market_repo.margin(_stock_id(code), start=start, engine=eng)
+            rows = hist.to_dict("records") if hist is not None and not hist.empty else []
+            trend = compute_margin_trend(rows)
+        except Exception as exc:  # noqa: BLE001 - prompt enrichment is strictly fail-open
+            logger.warning("[tw-margin] fail-open code=%s: %s", code, exc)
+            return ""
+        if not trend:
+            return ""
+
+        sep, colon = ("; ", ": ") if english else ("；", "：")
+        unit = T(" 張", " 张", " lots")
+        margin_txt = T(
+            f"融資餘額 {trend['margin_balance']:,}{unit}",
+            f"融资余额 {trend['margin_balance']:,}{unit}",
+            f"margin balance {trend['margin_balance']:,}{unit}",
+        )
+        chg = []
+        if trend.get("margin_chg_5") is not None:
+            chg.append(T(
+                f"較 5 個場次前 {trend['margin_chg_5']:+,}{unit}",
+                f"较 5 个场次前 {trend['margin_chg_5']:+,}{unit}",
+                f"{trend['margin_chg_5']:+,}{unit} vs 5 sessions ago",
+            ))
+        if trend.get("margin_chg_20") is not None:
+            chg.append(T(
+                f"較 20 個場次前 {trend['margin_chg_20']:+,}{unit}",
+                f"较 20 个场次前 {trend['margin_chg_20']:+,}{unit}",
+                f"{trend['margin_chg_20']:+,}{unit} vs 20 sessions ago",
+            ))
+        if chg:
+            margin_txt += ("（" if not english else " (") + sep.join(chg) + ("）" if not english else ")")
+        parts = [margin_txt]
+        if trend.get("short_balance") is not None:
+            parts.append(T(
+                f"融券餘額 {trend['short_balance']:,}{unit}",
+                f"融券余额 {trend['short_balance']:,}{unit}",
+                f"short balance {trend['short_balance']:,}{unit}",
+            ))
+        if trend.get("short_margin_ratio") is not None:
+            parts.append(T(
+                f"券資比 {trend['short_margin_ratio']:.2f}%",
+                f"券资比 {trend['short_margin_ratio']:.2f}%",
+                f"short-to-margin ratio {trend['short_margin_ratio']:.2f}%",
+            ))
+        header = T(
+            f"融資融券（截至 {trend['as_of']}，T+1 發布；單位：張）",
+            f"融资融券（截至 {trend['as_of']}，T+1 发布；单位：张）",
+            f"Margin trading (as of {trend['as_of']}, published T+1; unit: lots)",
+        )
+        return "\n" + header + colon + sep.join(parts) + "\n"
+
     def _format_prompt(
         self,
         context: Dict[str, Any],
@@ -4576,6 +4657,13 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                     f"三大法人資料不可用（當日取得失敗：{reason}），不得推論籌碼面。",
                     f"三大法人资料不可用（当日取得失败：{reason}），不得推论筹码面。",
                 ) + "\n"
+
+        # 台股融資融券（T14）：放在三大法人 if/elif 之外，不論 T86 成功或失敗都出現；
+        # 上櫃改印固定揭露句。prompt-only、fail-open。
+        if is_tw_code(code):
+            margin_lines = self._tw_margin_lines(code, report_language)
+            if margin_lines:
+                prompt += margin_lines
 
         # 台股交易成本：上游 prompt 為 A 股寫的，台股來回成本是 A 股的數倍，模型不知道就會
         # 給出扣完成本後賠比賺多的價位。事後還有 trade_cost_guardrail 確定性檢核，這段只讓

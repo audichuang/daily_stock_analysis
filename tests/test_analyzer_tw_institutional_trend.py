@@ -155,8 +155,9 @@ _FAIL_BLOCK = {
 }
 
 
-def _failed_prompt(code, n_hist, language="zh-TW", block=None):
-    """走真的 _format_prompt：institution block 為 failed，歷史 n_hist 個平日（止於 2026-10-16）。"""
+def _failed_prompt(code, n_hist, language="zh-TW", block=None, margin=None, margin_raises=False):
+    """走真的 _format_prompt：institution block 為 failed，歷史 n_hist 個平日（止於 2026-10-16）。
+    margin 預設為空表（離線測試不碰真實 DB）；margin_raises=True 時 margin() 拋例外。"""
     days = _weekdays_before(date(2026, 10, 17), n_hist) if n_hist else []
     hist = pd.DataFrame(
         [{"date": d.isoformat(), "foreign_net": 10, "trust_net": 0, "dealer_net": 0, "total_net": 10}
@@ -171,9 +172,14 @@ def _failed_prompt(code, n_hist, language="zh-TW", block=None):
     }
     with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
         analyzer = GeminiAnalyzer()
+    margin_patch = (
+        patch("market_data.market_repo.margin", side_effect=RuntimeError("db down"))
+        if margin_raises
+        else patch("market_data.market_repo.margin", return_value=margin if margin is not None else pd.DataFrame())
+    )
     with patch("market_data.market_repo.institutional", return_value=hist), \
          patch("market_data.market_repo.stock_info", return_value={"shares_outstanding": 10_000_000}), \
-         patch("market_data.db.get_engine", return_value=None):
+         patch("market_data.db.get_engine", return_value=None), margin_patch:
         return analyzer._format_prompt(context, "測試", news_context=None, report_language=language)
 
 
@@ -233,3 +239,88 @@ def test_trend_lines_with_empty_today_use_db_last_day_and_do_not_need_calendar()
          patch("src.core.trading_calendar.get_trading_dates", side_effect=AssertionError("no calendar check without today")):
         out = _analyzer()._tw_institutional_trend_lines("2330.TW", {}, "zh-TW")
     assert "截至 2026-10-16" in out
+
+
+# ---- T14：融資融券（張、T+1 資料日、5／20 場次變化、券資比），上櫃揭露，法人失敗仍出現 ----
+
+def _margin_df(n, last=date(2026, 10, 15)):
+    """n 個平日的融資融券列（升序，止於 last）：融資餘額每日 +10 從 1000 起，融券 50。"""
+    days = _weekdays_before(last + timedelta(days=1), n)
+    return pd.DataFrame(
+        [{"date": d.isoformat(), "margin_balance": 1000 + 10 * i, "margin_buy": 0, "margin_sell": 0,
+          "short_balance": 50, "short_buy": 0, "short_sell": 0}
+         for i, d in enumerate(days)]
+    )
+
+
+def _margin_lines(code, df=None, language="zh-TW", raises=False):
+    if raises:
+        p = patch("market_data.market_repo.margin", side_effect=RuntimeError("db down"))
+    else:
+        p = patch("market_data.market_repo.margin", return_value=df)
+    with p as m, patch("market_data.db.get_engine", return_value=None):
+        out = _analyzer()._tw_margin_lines(code, language)
+    return out, m
+
+
+def test_margin_lines_listed_with_25_rows_prints_balance_date_changes_and_ratio():
+    out, _ = _margin_lines("2330.TW", _margin_df(25))
+    # 最新餘額 1000+240=1240；5 場次前 1190（+50）、20 場次前 1040（+200）；券資比 50/1240
+    assert "融資融券（截至 2026-10-15，T+1 發布；單位：張）" in out
+    assert "融資餘額 1,240 張" in out
+    assert "較 5 個場次前 +50 張" in out and "較 20 個場次前 +200 張" in out
+    assert "融券餘額 50 張" in out and "券資比 4.03%" in out
+
+
+def test_margin_lines_three_languages():
+    zh, _ = _margin_lines("2330.TW", _margin_df(25), "zh")
+    assert "融资融券（截至 2026-10-15，T+1 发布；单位：张）" in zh and "较 20 个场次前 +200 张" in zh
+    en, _ = _margin_lines("2330.TW", _margin_df(25), "en")
+    assert "Margin trading (as of 2026-10-15, published T+1; unit: lots)" in en
+    assert "margin balance 1,240 lots" in en and "+200 lots vs 20 sessions ago" in en
+    assert "short-to-margin ratio 4.03%" in en
+
+
+def test_margin_lines_insufficient_sessions_omit_changes():
+    out, _ = _margin_lines("2330.TW", _margin_df(3))
+    assert "融資餘額 1,020 張" in out
+    assert "個場次前" not in out
+    out10, _ = _margin_lines("2330.TW", _margin_df(10))
+    assert "較 5 個場次前" in out10 and "較 20 個場次前" not in out10
+
+
+def test_margin_lines_tpex_prints_disclosure_without_querying_db():
+    out, m = _margin_lines("6488.TWO", _margin_df(25))
+    assert "上櫃個股沒有本地融資融券資料（資料庫只收錄上市），不得推論融資動向" in out
+    assert "融資餘額" not in out
+    m.assert_not_called()
+    assert "TPEx" in _margin_lines("6488.TWO", None, "en")[0]
+    assert "上柜个股没有本地融资融券资料" in _margin_lines("6488.TWO", None, "zh")[0]
+
+
+def test_margin_lines_fail_open_on_db_error_and_empty():
+    assert _margin_lines("2330.TW", raises=True)[0] == ""
+    assert _margin_lines("2330.TW", pd.DataFrame())[0] == ""
+    assert _margin_lines("2330.TW", None)[0] == ""
+
+
+def test_margin_block_present_in_prompt_even_when_institution_failed():
+    for block in (dict(_FAIL_BLOCK), {"status": "not_supported", "data": {}, "errors": ["fundamental fetch disabled"]}):
+        p = _failed_prompt("2330.TW", 30, block=block, margin=_margin_df(25))
+        assert "融資餘額 1,240 張" in p
+    # 法人 ok 分支同樣出現，且放在法人區塊之後
+    ok_block = {"status": "ok", "data": dict(_TODAY), "errors": []}
+    p = _failed_prompt("2330.TW", 30, block=ok_block, margin=_margin_df(25))
+    assert "融資餘額 1,240 張" in p and p.index("三大法人動向") < p.index("融資融券（截至")
+
+
+def test_margin_block_tpex_disclosure_and_non_tw_untouched_in_prompt():
+    p = _failed_prompt("6488.TWO", 0, margin=_margin_df(25))
+    assert "上櫃個股沒有本地融資融券資料" in p and "融資餘額" not in p
+    us = _failed_prompt("AAPL", 30, margin=_margin_df(25))
+    assert "融資餘額" not in us and "上櫃個股沒有本地融資融券資料" not in us
+
+
+def test_margin_block_db_error_does_not_break_prompt():
+    p = _failed_prompt("2330.TW", 30, margin_raises=True)
+    assert "融資餘額" not in p and "當日三大法人：取得失敗" in p
