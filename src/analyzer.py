@@ -108,6 +108,13 @@ _MARKET_CURRENCY = {
     'tw': '新台币', 'jp': '日元', 'kr': '韩元',
 }
 
+# 财报 currency（yfinance financialCurrency）→ 币别所属市场键：财报币别可与交易币别不同
+#（HK ADR 常以 CNY 报表），金额单位要跟财报走，不跟 prompt_market 走。
+_FINANCIAL_CCY_MARKET = {
+    'CNY': 'cn', 'RMB': 'cn', 'USD': 'us', 'HKD': 'hk',
+    'TWD': 'tw', 'JPY': 'jp', 'KRW': 'kr',
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -4411,8 +4418,8 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 | {L("目前價格", "当前价格")} | {rt.get('price', 'N/A')} {ccy} | |
 | **{L("量比", "量比")}** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
 | **{L("週轉率", "换手率")}** | **{rt.get('turnover_rate', 'N/A')}%** | |
-{pe_pb_rows_zh}| {L("總市值", "总市值")} | {self._format_amount(rt.get('total_mv'), prompt_market)} | |
-| {L("流通市值", "流通市值")} | {self._format_amount(rt.get('circ_mv'), prompt_market)} | |
+{pe_pb_rows_zh}| {L("總市值", "总市值")} | {self._format_amount(rt.get('total_mv'), prompt_market, report_language)} | |
+| {L("流通市值", "流通市值")} | {self._format_amount(rt.get('circ_mv'), prompt_market, report_language)} | |
 | {L("60日漲跌幅", "60日涨跌幅")} | {rt.get('change_60d', 'N/A')}% | {L("中期表現", "中期表现")} |
 """
 
@@ -4479,15 +4486,37 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             ttm_cash = dividend_metrics.get("ttm_cash_dividend_per_share", "N/A")
             ttm_count = dividend_metrics.get("ttm_event_count", "N/A")
             report_date = financial_report.get("report_date", "N/A")
+            # 财报三列：带单位／币别、保留正负号，并标明口径（单季或近四季）。ROE 是比率，原样。
+            _fin_market = _FINANCIAL_CCY_MARKET.get(
+                str(financial_report.get("currency") or "").upper(), prompt_market
+            )
+            _fin_basis = financial_report.get("basis")
+            _fin_basis = _fin_basis if isinstance(_fin_basis, dict) else {}
+            _basis_labels = {
+                "quarter": ("單季", "单季", "quarterly"),
+                "ttm": ("近四季", "近四季", "TTM"),
+                "ttm_derived": ("近四季推算（營收×淨利率）", "近四季推算（营收×净利率）", "TTM-derived (revenue x net margin)"),
+                "quarter_derived": ("單季推算（營收×近四季淨利率）", "单季推算（营收×近四季净利率）", "quarterly estimate (revenue x TTM net margin)"),
+            }
+
+            def _fin_amount(key: str) -> str:
+                return self._format_amount(financial_report.get(key), _fin_market, report_language)
+
+            def _fin_note(key: str) -> str:
+                labels = _basis_labels.get(_fin_basis.get(key))
+                if not labels:
+                    return ""
+                return labels[2] if english else L(labels[0], labels[1])
+
             if english:
                 prompt += f"""
 ### Financials and Dividends (value-investing view)
 | Indicator | Value | Note |
 |------|------|------|
 | Latest Report Period | {report_date} | From structured financial report fields |
-| Revenue | {financial_report.get('revenue', 'N/A')} | |
-{monthly_revenue_row_en}| Net Profit Attributable to Parent | {financial_report.get('net_profit_parent', 'N/A')} | |
-| Operating Cash Flow | {financial_report.get('operating_cash_flow', 'N/A')} | |
+| Revenue | {_fin_amount('revenue')} | {_fin_note('revenue')} |
+{monthly_revenue_row_en}| Net Profit Attributable to Parent | {_fin_amount('net_profit_parent')} | {_fin_note('net_profit_parent')} |
+| Operating Cash Flow | {_fin_amount('operating_cash_flow')} | {_fin_note('operating_cash_flow')} |
 | ROE | {financial_report.get('roe', 'N/A')} | |
 | TTM Cash Dividend per Share | {ttm_cash} | Cash dividends only, pre-tax |
 | TTM Dividend Yield | {ttm_yield} | Formula: TTM cash dividend per share / current price × 100% |
@@ -4501,9 +4530,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 | {L("指標", "指标")} | {L("數值", "数值")} | {L("說明", "说明")} |
 |------|------|------|
 | {L("最近報告期", "最近报告期")} | {report_date} | {L("來自結構化財報欄位", "来自结构化财报字段")} |
-| {L("營業收入", "营业收入")} | {financial_report.get('revenue', 'N/A')} | |
-{monthly_revenue_row_zh}| {L("歸母淨利", "归母净利润")} | {financial_report.get('net_profit_parent', 'N/A')} | |
-| {L("營運現金流", "经营现金流")} | {financial_report.get('operating_cash_flow', 'N/A')} | |
+| {L("營業收入", "营业收入")} | {_fin_amount('revenue')} | {_fin_note('revenue')} |
+{monthly_revenue_row_zh}| {L("歸母淨利", "归母净利润")} | {_fin_amount('net_profit_parent')} | {_fin_note('net_profit_parent')} |
+| {L("營運現金流", "经营现金流")} | {_fin_amount('operating_cash_flow')} | {_fin_note('operating_cash_flow')} |
 | ROE | {financial_report.get('roe', 'N/A')} | |
 | {L("近12個月每股現金股利", "近12个月每股现金分红")} | {ttm_cash} | {L("僅現金股利、稅前口徑", "仅现金分红、税前口径")} |
 | {L("TTM 股息率", "TTM 股息率")} | {ttm_yield} | {L("公式：近12個月每股現金股利 / 目前價格 × 100%", "公式：近12个月每股现金分红 / 当前价格 × 100%")} |
@@ -5170,28 +5199,38 @@ Output the complete Decision Dashboard in JSON format."""
         `report_language` 是 en/ko 时改用英文量级（上游 #2368），**位置在 market 之後**：
         上游签名是 `(amount, report_language)`，合并时所有呼叫端都已改成具名或三参数。
         """
-        if amount is None:
+        # 非数值（'N/A'、字串）先试 float，失败回 N/A；以 abs 判量级、保留正负号，
+        # 否则负的淨利／现金流会落到原始数字（-12345678900 元）。
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return 'N/A'
+        if amount != amount or amount in (float('inf'), float('-inf')):
             return 'N/A'
         if normalize_report_language(report_language) in ("en", "ko"):
             return self._format_scaled_number_en(amount)
         currency = _MARKET_CURRENCY.get(market, '元')
-        if amount >= 1e8:
-            return f"{amount / 1e8:.2f} 亿{currency}"
-        elif amount >= 1e4:
-            return f"{amount / 1e4:.2f} 万{currency}"
+        sign = '-' if amount < 0 else ''
+        magnitude = abs(amount)
+        if magnitude >= 1e8:
+            return f"{sign}{magnitude / 1e8:.2f} 亿{currency}"
+        elif magnitude >= 1e4:
+            return f"{sign}{magnitude / 1e4:.2f} 万{currency}"
         else:
-            return f"{amount:.0f} {currency}" if currency != '元' else f"{amount:.0f} 元"
+            return f"{sign}{magnitude:.0f} {currency}"
 
     @staticmethod
     def _format_scaled_number_en(value: float) -> str:
         """Format a large number with English magnitude suffixes (no currency unit)."""
-        if value >= 1e9:
-            return f"{value / 1e9:.2f}B"
-        if value >= 1e6:
-            return f"{value / 1e6:.2f}M"
-        if value >= 1e3:
-            return f"{value / 1e3:.2f}K"
-        return f"{value:.0f}"
+        sign = "-" if value < 0 else ""
+        magnitude = abs(value)
+        if magnitude >= 1e9:
+            return f"{sign}{magnitude / 1e9:.2f}B"
+        if magnitude >= 1e6:
+            return f"{sign}{magnitude / 1e6:.2f}M"
+        if magnitude >= 1e3:
+            return f"{sign}{magnitude / 1e3:.2f}K"
+        return f"{sign}{magnitude:.0f}"
 
     def _format_percent(self, value: Optional[float]) -> str:
         """格式化百分比显示"""

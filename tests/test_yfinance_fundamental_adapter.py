@@ -317,6 +317,55 @@ class TestYfinanceFundamentalAdapter(unittest.TestCase):
         self.assertEqual(bundle.get("belong_boards"), [])
 
 
+class FinancialReportBasisTest(unittest.TestCase):
+    """T15：financial_report.basis 依實際走的分支標單季／近四季，prompt 才能標口徑。"""
+
+    _TW_INFO = {
+        "financialCurrency": "TWD",
+        "currency": "TWD",
+        "totalRevenue": 3.8e12,
+        "operatingCashflow": 2.1e12,
+        "profitMargins": 0.4,
+    }
+
+    def _bundle(self, info, income=None, cashflow=None):
+        ticker = _build_mock_ticker(info, income, cashflow)
+        with patch("yfinance.Ticker", return_value=ticker):
+            return YfinanceFundamentalAdapter().get_fundamental_bundle("2330.TW")
+
+    def test_all_quarterly_present_marks_every_field_quarter(self) -> None:
+        income = pd.DataFrame(
+            {pd.Timestamp("2026-06-30"): {"Total Revenue": 9.3e11, "Net Income": 3.9e11}}
+        )
+        cashflow = pd.DataFrame({pd.Timestamp("2026-06-30"): {"Operating Cash Flow": 5.0e11}})
+        fr = self._bundle(self._TW_INFO, income, cashflow)["earnings"]["financial_report"]
+        self.assertEqual(fr["revenue"], 9.3e11)
+        self.assertEqual(
+            fr["basis"],
+            {"revenue": "quarter", "net_profit_parent": "quarter", "operating_cash_flow": "quarter"},
+        )
+
+    def test_quarterly_missing_falls_back_to_ttm_with_derived_net_profit(self) -> None:
+        fr = self._bundle(self._TW_INFO)["earnings"]["financial_report"]
+        self.assertEqual(fr["revenue"], 3.8e12)
+        self.assertAlmostEqual(fr["net_profit_parent"], 3.8e12 * 0.4)
+        self.assertEqual(
+            fr["basis"],
+            {"revenue": "ttm", "net_profit_parent": "ttm_derived", "operating_cash_flow": "ttm"},
+        )
+
+    def test_quarterly_revenue_with_margin_derived_net_profit_is_not_labelled_ttm(self) -> None:
+        income = pd.DataFrame({pd.Timestamp("2026-06-30"): {"Total Revenue": 9.3e11}})
+        fr = self._bundle(self._TW_INFO, income)["earnings"]["financial_report"]
+        self.assertEqual(fr["basis"]["revenue"], "quarter")
+        self.assertEqual(fr["basis"]["net_profit_parent"], "quarter_derived")
+        self.assertEqual(fr["basis"]["operating_cash_flow"], "ttm")
+
+    def test_basis_only_lists_fields_that_have_values(self) -> None:
+        fr = self._bundle({"financialCurrency": "TWD", "totalRevenue": 3.8e12})["earnings"]["financial_report"]
+        self.assertEqual(fr["basis"], {"revenue": "ttm"})
+
+
 class YoyFromRowTest(unittest.TestCase):
     """_yoy_from_row must compare with the same quarter one year earlier, found by date."""
 

@@ -114,3 +114,78 @@ def test_non_tw_prompt_valuation_rows_unchanged():
     en = _val_prompt("AAPL", val, language="en", rt={"price": 100.0, "pe_ratio": 28.0, "pb_ratio": 3.0})
     assert "| PE (TTM/dynamic) | 28.0 |" in en and "| PB | 3.0 |" in en
     assert "Dividend Yield (exchange-published)" not in en
+
+
+# ---- T15：財報列帶單位、正負號與口徑（單季／近四季） ----
+
+_FR = {
+    "report_date": "2026-06-30",
+    "revenue": 1270380250000.0,
+    "net_profit_parent": -12345678900,
+    "operating_cash_flow": None,
+    "roe": 25.3,
+    "currency": "TWD",
+    "basis": {"revenue": "quarter", "net_profit_parent": "ttm_derived"},
+}
+
+
+def _fr_prompt(code, financial_report, language="zh-TW"):
+    context = {
+        "code": code,
+        "stock_name": "測試",
+        "date": "2026-10-16",
+        "today": {"close": 100.0, "ma5": 1, "ma10": 1, "ma20": 1},
+        "fundamental_context": {"earnings": {"status": "ok", "data": {"financial_report": financial_report}}},
+    }
+    return _analyzer()._format_prompt(context, "測試", report_language=language)
+
+
+def _row(prompt, label):
+    return next(line for line in prompt.splitlines() if line.startswith(f"| {label} |"))
+
+
+def test_tw_financial_rows_zh_have_unit_sign_and_basis_labels():
+    p = _fr_prompt("2330.TW", dict(_FR))
+    assert "| 營業收入 | 12703.80 亿新台币 | 單季 |" in p
+    assert "| 歸母淨利 | -123.46 亿新台币 | 近四季推算（營收×淨利率） |" in p
+    assert "1270380250000" not in p and "-12345678900" not in p
+    # None → N/A、無口徑標籤；ROE 是比率，原樣不格式化
+    assert "| 營運現金流 | N/A |  |" in p
+    assert "| ROE | 25.3 |" in p
+
+
+def test_tw_financial_rows_en_have_scaled_numbers_sign_and_basis_labels():
+    p = _fr_prompt("2330.TW", dict(_FR), language="en")
+    assert "| Revenue | 1270.38B | quarterly |" in p
+    assert "| Net Profit Attributable to Parent | -12.35B | TTM-derived (revenue x net margin) |" in p
+    assert "| Operating Cash Flow | N/A |  |" in p
+    assert "| ROE | 25.3 |" in p
+
+
+def test_financial_rows_non_numeric_prints_na_and_missing_basis_leaves_note_empty():
+    fr = {"revenue": "N/A", "net_profit_parent": "-5000", "operating_cash_flow": 1.5e8, "roe": "N/A"}
+    p = _fr_prompt("2330.TW", fr)
+    assert "| 營業收入 | N/A |  |" in p
+    assert "| 歸母淨利 | -5000 新台币 |  |" in p
+    assert "| 營運現金流 | 1.50 亿新台币 |  |" in p
+    assert "| ROE | N/A |" in p
+
+
+def test_financial_rows_ttm_label_and_follow_report_currency_not_trade_market():
+    # 港股 ADR 常以人民幣報表：金額單位跟財報幣別走，不跟交易市場走
+    fr = {"revenue": 9.5e11, "currency": "CNY", "basis": {"revenue": "ttm"}}
+    p = _fr_prompt("HK09988", fr)
+    assert "| 營業收入 | 9500.00 亿元 | 近四季 |" in p
+
+
+def test_format_amount_sign_and_non_numeric():
+    a = _analyzer()
+    assert a._format_amount(-12345678900, "tw") == "-123.46 亿新台币"
+    assert a._format_amount(-12345678900, "tw", "en") == "-12.35B"
+    assert a._format_amount(-50000, "tw") == "-5.00 万新台币"
+    assert a._format_amount(-300, "tw") == "-300 新台币"
+    assert a._format_amount(None, "tw") == "N/A"
+    assert a._format_amount("N/A", "tw") == "N/A"
+    assert a._format_amount("N/A", "tw", "en") == "N/A"
+    assert a._format_amount(float("nan"), "tw") == "N/A"
+    assert a._format_amount("1270380250000.0", "tw") == "12703.80 亿新台币"

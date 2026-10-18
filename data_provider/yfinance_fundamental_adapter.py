@@ -270,16 +270,34 @@ class YfinanceFundamentalAdapter:
         if cashflow_df is not None and not cashflow_df.empty:
             operating_cash_flow_latest = _latest_value(_pick_row(cashflow_df, _CASHFLOW_OP_KEYS))
 
+        # 口径标记（basis）：季报表与 .info 的 TTM 聚合会逐栏退回，同一张表可能混单季与近四季，
+        # 不标出来模型会把近四季营收当成单季去比。值：quarter／ttm／ttm_derived（淨利 = 近四季营收 ×
+        # 淨利率）／quarter_derived（淨利 = 单季营收 × 近四季淨利率，只是估算）。
+        basis: Dict[str, str] = {}
+        if revenue_latest is not None:
+            basis["revenue"] = "quarter"
+        if net_profit_latest is not None:
+            basis["net_profit_parent"] = "quarter"
+        if operating_cash_flow_latest is not None:
+            basis["operating_cash_flow"] = "quarter"
+
         # Fallback to TTM aggregates from .info when quarterly statements are
         # unavailable — still produces a non-empty row.
         if revenue_latest is None:
             revenue_latest = _safe_float(info.get("totalRevenue"))
+            if revenue_latest is not None:
+                basis["revenue"] = "ttm"
         if operating_cash_flow_latest is None:
             operating_cash_flow_latest = _safe_float(info.get("operatingCashflow"))
+            if operating_cash_flow_latest is not None:
+                basis["operating_cash_flow"] = "ttm"
         if net_profit_latest is None and revenue_latest is not None:
             margin = _safe_float(info.get("profitMargins"))
             if margin is not None:
                 net_profit_latest = revenue_latest * margin
+                basis["net_profit_parent"] = (
+                    "ttm_derived" if basis.get("revenue") == "ttm" else "quarter_derived"
+                )
 
         # Statement-derived YoY (requires the same quarter a year earlier) is preferred
         # over .info ratios; otherwise keep the TTM growth values already set
@@ -303,6 +321,7 @@ class YfinanceFundamentalAdapter:
             "currency": financial_currency,
         }
         if any(v is not None and v != "" for v in financial_report.values()):
+            financial_report["basis"] = basis  # 放在存在性判断之後：空 dict 不算有资料
             result.setdefault("earnings", {})["financial_report"] = financial_report
             result["source_chain"].append("earnings.financial_report:yfinance")
 
