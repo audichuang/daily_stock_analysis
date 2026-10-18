@@ -108,8 +108,8 @@ _MARKET_CURRENCY = {
     'tw': '新台币', 'jp': '日元', 'kr': '韩元',
 }
 
-# 财报 currency（yfinance financialCurrency）→ 币别所属市场键：财报币别可与交易币别不同
-#（HK ADR 常以 CNY 报表），金额单位要跟财报走，不跟 prompt_market 走。
+# 財報 currency（yfinance financialCurrency）→ 幣別所屬市場鍵：財報幣別可與交易幣別不同
+#（HK ADR 常以 CNY 報表），金額單位要跟財報走，不跟 prompt_market 走。
 _FINANCIAL_CCY_MARKET = {
     'CNY': 'cn', 'RMB': 'cn', 'USD': 'us', 'HKD': 'hk',
     'TWD': 'tw', 'JPY': 'jp', 'KRW': 'kr',
@@ -4486,7 +4486,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             ttm_cash = dividend_metrics.get("ttm_cash_dividend_per_share", "N/A")
             ttm_count = dividend_metrics.get("ttm_event_count", "N/A")
             report_date = financial_report.get("report_date", "N/A")
-            # 财报三列：带单位／币别、保留正负号，并标明口径（单季或近四季）。ROE 是比率，原样。
+            # 財報三列：帶單位／幣別、保留正負號，並標明口徑（單季或近四季）。ROE 是比率，原樣。
             _fin_market = _FINANCIAL_CCY_MARKET.get(
                 str(financial_report.get("currency") or "").upper(), prompt_market
             )
@@ -5199,8 +5199,8 @@ Output the complete Decision Dashboard in JSON format."""
         `report_language` 是 en/ko 时改用英文量级（上游 #2368），**位置在 market 之後**：
         上游签名是 `(amount, report_language)`，合并时所有呼叫端都已改成具名或三参数。
         """
-        # 非数值（'N/A'、字串）先试 float，失败回 N/A；以 abs 判量级、保留正负号，
-        # 否则负的淨利／现金流会落到原始数字（-12345678900 元）。
+        # 非數值（'N/A'、字串）先試 float，失敗回 N/A；以 abs 判量級、保留正負號，
+        # 否則負的淨利／現金流會落到原始數字（-12345678900 元）。
         try:
             amount = float(amount)
         except (TypeError, ValueError):

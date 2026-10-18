@@ -402,6 +402,60 @@ class TestFutuFundamentalIntegration(unittest.TestCase):
     @patch("data_provider.futu_fetcher.FutuFetcher.has_configured_endpoint", return_value=True)
     @patch("data_provider.futu_fundamental_adapter.FutuFundamentalAdapter")
     @patch("src.config.get_config")
+    def test_merge_keeps_basis_only_for_fields_filled_from_yfinance(
+        self, mock_get_config, mock_adapter, mock_has_ep
+    ):
+        """Futu 自己的欄位不可被貼上 yfinance 的口徑標籤；yfinance 補的欄位保留標籤。"""
+        from types import SimpleNamespace
+
+        mock_get_config.return_value = SimpleNamespace()
+        mock_adapter.return_value.get_fundamental_bundle.return_value = {
+            "status": "partial",
+            "growth": {"revenue_yoy": 10.0, "net_profit_yoy": 12.0, "gross_margin": 40.0},
+            "earnings": {"financial_report": {"revenue": 5.0e10, "net_profit_parent": 9.0e9}},
+            "institution": {"company_profile": {"公司名称": "测试公司"}},
+            "capital_flow": {},
+            "belong_boards": [],
+            "source_chain": [{"provider": "futu.financials", "result": "ok", "duration_ms": 1}],
+            "errors": [],
+        }
+        manager = self._make_manager()
+        manager._yfinance_fundamental_adapter.get_fundamental_bundle.return_value = {
+            "status": "ok",
+            "growth": {},
+            "earnings": {
+                "financial_report": {
+                    "revenue": 1.11e11,
+                    "net_profit_parent": 2.95e10,
+                    "operating_cash_flow": 3.0e9,
+                    "basis": {
+                        "revenue": "quarter",
+                        "net_profit_parent": "quarter",
+                        "operating_cash_flow": "quarter",
+                    },
+                }
+            },
+            "belong_boards": [],
+            "source_chain": [{"provider": "yfinance.info", "result": "ok", "duration_ms": 1}],
+            "errors": [],
+        }
+
+        payload, err, ms, provider = manager._fetch_offshore_fundamental_bundle("HK00700", "hk", 10.0)
+
+        report = payload["earnings"]["financial_report"]
+        self.assertEqual(manager._yfinance_fundamental_adapter.get_fundamental_bundle.call_count, 1)
+        # Futu 的營收／淨利保留，且沒有 yfinance 的 quarter 標籤
+        self.assertEqual(report["revenue"], 5.0e10)
+        self.assertEqual(report["net_profit_parent"], 9.0e9)
+        self.assertNotIn("revenue", report["basis"])
+        self.assertNotIn("net_profit_parent", report["basis"])
+        # yfinance 補上的欄位保留自己的口徑
+        self.assertEqual(report["operating_cash_flow"], 3.0e9)
+        self.assertEqual(report["basis"], {"operating_cash_flow": "quarter"})
+
+    @patch("data_provider.futu_fetcher.FutuFetcher.has_configured_endpoint", return_value=True)
+    @patch("data_provider.futu_fundamental_adapter.FutuFundamentalAdapter")
+    @patch("src.config.get_config")
     def test_fetch_offshore_bundle_pulls_yfinance_when_futu_dividend_empty(
         self, mock_get_config, mock_adapter, mock_has_ep
     ):

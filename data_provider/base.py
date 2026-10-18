@@ -4014,9 +4014,19 @@ class DataFetcherManager:
                 yf_report = yf_earnings.get("financial_report")
                 if isinstance(yf_report, dict):
                     report = dict(futu_report) if isinstance(futu_report, dict) else {}
+                    # basis（口徑標記）不進通用迴圈：它描述的是 yfinance 各欄的口徑，
+                    # 只有「實際由 yfinance 補上的欄位」才能沿用，Futu 自己的值不能被貼上 yfinance 的標籤。
+                    yf_basis = yf_report.get("basis")
+                    filled_basis: Dict[str, Any] = {}
                     for field, value in yf_report.items():
+                        if field == "basis":
+                            continue
                         if not self._has_meaningful_payload(report.get(field)):
                             report[field] = value
+                            if isinstance(yf_basis, dict) and field in yf_basis:
+                                filled_basis[field] = yf_basis[field]
+                    if filled_basis:
+                        report["basis"] = filled_basis
                     if any(self._has_meaningful_payload(v) for v in report.values()):
                         earnings["financial_report"] = report
                 if not DataFetcherManager._dividend_contract_has_values(

@@ -270,9 +270,9 @@ class YfinanceFundamentalAdapter:
         if cashflow_df is not None and not cashflow_df.empty:
             operating_cash_flow_latest = _latest_value(_pick_row(cashflow_df, _CASHFLOW_OP_KEYS))
 
-        # 口径标记（basis）：季报表与 .info 的 TTM 聚合会逐栏退回，同一张表可能混单季与近四季，
-        # 不标出来模型会把近四季营收当成单季去比。值：quarter／ttm／ttm_derived（淨利 = 近四季营收 ×
-        # 淨利率）／quarter_derived（淨利 = 单季营收 × 近四季淨利率，只是估算）。
+        # 口徑標記（basis）：季報表與 .info 的 TTM 聚合會逐欄退回，同一張表可能混單季與近四季，
+        # 不標出來模型會把近四季營收當成單季去比。值：quarter／ttm／ttm_derived（淨利 = 近四季營收 ×
+        # 淨利率）／quarter_derived（淨利 = 單季營收 × 近四季淨利率，只是估算）。
         basis: Dict[str, str] = {}
         if revenue_latest is not None:
             basis["revenue"] = "quarter"
@@ -321,7 +321,7 @@ class YfinanceFundamentalAdapter:
             "currency": financial_currency,
         }
         if any(v is not None and v != "" for v in financial_report.values()):
-            financial_report["basis"] = basis  # 放在存在性判断之後：空 dict 不算有资料
+            financial_report["basis"] = basis  # 放在存在性判斷之後：空 dict 不算有資料
             result.setdefault("earnings", {})["financial_report"] = financial_report
             result["source_chain"].append("earnings.financial_report:yfinance")
 
