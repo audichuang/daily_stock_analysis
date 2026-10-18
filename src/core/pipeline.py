@@ -13,6 +13,7 @@ A股自选股智能分析系统 - 核心分析流水线
 
 import logging
 import inspect
+import math
 import threading
 import time
 from pathlib import Path
@@ -149,6 +150,20 @@ def _cumulative_max(existing: Any, realtime: Any) -> Any:
     if _valid(existing) and _valid(realtime):
         return max(existing, realtime)
     return realtime
+
+
+def _coerce_to_date(value: Any) -> Optional[date]:
+    """date／datetime（含 pandas.Timestamp）／ISO 字串（取前 10 碼）統一成 date；無法解析回 None。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
 
 
 def _share_image_payload(result: Any) -> Optional[Dict[str, Any]]:
@@ -1056,16 +1071,41 @@ class StockAnalysisPipeline:
 
         # Issue #234：盘中分析使用实时 OHLC 与趋势 MA 覆盖 today。
         # 防护条件：trend_result.ma5 > 0 表示 MA 计算已成功且数据量充足。
+        realtime_overridden = False
         if realtime_quote and trend_result and trend_result.ma5 > 0:
             price = getattr(realtime_quote, 'price', None)
             if price is not None and price > 0:
+                realtime_overridden = True
                 yesterday_close = None
                 if enhanced.get('yesterday') and isinstance(enhanced['yesterday'], dict):
                     yesterday_close = enhanced['yesterday'].get('close')
                 orig_today = enhanced.get('today') or {}
-                market_today = get_market_now(
-                    get_market_for_stock(normalize_stock_code(enhanced.get('code', '')))
-                ).date().isoformat()
+                market = get_market_for_stock(normalize_stock_code(enhanced.get('code', '')))
+                # 時鐘只讀一次：market_today 與下面「報價是否屬於今天」的判定共用同一個 market_now。
+                market_now = get_market_now(market)
+                market_today_date = market_now.date()
+                market_today = market_today_date.isoformat()
+                # 報價屬於今天 ⇔ 今天是交易日且尚未開盤前；開盤前／非交易日的「即時價」其實是
+                # T-1 收盤，此時 DB 的 today(T-1)／yesterday(T-2) 本來就對齊，不得平移。
+                quote_is_today = bool(
+                    market
+                    and is_market_open(market, market_today_date)
+                    and infer_market_phase(market, market_now) != MarketPhase.PREMARKET
+                )
+                # orig_today['date'] 可能是 date／Timestamp／ISO 字串；先正規化成 date 再比較。
+                orig_date_norm = _coerce_to_date(orig_today.get('date'))
+                # DB 最新列是 T-1（今天的 K 還沒進庫）：原 today 才是真正的「昨日」，
+                # 不平移的話即時價會拿去比前天收盤（實測 3008：-5.67% 被算成 -9.45%）。
+                shift_yesterday = bool(
+                    quote_is_today
+                    and orig_date_norm is not None
+                    and orig_date_norm < market_today_date
+                    and isinstance(orig_today, dict)
+                    and orig_today
+                )
+                if shift_yesterday:
+                    enhanced['yesterday'] = dict(orig_today)
+                    yesterday_close = orig_today.get('close')
                 source = getattr(realtime_quote, 'source', None)
                 source_name = getattr(source, 'value', source)
                 source_name = str(source_name) if source_name is not None else 'unknown'
@@ -1141,7 +1181,17 @@ class StockAnalysisPipeline:
                     price, trend_result.ma5, trend_result.ma10, trend_result.ma20
                 )
                 enhanced['date'] = market_today
-                if yesterday_close is not None:
+                # 即時漲跌幅有值就直接用（供應商端已還原，與 realtime_today['pct_chg'] 同一來源）；
+                # 否則以（平移後的）昨收計算。
+                pct_val = None
+                if pct is not None:
+                    try:
+                        pct_val = float(pct)
+                    except (TypeError, ValueError):
+                        pct_val = None
+                if pct_val is not None and math.isfinite(pct_val):
+                    enhanced['price_change_ratio'] = round(pct_val, 2)
+                elif yesterday_close is not None:
                     try:
                         yc = float(yesterday_close)
                         if yc > 0:
@@ -1163,6 +1213,22 @@ class StockAnalysisPipeline:
                                 )
                         except (TypeError, ValueError):
                             pass
+
+        # 非即時覆蓋路徑（沒有報價／趨勢，或覆蓋條件不成立）：台股以庫內已還原的 pct_chg 為「較昨日漲跌」。
+        # storage.get_analysis_context 用未還原收盤相減，除權息日會錯；只在 pipeline 對台股修正。
+        if not realtime_overridden:
+            _today_row = enhanced.get('today')
+            if (
+                get_market_for_stock(normalize_stock_code(enhanced.get('code', ''))) == 'tw'
+                and isinstance(_today_row, dict)
+                and _today_row.get('pct_chg') is not None
+            ):
+                try:
+                    _db_pct = float(_today_row['pct_chg'])
+                    if math.isfinite(_db_pct):
+                        enhanced['price_change_ratio'] = round(_db_pct, 2)
+                except (TypeError, ValueError):
+                    pass
 
         # ETF/index flag for analyzer prompt (Fixes #274)
         enhanced['is_index_etf'] = SearchService.is_index_or_etf(

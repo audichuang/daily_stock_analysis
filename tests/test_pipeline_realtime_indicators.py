@@ -533,5 +533,138 @@ class TestEnhanceContextRealtimeOverride(unittest.TestCase):
         self.assertEqual(enhanced["today"]["ma5"], 14.8)
 
 
+class TestEnhanceContextYesterdayAlignment(unittest.TestCase):
+    """T18：盤中拿即時價比 T-2 的錯位（實測 3008：-5.67% 被算成 -9.45%）。
+
+    一律釘 get_market_now／is_market_open／infer_market_phase／get_market_for_stock，
+    日期用相對值；並斷言 `today.close` 已被即時價覆蓋，證明測試真的走進覆蓋區塊。
+    """
+
+    def setUp(self) -> None:
+        self._db_path = os.path.join(
+            os.path.dirname(__file__), "..", "data", "test_issue234.db"
+        )
+        os.makedirs(os.path.dirname(self._db_path), exist_ok=True)
+        with patch.dict(os.environ, {"DATABASE_PATH": self._db_path}):
+            from src.config import Config
+            Config._instance = None
+            self.config = Config._load_from_env()
+        self.pipeline = StockAnalysisPipeline(config=self.config)
+        self.today = date.today()
+        self.t1 = self.today - timedelta(days=1)
+        self.t2 = self.today - timedelta(days=2)
+
+    def _context(self, today_date: date, *, today_extra=None) -> dict:
+        today_row = {"close": 100.0, "volume": 1000.0, "date": today_date}
+        today_row.update(today_extra or {})
+        return {
+            "code": "3008.TW",
+            "date": today_date.isoformat(),
+            "today": today_row,
+            # DB 的 T-2（或收盤後的 T-1）
+            "yesterday": {"close": 105.0, "volume": 800.0,
+                          "date": today_date - timedelta(days=1)},
+            # storage.get_analysis_context 以 today 對 yesterday 算出的舊值
+            "price_change_ratio": -4.76,
+            "volume_change_ratio": 1.25,
+        }
+
+    def _trend(self) -> TrendAnalysisResult:
+        return TrendAnalysisResult(
+            code="3008.TW", trend_status=TrendStatus.BULL, ma5=99.0, ma10=98.0, ma20=97.0,
+        )
+
+    def _enhance(self, context, quote, *, market="tw", is_open=True,
+                 phase=MarketPhase.INTRADAY, trend="default"):
+        from zoneinfo import ZoneInfo
+        now = datetime(self.today.year, self.today.month, self.today.day, 10, 53,
+                       tzinfo=ZoneInfo("Asia/Taipei"))
+        with patch("src.core.pipeline.get_market_now", return_value=now), \
+                patch("src.core.pipeline.get_market_for_stock", return_value=market), \
+                patch("src.core.pipeline.is_market_open", return_value=is_open), \
+                patch("src.core.pipeline.infer_market_phase", return_value=phase):
+            return self.pipeline._enhance_context(
+                context, quote, None,
+                self._trend() if trend == "default" else trend, "測試",
+            )
+
+    def test_intraday_shifts_prior_day_into_yesterday(self) -> None:
+        ctx = self._context(self.t1)
+        # 防止型別不一致讓平移靜默不觸發：輸入是 date 物件，不是字串。
+        self.assertIsInstance(ctx["today"]["date"], date)
+        quote = _make_realtime_quote(price=94.0, volume=500, change_pct=-5.67)
+        enhanced = self._enhance(ctx, quote)
+        self.assertEqual(enhanced["today"]["close"], 94.0)  # 走進覆蓋
+        self.assertEqual(enhanced["yesterday"]["date"], self.t1)
+        self.assertEqual(enhanced["yesterday"]["close"], 100.0)
+        # 即時 pct 有值 → 直接用它（單一還原來源），不用 94 對 100 的 -6.0
+        self.assertEqual(enhanced["price_change_ratio"], -5.67)
+        # 量比以 T-1 量為基準，不是 T-2 的 800
+        self.assertEqual(enhanced["volume_change_ratio"], 0.5)
+
+    def test_intraday_without_pct_computes_against_shifted_close(self) -> None:
+        quote = _make_realtime_quote(price=94.0, volume=500, change_pct=None)
+        enhanced = self._enhance(self._context(self.t1), quote)
+        self.assertEqual(enhanced["today"]["close"], 94.0)
+        self.assertEqual(enhanced["yesterday"]["date"], self.t1)
+        self.assertEqual(enhanced["price_change_ratio"], -6.0)  # 對 T-1 的 100，不是 T-2 的 105
+
+    def test_shift_accepts_iso_string_and_timestamp_dates(self) -> None:
+        """降級路徑（_build_analysis_context_from_daily_df）的 date 是 ISO 字串；也可能是 Timestamp。"""
+        for form in (self.t1.isoformat(), pd.Timestamp(self.t1)):
+            with self.subTest(form=type(form).__name__):
+                ctx = self._context(self.t1)
+                ctx["today"]["date"] = form
+                quote = _make_realtime_quote(price=94.0, volume=500, change_pct=None)
+                enhanced = self._enhance(ctx, quote)
+                self.assertEqual(enhanced["today"]["close"], 94.0)
+                self.assertEqual(enhanced["yesterday"]["close"], 100.0)
+                self.assertEqual(enhanced["price_change_ratio"], -6.0)
+
+    def test_postmarket_with_today_already_in_db_does_not_shift(self) -> None:
+        ctx = self._context(self.today)
+        quote = _make_realtime_quote(price=94.0, volume=500, change_pct=None)
+        enhanced = self._enhance(ctx, quote, phase=MarketPhase.POSTMARKET)
+        self.assertEqual(enhanced["today"]["close"], 94.0)
+        self.assertEqual(enhanced["yesterday"], ctx["yesterday"])
+        self.assertEqual(enhanced["price_change_ratio"], round((94.0 - 105.0) / 105.0 * 100, 2))
+
+    def test_premarket_does_not_shift(self) -> None:
+        """開盤前的「即時價」其實是 T-1 收盤：平移會讓 volume_change_ratio 變 1.0。"""
+        ctx = self._context(self.t1)
+        quote = _make_realtime_quote(price=100.0, volume=1000, change_pct=None)
+        enhanced = self._enhance(ctx, quote, phase=MarketPhase.PREMARKET)
+        self.assertEqual(enhanced["today"]["close"], 100.0)
+        self.assertEqual(enhanced["yesterday"], ctx["yesterday"])
+        self.assertEqual(enhanced["volume_change_ratio"], 1.25)  # T-1/T-2，不是 1.0
+
+    def test_non_trading_day_does_not_shift(self) -> None:
+        ctx = self._context(self.t1)
+        quote = _make_realtime_quote(price=100.0, volume=1000, change_pct=None)
+        # phase 刻意給非 PREMARKET，只讓交易日守門單獨擋住
+        enhanced = self._enhance(ctx, quote, is_open=False, phase=MarketPhase.POSTMARKET)
+        self.assertEqual(enhanced["today"]["close"], 100.0)
+        self.assertEqual(enhanced["yesterday"], ctx["yesterday"])
+        self.assertEqual(enhanced["volume_change_ratio"], 1.25)
+
+    def test_non_realtime_tw_uses_adjusted_pct_chg_but_other_markets_do_not(self) -> None:
+        """除權息日：庫內收盤未還原相減得 -9.99，已還原 pct_chg 才是 -3.2。"""
+        def ctx():
+            c = self._context(self.t1, today_extra={"pct_chg": -3.2})
+            c["price_change_ratio"] = -9.99
+            return c
+
+        tw = self._enhance(ctx(), None, market="tw", trend=None)
+        self.assertEqual(tw["price_change_ratio"], -3.2)
+        us = self._enhance(ctx(), None, market="us", trend=None)
+        self.assertEqual(us["price_change_ratio"], -9.99)
+        # 台股但庫內沒有 pct_chg：維持 storage 算出的值
+        c = self._context(self.t1)
+        c["price_change_ratio"] = -9.99
+        self.assertEqual(
+            self._enhance(c, None, market="tw", trend=None)["price_change_ratio"], -9.99
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
