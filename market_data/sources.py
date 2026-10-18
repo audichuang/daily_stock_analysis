@@ -630,8 +630,12 @@ def parse_index_report(payload):
     return rows
 
 
-def fetch_index(asof=None):
-    """FMTQIK:加權指數 TAIEX + 市場成交金額(近日)。"""
+def fetch_index(asof=None, fallback=True):
+    """FMTQIK:加權指數 TAIEX + 市場成交金額(該月整月)。
+
+    ``fallback=False``:rwd 失敗（或該月無資料）就回 None 並印 WARN,不退到 openapi——
+    openapi 只給**當月**,拿來補上個月沒有意義,還會讓 log 看起來像補到了。
+    """
     asof = asof or datetime.date.today()
     r = requests_get(
         "https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK",
@@ -647,6 +651,10 @@ def fetch_index(asof=None):
                     return rows
         except (ValueError, TypeError, IndexError):
             pass
+    if not fallback:
+        print(f"**WARN: FMTQIK {asof:%Y-%m} rwd 失敗或無資料,不走 openapi fallback"
+              "(openapi 只給當月,補不了這個月)")
+        return None
     # fallback 的 WARN 要帶 url,否則「當日未發布」與「端點改版」在 log 裡長得一樣
     url = "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK"
     return _valid_rows(_openapi_json(url),

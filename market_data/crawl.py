@@ -249,16 +249,44 @@ def crawl_valuation(conn):
     return upsert(conn, models.Valuation.__table__, recs, ["stock_id", "date"])
 
 
-def crawl_index(conn):
-    rows = sources.fetch_index()
-    if not rows:
+_INDEX_MONTH_DELAY_SECONDS = 2.0     # 月與月之間的間隔,避免連打 TWSE(測試 monkeypatch 成 0)
+
+
+def _today():
+    import datetime as _dt
+    return _dt.date.today()
+
+
+def crawl_index(conn, dates=None):
+    """FMTQIK 加權指數。FMTQIK 帶 date 只回**該月整月**,所以依 ``dates``（daily 的回補窗口）
+    涉及的每個月各打一次,再加上今天所在的月份;``dates=None`` 就只抓當月（`cli snapshot` 行為不變）。
+
+    為什麼要逐月:月底最後一個交易日漏跑,隔月第一輪 price 補得回來,但只抓當月的 index 補不回上月,
+    health 的 missing_index_dates 會連擋好幾天,而修復訊息叫你重跑的 daily 又修不了。
+    只有當月允許退到 openapi（它只給當月）;過去月份 rwd 失敗只印 WARN,缺口仍由 health 擋。"""
+    import time as _time
+
+    today = _today()
+    last_by_month = {(today.year, today.month): today}
+    for d in sorted(dates or ()):
+        if (d.year, d.month) != (today.year, today.month):
+            last_by_month[(d.year, d.month)] = d      # 該月在 dates 中最後一天
+    by_date = {}
+    for i, ym in enumerate(sorted(last_by_month)):
+        if i and _INDEX_MONTH_DELAY_SECONDS:
+            _time.sleep(_INDEX_MONTH_DELAY_SECONDS)
+        rows = sources.fetch_index(asof=last_by_month[ym],
+                                   fallback=ym == (today.year, today.month))
+        for r in rows or ():
+            by_date[r["Date"]] = r
+    if not by_date:
         return 0
-    df = etl.transform_index(rows).reset_index()
+    df = etl.transform_index(list(by_date.values())).reset_index()
     recs = _to_records(df, models.MarketIndex.__table__, filter_stock_id=False)
     return upsert(conn, models.MarketIndex.__table__, recs, ["index_id", "date"])
 
 
-def crawl_snapshots(engine):
+def crawl_snapshots(engine, dates=None):
     """三個當日快照(valuation/index/stock_info),**每步一個交易**,逐個印出 upsert 列數。
 
     **唯一該呼叫快照的入口**——`daily_update` 與 `cli snapshot` 兩條路徑原本各自直接呼叫
@@ -285,8 +313,10 @@ def crawl_snapshots(engine):
     for name, fn in (("valuation", crawl_valuation),
                      ("index", crawl_index),
                      ("stock_info", crawl_stock_info)):
+        # dates 只給 index:valuation／stock_info 是無日期快照,補日走 crawl_range
+        kw = {"dates": dates} if name == "index" and dates is not None else {}
         with engine.begin() as conn:
-            out[name] = n = fn(conn)
+            out[name] = n = fn(conn, **kw)
         print(f"{name} {n:,} rows{_snapshot_latest(engine, name)}")
     return out
 
@@ -487,7 +517,7 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
     # asof 當天剛抓的就是初版,重抓它沒有意義;隔天這一輪才會把它換成定版
     for source in REVISED_SOURCES:
         refresh_range(eng, source, [d for d in dates if d < asof])
-    crawl_snapshots(eng)
+    crawl_snapshots(eng, dates)    # index 依窗口逐月抓,月底漏跑才補得回上月
     # 月營收(上月整月)與除權息(滾動窗)順帶保鮮:各一個請求,upsert 冪等
     prev_month = (asof.replace(day=1) - _dt.timedelta(days=1)).replace(day=1)
     with eng.begin() as conn:

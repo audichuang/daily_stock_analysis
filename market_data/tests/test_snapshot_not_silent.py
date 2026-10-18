@@ -142,3 +142,71 @@ def test_snapshot_latest_failure_degrades_instead_of_breaking_the_crawl():
             raise RuntimeError("no such table")
 
     assert crawl._snapshot_latest(_Boom(), "index") == ", latest unknown (RuntimeError)"
+
+
+# ---- crawl_index 依回補窗口逐月抓(T05) -------------------------------------------
+
+from datetime import date  # noqa: E402
+
+
+def _month_rows(*days):
+    return [{"Date": f"{d.year - 1911:03d}{d.month:02d}{d.day:02d}", "TAIEX": "20,000.00",
+             "Change": "1.00", "TradeValue": "1,000"} for d in days]
+
+
+@pytest.fixture
+def index_env(monkeypatch):
+    """釘住「今天」、關掉月間 sleep、記錄 fetch_index 呼叫並收集被 upsert 的日期。"""
+    calls, upserted = [], []
+    monkeypatch.setattr(crawl, "_today", lambda: date(2026, 10, 5))
+    monkeypatch.setattr(crawl, "_INDEX_MONTH_DELAY_SECONDS", 0)
+
+    def fake_fetch(asof=None, fallback=True):
+        calls.append((asof, fallback))
+        return _month_rows(date(asof.year, asof.month, 1), asof)
+
+    monkeypatch.setattr(sources, "fetch_index", fake_fetch)
+    monkeypatch.setattr(crawl, "upsert",
+                        lambda conn, table, recs, pk: upserted.extend(r["date"] for r in recs) or len(recs))
+    return calls, upserted
+
+
+def test_crawl_index_fetches_each_month_in_the_window(index_env):
+    calls, upserted = index_env
+    dates = [date(2026, 9, 29), date(2026, 9, 30), date(2026, 10, 1), date(2026, 10, 2)]
+    crawl.crawl_index(None, dates)
+    # 9 月以「該月在窗口中最後一天」為 asof 且不准 openapi fallback;10 月（當月）用今天且允許
+    assert calls == [(date(2026, 9, 30), False), (date(2026, 10, 5), True)]
+    assert any(str(d).startswith("2026-09-30") for d in upserted)    # 9/30 的列被寫入
+
+
+def test_crawl_index_same_month_fetches_once(index_env):
+    calls, _ = index_env
+    crawl.crawl_index(None, [date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 5)])
+    assert calls == [(date(2026, 10, 5), True)]
+
+
+def test_crawl_index_without_dates_fetches_current_month_only(index_env):
+    calls, _ = index_env
+    crawl.crawl_index(None)
+    assert calls == [(date(2026, 10, 5), True)]
+
+
+def test_crawl_index_dedupes_rows_and_survives_a_failed_past_month(index_env, monkeypatch):
+    calls, upserted = index_env
+    monkeypatch.setattr(sources, "fetch_index",
+                        lambda asof=None, fallback=True: None if asof.month == 9
+                        else _month_rows(date(2026, 10, 1), date(2026, 10, 1)))
+    n = crawl.crawl_index(None, [date(2026, 9, 30), date(2026, 10, 1)])
+    assert n == 1 and len(upserted) == 1          # 上月失敗不拖垮當月;同日期去重
+
+
+def test_crawl_snapshots_passes_dates_only_to_index(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(crawl, "crawl_valuation", lambda conn: seen.setdefault("val", 0))
+    monkeypatch.setattr(crawl, "crawl_stock_info", lambda conn: seen.setdefault("info", 0))
+    monkeypatch.setattr(crawl, "crawl_index",
+                        lambda conn, dates=None: seen.update(idx=dates) or 0)
+    window = [date(2026, 9, 30), date(2026, 10, 1)]
+    crawl.crawl_snapshots(_FakeEngine("2026-10-01"), window)
+    assert seen["idx"] == window

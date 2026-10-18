@@ -189,6 +189,23 @@ def test_fetch_index_prefers_current_rwd_report(monkeypatch):
     }]
 
 
+def test_fetch_index_without_fallback_never_touches_openapi(monkeypatch, capsys):
+    """過去月份 rwd 失敗時不得退到 openapi（它只給當月）:回 None 並印 WARN。"""
+    monkeypatch.setattr(sources, "requests_get", lambda *a, **k: None)
+    monkeypatch.setattr(
+        sources, "_openapi_json", lambda url: pytest.fail("openapi fallback used"))
+    assert sources.fetch_index(date(2026, 9, 30), fallback=False) is None
+    assert "2026-09" in capsys.readouterr().out
+
+
+def test_fetch_index_with_fallback_still_uses_openapi(monkeypatch):
+    """當月仍保留 openapi 後備（預設行為不變）。"""
+    monkeypatch.setattr(sources, "requests_get", lambda *a, **k: None)
+    openapi = [{"Date": "1151005", "TAIEX": "1", "Change": "1", "TradeValue": "1"}]
+    monkeypatch.setattr(sources, "_openapi_json", lambda url: openapi)
+    assert sources.fetch_index(date(2026, 10, 5)) == openapi
+
+
 def test_missing_adjustments_finds_valid_ex_dividend_without_event_factor():
     expected = [("2330", date(2026, 7, 24)), ("2317", date(2026, 7, 28))]
     stored = [("2317", date(2026, 7, 28))]

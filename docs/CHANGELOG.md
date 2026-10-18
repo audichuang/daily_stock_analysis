@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 月底漏跑或指數晚發布時，下一輪每日更新會補回上個月的加權指數，健檢不再卡住好幾天
 - [修復] 台股均線、RSI、MACD、量比等技術指標改用還原後價格與量計算，除權息與分割不再讓訊號連錯好幾週（報告顯示的價格不變）
 - [新功能] 台股個股分析加入融資融券餘額與變化（標資料日與單位張）：提示詞新增融資餘額、較 5／20 個場次前的變化（場次不足不印）、融券餘額與券資比，不論當日三大法人是否取得成功都出現；上櫃股票明講沒有本地融資融券資料、不得推論融資動向（資料庫只收錄上市）
 - [修復] 台股日線在本地資料庫失效、改用 yfinance 時不再套現金股利還原，減少與資料庫日線混用兩種基準（Yahoo 的收盤價仍含分割調整，備援列並非純未還原，須以 data_source 區分）

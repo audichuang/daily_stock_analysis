@@ -32,7 +32,7 @@ def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch, capsys):
     monkeypatch.setattr(crawl, "crawl_valuation",
                         lambda conn: calls.append(("val",)) or 0)
     monkeypatch.setattr(crawl, "crawl_index",
-                        lambda conn: calls.append(("idx",)) or 0)
+                        lambda conn, dates=None: calls.append(("idx", dates)) or 0)
     monkeypatch.setattr(crawl, "crawl_stock_info",
                         lambda conn: calls.append(("info",)) or 0)
     monkeypatch.setattr(crawl, "crawl_monthly_revenue",
@@ -45,7 +45,8 @@ def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch, capsys):
     # 也會通過所有斷言,共用入口就白抽了(而共用入口正是「印出」不會再被漏掉的保證)
     real_snapshots = crawl.crawl_snapshots
     monkeypatch.setattr(crawl, "crawl_snapshots",
-                        lambda eng: calls.append(("snapshots",)) or real_snapshots(eng))
+                        lambda eng, dates=None: calls.append(("snapshots", dates))
+                        or real_snapshots(eng, dates))
 
     monkeypatch.setattr(crawl, "refresh_range",
                         lambda eng, src, dates: calls.append(("refresh", src, tuple(dates))))
@@ -57,8 +58,13 @@ def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch, capsys):
     ranged = {c[1] for c in calls if c[0] == "range"}
     # valuation 也走 crawl_range（BWIBBU_d 補窗口內缺日）；但不進 REVISED_SOURCES
     assert ranged == {"price", "institutional", "margin", "valuation"}
-    assert calls.count(("snapshots",)) == 1        # 走共用入口,不是三個直接呼叫
-    assert ("val",) in calls and ("idx",) in calls and ("info",) in calls
+    snaps = [c for c in calls if c[0] == "snapshots"]
+    assert len(snaps) == 1                          # 走共用入口,不是三個直接呼叫
+    # daily 把回補窗口交給快照段,index 才能依窗口逐月抓(月底漏跑補得回上月)
+    window = snaps[0][1]
+    assert window and date(2024, 6, 5) in window
+    assert ("idx", window) in calls                 # crawl_snapshots 把同一份 dates 轉給 crawl_index
+    assert ("val",) in calls and ("info",) in calls
     # 上月營收(asof 6/5 -> 5 月)與除權息滾動窗(-30d ~ +90d)
     assert ("rev", date(2024, 5, 1)) in calls
     assert ("exd", date(2024, 5, 6), date(2024, 9, 3)) in calls
@@ -92,7 +98,7 @@ def test_daily_update_refreshes_recent_stored_days_but_not_asof(monkeypatch):
     monkeypatch.setattr(crawl, "crawl_range", lambda eng, src, dates, resume=True: None)
     monkeypatch.setattr(crawl, "refresh_range",
                         lambda eng, src, dates: refreshed.append((src, list(dates))))
-    monkeypatch.setattr(crawl, "crawl_snapshots", lambda eng: {})
+    monkeypatch.setattr(crawl, "crawl_snapshots", lambda eng, dates=None: {})
     monkeypatch.setattr(crawl, "crawl_monthly_revenue", lambda conn, month: 0)
     monkeypatch.setattr(crawl, "crawl_ex_dividend", lambda conn, start, end: 0)
     monkeypatch.setattr(adjust, "refresh_recent", lambda engine, start, end: None)
