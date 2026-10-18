@@ -1274,9 +1274,6 @@ class StockAnalysisPipeline:
                     if k not in realtime_today and k not in realtime_owned_fields and v is not None:
                         realtime_today[k] = v
                 enhanced['today'] = realtime_today
-                enhanced['ma_status'] = self._compute_ma_status(
-                    price, trend_result.ma5, trend_result.ma10, trend_result.ma20
-                )
                 enhanced['date'] = market_today
                 # 即時漲跌幅有值就直接用（供應商端已還原，與 realtime_today['pct_chg'] 同一來源）；
                 # 否則以（平移後的）昨收計算。
@@ -1310,6 +1307,15 @@ class StockAnalysisPipeline:
                                 )
                         except (TypeError, ValueError):
                             pass
+
+        # 均線跟隨成功的趨勢分析（台股已前復權），無即時報價也要帶進 prompt；顯示價不變。
+        if trend_result and trend_result.ma5 > 0:
+            today = dict(enhanced.get('today') or {})
+            today.update(ma5=trend_result.ma5, ma10=trend_result.ma10, ma20=trend_result.ma20)
+            enhanced['today'] = today
+            enhanced['ma_status'] = self._compute_ma_status(
+                today.get('close'), trend_result.ma5, trend_result.ma10, trend_result.ma20
+            )
 
         # 非即時覆蓋路徑（沒有報價／趨勢，或覆蓋條件不成立）：台股以庫內已還原的 pct_chg 為「較昨日漲跌」。
         # storage.get_analysis_context 用未還原收盤相減，除權息日會錯；只在 pipeline 對台股修正。

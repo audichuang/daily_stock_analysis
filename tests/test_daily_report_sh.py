@@ -6,7 +6,10 @@
 """
 import os
 import re
+import shlex
+import signal
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -115,6 +118,63 @@ notify_failure() {{ echo "$1" >> "{tmp_path}/notified"; }}
     assert "TIMEOUT: 慢命令" in log.read_text(encoding="utf-8")
     assert (tmp_path / "notified").exists()
     assert _leftovers(tok) == ""
+
+
+@pytest.mark.parametrize("ignore_term", [False, True])
+def test_timeout_cleans_registered_cli_sessions_before_unlock(tmp_path, ignore_term):
+    cli = tmp_path / "fake_cli.py"
+    cli.write_text(
+        "import os, signal, subprocess, sys, time\n"
+        + ("signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" if ignore_term else "")
+        + "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+        + f"with open({str(tmp_path / 'pids')!r}, 'a') as f: f.write(f'{{os.getpid()}} {{child.pid}}\\n')\n"
+        + "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    # 只替換外部 CLI；真正的 backend 必須以 start_new_session 啟動兩份並行請求。
+    driver = f"""
+from concurrent.futures import ThreadPoolExecutor
+import sys
+from types import SimpleNamespace
+from src.llm.local_cli_backend import LocalCliGenerationBackend, LocalCliPreset
+config = SimpleNamespace(generation_backend_timeout_seconds=60,
+                         generation_backend_max_concurrency=2, local_cli_backend_max_concurrency=2)
+preset = LocalCliPreset(preset_id='codex_cli', executable=sys.executable,
+                        argv=({str(cli)!r},), display_name='Mock CLI')
+backend = LocalCliGenerationBackend(config, preset=preset)
+with ThreadPoolExecutor(max_workers=2) as pool:
+    list(pool.map(lambda _: backend.generate('test', {{}}), range(2)))
+"""
+    outsider = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    lock = tmp_path / "lock"
+    lock.mkdir()
+    snapshot = tmp_path / "at_unlock"
+    try:
+        r = _run_bash(f"""
+LOG="{tmp_path / 'step.log'}"
+notify_failure() {{ :; }}
+trap 'ps -eo pid=,pgid=,stat= > "{snapshot}"; rmdir "{lock}"' EXIT
+DAILY_REPORT_STEP_TIMEOUT_SECONDS=4 run_step "CLI 步驟" {shlex.quote(sys.executable)} -c {shlex.quote(driver)}
+""")
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "TIMEOUT: CLI 步驟" in (tmp_path / "step.log").read_text()
+        groups = [int(line.split()[0]) for line in (tmp_path / "pids").read_text().splitlines()]
+        assert len(groups) == 2, "逾時前必須真的啟動兩份 CLI"
+        assert not lock.exists()
+        for line in snapshot.read_text().splitlines():
+            _, pgid, state = line.split()
+            assert int(pgid) not in groups or state.startswith("Z"), line
+        assert outsider.poll() is None, "不得終止其他步驟／使用者的 session"
+    finally:
+        outsider.kill()
+        outsider.wait()
+        # mutation 故意漏殺時也要收乾淨，不能讓測試留下 CLI。
+        if (tmp_path / "pids").exists():
+            for line in (tmp_path / "pids").read_text().splitlines():
+                try:
+                    os.killpg(int(line.split()[0]), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
 def test_run_step_function_returning_nonzero_is_failure(tmp_path):

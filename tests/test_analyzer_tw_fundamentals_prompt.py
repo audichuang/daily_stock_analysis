@@ -2,6 +2,7 @@
 """T12：台股月營收進個股 prompt（單月口徑、標明月份），非台股／無月營收不出現。"""
 
 from tests.litellm_stub import ensure_litellm_stub
+import pytest
 
 ensure_litellm_stub()
 
@@ -189,3 +190,28 @@ def test_format_amount_sign_and_non_numeric():
     assert a._format_amount("N/A", "tw", "en") == "N/A"
     assert a._format_amount(float("nan"), "tw") == "N/A"
     assert a._format_amount("1270380250000.0", "tw") == "12703.80 亿新台币"
+
+
+@pytest.mark.parametrize("language,label,values", [
+    ("zh-TW", "營業收入", ["100.00 亿EUR", "-5.00 万EUR", "30 EUR"]),
+    ("zh", "营业收入", ["100.00 亿EUR", "-5.00 万EUR", "30 EUR"]),
+    ("en", "Revenue", ["10.00B EUR", "-50.00K EUR", "30 EUR"]),
+    ("ko", "Revenue", ["10.00B EUR", "-50.00K EUR", "30 EUR"]),
+])
+def test_unknown_financial_currency_keeps_iso_code(language, label, values):
+    for amount, expected in zip((1e10, -50000, 30), values):
+        p = _fr_prompt("HK09988", {"revenue": amount, "currency": " eur "}, language=language)
+        assert f"| {label} | {expected} |" in p
+    p = _fr_prompt("HK09988", {"revenue": None, "currency": "EUR"}, language=language)
+    assert f"| {label} | N/A |" in p
+
+
+@pytest.mark.parametrize("currency,expected", [
+    ("CNY", "100.00 亿元"), ("RMB", "100.00 亿元"), ("USD", "100.00 亿美元"),
+    ("HKD", "100.00 亿港元"), ("TWD", "100.00 亿新台币"),
+    ("JPY", "100.00 亿日元"), ("KRW", "100.00 亿韩元"), (None, "100.00 亿港元"),
+])
+def test_supported_financial_currency_format_unchanged(currency, expected):
+    fr = {"revenue": 1e10, "currency": currency}
+    assert f"| 營業收入 | {expected} |" in _fr_prompt("HK09988", fr)
+    assert "| Revenue | 10.00B |" in _fr_prompt("HK09988", fr, language="en")

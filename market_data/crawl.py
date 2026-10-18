@@ -177,6 +177,24 @@ def crawl_day(conn, source, d, replace=False, min_ratio=0.5):
             print(f"**WARN {source} {d}: replace refused — new {len(recs)} rows "
                   f"< {min_ratio:.0%} of existing {len(old)}, keeping current data")
             return 0
+        if source == "institutional":
+            # 所有法人 replace 都守欄位品質：人工 --force 也不應用壞欄位蓋掉好資料；
+            # 比較缺值「比例」而非列數，仍容許完整 payload 修復 partial／髒日。
+            fields = {
+                "foreign_net": ("外陸資買賣超股數(不含外資自營商)", "外資買賣超股數"),
+                "trust_net": ("投信買賣超股數",),
+                "dealer_net": ("自營商買賣超股數",),
+                "total_net": ("三大法人買賣超股數",),
+            }
+            missing = [c for c, names in fields.items() if not any(n in raw.columns for n in names)]
+            # 容忍零星缺值；任一欄 NULL 比例比原資料增加超過 10 個百分點就視為降級。
+            degraded = [c for c in fields if old
+                        and sum(r[c] is None for r in recs) / len(recs)
+                        > sum(r[c] is None for r in old) / len(old) + 0.1]
+            if missing or degraded:
+                print(f"**WARN {source} {d}: replace refused — degraded payload "
+                      f"(missing fields: {missing}; increased NULL share: {degraded}), keeping current data")
+                return 0
         revised = _count_revised(old, recs, pk)
         if revised:
             # grep 得到的訊號:官方事後改了已入庫的數字(見 refresh_range)

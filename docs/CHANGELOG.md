@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 法人整日替換前檢查 T86 必要欄位與 NULL 比例，回應降級時保留既有資料並印警告；自動重抓不中止，人工回補仍可修復殘缺日
+- [修復] 沒有可用即時報價時，個股提示詞仍採用成功趨勢分析的前復權均線與均線形態，報告顯示價維持原始價格
+- [修復] 每日報告步驟逾時時，一併終止該步驟啟動、另開 session 的本機 CLI 與其子行程，再釋放報告鎖
+- [修復] 財報未知幣別保留 ISO 代碼，不再套用交易市場幣別；已支援幣別的金額格式維持原樣
 - [修復] 台股大盤本地寬度計算失敗時不再連帶丟掉成交額與三大法人；本地資料庫讀取加逾時（寬度計算 5 秒、個股日線 15 秒，逾時改走降級來源）
 - [改進] 資料健檢會列出歷史上整天缺資料的日子（附回補指令）與各表只涵蓋上市的覆蓋率，只提示不擋流程：`market_data.health` 新增 `full-history gaps`（法人／融資／估值自各表首日起、price 有而整天沒列的日子，最近 10 筆附 `backfill` 指令）、`coverage vs price`（三張表只收上市，上櫃為設計上的缺）與非交易日復權事件數（約 242 筆屬預期且永久、勿刪列），三者皆不進 `--strict`；同步 `market_data/AGENTS.md` 與 `docs/tw-swing-pipeline.md`（momentum 因子比較含宇宙差異）
 - [改進] 融資融券解析改核對表頭順序，官方改欄位會直接報錯而非靜默錯位；「尚未發布／查無資料」（TWSE 短文字回覆）與「疑似被封鎖／改版」的警告訊息分開，三大法人與融資共用

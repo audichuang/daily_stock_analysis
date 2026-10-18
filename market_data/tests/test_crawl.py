@@ -271,3 +271,76 @@ def test_refresh_range_does_not_fetch_days_that_are_not_stored(pg_conn, monkeypa
     crawl.refresh_range(_TxEngine(pg_conn), "institutional", [date(2099, 2, 2)], delay=0)
 
     assert fetched == []
+
+
+_T86_FIELDS = {
+    "foreign_net": "外陸資買賣超股數(不含外資自營商)",
+    "trust_net": "投信買賣超股數",
+    "dealer_net": "自營商買賣超股數",
+    "total_net": "三大法人買賣超股數",
+}
+
+
+def _stored_institutional_rows(conn, d):
+    return {r["stock_id"]: r for r in crawl._stored_rows(conn, crawl.models.Institutional.__table__, d)}
+
+
+@pytest.mark.parametrize("field", _T86_FIELDS)
+@pytest.mark.parametrize("refresh", [True, False])
+def test_institutional_replace_keeps_rows_on_missing_field(pg_conn, monkeypatch, capsys, field, refresh):
+    d = date(2099, 2, 3)
+    rows = [("2330", 100, 20), ("2454", 50, 7)]
+    _seed_institutional(pg_conn, d, rows)
+    raw = _t86(rows)(d).drop(columns=[_T86_FIELDS[field]])
+    if field == "foreign_net":
+        raw = raw.drop(columns=["外資買賣超股數"])
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", lambda d: raw)
+    before = _stored_institutional_rows(pg_conn, d)
+
+    n = (crawl.refresh_range(_TxEngine(pg_conn), "institutional", [d], delay=0)
+         if refresh else crawl.crawl_day(pg_conn, "institutional", d, replace=True))
+
+    assert n == 0
+    assert _stored_institutional_rows(pg_conn, d) == before
+    out = capsys.readouterr().out
+    assert "**WARN institutional" in out and "degraded payload" in out and field in out
+    assert "**REVISED" not in out
+    if refresh:
+        assert f"**WARN refresh institutional {d}: kept stored rows" in out
+
+
+@pytest.mark.parametrize("field", _T86_FIELDS)
+@pytest.mark.parametrize("nulls, accepted", [(12, False), (5, True)])
+def test_institutional_replace_compares_null_share(pg_conn, monkeypatch, capsys, field, nulls, accepted):
+    d = date(2099, 2, 4)
+    rows = [(str(1000 + i), 100, 20) for i in range(20)]
+    _seed_institutional(pg_conn, d, rows)
+    # 舊資料本來有 20% 缺值；25% 應放行，60% 必須保留原資料。
+    pg_conn.execute(text(f"UPDATE market.institutional SET {field} = NULL "
+                         "WHERE date = :d AND stock_id < '1004'"), {"d": d})
+    before = _stored_institutional_rows(pg_conn, d)
+    raw = _t86(rows)(d)
+    raw.iloc[:nulls, raw.columns.get_loc(_T86_FIELDS[field])] = float("nan")
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", lambda d: raw)
+
+    assert crawl.refresh_range(_TxEngine(pg_conn), "institutional", [d], delay=0) == int(accepted)
+    after = _stored_institutional_rows(pg_conn, d)
+    if accepted:
+        assert sum(r[field] is None for r in after.values()) == nulls
+        assert "degraded payload" not in capsys.readouterr().out
+    else:
+        assert after == before
+        out = capsys.readouterr().out
+        assert "degraded payload" in out and field in out
+        assert f"**WARN refresh institutional {d}: kept stored rows" in out
+
+
+def test_institutional_force_replace_repairs_partial_day_with_legacy_foreign_field(pg_conn, monkeypatch):
+    d = date(2099, 2, 5)
+    _seed_institutional(pg_conn, d, [("2330", 1, 2), ("BAD", 1, 2)])
+    raw = _t86([("2330", 100, 20)])(d).drop(columns=["外資買賣超股數"])
+    raw = raw.rename(columns={_T86_FIELDS["foreign_net"]: "外資買賣超股數"})
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", lambda d: raw)
+
+    assert crawl.crawl_day(pg_conn, "institutional", d, replace=True) == 1
+    assert _stored(pg_conn, d) == {"2330": (100, 20, 120)}

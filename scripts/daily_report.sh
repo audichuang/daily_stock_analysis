@@ -39,9 +39,16 @@ notify_failure() {
 # 以 perl 在独立 process group 里执行命令并计时：逾时对整个 group 先 TERM、等最多 10 秒
 # 让成员退出，仍有残留再 KILL，回 124；正常结束回子行程退出码（被信号杀回 128+sig）。
 # 用 perl 是因为 macOS 没有 timeout(1)；kill 整个 group 才收得掉 `uv run` 底下的孙行程。
+# CLI 另開 session，Python 以同一把 flock 登記 PGID；終止時先封閉登記，再一併收掉。
 run_with_timeout() {
   local secs="$1"; shift
   perl -e '
+    use File::Temp qw(tempfile);
+    use Fcntl qw(:flock);
+    my ($registry, $registry_path) = tempfile("dsa-step-XXXXXX", TMPDIR => 1, UNLINK => 1);
+    $registry->autoflush(1);
+    print $registry "open\n";
+    $ENV{_DSA_LOCAL_CLI_REGISTRY} = $registry_path;
     my $secs = shift @ARGV;
     my $pid = fork();
     die "fork: $!\n" unless defined $pid;
@@ -59,13 +66,20 @@ run_with_timeout() {
     };
     my $stop = sub {
       my $sig = shift;
-      kill $sig, -$pid;
+      flock($registry, LOCK_EX) or die "registry lock: $!\n";
+      seek($registry, 0, 0);
+      my @groups = ($pid, map { chomp; /^\d+$/ ? int($_) : () } <$registry>);
+      seek($registry, 0, 0);
+      print $registry "closed\n";
+      truncate($registry, tell($registry));
+      kill $sig, -$_ for @groups;
+      flock($registry, LOCK_UN);
       for (1 .. 50) {
         $reap->();
-        last if $done && !kill(0, -$pid);
+        last if $done && !grep { kill(0, -$_) } @groups;
         select(undef, undef, undef, 0.2);
       }
-      kill "KILL", -$pid;
+      kill "KILL", -$_ for @groups;
       waitpid($pid, 0) unless $done;
       $done = 1;
     };

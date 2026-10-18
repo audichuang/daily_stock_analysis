@@ -4487,9 +4487,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             ttm_count = dividend_metrics.get("ttm_event_count", "N/A")
             report_date = financial_report.get("report_date", "N/A")
             # 財報三列：帶單位／幣別、保留正負號，並標明口徑（單季或近四季）。ROE 是比率，原樣。
-            _fin_market = _FINANCIAL_CCY_MARKET.get(
-                str(financial_report.get("currency") or "").upper(), prompt_market
-            )
+            _fin_currency = str(financial_report.get("currency") or "").strip().upper()
+            _fin_market = _FINANCIAL_CCY_MARKET.get(_fin_currency, prompt_market)
+            _unknown_currency = _fin_currency if _fin_currency not in _FINANCIAL_CCY_MARKET else None
             _fin_basis = financial_report.get("basis")
             _fin_basis = _fin_basis if isinstance(_fin_basis, dict) else {}
             _basis_labels = {
@@ -4500,7 +4500,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             }
 
             def _fin_amount(key: str) -> str:
-                return self._format_amount(financial_report.get(key), _fin_market, report_language)
+                return self._format_amount(
+                    financial_report.get(key), _fin_market, report_language, currency=_unknown_currency
+                )
 
             def _fin_note(key: str) -> str:
                 labels = _basis_labels.get(_fin_basis.get(key))
@@ -5190,6 +5192,8 @@ Output the complete Decision Dashboard in JSON format."""
         amount: Optional[float],
         market: str = 'cn',
         report_language: str = "zh",
+        *,
+        currency: Optional[str] = None,
     ) -> str:
         """格式化成交额显示。
 
@@ -5198,6 +5202,7 @@ Output the complete Decision Dashboard in JSON format."""
         而同一份 prompt 另一段告诉模型这是美股 ⇒ 模型拿到的是人民币计价的美股。
         `report_language` 是 en/ko 时改用英文量级（上游 #2368），**位置在 market 之後**：
         上游签名是 `(amount, report_language)`，合并时所有呼叫端都已改成具名或三参数。
+        `currency` 供未知財報幣別覆寫標籤（含英文量級），未傳時維持既有市場格式。
         """
         # 非數值（'N/A'、字串）先試 float，失敗回 N/A；以 abs 判量級、保留正負號，
         # 否則負的淨利／現金流會落到原始數字（-12345678900 元）。
@@ -5208,8 +5213,10 @@ Output the complete Decision Dashboard in JSON format."""
         if amount != amount or amount in (float('inf'), float('-inf')):
             return 'N/A'
         if normalize_report_language(report_language) in ("en", "ko"):
-            return self._format_scaled_number_en(amount)
-        currency = _MARKET_CURRENCY.get(market, '元')
+            formatted = self._format_scaled_number_en(amount)
+            return f"{formatted} {currency}" if currency else formatted
+        # 財報的未知 ISO 幣別直接保留；支援幣別仍沿用市場對應的既有格式。
+        currency = currency or _MARKET_CURRENCY.get(market, '元')
         sign = '-' if amount < 0 else ''
         magnitude = abs(amount)
         if magnitude >= 1e8:

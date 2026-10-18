@@ -642,6 +642,44 @@ def _popen_session_kwargs() -> Dict[str, Any]:
     return {"start_new_session": True}
 
 
+@contextmanager
+def _registered_cli_process(*args, **kwargs):
+    """在每日報告步驟的私有登記檔記錄 CLI PGID，供外層逾時時跨 session 清理。"""
+    registry_path = os.environ.get("_DSA_LOCAL_CLI_REGISTRY") if os.name != "nt" else None
+    if not registry_path:
+        yield subprocess.Popen(*args, **kwargs)
+        return
+
+    import fcntl
+
+    with open(registry_path, "r+", encoding="ascii") as registry:
+        # 與外層終止共用鎖：spawn＋登記不可被逾時切開，關閉後也不再啟動新 CLI。
+        fcntl.flock(registry, fcntl.LOCK_EX)
+        if registry.readline().strip() == "closed":
+            raise OSError("daily report step is stopping")
+        process = subprocess.Popen(*args, **kwargs)
+        registry.seek(0, os.SEEK_END)
+        registry.write(f"{process.pid}\n")
+        registry.flush()
+    try:
+        yield process
+    finally:
+        # 已退出且整組消失才移除，避免長步驟中 PID 重用；殘留子行程仍交給外層清理。
+        try:
+            process.poll()
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            try:
+                with open(registry_path, "r+", encoding="ascii") as registry:
+                    fcntl.flock(registry, fcntl.LOCK_EX)
+                    lines = [line for line in registry if line.strip() != str(process.pid)]
+                    registry.seek(0)
+                    registry.writelines(lines)
+                    registry.truncate()
+            except FileNotFoundError:
+                pass
+
+
 def _redact_assignment_value(match: re.Match[str]) -> str:
     """Replace one parsed assignment value while preserving its surrounding syntax."""
 
@@ -2196,7 +2234,7 @@ class LocalCliGenerationBackend(GenerationBackend):
                             )
                         stdout_handle = stack.enter_context(stdout_path.open("wb"))
                         stderr_handle = stack.enter_context(stderr_path.open("wb"))
-                        process = subprocess.Popen(
+                        process = stack.enter_context(_registered_cli_process(
                             [executable, *command_argv],
                             stdin=stdin_handle,
                             stdout=stdout_handle,
@@ -2206,7 +2244,7 @@ class LocalCliGenerationBackend(GenerationBackend):
                             text=True,
                             shell=False,
                             **_popen_session_kwargs(),
-                        )
+                        ))
                         self._emit_progress(stream_progress_callback, 1)
                         deadline = time.monotonic() + timeout_seconds
                         while True:

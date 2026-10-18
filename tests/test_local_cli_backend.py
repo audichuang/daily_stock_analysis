@@ -105,6 +105,37 @@ print(json.dumps({"prompt": prompt, "cwd": os.getcwd(), "sentiment_score": 70}, 
     assert "path" not in result.diagnostics["executable"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="每日報告的 PGID 登記僅用於 POSIX")
+def test_step_registry_tracks_only_active_cli_and_is_not_passed_to_cli(tmp_path, monkeypatch):
+    registry = tmp_path / "registry"
+    registry.write_text("open\n", encoding="ascii")
+    monkeypatch.setenv("_DSA_LOCAL_CLI_REGISTRY", str(registry))
+    backend = _backend(tmp_path, f"""
+import os
+from pathlib import Path
+assert str(os.getpid()) in Path({str(registry)!r}).read_text().splitlines()
+assert '_DSA_LOCAL_CLI_REGISTRY' not in os.environ
+print('{{"ok": true}}')
+""")
+    assert json.loads(backend.generate("hello", {}).text) == {"ok": True}
+    assert registry.read_text() == "open\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="每日報告的 PGID 登記僅用於 POSIX")
+def test_closed_step_registry_prevents_new_cli(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    registry = tmp_path / "registry"
+    registry.write_text("closed\n", encoding="ascii")
+    monkeypatch.setenv("_DSA_LOCAL_CLI_REGISTRY", str(registry))
+    popen = Mock()
+    monkeypatch.setattr(local_cli_backend_module.subprocess, "Popen", popen)
+    with pytest.raises(OSError, match="step is stopping"):
+        with local_cli_backend_module._registered_cli_process(["unused"]):
+            pytest.fail("已關閉的步驟不得再啟動 CLI")
+    popen.assert_not_called()
+
+
 def test_codex_preset_reads_output_last_message_instead_of_stdout(tmp_path: Path) -> None:
     final_payload = json.dumps({"prompt": "hello", "sentiment_score": 88, "source": "last_message"})
     script = _script(

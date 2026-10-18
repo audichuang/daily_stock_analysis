@@ -16,8 +16,13 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 from src.core.pipeline import StockAnalysisPipeline
 from src.core.trading_calendar import MarketPhase
+from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 
 _TPE = ZoneInfo("Asia/Taipei")
 FACTOR = 0.335  # 6669 2026-09-02 1:3 分割的形狀
@@ -212,6 +217,57 @@ class AnalyzeStockWiringTestCase(unittest.TestCase):
         seen, calls = self._run("AAPL")
         self.assertEqual(calls, [])
         self.assertTrue((seen[0]["close"] == 100.0).all())
+
+
+class AdjustedPromptContextTestCase(_Base):
+    def test_successful_adjusted_trend_reaches_prompt_without_usable_quote(self):
+        from copy import deepcopy
+        from src.analyzer import GeminiAnalyzer
+
+        df = _history(date(2026, 10, 19), n=65)
+        adjusted, _ = self.run_frame(
+            df, phase=MarketPhase.POSTMARKET,
+            now=datetime(2026, 10, 19, 19, 0, tzinfo=_TPE),
+        )
+        trend = StockTrendAnalyzer().analyze(adjusted, "6669.TW")
+        context = {
+            "code": "6669.TW", "date": "2026-10-19", "ma_status": "raw status",
+            "today": {**df.iloc[-1].to_dict(), "ma5": 200, "ma10": 200, "ma20": 200},
+            "yesterday": df.iloc[-2].to_dict(),
+        }
+        before = deepcopy(context)
+        p = _pipeline()
+        p.search_service = SimpleNamespace(news_window_days=3)
+        for quote in (None, _quote(0), _quote(None)):
+            with self.subTest(quote=quote):
+                enhanced = p._enhance_context(context, quote, None, trend, fundamental_context={})
+                for key in ("ma5", "ma10", "ma20"):
+                    self.assertEqual(enhanced["today"][key], getattr(trend, key))
+                self.assertEqual(enhanced["ma_status"], "多头排列 📈")
+                for key in ("open", "high", "low", "close", "volume", "amount", "date"):
+                    self.assertEqual(enhanced["today"][key], before["today"][key])
+                self.assertEqual(enhanced["yesterday"], before["yesterday"])
+                self.assertEqual(context, before)
+                with patch.object(GeminiAnalyzer, "_tw_margin_lines", return_value=""), \
+                     patch.object(GeminiAnalyzer, "_tw_institutional_trend_lines", return_value=""):
+                    prompt = GeminiAnalyzer.__new__(GeminiAnalyzer)._format_prompt(
+                        enhanced, "測試", report_language="zh-TW"
+                    )
+                for key in ("ma5", "ma10", "ma20"):
+                    self.assertIn(f"| {key.upper()} | {getattr(trend, key)} |", prompt)
+                self.assertIn("| 收盤價 | 100.0 新台币 |", prompt)
+                self.assertNotIn("raw status", prompt)
+
+    def test_failed_trend_preserves_stored_ma_and_prices(self):
+        p = _pipeline()
+        p.search_service = SimpleNamespace(news_window_days=3)
+        context = {"code": "6669.TW", "ma_status": "raw status",
+                   "today": {"close": 100, "ma5": 200, "ma10": 190, "ma20": 180}}
+        for trend in (None, TrendAnalysisResult(code="6669.TW")):
+            for quote in (None, _quote(110)):
+                enhanced = p._enhance_context(context, quote, None, trend, fundamental_context={})
+                self.assertEqual(enhanced["today"], context["today"])
+                self.assertEqual(enhanced["ma_status"], "raw status")
 
 
 if __name__ == "__main__":
