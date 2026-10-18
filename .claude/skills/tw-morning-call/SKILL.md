@@ -22,7 +22,8 @@ make morning       # 補資料 → 昨晚國際盤收盤 → 待觸發計畫 →
 四件事都在裡面，**不要用搜尋湊隔夜數字**：`scripts/overnight.py` 有日期戳、有 ADR 折算、
 有日期一致性檢查，而搜尋引擎會把不同交易日的收盤混在一起（實測差到 3.7pp）。
 
-再補一次寬掃，拿今天的資金流向樣本：
+再補一次寬掃，拿今天的資金流向樣本（**只涵蓋上市**：`market.institutional`／`margin`／`valuation` 沒有上櫃股，
+`momentum` 的「法人買超」篩選與「融資減」標籤等於排除所有上櫃，流動性夠的標的約少三成，族群分布因此偏上市）：
 
 ```bash
 uv run --env-file .env python scripts/screen_tw.py --strategy momentum \
@@ -165,8 +166,9 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
   「預測與結果同日寫入」必然拿不到防竄改保證，直接標 `exclude_from_scoring`。
 - `momentum` 寬掃的月營收預設只用上市（sii）口徑（上櫃已入庫但預設排除，`--include-otc-revenue` 才放回），上櫃 `yoy` 為 null；日均額壓到 1 億會納入中小型股，
   出場流動性要自行評估。
-- 台股大盤的季線／半年線算不出來：`market.market_index` 只有 20 個交易日，要外部查。
+- 台股大盤的季線算得出來、半年線算不出來：`market.market_index` 自 2026-07-01 起（2026-10-16 時約 74 個交易日，之後逐日增加），夠算 MA20／MA60，不夠 MA120；半年線要外部查。
 - `market.price` 的 `change` 欄位無正負號（台積電 2,280 → 2,200 顯示 `change=80`），算漲跌用
-  `close` 相減。`market.institutional` 的欄位單位未確認（實測外資 −2.6 對自營 −10.4 不合理），
-  三大法人金額改用官方來源；`TwseFetcher.get_market_stats()` 的漲跌家數也對不上掛牌檔數。
+  `close` 相減。`market.institutional` 的單位是**股**，與證交所 T86 逐欄一致
+  （`foreign_net` 對外陸資買賣超股數〔不含外資自營商〕、`trust_net` 對投信、`dealer_net` 對自營商；初版與定版的差異見 `market_data/AGENTS.md`），
+  可直接讀本 DB，不必為了單位再打官方端點；`TwseFetcher.get_market_stats()` 的漲跌家數也對不上掛牌檔數。
 - 這一層判的是**今天動不動**，不判個股出場價位——出場交給持倉管理。

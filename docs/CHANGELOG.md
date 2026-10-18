@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [文件] 台股盤前與波段研究 skill 更正法人單位與指數長度、標明寬掃只涵蓋上市、同業報酬須先還原、基準率待重測：`tw-morning-call` 的 `market.institutional` 單位是股（與 T86 逐欄一致）、`market_index` 自 2026-07-01 起約 74 個交易日（夠算季線、不夠半年線），並註明 momentum 寬掃的法人／融資只涵蓋上市；`tw-swing-research` 的同業報酬查詢須先套 `adjust.load_factors` 前復權、不讀 `price.change`，20.2% 基準率旁標「休市日復權修正後待重測」
 - [改進] 選股報告明講三大法人／融資／估值只涵蓋上市（momentum 的法人篩選等同排除上櫃）、印出法人／融資／估值的實際資料日與近 5 日統計實際涵蓋的場次數（與基準日不同才標註），缺值顯示「—」（0 照印，原本上櫃印成 `nan張 nan天`）；參考價表「20日高」實為 60 日高，欄名改正；估值改取基準日以前 7 曆日內最近一個有資料的交易日（原本只認基準日當天，18:00 幾乎必為空），所以 18:00 的高息／低估值標籤會開始觸發，候選清單文字會變
 - [修復] 收盤後分析不再用即時快照把官方日成交量覆蓋成較小的數字：DB 已有當日 K 時，`_augment_historical_with_realtime` 與 `_enhance_context` 的量／額改取 max（累計量單調不減；Shioaji 不含零股與盤後定價，實測 3008 官方 4,812,882 股、快照只有 4,441,000 股，少 7.7%）。盤中 DB 為部分 K 時仍會更新成較大的即時量；DB 還沒有今天（追加分支）行為不變
 - [修復] 當日三大法人抓不到時，個股報告仍提供本地資料庫的法人歷史趨勢並註明當日取得失敗：台股 institution 區塊在抓取失敗（逾時／熔斷／stage 預算用完／紀錄缺欄／fetcher 初始化失敗）時標 `failed` 並在 `errors` 寫實際原因（原本一律寫「not supported for offshore market」掩蓋網路失敗），prompt 先寫「當日三大法人：取得失敗（原因）；以下僅本地歷史」再附截至 DB 最後一天的趨勢，歷史也沒有時寫「不可用、不得推論籌碼面」；`FUNDAMENTAL_FETCH_TIMEOUT_SECONDS=0` 關閉抓取仍為 `not_supported`；非台股不變；整體 `status` 與推播報告（只渲染 `ok`）不受影響
