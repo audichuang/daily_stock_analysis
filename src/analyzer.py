@@ -3982,7 +3982,10 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         self, code: str, institution_data: dict, report_language: str
     ) -> str:
         """Prompt-only: read TW institutional history, compute trend, format 2-language
-        lines. Returns '' on any failure / no data. NEVER persisted (prompt string only)."""
+        lines. Returns '' on any failure / no data. NEVER persisted (prompt string only).
+
+        institution_data 為空（當日抓取失敗）時只用本地歷史、as_of 為 DB 最後一天；
+        此時不足 2 場次就回 ''（沒有「上表當日數據」可引用，由呼叫端明講不可用）。"""
         try:
             from datetime import date, timedelta
 
@@ -3997,18 +4000,23 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             hist = market_repo.institutional(sid, start=start, engine=eng)
             rows = hist.to_dict("records") if hist is not None and not hist.empty else []
             info = market_repo.stock_info(sid, engine=eng) or {}
-            today = dict(institution_data)  # copy — never mutate the cached fetcher record
+            # copy — never mutate the cached fetcher record；空 dict / None = 當日抓取失敗
+            today = dict(institution_data) if institution_data else None
             trend = compute_institutional_trend(
                 rows,
                 today,
                 info.get("shares_outstanding"),
-                expected_prev_session=self._tw_expected_prev_session(today.get("date")),
+                expected_prev_session=(
+                    self._tw_expected_prev_session(today.get("date")) if today else None
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - prompt enrichment is strictly fail-open
             logger.warning("[tw-inst-trend] fail-open code=%s: %s", code, exc)
             return ""
         if not trend:
             return ""
+        if today is None and trend.get("sessions", 0) < 2:
+            return ""  # 當日取得失敗且本地歷史不足：沒有可印的趨勢
 
         lang = normalize_report_language(report_language)
         # en/ko reuse the English prompt scaffolding (upstream #2368), so this block must too.
@@ -4480,6 +4488,33 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             trend_lines = self._tw_institutional_trend_lines(code, institution_data, report_language)
             if trend_lines:
                 prompt += trend_lines
+        elif (
+            isinstance(institution_block, dict)
+            and institution_block.get("status") == "failed"
+            and is_tw_code(code)
+        ):
+            # 台股當日三大法人抓取失敗：不能讓整段籌碼消失（DB 有歷史），也不能讓 LLM 以為
+            # 沒有資料就是沒有訊號。先明講失敗原因，再附本地歷史趨勢（as_of 為 DB 最後一天）。
+            errs = institution_block.get("errors")
+            reason = "; ".join(str(e) for e in errs if e)[:160] if isinstance(errs, list) else ""
+            reason = reason or "unknown"
+            trend_lines = self._tw_institutional_trend_lines(code, {}, report_language)
+            if trend_lines:
+                if english:
+                    prompt += f"\nToday's three institutional investors: fetch failed ({reason}); only local history below.\n"
+                else:
+                    prompt += "\n" + L(
+                        f"當日三大法人：取得失敗（{reason}）；以下僅本地歷史。",
+                        f"当日三大法人：取得失败（{reason}）；以下仅本地历史。",
+                    ) + "\n"
+                prompt += trend_lines
+            elif english:
+                prompt += f"\nThree institutional investors data is unavailable (today's fetch failed: {reason}); do not infer the chip structure.\n"
+            else:
+                prompt += "\n" + L(
+                    f"三大法人資料不可用（當日取得失敗：{reason}），不得推論籌碼面。",
+                    f"三大法人资料不可用（当日取得失败：{reason}），不得推论筹码面。",
+                ) + "\n"
 
         # 台股交易成本：上游 prompt 為 A 股寫的，台股來回成本是 A 股的數倍，模型不知道就會
         # 給出扣完成本後賠比賺多的價位。事後還有 trade_cost_guardrail 確定性檢核，這段只讓

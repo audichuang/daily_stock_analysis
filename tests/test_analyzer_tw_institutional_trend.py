@@ -144,3 +144,92 @@ def test_fresh_history_is_not_reported_stale():
 def test_calendar_unavailable_fails_open_on_continuity_check():
     out = _lines("2330.TW", 30, hist_end=date(2026, 7, 3), calendar=None)
     assert "停在" not in out and "近 20 日累計" in out
+
+
+# ---- T11：當日抓取失敗時仍給本地歷史、明講失敗原因 ----
+
+_FAIL_BLOCK = {
+    "status": "failed",
+    "data": {},
+    "errors": ["tw institutional record unavailable"],
+}
+
+
+def _failed_prompt(code, n_hist, language="zh-TW", block=None):
+    """走真的 _format_prompt：institution block 為 failed，歷史 n_hist 個平日（止於 2026-10-16）。"""
+    days = _weekdays_before(date(2026, 10, 17), n_hist) if n_hist else []
+    hist = pd.DataFrame(
+        [{"date": d.isoformat(), "foreign_net": 10, "trust_net": 0, "dealer_net": 0, "total_net": 10}
+         for d in days]
+    )
+    context = {
+        "code": code,
+        "stock_name": "測試",
+        "date": "2026-10-17",
+        "today": {"close": 100, "ma5": 99, "ma10": 98, "ma20": 97},
+        "fundamental_context": {"institution": block if block is not None else dict(_FAIL_BLOCK)},
+    }
+    with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
+        analyzer = GeminiAnalyzer()
+    with patch("market_data.market_repo.institutional", return_value=hist), \
+         patch("market_data.market_repo.stock_info", return_value={"shares_outstanding": 10_000_000}), \
+         patch("market_data.db.get_engine", return_value=None):
+        return analyzer._format_prompt(context, "測試", news_context=None, report_language=language)
+
+
+def test_failed_tw_prompt_has_failure_line_and_local_history_trend():
+    p = _failed_prompt("2330.TW", 30)
+    assert "當日三大法人：取得失敗（tw institutional record unavailable）；以下僅本地歷史" in p
+    assert "三大法人近期趨勢（截至 2026-10-16，共 30 交易日）" in p
+    assert "近 20 日累計 +200 股" in p  # 20 個歷史場次 x 10，今日不存在所以不加 300
+    assert "不得推論籌碼面" not in p
+    # 失敗行在趨勢之前
+    assert p.index("取得失敗") < p.index("三大法人近期趨勢")
+
+
+def test_failed_tw_prompt_languages():
+    assert "当日三大法人：取得失败（tw institutional record unavailable）；以下仅本地历史" in _failed_prompt("2330.TW", 30, "zh")
+    en = _failed_prompt("2330.TW", 30, "en")
+    assert "fetch failed (tw institutional record unavailable); only local history below" in en
+    assert "Recent institutional trend (as of 2026-10-16, 30 sessions)" in en
+
+
+def test_failed_tw_prompt_without_history_says_unavailable_and_forbids_inference():
+    p = _failed_prompt("2330.TW", 0)
+    assert "三大法人資料不可用（當日取得失敗：tw institutional record unavailable），不得推論籌碼面" in p
+    assert "三大法人近期趨勢" not in p and "以下僅本地歷史" not in p
+    assert "do not infer the chip structure" in _failed_prompt("2330.TW", 0, "en")
+    assert "不得推论筹码面" in _failed_prompt("2330.TW", 0, "zh")
+
+
+def test_failed_tw_prompt_with_single_history_row_is_unavailable():
+    # 只有 1 個歷史場次沒有「上表當日數據」可引用，也印不出趨勢 -> 不可用
+    p = _failed_prompt("2330.TW", 1)
+    assert "不得推論籌碼面" in p and "三大法人近期趨勢" not in p
+    assert "上表當日數據" not in p
+
+
+def test_failed_tpex_without_history_says_unavailable():
+    assert "不得推論籌碼面" in _failed_prompt("6488.TWO", 0)
+
+
+def test_non_tw_prompt_has_no_institution_failure_line():
+    for block in (dict(_FAIL_BLOCK), {"status": "not_supported", "data": {}, "errors": ["not supported for offshore market"]}):
+        p = _failed_prompt("AAPL", 30, block=block)
+        assert "取得失敗" not in p and "不得推論籌碼面" not in p
+        assert "三大法人近期趨勢" not in p
+    assert "取得失敗" not in _failed_prompt("2330.TW", 30, block={"status": "not_supported", "data": {}, "errors": ["fundamental fetch disabled"]})
+
+
+def test_trend_lines_with_empty_today_use_db_last_day_and_do_not_need_calendar():
+    days = _weekdays_before(date(2026, 10, 17), 30)
+    hist = pd.DataFrame(
+        [{"date": d.isoformat(), "foreign_net": 10, "trust_net": 0, "dealer_net": 0, "total_net": 10}
+         for d in days]
+    )
+    with patch("market_data.market_repo.institutional", return_value=hist), \
+         patch("market_data.market_repo.stock_info", return_value={}), \
+         patch("market_data.db.get_engine", return_value=None), \
+         patch("src.core.trading_calendar.get_trading_dates", side_effect=AssertionError("no calendar check without today")):
+        out = _analyzer()._tw_institutional_trend_lines("2330.TW", {}, "zh-TW")
+    assert "截至 2026-10-16" in out

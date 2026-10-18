@@ -4404,6 +4404,9 @@ class DataFetcherManager:
         # which never interrupts the main analysis. Raw net figures only — no derived
         # signal / score / schema (per the v2 scope confirmed on issue #1777).
         tw_record = None
+        # 台股抓取失敗的實際原因（寫進 block errors，不再一律標成 offshore not_supported）；
+        # None 代表「沒有嘗試」（非台股，或使用者以 fetch_timeout=0 關閉抓取）。
+        inst_failure: Optional[str] = None
         if market == "tw":
             fetcher = getattr(self, "_tw_institutional_fetcher", None)
             if fetcher is None:
@@ -4418,6 +4421,7 @@ class DataFetcherManager:
                 except Exception as exc:  # noqa: BLE001 - wiring failure: loud but fail-open
                     logger.error("[tw-inst] fetcher init failed (wiring bug?) code=%s: %s", stock_code, exc)
                     fetcher = None
+                    inst_failure = "fetcher unavailable"
             # fetch_timeout == 0 disables per-fetch fundamental fetches (same as valuation /
             # bundle above, which gate on fetch_timeout); honour that for institution too so
             # the FUNDAMENTAL_FETCH_TIMEOUT_SECONDS=0 config semantic is not bypassed.
@@ -4437,10 +4441,12 @@ class DataFetcherManager:
                     )
                     if inst_err:
                         logger.warning("[tw-inst] fetch failed/timeout code=%s: %s", stock_code, inst_err)
+                        inst_failure = str(inst_err)
                 else:
                     tw_record = None
+                    inst_failure = "fundamental stage budget exhausted"
         # status 'ok' only when the record carries all core net figures (a genuine 0 is
-        # kept — 0 is not None); None / missing core field / fetch failure -> not_supported.
+        # kept — 0 is not None); 台股 None / 缺欄 / 抓取失敗 -> failed（fetch 關閉則 not_supported）。
         _tw_core = ("foreign_net", "trust_net", "dealer_net", "total_net")
         if tw_record is not None and all(tw_record.get(key) is not None for key in _tw_core):
             institution_status = "ok"
@@ -4457,6 +4463,32 @@ class DataFetcherManager:
                 },
                 [{"provider": tw_record.get("source", "tw-institutional"), "result": "ok", "duration_ms": 0}],
                 [],
+            )
+        elif market == "tw" and fetch_timeout > 0:
+            # 台股且有嘗試抓取卻沒拿到完整紀錄 = 失敗，不是「不支援」：標 failed 並寫實際原因，
+            # 讓 prompt 能明講「當日取得失敗」並改用本地歷史趨勢。failed 不在 active_statuses、
+            # 也不 append 到 status_values，所以整體 status 與推播渲染（只認 ok）都不變。
+            if inst_failure is None:
+                inst_failure = (
+                    "tw institutional record missing core fields"
+                    if tw_record is not None
+                    else "tw institutional record unavailable"
+                )
+            institution_status = "failed"
+            result_ctx["institution"] = self._build_fundamental_block(
+                "failed",
+                {},
+                [{"provider": "tw-institutional", "result": "failed", "duration_ms": 0}],
+                [inst_failure],
+            )
+        elif market == "tw":
+            # FUNDAMENTAL_FETCH_TIMEOUT_SECONDS=0：使用者關閉抓取，不算失敗。
+            institution_status = "not_supported"
+            result_ctx["institution"] = self._build_fundamental_block(
+                "not_supported",
+                {},
+                [{"provider": "fundamental_pipeline", "result": "not_supported", "duration_ms": 0}],
+                ["fundamental fetch disabled"],
             )
         else:
             institution_status = "not_supported"

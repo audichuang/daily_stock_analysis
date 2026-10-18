@@ -111,17 +111,23 @@ class TestTwInstitutionReportWiring(unittest.TestCase):
         self.assertEqual(ctx["institution"]["data"]["foreign_net"], 0)
         self.assertEqual(ctx["institution"]["data"]["total_net"], 0)
 
-    # ---- tw fail-open: None -> not_supported, no raise -----------------------------
+    # ---- tw fail-open: None -> failed（台股有嘗試抓取），不 raise、整體 status 不變 ------
     def test_tw_institution_fail_open_when_fetcher_returns_none(self):
         ctx, _ = self._context("2330.TW", institutional_return=None)
-        self.assertEqual(ctx["coverage"].get("institution"), "not_supported")
+        self.assertEqual(ctx["coverage"].get("institution"), "failed")
+        self.assertEqual(ctx["institution"]["status"], "failed")
+        self.assertEqual(ctx["institution"]["errors"], ["tw institutional record unavailable"])
         self.assertEqual(ctx["institution"].get("data"), {})
 
-    # ---- tw fail-open: fetcher raises -> not_supported, main flow uninterrupted -----
+    # ---- tw fail-open: fetcher raises -> failed + 實際原因，main flow uninterrupted ---
     def test_tw_institution_fail_open_when_fetcher_raises(self):
         ctx, _ = self._context("2330.TW", institutional_side_effect=RuntimeError("boom"))
-        self.assertEqual(ctx["coverage"].get("institution"), "not_supported")
+        self.assertEqual(ctx["coverage"].get("institution"), "failed")
         self.assertEqual(ctx["institution"].get("data"), {})
+        errs = ctx["institution"]["errors"]
+        self.assertEqual(len(errs), 1)
+        self.assertIn("boom", errs[0])
+        self.assertNotIn("offshore", errs[0])
         # the rest of the context still built (no exception bubbled out)
         self.assertEqual(ctx["market"], "tw")
 
@@ -131,6 +137,7 @@ class TestTwInstitutionReportWiring(unittest.TestCase):
         self.assertEqual(ctx["market"], "us")
         self.assertEqual(ctx["coverage"].get("institution"), "not_supported")
         self.assertEqual(ctx["institution"].get("data"), {})
+        self.assertEqual(ctx["institution"]["errors"], ["not supported for offshore market"])
         self.assertEqual(tw_mock.call_count, 0)
 
     # ---- B2: every other offshore market (hk/jp/kr) untouched + fetcher unused ------
@@ -139,7 +146,54 @@ class TestTwInstitutionReportWiring(unittest.TestCase):
             ctx, tw_mock = self._context(code, institutional_return=dict(_FAKE_REC))
             self.assertEqual(ctx["market"], market, f"{code} routed to {ctx['market']}")
             self.assertEqual(ctx["coverage"].get("institution"), "not_supported")
+            self.assertEqual(ctx["institution"]["errors"], ["not supported for offshore market"])
             self.assertEqual(tw_mock.call_count, 0)
+
+    # ---- 整體 status 不受 institution failed 影響（與修改前的 not_supported 相同）-------
+    def test_tw_institution_failed_leaves_overall_status_unchanged(self):
+        # 基準值取自修改前（institution 為 not_supported）同一組 mock 的實跑結果：
+        # status ok、data_quality ok、missing_fields 不含 institution。
+        # failed 若被加進 active_statuses，status 會變 partial、missing_fields 會多 institution。
+        ctx, _ = self._context("2330.TW", institutional_return=None)
+        self.assertEqual(ctx["coverage"].get("institution"), "failed")
+        self.assertEqual(ctx["status"], "ok")
+        self.assertEqual(ctx["data_quality"], "ok")
+        self.assertEqual(ctx["missing_fields"], ["earnings", "capital_flow", "boards"])
+
+    # ---- 推播報告：failed 與缺值一樣不渲染三大法人表 ---------------------------------
+    def test_failed_institution_not_rendered_in_notification(self):
+        from src.notification import NotificationService
+        from src.report_language import get_report_labels
+
+        ctx, _ = self._context("2330.TW", institutional_return=None)
+        svc = NotificationService.__new__(NotificationService)
+        blocks = svc._get_fundamental_blocks(SimpleNamespace(fundamental_context=ctx))
+        self.assertEqual(blocks["institution_status"], "failed")
+        lines = []
+        svc._append_institutional_flow(lines, blocks, get_report_labels("zh"))
+        self.assertEqual(lines, [])
+
+    # ---- stage 預算用完（inst_timeout <= 0）-> failed + 預算用完原因 ------------------
+    def test_tw_institution_failed_when_stage_budget_exhausted(self):
+        cfg = SimpleNamespace(
+            enable_fundamental_pipeline=True,
+            fundamental_cache_ttl_seconds=0,
+            fundamental_stage_timeout_seconds=0.0,
+            fundamental_fetch_timeout_seconds=15.0,
+            fundamental_retry_max=1,
+        )
+        manager = DataFetcherManager(fetchers=[])
+        with patch("src.config.get_config", return_value=cfg), \
+                patch.object(manager, "get_realtime_quote", return_value=None), \
+                patch(
+                    "data_provider.yfinance_fundamental_adapter.YfinanceFundamentalAdapter.get_fundamental_bundle",
+                    return_value=_EMPTY_BUNDLE,
+                ), \
+                patch(_TW_FETCHER_METHOD, return_value=dict(_FAKE_REC)) as tw_mock:
+            ctx = manager.get_fundamental_context("2330.TW")
+        self.assertEqual(ctx["coverage"].get("institution"), "failed")
+        self.assertEqual(ctx["institution"]["errors"], ["fundamental stage budget exhausted"])
+        self.assertEqual(tw_mock.call_count, 0)
 
     # ---- fail-open on a fetcher WIRING/init failure (not just a fetch failure) ------
     def test_tw_institution_fail_open_when_fetcher_init_raises(self):
@@ -156,14 +210,16 @@ class TestTwInstitutionReportWiring(unittest.TestCase):
                 ):
             ctx = manager.get_fundamental_context("2330.TW")  # must NOT raise
         self.assertEqual(ctx["market"], "tw")
-        self.assertEqual(ctx["coverage"].get("institution"), "not_supported")
+        self.assertEqual(ctx["coverage"].get("institution"), "failed")
+        self.assertEqual(ctx["institution"]["errors"], ["fetcher unavailable"])
         self.assertEqual(ctx["institution"].get("data"), {})
 
     # ---- a record missing a core net field is NOT shown as a clean 'ok' -------------
     def test_tw_institution_not_ok_when_core_net_missing(self):
         broken = dict(_FAKE_REC, foreign_net=None)  # a core component missing
         ctx, _ = self._context("2330.TW", institutional_return=broken)
-        self.assertEqual(ctx["coverage"].get("institution"), "not_supported")
+        self.assertEqual(ctx["coverage"].get("institution"), "failed")
+        self.assertEqual(ctx["institution"]["errors"], ["tw institutional record missing core fields"])
         self.assertEqual(ctx["institution"].get("data"), {})
 
     # ---- a slow fetch must NOT push the analysis past the fundamental stage budget ---
@@ -193,7 +249,8 @@ class TestTwInstitutionReportWiring(unittest.TestCase):
         elapsed = time.time() - start
         # the 2s fetch must be abandoned at the ~0.3s stage budget, not block the analysis
         self.assertLess(elapsed, 1.5, f"institution fetch ignored the stage timeout ({elapsed:.2f}s)")
-        self.assertEqual(ctx["coverage"].get("institution"), "not_supported")
+        self.assertEqual(ctx["coverage"].get("institution"), "failed")
+        self.assertTrue(ctx["institution"]["errors"])
 
     # ---- negative: institution data carries RAW figures only, no derived signal ----
     def test_tw_institution_data_has_no_derived_signal_or_score(self):
@@ -259,7 +316,8 @@ class TestTwInstitutionReportWiring(unittest.TestCase):
                 ), \
                 patch(_TW_FETCHER_METHOD, return_value=dict(_FAKE_REC)) as tw_mock:
             ctx = manager.get_fundamental_context("2330.TW")
-        self.assertEqual(ctx["coverage"].get("institution"), "not_supported")
+        self.assertEqual(ctx["coverage"].get("institution"), "not_supported")  # 使用者關閉不算失敗
+        self.assertEqual(ctx["institution"]["errors"], ["fundamental fetch disabled"])
         self.assertEqual(tw_mock.call_count, 0)  # institution fetch skipped when disabled
 
 
