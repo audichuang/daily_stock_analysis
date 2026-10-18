@@ -449,6 +449,52 @@ class TestEnhanceContextRealtimeOverride(unittest.TestCase):
         self.assertEqual(enhanced["today"]["data_source"], "realtime:tencent")
         self.assertEqual(enhanced["today"]["code"], "600519")
 
+    def _enhance_same_day(self, orig_date, orig_volume, orig_amount, quote, date_as_str=False):
+        today = date.today()
+        trend = TrendAnalysisResult(
+            code="2330.TW", trend_status=TrendStatus.BULL, ma5=15.5, ma10=15.2, ma20=14.9,
+        )
+        context = {
+            "code": "2330.TW",
+            "date": orig_date.isoformat(),
+            "today": {"close": 15.0, "volume": orig_volume, "amount": orig_amount,
+                      "date": orig_date.isoformat() if date_as_str else orig_date},
+            "yesterday": {"close": 14.5, "volume": 4000000},
+        }
+        with patch("src.core.pipeline.get_market_now") as mock_now, \
+                patch("src.core.pipeline.get_market_for_stock", return_value="tw"):
+            mock_now.return_value = datetime(
+                today.year, today.month, today.day, 18, 0, tzinfo=timezone.utc
+            )
+            return self.pipeline._enhance_context(context, quote, None, trend, "台積電")
+
+    def test_same_day_postmarket_keeps_official_volume_and_amount(self) -> None:
+        """DB 已有今天的官方 K（date 為 date 物件）：量／額不得被較小的即時值縮小。"""
+        today = date.today()
+        quote = _make_realtime_quote(price=15.72, volume=4441000, amount=4.4e9)
+        enhanced = self._enhance_same_day(today, 4812882, 4.9e9, quote)
+        self.assertEqual(enhanced["today"]["close"], 15.72)  # 證明走進即時覆蓋
+        self.assertEqual(enhanced["today"]["volume"], 4812882)
+        self.assertEqual(enhanced["today"]["amount"], 4.9e9)
+        self.assertEqual(enhanced["volume_change_ratio"], round(4812882 / 4000000, 2))
+
+    def test_same_day_intraday_takes_larger_realtime_volume(self) -> None:
+        today = date.today()
+        quote = _make_realtime_quote(price=15.72, volume=2000000, amount=2.0e9)
+        enhanced = self._enhance_same_day(today, 1000000, 1.0e9, quote, date_as_str=True)
+        self.assertEqual(enhanced["today"]["close"], 15.72)
+        self.assertEqual(enhanced["today"]["volume"], 2000000)
+        self.assertEqual(enhanced["today"]["amount"], 2.0e9)
+
+    def test_prior_day_orig_today_volume_not_compared(self) -> None:
+        """orig_today 是昨天（DB 還沒有今天）：今天的即時量就是今天的量，不與昨日量比。"""
+        today = date.today()
+        quote = _make_realtime_quote(price=15.72, volume=4441000, amount=4.4e9)
+        enhanced = self._enhance_same_day(today - timedelta(days=1), 9000000, 9.0e9, quote)
+        self.assertEqual(enhanced["today"]["close"], 15.72)
+        self.assertEqual(enhanced["today"]["volume"], 4441000)
+        self.assertEqual(enhanced["today"]["amount"], 4.4e9)
+
     def test_enhance_context_injects_runtime_news_window_days(self) -> None:
         context = {"code": "600519", "today": {"close": 15.0}}
         enhanced = self.pipeline._enhance_context(

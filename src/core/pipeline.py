@@ -134,6 +134,23 @@ INDEX_SKIP_MODULES = frozenset({
 })
 
 
+def _cumulative_max(existing: Any, realtime: Any) -> Any:
+    """當日累計量／額單調不減：同一天已有數字時取較大者。
+
+    即時快照（Shioaji 等）不含零股與盤後定價，收盤後仍比官方日 K 少 1~10%；
+    盤中則 DB 的部分 K 比即時舊、即時較大。兩者皆有效才比較，任一邊缺值就用另一邊。
+    """
+    def _valid(v: Any) -> bool:
+        try:
+            return v is not None and not pd.isna(v) and float(v) > 0
+        except (TypeError, ValueError):
+            return False
+
+    if _valid(existing) and _valid(realtime):
+        return max(existing, realtime)
+    return realtime
+
+
 def _share_image_payload(result: Any) -> Optional[Dict[str, Any]]:
     """Return structured poster data when the result exposes the real contract."""
 
@@ -1079,6 +1096,15 @@ class StockAnalysisPipeline:
                 estimated_fields = [
                     'close', 'open', 'high', 'low', 'ma5', 'ma10', 'ma20',
                 ]
+                # 同日（DB 已有今天的 K）時量／額取 max：累計量單調不減，Shioaji 不含零股
+                # 與盤後定價，不得把官方量縮小。orig_today 為昨日或更早則不比（追加語意）。
+                orig_date = orig_today.get('date')
+                # date／Timestamp／ISO 字串皆以 str 前 10 碼（YYYY-MM-DD）比對 market_today（ISO 字串）。
+                if orig_date is not None and str(orig_date)[:10] == market_today:
+                    if vol is not None:
+                        vol = _cumulative_max(orig_today.get('volume'), vol)
+                    if amt is not None:
+                        amt = _cumulative_max(orig_today.get('amount'), amt)
                 if vol is not None:
                     realtime_today['volume'] = vol
                     estimated_fields.append('volume')
@@ -2576,10 +2602,16 @@ class StockAnalysisPipeline:
                 df.loc[idx, 'high'] = high_p
             if low_p is not None:
                 df.loc[idx, 'low'] = low_p
+            # 量／額取 max（累計量單調不減）：DB 已有當日官方 K 時，Shioaji 即時量不含零股
+            # 與盤後定價，直接覆蓋會把官方量縮小；盤中 DB 為部分 K 時即時量較大，照樣更新。
             if vol:
-                df.loc[idx, 'volume'] = vol
+                df.loc[idx, 'volume'] = _cumulative_max(
+                    df.loc[idx, 'volume'] if 'volume' in df.columns else None, vol
+                )
             if amt is not None:
-                df.loc[idx, 'amount'] = amt
+                df.loc[idx, 'amount'] = _cumulative_max(
+                    df.loc[idx, 'amount'] if 'amount' in df.columns else None, amt
+                )
             if pct is not None:
                 df.loc[idx, 'pct_chg'] = pct
         else:
