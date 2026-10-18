@@ -235,9 +235,19 @@ def crawl_stock_info(conn):
                   models.StockInfo, ["stock_id"])
 
 
-def crawl_ex_dividend(conn, start, end):
-    return _store(conn, sources.crawl_ex_dividend(start, end),
-                  etl.transform_ex_dividend, models.ExDividend, ["stock_id", "date"])
+def crawl_ex_dividend(conn, start, end, require=False):
+    """上市除權息預告(TWT49U)。來源回 None = 抓取/解析失敗(sources 已印 WARN),
+    與「窗口內 0 事件」(空 DataFrame)不同。``require=True``(daily 用)時失敗直接 raise,
+    與 TPEx exDailyQ、TWTAUU 的 fail-fast 一致:否則連兩晚失敗,新事件缺席卻沒人知道,
+    報告會把除息缺口當真跌。``cli ex-dividend`` 維持 ``require=False``(手動補抓,失敗只少寫)。"""
+    raw = sources.crawl_ex_dividend(start, end)
+    if raw is None and require:
+        raise RuntimeError(
+            f"TWT49U ex-dividend fetch failed for {start}~{end}; existing ex_dividend "
+            "events are kept but price_adjustment was NOT recomputed — "
+            "fix the official source and rerun daily")
+    return _store(conn, raw, etl.transform_ex_dividend, models.ExDividend,
+                  ["stock_id", "date"])
 
 
 def crawl_valuation(conn):
@@ -249,6 +259,7 @@ def crawl_valuation(conn):
     return upsert(conn, models.Valuation.__table__, recs, ["stock_id", "date"])
 
 
+_EX_DIVIDEND_RETRY_SECONDS = 5       # TWT49U 第一次失敗後重試前的等待(測試 monkeypatch 成 0)
 _INDEX_MONTH_DELAY_SECONDS = 2.0     # 月與月之間的間隔,避免連打 TWSE(測試 monkeypatch 成 0)
 
 
@@ -520,12 +531,23 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
     crawl_snapshots(eng, dates)    # index 依窗口逐月抓,月底漏跑才補得回上月
     # 月營收(上月整月)與除權息(滾動窗)順帶保鮮:各一個請求,upsert 冪等
     prev_month = (asof.replace(day=1) - _dt.timedelta(days=1)).replace(day=1)
+    # 月營收單獨一個交易並先 commit+印:除權息失敗 raise 時不連帶回滾已抓好的月營收
     with eng.begin() as conn:
         rev = crawl_monthly_revenue(conn, prev_month)
-        exd = crawl_ex_dividend(conn, asof - _dt.timedelta(days=30),
-                                asof + _dt.timedelta(days=adjust.ADJUSTMENT_WINDOW_DAYS))
     # commit 之後才印——在交易內印,後面一 raise 就會回滾,log 卻已宣稱寫入
     print(f"monthly_revenue {prev_month:%Y-%m} {rev:,} rows")
+    ex_start = asof - _dt.timedelta(days=30)
+    ex_end = asof + _dt.timedelta(days=adjust.ADJUSTMENT_WINDOW_DAYS)
+    try:
+        with eng.begin() as conn:
+            exd = crawl_ex_dividend(conn, ex_start, ex_end, require=True)
+    except RuntimeError:
+        # TWT49U 偶發擋/改版:等一下重試一次,仍失敗才 raise(在 refresh_recent 之前)
+        import time as _time
+        if _EX_DIVIDEND_RETRY_SECONDS:
+            _time.sleep(_EX_DIVIDEND_RETRY_SECONDS)
+        with eng.begin() as conn:
+            exd = crawl_ex_dividend(conn, ex_start, ex_end, require=True)
     print(f"ex_dividend {exd:,} rows")
     try:
         adjust.refresh_recent(
