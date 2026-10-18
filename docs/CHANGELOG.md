@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 台股均線、RSI、MACD、量比等技術指標改用還原後價格與量計算，除權息與分割不再讓訊號連錯好幾週（報告顯示的價格不變）
 - [修復] 台股日線在本地資料庫失效、改用 yfinance 時不再套現金股利還原，減少與資料庫日線混用兩種基準（Yahoo 的收盤價仍含分割調整，備援列並非純未還原，須以 data_source 區分）
 - [改進] 台股本益比／淨值比標示資料日期與「近四季」口徑，交易所殖利率一併提供；官方快照凍結或單邊失敗時不再沿用舊值數小時：估值每列帶資料日期（整包最新日期落後超過 10 曆日即拒收）、上市與上櫃分開快取（一邊失敗下次重打、不連坐另一邊）、重抓失敗最多回退舊快取 24 小時；prompt 的 PE 列改為「本益比（近四季，YYYY-MM-DD）」、PB 附日期並新增「殖利率（交易所公告）」列，其他市場不變
 - [改進] 台股大盤複盤恢復漲停／跌停家數（證交所帶日期的官方表）：`twtazu_od` 自 2026-06-05 凍結後家數只剩本地寬度（無漲跌停），market light 的漲跌停維度永久不可用（10-15 有 21 檔跌停卻印成沒有資料）。`TwseFetcher` 在 `twtazu_od` 被拒收時改取 `MI_INDEX?type=MS` 的「漲跌證券數合計」表「股票」欄（`200(4)` 解析為 200 家、漲停 4），回應 `date` 必須等於最新交易日，日期不符或格式不符一律放棄並退回本地寬度；`twtazu_od` 仍可用時不多打請求，凍結時每次複盤多一個 TWSE 請求

@@ -306,6 +306,61 @@ def _mark_daily_history_staleness(
         logger.debug("daily history staleness check skipped: %s", exc)
 
 
+def _front_adjust_tw_history(df: pd.DataFrame, code: str) -> pd.DataFrame:
+    """台股技術指標用的前復權 OHLCV（回傳新 df；顯示價不經這裡）。
+
+    ``dsa.stock_daily`` 的 MarketDB 列是**未還原**價：分割／除權息日價格斷崖會讓 MA、RSI、MACD
+    連錯好幾週（6669 於 2026-09-02 1:3 分割，六週後 MA60 仍 4189 vs 還原後 2142）。
+    這裡對 ``data_source == 'MarketDBFetcher'`` 的列 OHLC 乘 ``Π f``、volume 除以同一個乘數
+    （分割前量只有分割後約 1/3，不調整會讓 ``volume_ratio_5d`` 把分割後五天全判放量）。
+
+    - 必須在 ``_augment_historical_with_realtime`` **之後**呼叫：as_of ＝ df 最大日期，
+      開盤前不追加今天，今天才生效的除息因子就不會乘到昨天的原始收盤。
+    - YfinanceFetcher 列已含 Yahoo 的分割調整，不再乘（只計數告警）；即時追加列無
+      data_source、且是最大日期（乘數本來就是 1）。
+    - fail-open：任何例外 → WARNING 並回原 df。
+    """
+    try:
+        if df is None or df.empty or "data_source" not in df.columns:
+            return df
+        from market_data import market_repo
+        from market_data.db import get_engine
+        from data_provider.market_db_fetcher import _stock_id
+
+        mult = market_repo.front_adjust_multipliers(
+            _stock_id(code), df["date"], engine=get_engine(statement_timeout_ms=3000)
+        )
+        m = pd.to_numeric(pd.Series(mult.to_numpy(), index=df.index), errors="coerce").fillna(1.0)
+        if len(m) != len(df):
+            raise ValueError(f"multipliers length {len(m)} != df length {len(df)}")
+        if not (m != 1.0).any():
+            return df
+        source = df["data_source"]
+        is_mdb = source == "MarketDBFetcher"
+        skipped = int(((m != 1.0) & ~is_mdb & source.notna()).sum())
+        if skipped:
+            logger.warning(
+                "[%s] 指標前復權略過 %d 根非 MarketDB 列（來源已含供應商分割調整，不重複乘）",
+                code, skipped,
+            )
+        applied = m.where(is_mdb, 1.0)
+        if not (applied != 1.0).any():
+            return df
+        out = df.copy()
+        for col in ("open", "high", "low", "close"):
+            if col in out.columns:
+                out[col] = pd.to_numeric(out[col], errors="coerce") * applied
+        if "volume" in out.columns:
+            out["volume"] = pd.to_numeric(out["volume"], errors="coerce") / applied
+        ordered = applied.loc[pd.to_datetime(out["date"]).sort_values(kind="stable").index]
+        n_events = int((ordered.to_numpy()[1:] != ordered.to_numpy()[:-1]).sum())
+        logger.info("[%s] 技術指標已前復權：套用 %d 個除權息／分割事件", code, n_events)
+        return out
+    except Exception as exc:  # noqa: BLE001 - fail-open，退回未還原
+        logger.warning("[%s] 技術指標前復權失敗，改用未還原價: %s", code, exc)
+        return df
+
+
 class StockAnalysisPipeline:
     """
     股票分析主流程调度器
@@ -737,11 +792,7 @@ class StockAnalysisPipeline:
                 historical_bars = self.db.get_data_range(code, start_date, end_date)
                 if historical_bars:
                     df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
-                    # Issue #234: Augment with realtime for intraday MA calculation
-                    if self.config.enable_realtime_quote and realtime_quote:
-                        df = self._augment_historical_with_realtime(
-                            df, realtime_quote, code, market=market
-                        )
+                    df = self._build_trend_input_frame(df, realtime_quote, code, market)
                     trend_result = self.trend_analyzer.analyze(df, code)
                     logger.info(f"{stock_name}({code}) 趋势分析: {trend_result.trend_status.value}, "
                               f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
@@ -2658,6 +2709,26 @@ class StockAnalysisPipeline:
             return "短期走弱 🔽"
         else:
             return "震荡整理 ↔️"
+
+    def _build_trend_input_frame(
+        self,
+        df: pd.DataFrame,
+        realtime_quote: Any,
+        code: str,
+        market: Optional[str],
+    ) -> pd.DataFrame:
+        """趨勢分析的輸入日線：先疊即時 K（Issue #234），台股再前復權（顯示價不變）。
+
+        順序不可顛倒：前復權的 as_of ＝ augment 之後 df 的最大日期，開盤前不追加今天，
+        今天才生效的除息因子就不會乘到昨天的原始收盤。
+        """
+        if self.config.enable_realtime_quote and realtime_quote:
+            df = self._augment_historical_with_realtime(
+                df, realtime_quote, code, market=market
+            )
+        if market == "tw":
+            df = _front_adjust_tw_history(df, code)
+        return df
 
     def _augment_historical_with_realtime(
         self,
