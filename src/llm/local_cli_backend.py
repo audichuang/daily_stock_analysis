@@ -2742,11 +2742,33 @@ class LocalCliGenerationBackend(GenerationBackend):
         diagnostics: Dict[str, Any],
     ) -> GenerationError:
         combined = f"{stdout}\n{stderr}".lower()
+        envelope = {}
+        message = ""
+        if self._preset.preset_id == CLAUDE_CODE_CLI_BACKEND_ID:
+            try:
+                parsed = json.loads(stdout)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict) and parsed.get("type") == "result":
+                envelope = parsed
+                result = envelope.get("result")
+                result = result if isinstance(result, str) else ""
+                # 僅對人類訊息套用啟發式；JSON 欄位名稱不是錯誤證據。
+                combined = f"{result}\n{stderr}".lower()
+                message = redact_diagnostic_text(result, limit=500)
         code = GenerationErrorCode.NON_ZERO_EXIT
         reason = "non_zero_exit"
         if _is_cli_contract_unsupported(combined):
             code = GenerationErrorCode.CAPABILITY_UNSUPPORTED
             reason = "cli_contract_unsupported"
+        elif (
+            str(envelope.get("api_error") or "").lower() in {"usage_limit_reached", "429"}
+            or str(envelope.get("api_error_status") or "") == "429"
+        ):
+            reason = "usage_limit_reached"
+        elif isinstance(envelope.get("permission_denials"), list) and envelope["permission_denials"]:
+            code = GenerationErrorCode.APPROVAL_REQUIRED
+            reason = "approval_required"
         elif (
             self._preset.preset_id == OPENCODE_CLI_BACKEND_ID
             and _opencode_output_has_error_event(f"{stdout}\n{stderr}")
@@ -2767,7 +2789,11 @@ class LocalCliGenerationBackend(GenerationBackend):
             stage="execution",
             retryable=False,
             fallbackable=True,
-            details={**diagnostics, "reason": reason, "returncode": returncode},
+            details={
+                **diagnostics, "reason": reason, "returncode": returncode,
+                **({"message": message} if message else {}),
+            },
+            diagnostic_message=message,
         )
 
     def _output_file_error(
@@ -2797,6 +2823,7 @@ class LocalCliGenerationBackend(GenerationBackend):
         retryable: bool,
         fallbackable: bool,
         details: Dict[str, Any],
+        diagnostic_message: str = "",
     ) -> GenerationError:
         return GenerationError(
             error_code=error_code,
@@ -2806,6 +2833,7 @@ class LocalCliGenerationBackend(GenerationBackend):
             backend=self.backend_id,
             provider=self._preset.preset_id,
             details=details,
+            diagnostic_message=diagnostic_message,
         )
 
     @staticmethod

@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 個股報價與官方日線同場次時，成交量／額不再縮小，盤前與休市日也適用；量比與提示詞同步採用修正值，新場次仍保留即時量
+- [修復] Claude CLI 非零退出改讀 JSON 結構判斷用量上限與權限拒絕，空的 `permission_denials` 不再誤報需批准；錯誤保留脫敏後的限額與重設時間，不重試同一 CLI
 - [修復] 法人整日替換前檢查 T86 必要欄位與 NULL 比例，回應降級時保留既有資料並印警告；自動重抓不中止，人工回補仍可修復殘缺日
 - [修復] 沒有可用即時報價時，個股提示詞仍採用成功趨勢分析的前復權均線與均線形態，報告顯示價維持原始價格
 - [修復] 每日報告步驟逾時時，一併終止該步驟啟動、另開 session 的本機 CLI 與其子行程，再釋放報告鎖

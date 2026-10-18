@@ -16,6 +16,10 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from data_provider.realtime_types import UnifiedRealtimeQuote, RealtimeSource
@@ -462,7 +466,9 @@ class TestEnhanceContextRealtimeOverride(unittest.TestCase):
             "yesterday": {"close": 14.5, "volume": 4000000},
         }
         with patch("src.core.pipeline.get_market_now") as mock_now, \
-                patch("src.core.pipeline.get_market_for_stock", return_value="tw"):
+                patch("src.core.pipeline.get_market_for_stock", return_value="tw"), \
+                patch("src.core.pipeline.is_market_open", return_value=True), \
+                patch("src.core.pipeline.infer_market_phase", return_value=MarketPhase.POSTMARKET):
             mock_now.return_value = datetime(
                 today.year, today.month, today.day, 18, 0, tzinfo=timezone.utc
             )
@@ -644,6 +650,76 @@ class TestEnhanceContextYesterdayAlignment(unittest.TestCase):
         # phase 刻意給非 PREMARKET，只讓交易日守門單獨擋住
         enhanced = self._enhance(ctx, quote, is_open=False, phase=MarketPhase.POSTMARKET)
         self.assertEqual(enhanced["today"]["close"], 100.0)
+        self.assertEqual(enhanced["yesterday"], ctx["yesterday"])
+        self.assertEqual(enhanced["volume_change_ratio"], 1.25)
+
+    def test_weekend_quote_keeps_official_session_volume_in_prompt(self) -> None:
+        """重現週日備援量 33,490,300 股覆蓋週五官方量的實測案例。"""
+        from src.analyzer import GeminiAnalyzer
+
+        self.today = date(2026, 10, 18)
+        ctx = self._context(date(2026, 10, 16), today_extra={
+            "volume": 43046982, "amount": 43.05e9,
+        })
+        ctx["yesterday"]["volume"] = 58486711
+        quote = _make_realtime_quote(
+            price=100.0, volume=33490300, amount=33.49e9,
+            provider_timestamp="2026-10-16T13:30:00+08:00",
+            fetched_at="2026-10-18T10:53:00+08:00", is_stale=True,
+        )
+        enhanced = self._enhance(ctx, quote, is_open=False, phase=MarketPhase.POSTMARKET)
+        self.assertEqual(enhanced["today"]["close"], 100.0)
+        self.assertEqual(enhanced["today"]["volume"], 43046982)
+        self.assertEqual(enhanced["today"]["amount"], 43.05e9)
+        self.assertEqual(enhanced["yesterday"], ctx["yesterday"])
+        self.assertEqual(enhanced["volume_change_ratio"], 0.74)
+        with patch.object(GeminiAnalyzer, "_tw_margin_lines", return_value=""), \
+                patch.object(GeminiAnalyzer, "_tw_institutional_trend_lines", return_value=""):
+            prompt = GeminiAnalyzer.__new__(GeminiAnalyzer)._format_prompt(
+                enhanced, "測試", report_language="zh-TW"
+            )
+        self.assertIn("4304.70", prompt)
+        self.assertIn("成交量較昨日變化：0.74倍", prompt)
+        self.assertNotIn("3349.03", prompt)
+
+    def test_premarket_without_provider_time_keeps_official_session_totals(self) -> None:
+        """只有抓取時間時，開盤前仍用既有交易日 helper 判定報價場次。"""
+        ctx = self._context(self.t1, today_extra={"amount": 100000})
+        quote = _make_realtime_quote(
+            price=100.0, volume=500, amount=50000,
+            fetched_at=f"{self.today.isoformat()}T08:00:00+08:00",
+        )
+        with patch("src.core.pipeline.get_effective_trading_date", return_value=self.t1):
+            enhanced = self._enhance(ctx, quote, phase=MarketPhase.PREMARKET)
+        self.assertEqual(enhanced["today"]["close"], 100.0)
+        self.assertEqual(enhanced["today"]["volume"], 1000)
+        self.assertEqual(enhanced["today"]["amount"], 100000)
+        self.assertEqual(enhanced["yesterday"], ctx["yesterday"])
+        self.assertEqual(enhanced["volume_change_ratio"], 1.25)
+
+    def test_weekend_newer_quote_session_does_not_take_old_bar_max(self) -> None:
+        """反向：休市日也可能 DB 落後一場，不能把較大的舊量帶進新場次。"""
+        self.today = date(2026, 10, 18)
+        ctx = self._context(date(2026, 10, 15), today_extra={"amount": 100000})
+        quote = _make_realtime_quote(
+            price=101.0, volume=500, amount=50000,
+            provider_timestamp="2026-10-16T13:30:00+08:00",
+        )
+        enhanced = self._enhance(ctx, quote, is_open=False, phase=MarketPhase.POSTMARKET)
+        self.assertEqual(enhanced["today"]["close"], 101.0)
+        self.assertEqual(enhanced["today"]["volume"], 500)
+        self.assertEqual(enhanced["today"]["amount"], 50000)
+
+    def test_intraday_stale_quote_does_not_shift_the_stored_session(self) -> None:
+        """盤中仍可能拿到上一場報價；量與昨日比較必須一起按報價場次對齊。"""
+        ctx = self._context(self.t1)
+        quote = _make_realtime_quote(
+            price=100.0, volume=500,
+            provider_timestamp=f"{self.t1.isoformat()}T13:30:00+08:00", is_stale=True,
+        )
+        enhanced = self._enhance(ctx, quote)
+        self.assertEqual(enhanced["today"]["close"], 100.0)
+        self.assertEqual(enhanced["today"]["volume"], 1000)
         self.assertEqual(enhanced["yesterday"], ctx["yesterday"])
         self.assertEqual(enhanced["volume_change_ratio"], 1.25)
 

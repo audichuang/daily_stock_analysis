@@ -73,6 +73,7 @@ class GenerationError(Exception):
     backend: str
     provider: str = ""
     details: Dict[str, Any] = field(default_factory=dict)
+    diagnostic_message: str = ""  # 呼叫端須先脫敏；預設不改變既有錯誤訊息。
 
     def __post_init__(self) -> None:
         if not self.provider:
@@ -81,7 +82,8 @@ class GenerationError(Exception):
 
     @property
     def message(self) -> str:
-        return f"{self.error_code.value} at {self.stage} for backend {self.backend}"
+        base = f"{self.error_code.value} at {self.stage} for backend {self.backend}"
+        return f"{base}: {self.diagnostic_message}" if self.diagnostic_message else base
 
 
 class GenerationBackend(Protocol):

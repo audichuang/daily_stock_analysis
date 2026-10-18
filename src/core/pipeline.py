@@ -1191,12 +1191,18 @@ class StockAnalysisPipeline:
                 )
                 # orig_today['date'] 可能是 date／Timestamp／ISO 字串；先正規化成 date 再比較。
                 orig_date_norm = _coerce_to_date(orig_today.get('date'))
+                # provider 時間優先；抓取時間可能是休市日，不能直接當作報價場次。
+                quote_session = _coerce_to_date(getattr(realtime_quote, 'provider_timestamp', None))
+                if quote_session is None:
+                    quote_session = market_today_date if quote_is_today else get_effective_trading_date(
+                        market, current_time=market_now
+                    )
                 # DB 最新列是 T-1（今天的 K 還沒進庫）：原 today 才是真正的「昨日」，
                 # 不平移的話即時價會拿去比前天收盤（實測 3008：-5.67% 被算成 -9.45%）。
                 shift_yesterday = bool(
                     quote_is_today
                     and orig_date_norm is not None
-                    and orig_date_norm < market_today_date
+                    and orig_date_norm < quote_session
                     and isinstance(orig_today, dict)
                     and orig_today
                 )
@@ -1233,11 +1239,9 @@ class StockAnalysisPipeline:
                 estimated_fields = [
                     'close', 'open', 'high', 'low', 'ma5', 'ma10', 'ma20',
                 ]
-                # 同日（DB 已有今天的 K）時量／額取 max：累計量單調不減，Shioaji 不含零股
-                # 與盤後定價，不得把官方量縮小。orig_today 為昨日或更早則不比（追加語意）。
-                orig_date = orig_today.get('date')
-                # date／Timestamp／ISO 字串皆以 str 前 10 碼（YYYY-MM-DD）比對 market_today（ISO 字串）。
-                if orig_date is not None and str(orig_date)[:10] == market_today:
+                # 同場次量／額取 max（含盤前與休市日）：快照不含零股與盤後定價，不得縮小官方量。
+                # 報價是較新場次時保留追加語意，不與舊 K 比較。
+                if orig_date_norm is not None and orig_date_norm == quote_session:
                     if vol is not None:
                         vol = _cumulative_max(orig_today.get('volume'), vol)
                     if amt is not None:

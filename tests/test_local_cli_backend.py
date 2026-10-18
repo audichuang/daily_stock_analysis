@@ -1218,6 +1218,78 @@ raise SystemExit(2)
     assert exc_info.value.details["returncode"] == 2
 
 
+@pytest.mark.parametrize("api_fields", [
+    {"api_error": "usage_limit_reached", "api_error_status": 429},
+    {"api_error": "usage_limit_reached"},
+    {"api_error_status": 429},
+    {"api_error_status": "429"},
+    {"api_error": 429},
+])
+def test_claude_usage_limit_surfaces_redacted_message_without_retry(tmp_path, monkeypatch, api_fields):
+    message = "You've hit your weekly limit · resets 6am (Asia/Taipei)"
+    secret = "sk-testsecret123456789"
+    payload = {
+        "type": "result", "subtype": "success", "is_error": True,
+        "terminal_reason": "api_error", "permission_denials": [],
+        "result": f"{message}; api_key={secret}", **api_fields,
+    }
+    count_path = tmp_path / "count.txt"
+    script = _script(tmp_path, f"""
+import pathlib
+count_path = pathlib.Path({str(count_path)!r})
+count = int(count_path.read_text()) if count_path.exists() else 0
+count_path.write_text(str(count + 1))
+print({json.dumps(payload)!r})
+raise SystemExit(1)
+""")
+    preset = LocalCliPreset(
+        "claude_code_cli", sys.executable, (script,), "Mock Claude Code CLI",
+        extractor=CLAUDE_CODE_CLI_PRESET.extractor,
+    )
+    backend = LocalCliGenerationBackend(_config(generation_backend="claude_code_cli"), preset=preset)
+    client = GeminiAnalyzer.__new__(GeminiAnalyzer)
+    monkeypatch.setattr(client, "get_generation_backend_config_error", lambda: None)
+    monkeypatch.setattr(client, "_resolve_generation_backend_config", lambda: ("claude_code_cli", None))
+    monkeypatch.setattr(client, "_get_generation_backend", lambda _backend_id: backend)
+    with pytest.raises(GenerationError) as exc_info:
+        client._call_litellm("prompt", {})
+    error = exc_info.value
+    assert error.error_code is GenerationErrorCode.NON_ZERO_EXIT
+    assert error.details["reason"] == "usage_limit_reached"
+    assert error.retryable is False
+    assert error.fallbackable is True
+    assert message in str(error)
+    assert message in error.message
+    assert message in error.details["message"]
+    assert secret not in str(error)
+    assert secret not in repr(error.details)
+    assert count_path.read_text() == "1"
+
+
+@pytest.mark.parametrize("extra_keys", [{}, {"login_hint": "", "prompt_tokens": 100}])
+@pytest.mark.parametrize("denials, expected_code, expected_reason", [
+    ([], GenerationErrorCode.NON_ZERO_EXIT, "non_zero_exit"),
+    ([{"tool_name": "Bash", "tool_input": {"command": "true"}}],
+     GenerationErrorCode.APPROVAL_REQUIRED, "approval_required"),
+])
+def test_claude_structured_permission_denials_are_not_key_substring_matches(
+    tmp_path, denials, expected_code, expected_reason, extra_keys,
+):
+    payload = {
+        "type": "result", "subtype": "success", "is_error": True,
+        "permission_denials": denials, "api_error_status": 500,
+        "api_error": "server_error", "result": "Service temporarily unavailable",
+        **extra_keys,
+    }
+    script = _script(tmp_path, f"print({json.dumps(payload)!r})\nraise SystemExit(1)\n")
+    preset = LocalCliPreset("claude_code_cli", sys.executable, (script,), "Mock Claude Code CLI")
+    backend = LocalCliGenerationBackend(_config(generation_backend="claude_code_cli"), preset=preset)
+    with pytest.raises(GenerationError) as exc_info:
+        backend.generate("prompt", {})
+    assert exc_info.value.error_code is expected_code
+    assert exc_info.value.details["reason"] == expected_reason
+
+
 def test_non_zero_exit_maps_cli_contract_unsupported(tmp_path: Path) -> None:
     preset = LocalCliPreset(
         "codex_cli",

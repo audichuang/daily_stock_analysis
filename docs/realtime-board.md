@@ -73,6 +73,7 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 
 ## 踩雷与限制
 
+- **個股提示詞的量／額以報價場次對齊官方日線**：`_enhance_context` 優先讀 `provider_timestamp`，缺值時沿用市場階段與交易日 helper（抓取時間不代表成交場次）。同場次取官方值與即時值的 max，盤前與休市日也適用；新場次不與舊 K 取 max。成交量較昨日變化與提示詞成交量共用修正後的值。
 - **缺金钥时数据源自我停用，台股静默降级 yfinance**（行情延迟、走势 day 改用 yfinance 5m 也延迟）。`shioaji` 套件已列入 `requirements.txt`，真正的触发点是金钥没注入。可辨识的信号是 `source` 由 `shioaji` 变 `fallback`、且 `limit_up`/`limit_down` 变 `None`；**名称不会变英文**——降级路径的名称先查本 fork 的股票索引，索引里有的台股仍是中文（2026-07-25 live 对照实测），只有索引没收录的代码才会落到 Yahoo 的英文名。
 - **台股日线的权威是 `MarketDBFetcher` 的未还原列；yfinance 备援列不是纯未还原**：`YfinanceFetcher._fetch_raw_data` 对台股（`.TW`/`.TWO`）用 `auto_adjust=False`，去掉现金股利调整（否则与 MarketDB 未还原列混存会在 MA／RSI／MACD 边界出现假台阶），但 Yahoo 的 `Close` 仍含分割调整（台股股票股利在 Yahoo 多以 split 呈现），消费端须以 `data_source` 区分，不能把 yfinance 台股列当未还原价；备援路径上除权息日的 `pct_chg` 是未还原报酬。其他市场仍用还原价（`auto_adjust=True`）。
 - **台股趨勢指標以前復權計算，顯示價維持未還原**：`pipeline._build_trend_input_frame`（Step 3，餵給 `StockTrendAnalyzer`）在 `_augment_historical_with_realtime` **之後**呼叫 `market_repo.front_adjust_multipliers(stock_id, df 日期)`，只對 `data_source=='MarketDBFetcher'` 的列把 OHLC 乘乘數、volume **除**同一乘數（分割前量只有分割後約 1/3，不調整會讓 `volume_ratio_5d` 把分割後五天全判放量）；`as_of`＝augment 後 df 的最大日期，所以開盤前（不追加今天）今天才生效的除息不會乘到昨天，盤中追加今天後今天的事件才作用在之前所有列，最後一根乘數恆為 1。YfinanceFetcher 列已含 Yahoo 分割調整，不再乘（只計數 WARNING）；前復權失敗 fail-open 退回未還原並 WARNING。報告、prompt 與 `context.today` 顯示的價格仍是未還原（與券商 App 一致）。6669 於 2026-09-02 1:3 分割，未還原 MA60 到 10-16 仍是 4189、還原後 2142。
