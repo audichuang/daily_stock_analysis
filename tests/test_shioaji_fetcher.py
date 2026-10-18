@@ -162,6 +162,10 @@ def test_snapshot_maps_tw_intraday_fields(monkeypatch):
     # 涨跌停由 live 参考价(pre_close=990) ±10% + tick 对齐算出（tw_price_limits），
     # 取代可能与当日参考价不同步的 contract.limit_up/limit_down 静态值(1100/900)。
     assert quote.limit_up == 1085.0 and quote.limit_down == 891.0
+    # total_volume 5000 張 → 5,000,000 股（UnifiedRealtimeQuote.volume 契約是股）；
+    # 委買委賣量維持張、成交額不換算
+    assert quote.volume == 5_000_000
+    assert quote.amount == 5_000_000.0
     assert quote.best_bid == 999.0 and quote.best_bid_volume == 120
     assert quote.best_ask == 1001.0 and quote.best_ask_volume == 80
     assert quote.last_tick_type == 1              # 最后一笔外盘主买
@@ -371,3 +375,30 @@ def test_enrich_keeps_provider_timestamp(monkeypatch):
     enriched = DataFetcherManager(fetchers=[])._enrich_realtime_quote(quote, realtime_cache_ttl=600)
     assert enriched.provider_timestamp is not None
     assert enriched.is_stale is False  # 快照 ts 为当下，ttl(600s) 内判为 fresh
+
+
+def test_snap_to_quote_volume_none_stays_none():
+    """total_volume 缺值不能被換算成 0 股（0 與 None 語意不同）。"""
+    class _NoVol:
+        close = 100.0
+        change_price = 1.0
+        total_volume = None
+
+    quote = sf.ShioajiFetcher._snap_to_quote("2330", _NoVol())
+    assert quote is not None and quote.volume is None
+
+
+def test_snap_volume_matches_db_daily_unit_cross_source():
+    """跨來源單位契約：同一場次 3008 的 Shioaji 4441 張，要與 DB 日線 4,812,882 股同量級。
+
+    修前 quote.volume=4441（張）→ 比值 0.0009，pipeline 覆蓋日線後量比≈0.001、全部被判縮量。
+    """
+    class _Snap3008:
+        close = 2000.0
+        change_price = -10.0
+        total_volume = 4441
+
+    quote = sf.ShioajiFetcher._snap_to_quote("3008", _Snap3008())
+    db_daily_volume_shares = 4_812_882
+    ratio = quote.volume / db_daily_volume_shares
+    assert 0.85 <= ratio <= 1.0

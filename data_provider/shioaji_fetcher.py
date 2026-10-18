@@ -51,6 +51,9 @@ logger = logging.getLogger(__name__)
 
 # 台股升降单位（价格区间 -> tick）；>=1000 为 5。
 _TW_TICK_BANDS = ((10.0, 0.01), (50.0, 0.05), (100.0, 0.1), (500.0, 0.5), (1000.0, 1.0))
+# Shioaji snapshot.total_volume 單位是「張」（1 張 = 1000 股）；UnifiedRealtimeQuote.volume 與 DB 日線
+# 都是「股」，在 _snap_to_quote 邊界換算。委買委賣量（best_*_volume）API schema 標「張」，不換。
+_SHARES_PER_LOT = 1000
 
 
 def _tw_tick_size(price: float) -> float:
@@ -365,6 +368,12 @@ def _reset_for_tests() -> None:
     _login_breaker.reset()
 
 
+def _lots_to_shares(lots: Any) -> Optional[int]:
+    """張 → 股；None／無法解析維持 None。"""
+    n = safe_int(lots)
+    return None if n is None else n * _SHARES_PER_LOT
+
+
 class ShioajiFetcher(BaseFetcher):
     """台股 Shioaji 真即时报价（仅 realtime_quote，不参与日线/统计路由）。"""
 
@@ -497,7 +506,7 @@ class ShioajiFetcher(BaseFetcher):
             price=close,
             change_amount=change_price,
             change_pct=safe_float(getattr(snap, "change_rate", None)),
-            volume=safe_int(getattr(snap, "total_volume", None)),
+            volume=_lots_to_shares(getattr(snap, "total_volume", None)),
             amount=safe_float(getattr(snap, "total_amount", None)),
             # 量比 Shioaji 直接给（避免因缺此字段触发 base._quote_needs_supplement 的 yfinance 补字段往返）。
             # 注意：Shioaji 量比是当日累计量/昨量，开盘初段(约 ~10:30 前)偏低失真，前端需谨慎解读。

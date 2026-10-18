@@ -36,6 +36,8 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 | `amplitude` 振幅 | 自算 (high-low)/昨收 | 当日波动幅度 | 全时段可靠 |
 | `day_trade` 现股当沖资格 | contract | `Yes` 可双向当沖 / `OnlyBuy` 仅可先买 / `No` 不可当沖 | 静态合约字段，每日合约下载刷新（处置/暂停当沖会变） |
 
+**单位（张 vs 股）**：Shioaji snapshot 的 `total_volume`（成交量）与 `buy_volume`/`sell_volume`（委买委卖一档量）原始单位都是**张**（1 张 = 1000 股）。`ShioajiFetcher._snap_to_quote` 在边界把成交量 `volume` 换算成**股**（×1000，`None` 维持 `None`），与 `UnifiedRealtimeQuote.volume` 契约、yfinance 备援及 DB 日线一致；`best_bid_volume`/`best_ask_volume` 维持**张**（API schema 已标「张」），`amount` 为元、不换算。看板「成交量」列因此是股数（比修前放大 1000 倍）。修前 `volume` 直接是张，pipeline 以它覆盖/追加日线后量比≈0.001，所有台股被判缩量。
+
 看板展示：新增「均价」列（站上/跌破均价红绿着色）、价格列下方「距板」角标、名称旁「不可当沖／仅现沖买」示警角标（`Yes` 为常态不显示），展开列新增「盘口明细」区块（委买委卖一档+量、最后一笔内外盘、均价、涨跌停价、量比、振幅）。LLM 分析提示亦据 `day_trade` 约束：非可当沖标的不得给当沖策略。
 
 > 注：`volume_ratio`/`amplitude` 由 Shioaji 直接提供后，`DataFetcherManager` 的字段补全（`_SUPPLEMENT_FIELDS`）不再用 yfinance 的延迟日线值覆盖这两项（仅填 Shioaji 缺的 pe/pb/市值/换手率，且只填 `None` 不覆盖）。
