@@ -200,6 +200,9 @@ class MarketOverview:
     # 三大法人买卖超净额（仅台股有数据，单位与 total_amount 一致：亿新台币）
     # 键: foreign_net / trust_net / dealer_net / total_net；其他市场保持 None。
     institutional_net: Optional[Dict[str, float]] = None
+    # 台股統計（家數／成交額／法人）的場次日期與複盤日期不同、被拒收時記錄兩個日期：
+    # {'stats_date': str|None, 'overview_date': str}。None = 沒有被拒收。
+    stats_session_mismatch: Optional[Dict[str, Optional[str]]] = None
 
     # 板块涨幅榜
     top_sectors: List[Dict] = field(default_factory=list)     # 涨幅前5板块
@@ -915,6 +918,26 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 
             stats = self.data_manager.get_market_stats(purpose=f"market_review:{self.region}")
 
+            if stats and self.region == 'tw':
+                # 台股統計帶場次日期（trade_date），必須與複盤日期同一天才採用。盤中或
+                # 13:30 後官方還沒發布時，stats 是前一個交易日的數字，配上今天的指數
+                # 會寫出虛構的背離敘事（2026-10-16 10:55 的複盤把 10-15 崩盤日的家數與
+                # 法人配上 10-16 盤中 +1.14%）。缺 trade_date 一律拒收：無法證明是同一天
+                # 的數字不如沒有數字。只管 tw——其他市場的 stats 沒有這個鍵。
+                stats_date = stats.get('trade_date')
+                if not stats_date or str(stats_date) != overview.date:
+                    stats_date = str(stats_date) if stats_date else None
+                    logger.warning(
+                        "[大盘] %s action=get_market_stats status=session_mismatch "
+                        "stats_date=%s overview_date=%s",
+                        self._log_context(), stats_date, overview.date,
+                    )
+                    overview.stats_session_mismatch = {
+                        'stats_date': stats_date,
+                        'overview_date': overview.date,
+                    }
+                    return
+
             if stats:
                 overview.up_count = stats.get('up_count', 0)
                 overview.down_count = stats.get('down_count', 0)
@@ -1517,6 +1540,61 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         # Insert the block before the next heading, with spacing
         return text[:insert_pos].rstrip() + '\n\n' + block + '\n\n' + text[insert_pos:].lstrip('\n')
 
+    def _stats_session_mismatch_line(self, overview: MarketOverview) -> str:
+        """統計被拒收（場次日期對不上）時要明講的那一行；沒被拒收回空字串。
+
+        只靠家數／成交額／法人欄位消失，LLM 看不出是「今天還沒發布」還是「這個市場
+        沒有」，會拿剩下的指數自己編敘事；這一行把原因講明並禁止推論。
+        """
+        mismatch = getattr(overview, "stats_session_mismatch", None)
+        if not mismatch:
+            return ""
+        language = self._get_review_language()
+        stats_date = mismatch.get("stats_date") or "-"
+        overview_date = mismatch.get("overview_date") or overview.date
+        if language == "en":
+            return (
+                "- **Data limit**: Advance/decline counts, turnover and institutional flows "
+                f"for this session are not yet published or are dated differently from the "
+                f"index (stats date {stats_date}, index date {overview_date}); "
+                "do not infer anything from them."
+            )
+        if language == "zh-TW":
+            return (
+                "- **資料限制**：本場次漲跌家數／成交額／三大法人尚未發布或與指數不同日"
+                f"（統計日 {stats_date}、指數日 {overview_date}），不得推論。"
+            )
+        return (
+            "- **数据限制**：本场次涨跌家数/成交额/三大法人尚未发布或与指数不同日"
+            f"（统计日 {stats_date}、指数日 {overview_date}），不得推论。"
+        )
+
+    def _institutional_date_note(self, overview: MarketOverview) -> str:
+        """台股三大法人列的日期註記；其他市場回空字串。
+
+        法人數字在 18:00 左右是盤後初版，官方事後會修正（實測 2026-10-15 投信
+        309→317 億），所以複盤日期就是台北今天時明講「初版」；盤前或非交易日
+        複盤的是已定案的前一場，只標日期。進到這裡時統計已與 overview.date 對齊。
+        """
+        if self.region != 'tw':
+            return ""
+        language = self._get_review_language()
+        is_today = overview.date == get_market_now(self.region).date().isoformat()
+        if language == "en":
+            return (
+                f" ({overview.date} post-close preliminary; official figures may be revised later)"
+                if is_today else f" ({overview.date})"
+            )
+        if language == "zh-TW":
+            return (
+                f"（{overview.date} 盤後初版，官方稍後可能修正）" if is_today
+                else f"（{overview.date}）"
+            )
+        return (
+            f"（{overview.date} 盘后初版，官方稍后可能修正）" if is_today
+            else f"（{overview.date}）"
+        )
+
     def _build_stats_block(self, overview: MarketOverview) -> str:
         """Build market statistics block."""
         # 每一列各自判断自己有没有资料；判定集中在 `_breadth_availability`，
@@ -1530,7 +1608,10 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         has_breadth = has_advance_decline or has_limit or has_turnover
         has_institutional = _has_institutional_reading(overview)
         has_stats = has_breadth or has_institutional
-        if not has_stats and not (self._supports_market_light() and overview.indices):
+        mismatch_line = self._stats_session_mismatch_line(overview)
+        if not has_stats and not mismatch_line and not (
+            self._supports_market_light() and overview.indices
+        ):
             return ""
         # 盘面信号只在**评分器真的评得出来**时输出。不能拿 institutional_net 或
         # total_amount 的存在当理由——评分器根本不看这两项，于是「只有三大法人」
@@ -1571,12 +1652,17 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             if _has_institutional_reading(overview):
                 inst = overview.institutional_net
                 lines.append(
-                    f"- **Institutional net** ({self._get_turnover_unit_label()}): "
+                    f"- **Institutional net** ({self._get_turnover_unit_label()})"
+                    f"{self._institutional_date_note(overview)}: "
                     f"Foreign {inst.get('foreign_net', 0.0):+.0f} / "
                     f"Inv. trust {inst.get('trust_net', 0.0):+.0f} / "
                     f"Dealer {inst.get('dealer_net', 0.0):+.0f} / "
                     f"Total {inst.get('total_net', 0.0):+.0f}"
                 )
+            if mismatch_line:
+                if lines:
+                    lines.append("")
+                lines.append(mismatch_line)
             return "\n".join(lines)
         lines = []
         score = light["score"] if isinstance(light, dict) else None
@@ -1612,12 +1698,16 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 inst = overview.institutional_net
                 unit = self._get_turnover_unit_label()
                 lines.append(
-                    f"| 三大法人净买卖（{unit}） | "
+                    f"| 三大法人净买卖（{unit}）{self._institutional_date_note(overview)} | "
                     f"外资 {inst.get('foreign_net', 0.0):+.0f} / "
                     f"投信 {inst.get('trust_net', 0.0):+.0f} / "
                     f"自营商 {inst.get('dealer_net', 0.0):+.0f} | "
                     f"合计 {inst.get('total_net', 0.0):+.0f} |"
                 )
+        if mismatch_line:
+            if lines:
+                lines.append("")
+            lines.append(mismatch_line)
         return "\n".join(lines)
 
     def build_market_light_snapshot(self, overview: MarketOverview) -> Dict[str, Any]:
@@ -2189,7 +2279,8 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 if _has_institutional_reading(overview):
                     _inst = overview.institutional_net
                     stats_lines.append(
-                        f"- Institutional net ({self._get_turnover_unit_label()}): "
+                        f"- Institutional net ({self._get_turnover_unit_label()})"
+                        f"{self._institutional_date_note(overview)}: "
                         f"Foreign {_inst.get('foreign_net', 0.0):+.0f} / "
                         f"Inv. trust {_inst.get('trust_net', 0.0):+.0f} / "
                         f"Dealer {_inst.get('dealer_net', 0.0):+.0f} / "
@@ -2211,6 +2302,8 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
                     "- Market breadth, aggregate turnover, participation, and fund-flow signals are not available for this market."
                 )
             else:
+                if overview.stats_session_mismatch:
+                    data_limit_lines.append(self._stats_session_mismatch_line(overview))
                 # 逐栏说明「今天没有」，而不是让那一行只是从 stats_block 消失——后者
                 # LLM 看不出差别，前者才配得上 prompt 顶端那句「未提供…不要编造或
                 # 过度解读」。这就是 2026-08-24 那份复盘写出「涨跌停皆为 0，显示市场
@@ -2254,7 +2347,8 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
                 if _has_institutional_reading(overview):
                     _inst = overview.institutional_net
                     stats_lines.append(
-                        f"- 三大法人买卖超（{self._get_turnover_unit_label()}）: "
+                        f"- 三大法人买卖超（{self._get_turnover_unit_label()}）"
+                        f"{self._institutional_date_note(overview)}: "
                         f"外资 {_inst.get('foreign_net', 0.0):+.0f} | "
                         f"投信 {_inst.get('trust_net', 0.0):+.0f} | "
                         f"自营商 {_inst.get('dealer_net', 0.0):+.0f} | "
@@ -2281,6 +2375,8 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
                     else "- 该市场暂无涨跌家数、涨跌停、成交额汇总、参与度或资金流信号。"
                 )
             else:
+                if overview.stats_session_mismatch:
+                    data_limit_lines.append(self._stats_session_mismatch_line(overview))
                 # 与 en 分支同一组判定与同一个理由（见那边的注释）。
                 if not avail["advance_decline"]:
                     data_limit_lines.append(

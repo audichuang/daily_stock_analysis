@@ -347,6 +347,11 @@ class SummedFieldCoverageTestCase(unittest.TestCase):
         self.assertNotAlmostEqual(
             stats["total_amount"], self.TWSE_AMOUNT / 1e8, places=4)
 
+    def test_stats_carry_the_session_date_they_are_aligned_to(self):
+        """get_market_stats 回傳 trade_date（ISO），讓消費端比對複盤日期。"""
+        stats = self._fetcher().get_market_stats()
+        self.assertEqual(stats["trade_date"], "2026-08-21")
+
     def test_field_groups_still_degrade_independently(self):
         """分組降級沒被改壞：法人整組作廢時，家數與成交額照常。"""
         stats = self._fetcher(bfi="20260605").get_market_stats()

@@ -474,6 +474,9 @@ class TwseFetcher(BaseFetcher):
                   limit_up_count/limit_down_count/total_amount，total_amount
                   单位为亿新台币），三大法人成功时附加 foreign_net/trust_net/
                   dealer_net/total_net（单位亿新台币）。
+                  最新交易日有值时另附 ``trade_date``（ISO 日期字串）：上面所有读数
+                  都已对齐到这一天，消费端须拿它与复盘日期比对，不同日就不采用
+                  （盘中跑复盘时它是前一个交易日，不是今天）。
             {}:   所有端点均失败时返回空字典（绝不抛出异常）。
 
         覆盖范围：涨跌家数为 TWSE 上市口径（上柜无公开端点）；成交金额与三大法人
@@ -567,6 +570,11 @@ class TwseFetcher(BaseFetcher):
                 "有" if twse_inst is not None else "无",
                 "有" if tpex_inst is not None else "无",
             )
+
+        # 場次日期：消費端（market_analyzer）靠它判斷這批數字是不是複盤那一天的。
+        # 拿不到 TWSE 認定的最新交易日就不寫——消費端對缺鍵一律拒收。
+        if latest_trading_date is not None:
+            stats["trade_date"] = latest_trading_date.isoformat()
 
         logger.info(
             "[TwseFetcher] 统计完成 up=%s down=%s amount=%.0f亿(上市%s+上柜%s) "
