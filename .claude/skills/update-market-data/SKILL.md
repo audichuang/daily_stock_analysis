@@ -22,6 +22,7 @@ uv run --env-file .env python -m market_data.health
 
 輸出每表 `rows / start~end` 與 price/institutional/margin 的 `thin days`(單日列數低於前後交易日局部中位數九成 = 疑似單邊市場缺漏或截斷寫入)。
 **完成判準**:能說出每個資料集落後到哪一天、以及 thin days 清單。
+`expected session: YYYY-MM-DD (price ✓/✗, TAIEX ✓/✗)` 那一行是絕對新鮮度(交易日 17:00 後要有當天、之前要有前一交易日,price 與 TAIEX 缺任一邊 `--strict` 就非零);✗ 表示該場次尚未入庫(未發布或被封),發布後重跑 `daily`;印 `skipped` 代表本機沒有 `exchange_calendars`、此檢查未生效。
 財報看 `financial_statement` 的 `end` 與 `stale financial quarters` 那一行(它印的是會計期間 + 截止日 + 該跑的 `financials` 指令,**只報不擋**,exit code 不會反映它)。
 
 ### 2. 依落差選路徑

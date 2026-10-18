@@ -9,6 +9,7 @@ e.g. one market missing) and stale tables.
 import argparse
 import datetime
 import statistics
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
@@ -24,6 +25,54 @@ _DATE_COL = {"monthly_revenue": "revenue_month"}
 _REQUIRED_TABLES = (
     "price", "institutional", "margin", "monthly_revenue", "ex_dividend",
     "valuation", "market_index")
+
+
+_TAIPEI = ZoneInfo("Asia/Taipei")
+# 收盤後官方日資料（TWSE/TPEx 行情、FMTQIK）要到這個時刻才算「應已發布」；
+# 13:30 收盤到此之間跑 health 不該因為今天還沒入庫就擋。
+SESSION_COMPLETE_AFTER = datetime.time(17, 0)
+_SESSION_LOOKBACK_DAYS = 15
+
+
+def _xtai_session_checker():
+    """回傳 XTAI 的 ``is_session(date)``；exchange_calendars 不可用時回 None。
+
+    日曆取不到時由呼叫端**跳過**檢查，不退回週一~五：退回去會把國定假日
+    （颱風以外的已知休市日）誤判成缺資料而擋掉報告。"""
+    try:
+        import exchange_calendars as xcals
+
+        calendar = xcals.get_calendar("XTAI")
+    except Exception:
+        return None
+    return lambda day: bool(calendar.is_session(day))
+
+
+def expected_session(now=None, is_session=None):
+    """此刻庫裡「應該已經有」的最近一個交易日；取不到日曆回 None。
+
+    今天是交易日且已過 ``SESSION_COMPLETE_AFTER``（台北）→ 今天；否則往前找最近的
+    交易日（上限 ``_SESSION_LOOKBACK_DAYS`` 天）。``now`` 無時區視為台北時間。
+    ``is_session`` 為 ``date -> bool``，預設取 XTAI。函式名與簽名是
+    `scripts/daily_report.sh` 的契約，勿改。"""
+    now = now or datetime.datetime.now(_TAIPEI)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=_TAIPEI)
+    now = now.astimezone(_TAIPEI)
+    is_session = is_session or _xtai_session_checker()
+    if is_session is None:
+        return None
+    today = now.date()
+    try:
+        if is_session(today) and now.time() >= SESSION_COMPLETE_AFTER:
+            return today
+        for back in range(1, _SESSION_LOOKBACK_DAYS + 1):
+            day = today - datetime.timedelta(days=back)
+            if is_session(day):
+                return day
+    except Exception:
+        return None
+    return None
 
 
 def missing_dates(reference, observed):
@@ -111,7 +160,7 @@ _VERIFIED_THIN = {
 }
 
 
-def report(engine=None):
+def report(engine=None, now=None, is_session=None):
     engine = engine or get_engine()
     out = {"tables": {}, "thin_days": {}}
     with engine.connect() as c:
@@ -149,8 +198,20 @@ def report(engine=None):
                 ), {"start": min(recent_price_dates)}).fetchall()]
         else:
             source_dates = {"institutional": [], "margin": []}
+        # 絕對新鮮度：上面兩個檢查只讓 price 與 TAIEX 互相比對，兩者同時缺今天
+        # （同為 TWSE 來源、被封或盤中跑）時會一起通過；這裡對照日曆的「應有場次」。
+        expected = expected_session(now, is_session)
+        expected_check = None
+        if expected is not None:
+            has = {}
+            for key, sql in (
+                    ("price", "SELECT 1 FROM market.price WHERE date = :d LIMIT 1"),
+                    ("taiex", "SELECT 1 FROM market.market_index "
+                              "WHERE index_id = 'TAIEX' AND date = :d LIMIT 1")):
+                has[key] = c.execute(text(sql), {"d": expected}).fetchone() is not None
+            expected_check = {"date": str(expected), **has}
         today = datetime.date.today()
-        window = datetime.timedelta(days=ADJUSTMENT_WINDOW_DAYS)
+        window =datetime.timedelta(days=ADJUSTMENT_WINDOW_DAYS)
         expected_adjustments = c.execute(text(
             "SELECT stock_id, date FROM market.ex_dividend "
             "WHERE close_before > 0 AND reference_price > 0 "
@@ -164,6 +225,11 @@ def report(engine=None):
             # directions so a stale calendar cannot certify another stale table.
             "missing_price_dates": missing_dates(
                 recent_index_dates, recent_price_dates),
+            "expected_session": expected_check,
+            "missing_expected_session": (
+                [expected_check["date"]]
+                if expected_check and not (expected_check["price"]
+                                           and expected_check["taiex"]) else []),
             "missing_index_dates": missing_dates(
                 recent_price_dates, recent_index_dates),
             # 法人／融資是 T+1 資料；最新一個 price 交易日尚未發布屬正常延遲。
@@ -187,14 +253,25 @@ def report(engine=None):
     return out
 
 
-def run(engine=None, strict=False):
+def run(engine=None, strict=False, now=None, is_session=None):
     """Print the report and return a process exit code."""
-    result = report(engine)
+    result = report(engine, now=now, is_session=is_session)
     for table, info in result["tables"].items():
         print(f"{table:16} {info['rows']:>10,}  {info['start'][:10]}~{info['end'][:10]}")
     for table, days in result["thin_days"].items():
         print(f"thin {table} days: {len(days)} -> {days[:10]}")
     integrity = result.get("integrity", {})
+    latest_price = result.get("tables", {}).get("price", {}).get("end", "n/a")
+    print(f"latest price session: {str(latest_price)[:10]}")
+    expected_check = integrity.get("expected_session")
+    if expected_check:
+        mark = {True: "\u2713", False: "\u2717"}
+        print(f"expected session: {expected_check['date']} "
+              f"(price {mark[expected_check['price']]}, "
+              f"TAIEX {mark[expected_check['taiex']]})")
+    else:
+        print("expected session check skipped (exchange_calendars unavailable)")
+    missing_expected = integrity.get("missing_expected_session", [])
     missing_price = integrity.get("missing_price_dates", [])
     missing_index = integrity.get("missing_index_dates", [])
     missing_institutional = integrity.get("missing_institutional_dates", [])
@@ -218,10 +295,13 @@ def run(engine=None, strict=False):
     for year, season, _ in stale_financials[:10]:
         print("  repair: uv run --env-file .env python -m market_data.cli "
               f"financials --year {year} --season {season}")
-    gaps = (missing_price, missing_index, missing_institutional,
+    gaps = (missing_expected, missing_price, missing_index, missing_institutional,
             missing_margin, missing_events, thin_recent, empty_required)
     failed = any(gaps)
     if strict and failed:
+        if missing_expected:
+            print(f"應有場次 {missing_expected[0]} 尚未入庫（交易所未發布或被封）；"
+                  "發布後重跑 daily。颱風等臨時休市日日曆不知道，也會停在這裡")
         print("repair: uv run --env-file .env python -m market_data.cli daily")
         print("verify: uv run --env-file .env python -m market_data.cli "
               "health --strict")

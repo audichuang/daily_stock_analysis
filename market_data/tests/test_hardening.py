@@ -197,7 +197,7 @@ def test_missing_adjustments_finds_valid_ex_dividend_without_event_factor():
 
 
 def test_strict_health_returns_nonzero_for_integrity_gaps(monkeypatch):
-    monkeypatch.setattr(health, "report", lambda engine: {
+    monkeypatch.setattr(health, "report", lambda engine, **_: {
         "tables": {},
         "thin_days": {},
         "integrity": {
@@ -215,7 +215,7 @@ def _tables():
 
 
 def test_strict_health_rejects_a_thin_day_inside_the_daily_window(monkeypatch):
-    monkeypatch.setattr(health, "report", lambda engine: {
+    monkeypatch.setattr(health, "report", lambda engine, **_: {
         "tables": _tables(),
         "thin_days": {"price": [("2026-07-27", 100)]},
         "integrity": {"thin_recent_days": [("price", "2026-07-27", 100)]},
@@ -227,7 +227,7 @@ def test_strict_health_rejects_a_thin_day_inside_the_daily_window(monkeypatch):
 def test_strict_health_does_not_block_on_a_thin_day_daily_cannot_repair(monkeypatch):
     """全歷史 thin day 只報不擋——否則 2014 年的半日交易會讓 make morning 天天死在門口，
     而錯誤訊息叫你重跑的 daily 只補最近幾個交易日，永遠修不掉它。"""
-    monkeypatch.setattr(health, "report", lambda engine: {
+    monkeypatch.setattr(health, "report", lambda engine, **_: {
         "tables": _tables(),
         "thin_days": {"price": [("2014-05-21", 100)]},
         "integrity": {"thin_recent_days": []},
@@ -328,7 +328,7 @@ def test_strict_health_rejects_empty_required_table(monkeypatch):
         for table in health._REQUIRED_TABLES
     }
     tables["monthly_revenue"]["rows"] = 0
-    monkeypatch.setattr(health, "report", lambda engine: {
+    monkeypatch.setattr(health, "report", lambda engine, **_: {
         "tables": tables,
         "thin_days": {},
         "integrity": {},
@@ -338,7 +338,7 @@ def test_strict_health_rejects_empty_required_table(monkeypatch):
 
 
 def test_non_strict_health_reports_but_does_not_fail(monkeypatch):
-    monkeypatch.setattr(health, "report", lambda engine: {
+    monkeypatch.setattr(health, "report", lambda engine, **_: {
         "tables": {},
         "thin_days": {"price": [("2026-07-27", 100)]},
         "integrity": {"missing_price_dates": ["2026-07-27"]},
@@ -352,7 +352,7 @@ def test_non_strict_health_reports_but_does_not_fail(monkeypatch):
     "missing_margin_dates",
 ])
 def test_strict_health_rejects_stale_secondary_source(monkeypatch, gap):
-    monkeypatch.setattr(health, "report", lambda engine: {
+    monkeypatch.setattr(health, "report", lambda engine, **_: {
         "tables": {},
         "thin_days": {},
         "integrity": {
