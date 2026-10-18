@@ -13,7 +13,7 @@
 | 日線 | `MarketDBFetcher`(本地 `market` schema)→ yfinance | 依 `priority` 排序,沒有錨定首選;細節見 `market_data/AGENTS.md` |
 | 即時報價/走勢 | `ShioajiFetcher` → yfinance | **順序寫死在 `get_realtime_quote`,不讀 `priority`**;正本 `docs/realtime-board.md` |
 | 大盤統計(家數/成交額/三大法人) | `TwseFetcher`;家數被拒收時退 `tw_breadth.py` 由本地 DB 自算 | 單位是**億元**;`TwseFetcher` 刻意退出日線路由 |
-| 估值/月營收 | 報價上有就用,缺了才問 `TwseFundamentalAdapter`(官方即時 API) | **不讀本地 DB**。月營收已進個股 prompt(「財報與股利」表一列,單月口徑、標明月份;含月增、累計年增,可為負);民國「資料年月」用 `twse_fetcher._roc_date` 轉(**call-time import**,adapter 頂層 import 會與 `base.py`→adapter、`twse_fetcher`→`.base` 成環,也別另寫第三份解析) |
+| 估值/月營收 | 報價上有就用,缺了才補(台股一律問 `TwseFundamentalAdapter`(官方即時 API),因報價從不帶殖利率) | **不讀本地 DB**。月營收已進個股 prompt(「財報與股利」表一列,單月口徑、標明月份;含月增、累計年增,可為負);民國「資料年月」用 `twse_fetcher._roc_date` 轉(**call-time import**,adapter 頂層 import 會與 `base.py`→adapter、`twse_fetcher`→`.base` 成環,也別另寫第三份解析)。**估值每列帶 `as_of`(端點的民國 `Date`,同一個 `_roc_date`)**:整包最新 `as_of` 落後 `_today()` 超過 10 曆日(`_MAX_SNAPSHOT_AGE_DAYS`,涵蓋春節)或根本沒有可解析日期就**整包拒收**(端點會凍結卻照樣回 200);上市／上櫃各一份快取(`valuation_twse`／`valuation_tpex`),失敗或凍結不進快取、下次重試,TTL 後重抓失敗最多回退舊快取 24h。PE 是交易所的**近四季**口徑(prompt 標「本益比（近四季，<as_of>）」,不是「動態」),殖利率(`dividend_yield`)也併入並在 prompt 標「交易所公告」 |
 | 個股三大法人 | 當日走 `TwInstitutionalFetcher`(網路);歷史趨勢才讀本地 DB | 單位是**股**,不是張。**歷史只有上市;上櫃(`.TWO`)只有當日**,場次不足 2 時 prompt 改印揭露句、不算趨勢;「近 5／20 日累計」只在窗口內每一場都有值時才印(`tw_institutional_trend.py`);本地歷史比「今天之前最後一個交易日」舊就視為停更並明講 |
 
 ## 進來改要遵守

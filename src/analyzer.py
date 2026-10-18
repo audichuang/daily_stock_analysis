@@ -4160,6 +4160,13 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 return quote_value
             fallback = _fund_valuation.get(field)
             return fallback if fallback is not None else 'N/A'
+        # 台股估值（交易所快照）：PE 是近四季口径、各有资料日期，标签明讲，别让模型当成「动态」本益比；
+        # 另附交易所公告殖利率一列（其他市场的列与标签维持原样）。
+        _tw_val = prompt_market == "tw"
+        _val_as_of = str(_fund_valuation.get("valuation_as_of") or "").strip()
+        _val_suffix = f"，{_val_as_of}" if _val_as_of else ""
+        _val_suffix_en = f", {_val_as_of}" if _val_as_of else ""
+        _tw_yield = _fund_valuation.get("dividend_yield") if _tw_val else None
         hide_regular_session_ohlc = _should_hide_regular_session_ohlc(context)
         realtime_overlay_quote = hide_regular_session_ohlc and _today_has_realtime_overlay(today)
         if english:
@@ -4279,6 +4286,18 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         # 添加实时行情数据（量比、换手率等）
         if 'realtime' in context and english:
             rt = context['realtime']
+            if _tw_val:
+                pe_pb_rows_en = (
+                    f"| PE (trailing 4 quarters{_val_suffix_en}) | {V(rt.get('pe_ratio'), 'pe_ratio')} | |\n"
+                    f"| PB ({_val_as_of or 'exchange snapshot'}) | {V(rt.get('pb_ratio'), 'pb_ratio')} | |\n"
+                )
+                if _tw_yield is not None:
+                    pe_pb_rows_en += f"| Dividend Yield (exchange-published) | {_tw_yield}% | |\n"
+            else:
+                pe_pb_rows_en = (
+                    f"| PE (TTM/dynamic) | {rt.get('pe_ratio', 'N/A')} | |\n"
+                    f"| PB | {rt.get('pb_ratio', 'N/A')} | |\n"
+                )
             prompt += f"""
 ### Realtime Quote Details
 | Indicator | Value | Interpretation |
@@ -4286,14 +4305,24 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 | Current Price | {rt.get('price', 'N/A')} | |
 | **Volume Ratio** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
 | **Turnover Rate** | **{rt.get('turnover_rate', 'N/A')}%** | |
-| PE (TTM/dynamic) | {rt.get('pe_ratio', 'N/A')} | |
-| PB | {rt.get('pb_ratio', 'N/A')} | |
-| Total Market Cap | {self._format_amount(rt.get('total_mv'), prompt_market, report_language)} | |
+{pe_pb_rows_en}| Total Market Cap | {self._format_amount(rt.get('total_mv'), prompt_market, report_language)} | |
 | Float Market Cap | {self._format_amount(rt.get('circ_mv'), prompt_market, report_language)} | |
 | 60-Day Change | {rt.get('change_60d', 'N/A')}% | Medium-term performance |
 """
         elif 'realtime' in context:
             rt = context['realtime']
+            if _tw_val:
+                pe_pb_rows_zh = (
+                    f"| {L('本益比', '市盈率')}（近四季{_val_suffix}） | {V(rt.get('pe_ratio'), 'pe_ratio')} | |\n"
+                    f"| {L('股價淨值比', '市净率')}（{_val_as_of or '交易所公告'}） | {V(rt.get('pb_ratio'), 'pb_ratio')} | |\n"
+                )
+                if _tw_yield is not None:
+                    pe_pb_rows_zh += f"| 殖利率（交易所公告） | {_tw_yield}% | |\n"
+            else:
+                pe_pb_rows_zh = (
+                    f"| {L('本益比(動態)', '市盈率(动态)')} | {V(rt.get('pe_ratio'), 'pe_ratio')} | |\n"
+                    f"| {L('股價淨值比', '市净率')} | {V(rt.get('pb_ratio'), 'pb_ratio')} | |\n"
+                )
             prompt += f"""
 ### {L("即時行情增強資料", "实时行情增强数据")}
 | {L("指標", "指标")} | {L("數值", "数值")} | {L("解讀", "解读")} |
@@ -4301,9 +4330,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 | {L("目前價格", "当前价格")} | {rt.get('price', 'N/A')} {ccy} | |
 | **{L("量比", "量比")}** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
 | **{L("週轉率", "换手率")}** | **{rt.get('turnover_rate', 'N/A')}%** | |
-| {L("本益比(動態)", "市盈率(动态)")} | {V(rt.get('pe_ratio'), 'pe_ratio')} | |
-| {L("股價淨值比", "市净率")} | {V(rt.get('pb_ratio'), 'pb_ratio')} | |
-| {L("總市值", "总市值")} | {self._format_amount(rt.get('total_mv'), prompt_market)} | |
+{pe_pb_rows_zh}| {L("總市值", "总市值")} | {self._format_amount(rt.get('total_mv'), prompt_market)} | |
 | {L("流通市值", "流通市值")} | {self._format_amount(rt.get('circ_mv'), prompt_market)} | |
 | {L("60日漲跌幅", "60日涨跌幅")} | {rt.get('change_60d', 'N/A')}% | {L("中期表現", "中期表现")} |
 """

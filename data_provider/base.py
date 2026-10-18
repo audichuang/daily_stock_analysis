@@ -4191,9 +4191,8 @@ class DataFetcherManager:
         # 避免补值绕过 fundamental 8s/3s 预算拖垮整阶段（adapter 内 socket timeout 仅是兜底下界）。
         twse_valuation_used = False
         twse_valuation_ms = 0
-        if market == "tw" and (
-            valuation_payload["pe_ratio"] is None or valuation_payload["pb_ratio"] is None
-        ):
+        # 台股一律问交易所快照：报价从不带殖利率，PE/PB 也几乎总缺；快照有缓存，多问一次无成本。
+        if market == "tw":
             twse_timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
             if twse_timeout > 0:
                 twse_val, _twse_err, twse_valuation_ms = self._run_with_retry(
@@ -4205,10 +4204,14 @@ class DataFetcherManager:
                 twse_val = {}
             if not isinstance(twse_val, dict):
                 twse_val = {}
-            for field in ("pe_ratio", "pb_ratio"):
+            # pe/pb/dividend_yield 都是「缺才补」；用到交易所快照时带上它的资料日期（valuation_as_of），
+            # prompt 才能标明这个 PE 是哪天的「近四季」口径。
+            for field in ("pe_ratio", "pb_ratio", "dividend_yield"):
                 if valuation_payload.get(field) is None and twse_val.get(field) is not None:
                     valuation_payload[field] = twse_val[field]
                     twse_valuation_used = True
+            if twse_valuation_used and twse_val.get("as_of"):
+                valuation_payload["valuation_as_of"] = twse_val["as_of"]
         valuation_status = self._infer_block_status(
             valuation_payload,
             "partial" if (quote_payload is not None or twse_valuation_used) else "not_supported",

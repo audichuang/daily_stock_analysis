@@ -110,6 +110,7 @@ class TestFundamentalContext(unittest.TestCase):
         with patch("src.config.get_config", return_value=cfg), \
                 patch.object(manager, "get_realtime_quote", return_value=quote), \
                 patch.object(manager._twse_fundamental_adapter, "get_growth", return_value=twse_growth), \
+                patch.object(manager._twse_fundamental_adapter, "get_valuation", return_value={}), \
                 patch(
                     "data_provider.yfinance_fundamental_adapter.YfinanceFundamentalAdapter.get_fundamental_bundle",
                     return_value=bundle,
@@ -135,6 +136,53 @@ class TestFundamentalContext(unittest.TestCase):
         data = self._tw_growth_ctx({}, twse)
         self.assertEqual(data.get("monthly_revenue_yoy"), 54.65)
         self.assertNotIn("revenue_yoy", data)
+
+    def _tw_valuation_ctx(self, quote_pe, quote_pb, twse_val, code="2330.TW"):
+        """台股 valuation 合併：報價 + TWSE 估值 adapter（皆 mock，不連網）。"""
+        manager = DataFetcherManager(fetchers=[])
+        cfg = SimpleNamespace(
+            enable_fundamental_pipeline=True,
+            fundamental_cache_ttl_seconds=0,
+            fundamental_stage_timeout_seconds=2.0,
+            fundamental_fetch_timeout_seconds=1.5,
+            fundamental_retry_max=1,
+        )
+        quote = SimpleNamespace(pe_ratio=quote_pe, pb_ratio=quote_pb, total_mv=1e12, circ_mv=1e12,
+                                source=SimpleNamespace(value="yfinance"))
+        bundle = {"status": "partial", "growth": {}, "earnings": {}, "belong_boards": [],
+                  "source_chain": [], "errors": []}
+        with patch("src.config.get_config", return_value=cfg), \
+                patch.object(manager, "get_realtime_quote", return_value=quote), \
+                patch.object(manager._twse_fundamental_adapter, "get_growth", return_value={}), \
+                patch.object(manager._twse_fundamental_adapter, "get_valuation", return_value=twse_val), \
+                patch(
+                    "data_provider.yfinance_fundamental_adapter.YfinanceFundamentalAdapter.get_fundamental_bundle",
+                    return_value=bundle,
+                ):
+            ctx = manager.get_fundamental_context(code)
+        self.assertEqual(ctx["market"], "tw")
+        return ctx["valuation"].get("data") or {}
+
+    def test_tw_valuation_merges_dividend_yield_and_as_of(self) -> None:
+        twse = {"pe_ratio": 31.46, "pb_ratio": 10.3, "dividend_yield": 0.94, "as_of": "2026-10-16"}
+        data = self._tw_valuation_ctx(None, None, twse)
+        self.assertEqual(data.get("pe_ratio"), 31.46)
+        self.assertEqual(data.get("pb_ratio"), 10.3)
+        self.assertEqual(data.get("dividend_yield"), 0.94)
+        self.assertEqual(data.get("valuation_as_of"), "2026-10-16")
+
+    def test_tw_valuation_dividend_yield_fills_only_when_missing(self) -> None:
+        # 報價已有 PE/PB：保留報價值，只補殖利率（報價沒有）。
+        twse = {"pe_ratio": 31.46, "pb_ratio": 10.3, "dividend_yield": 0.94, "as_of": "2026-10-16"}
+        data = self._tw_valuation_ctx(20.0, 5.0, twse)
+        self.assertEqual((data.get("pe_ratio"), data.get("pb_ratio")), (20.0, 5.0))
+        self.assertEqual(data.get("dividend_yield"), 0.94)
+
+    def test_tw_valuation_without_exchange_data_has_no_as_of_or_yield(self) -> None:
+        data = self._tw_valuation_ctx(20.0, 5.0, {})  # 快照凍結／失敗 -> adapter 回 {}
+        self.assertEqual((data.get("pe_ratio"), data.get("pb_ratio")), (20.0, 5.0))
+        self.assertNotIn("valuation_as_of", data)
+        self.assertNotIn("dividend_yield", data)
 
     def test_offshore_market_populates_blocks_when_adapter_has_data(self) -> None:
         """US/HK fundamental context surfaces yfinance bundle into growth/earnings/belong_boards."""
