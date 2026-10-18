@@ -87,6 +87,69 @@ def revenue_scope_note(include_otc_revenue: bool) -> str:
     return "月營收只用上市(sii)口徑（上櫃營收即使入庫也預設排除）——上櫃股的 yoy 為 null 會被篩掉"
 
 
+# 估值只取 as_of 以前這個窗口內最近一天（曆日）。窗口夠涵蓋連假，又短到不會拿很舊的值當今天的
+VALUATION_WINDOW_DAYS = 7
+# 篩選用的「近 5 日」統計窗口（inst_5、margin_chg5 的場次數）
+STAT_SESSIONS = 5
+
+# 三大法人、融資、估值三張表只收上市（上櫃無本地個股歷史）。momentum 的「近 5 日法人淨買超」
+# 對上櫃個股是 NaN，`inst_5 > 0` 因此把上櫃全數靜默剔除；融資減標籤對上櫃永不觸發。
+LISTED_ONLY_NOTE = ("三大法人、融資、估值只涵蓋上市（上櫃無本地資料）；"
+                    "momentum 的法人篩選（近 5 日法人淨買超）等同排除上櫃")
+
+
+def _num(v, spec: str, suffix: str = "") -> str:
+    """數值轉字串，NaN／None 印「—」，0 照印（0 是真實資料，不能和缺值混在一起）。"""
+    return f"{v:{spec}}{suffix}" if pd.notna(v) else "—"
+
+
+def data_freshness(px, inst, mgn, val) -> dict:
+    """三張表各自的實際最新資料日，以及近 5 日統計實際涵蓋幾個場次。
+
+    18:00 時 T86（法人）與融資常常還停在前一天，`inst_5`／`margin_chg5` 其實只涵蓋 4 個場次
+    卻標「5 日」；呼叫端比對 as_of 決定要不要揭露。
+    場次數的算法與 `build()` 的統計窗口一致：法人是窗口內**有資料的日數**（inst_5 就是加這些日），
+    融資是 margin_ago 基準日之後到最新融資日之間的**價量場次**（margin_chg5 是兩端餘額相比）。
+    """
+    dates = sorted(px["date"].unique())
+    out = {"inst_last": None, "inst_sessions": 0, "margin_last": None, "margin_sessions": 0,
+           "val_date": None}
+    if len(inst):
+        out["inst_last"] = pd.Timestamp(inst["date"].max())
+        if len(dates) >= STAT_SESSIONS:
+            out["inst_sessions"] = int(
+                inst.loc[inst["date"] >= dates[-STAT_SESSIONS], "date"].nunique())
+    if len(mgn):
+        out["margin_last"] = pd.Timestamp(mgn["date"].max())
+        if len(dates) > STAT_SESSIONS:
+            base = dates[-(STAT_SESSIONS + 1)]
+            out["margin_sessions"] = sum(1 for d in dates if base < d <= out["margin_last"])
+    if len(val) and "date" in val.columns and val["date"].notna().any():
+        out["val_date"] = pd.Timestamp(val["date"].max())
+    return out
+
+
+def freshness_notes(as_of, fresh: dict | None) -> list:
+    """只在資料日與基準日不同時才出聲；同日不印，避免每份報告都帶一排無資訊的落後標註。"""
+    if not fresh:
+        return []
+    notes = []
+    for label, key, n_key in (("法人", "inst_last", "inst_sessions"),
+                              ("融資", "margin_last", "margin_sessions")):
+        last = fresh.get(key)
+        if last is None:
+            notes.append(f"{label}無資料")
+        elif last != as_of:
+            notes.append(f"{label}最新到 {last:%Y-%m-%d}（基準日 {as_of:%Y-%m-%d}），"
+                         f"{STAT_SESSIONS} 日統計實際涵蓋 {fresh.get(n_key, 0)} 個場次")
+    vd = fresh.get("val_date")
+    if vd is None:
+        notes.append(f"估值：基準日前 {VALUATION_WINDOW_DAYS} 日內無資料，PE／PB／殖利率全為「—」")
+    elif vd != as_of:
+        notes.append(f"估值取 {vd:%Y-%m-%d}（基準日 {as_of:%Y-%m-%d} 當日尚無，取前一個有資料的交易日）")
+    return notes
+
+
 def compute_factors(g: pd.DataFrame) -> dict:
     """單一標的的因子計算。g 需含 date/open/high/low/close/volume/turnover，且已按 date 升序。
 
@@ -184,9 +247,17 @@ def load(engine, as_of: pd.Timestamp | None, include_otc_revenue: bool = False):
         mgn = pd.read_sql(text(
             "select stock_id, date, margin_balance from market.margin where date between :s and :e"
         ), c, params={"s": (as_of - pd.Timedelta(days=20)).date(), "e": as_of.date()}, parse_dates=["date"])
+        # 估值取 as_of 以前 7 曆日內「最近一天」整包：18:00 當日的 BWIBBU 通常還沒入庫，
+        # 原本 `date = as_of` 查到 0 列、PE／PB／殖利率整欄 NaN（高息／低估值標籤永不觸發）。
+        # 在 Python 取最新日而不用子查詢，才能用假 read_sql 驗窗口與挑日。
         val = pd.read_sql(text(
-            "select stock_id, pe_ratio, pb_ratio, dividend_yield from market.valuation where date = :d"
-        ), c, params={"d": as_of.date()})
+            "select stock_id, date, pe_ratio, pb_ratio, dividend_yield from market.valuation "
+            "where date <= :d and date > :lo"
+        ), c, params={"d": as_of.date(),
+                      "lo": (as_of - pd.Timedelta(days=VALUATION_WINDOW_DAYS)).date()},
+            parse_dates=["date"])
+        if len(val):
+            val = val[val["date"] == val["date"].max()]
         # 用 announce_date 設上界:營收在次月才公布,以 revenue_month 篩會提前看到未發布的數字
         rev = pd.read_sql(text(
             "select stock_id, revenue_month, yoy, mom from market.monthly_revenue "
@@ -247,7 +318,7 @@ def build(as_of, px, inst, mgn, val, rev, info, idx, min_turnover):
     df = df.merge(now.reset_index(), on="stock_id", how="left").merge(ago.reset_index(), on="stock_id", how="left")
     df["margin_chg5"] = df["margin_now"].astype(float) / df["margin_ago"].astype(float).replace(0, np.nan) - 1
 
-    df = df.merge(val, on="stock_id", how="left")
+    df = df.merge(val[["stock_id", "pe_ratio", "pb_ratio", "dividend_yield"]], on="stock_id", how="left")
     last_rev = rev.sort_values("revenue_month").groupby("stock_id").last()[["revenue_month", "yoy", "mom"]]
     df = df.merge(last_rev.reset_index(), on="stock_id", how="left")
     df = df.merge(info[["stock_id", "industry"]], on="stock_id", how="left")
@@ -352,7 +423,8 @@ def _pe_score(pe: pd.Series) -> pd.Series:
     return 1 - usable.fillna(usable.median()).rank(pct=True)
 
 
-def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover, include_otc_revenue=False):
+def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover, include_otc_revenue=False,
+           freshness=None):
     L = []
     w = L.append
     w(f"# 台股量化篩選 — {as_of:%Y-%m-%d}（收盤後）\n")
@@ -364,7 +436,14 @@ def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover, include_ot
         last = idx.iloc[-1]
         w(f"- 加權指數：**{last['close']:,.2f}**（{last['change']:+,.2f}，{market_d1 * 100:+.2f}%）")
     w(f"- 估值表覆蓋 {int(df['pe_ratio'].notna().sum())} 檔、月營收覆蓋 {int(df['yoy'].notna().sum())} 檔"
-      f"（{revenue_scope_note(include_otc_revenue)}）\n")
+      f"（{revenue_scope_note(include_otc_revenue)}）")
+    vd = (freshness or {}).get("val_date")
+    if vd is not None:
+        w(f"- 估值日：**{vd:%Y-%m-%d}**")
+    w(f"- 範圍：{LISTED_ONLY_NOTE}")
+    for n in freshness_notes(as_of, freshness):
+        w(f"- ⚠ {n}")
+    w("")
 
     ind = df[~df["is_etf"]]
     w("## 1. 市場體檢\n")
@@ -397,19 +476,19 @@ def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover, include_ot
           f"{vol_ratio5} | "
           f"{r['d1'] * 100:+.1f} | {r['d5'] * 100:+.1f} | {r['d20'] * 100:+.1f} | "
           f"{r['bias20'] * 100:+.1f}% | {r['rsi14']:.0f} | {r['turnover20'] / 1e8:.1f}億 | "
-          f"{r['inst_5'] / 1000:+,.0f}張 | {r['inst_streak']:.0f}天 | "
+          f"{_num(r['inst_5'] / 1000, '+,.0f', '張')} | {_num(r['inst_streak'], '.0f', '天')} | "
           f"{r['pe_ratio'] if pd.notna(r['pe_ratio']) else '—'} | {r['pb_ratio'] if pd.notna(r['pb_ratio']) else '—'} | "
           f"{r['dividend_yield'] if pd.notna(r['dividend_yield']) else '—'} | "
           f"{yoy} | {' '.join(tag(r, market_d1)) or '—'} |")
     w("")
 
     w("## 4. 參考價位（以基準日收盤計算，**未計入隔夜盤**）\n")
-    w("| 代碼 | 名稱 | 收盤 | MA5 | MA10 | MA20 | ATR% | 20日高 | 停損參考(MA20-1%) |")
+    w("| 代碼 | 名稱 | 收盤 | MA5 | MA10 | MA20 | ATR% | 60日高 | 停損參考(MA20-1%) |")
     w("|---|---|--:|--:|--:|--:|--:|--:|--:|")
     for _, r in pool.head(top).iterrows():
-        hi20 = r["close"] / (1 + r["from_hi60"]) if r["from_hi60"] else r["close"]
+        hi60 = r["close"] / (1 + r["from_hi60"]) if r["from_hi60"] else r["close"]
         w(f"| {r['stock_id']} | {r['name']} | {r['close']:.2f} | {r['ma5']:.2f} | {r['ma10']:.2f} | "
-          f"{r['ma20']:.2f} | {r['atr_pct'] * 100:.1f}% | {hi20:.2f} | {r['ma20'] * 0.99:.2f} |")
+          f"{r['ma20']:.2f} | {r['atr_pct'] * 100:.1f}% | {hi60:.2f} | {r['ma20'] * 0.99:.2f} |")
     w("")
 
     w("## 5. 待查清單（DB 看不到，agent 接手）\n")
@@ -447,7 +526,8 @@ def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover, include_ot
     return "\n".join(L)
 
 
-def to_json(as_of, pool, steps, market_d1, strategy, top, include_otc_revenue=False):
+def to_json(as_of, pool, steps, market_d1, strategy, top, include_otc_revenue=False,
+            freshness=None):
     """給 agent 消費的候選資料。markdown 是給人讀的,agent 要的是可程式化的欄位 +
     「為什麼入選」——後者決定它該去查什麼,不然它只能重新猜一遍篩選邏輯。"""
     cols = ["stock_id", "name", "industry", "close", "break_pct", "vol_ratio5", "d1", "d5",
@@ -503,7 +583,9 @@ def to_json(as_of, pool, steps, market_d1, strategy, top, include_otc_revenue=Fa
         "blind_spots": [
             "資料截止基準日 13:30 收盤，未含隔夜美股／台指期夜盤",
             revenue_scope_note(include_otc_revenue),
+            LISTED_ONLY_NOTE,
             "產業別僅上市有值",
+            *freshness_notes(as_of, freshness),
         ],
     }
 
@@ -526,8 +608,9 @@ def main(argv=None):
     as_of, px, inst, mgn, val, rev, info, idx = load(engine, a.date, a.include_otc_revenue)
     df, market_d1 = build(as_of, px, inst, mgn, val, rev, info, idx, a.min_turnover * 1e8)
     pool, steps = funnel(df, a.min_turnover * 1e8, a.strategy)
+    fresh = data_freshness(px, inst, mgn, val)
     md = render(as_of, df, pool, steps, market_d1, idx, a.top, a.min_turnover,
-                a.include_otc_revenue)
+                a.include_otc_revenue, fresh)
 
     out = Path(a.out) if a.out else REPO / ".claude" / "reviews" / f"screen-tw-{as_of:%Y%m%d}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -536,7 +619,7 @@ def main(argv=None):
         jp = Path(a.json)
         jp.parent.mkdir(parents=True, exist_ok=True)
         jp.write_text(json.dumps(to_json(as_of, pool, steps, market_d1, a.strategy, a.top,
-                                         a.include_otc_revenue),
+                                         a.include_otc_revenue, fresh),
                                  ensure_ascii=False, indent=1, default=float), encoding="utf-8")
         print(f"[screen_tw] JSON 已寫入 {jp}", file=sys.stderr)
     print(md)
