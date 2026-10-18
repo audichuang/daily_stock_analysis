@@ -77,3 +77,49 @@ def test_indexers_tolerate_non_list():
     assert _index_twse_rows(None) == {}
     assert _index_tpex_rows({"not": "a list"}) == {}
     assert _index_revenue_rows(None) == {}
+
+
+# ---- T12：月增／累計年增／民國月份轉換 ----
+
+_REV_ROW = {
+    "公司代號": "2330", "資料年月": "11509",
+    "營業收入-當月營收": "335000000", "營業收入-去年當月營收": "216600000",
+    "營業收入-上月比較增減(%)": "-0.57", "累計營業收入-前期比較增減(%)": "41.11",
+}
+
+
+def test_index_revenue_rows_keeps_negative_mom_and_cumulative_yoy():
+    out = _index_revenue_rows([_REV_ROW])["2330"]
+    assert out["monthly_revenue_mom"] == -0.57  # 負數不能被 _pos_float 吞成 None
+    assert out["cumulative_revenue_yoy"] == 41.11
+    assert out["revenue_month"] == "11509"
+    assert out["revenue_month_iso"] == "2026-09"
+
+
+def test_index_revenue_rows_missing_pct_columns_are_none():
+    row = {k: v for k, v in _REV_ROW.items() if "比較增減" not in k}
+    out = _index_revenue_rows([row, {**_REV_ROW, "公司代號": "2317",
+                                       "營業收入-上月比較增減(%)": "-", "累計營業收入-前期比較增減(%)": ""}])
+    assert out["2330"]["monthly_revenue_mom"] is None and out["2330"]["cumulative_revenue_yoy"] is None
+    assert out["2317"]["monthly_revenue_mom"] is None and out["2317"]["cumulative_revenue_yoy"] is None
+
+
+def test_revenue_month_iso_unparseable_is_none():
+    for bad in (None, "", "abc", "11513", "1159"):
+        row = {**_REV_ROW, "資料年月": bad if bad is not None else ""}
+        assert _index_revenue_rows([row])["2330"]["revenue_month_iso"] is None, bad
+
+
+def test_adapter_module_does_not_import_twse_fetcher_at_top_level():
+    # twse_fetcher -> .base -> (頂層) twse_fundamental_adapter：頂層 import 會成環，必須 call-time import。
+    import ast
+    import data_provider.twse_fundamental_adapter as mod
+
+    with open(mod.__file__, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            assert "twse_fetcher" not in (node.module or "")
+            assert all(a.name != "twse_fetcher" for a in node.names)
+        elif isinstance(node, ast.Import):
+            assert all("twse_fetcher" not in a.name for a in node.names)

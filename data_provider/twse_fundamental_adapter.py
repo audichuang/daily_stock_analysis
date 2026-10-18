@@ -56,6 +56,33 @@ def _pos_float(value: Any) -> Optional[float]:
     return f if f > 0 else None
 
 
+def _signed_float(value: Any) -> Optional[float]:
+    """解析「允许负数」的百分比字段（月增／累计年增可为负）；缺失／非数字返回 None。
+    不能用 _pos_float：它把 ≤0 一律当缺失，会把负成长静默吞成 None。"""
+    if value is None:
+        return None
+    text = str(value).replace(",", "").strip()
+    if not text or text in ("-", "--", "N/A", "n/a"):
+        return None
+    try:
+        return round(float(text), 2)
+    except (ValueError, TypeError):
+        return None
+
+
+def _revenue_month_iso(revenue_month: Optional[str]) -> Optional[str]:
+    """民国「資料年月」'11509' -> '2026-09'；无法解析返回 None。
+
+    call-time import：base.py 顶层 import 本模块、twse_fetcher 又 import .base，顶层 import 会成环；
+    复用 twse_fetcher._roc_date，不自写第三份民国日期解析。"""
+    if not revenue_month:
+        return None
+    from data_provider.twse_fetcher import _roc_date
+
+    parsed = _roc_date(f"{revenue_month}01")
+    return parsed.strftime("%Y-%m") if parsed else None
+
+
 def _bare_code(stock_code: str) -> str:
     """'2330.TW' / '6488.TWO' / '2330' -> '2330'（去后缀、大写）。"""
     code = str(stock_code or "").strip().upper()
@@ -102,7 +129,8 @@ def _index_tpex_rows(rows: Any) -> Dict[str, Dict[str, Optional[float]]]:
 
 
 def _index_revenue_rows(rows: Any) -> Dict[str, Dict[str, Optional[float]]]:
-    """月营收（上市/上柜字段名相同）→ {monthly_revenue_yoy, monthly_revenue(元), revenue_month}。
+    """月营收（上市/上柜字段名相同）→ {monthly_revenue_yoy, monthly_revenue(元), revenue_month,
+    revenue_month_iso, monthly_revenue_mom, cumulative_revenue_yoy}。
     用 distinct 字段名（monthly_*）以与 yfinance 的年度 revenue_yoy 区分——月营收是台股最受重视的即时指标。"""
     out: Dict[str, Dict[str, Optional[float]]] = {}
     if not isinstance(rows, list):
@@ -116,10 +144,15 @@ def _index_revenue_rows(rows: Any) -> Dict[str, Dict[str, Optional[float]]]:
         cur = _pos_float(row.get("營業收入-當月營收"))      # 单位：千元
         prev = _pos_float(row.get("營業收入-去年當月營收"))
         yoy = round((cur - prev) / prev * 100, 2) if (cur is not None and prev) else None
+        revenue_month = str(row.get("資料年月") or "").strip() or None
         out[code] = {
             "monthly_revenue_yoy": yoy,
             "monthly_revenue": cur * 1000 if cur is not None else None,  # 千元 -> 元，对齐 yfinance 绝对币别
-            "revenue_month": str(row.get("資料年月") or "").strip() or None,
+            "revenue_month": revenue_month,
+            "revenue_month_iso": _revenue_month_iso(revenue_month),
+            # 月增／累计年增官方已算好（%），可为负，故用 _signed_float。
+            "monthly_revenue_mom": _signed_float(row.get("營業收入-上月比較增減(%)")),
+            "cumulative_revenue_yoy": _signed_float(row.get("累計營業收入-前期比較增減(%)")),
         }
     return out
 
@@ -139,7 +172,7 @@ class TwseFundamentalAdapter:
         return self._lookup(stock_code, "valuation", self._build_valuation_index, "估值")
 
     def get_growth(self, stock_code: str) -> Dict[str, Optional[float]]:
-        """返回 {monthly_revenue_yoy, monthly_revenue, revenue_month}；无数据或失败返回 {}。"""
+        """返回 {monthly_revenue_yoy, monthly_revenue, revenue_month, revenue_month_iso, monthly_revenue_mom, cumulative_revenue_yoy}；无数据或失败返回 {}。"""
         return self._lookup(stock_code, "revenue", self._build_revenue_index, "营收")
 
     def _lookup(self, stock_code, name, build, label) -> Dict[str, Optional[float]]:

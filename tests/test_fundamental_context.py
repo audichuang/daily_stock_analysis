@@ -93,6 +93,49 @@ class TestFundamentalContext(unittest.TestCase):
         self.assertEqual(ctx["coverage"].get("boards"), "not_supported")
         self.assertEqual(ctx.get("belong_boards"), [])
 
+    def _tw_growth_ctx(self, yf_growth, twse_growth):
+        """台股 growth 合併：yfinance bundle + TWSE 月營收 adapter（皆 mock，不連網）。"""
+        manager = DataFetcherManager(fetchers=[])
+        cfg = SimpleNamespace(
+            enable_fundamental_pipeline=True,
+            fundamental_cache_ttl_seconds=0,
+            fundamental_stage_timeout_seconds=2.0,
+            fundamental_fetch_timeout_seconds=1.5,
+            fundamental_retry_max=1,
+        )
+        quote = SimpleNamespace(pe_ratio=20.0, pb_ratio=5.0, total_mv=1e12, circ_mv=1e12,
+                                source=SimpleNamespace(value="yfinance"))
+        bundle = {"status": "partial", "growth": yf_growth, "earnings": {}, "belong_boards": [],
+                  "source_chain": [], "errors": []}
+        with patch("src.config.get_config", return_value=cfg), \
+                patch.object(manager, "get_realtime_quote", return_value=quote), \
+                patch.object(manager._twse_fundamental_adapter, "get_growth", return_value=twse_growth), \
+                patch(
+                    "data_provider.yfinance_fundamental_adapter.YfinanceFundamentalAdapter.get_fundamental_bundle",
+                    return_value=bundle,
+                ):
+            ctx = manager.get_fundamental_context("2330.TW")
+        self.assertEqual(ctx["market"], "tw")
+        return ctx["growth"].get("data") or {}
+
+    def test_tw_growth_merges_monthly_revenue_fields_without_touching_revenue_yoy(self) -> None:
+        twse = {
+            "monthly_revenue": 335e9, "monthly_revenue_yoy": 54.65, "monthly_revenue_mom": -0.57,
+            "cumulative_revenue_yoy": 41.11, "revenue_month": "11509", "revenue_month_iso": "2026-09",
+        }
+        data = self._tw_growth_ctx({"revenue_yoy": 12.3}, twse)
+        self.assertEqual(data.get("monthly_revenue_mom"), -0.57)  # 負值不得被丟
+        self.assertEqual(data.get("cumulative_revenue_yoy"), 41.11)
+        self.assertEqual(data.get("revenue_month_iso"), "2026-09")
+        self.assertEqual(data.get("monthly_revenue_yoy"), 54.65)
+        self.assertEqual(data.get("revenue_yoy"), 12.3)  # 月 YoY 不得覆寫年度 revenue_yoy
+
+    def test_tw_growth_does_not_backfill_revenue_yoy_when_yfinance_lacks_it(self) -> None:
+        twse = {"monthly_revenue": 335e9, "monthly_revenue_yoy": 54.65, "revenue_month": "11509"}
+        data = self._tw_growth_ctx({}, twse)
+        self.assertEqual(data.get("monthly_revenue_yoy"), 54.65)
+        self.assertNotIn("revenue_yoy", data)
+
     def test_offshore_market_populates_blocks_when_adapter_has_data(self) -> None:
         """US/HK fundamental context surfaces yfinance bundle into growth/earnings/belong_boards."""
         manager = DataFetcherManager(fetchers=[])

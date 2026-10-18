@@ -4302,7 +4302,7 @@ class DataFetcherManager:
             )
 
         # 台股(.TW/.TWO)：一律附上 TWSE/TPEx 免金钥月营收（monthly_revenue / monthly_revenue_yoy /
-        # revenue_month）——月营收是台股最受重视的即时基本面指标，即使 yfinance 已有年度成长也值得并列。
+        # revenue_month / revenue_month_iso / monthly_revenue_mom / cumulative_revenue_yoy）——月营收是台股最受重视的即时基本面指标，即使 yfinance 已有年度成长也值得并列。
         # 月营收 YoY 不回填通用的 revenue_yoy（理由见下方并入处）。走 _run_with_retry 受 stage 预算约束、fail-open。
         growth_chain = bundle_chain
         if market == "tw":
@@ -4319,11 +4319,18 @@ class DataFetcherManager:
             if not isinstance(twse_growth, dict):
                 twse_growth = {}
             twse_growth_used = False
-            # 仅在有「实际月营收数字」时并入月营收三栏（distinct 字段，与 yfinance 年度 revenue_yoy 区分）。
+            # 仅在有「实际月营收数字」时并入月营收各栏（distinct 字段，与 yfinance 年度 revenue_yoy 区分）。
             # 不回填通用 revenue_yoy：月 YoY 与年度成长口径不同，回填会被下游「营收同比」标签误读为年增。
             # 也避免「只剩 revenue_month 月份字串、无任何数值」被 _has_meaningful_payload 误判为 ok。
             if twse_growth.get("monthly_revenue") is not None:
-                for field in ("monthly_revenue", "monthly_revenue_yoy", "revenue_month"):
+                for field in (
+                    "monthly_revenue",
+                    "monthly_revenue_yoy",
+                    "monthly_revenue_mom",
+                    "cumulative_revenue_yoy",
+                    "revenue_month",
+                    "revenue_month_iso",
+                ):
                     if twse_growth.get(field) is not None:
                         growth_payload[field] = twse_growth[field]
                 twse_growth_used = True

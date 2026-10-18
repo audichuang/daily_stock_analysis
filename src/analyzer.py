@@ -4330,6 +4330,40 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             if isinstance(earnings_data, dict)
             else {}
         )
+        # 台股最新月营收（TWSE/TPEx 官方；单月口径，非年度）。仅台股且有月营收数字时加一列，fail-open。
+        monthly_revenue_row_en = ""
+        monthly_revenue_row_zh = ""
+        if prompt_market == "tw":
+            try:
+                _growth_block = (
+                    fundamental_context.get("growth", {}) if isinstance(fundamental_context, dict) else {}
+                )
+                _growth_data = _growth_block.get("data", {}) if isinstance(_growth_block, dict) else {}
+                _mr = _growth_data.get("monthly_revenue") if isinstance(_growth_data, dict) else None
+                _mr = float(_mr) if _mr is not None else None
+            except (TypeError, ValueError):
+                _mr = None
+            if _mr is not None:
+                def _pct_signed(value: Any) -> str:
+                    try:
+                        return f"{float(value):+.2f}%"
+                    except (TypeError, ValueError):
+                        return "N/A"
+
+                _mr_month = _growth_data.get("revenue_month_iso") or _growth_data.get("revenue_month") or "N/A"
+                _mr_amount = self._format_amount(_mr, prompt_market, report_language)
+                _mr_yoy = _pct_signed(_growth_data.get("monthly_revenue_yoy"))
+                _mr_mom = _pct_signed(_growth_data.get("monthly_revenue_mom"))
+                _mr_cum = _pct_signed(_growth_data.get("cumulative_revenue_yoy"))
+                monthly_revenue_row_en = (
+                    f"| Monthly Revenue ({_mr_month}, single month, not annual) | {_mr_amount} | "
+                    f"YoY {_mr_yoy}, MoM {_mr_mom}, cumulative YoY {_mr_cum} |\n"
+                )
+                monthly_revenue_row_zh = (
+                    f"| {L('月營收', '月营收')}（{_mr_month}，{L('單月，非年度', '单月，非年度')}） | {_mr_amount} | "
+                    f"{L('年增', '年增')} {_mr_yoy}、{L('月增', '月增')} {_mr_mom}、"
+                    f"{L('累計年增', '累计年增')} {_mr_cum} |\n"
+                )
         if isinstance(financial_report, dict) or isinstance(dividend_metrics, dict):
             financial_report = financial_report if isinstance(financial_report, dict) else {}
             dividend_metrics = dividend_metrics if isinstance(dividend_metrics, dict) else {}
@@ -4344,7 +4378,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 |------|------|------|
 | Latest Report Period | {report_date} | From structured financial report fields |
 | Revenue | {financial_report.get('revenue', 'N/A')} | |
-| Net Profit Attributable to Parent | {financial_report.get('net_profit_parent', 'N/A')} | |
+{monthly_revenue_row_en}| Net Profit Attributable to Parent | {financial_report.get('net_profit_parent', 'N/A')} | |
 | Operating Cash Flow | {financial_report.get('operating_cash_flow', 'N/A')} | |
 | ROE | {financial_report.get('roe', 'N/A')} | |
 | TTM Cash Dividend per Share | {ttm_cash} | Cash dividends only, pre-tax |
@@ -4360,7 +4394,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 |------|------|------|
 | {L("最近報告期", "最近报告期")} | {report_date} | {L("來自結構化財報欄位", "来自结构化财报字段")} |
 | {L("營業收入", "营业收入")} | {financial_report.get('revenue', 'N/A')} | |
-| {L("歸母淨利", "归母净利润")} | {financial_report.get('net_profit_parent', 'N/A')} | |
+{monthly_revenue_row_zh}| {L("歸母淨利", "归母净利润")} | {financial_report.get('net_profit_parent', 'N/A')} | |
 | {L("營運現金流", "经营现金流")} | {financial_report.get('operating_cash_flow', 'N/A')} | |
 | ROE | {financial_report.get('roe', 'N/A')} | |
 | {L("近12個月每股現金股利", "近12个月每股现金分红")} | {ttm_cash} | {L("僅現金股利、稅前口徑", "仅现金分红、税前口径")} |
