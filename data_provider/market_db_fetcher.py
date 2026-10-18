@@ -47,7 +47,9 @@ class MarketDBFetcher(BaseFetcher):
         try:
             # 除權息日的 pct_chg 必須是還原後報酬（價格斷崖不是真實跌幅）；
             # 沒有因子的日期乘 1，行為與未還原完全一致。見 market_repo.to_daily_frame。
-            factors = market_repo.adjustment_multipliers(_stock_id(stock_code))
+            # sessions：颱風休市日公告的事件要移到下一個交易日，否則那天的 pct_chg 是假跌幅。
+            factors = market_repo.adjustment_multipliers(
+                _stock_id(stock_code), sessions=pd.to_datetime(df["date"]))
         except Exception as e:  # 因子查詢失敗視同 DB 不可用 -> 讓鏈 fallback
             raise DataSourceUnavailableError(f"market DB unavailable: {e}") from e
         return market_repo.to_daily_frame(df, event_factors=factors)

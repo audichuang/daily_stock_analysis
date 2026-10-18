@@ -148,6 +148,16 @@ def test_panel_ignores_unknown_stock_and_offcalendar_date():
     assert (fac == 1.0).all().all()
 
 
+def test_panel_applies_closed_day_event_on_next_session():
+    """颱風休市日公告的事件（週五休市）作用在下一個交易日（週一）：週一還原後不留假跌幅。"""
+    sessions = pd.DatetimeIndex(["2026-07-08", "2026-07-09", "2026-07-13", "2026-07-14"])
+    fac = factors_to_panel(_adj([("1234", pd.Timestamp("2026-07-10"), 0.9)]), sessions, COLS)
+    assert fac.loc["2026-07-09", "1234"] == pytest.approx(0.9)
+    assert fac.loc["2026-07-13", "1234"] == pytest.approx(1.0)
+    raw = pd.Series([100.0, 100.0, 90.0, 90.0], index=sessions)
+    assert (raw * fac["1234"]).pct_change().abs().max() == pytest.approx(0.0, abs=1e-9)
+
+
 @pytest.mark.parametrize("factor,expected,is_split", [
     # 以下 factor 一律是 open/prev_close（實測值），不是 close/prev_close
     (0.10000, 0.10, True),    # 6763 實測 491→開49.10，精確 1/10

@@ -428,25 +428,73 @@ def rebuild(engine=None, start="2013-01-01", with_reductions=True):
             "by_kind": final.groupby("kind").size().to_dict()}
 
 
+def snap_events_to_sessions(events, sessions):
+    """把復權事件日對齊到交易日曆（**唯一實作**；所有讀取端都經由這裡）。
+
+    颱風等臨時休市日公告的除權息，事件日落在沒有開市的日子：``price_adjustment`` 照實記
+    那個日期，但價格斷崖發生在**下一個交易日**。不搬移的話，因子跳過、斷崖被當成真實跌幅
+    （2891 在 2026-07-13 由 69.90→66.50 被當成 -4.9%，官方因子 0.9641）。
+
+    規則（events 為長格式 ``date, factor``，可帶 ``stock_id``、``source``）：
+    - 日期在 ``sessions`` 內：不動
+    - ``sessions[0] < 日期 ≤ sessions[-1]`` 但不在 sessions：移到下一個交易日，原日期記在 ``snapped_from``
+    - 早於第一個交易日、或晚於最後一個交易日：丟棄（面板看不到，也不該影響它）
+    - 搬移後同 (stock_id, date) 若有任一**非** ``inferred_price`` 列，丟掉 ``inferred_price`` 列：
+      官方公告搬過來後，價格回推在同一個斷崖上也會抓到一筆，兩筆都乘會還原兩次
+      （實例：5519、3489 共 14 筆）。沒撞日的 inferred 照舊保留。
+    純函數、向量化（不逐列迭代）；同日多筆的相乘留給呼叫端（``factors_to_panel`` / ``groupby.prod``）。
+    """
+    ev = events.reset_index(drop=True)
+    ev["snapped_from"] = pd.Series(pd.NaT, index=ev.index, dtype="datetime64[ns]")
+    sess = pd.DatetimeIndex(sessions).normalize().unique().sort_values()
+    if ev.empty or len(sess) == 0:
+        return ev.iloc[0:0]
+    ev["date"] = pd.to_datetime(ev["date"]).dt.normalize()
+    keep = (ev["date"] >= sess[0]) & (ev["date"] <= sess[-1])
+    ev = ev[keep].copy()
+    if ev.empty:
+        return ev
+    pos = sess.searchsorted(ev["date"].to_numpy())
+    snapped = sess[pos]
+    moved = snapped != pd.DatetimeIndex(ev["date"])
+    ev.loc[moved, "snapped_from"] = ev.loc[moved, "date"]
+    ev["date"] = snapped
+    if "source" in ev.columns:
+        keys = [c for c in ("stock_id", "date") if c in ev.columns]
+        official = ev["source"] != "inferred_price"
+        has_official = official.groupby([ev[k] for k in keys]).transform("any")
+        ev = ev[official | ~has_official]
+    return ev
+
+
 def factors_to_panel(adj, index, columns):
-    """把 (stock_id, date, factor) 長格式攤成可直接乘上價格的前復權面板。
+    """把 (stock_id, date, factor[, source]) 長格式攤成可直接乘上價格的前復權面板。
 
     adj[t] = Π factor[s] for s > t —— 事件日之前的價格下修，最新價維持原值。
-    純函數（不碰 DB），見 tests/test_price_adjustment.py。
+    事件日先經 ``snap_events_to_sessions``（休市日的事件移到下一個交易日、區間外的丟棄、
+    與官方撞日的 inferred 丟棄）；同日多事件相乘。純函數（不碰 DB），見 tests/test_price_adjustment.py。
     """
     fac = pd.DataFrame(1.0, index=index, columns=columns)
     adj = adj[adj["stock_id"].isin(set(columns))]
-    for _, r in adj.iterrows():
-        d = pd.Timestamp(r["date"])
-        if d in fac.index:  # 同日多事件相乘；事件日不在交易日曆上時跳過
-            fac.at[d, r["stock_id"]] *= float(r["factor"])
+    snapped = snap_events_to_sessions(adj, index)
+    if len(snapped):
+        daily = (snapped.assign(factor=pd.to_numeric(snapped["factor"], errors="coerce"))
+                 .groupby(["date", "stock_id"])["factor"].prod().unstack())
+        fac = fac * daily.reindex(index=fac.index.normalize(), columns=fac.columns).fillna(1.0).to_numpy()
     return fac[::-1].cumprod()[::-1] / fac
 
 
-def load_factors(engine, index, columns):
-    """讀 price_adjustment 並回傳前復權面板（index=date, columns=stock_id）。"""
+def load_factors(engine, index, columns, start=None):
+    """讀 price_adjustment 並回傳前復權面板（index=date, columns=stock_id）。
+
+    ``start``：只讀 ``date >= start`` 的事件（窗口很短的呼叫端用；窗口之前的事件
+    本來就不影響面板）。多讀 ``source`` 是為了 snap 後丟掉與官方撞日的 inferred。
+    """
+    sql = "select stock_id, date, factor, source from market.price_adjustment"
+    params = {}
+    if start is not None:
+        sql += " where date >= :start"
+        params["start"] = start
     with engine.connect() as conn:
-        adj = pd.read_sql(text(
-            "select stock_id, date, factor from market.price_adjustment"
-        ), conn, parse_dates=["date"])
+        adj = pd.read_sql(text(sql), conn, params=params, parse_dates=["date"])
     return factors_to_panel(adj, index, columns)

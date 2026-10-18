@@ -109,3 +109,73 @@ def test_adjustment_multipliers_unknown_stock_is_empty(pg_conn):
     """查無事件 ⇒ 空 Series，`to_daily_frame` 的 `len(event_factors)` 判 0 走未還原。"""
     s = market_repo.adjustment_multipliers("ZZNONE", engine=pg_conn)
     assert len(s) == 0
+
+
+# 1900-04-05 週四、04-06 週五（休市）、04-09 週一——種在 1900 年不與真實資料衝突
+def _seed_adj(pg_conn, rows):
+    for sid, d, f, src in rows:
+        pg_conn.execute(text(
+            "INSERT INTO market.price_adjustment (stock_id, date, factor, kind, source) "
+            "VALUES (:s, :d, :f, 'dividend', :src)"), {"s": sid, "d": d, "f": f, "src": src})
+
+
+def test_adjustment_multipliers_with_sessions_snaps_closed_day_event(pg_conn):
+    import pandas as pd
+    import pytest
+
+    _seed_adj(pg_conn, [("ZZ40", "1900-04-06", 0.9641, "twse_twt49u")])
+    sessions = pd.to_datetime(["1900-04-04", "1900-04-05", "1900-04-09", "1900-04-10"])
+    s = market_repo.adjustment_multipliers("ZZ40", engine=pg_conn, sessions=sessions)
+    assert list(s.index) == [pd.Timestamp("1900-04-09")]
+    assert float(s.iloc[0]) == pytest.approx(0.9641)
+    # 不給 sessions = 原始事件日（舊行為不變）
+    raw = market_repo.adjustment_multipliers("ZZ40", engine=pg_conn)
+    assert list(raw.index) == [pd.Timestamp("1900-04-06")]
+
+
+def test_adjustment_multipliers_with_sessions_collision_stays_unique_and_multiplies(pg_conn):
+    """官方事件搬到 04-09 後與該日另一筆非 inferred 事件撞日：相乘，index 唯一，to_daily_frame 不拋。"""
+    import pandas as pd
+    import pytest
+
+    _seed_adj(pg_conn, [("ZZ41", "1900-04-06", 0.9, "twse_twt49u"),
+                        ("ZZ41", "1900-04-09", 0.5, "twse_twtauu"),
+                        ("ZZ41", "1900-04-10", 0.8, "inferred_price")])
+    sessions = pd.to_datetime(["1900-04-05", "1900-04-09", "1900-04-10"])
+    s = market_repo.adjustment_multipliers("ZZ41", engine=pg_conn, sessions=sessions)
+    assert s.index.is_unique
+    assert float(s[pd.Timestamp("1900-04-09")]) == pytest.approx(0.45)
+    assert float(s[pd.Timestamp("1900-04-10")]) == pytest.approx(0.8)  # 獨立 inferred 保留
+    df = pd.DataFrame({"date": sessions, "open": 1, "high": 1, "low": 1, "volume": 1,
+                       "turnover": 1, "close": [100.0, 45.0, 36.0]})
+    out = market_repo.to_daily_frame(df, event_factors=s)
+    assert out["pct_chg"].iloc[1] == pytest.approx(0.0)
+
+
+def test_front_adjust_multipliers_friday_closed_event(pg_conn):
+    """週五休市事件：dates 止於週四 ⇒ 不作用；止於週一 ⇒ 作用在週四（snap 到週一）。"""
+    import pandas as pd
+    import pytest
+
+    _seed_adj(pg_conn, [("ZZ42", "1900-04-06", 0.9, "twse_twt49u")])
+    thu = pd.to_datetime(["1900-04-04", "1900-04-05"])
+    s = market_repo.front_adjust_multipliers("ZZ42", thu, engine=pg_conn)
+    assert (s == 1.0).all() and list(s.index) == list(thu)
+
+    mon = pd.to_datetime(["1900-04-04", "1900-04-05", "1900-04-09"])
+    s = market_repo.front_adjust_multipliers("ZZ42", mon, engine=pg_conn)
+    assert s.iloc[0] == pytest.approx(0.9) and s.iloc[1] == pytest.approx(0.9)
+    assert s.iloc[2] == 1.0  # 最新價不變
+
+
+def test_front_adjust_multipliers_as_of_event_applies_to_earlier_days_only(pg_conn):
+    import pandas as pd
+    import pytest
+
+    _seed_adj(pg_conn, [("ZZ43", "1900-04-09", 0.8, "twse_twt49u"),
+                        ("ZZ43", "1900-04-10", 0.5, "twse_twt49u")])  # 04-10 晚於 as_of
+    dates = pd.to_datetime(["1900-04-05", "1900-04-09"])
+    s = market_repo.front_adjust_multipliers("ZZ43", dates, engine=pg_conn)
+    assert s.iloc[0] == pytest.approx(0.8)
+    assert s.iloc[1] == 1.0
+    assert market_repo.front_adjust_multipliers("ZZ43", [], engine=pg_conn).empty
