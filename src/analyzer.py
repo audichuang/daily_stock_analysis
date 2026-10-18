@@ -3956,6 +3956,28 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 report_language=report_language,
             )
 
+    @staticmethod
+    def _tw_expected_prev_session(today_value: Any):
+        """今天（法人資料日）之前最後一個台股交易日，供趨勢計算判斷本地歷史是否停更。
+        行事曆取不到或任何例外都回 None（fail-open：不做連續性檢查）。"""
+        try:
+            from datetime import timedelta
+
+            from data_provider.tw_institutional_trend import _norm_date
+            from src.core.trading_calendar import get_trading_dates
+
+            today_date = _norm_date(today_value)
+            if today_date is None:
+                return None
+            sessions = get_trading_dates("tw", today_date - timedelta(days=15), today_date)
+            if sessions is None:
+                return None
+            prev = [d.date() for d in sessions if d.date() < today_date]
+            return prev[-1] if prev else None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[tw-inst-trend] expected_prev_session unavailable: %s", exc)
+            return None
+
     def _tw_institutional_trend_lines(
         self, code: str, institution_data: dict, report_language: str
     ) -> str:
@@ -3976,7 +3998,12 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             rows = hist.to_dict("records") if hist is not None and not hist.empty else []
             info = market_repo.stock_info(sid, engine=eng) or {}
             today = dict(institution_data)  # copy — never mutate the cached fetcher record
-            trend = compute_institutional_trend(rows, today, info.get("shares_outstanding"))
+            trend = compute_institutional_trend(
+                rows,
+                today,
+                info.get("shares_outstanding"),
+                expected_prev_session=self._tw_expected_prev_session(today.get("date")),
+            )
         except Exception as exc:  # noqa: BLE001 - prompt enrichment is strictly fail-open
             logger.warning("[tw-inst-trend] fail-open code=%s: %s", code, exc)
             return ""
@@ -3991,6 +4018,30 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             if english:
                 return en
             return zh_tw if lang == "zh-TW" else zh
+
+        # 場次不足 2 就不印趨勢：只有當日一列時「連 ≥1 日」「近 N 日累計」都是誤導，
+        # 改成明講原因（上櫃本地庫無歷史／歷史停更／歷史不足）。
+        if trend.get("sessions", 0) < 2:
+            gap = trend.get("history_gap")
+            if gap:
+                note = T(
+                    f"三大法人歷史：本地歷史停在 {gap['last_history']}、應到 {gap['expected']}，不計算趨勢；只能參考上表當日數據，不得推論連續買賣超或累計。",
+                    f"三大法人历史：本地历史停在 {gap['last_history']}、应到 {gap['expected']}，不计算趋势；只能参考上表当日数据，不得推论连续买卖超或累计。",
+                    f"Institutional history: the local history stops at {gap['last_history']} (expected {gap['expected']}); no trend is computed. Use only today's figures above; do not infer consecutive buying/selling or cumulative totals.",
+                )
+            elif str(code).upper().endswith(".TWO"):
+                note = T(
+                    "三大法人歷史：本地資料庫只收錄上市（TWSE），上櫃無歷史；只能參考上表當日數據，不得推論連續買賣超或累計。",
+                    "三大法人历史：本地数据库只收录上市（TWSE），上柜无历史；只能参考上表当日数据，不得推论连续买卖超或累计。",
+                    "Institutional history: the local database only covers TWSE-listed stocks, so there is no history for TPEx-listed ones; use only today's figures above and do not infer consecutive buying/selling or cumulative totals.",
+                )
+            else:
+                note = T(
+                    "三大法人歷史：本地歷史不足，只能參考上表當日數據，不得推論連續買賣超或累計。",
+                    "三大法人历史：本地历史不足，只能参考上表当日数据，不得推论连续买卖超或累计。",
+                    "Institutional history: not enough local history; use only today's figures above and do not infer consecutive buying/selling or cumulative totals.",
+                )
+            return "\n" + note + "\n"
 
         _dir = {
             "buy": T("買超", "买超", "net buying"),
@@ -4010,7 +4061,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             days = streak.get("days", 0)
             direction = _dir.get(streak.get("direction", "flat"), _dir["flat"])
             ge = "≥" if streak.get("capped") else ""
+            # 只印有效窗口：滿 20 場印 20 日，否則滿 5 場印 5 日，都不滿就不印累計
             cum20 = a.get("cum_20d")
+            cum5 = a.get("cum_5d")
             parts = []
             if days > 0:
                 parts.append(T(f"連 {ge}{days} 日{direction}", f"连 {ge}{days} 日{direction}", f"{direction} for {ge}{days} sessions in a row"))
@@ -4018,6 +4071,8 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 parts.append(direction)
             if cum20 is not None:
                 parts.append(T(f"近 20 日累計 {cum20:+d} 股", f"近 20 日累计 {cum20:+d} 股", f"20-day cumulative {cum20:+d} shares"))
+            elif cum5 is not None:
+                parts.append(T(f"近 5 日累計 {cum5:+d} 股", f"近 5 日累计 {cum5:+d} 股", f"5-day cumulative {cum5:+d} shares"))
             if actor == "total" and a.get("pct_of_shares") is not None:
                 parts.append(T(f"佔股本 {a['pct_of_shares']:+.2f}%", f"占股本 {a['pct_of_shares']:+.2f}%", f"{a['pct_of_shares']:+.2f}% of shares outstanding"))
             sep, colon = ("; ", ": ") if english else ("；", "：")

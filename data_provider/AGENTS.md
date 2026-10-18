@@ -14,7 +14,7 @@
 | 即時報價/走勢 | `ShioajiFetcher` → yfinance | **順序寫死在 `get_realtime_quote`,不讀 `priority`**;正本 `docs/realtime-board.md` |
 | 大盤統計(家數/成交額/三大法人) | `TwseFetcher`;家數被拒收時退 `tw_breadth.py` 由本地 DB 自算 | 單位是**億元**;`TwseFetcher` 刻意退出日線路由 |
 | 估值/月營收 | 報價上有就用,缺了才問 `TwseFundamentalAdapter`(官方即時 API) | **不讀本地 DB** |
-| 個股三大法人 | 當日走 `TwInstitutionalFetcher`(網路);歷史趨勢才讀本地 DB | 單位是**股**,不是張 |
+| 個股三大法人 | 當日走 `TwInstitutionalFetcher`(網路);歷史趨勢才讀本地 DB | 單位是**股**,不是張。**歷史只有上市;上櫃(`.TWO`)只有當日**,場次不足 2 時 prompt 改印揭露句、不算趨勢;「近 5／20 日累計」只在窗口內每一場都有值時才印(`tw_institutional_trend.py`);本地歷史比「今天之前最後一個交易日」舊就視為停更並明講 |
 
 ## 進來改要遵守
 
