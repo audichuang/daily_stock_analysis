@@ -708,13 +708,18 @@ def crawl_range(engine, source, dates, resume=True, replace=False, delay=0.0):
     total = 0
     with engine.begin() as conn:
         have = _existing_dates(conn, table) if resume else set()
-        cal = (_trading_dates(conn, min(dates), max(dates))
-               if source != "price" and dates else set())
-    limit = _MAX_EMPTY_STREAK if cal else _MAX_EMPTY_STREAK_NO_CALENDAR
-    unit = "trading days" if cal else "weekdays"
+        cal = None
+        if source != "price":
+            cal = _trading_dates(conn, min(dates), max(dates)) if dates else set()
+    limit = _MAX_EMPTY_STREAK if cal is not None else _MAX_EMPTY_STREAK_NO_CALENDAR
+    unit = "trading days" if cal is not None else "weekdays"
     empty_streak = 0
     for d in dates:
-        if d.weekday() >= 5 or (cal and d not in cal):
+        if cal is not None:
+            if d not in cal:
+                continue
+        # price 自建日曆，仍只抓平日；價格缺漏的補班週六不在本次修復範圍。
+        elif d.weekday() >= 5:
             continue
         if resume and d.isoformat() in have:
             continue

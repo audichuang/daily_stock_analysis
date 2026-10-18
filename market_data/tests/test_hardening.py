@@ -415,6 +415,7 @@ def test_non_strict_health_reports_but_does_not_fail(monkeypatch):
 
     assert health.run(engine=object(), strict=False) == 0
 
+
 @pytest.mark.parametrize("gap", [
     "missing_index_dates",
     "missing_institutional_dates",
@@ -478,6 +479,60 @@ def test_crawl_range_only_requests_known_trading_days(monkeypatch):
              for i in range(11)]
     crawl.crawl_range(_FakeEngine(), "valuation", dates, resume=False)
     assert seen == sorted(cal)  # 假日一個請求都不該發
+
+
+@pytest.mark.parametrize("source", ["institutional", "margin", "valuation"])
+def test_crawl_range_crawls_saturday_in_calendar(monkeypatch, source):
+    saturday = date(1900, 1, 6)
+    seen = []
+    monkeypatch.setattr(crawl, "_trading_dates", lambda conn, s, e: {saturday})
+    monkeypatch.setattr(crawl, "crawl_day",
+                        lambda conn, src, d, replace=False: seen.append(d) or 1)
+
+    assert crawl.crawl_range(_FakeEngine(), source, [saturday], resume=False) == 1
+    assert seen == [saturday]
+
+
+@pytest.mark.parametrize("source", ["institutional", "margin", "valuation"])
+def test_crawl_range_skips_saturday_outside_calendar(monkeypatch, source):
+    friday, saturday = date(1900, 1, 5), date(1900, 1, 6)
+    seen = []
+    monkeypatch.setattr(crawl, "_trading_dates", lambda conn, s, e: {friday})
+    monkeypatch.setattr(crawl, "crawl_day",
+                        lambda conn, src, d, replace=False: seen.append(d) or 1)
+
+    assert crawl.crawl_range(
+        _FakeEngine(), source, [friday, saturday], resume=False) == 1
+    assert seen == [friday]
+
+
+@pytest.mark.parametrize("source", ["institutional", "margin", "valuation"])
+def test_crawl_range_empty_calendar_crawls_no_dates(monkeypatch, source):
+    seen = []
+    monkeypatch.setattr(crawl, "_trading_dates", lambda conn, s, e: set())
+    monkeypatch.setattr(crawl, "crawl_day",
+                        lambda conn, src, d, replace=False: seen.append(d) or 1)
+
+    assert crawl.crawl_range(
+        _FakeEngine(), source, [date(1900, 1, 5), date(1900, 1, 6)], resume=False) == 0
+    assert seen == []
+
+
+def test_crawl_range_price_without_calendar_skips_weekends(monkeypatch):
+    friday = date(1900, 1, 5)
+    seen = []
+
+    def unexpected_calendar(*args):
+        pytest.fail("price 不應讀取由自己建立的交易日曆")
+
+    monkeypatch.setattr(crawl, "_trading_dates", unexpected_calendar)
+    monkeypatch.setattr(crawl, "crawl_day",
+                        lambda conn, src, d, replace=False: seen.append(d) or 1)
+
+    assert crawl.crawl_range(
+        _FakeEngine(), "price", [friday + timedelta(days=i) for i in range(3)],
+        resume=False) == 1
+    assert seen == [friday]
 
 
 def test_crawl_range_raises_on_blocked_streak(monkeypatch):
