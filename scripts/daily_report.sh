@@ -8,22 +8,30 @@
 # 每步有 process-group 逾时（DAILY_REPORT_STEP_TIMEOUT_SECONDS，预设 5400）；前一轮的锁
 # 持有者还活着且锁龄超过 DAILY_REPORT_STALE_LOCK_SECONDS（预设 10800）会推 Bark 并以 1 退出。
 # 两个变数只供手动覆写（本脚本不读 .env）。脚本可被 source 以载入函式（测试用），只有直接执行才跑 main。
+#
+# 完成标记 logs/.daily_report_last_session 记「<曆日>|<expected_session>」：同一天且同一交易场次才跳过。
+# 盘中手动跑（expected=前一交易日）不会挡掉 18:00 的正式报告；台股休市日 expected 不变但曆日变了，仍会跑美股。
+# 日历取不到（expected 空）永不跳过、也不写标记；DAILY_REPORT_FORCE=1 一律重跑。
 
-DOPPLER_PROJECT="${DOPPLER_PROJECT:-shioaji}"
-DOPPLER_CONFIG="${DOPPLER_CONFIG:-dev}"
+# export：run_step 把 bash 函式交给子 bash 跑，notify_failure 要靠这两个变数自己组 doppler 命令
+# （bash 阵列无法 export）。
+export DOPPLER_PROJECT="${DOPPLER_PROJECT:-shioaji}"
+export DOPPLER_CONFIG="${DOPPLER_CONFIG:-dev}"
 DOPPLER_RUN=(doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" --)
 
 # run_step 已把 stdout 导进 $LOG，step 内只印 stdout，避免同一行写两次。
 say() { printf '%s | %s\n' "$(date '+%F %T')" "$*"; }
 log() { printf '%s | %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
 
+# notify_failure BODY [TITLE]：TITLE 预设「每日報告失敗」；非致命通知（如个股部分失败）传自己的标题。
 notify_failure() {
-  local body="$1"
+  local body="$1" title="${2:-每日報告失敗}"
   local payload
+  local -a runner=(doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" --)
   payload=$(uv run --no-project python -c \
-    'import json,sys; print(json.dumps({"title": "每日報告失敗", "body": sys.argv[1], "group": "dsa"}, ensure_ascii=False))' \
-    "$body" 2>/dev/null)
-  "${DOPPLER_RUN[@]}" bash -c \
+    'import json,sys; print(json.dumps({"title": sys.argv[2], "body": sys.argv[1], "group": "dsa"}, ensure_ascii=False))' \
+    "$body" "$title" 2>/dev/null)
+  "${runner[@]}" bash -c \
     'curl -sS -m 15 -X POST "$BARK_URL" -H "Content-Type: application/json; charset=utf-8" -d "$1" >/dev/null' \
     _ "$payload" || log "WARN: Bark 失败通知也没送出去"
 }
@@ -97,7 +105,7 @@ run_step() {
   log "==> $name"
   if declare -F "$1" >/dev/null; then
     # bash 函式 perl exec 不了：export -f 后交给子 bash 跑；函式内用到的 say／$LOG 也要带过去。
-    export -f "$1" say log
+    export -f "$1" say log notify_failure failed_codes
     export LOG
     run_with_timeout "$secs" bash -c '"$@"' _ "$@" >>"$LOG" 2>&1 || rc=$?
   else
@@ -133,6 +141,32 @@ print(f"LLM preflight ok: {text.strip()[:40]}")
 '
 }
 
+# LOG 里「[代码] 分析未成功」的代码，去重排序（pipeline.py 每档失败印一行）。
+failed_codes() {
+  grep -oE '\[[0-9A-Z.]+\] 分析未成功' "$1" 2>/dev/null | sed -E 's/^\[([^]]+)\].*/\1/' | sort -u
+}
+
+# 完成标记的键：「<曆日>|<expected_session>」。expected 空或格式不对（日历不可用）→ 印空，代表「不判定」。
+session_key() {
+  local expected="$1"
+  [[ "$expected" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || return 0
+  printf '%s|%s' "$(date +%Y%m%d)" "$expected"
+}
+
+# 此刻库里应有的最近交易场次（YYYY-MM-DD）；取不到印空。定义只有一份：market_data.health.expected_session。
+current_expected_session() {
+  uv run --env-file .env python -c \
+    'from market_data.health import expected_session; s=expected_session(); print(s or "")' \
+    2>/dev/null | tail -1
+}
+
+# session_already_reported MARK KEY：KEY 非空且 MARK 内容与之完全相同才回 0（该跳过）。
+session_already_reported() {
+  local mark="$1" key="$2"
+  [[ "$key" =~ ^[0-9]{8}\|.+$ && -f "$mark" ]] || return 1
+  [[ "$(cat "$mark" 2>/dev/null)" == "$key" ]]
+}
+
 require_stock_success() {
   local summary
   if grep -q '今日所有相关市场均为非交易日' "$LOG"; then
@@ -141,7 +175,17 @@ require_stock_success() {
   fi
   summary=$(grep -oE '成功: [0-9]+, 失败: [0-9]+' "$LOG" | tail -1)
   say "個股分析結果：${summary:-找不到彙總行}"
-  [[ "$summary" =~ ^成功:\ ([0-9]+) ]] && (( BASH_REMATCH[1] > 0 ))
+  [[ "$summary" =~ ^成功:\ ([0-9]+),\ 失败:\ ([0-9]+) ]] || return 1
+  local ok="${BASH_REMATCH[1]}" failed="${BASH_REMATCH[2]}"
+  if (( failed > 0 && ok > 0 )); then
+    # 部分失败不改变成败判定（至少一档成功就算过），但要让人知道是哪几档；
+    # 全军覆没由 run_step 的致命通知负责，不重复推。
+    local codes
+    codes=$(failed_codes "$LOG" | tr '\n' ' ')
+    notify_failure "個股分析 ${failed} 檔失敗（成功 ${ok} 檔）：${codes}。log: $LOG" "每日報告部分失敗" \
+      || say "WARN: 部分失敗通知沒送出去"
+  fi
+  (( ok > 0 ))
 }
 
 main() {
@@ -162,10 +206,12 @@ main() {
   mkdir -p logs
   LOG="logs/daily_report_$(date +%Y%m%d_%H%M%S).log"
 
-  # 当天已经成功推过一份就不再跑（手动补跑与 18:00 排程撞同一天时不会推两份）；要重跑设 DAILY_REPORT_FORCE=1。
-  DONE_MARK="logs/.daily_report_done_$(date +%Y%m%d)"
-  if [[ -f "$DONE_MARK" && "${DAILY_REPORT_FORCE:-0}" != "1" ]]; then
-    log "今天已產出過報告（${DONE_MARK}），本次不重複跑；要重跑請設 DAILY_REPORT_FORCE=1"
+  # 同一天且同一交易场次已成功推过一份就不再跑；要重跑设 DAILY_REPORT_FORCE=1。
+  # 键含场次：盘中手动跑（场次=前一交易日）不会挡掉 18:00，台股休市日也不会连美股一起跳过。
+  DONE_MARK="logs/.daily_report_last_session"
+  SESSION_KEY=$(session_key "$(current_expected_session)")
+  if [[ "${DAILY_REPORT_FORCE:-0}" != "1" ]] && session_already_reported "$DONE_MARK" "$SESSION_KEY"; then
+    log "本交易場次已產出過報告（${DONE_MARK}＝${SESSION_KEY}），本次不重複跑；要重跑請設 DAILY_REPORT_FORCE=1"
     rm -f "$LOG"
     exit 0
   fi
@@ -196,7 +242,11 @@ main() {
   # 外層疊 Doppler `finmind` 專案：注入 FINMIND_TOKEN_*，台股個股新聞先查 FinMind。
   run_step "自選股分析 + 大盤復盤" doppler run -p finmind -c dev -- "${DOPPLER_RUN[@]}" bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py'
   run_step "個股分析至少一檔成功" require_stock_success
-  touch "$DONE_MARK"
+  if [[ -n "$SESSION_KEY" ]]; then
+    printf '%s\n' "$SESSION_KEY" >"$DONE_MARK"
+  else
+    log "WARN: 取不到交易日曆（expected_session 為空），未寫完成標記"
+  fi
   log "daily report done"
 }
 

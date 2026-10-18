@@ -205,8 +205,17 @@ def _sandbox(tmp_path):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     calls = tmp_path / "doppler_calls"
-    (bindir / "uv").write_text("#!/bin/sh\necho '{}'\n")
-    (bindir / "doppler").write_text(f'#!/bin/sh\necho "$@" >> "{calls}"\n')
+    # 假 uv：问 expected_session 时回 $FAKE_EXPECTED（未设＝空），其余步骤一律成功；
+    # 假 doppler：主分析步骤（带 finmind）印出个股汇总行，其余只记呼叫。
+    (bindir / "uv").write_text(
+        f"#!/bin/sh\ncase \"$*\" in *expected_session*) echo \"${{FAKE_EXPECTED:-}}\";; "
+        f"*--no-project*) printf '%s\\n' \"$*\" >> \"{tmp_path}/notify_args\"; echo '{{}}';; *) echo '{{}}';; esac\n"
+    )
+    (bindir / "doppler").write_text(
+        f'#!/bin/sh\necho "$@" >> "{calls}"\n'
+        'case "$*" in *finmind*) if [ -n "$FAKE_FAIL" ]; then '
+        'echo "[5469.TW] 分析未成功: x"; echo "成功: 2, 失败: 1"; else echo "成功: 1, 失败: 0"; fi;; esac\n'
+    )
     for f in bindir.iterdir():
         f.chmod(0o755)
     return script, bindir, calls
@@ -245,3 +254,179 @@ def test_main_skips_quietly_when_live_lock_is_recent(tmp_path):
     assert not calls.exists()
     assert not list(logs.glob("daily_report_*.log"))
     assert "本次不重複跑" in r.stdout
+
+
+# ---- 完成标记：「<曆日>|<expected_session>」 ----
+
+TODAY = "20261016"
+
+
+@pytest.mark.parametrize(
+    "mark, key, skipped",
+    [
+        # 同日同场次 → 跳过
+        (f"{TODAY}|2026-10-16", f"{TODAY}|2026-10-16", True),
+        # 盘中手动跑留下的标记（场次=前一交易日）不挡 18:00（场次=今天）
+        (f"{TODAY}|2026-10-15", f"{TODAY}|2026-10-16", False),
+        # 台股休市日（10-09：场次仍是 10-08、美股开市）：前一晚的标记不挡隔天
+        ("20261008|2026-10-08", "20261009|2026-10-08", False),
+        # 同一天、场次也没变（盘中重跑）→ 跳过
+        (f"{TODAY}|2026-10-15", f"{TODAY}|2026-10-15", True),
+        # 日历不可用：KEY 空 → 永不跳过
+        (f"{TODAY}|2026-10-16", "", False),
+        # 只剩曆日（没有场次）的 KEY 不是合法键，不得当成「相等」而跳过
+        (f"{TODAY}|", f"{TODAY}|", False),
+        # MARK 空档
+        ("", f"{TODAY}|2026-10-16", False),
+    ],
+)
+def test_session_already_reported_truth_table(tmp_path, mark, key, skipped):
+    mark_file = tmp_path / "mark"
+    mark_file.write_text(mark + ("\n" if mark else ""), encoding="utf-8")
+    r = _run_bash(f'session_already_reported "{mark_file}" "{key}" && echo skip || echo run')
+    assert r.stdout.strip() == ("skip" if skipped else "run")
+
+
+def test_session_already_reported_missing_mark_runs(tmp_path):
+    r = _run_bash(f'session_already_reported "{tmp_path}/nope" "{TODAY}|2026-10-16" && echo skip || echo run')
+    assert r.stdout.strip() == "run"
+
+
+def test_session_key_assembly():
+    from datetime import datetime
+
+    today = datetime.now().strftime("%Y%m%d")
+    r = _run_bash('session_key "2026-10-16"; echo; session_key ""; echo; session_key "garbage"; echo')
+    assert r.stdout.split("\n")[:3] == [f"{today}|2026-10-16", "", ""]
+
+
+LOG_1016 = """\
+2026-10-16 18:18:09 | WARNING  | src.core.pipeline | src/core/pipeline.py:3399 | [3481.TW] 分析未成功: approval_required at execution for backend claude_code_cli
+2026-10-16 18:18:27 | WARNING  | src.core.pipeline | src/core/pipeline.py:3399 | [5469.TW] 分析未成功: approval_required at execution for backend claude_code_cli
+2026-10-16 18:18:31 | WARNING  | src.core.pipeline | src/core/pipeline.py:3399 | [6191.TW] 分析未成功: approval_required at execution for backend claude_code_cli
+2026-10-16 18:18:31 | WARNING  | src.core.pipeline | src/core/pipeline.py:3399 | [6191.TW] 分析未成功: 重試後仍失敗
+2026-10-16 18:18:31 | INFO     | src.core.pipeline | src/core/pipeline.py:3625 | 成功: 33, 失败: 3, 耗时: 996.30 秒
+"""
+
+
+def test_failed_codes_dedupes_and_sorts(tmp_path):
+    log = tmp_path / "x.log"
+    log.write_text(LOG_1016 + "[00631L.TW] 分析未成功: x\n", encoding="utf-8")
+    r = _run_bash(f'failed_codes "{log}" | tr "\\n" " "')
+    assert r.stdout.strip() == "00631L.TW 3481.TW 5469.TW 6191.TW"
+
+
+def _partial_failure_body(tmp_path, summary_line):
+    log = tmp_path / "x.log"
+    log.write_text(LOG_1016.replace("成功: 33, 失败: 3", summary_line), encoding="utf-8")
+    return f"""
+LOG="{log}"
+notify_failure() {{ printf '%s\\t%s\\n' "${{2:-}}" "$1" >> "{tmp_path}/notified"; }}
+require_stock_success; echo rc=$?
+"""
+
+
+def test_require_stock_success_partial_failure_pushes_nonfatal_notice(tmp_path):
+    r = _run_bash(_partial_failure_body(tmp_path, "成功: 33, 失败: 3"))
+    assert "rc=0" in r.stdout
+    title, body = (tmp_path / "notified").read_text(encoding="utf-8").strip().split("\t", 1)
+    assert title == "每日報告部分失敗"
+    for code in ("3481.TW", "5469.TW", "6191.TW"):
+        assert code in body
+
+
+def test_require_stock_success_no_failure_no_notice(tmp_path):
+    r = _run_bash(_partial_failure_body(tmp_path, "成功: 36, 失败: 0"))
+    assert "rc=0" in r.stdout
+    assert not (tmp_path / "notified").exists()
+
+
+def test_require_stock_success_all_failed_is_fatal_without_duplicate_notice(tmp_path):
+    # 全败由 run_step 推致命通知；这里不再多推一则「部分失敗」
+    r = _run_bash(_partial_failure_body(tmp_path, "成功: 0, 失败: 3"))
+    assert "rc=1" in r.stdout
+    assert not (tmp_path / "notified").exists()
+
+
+def test_notify_failure_title_defaults_and_overrides(tmp_path):
+    # 假 uv 把 argv 记下来：第 2 个参数（-c 之后）是 body、第 3 个是 title
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "uv").write_text(f'#!/bin/sh\nprintf "%s|" "$@" >> "{tmp_path}/uv_args"\necho "{{}}"\n')
+    (bindir / "doppler").write_text("#!/bin/sh\nexit 0\n")
+    for f in bindir.iterdir():
+        f.chmod(0o755)
+    env = {"PATH": f"{bindir}:{os.environ['PATH']}"}
+    _run_bash('notify_failure "內文"; echo >> "' + str(tmp_path) + '/uv_args"; notify_failure "內文2" "自訂標題"', env_extra=env)
+    lines = (tmp_path / "uv_args").read_text(encoding="utf-8").strip().split("\n")
+    assert lines[0].endswith("|內文|每日報告失敗|")
+    assert lines[1].endswith("|內文2|自訂標題|")
+
+
+def _run_main_sandbox(tmp_path, *, mark, expected, force=False):
+    script, bindir, calls = _sandbox(tmp_path)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    if mark is not None:
+        (logs / ".daily_report_last_session").write_text(mark + "\n", encoding="utf-8")
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}", FAKE_EXPECTED=expected)
+    env.pop("DAILY_REPORT_FORCE", None)
+    if force:
+        env["DAILY_REPORT_FORCE"] = "1"
+    r = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, timeout=60, env=env, cwd=str(tmp_path)
+    )
+    return r, logs
+
+
+def _today():
+    from datetime import datetime
+
+    return datetime.now().strftime("%Y%m%d")
+
+
+def test_main_skips_same_day_same_session(tmp_path):
+    r, logs = _run_main_sandbox(tmp_path, mark=f"{_today()}|2026-10-16", expected="2026-10-16")
+    assert r.returncode == 0
+    assert "本交易場次已產出過報告" in r.stdout
+    assert not list(logs.glob("daily_report_*.log"))
+
+
+def test_main_midday_mark_does_not_block_evening_run_and_updates_mark(tmp_path):
+    r, logs = _run_main_sandbox(tmp_path, mark=f"{_today()}|2026-10-15", expected="2026-10-16")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "本交易場次已產出過報告" not in r.stdout
+    assert "daily report done" in r.stdout
+    assert (logs / ".daily_report_last_session").read_text(encoding="utf-8").strip() == f"{_today()}|2026-10-16"
+
+
+def test_main_force_overrides_mark(tmp_path):
+    r, logs = _run_main_sandbox(tmp_path, mark=f"{_today()}|2026-10-16", expected="2026-10-16", force=True)
+    assert "本交易場次已產出過報告" not in r.stdout
+    assert "daily report done" in r.stdout
+
+
+def test_main_without_calendar_never_skips_and_writes_no_mark(tmp_path):
+    r, logs = _run_main_sandbox(tmp_path, mark=f"{_today()}|2026-10-16", expected="")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "daily report done" in r.stdout
+    # 既有标记原封不动（没有拿空场次覆写）
+    assert (logs / ".daily_report_last_session").read_text(encoding="utf-8").strip() == f"{_today()}|2026-10-16"
+    assert "取不到交易日曆" in r.stdout
+
+
+def test_main_without_calendar_and_no_mark_creates_none(tmp_path):
+    r, logs = _run_main_sandbox(tmp_path, mark=None, expected="")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (logs / ".daily_report_last_session").exists()
+
+
+def test_main_partial_failure_pushes_titled_notice_through_run_step(tmp_path, monkeypatch):
+    # 走完整 run_step（函式被 export -f 交给子 bash）：部分失败通知要真的送得出去，且整轮仍成功
+    monkeypatch.setenv("FAKE_FAIL", "1")
+    r, logs = _run_main_sandbox(tmp_path, mark=None, expected="2026-10-16")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "daily report done" in r.stdout
+    sent = (tmp_path / "notify_args").read_text(encoding="utf-8")
+    assert "每日報告部分失敗" in sent and "5469.TW" in sent
+    assert (logs / ".daily_report_last_session").exists()
