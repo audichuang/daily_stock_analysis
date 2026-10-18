@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改進] 融資融券解析改核對表頭順序，官方改欄位會直接報錯而非靜默錯位；「尚未發布／查無資料」（TWSE 短文字回覆）與「疑似被封鎖／改版」的警告訊息分開，三大法人與融資共用
 - [修復] 上市除權息公告抓取失敗時每日更新重試一次後直接報錯並推播，不再靜默用舊事件重算還原因子；月營收改為獨立交易，不受連帶回滾
 - [修復] 月底漏跑或指數晚發布時，下一輪每日更新會補回上個月的加權指數，健檢不再卡住好幾天
 - [改進] 個股提示詞的營收／淨利／營運現金流改用帶單位與幣別的金額格式（負值正確顯示負號，不再印原始浮點數），並標明單季、近四季或近四季推算口徑（財報幣別與交易幣別不同時跟財報走）；同步 `data_provider/AGENTS.md` 取數地圖的台股家數降級鏈與財報口徑說明

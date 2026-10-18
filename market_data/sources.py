@@ -106,15 +106,33 @@ _MARGIN_COLS = [
 ]
 
 
+# 官方表頭(pandas 會把重複欄名加 ".1" 後綴,比對前先去掉)。位置對欄有個靜默風險:
+# 來源若插欄,數值仍是數字、列數正常,整批錯位也不會報錯——所以先核對表頭順序。
+_MARGIN_HEADER = [
+    "代號", "名稱",
+    "買進", "賣出", "現金償還", "前日餘額", "今日餘額", "次一營業日限額",
+    "買進", "賣出", "現券償還", "前日餘額", "今日餘額", "次一營業日限額",
+    "資券互抵", "註記",
+]
+
+
 def parse_margin(raw, date):
     text = raw.decode("big5", errors="replace")
     body = _csv_from(text, '"代號","名稱"')
     raw_df = pd.read_csv(StringIO(body), header=0, dtype=str)
+    # 只比對前 16 欄:官方 CSV 每行尾端多一個逗號(多一個空欄),不能要求恰好 16 欄
+    actual = [str(c).split(".")[0] for c in raw_df.columns[: len(_MARGIN_HEADER)]]
+    if actual != _MARGIN_HEADER:
+        raise ValueError(
+            f"MI_MARGN 表頭與預期不符(欄位順序改了?),實際前 {len(_MARGIN_HEADER)} 欄: "
+            f"{list(raw_df.columns[: len(_MARGIN_HEADER)])}"
+        )
     df = raw_df.iloc[:, : len(_MARGIN_COLS)].copy()
     df.columns = _MARGIN_COLS
     df["stock_id"] = df["stock_id"].str.strip()
     df["名稱"] = df["名稱"].astype(str).str.strip()
-    df = df[df["stock_id"].str.match(r"^\w+$", na=False)]
+    # 代號只收英數字:\w 在 Python 3 對中文也成立,註腳列(「備註:」「符號說明…」)要擋在外面
+    df = df[df["stock_id"].str.fullmatch(r"[0-9A-Za-z]{2,10}", na=False)]
     df["date"] = pd.to_datetime(date)
     df = _to_num(df, {"stock_id", "date", "名稱", "註記"})
     return df.set_index(["stock_id", "date"])
@@ -181,6 +199,23 @@ def _twse_csv(url):
     return r.content
 
 
+def _describe_unparsable(raw):
+    """HTTP 200 卻解析不了的回覆,說明它比較像哪一種。
+
+    短純文字(不以 ``<`` 開頭、< 500 字元)多半是 TWSE 的訊息(尚未發布、查無資料、
+    日期在未來),印出前 60 字;其餘(HTML 或長內容)才是封鎖頁/改版的徵兆。
+    只靠長度與是否 HTML 判斷,不依賴字串內容(18:00 當天未發布的確切回覆未觀察到)。
+    解碼先 UTF-8、失敗再 cp950——cp950 能解出幾乎任何位元組,放前面會把 UTF-8 解成亂碼。"""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("cp950", errors="replace")
+    text = " ".join(text.split())
+    if text and not text.startswith("<") and len(text) < 500:
+        return f"TWSE 回覆「{text[:60]}」(多半是尚未發布或查無資料)"
+    return "HTTP 200 但內容不是預期的 CSV(封鎖頁/改版?)"
+
+
 def crawl_institutional(date):
     raw = _twse_csv(
         "https://www.twse.com.tw/rwd/zh/fund/T86"
@@ -192,7 +227,7 @@ def crawl_institutional(date):
         return parse_institutional(raw, date)
     except ValueError as exc:
         print(f"**WARN: cannot parse T86 institutional for {date} ({exc})"
-              f" — HTTP 200 但內容不是預期的 CSV(封鎖頁/改版?)")
+              f" — {_describe_unparsable(raw)}")
         return None
 
 
@@ -207,7 +242,7 @@ def crawl_margin(date):
         return parse_margin(raw, date)
     except ValueError as exc:
         print(f"**WARN: cannot parse MI_MARGN margin for {date} ({exc})"
-              f" — HTTP 200 但內容不是預期的 CSV(封鎖頁/改版?)")
+              f" — {_describe_unparsable(raw)}")
         return None
 
 
