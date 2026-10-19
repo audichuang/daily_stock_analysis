@@ -111,6 +111,13 @@ def transform_valuation(rows):
         return pd.to_numeric(df[col].astype(str).str.replace(",", "").str.strip(),
                              errors="coerce")
 
+    # 殖利率空白 = 該股利年度沒配息，存 0 而不是 NULL：帶日期的 BWIBBU_d 對同一批股票印
+    # `0.00`（2020~2025 回補的歷史全是 0），只有這個快照端點留空。兩條寫入路徑語意不一
+    # 會讓同一欄在快照日是 NULL、補缺日是 0，回測排序（NaN 掉出、0 墊底）隨日期變。
+    # 實測 2026-10-15／16：快照留空的 234 檔在 BWIBBU_d 全為 0.00，沒有一檔非零。
+    # 只換「空白」；其他非數值仍走 to_numeric 變 NULL。本益比空白是虧損無法計算，維持 NULL。
+    yield_raw = df["DividendYield"].astype(str).str.strip()
+    df["DividendYield"] = yield_raw.mask(yield_raw == "", "0")
     out = pd.DataFrame({
         "stock_id": df["Code"].astype(str).str.strip(),
         "date": pd.to_datetime(df["Date"].map(_roc_yyyymmdd)),

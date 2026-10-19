@@ -39,7 +39,7 @@
 | `ci_gate.sh syntax` / `flake8` | 綠 / 綠（0） |
 | 受影響測試 `tests/test_agent_active_stock_integration.py` | 277 passed |
 | 台股／繁體問股對象抽查（真實索引） | 見上表，正確 |
-| 全量離線測試 `ci_gate.sh` | 見合併 commit 後的交付說明 |
+| 全量離線測試 `ci_gate.sh` | 9457 passed、1 failed（7 分鐘）。失敗的 `test_tw_institution_report_wiring.py::test_tw_institution_failed_leaves_overall_status_unchanged` 與本輪無關：測試沒 mock TWSE 月營收、真的連外，端點回非 JSON 時 `growth` 掉進 `missing_fields`；單跑綠、斷網可重現。已於後續 commit 補 mock |
 
 ## 回滾
 

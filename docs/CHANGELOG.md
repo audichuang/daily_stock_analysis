@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 台股估值快照（BWIBBU_ALL）對沒配息股票留空的殖利率改存 0，與帶日期的 BWIBBU_d 及 2020~2025 歷史一致；本益比空白仍為 NULL
+- [測試] `test_tw_institution_report_wiring.py` 補上 TWSE 估值／月營收 mock，不再真的連 TWSE（端點失敗時全量偶發紅）
 - [chore] 合併上游 `6cb86d6e`..`7a21cd76`（6 個 commit，上游發版 v3.33.0；實質程式改動只有 #2406 問股把完整註冊名稱視為一個標的，#2395／#2396 已被上游 #2418 revert）；台股／繁體問股抽查不受影響，裁決見 `docs/upstream-sync-2026-10-19.md`
 - [修復] 法人、融資與估值回補以價格交易日曆為準，保留補班週六交易日；日曆以外的日期不抓取，price 本身仍只抓平日
 - [修復] 個股報價與官方日線同場次時，成交量／額不再縮小，盤前與休市日也適用；量比與提示詞同步採用修正值，新場次仍保留即時量

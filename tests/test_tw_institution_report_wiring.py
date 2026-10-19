@@ -22,6 +22,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from data_provider.base import DataFetcherManager
+from data_provider.twse_fundamental_adapter import TwseFundamentalAdapter
 
 _TW_FETCHER_METHOD = (
     "data_provider.tw_institutional_fetcher.TwInstitutionalFetcher.get_institutional_net"
@@ -54,6 +55,19 @@ _OFFSHORE_CFG = SimpleNamespace(
     fundamental_retry_max=1,
 )
 
+# 台股估值／月營收補全走 TwseFundamentalAdapter（真實 TWSE/TPEx 端點）。不 mock 時這些
+# 「離線」測試會連外（setUp 統一 patch），端點失敗就讓 growth 掉進 missing_fields（全量時好時壞）。
+# 形狀照 adapter 的回傳契約，數值為 2330 量級的示意值。
+_TWSE_VALUATION = {"pe_ratio": 25.0, "pb_ratio": 7.0, "dividend_yield": 1.5, "as_of": "2026-06-29"}
+_TWSE_GROWTH = {
+    "monthly_revenue": 263_000_000.0,
+    "monthly_revenue_yoy": 26.9,
+    "monthly_revenue_mom": -3.1,
+    "cumulative_revenue_yoy": 30.2,
+    "revenue_month": "11505",
+    "revenue_month_iso": "2026-05",
+}
+
 _EMPTY_BUNDLE = {
     "status": "not_supported",
     "growth": {},
@@ -65,6 +79,13 @@ _EMPTY_BUNDLE = {
 
 
 class TestTwInstitutionReportWiring(unittest.TestCase):
+    def setUp(self):
+        # 類別層級 patch：有幾個測試自己建 manager、不經 _context，也要一併擋住連外。
+        for method, value in (("get_valuation", _TWSE_VALUATION), ("get_growth", _TWSE_GROWTH)):
+            patcher = patch.object(TwseFundamentalAdapter, method, return_value=dict(value))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def _context(self, code, institutional_return=None, institutional_side_effect=None):
         """Run get_fundamental_context(code) offline; returns (ctx, tw_fetcher_mock)."""
         manager = DataFetcherManager(fetchers=[])
@@ -152,7 +173,8 @@ class TestTwInstitutionReportWiring(unittest.TestCase):
     # ---- 整體 status 不受 institution failed 影響（與修改前的 not_supported 相同）-------
     def test_tw_institution_failed_leaves_overall_status_unchanged(self):
         # 基準值取自修改前（institution 為 not_supported）同一組 mock 的實跑結果：
-        # status ok、data_quality ok、missing_fields 不含 institution。
+        # status ok、data_quality ok、missing_fields 不含 institution。估值與月營收由
+        # setUp 的 TWSE mock 供給，所以 valuation／growth 不在 missing_fields。
         # failed 若被加進 active_statuses，status 會變 partial、missing_fields 會多 institution。
         ctx, _ = self._context("2330.TW", institutional_return=None)
         self.assertEqual(ctx["coverage"].get("institution"), "failed")

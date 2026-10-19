@@ -19,6 +19,27 @@ def test_transform_valuation_parses_roc_date_and_blanks():
     assert str(df.index.get_level_values("date")[0])[:10] == "2026-07-03"
 
 
+def test_transform_valuation_blank_yield_is_zero_but_blank_pe_stays_null():
+    """快照端點對沒配息的股票殖利率留空，BWIBBU_d 同一檔印 0.00——兩條路徑要存成同一個值。
+    本益比空白（虧損）仍是 NULL：只能換殖利率，換過頭也要紅。"""
+    rows = [
+        {"Date": "1151016", "Code": "1213", "Name": "大飲",
+         "PEratio": "", "DividendYield": "", "PBratio": "0.68"},
+        {"Date": "1151016", "Code": "2330", "Name": "台積電",
+         "PEratio": "28.05", "DividendYield": "0.91", "PBratio": "9.76"},
+        {"Date": "1151016", "Code": "9999", "Name": "示意",
+         "PEratio": "12.00", "DividendYield": "N/A", "PBratio": "1.00"},
+    ]
+    df = etl.transform_valuation(rows).droplevel("date")
+    assert float(df.loc["1213", "dividend_yield"]) == 0.0
+    pe = df.loc["1213", "pe_ratio"]
+    assert pe != pe                                   # NaN -> NULL，不是 0
+    assert float(df.loc["1213", "pb_ratio"]) == 0.68
+    assert float(df.loc["2330", "dividend_yield"]) == 0.91
+    y = df.loc["9999", "dividend_yield"]
+    assert y != y                                     # 非空白的怪值不冒充 0
+
+
 def test_transform_index_maps_taiex():
     rows = json.loads((FIX / "fmtqik.json").read_bytes())
     df = etl.transform_index(rows)
