@@ -138,6 +138,44 @@ class NewsIntelStorageTestCase(unittest.TestCase):
                 self.fail("未找到保存的新闻记录")
             self.assertTrue(row.url.startswith("no-url:"))
 
+    def test_save_news_intel_clips_strings_to_column_length(self) -> None:
+        """超長字串截到 VARCHAR 長度，同批其他新聞照常寫入；Text 欄位不截。
+
+        SQLite 不檢查長度，這裡直接比對存下來的長度；Postgres 上超長會讓整批回滾。
+        """
+        long_title = "群創股東報告書" * 100          # 700 字，title 是 VARCHAR(300)
+        long_snippet = "內文" * 2000               # snippet 是 Text
+        long_url = "https://www.threads.com/@x/post/" + "a" * 1200
+        results = [
+            SearchResult(title=long_title, snippet=long_snippet, url=long_url,
+                         source="threads.com", published_date="2026-10-19"),
+            SearchResult(title="群創第三季轉盈", snippet="短", url="https://news.example.com/b",
+                         source="example.com", published_date="2026-10-19"),
+        ]
+        response = self._build_response(results)
+        saved = self.db.save_news_intel(
+            code="3481.TW", name="群創", dimension="earnings",
+            query="群創 " + "財報" * 200, response=response,
+            query_context={"requester_query": "問" * 400},
+        )
+        self.assertEqual(saved, 2)
+
+        columns = NewsIntel.__table__.columns
+        with self.db.get_session() as session:
+            rows = {row.source: row for row in session.query(NewsIntel).all()}
+        clipped = rows["threads.com"]
+        self.assertEqual(clipped.title, long_title[: columns["title"].type.length])
+        self.assertEqual(clipped.url, long_url[: columns["url"].type.length])
+        self.assertLessEqual(len(clipped.query), columns["query"].type.length)
+        self.assertLessEqual(len(clipped.requester_query), columns["requester_query"].type.length)
+        self.assertEqual(clipped.snippet, long_snippet)
+        self.assertEqual(rows["example.com"].title, "群創第三季轉盈")
+
+        # 同一則再存一次要命中既有列（查詢用的是截過的 URL），不能再新增一筆
+        self.assertEqual(self.db.save_news_intel(
+            code="3481.TW", name="群創", dimension="earnings", query="群創", response=response,
+        ), 0)
+
     def test_get_recent_news(self) -> None:
         """可按时间范围查询最新新闻"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

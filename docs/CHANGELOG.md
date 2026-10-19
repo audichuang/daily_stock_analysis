@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 新聞情報寫入前依欄位長度截斷字串：應用庫在 Postgres 上會強制 VARCHAR 長度，社群貼文把整篇內文當標題（超過 300 字）時，同一批新聞會整批回滾、全部沒存到
 - [修復] 台股估值快照（BWIBBU_ALL）對沒配息股票留空的殖利率改存 0，與帶日期的 BWIBBU_d 及 2020~2025 歷史一致；本益比空白仍為 NULL
 - [測試] `test_tw_institution_report_wiring.py` 補上 TWSE 估值／月營收 mock，不再真的連 TWSE（端點失敗時全量偶發紅）
 - [chore] 合併上游 `6cb86d6e`..`7a21cd76`（6 個 commit，上游發版 v3.33.0；實質程式改動只有 #2406 問股把完整註冊名稱視為一個標的，#2395／#2396 已被上游 #2418 revert）；台股／繁體問股抽查不受影響，裁決見 `docs/upstream-sync-2026-10-19.md`

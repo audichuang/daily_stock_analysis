@@ -2540,23 +2540,28 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             return 0
 
         saved_count = 0
-        query_ctx = query_context or {}
+        fit = self._fit_news_intel_column
+        query_ctx = {key: fit(key, value) for key, value in (query_context or {}).items()}
         current_query_id = (query_ctx.get("query_id") or "").strip()
+        name = fit("name", name)
+        dimension = fit("dimension", dimension)
+        query = fit("query", query)
+        provider = fit("provider", response.provider)
 
         def _write(session: Session) -> int:
             local_saved_count = 0
 
             for item in response.results:
-                title = (item.title or '').strip()
+                title = fit("title", (item.title or '').strip())
                 url = (item.url or '').strip()
-                source = (item.source or '').strip()
+                source = fit("source", (item.source or '').strip())
                 snippet = (item.snippet or '').strip()
                 published_date = self._parse_published_date(item.published_date)
 
                 if not title and not url:
                     continue
 
-                url_key = url or self._build_fallback_url_key(
+                url_key = fit("url", url) or self._build_fallback_url_key(
                     code=code,
                     title=title,
                     source=source,
@@ -2571,35 +2576,35 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     existing.name = name or existing.name
                     existing.dimension = dimension or existing.dimension
                     existing.query = query or existing.query
-                    existing.provider = response.provider or existing.provider
+                    existing.provider = provider or existing.provider
                     existing.snippet = snippet or existing.snippet
                     existing.source = source or existing.source
                     existing.published_date = published_date or existing.published_date
                     existing.fetched_at = datetime.now()
 
-                    if query_context:
+                    if query_ctx:
                         if not existing.query_id and current_query_id:
                             existing.query_id = current_query_id
                         existing.query_source = (
-                            query_context.get("query_source") or existing.query_source
+                            query_ctx.get("query_source") or existing.query_source
                         )
                         existing.requester_platform = (
-                            query_context.get("requester_platform") or existing.requester_platform
+                            query_ctx.get("requester_platform") or existing.requester_platform
                         )
                         existing.requester_user_id = (
-                            query_context.get("requester_user_id") or existing.requester_user_id
+                            query_ctx.get("requester_user_id") or existing.requester_user_id
                         )
                         existing.requester_user_name = (
-                            query_context.get("requester_user_name") or existing.requester_user_name
+                            query_ctx.get("requester_user_name") or existing.requester_user_name
                         )
                         existing.requester_chat_id = (
-                            query_context.get("requester_chat_id") or existing.requester_chat_id
+                            query_ctx.get("requester_chat_id") or existing.requester_chat_id
                         )
                         existing.requester_message_id = (
-                            query_context.get("requester_message_id") or existing.requester_message_id
+                            query_ctx.get("requester_message_id") or existing.requester_message_id
                         )
                         existing.requester_query = (
-                            query_context.get("requester_query") or existing.requester_query
+                            query_ctx.get("requester_query") or existing.requester_query
                         )
                     continue
 
@@ -2610,7 +2615,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                             name=name,
                             dimension=dimension,
                             query=query,
-                            provider=response.provider,
+                            provider=provider,
                             title=title,
                             snippet=snippet,
                             url=url_key,
@@ -3810,6 +3815,19 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         """Extract normalized sniper point values from an AnalysisResult."""
 
         return extract_sniper_points(result)
+
+    @staticmethod
+    def _fit_news_intel_column(column: str, value: Any) -> Any:
+        """把字串截到 ``NewsIntel`` 欄位的 VARCHAR 長度。
+
+        Postgres 會強制長度（SQLite 不會），超長值讓整批 transaction 回滾、同批新聞全丟
+        （踩過：社群貼文把整篇內文當標題，超過 ``title`` 的 300 字）。非字串、無長度欄位原樣返回。
+        """
+        col = NewsIntel.__table__.columns.get(column)
+        length = getattr(getattr(col, "type", None), "length", None)
+        if isinstance(value, str) and length and len(value) > length:
+            return value[:length]
+        return value
 
     @staticmethod
     def _build_fallback_url_key(
