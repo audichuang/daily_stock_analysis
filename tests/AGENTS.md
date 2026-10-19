@@ -23,12 +23,13 @@
 - **別把被測的判斷本身 mock 掉**(例如同時 patch 掉 region 檢查與它保護的建構函式):那樣把 `tw` 從支援清單拿掉測試照樣綠。
 - **加速不要引入 pytest-xdist／pytest-split。**有契約測試擋著;分片走自家的 `ci_test_shard.py`。
 
-## 判讀紅燈:先排除四種假紅,再判回歸
+## 判讀紅燈:先排除這幾種假紅,再判回歸
 
 | 形狀 | 特徵 | 判別 |
 |---|---|---|
 | 負載 | 錯誤是 timeout 類(`Test timed out`、`assertFalse(thread.is_alive())`),不是斷言值不對 | 單獨在空機器上重跑會綠 |
 | 連外 | 紅在 timeout 並印出堆疊,停在 socket 讀取 | 對方收了連線卻不回;補上漏掉的那格 mock |
+| 連外(fail-open) | 斷言值不對、不是 timeout:對端回錯時生產碼吞掉錯誤、該欄變缺值(踩過:台股 `get_fundamental_context` 沒 mock `TwseFundamentalAdapter`,TWSE 一回非 JSON,`growth` 就進 `missing_fields`) | 單跑常綠;**斷網重跑穩定重現**——用一個 pytest plugin 把 `socket.socket.connect` 對非 loopback 改成拋錯,帶 `-p` 載入 |
 | `.env` 漏入 | 「預設值」類測試讀到本機 `.env` 的值 | 單跑綠;帶 `<KEY>=<.env 的值> pytest <該測試>` 紅。CI 沒有 `.env`,只在本機出現 |
 | 時段 | 同一份程式碼早上紅、下午綠,**單跑也紅** | 換個時段重跑;修法見上方「日期與 phase 都要釘」 |
 
