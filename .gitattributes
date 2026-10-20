@@ -41,3 +41,5 @@ Makefile text eol=lf
 *.crt binary
 *.key binary
 *.p12 binary
+# 官方端點的原始回應（期交所 CSV 是 CRLF + MS950），測試逐位元組比對；不可讓 git 轉換換行
+tests/fixtures/*.bin binary
