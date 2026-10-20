@@ -3,6 +3,8 @@
 
 分工刻意切死：
   - 本腳本只做「DB 算得出來的」：價量、均線、法人、融資、估值、月營收。不碰網路、不下結論。
+    唯一例外：`main()` 可選擇即時抓官方公告（處置／注意股、事件日曆），可用 `--no-risk-flags`／
+    `--no-events` 關閉；純函式與三支量測 loader 都不連網。即時名單只標記、不剔除，漏斗不變。
   - 事件面（美股盤後、費半、法說、財報、地緣、產業消息）DB 天生看不到——報告末尾會列出
     待查清單，由 agent 讀完輸出後補查再做判斷。
 
@@ -17,8 +19,11 @@
 """
 
 import argparse
+import datetime
 import json
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from market_data.adjust import load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
+from market_data import events, risk_flags  # noqa: E402
+from market_data.health import expected_session, session_before, sessions_after  # noqa: E402
+from market_data.tw_official_http import md  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 SEED_CSV = REPO / "scripts" / "stock_index_seeds" / "stock_list_tw.csv"
@@ -75,9 +83,28 @@ def exclude_otc_revenue(rev: pd.DataFrame) -> pd.DataFrame:
     if not SEED_CSV.exists():
         # 分不出誰是上櫃就不能宣稱池子沒變；靜默放行會讓錨點失效而沒人知道
         raise FileNotFoundError(f"{SEED_CSV} 不存在，無法排除上櫃月營收（或改帶 --include-otc-revenue）")
-    codes = pd.read_csv(SEED_CSV, usecols=["ts_code"])["ts_code"].astype(str)
-    otc = set(codes[codes.str.endswith(".TWO")].str.split(".").str[0])
+    otc = {sid for sid, market in _seed_market_map().items() if market == "tpex"}
     return rev[~rev["stock_id"].astype(str).isin(otc)]
+
+
+_SUFFIX_MARKET = {"TW": "twse", "TWO": "tpex"}
+
+
+def _seed_market_map() -> dict:
+    """``{代號: "twse"|"tpex"}``，依種子檔的 ``.TW``／``.TWO``；種子檔不存在回空 dict。
+
+    市場別只能從這裡拿：`price.market` 全為 NULL、`stock_info` 只有上市。種子檔沒有的代號
+    （已下市）就是市場未知。"""
+    if not SEED_CSV.exists():
+        return {}
+    codes = pd.read_csv(SEED_CSV, usecols=["ts_code"])["ts_code"].astype(str)
+    out = {}
+    for code in codes:
+        sid, _, suffix = code.partition(".")
+        market = _SUFFIX_MARKET.get(suffix)
+        if market:
+            out[sid] = market
+    return out
 
 
 def revenue_scope_note(include_otc_revenue: bool) -> str:
@@ -202,6 +229,14 @@ def compute_factors(g: pd.DataFrame) -> dict:
 def tag(r: pd.Series, market_d1: float) -> list:
     """給 agent 看的特徵標籤——腳本只描述事實，不做買賣判斷。"""
     t = []
+    # 即時名單旗標（`apply_risk_flags`）；沒接即時名單的列沒有這欄，用 .get 才不會 KeyError
+    flag = _flag(r)
+    if flag in RISK_TAGS:
+        t.append(RISK_TAGS[flag])
+    # 事件短標（`apply_event_tags`）；同上，沒接事件日曆的列沒有這欄
+    event_tags = r.get("event_tags")
+    if isinstance(event_tags, list):
+        t.extend(event_tags)
     if r["d1"] > market_d1 + 0.005:
         t.append("逆勢抗跌")
     if r["d1"] < -0.05:
@@ -423,8 +458,252 @@ def _pe_score(pe: pd.Series) -> pd.Series:
     return 1 - usable.fillna(usable.median()).rank(pct=True)
 
 
+# ---- 即時官方名單（只在 main() 抓；純函式與量測 loader 不連網） -----------------------------
+# `live` 是傳給 render／to_json 的單一 dict：``{"risk": RiskResult|Skipped, "events": EventsResult|Skipped}``。
+# ``live=None``（預設）時兩者輸出與接上即時名單前逐字相同。
+RISK_TAGS = {risk_flags.DISPOSING: "⚠處置中", risk_flags.UPCOMING: "⚠即將處置",
+             risk_flags.ATTENTION: "⚠注意股"}
+SKIP_HISTORICAL = "歷史基準日（官方名單與事件只有當前快照，接到過去的基準日是錯的）"
+SKIP_CALENDAR = "交易日曆（XTAI）不可用"
+SKIP_STALE = "基準日 {as_of} 不是預期場次 {expected}（DB 可能尚未更新，先跑 market_data.cli daily）"
+# DB 比預期場次新：交易日收盤後手動跑過 daily、但還沒到 `health.SESSION_COMPLETE_AFTER`。
+# 這時當天的公告可能還沒出齊，所以同樣不抓；重跑 daily 沒有用，等過了那個時點再跑。
+SKIP_AHEAD = ("基準日 {as_of} 晚於預期場次 {expected}（當日場次尚未視為完成，官方名單可能還沒出齊，"
+              "過了場次完成時點再跑）")
+REVENUE_RULE = "證交法 §36，每月 10 日前公告上月營收；全市場適用，不逐檔標"
+
+
+@dataclass(frozen=True)
+class Skipped:
+    """這一半即時資料沒抓（或抓的當下就失敗）。``opted_out``：使用者自己要求不抓（``--no-*`` 或
+    ``--date``）——報告只在 §0 寫一行原因，不再逐檔列「未經檢查」。``n`` 只有事件日曆用（窗口天數）。"""
+
+    reason: str
+    opted_out: bool
+    n: int | None = None
+
+
+@dataclass(frozen=True)
+class RiskResult:
+    flags: dict          # {代號: risk_flags.RiskHit}
+    statuses: list
+    next_session: datetime.date
+
+
+@dataclass(frozen=True)
+class EventsResult:
+    window: events.EventWindow
+    by_stock: dict       # {代號: [events.Event, ...]}
+    statuses: list
+    revenue: list
+
+
+def _statuses(part):
+    return [] if isinstance(part, Skipped) else part.statuses
+
+
+def _flag(r):
+    """列上的 ``risk_flag``：字串照回，缺欄／None／NaN 一律回 None（＝未經檢查）。"""
+    flag = r.get("risk_flag")
+    return flag if isinstance(flag, str) else None
+
+
+def _warn(msg):
+    # stdout 是 markdown 報告本身，警告一律走 stderr（比照 load() 的 WARN）
+    print(f"**WARN: screen_tw {msg}", file=sys.stderr)
+
+
+def _live_gate(as_of, date_given):
+    """兩半共用的「抓不抓」閘門，回 ``(不抓的原因或 None, 下一個交易日)``。
+
+    依序：帶 ``--date`` → 日曆不可用 → DB 晚於／早於預期場次 → 下一個交易日算不出來。"""
+    if date_given:
+        return SKIP_HISTORICAL, None
+    expected = expected_session()
+    if expected is None:
+        return SKIP_CALENDAR, None
+    if as_of.date() > expected:
+        return SKIP_AHEAD.format(as_of=f"{as_of:%Y-%m-%d}", expected=expected), None
+    if as_of.date() < expected:
+        return SKIP_STALE.format(as_of=f"{as_of:%Y-%m-%d}", expected=expected), None
+    nxt = sessions_after(as_of, 1)
+    return (None, nxt) if nxt is not None else (SKIP_CALENDAR, None)
+
+
+def _collect_one(fetch, *, reason, opted_out, what, n=None):
+    """一半即時資料：``reason`` 為 None 才呼叫 ``fetch()``；例外、未抓與不可用的來源都只降級＋警告。
+
+    回 ``fetch()`` 的結果或 `Skipped`。``opted_out`` 時不警告；``what`` 是警告裡的名稱。"""
+    part = None
+    if reason is None:
+        try:
+            part = fetch()
+        except Exception as error:  # 防呆：模組本身不該拋，拋了也只降級
+            reason = f"抓取時發生例外（{type(error).__name__}: {error}）"
+    if part is None:
+        part = Skipped(reason, opted_out, n)
+        if not opted_out:
+            _warn(f"{what}未查：{reason}")
+    for s in _statuses(part):
+        if not s.ok:
+            _warn(f"{what}：{s.name} 不可用：{s.note}")
+    return part
+
+
+def collect_live(as_of, date_given, risk_on=True, events_on=True, event_days=5):
+    """main() 唯一決定「抓不抓」的地方：沒帶 ``--date`` 且基準日 == `expected_session()` 才抓。
+
+    任何失敗都只降級成 `Skipped` 或來源狀態，不擋報告。名單依序抓（上櫃處置依賴上櫃注意），
+    事件日曆的四個來源在 `events.upcoming` 內並行。"""
+    t0 = time.monotonic()
+    gate, nxt = _live_gate(as_of, date_given) if (risk_on or events_on) else (None, None)
+
+    def fetch_risk():
+        flags, statuses = risk_flags.fetch_risk_flags(as_of.date(), nxt)
+        return RiskResult(flags, statuses, nxt)
+
+    risk = _collect_one(fetch_risk, reason=gate if risk_on else "--no-risk-flags",
+                        opted_out=not risk_on or date_given, what="處置／注意股名單")
+    t1 = time.monotonic()
+
+    reason = gate if events_on else "--no-events"
+    window = None
+    if reason is None:
+        end, prev = sessions_after(as_of, event_days), session_before(as_of)
+        if end is None or prev is None:
+            reason = SKIP_CALENDAR
+        else:
+            window = events.EventWindow(nxt, end, prev, event_days)
+
+    def fetch_events():
+        by_stock, statuses = events.upcoming(window)
+        return EventsResult(window, by_stock, statuses, events.revenue_deadlines(window))
+
+    ev = _collect_one(fetch_events, reason=reason, opted_out=not events_on or date_given,
+                      what="事件日曆", n=event_days)
+    t2 = time.monotonic()
+    if not (isinstance(risk, Skipped) and isinstance(ev, Skipped)):
+        print(f"[screen_tw] 即時名單 {t1 - t0:.1f}s、事件日曆 {t2 - t1:.1f}s", file=sys.stderr)
+    return {"risk": risk, "events": ev}
+
+
+def apply_live(df, live, market_map=None):
+    """main() 用：依序套上 `apply_risk_flags` 與 `apply_event_tags`（都不剔除任何列）。"""
+    market_map = _seed_market_map() if market_map is None else market_map
+    df = apply_risk_flags(df, live["risk"], market_map)
+    return apply_event_tags(df, live["events"])
+
+
+def apply_risk_flags(df, risk, market_map=None):
+    """在候選 df 加 ``market``／``risk_flag``／``risk_flag_detail`` 三欄（不剔除任何列）。
+
+    ``risk_flag``：在可用名單裡 → 處置中／即將處置／注意股；該市場兩份名單都可用而不在名單
+    → ``""``（查過、乾淨）；名單不可用、沒查或市場未知 → ``None``（**未經檢查，不代表沒有**）。
+    市場別取種子檔（`_seed_market_map`），不用 `price.market`——那欄全為 NULL。"""
+    df = df.copy()
+    market_map = _seed_market_map() if market_map is None else market_map
+    df["market"] = pd.Series([market_map.get(str(s)) for s in df["stock_id"]], index=df.index,
+                             dtype=object)
+    # 沒抓（Skipped）時沒有 statuses，checked 自然是空集合：每一列都是未經檢查
+    flags = {} if isinstance(risk, Skipped) else risk.flags
+    checked = risk_flags.checked_markets(_statuses(risk))
+    hits = [_tristate(flags.get(str(sid)), market, checked, risk_flags.CLEAN)
+            for sid, market in zip(df["stock_id"], df["market"])]
+    for col, key in (("risk_flag", "flag"), ("risk_flag_detail", "detail")):
+        df[col] = pd.Series([None if h is None else getattr(h, key) for h in hits], index=df.index,
+                            dtype=object)
+    return df
+
+
+def _event_tags(found):
+    """一檔的事件短標：每種事件只標最早那一次（論壇不標，見 `events.Event.short_tag`）。"""
+    first = {}
+    for e in sorted(found, key=lambda e: e.start):
+        if e.short_tag() and e.kind not in first:
+            first[e.kind] = e.short_tag()
+    return list(first.values())
+
+
+def apply_event_tags(df, ev):
+    """加 ``event_tags`` 欄（📅法說10/23 這類短標的 list），由 `tag` 併入標籤欄與 JSON ``tags``。
+
+    沒抓事件日曆時不加欄，`tag` 照舊；沒命中的列是空 list（標籤不代表查過，查過與否看 JSON ``events``）。"""
+    if isinstance(ev, Skipped):
+        return df
+    df = df.copy()
+    df["event_tags"] = pd.Series([_event_tags(ev.by_stock.get(str(s), [])) for s in df["stock_id"]],
+                                 index=df.index, dtype=object)
+    return df
+
+
+def _tristate(hit, market, checked, clean):
+    """逐檔三態：有命中 → ``hit``；該檔市場的來源都可用 → ``clean``（查過、沒有）；
+    其餘（沒抓、來源失敗、市場未知）→ None（**未經檢查，不代表沒有**）。"""
+    if hit:
+        return hit
+    return clean if isinstance(market, str) and market in checked else None
+
+
+def _risk_status_line(risk):
+    if isinstance(risk, Skipped):
+        return f"- 處置／注意股名單：未查（{risk.reason}）"
+    parts = [f"{s.name} {'✓' if s.ok else '✗'}" + (f"（{s.note}）" if s.note else "")
+             for s in risk.statuses]
+    return "- 處置／注意股名單：" + "、".join(parts)
+
+
+def _render_risk(w, risk, top_rows):
+    hits = [r for _, r in top_rows.iterrows() if _flag(r)]
+    unchecked = [r for _, r in top_rows.iterrows() if _flag(r) is None]
+    if hits:
+        w(f"### ⚠ 處置／注意股（{len(hits)} 檔；處置期間分盤撮合／預收款券，進出場可成交性需自行評估）")
+        for r in hits:
+            w(f"- {r['stock_id']} {r['name']}（{r['risk_flag_detail']}）")
+        w("")
+    # 使用者自己關掉（--no-risk-flags／--date）時 §0 那行「未查（原因）」就夠了，不逐檔列
+    if unchecked and not (isinstance(risk, Skipped) and risk.opted_out):
+        if isinstance(risk, Skipped):
+            why = risk.reason
+        else:
+            why = "、".join(f"{s.name}（{s.note}）" for s in risk.statuses if not s.ok) or "市場別未知"
+        w(f"### ⚠ 處置／注意股名單未取得：{why}")
+        w("　以下候選未經檢查，不代表沒有：" + "、".join(
+            f"{r['stock_id']} {r['name']}" for r in unchecked))
+        w(f"　人工查詢：上市 {risk_flags.MANUAL_LINKS['twse']}　上櫃 {risk_flags.MANUAL_LINKS['tpex']}\n")
+
+
+def _render_events(w, ev, top_rows, top):
+    win = ev.window
+    w(f"### 事件日曆（未來 {win.n} 個交易日，{md(win.start)}~{md(win.end)}）")
+    any_hit = False
+    for _, r in top_rows.iterrows():
+        found = ev.by_stock.get(str(r["stock_id"]))
+        if found:
+            any_hit = True
+            w(f"- **{r['stock_id']} {r['name']}**：" + "　".join(e.label() for e in found))
+    if not any(s.ok for s in ev.statuses):
+        w("- 事件日曆來源全部不可用（未經檢查，不代表沒有事件，見下方來源狀態）")
+    elif not any_hit:
+        # 不能寫「無事件」：MOPS 證明不了新鮮，失敗的來源也看不到
+        w(f"- 前 {top} 名在可用來源中未見事件（未列不代表沒有，見下方來源狀態）")
+    for d in ev.revenue:
+        w(f"- 月營收：窗口與 {d:%m}/01~{d:%m}/10 公告期重疊（期限 {md(d)}；{REVENUE_RULE}）")
+    for s in ev.statuses:
+        w(f"- 來源：{s.name} {s.label}" + (f"：{s.note}" if s.note else ""))
+    w("")
+
+
+def _event_question(ev, r):
+    found = [e for e in ev.by_stock.get(str(r["stock_id"]), []) if e.kind != events.FORUM]
+    if not found:
+        return None
+    kinds = "／".join(dict.fromkeys(e.kind for e in found))
+    days = "、".join(dict.fromkeys(md(e.start) for e in found))
+    return f"{ev.window.n} 個交易日內有{kinds}（{days}），事件前是否降部位？"
+
+
 def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover, include_otc_revenue=False,
-           freshness=None):
+           freshness=None, live=None):
     L = []
     w = L.append
     w(f"# 台股量化篩選 — {as_of:%Y-%m-%d}（收盤後）\n")
@@ -443,6 +722,8 @@ def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover, include_ot
     w(f"- 範圍：{LISTED_ONLY_NOTE}")
     for n in freshness_notes(as_of, freshness):
         w(f"- ⚠ {n}")
+    if live is not None:
+        w(_risk_status_line(live["risk"]))
     w("")
 
     ind = df[~df["is_etf"]]
@@ -496,13 +777,31 @@ def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover, include_ot
       "美股與國際盤，上表所有價位都是未計入隔夜的錨點。\n")
     w("### 必查（決定要不要進場）")
     w("1. **美股最近一盤收盤**：那指／費半／道瓊，以及台指期夜盤點數 → 換算次日開盤預期缺口")
-    w("2. **未來 5 個交易日的事件**：FOMC、美國科技巨頭財報、台廠法說、月營收公布日、除權息")
+    ev = None if live is None else live["events"]
+    fetched = ev is not None and not isinstance(ev, Skipped)
+    days = 5 if ev is None else ev.window.n if fetched else ev.n
+    reminder = f"2. **未來 {days} 個交易日的事件**：FOMC、美國科技巨頭財報"
+    if fetched and any(s.ok and s.proven for s in ev.statuses):
+        w(reminder + "仍需自行查；台廠法說／除權息／月營收期限見下方「事件日曆」（未列不代表沒有）")
+    else:
+        # 沒附、全失敗、或只剩未證明新鮮的來源（MOPS）：事件日曆撐不起「改看下方」，人工待查項目原樣保留
+        if ev is None:
+            suffix = ""
+        elif not fetched:
+            suffix = f"（本報告未附事件日曆：{ev.reason}）"
+        elif any(s.ok for s in ev.statuses):
+            suffix = "（事件日曆只有未證明新鮮的來源可用）"
+        else:
+            suffix = "（事件日曆來源全部不可用）"
+        w(reminder + "、台廠法說、月營收公布日、除權息" + suffix)
     w("3. **大盤位階**：加權指數與季線／半年線的關係（本 DB 的 market_index 歷史過淺，需外部確認）")
     w("4. **國際變數**：油價、匯率、地緣衝突\n")
     semi = pool.head(top)[pool.head(top)["industry"].isin(SEMI_LINKED)]
     if len(semi):
         w(f"### ⚠ 費半連動標的（{len(semi)} 檔，隔夜美股半導體走弱時優先剔除）")
         w("　" + "、".join(f"{r['stock_id']} {r['name']}" for _, r in semi.iterrows()) + "\n")
+    if live is not None:
+        _render_risk(w, live["risk"], pool.head(top))
     thin = pool.head(top)[pool.head(top)["turnover20"] < 2e8]
     if len(thin):
         w(f"### ⚠ 量能偏薄（{len(thin)} 檔，日均額 < 2 億，出場流動性需自行評估）")
@@ -510,6 +809,8 @@ def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover, include_ot
             f"{r['stock_id']} {r['name']}（{r['turnover20'] / 1e8:.2f}億）"
             for _, r in thin.iterrows()
         ) + "\n")
+    if fetched:
+        _render_events(w, ev, pool.head(top), top)
     w("### 逐檔查（前 5 名）")
     for _, r in pool.head(5).iterrows():
         q = [f"近 20 日 {r['d20'] * 100:+.1f}% 的題材是什麼？是否已被消化？"]
@@ -521,15 +822,20 @@ def render(as_of, df, pool, steps, market_d1, idx, top, min_turnover, include_ot
             q.append("當日重挫的原因？是個股利空還是跟隨大盤？")
         if pd.notna(r["yoy"]) and r["yoy"] < 0:
             q.append(f"月營收 YoY {r['yoy']:+.1f}% 為負，股價上漲的依據是什麼？")
+        if fetched:
+            event_q = _event_question(ev, r)
+            if event_q:
+                q.append(event_q)
         w(f"- **{r['stock_id']} {r['name']}**：" + "　".join(q))
     w("")
     return "\n".join(L)
 
 
 def to_json(as_of, pool, steps, market_d1, strategy, top, include_otc_revenue=False,
-            freshness=None):
+            freshness=None, live=None):
     """給 agent 消費的候選資料。markdown 是給人讀的,agent 要的是可程式化的欄位 +
     「為什麼入選」——後者決定它該去查什麼,不然它只能重新猜一遍篩選邏輯。"""
+    ev_checked = None if live is None else _events_checked(live["events"])
     cols = ["stock_id", "name", "industry", "close", "break_pct", "vol_ratio5", "d1", "d5",
             "d20", "d60", "bias20", "rsi14", "atr_pct", "pos20", "from_hi60", "turnover20",
             "inst_5", "inst_20", "inst_streak", "margin_chg5", "pe_ratio", "pb_ratio",
@@ -547,8 +853,10 @@ def to_json(as_of, pool, steps, market_d1, strategy, top, include_otc_revenue=Fa
             "momentum": (f"多頭排列、近 5 日法人淨買 {r['inst_5'] / 1000:+,.0f} 張、"
                          f"20 日 {r['d20'] * 100:+.1f}%"),
         }[strategy]
+        if live is not None:
+            _live_rec(rec, r, live["events"], ev_checked)
         out.append(rec)
-    return {
+    result = {
         "as_of": f"{as_of:%Y-%m-%d}",
         "strategy": strategy,
         "thresholds": BREAKOUT if strategy == "breakout" else None,
@@ -588,6 +896,66 @@ def to_json(as_of, pool, steps, market_d1, strategy, top, include_otc_revenue=Fa
             *freshness_notes(as_of, freshness),
         ],
     }
+    if live is not None:
+        _live_json(result, live)
+    return result
+
+
+def _events_checked(ev):
+    """``(查過的市場集合, {市場: [查過的類別]})``，由 `to_json` 算一次給每一列用。"""
+    statuses = _statuses(ev)
+    return events.checked_markets(statuses), events.checked_categories(statuses)
+
+
+def _live_rec(rec, r, ev, ev_checked):
+    """逐檔的即時欄位。``None`` 一律代表「未經檢查」，``""``／``[]`` 才是查過沒有。
+
+    ``events`` 比照 ``risk_flag`` 逐市場判（`_tristate`）：有命中 → 命中清單（含未證明新鮮的 MOPS
+    命中）；沒命中且該檔市場（取 `apply_risk_flags` 加上的 ``market`` 欄）的每個事件來源都「可用且
+    新鮮度已證明」→ ``[]``；其餘（沒抓、該市場任一來源失敗或未證明新鮮、市場未知）→ ``None``。
+    MOPS 永遠未證明新鮮，所以目前 ``events`` 實務上只會是命中清單或 ``None``；哪些類別確實查過
+    看 ``events_checked``（例如 ``["除權息"]``；沒抓或市場未知為 ``[]``）。"""
+    rec["risk_flag"] = _flag(r)
+    detail = r.get("risk_flag_detail")
+    rec["risk_flag_detail"] = detail if isinstance(detail, str) else None
+    found = [] if isinstance(ev, Skipped) else ev.by_stock.get(str(r["stock_id"]), [])
+    markets, categories = ev_checked
+    market = r.get("market")
+    rec["events"] = _tristate([e.to_dict() for e in found], market, markets, [])
+    rec["events_checked"] = list(categories.get(market, [])) if isinstance(market, str) else []
+
+
+def _live_json(result, live):
+    risk, ev = live["risk"], live["events"]
+    blind = result["blind_spots"]
+    risk_skipped = isinstance(risk, Skipped)
+    result["risk_flag_skipped"] = risk.reason if risk_skipped else None
+    result["risk_flag_sources"] = [s.to_dict() for s in _statuses(risk)]
+    result["next_session"] = None if risk_skipped else risk.next_session.isoformat()
+    if risk_skipped:
+        blind.append(f"處置／注意股：未查（{risk.reason}），候選的 risk_flag 為 null＝未經檢查")
+    for s in _statuses(risk):
+        if not s.ok:
+            blind.append(f"處置／注意股：{s.name} 不可用（{s.note}），該市場不在名單上的候選未經檢查")
+    ev_skipped = isinstance(ev, Skipped)
+    result["event_skipped"] = ev.reason if ev_skipped else None
+    result["event_window"] = (None if ev_skipped else
+                              {"n": ev.window.n, "start": ev.window.start.isoformat(),
+                               "end": ev.window.end.isoformat()})
+    result["event_sources"] = [s.to_dict() for s in _statuses(ev)]
+    # 純日期推算，但沒抓事件日曆時並沒有算過窗口，維持「null＝未經檢查」
+    result["revenue_deadlines"] = None if ev_skipped else [d.isoformat() for d in ev.revenue]
+    if ev_skipped:
+        blind.append(f"事件日曆：未附（{ev.reason}），候選的 events 為 null＝未經檢查")
+    else:
+        blind.append("事件日曆只含台廠法說／除權息預告／月營收期限；FOMC、美股財報仍需自行查")
+    for s in _statuses(ev):
+        if not s.ok:
+            blind.append(f"事件日曆：{s.name} 不可用（{s.note}），該市場沒有命中的候選 events 為 null"
+                         "＝未經檢查，未列不代表沒有")
+        elif not s.proven:
+            blind.append(f"事件日曆：{s.name} 可用但未證明新鮮（{s.note}），不算查過：該市場沒有命中的"
+                         "候選 events 為 null，查過的類別見 events_checked")
 
 
 def main(argv=None):
@@ -602,15 +970,26 @@ def main(argv=None):
     p.add_argument("--json", default=None, help="另存 JSON 給 agent 消費")
     p.add_argument("--include-otc-revenue", action="store_true",
                    help="月營收條件放入上櫃（預設只用上市口徑；放入後基準數字失效，需先帶同一旗標重跑 measure_signal_forward.py）")
+    p.add_argument("--no-risk-flags", action="store_true",
+                   help="不即時抓處置／注意股名單（預設：基準日為預期場次時抓，只標記不剔除）")
+    p.add_argument("--no-events", action="store_true",
+                   help="不即時抓事件日曆（法說會、除權息預告；預設：基準日為預期場次時抓）")
+    p.add_argument("--event-days", type=int, default=5,
+                   help="事件日曆涵蓋基準日之後幾個交易日（預設 5）")
     a = p.parse_args(argv)
+    if a.event_days < 1:
+        p.error("--event-days 必須 ≥ 1")
 
     engine = get_engine()
     as_of, px, inst, mgn, val, rev, info, idx = load(engine, a.date, a.include_otc_revenue)
+    live = collect_live(as_of, a.date is not None, not a.no_risk_flags, not a.no_events,
+                        a.event_days)
     df, market_d1 = build(as_of, px, inst, mgn, val, rev, info, idx, a.min_turnover * 1e8)
+    df = apply_live(df, live)
     pool, steps = funnel(df, a.min_turnover * 1e8, a.strategy)
     fresh = data_freshness(px, inst, mgn, val)
     md = render(as_of, df, pool, steps, market_d1, idx, a.top, a.min_turnover,
-                a.include_otc_revenue, fresh)
+                a.include_otc_revenue, fresh, live)
 
     out = Path(a.out) if a.out else REPO / ".claude" / "reviews" / f"screen-tw-{as_of:%Y%m%d}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -619,7 +998,7 @@ def main(argv=None):
         jp = Path(a.json)
         jp.parent.mkdir(parents=True, exist_ok=True)
         jp.write_text(json.dumps(to_json(as_of, pool, steps, market_d1, a.strategy, a.top,
-                                         a.include_otc_revenue, fresh),
+                                         a.include_otc_revenue, fresh, live),
                                  ensure_ascii=False, indent=1, default=float), encoding="utf-8")
         print(f"[screen_tw] JSON 已寫入 {jp}", file=sys.stderr)
     print(md)

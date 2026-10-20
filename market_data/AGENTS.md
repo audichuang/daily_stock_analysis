@@ -4,7 +4,7 @@
 
 ## 模組定位
 
-爬取台股行情/籌碼/財報歷史,寫入外部 Postgres 的 `market` schema——台股歷史資料的**唯一資料源**(無本地備份,遺失只能從官方端點重爬)。面板經 `data_provider/market_db_fetcher.py` 讀取(priority=1,台股日線優先本地 DB,查無資料 fallback yfinance)。連線設定只有一個:`.env` 的 `DATABASE_URL`(gitignored,勿寫死)。
+爬取台股行情/籌碼/財報歷史,寫入外部 Postgres 的 `market` schema——台股歷史資料的**唯一資料源**(無本地備份,遺失只能從官方端點重爬)。另放少數**只抓不入庫**的模組:報告／盤前流程當下即時抓官方公告(處置／注意股 `risk_flags.py`、事件日曆 `events.py`),結果只進當次輸出,**不寫 DB、不建表**;它們的 HTTP 一律走 `tw_official_http.py`(放在 `scripts/` 的 `taifex_positions.py` 期交所籌碼也借用它),不走入庫爬蟲的 `crawler.requests_get`。面板經 `data_provider/market_db_fetcher.py` 讀取(priority=1,台股日線優先本地 DB,查無資料 fallback yfinance)。連線設定只有一個:`.env` 的 `DATABASE_URL`(gitignored,勿寫死)。
 
 ## 檔案角色
 
@@ -13,7 +13,10 @@
 - `writer.py`:INSERT…ON CONFLICT upsert(重爬冪等)
 - `market_repo.py`:面板讀取面(`price_history`/`to_daily_frame` 等)
 - `adjust.py`:重建 `price_adjustment` 前復權因子(除權息+減資+分割三來源合一);`load_factors()` 是算報酬/均線前套用因子的唯一入口(休市日事件經 `snap_events_to_sessions` 對齊)
-- `health.py`:完整性/新鮮度稽核(thin price days 用**局部**中位數——全域中位數會被 16 年上市家數成長稀釋;報出的日子用 `backfill --force` 修)
+- `health.py`:完整性/新鮮度稽核(thin price days 用**局部**中位數——全域中位數會被 16 年上市家數成長稀釋;報出的日子用 `backfill --force` 修;另有 `sessions_after(day, n)`／`session_before(day)` 給只抓不入庫的模組算「下 N 個／前一個交易日」,與 `expected_session` 共用 XTAI 日曆、日曆取不到回 None——`market_data` 內要交易日曆一律用這三個,不 import `src.core.trading_calendar`)
+- `tw_official_http.py`:只抓不入庫模組的共用 HTTP(`get`／`post` 短 timeout、不重試、不暖 cookie)、`error_reason`(判 HTML 看內容不看 Content-Type)、`SourceStatus`(`proven=False`＝可用但未證明新鮮、不算查過)／`Step`／`FormatChanged`／`run_sources`(`parallel=True` 只給彼此不依賴的來源)／`checked_markets`(要可用**且**已證明)／`md`(日期一律 `MM/DD` 補零);**不判新鮮度**,呼叫端仍要比對回應自帶的日期。並行下不能用 `warnings.catch_warnings()`(行程全域、非執行緒安全),MOPS 的 InsecureRequestWarning 是 import 時依主機靜音。規則見模組 docstring
+- `risk_flags.py`:處置／注意股即時名單(上市＋上櫃各兩份),只標記不剔除;四份各自的新鮮度規則見模組 docstring(TWSE 處置「資訊更新日期」語意未實測,見 `docs/tw-swing-pipeline.md`)。TPEx 注意的「累計」欄是當天總檔數不是個股次數,別印。`python -m market_data.risk_flags <代號>` 可單查(裸代號或帶 `.TW`／`.TWO` 皆可)
+- `events.py`:事件日曆(MOPS 法說會、除權息預告、月營收期限),只抓不入庫,四源並行;MOPS 新鮮度無法自證、`proven=False`,命中照列但不算查過。來源→市場在 `SOURCE_MARKET`、→類別在 `SOURCE_CATEGORY`;`checked_markets` 決定逐檔 `events` 能不能寫 `[]`(目前不會),`checked_categories` 給逐檔 `events_checked`。規則見模組 docstring
 - `migrations/`:Alembic,只管 `market` schema(不碰 `app`/`public`)
 - `sources.py`/`crawler.py`:TWSE/TPEx/MOPS 原始爬取邏輯(移植而來),盡量少動
 - `financial_statement.py`:IFRS 財報 html → 寬表解析(移植而來),盡量少動

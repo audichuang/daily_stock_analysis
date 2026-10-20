@@ -52,11 +52,16 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
   要改對 TWSE 官方加權指數日資料（`MI_5MINS_HIST`，驗法見 skill `tw-morning-call` Step 4）。
   每行都要明寫 `exclude_from_scoring`，累積到 20 筆**可計分**的判讀再寫回驗；在那之前，
   不要聲稱 regime 判讀有經驗證的優勢。
+  選填的期交所欄位（2026-10-20 起；之前的行沒有）。**從 `uv run python scripts/taifex_positions.py --json` 原樣複製**
+  （`make taifex` 的同一支腳本加 `--json`；欄位名、單位都已對好，不要從文字輸出手抄換算）：
+  `foreign_fut_oi`（外資台指期大台淨未平倉口數，整數，負＝淨空）、`foreign_fut_oi_chg`（較前一交易日的
+  口數變化，整數）、`pc_oi_ratio`（臺指選擇權 P/C 未平倉比，**小數**：文字輸出的 66.17% 在 JSON 已是 0.6617）。
+  不可用或沒有日變化時 JSON 裡已是 `null`（原因在 `reasons`），照填 `null`，不要去搜尋補數字。它們只是 `reason` 的佐證，不是 regime 門檻。
 
 ## 怎麼用
 
 ```bash
-make morning            # 每天早上：補資料 → 昨晚國際盤 → 待觸發計畫 → 候選，接著跑 tw-morning-call
+make morning            # 每天早上：補資料 → 昨晚國際盤 → 期交所籌碼 → 待觸發計畫 → 候選，接著跑 tw-morning-call
 make swing              # 更新資料 → 全市場篩選 → 產出候選 JSON，接著跑 tw-swing-research
 make verify-decisions   # 60 交易日後回驗（未到期的會列出剩餘天數）
 ```

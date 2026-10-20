@@ -66,10 +66,49 @@ def expected_session(now=None, is_session=None):
     try:
         if is_session(today) and now.time() >= SESSION_COMPLETE_AFTER:
             return today
-        for back in range(1, _SESSION_LOOKBACK_DAYS + 1):
-            day = today - datetime.timedelta(days=back)
-            if is_session(day):
-                return day
+    except Exception:
+        return None
+    return session_before(today, is_session=is_session)
+
+
+def _as_date(day):
+    return day.date() if isinstance(day, datetime.datetime) else day
+
+
+def sessions_after(day, n, is_session=None):
+    """``day`` 之後（不含 ``day``）的第 ``n`` 個交易日；``n`` 須 ≥ 1。
+
+    ``n=1`` 即「下一個交易日」。``day`` 本身是不是交易日不影響結果。日曆取不到、
+    日曆拋例外（例如超出 exchange_calendars 的範圍）或往後
+    ``_SESSION_LOOKBACK_DAYS * n`` 個曆日內湊不滿 ``n`` 個交易日都回 None——
+    呼叫端要把 None 當「日曆不可用」處理，不要自己退回週一~五（理由同
+    `_xtai_session_checker`）。``is_session`` 為 ``date -> bool``，預設取 XTAI。"""
+    if n < 1:
+        raise ValueError(f"n 必須 ≥ 1，收到 {n}")
+    return _walk_sessions(day, 1, n, _SESSION_LOOKBACK_DAYS * n, is_session)
+
+
+def session_before(day, is_session=None):
+    """``day`` 之前（不含 ``day``）最近的一個交易日；取不到回 None（規則同 `sessions_after`）。"""
+    return _walk_sessions(day, -1, 1, _SESSION_LOOKBACK_DAYS, is_session)
+
+
+def _walk_sessions(day, step, n, limit, is_session):
+    """從 ``day``（不含）往 ``step`` 方向逐日走最多 ``limit`` 個曆日，回第 ``n`` 個交易日。
+
+    日曆取不到、日曆拋例外或走完仍湊不滿都回 None。"""
+    is_session = is_session or _xtai_session_checker()
+    if is_session is None:
+        return None
+    day = _as_date(day)
+    found = 0
+    try:
+        for offset in range(1, limit + 1):
+            candidate = day + datetime.timedelta(days=step * offset)
+            if is_session(candidate):
+                found += 1
+                if found == n:
+                    return candidate
     except Exception:
         return None
     return None

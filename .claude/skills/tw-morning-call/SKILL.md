@@ -16,18 +16,32 @@ description: "台股每日盤前判讀：一鍵取數（補資料／隔夜收盤
 ## Step 1：一鍵取數
 
 ```bash
-make morning       # 補資料 → 昨晚國際盤收盤 → 待觸發計畫 → 今日 breakout 候選
+make morning       # 補資料 → 昨晚國際盤收盤 → 期交所籌碼 → 待觸發計畫 → 今日 breakout 候選
 ```
 
-四件事都在裡面，**不要用搜尋湊隔夜數字**：`scripts/overnight.py` 有日期戳、有 ADR 折算、
+五件事都在裡面，**不要用搜尋湊隔夜數字**：`scripts/overnight.py` 有日期戳、有 ADR 折算、
 有日期一致性檢查，而搜尋引擎會把不同交易日的收盤混在一起（實測差到 3.7pp）。
+`overnight.py` 任一序列失敗會回 1（表裡該列印「失敗」），`make morning` 忽略這個錯誤、後面幾段照跑；
+失敗的那幾個數字要自己補查，不能當成沒有變動。
+
+**期交所籌碼區塊**（`scripts/taifex_positions.py`，單跑用 `make taifex`）印前一交易日的外資台指期（大台 TXF）
+淨未平倉與日變化、臺指選擇權 P/C 未平倉比。讀法：
+
+- 只有回應最新一列的日期＝預期場次才印數字；否則該項印 `⚠ …：不可用（原因）`，**就當今天沒有這個數字**，
+  不要去搜尋補。兩項各自降級，一項不可用不影響另一項。
+- 日變化只在前一列正好是前一交易日時才印；印「不列日變化」時只有水位。
+- 出現 `⚠ 跨月結算` 時，未平倉變化含結算／轉倉效應，不要讀成法人換方向。
+
+今日候選的報告 §0 有一行「處置／注意股名單」狀態，§5 有「事件日曆」；待觸發計畫的代號不在候選裡，
+要查處置／注意狀態用 `uv run python -m market_data.risk_flags <代號…>`（`2424` 或 `2424.TW` 皆可）。
 
 再補一次寬掃，拿今天的資金流向樣本（**只涵蓋上市**：`market.institutional`／`margin`／`valuation` 沒有上櫃股，
 `momentum` 的「法人買超」篩選與「融資減」標籤等於排除所有上櫃，流動性夠的標的約少三成，族群分布因此偏上市）：
 
 ```bash
 uv run --env-file .env python scripts/screen_tw.py --strategy momentum \
-  --top 40 --min-turnover 1 --json /tmp/mom.json --out /tmp/mom.md
+  --top 40 --min-turnover 1 --json /tmp/mom.json --out /tmp/mom.md \
+  --no-risk-flags --no-events   # 寬掃只看族群分布，不必再抓一次即時名單與事件
 ```
 
 `momentum` 池只當**觀測**：它在 13 年回測是十個因子裡同曝險超額最差的一個（約 −13%），
@@ -35,7 +49,8 @@ uv run --env-file .env python scripts/screen_tw.py --strategy momentum \
 有正期望證據的進場來源只有 `breakout` 池。
 
 **完成條件**：手上有隔夜收盤七項、breadth 三個數字（站上 MA20 比例、漲跌家數、RSI14 中位）、
-待觸發計畫清單、`breakout` 檔數、`momentum` 的族群分布。
+期交所兩項（外資台指期淨未平倉＋日變化、P/C 未平倉比；不可用就寫不可用）、
+待觸發計畫清單、`breakout` 檔數與 screen 報告 §0 的處置／注意股名單狀態、`momentum` 的族群分布。
 
 ## Step 2：補「現在」
 
@@ -47,6 +62,9 @@ Step 1 給的全是**收盤**。美股期貨與台指期夜盤要的是現在，
 | 台指期夜盤收盤（05:00） | [期交所盤後行情](https://www.taifex.com.tw/cht/3/futDailyMarketReport)——官方，有場次時間戳 |
 | 美股期貨、VIX、日經／恆生期貨 | [鉅亨國際期指](https://www.cnyes.com/futures/indexftr.aspx) |
 | **今天韓國開盤後**（08:00 起）的 SK海力士 | 韓股與台股同時段，`make morning` 只給到它的**前一交易日**收盤。要連續監看走 `scripts/kr_tw_memory_watch.py`（見下） |
+
+法人台指期未平倉與 P/C 已由 `make morning` 的期交所區塊帶出，**不用人工查**；但那是前一交易日日盤的籌碼，
+不是夜盤價格，夜盤收盤仍照上表人工查。
 
 要盯整天而不是查一次，用監看腳本——它同時抓韓國三檔與台灣記憶體四檔，算同日價差，只在門檻觸發時推 Bark：
 
@@ -113,6 +131,9 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
 寫、但在 `reason` 明寫「門檻未過」。**不要為了貼標籤去改門檻**：目前沒有樣本支持任何新門檻。
 四種以外的自創標籤（例如 `relief_bounce`）同樣不要用，事後沒辦法對定義計分。
 
+期交所的外資淨未平倉與 P/C 只當 `reason` 的佐證，**不是 regime 的判定門檻**——沒有任何回測支持 P/C 或未平倉門檻，
+不要用它們改判 regime。
+
 **完成條件**：你能用一句話說出今天是哪個 regime，並指出**哪個數字讓你排除了其他三個**。
 
 ## Step 4：動作與留檔
@@ -138,6 +159,10 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
 能驗對錯的觀測值：
 
 - `regime`：拿當日收盤的 breadth 與 VIX 對定義驗。
+- `foreign_fut_oi`／`foreign_fut_oi_chg`／`pc_oi_ratio`（選填，2026-10-20 起）：**不要手抄或換算**，跑
+  `uv run python scripts/taifex_positions.py --json`（`make taifex` 的同一支腳本加 `--json`），把輸出的這三個欄位原樣複製，
+  例如 `"foreign_fut_oi":-89748,"foreign_fut_oi_chg":1397,"pc_oi_ratio":0.6617`（`pc_oi_ratio` 已是小數）。
+  不可用或沒有日變化時那一欄已是 `null`，原因在輸出的 `reasons`，可抄進 `reason`。語意見 `journal/README.md`。
 - `gap_expected`：**不能用 `market.market_index` 驗**，那張表沒有開盤價。要對 TWSE 官方的
   「發行量加權股價指數歷史資料」`https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST?date=YYYYMM01&response=json`
   （一次回一整月的開／高／低／收），算當日開盤 ÷ 前一交易日收盤 − 1。實測 2026-07-31 開盤 41,610.41，

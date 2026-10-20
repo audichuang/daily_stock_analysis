@@ -114,7 +114,7 @@ def test_fee_discount_reduces_cost():
 
 @pytest.mark.parametrize("script", [
     "backtest_screen.py", "measure_signal_forward.py", "portfolio_walkforward.py",
-    "screen_tw.py", "verify_swing_decisions.py",
+    "screen_tw.py", "taifex_positions.py", "verify_swing_decisions.py",
 ])
 def test_every_pipeline_script_can_print_help(script):
     """argparse 會對 help 字串做 `%` 格式化，所以裸 `%` 會讓 `--help` 直接 ValueError。

@@ -87,6 +87,80 @@ def test_a_calendar_that_raises_returns_none():
     assert health.expected_session(_at(date(2026, 10, 16), 18), broken) is None
 
 
+# --- sessions_after / session_before ---------------------------------------
+# 2026 的國慶 10/10 是週六，「週末不交易」就會跳過它，測它等於沒測；真正有鑑別力的是
+# 前一天 10/9（週五補假）。另用 2025（10/10 是週五）測國慶本身。
+
+_HOLIDAYS_2025 = {date(2025, 10, 10)}
+
+
+def _is_session_2025(day):
+    return day.weekday() < 5 and day not in _HOLIDAYS_2025
+
+
+def _weekday_only(day):
+    return day.weekday() < 5
+
+
+def test_next_session_skips_the_national_day_make_up_holiday_not_just_the_weekend():
+    """10/8（四）的下一個交易日是 10/12（一）：要跳過 10/9 補假，不是只跳週末。"""
+    assert health.sessions_after(date(2026, 10, 8), 1, _is_session) == date(2026, 10, 12)
+    # 反向：同一天換成只認週末的日曆就是 10/9——確認上面那條真的靠假日表在判斷
+    assert health.sessions_after(date(2026, 10, 8), 1, _weekday_only) == date(2026, 10, 9)
+
+
+def test_next_session_skips_national_day_on_a_weekday():
+    assert health.sessions_after(date(2025, 10, 9), 1, _is_session_2025) == date(2025, 10, 13)
+
+
+def test_nth_session_counts_only_sessions():
+    # 10/8 之後的交易日：10/12、10/13、10/14 …
+    assert health.sessions_after(date(2026, 10, 8), 2, _is_session) == date(2026, 10, 13)
+    assert health.sessions_after(date(2026, 10, 8), 5, _is_session) == date(2026, 10, 16)
+
+
+def test_sessions_after_is_strictly_after_even_on_a_session_and_from_a_holiday():
+    assert health.sessions_after(date(2026, 10, 16), 1, _is_session) == date(2026, 10, 19)
+    assert health.sessions_after(date(2026, 10, 9), 1, _is_session) == date(2026, 10, 12)
+
+
+def test_sessions_after_accepts_datetime():
+    assert health.sessions_after(_at(date(2026, 10, 8), 18), 1, _is_session) == date(2026, 10, 12)
+
+
+def test_session_before_skips_the_make_up_holiday_and_weekend():
+    assert health.session_before(date(2026, 10, 12), _is_session) == date(2026, 10, 8)
+    assert health.session_before(date(2026, 10, 12), _weekday_only) == date(2026, 10, 9)
+    assert health.session_before(date(2025, 10, 13), _is_session_2025) == date(2025, 10, 9)
+
+
+def test_session_before_is_strictly_before():
+    assert health.session_before(date(2026, 10, 16), _is_session) == date(2026, 10, 15)
+
+
+def test_sessions_calendar_unavailable_returns_none(monkeypatch):
+    """日曆取不到就回 None，不退回週一~五（否則 10/9 補假會被當成交易日）。"""
+    monkeypatch.setattr(health, "_xtai_session_checker", lambda: None)
+
+    assert health.sessions_after(date(2026, 10, 8), 1) is None
+    assert health.session_before(date(2026, 10, 12)) is None
+
+
+def test_sessions_calendar_that_raises_or_never_opens_returns_none():
+    def broken(day):
+        raise ValueError("out of bounds")
+
+    assert health.sessions_after(date(2026, 10, 8), 1, broken) is None
+    assert health.session_before(date(2026, 10, 12), broken) is None
+    assert health.sessions_after(date(2026, 10, 8), 3, lambda day: False) is None
+    assert health.session_before(date(2026, 10, 12), lambda day: False) is None
+
+
+def test_sessions_after_rejects_non_positive_n():
+    with pytest.raises(ValueError):
+        health.sessions_after(date(2026, 10, 8), 0, _is_session)
+
+
 # --- report / run wiring ----------------------------------------------------
 
 class _FakeResult:

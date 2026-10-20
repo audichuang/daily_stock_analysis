@@ -462,3 +462,558 @@ def test_build_does_not_leak_the_valuation_date_column():
     idx = pd.DataFrame({"date": [AS_OF], "close": [100.0], "change": [1.0]})
     df, _ = screen_tw.build(AS_OF, px, inst, mgn, val, rev, info, idx, 0.0)
     assert "date" not in df.columns and df.loc[0, "pe_ratio"] == 12.0
+
+
+# ---- 即時官方名單：處置／注意股旗標、事件日曆 -----------------------------------------------
+# `live=None`（預設）時 render／to_json 必須和接上即時名單之前**逐字相同**——fixture 是改動前
+# 的程式產生的（見 `tests/screen_tw_baseline_inputs.py`），不能拿新版輸出回填。
+
+import datetime as _dt  # noqa: E402
+import re  # noqa: E402
+
+from market_data import events as _events  # noqa: E402
+from market_data.risk_flags import RiskHit  # noqa: E402
+from market_data.tw_official_http import SourceStatus  # noqa: E402
+
+from tests import screen_tw_baseline_inputs as _baseline  # noqa: E402
+
+_BASELINE_DIR = Path(__file__).resolve().parent / "fixtures" / _baseline.FIXTURE_DIR_NAME
+
+
+def test_render_without_live_is_byte_identical_to_the_pre_change_output():
+    assert _baseline.render_baseline(screen_tw) == (_BASELINE_DIR / "render.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("strategy", ["breakout", "momentum"])
+def test_json_without_live_is_byte_identical_to_the_pre_change_output(strategy):
+    expected = (_BASELINE_DIR / f"to_json_{strategy}.json").read_text(encoding="utf-8")
+    assert _baseline.json_baseline(screen_tw, strategy) == expected
+
+
+@pytest.mark.parametrize("flag, label", [("處置中", "⚠處置中"), ("即將處置", "⚠即將處置"),
+                                         ("注意股", "⚠注意股")])
+def test_tag_marks_risk_flags(flag, label):
+    assert label in tag(pd.Series(_row(risk_flag=flag)), 0.0)
+
+
+@pytest.mark.parametrize("flag", [None, ""])
+def test_tag_is_silent_for_unchecked_and_clean(flag):
+    assert not any("處置" in t or "注意" in t for t in tag(pd.Series(_row(risk_flag=flag)), 0.0))
+
+
+_LIVE_AS_OF = pd.Timestamp("2026-10-20")
+_NEXT = _dt.date(2026, 10, 21)
+_OK4 = [SourceStatus("上市處置", True, "資訊更新 10/20"), SourceStatus("上市注意", True, "14 列皆為 10/20"),
+        SourceStatus("上櫃注意", True, "19 列皆為 10/20"), SourceStatus("上櫃處置", True, "新鮮度旁證")]
+_TPEX_DOWN = _OK4[:2] + [SourceStatus("上櫃注意", False, "空回應無法證明新鮮"),
+                         SourceStatus("上櫃處置", False, "無法證明新鮮")]
+
+
+def _risk(statuses=_OK4, flags=None):
+    flags = flags if flags is not None else {"2424": RiskHit("處置中", "隴華", "處置中 10/21～10/28，人工管制撮合")}
+    return screen_tw.RiskResult(flags, list(statuses), _NEXT)
+
+
+def _skip(reason, opted_out=False):
+    return screen_tw.Skipped(reason, opted_out, 5)
+
+
+def test_apply_risk_flags_uses_the_seed_market_when_price_market_is_null():
+    """實際 DB 的 price.market 全為 NULL：市場別必須從種子檔來，否則旗標永遠是「未經檢查」。"""
+    df = pd.DataFrame([_pool_row("1101", market=None), _pool_row("6488", market=None),
+                       _pool_row("2424", market=None), _pool_row("5305", market=None)])
+    seed = {"1101": "twse", "6488": "tpex", "2424": "twse"}   # 5305 已下市、不在種子檔
+
+    out = screen_tw.apply_risk_flags(df, _risk(_TPEX_DOWN), market_map=seed)
+
+    flags = dict(zip(out["stock_id"], out["risk_flag"]))
+    assert flags["1101"] == ""            # 上市兩份名單都可用、不在名單 → 查過、乾淨
+    assert flags["6488"] is None          # 上櫃名單不可用 → 未經檢查
+    assert flags["2424"] == "處置中"
+    assert flags["5305"] is None          # 市場未知 → 未經檢查
+    assert list(out["market"]) == ["twse", "tpex", "twse", None]
+
+
+def test_apply_risk_flags_reads_the_seed_csv(tmp_path, monkeypatch):
+    _seed(tmp_path, monkeypatch)
+    df = pd.DataFrame([_pool_row("1101"), _pool_row("6488")])
+
+    out = screen_tw.apply_risk_flags(df, _risk(_TPEX_DOWN, flags={}))
+
+    assert list(out["risk_flag"]) == ["", None]
+
+
+def test_apply_risk_flags_when_skipped_leaves_everything_unchecked():
+    df = pd.DataFrame([_pool_row("1101")])
+    out = screen_tw.apply_risk_flags(df, _skip(screen_tw.SKIP_HISTORICAL, True), market_map={"1101": "twse"})
+    assert out["risk_flag"].tolist() == [None]
+
+
+_WINDOW = _events.EventWindow(_dt.date(2026, 10, 21), _dt.date(2026, 10, 27), _dt.date(2026, 10, 19), 5)
+_MOPS_SII_OK = SourceStatus(_events.SRC_MOPS_SII, True, _events.MOPS_NOTE, proven=False)
+
+
+def _ev(by_stock=None, statuses=None, revenue=()):
+    by_stock = by_stock if by_stock is not None else {
+        "1101": [_events.Event("1101", _events.CONFERENCE, _dt.date(2026, 10, 23), _dt.date(2026, 10, 23),
+                               "第三季財務報告", "MOPS", "14:00"),
+                 _events.Event("1101", "除息", _dt.date(2026, 10, 26), _dt.date(2026, 10, 26),
+                               "", "TWT48U", cash=1.5)],
+        "6488": [_events.Event("6488", _events.FORUM, _dt.date(2026, 10, 21), _dt.date(2026, 10, 22),
+                               "受邀參加", "MOPS", "09:00")],
+    }
+    statuses = statuses if statuses is not None else [
+        _MOPS_SII_OK,
+        SourceStatus(_events.SRC_TWT48U, False, "拒收：Last-Modified 10/15，超過 1 個交易日未更新")]
+    return screen_tw.EventsResult(_WINDOW, by_stock, statuses, list(revenue))
+
+
+def _live_render(rows, live):
+    pool = pd.DataFrame(rows)
+    return screen_tw.render(_LIVE_AS_OF, pool, pool, {}, 0.0, pd.DataFrame(), 25, 2.0, live=live)
+
+
+def _flagged_rows():
+    return [_pool_row("2424", name="隴華", risk_flag="處置中", risk_flag_detail="處置中 10/21～10/28，人工管制撮合"),
+            _pool_row("1101", risk_flag=""), _pool_row("6488", name="環球晶", risk_flag=None)]
+
+
+def test_render_lists_flagged_and_unchecked_candidates_but_never_zero():
+    md = _live_render(_flagged_rows(), {"risk": _risk(_TPEX_DOWN), "events": _ev()})
+
+    assert "### ⚠ 處置／注意股（1 檔" in md and "- 2424 隴華（處置中 10/21～10/28，人工管制撮合）" in md
+    assert "### ⚠ 處置／注意股名單未取得：上櫃注意（空回應無法證明新鮮）、上櫃處置（無法證明新鮮）" in md
+    assert "以下候選未經檢查，不代表沒有：6488 環球晶" in md
+    assert not re.search(r"0 檔(處置|注意)|處置股 0|無處置", md)
+    assert "- 處置／注意股名單：上市處置 ✓（資訊更新 10/20）、上市注意 ✓（14 列皆為 10/20）、上櫃注意 ✗" in md
+
+
+def test_render_with_all_lists_clean_prints_no_risk_section_and_no_zero_claim():
+    md = _live_render([_pool_row("1101", risk_flag="")], {"risk": _risk(flags={}), "events": _ev({})})
+    assert "處置／注意股（" not in md and "名單未取得" not in md
+    assert not re.search(r"0 檔(處置|注意)|處置股 0|無處置", md)
+
+
+def test_render_opted_out_risk_flags_only_says_why_in_the_status_line():
+    """使用者自己關掉（--no-risk-flags／--date）：§0 一行原因就夠了，不逐檔列「未經檢查」。"""
+    for reason in (screen_tw.SKIP_HISTORICAL, "--no-risk-flags"):
+        md = _live_render([_pool_row("1101", risk_flag=None)],
+                          {"risk": _skip(reason, opted_out=True), "events": _skip(reason, opted_out=True)})
+        assert f"- 處置／注意股名單：未查（{reason}）" in md
+        assert "名單未取得" not in md and "以下候選未經檢查" not in md
+
+
+@pytest.mark.parametrize("reason", [screen_tw.SKIP_CALENDAR, "基準日 2026-10-20 不是預期場次 2026-10-21",
+                                    "抓取時發生例外（RuntimeError: x）"])
+def test_render_lists_unchecked_candidates_when_the_fetch_was_wanted_but_not_done(reason):
+    """反向：想抓卻沒抓成（日曆不可用、DB 落後、例外）仍要逐檔列出「未經檢查」與人工連結。"""
+    md = _live_render([_pool_row("1101", risk_flag=None)],
+                      {"risk": _skip(reason), "events": _skip(reason)})
+    assert f"### ⚠ 處置／注意股名單未取得：{reason}" in md
+    assert "以下候選未經檢查，不代表沒有：1101 台泥" in md
+
+
+def test_render_event_calendar_replaces_the_hard_coded_reminder():
+    md = _live_render([_pool_row("1101"), _pool_row("6488", name="環球晶"), _pool_row("3105", name="穩懋")],
+                      {"risk": _risk(), "events": _ev(statuses=[
+                          _MOPS_SII_OK,
+                          SourceStatus(_events.SRC_TWT48U, False, "拒收：Last-Modified 10/15，超過 1 個交易日未更新"),
+                          SourceStatus(_events.SRC_TPEX_EX, True, "資料時間 10/20")],
+                          revenue=[_dt.date(2026, 11, 10)])})
+
+    assert "未來 5 個交易日的事件**：FOMC、美國科技巨頭財報、台廠法說" not in md
+    assert "2. **未來 5 個交易日的事件**：FOMC、美國科技巨頭財報仍需自行查；台廠法說／除權息／月營收期限見下方「事件日曆」" in md
+    assert "### 事件日曆（未來 5 個交易日，10/21~10/27）" in md
+    assert "- **1101 台泥**：法說 10/23 14:00（自辦）　除息 10/26（現金 1.5 元）" in md
+    assert "- **6488 環球晶**：法說 10/21~10/22（券商論壇或未明）" in md
+    assert "- 月營收：窗口與 11/01~11/10 公告期重疊（期限 11/10" in md
+    assert "- 來源：法說會（上市 MOPS） 可用（未證明新鮮）：MOPS 表上沒有資料日期" in md
+    assert "- 來源：除權息預告（上市 TWT48U） 不可用：拒收" in md
+    assert "3105" not in md.split("### 事件日曆")[1].split("### 逐檔查")[0]   # 沒命中的不列
+    assert "無事件" not in md and not re.search(r"0 檔(事件|法說)", md)
+    # 逐檔查：自辦法說／除權息才追問，論壇不追問
+    assert "5 個交易日內有法說／除息（10/23、10/26），事件前是否降部位？" in md
+    assert "5 個交易日內有論壇" not in md
+
+
+def test_render_event_calendar_without_hits_still_shows_sources():
+    md = _live_render([_pool_row("1101")], {"risk": _risk(), "events": _ev({})})
+    assert "- 前 25 名在可用來源中未見事件（未列不代表沒有，見下方來源狀態）" in md
+    assert "- 來源：法說會（上市 MOPS）" in md
+
+
+def test_render_keeps_the_reminder_and_says_why_when_events_were_skipped():
+    md = _live_render([_pool_row("1101")], {"risk": _risk(), "events": _skip(screen_tw.SKIP_CALENDAR)})
+    assert ("2. **未來 5 個交易日的事件**：FOMC、美國科技巨頭財報、台廠法說、月營收公布日、除權息"
+            f"（本報告未附事件日曆：{screen_tw.SKIP_CALENDAR}）") in md
+    assert "### 事件日曆" not in md
+
+
+def test_json_carries_live_fields_and_blind_spots():
+    pool = pd.DataFrame(_flagged_rows())
+    out = screen_tw.to_json(_LIVE_AS_OF, pool, {}, 0.0, "breakout", 5,
+                            live={"risk": _risk(_TPEX_DOWN), "events": _ev()})
+
+    recs = {r["stock_id"]: r for r in out["candidates"]}
+    assert recs["2424"]["risk_flag"] == "處置中" and "⚠處置中" in recs["2424"]["tags"]
+    assert recs["1101"]["risk_flag"] == "" and recs["6488"]["risk_flag"] is None
+    # 2424 沒有市場別（列上無 market 欄）→ 事件也是未經檢查；1101 有命中照列
+    assert recs["2424"]["events"] is None and recs["1101"]["events"][0]["kind"] == "法說"
+    assert out["revenue_deadlines"] == []
+    assert out["next_session"] == "2026-10-21" and out["risk_flag_skipped"] is None
+    assert [s["name"] for s in out["risk_flag_sources"]][2] == "上櫃注意"
+    assert out["event_window"] == {"n": 5, "start": "2026-10-21", "end": "2026-10-27"}
+    blind = " ".join(out["blind_spots"])
+    assert "上櫃注意 不可用" in blind and "除權息預告（上市 TWT48U） 不可用" in blind
+    assert "法說會（上市 MOPS） 可用但未證明新鮮" in blind
+
+
+def test_json_marks_everything_unchecked_when_skipped():
+    pool = pd.DataFrame([_pool_row("1101")])
+    out = screen_tw.to_json(_LIVE_AS_OF, pool, {}, 0.0, "breakout", 5,
+                            live={"risk": _skip("--no-risk-flags", True), "events": _skip("--no-events", True)})
+    rec = out["candidates"][0]
+    assert rec["risk_flag"] is None and rec["events"] is None
+    assert out["risk_flag_skipped"] == "--no-risk-flags" and out["event_window"] is None
+    assert out["revenue_deadlines"] is None   # 沒抓就沒算過窗口：null＝未經檢查，不是 []
+    assert any("未經檢查" in b for b in out["blind_spots"])
+
+
+_EV_OK4 = [SourceStatus(name, True, "") for name in _events.SOURCE_MARKET]
+
+
+def _ev_statuses(failed=()):
+    return [SourceStatus(s.name, s.name not in failed, "連線失敗" if s.name in failed else "")
+            for s in _EV_OK4]
+
+
+def _events_by_sid(statuses, by_stock=None):
+    rows = [_pool_row("1101", market="twse"), _pool_row("6488", name="環球晶", market="tpex"),
+            _pool_row("2330", name="台積電", market="twse"), _pool_row("5305", name="敦南", market=None)]
+    by_stock = by_stock if by_stock is not None else {}
+    out = screen_tw.to_json(_LIVE_AS_OF, pd.DataFrame(rows), {}, 0.0, "breakout", 5,
+                            live={"risk": _risk(), "events": _ev(by_stock, statuses)})
+    return {r["stock_id"]: r["events"] for r in out["candidates"]}
+
+
+def test_json_events_are_unchecked_when_every_event_source_failed():
+    """四個來源全失敗時 by_stock 是空的；逐檔不能因此變成「查過沒有」的 []。"""
+    got = _events_by_sid(_ev_statuses(failed=list(_events.SOURCE_MARKET)))
+    assert got == {"1101": None, "6488": None, "2330": None, "5305": None}
+
+
+def test_json_events_are_checked_only_for_markets_whose_sources_all_worked():
+    hit = _events.Event("1101", "除息", _dt.date(2026, 10, 26), _dt.date(2026, 10, 26), "除息", "TWT48U")
+
+    all_ok = _events_by_sid(_ev_statuses())
+    assert all_ok == {"1101": [], "6488": [], "2330": [], "5305": None}   # 市場未知仍是未經檢查
+
+    tpex_down = _events_by_sid(_ev_statuses(failed=[_events.SRC_TPEX_EX]))
+    assert tpex_down["6488"] is None and tpex_down["2330"] == []
+
+    twse_down = _events_by_sid(_ev_statuses(failed=[_events.SRC_MOPS_SII]), {"1101": [hit]})
+    assert twse_down["2330"] is None and twse_down["6488"] == []
+    assert twse_down["1101"][0]["kind"] == "除息"            # 可用來源的命中照列
+
+
+def test_render_says_event_sources_all_failed_instead_of_no_events():
+    statuses = _ev_statuses(failed=list(_events.SOURCE_MARKET))
+    md = _live_render([_pool_row("1101")], {"risk": _risk(), "events": _ev({}, statuses)})
+
+    assert "- 事件日曆來源全部不可用（未經檢查，不代表沒有事件" in md
+    assert "在可用來源中未見事件" not in md
+    assert "見下方「事件日曆」" not in md
+    assert ("2. **未來 5 個交易日的事件**：FOMC、美國科技巨頭財報、台廠法說、月營收公布日、除權息"
+            "（事件日曆來源全部不可用）") in md
+
+
+def test_render_keeps_manual_event_items_when_only_unproven_sources_are_up():
+    """只剩 MOPS（未證明新鮮）可用時，§5 不能改成「見下方事件日曆」——那等於把未證明的清單當查過。"""
+    statuses = [SourceStatus(_events.SRC_MOPS_SII, True, "", proven=False),
+                SourceStatus(_events.SRC_MOPS_OTC, True, "", proven=False),
+                SourceStatus(_events.SRC_TWT48U, False, "連線失敗"),
+                SourceStatus(_events.SRC_TPEX_EX, False, "連線失敗")]
+    md = _live_render([_pool_row("1101")], {"risk": _risk(), "events": _ev({}, statuses)})
+
+    assert "見下方「事件日曆」" not in md
+    assert ("2. **未來 5 個交易日的事件**：FOMC、美國科技巨頭財報、台廠法說、月營收公布日、除權息"
+            "（事件日曆只有未證明新鮮的來源可用）") in md
+
+    # 反向：有一個證明得了新鮮的來源可用時，照常指向事件日曆
+    statuses[2] = SourceStatus(_events.SRC_TWT48U, True, "")
+    md = _live_render([_pool_row("1101")], {"risk": _risk(), "events": _ev({}, statuses)})
+    assert "見下方「事件日曆」" in md
+
+
+# ---- main()：唯一決定「抓不抓」的地方 ----------------------------------------------------------
+
+class _OutboundBlocked(BaseException):
+    """刻意繼承 `BaseException`：生產碼的 `except Exception` 吞不掉。"""
+
+
+@pytest.fixture
+def _main_env(monkeypatch, tmp_path):
+    """釘住 DB、日曆與時鐘；即時抓取換成計數 fake。`expected_session` 讀牆鐘，一定要釘。"""
+    import socket as _socket
+
+    def guard(self, address):
+        raise _OutboundBlocked(f"離線測試嘗試連外 {address}")
+
+    monkeypatch.setattr(_socket.socket, "connect", guard)
+    _seed(tmp_path, monkeypatch)
+    pool = pd.DataFrame([_pool_row("1101", hi60_prior=80.0), _pool_row("6488", name="環球晶")])
+    calls = {"risk": [], "events": []}
+    state = {"risk_exc": None}
+
+    monkeypatch.setattr(screen_tw, "get_engine", lambda: object())
+    monkeypatch.setattr(screen_tw, "load", lambda eng, date, inc: (
+        pd.Timestamp(date) if date else _LIVE_AS_OF, None, None, None, None, None, None, pd.DataFrame()))
+    monkeypatch.setattr(screen_tw, "build", lambda *a, **k: (pool.copy(), 0.0))
+    monkeypatch.setattr(screen_tw, "funnel", lambda df, mt, strategy: (df, {}))
+    monkeypatch.setattr(screen_tw, "data_freshness", lambda *a: None)
+    monkeypatch.setattr(screen_tw, "expected_session", lambda: _LIVE_AS_OF.date())
+    sessions = {1: _dt.date(2026, 10, 21), 3: _dt.date(2026, 10, 23), 5: _dt.date(2026, 10, 27)}
+    monkeypatch.setattr(screen_tw, "sessions_after", lambda day, n: sessions.get(n))
+    monkeypatch.setattr(screen_tw, "session_before", lambda day: _dt.date(2026, 10, 19))
+
+    def fake_risk(as_of, nxt):
+        calls["risk"].append((as_of, nxt))
+        if state["risk_exc"]:
+            raise state["risk_exc"]
+        return {"6488": RiskHit("注意股", "環球晶", "注意股")}, list(_OK4)
+
+    def fake_upcoming(window):
+        calls["events"].append((window.start, window.end, window.prev))
+        return {}, [_MOPS_SII_OK]
+
+    monkeypatch.setattr(screen_tw.risk_flags, "fetch_risk_flags", fake_risk)
+    monkeypatch.setattr(screen_tw.events, "upcoming", fake_upcoming)
+
+    def run(*argv):
+        out, js = tmp_path / "s.md", tmp_path / "s.json"
+        assert screen_tw.main(["--out", str(out), "--json", str(js), *argv]) == 0
+        import json as _json
+        return out.read_text(encoding="utf-8"), _json.loads(js.read_text(encoding="utf-8"))
+
+    return run, calls, state, monkeypatch
+
+
+def test_main_fetches_live_lists_with_the_next_session(_main_env):
+    run, calls, _, _ = _main_env
+
+    md, js = run()
+
+    assert calls["risk"] == [(_dt.date(2026, 10, 20), _dt.date(2026, 10, 21))]
+    assert calls["events"] == [(_dt.date(2026, 10, 21), _dt.date(2026, 10, 27), _dt.date(2026, 10, 19))]
+    recs = {r["stock_id"]: r for r in js["candidates"]}
+    assert recs["6488"]["risk_flag"] == "注意股" and recs["1101"]["risk_flag"] == ""
+    assert "### 事件日曆（未來 5 個交易日，10/21~10/27）" in md
+
+
+def test_main_with_a_date_records_the_reason_and_does_not_fetch(_main_env):
+    run, calls, _, _ = _main_env
+
+    md, js = run("--date", "2026-10-20")
+
+    assert calls == {"risk": [], "events": []}
+    assert js["risk_flag_skipped"] == screen_tw.SKIP_HISTORICAL
+    assert js["event_skipped"] == screen_tw.SKIP_HISTORICAL
+    assert f"本報告未附事件日曆：{screen_tw.SKIP_HISTORICAL}" in md
+    assert all(r["risk_flag"] is None for r in js["candidates"])
+
+
+def test_main_skips_when_the_db_is_behind_the_expected_session(_main_env, capsys):
+    run, calls, _, mp = _main_env
+    mp.setattr(screen_tw, "expected_session", lambda: _dt.date(2026, 10, 21))
+
+    md, js = run()
+
+    assert calls == {"risk": [], "events": []}
+    assert "不是預期場次 2026-10-21" in js["risk_flag_skipped"]
+    assert "先跑 market_data.cli daily" in js["risk_flag_skipped"]
+    assert "**WARN: screen_tw 處置／注意股名單未查" in capsys.readouterr().err
+
+
+def test_main_skips_without_blaming_the_db_when_it_is_ahead_of_the_expected_session(_main_env, capsys):
+    """收盤後手動跑過 daily、還沒到場次完成時點：DB 比預期場次新，叫人重跑 daily 是錯的建議。"""
+    run, calls, _, mp = _main_env
+    mp.setattr(screen_tw, "expected_session", lambda: _dt.date(2026, 10, 19))
+
+    md, js = run()
+
+    assert calls == {"risk": [], "events": []}
+    for reason in (js["risk_flag_skipped"], js["event_skipped"]):
+        assert "晚於預期場次 2026-10-19" in reason and "cli daily" not in reason
+    assert "cli daily" not in md and "cli daily" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("patch", ["expected_session", "sessions_after"])
+def test_main_does_not_fall_back_to_weekdays_without_a_calendar(_main_env, patch):
+    run, calls, _, mp = _main_env
+    mp.setattr(screen_tw, patch, lambda *a: None)
+
+    _, js = run()
+
+    assert calls == {"risk": [], "events": []}
+    assert js["risk_flag_skipped"] == js["event_skipped"] == screen_tw.SKIP_CALENDAR
+
+
+def test_main_flags_turn_each_feature_off_independently(_main_env):
+    run, calls, _, _ = _main_env
+
+    _, js = run("--no-risk-flags")
+
+    assert calls["risk"] == [] and len(calls["events"]) == 1
+    assert js["risk_flag_skipped"] == "--no-risk-flags" and js["event_skipped"] is None
+
+
+def test_main_still_writes_the_report_when_a_fetcher_raises(_main_env, capsys):
+    run, calls, state, _ = _main_env
+    state["risk_exc"] = RuntimeError("parser bug")
+
+    md, js = run()
+
+    assert "抓取時發生例外（RuntimeError: parser bug）" in js["risk_flag_skipped"]
+    assert "名單未取得" in md and "## 3. 候選清單" in md
+    assert "**WARN: screen_tw" in capsys.readouterr().err
+
+
+def test_main_does_not_swallow_the_network_guard(_main_env):
+    run, _, state, _ = _main_env
+    state["risk_exc"] = _OutboundBlocked("would hit network")
+    with pytest.raises(_OutboundBlocked):
+        run()
+
+
+def test_main_passes_event_days_to_the_window(_main_env):
+    run, calls, _, _ = _main_env
+
+    md, js = run("--event-days", "3")
+
+    assert calls["events"] == [(_dt.date(2026, 10, 21), _dt.date(2026, 10, 23), _dt.date(2026, 10, 19))]
+    assert "### 事件日曆（未來 3 個交易日，10/21~10/23）" in md
+    assert js["event_window"] == {"n": 3, "start": "2026-10-21", "end": "2026-10-23"}
+
+
+def test_main_rejects_a_non_positive_event_window(_main_env):
+    run, _, _, _ = _main_env
+    with pytest.raises(SystemExit):
+        run("--event-days", "0")
+
+
+# ---- S1：MOPS 未證明新鮮 → 不算查過 ------------------------------------------------------------
+
+def _realistic_ev_statuses(failed=()):
+    """實際 `events.upcoming` 的形狀：MOPS 兩源可用但 proven=False，除權息兩源可用且已證明。"""
+    out = []
+    for name in _events.SOURCE_MARKET:
+        unproven = _events.SOURCE_CATEGORY[name] == _events.CAT_CONFERENCE
+        out.append(SourceStatus(name, name not in failed, "連線失敗" if name in failed else "",
+                                proven=not unproven))
+    return out
+
+
+def _events_json(statuses, by_stock):
+    rows = [_pool_row("1101", market="twse"), _pool_row("6488", name="環球晶", market="tpex"),
+            _pool_row("2330", name="台積電", market="twse"), _pool_row("5305", name="敦南", market=None)]
+    out = screen_tw.to_json(_LIVE_AS_OF, pd.DataFrame(rows), {}, 0.0, "breakout", 5,
+                            live={"risk": _risk(), "events": _ev(by_stock, statuses)})
+    return {r["stock_id"]: r for r in out["candidates"]}, out
+
+
+def test_json_unproven_mops_is_never_counted_as_checked():
+    """MOPS 回了資料也不能讓沒命中的候選變成 `[]`：凍結的表會漏列新申報。"""
+    hit = _events.Event("1101", _events.CONFERENCE, _dt.date(2026, 10, 23), _dt.date(2026, 10, 23),
+                        "第三季財務報告", "MOPS", "14:00")
+    recs, out = _events_json(_realistic_ev_statuses(), {"1101": [hit]})
+
+    assert recs["2330"]["events"] is None and recs["6488"]["events"] is None   # 不是 []
+    assert recs["1101"]["events"][0]["kind"] == "法說"                          # 命中照列
+    assert recs["2330"]["events_checked"] == ["除權息"] == recs["6488"]["events_checked"]
+    assert recs["5305"]["events_checked"] == []                                 # 市場未知
+    proven = {s["name"]: s["proven"] for s in out["event_sources"]}
+    assert proven == {_events.SRC_MOPS_SII: False, _events.SRC_MOPS_OTC: False,
+                      _events.SRC_TWT48U: True, _events.SRC_TPEX_EX: True}
+    assert "法說會（上市 MOPS） 可用但未證明新鮮" in " ".join(out["blind_spots"])
+
+
+def test_json_events_checked_drops_a_category_whose_source_failed():
+    recs, _ = _events_json(_realistic_ev_statuses(failed=[_events.SRC_TPEX_EX]), {})
+    assert recs["6488"]["events_checked"] == [] and recs["2330"]["events_checked"] == ["除權息"]
+
+
+def test_json_events_checked_is_empty_when_events_were_skipped():
+    out = screen_tw.to_json(_LIVE_AS_OF, pd.DataFrame([_pool_row("1101", market="twse")]), {}, 0.0,
+                            "breakout", 5, live={"risk": _risk(), "events": _skip("--no-events", True)})
+    rec = out["candidates"][0]
+    assert rec["events"] is None and rec["events_checked"] == []
+
+
+def test_render_marks_unproven_sources_distinctly():
+    md = _live_render([_pool_row("1101")], {"risk": _risk(), "events": _ev({}, _realistic_ev_statuses())})
+    assert "- 來源：法說會（上櫃 MOPS） 可用（未證明新鮮）" in md
+    assert "- 來源：除權息預告（上櫃 TPEx） 可用" in md
+    assert "除權息預告（上櫃 TPEx） 可用（未證明" not in md   # 已證明的來源不能被一起標成未證明
+
+
+# ---- S3：事件短標進標籤欄與 JSON tags ----------------------------------------------------------
+
+def _tagged_rows(ev):
+    pool = pd.DataFrame([_pool_row("1101"), _pool_row("6488", name="環球晶"), _pool_row("3105", name="穩懋")])
+    return screen_tw.apply_event_tags(pool, ev)
+
+
+def _tag_ev():
+    d = _dt.date
+    return _ev({
+        "1101": [_events.Event("1101", "除息", d(2026, 10, 26), d(2026, 10, 26), "", "TWT48U", cash=1.5),
+                 _events.Event("1101", _events.CONFERENCE, d(2026, 10, 23), d(2026, 10, 23), "財報", "MOPS"),
+                 _events.Event("1101", _events.CONFERENCE, d(2026, 10, 27), d(2026, 10, 27), "財報", "MOPS")],
+        "6488": [_events.Event("6488", _events.FORUM, d(2026, 10, 21), d(2026, 10, 22), "受邀", "MOPS")],
+    })
+
+
+def test_event_tags_take_the_earliest_of_each_kind_and_skip_forums():
+    pool = _tagged_rows(_tag_ev())
+    tags = {r["stock_id"]: tag(r, 0.0) for _, r in pool.iterrows()}
+
+    assert [t for t in tags["1101"] if t.startswith("📅")] == ["📅法說10/23", "📅除息10/26"]
+    assert not any(t.startswith("📅") for t in tags["6488"])     # 只有論壇：不上標籤
+    assert not any(t.startswith("📅") for t in tags["3105"])
+
+
+def test_event_tags_flow_into_the_markdown_table_and_json_tags():
+    ev = _tag_ev()
+    pool = _tagged_rows(ev)
+    live = {"risk": _risk(), "events": ev}
+
+    md = screen_tw.render(_LIVE_AS_OF, pool, pool, {}, 0.0, pd.DataFrame(), 25, 2.0, live=live)
+    row = next(line for line in md.splitlines() if line.startswith("| 1 | 1101 "))
+    assert "| 📅法說10/23 📅除息10/26" in row     # 標籤欄（最後一欄），緊接在處置旗標之後
+
+    out = screen_tw.to_json(_LIVE_AS_OF, pool, {}, 0.0, "breakout", 5, live=live)
+    assert "📅除息10/26" in out["candidates"][0]["tags"]
+
+
+def test_event_tags_are_absent_when_events_were_skipped():
+    pool = _tagged_rows(_skip("--no-events", True))
+    assert "event_tags" not in pool.columns
+    assert not any(t.startswith("📅") for t in tag(pool.iloc[0], 0.0))
+
+
+# ---- S11：使用者自己關掉時不逐檔列「未經檢查」 -------------------------------------------------
+
+@pytest.mark.parametrize("argv", [["--no-risk-flags"], ["--date", "2026-10-20"]])
+def test_main_opted_out_prints_only_the_status_line(_main_env, argv):
+    run, _, _, _ = _main_env
+    md, js = run(*argv)
+    assert "- 處置／注意股名單：未查（" in md
+    assert "名單未取得" not in md and "以下候選未經檢查" not in md
+    assert all(r["risk_flag"] is None for r in js["candidates"])
+
+
+def test_main_stale_db_still_lists_unchecked_candidates(_main_env):
+    run, _, _, mp = _main_env
+    mp.setattr(screen_tw, "expected_session", lambda: _dt.date(2026, 10, 21))
+    md, _ = run()
+    assert "### ⚠ 處置／注意股名單未取得：基準日 2026-10-20 不是預期場次" in md
