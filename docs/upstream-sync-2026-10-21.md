@@ -39,7 +39,7 @@
 | --- | --- |
 | `ci_gate.sh syntax` / `flake8` | 綠 / 綠（0） |
 | 受影響測試（`test_formatters.py`、`test_notification_report_fixtures.py`、`test_notification_sender.py`、`test_notification_sender_protocol.py`、`test_pipeline_notification_image_routing.py`、`test_system_config_service.py`） | 478 passed |
-| 全量離線測試 `ci_gate.sh` | **未跑**（無人值守排程不跑全量，合併前由使用者決定） |
+| 全量離線測試 `ci_gate.sh` | 排程未跑；合併前手動補跑：9550 passed、79 skipped、0 failed（4 分 38 秒） |
 | 阻斷 CI | 未跑（fork 不開 PR，§6） |
 
 ## 回滾
