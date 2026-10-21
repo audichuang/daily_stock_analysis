@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 首頁個股欄與自選列每 30 秒背景刷新（及切回分頁）時不再整個換成「載入中」再掛回：原本每次閃約 0.4 秒、捲動位置與點擊會落空；手動刷新仍顯示載入中以免點到舊資料
 - [新功能] 即時盯盤加「全部／自選／持股」切換：持股取自帳本全部帳戶（含美股複委託），跨帳戶合併、以即時價顯示股數與未實現損益；下方另列基金持倉卡（淨值、淨值日、持有報酬）。賣光的持股自動消失，不必改 `STOCK_LIST`
 - [chore] CI 移除 `desktop-futu-package-windows`（本 fork 不發 Windows 桌面版）；macOS 打包檢查保留，`scripts/build-backend.ps1` 未刪
 - [文档] 根 `AGENTS.md` 分層精簡（31,344 → 約 11,600 bytes），只留每個任務都用得到的硬規則、驗證矩陣與跨領域踩雷；維運流程移到新文件 `docs/daily-report-ops.md`（排程一覽、每日報告逾時／鎖／完成標記）與 `docs/nas-deploy.md`（NAS 發版），單一目錄的規則下放 `src/`、`tests/`、`scripts/` 的 `AGENTS.md`，PR 標題與截圖規則移入 skill `analyze-pr`／`fix-issue`，`make analyze` 的 Doppler 手動包法移到 `docs/tw-operating-guide.md` §2.3；§6／§9 改為 CI 也跑 push 分支、合入前看 `gh run` 綠燈

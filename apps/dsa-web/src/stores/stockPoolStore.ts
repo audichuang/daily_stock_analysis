@@ -122,7 +122,7 @@ export interface StockPoolState {
   removeTask: (taskId: string) => void;
   resetDashboardState: () => void;
   loadStockBar: () => Promise<void>;
-  refreshStockBar: () => Promise<void>;
+  refreshStockBar: (silent?: boolean) => Promise<void>;
 }
 
 const initialState = {
@@ -1091,9 +1091,12 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
     }
   },
 
-  refreshStockBar: async () => {
+  refreshStockBar: async (silent = false) => {
     const requestSeq = ++stockBarRequestSeq;
-    set({ isLoadingStockBar: true });
+    // 背景輪詢用 silent：已有資料時切到 loading 會讓個股欄與自選列整個卸載再掛回（每 30 秒閃一下、點擊落空）
+    if (!silent || get().stockBarItems.length === 0) {
+      set({ isLoadingStockBar: true });
+    }
     try {
       const response = await historyApi.getStockBarList({
         startDate: getRecentStartDate(90),

@@ -1380,6 +1380,42 @@ describe('stockPoolStore', () => {
     expect(useStockPoolStore.getState().isLoadingStockBar).toBe(false);
   });
 
+  it('keeps the loaded stock bar on screen during a silent background refresh', async () => {
+    useStockPoolStore.setState({ stockBarItems: [stockBarItem] });
+    const refreshRequest = createDeferred<StockBarResponse>();
+    vi.mocked(historyApi.getStockBarList).mockReturnValueOnce(refreshRequest.promise);
+
+    const refreshPromise = useStockPoolStore.getState().refreshStockBar(true);
+    expect(useStockPoolStore.getState().isLoadingStockBar).toBe(false);
+    expect(useStockPoolStore.getState().stockBarItems).toEqual([stockBarItem]);
+
+    const updated = { ...stockBarItem, id: 42 };
+    refreshRequest.resolve({ total: 1, items: [updated] });
+    await refreshPromise;
+    expect(useStockPoolStore.getState().stockBarItems).toEqual([updated]);
+    expect(useStockPoolStore.getState().isLoadingStockBar).toBe(false);
+  });
+
+  it('still shows stock-bar loading for a manual refresh or an empty bar', async () => {
+    useStockPoolStore.setState({ stockBarItems: [stockBarItem] });
+    const manualRequest = createDeferred<StockBarResponse>();
+    const emptyRequest = createDeferred<StockBarResponse>();
+    vi.mocked(historyApi.getStockBarList)
+      .mockReturnValueOnce(manualRequest.promise)
+      .mockReturnValueOnce(emptyRequest.promise);
+
+    const manualPromise = useStockPoolStore.getState().refreshStockBar();
+    expect(useStockPoolStore.getState().isLoadingStockBar).toBe(true);
+    manualRequest.resolve({ total: 0, items: [] });
+    await manualPromise;
+
+    const emptyPromise = useStockPoolStore.getState().refreshStockBar(true);
+    expect(useStockPoolStore.getState().isLoadingStockBar).toBe(true);
+    emptyRequest.resolve({ total: 1, items: [stockBarItem] });
+    await emptyPromise;
+    expect(useStockPoolStore.getState().isLoadingStockBar).toBe(false);
+  });
+
   it('keeps stock-bar failure state when a stale older request succeeds after a newer failure', async () => {
     const staleStockBarRequest = createDeferred<StockBarResponse>();
     const latestStockBarRequest = createDeferred<StockBarResponse>();
