@@ -17,6 +17,7 @@
 - **成對寫守門**:擋 PREMARKET 的測試要配一支「POSTMARKET 仍然放行」,否則把判斷寫成「非盤中一律擋」照樣綠。
 - **mock 的接縫選自家函式,不要 patch `requests`／DNS**:後者會被其他測試殘留的 socket 狀態影響,變成順序敏感。
 - **會走到選股／熱點 provider(eastmoney、akshare、sina)的測試要自帶連外守門。**那條鏈每個網路失敗都被 `except` 接住再 fallback,漏一格 mock 的測試有沒有網路都是綠的。守門是 `test_screening_api.py` 的 `_no_outbound_network`,**只對該檔生效**,新檔要自己複製一份;它刻意繼承 `BaseException`,而生產碼那端必須維持 `except Exception`,任一邊放寬守門就被吞掉。兩個必踩形狀:`provider="akshare"` 會讓未 patch 的 `_resolve_hotspot_provider` 造出真 provider;繼承真 provider 的 Fake 會繼承整條連外子樹。
+- **官方端點的原始回應要逐位元組比對時,存成 `tests/fixtures/*.bin`**(`.gitattributes` 標 binary)。本機 git 是 `core.autocrlf=input`,其他副檔名的 CRLF 在 commit 時被改成 LF、工作區卻仍是 CRLF——本機綠、乾淨 checkout 才紅(踩過:期交所 CSV)。驗法:`git show HEAD:<檔>` 比位元組,或在新 worktree 跑該測試。
 - **import 被測模組之前先呼叫 `litellm_stub.ensure_litellm_stub()`**,否則 LiteLLM 在 import 時就會連外。
 - **驗「寫入當下的值」要在 `side_effect` 裡擷取**。從 `call_args` 讀回來的是同一個物件參考,事後比對恆真,呼叫順序錯了也不會紅。
 - **生產路徑是「先建空物件、再逐欄賦值」的型別(如 `MarketOverview`),測試要複製同樣形狀。**用 kwargs 一次建構會讓建構期的守門看起來有效,實際上生產路徑不經過它。
