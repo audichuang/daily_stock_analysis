@@ -621,6 +621,31 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual(stock_bar.items[0].stock_code, "005930.KS")
         self.assertEqual(stock_bar.items[0].analysis_count, 2)
 
+    def test_us_history_shows_official_index_name_instead_of_stored_chinese(self) -> None:
+        """本 fork：已存成簡體中文名（英伟达）的美股歷史，讀取時改顯示官方清單名。"""
+        if get_stock_bar is None:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        result = self._build_result()
+        result.code = "NVDA"
+        result.name = "英伟达"
+        self.assertGreater(
+            self.db.save_analysis_history(
+                result=result,
+                query_id="query_nvda",
+                report_type="simple",
+                news_content="news",
+                context_snapshot={"market_phase_summary": _market_phase_summary()},
+                save_snapshot=True,
+            ),
+            0,
+        )
+
+        with patch("src.data.us_stock_name.get_index_stock_name", return_value="NVIDIA Corporation"):
+            stock_bar = get_stock_bar(start_date=None, end_date=None, limit=10, db_manager=self.db)
+
+        self.assertEqual([item.stock_name for item in stock_bar.items], ["NVIDIA Corporation"])
+
     def test_save_analysis_history_persists_sniper_columns_via_shared_parser(self) -> None:
         """迁出 sniper parser 后历史狙击点位列仍按原规则保存。"""
         result = self._build_result()
@@ -2226,9 +2251,11 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         if get_history_detail is None:
             self.skipTest("fastapi is not installed in this test environment")
 
+        # 本 fork 的美股名稱改走官方清單（src/data/us_stock_name.py），佔位名換不到 Unnamed；
+        # 用非美股代碼保留「佔位名要在地化」這個斷言的原意
         result = AnalysisResult(
-            code="AAPL",
-            name="股票AAPL",
+            code="600519",
+            name="股票600519",
             sentiment_score=78,
             trend_prediction="看多",
             operation_advice="买入",

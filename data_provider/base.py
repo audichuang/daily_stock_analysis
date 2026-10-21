@@ -3231,7 +3231,10 @@ class DataFetcherManager:
         if cached_name is not None:
             return cached_name
         
-        if is_meaningful_stock_name(static_name, stock_code):
+        from .us_index_mapping import is_us_stock_code
+
+        # 本 fork：美股不用上游寫死的簡體中文名，改走下方的官方清單索引（見 src/data/us_stock_name.py）
+        if is_meaningful_stock_name(static_name, stock_code) and not is_us_stock_code(stock_code):
             return self._cache_stock_name(stock_code, static_name) or static_name
 
         # 美股指数别名优先于股票索引：`DJIA` 同时是道琼斯的通用缩写**和**一档挂牌 ETF

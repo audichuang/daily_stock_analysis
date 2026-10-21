@@ -1764,7 +1764,12 @@ def get_stock_name_multi_source(
         if 'realtime' in context and context['realtime'].get('name'):
             return context['realtime']['name']
 
-    # 2. 从静态映射表获取
+    # 2. 从静态映射表获取（本 fork：美股改用官方清單名，見 src/data/us_stock_name.py）
+    from src.data.us_stock_name import official_us_stock_name
+
+    official_name = official_us_stock_name(stock_code)
+    if official_name:
+        return official_name
     if stock_code in STOCK_NAME_MAP:
         return STOCK_NAME_MAP[stock_code]
 

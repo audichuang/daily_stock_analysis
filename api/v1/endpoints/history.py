@@ -43,6 +43,7 @@ from src.report_language import (
     localize_trend_prediction,
     normalize_report_language,
 )
+from src.data.us_stock_name import display_stock_name
 from src.services.history_service import HistoryService, MarkdownReportGenerationError
 from src.services.analysis_service import asset_type_from_canonical_code
 from src.schemas.decision_action import build_action_fields
@@ -253,7 +254,7 @@ def get_history_list(
                 id=item.get("id"),
                 query_id=item.get("query_id", ""),
                 stock_code=item.get("stock_code", ""),
-                stock_name=item.get("stock_name"),
+                stock_name=display_stock_name(item.get("stock_code", ""), item.get("stock_name")),
                 report_type=item.get("report_type"),
                 region=item.get("region"),
                 trend_prediction=item.get("trend_prediction"),
@@ -484,7 +485,7 @@ def get_stock_bar(
                 StockBarItem(
                     id=record.id,
                     stock_code=display_stock_code,
-                    stock_name=record.name,
+                    stock_name=display_stock_name(record.code, record.name),
                     report_type=record.report_type,
                     sentiment_score=sentiment_score,
                     operation_advice=operation_advice,
@@ -587,7 +588,7 @@ def get_history_detail(
             )
         )
         stock_name = get_localized_stock_name(
-            result.get("stock_name"),
+            display_stock_name(result.get("stock_code", ""), result.get("stock_name")),
             result.get("stock_code", ""),
             report_language,
         )

@@ -129,13 +129,26 @@ class TestPrefetchStockNames(unittest.TestCase):
         manager._fetchers = []
         manager.get_realtime_quote = MagicMock()
 
+        with patch.dict("data_provider.base.STOCK_NAME_MAP", {"600519": "贵州茅台"}, clear=True):
+            with patch("data_provider.base.get_index_stock_name", return_value="索引茅台"):
+                name = DataFetcherManager.get_stock_name(manager, "600519")
+
+        self.assertEqual(name, "贵州茅台")
+        manager.get_realtime_quote.assert_not_called()
+        self.assertEqual(manager._stock_name_cache["600519"], "贵州茅台")
+
+    def test_get_stock_name_us_uses_official_index_not_static_chinese(self):
+        """本 fork：美股不用上游寫死的簡體名（苹果），改用官方清單索引名。"""
+        manager = DataFetcherManager.__new__(DataFetcherManager)
+        manager._fetchers = []
+        manager.get_realtime_quote = MagicMock()
+
         with patch.dict("data_provider.base.STOCK_NAME_MAP", {"AAPL": "苹果"}, clear=True):
-            with patch("data_provider.base.get_index_stock_name", return_value="APPLE"):
+            with patch("data_provider.base.get_index_stock_name", return_value="Apple Inc."):
                 name = DataFetcherManager.get_stock_name(manager, "AAPL")
 
-        self.assertEqual(name, "苹果")
+        self.assertEqual(name, "Apple Inc.")
         manager.get_realtime_quote.assert_not_called()
-        self.assertEqual(manager._stock_name_cache["AAPL"], "苹果")
 
     def test_get_stock_name_prefers_index_mapping_before_realtime_quote(self):
         manager = DataFetcherManager.__new__(DataFetcherManager)
