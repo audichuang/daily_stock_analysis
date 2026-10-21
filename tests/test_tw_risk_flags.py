@@ -226,7 +226,8 @@ def test_fetch_merges_four_lists_and_queries_disposal_by_next_session(monkeypatc
 
     flags, statuses = risk_flags.fetch_risk_flags(AS_OF, NEXT)
 
-    assert [s.name for s in statuses] == ["上市處置", "上市注意", "上櫃注意", "上櫃處置"]
+    # 兩份處置都排在同市場的注意之後：title／表上沒有更新日期時要讀同輪注意當旁證
+    assert [s.name for s in statuses] == ["上市注意", "上市處置", "上櫃注意", "上櫃處置"]
     assert all(s.ok for s in statuses)
     assert risk_flags.checked_markets(statuses) == {"twse", "tpex"}
     # 同時處置與注意：flag 取處置、detail 兩者都寫
@@ -285,6 +286,63 @@ def test_fetch_accepts_tpex_disposal_without_base_date_rows_when_attention_is_up
     assert by_name["上櫃處置"].ok and "旁證" in by_name["上櫃處置"].note
     assert risk_flags.checked_markets(statuses) == {"twse", "tpex"}
     assert flags["6716"].flag == risk_flags.DISPOSING
+
+
+# ---- 上市處置：早上的 title 不附「資訊更新日期」（2026-10-21 07:30 盤前實測） ------------------
+
+MORNING_PUNISH = "twse_punish_next_20261021_morning.json"
+
+
+def _twse_without_base_date_rows(payload):
+    payload = copy.deepcopy(payload)
+    i = payload["fields"].index("公布日期")
+    payload["data"] = [r for r in payload["data"] if r[i].lstrip("*") != "115/10/20"]
+    return payload
+
+
+def test_twse_punish_without_update_date_is_proven_by_rows_announced_on_the_base_date():
+    payload = _load(MORNING_PUNISH)
+    assert "資訊更新日期" not in payload["title"]          # 釘住實測形狀
+
+    hits, note = risk_flags.parse_twse_punish(payload, AS_OF, NEXT)
+
+    assert note == "新鮮度旁證：有基準日公布的列"
+    assert hits["053040"].flag == risk_flags.DISPOSING
+
+
+@pytest.mark.parametrize("attention_ok", [True, False])
+def test_twse_punish_without_update_date_or_base_date_rows_falls_back_to_attention(attention_ok):
+    payload = _twse_without_base_date_rows(_load(MORNING_PUNISH))
+    if attention_ok:
+        _, note = risk_flags.parse_twse_punish(payload, AS_OF, NEXT, attention_ok=True)
+        assert "上市注意" in note and "較弱" in note
+    else:
+        with pytest.raises(risk_flags.Unproven, match="無法證明新鮮"):
+            risk_flags.parse_twse_punish(payload, AS_OF, NEXT, attention_ok=False)
+
+
+def test_twse_punish_stale_update_date_is_rejected_even_when_attention_is_up():
+    """title 明說資料停在基準日之前，就是舊表；旁證不能蓋過直接證據。"""
+    payload = copy.deepcopy(_load(ROUTES[risk_flags.TWSE_PUNISH_URL]))
+    payload["title"] = payload["title"].replace("資訊更新日期：115/10/20", "資訊更新日期：115/10/19")
+    with pytest.raises(risk_flags.Unproven, match="早於基準日"):
+        risk_flags.parse_twse_punish(payload, AS_OF, NEXT, attention_ok=True)
+
+
+def test_fetch_uses_twse_attention_as_side_evidence_for_the_morning_punish_shape(monkeypatch):
+    stale = _json_resp(_twse_without_base_date_rows(_load(MORNING_PUNISH)))
+
+    _install(monkeypatch, {risk_flags.TWSE_PUNISH_URL: stale})
+    _, statuses = risk_flags.fetch_risk_flags(AS_OF, NEXT)
+    by_name = {s.name: s for s in statuses}
+    assert by_name["上市處置"].ok and "上市注意" in by_name["上市處置"].note
+    assert risk_flags.checked_markets(statuses) == {"twse", "tpex"}
+
+    _install(monkeypatch, {risk_flags.TWSE_PUNISH_URL: stale, risk_flags.TWSE_NOTICE_URL: _hinet()})
+    _, statuses = risk_flags.fetch_risk_flags(AS_OF, NEXT)
+    by_name = {s.name: s for s in statuses}
+    assert not by_name["上市處置"].ok and "無法證明新鮮" in by_name["上市處置"].note
+    assert risk_flags.checked_markets(statuses) == {"tpex"}
 
 
 def test_fetch_never_raises_on_connection_failures(monkeypatch):

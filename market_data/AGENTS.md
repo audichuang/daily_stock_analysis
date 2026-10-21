@@ -15,7 +15,7 @@
 - `adjust.py`:重建 `price_adjustment` 前復權因子(除權息+減資+分割三來源合一);`load_factors()` 是算報酬/均線前套用因子的唯一入口(休市日事件經 `snap_events_to_sessions` 對齊)
 - `health.py`:完整性/新鮮度稽核(thin price days 用**局部**中位數——全域中位數會被 16 年上市家數成長稀釋;報出的日子用 `backfill --force` 修;另有 `sessions_after(day, n)`／`session_before(day)` 給只抓不入庫的模組算「下 N 個／前一個交易日」,與 `expected_session` 共用 XTAI 日曆、日曆取不到回 None——`market_data` 內要交易日曆一律用這三個,不 import `src.core.trading_calendar`)
 - `tw_official_http.py`:只抓不入庫模組的共用 HTTP(`get`／`post` 短 timeout、不重試、不暖 cookie)、`error_reason`(判 HTML 看內容不看 Content-Type)、`SourceStatus`(`proven=False`＝可用但未證明新鮮、不算查過)／`Step`／`FormatChanged`／`run_sources`(`parallel=True` 只給彼此不依賴的來源)／`checked_markets`(要可用**且**已證明)／`md`(日期一律 `MM/DD` 補零);**不判新鮮度**,呼叫端仍要比對回應自帶的日期。並行下不能用 `warnings.catch_warnings()`(行程全域、非執行緒安全),MOPS 的 InsecureRequestWarning 是 import 時依主機靜音。規則見模組 docstring
-- `risk_flags.py`:處置／注意股即時名單(上市＋上櫃各兩份),只標記不剔除;四份各自的新鮮度規則見模組 docstring(TWSE 處置「資訊更新日期」語意未實測,見 `docs/tw-swing-pipeline.md`)。TPEx 注意的「累計」欄是當天總檔數不是個股次數,別印。`python -m market_data.risk_flags <代號>` 可單查(裸代號或帶 `.TW`／`.TWO` 皆可)
+- `risk_flags.py`:處置／注意股即時名單(上市＋上櫃各兩份),只標記不剔除;四份各自的新鮮度規則見模組 docstring(TWSE 處置 title 的「資訊更新日期」只在某些時段出現、語意未實測,沒有時與 TPEx 處置一樣靠旁證,見 `docs/tw-swing-pipeline.md`;兩份處置都必須排在同市場注意之後跑)。TPEx 注意的「累計」欄是當天總檔數不是個股次數,別印。`python -m market_data.risk_flags <代號>` 可單查(裸代號或帶 `.TW`／`.TWO` 皆可)
 - `events.py`:事件日曆(MOPS 法說會、除權息預告、月營收期限),只抓不入庫,四源並行;MOPS 新鮮度無法自證、`proven=False`,命中照列但不算查過。來源→市場在 `SOURCE_MARKET`、→類別在 `SOURCE_CATEGORY`;`checked_markets` 決定逐檔 `events` 能不能寫 `[]`(目前不會),`checked_categories` 給逐檔 `events_checked`。規則見模組 docstring
 - `migrations/`:Alembic,只管 `market` schema(不碰 `app`/`public`)
 - `sources.py`/`crawler.py`:TWSE/TPEx/MOPS 原始爬取邏輯(移植而來),盡量少動

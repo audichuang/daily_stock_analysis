@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] `screen_tw` 報告新增「事件日曆」：逐檔列出未來 N 個交易日（`--event-days`，預設 5）的法說會（MOPS）與除權息預告（TWT48U／TPEx），並標月營收法定期限；JSON 逐檔 `events`（命中清單，否則 `null`＝未經檢查）與 `events_checked`（確實查過的類別，例如 `["除權息"]`）、頂層 `event_sources`（含 `proven`；沒抓時為 `[]`）／`event_window`／`revenue_deadlines`（沒抓時為 `null`）；候選標籤欄與 JSON `tags` 加上 `📅法說10/23`／`📅除息10/22` 短標（每種取最早一次，券商論壇不標）。MOPS 表上沒有資料日期、新鮮度無法自證，狀態標「可用（未證明新鮮）」且不算查過，所以沒命中的候選是 `null` 不是 `[]`；四個來源並行抓；來源失敗只標註、不影響篩選，`--no-events` 可關閉；`--no-risk-flags`／`--date` 時只在 §0 寫一行原因，不逐檔列「未經檢查」
 - [新功能] `make morning` 新增期交所籌碼區塊（另有 `make taifex`）：外資台指期（大台 TXF）淨未平倉與日變化、臺指選擇權 P/C 未平倉比；回應最新一列日期≠預期場次時不印數字，日變化只在前一列正好是前一交易日時才算，兩個端點各自降級、資料問題不擋 morning 後續步驟。只列數字不給門檻；台指期夜盤價格仍需人工查。`scripts/taifex_positions.py --json` 直接印 journal 欄位（`foreign_fut_oi`／`foreign_fut_oi_chg`／`pc_oi_ratio`，不可用為 null 並附原因）
 - [改進] `make morning` 的隔夜國際盤（`overnight.py`）任一序列失敗時不再中止整個流程：失敗照樣在表中標「失敗」，之後的期交所籌碼／待觸發計畫／今日候選繼續跑，失敗的數字需人工補查
+- [修復] 上市處置名單在盤前判成不可用：證交所處置 API 的標題只在某些時段附「資訊更新日期」（10-21 07:30 盤前沒有），原規則因此每天早上都拒收、改人工查。現在沒有更新日期時改看旁證（有基準日公布的列，或同輪上市注意名單可用），有更新日期但早於基準日仍拒收
 - [修復] 新聞情報寫入前依欄位長度截斷字串：應用庫在 Postgres 上會強制 VARCHAR 長度，社群貼文把整篇內文當標題（超過 300 字）時，同一批新聞會整批回滾、全部沒存到
 - [修復] 台股估值快照（BWIBBU_ALL）對沒配息股票留空的殖利率改存 0，與帶日期的 BWIBBU_d 及 2020~2025 歷史一致；本益比空白仍為 NULL
 - [測試] `test_tw_institution_report_wiring.py` 補上 TWSE 估值／月營收 mock，不再真的連 TWSE（端點失敗時全量偶發紅）

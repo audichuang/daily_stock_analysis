@@ -7,9 +7,10 @@
 每份名單各自判新鮮度，證明不了就整份記成不可用（``SourceStatus.ok=False``），**絕不當成
 「0 檔」**：
 
-- 上市處置（TWSE rwd punish）：title 自帶「資訊更新日期」，須 ≥ ``as_of``；title 的查詢區間
-  須等於送出的 ``next_session``。**這欄不隨查詢區間變**（查過去的區間也回當天），是最後發布日
-  還是伺服器當日尚未實測區分；若是後者，基準日當晚公告出齊前跑會把舊表當成新的。
+- 上市處置（TWSE rwd punish）：title 的查詢區間須等於送出的 ``next_session``。title **有時**附
+  「資訊更新日期」（2026-10-20 晚上有、10-21 07:30 沒有）：有就須 ≥ ``as_of``，早於基準日一律拒收；
+  沒有時改用旁證——有任一列的公布日期等於 ``as_of``，或同一輪的上市注意已判可用（較弱）。
+  這欄不隨查詢區間變（查過去的區間也回當天），是最後發布日還是伺服器當日尚未區分。
 - 上市注意（TWSE rwd notice）：非交易日與未來日都回 ``stat=OK`` 加空 data，所以 data 必須
   非空、且每一列的「日期」都等於 ``as_of``。
 - 上櫃注意（TPEx bulletin attention）：日期參數不合法時**靜默退回今天**，所以回應的
@@ -130,23 +131,31 @@ def _disposal_hits(rows, cols, as_of, next_session, name_cleaner=str.strip):
     return hits
 
 
-def parse_twse_punish(payload, as_of, next_session):
+def parse_twse_punish(payload, as_of, next_session, attention_ok=False):
+    """title 有「資訊更新日期」就以它為準（早於基準日一律拒收，不拿旁證救）；沒有時（2026-10-21
+    07:30 實測：早上的 title 不附這欄）改用旁證——有基準日公布的列，或同輪上市注意可用。"""
     if payload.get("stat") != "OK":
         raise FormatChanged(f"stat={payload.get('stat')!r}")
     title = str(payload.get("title", ""))
-    m = _UPDATE_RE.search(title)
-    if not m:
-        raise FormatChanged("title 找不到「資訊更新日期」")
-    updated = _roc_slash_to_date(m.group(1))
-    if updated < as_of:
-        raise Unproven(f"資訊更新日期 {md(updated)} 早於基準日 {md(as_of)}")
     r = _SLASH_RANGE_RE.search(title)
     if not r or {_roc_slash_to_date(r.group(1)), _roc_slash_to_date(r.group(2))} != {next_session}:
         raise Unproven("回應的查詢區間不是送出的日期")
-    cols = _columns(payload.get("fields"), ["證券代號", "證券名稱", "處置起迄時間", "處置措施"])
+    cols = _columns(payload.get("fields"), ["公布日期", "證券代號", "證券名稱", "處置起迄時間", "處置措施"])
     cols["period"] = cols["處置起迄時間"]
-    return _disposal_hits(payload.get("data") or [], cols, as_of, next_session), \
-        f"資訊更新 {md(updated)}"
+    data = payload.get("data") or []
+    m = _UPDATE_RE.search(title)
+    if m:
+        updated = _roc_slash_to_date(m.group(1))
+        if updated < as_of:
+            raise Unproven(f"資訊更新日期 {md(updated)} 早於基準日 {md(as_of)}")
+        proof = f"資訊更新 {md(updated)}"
+    elif any(_roc_slash_to_date(str(row[cols["公布日期"]]).lstrip("*")) == as_of for row in data):
+        proof = "新鮮度旁證：有基準日公布的列"
+    elif attention_ok:
+        proof = "新鮮度旁證：以同輪上市注意可用為旁證（較弱）"
+    else:
+        raise Unproven("title 無資訊更新日期，且無基準日公布的列、上市注意也不可用，無法證明新鮮")
+    return _disposal_hits(data, cols, as_of, next_session), proof
 
 
 def parse_twse_notice(payload, as_of):
@@ -232,12 +241,14 @@ def fetch_risk_flags(as_of, next_session):
     ymd = lambda d: f"{d:%Y%m%d}"  # noqa: E731
     slash = lambda d: f"{d:%Y/%m/%d}"  # noqa: E731
     steps = [
-        Step("上市處置", lambda done: parse_twse_punish(_get_json(
-            TWSE_PUNISH_URL, {"response": "json", "startDate": ymd(next_session),
-                              "endDate": ymd(next_session)}), as_of, next_session)),
         Step("上市注意", lambda done: parse_twse_notice(_get_json(
             TWSE_NOTICE_URL, {"response": "json", "startDate": ymd(as_of),
                               "endDate": ymd(as_of)}), as_of)),
+        # 上市處置 title 不附更新日期時要讀同輪「上市注意」當旁證，所以排在它之後
+        Step("上市處置", lambda done: parse_twse_punish(_get_json(
+            TWSE_PUNISH_URL, {"response": "json", "startDate": ymd(next_session),
+                              "endDate": ymd(next_session)}),
+            as_of, next_session, attention_ok=any(s.ok for s in done if s.name == "上市注意"))),
         Step("上櫃注意", lambda done: parse_tpex_attention(_get_json(
             TPEX_ATTENTION_URL, {"startDate": slash(as_of), "endDate": slash(as_of),
                                  "response": "json"}), as_of)),
