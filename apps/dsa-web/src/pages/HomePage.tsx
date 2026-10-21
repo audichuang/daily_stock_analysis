@@ -868,6 +868,28 @@ const HomePage: React.FC = () => {
     }
   }, [isDeletingStock, refreshMarketReviewHistory, refreshStockBar, refreshHistory]);
 
+  // store 層產生的幾句固定訊息是簡體寫死的（store 拿不到介面語言），顯示時換成目前語言
+  const localizeHomeMessage = useCallback((message: string) => {
+    const duplicate = /^股票 (.+) 正在分析中，请等待完成$/.exec(message);
+    if (duplicate) {
+      return t('home.duplicateTaskMessage', { code: duplicate[1] });
+    }
+    if (message === '请输入股票代码') {
+      return t('home.inputEmpty');
+    }
+    if (message === '请输入有效的股票代码或股票名称') {
+      return t('home.inputUnrecognized');
+    }
+    return message;
+  }, [t]);
+
+  // 滑鼠點選的建議只填入輸入框；按「分析」或 Enter 時，輸入框仍是那個代碼才沿用它的正規代碼與名稱
+  const [pickedSuggestion, setPickedSuggestion] = useState<{
+    displayCode: string;
+    code: string;
+    name?: string;
+  } | null>(null);
+
   const handleSubmitAnalysis = useCallback(
     (
       stockCode?: string,
@@ -875,6 +897,12 @@ const HomePage: React.FC = () => {
       selectionSource?: 'manual' | 'autocomplete' | 'import' | 'image',
       analysisSkills?: string[],
     ) => {
+      const picked = pickedSuggestion && query.trim() === pickedSuggestion.displayCode ? pickedSuggestion : null;
+      if (picked && (!stockCode || stockCode === picked.displayCode)) {
+        stockCode = picked.code;
+        stockName = picked.name;
+        selectionSource = 'autocomplete';
+      }
       void submitAnalysis({
         stockCode,
         stockName,
@@ -883,7 +911,7 @@ const HomePage: React.FC = () => {
         skills: analysisSkills ?? selectedAnalysisSkills,
       });
     },
-    [query, selectedAnalysisSkills, submitAnalysis],
+    [pickedSuggestion, query, selectedAnalysisSkills, submitAnalysis],
   );
 
   useEffect(() => {
@@ -1539,6 +1567,9 @@ const HomePage: React.FC = () => {
                   onSubmit={(stockCode, stockName, selectionSource) => {
                     handleSubmitAnalysis(stockCode, stockName, selectionSource);
                   }}
+                  onPick={(code, name, metadata) => {
+                    setPickedSuggestion({ displayCode: metadata?.displayCode ?? code, code, name });
+                  }}
                   placeholder={t('home.placeholder')}
                   disabled={isAnalyzing}
                   className={inputError ? 'border-danger/50' : undefined}
@@ -1653,7 +1684,7 @@ const HomePage: React.FC = () => {
               <InlineAlert
                 variant="danger"
                 title={t('home.inputInvalid')}
-                message={inputError}
+                message={localizeHomeMessage(inputError)}
                 className="rounded-xl px-3 py-2 text-xs shadow-none"
               />
             ) : null}
@@ -1661,7 +1692,7 @@ const HomePage: React.FC = () => {
               <InlineAlert
                 variant="warning"
                 title={t('home.duplicateTask')}
-                message={duplicateError}
+                message={localizeHomeMessage(duplicateError)}
                 action={(
                   <button
                     type="button"

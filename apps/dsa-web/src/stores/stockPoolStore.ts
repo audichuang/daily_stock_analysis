@@ -125,10 +125,30 @@ export interface StockPoolState {
   refreshStockBar: (silent?: boolean) => Promise<void>;
 }
 
+// 「推送通知」記住使用者上次的選擇；沒存過（或讀不到 localStorage）才用預設的勾選
+const NOTIFY_STORAGE_KEY = 'dsa.home.notify';
+
+function readStoredNotify(): boolean {
+  try {
+    const stored = window.localStorage.getItem(NOTIFY_STORAGE_KEY);
+    return stored === null ? true : stored === 'true';
+  } catch {
+    return true;
+  }
+}
+
+function writeStoredNotify(notify: boolean): void {
+  try {
+    window.localStorage.setItem(NOTIFY_STORAGE_KEY, String(notify));
+  } catch {
+    // 無痕模式等情況存不了，只影響下次的預設值
+  }
+}
+
 const initialState = {
   query: '',
   selectionSource: 'manual' as SelectionSource,
-  notify: true,
+  notify: readStoredNotify(),
   inputError: undefined,
   duplicateError: null,
   error: null,
@@ -628,7 +648,10 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
 
   clearInlineMessages: () => set({ inputError: undefined, duplicateError: null }),
 
-  setNotify: (notify) => set({ notify }),
+  setNotify: (notify) => {
+    writeStoredNotify(notify);
+    set({ notify });
+  },
 
   openMarkdownDrawer: () => set({ markdownDrawerOpen: true }),
 
@@ -1062,7 +1085,7 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
     activeTaskLocalRevision += 1;
     dismissedTaskIds.clear();
     pendingCompletedTaskSelectionKeys.clear();
-    set({ ...initialState });
+    set({ ...initialState, notify: readStoredNotify() });
   },
 
   loadStockBar: async () => {

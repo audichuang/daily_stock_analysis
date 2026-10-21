@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import type React from 'react';
 import { StockAutocomplete } from '../StockAutocomplete';
+import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
+import { UI_LANGUAGE_STORAGE_KEY } from '../../../utils/uiLanguage';
 import type { StockIndexItem, StockSuggestion } from '../../../types/stockIndex';
 
 let stockIndexHookImpl: () => {
@@ -491,6 +493,95 @@ describe('StockAutocomplete', () => {
       fireEvent.keyDown(input, { key: 'Enter' });
 
       expect(mockOnChange).toHaveBeenCalledWith('600519');
+      expect(mockOnSubmit).toHaveBeenCalledWith('600519.SH', '贵州茅台', 'autocomplete', {
+        market: 'CN',
+        displayCode: '600519',
+      });
+    });
+
+    it('labels suggestion badges in the current UI language', async () => {
+      window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+      autocompleteHookImpl = () => ({
+        query: '',
+        setQuery: vi.fn(),
+        suggestions: [krSuggestion],
+        isOpen: true,
+        highlightedIndex: -1,
+        setHighlightedIndex: vi.fn(),
+        highlightPrevious: vi.fn(),
+        highlightNext: vi.fn(),
+        handleSelect: vi.fn(),
+        close: vi.fn(),
+        reset: vi.fn(),
+        isComposing: false,
+        setIsComposing: vi.fn(),
+        runtimeFallback: false,
+        error: null,
+      });
+      try {
+        render(
+          <UiLanguageProvider>
+            <StockAutocomplete value="0006" onChange={mockOnChange} onSubmit={mockOnSubmit} />
+          </UiLanguageProvider>,
+        );
+        expect(await screen.findByText('韓股')).toBeInTheDocument();
+        expect(screen.getByText('包含')).toBeInTheDocument();
+        expect(screen.queryByText('韩股')).not.toBeInTheDocument();
+      } finally {
+        window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY);
+      }
+    });
+
+    it('clicking a suggestion only fills it when the caller handles picks', async () => {
+      autocompleteHookImpl = () => ({
+        query: '',
+        setQuery: vi.fn(),
+        suggestions: mockSuggestions,
+        isOpen: true,
+        highlightedIndex: -1,
+        setHighlightedIndex: vi.fn(),
+        highlightPrevious: vi.fn(),
+        highlightNext: vi.fn(),
+        handleSelect: vi.fn(),
+        close: vi.fn(),
+        reset: vi.fn(),
+        isComposing: false,
+        setIsComposing: vi.fn(),
+        runtimeFallback: false,
+        error: null,
+      });
+      const onPick = vi.fn();
+
+      render(<StockAutocomplete value="6005" onChange={mockOnChange} onSubmit={mockOnSubmit} onPick={onPick} />);
+      fireEvent.click(await screen.findByRole('option'));
+
+      expect(mockOnChange).toHaveBeenCalledWith('600519');
+      expect(onPick).toHaveBeenCalledWith('600519.SH', '贵州茅台', { market: 'CN', displayCode: '600519' });
+      expect(mockOnSubmit).not.toHaveBeenCalled();
+    });
+
+    it('clicking a suggestion still submits when the caller does not handle picks', async () => {
+      autocompleteHookImpl = () => ({
+        query: '',
+        setQuery: vi.fn(),
+        suggestions: mockSuggestions,
+        isOpen: true,
+        highlightedIndex: -1,
+        setHighlightedIndex: vi.fn(),
+        highlightPrevious: vi.fn(),
+        highlightNext: vi.fn(),
+        handleSelect: vi.fn(),
+        close: vi.fn(),
+        reset: vi.fn(),
+        isComposing: false,
+        setIsComposing: vi.fn(),
+        runtimeFallback: false,
+        error: null,
+      });
+
+      render(<StockAutocomplete value="6005" onChange={mockOnChange} onSubmit={mockOnSubmit} />);
+      fireEvent.click(await screen.findByRole('option'));
+
       expect(mockOnSubmit).toHaveBeenCalledWith('600519.SH', '贵州茅台', 'autocomplete', {
         market: 'CN',
         displayCode: '600519',

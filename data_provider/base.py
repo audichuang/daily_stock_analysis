@@ -3456,6 +3456,53 @@ class DataFetcherManager:
         logger.info(f"[股票名称] 批量获取完成，成功 {len(result)}/{len(stock_codes)}")
         return result
 
+    @staticmethod
+    def _get_tw_main_indices() -> List[Dict[str, Any]]:
+        """台股指數：Shioaji 快照 → 本地 `market` schema 官方收盤；都沒有回空，交給 yfinance。
+
+        yfinance 的 ``^TWII`` 收盤後常是幽靈 K 棒（漲跌 0%、數字是前一日收盤），所以排最後。
+        本地官方收盤只有加權指數（``market_index`` 只存 TAIEX），沒有櫃買。
+        """
+        try:
+            from .shioaji_fetcher import shioaji_main_indices
+
+            data = shioaji_main_indices()
+            if data:
+                logger.info("[ShioajiFetcher] 获取台股指数行情成功")
+                return data
+        except Exception as e:
+            logger.warning(f"[ShioajiFetcher] 获取台股指数行情失败: {e}")
+        try:
+            from market_data import market_repo
+            from market_data.db import get_engine
+
+            row = market_repo.latest_market_index(
+                "TAIEX", engine=get_engine(statement_timeout_ms=3000)
+            )
+        except Exception as e:
+            logger.warning(f"[MarketDB] 读取加权指数官方收盘失败: {e}")
+            return []
+        if not row or row.get("close") is None:
+            return []
+        close = float(row["close"])
+        change = float(row.get("change") or 0.0)
+        prev_close = close - change
+        return [{
+            "code": "TWII",
+            "name": "台灣加權指數",
+            "current": close,
+            "change": change,
+            "change_pct": change / prev_close * 100 if prev_close else 0.0,
+            "open": None,
+            "high": None,
+            "low": None,
+            "prev_close": prev_close,
+            "volume": 0.0,
+            "amount": 0.0,
+            "amplitude": None,
+            "as_of": str(row.get("date"))[:10],
+        }]
+
     def get_main_indices(self, region: str = "cn") -> List[Dict[str, Any]]:
         """获取主要指数实时行情（自动切换数据源）"""
         if region == "cn":
@@ -3468,6 +3515,11 @@ class DataFetcherManager:
                         return data
                 except Exception as e:
                     logger.warning(f"[TickFlowFetcher] 获取指数行情失败: {e}")
+
+        if region == "tw":
+            data = self._get_tw_main_indices()
+            if data:
+                return data
 
         for fetcher in self._fetchers:
             if region == "cn" and fetcher.name == "TickFlowFetcher":

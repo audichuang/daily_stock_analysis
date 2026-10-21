@@ -280,6 +280,76 @@ def shioaji_trend(stock_code: str, range_: str):
     return [{"t": d, "price": p} for d, p in sorted(by_day.items())]
 
 
+# 盯盤指數條：(Shioaji 指數合約 exchange, code, 回傳 code, 名稱)。合約代碼是 IX 編號，不是 001／101。
+_TW_MAIN_INDEX_CONTRACTS = (
+    ("TSE", "IX0001", "TWII", "台灣加權指數"),
+    ("OTC", "IX0043", "TPEX", "櫃買指數"),
+)
+
+
+def shioaji_main_indices() -> Optional[list]:
+    """台股加權與櫃買指數（Shioaji 快照），格式同 ``get_main_indices``。
+
+    yfinance 的 ``^TWII`` 在收盤後常是幽靈 K 棒（當日 OHLC 配前一日收盤、漲跌 0%），
+    ``^TWOII`` 則查無資料；Shioaji 快照收盤後仍回最近一個場次的正式收盤，兩檔都有。
+    未安裝／無金鑰／無 session／失敗回 None，由呼叫端退回其他來源。
+    """
+    if not _HAS_SHIOAJI:
+        return None
+    api = _ensure_session()
+    if api is None:
+        return None
+    contracts, meta = [], {}
+    for exchange, code, out_code, name in _TW_MAIN_INDEX_CONTRACTS:
+        try:
+            contract = getattr(api.Contracts.Indexs, exchange)[code]
+        except Exception:
+            contract = None
+        if contract is not None:
+            contracts.append(contract)
+            meta[code] = (out_code, name)
+    if not contracts:
+        return None
+    try:
+        with _SNAPSHOT_LOCK:
+            fut = _executor.submit(api.snapshots, contracts)
+            snaps = fut.result(timeout=_SNAPSHOT_TIMEOUT_S)
+    except Exception as e:
+        logger.warning("[ShioajiFetcher] 指數快照失敗/超時: %s", type(e).__name__)
+        return None
+
+    results = []
+    for snap in snaps or []:
+        code = str(getattr(snap, "code", "") or "")
+        close = safe_float(getattr(snap, "close", None))
+        if code not in meta or not close:
+            continue
+        out_code, name = meta[code]
+        change = safe_float(getattr(snap, "change_price", None)) or 0.0
+        prev_close = close - change
+        high = safe_float(getattr(snap, "high", None)) or 0.0
+        low = safe_float(getattr(snap, "low", None)) or 0.0
+        results.append({
+            "code": out_code,
+            "name": name,
+            "current": close,
+            "change": change,
+            "change_pct": safe_float(getattr(snap, "change_rate", None)) or 0.0,
+            "open": safe_float(getattr(snap, "open", None)) or 0.0,
+            "high": high,
+            "low": low,
+            "prev_close": prev_close,
+            "volume": safe_float(getattr(snap, "total_volume", None)) or 0.0,
+            "amount": safe_float(getattr(snap, "total_amount", None)) or 0.0,
+            "amplitude": (high - low) / prev_close * 100 if prev_close else 0.0,
+            "as_of": _ns_to_iso(getattr(snap, "ts", None)),
+        })
+    # 依固定順序（加權在前）
+    order = [out for _, _, out, _ in _TW_MAIN_INDEX_CONTRACTS]
+    results.sort(key=lambda r: order.index(r["code"]))
+    return results or None
+
+
 def _read_snapshot_cache(bare_code: str):
     """读批次预热缓存：返回 (snap, contract) 或 None（缺失/过期）。"""
     with _SNAPSHOT_CACHE_LOCK:

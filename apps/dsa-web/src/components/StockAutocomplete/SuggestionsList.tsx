@@ -6,6 +6,8 @@ import type { CSSProperties } from 'react';
 import type { StockSuggestion } from '../../types/stockIndex';
 import { Badge } from '../common';
 import { cn } from '../../utils/cn';
+import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import type { UiTextKey } from '../../i18n/uiText';
 
 export interface SuggestionsListProps {
   /** Suggestion list */
@@ -77,18 +79,19 @@ export function SuggestionsList({
 }
 
 const MARKET_BADGE_CONFIG = {
-  CN: { label: 'A股', className: 'border-danger/25 bg-danger/10 text-danger' },
-  HK: { label: '港股', className: 'border-success/25 bg-success/10 text-success' },
-  US: { label: '美股', className: 'border-cyan/25 bg-cyan/10 text-cyan' },
-  JP: { label: '日股', className: 'border-indigo-500/25 bg-indigo-500/10 text-indigo-500' },
-  KR: { label: '韩股', className: 'border-rose-500/25 bg-rose-500/10 text-rose-500' },
-  TW: { label: '台股', className: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600' },
-  INDEX: { label: '指数', className: 'border-purple/25 bg-purple/10 text-purple' },
-  ETF: { label: 'ETF', className: 'border-warning/25 bg-warning/10 text-warning' },
-  BSE: { label: '北交所', className: 'border-orange-500/25 bg-orange-500/10 text-orange-500' },
-} as const;
+  CN: { labelKey: 'autocomplete.market.CN', className: 'border-danger/25 bg-danger/10 text-danger' },
+  HK: { labelKey: 'autocomplete.market.HK', className: 'border-success/25 bg-success/10 text-success' },
+  US: { labelKey: 'autocomplete.market.US', className: 'border-cyan/25 bg-cyan/10 text-cyan' },
+  JP: { labelKey: 'autocomplete.market.JP', className: 'border-indigo-500/25 bg-indigo-500/10 text-indigo-500' },
+  KR: { labelKey: 'autocomplete.market.KR', className: 'border-rose-500/25 bg-rose-500/10 text-rose-500' },
+  TW: { labelKey: 'autocomplete.market.TW', className: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600' },
+  INDEX: { labelKey: 'autocomplete.market.INDEX', className: 'border-purple/25 bg-purple/10 text-purple' },
+  ETF: { labelKey: 'autocomplete.market.ETF', className: 'border-warning/25 bg-warning/10 text-warning' },
+  BSE: { labelKey: 'autocomplete.market.BSE', className: 'border-orange-500/25 bg-orange-500/10 text-orange-500' },
+} as const satisfies Record<string, { labelKey: UiTextKey; className: string }>;
 
 function MarketBadge({ market }: { market: string }) {
+  const { t } = useUiLanguage();
   const config = MARKET_BADGE_CONFIG[market as keyof typeof MARKET_BADGE_CONFIG];
 
   if (!config) {
@@ -97,24 +100,25 @@ function MarketBadge({ market }: { market: string }) {
 
   return (
     <Badge variant="default" size="sm" className={cn('min-w-[3rem] justify-center shadow-none', config.className)}>
-      {config.label}
+      {t(config.labelKey)}
     </Badge>
   );
 }
 
 function MatchTypeBadge({ matchType }: { matchType: string }) {
+  const { t } = useUiLanguage();
   const configMap = {
-    exact: { label: '精确', className: 'border-cyan/25 bg-cyan/10 text-cyan' },
-    prefix: { label: '前缀', className: 'border-purple/25 bg-purple/10 text-purple' },
-    contains: { label: '包含', className: 'border-warning/25 bg-warning/10 text-warning' },
-    fuzzy: { label: '模糊', className: 'border-border/55 bg-elevated/75 text-muted-text' },
+    exact: { labelKey: 'autocomplete.match.exact', className: 'border-cyan/25 bg-cyan/10 text-cyan' },
+    prefix: { labelKey: 'autocomplete.match.prefix', className: 'border-purple/25 bg-purple/10 text-purple' },
+    contains: { labelKey: 'autocomplete.match.contains', className: 'border-warning/25 bg-warning/10 text-warning' },
+    fuzzy: { labelKey: 'autocomplete.match.fuzzy', className: 'border-border/55 bg-elevated/75 text-muted-text' },
   };
 
   const config = configMap[matchType as keyof typeof configMap] || configMap.fuzzy;
 
   return (
     <Badge variant="default" size="sm" className={cn('shrink-0 shadow-none', config.className)}>
-      {config.label}
+      {t(config.labelKey as UiTextKey)}
     </Badge>
   );
 }

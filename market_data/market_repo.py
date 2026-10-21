@@ -196,6 +196,14 @@ def market_index(index_id, date, engine=None):
     return None if df.empty else df.iloc[0].to_dict()
 
 
+def latest_market_index(index_id, engine=None):
+    """指數最新一個場次的官方收盤：dict(date, close, change)；查無回 None。"""
+    df = _q("SELECT date, close, change FROM market.market_index "
+            "WHERE index_id = :iid AND close IS NOT NULL ORDER BY date DESC LIMIT 1",
+            {"iid": index_id}, engine)
+    return None if df.empty else df.iloc[0].to_dict()
+
+
 _FUND_INFO_COLUMNS = ("fund_id, name, company, isin, sitca_code, type_code, type_name, invest_area, "
                       "currency, inception_date, aum, aum_currency, aum_date, dividend_policy, cnyes_id")
 

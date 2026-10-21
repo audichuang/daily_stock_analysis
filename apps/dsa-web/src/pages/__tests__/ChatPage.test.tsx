@@ -649,6 +649,67 @@ describe('ChatPage', () => {
     expect(screen.queryByText('暂时无法读取问股运行状态')).not.toBeInTheDocument();
   });
 
+  it('renders the chat chrome in Traditional Chinese and keeps backend data untranslated', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+
+    render(
+      <UiLanguageProvider>
+        <MemoryRouter initialEntries={['/chat']}>
+          <ChatPage />
+        </MemoryRouter>
+      </UiLanguageProvider>,
+    );
+
+    expect(await screen.findByRole('checkbox', { name: '通用分析' })).toBeInTheDocument();
+    expect(await screen.findByText('未啟用')).toBeInTheDocument();
+    expect(screen.getAllByText('歷史對話').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: '開啟新對話' })).toBeInTheDocument();
+    // 會話標題與技能名稱是後端資料，不能被翻譯
+    expect(screen.getByRole('button', { name: '切換到對話 请简要分析 600519' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '趋势分析' })).toBeInTheDocument();
+    expect(screen.getByText('2 則對話')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '刪除對話 请简要分析 600519' })).toBeInTheDocument();
+    expect(screen.getByText('開始問股')).toBeInTheDocument();
+    expect(screen.getByText('上下文壓縮')).toBeInTheDocument();
+    expect(screen.getByText('節省長對話 token')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('例如：分析 2330.TW / 台積電現在適合買入嗎？（Enter 傳送，Shift+Enter 換行）')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '傳送' })).toBeInTheDocument();
+    expect(document.title).toBe('問股 - DSA');
+
+    const bodyText = document.body.textContent ?? '';
+    for (const simplified of ['历史对话', '开始问股', '上下文压缩', '未启用', '条对话', '发送', '节省长会话']) {
+      expect(bodyText).not.toContain(simplified);
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: '分析比亞迪趨勢' }));
+    await waitFor(() => {
+      expect(mockStartStream).toHaveBeenCalledWith(
+        expect.objectContaining({ message: '分析比亞迪趨勢', skills: ['bull_trend'] }),
+        expect.anything(),
+      );
+    });
+  });
+
+  it('renders the chat chrome in English', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+
+    render(
+      <UiLanguageProvider>
+        <MemoryRouter initialEntries={['/chat']}>
+          <ChatPage />
+        </MemoryRouter>
+      </UiLanguageProvider>,
+    );
+
+    expect(await screen.findByRole('checkbox', { name: 'General analysis' })).toBeInTheDocument();
+    expect(await screen.findByText('Disabled')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start a new chat' })).toBeInTheDocument();
+    expect(screen.getByText('2 messages')).toBeInTheDocument();
+    expect(screen.getByText('Context compression')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/^e\.g\. Analyze AAPL/)).toBeInTheDocument();
+  });
+
   it('renders a fixed workspace shell with independent session and message viewports', async () => {
     render(
       <MemoryRouter initialEntries={['/chat']}>

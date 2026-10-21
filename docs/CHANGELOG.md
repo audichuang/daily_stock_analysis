@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 問股頁、搜尋下拉的市場／比對標籤、首頁重複任務與輸入錯誤提示改走介面語言（繁中／英文不再顯示簡體）；後端回來的股名、策略名、對話內容不翻
+- [修復] 盯盤大盤指數條改取永豐指數快照（加權＋櫃買），失敗才退本地官方收盤、最後才用 yfinance；原本收盤後顯示前一日收盤、漲跌 0.00%，櫃買指數也抓不到
+- [改進] 首頁搜尋建議用滑鼠點選只填入代碼，按「分析」或 Enter 才送出（鍵盤選取仍直接送出）；選取後下拉不再自己重新打開；「推送通知」記住上次的勾選
 - [修復] 首頁個股欄與自選列每 30 秒背景刷新（及切回分頁）時不再整個換成「載入中」再掛回：原本每次閃約 0.4 秒、捲動位置與點擊會落空；手動刷新仍顯示載入中以免點到舊資料
 - [新功能] 即時盯盤加「全部／自選／持股」切換：持股取自帳本全部帳戶（含美股複委託），跨帳戶合併、以即時價顯示股數與未實現損益；下方另列基金持倉卡（淨值、淨值日、持有報酬）。賣光的持股自動消失，不必改 `STOCK_LIST`
 - [chore] CI 移除 `desktop-futu-package-windows`（本 fork 不發 Windows 桌面版）；macOS 打包檢查保留，`scripts/build-backend.ps1` 未刪

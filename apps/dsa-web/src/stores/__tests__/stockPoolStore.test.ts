@@ -1380,6 +1380,18 @@ describe('stockPoolStore', () => {
     expect(useStockPoolStore.getState().isLoadingStockBar).toBe(false);
   });
 
+  it('remembers the notify checkbox across a dashboard reset', () => {
+    useStockPoolStore.getState().setNotify(false);
+    expect(window.localStorage.getItem('dsa.home.notify')).toBe('false');
+
+    useStockPoolStore.getState().resetDashboardState();
+    expect(useStockPoolStore.getState().notify).toBe(false);
+
+    useStockPoolStore.getState().setNotify(true);
+    useStockPoolStore.getState().resetDashboardState();
+    expect(useStockPoolStore.getState().notify).toBe(true);
+  });
+
   it('keeps the loaded stock bar on screen during a silent background refresh', async () => {
     useStockPoolStore.setState({ stockBarItems: [stockBarItem] });
     const refreshRequest = createDeferred<StockBarResponse>();

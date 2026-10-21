@@ -2546,6 +2546,31 @@ describe('HomePage', () => {
     expect(screen.queryByText(/股票 600519 正在分析中/)).not.toBeInTheDocument();
   });
 
+  it('shows store messages in Traditional Chinese when the UI is zh-TW', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+    vi.mocked(historyApi.getList).mockResolvedValue({ total: 0, page: 1, limit: 20, items: [] });
+
+    render(
+      <UiLanguageProvider>
+        <MemoryRouter>
+          <HomePage />
+        </MemoryRouter>
+      </UiLanguageProvider>,
+    );
+    await screen.findByRole('combobox');
+
+    act(() => {
+      useStockPoolStore.setState({ duplicateError: '股票 600519 正在分析中，请等待完成' });
+    });
+    expect(screen.getByText('600519 正在分析中，請等待完成')).toBeInTheDocument();
+    expect(screen.queryByText(/请等待完成/)).not.toBeInTheDocument();
+
+    act(() => {
+      useStockPoolStore.setState({ duplicateError: null, inputError: '请输入股票代码' });
+    });
+    expect(screen.getByText('請輸入股票代號')).toBeInTheDocument();
+  });
+
   it('auto-dismisses the duplicate task banner after 5 seconds', async () => {
     vi.useFakeTimers();
     try {
@@ -3510,5 +3535,51 @@ describe('HomePage', () => {
     expect(await screen.findByText('大盘复盘摘要')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '市场情绪与赚钱效应' })).toBeInTheDocument();
     expect(vi.mocked(historyApi.getDetail)).toHaveBeenCalledWith(2);
+  });
+
+  it('fills a clicked suggestion without analysing until the user presses analyse', async () => {
+    stockIndexItems = [{
+      canonicalCode: '2887.TW',
+      displayCode: '2887.TW',
+      nameZh: '台新新光金',
+      pinyinFull: '',
+      pinyinAbbr: '',
+      aliases: [],
+      market: 'TW',
+      assetType: 'stock',
+      active: true,
+      popularity: 100,
+    } as unknown as (typeof stockIndexItems)[number]];
+    vi.mocked(historyApi.getList).mockResolvedValue({ total: 0, page: 1, limit: 20, items: [] });
+    vi.mocked(analysisApi.analyzeAsync).mockResolvedValue({
+      taskId: 'task-2887',
+      status: 'pending',
+      message: 'accepted',
+    } as unknown as Awaited<ReturnType<typeof analysisApi.analyzeAsync>>);
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    const input = await screen.findByRole('combobox');
+    fireEvent.change(input, { target: { value: '2887' } });
+    const option = await screen.findByRole('option', { name: /台新新光金/ });
+    fireEvent.click(option);
+
+    expect(input).toHaveValue('2887.TW');
+    // 等過搜尋的 debounce：點選後不該再自己打開下拉，也不該送出分析
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(screen.queryByRole('option')).not.toBeInTheDocument();
+    expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '分析' }));
+    await waitFor(() => expect(analysisApi.analyzeAsync).toHaveBeenCalledTimes(1));
+    expect(analysisApi.analyzeAsync).toHaveBeenCalledWith(expect.objectContaining({
+      stockCode: '2887.TW',
+      stockName: '台新新光金',
+      selectionSource: 'autocomplete',
+    }));
   });
 });

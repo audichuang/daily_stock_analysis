@@ -30,6 +30,15 @@ export interface StockAutocompleteProps {
     source?: 'manual' | 'autocomplete',
     metadata?: { market?: Market; displayCode?: string },
   ) => void;
+  /**
+   * 滑鼠點選建議時改呼叫它（只填入、不送出），由呼叫端決定何時送出；
+   * 不給時維持舊行為（點選即 onSubmit）。鍵盤 Enter 選取一律送出。
+   */
+  onPick?: (
+    code: string,
+    name?: string,
+    metadata?: { market?: Market; displayCode?: string },
+  ) => void;
   /** Whether disabled */
   disabled?: boolean;
   /** Placeholder text */
@@ -106,6 +115,7 @@ function StockAutocompleteInner({
   value,
   onChange,
   onSubmit,
+  onPick,
   disabled = false,
   placeholder = '输入股票代码或名称',
   ariaLabel,
@@ -150,6 +160,12 @@ function StockAutocompleteInner({
   const closeSuggestions = () => {
     close();
     setDropdownStyle(null);
+  };
+
+  // 選取後把輸入框換成代碼：先記成「已同步」，否則同步 effect 會拿新代碼再搜一次、把下拉重新打開
+  const fillWithoutSearch = (displayCode: string) => {
+    prevValueRef.current = displayCode;
+    onChange(displayCode);
   };
 
   // Sync external value with internal query (only when value truly changes)
@@ -204,7 +220,7 @@ function StockAutocompleteInner({
         if (highlightedIndex >= 0 && suggestions[highlightedIndex]) {
           // Select highlighted item
           const selected = suggestions[highlightedIndex];
-          onChange(selected.displayCode);
+          fillWithoutSearch(selected.displayCode);
           closeSuggestions();
           onSubmit(selected.canonicalCode, selected.nameZh, 'autocomplete', {
             market: selected.market,
@@ -295,15 +311,15 @@ function StockAutocompleteInner({
           suggestions={suggestions}
           highlightedIndex={highlightedIndex}
           onSelect={(s) => {
-            // Update external value (shown in input box)
-            onChange(s.displayCode);
-            // Close dropdown list
+            fillWithoutSearch(s.displayCode);
             closeSuggestions();
-            // Submit analysis
-            onSubmit(s.canonicalCode, s.nameZh, 'autocomplete', {
-              market: s.market,
-              displayCode: s.displayCode,
-            });
+            const metadata = { market: s.market, displayCode: s.displayCode };
+            if (onPick) {
+              onPick(s.canonicalCode, s.nameZh, metadata);
+              inputRef.current?.focus();
+              return;
+            }
+            onSubmit(s.canonicalCode, s.nameZh, 'autocomplete', metadata);
           }}
           onMouseEnter={(index) => setHighlightedIndex(index)}
           style={{ position: 'fixed', ...dropdownStyle }}

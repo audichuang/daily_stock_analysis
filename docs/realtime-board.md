@@ -63,6 +63,11 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
   - 单个代码失败回 `quote: null, error: "no_data"`，**绝不 500 整批**。
   - 单次最多 50 个代码（超出 400），代码去重保序。
 - `GET /api/v1/stocks/{code}/quote`：单股行情，响应追加 `source` / `as_of` / `is_stale`（与批次一致）。
+- `GET /api/v1/stocks/indices?region=tw`：盯盤上方的大盤指數條（加權 `TWII`、櫃買 `TPEX`），失敗回空列表。台股依序：
+  1. **Shioaji 指數快照**（合約 `Indexs.TSE["IX0001"]`／`Indexs.OTC["IX0043"]`，不是 `001`／`101`）：盤中即時，收盤後仍是最近場次的正式收盤；兩檔都有，回應多帶 `as_of`。
+  2. **本地 `market.market_index` 官方收盤**：只有加權（表內只存 TAIEX），沒有櫃買；`open`／`high`／`low` 為 `null`。
+  3. **yfinance**：最後才用。`^TWII` 收盤後常是幽靈 K 棒（當日 OHLC 配前一日收盤、漲跌 0.00%，2026-10-22 實測顯示 46,292.93 而官方是 46,887.77），`^TWOII` 查無資料。
+  大盤複盤走同一個入口，表頭加權指數之後仍會被釘成該場次官方收盤（`market_analyzer._pin_tw_indices_to_session`）。
 
 ## Shioaji 数据源（Phase 2）
 
