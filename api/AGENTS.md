@@ -1,6 +1,6 @@
 # api — FastAPI 服務層
 
-> 共通規則見 repo 根 `AGENTS.md`(§7 API／Web／Desktop 相容護欄),本檔只寫本模組增量。
+> 本檔只寫本模組增量。
 
 ## 模組定位
 

@@ -1,92 +1,35 @@
 # market_data — 台股行情爬取與統一 Postgres(market schema)
 
-> 共通規則見 repo 根 `AGENTS.md`,本檔只寫本模組的增量。
+爬 TWSE/TPEx/MOPS 歷史寫進 Postgres `market` schema——台股歷史的**唯一資料源**(無備份,丟了只能重爬)。連線只認 `.env` 的 `DATABASE_URL`,模組不自載 `.env`,指令一律 `uv run --env-file .env …`。面板經 `data_provider/market_db_fetcher.py` 讀取。
+`risk_flags.py`/`events.py` 只抓不入庫(不寫 DB、不建表),HTTP 一律走 `tw_official_http.py`(不走 `crawler.requests_get`),它**不判新鮮度**,呼叫端自己比對回應日期。`sources.py`/`crawler.py`/`financial_statement.py` 是移植來的,盡量少動。
 
-## 模組定位
+## 寫入與 schema
 
-爬取台股行情/籌碼/財報歷史,寫入外部 Postgres 的 `market` schema——台股歷史資料的**唯一資料源**(無本地備份,遺失只能從官方端點重爬)。另放少數**只抓不入庫**的模組:報告／盤前流程當下即時抓官方公告(處置／注意股 `risk_flags.py`、事件日曆 `events.py`),結果只進當次輸出,**不寫 DB、不建表**;它們的 HTTP 一律走 `tw_official_http.py`(放在 `scripts/` 的 `taifex_positions.py` 期交所籌碼也借用它),不走入庫爬蟲的 `crawler.requests_get`。面板經 `data_provider/market_db_fetcher.py` 讀取(priority=1,台股日線優先本地 DB,查無資料 fallback yfinance)。連線設定只有一個:`.env` 的 `DATABASE_URL`(gitignored,勿寫死)。
+- schema 只走 Alembic(`migrations/`,只管 `market` schema),不手改線上 DB。
+- price 一天 TWSE+TPEx **兩市場都到才寫**——單邊寫入會讓 resume 標記該日完成、另一邊永久缺。別「順手優化」。
+- price 的**截斷防護**(低於近 5 日中位數九成 → STOCK_DAY_ALL 備援 → 仍不足整天跳過)不要移除:TWSE 回過截斷但非空的回應。
+- 會被官方事後修正的來源要加進 `crawl.REVISED_SOURCES`(目前只有 institutional,T86 18:00 是初版);沒列進去的會凍結在初版。
+- 快照段(valuation/index/stock_info)只經 `crawl.crawl_snapshots()`;直接呼叫會丟掉列數與 `latest <date>`,那是唯一的可觀測訊號。
+- `sources` 取得層失敗只印 `**WARN`、回 `None`,exit code 不反映失敗;新來源照這個契約,自動化判成敗看 stdout。
+- psycopg 多列 INSERT 的 `rowcount` 不可靠(要數就 `RETURNING`);單一 INSERT 綁定參數上限 65,535,寬表要分批(`funds._chunks`)。
+- `adjust` 的重建是先刪區間再寫,所以官方來源抓不齊就要 raise、離線模式要讀回既有官方列——`_fetch_by_year`、`existing_official_rows`、`infer_rows` 的 docstring 寫了不能「順手優化」掉的理由。
 
-## 檔案角色
+## 讀取語意
 
-- `crawl.py`:orchestration(`crawl_day`/`crawl_range` 帶 resume、`daily_update` 營運入口)
-- `etl.py`:中文欄位→英文 typed 轉換;財報 melt 寬表→長格式
-- `writer.py`:INSERT…ON CONFLICT upsert(重爬冪等)
-- `market_repo.py`:面板讀取面(`price_history`/`to_daily_frame` 等)
-- `adjust.py`:重建 `price_adjustment` 前復權因子(除權息+減資+分割三來源合一);`load_factors()` 是算報酬/均線前套用因子的唯一入口(休市日事件經 `snap_events_to_sessions` 對齊)
-- `health.py`:完整性/新鮮度稽核(thin price days 用**局部**中位數——全域中位數會被 16 年上市家數成長稀釋;報出的日子用 `backfill --force` 修;另有 `sessions_after(day, n)`／`session_before(day)` 給只抓不入庫的模組算「下 N 個／前一個交易日」,與 `expected_session` 共用 XTAI 日曆、日曆取不到回 None——`market_data` 內要交易日曆一律用這三個,不 import `src.core.trading_calendar`)
-- `tw_official_http.py`:只抓不入庫模組的共用 HTTP(`get`／`post` 短 timeout、不重試、不暖 cookie)、`error_reason`(判 HTML 看內容不看 Content-Type)、`SourceStatus`(`proven=False`＝可用但未證明新鮮、不算查過)／`Step`／`FormatChanged`／`run_sources`(`parallel=True` 只給彼此不依賴的來源)／`checked_markets`(要可用**且**已證明)／`md`(日期一律 `MM/DD` 補零);**不判新鮮度**,呼叫端仍要比對回應自帶的日期。並行下不能用 `warnings.catch_warnings()`(行程全域、非執行緒安全),MOPS 的 InsecureRequestWarning 是 import 時依主機靜音。規則見模組 docstring
-- `risk_flags.py`:處置／注意股即時名單(上市＋上櫃各兩份),只標記不剔除;四份各自的新鮮度規則見模組 docstring(TWSE 處置 title 的「資訊更新日期」只在某些時段出現、語意未實測,沒有時與 TPEx 處置一樣靠旁證,見 `docs/tw-swing-pipeline.md`;兩份處置都必須排在同市場注意之後跑)。TPEx 注意的「累計」欄是當天總檔數不是個股次數,別印。`python -m market_data.risk_flags <代號>` 可單查(裸代號或帶 `.TW`／`.TWO` 皆可)
-- `events.py`:事件日曆(MOPS 法說會、除權息預告、月營收期限),只抓不入庫,四源並行;MOPS 新鮮度無法自證、`proven=False`,命中照列但不算查過。來源→市場在 `SOURCE_MARKET`、→類別在 `SOURCE_CATEGORY`;`checked_markets` 決定逐檔 `events` 能不能寫 `[]`(目前不會),`checked_categories` 給逐檔 `events_checked`。規則見模組 docstring
-- `funds.py`:境內基金——投信投顧公會每日淨值／基本資料入庫(`fund_info`/`fund_nav`,以每列自帶淨值日 upsert)、鉅亨補歷史淨值(只補缺日不覆蓋官方值)與即時前十大持股;HTTP 借用 `tw_official_http.get`。`daily` 在除權息之後、復權刷新之前呼叫,失敗只印 `**WARN fund_nav`。來源語意與坑見 `docs/tw-funds.md`
-- `migrations/`:Alembic,只管 `market` schema(不碰 `app`/`public`)
-- `sources.py`/`crawler.py`:TWSE/TPEx/MOPS 原始爬取邏輯(移植而來),盡量少動
-- `financial_statement.py`:IFRS 財報 html → 寬表解析(移植而來),盡量少動
+- `price` 是**未還原價**:算報酬/均線/乖離前一律套因子,唯一入口 `adjust.load_factors()`;休市日事件只由 `adjust.snap_events_to_sessions` 搬到下一交易日(表內日期不動)。`ex_dividend` 只有上市除權息,不是還原來源。
+- `price_adjustment` 每檔每日一列,同日多事件留優先來源、**不相乘**(`merge_adjustment_rows`);改復權鏈前先想清楚。
+- **`price.change` 算報酬一律不碰**(上市歷史曾無正負號、`X` 存成 0);用 `close` 自己 diff,但方向不能用 `close - lag(close)` 重算(官方比的是參考價)。
+- `institutional`/`margin`/`valuation` **只有上市**;`price.market` 全為 NULL;判定下市用 `price` 最後交易日,不是「不在 `stock_info`」(它只有上市)。
+- `monthly_revenue.revenue` 單位是**千元**;`crawler.crawl_monthly_report` 有存活偏誤(只列仍申報的公司),補歷史走 `cli revenue-pit`。
+- `MarketDBFetcher` 只服務 `.TW`/`.TWO`;查無資料 raise `DataSourceUnavailableError` 讓 chain fallback,不回空 DataFrame。
+- `market_data` 內要交易日曆一律用 `health.expected_session`/`sessions_after`/`session_before`,不 import `src.core.trading_calendar`;`health` 的函式名與簽名是 `scripts/daily_report.sh` 的契約。
 
-## 數據更新(操作指令)
+## 測試
 
-> 完整更新流程(何時 daily、何時 backfill、跑完怎麼用 health 驗收)見 skill `update-market-data`。以下為指令速查。本模組**不自載 `.env`**(不同於面板的 load_dotenv),指令一律帶 `--env-file .env`,否則 `DATABASE_URL is not set`。
+- **DB 測試一律用 `pg_conn` fixture 並自己種資料**:本機 conftest 從 `.env` 讀 `DATABASE_URL`,連的是正式庫,`pg_conn` 才保證 rollback,直接拿 `engine` 寫就是寫進正式庫。CI 是已遷移的空庫,種子用遠離真實資料的年份(1900／2099)。
+- 新增表時本機 pg 測試在正式庫 migration 前必紅:先 `make pg-scratch`,照它印的 `DATABASE_URL` export 後再跑。
 
-- **自動更新**:平日 18:00 由 Orca automation「每日台股報告」跑 `make daily-report-detached`(脫離 agent 的 session 在背景跑完;`scripts/daily_report.sh`:`daily` → `health --strict` → 報告),daily 或 health 失敗就不出報告、改推 Bark 失敗通知(log:`logs/daily_report_*.log`)。18:00 當日融資融券尚未發布,由隔日 run resume 補齊(T+1)。原本的 15:00 crontab 已不存在(2026-09-25 最後一跑,之後停更 3 個交易日沒人發現);資料停更先查 `orca automations runs --id <id>` 與該 log。
-- 每日增量+快照:`uv run --env-file .env python -m market_data.cli daily`(近 `crawl.RECENT_SESSIONS`=5 個交易日的 price/institutional/margin/valuation,**該區間的每個曆日都補**、缺日會被連續補回(valuation 走帶日期的 BWIBBU_d 補窗口內缺日,見踩雷「valuation 的歷史」);institutional 另把區間內已入庫的日子重抓換成官方定版,見踩雷「T86 初版」 + valuation(BWIBBU_ALL 當日快照,另有上述 BWIBBU_d 補缺日)/index/stock_info 快照 + 上月營收 + 除權息滾動窗 + 近期 `price_adjustment` 復權事件重算)
-  - **復權事件是 daily 的一部分,不必另跑 `adjust`**:除權息抓取與 ±`adjust.ADJUSTMENT_WINDOW_DAYS`=90 天的因子替換在同一 transaction 完成,任一官方來源(上市 TWT49U、上櫃 TPEx exDailyQ、還原因子 TWTAUU)失敗就整包不寫、daily 直接報錯(不留半套因子)。TWT49U 先試一次、失敗等 `_EX_DIVIDEND_RETRY_SECONDS`=5 秒重試,仍失敗才 raise(在 `refresh_recent` 之前;月營收已先自成一個交易 commit)。**注意 TWSE 對「窗口內 0 事件」也回 200＋無表頭的文字,與被擋/改版同樣解析成失敗(實測 2026-01-03~04)**——daily 的窗口是 −30~+90 天、實務上必有事件,但手動縮窄窗口用 `cli ex-dividend`(`require=False`,失敗只少寫)而非靠 daily。只有修過 price 髒日或要重建全期,才需要下面的 `adjust`。
-  - **落後超過 31 個曆日會直接拒跑**(`MAX_DAILY_RECOVERY_CALENDAR_DAYS`),訊息會叫你指定區間 backfill——這是刻意的,避免無界回補偷偷跑幾小時。
-- 稽核:`uv run --env-file .env python -m market_data.cli health --strict`(`make morning`／`make swing` 已內建;近期缺日、TAIEX/法人/融資錯位、除權息缺因子、必備表為空就回非零)。它的近期視窗與 daily **共用 `RECENT_SESSIONS`**;**應有場次**(`health.expected_session`):用 XTAI 日曆算出此刻該已入庫的最近交易日——交易日且台北時間 ≥17:00(`SESSION_COMPLETE_AFTER`,不是 13:30 收盤)取今天,否則取前一個交易日;`price` 與 `TAIEX` **都要有**那天,缺任一邊就擋(`missing_expected_session`),因為兩者同為 TWSE 來源,被封或盤中跑時會同時缺而互相比對看不出來。`health` 一律印 `latest price session` 與 `expected session: … (price ✓/✗, TAIEX ✓/✗)`。日曆(`exchange_calendars`)取不到時印 `skipped` 並**跳過**、不退回週一~五(否則國定假日誤擋);颱風等日曆不知道的臨時休市日 18:00 會被擋並推 Bark(刻意,寧吵勿默)。函式名與簽名是 `scripts/daily_report.sh` 的契約。全歷史 thin day 與 `stale financial quarters` 只報不擋(daily 修不到的東西不該擋每天的流程)。財報那一行列出**已過公告截止日卻沒有任何列**的季(截止日對映重用 `financial_statement.afterIFRS`,印的 `season` 是會計期間、Q4 在隔年 3/31),並附上該季的 `financials` 指令——財報季更不在 `daily` 裡,這是漏季唯一會喊的地方。另有三行**只報不擋**的全歷史稽核(不進 strict gaps):`full-history gaps <institutional|margin|valuation>`(`health.full_history_gaps`:自**該表首日**起、price 有而該表整天沒列的日子,不含 price 最新一日(T+1);印總數與**最近** 10 筆,每筆附 `backfill <src> --start D --end D --delay 3`)——`missing_*_dates` 只看最近 `RECENT_SESSIONS` 個交易日,一天整日沒列且滑出窗口就永久無聲,2026-10 實測 institutional 116 天、margin 36 天(含 2026-01-22／01-30);`coverage vs price`(各表與 price 最新共同日期的 stock_id 數／price 的 stock_id 數,如 institutional 1335/2357,差距就是上櫃);`price_adjustment events on non-session dates`(約 242 筆,**屬預期且永久,讀取端已移到下一交易日,不要刪列**)。
-- 補特定月營收/除權息:`… revenue --month 2026-06`、`… ex-dividend --start … --end …`
-- 區間回補:`uv run --env-file .env python -m market_data.cli backfill price --start 2026-01-01 --end 2026-01-31`
-- 修 partial/髒日(health 報 thin day):同上加 `--force`(忽略 resume、抓到完整資料才整日換血;不用手動 DELETE)
-- 補下市公司的月營收(修存活偏誤):`uv run --env-file .env python -m market_data.cli revenue-pit --start 2019-06-01 --end 2026-07-24 --delay 3`(先加 `--dry-run` 看缺口數與預估耗時;逐公司逐月打 MOPS,不繼續公開發行的公司探測一次就跳過剩餘月份)
-- 財報季更:`uv run --env-file .env python -m market_data.cli financials --year 2026 --season 2`(下載該季 IFRS html 包 → 解析 → upsert;完整性 fail-fast:解析不足 1000 檔或 Q4 缺同年 Q3 累計都直接失敗、全季回滾、保留下載檔,不寫半套資料)
-- 重建前復權因子:`uv run --env-file .env python -m market_data.cli adjust`(除權息全期 + TWTAUU 減資 + 價格推導;修過 price 髒日或補了除權息之後要重跑)
-- 健康稽核:`uv run --env-file .env python -m market_data.health`
-- 模組測試(免裝面板全依賴):
-  `export $(grep '^DATABASE_URL=' .env | xargs) && uv run --no-project --with sqlalchemy --with 'psycopg[binary]' --with pandas --with lxml --with requests --with tqdm --with pytest python -m pytest market_data/tests/ -q -m "not network"`
-- 真網路 smoke(端點活性 + 面板走 DB 驗證):同上指令改 `-m network`。**「面板走 DB」那一支只有在本機才真的斷言**——PR 的 CI 用 `-m "not network"` 排除它,排程的 network-smoke 沒有 `DATABASE_URL` 所以 skip;別以為 CI 已經守住「靜默降級 yfinance」
+## 其他
 
-## 進來改要遵守
-
-- schema 變更一律走 Alembic migration,不手改線上 DB。
-- price 一天必須 TWSE+TPEx **兩市場都抓到才寫**(單邊寫入會讓 resume 標記該日完成、另一邊永久缺)——不要「順手優化」成單邊也寫。
-- price 有**截斷防護**:單日合計低於附近 5 個交易日中位數九成(優先取之前的日期,無則取之後——倒序/空庫 bootstrap 也有基準;全空庫第一天無防護),先試 STOCK_DAY_ALL 備援(僅最新交易日、全列同日才收、缺本益比欄以 coalesce 保留舊值),仍不足整天跳過等 resume 重試——別移除這道門(TWSE 回過截斷但非空的回應)。
-- `MarketDBFetcher` 只准服務 `.TW`/`.TWO`;查無資料要 raise `DataSourceUnavailableError` 讓 chain fallback,不要回空 DataFrame。
-- **DB 測試一律用 `pg_conn` fixture 並自己種資料。**本機的 `market_data/tests/` 連的是**真的那一座**唯一資料源(conftest 會從 `.env` 讀 `DATABASE_URL`),`pg_conn` 包在必定 rollback 的交易裡;直接拿 `engine` 寫入就是寫進正式庫。CI 則是 schema 已遷移的**空庫**,讀庫內既有資料的斷言在那裡必紅——種子用遠離真實資料的年份(1900／2099),讓真實列落在查詢視窗外。**新增表時本機 pg 測試在正式庫 migration 前必紅**(連的就是正式庫):先在臨時 Postgres 驗——`initdb` 到暫存目錄、`pg_ctl -o "-p <port> -k ''"`(暫存路徑超過 unix socket 的 103 bytes 上限,關掉 socket 走 TCP)、建 `market` schema、`alembic upgrade head`,再把 `DATABASE_URL` 指過去跑。
-
-## 踩雷
-
-- **psycopg 下多列 `INSERT … VALUES` 的 `rowcount` 不可靠**(`ON CONFLICT DO NOTHING` 實測回 -2),要數實際寫入列加 `RETURNING`;單一 INSERT 綁定參數上限 65,535,寬表一次寫幾千列要分批(例:`funds._chunks`)。
-- `monthly_revenue.revenue` 單位是**千元**(MOPS 原始單位);對照 `twse_fundamental_adapter` 是 `*1000` 轉元後才用。
-- `monthly_revenue` 自 2026-09 起 `crawl_monthly_revenue` 上市(`/sii/`)＋上櫃(`/otc/`)各抓一份、**逐市場各自寫入**;之前入庫的歷史只有上市,上櫃歷史要逐月 `revenue --month` 補(同樣是動態產生的彙總報表,存活偏誤一樣在)。表內沒有市場欄——`scripts/screen_tw.exclude_otc_revenue` 用種子檔 `.TWO` 判定上櫃,選股與量測預設排除,**別把上櫃營收直接放進漏斗**,理由見該函式。
-- **月營收彙總報表有存活偏誤,而且是靜默的**:`crawler.crawl_monthly_report` 走的 `t21sc03_<民國年>_<月>.html` 看起來是按月存檔,實際是**動態產生**的,只列出目前仍在申報的公司。實測 2020-06 那份 979 家裡完全沒有 6452 康友、2448 晶電、2456 奇力新、5305 敦南、3698 隆達——這五檔當時全部還在交易。**用它回補歷史,後來下市的公司會永久缺席**,任何「要求營收成長」的選股條件都會把負尾系統性移除。修法是 `cli revenue-pit`(走 `sources.crawl_company_monthly_revenue`,MOPS 個別公司查詢),但只補得回**仍公開發行**的公司;被吸收合併的回「該公司不繼續公開發行」(如 2448 晶電併入富采),那部分是硬邊界,只能用敏感度分析給上界(`scripts/measure_signal_forward.py --survivorship-bound`)。
-- **判定「已下市」要用 `price` 表的最後交易日,不是「不在 `stock_info` 裡」**:`stock_info` 只含上市約 1,100 檔,用它判定會把全部上櫃公司都算成下市(實測 70 檔 → 973 檔)。
-- **`price.change` 對上市股票沒有正負號,算任何報酬都不要碰這一欄**——用 `close` 自己 diff。TWSE `MI_INDEX` 的 `漲跌價差` 只有絕對值,方向在獨立的 `漲跌(+/-)` 欄(`+`／`-`／空=平盤／`X`=無比價);`crawler.crawl_price` 曾把那欄 `to_numeric(errors="coerce")` 成 NaN 後被 dropna-all 整欄丟掉,**2013 起到 2026-08 入庫的上市列全部只有絕對值**(2026 年至今 95,211/353,563 列與 `close - lag(close)` 反號)。上櫃走 TPEx JSON(`漲跌` 本身帶號)沒中,`market_index.change` 走 FMTQIK 也沒中——所以症狀是「同一張表上市全正、上櫃正常」,不看市場別會以為資料沒問題。爬取端已於 2026-08-23 修好,2013 起的上市歷史列也已用 `scripts/backfill_price_change_sign.py` 回補正負號(2013 之前沒有復權因子,刻意不補);`to_daily_frame` 不再讀這欄,正確性不依賴它。**方向不能用 `close - lag(close)` 重算**——官方比的是當日參考價(前收 × 復權因子),除權息日兩者方向不同。踩過:`to_daily_frame` 舊版用 `close - change` 回推昨收,讓上市股票每個下跌日的 `pct_chg` 都變成上漲,而那個欄位會進台股個股分析的 LLM prompt。
-- **TWSE T86(三大法人)18:00 前後抓到的是初版,之後官方還會改**:投信欄最常變、外幣 ETF(`00636K` 這類 K 結尾)晚到,偶爾連外資數字也會變(3189 景碩 2026-09-30 入庫時是外資賣超 432 張,定版是買超 852 張)。2026-09-29~10-16 當晚入庫的 11 天全數與定版不一致,隔天才抓的 10-08、10-13 則逐檔一致。09-24 以前也逐檔一致——推測是舊的 15:00 crontab 跑的時候當天 T86 還沒發布、實際入庫的都是隔天抓到的定版(未驗證)。修法是 `crawl.REVISED_SOURCES` + `refresh_range`:`daily` 每輪把窗口內 asof 之前**已入庫**的日子重抓、整日換血,所以初版最晚隔天的 daily 就會被換掉。**修正晚於 `RECENT_SESSIONS` 個交易日的不會被吃進來**(實測還沒遇過)。`resume` 只看「那天有沒有列」,沒列進 `REVISED_SOURCES` 的來源同樣會凍結在初版——新增其他會被修正的來源時要加進這個 tuple。融資(MI_MARGN)同期比對沒有修正。重抓失敗不 raise、保留舊資料(連續零列的止血只有補缺日的 `crawl_range` 才有),判讀看 `**REVISED`／`**WARN refresh` 兩種訊號。所有 institutional 整日替換（含人工 `backfill --force`）都先檢查 T86 四個必要淨額欄位（外資接受新舊欄名），任一欄缺失或 NULL 比例比該日舊資料增加超過 10 個百分點就拒收、另印 `**WARN institutional … degraded payload`；refresh 仍印 `**WARN refresh … kept stored rows` 且不 raise。列數門檻不變，完整 payload 仍可修復 partial／髒日。當天的法人數字(報告當下由 `TwInstitutionalFetcher` 即時抓)同樣是初版,這是時間點的限制,不是資料庫的問題。
-- **openapi 端點會停止更新卻照樣回 200**,消費端一律要比對回應自帶的民國日期欄。實測 2026-08-23:`opendata/twtazu_od`(漲跌家數)的 `出表日期` 還是 `1150605`,凍結 79 天,而同一時間 `FMTQIK`／`BFI82U`／兩支 TPEx 端點都是最新交易日。`sources.crawl_price_backup` 早就有這道門(註解寫「不能拿別天的資料冒充」),`data_provider/twse_fetcher.py::_fetch_breadth` 沒有,後果是台股大盤複盤連續 20 份印同一組家數、LLM 在上面疊出虛構敘事,而 exit code 一路正常。現已加上日期比對,家數來源依序為 `twtazu_od`(日期比對)→ `MI_INDEX?type=MS`(回應自帶日期、含漲跌停)→ `data_provider/tw_breadth.py::closing_breadth()`,前一個被拒收才往下退;最後一格由本 schema 的前復權收盤自算(上市普通股、**無漲跌停家數**;上市名單只能取 `stock_info`,因為 `price.market` 全為 NULL)。`closing_breadth` 的 DB 讀取帶 5 秒 statement timeout,因子讀取失敗也回 None 不抛出(否則會連帶丟掉同一輪已抓好的成交額與法人)。
-- **`price` 是未還原價,算報酬/均線/乖離前一律先套 `market.price_adjustment`**(`adjust.load_factors()`)。不要直接拿 `ex_dividend` 當還原來源——那張表走 TWSE 的 TWT49U,**只有上市除權息**,缺三類:上櫃(TPEx)全部、股票分割(面額變更)、減資。踩過:0050 的 1:4 分割(2025-06-18,188.65→47.57)不在 `ex_dividend`,讓回測的 0050 基準在 2025 年顯示 -65.79%。
-- **上櫃除權息走 TPEx 官方端點 `bulletin/exDailyQ`**(`sources.crawl_tpex_ex_dividend`,吃**西元** `startDate`/`endDate`、回應日期是民國斜線格式,自 2008-01-02 起)。找它踩過四個坑:openapi `/tpex_exright_daily` 只回當日 13 筆;`/tpex_exright_prepost` 是預告表無參考價;`bulletin/exDailyQHis` 只涵蓋民國 89/9~96/12(頁面自己註明);舊版 `exDailyQ_result.php` 忽略日期參數。**找新站端點的通法**:抓舊 php URL(會 302 到新頁),在新頁 HTML 裡 grep `action:"..."`,拼成 `https://www.tpex.org.tw/www/zh-tw/<action>`。
-- **上櫃股票在接上官方端點前幾乎沒有還原過**:價格推導的門檻是單日跳空 >11%,而除息通常只跳 1~5%,所以 10,892 筆官方上櫃除權息裡只有 481 筆被推導抓到(4.4%),其餘 10,411 筆完全缺漏。對照發現推導值與官方值的相對誤差中位 1.16%、最大 9.98%,61 筆誤差 >5%。改動後上櫃小型股的歷史報酬會系統性上修,**跨越這次修復的回測數字不可互相比較**。
-- `price_adjustment.source` 標可信度:`twse_twt49u`/`tpex_exdailyq`/`twse_twtauu` 官方公告值 > `verified_manual` 人工核對白名單 > `inferred_price` 價格回推。推導依據是台股 ±10% 漲跌幅限制——**這個前提只對普通股成立**,ETF/ETN/TDR 依官方規則不受限制,推導必然製造假事件。踩過:00887 在 2024-10-08、10-14 的真實 -48%/-51% 崩跌(海外休市、溢價逾 200% 的價格異常)被判成兩次 1:2 分割,把跌幅改寫成 +3%/-2%,還讓之前的歷史價全乘 0.25。現由 `is_common_stock()` 一律排除,ETF 的真分割改走 `VERIFIED_ACTIONS` 白名單(目前只有 0050 的 1:4)。
-- **TDR 有四位數代號**(9103 美德醫療-DR、9105 泰金寶-DR、9110 越南控-DR、9136 巨騰-DR),光靠長度擋不掉;而 9802、9904 寶成、9921 巨大這些 9 開頭的是正常普通股,不能整段排除 9,只能用 `91` 前綴區分。
-- `rebuild()` 會先 `delete ... where date >= start` 再寫入,這是真正的重建——只 upsert 的話被新邏輯否決的錯事件(如 00887 的假分割)會永久殘留,改了判斷也清不掉。
-- **推導值的已知限制**:剩餘的 `inferred_price` 主要是上櫃減資(TWTAUU 僅上市,無公開的上櫃減資端點),誤差來自以開盤價回推而非官方參考價。
-- **停牌 gap 規則有例外,但例外有上限**:`STALE_GAP_DAYS=14` 的用意是「長期停牌後復牌的跳空反映停牌期間的資訊,不是公司行動」,但**比例吸附到精確 1/N 或 N 倍時收錄**——減資的停止買賣窗口本來就是 2~3 週,一刀切會把最常見的上櫃減資整批漏掉(實測 gap>=14 被排除的 152 筆裡有 13 筆是精確比例,11 筆的 gap 落在 14~28 天)。**但超過 `MAX_SPLIT_GAP_DAYS=60` 一律不推導**:停牌越久,「復牌價恰好落在 1/N 附近」越可能只是真實重估碰巧撞上比例,而推導錯一筆就把該檔之前的全部歷史價乘錯。6222(停牌 195 天)、6131(328 天)因此被排除,要收得先人工對官方公告再進 `VERIFIED_ACTIONS`。
-- **`infer_rows` 會多讀 60 天歷史才算 `seq`/`gap`**,事件仍只收 `>= start`。不要「順手優化」成只查 `date >= start`——那樣任何既有股票在起點後前 6 根 K 的公司行動都會被 `MIN_BARS_BEFORE` 當成「新上市」永久漏記。
-- **官方來源逐年抓取,任一年失敗就 raise**(`adjust._fetch_by_year`)。舊版只在「所有年度都失敗」時回空,於是「2018 那段回 None、其他年成功」的結果仍非空,`rebuild()` 照樣先刪整段再寫入缺 2018 的資料——缺一年官方除權息足以讓那年之後所有報酬計算全錯且無聲。
-- **`--no-reductions` 不是破壞性操作**:它跳過兩個需要網路的官方來源(TWTAUU 減資、TPEx 上櫃除權息),但會用 `existing_official_rows()` 把 DB 既有的那些列讀回來一起寫入。改動 `rebuild` 時不要把這條拿掉——`rebuild` 會 `delete where date >= start`,只跳過抓取而不讀回來等於清空 10,879 筆上櫃除權息。
-- `price` 表 **2010 上半年混有約 1,000 檔權證**(5 位數代號;每日 2,200+ 檔 vs 2011 之後的 1,380)。權證無漲跌幅限制,納入推導會生出兩萬筆假事件,故 `adjust` 預設從 **2013** 起算。
-- TWSE 各表的民國日期格式**不一致**:TWT49U 是「113年01月22日」(`_roc_to_date`),TWTAUU 是「113/01/22」(`_roc_slash_to_date`)。用錯會讓每列 parse 失敗;`parse_reduction` 因此在「全數列都失敗」時 raise 而非靜默回空。
-- `valuation` 的歷史:`daily` 的快照走 `BWIBBU_ALL`(無 date 參數的當日快照端點,18:00 仍回 D-1),某晚沒跑那天就永久缺(踩過:09-22、10-12)。所以 `daily` 現在**也以 BWIBBU_d 補窗口內缺的日子**(`crawl_range` 的 resume 只補缺日;不進 `REVISED_SOURCES`);18:00 當天 BWIBBU_d 多半未發布 → 0 列、計入 empty_streak(遠小於上限)、隔天補。**`crawl_valuation_day` 一律比對回應自帶的 `date` 與請求日**(`parse_valuation_day` 會把列蓋上請求日,來源若回前一日的表就會被存成當天、resume 又視為完成),不符或缺日期欄印 `**WARN: BWIBBU_d 回應日期 … 拒收` 並回 None;`health` 對窗口內除最新一日外缺 valuation 的日子 strict 擋(`missing valuation dates`)。長區間仍要自己回補:回補走 `backfill valuation`(`sources.crawl_valuation_day` → `BWIBBU_d?date=&selectType=ALL`),**欄位順序隨年代變**(2015 五欄、2026 八欄且殖利率排到本益比之前),故靠回應的 `fields` 動態對應——用固定索引會讓舊資料的 PE 與 PB 整欄錯位。另:PE 也可用 `price.pe_ratio`(隨 price 一起回補,2010 起,覆蓋約 57%),PB 與殖利率則只有這條路。
-- **殖利率「沒配息」兩個官方端點寫法不同**:快照 `BWIBBU_ALL` 留空字串,帶日期的 `BWIBBU_d` 印 `0.00`(同股利年度)。`etl.transform_valuation` 自 2026-10-19 起把快照的空白殖利率存成 0、與 `BWIBBU_d` 一致(本益比空白仍是 NULL——虧損無法計算);之前 2026 年由快照寫入的列約 1.47 萬筆存成 NULL,而 2020~2025 回補與 09-22、10-12 補缺日是 0,同一欄語意隨寫入路徑變。篩選條件(`> 0`、`> 4`)兩者結果相同,但 `scripts/backtest_screen.py` 把 `divy` 加進分數時 NaN 會讓該檔掉出排名。2026-07-03~10-16 的 1.47 萬筆 NULL 已於 2026-10-19 用 `backfill valuation --force` 回補成 0(逐日比對備份:列數、PE、PB 全不變),全表殖利率已無 NULL。**valuation 的 `--force` 只有列數門檻(新列 ≥ 舊列一半),沒有法人那種欄位品質守門**——來源少一欄就會整欄蓋成 NULL;整段 `--force` 前先備份該區間、抽一兩天試跑比對,再放全段。
-- **快照段(valuation/index/stock_info)一律走 `crawl.crawl_snapshots()`,不要直接呼叫那三個函式**:直接呼叫會把 upsert 列數丟棄,而那正是唯一的可觀測訊號。踩過:2026-07-28 18:10 跑 `snapshot` 全無輸出、`market_index` 停在 07-27,得讀三層原始碼才確認是 TWSE FMTQIK **當日尚未發布**(不是 IP 被封、不是端點改版,三者處置完全不同)。`crawl_snapshots` 會印 `<name> <n> rows` 並對有日期維度的兩張表加印 `latest <date>`——**列數本身不夠**,這兩個端點回近月/全市場整包,當日未發布時照樣回一樣多的列(實測 `index 18 rows` 而最新仍是 07-27)。
-- **index 依 daily 窗口逐月抓**:FMTQIK 帶 `date` 只回該月整月,所以 `crawl_index(conn, dates)` 對 daily 回補窗口涉及的每個月（加上今天所在月）各打一次 `fetch_index(asof, fallback=)`,月與月間 sleep `_INDEX_MONTH_DELAY_SECONDS`（2 秒）,以 Date 去重後 upsert；`crawl_snapshots(engine, dates)` 只把 dates 轉給 index（`cli snapshot` 不傳,仍只抓當月）。**只有當月允許退到 openapi**（它只給當月）,過去月份 rwd 失敗只印 `**WARN`、缺口仍由 `health --strict` 擋。踩過的死結:月底最後一個交易日漏跑,隔月 daily 補得回 price 卻補不回 TAIEX,`missing_index_dates` 連擋最多 5 個交易日,而修復訊息叫你重跑的 daily 修不了。
-- **`sources` 的取得層失敗只印 WARN、不 raise**:`_openapi_json`/`_valid_rows`/`_twse_csv` 對「連線失敗或 IP 被封」「HTTP 非 200」「非 JSON」「空 list(當日未發布)」「缺欄位(端點改版)」各印一種可區分訊息,但回傳契約仍是 `None`。所以**exit code 不會反映失敗**,自動化要判成敗得看 stdout 的 `**WARN:` 或列數,別只看 `$?`。`crawl_margin`/`crawl_institutional` 解析失敗時,短純文字回覆(不以 `<` 開頭、< 500 字元;未來日期、尚未發布、查無資料)印 `**WARN: … TWSE 回覆「<前 60 字>」`,HTML 或長內容才印「封鎖頁/改版?」(`_describe_unparsable`,只看長度與是否 HTML、不依賴字串);`parse_margin` 另核對前 16 欄表頭順序,官方插欄會直接 raise 而非靜默錯位。
-- **TWSE 密集請求會封 IP,而且失敗是靜默的**:`requests_get` 回 None → `crawl_day` 直接跳過該日、不報錯、不影響 exit code。踩過:回補 1,600 天 valuation 只寫進 40 天就被擋,stdout 全空看起來像成功。長區間回補一律加 `--delay 3`(`crawl_range(delay=)`);被擋之後要等封鎖解除才能續跑,resume 會自動跳過已寫入的日期。現有兩道防護:`crawl_range` 只打 `market.price` 已存的**交易日**(不在日曆內的日期不發請求——2024 春節休市 2/6~2/14 就是連續 7 個平日,光靠 weekday 擋不掉),且連續零列就 raise 中止。**門檻依有沒有日曆分流**:有日曆時 `_MAX_EMPTY_STREAK`(4);`price` 自己就是日曆來源、沒有日曆可用,退回只擋週末,此時零列還有「國定假日」這個正常解釋,故門檻放寬到 `_MAX_EMPTY_STREAK_NO_CALENDAR`(10,高過最長的連續平日休市)。**過濾用的是 price 表本身**,所以 price 缺的日子其他來源也會被跳過;`daily` 的窗口是**交易日**不是曆日(從 price 取最近 N 個交易日),會在 price 補上後自然重試。
-- **台股補班週六也可能交易**：法人／融資／估值須以 `price` 日曆為準（空集合也不抓），再套週末篩選會漏掉 2016-01-30、2017-06-03 等交易日；`price` 自建日曆，仍只抓平日，價格缺漏的補班週六須另行處理。這兩天 `health` 一直報 `thin institutional days` 是**官方 T86 本身就少**(2026-10-19 重抓原始列 628／508,與庫內 622／501 相符),不是缺漏,別 `--force`。
-- **`institutional`／`margin`／`valuation` 三張表只有上市(TWSE),沒有任何上櫃(TPEx)列**:實測 price 約 2,361 檔、其中上櫃約 990 檔,三張表各只有約 1,100~1,340 檔。上櫃是硬缺口、不是缺日,補日補不回;`health` 的 `coverage vs price` 行就是這個比例(「只收錄上市,設計如此」)。消費端要自己處理:`market_repo.margin()` 對上櫃回空、法人因子只涵蓋上市,選股／回測裡任何用到它們的因子會系統性剔除上櫃,見 `docs/tw-swing-pipeline.md`。
-- `price.market` **全欄為 NULL**(TWSE/TPEx 在爬取端已合併,無法逐列區分上市/上櫃)。
-- 面板日線仍只經 `MarketDBFetcher` 消費 `market.price`。`market_repo.institutional()` + `stock_info()` 已有消費者——台股個股報告的**三大法人歷史趨勢**(連 N 日/近 20 日累計/佔股本比)在 `analyzer._format_prompt` 即時讀本 DB 算好注入 LLM prompt(prompt-only、fail-open、不入持久化 context)。`market_repo.margin(stock_id, start, end)` 是融資融券歷史讀取面(單位張、T+1 發布、只有上市,上櫃回空),給個股 prompt 用(T14)。`market.monthly_revenue`/`market.valuation` 兩張表仍持續由 `daily`/`revenue` 更新入庫,但面板讀取層(`market_repo`)目前無消費者——估值/月營收數字一律走 `twse_fundamental_adapter` 即時 API,不讀本 DB(故先前的 `market_repo.valuation()`/`monthly_revenue()` 讀取函式已移除;要重新消費本 DB 再補回讀取面)。踩雷:估值/月營收數字走 `twse_fundamental_adapter` 即時 API、三大法人**當日**買賣超走網路(`TwInstitutionalFetcher`),都不是本 DB——只有三大法人**歷史趨勢**走本 DB。
-- 財報季更不在 `daily` 裡,要手動跑 `financials`(發布時點與 Q4 推導前提見「數據更新」)。
-- **`financial_statement` 目前唯一的洞是 2019Q4(`date` = 2020-03-31)**:庫內涵蓋 2019Q1(2019-05-15)~2026Q2(2026-08-14),`health` 的 `stale financial quarters` 逐季比對後只報這一季。沒有殘留的`data/financial_statement/20194` 下載目錄、git 史也查不到跑過的痕跡,所以是**當初回補就沒跑**,不是跑了失敗被 fail-fast 回滾。要補的前提(同年 Q3 累計)成立(2019-11-14 在庫),但下載約 1-2 GB、MOPS 密集請求有被擋的風險,而 `src/` 目前沒有任何 `financial_statement` 的讀取端,所以補不補是取捨不是待辦。
-- TWSE 可能回**截斷但非空**的回應(踩過:單日 price 少寫 300+ 筆且數值錯位);已寫入的髒日用 `backfill --start <該日> --end <該日> --force` 整日換血修復。
-- 面板 venv 缺 `psycopg` 時 `MarketDBFetcher` 會**靜默熔斷降級 yfinance**(歷史看似正常,但可能混入非交易日的幽靈 K 棒);懷疑沒走 DB,先 `uv pip install -r requirements.txt` 再驗 `get_daily_data` 的 source。
-- **`price.change` 全歷史約 3.2 萬列「說平盤但有動」是舊爬蟲把上游 `X`（無比價）列存成絕對值 0，不是爬取層新問題。**2026-08-24 全庫掃描：`change==0 & |close − lag(close)|>0.01` 共 31,718 列（2013+），其中 13,123 落在該檔的 `ex_dividend ∪ price_adjustment` 事件日；其餘 18,595 列抽樣 12 列打 MI_INDEX 回查，**12/12 上游都是 `漲跌(+/-)=X`、`漲跌價差=0.00`**——它們只是事件沒進我們的因子表（上櫃除權息 4.4% 覆蓋、ETF 排除、特別股等）。2458 義隆 2026-08-21 就是活例：官方 `X`/`0.00`，除息因子 0.969658。`crawler.crawl_price` 已在 2026-08-23 修成 `X ⇒ NULL`（0 是平盤、是讀數），備援路徑 `crawl_price_backup` 的 `Change='0.0000'` 也於 `_price_all` 對齊（藉前根收盤辨識）。歷史列未回補、也不必回補：`to_daily_frame` 與任何報酬計算都不讀這一欄。真要清乾淨，用 `close − lag(close)` 判定 `change==0 且收盤有動` 的列改 NULL 即可（注意停牌復牌 gap 列勿誤判）。
-- **`price_adjustment` 的事件日可能落在休市日(颱風),讀取端一律移到下一個交易日,唯一實作是 `adjust.snap_events_to_sessions`。**公告日是休市日(2026-07-10 颱風,2891 因子 0.9641),但價格斷崖發生在復市日 07-13;原本 `factors_to_panel` 對不在交易日曆上的事件直接跳過,斷崖被當成真實 -4.9%(還原後應為 -1.32%)。2026-10 實測 242 筆事件落在 15 個休市日(2024-07-24/25 共 75 筆、2026-07-10 共 19 筆…)。規則:休市日事件移到下一個交易日;早於第一個/晚於最後一個交易日的丟棄;搬移後與同檔同日的 `inferred_price` 撞日時丟 inferred(官方公告搬過來後價格回推在同一斷崖又抓到一筆,不丟會還原兩次,5519/3489 共 14 筆);沒撞日的 inferred 保留。消費端:`factors_to_panel`/`load_factors`(面板)、`market_repo.adjustment_multipliers(sessions=)`(`MarketDBFetcher` 的 `pct_chg`)、`market_repo.front_adjust_multipliers(stock_id, dates)`(指標用前復權乘數,sessions 就是輸入 dates、as_of=max(dates))。**這是讀取端修正,`price_adjustment` 表內日期不動、不需 rebuild**,`health.missing_adjustments` 因此不受影響。直接讀 `price_adjustment` 原始日期的消費者(如 `scripts/backtest_daily_report_levels.py` 標「除權息日出場」那行)不會被修正。
-- **`price_adjustment` 每檔每日只有一列，同日多事件不相乘而是「留優先來源那一筆」。**PK 是 `(stock_id, date)`，寫入端 `adjust.merge_adjustment_rows` 用 `drop_duplicates(subset=["stock_id","date"], keep="first")`，而 `refresh_recent` 的傳入順序是 `(官方除權息, 上櫃除權息, 減資, 回推值)`——所以**同日的除息 + 減資只會留下除息那一筆，減資因子被丟掉**，該日的還原報酬會少乘一次。目前沒實測到這種同日組合，但它是結構性的，改動復權鏈之前要先想清楚。連帶：`market_repo.adjustment_multipliers` 的 `.prod()` 在**未 snap** 的 DB 資料上恆等於 `.first()`；給了 `sessions=` 時官方事件搬到下一交易日後可能與該日另一筆非 inferred 事件撞日，`.prod()` 就是真的在相乘，也同時保證回傳 index 唯一——`to_daily_frame` 用 `Series.map`，重複 index 會直接抛 `InvalidIndexError`。
+- 踩雷案例、實測數字與資料語意全文:`docs/market-data-pitfalls.md`;境內基金(`funds.py`):`docs/tw-funds.md`。
+- 怎麼更新/回補/稽核/跑模組測試:skill `update-market-data`。

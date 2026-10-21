@@ -25,7 +25,8 @@ DOPPLER_RUN = doppler run -p finmind -c dev -- doppler run -p $(DOPPLER_PROJECT)
 .DEFAULT_GOAL := help
 .PHONY: help install serve serve-local review review-tw analyze schedule screen \
         swing morning overnight taifex measure portfolio portfolio-wf verify-decisions \
-        test lint lint-fix format refresh-tw refresh-us daily-report daily-report-detached
+        test lint lint-fix format refresh-tw refresh-us daily-report daily-report-detached \
+        pg-scratch pg-scratch-stop
 
 help: ## 显示所有可用命令
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -114,6 +115,12 @@ verify-decisions: ## 回验 tw-swing-research 的判断（Brier + E[R|enter]−E
 	uv run --env-file .env python scripts/verify_swing_decisions.py
 
 # ---- 质量检查 ----
+pg-scratch: ## 本機臨時 Postgres（market schema 跑到 Alembic head），印出要 export 的 DATABASE_URL
+	@scripts/pg_scratch.sh start
+
+pg-scratch-stop: ## 停掉臨時 Postgres（scripts/pg_scratch.sh reset 連資料一起刪）
+	@scripts/pg_scratch.sh stop
+
 test: ## 运行离线测试（不含 network 标记）
 	uv run python -m pytest -m "not network" -q
 

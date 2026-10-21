@@ -194,6 +194,6 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
 - 台股大盤的季線算得出來、半年線算不出來：`market.market_index` 自 2026-07-01 起（2026-10-16 時約 74 個交易日，之後逐日增加），夠算 MA20／MA60，不夠 MA120；半年線要外部查。
 - `market.price` 的 `change` 欄位無正負號（台積電 2,280 → 2,200 顯示 `change=80`），算漲跌用
   `close` 相減。`market.institutional` 的單位是**股**，與證交所 T86 逐欄一致
-  （`foreign_net` 對外陸資買賣超股數〔不含外資自營商〕、`trust_net` 對投信、`dealer_net` 對自營商；初版與定版的差異見 `market_data/AGENTS.md`），
+  （`foreign_net` 對外陸資買賣超股數〔不含外資自營商〕、`trust_net` 對投信、`dealer_net` 對自營商；初版與定版的差異見 `docs/market-data-pitfalls.md`），
   可直接讀本 DB，不必為了單位再打官方端點；`TwseFetcher.get_market_stats()` 的漲跌家數也對不上掛牌檔數。
 - 這一層判的是**今天動不動**，不判個股出場價位——出場交給持倉管理。

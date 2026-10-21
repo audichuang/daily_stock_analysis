@@ -3,6 +3,11 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # fork 增量：本 fork 不開 PR、驗完直接合進 main（AGENTS §9），只有 pull_request 觸發時
+  # 阻斷 job 一次都不會跑。推 main 與工作分支也跑；paths-filter 在 push 事件下，
+  # 工作分支比對 default branch、main 比對上一個 commit。
+  push:
+    branches: [main, 'feat/**', 'fix/**', 'chore/**', 'docs/**', 'refactor/**', 'test/**']
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -303,7 +308,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: web-ui-evidence-${{ github.event.pull_request.head.sha }}
+          name: web-ui-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           path: apps/dsa-web/test-results/fixtures/
           if-no-files-found: warn
           retention-days: 30

@@ -143,7 +143,7 @@ def to_daily_frame(df, event_factors=None):
 
     ``event_factors`` 是 ``adjustment_multipliers()`` 的輸出。除權息日的價格斷崖不是
     真實跌幅——`price` 是未還原價，算報酬前一律先套 `market.price_adjustment`
-    （market_data/AGENTS.md）。沒給因子時退回未還原報酬（行為同舊版）。
+    （`docs/market-data-pitfalls.md`）。沒給因子時退回未還原報酬（行為同舊版）。
 
     **只有 `pct_chg` 被還原，OHLC 四欄仍是原始未還原價**（下游 `BaseFetcher.
     _calculate_indicators` 的 ma5/10/20 也因此是未還原均線）。所以除權息當天餵給 LLM

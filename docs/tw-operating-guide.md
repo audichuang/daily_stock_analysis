@@ -9,7 +9,7 @@
 > - 每日報告回驗：`docs/daily-report-backtest-2026-07.md`
 > - 大盤位階與部署方式：`docs/tw-market-position.md`
 > - 交易成本：`docs/tw-trading-costs.md`
-> - 資料庫爬取與踩雷：`market_data/AGENTS.md`
+> - 資料庫爬取與踩雷：`docs/market-data-pitfalls.md`（改 code 的不變式在 `market_data/AGENTS.md`）
 >
 > **這不是投資建議。** 以下每一個「有沒有用」的結論都照 repo 自己的證據寫；證據不夠的地方一律寫
 > inconclusive，不寫方向。
@@ -86,8 +86,14 @@ A 線的投資觀是**趨勢追蹤＋回踩低吸**，規則寫死在 prompt 與
   照推一份只有模板的複盤，別把那則當成報告）。分析內容由本機已登入的 Claude Code CLI 產生（`GENERATION_BACKEND=claude_code_cli`），不需 API key。非交易日由 `main.py` 自己跳過。手動補跑同一條指令即可。
 - `make review-tw`：台股大盤複盤，推 Bark。13:30 收盤後跑；法人與融資 T+1 才補齊，盤後當天的籌碼數字
   不完整。
-- `make analyze STOCKS=2330.TW,2317.TW`：個股分析。**這個 target 不經 Doppler，不會推 Bark**，要推播的
-  包法見根目錄 `AGENTS.md` §10。
+- `make analyze STOCKS=2330.TW,2317.TW`：個股分析。**這個 target 不經 Doppler**——少了它不報錯，只會沒 Bark、
+  台股新聞退回通用搜尋。要推播就手動包兩層（外層 `finmind` 注入 `FINMIND_TOKEN_*`，內層 `shioaji` 的 `BARK_URL`
+  映射成 `CUSTOM_WEBHOOK_URLS`）；非交易日加 `--force-run`：
+
+  ```bash
+  doppler run -p finmind -c dev -- doppler run -p shioaji -c dev -- \
+    bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py --stocks 2330.TW'
+  ```
 - 代碼一定要帶 `.TW`／`.TWO`，裸 `2330` 不會進台股語義。
 - `.env` 的 `SCHEDULE_ENABLED` 是服務內建排程，與上面的 Orca 排程無關（本機為 `false`，避免同一天跑兩份）。GitHub Actions 的每日任務
   沒有設 `DATABASE_URL`，`MarketDBFetcher` 會退回下一個資料源（yfinance），台股日線可能跟本機不同。

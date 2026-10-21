@@ -24,7 +24,7 @@ If any instruction in this file conflicts with `AGENTS.md`, follow `AGENTS.md`.
 
 ## Validation
 
-- Backend changes: use the fast gate `uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8` (measured 0.7s / 4s; the script takes a phase argument `all|syntax|flake8|deterministic|offline-tests`). Bare `./scripts/ci_gate.sh` means `all` and includes the full `pytest -m "not network"` suite (minutes to an hour depending on the machine; see `AGENTS.md` §10) — run it only before delivery. At minimum run `uv run python -m py_compile` on changed Python files.
+- Backend changes: use the fast gate `uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8` (measured 0.7s / 4s; the script takes a phase argument `all|syntax|flake8|deterministic|offline-tests`). Bare `./scripts/ci_gate.sh` means `all` and includes the full `pytest -m "not network"` suite (minutes to an hour depending on the machine; see `tests/AGENTS.md`) — run it only before delivery. At minimum run `uv run python -m py_compile` on changed Python files.
 - Locally the `uv run` prefix is required: the script calls bare `python`, which this fork does not provide globally (`python: command not found`). CI images do provide `python`, so the bare form is fine there.
 - Web changes: run `cd apps/dsa-web && npm ci && npm run lint && npm run build`.
 - Desktop changes: build web first, then desktop if feasible.
@@ -33,7 +33,7 @@ If any instruction in this file conflicts with `AGENTS.md`, follow `AGENTS.md`.
 
 ## Fork-Specific Conventions
 
-This repository is a personal fork (`audichuang/daily_stock_analysis`) that is **not merged back upstream**. The full list is `AGENTS.md` §10; these three are here because getting them wrong actively breaks things:
+This repository is a personal fork (`audichuang/daily_stock_analysis`) that is **not merged back upstream**. The cross-cutting list is `AGENTS.md` §10 (operational playbooks live in `docs/daily-report-ops.md` and `docs/nas-deploy.md`); these three are here because getting them wrong actively breaks things:
 
 - **Use `uv`, not `pip`/`python -m venv`**: `uv venv --python 3.12`, `uv pip install -r requirements.txt`, and run everything via `uv run python …`. Common tasks are wrapped in the root `Makefile` (`make help`).
 - **`STOCK_INDEX_REMOTE_UPDATE_ENABLED` must stay `false`** in `.env`. Setting it to `true` makes the runtime pull the stock index from upstream GitHub and **overwrite this fork's local TW/US index additions**. Note that `.env.example` still ships the upstream value `true` — do not copy it.

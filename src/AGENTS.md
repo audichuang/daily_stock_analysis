@@ -1,10 +1,16 @@
 # src — 分析主流程、大盤複盤、報告與通知
 
-> 共通規則見 repo 根 `AGENTS.md`(§3 各子目錄職責、§7 護欄),本檔只寫本模組增量。`src/agent/` 的契約正本在 `docs/multi-strategy-contract.md`,不在此重述。
+> 本檔只寫本模組增量。`src/agent/` 的契約正本在 `docs/multi-strategy-contract.md`,不在此重述。
 
 ## 模組定位
 
-個股分析(`analyzer.py` + `core/pipeline.py`)與大盤複盤(`market_analyzer.py` + `core/market_review.py`)是兩條獨立流程,共用通知與報告語言層。這裡的缺陷幾乎都是同一種形狀:**報告照常產出、測試照常通過、只有數字或語言是錯的**,而 LLM 會在錯的數字上疊出通順的敘事。
+個股分析(`analyzer.py` + `core/pipeline.py`)與大盤複盤(`market_analyzer.py` + `core/market_review.py`)是兩條獨立流程,共用通知與報告語言層。
+
+名字猜不到用途、或帶額外契約的子目錄:
+
+- `notification_sender/`:各通知渠道;新增渠道實作 `base.py` 的 `Sender` protocol,並在 `notification.py` 的 `NotificationService._senders` 註冊(另見下方 `detect_configured_channels`)。
+- `llm/`:生成後端、usage／provider 快取與 transport 編排(`client.py::LLMClient`:backend fallback／脫敏／串流);與 `GeminiAnalyzer` 的邊界見該檔模組 docstring。
+- `agent/`:tool-calling agent(多輪對話、分歧偵測、事件流),`AGENT_MODE=true` 啟用;策略定義在根目錄 `strategies/*.yaml`(見 `strategies/README.md`);問股後端由 `AGENT_BACKEND` 選(`auto`／`litellm` 走 LiteLLM,`codex_app_server` 走本機 Codex)。這裡的缺陷幾乎都是同一種形狀:**報告照常產出、測試照常通過、只有數字或語言是錯的**,而 LLM 會在錯的數字上疊出通順的敘事。
 
 ## 進來改要遵守
 
@@ -17,6 +23,8 @@
 - **守門放在資料進入結構化契約的入口,不要只在某個消費端擋。**連續三輪修復都錯在放錯層:call site 的過濾被 `a or build()` 抵銷、建構期的清洗攔不到「先建空物件再逐欄賦值」的生產路徑。非有限值在序列化邊界遞迴清洗;已落庫的舊資料要在讀取端套同一個判定。
 - **個股結果的後處理掛在 `_finalize_and_persist_result`**,傳統與 agent 兩條路徑都經過它。必須在歷史寫入前就存在的欄位,要在呼叫它**之前**、兩條路徑都寫。
 - **新增通知渠道除了註冊 sender,還要同步 `detect_configured_channels`**——診斷路徑只讀設定、不會去建 sender,兩邊不一致時診斷說的與實際發的不同。
+- **寫外部來源的字串欄位(標題、URL、查詢)要先截到欄位長度。**上游預設 SQLite、不檢查 `VARCHAR` 長度;應用庫搬到 Postgres 後,一筆超長字串會讓整個寫入 transaction 回滾(踩過:`news_intel.title`,修法見 `storage.py` 的 `DatabaseManager._fit_news_intel_column`)。
+- **改 `services/image_stock_extractor.py` 的 `EXTRACT_PROMPT` 時,交付說明(或 PR 描述)附完整最新 prompt。**
 - **彙總報告的失敗揭露從唯一分派點 `generate_aggregate_report` 往下傳。**表頭檔數是成功數,失敗另起一行;分組信不帶(清單是整輪的,會點名組外代碼)。`REPORT_RENDERER_ENABLED` 打開時模板路徑會提早返回,那一行不會出現。
 
 ## 語言
@@ -27,7 +35,7 @@
 
 ## 踩雷
 
-- **LLM 回空與回非法 JSON 是兩種失敗。**回空多半是推理模型把預算花光,調 token 預算也救不了(根 §10);非法 JSON 會走文字 fallback、結果標為失敗、不進彙總。別用同一種重試處理兩者。
+- **LLM 回空與回非法 JSON 是兩種失敗。**回空多半是推理模型(如 `deepseek-v4-flash`)把預算花在推理上:內容為空而 `finish_reason=length`,症狀是隨機「分析未成功」,台股美股都會中。**加預算不是可用的槓桿**——個股分析的 `max_output_tokens` 由 `analyzer.analyze()` 寫死 8192,`LLM_MAX_TOKENS` 只有選股 pipeline 讀得到,實測 8192 下仍約 1/3 回空;要修就換 `LITELLM_MODEL`。非法 JSON 會走文字 fallback、結果標為失敗、不進彙總。別用同一種重試處理兩者。
 - **排程器的 signal handler 只做賦值**,不取鎖、不寫 log。光把 log 移出去不夠——只要 handler 會拿任何不可重入的鎖,另一條執行緒就能跟它組成死鎖;單執行緒重現不出來,而 systemd 仍顯示 active。
 - **判斷「是不是台股」的函式不只一個,規則也不同**:後綴是否合法以 `market_symbol_utils.get_suffix_market` 為準,但另有幾處只看字尾 `.TW`／`.TWO`。新增判斷時委派給它,不要再寫一個 `endswith`。
 - **改上游的預設值時留空,不要刪除。**刪掉的話上游下次動到那幾行會自動合併回來;留成空字串,衝突就會出現在寫著理由的位置(踩過:分享圖預設帶上游作者的社群帳號)。上游的命名即使撞名也不改——每次合併都要付代價。

@@ -44,7 +44,7 @@ description: 按 issue 分析结论实现修复，并补齐验证、风险与回
 按 `AGENTS.md` 的验证矩阵执行最接近的检查：
 
 - 后端快速门槛：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（秒级，开发中默认用这个；本机必须带 `uv run`，否则 `python: command not found`）
-- 后端完整门槛：`uv run ./scripts/ci_gate.sh`（= `all`，含全量离线测试；仅在交付前跑，耗时与判定基准见 `AGENTS.md` §10）
+- 后端完整门槛：`uv run ./scripts/ci_gate.sh`（= `all`，含全量离线测试；仅在交付前跑，耗时与判定基准见 `tests/AGENTS.md`）
 - 最低后端要求：`uv run python -m py_compile <changed_python_files>`
 - 前端：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
 - 桌面端：先构建 Web，再构建桌面端
@@ -82,7 +82,7 @@ description: 按 issue 分析结论实现修复，并补齐验证、风险与回
 
 按 `AGENTS.md` §5 的交付六项写：改了什么 / 为什么这么改 / 验证情况 / 未验证项 / 风险点 / 回滚方式。
 
-用户要求创建 PR 或整理 PR 描述时，PR title 按 `AGENTS.md` §1.1 的 `<类型>: <修改内容>` 格式给。
+用户要求创建 PR 或整理 PR 描述时：PR title 用 `<类型>: <修改内容>`（类型优先 `fix`/`feat`/`refactor`/`docs`/`chore`/`test`/`ci`，不加 `[codex]`、`copilot` 等工具前缀；非阻断建议）。改到报告格式、报告渲染或 Web UI 时附受影响报告／页面截图（有前后差异优先前后对比，无法截图就说明原因与替代证据）；截图放 PR 描述／评论／附件，不作为仓库文件合入。
 
 ## 可自主执行
 

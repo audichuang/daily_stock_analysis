@@ -42,12 +42,14 @@ gh run view <run_id> --log-failed
 
 ### Step 3: 检查标题与描述完整性
 
-先检查 PR title 是否符合 `AGENTS.md` 的非阻断建议：
+先检查 PR title 是否符合下列非阻断建议：
 
 - 格式应为 `<类型>: <修改内容>`，例如 `fix: 修复大盘分析历史记录丢失`
 - 类型优先为 `fix`/`feat`/`refactor`/`docs`/`chore`/`test`/`ci`
 - 不应包含 `[codex]`、`codex`、`autocode`、`copilot` 或其他工具/agent 来源前缀
 - 标题应描述实际变更；若标题与 diff 不符，在描述完整性中指出，但不应单独作为 review process blocker。
+
+改到报告格式、报告渲染效果或 Web UI 时，PR 描述必须附受影响报告／页面截图（涉及前后差异优先前后对比；无法截图要写原因与替代可视证据）。过程截图、审查截图、一次性验收截图不得作为仓库文件合入——应放 PR 描述、评论、GitHub 附件或 Actions artifact；产品长期文档的示意图除外，但文件名与语义不得带 issue／PR 编号。
 
 对照 `.github/PULL_REQUEST_TEMPLATE.md`，确认是否覆盖：
 
@@ -78,7 +80,7 @@ gh run view <run_id> --log-failed
 
 如果必须补本地验证，按改动面选择最接近的检查，例如：
 
-- 后端：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（秒级快速门槛；本机必须带 `uv run`，否则 `python: command not found`）或 `uv run python -m py_compile <changed_python_files>`；**不要**在 review 场景跑不带参数的 `ci_gate.sh`，它等于 `all`、含全量离线测试（耗时见 `AGENTS.md` §10）
+- 后端：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（秒级快速门槛；本机必须带 `uv run`，否则 `python: command not found`）或 `uv run python -m py_compile <changed_python_files>`；**不要**在 review 场景跑不带参数的 `ci_gate.sh`，它等于 `all`、含全量离线测试（耗时见 `tests/AGENTS.md`）
 - 前端：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
 - 桌面端：先构建 Web，再构建 Electron
 

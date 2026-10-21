@@ -1,6 +1,6 @@
 # scripts — 研究、索引、門檻與打包腳本
 
-> 共通規則見 repo 根 `AGENTS.md`(§1 的 `.gitignore` 寬 pattern、§6 門檻、§10 的「`--help` 不是安全探針」),本檔只寫本目錄增量。
+> 本檔只寫本目錄增量。
 
 ## 模組定位
 
@@ -27,6 +27,8 @@
 ## 踩雷
 
 - **`migrate_sqlite_to_pg.py` 是已完成的一次性遷移,不要再執行。**它沒有 argparse(任何參數都被當成 sqlite 路徑),對 `market` schema 七張表逐一 `TRUNCATE` 後重灌,而且**每張表各自 commit**——中途失敗時前面的表已經被舊資料換掉。該 schema 是台股歷史的唯一資料源、沒有備份。
+- **`--help` 不是安全探針**:沒有 argparse 的腳本 `main()` 直接做事、把參數忽略或當成路徑。拿 `--help` 掃一遍會真的執行它們(踩過:一次掃描重寫了進版控的 `stocks.index.json`);要探能不能跑,先 `grep -c argparse`。
+- **`daily_report.sh` 被 `source` 時只載入函式、不跑 main**,`tests/test_daily_report_sh.py` 靠這點測試;不要直接執行腳本去測。逾時、鎖與完成標記的語意見 `docs/daily-report-ops.md`。
 - **`merge_tw_into_index.py` 沒有 argparse**,任何參數都會被忽略並直接改寫索引;目標檔不存在時只印 skip、照樣回 0。`refresh_us_stock_index.py` 有 `--dry-run`,但不加參數仍會連網並寫檔。
 - **台股索引只用 `make refresh-tw`,不要用 `refresh_stock_index` 全量重生**:全量需要本 repo 通常沒有的 Tushare 匯出檔,缺檔會丟掉三萬多筆 A 股條目。
 - **回補 `price.change` 的正負號不能用 `close - lag(close)`。**官方比的是當日參考價(前收 × 復權因子),除權息日兩者方向不同;讀取視窗也要往前多取,否則每檔每年第一個交易日沒有前一列可比、被靜默跳過。

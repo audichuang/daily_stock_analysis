@@ -10,7 +10,7 @@ description: 無人值守地把上游 ZhuLinsen/daily_stock_analysis 的 main me
 固定值：
 
 - `REPO=$(git rev-parse --show-toplevel)`（排程跑在主 checkout，就是它），remote：`origin`＝fork、`upstream`＝上游
-- 同步用 **merge、不 rebase、不 force push**（§10）
+- 同步用 **merge、不 rebase、不 force push**（fork 已 push 上百個自有 commit，rebase 等於全部改寫、只能 force push）
 - 工作一律在獨立 worktree 做，**不准動 `$REPO` 的 working tree 與它 checkout 的分支**：同一個 checkout 07:30／10:00／13:00 有別的排程在用
 
 ## 0. 要不要做

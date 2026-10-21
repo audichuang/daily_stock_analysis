@@ -153,7 +153,7 @@ def missing_adjustments(expected, stored):
 def stale_financial_quarters(stored_dates, today):
     """已過公告截止日、但一列都沒有的財報季,回 ``(year, season, deadline)``。
 
-    財報季更**不在 `daily` 裡**(見 `market_data/AGENTS.md`),漏一季不會有任何
+    財報季更**不在 `daily` 裡**(見 `docs/market-data-pitfalls.md`),漏一季不會有任何
     東西喊——這裡是唯一會喊的地方。截止日對映直接用
     `financial_statement.afterIFRS`,不另抄一份日期表,避免兩份漂移。
 

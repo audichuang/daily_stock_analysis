@@ -14,7 +14,8 @@
 | split     | inferred_price  | 普通股分割(≈1/N)  | 吸附到精確 1/N |
 | inferred  | inferred_price  | 上櫃減資等剩餘事件 | 回推,誤差 ≤10% |
 
-推導的理論依據：台股普通股有 ±10% 漲跌幅限制，所以單日 >15% 跳空必為公司行動。
+推導的理論依據：台股普通股有漲跌幅限制（``PRICE_LIMIT_CHANGE`` 之前 ±7%、之後 ±10%），
+所以單日跳空超過當時限制 × 1.1（約 7.7%／11%）必為公司行動。
 **這個前提只對普通股成立**——ETF／ETN／TDR 依官方規則不受漲跌幅限制（部分海外 ETF、
 槓反產品、第二上市外國證券），對它們推導必然製造假事件，故一律排除、只收官方值或
 ``VERIFIED_ACTIONS`` 白名單。
@@ -126,7 +127,10 @@ def official_rows(conn):
 
 
 def merge_adjustment_rows(*parts):
-    """依傳入順序保留同股票同日的最高優先來源，並丟掉無效因子。"""
+    """依傳入順序保留同股票同日的最高優先來源，並丟掉無效因子。
+
+    同日多事件**不相乘**：PK 是 ``(stock_id, date)``，同日的除息＋減資只會留下排在前面的
+    那一筆（另一個因子被丟掉）。官方來源目前實測零交集；改動來源或優先序前要重驗。"""
     frames = [p.reindex(columns=ADJUSTMENT_COLUMNS) for p in parts
               if p is not None and len(p)]
     if not frames:

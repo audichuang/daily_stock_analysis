@@ -1,6 +1,6 @@
 # tests — 離線測試套件
 
-> 共通規則見 repo 根 `AGENTS.md`(該跑哪個門檻 §6、mutation 雙向檢查 §1.2、跑全量的行為規則 §10),本檔只寫「寫測試」與「判讀紅燈」的增量。
+> 本檔只寫「寫測試」「跑全量」與「判讀紅燈」的增量。
 
 ## 模組定位
 
@@ -23,6 +23,13 @@
 - **生產路徑是「先建空物件、再逐欄賦值」的型別(如 `MarketOverview`),測試要複製同樣形狀。**用 kwargs 一次建構會讓建構期的守門看起來有效,實際上生產路徑不經過它。
 - **別把被測的判斷本身 mock 掉**(例如同時 patch 掉 region 檢查與它保護的建構函式):那樣把 `tw` 從支援清單拿掉測試照樣綠。
 - **加速不要引入 pytest-xdist／pytest-split。**有契約測試擋著;分片走自家的 `ci_test_shard.py`。
+
+## 跑全量
+
+- 全量是 `uv run ./scripts/ci_gate.sh`(不帶參數＝`all`,第四階段 `pytest -m "not network"`),應該全綠。耗時依機器差十幾倍(實測:一台 Mac 約 4 分鐘、另一台機器 56 分鐘,測試數相當、都是單行程),別拿一個數字估另一台;平常用受影響測試檔的子集。
+- **別和另一個重活並行**(pytest 全量 + vitest 全量):實測 vitest 從 15 failed 變 143 failed,全是 timeout,兩份結果同時被污染。
+- **「離線」測試其實會連外,是這個 repo 最貴的一類坑**(踩過一次掛 6 小時 21 分,只燒 30 秒 CPU)。止血是單測 timeout(數字見下節),會讓它紅在那個測試上並印出堆疊。LiteLLM 在 import 時會去 `raw.githubusercontent.com` 抓 model cost map(有本地 fallback,不會掛)。
+- 台股代碼正則的契約測試 `test_tw_code_pattern_contract.py` 只看得到「同一行寫了位數與 `TW`」的正則;`isdigit()`、分開比對後綴的寫法它看不到,查「帶字母的台股不見了」時仍要全掃。
 
 ## 判讀紅燈:先排除這幾種假紅,再判回歸
 
