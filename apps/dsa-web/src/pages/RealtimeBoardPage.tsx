@@ -308,7 +308,7 @@ const RealtimeBoardPage: React.FC = () => {
     };
     const label = t(`board.source.${kind}` as 'board.source.live');
     return (
-      <span className={cn('inline-flex rounded-md border px-2 py-0.5 text-xs', styles[kind])}>
+      <span className={cn('inline-flex whitespace-nowrap rounded-md border px-2 py-0.5 text-xs', styles[kind])}>
         {label}
         {kind === 'live' && item?.quote?.source ? ` · ${item.quote.source}` : null}
       </span>
@@ -562,7 +562,7 @@ const RealtimeBoardPage: React.FC = () => {
                         <td className="px-2 py-2 text-secondary-text">
                           {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                         </td>
-                        <td className="px-3 py-2 font-mono">
+                        <td className="whitespace-nowrap px-3 py-2 font-mono">
                           {code}
                           {holdings[code] ? (
                             <span className="ml-1.5 inline-flex rounded border border-[hsl(var(--primary))]/30 px-1 py-0.5 align-middle font-sans text-[10px] text-[hsl(var(--primary))]">
@@ -591,8 +591,8 @@ const RealtimeBoardPage: React.FC = () => {
                           {q?.volume != null ? q.volume.toLocaleString() : '—'}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums">{positionCell(code, q)}</td>
-                        <td className="px-3 py-2">{badge(item)}</td>
-                        <td className="px-3 py-2 text-xs text-secondary-text">{q?.asOf ? formatDateTime(q.asOf) : '—'}</td>
+                        <td className="whitespace-nowrap px-3 py-2">{badge(item)}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-xs text-secondary-text">{q?.asOf ? formatDateTime(q.asOf) : '—'}</td>
                         <td className="px-3 py-2">
                           <button
                             type="button"
