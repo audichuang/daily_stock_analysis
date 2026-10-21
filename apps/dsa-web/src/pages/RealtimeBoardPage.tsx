@@ -1,5 +1,5 @@
 import type React from 'react';
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, LineChart as LineChartIcon, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -12,15 +12,42 @@ import {
   type TrendRange,
 } from '../api/stocks';
 import { systemConfigApi } from '../api/systemConfig';
+import { portfolioApi } from '../api/portfolio';
+import { fundsApi } from '../api/funds';
+import type { FundHoldingItem } from '../types/funds';
 import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
-import { ApiErrorAlert, AppPage, Card, EmptyState, Loading, PageHeader } from '../components/common';
+import { ApiErrorAlert, AppPage, Card, EmptyState, Loading, PageHeader, Tooltip as HintTooltip } from '../components/common';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatSignedPct } from '../utils/portfolioFormat';
 import { formatDateTime } from '../utils/format';
 import { cn } from '../utils/cn';
 
 const POLL_INTERVAL_MS = 30_000;
+const SCOPE_STORAGE_KEY = 'dsa.board.scope';
+
+type Scope = 'all' | 'watch' | 'holdings';
+const SCOPES: Scope[] = ['all', 'watch', 'holdings'];
+
+// 帳本持股（跨帳戶合併同一代碼）：成本以股數加權，用來對即時價算未實現損益
+type Holding = { quantity: number; avgCost: number; currency: string; accounts: string[] };
+
+function readScope(): Scope {
+  try {
+    const v = window.localStorage.getItem(SCOPE_STORAGE_KEY);
+    return v === 'watch' || v === 'holdings' ? v : 'all';
+  } catch {
+    return 'all';
+  }
+}
+
+function writeScope(scope: Scope) {
+  try {
+    window.localStorage.setItem(SCOPE_STORAGE_KEY, scope);
+  } catch {
+    /* 偏好記不住不影響顯示 */
+  }
+}
 const CHUNK = 8; // 每批并发请求的代码数：分批并发刷新，慢的股票不挡快的
 
 // 台股/A股涨跌色：红涨绿跌
@@ -168,7 +195,11 @@ const TrendChart: React.FC<{ code: string }> = ({ code }) => {
 const RealtimeBoardPage: React.FC = () => {
   const { t } = useUiLanguage();
   const navigate = useNavigate();
-  const [codes, setCodes] = useState<string[] | null>(null);
+  const [watchCodes, setWatchCodes] = useState<string[]>([]);
+  const [holdings, setHoldings] = useState<Record<string, Holding>>({});
+  const [holdingsFailed, setHoldingsFailed] = useState(false);
+  const [funds, setFunds] = useState<FundHoldingItem[]>([]);
+  const [scope, setScope] = useState<Scope>(readScope);
   const [quotes, setQuotes] = useState<Record<string, StockQuoteBatchItem>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ParsedApiError | null>(null);
@@ -205,25 +236,61 @@ const RealtimeBoardPage: React.FC = () => {
     }
   }, []);
 
+  // 自選清單（STOCK_LIST）＋帳本持股（全部帳戶，含美股複委託）＋基金持倉；任一來源失敗不擋其他兩個
   useEffect(() => {
     let active = true;
     void (async () => {
-      try {
-        const watchlist = await systemConfigApi.getWatchlist();
-        if (!active) return;
-        codesRef.current = watchlist;
-        setCodes(watchlist);
-        refresh();
-      } catch (err) {
-        if (active) setError(getParsedApiError(err));
-      } finally {
-        if (active) setLoading(false);
+      const [watch, snap, fundList] = await Promise.allSettled([
+        systemConfigApi.getWatchlist(),
+        portfolioApi.getSnapshot({ includeRealtime: false }),
+        fundsApi.listHoldings(),
+      ]);
+      if (!active) return;
+      if (watch.status === 'fulfilled') setWatchCodes(watch.value);
+      else setError(getParsedApiError(watch.reason));
+      if (snap.status === 'fulfilled') {
+        const merged: Record<string, Holding> = {};
+        for (const acc of snap.value.accounts) {
+          for (const p of acc.positions) {
+            if (!(p.quantity > 0)) continue;
+            const h = merged[p.symbol];
+            if (h) {
+              const qty = h.quantity + p.quantity;
+              h.avgCost = (h.avgCost * h.quantity + p.avgCost * p.quantity) / qty;
+              h.quantity = qty;
+              if (!h.accounts.includes(acc.accountName)) h.accounts.push(acc.accountName);
+            } else {
+              merged[p.symbol] = { quantity: p.quantity, avgCost: p.avgCost, currency: p.currency, accounts: [acc.accountName] };
+            }
+          }
+        }
+        setHoldings(merged);
+      } else {
+        setHoldingsFailed(true);
       }
+      if (fundList.status === 'fulfilled') setFunds(fundList.value.items);
+      setLoading(false);
     })();
     return () => {
       active = false;
     };
-  }, [refresh]);
+  }, []);
+
+  // 顯示清單隨範圍切換；輪詢只抓畫面上的代碼
+  const codes = useMemo<string[] | null>(() => {
+    if (loading) return null;
+    const held = Object.keys(holdings).sort((a, b) => a.localeCompare(b));
+    const watchSet = new Set(watchCodes);
+    if (scope === 'watch') return watchCodes;
+    if (scope === 'holdings') return held;
+    return [...watchCodes, ...held.filter((c) => !watchSet.has(c))];
+  }, [loading, scope, watchCodes, holdings]);
+
+  useEffect(() => {
+    if (!codes) return;
+    codesRef.current = codes;
+    refresh();
+  }, [codes, refresh]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -344,6 +411,54 @@ const RealtimeBoardPage: React.FC = () => {
     );
   };
 
+  // 持股欄：股數＋以即時價算的未實現損益（%），成本用帳本跨帳戶加權平均
+  const positionCell = (code: string, q?: StockQuote | null) => {
+    const h = holdings[code];
+    if (!h) return <span className="text-secondary-text">—</span>;
+    const price = q?.currentPrice;
+    const pnl = price ? (price - h.avgCost) * h.quantity : null;
+    const pct = price && h.avgCost ? (price / h.avgCost - 1) * 100 : null;
+    return (
+      <HintTooltip content={h.accounts.join('、')}>
+        <div>
+          <div>{h.quantity.toLocaleString()}</div>
+          <div className={cn('text-[10px]', changeClass(pnl))}>
+            {pnl != null ? `${pnl > 0 ? '+' : ''}${Math.round(pnl).toLocaleString()} ${h.currency}` : '—'}
+            {pct != null ? ` (${formatSignedPct(pct)})` : ''}
+          </div>
+        </div>
+      </HintTooltip>
+    );
+  };
+
+  const fundsCard =
+    scope !== 'watch' && funds.length > 0 ? (
+      <Card variant="bordered" padding="md">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <span className="text-sm font-medium">{t('board.funds.title')}</span>
+          <button type="button" className="text-xs text-[hsl(var(--primary))] hover:underline" onClick={() => navigate('/funds')}>
+            {t('board.funds.more')}
+          </button>
+        </div>
+        <div className="mb-2 text-[11px] text-secondary-text">{t('board.funds.note')}</div>
+        <div className="flex flex-wrap gap-x-8 gap-y-2">
+          {funds.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => navigate(`/funds?fund=${encodeURIComponent(f.fundId)}`)}
+              className="inline-flex items-baseline gap-2 text-left tabular-nums hover:text-[hsl(var(--primary))]"
+            >
+              <span className="text-sm">{f.fundName}</span>
+              <span className="text-base font-medium">{f.nav != null ? f.nav.toFixed(2) : '—'}</span>
+              <span className={cn('whitespace-nowrap text-xs', f.isStale ? 'text-warning' : 'text-secondary-text')}>{f.navDate ?? t('funds.noNav')}</span>
+              <span className={cn('text-sm', changeClass(f.pnlPct))}>{f.pnlPct != null ? formatSignedPct(f.pnlPct) : '—'}</span>
+            </button>
+          ))}
+        </div>
+      </Card>
+    ) : null;
+
   const refreshButton = (
     <button
       type="button"
@@ -357,7 +472,35 @@ const RealtimeBoardPage: React.FC = () => {
 
   return (
     <AppPage className="space-y-5">
-      <PageHeader title={t('board.title')} description={t('board.delayNote')} actions={refreshButton} />
+      <PageHeader
+        title={t('board.title')}
+        description={t('board.delayNote')}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded-lg border border-border p-0.5" role="group" aria-label={t('board.scope.label')}>
+              {SCOPES.map((sc) => (
+                <button
+                  key={sc}
+                  type="button"
+                  aria-pressed={scope === sc}
+                  onClick={() => {
+                    setScope(sc);
+                    writeScope(sc);
+                  }}
+                  className={cn(
+                    'rounded-md px-2.5 py-1 text-xs',
+                    scope === sc ? 'bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]' : 'text-secondary-text hover:bg-hover',
+                  )}
+                >
+                  {t(`board.scope.${sc}` as 'board.scope.all')}
+                </button>
+              ))}
+            </div>
+            {refreshButton}
+          </div>
+        }
+      />
+      {holdingsFailed ? <div className="text-xs text-warning">{t('board.holdingsError')}</div> : null}
       {error ? <ApiErrorAlert error={error} onDismiss={() => setError(null)} /> : null}
       {indices.length > 0 ? (
         <Card variant="bordered" padding="md">
@@ -386,7 +529,7 @@ const RealtimeBoardPage: React.FC = () => {
         {loading ? (
           <Loading label={t('board.title')} />
         ) : codes && codes.length === 0 ? (
-          <EmptyState title={t('board.empty')} />
+          <EmptyState title={scope === 'holdings' ? t('board.emptyHoldings') : t('board.empty')} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -399,6 +542,7 @@ const RealtimeBoardPage: React.FC = () => {
                   <th className="px-3 py-2 text-right">{t('board.col.change')}</th>
                   <th className="px-3 py-2 text-right">{t('board.col.avg')}</th>
                   <th className="px-3 py-2 text-right">{t('board.col.volume')}</th>
+                  <th className="px-3 py-2 text-right">{t('board.col.position')}</th>
                   <th className="px-3 py-2">{t('board.col.status')}</th>
                   <th className="px-3 py-2">{t('board.asOf')}</th>
                   <th className="px-3 py-2" />
@@ -418,7 +562,14 @@ const RealtimeBoardPage: React.FC = () => {
                         <td className="px-2 py-2 text-secondary-text">
                           {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                         </td>
-                        <td className="px-3 py-2 font-mono">{code}</td>
+                        <td className="px-3 py-2 font-mono">
+                          {code}
+                          {holdings[code] ? (
+                            <span className="ml-1.5 inline-flex rounded border border-[hsl(var(--primary))]/30 px-1 py-0.5 align-middle font-sans text-[10px] text-[hsl(var(--primary))]">
+                              {t('board.tag.holding')}
+                            </span>
+                          ) : null}
+                        </td>
                         <td className="px-3 py-2">
                           {q?.stockName ?? '—'}
                           {dayTradeBadge(q)}
@@ -439,6 +590,7 @@ const RealtimeBoardPage: React.FC = () => {
                         <td className="px-3 py-2 text-right tabular-nums">
                           {q?.volume != null ? q.volume.toLocaleString() : '—'}
                         </td>
+                        <td className="px-3 py-2 text-right tabular-nums">{positionCell(code, q)}</td>
                         <td className="px-3 py-2">{badge(item)}</td>
                         <td className="px-3 py-2 text-xs text-secondary-text">{q?.asOf ? formatDateTime(q.asOf) : '—'}</td>
                         <td className="px-3 py-2">
@@ -457,7 +609,7 @@ const RealtimeBoardPage: React.FC = () => {
                       </tr>
                       {isOpen ? (
                         <tr className="border-b border-border/50 bg-base/40">
-                          <td colSpan={10}>
+                          <td colSpan={11}>
                             {quoteDetail(q)}
                             <TrendChart code={code} />
                           </td>
@@ -471,6 +623,7 @@ const RealtimeBoardPage: React.FC = () => {
           </div>
         )}
       </Card>
+      {fundsCard}
     </AppPage>
   );
 };
