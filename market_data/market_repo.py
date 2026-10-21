@@ -194,3 +194,50 @@ def market_index(index_id, date, engine=None):
             "WHERE index_id = :iid AND date = :d",
             {"iid": index_id, "d": str(date)[:10]}, engine)
     return None if df.empty else df.iloc[0].to_dict()
+
+
+_FUND_INFO_COLUMNS = ("fund_id, name, company, isin, sitca_code, type_code, type_name, invest_area, "
+                      "currency, inception_date, aum, aum_currency, aum_date, dividend_policy, cnyes_id")
+
+
+def fund_search(query, limit=20, engine=None):
+    """以名稱、投信、統編或 ISIN 模糊搜尋境內基金；有最新淨值的排前面。"""
+    like = f"%{query.strip()}%"
+    return _q(
+        f"SELECT {', '.join('i.' + c.strip() for c in _FUND_INFO_COLUMNS.split(','))}, "
+        "n.date AS nav_date, n.nav "
+        "FROM market.fund_info i LEFT JOIN LATERAL ("
+        "  SELECT date, nav FROM market.fund_nav WHERE fund_id = i.fund_id ORDER BY date DESC LIMIT 1"
+        ") n ON true "
+        "WHERE i.name ILIKE :q OR i.company ILIKE :q OR i.fund_id ILIKE :q OR i.isin ILIKE :q "
+        "ORDER BY (n.date IS NULL), (i.fund_id = :exact OR i.isin = :exact) DESC, i.aum DESC NULLS LAST "
+        "LIMIT :n",
+        {"q": like, "exact": query.strip(), "n": int(limit)}, engine)
+
+
+def fund_info(fund_id, engine=None):
+    """單檔基金基本資料（dict）；查無回 None。"""
+    df = _q(f"SELECT {_FUND_INFO_COLUMNS} FROM market.fund_info WHERE fund_id = :f", {"f": fund_id}, engine)
+    return None if df.empty else df.iloc[0].to_dict()
+
+
+def fund_nav_history(fund_id, start=None, end=None, engine=None):
+    """單檔基金淨值歷史（升序）。``date`` 是淨值日。"""
+    sql = "SELECT date, nav, change, change_pct, source FROM market.fund_nav WHERE fund_id = :f"
+    params = {"f": fund_id}
+    if start:
+        sql += " AND date >= :start"
+        params["start"] = start
+    if end:
+        sql += " AND date <= :end"
+        params["end"] = end
+    return _q(sql + " ORDER BY date", params, engine)
+
+
+def fund_latest_navs(fund_ids, engine=None):
+    """多檔基金各自最新一筆淨值：``{fund_id: (nav, date)}``，查無的不列。"""
+    if not fund_ids:
+        return {}
+    df = _q("SELECT DISTINCT ON (fund_id) fund_id, date, nav FROM market.fund_nav "
+            "WHERE fund_id = ANY(:ids) ORDER BY fund_id, date DESC", {"ids": list(fund_ids)}, engine)
+    return {r.fund_id: (float(r.nav), pd.Timestamp(r.date).date()) for r in df.itertuples()}

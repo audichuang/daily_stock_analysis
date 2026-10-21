@@ -356,6 +356,22 @@ def report(engine=None, now=None, is_session=None):
     return out
 
 
+def fund_nav_status(engine=None):
+    """境內基金淨值新鮮度（只報不擋）：最新淨值日、該日有幾檔、總列數；表不存在或查詢失敗回 None。
+
+    公會每日檔一份混多個淨值日，所以看「最新日有幾檔」比只看最新日更能看出是不是停更。"""
+    try:
+        with (engine or get_engine()).connect() as conn:
+            row = conn.execute(text(
+                "SELECT max(date), count(*) FROM market.fund_nav")).fetchone()
+            latest = row[0]
+            funds = conn.execute(text(
+                "SELECT count(*) FROM market.fund_nav WHERE date = :d"), {"d": latest}).scalar() if latest else 0
+    except Exception:
+        return None
+    return {"latest": latest, "funds_on_latest": funds, "rows": row[1]}
+
+
 def run(engine=None, strict=False, now=None, is_session=None):
     """Print the report and return a process exit code."""
     result = report(engine, now=now, is_session=is_session)
@@ -422,6 +438,10 @@ def run(engine=None, strict=False, now=None, is_session=None):
     if offcalendar is not None:
         print(f"price_adjustment events on non-session dates: {offcalendar} "
               "(約 242 筆屬預期且永久，讀取端已移到下一交易日，不要刪列)")
+    fund = fund_nav_status(engine)
+    if fund is not None:
+        print(f"fund_nav latest {fund['latest']} ({fund['funds_on_latest']:,} funds), "
+              f"{fund['rows']:,} rows (只報不擋)")
     gaps = (missing_expected, missing_price, missing_index, missing_institutional,
             missing_margin, missing_valuation, missing_events, thin_recent, empty_required)
     failed = any(gaps)

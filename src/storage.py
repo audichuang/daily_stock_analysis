@@ -725,6 +725,33 @@ class PortfolioFxRate(Base):
     )
 
 
+class PortfolioFundHolding(Base):
+    """境內基金持倉（帳本外）：照對帳單記單位數與總成本，不走股票帳本的成交重播。
+
+    ``fund_id`` 是投信投顧公會的基金統編（``market.fund_info`` 的主鍵）；淨值只在讀取時
+    從 ``market.fund_nav`` 取最新一筆，這裡不存價格。刻意不併進 ``portfolio_trades``：
+    基金代碼進了那張表會被即時報價與每日個股分析當成 A 股代碼處理。
+    """
+
+    __tablename__ = 'portfolio_fund_holdings'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    platform = Column(String(64), nullable=False, default='')  # 購買通路，如「國泰世華」
+    fund_id = Column(String(16), nullable=False, index=True)
+    fund_name = Column(String(128), nullable=False)
+    units = Column(Float, nullable=False)
+    cost_total = Column(Float, nullable=False)  # 以基金計價幣別計的總投入成本
+    currency = Column(String(8), nullable=False, default='TWD')
+    as_of = Column(Date, nullable=False)  # 單位數與成本對應的對帳日
+    note = Column(String(255))
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint('platform', 'fund_id', name='uix_portfolio_fund_holding_platform_fund'),
+    )
+
+
 class ConversationMessage(Base):
     """
     Agent 对话历史记录表

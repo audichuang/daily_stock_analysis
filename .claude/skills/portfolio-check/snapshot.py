@@ -2,7 +2,7 @@
 
 用法（Doppler 注入 Shioaji 金鑰；少了它台股會靜默退回延遲的 yfinance）：
     doppler run -p shioaji -c dev -- uv run python .claude/skills/portfolio-check/snapshot.py [account_id]
-不帶 account_id 時列出全部啟用中的帳戶。帳本外的資產（基金）不在這裡，見 SKILL.md。
+不帶 account_id 時列出全部啟用中的帳戶，再列基金持倉（應用庫 `portfolio_fund_holdings`，以最新淨值估值）並併入合併表。
 最後附上每檔持股最近一次系統分析（應用庫 analysis_history）的建議與時間，看報告日期判斷是不是今天的。
 """
 import os
@@ -18,6 +18,7 @@ from dotenv import load_dotenv  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
 
 from data_provider.base import DataFetcherManager  # noqa: E402
+from src.services.fund_service import FundService  # noqa: E402
 from src.services.portfolio_service import PortfolioService  # noqa: E402
 
 load_dotenv(Path(__file__).resolve().parents[3] / ".env")
@@ -52,6 +53,31 @@ for acc in snap["accounts"]:
             names[sym] = name
     print()
 
+if account_id is None:
+    try:
+        fund_snap = FundService().list_holdings()
+    except Exception as exc:  # noqa: BLE001 - 基金段失敗不擋股票快照
+        fund_snap = None
+        print(f"== 基金持倉讀取失敗：{exc}（合併表不含基金）\n")
+    if fund_snap and fund_snap["items"]:
+        if fund_snap["nav_error"]:
+            print(f"**基金淨值庫無法讀取：{fund_snap['nav_error']}")
+        print("== 基金（帳本外，淨值為最新淨值日）")
+        print(f"{'基金':16}{'單位數':>10}{'淨值':>9}{'淨值日':>12}{'市值':>11}{'損益%':>8}  通路")
+        for f in fund_snap["items"]:
+            value, nav = f["market_value"], f["nav"]
+            stale = "（逾期）" if f["is_stale"] else ""
+            print(f"{f['fund_name'][:8]:16}{f['units']:>10g}{(nav or 0):>9.2f}{str(f['nav_date'] or '-'):>12}"
+                  f"{(value or 0):>11,.0f}{(f['pnl_pct'] or 0):>+8.1f}  {f['platform']}{stale}")
+            rate = to_twd.get(f["currency"])
+            if value is not None and rate:
+                key = f"F:{f['fund_id']}"
+                combined[key] += value * rate
+                names[key] = f["fund_name"]
+            else:
+                print(f"  **{f['fund_name']} 沒有淨值或匯率，未計入合併表")
+        print()
+
 grand = sum(combined.values())
 print(f"== 全部帳戶合併（台幣，USD/TWD={usd_twd or '取不到，美股未計入'}）總市值 {grand:,.0f}")
 for sym, value in sorted(combined.items(), key=lambda kv: -kv[1]):
@@ -62,6 +88,8 @@ print("== 最近一次系統分析（每日報告／Web）")
 engine = create_engine(os.environ["STORAGE_DATABASE_URL"])
 with engine.connect() as conn:
     for sym in sorted(combined, key=lambda k: -combined[k]):
+        if sym.startswith("F:"):  # 基金沒有每日個股分析
+            continue
         row = conn.execute(
             text(
                 "SELECT created_at, operation_advice, sentiment_score, analysis_summary FROM dsa.analysis_history "

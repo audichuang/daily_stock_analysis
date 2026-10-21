@@ -32,7 +32,7 @@ describe('SidebarNav', () => {
 
     expect(screen.getByRole('link', { name: '选股' })).toHaveAttribute('href', '/screening');
     const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
-    expect(hrefs.slice(0, 5)).toEqual(['/', '/chat', '/screening', '/portfolio', '/board']);
+    expect(hrefs.slice(0, 6)).toEqual(['/', '/chat', '/screening', '/portfolio', '/funds', '/board']);
   });
 
   it('shows the shared completion badge only when chat completion is pending', () => {

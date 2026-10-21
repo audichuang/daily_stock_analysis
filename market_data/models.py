@@ -162,3 +162,48 @@ class FinancialStatement(Base):
     statement_type: Mapped[str] = mapped_column(String(24), primary_key=True)
     account: Mapped[str] = mapped_column(String(128), primary_key=True)  # 會計項目
     value: Mapped[float | None] = mapped_column(Numeric(28, 4))
+
+
+class FundInfo(Base):
+    """境內基金（含 ETF、各級別）基本資料。
+
+    ``fund_id`` 用投信投顧公會的「基金統編」（級別另帶字母尾碼，如 ``00526748A``）：
+    公會每日淨值檔與基本資料檔都以它為鍵、各自唯一；鉅亨回應裡的 ``sitca`` 欄也是它。
+    公會的「基金代號」（如 ``DDO04``）在淨值檔內重複 529 次，不能當鍵。
+    ``cnyes_id`` 是非官方來源的對照（以 ISIN 驗證後才寫入），只給補歷史淨值與持股用。
+    """
+
+    __tablename__ = "fund_info"
+
+    fund_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    company: Mapped[str | None] = mapped_column(String(32))  # 投信名稱
+    isin: Mapped[str | None] = mapped_column(String(16))
+    sitca_code: Mapped[str | None] = mapped_column(String(16))  # 公會基金代號（非唯一）
+    type_code: Mapped[str | None] = mapped_column(String(8))  # AA1 國內股票型…
+    type_name: Mapped[str | None] = mapped_column(String(64))
+    invest_area: Mapped[str | None] = mapped_column(String(128))
+    currency: Mapped[str | None] = mapped_column(String(8))  # 計價幣別
+    inception_date: Mapped[_date | None] = mapped_column(Date)
+    aum: Mapped[int | None] = mapped_column(BigInteger)  # 級別規模（規模幣別）
+    aum_currency: Mapped[str | None] = mapped_column(String(8))
+    aum_date: Mapped[_date | None] = mapped_column(Date)
+    dividend_policy: Mapped[str | None] = mapped_column(String(128))
+    cnyes_id: Mapped[str | None] = mapped_column(String(16))
+
+
+class FundNav(Base):
+    """境內基金每日淨值。``date`` 是淨值日（來源每列自帶），不是抓取日。
+
+    ``source``：``sitca``（公會每日檔，官方）或 ``cnyes``（鉅亨歷史，非官方，只補缺日、
+    不覆蓋官方值）。
+    """
+
+    __tablename__ = "fund_nav"
+
+    fund_id: Mapped[str] = mapped_column(String(16), primary_key=True)
+    date: Mapped[_date] = mapped_column(Date, primary_key=True)
+    nav: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    change: Mapped[float | None] = mapped_column(Numeric(18, 6))
+    change_pct: Mapped[float | None] = mapped_column(Numeric(12, 6))
+    source: Mapped[str] = mapped_column(String(8), nullable=False)

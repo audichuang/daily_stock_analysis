@@ -567,6 +567,12 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
         with eng.begin() as conn:
             exd = crawl_ex_dividend(conn, ex_start, ex_end, require=True)
     print(f"ex_dividend {exd:,} rows")
+    # 基金淨值與股票無關:來源失敗只印 WARN,不擋股票資料與之後的報告
+    from market_data import funds
+    try:
+        funds.daily_update(eng, asof=asof)
+    except Exception as exc:
+        print(f"**WARN fund_nav: {exc}")
     try:
         adjust.refresh_recent(
             eng, asof - _dt.timedelta(days=adjust.ADJUSTMENT_WINDOW_DAYS),

@@ -2,7 +2,15 @@ from datetime import date
 
 import pytest
 
-from market_data import adjust, crawl
+from market_data import adjust, crawl, funds
+
+
+@pytest.fixture(autouse=True)
+def _no_fund_network(monkeypatch):
+    """daily 的基金段會連公會與鉅亨；本檔只驗股票段，一律換成不連外的假函式。"""
+    calls = []
+    monkeypatch.setattr(funds, "daily_update", lambda eng, asof=None: calls.append(asof))
+    return calls
 
 
 class _Result:
@@ -208,3 +216,32 @@ def test_recovery_dates_reject_a_long_implicit_backfill():
         crawl.recovery_dates(
             date(2024, 6, 5), [date(2024, 1, 2)],
         )
+
+
+def test_daily_update_runs_fund_step_with_same_asof(monkeypatch, _no_fund_network):
+    _stub_stock_steps(monkeypatch)
+    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+    assert _no_fund_network == [date(2024, 6, 5)]
+
+
+def test_fund_source_failure_does_not_fail_stock_daily(monkeypatch, capsys):
+    adjusted = []
+    _stub_stock_steps(monkeypatch, adjusted)
+
+    def boom(eng, asof=None):
+        raise funds.FundSourceError("SITCA nav.csv: HTTP 503")
+
+    monkeypatch.setattr(funds, "daily_update", boom)
+    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+    assert adjusted, "基金失敗不該擋掉之後的復權刷新"
+    assert "**WARN fund_nav: SITCA nav.csv: HTTP 503" in capsys.readouterr().out
+
+
+def _stub_stock_steps(monkeypatch, adjusted=None):
+    monkeypatch.setattr(crawl, "crawl_range", lambda eng, src, dates, resume=True: None)
+    monkeypatch.setattr(crawl, "refresh_range", lambda eng, src, dates: None)
+    monkeypatch.setattr(crawl, "crawl_snapshots", lambda eng, dates=None: {})
+    monkeypatch.setattr(crawl, "crawl_monthly_revenue", lambda conn, month: 0)
+    monkeypatch.setattr(crawl, "crawl_ex_dividend", lambda conn, s, e, require=False: 0)
+    monkeypatch.setattr(adjust, "refresh_recent",
+                        lambda engine, start, end: (adjusted if adjusted is not None else []).append(1))

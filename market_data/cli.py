@@ -3,6 +3,8 @@
     python -m market_data.cli daily                 # 近幾日增量 + 快照
     python -m market_data.cli backfill price --start 2010-01-01 --end 2026-07-01
     python -m market_data.cli snapshot              # valuation + index + stock_info
+    python -m market_data.cli funds                 # 境內基金每日淨值
+    python -m market_data.cli fund-history 18480065 # 單檔基金歷史淨值
 """
 
 import argparse
@@ -45,6 +47,10 @@ def main(argv=None):
                    help="每日抓取間隔秒數。長區間回補務必給(建議 3)——TWSE 密集請求會封 IP,"
                         "且失敗是靜默的(該日直接跳過不報錯)")
     sub.add_parser("snapshot", help="valuation + index + stock_info 快照")
+    sub.add_parser("funds", help="境內基金:公會每日淨值/基本資料 + 已追蹤基金近期補缺")
+    fh = sub.add_parser("fund-history", help="從鉅亨補單檔基金的歷史淨值(不覆蓋公會官方值)")
+    fh.add_argument("fund_id", nargs="+", help="公會基金統編,如 18480065")
+    fh.add_argument("--start", default=None, help="起日 YYYY-MM-DD,預設全期")
     adj = sub.add_parser("adjust", help="重建 price_adjustment 前復權因子(除權息+減資+分割)")
     adj.add_argument("--start", default="2013-01-01",
                      help="推導起點。預設 2013：price 表 2010 上半年混有權證,見 adjust.py")
@@ -85,6 +91,15 @@ def main(argv=None):
                           resume=not args.force, replace=args.force, delay=args.delay)
     elif args.command == "snapshot":
         crawl.crawl_snapshots(eng)      # 自己管交易:每步一個,印出即代表已 commit
+    elif args.command == "funds":
+        from market_data import funds
+        funds.daily_update(eng)
+    elif args.command == "fund-history":
+        from market_data import funds
+        start = datetime.date.fromisoformat(args.start) if args.start else None
+        for fid in args.fund_id:
+            n = funds.backfill_history(eng, fid, start=start)
+            print(f"fund_nav {fid} {n:,} new rows")
     elif args.command == "adjust":
         from market_data import adjust
         res = adjust.rebuild(eng, start=args.start, with_reductions=not args.no_reductions)
