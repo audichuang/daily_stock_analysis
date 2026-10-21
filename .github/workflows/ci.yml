@@ -219,33 +219,8 @@ jobs:
           print('✅ All Docker imports OK')
           "
 
-  desktop-futu-package-windows:
-    name: desktop-futu-package-windows
-    runs-on: windows-latest
-    needs: [changes, ai-governance]
-    if: needs.changes.outputs.futu_packaging == 'true'
-    steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v5
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: requirements.txt
-      - name: 🟢 Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: apps/dsa-web/package-lock.json
-      - name: 📦 Install Web dependencies
-        shell: pwsh
-        run: npm ci --prefix apps/dsa-web
-      - name: 🧊 Build and verify frozen backend
-        shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File scripts/build-backend.ps1
-
+  # fork 增量：desktop-futu-package-windows 已移除——本 fork 不發 Windows 桌面版（使用者 2026-10-22）；
+  # scripts/build-backend.ps1 仍由打包測試與 desktop-release 使用，未刪。
   desktop-futu-package-macos:
     name: desktop-futu-package-macos
     runs-on: macos-15

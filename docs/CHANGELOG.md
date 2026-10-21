@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [chore] CI 移除 `desktop-futu-package-windows`（本 fork 不發 Windows 桌面版）；macOS 打包檢查保留，`scripts/build-backend.ps1` 未刪
 - [文档] 根 `AGENTS.md` 分層精簡（31,344 → 約 11,600 bytes），只留每個任務都用得到的硬規則、驗證矩陣與跨領域踩雷；維運流程移到新文件 `docs/daily-report-ops.md`（排程一覽、每日報告逾時／鎖／完成標記）與 `docs/nas-deploy.md`（NAS 發版），單一目錄的規則下放 `src/`、`tests/`、`scripts/` 的 `AGENTS.md`，PR 標題與截圖規則移入 skill `analyze-pr`／`fix-issue`，`make analyze` 的 Doppler 手動包法移到 `docs/tw-operating-guide.md` §2.3；§6／§9 改為 CI 也跑 push 分支、合入前看 `gh run` 綠燈
 - [文件] `market_data/AGENTS.md` 精簡為改 code 時的不變式（92 行 → 約 40 行）；踩雷案例與實測數字搬到新的 `docs/market-data-pitfalls.md`，操作指令（`revenue-pit`、`adjust`、模組測試、`make pg-scratch`）併入 skill `update-market-data`
 - [修復] `src` 套件載入時預設 `LITELLM_MODE=PRODUCTION`，關掉 LiteLLM import 時對工作目錄 `.env` 的 `load_dotenv()`：臨時腳本 unset 掉的 `STORAGE_DATABASE_URL` 不會再被補回正式應用庫；`.env` 一律由 `setup_env()` 讀，明確設了 `LITELLM_MODE` 的照用
