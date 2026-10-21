@@ -77,6 +77,37 @@ if account_id is None:
             else:
                 print(f"  **{f['fund_name']} 沒有淨值或匯率，未計入合併表")
         print()
+        # 基金每天的判斷基準：跟 0050（含息）比相對強弱，SKILL.md 第 4 節的減碼條件看「近6月落後」
+        bench = {}
+        try:
+            from src.services.fund_service import compute_returns, compute_risk
+            closes = yf.Ticker("0050.TW").history(period="2y", auto_adjust=True)["Close"].dropna()
+            series = [{"date": i.date(), "nav": float(v)} for i, v in closes.items()]
+            bench = {**compute_returns(series), **compute_risk(series), "date": series[-1]["date"]}
+        except Exception as exc:  # noqa: BLE001 - 基準取不到只少比較欄
+            print(f"**0050 基準取不到：{exc}")
+
+        def _p(v):
+            return f"{v:>+8.1f}" if v is not None else f"{'-':>8}"
+
+        print(f"== 基金對照 0050（含息，{bench.get('date', '-')}）")
+        print(f"{'基金':16}{'近1月':>8}{'近6月':>8}{'近1年':>8}{'1年回撤':>8}{'距1年高':>8}{'6月落後':>8}")
+        if bench:
+            print(f"{'0050':16}{_p(bench['m1'])}{_p(bench['m6'])}{_p(bench['y1'])}{_p(bench['max_drawdown'])}")
+        fund_svc = FundService()
+        for f in fund_snap["items"]:
+            try:
+                det = fund_svc.get_detail(f["fund_id"])
+                pts = fund_svc.get_nav_history(f["fund_id"], days=365)["points"]
+            except Exception as exc:  # noqa: BLE001
+                print(f"{f['fund_name'][:8]:16}取不到：{exc}")
+                continue
+            ret = det["returns"]
+            off_high = (det["nav"] / max(p["nav"] for p in pts) - 1) * 100 if pts and det["nav"] else None
+            lag = ret["m6"] - bench["m6"] if ret["m6"] is not None and bench.get("m6") is not None else None
+            print(f"{f['fund_name'][:8]:16}{_p(ret['m1'])}{_p(ret['m6'])}{_p(ret['y1'])}"
+                  f"{_p(det['risk']['max_drawdown'])}{_p(off_high)}{_p(lag)}")
+        print()
 
 grand = sum(combined.values())
 print(f"== 全部帳戶合併（台幣，USD/TWD={usd_twd or '取不到，美股未計入'}）總市值 {grand:,.0f}")

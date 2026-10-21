@@ -24,7 +24,8 @@
 ## 驗證
 
 - `npm run lint && npm run build`(根 AGENTS.md 的 web-gate 同款)
-- 單元測試:`npm run test`(vitest;根 AGENTS.md 沒列,但存在)
+- 單元測試:`npm run test`(vitest;根 AGENTS.md 沒列,但存在)。測試環境預設 UI 語言是英文,斷言文字照 `en` 寫
+- 截圖(UI 改動的交付證據):本機 Playwright 沒下載瀏覽器(裝要先問),用 `chromium.launch({ channel: 'chrome' })` 走系統 Chrome;要指定語言就在 `addInitScript` 寫 localStorage `dsa.uiLanguage`
 
 ## 踩雷
 

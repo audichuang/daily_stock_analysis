@@ -14,7 +14,7 @@
 - **校驗失敗的回應只投影 `type`／`loc`／`msg`,刻意丟掉 pydantic 的 `input` 與 `ctx`**(會回顯密碼、把 100KB 輸入原樣吐回、`ctx` 裡的例外物件無法序列化而變 500)。端點自己組的錯誤訊息不經過那層投影,所以**新 schema 的字串欄位一律設 `max_length`**,在輸入邊界擋。
 - **回應裡的數值要分清三種狀態:讀數是 0、沒有讀數、非有限值。**`float(x) if x else None` 兩頭都錯——NaN 為真會被放行(`JSONResponse` 直接 500)、0 是真實讀數卻被丟掉。缺值回 `null`,不要用 `0.0` 當哨兵。目前只有大盤複盤與選股的回傳有做非有限值清洗,行情類端點沒有。
 - **批次端點單筆失敗回該筆 `null` 加 `error`,HTTP 仍是 200。**筆數上限要在解析與去重**之前**用原始輸入計算,否則一筆合法加大量重複可以繞過上限。
-- **回應型別與前端是純手動同步**(沒有 codegen):`v1/schemas/` ↔ `apps/dsa-web/src/types/`,請求的欄位名另外手寫在 `apps/dsa-web/src/api/*.ts`。漏改後者時 tsc 照樣綠,請求少一個欄位、後端當作沒傳。優先追加欄位,不改名、不刪。
+- **回應型別與前端是純手動同步**(沒有 codegen):`v1/schemas/` ↔ `apps/dsa-web/src/types/`,請求的欄位名另外手寫在 `apps/dsa-web/src/api/*.ts`。漏改後者時 tsc 照樣綠,請求少一個欄位、後端當作沒傳。優先追加欄位,不改名、不刪。**回應鍵名別讓數字後面接字母**:前端 `toCamelCase`(camelcase-keys)會把 `1w` 轉成 `1W`、`max_drawdown_1y` 轉成 `maxDrawdown1Y`,型別照寫就讀到 undefined、tsc 不會報。
 - **報告語言的列舉在 schema 裡是手寫的 `Literal`**,不是從 `SUPPORTED_REPORT_LANGUAGES` 衍生。新增語言只改常數的話,文件描述會跟著變,請求仍被 422 擋下。
 
 ## 踩雷

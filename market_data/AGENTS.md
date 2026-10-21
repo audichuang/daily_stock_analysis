@@ -48,10 +48,11 @@
 - price 一天必須 TWSE+TPEx **兩市場都抓到才寫**(單邊寫入會讓 resume 標記該日完成、另一邊永久缺)——不要「順手優化」成單邊也寫。
 - price 有**截斷防護**:單日合計低於附近 5 個交易日中位數九成(優先取之前的日期,無則取之後——倒序/空庫 bootstrap 也有基準;全空庫第一天無防護),先試 STOCK_DAY_ALL 備援(僅最新交易日、全列同日才收、缺本益比欄以 coalesce 保留舊值),仍不足整天跳過等 resume 重試——別移除這道門(TWSE 回過截斷但非空的回應)。
 - `MarketDBFetcher` 只准服務 `.TW`/`.TWO`;查無資料要 raise `DataSourceUnavailableError` 讓 chain fallback,不要回空 DataFrame。
-- **DB 測試一律用 `pg_conn` fixture 並自己種資料。**本機的 `market_data/tests/` 連的是**真的那一座**唯一資料源(conftest 會從 `.env` 讀 `DATABASE_URL`),`pg_conn` 包在必定 rollback 的交易裡;直接拿 `engine` 寫入就是寫進正式庫。CI 則是 schema 已遷移的**空庫**,讀庫內既有資料的斷言在那裡必紅——種子用遠離真實資料的年份(1900／2099),讓真實列落在查詢視窗外。
+- **DB 測試一律用 `pg_conn` fixture 並自己種資料。**本機的 `market_data/tests/` 連的是**真的那一座**唯一資料源(conftest 會從 `.env` 讀 `DATABASE_URL`),`pg_conn` 包在必定 rollback 的交易裡;直接拿 `engine` 寫入就是寫進正式庫。CI 則是 schema 已遷移的**空庫**,讀庫內既有資料的斷言在那裡必紅——種子用遠離真實資料的年份(1900／2099),讓真實列落在查詢視窗外。**新增表時本機 pg 測試在正式庫 migration 前必紅**(連的就是正式庫):先在臨時 Postgres 驗——`initdb` 到暫存目錄、`pg_ctl -o "-p <port> -k ''"`(暫存路徑超過 unix socket 的 103 bytes 上限,關掉 socket 走 TCP)、建 `market` schema、`alembic upgrade head`,再把 `DATABASE_URL` 指過去跑。
 
 ## 踩雷
 
+- **psycopg 下多列 `INSERT … VALUES` 的 `rowcount` 不可靠**(`ON CONFLICT DO NOTHING` 實測回 -2),要數實際寫入列加 `RETURNING`;單一 INSERT 綁定參數上限 65,535,寬表一次寫幾千列要分批(例:`funds._chunks`)。
 - `monthly_revenue.revenue` 單位是**千元**(MOPS 原始單位);對照 `twse_fundamental_adapter` 是 `*1000` 轉元後才用。
 - `monthly_revenue` 自 2026-09 起 `crawl_monthly_revenue` 上市(`/sii/`)＋上櫃(`/otc/`)各抓一份、**逐市場各自寫入**;之前入庫的歷史只有上市,上櫃歷史要逐月 `revenue --month` 補(同樣是動態產生的彙總報表,存活偏誤一樣在)。表內沒有市場欄——`scripts/screen_tw.exclude_otc_revenue` 用種子檔 `.TWO` 判定上櫃,選股與量測預設排除,**別把上櫃營收直接放進漏斗**,理由見該函式。
 - **月營收彙總報表有存活偏誤,而且是靜默的**:`crawler.crawl_monthly_report` 走的 `t21sc03_<民國年>_<月>.html` 看起來是按月存檔,實際是**動態產生**的,只列出目前仍在申報的公司。實測 2020-06 那份 979 家裡完全沒有 6452 康友、2448 晶電、2456 奇力新、5305 敦南、3698 隆達——這五檔當時全部還在交易。**用它回補歷史,後來下市的公司會永久缺席**,任何「要求營收成長」的選股條件都會把負尾系統性移除。修法是 `cli revenue-pit`(走 `sources.crawl_company_monthly_revenue`,MOPS 個別公司查詢),但只補得回**仍公開發行**的公司;被吸收合併的回「該公司不繼續公開發行」(如 2448 晶電併入富采),那部分是硬邊界,只能用敏感度分析給上界(`scripts/measure_signal_forward.py --survivorship-bound`)。
