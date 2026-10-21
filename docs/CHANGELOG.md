@@ -228,6 +228,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
+- [chore] 合併上游 `7a21cd76`..`ec66bf46`（1 個 commit：#2419 Telegram 推送改以 UTF-16 長度判斷與分段；本 fork 通知走 Bark，不受影響），裁決見 `docs/upstream-sync-2026-10-21.md`
 - [修复] Telegram 推送按 UTF-16 长度判断与分段，修复含大量 emoji 的报告超出 4096 限制导致发送失败的问题。
 
 ## [3.33.0] - 2026-10-15
