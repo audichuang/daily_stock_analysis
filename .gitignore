@@ -85,6 +85,9 @@ verify_*.py
 # 不受它管，會讓整個目錄一直出現在 `git status`，所以整個目錄忽略。
 .codegraph/
 
+# agent 記憶（持股、計畫等個人資料），由 .claude/settings.local.json 的 autoMemoryDirectory 指過來；絕不進版控
+.memory/
+
 # ignore Claude workspace artifacts, but keep shared repo skills versioned
 .claude/*
 !.claude/skills/
