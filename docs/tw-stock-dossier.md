@@ -32,7 +32,7 @@ uv run --env-file .env python scripts/tw_stock_dossier.py 2330 --no-branch   # �
 
 **解讀（narrative）**：
 - 撰寫規則與 JSON 格式只有一份，就是 `NARRATIVE_RULES`。Web 由伺服器設定的生成後端撰寫（呼叫 `GeminiAnalyzer.generate_text`，用量在 LLM 用量頁記為「四維度分析」，即 `call_type=stock_dossier`）。
-- 結果依「股票＋資料基準日」快取在 `DATABASE_PATH` 同目錄的 `dossier_narratives/`，同一天重開不重算；Docker 裡就是 `/app/data` 這個 volume。
+- 結果依「股票＋資料基準日」快取在 `DATABASE_PATH` 同目錄的 `dossier_narratives/`，同一天重開不重算——除非同一基準日的資料晚入庫（解讀記下各段資料日 `data_stamp`：最新營收月、最新季、法人／融資／集保／估值的 as_of、現價，任一變了就重寫），或這次比上次完整（分點晚到、上次讀取失敗的段落這次讀到了；反過來不重寫）。所以收盤後法人、融資陸續入庫時，同一檔一天可能重付 2～3 次 LLM；Docker 裡就是 `/app/data` 這個 volume。
 - LLM 失敗或回傳格式不對時，頁面退回只列數字並顯示提示，失敗的結果不會被快取。
 - **數字核對只是便宜的防呆**：解讀裡帶小數或千分位的數字，要能在資料包找到，或所在句子標了「自算」。整數（張數、天數）不核對，推導算式本身也不驗算。
   - 允許的寫法：四捨五入到 0~3 位、絕對值，以及只對帶單位的欄位做的換算：`*_k`（千元）換成億（÷100,000）或萬（÷10），而且**數字後面必須真的寫「億」「萬」**（寫成「37.7 千元」或不寫單位都核對不到）；Fib `position`（0~1）×100 寫成百分比；Fib／OTE 常數 0.5、0.618、0.705、0.786（含 ×100）。

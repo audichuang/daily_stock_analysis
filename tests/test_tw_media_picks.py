@@ -29,6 +29,8 @@ def test_parse_answer_garbage_is_none_but_empty_list_is_no_picks():
     # a bare citation marker is not "no picks": journaling it as no_picks would skip the episode forever
     assert mp.parse_answer("這集沒有列點名 [1]") is None
     assert mp.parse_answer("[1, 2]") is None
+    assert mp.parse_answer("[{}]") is None
+    assert mp.parse_answer('[{"code": "x"}, {"name": ""}]') is None
 
 
 def test_resolve_order():
@@ -59,6 +61,9 @@ def test_resolve_order():
     # a number that only matches after zero-padding loses to a name that resolves
     assert mp.resolve("中揚光", None, INDEX, said="668") == ("6668.TW", "exact")
     assert mp.resolve("國泰美國道瓊", None, INDEX, said="668") == ("00668.TW", "code")
+    # the name is a homophone that resolves nothing, but the LLM's code contains the digits
+    assert mp.resolve("中陽光", "6668", INDEX, said="668") == ("6668.TW", "code")
+    assert mp.resolve("中揚光電", "6668", INDEX, said="668") == ("6668.TW", "code")
     # ...but only when the name's code contains the spoken digits; otherwise the number wins
     assert mp.resolve("國泰台灣領袖50", None, INDEX + [("00922.TW", "國泰台灣領袖50", [])], said="850") == ("00850.TW", "code")
     # digits inside a nickname are not a code
@@ -151,3 +156,42 @@ def test_snapshot_dependencies_exist():
     from src.services import tw_stock_dossier as dossier
 
     assert callable(dossier.fundamentals) and callable(dossier.chips)
+
+
+def test_snapshot_skips_null_close_before_adjusting(monkeypatch):
+    # 最後一天收盤是 NULL：不能把 NaN 寫進 journal，前復權也不能以那天為基準
+    import math
+    import pandas as pd
+    from market_data import market_repo
+    from src.services import tw_stock_dossier as dossier
+
+    days = pd.bdate_range("2026-07-01", "2026-10-22")
+    closes = [100.0] * (len(days) - 1) + [None]
+    seen = {}
+    monkeypatch.setattr(market_repo, "price_history",
+                        lambda sid, start, end, engine: pd.DataFrame({"date": days, "close": closes}))
+
+    def mult(sid, dates, engine):
+        seen["last"] = pd.Timestamp(dates.iloc[-1])
+        return pd.Series([1.0] * len(dates))
+
+    monkeypatch.setattr(market_repo, "front_adjust_multipliers", mult)
+    monkeypatch.setattr(dossier, "fundamentals", lambda *a, **k: {"monthly_revenue": []})
+    monkeypatch.setattr(dossier, "chips", lambda *a, **k: {"institutional": None})
+    out = mp.snapshot("2330.TW", days[-1].date(), engine=None)
+    assert out["close"] == 100.0 and out["as_of"] == str(days[-2].date())
+    assert seen["last"] == days[-2]
+    assert not any(isinstance(v, float) and math.isnan(v) for v in out.values())
+    json.dumps(out, allow_nan=False)
+
+
+def test_single_run_lock_blocks_overlap():
+    first = mp._single_run_lock()
+    try:
+        assert first is not None
+        assert mp._single_run_lock() is None
+    finally:
+        first.close()
+    again = mp._single_run_lock()
+    assert again is not None
+    again.close()

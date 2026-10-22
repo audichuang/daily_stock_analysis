@@ -1488,6 +1488,16 @@ TW_MA_CONTROL_VARIANT = "tw-ma-control"
 _TW_MA_WEIGHTED_HEADING = "### 台股短波段買入（60-69分，均線加權）："
 
 
+_TW_MA_ARM_PIN_SECONDS = 30 * 60   # 一次 analyze() 內的分組釘住時間（system 與 user prompt 必須同組）
+
+
+def _taipei_today():
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    return _dt.now(ZoneInfo("Asia/Taipei")).date()
+
+
 def _tw_ma_ab_treated(stock_code: Any, ratio: float, day: Any) -> bool:
     """A/B 分組：同一檔同一天固定在同一組（重跑不換組），不同天重新抽，避免某幾檔永遠在同一組。"""
     if ratio >= 1:
@@ -2938,19 +2948,29 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
     def _tw_ma_ab_ratio(self) -> float:
         try:
-            return float(getattr(self._get_runtime_config(), "tw_ma_alignment_ab_ratio", 1.0))
+            ratio = float(getattr(self._get_runtime_config(), "tw_ma_alignment_ab_ratio", 1.0))
         except (TypeError, ValueError):
             return 1.0
+        return ratio if math.isfinite(ratio) else 1.0     # nan 會讓每個比較都為假：全進對照組又不打標
 
     def _tw_ma_weighted_active(self, stock_code: Any, report_language: str) -> bool:
-        """實驗內且被分到加權組才套用均線加權規則；分組依台北日期（TW_MA_ALIGNMENT_AB_RATIO）。"""
-        from datetime import datetime as _dt
-        from zoneinfo import ZoneInfo
+        """實驗內且被分到加權組才套用均線加權規則；分組依台北日期（TW_MA_ALIGNMENT_AB_RATIO）。
 
+        analyze() 開頭會先釘住這次的組別，之後組 system／user prompt 都讀同一個值，跨午夜也不會一半一半。"""
+        pin = getattr(self, "_tw_ma_arm_pins", {}).get((str(stock_code), report_language))
+        if pin and time.monotonic() - pin[0] < _TW_MA_ARM_PIN_SECONDS:
+            return pin[1]
         if not self._tw_ma_ab_eligible(stock_code, report_language):
             return False
-        day = _dt.now(ZoneInfo("Asia/Taipei")).date()
-        return _tw_ma_ab_treated(stock_code, self._tw_ma_ab_ratio(), day)
+        return _tw_ma_ab_treated(stock_code, self._tw_ma_ab_ratio(), _taipei_today())
+
+    def _pin_tw_ma_arm(self, stock_code: Any, report_language: str) -> None:
+        pins = self.__dict__.setdefault("_tw_ma_arm_pins", {})
+        key = (str(stock_code), report_language)
+        now = time.monotonic()
+        for k in [k for k, (t, _) in pins.items() if k == key or now - t >= _TW_MA_ARM_PIN_SECONDS]:
+            del pins[k]      # 長駐行程裡不無限累積
+        pins[key] = (now, self._tw_ma_weighted_active(stock_code, report_language))
 
     def _get_analysis_system_prompt(self, report_language: str, stock_code: str = "") -> str:
         """Build the analyzer system prompt with output-language guidance."""
@@ -3862,6 +3882,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         code = context.get('code', 'Unknown')
         config = self._get_runtime_config()
         report_language = normalize_report_language(getattr(config, "report_language", "zh"))
+        self._pin_tw_ma_arm(code, report_language)
         system_prompt = self._get_analysis_system_prompt(report_language, stock_code=code)
         skill_instructions, default_skill_policy, use_legacy_default_prompt = self._get_skill_prompt_sections()
 

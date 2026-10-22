@@ -49,7 +49,8 @@ def _fetch_cached(as_of_iso: str) -> Optional[Dict[str, Any]]:
     if hit and (hit[1] or time.monotonic() - hit[0] < _RETRY_SECONDS):
         return hit[2]
     live = _fetch(as_of_iso)
-    complete = bool(live) and not any(live["risk_down"].values())
+    # 處置／注意名單或事件來源（除權息、法說會）有任一份這輪不可用，就只沿用 30 分鐘
+    complete = bool(live) and not any(live["risk_down"].values()) and not live.get("event_down")
     if as_of_iso not in _cache and len(_cache) >= 4:
         _cache.pop(next(iter(_cache)))
     _cache[as_of_iso] = (time.monotonic(), complete, live)
@@ -78,6 +79,7 @@ def _fetch(as_of_iso: str) -> Optional[Dict[str, Any]]:
             "risk_down": {m: [s.name for s in risk_statuses if not s.ok and risk_flags.SOURCE_MARKET.get(s.name) == m]
                           for m in _SUFFIX_MARKET.values()},
             "by_stock": by_stock, "event_checked": events.checked_categories(event_statuses),
+            "event_down": [st.name for st in event_statuses if not st.ok],
             "revenue_deadlines": events.revenue_deadlines(window),
         }
     except Exception as exc:  # noqa: BLE001 - prompt enrichment is strictly fail-open

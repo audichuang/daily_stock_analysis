@@ -114,9 +114,10 @@ def parse_answer(text: str) -> list[dict] | None:
         return None
     if not isinstance(items, list):
         return None
-    if items and not any(isinstance(i, dict) for i in items):
-        return None  # "[1]" / "[1, 2]" is a citation marker, not an empty pick list
-    return [i for i in items if isinstance(i, dict) and i.get("name")]
+    picks = [i for i in items if isinstance(i, dict) and i.get("name")]
+    if items and not picks:
+        return None  # "[1]", "[{}]", nameless objects: not a clean "no picks", retry next run
+    return picks
 
 
 def load_index(path=INDEX) -> list[tuple[str, str, list[str]]]:
@@ -174,12 +175,16 @@ def resolve(name: str, code: str | None, index, said: str | None = None) -> tupl
     # TV-style names: "精材（精綵）" -> try each part
     parts = [_norm(p) for p in re.split(r"[（）()/／、]", name or "") if p.strip()]
     by_name = _by_name(parts, index)
-    # A number that only matched after zero-padding ("668" -> 00668) loses to a name whose code
-    # contains those digits: it was a fragment of 6668 (中揚光). Otherwise the spoken number still
-    # beats the fund name the LLM filled in ("850" with 國泰台灣領袖50 stays 00850).
-    padded_fragment = (hit and by_name and by_name[0] != hit[0] and hit[0].split(".")[0] != said_code
-                       and said_code in by_name[0].split(".")[0])
-    if hit and not padded_fragment:
+    # A number that only matched after zero-padding ("668" -> 00668) loses to the name's code, or
+    # failing that the LLM's code, when that code contains those digits: it was a fragment of 6668
+    # (中揚光). Otherwise the spoken number still beats the fund name the LLM filled in ("850" with
+    # 國泰台灣領袖50 stays 00850).
+    if hit and hit[0].split(".")[0] != said_code:
+        llm_hit = code and _by_code(code, index, pad=False)
+        alt = by_name or (llm_hit and (llm_hit[0], "code"))
+        if alt and alt[0] != hit[0] and said_code in alt[0].split(".")[0]:
+            return alt
+    if hit:
         return hit[0], "code"  # a misheard number ("5000" for 0050) falls through to the name
     if by_name:
         return by_name
@@ -246,15 +251,14 @@ def snapshot(code: str, as_of: date, engine) -> dict | None:
 
     sid = code.split(".")[0]
     px = market_repo.price_history(sid, start=as_of - timedelta(days=150), end=as_of, engine=engine)
+    # Drop NULL closes before adjusting: a NaN would journal as NaN (breaks every later json.loads),
+    # and adjusting first would anchor the multipliers on the dropped day.
+    px = px[pd.to_numeric(px["close"], errors="coerce").notna()].copy()
     if px.empty:
         return None
     px["date"] = pd.to_datetime(px["date"])
     close = pd.to_numeric(px["close"], errors="coerce") * \
         market_repo.front_adjust_multipliers(sid, px["date"], engine=engine).to_numpy()
-    valid = close.notna().to_numpy()  # a NULL close would journal NaN, which breaks every later json.loads
-    close, px = close[valid], px[valid]
-    if px.empty:
-        return None
     last = float(close.iloc[-1])
 
     def pct(a, b):
@@ -321,6 +325,20 @@ def process(ep: dict, nb_id: str, index, engine) -> list[dict]:
     return rows
 
 
+def _single_run_lock():
+    """Non-blocking process lock; None when another run holds it. Kept open for the process lifetime."""
+    import fcntl
+    import tempfile
+
+    f = open(Path(tempfile.gettempdir()) / "tw_media_picks.lock", "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return f
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--since", type=date.fromisoformat, default=date.today() - timedelta(days=2),
@@ -329,6 +347,10 @@ def main(argv=None):
     ap.add_argument("--no-data", action="store_true", help="不連 market schema")
     args = ap.parse_args(argv)
 
+    lock = _single_run_lock()
+    if lock is None:
+        print("另一個 media-picks 正在跑，這次不執行（重疊會把同一集寫進 journal 兩次）", file=sys.stderr)
+        return 0
     eps = new_episodes(args.since, already_done())
     print(f"新集數 {len(eps)}：")
     for e in eps:

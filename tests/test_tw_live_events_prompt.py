@@ -221,3 +221,21 @@ def test_complete_result_is_kept_for_the_whole_day(monkeypatch):
     assert live_mod.load_tw_live_events("2026-10-20") is not None
     assert len(calls) == n
 
+
+
+@pytest.mark.parametrize("broken", ["risk", "event"])
+def test_incomplete_result_is_retried_after_window(monkeypatch, broken):
+    # 有一份名單（或除權息來源）這輪不可用：不能整天沿用缺這份的結果
+    clock = [1000.0]
+    monkeypatch.setattr(live_mod.time, "monotonic", lambda: clock[0])
+    url = risk_flags.TPEX_ATTENTION_URL if broken == "risk" else events.TWT48U_URL
+    calls = _install(monkeypatch, overrides={url: _resp(b"<html>maintenance</html>")})
+    first = live_mod.load_tw_live_events("2026-10-20")
+    assert first is not None
+    assert (any(first["risk_down"].values()) if broken == "risk" else first["event_down"])
+    n = len(calls)
+    assert live_mod.load_tw_live_events("2026-10-20") is first     # 窗口內沿用
+    assert len(calls) == n
+    clock[0] += live_mod._RETRY_SECONDS + 1
+    live_mod.load_tw_live_events("2026-10-20")
+    assert len(calls) > n                                            # 過了窗口重抓

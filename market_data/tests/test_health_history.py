@@ -261,8 +261,11 @@ def test_report_lists_tpex_thin_days_separately(capsys):
     # 上櫃融資／估值不在 REVISED_SOURCES：半套日寫進去就凍結，上市的 thin 稽核又只看 market IS NULL
     days = _days((1, 21), (1, 22), (1, 23), (1, 26), (1, 27), (1, 28))
     half = [(d, 400 if d == _D(2026, 1, 23) else 800) for d in days]
-    engine, _ = _engine(first=[("FROM market.margin WHERE true AND market = :market GROUP BY", half)])
+    engine, calls = _engine(first=[("FROM market.margin WHERE true AND market = :market GROUP BY", half)])
     result = health.report(engine, now=_NOW, is_session=_is_session)
+    # 假連線不檢查參數：少傳 :market 時真的 Postgres 會直接拋例外、health --strict 整個崩
+    tpex_calls = [p for sql, p in calls if "AND market = :market GROUP BY" in sql]
+    assert len(tpex_calls) == 3 and all(p == {"market": "tpex"} for p in tpex_calls)
     assert result["thin_days_tpex"]["margin"] == [("2026-01-23", 400)]
     assert result["thin_days_tpex"]["institutional"] == []
     assert result["thin_days"]["margin"] == []          # 上市稽核不受影響

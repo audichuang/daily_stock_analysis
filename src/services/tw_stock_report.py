@@ -461,6 +461,17 @@ def data_stamp(p):
     ))
 
 
+def _coverage(p):
+    """報告專屬的完整度（看板的資料包不查分點，所以不放進 data_stamp）：分點有沒有拿到、哪些段讀取失敗。"""
+    branch = (p.get("chips") or {}).get("branch") or {}
+    return {"branch": bool(branch.get("day") or branch.get("five_sessions")), "errors": sorted(p.get("errors") or [])}
+
+
+def _more_complete(now, before):
+    before = before or {}
+    return (now["branch"] and not before.get("branch")) or set(now["errors"]) < set(before.get("errors") or [])
+
+
 def cached_narrative(p, generate, cache_dir):
     """同一檔、同一資料基準日只呼叫一次 LLM；結果存在 cache_dir，重啟不重算。
 
@@ -471,8 +482,9 @@ def cached_narrative(p, generate, cache_dir):
         if path.exists():
             nar = json.loads(path.read_text(encoding="utf-8"))
             fresh = not nar.get("unverified") or time.time() - path.stat().st_mtime < _UNVERIFIED_TTL_SECONDS
+            # 分點晚到、或上次有段讀取失敗而這次讀到了：舊解讀寫的是「無資料」，要重寫
             if (nar.get("check_version") == NARRATIVE_CHECK_VERSION and fresh
-                    and nar.get("data_stamp") == data_stamp(p)):
+                    and nar.get("data_stamp") == data_stamp(p) and not _more_complete(_coverage(p), nar.get("coverage"))):
                 return nar
         nar = parse_narrative(generate(narrative_prompt(p)))
         if nar:
@@ -482,6 +494,7 @@ def cached_narrative(p, generate, cache_dir):
                 nar["unverified"] = bad
             nar["check_version"] = NARRATIVE_CHECK_VERSION
             nar["data_stamp"] = data_stamp(p)
+            nar["coverage"] = _coverage(p)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(nar, ensure_ascii=False), encoding="utf-8")
         return nar

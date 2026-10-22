@@ -240,6 +240,52 @@ def test_cache_is_rewritten_when_same_day_data_changes(monkeypatch, tmp_path):
     assert len(calls) == 2
 
 
+def test_cache_is_rewritten_when_branch_arrives_or_a_section_recovers(tmp_path):
+    calls = []
+
+    def gen(prompt):
+        calls.append(prompt)
+        return json.dumps(GOOD)
+
+    p = {**EMPTY, "chips": {"branch": {"day": None, "five_sessions": None}}, "errors": ["合約負債"]}
+    report.cached_narrative(p, gen, tmp_path)
+    report.cached_narrative(p, gen, tmp_path)
+    assert len(calls) == 1
+    with_branch = {**p, "chips": {"branch": {"day": {"buy": []}, "five_sessions": None}}}
+    report.cached_narrative(with_branch, gen, tmp_path)          # 分點晚到
+    assert len(calls) == 2
+    report.cached_narrative({**with_branch, "errors": []}, gen, tmp_path)    # 失敗的段落這次讀到了
+    assert len(calls) == 3
+    report.cached_narrative({**with_branch, "errors": []}, gen, tmp_path)
+    assert len(calls) == 3
+    # 反方向（這次分點反而沒拿到）不重寫，沿用較完整的舊解讀
+    report.cached_narrative({**p, "errors": []}, gen, tmp_path)
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("path", [
+    ("fundamentals", "monthly_revenue"), ("fundamentals", "quarters"), ("chips", "institutional"),
+    ("chips", "margin"), ("chips", "holding"), ("valuation",), ("smc",),
+])
+def test_data_stamp_changes_with_every_cited_section(path):
+    base = {"fundamentals": {"monthly_revenue": [{"month": "2026-08"}], "quarters": [{"quarter": "2026Q2"}]},
+            "chips": {k: {"as_of": "2026-10-21"} for k in ("institutional", "margin", "holding")},
+            "valuation": {"as_of": "2026-10-21"}, "smc": {"price": 100.0}}
+    changed = json.loads(json.dumps(base))
+    node = changed
+    for k in path[:-1]:
+        node = node[k]
+    leaf = node[path[-1]]
+    if isinstance(leaf, list):
+        leaf.append({"month": "2026-09", "quarter": "2026Q3"})
+    elif "as_of" in leaf:
+        leaf["as_of"] = "2026-10-22"
+    else:
+        leaf["price"] = 101.0
+    assert report.data_stamp(changed) != report.data_stamp(base)
+    assert report.data_stamp(json.loads(json.dumps(base))) == report.data_stamp(base)
+
+
 def test_written_unit_must_be_the_converted_value():
     # 「3,765,466 億」數字等於千元原值，但單位差了十萬倍
     p = {**EMPTY, "fundamentals": {"monthly_revenue": [{"revenue_k": 3765466}], "quarters": []}}

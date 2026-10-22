@@ -280,3 +280,13 @@ def test_negative_eps_base_keeps_revision_sign(fy1, up30, down30, pct, direction
     c, _ = _fetch(_ticker(fy1=fy1, up30=up30, down30=down30))
     assert c["eps_fy1_rev_30d_pct"] == pytest.approx(pct)
     assert c["eps_fy1_revision_direction"] == direction
+
+
+def test_cache_recomputes_status_and_upside_for_each_ref_price():
+    # 同一天第二次分析時價格漲了 9%：不能沿用第一次的 status=ok 與上檔空間
+    first, m = _fetch(_ticker(), ref_price=2420.0)
+    with patch("yfinance.Ticker") as again:
+        second = ac.fetch_analyst_consensus("2330.TW", ref_price=2640.0)
+    assert again.call_count == 0                       # 仍然只抓一次
+    assert first["status"] == "ok" and second["status"] == "stale"
+    assert second != first

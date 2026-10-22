@@ -16,6 +16,8 @@ except ModuleNotFoundError:
     ensure_litellm_stub()
 
 from src.agent.skills.defaults import CORE_TRADING_SKILL_POLICY_ZH
+import datetime as dt
+
 from src.analyzer import TW_MA_CONTROL_VARIANT, TW_MA_WEIGHTED_VARIANT, GeminiAnalyzer, _tw_ma_ab_treated
 from tests.test_analyzer_prompt_language import _make_analyzer, _rich_context
 
@@ -133,7 +135,8 @@ def test_on_does_not_touch_non_tw_or_english(code, language):
     assert _user_prompt(_analyzer(True), code, language) == _user_prompt(_analyzer(False), code, language)
 
 
-def _analyze_dashboard(weighted: bool, code: str = "2330.TW", prompt_variant: str = "baseline", ab_ratio: float = 1.0):
+def _analyze_dashboard(weighted: bool, code: str = "2330.TW", prompt_variant: str = "baseline", ab_ratio: float = 1.0,
+                       sent: list = None):
     analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
     analyzer._router = None
     analyzer._litellm_available = True
@@ -155,7 +158,9 @@ def _analyze_dashboard(weighted: bool, code: str = "2330.TW", prompt_variant: st
     context["code"] = code
     with patch("src.analyzer.get_config", return_value=analyzer._config_override), \
             patch.object(GeminiAnalyzer, "_tw_institutional_trend_lines", return_value=""), \
-            patch.object(analyzer, "generate", return_value=(response, "m", {}), create=True):
+            patch.object(analyzer, "generate", create=True,
+                         side_effect=lambda *a, **k: (sent.append((a, k)) if sent is not None else None)
+                         or (response, "m", {})):
         result = analyzer.analyze(context, news_context="n")
     return result.dashboard
 
@@ -203,3 +208,42 @@ def test_ab_tag_follows_the_system_prompt_actually_sent():
     # 系統提示詞分到加權組、之後重算換組（例如跨午夜）：標籤仍要跟送出的提示詞
     with patch("src.analyzer._tw_ma_ab_treated", side_effect=[True] + [False] * 10):
         assert _analyze_dashboard(True, ab_ratio=0.5)["prompt_variant"] == TW_MA_WEIGHTED_VARIANT
+
+
+# ---- 不 mock 分組函式：比例、台北日期、整次分析同一組這三條接線 ----
+
+def test_ab_ratio_from_config_drives_the_split():
+    assert _analyze_dashboard(True, ab_ratio=0.0)["prompt_variant"] == TW_MA_CONTROL_VARIANT
+    assert _analyze_dashboard(True, ab_ratio=1.0)["prompt_variant"] == TW_MA_WEIGHTED_VARIANT
+    # nan 讓每個比較都為假：不能變成「全進對照組又不打標」，當成 1 處理
+    assert _analyze_dashboard(True, ab_ratio=float("nan"))["prompt_variant"] == TW_MA_WEIGHTED_VARIANT
+
+
+def test_ab_split_uses_the_taipei_date():
+    day = dt.date(2026, 10, 23)
+    analyzer = _analyzer(True)
+    analyzer._config_override.tw_ma_alignment_ab_ratio = 0.5
+    codes = [f"{n:04d}.TW" for n in range(1100, 1140)]
+    with patch("src.analyzer._taipei_today", return_value=day):
+        got = [analyzer._tw_ma_weighted_active(c, "zh-TW") for c in codes]
+    assert got == [_tw_ma_ab_treated(c, 0.5, day) for c in codes]
+    assert any(got) and not all(got)
+
+
+def _flips(day1, day2):
+    return next(f"{n:04d}.TW" for n in range(1000, 2000)
+                if _tw_ma_ab_treated(f"{n:04d}.TW", 0.5, day1) and not _tw_ma_ab_treated(f"{n:04d}.TW", 0.5, day2))
+
+
+def test_one_analysis_keeps_one_arm_across_midnight():
+    # system prompt 在 23:59 組、user prompt 在 00:00 組：兩邊必須同組，標籤也跟著
+    d1, d2 = dt.date(2026, 10, 22), dt.date(2026, 10, 23)
+    code, sent = _flips(d1, d2), []
+    with patch("src.analyzer._taipei_today", side_effect=[d1] + [d2] * 20):
+        dash = _analyze_dashboard(True, code=code, ab_ratio=0.5, sent=sent)
+    text = json.dumps(sent, ensure_ascii=False, default=str)
+    assert dash["prompt_variant"] == TW_MA_WEIGHTED_VARIANT
+    assert _NEW_MARKER in text
+    assert "為加分項" in text                  # user prompt 也是加權版
+    for line in _OLD_USER_LINES:
+        assert line not in text

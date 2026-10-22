@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Dict, Optional, Tuple
 
 from data_provider.yfinance_fundamental_adapter import _convert_to_yf_symbol, _safe_float
@@ -29,7 +30,7 @@ _MAX_PRICE_GAP = 0.03
 _MAX_ABS_REVISION_PCT = 50.0  # 超過視為基期異常（如 90 天前 EPS≈0），該欄設 None
 
 # ponytail: 程序級快取、以 (symbol, 日期) 為 key，只長不清；一天幾十檔無所謂，常駐服務跨日才會累積
-_CACHE: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
+_CACHE: Dict[Tuple[str, str], Any] = {}      # (symbol, 日期) -> yfinance 原始資料快照
 _CACHE_LOCK = threading.Lock()
 
 
@@ -187,18 +188,25 @@ def fetch_analyst_consensus(stock_code: str, ref_price: Any = None) -> Optional[
         ref_price = None
     key = (symbol, _today().isoformat())
     with _CACHE_LOCK:
-        if key in _CACHE:
-            return _CACHE[key]
+        snap = _CACHE.get(key)
     try:
-        import yfinance as yf
+        if snap is None:
+            import yfinance as yf
 
-        result = _build(yf.Ticker(symbol), ref_price)
+            snap = _snapshot(yf.Ticker(symbol))
+            with _CACHE_LOCK:
+                _CACHE[key] = snap
+        # 快取的是 yfinance 原始資料；status 與上檔空間每次用這次的參考價重算（長駐的 Web 盤中重複分析時價格會變）
+        return _build(snap, ref_price)
     except Exception as exc:  # noqa: BLE001 - fail-open by design
         logger.info("[consensus] %s fetch failed: %s", symbol, exc)
         return None  # 失敗不進快取，下次重試
-    with _CACHE_LOCK:
-        _CACHE[key] = result
-    return result
+
+
+def _snapshot(ticker: Any) -> SimpleNamespace:
+    """一次讀完 _build 用到的 yfinance 屬性（每個屬性都會連網）。"""
+    return SimpleNamespace(**{k: getattr(ticker, k, None) for k in
+                              ("info", "eps_trend", "eps_revisions", "earnings_estimate", "recommendations")})
 
 
 def _fmt(value: Any, suffix: str = "", signed: bool = False) -> str:
