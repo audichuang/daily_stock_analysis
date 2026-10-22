@@ -207,17 +207,14 @@ def valuation(p, nar):
     return _section("💰", "估值", f'<div class="card">{body}</div>')
 
 
+_LEVEL_COLOR = {"bsl": "muted", "ssl": "down", "fvg": "neutral", "ote": "accent"}
+
+
 def _ladder_levels(s):
-    price = s["price"]
-    lv = [("BSL 上方流動性", x, x, "muted") for x in s["bsl"]]
-    lv += [("SSL 下方流動性", x, x, "down") for x in s["ssl"]]
-    lv += [(f'{"多頭" if o["direction"] == "bullish" else "空頭"} OB', o["low"], o["high"],
-            "down" if o["direction"] == "bullish" else "up") for o in s["order_blocks"]]
-    lv += [("FVG 未回補", g["low"], g["high"], "neutral") for g in s["fvgs"]]
-    if s.get("fib"):
-        lv.append(("OTE 進場區", s["fib"]["ote_low"], s["fib"]["ote_high"], "accent"))
-    # 只畫現價 ±30% 內的價位，太遠的壓縮圖面
-    return [x for x in lv if abs(x[2] / price - 1) <= 0.3 or abs(x[1] / price - 1) <= 0.3]
+    from src.services.tw_stock_watch import smc_levels
+
+    return [(x["label"], x["low"], x["high"], _LEVEL_COLOR.get(x["kind"]) or ("down" if x["bias"] == "bull" else "up"))
+            for x in smc_levels(s)]
 
 
 def _ladder(s):
