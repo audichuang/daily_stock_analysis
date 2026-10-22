@@ -7,7 +7,7 @@ description: 判断一个 GitHub Issue 是否成立、属不属于本仓库责�
 
 分析 GitHub Issue，判断其真实性、优先级、仓库责任边界与建议动作。
 
-**Repository**: https://github.com/ZhuLinsen/daily_stock_analysis/issues
+**Repository**：本 fork（`gh repo set-default --view`）。下方指令不帶 `--repo`，由 gh 的預設 repo 解析。
 
 ## Usage
 
@@ -26,8 +26,8 @@ description: 判断一个 GitHub Issue 是否成立、属不属于本仓库责�
 ### Step 2: 拉取 Issue 信息
 
 ```bash
-gh issue view <issue_number> --repo ZhuLinsen/daily_stock_analysis
-gh issue view <issue_number> --repo ZhuLinsen/daily_stock_analysis --comments
+gh issue view <issue_number>
+gh issue view <issue_number> --comments
 ```
 
 如为 bug，优先核对 issue 模板中是否提供了以下信息：
@@ -108,7 +108,7 @@ gh issue view <issue_number> --repo ZhuLinsen/daily_stock_analysis --comments
 
 <建议修复、澄清或关闭方式>
 
-若建议后续创建 PR，给出的 PR title 建议符合 `AGENTS.md`：使用 `<类型>: <修改内容>`，不添加 `[codex]`、`codex`、`autocode`、`copilot` 或其他工具/agent 来源前缀；该约定仅用于协作一致性提醒，不应单独作为 review process blocker。
+若建议后续创建 PR，给出的 PR title 建议符合 `.github/copilot-instructions.md`：使用 `<类型>: <修改内容>`，不添加 `[codex]`、`codex`、`autocode`、`copilot` 或其他工具/agent 来源前缀；该约定仅用于协作一致性提醒，不应单独作为 review process blocker。
 
 ## Risks And Rollback
 

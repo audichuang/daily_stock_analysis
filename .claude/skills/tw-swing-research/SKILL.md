@@ -232,7 +232,7 @@ down=-0.18` 算出 +0.234 而放行，正確答案是 **-0.054、應該 pass**�
 - 每檔一行、上述欄位齊全。
 - `enter` 的每一檔都有 `entry_range`、`invalidation`、`invalidation_legs`、`exp_upside`、`exp_downside`、`theme`。
 - 每一腿都有 `source`，而且都已經在寫入當下查過是否成立。
-- 最後**提醒使用者今天就把 `journal/` commit 掉**。你不能自己 commit，而這份預測只有在結果出來之前
+- 最後**今天就把這幾行 commit＋push 到 `develop`**（只 add `journal/swing-decisions.jsonl`，AGENTS §1）。這份預測只有在結果出來之前
   就進版控才有意義（理由見 `journal/README.md`）；晚 10 天才 commit 的那兩筆就失去了這個保證。
 
 ## 邊界

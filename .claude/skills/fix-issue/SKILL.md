@@ -7,7 +7,7 @@ description: 按 issue 分析结论实现修复，并补齐验证、风险与回
 
 基于 issue 分析结果实现修复，并按仓库规则补齐验证、风险与回滚说明。
 
-**Repository**: https://github.com/ZhuLinsen/daily_stock_analysis
+**Repository**：本 fork（`gh repo set-default --view`）。
 
 ## Usage
 
@@ -88,6 +88,6 @@ description: 按 issue 分析结论实现修复，并补齐验证、风险与回
 
 阅读与分析代码、应用与当前任务直接相关的最小修复、运行非破坏性的本地验证、更新本地 issue 分析文档，以及 [`../shared/baseline-sync.md`](../shared/baseline-sync.md) 允许的 fast-forward 同步。
 
-其余操作（建分支、切分支、`git commit`、`git push`、创建 PR、在 issue 下回复或关闭）按同一份文件的确认边界——一律先问。
+建分支、`git commit`、`git push`、建立 PR、CI 綠後合進 `develop` 可自主（確認邊界見同一份文件）。
 
 修完后收到 review 反馈要继续改时，走 skill `respond-to-review`。

@@ -7,7 +7,7 @@ description: 审查 GitHub Pull Request 的必要性、验证证据、兼容性�
 
 分析 GitHub Pull Request，评估必要性、描述完整性、验证证据、主要风险与是否可直接合入。
 
-**Repository**: https://github.com/ZhuLinsen/daily_stock_analysis/pulls
+**Repository**：本 fork（`gh repo set-default --view`）。下方指令不帶 `--repo`，由 gh 的預設 repo 解析。
 
 ## Usage
 
@@ -28,10 +28,10 @@ description: 审查 GitHub Pull Request 的必要性、验证证据、兼容性�
 ### Step 2: 拉取 PR 基本信息
 
 ```bash
-gh pr view <pr_number> --repo ZhuLinsen/daily_stock_analysis
-gh pr view <pr_number> --repo ZhuLinsen/daily_stock_analysis --comments
-gh pr checks <pr_number> --repo ZhuLinsen/daily_stock_analysis
-gh pr diff <pr_number> --repo ZhuLinsen/daily_stock_analysis
+gh pr view <pr_number>
+gh pr view <pr_number> --comments
+gh pr checks <pr_number>
+gh pr diff <pr_number>
 ```
 
 如有失败的 CI，优先查看失败日志，而不是立刻在本地重跑全部检查：
@@ -157,4 +157,4 @@ gh run view <run_id> --log-failed
 
 拉取 PR 元数据 / diff / 评论 / CI 状态、阅读代码与模板、执行 Step 4 的最小化本地验证、生成评审文档，以及 [`../shared/baseline-sync.md`](../shared/baseline-sync.md) 允许的 fast-forward 同步。
 
-改变远端状态的操作（发布评论、approve、request changes、merge、关闭 PR）按同一份文件的确认边界执行——一律先问。
+本 fork 自己的 PR 在 CI 綠後可直接 merge 進 `develop`；在上游 repo 上的任何操作先問（確認邊界見同一份文件）。

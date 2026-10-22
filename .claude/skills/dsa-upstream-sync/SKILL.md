@@ -89,7 +89,7 @@ git -C $REPO worktree add --detach ~/.cache/dsa-upstream-sync/$DATE-up upstream/
 git push origin HEAD:refs/heads/chore/upstream-sync-$DATE
 ```
 
-不開 PR（fork 不開 PR，§9）。推上去的未合併分支就是下一輪 precheck 的鎖。
+不開 PR：這是無人值守排程，交付物只有待審分支；要不要開 PR、何時合進 `develop` 由使用者審過後決定（§9）。推上去的未合併分支就是下一輪 precheck 的鎖。
 
 ## 6. Bark
 

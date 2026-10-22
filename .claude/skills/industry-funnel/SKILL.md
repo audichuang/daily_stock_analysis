@@ -15,22 +15,22 @@ description: "行業漏斗選股：從一個行業或主題篩出候選池，逐
 
 ## Instructions
 
-> **前置**：用到 `curl localhost:8000/api/...` 的步驟需先啟動服務（`make serve`，本 fork 走 doppler 注入）；`main.py --debug` 取數步驟是 CLI、不需服務。服務未開時請改用對應 CLI 或先 `make serve`。
+> **前置**：用到 `curl localhost:8000/api/...` 的步驟需本機服務，用 `make serve-local`（不經 Doppler，所以不會登入 Shioaji、不和 NAS 搶同一組金鑰）；不要用 `make serve`（AGENTS §10）。`main.py --debug` 取數步驟是 CLI、不需服務。
 
-### Step 1: 取候選池（先用 AlphaSift，缺再補）
+### Step 1: 取候選池（先用內建選股，缺再補）
 
-優先用 repo 既有 AlphaSift 選股（外部 optional 套件，未裝會降級）：
+優先用 repo 內建選股（`src/services/screening/`，衍生自 AlphaSift；可用狀態看 `GET /api/v1/screening/status`）：
 
 ```bash
 # 列可用策略
-curl -s http://localhost:8000/api/v1/alphasift/strategies
+curl -s http://localhost:8000/api/v1/screening/strategies
 # 跑篩選（strategy/market/max_results）
-curl -s -X POST http://localhost:8000/api/v1/alphasift/screen \
+curl -s -X POST http://localhost:8000/api/v1/screening/screen \
   -H 'Content-Type: application/json' \
   -d '{"strategy":"dual_low","market":"<市場>","max_results":30}'
 ```
 
-- AlphaSift 不可用（未裝/未注入）→ 改用 WebSearch + 行業龍頭知識，手動列出該行業 15-30 檔候選（含代碼），並在報告標明「候選來源：人工」。
+- 選股不可用（`status` 回報不可用或請求失敗）→ 改用 WebSearch + 行業龍頭知識，手動列出該行業 15-30 檔候選（含代碼），並在報告標明「候選來源：人工」。
 - 台股優先用本地種子（`scripts/stock_index_seeds/stock_list_tw.csv`）核對代碼正確性。
 
 ### Step 2: 粗篩（量化門檻，砍掉明顯不合格）

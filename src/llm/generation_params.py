@@ -185,12 +185,20 @@ def _matches_model_family(model: str, family: str) -> bool:
     return any(part == family or part.startswith(f"{family}-") for part in _model_parts(model))
 
 
+# Claude Opus 4.7 之後的模型只接受預設取樣參數，送非預設 temperature 會 400（errors.py 會再重試一次）；
+# 直接省略，省掉每個行程第一次的失敗請求。Sonnet 4.6／Haiku 4.5 仍接受，不在此列。
+_DEFAULT_SAMPLING_ONLY_CLAUDE_RE = re.compile(
+    r"claude-(?:opus-4-[78]|(?:opus|sonnet|haiku|fable|mythos)-5)(?![0-9])"
+)
+
+
 def _should_omit_litellm_temperature(model: str) -> bool:
     """Return whether a model family should rely on the provider default temperature."""
     return any(
         part.startswith(("gpt-5", "gpt5"))
         or part in {"o1", "o3", "o4"}
         or part.startswith(("o1-", "o3-", "o4-"))
+        or _DEFAULT_SAMPLING_ONLY_CLAUDE_RE.search(part) is not None
         for part in _model_parts(model)
     )
 
