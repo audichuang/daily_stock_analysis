@@ -13,6 +13,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from measure_revenue_momentum import (  # noqa: E402
+    candidate_yoy_frame,
     effective_announce,
     month_diffs,
     revenue_features,
@@ -95,3 +96,16 @@ def test_month_diffs_sign_and_missing_arm():
     d = month_diffs(df, "f")
     assert list(d.index) == [pd.Timestamp("2020-01-01")]  # 2 月缺「無旗標」臂 → 不算
     assert np.isclose(d.iloc[0], -0.03 - 0.02)
+
+
+def test_candidate_panel_uses_extended_deadline_not_placeholder():
+    # 2020-01 營收展延到 2/15：候選池那份 yoy 面板不能用 DB 佔位日 2/10 提前看到
+    rv = pd.DataFrame({
+        "stock_id": ["2330", "2330", "2454"],
+        "revenue_month": pd.to_datetime(["2020-01-01", "2020-02-01", "2020-01-01"]),
+        "announce_date": pd.to_datetime(["2020-02-10", "2020-03-10", "2020-02-10"]),
+        "yoy": [25.0, 30.0, None],
+    })
+    out = candidate_yoy_frame(effective_announce(rv))
+    assert list(out.columns) == ["stock_id", "date", "yoy"]
+    assert out["date"].tolist() == [pd.Timestamp("2020-02-15"), pd.Timestamp("2020-03-10")]

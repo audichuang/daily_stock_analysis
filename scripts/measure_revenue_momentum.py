@@ -63,6 +63,12 @@ def effective_announce(rv):
     return out
 
 
+def candidate_yoy_frame(rv):
+    """候選池用的 (stock_id, date, yoy)：date 取 effective_announce 之後的公告日。"""
+    return rv.dropna(subset=["yoy"])[["stock_id", "announce_date", "yoy"]].rename(
+        columns={"announce_date": "date"})
+
+
 def month_diffs(df, flag, month_col="month"):
     """逐月 mean(有旗標) − mean(無旗標)；某月缺一臂就不算那個月。"""
     d = df.dropna(subset=[flag, "r"])
@@ -175,7 +181,7 @@ def main(argv=None):
     if a.end is None:
         with eng.connect() as c:
             a.end = str(c.execute(text("select max(date) from market.price")).scalar())
-    piv, rv_yoy, _ = load(eng, a.start, a.end, a.include_otc_revenue)
+    piv, _, _ = load(eng, a.start, a.end, a.include_otc_revenue)
     keep = [s for s in piv["close"].columns
             if len(s) == 4 and s.isdigit() and not s.startswith(("00", "91"))]
     piv = {k: v[keep] for k, v in piv.items()}
@@ -195,7 +201,8 @@ def main(argv=None):
     print(f"announce_date 日期分布：{feat['announce_date'].dt.day.value_counts().head(3).to_dict()}"
           "（佔位＝10 日；展延月已改成較晚者）\n")
 
-    sig, extra = build_signals(piv, pit_revenue_panel(rv_yoy, idx, cols), a.min_turnover * 1e8,
+    # 候選池也要用修正後的公告日：load() 回的營收是 DB 佔位日，展延月（2020-01）會提前看到營收
+    sig, extra = build_signals(piv, pit_revenue_panel(candidate_yoy_frame(rv), idx, cols), a.min_turnover * 1e8,
                                0.05, 1.3, 2.0, 20.0)
     sig.loc[:pd.Timestamp(a.start)] = False
     liquid = extra["liquid"].fillna(False)

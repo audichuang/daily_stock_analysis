@@ -1432,6 +1432,25 @@ def _is_capital_flow_not_supported(reason: str) -> bool:
     return normalized == "unsupported" or "not supported" in normalized
 
 
+def _tw_institution_accepted_sessions() -> Optional[set]:
+    """可接受的三大法人資料日：最近已收盤場次與其前一場（T86 收盤後才發布，盤後到發布前仍是前一場）。"""
+    from datetime import timedelta
+
+    from src.core.trading_calendar import get_effective_trading_date, get_trading_dates
+
+    try:
+        effective = get_effective_trading_date("tw")
+        sessions = get_trading_dates("tw", effective - timedelta(days=14), effective)
+    except Exception:
+        return None
+    if sessions is None or len(sessions) == 0:
+        return None
+    recent = [ts.date() for ts in sessions[-2:]]
+    if recent[-1] != effective:
+        return None
+    return set(recent)
+
+
 def _tw_institution_flow_bias(fundamental_context: Optional[Dict[str, Any]]) -> Optional[str]:
     """台股三大法人：外資與投信同買 → inflow、同賣 → outflow、其餘 → neutral；無資料回 None。"""
     if not isinstance(fundamental_context, dict):
@@ -1440,6 +1459,17 @@ def _tw_institution_flow_bias(fundamental_context: Optional[Dict[str, Any]]) -> 
     if not isinstance(block, dict) or str(block.get("status") or "").strip().lower() != "ok":
         return None
     data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    # 官方端點會凍結卻照樣回 status=ok：資料日不是最近兩個已收盤場次（或日曆不可用、沒有日期）一律視為無資料
+    accepted = _tw_institution_accepted_sessions()
+    raw_date = str(data.get("date") or "").strip().replace("-", "")
+    from datetime import datetime as _dt
+
+    try:
+        data_date = _dt.strptime(raw_date, "%Y%m%d").date()
+    except ValueError:
+        return None
+    if not accepted or data_date not in accepted:
+        return None
     foreign = _coerce_numeric_value(data.get("foreign_net"))
     trust = _coerce_numeric_value(data.get("trust_net"))
     if foreign is None or trust is None:

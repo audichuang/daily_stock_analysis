@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Tests for structure-aware decision stability calibration."""
 
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
@@ -259,6 +260,11 @@ def tw_institution_path(monkeypatch):
         "get_config",
         lambda: SimpleNamespace(capital_flow_not_supported_downgrade=False),
     )
+    monkeypatch.setattr(
+        analyzer_module,
+        "_tw_institution_accepted_sessions",
+        lambda: {date(2026, 10, 20), date(2026, 10, 21)},
+    )
 
 
 def _tw_result(*, current_price: float = 32.0, code: str = "2330.TW") -> AnalysisResult:
@@ -267,7 +273,7 @@ def _tw_result(*, current_price: float = 32.0, code: str = "2330.TW") -> Analysi
     return result
 
 
-def _tw_context(foreign: float, trust: float, inst_status: str = "ok") -> dict:
+def _tw_context(foreign: float, trust: float, inst_status: str = "ok", inst_date: str = "20261021") -> dict:
     return {
         "capital_flow": {"status": "not_supported", "data": {}},
         "institution": {
@@ -278,7 +284,7 @@ def _tw_context(foreign: float, trust: float, inst_status: str = "ok") -> dict:
                 "dealer_net": 0,
                 "total_net": foreign + trust,
                 "unit": "shares",
-                "date": "20261021",
+                "date": inst_date,
             },
         },
     }
@@ -550,3 +556,57 @@ def test_config_capital_flow_not_supported_downgrade_defaults_to_old_behavior(en
             patch.dict("os.environ", env, clear=True):
         cfg = Config._load_from_env()
     assert cfg.capital_flow_not_supported_downgrade is expected
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+@pytest.mark.parametrize("inst_date", ["20240105", "", "not-a-date"])
+def test_tw_stale_or_undated_institution_is_ignored(inst_date) -> None:
+    # 凍結的舊法人賣超不得把買入壓成持有：資料日不在最近兩場就當沒有法人資料
+    result = _tw_result()
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(-1_000_000, -200_000, inst_date=inst_date))
+
+    assert result.decision_type == "buy"
+    assert result.sentiment_score == 70
+    assert result.dashboard["decision_stability"]["applied"] is False
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+def test_tw_previous_session_institution_is_still_used() -> None:
+    # 收盤後到 T86 發布前，資料日是前一場：仍採用（避免把新鮮度收得過嚴）
+    result = _tw_result()
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(-1_000_000, -200_000, inst_date="20261020"))
+
+    assert result.dashboard["decision_stability"]["capital_flow_bias"] == "outflow"
+
+
+def test_tw_institution_rejected_when_calendar_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        analyzer_module, "get_config", lambda: SimpleNamespace(capital_flow_not_supported_downgrade=False)
+    )
+    monkeypatch.setattr(analyzer_module, "_tw_institution_accepted_sessions", lambda: None)
+    result = _tw_result()
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(-1_000_000, -200_000))
+
+    assert result.sentiment_score == 70
+    assert result.dashboard["decision_stability"]["applied"] is False
+
+
+def test_accepted_sessions_are_last_two_completed_sessions(monkeypatch) -> None:
+    import pandas as pd
+    import src.core.trading_calendar as cal
+
+    monkeypatch.setattr(cal, "get_effective_trading_date", lambda market: date(2026, 10, 21))
+    monkeypatch.setattr(
+        cal, "get_trading_dates",
+        lambda market, s, e: pd.DatetimeIndex(["2026-10-16", "2026-10-19", "2026-10-20", "2026-10-21"]),
+    )
+    assert analyzer_module._tw_institution_accepted_sessions() == {date(2026, 10, 20), date(2026, 10, 21)}
+
+    # 日曆查不到或最後一場不是有效交易日 → 不可判定
+    monkeypatch.setattr(cal, "get_trading_dates", lambda market, s, e: None)
+    assert analyzer_module._tw_institution_accepted_sessions() is None
+    monkeypatch.setattr(cal, "get_trading_dates", lambda market, s, e: pd.DatetimeIndex(["2026-10-17", "2026-10-20"]))
+    assert analyzer_module._tw_institution_accepted_sessions() is None

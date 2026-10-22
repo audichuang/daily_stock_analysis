@@ -17,7 +17,7 @@
     others＝其餘；0050＝raw-buy 那些事件同一個進出場視窗的 0050。
   - 進場：報告日期**之後**第一個交易日的開盤（盤前報告也延到隔日，避免時區與前視疑慮）。
   - 出場（兩種都算）：(1) 第 h 個交易日收盤（進場日算第 1 天）；(2) 視窗內先碰報告的
-    stop_loss／take_profit 就出場，同日兩者都碰算停損，未碰則同 (1)。觸發比**未還原**價
+    stop_loss／take_profit 就出場，同日兩者都碰算停損，未碰則同 (1)。觸發與損益都在**還原**價空間（價位乘進場日因子）
     （報告價位是名目價），損益用前復權價。價位缺值或不滿足 stop < 進場開盤 < take 時不套價位。
   - 成本：`src/utils/tw_trade_costs.round_trip_return`（含雙邊滑價、手續費、賣方證交稅；
     00 開頭用 ETF 稅率），固定名目本金。
@@ -95,19 +95,23 @@ def trade_return(o, h, lo, c, adj, *, stop=None, take=None, tax_rate=STOCK_TRANS
     entry = o[0]
     use_levels = (stop is not None and take is not None and np.isfinite(stop) and np.isfinite(take)
                   and stop < entry < take)
+    # 報告價位是進場日的名目價：一律在還原價空間比較，窗口內除權息／分割才不會誤觸停損停利
+    stop_adj = stop * adj[0] if use_levels else None
+    take_adj = take * adj[0] if use_levels else None
     last = None
     for k in range(len(o)):
         if not np.isfinite(o[k]):
             continue
         if use_levels:
-            if lo[k] <= stop:
-                exit_raw, kind = min(o[k], stop), "stop"
-            elif h[k] >= take:
-                exit_raw, kind = max(o[k], take), "take"
+            o_adj, h_adj, lo_adj = o[k] * adj[k], h[k] * adj[k], lo[k] * adj[k]
+            if lo_adj <= stop_adj:
+                exit_adj, kind = min(o_adj, stop_adj), "stop"
+            elif h_adj >= take_adj:
+                exit_adj, kind = max(o_adj, take_adj), "take"
             else:
-                exit_raw = None
-            if exit_raw is not None:
-                return _net(entry * adj[0], exit_raw * adj[k], tax_rate, notional, fee_discount), kind
+                exit_adj = None
+            if exit_adj is not None:
+                return _net(entry * adj[0], exit_adj, tax_rate, notional, fee_discount), kind
         if np.isfinite(c[k]):
             last = k
     if last is None:

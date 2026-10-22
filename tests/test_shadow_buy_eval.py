@@ -66,11 +66,23 @@ def test_levels_not_straddling_entry_are_ignored():
     assert kind == "time" and r == pytest.approx(_rt(94, 98))
 
 
-def test_adjusted_prices_used_for_pnl_but_raw_for_triggers():
-    # 第 2 天除息：前復權因子 0.5→1；觸發看未還原 low（不觸發 stop=40），損益用還原價
+def test_adjusted_prices_used_for_pnl_and_triggers():
+    # 第 2 天除息：前復權因子 0.5→1；價位換到還原空間（stop=40→20）不觸發，損益用還原價
     r, kind = trade_return(*_bars([100, 51], [101, 53], [99, 50], [100, 52], adj=[0.5, 1.0]),
                            stop=40, take=200)
     assert kind == "time" and r == pytest.approx(_rt(50, 52))
+
+
+def test_split_inside_window_does_not_fake_a_stop():
+    # 第 2 天 1 拆 4：未還原開盤 100→25，經濟上沒虧；名目 stop=95 不可因此觸發，之後 +20% 才停利
+    adj = [0.25, 1.0, 1.0]
+    bars = _bars([100, 25, 27], [101, 26, 30.5], [99, 24.5, 26.5], [100, 25.5, 30], adj=adj)
+    r, kind = trade_return(*bars, stop=95, take=120)
+    assert kind == "take" and r == pytest.approx(_rt(25, 30))
+    # 反向：真的跌破還原後的停損仍要停損
+    drop = _bars([100, 23, 22], [101, 24, 23], [99, 22.5, 21], [100, 23, 22], adj=adj)
+    r, kind = trade_return(*drop, stop=95, take=120)
+    assert kind == "stop" and r == pytest.approx(_rt(25, 23))
 
 
 def test_suspended_entry_day_returns_none():
