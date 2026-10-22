@@ -65,7 +65,7 @@ describe('RealtimeBoardPage scope', () => {
       totals: [], navError: null,
     });
     getIndices.mockResolvedValue([]);
-    getDossierSummaries.mockResolvedValue([]);
+    getDossierSummaries.mockResolvedValue({ items: [], levelAlertsEnabled: false });
     getQuotes.mockImplementation((codes: string[]) =>
       Promise.resolve(codes.map((c) => quote(c, c === '2330.TW' ? 1000 : c === '2887.TW' ? 40 : 200))),
     );
@@ -109,13 +109,13 @@ describe('RealtimeBoardPage scope', () => {
 
   it('asks the dossier summary only for TW codes and shows the structure column', async () => {
     getDossierSummaries.mockImplementation((codes: string[]) =>
-      Promise.resolve(codes.map((c) => ({
+      Promise.resolve({ levelAlertsEnabled: false, items: codes.map((c) => ({
         stockCode: c,
         summary: c === '2330.TW'
           ? { asOf: '2026-10-21', close: 990, structure: { kind: 'BOS', bias: 'bull', date: '2026-10-05', level: 950 },
               levels: [{ label: 'OB', low: 940, high: 960, kind: 'ob', bias: 'bull' }], changes: [], verdicts: null }
           : null,
-      }))),
+      })) }),
     );
     renderPage();
     await waitFor(() => expect(getDossierSummaries).toHaveBeenCalled());

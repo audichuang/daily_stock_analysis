@@ -209,6 +209,7 @@ const RealtimeBoardPage: React.FC = () => {
   const [error, setError] = useState<ParsedApiError | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [dossier, setDossier] = useState<Record<string, DossierSummary | null>>({});
+  const [levelAlertsEnabled, setLevelAlertsEnabled] = useState(false);
   const [indices, setIndices] = useState<MarketIndex[]>([]);
   const codesRef = useRef<string[]>([]);
   const refreshSeqRef = useRef(0); // 世代守卫：丢弃旧轮询迟到的 chunk，避免覆盖更新的数据
@@ -304,8 +305,9 @@ const RealtimeBoardPage: React.FC = () => {
     for (let i = 0; i < tw.length; i += DOSSIER_CHUNK) {
       stocksApi
         .getDossierSummaries(tw.slice(i, i + DOSSIER_CHUNK))
-        .then((items) => {
+        .then(({ items, levelAlertsEnabled: enabled }) => {
           if (!active) return;
+          setLevelAlertsEnabled(enabled);
           setDossier((prev) => {
             const next = { ...prev };
             for (const it of items) next[it.stockCode] = it.summary;
@@ -643,7 +645,13 @@ const RealtimeBoardPage: React.FC = () => {
                       {isOpen ? (
                         <tr className="border-b border-border/50 bg-base/40">
                           <td colSpan={12}>
-                            <BoardDossierPanel code={code} name={q?.stockName} summary={dossier[code]} price={q?.currentPrice} />
+                            <BoardDossierPanel
+                              code={code}
+                              name={q?.stockName}
+                              summary={dossier[code]}
+                              price={q?.currentPrice}
+                              levelAlertsEnabled={levelAlertsEnabled}
+                            />
                             {quoteDetail(q)}
                             <TrendChart code={code} />
                           </td>

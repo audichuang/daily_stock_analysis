@@ -99,6 +99,31 @@ class DossierSummaryResponse(BaseModel):
     """看板四維度摘要批次響應"""
 
     items: List[DossierSummaryItem] = Field(default_factory=list, description="按請求代碼順序")
+    level_alerts_enabled: bool = Field(False, description="TW_LEVEL_ALERTS_ENABLED；false 時看板不顯示「建立價位警報」")
+
+
+class LevelPick(BaseModel):
+    """看板上顯示的一個 SMC 價位（伺服器會比對它確實是這檔今天的價位）"""
+
+    label: str = Field(..., max_length=32)
+    low: float
+    high: float
+    kind: Literal["bsl", "ssl", "ob", "fvg", "ote"]
+    bias: Optional[Literal["bull", "bear"]] = None
+
+
+class LevelAlertRequest(BaseModel):
+    """建立台股 SMC 價位警報：support 跌破、resistance 站上；dry_run 只試算不寫入"""
+
+    support: Optional[LevelPick] = None
+    resistance: Optional[LevelPick] = None
+    dry_run: bool = False
+
+
+class LevelAlertResponse(BaseModel):
+    enabled: bool = Field(..., description="TW_LEVEL_ALERTS_ENABLED")
+    dry_run: bool
+    rules: List[Dict[str, Any]] = Field(default_factory=list, description="dry_run 時是待建立的 payload，否則是已建立的規則")
 
 
 class TrendPoint(BaseModel):
