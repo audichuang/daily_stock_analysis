@@ -11,6 +11,7 @@
 | 平日 10:00／13:00 | 持股盤中對照即時價，有觸發才推 Bark | skill `portfolio-check` |
 | 平日 18:00 | `make daily-report-detached`（`scripts/daily_report.sh`） | 本檔下兩節 |
 | 平日 19:00 | 持股：寫隔日條件式計畫（接在每日報告後） | skill `portfolio-check` |
+| 平日 23:00 | 媒體點名：`make media-picks` 抓 21 個財經頻道的完整版、寫 `journal/media-picks.jsonl`，**只** commit＋push 這個檔到 `develop`，推 Bark 摘要；一輪約 30 分鐘，`--since` 預設前天，所以晚上傳的集數隔天會補到 | `scripts/tw_media_picks.py`、`journal/README.md` |
 
 這些排程共用同一個主 checkout，手動作業別把它的 working tree 留在別的分支或髒狀態。
 
