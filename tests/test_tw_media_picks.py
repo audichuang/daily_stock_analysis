@@ -306,6 +306,16 @@ def test_defer_unsettled_keeps_only_episodes_whose_close_is_in(monkeypatch):
     assert [e["video_id"] for e in mp.defer_unsettled(eps, engine=None)] == ["a", "b"]
 
 
+def test_default_since_covers_episodes_deferred_over_a_weekend(monkeypatch):
+    # 週五延後的集數（收盤沒入庫／颱風休市）要在週一那輪仍落在 --since 內，否則永遠漏掉
+    seen = {}
+    monkeypatch.setattr(mp, "_single_run_lock", lambda: object())
+    monkeypatch.setattr(mp, "already_done", lambda: set())
+    monkeypatch.setattr(mp, "new_episodes", lambda since, done: seen.setdefault("since", since) and [])
+    assert mp.main(["--dry-run"]) == 0
+    assert mp.date.today() - seen["since"] >= mp.timedelta(days=4)
+
+
 def test_main_does_not_touch_notebooklm_when_every_episode_is_deferred(monkeypatch):
     from market_data import db
 
