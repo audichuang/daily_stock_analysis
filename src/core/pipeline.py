@@ -563,6 +563,16 @@ class StockAnalysisPipeline:
             saved_count = self.db.save_daily_data(df, code, source_name)
             logger.info(f"{stock_name}({code}) 数据保存成功（来源: {source_name}，新增 {saved_count} 条）")
 
+            # 來源回的最新一根早於應有的場次：不擋流程（下次執行 has_today_data 仍為 False 會重抓），
+            # 但要留下警告。踩過：2026-10-22 紐約盤前 Yahoo 的 10-21 日線價格全空，被清洗丟掉，
+            # 美股 stock_daily 靜默停在 10-20，持倉頁非即時口徑的現價跟著落後兩個交易日。
+            latest_date = _coerce_to_date(df['date'].max()) if 'date' in df.columns else None
+            if latest_date is not None and latest_date < target_date:
+                logger.warning(
+                    f"{stock_name}({code}) 日线落后：来源 {source_name} 最新只到 {latest_date}，"
+                    f"应有 {target_date}（缺的那根不会入库，下次运行会重抓）"
+                )
+
             return True, None
 
         except Exception as e:
@@ -1178,10 +1188,9 @@ class StockAnalysisPipeline:
                     yesterday_close = enhanced['yesterday'].get('close')
                 orig_today = enhanced.get('today') or {}
                 market = get_market_for_stock(normalize_stock_code(enhanced.get('code', '')))
-                # 時鐘只讀一次：market_today 與下面「報價是否屬於今天」的判定共用同一個 market_now。
+                # 時鐘只讀一次：market_today_date 與下面「報價是否屬於今天」的判定共用同一個 market_now。
                 market_now = get_market_now(market)
                 market_today_date = market_now.date()
-                market_today = market_today_date.isoformat()
                 # 報價屬於今天 ⇔ 今天是交易日且尚未開盤前；開盤前／非交易日的「即時價」其實是
                 # T-1 收盤，此時 DB 的 today(T-1)／yesterday(T-2) 本來就對齊，不得平移。
                 quote_is_today = bool(
@@ -1197,11 +1206,14 @@ class StockAnalysisPipeline:
                     quote_session = market_today_date if quote_is_today else get_effective_trading_date(
                         market, current_time=market_now
                     )
-                # DB 最新列是 T-1（今天的 K 還沒進庫）：原 today 才是真正的「昨日」，
+                # DB 最新列早於報價場次（報價那一場的 K 還沒進庫）：原 today 才是真正的「昨日」，
                 # 不平移的話即時價會拿去比前天收盤（實測 3008：-5.67% 被算成 -9.45%）。
+                # 不能只在「報價屬於今天」時平移：開盤前的報價是 T-1 收盤，而 DB 也可能缺 T-1
+                # （踩過：2026-10-22 紐約盤前，Yahoo 的 10-21 日線價格全空、沒入庫）——
+                # 這時原 today 是 T-2，不平移就把 T-2 當昨日、T-1 整根消失。
+                # DB 已有 T-1 時 orig_date == quote_session，不會平移。
                 shift_yesterday = bool(
-                    quote_is_today
-                    and orig_date_norm is not None
+                    orig_date_norm is not None
                     and orig_date_norm < quote_session
                     and isinstance(orig_today, dict)
                     and orig_today
@@ -1231,7 +1243,9 @@ class StockAnalysisPipeline:
                     'ma5': trend_result.ma5,
                     'ma10': trend_result.ma10,
                     'ma20': trend_result.ma20,
-                    'date': market_today,
+                    # 標報價所屬的場次，不是掛鐘日：開盤前的報價是上一場收盤，
+                    # 標成今天就是一根假 K 棒（src/AGENTS.md 的 PREMARKET 規則）。
+                    'date': quote_session.isoformat(),
                     'data_source': f"realtime:{source_name}",
                     'realtime_source': source_name,
                     'is_estimated': True,
@@ -1278,7 +1292,7 @@ class StockAnalysisPipeline:
                     if k not in realtime_today and k not in realtime_owned_fields and v is not None:
                         realtime_today[k] = v
                 enhanced['today'] = realtime_today
-                enhanced['date'] = market_today
+                enhanced['date'] = quote_session.isoformat()
                 # 即時漲跌幅有值就直接用（供應商端已還原，與 realtime_today['pct_chg'] 同一來源）；
                 # 否則以（平移後的）昨收計算。
                 pct_val = None

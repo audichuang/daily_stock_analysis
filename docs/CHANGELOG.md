@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 美股盤前分析把上一場收盤標成今天的估算 K 棒：分析上下文的 `today` 改標報價所屬場次（盤前是上一場），DB 最新一根早於該場次時平移成 `yesterday`（10/22 紐約盤前 NVDA 的 221.97 被標成 10-22、10-21 從序列消失、昨日退到 10-19）；日線來源最新只到應有場次之前時記警告。`stock_daily` 停在 10-20 的直接原因是 Yahoo 當時回的 10-21 日線價格為空、被清洗丟掉，屬來源端暫時缺漏，下次排程會重抓補齊
 - [修復] `/portfolio` 查無匯率時不再把外幣金額 1:1 當人民幣加總（永豐複委託的 USD 被標成 CNY、全部帳戶總市值低估約 7 倍）：快照新增 `fx_missing`／`fx_missing_pairs`，頂部總權益／總市值／總現金改顯示「不可用」並提示缺哪一對、Agent 工具的跨幣別合計給 null；匯率快取超過 3 天改判過期（原本 10-15 的匯率到 10-23 仍顯示「最新」）。缺 USD→CNY 的原因是匯率只在按「刷新匯率」時更新、10-15 之後沒人按，而 #8 是 10-21 才建的
 - [修復] 美股大盤複盤的指數價格：Yahoo 偶發把最新一列日線回成「價格全空、只有成交量」（10/22 那筆複盤 S&P 500／Nasdaq／道瓊全是「-」），現在改讀 yfinance `fast_info` 的最新價、以前一個有價格的交易日當基準並記警告，拿不到就留空，不會拿上一場收盤冒充；只有一列時漲跌改成沒有讀數而不是 0%；繁中報告的「結構化大盤資料」把美股指數名依代碼顯示成繁體（標普500指數、那斯達克綜合指數、道瓊工業指數等，歷史紀錄同樣生效）
 - [測試] `test_persist_usage_never_raises` 改用注入的資料庫失敗，不再 reset singleton 後讓 `persist_llm_usage` 依設定新建連線寫入（正式 `dsa.llm_usage` 裡 42 筆 `model='m'` 的假用量就是它留下的；清除要另行處理）

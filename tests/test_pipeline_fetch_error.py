@@ -49,6 +49,35 @@ class PipelineFetchErrorTestCase(unittest.TestCase):
         pipeline.db.has_today_data.assert_called_once_with("600519", date(2026, 3, 27))
         pipeline.fetcher_manager.get_daily_data.assert_not_called()
 
+    def _fetch_with_latest_bar(self, latest: date):
+        import pandas as pd
+
+        pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.fetcher_manager = MagicMock()
+        pipeline.db = MagicMock()
+        pipeline.fetcher_manager.get_stock_name.return_value = "NVIDIA"
+        pipeline.db.has_today_data.return_value = False
+        pipeline.db.save_daily_data.return_value = 1
+        df = pd.DataFrame({"date": pd.to_datetime([date(2026, 10, 19), latest]), "close": [1.0, 2.0]})
+        pipeline.fetcher_manager.get_daily_data.return_value = (df, "YfinanceFetcher")
+        with patch.object(
+            StockAnalysisPipeline, "_resolve_resume_target_date", return_value=date(2026, 10, 21)
+        ), self.assertLogs("src.core.pipeline", level="INFO") as logs:
+            success, error = StockAnalysisPipeline.fetch_and_save_stock_data(pipeline, "NVDA")
+        self.assertTrue(success)
+        self.assertIsNone(error)
+        return [line for line in logs.output if "日线落后" in line]
+
+    def test_fetch_and_save_warns_when_source_lags_target_session(self):
+        # 2026-10-22 紐約盤前：應有 10-21，Yahoo 只給到 10-20，原本完全沒有訊號。
+        lag_lines = self._fetch_with_latest_bar(date(2026, 10, 20))
+        self.assertEqual(len(lag_lines), 1)
+        self.assertIn("WARNING", lag_lines[0])
+        self.assertIn("2026-10-20", lag_lines[0])
+
+    def test_fetch_and_save_does_not_warn_when_target_session_present(self):
+        self.assertEqual(self._fetch_with_latest_bar(date(2026, 10, 21)), [])
+
     def test_resolve_resume_target_date_normalizes_supported_a_share_formats(self):
         with patch("src.core.pipeline.get_market_for_stock", return_value="cn") as mock_market, patch(
             "src.core.pipeline.get_effective_trading_date",
