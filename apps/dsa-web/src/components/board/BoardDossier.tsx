@@ -63,6 +63,7 @@ export const BoardDossierPanel: React.FC<{
   const { t } = useUiLanguage();
   const [open, setOpen] = useState(false);
   const [alertNote, setAlertNote] = useState<string | null>(null);
+  const [creatingAlerts, setCreatingAlerts] = useState(false); // 送出中鎖住按鈕，避免連點重複建立
   if (!summary) return null;
   const s = summary.structure;
   const ref = price ?? summary.close;
@@ -113,13 +114,16 @@ export const BoardDossierPanel: React.FC<{
         {levelAlertsEnabled && (near?.support || near?.resistance) ? (
           <button
             type="button"
-            className="ml-auto rounded-md border border-border px-2 py-0.5 text-secondary-text hover:bg-hover"
+            className="ml-auto rounded-md border border-border px-2 py-0.5 text-secondary-text hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={creatingAlerts}
             onClick={() => {
               if (!window.confirm(t('board.dossier.alertConfirm'))) return;
+              setCreatingAlerts(true);
               stocksApi
                 .createLevelAlerts(code, { support: near?.support?.level, resistance: near?.resistance?.level })
                 .then((n) => setAlertNote(t('board.dossier.alertCreated', { count: String(n) })))
-                .catch((err) => setAlertNote(getParsedApiError(err).message));
+                .catch((err) => setAlertNote(getParsedApiError(err).message))
+                .finally(() => setCreatingAlerts(false));
             }}
           >
             {t('board.dossier.createAlerts')}

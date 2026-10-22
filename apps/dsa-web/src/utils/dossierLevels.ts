@@ -5,7 +5,7 @@ export type NearLevel = { level: DossierLevel; distPct: number };
 /**
  * 用即時價找最近的支撐與壓力（後端只給絕對價位，因為資料包的價格是上一個收盤）。
  * 價位區間完全在現價之下算支撐、之上算壓力；現價落在區間裡時依多空屬性歸類
- * （多頭區＝支撐、空頭區＝壓力，距離 0），沒有方向的 OTE 區不算。
+ * （多頭區＝支撐、空頭區＝壓力，距離 0），沒有方向的區間不算（OTE 已依最新結構帶多空）。
  */
 export function nearestLevels(levels: DossierLevel[], price: number): { support: NearLevel | null; resistance: NearLevel | null } {
   let support: NearLevel | null = null;

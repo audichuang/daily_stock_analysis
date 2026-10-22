@@ -33,8 +33,12 @@ def smc_levels(s):
     lv += [{"label": "FVG 未回補", "low": g["low"], "high": g["high"], "kind": "fvg",
             "bias": "bull" if g["direction"] == "bullish" else "bear"} for g in s["fvgs"]]
     if s.get("fib"):
-        lv.append({"label": "OTE 進場區", "low": s["fib"]["ote_low"], "high": s["fib"]["ote_high"],
-                   "kind": "ote", "bias": None})
+        # OTE 的方向跟著最近一次結構事件：多方回檔進場或空方反彈進場；沒有事件就不標方向
+        ev = s.get("last_event")
+        bias = None if not ev else ("bull" if ev["direction"] == "bullish" else "bear")
+        label = {"bull": "OTE 多方進場區", "bear": "OTE 空方進場區"}.get(bias, "OTE 進場區")
+        lv.append({"label": label, "low": s["fib"]["ote_low"], "high": s["fib"]["ote_high"],
+                   "kind": "ote", "bias": bias})
     price = s["price"]
     return [x for x in lv
             if abs(x["high"] / price - 1) <= _LEVEL_RANGE or abs(x["low"] / price - 1) <= _LEVEL_RANGE]
@@ -54,8 +58,9 @@ def _changes(p):
         ann = months[-1]["announced"]
         if (date.fromisoformat(as_of) - date.fromisoformat(ann)).days <= _REVENUE_FRESH_DAYS:      # 資料包只取已公告的月份
             yoy = months[-1]["yoy_pct"]
+            ann_d, month = date.fromisoformat(ann), int(months[-1]["month"][5:7])
             out.append({"kind": "revenue", "tone": "pos" if yoy > 0 else "neg",
-                        "text": f"{ann[5:]} {months[-1]['month'][5:]} 月營收 YoY {yoy:+.1f}%"})
+                        "text": f"{ann_d:%m/%d} {month} 月營收 YoY {yoy:+.1f}%"})
     inst = (p.get("chips") or {}).get("institutional") or {}
     f5, f20 = inst.get("foreign_5d_lots"), inst.get("foreign_20d_lots")
     if f5 and f20 and (f5 > 0) != (f20 > 0):
@@ -72,6 +77,11 @@ def _changes(p):
 
 
 def summarize(p, nar=None):
+    from src.services.tw_stock_report import NARRATIVE_CHECK_VERSION
+
+    # 數字核對沒過、或用舊版核對規則寫的解讀都不上看板（報告頁才有警示／會重寫）
+    if (nar or {}).get("unverified") or (nar and nar.get("check_version") != NARRATIVE_CHECK_VERSION):
+        nar = None
     s = p.get("smc") or {}
     ev = s.get("last_event")
     return {
@@ -105,11 +115,12 @@ def _one(code):
     now = time.monotonic()
     hit = _summary_cache.get(code)
     if hit and now - hit[0] < _SUMMARY_TTL_SECONDS:
-        return hit[1]
-    p = tw_stock_dossier.build(code, branch=False)      # 看板不查分點：每檔省兩個富邦請求
-    out = summarize(p, _cached_verdicts(p))
-    _summary_cache[code] = (now, out)
-    return out
+        p = hit[1]
+    else:
+        p = tw_stock_dossier.build(code, branch=False)      # 看板不查分點：每檔省兩個富邦請求
+        _summary_cache[code] = (now, p)
+    # 解讀卡色調每次都重讀（只是讀一個檔），快取期間新產生的解讀也能立刻反映
+    return summarize(p, _cached_verdicts(p))
 
 
 def summaries(codes):

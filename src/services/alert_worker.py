@@ -657,11 +657,15 @@ class AlertWorker:
         notification_service = self.notifier or NotificationService()
         policy = runtime_rule.notification_policy if isinstance(runtime_rule.notification_policy, dict) else {}
         if isinstance(policy.get("tw_level"), dict):
-            # 台股 SMC 價位警報自帶 Markdown 版型（docs/tw-level-alerts.md）；其他規則維持通用格式
-            from src.services.tw_level_alerts import build_level_alert_message
+            # 台股 SMC 價位警報自帶 Markdown 版型（docs/tw-level-alerts.md）；其他規則維持通用格式。
+            # 規則裡存的 meta 欄位不合法時退回通用格式，不讓一筆壞資料吞掉整則通知。
+            from src.services.tw_level_alerts import build_level_alert_message, valid_level_meta
 
-            return notification_service.send_with_results(
-                build_level_alert_message(policy["tw_level"], result), route_type="alert")
+            if valid_level_meta(policy["tw_level"]):
+                return notification_service.send_with_results(
+                    build_level_alert_message(policy["tw_level"], result), route_type="alert")
+            logger.warning("[AlertWorker] invalid tw_level meta for %s, using generic message",
+                           self._display_target(runtime_rule))
         title = f"Event Alert | {self._display_target(runtime_rule)}"
         content = result.get("reason") or result.get("message") or runtime_rule.rule.description or "Alert triggered"
         diagnostics = self._diagnostics_payload(result.get("diagnostics"))

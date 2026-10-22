@@ -60,6 +60,9 @@ def test_stock_name_falls_back_to_index_for_tpex(monkeypatch):
 
 def test_build_isolates_section_failures(monkeypatch):
     import pandas as pd
+    from src.data import stock_index_loader
+
+    monkeypatch.setattr(stock_index_loader, "get_stock_name_index_map", lambda: {"3324.TWO": "雙鴻"})
 
     def boom(*a, **k):
         raise RuntimeError("db hiccup")
@@ -76,3 +79,23 @@ def test_build_isolates_section_failures(monkeypatch):
     assert p["errors"] == ["技術面", "基本面", "估值"]
     assert p["smc"] is None and p["valuation"] is None and p["fundamentals"]["quarters"] == []
     assert "讀取失敗" in dossier.render(p)
+
+
+def test_build_rejects_wrong_market_suffix(monkeypatch):
+    import pandas as pd
+    import pytest
+    from src.data import stock_index_loader
+
+    monkeypatch.setattr(stock_index_loader, "get_stock_name_index_map",
+                        lambda: {"3324.TWO": "雙鴻", "2330.TW": "台積電"})
+    with pytest.raises(LookupError, match=r"2330\.TWO 應為 2330\.TW"):
+        dossier.build("2330.TWO", engine=object())
+    with pytest.raises(LookupError, match=r"3324\.tw 應為 3324\.TWO"):
+        dossier.build("3324.tw", engine=object())
+    # 正確後綴、索引查無的新掛牌、裸代號都照常往下查 market.price
+    seen = []
+    monkeypatch.setattr(dossier, "_sql", lambda engine, sql, **kw: seen.append(kw["s"]) or pd.DataFrame({"d": [None]}))
+    for code in ("2330.TW", "3324.TWO", "7777.TWO", "2330"):
+        with pytest.raises(LookupError, match="查無資料"):
+            dossier.build(code, engine=object())
+    assert seen == ["2330", "3324", "7777", "2330"]

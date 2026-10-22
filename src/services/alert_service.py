@@ -112,6 +112,16 @@ class AlertService:
         fields = self._normalize_rule_payload(payload, source=source)
         return self._serialize_rule(self.repo.create_rule(fields))
 
+    def replace_source_rules(self, target: str, payloads: List[Dict[str, Any]], *, source: str) -> List[Dict[str, Any]]:
+        """先驗證全部 payload，再在單一交易裡把同 target＋source 的規則整組換掉（不會留下半套）。"""
+        normalized = self._normalize_target("single_symbol", target)
+        fields_list = [self._normalize_rule_payload(p, source=source) for p in payloads]
+        targets = {f["target"] for f in fields_list}
+        if targets - {normalized}:
+            raise AlertServiceError(f"payload target mismatch: {sorted(targets)} vs {normalized}")
+        rows = self.repo.replace_rules_by_source(normalized, source[:16], fields_list)
+        return [self._serialize_rule(row) for row in rows]
+
     def get_rule(self, rule_id: int) -> Dict[str, Any]:
         row = self.repo.get_rule(rule_id)
         if row is None:

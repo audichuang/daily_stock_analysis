@@ -22,7 +22,10 @@ export const StockDossierDrawer: React.FC<StockDossierDrawerProps> = ({ stockCod
   const theme = resolvedTheme === 'light' ? 'light' : 'dark';
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [narrativePending, setNarrativePending] = useState(true);
+  // 以「代碼＋主題」當請求識別：切主題重抓時識別改變，等待提示自然重新出現（不必在 effect 裡同步 setState）
+  const requestKey = `${stockCode}|${theme}`;
+  const [settledKey, setSettledKey] = useState<string | null>(null);
+  const narrativePending = settledKey !== requestKey;
 
   useEffect(() => {
     let cancelled = false;
@@ -43,12 +46,12 @@ export const StockDossierDrawer: React.FC<StockDossierDrawerProps> = ({ stockCod
         if (!cancelled) setError(getParsedApiError(err).message);
       })
       .finally(() => {
-        if (!cancelled) setNarrativePending(false);
+        if (!cancelled) setSettledKey(requestKey);
       });
     return () => {
       cancelled = true;
     };
-  }, [stockCode, theme]);
+  }, [stockCode, theme, requestKey]);
 
   return (
     <Drawer
