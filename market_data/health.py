@@ -218,6 +218,7 @@ def thin_days(day_counts, window=5, ratio=0.9):
 _HISTORY_TABLES = ("institutional", "margin", "valuation")
 
 _THIN_TABLES = ["price", "institutional", "margin"]  # 每日全市場列數穩定的表
+_TPEX_THIN_TABLES = ["institutional", "margin", "valuation"]
 # 三張籌碼表上市（market IS NULL）與上櫃（'tpex'）共表；既有的上市稽核只看上市列（過濾條件
 # 用 crawl.market_filter）——否則上櫃回補到一半時，每日列數忽多忽少會被當成 thin day，
 # 上櫃單邊有列也會掩蓋上市缺日。
@@ -235,7 +236,7 @@ _VERIFIED_THIN = {
 
 def report(engine=None, now=None, is_session=None):
     engine = engine or get_engine()
-    out = {"tables": {}, "thin_days": {}}
+    out = {"tables": {}, "thin_days": {}, "thin_days_tpex": {}}
     with engine.connect() as c:
         for t in _DATE_TABLES:
             col = _DATE_COL.get(t, "date")
@@ -251,6 +252,12 @@ def report(engine=None, now=None, is_session=None):
             verified = _VERIFIED_THIN.get(t, set())
             out["thin_days"][t] = [(d, n) for d, n in thin_days(day_counts)
                                    if d not in verified]
+        # 上櫃融資／估值不在 REVISED_SOURCES：第一次抓到半套就凍結，resume 也當它完成（只報不擋）
+        for t in _TPEX_THIN_TABLES:
+            day_counts = c.execute(text(
+                f"SELECT date, count(*) FROM market.{t} WHERE true{market_filter(t, 'tpex')} "
+                f"GROUP BY date ORDER BY date"), {"market": "tpex"}).fetchall()
+            out["thin_days_tpex"][t] = thin_days(day_counts)
 
         # 視窗與 `crawl.daily_update` 的自動修復視窗**同一個常數**：檢查得比修復得遠，
         # gate 就會擋在一個 daily 補不到的缺口上，而錯誤訊息叫你重跑的正是 daily。
@@ -393,6 +400,8 @@ def run(engine=None, strict=False, now=None, is_session=None):
         print(f"{table:16} {info['rows']:>10,}  {info['start'][:10]}~{info['end'][:10]}")
     for table, days in result["thin_days"].items():
         print(f"thin {table} days: {len(days)} -> {days[:10]}")
+    for table, days in result.get("thin_days_tpex", {}).items():
+        print(f"thin {table}_tpex days (只報不擋): {len(days)} -> {days[:10]}")
     integrity = result.get("integrity", {})
     latest_price = result.get("tables", {}).get("price", {}).get("end", "n/a")
     print(f"latest price session: {str(latest_price)[:10]}")

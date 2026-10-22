@@ -77,10 +77,11 @@ def _changes(p):
 
 
 def summarize(p, nar=None):
-    from src.services.tw_stock_report import NARRATIVE_CHECK_VERSION
+    from src.services.tw_stock_report import NARRATIVE_CHECK_VERSION, data_stamp
 
-    # 數字核對沒過、或用舊版核對規則寫的解讀都不上看板（報告頁才有警示／會重寫）
-    if (nar or {}).get("unverified") or (nar and nar.get("check_version") != NARRATIVE_CHECK_VERSION):
+    # 數字核對沒過、用舊版核對規則寫的、或寫完之後資料又更新的解讀都不上看板（報告頁才有警示／會重寫）
+    if nar and (nar.get("unverified") or nar.get("check_version") != NARRATIVE_CHECK_VERSION
+                or nar.get("data_stamp") != data_stamp(p)):
         nar = None
     s = p.get("smc") or {}
     ev = s.get("last_event")

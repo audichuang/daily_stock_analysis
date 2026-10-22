@@ -183,6 +183,20 @@ def test_unverified_numbers_accepts_fib_constants_and_unit_conversions():
     assert report.unverified_numbers(nar, p) == []
 
 
+def test_level_distances_count_only_as_percentages():
+    # 正式站 6191／3324 的解讀都被標黃，抓到的全是「距現價 -2.94%」這類距離；報告的價位階梯本來就印這些數
+    p = {**EMPTY, "smc": {"price": 1360.0, "ssl": [1320.0], "swing_n": 3,
+                          "last_event": {"level": 1395.0, "i": 261},
+                          "order_blocks": [{"low": 1240.0, "high": 1365.0}]},
+         "chips": {"branch": {"five_sessions": {"avg_buy_cost": 1410.15}}}}
+    ok = {"notes": {"technical": "1,320 的賣方流動性約 -2.94%，1,395 在上方 +2.57%，現價在其下 2.51%，"
+                                 "OB 下緣 1,240 距 -8.82%；主力成本 1,410.15，現價低 3.56%。"}}
+    assert report.unverified_numbers(ok, p) == []
+    # 同一個數字沒寫「%」不算距離；也不能拿非價位欄位（K 棒序號 261、擺動點 3）去湊
+    wrong = {"notes": {"technical": "賣方流動性約 2.94 元；距離 80.81%；距離 99.78%。"}}
+    assert report.unverified_numbers(wrong, p) == ["2.94", "80.81", "99.78"]
+
+
 def test_converted_amounts_must_carry_their_unit():
     # 3,765,466 千元：寫成 37.7 億、376.5 萬才算對；同一個數字配錯單位（或沒寫單位）差了十萬倍，要抓出來
     p = {**EMPTY, "fundamentals": {"monthly_revenue": [{"revenue_k": 3765466}], "quarters": []}}
@@ -208,6 +222,111 @@ def test_legacy_cache_without_check_version_is_regenerated(monkeypatch, tmp_path
     assert json.loads(legacy.read_text(encoding="utf-8"))["check_version"] == report.NARRATIVE_CHECK_VERSION
     report.report_html("3324.TWO", narrative=True, generate=gen, cache_dir=tmp_path)
     assert len(calls) == 1      # 新版快取照常沿用
+
+
+def test_cache_is_rewritten_when_same_day_data_changes(monkeypatch, tmp_path):
+    # 同一基準日先開過一次，之後法人才入庫：資料包換了，解讀不能繼續引用舊數字
+    calls = []
+
+    def gen(prompt):
+        calls.append(prompt)
+        return json.dumps(GOOD)
+
+    p = {**EMPTY, "chips": {"institutional": {"as_of": "2026-08-27"}}}
+    report.cached_narrative(p, gen, tmp_path)
+    report.cached_narrative(p, gen, tmp_path)
+    assert len(calls) == 1
+    report.cached_narrative({**p, "chips": {"institutional": {"as_of": "2026-08-28"}}}, gen, tmp_path)
+    assert len(calls) == 2
+
+
+def test_cache_is_rewritten_when_branch_arrives_or_a_section_recovers(tmp_path):
+    calls = []
+
+    def gen(prompt):
+        calls.append(prompt)
+        return json.dumps(GOOD)
+
+    p = {**EMPTY, "chips": {"branch": {"day": None, "five_sessions": None}}, "errors": ["合約負債"]}
+    report.cached_narrative(p, gen, tmp_path)
+    report.cached_narrative(p, gen, tmp_path)
+    assert len(calls) == 1
+    with_branch = {**p, "chips": {"branch": {"day": {"buy": []}, "five_sessions": None}}}
+    report.cached_narrative(with_branch, gen, tmp_path)          # 分點晚到
+    assert len(calls) == 2
+    report.cached_narrative({**with_branch, "errors": []}, gen, tmp_path)    # 失敗的段落這次讀到了
+    assert len(calls) == 3
+    report.cached_narrative({**with_branch, "errors": []}, gen, tmp_path)
+    assert len(calls) == 3
+    # 反方向（這次分點反而沒拿到）不重寫，沿用較完整的舊解讀
+    report.cached_narrative({**p, "errors": []}, gen, tmp_path)
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("path", [
+    ("fundamentals", "monthly_revenue"), ("fundamentals", "quarters"), ("chips", "institutional"),
+    ("chips", "margin"), ("chips", "holding"), ("valuation",), ("smc",),
+])
+def test_data_stamp_changes_with_every_cited_section(path):
+    base = {"fundamentals": {"monthly_revenue": [{"month": "2026-08"}], "quarters": [{"quarter": "2026Q2"}]},
+            "chips": {k: {"as_of": "2026-10-21"} for k in ("institutional", "margin", "holding")},
+            "valuation": {"as_of": "2026-10-21"}, "smc": {"price": 100.0}}
+    changed = json.loads(json.dumps(base))
+    node = changed
+    for k in path[:-1]:
+        node = node[k]
+    leaf = node[path[-1]]
+    if isinstance(leaf, list):
+        leaf.append({"month": "2026-09", "quarter": "2026Q3"})
+    elif "as_of" in leaf:
+        leaf["as_of"] = "2026-10-22"
+    else:
+        leaf["price"] = 101.0
+    assert report.data_stamp(changed) != report.data_stamp(base)
+    assert report.data_stamp(json.loads(json.dumps(base))) == report.data_stamp(base)
+
+
+def test_incomparable_coverage_does_not_flip_flop(tmp_path):
+    # 「分點有、合約負債失敗」與「分點逾時、各段都讀到」互相比不出誰完整：交替出現時不能每次都重寫
+    calls = []
+
+    def gen(prompt):
+        calls.append(prompt)
+        return json.dumps(GOOD)
+
+    a = {**EMPTY, "chips": {"branch": {"day": {"buy": []}}}, "errors": ["合約負債"]}
+    b = {**EMPTY, "chips": {"branch": {"day": None, "five_sessions": None}}, "errors": []}
+    for p in (b, a, b, a, b, a):
+        report.cached_narrative(p, gen, tmp_path)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["garbage", "raises"])
+def test_failed_rewrite_keeps_the_cached_narrative(tmp_path, failure):
+    p = {**EMPTY, "chips": {"branch": {"day": None, "five_sessions": None}}}
+    first = report.cached_narrative(p, lambda prompt: json.dumps(GOOD), tmp_path)
+
+    def bad(prompt):
+        if failure == "raises":
+            raise RuntimeError("LLM down")
+        return "not json"
+
+    later = {**p, "chips": {"branch": {"day": {"buy": []}}}}      # 分點晚到，想重寫但 LLM 失敗
+    assert report.cached_narrative(later, bad, tmp_path) == first
+    # 數字本身變了（data_stamp 不同）時舊解讀不能拿來頂：照常回報失敗
+    changed = {**later, "valuation": {"as_of": "2026-08-29"}}
+    if failure == "raises":
+        with pytest.raises(RuntimeError):
+            report.cached_narrative(changed, bad, tmp_path)
+    else:
+        assert report.cached_narrative(changed, bad, tmp_path) is None
+
+
+def test_written_unit_must_be_the_converted_value():
+    # 「3,765,466 億」數字等於千元原值，但單位差了十萬倍
+    p = {**EMPTY, "fundamentals": {"monthly_revenue": [{"revenue_k": 3765466}], "quarters": []}}
+    assert report.unverified_numbers({"notes": {"revenue": "營收 3,765,466 億。"}}, p) == ["3,765,466"]
+    assert report.unverified_numbers({"notes": {"revenue": "營收 3,765,466 千元，約 37.7 億。"}}, p) == []
 
 
 def test_unverified_numbers_flags_decimal_slips_on_price_and_pe():

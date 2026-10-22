@@ -418,3 +418,28 @@ def test_dossier_rejects_impossible_date(monkeypatch):
     assert client.get("/api/v1/stocks/3324.TWO/dossier", params={"date": "2026-10-21"}).status_code == 200
     assert client.get("/api/v1/stocks/3324.TWO/dossier").status_code == 200
     assert seen == ["2026-10-21", None]
+
+
+@pytest.mark.parametrize("enabled,read_only,expected", [
+    (False, False, ["generic"]), (True, False, ["generic", "levels"]), (False, True, ["generic", "levels"]),
+])
+def test_worker_skips_level_rules_while_flag_is_off(monkeypatch, enabled, read_only, expected):
+    # 開關關掉後，之前建好的價位規則不再評估、不推；唯讀的規則來源統計照列
+    from types import SimpleNamespace
+
+    from src.services import alert_worker as aw
+
+    rows = [SimpleNamespace(id=1, source="manual", name="generic", cooldown_policy=None, notification_policy=None,
+                            severity="info"),
+            SimpleNamespace(id=2, source=la.SOURCE, name="levels", cooldown_policy=None, notification_policy=None,
+                            severity="info")]
+    service = SimpleNamespace(
+        repo=SimpleNamespace(list_enabled_rules=lambda limit: rows),
+        _load_json=lambda v, default=None: default,
+        build_runtime_payloads=lambda row, **kw: [SimpleNamespace(key=row.name, rule=row, effective_target=None,
+                                                                 display_target=None)],
+    )
+    worker = aw.AlertWorker.__new__(aw.AlertWorker)
+    worker.service = service
+    loaded = worker._load_runtime_rules(SimpleNamespace(tw_level_alerts_enabled=enabled), read_only=read_only)
+    assert [r.key for r in loaded] == expected

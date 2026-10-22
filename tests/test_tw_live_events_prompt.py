@@ -186,3 +186,56 @@ def test_analyzer_wires_block_for_tw_when_enabled():
         out, load, _ = _prompt(code, enabled)
         assert "LIVE-BLOCK" not in out
         load.assert_not_called()
+
+
+_REAL_FETCH = live_mod._fetch
+
+
+def test_failed_fetch_is_retried_after_window_not_cached_all_day(monkeypatch):
+    # 長駐的 Web 服務第一次抓取出錯：舊版 lru_cache 把 None 留到隔天，整個交易日 prompt 都缺這段
+    clock = [1000.0]
+    monkeypatch.setattr(live_mod.time, "monotonic", lambda: clock[0])
+    attempts = []
+
+    def boom(as_of_iso):
+        attempts.append(as_of_iso)
+        return None
+
+    monkeypatch.setattr(live_mod, "_fetch", boom)
+    assert live_mod.load_tw_live_events("2026-10-20") is None
+    assert live_mod.load_tw_live_events("2026-10-20") is None
+    assert len(attempts) == 1                      # 窗口內不每檔重打
+    clock[0] += live_mod._RETRY_SECONDS + 1
+    _install(monkeypatch)
+    monkeypatch.setattr(live_mod, "_fetch", _REAL_FETCH)
+    assert live_mod.load_tw_live_events("2026-10-20") is not None
+
+
+def test_complete_result_is_kept_for_the_whole_day(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(live_mod.time, "monotonic", lambda: clock[0])
+    calls = _install(monkeypatch)
+    assert live_mod.load_tw_live_events("2026-10-20") is not None
+    n = len(calls)
+    clock[0] += 10 * live_mod._RETRY_SECONDS
+    assert live_mod.load_tw_live_events("2026-10-20") is not None
+    assert len(calls) == n
+
+
+
+@pytest.mark.parametrize("broken", ["risk", "event"])
+def test_incomplete_result_is_retried_after_window(monkeypatch, broken):
+    # 有一份名單（或除權息來源）這輪不可用：不能整天沿用缺這份的結果
+    clock = [1000.0]
+    monkeypatch.setattr(live_mod.time, "monotonic", lambda: clock[0])
+    url = risk_flags.TPEX_ATTENTION_URL if broken == "risk" else events.TWT48U_URL
+    calls = _install(monkeypatch, overrides={url: _resp(b"<html>maintenance</html>")})
+    first = live_mod.load_tw_live_events("2026-10-20")
+    assert first is not None
+    assert (any(first["risk_down"].values()) if broken == "risk" else first["event_down"])
+    n = len(calls)
+    assert live_mod.load_tw_live_events("2026-10-20") is first     # 窗口內沿用
+    assert len(calls) == n
+    clock[0] += live_mod._RETRY_SECONDS + 1
+    live_mod.load_tw_live_events("2026-10-20")
+    assert len(calls) > n                                            # 過了窗口重抓

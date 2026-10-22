@@ -1,5 +1,7 @@
 """四維度資料包：財報日期→季度的對應，以及各段缺資料時印「無資料」而不是估算或炸掉。"""
 
+import pytest
+
 from tests.litellm_stub import ensure_litellm_stub
 
 ensure_litellm_stub()
@@ -99,3 +101,40 @@ def test_build_rejects_wrong_market_suffix(monkeypatch):
         with pytest.raises(LookupError, match="查無資料"):
             dossier.build(code, engine=object())
     assert seen == ["2330", "3324", "7777", "2330"]
+
+
+def test_holding_summary_tolerates_missing_holder_count():
+    # 最新一週 level 17 的股東數是空值：只讓這一欄變 None，不能 int(NaN) 把整段籌碼弄成「無資料」
+    import pandas as pd
+
+    from src.services.tw_stock_dossier import holding_summary
+
+    hd = pd.DataFrame([
+        {"date": "2026-10-09", "level": 15, "pct": 50.0, "holders": 10},
+        {"date": "2026-10-09", "level": 17, "pct": 100.0, "holders": 9000},
+        {"date": "2026-10-16", "level": 15, "pct": 51.0, "holders": 10},
+        {"date": "2026-10-16", "level": 17, "pct": 100.0, "holders": None},
+    ])
+    s = holding_summary(hd)
+    assert s["big_holder_pct"] == 51.0 and s["big_holder_pct_wow"] == 1.0
+    assert s["total_holders"] is None
+
+
+@pytest.mark.parametrize("gap,expected", [(False, 100.0), (True, None)])
+def test_ttm_revenue_yoy_needs_24_consecutive_months(monkeypatch, gap, expected):
+    # 中間缺一個月時最近 24 列跨了 25 個月，兩個 12 列窗口錯開，不能標成「近 12 個月年增」
+    import pandas as pd
+
+    from src.services import tw_stock_dossier as dossier
+
+    months = pd.period_range("2024-10", "2026-09", freq="M").to_timestamp()
+    if gap:
+        months = pd.period_range("2024-09", "2026-09", freq="M").to_timestamp().delete(12)
+    rev = pd.DataFrame({"revenue_month": months[::-1], "revenue": [200 if i < 12 else 100 for i in range(24)],
+                        "yoy": None, "announce_date": None})
+
+    def fake_sql(engine, sql, **kw):
+        return rev if "monthly_revenue" in sql else pd.DataFrame(columns=["date", "account", "value"])
+
+    monkeypatch.setattr(dossier, "_sql", fake_sql)
+    assert dossier.fundamentals(None, "9999", "2026-10-22")["ttm_revenue_yoy_pct"] == expected

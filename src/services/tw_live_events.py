@@ -5,7 +5,7 @@
 
 - 只在分析日 ≥ `health.expected_session()` 時抓（盤中分析日會晚於預期場次）：兩份都是「當前快照」，
   接到歷史分析日是錯的。
-- 全市場名單每個執行期、每個基準日只抓一次（加鎖，避免並行分析同時打官方端點被擋）。
+- 全市場名單每個基準日只抓一次（加鎖，避免並行分析同時打官方端點被擋）；失敗或有名單不可用時 30 分鐘後重抓。
 - 三態用字：命中＝是；該市場名單都可用且新鮮才寫「否」；其餘一律「未確認，不代表沒有」。
 
 任何失敗都回 None／''（fail-open），不擋報告。
@@ -13,8 +13,8 @@
 
 import logging
 import threading
+import time
 from datetime import date, datetime
-from functools import lru_cache
 from typing import Any, Dict, Optional
 
 from src.services.market_symbol_utils import split_suffix_symbol
@@ -38,10 +38,29 @@ def _as_date(value: Any) -> Optional[date]:
         return None
 
 
-@lru_cache(maxsize=4)
+_RETRY_SECONDS = 30 * 60   # 抓取失敗或有名單不可用時，過這麼久才重抓；名單全部可用的結果整個基準日沿用
+_cache: Dict[str, tuple] = {}     # as_of_iso -> (monotonic, 名單是否全部可用, 結果)
+
+
 def _fetch_cached(as_of_iso: str) -> Optional[Dict[str, Any]]:
-    # 失敗也快取：同一基準日不再每檔重打一次。
-    # ponytail: 長駐的 Web 服務整天沿用第一次的結果，盤後名單晚出時要重啟或等隔日
+    """同一基準日不再每檔重打一次。失敗與不完整的結果只沿用 30 分鐘：長駐的 Web 服務第一次逾時或
+    名單晚出時，不會整個交易日都缺這段或寫「未確認」。"""
+    hit = _cache.get(as_of_iso)
+    if hit and (hit[1] or time.monotonic() - hit[0] < _RETRY_SECONDS):
+        return hit[2]
+    live = _fetch(as_of_iso)
+    # 處置／注意名單或事件來源（除權息、法說會）有任一份這輪不可用，就只沿用 30 分鐘
+    complete = bool(live) and not any(live["risk_down"].values()) and not live.get("event_down")
+    if as_of_iso not in _cache and len(_cache) >= 4:
+        _cache.pop(next(iter(_cache)))
+    _cache[as_of_iso] = (time.monotonic(), complete, live)
+    return live
+
+
+_fetch_cached.cache_clear = _cache.clear
+
+
+def _fetch(as_of_iso: str) -> Optional[Dict[str, Any]]:
     try:
         from market_data import events, risk_flags
         from market_data.health import session_before, sessions_after
@@ -60,6 +79,7 @@ def _fetch_cached(as_of_iso: str) -> Optional[Dict[str, Any]]:
             "risk_down": {m: [s.name for s in risk_statuses if not s.ok and risk_flags.SOURCE_MARKET.get(s.name) == m]
                           for m in _SUFFIX_MARKET.values()},
             "by_stock": by_stock, "event_checked": events.checked_categories(event_statuses),
+            "event_down": [st.name for st in event_statuses if not st.ok],
             "revenue_deadlines": events.revenue_deadlines(window),
         }
     except Exception as exc:  # noqa: BLE001 - prompt enrichment is strictly fail-open

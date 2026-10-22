@@ -114,6 +114,10 @@ def parse_answer(text: str) -> list[dict] | None:
         return None
     if not isinstance(items, list):
         return None
+    if items and not any(isinstance(i, dict) for i in items):
+        return None  # "[1]" / "[1, 2]" is a citation marker, not an answer: retry next run
+    # Objects without a name ({"name": null, "reason": "本集未點名個股"}) are the model saying "no picks";
+    # retrying would only drop the episode silently once it ages out of --since.
     return [i for i in items if isinstance(i, dict) and i.get("name")]
 
 
@@ -139,6 +143,17 @@ def _by_code(code: str, index, pad: bool = True) -> tuple[str, str] | None:
     return None
 
 
+def _by_name(parts, index) -> tuple[str, str] | None:
+    for p in parts:
+        for c, n, aliases in index:
+            if p == _norm(n):
+                return c, "exact"
+        for c, n, aliases in index:
+            if p in map(_norm, aliases):
+                return c, "alias"
+    return None
+
+
 def resolve(name: str, code: str | None, index, said: str | None = None) -> tuple[str | None, str]:
     """-> (canonical code like 3044.TW, how).
 
@@ -148,6 +163,7 @@ def resolve(name: str, code: str | None, index, said: str | None = None) -> tupl
     how: exact|alias|code|code_mismatch|fuzzy|unresolved.
     """
     said = (said or "").strip().upper()
+    said_code = said
     if re.fullmatch(r"\d{2,6}[A-Z]?", said):
         hit = _by_code(said, index)
     else:
@@ -155,18 +171,24 @@ def resolve(name: str, code: str | None, index, said: str | None = None) -> tupl
         # transcripts also yield fragments like "668 中 陽 光" (6668) or "130 連 南亞" (1303).
         # "0050正2" is a nickname, not a code.
         m = re.match(r"(\d{4,6}[A-Z]?)\s", said)
-        hit = m and _by_code(m.group(1), index, pad=False)
-    if hit:  # a misheard number ("5000" for 0050) falls through to the name
-        return hit[0], "code"
+        said_code = m.group(1) if m else ""
+        hit = m and _by_code(said_code, index, pad=False)
     # TV-style names: "精材（精綵）" -> try each part
     parts = [_norm(p) for p in re.split(r"[（）()/／、]", name or "") if p.strip()]
-    for p in parts:
-        for c, n, aliases in index:
-            if p == _norm(n):
-                return c, "exact"
-        for c, n, aliases in index:
-            if p in map(_norm, aliases):
-                return c, "alias"
+    by_name = _by_name(parts, index)
+    # A number that only matched after zero-padding ("668" -> 00668) loses to the name's code, or
+    # failing that the LLM's code, when that code contains those digits: it was a fragment of 6668
+    # (中揚光). Otherwise the spoken number still beats the fund name the LLM filled in ("850" with
+    # 國泰台灣領袖50 stays 00850).
+    if hit and hit[0].split(".")[0] != said_code:
+        llm_hit = code and _by_code(code, index, pad=False)
+        alt = by_name or (llm_hit and (llm_hit[0], "code"))
+        if alt and alt[0] != hit[0] and said_code in alt[0].split(".")[0]:
+            return alt
+    if hit:
+        return hit[0], "code"  # a misheard number ("5000" for 0050) falls through to the name
+    if by_name:
+        return by_name
     hit = code and _by_code(code, index)
     if hit:
         c, n = hit
@@ -230,6 +252,9 @@ def snapshot(code: str, as_of: date, engine) -> dict | None:
 
     sid = code.split(".")[0]
     px = market_repo.price_history(sid, start=as_of - timedelta(days=150), end=as_of, engine=engine)
+    # Drop NULL closes before adjusting: a NaN would journal as NaN (breaks every later json.loads),
+    # and adjusting first would anchor the multipliers on the dropped day.
+    px = px[pd.to_numeric(px["close"], errors="coerce").notna()].copy()
     if px.empty:
         return None
     px["date"] = pd.to_datetime(px["date"])
@@ -301,6 +326,20 @@ def process(ep: dict, nb_id: str, index, engine) -> list[dict]:
     return rows
 
 
+def _single_run_lock():
+    """Non-blocking process lock; None when another run holds it. Kept open for the process lifetime."""
+    import fcntl
+    import tempfile
+
+    f = open(Path(tempfile.gettempdir()) / "tw_media_picks.lock", "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return f
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--since", type=date.fromisoformat, default=date.today() - timedelta(days=2),
@@ -309,6 +348,10 @@ def main(argv=None):
     ap.add_argument("--no-data", action="store_true", help="不連 market schema")
     args = ap.parse_args(argv)
 
+    lock = _single_run_lock()
+    if lock is None:
+        print("另一個 media-picks 正在跑，這次不執行（重疊會把同一集寫進 journal 兩次）", file=sys.stderr)
+        return 0
     eps = new_episodes(args.since, already_done())
     print(f"新集數 {len(eps)}：")
     for e in eps:

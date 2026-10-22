@@ -16,7 +16,9 @@ except ModuleNotFoundError:
     ensure_litellm_stub()
 
 from src.agent.skills.defaults import CORE_TRADING_SKILL_POLICY_ZH
-from src.analyzer import TW_MA_WEIGHTED_VARIANT, GeminiAnalyzer
+import datetime as dt
+
+from src.analyzer import TW_MA_CONTROL_VARIANT, TW_MA_WEIGHTED_VARIANT, GeminiAnalyzer, _tw_ma_ab_treated
 from tests.test_analyzer_prompt_language import _make_analyzer, _rich_context
 
 _OLD_HARD_LINES = ("**多头排列必须条件**", '乖离率 > 5%：严禁追高！直接判定为"观望"', "坚决不买入")
@@ -50,9 +52,12 @@ def _user_prompt(analyzer, code: str, language: str = "zh-TW") -> str:
 @pytest.mark.parametrize("language", ["zh", "zh-TW"])
 def test_off_system_prompt_is_unchanged(legacy, language):
     off = _analyzer(False, legacy)._get_analysis_system_prompt(language, stock_code="2330.TW")
-    baseline = _make_analyzer(
+    baseline_analyzer = _make_analyzer(
         legacy=legacy, default_skill_policy="" if legacy else CORE_TRADING_SKILL_POLICY_ZH
-    )._get_analysis_system_prompt(language, stock_code="2330.TW")
+    )
+    # 不帶開關欄位的設定＝功能上線前；不能讀 get_config()，本機 .env 開著開關會讓這裡假紅
+    baseline_analyzer._config_override = SimpleNamespace(bias_threshold=5.0)
+    baseline = baseline_analyzer._get_analysis_system_prompt(language, stock_code="2330.TW")
     assert off == baseline
     assert off.count(CORE_TRADING_SKILL_POLICY_ZH) == 1
     assert _NEW_MARKER not in off
@@ -130,7 +135,8 @@ def test_on_does_not_touch_non_tw_or_english(code, language):
     assert _user_prompt(_analyzer(True), code, language) == _user_prompt(_analyzer(False), code, language)
 
 
-def _analyze_dashboard(weighted: bool, code: str = "2330.TW", prompt_variant: str = "baseline"):
+def _analyze_dashboard(weighted: bool, code: str = "2330.TW", prompt_variant: str = "baseline", ab_ratio: float = 1.0,
+                       sent: list = None):
     analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
     analyzer._router = None
     analyzer._litellm_available = True
@@ -141,7 +147,7 @@ def _analyze_dashboard(weighted: bool, code: str = "2330.TW", prompt_variant: st
         weighted, prompt_variant=prompt_variant, generation_backend="litellm",
         generation_fallback_backend="litellm", litellm_model="ollama/qwen3:14b", litellm_fallback_models=[],
         llm_model_list=[], report_language="zh-TW", gemini_request_delay=0, llm_temperature=0.7,
-        report_integrity_enabled=False, report_integrity_retry=0,
+        report_integrity_enabled=False, report_integrity_retry=0, tw_ma_alignment_ab_ratio=ab_ratio,
     )
     response = json.dumps({
         "stock_name": "台積電", "sentiment_score": 62, "trend_prediction": "看多", "operation_advice": "買入",
@@ -152,7 +158,9 @@ def _analyze_dashboard(weighted: bool, code: str = "2330.TW", prompt_variant: st
     context["code"] = code
     with patch("src.analyzer.get_config", return_value=analyzer._config_override), \
             patch.object(GeminiAnalyzer, "_tw_institutional_trend_lines", return_value=""), \
-            patch.object(analyzer, "generate", return_value=(response, "m", {}), create=True):
+            patch.object(analyzer, "generate", create=True,
+                         side_effect=lambda *a, **k: (sent.append((a, k)) if sent is not None else None)
+                         or (response, "m", {})):
         result = analyzer.analyze(context, news_context="n")
     return result.dashboard
 
@@ -165,3 +173,128 @@ def test_on_stamps_prompt_variant():
 def test_off_or_non_tw_leaves_prompt_variant_to_pipeline():
     assert "prompt_variant" not in _analyze_dashboard(False)
     assert "prompt_variant" not in _analyze_dashboard(True, code="AAPL")
+
+
+def test_ab_split_is_stable_per_day_and_roughly_follows_ratio():
+    assert _tw_ma_ab_treated("2330.TW", 1.0, "2026-10-23") is True
+    assert _tw_ma_ab_treated("2330.TW", 0.0, "2026-10-23") is False
+    codes = [f"{n:04d}.TW" for n in range(1000, 1400)]
+    picks = [_tw_ma_ab_treated(c, 0.5, "2026-10-23") for c in codes]
+    assert picks == [_tw_ma_ab_treated(c, 0.5, "2026-10-23") for c in codes]   # 同一天重跑不換組
+    assert 0.4 < sum(picks) / len(picks) < 0.6
+    other_day = [_tw_ma_ab_treated(c, 0.5, "2026-10-26") for c in codes]
+    assert picks != other_day                                                   # 換一天重新抽
+    assert sum(_tw_ma_ab_treated(c, 0.2, "2026-10-23") for c in codes) < sum(picks)
+
+
+@pytest.mark.parametrize("treated,variant", [(True, TW_MA_WEIGHTED_VARIANT), (False, TW_MA_CONTROL_VARIANT)])
+def test_ab_split_tags_each_arm(treated, variant):
+    with patch("src.analyzer._tw_ma_ab_treated", return_value=treated):
+        assert _analyze_dashboard(True, ab_ratio=0.5)["prompt_variant"] == variant
+        assert _analyze_dashboard(True, prompt_variant="v2", ab_ratio=0.5)["prompt_variant"] == f"v2+{variant}"
+
+
+def test_ab_control_arm_gets_unchanged_prompt():
+    analyzer = _analyzer(True)
+    analyzer._config_override.tw_ma_alignment_ab_ratio = 0.5
+    with patch("src.analyzer._tw_ma_ab_treated", return_value=False):
+        control = analyzer._get_analysis_system_prompt("zh-TW", stock_code="2330.TW")
+        control_user = _user_prompt(analyzer, "2330.TW")
+    assert control == _analyzer(False)._get_analysis_system_prompt("zh-TW", stock_code="2330.TW")
+    assert control_user == _user_prompt(_analyzer(False), "2330.TW")
+
+
+def test_ab_tag_follows_the_system_prompt_actually_sent():
+    # 系統提示詞分到加權組、之後重算換組（例如跨午夜）：標籤仍要跟送出的提示詞
+    with patch("src.analyzer._tw_ma_ab_treated", side_effect=[True] + [False] * 10):
+        assert _analyze_dashboard(True, ab_ratio=0.5)["prompt_variant"] == TW_MA_WEIGHTED_VARIANT
+
+
+# ---- 不 mock 分組函式：比例、台北日期、整次分析同一組這三條接線 ----
+
+def test_ab_ratio_from_config_drives_the_split():
+    assert _analyze_dashboard(True, ab_ratio=0.0)["prompt_variant"] == TW_MA_CONTROL_VARIANT
+    assert _analyze_dashboard(True, ab_ratio=1.0)["prompt_variant"] == TW_MA_WEIGHTED_VARIANT
+    # nan 讓每個比較都為假：不能變成「全進對照組又不打標」，當成 1 處理
+    assert _analyze_dashboard(True, ab_ratio=float("nan"))["prompt_variant"] == TW_MA_WEIGHTED_VARIANT
+
+
+def test_ab_split_uses_the_taipei_date():
+    day = dt.date(2026, 10, 23)
+    analyzer = _analyzer(True)
+    analyzer._config_override.tw_ma_alignment_ab_ratio = 0.5
+    codes = [f"{n:04d}.TW" for n in range(1100, 1140)]
+    with patch("src.analyzer._taipei_today", return_value=day):
+        got = [analyzer._tw_ma_weighted_active(c, "zh-TW") for c in codes]
+    assert got == [_tw_ma_ab_treated(c, 0.5, day) for c in codes]
+    assert any(got) and not all(got)
+
+
+def _flips(day1, day2):
+    return next(f"{n:04d}.TW" for n in range(1000, 2000)
+                if _tw_ma_ab_treated(f"{n:04d}.TW", 0.5, day1) and not _tw_ma_ab_treated(f"{n:04d}.TW", 0.5, day2))
+
+
+def test_one_analysis_keeps_one_arm_across_midnight():
+    # system prompt 在 23:59 組、user prompt 在 00:00 組：兩邊必須同組，標籤也跟著
+    d1, d2 = dt.date(2026, 10, 22), dt.date(2026, 10, 23)
+    code, sent = _flips(d1, d2), []
+    with patch("src.analyzer._taipei_today", side_effect=[d1] + [d2] * 20):
+        dash = _analyze_dashboard(True, code=code, ab_ratio=0.5, sent=sent)
+    text = json.dumps(sent, ensure_ascii=False, default=str)
+    assert dash["prompt_variant"] == TW_MA_WEIGHTED_VARIANT
+    assert _NEW_MARKER in text
+    assert "為加分項" in text                  # user prompt 也是加權版
+    for line in _OLD_USER_LINES:
+        assert line not in text
+
+
+def test_rerun_on_the_next_day_within_pin_window_regroups():
+    # 23:50 跑一次、00:10 同一檔再跑：要依新的一天重新分組，不能沿用 20 分鐘前釘住的組別
+    d1, d2 = dt.date(2026, 10, 22), dt.date(2026, 10, 23)
+    code = _flips(d1, d2)
+    analyzer = _analyzer(True)
+    analyzer._config_override.tw_ma_alignment_ab_ratio = 0.5
+    with patch("src.analyzer._taipei_today", return_value=d1):
+        analyzer._pin_tw_ma_arm(code, "zh-TW")
+        assert analyzer._tw_ma_weighted_active(code, "zh-TW") is True
+    with patch("src.analyzer._taipei_today", return_value=d2):
+        analyzer._pin_tw_ma_arm(code, "zh-TW")
+        assert analyzer._tw_ma_weighted_active(code, "zh-TW") is False
+
+
+def test_pins_survive_concurrent_workers():
+    # pipeline 的 worker 共用一個 analyzer：沒有鎖時迭代中被改會丟 RuntimeError／KeyError
+    import sys
+    import threading
+
+    analyzer = _analyzer(True)
+    analyzer._config_override.tw_ma_alignment_ab_ratio = 0.5
+    clock = [0.0]
+
+    def tick():
+        clock[0] += 120.0       # 讓 pins 裡一直有過期 key，清理路徑每次都會走到
+        return clock[0]
+
+    errors = []
+
+    def work(offset):
+        try:
+            for i in range(1500):
+                analyzer._pin_tw_ma_arm(f"{1000 + (i + offset) % 60:04d}.TW", "zh-TW")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(repr(exc))
+
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        with patch("src.analyzer.time.monotonic", side_effect=tick), \
+                patch("src.analyzer._taipei_today", return_value=dt.date(2026, 10, 23)):
+            threads = [threading.Thread(target=work, args=(k * 7,)) for k in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+    finally:
+        sys.setswitchinterval(old)
+    assert errors == []

@@ -10,10 +10,12 @@ A股自选股智能分析系统 - AI分析层
 3. 解析 LLM 响应为结构化 AnalysisResult
 """
 
+import hashlib
 import json
 import logging
 import math
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Tuple, Callable
@@ -1482,6 +1484,30 @@ def _tw_institution_flow_bias(fundamental_context: Optional[Dict[str, Any]]) -> 
 
 
 TW_MA_WEIGHTED_VARIANT = "tw-ma-weighted"
+# TW_MA_ALIGNMENT_AB_RATIO < 1 時，沒分到加權組的台股報告標這個，與同期加權組比（不和實驗前的 baseline 混）
+TW_MA_CONTROL_VARIANT = "tw-ma-control"
+_TW_MA_WEIGHTED_HEADING = "### 台股短波段買入（60-69分，均線加權）："
+
+
+_TW_MA_ARM_PIN_SECONDS = 30 * 60   # 一次 analyze() 內的分組釘住時間（system 與 user prompt 必須同組）
+_TW_MA_ARM_PIN_LOCK = threading.Lock()   # pipeline 的多個 worker 共用同一個 analyzer 實例
+
+
+def _taipei_today():
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    return _dt.now(ZoneInfo("Asia/Taipei")).date()
+
+
+def _tw_ma_ab_treated(stock_code: Any, ratio: float, day: Any) -> bool:
+    """A/B 分組：同一檔同一天固定在同一組（重跑不換組），不同天重新抽，避免某幾檔永遠在同一組。"""
+    if ratio >= 1:
+        return True
+    if ratio <= 0:
+        return False
+    digest = hashlib.sha256(f"{str(stock_code).strip().upper()}|{day}".encode("utf-8")).hexdigest()
+    return int(digest[:8], 16) / 0x100000000 < ratio
 
 
 def _tw_ma_weighted_bounds(bias_threshold: Any) -> tuple[str, str]:
@@ -1505,7 +1531,7 @@ def _apply_tw_ma_weighted_system_rules(prompt: str, bias_threshold: Any) -> str:
         "- **多头排列必须条件**：MA5 > MA10 > MA20\n- 只做多头排列的股票，空头排列坚决不碰\n",
         "- **多頭排列為加權加分項（非必要條件）**：MA5 > MA10 > MA20 加分；空頭排列（MA5 < MA10 < MA20）仍不做多\n",
     )
-    block = f"""### 台股短波段買入（60-69分，均線加權）：
+    block = f"""{_TW_MA_WEIGHTED_HEADING}
 - ✅ 未完整多頭排列也可：收盤站回 MA5 或 MA10，且量能放大（量比 > 1 或明顯放量）
 - ✅ 外資與投信同向買超（兩者皆為淨買超）
 - ✅ 乖離率 {lo}~{hi}% 只在放量突破（突破壓力位或前高且放量）時允許，且 `stop_loss` 必須寫明依 ATR14 設定的停損（停損距離不小於 1 倍 ATR14）；> {hi}% 仍嚴禁追高
@@ -2914,13 +2940,44 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             ),
         )
 
-    def _tw_ma_weighted_active(self, stock_code: Any, report_language: str) -> bool:
-        """台股＋中文模板＋TW_MA_ALIGNMENT_WEIGHTED 開啟時才套用均線加權規則（英文模板未覆蓋）。"""
+    def _tw_ma_ab_eligible(self, stock_code: Any, report_language: str) -> bool:
+        """台股＋中文模板＋TW_MA_ALIGNMENT_WEIGHTED 開啟：進入均線加權實驗（英文模板未覆蓋）。"""
         return (
             bool(getattr(self._get_runtime_config(), "tw_ma_alignment_weighted", False))
             and is_tw_code(stock_code)
             and normalize_report_language(report_language) not in ("en", "ko")
         )
+
+    def _tw_ma_ab_ratio(self) -> float:
+        try:
+            ratio = float(getattr(self._get_runtime_config(), "tw_ma_alignment_ab_ratio", 1.0))
+        except (TypeError, ValueError):
+            return 1.0
+        return ratio if math.isfinite(ratio) else 1.0     # nan 會讓每個比較都為假：全進對照組又不打標
+
+    def _tw_ma_weighted_active(self, stock_code: Any, report_language: str) -> bool:
+        """實驗內且被分到加權組才套用均線加權規則；分組依台北日期（TW_MA_ALIGNMENT_AB_RATIO）。
+
+        analyze() 開頭會先釘住這次的組別，之後組 system／user prompt 都讀同一個值，跨午夜也不會一半一半。"""
+        with _TW_MA_ARM_PIN_LOCK:
+            pin = getattr(self, "_tw_ma_arm_pins", {}).get((str(stock_code), report_language))
+        if pin and time.monotonic() - pin[0] < _TW_MA_ARM_PIN_SECONDS:
+            return pin[1]
+        if not self._tw_ma_ab_eligible(stock_code, report_language):
+            return False
+        return _tw_ma_ab_treated(stock_code, self._tw_ma_ab_ratio(), _taipei_today())
+
+    def _pin_tw_ma_arm(self, stock_code: Any, report_language: str) -> None:
+        key = (str(stock_code), report_language)
+        with _TW_MA_ARM_PIN_LOCK:
+            pins = self.__dict__.setdefault("_tw_ma_arm_pins", {})
+            pins.pop(key, None)      # 先拿掉自己的舊 pin，下面才會依今天的日期重算
+        arm = self._tw_ma_weighted_active(stock_code, report_language)
+        with _TW_MA_ARM_PIN_LOCK:
+            now = time.monotonic()
+            for k in [k for k, (t, _) in pins.items() if now - t >= _TW_MA_ARM_PIN_SECONDS]:
+                del pins[k]      # 長駐行程裡不無限累積
+            pins[key] = (now, arm)
 
     def _get_analysis_system_prompt(self, report_language: str, stock_code: str = "") -> str:
         """Build the analyzer system prompt with output-language guidance."""
@@ -3832,6 +3889,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         code = context.get('code', 'Unknown')
         config = self._get_runtime_config()
         report_language = normalize_report_language(getattr(config, "report_language", "zh"))
+        self._pin_tw_ma_arm(code, report_language)
         system_prompt = self._get_analysis_system_prompt(report_language, stock_code=code)
         skill_instructions, default_skill_policy, use_legacy_default_prompt = self._get_skill_prompt_sections()
 
@@ -4101,12 +4159,20 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             if should_persist_usage_telemetry(llm_usage):
                 persist_llm_usage(llm_usage, model_used, call_type="analysis", stock_code=code)
 
-            if self._tw_ma_weighted_active(code, report_language) and isinstance(result.dashboard, dict):
-                # 套了均線加權提示詞就標記版本，pipeline 的 setdefault 會保留它，影子評估據此分組
+            if self._tw_ma_ab_eligible(code, report_language) and isinstance(result.dashboard, dict):
+                # 依實際送出的系統提示詞標組別（分組看日期，跨午夜重算可能換組，以送出的為準）；
+                # pipeline 的 setdefault 會保留它，影子評估據此分組
+                if _TW_MA_WEIGHTED_HEADING in system_prompt:
+                    arm = TW_MA_WEIGHTED_VARIANT
+                elif self._tw_ma_ab_ratio() < 1:
+                    arm = TW_MA_CONTROL_VARIANT
+                else:
+                    arm = None
                 base_variant = getattr(config, "prompt_variant", None) or "baseline"
-                result.dashboard["prompt_variant"] = (
-                    TW_MA_WEIGHTED_VARIANT if base_variant == "baseline" else f"{base_variant}+{TW_MA_WEIGHTED_VARIANT}"
-                )
+                if arm:
+                    result.dashboard["prompt_variant"] = (
+                        arm if base_variant == "baseline" else f"{base_variant}+{arm}"
+                    )
 
             logger.info(f"[LLM解析] {name}({code}) 分析完成: {result.trend_prediction}, 评分 {result.sentiment_score}")
 
