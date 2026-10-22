@@ -795,6 +795,71 @@ class PortfolioPr2TestCase(unittest.TestCase):
             summary = self.service.refresh_fx_rates(account_id=account["id"], as_of=date(2026, 1, 2))
         self.assertEqual(summary["pair_count"], 0)
 
+    def _usd_and_twd_accounts(self):
+        """正式站形狀：台幣帳戶有 TWD->CNY，美元帳戶（後建）從沒刷新過 USD->CNY。"""
+        tw = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
+        us = self.service.create_account(name="US", broker="Demo", market="us", base_currency="USD")
+        self.service.record_cash_ledger(
+            account_id=tw["id"], event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="TWD"
+        )
+        self.service.record_cash_ledger(
+            account_id=us["id"], event_date=date(2026, 1, 1), direction="in", amount=100.0, currency="USD"
+        )
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 2),
+            rate=0.2, source="manual", is_stale=False,
+        )
+        return tw["id"], us["id"]
+
+    def test_snapshot_flags_missing_fx_instead_of_passing_one_to_one_as_converted(self) -> None:
+        _, us_id = self._usd_and_twd_accounts()
+
+        snapshot = self.service.get_portfolio_snapshot(as_of=date(2026, 1, 2), include_realtime=False)
+
+        self.assertTrue(snapshot["fx_missing"])
+        self.assertEqual(snapshot["fx_missing_pairs"], ["USD/CNY"])
+        accounts = {item["account_id"]: item for item in snapshot["accounts"]}
+        # USD 帳戶自己的金額沒問題（帳戶幣別內），換到 CNY 的那個數字不能給 1:1 的假值
+        self.assertFalse(accounts[us_id]["fx_missing"])
+        self.assertIsNone(accounts[us_id]["total_market_value_aggregate"])
+        self.assertAlmostEqual(accounts[us_id]["total_cash"], 100.0, places=6)
+
+    def test_snapshot_without_missing_fx_keeps_flag_false(self) -> None:
+        # 反向：匯率齊全時不得標成缺匯率，換算值照常給。
+        _, us_id = self._usd_and_twd_accounts()
+        self.service.repo.save_fx_rate(
+            from_currency="USD", to_currency="CNY", rate_date=date(2026, 1, 2),
+            rate=7.0, source="manual", is_stale=False,
+        )
+
+        snapshot = self.service.get_portfolio_snapshot(as_of=date(2026, 1, 2), include_realtime=False)
+
+        self.assertFalse(snapshot["fx_missing"])
+        self.assertEqual(snapshot["fx_missing_pairs"], [])
+        self.assertAlmostEqual(snapshot["total_cash"], 200.0 + 700.0, places=6)
+        accounts = {item["account_id"]: item for item in snapshot["accounts"]}
+        self.assertIsNotNone(accounts[us_id]["total_market_value_aggregate"])
+        self.assertFalse(snapshot["fx_stale"])
+
+    def test_fx_rate_older_than_max_age_reads_as_stale(self) -> None:
+        # is_stale 是寫入時的旗標：10-15 刷新一次後 10-23 仍標「最新」。讀取端要看匯率日期。
+        account = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="TWD"
+        )
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 1),
+            rate=0.2, source="manual", is_stale=False,
+        )
+
+        fresh = self.service.get_portfolio_snapshot(as_of=date(2026, 1, 4), include_realtime=False)
+        old = self.service.get_portfolio_snapshot(as_of=date(2026, 1, 9), include_realtime=False)
+
+        # 3 天內（涵蓋週末）仍算最新，8 天前就是過期
+        self.assertFalse(fresh["fx_stale"])
+        self.assertTrue(old["fx_stale"])
+        self.assertFalse(old["fx_missing"])
+
     def test_fx_refresh_disabled_returns_real_pair_count_without_fetching(self) -> None:
         account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="CNY")
         aid = account["id"]

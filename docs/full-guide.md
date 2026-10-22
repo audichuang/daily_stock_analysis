@@ -1987,6 +1987,8 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 - 持仓快照的 `positions[]` 会返回 `price_source`、`price_date`、`price_stale`、`price_available` 等价格元信息；当天快照默认会先尝试实时行情，实时价不可用或非正值时再回退到 `as_of` 当天或之前最近的历史收盘价；传入 `include_realtime=false` 时会跳过实时行情并直接使用本地历史收盘价回退路径，Web 持仓页用该模式优先渲染持仓列表，避免外部实时行情源变慢时阻塞首屏。历史 `as_of` 快照不会拉取实时价，也不会再把成本价静默当作现价；缺价持仓会标记 `price_available=false` 并从市值与未实现盈亏汇总中排除。
 - 台股（`.TW`/`.TWO`）的历史收盘除了应用库 `stock_daily`，也会查 `market` schema 的 `market.price`（全市场每日收盘），两边取较新的一天；因此没跑过个股分析的台股持仓也有价格。`market` schema 不可用时静默退回只用 `stock_daily`。
 - 快照的跨帐户汇总（`currency`、`total_*`）固定换算成 CNY；「刷新汇率」除了交易币别→帐户币别，也会刷新帐户币别→CNY，非人民币帐户（如台币）需至少刷新一次，否则汇总以 1:1 回退并标记 `fx_stale`。
+- 本 fork：查無匯率走 1:1 回退時，快照另帶 `fx_missing=true` 與 `fx_missing_pairs`（如 `USD/CNY`），該帳戶的 `total_market_value_aggregate` 給 `null`；Web 頂部三張總額卡顯示「不可用」並提示要刷新哪一對，Agent 工具拿到的跨幣別合計也是 `null`。`total_*` 數值欄位仍保留（契約是 float），消費端要看 `fx_missing`。刷新只在按「刷新匯率」時發生（沒有排程），新建外幣帳戶後要刷新一次。
+- 本 fork：匯率快取的日期比快照日早超過 3 天就算 `fx_stale`（常數 `portfolio_service.PORTFOLIO_FX_MAX_AGE_DAYS`，涵蓋週末），不再只看寫入當下的 `is_stale`。
 - 汇率刷新会先尝试在线源；若在线获取失败，则回退到最近一次缓存并标记 `is_stale=true`，避免快照和风险页整体不可用。
 - 当 `PORTFOLIO_FX_UPDATE_ENABLED=false` 时，手动刷新接口会明确返回“在线刷新已禁用”，页面不会误导为“当前没有可刷新的汇率对”。
 - 风险摘要包含集中度、回撤、止损接近度等信息；`sector_concentration` 会优先尝试按板块归类，失败时降级到 `UNCLASSIFIED`，不会阻断风险结果返回。

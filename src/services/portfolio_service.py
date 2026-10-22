@@ -8,7 +8,7 @@ import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from data_provider.base import canonical_stock_code, normalize_stock_code
@@ -41,6 +41,14 @@ PORTFOLIO_FX_REFRESH_DISABLED_REASON = "portfolio_fx_update_disabled"
 PORTFOLIO_REALTIME_QUOTE_MAX_WORKERS = 4
 # 跨帐户汇总（快照 total_* 与风险页）统一换算到这个币别。
 PORTFOLIO_AGGREGATE_CURRENCY = "CNY"
+# 匯率快取超過這麼多天（以 rate_date 對快照日）就算過期。`is_stale` 只在寫入時決定，
+# 手動刷新一次之後就一直是 False——8 天前的匯率照樣顯示「最新」。3 天涵蓋週末。
+PORTFOLIO_FX_MAX_AGE_DAYS = 3
+FX_FALLBACK_SOURCE = "fallback_1_to_1"
+
+
+def _format_fx_pair(pair: Tuple[str, str]) -> str:
+    return f"{pair[0]}/{pair[1]}"
 
 
 def _portfolio_limitations_for_market(market: str) -> List[str]:
@@ -114,6 +122,8 @@ class PortfolioService:
 
     def __init__(self, repo: Optional[PortfolioRepository] = None):
         self.repo = repo or PortfolioRepository()
+        # 本次換算中查無匯率（走 1:1 回退）的幣別對，get_portfolio_snapshot 逐帳戶收集。
+        self._fx_missing_pairs: Set[Tuple[str, str]] = set()
 
     # ------------------------------------------------------------------
     # Account CRUD
@@ -504,13 +514,21 @@ class PortfolioService:
             "limitations": [],
         }
 
+        aggregate_missing_pairs: Set[Tuple[str, str]] = set()
         for account in account_rows:
+            self._fx_missing_pairs = set()
             account_snapshot = self._replay_account(
                 account=account,
                 as_of_date=as_of_date,
                 cost_method=method,
                 include_realtime=include_realtime and not read_only,
             )
+            # 帳戶內（交易幣別 → 帳戶幣別）查無匯率：帳戶自己的金額就已經是 1:1 冒充。
+            account_missing_pairs = sorted(self._fx_missing_pairs)
+            account_snapshot["public"]["fx_missing"] = bool(account_missing_pairs)
+            account_snapshot["public"]["fx_missing_pairs"] = [
+                _format_fx_pair(pair) for pair in account_missing_pairs
+            ]
 
             if not read_only:
                 self.repo.replace_positions_lots_and_snapshot(
@@ -550,7 +568,13 @@ class PortfolioService:
                 to_currency=aggregate_currency,
                 as_of_date=as_of_date,
             )
-            account_snapshot["public"]["total_market_value_aggregate"] = round(mv_cny, 6)
+            # 帳戶幣別換不到彙總幣別時，換算後的市值是假數字：給 null，不給 1:1 的值。
+            account_snapshot["public"]["total_market_value_aggregate"] = (
+                None
+                if (self._normalize_currency(account.base_currency), aggregate_currency)
+                in self._fx_missing_pairs
+                else round(mv_cny, 6)
+            )
             eq_cny, stale_eq, _ = self._convert_amount(
                 amount=account_snapshot["total_equity"],
                 from_currency=account.base_currency,
@@ -600,6 +624,7 @@ class PortfolioService:
                     stale_tax,
                 ]
             )
+            aggregate_missing_pairs |= self._fx_missing_pairs
 
         return {
             "as_of": as_of_date.isoformat(),
@@ -614,6 +639,10 @@ class PortfolioService:
             "fee_total": round(aggregate["fee_total"], 6),
             "tax_total": round(aggregate["tax_total"], 6),
             "fx_stale": aggregate["fx_stale"],
+            # 有任一幣別對查無匯率時 total_* 含 1:1 冒充的金額，消費端要當成不可用。
+            # 數值欄位保留（契約是 float），以這兩欄判斷。
+            "fx_missing": bool(aggregate_missing_pairs),
+            "fx_missing_pairs": [_format_fx_pair(pair) for pair in sorted(aggregate_missing_pairs)],
             "data_quality": "partial" if aggregate["limitations"] else "ok",
             "limitations": aggregate["limitations"],
             "accounts": accounts_payload,
@@ -1463,7 +1492,11 @@ class PortfolioService:
             as_of=as_of_date,
         )
         if direct is not None and direct.rate > 0:
-            return float(amount) * float(direct.rate), bool(direct.is_stale), "direct_rate"
+            return (
+                float(amount) * float(direct.rate),
+                self._is_fx_rate_stale(direct, as_of_date),
+                "direct_rate",
+            )
 
         inverse = self.repo.get_latest_fx_rate(
             from_currency=to_norm,
@@ -1471,10 +1504,30 @@ class PortfolioService:
             as_of=as_of_date,
         )
         if inverse is not None and inverse.rate > 0:
-            return float(amount) / float(inverse.rate), bool(inverse.is_stale), "inverse_rate"
+            return (
+                float(amount) / float(inverse.rate),
+                self._is_fx_rate_stale(inverse, as_of_date),
+                "inverse_rate",
+            )
 
         # P0 fallback: keep pipeline available even when FX cache is missing.
-        return float(amount), True, "fallback_1_to_1"
+        # 金額沒有換算，記下這一對讓快照把彙總標成不可用（見 get_portfolio_snapshot）。
+        missing_pairs = getattr(self, "_fx_missing_pairs", None)
+        if missing_pairs is not None:
+            missing_pairs.add((from_norm, to_norm))
+        return float(amount), True, FX_FALLBACK_SOURCE
+
+    @staticmethod
+    def _is_fx_rate_stale(rate_row: Any, as_of_date: date) -> bool:
+        """寫入時的 is_stale 之外，再以匯率日期的年齡判定（讀取端套同一個判定）。"""
+        if bool(getattr(rate_row, "is_stale", False)):
+            return True
+        rate_date = getattr(rate_row, "rate_date", None)
+        if isinstance(rate_date, datetime):
+            rate_date = rate_date.date()
+        if not isinstance(rate_date, date):
+            return True
+        return (as_of_date - rate_date).days > PORTFOLIO_FX_MAX_AGE_DAYS
 
     def convert_amount(
         self,

@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
-- [修復] 美股大盤複盤的指數價格：Yahoo 偶發把最新一列日線回成「價格全空、只有成交量」（10/22 那筆複盤 S&P 500／Nasdaq／道瓊全是「-」），現在改讀 yfinance `fast_info` 的最新價、以前一個有價格的交易日當基準並記警告，拿不到就留空，不會拿上一場收盤冒充；只有一列時涨跌改成沒有讀數而不是 0%；繁中報告的「結構化大盤資料」把美股指數名依代碼顯示成繁體（標普500指數、那斯達克綜合指數、道瓊工業指數等，歷史紀錄同樣生效）
+- [修復] `/portfolio` 查無匯率時不再把外幣金額 1:1 當人民幣加總（永豐複委託的 USD 被標成 CNY、全部帳戶總市值低估約 7 倍）：快照新增 `fx_missing`／`fx_missing_pairs`，頂部總權益／總市值／總現金改顯示「不可用」並提示缺哪一對、Agent 工具的跨幣別合計給 null；匯率快取超過 3 天改判過期（原本 10-15 的匯率到 10-23 仍顯示「最新」）。缺 USD→CNY 的原因是匯率只在按「刷新匯率」時更新、10-15 之後沒人按，而 #8 是 10-21 才建的
+- [修復] 美股大盤複盤的指數價格：Yahoo 偶發把最新一列日線回成「價格全空、只有成交量」（10/22 那筆複盤 S&P 500／Nasdaq／道瓊全是「-」），現在改讀 yfinance `fast_info` 的最新價、以前一個有價格的交易日當基準並記警告，拿不到就留空，不會拿上一場收盤冒充；只有一列時漲跌改成沒有讀數而不是 0%；繁中報告的「結構化大盤資料」把美股指數名依代碼顯示成繁體（標普500指數、那斯達克綜合指數、道瓊工業指數等，歷史紀錄同樣生效）
 - [測試] `test_persist_usage_never_raises` 改用注入的資料庫失敗，不再 reset singleton 後讓 `persist_llm_usage` 依設定新建連線寫入（正式 `dsa.llm_usage` 裡 42 筆 `model='m'` 的假用量就是它留下的；清除要另行處理）
 - [修復] `/settings` 首次啟動設定檢查的「資料庫」項：設了 `STORAGE_DATABASE_URL` 時改成對執行中的應用庫做 `SELECT 1`（顯示遮蔽密碼的連線字串），連不上就標「需處理」；原本只看已凍結的 `DATABASE_PATH` SQLite 父目錄能不能寫，Postgres 掛掉也亮綠燈
 - [修復] 資料中心 `/data` 認得本 fork 的台股來源：新增 `shioaji`（台股即時報價，有金鑰時排在 yfinance 前）與 `marketdb`（台股日 K）兩個 Provider 和 `tw.realtime` 路由；`marketdbfetcher` 不再出現 `unknown_source` 警示，也不再被掛到 cn／hk／jp／kr 的日 K
