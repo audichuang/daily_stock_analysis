@@ -83,21 +83,24 @@ def is_raw_buy(raw_score, raw_type, threshold=60) -> bool:
     return (raw_score is not None and raw_score >= threshold) or raw_type in BUY_TYPES
 
 
-def trade_return(o, h, lo, c, adj, *, stop=None, take=None, tax_rate=STOCK_TRANSACTION_TAX_RATE,
+def trade_return(o, h, lo, c, adj, *, stop=None, take=None, level_adj=None, tax_rate=STOCK_TRANSACTION_TAX_RATE,
                  notional=DEFAULT_NOTIONAL, fee_discount=1.0):
     """一筆影子交易的淨報酬。
 
     o/h/lo/c/adj 是從進場日（第 1 天）起、長度 = 持有天數的序列；o/h/lo/c 為未還原價，adj 為前復權因子。
+    level_adj 是報告價位所屬那天（報告日）的前復權因子；未給時視為進場日（adj[0]）。
     回傳 (淨報酬, 出場類型) ；進場日沒開盤價（停牌）回傳 None。
     """
     if not np.isfinite(o[0]):
         return None
     entry = o[0]
+    # 報告價位是報告日的名目價：一律換到還原價空間再比，報告日到出場之間除權息／分割才不會誤觸或失效
+    f_level = adj[0] if level_adj is None or not np.isfinite(level_adj) else level_adj
+    entry_adj = entry * adj[0]
     use_levels = (stop is not None and take is not None and np.isfinite(stop) and np.isfinite(take)
-                  and stop < entry < take)
-    # 報告價位是進場日的名目價：一律在還原價空間比較，窗口內除權息／分割才不會誤觸停損停利
-    stop_adj = stop * adj[0] if use_levels else None
-    take_adj = take * adj[0] if use_levels else None
+                  and stop * f_level < entry_adj < take * f_level)
+    stop_adj = stop * f_level if use_levels else None
+    take_adj = take * f_level if use_levels else None
     last = None
     for k in range(len(o)):
         if not np.isfinite(o[k]):
@@ -237,6 +240,8 @@ def build_events(reports, panels, horizons, *, threshold, fee_discount):
         if r.stock_id not in panels["close"].columns:
             continue
         i0 = cal.searchsorted(r.day, side="right")  # 報告日之後第一個交易日
+        adj_col = panels["adj"][r.stock_id].to_numpy()
+        level_adj = adj_col[i0 - 1] if i0 >= 1 else np.nan  # 報告日（或之前最後一個交易日）的因子
         group = "raw_buy" if is_raw_buy(r.raw_score, r.raw_type, threshold) else "others"
         tax = ETF_TRANSACTION_TAX_RATE if r.stock_id.startswith("00") else STOCK_TRANSACTION_TAX_RATE
         for hz in horizons:
@@ -251,7 +256,8 @@ def build_events(reports, panels, horizons, *, threshold, fee_discount):
                                  tax_rate=ETF_TRANSACTION_TAX_RATE, fee_discount=fee_discount)
             for mode, stop, take in (("time", None, None), ("levels", r.stop_loss, r.take_profit)):
                 res = trade_return(*(seq(r.stock_id, k) for k in ("open", "high", "low", "close", "adj")),
-                                   stop=stop, take=take, tax_rate=tax, fee_discount=fee_discount)
+                                   stop=stop, take=take, level_adj=level_adj, tax_rate=tax,
+                                   fee_discount=fee_discount)
                 if res is None:
                     continue
                 rows.append({"code": r.code, "day": r.day, "group": group, "h": hz, "mode": mode,

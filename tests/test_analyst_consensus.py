@@ -270,3 +270,13 @@ def test_wiring_exception_fails_open():
     ctx, _ = _ctx("2330.TW", True, consensus_exc=RuntimeError("boom"))
     assert "consensus" not in ctx
     assert ctx["market"] == "tw"
+
+
+@pytest.mark.parametrize("fy1,up30,down30,pct,direction", [
+    ((-1.6, -1.7, -2.0, -2.0), 4, 0, 20.0, "up"),     # 虧損縮小 -2→-1.6 是上修
+    ((-2.4, -2.3, -2.0, -2.0), 0, 4, -20.0, "down"),  # 虧損擴大 -2→-2.4 是下修
+])
+def test_negative_eps_base_keeps_revision_sign(fy1, up30, down30, pct, direction):
+    c, _ = _fetch(_ticker(fy1=fy1, up30=up30, down30=down30))
+    assert c["eps_fy1_rev_30d_pct"] == pytest.approx(pct)
+    assert c["eps_fy1_revision_direction"] == direction

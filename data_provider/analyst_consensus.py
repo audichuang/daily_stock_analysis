@@ -40,7 +40,8 @@ def _today() -> date:
 def _pct_change(cur: Optional[float], base: Optional[float]) -> Optional[float]:
     if cur is None or base is None or base == 0:
         return None
-    pct = (cur / base - 1.0) * 100.0
+    # 除以 |base|：基期為負（虧損）時方向才不會反轉（-2→-1.6 是上修）
+    pct = (cur - base) / abs(base) * 100.0
     if abs(pct) > _MAX_ABS_REVISION_PCT:
         return None
     return round(pct, 2)

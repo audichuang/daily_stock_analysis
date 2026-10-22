@@ -287,13 +287,16 @@ def load(engine, as_of: pd.Timestamp | None, include_otc_revenue: bool = False):
         # 原本 `date = as_of` 查到 0 列、PE／PB／殖利率整欄 NaN（高息／低估值標籤永不觸發）。
         # 在 Python 取最新日而不用子查詢，才能用假 read_sql 驗窗口與挑日。
         val = pd.read_sql(text(
-            "select stock_id, date, pe_ratio, pb_ratio, dividend_yield from market.valuation "
+            "select stock_id, date, market, pe_ratio, pb_ratio, dividend_yield from market.valuation "
             "where date <= :d and date > :lo"
         ), c, params={"d": as_of.date(),
                       "lo": (as_of - pd.Timedelta(days=VALUATION_WINDOW_DAYS)).date()},
             parse_dates=["date"])
         if len(val):
-            val = val[val["date"] == val["date"].max()]
+            # 上市、上櫃各自發布，最新日可能差一天：分市場各取最新一天（NULL＝上市）
+            mkt = val["market"].fillna("twse") if "market" in val else pd.Series("twse", index=val.index)
+            val = val[val["date"] == val.groupby(mkt)["date"].transform("max")]
+        val = val.drop(columns=["market"], errors="ignore")
         # 用 announce_date 設上界:營收在次月才公布,以 revenue_month 篩會提前看到未發布的數字
         rev = pd.read_sql(text(
             "select stock_id, revenue_month, yoy, mom from market.monthly_revenue "

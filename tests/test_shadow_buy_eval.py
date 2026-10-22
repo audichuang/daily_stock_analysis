@@ -85,6 +85,16 @@ def test_split_inside_window_does_not_fake_a_stop():
     assert kind == "stop" and r == pytest.approx(_rt(25, 23))
 
 
+def test_split_between_report_and_entry_keeps_levels():
+    # 報告日價位 stop 95／take 120（名目 100 附近），進場日當天 1 拆 4：開盤 25 不可讓價位失效
+    bars = _bars([25, 27, 30.5], [26, 30.5, 31], [24.5, 26.5, 30], [25.5, 30, 30.5], adj=[1.0, 1.0, 1.0])
+    r, kind = trade_return(*bars, stop=95, take=120, level_adj=0.25)
+    assert kind == "take" and r == pytest.approx(_rt(25, 30))
+    # 反向：沒有分割時，報告價位相對進場價不成區間就仍要忽略
+    r, kind = trade_return(*bars, stop=95, take=120, level_adj=1.0)
+    assert kind == "time"
+
+
 def test_suspended_entry_day_returns_none():
     assert trade_return(*_bars([np.nan, 100], [np.nan, 101], [np.nan, 99], [np.nan, 100])) is None
 
@@ -189,3 +199,20 @@ def test_help_has_no_side_effects():
     out = subprocess.run([sys.executable, str(SCRIPTS_DIR / "shadow_buy_eval.py"), "--help"],
                          capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}, timeout=60)
     assert out.returncode == 0 and "--out" in out.stdout
+
+
+def test_build_events_uses_report_day_factor_for_levels():
+    from shadow_buy_eval import BENCHMARK, build_events
+
+    days = pd.to_datetime(["2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06"])
+    # 2330 在 10-02（進場日）1 拆 4：報告日 10-01 因子 0.25、之後 1.0
+    px = {"open": [100, 25, 27, 30.5], "high": [101, 26, 30.5, 31],
+          "low": [99, 24.5, 26.5, 30], "close": [100, 25.5, 30, 30.5]}
+    panels = {k: pd.DataFrame({"2330": v, BENCHMARK: [50.0] * 4}, index=days) for k, v in px.items()}
+    panels["adj"] = pd.DataFrame({"2330": [0.25, 1.0, 1.0, 1.0], BENCHMARK: [1.0] * 4}, index=days)
+    reports = pd.DataFrame([{"code": "2330.TW", "stock_id": "2330", "day": days[0], "raw_score": 70,
+                             "raw_type": "buy", "stop_loss": 95.0, "take_profit": 120.0,
+                             "downgraded": True, "variant": "baseline"}])
+    ev = build_events(reports, panels, [3], threshold=60, fee_discount=1.0)
+    lv = ev[ev["mode"] == "levels"].iloc[0]
+    assert lv["exit"] == "take" and lv["ret"] == pytest.approx(_rt(25, 30))

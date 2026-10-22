@@ -438,6 +438,21 @@ def test_valuation_takes_the_latest_day_within_seven_calendar_days(monkeypatch, 
     assert "date = :d" not in seen["sql"]
 
 
+@pytest.mark.parametrize("twse_day,tpex_day", [("2026-07-31", "2026-07-30"), ("2026-07-30", "2026-07-31")])
+def test_valuation_latest_day_is_picked_per_market(monkeypatch, tmp_path, twse_day, tpex_day):
+    # 上市與上櫃發布日差一天時，兩邊都要留下各自最新那天，不能被另一邊的日期整包剔除
+    rows = pd.DataFrame([
+        {"stock_id": s, "date": pd.Timestamp(d), "market": m, "pe_ratio": pe, "pb_ratio": 1.0,
+         "dividend_yield": 2.0}
+        for s, m, days in (("1101", None, (twse_day, "2026-07-29")), ("6488", "tpex", (tpex_day, "2026-07-29")))
+        for d, pe in zip(days, (13.0, 99.0))
+    ])
+    val, _ = _load_valuation(monkeypatch, tmp_path, rows)
+    got = dict(zip(val["stock_id"], val["date"]))
+    assert got == {"1101": pd.Timestamp(twse_day), "6488": pd.Timestamp(tpex_day)}
+    assert set(val["pe_ratio"]) == {13.0} and "market" not in val.columns
+
+
 def test_valuation_older_than_the_window_is_not_used(monkeypatch, tmp_path):
     """窗口只有 07-20 一天（遠超 7 日）→ 寧可整欄「—」，不拿十幾天前的 PE 當今天的。"""
     old = _valuation_rows()
