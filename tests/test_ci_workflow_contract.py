@@ -123,7 +123,8 @@ def test_heavy_ci_jobs_are_path_filtered_and_backend_tests_are_sharded() -> None
     assert backend_tests_job["needs"] == ["changes", "ai-governance"]
     assert backend_tests_job["if"] == "needs.changes.outputs.backend == 'true'"
     assert backend_tests_job["strategy"]["fail-fast"] == "false"
-    assert backend_tests_job["strategy"]["matrix"]["shard"] == ["1", "2", "3"]
+    # fork：ttnas 自架 runner 上 4 片最佳（6 片會滿載），見 ci.yml 開頭註解
+    assert backend_tests_job["strategy"]["matrix"]["shard"] == ["1", "2", "3", "4"]
     assert backend_gate_job["needs"] == [
         "changes",
         "ai-governance",
@@ -142,10 +143,10 @@ def test_heavy_ci_jobs_are_path_filtered_and_backend_tests_are_sharded() -> None
     shard_step = next(
         step
         for step in backend_tests_job["steps"]
-        if step["name"] == "✅ Offline test suite shard ${{ matrix.shard }}/3"
+        if step["name"] == "✅ Offline test suite shard ${{ matrix.shard }}/4"
     )
     assert shard_step["env"] == {
-        "PYTEST_SPLITS": "3",
+        "PYTEST_SPLITS": "4",
         "PYTEST_GROUP": "${{ matrix.shard }}",
         "PYTEST_FIRST_SHARD_OVERHEAD": "20",
     }

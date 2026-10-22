@@ -44,6 +44,7 @@
 ### CI
 
 - CI 只由 push 触发（`ci.yml` 的 `on:`），PR 上的 checks 就是工作分支那次 push run：**工作分支前缀不在 `on:` 清单内就没有 CI**。
+- **CI 跑在 ttnas 的自架 runner**（label `ttnas`，Komodo stack `gh-runners`，設定與坑見 nas-ops `hosts/ttnas/gh-runners/manifest.md`）。runner 掛 `docker.sock`＝NAS root：repo 公開期間 fork PR 的 workflow 核准必須維持 `all_external_contributors`，`ci.yml` 不加 `pull_request` 觸發；要暫停就 Komodo `StopStack gh-runners`。
 - **本机 `ci_gate.sh` 与 CI 不等价**：相依安装只有 CI 装得起来才算数；CI 的 backend-tests 跑 **Python 3.11**、本机 venv 是 3.12，3.12-only 语法（PEP 701 同引号巢状 f-string）本机永远剖析得过。`tests/test_python_version_compat.py` 挡这个，但本机借不到 CI 版本时它是 **skip 不是 fail**。
 
 ### 按改动面
