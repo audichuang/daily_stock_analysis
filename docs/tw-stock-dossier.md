@@ -66,7 +66,7 @@ uv run --env-file .env python scripts/tw_stock_report.py 3324 --data /tmp/3324.j
 | 合約負債 | `financial_statement`（`balance_sheet` 的「合約負債－流動／非流動」） | 約 1,900 家有單獨列示；沒列的公司（如 3324）多半併在其他流動負債，報告寫「無法評估」，不拿別的科目代替 |
 | 三大法人 5／20 日 | `market.institutional`（上市＋上櫃） | 單位換成張；窗口內有缺值就不印累計 |
 | 融資融券 | `market.margin`（上市＋上櫃） | 單位張、T+1；不含融資使用率（表內沒有限額欄） |
-| 千張大戶、股東人數 | `market.holding_dist`（集保） | 開放資料只給最新一週；要週變化得先 `market_data.cli holding-history <代號>` 補歷史（每檔約 51 個請求） |
+| 千張大戶、股東人數 | `market.holding_dist`（集保） | 開放資料只給最新一週；要週變化得先 `market_data.cli holding-history <代號>` 補歷史（每檔約 51 個請求）。TDCC 表單 token 每次請求後輪換，某週逾時後會重新 GET 查詢頁換 token；回「查無此資料」的週次拒收，整串只印一條 `**WARN`（附週數與範圍）——代號打錯、該週無資料、作廢 token 回的頁面逐字相同，全部週次都查無時先檢查代號 |
 | 券商分點 | 富邦 DJ 個股主力進出頁（`data_provider/tw_broker_branch.py`） | **只有前 15 名買超與前 15 名賣超**；HHI 只在前 15 名買超分點內計算，「平均買超成本」是這 15 家的加權成本，不是全體大戶成本 |
 | 估值 | `market.valuation`（上市 BWIBBU、上櫃 peQryDate） | 本益比百分位要近 3 年至少 120 個有值交易日才算 |
 | SMC 結構 | `market.price` 套前復權（`market_repo.front_adjust_multipliers`）後算 | 定義寫死在 `src/services/smc_structure.py` 模組說明（擺動點 n=3、收盤突破才算、OB／FVG／Fib 的取法）；SMC 沒有統一標準，換定義數字就不同 |

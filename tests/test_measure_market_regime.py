@@ -10,6 +10,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import measure_market_regime  # noqa: E402
 from measure_market_regime import (  # noqa: E402
     bootstrap_diff,
     price_neutral_margin_delta,
@@ -68,3 +69,25 @@ def test_bootstrap_diff_recovers_known_gap():
     assert ci is not None and ci[0] > 0 and ci[0] < 0.005 < ci[1]
     flat = bootstrap_diff(rng.normal(0, 0.01, n), np.ones(n), state, n=300, block=60)
     assert flat[0] < 0 < flat[1]
+
+
+def test_load_margin_delta_reads_listed_margin_only(monkeypatch):
+    """market.margin 已回補上櫃列；研究口徑是上市融資，查詢要只取 market IS NULL。"""
+    seen = []
+
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class _Engine:
+        def connect(self): return _Conn()
+
+    def fake_read_sql(sql, conn, params, parse_dates):
+        seen.append(" ".join(str(sql).lower().split()))
+        return pd.DataFrame({"stock_id": ["2330"], "date": [IDX[0]], "bal": [1.0], "px": [1.0]})
+
+    monkeypatch.setattr(measure_market_regime.pd, "read_sql", fake_read_sql)
+    measure_market_regime.load_margin_delta(_Engine(), IDX, _frame([1.0] * 12, [1.0] * 12))
+    assert len(seen) == 1
+    assert "m.market is null" in seen[0]
+    assert "p.market" not in seen[0], "price.market 全為 NULL，不能拿它當市場過濾"
