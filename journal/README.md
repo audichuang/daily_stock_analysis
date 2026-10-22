@@ -79,7 +79,7 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
 - `media-picks.jsonl` — **財經電視節目點名**（`make media-picks`，`scripts/tw_media_picks.py`），一筆點名一行。
   來源是固定頻道的完整版，清單與篩選規則在腳本的 `CHANNELS`（電視財經節目 9 個、投顧分析師每日解盤 10 個、研究型 2 個）：NotebookLM 產生逐字稿並逐集列出點名，
   股名對照 `apps/dsa-web/public/stocks.index.json` 轉代號，再附播出當時已知的本地數據。
-  收盤資料還沒入庫（例如下午手動跑）時，該集先不寫、留給下一輪（stderr 印 `[defer]`）；`--since` 預設 4 天前，週五延後的集數隔週一仍補得到，但收盤資料停更超過這個窗口的集數會漏掉，要手動帶 `--since` 補。
+  收盤資料還沒入庫（看 `market.price` 的最新場次；上市、上櫃都抓到才會寫入那天，例如下午手動跑、或上櫃行情抓失敗）時，該集先不寫、留給下一輪（stderr 印 `[defer]`）；`--since` 預設 4 天前，週五延後的集數隔週一仍補得到，但收盤資料停更超過這個窗口的集數會漏掉，要手動帶 `--since` 補。
   **這是候選來源，不是買進訊號**：上一輪掃描的點名事後表現是 inconclusive（`docs/research/2026-10-22-tw-media-sweep.md`）。
   腳本當天自己追加；跟 `swing-decisions.jsonl` 一樣**當天 commit**，事後不改。累積夠多再對 0050 回驗，在那之前不聲稱有效。
 

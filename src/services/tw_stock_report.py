@@ -355,6 +355,10 @@ _UNIT_AFTER_RE = re.compile(r"\s*(億|萬|%|％)")
 _SMC_NON_PRICE_KEYS = {"i", "swing_i", "swing_n", "position", "price"}
 # 融資融券（張）與總股東（人）：中文財經慣例常寫成「3.53 萬張」「309.9 萬人」
 _COUNT_KEYS = {"margin_balance", "margin_chg_5", "margin_chg_20", "short_balance", "total_holders"}
+# 分點的張數欄位：每列的 buy／sell／net 與窗口的 buy_total／sell_total。名稱太通用（別段也可能有 net），
+# 只在 chips.branch 底下套用，不放進 _unit_factors 依欄位名比對
+_BRANCH_ROW_LOT_KEYS = ("buy", "sell", "net")
+_BRANCH_TOTAL_LOT_KEYS = ("buy_total", "sell_total")
 
 
 def _unit_factors(key):
@@ -387,8 +391,24 @@ def _payload_numbers(p):
 
     walk(p)
     walk(_FIB_CONSTANTS, "position")
+    out.update(_branch_lot_numbers(p))
     out.update(_distance_numbers(p))
     return out
+
+
+def _branch_lot_numbers(p):
+    """分點張數換成「萬張」（÷10,000）；原值已由 _payload_numbers 收進來，這裡只補換算後、必須寫「萬」的值。"""
+    lots = []
+    for window in ((p.get("chips") or {}).get("branch") or {}).values():
+        if not isinstance(window, dict):
+            continue
+        lots += [window.get(k) for k in _BRANCH_TOTAL_LOT_KEYS]
+        for side in ("buy", "sell"):
+            for row in window.get(side) or []:
+                if isinstance(row, dict):
+                    lots += [row.get(k) for k in _BRANCH_ROW_LOT_KEYS]
+    return {(d, round(abs(x) * 1e-4, d), "萬") for x in lots
+            if isinstance(x, (int, float)) and not isinstance(x, bool) for d in range(4)}
 
 
 def _distance_numbers(p):

@@ -359,6 +359,32 @@ def test_wan_conversion_needs_the_unit_and_stays_off_prices():
     assert report.unverified_numbers(wrong, p) == ["14.9", "14.9", "149,121", "309.9", "0.14", "0.1375"]
 
 
+def _branch_payload():
+    # 2330 的真實分點數字（2026-10-22 資料包）
+    row = {"branch": "某分點", "buy": 120.0, "sell": 14450.0, "net": 14330.0, "share_pct": 1.23}
+    return {**EMPTY, "chips": {"institutional": None, "margin": None, "holding": None,
+                               "branch": {"day": None, "five_sessions": {
+                                   "buy": [{"branch": "甲", "buy": 9000.0, "sell": 100.0, "net": 8900.0,
+                                            "share_pct": 2.5}],
+                                   "sell": [row], "buy_total": 16853.0, "sell_total": 60478.0,
+                                   "avg_buy_cost": None, "avg_sell_cost": None}}},
+            "smc": {"price": 1375.0},
+            # 分點以外同名的 net／buy 欄位不能跟著換算（名稱太通用）
+            "valuation": {"net": 25000.0, "buy": 31000.0}}
+
+
+def test_branch_lots_may_be_written_in_wan():
+    ok = {"notes": {"chips": "近五日分點賣出合計 6.05 萬張。最大賣超分點 5 日賣超 1.43 萬張。"
+                             "近五日分點買進合計 1.69 萬張；該分點賣出 1.445 萬張；買超分點淨買 0.89 萬張。"}}
+    assert report.unverified_numbers(ok, _branch_payload()) == []
+
+
+def test_branch_wan_conversion_needs_the_unit_and_stays_inside_branch():
+    wrong = {"notes": {"chips": "賣出合計 6.05 張；賣超 1.43 億張；占比 0.0123 萬；"
+                                "別段的 net 2.5 萬；別段的 buy 3.1 萬。"}}
+    assert report.unverified_numbers(wrong, _branch_payload()) == ["6.05", "1.43", "0.0123", "2.5", "3.1"]
+
+
 def test_corrupt_narrative_cache_self_heals(monkeypatch, tmp_path):
     # 寫到一半被殺留下截斷的 JSON：要重呼 LLM 蓋掉它，不能整個基準日都顯示「AI 解讀產生失敗」
     _payload_stub(monkeypatch)

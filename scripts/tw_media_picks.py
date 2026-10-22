@@ -256,7 +256,7 @@ def data_settled(cutoff: date, latest_session: date | None) -> bool:
     """市場庫已經有 cutoff 該用的那個交易日的收盤了嗎。
 
     收盤資料入庫前跑（例如下午 16 點手動跑），`price_history(end=cutoff)` 只拿得到前一天，snapshot 會
-    靜默把前一天收盤當成播出當天；這種集數先不寫 journal，下一輪再處理。加權指數最新場次晚於該交易日
+    靜默把前一天收盤當成播出當天；這種集數先不寫 journal，下一輪再處理。行情最新場次晚於該交易日
     （例如颱風休市那天之後已有新場次）也算已定案，那天本來就沒有收盤。"""
     return latest_session is not None and latest_session >= required_session(cutoff)
 
@@ -338,8 +338,10 @@ def defer_unsettled(eps: list[dict], engine) -> list[dict]:
     """拿掉收盤資料還沒入庫的集數（不寫 journal，下一輪重抓），其餘照常處理。"""
     from market_data import market_repo
 
-    latest = market_repo.latest_market_index("TAIEX", engine=engine)
-    latest_session = datetime.fromisoformat(str(latest["date"])[:10]).date() if latest else None
+    # 看 market.price 本身：加權指數在 price 整天被跳過（例如上櫃行情抓失敗）時照樣入庫，拿它當代理會
+    # 放行集數，snapshot 又靜默退回前一天收盤
+    latest = market_repo.latest_price_date(engine=engine)
+    latest_session = datetime.fromisoformat(str(latest)[:10]).date() if latest is not None else None
     keep = []
     for ep in eps:
         if data_settled(ep["cutoff"], latest_session):
