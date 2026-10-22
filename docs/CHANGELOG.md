@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 台股四維度報告的 AI 解讀在 NAS（LiteLLM＋Sonnet 5.5）一律產生失敗：模型先推理、推理也算在輸出上限裡，4096 tokens 被推理用完而回空（`finish_reason=length`）；上限改為 16384（本機走 Claude Code CLI 不受影響）
 - [修復] 台股四維度報告、盯盤看板與 SMC 價位警報一輪審查修正：價位警報的整組替換改在單一資料庫交易裡完成（失敗整組回滾、舊規則保留、同一檔加鎖），讀價位或寫規則失敗回 503 `level_alerts_unavailable`、規則驗證失敗回 400 `invalid_rule`，規則存的價位欄位不合法時退回通用通知，價位建立後有除權息／分割／減資時訊息頂端加提醒，「下一個價位」與看板同一套判定；OTE 區依最新結構標「多方／空方進場區」並帶多空屬性；看板摘要每 15 分鐘與手動刷新時重抓、小寫代碼也對得上、結論卡標籤不再被 10 分鐘快取擋住，月營收提示改成「10/10 9 月營收」；報告價位階梯距離改量近端邊、空方事件寫「跌破」，`date` 不是真日期回 400 `invalid_date`，後綴寫錯市場（如 `2330.TWO`）回 404 並提示正確代號；解讀數字核對接受 Fib 常數與千元→億／萬換算（數字後面必須寫對單位），核對不到的解讀改為快取 6 小時後重寫，快取帶核對規則版本、舊版快取重寫且不上看板；文件的啟用清單改用真的會送出的實測步驟（警報中心「測試」只試算不送訊息）。說明見 `docs/tw-level-alerts.md`、`docs/realtime-board.md`、`docs/tw-stock-dossier.md`
 - [新功能] 台股 SMC 價位警報（**預設關閉**，`TW_LEVEL_ALERTS_ENABLED=false`）：開啟後，盯盤看板展開列可把最近的支撐／壓力建成 `price_cross` 規則（跌破支撐下緣、站上壓力上緣；同一檔重建時新規則建好才刪舊規則；一天只推一次），觸發時推 Markdown 訊息（價位、結構、下一個價位、近一日變化）。新增 `POST /api/v1/stocks/{code}/level-alerts`（關閉時只能 `dry_run`），`dossier-summary` 回應追加 `level_alerts_enabled`；`AlertService.create_rule` 可指定 `source`。設計與啟用前檢查清單見 `docs/tw-level-alerts.md`
 - [新功能] 盯盤看板（`/board`）新增台股「結構」欄與展開列的四維度摘要：最新 SMC 結構、最近支撐／壓力（距離用即時價計算）、最近一個交易日的變化提示（結構轉向、月營收新公告、外資 5 日與 20 日轉向、千張大戶週變化），並可直接開啟四維度報告；後端新增 `GET /api/v1/stocks/dossier-summary`（批次、不查分點、不呼叫 LLM）。說明見 `docs/realtime-board.md`

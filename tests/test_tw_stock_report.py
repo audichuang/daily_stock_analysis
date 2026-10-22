@@ -338,6 +338,8 @@ def test_llm_generate_tags_usage_as_stock_dossier(monkeypatch):
     monkeypatch.setattr(analyzer_mod, "GeminiAnalyzer", FakeAnalyzer)
     report._llm_generate("x")
     assert seen["call_type"] == "stock_dossier"
+    # 推理模型的推理也算在 max_tokens 裡：4096 在 NAS 上回空
+    assert seen["max_tokens"] >= 8192
 
 
 def test_generate_text_persists_given_call_type(monkeypatch):

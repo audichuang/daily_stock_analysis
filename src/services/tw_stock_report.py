@@ -471,7 +471,9 @@ def _llm_generate(prompt):
     analyzer = GeminiAnalyzer(config=get_config())
     if not analyzer.is_available():
         raise RuntimeError("LLM 未設定或不可用")
-    return analyzer.generate_text(prompt, max_tokens=4096, temperature=0.3, call_type="stock_dossier")
+    # Sonnet 5.5 reasons before answering and the reasoning counts against max_tokens:
+    # 4096 came back empty (finish_reason=length) on NAS; other callers use 8192+.
+    return analyzer.generate_text(prompt, max_tokens=16384, temperature=0.3, call_type="stock_dossier")
 
 
 def _narrative_cache_dir():
