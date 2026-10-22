@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 盯盤看板：美股代碼大小寫不同（自選 `nvda`、帳本 `NVDA`）不再分成兩列，帳本代碼不是正規寫法時也會先合併再比對；選股頁風險摘要是空陣列 `[]` 時不再顯示空的區塊
 - [修復] 盯盤看板：自選寫成小寫（`2330.tw`）時不再和帳本的 `2330.TW` 分成兩列；大盤指數條照實際來源標「即時」「官方收盤 日期」或「延遲」，不再一律寫 yfinance 延遲；除權息、減資當天不拿即時價去量舊基準的撐壓距離，也不能建立價位警報（API 回 409 `levels_stale`），價位警報訊息改提示等盤後資料更新再重建；手機寬展開列不再被撐成整張表寬
 - [修復] 基金詳情：走勢圖的區間改用報酬卡同一個基準點（`/api/v1/funds/{id}/nav?period=`），「5年」走勢的區間報酬和「近5年」報酬卡不再差 10～15 個百分點
 - [修復] AI 建議（持倉頁、決策訊號卡與詳情、重評預覽、選股風險摘要）：觸發條件、觀察條件、風險摘要的 JSON 陣列字串改成逐條或以「；」接起來顯示，不再印出方括號與引號

@@ -89,6 +89,44 @@ describe('RealtimeBoardPage scope', () => {
     expect(within(row).getByText('10')).toBeInTheDocument();
   });
 
+  it('treats a US ticker in another case as the same holding', async () => {
+    // normalizeStockCode 對美股原樣回傳不轉大寫：`nvda` 與帳本的 `NVDA` 仍要合成一列
+    getWatchlist.mockResolvedValue(['nvda']);
+    getSnapshot.mockResolvedValue({ accounts: [{ accountName: '永豐複委託', positions: [position('NVDA', 2, 100, 'USD')] }] });
+    renderPage();
+    await waitFor(() => expect(rowCodes()).toEqual(['nvda']));
+    const row = screen.getAllByRole('row')[1];
+    expect(within(row).getByText('Held')).toBeInTheDocument();
+    expect(within(row).getByText('2')).toBeInTheDocument();
+  });
+
+  it('normalizes non-canonical ledger symbols before merging and matching', async () => {
+    // 帳本代碼不一定是正規形式：`2330.tw` 與 `2330.TW` 跨帳戶要合併，且對上自選的 `2330.TW`
+    getWatchlist.mockResolvedValue(['2330.TW']);
+    getSnapshot.mockResolvedValue({
+      accounts: [
+        { accountName: '國泰台股', positions: [position('2330.tw', 10, 900)] },
+        { accountName: '美好台股', positions: [position('2330.TW', 30, 1100)] },
+      ],
+    });
+    renderPage();
+    await waitFor(() => expect(rowCodes()).toEqual(['2330.TW']));
+    const row = screen.getAllByRole('row')[1];
+    expect(within(row).getByText('Held')).toBeInTheDocument();
+    expect(within(row).getByText('40')).toBeInTheDocument();
+  });
+
+  it('keeps distinct US tickers apart after case folding', async () => {
+    // 反向：轉大寫不能把不同代碼摺成一檔
+    getWatchlist.mockResolvedValue(['nvda', 'amd']);
+    getSnapshot.mockResolvedValue({ accounts: [{ accountName: '永豐複委託', positions: [position('NVDA', 2, 100, 'USD')] }] });
+    renderPage();
+    await waitFor(() => expect(rowCodes()).toEqual(['nvda', 'amd']));
+    const rows = screen.getAllByRole('row');
+    expect(within(rows[1]).getByText('Held')).toBeInTheDocument();
+    expect(within(rows[2]).queryByText('Held')).not.toBeInTheDocument();
+  });
+
   it('does not fold a bare code or a different board into the ledger symbol', async () => {
     // 裸代碼不是台股語意、.TWO 是另一個市場：都不能被當成 2330.TW 的同一檔
     getWatchlist.mockResolvedValue(['2330', '2330.TWO']);

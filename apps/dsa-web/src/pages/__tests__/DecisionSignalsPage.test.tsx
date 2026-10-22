@@ -605,6 +605,46 @@ describe('DecisionSignalsPage', () => {
     expect(screen.getByText('action_blocked_by_guardrail')).toBeInTheDocument();
   });
 
+  it('renders JSON-array risk and watch fields in the reassess preview as readable lists', async () => {
+    // 重評預覽的風險／觀察條件可能是 JSON 陣列字串：要攤成「；」分隔的文字，不能露出原始 `["…"]`
+    vi.mocked(decisionSignalsApi.reassess).mockResolvedValueOnce({
+      ...reassessResponse,
+      preview: {
+        ...reassessResponse.preview!,
+        riskSummary: '["放量跌破月線","外資連賣"]',
+        watchConditions: '["站回 1650","量縮整理"]',
+      },
+    });
+    renderPage();
+    await screen.findByText('贵州茅台');
+    fireEvent.click(screen.getByRole('button', { name: '查看 贵州茅台 AI 建议详情' }));
+    expect(await screen.findByText('决策风格重评估预览')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '生成预览' }));
+
+    const paragraph = (text: string) => (_: string, el: Element | null) => el?.tagName === 'P' && el.textContent === text;
+    expect(await screen.findByText(paragraph('风险: 放量跌破月線；外資連賣'))).toBeInTheDocument();
+    expect(screen.getByText(paragraph('观察条件: 站回 1650；量縮整理'))).toBeInTheDocument();
+    expect(screen.queryByText(/\["放量跌破月線"/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/\["站回 1650"/)).not.toBeInTheDocument();
+  });
+
+  it('keeps plain reassess preview text as-is and hides an empty JSON array', async () => {
+    // 反向：一般文字原樣顯示；空陣列 `[]` 不顯示該行
+    vi.mocked(decisionSignalsApi.reassess).mockResolvedValueOnce({
+      ...reassessResponse,
+      preview: { ...reassessResponse.preview!, riskSummary: '[]', watchConditions: '站回月線再看, 量縮' },
+    });
+    renderPage();
+    await screen.findByText('贵州茅台');
+    fireEvent.click(screen.getByRole('button', { name: '查看 贵州茅台 AI 建议详情' }));
+    expect(await screen.findByText('决策风格重评估预览')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '生成预览' }));
+
+    const paragraph = (text: string) => (_: string, el: Element | null) => el?.tagName === 'P' && el.textContent === text;
+    expect(await screen.findByText(paragraph('观察条件: 站回月線再看, 量縮'))).toBeInTheDocument();
+    expect(screen.queryByText((_, el) => el?.tagName === 'P' && (el.textContent ?? '').startsWith('风险: '))).not.toBeInTheDocument();
+  });
+
   it('reassesses from an existing source report id filter without a selected signal', async () => {
     window.history.pushState({}, '', '/decision-signals?sourceReportId=3001');
     vi.mocked(decisionSignalsApi.list).mockResolvedValueOnce(listResponse([], 0));

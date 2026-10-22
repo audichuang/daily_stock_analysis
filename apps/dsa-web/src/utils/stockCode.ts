@@ -106,7 +106,8 @@ export function isTwStockCode(code: string | null | undefined): boolean {
   return TW_STOCK_CODE_RE.test(normalizeStockCode((code ?? '').trim()));
 }
 
-function stockCodeMatchKey(stockCode: string): string {
+/** 比對用的身分 key：正規化後再整體轉大寫，`nvda`／`NVDA`、`2330.tw`／`2330.TW` 視為同一檔。 */
+export function stockCodeMatchKey(stockCode: string): string {
   return normalizeStockCode(stockCode).toUpperCase();
 }
 

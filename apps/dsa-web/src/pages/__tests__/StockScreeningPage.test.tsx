@@ -1818,6 +1818,60 @@ describe('StockScreeningPage', () => {
     expect(screen.getByText('主要优势：估值 88')).toBeInTheDocument();
   });
 
+  it('renders a JSON-array risk summary as a readable list', async () => {
+    // LLM 風險摘要可能是 JSON 陣列字串：攤成「；」分隔，不露出原始 `["…"]`
+    getScreeningStatus.mockResolvedValueOnce({ enabled: true, available: true });
+    screenStocks.mockResolvedValueOnce({
+      enabled: true,
+      candidates: [
+        {
+          rank: 1, code: '000001', name: '平安银行', score: 88.5, reason: '主要优势：估值 88',
+          riskSummary: '["资产质量待观察","息差收窄"]', riskFlags: [], llmRisks: [], raw: {},
+        },
+      ],
+      candidateCount: 1,
+      llmRanked: true,
+    });
+
+    render(<StockScreeningPage />);
+    expect(await screen.findByText('选股已开启')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
+    expect(await screen.findByText('平安银行')).toBeInTheDocument();
+    const expandButton = screen.queryByRole('button', { name: '展开查看' });
+    if (expandButton) fireEvent.click(expandButton);
+
+    expect(screen.getByText('风险摘要')).toBeInTheDocument();
+    expect(screen.getByText('资产质量待观察；息差收窄')).toBeInTheDocument();
+    expect(screen.queryByText(/\["资产质量待观察"/)).not.toBeInTheDocument();
+  });
+
+  it('hides the risk summary block when the summary is an empty JSON array', async () => {
+    // 反向：空陣列格式化後沒有內容，不顯示空的風險摘要區塊
+    getScreeningStatus.mockResolvedValueOnce({ enabled: true, available: true });
+    screenStocks.mockResolvedValueOnce({
+      enabled: true,
+      candidates: [
+        {
+          rank: 1, code: '000001', name: '平安银行', score: 88.5, reason: '主要优势：估值 88',
+          riskSummary: '[]', riskFlags: [], llmRisks: [], raw: {},
+        },
+      ],
+      candidateCount: 1,
+      llmRanked: true,
+    });
+
+    render(<StockScreeningPage />);
+    expect(await screen.findByText('选股已开启')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
+    expect(await screen.findByText('平安银行')).toBeInTheDocument();
+    const expandButton = screen.queryByRole('button', { name: '展开查看' });
+    if (expandButton) fireEvent.click(expandButton);
+
+    expect(screen.getByText('风险标签')).toBeInTheDocument();
+    expect(screen.queryByText('风险摘要')).not.toBeInTheDocument();
+    expect(screen.queryByText('[]')).not.toBeInTheDocument();
+  });
+
   it('deduplicates Screening snapshot fallback warnings and source errors', async () => {
     getScreeningStatus.mockResolvedValueOnce({
       enabled: true,

@@ -23,7 +23,7 @@ import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatSignedPct } from '../utils/portfolioFormat';
 import { formatDateTime } from '../utils/format';
 import { cn } from '../utils/cn';
-import { isTwStockCode, normalizeStockCode } from '../utils/stockCode';
+import { isTwStockCode, stockCodeMatchKey } from '../utils/stockCode';
 import { BoardDossierCell, BoardDossierPanel } from '../components/board/BoardDossier';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -35,7 +35,7 @@ type Scope = 'all' | 'watch' | 'holdings';
 const SCOPES: Scope[] = ['all', 'watch', 'holdings'];
 
 // 帳本持股（跨帳戶合併同一代碼）：成本以股數加權，用來對即時價算未實現損益。
-// key 一律是 normalizeStockCode 後的代碼：自選清單是原樣字串（可能小寫），帳本與它比對都要先正規化
+// key 一律是 stockCodeMatchKey（正規化後整體轉大寫）：自選清單是原樣字串（可能小寫），帳本代碼也不保證是正規形式，兩邊比對都要先過它
 type Holding = { quantity: number; avgCost: number; currency: string; accounts: string[] };
 
 function readScope(): Scope {
@@ -280,7 +280,7 @@ const RealtimeBoardPage: React.FC = () => {
         for (const acc of snap.value.accounts) {
           for (const p of acc.positions) {
             if (!(p.quantity > 0)) continue;
-            const key = normalizeStockCode(p.symbol);
+            const key = stockCodeMatchKey(p.symbol);
             const h = merged[key];
             if (h) {
               const qty = h.quantity + p.quantity;
@@ -308,8 +308,8 @@ const RealtimeBoardPage: React.FC = () => {
   const codes = useMemo<string[] | null>(() => {
     if (loading) return null;
     const held = Object.keys(holdings).sort((a, b) => a.localeCompare(b));
-    // 自選寫成 `2330.tw`、帳本是 `2330.TW` 也是同一檔：比對前兩邊都正規化，列上沿用自選的寫法
-    const watchSet = new Set(watchCodes.map(normalizeStockCode));
+    // 自選寫成 `2330.tw`／`nvda`、帳本是 `2330.TW`／`NVDA` 也是同一檔：比對前兩邊都轉成 match key，列上沿用自選的寫法
+    const watchSet = new Set(watchCodes.map(stockCodeMatchKey));
     if (scope === 'watch') return watchCodes;
     if (scope === 'holdings') return held;
     return [...watchCodes, ...held.filter((c) => !watchSet.has(c))];
@@ -334,7 +334,7 @@ const RealtimeBoardPage: React.FC = () => {
           setLevelAlertsEnabled(enabled);
           setDossier((prev) => {
             const next = { ...prev };
-            for (const it of items) next[normalizeStockCode(it.stockCode)] = it.summary;
+            for (const it of items) next[stockCodeMatchKey(it.stockCode)] = it.summary;
             return next;
           });
         })
@@ -489,7 +489,7 @@ const RealtimeBoardPage: React.FC = () => {
 
   // 持股欄：股數＋以即時價算的未實現損益（%），成本用帳本跨帳戶加權平均
   const positionCell = (code: string, q?: StockQuote | null) => {
-    const h = holdings[normalizeStockCode(code)];
+    const h = holdings[stockCodeMatchKey(code)];
     if (!h) return <span className="text-secondary-text">—</span>;
     const price = q?.currentPrice;
     const pnl = price ? (price - h.avgCost) * h.quantity : null;
@@ -658,7 +658,7 @@ const RealtimeBoardPage: React.FC = () => {
                         </td>
                         <td className="whitespace-nowrap px-3 py-2 font-mono">
                           {code}
-                          {holdings[normalizeStockCode(code)] ? (
+                          {holdings[stockCodeMatchKey(code)] ? (
                             <span className="ml-1.5 inline-flex rounded border border-[hsl(var(--primary))]/30 px-1 py-0.5 align-middle font-sans text-[10px] text-[hsl(var(--primary))]">
                               {t('board.tag.holding')}
                             </span>
@@ -686,7 +686,7 @@ const RealtimeBoardPage: React.FC = () => {
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums">{positionCell(code, q)}</td>
                         <td className="px-3 py-2">
-                          <BoardDossierCell summary={dossier[normalizeStockCode(code)]} price={q?.currentPrice} />
+                          <BoardDossierCell summary={dossier[stockCodeMatchKey(code)]} price={q?.currentPrice} />
                         </td>
                         <td className="whitespace-nowrap px-3 py-2">{badge(item)}</td>
                         <td className="whitespace-nowrap px-3 py-2 text-xs text-secondary-text">{q?.asOf ? formatDateTime(q.asOf) : '—'}</td>
@@ -715,7 +715,7 @@ const RealtimeBoardPage: React.FC = () => {
                               <BoardDossierPanel
                                 code={code}
                                 name={q?.stockName}
-                                summary={dossier[normalizeStockCode(code)]}
+                                summary={dossier[stockCodeMatchKey(code)]}
                                 price={q?.currentPrice}
                                 levelAlertsEnabled={levelAlertsEnabled}
                               />

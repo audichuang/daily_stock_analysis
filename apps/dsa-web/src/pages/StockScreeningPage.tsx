@@ -2053,7 +2053,8 @@ const StockScreeningPage: React.FC = () => {
                                       : '无'}
                                   </p>
                                 </div>
-                                {item.riskSummary ? (
+                                {/* 空陣列 `[]` 格式化後是 null，不顯示空的風險摘要區塊 */}
+                                {formatSignalText(item.riskSummary) ? (
                                   <div>
                                     <p className="text-xs font-semibold text-secondary-text">风险摘要</p>
                                     <p className="mt-1 text-sm text-foreground">{formatSignalText(item.riskSummary)}</p>
