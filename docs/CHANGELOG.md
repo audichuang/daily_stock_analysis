@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [測試] `test_persist_usage_never_raises` 改用注入的資料庫失敗，不再 reset singleton 後讓 `persist_llm_usage` 依設定新建連線寫入（正式 `dsa.llm_usage` 裡 42 筆 `model='m'` 的假用量就是它留下的；清除要另行處理）
 - [修復] `/settings` 首次啟動設定檢查的「資料庫」項：設了 `STORAGE_DATABASE_URL` 時改成對執行中的應用庫做 `SELECT 1`（顯示遮蔽密碼的連線字串），連不上就標「需處理」；原本只看已凍結的 `DATABASE_PATH` SQLite 父目錄能不能寫，Postgres 掛掉也亮綠燈
 - [修復] 資料中心 `/data` 認得本 fork 的台股來源：新增 `shioaji`（台股即時報價，有金鑰時排在 yfinance 前）與 `marketdb`（台股日 K）兩個 Provider 和 `tw.realtime` 路由；`marketdbfetcher` 不再出現 `unknown_source` 警示，也不再被掛到 cn／hk／jp／kr 的日 K
 - [修復] 第三輪（反方驗證後）：護欄的反問只認「何不」，「無論如何不加倉／為何不建議買入」仍是否定；均線加權實驗的分組釘住表加鎖（pipeline 多執行緒共用分析器）；四維度解讀「更完整」改成分點與讀取失敗兩個維度都不能變差（兩種互有缺漏的資料包交替時不再每次重付 LLM），重寫失敗時沿用數字相同的舊解讀；`make media-picks` 的無股名物件回覆記成沒有點名、只有純引用標記才重試
