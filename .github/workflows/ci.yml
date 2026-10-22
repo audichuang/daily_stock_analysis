@@ -14,9 +14,14 @@ on:
 # 設定與 runner 端的坑在 nas-ops `hosts/ttnas/gh-runners/manifest.md`）。backend 分 4 片：
 # 6 片會把 NAS 的 12 執行緒跑滿、出負載型假紅。
 
+# fork：develop 不取消進行中的 run。paths-filter 在 develop 只比對上一個 commit，
+# 合併後緊接排程的 journal push 若取消前一個 run，PR 的 web／docker 改動在 develop 上
+# 就永遠沒有 web-gate／docker-build。不改成每個 SHA 一個 group：兩個 develop run 同時跑
+# 等於 8 片，NAS 會滿載。殘留缺口：GitHub 每個 group 只留一個 pending run，7.5 分鐘內
+# 連 push 三次，中間那次仍會被丟掉。
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/develop' }}
 
 jobs:
   changes:
@@ -52,7 +57,8 @@ jobs:
               - '{apps/dsa-web/public/**,apps/dsa-web/src/components/settings/llmProviderTemplates.ts,apps/dsa-web/src/locales/settingsHelp.ts}'
               - '!**/*.md'
             docker:
-              - '{*.py,api/**,bot/**,data_provider/**,src/**,strategies/**,apps/dsa-web/**,docker/**,requirements.txt,.dockerignore,.github/workflows/ci.yml}'
+              # fork：market_data／templates 也會被 docker/Dockerfile COPY 進映像
+              - '{*.py,api/**,bot/**,data_provider/**,src/**,strategies/**,market_data/**,templates/**,apps/dsa-web/**,docker/**,requirements.txt,.dockerignore,.github/workflows/ci.yml}'
               - '!**/*.md'
             futu_packaging:
               - '{requirements.txt,main.py,src/brokers/futu/**,scripts/build-backend.ps1,scripts/build-backend-macos.sh,scripts/macos-signature-audit.sh,scripts/build-all.ps1,scripts/build-all-macos.sh,apps/dsa-desktop/**,.github/workflows/ci.yml,.github/workflows/desktop-release.yml}'
@@ -240,6 +246,7 @@ jobs:
           from bot.dispatcher import CommandDispatcher; print('✅ bot')
           from api.app import app; print('✅ api')
           import futu; print('✅ futu')
+          import market_data.db, market_data.market_repo, market_data.adjust, market_data.events, market_data.funds, market_data.health, market_data.risk_flags, market_data.sources, market_data.financial_statement; print('✅ market_data')
           print('✅ All Docker imports OK')
           "
 

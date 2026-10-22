@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] `scripts/tw_stock_report.py` 的 `-o`／`--dump-data` 會先建上層目錄：skill `stock-report` 與 `docs/tw-stock-dossier.md` 寫的 `reports/dossier/` 在乾淨 checkout 不存在，原本 LLM 解讀寫好了卻在渲染這步 `FileNotFoundError`。
+- [chore] CI：docker-build 的路徑過濾補上 `market_data/**`、`templates/**`（Dockerfile 會 COPY 它們，原本只改這兩處時映像不會重建驗證），Docker smoke 加 import 服務路徑用到的 `market_data` 模組；develop 上的 run 不再被後一次 push 取消（避免 PR 合併後緊接排程 journal push 時 web-gate／docker-build 在 develop 漏跑）；PR 範本的 diff 基準改成 `origin/develop`。
+- [文件] `docs/tw-level-alerts.md` 啟用清單補上警報輪詢的真正條件：除了 `AGENT_EVENT_MONITOR_ENABLED` 還要 `SCHEDULE_ENABLED=true` 或 `--schedule`（NAS 的 `--serve-only` 只開前者不會輪詢），並寫明開了會連帶跑 NAS 每日分析的取捨；`docs/realtime-board.md` 加權指數合約改成與程式一致的 `IX0001`；skill `dsa-upstream-sync` 不再誤引 AGENTS §1、§9 當「不能合進 develop」的依據。
 - [修復] 第三輪（反方驗證後）：護欄的反問只認「何不」，「無論如何不加倉／為何不建議買入」仍是否定；均線加權實驗的分組釘住表加鎖（pipeline 多執行緒共用分析器）；四維度解讀「更完整」改成分點與讀取失敗兩個維度都不能變差（兩種互有缺漏的資料包交替時不再每次重付 LLM），重寫失敗時沿用數字相同的舊解讀；`make media-picks` 的無股名物件回覆記成沒有點名、只有純引用標記才重試
 - [修復] 深度驗證後的第二輪修正：護欄不再因「不追高」（提示詞本來就要求寫）而放過買進，「不得不加倉／沒有理由不加倉／何不加倉」仍判為買進；均線加權實驗的組別在一次分析開頭釘住（跨午夜不會 system／user 提示詞分到不同組），比例設成 `nan` 時當 1；四維度解讀在分點晚到或失敗段落恢復時重寫；處置名單快取的「完整」也看除權息／法說會來源；賣方共識快取改存 yfinance 原始資料，status 與上檔空間每次用當下參考價重算（NAS 盤中重複分析不再沿用早上的結果）；`make media-picks` 加單一執行鎖，`[{}]` 這類無股名回覆也下次重試，同音名配不到時改用模型代號判斷補零數字
 - [修復] 台股盤勢護欄的否定詞判斷：「不建議買入」「不加倉」原本被當成積極買進（賣出被改成觀望、分數壓到 52），「特別建議買入」因為「特別」的「別」被當成否定而逃過降級；改為認緊貼買進詞的「不／勿／沒／未」，並排除「特別、區別、個別」等詞

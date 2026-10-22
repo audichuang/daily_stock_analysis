@@ -672,6 +672,11 @@ color:var(--text-secondary);margin:0 6px 4px 0}
 """
 
 
+def _ensure_parent(path: str) -> None:
+    # skill／文件寫的輸出路徑（如 reports/dossier/）在乾淨 checkout 不存在，先建上層目錄。
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("code", help="台股代號，可帶 .TW／.TWO")
@@ -696,11 +701,13 @@ def main(argv=None):
         print(narrative_prompt(p))
         return
     if args.dump_data:
+        _ensure_parent(args.dump_data)
         Path(args.dump_data).write_text(json.dumps(p, ensure_ascii=False, indent=1), encoding="utf-8")
         return
     nar = json.loads(Path(args.narrative).read_text(encoding="utf-8")) if args.narrative else None
     html = render(p, nar)
     if args.out:
+        _ensure_parent(args.out)
         Path(args.out).write_text(html, encoding="utf-8")
     else:
         print(html)

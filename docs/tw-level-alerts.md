@@ -102,7 +102,8 @@ _SMC 價位是結構參考，不是買賣訊號；完整分析在盯盤看板的
 1. **通知格式改版定案**：確認上面的訊息版型是要的。要改的話只需改 `format_level_alert_markdown()`，通用警報的格式不受影響。
 2. **設定 Telegram**：`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID` 都要有（兩個只設一個會被設定檢查擋下）。
 3. **路由**：`NOTIFICATION_ALERT_CHANNELS` 留空時，警報送到所有已設定的渠道；只想送 Telegram 就設成 `telegram`。
-4. **警報輪詢要開著**：`AGENT_EVENT_MONITOR_ENABLED=true`（`AGENT_EVENT_MONITOR_INTERVAL_MINUTES` 預設 5 分鐘）。這是既有的警報中心開關，關著時規則建了也不會被檢查。
+4. **警報輪詢要開著**：`AGENT_EVENT_MONITOR_ENABLED=true`（`AGENT_EVENT_MONITOR_INTERVAL_MINUTES` 預設 5 分鐘）**而且**排程器要在跑——`SCHEDULE_ENABLED=true`，或啟動時帶 `--schedule`。警報 worker 只掛在 `RuntimeSchedulerService` 的背景任務上，排程器沒啟動就不會註冊（`runtime_scheduler.py` 的 `reconcile_from_config`／`start` 先檢查 `_is_schedule_enabled`）。NAS 的 compose 跑 `main.py --serve-only`，所以那邊只開 `AGENT_EVENT_MONITOR_ENABLED` 不夠，規則建了也不會被檢查，而且不會有任何錯誤訊息。`SCHEDULE_ENABLED` 可寫進 `.env`，也可在 Web 設定頁切換（存檔後立即重新套用排程器）。
+   - **取捨**：打開 `SCHEDULE_ENABLED` 也會讓 NAS 在 `SCHEDULE_TIME`／`SCHEDULE_TIMES`（預設 18:00）跑每日分析，和 Mac 18:00 的每日報告重複（同一個應用庫、走 NAS 的 Anthropic key）。程式目前**沒有「只開警報輪詢、不跑每日分析」的開關**；要不要接受重複、或另外加開關，需要先決定再啟用。
 5. **開功能**：`TW_LEVEL_ALERTS_ENABLED=true`，部署到 NAS。先用 `dry_run` 確認一檔，再在看板對一檔持股真的建立。
 6. **實測一次真的送出**：警報中心的「測試」按鈕只是試算（`POST /api/v1/alerts/rules/{id}/test` → `AlertService.test_rule`），**不會送任何訊息**，驗不到版型。要讓 worker 真的推一次：
    - 把剛建的一條價位規則的觸發價改到現價外面一點（支撐規則改成略高於現價、壓力規則改成略低於現價）。警報中心沒有編輯畫面，用 API：`PATCH /api/v1/alerts/rules/{id}`，body `{"parameters": {"direction": "below", "price": <略高於現價>}}`。只改 `parameters`，`notification_policy.tw_level` 不動，訊息版型照舊。

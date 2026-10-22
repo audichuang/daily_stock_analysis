@@ -5,7 +5,7 @@ description: 無人值守地把上游 ZhuLinsen/daily_stock_analysis 的 main me
 
 # dsa 上游同步（無人值守）
 
-這是排程，沒有人會回答問題，不要停下來問。**產出是一條待審分支，不是合進 develop**——merge 進 `develop` 與 push `develop` 永遠留給使用者（repo `AGENTS.md` §1、§9）。repo 規則以 `$REPO/AGENTS.md` 為準，先讀 §1、§6、§10。
+這是排程，沒有人會回答問題，不要停下來問。**產出是一條待審分支，不是合進 develop**——這是本 skill 自己的規定，不是 `AGENTS.md` 的：§1、§9 允許 agent 在 CI 綠後自己合進 `develop`，但上游 merge 改動面大、排程時沒人在場，所以無人值守跑的時候 merge 與 push `develop` 都留給使用者審過再做。使用者在場、要求收尾時，照 §9 等 CI 綠再合。repo 規則以 `$REPO/AGENTS.md` 為準，先讀 §1、§6、§10。
 
 固定值：
 

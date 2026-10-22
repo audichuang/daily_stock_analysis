@@ -473,3 +473,15 @@ def test_generate_text_persists_given_call_type(monkeypatch):
         assert analyzer.generate_text("p") == "ok"
         assert analyzer.generate_text("p", call_type="stock_dossier") == "ok"
     assert [c.kwargs["call_type"] for c in persist.call_args_list] == ["market_review", "stock_dossier"]
+
+
+def test_main_creates_missing_output_dirs(tmp_path):
+    # skill／docs 寫的 -o reports/dossier/... 在乾淨 checkout 沒有這個目錄
+    data = tmp_path / "data.json"
+    data.write_text(json.dumps(EMPTY), encoding="utf-8")
+    out = tmp_path / "reports" / "dossier" / "9999_2026-08-28.html"
+    report.main(["9999", "--data", str(data), "-o", str(out)])
+    assert out.is_file() and "<html" in out.read_text(encoding="utf-8").lower()
+    dump = tmp_path / "nested" / "dump" / "9999.json"
+    report.main(["9999", "--data", str(data), "--dump-data", str(dump)])
+    assert json.loads(dump.read_text(encoding="utf-8"))["stock_id"] == "9999"
