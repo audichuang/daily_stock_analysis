@@ -1713,6 +1713,20 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(check["status"], "needs_action")
         self.assertIn("ConnectionRefusedError", check["message"])
 
+    def test_get_setup_status_storage_check_flags_running_sqlite_despite_storage_url(self) -> None:
+        # 設了 STORAGE_DATABASE_URL 但執行中的引擎仍是 SQLite（改了設定沒重啟）：要標需處理，
+        # 而且不能拿 SQLite 的 SELECT 1 成功當成應用庫正常。
+        engine = MagicMock()
+        engine.url.render_as_string.return_value = "sqlite:///data/stock_analysis.db"
+        engine.url.get_backend_name.return_value = "sqlite"
+
+        check = self._storage_check_with_app_engine(engine)
+
+        self.assertEqual(check["status"], "needs_action")
+        self.assertIn("SQLite", check["message"])
+        self.assertIn("重新啟動", check["next_step"])
+        engine.connect.assert_not_called()
+
     def test_get_setup_status_storage_check_keeps_sqlite_path_without_storage_url(self) -> None:
         # 反向：沒設 STORAGE_DATABASE_URL 時仍走 SQLite 路徑檢查，不去碰應用庫連線。
         engine = MagicMock()

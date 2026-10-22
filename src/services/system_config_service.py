@@ -3948,7 +3948,7 @@ class SystemConfigService:
         if storage_url:
             return self._build_setup_app_database_check()
 
-        db_path =Path((effective_map.get("DATABASE_PATH") or "./data/stock_analysis.db").strip()).expanduser()
+        db_path = Path((effective_map.get("DATABASE_PATH") or "./data/stock_analysis.db").strip()).expanduser()
         parent = db_path.parent if db_path.parent != Path("") else Path(".")
         probe = parent
         while not probe.exists() and probe != probe.parent:
