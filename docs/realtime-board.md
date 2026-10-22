@@ -7,7 +7,7 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 右上角切換（記在 localStorage `dsa.board.scope`，預設「全部」）：
 - **自選**：`STOCK_LIST`（`/api/v1/stocks/watchlist`）。
 - **持股**：持股帳本全部帳戶的部位（`/api/v1/portfolio/snapshot?include_realtime=false`，股數 > 0），同一代碼跨帳戶合併、成本按股數加權；「持股／損益」欄用盯盤的即時價現算未實現損益（以交易幣別計，美股是 USD），滑鼠移上去顯示所屬帳戶。賣光就自動消失，不必改 `STOCK_LIST`。
-- **全部**：自選在前，再接自選裡沒有的持股，不重複。
+- **全部**：自選在前，再接自選裡沒有的持股，不重複。比對前兩邊都用 `normalizeStockCode` 正規化：自選寫成 `2330.tw`、帳本是 `2330.TW` 算同一檔，只列一列（沿用自選的寫法）並帶持股標籤與股數。裸代碼 `2330` 與 `2330.TWO` 不會被併成 `2330.TW`（裸代碼不進台股語意，`.TWO` 是另一個市場）。
 - 帳本讀不到時只顯示自選並在標題下提示；三個來源（自選、帳本、基金）各自失敗、互不影響。
 - **基金**不進報價表（一天一個淨值），在「全部」「持股」範圍的下方另列一張卡：最新淨值、淨值日（逾 10 天標黃）、持有報酬，點進 `/funds`。美股報價走 yfinance，狀態欄照舊標「延遲」。
 
@@ -40,6 +40,8 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 - 這檔股票當天已經有人開過「四維度分析」（解讀已快取）時，展開列另外顯示四張結論卡的標籤。摘要端點本身不會觸發 LLM。數字核對沒過（帶 `unverified`）、核對規則版本舊（`check_version`）、或寫完之後資料又更新（`data_stamp` 對不上）的解讀都不顯示標籤，看板上沒有警示可附。
 - 展開列的「四維度分析」按鈕開啟與首頁相同的報告抽屜，見 `docs/tw-stock-dossier.md`。
 - `TW_LEVEL_ALERTS_ENABLED=true` 時，展開列多一顆「建立價位警報」，把畫面上的最近支撐／壓力建成價格警報。預設關閉，設計見 `docs/tw-level-alerts.md`。
+- **除權息、分割、減資之後**（`market.price_adjustment` 在資料基準日隔天到今天有事件），摘要帶 `adjusted_after: true`。價位是前復權到資料基準日的舊基準，即時價已是新基準，量出來的距離會偏掉整個調整幅度（例如減資 factor 1.333 會把所有價位量成約 −25%）。這時「結構」欄與展開列不算撐／壓距離，改顯示「除權息後價位待更新」，也不出現「建立價位警報」；建立警報的 API 同樣回 409 `levels_stale`。盤後資料更新、基準日跟上之後恢復。查詢跟著摘要快取（10 分鐘），查不到調整資料時當作沒有。
+- 手機寬時展開列的內容黏在表格可視範圍左側、寬度跟著捲動框，不會被整張表的欄寬撐開（不用橫滑找「四維度分析」按鈕）。
 
 ## 数据来源与时效
 
@@ -95,8 +97,10 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 - `GET /api/v1/stocks/dossier-summary?codes=2330.TW,3324.TWO`：台股四維度摘要（批次），返回 `{ items: [{ stock_code, summary|null, error }] }`；非台股 `unsupported_market`、查無資料 `no_data`、讀取失敗 `unavailable`，整批仍 200；上限 50 個，用原始輸入計算。見上方「四維度摘要」。
 - `GET /api/v1/stocks/{code}/quote`：单股行情，响应追加 `source` / `as_of` / `is_stale`（与批次一致）。
 - `GET /api/v1/stocks/indices?region=tw`：盯盤上方的大盤指數條（加權 `TWII`、櫃買 `TPEX`），失敗回空列表。台股依序：
-  1. **Shioaji 指數快照**（合約 `Indexs.TSE["IX0001"]`／`Indexs.OTC["IX0043"]`，不是 `001`／`101`）：盤中即時，收盤後仍是最近場次的正式收盤；兩檔都有，回應多帶 `as_of`。
-  2. **本地 `market.market_index` 官方收盤**：只有加權（表內只存 TAIEX），沒有櫃買；`open`／`high`／`low` 為 `null`。
+  1. **Shioaji 指數快照**（合約 `Indexs.TSE["IX0001"]`／`Indexs.OTC["IX0043"]`，不是 `001`／`101`）：盤中即時，收盤後仍是最近場次的正式收盤；兩檔都有，回應多帶 `as_of` 與 `source: "shioaji"`。
+  2. **本地 `market.market_index` 官方收盤**：只有加權（表內只存 TAIEX），沒有櫃買；`open`／`high`／`low` 為 `null`，`source: "official_close"`。
+
+  前端指數條照 `source` 標示：`shioaji` 標「即時」加快照時間，`official_close` 標「官方收盤 日期」，沒有 `source`（yfinance）才標「延遲」。滑鼠移上去的提示說明來源。
   3. **yfinance**：最後才用。`^TWII` 收盤後常是幽靈 K 棒（當日 OHLC 配前一日收盤、漲跌 0.00%，2026-10-22 實測顯示 46,292.93 而官方是 46,887.77），`^TWOII` 查無資料。
   大盤複盤走同一個入口，表頭加權指數之後仍會被釘成該場次官方收盤（`market_analyzer._pin_tw_indices_to_session`）。
 
