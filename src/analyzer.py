@@ -3691,6 +3691,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         prompt: str,
         max_tokens: int = 2048,
         temperature: float = 0.7,
+        call_type: str = "market_review",
     ) -> Optional[str]:
         """Public entry point for free-form text generation.
 
@@ -3702,6 +3703,8 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             prompt:      Text prompt to send to the LLM.
             max_tokens:  Maximum tokens in the response (default 2048).
             temperature: Sampling temperature (default 0.7).
+            call_type:   Usage-telemetry bucket (default ``market_review`` for the
+                         original caller; the TW dossier passes ``stock_dossier``).
 
         Returns:
             Response text, or None if the LLM call fails (error is logged).
@@ -3714,7 +3717,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             if isinstance(result, tuple):
                 text, model_used, usage = result
                 if should_persist_usage_telemetry(usage):
-                    persist_llm_usage(usage, model_used, call_type="market_review")
+                    persist_llm_usage(usage, model_used, call_type=call_type)
                 return text
             return result
         except GenerationError:

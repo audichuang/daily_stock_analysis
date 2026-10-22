@@ -10,6 +10,41 @@ uv run --env-file .env python scripts/tw_stock_dossier.py 2330 --no-branch   # �
 
 唯讀本地 `market` schema；只有券商分點會即時連網。
 
+## HTML 分析報告
+
+版面參考 botbook.cc：先是四維度結論卡，接著是基本面、合約負債、籌碼面、估值、SMC 價位階梯與結構事件，最後是追蹤重點。比 botbook 多了以下內容：
+- 當日與近 5 日分點並排
+- 三大法人 20 日累計
+- 獨立的估值段（PE 百分位刻度）
+- 價位階梯標出每個價位距現價的百分比
+- 頁尾列出各段資料日
+
+實作在 `src/services/tw_stock_report.py`（資料包在同目錄的 `tw_stock_dossier.py`）；`scripts/` 底下的同名檔只是 CLI 包裝，因為 Docker 映像不含 `scripts/`。
+
+**Web 入口**：首頁個股詳情的「四維度分析」按鈕只在 `.TW`／`.TWO` 出現，按下開啟抽屜。
+- 後端是 `GET /api/v1/stocks/{code}/dossier`，參數 `narrative`、`theme=light|dark`、`date`。
+- 抽屜先載入純數字版，再背景請求 `narrative=true` 的版本，拿到就替換。報告放在不執行腳本的 sandbox iframe 裡。
+- 錯誤碼：非台股回 400 `unsupported_market`，本地行情查無此股回 404，台股庫不可用回 503。
+
+**解讀（narrative）**：
+- 撰寫規則與 JSON 格式只有一份，就是 `NARRATIVE_RULES`。Web 由伺服器設定的生成後端撰寫（呼叫 `GeminiAnalyzer.generate_text`，用量在 LLM 用量頁記為「四維度分析」，即 `call_type=stock_dossier`）。
+- 結果依「股票＋資料基準日」快取在 `DATABASE_PATH` 同目錄的 `dossier_narratives/`，同一天重開不重算；Docker 裡就是 `/app/data` 這個 volume。
+- LLM 失敗或回傳格式不對時，頁面退回只列數字並顯示提示，失敗的結果不會被快取。
+- **數字核對只是便宜的防呆**：解讀裡帶小數或千分位的數字，要能在資料包找到（允許四捨五入、絕對值、比例 ×100），或所在句子標了「自算」。有核對不到的數字時，頁面照常顯示，但頂部會列出這些數字，而且這份解讀不快取，下次開啟重寫。整數（張數、天數）不核對，推導算式本身也不驗算。
+- 同一檔、同一基準日的資料包在行程內快取 10 分鐘，所以先看數字、再等解讀，不會重查分點。
+
+報告內文只有繁體中文（台股限定功能）；抽屜本身的按鈕與標題有中、英、繁三語。
+
+**容錯**：資料包每一段各自容錯，任一段查詢出錯只讓那段顯示「無資料」，頁首列出讀取失敗的段落（`errors`），不會整頁 503。只有查不到價格或整個台股庫連不上時，才回 404／503。
+
+**CLI／skill**：本機要用 Claude Code 寫解讀時走 skill `/stock-report`（`.claude/skills/stock-report/SKILL.md`）。
+
+```bash
+uv run --env-file .env python scripts/tw_stock_report.py 3324 --dump-data /tmp/3324.json
+uv run --env-file .env python scripts/tw_stock_report.py 3324 --data /tmp/3324.json --print-prompt   # 規則＋資料包
+uv run --env-file .env python scripts/tw_stock_report.py 3324 --data /tmp/3324.json --narrative /tmp/3324.narrative.json -o reports/dossier/3324_2026-10-21.html
+```
+
 ## 每一段的來源與限制
 
 | 段落 | 來源 | 限制 |

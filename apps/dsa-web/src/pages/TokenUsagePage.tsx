@@ -22,6 +22,7 @@ const CALL_TYPE_LABEL_KEYS: Record<string, UiTextKey> = {
   analysis: 'usage.callType.analysis',
   agent: 'usage.callType.agent',
   market_review: 'usage.callType.marketReview',
+  stock_dossier: 'usage.callType.stockDossier',
 };
 
 function getLocale(language: UiLanguage): string {

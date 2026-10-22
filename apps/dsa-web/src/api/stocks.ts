@@ -190,6 +190,16 @@ export const stocksApi = {
     }));
   },
 
+  /** 台股四維度分析報告（伺服器渲染的完整 HTML 文件）。narrative=true 會等 LLM 解讀，約 20~60 秒。 */
+  async getDossierHtml(code: string, options: { narrative?: boolean; theme?: 'light' | 'dark' } = {}): Promise<string> {
+    const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/dossier`, {
+      params: { narrative: options.narrative ?? false, theme: options.theme },
+      responseType: 'text',
+      timeout: 180000,
+    });
+    return String(response.data ?? '');
+  },
+
   async getTrend(code: string, range: TrendRange): Promise<TrendPoint[]> {
     const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/trend`, {
       params: { range },
