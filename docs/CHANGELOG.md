@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [文件] 新增 `docs/tw-analysis-overview.md`：台股每日分析的數據來源、護欄順序、開關建議與 2026-10-22 診斷／回測已回答的問題
 - [修復] 美股名稱改用 NASDAQ Trader 官方清單（股票索引）的英文名，查無顯示代號；不再用上游寫死的簡體中文名（英伟达、微软）。已存進歷史的舊名在讀取時一併換成官方名，資料庫不改
 - [修復] 問股頁、搜尋下拉的市場／比對標籤、首頁重複任務與輸入錯誤提示改走介面語言（繁中／英文不再顯示簡體）；後端回來的股名、策略名、對話內容不翻
 - [修復] 盯盤大盤指數條改取永豐指數快照（加權＋櫃買），失敗才退本地官方收盤、最後才用 yfinance；原本收盤後顯示前一日收盤、漲跌 0.00%，櫃買指數也抓不到
