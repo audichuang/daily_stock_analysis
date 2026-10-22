@@ -3,11 +3,16 @@ name: CI
 on:
   # fork 增量：只用 push 觸發。工作分支的 push run 會掛在 PR head commit 上當 checks，
   # 再加 pull_request 等於同一個改動跑兩次（concurrency group 不同、互不取消），
-  # 私有 repo 會白燒 Actions 額度。paths-filter 在 push 事件下，工作分支比對
+  # 白佔 runner。另外不收 pull_request 也是安全邊界：job 跑在 ttnas 自架 runner
+  # （掛 docker.sock），fork PR 不能觸發它。paths-filter 在 push 事件下，工作分支比對
   # default branch（develop）、develop 比對上一個 commit。main 只收發版 fast-forward，
   # 同一個 SHA 已在 develop 驗過，不重跑。
   push:
     branches: [develop, 'feat/**', 'fix/**', 'chore/**', 'docs/**', 'refactor/**', 'test/**']
+
+# fork 增量：所有 job 跑在 ttnas 的自架 runner（label `ttnas`，Komodo stack `gh-runners`，
+# 設定與 runner 端的坑在 nas-ops `hosts/ttnas/gh-runners/manifest.md`）。backend 分 4 片：
+# 6 片會把 NAS 的 12 執行緒跑滿、出負載型假紅。
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -16,7 +21,7 @@ concurrency:
 jobs:
   changes:
     name: 🔎 Change Detection
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ttnas]
     # fork 增量：本仓库 default_workflow_permissions=read（仅 contents/packages），
     # dorny/paths-filter 在 pull_request 事件下要读 changed files，缺 pull-requests
     # 权限会以 "Resource not accessible by integration" 失败，导致下游 job 全部 skip。
@@ -76,7 +81,7 @@ jobs:
 
   ai-governance:
     name: ai-governance
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ttnas]
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
@@ -88,14 +93,14 @@ jobs:
         run: python scripts/check_ai_assets.py
 
   backend-tests:
-    name: backend-tests (${{ matrix.shard }}/3)
-    runs-on: ubuntu-latest
+    name: backend-tests (${{ matrix.shard }}/4)
+    runs-on: [self-hosted, ttnas]
     needs: [changes, ai-governance]
     if: needs.changes.outputs.backend == 'true'
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     services:
       postgres:
         image: postgres:16
@@ -103,30 +108,32 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: stock_test
+        # 隨機 host port：self-hosted runner 的主機上 5432 可能已被佔用。
         ports:
-          - 5432:5432
+          - 5432
+        # 資料目錄放 tmpfs：測試庫用完即丟，避免和主機上其他資料庫搶 fsync。
         options: >-
+          --tmpfs /var/lib/postgresql/data
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     env:
-      # ephemeral Postgres for market_data DB-backed tests (schema via Alembic)
-      DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/stock_test
       # fork 增量：每個 shard 留 junit，供 scripts/ci_durations_from_junit.py 重算
       # .github/ci-test-durations.json（耗時資料過期時 shard 會嚴重失衡）。
       PYTEST_ADDOPTS: --junitxml=pytest-junit.xml
     steps:
+      # ephemeral Postgres for market_data DB-backed tests (schema via Alembic)；
+      # job 層 env 拿不到 job.services，只能在 step 寫進 GITHUB_ENV。
+      - name: 🗄️ Point DATABASE_URL at service container
+        run: echo "DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/stock_test" >> "$GITHUB_ENV"
       - name: 📥 Checkout
         uses: actions/checkout@v5
       - name: 🐍 Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-          cache: 'pip'
-          cache-dependency-path: |
-            requirements.txt
-            .github/requirements-ci.txt
+          # 不用 cache: 'pip'：那是從 GitHub 下載；ttnas runner 的 uv／pip 快取本來就在本機 volume。
       - name: 📦 Install dependencies
         run: |
           # fork 增量：先用 uv（每個 shard 省 30～50 秒），失敗才退回原本的 pip 重試迴圈。
@@ -161,9 +168,9 @@ jobs:
       # every shard needs the schema — the DB-backed tests are spread across all three
       - name: 🗄️ Migrate market schema (ephemeral Postgres)
         run: python -m alembic -c market_data/alembic.ini upgrade head
-      - name: ✅ Offline test suite shard ${{ matrix.shard }}/3
+      - name: ✅ Offline test suite shard ${{ matrix.shard }}/4
         env:
-          PYTEST_SPLITS: '3'
+          PYTEST_SPLITS: '4'
           PYTEST_GROUP: ${{ matrix.shard }}
           PYTEST_FIRST_SHARD_OVERHEAD: '20'
         run: ./scripts/ci_gate.sh offline-tests
@@ -178,7 +185,7 @@ jobs:
 
   backend-gate:
     name: backend-gate
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ttnas]
     needs: [changes, ai-governance, backend-tests]
     if: always()
     steps:
@@ -201,14 +208,17 @@ jobs:
 
   docker-build:
     name: docker-build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ttnas]
     needs: [changes, ai-governance]
     if: needs.changes.outputs.docker == 'true'
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
+      # driver: docker 直接用 ttnas 本機 daemon 的層快取；gha 快取要經家用網路下載整份映像層（實測 456 秒）。
       - name: 🛠️ Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
       - name: 🐳 Build image
         uses: docker/build-push-action@v6
         with:
@@ -216,8 +226,6 @@ jobs:
           file: docker/Dockerfile
           tags: stock-analysis:test
           load: true
-          cache-from: type=gha,scope=stock-analysis-ci-docker
-          cache-to: type=gha,mode=max,scope=stock-analysis-ci-docker,ignore-error=true
       - name: 🐳 Docker smoke
         run: docker run --rm stock-analysis:test python -c "print('✅ Docker OK')"
       - name: 🔍 Docker smoke imports
@@ -241,7 +249,7 @@ jobs:
 
   web-gate:
     name: web-gate
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, ttnas]
     needs: [changes, ai-governance]
     if: needs.changes.outputs.frontend == 'true'
     defaults:
@@ -254,8 +262,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: apps/dsa-web/package-lock.json
+          # 不用 cache: 'npm'：runner 的 npm 快取（npm_config_cache）在 ttnas 本機 volume。
       - name: 📦 Install
         run: npm ci
       - name: 🔎 Lint

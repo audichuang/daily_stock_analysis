@@ -38,7 +38,9 @@ def file_durations(reports: list[Path], repo_root: Path = REPO_ROOT) -> dict[str
             test_file = classname_to_file(case.get("classname", ""), repo_root)
             if test_file:
                 totals[test_file] += float(case.get("time") or 0)
-    return {path: round(seconds, 3) for path, seconds in sorted(totals.items())}
+    # 下限 0.001：快機器上整個檔可能四捨五入成 0.0，而 ci_test_shard.load_durations
+    # 只收 > 0 的值，寫出 0.0 會讓每個 shard 開機即失敗。
+    return {path: max(round(seconds, 3), 0.001) for path, seconds in sorted(totals.items())}
 
 
 def main() -> int:

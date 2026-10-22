@@ -429,7 +429,7 @@ def test_litellm_openai_prompt_cache_key_is_not_passed_through_without_verified_
         capture_output=True,
         env=sanitized_env,
         text=True,
-        timeout=15,
+        timeout=60,  # fork：只是 import LiteLLM 的子程序上限，不是被測性質；忙的 CI runner 上 15 秒會假紅
     )
     if completed.returncode == 77:
         if "LOCAL_SOCKET_UNAVAILABLE" in completed.stdout + completed.stderr:

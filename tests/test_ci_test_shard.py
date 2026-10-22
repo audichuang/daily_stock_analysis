@@ -34,13 +34,25 @@ def test_shard_roots_match_the_pytest_testpaths_contract() -> None:
 def test_real_ci_shards_are_complete_disjoint_and_balanced() -> None:
     test_files = discover_test_files()
     durations = load_durations()
-    groups, totals = partition_test_files(test_files, durations, 3)
+    # fork：片數要和 ci.yml 的 PYTEST_SPLITS 一致（4，跑在 ttnas self-hosted runner）。
+    groups, totals = partition_test_files(test_files, durations, 4)
 
     flattened = [test_file for group in groups for test_file in group]
     assert sorted(flattened) == test_files
     assert len(flattened) == len(set(flattened))
     assert all(group == sorted(group) for group in groups)
-    assert max(totals) - min(totals) < 1.0
+    # 分片以整個檔為單位：單一檔比平均每片還長時（test_agent_active_stock_integration
+    # 約 360 秒、全部約 1018 秒），它只能獨占一片。這是唯一允許的不平衡，其餘各片仍要齊平。
+    largest = max(durations[test_file] for test_file in test_files if test_file in durations)
+    oversized = [
+        index
+        for index, group in enumerate(groups)
+        if len(group) == 1 and durations.get(group[0]) == largest
+    ]
+    balanced = [total for index, total in enumerate(totals) if index not in oversized]
+    assert len(oversized) <= 1
+    assert max(balanced) - min(balanced) < 1.0
+    assert max(totals) == pytest.approx(max(largest, max(balanced)))
 
 
 def test_new_test_file_uses_fallback_without_being_dropped() -> None:
