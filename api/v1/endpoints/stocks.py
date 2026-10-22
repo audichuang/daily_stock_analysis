@@ -9,6 +9,7 @@
 2. POST /api/v1/stocks/parse-import 解析 CSV/Excel/剪贴板
 3. GET /api/v1/stocks/{code}/quote 实时行情接口
 4. GET /api/v1/stocks/{code}/history 历史行情接口
+5. GET /api/v1/stocks/{code}/dossier 台股四維度分析報告（HTML）
 """
 
 import logging
@@ -16,6 +17,7 @@ from typing import Optional
 import re
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, Depends
+from fastapi.responses import HTMLResponse
 
 from api.deps import get_system_config_service
 
@@ -33,6 +35,7 @@ from api.v1.schemas.stocks import (
 )
 from api.v1.schemas.history import WatchlistRequest, WatchlistResponse
 from api.v1.schemas.common import ErrorResponse
+from api.v1.errors import api_error
 from src.services.image_stock_extractor import (
     ALLOWED_MIME,
     MAX_SIZE_BYTES,
@@ -733,3 +736,34 @@ def get_stock_trend(
             status_code=500,
             detail={"error": "internal_error", "message": f"获取走势失败: {str(e)}"},
         )
+
+
+@router.get(
+    "/{stock_code}/dossier",
+    response_class=HTMLResponse,
+    responses={
+        200: {"description": "報告 HTML"},
+        400: {"description": "不是台股代號", "model": ErrorResponse},
+        404: {"description": "本地行情查無此股", "model": ErrorResponse},
+        503: {"description": "台股資料庫不可用", "model": ErrorResponse},
+    },
+    summary="台股個股四維度分析報告",
+    description="基本面、合約負債、籌碼、估值、SMC 技術結構的單頁 HTML；narrative=true 時附 LLM 解讀（依資料基準日快取），失敗只降級成純數字。",
+)
+def get_stock_dossier(
+    stock_code: str,
+    narrative: bool = Query(False, description="是否附 LLM 解讀"),
+    theme: Optional[str] = Query(None, pattern="^(light|dark)$", description="頁面主題"),
+    date: Optional[str] = Query(None, pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$", description="資料基準日 YYYY-MM-DD"),
+) -> HTMLResponse:
+    from src.services.tw_stock_report import UnsupportedMarket, report_html
+
+    try:
+        return HTMLResponse(report_html(stock_code, narrative=narrative, theme=theme, as_of=date))
+    except UnsupportedMarket as e:
+        raise api_error(400, "unsupported_market", str(e))
+    except LookupError as e:
+        raise api_error(404, "not_found", str(e))
+    except Exception as e:
+        logger.error(f"產生台股分析報告失敗 {stock_code}: {e}", exc_info=True)
+        raise api_error(503, "dossier_unavailable", "產生台股分析報告失敗，請稍後再試")

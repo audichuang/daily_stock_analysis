@@ -12,6 +12,7 @@ import { DashboardStateBlock } from '../components/dashboard';
 import { StockAutocomplete } from '../components/StockAutocomplete';
 import { StockHistoryTrendDrawer } from '../components/history';
 import { ReportMarkdownDrawer } from '../components/report/ReportMarkdownDrawer';
+import { StockDossierDrawer } from '../components/report/StockDossierDrawer';
 import { MarketReviewReportView } from '../components/report/MarketReviewReportView';
 import { MarketReviewRegionSelector } from '../components/market-review/MarketReviewRegionSelector';
 import { ReportSummary } from '../components/report/ReportSummary';
@@ -40,7 +41,7 @@ import type {
 import type { RunFlowSnapshotSource } from '../types/runFlow';
 import { getTodayInShanghai } from '../utils/format';
 import { useStockIndex } from '../hooks/useStockIndex';
-import { resolveRegisteredIndexCanonical, toAssetAwareCodeKey, type AssetAwareAssetType } from '../utils/stockCode';
+import { isTwStockCode, resolveRegisteredIndexCanonical, toAssetAwareCodeKey, type AssetAwareAssetType } from '../utils/stockCode';
 
 type MarketReviewNotice = {
   variant: 'success' | 'warning' | 'danger';
@@ -288,6 +289,7 @@ const HomePage: React.FC = () => {
   );
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [dossierOpen, setDossierOpen] = useState(false);
   const [isSubmittingMarketReview, setIsSubmittingMarketReview] = useState(false);
   const [marketReviewNotice, setMarketReviewNotice] = useState<MarketReviewNotice>(null);
   const [marketReviewError, setMarketReviewError] = useState<ParsedApiError | null>(null);
@@ -513,6 +515,13 @@ const HomePage: React.FC = () => {
   }, [analysisSkills, selectedStrategyId]);
 
   const reportLanguage = normalizeReportLanguage(selectedReport?.meta.reportLanguage);
+  // 換股就關掉四維度抽屜（render 中調整 state，不用 effect），A→B→A 不會自己再彈出
+  const selectedStockCode = selectedReport?.meta.stockCode;
+  const [dossierStockCode, setDossierStockCode] = useState(selectedStockCode);
+  if (dossierStockCode !== selectedStockCode) {
+    setDossierStockCode(selectedStockCode);
+    setDossierOpen(false);
+  }
   const liveMarketReviewLanguage = normalizeReportLanguage(marketReviewPayload?.language);
   const isMarketReviewHistoryReport = selectedReport?.meta.reportType === 'market_review';
   const isHistoryTrendUnavailable = !selectedReport || !selectedReport.meta.stockCode;
@@ -1865,6 +1874,16 @@ const HomePage: React.FC = () => {
                     </svg>
                     {t('home.fullReport')}
                   </Button>
+                  {isTwStockCode(selectedReport.meta.stockCode) ? (
+                    <Button
+                      variant="home-action-ai"
+                      size="sm"
+                      onClick={() => setDossierOpen(true)}
+                    >
+                      <BarChart3 className="h-4 w-4" />
+                      {t('home.dossier')}
+                    </Button>
+                  ) : null}
                 </div>
                 {isHistoryTrendOpen ? (
                   <StockHistoryTrendDrawer
@@ -1923,6 +1942,14 @@ const HomePage: React.FC = () => {
           stockCode={selectedReport.meta.stockCode}
           reportLanguage={reportLanguage}
           onClose={closeMarkdownDrawer}
+        />
+      ) : null}
+
+      {dossierOpen && selectedReport ? (
+        <StockDossierDrawer
+          stockCode={selectedReport.meta.stockCode}
+          stockName={selectedReport.meta.stockName}
+          onClose={() => setDossierOpen(false)}
         />
       ) : null}
 

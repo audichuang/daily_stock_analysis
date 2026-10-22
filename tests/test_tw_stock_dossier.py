@@ -1,12 +1,10 @@
 """四維度資料包：財報日期→季度的對應，以及各段缺資料時印「無資料」而不是估算或炸掉。"""
 
-import importlib.util
-from pathlib import Path
+from tests.litellm_stub import ensure_litellm_stub
 
-_spec = importlib.util.spec_from_file_location(
-    "tw_stock_dossier", Path(__file__).resolve().parents[1] / "scripts" / "tw_stock_dossier.py")
-dossier = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(dossier)
+ensure_litellm_stub()
+
+from src.services import tw_stock_dossier as dossier  # noqa: E402
 
 
 def test_statement_dates_map_to_quarters():
@@ -47,3 +45,34 @@ def test_weekly_change_only_between_consecutive_weeks():
 def test_holding_summary_empty_is_none():
     import pandas as pd
     assert dossier.holding_summary(pd.DataFrame()) is None
+
+
+def test_stock_name_falls_back_to_index_for_tpex(monkeypatch):
+    from src.data import stock_index_loader
+
+    monkeypatch.setattr(dossier.market_repo, "stock_info", lambda sid, engine=None: None)
+    monkeypatch.setattr(stock_index_loader, "get_stock_name_index_map", lambda: {"3324.TWO": "雙鴻", "2330.TW": "台積電"})
+    assert dossier.stock_name("3324") == "雙鴻"
+    assert dossier.stock_name("2330") == "台積電"
+    monkeypatch.setattr(dossier.market_repo, "stock_info", lambda sid, engine=None: {"name": "上市名"})
+    assert dossier.stock_name("2330") == "上市名"
+
+
+def test_build_isolates_section_failures(monkeypatch):
+    import pandas as pd
+
+    def boom(*a, **k):
+        raise RuntimeError("db hiccup")
+
+    monkeypatch.setattr(dossier, "_sql", lambda engine, sql, **kw: pd.DataFrame({"d": [pd.Timestamp("2026-08-28")]}))
+    monkeypatch.setattr(dossier, "stock_name", lambda sid, engine=None: "雙鴻")
+    monkeypatch.setattr(dossier, "technicals", boom)
+    monkeypatch.setattr(dossier, "fundamentals", boom)
+    monkeypatch.setattr(dossier, "valuation", boom)
+    monkeypatch.setattr(dossier, "contract_liabilities", lambda *a: [])
+    monkeypatch.setattr(dossier, "chips", lambda *a, **k: {"institutional": None, "margin": None,
+                                                           "holding": None, "branch": None})
+    p = dossier.build("3324.TWO", engine=object())
+    assert p["errors"] == ["技術面", "基本面", "估值"]
+    assert p["smc"] is None and p["valuation"] is None and p["fundamentals"]["quarters"] == []
+    assert "讀取失敗" in dossier.render(p)

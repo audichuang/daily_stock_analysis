@@ -4,6 +4,7 @@ import {
   areStockCodesEquivalent,
   findMatchingStockCode,
   includesStockCode,
+  isTwStockCode,
   normalizeStockCode,
   resolveRegisteredIndexCanonical,
   toAssetAwareCodeKey,
@@ -215,5 +216,20 @@ describe('asset-aware identity keys (PR #2312)', () => {
     } finally {
       String.prototype.toLocaleLowerCase = original;
     }
+  });
+});
+
+describe('isTwStockCode', () => {
+  it('accepts TWSE/TPEx suffix codes including trailing-letter ETFs', () => {
+    expect(isTwStockCode('2330.TW')).toBe(true);
+    expect(isTwStockCode('3324.two')).toBe(true);
+    expect(isTwStockCode('00631l.tw')).toBe(true);
+  });
+
+  it('rejects other markets and bare codes', () => {
+    expect(isTwStockCode('2330')).toBe(false);
+    expect(isTwStockCode('600519.SH')).toBe(false);
+    expect(isTwStockCode('AAPL')).toBe(false);
+    expect(isTwStockCode(null)).toBe(false);
   });
 });

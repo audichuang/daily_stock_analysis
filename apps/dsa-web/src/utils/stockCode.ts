@@ -98,6 +98,14 @@ export function normalizeStockCode(stockCode: string): string {
   return code;
 }
 
+/** 正規化後的台股代號（`2330.TW`、`00631L.TW`、`6488.TWO`）；`validation.ts` 共用這一份。 */
+export const TW_STOCK_CODE_RE = /^\d{4,6}[A-Z]?\.(TW|TWO)$/;
+
+/** 帶 `.TW`／`.TWO` 後綴的台股代號（四維度報告只支援台股，後端對其他市場回 400）。 */
+export function isTwStockCode(code: string | null | undefined): boolean {
+  return TW_STOCK_CODE_RE.test(normalizeStockCode((code ?? '').trim()));
+}
+
 function stockCodeMatchKey(stockCode: string): string {
   return normalizeStockCode(stockCode).toUpperCase();
 }
