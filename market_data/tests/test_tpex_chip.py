@@ -127,3 +127,63 @@ def test_every_tpex_source_is_market_tagged():
     # 新增 *_tpex 來源卻漏了 SOURCE_MARKET，就會以 NULL（＝上市）寫入並被上市 replace 刪掉
     assert {s for s in crawl.DAILY if s.endswith("_tpex")} == set(crawl.SOURCE_MARKET)
     assert set(crawl.SOURCE_MARKET.values()) == {"tpex"}
+
+
+
+def test_crawl_day_tpex_collision_does_not_overwrite_listed_row(pg_conn, monkeypatch, capsys):
+    """上櫃來源吐出與上市撞號的代號（實例：006201 → '6201'）：不能整列蓋掉上市列並改標 tpex。"""
+    _seed(pg_conn)
+    monkeypatch.setattr(crawl.sources, "crawl_tpex_chip", lambda kind, d: _frame("2330", 9)(d))
+    assert crawl.crawl_day(pg_conn, "institutional_tpex", _D) == 0
+    assert _rows(pg_conn) == {"2330": "twse", "3324": "tpex"}
+    assert pg_conn.execute(text("SELECT foreign_net FROM market.institutional "
+                                "WHERE stock_id = '2330' AND date = :d"), {"d": _D}).scalar() == 1
+    assert "**WARN institutional: 1 rows skipped" in capsys.readouterr().out
+
+
+# --- crawl_range／refresh_range 的 resume 要依市場判斷「這天做過了沒」----------------
+
+class _TxEngine:
+    def __init__(self, conn): self.conn = conn
+    def begin(self): return self
+    def __enter__(self): return self.conn
+    def __exit__(self, *a): return False
+
+
+def _calendar_day(conn):
+    # crawl_range 只抓 market.price 有的交易日
+    conn.execute(text("INSERT INTO market.price (stock_id, date) VALUES ('2330', :d)"), {"d": _D})
+
+
+def _recording_fetch(monkeypatch, calls):
+    def fetch(*args):
+        calls.append(args)
+        return _frame("6488", 5)(args[-1])
+    monkeypatch.setattr(crawl.sources, "crawl_tpex_chip", fetch)
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", fetch)
+
+
+@pytest.mark.parametrize("stored, source, fetched", [
+    ("twse", "institutional_tpex", True),    # 只有上市列：上櫃這天還沒做
+    ("tpex", "institutional_tpex", False),   # 上櫃已入庫：resume 跳過
+    ("tpex", "institutional", True),         # 只有上櫃列：上市這天還沒做
+    ("twse", "institutional", False),
+])
+def test_crawl_range_resume_is_per_market(pg_conn, monkeypatch, stored, source, fetched):
+    _calendar_day(pg_conn)
+    pg_conn.execute(text("INSERT INTO market.institutional (stock_id, date, market) "
+                         "VALUES ('3324', :d, :m)"), {"d": _D, "m": None if stored == "twse" else "tpex"})
+    calls = []
+    _recording_fetch(monkeypatch, calls)
+    crawl.crawl_range(_TxEngine(pg_conn), source, [_D], resume=True)
+    assert bool(calls) is fetched
+
+
+@pytest.mark.parametrize("stored, fetched", [("twse", False), ("tpex", True)])
+def test_refresh_range_tpex_only_refreshes_stored_tpex_days(pg_conn, monkeypatch, stored, fetched):
+    pg_conn.execute(text("INSERT INTO market.institutional (stock_id, date, market) "
+                         "VALUES ('3324', :d, :m)"), {"d": _D, "m": None if stored == "twse" else "tpex"})
+    calls = []
+    _recording_fetch(monkeypatch, calls)
+    crawl.refresh_range(_TxEngine(pg_conn), "institutional_tpex", [_D], delay=0)
+    assert bool(calls) is fetched

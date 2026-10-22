@@ -885,6 +885,8 @@ def parse_tdcc_query(html, stock_id, want):
     """TDCC 個股查詢結果頁 -> DataFrame；頁面資料日期 ≠ ``want``（YYYYMMDD）或查無資料回 None。"""
     m = re.search(r"資料日期：(\d+年\d+月\d+日)", html)
     if not m:
+        # 帶作廢 token 的請求就長這樣（有新 token、沒有資料日期）：拿不到參照就拒收，但要留痕
+        print(f"**WARN: 集保查詢 {stock_id} {want} 回應沒有資料日期(token 可能作廢),拒收")
         return None
     got = _roc_to_date(m.group(1))
     if got.strftime("%Y%m%d") != want:
@@ -941,6 +943,19 @@ def crawl_tdcc_history(stock_id, weeks=None, delay=1.0):
             r.raise_for_status()
         except requests.RequestException as exc:
             print(f"**WARN: 集保查詢 {stock_id} {want} 失敗 ({exc})")
+            # 逾時的請求可能已送達伺服器、token 已在伺服端輪換，手上這個作廢了；不換的話下一週
+            # 會靜默回空。同一個 session 重新 GET 查詢頁可拿到新的可用 token（實測）。
+            fresh_token, reason = None, "查詢頁找不到 token"
+            try:
+                fresh = ses.get(_TDCC_QUERY, timeout=30)
+                fresh.raise_for_status()
+                fresh_token = _TDCC_TOKEN.search(fresh.text)
+            except requests.RequestException as exc2:
+                reason = exc2
+            if fresh_token:
+                token = fresh_token
+            else:
+                print(f"**WARN: 集保查詢 {stock_id} 無法重取 token ({reason}),後續週次可能全數拒收")
             continue
         # token 每次請求後輪換、舊的作廢（實測沿用舊 token 回空）：一拿到回應就先換，
         # 解析失敗也不例外——否則後面每一週都帶著作廢的 token 靜默失敗。

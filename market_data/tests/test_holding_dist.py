@@ -106,6 +106,70 @@ def test_history_keeps_rotating_token_after_a_week_fails_to_parse(monkeypatch):
     assert df is not None and df.date.unique().tolist() == [pd.Timestamp(2026, 9, 11)]
 
 
+
+class _TdccSession:
+    """模擬 TDCC：token 每次請求（含逾時但已送達的）後輪換，只有最新的有效；GET 查詢頁給最新 token。"""
+
+    def __init__(self, weeks, timeout_on=()):
+        self.weeks, self.timeout_on = weeks, set(timeout_on)
+        self.headers, self.n, self.gets, self.sent = {}, 0, 0, []
+        good = (_FX / "tdcc_query_3324.html").read_text()        # 資料日期 115年09月11日
+        self.pages = {w: good.replace("115年09月11日", f"{int(w[:4]) - 1911}年{w[4:6]}月{w[6:]}日")
+                      for w in weeks}
+
+    def _token(self):
+        return f"T{self.n}"
+
+    def get(self, url, timeout):
+        self.gets += 1
+        opts = "".join(f'<option value="{w}">x</option>' for w in self.weeks)
+        return _FakeResp(f'<input name="SYNCHRONIZER_TOKEN" value="{self._token()}" />{opts}')
+
+    def post(self, url, data, timeout):
+        tok, want = data["SYNCHRONIZER_TOKEN"], data["scaDate"]
+        self.sent.append(tok)
+        valid = tok == self._token()
+        self.n += 1                                               # 請求送達即輪換
+        if want in self.timeout_on and len(self.sent) == 1:
+            raise sources.requests.Timeout("Read timed out")
+        head = f'<input name="SYNCHRONIZER_TOKEN" value="{self._token()}" />'
+        return _FakeResp(head + (self.pages[want] if valid else ""))
+
+
+class _FakeResp:
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+
+def test_history_refreshes_token_after_a_timed_out_week(monkeypatch, capsys):
+    """逾時的請求已送達伺服器、token 已輪換：不重取 token，下一週會帶作廢 token 靜默遺失。"""
+    ses = _TdccSession(["20260918", "20260911"], timeout_on={"20260918"})
+    monkeypatch.setattr(sources.requests, "Session", lambda: ses)
+    df = sources.crawl_tdcc_history("3324", delay=0)
+    assert ses.sent == ["T0", "T1"], "逾時後要重新 GET 取得新 token，再送下一週"
+    assert ses.gets == 2
+    assert df is not None and df.date.unique().tolist() == [pd.Timestamp(2026, 9, 11)]
+    assert "20260918 失敗" in capsys.readouterr().out
+
+
+def test_history_does_not_refetch_token_when_every_week_succeeds(monkeypatch):
+    """反向：沒有失敗就沿用回應裡輪換的 token，不該每週多打一次 GET。"""
+    ses = _TdccSession(["20260918", "20260911"])
+    monkeypatch.setattr(sources.requests, "Session", lambda: ses)
+    df = sources.crawl_tdcc_history("3324", delay=0)
+    assert ses.gets == 1 and ses.sent == ["T0", "T1"]
+    assert sorted(df.date.unique().tolist()) == [pd.Timestamp(2026, 9, 11), pd.Timestamp(2026, 9, 18)]
+
+
+def test_query_page_without_data_date_warns(capsys):
+    """作廢 token 的回應沒有「資料日期」：拒收之外要印 WARN，不能讓整週靜默消失。"""
+    assert sources.parse_tdcc_query('<input name="SYNCHRONIZER_TOKEN" value="T9" />', "3324",
+                                    "20260911") is None
+    assert "**WARN: 集保查詢 3324 20260911 回應沒有資料日期" in capsys.readouterr().out
+
 def test_crawl_holding_dist_fetch_failure_writes_nothing(pg_conn, monkeypatch):
     monkeypatch.setattr(crawl.sources, "fetch_tdcc_latest", lambda: None)
     assert crawl.crawl_holding_dist(pg_conn) == (0, None)

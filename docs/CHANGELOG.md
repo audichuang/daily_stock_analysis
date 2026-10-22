@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 集保個股回補（`market_data.cli holding-history`）某週請求逾時後改為重新取得表單 token，不再讓下一週帶作廢 token 靜默遺失；回應沒有資料日期時印 `**WARN`
+- [修復] 法人／融資／估值寫入遇到上市與上櫃撞號（同代號同日、市場不同）時不再整列覆蓋並改標市場，改為跳過並印 `**WARN`（實例：TPEx 2016-09-26 把 006201 吐成 6201，蓋掉上市亞弘電的融資列）
+- [修復] `scripts/measure_market_regime.py` 的融資狀態只取上市融資（`market IS NULL`），上櫃融資回補後維持研究文件的口徑
+- [測試] 補上 `crawl_range`／`refresh_range` 依市場判斷 resume 的測試（上櫃來源不會因上市已入庫而跳過）
+- [文檔] `market_data/AGENTS.md` 的 `REVISED_SOURCES` 描述更正為 institutional 與 institutional_tpex
 - [修復] 第三輪（反方驗證後）：護欄的反問只認「何不」，「無論如何不加倉／為何不建議買入」仍是否定；均線加權實驗的分組釘住表加鎖（pipeline 多執行緒共用分析器）；四維度解讀「更完整」改成分點與讀取失敗兩個維度都不能變差（兩種互有缺漏的資料包交替時不再每次重付 LLM），重寫失敗時沿用數字相同的舊解讀；`make media-picks` 的無股名物件回覆記成沒有點名、只有純引用標記才重試
 - [修復] 深度驗證後的第二輪修正：護欄不再因「不追高」（提示詞本來就要求寫）而放過買進，「不得不加倉／沒有理由不加倉／何不加倉」仍判為買進；均線加權實驗的組別在一次分析開頭釘住（跨午夜不會 system／user 提示詞分到不同組），比例設成 `nan` 時當 1；四維度解讀在分點晚到或失敗段落恢復時重寫；處置名單快取的「完整」也看除權息／法說會來源；賣方共識快取改存 yfinance 原始資料，status 與上檔空間每次用當下參考價重算（NAS 盤中重複分析不再沿用早上的結果）；`make media-picks` 加單一執行鎖，`[{}]` 這類無股名回覆也下次重試，同音名配不到時改用模型代號判斷補零數字
 - [修復] 台股盤勢護欄的否定詞判斷：「不建議買入」「不加倉」原本被當成積極買進（賣出被改成觀望、分數壓到 52），「特別建議買入」因為「特別」的「別」被當成否定而逃過降級；改為認緊貼買進詞的「不／勿／沒／未」，並排除「特別、區別、個別」等詞
