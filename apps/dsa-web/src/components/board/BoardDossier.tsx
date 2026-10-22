@@ -1,6 +1,7 @@
 import type React from 'react';
 import { useState } from 'react';
-import type { DossierSummary, DossierTone } from '../../api/stocks';
+import { stocksApi, type DossierSummary, type DossierTone } from '../../api/stocks';
+import { getParsedApiError } from '../../api/error';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { cn } from '../../utils/cn';
 import { nearestLevels, type NearLevel } from '../../utils/dossierLevels';
@@ -57,9 +58,11 @@ export const BoardDossierPanel: React.FC<{
   name?: string | null;
   summary?: DossierSummary | null;
   price?: number | null;
-}> = ({ code, name, summary, price }) => {
+  levelAlertsEnabled?: boolean;
+}> = ({ code, name, summary, price, levelAlertsEnabled = false }) => {
   const { t } = useUiLanguage();
   const [open, setOpen] = useState(false);
+  const [alertNote, setAlertNote] = useState<string | null>(null);
   if (!summary) return null;
   const s = summary.structure;
   const ref = price ?? summary.close;
@@ -107,14 +110,33 @@ export const BoardDossierPanel: React.FC<{
         {!summary.verdicts && summary.changes.length === 0 ? (
           <span className="text-secondary-text">{t('board.dossier.noChanges')}</span>
         ) : null}
+        {levelAlertsEnabled && (near?.support || near?.resistance) ? (
+          <button
+            type="button"
+            className="ml-auto rounded-md border border-border px-2 py-0.5 text-secondary-text hover:bg-hover"
+            onClick={() => {
+              if (!window.confirm(t('board.dossier.alertConfirm'))) return;
+              stocksApi
+                .createLevelAlerts(code, { support: near?.support?.level, resistance: near?.resistance?.level })
+                .then((n) => setAlertNote(t('board.dossier.alertCreated', { count: String(n) })))
+                .catch((err) => setAlertNote(getParsedApiError(err).message));
+            }}
+          >
+            {t('board.dossier.createAlerts')}
+          </button>
+        ) : null}
         <button
           type="button"
-          className="ml-auto rounded-md border border-[hsl(var(--primary))]/40 px-2 py-0.5 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10"
+          className={cn(
+            'rounded-md border border-[hsl(var(--primary))]/40 px-2 py-0.5 text-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/10',
+            levelAlertsEnabled && (near?.support || near?.resistance) ? '' : 'ml-auto',
+          )}
           onClick={() => setOpen(true)}
         >
           {t('home.dossier')}
         </button>
       </div>
+      {alertNote ? <p className="text-secondary-text" role="status">{alertNote}</p> : null}
       {open ? <StockDossierDrawer stockCode={code} stockName={name} onClose={() => setOpen(false)} /> : null}
     </div>
   );

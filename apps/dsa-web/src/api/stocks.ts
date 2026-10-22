@@ -192,10 +192,20 @@ export const stocksApi = {
   },
 
   /** 看板用台股四維度摘要（不查分點、不呼叫 LLM）；非台股或失敗的單檔回 summary=null。 */
-  async getDossierSummaries(codes: string[]): Promise<DossierSummaryItem[]> {
-    if (codes.length === 0) return [];
+  async getDossierSummaries(codes: string[]): Promise<DossierSummaryBatch> {
+    if (codes.length === 0) return { items: [], levelAlertsEnabled: false };
     const response = await apiClient.get('/api/v1/stocks/dossier-summary', { params: { codes: codes.join(',') } });
-    return toCamelCase<{ items?: DossierSummaryItem[] }>(response.data).items ?? [];
+    const data = toCamelCase<{ items?: DossierSummaryItem[]; levelAlertsEnabled?: boolean }>(response.data);
+    return { items: data.items ?? [], levelAlertsEnabled: Boolean(data.levelAlertsEnabled) };
+  },
+
+  /** 把看板顯示的最近支撐／壓力建成價位警報（會先刪這檔既有的價位警報）。功能預設關閉。 */
+  async createLevelAlerts(code: string, picks: { support?: DossierLevel | null; resistance?: DossierLevel | null }): Promise<number> {
+    const response = await apiClient.post(`/api/v1/stocks/${encodeURIComponent(code)}/level-alerts`, {
+      support: picks.support ?? null,
+      resistance: picks.resistance ?? null,
+    });
+    return ((response.data as { rules?: unknown[] }).rules ?? []).length;
   },
 
   /** 台股四維度分析報告（伺服器渲染的完整 HTML 文件）。narrative=true 會等 LLM 解讀，約 20~60 秒。 */
@@ -230,6 +240,7 @@ export type DossierLevel = {
 };
 export type DossierTone = 'pos' | 'neg' | 'neu' | 'watch';
 export type DossierSummary = {
+  name?: string | null;
   asOf: string;
   close: number | null;
   structure: { kind: string; bias: 'bull' | 'bear'; date: string; level: number } | null;
@@ -238,3 +249,4 @@ export type DossierSummary = {
   verdicts: Record<string, { badge?: string | null; tone?: DossierTone | null }> | null;
 };
 export type DossierSummaryItem = { stockCode: string; summary: DossierSummary | null; error?: string | null };
+export type DossierSummaryBatch = { items: DossierSummaryItem[]; levelAlertsEnabled: boolean };

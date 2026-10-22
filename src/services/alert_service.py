@@ -108,8 +108,8 @@ class AlertService:
         self.db = db_manager or DatabaseManager.get_instance()
         self.repo = AlertRepository(self.db)
 
-    def create_rule(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        fields = self._normalize_rule_payload(payload)
+    def create_rule(self, payload: Dict[str, Any], *, source: str = "api") -> Dict[str, Any]:
+        fields = self._normalize_rule_payload(payload, source=source)
         return self._serialize_rule(self.repo.create_rule(fields))
 
     def get_rule(self, rule_id: int) -> Dict[str, Any]:

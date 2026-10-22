@@ -11,6 +11,7 @@
 4. GET /api/v1/stocks/{code}/history 历史行情接口
 5. GET /api/v1/stocks/{code}/dossier 台股四維度分析報告（HTML）
 6. GET /api/v1/stocks/dossier-summary 看板用台股四維度摘要（批次）
+7. POST /api/v1/stocks/{code}/level-alerts 台股 SMC 價位警報（預設關閉，dry_run 可試算）
 """
 
 import logging
@@ -25,6 +26,8 @@ from api.deps import get_system_config_service
 from api.v1.schemas.stocks import (
     DossierSummaryItem,
     DossierSummaryResponse,
+    LevelAlertRequest,
+    LevelAlertResponse,
     ExtractFromImageResponse,
     ExtractItem,
     KLineData,
@@ -538,10 +541,51 @@ def get_dossier_summaries(
     parsed = list(dict.fromkeys(c.upper() for c in raw))
     tw = [c for c in parsed if is_tw_suffix_symbol(c)]
     done = {code: (summary, error) for code, summary, error in summaries(tw)}
-    return DossierSummaryResponse(items=[
+    return DossierSummaryResponse(level_alerts_enabled=_level_alerts_enabled(), items=[
         DossierSummaryItem(stock_code=c, summary=done[c][0], error=done[c][1]) if c in done
         else DossierSummaryItem(stock_code=c, error="unsupported_market")
         for c in parsed])
+
+
+def _level_alerts_enabled() -> bool:
+    from src.config import get_config
+
+    return bool(getattr(get_config(), "tw_level_alerts_enabled", False))
+
+
+@router.post(
+    "/{stock_code}/level-alerts",
+    response_model=LevelAlertResponse,
+    responses={
+        400: {"description": "非台股或價位不在今天的 SMC 價位裡", "model": ErrorResponse},
+        409: {"description": "TW_LEVEL_ALERTS_ENABLED 未開啟（dry_run 不受限）", "model": ErrorResponse},
+    },
+    summary="建立台股 SMC 價位警報",
+    description="把看板上的最近支撐／壓力建成 price_cross 規則，先刪掉這檔既有的價位警報再建；會寫應用庫。設計見 docs/tw-level-alerts.md。",
+)
+def create_level_alerts(stock_code: str, body: LevelAlertRequest) -> LevelAlertResponse:
+    from src.services.market_symbol_utils import is_tw_suffix_symbol
+    from src.services.tw_level_alerts import LevelAlertError, plan_rules, replace_rules
+    from src.services.tw_stock_watch import _one
+
+    code = stock_code.strip().upper()
+    if not is_tw_suffix_symbol(code):
+        raise api_error(400, "unsupported_market", f"{code} 不是台股代號（需帶 .TW／.TWO）")
+    enabled = _level_alerts_enabled()
+    if not body.dry_run and not enabled:
+        raise api_error(409, "feature_disabled", "價位警報尚未開啟（TW_LEVEL_ALERTS_ENABLED=false）")
+    try:
+        summary = _one(code)
+        picks = {"support": body.support and body.support.model_dump(),
+                 "resistance": body.resistance and body.resistance.model_dump()}
+        rules = plan_rules(code, picks, summary, name=summary.get("name"))
+    except LevelAlertError as e:
+        raise api_error(400, "level_mismatch", str(e))
+    except LookupError as e:
+        raise api_error(404, "not_found", str(e))
+    if not body.dry_run:
+        rules = replace_rules(code, rules)
+    return LevelAlertResponse(enabled=enabled, dry_run=body.dry_run, rules=rules)
 
 
 @router.get(

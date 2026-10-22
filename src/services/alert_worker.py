@@ -58,6 +58,7 @@ class RuntimeAlertRule:
     source: str
     severity: Optional[str] = None
     cooldown_policy: Optional[Dict[str, Any]] = None
+    notification_policy: Optional[Dict[str, Any]] = None
     effective_target: Optional[str] = None
     display_target: Optional[str] = None
 
@@ -218,6 +219,7 @@ class AlertWorker:
         for row in self.service.repo.list_enabled_rules(limit=ALERT_WORKER_RULE_LIMIT):
             try:
                 cooldown_policy = self.service._load_json(row.cooldown_policy, default=None)
+                notification_policy = self.service._load_json(row.notification_policy, default=None)
                 for payload in self.service.build_runtime_payloads(
                     row, config=config, include_overflow_payload=False, read_only=read_only,
                     target_expansion_cache=target_expansion_cache,
@@ -235,6 +237,7 @@ class AlertWorker:
                             source="db",
                             severity=row.severity,
                             cooldown_policy=cooldown_policy,
+                            notification_policy=notification_policy,
                             effective_target=payload.effective_target,
                             display_target=payload.display_target,
                         )
@@ -652,6 +655,13 @@ class AlertWorker:
         from src.notification import NotificationBuilder, NotificationService
 
         notification_service = self.notifier or NotificationService()
+        policy = runtime_rule.notification_policy if isinstance(runtime_rule.notification_policy, dict) else {}
+        if isinstance(policy.get("tw_level"), dict):
+            # 台股 SMC 價位警報自帶 Markdown 版型（docs/tw-level-alerts.md）；其他規則維持通用格式
+            from src.services.tw_level_alerts import build_level_alert_message
+
+            return notification_service.send_with_results(
+                build_level_alert_message(policy["tw_level"], result), route_type="alert")
         title = f"Event Alert | {self._display_target(runtime_rule)}"
         content = result.get("reason") or result.get("message") or runtime_rule.rule.description or "Alert triggered"
         diagnostics = self._diagnostics_payload(result.get("diagnostics"))

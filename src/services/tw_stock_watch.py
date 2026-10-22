@@ -75,6 +75,7 @@ def summarize(p, nar=None):
     s = p.get("smc") or {}
     ev = s.get("last_event")
     return {
+        "name": p.get("name"),
         "as_of": p["as_of"],
         "close": s.get("price"),
         "structure": None if not ev else {
