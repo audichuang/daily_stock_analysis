@@ -43,8 +43,7 @@
 
 ### CI
 
-- 阻断 job 只由 push 触发：push `develop`、push `feat/**`、`fix/**`、`chore/**`、`docs/**`、`refactor/**`、`test/**` 分支时都会跑（`ci.yml` 的 `on:`）；不监听 `pull_request`，PR 上的 checks 就是工作分支那次 push run，分支前缀不在清单内的 PR 不会有 CI。当前有哪些 job、哪些阻断，以 `gh run list --branch <分支>`／`gh pr checks` 为准。`pr-review`（纯手动）不跟着 push 跑；`00-daily-analysis`、`network-smoke`、`stale` 已用 `gh workflow disable` 停用（每日报告在本机跑，Actions 上那份没配 secrets；省私有 repo 额度），要用时 `gh workflow enable`。
-- **改 `ci.yml` 先绕开上游的契约测试**：`test_ci_workflow_contract.py`、`test_packaging_build_scripts.py`、`test_futu_distribution_contract.py` 把 job 的 `if`／`needs`、安装指令、shard env、打包指令的原文钉住，改到就红；改上游测试的每一行都会在 `dsa-upstream-sync` 时冲突。优先用不碰断言的写法（job 层 env、旧指令留作 fallback、过滤器留着不删），非改不可才改测试并加 `fork：` 注解。
+- CI 只由 push 触发（`ci.yml` 的 `on:`），PR 上的 checks 就是工作分支那次 push run：**工作分支前缀不在 `on:` 清单内就没有 CI**。
 - **本机 `ci_gate.sh` 与 CI 不等价**：相依安装只有 CI 装得起来才算数；CI 的 backend-tests 跑 **Python 3.11**、本机 venv 是 3.12，3.12-only 语法（PEP 701 同引号巢状 f-string）本机永远剖析得过。`tests/test_python_version_compat.py` 挡这个，但本机借不到 CI 版本时它是 **skip 不是 fail**。
 
 ### 按改动面
@@ -71,7 +70,6 @@
 
 - 分支模型：工作分支 → PR 合进 **`develop`**（GitHub 预设分支，日常整合）；`main` 只代表已发版。推工作分支后用 `gh run list --branch <分支>`／`gh run watch` 确认 CI 绿，经使用者确认再合进 `develop`；交付说明引用那次 run。
 - 发版：`develop` fast-forward 进 `main`、push `main`，再在 `main` 上打 annotated tag `rel-YYYY.MM.DD`（同日第二版加 `.2`）并 push tag，`ghcr-main.yml` 依 tag 建映像。不用 `v*.*.*`——那是上游的版号，会触发上游的 release／Docker Hub／桌面端 workflow。
-- 上游的 `auto-tag.yml`（commit title 含 `#patch` 等就打 `v*` tag）已用 `gh workflow disable` 停用：上游 commit 经 `develop` 进 `main` 时会误触发。
 - 打 tag 只建映像，不会部署到 NAS；部署流程见 `docs/nas-deploy.md`。
 
 ## 10. 本 fork 专属约定
