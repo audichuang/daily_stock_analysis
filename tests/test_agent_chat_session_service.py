@@ -4,8 +4,18 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from src.services.agent_chat_session_service import AgentChatSessionService
 from src.storage import DatabaseManager
+
+
+@pytest.fixture(autouse=True)
+def _fresh_database_singleton():
+    # DatabaseManager 是 singleton：不重置會把 :memory: instance 留給後面的測試檔
+    DatabaseManager.reset_instance()
+    yield
+    DatabaseManager.reset_instance()
 
 
 def test_skill_selection_distinguishes_inherit_clear_and_explicit() -> None:

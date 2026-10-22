@@ -385,6 +385,8 @@ class AgentSkillsEndpointTestCase(unittest.TestCase):
             context={"skills": ["old_skill"], "strategies": ["older_strategy"]},
         )
         with tempfile.TemporaryDirectory() as directory:
+            # DatabaseManager 是 singleton：前面測試留下的 instance 會讓 db_url 被忽略
+            DatabaseManager.reset_instance()
             db = DatabaseManager(db_url=f"sqlite:///{directory}/chat.db")
             try:
                 with patch("api.v1.endpoints.agent.get_config", return_value=config), patch(
@@ -396,7 +398,7 @@ class AgentSkillsEndpointTestCase(unittest.TestCase):
                 self.assertEqual(db.get_conversation_session_selected_skill_ids("empty-skills"), [])
                 self.assertEqual(len(db.get_conversation_messages("empty-skills")), 2)
             finally:
-                db._engine.dispose()
+                DatabaseManager.reset_instance()
 
         mock_build_executor.assert_called_once_with(config, [])
         self.assertEqual(len(run_requests), 1)
