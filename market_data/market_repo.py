@@ -204,6 +204,16 @@ def latest_market_index(index_id, engine=None):
     return None if df.empty else df.iloc[0].to_dict()
 
 
+def latest_price_date(engine=None):
+    """`market.price` 最新一個場次的日期；查無回 None。
+
+    上市、上櫃要兩邊都抓到才會寫入那一天（`crawl._price_all`），所以這一天兩個市場的收盤都在；
+    加權指數（`market_index`）是另一個來源，price 整天被跳過時它照樣寫入，不能拿來代理。"""
+    df = _q("SELECT max(date) AS d FROM market.price", {}, engine)
+    d = None if df.empty else df.iloc[0]["d"]
+    return None if d is None or d != d else d
+
+
 _FUND_INFO_COLUMNS = ("fund_id, name, company, isin, sitca_code, type_code, type_name, invest_area, "
                       "currency, inception_date, aum, aum_currency, aum_date, dividend_policy, cnyes_id")
 

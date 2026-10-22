@@ -196,3 +196,182 @@ def test_single_run_lock_blocks_overlap():
     again = mp._single_run_lock()
     assert again is not None
     again.close()
+
+
+def test_air_date_comes_from_title_not_upload_date():
+    # TVBS金臨天下 10-16 播的集數 10-20 才上傳：用上傳日當基準，data 會吃到播出後 4 個交易日的行情
+    up = mp.date(2026, 10, 20)
+    assert mp.air_date("【精彩鈔能力】台股慘跌 #財經鈔能力 20261016", up) == (mp.date(2026, 10, 16), "title")
+    assert mp.air_date("投資明明很簡單 2026.10.19 #紀緯明", up) == (mp.date(2026, 10, 19), "title")
+    assert mp.air_date("股市米琪林｜2026/10/20｜謝文琪", up) == (mp.date(2026, 10, 20), "title")
+    # 標題沒日期、日期在上傳日之後、或早於上傳日兩週以上（講的是別的日子）都退回上傳日
+    assert mp.air_date("台股打底量《股市情報局》", up) == (up, "upload")
+    assert mp.air_date("明天 20261021 開獎", up) == (up, "upload")
+    assert mp.air_date("回顧 20260101 那一波", up) == (up, "upload")
+    assert mp.air_date("代號 2026 的股票 20261340", up) == (up, "upload")
+    # 上傳日之前 14 天內都採用（含第 14 天）
+    assert mp.air_date("x 20261006", up) == (mp.date(2026, 10, 6), "title")
+    assert mp.air_date("x 20261005", up) == (up, "upload")
+
+
+def test_premarket_shows_use_the_previous_close():
+    aired = mp.date(2026, 10, 22)
+    assert mp.data_cutoff("(字幕版) 2026.10.22 台股盤前 #財經早點名", aired) == mp.date(2026, 10, 21)
+    assert mp.data_cutoff("(字幕版) 2026.10.22 台股盤後 #仁者無敵", aired) == aired
+
+
+def test_new_episodes_dates_by_air_date_but_filters_by_upload(monkeypatch):
+    listing = "\n".join([
+        "late\t3000\t【節目】完整版 20261016",   # 10-16 播、10-20 才上傳：在 --since 內
+        "old\t3000\t【節目】完整版 20261020",    # 上傳日早於 --since：停
+    ])
+    dates = {"late": "20261020", "old": "20261018"}
+
+    def fake_run(cmd, timeout=600):
+        if "--flat-playlist" in cmd:
+            return listing
+        return dates[cmd[-1].rsplit("=", 1)[1]]
+
+    monkeypatch.setattr(mp, "_run", fake_run)
+    monkeypatch.setattr(mp, "CHANNELS", [("節目", "tv", "UCx", r"完整版", 1200)])
+    eps = mp.new_episodes(mp.date(2026, 10, 19), set())
+    assert [e["video_id"] for e in eps] == ["late"]
+    ep = eps[0]
+    assert ep["aired"] == mp.date(2026, 10, 16) and ep["aired_from"] == "title"
+    assert ep["uploaded"] == mp.date(2026, 10, 20) and ep["cutoff"] == mp.date(2026, 10, 16)
+
+
+def test_process_journals_air_date_and_snapshots_at_the_cutoff(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(mp, "nb", lambda *a, **k: {"answer": '[{"name": "台積電", "code": "2330"}]'})
+    monkeypatch.setattr(mp, "TRANSCRIPTS", tmp_path)
+    monkeypatch.setattr(mp, "snapshot", lambda code, as_of, engine: seen.append(as_of) or {"as_of": str(as_of)})
+    ep = {"show": "節目", "kind": "tv", "video_id": "v", "url": "u", "title": "盤前 2026.10.22",
+          "aired": mp.date(2026, 10, 22), "aired_from": "title", "uploaded": mp.date(2026, 10, 23),
+          "cutoff": mp.date(2026, 10, 21), "source_id": "s"}
+    rows = mp.process(ep, "nb", INDEX, engine=object())
+    assert seen == [mp.date(2026, 10, 21)]
+    assert rows[0]["date"] == "2026-10-22" and rows[0]["upload_date"] == "2026-10-23"
+    assert rows[0]["date_source"] == "title"
+
+
+def test_process_no_picks_row_carries_the_air_date_and_upload_date(monkeypatch, tmp_path):
+    # 沒點名的集數也寫一行：date 是播出日（不是上傳日），也要有 upload_date／date_source，
+    # 回驗才能用 date_source 分辨新舊口徑
+    monkeypatch.setattr(mp, "nb", lambda *a, **k: {"answer": "[]"})
+    monkeypatch.setattr(mp, "TRANSCRIPTS", tmp_path)
+    ep = {"show": "節目", "kind": "tv", "video_id": "v", "url": "u", "title": "完整版 20261016",
+          "aired": mp.date(2026, 10, 16), "aired_from": "title", "uploaded": mp.date(2026, 10, 20),
+          "cutoff": mp.date(2026, 10, 16), "source_id": "s"}
+    rows = mp.process(ep, "nb", INDEX, engine=None)
+    assert len(rows) == 1 and rows[0]["resolve"] == "no_picks"
+    assert rows[0]["date"] == "2026-10-16"
+    assert rows[0]["upload_date"] == "2026-10-20" and rows[0]["date_source"] == "title"
+
+
+def test_data_settled_waits_for_the_close_but_not_for_holidays(monkeypatch):
+    monkeypatch.setattr(mp, "required_session", lambda d: {
+        mp.date(2026, 10, 22): mp.date(2026, 10, 22),      # 平日
+        mp.date(2026, 10, 24): mp.date(2026, 10, 23),      # 週六 -> 週五
+    }[d])
+    # 10-22 下午收盤還沒入庫：最新場次是 10-21，不能把前一天收盤寫成「播出當天」
+    assert not mp.data_settled(mp.date(2026, 10, 22), mp.date(2026, 10, 21))
+    assert mp.data_settled(mp.date(2026, 10, 22), mp.date(2026, 10, 22))
+    # 休市那天之後已有新場次：那天本來就沒有收盤，用前一場是對的
+    assert mp.data_settled(mp.date(2026, 10, 22), mp.date(2026, 10, 26))
+    # 週六播出：要的是週五收盤，週五入庫就算定案
+    assert mp.data_settled(mp.date(2026, 10, 24), mp.date(2026, 10, 23))
+    assert not mp.data_settled(mp.date(2026, 10, 24), mp.date(2026, 10, 22))
+    assert not mp.data_settled(mp.date(2026, 10, 22), None)
+
+
+def test_required_session_skips_weekends_without_a_calendar(monkeypatch):
+    from tests.litellm_stub import ensure_litellm_stub
+
+    ensure_litellm_stub()
+    from src.core import trading_calendar
+
+    monkeypatch.setattr(trading_calendar, "get_trading_dates", lambda *a, **k: None)
+    assert mp.required_session(mp.date(2026, 10, 25)) == mp.date(2026, 10, 23)    # 週日 -> 週五
+    assert mp.required_session(mp.date(2026, 10, 22)) == mp.date(2026, 10, 22)
+
+
+def test_required_session_uses_the_exchange_calendar(monkeypatch):
+    import pandas as pd
+    from tests.litellm_stub import ensure_litellm_stub
+
+    ensure_litellm_stub()
+    from src.core import trading_calendar
+
+    # 平日休市（颱風假、國定假日）：10-22 週四休市，要的是 10-21 的收盤；只靠「跳過週末」會得到 10-22
+    monkeypatch.setattr(trading_calendar, "get_trading_dates",
+                        lambda m, s, e: pd.DatetimeIndex(["2026-10-20", "2026-10-21"]))
+    assert mp.required_session(mp.date(2026, 10, 22)) == mp.date(2026, 10, 21)
+    # 日曆回空（查不到）時退回平日判斷，不是報錯或回 None
+    monkeypatch.setattr(trading_calendar, "get_trading_dates", lambda m, s, e: pd.DatetimeIndex([]))
+    assert mp.required_session(mp.date(2026, 10, 22)) == mp.date(2026, 10, 22)
+    assert mp.required_session(mp.date(2026, 10, 25)) == mp.date(2026, 10, 23)
+
+
+def test_defer_unsettled_keeps_only_episodes_whose_close_is_in(monkeypatch):
+    from market_data import market_repo
+
+    # 10-22 行情整天被跳過（上櫃抓失敗），加權指數卻照樣寫進 10-22：閘門要看 market.price，不能看指數
+    monkeypatch.setattr(market_repo, "latest_price_date", lambda engine=None: mp.date(2026, 10, 21))
+    monkeypatch.setattr(market_repo, "latest_market_index",
+                        lambda index_id, engine=None: {"date": mp.date(2026, 10, 22), "close": 1.0})
+    monkeypatch.setattr(mp, "required_session", lambda d: d)
+    eps = [{"video_id": v, "show": "s", "cutoff": d}
+           for v, d in (("a", mp.date(2026, 10, 20)), ("b", mp.date(2026, 10, 21)), ("c", mp.date(2026, 10, 22)))]
+    assert [e["video_id"] for e in mp.defer_unsettled(eps, engine=None)] == ["a", "b"]
+    # 行情表查不到任何場次：全部延後（拿不到參照就拒收）
+    monkeypatch.setattr(market_repo, "latest_price_date", lambda engine=None: None)
+    assert mp.defer_unsettled(eps, engine=None) == []
+
+
+def test_default_since_covers_episodes_deferred_over_a_weekend(monkeypatch):
+    # 週五延後的集數（收盤沒入庫／颱風休市）要在週一那輪仍落在 --since 內，否則永遠漏掉
+    seen = {}
+    monkeypatch.setattr(mp, "_single_run_lock", lambda: object())
+    monkeypatch.setattr(mp, "already_done", lambda: set())
+    monkeypatch.setattr(mp, "new_episodes", lambda since, done: seen.setdefault("since", since) and [])
+    assert mp.main(["--dry-run"]) == 0
+    assert mp.date.today() - seen["since"] >= mp.timedelta(days=4)
+
+
+def test_main_does_not_touch_notebooklm_when_every_episode_is_deferred(monkeypatch):
+    from market_data import db
+
+    ep = {"video_id": "v", "show": "s", "title": "t", "aired": mp.date(2026, 10, 22), "cutoff": mp.date(2026, 10, 22)}
+    monkeypatch.setattr(mp, "_single_run_lock", lambda: object())
+    monkeypatch.setattr(mp, "already_done", lambda: set())
+    monkeypatch.setattr(mp, "new_episodes", lambda since, done: [ep])
+    monkeypatch.setattr(mp, "load_index", lambda: INDEX)
+    monkeypatch.setattr(db, "get_engine", lambda: object())
+    deferred = []
+    monkeypatch.setattr(mp, "defer_unsettled", lambda eps, engine: deferred.extend(eps) or [])
+
+    def no_nb(*a, **k):
+        raise AssertionError("deferred episodes must not reach NotebookLM or the journal")
+
+    monkeypatch.setattr(mp, "nb", no_nb)
+    assert mp.main(["--since", "2026-10-20"]) == 0
+    assert deferred == [ep]
+
+
+def test_latest_price_date_reads_market_price_and_handles_an_empty_table(monkeypatch):
+    import pandas as pd
+
+    from market_data import market_repo
+
+    seen = []
+
+    def fake_q(sql, params, engine):
+        seen.append(sql)
+        return pd.DataFrame({"d": [mp.date(2026, 10, 22)]})
+
+    monkeypatch.setattr(market_repo, "_q", fake_q)
+    assert market_repo.latest_price_date(engine=object()) == mp.date(2026, 10, 22)
+    assert "market.price" in seen[0] and "market_index" not in seen[0]
+    monkeypatch.setattr(market_repo, "_q", lambda sql, params, engine: pd.DataFrame({"d": [None]}))
+    assert market_repo.latest_price_date(engine=object()) is None

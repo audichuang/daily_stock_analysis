@@ -336,6 +336,100 @@ def test_unverified_numbers_flags_decimal_slips_on_price_and_pe():
     assert report.unverified_numbers(nar, p) == ["108.5", "10.85", "2.345", "234.5"]
 
 
+def _chip_payload():
+    # 2330 的真實數字（2026-10-22 資料包）
+    return {**EMPTY, "chips": {"institutional": {"foreign_20d_lots": -149121, "foreign_5d_lots": -60094},
+                               "margin": {"margin_balance": 35330, "margin_chg_5": -2140, "short_balance": 412},
+                               "holding": {"total_holders": 3098860}, "branch": None},
+            "smc": {"price": 1375.0}}
+
+
+def test_lots_and_holders_may_be_written_in_wan():
+    # 張數、人數照中文財經慣例寫成「萬張」「萬人」不能被當成核對不到（看板結論卡會因此消失）
+    ok = {"notes": {"chips": "外資近 20 日賣超約 14.9 萬張，近 5 日賣超 6.0 萬張；融資餘額 3.53 萬張，"
+                             "5 日減 0.21 萬張；總股東人數約 309.9 萬人；外資 20 日賣超 149,121 張。"}}
+    assert report.unverified_numbers(ok, _chip_payload()) == []
+
+
+def test_wan_conversion_needs_the_unit_and_stays_off_prices():
+    p = _chip_payload()
+    # 換算後的數字沒寫「萬」、寫成「億」、原值配「萬」都差了一萬倍；價格不准換成萬
+    wrong = {"notes": {"chips": "外資賣超 14.9 張；外資賣超 14.9 億張；外資賣超 149,121 萬張；"
+                                "總股東 309.9 人；現價 0.14 萬；現價 0.1375 萬。"}}
+    assert report.unverified_numbers(wrong, p) == ["14.9", "14.9", "149,121", "309.9", "0.14", "0.1375"]
+
+
+def _branch_payload():
+    # 2330 的真實分點數字（2026-10-22 資料包）
+    row = {"branch": "某分點", "buy": 120.0, "sell": 14450.0, "net": 14330.0, "share_pct": 1.23}
+    return {**EMPTY, "chips": {"institutional": None, "margin": None, "holding": None,
+                               "branch": {"day": None, "five_sessions": {
+                                   "buy": [{"branch": "甲", "buy": 9000.0, "sell": 100.0, "net": 8900.0,
+                                            "share_pct": 2.5}],
+                                   "sell": [row], "buy_total": 16853.0, "sell_total": 60478.0,
+                                   "avg_buy_cost": None, "avg_sell_cost": None}}},
+            "smc": {"price": 1375.0},
+            # 分點以外同名的 net／buy 欄位不能跟著換算（名稱太通用）
+            "valuation": {"net": 25000.0, "buy": 31000.0}}
+
+
+def test_branch_lots_may_be_written_in_wan():
+    ok = {"notes": {"chips": "近五日分點賣出合計 6.05 萬張。最大賣超分點 5 日賣超 1.43 萬張。"
+                             "近五日分點買進合計 1.69 萬張；該分點賣出 1.445 萬張；買超分點淨買 0.89 萬張。"}}
+    assert report.unverified_numbers(ok, _branch_payload()) == []
+
+
+def test_branch_wan_conversion_needs_the_unit_and_stays_inside_branch():
+    wrong = {"notes": {"chips": "賣出合計 6.05 張；賣超 1.43 億張；占比 0.0123 萬；"
+                                "別段的 net 2.5 萬；別段的 buy 3.1 萬。"}}
+    assert report.unverified_numbers(wrong, _branch_payload()) == ["6.05", "1.43", "0.0123", "2.5", "3.1"]
+
+
+def test_corrupt_narrative_cache_self_heals(monkeypatch, tmp_path):
+    # 寫到一半被殺留下截斷的 JSON：要重呼 LLM 蓋掉它，不能整個基準日都顯示「AI 解讀產生失敗」
+    _payload_stub(monkeypatch)
+    cached = tmp_path / "3324_2026-08-28.json"
+    calls = []
+
+    def gen(prompt):
+        calls.append(prompt)
+        return json.dumps(GOOD)
+
+    for broken in ('{"verdicts": {"fundamental": ', "[1, 2]", b"\xff\xfe\x00"):
+        calls.clear()
+        if isinstance(broken, bytes):
+            cached.write_bytes(broken)
+        else:
+            cached.write_text(broken, encoding="utf-8")
+        html = report.report_html("3324.TWO", narrative=True, generate=gen, cache_dir=tmp_path)
+        assert len(calls) == 1 and "AI 解讀產生失敗" not in html and "四維度總覽" in html
+        assert json.loads(cached.read_text(encoding="utf-8"))["check_version"] == report.NARRATIVE_CHECK_VERSION
+        # 重寫後的快取正常沿用，不會每次開都重付 LLM
+        report.report_html("3324.TWO", narrative=True, generate=gen, cache_dir=tmp_path)
+        assert len(calls) == 1
+
+
+def test_narrative_cache_write_is_atomic(monkeypatch, tmp_path):
+    # 寫入途中失敗（被殺、磁碟滿）時舊快取保持完整，也不留下暫存檔
+    p = {**EMPTY}
+    first = report.cached_narrative(p, lambda prompt: json.dumps(GOOD), tmp_path)
+    cached = tmp_path / "9999_2026-08-28.json"
+    before = cached.read_text(encoding="utf-8")
+    real_write = report.Path.write_text
+
+    def dies_midway(self, text, *a, **k):
+        real_write(self, text[:10], *a, **k)
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(report.Path, "write_text", dies_midway)
+    changed = {**p, "valuation": {"as_of": "2026-08-29"}}      # 數字變了，要重寫
+    with pytest.raises(OSError):
+        report.cached_narrative(changed, lambda prompt: json.dumps(GOOD), tmp_path)
+    assert cached.read_text(encoding="utf-8") == before
+    assert [f.name for f in tmp_path.iterdir()] == [cached.name]
+    assert json.loads(before) == first
+
+
 def _bad_gen(calls):
     bad = {**GOOD, "notes": {"chips": "外資持股 41.27%。"}}
 
