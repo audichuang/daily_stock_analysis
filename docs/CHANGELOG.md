@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] `/settings` 首次啟動設定檢查的「資料庫」項：設了 `STORAGE_DATABASE_URL` 時改成對執行中的應用庫做 `SELECT 1`（顯示遮蔽密碼的連線字串），連不上就標「需處理」；原本只看已凍結的 `DATABASE_PATH` SQLite 父目錄能不能寫，Postgres 掛掉也亮綠燈
 - [修復] 資料中心 `/data` 認得本 fork 的台股來源：新增 `shioaji`（台股即時報價，有金鑰時排在 yfinance 前）與 `marketdb`（台股日 K）兩個 Provider 和 `tw.realtime` 路由；`marketdbfetcher` 不再出現 `unknown_source` 警示，也不再被掛到 cn／hk／jp／kr 的日 K
 - [修復] 第三輪（反方驗證後）：護欄的反問只認「何不」，「無論如何不加倉／為何不建議買入」仍是否定；均線加權實驗的分組釘住表加鎖（pipeline 多執行緒共用分析器）；四維度解讀「更完整」改成分點與讀取失敗兩個維度都不能變差（兩種互有缺漏的資料包交替時不再每次重付 LLM），重寫失敗時沿用數字相同的舊解讀；`make media-picks` 的無股名物件回覆記成沒有點名、只有純引用標記才重試
 - [修復] 深度驗證後的第二輪修正：護欄不再因「不追高」（提示詞本來就要求寫）而放過買進，「不得不加倉／沒有理由不加倉／何不加倉」仍判為買進；均線加權實驗的組別在一次分析開頭釘住（跨午夜不會 system／user 提示詞分到不同組），比例設成 `nan` 時當 1；四維度解讀在分點晚到或失敗段落恢復時重寫；處置名單快取的「完整」也看除權息／法說會來源；賣方共識快取改存 yfinance 原始資料，status 與上檔空間每次用當下參考價重算（NAS 盤中重複分析不再沿用早上的結果）；`make media-picks` 加單一執行鎖，`[{}]` 這類無股名回覆也下次重試，同音名配不到時改用模型代號判斷補零數字

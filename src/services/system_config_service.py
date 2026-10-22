@@ -3891,8 +3891,64 @@ class SystemConfigService:
             "需要推送时可稍后配置飞书、钉钉、Telegram、邮件或其他通知渠道。",
         )
 
+    def _build_setup_app_database_check(self) -> Dict[str, Any]:
+        """設了 STORAGE_DATABASE_URL 時檢查執行中的應用庫，而不是 DATABASE_PATH 的 SQLite。
+
+        STORAGE_DATABASE_URL 優先於 DATABASE_PATH（見 Config.get_db_url）；只看 SQLite 父目錄
+        會在 Postgres 掛掉時照樣亮綠燈，而那個 SQLite 檔根本沒人在寫。
+        """
+        title = "数据库 / 本地存储"
+        try:
+            from sqlalchemy import text
+
+            from src.storage import DatabaseManager
+
+            engine = getattr(DatabaseManager.get_instance(), "_engine", None)
+            if engine is None:
+                raise RuntimeError("database engine not initialized")
+            label = engine.url.render_as_string(hide_password=True)
+            if engine.url.get_backend_name() == "sqlite":
+                return self._setup_check(
+                    "storage",
+                    title,
+                    "system",
+                    True,
+                    "needs_action",
+                    f"已設定 STORAGE_DATABASE_URL，但執行中的應用庫仍是 SQLite: {label}",
+                    "重新啟動服務讓 STORAGE_DATABASE_URL 生效。",
+                )
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+        except Exception as exc:  # noqa: BLE001 - 狀態檢查不得拋錯
+            logger.warning("Setup storage check failed to reach app database: %s", type(exc).__name__)
+            return self._setup_check(
+                "storage",
+                title,
+                "system",
+                True,
+                "needs_action",
+                f"應用庫（STORAGE_DATABASE_URL）連線失敗: {type(exc).__name__}",
+                "請檢查 STORAGE_DATABASE_URL 與資料庫服務是否可用。",
+            )
+        return self._setup_check(
+            "storage",
+            title,
+            "system",
+            True,
+            "configured",
+            f"應用庫（STORAGE_DATABASE_URL）連線正常: {label}",
+        )
+
     def _build_setup_storage_check(self, effective_map: Dict[str, str]) -> Dict[str, Any]:
-        db_path = Path((effective_map.get("DATABASE_PATH") or "./data/stock_analysis.db").strip()).expanduser()
+        storage_url = (
+            os.environ.get("STORAGE_DATABASE_URL")
+            or effective_map.get("STORAGE_DATABASE_URL")
+            or ""
+        ).strip()
+        if storage_url:
+            return self._build_setup_app_database_check()
+
+        db_path =Path((effective_map.get("DATABASE_PATH") or "./data/stock_analysis.db").strip()).expanduser()
         parent = db_path.parent if db_path.parent != Path("") else Path(".")
         probe = parent
         while not probe.exists() and probe != probe.parent:
