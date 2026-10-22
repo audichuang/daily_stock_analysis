@@ -28,7 +28,7 @@
 
 ## 3. 仓库速览
 
-完整结构问 `tree`／codegraph。`market_data/` 是台股行情爬取 → Postgres `market` schema（细节见 `market_data/AGENTS.md`）。
+完整结构问 `tree`／codegraph。`market_data/` 是台股行情爬取 → Postgres `market` schema（细节见 `market_data/AGENTS.md`）。台股分析现况（抓哪些数据、哪些护栏会改掉 LLM 结论、开关与建议值、已经研究过不要重做的问题）先读 `docs/tw-analysis-overview.md`；文件导航见 `docs/INDEX.md` 的「台股（本 fork）」，当天快照式的研究纪录放 `docs/research/`。
 
 ## 4. 常用命令
 

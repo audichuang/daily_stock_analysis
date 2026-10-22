@@ -54,7 +54,7 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
 
 ## 4. 已經回答過的問題（不要重做）
 
-全部是 2026-10-22 的診斷與回測，原始報告在 `.claude/reviews/2026-10-22-no-buy-diagnosis.md`、`2026-10-22-tw-media-sweep.md`（gitignore，只在兩台開發機）。量化結論的正本在 `docs/tw-signal-research-2026-10.md`。
+全部是 2026-10-22 的診斷與回測，完整報告在 [`docs/research/2026-10-22-no-buy-diagnosis.md`](research/2026-10-22-no-buy-diagnosis.md)（零買進診斷）與 [`docs/research/2026-10-22-tw-media-sweep.md`](research/2026-10-22-tw-media-sweep.md)（台灣財經媒體與投行掃描）。量化結論的正本在 [`docs/tw-signal-research-2026-10.md`](tw-signal-research-2026-10.md)。
 
 - **為什麼 873 份報告（2026-07-06～10-22）零買進？** 結構性的，不是 LLM 看空。
   - 主因：資金流 `not_supported` 被當成「缺資料」，LLM 原判買進的 124 份（原始分 60～82）全被壓成 59／持有觀察。這就是分數永遠到不了 70 的原因。
