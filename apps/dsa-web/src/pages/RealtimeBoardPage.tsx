@@ -229,6 +229,10 @@ const RealtimeBoardPage: React.FC = () => {
   const [dossierTick, setDossierTick] = useState(0); // 遞增即重抓四維度摘要（手動刷新／15 分鐘）
   const [indices, setIndices] = useState<MarketIndex[]>([]);
   const codesRef = useRef<string[]>([]);
+  // 展開列是 colSpan 整張表寬（手機上被欄位撐到 1000px 以上）：內容改成黏在左邊、寬度跟著可視的捲動框，
+  // 不用橫滑整張表才找得到撐壓、結論卡與「四維度分析」按鈕
+  const tableBoxRef = useRef<HTMLDivElement | null>(null);
+  const [tableBoxWidth, setTableBoxWidth] = useState<number | null>(null);
   const refreshSeqRef = useRef(0); // 世代守卫：丢弃旧轮询迟到的 chunk，避免覆盖更新的数据
 
   // 分批并发刷新：每批回来就只 merge 那几列（in-place），不整页清空、不等最慢的
@@ -342,6 +346,20 @@ const RealtimeBoardPage: React.FC = () => {
       active = false;
     };
   }, [codes, dossierTick]);
+
+  useEffect(() => {
+    const box = tableBoxRef.current;
+    if (!box) return;
+    const measure = () => setTableBoxWidth(box.clientWidth || null);
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [loading, codes]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -604,7 +622,7 @@ const RealtimeBoardPage: React.FC = () => {
         ) : codes && codes.length === 0 ? (
           <EmptyState title={scope === 'holdings' ? t('board.emptyHoldings') : t('board.empty')} />
         ) : (
-          <div className="overflow-x-auto">
+          <div ref={tableBoxRef} className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs text-secondary-text">
@@ -686,16 +704,22 @@ const RealtimeBoardPage: React.FC = () => {
                       </tr>
                       {isOpen ? (
                         <tr className="border-b border-border/50 bg-base/40">
-                          <td colSpan={12}>
-                            <BoardDossierPanel
-                              code={code}
-                              name={q?.stockName}
-                              summary={dossier[normalizeStockCode(code)]}
-                              price={q?.currentPrice}
-                              levelAlertsEnabled={levelAlertsEnabled}
-                            />
-                            {quoteDetail(q)}
-                            <TrendChart code={code} />
+                          <td colSpan={12} className="p-0">
+                            <div
+                              data-testid="board-expanded"
+                              className="sticky left-0"
+                              style={tableBoxWidth ? { width: tableBoxWidth } : undefined}
+                            >
+                              <BoardDossierPanel
+                                code={code}
+                                name={q?.stockName}
+                                summary={dossier[normalizeStockCode(code)]}
+                                price={q?.currentPrice}
+                                levelAlertsEnabled={levelAlertsEnabled}
+                              />
+                              {quoteDetail(q)}
+                              <TrendChart code={code} />
+                            </div>
                           </td>
                         </tr>
                       ) : null}
