@@ -57,7 +57,7 @@
 | [分析上下文包契约、运行态消费与可见性](analysis-context-pack.md) | AnalysisContextPack 首版范围、字段质量状态、P1/P2 内部契约、P3 Prompt 摘要消费、P4 历史/API/Web 低敏可见性、P5 数据质量评分、P6 迁移回滚与源码锚点；完整指南补充 #1386 阶段感知分析、迁移与回滚入口 |
 | [台股操作手册](tw-operating-guide.md) | 每天几点做什么、每日报告怎么读（看文字结论与狙击点位、忽略买卖标签；没有持有期）、三条线（AI 报告／波段／价值）的分工与证据状态、上柜月营收的口径闸门 |
 | [本機排程與每日報告維運](daily-report-ops.md) | Orca 排程一覽（盤前、上游同步、每日報告、持股檢查）、每日報告的逾時／鎖／完成標記與卡住時的診斷 |
-| [NAS 上的 Web 服務與發版](nas-deploy.md) | 本 fork Web 服務跑在 NAS：不在本機再起一份的理由、釘 digest 經 Komodo 的手動發版流程、NAS 問股後端 |
+| [NAS 上的 Web 服務與發版](nas-deploy.md) | 本 fork Web 服務跑在 NAS：不在本機再起一份的理由、釘 digest 經 Komodo 的手動發版流程、NAS 問股後端、唯讀查看線上狀態與直接查 DB、第二台開發機的分工 |
 | [台股個股四維度資料包](tw-stock-dossier.md) | `tw_stock_dossier.py` 各段的來源與限制（分點只有前 15 名、HHI 口徑、SMC 定義），以及與 botbook.cc 範例報告的逐項對照 |
 | [台股波段候选流水线](tw-swing-pipeline.md) | 量化预筛 → AI 事件面研究 → 回验四层的契约：冻结的讯号定义、前瞻报酬分布与区块 bootstrap 区间、组合层（资金竞争／排序／走前验证）结论、回验指标，以及明确站不住的部分 |
 | [台股訊號研究 2026-10](tw-signal-research-2026-10.md) | 大盤狀態（0050 季線、市場寬度、融資背離）與月營收動能（降速、月減、斷創高）的前瞻淨報酬回測，以及賣方共識（目標價／EPS 修正）調查：n、期間、bootstrap CI 與 inconclusive 標記，和接進 prompt 時的用字規則 |
