@@ -6,7 +6,7 @@
 
 | 時間（台北） | 做什麼 | 流程正本 |
 |---|---|---|
-| 平日 07:30 | 盤前判讀，寫 `journal/` 兩個 jsonl；使用者授權它**只** commit＋push 這兩個檔到 `develop`（根 `AGENTS.md` §1 commit 規則的唯一例外，讓預測當天進版控） | skill `tw-morning-call` |
+| 平日 07:30 | 盤前判讀，寫 `journal/` 兩個 jsonl；只 commit＋push 這兩個檔到 `develop`（讓預測當天進版控；git 權限見根 `AGENTS.md` §1） | skill `tw-morning-call` |
 | 每日 08:30 | 上游同步：上游累積 ≥5 個未收 commit 才動手，只產出待審分支 `chore/upstream-sync-<日期>` 並推 Bark，**不碰 `develop`／`main`**；該分支合進 `develop` 前就是下一輪的鎖，排程會一直記成 skipped | skill `dsa-upstream-sync`（precheck 在它的 `scripts/`） |
 | 平日 10:00／13:00 | 持股盤中對照即時價，有觸發才推 Bark | skill `portfolio-check` |
 | 平日 18:00 | `make daily-report-detached`（`scripts/daily_report.sh`） | 本檔下兩節 |

@@ -37,7 +37,7 @@ This repository is a personal fork (`audichuang/daily_stock_analysis`) that is *
 
 - **Use `uv`, not `pip`/`python -m venv`**: `uv venv --python 3.12`, `uv pip install -r requirements.txt`, and run everything via `uv run python …`. Common tasks are wrapped in the root `Makefile` (`make help`).
 - **`STOCK_INDEX_REMOTE_UPDATE_ENABLED` must stay `false`** in `.env`. Setting it to `true` makes the runtime pull the stock index from upstream GitHub and **overwrite this fork's local TW/US index additions**. Note that `.env.example` still ships the upstream value `true` — do not copy it.
-- **`LITELLM_MODEL` must be set explicitly** in `.env`. Otherwise, when the shell exports `GEMINI_API_KEY`, `load_dotenv` will not override the existing environment variable and model inference silently picks Gemini instead. The model name is whatever `.env` currently holds — it is deliberately not written here, because DeepSeek has already retired one name (`deepseek-chat`) that was.
+- **When generation goes through LiteLLM, `LITELLM_MODEL` must be set explicitly** in `.env` (local runs use the Claude Code CLI backend, see `AGENTS.md` §10). Otherwise, when the shell exports `GEMINI_API_KEY`, `load_dotenv` will not override the existing environment variable and model inference silently picks Gemini instead. The model name is whatever `.env` currently holds — it is deliberately not written here, because DeepSeek has already retired one name (`deepseek-chat`) that was.
 
 ## AI Asset Governance
 
