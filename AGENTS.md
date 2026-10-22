@@ -43,7 +43,7 @@
 
 ### CI
 
-- 阻断 job 在对 `main` 开 PR、push `main`、push `feat/**`、`fix/**`、`chore/**`、`docs/**`、`refactor/**`、`test/**` 分支时都会跑（`ci.yml` 的 `on:`）。当前有哪些 job、哪些阻断，以 `gh run list --branch <分支>`／`gh pr checks` 为准。`network-smoke`（排程＋手动）与 `pr-review`（纯手动）不跟着 push 跑。
+- 阻断 job 只由 push 触发：push `main`、push `feat/**`、`fix/**`、`chore/**`、`docs/**`、`refactor/**`、`test/**` 分支时都会跑（`ci.yml` 的 `on:`）；不监听 `pull_request`，PR 上的 checks 就是工作分支那次 push run，分支前缀不在清单内的 PR 不会有 CI。当前有哪些 job、哪些阻断，以 `gh run list --branch <分支>`／`gh pr checks` 为准。`pr-review`（纯手动）不跟着 push 跑；`00-daily-analysis`、`network-smoke`、`stale` 已用 `gh workflow disable` 停用（每日报告在本机跑，Actions 上那份没配 secrets；省私有 repo 额度），要用时 `gh workflow enable`。
 - **本机 `ci_gate.sh` 与 CI 不等价**：相依安装只有 CI 装得起来才算数；CI 的 backend-tests 跑 **Python 3.11**、本机 venv 是 3.12，3.12-only 语法（PEP 701 同引号巢状 f-string）本机永远剖析得过。`tests/test_python_version_compat.py` 挡这个，但本机借不到 CI 版本时它是 **skip 不是 fail**。
 
 ### 按改动面

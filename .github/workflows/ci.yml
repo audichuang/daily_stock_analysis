@@ -1,11 +1,10 @@
 name: CI
 
 on:
-  pull_request:
-    branches: [main]
-  # fork 增量：本 fork 不開 PR、驗完直接合進 main（AGENTS §9），只有 pull_request 觸發時
-  # 阻斷 job 一次都不會跑。推 main 與工作分支也跑；paths-filter 在 push 事件下，
-  # 工作分支比對 default branch、main 比對上一個 commit。
+  # fork 增量：只用 push 觸發。工作分支的 push run 會掛在 PR head commit 上當 checks，
+  # 再加 pull_request 等於同一個改動跑兩次（concurrency group 不同、互不取消），
+  # 私有 repo 會白燒 Actions 額度。paths-filter 在 push 事件下，工作分支比對
+  # default branch、main 比對上一個 commit。
   push:
     branches: [main, 'feat/**', 'fix/**', 'chore/**', 'docs/**', 'refactor/**', 'test/**']
 
