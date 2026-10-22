@@ -11,7 +11,7 @@
 - `/` HomePage:**最複雜的一頁**——發起分析任務、任務進度(run-flow/tasks 面板)、歷史報告與大盤複盤檢視都在這
 - `/board` RealtimeBoardPage:即時看板(自選＋帳本持股＋基金卡,Shioaji 行情+大盤指數條);**資料語意正本在 `docs/realtime-board.md`**(fallback、時區、kbars 30 天上限),別在這裡重查
 - `/funds` FundsPage:境內基金查詢(淨值走勢、報酬、前十大持股)與帳本外的基金持倉;資料語意見 `docs/tw-funds.md`
-- `/chat` agent 對話、`/portfolio` 投組、`/decision-signals` 決策信號、`/screening` 選股、`/backtest` 回測、`/alerts` 警報、`/usage` LLM token 用量、`/data` 資料中心(唯讀資料源能力；後端 `data_capability_service.py` 不認得 fork 的台股 fetcher，台股只列 yfinance)、`/settings` 設定——顧名思義
+- `/chat` agent 對話、`/portfolio` 投組、`/decision-signals` 決策信號、`/screening` 選股、`/backtest` 回測、`/alerts` 警報、`/usage` LLM token 用量、`/data` 資料中心(唯讀資料源能力；台股即時 `tw.realtime` 是 Shioaji→yfinance、日 K 是 marketdb→yfinance，見 `docs/data-center-diagnostics.md`)、`/settings` 設定——顧名思義
 - `/login` 登入頁(已登入時自動導回 `/`)
 
 ## 進來改要遵守

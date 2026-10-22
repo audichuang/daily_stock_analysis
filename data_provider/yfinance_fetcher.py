@@ -16,6 +16,7 @@ YfinanceFetcher - 兜底数据源 (Priority 4)
 
 import csv
 import logging
+import math
 import re
 from datetime import datetime
 from io import StringIO
@@ -406,20 +407,33 @@ class YfinanceFetcher(BaseFetcher):
             行情字典，失败时返回 None
         """
         ticker = yf.Ticker(yf_code)
-        # 取近两日数据以计算涨跌幅
-        hist = ticker.history(period='2d')
+        # 多取几日以便找到前一个有价格的交易日（涨跌幅的基准）。
+        hist = ticker.history(period='5d')
         if hist.empty:
             return None
+        nan = float('nan')
         today_row = hist.iloc[-1]
-        prev_row = hist.iloc[-2] if len(hist) > 1 else today_row
+        earlier = hist.iloc[:-1].dropna(subset=['Close'])
+        # 没有前一列就没有涨跌：「没有读数」不是 0（见 src/AGENTS.md），留 NaN 让序列化边界清成 null。
+        prev_close = float(earlier.iloc[-1]['Close']) if not earlier.empty else nan
         price = float(today_row['Close'])
-        prev_close = float(prev_row['Close'])
-        change = price - prev_close
-        change_pct = (change / prev_close) * 100 if prev_close else 0
+        if not math.isfinite(price):
+            # Yahoo 偶发把最新一列的 OHLC 回成空值、只留成交量（yfinance 的 keepna=False 只丢
+            # 「全部为空」的列，这种列会留下来；踩过：2026-10-22 纽约盘前 SPX/IXIC/DJI 全空）。
+            # 不能退回前一列——那是上一场的收盘，会被当成这一场。改读 fast_info.last_price：
+            # yfinance 在日线收盘为空时会改用 chart metadata 的 regularMarketPrice。
+            price = self._fast_info_last_price(ticker)
+            logger.warning(
+                f"[Yfinance] {yf_code} 最新一列 ({hist.index[-1]}) 收盘价为空，"
+                f"改用 fast_info 最新价: {price}"
+            )
+        has_prev = math.isfinite(prev_close) and prev_close != 0
+        change = price - prev_close if has_prev else nan
+        change_pct = (change / prev_close) * 100 if has_prev else nan
         high = float(today_row['High'])
         low = float(today_row['Low'])
         # 振幅 = (最高 - 最低) / 昨收 * 100
-        amplitude = ((high - low) / prev_close * 100) if prev_close else 0
+        amplitude = ((high - low) / prev_close * 100) if has_prev else nan
         return {
             'code': return_code,
             'name': name,
@@ -434,6 +448,16 @@ class YfinanceFetcher(BaseFetcher):
             'amount': 0.0,  # Yahoo Finance 不提供准确成交额
             'amplitude': amplitude,
         }
+
+    @staticmethod
+    def _fast_info_last_price(ticker: Any) -> float:
+        """读 fast_info 的最新价；拿不到或非有限值时回 NaN（不得回 0）。"""
+        try:
+            value = float(ticker.fast_info.last_price)
+        except Exception as exc:  # noqa: BLE001 - 补救路径失败就当没有读数
+            logger.debug(f"[Yfinance] fast_info.last_price 读取失败: {exc}")
+            return float('nan')
+        return value if math.isfinite(value) and value > 0 else float('nan')
 
     def get_main_indices(self, region: str = "cn") -> Optional[List[Dict[str, Any]]]:
         """
