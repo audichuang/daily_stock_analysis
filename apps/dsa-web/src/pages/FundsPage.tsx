@@ -155,6 +155,12 @@ const FundsPage: React.FC = () => {
     };
   }, [selectedId]);
 
+  // 「新增持倉」表單開著但還沒選基金時，選定的基金載完就帶入；已有基金的表單（含編輯中）不動
+  useEffect(() => {
+    if (!detail) return;
+    setForm((prev) => (prev && !prev.fundId ? { ...prev, fundId: detail.fundId, fundName: detail.name } : prev));
+  }, [detail]);
+
   // 詳情載完（含首次補歷史）才抓走勢，避免與補歷史搶先回空
   useEffect(() => {
     if (!detail) {
