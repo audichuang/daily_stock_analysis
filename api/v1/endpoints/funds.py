@@ -68,9 +68,13 @@ def create_fund_holding(request: FundHoldingCreateRequest) -> FundHoldingItem:
     return FundHoldingItem(**item)
 
 
-@router.put("/holdings/{holding_id}", response_model=FundHoldingItem, responses=_ERRORS, summary="更新基金持倉")
+@router.put("/holdings/{holding_id}", response_model=FundHoldingItem,
+            responses={**_ERRORS, 409: {"model": ErrorResponse}}, summary="更新基金持倉")
 def update_fund_holding(holding_id: int, request: FundHoldingUpdateRequest) -> FundHoldingItem:
-    item = FundService().update_holding(holding_id, **request.model_dump(exclude_none=True))
+    try:
+        item = FundService().update_holding(holding_id, **request.model_dump(exclude_none=True))
+    except ValueError:
+        raise api_error(409, "duplicate_holding", "這個通路已有同一檔基金的持倉，請改編輯那一筆")
     if item is None:
         raise api_error(404, "not_found", f"查無持倉：{holding_id}")
     return FundHoldingItem(**item)
