@@ -117,6 +117,19 @@ def nav_on_or_before(series: List[Dict[str, Any]], target: date) -> Optional[Dic
     return found
 
 
+_PERIOD_DAYS = dict(RETURN_PERIODS)
+PERIOD_KEYS = tuple(_PERIOD_DAYS) + ("ytd",)
+
+
+def period_base_target(last_date: date, key: str) -> date:
+    """期間報酬的起點日：最新淨值日回推（ytd 是去年最後一天）；實際基準取這天當日或之前最後一筆。
+
+    報酬卡（``compute_returns``）與走勢圖區間（``get_nav_history(period=)``）共用，兩邊才會是同一個基準日。"""
+    if key == "ytd":
+        return date(last_date.year, 1, 1) - timedelta(days=1)
+    return last_date - timedelta(days=_PERIOD_DAYS[key])
+
+
 def compute_returns(series: List[Dict[str, Any]]) -> Dict[str, Optional[float]]:
     """各期間報酬率（%）：以最新淨值日回推，起點取當日或之前最後一筆；期間不足的回 None。
 
@@ -127,18 +140,13 @@ def compute_returns(series: List[Dict[str, Any]]) -> Dict[str, Optional[float]]:
         return out
     last = series[-1]
     first_date = series[0]["date"]
-    for key, days in RETURN_PERIODS:
-        target = last["date"] - timedelta(days=days)
+    for key in PERIOD_KEYS:
+        target = period_base_target(last["date"], key)
         if target < first_date:
             continue
         base = nav_on_or_before(series, target)
         if base and base["nav"]:
             out[key] = (last["nav"] / base["nav"] - 1) * 100
-    year_start = date(last["date"].year, 1, 1) - timedelta(days=1)
-    if year_start >= first_date:
-        base = nav_on_or_before(series, year_start)
-        if base and base["nav"]:
-            out["ytd"] = (last["nav"] / base["nav"] - 1) * 100
     return out
 
 
@@ -235,10 +243,21 @@ class FundService:
             "risk": compute_risk(series),
         }
 
-    def get_nav_history(self, fund_id: str, days: Optional[int] = None) -> Dict[str, Any]:
+    def get_nav_history(self, fund_id: str, days: Optional[int] = None,
+                        period: Optional[str] = None) -> Dict[str, Any]:
+        """``period``（m1…y5、ytd）：從報酬卡同一個基準點（``period_base_target`` 當日或之前最後一筆）起算，
+        首尾相除就等於 ``returns[period]``；歷史不足一個期間時回全部。``days`` 是舊參數（以今天回推、
+        取之後的第一筆），兩者都給時以 ``period`` 為準。"""
         self._info(fund_id)
-        start = date.today() - timedelta(days=days) if days else None
-        points = self._series(fund_id, start=start)
+        if period:
+            points = self._series(fund_id)
+            if points:
+                base = nav_on_or_before(points, period_base_target(points[-1]["date"], period))
+                if base is not None:
+                    points = points[points.index(base):]
+        else:
+            start = date.today() - timedelta(days=days) if days else None
+            points = self._series(fund_id, start=start)
         return {"fund_id": fund_id,
                 "points": [{"date": p["date"], "nav": p["nav"]} for p in points]}
 

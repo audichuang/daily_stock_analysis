@@ -41,7 +41,7 @@ uv run --env-file .env python -m market_data.cli health
 |---|---|
 | `GET /search?q=&limit=` | 依名稱、投信、統編或 ISIN 搜尋；有淨值的排前面 |
 | `GET /{fund_id}` | 詳情：基本資料、最新淨值與淨值日、`is_stale`（淨值日逾 10 天）、`returns`（`w1`/`m1`/`m3`/`m6`/`ytd`/`y1`/`y3`/`y5`，%）、`risk`（近一年 `max_drawdown`、`volatility`，%）。歷史少於 30 筆時先從鉅亨補；補失敗時填 `history_error`，其餘照常回 |
-| `GET /{fund_id}/nav?days=` | 淨值歷史（升序） |
+| `GET /{fund_id}/nav?period=`／`?days=` | 淨值歷史（升序）。`period`（`w1`/`m1`/`m3`/`m6`/`y1`/`y3`/`y5`/`ytd`）從報酬卡同一個基準點起算：最新淨值日回推該期間，取當天或之前最後一筆，所以首尾相除就等於 `returns[period]`；歷史不足一個期間時回全部。`days` 是舊參數，以今天回推、取之後第一筆，和報酬卡的基準日不同；兩者都給時以 `period` 為準。Web 走勢圖用 `period` |
 | `GET /{fund_id}/holdings` | 前十大持股；來源失敗時 `items=[]`、`error=source_unavailable`，找不到鉅亨對照時 `error=not_mapped`，HTTP 仍是 200 |
 | `GET /holdings` | 基金持倉＋估值；缺淨值的那一筆 `market_value`／`pnl` 為 null，該幣別的合計也是 null，不會用 0 冒充 |
 | `POST /holdings`、`PUT /holdings/{id}`、`DELETE /holdings/{id}` | 新增、修改、刪除持倉；同通路同基金重複時回 409 `duplicate_holding` |
