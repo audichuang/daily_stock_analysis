@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Path, Query
 
@@ -100,9 +100,11 @@ def get_fund(fund_id: str = _FUND_ID) -> FundDetailResponse:
 
 @router.get("/{fund_id}/nav", response_model=FundNavHistoryResponse, responses=_ERRORS, summary="淨值歷史")
 def get_fund_nav(fund_id: str = _FUND_ID,
-                 days: Optional[int] = Query(None, ge=1, le=366 * 30)) -> FundNavHistoryResponse:
+                 days: Optional[int] = Query(None, ge=1, le=366 * 30),
+                 period: Optional[Literal["w1", "m1", "m3", "m6", "y1", "y3", "y5", "ytd"]] = Query(
+                     None, description="與報酬卡同一個基準點起算的區間；給了就忽略 days")) -> FundNavHistoryResponse:
     try:
-        return FundNavHistoryResponse(**FundService().get_nav_history(fund_id, days=days))
+        return FundNavHistoryResponse(**FundService().get_nav_history(fund_id, days=days, period=period))
     except FundNotFoundError:
         raise _not_found(fund_id)
     except FundUnavailableError as exc:

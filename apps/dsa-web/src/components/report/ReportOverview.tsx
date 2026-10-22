@@ -251,9 +251,10 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
         <div className="lg:col-span-2 space-y-5">
           {/* 股票头部 */}
           <Card variant="gradient" padding="md" className="home-report-hero">
-            <div className="mb-5 flex items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-3">
+            {/* 手機寬時分享鈕與價格換行，不壓縮股名（中文股名會被擠成一字一行） */}
+            <div className="mb-5 flex flex-wrap items-start justify-between gap-3" data-testid="report-hero-header">
+              <div className="min-w-[12rem] flex-1">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                   <h2 className="text-[28px] font-bold leading-tight text-foreground">
                     {meta.stockName || meta.stockCode}
                   </h2>

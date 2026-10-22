@@ -38,6 +38,39 @@ describe('SettingsField', () => {
     expect(screen.queryByLabelText('Stock List')).not.toBeInTheDocument();
   });
 
+  it('uses Traditional Chinese title and description for STOCK_LIST in the zh-TW UI', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+    try {
+      const item = {
+        key: 'STOCK_LIST', value: '2330.TW', rawValueExists: true, isMasked: false,
+        schema: {
+          key: 'STOCK_LIST', title: 'Stock List', category: 'base' as const, dataType: 'string' as const,
+          uiControl: 'text' as const, isSensitive: false, isRequired: false, isEditable: true, options: [],
+          validation: {}, displayOrder: 1,
+        },
+      };
+      const { container, unmount } = render(
+        <UiLanguageProvider>
+          <SettingsField item={item} value="2330.TW" onChange={vi.fn()} />
+        </UiLanguageProvider>,
+      );
+      expect(screen.getByLabelText('自選股清單')).toBeInTheDocument();
+      expect(container.textContent).toContain('建議用英文逗號分隔股票代碼');
+      expect(container.textContent).not.toMatch(/自选股列表|推荐使用英文逗号/);
+      unmount();
+      // 簡中介面不受影響
+      window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh');
+      render(
+        <UiLanguageProvider>
+          <SettingsField item={item} value="2330.TW" onChange={vi.fn()} />
+        </UiLanguageProvider>,
+      );
+      expect(screen.getByLabelText('自选股列表')).toBeInTheDocument();
+    } finally {
+      window.localStorage.clear();
+    }
+  });
+
   it('localizes TickFlow field descriptions instead of falling back to backend English schema', () => {
     render(
       <SettingsField

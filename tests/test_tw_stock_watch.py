@@ -109,6 +109,27 @@ def test_summaries_isolate_failures(monkeypatch):
         ("3324.TWO", {"as_of": "2026-10-21"}, None), ("9999.TW", None, "no_data"), ("1111.TW", None, "unavailable")]
 
 
+@pytest.fixture(autouse=True)
+def _no_market_db(monkeypatch):
+    # _one 會查 market.price_adjustment；單元測試不連行情庫
+    monkeypatch.setattr(watch, "_adjusted_since", lambda code, as_of: False)
+
+
+def test_one_flags_adjustment_after_as_of_and_caches_the_lookup(monkeypatch):
+    from src.services import tw_stock_dossier
+
+    calls, events = [], {"3324.TWO"}
+    monkeypatch.setattr(watch, "_summary_cache", {})
+    monkeypatch.setattr(watch, "_cached_verdicts", lambda p: None)
+    monkeypatch.setattr(watch, "_adjusted_since", lambda code, as_of: calls.append((code, as_of)) or code in events)
+    monkeypatch.setattr(tw_stock_dossier, "build", lambda code, **kw: payload())
+    assert watch._one("3324.TWO")["adjusted_after"] is True
+    assert watch._one("3324.TWO")["adjusted_after"] is True
+    assert watch._one("2330.TW")["adjusted_after"] is False
+    # 查的是資料包的 as_of 之後；同一檔 10 分鐘內只查一次
+    assert calls == [("3324.TWO", "2026-10-21"), ("2330.TW", "2026-10-21")]
+
+
 def test_one_skips_branch_fetch_and_caches(monkeypatch):
     from src.services import tw_stock_dossier
 

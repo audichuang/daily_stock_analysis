@@ -497,8 +497,9 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
   return (
     <div className={`animate-fade-in space-y-4 pb-8 ${className}`}>
       <Card variant="gradient" padding="md" className="home-report-hero text-left">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+        {/* 手機寬時按鈕列換到下一行：中文標題在 flex 裡可被壓到一字寬，會變成一字一行 */}
+        <div className="flex flex-wrap items-start justify-between gap-3" data-testid="market-review-hero-header">
+          <div className="min-w-[12rem] flex-1">
             <div className="mb-2 inline-flex items-center gap-2 text-xs font-semibold text-secondary-text">
               <BarChart3 className="h-4 w-4" aria-hidden="true" />
               <span>MARKET REVIEW</span>
@@ -514,7 +515,7 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
             </div>
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-2">
             <ShareImageButton
               recordId={recordId}
               reportTitle={displayTitle}

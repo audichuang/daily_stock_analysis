@@ -25,6 +25,7 @@ import type {
   FundDetail,
   FundHoldingItem,
   FundHoldingListResponse,
+  FundNavPeriod,
   FundNavPoint,
   FundReturns,
   FundSearchItem,
@@ -40,8 +41,9 @@ function changeClass(value?: number | null): string {
 }
 
 type RangeKey = 'm1' | 'm3' | 'm6' | 'y1' | 'y3' | 'y5' | 'all';
-const RANGE_DAYS: Record<RangeKey, number | undefined> = {
-  m1: 31, m3: 92, m6: 183, y1: 366, y3: 366 * 3, y5: 366 * 5, all: undefined,
+// 區間走勢交給後端用報酬卡同一個基準點切（period），首尾相除才會等於同頁的「近N」報酬；all 不切
+const RANGE_PERIOD: Record<RangeKey, FundNavPeriod | undefined> = {
+  m1: 'm1', m3: 'm3', m6: 'm6', y1: 'y1', y3: 'y3', y5: 'y5', all: undefined,
 };
 const RANGES: RangeKey[] = ['m1', 'm3', 'm6', 'y1', 'y3', 'y5', 'all'];
 const RETURN_KEYS: (keyof FundReturns)[] = ['w1', 'm1', 'm3', 'm6', 'ytd', 'y1', 'y3', 'y5'];
@@ -169,7 +171,7 @@ const FundsPage: React.FC = () => {
     }
     let cancelled = false;
     fundsApi
-      .getNavHistory(detail.fundId, RANGE_DAYS[range])
+      .getNavHistory(detail.fundId, { period: RANGE_PERIOD[range] })
       .then((data) => {
         if (!cancelled) setPoints(data.points);
       })

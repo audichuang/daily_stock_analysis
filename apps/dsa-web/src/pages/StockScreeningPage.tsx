@@ -43,6 +43,7 @@ import { formatParsedApiError, getParsedApiError, toApiErrorMessage, type Parsed
 import { AppPage, Button, InlineAlert, Select } from '../components/common';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { getIntlLocale } from '../i18n/intlLocale';
+import { formatSignalText } from '../utils/signalText';
 
 const MARKETS = [{ id: 'cn', label: 'A 股' }];
 const SCREEN_TASK_STORAGE_KEY = 'dsa.screening.activeScreenTask.v1';
@@ -843,7 +844,7 @@ const MiniSparkline: React.FC<{ score?: number | null; selected?: boolean }> = (
 };
 
 const StockScreeningPage: React.FC = () => {
-  const { language } = useUiLanguage();
+  const { language, t } = useUiLanguage();
   const navigate = useNavigate();
   const [restoredTask] = useState<PersistedScreenTask | null>(() => readPersistedScreenTask());
   const [statusState, setStatusState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -909,12 +910,12 @@ const StockScreeningPage: React.FC = () => {
     : screenMessages;
   const isScreeningEnabled = statusState === 'ready' && enabled && available;
   const statusText = statusState === 'loading'
-    ? '正在检查选股状态'
+    ? t('screeningPage.status.loading')
     : statusState === 'error'
-      ? '选股状态未知'
+      ? t('screeningPage.status.error')
       : !enabled
-        ? '选股未开启'
-        : available ? '选股已开启' : '选股功能不可用';
+        ? t('screeningPage.status.disabled')
+        : available ? t('screeningPage.status.enabled') : t('screeningPage.status.unavailable');
 
   const applyScreenResult = useCallback((result: ScreeningScreenResponse) => {
     const nextCandidates = result.candidates || [];
@@ -1501,11 +1502,11 @@ const StockScreeningPage: React.FC = () => {
       {statusState === 'ready' && !enabled ? (
         <InlineAlert
           variant="info"
-          title="选股未开启"
-          message="开启后即可运行选股策略。"
+          title={t('screeningPage.status.disabled')}
+          message={t('screeningPage.enableHint')}
           action={
-            <Button size="sm" isLoading={enabling} loadingText="开启中..." onClick={() => void handleEnable()}>
-              开启选股
+            <Button size="sm" isLoading={enabling} loadingText={t('screeningPage.enabling')} onClick={() => void handleEnable()}>
+              {t('screeningPage.enable')}
             </Button>
           }
         />
@@ -1514,8 +1515,8 @@ const StockScreeningPage: React.FC = () => {
       {statusState === 'ready' && enabled && !available ? (
         <InlineAlert
           variant="warning"
-          title="选股功能不可用"
-          message="请检查后端日志、策略文件和基础数据依赖后重启服务。"
+          title={t('screeningPage.status.unavailable')}
+          message={t('screeningPage.unavailableHint')}
         />
       ) : null}
 
@@ -1527,7 +1528,7 @@ const StockScreeningPage: React.FC = () => {
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-orange-500/10 text-orange-500 shadow-[0_10px_30px_rgba(249,115,22,0.16)]">
               <Flame className="h-5 w-5" />
             </span>
-            <h2 className="text-lg font-bold tracking-normal text-foreground">热点题材</h2>
+            <h2 className="text-lg font-bold tracking-normal text-foreground">{t('screeningPage.hotspots')}</h2>
           </div>
           <div className="flex flex-col items-start gap-2 lg:items-end">
             <div className="flex flex-wrap items-center gap-2">
@@ -1775,7 +1776,7 @@ const StockScreeningPage: React.FC = () => {
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <SlidersHorizontal className="h-4 w-4 text-cyan" />
-            运行选股
+            {t('screeningPage.run')}
           </div>
           <span className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-xs font-semibold text-cyan">
             {selectedStrategyTag}
@@ -1784,7 +1785,7 @@ const StockScreeningPage: React.FC = () => {
 
         <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr_180px_auto] lg:items-end">
           <label className="space-y-2 text-xs font-medium text-secondary-text">
-            市场
+            {t('screeningPage.market')}
             <select
               className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
               value={market}
@@ -1856,7 +1857,7 @@ const StockScreeningPage: React.FC = () => {
             onClick={() => void handleSubmit()}
           >
             <Play className="h-4 w-4" />
-            运行选股
+            {t('screeningPage.run')}
           </Button>
         </div>
 
@@ -2052,10 +2053,11 @@ const StockScreeningPage: React.FC = () => {
                                       : '无'}
                                   </p>
                                 </div>
-                                {item.riskSummary ? (
+                                {/* 空陣列 `[]` 格式化後是 null，不顯示空的風險摘要區塊 */}
+                                {formatSignalText(item.riskSummary) ? (
                                   <div>
                                     <p className="text-xs font-semibold text-secondary-text">风险摘要</p>
-                                    <p className="mt-1 text-sm text-foreground">{item.riskSummary}</p>
+                                    <p className="mt-1 text-sm text-foreground">{formatSignalText(item.riskSummary)}</p>
                                   </div>
                                 ) : null}
                               </div>
@@ -2144,7 +2146,7 @@ const StockScreeningPage: React.FC = () => {
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
             <Clock3 className="h-4 w-4 text-cyan" />
-            历史记录
+            {t('screeningPage.history')}
           </div>
           <button
             type="button"
@@ -2160,7 +2162,7 @@ const StockScreeningPage: React.FC = () => {
         ) : null}
         {historyRuns.length === 0 ? (
           <p className="py-3 text-center text-xs text-secondary-text">
-            {historyLoading ? '正在加载历史记录...' : '暂无历史选股记录'}
+            {historyLoading ? t('screeningPage.historyLoading') : t('screeningPage.historyEmpty')}
           </p>
         ) : (
           <div className="divide-y divide-border/70">

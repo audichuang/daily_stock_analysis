@@ -23,7 +23,7 @@ import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatSignedPct } from '../utils/portfolioFormat';
 import { formatDateTime } from '../utils/format';
 import { cn } from '../utils/cn';
-import { isTwStockCode, normalizeStockCode } from '../utils/stockCode';
+import { isTwStockCode, stockCodeMatchKey } from '../utils/stockCode';
 import { BoardDossierCell, BoardDossierPanel } from '../components/board/BoardDossier';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -34,7 +34,8 @@ const SCOPE_STORAGE_KEY = 'dsa.board.scope';
 type Scope = 'all' | 'watch' | 'holdings';
 const SCOPES: Scope[] = ['all', 'watch', 'holdings'];
 
-// 帳本持股（跨帳戶合併同一代碼）：成本以股數加權，用來對即時價算未實現損益
+// 帳本持股（跨帳戶合併同一代碼）：成本以股數加權，用來對即時價算未實現損益。
+// key 一律是 stockCodeMatchKey（正規化後整體轉大寫）：自選清單是原樣字串（可能小寫），帳本代碼也不保證是正規形式，兩邊比對都要先過它
 type Holding = { quantity: number; avgCost: number; currency: string; accounts: string[] };
 
 function readScope(): Scope {
@@ -75,6 +76,20 @@ function freshnessOf(item?: StockQuoteBatchItem): Freshness {
   if (!item || !item.quote) return 'unavailable';
   if (item.quote.source === 'shioaji' && item.quote.isStale === false) return 'live';
   return 'delayed';
+}
+
+// 大盤指數條的時效標示：照後端回的 source 分，不能一律寫延遲（Shioaji 有設定時指數是即時快照）
+type IndexSourceKind = 'live' | 'close' | 'delayed';
+const INDEX_HINT_KEY = {
+  live: 'board.indices.liveHint',
+  close: 'board.indices.closeHint',
+  delayed: 'board.indices.delay',
+} as const;
+
+function indexSourceTag(idx?: MarketIndex): { kind: IndexSourceKind; asOf: string | null } {
+  if (idx?.source === 'shioaji') return { kind: 'live', asOf: idx.asOf };
+  if (idx?.source === 'official_close') return { kind: 'close', asOf: idx.asOf };
+  return { kind: 'delayed', asOf: null };
 }
 
 // 内联走势图：自管 range + 数据；展开时按 code 懒加载
@@ -214,6 +229,10 @@ const RealtimeBoardPage: React.FC = () => {
   const [dossierTick, setDossierTick] = useState(0); // 遞增即重抓四維度摘要（手動刷新／15 分鐘）
   const [indices, setIndices] = useState<MarketIndex[]>([]);
   const codesRef = useRef<string[]>([]);
+  // 展開列是 colSpan 整張表寬（手機上被欄位撐到 1000px 以上）：內容改成黏在左邊、寬度跟著可視的捲動框，
+  // 不用橫滑整張表才找得到撐壓、結論卡與「四維度分析」按鈕
+  const tableBoxRef = useRef<HTMLDivElement | null>(null);
+  const [tableBoxWidth, setTableBoxWidth] = useState<number | null>(null);
   const refreshSeqRef = useRef(0); // 世代守卫：丢弃旧轮询迟到的 chunk，避免覆盖更新的数据
 
   // 分批并发刷新：每批回来就只 merge 那几列（in-place），不整页清空、不等最慢的
@@ -261,14 +280,15 @@ const RealtimeBoardPage: React.FC = () => {
         for (const acc of snap.value.accounts) {
           for (const p of acc.positions) {
             if (!(p.quantity > 0)) continue;
-            const h = merged[p.symbol];
+            const key = stockCodeMatchKey(p.symbol);
+            const h = merged[key];
             if (h) {
               const qty = h.quantity + p.quantity;
               h.avgCost = (h.avgCost * h.quantity + p.avgCost * p.quantity) / qty;
               h.quantity = qty;
               if (!h.accounts.includes(acc.accountName)) h.accounts.push(acc.accountName);
             } else {
-              merged[p.symbol] = { quantity: p.quantity, avgCost: p.avgCost, currency: p.currency, accounts: [acc.accountName] };
+              merged[key] = { quantity: p.quantity, avgCost: p.avgCost, currency: p.currency, accounts: [acc.accountName] };
             }
           }
         }
@@ -288,7 +308,8 @@ const RealtimeBoardPage: React.FC = () => {
   const codes = useMemo<string[] | null>(() => {
     if (loading) return null;
     const held = Object.keys(holdings).sort((a, b) => a.localeCompare(b));
-    const watchSet = new Set(watchCodes);
+    // 自選寫成 `2330.tw`／`nvda`、帳本是 `2330.TW`／`NVDA` 也是同一檔：比對前兩邊都轉成 match key，列上沿用自選的寫法
+    const watchSet = new Set(watchCodes.map(stockCodeMatchKey));
     if (scope === 'watch') return watchCodes;
     if (scope === 'holdings') return held;
     return [...watchCodes, ...held.filter((c) => !watchSet.has(c))];
@@ -313,7 +334,7 @@ const RealtimeBoardPage: React.FC = () => {
           setLevelAlertsEnabled(enabled);
           setDossier((prev) => {
             const next = { ...prev };
-            for (const it of items) next[normalizeStockCode(it.stockCode)] = it.summary;
+            for (const it of items) next[stockCodeMatchKey(it.stockCode)] = it.summary;
             return next;
           });
         })
@@ -325,6 +346,20 @@ const RealtimeBoardPage: React.FC = () => {
       active = false;
     };
   }, [codes, dossierTick]);
+
+  useEffect(() => {
+    const box = tableBoxRef.current;
+    if (!box) return;
+    const measure = () => setTableBoxWidth(box.clientWidth || null);
+    measure();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [loading, codes]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -454,7 +489,7 @@ const RealtimeBoardPage: React.FC = () => {
 
   // 持股欄：股數＋以即時價算的未實現損益（%），成本用帳本跨帳戶加權平均
   const positionCell = (code: string, q?: StockQuote | null) => {
-    const h = holdings[code];
+    const h = holdings[stockCodeMatchKey(code)];
     if (!h) return <span className="text-secondary-text">—</span>;
     const price = q?.currentPrice;
     const pnl = price ? (price - h.avgCost) * h.quantity : null;
@@ -550,9 +585,23 @@ const RealtimeBoardPage: React.FC = () => {
         <Card variant="bordered" padding="md">
           <div className="mb-2 flex items-center gap-2">
             <span className="text-sm font-medium">{t('board.indices.title')}</span>
-            <span className="text-xs text-secondary-text" aria-label={t('board.indices.delay')}>
-              {t('board.source.delayed')}
-            </span>
+            {(() => {
+              const tag = indexSourceTag(indices[0]);
+              const label =
+                tag.kind === 'live'
+                  ? `${t('board.source.live')}${tag.asOf ? ` · ${formatDateTime(tag.asOf)}` : ''}`
+                  : tag.kind === 'close'
+                    ? t('board.indices.close', { date: tag.asOf ?? '—' })
+                    : t('board.source.delayed');
+              const hint = t(INDEX_HINT_KEY[tag.kind]);
+              return (
+                <HintTooltip content={hint}>
+                  <span className="text-xs text-secondary-text" aria-label={hint}>
+                    {label}
+                  </span>
+                </HintTooltip>
+              );
+            })()}
           </div>
           <div className="flex flex-wrap gap-x-8 gap-y-2">
             {indices.map((idx) => (
@@ -575,7 +624,7 @@ const RealtimeBoardPage: React.FC = () => {
         ) : codes && codes.length === 0 ? (
           <EmptyState title={scope === 'holdings' ? t('board.emptyHoldings') : t('board.empty')} />
         ) : (
-          <div className="overflow-x-auto">
+          <div ref={tableBoxRef} className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs text-secondary-text">
@@ -609,7 +658,7 @@ const RealtimeBoardPage: React.FC = () => {
                         </td>
                         <td className="whitespace-nowrap px-3 py-2 font-mono">
                           {code}
-                          {holdings[code] ? (
+                          {holdings[stockCodeMatchKey(code)] ? (
                             <span className="ml-1.5 inline-flex rounded border border-[hsl(var(--primary))]/30 px-1 py-0.5 align-middle font-sans text-[10px] text-[hsl(var(--primary))]">
                               {t('board.tag.holding')}
                             </span>
@@ -637,7 +686,7 @@ const RealtimeBoardPage: React.FC = () => {
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums">{positionCell(code, q)}</td>
                         <td className="px-3 py-2">
-                          <BoardDossierCell summary={dossier[normalizeStockCode(code)]} price={q?.currentPrice} />
+                          <BoardDossierCell summary={dossier[stockCodeMatchKey(code)]} price={q?.currentPrice} />
                         </td>
                         <td className="whitespace-nowrap px-3 py-2">{badge(item)}</td>
                         <td className="whitespace-nowrap px-3 py-2 text-xs text-secondary-text">{q?.asOf ? formatDateTime(q.asOf) : '—'}</td>
@@ -657,16 +706,22 @@ const RealtimeBoardPage: React.FC = () => {
                       </tr>
                       {isOpen ? (
                         <tr className="border-b border-border/50 bg-base/40">
-                          <td colSpan={12}>
-                            <BoardDossierPanel
-                              code={code}
-                              name={q?.stockName}
-                              summary={dossier[normalizeStockCode(code)]}
-                              price={q?.currentPrice}
-                              levelAlertsEnabled={levelAlertsEnabled}
-                            />
-                            {quoteDetail(q)}
-                            <TrendChart code={code} />
+                          <td colSpan={12} className="p-0">
+                            <div
+                              data-testid="board-expanded"
+                              className="sticky left-0"
+                              style={tableBoxWidth ? { width: tableBoxWidth } : undefined}
+                            >
+                              <BoardDossierPanel
+                                code={code}
+                                name={q?.stockName}
+                                summary={dossier[stockCodeMatchKey(code)]}
+                                price={q?.currentPrice}
+                                levelAlertsEnabled={levelAlertsEnabled}
+                              />
+                              {quoteDetail(q)}
+                              <TrendChart code={code} />
+                            </div>
                           </td>
                         </tr>
                       ) : null}

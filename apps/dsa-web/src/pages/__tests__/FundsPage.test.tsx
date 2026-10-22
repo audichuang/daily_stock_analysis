@@ -93,7 +93,18 @@ describe('FundsPage', () => {
     expect(await screen.findByText('+157.99%')).toBeInTheDocument();
     expect(screen.getByText('TW000T3604Y3')).toBeInTheDocument();
     expect(await screen.findByText('创意')).toBeInTheDocument();
-    await waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/funds/18480065/nav', { params: { days: 366 } }));
+    // 走勢區間用與報酬卡同一個基準點（period），不再以今天回推天數
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/funds/18480065/nav', { params: { period: 'y1' } }));
+  });
+
+  it('asks the chart for the same period basis as the return cards, and the full history for All', async () => {
+    renderPage('/funds?fund=18480065');
+    await screen.findByText('+157.99%');
+    fireEvent.click(screen.getByRole('button', { name: '5Y' }));
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/funds/18480065/nav', { params: { period: 'y5' } }));
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    await waitFor(() => expect(get).toHaveBeenLastCalledWith('/api/v1/funds/18480065/nav', { params: {} }));
+    expect(get.mock.calls.some(([, cfg]) => cfg?.params?.days !== undefined)).toBe(false);
   });
 
   it('searches funds by keyword', async () => {

@@ -19,7 +19,7 @@ _LEVEL_RANGE = 0.3          # 只取現價 ±30% 內的價位
 _REVENUE_FRESH_DAYS = 7     # 月營收公告後幾天內算「新公告」
 _HOLDER_WOW_PP = 0.5        # 千張大戶週變化超過幾個百分點才提示
 _SUMMARY_TTL_SECONDS = 600
-_summary_cache: dict = {}   # code -> (monotonic, summary)
+_summary_cache: dict = {}   # code -> (monotonic, 資料包, as_of 之後有無股價調整)
 
 
 def smc_levels(s):
@@ -110,18 +110,27 @@ def _cached_verdicts(p):
         return None
 
 
+def _adjusted_since(code, as_of):
+    """as_of 隔天到今天有沒有除權息／分割／減資（查不到當沒有）；與價位警報訊息共用同一個查法。"""
+    from src.services.tw_level_alerts import _adjusted_after
+
+    return _adjusted_after(code, as_of)
+
+
 def _one(code):
     from src.services import tw_stock_dossier
 
     now = time.monotonic()
     hit = _summary_cache.get(code)
     if hit and now - hit[0] < _SUMMARY_TTL_SECONDS:
-        p = hit[1]
+        p, adjusted = hit[1], hit[2]
     else:
         p = tw_stock_dossier.build(code, branch=False)      # 看板不查分點：每檔省兩個富邦請求
-        _summary_cache[code] = (now, p)
+        # 價位是前復權到 as_of 的舊基準；之後有股價調整時，盤中即時價（新基準）量出的距離會偏掉整個調整幅度
+        adjusted = _adjusted_since(code, p["as_of"])
+        _summary_cache[code] = (now, p, adjusted)
     # 解讀卡色調每次都重讀（只是讀一個檔），快取期間新產生的解讀也能立刻反映
-    return summarize(p, _cached_verdicts(p))
+    return {**summarize(p, _cached_verdicts(p)), "adjusted_after": adjusted}
 
 
 def summaries(codes):

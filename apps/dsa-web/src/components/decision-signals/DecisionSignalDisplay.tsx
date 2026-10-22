@@ -18,6 +18,7 @@ import {
   type DecisionActionTone,
 } from '../../utils/decisionAction';
 import { cn } from '../../utils/cn';
+import { formatSignalText, parseSignalList } from '../../utils/signalText';
 import { parseDecisionSignalDate } from '../../utils/decisionSignalTime';
 import { getDecisionSignalProfileLabel } from '../../utils/decisionSignalProfile';
 import {
@@ -190,14 +191,24 @@ type SignalTextBlockProps = {
 };
 
 const SignalTextBlock: React.FC<SignalTextBlockProps> = ({ label, value, tone = 'default', clamp = true }) => {
-  const normalized = value?.trim();
+  // 條列欄位在庫裡是 JSON 陣列字串：卡片摘要接成一行，詳情逐條列出
+  const list = parseSignalList(value);
+  const normalized = formatSignalText(value);
   if (!normalized) return null;
   return (
     <div className={cn('rounded-xl border px-3 py-2.5', textToneClass[tone])}>
       <p className="text-[11px] font-medium text-current/80">{label}</p>
-      <p className={cn('mt-1 text-sm leading-5 text-current', clamp ? 'line-clamp-2' : 'whitespace-pre-wrap')}>
-        {normalized}
-      </p>
+      {list && !clamp ? (
+        <ul className="mt-1 list-disc space-y-1 pl-4 text-sm leading-5 text-current">
+          {list.map((entry, idx) => (
+            <li key={idx} className="whitespace-pre-wrap">{entry}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className={cn('mt-1 text-sm leading-5 text-current', clamp ? 'line-clamp-2' : 'whitespace-pre-wrap')}>
+          {normalized}
+        </p>
+      )}
     </div>
   );
 };
@@ -496,14 +507,16 @@ export const PortfolioSignalSummary: React.FC<PortfolioSignalSummaryProps> = ({ 
     return <span className="text-xs text-muted-text">{t('decisionSignals.portfolioEmpty')}</span>;
   }
   const actionLabel = getActionLabel(item, t);
+  const riskText = formatSignalText(item.riskSummary);
+  const watchText = formatSignalText(item.watchConditions);
   return (
     <div className="min-w-[11rem] max-w-[18rem] text-left">
       <div className="flex flex-wrap items-center justify-end gap-1.5">
         <Badge variant={getActionVariant(item)}>{actionLabel}</Badge>
         {item.horizon ? <span className="text-[11px] text-secondary-text">{getDecisionSignalHorizonLabel(item.horizon, t)}</span> : null}
       </div>
-      {item.riskSummary ? <p className="mt-1 line-clamp-2 text-[11px] text-warning">{item.riskSummary}</p> : null}
-      {item.watchConditions ? <p className="mt-1 line-clamp-2 text-[11px] text-secondary-text">{item.watchConditions}</p> : null}
+      {riskText ? <p className="mt-1 line-clamp-2 text-[11px] text-warning">{riskText}</p> : null}
+      {watchText ? <p className="mt-1 line-clamp-2 text-[11px] text-secondary-text">{watchText}</p> : null}
     </div>
   );
 };

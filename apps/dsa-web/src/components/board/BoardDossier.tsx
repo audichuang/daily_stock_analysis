@@ -24,13 +24,22 @@ function levelRange(near: NearLevel): string {
   return low === high ? fmtPrice(low) : `${fmtPrice(low)}~${fmtPrice(high)}`;
 }
 
+/**
+ * 最近支撐／壓力（用即時價量距離）。資料基準日之後有除權息／減資時價位是舊基準（前復權到 as_of），
+ * 即時價已是新基準，量出來會偏掉整個調整幅度，所以不算，等盤後資料更新。
+ */
+function nearFor(summary: DossierSummary, price?: number | null) {
+  if (summary.adjustedAfter) return null;
+  const ref = price ?? summary.close;
+  return ref ? nearestLevels(summary.levels, ref) : null;
+}
+
 /** 表格內的精簡欄：最新結構方向＋最近支撐／壓力距離（用即時價算）。 */
 export const BoardDossierCell: React.FC<{ summary?: DossierSummary | null; price?: number | null }> = ({ summary, price }) => {
   const { t } = useUiLanguage();
   if (!summary) return <span className="text-secondary-text">—</span>;
   const s = summary.structure;
-  const ref = price ?? summary.close;
-  const near = ref ? nearestLevels(summary.levels, ref) : null;
+  const near = nearFor(summary, price);
   return (
     <div className="whitespace-nowrap text-xs leading-5">
       {s ? (
@@ -48,6 +57,7 @@ export const BoardDossierCell: React.FC<{ summary?: DossierSummary | null; price
           {t('board.dossier.resistance')} {fmtPct(near.resistance.distPct)}
         </div>
       ) : null}
+      {summary.adjustedAfter ? <div className="text-warning">{t('board.dossier.adjustedShort')}</div> : null}
     </div>
   );
 };
@@ -66,8 +76,7 @@ export const BoardDossierPanel: React.FC<{
   const [creatingAlerts, setCreatingAlerts] = useState(false); // 送出中鎖住按鈕，避免連點重複建立
   if (!summary) return null;
   const s = summary.structure;
-  const ref = price ?? summary.close;
-  const near = ref ? nearestLevels(summary.levels, ref) : null;
+  const near = nearFor(summary, price);
   return (
     <div className="space-y-2 px-4 py-3 text-xs">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -92,6 +101,11 @@ export const BoardDossierPanel: React.FC<{
           </span>
         ) : null}
       </div>
+      {summary.adjustedAfter ? (
+        <p className="text-warning" role="note">
+          {t('board.dossier.adjusted')}
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-1.5">
         {summary.verdicts
           ? VERDICT_KEYS.map((k) => {

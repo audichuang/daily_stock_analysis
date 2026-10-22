@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import type { ScreeningHotspotDetail } from '../../api/screening';
 import StockScreeningPage from '../StockScreeningPage';
 
@@ -173,6 +174,25 @@ describe('StockScreeningPage', () => {
     expect(screen.queryByText(/theme_heat/)).not.toBeInTheDocument();
     expect(screen.queryByText('实验功能与风险提示')).not.toBeInTheDocument();
     expect(screen.queryByText('选股结果')).not.toBeInTheDocument();
+  });
+
+  it('shows the entry copy in Traditional Chinese for the zh-TW UI', async () => {
+    getScreeningStatus.mockResolvedValue({ enabled: false, available: false });
+    window.localStorage.setItem('dsa.uiLanguage', 'zh-TW');
+    try {
+      const { container } = render(
+        <UiLanguageProvider>
+          <StockScreeningPage />
+        </UiLanguageProvider>,
+      );
+      expect((await screen.findAllByText('選股未開啟')).length).toBeGreaterThan(0);
+      expect(screen.getByRole('button', { name: '開啟選股' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /執行選股/ })).toBeDisabled();
+      expect(screen.getByText('歷史紀錄')).toBeInTheDocument();
+      expect(container.textContent).not.toMatch(/选股未开启|开启选股|运行选股|历史记录/);
+    } finally {
+      window.localStorage.clear();
+    }
   });
 
   it('re-syncs enabled state when Screening availability check fails after config is enabled', async () => {
@@ -1796,6 +1816,60 @@ describe('StockScreeningPage', () => {
     expect(screen.getByText('风险摘要')).toBeInTheDocument();
     expect(screen.getByText('资产质量仍需持续观察')).toBeInTheDocument();
     expect(screen.getByText('主要优势：估值 88')).toBeInTheDocument();
+  });
+
+  it('renders a JSON-array risk summary as a readable list', async () => {
+    // LLM 風險摘要可能是 JSON 陣列字串：攤成「；」分隔，不露出原始 `["…"]`
+    getScreeningStatus.mockResolvedValueOnce({ enabled: true, available: true });
+    screenStocks.mockResolvedValueOnce({
+      enabled: true,
+      candidates: [
+        {
+          rank: 1, code: '000001', name: '平安银行', score: 88.5, reason: '主要优势：估值 88',
+          riskSummary: '["资产质量待观察","息差收窄"]', riskFlags: [], llmRisks: [], raw: {},
+        },
+      ],
+      candidateCount: 1,
+      llmRanked: true,
+    });
+
+    render(<StockScreeningPage />);
+    expect(await screen.findByText('选股已开启')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
+    expect(await screen.findByText('平安银行')).toBeInTheDocument();
+    const expandButton = screen.queryByRole('button', { name: '展开查看' });
+    if (expandButton) fireEvent.click(expandButton);
+
+    expect(screen.getByText('风险摘要')).toBeInTheDocument();
+    expect(screen.getByText('资产质量待观察；息差收窄')).toBeInTheDocument();
+    expect(screen.queryByText(/\["资产质量待观察"/)).not.toBeInTheDocument();
+  });
+
+  it('hides the risk summary block when the summary is an empty JSON array', async () => {
+    // 反向：空陣列格式化後沒有內容，不顯示空的風險摘要區塊
+    getScreeningStatus.mockResolvedValueOnce({ enabled: true, available: true });
+    screenStocks.mockResolvedValueOnce({
+      enabled: true,
+      candidates: [
+        {
+          rank: 1, code: '000001', name: '平安银行', score: 88.5, reason: '主要优势：估值 88',
+          riskSummary: '[]', riskFlags: [], llmRisks: [], raw: {},
+        },
+      ],
+      candidateCount: 1,
+      llmRanked: true,
+    });
+
+    render(<StockScreeningPage />);
+    expect(await screen.findByText('选股已开启')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
+    expect(await screen.findByText('平安银行')).toBeInTheDocument();
+    const expandButton = screen.queryByRole('button', { name: '展开查看' });
+    if (expandButton) fireEvent.click(expandButton);
+
+    expect(screen.getByText('风险标签')).toBeInTheDocument();
+    expect(screen.queryByText('风险摘要')).not.toBeInTheDocument();
+    expect(screen.queryByText('[]')).not.toBeInTheDocument();
   });
 
   it('deduplicates Screening snapshot fallback warnings and source errors', async () => {

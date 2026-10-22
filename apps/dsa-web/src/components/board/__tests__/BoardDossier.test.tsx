@@ -44,6 +44,29 @@ describe('BoardDossier', () => {
     expect(screen.getByRole('dialog')).toHaveTextContent('drawer 3324.TWO');
   });
 
+  it('does not measure old-basis levels against the live price after an ex-dividend or capital reduction', () => {
+    const adjusted = { ...summary, adjustedAfter: true };
+    const cell = render(<BoardDossierCell summary={adjusted} price={1400} />);
+    expect(cell.container.textContent).not.toMatch(/%/);
+    expect(cell.container.textContent).toMatch(/ex-div|除權息|除权息/);
+    expect(cell.container.textContent).toContain('BOS'); // 結構方向不受影響
+    cell.unmount();
+    render(<BoardDossierPanel code="1516.TW" summary={adjusted} price={24.73} levelAlertsEnabled />);
+    expect(screen.getByRole('note')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Create level alerts|建立价位警报|建立價位警報/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/%）/)).not.toBeInTheDocument();
+  });
+
+  it('keeps distances and the alert button when there was no adjustment', () => {
+    const cell = render(<BoardDossierCell summary={{ ...summary, adjustedAfter: false }} price={1400} />);
+    expect(cell.container.textContent).toMatch(/-2\.5%/);
+    expect(cell.container.textContent).not.toMatch(/ex-div|除權息|除权息/);
+    cell.unmount();
+    render(<BoardDossierPanel code="3324.TWO" summary={{ ...summary, adjustedAfter: false }} price={1375} levelAlertsEnabled />);
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Create level alerts|建立价位警报|建立價位警報/ })).toBeInTheDocument();
+  });
+
   it('renders a dash without a summary', () => {
     render(<BoardDossierCell summary={null} price={100} />);
     expect(screen.getByText('—')).toBeInTheDocument();

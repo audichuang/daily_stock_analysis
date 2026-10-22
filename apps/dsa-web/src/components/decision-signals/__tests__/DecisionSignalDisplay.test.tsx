@@ -224,6 +224,58 @@ describe('DecisionSignalDetails', () => {
     expect(onFeedbackSubmit).toHaveBeenCalledWith('not_useful');
   });
 
+  // 應用庫把條列欄位存成 JSON 陣列字串；畫面不能出現 ["…", "…"] 字面
+  const listSignal = {
+    ...signal,
+    watchConditions: '["守住 299 元", "量縮反彈就減碼"]',
+    riskSummary: ' ["空頭排列", "投信連賣"] ',
+    catalystSummary: '["10 月營收"]',
+  };
+
+  it('joins JSON-array fields into one line on the card and the portfolio summary', () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'zh');
+    const { container, unmount } = render(
+      <UiLanguageProvider>
+        <DecisionSignalCard item={listSignal} />
+      </UiLanguageProvider>,
+    );
+    expect(screen.getByText('守住 299 元；量縮反彈就減碼')).toBeInTheDocument();
+    expect(screen.getByText('空頭排列；投信連賣')).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/\["|"\]/);
+    unmount();
+    const portfolio = render(
+      <UiLanguageProvider>
+        <PortfolioSignalSummary item={listSignal} />
+      </UiLanguageProvider>,
+    );
+    expect(portfolio.container.textContent).toContain('空頭排列；投信連賣');
+    expect(portfolio.container.textContent).not.toMatch(/\["|"\]/);
+  });
+
+  it('lists JSON-array fields item by item in the details', () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'zh');
+    const { container } = render(
+      <UiLanguageProvider>
+        <DecisionSignalDetails item={listSignal} />
+      </UiLanguageProvider>,
+    );
+    const items = Array.from(container.querySelectorAll('li')).map((li) => li.textContent);
+    expect(items).toEqual(expect.arrayContaining(['守住 299 元', '量縮反彈就減碼', '空頭排列', '投信連賣', '10 月營收']));
+    expect(container.textContent).not.toMatch(/\["|"\]/);
+  });
+
+  it('keeps plain sentences, including ones that start with a bracket, as written', () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'zh');
+    const { container } = render(
+      <UiLanguageProvider>
+        <DecisionSignalCard item={{ ...signal, riskSummary: '[注意] 放量下跌风险', watchConditions: '观察成交量' }} />
+      </UiLanguageProvider>,
+    );
+    expect(screen.getByText('[注意] 放量下跌风险')).toBeInTheDocument();
+    expect(screen.getByText('观察成交量')).toBeInTheDocument();
+    expect(container.querySelector('li')).toBeNull();
+  });
+
   it('renders portfolio signal horizon using the current UI language', () => {
     window.localStorage.setItem('dsa.uiLanguage', 'en');
     render(

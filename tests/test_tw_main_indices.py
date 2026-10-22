@@ -69,6 +69,8 @@ def test_shioaji_main_indices_maps_taiex_and_otc(monkeypatch):
     assert twii["change_pct"] == 1.28
     assert twii["prev_close"] == pytest.approx(46292.93)
     assert twii["as_of"].endswith("+08:00")
+    # 前端靠 source 標「即時」，少了它指數條會一律標延遲
+    assert {r["source"] for r in rows} == {"shioaji"}
 
 
 def test_shioaji_main_indices_none_without_session(monkeypatch):
@@ -128,6 +130,7 @@ def test_tw_falls_back_to_official_close_before_yfinance(monkeypatch):
     assert rows[0]["current"] == 46887.77
     assert rows[0]["change_pct"] == pytest.approx(594.84 / 46292.93 * 100)
     assert rows[0]["as_of"] == "2026-10-21"
+    assert rows[0]["source"] == "official_close"
 
 
 def test_tw_uses_yfinance_only_when_both_tw_sources_fail(monkeypatch):

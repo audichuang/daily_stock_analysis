@@ -151,6 +151,27 @@ class FundApiTests(unittest.TestCase):
         self.assertIsNotNone(body["returns"]["y1"])
         self.assertEqual(self.market.backfills, [])    # 歷史夠長就不補
 
+    def test_nav_period_starts_at_the_same_base_as_the_return_card(self):
+        # 淨值日落後今天 3 天、中間有缺日：以今天回推（舊 days 寫法）會選到不同的基準日
+        end = _today() - timedelta(days=3)
+        series = [p for p in _series(2000, end=end, step=0.37) if p["date"].weekday() < 5]
+        self.market.series = series
+        returns = self.client.get("/api/v1/funds/18480065").json()["returns"]
+        for key in ("m1", "m3", "y1", "y3", "y5", "ytd"):
+            points = self.client.get("/api/v1/funds/18480065/nav", params={"period": key}).json()["points"]
+            self.assertAlmostEqual((points[-1]["nav"] / points[0]["nav"] - 1) * 100, returns[key], places=9, msg=key)
+            # 基準是起點日當日或之前最後一筆：再往前一筆就超出區間
+            target = fund_service.period_base_target(end, key)
+            self.assertLessEqual(date.fromisoformat(points[0]["date"]), target)
+            nxt = date.fromisoformat(points[1]["date"])
+            self.assertGreater(nxt, target, msg=key)
+
+    def test_nav_period_falls_back_to_all_history_when_too_short(self):
+        self.market.series = _series(60)
+        points = self.client.get("/api/v1/funds/18480065/nav", params={"period": "y5"}).json()["points"]
+        self.assertEqual(len(points), 60)
+        self.assertEqual(self.client.get("/api/v1/funds/18480065/nav", params={"period": "y9"}).status_code, 422)
+
     def test_detail_backfills_short_history_once(self):
         self.market.series = _series(3)
         body = self.client.get("/api/v1/funds/18480065").json()
