@@ -11,6 +11,18 @@ from src.llm.generation_params import (
 )
 
 
+def test_default_sampling_only_claude_models_omit_temperature() -> None:
+    clear_litellm_generation_param_recovery_cache()
+    kwargs = apply_litellm_generation_params({}, "anthropic/claude-sonnet-5-5", 0.3)
+    assert "temperature" not in kwargs
+
+
+def test_older_claude_models_keep_requested_temperature() -> None:
+    clear_litellm_generation_param_recovery_cache()
+    kwargs = apply_litellm_generation_params({}, "anthropic/claude-sonnet-4-6", 0.3)
+    assert kwargs["temperature"] == 0.3
+
+
 def test_temperature_default_only_error_sets_temperature_to_one() -> None:
     recovery = classify_litellm_generation_param_error(
         RuntimeError(

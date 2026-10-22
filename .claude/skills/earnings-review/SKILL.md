@@ -15,7 +15,7 @@ description: "財報複盤：財報發布後檢查業績是否驗證原投資論
 
 ## Instructions
 
-> **前置**：用到 `curl localhost:8000/api/...` 的步驟需先啟動服務（`make serve`，本 fork 走 doppler 注入）；`main.py --debug` 取數步驟是 CLI、不需服務。服務未開時請改用對應 CLI 或先 `make serve`。
+> **前置**：用到 `curl localhost:8000/api/...` 的步驟需本機服務，用 `make serve-local`（不經 Doppler，所以不會登入 Shioaji、不和 NAS 搶同一組金鑰）；不要用 `make serve`（AGENTS §10）。它寫的是與 NAS 共用的正式應用庫，`--apply` 就是寫正式資料。`main.py --debug` 取數步驟是 CLI、不需服務。
 
 ### Step 1: 拉出原論題
 

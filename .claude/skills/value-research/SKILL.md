@@ -7,7 +7,7 @@ description: "對單一公司做價值投資式深度研究，套用巴菲特/�
 
 對單一公司做**價值投資式深度研究**，方法論移植自 [xbtlin/ai-berkshire](https://github.com/xbtlin/ai-berkshire)（MIT），驗算由本 repo 內 `scripts/financial_rigor.py` 提供。
 
-此 skill 是**互動式深度模式**，與每日自動分析管線並存、互不影響；用 session 強模型（Opus）深挖，刻意避開每日批量管線的資料/編排限制。
+此 skill 是**互動式深度模式**，與每日自動分析管線並存、互不影響；用當前 session 的模型深挖，刻意避開每日批量管線的資料/編排限制。
 
 ## Usage
 

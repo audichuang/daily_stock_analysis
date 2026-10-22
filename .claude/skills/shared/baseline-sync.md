@@ -16,6 +16,6 @@ git pull --ff-only
 - 在产出文档中记录三项：本地 HEAD、实际使用的远端基线、未更新本地工作树的原因（如有）。
 - PR 创建 / 更新前，先说明当前分支与目标基线的差异；需要 rebase 或 merge 时请用户确认。
 
-## 需要用户确认的操作
+## git 寫操作的確認邊界
 
-上面的 fast-forward 同步是唯一可自主执行的 git 写操作。其余改变远端或当前分支状态的操作一律先问：`git commit`、`git push`、`git tag`、`gh pr create`、建分支、切分支、以及在 issue / PR 下发布评论、approve、request changes、merge、关闭。
+以 `AGENTS.md` §1 為準。可自主：fast-forward 同步、在本 fork 上 commit、建／切分支（不動有他人改動的工作樹）、push 工作分支、`gh pr create`、CI 綠後 merge 進 `develop`。先問：push 到別人的 repo（含上游）、`git tag`、發版。另外不要 `stash`／`reset` 掉本地既有改動（上面同步規則）。

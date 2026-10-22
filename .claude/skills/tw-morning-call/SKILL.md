@@ -92,7 +92,7 @@ doppler run -p shioaji -c dev -- uv run --env-file .env python scripts/kr_tw_mem
 
 拿錯代理會把族群崩跌讀成「殺盤侷限於族群」。**2026-08-03 犯過**：費半 +0.07% 判無事，
 而同一時間美光 −5.90%、SanDisk −5.09%、SK海力士 −8.79%、三星 −8.76%，台灣記憶體卻全數漲停。
-是使用者指出這個缺口，不是流程自己發現的。完整量測與條件分布見
+完整量測與條件分布見
 [`docs/tw-swing-pipeline.md`](../../../docs/tw-swing-pipeline.md) 的「族群代理」節。
 
 每個數字都要 **triangulate**：用「前一日收盤 × (1 + 漲跌幅) = 今日收盤」驗算，對不上就換來源。
@@ -178,7 +178,7 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
 防竄改保證只來自「預測比結果先進版控」。2026-08-05 那次 commit 一口氣補進 4 筆，5 筆裡最後只有 1 筆可計分。
 
 **完成條件**：一個動作、一句理由、一個可觀察的翻轉條件、`exclude_from_scoring` 已明寫、一行已追加。
-最後提醒使用者**現在就** commit `journal/`；你不能自己 commit。
+最後**現在就**把這一行 commit＋push 到 `develop`（只 add `journal/morning-calls.jsonl`，AGENTS §1）。
 
 ## 邊界
 
@@ -191,7 +191,7 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
   「預測與結果同日寫入」必然拿不到防竄改保證，直接標 `exclude_from_scoring`。
 - `momentum` 寬掃的月營收預設只用上市（sii）口徑（上櫃已入庫但預設排除，`--include-otc-revenue` 才放回），上櫃 `yoy` 為 null；日均額壓到 1 億會納入中小型股，
   出場流動性要自行評估。
-- 台股大盤的季線算得出來、半年線算不出來：`market.market_index` 自 2026-07-01 起（2026-10-16 時約 74 個交易日，之後逐日增加），夠算 MA20／MA60，不夠 MA120；半年線要外部查。
+- `market.market_index` 自 2026-07-01 起才有資料：算大盤均線前先數交易日數，不足該均線天數（例如 MA120 要 120 個交易日）就外部查。
 - `market.price` 的 `change` 欄位無正負號（台積電 2,280 → 2,200 顯示 `change=80`），算漲跌用
   `close` 相減。`market.institutional` 的單位是**股**，與證交所 T86 逐欄一致
   （`foreign_net` 對外陸資買賣超股數〔不含外資自營商〕、`trust_net` 對投信、`dealer_net` 對自營商；初版與定版的差異見 `docs/market-data-pitfalls.md`），

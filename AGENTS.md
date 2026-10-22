@@ -5,7 +5,7 @@
 ## 1. 硬规则
 
 - 目录边界：后端 `src/`、`data_provider/`、`api/`、`bot/`；Web `apps/dsa-web/`；桌面端 `apps/dsa-desktop/`；部署与流水线 `scripts/`、`.github/workflows/`、`docker/`。台股波段的每日决策日志在 `journal/`（append-only、**进版控**，见 `journal/README.md`）；`data/`、`reports/`、`logs/` 是 gitignore 的运行期目录，长期记录不要放那里。
-- `git commit`，以及 push 到自己的 `origin`（`audichuang/daily_stock_analysis`）的工作分支或 `develop`，不用再问，做完就提交推送。只有三件会公开或难以撤回的事要先确认：推到别人的上游（`upstream` = ZhuLinsen）、`git tag`、发版（push `main` 与下文发版流程）。排程照旧自动 commit＋push 自己写的 `journal/*.jsonl` 到 `develop`：平日 07:30 盘前判读（`morning-calls`、`swing-decisions`）、平日 23:00 媒体点名（`media-picks`）。
+- `git commit`，以及 push 到自己的 `origin`（`audichuang/daily_stock_analysis`）的工作分支或 `develop`，不用再问，做完就提交推送；开 PR、CI 绿后合进 `develop` 也直接做（§9）。只有三件会公开或难以撤回的事要先确认：推到别人的上游（`upstream` = ZhuLinsen）、`git tag`、发版（push `main` 与下文发版流程）。排程照旧自动 commit＋push 自己写的 `journal/*.jsonl` 到 `develop`：平日 07:30 盘前判读（`morning-calls`、`swing-decisions`）、平日 23:00 媒体点名（`media-picks`）。
 - 同样要先确认：安装或升级依赖（`uv pip install`、`npm install <pkg>`、改 `requirements.txt`）、删除文件或目录、改 infra 与部署配置、跑全量离线测试。读代码、跑 §6 快速门槛、生成分析文档可自主。
 - commit message 用英文，不加 `Co-Authored-By`。
 - 不写死密钥、账号、路径、模型名、端口或环境差异逻辑。
@@ -68,8 +68,8 @@
 
 ## 9. 合入与发布
 
-- 分支模型：工作分支 → PR 合进 **`develop`**（GitHub 预设分支，日常整合）；`main` 只代表已发版。推工作分支后用 `gh run list --branch <分支>`／`gh run watch` 确认 CI 绿，经使用者确认再合进 `develop`；交付说明引用那次 run。
-- 发版：`develop` fast-forward 进 `main`、push `main`，再在 `main` 上打 annotated tag `rel-YYYY.MM.DD`（同日第二版加 `.2`）并 push tag，`ghcr-main.yml` 依 tag 建映像。不用 `v*.*.*`——那是上游的版号，会触发上游的 release／Docker Hub／桌面端 workflow。
+- 分支模型：工作分支 → PR 合進 **`develop`**（GitHub 預設分支，日常整合）；`main` 只代表已發版。推工作分支後用 `gh run list --branch <分支>`／`gh run watch <run-id> --exit-status --interval 60` 確認 CI 綠，綠了就自己合進 `develop`（§1）；交付說明引用那次 run。
+- 發版（要先確認，§1）：`develop` fast-forward 進 `main`、push `main`，再在 `main` 上打 annotated tag `rel-YYYY.MM.DD`（同日第二版加 `.2`）並 push tag，`ghcr-main.yml` 依 tag 建映像。不用 `v*.*.*`——那是上游的版號，會觸發上游的 release／Docker Hub／桌面端 workflow。
 - 打 tag 只建映像，不会部署到 NAS；部署流程见 `docs/nas-deploy.md`。
 
 ## 10. 本 fork 专属约定
