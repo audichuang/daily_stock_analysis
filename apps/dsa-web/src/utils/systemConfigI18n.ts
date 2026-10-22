@@ -687,6 +687,25 @@ export function getFieldDescriptionZh(key: string, fallback?: string): string {
   return fieldDescriptionMap[key] || fallback || '';
 }
 
+// 繁中介面的欄位名與說明：只收已翻好的鍵，其餘退回簡中表（上游的設定文案只有簡中與英文）
+const fieldTitleMapZhTw: Record<string, string> = {
+  STOCK_LIST: '自選股清單',
+};
+
+const fieldDescriptionMapZhTw: Record<string, string> = {
+  STOCK_LIST: '建議用英文逗號分隔股票代碼；中文逗號、頓號、分號、空格和換行會在儲存後統一成英文逗號。',
+};
+
+/** zh／zh-TW 介面的欄位名：zh-TW 先查繁中表，沒有再退回簡中表。 */
+export function getFieldTitleForLocale(key: string, fallback: string | undefined, locale: UiLanguage): string {
+  return (locale === 'zh-TW' && fieldTitleMapZhTw[key]) || getFieldTitleZh(key, fallback);
+}
+
+/** zh／zh-TW 介面的欄位說明：zh-TW 先查繁中表，沒有再退回簡中表。 */
+export function getFieldDescriptionForLocale(key: string, fallback: string | undefined, locale: UiLanguage): string {
+  return (locale === 'zh-TW' && fieldDescriptionMapZhTw[key]) || getFieldDescriptionZh(key, fallback);
+}
+
 export function getFieldOptionLabelZh(key: string, value: string, fallbackLabel?: string): string {
   return getFieldOptionLabel(key, value, fallbackLabel, 'zh');
 }

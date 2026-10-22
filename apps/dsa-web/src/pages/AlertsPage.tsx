@@ -23,6 +23,7 @@ import type {
   AlertType,
 } from '../types/alerts';
 import { formatDateTime } from '../utils/format';
+import { useUiLanguage } from '../contexts/UiLanguageContext';
 
 const PAGE_SIZE = 20;
 
@@ -99,9 +100,10 @@ function formatNotificationStatus(notification: AlertNotificationItem): string {
 }
 
 const AlertsPage: React.FC = () => {
+  const { t } = useUiLanguage();
   useEffect(() => {
-    document.title = '告警中心 - DSA';
-  }, []);
+    document.title = `${t('alertsPage.title')} - DSA`;
+  }, [t]);
 
   const [rules, setRules] = useState<AlertRuleItem[]>([]);
   const [rulesTotal, setRulesTotal] = useState(0);
@@ -265,8 +267,8 @@ const AlertsPage: React.FC = () => {
     <AppPage className="space-y-5">
       <PageHeader
         eyebrow="Alert Center"
-        title="告警中心"
-        description="管理事件告警、日线技术指标、自选股、持仓/账户联动和大盘红绿灯规则，执行一次性测试，并查看后台评估任务记录的触发历史。"
+        title={t('alertsPage.title')}
+        description={t('alertsPage.description')}
       />
 
       {createError ? <ApiErrorAlert error={createError} onDismiss={() => setCreateError(null)} /> : null}
@@ -331,13 +333,13 @@ const AlertsPage: React.FC = () => {
       <AlertTriggerHistory triggers={triggers} isLoading={triggersLoading} />
 
       {notificationsError ? <ApiErrorAlert error={notificationsError} onDismiss={() => setNotificationsError(null)} /> : null}
-      <Card title="通知尝试记录" subtitle="通知结果" variant="bordered" padding="md">
-        {notificationsLoading ? <Loading label="正在加载通知尝试记录" /> : null}
+      <Card title={t('alertsPage.notifications.title')} subtitle={t('alertsPage.notifications.subtitle')} variant="bordered" padding="md">
+        {notificationsLoading ? <Loading label={t('alertsPage.notifications.loading')} /> : null}
         {!notificationsLoading && notifications.length === 0 ? (
           <EmptyState
             icon={<BellRing className="h-6 w-6" />}
-            title="暂无通知尝试记录"
-            description="当前没有可展示的通知尝试明细；告警触发仍会按已配置通知渠道发送。"
+            title={t('alertsPage.notifications.empty')}
+            description={t('alertsPage.notifications.emptyDescription')}
           />
         ) : null}
         {!notificationsLoading && notifications.length > 0 ? (
@@ -345,12 +347,12 @@ const AlertsPage: React.FC = () => {
             <table className="w-full min-w-[680px] text-left text-sm">
               <thead className="border-b border-border/60 text-xs uppercase text-muted-text">
                 <tr>
-                  <th className="px-3 py-2 font-medium">渠道</th>
-                  <th className="px-3 py-2 font-medium">状态</th>
-                  <th className="px-3 py-2 font-medium">错误码</th>
-                  <th className="px-3 py-2 font-medium">耗时</th>
-                  <th className="px-3 py-2 font-medium">时间</th>
-                  <th className="px-3 py-2 font-medium">诊断</th>
+                  <th className="px-3 py-2 font-medium">{t('alertsPage.notifications.col.channel')}</th>
+                  <th className="px-3 py-2 font-medium">{t('alertsPage.notifications.col.status')}</th>
+                  <th className="px-3 py-2 font-medium">{t('alertsPage.notifications.col.errorCode')}</th>
+                  <th className="px-3 py-2 font-medium">{t('alertsPage.notifications.col.duration')}</th>
+                  <th className="px-3 py-2 font-medium">{t('alertsPage.notifications.col.time')}</th>
+                  <th className="px-3 py-2 font-medium">{t('alertsPage.notifications.col.diagnostics')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40">

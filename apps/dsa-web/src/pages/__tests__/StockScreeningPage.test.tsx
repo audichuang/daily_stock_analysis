@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import type { ScreeningHotspotDetail } from '../../api/screening';
 import StockScreeningPage from '../StockScreeningPage';
 
@@ -173,6 +174,25 @@ describe('StockScreeningPage', () => {
     expect(screen.queryByText(/theme_heat/)).not.toBeInTheDocument();
     expect(screen.queryByText('实验功能与风险提示')).not.toBeInTheDocument();
     expect(screen.queryByText('选股结果')).not.toBeInTheDocument();
+  });
+
+  it('shows the entry copy in Traditional Chinese for the zh-TW UI', async () => {
+    getScreeningStatus.mockResolvedValue({ enabled: false, available: false });
+    window.localStorage.setItem('dsa.uiLanguage', 'zh-TW');
+    try {
+      const { container } = render(
+        <UiLanguageProvider>
+          <StockScreeningPage />
+        </UiLanguageProvider>,
+      );
+      expect((await screen.findAllByText('選股未開啟')).length).toBeGreaterThan(0);
+      expect(screen.getByRole('button', { name: '開啟選股' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /執行選股/ })).toBeDisabled();
+      expect(screen.getByText('歷史紀錄')).toBeInTheDocument();
+      expect(container.textContent).not.toMatch(/选股未开启|开启选股|运行选股|历史记录/);
+    } finally {
+      window.localStorage.clear();
+    }
   });
 
   it('re-syncs enabled state when Screening availability check fails after config is enabled', async () => {
