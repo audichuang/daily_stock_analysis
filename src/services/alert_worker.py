@@ -216,7 +216,13 @@ class AlertWorker:
         # dry runs retain their existing quote and portfolio snapshot behavior.
         target_expansion_cache = {} if read_only else None
 
+        from src.services.tw_level_alerts import SOURCE as TW_LEVEL_SOURCE
+
+        levels_off = not getattr(config, "tw_level_alerts_enabled", False)
         for row in self.service.repo.list_enabled_rules(limit=ALERT_WORKER_RULE_LIMIT):
+            # 價位警報開關關掉時，之前在看板建好的規則也不評估、不推（只擋寫入的話舊規則照樣會響）
+            if levels_off and not read_only and getattr(row, "source", None) == TW_LEVEL_SOURCE:
+                continue
             try:
                 cooldown_policy = self.service._load_json(row.cooldown_policy, default=None)
                 notification_policy = self.service._load_json(row.notification_policy, default=None)

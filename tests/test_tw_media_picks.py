@@ -26,6 +26,9 @@ def test_parse_answer_garbage_is_none_but_empty_list_is_no_picks():
     assert mp.parse_answer("沒有點名任何個股") is None
     assert mp.parse_answer("[not json]") is None
     assert mp.parse_answer("[]") == []
+    # a bare citation marker is not "no picks": journaling it as no_picks would skip the episode forever
+    assert mp.parse_answer("這集沒有列點名 [1]") is None
+    assert mp.parse_answer("[1, 2]") is None
 
 
 def test_resolve_order():
@@ -53,6 +56,11 @@ def test_resolve_order():
     # fragments of spaced transcripts are not codes
     assert mp.resolve("中揚光", "6668", INDEX, said="668 中 陽 光") == ("6668.TW", "exact")
     assert mp.resolve("南亞", "1303", INDEX, said="130 連 南亞") == ("1303.TW", "exact")
+    # a number that only matches after zero-padding loses to a name that resolves
+    assert mp.resolve("中揚光", None, INDEX, said="668") == ("6668.TW", "exact")
+    assert mp.resolve("國泰美國道瓊", None, INDEX, said="668") == ("00668.TW", "code")
+    # ...but only when the name's code contains the spoken digits; otherwise the number wins
+    assert mp.resolve("國泰台灣領袖50", None, INDEX + [("00922.TW", "國泰台灣領袖50", [])], said="850") == ("00850.TW", "code")
     # digits inside a nickname are not a code
     assert mp.resolve("元大台灣50正2", None, INDEX, said="0050正2") == ("00631L.TW", "exact")
 

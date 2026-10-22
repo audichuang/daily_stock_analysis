@@ -1117,6 +1117,8 @@ class Config:
     prompt_variant: str = "baseline"
     # 台股短波段評分：多頭排列由必要條件改為加權項（預設關＝舊提示詞一字不改；開啟時報告標記 prompt_variant）
     tw_ma_alignment_weighted: bool = False
+    # 開啟上項時有多少比例的台股報告分到加權組（依代號＋台北日期雜湊），其餘標 tw-ma-control 當同期對照；1＝全部套用
+    tw_ma_alignment_ab_ratio: float = 1.0
     # 台股個股 prompt 接處置／注意股與法說、除權息即時名單（官方端點，每個基準日只抓一次、fail-open）
     tw_live_events_enabled: bool = True
     # 盯盤看板「建立價位警報」（SMC 支撐／壓力 -> price_cross 規則，寫正式應用庫）；設計見 docs/tw-level-alerts.md，預設關
@@ -2078,6 +2080,9 @@ class Config:
                 os.getenv('TW_BROKER_FEE_DISCOUNT'), 1.0, field_name='TW_BROKER_FEE_DISCOUNT', minimum=0.0, maximum=1.0),
             prompt_variant=(os.getenv('PROMPT_VARIANT') or '').strip() or 'baseline',
             tw_ma_alignment_weighted=parse_env_bool(os.getenv('TW_MA_ALIGNMENT_WEIGHTED'), default=False),
+            tw_ma_alignment_ab_ratio=parse_env_float(
+                os.getenv('TW_MA_ALIGNMENT_AB_RATIO'), 1.0, field_name='TW_MA_ALIGNMENT_AB_RATIO',
+                minimum=0.0, maximum=1.0),
             tw_live_events_enabled=parse_env_bool(os.getenv('TW_LIVE_EVENTS_ENABLED'), default=True),
             tw_level_alerts_enabled=parse_env_bool(os.getenv('TW_LEVEL_ALERTS_ENABLED'), default=False),
             analyst_consensus_enabled=parse_env_bool(os.getenv('ANALYST_CONSENSUS_ENABLED'), default=False),

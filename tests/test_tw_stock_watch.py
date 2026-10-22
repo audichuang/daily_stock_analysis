@@ -7,7 +7,7 @@ from tests.litellm_stub import ensure_litellm_stub
 ensure_litellm_stub()
 
 from src.services import tw_stock_watch as watch  # noqa: E402
-from src.services.tw_stock_report import NARRATIVE_CHECK_VERSION as VERSION  # noqa: E402
+from src.services.tw_stock_report import NARRATIVE_CHECK_VERSION as VERSION, data_stamp  # noqa: E402
 
 SMC = {"price": 100.0, "bsl": [140.0, 112.0], "ssl": [90.0],
        "order_blocks": [{"direction": "bullish", "low": 95.0, "high": 98.0},
@@ -75,7 +75,7 @@ def test_change_conditions(over, kind, expected):
 
 def test_summarize_shape_and_cached_verdicts():
     s = watch.summarize(payload(), {"verdicts": {"chips": {"badge": "外資調節", "tone": "neg", "note": "x"}},
-                                    "check_version": VERSION})
+                                    "check_version": VERSION, "data_stamp": data_stamp(payload())})
     assert s["close"] == 100.0 and s["as_of"] == "2026-10-21"
     assert s["structure"] == {"kind": "ChoCH", "bias": "bear", "date": "2026-10-21", "level": 99.5}
     assert s["verdicts"] == {"chips": {"badge": "外資調節", "tone": "neg"}}
@@ -84,13 +84,16 @@ def test_summarize_shape_and_cached_verdicts():
 
 
 def test_summarize_hides_verdicts_from_unverified_narrative():
-    nar = {"verdicts": {"chips": {"badge": "外資調節", "tone": "neg"}}, "check_version": VERSION}
+    nar = {"verdicts": {"chips": {"badge": "外資調節", "tone": "neg"}}, "check_version": VERSION,
+           "data_stamp": data_stamp(payload())}
     assert watch.summarize(payload(), {**nar, "unverified": ["41.27"]})["verdicts"] is None
     # 空清單代表全部核對過，照常顯示
     assert watch.summarize(payload(), {**nar, "unverified": []})["verdicts"] == nar["verdicts"]
     # 舊版核對規則寫的快取（沒有或不同的 check_version）也不上看板
     assert watch.summarize(payload(), {"verdicts": nar["verdicts"]})["verdicts"] is None
     assert watch.summarize(payload(), {**nar, "check_version": VERSION - 1})["verdicts"] is None
+    # 解讀寫完之後同一基準日的資料又更新（例如法人晚入庫）：舊結論不上看板
+    assert watch.summarize(payload(), {**nar, "data_stamp": "stale"})["verdicts"] is None
 
 
 def test_summaries_isolate_failures(monkeypatch):
@@ -127,7 +130,8 @@ def test_one_rereads_verdicts_within_ttl(monkeypatch):
     monkeypatch.setattr(tw_stock_dossier, "build", lambda code, **kw: calls.append(code) or payload())
     assert watch._one("3324.TWO")["verdicts"] is None
     # 一分鐘後解讀產生了：資料包仍走快取，但色調要立刻出現
-    nar["v"] = {"verdicts": {"chips": {"badge": "外資調節", "tone": "neg"}}, "check_version": VERSION}
+    nar["v"] = {"verdicts": {"chips": {"badge": "外資調節", "tone": "neg"}}, "check_version": VERSION,
+                "data_stamp": data_stamp(payload())}
     assert watch._one("3324.TWO")["verdicts"] == {"chips": {"badge": "外資調節", "tone": "neg"}}
     assert calls == ["3324.TWO"]
 

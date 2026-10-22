@@ -339,6 +339,7 @@ def test_report_tolerates_latest_day_missing_valuation_but_not_older_days():
         plan = [
             ("count(*), min(", [(1, sessions[0], sessions[-1])]),
             ("AND market IS NULL GROUP BY", []),
+            ("AND market = :market GROUP BY", []),
             ("FROM market.price ORDER BY date DESC", newest_first),
             ("FROM market.institutional WHERE", [(d,) for d in sessions]),
             ("FROM market.margin WHERE", [(d,) for d in sessions]),

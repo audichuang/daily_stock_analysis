@@ -186,3 +186,38 @@ def test_analyzer_wires_block_for_tw_when_enabled():
         out, load, _ = _prompt(code, enabled)
         assert "LIVE-BLOCK" not in out
         load.assert_not_called()
+
+
+_REAL_FETCH = live_mod._fetch
+
+
+def test_failed_fetch_is_retried_after_window_not_cached_all_day(monkeypatch):
+    # 長駐的 Web 服務第一次抓取出錯：舊版 lru_cache 把 None 留到隔天，整個交易日 prompt 都缺這段
+    clock = [1000.0]
+    monkeypatch.setattr(live_mod.time, "monotonic", lambda: clock[0])
+    attempts = []
+
+    def boom(as_of_iso):
+        attempts.append(as_of_iso)
+        return None
+
+    monkeypatch.setattr(live_mod, "_fetch", boom)
+    assert live_mod.load_tw_live_events("2026-10-20") is None
+    assert live_mod.load_tw_live_events("2026-10-20") is None
+    assert len(attempts) == 1                      # 窗口內不每檔重打
+    clock[0] += live_mod._RETRY_SECONDS + 1
+    _install(monkeypatch)
+    monkeypatch.setattr(live_mod, "_fetch", _REAL_FETCH)
+    assert live_mod.load_tw_live_events("2026-10-20") is not None
+
+
+def test_complete_result_is_kept_for_the_whole_day(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(live_mod.time, "monotonic", lambda: clock[0])
+    calls = _install(monkeypatch)
+    assert live_mod.load_tw_live_events("2026-10-20") is not None
+    n = len(calls)
+    clock[0] += 10 * live_mod._RETRY_SECONDS
+    assert live_mod.load_tw_live_events("2026-10-20") is not None
+    assert len(calls) == n
+

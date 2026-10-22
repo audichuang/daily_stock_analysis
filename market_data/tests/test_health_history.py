@@ -107,6 +107,7 @@ def _engine(price=_PRICE, inst=_INST, margin=_MARGIN, valuation=_VALUATION,
         ("count(DISTINCT stock_id) FROM market.margin", [(1100,)]),
         ("count(DISTINCT stock_id) FROM market.valuation", [(1330,)]),
         ("AND market IS NULL GROUP BY", []),
+        ("AND market = :market GROUP BY", []),
         ("index_id = 'TAIEX' AND date >= :start",
          [(d,) for d in price[-crawl.RECENT_SESSIONS:]]),
         # 近期視窗（LIMIT :n）：假連線不處理參數，這裡直接給最後 RECENT_SESSIONS 天
@@ -254,3 +255,16 @@ def test_source_dates_isolates_markets_on_a_real_table(pg_conn):
     start = _D(2099, 5, 1)
     assert health._source_dates(pg_conn, "institutional", None, start) == [_D(2099, 5, 1)]
     assert health._source_dates(pg_conn, "institutional", "tpex", start) == [_D(2099, 5, 2)]
+
+
+def test_report_lists_tpex_thin_days_separately(capsys):
+    # 上櫃融資／估值不在 REVISED_SOURCES：半套日寫進去就凍結，上市的 thin 稽核又只看 market IS NULL
+    days = _days((1, 21), (1, 22), (1, 23), (1, 26), (1, 27), (1, 28))
+    half = [(d, 400 if d == _D(2026, 1, 23) else 800) for d in days]
+    engine, _ = _engine(first=[("FROM market.margin WHERE true AND market = :market GROUP BY", half)])
+    result = health.report(engine, now=_NOW, is_session=_is_session)
+    assert result["thin_days_tpex"]["margin"] == [("2026-01-23", 400)]
+    assert result["thin_days_tpex"]["institutional"] == []
+    assert result["thin_days"]["margin"] == []          # 上市稽核不受影響
+    health.run(engine, strict=False, now=_NOW, is_session=_is_session)
+    assert "thin margin_tpex days (只報不擋): 1" in capsys.readouterr().out

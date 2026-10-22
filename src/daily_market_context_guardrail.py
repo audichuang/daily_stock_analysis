@@ -88,6 +88,14 @@ _NEGATION_HINTS_ZH = (
 _NEGATION_HINTS_EN = (" not ", "do not", "don't", "no ", "never", "avoid")
 _NEGATION_HINTS_KO = ("권하지 않", "하지 않", "하지 마", "불가", "금지", "피하", "보류", "않", "말")
 _NEGATION_LOOKBACK = 16
+# 否定詞與買進詞共用字時（「不建議買入」的「建議買入」、「不加倉」），回看窗只剩一個「不」，上面的詞表對不到；
+# 只認緊貼在買進詞前面的單字，避免「股價不貴，建議買入」這類句子被當成否定
+_NEGATION_IMMEDIATE_ZH = ("不", "勿", "没", "沒", "未")
+# 含「別／别」但不是否定的詞：「特別建議買入」不能因為「別」就逃過護欄
+_NEGATION_FALSE_COMPOUNDS_ZH = (
+    "特別", "特别", "區別", "区别", "個別", "个别", "分別", "分别", "類別", "类别", "級別", "级别", "差別", "差别",
+    "識別", "识别",
+)
 _GUARDRAIL_SENTIMENT_SCORE = 52
 
 
@@ -312,7 +320,7 @@ def _contains_any(
             if marker_pos == -1:
                 break
             context = lowered[max(0, marker_pos - _NEGATION_LOOKBACK):marker_pos]
-            has_negation = _contains_negation_near_marker(context, negation_hints)
+            has_negation = _contains_negation_near_marker(context, negation_hints, zh=language not in ("en", "ko"))
             if require_negation:
                 if has_negation:
                     return True
@@ -322,7 +330,7 @@ def _contains_any(
     return False
 
 
-def _contains_negation_near_marker(context: str, negation_hints: tuple[str, ...]) -> bool:
+def _contains_negation_near_marker(context: str, negation_hints: tuple[str, ...], *, zh: bool = False) -> bool:
     separators = ("，", ",", "。", "；", ";", "：", ":", "？", "!", "！", "）", ")", "（", "(")
     tail = context
     sep_pos = -1
@@ -332,6 +340,11 @@ def _contains_negation_near_marker(context: str, negation_hints: tuple[str, ...]
             sep_pos = candidate
     if sep_pos >= 0:
         tail = context[sep_pos + 1 :]
+    if zh:
+        if tail.endswith(_NEGATION_IMMEDIATE_ZH):
+            return True
+        for compound in _NEGATION_FALSE_COMPOUNDS_ZH:
+            tail = tail.replace(compound, "")
     return any(hint in tail for hint in negation_hints)
 
 

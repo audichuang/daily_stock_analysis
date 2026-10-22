@@ -62,7 +62,11 @@ def fundamentals(engine, sid, as_of):
                "announced": None if pd.isna(r.announce_date) else str(r.announce_date)}
               for r in rev.head(13).itertuples()][::-1]
     ttm_yoy = None
-    if len(rev) == 24:
+    # 要連續 24 個月才算：中間缺月時兩個 12 列窗口會錯開，算出來不是「近 12 個月」
+    span = None if len(rev) != 24 else (
+        (rev.revenue_month.iloc[0].year - rev.revenue_month.iloc[-1].year) * 12
+        + rev.revenue_month.iloc[0].month - rev.revenue_month.iloc[-1].month)
+    if span == 23:
         last, prev = rev.revenue.iloc[:12].sum(), rev.revenue.iloc[12:].sum()
         ttm_yoy = round((last / prev - 1) * 100, 1) if prev else None
     inc = _sql(engine, "SELECT date, account, value FROM market.financial_statement "
@@ -113,7 +117,7 @@ def holding_summary(hd):
             wow = round(float(cur[("pct", 15)] - w.iloc[-2][("pct", 15)]), 2)
     return {"as_of": str(w.index[-1]), "big_holder_pct": float(cur[("pct", 15)]),
             "big_holder_pct_wow": wow,
-            "total_holders": int(cur[("holders", 17)]) if ("holders", 17) in cur else None}
+            "total_holders": int(cur[("holders", 17)]) if not pd.isna(cur.get(("holders", 17))) else None}
 
 
 def chips(engine, sid, as_of, sessions, branch=True):

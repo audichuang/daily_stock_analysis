@@ -306,6 +306,7 @@ tone：pos 偏多、neg 偏空、neu 中性、watch 觀察。標示中立，不�
 - 每個數字都要能在資料包裡找到，或由資料包的數字算出（季營收加總、TTM EPS、自算本益比、與現價乖離）；自己算的要寫「自算」。不准引用資料包以外的財務數字或新聞。
 - 資料包是 null 或空的段落寫「無資料」或「回補中」，不准推測補上。文字裡不要出現 null、JSON 欄位名或英文鍵名，一律用中文描述。valuation 是 null 時可用近四季 EPS 自算 TTM 本益比，並註明沒有歷史百分位。
 - 月營收以 month 欄為準；留意 announced 公告日與各段 as_of 的新鮮度。
+- 寫「最高／最低／次高／次低」或「連續 N 個月」這類排名與趨勢前，先逐筆比對整段數列；比對不了就只寫數字、不下排名。
 - 分點 HHI 註明「前 15 名」口徑；「主力成本」指近 5 日前 15 分點買超均價，不要叫「大戶成本」。
 - SMC：BOS 是延續確認、ChoCH 是較弱的轉折，最新一筆事件決定目前結構；距離用 (價位 / 現價 − 1)。
 - OTE 方向跟著最新結構：最新事件是 bearish（空方結構）時 OTE 是反彈賣壓區，不准寫成買進區、進場區或支撐。
@@ -348,8 +349,9 @@ _SENTENCE_SPLIT_RE = re.compile(r"[。；;\n]")      # 「自算」常寫在同�
 _FIB_CONSTANTS = [0.5, 0.618, 0.705, 0.786]       # Fib／OTE 常數（*100 後即 50、61.8、70.5、78.6）
 _UNVERIFIED_TTL_SECONDS = 6 * 3600                 # 有核對不到數字的解讀：快取 6 小時後重寫
 # 數字核對規則的版本；快取檔版本不同就當過期重寫，看板也不採用（規則收緊後舊快取不會一直沿用）
-NARRATIVE_CHECK_VERSION = 2
-_UNIT_AFTER_RE = re.compile(r"\s*(億|萬)")
+NARRATIVE_CHECK_VERSION = 3
+_UNIT_AFTER_RE = re.compile(r"\s*(億|萬|%|％)")
+_SMC_NON_PRICE_KEYS = {"i", "swing_i", "swing_n", "position", "price"}
 
 
 def _unit_factors(key):
@@ -380,6 +382,36 @@ def _payload_numbers(p):
 
     walk(p)
     walk(_FIB_CONSTANTS, "position")
+    out.update(_distance_numbers(p))
+    return out
+
+
+def _distance_numbers(p):
+    """價位與現價的距離％（報告價位階梯就印這個），兩個方向都認；只在數字後面緊接「%」時才算數。"""
+    smc = p.get("smc") or {}
+    price = smc.get("price")
+    if not isinstance(price, (int, float)) or isinstance(price, bool) or price <= 0:
+        return set()
+    levels = []
+
+    def walk(x, key=""):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                walk(v, str(k))
+        elif isinstance(x, list):
+            for v in x:
+                walk(v, key)
+        elif isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0 and key not in _SMC_NON_PRICE_KEYS:
+            levels.append(x)
+
+    walk(smc)
+    for window in ((p.get("chips") or {}).get("branch") or {}).values():
+        if isinstance(window, dict):
+            levels += [v for k, v in window.items() if k.startswith("avg_") and isinstance(v, (int, float)) and v > 0]
+    out = set()
+    for level in levels:
+        for pct in (abs(level / price - 1) * 100, abs(price / level - 1) * 100):
+            out.update((d, round(pct, d), unit) for d in range(4) for unit in ("%", "％"))
     return out
 
 
@@ -406,10 +438,27 @@ def unverified_numbers(nar, p):
                 decimals = len(m.split(".")[1]) if "." in m else 0
                 value = round(float(m.replace(",", "")), decimals)
                 unit = _UNIT_AFTER_RE.match(sentence, match.end())
-                if (decimals, value, None) not in known and (
-                        not unit or (decimals, value, unit.group(1)) not in known):
+                unit = unit.group(1) if unit else None
+                if unit in ("億", "萬"):
+                    # 寫了億／萬就必須是換算後的值：「3,765,466 億」等於原值，但差了十萬倍
+                    ok = (decimals, value, unit) in known
+                else:
+                    ok = (decimals, value, None) in known or (unit and (decimals, value, unit) in known)
+                if not ok:
                     bad.append(m)
     return bad
+
+
+def data_stamp(p):
+    """解讀引用的各段資料日；同一個基準日內法人、營收等晚入庫時會變，變了就不能沿用舊解讀。"""
+    f = p.get("fundamentals") or {}
+    c = p.get("chips") or {}
+    months, quarters = f.get("monthly_revenue") or [], f.get("quarters") or []
+    return "|".join(str(x) for x in (
+        months[-1]["month"] if months else None, quarters[-1]["quarter"] if quarters else None,
+        *((c.get(k) or {}).get("as_of") for k in ("institutional", "margin", "holding")),
+        (p.get("valuation") or {}).get("as_of"), (p.get("smc") or {}).get("price"),
+    ))
 
 
 def cached_narrative(p, generate, cache_dir):
@@ -422,7 +471,8 @@ def cached_narrative(p, generate, cache_dir):
         if path.exists():
             nar = json.loads(path.read_text(encoding="utf-8"))
             fresh = not nar.get("unverified") or time.time() - path.stat().st_mtime < _UNVERIFIED_TTL_SECONDS
-            if nar.get("check_version") == NARRATIVE_CHECK_VERSION and fresh:
+            if (nar.get("check_version") == NARRATIVE_CHECK_VERSION and fresh
+                    and nar.get("data_stamp") == data_stamp(p)):
                 return nar
         nar = parse_narrative(generate(narrative_prompt(p)))
         if nar:
@@ -431,6 +481,7 @@ def cached_narrative(p, generate, cache_dir):
                 logger.warning("[tw_stock_report] %s narrative has unverified numbers: %s", p["stock_id"], bad)
                 nar["unverified"] = bad
             nar["check_version"] = NARRATIVE_CHECK_VERSION
+            nar["data_stamp"] = data_stamp(p)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(nar, ensure_ascii=False), encoding="utf-8")
         return nar

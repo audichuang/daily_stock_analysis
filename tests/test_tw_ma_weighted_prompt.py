@@ -16,7 +16,7 @@ except ModuleNotFoundError:
     ensure_litellm_stub()
 
 from src.agent.skills.defaults import CORE_TRADING_SKILL_POLICY_ZH
-from src.analyzer import TW_MA_WEIGHTED_VARIANT, GeminiAnalyzer
+from src.analyzer import TW_MA_CONTROL_VARIANT, TW_MA_WEIGHTED_VARIANT, GeminiAnalyzer, _tw_ma_ab_treated
 from tests.test_analyzer_prompt_language import _make_analyzer, _rich_context
 
 _OLD_HARD_LINES = ("**多头排列必须条件**", '乖离率 > 5%：严禁追高！直接判定为"观望"', "坚决不买入")
@@ -50,9 +50,12 @@ def _user_prompt(analyzer, code: str, language: str = "zh-TW") -> str:
 @pytest.mark.parametrize("language", ["zh", "zh-TW"])
 def test_off_system_prompt_is_unchanged(legacy, language):
     off = _analyzer(False, legacy)._get_analysis_system_prompt(language, stock_code="2330.TW")
-    baseline = _make_analyzer(
+    baseline_analyzer = _make_analyzer(
         legacy=legacy, default_skill_policy="" if legacy else CORE_TRADING_SKILL_POLICY_ZH
-    )._get_analysis_system_prompt(language, stock_code="2330.TW")
+    )
+    # 不帶開關欄位的設定＝功能上線前；不能讀 get_config()，本機 .env 開著開關會讓這裡假紅
+    baseline_analyzer._config_override = SimpleNamespace(bias_threshold=5.0)
+    baseline = baseline_analyzer._get_analysis_system_prompt(language, stock_code="2330.TW")
     assert off == baseline
     assert off.count(CORE_TRADING_SKILL_POLICY_ZH) == 1
     assert _NEW_MARKER not in off
@@ -130,7 +133,7 @@ def test_on_does_not_touch_non_tw_or_english(code, language):
     assert _user_prompt(_analyzer(True), code, language) == _user_prompt(_analyzer(False), code, language)
 
 
-def _analyze_dashboard(weighted: bool, code: str = "2330.TW", prompt_variant: str = "baseline"):
+def _analyze_dashboard(weighted: bool, code: str = "2330.TW", prompt_variant: str = "baseline", ab_ratio: float = 1.0):
     analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
     analyzer._router = None
     analyzer._litellm_available = True
@@ -141,7 +144,7 @@ def _analyze_dashboard(weighted: bool, code: str = "2330.TW", prompt_variant: st
         weighted, prompt_variant=prompt_variant, generation_backend="litellm",
         generation_fallback_backend="litellm", litellm_model="ollama/qwen3:14b", litellm_fallback_models=[],
         llm_model_list=[], report_language="zh-TW", gemini_request_delay=0, llm_temperature=0.7,
-        report_integrity_enabled=False, report_integrity_retry=0,
+        report_integrity_enabled=False, report_integrity_retry=0, tw_ma_alignment_ab_ratio=ab_ratio,
     )
     response = json.dumps({
         "stock_name": "台積電", "sentiment_score": 62, "trend_prediction": "看多", "operation_advice": "買入",
@@ -165,3 +168,38 @@ def test_on_stamps_prompt_variant():
 def test_off_or_non_tw_leaves_prompt_variant_to_pipeline():
     assert "prompt_variant" not in _analyze_dashboard(False)
     assert "prompt_variant" not in _analyze_dashboard(True, code="AAPL")
+
+
+def test_ab_split_is_stable_per_day_and_roughly_follows_ratio():
+    assert _tw_ma_ab_treated("2330.TW", 1.0, "2026-10-23") is True
+    assert _tw_ma_ab_treated("2330.TW", 0.0, "2026-10-23") is False
+    codes = [f"{n:04d}.TW" for n in range(1000, 1400)]
+    picks = [_tw_ma_ab_treated(c, 0.5, "2026-10-23") for c in codes]
+    assert picks == [_tw_ma_ab_treated(c, 0.5, "2026-10-23") for c in codes]   # 同一天重跑不換組
+    assert 0.4 < sum(picks) / len(picks) < 0.6
+    other_day = [_tw_ma_ab_treated(c, 0.5, "2026-10-26") for c in codes]
+    assert picks != other_day                                                   # 換一天重新抽
+    assert sum(_tw_ma_ab_treated(c, 0.2, "2026-10-23") for c in codes) < sum(picks)
+
+
+@pytest.mark.parametrize("treated,variant", [(True, TW_MA_WEIGHTED_VARIANT), (False, TW_MA_CONTROL_VARIANT)])
+def test_ab_split_tags_each_arm(treated, variant):
+    with patch("src.analyzer._tw_ma_ab_treated", return_value=treated):
+        assert _analyze_dashboard(True, ab_ratio=0.5)["prompt_variant"] == variant
+        assert _analyze_dashboard(True, prompt_variant="v2", ab_ratio=0.5)["prompt_variant"] == f"v2+{variant}"
+
+
+def test_ab_control_arm_gets_unchanged_prompt():
+    analyzer = _analyzer(True)
+    analyzer._config_override.tw_ma_alignment_ab_ratio = 0.5
+    with patch("src.analyzer._tw_ma_ab_treated", return_value=False):
+        control = analyzer._get_analysis_system_prompt("zh-TW", stock_code="2330.TW")
+        control_user = _user_prompt(analyzer, "2330.TW")
+    assert control == _analyzer(False)._get_analysis_system_prompt("zh-TW", stock_code="2330.TW")
+    assert control_user == _user_prompt(_analyzer(False), "2330.TW")
+
+
+def test_ab_tag_follows_the_system_prompt_actually_sent():
+    # 系統提示詞分到加權組、之後重算換組（例如跨午夜）：標籤仍要跟送出的提示詞
+    with patch("src.analyzer._tw_ma_ab_treated", side_effect=[True] + [False] * 10):
+        assert _analyze_dashboard(True, ab_ratio=0.5)["prompt_variant"] == TW_MA_WEIGHTED_VARIANT

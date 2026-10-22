@@ -84,7 +84,9 @@ A 線的投資觀是**趨勢追蹤＋回踩低吸**，規則寫死在 prompt 與
    - 「賣方共識」（`ANALYST_CONSENSUS_ENABLED`，預設關）：目標價系統性偏多，台股沒有驗證過；看 EPS 修正方向就好，
      不要拿隱含上漲當買進理由。年底指數目標（`TW_BROKER_INDEX_TARGETS`）只是人工維護的一行情緒背景。
    - `TW_MA_ALIGNMENT_WEIGHTED`（預設關）把多頭排列改成加分項；開了的報告會標 `prompt_variant=tw-ma-weighted`。
-     效果沒有驗證，要用 `scripts/shadow_buy_eval.py --by-variant` 與同期 baseline 比，區間跨零就維持關閉。
+     效果沒有驗證，開的時候同時設 `TW_MA_ALIGNMENT_AB_RATIO=0.5`：依「代號＋台北日期」雜湊，一半台股報告套加權
+     （`tw-ma-weighted`）、一半照舊（`tw-ma-control`），同一檔同一天重跑不換組。再用 `scripts/shadow_buy_eval.py --by-variant`
+     比這兩組（不要拿實驗前的 `baseline`／`untagged` 當對照），區間跨零就維持關閉。比例設 1（預設）＝全部套用、沒有對照組。
 
 ### 2.3 什麼時候跑
 

@@ -450,3 +450,34 @@ def test_unsoftened_buy_records_no_calibration() -> None:
         result, daily_market_context={"summary": "指數震盪。"}, report_language="zh"
     ) == []
     assert "decision_score_calibration" not in result.dashboard
+
+
+_HIGH_RISK_TW = {"region": "tw", "trade_date": "2026-10-05", "summary": "大盤高風險。", "risk_tags": ["high_risk"]}
+
+
+@pytest.mark.parametrize("decision_type,advice", [
+    ("sell", "不建議買入"), ("hold", "不建議買入"), ("hold", "不加倉"), ("sell", "不建議加倉"),
+])
+def test_negation_sharing_chars_with_buy_marker_is_not_softened(decision_type, advice) -> None:
+    # 「不建議買入」的回看窗只剩「不」：舊判斷當成積極買進，把賣出改成觀望、分數壓到 52
+    result = _result()
+    result.decision_type = decision_type
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = decision_type
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert adjustments == []
+    assert result.operation_advice == advice
+    assert result.dashboard["decision_type"] == decision_type
+
+
+@pytest.mark.parametrize("advice", ["特別建議買入", "股價不貴，建議買入", "股價不貴建議買入"])
+def test_non_negating_words_do_not_shield_buy(advice) -> None:
+    # 「特別」的「別」、句中不貼著買進詞的「不」都不是否定：保守市況仍要降級
+    result = _result()
+    result.operation_advice = advice
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert "daily_market_context_buy_softened" in adjustments

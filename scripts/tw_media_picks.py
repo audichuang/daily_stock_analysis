@@ -114,6 +114,8 @@ def parse_answer(text: str) -> list[dict] | None:
         return None
     if not isinstance(items, list):
         return None
+    if items and not any(isinstance(i, dict) for i in items):
+        return None  # "[1]" / "[1, 2]" is a citation marker, not an empty pick list
     return [i for i in items if isinstance(i, dict) and i.get("name")]
 
 
@@ -139,6 +141,17 @@ def _by_code(code: str, index, pad: bool = True) -> tuple[str, str] | None:
     return None
 
 
+def _by_name(parts, index) -> tuple[str, str] | None:
+    for p in parts:
+        for c, n, aliases in index:
+            if p == _norm(n):
+                return c, "exact"
+        for c, n, aliases in index:
+            if p in map(_norm, aliases):
+                return c, "alias"
+    return None
+
+
 def resolve(name: str, code: str | None, index, said: str | None = None) -> tuple[str | None, str]:
     """-> (canonical code like 3044.TW, how).
 
@@ -148,6 +161,7 @@ def resolve(name: str, code: str | None, index, said: str | None = None) -> tupl
     how: exact|alias|code|code_mismatch|fuzzy|unresolved.
     """
     said = (said or "").strip().upper()
+    said_code = said
     if re.fullmatch(r"\d{2,6}[A-Z]?", said):
         hit = _by_code(said, index)
     else:
@@ -155,18 +169,20 @@ def resolve(name: str, code: str | None, index, said: str | None = None) -> tupl
         # transcripts also yield fragments like "668 中 陽 光" (6668) or "130 連 南亞" (1303).
         # "0050正2" is a nickname, not a code.
         m = re.match(r"(\d{4,6}[A-Z]?)\s", said)
-        hit = m and _by_code(m.group(1), index, pad=False)
-    if hit:  # a misheard number ("5000" for 0050) falls through to the name
-        return hit[0], "code"
+        said_code = m.group(1) if m else ""
+        hit = m and _by_code(said_code, index, pad=False)
     # TV-style names: "精材（精綵）" -> try each part
     parts = [_norm(p) for p in re.split(r"[（）()/／、]", name or "") if p.strip()]
-    for p in parts:
-        for c, n, aliases in index:
-            if p == _norm(n):
-                return c, "exact"
-        for c, n, aliases in index:
-            if p in map(_norm, aliases):
-                return c, "alias"
+    by_name = _by_name(parts, index)
+    # A number that only matched after zero-padding ("668" -> 00668) loses to a name whose code
+    # contains those digits: it was a fragment of 6668 (中揚光). Otherwise the spoken number still
+    # beats the fund name the LLM filled in ("850" with 國泰台灣領袖50 stays 00850).
+    padded_fragment = (hit and by_name and by_name[0] != hit[0] and hit[0].split(".")[0] != said_code
+                       and said_code in by_name[0].split(".")[0])
+    if hit and not padded_fragment:
+        return hit[0], "code"  # a misheard number ("5000" for 0050) falls through to the name
+    if by_name:
+        return by_name
     hit = code and _by_code(code, index)
     if hit:
         c, n = hit
@@ -235,6 +251,10 @@ def snapshot(code: str, as_of: date, engine) -> dict | None:
     px["date"] = pd.to_datetime(px["date"])
     close = pd.to_numeric(px["close"], errors="coerce") * \
         market_repo.front_adjust_multipliers(sid, px["date"], engine=engine).to_numpy()
+    valid = close.notna().to_numpy()  # a NULL close would journal NaN, which breaks every later json.loads
+    close, px = close[valid], px[valid]
+    if px.empty:
+        return None
     last = float(close.iloc[-1])
 
     def pct(a, b):
