@@ -843,6 +843,7 @@ def crawl_tpex_chip(kind, date):
 _TDCC_OPENDATA = "https://opendata.tdcc.com.tw/getOD.ashx?id=1-5"
 _TDCC_QUERY = "https://www.tdcc.com.tw/portal/zh/smWeb/qryStock"
 _TDCC_TOKEN = re.compile(r'name="SYNCHRONIZER_TOKEN" value="([^"]+)"')
+_TDCC_DATA_DATE = re.compile(r"資料日期：(\d+年\d+月\d+日)")
 _TDCC_HEADER = ["資料日期", "證券代號", "持股分級", "人數", "股數", "占集保庫存數比例%"]
 # 開放資料的 16 是「差異數調整」、17 是合計。個股查詢頁的序號在有差異數調整的週同樣是
 # 16／17，沒有那列的週合計卻排在 16——所以合計一律靠「合計」字樣認，統一存 17。
@@ -883,10 +884,10 @@ def fetch_tdcc_latest():
 
 def parse_tdcc_query(html, stock_id, want):
     """TDCC 個股查詢結果頁 -> DataFrame；頁面資料日期 ≠ ``want``（YYYYMMDD）或查無資料回 None。"""
-    m = re.search(r"資料日期：(\d+年\d+月\d+日)", html)
+    m = _TDCC_DATA_DATE.search(html)
     if not m:
-        # 帶作廢 token 的請求就長這樣（有新 token、沒有資料日期）：拿不到參照就拒收，但要留痕
-        print(f"**WARN: 集保查詢 {stock_id} {want} 回應沒有資料日期(token 可能作廢),拒收")
+        # 「查無此資料」頁：代號打錯、該週查無資料、帶作廢 token 三種回的頁面逐字相同（實測），
+        # 這裡分不出原因，拒收但不印；由 crawl_tdcc_history 彙總成一條 WARN。
         return None
     got = _roc_to_date(m.group(1))
     if got.strftime("%Y%m%d") != want:
@@ -931,7 +932,7 @@ def crawl_tdcc_history(stock_id, weeks=None, delay=1.0):
     if not token or not dates:
         print("**WARN: 集保查詢頁格式不符(找不到 token 或日期選單)")
         return None
-    frames = []
+    frames, no_data = [], []
     for i, want in enumerate(dates[:weeks]):
         if i and delay:
             time.sleep(delay)            # 成功或失敗都照節奏打，不因失敗連發
@@ -962,6 +963,9 @@ def crawl_tdcc_history(stock_id, weeks=None, delay=1.0):
         nxt = _TDCC_TOKEN.search(r.text)
         if nxt:
             token = nxt
+        if not _TDCC_DATA_DATE.search(r.text):
+            no_data.append(want)
+            continue
         try:
             df = parse_tdcc_query(r.text, stock_id, want)
         except (ValueError, KeyError) as exc:
@@ -970,4 +974,9 @@ def crawl_tdcc_history(stock_id, weeks=None, delay=1.0):
             continue
         if df is not None:
             frames.append(df)
+    if no_data:
+        # 查無此資料的頁面分不出是代號錯、該週無資料還是 token 作廢：整串只印一條，附週次範圍
+        cause = "代號是否正確" if not frames else "該週是否無資料或 token 作廢"
+        print(f"**WARN: 集保查詢 {stock_id} 有 {len(no_data)} 週回「查無此資料」"
+              f"({no_data[-1]}~{no_data[0]}),拒收;請確認{cause}")
     return pd.concat(frames, ignore_index=True) if frames else None

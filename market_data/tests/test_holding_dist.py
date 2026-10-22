@@ -106,7 +106,6 @@ def test_history_keeps_rotating_token_after_a_week_fails_to_parse(monkeypatch):
     assert df is not None and df.date.unique().tolist() == [pd.Timestamp(2026, 9, 11)]
 
 
-
 class _TdccSession:
     """模擬 TDCC：token 每次請求（含逾時但已送達的）後輪換，只有最新的有效；GET 查詢頁給最新 token。"""
 
@@ -137,11 +136,12 @@ class _TdccSession:
 
 
 class _FakeResp:
-    def __init__(self, text):
-        self.text = text
+    def __init__(self, text, error=None):
+        self.text, self.error = text, error
 
     def raise_for_status(self):
-        pass
+        if self.error:
+            raise self.error
 
 
 def test_history_refreshes_token_after_a_timed_out_week(monkeypatch, capsys):
@@ -164,11 +164,89 @@ def test_history_does_not_refetch_token_when_every_week_succeeds(monkeypatch):
     assert sorted(df.date.unique().tolist()) == [pd.Timestamp(2026, 9, 11), pd.Timestamp(2026, 9, 18)]
 
 
-def test_query_page_without_data_date_warns(capsys):
-    """作廢 token 的回應沒有「資料日期」：拒收之外要印 WARN，不能讓整週靜默消失。"""
-    assert sources.parse_tdcc_query('<input name="SYNCHRONIZER_TOKEN" value="T9" />', "3324",
-                                    "20260911") is None
-    assert "**WARN: 集保查詢 3324 20260911 回應沒有資料日期" in capsys.readouterr().out
+# 實測 2026-10-23：代號 9999（不存在）與帶作廢 token 的 3324，回的頁面除了 token 與回填的
+# 表單值之外逐字相同——「資料日期：」後面是空的，表格只有一列「查無此資料」。
+_NO_DATA_PAGE = """<input type="hidden" name="SYNCHRONIZER_TOKEN" value="T9" id="SYNCHRONIZER_TOKEN" />
+<span class="font" style="font-size: 0.813em;">資料日期：</span>
+<table class="table"><thead><tr><th>序</th><th>持股/單位數分級</th><th>人數</th>
+<th>股數/單位數</th><th>占集保庫存數比例 (%)</th></tr></thead>
+<tr><td align="center" colspan="5"><span class="font" style="color: #ff0000;">查無此資料</span></td></tr>
+</table>"""
+
+
+def test_query_page_without_data_date_is_rejected_quietly(capsys):
+    """單頁分不出原因（代號錯／無資料／token 作廢），拒收但不逐週印，由呼叫端彙總。"""
+    assert sources.parse_tdcc_query(_NO_DATA_PAGE, "9999", "20260911") is None
+    assert capsys.readouterr().out == ""
+
+
+class _NoDataSession(_TdccSession):
+    """查無此資料：每週都回「查無此資料」頁（代號打錯的實際長相）。"""
+
+    def __init__(self, weeks, data_weeks=()):
+        super().__init__(weeks)
+        self.data_weeks = set(data_weeks)
+
+    def post(self, url, data, timeout):
+        self.n += 1
+        want = data["scaDate"]
+        head = f'<input name="SYNCHRONIZER_TOKEN" value="{self._token()}" />'
+        return _FakeResp(head + (self.pages[want] if want in self.data_weeks else _NO_DATA_PAGE))
+
+
+def test_history_summarises_no_data_weeks_in_one_warning(monkeypatch, capsys):
+    """代號打錯時 51 週都回查無此資料：只印一條 WARN（附週數與範圍），不歸因成 token 作廢。"""
+    weeks = ["20260925", "20260918", "20260911"]
+    monkeypatch.setattr(sources.requests, "Session", lambda: _NoDataSession(weeks))
+    assert sources.crawl_tdcc_history("9999", delay=0) is None
+    warns = [ln for ln in capsys.readouterr().out.splitlines() if "**WARN" in ln]
+    assert warns == ["**WARN: 集保查詢 9999 有 3 週回「查無此資料」(20260911~20260925),拒收;"
+                     "請確認代號是否正確"], warns
+
+
+def test_history_no_data_weeks_beside_good_weeks_still_warn(monkeypatch, capsys):
+    """反向：部分週次有資料時，缺的那幾週仍要留痕，且不能把整檔說成代號錯。"""
+    weeks = ["20260918", "20260911"]
+    monkeypatch.setattr(sources.requests, "Session",
+                        lambda: _NoDataSession(weeks, data_weeks={"20260911"}))
+    df = sources.crawl_tdcc_history("3324", delay=0)
+    assert df is not None and df.date.unique().tolist() == [pd.Timestamp(2026, 9, 11)]
+    out = capsys.readouterr().out
+    assert "**WARN: 集保查詢 3324 有 1 週回「查無此資料」(20260918~20260918)" in out
+    assert "token 作廢" in out and "代號是否正確" not in out
+
+
+class _RefetchFails(_TdccSession):
+    """第一週逾時，之後重新 GET 查詢頁也失敗（``mode``）：raise／HTTP 錯誤／頁面沒有 token。"""
+
+    def __init__(self, weeks, mode):
+        super().__init__(weeks, timeout_on={weeks[0]})
+        self.mode = mode
+
+    def get(self, url, timeout):
+        if self.gets == 0:
+            return super().get(url, timeout)
+        self.gets += 1
+        if self.mode == "raise":
+            raise sources.requests.ConnectionError("refused")
+        if self.mode == "http":
+            # 5xx 頁面上剛好也有 token：raise_for_status 必須擋下，不能拿這個 token 繼續送
+            return _FakeResp(f'<input name="SYNCHRONIZER_TOKEN" value="{self._token()}" />',
+                             error=sources.requests.HTTPError("503 Server Error"))
+        return _FakeResp("<html>maintenance</html>")
+
+
+@pytest.mark.parametrize("mode, reason", [
+    ("raise", "refused"), ("http", "503 Server Error"), ("no_token", "查詢頁找不到 token")])
+def test_history_warns_when_token_refetch_fails(monkeypatch, capsys, mode, reason):
+    ses = _RefetchFails(["20260918", "20260911"], mode)
+    monkeypatch.setattr(sources.requests, "Session", lambda: ses)
+    sources.crawl_tdcc_history("3324", delay=0)
+    assert ses.gets == 2
+    assert ses.sent == ["T0", "T0"], "重取失敗就沿用舊 token（不能換成錯誤頁上的 token）"
+    out = capsys.readouterr().out
+    assert f"**WARN: 集保查詢 3324 無法重取 token ({reason}),後續週次可能全數拒收" in out
+
 
 def test_crawl_holding_dist_fetch_failure_writes_nothing(pg_conn, monkeypatch):
     monkeypatch.setattr(crawl.sources, "fetch_tdcc_latest", lambda: None)
