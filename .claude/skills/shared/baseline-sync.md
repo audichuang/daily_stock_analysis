@@ -12,7 +12,7 @@ git pull --ff-only
 ```
 
 - 工作区干净、且当前分支有可 fast-forward 的上游时，才接受 `git pull --ff-only` 的结果。
-- 存在本地改动、冲突状态、未跟踪风险文件、无上游分支或无法 fast-forward 时，保持本地状态不动，改用已 fetch 的 `origin/main`、PR head 或 GitHub diff 做分析。这种情况下不执行 `stash`、`reset` 或强制切分支。
+- 存在本地改动、冲突状态、未跟踪风险文件、无上游分支或无法 fast-forward 时，保持本地状态不动，改用已 fetch 的 `origin/develop`、PR head 或 GitHub diff 做分析。这种情况下不执行 `stash`、`reset` 或强制切分支。
 - 在产出文档中记录三项：本地 HEAD、实际使用的远端基线、未更新本地工作树的原因（如有）。
 - PR 创建 / 更新前，先说明当前分支与目标基线的差异；需要 rebase 或 merge 时请用户确认。
 

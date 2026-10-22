@@ -6,9 +6,11 @@
 
 本機 launchd `com.audichuang.dsa` 已 `disable`，不要重新啟用：兩邊會同時登入 Shioaji，且共用同一個應用庫（`STORAGE_DATABASE_URL` 的 `dsa` schema）。
 
-## 發版流程（手動，push `main` 不會自動部署）
+## 發版流程（手動，打 tag 不會自動部署）
 
-1. push `main` → `.github/workflows/ghcr-main.yml` 產出映像，job summary 印出 `git-<sha7>@sha256:<digest>`。
+日常改動合進 `develop`；`main` 只代表已發版。
+
+1. `develop` fast-forward 進 `main` 並 push，在 `main` 上打 annotated tag `rel-YYYY.MM.DD`（同日第二版加 `.2`）並 push tag → `.github/workflows/ghcr-main.yml` 產出映像，job summary 印出 `git-<sha7>@sha256:<digest>`，另有同名 tag。
 2. 照 ops repo `nas-ops`（本機 clone 在 `~/Project/nas-ops`）裡 `hosts/<NAS>/dsa/manifest.md`，把 compose 的 `image:` 釘到新 digest、鎖 SHA，經 Komodo 部署。
 3. 記入同目錄的 `deployments.md`。
 

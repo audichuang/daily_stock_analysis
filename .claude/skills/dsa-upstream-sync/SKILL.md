@@ -5,7 +5,7 @@ description: 無人值守地把上游 ZhuLinsen/daily_stock_analysis 的 main me
 
 # dsa 上游同步（無人值守）
 
-這是排程，沒有人會回答問題，不要停下來問。**產出是一條待審分支，不是合進 main**——merge 進 `main` 與 push `main` 永遠留給使用者（repo `AGENTS.md` §1、§9）。repo 規則以 `$REPO/AGENTS.md` 為準，先讀 §1、§6、§10。
+這是排程，沒有人會回答問題，不要停下來問。**產出是一條待審分支，不是合進 develop**——merge 進 `develop` 與 push `develop` 永遠留給使用者（repo `AGENTS.md` §1、§9）。repo 規則以 `$REPO/AGENTS.md` 為準，先讀 §1、§6、§10。
 
 固定值：
 
@@ -21,13 +21,13 @@ bash $REPO/.claude/skills/dsa-upstream-sync/scripts/precheck.sh
 
 非 0 就直接結束、不推 Bark（手動 run 不會跑 precheck，所以這裡要自己再跑一次）。通過且 `~/.config/dsa-upstream-sync/force-once` 存在時，刪掉它（只作用一次）。
 
-記下：`BASE=$(git -C $REPO merge-base origin/main upstream/main)`、`HEAD_UP=$(git -C $REPO rev-parse upstream/main)`、`N=$(git -C $REPO rev-list --count origin/main..upstream/main)`、`DATE=$(TZ=Asia/Taipei date +%F)`。分支名 `chore/upstream-sync-$DATE`；origin 已有同名分支就加 `-2`、`-3`。
+記下：`BASE=$(git -C $REPO merge-base origin/develop upstream/main)`、`HEAD_UP=$(git -C $REPO rev-parse upstream/main)`、`N=$(git -C $REPO rev-list --count origin/develop..upstream/main)`、`DATE=$(TZ=Asia/Taipei date +%F)`。分支名 `chore/upstream-sync-$DATE`；origin 已有同名分支就加 `-2`、`-3`。
 
 ## 1. 開 worktree、merge
 
 ```bash
 WT=~/.cache/dsa-upstream-sync/$DATE
-git -C $REPO worktree add -b chore/upstream-sync-$DATE $WT origin/main
+git -C $REPO worktree add -b chore/upstream-sync-$DATE $WT origin/develop
 cd $WT && git merge upstream/main --no-ff --no-edit -m "chore: merge upstream main (${BASE:0:8}..${HEAD_UP:0:8})"
 ```
 
@@ -71,11 +71,11 @@ python -m pytest -m "not network" <受影響測試檔> -q
 有測試紅：先照 `tests/AGENTS.md` 排除假紅（單檔重跑），再在乾淨對照組跑同一個檔：
 
 ```bash
-git -C $REPO worktree add --detach ~/.cache/dsa-upstream-sync/$DATE-fork origin/main
+git -C $REPO worktree add --detach ~/.cache/dsa-upstream-sync/$DATE-fork origin/develop
 git -C $REPO worktree add --detach ~/.cache/dsa-upstream-sync/$DATE-up upstream/main
 ```
 
-只有「merge 後紅、`origin/main` 綠」才算本輪引入的回歸；`upstream/main` 也紅代表是上游自己的問題。兩邊的輸出都摘進同步紀錄。新依賴沒裝造成的 ImportError 記為「需安裝依賴」，不算回歸。
+只有「merge 後紅、`origin/develop` 綠」才算本輪引入的回歸；`upstream/main` 也紅代表是上游自己的問題。兩邊的輸出都摘進同步紀錄。新依賴沒裝造成的 ImportError 記為「需安裝依賴」，不算回歸。
 
 ## 4. 同步紀錄、CHANGELOG
 
@@ -113,7 +113,7 @@ sys.exit(0 if resp.get("code") == 200 else 1)
 PY
 ```
 
-body：分支名、吸收幾個 commit（重點改動一兩句）、衝突數與 ⚠ 需人工確認的項目、靜默降級排查結果、驗證結果、新依賴，最後一行「審過後在 main：`git fetch origin chore/upstream-sync-$DATE && git merge --ff-only FETCH_HEAD`（main 已前進就先把 main merge 進分支）」。origin 的 fetch refspec 只抓 `main`，所以不能寫 `origin/chore/...`，那個 ref 不存在。只有印出 `code: 200` 才算成功。
+body：分支名、吸收幾個 commit（重點改動一兩句）、衝突數與 ⚠ 需人工確認的項目、靜默降級排查結果、驗證結果、新依賴，最後一行「審過後在 develop：`git fetch origin chore/upstream-sync-$DATE && git merge --ff-only FETCH_HEAD`（develop 已前進就先把 develop merge 進分支）」。origin 的 fetch refspec 只抓 `main` 與 `develop`，所以不能寫 `origin/chore/...`，那個 ref 不存在。只有印出 `code: 200` 才算成功。
 
 任何一步失敗也推，title「上游同步失敗 YYYY-MM-DD」，body 寫哪一步、什麼錯。失敗時若分支已推，在 body 寫明，讓使用者決定刪或續。
 
@@ -123,7 +123,7 @@ body：分支名、吸收幾個 commit（重點改動一兩句）、衝突數與
 
 ## 禁止
 
-- 不改、不 push `main`；不 force push；不刪遠端分支
+- 不改、不 push `develop`／`main`；不 force push；不刪遠端分支
 - 不安裝或升級依賴；不跑全量離線測試
 - 不執行 `scripts/` 底下沒有 argparse 的腳本（§10，`--help` 也不行）
 - 不碰 `.env`、`journal/`、`.memory/`

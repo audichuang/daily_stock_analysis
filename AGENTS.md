@@ -5,7 +5,7 @@
 ## 1. 硬规则
 
 - 目录边界：后端 `src/`、`data_provider/`、`api/`、`bot/`；Web `apps/dsa-web/`；桌面端 `apps/dsa-desktop/`；部署与流水线 `scripts/`、`.github/workflows/`、`docker/`。台股波段的每日决策日志在 `journal/`（append-only、**进版控**，见 `journal/README.md`）；`data/`、`reports/`、`logs/` 是 gitignore 的运行期目录，长期记录不要放那里。
-- 未经明确确认，不执行 `git commit`、`git tag`、`git push`。唯一例外：平日 07:30 的盘前判读排程只 commit＋push `journal/` 那两个 jsonl（让预测当天进版控）。
+- 未经明确确认，不执行 `git commit`、`git tag`、`git push`。唯一例外：平日 07:30 的盘前判读排程只 commit＋push `journal/` 那两个 jsonl 到 `develop`（让预测当天进版控）。
 - 同样要先确认：安装或升级依赖（`uv pip install`、`npm install <pkg>`、改 `requirements.txt`）、删除文件或目录、改 infra 与部署配置、跑全量离线测试。读代码、跑 §6 快速门槛、生成分析文档可自主。
 - commit message 用英文，不加 `Co-Authored-By`。
 - 不写死密钥、账号、路径、模型名、端口或环境差异逻辑。
@@ -43,7 +43,7 @@
 
 ### CI
 
-- 阻断 job 只由 push 触发：push `main`、push `feat/**`、`fix/**`、`chore/**`、`docs/**`、`refactor/**`、`test/**` 分支时都会跑（`ci.yml` 的 `on:`）；不监听 `pull_request`，PR 上的 checks 就是工作分支那次 push run，分支前缀不在清单内的 PR 不会有 CI。当前有哪些 job、哪些阻断，以 `gh run list --branch <分支>`／`gh pr checks` 为准。`pr-review`（纯手动）不跟着 push 跑；`00-daily-analysis`、`network-smoke`、`stale` 已用 `gh workflow disable` 停用（每日报告在本机跑，Actions 上那份没配 secrets；省私有 repo 额度），要用时 `gh workflow enable`。
+- 阻断 job 只由 push 触发：push `develop`、push `feat/**`、`fix/**`、`chore/**`、`docs/**`、`refactor/**`、`test/**` 分支时都会跑（`ci.yml` 的 `on:`）；不监听 `pull_request`，PR 上的 checks 就是工作分支那次 push run，分支前缀不在清单内的 PR 不会有 CI。当前有哪些 job、哪些阻断，以 `gh run list --branch <分支>`／`gh pr checks` 为准。`pr-review`（纯手动）不跟着 push 跑；`00-daily-analysis`、`network-smoke`、`stale` 已用 `gh workflow disable` 停用（每日报告在本机跑，Actions 上那份没配 secrets；省私有 repo 额度），要用时 `gh workflow enable`。
 - **本机 `ci_gate.sh` 与 CI 不等价**：相依安装只有 CI 装得起来才算数；CI 的 backend-tests 跑 **Python 3.11**、本机 venv 是 3.12，3.12-only 语法（PEP 701 同引号巢状 f-string）本机永远剖析得过。`tests/test_python_version_compat.py` 挡这个，但本机借不到 CI 版本时它是 **skip 不是 fail**。
 
 ### 按改动面
@@ -68,16 +68,17 @@
 
 ## 9. 合入与发布
 
-- 本 fork 不开 PR：推工作分支 → `gh run list --branch <分支>`／`gh run watch` 确认 CI 绿 → 经使用者确认后 fast-forward 合进 `main` 并 push；交付说明引用那次 run。
-- 自动 tag 保持 opt-in：只有 commit title 含 `#patch`、`#minor`、`#major` 才触发。手动打 tag 必须用 annotated tag。
-- push `main` 不会部署到 NAS；发版流程见 `docs/nas-deploy.md`。
+- 分支模型：工作分支 → PR 合进 **`develop`**（GitHub 预设分支，日常整合）；`main` 只代表已发版。推工作分支后用 `gh run list --branch <分支>`／`gh run watch` 确认 CI 绿，经使用者确认再合进 `develop`；交付说明引用那次 run。
+- 发版：`develop` fast-forward 进 `main`、push `main`，再在 `main` 上打 annotated tag `rel-YYYY.MM.DD`（同日第二版加 `.2`）并 push tag，`ghcr-main.yml` 依 tag 建映像。不用 `v*.*.*`——那是上游的版号，会触发上游的 release／Docker Hub／桌面端 workflow。
+- 上游的 `auto-tag.yml`（commit title 含 `#patch` 等就打 `v*` tag）已用 `gh workflow disable` 停用：上游 commit 经 `develop` 进 `main` 时会误触发。
+- 打 tag 只建映像，不会部署到 NAS；部署流程见 `docs/nas-deploy.md`。
 
 ## 10. 本 fork 专属约定
 
 > 个人 fork（`audichuang/daily_stock_analysis`），**不并回上游**。以下是从代码推断不出、任何任务都可能踩到的约定：
 
 - **环境用 `uv`**：`uv venv --python 3.12`、`uv pip install -r requirements.txt`，执行一律 `uv run python …`。
-- **origin 的 fetch refspec 在本机 checkout 只抓 `main`**，`origin/<其他分支>` 一律不存在：看远端分支用 `git ls-remote` 或 `git fetch origin <分支>`（`FETCH_HEAD`）。同步上游走 skill `dsa-upstream-sync`（merge，不 rebase）。
+- **origin 的 fetch refspec 在本机 checkout 只抓 `main` 与 `develop`**，`origin/<其他分支>` 一律不存在：看远端分支用 `git ls-remote` 或 `git fetch origin <分支>`（`FETCH_HEAD`）。同步上游走 skill `dsa-upstream-sync`（merge，不 rebase）。
 - **台股代码必须带 `.TW`（上市）／`.TWO`（上柜）后缀**（裸 `2330` 不进台股语义），代码是 4~6 位数字加至多一个大写字母（`00631L`、`2887A`）。这条格式**没有单一来源**，前后端、报告渲染、索引种子脚本各有一份正则；语意真源是 `src/services/market_symbol_utils.py`，改一处要全扫（踩过：`00631L` 搜不到、海报印成 `00631`）。
 - **TWSE/TPEx 官方端点会停止更新却照样回 200**（实测冻结 79 天）：消费端一律比对回应自带的日期，拿不到参照就拒收。
 - **`.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` 必须保持 `false`**，否则运行时会从上游拉索引、覆盖本地台股／美股增量（`.env.example` 是上游的 `true`，勿照抄）。台股索引用 `make refresh-tw` 重建。

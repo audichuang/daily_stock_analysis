@@ -109,9 +109,9 @@ The Docker image startup entrypoint automatically creates and fixes ownership fo
 
 If you explicitly set `--user` / Compose `user:`, or use read-only mounts, rootless Docker, NFS, or another environment that prevents the container from fixing ownership, make sure the actual runtime user can write to these directories.
 
-### 7. This Fork's Prebuilt Image (GHCR main)
+### 7. This Fork's Prebuilt Image (GHCR release)
 
-In this fork, `.github/workflows/ghcr-main.yml` builds a `linux/amd64` image on every push to `main` (or on manual dispatch) and pushes it to `ghcr.io/audichuang/daily_stock_analysis` with the tags `git-<7-char commit sha>` and `main`. Pin deployments to the `…:git-<sha>@sha256:<digest>` reference printed in the job summary instead of following the `main` tag. The image carries the Web/API plus the `market_data/` package needed to read the Taiwan `market` schema; it does not include the Claude Code CLI, so scheduled LLM reports keep running elsewhere.
+In this fork, `.github/workflows/ghcr-main.yml` builds a `linux/amd64` image when a `rel-*` release tag is pushed (or on manual dispatch) and pushes it to `ghcr.io/audichuang/daily_stock_analysis` with the tags `git-<7-char commit sha>` and the tag name. Pin deployments to the `…:git-<sha>@sha256:<digest>` reference printed in the job summary. The image carries the Web/API plus the `market_data/` package needed to read the Taiwan `market` schema; it does not include the Claude Code CLI, so scheduled LLM reports keep running elsewhere.
 
 ---
 

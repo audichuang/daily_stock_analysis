@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [chore] 改用 develop／main 分流：日常 PR 合進 `develop`（CI 只跑 `develop` 與工作分支），發版時 `develop` fast-forward 進 `main` 再打 `rel-YYYY.MM.DD` tag，`ghcr-main.yml` 改由 `rel-*` tag 觸發建映像；盤前判讀的 journal 與上游同步改對 `develop`；`auto-tag.yml` 停用
 - [文件] 新增 `docs/tw-analysis-overview.md`：台股每日分析的數據來源、護欄順序、開關建議與 2026-10-22 診斷／回測已回答的問題
 - [chore] CI 不再監聽 `pull_request`，只由 push 觸發（PR checks 就是工作分支的 push run），同一改動不再跑兩次；GitHub 上的每日分析、network-smoke、stale 排程以 `gh workflow disable` 停用
 - [修復] 美股名稱改用 NASDAQ Trader 官方清單（股票索引）的英文名，查無顯示代號；不再用上游寫死的簡體中文名（英伟达、微软）。已存進歷史的舊名在讀取時一併換成官方名，資料庫不改

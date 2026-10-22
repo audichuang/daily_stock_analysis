@@ -4,9 +4,10 @@ on:
   # fork 增量：只用 push 觸發。工作分支的 push run 會掛在 PR head commit 上當 checks，
   # 再加 pull_request 等於同一個改動跑兩次（concurrency group 不同、互不取消），
   # 私有 repo 會白燒 Actions 額度。paths-filter 在 push 事件下，工作分支比對
-  # default branch、main 比對上一個 commit。
+  # default branch（develop）、develop 比對上一個 commit。main 只收發版 fast-forward，
+  # 同一個 SHA 已在 develop 驗過，不重跑。
   push:
-    branches: [main, 'feat/**', 'fix/**', 'chore/**', 'docs/**', 'refactor/**', 'test/**']
+    branches: [develop, 'feat/**', 'fix/**', 'chore/**', 'docs/**', 'refactor/**', 'test/**']
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
