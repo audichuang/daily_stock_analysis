@@ -1008,3 +1008,75 @@ def test_data_capability_api_paths_return_valid_contract() -> None:
     assert capabilities_response.status_code == 200
     assert overview_response.json() == overview_payload
     assert capabilities_response.json() == overview_payload
+
+
+class _ShioajiLikeFetcher:
+    name = "ShioajiFetcher"
+    priority = 50
+
+    def is_available_for_request(self, capability: str = "") -> bool:
+        # 與 ShioajiFetcher 相同：只服務 realtime_quote，空字串回 False。
+        return capability == "realtime_quote"
+
+
+def _tw_overview(*, shioaji_configured: bool, database_url: str = "postgresql://u@h/db"):
+    """台股路由：MarketDB 日 K 優先、Shioaji 即時報價優先（本 fork 的實際路由）。"""
+    manager = _FetcherManager([
+        _Fetcher("MarketDBFetcher", 1, available=True),
+        _Fetcher("EfinanceFetcher", 0, available=True),
+        _Fetcher("YfinanceFetcher", 4, available=True),
+        _ShioajiLikeFetcher(),
+    ])
+    env = {
+        "SHIOAJI_API_KEY": "k" if shioaji_configured else "",
+        "SHIOAJI_SECRET_KEY": "s" if shioaji_configured else "",
+        "DATABASE_URL": database_url,
+    }
+    with patch.dict("os.environ", env):
+        return DataCapabilityService(config=_config(), fetcher_manager=manager).get_overview()
+
+
+def test_tw_realtime_route_lists_shioaji_before_yfinance_when_configured() -> None:
+    overview = _tw_overview(shioaji_configured=True)
+    priorities = {item["scenario"]: item for item in overview["priorities"]}
+    tw_quote = _dataset(overview, "quote.realtime")["coverage"]["markets"]["tw"]
+
+    assert priorities["tw.realtime"]["providers"] == ["shioaji", "yfinance"]
+    assert priorities["tw.realtime"]["warnings"] == []
+    # 探針要帶 realtime_quote，否則只服務即時報價的 Shioaji 會被誤判 unavailable。
+    assert _provider(overview, "shioaji")["status"] == "ok"
+    assert tw_quote["source"] == "shioaji"
+    assert tw_quote["status"] == "ok"
+
+
+def test_tw_realtime_route_falls_back_to_yfinance_without_shioaji_keys() -> None:
+    overview = _tw_overview(shioaji_configured=False)
+    priorities = {item["scenario"]: item for item in overview["priorities"]}
+
+    assert priorities["tw.realtime"]["providers"] == ["yfinance"]
+    assert _provider(overview, "shioaji")["status"] == "unconfigured"
+    assert _dataset(overview, "quote.realtime")["coverage"]["markets"]["tw"]["source"] == "yfinance"
+
+
+def test_marketdb_is_known_tw_daily_source_only() -> None:
+    overview = _tw_overview(shioaji_configured=True)
+    priorities = {item["scenario"]: item for item in overview["priorities"]}
+    daily = _dataset(overview, "kline.daily")["coverage"]["markets"]
+
+    assert "marketdb" in priorities["daily.generic"]["providers"]
+    assert not any("unknown_source" in w for w in priorities["daily.generic"]["warnings"])
+    assert daily["tw"]["source"] == "marketdb"
+    assert _provider(overview, "marketdb")["markets"] == ["tw"]
+    for market in ("cn", "hk", "jp", "kr"):
+        assert "marketdb" not in (daily[market].get("fallback_from") or [])
+        assert daily[market]["source"] != "marketdb"
+        assert not any("marketdb" in w for w in daily[market]["warnings"])
+
+
+def test_marketdb_without_database_url_is_unconfigured() -> None:
+    overview = _tw_overview(shioaji_configured=False, database_url="")
+
+    assert _provider(overview, "marketdb")["status"] == "unconfigured"
+    tw_daily = _dataset(overview, "kline.daily")["coverage"]["markets"]["tw"]
+    assert tw_daily["source"] == "yfinance"
+    assert tw_daily["fallback_from"] == ["marketdb"]

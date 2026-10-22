@@ -245,6 +245,36 @@ describe('MarketReviewReportView', () => {
     expect(screen.queryByText(/0\.440797/)).not.toBeInTheDocument();
   });
 
+  it('shows traditional Chinese US index names for zh-TW reports only', () => {
+    const payload: MarketReviewPayload = {
+      version: 1,
+      kind: 'market_review',
+      region: 'us',
+      language: 'zh-TW',
+      title: '大盤複盤',
+      rootTitle: '大盤複盤',
+      indices: [
+        { code: 'SPX', name: '标普500指数', current: 7712.57, changePct: 0.3 },
+        { code: '^IXIC', name: '纳斯达克综合指数', current: 26424.82, changePct: 0.5 },
+        { code: 'TWII', name: '加權指數', current: 23000, changePct: 0.1 },
+      ],
+    };
+
+    const { rerender } = render(
+      <MarketReviewReportView payload={payload} content="# 大盤複盤" reportLanguage="zh-TW" />,
+    );
+
+    expect(screen.getByText('標普500指數')).toBeInTheDocument();
+    expect(screen.getByText('那斯達克綜合指數')).toBeInTheDocument();
+    expect(screen.getByText('加權指數')).toBeInTheDocument();
+    expect(screen.queryByText('标普500指数')).not.toBeInTheDocument();
+
+    rerender(<MarketReviewReportView payload={payload} content="# 大盘复盘" reportLanguage="zh" />);
+
+    expect(screen.getByText('标普500指数')).toBeInTheDocument();
+    expect(screen.queryByText('標普500指數')).not.toBeInTheDocument();
+  });
+
   it('formats string-backed market numbers and hides missing high/low zeros', () => {
     const payload = {
       version: 1,

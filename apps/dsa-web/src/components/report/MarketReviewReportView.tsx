@@ -176,6 +176,33 @@ const hasRankingRows = (rankings?: MarketReviewPayload['sectors']): boolean =>
 const hasStructuredMarketData = (payload?: MarketReviewPayload | null): boolean =>
   Boolean(payload?.breadth || payload?.indices?.length || hasRankingRows(payload?.sectors) || hasRankingRows(payload?.concepts));
 
+// 美股指數名在後端（上游 us_index_mapping.py）是簡體且被測試釘住；繁中報告在顯示層依代碼換成繁體，
+// 歷史紀錄也一併生效。只認代碼，不去改寫名稱字串。
+const US_INDEX_ZH_TW_NAMES: Record<string, string> = {
+  SPX: '標普500指數',
+  GSPC: '標普500指數',
+  DJI: '道瓊工業指數',
+  DJIA: '道瓊工業指數',
+  IXIC: '那斯達克綜合指數',
+  NASDAQ: '那斯達克綜合指數',
+  NDX: '那斯達克100指數',
+  VIX: 'VIX恐慌指數',
+  RUT: '羅素2000指數',
+  SOX: '費城半導體指數',
+};
+
+const getLocalizedIndexName = (
+  index: { code?: string | null; name?: string | null },
+  language: ReportLanguage,
+): string => {
+  const name = index.name || index.code || '';
+  if (language !== 'zh-TW') {
+    return name;
+  }
+  const code = (index.code || '').trim().toUpperCase().replace(/^\^/, '');
+  return US_INDEX_ZH_TW_NAMES[code] ?? name;
+};
+
 const getStructuredMarketData = (payload?: MarketReviewPayload | null): StructuredMarketData[] => {
   if (!payload) {
     return [];
@@ -421,8 +448,14 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
     [marketReviewPayload, structuredContent],
   );
   const structuredMarketData = useMemo(
-    () => getStructuredMarketData(marketReviewPayload),
-    [marketReviewPayload],
+    () => getStructuredMarketData(marketReviewPayload).map((marketData) => ({
+      ...marketData,
+      indices: marketData.indices.map((index) => ({
+        ...index,
+        name: getLocalizedIndexName(index, normalizedReportLanguage),
+      })),
+    })),
+    [marketReviewPayload, normalizedReportLanguage],
   );
   const showStructuredMarketTitles = Boolean(marketReviewPayload?.markets);
   const canOpenRunFlow = recordId !== undefined && onOpenRunFlow;

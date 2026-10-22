@@ -197,6 +197,10 @@ class PortfolioAccountSnapshot(BaseModel):
     fee_total: float
     tax_total: float
     fx_stale: bool
+    fx_missing: bool = Field(
+        False, description="True when some FX pair had no cached rate and amounts were not converted (1:1 fallback)"
+    )
+    fx_missing_pairs: List[str] = Field(default_factory=list, description="Missing FX pairs as FROM/TO")
     data_quality: str = "ok"
     limitations: List[str] = Field(default_factory=list)
     positions: List[PortfolioPositionItem] = Field(default_factory=list)
@@ -215,6 +219,10 @@ class PortfolioSnapshotResponse(BaseModel):
     fee_total: float
     tax_total: float
     fx_stale: bool
+    fx_missing: bool = Field(
+        False, description="True when some FX pair had no cached rate and amounts were not converted (1:1 fallback)"
+    )
+    fx_missing_pairs: List[str] = Field(default_factory=list, description="Missing FX pairs as FROM/TO")
     data_quality: str = "ok"
     limitations: List[str] = Field(default_factory=list)
     accounts: List[PortfolioAccountSnapshot] = Field(default_factory=list)

@@ -387,6 +387,32 @@ describe('PortfolioPage FX refresh', () => {
     expect(screen.getByRole('button', { name: '刷新汇率' })).toBeInTheDocument();
   });
 
+  it('hides converted totals when an FX pair is missing instead of showing 1:1 sums', async () => {
+    getSnapshot.mockResolvedValueOnce({
+      ...makeSnapshot({ fxStale: true }),
+      fxMissing: true,
+      fxMissingPairs: ['USD/CNY'],
+    });
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    expect(await screen.findByText('缺汇率')).toBeInTheDocument();
+    expect(screen.getByText(/缺少 USD\/CNY 汇率/)).toBeInTheDocument();
+    expect(screen.queryByText(/3,000/)).not.toBeInTheDocument();
+  });
+
+  it('keeps showing converted totals when no FX pair is missing', async () => {
+    getSnapshot.mockResolvedValueOnce({ ...makeSnapshot({ fxStale: true }), fxMissing: false, fxMissingPairs: [] });
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    expect(await screen.findByText(/3,000/)).toBeInTheDocument();
+    expect(screen.getByText('过期')).toBeInTheDocument();
+    expect(screen.queryByText('缺汇率')).not.toBeInTheDocument();
+  });
+
   it('renders portfolio risk flags and exposure dashboard from snapshot and risk data', async () => {
     getSnapshot.mockResolvedValueOnce(makeSnapshot({
       fxStale: false,

@@ -210,17 +210,25 @@ def _compact_portfolio_snapshot(snapshot: dict, include_positions: bool = False,
             account_payload["top_positions"] = positions[:top_n]
         compact_accounts.append(account_payload)
 
+    # 缺匯率時跨幣別合計是把外幣 1:1 當成彙總幣別加總的假數字，不交給模型。
+    fx_missing = bool(snapshot.get("fx_missing"))
+
+    def _aggregate(key: str):
+        return None if fx_missing else snapshot.get(key)
+
     return {
         "as_of": snapshot.get("as_of"),
         "cost_method": snapshot.get("cost_method"),
         "currency": snapshot.get("currency"),
         "account_count": snapshot.get("account_count"),
-        "total_cash": snapshot.get("total_cash"),
-        "total_market_value": snapshot.get("total_market_value"),
-        "total_equity": snapshot.get("total_equity"),
-        "realized_pnl": snapshot.get("realized_pnl"),
-        "unrealized_pnl": snapshot.get("unrealized_pnl"),
+        "total_cash": _aggregate("total_cash"),
+        "total_market_value": _aggregate("total_market_value"),
+        "total_equity": _aggregate("total_equity"),
+        "realized_pnl": _aggregate("realized_pnl"),
+        "unrealized_pnl": _aggregate("unrealized_pnl"),
         "fx_stale": snapshot.get("fx_stale"),
+        "fx_missing": fx_missing,
+        "fx_missing_pairs": list(snapshot.get("fx_missing_pairs") or []),
         "accounts": compact_accounts,
     }
 

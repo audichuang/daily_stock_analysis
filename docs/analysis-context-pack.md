@@ -300,6 +300,8 @@ Agent 工具还会独立调用 `get_realtime_quote`、`get_daily_history`、`get
 
 回测服务在 `src/services/backtest_service.py` 和 `src/repositories/backtest_repo.py` 中消费历史分析记录与日线数据。现有 `parse_analysis_date_from_snapshot()` 依赖 `analysis_history.context_snapshot.enhanced_context.date` 解析分析日期。
 
+`enhanced_context.date` 走即時覆蓋時標的是**報價所屬場次**，不是掛鐘日（本 fork 2026-10 起）：交易日開盤前（台北 07:30 的台股、紐約盤前的美股）的分析，報價是上一場收盤，日期因此是 T-1 而不是 T。回測與 skill outcome（`skill_opinion_outcome_service._resolve_analysis_date`）都以它為起點：起始 K 棒是 T-1 收盤、前向窗口從 T 這一場算起。在此之前的盤前紀錄標的是 T（起點 T 收盤、少算 T 這一場），兩段紀錄的命中率與報酬口徑不能直接比較；盤中與盤後的分析不受影響。
+
 P0 必须把 `enhanced_context.date` 标为兼容边界。后续 pack 可以新增更清晰的日期字段，但不能无迁移地删除或改名当前历史快照中的日期位置。
 
 ### 历史

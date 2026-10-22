@@ -76,6 +76,9 @@ export interface PortfolioAccountSnapshot {
   feeTotal: number;
   taxTotal: number;
   fxStale: boolean;
+  /** Some FX pair had no cached rate; converted totals are 1:1 placeholders and must not be shown. */
+  fxMissing?: boolean;
+  fxMissingPairs?: string[];
   dataQuality?: 'ok' | 'partial' | string;
   limitations?: string[];
   positions: PortfolioPositionItem[];
@@ -94,6 +97,9 @@ export interface PortfolioSnapshotResponse {
   feeTotal: number;
   taxTotal: number;
   fxStale: boolean;
+  /** Some FX pair had no cached rate; converted totals are 1:1 placeholders and must not be shown. */
+  fxMissing?: boolean;
+  fxMissingPairs?: string[];
   dataQuality?: 'ok' | 'partial' | string;
   limitations?: string[];
   accounts: PortfolioAccountSnapshot[];

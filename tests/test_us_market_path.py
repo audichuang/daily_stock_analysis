@@ -589,6 +589,8 @@ class TestNoPhantomBarBeforeTheSessionOpens:
         兩個必須做對、否則測試會因為**別的理由**通過（mutation 檢查抓到過）：
         quote 一定要有真的 `price`（否則函式在最前面就 return），且最後一根 K 棒的
         日期必須**早於** market_today（否則走的是「更新最後一列」而不是 append）。
+        DB 最新列是上一場 8/10（週一）：盤前 DB 缺上一場時報價會被補成那一場的 K 棒
+        （見 test_pipeline_realtime_indicators 的 TestPremarketGuard），這裡驗的是「不補今天」。
         """
         from datetime import date, datetime
         from zoneinfo import ZoneInfo
@@ -598,12 +600,13 @@ class TestNoPhantomBarBeforeTheSessionOpens:
         from src.core.pipeline import StockAnalysisPipeline
 
         df = pd.DataFrame({
-            "date": [date(2026, 8, 6), date(2026, 8, 7)],
+            "date": [date(2026, 8, 7), date(2026, 8, 10)],
             "open": [310.0, 311.0], "high": [312.0, 313.0],
             "low": [309.0, 310.0], "close": [311.0, 312.0], "volume": [1e6, 1.1e6],
         })
         quote = MagicMock(price=312.0, open_price=312.0, high=312.0, low=312.0,
-                          volume=0, amount=None, change_pct=0.0, pre_close=312.0)
+                          volume=0, amount=None, change_pct=0.0, pre_close=312.0,
+                          provider_timestamp=None)
 
         stub = MagicMock(spec=StockAnalysisPipeline)
         stub.config = MagicMock(enable_realtime_technical_indicators=True)

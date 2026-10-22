@@ -1507,6 +1507,8 @@ const PortfolioPage: React.FC = () => {
       decisionActionLabels,
     ) ?? text.alert
   );
+  // 有幣別對查無匯率時，後端的 total_* 是把外幣金額 1:1 當成彙總幣別加總的假數字。
+  const fxMissing = snapshot?.fxMissing === true;
   const snapshotQualityMessage = snapshot?.dataQuality === 'partial' && snapshot.limitations?.length
     ? snapshot.limitations
       .map((limitation) => formatPortfolioLimitation(limitation, language))
@@ -1700,15 +1702,15 @@ const PortfolioPage: React.FC = () => {
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
         <Card variant="gradient" padding="md">
           <p className="text-xs text-secondary">{text.totalEquity}</p>
-          <p className="mt-1 text-xl font-semibold text-foreground">{formatMoney(snapshot?.totalEquity, snapshot?.currency || 'CNY', getIntlLocale(language))}</p>
+          <p className="mt-1 text-xl font-semibold text-foreground">{fxMissing ? text.fxMissingTotal : formatMoney(snapshot?.totalEquity, snapshot?.currency || 'CNY', getIntlLocale(language))}</p>
         </Card>
         <Card variant="gradient" padding="md">
           <p className="text-xs text-secondary">{text.totalMarketValue}</p>
-          <p className="mt-1 text-xl font-semibold text-foreground">{formatMoney(snapshot?.totalMarketValue, snapshot?.currency || 'CNY', getIntlLocale(language))}</p>
+          <p className="mt-1 text-xl font-semibold text-foreground">{fxMissing ? text.fxMissingTotal : formatMoney(snapshot?.totalMarketValue, snapshot?.currency || 'CNY', getIntlLocale(language))}</p>
         </Card>
         <Card variant="gradient" padding="md">
           <p className="text-xs text-secondary">{text.totalCash}</p>
-          <p className="mt-1 text-xl font-semibold text-foreground">{formatMoney(snapshot?.totalCash, snapshot?.currency || 'CNY', getIntlLocale(language))}</p>
+          <p className="mt-1 text-xl font-semibold text-foreground">{fxMissing ? text.fxMissingTotal : formatMoney(snapshot?.totalCash, snapshot?.currency || 'CNY', getIntlLocale(language))}</p>
         </Card>
         <Card variant="gradient" padding="md">
           <div className="flex items-start justify-between gap-3">
@@ -1722,11 +1724,18 @@ const PortfolioPage: React.FC = () => {
               {fxRefreshing ? text.refreshing : text.refreshFx}
             </button>
           </div>
-          <div className="mt-2">{snapshot?.fxStale === true
+          <div className="mt-2">{fxMissing
+            ? <Badge variant="warning">{text.fxMissing}</Badge>
+            : snapshot?.fxStale === true
             ? <Badge variant="warning">{text.stale}</Badge>
             : snapshot?.fxStale === false
               ? <Badge variant="success">{text.latest}</Badge>
               : <Badge variant="default">{riskDashboardText.unavailable}</Badge>}</div>
+          {fxMissing ? (
+            <p className="mt-2 text-xs text-secondary">
+              {text.fxMissingHint.replace('{pairs}', (snapshot?.fxMissingPairs || []).join(', '))}
+            </p>
+          ) : null}
           {fxRefreshFeedback ? (
             <InlineAlert
               variant={getFxRefreshFeedbackVariant(fxRefreshFeedback.tone)}
