@@ -80,7 +80,7 @@ class TestFetchYfTickerData(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_single_row_history_has_no_change_reading(self):
-        """仅一行数据时没有前收：涨跌留 NaN（没有读数不是 0），现价照常给"""
+        """僅一行數據時沒有前收：漲跌留 NaN（沒有讀數不是 0），現價照常給"""
         mock_hist = _make_mock_hist(close=5000.0, prev_close=5000.0)
         mock_hist = mock_hist.iloc[[-1]]
         mock_yf = _make_mock_yf(mock_hist)
@@ -94,7 +94,7 @@ class TestFetchYfTickerData(unittest.TestCase):
 
     @staticmethod
     def _hist_with_blank_latest_row() -> pd.DataFrame:
-        """2026-10-22 纽约盘前的形状：最新一列 OHLC 全空、只有成交量。"""
+        """2026-10-22 紐約盤前的形狀：最新一列 OHLC 全空、只有成交量。"""
         nan = float('nan')
         return pd.DataFrame({
             'Close': [7690.73, 7712.57, nan],
@@ -111,14 +111,14 @@ class TestFetchYfTickerData(unittest.TestCase):
         result = self.fetcher._fetch_yf_ticker_data(mock_yf, '^GSPC', '标普500指数', 'SPX')
 
         self.assertEqual(result['current'], 7750.0)
-        # 基准是前一个有价格的交易日，不是空列本身
+        # 基準是前一個有價格的交易日，不是空列本身
         self.assertEqual(result['prev_close'], 7712.57)
         self.assertAlmostEqual(result['change'], 7750.0 - 7712.57)
         self.assertTrue(math.isfinite(result['change_pct']))
 
     @staticmethod
     def _hist_with_blank_middle_row(volume: float) -> pd.DataFrame:
-        """2026-10-23 实测 ^GSPC：10-21 整场 OHLC 为空（keepna=True 才看得到这列）。"""
+        """2026-10-23 實測 ^GSPC：10-21 整場 OHLC 為空（keepna=True 才看得到這列）。"""
         nan = float('nan')
         return pd.DataFrame({
             'Close': [7690.73, 7712.57, nan, 7663.43],
@@ -129,26 +129,26 @@ class TestFetchYfTickerData(unittest.TestCase):
         }, index=pd.DatetimeIndex(['2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22']))
 
     def test_requests_history_with_blank_rows_kept(self):
-        # keepna=False（预设）会把整场空白的 10-21 丢掉，缺一场就看不出来。
+        # keepna=False（預設）會把整場空白的 10-21 丟掉，缺一場就看不出來。
         mock_yf = _make_mock_yf(_make_mock_hist(close=5100.0, prev_close=5000.0))
         self.fetcher._fetch_yf_ticker_data(mock_yf, '^GSPC', '标普500指数', 'SPX')
         self.assertTrue(mock_yf.Ticker.return_value.history.call_args.kwargs.get('keepna'))
 
     def test_blank_previous_session_leaves_change_empty_instead_of_using_two_sessions_back(self):
-        for volume in (0.0, 1.2e9):  # 整列空白／只剩成交量（1102 的形状）都一样
+        for volume in (0.0, 1.2e9):  # 整列空白／只剩成交量（1102 的形狀）都一樣
             with self.subTest(volume=volume):
                 mock_yf = _make_mock_yf(self._hist_with_blank_middle_row(volume))
                 with self.assertLogs('data_provider.yfinance_fetcher', level='WARNING'):
                     result = self.fetcher._fetch_yf_ticker_data(mock_yf, '^GSPC', '标普500指数', 'SPX')
                 self.assertEqual(result['current'], 7663.43)
-                # 不得拿 10-20 的 7712.57 当「昨收」报出 -0.64%
+                # 不得拿 10-20 的 7712.57 當「昨收」報出 -0.64%
                 self.assertTrue(math.isnan(result['prev_close']))
                 self.assertTrue(math.isnan(result['change_pct']))
                 self.assertTrue(math.isnan(result['amplitude']))
 
     def test_trailing_all_blank_row_is_not_taken_as_latest_session(self):
-        # 反向：结尾整列空白（keepna=False 本来就丢的形状）不当最新列、也不去 fast_info 补价，
-        # 最新列仍是最后一场有价格的，涨跌对它紧邻的前一场；但要留警告。
+        # 反向：結尾整列空白（keepna=False 本來就丟的形狀）不當最新列、也不去 fast_info 補價，
+        # 最新列仍是最後一場有價格的，漲跌對它緊鄰的前一場；但要留警告。
         hist = self._hist_with_blank_middle_row(0.0).iloc[[0, 1, 2]]
         mock_yf = _make_mock_yf(hist)
         mock_yf.Ticker.return_value.fast_info.last_price = 9999.0
@@ -156,10 +156,10 @@ class TestFetchYfTickerData(unittest.TestCase):
             result = self.fetcher._fetch_yf_ticker_data(mock_yf, '^GSPC', '标普500指数', 'SPX')
         self.assertEqual(result['current'], 7712.57)
         self.assertEqual(result['prev_close'], 7690.73)
-        self.assertTrue(any('整列为空' in line for line in logs.output))
+        self.assertTrue(any('整列為空' in line for line in logs.output))
 
     def test_blank_latest_close_never_substitutes_previous_session_close(self):
-        """反向：fast_info 也拿不到时宁可没有读数，不得把上一场收盘当成这一场。"""
+        """反向：fast_info 也拿不到時寧可沒有讀數，不得把上一場收盤當成這一場。"""
         mock_yf = _make_mock_yf(self._hist_with_blank_latest_row())
         type(mock_yf.Ticker.return_value).fast_info = property(
             lambda _self: (_ for _ in ()).throw(RuntimeError('no quote'))
