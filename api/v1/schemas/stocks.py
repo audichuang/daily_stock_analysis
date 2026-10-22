@@ -9,7 +9,7 @@
 2. 定义历史 K 线数据模型
 """
 
-from typing import Dict, Literal, Optional, List
+from typing import Any, Dict, Literal, Optional, List
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -85,6 +85,20 @@ class StockQuoteBatchResponse(BaseModel):
     """批次行情响应"""
 
     items: List[StockQuoteBatchItem] = Field(default_factory=list, description="按请求代码顺序的行情结果")
+
+
+class DossierSummaryItem(BaseModel):
+    """看板四維度摘要單項：summary 為 None 表示該代碼不是台股或資料讀取失敗"""
+
+    stock_code: str = Field(..., description="股票代碼")
+    summary: Optional[Dict[str, Any]] = Field(None, description="結構、SMC 價位（絕對價格）、近一日變化、已快取的解讀色調")
+    error: Optional[str] = Field(None, description="unsupported_market／no_data／unavailable，成功時為 None")
+
+
+class DossierSummaryResponse(BaseModel):
+    """看板四維度摘要批次響應"""
+
+    items: List[DossierSummaryItem] = Field(default_factory=list, description="按請求代碼順序")
 
 
 class TrendPoint(BaseModel):

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 盯盤看板（`/board`）新增台股「結構」欄與展開列的四維度摘要：最新 SMC 結構、最近支撐／壓力（距離用即時價計算）、最近一個交易日的變化提示（結構轉向、月營收新公告、外資 5 日與 20 日轉向、千張大戶週變化），並可直接開啟四維度報告；後端新增 `GET /api/v1/stocks/dossier-summary`（批次、不查分點、不呼叫 LLM）。說明見 `docs/realtime-board.md`
 - [新功能] 台股個股四維度分析報告：Web 首頁個股詳情新增「四維度分析」按鈕（只限 `.TW`／`.TWO`），開啟抽屜顯示四維度結論卡、月營收、季度三率、分點、法人、估值、SMC 價位階梯與追蹤重點；後端新增 `GET /api/v1/stocks/{code}/dossier`（HTML，`narrative=true` 由設定的 LLM 撰寫解讀，依資料基準日快取在 `data/dossier_narratives/`，失敗時退回只列數字；解讀中核對不到資料包的數字會標示且不快取；資料包各段獨立容錯；LLM 用量另記為「四維度分析」）；本機另有 `scripts/tw_stock_report.py` 與 skill `/stock-report`。資料包實作移到 `src/services/tw_stock_dossier.py`（`scripts/` 改為 CLI 包裝），上櫃股改從股票索引補公司名稱
 - [chore] CI 移除 `desktop-futu-package-macos`：本 fork 只發 NAS 的 Docker 映像、不發桌面版，這支 job 只在替上游驗證，又是 Linux 10 倍計價的 macOS runner；打包需要時手動觸發 `desktop-release.yml`
 - [chore] CI 提速：backend-tests 改用 uv 安裝相依（失敗退回 pip）、每個 shard 上傳 junit，新增 `scripts/ci_durations_from_junit.py` 重算過期的 `.github/ci-test-durations.json`（舊表停在 08-09、缺 107 個測試檔，三個 shard 實測 148／296／409 秒嚴重失衡）

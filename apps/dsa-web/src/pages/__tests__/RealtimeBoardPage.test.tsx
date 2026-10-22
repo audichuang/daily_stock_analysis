@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import RealtimeBoardPage from '../RealtimeBoardPage';
 
-const { getWatchlist, getSnapshot, listHoldings, getQuotes, getIndices } = vi.hoisted(() => ({
+const { getWatchlist, getSnapshot, listHoldings, getQuotes, getIndices, getDossierSummaries } = vi.hoisted(() => ({
+  getDossierSummaries: vi.fn(),
   getWatchlist: vi.fn(),
   getSnapshot: vi.fn(),
   listHoldings: vi.fn(),
@@ -15,7 +16,9 @@ const { getWatchlist, getSnapshot, listHoldings, getQuotes, getIndices } = vi.ho
 vi.mock('../../api/systemConfig', () => ({ systemConfigApi: { getWatchlist } }));
 vi.mock('../../api/portfolio', () => ({ portfolioApi: { getSnapshot } }));
 vi.mock('../../api/funds', () => ({ fundsApi: { listHoldings } }));
-vi.mock('../../api/stocks', () => ({ stocksApi: { getQuotes, getIndices, getTrend: vi.fn().mockResolvedValue([]) } }));
+vi.mock('../../api/stocks', () => ({
+  stocksApi: { getQuotes, getIndices, getDossierSummaries, getTrend: vi.fn().mockResolvedValue([]) },
+}));
 vi.mock('recharts', () => {
   const Stub = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
   return { LineChart: Stub, Line: Stub, ResponsiveContainer: Stub, Tooltip: Stub, XAxis: Stub, YAxis: Stub };
@@ -62,6 +65,7 @@ describe('RealtimeBoardPage scope', () => {
       totals: [], navError: null,
     });
     getIndices.mockResolvedValue([]);
+    getDossierSummaries.mockResolvedValue([]);
     getQuotes.mockImplementation((codes: string[]) =>
       Promise.resolve(codes.map((c) => quote(c, c === '2330.TW' ? 1000 : c === '2887.TW' ? 40 : 200))),
     );
@@ -101,5 +105,24 @@ describe('RealtimeBoardPage scope', () => {
     expect(await screen.findByText('安聯台灣科技基金')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Watchlist' }));
     await waitFor(() => expect(screen.queryByText('安聯台灣科技基金')).not.toBeInTheDocument());
+  });
+
+  it('asks the dossier summary only for TW codes and shows the structure column', async () => {
+    getDossierSummaries.mockImplementation((codes: string[]) =>
+      Promise.resolve(codes.map((c) => ({
+        stockCode: c,
+        summary: c === '2330.TW'
+          ? { asOf: '2026-10-21', close: 990, structure: { kind: 'BOS', bias: 'bull', date: '2026-10-05', level: 950 },
+              levels: [{ label: 'OB', low: 940, high: 960, kind: 'ob', bias: 'bull' }], changes: [], verdicts: null }
+          : null,
+      }))),
+    );
+    renderPage();
+    await waitFor(() => expect(getDossierSummaries).toHaveBeenCalled());
+    expect(getDossierSummaries.mock.calls.flat(2)).not.toContain('NVDA');
+    const row = (await screen.findAllByRole('row')).find((r) => r.textContent?.startsWith('2330.TW'))!;
+    await waitFor(() => expect(row.textContent).toContain('▲ BOS'));
+    // 距離用即時價 1000 算：960 / 1000 − 1
+    expect(row.textContent).toContain('-4.0%');
   });
 });

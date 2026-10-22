@@ -1,4 +1,5 @@
 import apiClient from './index';
+import { toCamelCase } from './utils';
 
 export type ExtractItem = {
   code?: string | null;
@@ -190,6 +191,13 @@ export const stocksApi = {
     }));
   },
 
+  /** 看板用台股四維度摘要（不查分點、不呼叫 LLM）；非台股或失敗的單檔回 summary=null。 */
+  async getDossierSummaries(codes: string[]): Promise<DossierSummaryItem[]> {
+    if (codes.length === 0) return [];
+    const response = await apiClient.get('/api/v1/stocks/dossier-summary', { params: { codes: codes.join(',') } });
+    return toCamelCase<{ items?: DossierSummaryItem[] }>(response.data).items ?? [];
+  },
+
   /** 台股四維度分析報告（伺服器渲染的完整 HTML 文件）。narrative=true 會等 LLM 解讀，約 20~60 秒。 */
   async getDossierHtml(code: string, options: { narrative?: boolean; theme?: 'light' | 'dark' } = {}): Promise<string> {
     const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/dossier`, {
@@ -211,3 +219,22 @@ export const stocksApi = {
 
 export type TrendRange = 'day' | 'month' | 'year';
 export type TrendPoint = { t: string; price: number };
+
+export type DossierBias = 'bull' | 'bear' | null;
+export type DossierLevel = {
+  label: string;
+  low: number;
+  high: number;
+  kind: 'bsl' | 'ssl' | 'ob' | 'fvg' | 'ote';
+  bias: DossierBias;
+};
+export type DossierTone = 'pos' | 'neg' | 'neu' | 'watch';
+export type DossierSummary = {
+  asOf: string;
+  close: number | null;
+  structure: { kind: string; bias: 'bull' | 'bear'; date: string; level: number } | null;
+  levels: DossierLevel[];
+  changes: Array<{ kind: string; tone: DossierTone; text: string }>;
+  verdicts: Record<string, { badge?: string | null; tone?: DossierTone | null }> | null;
+};
+export type DossierSummaryItem = { stockCode: string; summary: DossierSummary | null; error?: string | null };

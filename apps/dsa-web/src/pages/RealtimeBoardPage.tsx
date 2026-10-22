@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
   stocksApi,
+  type DossierSummary,
   type MarketIndex,
   type StockQuote,
   type StockQuoteBatchItem,
@@ -22,8 +23,11 @@ import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatSignedPct } from '../utils/portfolioFormat';
 import { formatDateTime } from '../utils/format';
 import { cn } from '../utils/cn';
+import { isTwStockCode } from '../utils/stockCode';
+import { BoardDossierCell, BoardDossierPanel } from '../components/board/BoardDossier';
 
 const POLL_INTERVAL_MS = 30_000;
+const DOSSIER_CHUNK = 50; // 與後端 MAX_BATCH_CODES 一致
 const SCOPE_STORAGE_KEY = 'dsa.board.scope';
 
 type Scope = 'all' | 'watch' | 'holdings';
@@ -204,6 +208,7 @@ const RealtimeBoardPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ParsedApiError | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [dossier, setDossier] = useState<Record<string, DossierSummary | null>>({});
   const [indices, setIndices] = useState<MarketIndex[]>([]);
   const codesRef = useRef<string[]>([]);
   const refreshSeqRef = useRef(0); // 世代守卫：丢弃旧轮询迟到的 chunk，避免覆盖更新的数据
@@ -291,6 +296,30 @@ const RealtimeBoardPage: React.FC = () => {
     codesRef.current = codes;
     refresh();
   }, [codes, refresh]);
+
+  // 四維度摘要只在清單改變時抓一次（日資料，不跟 30 秒報價輪詢）；只送台股、失敗不影響報價
+  useEffect(() => {
+    const tw = (codes ?? []).filter(isTwStockCode);
+    let active = true;
+    for (let i = 0; i < tw.length; i += DOSSIER_CHUNK) {
+      stocksApi
+        .getDossierSummaries(tw.slice(i, i + DOSSIER_CHUNK))
+        .then((items) => {
+          if (!active) return;
+          setDossier((prev) => {
+            const next = { ...prev };
+            for (const it of items) next[it.stockCode] = it.summary;
+            return next;
+          });
+        })
+        .catch(() => {
+          /* 摘要是輔助資料，失敗只是該欄顯示「—」 */
+        });
+    }
+    return () => {
+      active = false;
+    };
+  }, [codes]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -543,6 +572,7 @@ const RealtimeBoardPage: React.FC = () => {
                   <th className="px-3 py-2 text-right">{t('board.col.avg')}</th>
                   <th className="px-3 py-2 text-right">{t('board.col.volume')}</th>
                   <th className="px-3 py-2 text-right">{t('board.col.position')}</th>
+                  <th className="px-3 py-2">{t('board.col.dossier')}</th>
                   <th className="px-3 py-2">{t('board.col.status')}</th>
                   <th className="px-3 py-2">{t('board.asOf')}</th>
                   <th className="px-3 py-2" />
@@ -591,6 +621,9 @@ const RealtimeBoardPage: React.FC = () => {
                           {q?.volume != null ? q.volume.toLocaleString() : '—'}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums">{positionCell(code, q)}</td>
+                        <td className="px-3 py-2">
+                          <BoardDossierCell summary={dossier[code]} price={q?.currentPrice} />
+                        </td>
                         <td className="whitespace-nowrap px-3 py-2">{badge(item)}</td>
                         <td className="whitespace-nowrap px-3 py-2 text-xs text-secondary-text">{q?.asOf ? formatDateTime(q.asOf) : '—'}</td>
                         <td className="px-3 py-2">
@@ -609,7 +642,8 @@ const RealtimeBoardPage: React.FC = () => {
                       </tr>
                       {isOpen ? (
                         <tr className="border-b border-border/50 bg-base/40">
-                          <td colSpan={11}>
+                          <td colSpan={12}>
+                            <BoardDossierPanel code={code} name={q?.stockName} summary={dossier[code]} price={q?.currentPrice} />
                             {quoteDetail(q)}
                             <TrendChart code={code} />
                           </td>

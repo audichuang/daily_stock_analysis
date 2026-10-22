@@ -10,6 +10,7 @@
 3. GET /api/v1/stocks/{code}/quote 实时行情接口
 4. GET /api/v1/stocks/{code}/history 历史行情接口
 5. GET /api/v1/stocks/{code}/dossier 台股四維度分析報告（HTML）
+6. GET /api/v1/stocks/dossier-summary 看板用台股四維度摘要（批次）
 """
 
 import logging
@@ -22,6 +23,8 @@ from fastapi.responses import HTMLResponse
 from api.deps import get_system_config_service
 
 from api.v1.schemas.stocks import (
+    DossierSummaryItem,
+    DossierSummaryResponse,
     ExtractFromImageResponse,
     ExtractItem,
     KLineData,
@@ -509,6 +512,36 @@ def get_stock_quotes(
             status_code=500,
             detail={"error": "internal_error", "message": f"批量获取行情失败: {str(e)}"},
         )
+
+
+@router.get(
+    "/dossier-summary",
+    response_model=DossierSummaryResponse,
+    responses={
+        200: {"description": "批次摘要"},
+        400: {"description": "请求参数错误", "model": ErrorResponse},
+    },
+    summary="看板用台股四維度摘要",
+    description="逗號分隔代碼；非台股或讀取失敗的單檔回 summary=null＋error，整批仍 200。不查分點、不呼叫 LLM。",
+)
+def get_dossier_summaries(
+    codes: str = Query(..., description="逗號分隔股票代碼，如 2330.TW,3324.TWO"),
+) -> DossierSummaryResponse:
+    from src.services.market_symbol_utils import is_tw_suffix_symbol
+    from src.services.tw_stock_watch import summaries
+
+    raw = [c.strip() for c in codes.split(",") if c.strip()]
+    if not raw:
+        raise api_error(400, "empty_codes", "codes 不能为空")
+    if len(raw) > MAX_BATCH_CODES:      # 上限用原始輸入算，重複代碼繞不過
+        raise api_error(400, "too_many_codes", f"最多 {MAX_BATCH_CODES} 个代码")
+    parsed = list(dict.fromkeys(c.upper() for c in raw))
+    tw = [c for c in parsed if is_tw_suffix_symbol(c)]
+    done = {code: (summary, error) for code, summary, error in summaries(tw)}
+    return DossierSummaryResponse(items=[
+        DossierSummaryItem(stock_code=c, summary=done[c][0], error=done[c][1]) if c in done
+        else DossierSummaryItem(stock_code=c, error="unsupported_market")
+        for c in parsed])
 
 
 @router.get(
