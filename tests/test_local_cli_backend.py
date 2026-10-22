@@ -52,7 +52,8 @@ def _registered_sensitive_titles_needing_title_match() -> list[str]:
 
 def _config(**overrides):
     defaults = {
-        "generation_backend_timeout_seconds": 5,
+        # fork：不是被測性質的上限；忙的 CI runner 上 5 秒啟動 mock CLI 會假紅。測逾時的測試自己覆寫成 1 秒
+        "generation_backend_timeout_seconds": 30,
         "generation_backend_max_output_bytes": 1024 * 1024,
         "generation_backend_max_concurrency": 1,
         "local_cli_backend_max_concurrency": 1,
