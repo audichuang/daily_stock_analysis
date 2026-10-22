@@ -114,10 +114,11 @@ def parse_answer(text: str) -> list[dict] | None:
         return None
     if not isinstance(items, list):
         return None
-    picks = [i for i in items if isinstance(i, dict) and i.get("name")]
-    if items and not picks:
-        return None  # "[1]", "[{}]", nameless objects: not a clean "no picks", retry next run
-    return picks
+    if items and not any(isinstance(i, dict) for i in items):
+        return None  # "[1]" / "[1, 2]" is a citation marker, not an answer: retry next run
+    # Objects without a name ({"name": null, "reason": "本集未點名個股"}) are the model saying "no picks";
+    # retrying would only drop the episode silently once it ages out of --since.
+    return [i for i in items if isinstance(i, dict) and i.get("name")]
 
 
 def load_index(path=INDEX) -> list[tuple[str, str, list[str]]]:

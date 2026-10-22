@@ -247,3 +247,54 @@ def test_one_analysis_keeps_one_arm_across_midnight():
     assert "為加分項" in text                  # user prompt 也是加權版
     for line in _OLD_USER_LINES:
         assert line not in text
+
+
+def test_rerun_on_the_next_day_within_pin_window_regroups():
+    # 23:50 跑一次、00:10 同一檔再跑：要依新的一天重新分組，不能沿用 20 分鐘前釘住的組別
+    d1, d2 = dt.date(2026, 10, 22), dt.date(2026, 10, 23)
+    code = _flips(d1, d2)
+    analyzer = _analyzer(True)
+    analyzer._config_override.tw_ma_alignment_ab_ratio = 0.5
+    with patch("src.analyzer._taipei_today", return_value=d1):
+        analyzer._pin_tw_ma_arm(code, "zh-TW")
+        assert analyzer._tw_ma_weighted_active(code, "zh-TW") is True
+    with patch("src.analyzer._taipei_today", return_value=d2):
+        analyzer._pin_tw_ma_arm(code, "zh-TW")
+        assert analyzer._tw_ma_weighted_active(code, "zh-TW") is False
+
+
+def test_pins_survive_concurrent_workers():
+    # pipeline 的 worker 共用一個 analyzer：沒有鎖時迭代中被改會丟 RuntimeError／KeyError
+    import sys
+    import threading
+
+    analyzer = _analyzer(True)
+    analyzer._config_override.tw_ma_alignment_ab_ratio = 0.5
+    clock = [0.0]
+
+    def tick():
+        clock[0] += 120.0       # 讓 pins 裡一直有過期 key，清理路徑每次都會走到
+        return clock[0]
+
+    errors = []
+
+    def work(offset):
+        try:
+            for i in range(1500):
+                analyzer._pin_tw_ma_arm(f"{1000 + (i + offset) % 60:04d}.TW", "zh-TW")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(repr(exc))
+
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        with patch("src.analyzer.time.monotonic", side_effect=tick), \
+                patch("src.analyzer._taipei_today", return_value=dt.date(2026, 10, 23)):
+            threads = [threading.Thread(target=work, args=(k * 7,)) for k in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+    finally:
+        sys.setswitchinterval(old)
+    assert errors == []

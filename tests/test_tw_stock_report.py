@@ -286,6 +286,42 @@ def test_data_stamp_changes_with_every_cited_section(path):
     assert report.data_stamp(json.loads(json.dumps(base))) == report.data_stamp(base)
 
 
+def test_incomparable_coverage_does_not_flip_flop(tmp_path):
+    # 「分點有、合約負債失敗」與「分點逾時、各段都讀到」互相比不出誰完整：交替出現時不能每次都重寫
+    calls = []
+
+    def gen(prompt):
+        calls.append(prompt)
+        return json.dumps(GOOD)
+
+    a = {**EMPTY, "chips": {"branch": {"day": {"buy": []}}}, "errors": ["合約負債"]}
+    b = {**EMPTY, "chips": {"branch": {"day": None, "five_sessions": None}}, "errors": []}
+    for p in (b, a, b, a, b, a):
+        report.cached_narrative(p, gen, tmp_path)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["garbage", "raises"])
+def test_failed_rewrite_keeps_the_cached_narrative(tmp_path, failure):
+    p = {**EMPTY, "chips": {"branch": {"day": None, "five_sessions": None}}}
+    first = report.cached_narrative(p, lambda prompt: json.dumps(GOOD), tmp_path)
+
+    def bad(prompt):
+        if failure == "raises":
+            raise RuntimeError("LLM down")
+        return "not json"
+
+    later = {**p, "chips": {"branch": {"day": {"buy": []}}}}      # 分點晚到，想重寫但 LLM 失敗
+    assert report.cached_narrative(later, bad, tmp_path) == first
+    # 數字本身變了（data_stamp 不同）時舊解讀不能拿來頂：照常回報失敗
+    changed = {**later, "valuation": {"as_of": "2026-08-29"}}
+    if failure == "raises":
+        with pytest.raises(RuntimeError):
+            report.cached_narrative(changed, bad, tmp_path)
+    else:
+        assert report.cached_narrative(changed, bad, tmp_path) is None
+
+
 def test_written_unit_must_be_the_converted_value():
     # 「3,765,466 億」數字等於千元原值，但單位差了十萬倍
     p = {**EMPTY, "fundamentals": {"monthly_revenue": [{"revenue_k": 3765466}], "quarters": []}}

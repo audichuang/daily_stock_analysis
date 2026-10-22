@@ -468,8 +468,12 @@ def _coverage(p):
 
 
 def _more_complete(now, before):
+    """兩個維度都不比上次差、而且至少一個比較好才算。只看單一維度的話，「分點有、合約負債失敗」與
+    「分點逾時、各段都讀到」會互相判定對方較完整，交替出現時每次開都重付一次 LLM。"""
     before = before or {}
-    return (now["branch"] and not before.get("branch")) or set(now["errors"]) < set(before.get("errors") or [])
+    now_err, before_err = set(now["errors"]), set(before.get("errors") or [])
+    no_worse = (now["branch"] or not before.get("branch")) and now_err <= before_err
+    return no_worse and (now["branch"] != bool(before.get("branch")) or now_err != before_err)
 
 
 def cached_narrative(p, generate, cache_dir):
@@ -479,14 +483,25 @@ def cached_narrative(p, generate, cache_dir):
     避免每次開啟都重付一次 LLM。"""
     path = Path(cache_dir) / f"{p['stock_id']}_{p['as_of']}.json"
     with _narrative_locks.setdefault(str(path), threading.Lock()):
+        fallback = None
         if path.exists():
             nar = json.loads(path.read_text(encoding="utf-8"))
             fresh = not nar.get("unverified") or time.time() - path.stat().st_mtime < _UNVERIFIED_TTL_SECONDS
+            current = nar.get("check_version") == NARRATIVE_CHECK_VERSION and nar.get("data_stamp") == data_stamp(p)
             # 分點晚到、或上次有段讀取失敗而這次讀到了：舊解讀寫的是「無資料」，要重寫
-            if (nar.get("check_version") == NARRATIVE_CHECK_VERSION and fresh
-                    and nar.get("data_stamp") == data_stamp(p) and not _more_complete(_coverage(p), nar.get("coverage"))):
+            if current and fresh and not _more_complete(_coverage(p), nar.get("coverage")):
                 return nar
-        nar = parse_narrative(generate(narrative_prompt(p)))
+            # 數字沒變、只是想寫得更完整（或 6 小時到期）時，重寫失敗就沿用舊的，不讓頁面變成「解讀失敗」
+            fallback = nar if current else None
+        try:
+            nar = parse_narrative(generate(narrative_prompt(p)))
+        except Exception:
+            if fallback is None:
+                raise
+            logger.warning("[tw_stock_report] %s narrative rewrite failed; keeping the cached one", p["stock_id"])
+            return fallback
+        if not nar and fallback is not None:
+            return fallback
         if nar:
             bad = unverified_numbers(nar, p)
             if bad:

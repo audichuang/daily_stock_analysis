@@ -477,7 +477,7 @@ def test_negation_sharing_chars_with_buy_marker_is_not_softened(decision_type, a
     # 「不追高」否定的是追價、不是買進；提示詞本身就要求 LLM 寫「不追高」
     "逢低買進，不追高", "建議買進，但不追高", "買入，不追高",
     # 雙重否定與反問仍是要買
-    "沒有理由不加倉", "不得不加倉", "何不加倉",
+    "沒有理由不加倉", "不得不加倉", "何不加倉", "並無不加倉之理", "並非不建議買入",
 ])
 def test_non_negating_words_do_not_shield_buy(advice) -> None:
     # 「特別」的「別」、句中不貼著買進詞的「不」都不是否定：保守市況仍要降級
@@ -487,3 +487,17 @@ def test_non_negating_words_do_not_shield_buy(advice) -> None:
     adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
 
     assert "daily_market_context_buy_softened" in adjustments
+
+
+@pytest.mark.parametrize("advice", ["無論如何不加倉", "无论如何不建议买入", "不管如何不加倉", "為何不建議買入", "無論如何勿加倉"])
+def test_explicit_refusal_ending_in_he_is_not_rhetorical(advice) -> None:
+    # 「何不」才是反問；「無論如何不／為何不」是明確否定，賣出不能被改寫成觀望
+    result = _result()
+    result.decision_type = "sell"
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = "sell"
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert adjustments == []
+    assert result.operation_advice == advice

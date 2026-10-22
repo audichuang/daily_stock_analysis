@@ -92,7 +92,9 @@ _NEGATION_LOOKBACK = 16
 # 只認緊貼在買進詞前面的單字，避免「股價不貴，建議買入」這類句子被當成否定
 _NEGATION_IMMEDIATE_ZH = ("不", "勿", "没", "沒", "未")
 # 雙重否定與反問：「不得不加倉」「沒有理由不加倉」「何不加倉」是要買，緊貼的「不」不算否定
-_DOUBLE_NEGATION_ZH = ("不得", "没有理由", "沒有理由", "何", "无", "無", "非")
+_DOUBLE_NEGATION_ZH = ("不得", "没有理由", "沒有理由", "无", "無", "非")
+# 「何不加倉」是反問（要買），但「無論如何不／不管如何不／為何不」是明確否定，所以「何」只認不接在這些字後面時
+_RHETORICAL_HE_EXCLUDED = ("如", "為", "为", "論", "论", "管")
 _CHASE_MARKERS = ("追高", "chase")
 # 含「別／别」但不是否定的詞：「特別建議買入」不能因為「別」就逃過護欄
 _NEGATION_FALSE_COMPOUNDS_ZH = (
@@ -347,7 +349,9 @@ def _contains_negation_near_marker(context: str, negation_hints: tuple[str, ...]
         tail = context[sep_pos + 1 :]
     if zh:
         if tail.endswith(_NEGATION_IMMEDIATE_ZH):
-            return not tail[:-1].endswith(_DOUBLE_NEGATION_ZH)
+            head = tail[:-1]
+            rhetorical = head.endswith("何") and not head[:-1].endswith(_RHETORICAL_HE_EXCLUDED)
+            return not (head.endswith(_DOUBLE_NEGATION_ZH) or rhetorical)
         for compound in _NEGATION_FALSE_COMPOUNDS_ZH:
             tail = tail.replace(compound, "")
     return any(hint in tail for hint in negation_hints)

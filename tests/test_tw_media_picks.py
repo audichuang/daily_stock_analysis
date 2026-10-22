@@ -29,8 +29,9 @@ def test_parse_answer_garbage_is_none_but_empty_list_is_no_picks():
     # a bare citation marker is not "no picks": journaling it as no_picks would skip the episode forever
     assert mp.parse_answer("這集沒有列點名 [1]") is None
     assert mp.parse_answer("[1, 2]") is None
-    assert mp.parse_answer("[{}]") is None
-    assert mp.parse_answer('[{"code": "x"}, {"name": ""}]') is None
+    # nameless objects are the model's way of saying "no picks": record them, don't retry until they age out
+    assert mp.parse_answer('[{"name": null, "reason": "本集未點名個股"}]') == []
+    assert mp.parse_answer("[{}]") == []
 
 
 def test_resolve_order():
