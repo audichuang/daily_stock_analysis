@@ -65,13 +65,9 @@ def test_futu_sdk_is_collected_and_probed_in_desktop_backends() -> None:
     assert "scripts/build-backend-macos.sh" in filters
     assert "scripts/build-backend.ps1" in filters
 
-    # fork：Windows 打包 job 已移除（本 fork 不發 Windows 桌面版），只守 macOS 那一支
+    # fork：桌面打包 job 已全數移除（本 fork 只發 Docker 映像），打包改由 desktop-release 手動觸發
     assert "desktop-futu-package-windows" not in jobs
-    for job_name in ("desktop-futu-package-macos",):
-        job = jobs[job_name]
-        assert job["needs"] == ["changes", "ai-governance"]
-        assert "needs.changes.outputs.futu_packaging == 'true'" in job["if"]
-        assert "build-backend" in _job_run_text(job)
+    assert "desktop-futu-package-macos" not in jobs
 
     assert '"${PYTHON_BIN}" -c "import futu"' in macos_script
     assert 'cmd+=("--collect-all" "futu")' in macos_script

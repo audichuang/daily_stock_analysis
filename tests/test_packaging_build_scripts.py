@@ -218,8 +218,12 @@ def test_macos_unsigned_packaging_contract_is_explicit() -> None:
         desktop_script
     )
     assert "scripts/macos-signature-audit.sh" in workflow
-    assert "run: bash scripts/build-backend-macos.sh" in workflow
-    assert "run: bash scripts/build-desktop-macos.sh" in workflow
+    # fork：主 CI 已移除 macOS 打包 job，兩支腳本改由 desktop-release 經 build-all-macos.sh 執行
+    release = _read_text(REPO_ROOT / ".github" / "workflows" / "desktop-release.yml")
+    build_all = _read_text(REPO_ROOT / "scripts" / "build-all-macos.sh")
+    assert "run: bash scripts/build-all-macos.sh" in release
+    assert 'bash "${SCRIPT_DIR}/build-backend-macos.sh"' in build_all
+    assert 'bash "${SCRIPT_DIR}/build-desktop-macos.sh"' in build_all
 
 
 def _write_fake_macos_signature_tools(fake_bin: Path) -> None:
