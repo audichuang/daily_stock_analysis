@@ -1758,7 +1758,7 @@ class TestPersistUsageHelper(unittest.TestCase):
     def test_persist_usage_never_raises(self):
         # 用注入的失敗製造「資料庫不可用」，不要 reset singleton：reset 之後 persist_llm_usage
         # 會依設定新建一個 DatabaseManager，寫進 .env 指到的庫——conftest 守門之前那就是
-        # 正式 dsa.llm_usage（model='m'、total_tokens=5 的 42 列都是這支測試留下的）。
+        # 正式 dsa.llm_usage（曾累積 42 列 model='m'、total_tokens=5，都是這支測試留下的，已清除）。
         with patch(
             "src.storage.DatabaseManager.get_instance",
             side_effect=RuntimeError("db unavailable"),
