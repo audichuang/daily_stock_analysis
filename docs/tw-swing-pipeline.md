@@ -71,7 +71,7 @@ timeout 是位元組間隔、不是總時長，伺服器慢慢吐資料時單一
 
 - TWSE openapi 的處置／注意名單晚一天，不採用。
 - 上櫃兩份名單目前只在 `--include-otc-revenue` 時有實際作用：預設 breakout 會因上櫃 `yoy` 為 null 剔除上櫃，
-  momentum 要求 `inst_5 > 0` 也等於剔除上櫃（法人表只有上市）。
+  momentum 要求 `inst_5 > 0`：上櫃法人回補完成前，缺法人資料的上櫃股仍會被剔除（法人表自 2026-10 起含上櫃，資料自 2018-01-15）。
 - `screen_tw` 只在**未帶 `--date` 且基準日＝`health.expected_session()`** 時抓；歷史基準日、日曆不可用、
   DB 落後或超前預期場次（超前＝收盤後已跑 daily、但還沒到 `SESSION_COMPLETE_AFTER`）、`--no-risk-flags`／`--no-events`
   時一律不抓並在報告寫明原因。
@@ -241,7 +241,7 @@ strict 会让盘后跑的 `make morning` 每天先红一次。代价是**当天 
 現行 row-shaped 格式不含完整候選 manifest，因此不能從日誌本身證明當天是否漏判；回驗只評估
 實際留檔的決策，不把不存在或未留檔的候選補成 0。樣本不足或區間跨零時一律 inconclusive。
 只有帶校準 prior 的 `breakout` 可寫正式日誌；`momentum` 僅供探索。
-`backtest_screen` 因子比較裡 `momentum`（與 `inst`）的濾網含法人買超（`inst5 > 0`），而 `market.institutional` **只有上市、沒有上櫃**（同理 `margin`、`valuation`），所以它的宇宙比其他因子小一圈：「momentum 最差」這類排名**有一部分是宇宙差異**（上櫃股被靜默剔除），不是純因子效果；要比因子本身，須先對共同宇宙去重再比，見 `market_data/AGENTS.md`。
+`backtest_screen` 因子比較裡 `momentum`（與 `inst`）的濾網含法人買超（`inst5 > 0`），而 `market.institutional` 在 2026-10 之前**只有上市、沒有上櫃**（同理 `margin`、`valuation`；之後上櫃自 2018-01-15 起補進，回補前的結論仍適用），所以它的宇宙比其他因子小一圈：「momentum 最差」這類排名**有一部分是宇宙差異**（上櫃股被靜默剔除），不是純因子效果；要比因子本身，須先對共同宇宙去重再比，見 `market_data/AGENTS.md`。
 `confidence` 的語意鎖定為「進場後第 60 個交易日收盤淨報酬 ≥ +30%」的主觀機率，現行基準率為
 **20.2%**（2026-10 SW-F1 休市日復權修正後待重測，暫不可與新數字比較）。部位大小另看 `exp_upside`／`exp_downside`／`theme`；期望報酬是
 `upside × p + downside × (1 − p)`（加号，`exp_downside` 本身为负）。

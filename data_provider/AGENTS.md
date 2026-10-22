@@ -15,8 +15,9 @@
 | 大盤統計(家數/成交額/三大法人) | `TwseFetcher`;家數依序 `twtazu_od` → `MI_INDEX?type=MS`(含漲跌停)→ `tw_breadth.py` 由本地 DB 自算(無漲跌停) | 單位是**億元**;`TwseFetcher` 刻意退出日線路由。前兩者回應都自帶日期、須等於最新交易日才採用,被拒收才往下退 |
 | 估值/月營收 | 報價上有就用,缺了才補(台股一律問 `TwseFundamentalAdapter`(官方即時 API),因報價從不帶殖利率) | **不讀本地 DB**。月營收已進個股 prompt(「財報與股利」表一列,單月口徑、標明月份;含月增、累計年增,可為負);民國「資料年月」用 `twse_fetcher._roc_date` 轉(**call-time import**,adapter 頂層 import 會與 `base.py`→adapter、`twse_fetcher`→`.base` 成環,也別另寫第三份解析)。**估值每列帶 `as_of`(端點的民國 `Date`,同一個 `_roc_date`)**:整包最新 `as_of` 落後 `_today()` 超過 10 曆日(`_MAX_SNAPSHOT_AGE_DAYS`,涵蓋春節)或根本沒有可解析日期就**整包拒收**(端點會凍結卻照樣回 200);上市／上櫃各一份快取(`valuation_twse`／`valuation_tpex`),失敗或凍結不進快取、下次重試,TTL 後重抓失敗最多回退舊快取 24h。PE 是交易所的**近四季**口徑(prompt 標「本益比（近四季，<as_of>）」,不是「動態」),殖利率(`dividend_yield`)也併入並在 prompt 標「交易所公告」 |
 | 財報(營收/淨利/營運現金流) | `YfinanceFundamentalAdapter`(季報表 → 缺才退 `info` 的近四季聚合) | 逐欄退回,同一張表可混單季與近四季,所以 `financial_report.basis` 逐欄標 `quarter`／`ttm`／`ttm_derived`(淨利 = 近四季營收×淨利率)／`quarter_derived`(單季營收×近四季淨利率,僅估算),prompt 說明欄印口徑。金額經 `_format_amount` 帶單位與幣別、負值保留正負號;幣別跟財報 `currency` 走(HK ADR 可為 CNY),不跟交易市場走。ROE 等比率原樣 |
-| 個股三大法人 | 當日走 `TwInstitutionalFetcher`(網路);歷史趨勢才讀本地 DB | 單位是**股**,不是張。**歷史只有上市;上櫃(`.TWO`)只有當日**,場次不足 2 時 prompt 改印揭露句、不算趨勢;「近 5／20 日累計」只在窗口內每一場都有值時才印(`tw_institutional_trend.py`);本地歷史比「今天之前最後一個交易日」舊就視為停更並明講 |
-| 個股融資融券 | 只讀本地 DB(`market_repo.margin`,3 秒 statement timeout);純函式 `tw_margin_trend.py` 算最新餘額、5／20 場次變化與券資比 | 單位是**張**(與三大法人的股不同),**T+1 發布**所以 prompt 標資料日。**只有上市**:上櫃(`.TWO`)固定印「沒有本地融資融券資料」揭露句、不查 DB;場次 <6／<21 不印對應變化。注入點在三大法人 `if/elif` **之外**,T86 成功或失敗都出現;prompt-only、fail-open、不入持久化 context |
+| 個股三大法人 | 當日走 `TwInstitutionalFetcher`(網路);歷史趨勢才讀本地 DB | 單位是**股**,不是張。歷史上市、上櫃都有(上櫃自 2018-01-15 起,同表 `market='tpex'`),場次不足 2 時 prompt 改印揭露句、不算趨勢;「近 5／20 日累計」只在窗口內每一場都有值時才印(`tw_institutional_trend.py`);本地歷史比「今天之前最後一個交易日」舊就視為停更並明講 |
+| 券商分點 | `tw_broker_branch.py` 按需查富邦 DJ 個股主力進出頁,不入庫、不進報告 prompt(目前只有 `scripts/tw_stock_dossier.py` 用) | 只有前 15 名買超／賣超;HHI 只在前 15 名內算、平均成本是這 15 家的;頁面 `getYMD1` 是迄日、`getYMD2` 是起日 |
+| 個股融資融券 | 只讀本地 DB(`market_repo.margin`,3 秒 statement timeout);純函式 `tw_margin_trend.py` 算最新餘額、5／20 場次變化與券資比 | 單位是**張**(與三大法人的股不同),**T+1 發布**所以 prompt 標資料日。上市、上櫃同表(上櫃 `market='tpex'`),查無資料回空字串;場次 <6／<21 不印對應變化。注入點在三大法人 `if/elif` **之外**,T86 成功或失敗都出現;prompt-only、fail-open、不入持久化 context |
 
 ## 進來改要遵守
 

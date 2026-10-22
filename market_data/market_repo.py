@@ -61,7 +61,7 @@ def margin(stock_id, start=None, end=None, engine=None):
 
     單位是**張**（交易單位，見 ``models.Margin``），不是股；餘額為「今日餘額」。
     資料 T+1 發布（盤後爬取要隔個交易日才補上），所以最後一列通常落後最新收盤一天。
-    來源 TWSE MI_MARGN，**只有上市**；上櫃、興櫃股無資料，回空 DataFrame 而非 raise。
+    上市來源 TWSE MI_MARGN、上櫃來源 TPEx（同表 market='tpex'）；興櫃無資料，回空 DataFrame 而非 raise。
     """
     sql = ("SELECT date, margin_balance, margin_buy, margin_sell, "
            "short_balance, short_buy, short_sell "

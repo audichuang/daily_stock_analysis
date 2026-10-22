@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 
 from market_data.adjust import ADJUSTMENT_WINDOW_DAYS
-from market_data.crawl import RECENT_SESSIONS
+from market_data.crawl import RECENT_SESSIONS, market_filter
 from market_data.db import get_engine
 from market_data.financial_statement import afterIFRS
 
@@ -121,6 +121,13 @@ def missing_dates(reference, observed):
     return sorted(reference_keys - observed_keys)
 
 
+def _source_dates(conn, table, market, start):
+    """``table`` 在 ``start`` 之後、指定市場（None = 上市）有資料的日期。"""
+    return [row[0] for row in conn.execute(text(
+        f"SELECT DISTINCT date FROM market.{table} WHERE date >= :start"
+        + market_filter(table, market)), {"start": start, "market": market}).fetchall()]
+
+
 def full_history_gaps(price_dates, table_dates, exclude_latest=True):
     """price 有、該表沒有的整日缺洞，**從該表首日起算**到 price 最新日。
 
@@ -211,6 +218,9 @@ def thin_days(day_counts, window=5, ratio=0.9):
 _HISTORY_TABLES = ("institutional", "margin", "valuation")
 
 _THIN_TABLES = ["price", "institutional", "margin"]  # 每日全市場列數穩定的表
+# 三張籌碼表上市（market IS NULL）與上櫃（'tpex'）共表；既有的上市稽核只看上市列（過濾條件
+# 用 crawl.market_filter）——否則上櫃回補到一半時，每日列數忽多忽少會被當成 thin day，
+# 上櫃單邊有列也會掩蓋上市缺日。
 
 # 已逐日與來源核對一致的合法稀疏日(補班日交易,法人/信用活動天然只剩一半):
 # 不是資料缺漏,白名單排除避免每次稽核重複告警。新 thin day 先跑修復流程
@@ -236,7 +246,7 @@ def report(engine=None, now=None, is_session=None):
                                 "end": str(row[2])}
         for t in _THIN_TABLES:
             day_counts = c.execute(text(
-                f"SELECT date, count(*) FROM market.{t} "
+                f"SELECT date, count(*) FROM market.{t} WHERE true{market_filter(t, None)} "
                 f"GROUP BY date ORDER BY date")).fetchall()
             verified = _VERIFIED_THIN.get(t, set())
             out["thin_days"][t] = [(d, n) for d, n in thin_days(day_counts)
@@ -255,12 +265,11 @@ def report(engine=None, now=None, is_session=None):
                 "WHERE index_id = 'TAIEX' AND date >= :start"
             ), {"start": min(recent_price_dates)}).fetchall()]
 
-            for table in ("institutional", "margin", "valuation"):
-                source_dates[table] = [row[0] for row in c.execute(text(
-                    f"SELECT DISTINCT date FROM market.{table} WHERE date >= :start"
-                ), {"start": min(recent_price_dates)}).fetchall()]
+            for table in _HISTORY_TABLES:
+                for key, market in ((table, None), (table + "_tpex", "tpex")):
+                    source_dates[key] = _source_dates(c, table, market, min(recent_price_dates))
         else:
-            source_dates = {"institutional": [], "margin": [], "valuation": []}
+            source_dates = {k: [] for t in _HISTORY_TABLES for k in (t, t + "_tpex")}
         # 絕對新鮮度：上面兩個檢查只讓 price 與 TAIEX 互相比對，兩者同時缺今天
         # （同為 TWSE 來源、被封或盤中跑）時會一起通過；這裡對照日曆的「應有場次」。
         expected = expected_session(now, is_session)
@@ -277,12 +286,13 @@ def report(engine=None, now=None, is_session=None):
         price_all = [row[0] for row in c.execute(text(
             "SELECT DISTINCT date FROM market.price ORDER BY date")).fetchall()]
         table_all = {t: [row[0] for row in c.execute(text(
-            f"SELECT DISTINCT date FROM market.{t} ORDER BY date")).fetchall()]
+            f"SELECT DISTINCT date FROM market.{t} WHERE true{market_filter(t, None)} ORDER BY date"
+            )).fetchall()]
             for t in _HISTORY_TABLES}
         out["history_gaps"] = {t: full_history_gaps(price_all, table_all[t])
                                for t in _HISTORY_TABLES}
         # 覆蓋率：各表與 price 的「最新共同日期」上，stock_id 數 / price 的 stock_id 數。
-        # 三張表只收上市（TWSE），上櫃是硬缺口，這個比例就是它的量化。
+        # 上市＋上櫃一起數（上櫃回補完成前，這個比例就是缺口的量化）。
         coverage = {}
         price_keys = {str(d)[:10]: d for d in price_all}
         for t in _HISTORY_TABLES:
@@ -340,6 +350,10 @@ def report(engine=None, now=None, is_session=None):
             # 更早的缺日 daily 會補，補不到（被封）才擋。
             "missing_valuation_dates": missing_dates(
                 recent_price_dates[1:], source_dates["valuation"]),
+            # 上櫃三表只報不擋（不進 strict gate）：TPEx 單邊失敗不該擋住每日報告。
+            "missing_tpex_dates": {
+                t: missing_dates(recent_price_dates[1:], source_dates[t + "_tpex"])
+                for t in _HISTORY_TABLES},
             "missing_price_adjustments": missing_adjustments(
                 expected_adjustments, stored_adjustments),
             # 全歷史 thin day 留在 out["thin_days"] 供稽核；strict 只擋這一段。
@@ -405,6 +419,8 @@ def run(engine=None, strict=False, now=None, is_session=None):
     print("missing valuation dates: "
           f"{len(missing_valuation)} -> {missing_valuation[:10]}")
     print(f"missing price adjustments: {len(missing_events)} -> {missing_events[:10]}")
+    for table, days in integrity.get("missing_tpex_dates", {}).items():
+        print(f"missing {table}_tpex dates (只報不擋): {len(days)} -> {days[:10]}")
     empty_required = [table for table in _REQUIRED_TABLES
                       if not result.get("tables", {}).get(table, {}).get("rows")]
     print(f"empty required tables: {len(empty_required)} -> {empty_required}")
@@ -417,7 +433,7 @@ def run(engine=None, strict=False, now=None, is_session=None):
     for year, season, _ in stale_financials[:10]:
         print("  repair: uv run --env-file .env python -m market_data.cli "
               f"financials --year {year} --season {season}")
-    # 以下三組只報不擋，刻意不進下面的 gaps：daily 修不到窗口外的日子，上櫃是設計上的缺。
+    # 以下三組只報不擋，刻意不進下面的 gaps：daily 修不到窗口外的日子；全歷史缺洞只看上市。
     history_gaps = result.get("history_gaps", {})
     for table in _HISTORY_TABLES:
         days = history_gaps.get(table, [])
@@ -431,7 +447,7 @@ def run(engine=None, strict=False, now=None, is_session=None):
     coverage = result.get("coverage", {})
     if coverage:
         print("coverage vs price (latest shared date; "
-              "institutional/margin/valuation 只收錄上市, 設計如此): "
+              "上市＋上櫃; institutional 上櫃自 2018-01-15 起): "
               + ", ".join(f"{t} {info['stocks']}/{info['price_stocks']} "
                           f"({info['date']})" for t, info in coverage.items()))
     offcalendar = result.get("offcalendar_adjustments")

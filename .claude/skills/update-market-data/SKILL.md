@@ -24,7 +24,7 @@ uv run --env-file .env python -m market_data.health
 **完成判準**:能說出每個資料集落後到哪一天、以及 thin days 清單。
 `expected session: YYYY-MM-DD (price ✓/✗, TAIEX ✓/✗)` 那一行是絕對新鮮度(交易日 17:00 後要有當天、之前要有前一交易日,price 與 TAIEX 缺任一邊 `--strict` 就非零);✗ 表示該場次尚未入庫(未發布或被封),發布後重跑 `daily`;印 `skipped` 代表本機沒有 `exchange_calendars`、此檢查未生效。
 財報看 `financial_statement` 的 `end` 與 `stale financial quarters` 那一行(它印的是會計期間 + 截止日 + 該跑的 `financials` 指令,**只報不擋**,exit code 不會反映它)。
-另有三行全歷史稽核**只報不擋**:`full-history gaps <institutional|margin|valuation>`(自該表首日起 price 有而該表整天沒列的日子,附 `backfill … --delay 3` 指令;`missing_*_dates` 只看近 `RECENT_SESSIONS` 個交易日,滑出窗口的缺日只有這裡會喊)、`coverage vs price`(三張表只收上市,差距就是上櫃,設計如此)、`price_adjustment events on non-session dates`(休市日事件,讀取端已搬到下一交易日,**預期且永久,不要刪列**)。
+另有四行全歷史稽核**只報不擋**:`full-history gaps <institutional|margin|valuation>`(自該表首日起 price 有而該表整天沒列的日子,附 `backfill … --delay 3` 指令;`missing_*_dates` 只看近 `RECENT_SESSIONS` 個交易日,滑出窗口的缺日只有這裡會喊)、`coverage vs price`(上市＋上櫃一起數;上櫃回補完成前差距就是上櫃缺口)、`missing <表>_tpex dates`(上櫃近期缺日,只報不擋)、`price_adjustment events on non-session dates`(休市日事件,讀取端已搬到下一交易日,**預期且永久,不要刪列**)。
 `expected session` 印 `skipped` 時**不會**退回週一~五(否則國定假日誤擋);颱風等日曆不知道的臨時休市日 18:00 會被擋並推 Bark,刻意寧吵勿默。
 
 ### 2. 依落差選路徑

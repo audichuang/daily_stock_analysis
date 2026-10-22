@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修復] 盯盤大盤指數條改取永豐指數快照（加權＋櫃買），失敗才退本地官方收盤、最後才用 yfinance；原本收盤後顯示前一日收盤、漲跌 0.00%，櫃買指數也抓不到
 - [改進] 首頁搜尋建議用滑鼠點選只填入代碼，按「分析」或 Enter 才送出（鍵盤選取仍直接送出）；選取後下拉不再自己重新打開；「推送通知」記住上次的勾選
 - [修復] 首頁個股欄與自選列每 30 秒背景刷新（及切回分頁）時不再整個換成「載入中」再掛回：原本每次閃約 0.4 秒、捲動位置與點擊會落空；手動刷新仍顯示載入中以免點到舊資料
+- [新功能] 上櫃（TPEx）三大法人、融資融券、估值入本地庫：與上市共用 `market.institutional`／`margin`／`valuation`，新增 `market` 欄（NULL＝上市、`'tpex'`＝上櫃），`daily` 每晚一起抓，回補用 `market_data.cli backfill institutional_tpex|margin_tpex|valuation_tpex`（法人自 2018-01-15 起）；resume、整日換血與 `health` 稽核都分市場，上櫃缺日只報不擋。個股報告的上櫃三大法人趨勢與融資融券改讀本地歷史，不再印「上櫃無歷史」；選股 momentum 的法人篩選從此不再一律剔除上櫃
+- [新功能] 集保股權分散表 `market.holding_dist`：`daily` 抓開放資料最新一週（全市場，只報不擋），`market_data.cli holding-history <代號…>` 從 TDCC 個股查詢頁補近一年
+- [新功能] `scripts/tw_stock_dossier.py` 個股四維度資料包（基本面、合約負債、籌碼含券商分點前 15 名與 HHI、估值百分位、SMC 結構），新增 `data_provider/tw_broker_branch.py`（富邦 DJ 分點，按需查詢不入庫）與 `src/services/smc_structure.py`；說明見 `docs/tw-stock-dossier.md`
 - [新功能] 即時盯盤加「全部／自選／持股」切換：持股取自帳本全部帳戶（含美股複委託），跨帳戶合併、以即時價顯示股數與未實現損益；下方另列基金持倉卡（淨值、淨值日、持有報酬）。賣光的持股自動消失，不必改 `STOCK_LIST`
 - [chore] CI 移除 `desktop-futu-package-windows`（本 fork 不發 Windows 桌面版）；macOS 打包檢查保留，`scripts/build-backend.ps1` 未刪
 - [文档] 根 `AGENTS.md` 分層精簡（31,344 → 約 11,600 bytes），只留每個任務都用得到的硬規則、驗證矩陣與跨領域踩雷；維運流程移到新文件 `docs/daily-report-ops.md`（排程一覽、每日報告逾時／鎖／完成標記）與 `docs/nas-deploy.md`（NAS 發版），單一目錄的規則下放 `src/`、`tests/`、`scripts/` 的 `AGENTS.md`，PR 標題與截圖規則移入 skill `analyze-pr`／`fix-issue`，`make analyze` 的 Doppler 手動包法移到 `docs/tw-operating-guide.md` §2.3；§6／§9 改為 CI 也跑 push 分支、合入前看 `gh run` 綠燈

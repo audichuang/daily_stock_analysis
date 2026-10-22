@@ -12,6 +12,7 @@ import re
 from io import StringIO
 
 import pandas as pd
+import requests
 
 from market_data.crawler import _UA, requests_get, requests_post
 
@@ -694,3 +695,264 @@ def fetch_index(asof=None, fallback=True):
     url = "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK"
     return _valid_rows(_openapi_json(url),
                        {"Date", "TAIEX", "Change", "TradeValue"}, url)
+
+
+# ---------------------------------------------------------------------------
+# 上櫃三大法人／融資融券／估值 (TPEx www JSON，帶日期、全市場一次)
+# ---------------------------------------------------------------------------
+
+# 欄名重複（七組「買進／賣出／買賣超股數」），只能靠位置取值；先核對整排表頭，
+# 來源插欄時整批錯位卻照樣是數字，不擋就靜默寫錯（同 _MARGIN_HEADER 的理由）。
+_TPEX_INSTI_FIELDS = (
+    ["代號", "名稱"] + ["買進股數", "賣出股數", "買賣超股數"] * 7 + ["三大法人買賣超股數合計"])
+# 位置 -> T86 欄名：沿用 T86 欄名，etl.transform_institutional 與 crawl_day 的
+# 欄位品質守門才能直接套用。分組依序：外資及陸資(不含外資自營商)、外資自營商、
+# 外資及陸資合計、投信、自營商(自行買賣)、自營商(避險)、自營商合計。
+_TPEX_INSTI_COLS = {
+    4: "外陸資買賣超股數(不含外資自營商)",
+    7: "外資自營商買賣超股數",
+    13: "投信買賣超股數",
+    22: "自營商買賣超股數",
+    23: "三大法人買賣超股數",
+}
+_TPEX_MARGIN_FIELDS = [
+    "代號", "名稱", "前資餘額(張)", "資買", "資賣", "現償", "資餘額", "資屬證金",
+    "資使用率(%)", "資限額", "前券餘額(張)", "券賣", "券買", "券償", "券餘額",
+    "券屬證金", "券使用率(%)", "券限額", "資券相抵(張)", "備註",
+]
+# 位置 -> MI_MARGN 欄名（etl.transform_margin 吃後者）；單位同為張
+_TPEX_MARGIN_COLS = {_TPEX_MARGIN_FIELDS.index(zh): twse for zh, twse in {
+    "資買": "融資買進", "資賣": "融資賣出", "資餘額": "融資今日餘額",
+    "券買": "融券買進", "券賣": "融券賣出", "券餘額": "融券今日餘額",
+}.items()}
+_TPEX_PE_MAP = {"本益比": "pe_ratio", "股價淨值比": "pb_ratio", "殖利率(%)": "dividend_yield"}
+
+
+def _tpex_table(payload, date, what):
+    """取出 TPEx 回應的資料表；未發布／日期不符回 None。
+
+    TPEx 對未來或未發布的日子照樣回 ``stat ok`` 並**回填請求的日期**、只是 0 列，所以外層
+    ``date`` 只擋得住回錯日；0 列才是未發布的訊號。資料表另帶自己的民國日期（``"115/08/28"``，
+    實測 2010~2026 有資料列時一定有），外層照填請求日、表卻是舊表的情況靠它擋——缺就拒收。"""
+    if str(payload.get("stat", "")).lower() != "ok":
+        return None
+    want = date.strftime("%Y%m%d")
+    got = str(payload.get("date") or "")
+    if got != want:
+        print(f"**WARN: TPEx {what} 回應日期 {got or '(無)'} ≠ 請求日 {want},拒收", flush=True)
+        return None
+    tables = payload.get("tables") or []
+    if not tables or not tables[0].get("data"):
+        return None
+    try:
+        table_day = _roc_slash_to_date(tables[0]["date"]).strftime("%Y%m%d")
+    except (KeyError, ValueError, TypeError):
+        table_day = "(無)"
+    if table_day != want:
+        print(f"**WARN: TPEx {what} 資料表日期 {table_day} ≠ 請求日 {want},拒收", flush=True)
+        return None
+    return tables[0]
+
+
+def _tpex_num(raw):
+    s = str(raw).replace(",", "").strip()
+    try:
+        return float(s)
+    except ValueError:
+        return None  # "N/A" / "" / "-"
+
+
+def _parse_tpex_fixed(payload, date, what, fields, cols):
+    """表頭必須與 ``fields`` 完全一致（照位置取值），``cols`` 是 位置 -> 輸出欄名。"""
+    tb = _tpex_table(payload, date, what)
+    if tb is None:
+        return None
+    if list(tb.get("fields") or []) != list(fields):
+        raise ValueError(f"TPEx {what}表頭與預期不符(欄位順序改了?): {tb.get('fields')}")
+    rows = [{"stock_id": str(r[0]).strip(), "名稱": str(r[1]).strip(), "date": pd.to_datetime(date),
+             **{name: _tpex_num(r[i]) for i, name in cols.items()}} for r in tb["data"]]
+    return pd.DataFrame(rows).set_index(["stock_id", "date"])
+
+
+def parse_tpex_institutional(payload, date):
+    return _parse_tpex_fixed(payload, date, "三大法人", _TPEX_INSTI_FIELDS, _TPEX_INSTI_COLS)
+
+
+def parse_tpex_margin(payload, date):
+    return _parse_tpex_fixed(payload, date, "融資融券", _TPEX_MARGIN_FIELDS, _TPEX_MARGIN_COLS)
+
+
+def parse_tpex_valuation(payload, date):
+    """peQryDate -> DataFrame(stock_id, date, pe_ratio, pb_ratio, dividend_yield)。
+
+    欄位數隨年代變（2026 多了「財報年/季」），一律靠欄名定位。NULL-wash 守門同
+    ``parse_valuation_day``：valuation 的 upsert 不 coalesce，整欄失效寫進去就洗掉既有值。"""
+    tb = _tpex_table(payload, date, "本益比")
+    if tb is None:
+        return None
+    idx = {name: i for i, name in enumerate(tb.get("fields") or [])}
+    missing = [zh for zh in ("股票代號", *_TPEX_PE_MAP) if zh not in idx]
+    if missing:
+        raise ValueError(f"TPEx 本益比缺少欄位 {missing},格式可能已變更: {tb.get('fields')}")
+    rows = []
+    for r in tb["data"]:
+        rec = {"stock_id": str(r[idx["股票代號"]]).strip(), "date": pd.to_datetime(date)}
+        for zh, en in _TPEX_PE_MAP.items():
+            rec[en] = _tpex_num(r[idx[zh]])
+        rows.append(rec)
+    df = pd.DataFrame(rows).set_index(["stock_id", "date"])
+    for en in ("pb_ratio", "dividend_yield"):   # PE 正常就大量 N/A（虧損公司）
+        if df[en].notna().mean() < 0.5:
+            raise ValueError(f"TPEx 本益比 {date}: {en} 只有 {df[en].notna().mean() * 100:.0f}% "
+                             "有值,來源疑似故障;整批不發布以免把既有值洗成 NULL")
+    return df
+
+
+_TPEX_CHIP_PATHS = {
+    "institutional": ("insti/dailyTrade", {"type": "Daily", "sect": "EW"}, parse_tpex_institutional),
+    "margin": ("margin/balance", {}, parse_tpex_margin),
+    "valuation": ("afterTrading/peQryDate", {}, parse_tpex_valuation),
+}
+
+
+def crawl_tpex_chip(kind, date):
+    """上櫃 ``kind``（institutional／margin／valuation）某日全市場。失敗印 WARN 回 None。
+
+    三大法人自 2018-01-15 起才有（之前回 0 列）；融資、本益比可回到 2007。"""
+    path, params, parse = _TPEX_CHIP_PATHS[kind]
+    url = f"https://www.tpex.org.tw/www/zh-tw/{path}"
+    r = requests_get(url, params={**params, "date": date.strftime("%Y/%m/%d"),
+                                  "response": "json"}, headers={"User-Agent": _UA})
+    if r is None:
+        print(f"**WARN: no response from {url} (連線失敗或 IP 被 TPEx 封鎖)")
+        return None
+    if r.status_code != 200:
+        print(f"**WARN: HTTP {r.status_code} from {url}")
+        return None
+    try:
+        return parse(r.json(), date)
+    except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:  # 格式改版一律 WARN
+        print(f"**WARN: cannot parse TPEx {kind} for {date} ({exc})")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# 集保股權分散表 (TDCC)：開放資料（最新一週、全市場）＋個股查詢頁（約 51 週歷史）
+# ---------------------------------------------------------------------------
+
+_TDCC_OPENDATA = "https://opendata.tdcc.com.tw/getOD.ashx?id=1-5"
+_TDCC_QUERY = "https://www.tdcc.com.tw/portal/zh/smWeb/qryStock"
+_TDCC_TOKEN = re.compile(r'name="SYNCHRONIZER_TOKEN" value="([^"]+)"')
+_TDCC_HEADER = ["資料日期", "證券代號", "持股分級", "人數", "股數", "占集保庫存數比例%"]
+# 開放資料的 16 是「差異數調整」、17 是合計。個股查詢頁的序號在有差異數調整的週同樣是
+# 16／17，沒有那列的週合計卻排在 16——所以合計一律靠「合計」字樣認，統一存 17。
+_TDCC_TOTAL_LEVEL = 17
+
+
+def parse_tdcc_opendata(text):
+    """開放資料 1-5 CSV -> DataFrame(stock_id, date, level, holders, shares, pct)。"""
+    df = pd.read_csv(StringIO(text.lstrip("﻿")), dtype=str)
+    if list(df.columns) != _TDCC_HEADER:
+        raise ValueError(f"集保開放資料表頭與預期不符: {list(df.columns)}")
+    out = pd.DataFrame({
+        "stock_id": df["證券代號"].str.strip(),
+        "date": pd.to_datetime(df["資料日期"].str.strip(), format="%Y%m%d"),
+        "level": pd.to_numeric(df["持股分級"], errors="coerce"),
+        "holders": pd.to_numeric(df["人數"].str.replace(",", ""), errors="coerce"),
+        "shares": pd.to_numeric(df["股數"].str.replace(",", ""), errors="coerce"),
+        "pct": pd.to_numeric(df["占集保庫存數比例%"], errors="coerce"),
+    })
+    return out.dropna(subset=["stock_id", "date", "level"])
+
+
+def fetch_tdcc_latest():
+    """全市場最新一週股權分散。失敗印 WARN 回 None。
+
+    開放資料沒有日期參數、只給最新一週，列上的資料日期是唯一的新鮮度依據——呼叫端
+    （``crawl.crawl_holding_dist``）印出它；資料按自帶日期入庫，停更時只是重複 upsert 同一週。"""
+    r = requests_get(_TDCC_OPENDATA, headers={"User-Agent": _UA}, timeout=60)
+    if r is None or r.status_code != 200:
+        print(f"**WARN: 集保開放資料抓取失敗 ({getattr(r, 'status_code', 'no response')})")
+        return None
+    try:
+        return parse_tdcc_opendata(r.content.decode("utf-8-sig"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        print(f"**WARN: 集保開放資料解析失敗 ({exc})")
+        return None
+
+
+def parse_tdcc_query(html, stock_id, want):
+    """TDCC 個股查詢結果頁 -> DataFrame；頁面資料日期 ≠ ``want``（YYYYMMDD）或查無資料回 None。"""
+    m = re.search(r"資料日期：(\d+年\d+月\d+日)", html)
+    if not m:
+        return None
+    got = _roc_to_date(m.group(1))
+    if got.strftime("%Y%m%d") != want:
+        print(f"**WARN: 集保查詢 {stock_id} 資料日期 {got} ≠ 請求 {want},拒收")
+        return None
+    table = next((t for t in pd.read_html(StringIO(html))
+                  if "持股/單位數分級" in [str(c) for c in t.columns]), None)
+    if table is None or table.empty:
+        return None
+    level = pd.to_numeric(table["序"], errors="coerce")
+    total = table["持股/單位數分級"].astype(str).str.replace(r"\s", "", regex=True) == "合計"
+    level = level.mask(total, _TDCC_TOTAL_LEVEL)
+
+    def num(col):
+        return pd.to_numeric(table[col].astype(str).str.replace(",", ""), errors="coerce")
+
+    out = pd.DataFrame({"stock_id": stock_id, "date": pd.Timestamp(got), "level": level,
+                        "holders": num("人數"), "shares": num("股數/單位數"),
+                        "pct": num("占集保庫存數比例 (%)")})
+    return out.dropna(subset=["level"])
+
+
+def crawl_tdcc_history(stock_id, weeks=None, delay=1.0):
+    """單檔近 ``weeks`` 週（預設查詢頁提供的全部，約 51 週）。每週一個 POST；回 DataFrame 或 None。
+
+    刻意用自己的 ``requests.Session`` 而不是 ``crawler.requests_get``：表單 token 從這個
+    session 取得，後者連線失敗時會重建 session（沒驗證過 token 跨 session 能不能用），
+    所以整串查詢固定同一個 session。"""
+    import time
+
+    ses = requests.Session()
+    ses.headers["User-Agent"] = _UA
+    try:
+        r = ses.get(_TDCC_QUERY, timeout=30)
+        r.raise_for_status()
+        page = r.text
+    except requests.RequestException as exc:
+        print(f"**WARN: 集保查詢頁連線失敗 ({exc})")
+        return None
+    token = _TDCC_TOKEN.search(page)
+    dates = re.findall(r'<option value="(\d{8})"', page)
+    if not token or not dates:
+        print("**WARN: 集保查詢頁格式不符(找不到 token 或日期選單)")
+        return None
+    frames = []
+    for i, want in enumerate(dates[:weeks]):
+        if i and delay:
+            time.sleep(delay)            # 成功或失敗都照節奏打，不因失敗連發
+        form = {"SYNCHRONIZER_TOKEN": token.group(1), "SYNCHRONIZER_URI": "/portal/zh/smWeb/qryStock",
+                "method": "submit", "firDate": dates[0], "scaDate": want,
+                "sqlMethod": "StockNo", "stockNo": stock_id, "stockName": ""}
+        try:
+            r = ses.post(_TDCC_QUERY, data=form, timeout=30)
+            r.raise_for_status()
+        except requests.RequestException as exc:
+            print(f"**WARN: 集保查詢 {stock_id} {want} 失敗 ({exc})")
+            continue
+        # token 每次請求後輪換、舊的作廢（實測沿用舊 token 回空）：一拿到回應就先換，
+        # 解析失敗也不例外——否則後面每一週都帶著作廢的 token 靜默失敗。
+        nxt = _TDCC_TOKEN.search(r.text)
+        if nxt:
+            token = nxt
+        try:
+            df = parse_tdcc_query(r.text, stock_id, want)
+        except (ValueError, KeyError) as exc:
+            # 單週解析失敗只少那一週（read_html 找不到表、欄名改版都在這）
+            print(f"**WARN: 集保查詢 {stock_id} {want} 解析失敗 ({type(exc).__name__}: {exc})")
+            continue
+        if df is not None:
+            frames.append(df)
+    return pd.concat(frames, ignore_index=True) if frames else None

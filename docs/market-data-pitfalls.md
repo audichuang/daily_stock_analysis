@@ -31,7 +31,7 @@
 
 ## 三大法人／融資／估值
 
-- **三張表只有上市（TWSE），沒有任何上櫃列**：實測 price 約 2,361 檔（上櫃約 990），三張表各只有約 1,100~1,340 檔。上櫃是硬缺口、補日補不回；`health` 的 `coverage vs price` 就是這個比例。`market_repo.margin()` 對上櫃回空、法人因子只涵蓋上市，選股／回測裡用到它們的因子會系統性剔除上櫃，見 `docs/tw-swing-pipeline.md`。
+- **三張表上市與上櫃共表，以 `market` 欄區分（NULL＝上市、`'tpex'`＝上櫃）**。2026-10 之前只有上市；上櫃走 TPEx 官方全市場日端點（`insti/dailyTrade`、`margin/balance`、`afterTrading/peQryDate`），是獨立的 `*_tpex` 來源、各自 resume，回補前上櫃仍是缺口（`health` 的 `coverage vs price` 就是這個比例）。上櫃法人**自 2018-01-15 起才有**（之前端點回 0 列，回補起點設更早會連續空日而中止）；融資、本益比可回到 2007。TPEx 對未發布的日子照樣回 `stat ok` 並回填請求日期、只是 0 列，所以 0 列才是「未發布」的訊號。上櫃缺日在 `health` 只報不擋。
 - **T86 初版**：18:00 前後抓到的是初版，官方之後還會改——投信欄最常變、外幣 ETF（`00636K` 這類 K 結尾）晚到，偶爾連外資也變（3189 景碩 2026-09-30 入庫時外資賣超 432 張，定版買超 852 張）。2026-09-29~10-16 當晚入庫的 11 天全數與定版不一致，隔天才抓的 10-08、10-13 逐檔一致；09-24 以前也一致——推測舊的 15:00 crontab 跑時 T86 還沒發布、實際入庫的都是隔天的定版（未驗證）。修法是 `crawl.REVISED_SOURCES` + `refresh_range`：`daily` 每輪把窗口內 asof 之前**已入庫**的日子重抓、整日換血，初版最晚隔天就被換掉。**晚於 `RECENT_SESSIONS` 個交易日的修正不會被吃進來**（還沒遇過）。沒列進 `REVISED_SOURCES` 的來源會凍結在初版。融資（MI_MARGN）同期比對沒有修正。重抓失敗不 raise、保留舊資料，判讀看 `**REVISED`／`**WARN refresh`。所有 institutional 整日替換（含人工 `backfill --force`）都先檢查 T86 四個必要淨額欄位（外資接受新舊欄名），任一欄缺失或 NULL 比例比該日舊資料增加超過 10 個百分點就拒收並印 `**WARN institutional … degraded payload`。報告當下由 `TwInstitutionalFetcher` 即時抓的當日法人同樣是初版，是時間點限制、不是資料庫問題。
 - **補班週六也可能交易**：法人／融資／估值以 `price` 日曆為準（空集合也不抓），再套週末篩選會漏掉 2016-01-30、2017-06-03 這類交易日；`price` 自建日曆仍只抓平日，價格缺漏的補班週六要另行處理。這兩天 `health` 一直報 `thin institutional days` 是**官方 T86 本身就少**（2026-10-19 重抓原始列 628／508，與庫內 622／501 相符），別 `--force`。
 - **valuation 的缺日**：`daily` 的快照走 `BWIBBU_ALL`（無 date 參數，18:00 仍回 D-1），某晚沒跑那天就永久缺（踩過 09-22、10-12）。所以 `daily` 也以 `BWIBBU_d` 補窗口內缺日（`crawl_range` resume，不進 `REVISED_SOURCES`）；18:00 當天 BWIBBU_d 多半未發布 → 0 列、隔天補。**`crawl_valuation_day` 一律比對回應自帶的 `date` 與請求日**（`parse_valuation_day` 會把列蓋上請求日，來源回前一日的表就會被存成當天、resume 又視為完成），不符印 `**WARN: BWIBBU_d 回應日期 … 拒收`；`health` 對窗口內除最新一日外缺 valuation 的日子 strict 擋。**欄位順序隨年代變**（2015 五欄、2026 八欄且殖利率排到本益比之前），靠回應的 `fields` 動態對應——固定索引會讓舊資料 PE 與 PB 整欄錯位。PE 也可用 `price.pe_ratio`（2010 起、覆蓋約 57%），PB 與殖利率只有這條路。
@@ -62,7 +62,7 @@
 ## 讀取面與消費者
 
 - 面板日線只經 `data_provider/market_db_fetcher.py::MarketDBFetcher`（priority=1，查無資料 fallback yfinance）消費 `market.price`。
-- `market_repo.institutional()` + `stock_info()` 的消費者是台股個股報告的**三大法人歷史趨勢**（`analyzer._format_prompt` 即時讀本 DB 算好注入 prompt，prompt-only、fail-open、不入持久化 context）；`market_repo.margin(stock_id, start, end)` 給個股 prompt 的融資融券歷史（單位張、T+1、只有上市）。
+- `market_repo.institutional()` + `stock_info()` 的消費者是台股個股報告的**三大法人歷史趨勢**（`analyzer._format_prompt` 即時讀本 DB 算好注入 prompt，prompt-only、fail-open、不入持久化 context）；`market_repo.margin(stock_id, start, end)` 給個股 prompt 的融資融券歷史（單位張、T+1、上市與上櫃）。
 - `monthly_revenue`／`valuation` 仍由 `daily`/`revenue` 入庫，但 `market_repo` 目前無讀取面——估值／月營收走 `twse_fundamental_adapter` 即時 API，當日法人走 `TwInstitutionalFetcher`；要重新消費本 DB 得補回讀取函式。
 - 面板 venv 缺 `psycopg` 時 `MarketDBFetcher` 會**靜默降級 yfinance**（歷史看似正常，但可能混入非交易日的幽靈 K 棒）；懷疑沒走 DB，先 `uv pip install -r requirements.txt` 再驗 `get_daily_data` 的 source。
 - **「面板走 DB」的 network smoke 只有本機會真的斷言**：PR 的 CI 用 `-m "not network"` 排除它，排程 `network-smoke` 沒有 `DATABASE_URL` 所以 skip——別以為 CI 已守住「靜默降級 yfinance」。

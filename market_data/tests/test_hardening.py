@@ -307,9 +307,9 @@ def test_report_uses_the_shared_window_and_wires_recent_thin_days_to_the_gate():
     calls = []
     plan = [
         ("count(*), min(", [(1, sessions[0], sessions[-1])]),
-        ("FROM market.price GROUP BY", counts),
-        ("FROM market.institutional GROUP BY", old_thin),
-        ("FROM market.margin GROUP BY", []),
+        ("FROM market.price WHERE true GROUP BY", counts),
+        ("FROM market.institutional WHERE true AND market IS NULL GROUP BY", old_thin),
+        ("FROM market.margin WHERE true AND market IS NULL GROUP BY", []),
         ("FROM market.price ORDER BY date DESC", [(d,) for d in reversed(sessions)]),
     ]
 
@@ -338,6 +338,7 @@ def test_report_tolerates_latest_day_missing_valuation_but_not_older_days():
     def run(valuation_days):
         plan = [
             ("count(*), min(", [(1, sessions[0], sessions[-1])]),
+            ("AND market IS NULL GROUP BY", []),
             ("FROM market.price ORDER BY date DESC", newest_first),
             ("FROM market.institutional WHERE", [(d,) for d in sessions]),
             ("FROM market.margin WHERE", [(d,) for d in sessions]),

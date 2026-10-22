@@ -208,6 +208,8 @@ def _engine(price_days, taiex_days):
         ("count(*), min(", [(1, ordered[0], ordered[-1])]),
         ("FROM market.price ORDER BY date DESC", [(d,) for d in reversed(ordered)]),
         ("index_id = 'TAIEX' AND date >= :start", [(d,) for d in taiex_days]),
+        # thin-day 統計（每日列數）也帶 WHERE，排在近期視窗之前，否則會吃到單欄的日期列
+        ("AND market IS NULL GROUP BY", []),
         ("FROM market.institutional WHERE", [(d,) for d in ordered[:-1]]),
         ("FROM market.margin WHERE", [(d,) for d in ordered[:-1]]),
         ("FROM market.valuation WHERE", [(d,) for d in ordered[:-1]]),

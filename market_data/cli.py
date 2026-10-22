@@ -2,9 +2,12 @@
 
     python -m market_data.cli daily                 # 近幾日增量 + 快照
     python -m market_data.cli backfill price --start 2010-01-01 --end 2026-07-01
+    python -m market_data.cli backfill institutional_tpex --start 2018-01-15 --end 2026-10-21 --delay 3
     python -m market_data.cli snapshot              # valuation + index + stock_info
     python -m market_data.cli funds                 # 境內基金每日淨值
     python -m market_data.cli fund-history 18480065 # 單檔基金歷史淨值
+    python -m market_data.cli holding               # 集保股權分散最新一週(全市場)
+    python -m market_data.cli holding-history 3324 6191  # 個股近一年集保(每檔約 51 個請求)
 """
 
 import argparse
@@ -38,7 +41,8 @@ def main(argv=None):
     h.add_argument("--strict", action="store_true",
                    help="近期交易日或復權事件有缺口時回傳非零")
     b = sub.add_parser("backfill", help="回補某來源日期區間")
-    b.add_argument("source", choices=["price", "institutional", "margin", "valuation"])
+    b.add_argument("source", choices=list(crawl.DAILY),
+                   help="*_tpex 為上櫃;institutional_tpex 自 2018-01-15 起才有資料")
     b.add_argument("--start", required=True)
     b.add_argument("--end", required=True)
     b.add_argument("--force", action="store_true",
@@ -48,6 +52,11 @@ def main(argv=None):
                         "且失敗是靜默的(該日直接跳過不報錯)")
     sub.add_parser("snapshot", help="valuation + index + stock_info 快照")
     sub.add_parser("funds", help="境內基金:公會每日淨值/基本資料 + 已追蹤基金近期補缺")
+    sub.add_parser("holding", help="集保股權分散:開放資料最新一週(全市場)")
+    hh = sub.add_parser("holding-history", help="集保股權分散:從 TDCC 個股查詢頁補近一年")
+    hh.add_argument("stock_id", nargs="+", help="不帶後綴的代號,如 3324")
+    hh.add_argument("--weeks", type=int, default=None, help="只補最近 N 週,預設查詢頁提供的全部(約 51 週)")
+    hh.add_argument("--delay", type=float, default=1.0, help="每週請求間隔秒數")
     fh = sub.add_parser("fund-history", help="從鉅亨補單檔基金的歷史淨值(不覆蓋公會官方值)")
     fh.add_argument("fund_id", nargs="+", help="公會基金統編,如 18480065")
     fh.add_argument("--start", default=None, help="起日 YYYY-MM-DD,預設全期")
@@ -91,6 +100,13 @@ def main(argv=None):
                           resume=not args.force, replace=args.force, delay=args.delay)
     elif args.command == "snapshot":
         crawl.crawl_snapshots(eng)      # 自己管交易:每步一個,印出即代表已 commit
+    elif args.command == "holding":
+        with eng.begin() as conn:
+            n, latest = crawl.crawl_holding_dist(conn)
+        print(f"holding_dist {n:,} rows, latest {latest}")
+    elif args.command == "holding-history":
+        n = crawl.backfill_holding_dist(eng, args.stock_id, weeks=args.weeks, delay=args.delay)
+        print(f"holding_dist rows upserted: {n:,}")
     elif args.command == "funds":
         from market_data import funds
         funds.daily_update(eng)

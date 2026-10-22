@@ -11,7 +11,7 @@
 
 資料覆蓋限制（決定樣本能拉多長）：
   - `market.valuation` 只有 2026-07 之後 → 估值因子改用 `market.price.pe_ratio`（覆蓋約 57%）
-  - `market.institutional` 自 2012-05 起，每日覆蓋 880~1340 檔（偏大型股）
+  - `market.institutional` 自 2012-05 起，每日覆蓋 880~1340 檔（偏大型股；2026-10 起另含上櫃 `market='tpex'`，自 2018-01-15）
   - 故預設樣本自 2013-01-01 起。
 
 用法：

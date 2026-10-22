@@ -119,7 +119,31 @@ DAILY = {
     # fetch 已輸出 typed 英文欄位,故 transform 為 identity。
     "valuation": (lambda d: sources.crawl_valuation_day(d), lambda df: df,
                   models.Valuation, ["stock_id", "date"]),
+    # 上櫃（TPEx）與上市共用同一張表，以 market 欄區分；轉換沿用上市（parser 已輸出
+    # 上市欄名）。法人自 2018-01-15 起才有資料。
+    "institutional_tpex": (lambda d: sources.crawl_tpex_chip("institutional", d),
+                           etl.transform_institutional, models.Institutional,
+                           ["stock_id", "date"]),
+    "margin_tpex": (lambda d: sources.crawl_tpex_chip("margin", d), etl.transform_margin,
+                    models.Margin, ["stock_id", "date"]),
+    "valuation_tpex": (lambda d: sources.crawl_tpex_chip("valuation", d), lambda df: df,
+                       models.Valuation, ["stock_id", "date"]),
 }
+
+# 來源 -> 寫入的 market 值。這三張表上市列是 NULL、上櫃列是 'tpex'；resume、replace 的
+# 刪除與比對都只看自己市場的列——不分的話，每晚上市法人 refresh 的整日換血會把同日的
+# 上櫃列一起刪掉，而上櫃已入庫的日子又會讓上市 resume 以為已完成。新增上櫃來源只要在
+# DAILY 加 `<表>_tpex`，這兩個集合自動跟上。
+SOURCE_MARKET = {s: "tpex" for s in DAILY if s.endswith("_tpex")}
+MARKET_SPLIT_TABLES = {DAILY[s][2].__tablename__ for s in SOURCE_MARKET}
+
+
+def market_filter(table, market):
+    """``table`` 依市場拆分時回 `` AND market ...`` 子句（上市 = NULL，參數名 ``:market``），
+    否則回空字串。crawl 與 health 共用這一個定義。"""
+    if table not in MARKET_SPLIT_TABLES:
+        return ""
+    return " AND market = :market" if market else " AND market IS NULL"
 
 
 def _to_records(df, table, filter_stock_id=True):
@@ -164,6 +188,7 @@ def crawl_day(conn, source, d, replace=False, min_ratio=0.5):
     「轉換+有效列過濾後真的有可寫資料,且不少於既有列數的一半」——來源回
     非空垃圾(全 footer/壞 stock_id)或嚴重縮水時絕不能先刪好資料。"""
     fetch, transform, model, pk = DAILY[source]
+    market = SOURCE_MARKET.get(source)
     if source == "price":
         raw = _price_all(d, expected=_recent_price_median(conn, d), conn=conn)
         coalesce = ("pe_ratio",)  # 備援缺本益比,重爬不得抹成 NULL
@@ -171,13 +196,16 @@ def crawl_day(conn, source, d, replace=False, min_ratio=0.5):
         raw = fetch(d)
         coalesce = ()
     recs = _prepare(raw, transform, model.__table__, pk)
+    if market:
+        for r in recs:
+            r["market"] = market
     if replace and recs:
-        old = _stored_rows(conn, model.__table__, d)
+        old = _stored_rows(conn, model.__table__, d, market)
         if len(recs) < len(old) * min_ratio:
             print(f"**WARN {source} {d}: replace refused — new {len(recs)} rows "
                   f"< {min_ratio:.0%} of existing {len(old)}, keeping current data")
             return 0
-        if source == "institutional":
+        if model is models.Institutional:
             # 所有法人 replace 都守欄位品質：人工 --force 也不應用壞欄位蓋掉好資料；
             # 比較缺值「比例」而非列數，仍容許完整 payload 修復 partial／髒日。
             fields = {
@@ -201,15 +229,16 @@ def crawl_day(conn, source, d, replace=False, min_ratio=0.5):
             print(f"**REVISED {source} {d}: {revised:,} rows differ from stored "
                   f"(stored {len(old):,} -> official {len(recs):,})")
         conn.execute(text(
-            f"DELETE FROM market.{model.__tablename__} WHERE date = :d"), {"d": d})
+            f"DELETE FROM market.{model.__tablename__} WHERE date = :d"
+            + market_filter(model.__tablename__, market)), {"d": d, "market": market})
     return upsert(conn, model.__table__, recs, pk, coalesce=coalesce)
 
 
-def _stored_rows(conn, table, d):
+def _stored_rows(conn, table, d, market=None):
     cols = ", ".join(c.name for c in table.columns)
     return [dict(r) for r in conn.execute(text(
-        f"SELECT {cols} FROM market.{table.name} WHERE date = :d"),
-        {"d": d}).mappings()]
+        f"SELECT {cols} FROM market.{table.name} WHERE date = :d"
+        + market_filter(table.name, market)), {"d": d, "market": market}).mappings()]
 
 
 def _same(a, b):
@@ -277,7 +306,57 @@ def crawl_valuation(conn):
     return upsert(conn, models.Valuation.__table__, recs, ["stock_id", "date"])
 
 
-_EX_DIVIDEND_RETRY_SECONDS = 5       # TWT49U 第一次失敗後重試前的等待(測試 monkeypatch 成 0)
+_HOLDING_PK = ["stock_id", "date", "level"]
+# 集保週資料（週五資料日、隔週初發布）超過這麼多曆日沒更新就印 WARN；涵蓋連假
+HOLDING_STALE_DAYS = 12
+
+
+def _store_holding(conn, df):
+    if df is None or df.empty:
+        return 0
+    recs = dedupe(_records(df, models.HoldingDist.__table__), _HOLDING_PK)
+    n = 0
+    for i in range(0, len(recs), 10000):    # 6 欄 × 1 萬列，遠低於 65,535 參數上限
+        n += upsert(conn, models.HoldingDist.__table__, recs[i:i + 10000], _HOLDING_PK)
+    return n
+
+
+def crawl_holding_dist(conn, asof=None):
+    """集保開放資料最新一週（全市場）。回傳 ``(rows, 資料日)``；抓取失敗回 ``(0, None)``。
+
+    開放資料沒有日期參數，只能信列上自帶的資料日：按它入庫，停更只會重複 upsert 同一週，
+    不會把舊值蓋成新日期；落後 ``HOLDING_STALE_DAYS`` 以上印 WARN（唯一的停更訊號）。"""
+    import datetime as _dt
+
+    df = sources.fetch_tdcc_latest()
+    if df is None or df.empty:
+        return 0, None
+    latest = df["date"].max().date()
+    if (asof or _dt.date.today()) - latest > _dt.timedelta(days=HOLDING_STALE_DAYS):
+        print(f"**WARN holding_dist: 集保開放資料停在 {latest},超過 {HOLDING_STALE_DAYS} 天沒更新")
+    # 一週只變一次：該週全市場已入庫就不再重寫 7 萬列。要比列數而不是「有沒有列」——
+    # `holding-history` 會逐檔寫入同一週，有一檔就跳過會讓全市場那週永久缺。
+    stored = conn.execute(text("SELECT count(*) FROM market.holding_dist WHERE date = :d"),
+                          {"d": latest}).scalar()
+    if stored >= len(df):
+        return 0, latest
+    return _store_holding(conn, df), latest
+
+
+def backfill_holding_dist(engine, stock_ids, weeks=None, delay=1.0):
+    """逐檔從 TDCC 個股查詢頁補近 ``weeks`` 週（預設約 51 週）。每檔一個交易，回傳寫入列數。"""
+    total = 0
+    for sid in stock_ids:
+        df = sources.crawl_tdcc_history(sid, weeks=weeks, delay=delay)
+        with engine.begin() as conn:
+            n = _store_holding(conn, df)
+        weeks_got = 0 if df is None else df["date"].nunique()
+        print(f"holding_dist {sid} {weeks_got} weeks {n:,} rows", flush=True)
+        total += n
+    return total
+
+
+_EX_DIVIDEND_RETRY_SECONDS = 5      # TWT49U 第一次失敗後重試前的等待(測試 monkeypatch 成 0)
 _INDEX_MONTH_DELAY_SECONDS = 2.0     # 月與月之間的間隔,避免連打 TWSE(測試 monkeypatch 成 0)
 
 
@@ -466,7 +545,8 @@ RECENT_SESSIONS = 5
 # 10-13 則逐檔一致。
 # resume 只看「該日有沒有列」,所以初版一旦入庫就永久凍結——這些來源每輪 daily 都要
 # 把近期已入庫的日子重抓、整日換血。融資(MI_MARGN)同期比對沒有修正,不列入。
-REVISED_SOURCES = ("institutional",)
+# 上櫃法人是否也先出初版未實測；一天只多一個請求，先比照上市一起重抓。
+REVISED_SOURCES = ("institutional", "institutional_tpex")
 # T86 有約 3 req / 5 s 的非正式封鎖門檻(見 data_provider/tw_institutional_fetcher.py)
 REFRESH_DELAY_SECONDS = 2.0
 # 無人看守、每晚對唯一資料源整日換血,門檻要比人工 `--force` 的 50% 嚴:實測 13 天的修正
@@ -486,7 +566,7 @@ def refresh_range(engine, source, dates, delay=REFRESH_DELAY_SECONDS):
 
     table = DAILY[source][2].__tablename__
     with engine.begin() as conn:
-        have = _existing_dates(conn, table)
+        have = _existing_dates(conn, table, SOURCE_MARKET.get(source), dates)
     done = 0
     for d in dates:
         if d.isoformat() not in have:
@@ -541,11 +621,21 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
     # 某晚沒跑那天就永久缺)。18:00 當天的 BWIBBU_d 多半還沒發布 → 0 列,計入 empty_streak
     # (遠小於上限,不中止),隔天這一輪補上;回應日期不符時 sources 端已拒收。
     # valuation 不進 REVISED_SOURCES:它沒有「初版→定版」的修正語意。
-    for source in ("price", "institutional", "margin", "valuation"):
-        crawl_range(eng, source, dates)
+    # 上櫃來源只報不擋：TPEx 掛掉（含連續空日的 RuntimeError）不能讓後面的快照、月營收、
+    # 復權與每日報告陪葬；上市來源維持 fail-fast。cli backfill 不經這裡，照舊會中止。
+    def _run(fn, source, *args):
+        if source not in SOURCE_MARKET:
+            return fn(eng, source, *args)
+        try:
+            return fn(eng, source, *args)
+        except Exception as exc:
+            print(f"**WARN {source}: {exc}", flush=True)
+
+    for source in DAILY:
+        _run(crawl_range, source, dates)
     # asof 當天剛抓的就是初版,重抓它沒有意義;隔天這一輪才會把它換成定版
     for source in REVISED_SOURCES:
-        refresh_range(eng, source, [d for d in dates if d < asof])
+        _run(refresh_range, source, [d for d in dates if d < asof])
     crawl_snapshots(eng, dates)    # index 依窗口逐月抓,月底漏跑才補得回上月
     # 月營收(上月整月)與除權息(滾動窗)順帶保鮮:各一個請求,upsert 冪等
     prev_month = (asof.replace(day=1) - _dt.timedelta(days=1)).replace(day=1)
@@ -573,6 +663,13 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
         funds.daily_update(eng, asof=asof)
     except Exception as exc:
         print(f"**WARN fund_nav: {exc}")
+    # 集保股權分散一週一份，每天抓最新一週冪等 upsert；同樣只報不擋
+    try:
+        with eng.begin() as conn:
+            n, latest = crawl_holding_dist(conn, asof=asof)
+        print(f"holding_dist {n:,} rows, latest {latest}")
+    except Exception as exc:
+        print(f"**WARN holding_dist: {exc}")
     try:
         adjust.refresh_recent(
             eng, asof - _dt.timedelta(days=adjust.ADJUSTMENT_WINDOW_DAYS),
@@ -673,8 +770,14 @@ def backfill_pit_revenue(engine, start, end, delay=3.0, limit=None, only=None):
     return stats
 
 
-def _existing_dates(conn, table):
-    rows = conn.execute(text(f"SELECT DISTINCT date FROM market.{table}")).fetchall()
+def _existing_dates(conn, table, market=None, dates=None):
+    """已入庫的日期（ISO 字串）。給了 ``dates`` 就只掃它的區間，不讀整張表的歷史。"""
+    where, params = "WHERE true", {"market": market}
+    if dates:
+        where += " AND date BETWEEN :lo AND :hi"
+        params.update(lo=min(dates), hi=max(dates))
+    rows = conn.execute(text(f"SELECT DISTINCT date FROM market.{table} {where}"
+                             + market_filter(table, market)), params).fetchall()
     return {r[0].isoformat() for r in rows}
 
 
@@ -713,7 +816,8 @@ def crawl_range(engine, source, dates, resume=True, replace=False, delay=0.0):
     table = DAILY[source][2].__tablename__
     total = 0
     with engine.begin() as conn:
-        have = _existing_dates(conn, table) if resume else set()
+        have = (_existing_dates(conn, table, SOURCE_MARKET.get(source), dates)
+                if resume else set())
         cal = None
         if source != "price":
             cal = _trading_dates(conn, min(dates), max(dates)) if dates else set()

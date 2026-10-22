@@ -4040,7 +4040,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             return zh_tw if lang == "zh-TW" else zh
 
         # 場次不足 2 就不印趨勢：只有當日一列時「連 ≥1 日」「近 N 日累計」都是誤導，
-        # 改成明講原因（上櫃本地庫無歷史／歷史停更／歷史不足）。
+        # 改成明講原因（歷史停更／歷史不足）。上櫃自 2018-01-15 起也有本地歷史，不再另立一句。
         if trend.get("sessions", 0) < 2:
             gap = trend.get("history_gap")
             if gap:
@@ -4048,12 +4048,6 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                     f"三大法人歷史：本地歷史停在 {gap['last_history']}、應到 {gap['expected']}，不計算趨勢；只能參考上表當日數據，不得推論連續買賣超或累計。",
                     f"三大法人历史：本地历史停在 {gap['last_history']}、应到 {gap['expected']}，不计算趋势；只能参考上表当日数据，不得推论连续买卖超或累计。",
                     f"Institutional history: the local history stops at {gap['last_history']} (expected {gap['expected']}); no trend is computed. Use only today's figures above; do not infer consecutive buying/selling or cumulative totals.",
-                )
-            elif str(code).upper().endswith(".TWO"):
-                note = T(
-                    "三大法人歷史：本地資料庫只收錄上市（TWSE），上櫃無歷史；只能參考上表當日數據，不得推論連續買賣超或累計。",
-                    "三大法人历史：本地数据库只收录上市（TWSE），上柜无历史；只能参考上表当日数据，不得推论连续买卖超或累计。",
-                    "Institutional history: the local database only covers TWSE-listed stocks, so there is no history for TPEx-listed ones; use only today's figures above and do not infer consecutive buying/selling or cumulative totals.",
                 )
             else:
                 note = T(
@@ -4107,7 +4101,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
     def _tw_margin_lines(self, code: str, report_language: str) -> str:
         """Prompt-only：台股融資融券（本地 market.margin，單位張，T+1 發布）三語系行文。
 
-        上櫃（.TWO）本地庫沒有資料，回固定揭露句（不查 DB）；上市查不到或任何例外回 ''。
+        上市與上櫃（TPEx，market='tpex'）同表；查不到或任何例外回 ''。
         與三大法人是否取得成功無關，由呼叫端在法人區塊之外注入。NEVER persisted。"""
         lang = normalize_report_language(report_language)
         english = lang in ("en", "ko")
@@ -4116,13 +4110,6 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             if english:
                 return en
             return zh_tw if lang == "zh-TW" else zh
-
-        if str(code).upper().endswith(".TWO"):
-            return "\n" + T(
-                "融資融券：上櫃個股沒有本地融資融券資料（資料庫只收錄上市），不得推論融資動向。",
-                "融资融券：上柜个股没有本地融资融券资料（数据库只收录上市），不得推论融资动向。",
-                "Margin trading: there is no local margin/short data for TPEx-listed stocks (the database only covers TWSE-listed ones); do not infer margin-financing trends.",
-            ) + "\n"
 
         try:
             from datetime import date, timedelta

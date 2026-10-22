@@ -94,17 +94,17 @@ def _lines(code, n_hist, language="zh-TW", calendar="weekdays", hist_end=date(20
         return _analyzer()._tw_institutional_trend_lines(code, dict(_TODAY), language)
 
 
-def test_tpex_without_history_gets_disclosure_not_20d_cumulative():
+def test_tpex_without_history_gets_generic_disclosure_not_20d_cumulative():
+    # 上櫃自 2018-01-15 起也有本地歷史：缺歷史時與上市同一句，不再宣稱「上櫃無歷史」
     out = _lines("6488.TWO", 0)
-    assert "只收錄上市（TWSE），上櫃無歷史" in out
+    assert "本地歷史不足" in out and "上櫃無歷史" not in out
     assert "近 20 日累計" not in out and "近 5 日累計" not in out
     assert "連 ≥1 日" not in out and "外資" not in out
 
 
-def test_tpex_disclosure_in_all_three_languages():
-    assert "上柜无历史" in _lines("6488.TWO", 0, "zh")
-    en = _lines("6488.TWO", 0, "en")
-    assert "TPEx" in en and "20-day cumulative" not in en
+def test_tpex_with_history_prints_trend_like_listed():
+    out = _lines("6488.TWO", 62)
+    assert "近 20 日累計" in out and "上櫃" not in out
 
 
 def test_listed_stock_with_62_sessions_prints_20_day_window():
@@ -289,13 +289,10 @@ def test_margin_lines_insufficient_sessions_omit_changes():
     assert "較 5 個場次前" in out10 and "較 20 個場次前" not in out10
 
 
-def test_margin_lines_tpex_prints_disclosure_without_querying_db():
+def test_margin_lines_tpex_queries_db_like_listed():
     out, m = _margin_lines("6488.TWO", _margin_df(25))
-    assert "上櫃個股沒有本地融資融券資料（資料庫只收錄上市），不得推論融資動向" in out
-    assert "融資餘額" not in out
-    m.assert_not_called()
-    assert "TPEx" in _margin_lines("6488.TWO", None, "en")[0]
-    assert "上柜个股没有本地融资融券资料" in _margin_lines("6488.TWO", None, "zh")[0]
+    assert "融資餘額 1,240 張" in out and "上櫃" not in out
+    m.assert_called_once()
 
 
 def test_margin_lines_fail_open_on_db_error_and_empty():
@@ -314,11 +311,11 @@ def test_margin_block_present_in_prompt_even_when_institution_failed():
     assert "融資餘額 1,240 張" in p and p.index("三大法人動向") < p.index("融資融券（截至")
 
 
-def test_margin_block_tpex_disclosure_and_non_tw_untouched_in_prompt():
+def test_margin_block_tpex_from_db_and_non_tw_untouched_in_prompt():
     p = _failed_prompt("6488.TWO", 0, margin=_margin_df(25))
-    assert "上櫃個股沒有本地融資融券資料" in p and "融資餘額" not in p
+    assert "融資餘額 1,240 張" in p and "上櫃個股沒有本地融資融券資料" not in p
     us = _failed_prompt("AAPL", 30, margin=_margin_df(25))
-    assert "融資餘額" not in us and "上櫃個股沒有本地融資融券資料" not in us
+    assert "融資餘額" not in us
 
 
 def test_margin_block_db_error_does_not_break_prompt():

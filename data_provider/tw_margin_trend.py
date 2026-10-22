@@ -4,7 +4,7 @@
 傳進來；輸出只用來組 LLM prompt 行，不持久化。
 
 單位是**張**（交易單位，不是股）。資料 T+1 發布，最後一列通常落後最新收盤一天，
-所以輸出一律帶 ``as_of``。來源只有上市（TWSE MI_MARGN）。
+所以輸出一律帶 ``as_of``。來源：上市 TWSE MI_MARGN、上櫃 TPEx 融資融券餘額。
 """
 from __future__ import annotations
 

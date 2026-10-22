@@ -96,15 +96,17 @@ _ADJ = [(_D(2026, 1, 23), 2), (_D(2026, 1, 24), 3), (_D(2026, 2, 10), 9)]
 
 
 def _engine(price=_PRICE, inst=_INST, margin=_MARGIN, valuation=_VALUATION,
-            adj=_ADJ):
+            adj=_ADJ, first=()):
     calls = []
     plan = [
+        *first,
         ("count(*), min(", [(1, price[0], price[-1])]),
         # 覆蓋率查詢也含 "FROM market.<t> WHERE"，必須排在近期視窗查詢之前
         ("count(DISTINCT stock_id) FROM market.price", [(2361,)]),
         ("count(DISTINCT stock_id) FROM market.institutional", [(1338,)]),
         ("count(DISTINCT stock_id) FROM market.margin", [(1100,)]),
         ("count(DISTINCT stock_id) FROM market.valuation", [(1330,)]),
+        ("AND market IS NULL GROUP BY", []),
         ("index_id = 'TAIEX' AND date >= :start",
          [(d,) for d in price[-crawl.RECENT_SESSIONS:]]),
         # 近期視窗（LIMIT :n）：假連線不處理參數，這裡直接給最後 RECENT_SESSIONS 天
@@ -112,11 +114,11 @@ def _engine(price=_PRICE, inst=_INST, margin=_MARGIN, valuation=_VALUATION,
          [(d,) for d in reversed(price[-crawl.RECENT_SESSIONS:])]),
         # 全歷史查詢（無 WHERE / LIMIT）
         ("SELECT DISTINCT date FROM market.price ORDER BY date", [(d,) for d in price]),
-        ("SELECT DISTINCT date FROM market.institutional ORDER BY date",
+        ("SELECT DISTINCT date FROM market.institutional WHERE true AND market IS NULL ORDER BY date",
          [(d,) for d in inst]),
-        ("SELECT DISTINCT date FROM market.margin ORDER BY date",
+        ("SELECT DISTINCT date FROM market.margin WHERE true AND market IS NULL ORDER BY date",
          [(d,) for d in margin]),
-        ("SELECT DISTINCT date FROM market.valuation ORDER BY date",
+        ("SELECT DISTINCT date FROM market.valuation WHERE true AND market IS NULL ORDER BY date",
          [(d,) for d in valuation]),
         ("FROM market.institutional WHERE", [(d,) for d in inst]),
         ("FROM market.margin WHERE", [(d,) for d in margin]),
@@ -180,7 +182,7 @@ def test_run_prints_the_three_lines_with_repair_commands(capsys):
     assert ("repair: uv run --env-file .env python -m market_data.cli "
             "backfill institutional --start 2026-01-22 --end 2026-01-22 --delay 3") in out
     assert "institutional 1338/2361 (2026-01-29)" in out
-    assert "只收錄上市, 設計如此" in out
+    assert "上市＋上櫃" in out
     assert "non-session dates: 3" in out
     assert "不要刪列" in out and "永久" in out
 
@@ -223,3 +225,32 @@ def test_run_tolerates_results_without_the_new_keys(monkeypatch):
         "tables": {}, "thin_days": {}, "integrity": {}})
 
     assert health.run(engine=object(), strict=False) == 0
+
+
+def test_tpex_gaps_are_reported_but_never_block_strict(capsys):
+    """上櫃三表近期全缺（TPEx 掛了）：逐表列出，但 strict 仍回 0——上櫃單邊失敗不擋每日報告。"""
+    engine, _ = _engine(first=[("AND market = :market", [])])
+
+    assert health.run(engine, strict=True, now=_NOW, is_session=_is_session) == 0
+    out = capsys.readouterr().out
+    assert "missing institutional_tpex dates (只報不擋): 4" in out
+
+
+def test_twse_recent_check_ignores_tpex_rows(capsys):
+    """上市近期缺日只看上市列（market IS NULL）：同日只有上櫃列不能讓上市缺日過關。"""
+    engine, _ = _engine(first=[("AND market IS NULL", [])])
+
+    assert health.run(engine, strict=True, now=_NOW, is_session=_is_session) == 1
+    assert "missing institutional dates: 4" in capsys.readouterr().out
+
+
+def test_source_dates_isolates_markets_on_a_real_table(pg_conn):
+    """假連線只比對 SQL 字串、驗不到過濾條件；這裡在真的表上種兩市場各一天。
+    種子用 2099 年（本機 pg_conn 連正式庫，交易會 rollback）。"""
+    from sqlalchemy import text as _text
+    pg_conn.execute(_text("INSERT INTO market.institutional (stock_id, date) VALUES ('2330', '2099-05-01')"))
+    pg_conn.execute(_text("INSERT INTO market.institutional (stock_id, date, market) "
+                          "VALUES ('3324', '2099-05-02', 'tpex')"))
+    start = _D(2099, 5, 1)
+    assert health._source_dates(pg_conn, "institutional", None, start) == [_D(2099, 5, 1)]
+    assert health._source_dates(pg_conn, "institutional", "tpex", start) == [_D(2099, 5, 2)]

@@ -10,6 +10,8 @@ def _no_fund_network(monkeypatch):
     """daily 的基金段會連公會與鉅亨；本檔只驗股票段，一律換成不連外的假函式。"""
     calls = []
     monkeypatch.setattr(funds, "daily_update", lambda eng, asof=None: calls.append(asof))
+    # 集保段同理（會連 TDCC 開放資料）
+    monkeypatch.setattr(crawl.sources, "fetch_tdcc_latest", lambda: None)
     return calls
 
 
@@ -61,11 +63,12 @@ def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch, capsys):
 
     crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
 
-    assert [c[1] for c in calls if c[0] == "refresh"] == ["institutional"]
+    assert [c[1] for c in calls if c[0] == "refresh"] == ["institutional", "institutional_tpex"]
 
     ranged = {c[1] for c in calls if c[0] == "range"}
     # valuation 也走 crawl_range（BWIBBU_d 補窗口內缺日）；但不進 REVISED_SOURCES
-    assert ranged == {"price", "institutional", "margin", "valuation"}
+    assert ranged == {"price", "institutional", "margin", "valuation",
+                      "institutional_tpex", "margin_tpex", "valuation_tpex"}
     snaps = [c for c in calls if c[0] == "snapshots"]
     assert len(snaps) == 1                          # 走共用入口,不是三個直接呼叫
     # daily 把回補窗口交給快照段,index 才能依窗口逐月抓(月底漏跑補得回上月)
@@ -114,7 +117,8 @@ def test_daily_update_refreshes_recent_stored_days_but_not_asof(monkeypatch):
 
     crawl.daily_update(engine=_RecentEng(), asof=date(2024, 6, 5), days=3)
 
-    assert refreshed == [("institutional", [date(2024, 6, 3), date(2024, 6, 4)])]
+    assert refreshed == [(s, [date(2024, 6, 3), date(2024, 6, 4)])
+                         for s in ("institutional", "institutional_tpex")]
 
 
 def _wire_ex_dividend(monkeypatch, returns, events):
@@ -245,3 +249,36 @@ def _stub_stock_steps(monkeypatch, adjusted=None):
     monkeypatch.setattr(crawl, "crawl_ex_dividend", lambda conn, s, e, require=False: 0)
     monkeypatch.setattr(adjust, "refresh_recent",
                         lambda engine, start, end: (adjusted if adjusted is not None else []).append(1))
+
+
+def _stub_daily(monkeypatch, failing):
+    """子步驟換成記錄器；``failing`` 內的來源在 crawl_range 丟 RuntimeError（連續空日那種）。"""
+    calls = []
+
+    def fake_range(eng, src, dates, resume=True):
+        calls.append(("range", src))
+        if src in failing:
+            raise RuntimeError(f"{src}: 4 consecutive trading days returned 0 rows")
+
+    monkeypatch.setattr(crawl, "crawl_range", fake_range)
+    monkeypatch.setattr(crawl, "refresh_range", lambda eng, src, dates: calls.append(("refresh", src)))
+    monkeypatch.setattr(crawl, "crawl_snapshots", lambda eng, dates=None: calls.append(("snapshots",)) or {})
+    monkeypatch.setattr(crawl, "crawl_monthly_revenue", lambda conn, month: calls.append(("rev",)) or 0)
+    monkeypatch.setattr(crawl, "crawl_ex_dividend", lambda conn, s, e, require=False: 0)
+    monkeypatch.setattr(adjust, "refresh_recent", lambda engine, start, end: calls.append(("adjust",)))
+    return calls
+
+
+def test_tpex_source_failure_is_reported_and_daily_continues(monkeypatch, capsys):
+    calls = _stub_daily(monkeypatch, failing={"institutional_tpex", "margin_tpex"})
+    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+    assert {"snapshots", "rev", "adjust"} <= {c[0] for c in calls}, "上櫃失敗不能讓後段中斷"
+    assert ("range", "valuation_tpex") in calls       # 一個上櫃來源壞掉，其他上櫃照跑
+    assert "**WARN institutional_tpex" in capsys.readouterr().out
+
+
+def test_twse_source_failure_still_aborts_daily(monkeypatch):
+    # 反向：上市來源維持 fail-fast，沒被「只報不擋」一起吞掉
+    _stub_daily(monkeypatch, failing={"institutional"})
+    with pytest.raises(RuntimeError, match="institutional"):
+        crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)

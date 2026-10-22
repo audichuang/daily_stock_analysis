@@ -35,8 +35,8 @@ make morning       # 補資料 → 昨晚國際盤收盤 → 期交所籌碼 →
 今日候選的報告 §0 有一行「處置／注意股名單」狀態，§5 有「事件日曆」；待觸發計畫的代號不在候選裡，
 要查處置／注意狀態用 `uv run python -m market_data.risk_flags <代號…>`（`2424` 或 `2424.TW` 皆可）。
 
-再補一次寬掃，拿今天的資金流向樣本（**只涵蓋上市**：`market.institutional`／`margin`／`valuation` 沒有上櫃股，
-`momentum` 的「法人買超」篩選與「融資減」標籤等於排除所有上櫃，流動性夠的標的約少三成，族群分布因此偏上市）：
+再補一次寬掃，拿今天的資金流向樣本（`market.institutional`／`margin`／`valuation` 上市與上櫃共表，
+上櫃回補完成前，缺法人資料的上櫃股會被 `momentum` 的「法人買超」篩選剔除，族群分布可能偏上市）：
 
 ```bash
 uv run --env-file .env python scripts/screen_tw.py --strategy momentum \

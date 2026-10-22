@@ -49,7 +49,7 @@ class StockInfo(Base):
 
 
 class Valuation(Base):
-    """估值三率 (每日,每股)。"""
+    """估值三率 (每日,每股)。上市 BWIBBU、上櫃 peQryDate。"""
 
     __tablename__ = "valuation"
 
@@ -58,6 +58,9 @@ class Valuation(Base):
     pe_ratio: Mapped[float | None] = mapped_column(Numeric(12, 2))
     pb_ratio: Mapped[float | None] = mapped_column(Numeric(12, 2))
     dividend_yield: Mapped[float | None] = mapped_column(Numeric(8, 4))
+    # NULL = 上市（TWSE，歷史列沿用）、'tpex' = 上櫃。resume／replace／health 依此分市場，
+    # 兩邊各自補缺、互不刪除（見 crawl.SOURCE_MARKET）。
+    market: Mapped[str | None] = mapped_column(String(8))
 
 
 class MarketIndex(Base):
@@ -83,6 +86,9 @@ class Institutional(Base):
     trust_net: Mapped[int | None] = mapped_column(BigInteger)  # 投信
     dealer_net: Mapped[int | None] = mapped_column(BigInteger)  # 自營商
     total_net: Mapped[int | None] = mapped_column(BigInteger)  # 三大法人合計
+    # NULL = 上市（TWSE，歷史列沿用）、'tpex' = 上櫃。resume／replace／health 依此分市場，
+    # 兩邊各自補缺、互不刪除（見 crawl.SOURCE_MARKET）。
+    market: Mapped[str | None] = mapped_column(String(8))
 
 
 class Margin(Base):
@@ -98,6 +104,9 @@ class Margin(Base):
     short_balance: Mapped[int | None] = mapped_column(BigInteger)  # 融券今日餘額
     short_buy: Mapped[int | None] = mapped_column(BigInteger)
     short_sell: Mapped[int | None] = mapped_column(BigInteger)
+    # NULL = 上市（TWSE，歷史列沿用）、'tpex' = 上櫃。resume／replace／health 依此分市場，
+    # 兩邊各自補缺、互不刪除（見 crawl.SOURCE_MARKET）。
+    market: Mapped[str | None] = mapped_column(String(8))
 
 
 class ExDividend(Base):
@@ -207,3 +216,21 @@ class FundNav(Base):
     change: Mapped[float | None] = mapped_column(Numeric(18, 6))
     change_pct: Mapped[float | None] = mapped_column(Numeric(12, 6))
     source: Mapped[str] = mapped_column(String(8), nullable=False)
+
+
+class HoldingDist(Base):
+    """集保股權分散表（每週，每股每持股分級一列），來源 TDCC。
+
+    ``level`` 沿用集保開放資料（1-5）的編號：1~15 為持股分級（15 = 1,000,001 股以上，
+    即千張大戶），16 = 差異數調整、17 = 合計。``date`` 是集保資料日（週五，遇假日提前）。
+    開放資料只給最新一週；歷史靠 TDCC 個股查詢頁（約 51 週）逐檔回補，那頁沒有 16。
+    """
+
+    __tablename__ = "holding_dist"
+
+    stock_id: Mapped[str] = mapped_column(String(12), primary_key=True)
+    date: Mapped[_date] = mapped_column(Date, primary_key=True)
+    level: Mapped[int] = mapped_column(Integer, primary_key=True)
+    holders: Mapped[int | None] = mapped_column(Integer)
+    shares: Mapped[int | None] = mapped_column(BigInteger)
+    pct: Mapped[float | None] = mapped_column(Numeric(8, 2))  # 占集保庫存數比例 %

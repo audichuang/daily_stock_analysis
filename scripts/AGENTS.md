@@ -4,11 +4,12 @@
 
 ## 模組定位
 
-這個目錄混了六種性質完全不同的腳本,動手前先認清手上這支是哪一種——副作用差很多:
+這個目錄混了七種性質完全不同的腳本,動手前先認清手上這支是哪一種——副作用差很多:
 
 | 類別 | 腳本 | 副作用 |
 |---|---|---|
 | 台股波段研究 | `screen_tw`、`measure_signal_forward`、`portfolio_walkforward`、`backtest_screen`、`verify_swing_decisions` | 唯讀本地 Postgres;`verify_swing_decisions` 只讀 `journal/`,沒有任何腳本會寫它;`screen_tw` 的 `main()` 在基準日＝預期場次時另即時抓官方公告(處置／注意股、事件日曆,`--no-risk-flags`／`--no-events` 關閉),純函式與三支量測 loader 不連網 |
+| 個股資料包 | `tw_stock_dossier` | 唯讀本地 Postgres;券商分點另連網查富邦 DJ(`--no-branch` 關閉),不寫 DB |
 | 每日報告回測 | `backtest_daily_report_levels` | 唯讀應用庫(報告價位;有 `STORAGE_DATABASE_URL` 就讀它,否則 `data/stock_analysis.db`)與 Postgres(行情) |
 | 盤前／盤中取數 | `overnight`、`taifex_positions`、`intraday_breadth`、`kr_tw_memory_watch` | 連網(yfinance／Shioaji／期交所),不寫 DB;後兩支另讀 DB |
 | 股票索引 | `fetch_tw_stock_list`、`merge_tw_into_index`、`refresh_us_stock_index`、`refresh_stock_index`、`generate_index_from_csv` | **改寫進版控的索引檔與種子 CSV** |
