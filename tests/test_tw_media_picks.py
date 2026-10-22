@@ -133,3 +133,13 @@ def test_nb_gives_up_after_attempts(monkeypatch):
         assert "timed out" in str(exc)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_snapshot_dependencies_exist():
+    # snapshot() swallows errors per stock, so a moved helper would silently null every `data`
+    from tests.litellm_stub import ensure_litellm_stub
+
+    ensure_litellm_stub()
+    from src.services import tw_stock_dossier as dossier
+
+    assert callable(dossier.fundamentals) and callable(dossier.chips)

@@ -5,7 +5,7 @@
 ## 1. 硬规则
 
 - 目录边界：后端 `src/`、`data_provider/`、`api/`、`bot/`；Web `apps/dsa-web/`；桌面端 `apps/dsa-desktop/`；部署与流水线 `scripts/`、`.github/workflows/`、`docker/`。台股波段的每日决策日志在 `journal/`（append-only、**进版控**，见 `journal/README.md`）；`data/`、`reports/`、`logs/` 是 gitignore 的运行期目录，长期记录不要放那里。
-- 未经明确确认，不执行 `git commit`、`git tag`、`git push`。唯一例外：平日 07:30 的盘前判读排程只 commit＋push `journal/` 那两个 jsonl 到 `develop`（让预测当天进版控）。
+- 未经明确确认，不执行 `git commit`、`git tag`、`git push`。例外只有两个排程，都只 commit＋push 自己写的 `journal/*.jsonl` 到 `develop`（让预测当天进版控）：平日 07:30 盘前判读（`morning-calls`、`swing-decisions`）、平日 23:00 媒体点名（`media-picks`）。
 - 同样要先确认：安装或升级依赖（`uv pip install`、`npm install <pkg>`、改 `requirements.txt`）、删除文件或目录、改 infra 与部署配置、跑全量离线测试。读代码、跑 §6 快速门槛、生成分析文档可自主。
 - commit message 用英文，不加 `Co-Authored-By`。
 - 不写死密钥、账号、路径、模型名、端口或环境差异逻辑。

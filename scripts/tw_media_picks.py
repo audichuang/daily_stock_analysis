@@ -29,7 +29,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts"))
 
 JOURNAL = ROOT / "journal" / "media-picks.jsonl"
 TRANSCRIPTS = ROOT / "data" / "media_picks"
@@ -226,8 +225,8 @@ def snapshot(code: str, as_of: date, engine) -> dict | None:
     """Data as of the air date (episodes air after close, so that day's close is known)."""
     import pandas as pd
 
-    import tw_stock_dossier as dossier
     from market_data import market_repo
+    from src.services import tw_stock_dossier as dossier
 
     sid = code.split(".")[0]
     px = market_repo.price_history(sid, start=as_of - timedelta(days=150), end=as_of, engine=engine)
