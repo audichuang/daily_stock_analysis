@@ -148,7 +148,7 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
   这是「现在下单买不到」的直接证据，比涨幅百分比有用得多：2026-08-03 华邦电锁 143，
   委买排队 **13,533 张**、委卖 **0 张**。锁板时 `buy_price`／`sell_price` 会同时回 `0.0`，
   别拿它们当报价。本路径无五档，所以只能说「锁死」不能量化排队深度以外的结构。
-- **指数与期货也走同一个 `snapshots()`**：加权指数 `api.Contracts.Indexs.TSE["001"]`、
+- **指数与期货也走同一个 `snapshots()`**：加权指数 `api.Contracts.Indexs.TSE["IX0001"]`（不是 `001`，見上方大盤指數條）、
   台指期近月 `api.Contracts.Futures.TXF["TXFR1"]`。盘中要算「现货 vs 期货逆价差」两个一起抓即可。
   盘中即时 breadth 的现成工具见 `scripts/intraday_breadth.py`。
 - **日線歷史落後已收盤場次會標 STALE**：台股分析前，`pipeline._get_analysis_context_with_market_fallback`（一般分析與 Agent pack 兩個呼叫點共用）用 `trading_calendar.count_missing_sessions` 算 DB 最後一根日 K 到「最近已收盤場次」之間缺幾個交易日。容忍規則：effective 日就是市場今天（剛收盤、當日爬取尚未跑）容忍 1 場，其餘容忍 0 場；超過就在 context 寫 `daily_history_stale = {last_date, expected, missing_sessions}` 並印 WARNING，`analysis_context_builder` 把 `daily_bars` block 與 `today` item 標 `STALE`（`missing_reason=daily_history_stale`），沿用既有「STALE 不得給高信心」規則。**只降信心、不擋分析**。已知誤標：停牌股（最後一根本來就舊）會長期標 STALE；颱風等臨時休市 XTAI 日曆不知道，休市隔天可能誤標一次。日曆不可用時不標也不拋出。

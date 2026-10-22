@@ -5,7 +5,7 @@ description: 無人值守地把上游 ZhuLinsen/daily_stock_analysis 的 main me
 
 # dsa 上游同步（無人值守）
 
-這是排程，沒有人會回答問題，不要停下來問。**產出是一條待審分支，不是合進 develop**——merge 進 `develop` 與 push `develop` 永遠留給使用者（repo `AGENTS.md` §1、§9）。repo 規則以 `$REPO/AGENTS.md` 為準，先讀 §1、§6、§10。
+這是排程，沒有人會回答問題，不要停下來問。**產出是一條待審分支，不是合進 develop**——這是本 skill 自己的規定，不是 `AGENTS.md` 的：§1、§9 允許 agent 在 CI 綠後自己合進 `develop`，但上游 merge 改動面大、排程時沒人在場，所以無人值守跑的時候 merge 與 push `develop` 都留給使用者審過再做。使用者在場、要求收尾時，照 §9 等 CI 綠再合。repo 規則以 `$REPO/AGENTS.md` 為準，先讀 §1、§6、§10。
 
 固定值：
 
@@ -89,7 +89,7 @@ git -C $REPO worktree add --detach ~/.cache/dsa-upstream-sync/$DATE-up upstream/
 git push origin HEAD:refs/heads/chore/upstream-sync-$DATE
 ```
 
-不開 PR：這是無人值守排程，交付物只有待審分支；要不要開 PR、何時合進 `develop` 由使用者審過後決定（§9）。推上去的未合併分支就是下一輪 precheck 的鎖。
+不開 PR：這是無人值守排程，交付物只有待審分支；要不要開 PR、何時合進 `develop` 由使用者審過後決定（本 skill 的規定，理由見開頭；使用者在場收尾時照 §9 等 CI 綠再合）。推上去的未合併分支就是下一輪 precheck 的鎖。
 
 ## 6. Bark
 
