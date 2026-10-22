@@ -407,19 +407,40 @@ class YfinanceFetcher(BaseFetcher):
             行情字典，失败时返回 None
         """
         ticker = yf.Ticker(yf_code)
-        # 多取几日以便找到前一个有价格的交易日（涨跌幅的基准）。
-        hist = ticker.history(period='5d')
+        # 多取几日以便找到前一场（涨跌幅的基准）。keepna=True：Yahoo 偶发把整场日线回成空值
+        # （OHLC 全空、成交量 0），预设的 keepna=False 会把这列整个丢掉，上一场就静默变成
+        # 「前两场」（踩过：2026-10-23 ^GSPC/^DJI 的 10-21 被丢，SPX 拿 10-20 当基准报 -0.64%，
+        # 对 10-21 实为 -1.21%）。保留空列才看得出中间缺了一场。
+        hist = ticker.history(period='5d', keepna=True)
         if hist.empty:
             return None
         nan = float('nan')
+        # 结尾「整列全空」的列（keepna=False 会丢的形状）不当最新列：开盘前若出现这种占位列，
+        # 拿 fast_info 补价会把上一场收盘标成这一场。但要留警告——也可能是最新一场整列缺漏，
+        # 这时最新列其实是上一场。
+        trailing_blank = 0
+        while trailing_blank < len(hist) and self._is_blank_daily_row(hist.iloc[-1 - trailing_blank]):
+            trailing_blank += 1
+        if trailing_blank == len(hist):
+            return None
+        if trailing_blank:
+            logger.warning(
+                f"[Yfinance] {yf_code} 最后 {trailing_blank} 列日线整列为空（{hist.index[-1]}），"
+                f"以 {hist.index[-1 - trailing_blank]} 为最新一列；若该场已收盘，现价可能是上一场"
+            )
+            hist = hist.iloc[:-trailing_blank]
         today_row = hist.iloc[-1]
-        earlier = hist.iloc[:-1].dropna(subset=['Close'])
-        # 没有前一列就没有涨跌：「没有读数」不是 0（见 src/AGENTS.md），留 NaN 让序列化边界清成 null。
-        prev_close = float(earlier.iloc[-1]['Close']) if not earlier.empty else nan
+        # 基准只取紧邻的前一列：它为空就是没有读数，不往前跳——跳过去会拿前两场当「昨收」，
+        # 给出看起来可信的错误涨跌（没有读数不是 0，见 src/AGENTS.md）。
+        prev_close = float(hist.iloc[-2]['Close']) if len(hist) > 1 else nan
+        if len(hist) > 1 and not math.isfinite(prev_close):
+            logger.warning(
+                f"[Yfinance] {yf_code} 前一场 ({hist.index[-2]}) 收盘价为空，涨跌幅留空"
+            )
         price = float(today_row['Close'])
         if not math.isfinite(price):
-            # Yahoo 偶发把最新一列的 OHLC 回成空值、只留成交量（yfinance 的 keepna=False 只丢
-            # 「全部为空」的列，这种列会留下来；踩过：2026-10-22 纽约盘前 SPX/IXIC/DJI 全空）。
+            # Yahoo 偶发把最新一列的 OHLC 回成空值、只留成交量（这种列 keepna=False 也会留下；
+            # 踩过：2026-10-22 纽约盘前 SPX/IXIC/DJI 全空）。
             # 不能退回前一列——那是上一场的收盘，会被当成这一场。改读 fast_info.last_price：
             # yfinance 在日线收盘为空时会改用 chart metadata 的 regularMarketPrice。
             price = self._fast_info_last_price(ticker)
@@ -448,6 +469,13 @@ class YfinanceFetcher(BaseFetcher):
             'amount': 0.0,  # Yahoo Finance 不提供准确成交额
             'amplitude': amplitude,
         }
+
+    @staticmethod
+    def _is_blank_daily_row(row: Any) -> bool:
+        """OHLC 全空且成交量为空或 0：yfinance keepna=False 会整列丢掉的形状。"""
+        prices_blank = all(pd.isna(row.get(col)) for col in ('Open', 'High', 'Low', 'Close'))
+        volume = row.get('Volume')
+        return bool(prices_blank and (pd.isna(volume) or float(volume) == 0))
 
     @staticmethod
     def _fast_info_last_price(ticker: Any) -> float:
