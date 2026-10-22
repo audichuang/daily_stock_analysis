@@ -124,6 +124,10 @@ class PortfolioService:
         self.repo = repo or PortfolioRepository()
         # 本次換算中查無匯率（走 1:1 回退）的幣別對，get_portfolio_snapshot 逐帳戶收集。
         self._fx_missing_pairs: Set[Tuple[str, str]] = set()
+        # 快照估值日用到的匯率超過 PORTFOLIO_FX_MAX_AGE_DAYS 的幣別對（只在 get_portfolio_snapshot
+        # 期間收集，見 _note_fx_rate_age）。
+        self._fx_aged_pairs: Set[Tuple[str, str]] = set()
+        self._fx_view_date: Optional[date] = None
 
     # ------------------------------------------------------------------
     # Account CRUD
@@ -500,6 +504,27 @@ class PortfolioService:
         else:
             account_rows = self.repo.list_accounts(include_inactive=False)
 
+        self._fx_view_date = as_of_date
+        try:
+            return self._build_portfolio_snapshot(
+                account_rows=account_rows,
+                as_of_date=as_of_date,
+                method=method,
+                include_realtime=include_realtime,
+                read_only=read_only,
+            )
+        finally:
+            self._fx_view_date = None
+
+    def _build_portfolio_snapshot(
+        self,
+        *,
+        account_rows: List[Any],
+        as_of_date: date,
+        method: str,
+        include_realtime: bool,
+        read_only: bool,
+    ) -> Dict[str, Any]:
         accounts_payload: List[Dict[str, Any]] = []
         aggregate_currency = PORTFOLIO_AGGREGATE_CURRENCY
         aggregate = {
@@ -517,6 +542,7 @@ class PortfolioService:
         aggregate_missing_pairs: Set[Tuple[str, str]] = set()
         for account in account_rows:
             self._fx_missing_pairs = set()
+            self._fx_aged_pairs = set()
             account_snapshot = self._replay_account(
                 account=account,
                 as_of_date=as_of_date,
@@ -550,6 +576,11 @@ class PortfolioService:
                     valuation_currency=account.base_currency,
                 )
 
+            # 匯率年齡只影響「現在看」的旗標，不寫進 daily snapshot 的 fx_stale（上面已落庫）：落庫的列會被回撤
+            # 監控逐日 OR 180 天，把「當時匯率舊」存進去會讓回撤卡半年不可用。
+            account_snapshot["public"]["fx_stale"] = bool(
+                account_snapshot["fx_stale"] or self._fx_aged_pairs
+            )
             accounts_payload.append(account_snapshot["public"])
             aggregate["limitations"] = _merge_portfolio_limitations(
                 aggregate["limitations"],
@@ -623,7 +654,7 @@ class PortfolioService:
                     stale_fee,
                     stale_tax,
                 ]
-            )
+            ) or bool(self._fx_aged_pairs)
             aggregate_missing_pairs |= self._fx_missing_pairs
 
         return {
@@ -1492,11 +1523,8 @@ class PortfolioService:
             as_of=as_of_date,
         )
         if direct is not None and direct.rate > 0:
-            return (
-                float(amount) * float(direct.rate),
-                self._is_fx_rate_stale(direct, as_of_date),
-                "direct_rate",
-            )
+            self._note_fx_rate_age(direct, (from_norm, to_norm), as_of_date)
+            return float(amount) * float(direct.rate), bool(direct.is_stale), "direct_rate"
 
         inverse = self.repo.get_latest_fx_rate(
             from_currency=to_norm,
@@ -1504,11 +1532,8 @@ class PortfolioService:
             as_of=as_of_date,
         )
         if inverse is not None and inverse.rate > 0:
-            return (
-                float(amount) / float(inverse.rate),
-                self._is_fx_rate_stale(inverse, as_of_date),
-                "inverse_rate",
-            )
+            self._note_fx_rate_age(inverse, (from_norm, to_norm), as_of_date)
+            return float(amount) / float(inverse.rate), bool(inverse.is_stale), "inverse_rate"
 
         # P0 fallback: keep pipeline available even when FX cache is missing.
         # 金額沒有換算，記下這一對讓快照把彙總標成不可用（見 get_portfolio_snapshot）。
@@ -1518,16 +1543,29 @@ class PortfolioService:
         return float(amount), True, FX_FALLBACK_SOURCE
 
     @staticmethod
-    def _is_fx_rate_stale(rate_row: Any, as_of_date: date) -> bool:
-        """寫入時的 is_stale 之外，再以匯率日期的年齡判定（讀取端套同一個判定）。"""
-        if bool(getattr(rate_row, "is_stale", False)):
-            return True
+    def _is_fx_rate_aged(rate_row: Any, as_of_date: date) -> bool:
+        """匯率日期距 as_of_date 超過 PORTFOLIO_FX_MAX_AGE_DAYS（拿不到日期也算）。"""
         rate_date = getattr(rate_row, "rate_date", None)
         if isinstance(rate_date, datetime):
             rate_date = rate_date.date()
         if not isinstance(rate_date, date):
             return True
         return (as_of_date - rate_date).days > PORTFOLIO_FX_MAX_AGE_DAYS
+
+    def _note_fx_rate_age(self, rate_row: Any, pair: Tuple[str, str], as_of_date: date) -> None:
+        """快照估值日的換算用到舊匯率時記下幣別對；回傳的 stale 仍只看寫入時的 is_stale。
+
+        `is_stale` 只在寫入時決定，手動刷新一次之後就一直是 False——8 天前的匯率照樣顯示「最新」，
+        所以「現在看」的快照要再看匯率年齡。但這個年齡判定只對估值日成立：歷史日期（交易日的
+        已實現損益、回撤監控逐日換算）查得到的永遠是當時之前最後一次刷新的匯率，刷新只會寫
+        今天的日期，套年齡會讓它們永遠過期、按「刷新匯率」也救不回來。
+        """
+        view_date = getattr(self, "_fx_view_date", None)
+        aged_pairs = getattr(self, "_fx_aged_pairs", None)
+        if view_date is None or aged_pairs is None or as_of_date != view_date:
+            return
+        if self._is_fx_rate_aged(rate_row, as_of_date):
+            aged_pairs.add(pair)
 
     def convert_amount(
         self,

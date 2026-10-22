@@ -7,7 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -859,6 +859,109 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertFalse(fresh["fx_stale"])
         self.assertTrue(old["fx_stale"])
         self.assertFalse(old["fx_missing"])
+
+    def _twd_account_with_daily_snapshots(self, days: int):
+        """正式站形狀：TWD 帳戶每天都有 daily snapshot，匯率只在第一天刷新過一次。"""
+        account = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="TWD"
+        )
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 1),
+            rate=0.2, source="manual", is_stale=False,
+        )
+        for offset in range(days):
+            self.service.get_portfolio_snapshot(
+                account_id=account["id"], as_of=date(2026, 1, 1) + timedelta(days=offset), include_realtime=False
+            )
+        return account["id"]
+
+    def test_drawdown_fx_stale_ignores_rate_age_of_historical_rows(self) -> None:
+        # 回撤逐日換算查得到的是「當天之前最後一次刷新」的匯率；刷新只寫今天，套年齡判定的話
+        # 歷史列永遠過期、按「刷新匯率」也救不回來（10-15 刷新後 10-19~10-22 全被判過期）。
+        aid = self._twd_account_with_daily_snapshots(12)
+        as_of = date(2026, 1, 12)
+
+        before = self.risk_service.get_risk_report(account_id=aid, as_of=as_of, cost_method="fifo", include_realtime=False)
+        stale_top = self.service.get_portfolio_snapshot(
+            account_id=aid, as_of=as_of, include_realtime=False, read_only=True
+        )["fx_stale"]
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=as_of, rate=0.2, source="manual", is_stale=False,
+        )
+        after = self.risk_service.get_risk_report(account_id=aid, as_of=as_of, cost_method="fifo", include_realtime=False)
+
+        self.assertGreater(before["drawdown"]["series_points"], 1)
+        self.assertFalse(before["drawdown"]["fx_stale"])
+        self.assertFalse(after["drawdown"]["fx_stale"])
+        # 快照頂部（估值日）仍看年齡：刷新前過期、刷新後恢復
+        self.assertTrue(stale_top)
+        self.assertFalse(self.service.get_portfolio_snapshot(
+            account_id=aid, as_of=as_of, include_realtime=False, read_only=True)["fx_stale"])
+
+    def test_drawdown_still_flags_rates_written_as_stale(self) -> None:
+        # 反向：寫入時就標 is_stale 的匯率（線上抓取失敗、沿用舊值）仍要讓回撤標過期。
+        aid = self._twd_account_with_daily_snapshots(3)
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 2),
+            rate=0.2, source="cache_fallback", is_stale=True,
+        )
+
+        report = self.risk_service.get_risk_report(
+            account_id=aid, as_of=date(2026, 1, 3), cost_method="fifo", include_realtime=False
+        )
+
+        self.assertTrue(report["drawdown"]["fx_stale"])
+
+    def test_rate_age_of_past_trade_conversion_does_not_mark_current_view_stale(self) -> None:
+        # 反向：交易日的手續費按「當時」匯率換算，那時的匯率本來就可能是好幾天前刷新的；
+        # 估值日的匯率已刷新時，快照不能因為歷史換算而標過期。
+        account = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=date(2026, 1, 1), direction="in", amount=10000.0, currency="USD"
+        )
+        self.service.record_trade(
+            account_id=account["id"], symbol="AAPL", trade_date=date(2026, 1, 10), side="buy",
+            quantity=1, price=100, fee=1.0, market="us", currency="USD",
+        )
+        for rate_date in (date(2026, 1, 1), date(2026, 1, 20)):
+            self.service.repo.save_fx_rate(
+                from_currency="USD", to_currency="TWD", rate_date=rate_date, rate=30.0, source="manual", is_stale=False,
+            )
+            self.service.repo.save_fx_rate(
+                from_currency="TWD", to_currency="CNY", rate_date=rate_date, rate=0.2, source="manual", is_stale=False,
+            )
+
+        snapshot = self.service.get_portfolio_snapshot(
+            account_id=account["id"], as_of=date(2026, 1, 20), include_realtime=False, read_only=True
+        )
+
+        self.assertFalse(snapshot["fx_stale"])
+        self.assertFalse(snapshot["accounts"][0]["fx_stale"])
+
+    def test_daily_snapshot_row_does_not_persist_rate_age(self) -> None:
+        # 帳戶內換算（USD 現金 → TWD 帳戶）用到舊匯率：當下的快照標過期，但落庫的 daily snapshot
+        # fx_stale 不能存年齡判定——回撤監控會把它 OR 180 天。
+        account = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=date(2026, 1, 1), direction="in", amount=100.0, currency="USD"
+        )
+        for pair in (("USD", "TWD"), ("TWD", "CNY")):
+            self.service.repo.save_fx_rate(
+                from_currency=pair[0], to_currency=pair[1], rate_date=date(2026, 1, 1),
+                rate=30.0 if pair[0] == "USD" else 0.2, source="manual", is_stale=False,
+            )
+
+        snapshot = self.service.get_portfolio_snapshot(
+            account_id=account["id"], as_of=date(2026, 1, 10), include_realtime=False
+        )
+        rows = self.service.repo.list_daily_snapshots_for_risk(
+            as_of=date(2026, 1, 10), cost_method="fifo", account_id=account["id"], lookback_days=30
+        )
+
+        self.assertTrue(snapshot["fx_stale"])
+        self.assertTrue(snapshot["accounts"][0]["fx_stale"])
+        self.assertEqual([row.fx_stale for row in rows if row.snapshot_date == date(2026, 1, 10)], [False])
 
     def test_fx_refresh_disabled_returns_real_pair_count_without_fetching(self) -> None:
         account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="CNY")
