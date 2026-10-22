@@ -14,7 +14,7 @@
 | 盤前／盤中取數 | `overnight`、`taifex_positions`、`intraday_breadth`、`kr_tw_memory_watch` | 連網(yfinance／Shioaji／期交所),不寫 DB;後兩支另讀 DB |
 | 股票索引 | `fetch_tw_stock_list`、`merge_tw_into_index`、`refresh_us_stock_index`、`refresh_stock_index`、`generate_index_from_csv` | **改寫進版控的索引檔與種子 CSV** |
 | 資料庫維運 | `migrate_sqlite_to_pg`、`backfill_price_change_sign`、`migrate_storage_to_postgres` | **寫入 Postgres**;最後一支只碰 `--schema` 指定的應用庫表(分析歷史等),有 `--dry-run`,目標非空需 `--replace` |
-| 門檻／治理／打包 | `ci_gate.sh`、`ci_test_shard`、`check_ai_assets`、`test.sh`、`build-*`、`pyinstaller_runtime_compat` | CI 與發版流程直接呼叫,檔名被測試用字串釘住 |
+| 門檻／治理／打包 | `ci_gate.sh`、`ci_test_shard`、`ci_durations_from_junit`(從 CI 的 junit artifact 重算 shard 時長表,改寫進版控的 `.github/ci-test-durations.json`)、`check_ai_assets`、`test.sh`、`build-*`、`pyinstaller_runtime_compat` | CI 與發版流程直接呼叫,檔名被測試用字串釘住 |
 
 ## 進來改要遵守
 

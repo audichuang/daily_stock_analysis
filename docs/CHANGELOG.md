@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [chore] CI 提速：backend-tests 改用 uv 安裝相依（失敗退回 pip）、每個 shard 上傳 junit，新增 `scripts/ci_durations_from_junit.py` 重算過期的 `.github/ci-test-durations.json`（舊表停在 08-09、缺 107 個測試檔，三個 shard 實測 148／296／409 秒嚴重失衡）
 - [chore] 改用 develop／main 分流：日常 PR 合進 `develop`（CI 只跑 `develop` 與工作分支），發版時 `develop` fast-forward 進 `main` 再打 `rel-YYYY.MM.DD` tag，`ghcr-main.yml` 改由 `rel-*` tag 觸發建映像；盤前判讀的 journal 與上游同步改對 `develop`；`auto-tag.yml` 停用
 - [文件] `docs/INDEX.md` 新增「台股（本 fork）」專區（先讀／流程與資料／研究與對帳／研究紀錄／維運）；新增 `docs/research/` 收錄 2026-10-22 零買進診斷與台灣財經媒體掃描的研究紀錄；`AGENTS.md` 指向台股分析現況總覽
 - [文件] 新增 `docs/tw-analysis-overview.md`：台股每日分析的數據來源、護欄順序、開關建議與 2026-10-22 診斷／回測已回答的問題

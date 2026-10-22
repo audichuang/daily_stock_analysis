@@ -113,6 +113,9 @@ jobs:
     env:
       # ephemeral Postgres for market_data DB-backed tests (schema via Alembic)
       DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/stock_test
+      # fork 增量：每個 shard 留 junit，供 scripts/ci_durations_from_junit.py 重算
+      # .github/ci-test-durations.json（耗時資料過期時 shard 會嚴重失衡）。
+      PYTEST_ADDOPTS: --junitxml=pytest-junit.xml
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
@@ -126,6 +129,11 @@ jobs:
             .github/requirements-ci.txt
       - name: 📦 Install dependencies
         run: |
+          # fork 增量：先用 uv（每個 shard 省 30～50 秒），失敗才退回原本的 pip 重試迴圈。
+          if python -m pip install -q uv && uv pip install --system -r .github/requirements-ci.txt; then
+            exit 0
+          fi
+          echo "uv install failed, falling back to pip" >&2
           python -m pip install --upgrade pip
           for attempt in 1 2 3; do
             if python -m pip install -r .github/requirements-ci.txt; then
@@ -159,6 +167,14 @@ jobs:
           PYTEST_GROUP: ${{ matrix.shard }}
           PYTEST_FIRST_SHARD_OVERHEAD: '20'
         run: ./scripts/ci_gate.sh offline-tests
+      - name: 📤 Upload test timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-junit-${{ matrix.shard }}
+          path: pytest-junit.xml
+          retention-days: 14
+          if-no-files-found: ignore
 
   backend-gate:
     name: backend-gate
