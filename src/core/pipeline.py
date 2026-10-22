@@ -2799,14 +2799,25 @@ class StockAnalysisPipeline:
         # signal_score 46→55。不報錯，只是分數不對。
         # 只擋 PREMARKET：盤中／午休／收盤集合競價本來就該疊即時價，收盤後（POSTMARKET）
         # 那筆即時價就是當日收盤，DB 日線還沒進來時仍該補，不能一起關掉。
-        if market and infer_market_phase(market, market_now) == MarketPhase.PREMARKET:
-            return df
-
         last_val = df['date'].max()
         last_date = (
             last_val.date() if hasattr(last_val, 'date') else
             (last_val if isinstance(last_val, date) else pd.Timestamp(last_val).date())
         )
+        # 追加列的日期：盤中／盤後是今天；開盤前是報價所屬的上一場（與 _enhance_context 的
+        # quote_session 同一個判定）。
+        bar_date = market_today
+        if market and infer_market_phase(market, market_now) == MarketPhase.PREMARKET:
+            # 開盤前的報價就是上一場收盤。DB 已有那一場就不動（不拿報價蓋官方 K 棒）；
+            # DB 缺那一場（踩過：2026-10-22 紐約盤前，Yahoo 的 10-21 日線價格全空、沒入庫）
+            # 才把報價當成那一場補上——否則均線等指標都算在少了 T-1 的序列上，
+            # 而 today 估算列卻標 T-1。
+            bar_date = get_effective_trading_date(market, current_time=market_now)
+            provider_date = _coerce_to_date(getattr(realtime_quote, 'provider_timestamp', None))
+            if provider_date is not None and provider_date < bar_date:
+                bar_date = provider_date
+            if bar_date >= market_today or last_date >= bar_date:
+                return df
         yesterday_close = float(df.iloc[-1]['close']) if len(df) > 0 else price
         open_p = getattr(realtime_quote, 'open_price', None) or getattr(
             realtime_quote, 'pre_close', None
@@ -2841,10 +2852,10 @@ class StockAnalysisPipeline:
             if pct is not None:
                 df.loc[idx, 'pct_chg'] = pct
         else:
-            # 追加一行虚拟的当日实时 K 线。
+            # 追加一行虚拟的实时 K 线（日期见上面的 bar_date）。
             new_row = {
                 'code': code,
-                'date': market_today,
+                'date': bar_date,
                 'open': open_p,
                 'high': high_p,
                 'low': low_p,

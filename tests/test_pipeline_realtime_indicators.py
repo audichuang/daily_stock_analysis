@@ -184,24 +184,47 @@ class TestPremarketGuard(unittest.TestCase):
             self.config = Config._load_from_env()
         self.pipeline = StockAnalysisPipeline(config=self.config)
 
-    @patch("src.core.pipeline.get_market_now")
-    @patch("src.core.pipeline.is_market_open", return_value=True)
-    @patch("src.core.pipeline.get_market_for_stock", return_value="us")
-    @patch("src.core.pipeline.infer_market_phase", return_value=MarketPhase.PREMARKET)
-    def test_premarket_does_not_fabricate_today_bar(
-        self, _mock_phase, _mock_market, _mock_open, mock_now
-    ) -> None:
-        """盤前的「即時價」其實是昨收，疊上去會造出一根假日線讓指標全錯。"""
+    def _premarket_augment(self, *, db_last_offset: int, session_offset: int, provider_offset=None):
+        """盤前補 K：DB 最新列在 today-db_last_offset、上一場在 today-session_offset。"""
         today = date.today()
-        mock_now.return_value = datetime(
-            today.year, today.month, today.day, 10, 0, tzinfo=timezone.utc
-        )
-        df = _make_historical_df(last_date=today - timedelta(days=1))
-        result = self.pipeline._augment_historical_with_realtime(
-            df, _make_realtime_quote(price=999.0), "AAPL"
-        )
+        now = datetime(today.year, today.month, today.day, 10, 0, tzinfo=timezone.utc)
+        quote = _make_realtime_quote(price=999.0)
+        if provider_offset is not None:
+            quote.provider_timestamp = (today - timedelta(days=provider_offset)).isoformat()
+        df = _make_historical_df(last_date=today - timedelta(days=db_last_offset))
+        with patch("src.core.pipeline.get_market_now", return_value=now), \
+                patch("src.core.pipeline.is_market_open", return_value=True), \
+                patch("src.core.pipeline.get_market_for_stock", return_value="us"), \
+                patch("src.core.pipeline.infer_market_phase", return_value=MarketPhase.PREMARKET), \
+                patch(
+                    "src.core.pipeline.get_effective_trading_date",
+                    return_value=today - timedelta(days=session_offset),
+                ):
+            result = self.pipeline._augment_historical_with_realtime(df, quote, "AAPL")
+        return today, df, result
+
+    def test_premarket_does_not_fabricate_today_bar(self) -> None:
+        """盤前的「即時價」其實是昨收，疊上去會造出一根假日線讓指標全錯。"""
+        _, df, result = self._premarket_augment(db_last_offset=1, session_offset=1)
         self.assertEqual(len(result), len(df))
         self.assertNotEqual(result.iloc[-1]["close"], 999.0)
+
+    def test_premarket_fills_missing_prior_session_bar_with_quote(self) -> None:
+        """DB 缺 T-1（10/22 紐約盤前 Yahoo 的 10-21 空白）：報價就是 T-1 收盤，補成 T-1 那根。
+
+        只改 today 的日期標籤不夠——均線等指標仍算在停在 T-2 的序列上。
+        """
+        today, df, result = self._premarket_augment(db_last_offset=2, session_offset=1)
+        self.assertEqual(len(result), len(df) + 1)
+        self.assertEqual(result.iloc[-1]["close"], 999.0)
+        self.assertEqual(result.iloc[-1]["date"], today - timedelta(days=1))
+
+    def test_premarket_never_appends_bar_dated_today(self) -> None:
+        """反向：日曆查詢失敗（fail-open 回今天）或報價自稱今天，盤前都不得補今天的 K 棒。"""
+        _, df, result = self._premarket_augment(db_last_offset=2, session_offset=0)
+        self.assertEqual(len(result), len(df))
+        _, df, result = self._premarket_augment(db_last_offset=2, session_offset=1, provider_offset=0)
+        self.assertEqual(result.iloc[-1]["date"], date.today() - timedelta(days=1))
 
     @patch("src.core.pipeline.get_market_now")
     @patch("src.core.pipeline.is_market_open", return_value=True)
