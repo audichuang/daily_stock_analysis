@@ -1185,12 +1185,49 @@ def test_yellow_bullish_tw_summary_has_no_tags_and_does_not_soften_buy() -> None
 
 def test_yellow_tw_summary_wording_still_produces_traditional_tags() -> None:
     cautious = _tw_context("大盤漲多震盪，宜謹慎觀望。", "yellow", "訊號分化，控制倉位並等待量價確認。")
-    cooling = _tw_context("類股輪動降溫，高風險族群留意。", "yellow", "訊號分化，控制倉位並等待量價確認。")
+    cooling = _tw_context("類股資金退潮，高風險族群留意。", "yellow", "訊號分化，控制倉位並等待量價確認。")
 
     assert cautious is not None and "conservative" in cautious.risk_tags
     assert cooling is not None
     assert "market_cooling" in cooling.risk_tags
     assert "high_risk" in cooling.risk_tags
+
+
+def test_tw_summary_saying_momentum_cooled_on_record_high_does_not_soften_buy() -> None:
+    # 10-06 實例：創新高日摘要寫「追價力道……降溫」，舊詞表把它標成 market_cooling、護欄把買進壓成觀望
+    from src.daily_market_context_guardrail import apply_daily_market_context_guardrail
+    from tests.test_daily_market_context_guardrail import _result
+
+    context = _tw_context(
+        "加權指數收盤再創歷史新高，整體判斷為「偏暖但轉入高檔震盪」，追價力道已比前一日明顯降溫。",
+        "yellow",
+        "訊號分化，控制倉位並等待量價確認。",
+    )
+    assert context is not None
+    assert "market_cooling" not in context.risk_tags
+
+    result = _result()
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=context.to_safe_dict(), report_language="zh"
+    )
+    assert adjustments == []
+    assert result.decision_type == "buy"
+
+
+def test_tw_summary_with_ebb_still_tags_market_cooling_and_softens_buy() -> None:
+    # 反向：拿掉「降溫」不能連「退潮」一起放掉
+    from src.daily_market_context_guardrail import apply_daily_market_context_guardrail
+    from tests.test_daily_market_context_guardrail import _result
+
+    context = _tw_context("加權指數量縮收黑，資金退潮。", "yellow", "訊號分化，控制倉位並等待量價確認。")
+    assert context is not None
+    assert context.risk_tags == ["market_cooling"]
+
+    result = _result()
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=context.to_safe_dict(), report_language="zh"
+    )
+    assert "daily_market_context_buy_softened" in adjustments
 
 
 def test_red_tw_market_light_still_softens_buy() -> None:
