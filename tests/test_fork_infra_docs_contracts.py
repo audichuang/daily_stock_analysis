@@ -198,3 +198,4 @@ def test_upstream_sync_skill_does_not_cite_agents_as_forbidding_develop_merge():
     skill = _read(".claude/skills/dsa-upstream-sync/SKILL.md")
     assert "永遠留給使用者（repo `AGENTS.md` §1、§9）" not in skill
     assert "§1、§9 允許 agent 在 CI 綠後自己合進 `develop`" in skill
+    assert "由使用者審過後決定（§9）" not in skill
