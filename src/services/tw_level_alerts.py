@@ -84,7 +84,7 @@ def format_level_alert_markdown(meta: Dict[str, Any], price: Optional[float],
     who = f"{meta.get('name') or ''} {meta['code']}".strip()
     lines = [f"**{arrow} {who} {verb}{meta['label']}**", ""]
     if adjusted:
-        lines[:0] = [f"⚠️ 價位建立後（{meta.get('as_of')}）有除權息，價位基準已變動，請在盯盤看板重建警報", ""]
+        lines[:0] = [f"⚠️ 價位建立後（{meta.get('as_of')}）有除權息，價位基準已變動，請等盤後資料更新後在盯盤看板重建警報", ""]
     if price:
         lines.append(f"現價 **{_fmt(price)}**（觸發價 {_fmt(edge)}，{(price / edge - 1) * 100:+.1f}%）")
     lines.append(f"- 價位：{meta['label']} {zone}（{meta.get('as_of') or '—'} 的 SMC 價位）")

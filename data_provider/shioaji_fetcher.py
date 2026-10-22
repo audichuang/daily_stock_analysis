@@ -343,6 +343,7 @@ def shioaji_main_indices() -> Optional[list]:
             "amount": safe_float(getattr(snap, "total_amount", None)) or 0.0,
             "amplitude": (high - low) / prev_close * 100 if prev_close else 0.0,
             "as_of": _ns_to_iso(getattr(snap, "ts", None)),
+            "source": "shioaji",  # 前端靠它分「即時／收盤／延遲」標示
         })
     # 依固定順序（加權在前）
     order = [out for _, _, out, _ in _TW_MAIN_INDEX_CONTRACTS]

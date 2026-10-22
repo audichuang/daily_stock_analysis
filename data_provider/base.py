@@ -3504,6 +3504,7 @@ class DataFetcherManager:
             "amount": 0.0,
             "amplitude": None,
             "as_of": str(row.get("date"))[:10],
+            "source": "official_close",  # 前一場官方收盤，不是盤中即時
         }]
 
     def get_main_indices(self, region: str = "cn") -> List[Dict[str, Any]]:

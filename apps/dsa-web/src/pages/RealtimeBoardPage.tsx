@@ -34,7 +34,8 @@ const SCOPE_STORAGE_KEY = 'dsa.board.scope';
 type Scope = 'all' | 'watch' | 'holdings';
 const SCOPES: Scope[] = ['all', 'watch', 'holdings'];
 
-// 帳本持股（跨帳戶合併同一代碼）：成本以股數加權，用來對即時價算未實現損益
+// 帳本持股（跨帳戶合併同一代碼）：成本以股數加權，用來對即時價算未實現損益。
+// key 一律是 normalizeStockCode 後的代碼：自選清單是原樣字串（可能小寫），帳本與它比對都要先正規化
 type Holding = { quantity: number; avgCost: number; currency: string; accounts: string[] };
 
 function readScope(): Scope {
@@ -75,6 +76,20 @@ function freshnessOf(item?: StockQuoteBatchItem): Freshness {
   if (!item || !item.quote) return 'unavailable';
   if (item.quote.source === 'shioaji' && item.quote.isStale === false) return 'live';
   return 'delayed';
+}
+
+// 大盤指數條的時效標示：照後端回的 source 分，不能一律寫延遲（Shioaji 有設定時指數是即時快照）
+type IndexSourceKind = 'live' | 'close' | 'delayed';
+const INDEX_HINT_KEY = {
+  live: 'board.indices.liveHint',
+  close: 'board.indices.closeHint',
+  delayed: 'board.indices.delay',
+} as const;
+
+function indexSourceTag(idx?: MarketIndex): { kind: IndexSourceKind; asOf: string | null } {
+  if (idx?.source === 'shioaji') return { kind: 'live', asOf: idx.asOf };
+  if (idx?.source === 'official_close') return { kind: 'close', asOf: idx.asOf };
+  return { kind: 'delayed', asOf: null };
 }
 
 // 内联走势图：自管 range + 数据；展开时按 code 懒加载
@@ -261,14 +276,15 @@ const RealtimeBoardPage: React.FC = () => {
         for (const acc of snap.value.accounts) {
           for (const p of acc.positions) {
             if (!(p.quantity > 0)) continue;
-            const h = merged[p.symbol];
+            const key = normalizeStockCode(p.symbol);
+            const h = merged[key];
             if (h) {
               const qty = h.quantity + p.quantity;
               h.avgCost = (h.avgCost * h.quantity + p.avgCost * p.quantity) / qty;
               h.quantity = qty;
               if (!h.accounts.includes(acc.accountName)) h.accounts.push(acc.accountName);
             } else {
-              merged[p.symbol] = { quantity: p.quantity, avgCost: p.avgCost, currency: p.currency, accounts: [acc.accountName] };
+              merged[key] = { quantity: p.quantity, avgCost: p.avgCost, currency: p.currency, accounts: [acc.accountName] };
             }
           }
         }
@@ -288,7 +304,8 @@ const RealtimeBoardPage: React.FC = () => {
   const codes = useMemo<string[] | null>(() => {
     if (loading) return null;
     const held = Object.keys(holdings).sort((a, b) => a.localeCompare(b));
-    const watchSet = new Set(watchCodes);
+    // 自選寫成 `2330.tw`、帳本是 `2330.TW` 也是同一檔：比對前兩邊都正規化，列上沿用自選的寫法
+    const watchSet = new Set(watchCodes.map(normalizeStockCode));
     if (scope === 'watch') return watchCodes;
     if (scope === 'holdings') return held;
     return [...watchCodes, ...held.filter((c) => !watchSet.has(c))];
@@ -454,7 +471,7 @@ const RealtimeBoardPage: React.FC = () => {
 
   // 持股欄：股數＋以即時價算的未實現損益（%），成本用帳本跨帳戶加權平均
   const positionCell = (code: string, q?: StockQuote | null) => {
-    const h = holdings[code];
+    const h = holdings[normalizeStockCode(code)];
     if (!h) return <span className="text-secondary-text">—</span>;
     const price = q?.currentPrice;
     const pnl = price ? (price - h.avgCost) * h.quantity : null;
@@ -550,9 +567,21 @@ const RealtimeBoardPage: React.FC = () => {
         <Card variant="bordered" padding="md">
           <div className="mb-2 flex items-center gap-2">
             <span className="text-sm font-medium">{t('board.indices.title')}</span>
-            <span className="text-xs text-secondary-text" aria-label={t('board.indices.delay')}>
-              {t('board.source.delayed')}
-            </span>
+            {(() => {
+              const tag = indexSourceTag(indices[0]);
+              const label =
+                tag.kind === 'live'
+                  ? `${t('board.source.live')}${tag.asOf ? ` · ${formatDateTime(tag.asOf)}` : ''}`
+                  : tag.kind === 'close'
+                    ? t('board.indices.close', { date: tag.asOf ?? '—' })
+                    : t('board.source.delayed');
+              const hint = t(INDEX_HINT_KEY[tag.kind]);
+              return (
+                <span className="text-xs text-secondary-text" aria-label={hint} title={hint}>
+                  {label}
+                </span>
+              );
+            })()}
           </div>
           <div className="flex flex-wrap gap-x-8 gap-y-2">
             {indices.map((idx) => (
@@ -609,7 +638,7 @@ const RealtimeBoardPage: React.FC = () => {
                         </td>
                         <td className="whitespace-nowrap px-3 py-2 font-mono">
                           {code}
-                          {holdings[code] ? (
+                          {holdings[normalizeStockCode(code)] ? (
                             <span className="ml-1.5 inline-flex rounded border border-[hsl(var(--primary))]/30 px-1 py-0.5 align-middle font-sans text-[10px] text-[hsl(var(--primary))]">
                               {t('board.tag.holding')}
                             </span>
