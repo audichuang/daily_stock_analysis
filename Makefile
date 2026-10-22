@@ -18,13 +18,15 @@ MIN_TURNOVER    ?= 2
 RANK            ?= score
 SLOTS           ?= 5
 TSMC_CLOSE      ?= 0
+# notebooklm-py CLI（media-picks 用）；不在 PATH 時指向它的 venv，例如 ~/research/notebooklm-py/.venv/bin/notebooklm
+NOTEBOOKLM_BIN  ?= notebooklm
 
 # Doppler 包裹：注入 BARK_URL 并映射为 CUSTOM_WEBHOOK_URLS；外層再疊 `finmind` 專案注入 FINMIND_TOKEN_*（台股新聞）
 DOPPLER_RUN = doppler run -p finmind -c dev -- doppler run -p $(DOPPLER_PROJECT) -c $(DOPPLER_CONFIG) --
 
 .DEFAULT_GOAL := help
 .PHONY: help install serve serve-local review review-tw analyze schedule screen \
-        swing morning overnight taifex measure portfolio portfolio-wf verify-decisions shadow-buy \
+        swing morning overnight taifex media-picks measure portfolio portfolio-wf verify-decisions shadow-buy \
         test lint lint-fix format refresh-tw refresh-us daily-report daily-report-detached \
         pg-scratch pg-scratch-stop
 
@@ -99,6 +101,9 @@ overnight: ## 昨晚国际盘数字（道琼/标普/纳指/费半/台积电ADR/�
 
 taifex: ## 期交所外資台指期淨未平倉＋P/C 未平倉比（給 skill tw-morning-call Step 1；回應日期≠預期場次時不印數字）
 	uv run python scripts/taifex_positions.py
+
+media-picks: ## 財經電視完整版 → NotebookLM 逐字稿與點名 → 對照本地數據 → journal/media-picks.jsonl（憑證走 Doppler notebooklm）
+	NOTEBOOKLM_BIN=$(NOTEBOOKLM_BIN) doppler run -p notebooklm -c prd -- uv run --env-file .env python scripts/tw_media_picks.py
 
 measure: ## 量测讯号的前瞻报酬分布（事件级、区块 bootstrap；不做部位模拟）
 	uv run --env-file .env python scripts/measure_signal_forward.py
