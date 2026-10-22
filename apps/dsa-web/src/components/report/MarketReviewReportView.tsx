@@ -448,8 +448,14 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
     [marketReviewPayload, structuredContent],
   );
   const structuredMarketData = useMemo(
-    () => getStructuredMarketData(marketReviewPayload),
-    [marketReviewPayload],
+    () => getStructuredMarketData(marketReviewPayload).map((marketData) => ({
+      ...marketData,
+      indices: marketData.indices.map((index) => ({
+        ...index,
+        name: getLocalizedIndexName(index, normalizedReportLanguage),
+      })),
+    })),
+    [marketReviewPayload, normalizedReportLanguage],
   );
   const showStructuredMarketTitles = Boolean(marketReviewPayload?.markets);
   const canOpenRunFlow = recordId !== undefined && onOpenRunFlow;
@@ -680,7 +686,7 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
                       <tbody className="divide-y divide-subtle">
                         {marketData.indices.map((index) => (
                           <tr key={index.code || index.name}>
-                            <td className="px-2 py-2 font-medium text-foreground">{getLocalizedIndexName(index, normalizedReportLanguage)}</td>
+                            <td className="px-2 py-2 font-medium text-foreground">{index.name}</td>
                             <td className="px-2 py-2 text-secondary-text">{formatMarketNumber(index.current)}</td>
                             <td className="px-2 py-2 text-secondary-text">{formatMarketPercent(index.changePct)}</td>
                             <td className="px-2 py-2 text-secondary-text">{formatMarketHighLow(index.high, index.low)}</td>
