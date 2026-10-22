@@ -1121,7 +1121,28 @@ def test_region_scoped_market_light_risk_signals_survive_neutral_summary() -> No
     assert safe_payload["position_cap"] == "20%"
 
 
-def test_yellow_market_light_status_marks_context_conservative() -> None:
+def _tw_context(summary: str, status: str, guidance: str):
+    return DailyMarketContextService(
+        db_manager=MagicMock(),
+        today_fn=lambda: date(2026, 10, 5),
+    )._build_context_from_payload(
+        region="tw",
+        trade_date=date(2026, 10, 5),
+        payload={
+            "summary": summary,
+            "market_light": {
+                "score": 55,
+                "status": status,
+                "guidance": guidance,
+                "dimensions": {"breadth": {"score": 36, "available": True}},
+            },
+        },
+        source="analysis_history",
+    )
+
+
+def test_yellow_market_light_status_alone_does_not_mark_conservative() -> None:
+    """yellow 只代表訊號分化；10-05 加權 +2.55% 創新高也是 yellow（55 分）。"""
     context = DailyMarketContextService(
         db_manager=MagicMock(),
         today_fn=lambda: date(2026, 6, 6),
@@ -1139,7 +1160,61 @@ def test_yellow_market_light_status_marks_context_conservative() -> None:
     )
 
     assert context is not None
-    assert "conservative" in context.to_safe_dict()["risk_tags"]
+    assert context.to_safe_dict()["risk_tags"] == []
+
+
+def test_yellow_bullish_tw_summary_has_no_tags_and_does_not_soften_buy() -> None:
+    from src.daily_market_context_guardrail import apply_daily_market_context_guardrail
+    from tests.test_daily_market_context_guardrail import _result
+
+    context = _tw_context(
+        "加權指數大漲 2.55% 創歷史新高，台積電領軍，電子權值股全面走強。",
+        "yellow",
+        "訊號分化，控制倉位並等待量價確認。",
+    )
+    assert context is not None
+    assert context.risk_tags == []
+
+    result = _result()
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=context.to_safe_dict(), report_language="zh"
+    )
+    assert adjustments == []
+    assert result.decision_type == "buy"
+
+
+def test_yellow_tw_summary_wording_still_produces_traditional_tags() -> None:
+    cautious = _tw_context("大盤漲多震盪，宜謹慎觀望。", "yellow", "訊號分化，控制倉位並等待量價確認。")
+    cooling = _tw_context("類股輪動降溫，高風險族群留意。", "yellow", "訊號分化，控制倉位並等待量價確認。")
+
+    assert cautious is not None and "conservative" in cautious.risk_tags
+    assert cooling is not None
+    assert "market_cooling" in cooling.risk_tags
+    assert "high_risk" in cooling.risk_tags
+
+
+def test_red_tw_market_light_still_softens_buy() -> None:
+    from src.daily_market_context_guardrail import apply_daily_market_context_guardrail
+    from tests.test_daily_market_context_guardrail import _result
+
+    context = _tw_context("加權指數小跌。", "red", "風險偏高，優先控制回撤，避免追高弱反彈。")
+    assert context is not None
+    assert "high_risk" in context.risk_tags
+
+    result = _result()
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=context.to_safe_dict(), report_language="zh"
+    )
+    assert "daily_market_context_buy_softened" in adjustments
+    assert result.decision_type == "hold"
+    assert result.sentiment_score == 52
+
+
+def test_traditional_position_cap_is_extracted() -> None:
+    context = _tw_context("大盤震盪，倉位上限 30%。", "green", "風險偏好尚可。")
+    assert context is not None
+    assert context.position_cap == "30%"
+    assert "low_position_cap" in context.risk_tags
 
 
 def test_daily_market_context_keeps_jp_kr_regions_and_labels() -> None:
@@ -1212,7 +1287,7 @@ class TestHistoricalMarketLightWithoutReading:
         from src.services.daily_market_context import _extract_market_light_signal_text
 
         text = _extract_market_light_signal_text(self._payload(available=True))
-        assert "conservative" in text
+        assert "conservative" not in text
         assert "等待量价确认" in text
 
     def test_payload_without_dimensions_is_still_treated_as_a_reading(self):
@@ -1225,10 +1300,45 @@ class TestHistoricalMarketLightWithoutReading:
         from src.services.daily_market_context import _extract_market_light_signal_text
 
         legacy = {"market_light": {"score": 50, "status": "yellow", "guidance": "观察"}}
-        assert "conservative" in _extract_market_light_signal_text(legacy)
+        assert _extract_market_light_signal_text(legacy) == "观察"
 
     def test_red_status_with_a_reading_is_preserved(self):
         from src.services.daily_market_context import _extract_market_light_signal_text
 
         text = _extract_market_light_signal_text(self._payload(available=True, status="red"))
         assert "high risk" in text
+
+
+# ---- 法人年底指數目標（TW_BROKER_INDEX_TARGETS，人工維護一行背景）----------------
+
+def _broker_line(raw: str, region: str = "tw", today: date = date(2026, 10, 22), english: bool = False) -> str:
+    cfg = SimpleNamespace(tw_broker_index_targets=raw)
+    with patch("src.config.get_config", return_value=cfg):
+        return daily_market_context_module._broker_index_targets_line(region, english=english, today=today)
+
+
+def test_broker_index_targets_shown_when_fresh():
+    line = _broker_line("2026-10-21 統一55K 富邦54.5K 高盛54K")
+    assert "統一55K" in line and "不是選股訊號" in line and "2026-10-21" in line
+
+
+def test_broker_index_targets_cutoff_30_days():
+    # 30 天內顯示、第 31 天隱藏；拿掉截止會讓後者紅，截止設 0 天會讓前者紅
+    assert _broker_line("2026-09-22 統一55K")
+    assert _broker_line("2026-09-21 統一55K") == ""
+
+
+def test_broker_index_targets_hidden_when_empty_or_unparsable_or_not_tw():
+    assert _broker_line("") == ""
+    assert _broker_line("統一55K") == ""
+    assert _broker_line("2026-10-21 統一55K", region="us") == ""
+
+
+def test_broker_index_targets_in_tw_section():
+    ctx = {"region": "tw", "summary": "盤勢整理", "trade_date": "2026-10-21"}
+    cfg = SimpleNamespace(tw_broker_index_targets=f"{date.today().isoformat()} 統一55K")
+    with patch("src.config.get_config", return_value=cfg):
+        section = format_daily_market_context_prompt_section(ctx, report_language="zh-TW")
+        en_section = format_daily_market_context_prompt_section(ctx, report_language="en")
+    assert "法人年底指數目標" in section and "統一55K" in section
+    assert "Broker year-end TAIEX targets" in en_section and "統一55K" in en_section

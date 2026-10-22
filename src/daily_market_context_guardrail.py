@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, List
 
+from src.schemas.decision_scale import record_guardrail_score_adjustment
 from src.report_language import (
     localize_confidence_level,
     localize_operation_advice,
@@ -13,10 +14,24 @@ from src.report_language import (
 )
 
 
-_CONSERVATIVE_TAGS = {"high_risk", "market_cooling", "conservative", "low_position_cap"}
-_CONSERVATIVE_TEXT_MARKERS_ZH = ("退潮", "观望", "高风险", "谨慎", "保守", "仓位上限", "仓位不超过", "轻仓")
-_CONSERVATIVE_TEXT_MARKERS_EN = ("high risk", "risk-off", "risk off", "watch", "cautious", "conservative", "position cap", "position limit")
-_CONSERVATIVE_TEXT_MARKERS_KO = ("고위험", "관망", "위험", "신중", "보수", "비중 상한", "비중 축소", "경량")
+# 只認「真的有風險」的訊號（高風險／退潮／明確倉位上限）。「謹慎」「觀望」這類
+# 中性措辭不再觸發：yellow 日幾乎天天出現，會讓護欄在創新高日也把買進壓成觀望。
+_CONSERVATIVE_TAGS = {"high_risk", "market_cooling", "low_position_cap"}
+_CONSERVATIVE_TEXT_MARKERS_ZH = (
+    "退潮",
+    "高风险",
+    "风险偏高",
+    "高風險",
+    "風險偏高",
+    "仓位上限",
+    "仓位不超过",
+    "轻仓",
+    "倉位上限",
+    "倉位不超過",
+    "輕倉",
+)
+_CONSERVATIVE_TEXT_MARKERS_EN = ("high risk", "elevated risk", "risk-off", "risk off", "cooling", "position cap", "position limit")
+_CONSERVATIVE_TEXT_MARKERS_KO = ("고위험", "비중 상한", "비중 축소", "경량")
 _AGGRESSIVE_BUY_MARKERS_ZH = (
     "立即买入",
     "马上买入",
@@ -28,6 +43,15 @@ _AGGRESSIVE_BUY_MARKERS_ZH = (
     "激进买入",
     "追高",
     "加仓",
+    # 繁體（zh-TW 報告）
+    "立即買入",
+    "馬上買入",
+    "建議買入",
+    "分批買入",
+    "回踩買入",
+    "積極買入",
+    "激進買入",
+    "加倉",
 )
 _AGGRESSIVE_BUY_MARKERS_EN = ("buy now", "strong buy", "aggressive buy", "chase", "add aggressively")
 _AGGRESSIVE_BUY_MARKERS_KO = (
@@ -40,7 +64,27 @@ _AGGRESSIVE_BUY_MARKERS_KO = (
     "추격 매수",
     "비중 확대",
 )
-_NEGATION_HINTS_ZH = ("暂不", "不建议", "不应", "不宜", "不能", "无法", "不允许", "禁止", "避免", "不要", "别", "先不")
+_NEGATION_HINTS_ZH = (
+    "暂不",
+    "不建议",
+    "不应",
+    "不宜",
+    "不能",
+    "无法",
+    "不允许",
+    "禁止",
+    "避免",
+    "不要",
+    "别",
+    "先不",
+    # 繁體：補了繁體買進詞就必須補否定詞，否則「暫不建議買入」會被誤判成激進買進
+    "暫不",
+    "不建議",
+    "不應",
+    "無法",
+    "不允許",
+    "別",
+)
 _NEGATION_HINTS_EN = (" not ", "do not", "don't", "no ", "never", "avoid")
 _NEGATION_HINTS_KO = ("권하지 않", "하지 않", "하지 마", "불가", "금지", "피하", "보류", "않", "말")
 _NEGATION_LOOKBACK = 16
@@ -75,6 +119,9 @@ def apply_daily_market_context_guardrail(
         return []
 
     adjustments: List[str] = []
+    # 護欄前的原始分數／動作：落庫給 scripts/shadow_buy_eval.py 回推 LLM 原判
+    raw_score = getattr(result, "sentiment_score", None)
+    raw_decision_type = str(getattr(result, "decision_type", "") or "").lower() or None
     if str(getattr(result, "decision_type", "") or "").lower() == "buy":
         result.decision_type = "hold"
         adjustments.append("daily_market_context_buy_softened")
@@ -101,6 +148,14 @@ def apply_daily_market_context_guardrail(
         dashboard,
         softened_advice=softened_advice,
         language=language,
+    )
+    record_guardrail_score_adjustment(
+        dashboard,
+        raw_score=raw_score,
+        adjusted_score=result.sentiment_score,
+        final_action="hold",
+        reason=_softening_reason(language),
+        raw_decision_type=raw_decision_type,
     )
 
     phase_decision = dashboard.get("phase_decision")
@@ -172,16 +227,19 @@ def _softened_position_strategy(language: str) -> dict[str, str]:
     }
 
 
+def _softening_reason(language: str) -> str:
+    if language == "en":
+        return "Daily market context is conservative/high risk; aggressive buy advice was softened."
+    if language == "ko":
+        return "대시장 환경이 보수적/고위험이라 공격적 매수 권고를 완화했습니다."
+    return "大盘环境偏谨慎/高风险，已软化激进买入建议。"
+
+
 def _append_softening_limitation(phase_decision: dict[str, Any], *, language: str) -> None:
     limitations = phase_decision.get("data_limitations")
     if not isinstance(limitations, list):
         limitations = []
-    if language == "en":
-        limitation = "Daily market context is conservative/high risk; aggressive buy advice was softened."
-    elif language == "ko":
-        limitation = "대시장 환경이 보수적/고위험이라 공격적 매수 권고를 완화했습니다."
-    else:
-        limitation = "大盘环境偏谨慎/高风险，已软化激进买入建议。"
+    limitation = _softening_reason(language)
     if limitation not in limitations:
         limitations.append(limitation)
     phase_decision["data_limitations"] = limitations

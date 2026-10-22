@@ -98,6 +98,13 @@ from src.schemas.decision_scale import (
 from src.schemas.report_schema import AnalysisReportSchema
 from src.market_context import detect_market, get_market_role, get_market_guidelines
 from src.services.daily_market_context import format_daily_market_context_prompt_section
+from src.services.tw_backtest_context import (
+    format_regime_block,
+    format_revenue_momentum_row,
+    load_tw_regime,
+    load_tw_revenue_momentum,
+)
+from src.services.tw_live_events import format_tw_live_block, load_tw_live_events
 from src.market_phase_prompt import format_market_phase_prompt_section
 from src.market_structure_prompt import format_market_structure_prompt_section
 
@@ -1123,6 +1130,33 @@ def stabilize_decision_with_structure(
         )
 
         flow_bias, flow_reason = _capital_flow_bias_with_status(fundamental_context)
+        if (
+            flow_bias == "unavailable"
+            and _is_capital_flow_not_supported(flow_reason)
+            # A 股本來就有資金流資料源，akshare 抓不到時也回 not_supported（實為失敗），維持降級
+            and detect_market(getattr(result, "code", "")) != "cn"
+            and not getattr(get_config(), "capital_flow_not_supported_downgrade", True)
+        ):
+            # 「此市場沒有資金流資料源」不等於「資料源失敗、未能確認」：不據此降級買入。
+            # 台股改用三大法人（外資＋投信）推導 flow_bias，再走下方既有的結構校準。
+            # 只在買入結論時代入：賣出／一般持有維持原本「未校準」路徑，避免單日法人把賣出改成洗盤觀察。
+            institution_bias = (
+                _tw_institution_flow_bias(fundamental_context)
+                if is_tw_code(getattr(result, "code", ""))
+                and (decision_type == "buy" or advice_decision_type == "buy")
+                else None
+            )
+            if institution_bias is None:
+                _set_decision_stability_unavailable(
+                    result,
+                    language,
+                    current_price=current_price,
+                    support=support,
+                    resistance=resistance,
+                    flow_status=flow_reason,
+                )
+                return
+            flow_bias = institution_bias
         if flow_bias == "unavailable":
             if isinstance(fundamental_context, dict) and "capital_flow" in fundamental_context:
                 if decision_type == "buy" or advice_decision_type == "buy":
@@ -1391,6 +1425,94 @@ def _capital_flow_bias_with_status(
         if signal is not None:
             return signal, "ok"
     return "neutral", "neutral"
+
+
+def _is_capital_flow_not_supported(reason: str) -> bool:
+    normalized = str(reason or "").strip().lower().replace("-", " ").replace("_", " ")
+    return normalized == "unsupported" or "not supported" in normalized
+
+
+def _tw_institution_flow_bias(fundamental_context: Optional[Dict[str, Any]]) -> Optional[str]:
+    """台股三大法人：外資與投信同買 → inflow、同賣 → outflow、其餘 → neutral；無資料回 None。"""
+    if not isinstance(fundamental_context, dict):
+        return None
+    block = fundamental_context.get("institution")
+    if not isinstance(block, dict) or str(block.get("status") or "").strip().lower() != "ok":
+        return None
+    data = block.get("data") if isinstance(block.get("data"), dict) else {}
+    foreign = _coerce_numeric_value(data.get("foreign_net"))
+    trust = _coerce_numeric_value(data.get("trust_net"))
+    if foreign is None or trust is None:
+        return None
+    if foreign > 0 and trust > 0:
+        return "inflow"
+    if foreign < 0 and trust < 0:
+        return "outflow"
+    return "neutral"
+
+
+TW_MA_WEIGHTED_VARIANT = "tw-ma-weighted"
+
+
+def _tw_ma_weighted_bounds(bias_threshold: Any) -> tuple[str, str]:
+    try:
+        bt = float(bias_threshold)
+    except (TypeError, ValueError):
+        bt = 5.0
+    return f"{bt:g}", f"{bt * 2:g}"
+
+
+def _apply_tw_ma_weighted_system_rules(prompt: str, bias_threshold: Any) -> str:
+    """台股短波段（TW_MA_ALIGNMENT_WEIGHTED）：把多頭排列從必要條件改成加權項，並插入 60-69 分短波段買入規則。"""
+    lo, hi = _tw_ma_weighted_bounds(bias_threshold)
+    prompt = prompt.replace(
+        "- **绝对不追高**：当股价偏离 MA5 超过 5% 时，坚决不买入\n",
+        "- **不追高**：乖離率上限依下方「台股短波段買入（60-69分，均線加權）」\n",
+    ).replace(
+        '- 乖离率 > 5%：严禁追高！直接判定为"观望"\n',
+        f"- 乖離率 {lo}~{hi}%：僅限放量突破，且必須寫明依 ATR14 設定的停損；> {hi}% 嚴禁追高\n",
+    ).replace(
+        "- **多头排列必须条件**：MA5 > MA10 > MA20\n- 只做多头排列的股票，空头排列坚决不碰\n",
+        "- **多頭排列為加權加分項（非必要條件）**：MA5 > MA10 > MA20 加分；空頭排列（MA5 < MA10 < MA20）仍不做多\n",
+    )
+    block = f"""### 台股短波段買入（60-69分，均線加權）：
+- ✅ 未完整多頭排列也可：收盤站回 MA5 或 MA10，且量能放大（量比 > 1 或明顯放量）
+- ✅ 外資與投信同向買超（兩者皆為淨買超）
+- ✅ 乖離率 {lo}~{hi}% 只在放量突破（突破壓力位或前高且放量）時允許，且 `stop_loss` 必須寫明依 ATR14 設定的停損（停損距離不小於 1 倍 ATR14）；> {hi}% 仍嚴禁追高
+- ❌ 任一條件不滿足 → 觀望；未完整多頭排列者分數上限 69
+
+"""
+    # legacy 評分表的觀望段寫死「乖离率 >5%」，與上面的放量突破例外互相矛盾
+    prompt = prompt.replace(
+        "- ⚠️ 乖离率 >5%（追高风险）\n",
+        f"- ⚠️ 乖離率 >{lo}% 且非放量突破，或 >{hi}%（追高風險）\n",
+    )
+    rubric_anchor = "### 观望（40-59分）：\n"
+    if rubric_anchor in prompt:
+        return prompt.replace(rubric_anchor, block + rubric_anchor, 1)
+    return prompt + "\n" + block
+
+
+def _apply_tw_ma_weighted_user_rules(prompt: str, bias_threshold: Any, bias_ma5: Any = None) -> str:
+    """同一開關下，改寫 user prompt 裡與加權規則衝突的硬性措辭（繁簡兩種寫法都換）。"""
+    lo, hi = _tw_ma_weighted_bounds(bias_threshold)
+    bias = _coerce_numeric_value(bias_ma5)
+    q1 = "均線多頭排列（MA5>MA10>MA20）為加分項；未完整排列時，是否站回 MA5/MA10、放量且外資與投信同向買超？"
+    q2 = f"目前乖離率是否 < {lo}%？{lo}~{hi}% 須放量突破並寫明 ATR14 停損，> {hi}% 必須標註「嚴禁追高」"
+    label = f"⚠️ 偏高：須放量突破＋ATR14 停損（> {hi}% 嚴禁追高）"
+    for old, new in (
+        ("是否滿足 MA5>MA10>MA20 多頭排列？", q1),
+        ("是否满足 MA5>MA10>MA20 多头排列？", q1),
+        ('目前乖離率是否在安全範圍內（<5%）？—— 超過5%必須標註"嚴禁追高"', q2),
+        ('当前乖离率是否在安全范围内（<5%）？—— 超过5%必须标注"严禁追高"', q2),
+        ("🚨 超過5%，嚴禁追高！", label),
+        ("🚨 超过5%，严禁追高！", label),
+    ):
+        # 乖離已超過上限（> 2×BT）時保留原本的 🚨 嚴禁追高標籤，不放寬
+        if old.startswith("🚨") and bias is not None and bias > float(hi):
+            continue
+        prompt = prompt.replace(old, new)
+    return prompt
 
 
 def _capital_flow_status_for_stability(reason: str, language: str) -> str:
@@ -2762,6 +2884,14 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             ),
         )
 
+    def _tw_ma_weighted_active(self, stock_code: Any, report_language: str) -> bool:
+        """台股＋中文模板＋TW_MA_ALIGNMENT_WEIGHTED 開啟時才套用均線加權規則（英文模板未覆蓋）。"""
+        return (
+            bool(getattr(self._get_runtime_config(), "tw_ma_alignment_weighted", False))
+            and is_tw_code(stock_code)
+            and normalize_report_language(report_language) not in ("en", "ko")
+        )
+
     def _get_analysis_system_prompt(self, report_language: str, stock_code: str = "") -> str:
         """Build the analyzer system prompt with output-language guidance."""
         lang = normalize_report_language(report_language)
@@ -2796,6 +2926,10 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 .replace("{guidelines_placeholder}", market_guidelines)
                 .replace("{default_skill_policy_section}", default_skill_policy_section)
                 .replace("{skills_section}", skills_section)
+            )
+        if self._tw_ma_weighted_active(stock_code, lang):
+            base_prompt = _apply_tw_ma_weighted_system_rules(
+                base_prompt, getattr(self._get_runtime_config(), "bias_threshold", 5.0)
             )
         if lang == "en":
             return base_prompt + """
@@ -3934,6 +4068,13 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             if should_persist_usage_telemetry(llm_usage):
                 persist_llm_usage(llm_usage, model_used, call_type="analysis", stock_code=code)
 
+            if self._tw_ma_weighted_active(code, report_language) and isinstance(result.dashboard, dict):
+                # 套了均線加權提示詞就標記版本，pipeline 的 setdefault 會保留它，影子評估據此分組
+                base_variant = getattr(config, "prompt_variant", None) or "baseline"
+                result.dashboard["prompt_variant"] = (
+                    TW_MA_WEIGHTED_VARIANT if base_variant == "baseline" else f"{base_variant}+{TW_MA_WEIGHTED_VARIANT}"
+                )
+
             logger.info(f"[LLM解析] {name}({code}) 分析完成: {result.trend_prediction}, 评分 {result.sentiment_score}")
 
             return result
@@ -4318,6 +4459,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         )
         if daily_market_context_section:
             prompt += daily_market_context_section
+        if prompt_market == "tw":
+            # 台股大盤狀態（本地行情、每天算一次）：只當資訊，用字依回測 CI 是否排除零
+            prompt += format_regime_block(load_tw_regime(), normalize_report_language(report_language))
         market_structure_section = format_market_structure_prompt_section(
             context.get("market_structure_context"),
             report_language=report_language,
@@ -4471,6 +4615,13 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                     f"{L('年增', '年增')} {_mr_yoy}、{L('月增', '月增')} {_mr_mom}、"
                     f"{L('累計年增', '累计年增')} {_mr_cum} |\n"
                 )
+                # 營收動能（本地 market.monthly_revenue，須有官方最新月份那一列）：只當資訊
+                _mom_row = format_revenue_momentum_row(
+                    load_tw_revenue_momentum(code, _growth_data.get("revenue_month_iso")),
+                    normalize_report_language(report_language),
+                )
+                monthly_revenue_row_en += _mom_row
+                monthly_revenue_row_zh += _mom_row
         if isinstance(financial_report, dict) or isinstance(dividend_metrics, dict):
             financial_report = financial_report if isinstance(financial_report, dict) else {}
             dividend_metrics = dividend_metrics if isinstance(dividend_metrics, dict) else {}
@@ -4534,6 +4685,12 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
 > {L("若上述欄位為 N/A 或缺失，請明確寫「資料缺失，無法判斷」，禁止編造。", "若上述字段为 N/A 或缺失，请明确写“数据缺失，无法判断”，禁止编造。")}
 """
+
+        # 賣方共識（台股＋美股，ANALYST_CONSENSUS_ENABLED 開才會有）：純資訊，不參與任何規則
+        if isinstance(fundamental_context, dict) and fundamental_context.get("consensus"):
+            from data_provider.analyst_consensus import format_analyst_consensus_block
+
+            prompt += format_analyst_consensus_block(fundamental_context.get("consensus"), report_language)
 
         capital_flow_block = (
             fundamental_context.get("capital_flow", {})
@@ -4722,6 +4879,15 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             elif isinstance(atr_pct, (int, float)) and atr_pct > 0:
                 prompt += f"""- {L(f"這檔一天的正常波動（ATR14）約 {atr_pct:.2f}%。停損離買點若比這個還近，多半是被雜訊掃掉而不是論點失效。", f"这档一天的正常波动（ATR14）约 {atr_pct:.2f}%。止损离买点若比这个还近，多半是被杂讯扫掉而不是论点失效。")}
 """
+
+        # 台股處置／注意股與事件日曆（官方即時名單，同一基準日只抓一次）：tw-only、fail-open
+        if is_tw_code(code) and getattr(self._get_runtime_config(), "tw_live_events_enabled", False) is True:
+            try:
+                prompt += format_tw_live_block(
+                    load_tw_live_events(context.get("date")), code, normalize_report_language(report_language)
+                )
+            except Exception as exc:  # noqa: BLE001 - prompt enrichment is strictly fail-open
+                logger.warning("[tw-live-events] fail-open code=%s: %s", code, exc)
 
         # 添加筹码分布数据
         if 'chip' in context and english:
@@ -5164,6 +5330,12 @@ Output the complete Decision Dashboard in JSON format."""
 - 当数据缺失时，请使用中文直接说明“{no_data_text}，无法判断”。
 """
 
+        if self._tw_ma_weighted_active(code, report_language):
+            prompt = _apply_tw_ma_weighted_user_rules(
+                prompt,
+                getattr(self._get_runtime_config(), "bias_threshold", 5.0),
+                trend_ctx.get("bias_ma5") if isinstance(trend_ctx := context.get("trend_analysis"), dict) else None,
+            )
         return prompt
 
     def _format_volume(self, volume: Optional[float], report_language: str = "zh") -> str:

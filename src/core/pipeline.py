@@ -3101,6 +3101,10 @@ class StockAnalysisPipeline:
         final_action = normalize_decision_action(getattr(result, "action", None))
         if isinstance(result.dashboard, dict):
             result.dashboard.pop("agent_disagreement_explanation", None)
+            # 提示詞版本標籤隨報告落庫，scripts/shadow_buy_eval.py --by-variant 據此分組
+            result.dashboard.setdefault(
+                "prompt_variant", getattr(self.config, "prompt_variant", None) or "baseline"
+            )
         if (
             runtime_facts is not None
             and action_chain_valid

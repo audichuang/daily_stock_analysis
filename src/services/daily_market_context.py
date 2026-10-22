@@ -43,11 +43,15 @@ _MARKET_REVIEW_LOCK_WAIT_MAX_INTERVAL_SECONDS = 5.0
 _MARKET_REVIEW_LOCK_WAIT_BACKOFF_MULTIPLIER = 1.5
 _MARKET_REVIEW_LOCK_WAIT_MAX_ATTEMPTS = 40
 
+# 簡繁並列：zh-TW 復盤與 market_light guidance 是繁體，只放簡體會靜默漏判。
 _RISK_PATTERNS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("high_risk", ("高风险", "风险偏高", "风险较高", "high risk", "elevated risk")),
-    ("market_cooling", ("退潮", "降温", "risk-off", "risk off", "cooling")),
-    ("conservative", ("观望", "谨慎", "保守", "等待确认", "watch", "cautious", "conservative")),
-    ("low_position_cap", ("仓位上限", "轻仓", "低仓位", "小仓", "position cap", "low position", "small position")),
+    ("high_risk", ("高风险", "风险偏高", "风险较高", "高風險", "風險偏高", "風險較高", "high risk", "elevated risk")),
+    ("market_cooling", ("退潮", "降温", "降溫", "risk-off", "risk off", "cooling")),
+    ("conservative", ("观望", "谨慎", "保守", "等待确认", "觀望", "謹慎", "等待確認", "watch", "cautious", "conservative")),
+    (
+        "low_position_cap",
+        ("仓位上限", "轻仓", "低仓位", "小仓", "倉位上限", "輕倉", "低倉位", "小倉", "position cap", "low position", "small position"),
+    ),
 )
 
 
@@ -675,6 +679,9 @@ def format_daily_market_context_prompt_section(
             lines.append(f"- Risk tags: {', '.join(risk_tags)}")
         if position_cap:
             lines.append(f"- Position cap: {position_cap}")
+        _targets = _broker_index_targets_line(region, english=True)
+        if _targets:
+            lines.append(_targets)
         lines.append("- Guardrail: if this context is conservative or high risk, avoid aggressive buy advice and prefer smaller position sizing or confirmation.")
         if source:
             lines.append(f"- Source: {source}")
@@ -695,10 +702,51 @@ def format_daily_market_context_prompt_section(
         lines.append(f"- 风险标签：{', '.join(risk_tags)}")
     if position_cap:
         lines.append(f"- 仓位提示：{position_cap}")
+    _targets = _broker_index_targets_line(region, english=False)
+    if _targets:
+        lines.append(_targets)
     lines.append("- 约束：若大盘环境偏谨慎、退潮、观望或高风险，避免给出激进买入建议，优先控制仓位并等待确认。")
     if source:
         lines.append(f"- 来源：{source}")
     return "\n".join(lines) + "\n"
+
+
+_BROKER_TARGETS_MAX_AGE_DAYS = 30
+
+
+def _broker_index_targets_line(region: str, *, english: bool, today: Optional[date] = None) -> str:
+    """台股大盤背景附一行人工維護的法人年底指數目標（TW_BROKER_INDEX_TARGETS）。
+
+    格式「YYYY-MM-DD 內容」；空值、日期解析不了或超過 30 天沒更新就不顯示。只是情緒/beta 背景。
+    """
+    if region != "tw":
+        return ""
+    try:
+        from src.config import get_config
+
+        raw = str(getattr(get_config(), "tw_broker_index_targets", "") or "").strip()
+    except Exception:  # noqa: BLE001 - 背景資訊，拿不到就不顯示
+        return ""
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})\s+(.+)$", raw)
+    if not match:
+        return ""
+    try:
+        updated = date.fromisoformat(match.group(1))
+    except ValueError:
+        return ""
+    age = ((today or date.today()) - updated).days
+    if age < 0 or age > _BROKER_TARGETS_MAX_AGE_DAYS:
+        return ""
+    body = match.group(2).strip()
+    if english:
+        return (
+            f"- Broker year-end TAIEX targets (manually maintained, updated {updated}): {body}. "
+            "Sentiment/beta background only, not a stock-picking signal; never change a stock's action or confidence because of it."
+        )
+    return (
+        f"- 法人年底指數目標（人工維護，更新於 {updated}）：{body}。"
+        "僅作情緒/beta 背景，不是選股訊號，不得據此調整個股 action 或 confidence。"
+    )
 
 
 def _escape_untrusted_market_summary_sentinels(summary: str) -> str:
@@ -899,8 +947,8 @@ def _market_light_payload_has_reading(market_light: Mapping[str, Any]) -> bool:
 
     写入端已经在快照进入结构化契约的入口挡掉「所有维度都不可用」的快照，但**既有
     历史纪录挡不到**——旧版会为资料全掛的复盘写入一个 `score=50 / status=yellow /
-    每个维度 available=False` 的 payload。这里不验，那些旧纪录就会被下面读成
-    `conservative cautious wait for confirmation`，一个没人量过的市场判断继续影响
+    每个维度 available=False` 的 payload。这里不验，那些旧纪录的 guidance（以及 red
+    状态注入的风险词）就会被下面读进风险标签，一个没人量过的市场判断继续影响
     今天的决策上下文。
 
     与写入端同一个判准（任一维度 available），但**只在 `dimensions` 真的存在时才判**。
@@ -930,8 +978,8 @@ def _extract_market_light_signal_text(payload: Mapping[str, Any]) -> str:
     status = str(market_light.get("status") or "").strip().lower()
     if status == "red":
         parts.append("high risk risk-off conservative")
-    elif status == "yellow":
-        parts.append("conservative cautious wait for confirmation")
+    # yellow（40-59 分）只是「訊號分化」，不自動注入 conservative：
+    # 創新高但廣度窄的日子也落在這裡，conservative 只該來自摘要／guidance 的實際措辭。
 
     guidance = market_light.get("guidance")
     if isinstance(guidance, str) and guidance.strip():
@@ -976,10 +1024,10 @@ def _extract_risk_tags(text: str) -> List[str]:
 def _extract_position_cap(text: str) -> Optional[str]:
     if not text:
         return None
-    cap_match = re.search(r"(?:仓位上限|仓位不超过|position cap|position limit)[^0-9%]{0,12}(\d{1,3}\s*%)", text, re.IGNORECASE)
+    cap_match = re.search(r"(?:仓位上限|仓位不超过|倉位上限|倉位不超過|position cap|position limit)[^0-9%]{0,12}(\d{1,3}\s*%)", text, re.IGNORECASE)
     if cap_match:
         return cap_match.group(1).replace(" ", "")
-    low_position_match = re.search(r"(轻仓|低仓位|小仓|low position|small position)", text, re.IGNORECASE)
+    low_position_match = re.search(r"(轻仓|低仓位|小仓|輕倉|低倉位|小倉|low position|small position)", text, re.IGNORECASE)
     return low_position_match.group(1) if low_position_match else None
 
 

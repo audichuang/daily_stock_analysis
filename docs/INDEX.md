@@ -60,6 +60,7 @@
 | [NAS 上的 Web 服務與發版](nas-deploy.md) | 本 fork Web 服務跑在 NAS：不在本機再起一份的理由、釘 digest 經 Komodo 的手動發版流程、NAS 問股後端 |
 | [台股個股四維度資料包](tw-stock-dossier.md) | `tw_stock_dossier.py` 各段的來源與限制（分點只有前 15 名、HHI 口徑、SMC 定義），以及與 botbook.cc 範例報告的逐項對照 |
 | [台股波段候选流水线](tw-swing-pipeline.md) | 量化预筛 → AI 事件面研究 → 回验四层的契约：冻结的讯号定义、前瞻报酬分布与区块 bootstrap 区间、组合层（资金竞争／排序／走前验证）结论、回验指标，以及明确站不住的部分 |
+| [台股訊號研究 2026-10](tw-signal-research-2026-10.md) | 大盤狀態（0050 季線、市場寬度、融資背離）與月營收動能（降速、月減、斷創高）的前瞻淨報酬回測，以及賣方共識（目標價／EPS 修正）調查：n、期間、bootstrap CI 與 inconclusive 標記，和接進 prompt 時的用字規則 |
 | [台股波段判断事后对帐 2026-08](tw-swing-hindsight-2026-08.md) | 2026-07-24 ~ 08-05 的 4 笔波段决策、5 笔盘前 regime、7 档筛选候选量到 2026-08-21 的中途对帐：逐档还原价报酬与同窗 0050 对照、过了对抗审查的误判、可知与不可知的盲点、该改与**不该改**的清单 |
 | [图片识别 Prompt](image-extract-prompt.md) | 图片识别股票信息的 Prompt 与使用边界 |
 | [OpenClaw Skill 集成](openclaw-skill-integration.md) | OpenClaw / Skill 外部集成说明 |

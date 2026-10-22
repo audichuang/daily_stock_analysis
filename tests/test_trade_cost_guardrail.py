@@ -97,11 +97,29 @@ class TestApplyGuardrail(unittest.TestCase):
         self.assertIn("不划算", r.dashboard["core_conclusion"]["one_sentence"])
         self.assertFalse(r.dashboard["battle_plan"]["cost_check"]["passed"])
 
+    def test_softening_persists_pre_guardrail_score(self):
+        # 護欄前分數落庫給 shadow_buy_eval；前一個護欄已記的 raw_score 不得被覆蓋
+        r = _result(TYPICAL)
+        apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW")
+        cal = r.dashboard["decision_score_calibration"]
+        self.assertEqual((cal["raw_score"], cal["raw_decision_type"], cal["final_action"]), (78, "buy", "hold"))
+        self.assertEqual(cal["adjusted_score"], r.sentiment_score)
+        self.assertIn("淨風報比", cal["guardrail_reason"])
+
+        r = _result(TYPICAL)
+        r.dashboard["decision_score_calibration"] = {"raw_score": 85, "adjusted_score": 78}
+        apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW")
+        cal = r.dashboard["decision_score_calibration"]
+        self.assertEqual(cal["raw_score"], 85)
+        self.assertEqual(cal["adjusted_score"], r.sentiment_score)
+        self.assertLessEqual(cal["adjusted_score"], 59)
+
     def test_passing_buy_is_untouched(self):
         r = _result(WIDE)
         self.assertEqual(apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW"), [])
         self.assertEqual((r.decision_type, r.operation_advice), ("buy", "买入"))
         self.assertTrue(r.dashboard["battle_plan"]["cost_check"]["passed"])
+        self.assertNotIn("decision_score_calibration", r.dashboard)
 
     def test_non_buy_gets_the_check_but_keeps_its_advice(self):
         # 掛單照價位做的人看的是價位不是評級，所以觀望的報告也要有檢核

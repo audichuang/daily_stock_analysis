@@ -111,6 +111,37 @@ def score_band_metadata(value: Any) -> dict[str, Any]:
     }
 
 
+def record_guardrail_score_adjustment(
+    dashboard: dict,
+    *,
+    raw_score: Any,
+    adjusted_score: Any,
+    final_action: str,
+    reason: Optional[str] = None,
+    raw_decision_type: Optional[str] = None,
+) -> None:
+    """後段護欄（大盤環境、交易成本）壓分時，把護欄前的原始分數併進 decision_score_calibration。
+
+    raw_score 只在還沒有時寫入（保留最早、也就是 LLM 原判那一份），不覆蓋前一個護欄的紀錄；
+    adjusted_score／final_action 一律更新成最新值，避免 DecisionSignal 讀到過期分數。
+    """
+    calibration = dashboard.get("decision_score_calibration")
+    if not isinstance(calibration, dict):
+        calibration = {}
+        dashboard["decision_score_calibration"] = calibration
+    if calibration.get("raw_score") is None and normalize_score(raw_score) is not None:
+        calibration.update(score_band_metadata(raw_score))
+        calibration["raw_score"] = normalize_score(raw_score)
+        if raw_decision_type:
+            calibration["raw_decision_type"] = raw_decision_type
+    adjusted = normalize_score(adjusted_score)
+    if adjusted is not None:
+        calibration["adjusted_score"] = adjusted
+    calibration["final_action"] = final_action
+    if reason and not calibration.get("guardrail_reason"):
+        calibration["guardrail_reason"] = reason
+
+
 def extract_decision_guardrail_reason(payload: Any) -> Optional[str]:
     """Extract an applied score/action guardrail reason from a result payload."""
 

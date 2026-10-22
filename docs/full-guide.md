@@ -504,6 +504,12 @@ daily_stock_analysis/
 | `MAX_WORKERS` | 并发线程数 | `3` |
 | `MARKET_REVIEW_ENABLED` | 启用大盘复盘 | `true` |
 | `DAILY_MARKET_CONTEXT_ENABLED` | 将当日大盘环境摘要注入个股分析 Prompt，并在高风险/退潮环境下软化激进买入建议；默认开启，设为 `false` 后仍可运行大盘复盘 | `true` |
+| `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE` | 資金流 `not_supported`（市場沒有這種資料源）時買入是否照舊降級為持有觀察；預設 `true`＝舊行為，設 `false` 才啟用新路徑（非 A 股不據此降級，台股改用三大法人校準），見「分析决策可操作性」 | `true` |
+| `PROMPT_VARIANT` | 提示詞版本標籤，隨每份報告寫進 `dashboard.prompt_variant`，給 `scripts/shadow_buy_eval.py --by-variant` 做 A/B 分組；只是標籤，不改提示詞 | `baseline` |
+| `TW_MA_ALIGNMENT_WEIGHTED` | 台股＋中文報告專用：多頭排列由必要條件改為加權項，乖離 `BIAS_THRESHOLD`～2 倍限放量突破＋ATR14 停損、超過 2 倍嚴禁追高；報告標 `prompt_variant=tw-ma-weighted`。關閉時提示詞一字不改；英文報告與 Agent 模式不生效 | `false` |
+| `TW_LIVE_EVENTS_ENABLED` | 台股個股 prompt 接處置／注意股與未來 10 個交易日法說會、除權息（官方即時名單，每個基準日抓一次、fail-open；證明不了新鮮寫「未確認」） | `true` |
+| `ANALYST_CONSENSUS_ENABLED` | 個股 prompt 附賣方共識（yfinance：EPS 修正、評級、目標價；台股＋美股），純資訊、不改 action／confidence；台股未經驗證，見 `docs/tw-signal-research-2026-10.md` | `false` |
+| `TW_BROKER_INDEX_TARGETS` | 人工維護的法人年底指數目標一行（`YYYY-MM-DD 內容`），在台股大盤背景顯示為情緒/beta 背景；空值或超過 30 天沒更新不顯示 | 空 |
 | `MARKET_REVIEW_REGION` | 大盘复盘市场区域：cn(A股)、hk(港股)、us(美股)、tw(台股)、jp(日股)、kr(韩股)、both(全部市场)；支持逗号组合（按输入顺序，如 tw,us）；hk/us/tw/jp/kr 适合仅关注单区域用户 | `cn` |
 | `MARKET_REVIEW_COLOR_SCHEME` | 大盘复盘指数涨跌颜色：`green_up`=绿涨红跌（默认），`red_up`=红涨绿跌 | `green_up` |
 | `TRADING_DAY_CHECK_ENABLED` | 交易日检查：默认 `true`，非交易日跳过执行；设为 `false` 或使用 `--force-run` 可强制执行（Issue #373） | `true` |
@@ -1543,9 +1549,10 @@ STORAGE_DATABASE_URL=postgresql+psycopg://user:password@host:5432/stock?options=
 ## 分析决策可操作性
 
 个股报告的操作建议会结合支撑位、压力位、量能/筹码、主力资金流向和风险事件进行校准，避免仅因单日涨跌或评分跨线在“买入/卖出”之间剧烈切换。若价格处在支撑与压力之间且资金流不明确，报告会优先给出“持有、震荡观望、洗盘观察”等中性可执行建议；只有接近支撑确认、有效突破压力且量价/资金配合时才给出买入，跌破关键支撑或主力资金持续流出时才给出卖出/减仓。
+資金流狀態的區分（預設 `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE=true` 維持舊行為，`not_supported` 也照舊降級；以下新路徑要設 `false` 才啟用）：抓取失敗（`failed`、空資料、全 N/A）時買入照舊降級為持有觀察；`not_supported`（市場沒有這種資料源，如美股、指數、非 A 股 ETF）不降級，只在 `dashboard.decision_stability` 標 `applied=False`。台股的買入（`decision_type=buy` 或建議判為買入）改用 `fundamental_context.institution` 的外資＋投信推導：同買→inflow、同賣→outflow、其餘→neutral，再走上面的支撐／壓力校準；法人只看當日一天，報告文案仍寫「资金流」。A 股的 `not_supported` 照舊降級（akshare 抓不到也回這個狀態）。
 该项调整会影响可操作决策的运行时落盘与提示词约束链路，但不变更 LLM 模型、LiteLLM 路由、Provider/Key 及其兼容边界，不影响配置保存/清理语义。
 兼容性核验结论：除配置和模型侧语义外，该决策稳定性链路覆盖 `src/analyzer.py`、`src/core/pipeline.py`、`src/core/backtest_engine.py`、`src/report_language.py` 及 `src/agent` 决策路径的运行时行为，建议复核报告决策类型映射与回测入口联动。
-核验路径：相关逻辑在上述运行时路径与对应测试（`tests/test_backtest_engine.py`、`tests/test_analyzer_news_prompt.py`、`tests/test_decision_stability.py`、`tests/test_agent_pipeline.py` 等）中生效；未在 `src/config.py`、`src/report.py`、存储/持久化链路新增配置字段或清理逻辑。
+核验路径：相关逻辑在上述运行时路径与对应测试（`tests/test_backtest_engine.py`、`tests/test_analyzer_news_prompt.py`、`tests/test_decision_stability.py`、`tests/test_agent_pipeline.py` 等）中生效；本 fork 在 `src/config.py` 新增 `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE`（預設 `true`＝舊行為），未在 `src/report.py`、存储/持久化链路新增配置字段或清理逻辑。
 
 ### 建议动作 Taxonomy（#1390 P0）
 

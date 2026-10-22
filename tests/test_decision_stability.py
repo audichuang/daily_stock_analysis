@@ -3,6 +3,9 @@
 
 from types import SimpleNamespace
 
+import pytest
+
+import src.analyzer as analyzer_module
 from src.analyzer import AnalysisResult, _capital_flow_bias, stabilize_decision_with_structure
 
 
@@ -54,6 +57,11 @@ def _fund_flow(main: float, five_day: float = 0.0, ten_day: float = 0.0) -> dict
 
 def _unsupported_fund_flow() -> dict:
     return {"capital_flow": {"status": "not_supported", "data": {}}}
+
+
+def _failed_fund_flow() -> dict:
+    # 資料源存在但抓取失敗（_build_fundamental_block("failed", {}, ...) 的形狀）
+    return {"capital_flow": {"status": "failed", "data": {}}}
 
 
 def _unsupported_fund_flow_caps() -> dict:
@@ -146,7 +154,7 @@ def test_downgrades_buy_when_capital_flow_is_unavailable() -> None:
     stabilize_decision_with_structure(
         buy_result,
         SimpleNamespace(support_levels=[30.0], resistance_levels=[34.0]),
-        _unsupported_fund_flow(),
+        _failed_fund_flow(),
     )
     stabilize_decision_with_structure(
         sell_result,
@@ -209,7 +217,7 @@ def test_downgrades_buy_advice_when_decision_type_is_hold_and_capital_flow_unava
     stabilize_decision_with_structure(
         result,
         SimpleNamespace(support_levels=[30.0], resistance_levels=[34.0]),
-        _unsupported_fund_flow(),
+        _failed_fund_flow(),
     )
 
     assert result.decision_type == "hold"
@@ -219,13 +227,16 @@ def test_downgrades_buy_advice_when_decision_type_is_hold_and_capital_flow_unava
     assert "买入结论缺少资金面确认" in result.dashboard["decision_stability"]["reason"]
 
 
-def test_downgrades_buy_when_capital_flow_status_is_unavailable_case_insensitive() -> None:
+@pytest.mark.usefixtures("tw_institution_path")
+def test_not_supported_capital_flow_does_not_downgrade_buy_case_insensitive() -> None:
+    # 「此市場無資金流資料源」不是「資料失敗」：不降級，只標記未校準
     buy_result = _result(
         decision_type="buy",
         operation_advice="买入",
         score=66,
         current_price=32.0,
     )
+    buy_result.code = "AAPL"
 
     stabilize_decision_with_structure(
         buy_result,
@@ -233,10 +244,155 @@ def test_downgrades_buy_when_capital_flow_status_is_unavailable_case_insensitive
         _unsupported_fund_flow_caps(),
     )
 
-    assert buy_result.decision_type == "hold"
-    assert buy_result.operation_advice == "持有观察"
-    assert buy_result.dashboard["decision_stability"]["applied"] is True
+    assert buy_result.decision_type == "buy"
+    assert buy_result.operation_advice == "买入"
+    assert buy_result.sentiment_score == 66
+    assert buy_result.dashboard["decision_stability"]["applied"] is False
     assert "暂不支持" in str(buy_result.dashboard["decision_stability"]["capital_flow_status"])
+
+
+@pytest.fixture
+def tw_institution_path(monkeypatch):
+    """顯式關掉 CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE，啟用 not_supported 不降級＋台股法人推導的新路徑。"""
+    monkeypatch.setattr(
+        analyzer_module,
+        "get_config",
+        lambda: SimpleNamespace(capital_flow_not_supported_downgrade=False),
+    )
+
+
+def _tw_result(*, current_price: float = 32.0, code: str = "2330.TW") -> AnalysisResult:
+    result = _result(decision_type="buy", operation_advice="买入", score=70, current_price=current_price)
+    result.code = code
+    return result
+
+
+def _tw_context(foreign: float, trust: float, inst_status: str = "ok") -> dict:
+    return {
+        "capital_flow": {"status": "not_supported", "data": {}},
+        "institution": {
+            "status": inst_status,
+            "data": {
+                "foreign_net": foreign,
+                "trust_net": trust,
+                "dealer_net": 0,
+                "total_net": foreign + trust,
+                "unit": "shares",
+                "date": "20261021",
+            },
+        },
+    }
+
+
+_LEVELS = SimpleNamespace(support_levels=[30.0], resistance_levels=[34.0])
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+def test_tw_not_supported_with_institution_inflow_keeps_buy() -> None:
+    # 中段價位 + 外資投信同買 → inflow，不觸發任何結構降級
+    result = _tw_result()
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(1_000_000, 200_000))
+
+    assert result.decision_type == "buy"
+    assert result.operation_advice == "买入"
+    assert result.sentiment_score == 70
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+def test_tw_institution_inflow_near_resistance_keeps_buy() -> None:
+    # 近壓力只有 inflow 能放行；證明 inflow 有實際接上既有邏輯而非僅僅跳過
+    result = _tw_result(current_price=33.4)
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(1_000_000, 200_000))
+
+    assert result.decision_type == "buy"
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+def test_tw_institution_outflow_downgrades_buy_via_existing_outflow_rule() -> None:
+    result = _tw_result()
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(-1_000_000, -200_000))
+
+    assert result.decision_type == "hold"
+    assert result.operation_advice == "震荡观望"
+    assert result.sentiment_score <= 59
+    assert result.dashboard["decision_stability"]["capital_flow_bias"] == "outflow"
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+def test_tw_institution_mixed_is_neutral_and_mid_range_rule_applies() -> None:
+    result = _tw_result()
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(1_000_000, -200_000))
+
+    assert result.decision_type == "hold"
+    assert result.dashboard["decision_stability"]["capital_flow_bias"] == "neutral"
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+def test_tw_not_supported_without_institution_marks_unavailable_without_downgrade() -> None:
+    result = _tw_result()
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(0, 0, inst_status="failed"))
+
+    assert result.decision_type == "buy"
+    assert result.sentiment_score == 70
+    assert result.dashboard["decision_stability"]["applied"] is False
+    assert result.dashboard["decision_stability"]["capital_flow_bias"] == "unavailable"
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+def test_tw_failed_capital_flow_still_downgrades_even_with_institution_inflow() -> None:
+    # 過度修正守門：資料源存在但失敗時，不得拿法人資料替代而放行
+    result = _tw_result()
+    context = _tw_context(1_000_000, 200_000)
+    context["capital_flow"] = {"status": "failed", "data": {}}
+
+    stabilize_decision_with_structure(result, _LEVELS, context)
+
+    assert result.decision_type == "hold"
+    assert result.operation_advice == "持有观察"
+    assert result.sentiment_score <= 59
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+def test_non_tw_code_ignores_institution_when_capital_flow_not_supported() -> None:
+    # 法人推導只限台股；非台股 not_supported 一律只標記未校準
+    result = _tw_result(code="AAPL")
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(-1_000_000, -200_000))
+
+    assert result.decision_type == "buy"
+    assert result.dashboard["decision_stability"]["capital_flow_bias"] == "unavailable"
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+def test_us_not_supported_capital_flow_does_not_downgrade_buy() -> None:
+    result = _tw_result(code="AAPL")
+
+    stabilize_decision_with_structure(result, _LEVELS, _unsupported_fund_flow())
+
+    assert result.decision_type == "buy"
+    assert result.sentiment_score == 70
+    assert result.dashboard["decision_stability"]["applied"] is False
+
+
+@pytest.mark.parametrize("config", [
+    SimpleNamespace(capital_flow_not_supported_downgrade=True),
+    SimpleNamespace(),  # 設定物件沒有這個欄位時也要回到舊行為
+], ids=["explicit_true", "attr_missing"])
+@pytest.mark.parametrize("code", ["AAPL", "2330.TW"])
+def test_default_flag_keeps_old_not_supported_downgrade(monkeypatch, code, config) -> None:
+    monkeypatch.setattr(analyzer_module, "get_config", lambda: config)
+    result = _tw_result(code=code)
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(1_000_000, 200_000))
+
+    assert result.decision_type == "hold"
+    assert result.operation_advice == "持有观察"
+    assert result.sentiment_score <= 59
 
 
 def test_skips_downgrade_when_only_generic_risk_warning_and_sell_near_support() -> None:
@@ -340,3 +496,57 @@ def test_refines_hold_pullback_near_support_as_shakeout_watch() -> None:
     assert result.decision_type == "hold"
     assert result.operation_advice == "洗盘观察"
     assert "更适合按洗盘观察处理" in result.risk_warning
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+def test_tw_sell_near_support_unchanged_when_capital_flow_not_supported() -> None:
+    # 法人代入只限買入：台股賣出（紅 K、近支撐、法人同買）仍維持賣出，不被改成洗盤觀察
+    result = _result(decision_type="sell", operation_advice="卖出", score=30, current_price=30.4, change_pct=-2.1)
+    result.code = "2330.TW"
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(1_000_000, 200_000))
+
+    assert result.decision_type == "sell"
+    assert result.operation_advice == "卖出"
+    assert result.sentiment_score == 30
+    assert result.dashboard["decision_stability"]["applied"] is False
+    assert result.dashboard["decision_stability"]["capital_flow_bias"] == "unavailable"
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+def test_tw_hold_with_buy_advice_uses_institution_bias() -> None:
+    # decision_type=hold 但建議寫「建议买入」也算買入結論：上櫃代碼、法人一買一賣 → neutral，走區間中段校準
+    result = _result(decision_type="hold", operation_advice="建议买入", score=58, current_price=32.0)
+    result.code = "6488.TWO"
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(1_000_000, -200_000))
+
+    assert result.dashboard["decision_stability"]["capital_flow_bias"] == "neutral"
+    assert result.dashboard["decision_stability"]["applied"] is True
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+def test_cn_not_supported_capital_flow_still_downgrades_buy() -> None:
+    # A 股有資金流資料源：akshare 抓不到時也標 not_supported（實為失敗），仍須降級
+    result = _result(decision_type="buy", operation_advice="买入", score=66, current_price=32.0)
+
+    stabilize_decision_with_structure(result, _LEVELS, _unsupported_fund_flow())
+
+    assert result.code == "002812"
+    assert result.decision_type == "hold"
+    assert result.operation_advice == "持有观察"
+    assert result.sentiment_score <= 59
+
+
+@pytest.mark.parametrize("env, expected", [({}, True), ({"CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE": "false"}, False)])
+def test_config_capital_flow_not_supported_downgrade_defaults_to_old_behavior(env, expected) -> None:
+    # 使用者未選擇前預設維持舊行為（not_supported 照舊降級）；只有顯式設 false 才走新路徑
+    from unittest.mock import patch
+
+    from src.config import Config
+
+    assert Config.__dataclass_fields__["capital_flow_not_supported_downgrade"].default is True
+    with patch("src.config.setup_env"), patch.object(Config, "_parse_litellm_yaml", return_value=[]), \
+            patch.dict("os.environ", env, clear=True):
+        cfg = Config._load_from_env()
+    assert cfg.capital_flow_not_supported_downgrade is expected

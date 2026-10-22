@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from src.analyzer import AnalysisResult
 from src.daily_market_context_guardrail import apply_daily_market_context_guardrail
 
@@ -299,3 +301,152 @@ def test_conservative_market_context_does_not_soften_do_not_buy_in_english() -> 
     assert adjustments == []
     assert result.decision_type == "buy"
     assert result.operation_advice == "Do not buy now; sell into strength."
+
+
+def test_conservative_tag_alone_no_longer_softens_buy() -> None:
+    """「謹慎／觀望」是中性措辭，單獨出現不該把買進壓成觀望。"""
+    result = _result()
+
+    adjustments = apply_daily_market_context_guardrail(
+        result,
+        daily_market_context={
+            "region": "tw",
+            "trade_date": "2026-10-05",
+            "summary": "加權指數創高，留意短線謹慎觀望。",
+            "risk_tags": ["conservative"],
+        },
+        report_language="zh",
+    )
+
+    assert adjustments == []
+    assert result.decision_type == "buy"
+    assert result.sentiment_score == 82
+
+
+def test_traditional_risky_summary_softens_traditional_aggressive_buy() -> None:
+    result = _result()
+    result.decision_type = "hold"
+    result.operation_advice = "立即買入並積極加倉"
+
+    adjustments = apply_daily_market_context_guardrail(
+        result,
+        daily_market_context={
+            "region": "tw",
+            "trade_date": "2026-10-05",
+            "summary": "大盤高風險，量縮下跌。",
+            "risk_tags": [],
+        },
+        report_language="zh",
+    )
+
+    assert "daily_market_context_buy_softened" in adjustments
+    assert result.operation_advice == "观望"
+
+
+def test_traditional_negated_buy_is_not_softened() -> None:
+    result = _result()
+    result.decision_type = "hold"
+    result.operation_advice = "暫不建議買入"
+
+    adjustments = apply_daily_market_context_guardrail(
+        result,
+        daily_market_context={
+            "region": "tw",
+            "trade_date": "2026-10-05",
+            "summary": "大盤高風險。",
+            "risk_tags": ["high_risk"],
+        },
+        report_language="zh",
+    )
+
+    assert adjustments == []
+    assert result.operation_advice == "暫不建議買入"
+
+
+@pytest.mark.parametrize(
+    "risk_tags,position_cap",
+    [
+        (["high_risk"], ""),
+        (["market_cooling"], ""),
+        (["low_position_cap"], ""),
+        ([], "30%"),
+    ],
+)
+def test_each_remaining_trigger_alone_still_softens_buy(risk_tags, position_cap) -> None:
+    """收窄後剩下的每條觸發路徑都要單獨有效：摘要用中性措辭，避免被文字路徑救回。"""
+    result = _result()
+
+    adjustments = apply_daily_market_context_guardrail(
+        result,
+        daily_market_context={
+            "region": "tw",
+            "trade_date": "2026-10-05",
+            "summary": "加權指數震盪整理。",
+            "risk_tags": risk_tags,
+            "position_cap": position_cap,
+        },
+        report_language="zh",
+    )
+
+    assert "daily_market_context_buy_softened" in adjustments
+    assert result.decision_type == "hold"
+
+
+_RISKY_CONTEXT = {"summary": "大盘退潮，高风险。", "risk_tags": ["high_risk"]}
+
+
+def test_softening_persists_pre_guardrail_score_for_shadow_eval() -> None:
+    # 護欄前的 LLM 原判要落庫，scripts/shadow_buy_eval.py 才數得到被大盤護欄壓掉的買進
+    result = _result()
+
+    apply_daily_market_context_guardrail(result, daily_market_context=_RISKY_CONTEXT, report_language="zh")
+
+    calibration = result.dashboard["decision_score_calibration"]
+    assert calibration["raw_score"] == 82
+    assert calibration["raw_decision_type"] == "buy"
+    assert calibration["canonical_decision_type"] == "buy"
+    assert calibration["adjusted_score"] == 52 == result.sentiment_score
+    assert calibration["final_action"] == "hold"
+    assert "大盘环境" in calibration["guardrail_reason"]
+
+
+def test_softening_keeps_earlier_guardrail_raw_score_and_updates_adjusted() -> None:
+    # 前一個護欄（R1）已記下 LLM 原分 70：不得被本護欄看到的中間分數覆蓋，但 adjusted 要更新
+    result = _result()
+    result.sentiment_score = 59
+    result.dashboard["decision_score_calibration"] = {
+        "raw_score": 70, "canonical_decision_type": "buy", "adjusted_score": 59,
+        "final_action": "watch", "guardrail_reason": "R1 原因",
+    }
+
+    apply_daily_market_context_guardrail(result, daily_market_context=_RISKY_CONTEXT, report_language="zh")
+
+    calibration = result.dashboard["decision_score_calibration"]
+    assert calibration["raw_score"] == 70
+    assert "raw_decision_type" not in calibration
+    assert calibration["guardrail_reason"] == "R1 原因"
+    assert calibration["adjusted_score"] == 52
+    # final_action 也要跟著本護欄更新，否則影子評估的最終動作會停在 R1
+    assert calibration["final_action"] == "hold"
+
+
+def test_softening_fills_raw_score_when_calibration_has_only_llm_reason() -> None:
+    # LLM 自述降級時 _parse_response 只放 guardrail_reason：仍要補上 raw_score
+    result = _result()
+    result.dashboard["decision_score_calibration"] = {"guardrail_reason": "LLM 自述"}
+
+    apply_daily_market_context_guardrail(result, daily_market_context=_RISKY_CONTEXT, report_language="zh")
+
+    calibration = result.dashboard["decision_score_calibration"]
+    assert calibration["raw_score"] == 82
+    assert calibration["guardrail_reason"] == "LLM 自述"
+
+
+def test_unsoftened_buy_records_no_calibration() -> None:
+    # 反向：護欄沒觸發就不能記，否則影子評估會把正常報告算成「被護欄降級」
+    result = _result()
+
+    assert apply_daily_market_context_guardrail(
+        result, daily_market_context={"summary": "指數震盪。"}, report_language="zh"
+    ) == []
+    assert "decision_score_calibration" not in result.dashboard

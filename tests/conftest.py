@@ -39,6 +39,11 @@ _PROD_STORAGE_DATABASE_URL = (
     dotenv_values(Path(__file__).resolve().parents[1] / ".env").get("STORAGE_DATABASE_URL") or ""
 ).strip()
 os.environ["STORAGE_DATABASE_URL"] = ""
+# 台股 prompt 的處置／事件即時名單會打官方端點；測試一律關掉，要測的自己注入 config
+os.environ["TW_LIVE_EVENTS_ENABLED"] = "false"
+# 賣方共識會連 yfinance、指數目標會多一行 prompt；擋掉 .env 漏入，要測的自己注入 config
+os.environ["ANALYST_CONSENSUS_ENABLED"] = "false"
+os.environ["TW_BROKER_INDEX_TARGETS"] = ""
 
 _original_create_engine = sqlalchemy.create_engine
 
@@ -58,6 +63,7 @@ sqlalchemy.engine.create_engine = _create_engine_refusing_prod_storage
 @pytest.fixture(autouse=True)
 def _keep_storage_database_url_unset():
     os.environ["STORAGE_DATABASE_URL"] = ""
+    os.environ["TW_LIVE_EVENTS_ENABLED"] = "false"
     yield
 
 _original_call_soon_threadsafe = asyncio.BaseEventLoop.call_soon_threadsafe

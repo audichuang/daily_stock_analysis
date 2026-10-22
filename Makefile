@@ -24,7 +24,7 @@ DOPPLER_RUN = doppler run -p finmind -c dev -- doppler run -p $(DOPPLER_PROJECT)
 
 .DEFAULT_GOAL := help
 .PHONY: help install serve serve-local review review-tw analyze schedule screen \
-        swing morning overnight taifex measure portfolio portfolio-wf verify-decisions \
+        swing morning overnight taifex measure portfolio portfolio-wf verify-decisions shadow-buy \
         test lint lint-fix format refresh-tw refresh-us daily-report daily-report-detached \
         pg-scratch pg-scratch-stop
 
@@ -113,6 +113,9 @@ portfolio-wf: ## 同上但走擴張窗选参，只计样本外（回答选参偏
 
 verify-decisions: ## 回验 tw-swing-research 的判断（Brier + E[R|enter]−E[R|全收]）
 	uv run --env-file .env python scripts/verify_swing_decisions.py
+
+shadow-buy: ## 影子評估：被護欄壓掉的 LLM 原判買進照做的 1/2/3/5 日淨報酬 vs 0050（唯讀，輸出到 reports/）
+	uv run --env-file .env python scripts/shadow_buy_eval.py
 
 # ---- 质量检查 ----
 pg-scratch: ## 本機臨時 Postgres（market schema 跑到 Alembic head），印出要 export 的 DATABASE_URL

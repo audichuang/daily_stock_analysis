@@ -17,6 +17,7 @@
 | 財報(營收/淨利/營運現金流) | `YfinanceFundamentalAdapter`(季報表 → 缺才退 `info` 的近四季聚合) | 逐欄退回,同一張表可混單季與近四季,所以 `financial_report.basis` 逐欄標 `quarter`／`ttm`／`ttm_derived`(淨利 = 近四季營收×淨利率)／`quarter_derived`(單季營收×近四季淨利率,僅估算),prompt 說明欄印口徑。金額經 `_format_amount` 帶單位與幣別、負值保留正負號;幣別跟財報 `currency` 走(HK ADR 可為 CNY),不跟交易市場走。ROE 等比率原樣 |
 | 個股三大法人 | 當日走 `TwInstitutionalFetcher`(網路);歷史趨勢才讀本地 DB | 單位是**股**,不是張。歷史上市、上櫃都有(上櫃自 2018-01-15 起,同表 `market='tpex'`),場次不足 2 時 prompt 改印揭露句、不算趨勢;「近 5／20 日累計」只在窗口內每一場都有值時才印(`tw_institutional_trend.py`);本地歷史比「今天之前最後一個交易日」舊就視為停更並明講 |
 | 券商分點 | `tw_broker_branch.py` 按需查富邦 DJ 個股主力進出頁,不入庫、不進報告 prompt(目前只有 `scripts/tw_stock_dossier.py` 用) | 只有前 15 名買超／賣超;HHI 只在前 15 名內算、平均成本是這 15 家的;頁面 `getYMD1` 是迄日、`getYMD2` 是起日 |
+| 賣方共識(`ANALYST_CONSENSUS_ENABLED`,預設關) | `analyst_consensus.py`(yfinance,台股＋美股) | 只在基本面階段抓,會呼叫 `ticker.info`,**不能搬到報價路徑**;沒有共識本身的 as_of,新鮮度只能從價格日期推;純資訊,不進 coverage／status |
 | 個股融資融券 | 只讀本地 DB(`market_repo.margin`,3 秒 statement timeout);純函式 `tw_margin_trend.py` 算最新餘額、5／20 場次變化與券資比 | 單位是**張**(與三大法人的股不同),**T+1 發布**所以 prompt 標資料日。上市、上櫃同表(上櫃 `market='tpex'`),查無資料回空字串;場次 <6／<21 不印對應變化。注入點在三大法人 `if/elif` **之外**,T86 成功或失敗都出現;prompt-only、fail-open、不入持久化 context |
 
 ## 進來改要遵守

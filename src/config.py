@@ -978,6 +978,9 @@ class Config:
     stock_list: List[str] = field(default_factory=list)
     # 每日分析时把本地持仓账本（Web 持仓页）的持股并进 STOCK_LIST；仅作用于未指定 --stocks/--portfolio 的运行
     analyze_portfolio_holdings: bool = False
+    # 預設 true＝舊行為：資金流 not_supported（市場無此資料源）照舊把買入降級為持有觀察；
+    # 設 false 才啟用新路徑（非 A 股不據此降級，台股改用三大法人推導資金面）
+    capital_flow_not_supported_downgrade: bool = True
 
     # === 飞书云文档配置 ===
     feishu_app_id: Optional[str] = None
@@ -1110,6 +1113,16 @@ class Config:
     bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
     trade_cost_min_net_rr: float = 1.0  # 台股价位扣成本后的最低净风报比，低于它买入降级观望
     tw_broker_fee_discount: float = 1.0  # 台股券商手续费折扣（6 折填 0.6），只影响成本检核
+    # 提示詞版本標籤，隨每份報告落庫（dashboard.prompt_variant），給影子評估做 A/B 分組；只是標籤，不改提示詞本身
+    prompt_variant: str = "baseline"
+    # 台股短波段評分：多頭排列由必要條件改為加權項（預設關＝舊提示詞一字不改；開啟時報告標記 prompt_variant）
+    tw_ma_alignment_weighted: bool = False
+    # 台股個股 prompt 接處置／注意股與法說、除權息即時名單（官方端點，每個基準日只抓一次、fail-open）
+    tw_live_events_enabled: bool = True
+    # 個股 prompt 附賣方共識（yfinance：目標價、EPS 修正、評級；台股＋美股）；純資訊、預設關
+    analyst_consensus_enabled: bool = False
+    # 台股大盤背景附一行法人年底指數目標，格式「YYYY-MM-DD 內容」；空＝不顯示，超過 30 天沒更新也不顯示
+    tw_broker_index_targets: str = ""
 
     # === Agent 模式配置 ===
     agent_backend: str = "auto"
@@ -1923,6 +1936,9 @@ class Config:
         return cls(
             stock_list=stock_list,
             analyze_portfolio_holdings=parse_env_bool(os.getenv('ANALYZE_PORTFOLIO_HOLDINGS'), default=False),
+            capital_flow_not_supported_downgrade=parse_env_bool(
+                os.getenv('CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE'), default=True
+            ),
             feishu_app_id=os.getenv('FEISHU_APP_ID'),
             feishu_app_secret=os.getenv('FEISHU_APP_SECRET'),
             feishu_folder_token=os.getenv('FEISHU_FOLDER_TOKEN'),
@@ -2058,6 +2074,11 @@ class Config:
                 os.getenv('TRADE_COST_MIN_NET_RR'), 1.0, field_name='TRADE_COST_MIN_NET_RR', minimum=0.0, maximum=10.0),
             tw_broker_fee_discount=parse_env_float(
                 os.getenv('TW_BROKER_FEE_DISCOUNT'), 1.0, field_name='TW_BROKER_FEE_DISCOUNT', minimum=0.0, maximum=1.0),
+            prompt_variant=(os.getenv('PROMPT_VARIANT') or '').strip() or 'baseline',
+            tw_ma_alignment_weighted=parse_env_bool(os.getenv('TW_MA_ALIGNMENT_WEIGHTED'), default=False),
+            tw_live_events_enabled=parse_env_bool(os.getenv('TW_LIVE_EVENTS_ENABLED'), default=True),
+            analyst_consensus_enabled=parse_env_bool(os.getenv('ANALYST_CONSENSUS_ENABLED'), default=False),
+            tw_broker_index_targets=(os.getenv('TW_BROKER_INDEX_TARGETS') or '').strip(),
             agent_backend=(os.getenv('AGENT_BACKEND', 'auto') or 'auto').strip().lower(),
             agent_generation_backend=agent_generation_backend,
             agent_litellm_model=agent_litellm_model,

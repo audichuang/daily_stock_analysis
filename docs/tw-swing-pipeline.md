@@ -58,6 +58,7 @@ git add journal/ && git commit -m "journal: decisions for YYYY-MM-DD"
 「當前快照」，存歷史對「未來 N 日」沒有幫助，回測與量測 loader 也不讀。HTTP 統一走
 `market_data/tw_official_http.py`（短 timeout、不重試、不暖 TWSE cookie；連不上或不回應約 20 秒放棄，但讀取
 timeout 是位元組間隔、不是總時長，伺服器慢慢吐資料時單一來源可超過；`screen_tw` 先依序抓 4 份名單、再並行抓 4 個事件來源（MOPS 整年表單次 2~20 秒），整輪沒有總時限）。
+同一組處置／注意與事件來源也接進台股個股 prompt（`src/services/tw_live_events.py`，`TW_LIVE_EVENTS_ENABLED`），新鮮度判準一樣、每個基準日只抓一次。
 每個來源都要自己證明新鮮，證明不了就標不可用——**空回應不等於 0 檔、未列不等於沒有**：
 
 | 來源 | 新鮮度判準 | 強度 |

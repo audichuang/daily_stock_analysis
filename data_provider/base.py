@@ -4574,6 +4574,25 @@ class DataFetcherManager:
                 ["not supported for offshore market"],
             )
 
+        # 賣方共識（台股＋美股，opt-in）：純資訊欄，不進 coverage／status，失敗就沒有這個 key。
+        if (
+            market in ("tw", "us")
+            and getattr(config, "analyst_consensus_enabled", False) is True
+            and fetch_timeout > 0
+        ):
+            consensus_timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
+            if consensus_timeout > 0:
+                from data_provider.analyst_consensus import fetch_analyst_consensus
+
+                ref_price = getattr(quote_payload, "price", None) if quote_payload else None
+                consensus, _c_err, _c_ms = self._run_with_retry(
+                    lambda: fetch_analyst_consensus(stock_code, ref_price=ref_price),
+                    consensus_timeout,
+                    "fundamental_consensus",
+                )
+                if isinstance(consensus, dict):
+                    result_ctx["consensus"] = consensus
+
         result_ctx["belong_boards"] = belong_boards or futu_boards
 
         capital_flow_status = result_ctx["capital_flow"].get("status", "not_supported")

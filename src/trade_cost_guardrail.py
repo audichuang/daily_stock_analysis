@@ -23,6 +23,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from src.report_language import localize_operation_advice, normalize_report_language
+from src.schemas.decision_scale import record_guardrail_score_adjustment
 from src.services.market_symbol_utils import get_suffix_market
 from src.utils.sniper_points import extract_sniper_points
 from src.utils.tw_trade_costs import DEFAULT_SLIPPAGE_RATE, per_share_cost_multipliers
@@ -163,6 +164,8 @@ def apply_trade_cost_guardrail(
 
     language = normalize_report_language(report_language or getattr(result, "report_language", "zh"))
     words = _wording(language, check)
+    raw_score = getattr(result, "sentiment_score", None)
+    raw_decision_type = str(getattr(result, "decision_type", "") or "").lower() or None
     result.decision_type = "hold"
     result.operation_advice = localize_operation_advice("观望", language)
     try:
@@ -170,6 +173,15 @@ def apply_trade_cost_guardrail(
     except (TypeError, ValueError):
         result.sentiment_score = 50
     dashboard["sentiment_score"] = result.sentiment_score
+    # 護欄前的原始分數／動作：落庫給 scripts/shadow_buy_eval.py 回推 LLM 原判
+    record_guardrail_score_adjustment(
+        dashboard,
+        raw_score=raw_score,
+        adjusted_score=result.sentiment_score,
+        final_action="hold",
+        reason=words["reason"],
+        raw_decision_type=raw_decision_type,
+    )
     dashboard["operation_advice"] = result.operation_advice
     dashboard["decision_type"] = "hold"
     core = dashboard.get("core_conclusion")

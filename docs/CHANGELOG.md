@@ -16,6 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 上櫃（TPEx）三大法人、融資融券、估值入本地庫：與上市共用 `market.institutional`／`margin`／`valuation`，新增 `market` 欄（NULL＝上市、`'tpex'`＝上櫃），`daily` 每晚一起抓，回補用 `market_data.cli backfill institutional_tpex|margin_tpex|valuation_tpex`（法人自 2018-01-15 起）；resume、整日換血與 `health` 稽核都分市場，上櫃缺日只報不擋。個股報告的上櫃三大法人趨勢與融資融券改讀本地歷史，不再印「上櫃無歷史」；選股 momentum 的法人篩選從此不再一律剔除上櫃
 - [新功能] 集保股權分散表 `market.holding_dist`：`daily` 抓開放資料最新一週（全市場，只報不擋），`market_data.cli holding-history <代號…>` 從 TDCC 個股查詢頁補近一年
 - [新功能] `scripts/tw_stock_dossier.py` 個股四維度資料包（基本面、合約負債、籌碼含券商分點前 15 名與 HHI、估值百分位、SMC 結構），新增 `data_provider/tw_broker_branch.py`（富邦 DJ 分點，按需查詢不入庫）與 `src/services/smc_structure.py`；說明見 `docs/tw-stock-dossier.md`
+- [新功能] 新增 `PROMPT_VARIANT`（預設 `baseline`）：提示詞版本標籤，所有護欄跑完後寫進 `dashboard.prompt_variant`（上游已標記的不覆蓋），只是標籤、不改提示詞；`scripts/shadow_buy_eval.py` 新增 `--by-variant` 依版本分表，沒有標籤的舊報告歸 `untagged`、不冒充 baseline
+- [改進] 大盤環境護欄與交易成本護欄壓分時，把護欄前的 `raw_score`、`raw_decision_type` 與 `guardrail_reason` 寫進 `dashboard.decision_score_calibration`（已有的原分只補不蓋）；修正多個護欄連續壓分時 `adjusted_score`／`final_action` 停在第一個護欄的值；`shadow_buy_eval` 的原始動作改依序取 `raw_decision_type`→`canonical_decision_type`→`decision_type`
+- [新功能] 台股個股 prompt 新增「大盤狀態」（0050 季線與季線斜率、市場寬度20／60）與「月營收動能」（前 3 月平均 YoY 與本月差）資訊區塊，讀本地 `market` schema：只當資訊、不進分數；只有回測 95% CI 排除零的格子附數字，其餘寫「僅供參考，回測未證實」；本地行情停更或營收缺月就不出。純計算在 `src/services/tw_backtest_context.py`，與兩支量測腳本共用
+- [新功能] 新增 `TW_MA_ALIGNMENT_WEIGHTED`（預設 `false`，關閉時提示詞一字不改）：只限台股＋中文報告，多頭排列由必要條件改為加權項（空頭排列仍不做多），乖離 `BIAS_THRESHOLD`～2 倍限放量突破＋ATR14 停損、超過 2 倍嚴禁追高，另加 60–69 分短波段買入段；報告標 `prompt_variant=tw-ma-weighted`（有設 `PROMPT_VARIANT` 時為 `<值>+tw-ma-weighted`）供影子評估分組；英文報告與 Agent 模式不生效
+- [新功能] 台股個股 prompt 納入處置／注意股與未來 10 個交易日的法說會、除權息（`TW_LIVE_EVENTS_ENABLED`，預設 `true`）：重用 `market_data.risk_flags`／`events` 的官方名單與新鮮度判準，只在分析日 ≥ 預期場次時抓、每個基準日抓一次；用字分「是／否（已查）／未確認」，名單證明不了新鮮就寫未確認；法說會（MOPS）無法自證新鮮，一律附註「未列不代表沒有」；失敗略過不擋分析
+- [新功能] 新增 `ANALYST_CONSENSUS_ENABLED`（預設 `false`）：個股 prompt 可選附賣方共識（`data_provider/analyst_consensus.py`，yfinance；台股＋美股），依序列 EPS 修正方向、分歧、評級，目標價只當背景，並固定警語不得據此提高 confidence 或放寬進場；寫進 `fundamental_context.consensus`、不計入 coverage；n<3 標 thin、價格日期過舊或與現價差 >3% 標 stale；Agent 模式不帶這段
+- [新功能] 新增 `TW_BROKER_INDEX_TARGETS`（人工維護一行「YYYY-MM-DD 內容」）：台股大盤背景顯示法人年底指數目標，標「情緒/beta 背景，不是選股訊號」；空值或超過 30 天沒更新就不顯示
+- [新功能] 新增唯讀研究腳本 `scripts/measure_market_regime.py`（大盤狀態對 3/5/10 日前瞻淨報酬）與 `scripts/measure_revenue_momentum.py`（月營收轉弱訊號對 5/10/20/60 日前瞻淨報酬），輸出到 `reports/`
+- [文件] 新增 `docs/tw-signal-research-2026-10.md`：大盤狀態與月營收動能回測、賣方共識調查的結論（3～5 日大盤狀態對突破候選全部 inconclusive、寬度高反而較差、極端超賣是反向訊號、營收降速只在強勢股 20 日相對落後、目標價不比較準）
+- [測試] 新增 `test_measure_market_regime.py`、`test_measure_revenue_momentum.py`、`test_tw_backtest_context.py`、`test_tw_ma_weighted_prompt.py`、`test_tw_live_events_prompt.py`、`test_analyst_consensus.py`；`tests/conftest.py` 在 import 時關掉 `TW_LIVE_EVENTS_ENABLED`、`ANALYST_CONSENSUS_ENABLED` 並清空 `TW_BROKER_INDEX_TARGETS`，避免本機 `.env` 讓測試連外
+- [新功能] 新增 `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE`（預設 `true`＝維持舊行為，資金流 `not_supported` 照舊把買入降級）；設 `false` 才啟用新路徑：資金流 `not_supported`（市場沒有這種資料源）不再把買入降級為持有觀察，台股的買入改以三大法人（外資＋投信同買→inflow、同賣→outflow、其餘→neutral）推導資金面再走既有結構校準，賣出與一般持有不受影響；美股等非 A 股市場（含 `ENABLE_FUNDAMENTAL_PIPELINE=false`、指數、非 A 股 ETF）只標 `applied=False` 不降級；資金流 `failed`／空資料／N/A，以及 A 股的 `not_supported`（akshare 抓不到也回這個狀態）照舊降級
+- [修復] 大盤紅綠燈為 yellow 時不再自動打 `conservative` 風險標籤（10 月 84% 的報告都帶這個標籤，含創新高日）；red 日照常注入 `high_risk`
+- [改進] 每日大盤環境護欄只在 `high_risk`、`market_cooling`、`low_position_cap` 標籤或明確倉位上限時軟化買入，摘要單獨出現「謹慎／觀望」不再把買進壓成觀望
+- [修復] 每日大盤環境的風險標籤、倉位上限、激進買進詞與否定詞補上繁體，zh-TW 報告不再靜默漏判
+- [新功能] 新增 `scripts/shadow_buy_eval.py`（`make shadow-buy`）：唯讀影子評估被護欄壓掉的 LLM 原判買進，照做的 1/2/3/5 日淨報酬對照其他報告與 0050（另列「僅被護欄降級者」），以 code 群聚 bootstrap，區間跨零標 inconclusive；輸出到 `reports/`
 - [新功能] 即時盯盤加「全部／自選／持股」切換：持股取自帳本全部帳戶（含美股複委託），跨帳戶合併、以即時價顯示股數與未實現損益；下方另列基金持倉卡（淨值、淨值日、持有報酬）。賣光的持股自動消失，不必改 `STOCK_LIST`
 - [chore] CI 移除 `desktop-futu-package-windows`（本 fork 不發 Windows 桌面版）；macOS 打包檢查保留，`scripts/build-backend.ps1` 未刪
 - [文档] 根 `AGENTS.md` 分層精簡（31,344 → 約 11,600 bytes），只留每個任務都用得到的硬規則、驗證矩陣與跨領域踩雷；維運流程移到新文件 `docs/daily-report-ops.md`（排程一覽、每日報告逾時／鎖／完成標記）與 `docs/nas-deploy.md`（NAS 發版），單一目錄的規則下放 `src/`、`tests/`、`scripts/` 的 `AGENTS.md`，PR 標題與截圖規則移入 skill `analyze-pr`／`fix-issue`，`make analyze` 的 Doppler 手動包法移到 `docs/tw-operating-guide.md` §2.3；§6／§9 改為 CI 也跑 push 分支、合入前看 `gh run` 綠燈

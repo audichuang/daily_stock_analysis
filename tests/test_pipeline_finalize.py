@@ -126,6 +126,32 @@ class FinalizeAndPersistResultTestCase(unittest.TestCase):
         self.assertTrue(result.dashboard["battle_plan"]["cost_check"]["passed"])
         self.assertEqual(result.decision_type, "buy")
 
+    def _finalize_with_config(self, config, dashboard=None):
+        pipeline = _make_pipeline()
+        pipeline.config = config
+        result = _result(dashboard=dashboard if dashboard is not None else {})
+        pipeline._finalize_and_persist_result(
+            result,
+            _artifacts(),
+            market_phase_summary=None,
+            analysis_context_pack_overview=None,
+            report_type="simple",
+            snapshot_context={},
+            news_content_for_save=None,
+        )
+        return result
+
+    def test_prompt_variant_is_stamped_on_persisted_dashboard(self):
+        """提示詞版本標籤隨報告落庫，影子評估 --by-variant 才分得出 A/B。"""
+        result = self._finalize_with_config(SimpleNamespace(report_language="zh", prompt_variant="v2"))
+        self.assertEqual(result.dashboard["prompt_variant"], "v2")
+        result = self._finalize_with_config(SimpleNamespace(report_language="zh"))
+        self.assertEqual(result.dashboard["prompt_variant"], "baseline")
+        # 上游已標記的版本不得被設定覆蓋
+        result = self._finalize_with_config(SimpleNamespace(report_language="zh", prompt_variant="v2"),
+                                            dashboard={"prompt_variant": "agent-v1"})
+        self.assertEqual(result.dashboard["prompt_variant"], "agent-v1")
+
     def test_save_analysis_history_receives_none_news_content_for_save(self):
         """(b) news_content_for_save=None reaches save_analysis_history unchanged."""
         pipeline = _make_pipeline()

@@ -8,9 +8,9 @@
 
 | 類別 | 腳本 | 副作用 |
 |---|---|---|
-| 台股波段研究 | `screen_tw`、`measure_signal_forward`、`portfolio_walkforward`、`backtest_screen`、`verify_swing_decisions` | 唯讀本地 Postgres;`verify_swing_decisions` 只讀 `journal/`,沒有任何腳本會寫它;`screen_tw` 的 `main()` 在基準日＝預期場次時另即時抓官方公告(處置／注意股、事件日曆,`--no-risk-flags`／`--no-events` 關閉),純函式與三支量測 loader 不連網 |
+| 台股波段研究 | `screen_tw`、`measure_signal_forward`、`measure_market_regime`、`measure_revenue_momentum`、`portfolio_walkforward`、`backtest_screen`、`verify_swing_decisions` | 唯讀本地 Postgres;`measure_market_regime`／`measure_revenue_momentum` 的狀態與營收特徵純函式在 `src/services/tw_backtest_context.py`(與台股 prompt 共用,改量測口徑要同步那裡寫死的 CI 文案),結論見 `docs/tw-signal-research-2026-10.md`;`verify_swing_decisions` 只讀 `journal/`,沒有任何腳本會寫它;`screen_tw` 的 `main()` 在基準日＝預期場次時另即時抓官方公告(處置／注意股、事件日曆,`--no-risk-flags`／`--no-events` 關閉),純函式與三支量測 loader 不連網 |
 | 個股資料包 | `tw_stock_dossier` | 唯讀本地 Postgres;券商分點另連網查富邦 DJ(`--no-branch` 關閉),不寫 DB |
-| 每日報告回測 | `backtest_daily_report_levels` | 唯讀應用庫(報告價位;有 `STORAGE_DATABASE_URL` 就讀它,否則 `data/stock_analysis.db`)與 Postgres(行情) |
+| 每日報告回測 | `backtest_daily_report_levels`、`shadow_buy_eval` | 唯讀應用庫(報告價位;有 `STORAGE_DATABASE_URL` 就讀它,否則 `data/stock_analysis.db`;`shadow_buy_eval` 只認 `STORAGE_DATABASE_URL`/`--db`,連線設 READ ONLY,`--by-variant` 依 `dashboard.prompt_variant` 分表、未標記歸 `untagged`)與 Postgres(行情);後者寫 markdown 到 `reports/` |
 | 盤前／盤中取數 | `overnight`、`taifex_positions`、`intraday_breadth`、`kr_tw_memory_watch` | 連網(yfinance／Shioaji／期交所),不寫 DB;後兩支另讀 DB |
 | 股票索引 | `fetch_tw_stock_list`、`merge_tw_into_index`、`refresh_us_stock_index`、`refresh_stock_index`、`generate_index_from_csv` | **改寫進版控的索引檔與種子 CSV** |
 | 資料庫維運 | `migrate_sqlite_to_pg`、`backfill_price_change_sign`、`migrate_storage_to_postgres` | **寫入 Postgres**;最後一支只碰 `--schema` 指定的應用庫表(分析歷史等),有 `--dry-run`,目標非空需 `--replace` |
