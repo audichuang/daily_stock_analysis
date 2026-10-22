@@ -46,6 +46,7 @@ import type {
 } from '../types/decisionSignals';
 import type { Market, StockIndexItem } from '../types/stockIndex';
 import { cn } from '../utils/cn';
+import { formatSignalText } from '../utils/signalText';
 import { buildDecisionActionLabelMap } from '../utils/decisionAction';
 import {
   getDecisionSignalMarketLabel,
@@ -1126,8 +1127,8 @@ const DecisionSignalsPage: React.FC = () => {
               ) : null}
               {preview.invalidation ? <p><span className="text-foreground">{t('decisionSignals.invalidation')}:</span> {preview.invalidation}</p> : null}
               {preview.reason ? <p><span className="text-foreground">{t('decisionSignals.reason')}:</span> {preview.reason}</p> : null}
-              {preview.riskSummary ? <p><span className="text-foreground">{t('decisionSignals.riskSummary')}:</span> {preview.riskSummary}</p> : null}
-              {preview.watchConditions ? <p><span className="text-foreground">{t('decisionSignals.watchConditions')}:</span> {preview.watchConditions}</p> : null}
+              {formatSignalText(preview.riskSummary) ? <p><span className="text-foreground">{t('decisionSignals.riskSummary')}:</span> {formatSignalText(preview.riskSummary)}</p> : null}
+              {formatSignalText(preview.watchConditions) ? <p><span className="text-foreground">{t('decisionSignals.watchConditions')}:</span> {formatSignalText(preview.watchConditions)}</p> : null}
             </div>
             {reassessResponse?.warnings.length ? (
               <div className="rounded-lg border border-warning/30 bg-warning/10 p-3">

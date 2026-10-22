@@ -43,6 +43,7 @@ import { formatParsedApiError, getParsedApiError, toApiErrorMessage, type Parsed
 import { AppPage, Button, InlineAlert, Select } from '../components/common';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { getIntlLocale } from '../i18n/intlLocale';
+import { formatSignalText } from '../utils/signalText';
 
 const MARKETS = [{ id: 'cn', label: 'A 股' }];
 const SCREEN_TASK_STORAGE_KEY = 'dsa.screening.activeScreenTask.v1';
@@ -2055,7 +2056,7 @@ const StockScreeningPage: React.FC = () => {
                                 {item.riskSummary ? (
                                   <div>
                                     <p className="text-xs font-semibold text-secondary-text">风险摘要</p>
-                                    <p className="mt-1 text-sm text-foreground">{item.riskSummary}</p>
+                                    <p className="mt-1 text-sm text-foreground">{formatSignalText(item.riskSummary)}</p>
                                   </div>
                                 ) : null}
                               </div>
