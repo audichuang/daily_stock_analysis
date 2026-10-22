@@ -180,7 +180,22 @@ def technicals(engine, sid, as_of):
     return smc, list(px["date"].dt.date)
 
 
+def _check_suffix(code):
+    """後綴寫錯市場（2330.TWO）就拒絕，避免靜默回傳另一個市場同代號的資料；索引裡兩邊都查不到時放行（新掛牌）。"""
+    parts = split_suffix_symbol(code)
+    if not parts or parts[1] not in ("TW", "TWO"):
+        return
+    from src.data.stock_index_loader import get_stock_name_index_map
+
+    names = get_stock_name_index_map()
+    sid, suffix = parts
+    other = f"{sid}.{'TWO' if suffix == 'TW' else 'TW'}"
+    if f"{sid}.{suffix}" not in names and other in names:
+        raise LookupError(f"{code} 應為 {other}")
+
+
 def build(code, as_of=None, branch=True, engine=None):
+    _check_suffix(code)
     sid = (split_suffix_symbol(code) or (code.strip().upper(),))[0]
     engine = engine or get_engine()
     d = _sql(engine, "SELECT max(date) AS d FROM market.price WHERE stock_id = :s"

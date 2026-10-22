@@ -34,6 +34,30 @@ class AlertRepository:
             session.refresh(row)
             return row
 
+    def replace_rules_by_source(
+        self, target: str, source: str, fields_list: List[Dict[str, Any]]
+    ) -> List[AlertRuleRecord]:
+        """同一個 target＋source 的規則整組換掉：刪舊、建新在同一個交易裡，失敗就全部回滾。"""
+        with self.db.get_session() as session:
+            try:
+                session.execute(
+                    delete(AlertRuleRecord).where(
+                        and_(AlertRuleRecord.target == target, AlertRuleRecord.source == source)
+                    )
+                )
+                rows = [AlertRuleRecord(**fields) for fields in fields_list]
+                session.add_all(rows)
+                # Flush assigns ids (column defaults are Python-side) and detaching keeps commit
+                # from expiring them: after commit no DB read may fail and report an error for a
+                # replacement that already happened.
+                session.flush()
+                session.expunge_all()
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            return rows
+
     def get_rule(self, rule_id: int) -> Optional[AlertRuleRecord]:
         with self.db.get_session() as session:
             return session.execute(

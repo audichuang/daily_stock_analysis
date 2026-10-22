@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
@@ -57,6 +57,7 @@ const rowCodes = () => screen.getAllByRole('row').slice(1).map((r) => r.querySel
 
 describe('RealtimeBoardPage scope', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     window.localStorage.clear();
     getWatchlist.mockResolvedValue(['2330.TW', '2454.TW']);
     getSnapshot.mockResolvedValue(snapshot);
@@ -124,5 +125,43 @@ describe('RealtimeBoardPage scope', () => {
     await waitFor(() => expect(row.textContent).toContain('▲ BOS'));
     // 距離用即時價 1000 算：960 / 1000 − 1
     expect(row.textContent).toContain('-4.0%');
+  });
+
+  const summaryFor = (code: string) => ({
+    stockCode: code,
+    summary: { asOf: '2026-10-21', close: 990, structure: { kind: 'CHoCH', bias: 'bear', date: '2026-10-05', level: 950 },
+      levels: [], changes: [], verdicts: null },
+  });
+
+  it('matches summaries to lowercase watchlist codes (backend answers uppercase)', async () => {
+    getWatchlist.mockResolvedValue(['00631l.tw', '2454.TW']);
+    getSnapshot.mockResolvedValue({ accounts: [] });
+    // 兩邊都正規化：回應代碼大小寫與清單不同也對得上
+    getDossierSummaries.mockResolvedValue({ levelAlertsEnabled: false, items: [summaryFor('00631L.TW'), summaryFor('2454.tw')] });
+    renderPage();
+    const rows = await screen.findAllByRole('row');
+    for (const code of ['00631l.tw', '2454.TW']) {
+      const row = rows.find((r) => r.textContent?.startsWith(code))!;
+      await waitFor(() => expect(row.textContent).toContain('▼ CHoCH'));
+    }
+  });
+
+  it('refetches summaries on manual refresh and every 15 minutes while visible', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage();
+      await waitFor(() => expect(getDossierSummaries).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+      await waitFor(() => expect(getDossierSummaries).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      await waitFor(() => expect(getDossierSummaries).toHaveBeenCalledTimes(3));
+      // 分頁在背景時不抓
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+      await act(() => vi.advanceTimersByTimeAsync(15 * 60_000));
+      expect(getDossierSummaries).toHaveBeenCalledTimes(3);
+    } finally {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      vi.useRealTimers();
+    }
   });
 });

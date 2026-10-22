@@ -79,13 +79,13 @@ def fundamentals(p, nar):
     if months:
         top = max(m["revenue_k"] for m in months) or 1
         rows = "".join(
-            f'<div class="bar-row"><div class="lbl">{m["month"][2:].replace("-", "/")}</div>'
+            f'<div class="bar-row"><div class="lbl">{_e(m["month"][2:].replace("-", "/"))}</div>'
             f'<div class="track"><div class="fill" style="width:{m["revenue_k"] / top * 100:.1f}%"></div></div>'
             f'<div class="val">{m["revenue_k"]:,} 千元</div>'
             f'<div class="yoy">{_signed(m["yoy_pct"], "+.1f", "%")}</div></div>' for m in months)
         rev = (rows + f'<div class="note">近 12 個月累計營收年增率 '
                f'<b>{_signed(f["ttm_revenue_yoy_pct"], "+.1f", "%")}</b>'
-               f'　最新月份 {months[-1]["month"]}（公告日 {_e(months[-1]["announced"]) or NA}）</div>')
+               f'　最新月份 {_e(months[-1]["month"])}（公告日 {_e(months[-1]["announced"]) or NA}）</div>')
     else:
         rev = _empty()
     left = f'<div class="card">{_sub("月營收（千元）與 YoY%")}{rev}{_note(notes.get("revenue"))}</div>'
@@ -97,7 +97,7 @@ def fundamentals(p, nar):
             return f"<td>{f'<b>{s}</b>' if last else s}</td>"
 
         body = "".join(
-            f'<tr><td>{q["quarter"]}</td>'
+            f'<tr><td>{_e(q["quarter"])}</td>'
             + "".join(cell(q[k], i == len(qs) - 1) for k in ("gross_margin", "op_margin", "net_margin", "eps"))
             + "</tr>" for i, q in enumerate(qs))
         table = ('<div class="table-wrap"><table><tr><th>季度</th><th>毛利率%</th><th>營益率%</th><th>淨利率%</th>'
@@ -116,7 +116,7 @@ def contract(p, nar):
         for i, c in enumerate(cl):
             prev = cl[i - 1]["contract_liabilities_k"] if i else None
             qoq = (c["contract_liabilities_k"] / prev - 1) * 100 if prev else None
-            rows.append(f'<tr><td>{c["quarter"]}</td><td>{c["contract_liabilities_k"]:,.0f}</td>'
+            rows.append(f'<tr><td>{_e(c["quarter"])}</td><td>{c["contract_liabilities_k"]:,.0f}</td>'
                         f'<td>{_signed(qoq, "+.1f", "%")}</td></tr>')
         body = "<table><tr><th>季度</th><th>合約負債（千元）</th><th>季增</th></tr>" + "".join(rows) + "</table>"
     else:
@@ -203,7 +203,7 @@ def valuation(p, nar):
         ("本益比", _n(v.get("pe"), ".2f", " 倍")), ("股價淨值比", _n(v.get("pb"), ".2f", " 倍")),
         ("殖利率", _n(v.get("dividend_yield"), ".2f", "%")), ("PE 3 年百分位", _n(pct, ".1f"))))
     body = (f'<div class="grid4">{tiles}</div>{gauge}'
-            f'<div class="note">截至 {_e(v["as_of"])}；百分位樣本 {v["pe_samples_3y"]} 日</div>{_note(note)}')
+            f'<div class="note">截至 {_e(v["as_of"])}；百分位樣本 {_e(v["pe_samples_3y"])} 日</div>{_note(note)}')
     return _section("💰", "估值", f'<div class="card">{body}</div>')
 
 
@@ -237,7 +237,8 @@ def _ladder(s):
                        f'<div class="lval now" style="top:{ly:.1f}px">{price:,.1f}</div>')
             continue
         rng = f"{low:,.1f}" if low == high else f"{low:,.1f}~{high:,.1f}"
-        dist = (((low + high) / 2) / price - 1) * 100
+        # 與看盤板／警示一致：量最近的邊緣，現價在區間內為 0
+        dist = (min(max(price, low), high) / price - 1) * 100
         out.append(f'<div class="band" style="top:{y:.1f}px;height:{h:.1f}px;background:var(--{color})"></div>'
                    f'<div class="ltag" style="top:{ly:.1f}px">{_e(label)}</div>'
                    f'<div class="lval" style="top:{ly:.1f}px;color:var(--{color})">{rng} '
@@ -256,12 +257,16 @@ def technical(p, nar):
         kind = "ChoCH" if e["kind"] == "CHOCH" else e["kind"]
         tag = "，最新結構" if k == len(s["events"]) - 1 else ""
         ev.append(_stat(e["date"][:10], f'<span class="{"pos" if bull else "neg"}">{"🔼" if bull else "🔽"} '
-                                       f'{kind} {e["direction"].upper()}（突破 {e["level"]:,.1f}{tag}）</span>'))
+                                       f'{_e(kind)} {_e(e["direction"].upper())}'
+                                       f'（{"突破" if bull else "跌破"} {e["level"]:,.1f}{tag}）</span>'))
     fb = s.get("fib")
     if fb:
         zone = {"premium": "Premium 區間", "discount": "Discount 區間"}.get(fb["zone"], fb["zone"])
-        ev.append(_stat("Fib 位置", f'{fb["position"] * 100:.1f}%（{zone}，區間 {fb["range_low"]:,.1f}~{fb["range_high"]:,.1f}）'))
-        ev.append(_stat("OTE 最佳進場區間", f'{fb["ote_low"]:,.1f}~{fb["ote_high"]:,.1f}（現價{"在內" if fb["in_ote"] else "不在內"}）'))
+        last = s.get("last_event")
+        ote = ("OTE 進場區" if not last else
+               "OTE 多方進場區" if last["direction"] == "bullish" else "OTE 空方進場區")      # 與 smc_levels 同一套標籤
+        ev.append(_stat("Fib 位置", f'{fb["position"] * 100:.1f}%（{_e(zone)}，區間 {fb["range_low"]:,.1f}~{fb["range_high"]:,.1f}）'))
+        ev.append(_stat(ote, f'{fb["ote_low"]:,.1f}~{fb["ote_high"]:,.1f}（現價{"在內" if fb["in_ote"] else "不在內"}）'))
     right = f'<div class="card">{_sub("結構事件紀錄")}{"".join(ev) or _empty()}{_note(note)}</div>'
     return _section("📐", "技術面（SMC 結構）", f'<div class="grid2">{left}{right}</div>',
                     f"前復權日 K，擺動點 n={s['swing_n']}")
@@ -275,7 +280,7 @@ def footer(p, nar):
     asof = [("價格", p["as_of"]),
             ("法人", (c.get("institutional") or {}).get("as_of")), ("融資", (c.get("margin") or {}).get("as_of")),
             ("集保", (c.get("holding") or {}).get("as_of")), ("估值", (p.get("valuation") or {}).get("as_of"))]
-    fresh = "・".join(f"{k} {v or NA}" for k, v in asof)
+    fresh = "・".join(f"{k} {_e(v) or NA}" for k, v in asof)
     pills = "".join(f'<span class="pill">{x}</span>' for x in
                     ("公開資訊觀測站財報", "TWSE／TPEx 官方籌碼", "富邦 DJ 券商分點", "TDCC 集保週報", "SMC 技術結構"))
     return (f'<div class="foot">{pills}<br><br>'
@@ -303,6 +308,7 @@ tone：pos 偏多、neg 偏空、neu 中性、watch 觀察。標示中立，不�
 - 月營收以 month 欄為準；留意 announced 公告日與各段 as_of 的新鮮度。
 - 分點 HHI 註明「前 15 名」口徑；「主力成本」指近 5 日前 15 分點買超均價，不要叫「大戶成本」。
 - SMC：BOS 是延續確認、ChoCH 是較弱的轉折，最新一筆事件決定目前結構；距離用 (價位 / 現價 − 1)。
+- OTE 方向跟著最新結構：最新事件是 bearish（空方結構）時 OTE 是反彈賣壓區，不准寫成買進區、進場區或支撐。
 - 每段的觀察要點出矛盾或風險（例如營收年增但月減、法人買但價格低於主力成本），不要只複述數字。
 - notes 每段以「觀察：」開頭（contract／valuation 除外），2~4 句。
 - followups 3~5 條，寫成之後能驗證的條件：月營收公告日（每月 10 日）、財報截止日（5/15、8/14、11/14、3/31）、關鍵價位。
@@ -339,23 +345,41 @@ _narrative_locks: dict = {}      # cache path -> Lock；同一檔同時被開兩
 # 只核對「帶小數或千分位」的數字：整數張數、日期、天數太容易撞到，不值得核
 _NUMBER_RE = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+")
 _SENTENCE_SPLIT_RE = re.compile(r"[。；;\n]")      # 「自算」常寫在同一句的前半，用整句判斷
+_FIB_CONSTANTS = [0.5, 0.618, 0.705, 0.786]       # Fib／OTE 常數（*100 後即 50、61.8、70.5、78.6）
+_UNVERIFIED_TTL_SECONDS = 6 * 3600                 # 有核對不到數字的解讀：快取 6 小時後重寫
+# 數字核對規則的版本；快取檔版本不同就當過期重寫，看板也不採用（規則收緊後舊快取不會一直沿用）
+NARRATIVE_CHECK_VERSION = 2
+_UNIT_AFTER_RE = re.compile(r"\s*(億|萬)")
+
+
+def _unit_factors(key):
+    """依欄位名決定允許的單位換算 (倍數, 必須緊接的單位)。
+
+    價格、PE／PB 等只認原值，小數點抄錯位才抓得到；千元換算成億／萬時，文字裡數字後面必須真的寫
+    「億」「萬」，寫成「37.7 千元」就核對不到。"""
+    if key.endswith("_k"):          # 千元 -> 億（/1e5）、萬（/10）
+        return ((1, None), (1e-5, "億"), (0.1, "萬"))
+    if key == "position":           # Fib 位置等 0~1 比例常寫成百分比
+        return ((1, None), (100, None))
+    return ((1, None),)
 
 
 def _payload_numbers(p):
     out = set()
 
-    def walk(x):
+    def walk(x, key=""):
         if isinstance(x, dict):
-            for v in x.values():
-                walk(v)
+            for k, v in x.items():
+                walk(v, str(k))
         elif isinstance(x, list):
             for v in x:
-                walk(v)
+                walk(v, key)
         elif isinstance(x, (int, float)) and not isinstance(x, bool):
-            for v in (abs(x), abs(x) * 100):      # *100：Fib 位置等 0~1 的比例常被寫成百分比
-                out.update((d, round(v, d)) for d in range(4))
+            for f, unit in _unit_factors(key):
+                out.update((d, round(abs(x) * f, d), unit) for d in range(4))
 
     walk(p)
+    walk(_FIB_CONSTANTS, "position")
     return out
 
 
@@ -377,9 +401,13 @@ def unverified_numbers(nar, p):
         for sentence in _SENTENCE_SPLIT_RE.split(text):
             if "自算" in sentence:
                 continue
-            for m in _NUMBER_RE.findall(sentence):
+            for match in _NUMBER_RE.finditer(sentence):
+                m = match.group(0)
                 decimals = len(m.split(".")[1]) if "." in m else 0
-                if (decimals, round(float(m.replace(",", "")), decimals)) not in known:
+                value = round(float(m.replace(",", "")), decimals)
+                unit = _UNIT_AFTER_RE.match(sentence, match.end())
+                if (decimals, value, None) not in known and (
+                        not unit or (decimals, value, unit.group(1)) not in known):
                     bad.append(m)
     return bad
 
@@ -387,20 +415,24 @@ def unverified_numbers(nar, p):
 def cached_narrative(p, generate, cache_dir):
     """同一檔、同一資料基準日只呼叫一次 LLM；結果存在 cache_dir，重啟不重算。
 
-    解讀裡有核對不到的數字時照樣回傳（附 `unverified`）但不寫快取，下次開啟重新產生。"""
+    解讀裡有核對不到的數字時照樣快取（附 `unverified`），但只算 6 小時新鮮，過了才重寫，
+    避免每次開啟都重付一次 LLM。"""
     path = Path(cache_dir) / f"{p['stock_id']}_{p['as_of']}.json"
     with _narrative_locks.setdefault(str(path), threading.Lock()):
         if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
+            nar = json.loads(path.read_text(encoding="utf-8"))
+            fresh = not nar.get("unverified") or time.time() - path.stat().st_mtime < _UNVERIFIED_TTL_SECONDS
+            if nar.get("check_version") == NARRATIVE_CHECK_VERSION and fresh:
+                return nar
         nar = parse_narrative(generate(narrative_prompt(p)))
         if nar:
             bad = unverified_numbers(nar, p)
             if bad:
                 logger.warning("[tw_stock_report] %s narrative has unverified numbers: %s", p["stock_id"], bad)
                 nar["unverified"] = bad
-            else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps(nar, ensure_ascii=False), encoding="utf-8")
+            nar["check_version"] = NARRATIVE_CHECK_VERSION
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(nar, ensure_ascii=False), encoding="utf-8")
         return nar
 
 
@@ -412,19 +444,23 @@ class UnsupportedMarket(ValueError):
 
 _PAYLOAD_TTL_SECONDS = 600
 _payload_cache: dict = {}      # (code, as_of) -> (monotonic, payload)；先看數字再要解讀時不重查分點
+_payload_lock = threading.Lock()      # 只護字典讀寫與清理；build() 不在鎖內，慢查詢不互卡
 
 
 def _payload(code, as_of):
     from src.services import tw_stock_dossier
 
-    key, now = (code, as_of), time.monotonic()
-    hit = _payload_cache.get(key)
-    if hit and now - hit[0] < _PAYLOAD_TTL_SECONDS:
-        return hit[1]
-    for k in [k for k, (t, _) in _payload_cache.items() if now - t >= _PAYLOAD_TTL_SECONDS]:
-        del _payload_cache[k]      # 順手清掉過期項，任意代號／日期組合不會無限累積
+    key = (code, as_of)
+    with _payload_lock:
+        now = time.monotonic()
+        hit = _payload_cache.get(key)
+        if hit and now - hit[0] < _PAYLOAD_TTL_SECONDS:
+            return hit[1]
+        for k in [k for k, (t, _) in _payload_cache.items() if now - t >= _PAYLOAD_TTL_SECONDS]:
+            del _payload_cache[k]      # 順手清掉過期項，任意代號／日期組合不會無限累積
     p = tw_stock_dossier.build(code, as_of=as_of)
-    _payload_cache[key] = (now, p)
+    with _payload_lock:
+        _payload_cache[key] = (time.monotonic(), p)
     return p
 
 
@@ -462,7 +498,7 @@ def report_html(code, *, narrative=False, theme=None, as_of=None, generate=None,
             notice = "AI 解讀產生失敗，目前只列數字；稍後重新開啟可再試一次。"
         elif nar.get("unverified"):
             notice = (f"AI 解讀中有數字無法在資料包核對（{'、'.join(nar['unverified'][:6])}），"
-                      "請以下方數字為準；這份解讀不會快取，重新開啟會重寫。")
+                      "請以下方數字為準；這份解讀最多保留 6 小時，之後開啟會重寫。")
     return render(p, nar, theme=theme, notice=notice)
 
 

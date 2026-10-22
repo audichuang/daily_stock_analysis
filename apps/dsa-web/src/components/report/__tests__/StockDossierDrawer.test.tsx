@@ -1,7 +1,8 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('next-themes', () => ({ useTheme: () => ({ resolvedTheme: 'dark' }) }));
+const themeState = vi.hoisted(() => ({ resolved: 'dark' }));
+vi.mock('next-themes', () => ({ useTheme: () => ({ resolvedTheme: themeState.resolved }) }));
 
 const getDossierHtml = vi.fn();
 vi.mock('../../../api/stocks', () => ({ stocksApi: { getDossierHtml: (...args: unknown[]) => getDossierHtml(...args) } }));
@@ -25,6 +26,24 @@ describe('StockDossierDrawer', () => {
   afterEach(() => {
     cleanup();
     getDossierHtml.mockReset();
+    themeState.resolved = 'dark';
+  });
+
+  it('shows the pending hint again when the theme changes mid-way', async () => {
+    const light = deferred();
+    getDossierHtml.mockImplementation((_code: string, opts: { theme: string; narrative?: boolean }) =>
+      opts.theme === 'light' && opts.narrative ? light.promise : Promise.resolve(`<p>${opts.theme}</p>`));
+    const { rerender } = render(<StockDossierDrawer stockCode="3324.TWO" onClose={vi.fn()} />);
+    await waitFor(() => expect(frameHtml()).toBe('<p>dark</p>'));
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+
+    themeState.resolved = 'light';
+    rerender(<StockDossierDrawer stockCode="3324.TWO" onClose={vi.fn()} />);
+    await waitFor(() => expect(frameHtml()).toBe('<p>light</p>'));
+    expect(screen.getByRole('status')).toBeInTheDocument(); // 解讀版還在跑
+    light.resolve('<p>light narrative</p>');
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(frameHtml()).toBe('<p>light narrative</p>');
   });
 
   it('shows the numbers first, then swaps in the narrative version', async () => {

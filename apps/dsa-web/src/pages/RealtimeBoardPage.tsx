@@ -23,11 +23,12 @@ import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatSignedPct } from '../utils/portfolioFormat';
 import { formatDateTime } from '../utils/format';
 import { cn } from '../utils/cn';
-import { isTwStockCode } from '../utils/stockCode';
+import { isTwStockCode, normalizeStockCode } from '../utils/stockCode';
 import { BoardDossierCell, BoardDossierPanel } from '../components/board/BoardDossier';
 
 const POLL_INTERVAL_MS = 30_000;
 const DOSSIER_CHUNK = 50; // 與後端 MAX_BATCH_CODES 一致
+const DOSSIER_REFRESH_MS = 15 * 60_000; // 摘要是日資料，盤中不必跟 30 秒報價一起抓
 const SCOPE_STORAGE_KEY = 'dsa.board.scope';
 
 type Scope = 'all' | 'watch' | 'holdings';
@@ -210,6 +211,7 @@ const RealtimeBoardPage: React.FC = () => {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [dossier, setDossier] = useState<Record<string, DossierSummary | null>>({});
   const [levelAlertsEnabled, setLevelAlertsEnabled] = useState(false);
+  const [dossierTick, setDossierTick] = useState(0); // 遞增即重抓四維度摘要（手動刷新／15 分鐘）
   const [indices, setIndices] = useState<MarketIndex[]>([]);
   const codesRef = useRef<string[]>([]);
   const refreshSeqRef = useRef(0); // 世代守卫：丢弃旧轮询迟到的 chunk，避免覆盖更新的数据
@@ -298,7 +300,8 @@ const RealtimeBoardPage: React.FC = () => {
     refresh();
   }, [codes, refresh]);
 
-  // 四維度摘要只在清單改變時抓一次（日資料，不跟 30 秒報價輪詢）；只送台股、失敗不影響報價
+  // 四維度摘要在清單改變、手動刷新、每 15 分鐘時重抓（日資料，不跟 30 秒報價輪詢）；只送台股、失敗不影響報價
+  // key 一律正規化：後端回大寫代碼，自選清單可能是小寫
   useEffect(() => {
     const tw = (codes ?? []).filter(isTwStockCode);
     let active = true;
@@ -310,7 +313,7 @@ const RealtimeBoardPage: React.FC = () => {
           setLevelAlertsEnabled(enabled);
           setDossier((prev) => {
             const next = { ...prev };
-            for (const it of items) next[it.stockCode] = it.summary;
+            for (const it of items) next[normalizeStockCode(it.stockCode)] = it.summary;
             return next;
           });
         })
@@ -321,7 +324,14 @@ const RealtimeBoardPage: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [codes]);
+  }, [codes, dossierTick]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!document.hidden) setDossierTick((n) => n + 1);
+    }, DOSSIER_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -494,7 +504,10 @@ const RealtimeBoardPage: React.FC = () => {
     <button
       type="button"
       className="btn-secondary inline-flex items-center gap-2 text-sm"
-      onClick={() => refresh()}
+      onClick={() => {
+        refresh();
+        setDossierTick((n) => n + 1);
+      }}
     >
       <RefreshCw className="h-4 w-4" />
       {t('board.refresh')}
@@ -624,7 +637,7 @@ const RealtimeBoardPage: React.FC = () => {
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums">{positionCell(code, q)}</td>
                         <td className="px-3 py-2">
-                          <BoardDossierCell summary={dossier[code]} price={q?.currentPrice} />
+                          <BoardDossierCell summary={dossier[normalizeStockCode(code)]} price={q?.currentPrice} />
                         </td>
                         <td className="whitespace-nowrap px-3 py-2">{badge(item)}</td>
                         <td className="whitespace-nowrap px-3 py-2 text-xs text-secondary-text">{q?.asOf ? formatDateTime(q.asOf) : '—'}</td>
@@ -648,7 +661,7 @@ const RealtimeBoardPage: React.FC = () => {
                             <BoardDossierPanel
                               code={code}
                               name={q?.stockName}
-                              summary={dossier[code]}
+                              summary={dossier[normalizeStockCode(code)]}
                               price={q?.currentPrice}
                               levelAlertsEnabled={levelAlertsEnabled}
                             />

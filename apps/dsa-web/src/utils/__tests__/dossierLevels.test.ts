@@ -37,6 +37,17 @@ describe('nearestLevels', () => {
     expect(inOte).toEqual({ support: null, resistance: null });
   });
 
+  it('treats a directional OTE like any zone: bear OTE above price is resistance, containing price by bias', () => {
+    const bearOte = L(1400, 1450, 'bear', 'ote');
+    expect(nearestLevels([bearOte], 1375)).toEqual({
+      support: null,
+      resistance: { level: bearOte, distPct: ((1400 - 1375) / 1375) * 100 },
+    });
+    expect(nearestLevels([bearOte], 1420)).toEqual({ support: null, resistance: { level: bearOte, distPct: 0 } });
+    const bullOte = L(1300, 1350, 'bull', 'ote');
+    expect(nearestLevels([bullOte], 1320)).toEqual({ support: { level: bullOte, distPct: 0 }, resistance: null });
+  });
+
   it('picks the nearest level regardless of input order', () => {
     const shuffled = [L(900, 950, 'bull'), L(1750, 1750, 'bear', 'bsl'), L(1240, 1365, 'bull'), L(1395, 1460, 'bear'), L(1100, 1120, 'bull')];
     const { support, resistance } = nearestLevels(shuffled, 1375);

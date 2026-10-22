@@ -64,4 +64,25 @@ describe('BoardDossier', () => {
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/2/));
     confirm.mockRestore();
   });
+
+  it('locks the alert button while the request is in flight, then unlocks it', async () => {
+    let finish!: (n: number) => void;
+    createLevelAlerts.mockReset();
+    createLevelAlerts.mockReturnValueOnce(new Promise<number>((res) => { finish = res; })).mockRejectedValueOnce(new Error('boom'));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<BoardDossierPanel code="3324.TWO" summary={summary} price={1375} levelAlertsEnabled />);
+    const button = screen.getByRole('button', { name: /Create level alerts|建立价位警报|建立價位警報/ });
+    fireEvent.click(button);
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(createLevelAlerts).toHaveBeenCalledTimes(1);
+    finish(2);
+    await waitFor(() => expect(button).toBeEnabled());
+    // 失敗後也要解鎖
+    fireEvent.click(button);
+    expect(createLevelAlerts).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/boom/));
+    expect(button).toBeEnabled();
+    confirm.mockRestore();
+  });
 });

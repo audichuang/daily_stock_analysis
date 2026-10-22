@@ -7,6 +7,7 @@ from tests.litellm_stub import ensure_litellm_stub
 ensure_litellm_stub()
 
 from src.services import tw_stock_watch as watch  # noqa: E402
+from src.services.tw_stock_report import NARRATIVE_CHECK_VERSION as VERSION  # noqa: E402
 
 SMC = {"price": 100.0, "bsl": [140.0, 112.0], "ssl": [90.0],
        "order_blocks": [{"direction": "bullish", "low": 95.0, "high": 98.0},
@@ -28,10 +29,25 @@ def payload(**over):
 def test_levels_carry_bias_and_drop_far_ones():
     lv = watch.smc_levels(SMC)
     assert {(x["kind"], x["bias"]) for x in lv} == {
-        ("bsl", "bear"), ("ssl", "bull"), ("ob", "bull"), ("ob", "bear"), ("fvg", "bear"), ("ote", None)}
+        ("bsl", "bear"), ("ssl", "bull"), ("ob", "bull"), ("ob", "bear"), ("fvg", "bear"), ("ote", "bear")}
     assert 140.0 not in [x["high"] for x in lv]          # +40% 太遠
     assert 112.0 in [x["high"] for x in lv]
     assert watch.smc_levels(None) == []
+
+
+@pytest.mark.parametrize("event, bias, label", [
+    ({"direction": "bullish"}, "bull", "OTE 多方進場區"),
+    ({"direction": "bearish"}, "bear", "OTE 空方進場區"),
+    (None, None, "OTE 進場區"),
+])
+def test_ote_direction_follows_last_event(event, bias, label):
+    ote = [x for x in watch.smc_levels({**SMC, "last_event": event}) if x["kind"] == "ote"]
+    assert [(x["bias"], x["label"]) for x in ote] == [(bias, label)]
+
+
+def test_revenue_change_text_uses_slash_date_and_plain_month():
+    texts = [c["text"] for c in watch._changes(payload(as_of="2026-10-17")) if c["kind"] == "revenue"]
+    assert texts == ["10/10 9 月營收 YoY +23.2%"]
 
 
 def test_changes_dated_by_last_session():
@@ -58,12 +74,23 @@ def test_change_conditions(over, kind, expected):
 
 
 def test_summarize_shape_and_cached_verdicts():
-    s = watch.summarize(payload(), {"verdicts": {"chips": {"badge": "外資調節", "tone": "neg", "note": "x"}}})
+    s = watch.summarize(payload(), {"verdicts": {"chips": {"badge": "外資調節", "tone": "neg", "note": "x"}},
+                                    "check_version": VERSION})
     assert s["close"] == 100.0 and s["as_of"] == "2026-10-21"
     assert s["structure"] == {"kind": "ChoCH", "bias": "bear", "date": "2026-10-21", "level": 99.5}
     assert s["verdicts"] == {"chips": {"badge": "外資調節", "tone": "neg"}}
     assert watch.summarize(payload(smc=None))["structure"] is None
     assert watch.summarize(payload())["verdicts"] is None
+
+
+def test_summarize_hides_verdicts_from_unverified_narrative():
+    nar = {"verdicts": {"chips": {"badge": "外資調節", "tone": "neg"}}, "check_version": VERSION}
+    assert watch.summarize(payload(), {**nar, "unverified": ["41.27"]})["verdicts"] is None
+    # 空清單代表全部核對過，照常顯示
+    assert watch.summarize(payload(), {**nar, "unverified": []})["verdicts"] == nar["verdicts"]
+    # 舊版核對規則寫的快取（沒有或不同的 check_version）也不上看板
+    assert watch.summarize(payload(), {"verdicts": nar["verdicts"]})["verdicts"] is None
+    assert watch.summarize(payload(), {**nar, "check_version": VERSION - 1})["verdicts"] is None
 
 
 def test_summaries_isolate_failures(monkeypatch):
@@ -89,6 +116,20 @@ def test_one_skips_branch_fetch_and_caches(monkeypatch):
     watch._one("3324.TWO")
     watch._one("3324.TWO")
     assert calls == [{"branch": False}]      # 看板每檔不打富邦，且 10 分鐘內不重算
+
+
+def test_one_rereads_verdicts_within_ttl(monkeypatch):
+    from src.services import tw_stock_dossier
+
+    calls, nar = [], {"v": None}
+    monkeypatch.setattr(watch, "_summary_cache", {})
+    monkeypatch.setattr(watch, "_cached_verdicts", lambda p: nar["v"])
+    monkeypatch.setattr(tw_stock_dossier, "build", lambda code, **kw: calls.append(code) or payload())
+    assert watch._one("3324.TWO")["verdicts"] is None
+    # 一分鐘後解讀產生了：資料包仍走快取，但色調要立刻出現
+    nar["v"] = {"verdicts": {"chips": {"badge": "外資調節", "tone": "neg"}}, "check_version": VERSION}
+    assert watch._one("3324.TWO")["verdicts"] == {"chips": {"badge": "外資調節", "tone": "neg"}}
+    assert calls == ["3324.TWO"]
 
 
 def test_summary_endpoint_batch(monkeypatch):

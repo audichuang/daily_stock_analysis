@@ -42,6 +42,49 @@ def test_ladder_labels_do_not_overlap():
     assert all(b - a >= 17.8 for a, b in zip(tops, tops[1:]))
 
 
+def test_ladder_distance_uses_near_edge_like_board():
+    smc = {"price": 1375.0, "bsl": [], "ssl": [], "fib": None, "fvgs": [],
+           "order_blocks": [{"direction": "bullish", "low": 1240.0, "high": 1365.0},
+                            {"direction": "bearish", "low": 1360.0, "high": 1400.0},
+                            {"direction": "bearish", "low": 1430.0, "high": 1500.0}]}
+    dists = re.findall(r'\(([+-][\d.]+)%\)', report._ladder(smc))
+    assert dists == ["+4.0", "+0.0", "-0.7"]      # 由高至低；現價在區間內為 0
+
+
+def _smc(direction):
+    return {"price": 100.0, "bsl": [], "ssl": [], "order_blocks": [], "fvgs": [], "swing_n": 3,
+            "events": [{"date": "2026-08-27", "kind": "CHOCH", "direction": direction, "level": 95.0}],
+            "last_event": {"date": "2026-08-27", "kind": "CHOCH", "direction": direction, "level": 95.0},
+            "fib": {"position": 0.3, "zone": "discount", "range_low": 90.0, "range_high": 110.0,
+                    "ote_low": 93.0, "ote_high": 96.0, "in_ote": False}}
+
+
+@pytest.mark.parametrize("direction, verb, ote, wrong_verb, wrong_ote", [
+    ("bullish", "突破 95.0", "OTE 多方進場區", "跌破", "OTE 空方進場區"),
+    ("bearish", "跌破 95.0", "OTE 空方進場區", "突破", "OTE 多方進場區")])
+def test_technical_wording_follows_direction(direction, verb, ote, wrong_verb, wrong_ote):
+    html = report.technical({"smc": _smc(direction)}, {})
+    assert verb in html and wrong_verb not in html
+    assert ote in html and wrong_ote not in html and "最佳進場" not in html
+
+
+def test_db_derived_fields_are_escaped():
+    x = "<i>x</i>"
+    p = {**EMPTY, "as_of": x,
+         "fundamentals": {"monthly_revenue": [{"month": x, "revenue_k": 1, "yoy_pct": None, "announced": None}],
+                          "ttm_revenue_yoy_pct": None,
+                          "quarters": [{"quarter": x, "gross_margin": 1, "op_margin": 1, "net_margin": 1, "eps": 1}]},
+         "contract_liabilities": [{"quarter": x, "contract_liabilities_k": 1.0}],
+         "chips": {"institutional": None, "margin": None, "branch": None,
+                   "holding": {"as_of": x, "big_holder_pct": 1.0, "big_holder_pct_wow": 0.0}},
+         "valuation": {"as_of": x, "pe_samples_3y": x},
+         "smc": {**_smc("bearish"), "events": [{"date": "2026-08-27", "kind": x, "direction": x, "level": 95.0}],
+                 "fib": {**_smc("bearish")["fib"], "zone": x}}}
+    html = report.render(p)
+    low = html.lower()      # direction 會先 .upper()，未跳脫時輸出是 <I>X</I>
+    assert "<i>" not in low and "</i>" not in low and "&lt;i&gt;" in low
+
+
 GOOD = {"verdicts": {k: {"badge": "b", "tone": "neu", "note": "n"} for k in report.VERDICTS},
         "notes": {"revenue": "觀察：x"}, "followups": ["f"]}
 
@@ -133,20 +176,142 @@ def test_unverified_numbers_flags_only_numbers_missing_from_payload():
     assert report.unverified_numbers(nar, p) == ["41.27"]
 
 
-def test_unverified_narrative_is_shown_with_notice_but_not_cached(monkeypatch, tmp_path):
+def test_unverified_numbers_accepts_fib_constants_and_unit_conversions():
+    p = {**EMPTY, "fundamentals": {"monthly_revenue": [{"revenue_k": 3770000}], "quarters": []}}
+    nar = {"notes": {"technical": "回撤到 0.618 與 0.705 之間（61.8%~70.5%），0.786 失守再看 50.0%。",
+                     "revenue": "月營收 37.7 億（377,000 萬）。"}}
+    assert report.unverified_numbers(nar, p) == []
+
+
+def test_converted_amounts_must_carry_their_unit():
+    # 3,765,466 千元：寫成 37.7 億、376.5 萬才算對；同一個數字配錯單位（或沒寫單位）差了十萬倍，要抓出來
+    p = {**EMPTY, "fundamentals": {"monthly_revenue": [{"revenue_k": 3765466}], "quarters": []}}
+    ok = {"notes": {"revenue": "7 月營收 37.7 億；換算 376,546.6 萬；原值 3,765,466 千元。"}}
+    assert report.unverified_numbers(ok, p) == []
+    wrong = {"notes": {"revenue": "7 月營收 37.7 千元；7 月營收 376,546.6 億；7 月營收 37.7。"}}
+    assert report.unverified_numbers(wrong, p) == ["37.7", "376,546.6", "37.7"]
+
+
+def test_legacy_cache_without_check_version_is_regenerated(monkeypatch, tmp_path):
+    # 舊版核對規則寫的快取：當過期重寫，不能一直沿用
     _payload_stub(monkeypatch)
-    bad = {**GOOD, "notes": {"chips": "外資持股 41.27%。"}}
     calls = []
 
     def gen(prompt):
         calls.append(prompt)
-        return json.dumps(bad, ensure_ascii=False)
+        return json.dumps(GOOD)
 
+    legacy = tmp_path / "3324_2026-08-28.json"
+    legacy.write_text(json.dumps({**GOOD, "notes": {"valuation": "本益比 2,345.0"}}), encoding="utf-8")
+    report.report_html("3324.TWO", narrative=True, generate=gen, cache_dir=tmp_path)
+    assert len(calls) == 1
+    assert json.loads(legacy.read_text(encoding="utf-8"))["check_version"] == report.NARRATIVE_CHECK_VERSION
+    report.report_html("3324.TWO", narrative=True, generate=gen, cache_dir=tmp_path)
+    assert len(calls) == 1      # 新版快取照常沿用
+
+
+def test_unverified_numbers_flags_decimal_slips_on_price_and_pe():
+    # 單位換算只套在帶單位的欄位：價格、PE 小數點抄錯位要被抓到
+    p = {**EMPTY, "valuation": {"pe": 23.45}, "smc": {"price": 1085.0}}
+    nar = {"notes": {"valuation": "現價 108.5；現價 10.85；本益比 2.345；本益比 234.5；現價 1,085.0，本益比 23.45。"}}
+    assert report.unverified_numbers(nar, p) == ["108.5", "10.85", "2.345", "234.5"]
+
+
+def _bad_gen(calls):
+    bad = {**GOOD, "notes": {"chips": "外資持股 41.27%。"}}
+
+    def gen(prompt):
+        calls.append(prompt)
+        return json.dumps(bad, ensure_ascii=False)
+    return gen
+
+
+def _age(path, seconds):
+    import os
+    import time
+
+    t = time.time() - seconds
+    os.utime(path, (t, t))
+
+
+def test_unverified_narrative_is_cached_with_notice_for_six_hours(monkeypatch, tmp_path):
+    _payload_stub(monkeypatch)
+    calls = []
+    gen = _bad_gen(calls)
     html = report.report_html("3324.TWO", narrative=True, generate=gen, cache_dir=tmp_path)
     assert "四維度總覽" in html and "41.27" in html and "無法在資料包核對" in html
-    assert not list(tmp_path.iterdir())
+    cached = tmp_path / "3324_2026-08-28.json"
+    assert json.loads(cached.read_text(encoding="utf-8"))["unverified"] == ["41.27"]
+    _age(cached, 6 * 3600 - 60)
+    html = report.report_html("3324.TWO", narrative=True, generate=gen, cache_dir=tmp_path)
+    assert len(calls) == 1 and "無法在資料包核對" in html      # 6 小時內沿用快取，提示照樣出現
+
+
+def test_unverified_narrative_is_regenerated_after_six_hours(monkeypatch, tmp_path):
+    _payload_stub(monkeypatch)
+    calls = []
+    gen = _bad_gen(calls)
     report.report_html("3324.TWO", narrative=True, generate=gen, cache_dir=tmp_path)
-    assert len(calls) == 2      # 沒快取，下次重寫
+    _age(tmp_path / "3324_2026-08-28.json", 6 * 3600 + 60)
+    report.report_html("3324.TWO", narrative=True, generate=gen, cache_dir=tmp_path)
+    assert len(calls) == 2
+
+
+def test_verified_narrative_cache_does_not_expire_within_as_of(monkeypatch, tmp_path):
+    _payload_stub(monkeypatch)
+    calls = []
+
+    def gen(prompt):
+        calls.append(prompt)
+        return json.dumps(GOOD)
+
+    report.report_html("3324.TWO", narrative=True, generate=gen, cache_dir=tmp_path)
+    _age(tmp_path / "3324_2026-08-28.json", 2 * 86400)
+    report.report_html("3324.TWO", narrative=True, generate=gen, cache_dir=tmp_path)
+    assert len(calls) == 1
+
+
+def _seed_expired_payload(monkeypatch):
+    from src.services import tw_stock_dossier
+
+    monkeypatch.setattr(report, "_payload_cache", {("OLD.TW", None): (-1e9, {})})
+    monkeypatch.setattr(tw_stock_dossier, "build", lambda code, as_of=None: {"stock_id": code})
+
+
+def test_payload_cache_eviction_is_thread_safe(monkeypatch):
+    """另一條請求在清理途中插進來：沒鎖時兩邊都刪同一個過期 key -> KeyError（API 回 503）。"""
+    import threading
+
+    _seed_expired_payload(monkeypatch)
+    cache, errors, other = report._payload_cache, [], []
+
+    class Racy(dict):
+        def __delitem__(self, k):
+            if not other:      # 第一次刪除前，讓另一條執行緒跑完整個 _payload
+                t = threading.Thread(target=lambda: report._payload("B.TW", None))
+                other.append(t)
+                t.start()
+                t.join(0.3)
+            super().__delitem__(k)
+
+    monkeypatch.setattr(report, "_payload_cache", Racy(cache))
+    try:
+        assert report._payload("A.TW", None) == {"stock_id": "A.TW"}
+    except KeyError as exc:
+        errors.append(exc)
+    other[0].join(30)
+    assert not errors and set(report._payload_cache) == {("A.TW", None), ("B.TW", None)}
+
+
+def test_payload_build_runs_outside_cache_lock(monkeypatch):
+    from src.services import tw_stock_dossier
+
+    _seed_expired_payload(monkeypatch)
+    held = []
+    monkeypatch.setattr(tw_stock_dossier, "build",
+                        lambda code, as_of=None: held.append(report._payload_lock.locked()) or {})
+    report._payload("A.TW", None)
+    assert held == [False]      # 慢的 build() 不能卡住其他代號的快取查詢
 
 
 def test_failed_sections_are_listed_in_notice(monkeypatch):

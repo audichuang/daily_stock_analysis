@@ -559,9 +559,10 @@ def _level_alerts_enabled() -> bool:
     responses={
         400: {"description": "非台股或價位不在今天的 SMC 價位裡", "model": ErrorResponse},
         409: {"description": "TW_LEVEL_ALERTS_ENABLED 未開啟（dry_run 不受限）", "model": ErrorResponse},
+        503: {"description": "讀取 SMC 價位或寫入警報規則失敗（舊規則保留）", "model": ErrorResponse},
     },
     summary="建立台股 SMC 價位警報",
-    description="把看板上的最近支撐／壓力建成 price_cross 規則，先刪掉這檔既有的價位警報再建；會寫應用庫。設計見 docs/tw-level-alerts.md。",
+    description="把看板上的最近支撐／壓力建成 price_cross 規則，新規則全部建好才刪掉這檔舊的價位警報（建失敗時舊規則保留）；會寫應用庫。設計見 docs/tw-level-alerts.md。",
 )
 def create_level_alerts(stock_code: str, body: LevelAlertRequest) -> LevelAlertResponse:
     from src.services.market_symbol_utils import is_tw_suffix_symbol
@@ -583,8 +584,19 @@ def create_level_alerts(stock_code: str, body: LevelAlertRequest) -> LevelAlertR
         raise api_error(400, "level_mismatch", str(e))
     except LookupError as e:
         raise api_error(404, "not_found", str(e))
+    except Exception as e:
+        logger.error(f"讀取 SMC 價位失敗 {code}: {e}", exc_info=True)
+        raise api_error(503, "level_alerts_unavailable", "讀取 SMC 價位失敗，請稍後再試")
     if not body.dry_run:
-        rules = replace_rules(code, rules)
+        from src.services.alert_service import AlertServiceError
+
+        try:
+            rules = replace_rules(code, rules)
+        except AlertServiceError as e:
+            raise api_error(400, "invalid_rule", str(e))
+        except Exception as e:
+            logger.error(f"建立價位警報失敗 {code}: {e}", exc_info=True)
+            raise api_error(503, "level_alerts_unavailable", "建立價位警報失敗，請稍後再試")
     return LevelAlertResponse(enabled=enabled, dry_run=body.dry_run, rules=rules)
 
 
@@ -820,7 +832,7 @@ def get_stock_trend(
     response_class=HTMLResponse,
     responses={
         200: {"description": "報告 HTML"},
-        400: {"description": "不是台股代號", "model": ErrorResponse},
+        400: {"description": "不是台股代號，或 date 不是有效日期", "model": ErrorResponse},
         404: {"description": "本地行情查無此股", "model": ErrorResponse},
         503: {"description": "台股資料庫不可用", "model": ErrorResponse},
     },
@@ -833,8 +845,15 @@ def get_stock_dossier(
     theme: Optional[str] = Query(None, pattern="^(light|dark)$", description="頁面主題"),
     date: Optional[str] = Query(None, pattern=r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$", description="資料基準日 YYYY-MM-DD"),
 ) -> HTMLResponse:
+    from datetime import date as _date
+
     from src.services.tw_stock_report import UnsupportedMarket, report_html
 
+    if date:
+        try:
+            _date.fromisoformat(date)      # 正則擋不住 2026-13-45 這種不存在的日期
+        except ValueError:
+            raise api_error(400, "invalid_date", f"{date} 不是有效日期")
     try:
         return HTMLResponse(report_html(stock_code, narrative=narrative, theme=theme, as_of=date))
     except UnsupportedMarket as e:

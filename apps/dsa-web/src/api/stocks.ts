@@ -1,5 +1,6 @@
 import apiClient from './index';
 import { toCamelCase } from './utils';
+import { attachParsedApiError } from './error';
 
 export type ExtractItem = {
   code?: string | null;
@@ -210,12 +211,26 @@ export const stocksApi = {
 
   /** 台股四維度分析報告（伺服器渲染的完整 HTML 文件）。narrative=true 會等 LLM 解讀，約 20~60 秒。 */
   async getDossierHtml(code: string, options: { narrative?: boolean; theme?: 'light' | 'dark' } = {}): Promise<string> {
-    const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/dossier`, {
-      params: { narrative: options.narrative ?? false, theme: options.theme },
-      responseType: 'text',
-      timeout: 180000,
-    });
-    return String(response.data ?? '');
+    try {
+      const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/dossier`, {
+        params: { narrative: options.narrative ?? false, theme: options.theme },
+        responseType: 'text',
+        timeout: 180000,
+      });
+      return String(response.data ?? '');
+    } catch (err) {
+      // responseType 'text' 讓錯誤回應也變成字串；轉回 JSON 再重新解析，畫面才顯示 detail 而不是整串大括號
+      const res = (err as { response?: { data?: unknown } } | null)?.response;
+      if (res && typeof res.data === 'string') {
+        try {
+          res.data = JSON.parse(res.data);
+          attachParsedApiError(err);
+        } catch {
+          /* 不是 JSON（例如代理回的 HTML），保留原樣 */
+        }
+      }
+      throw err;
+    }
   },
 
   async getTrend(code: string, range: TrendRange): Promise<TrendPoint[]> {
