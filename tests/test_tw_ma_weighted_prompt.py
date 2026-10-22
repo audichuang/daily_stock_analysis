@@ -298,3 +298,57 @@ def test_pins_survive_concurrent_workers():
     finally:
         sys.setswitchinterval(old)
     assert errors == []
+
+
+# ---- 「風險因素」列表裡評分器寫死的「严禁追高」 ----
+
+def _scorer_bias_risk_strings(bias: float, threshold: float) -> list:
+    """把 src/stock_analyzer.py 乖離率評分的 risk 字串模板照原樣格式化，評分器改字時這裡會跟著失效而紅。"""
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "src" / "stock_analyzer.py").read_text(encoding="utf-8")
+    templates = re.findall(r'f"(❌ 乖离率过高\(\{bias:\.1f\}%>\{\w+:\.1f\}%\)，严禁追高！)"', source)
+    assert len(templates) == 2, "stock_analyzer 的乖離率風險字串改了，_TW_MA_BIAS_RISK_RE 要跟著改"
+    return [re.sub(r"\{\w+:\.1f\}%\)", f"{threshold:.1f}%)", t.replace("{bias:.1f}", f"{bias:.1f}")) for t in templates]
+
+
+def _user_prompt_with_risk(analyzer, bias: float, risks: list) -> str:
+    context = copy.deepcopy(_rich_context())
+    context["code"] = "2330.TW"
+    context["trend_analysis"]["bias_ma5"] = bias
+    context["trend_analysis"]["risk_factors"] = list(risks)
+    with patch("src.analyzer.get_config", return_value=analyzer._config_override), \
+            patch.object(GeminiAnalyzer, "_tw_institutional_trend_lines", return_value=""):
+        return analyzer._format_prompt(context, "台積電", news_context="n", report_language="zh-TW")
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_on_rewrites_scorer_no_chase_risk_within_band(legacy):
+    risks = _scorer_bias_risk_strings(7.0, 5.0)
+    on = _user_prompt_with_risk(_analyzer(True, legacy), 7.0, risks)
+    assert "严禁追高！" not in on and "❌ 乖离率过高" not in on
+    assert "⚠️ 乖離率偏高(7.0%>5.0%)：須放量突破並寫明 ATR14 停損（> 10% 嚴禁追高）" in on
+    # 對照組（開關關閉）一字不改
+    off = _user_prompt_with_risk(_analyzer(False, legacy), 7.0, risks)
+    assert risks[0] in off
+
+
+def test_on_keeps_scorer_no_chase_risk_above_band():
+    # 乖離 > 2×BT 時不放寬：風險因素照樣寫「严禁追高」
+    risks = _scorer_bias_risk_strings(12.0, 5.0)
+    on = _user_prompt_with_risk(_analyzer(True), 12.0, risks)
+    assert risks[0] in on
+    assert "⚠️ 乖離率偏高(12.0%" not in on
+
+
+@pytest.mark.parametrize("bias,softened", [(10.04, False), (10.0, True), (9.96, True)])
+def test_scorer_risk_and_table_label_agree_at_upper_bound(bias, softened):
+    # 評分器字串四捨五入到一位（10.04 → 「10.0」），表格 🚨 標籤用原始 bias_ma5；
+    # 兩邊要用同一個值判斷，否則同一份提示詞同時出現「嚴禁追高」與「須放量突破」
+    risks = _scorer_bias_risk_strings(bias, 5.0)
+    on = _user_prompt_with_risk(_analyzer(True), bias, risks)
+    table_strict = "🚨 超過5%，嚴禁追高！" in on or "🚨 超过5%，严禁追高！" in on
+    risk_strict = risks[0] in on
+    assert table_strict == risk_strict == (not softened)
+    assert ("⚠️ 乖離率偏高(" in on) == softened
