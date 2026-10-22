@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -352,6 +353,8 @@ _UNVERIFIED_TTL_SECONDS = 6 * 3600                 # 有核對不到數字的解
 NARRATIVE_CHECK_VERSION = 3
 _UNIT_AFTER_RE = re.compile(r"\s*(億|萬|%|％)")
 _SMC_NON_PRICE_KEYS = {"i", "swing_i", "swing_n", "position", "price"}
+# 融資融券（張）與總股東（人）：中文財經慣例常寫成「3.53 萬張」「309.9 萬人」
+_COUNT_KEYS = {"margin_balance", "margin_chg_5", "margin_chg_20", "short_balance", "total_holders"}
 
 
 def _unit_factors(key):
@@ -361,6 +364,8 @@ def _unit_factors(key):
     「億」「萬」，寫成「37.7 千元」就核對不到。"""
     if key.endswith("_k"):          # 千元 -> 億（/1e5）、萬（/10）
         return ((1, None), (1e-5, "億"), (0.1, "萬"))
+    if key.endswith("_lots") or key in _COUNT_KEYS:      # 張數、人數 -> 萬張、萬人（/1e4）
+        return ((1, None), (1e-4, "萬"))
     if key == "position":           # Fib 位置等 0~1 比例常寫成百分比
         return ((1, None), (100, None))
     return ((1, None),)
@@ -484,8 +489,8 @@ def cached_narrative(p, generate, cache_dir):
     path = Path(cache_dir) / f"{p['stock_id']}_{p['as_of']}.json"
     with _narrative_locks.setdefault(str(path), threading.Lock()):
         fallback = None
-        if path.exists():
-            nar = json.loads(path.read_text(encoding="utf-8"))
+        nar = _read_cached(path)
+        if nar is not None:
             fresh = not nar.get("unverified") or time.time() - path.stat().st_mtime < _UNVERIFIED_TTL_SECONDS
             current = nar.get("check_version") == NARRATIVE_CHECK_VERSION and nar.get("data_stamp") == data_stamp(p)
             # 分點晚到、或上次有段讀取失敗而這次讀到了：舊解讀寫的是「無資料」，要重寫
@@ -510,9 +515,35 @@ def cached_narrative(p, generate, cache_dir):
             nar["check_version"] = NARRATIVE_CHECK_VERSION
             nar["data_stamp"] = data_stamp(p)
             nar["coverage"] = _coverage(p)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(nar, ensure_ascii=False), encoding="utf-8")
+            _write_atomic(path, json.dumps(nar, ensure_ascii=False))
         return nar
+
+
+def _read_cached(path):
+    """讀解讀快取；不存在回 None。檔案損壞（寫到一半被殺、磁碟滿）也回 None，讓呼叫端重寫蓋掉它，
+    不然同一個基準日之內每次開報告都會停在「AI 解讀產生失敗」。"""
+    if not path.exists():
+        return None
+    try:
+        nar = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:      # JSONDecodeError、UnicodeDecodeError 都是 ValueError
+        logger.warning("[tw_stock_report] corrupt narrative cache %s, regenerating: %s", path.name, exc)
+        return None
+    if not isinstance(nar, dict):
+        logger.warning("[tw_stock_report] narrative cache %s is not an object, regenerating", path.name)
+        return None
+    return nar
+
+
+def _write_atomic(path, text):
+    """先寫同目錄的暫存檔再 rename：寫到一半被殺時舊檔（或沒有檔）保持原樣，不會留下截斷的 JSON。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 # ---------- web entry ----------

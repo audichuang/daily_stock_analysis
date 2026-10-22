@@ -209,6 +209,58 @@ def already_done(path=JOURNAL) -> set[str]:
     return {json.loads(line)["video_id"] for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
 
 
+# 標題裡的播出日：20261020、2026.10.20、2026/10/20、2026-10-20
+_TITLE_DATE_RE = re.compile(r"(?<!\d)(20\d{2})(?:([./\-])(\d{1,2})\2(\d{1,2})|(\d{2})(\d{2}))(?!\d)")
+_MAX_UPLOAD_LAG_DAYS = 14
+
+
+def air_date(title: str, uploaded: date) -> tuple[date, str]:
+    """-> (播出日, 來源 title|upload)。
+
+    YouTube 的上傳日不一定是播出日（TVBS金臨天下 常隔天、甚至隔幾天才上傳完整版）；拿上傳日當基準，
+    `data` 會吃到播出之後的行情。標題寫了日期就用標題的；不在上傳日之前 14 天內的日期不採用
+    （可能是節目裡講的別的日子），退回上傳日。"""
+    for m in _TITLE_DATE_RE.finditer(title or ""):
+        y, _, mo, d, mo8, d8 = m.groups()
+        try:
+            day = date(int(y), int(mo or mo8), int(d or d8))
+        except ValueError:
+            continue
+        if uploaded - timedelta(days=_MAX_UPLOAD_LAG_DAYS) <= day <= uploaded:
+            return day, "title"
+    return uploaded, "upload"
+
+
+def data_cutoff(title: str, aired: date) -> date:
+    """`data` 可以用到哪一天的收盤。盤前節目在開盤前播出，播出當天的收盤還不存在，只能用前一天以前的。"""
+    return aired - timedelta(days=1) if "盤前" in (title or "") else aired
+
+
+def required_session(cutoff: date) -> date:
+    """cutoff（含）以前最後一個交易日：交易所日曆可用就用它（排掉國定假日），否則退回平日。"""
+    try:
+        from src.core.trading_calendar import get_trading_dates
+
+        sessions = get_trading_dates("tw", cutoff - timedelta(days=20), cutoff)
+    except Exception:
+        sessions = None
+    if sessions is not None and len(sessions):
+        return sessions[-1].date()
+    day = cutoff
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day
+
+
+def data_settled(cutoff: date, latest_session: date | None) -> bool:
+    """市場庫已經有 cutoff 該用的那個交易日的收盤了嗎。
+
+    收盤資料入庫前跑（例如下午 16 點手動跑），`price_history(end=cutoff)` 只拿得到前一天，snapshot 會
+    靜默把前一天收盤當成播出當天；這種集數先不寫 journal，下一輪再處理。加權指數最新場次晚於該交易日
+    （例如颱風休市那天之後已有新場次）也算已定案，那天本來就沒有收盤。"""
+    return latest_session is not None and latest_session >= required_session(cutoff)
+
+
 # ---------- YouTube ----------
 
 def new_episodes(since: date, done: set[str]) -> list[dict]:
@@ -230,13 +282,15 @@ def new_episodes(since: date, done: set[str]) -> list[dict]:
             try:
                 up = _run(["yt-dlp", *YT_LANG, "--skip-download", "--print", "%(upload_date)s",
                            f"https://www.youtube.com/watch?v={vid}"], 120).strip()
-                aired = datetime.strptime(up, "%Y%m%d").date()
+                uploaded = datetime.strptime(up, "%Y%m%d").date()
             except Exception as exc:
                 print(f"[warn] {vid} 取不到上傳日：{exc}", file=sys.stderr)
                 continue
-            if aired < since:
-                break  # the tab is newest-first; everything below is older
+            if uploaded < since:
+                break  # the tab is newest-first by upload; everything below is older
+            aired, aired_from = air_date(title, uploaded)
             eps.append({"show": show, "kind": kind, "video_id": vid, "title": title, "aired": aired,
+                        "aired_from": aired_from, "uploaded": uploaded, "cutoff": data_cutoff(title, aired),
                         "url": f"https://www.youtube.com/watch?v={vid}"})
     return sorted(eps, key=lambda e: e["aired"])
 
@@ -244,7 +298,7 @@ def new_episodes(since: date, done: set[str]) -> list[dict]:
 # ---------- local data ----------
 
 def snapshot(code: str, as_of: date, engine) -> dict | None:
-    """Data as of the air date (episodes air after close, so that day's close is known)."""
+    """Data as of `as_of` (the episode's data cutoff: the air date, or the day before for 盤前 shows)."""
     import pandas as pd
 
     from market_data import market_repo
@@ -280,6 +334,22 @@ def snapshot(code: str, as_of: date, engine) -> dict | None:
 
 # ---------- main ----------
 
+def defer_unsettled(eps: list[dict], engine) -> list[dict]:
+    """拿掉收盤資料還沒入庫的集數（不寫 journal，下一輪重抓），其餘照常處理。"""
+    from market_data import market_repo
+
+    latest = market_repo.latest_market_index("TAIEX", engine=engine)
+    latest_session = datetime.fromisoformat(str(latest["date"])[:10]).date() if latest else None
+    keep = []
+    for ep in eps:
+        if data_settled(ep["cutoff"], latest_session):
+            keep.append(ep)
+        else:
+            print(f"[defer] {ep['video_id']} {ep['show']}：{ep['cutoff']} 的收盤還沒入庫（最新場次 {latest_session}），"
+                  "下一輪再處理", file=sys.stderr)
+    return keep
+
+
 def cleanup_notebooks(today: date):
     for n in nb("list").get("notebooks", []):
         title = n.get("title", "")
@@ -304,13 +374,14 @@ def process(ep: dict, nb_id: str, index, engine) -> list[dict]:
     if picks is None:  # don't journal it, so the next run retries this episode
         raise RuntimeError(f"回答不是 JSON：{ans.get('answer', '')[:120]!r}")
     now = datetime.now().astimezone().isoformat(timespec="seconds")
+    when = {"upload_date": str(ep.get("uploaded", ep["aired"])), "date_source": ep.get("aired_from", "upload")}
     rows = []
     for p in picks:
         code, how = resolve(p.get("name"), p.get("code"), index, p.get("said"))
         data = None
         if code and engine is not None:
             try:
-                data = snapshot(code, ep["aired"], engine)
+                data = snapshot(code, ep.get("cutoff", ep["aired"]), engine)
             except Exception as exc:
                 print(f"[warn] {code} 數據失敗：{exc}", file=sys.stderr)
         rows.append({"date": str(ep["aired"]), "show": ep["show"], "kind": ep["kind"], "video_id": ep["video_id"],
@@ -318,11 +389,11 @@ def process(ep: dict, nb_id: str, index, engine) -> list[dict]:
                      "stock_code": code, "resolve": how, "code_llm": p.get("code"), "stance": p.get("stance"),
                      "speaker": p.get("speaker"), "reason": p.get("reason"), "theme": p.get("theme"),
                      "condition": p.get("condition"), "quote": p.get("quote"),
-                     "data": data, "extracted_at": now, "notebook_id": nb_id})
+                     "data": data, "extracted_at": now, "notebook_id": nb_id, **when})
     if not rows:  # still record the episode so it isn't re-processed forever
         rows.append({"date": str(ep["aired"]), "show": ep["show"], "kind": ep["kind"], "video_id": ep["video_id"],
                      "url": ep["url"], "title": ep["title"], "stock_code": None, "resolve": "no_picks",
-                     "extracted_at": now, "notebook_id": nb_id})
+                     "extracted_at": now, "notebook_id": nb_id, **when})
     return rows
 
 
@@ -342,8 +413,8 @@ def _single_run_lock():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--since", type=date.fromisoformat, default=date.today() - timedelta(days=2),
-                    help="只抓這天（含）之後上傳的集數，預設前天")
+    ap.add_argument("--since", type=date.fromisoformat, default=date.today() - timedelta(days=4),
+                    help="只抓這天（含）之後上傳的集數，預設 4 天前（收盤資料還沒入庫而延後的集數，隔週一仍補得到）")
     ap.add_argument("--dry-run", action="store_true", help="只列出會處理的集數")
     ap.add_argument("--no-data", action="store_true", help="不連 market schema")
     args = ap.parse_args(argv)
@@ -364,6 +435,9 @@ def main(argv=None):
     if not args.no_data:
         from market_data.db import get_engine
         engine = get_engine()
+        eps = defer_unsettled(eps, engine)
+        if not eps:
+            return 0
     today = date.today()
     title = f"{NB_PREFIX}{today}"
     existing = [n for n in nb("list").get("notebooks", []) if n.get("title") == title]
