@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [chore] `docker/Dockerfile` 建置期 smoke 也 import `market_data` 與台股服務模組：發版映像（`ghcr-main.yml`）沒有其他關卡，新 package 漏 `COPY` 時建置就失敗，不會到容器裡才靜默退回別的資料源
 - [修復] 基金補歷史改看「起點是否涵蓋近五年或成立日」，不再只看筆數：公會每日值累積滿 30 筆後，沒查過的基金第一次打開或建立持倉時仍會從鉅亨補全期，近 3 月以上報酬與近一年風險不再是 null 或只用一個多月資料算
 - [修復] `PUT /api/v1/funds/holdings/{id}` 把通路改成同基金已有的通路時回 409 `duplicate_holding`，原本是未處理的唯一鍵錯誤（500）
 - [修復] `/funds` 沒選基金時點「新增持倉」，照提示搜尋並選定基金後，表單會帶入該基金、可以儲存；已有基金的新增表單與編輯表單不會被換掉
