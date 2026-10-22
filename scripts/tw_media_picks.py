@@ -22,6 +22,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -36,12 +37,34 @@ INDEX = ROOT / "apps" / "dsa-web" / "public" / "stocks.index.json"
 NB_PREFIX = "dsa 媒體點名 "
 KEEP_NOTEBOOK_DAYS = 30
 
-# (show, channel id, title regex, min seconds) — only full episodes; clips and highlights repeat them
+# (show, kind, channel id, title regex, min seconds) — only full episodes; clips and highlights
+# repeat them. kind keeps the later back-test separable: tv / advisor (投顧, sells memberships) / research
 CHANNELS = [
-    ("錢線百分百", "UC_ObC9O0ZQ2FhW6u9_iFlZA", r"完整版", 1200),
-    ("理財達人秀", "UCQvsuaih5lE0n_Ne54nNezg", r"【(理財達人秀|兆華艾綸說)】", 2400),
-    ("鈔錢部署", "UCA_hK5eRICBdSOLlXKESvEg", r"《鈔錢部署》", 1500),
+    ("錢線百分百", "tv", "UC_ObC9O0ZQ2FhW6u9_iFlZA", r"完整版", 1200),
+    ("理財達人秀", "tv", "UCQvsuaih5lE0n_Ne54nNezg", r"【(理財達人秀|兆華艾綸說)】", 2400),
+    ("鈔錢部署", "tv", "UCA_hK5eRICBdSOLlXKESvEg", r"《鈔錢部署》", 1500),
+    ("財富達給厚", "tv", "UCYo8FANgeH2ONA898HbzHKg", r"《財富達給厚》", 2400),
+    ("股市情報局", "tv", "UCNgcAnFU5eygSqb7Em8TScQ", r".", 2400),
+    ("TVBS金臨天下", "tv", "UCYDaGPmMfSXViITpPYDKIcw", r".", 2400),
+    ("賺錢放大術", "tv", "UCGSlzLzYtXQvmPrsZKAfKmA", r".", 2400),
+    ("股市現場", "tv", "UCJcPWs0gpYMx_CghPdELUhw", r".", 3600),
+    ("投資聊一SHOT", "tv", "UCgTGRGR1nHz_m1ZcFGfg4RQ", r"投資聊一SHOT", 1200),
+    ("江國中", "advisor", "UCxhmFqqd28z04vjagnMpJpg", r".", 2100),
+    ("林漢偉", "advisor", "UCleWOsRmPBhWPvQlSTy7fPw", r".", 1800),
+    ("楊育華", "advisor", "UCK1TfbeSlR0jc733Ep83Xfg", r".", 1800),
+    ("葉俊敏", "advisor", "UC8r0UHqwUeAArogHqgFXDVw", r".", 1800),
+    ("陳昆仁", "advisor", "UCiBLyIFu3KjG2opa7uQHZbQ", r".", 1200),
+    ("郭哲榮", "advisor", "UChfl3auNxAxOR3wy8a8ysQQ", r".", 2100),
+    ("紀緯明", "advisor", "UCOZosuCbpzK7Optwppn0whA", r"投資明明很簡單", 2100),
+    ("謝文琪", "advisor", "UCUSfi6ugUr9r-1UUS48uivw", r".", 1500),
+    ("陳學進", "advisor", "UCTJBg089Av1LV8Nhd5YPDTw", r"理周TV", 1200),
+    ("豐銀投顧", "advisor", "UCqLsAvnCtSU7CeSrfjy2Btw", r".", 1200),
+    ("財報狗", "research", "UC2TsM2pyabGznSvB9llmsFA", r"財經時事放大鏡", 1200),
+    ("MoneyDJ", "research", "UC8qLLXh5cuY_jtvOHsSYmTA", r"^Ep\.", 1200),
 ]
+
+# without it YouTube may serve auto-translated English titles and the title patterns stop matching
+YT_LANG = ["--extractor-args", "youtube:lang=zh-TW"]
 
 PROMPT = """只根據這一集節目，列出每一檔被具體點名的台股（含 ETF）。只輸出一個 JSON 陣列，不要任何其他文字、不要 markdown、不要引用編號。每個元素：
 {"name": 正確的上市櫃公司或 ETF 名稱, "said": 逐字稿裡的寫法, "code": 股票代號（你確定才填）否則 null, "stance": "bullish"|"bearish"|"avoid"|"neutral", "speaker": 誰說的, "reason": 推薦或不推薦的理由（一兩句，照節目內容）, "theme": 看好的題材或族群, "condition": 節目給的價位或進出場條件（照原話）否則 null, "quote": 最關鍵的一句原話}
@@ -53,26 +76,45 @@ def _run(cmd, timeout=600):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=True).stdout
 
 
-def nb(*args, timeout=600):
-    out = _run([os.environ.get("NOTEBOOKLM_BIN", "notebooklm"), *args, "--json"], timeout)
-    data = json.loads(out)
-    if isinstance(data, dict) and data.get("error"):
-        raise RuntimeError(f"notebooklm {args[0]}: {data.get('message')}")
-    return data
+def nb(*args, timeout=600, attempts=3):
+    # NotebookLM fails transiently (source add errored 3 of 5 in one run, then worked by hand)
+    cmd = [os.environ.get("NOTEBOOKLM_BIN", "notebooklm"), *args, "--json"]
+    for i in range(attempts):
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:  # ask slows down as the notebook fills up
+            data = {"error": True, "message": f"timed out after {timeout}s"}
+            if i + 1 < attempts:
+                time.sleep(20 * (i + 1))
+            continue
+        try:
+            data = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            data = {"error": True, "message": (proc.stderr or proc.stdout).strip()[-300:]}
+        if proc.returncode == 0 and not (isinstance(data, dict) and data.get("error")):
+            return data
+        if i + 1 < attempts:
+            time.sleep(20 * (i + 1))
+    raise RuntimeError(f"notebooklm {' '.join(args[:2])}: {data.get('message') if isinstance(data, dict) else data}")
 
 
 # ---------- pure helpers (tested) ----------
 
-def parse_answer(text: str) -> list[dict]:
-    """NotebookLM answer -> list of picks; tolerates fences and stray citation markers."""
+def parse_answer(text: str) -> list[dict] | None:
+    """NotebookLM answer -> list of picks; tolerates fences and stray citation markers.
+
+    None means the answer wasn't a JSON array (retry next run); [] means no picks.
+    """
     start, end = text.find("["), text.rfind("]")
     if start < 0 or end <= start:
-        return []
+        return None
     body = re.sub(r"\s\[\d+(?:[,\-–]\s*\d+)*\]", "", text[start:end + 1])
     try:
         items = json.loads(body)
     except json.JSONDecodeError:
-        return []
+        return None
+    if not isinstance(items, list):
+        return None
     return [i for i in items if isinstance(i, dict) and i.get("name")]
 
 
@@ -85,16 +127,38 @@ def _norm(name: str) -> str:
     return re.sub(r"-KY|\*|\s", "", name or "").upper()
 
 
+def _by_code(code: str, index, pad: bool = True) -> tuple[str, str] | None:
+    """-> (canonical, index name). ETFs are read out without leading zeros:
+    "52" -> 0052, "850" -> 00850, "981A" -> 00981A."""
+    base = str(code).strip().upper()
+    digits, suffix = re.fullmatch(r"(\d*)(.*)", base).groups()
+    tries = (base, *(digits.zfill(n) + suffix for n in (4, 5, 6))) if pad and digits else (base,)
+    for b in dict.fromkeys(tries):
+        for c, n, _ in index:
+            if c.split(".")[0] == b:
+                return c, n
+    return None
+
+
 def resolve(name: str, code: str | None, index, said: str | None = None) -> tuple[str | None, str]:
     """-> (canonical code like 3044.TW, how).
 
     Name first: the LLM-normalised name is more reliable than the code it guesses
-    (live run: 宜鼎 came with 宜特's code). Exception: when the transcript itself says a
-    number (ETFs are read out as "00927"), that number wins over the name the LLM filled in.
+    (live run: 宜鼎 came with 宜特's code). Exception: a number in the transcript itself
+    wins, since ETFs are read out as numbers ("00927") and the LLM may pick the wrong fund.
     how: exact|alias|code|code_mismatch|fuzzy|unresolved.
     """
-    if said and re.fullmatch(r"\d{2,6}[A-Z]?", said.strip().upper()):
-        code, name = said, said
+    said = (said or "").strip().upper()
+    if re.fullmatch(r"\d{2,6}[A-Z]?", said):
+        hit = _by_code(said, index)
+    else:
+        # "6658 連測": a code read out before a misheard name. Exact codes only — the spaced
+        # transcripts also yield fragments like "668 中 陽 光" (6668) or "130 連 南亞" (1303).
+        # "0050正2" is a nickname, not a code.
+        m = re.match(r"(\d{4,6}[A-Z]?)\s", said)
+        hit = m and _by_code(m.group(1), index, pad=False)
+    if hit:  # a misheard number ("5000" for 0050) falls through to the name
+        return hit[0], "code"
     # TV-style names: "精材（精綵）" -> try each part
     parts = [_norm(p) for p in re.split(r"[（）()/／、]", name or "") if p.strip()]
     for p in parts:
@@ -104,20 +168,17 @@ def resolve(name: str, code: str | None, index, said: str | None = None) -> tupl
         for c, n, aliases in index:
             if p in map(_norm, aliases):
                 return c, "alias"
-    if code:
-        base = str(code).strip().upper()
-        digits, suffix = re.fullmatch(r"(\d*)(.*)", base).groups()
-        # ETFs are read out without leading zeros: "850" -> 00850, "981A" -> 00981A
-        for b in dict.fromkeys((base, digits.zfill(5) + suffix, digits.zfill(6) + suffix)):
-            for c, n, _ in index:
-                if c.split(".")[0] == b:
-                    agree = not parts or any(p in (base, b) or p in _norm(n) or _norm(n) in p for p in parts)
-                    return c, "code" if agree else "code_mismatch"
+    hit = code and _by_code(code, index)
+    if hit:
+        c, n = hit
+        agree = not parts or any(p in (str(code).upper(), c.split(".")[0]) or p in _norm(n) or _norm(n) in p
+                                  for p in parts)
+        return c, "code" if agree else "code_mismatch"
     names = {_norm(n): c for c, n, _ in index}
     for p in parts:
-        hit = difflib.get_close_matches(p, names, n=1, cutoff=0.67)
-        if hit:
-            return names[hit[0]], "fuzzy"
+        close = difflib.get_close_matches(p, names, n=1, cutoff=0.67)
+        if close:
+            return names[close[0]], "fuzzy"
     return None, "unresolved"
 
 
@@ -131,9 +192,9 @@ def already_done(path=JOURNAL) -> set[str]:
 
 def new_episodes(since: date, done: set[str]) -> list[dict]:
     eps = []
-    for show, cid, pattern, min_sec in CHANNELS:
+    for show, kind, cid, pattern, min_sec in CHANNELS:
         try:
-            out = _run(["yt-dlp", "--flat-playlist", "--playlist-end", "20",
+            out = _run(["yt-dlp", *YT_LANG, "--flat-playlist", "--playlist-end", "60",  # 錢線 uploads ~13 clips a day
                         "--print", "%(id)s\t%(duration)s\t%(title)s",
                         f"https://www.youtube.com/channel/{cid}/videos"], 180)
         except Exception as exc:  # one channel failing must not stop the others
@@ -146,15 +207,16 @@ def new_episodes(since: date, done: set[str]) -> list[dict]:
             if not dur.replace(".", "").isdigit() or float(dur) < min_sec:
                 continue
             try:
-                up = _run(["yt-dlp", "--skip-download", "--print", "%(upload_date)s",
+                up = _run(["yt-dlp", *YT_LANG, "--skip-download", "--print", "%(upload_date)s",
                            f"https://www.youtube.com/watch?v={vid}"], 120).strip()
                 aired = datetime.strptime(up, "%Y%m%d").date()
             except Exception as exc:
                 print(f"[warn] {vid} 取不到上傳日：{exc}", file=sys.stderr)
                 continue
-            if aired >= since:
-                eps.append({"show": show, "video_id": vid, "title": title, "aired": aired,
-                            "url": f"https://www.youtube.com/watch?v={vid}"})
+            if aired < since:
+                break  # the tab is newest-first; everything below is older
+            eps.append({"show": show, "kind": kind, "video_id": vid, "title": title, "aired": aired,
+                        "url": f"https://www.youtube.com/watch?v={vid}"})
     return sorted(eps, key=lambda e: e["aired"])
 
 
@@ -209,12 +271,14 @@ def cleanup_notebooks(today: date):
 
 
 def process(ep: dict, nb_id: str, index, engine) -> list[dict]:
-    src = nb("source", "add", ep["url"], "-n", nb_id)["source"]["id"]
+    src = ep.get("source_id") or nb("source", "add", ep["url"], "-n", nb_id)["source"]["id"]
     nb("source", "wait", src, "-n", nb_id, "--timeout", "600", timeout=700)
     TRANSCRIPTS.mkdir(parents=True, exist_ok=True)
     nb("source", "fulltext", src, "-n", nb_id, "-o", str(TRANSCRIPTS / f"{ep['video_id']}.txt"), "--force")
-    ans = nb("ask", "-n", nb_id, "-s", src, "--new", "-y", PROMPT, timeout=300)
+    ans = nb("ask", "-n", nb_id, "-s", src, "--new", "-y", PROMPT, timeout=600)
     picks = parse_answer(ans.get("answer", ""))
+    if picks is None:  # don't journal it, so the next run retries this episode
+        raise RuntimeError(f"回答不是 JSON：{ans.get('answer', '')[:120]!r}")
     now = datetime.now().astimezone().isoformat(timespec="seconds")
     rows = []
     for p in picks:
@@ -225,14 +289,14 @@ def process(ep: dict, nb_id: str, index, engine) -> list[dict]:
                 data = snapshot(code, ep["aired"], engine)
             except Exception as exc:
                 print(f"[warn] {code} 數據失敗：{exc}", file=sys.stderr)
-        rows.append({"date": str(ep["aired"]), "show": ep["show"], "video_id": ep["video_id"],
+        rows.append({"date": str(ep["aired"]), "show": ep["show"], "kind": ep["kind"], "video_id": ep["video_id"],
                      "url": ep["url"], "title": ep["title"], "name": p.get("name"), "name_said": p.get("said"),
                      "stock_code": code, "resolve": how, "code_llm": p.get("code"), "stance": p.get("stance"),
                      "speaker": p.get("speaker"), "reason": p.get("reason"), "theme": p.get("theme"),
                      "condition": p.get("condition"), "quote": p.get("quote"),
                      "data": data, "extracted_at": now, "notebook_id": nb_id})
     if not rows:  # still record the episode so it isn't re-processed forever
-        rows.append({"date": str(ep["aired"]), "show": ep["show"], "video_id": ep["video_id"],
+        rows.append({"date": str(ep["aired"]), "show": ep["show"], "kind": ep["kind"], "video_id": ep["video_id"],
                      "url": ep["url"], "title": ep["title"], "stock_code": None, "resolve": "no_picks",
                      "extracted_at": now, "notebook_id": nb_id})
     return rows
@@ -265,6 +329,12 @@ def main(argv=None):
 
     failed = 0
     JOURNAL.parent.mkdir(exist_ok=True)
+    # add every source up front so NotebookLM transcribes them in parallel
+    for ep in eps:
+        try:
+            ep["source_id"] = nb("source", "add", ep["url"], "-n", nb_id)["source"]["id"]
+        except Exception as exc:  # process() retries the add
+            print(f"[warn] {ep['video_id']} 預先加入失敗：{exc}", file=sys.stderr)
     for ep in eps:
         try:
             rows = process(ep, nb_id, index, engine)

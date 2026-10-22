@@ -77,7 +77,7 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
 
 結論一律要求 **bootstrap 區間不跨零且已到期 ≥20 筆**，否則標為 inconclusive。
 - `media-picks.jsonl` — **財經電視節目點名**（`make media-picks`，`scripts/tw_media_picks.py`），一筆點名一行。
-  來源是固定頻道的完整版（錢線百分百、理財達人秀／兆華艾綸說、鈔錢部署）：NotebookLM 產生逐字稿並逐集列出點名，
+  來源是固定頻道的完整版，清單與篩選規則在腳本的 `CHANNELS`（電視財經節目 9 個、投顧分析師每日解盤 10 個、研究型 2 個）：NotebookLM 產生逐字稿並逐集列出點名，
   股名對照 `apps/dsa-web/public/stocks.index.json` 轉代號，再附播出當天的本地數據。
   **這是候選來源，不是買進訊號**：上一輪掃描的點名事後表現是 inconclusive（`docs/research/2026-10-22-tw-media-sweep.md`）。
   腳本當天自己追加；跟 `swing-decisions.jsonl` 一樣**當天 commit**，事後不改。累積夠多再對 0050 回驗，在那之前不聲稱有效。
@@ -85,7 +85,7 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   | 欄位 | 意思 |
   | --- | --- |
   | `date` | 影片上傳日（節目收盤後播出，`data` 用這天收盤的數據） |
-  | `show` / `video_id` / `url` / `title` | 節目、影片 |
+  | `show` / `kind` / `video_id` / `url` / `title` | 節目、來源類別、影片。`kind`：`tv`（電視財經節目）、`advisor`（投顧分析師，頻道本身在招攬會員，有利益衝突）、`research`（財報狗、MoneyDJ 這類研究型）；回驗要分開算。2026-10-22 第一次 commit 的那批沒有這欄，都是 `tv` |
   | `name` / `name_said` | NotebookLM 還原的正確股名／逐字稿裡的寫法（語音辨識常有同音錯字，例如「建頂」） |
   | `stock_code` / `resolve` / `code_llm` | 對到的代號、怎麼對到的、NotebookLM 原本給的代號。順序：逐字稿念的是數字（ETF 常這樣）就用那個代號（`code`）；否則先用還原後的股名比對（`exact`／`alias`），比對不到才用 NotebookLM 給的代號（名稱吻合 `code`，不吻合 `code_mismatch`，要人工確認）；最後才是字面相近（`fuzzy`，要人工確認）或 `unresolved`（留 `null`）。實測 NotebookLM 的股名比它猜的代號可靠（宜鼎被給成宜特的代號）。整集沒有點名時寫一行 `no_picks`，避免重抓 |
   | `stance` | `bullish`／`bearish`／`avoid`／`neutral`；同一檔不同來賓看法不同時分兩行 |
