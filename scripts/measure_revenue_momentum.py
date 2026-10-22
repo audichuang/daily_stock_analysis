@@ -63,6 +63,16 @@ def effective_announce(rv):
     return out
 
 
+def correct_pit_dates(rv_pit):
+    """msf.load() 形狀的 (stock_id, date, yoy)：DB 的 date 是佔位「次月 10 日」，套上已知展延。"""
+    # 佔位日 = 次月 10 日 → 營收月 = 公告日的前一個月
+    month = (rv_pit["date"].dt.to_period("M") - 1).dt.to_timestamp()
+    ext = month.map(KNOWN_DEADLINE_EXTENSIONS)
+    out = rv_pit.copy()
+    out["date"] = pd.concat([rv_pit["date"], ext], axis=1).max(axis=1).astype(rv_pit["date"].dtype)
+    return out
+
+
 def candidate_yoy_frame(rv):
     """候選池用的 (stock_id, date, yoy)：date 取 effective_announce 之後的公告日。"""
     return rv.dropna(subset=["yoy"])[["stock_id", "announce_date", "yoy"]].rename(

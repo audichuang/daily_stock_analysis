@@ -14,6 +14,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from measure_revenue_momentum import (  # noqa: E402
     candidate_yoy_frame,
+    correct_pit_dates,
     effective_announce,
     month_diffs,
     revenue_features,
@@ -109,3 +110,13 @@ def test_candidate_panel_uses_extended_deadline_not_placeholder():
     out = candidate_yoy_frame(effective_announce(rv))
     assert list(out.columns) == ["stock_id", "date", "yoy"]
     assert out["date"].tolist() == [pd.Timestamp("2020-02-15"), pd.Timestamp("2020-03-10")]
+
+
+def test_correct_pit_dates_moves_only_the_extended_month():
+    rv = pd.DataFrame({"stock_id": ["2330"] * 3,
+                       "date": pd.to_datetime(["2020-02-10", "2020-03-10", "2026-10-10"]),
+                       "yoy": [25.0, 30.0, 5.0]})
+    out = correct_pit_dates(rv)
+    assert out["date"].tolist() == [pd.Timestamp("2020-02-15"), pd.Timestamp("2020-03-10"),
+                                    pd.Timestamp("2026-10-10")]
+    assert rv["date"].iloc[0] == pd.Timestamp("2020-02-10")  # 不改到輸入

@@ -35,6 +35,7 @@ from sqlalchemy import create_engine, text
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import measure_signal_forward as msf  # noqa: E402
+from measure_revenue_momentum import correct_pit_dates  # noqa: E402
 from market_data.adjust import is_common_stock  # noqa: E402
 from market_data.db import database_url  # noqa: E402
 from src.services.tw_backtest_context import regime_states  # noqa: E402  與 live prompt 共用
@@ -169,7 +170,9 @@ def main(argv=None):
     states, breadth = regime_states(proxy["close"], close, liquid, mdelta)
     in_window = cal >= pd.Timestamp(a.start)
 
-    yoy = msf.pit_revenue_panel(rv, cal, close.columns) if not a.no_breakout else None
+    # 候選池的營收可見日要套已知展延（2020-01 → 2/15），否則會提前用到未公布營收
+    yoy = (msf.pit_revenue_panel(correct_pit_dates(rv), cal, close.columns)
+           if not a.no_breakout else None)
     sig = None
     if yoy is not None:
         sig, _ = msf.build_signals(piv, yoy, a.min_turnover * 1e8, 0.05, 1.3, 2.0, 20.0)
