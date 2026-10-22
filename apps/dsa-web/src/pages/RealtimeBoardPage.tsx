@@ -595,9 +595,11 @@ const RealtimeBoardPage: React.FC = () => {
                     : t('board.source.delayed');
               const hint = t(INDEX_HINT_KEY[tag.kind]);
               return (
-                <span className="text-xs text-secondary-text" aria-label={hint} title={hint}>
-                  {label}
-                </span>
+                <HintTooltip content={hint}>
+                  <span className="text-xs text-secondary-text" aria-label={hint}>
+                    {label}
+                  </span>
+                </HintTooltip>
               );
             })()}
           </div>
