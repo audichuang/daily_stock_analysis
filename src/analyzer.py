@@ -1574,9 +1574,11 @@ def _apply_tw_ma_weighted_user_rules(prompt: str, bias_threshold: Any, bias_ma5:
         prompt = prompt.replace(old, new)
 
     # 「風險因素」列表裡 stock_analyzer 評分器寫死的「❌ 乖离率过高(x%>y%)，严禁追高！」也要換，
-    # 否則加權組同一份提示詞同時說「5~10% 放量突破可買」與「严禁追高」；乖離超過上限的照舊保留
+    # 否則加權組同一份提示詞同時說「5~10% 放量突破可買」與「严禁追高」；乖離超過上限的照舊保留。
+    # 判斷要用跟上面 🚨 標籤同一個原始 bias_ma5：評分器字串已四捨五入到一位，10.04 會印成 10.0，
+    # 拿它比會出現表格保留嚴禁追高、風險因素卻放寬的矛盾；拿不到原始值才退回字串裡的數字
     def _soften_bias_risk(match: "re.Match[str]") -> str:
-        value = _coerce_numeric_value(match.group(1))
+        value = bias if bias is not None else _coerce_numeric_value(match.group(1))
         if value is None or value > float(hi):
             return match.group(0)
         return f"⚠️ 乖離率偏高({match.group(1)}%>{match.group(2)}%)：須放量突破並寫明 ATR14 停損（> {hi}% 嚴禁追高）"

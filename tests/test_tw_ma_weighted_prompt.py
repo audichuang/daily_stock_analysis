@@ -340,3 +340,15 @@ def test_on_keeps_scorer_no_chase_risk_above_band():
     on = _user_prompt_with_risk(_analyzer(True), 12.0, risks)
     assert risks[0] in on
     assert "⚠️ 乖離率偏高(12.0%" not in on
+
+
+@pytest.mark.parametrize("bias,softened", [(10.04, False), (10.0, True), (9.96, True)])
+def test_scorer_risk_and_table_label_agree_at_upper_bound(bias, softened):
+    # 評分器字串四捨五入到一位（10.04 → 「10.0」），表格 🚨 標籤用原始 bias_ma5；
+    # 兩邊要用同一個值判斷，否則同一份提示詞同時出現「嚴禁追高」與「須放量突破」
+    risks = _scorer_bias_risk_strings(bias, 5.0)
+    on = _user_prompt_with_risk(_analyzer(True), bias, risks)
+    table_strict = "🚨 超過5%，嚴禁追高！" in on or "🚨 超过5%，严禁追高！" in on
+    risk_strict = risks[0] in on
+    assert table_strict == risk_strict == (not softened)
+    assert ("⚠️ 乖離率偏高(" in on) == softened
