@@ -21,6 +21,9 @@ class _ProviderDefinition:
     fetcher_name: Optional[str]
     dataset_markets: Mapping[str, Sequence[str]]
     builtin: bool = False
+    # 執行期可用性探針要帶的 capability。只服務單一能力的 fetcher（如 Shioaji 只供即時報價）
+    # 對空字串一律回 False，不帶就會被誤判成 unavailable。
+    probe_capability: str = ""
 
     @property
     def datasets(self) -> Sequence[str]:
@@ -84,6 +87,21 @@ _PROVIDER_DEFINITIONS: Sequence[_ProviderDefinition] = (
             "financial.snapshot": ("hk", "us", "jp", "kr", "tw"),
         },
         builtin=True,
+    ),
+    # 本 fork 的台股來源：上游的資料中心不認得它們，台股路由會被顯示成只走 yfinance、
+    # MarketDBFetcher 被標成 unknown_source 且掛到 cn/hk/jp/kr（實際路由見 data_provider/base.py）。
+    _ProviderDefinition(
+        name="shioaji",
+        label="Shioaji（永豐）",
+        fetcher_name="ShioajiFetcher",
+        dataset_markets={"quote.realtime": ("tw",)},
+        probe_capability="realtime_quote",
+    ),
+    _ProviderDefinition(
+        name="marketdb",
+        label="MarketDB（本地台股行情庫）",
+        fetcher_name="MarketDBFetcher",
+        dataset_markets={"kline.daily": ("tw",)},
     ),
     _ProviderDefinition(
         name="pytdx",
@@ -182,6 +200,7 @@ _REALTIME_SOURCE_PROVIDER = {
     "longbridge": "longbridge",
     "akshare": "akshare",
     "yfinance": "yfinance",
+    "shioaji": "shioaji",
     "finnhub": "finnhub",
     "alphavantage": "alphavantage",
 }
@@ -293,7 +312,9 @@ class DataCapabilityService:
                 status = "unavailable"
                 warnings.append("provider_not_initialized")
             else:
-                status = self._provider_runtime_status(fetcher)
+                status = self._provider_runtime_status(
+                    fetcher, capability=definition.probe_capability
+                )
                 if status == "unavailable":
                     warnings.append("provider_marked_unavailable")
                 elif status == "unknown":
@@ -322,8 +343,8 @@ class DataCapabilityService:
         return providers
 
     @staticmethod
-    def _provider_runtime_status(fetcher: Any) -> str:
-        probe_result = DataCapabilityService._probe_fetcher_available(fetcher)
+    def _provider_runtime_status(fetcher: Any, capability: str = "") -> str:
+        probe_result = DataCapabilityService._probe_fetcher_available(fetcher, capability)
         if probe_result is True:
             return "ok"
         if probe_result is False:
@@ -371,6 +392,19 @@ class DataCapabilityService:
             return _truthy(getattr(self.config, "finnhub_api_key", None))
         if name == "alphavantage":
             return _truthy(getattr(self.config, "alphavantage_api_key", None))
+        if name == "shioaji":
+            # 與 ShioajiFetcher 同一份判定（執行期讀環境變數，Doppler 注入）。
+            try:
+                from data_provider.shioaji_fetcher import _credentials
+
+                api_key, secret_key = _credentials()
+            except Exception as exc:  # noqa: BLE001 - diagnostics must fail open.
+                logger.debug("Failed to read Shioaji credentials for capability overview: %s", exc)
+                return False
+            return bool(api_key and secret_key)
+        if name == "marketdb":
+            # market_data.db.get_engine 讀的是 DATABASE_URL；沒設時 MarketDBFetcher 每次都 fallback。
+            return _truthy((os.getenv("DATABASE_URL") or "").strip())
         return False
 
     def _provider_priority(self, definition: _ProviderDefinition, fetcher: Any) -> Optional[int]:
@@ -430,6 +464,12 @@ class DataCapabilityService:
                 known_sources={"longbridge", "yfinance"},
             ),
             self._priority_view(
+                "tw.realtime",
+                self._tw_realtime_priority(),
+                "DataFetcherManager TW realtime route",
+                known_sources={"shioaji", "yfinance"},
+            ),
+            self._priority_view(
                 "daily.generic",
                 generic_daily,
                 "DataFetcherManager.fetchers",
@@ -481,6 +521,12 @@ class DataCapabilityService:
         except Exception as exc:  # noqa: BLE001 - diagnostics must fail open.
             logger.debug("Failed to resolve screening snapshot priority: %s", exc)
             return _split_priority("sina,efinance,akshare_em,em_datacenter")
+
+    def _tw_realtime_priority(self) -> List[str]:
+        # 實際路由：Shioaji 有金鑰就先試，拿不到才退 yfinance（data_provider/base.py 的 is_tw 分支）。
+        if self._is_provider_configured(_PROVIDER_DEFINITION_MAP["shioaji"]):
+            return ["shioaji", "yfinance"]
+        return ["yfinance"]
 
     def _us_realtime_priority(self, fetchers: Sequence[Any]) -> List[str]:
         fetcher_map = {str(getattr(fetcher, "name", "")): fetcher for fetcher in fetchers}
@@ -535,7 +581,7 @@ class DataCapabilityService:
                     "us.index": {"providers": ["yfinance"], "warnings": []},
                     "jp": {"providers": ["yfinance"], "warnings": []},
                     "kr": {"providers": ["yfinance"], "warnings": []},
-                    "tw": {"providers": ["yfinance"], "warnings": []},
+                    "tw": priority_map.get("tw.realtime", {}),
                 },
                 provider_map=provider_map,
                 status_resolvers={
