@@ -6,6 +6,9 @@ export default defineConfig({
   outputDir: './test-results/fixtures',
   fullyParallel: false,
   retries: process.env.CI ? 1 : 0,
+  // CI 固定 2 個 worker（和 GitHub 託管的 4 vCPU 預設一樣）：自架 runner 的容器看得到主機全部執行緒，
+  // 預設會開 6 個 Chromium 去搶 4 核，Vite dev server 首次編譯就逾時。
+  workers: process.env.CI ? 2 : undefined,
   reporter: 'list',
   use: {
     baseURL: 'http://127.0.0.1:4173',
