@@ -9,6 +9,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
@@ -46,6 +47,17 @@ PORTFOLIO_AGGREGATE_CURRENCY = "CNY"
 # 手動刷新一次之後就一直是 False——8 天前的匯率照樣顯示「最新」。3 天涵蓋週末。
 PORTFOLIO_FX_MAX_AGE_DAYS = 3
 FX_FALLBACK_SOURCE = "fallback_1_to_1"
+FX_OUTLIER_MAX_DEVIATION = 0.02  # a bar this far (relative) from its reference counts as deviating
+
+
+def _london_date(ts: Any) -> date:
+    """Calendar date of a yfinance bar timestamp in London (naive timestamps are taken as London already)."""
+    import pandas as pd  # local: only reached with yfinance data, which already depends on pandas
+
+    ts = pd.Timestamp(ts)
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert("Europe/London")
+    return ts.date()
 
 
 def _format_fx_pair(pair: Tuple[str, str]) -> str:
@@ -1647,14 +1659,26 @@ class PortfolioService:
             "error_count": 0,
         }
         for from_currency, to_currency in pairs:
+            # `accepted` is only set after the outlier filter succeeds; raw downloads never reach the fallback.
+            accepted: List[Tuple[date, float]] = []
             try:
                 # One download feeds both today's rate and the history backfill.
-                closes = self._fetch_fx_closes_from_yfinance(
+                fetched = self._fetch_fx_closes_from_yfinance(
                     from_currency=from_currency,
                     to_currency=to_currency,
                     as_of_date=as_of_date,
                 )
-                rate = closes[-1][1] if closes else None
+                fetched_last = fetched[-1] if fetched else None
+                closes = accepted = self._filter_fx_outliers(
+                    from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date, closes=fetched
+                )
+                # If the newest bar was rejected, today's rate must not silently become an older bar.
+                rate = closes[-1][1] if closes and closes[-1] == fetched_last else None
+                # Backfill the bars that passed the filter even when the newest one was rejected, so the
+                # stale carry below starts from the latest accepted value instead of an older stored one.
+                self._backfill_fx_history(
+                    from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date, closes=closes
+                )
                 if rate is not None and rate > 0:
                     self.repo.save_fx_rate(
                         from_currency=from_currency,
@@ -1665,9 +1689,6 @@ class PortfolioService:
                         is_stale=False,
                     )
                     summary["updated_count"] += 1
-                    self._backfill_fx_history(
-                        from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date, closes=closes
-                    )
                     continue
             except Exception as exc:
                 logger.warning(
@@ -1678,11 +1699,15 @@ class PortfolioService:
                     exc,
                 )
 
-            fallback = self.repo.get_latest_fx_rate(
-                from_currency=from_currency,
-                to_currency=to_currency,
-                as_of=as_of_date,
-            )
+            if accepted:
+                # Carry from the newest accepted bar, not from an older same-day carry row.
+                fallback = SimpleNamespace(rate=accepted[-1][1], source="yfinance")
+            else:
+                fallback = self.repo.get_latest_fx_rate(
+                    from_currency=from_currency,
+                    to_currency=to_currency,
+                    as_of=as_of_date,
+                )
             if fallback is not None and float(fallback.rate or 0.0) > 0:
                 self.repo.save_fx_rate(
                     from_currency=from_currency,
@@ -1704,21 +1729,134 @@ class PortfolioService:
         to_currency: str,
         as_of_date: date,
     ) -> List[Tuple[date, float]]:
-        """Fetch daily FX closes as (bar_date, close) for [as_of-7d, as_of], NaN and non-positive dropped."""
+        """Fetch FX closes as (london_date, close) for [as_of-7d, as_of], NaN and non-positive dropped.
+
+        yfinance 1d FX bars are dated on the London calendar and their Close is roughly the 00:00 London
+        open (USDTWD 2026-10-22: 1d Close 32.366 vs the 23:00 hourly bar 32.597), i.e. a day behind. So a
+        London day's close is its last 1h bar; without hourly data use the next daily bar's Open, and only
+        as a last resort the daily Close (logged).
+        """
         if yf is None:
             return []
         symbol = f"{from_currency}{to_currency}=X"
         ticker = yf.Ticker(symbol)
-        history = ticker.history(
-            start=(as_of_date - timedelta(days=7)).isoformat(),
-            end=(as_of_date + timedelta(days=1)).isoformat(),
-            interval="1d",
-            auto_adjust=False,
+        start = (as_of_date - timedelta(days=7)).isoformat()
+        closes: Dict[date, float] = {}
+        try:
+            hourly = ticker.history(
+                start=start, end=(as_of_date + timedelta(days=1)).isoformat(), interval="1h", auto_adjust=False
+            )
+            if hourly is not None and not hourly.empty and "Close" in hourly:
+                for ts, value in hourly["Close"].dropna().items():
+                    # Bars are chronological, so the last assignment per day is the day's last bar.
+                    if float(value) > 0 and _london_date(ts) <= as_of_date:
+                        closes[_london_date(ts)] = float(value)
+        except Exception as exc:
+            logger.warning("匯率 1h 資料取得失敗 %s，改用日K：%s", symbol, exc)
+
+        # Daily bars fill London days without hourly data; the end is a few days past as_of only to get the
+        # successor bar's Open (output stays <= as_of).
+        try:
+            daily = ticker.history(
+                start=start, end=(as_of_date + timedelta(days=4)).isoformat(), interval="1d", auto_adjust=False
+            )
+            if daily is not None and not daily.empty and "Close" in daily:
+                rows = [(_london_date(ts), row) for ts, row in daily.iterrows()]
+                for i, (bar_date, row) in enumerate(rows):
+                    if bar_date > as_of_date or bar_date in closes:
+                        continue
+                    value = rows[i + 1][1].get("Open") if i + 1 < len(rows) else None
+                    if value is None or value != value or float(value) <= 0:
+                        value = row.get("Close")
+                        logger.warning("匯率 %s %s 無 1h 也無次日開盤，退回日K收盤（可能落後一天）", symbol, bar_date)
+                    if value is not None and value == value and float(value) > 0:
+                        closes[bar_date] = float(value)
+        except Exception as exc:
+            logger.warning("匯率日K資料取得失敗 %s：%s", symbol, exc)
+        return sorted(closes.items())
+
+    @staticmethod
+    def _fetch_fx_cross_rate(*, from_currency: str, to_currency: str) -> Optional[float]:
+        """Latest from->to rate implied by the two USD legs (TWDCNY ~ USDCNY / USDTWD); None if unavailable."""
+        # A USD leg is just the same USDxxx=X ticker the newest bar came from, so it cannot cross-check it.
+        if yf is None or from_currency == to_currency or "USD" in (from_currency, to_currency):
+            return None
+
+        def leg(currency: str) -> Optional[float]:
+            if currency == "USD":
+                return 1.0
+            history = yf.Ticker(f"USD{currency}=X").history(period="5d", interval="1d", auto_adjust=False)
+            close = history["Close"].dropna() if history is not None and not history.empty else None
+            return float(close.iloc[-1]) if close is not None and len(close) and float(close.iloc[-1]) > 0 else None
+
+        try:
+            src, dst = leg(from_currency), leg(to_currency)
+        except Exception as exc:
+            logger.warning("交叉匯率取得失敗 %s/%s：%s", from_currency, to_currency, exc)
+            return None
+        return dst / src if src and dst else None
+
+    def _last_real_stored_rate(
+        self, *, from_currency: str, to_currency: str, before: date
+    ) -> Optional[float]:
+        """Latest stored non-stale rate dated before `before`, however long the stale streak is."""
+        row = self.repo.get_latest_fx_rate(
+            from_currency=from_currency,
+            to_currency=to_currency,
+            as_of=before - timedelta(days=1),
+            real_only=True,
         )
-        if history is None or history.empty or "Close" not in history:
-            return []
-        close = history["Close"].dropna()
-        return [(idx.date(), float(value)) for idx, value in close.items() if float(value) > 0]
+        return float(row.rate) if row is not None else None
+
+    def _filter_fx_outliers(
+        self,
+        *,
+        from_currency: str,
+        to_currency: str,
+        as_of_date: date,
+        closes: List[Tuple[date, float]],
+    ) -> List[Tuple[date, float]]:
+        """Drop junk bars (TWDCNY=X once printed 0.1962 against ~0.2047 from the USD cross).
+
+        Only an isolated spike is rejected: a bar that deviates from both neighbours by more than
+        FX_OUTLIER_MAX_DEVIATION. A real jump has the next bar on the new level and passes. The newest bar has
+        no next neighbour, so it is compared with the cross rate (or, without one, the previous real value,
+        walking back past stale carries); no reference at all means accept.
+        """
+
+        def deviates(a: float, b: float) -> bool:
+            return abs(a / b - 1.0) > FX_OUTLIER_MAX_DEVIATION
+
+        kept: List[Tuple[date, float]] = []
+        for i, (bar_date, value) in enumerate(closes):
+            if i + 1 < len(closes):
+                prev = kept[-1][1] if kept else self._last_real_stored_rate(
+                    from_currency=from_currency, to_currency=to_currency, before=bar_date
+                )
+                nxt = closes[i + 1][1]
+                bad = prev is not None and deviates(value, prev) and deviates(value, nxt)
+                reference = prev
+            else:
+                # The cross rate is today's value; it is meaningless for a historical as_of.
+                reference = (
+                    self._fetch_fx_cross_rate(from_currency=from_currency, to_currency=to_currency)
+                    if as_of_date >= self._london_today()
+                    else None
+                )
+                if reference is None:
+                    reference = kept[-1][1] if kept else self._last_real_stored_rate(
+                        from_currency=from_currency, to_currency=to_currency, before=bar_date
+                    )
+                bad = reference is not None and deviates(value, reference)
+            if bad:
+                logger.warning(
+                    "匯率離群值拒收 %s/%s %s：%s（參考值 %s，偏離超過 %.0f%%）",
+                    from_currency, to_currency, bar_date.isoformat(), value, reference,
+                    FX_OUTLIER_MAX_DEVIATION * 100,
+                )
+                continue
+            kept.append((bar_date, value))
+        return kept
 
     @staticmethod
     def _london_today() -> date:

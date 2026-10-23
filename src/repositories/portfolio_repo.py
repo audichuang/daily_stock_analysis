@@ -815,17 +815,20 @@ class PortfolioRepository:
         from_currency: str,
         to_currency: str,
         as_of: date,
+        real_only: bool = False,
     ) -> Optional[PortfolioFxRate]:
+        """Latest rate on or before as_of; real_only skips stale carries and non-positive rates."""
+        conditions = [
+            PortfolioFxRate.from_currency == from_currency,
+            PortfolioFxRate.to_currency == to_currency,
+            PortfolioFxRate.rate_date <= as_of,
+        ]
+        if real_only:
+            conditions += [PortfolioFxRate.is_stale.is_(False), PortfolioFxRate.rate > 0]
         with self.db.get_session() as session:
             row = session.execute(
                 select(PortfolioFxRate)
-                .where(
-                    and_(
-                        PortfolioFxRate.from_currency == from_currency,
-                        PortfolioFxRate.to_currency == to_currency,
-                        PortfolioFxRate.rate_date <= as_of,
-                    )
-                )
+                .where(and_(*conditions))
                 .order_by(desc(PortfolioFxRate.rate_date))
                 .limit(1)
             ).scalar_one_or_none()
