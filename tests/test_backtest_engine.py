@@ -415,6 +415,11 @@ class BacktestEngineTestCase(unittest.TestCase):
             "觀望": ("flat", "cash"),
             "震盪觀望": ("not_down", "long"),
             "不要賣出": ("not_down", "long"),
+            "買進": ("up", "long"),
+            "逢低買進": ("up", "long"),
+            "不建議買入": ("flat", "cash"),
+            "不建議賣出": ("flat", "cash"),
+            "不建議買進": ("flat", "cash"),
         }
         for advice, (direction, position) in cases.items():
             with self.subTest(advice=advice):
