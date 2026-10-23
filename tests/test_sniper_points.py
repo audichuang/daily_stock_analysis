@@ -100,3 +100,40 @@ def test_extract_passes_field():
                     "take_profit": "目標位：2,080.00元", "secondary_buy": None}
     assert extract_sniper_points(R()) == {
         "ideal_buy": None, "secondary_buy": None, "stop_loss": 1778.0, "take_profit": 2080.0}
+
+
+# 正式庫原文：「暫無買點」開頭、或「觀望，」之後才寫暫不設定，都是沒有價位（句內的 MA／括號價位不能被當成買點）
+@pytest.mark.parametrize("text", [
+    "暫無買點。待收盤站回 MA10 約 12.77 元再評估",
+    "暂无买点。待收盘站回 MA10 约 12.77 元再评估",
+    "理想買入點：暫無價位。待收盤站回 MA10 約 12.77 元再評估",
+    "观望，暂不设定（161.6元）",
+    "觀望，暫不設定（161.6元）",
+    "理想買入點：觀望，暫不設定（161.6元）",
+    "觀望，暫無買點，待站回MA10 161.6元",
+])
+def test_leading_no_buypoint_phrases_are_none(text):
+    assert parse_sniper_value(text, "ideal_buy") is None
+    assert parse_sniper_value(text) is None
+
+
+# 反向：暫無／觀望之後仍是真實價位或條件，不能被吞掉
+@pytest.mark.parametrize("text, expected", [
+    ("暫無明顯支撐，回測100元附近再評估", 100.0),
+    ("觀望，回測100元附近再評估", 100.0),
+    ("觀望至收盤站回12.77元再評估，暫不追高", 12.77),
+    ("觀望，回測100元附近再買，跌破95元暫不進場", 100.0),
+])
+def test_no_buypoint_phrases_do_not_overreach(text, expected):
+    assert parse_sniper_value(text, "ideal_buy") == expected
+
+
+# 2026-10-21 正式庫原文：暫不設定之後的 MA 價位不是買點（3211.TWO／2408.TW／6669.TW／2454.TW）
+@pytest.mark.parametrize("text", [
+    "理想買入點：暫不設定。收盤站回 MA10（360.05 元）、量能配合、MA5 翻揚之後才重新評估，目前不建議買進",
+    "理想買入點：暫不設定；須等到放量站穩MA10 472.30元、MA5翻揚，且法人連續買超後，再以回測約472.00元不破為進場條件",
+    "理想買入點：暫不建議買入。待股價帶量站回 MA10 2,050.50元、三大法人轉為買超後再評估",
+    "理想買點：暫不設定。空頭排列不做多，等收盤站回MA10（4,406.00元）且MA5上彎後再重新評估",
+])
+def test_prod_1021_not_set_with_ma_price_is_none(text):
+    assert parse_sniper_value(text, "ideal_buy") is None
