@@ -1176,6 +1176,15 @@ class StockAnalysisPipeline:
                     rt['volume_ratio'] = None
                     rt['volume_ratio_desc'] = '无数据'
                 rt['volume_ratio_basis'] = 'avg5'
+                # During the session the quote volume is a partial-day cumulative figure divided by
+                # full-day averages, so it reads "shrinking" by construction; label it instead of judging it.
+                _tw_market = get_market_for_stock(normalize_stock_code(context.get('code') or ''))
+                if _tw_market and infer_market_phase(_tw_market, get_market_now(_tw_market)) in (
+                    MarketPhase.INTRADAY, MarketPhase.LUNCH_BREAK, MarketPhase.CLOSING_AUCTION,
+                ):
+                    rt['volume_ratio_basis'] = 'avg5_intraday'
+                    if rt.get('volume_ratio') is not None:
+                        rt['volume_ratio_desc'] = '盘中累计量未按时间换算，不据此判断缩量'
             # 移除 None 值以减少上下文大小
             enhanced['realtime'] = {k: v for k, v in enhanced['realtime'].items() if v is not None}
         

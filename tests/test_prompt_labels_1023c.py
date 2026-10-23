@@ -27,14 +27,16 @@ def _quote(source=RealtimeSource.SHIOAJI, vr=1.31):
     return SimpleNamespace(code="2330.TW", name="台積電", price=1000.0, volume_ratio=vr, source=source)
 
 
-def _enhance(code, db_vr, quote, trend_vr=None, db_date=None):
+def _enhance(code, db_vr, quote, trend_vr=None, db_date=None, phase=None):
     """db_vr is the (possibly T-1) DB row ratio; trend_vr is trend_result.volume_ratio_5d (quote-session based)."""
     today = {"close": 1000.0, **({"volume_ratio": db_vr} if db_vr is not None else {})}
     if db_date:
         today["date"] = db_date
     trend = MagicMock(volume_ratio_5d=trend_vr, ma5=0) if trend_vr is not None else None
-    return _pipeline()._enhance_context({"code": code, "today": today}, quote, None, trend,
-                                        fundamental_context={})["realtime"]
+    from src.core.trading_calendar import MarketPhase
+    with patch("src.core.pipeline.infer_market_phase", return_value=phase or MarketPhase.POSTMARKET):
+        return _pipeline()._enhance_context({"code": code, "today": today}, quote, None, trend,
+                                            fundamental_context={})["realtime"]
 
 
 def _prompt(realtime, institution=None, valuation=None, code="2330.TW"):
@@ -58,6 +60,18 @@ def test_tw_volume_ratio_uses_5d_basis_and_keeps_shioaji_as_vs_prev():
     assert rt["volume_ratio_desc"] == "明显萎缩"
     assert rt["volume_ratio_vs_prev"] == 1.31
     assert rt["volume_ratio_basis"] == "avg5"
+
+
+def test_tw_intraday_volume_ratio_is_labelled_not_judged():
+    from src.core.trading_calendar import MarketPhase
+    rt = _enhance("2330.TW", 1.0, _quote(), trend_vr=0.4, phase=MarketPhase.INTRADAY)
+    assert rt["volume_ratio_basis"] == "avg5_intraday"
+    assert "缩量" not in rt["volume_ratio_desc"].replace("不据此判断缩量", "")
+    assert "萎缩" not in rt["volume_ratio_desc"]
+    p = _prompt(rt)
+    assert "盤中累計、未按時間換算" in p
+    post = _enhance("2330.TW", 1.0, _quote(), trend_vr=0.4)
+    assert post["volume_ratio_basis"] == "avg5" and post["volume_ratio_desc"] == "极度萎缩"
 
 
 def test_tw_volume_ratio_ignores_t_minus_1_db_row():
@@ -170,7 +184,28 @@ def test_valuation_newer_local_fills_missing_yield_from_api():
     row = dict(_row(1), dividend_yield=None)
     with patch("market_data.market_repo.latest_valuation", return_value=row):
         v = a.get_valuation("2330.TW")
+    # no cross-day gap filling: older values must not be stamped with the newer as_of
+    assert v["pe_ratio"] == 20.5 and v["dividend_yield"] is None and v["as_of"] != older
+
+
+def test_valuation_same_day_rows_fill_gaps():
+    a = tfa.TwseFundamentalAdapter()
+    day = (tfa._today() - datetime.timedelta(days=1))
+    api = {"2330": {"pe_ratio": 9.9, "pb_ratio": 1.0, "dividend_yield": 2.0, "as_of": day.isoformat()}}
+    a._cached = lambda name, build: api if name == "valuation_twse" else {}
+    row = dict(_row(1), dividend_yield=None)
+    with patch("market_data.market_repo.latest_valuation", return_value=row):
+        v = a.get_valuation("2330.TW")
     assert v["pe_ratio"] == 20.5 and v["dividend_yield"] == 2.0
+
+
+def test_valuation_api_row_without_as_of_does_not_crash():
+    a = tfa.TwseFundamentalAdapter()
+    api = {"2330": {"pe_ratio": 9.9, "pb_ratio": 1.0, "dividend_yield": 2.0, "as_of": None}}
+    a._cached = lambda name, build: api if name == "valuation_twse" else {}
+    with patch("market_data.market_repo.latest_valuation", return_value=_row(1)):
+        v = a.get_valuation("2330.TW")
+    assert v["pe_ratio"] == 20.5
 
 
 def test_market_engine_has_connect_timeout():

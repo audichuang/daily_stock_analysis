@@ -4628,8 +4628,14 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         _vr_basis = _rt_ctx.get('volume_ratio_basis')
         _vr_prev = _rt_ctx.get('volume_ratio_vs_prev')
         # basis is a language-neutral code ("avg5"), rendered per language here.
-        _vr_basis_en = " (vs 5-day avg volume)" if _vr_basis == "avg5" else ""
-        _vr_basis_zh = "（對5日均量）" if _vr_basis == "avg5" else ""
+        _vr_basis_en = {
+            "avg5": " (vs 5-day avg volume)",
+            "avg5_intraday": " (vs 5-day avg volume; intraday cumulative, not time-adjusted)",
+        }.get(_vr_basis, "")
+        _vr_basis_zh = {
+            "avg5": "（對5日均量）",
+            "avg5_intraday": "（對5日均量；盤中累計、未按時間換算）",
+        }.get(_vr_basis, "")
         _vr_prev_row_en = (
             f"| Volume vs Yesterday (cumulative volume / yesterday's volume, not the 5-day basis) | {_vr_prev} | |\n"
             if _vr_prev is not None else ""

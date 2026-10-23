@@ -232,12 +232,15 @@ class TwseFundamentalAdapter:
             return api
         if not api:
             return local
-        # Both exist: take the newer as_of (ties go to local), and fill its gaps from the other.
-        newer, other = (local, api) if local["as_of"] >= api.get("as_of", "") else (api, local)
+        # Both exist: take the newer as_of (ties go to local). An API row without a date counts as oldest.
+        newer, other = (local, api) if local["as_of"] >= (api.get("as_of") or "") else (api, local)
         out = dict(newer)
-        for key in ("pe_ratio", "pb_ratio", "dividend_yield"):
-            if out.get(key) is None:
-                out[key] = other.get(key)
+        # Only fill gaps from a same-day row: filling from an older day would stamp stale values with
+        # the newer as_of (and let an old PE replace a current None, e.g. a loss-making quarter).
+        if (other.get("as_of") or "") == (newer.get("as_of") or ""):
+            for key in ("pe_ratio", "pb_ratio", "dividend_yield"):
+                if out.get(key) is None:
+                    out[key] = other.get(key)
         return out
 
     def _api_valuation(self, code: str) -> Dict[str, Optional[float]]:
