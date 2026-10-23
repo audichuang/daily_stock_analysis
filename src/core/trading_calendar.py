@@ -55,8 +55,9 @@ def _get_calendar(ex: str):
     listed by ``market_data.closures``, which the bundled calendar does not know."""
     if ex == "XTAI":
         try:
-            from market_data.closures import adhoc_closed_dates
+            from market_data.closures import adhoc_closed_dates, autodetect_today
 
+            autodetect_today()
             closed = frozenset(adhoc_closed_dates())
         except Exception as e:
             logger.warning("trading_calendar ad-hoc closure list unavailable: %s", e)
@@ -503,6 +504,32 @@ def infer_market_phase(
         return MarketPhase.UNKNOWN
 
 
+def is_market_polling_window(
+    market: Optional[str],
+    current_time: Optional[datetime] = None,
+    before: timedelta = timedelta(minutes=5),
+    after: timedelta = timedelta(minutes=10),
+) -> bool:
+    """Whether a live-quote poller should be running for ``market`` right now.
+
+    True while the regular session is open, padded by ``before``/``after`` so the
+    first and last tick of the day are not missed. Holidays (incl. typhoon days)
+    come from the exchange calendar. Fail-open: ``UNKNOWN`` phase counts as open,
+    so a calendar problem never freezes a live board.
+    """
+    now = current_time or datetime.now().astimezone()
+    open_phases = {
+        MarketPhase.INTRADAY,
+        MarketPhase.LUNCH_BREAK,
+        MarketPhase.CLOSING_AUCTION,
+    }
+    for t in (now, now + before, now - after):
+        phase = infer_market_phase(market, current_time=t)
+        if phase == MarketPhase.UNKNOWN or phase in open_phases:
+            return True
+    return False
+
+
 def _add_warning_code(warnings: List[str], code: str) -> None:
     if code not in warnings:
         warnings.append(code)
@@ -525,6 +552,38 @@ def _phase_booleans(
         MarketPhase.CLOSING_AUCTION,
     }
     return is_trading_day, is_market_open_now, is_partial_bar
+
+
+def last_closed_session_open(
+    market: Optional[str], current_time: Optional[datetime] = None
+) -> Optional[datetime]:
+    """
+    Open time (market-local, tz-aware) of the most recent fully closed session.
+
+    Returns None while the market is in session or when the phase is unknown,
+    so callers keep their intraday logic. Holidays and ad-hoc closures are
+    handled by the calendar (previous real session is returned).
+    """
+    phase = infer_market_phase(market, current_time)
+    if phase not in (
+        MarketPhase.PREMARKET,
+        MarketPhase.POSTMARKET,
+        MarketPhase.NON_TRADING,
+    ):
+        return None
+    try:
+        tz_name = MARKET_TIMEZONE[market]
+        cal = _get_calendar(MARKET_EXCHANGE[market])
+        local_date = get_market_now(market, current_time).date()
+        if phase == MarketPhase.POSTMARKET:
+            session = cal.date_to_session(local_date, direction="previous")
+        else:
+            # premarket / holiday: the current day has not closed yet
+            session = cal.date_to_session(local_date - timedelta(days=1), direction="previous")
+        return _as_market_datetime(cal.session_open(session), tz_name)
+    except Exception as e:
+        logger.warning("trading_calendar.last_closed_session_open fail-closed: %s", e)
+        return None
 
 
 def _session_open_close_for_today(

@@ -1,0 +1,2 @@
+# Ad-hoc TW market closures (append-only, version-controlled). One ISO date per line.
+2026-10-23  # typhoon closure

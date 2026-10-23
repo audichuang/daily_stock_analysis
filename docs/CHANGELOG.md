@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 個股情報搜尋：某個維度的搜尋來源失敗或回空時，改試下一個來源，不再整個維度判失敗（原本公開 SearXNG 被擋，「機構分析／公司公告」連續三週全空）；台股最新新聞維度先走 FinMind，18:00 每日報告也會用到
+- [修復] 交易日曆會自動偵測當天的颱風臨時休市（每小時最多查一次、逾時 3 秒、失敗只記 warning），NAS 正式站不必靠 Mac 寫清單也能知道；新增 `TW_CLOSURE_AUTODETECT`（預設 true）
+- [修復] 回測方向判斷認得繁中的「減倉／賣出／減碼／買進」，簡體補「减码」；資料不足（insufficient_data）的回測列在日線到齊後會重評
+- [修復] 波段決策回驗排除 `journal/closed-dates.txt` 列出的臨時休市日，並在輸出列出排除筆數（10-23 颱風假那筆盤前判讀不計分）
+- [修復] 融資與法人爬取會核對 csv 標題自帶的日期，日期不符或缺日期就拒收；`health` 新增孤兒日檢查（其他表有、price 沒有的日期），只警告不擋
+- [修復] 收盤後的報價只要屬於最近已收盤的場次就不判為過期，盤後報告不再一律因報價過期而壓低信心
+- [修復] 盯盤看板依各市場開收盤時間（含休市）輪詢，非交易時段停止打報價；新增 `GET /api/v1/stocks/market-status`
 - [新功能] `make ptt-picks`（`scripts/tw_ptt_picks.py`）：抓 PTT 股票板的 `[標的]` 文，解析多空、理由、進退場機制、推噓數與是否附對帳單，股名轉代號並附發文當時的本地數據，追加到 `journal/ptt-picks.jsonl`；當候選來源用，不是買進訊號
 - [改進] 媒體點名新增 4 個頻道（瘋狂股市福利社、理周TV、老王愛說笑、一綺聊股），共 25 個（劉姸希、股癌試跑後拿掉：前者半數點名是過往戰績宣傳、後者幾乎不點名台股）；新增 `kind=kol`（非投顧的獨立 YouTuber）
 - [改進] 減倉／賣出或買進條件未成立時，提示詞要求理想／次要買點只寫「暫不設定」、再進場條件寫進觀察條件，停利只寫一個持股者目標價（原本模型把同一條均線同時寫進買點與停利，造成賣出報告「理想買點＝停利價」）

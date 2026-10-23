@@ -15,9 +15,11 @@
 
 import argparse
 import datetime
+import logging
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -122,6 +124,31 @@ def tw_closed_reason(day, fetch=fetch_dgpa_closures, path=None, today=None):
             record_closure(day, "人事行政總處：臺北市停止上班", path)
             return "人事行政總處：臺北市停止上班（已記入臨時休市清單）"
     return None
+
+
+_AUTODETECT_INTERVAL = 3600.0
+_autodetect_last = None  # (taipei date, monotonic time) of the last attempt
+
+
+def autodetect_today():
+    """Let any process (e.g. the NAS web service, which no cron touches) learn about
+    a typhoon closure: at most once per hour ask whether *today* is closed and record
+    it in the shared list. Fail-open, short timeout, today only. Shared by
+    ``trading_calendar`` and ``health`` so cold callers behave the same.
+    ``TW_CLOSURE_AUTODETECT=false`` disables."""
+    global _autodetect_last
+    if os.environ.get("TW_CLOSURE_AUTODETECT", "true").strip().lower() in ("0", "false", "no", "off"):
+        return
+    today = datetime.datetime.now(_TAIPEI).date()
+    now = time.monotonic()
+    last = _autodetect_last
+    if last and last[0] == today and now - last[1] < _AUTODETECT_INTERVAL:
+        return
+    _autodetect_last = (today, now)
+    try:
+        tw_closed_reason(today, fetch=lambda: fetch_dgpa_closures(timeout=3))
+    except Exception as e:  # noqa: BLE001 - never block calendar lookups
+        logging.getLogger(__name__).warning("臨時休市自動偵測失敗：%s", e)
 
 
 def main(argv=None):

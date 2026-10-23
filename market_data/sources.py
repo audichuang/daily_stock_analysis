@@ -217,6 +217,22 @@ def _describe_unparsable(raw):
     return "HTTP 200 但內容不是預期的 CSV(封鎖頁/改版?)"
 
 
+def _title_date_matches(raw, date, name):
+    """TWSE csv 第一行自帶資料日（``115年05月22日 信用交易統計``）必須等於請求日。
+
+    官方對沒有交易的日子（週日、停市日）有時回另一天的整份表而非「查無資料」，
+    parse 會把列蓋上請求日，存成不存在的孤兒日（margin 2021-05-23／2024-09-01 即如此）。
+    無法證明新鮮的資料不如沒有：標題缺日期一樣拒收。"""
+    head = raw.decode("big5", errors="replace").lstrip("\ufeff \r\n").split("\n", 1)[0]
+    m = re.search(r"\d+年\d+月\d+日", head)
+    got = _roc_to_date(m.group(0)) if m else None
+    if got == date:
+        return True
+    print(f"**WARN: {name} 回應日期 {got or '(無)'} ≠ 請求日 {date},拒收"
+          "(非交易日或尚未發布時官方會回別天的表)", flush=True)
+    return False
+
+
 def crawl_institutional(date):
     raw = _twse_csv(
         "https://www.twse.com.tw/rwd/zh/fund/T86"
@@ -225,11 +241,12 @@ def crawl_institutional(date):
     if not raw:
         return None
     try:
-        return parse_institutional(raw, date)
+        df = parse_institutional(raw, date)
     except ValueError as exc:
         print(f"**WARN: cannot parse T86 institutional for {date} ({exc})"
               f" — {_describe_unparsable(raw)}")
         return None
+    return df if _title_date_matches(raw, date, "T86") else None
 
 
 def crawl_margin(date):
@@ -240,11 +257,12 @@ def crawl_margin(date):
     if not raw:
         return None
     try:
-        return parse_margin(raw, date)
+        df = parse_margin(raw, date)
     except ValueError as exc:
         print(f"**WARN: cannot parse MI_MARGN margin for {date} ({exc})"
               f" — {_describe_unparsable(raw)}")
         return None
+    return df if _title_date_matches(raw, date, "MI_MARGN") else None
 
 
 def crawl_ex_dividend(start, end):

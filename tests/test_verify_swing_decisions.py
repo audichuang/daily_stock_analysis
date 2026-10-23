@@ -50,6 +50,19 @@ def test_read_log_skips_blank_and_comment_lines(tmp_path):
     assert len(df) == 1 and df["stock_id"].iloc[0] == "2615"
 
 
+def test_read_log_drops_closure_and_weekend_rows_and_counts_them(tmp_path, monkeypatch):
+    closed = tmp_path / "closed.txt"
+    closed.write_text("2026-10-23  # typhoon\n", encoding="utf-8")
+    monkeypatch.setenv("TW_ADHOC_CLOSED_FILE", str(closed))
+    p = tmp_path / "d.jsonl"
+    rows = ["2026-10-22", "2026-10-23", "2026-10-24"]  # open, adhoc closed, Saturday
+    p.write_text("".join(f'{{"date":"{d}","stock_id":"2615","verdict":"pass"}}\n' for d in rows),
+                 encoding="utf-8")
+    df = read_log(p)
+    assert list(df["date"]) == ["2026-10-22"] and df.attrs["closed_excluded"] == 2
+    assert len(read_log(p, drop_closed=False)) == 3
+
+
 def test_read_log_refuses_a_truncated_line_instead_of_dropping_it(tmp_path):
     """一行壞掉就整份不算——靜默跳過等於讓回驗少掉幾筆而沒人知道。"""
     p = tmp_path / "d.jsonl"
@@ -330,3 +343,39 @@ def test_paired_portfolio_enters_on_the_per_event_entry_day_and_ranks_by_confide
     _, trades = vsd.paired_portfolio(df, _Eng(), 3, 1)["只收 enter"]
     assert list(trades["stock_id"]) == ["2002"]
     assert trades["entry_date"].iloc[0] == IDX[5]
+
+
+def _write_log(p, dates):
+    p.write_text("".join(f'{{"date":"{d}","stock_id":"2615","verdict":"pass"}}\n' for d in dates),
+                 encoding="utf-8")
+
+
+def test_read_log_excludes_1023_from_the_tracked_list_when_the_local_list_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("TW_ADHOC_CLOSED_FILE", str(tmp_path / "absent.txt"))
+    p = tmp_path / "morning.jsonl"
+    _write_log(p, ["2026-10-22", "2026-10-23"])
+    df = read_log(p)
+    assert list(df["date"]) == ["2026-10-22"] and df.attrs["closed_excluded"] == 1
+
+
+def test_main_always_reports_the_excluded_count(tmp_path, monkeypatch, capsys):
+    import verify_swing_decisions as v
+    monkeypatch.setenv("TW_ADHOC_CLOSED_FILE", str(tmp_path / "absent.txt"))
+    monkeypatch.setenv("STORAGE_DATABASE_URL", "")
+
+    def boom():
+        raise RuntimeError("stop after the header")
+    monkeypatch.setattr(v, "get_engine", boom)
+    cases = {"none": (["2026-10-22"], "已排除 0 筆"),
+             "partial": (["2026-10-22", "2026-10-23"], "已排除 1 筆"),
+             "all": (["2026-10-23", "2026-10-24"], "全數 2 筆皆為休市日")}
+    for name, (dates, expect) in cases.items():
+        p = tmp_path / f"{name}.jsonl"
+        _write_log(p, dates)
+        try:
+            v.main(["--log", str(p)])
+        except Exception:
+            pass
+        out = capsys.readouterr().out
+        assert expect in out, (name, out)
+        assert "是空的" not in out

@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 
 from market_data.adjust import ADJUSTMENT_WINDOW_DAYS
-from market_data.closures import adhoc_closed_dates
+from market_data.closures import adhoc_closed_dates, autodetect_today
 from market_data.crawl import RECENT_SESSIONS, market_filter
 from market_data.db import get_engine
 from market_data.financial_statement import afterIFRS
@@ -47,6 +47,7 @@ def _xtai_session_checker():
     except Exception:
         return None
     # 颱風假等臨時休市日曆不知道，由 `market_data.closures` 的清單補上。
+    autodetect_today()
     closed = adhoc_closed_dates()
     return lambda day: bool(calendar.is_session(day)) and _as_date(day) not in closed
 
@@ -150,6 +151,19 @@ def full_history_gaps(price_dates, table_dates, exclude_latest=True):
     end = max(price_keys)
     return sorted(day for day in price_keys - table_keys
                   if day >= start and not (exclude_latest and day == end))
+
+
+def orphan_dates(price_dates, table_dates):
+    """該表有、price 當日沒有的孤兒日（週日／停市日被灌進整份別天複本的典型症狀）。
+
+    與 `full_history_gaps` 方向相反：缺洞是「price 有、表沒有」。price 最新日之後的日子
+    不算（price 尚未入庫、不是孤兒）；price 完全沒有列 → 回 []（無從比對）。"""
+    price_keys = {str(value)[:10] for value in price_dates}
+    if not price_keys:
+        return []
+    end = max(price_keys)
+    return sorted(day for day in {str(value)[:10] for value in table_dates}
+                  if day <= end and day not in price_keys)
 
 
 def missing_adjustments(expected, stored):
@@ -301,6 +315,13 @@ def report(engine=None, now=None, is_session=None):
             for t in _HISTORY_TABLES}
         out["history_gaps"] = {t: full_history_gaps(price_all, table_all[t])
                                for t in _HISTORY_TABLES}
+        # 孤兒日（只報不擋）：price 有交易才有法人／融資／估值；price 沒有的日子出現在這三表，
+        # 多半是官方對非交易日回了別天的表。上市、上櫃各自比對（price 不分市場，同日有列即可）。
+        out["orphan_dates"] = {
+            key: orphan_dates(price_all, table_all[t] if market is None else
+                              _source_dates(c, t, market, datetime.date.min))
+            for t in _HISTORY_TABLES
+            for key, market in ((t, None), (t + "_tpex", "tpex"))}
         # 覆蓋率：各表與 price 的「最新共同日期」上，stock_id 數 / price 的 stock_id 數。
         # 上市＋上櫃一起數（上櫃回補完成前，這個比例就是缺口的量化）。
         coverage = {}
@@ -456,6 +477,12 @@ def run(engine=None, strict=False, now=None, is_session=None):
         for day in shown:
             print(f"  repair: uv run --env-file .env python -m market_data.cli "
                   f"backfill {table} --start {day} --end {day} --delay 3")
+    # 孤兒日只報不擋：歷史舊資料會讓每日 gate 永遠紅，而 daily 不會自己清；刪除 SQL 見
+    # docs/market-data-pitfalls.md 的孤兒日一節（人工、先備份）。
+    for key, days in result.get("orphan_dates", {}).items():
+        if days:
+            print(f"**WARN orphan dates {key} (表有、price 沒有; 只報不擋): "
+                  f"{len(days)} -> {days[-10:]}")
     coverage = result.get("coverage", {})
     if coverage:
         print("coverage vs price (latest shared date; "

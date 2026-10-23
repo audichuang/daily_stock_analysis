@@ -21,6 +21,7 @@
 
 - 查人事行政總處停班停課頁（`market_data.closures.DGPA_URL`）；臺北市全體公教機關**全日或上午**停止上班就當休市（證交所休市原則；下午停班照常交易，校級／區域停班不算），記進臨時休市清單 `data/tw_adhoc_closed_dates.txt`（`TW_ADHOC_CLOSED_FILE` 可改）。頁面的「今天／明天」以頁面自己的「更新時間」為準；版面認不出來時印 WARN。
 - `trading_calendar` 的 XTAI 日曆（`is_market_open`、`get_effective_trading_date`、`get_trading_dates`…）與 `health.expected_session` 都讀這份清單，所以休市當天 18:00 的 `health --strict` 不會把它當缺資料擋下、美股復盤照跑，連假後第一個交易日的盤前判讀也不會去找休市那天的資料。
+- NAS 正式 Web 沒有這些排程（`data/` 是另一份 bind mount）：`trading_calendar._get_calendar("XTAI")` 會自己偵測——每個行程每小時最多一次、逾時 3 秒，只查「今天」，今天是交易日且清單沒有時呼叫 `tw_closed_reason`，偵測到就寫進該行程所在環境的清單檔；失敗只 warning。`TW_CLOSURE_AUTODETECT=false` 可關（測試預設關）。偵測是在第一次查 XTAI 日曆或呼叫 expected_session 時觸發，之後同一行程內的其他呼叫端讀檔即得。
 - 頁面連不上或改版 → 只依交易日曆（fail-open，照常跑）。其他原因的臨時休市手動在清單加一行 `YYYY-MM-DD  # 原因`。
 - 2026-10-23（薔琵颱風）時還沒有這個機制，是手動暫停盤中與持股計畫排程。
 

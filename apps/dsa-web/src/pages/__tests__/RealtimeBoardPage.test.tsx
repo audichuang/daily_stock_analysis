@@ -4,20 +4,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import RealtimeBoardPage from '../RealtimeBoardPage';
 
-const { getWatchlist, getSnapshot, listHoldings, getQuotes, getIndices, getDossierSummaries } = vi.hoisted(() => ({
+const { getWatchlist, getSnapshot, listHoldings, getQuotes, getIndices, getDossierSummaries, getMarketStatus } = vi.hoisted(() => ({
   getDossierSummaries: vi.fn(),
   getWatchlist: vi.fn(),
   getSnapshot: vi.fn(),
   listHoldings: vi.fn(),
   getQuotes: vi.fn(),
   getIndices: vi.fn(),
+  getMarketStatus: vi.fn(),
 }));
 
 vi.mock('../../api/systemConfig', () => ({ systemConfigApi: { getWatchlist } }));
 vi.mock('../../api/portfolio', () => ({ portfolioApi: { getSnapshot } }));
 vi.mock('../../api/funds', () => ({ fundsApi: { listHoldings } }));
 vi.mock('../../api/stocks', () => ({
-  stocksApi: { getQuotes, getIndices, getDossierSummaries, getTrend: vi.fn().mockResolvedValue([]) },
+  stocksApi: { getQuotes, getIndices, getMarketStatus, getDossierSummaries, getTrend: vi.fn().mockResolvedValue([]) },
 }));
 vi.mock('recharts', () => {
   const Stub = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
@@ -66,6 +67,7 @@ describe('RealtimeBoardPage scope', () => {
       totals: [], navError: null,
     });
     getIndices.mockResolvedValue([]);
+    getMarketStatus.mockResolvedValue({ tw: true, us: true });
     getDossierSummaries.mockResolvedValue({ items: [], levelAlertsEnabled: false });
     getQuotes.mockImplementation((codes: string[]) =>
       Promise.resolve(codes.map((c) => quote(c, c === '2330.TW' ? 1000 : c === '2887.TW' ? 40 : 200))),
@@ -244,5 +246,133 @@ describe('RealtimeBoardPage scope', () => {
       Object.defineProperty(document, 'hidden', { configurable: true, value: false });
       vi.useRealTimers();
     }
+  });
+
+  it('stops polling quotes while the market is closed and resumes when it reopens', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage();
+      await waitFor(() => expect(getQuotes).toHaveBeenCalled());
+      getMarketStatus.mockResolvedValue({ tw: false, us: false });
+      await act(() => vi.advanceTimersByTimeAsync(5 * 60_000 + 30_000)); // status check turns closed
+      const calls = getQuotes.mock.calls.length;
+      await act(() => vi.advanceTimersByTimeAsync(4 * 60_000)); // closed: no quote requests, no status request
+      expect(getQuotes.mock.calls.length).toBe(calls);
+      getMarketStatus.mockResolvedValue({ tw: true, us: true });
+      await act(() => vi.advanceTimersByTimeAsync(2 * 60_000)); // next status check reopens
+      expect(getQuotes.mock.calls.length).toBeGreaterThan(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  const pollAfterStatusCheck = async (status: Record<string, boolean>) => {
+    await waitFor(() => expect(getQuotes).toHaveBeenCalled());
+    getMarketStatus.mockResolvedValue(status);
+    getQuotes.mockClear();
+    getIndices.mockClear();
+    await act(() => vi.advanceTimersByTimeAsync(5 * 60_000 + 30_000));
+    getQuotes.mockClear();
+    getIndices.mockClear();
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    return getQuotes.mock.calls.flatMap((c) => c[0] as string[]);
+  };
+
+  it('polls only open markets: tw closed and us open skips tw quotes and the tw index', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage();
+      const polled = await pollAfterStatusCheck({ tw: false, us: true });
+      expect(new Set(polled)).toEqual(new Set(['NVDA']));
+      expect(getIndices).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps refreshing the tw index when a us-only board sees tw open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getWatchlist.mockResolvedValue(['NVDA']);
+      getSnapshot.mockResolvedValue({ accounts: [] });
+      renderPage();
+      const polled = await pollAfterStatusCheck({ tw: true, us: false });
+      expect(polled).toEqual([]);
+      expect(getIndices).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never gates non-tw non-us codes (7203.T) on the us market', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getWatchlist.mockResolvedValue(['7203.T', 'NVDA']);
+      getSnapshot.mockResolvedValue({ accounts: [] });
+      renderPage();
+      const polled = await pollAfterStatusCheck({ tw: false, us: false });
+      expect(new Set(polled)).toEqual(new Set(['7203.T']));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('polls AAPL.US and BRK-B as us codes: zero quote requests when both markets are closed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getWatchlist.mockResolvedValue(['AAPL.US', 'BRK-B']);
+      getSnapshot.mockResolvedValue({ accounts: [] });
+      renderPage();
+      const polled = await pollAfterStatusCheck({ tw: false, us: false });
+      expect(polled).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a pending manual full refresh alive when a subset poll tick fires first', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage();
+      await waitFor(() => expect(getQuotes).toHaveBeenCalled());
+      getMarketStatus.mockResolvedValue({ tw: false, us: true });
+      await act(() => vi.advanceTimersByTimeAsync(5 * 60_000 + 30_000)); // status turns tw closed
+      const pending: Array<() => void> = [];
+      getQuotes.mockImplementation(
+        (codes: string[]) =>
+          new Promise((resolve) => {
+            pending.push(() => resolve(codes.map((c) => quote(c, c === '2330.TW' ? 1234 : 200))));
+          }),
+      );
+      fireEvent.click(screen.getByRole('button', { name: /刷新|重新整理|refresh/i }));
+      const manual = pending.splice(0); // full refresh, still in flight
+      await act(() => vi.advanceTimersByTimeAsync(30_000)); // us-only tick fires before tw chunks return
+      await act(async () => {
+        manual.forEach((f) => f());
+        pending.splice(0).forEach((f) => f());
+      });
+      expect(await screen.findByText(/1,?234/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('still drops a late response for codes that a newer refresh already covered', async () => {
+    renderPage();
+    await waitFor(() => expect(getQuotes).toHaveBeenCalled());
+    const pending: Array<(price: number) => void> = [];
+    getQuotes.mockImplementation(
+      (codes: string[]) =>
+        new Promise((resolve) => {
+          pending.push((price) => resolve(codes.map((c) => quote(c, c === '2330.TW' ? price : 200))));
+        }),
+    );
+    const btn = screen.getByRole('button', { name: /刷新|重新整理|refresh/i });
+    fireEvent.click(btn);
+    const older = pending.splice(0);
+    fireEvent.click(btn);
+    const newer = pending.splice(0);
+    await act(async () => newer.forEach((f) => f(2222)));
+    await act(async () => older.forEach((f) => f(1111)));
+    expect(await screen.findByText(/2,?222/)).toBeTruthy();
+    expect(screen.queryByText(/1,?111/)).toBeNull();
   });
 });

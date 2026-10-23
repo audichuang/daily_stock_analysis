@@ -84,3 +84,24 @@ def test_describe_unparsable_long_plain_text_is_not_a_service_message():
 def test_describe_unparsable_truncates_to_60_chars():
     msg = sources._describe_unparsable(("甲" * 100).encode("utf-8"))
     assert "甲" * 60 in msg and "甲" * 61 not in msg
+
+
+# --- 回應自帶日期必須等於請求日（週日／停市日官方會回別天的整份表）------------------
+
+@pytest.mark.parametrize("crawl, parse", [("crawl_margin", "parse_margin"),
+                                          ("crawl_institutional", "parse_institutional")])
+def test_crawl_rejects_a_table_whose_title_date_differs_from_the_request(monkeypatch, capsys, crawl, parse):
+    sunday = datetime.date(2026, 10, 18)
+    monkeypatch.setattr(sources, "_twse_csv", lambda url: _csv())   # 標題是 115年10月15日
+    monkeypatch.setattr(sources, parse, lambda raw, d: "frame")
+
+    assert getattr(sources, crawl)(sunday) is None
+    assert "回應日期 2026-10-15 ≠ 請求日 2026-10-18" in capsys.readouterr().out
+    assert getattr(sources, crawl)(D) == "frame"                    # 反向：日期相符照收
+
+
+def test_crawl_rejects_a_table_without_any_title_date(monkeypatch):
+    raw = _csv().split(b"\r\n", 1)[1]
+    monkeypatch.setattr(sources, "_twse_csv", lambda url: raw)
+
+    assert sources.crawl_margin(D) is None

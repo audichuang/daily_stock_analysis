@@ -271,3 +271,27 @@ def test_report_lists_tpex_thin_days_separately(capsys):
     assert result["thin_days"]["margin"] == []          # 上市稽核不受影響
     health.run(engine, strict=False, now=_NOW, is_session=_is_session)
     assert "thin margin_tpex days (只報不擋): 1" in capsys.readouterr().out
+
+
+# --- 孤兒日：表有、price 沒有（只報不擋）-----------------------------------------
+
+def test_orphan_dates_lists_table_days_without_price_and_ignores_days_after_latest_price():
+    price = _days((1, 21), (1, 23))
+    table = _days((1, 21), (1, 22), (1, 23), (1, 26))   # 01-22 孤兒；01-26 在 price 最新日後 → 不算
+
+    assert health.orphan_dates(price, table) == ["2026-01-22"]
+    assert health.orphan_dates([], table) == []
+
+
+def test_report_and_run_list_orphans_per_market_but_never_block_strict(capsys):
+    margin = _MARGIN + [_D(2026, 1, 24)]                 # 週六：price 沒有
+    engine, _ = _engine(margin=margin)
+
+    result = health.report(engine, now=_NOW, is_session=_is_session)
+    assert result["orphan_dates"]["margin"] == ["2026-01-24"]
+    assert result["orphan_dates"]["institutional"] == []
+    # 上櫃查詢走 _source_dates（假連線對 "FROM market.margin WHERE" 回同一份），同樣要被比對到
+    assert result["orphan_dates"]["margin_tpex"] == ["2026-01-24"]
+
+    assert health.run(engine, strict=True, now=_NOW, is_session=_is_session) == 0
+    assert "orphan dates margin (表有、price 沒有; 只報不擋): 1 -> ['2026-01-24']" in capsys.readouterr().out
