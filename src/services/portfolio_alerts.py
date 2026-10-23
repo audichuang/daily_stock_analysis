@@ -513,8 +513,9 @@ def _evaluate_drawdown(rule: PortfolioRiskAlert, report: Dict[str, Any]) -> Dict
         "fx_stale": bool(drawdown.get("fx_stale")),
         "fx_excluded_dates": list(drawdown.get("fx_excluded_dates") or []),
     })
-    if observed is None or drawdown.get("fx_missing"):
-        # 缺匯率時剔除日期後的回撤只是部分序列，不當成讀數。
+    points = _finite_or_none(drawdown.get("series_points"))
+    if observed is None or drawdown.get("fx_missing") or points is None or points < 2:
+        # 缺匯率或序列不足 2 點時剔除日期後的回撤只是部分序列，不當成讀數。
         diagnostics["max_drawdown_pct"] = None
         diagnostics["current_drawdown_pct"] = None
         return _fx_unavailable_result(
@@ -523,6 +524,10 @@ def _evaluate_drawdown(rule: PortfolioRiskAlert, report: Dict[str, Any]) -> Dict
         )
     triggered = bool(drawdown.get("alert"))
     message = f"{_display_account(report)} max drawdown {observed:.2f}%"
+    if drawdown.get("data_quality") == "partial":
+        # Excluded days may hide the equity peak, so the reading can understate the drawdown.
+        message += " (partial: FX-missing days excluded)"
+        diagnostics["data_quality"] = "partial"
     return _portfolio_result(
         rule,
         triggered=triggered,

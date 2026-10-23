@@ -9,6 +9,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
@@ -46,7 +47,7 @@ PORTFOLIO_AGGREGATE_CURRENCY = "CNY"
 # 手動刷新一次之後就一直是 False——8 天前的匯率照樣顯示「最新」。3 天涵蓋週末。
 PORTFOLIO_FX_MAX_AGE_DAYS = 3
 FX_FALLBACK_SOURCE = "fallback_1_to_1"
-FX_REFERENCE_MAX_AGE_DAYS = 7  # a stored row older than this is no reference for the outlier check
+FX_REFERENCE_MAX_AGE_DAYS = 7  # max stored rows (days) walked back for the outlier reference
 FX_OUTLIER_MAX_DEVIATION = 0.02  # a bar this far (relative) from its reference counts as deviating
 
 
@@ -1659,6 +1660,7 @@ class PortfolioService:
             "error_count": 0,
         }
         for from_currency, to_currency in pairs:
+            closes: List[Tuple[date, float]] = []
             try:
                 # One download feeds both today's rate and the history backfill.
                 closes = self._fetch_fx_closes_from_yfinance(
@@ -1697,11 +1699,15 @@ class PortfolioService:
                     exc,
                 )
 
-            fallback = self.repo.get_latest_fx_rate(
-                from_currency=from_currency,
-                to_currency=to_currency,
-                as_of=as_of_date,
-            )
+            if closes:
+                # Carry from the newest accepted bar, not from an older same-day carry row.
+                fallback = SimpleNamespace(rate=closes[-1][1], source="yfinance")
+            else:
+                fallback = self.repo.get_latest_fx_rate(
+                    from_currency=from_currency,
+                    to_currency=to_currency,
+                    as_of=as_of_date,
+                )
             if fallback is not None and float(fallback.rate or 0.0) > 0:
                 self.repo.save_fx_rate(
                     from_currency=from_currency,
@@ -1797,7 +1803,7 @@ class PortfolioService:
         cursor = before - timedelta(days=1)
         for _ in range(FX_REFERENCE_MAX_AGE_DAYS + 1):
             row = self.repo.get_latest_fx_rate(from_currency=from_currency, to_currency=to_currency, as_of=cursor)
-            if row is None or (before - row.rate_date).days > FX_REFERENCE_MAX_AGE_DAYS:
+            if row is None:
                 return None
             if not row.is_stale and float(row.rate or 0.0) > 0:
                 return float(row.rate)

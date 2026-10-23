@@ -934,6 +934,22 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertEqual(self._filter([(date(2026, 1, 8), 6.00)]), [])
         self.assertEqual(self._filter([(date(2026, 1, 8), 7.31)]), [(date(2026, 1, 8), 7.31)])
 
+    def test_fx_outlier_latest_garbage_rejected_after_long_stale_streak(self) -> None:
+        self._seed_fx(date(2026, 1, 1), 7.30, "yfinance", False)
+        for day in range(2, 9):  # 7 stale carries: the real row is 8 days before the newest bar
+            self._seed_fx(date(2026, 1, day), 7.30, "yfinance", True)
+        self.assertEqual(self._filter([(date(2026, 1, 9), 6.00)]), [])
+        self.assertEqual(self._filter([(date(2026, 1, 9), 7.31)]), [(date(2026, 1, 9), 7.31)])
+
+    def test_fx_refresh_rejected_latest_carries_from_accepted_bar_over_same_day_carry(self) -> None:
+        self._seed_fx(date(2026, 1, 2), 7.20, "yfinance", False)
+        self._seed_fx(date(2026, 1, 8), 7.20, "yfinance", True)  # carry written by an earlier failed refresh
+        frame = self._fx_frame([("2026-01-05", 7.31), ("2026-01-06", 7.32), ("2026-01-07", 7.33), ("2026-01-08", 6.00)])
+        self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 8))
+        today = self._fx_row(date(2026, 1, 8))
+        self.assertTrue(today.is_stale)
+        self.assertAlmostEqual(today.rate, 7.33)
+
     def test_fx_outlier_no_reference_accepts(self) -> None:
         self.assertEqual(self._filter([(date(2026, 1, 8), 6.00)]), [(date(2026, 1, 8), 6.00)])
 
