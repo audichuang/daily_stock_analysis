@@ -96,6 +96,15 @@ def _fx_call(fn: Any, /, *args: Any, **kwargs: Any) -> Any:
     return box.get("value")
 
 
+def _ticker_history(symbol: str, **kwargs: Any) -> Any:
+    """Build the yfinance Ticker and fetch history in one call, so _fx_call bounds both.
+
+    Ticker construction can block on yfinance's shared locks (an abandoned cookie request
+    holding them while a concurrent yf.download waits), so it must not run outside the budget.
+    """
+    return yf.Ticker(symbol).history(**kwargs)
+
+
 def _london_date(ts: Any) -> date:
     """Calendar date of a yfinance bar timestamp in London (naive timestamps are taken as London already)."""
     import pandas as pd  # local: only reached with yfinance data, which already depends on pandas
@@ -1833,12 +1842,11 @@ class PortfolioService:
         if yf is None:
             return []
         symbol = f"{from_currency}{to_currency}=X"
-        ticker = yf.Ticker(symbol)
         start = (as_of_date - timedelta(days=7)).isoformat()
         closes: Dict[date, float] = {}
         try:
             hourly = _fx_call(
-                ticker.history,
+                _ticker_history, symbol,
                 start=start, end=(as_of_date + timedelta(days=1)).isoformat(), interval="1h", auto_adjust=False,
             )
             if hourly is not None and not hourly.empty and "Close" in hourly:
@@ -1853,7 +1861,7 @@ class PortfolioService:
         # successor bar's Open (output stays <= as_of).
         try:
             daily = _fx_call(
-                ticker.history,
+                _ticker_history, symbol,
                 start=start, end=(as_of_date + timedelta(days=4)).isoformat(), interval="1d", auto_adjust=False,
             )
             if daily is not None and not daily.empty and "Close" in daily:
@@ -1881,9 +1889,7 @@ class PortfolioService:
         def leg(currency: str) -> Optional[float]:
             if currency == "USD":
                 return 1.0
-            history = _fx_call(
-                yf.Ticker(f"USD{currency}=X").history, period="5d", interval="1d", auto_adjust=False
-            )
+            history = _fx_call(_ticker_history, f"USD{currency}=X", period="5d", interval="1d", auto_adjust=False)
             close = history["Close"].dropna() if history is not None and not history.empty else None
             return float(close.iloc[-1]) if close is not None and len(close) and float(close.iloc[-1]) > 0 else None
 

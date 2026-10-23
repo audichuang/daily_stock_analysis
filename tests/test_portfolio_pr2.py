@@ -1735,6 +1735,27 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertEqual(summary["stale_count"], 1)  # fell back to the stored 01-07 value
         self.assertTrue(self._twd_row(d8).is_stale)
 
+    def test_fx_refresh_returns_within_budget_when_ticker_construction_blocks(self) -> None:
+        # yf.Ticker() itself can wait on yfinance's shared locks; it must run inside the bounded worker.
+        import time as _t
+
+        import src.services.portfolio_service as ps
+
+        d8 = date(2026, 1, 8)
+        self._seed_twd(date(2026, 1, 7), 0.2050, "yfinance", False)
+        account = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="TWD"
+        )
+        yf_mock = MagicMock()
+        yf_mock.Ticker.side_effect = lambda *a, **k: _t.sleep(2.0) or MagicMock()
+        with patch("src.services.portfolio_service.yf", yf_mock), patch.object(ps, "FX_REFRESH_BUDGET_SECONDS", 0.2):
+            started = _t.monotonic()
+            summary = self.service.refresh_fx_rates(account_id=account["id"], as_of=d8)
+            elapsed = _t.monotonic() - started
+        self.assertLess(elapsed, 0.2 + 0.5)
+        self.assertEqual(summary["stale_count"], 1)
+
     def test_fx_call_within_budget_is_used(self) -> None:
         import src.services.portfolio_service as ps
 
