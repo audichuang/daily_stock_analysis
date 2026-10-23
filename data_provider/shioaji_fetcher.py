@@ -33,7 +33,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import pandas as pd
 
@@ -148,7 +148,7 @@ def _attempt_login() -> Optional[Any]:
 
     返回可用 api 或 None。半开探测名额在此消耗，与下游 record_* 一一配对。
     """
-    global _api, _logged_in, _logout_registered
+    global _api, _logged_in, _logout_registered, _contract_fail_since
     # 先验金钥：无金钥的直呼/竞态不应消耗熔断器半开探测名额（否则 is_available 占用名额却无 record 配对）。
     api_key, secret_key = _credentials()
     if not api_key or not secret_key:
@@ -174,6 +174,7 @@ def _attempt_login() -> Optional[Any]:
         return None
     _api = api
     _logged_in = True
+    _contract_fail_since = None  # a new session never inherits the old one's failure clock
     if not _logout_registered:
         import atexit
 
@@ -192,6 +193,49 @@ def _ensure_session() -> Optional[Any]:
         if _logged_in and _api is not None:
             return _api
         return _attempt_login()
+
+
+# 查合约连续丢例外（SDK 连线已死、session 物件却仍被快速路径沿用）的作废门槛。
+# 用「首次失败起持续秒数」而非次数：看板一轮就能打出几十次查询，10-14 那次 1 分钟内自愈的
+# 27 次错误若按次数会误触发；10-23 的 3.5 小时中断则在 60 秒后的下一次请求即触发。
+_CONTRACT_FAIL_WINDOW_S = 60.0
+_contract_fail_since: Optional[float] = None
+
+
+def _lookup_contract(api: Any, getter: Callable[[Any], Any]) -> Optional[Any]:
+    """查合约；丢例外时累计连续失败并在持续超过门槛时作废 session。查无（None/KeyError）不算失败。"""
+    global _api, _logged_in, _contract_fail_since
+    try:
+        contract = getter(api)
+    except KeyError:
+        return None
+    except Exception as e:
+        logger.debug("[ShioajiFetcher] 合约查询失败: %s", e)
+        now = time.monotonic()
+        # Timer, threshold check and invalidation share one critical section so a concurrent
+        # success or a session swap cannot make us act on another session's clock.
+        with _SESSION_LOCK:
+            if _api is not api:
+                return None  # stale session already replaced; its failures say nothing about the new one
+            if _contract_fail_since is None:
+                _contract_fail_since = now
+            if now - _contract_fail_since < _CONTRACT_FAIL_WINDOW_S:
+                return None
+            _api = None
+            _logged_in = False
+            _contract_fail_since = None
+        logger.warning("[ShioajiFetcher] 合约查询持续失败超过 %.0f 秒，作废 session 以便重新登入: %s: %s",
+                       _CONTRACT_FAIL_WINDOW_S, type(e).__name__, str(e)[:200])
+        try:
+            # Own daemon thread: logout on a dead SDK may hang, and must not occupy the shared 2-worker _executor.
+            threading.Thread(target=api.logout, daemon=True, name="shioaji-logout").start()
+        except Exception:
+            pass
+        return None
+    with _SESSION_LOCK:
+        if _api is api:
+            _contract_fail_since = None
+    return contract
 
 
 def _ns_to_iso(ns: Any) -> Optional[str]:
@@ -236,10 +280,7 @@ def shioaji_trend(stock_code: str, range_: str):
     if api is None:
         return None
     code = ShioajiFetcher._tw_code(stock_code)
-    try:
-        contract = api.Contracts.Stocks[code]
-    except Exception:
-        return None
+    contract = _lookup_contract(api, lambda a: a.Contracts.Stocks[code])
     if contract is None:
         return None
 
@@ -301,10 +342,7 @@ def shioaji_main_indices() -> Optional[list]:
         return None
     contracts, meta = [], {}
     for exchange, code, out_code, name in _TW_MAIN_INDEX_CONTRACTS:
-        try:
-            contract = getattr(api.Contracts.Indexs, exchange)[code]
-        except Exception:
-            contract = None
+        contract = _lookup_contract(api, lambda a, ex=exchange, c=code: getattr(a.Contracts.Indexs, ex)[c])
         if contract is not None:
             contracts.append(contract)
             meta[code] = (out_code, name)
@@ -382,10 +420,7 @@ def prime_snapshots(codes) -> int:
     contracts = []
     for raw in codes:
         bare = ShioajiFetcher._tw_code(raw)
-        try:
-            contract = api.Contracts.Stocks[bare]
-        except Exception:
-            contract = None
+        contract = _lookup_contract(api, lambda a, b=bare: a.Contracts.Stocks[b])
         if contract is not None and bare not in by_code:
             by_code[bare] = contract
             contracts.append(contract)
@@ -430,10 +465,12 @@ def prime_snapshots(codes) -> int:
 def _reset_for_tests() -> None:
     """清模组级状态 + 熔断器 + 批次缓存（供测试隔离）。"""
     global _api, _logged_in, _logout_registered
+    global _contract_fail_since
     with _SESSION_LOCK:
         _api = None
         _logged_in = False
         _logout_registered = False
+        _contract_fail_since = None
     with _SNAPSHOT_CACHE_LOCK:
         _SNAPSHOT_CACHE.clear()
     _login_breaker.reset()
@@ -502,11 +539,7 @@ class ShioajiFetcher(BaseFetcher):
             return None
 
         # 查合约：查无属 transient（非 session 死），不记 breaker failure。
-        try:
-            contract = api.Contracts.Stocks[code]
-        except Exception as e:
-            logger.debug("[ShioajiFetcher] 合约查询失败 %s: %s", code, e)
-            return None
+        contract = _lookup_contract(api, lambda a: a.Contracts.Stocks[code])
         if contract is None:
             return None
 
