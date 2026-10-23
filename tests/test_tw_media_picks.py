@@ -38,7 +38,8 @@ def test_resolve_order():
     assert mp.resolve("台積電公司", "2330", INDEX) == ("2330.TW", "code")
     # the name wins over a wrong code the LLM guessed
     assert mp.resolve("健鼎", "2330", INDEX) == ("3044.TW", "exact")
-    assert mp.resolve("隨便", "2330", INDEX) == ("2330.TW", "code_mismatch")
+    assert mp.resolve("隨便", "2330", INDEX) == (None, "unresolved")  # shares no character with 台積電
+    assert mp.resolve("台積隨便", "2330", INDEX) == ("2330.TW", "code_mismatch")
     assert mp.resolve("臻鼎", None, [("4958.TW", "臻鼎-KY", [])]) == ("4958.TW", "exact")
     assert mp.resolve("健鼎", None, INDEX) == ("3044.TW", "exact")
     assert mp.resolve("台50", None, INDEX) == ("0050.TW", "alias")
@@ -411,3 +412,56 @@ def test_cutoff_uses_the_upload_time_when_the_title_does_not_say_盤前(monkeypa
 def test_cutoff_without_an_upload_time_assumes_the_day_was_not_yet_public():
     # yt-dlp keeps upload_date but may drop the timestamp; a morning segment must not get that day's close
     assert mp.data_cutoff("20261006 盤中連線", mp.date(2026, 10, 6), None) == mp.date(2026, 10, 5)
+
+
+def test_fuzzy_is_vetoed_by_a_conflicting_llm_code():
+    idx = [("00708L.TW", "期元大S&P黃金正2", []), ("3257.TW", "虹冠電", [])]
+    # LLM code 00672L is not in the index; the gold fund is a near-name, not the oil fund
+    assert mp.resolve("期元大S&P原油正2", "00672L", idx) == (None, "unresolved")
+    assert mp.resolve("期元大S&P黃金正2", "00708L", idx)[1] == "exact"
+    # no LLM code: a longer name containing the input is still fuzzy, flagged for a human
+    assert mp.resolve("冠電", None, idx) == ("3257.TW", "fuzzy")
+
+
+def test_fuzzy_rejects_substring_and_tied_candidates():
+    idx = [("2905.TW", "三商", []), ("3257.TW", "虹冠電", []), ("4999.TW", "冠西電", []), ("2330.TW", "台積電", [])]
+    assert mp.resolve("三商銀", None, idx) == (None, "unresolved")  # candidate is a shorter name inside the input
+    # full company names with a suffix are not "a different, shorter company"
+    idx2 = [("2308.TW", "台達電", []), ("2454.TW", "聯發科", []), ("2383.TW", "台光電", [])] + idx
+    assert mp.resolve("台達電子", None, idx2) == ("2308.TW", "fuzzy")
+    assert mp.resolve("聯發科技", None, idx2) == ("2454.TW", "fuzzy")
+    assert mp.resolve("三商銀", None, idx2) == (None, "unresolved")
+    assert mp.resolve("冠電", None, idx) == (None, "unresolved")  # two equally close names
+    assert mp.resolve("台積", None, idx) == ("2330.TW", "fuzzy")  # genuine abbreviation still resolves
+
+
+def test_media_aliases_beat_a_wrong_llm_code(tmp_path):
+    f = tmp_path / "idx.json"
+    rows = [["5234.TW", "5234.TW", "達興材料", "", "", [], "TW"], ["6234.TWO", "6234.TWO", "高僑", "", "", [], "TW"],
+            ["6456.TW", "6456.TW", "GIS-KY", "", "", [], "TW"]]
+    f.write_text(json.dumps(rows), encoding="utf-8")
+    idx = mp.load_index(f)
+    assert mp.resolve("高橋", "5234", idx) == ("6234.TWO", "alias")
+    assert mp.resolve("業成", "6456", idx) == ("6456.TW", "alias")
+
+
+def test_every_media_alias_resolves_to_its_stock_against_a_conflicting_code():
+    idx = mp.load_index()
+    expected = {"台灣積體電路製造": "2330.TW", "日月光投資控股": "3711.TW", "高橋": "6234.TWO", "業成": "6456.TW",
+                "業成科技": "6456.TW", "走著瞧": "6902.TW", "走著瞧-創": "6902.TW"}  # independent of MEDIA_ALIASES
+    assert {a for al in mp.MEDIA_ALIASES.values() for a in al} == set(expected)  # new alias needs a line here
+    names = {c: n for c, n, _ in idx}
+    assert [names[c] for c in ("2330.TW", "3711.TW", "6234.TWO", "6456.TW", "6902.TW")] == [
+        "台積電", "日月光投控", "高僑", "GIS-KY", "GOGOLOOK"]
+    for alias, code in expected.items():
+        other = "2317" if code != "2317.TW" else "2330"  # valid code of a different stock
+        assert mp.resolve(alias, other, idx) == (code, "alias"), alias
+
+
+def test_code_mismatch_needs_half_the_name_shared_with_the_llm_code_company():
+    idx = mp.load_index()
+    # one shared character ("達") is not enough: 6140 is 訊達, the real company is 6112 邁達特
+    assert mp.resolve("麥達特", "6140", idx) == (None, "unresolved")
+    # half of a 2-char name shared is still a plausible misheard name
+    small = [("2330.TW", "泰昇", [])]
+    assert mp.resolve("泰山", "2330", small) == ("2330.TW", "code_mismatch")

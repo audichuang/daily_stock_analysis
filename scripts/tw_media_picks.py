@@ -128,9 +128,20 @@ def parse_answer(text: str) -> list[dict] | None:
     return [i for i in items if isinstance(i, dict) and i.get("name")]
 
 
+# Names the shows use that the official list does not carry, checked against stocks.index.json.
+# Only add one when the company is certain: a wrong alias beats the LLM's code and resolves silently.
+MEDIA_ALIASES = {
+    "2330.TW": ["台灣積體電路製造"],
+    "3711.TW": ["日月光投資控股"],
+    "6234.TWO": ["高橋"],  # misheard 高僑; same episode had it limit-up
+    "6456.TW": ["業成", "業成科技"],  # GIS-KY's former name
+    "6902.TW": ["走著瞧", "走著瞧-創"],  # GOGOLOOK's Chinese brand
+}
+
+
 def load_index(path=INDEX) -> list[tuple[str, str, list[str]]]:
     rows = json.loads(Path(path).read_text(encoding="utf-8"))
-    return [(r[0], r[2], r[5] or []) for r in rows if r[6] == "TW"]
+    return [(r[0], r[2], list(r[5] or []) + MEDIA_ALIASES.get(r[0], [])) for r in rows if r[6] == "TW"]
 
 
 def _norm(name: str) -> str:
@@ -159,6 +170,14 @@ def _by_name(parts, index) -> tuple[str, str] | None:
             if p in map(_norm, aliases):
                 return c, "alias"
     return None
+
+
+_COMPANY_SUFFIXES = ("電子", "科技", "工業")
+
+
+def _is_full_name(full: str, short: str) -> bool:
+    """True for 台達電子 / 聯發科技 vs 台達電 / 聯發科: the short name already uses the suffix's first char."""
+    return any(full.endswith(s) and full[:-len(s)] + s[0] == short for s in _COMPANY_SUFFIXES)
 
 
 def resolve(name: str, code: str | None, index, said: str | None = None) -> tuple[str | None, str]:
@@ -201,11 +220,26 @@ def resolve(name: str, code: str | None, index, said: str | None = None) -> tupl
         c, n = hit
         agree = not parts or any(p in (str(code).upper(), c.split(".")[0]) or p in _norm(n) or _norm(n) in p
                                   for p in parts)
+        if not agree and not any(len(set(p) & set(_norm(n))) * 2 >= len(p) for p in parts):
+            # Fewer than half of the name shared: the LLM's code belongs to another company (光紘 -> 3669 圓展).
+            return None, "unresolved"
         return c, "code" if agree else "code_mismatch"
     names = {_norm(n): c for c, n, _ in index}
     for p in parts:
-        close = difflib.get_close_matches(p, names, n=1, cutoff=0.67)
+        close = difflib.get_close_matches(p, names, n=2, cutoff=0.67)
+        # A name that is a strict substring of the input is a different, shorter company
+        # ("三商銀" -> 三商, a bank group is not the retailer); two equally close names are a coin flip
+        # ("冠電" -> 虹冠電 or 冠西電). Both stay unresolved instead of attaching the wrong quote.
+        if close and close[0] != p and close[0] in p and not _is_full_name(p, close[0]):
+            continue
+        if len(close) > 1 and difflib.SequenceMatcher(None, p, close[0]).ratio() == \
+                difflib.SequenceMatcher(None, p, close[1]).ratio():
+            continue
         if close:
+            # The LLM gave a code that is not in the index, so it is no evidence for this near-name
+            # (live run: "期元大S&P原油正2" with 00672L came back as the gold fund 00708L).
+            if code:  # a code that is in the index returned above
+                continue
             return names[close[0]], "fuzzy"
     return None, "unresolved"
 
