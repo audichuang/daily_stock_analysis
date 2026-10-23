@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from zoneinfo import ZoneInfo
 
 from data_provider.base import canonical_stock_code, normalize_stock_code
 from src.config import get_config
@@ -1647,11 +1648,13 @@ class PortfolioService:
         }
         for from_currency, to_currency in pairs:
             try:
-                rate = self._fetch_fx_rate_from_yfinance(
+                # One download feeds both today's rate and the history backfill.
+                closes = self._fetch_fx_closes_from_yfinance(
                     from_currency=from_currency,
                     to_currency=to_currency,
                     as_of_date=as_of_date,
                 )
+                rate = closes[-1][1] if closes else None
                 if rate is not None and rate > 0:
                     self.repo.save_fx_rate(
                         from_currency=from_currency,
@@ -1663,7 +1666,7 @@ class PortfolioService:
                     )
                     summary["updated_count"] += 1
                     self._backfill_fx_history(
-                        from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date
+                        from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date, closes=closes
                     )
                     continue
             except Exception as exc:
@@ -1718,36 +1721,38 @@ class PortfolioService:
         return [(idx.date(), float(value)) for idx, value in close.items() if float(value) > 0]
 
     @staticmethod
-    def _fetch_fx_rate_from_yfinance(
+    def _london_today() -> date:
+        """Today's date in London; yfinance FX daily bars are dated on that calendar."""
+        return datetime.now(ZoneInfo("Europe/London")).date()
+
+    def _backfill_fx_history(
+        self,
         *,
         from_currency: str,
         to_currency: str,
         as_of_date: date,
-    ) -> Optional[float]:
-        """Fetch latest available FX close rate around as_of date."""
-        closes = PortfolioService._fetch_fx_closes_from_yfinance(
-            from_currency=from_currency,
-            to_currency=to_currency,
-            as_of_date=as_of_date,
-        )
-        return closes[-1][1] if closes else None
+        closes: List[Tuple[date, float]],
+    ) -> None:
+        """Save finished daily bars under their own dates.
 
-    def _backfill_fx_history(self, *, from_currency: str, to_currency: str, as_of_date: date) -> None:
-        """Save finished daily bars before as_of under their own dates; never overwrite a row."""
+        Rows from manual entries are never touched; stale carries and automated
+        yfinance rows (possibly intraday values) are replaced by the finished close.
+        """
         try:
-            closes = self._fetch_fx_closes_from_yfinance(
-                from_currency=from_currency,
-                to_currency=to_currency,
-                as_of_date=as_of_date,
-            )
+            last_finished = min(as_of_date, self._london_today())
             for bar_date, value in closes:
-                # as_of's own bar may be intraday; today's rate is stored by the caller.
-                if bar_date >= as_of_date:
+                # A bar dated today (London) or later may still be open.
+                if bar_date >= last_finished:
                     continue
                 existing = self.repo.get_latest_fx_rate(
                     from_currency=from_currency, to_currency=to_currency, as_of=bar_date
                 )
-                if existing is not None and existing.rate_date == bar_date:
+                if (
+                    existing is not None
+                    and existing.rate_date == bar_date
+                    and not existing.is_stale
+                    and existing.source not in ("yfinance", "yfinance_backfill")
+                ):
                     continue
                 self.repo.save_fx_rate(
                     from_currency=from_currency,
