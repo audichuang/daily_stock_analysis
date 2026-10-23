@@ -140,6 +140,7 @@ const PORTFOLIO_RISK_DASHBOARD_TEXT = {
     active: '需处理',
     stable: '正常',
     unavailable: '不可用',
+    incomplete: '不完整',
     maxDrawdown: '最大回撤',
     topPosition: 'Top1',
     topSector: 'Top1',
@@ -167,6 +168,7 @@ const PORTFOLIO_RISK_DASHBOARD_TEXT = {
     active: 'Needs action',
     stable: 'Normal',
     unavailable: 'Unavailable',
+    incomplete: 'Incomplete',
     maxDrawdown: 'Max drawdown',
     topPosition: 'Top1',
     topSector: 'Top1',
@@ -194,6 +196,7 @@ const PORTFOLIO_RISK_DASHBOARD_TEXT = {
     active: '需處理',
     stable: '正常',
     unavailable: '不可用',
+    incomplete: '不完整',
     maxDrawdown: '最大回撤',
     topPosition: 'Top1',
     topSector: 'Top1',
@@ -389,6 +392,7 @@ function getPortfolioRiskAvailability(
       && drawdown.seriesPoints > 1
       && hasBooleanField(drawdown, 'fxStale')
       && drawdown.fxStale === false
+      && drawdown.fxMissing !== true
       && hasBooleanField(drawdown, 'alert'),
     stopLoss: priceCoverageAvailable
       && hasNumberField(stopLoss, 'triggeredCount')
@@ -511,7 +515,7 @@ function buildPortfolioRiskFlags(
       key: 'drawdown',
       label: text.drawdown,
       value: availability.drawdown ? formatPct(drawdown?.currentDrawdownPct) : '--',
-      detail: availability.drawdown ? `${text.maxDrawdown}: ${formatPct(drawdown?.maxDrawdownPct)}` : text.unavailable,
+      detail: availability.drawdown ? `${text.maxDrawdown}: ${formatPct(drawdown?.maxDrawdownPct)}${drawdown?.dataQuality === 'partial' ? ` (${text.incomplete})` : ''}` : text.unavailable,
       tone: availability.drawdown ? (drawdown?.alert ? 'danger' : 'success') : 'neutral',
     },
     {

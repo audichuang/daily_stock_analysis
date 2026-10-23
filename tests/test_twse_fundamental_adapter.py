@@ -19,6 +19,12 @@ from data_provider.twse_fundamental_adapter import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_local_valuation(monkeypatch):
+    # get_valuation reads market.valuation first; keep these offline tests off the real DB.
+    monkeypatch.setattr("market_data.market_repo.latest_valuation", lambda *a, **k: None)
+
+
 def test_bare_code_strips_suffix():
     assert _bare_code("2330.TW") == "2330"
     assert _bare_code("6488.TWO") == "6488"

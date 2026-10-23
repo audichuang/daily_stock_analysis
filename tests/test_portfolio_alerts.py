@@ -236,6 +236,30 @@ class PortfolioAlertsTestCase(unittest.TestCase):
         )
         self._assert_fx_unavailable(result, "max_drawdown_pct")
 
+    def test_drawdown_empty_or_single_point_series_is_unavailable(self) -> None:
+        for points in (0, 1):
+            report = _risk_report()
+            report["drawdown"].update({
+                "series_points": points, "max_drawdown_pct": 0.0, "data_quality": "partial",
+                "fx_excluded_dates": ["2026-01-01"],
+            })
+            result = evaluate_portfolio_risk_alert(
+                _risk_rule("portfolio_drawdown"), risk_service=FakeRiskService(report)
+            )
+            self.assertIsNone(result["observed_value"])
+            self.assertEqual(result["record_status"], "skipped")
+            self.assertNotIn("0.00%", result["message"])
+            self.assertFalse(json.loads(result["diagnostics"])["data_available"])
+
+    def test_drawdown_partial_series_message_is_marked_incomplete(self) -> None:
+        report = _risk_report()
+        report["drawdown"].update({"data_quality": "partial", "fx_excluded_dates": ["2026-01-01"]})
+        result = evaluate_portfolio_risk_alert(
+            _risk_rule("portfolio_drawdown"), risk_service=FakeRiskService(report)
+        )
+        self.assertIn("partial", result["message"])
+        self.assertEqual(json.loads(result["diagnostics"])["data_quality"], "partial")
+
     def test_none_readings_are_unavailable_even_without_fx_flag(self) -> None:
         report = _risk_report()
         report["concentration"]["top_weight_pct"] = None

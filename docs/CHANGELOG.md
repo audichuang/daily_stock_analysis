@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 個股 prompt 的台股量比改用 5 日均量口徑並標明口徑（Shioaji 的值改稱「較昨量」）；報價當下或傳入的盤別任一方是盤中，就標成盤中口徑並加警語，不把盤中部分量判成縮量；當日三大法人標註「初版，投信常於隔夜修正」；上市估值優先讀本地當日值並附日期
+- [修復] 持倉匯率回補改取倫敦日最後一根小時 K 當收盤（原本日 K 的 Close 其實是開盤）；離群檢查只擋與前後鄰居都偏離 >2% 的孤立尖刺，最新一根改與交叉匯率或前一筆非 stale 實值比對；每日快照追加 `fx_missing`，缺匯率時回撤回應標示不完整
 - [修復] 停利／停損文字中的數字比例（如「風險報酬比 1:1」）不再被當成欄位冒號，停利價不再抓到比例後面的價位（`MA5：118` 這類標籤照舊）
 - [修復] 上櫃減資改用 TPEx 官方「減資恢復買賣參考價」（`bulletin/revivt`）產生復權因子，不再以開盤價回推（誤差約 9%、跳空小的現金減資會漏記）；開盤價推導只在官方沒涵蓋時當備援
 - [修復] 大盤複盤同一場次同一語言只生成一次並重用，預熱快取在常駐服務中會清掉過期項目

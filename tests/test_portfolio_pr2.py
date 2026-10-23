@@ -38,6 +38,10 @@ def _reset_auth_globals() -> None:
     auth._rate_limit = {}
 
 
+# setUp patches the method away; keep the real one for tests of its own logic.
+_REAL_FETCH_FX_CROSS_RATE = PortfolioService.__dict__["_fetch_fx_cross_rate"].__func__
+
+
 class PortfolioPr2TestCase(unittest.TestCase):
     """End-to-end style tests for PR2 import, dedup, risk and fx behavior."""
 
@@ -70,6 +74,9 @@ class PortfolioPr2TestCase(unittest.TestCase):
         Config.reset_instance()
         DatabaseManager.reset_instance()
 
+        cross_patch = patch.object(PortfolioService, "_fetch_fx_cross_rate", return_value=None)
+        cross_patch.start()
+        self.addCleanup(cross_patch.stop)
         self.db = DatabaseManager.get_instance()
         self.service = PortfolioService()
         self.import_service = PortfolioImportService(portfolio_service=self.service)
@@ -791,7 +798,7 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertFalse(snapshot["fx_stale"])
 
     def _fx_frame(self, closes):
-        index = pd.DatetimeIndex([pd.Timestamp(d, tz="Asia/Shanghai") for d, _ in closes])
+        index = pd.DatetimeIndex([pd.Timestamp(d, tz="Europe/London") for d, _ in closes])
         return pd.DataFrame({"Close": [c for _, c in closes]}, index=index)
 
     def _refresh_usd_with_frame(self, frame, as_of):
@@ -809,21 +816,21 @@ class PortfolioPr2TestCase(unittest.TestCase):
         return row if row is not None and row.rate_date == on_date else None
 
     def test_fx_refresh_backfills_historic_bars_under_own_dates(self) -> None:
-        frame = self._fx_frame([("2026-01-05", 7.01), ("2026-01-06", float("nan")), ("2026-01-07", 7.03), ("2026-01-08", 7.99)])
+        frame = self._fx_frame([("2026-01-05", 7.01), ("2026-01-06", float("nan")), ("2026-01-07", 7.03), ("2026-01-08", 7.05)])
         self._refresh_usd_with_frame(frame, date(2026, 1, 8))
         self.assertAlmostEqual(self._fx_row(date(2026, 1, 5)).rate, 7.01)
         self.assertEqual(self._fx_row(date(2026, 1, 5)).source, "yfinance_backfill")
         self.assertIsNone(self._fx_row(date(2026, 1, 6)))  # NaN close skipped
         self.assertAlmostEqual(self._fx_row(date(2026, 1, 7)).rate, 7.03)
         today = self._fx_row(date(2026, 1, 8))  # today's row keeps the original behaviour
-        self.assertAlmostEqual(today.rate, 7.99)
+        self.assertAlmostEqual(today.rate, 7.05)
         self.assertEqual(today.source, "yfinance")
 
     def test_fx_refresh_backfill_never_overwrites_manual_rows(self) -> None:
         self.service.repo.save_fx_rate(
             from_currency="USD", to_currency="CNY", rate_date=date(2026, 1, 5), rate=6.5, source="manual", is_stale=False
         )
-        frame = self._fx_frame([("2026-01-05", 7.01), ("2026-01-07", 7.03), ("2026-01-08", 7.99)])
+        frame = self._fx_frame([("2026-01-05", 7.01), ("2026-01-07", 7.03), ("2026-01-08", 7.05)])
         self._refresh_usd_with_frame(frame, date(2026, 1, 8))
         kept = self._fx_row(date(2026, 1, 5))
         self.assertAlmostEqual(kept.rate, 6.5)
@@ -844,7 +851,7 @@ class PortfolioPr2TestCase(unittest.TestCase):
 
     def test_fx_backfill_overwrites_stale_row_with_real_close(self) -> None:
         self._seed_fx(date(2026, 1, 5), 6.5, "manual", True)  # stale carry of an earlier rate
-        frame = self._london_frame([("2026-01-05", 7.01), ("2026-01-08", 7.99)])
+        frame = self._london_frame([("2026-01-05", 7.01), ("2026-01-08", 7.05)])
         self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 8))
         row = self._fx_row(date(2026, 1, 5))
         self.assertAlmostEqual(row.rate, 7.01)
@@ -852,7 +859,7 @@ class PortfolioPr2TestCase(unittest.TestCase):
 
     def test_fx_backfill_overwrites_yfinance_intraday_row_with_close(self) -> None:
         self._seed_fx(date(2026, 1, 7), 7.00, "yfinance", False)  # same-day refresh value
-        frame = self._london_frame([("2026-01-07", 7.03), ("2026-01-08", 7.99)])
+        frame = self._london_frame([("2026-01-07", 7.03), ("2026-01-08", 7.05)])
         self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 8))
         row = self._fx_row(date(2026, 1, 7))
         self.assertAlmostEqual(row.rate, 7.03)
@@ -860,17 +867,155 @@ class PortfolioPr2TestCase(unittest.TestCase):
 
     def test_fx_backfill_keeps_manual_row(self) -> None:
         self._seed_fx(date(2026, 1, 7), 6.5, "manual", False)
-        frame = self._london_frame([("2026-01-07", 7.03), ("2026-01-08", 7.99)])
+        frame = self._london_frame([("2026-01-07", 7.03), ("2026-01-08", 7.05)])
         self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 8))
         self.assertAlmostEqual(self._fx_row(date(2026, 1, 7)).rate, 6.5)
 
     def test_fx_backfill_skips_bar_still_open_in_london(self) -> None:
         # Taipei 2026-01-08 03:00 is London 2026-01-07 19:00: the 01-07 bar is still open.
-        frame = self._london_frame([("2026-01-06", 7.02), ("2026-01-07", 7.55)])
+        frame = self._london_frame([("2026-01-06", 7.02), ("2026-01-07", 7.04)])
         self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 7))
         self.assertAlmostEqual(self._fx_row(date(2026, 1, 6)).rate, 7.02)
         self.assertIsNone(self._fx_row(date(2026, 1, 7)))
-        self.assertAlmostEqual(self._fx_row(date(2026, 1, 8)).rate, 7.55)  # today's rate unchanged
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 8)).rate, 7.04)  # today's rate unchanged
+
+    # ---- outlier filter: only isolated spikes are rejected ----
+    def _filter(self, closes, as_of=date(2026, 1, 8), pair=("USD", "CNY"), london_today=date(2026, 1, 8)):
+        with patch.object(PortfolioService, "_london_today", return_value=london_today):
+            return self.service._filter_fx_outliers(
+                from_currency=pair[0], to_currency=pair[1], as_of_date=as_of, closes=closes
+            )
+
+    def test_fx_outlier_isolated_spike_rejected(self) -> None:
+        closes = [(date(2026, 1, 5), 7.30), (date(2026, 1, 6), 6.00), (date(2026, 1, 7), 7.31), (date(2026, 1, 8), 7.32)]
+        self.assertEqual([d for d, _ in self._filter(closes)], [date(2026, 1, 5), date(2026, 1, 7), date(2026, 1, 8)])
+
+    def test_fx_outlier_real_jump_accepted(self) -> None:
+        closes = [(date(2026, 1, 5), 7.30), (date(2026, 1, 6), 7.60), (date(2026, 1, 7), 7.61)]
+        self.assertEqual(self._filter(closes), closes)
+
+    def test_fx_outlier_latest_checked_against_cross_rate(self) -> None:
+        closes = [(date(2026, 1, 7), 0.2050), (date(2026, 1, 8), 0.1962)]
+        kw = {"pair": ("TWD", "CNY")}
+        with patch.object(PortfolioService, "_fetch_fx_cross_rate", return_value=0.2047):
+            self.assertEqual(self._filter(closes, **kw), closes[:1])
+        with patch.object(PortfolioService, "_fetch_fx_cross_rate", return_value=0.1963):
+            self.assertEqual(self._filter(closes, **kw), closes)  # cross says the new level is real
+
+    def test_fx_outlier_cross_rate_ignored_for_historical_as_of(self) -> None:
+        closes = [(date(2026, 1, 7), 7.30), (date(2026, 1, 8), 7.31)]
+        with patch.object(PortfolioService, "_fetch_fx_cross_rate", return_value=7.60):
+            out = self._filter(closes, pair=("TWD", "CNY"), london_today=date(2026, 6, 1))
+        self.assertEqual(out, closes)
+
+    def test_fx_cross_rate_none_when_a_leg_is_usd(self) -> None:
+        yf_mock = MagicMock()
+        yf_mock.Ticker.return_value.history.return_value = self._fx_frame([("2026-01-08", 20.0)])
+        with patch("src.services.portfolio_service.yf", yf_mock):
+            self.assertIsNone(_REAL_FETCH_FX_CROSS_RATE(from_currency="USD", to_currency="TWD"))
+            self.assertIsNone(_REAL_FETCH_FX_CROSS_RATE(from_currency="TWD", to_currency="USD"))
+            self.assertAlmostEqual(
+                _REAL_FETCH_FX_CROSS_RATE(from_currency="TWD", to_currency="CNY"), 1.0
+            )
+
+    def test_fx_refresh_rejected_latest_still_backfills_accepted_history(self) -> None:
+        self._seed_fx(date(2026, 1, 2), 7.20, "yfinance", False)
+        frame = self._fx_frame([("2026-01-05", 7.31), ("2026-01-06", 7.32), ("2026-01-07", 7.33), ("2026-01-08", 6.00)])
+        self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 8))
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 7)).rate, 7.33)
+        today = self._fx_row(date(2026, 1, 8))
+        self.assertTrue(today.is_stale)
+        self.assertAlmostEqual(today.rate, 7.33)
+
+    def test_fx_outlier_latest_garbage_rejected_when_previous_row_is_stale_carry(self) -> None:
+        self._seed_fx(date(2026, 1, 5), 7.30, "yfinance", False)
+        self._seed_fx(date(2026, 1, 6), 7.30, "yfinance", True)  # stale carry must not end the search
+        self._seed_fx(date(2026, 1, 7), 7.30, "yfinance", True)
+        self.assertEqual(self._filter([(date(2026, 1, 8), 6.00)]), [])
+        self.assertEqual(self._filter([(date(2026, 1, 8), 7.31)]), [(date(2026, 1, 8), 7.31)])
+
+    def test_fx_outlier_latest_garbage_rejected_after_long_stale_streak(self) -> None:
+        self._seed_fx(date(2026, 1, 1), 7.30, "yfinance", False)
+        for day in range(2, 9):  # 7 stale carries: the real row is 8 days before the newest bar
+            self._seed_fx(date(2026, 1, day), 7.30, "yfinance", True)
+        self.assertEqual(self._filter([(date(2026, 1, 9), 6.00)]), [])
+        self.assertEqual(self._filter([(date(2026, 1, 9), 7.31)]), [(date(2026, 1, 9), 7.31)])
+
+    def test_fx_outlier_reference_survives_arbitrarily_long_stale_streak(self) -> None:
+        self._seed_fx(date(2026, 1, 1), 7.30, "yfinance", False)
+        for day in range(2, 10):  # 8 stale carries; differing value proves they are skipped, not used
+            self._seed_fx(date(2026, 1, day), 6.10, "yfinance", True)
+        self.assertEqual(self._filter([(date(2026, 1, 10), 6.00)]), [])
+        self.assertEqual(self._filter([(date(2026, 1, 10), 7.31)]), [(date(2026, 1, 10), 7.31)])
+        self._seed_fx(date(2026, 1, 1), 7.30, "yfinance", False)
+        for day in range(2, 40):  # a month-long streak, crossing into February
+            self._seed_fx(date(2026, 1, 1) + timedelta(days=day - 1), 7.30, "yfinance", True)
+        self.assertEqual(self._filter([(date(2026, 2, 10), 6.00)], as_of=date(2026, 2, 10)), [])
+
+    def test_fx_refresh_filter_failure_does_not_carry_raw_latest_bar(self) -> None:
+        self._seed_fx(date(2026, 1, 7), 7.30, "yfinance", False)
+        frame = self._fx_frame([("2026-01-06", 7.31), ("2026-01-07", 7.32), ("2026-01-08", 6.00)])
+        with patch.object(PortfolioService, "_last_real_stored_rate", side_effect=RuntimeError("db down")):
+            self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 8))
+        today = self._fx_row(date(2026, 1, 8))
+        self.assertTrue(today.is_stale)
+        self.assertAlmostEqual(today.rate, 7.30)  # last stored row, never the unchecked raw 6.00
+
+    def test_fx_refresh_rejected_latest_carries_from_accepted_bar_over_same_day_carry(self) -> None:
+        self._seed_fx(date(2026, 1, 2), 7.20, "yfinance", False)
+        self._seed_fx(date(2026, 1, 8), 7.20, "yfinance", True)  # carry written by an earlier failed refresh
+        frame = self._fx_frame([("2026-01-05", 7.31), ("2026-01-06", 7.32), ("2026-01-07", 7.33), ("2026-01-08", 6.00)])
+        self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 8))
+        today = self._fx_row(date(2026, 1, 8))
+        self.assertTrue(today.is_stale)
+        self.assertAlmostEqual(today.rate, 7.33)
+
+    def test_fx_outlier_no_reference_accepts(self) -> None:
+        self.assertEqual(self._filter([(date(2026, 1, 8), 6.00)]), [(date(2026, 1, 8), 6.00)])
+
+    def test_fx_refresh_rejected_latest_does_not_become_today_rate(self) -> None:
+        self._seed_fx(date(2026, 1, 7), 7.30, "yfinance", False)
+        self._refresh_usd_with_frame(self._fx_frame([("2026-01-08", 6.00)]), date(2026, 1, 8))
+        today = self._fx_row(date(2026, 1, 8))
+        self.assertTrue(today.is_stale)
+        self.assertAlmostEqual(today.rate, 7.30)
+
+    # ---- close selection: 1h last bar > next daily Open > daily Close ----
+    def _fetch_with(self, hourly, daily, as_of=date(2026, 1, 8)):
+        def history(**kw):
+            return hourly if kw["interval"] == "1h" else daily
+
+        yf_mock = MagicMock()
+        yf_mock.Ticker.return_value.history.side_effect = history
+        with patch("src.services.portfolio_service.yf", yf_mock):
+            return PortfolioService._fetch_fx_closes_from_yfinance(
+                from_currency="USD", to_currency="CNY", as_of_date=as_of
+            )
+
+    @staticmethod
+    def _ohlc(rows):
+        index = pd.DatetimeIndex([pd.Timestamp(t, tz="Europe/London") for t, *_ in rows])
+        return pd.DataFrame(
+            {"Open": [o for _, o, _ in rows], "Close": [c for _, _, c in rows]}, index=index
+        )
+
+    def test_fx_fetch_uses_last_hourly_bar_of_london_day(self) -> None:
+        hourly = self._ohlc([("2026-01-06 00:00", 7.0, 7.00), ("2026-01-06 23:00", 7.0, 7.05)])
+        daily = self._ohlc([("2026-01-06", 7.0, 6.90), ("2026-01-07", 7.5, 7.5)])
+        out = dict(self._fetch_with(hourly, daily))
+        self.assertAlmostEqual(out[date(2026, 1, 6)], 7.05)
+
+    def test_fx_fetch_falls_back_to_next_daily_open_then_daily_close(self) -> None:
+        daily = self._ohlc([("2026-01-05", 7.0, 6.90), ("2026-01-06", 7.1, 7.2)])
+        out = dict(self._fetch_with(None, daily))
+        self.assertAlmostEqual(out[date(2026, 1, 5)], 7.1)  # next bar's Open
+        self.assertAlmostEqual(out[date(2026, 1, 6)], 7.2)  # no successor: daily Close (warned)
+
+    def test_fx_fetch_hourly_beats_daily_for_same_day(self) -> None:
+        hourly = self._ohlc([("2026-01-05 22:00", 7.0, 7.33)])
+        daily = self._ohlc([("2026-01-05", 7.0, 6.90), ("2026-01-06", 7.1, 7.2)])
+        out = dict(self._fetch_with(hourly, daily))
+        self.assertAlmostEqual(out[date(2026, 1, 5)], 7.33)
 
     def test_fx_refresh_downloads_pair_once(self) -> None:
         account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="CNY")
@@ -879,11 +1024,11 @@ class PortfolioPr2TestCase(unittest.TestCase):
         )
         yf_mock = MagicMock()
         yf_mock.Ticker.return_value.history.return_value = self._london_frame(
-            [("2026-01-07", 7.03), ("2026-01-08", 7.99)]
+            [("2026-01-07", 7.03), ("2026-01-08", 7.05)]
         )
         with patch("src.services.portfolio_service.yf", yf_mock):
             self.service.refresh_fx_rates(account_id=account["id"], as_of=date(2026, 1, 8))
-        self.assertEqual(yf_mock.Ticker.return_value.history.call_count, 1)
+        self.assertEqual(yf_mock.Ticker.return_value.history.call_count, 2)  # 1h + 1d
 
     def test_fx_refresh_without_as_of_bar_saves_last_bar_under_its_own_date(self) -> None:
         # No bar for as_of itself: today's row takes the last close (old behaviour)
@@ -981,6 +1126,35 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertEqual(dd["fx_excluded_dates"], ["2026-01-01", "2026-01-02"])
         self.assertEqual(dd["series_points"], 1)
 
+    def test_risk_drawdown_excludes_days_snapshot_flagged_fx_missing_in_account(self) -> None:
+        # TWD 帳戶持有 USD 現金、沒有 USD/TWD：TWD->CNY 查得到，但帳戶 equity 本身已是 1:1 假數字。
+        tw = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
+        self.service.record_cash_ledger(
+            account_id=tw["id"], event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="TWD"
+        )
+        self.service.record_cash_ledger(
+            account_id=tw["id"], event_date=date(2026, 1, 1), direction="in", amount=100.0, currency="USD"
+        )
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 1),
+            rate=0.2, source="manual", is_stale=False,
+        )
+
+        report = self.risk_service.get_risk_report(as_of=date(2026, 1, 3), cost_method="fifo")
+
+        dd = report["drawdown"]
+        # Payload flags only exclude their days; fx_missing still reflects the current rate table (TWD->CNY is present).
+        self.assertFalse(dd["fx_missing"])
+        self.assertEqual(dd["fx_missing_pairs"], [])
+        self.assertEqual(dd["fx_excluded_dates"], ["2026-01-01", "2026-01-02", "2026-01-03"])
+        self.assertEqual(dd["series_points"], 0)
+        self.assertEqual(dd["data_quality"], "partial")
+
+    def test_risk_drawdown_data_quality_partial_only_when_dates_excluded(self) -> None:
+        self._risk_fx_fixture(date(2026, 1, 3))
+        partial = self.risk_service.get_risk_report(as_of=date(2026, 1, 3), cost_method="fifo")["drawdown"]
+        self.assertEqual(partial["data_quality"], "partial")
+
     def test_risk_drawdown_with_all_fx_present_is_unchanged(self) -> None:
         # 反向：匯率齊全時不剔除任何一天、不標旗標。
         self._risk_fx_fixture(date(2026, 1, 1))
@@ -991,6 +1165,7 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertFalse(dd["fx_missing"])
         self.assertEqual(dd["fx_missing_pairs"], [])
         self.assertEqual(dd["fx_excluded_dates"], [])
+        self.assertEqual(dd["data_quality"], "ok")
         self.assertEqual(dd["series_points"], 3)
         self.assertFalse(report["concentration"]["fx_missing"])
         self.assertIsNotNone(report["concentration"]["top_weight_pct"])

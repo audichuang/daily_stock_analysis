@@ -207,6 +207,15 @@ def _is_tw_market(code: str) -> bool:
     return is_suffix_market_symbol(code, "tw")
 
 
+def _tw_inst_is_preliminary(record_date: Any) -> bool:
+    """True when a 三大法人 record is dated today (Taipei): the first release, revised overnight."""
+    from zoneinfo import ZoneInfo
+
+    digits = "".join(ch for ch in str(record_date or "") if ch.isdigit())
+    today = datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y%m%d")
+    return digits == today
+
+
 def _is_etf_code(code: str) -> bool:
     """判定 A 股 ETF 基金代码（保守规则）。"""
     normalized = normalize_stock_code(code)
@@ -4552,6 +4561,8 @@ class DataFetcherManager:
                     "unit": tw_record.get("unit"),
                     "date": tw_record.get("date"),
                     "source": tw_record.get("source"),
+                    # 當日（18:00 抓到的）T86/TPEx 是初版，投信欄常於隔夜修正；非當日資料視為定版。
+                    "is_preliminary": _tw_inst_is_preliminary(tw_record.get("date")),
                 },
                 [{"provider": tw_record.get("source", "tw-institutional"), "result": "ok", "duration_ms": 0}],
                 [],

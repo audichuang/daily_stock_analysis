@@ -4624,6 +4624,26 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 """
 
         # 添加实时行情数据（量比、换手率等）
+        _rt_ctx = context.get('realtime') if isinstance(context.get('realtime'), dict) else {}
+        _vr_basis = _rt_ctx.get('volume_ratio_basis')
+        _vr_prev = _rt_ctx.get('volume_ratio_vs_prev')
+        # basis is a language-neutral code ("avg5"), rendered per language here.
+        _vr_basis_en = {
+            "avg5": " (vs 5-day avg volume)",
+            "avg5_intraday": " (vs 5-day avg volume; intraday cumulative, not time-adjusted)",
+        }.get(_vr_basis, "")
+        _vr_basis_zh = {
+            "avg5": "（對5日均量）",
+            "avg5_intraday": "（對5日均量；盤中累計、未按時間換算）",
+        }.get(_vr_basis, "")
+        _vr_prev_row_en = (
+            f"| Volume vs Yesterday (cumulative volume / yesterday's volume, not the 5-day basis) | {_vr_prev} | |\n"
+            if _vr_prev is not None else ""
+        )
+        _vr_prev_row_zh = (
+            f"| 較昨量（當日累計量／昨量，非5日均量口徑） | {_vr_prev} | |\n"
+            if _vr_prev is not None else ""
+        )
         if 'realtime' in context and english:
             rt = context['realtime']
             if _tw_val:
@@ -4643,8 +4663,8 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 | Indicator | Value | Interpretation |
 |------|------|------|
 | Current Price | {rt.get('price', 'N/A')} | |
-| **Volume Ratio** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
-| **Turnover Rate** | **{rt.get('turnover_rate', 'N/A')}%** | |
+| **Volume Ratio{_vr_basis_en}** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
+{_vr_prev_row_en}| **Turnover Rate** | **{rt.get('turnover_rate', 'N/A')}%** | |
 {pe_pb_rows_en}| Total Market Cap | {self._format_amount(rt.get('total_mv'), prompt_market, report_language)} | |
 | Float Market Cap | {self._format_amount(rt.get('circ_mv'), prompt_market, report_language)} | |
 | 60-Day Change | {rt.get('change_60d', 'N/A')}% | Medium-term performance |
@@ -4668,8 +4688,8 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 | {L("指標", "指标")} | {L("數值", "数值")} | {L("解讀", "解读")} |
 |------|------|------|
 | {L("目前價格", "当前价格")} | {rt.get('price', 'N/A')} {ccy} | |
-| **{L("量比", "量比")}** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
-| **{L("週轉率", "换手率")}** | **{rt.get('turnover_rate', 'N/A')}%** | |
+| **{L("量比", "量比")}{_vr_basis_zh}** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
+{_vr_prev_row_zh}| **{L("週轉率", "换手率")}** | **{rt.get('turnover_rate', 'N/A')}%** | |
 {pe_pb_rows_zh}| {L("總市值", "总市值")} | {self._format_amount(rt.get('total_mv'), prompt_market, report_language)} | |
 | {L("流通市值", "流通市值")} | {self._format_amount(rt.get('circ_mv'), prompt_market, report_language)} | |
 | {L("60日漲跌幅", "60日涨跌幅")} | {rt.get('change_60d', 'N/A')}% | {L("中期表現", "中期表现")} |
@@ -4897,6 +4917,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 for key in ("foreign_net", "trust_net", "dealer_net", "total_net")
             )
         ):
+            _prelim = institution_data.get('is_preliminary') is True
+            _inst_prelim_en = " (preliminary; investment-trust figures are often revised overnight)" if _prelim else ""
+            _inst_prelim_zh = "（初版，投信常於隔夜修正）" if _prelim else ""
             if english:
                 prompt += f"""
 ### Three Major Institutional Investors (Taiwan chip filter, net buy/sell, unit: shares)
@@ -4906,7 +4929,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 | Investment Trusts | {institution_data.get('trust_net', 'N/A')} | Persistent trust buying often accompanies medium-term longs |
 | Dealers | {institution_data.get('dealer_net', 'N/A')} | Short-term hedging/proprietary direction reference |
 | Three Institutions Total | {institution_data.get('total_net', 'N/A')} | The most watched chip signal in Taiwan stocks |
-| Data Date | {institution_data.get('date', 'N/A')} | Source {institution_data.get('source', 'N/A')} |
+| Data Date | {institution_data.get('date', 'N/A')} | Source {institution_data.get('source', 'N/A')}{_inst_prelim_en} |
 
 > The three major institutional investors are the chip filter for Taiwan stocks (similar in role to A-share main capital flow/Dragon Tiger list, but with a different definition that must not be mixed): foreign and investment-trust net buying in the same direction supports the price, net selling in the same direction suppresses it. Use this to judge the Taiwan chip structure; when this data is present, do not write "chip structure: data unavailable".
 """
@@ -4919,7 +4942,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 | {L("投信", "投信")} | {institution_data.get('trust_net', 'N/A')} | {L("投信持續買超常伴隨中線做多", "投信持续买超常伴随中线做多")} |
 | {L("自營商", "自营商")} | {institution_data.get('dealer_net', 'N/A')} | {L("短線避險/自營方向參考", "短线避险/自营方向参考")} |
 | {L("三大法人合計", "三大法人合计")} | {institution_data.get('total_net', 'N/A')} | {L("台股最受關注的籌碼信號", "台股最受关注的筹码信号")} |
-| {L("資料日期", "资料日期")} | {institution_data.get('date', 'N/A')} | {L("來源", "来源")} {institution_data.get('source', 'N/A')} |
+| {L("資料日期", "资料日期")} | {institution_data.get('date', 'N/A')} | {L("來源", "来源")} {institution_data.get('source', 'N/A')}{_inst_prelim_zh} |
 
 > {L("三大法人是台股的籌碼過濾器（相當於 A 股主力資金/龍虎榜的角色，但口徑不同、不可混用）：外資與投信同向淨買支持價格、同向淨賣壓制價格。請據此判斷台股籌碼結構，不要在有本數據時寫「籌碼結構：數據缺失」。", "三大法人是台股的筹码过滤器（相当于 A 股主力资金/龙虎榜的角色，但口径不同、不可混用）：外资与投信同向净买支持价格、同向净卖压制价格。请据此判断台股筹码结构，不要在有本数据时写“筹码结构：数据缺失”。")}
 """
