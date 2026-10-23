@@ -236,25 +236,35 @@ def infer_rows(conn, known, start):
     px["prev"] = g["close"].shift(1)
     px["seq"] = g.cumcount()
     px["gap"] = g["date"].diff().dt.days
+    px["prev_date"] = g["date"].shift(1)
     px = px[px["prev"].notna()]
     px["factor"] = px["open"] / px["prev"]
     # 偵測仍看開盤跳空；但事件日的官方漲跌是對恢復後參考價算的，close - change 就是參考價，
     # 比開盤價準（實測開盤代理與官方差約 9%）。只在 change 有值、參考價為正、且開盤落在
-    # 參考價 ±11% 內才採用——change 為 0 常是缺值佔位，不可信時退回開盤價。
+    # 參考價 ±11% 內才採用——change 為 0 常是缺值佔位（歷史 MI_INDEX 的「X」存成 0），
+    # 此時 close - change 退化成收盤價，會抹掉事件日報酬，所以排除，退回開盤價。
     ref = px["close"] - px["change"]
-    ok = ref.notna() & (ref > 0) & ((px["open"] / ref - 1).abs() <= 0.11)
+    ok = (ref.notna() & (px["change"] != 0) & (ref > 0)
+          & ((px["open"] / ref - 1).abs() <= 0.11))
     px["ref"] = ref.where(ok, px["open"])
 
     # 門檻跟著當時實際的漲跌幅限制走：2015-06-01 前是 ±7%，之後才放寬為 ±10%。
     # 固定用 15% 會漏掉舊制下 7~15% 的公司行動（獨立審查指出）。取 1.1 倍緩衝。
     limit = np.where(px["date"] < pd.Timestamp(PRICE_LIMIT_CHANGE), 0.07, 0.10) * 1.1
     jump = px[(px["factor"] - 1).abs() > limit].copy()
-    explained = pd.Series([(s, d) in known for s, d in zip(jump["stock_id"], jump["date"])],
-                          index=jump.index)
+    # 已知事件的日期可能落在沒有 K 棒的日子（恢復日當天該檔未成交），跳空就出現在下一根 K，
+    # 精確比對會漏掉而重複還原。所以「前一根 K 之後、本根 K 以前（含當天）」有任何已知事件都算已解釋。
+    known_by_stock = {}
+    for s_, d_ in known:
+        known_by_stock.setdefault(s_, []).append(pd.Timestamp(d_))
+    explained = pd.Series(
+        [any(pd.Timestamp(pd_) < k <= d for k in known_by_stock.get(s, ()))
+         for s, d, pd_ in zip(jump["stock_id"], jump["date"], jump["prev_date"])],
+        index=jump.index)
     jump = jump[~explained & (jump["seq"] >= MIN_BARS_BEFORE)]
 
     # 只推導普通股。非普通股（ETF/ETN/TDR）不受漲跌幅限制，價格推導必然製造假事件。
-    jump = jump[jump["stock_id"].map(is_common_stock)].copy()
+    jump = jump[jump["stock_id"].map(is_common_stock).astype(bool)].copy()
     jump["factor"] = jump["ref"] / jump["prev"]
     snapped = jump["factor"].map(_snap_to_split)
     jump["factor"] = snapped.map(lambda s: s[0])

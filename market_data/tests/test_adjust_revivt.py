@@ -104,12 +104,16 @@ def test_refresh_recent_refuses_to_erase_existing_revivt(monkeypatch):
 FUTURE = date(2100, 1, 4)
 
 
-def _infer(monkeypatch, stock_id, bars):
-    """Run infer_rows on in-memory prices (no DB access)."""
+def _infer_df(monkeypatch, stock_id, bars, known=frozenset()):
     px = pd.DataFrame([{"stock_id": stock_id, "date": pd.Timestamp(d), "open": o,
                         "close": c, "change": ch} for d, o, c, ch in bars])
     monkeypatch.setattr(adjust.pd, "read_sql", lambda *a, **k: px)
-    return adjust.infer_rows(None, set(), FUTURE).iloc[0]
+    return adjust.infer_rows(None, set(known), FUTURE)
+
+
+def _infer(monkeypatch, stock_id, bars):
+    """Run infer_rows on in-memory prices (no DB access)."""
+    return _infer_df(monkeypatch, stock_id, bars).iloc[0]
 
 
 def _bars(open_, close, change):
@@ -134,3 +138,47 @@ def test_infer_ignores_reference_far_from_open(monkeypatch):
     # close - change = 27，離 open 15.10 超過 11%：視為壞資料，退回開盤價
     row = _infer(monkeypatch, "1236", _bars(15.10, 17.0, -10.0))
     assert row["reference_price"] == pytest.approx(15.10)
+
+
+def _bars_at(gap, price, open_, close, change):
+    bars = [(FUTURE + timedelta(days=i), price, price, 0.0) for i in range(8)]
+    bars.append((FUTURE + timedelta(days=7 + gap), open_, close, change))
+    return bars
+
+
+def test_infer_change_zero_placeholder_falls_back_to_open(monkeypatch):
+    # change=0 是缺值佔位：不可把 close(10.5) 當參考價，否則 factor 0.525 而非 0.5
+    row = _infer(monkeypatch, "1237", _bars_at(1, 20.0, 10.0, 10.5, 0.0))
+    assert row["reference_price"] == pytest.approx(10.0)
+    assert row["factor"] == pytest.approx(0.5)
+
+
+def test_infer_change_zero_long_gap_split_survives(monkeypatch):
+    row = _infer(monkeypatch, "1238", _bars_at(10, 20.0, 10.0, 9.5, 0.0))
+    assert row["kind"] == "split" and row["factor"] == pytest.approx(0.5)
+
+
+def test_infer_nonzero_change_still_used(monkeypatch):
+    row = _infer(monkeypatch, "1239", _bars_at(1, 20.0, 10.0, 10.5, 0.5))
+    assert row["reference_price"] == pytest.approx(10.0)  # close - change
+    row = _infer(monkeypatch, "1240", _bars_at(1, 10.0, 15.10, 17.0, 0.65))
+    assert row["reference_price"] == pytest.approx(16.35)
+
+
+# --- known 事件落在沒有 K 棒的日子 ---
+def test_known_event_on_barless_day_explains_next_bar_gap(monkeypatch):
+    bars = _bars_at(3, 20.0, 10.0, 10.0, 0.0)
+    event_day = FUTURE + timedelta(days=7 + 2)  # 前一根 K 之後、跳空 K 之前，當天無 K
+    assert len(_infer_df(monkeypatch, "1241", bars)) == 1
+    assert _infer_df(monkeypatch, "1241", bars, {("1241", event_day)}).empty
+    # 同日精確命中仍有效
+    assert _infer_df(monkeypatch, "1241", bars, {("1241", FUTURE + timedelta(days=10))}).empty
+
+
+def test_known_event_outside_gap_interval_does_not_explain(monkeypatch):
+    bars = _bars_at(3, 20.0, 10.0, 10.0, 0.0)
+    before = FUTURE + timedelta(days=3)   # 早於前一根 K（含）
+    after = FUTURE + timedelta(days=11)   # 晚於跳空 K
+    assert len(_infer_df(monkeypatch, "1242", bars, {("1242", before), ("1242", FUTURE + timedelta(days=7))})) == 1
+    assert len(_infer_df(monkeypatch, "1242", bars, {("1242", after)})) == 1
+    assert len(_infer_df(monkeypatch, "1242", bars, {("9999", FUTURE + timedelta(days=9))})) == 1
