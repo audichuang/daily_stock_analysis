@@ -402,3 +402,145 @@ def test_snap_volume_matches_db_daily_unit_cross_source():
     db_daily_volume_shares = 4_812_882
     ratio = quote.volume / db_daily_volume_shares
     assert 0.85 <= ratio <= 1.0
+
+
+# --- 查合约连续失败 → 作废死 session（10-23 NAS 事故回归）-------------------
+
+class _Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def _dead_contract_env(monkeypatch, *, fail=True):
+    """登入成功的 fake SDK；fail 开关控制查合约是否丢 SessionNotEstablished 类例外。"""
+    monkeypatch.setattr(sf, "_HAS_SHIOAJI", True)
+    monkeypatch.setenv("SHIOAJI_API_KEY", "k")
+    monkeypatch.setenv("SHIOAJI_SECRET_KEY", "s")
+    state = {"fail": fail, "login": 0}
+    clock = _Clock()
+    monkeypatch.setattr(sf.time, "monotonic", clock)
+
+    class _Table:
+        def __getitem__(self, key):
+            if state["fail"]:
+                raise RuntimeError("Session error ... SessionNotEstablished")
+            return _FakeContract(key)
+
+    class _Contracts:
+        Stocks = _Table()
+
+        class Indexs:
+            TSE = _Table()
+            OTC = _Table()
+
+    class _Api:
+        def __init__(self):
+            self.Contracts = _Contracts()
+
+        def login(self, api_key=None, secret_key=None, **kw):
+            state["login"] += 1
+
+        def snapshots(self, contracts):
+            return [_FakeSnap()]
+
+        def logout(self):
+            pass
+
+    module = types.ModuleType("shioaji")
+    module.Shioaji = _Api
+    monkeypatch.setitem(sys.modules, "shioaji", module)
+    return state, clock
+
+
+def test_contract_lookup_failing_past_window_invalidates_session_and_relogins(monkeypatch):
+    state, clock = _dead_contract_env(monkeypatch)
+    f = sf.ShioajiFetcher()
+    assert f.get_realtime_quote("2330.TW") is None
+    assert state["login"] == 1
+    first_api = sf._api
+    clock.t += sf._CONTRACT_FAIL_WINDOW_S - 1
+    assert f.get_realtime_quote("2330.TW") is None
+    assert sf._api is first_api  # 未达门槛不作废
+    clock.t += 2
+    assert f.get_realtime_quote("2330.TW") is None
+    assert sf._api is None and sf._logged_in is False  # 作废
+    state["fail"] = False
+    assert f.get_realtime_quote("2330.TW") is not None
+    assert state["login"] == 2  # 下一次请求自然重登一次
+
+
+def test_contract_lookup_recovering_before_window_does_not_relogin(monkeypatch):
+    state, clock = _dead_contract_env(monkeypatch)
+    f = sf.ShioajiFetcher()
+    for _ in range(30):  # 10-14 型：一分钟内几十次失败，次数多但时间短
+        f.get_realtime_quote("2330.TW")
+        clock.t += 1
+    state["fail"] = False
+    assert f.get_realtime_quote("2330.TW") is not None
+    clock.t += 1000
+    assert f.get_realtime_quote("2330.TW") is not None
+    assert state["login"] == 1
+
+
+def test_contract_lookup_success_resets_failure_clock(monkeypatch):
+    state, clock = _dead_contract_env(monkeypatch)
+    f = sf.ShioajiFetcher()
+    f.get_realtime_quote("2330.TW")
+    clock.t += 50
+    f.get_realtime_quote("2330.TW")
+    state["fail"] = False
+    assert f.get_realtime_quote("2330.TW") is not None
+    assert sf._contract_fail_since is None
+    state["fail"] = True
+    clock.t += 50  # 距首次失败已 >60s，但成功过一次，计时应重来
+    f.get_realtime_quote("2330.TW")
+    assert sf._api is not None
+    assert state["login"] == 1
+
+
+def test_prime_snapshots_and_indices_also_accumulate(monkeypatch):
+    state, clock = _dead_contract_env(monkeypatch)
+    assert sf.prime_snapshots(["2330.TW"]) == 0
+    assert sf._contract_fail_since is not None
+    clock.t += sf._CONTRACT_FAIL_WINDOW_S + 1
+    assert sf.prime_snapshots(["2330.TW"]) == 0
+    assert sf._api is None  # 批次路径作废
+
+    sf._ensure_session()
+    clock.t += 0
+    assert sf.shioaji_main_indices() is None
+    clock.t += sf._CONTRACT_FAIL_WINDOW_S + 1
+    assert sf.shioaji_main_indices() is None
+    assert sf._api is None  # 指数路径作废
+    assert state["login"] == 2
+
+
+def test_contract_lookup_miss_is_not_a_failure(monkeypatch):
+    state, clock = _dead_contract_env(monkeypatch, fail=False)
+    api = sf._ensure_session()
+    assert sf._lookup_contract(api, lambda a: None) is None
+    assert sf._lookup_contract(api, lambda a: {}["x"]) is None  # KeyError = 查无
+    assert sf._contract_fail_since is None
+
+
+def test_contract_failure_on_replaced_session_does_not_kill_new_session(monkeypatch):
+    state, clock = _dead_contract_env(monkeypatch)
+    old_api = sf._ensure_session()
+    sf._contract_fail_since = clock.t - 1000  # 已超门槛
+    new_api = object()
+    sf._api = new_api  # 别的线程已换新 session
+    assert sf._lookup_contract(old_api, lambda a: a.Contracts.Stocks["2330"]) is None
+    assert sf._api is new_api and sf._logged_in is True
+    assert sf._contract_fail_since == clock.t - 1000  # untouched: stale failures are ignored, not counted
+
+
+def test_invalidate_skips_when_api_swapped_between_check_and_invalidate(monkeypatch):
+    _dead_contract_env(monkeypatch)
+    old_api = object()
+    new_api = object()
+    sf._api, sf._logged_in = new_api, True
+    sf._invalidate_dead_session(old_api, RuntimeError("dead"))
+    assert sf._api is new_api and sf._logged_in is True
