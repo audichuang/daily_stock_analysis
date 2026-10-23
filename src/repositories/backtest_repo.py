@@ -103,6 +103,8 @@ class BacktestRepository:
                     and_(
                         BacktestResult.eval_window_days == eval_window_days,
                         BacktestResult.engine_version == engine_version,
+                        # insufficient_data is retried once more bars have arrived
+                        BacktestResult.eval_status != "insufficient_data",
                     )
                 )
                 query = query.where(AnalysisHistory.id.not_in(existing_ids))
@@ -180,21 +182,21 @@ class BacktestRepository:
 
         with self.db.get_session() as session:
             try:
-                if replace_existing:
-                    analysis_ids = sorted({r.analysis_history_id for r in results if r.analysis_history_id is not None})
-                    key_pairs = sorted({(r.eval_window_days, r.engine_version) for r in results})
+                # Stale insufficient_data rows are always superseded by a retry;
+                # other statuses are only replaced when force-rerunning.
+                analysis_ids = sorted({r.analysis_history_id for r in results if r.analysis_history_id is not None})
+                key_pairs = sorted({(r.eval_window_days, r.engine_version) for r in results})
 
-                    if analysis_ids and key_pairs:
-                        for window_days, engine_version in key_pairs:
-                            session.execute(
-                                delete(BacktestResult).where(
-                                    and_(
-                                        BacktestResult.analysis_history_id.in_(analysis_ids),
-                                        BacktestResult.eval_window_days == window_days,
-                                        BacktestResult.engine_version == engine_version,
-                                    )
-                                )
-                            )
+                if analysis_ids and key_pairs:
+                    for window_days, engine_version in key_pairs:
+                        conditions = [
+                            BacktestResult.analysis_history_id.in_(analysis_ids),
+                            BacktestResult.eval_window_days == window_days,
+                            BacktestResult.engine_version == engine_version,
+                        ]
+                        if not replace_existing:
+                            conditions.append(BacktestResult.eval_status == "insufficient_data")
+                        session.execute(delete(BacktestResult).where(and_(*conditions)))
 
                 session.add_all(results)
                 session.commit()

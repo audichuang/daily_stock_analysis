@@ -480,6 +480,38 @@ class BacktestServiceTestCase(unittest.TestCase):
         self.assertEqual(stats3["saved"], 1)
         self.assertEqual(self._count_results(), 1)
 
+    def test_insufficient_data_is_retried_once_bars_arrive(self) -> None:
+        service = BacktestService(self.db)
+        with self.db.get_session() as session:
+            session.query(StockDaily).filter(StockDaily.date > date(2024, 1, 2)).delete()
+            session.commit()
+
+        with patch.object(BacktestService, "_try_fill_daily_data"):
+            stats1 = service.run_backtest(code="600519", eval_window_days=3, min_age_days=0, limit=10)
+        self.assertEqual(stats1["insufficient"], 1)
+        self.assertEqual(self._statuses(), ["insufficient_data"])
+
+        with self.db.get_session() as session:
+            session.add_all([
+                StockDaily(code="600519", date=date(2024, 1, 3), high=108.0, low=103.0, close=106.0),
+                StockDaily(code="600519", date=date(2024, 1, 4), high=109.0, low=104.0, close=107.0),
+            ])
+            session.commit()
+
+        with patch.object(BacktestService, "_try_fill_daily_data"):
+            stats2 = service.run_backtest(code="600519", eval_window_days=3, min_age_days=0, limit=10)
+        self.assertEqual(stats2["completed"], 1)
+        self.assertEqual(self._statuses(), ["completed"])
+
+        # A completed result is not re-evaluated without force.
+        stats3 = service.run_backtest(code="600519", eval_window_days=3, min_age_days=0, limit=10)
+        self.assertEqual(stats3["processed"], 0)
+        self.assertEqual(self._statuses(), ["completed"])
+
+    def _statuses(self) -> list:
+        with self.db.get_session() as session:
+            return [r.eval_status for r in session.query(BacktestResult).all()]
+
     def test_run_backtest_rejects_invalid_eval_window_days_at_entry(self) -> None:
         service = BacktestService(self.db)
 

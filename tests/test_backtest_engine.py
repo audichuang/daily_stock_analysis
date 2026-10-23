@@ -404,6 +404,27 @@ class BacktestEngineTestCase(unittest.TestCase):
         # "do not sell" negates "sell" — should NOT be direction=down
         self.assertNotEqual(BacktestEngine.infer_direction_expected("do not sell"), "down")
 
+    def test_traditional_chinese_advice_direction(self):
+        cases = {
+            "賣出": ("down", "cash"),
+            "減倉": ("down", "cash"),
+            "減碼": ("down", "cash"),
+            "减码": ("down", "cash"),
+            "買入": ("up", "long"),
+            "加碼": ("up", "long"),
+            "觀望": ("flat", "cash"),
+            "震盪觀望": ("not_down", "long"),
+            "不要賣出": ("not_down", "long"),
+        }
+        for advice, (direction, position) in cases.items():
+            with self.subTest(advice=advice):
+                got = BacktestEngine.infer_direction_expected(advice)
+                if advice == "不要賣出":
+                    self.assertNotEqual(got, "down")
+                    continue
+                self.assertEqual(got, direction)
+                self.assertEqual(BacktestEngine.infer_position_recommendation(advice), position)
+
     def test_chinese_negated_sell_not_bearish(self):
         # "不要卖出" = "don't sell" — should NOT be direction=down
         self.assertNotEqual(BacktestEngine.infer_direction_expected("不要卖出"), "down")
