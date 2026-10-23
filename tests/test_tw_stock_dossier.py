@@ -182,3 +182,50 @@ def test_render_labels_structure_direction():
     assert "OTE 空方 1.50~1.80" in md
     smc["last_event"] = {"direction": "bullish"}
     assert "OTE 多方 1.50~1.80" in dossier.render(payload)
+
+
+def _nan_rev_fixture(monkeypatch, cur, prev, stored):
+    import pandas as pd
+
+    # revenue 欄可為 NULL（讀成 NaN）：25 個連續月份，最新月 cur、去年同月 prev
+    months = pd.period_range("2024-09", "2026-09", freq="M").to_timestamp()[::-1]
+    revs = [cur if i == 0 else prev if i == 12 else 100 for i in range(len(months))]
+    rev = pd.DataFrame({"revenue_month": months, "revenue": revs,
+                        "yoy": [stored] + [None] * (len(months) - 1), "announce_date": None})
+    monkeypatch.setattr(dossier, "_sql", lambda e, sql, **kw: rev if "monthly_revenue" in sql
+                        else pd.DataFrame(columns=["date", "account", "value"]))
+    return dossier.fundamentals(None, "9999", "2026-10-22")
+
+
+@pytest.mark.parametrize("cur,prev,stored,expected", [
+    (160000, float("nan"), 61.26, 61.3),            # 去年同月 NULL：退回庫裡 yoy
+    (160000, float("nan"), float("nan"), None),     # 兩者皆無：None
+    (float("nan"), 100000, 61.26, 61.3),            # 當月 NULL：退回庫裡 yoy
+])
+def test_monthly_yoy_nan_revenue_does_not_crash(monkeypatch, cur, prev, stored, expected):
+    f = _nan_rev_fixture(monkeypatch, cur, prev, stored)
+    assert f["monthly_revenue"][-1]["yoy_pct"] == expected
+    # 當月營收 NaN 也不能炸 int()，且 render 要印「無資料」而非 None／nan
+    payload = {"stock_id": "9999", "name": None, "as_of": "2026-10-22", "fundamentals": f,
+               "contract_liabilities": [],
+               "chips": {"institutional": None, "margin": None, "holding": None, "branch": None},
+               "valuation": None, "smc": None}
+    dossier.render(payload)
+
+
+def test_monthly_yoy_computed_from_revenue_over_stored(monkeypatch):
+    # 兩者皆有限時必須用營收自算（stored 故意給錯值）
+    f = _nan_rev_fixture(monkeypatch, 150000, 100000, 99.0)
+    assert f["monthly_revenue"][-1]["yoy_pct"] == 50.0
+
+
+def test_ttm_yoy_none_when_window_has_null_revenue(monkeypatch):
+    import pandas as pd
+
+    months = pd.period_range("2024-10", "2026-09", freq="M").to_timestamp()[::-1]
+    revs = [100.0] * 24
+    revs[5] = float("nan")
+    rev = pd.DataFrame({"revenue_month": months, "revenue": revs, "yoy": None, "announce_date": None})
+    monkeypatch.setattr(dossier, "_sql", lambda e, sql, **kw: rev if "monthly_revenue" in sql
+                        else pd.DataFrame(columns=["date", "account", "value"]))
+    assert dossier.fundamentals(None, "9999", "2026-10-22")["ttm_revenue_yoy_pct"] is None
