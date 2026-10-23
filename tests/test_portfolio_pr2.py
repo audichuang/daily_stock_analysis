@@ -76,6 +76,9 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.risk_service = PortfolioRiskService(portfolio_service=self.service)
         self._board_fetch_patcher = patch.object(PortfolioRiskService, "_fetch_belong_boards", return_value=[])
         self._board_fetch_patcher.start()
+        # 匯率刷新會順手補歷史日線；預設關掉 yfinance，避免測試連外。
+        self._yf_patcher = patch("src.services.portfolio_service.yf", None)
+        self._yf_patcher.start()
         self.client = TestClient(create_app(static_dir=data_dir / "empty-static"))
 
     def tearDown(self) -> None:
@@ -84,6 +87,7 @@ class PortfolioPr2TestCase(unittest.TestCase):
         os.environ.pop("ENV_FILE", None)
         os.environ.pop("DATABASE_PATH", None)
         self._board_fetch_patcher.stop()
+        self._yf_patcher.stop()
         self.temp_dir.cleanup()
 
     def _save_close(self, symbol: str, on_date: date, close: float) -> None:
@@ -785,6 +789,54 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertEqual(snapshot["currency"], "CNY")
         self.assertAlmostEqual(snapshot["total_cash"], 200.0, places=6)
         self.assertFalse(snapshot["fx_stale"])
+
+    def _fx_frame(self, closes):
+        index = pd.DatetimeIndex([pd.Timestamp(d, tz="Asia/Shanghai") for d, _ in closes])
+        return pd.DataFrame({"Close": [c for _, c in closes]}, index=index)
+
+    def _refresh_usd_with_frame(self, frame, as_of):
+        account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="CNY")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="USD"
+        )
+        yf_mock = MagicMock()
+        yf_mock.Ticker.return_value.history.return_value = frame
+        with patch("src.services.portfolio_service.yf", yf_mock):
+            self.service.refresh_fx_rates(account_id=account["id"], as_of=as_of)
+
+    def _fx_row(self, on_date):
+        row = self.service.repo.get_latest_fx_rate(from_currency="USD", to_currency="CNY", as_of=on_date)
+        return row if row is not None and row.rate_date == on_date else None
+
+    def test_fx_refresh_backfills_historic_bars_under_own_dates(self) -> None:
+        frame = self._fx_frame([("2026-01-05", 7.01), ("2026-01-06", float("nan")), ("2026-01-07", 7.03), ("2026-01-08", 7.99)])
+        self._refresh_usd_with_frame(frame, date(2026, 1, 8))
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 5)).rate, 7.01)
+        self.assertEqual(self._fx_row(date(2026, 1, 5)).source, "yfinance_backfill")
+        self.assertIsNone(self._fx_row(date(2026, 1, 6)))  # NaN close skipped
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 7)).rate, 7.03)
+        today = self._fx_row(date(2026, 1, 8))  # today's row keeps the original behaviour
+        self.assertAlmostEqual(today.rate, 7.99)
+        self.assertEqual(today.source, "yfinance")
+
+    def test_fx_refresh_backfill_never_overwrites_existing_rows(self) -> None:
+        self.service.repo.save_fx_rate(
+            from_currency="USD", to_currency="CNY", rate_date=date(2026, 1, 5), rate=6.5, source="manual", is_stale=False
+        )
+        frame = self._fx_frame([("2026-01-05", 7.01), ("2026-01-07", 7.03), ("2026-01-08", 7.99)])
+        self._refresh_usd_with_frame(frame, date(2026, 1, 8))
+        kept = self._fx_row(date(2026, 1, 5))
+        self.assertAlmostEqual(kept.rate, 6.5)
+        self.assertEqual(kept.source, "manual")
+
+    def test_fx_refresh_without_as_of_bar_saves_last_bar_under_its_own_date(self) -> None:
+        # No bar for as_of itself: today's row takes the last close (old behaviour)
+        # and that bar is also saved under its own date.
+        frame = self._fx_frame([("2026-01-05", 7.01), ("2026-01-07", 7.03)])
+        self._refresh_usd_with_frame(frame, date(2026, 1, 8))
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 8)).rate, 7.03)
+        self.assertEqual(self._fx_row(date(2026, 1, 8)).source, "yfinance")
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 7)).rate, 7.03)
 
     def test_fx_refresh_cny_account_does_not_fetch_aggregate_pair(self) -> None:
         account = self.service.create_account(name="CN", broker="Demo", market="cn", base_currency="CNY")
