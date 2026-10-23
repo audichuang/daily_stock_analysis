@@ -420,3 +420,12 @@ def test_every_media_alias_resolves_to_its_stock_against_a_conflicting_code():
     for alias, code in expected.items():
         other = "2317" if code != "2317.TW" else "2330"  # valid code of a different stock
         assert mp.resolve(alias, other, idx) == (code, "alias"), alias
+
+
+def test_code_mismatch_needs_half_the_name_shared_with_the_llm_code_company():
+    idx = mp.load_index()
+    # one shared character ("達") is not enough: 6140 is 訊達, the real company is 6112 邁達特
+    assert mp.resolve("麥達特", "6140", idx) == (None, "unresolved")
+    # half of a 2-char name shared is still a plausible misheard name
+    small = [("2330.TW", "泰昇", [])]
+    assert mp.resolve("泰山", "2330", small) == ("2330.TW", "code_mismatch")

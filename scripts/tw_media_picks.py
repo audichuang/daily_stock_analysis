@@ -221,8 +221,8 @@ def resolve(name: str, code: str | None, index, said: str | None = None) -> tupl
         c, n = hit
         agree = not parts or any(p in (str(code).upper(), c.split(".")[0]) or p in _norm(n) or _norm(n) in p
                                   for p in parts)
-        if not agree and not any(set(p) & set(_norm(n)) for p in parts):
-            # No shared character at all: the LLM's code belongs to another company (光紘 -> 3669 圓展).
+        if not agree and not any(len(set(p) & set(_norm(n))) * 2 >= len(p) for p in parts):
+            # Fewer than half of the name shared: the LLM's code belongs to another company (光紘 -> 3669 圓展).
             return None, "unresolved"
         return c, "code" if agree else "code_mismatch"
     names = {_norm(n): c for c, n, _ in index}
