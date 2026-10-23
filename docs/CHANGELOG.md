@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] `make ptt-picks`（`scripts/tw_ptt_picks.py`）：抓 PTT 股票板的 `[標的]` 文，解析多空、理由、進退場機制、推噓數與是否附對帳單，股名轉代號並附發文當時的本地數據，追加到 `journal/ptt-picks.jsonl`；當候選來源用，不是買進訊號
 - [改進] 媒體點名新增 4 個頻道（瘋狂股市福利社、理周TV、老王愛說笑、一綺聊股），共 25 個（劉姸希、股癌試跑後拿掉：前者半數點名是過往戰績宣傳、後者幾乎不點名台股）；新增 `kind=kol`（非投顧的獨立 YouTuber）
 - [改進] 減倉／賣出或買進條件未成立時，提示詞要求理想／次要買點只寫「暫不設定」、再進場條件寫進觀察條件，停利只寫一個持股者目標價（原本模型把同一條均線同時寫進買點與停利，造成賣出報告「理想買點＝停利價」）
 - [改進] 提示詞的減倉／賣出規則統一：減倉＝收盤跌破 MA20 且符合空頭排列、法人連續賣超、放量下跌、跌破前低之一；賣出需放量跌破前低／關鍵支撐或重大風險事件，只有空頭排列最多減倉（對齊實際判斷，不改分數區間）

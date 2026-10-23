@@ -105,6 +105,9 @@ taifex: ## 期交所外資台指期淨未平倉＋P/C 未平倉比（給 skill t
 media-picks: ## 財經電視完整版 → NotebookLM 逐字稿與點名 → 對照本地數據 → journal/media-picks.jsonl（憑證走 Doppler notebooklm）
 	NOTEBOOKLM_BIN=$(NOTEBOOKLM_BIN) doppler run -p notebooklm -c prd -- uv run --env-file .env python scripts/tw_media_picks.py
 
+ptt-picks: ## PTT 股票板 [標的] 文 → 解析多空／理由／進退場 → 對照本地數據 → journal/ptt-picks.jsonl
+	uv run --env-file .env python scripts/tw_ptt_picks.py
+
 measure: ## 量测讯号的前瞻报酬分布（事件级、区块 bootstrap；不做部位模拟）
 	uv run --env-file .env python scripts/measure_signal_forward.py
 
