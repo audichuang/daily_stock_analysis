@@ -224,6 +224,26 @@ class TwseFundamentalAdapter:
         code = _bare_code(stock_code)
         if not code:
             return {}
+        local = self._local_valuation(code)
+        if local and local.get("as_of") == _today().isoformat():
+            return local
+        api = self._api_valuation(code)
+        if not local:
+            return api
+        if not api:
+            return local
+        # Both exist: take the newer as_of (ties go to local). An API row without a date counts as oldest.
+        newer, other = (local, api) if local["as_of"] >= (api.get("as_of") or "") else (api, local)
+        out = dict(newer)
+        # Only fill gaps from a same-day row: filling from an older day would stamp stale values with
+        # the newer as_of (and let an old PE replace a current None, e.g. a loss-making quarter).
+        if (other.get("as_of") or "") == (newer.get("as_of") or ""):
+            for key in ("pe_ratio", "pb_ratio", "dividend_yield"):
+                if out.get(key) is None:
+                    out[key] = other.get(key)
+        return out
+
+    def _api_valuation(self, code: str) -> Dict[str, Optional[float]]:
         for name, build, label in (
             ("valuation_twse", self._build_twse_valuation, "上市估值"),
             ("valuation_tpex", self._build_tpex_valuation, "上柜估值"),
@@ -236,6 +256,39 @@ class TwseFundamentalAdapter:
             if code in index:
                 return dict(index[code])
         return {}
+
+    @staticmethod
+    def _local_valuation(code: str) -> Dict[str, Any]:
+        """Latest local ``market.valuation`` row (has same-day values; BWIBBU_ALL is only T-1).
+
+        Fail-open: DB down / no row / date older than ``_MAX_SNAPSHOT_AGE_DAYS`` or in the
+        future -> {} so the caller falls back to the exchange snapshot.
+        """
+        try:
+            from market_data import market_repo
+
+            from market_data.db import get_engine
+
+            # Short statement timeout; connect timeout comes from get_engine itself.
+            row = market_repo.latest_valuation(code, engine=get_engine(statement_timeout_ms=3000))
+            if not row:
+                return {}
+            as_of = row["date"]
+            as_of = as_of.date() if hasattr(as_of, "date") else as_of
+            age = (_today() - as_of).days
+            if age < 0 or age > _MAX_SNAPSHOT_AGE_DAYS:
+                logger.info("[TwseFundamental] 本地估值日期 %s 不新鲜（落後 %d 天），改用交易所快照", as_of, age)
+                return {}
+            out: Dict[str, Any] = {"as_of": as_of.isoformat()}
+            for key in ("pe_ratio", "pb_ratio", "dividend_yield"):
+                val = row.get(key)
+                out[key] = None if val is None or val != val else float(val)
+            if all(out[k] is None for k in ("pe_ratio", "pb_ratio", "dividend_yield")):
+                return {}
+            return out
+        except Exception as exc:  # noqa: BLE001 - fail-open
+            logger.info("[TwseFundamental] 本地估值讀取失敗，改用交易所快照: %s", exc)
+            return {}
 
     def get_growth(self, stock_code: str) -> Dict[str, Optional[float]]:
         """返回 {monthly_revenue_yoy, monthly_revenue, revenue_month, revenue_month_iso, monthly_revenue_mom, cumulative_revenue_yoy}；无数据或失败返回 {}。"""
