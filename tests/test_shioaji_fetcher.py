@@ -2,6 +2,7 @@
 """ShioajiFetcher 自我停用 / 解析 / 持久 session / 熔断防 relogin-storm（全 mock，无真登入）。"""
 
 import sys
+import threading
 import time
 import types
 
@@ -406,6 +407,7 @@ def test_snap_volume_matches_db_daily_unit_cross_source():
 
 # --- 查合约连续失败 → 作废死 session（10-23 NAS 事故回归）-------------------
 
+
 class _Clock:
     def __init__(self):
         self.t = 1000.0
@@ -558,10 +560,36 @@ def test_new_session_does_not_inherit_old_failure_clock(monkeypatch):
     assert sf._api is not None  # single failure must not kill the fresh session
 
 
-def test_dead_session_invalidation_trips_login_breaker(monkeypatch):
+def test_dead_session_invalidation_does_not_block_relogin_after_sdk_recovers(monkeypatch):
+    """Invalidations must not feed the login breaker: once the SDK recovers, the next request logs in."""
     state, clock = _dead_contract_env(monkeypatch)
+    monkeypatch.setattr(sf.time, "time", clock)  # CircuitBreaker cooldown reads wall clock, not monotonic
     f = sf.ShioajiFetcher()
-    for _ in range(40):
+    for _ in range(3):  # login, then two invalidation rounds past the 60s window
         f.get_realtime_quote("2330.TW")
         clock.t += sf._CONTRACT_FAIL_WINDOW_S + 1
-    assert state["login"] <= 3  # breaker opens after threshold failures, cooldown blocks relogin
+        f.get_realtime_quote("2330.TW")
+    assert sf._api is None
+    logins = state["login"]
+    state["fail"] = False
+    clock.t += 1  # well inside the 900s breaker cooldown
+    assert f.get_realtime_quote("2330.TW") is not None
+    assert state["login"] == logins + 1
+
+
+def test_blocking_logout_of_dead_session_does_not_starve_executor(monkeypatch):
+    state, clock = _dead_contract_env(monkeypatch)
+    release = threading.Event()
+    monkeypatch.setattr(sys.modules["shioaji"].Shioaji, "logout", lambda self: release.wait(30))
+    f = sf.ShioajiFetcher()
+    try:
+        for _ in range(3):  # more stuck logouts than executor workers
+            f.get_realtime_quote("2330.TW")
+            clock.t += sf._CONTRACT_FAIL_WINDOW_S + 1
+            f.get_realtime_quote("2330.TW")
+        assert state["login"] == 3  # every relogin got an executor worker despite stuck logouts
+        state["fail"] = False
+        assert sf._executor.submit(lambda: "ok").result(timeout=2) == "ok"
+        assert f.get_realtime_quote("2330.TW") is not None
+    finally:
+        release.set()

@@ -224,12 +224,11 @@ def _lookup_contract(api: Any, getter: Callable[[Any], Any]) -> Optional[Any]:
             _api = None
             _logged_in = False
             _contract_fail_since = None
-            # Count it so repeated dead-session relogins trip the breaker instead of burning login quota.
-            _login_breaker.record_failure(_BREAKER_KEY, str(e)[:200])
         logger.warning("[ShioajiFetcher] 合约查询持续失败超过 %.0f 秒，作废 session 以便重新登入: %s: %s",
                        _CONTRACT_FAIL_WINDOW_S, type(e).__name__, str(e)[:200])
         try:
-            _executor.submit(api.logout)  # fire-and-forget; never block the request thread on a dead SDK
+            # Own daemon thread: logout on a dead SDK may hang, and must not occupy the shared 2-worker _executor.
+            threading.Thread(target=api.logout, daemon=True, name="shioaji-logout").start()
         except Exception:
             pass
         return None
