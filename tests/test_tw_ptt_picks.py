@@ -101,3 +101,8 @@ def test_parse_search_keeps_only_original_target_posts():
              '<a href="/bbs/Stock/M.2.A.BBB.html">Re: [標的] 2316 楠梓電</a>'
              '<a href="/bbs/Stock/M.3.A.CCC.html">[新聞] 台積電法說</a>')
     assert tp.parse_search(html_) == [("M.1.A.AAA", "[標的] 2316 楠梓電")]
+
+
+def test_template_cleanup_keeps_prose_that_starts_with_例():
+    p = tp.parse_article(page("標的：2316 楠梓電\n進退場機制：1000 進場（例外：跌破 900 立即停損）\n"), "[標的] 2316")
+    assert p["condition"] == "1000 進場（例外：跌破 900 立即停損）"

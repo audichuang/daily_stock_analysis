@@ -56,7 +56,7 @@ def parse_search(page: str) -> list[tuple[str, str]]:
 # template labels at line start, optionally numbered ("2.分類：多")
 _LABEL = re.compile(r"^[ \t]*(?:\d+\s*[.、]\s*)?(標的|分類|分析\s*/?\s*正文|分析|正文|進退場機制|對帳單)\s*[:：]", re.M)
 # left over from the board template: its hints and its sample target "(例 2330.TW 台積電)"
-_PLACEHOLDER = re.compile(r"[(（](?:喊多喊空者|例|請選擇).*?[)）]", re.S)
+_PLACEHOLDER = re.compile(r"[(（](?:喊多喊空者|例\s*\d{4}|請選擇).*?[)）]", re.S)  # not 例外／例如 prose
 _UNFILLED_CATEGORY = re.compile(r"多\s*/\s*空\s*/\s*討論\s*/\s*心得")
 _EDIT = re.compile(r"※ 編輯: \S+ \([^)]*\), (\d\d/\d\d/\d{4} \d\d:\d\d:\d\d)")
 

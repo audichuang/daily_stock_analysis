@@ -247,12 +247,12 @@ DATA_KNOWN = (17, 0)
 def data_cutoff(title: str, aired: date, published: datetime | None = None) -> date:
     """`data` 可以用到哪一天的資料。盤前節目、或播出當天 17:00 前就上傳的（盤中連線），當天的收盤與法人
     都還沒公布，只能用前一天以前的。"""
-    if "盤前" in (title or ""):
+    # no timestamp (yt-dlp may drop it): can't show the day was already public
+    if "盤前" in (title or "") or published is None:
         return aired - timedelta(days=1)
-    if published is not None:
-        p = published.astimezone(TPE)
-        if p.date() <= aired and (p.date() < aired or (p.hour, p.minute) < DATA_KNOWN):
-            return aired - timedelta(days=1)
+    p = published.astimezone(TPE)
+    if p.date() < aired or (p.date() == aired and (p.hour, p.minute) < DATA_KNOWN):
+        return aired - timedelta(days=1)
     return aired
 
 
@@ -302,9 +302,11 @@ def new_episodes(since: date, done: set[str]) -> list[dict]:
             try:
                 up, ts = (_run(["yt-dlp", *YT_LANG, "--skip-download", "--print", "%(upload_date)s %(timestamp)s",
                                 f"https://www.youtube.com/watch?v={vid}"], 120).split() + ["NA"])[:2]
-                # upload_date is the UTC day; the timestamp gives the Taipei day and hour when present
-                published = datetime.fromtimestamp(int(ts), TPE) if ts.isdigit() else None
-                uploaded = published.date() if published else datetime.strptime(up, "%Y%m%d").date()
+                # upload_date is the UTC day; the timestamp gives the Taipei day and hour. Without a
+                # timestamp, the start of that UTC day (08:00 Taipei) is the earliest it could have been.
+                published = (datetime.fromtimestamp(int(ts), TPE) if ts.isdigit()
+                             else datetime.strptime(up, "%Y%m%d").replace(tzinfo=timezone.utc).astimezone(TPE))
+                uploaded = published.date()
             except Exception as exc:
                 print(f"[warn] {vid} 取不到上傳日：{exc}", file=sys.stderr)
                 continue

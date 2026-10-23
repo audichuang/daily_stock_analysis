@@ -217,7 +217,9 @@ def test_air_date_comes_from_title_not_upload_date():
 def test_premarket_shows_use_the_previous_close():
     aired = mp.date(2026, 10, 22)
     assert mp.data_cutoff("(字幕版) 2026.10.22 台股盤前 #財經早點名", aired) == mp.date(2026, 10, 21)
-    assert mp.data_cutoff("(字幕版) 2026.10.22 台股盤後 #仁者無敵", aired) == aired
+    evening = mp.datetime(2026, 10, 22, 21, 0, tzinfo=mp.TPE)
+    assert mp.data_cutoff("(字幕版) 2026.10.22 台股盤前 #財經早點名", aired, evening) == mp.date(2026, 10, 21)
+    assert mp.data_cutoff("(字幕版) 2026.10.22 台股盤後 #仁者無敵", aired, evening) == aired
 
 
 def test_new_episodes_dates_by_air_date_but_filters_by_upload(monkeypatch):
@@ -397,7 +399,15 @@ def test_cutoff_uses_the_upload_time_when_the_title_does_not_say_盤前(monkeypa
 
     monkeypatch.setattr(mp, "_run", fake_run)
     monkeypatch.setattr(mp, "CHANNELS", [("節目", "tv", "UCx", r".", 1200)])
+    meta["nots"] = "20261006 NA"  # no timestamp: assume the earliest moment of that UTC day
+    listing += "\nnots\t1400\t20261006 晚間節目"
     eps = {e["video_id"]: e for e in mp.new_episodes(mp.date(2026, 10, 1), set())}
+    assert eps["nots"]["cutoff"] == mp.date(2026, 10, 5)
     assert eps["am"]["cutoff"] == mp.date(2026, 10, 5)  # a morning segment only knows the previous close
     assert eps["pm"]["cutoff"] == mp.date(2026, 10, 6)
     assert eps["early"]["uploaded"] == mp.date(2026, 10, 6) and eps["early"]["cutoff"] == mp.date(2026, 10, 5)
+
+
+def test_cutoff_without_an_upload_time_assumes_the_day_was_not_yet_public():
+    # yt-dlp keeps upload_date but may drop the timestamp; a morning segment must not get that day's close
+    assert mp.data_cutoff("20261006 盤中連線", mp.date(2026, 10, 6), None) == mp.date(2026, 10, 5)
