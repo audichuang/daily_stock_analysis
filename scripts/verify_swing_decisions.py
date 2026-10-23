@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from market_data.adjust import load_factors  # noqa: E402
-from market_data.closures import tw_closed_reason  # noqa: E402
+from market_data.closures import adhoc_closed_dates, tw_closed_reason  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
 from measure_signal_forward import (  # noqa: E402
     DEFAULT_POSITION_NOTIONAL, paired_block_bootstrap,
@@ -45,6 +45,8 @@ from measure_signal_forward import (  # noqa: E402
 from tw_trade_costs import round_trip_return  # noqa: E402
 
 LOG = Path("journal/swing-decisions.jsonl")   # 進版控：見 journal/README.md
+# Version-controlled closure list (the data/ one is gitignored and XTAI misses ad-hoc closures).
+CLOSED_DATES = Path(__file__).resolve().parent.parent / "journal" / "closed-dates.txt"
 BASE_RATE = 0.202        # 現行成本口徑 P(第 60 日收盤淨報酬 ≥ +30%)
 MIN_MATURED = 20         # 低於這個數量的結論一律標為雜訊
 
@@ -67,8 +69,10 @@ def read_log(path, drop_closed=True):
     df.attrs["closed_excluded"] = 0
     if drop_closed and len(df) and "date" in df.columns:
         # fetch=lambda: None: only the adhoc-closure list + XTAI calendar, never the network.
+        tracked = adhoc_closed_dates(CLOSED_DATES)
         closed = {d for d in df["date"].dropna().unique()
-                  if tw_closed_reason(datetime.date.fromisoformat(str(d)), fetch=lambda: None)}
+                  if datetime.date.fromisoformat(str(d)) in tracked
+                  or tw_closed_reason(datetime.date.fromisoformat(str(d)), fetch=lambda: None)}
         df = df[~df["date"].isin(closed)].reset_index(drop=True)
         df.attrs["closed_excluded"] = len(rows) - len(df)
     return df
@@ -391,10 +395,11 @@ def main(argv=None):
               f"（見 journal/README.md）。還沒有判斷就沒有東西可回驗。")
         return 0
     df = read_log(path)
-    if df.attrs.get("closed_excluded"):
-        print(f"已排除 {df.attrs['closed_excluded']} 筆訊號日為休市日的決策（臨時休市清單／非交易日）。")
+    excluded = df.attrs.get("closed_excluded", 0)
+    print(f"已排除 {excluded} 筆訊號日為休市日的決策（臨時休市清單／非交易日）。")
     if not len(df):
-        print(f"{path} 是空的。")
+        print(f"{path} 全數 {excluded} 筆皆為休市日、已排除。" if excluded
+              else f"{path} 是空的。")
         return 0
     need = {"date", "stock_id", "verdict"}
     if miss := need - set(df.columns):
