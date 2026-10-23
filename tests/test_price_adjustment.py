@@ -260,3 +260,65 @@ def test_snap_rejects_etf_crash_ratios():
         if is_split:
             # 若落在 1/2 容差內，代表光靠比率無法分辨——這正是必須靠商品類型過濾的理由
             assert got == pytest.approx(0.5)
+
+
+def _window_boundary_run(monkeypatch, start):
+    import contextlib
+    from market_data import adjust
+
+    cols = adjust.ADJUSTMENT_COLUMNS
+    dk = pd.Timestamp("2026-07-15")  # official event day with no bar
+    days = [d for d in pd.bdate_range("2026-05-01", "2026-08-10") if d != dk]
+    px = pd.DataFrame([{
+        "stock_id": "2330", "date": d, "open": 100.0 if d < dk else 50.0,
+        "close": 100.0 if d < dk else 50.0, "change": 0.0} for d in days])
+    off = pd.DataFrame([{"stock_id": "2330", "date": dk,
+                         "close_before": 100.0, "reference_price": 50.0}])
+
+    def fake_read_sql(sql, conn, params=None, parse_dates=None):
+        s = str(sql)
+        if "from market.price " in s or "from market.price\n" in s:
+            return px[px.date >= pd.Timestamp(params["s"])].copy()
+        if "ex_dividend" in s:
+            return off.copy()
+        return pd.DataFrame(columns=cols)
+
+    rows = []
+
+    class _Conn:
+        def execute(self, *a, **k):
+            pass
+
+    class _Eng:
+        @contextlib.contextmanager
+        def connect(self):
+            yield _Conn()
+
+        @contextlib.contextmanager
+        def begin(self):
+            yield _Conn()
+
+    empty = lambda *a, **k: pd.DataFrame(columns=cols)  # noqa: E731
+    monkeypatch.setattr(adjust.pd, "read_sql", fake_read_sql)
+    monkeypatch.setattr(adjust, "fetch_tpex_dividends", empty)
+    monkeypatch.setattr(adjust, "fetch_reductions", empty)
+    monkeypatch.setattr(adjust, "fetch_tpex_reductions", empty)
+    monkeypatch.setattr(
+        adjust, "upsert", lambda conn, tbl, recs, keys: rows.extend(recs) or len(recs))
+    adjust.refresh_recent(_Eng(), start, date(2026, 8, 10))
+    return rows
+
+
+def test_refresh_recent_window_start_after_event_does_not_reinfer(monkeypatch):
+    # Event on 07-15 has no bar; window starts 07-16 so the 07-16 gap is the same event.
+    rows = _window_boundary_run(monkeypatch, date(2026, 7, 16))
+    assert [r for r in rows if r["source"] == "inferred_price"] == []
+
+
+def test_refresh_recent_window_still_infers_unexplained_gap(monkeypatch):
+    # Guard against over-fixing: an unrelated gap inside the window must still be inferred.
+    from market_data import adjust
+    real = adjust.official_rows
+    monkeypatch.setattr(adjust, "official_rows", lambda conn: real(conn).iloc[0:0])
+    rows = _window_boundary_run(monkeypatch, date(2026, 7, 10))
+    assert [r["stock_id"] for r in rows if r["source"] == "inferred_price"] == ["2330"]

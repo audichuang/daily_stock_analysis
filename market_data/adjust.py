@@ -343,6 +343,10 @@ def refresh_recent(engine=None, start=None, end=None):
     with eng.connect() as conn:
         off = official_rows(conn).reindex(columns=ADJUSTMENT_COLUMNS)
         existing = existing_official_rows(conn, start_d)
+        # infer_rows reads a 60-day lookback, so events before start_d still explain the first bar
+        # inside the window; without them the same event is restored twice (0.5 becomes 0.25).
+        lookback_known = existing_official_rows(conn, start_d - datetime.timedelta(days=60))
+    pre_known = set(zip(off["stock_id"], off["date"])) if len(off) else set()
     if len(off):
         dates = pd.to_datetime(off["date"], errors="coerce")
         off = off[(dates >= pd.Timestamp(start_d)) & (dates <= pd.Timestamp(end_d))]
@@ -365,7 +369,8 @@ def refresh_recent(engine=None, start=None, end=None):
 
     # 順序即來源優先序：上市公告 > 上櫃公告 > 減資公告（上市、上櫃） > 人工核對 > 價格推導。
     merged = merge_adjustment_rows(off, tpex, reductions, tpex_red, verified)
-    known = set(zip(merged["stock_id"], merged["date"]))
+    known = set(zip(merged["stock_id"], merged["date"])) | pre_known
+    known |= set(zip(lookback_known["stock_id"], lookback_known["date"]))
     with eng.connect() as conn:
         inferred = infer_rows(conn, known, start_d)
     if len(inferred):
