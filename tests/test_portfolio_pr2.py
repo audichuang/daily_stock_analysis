@@ -1624,12 +1624,21 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertTrue(row.is_stale)
         self.assertAlmostEqual(row.rate, 0.2050)
 
-    def test_fx_refresh_all_bars_rejected_without_any_clean_source_is_an_error(self) -> None:
+    def test_fx_refresh_all_bars_rejected_without_any_clean_source_drops_junk_row_and_marks_missing(self) -> None:
         d8 = date(2026, 1, 8)
         self._seed_twd(d8, 0.1963, "yfinance", False)
         self._refresh_twd_cny([(d8, 0.1963)], [(d8, 32.6)], [(d8, 6.665)], d8, d8)
-        self.assertAlmostEqual(self._twd_row(d8).rate, 0.1963)  # untouched, not re-saved as a stale carry
-        self.assertFalse(self._twd_row(d8).is_stale)
+        self.assertIsNone(self._twd_row(d8))  # the junk row is gone, nothing replaces it
+        snapshot = self.service.get_portfolio_snapshot(as_of=d8, cost_method="fifo")
+        self.assertTrue(snapshot["fx_missing"])
+        self.assertIn("TWD/CNY", snapshot["fx_missing_pairs"])
+
+    def test_fx_refresh_all_bars_rejected_keeps_manual_row(self) -> None:
+        d8 = date(2026, 1, 8)
+        self._seed_twd(d8, 0.1963, "manual", False)
+        self._refresh_twd_cny([(d8, 0.1963)], [(d8, 32.6)], [(d8, 6.665)], d8, d8)
+        self.assertAlmostEqual(self._twd_row(d8).rate, 0.1963)
+        self.assertEqual(self._twd_row(d8).source, "manual")
 
     def test_fx_refresh_empty_main_series_skips_cross_legs(self) -> None:
         account = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
@@ -1690,6 +1699,54 @@ class PortfolioPr2TestCase(unittest.TestCase):
             ps._FX_DEADLINE.reset(token)
         timeouts = [c.kwargs["timeout"] for c in yf_mock.Ticker.return_value.history.call_args_list]
         self.assertTrue(timeouts and all(abs(t - 3.0) < 1e-9 for t in timeouts))
+
+    def _slow_yf(self, delay):
+        import time as _t
+
+        written = []
+
+        def history(*args, **kwargs):
+            _t.sleep(delay)
+            written.append(1)
+            return pd.DataFrame({"Close": [0.2050]}, index=pd.to_datetime(["2026-01-08 12:00"]).tz_localize("UTC"))
+
+        yf_mock = MagicMock()
+        yf_mock.Ticker.return_value.history.side_effect = history
+        return yf_mock
+
+    def test_fx_refresh_returns_within_budget_when_yfinance_hangs(self) -> None:
+        import time as _t
+
+        import src.services.portfolio_service as ps
+
+        d8 = date(2026, 1, 8)
+        self._seed_twd(date(2026, 1, 7), 0.2050, "yfinance", False)
+        account = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="TWD"
+        )
+        with patch("src.services.portfolio_service.yf", self._slow_yf(2.0)), patch.object(
+            ps, "FX_REFRESH_BUDGET_SECONDS", 0.2
+        ):
+            started = _t.monotonic()
+            summary = self.service.refresh_fx_rates(account_id=account["id"], as_of=d8)
+            elapsed = _t.monotonic() - started
+        self.assertLess(elapsed, 0.2 + 0.5)
+        self.assertEqual(summary["stale_count"], 1)  # fell back to the stored 01-07 value
+        self.assertTrue(self._twd_row(d8).is_stale)
+
+    def test_fx_call_within_budget_is_used(self) -> None:
+        import src.services.portfolio_service as ps
+
+        token = ps._FX_DEADLINE.set(__import__("time").monotonic() + 5.0)
+        try:
+            with patch("src.services.portfolio_service.yf", self._slow_yf(0.05)):
+                out = PortfolioService._fetch_fx_closes_from_yfinance(
+                    from_currency="USD", to_currency="CNY", as_of_date=date(2026, 1, 8)
+                )
+        finally:
+            ps._FX_DEADLINE.reset(token)
+        self.assertEqual(out, [(date(2026, 1, 8), 0.2050)])
 
 
 if __name__ == "__main__":

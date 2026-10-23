@@ -809,6 +809,29 @@ class PortfolioRepository:
                 existing.updated_at = datetime.now()
             session.commit()
 
+    def delete_fx_rate(
+        self,
+        *,
+        from_currency: str,
+        to_currency: str,
+        rate_date: date,
+        only_sources: Iterable[str],
+    ) -> int:
+        """Delete the rate row of one day only if its source is in `only_sources` (manual rows survive)."""
+        with self.db.get_session() as session:
+            result = session.execute(
+                delete(PortfolioFxRate).where(
+                    and_(
+                        PortfolioFxRate.from_currency == from_currency,
+                        PortfolioFxRate.to_currency == to_currency,
+                        PortfolioFxRate.rate_date == rate_date,
+                        PortfolioFxRate.source.in_(list(only_sources)),
+                    )
+                )
+            )
+            session.commit()
+            return int(result.rowcount or 0)
+
     def get_latest_fx_rate(
         self,
         *,
