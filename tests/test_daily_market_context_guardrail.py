@@ -636,3 +636,25 @@ def test_advice_context_buy_verbs_are_softened(decision_type, advice) -> None:
 
     assert result.operation_advice == "观望"
     assert adjustments
+
+
+@pytest.mark.parametrize("decision_type", ["buy", "hold"])
+@pytest.mark.parametrize("advice", [
+    # 否定詞與買進詞之間夾著別的動詞或連接詞：否定綁在那個動詞上，買進本身是肯定
+    "不要猶豫加碼", "不要犹豫加仓", "不要遲疑加碼", "不要錯過加碼", "千萬不要錯過加碼", "不要錯過機會加碼",
+    "別擔心加碼", "不要害怕直接加碼", "不建議賣出反而加碼", "不建議減碼並加碼", "不建議減碼並逢低加碼",
+    "不要只是持有而要加碼", "不建議賣出而應買進", "不可錯失良機加碼", "避免踏空積極佈局",
+    # 裸「買進」前面不必是固定建議詞
+    "擇機買進", "現價買進", "低接買進", "可考慮買進",
+])
+def test_negation_of_intervening_verb_does_not_shield_buy(decision_type, advice) -> None:
+    result = _result()
+    result.decision_type = decision_type
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = decision_type
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert result.operation_advice == "观望"
+    assert result.dashboard["decision_type"] == "hold"
+    assert adjustments

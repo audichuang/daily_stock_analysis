@@ -56,14 +56,12 @@ _AGGRESSIVE_BUY_MARKERS_ZH = (
     "加碼",
     "加码",
 )
-# 裸「買進／進場／佈局」也常當名詞（「買進訊號未出現」），只在前面接建議／動作語境時才算積極買進
+# 裸「買進／進場／佈局」算買進詞，但後面緊接名詞字尾時是名詞（「買進訊號未出現」「進場時機」），不算
 _BARE_BUY_VERBS_ZH = ("買進", "买进", "進場", "进场", "佈局", "布局")
-_BUY_ADVICE_PREFIXES_ZH = (
-    "建議", "建议", "可", "可以", "宜", "應", "应", "分批", "逢低", "積極", "积极", "立即", "馬上", "马上", "立刻",
-)
-_AGGRESSIVE_BUY_MARKERS_ZH += tuple(p + v for p in _BUY_ADVICE_PREFIXES_ZH for v in _BARE_BUY_VERBS_ZH)
-# 判斷「買進本身被否定」時要看得到裸動詞：「不建議此時進場」「不建議於現價買入」沒有建議語境，仍是否定買進
-_NEGATABLE_BUY_MARKERS_ZH = _AGGRESSIVE_BUY_MARKERS_ZH + _BARE_BUY_VERBS_ZH + ("買入", "买入")
+_BUY_NOUN_SUFFIXES_ZH = ("訊號", "讯号", "信號", "信号", "點", "点", "時機", "时机", "力道", "價", "价", "區", "区", "量")
+_AGGRESSIVE_BUY_MARKERS_ZH += _BARE_BUY_VERBS_ZH
+# 判斷「買進本身被否定」時要看得到裸「買入」：「不建議於現價買入」仍是否定買進
+_NEGATABLE_BUY_MARKERS_ZH = _AGGRESSIVE_BUY_MARKERS_ZH + ("買入", "买入")
 _AGGRESSIVE_BUY_MARKERS_EN = ("buy now", "strong buy", "aggressive buy", "chase", "add aggressively")
 _AGGRESSIVE_BUY_MARKERS_KO = (
     "즉시 매수",
@@ -376,6 +374,9 @@ def _contains_any(
             marker_pos = lowered.find(marker_lower, marker_pos)
             if marker_pos == -1:
                 break
+            if marker in _BARE_BUY_VERBS_ZH and lowered.startswith(_BUY_NOUN_SUFFIXES_ZH, marker_pos + len(marker_lower)):
+                marker_pos += len(marker_lower)
+                continue
             context = lowered[max(0, marker_pos - _NEGATION_LOOKBACK):marker_pos]
             has_negation = _contains_negation_near_marker(context, negation_hints, zh=language not in ("en", "ko"))
             if require_negation:
@@ -400,9 +401,16 @@ def _contains_negation_near_marker(context: str, negation_hints: tuple[str, ...]
 
 # 中文另切的子句邊界：頓號、空白與轉折詞後面是另一個判斷（「不宜追高但可分批買入」）
 _CLAUSE_SEPARATORS_ZH = ("、", " ", "\u3000", "但", "惟", "不過", "不过", "然而")
-# 提示型否定之後出現這些詞，表示句子轉回肯定建議：「避免追高，可分批買入」「為避免踏空建議加倉」
+# 提示型否定之後出現這些詞，表示句子轉回肯定建議：「避免追高，可分批買入」「為避免踏空建議加倉」；
+# 或否定與買進詞之間夾著別的動詞／另起謂語的連接詞，否定綁在那個動詞上（「不要猶豫加碼」「不建議賣出反而加碼」）。
+# 「追高／追價／過早／大舉／此時」這類修飾語不收：「不建議追高買入」「不宜過早佈局」仍是否定買進
 # ponytail: 單字 pivot 會命中「可能／應該」等詞（「不建議在可能回檔前買進」會被降級），誤判時改收整詞，不要再加長虛詞表
-_AFFIRMATIVE_PIVOTS_ZH = ("建議", "建议", "可", "應", "应", "宜", "再度")
+_AFFIRMATIVE_PIVOTS_ZH = (
+    "建議", "建议", "可", "應", "应", "宜", "再度",
+    "猶豫", "犹豫", "遲疑", "迟疑", "錯過", "错过", "錯失", "错失", "擔心", "担心", "害怕",
+    "賣出", "卖出", "減碼", "减码", "減倉", "减仓", "持有", "踏空", "觀望", "观望", "等待",
+    "而", "並", "并",
+)
 
 
 def _negates_marker_zh(tail: str) -> bool:
