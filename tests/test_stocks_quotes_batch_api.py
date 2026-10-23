@@ -100,3 +100,12 @@ def test_single_quote_endpoint_includes_source_fields(monkeypatch):
     assert quote.source == "shioaji"
     assert quote.as_of == "2026-06-24T10:00:00+08:00"
     assert quote.is_stale is False
+
+
+def test_market_status_endpoint_aggregates_markets(monkeypatch):
+    import src.core.trading_calendar as tc
+
+    monkeypatch.setattr(tc, "is_market_polling_window", lambda m: m == "us")
+    assert stocks_endpoint.get_market_status(markets="tw, us") == {"markets": {"tw": False, "us": True}, "open": True}
+    assert stocks_endpoint.get_market_status(markets="tw")["open"] is False
+    assert stocks_endpoint.get_market_status(markets="")["open"] is True

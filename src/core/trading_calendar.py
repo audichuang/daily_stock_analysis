@@ -503,6 +503,32 @@ def infer_market_phase(
         return MarketPhase.UNKNOWN
 
 
+def is_market_polling_window(
+    market: Optional[str],
+    current_time: Optional[datetime] = None,
+    before: timedelta = timedelta(minutes=5),
+    after: timedelta = timedelta(minutes=10),
+) -> bool:
+    """Whether a live-quote poller should be running for ``market`` right now.
+
+    True while the regular session is open, padded by ``before``/``after`` so the
+    first and last tick of the day are not missed. Holidays (incl. typhoon days)
+    come from the exchange calendar. Fail-open: ``UNKNOWN`` phase counts as open,
+    so a calendar problem never freezes a live board.
+    """
+    now = current_time or datetime.now().astimezone()
+    open_phases = {
+        MarketPhase.INTRADAY,
+        MarketPhase.LUNCH_BREAK,
+        MarketPhase.CLOSING_AUCTION,
+    }
+    for t in (now, now + before, now - after):
+        phase = infer_market_phase(market, current_time=t)
+        if phase == MarketPhase.UNKNOWN or phase in open_phases:
+            return True
+    return False
+
+
 def _add_warning_code(warnings: List[str], code: str) -> None:
     if code not in warnings:
         warnings.append(code)

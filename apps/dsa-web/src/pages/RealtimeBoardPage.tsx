@@ -27,6 +27,7 @@ import { isTwStockCode, stockCodeMatchKey } from '../utils/stockCode';
 import { BoardDossierCell, BoardDossierPanel } from '../components/board/BoardDossier';
 
 const POLL_INTERVAL_MS = 30_000;
+const MARKET_STATUS_TTL_MS = 5 * 60_000; // 休市時只每 5 分鐘問一次後端開盤狀態，不打報價
 const DOSSIER_CHUNK = 50; // 與後端 MAX_BATCH_CODES 一致
 const DOSSIER_REFRESH_MS = 15 * 60_000; // 摘要是日資料，盤中不必跟 30 秒報價一起抓
 const SCOPE_STORAGE_KEY = 'dsa.board.scope';
@@ -369,8 +370,23 @@ const RealtimeBoardPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    let open = true;
+    let checkedAt = Date.now(); // 進頁面的首次刷新已在別處發出
     const timer = window.setInterval(() => {
-      if (!document.hidden) refresh();
+      if (document.hidden) return;
+      const run = () => {
+        if (open) refresh();
+      };
+      if (Date.now() - checkedAt < MARKET_STATUS_TTL_MS) return run();
+      checkedAt = Date.now();
+      const markets = Array.from(new Set((codesRef.current ?? []).map((c) => (isTwStockCode(c) ? 'tw' : 'us'))));
+      stocksApi
+        .getMarketOpen(markets.length ? markets : ['tw'])
+        .catch(() => true) // 查不到就當開盤，寧可多打不凍結看板
+        .then((o) => {
+          open = o;
+          run();
+        });
     }, POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [refresh]);

@@ -1035,3 +1035,33 @@ class CountMissingSessionsTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+TPE = ZoneInfo("Asia/Taipei")
+
+
+def _tpe(day, hh, mm):
+    return datetime(2026, 10, day, hh, mm, tzinfo=TPE)
+
+
+def test_polling_window_tw_open_close_and_grace():
+    f = trading_calendar.is_market_polling_window
+    assert f("tw", _tpe(23, 10, 0)) is True      # Fri, intraday
+    assert f("tw", _tpe(23, 8, 57)) is True      # 5 min lead-in
+    assert f("tw", _tpe(23, 13, 35)) is True     # 10 min tail
+    assert f("tw", _tpe(23, 8, 50)) is False
+    assert f("tw", _tpe(23, 13, 45)) is False
+    assert f("tw", _tpe(23, 2, 0)) is False      # overnight
+    assert f("tw", _tpe(24, 10, 0)) is False     # Saturday
+
+
+def test_polling_window_us_follows_new_york_session():
+    f = trading_calendar.is_market_polling_window
+    assert f("us", _tpe(23, 22, 0)) is True      # 10:00 New York
+    assert f("us", _tpe(23, 10, 0)) is False     # 22:00 New York
+
+
+def test_polling_window_fails_open_when_calendar_unavailable():
+    with patch.object(trading_calendar, "_XCALS_AVAILABLE", False):
+        assert trading_calendar.is_market_polling_window("tw", _tpe(24, 3, 0)) is True
+    assert trading_calendar.is_market_polling_window("zz", _tpe(24, 3, 0)) is True

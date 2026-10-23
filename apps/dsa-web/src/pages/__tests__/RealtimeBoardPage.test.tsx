@@ -4,20 +4,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import RealtimeBoardPage from '../RealtimeBoardPage';
 
-const { getWatchlist, getSnapshot, listHoldings, getQuotes, getIndices, getDossierSummaries } = vi.hoisted(() => ({
+const { getWatchlist, getSnapshot, listHoldings, getQuotes, getIndices, getDossierSummaries, getMarketOpen } = vi.hoisted(() => ({
   getDossierSummaries: vi.fn(),
   getWatchlist: vi.fn(),
   getSnapshot: vi.fn(),
   listHoldings: vi.fn(),
   getQuotes: vi.fn(),
   getIndices: vi.fn(),
+  getMarketOpen: vi.fn(),
 }));
 
 vi.mock('../../api/systemConfig', () => ({ systemConfigApi: { getWatchlist } }));
 vi.mock('../../api/portfolio', () => ({ portfolioApi: { getSnapshot } }));
 vi.mock('../../api/funds', () => ({ fundsApi: { listHoldings } }));
 vi.mock('../../api/stocks', () => ({
-  stocksApi: { getQuotes, getIndices, getDossierSummaries, getTrend: vi.fn().mockResolvedValue([]) },
+  stocksApi: { getQuotes, getIndices, getMarketOpen, getDossierSummaries, getTrend: vi.fn().mockResolvedValue([]) },
 }));
 vi.mock('recharts', () => {
   const Stub = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
@@ -66,6 +67,7 @@ describe('RealtimeBoardPage scope', () => {
       totals: [], navError: null,
     });
     getIndices.mockResolvedValue([]);
+    getMarketOpen.mockResolvedValue(true);
     getDossierSummaries.mockResolvedValue({ items: [], levelAlertsEnabled: false });
     getQuotes.mockImplementation((codes: string[]) =>
       Promise.resolve(codes.map((c) => quote(c, c === '2330.TW' ? 1000 : c === '2887.TW' ? 40 : 200))),
@@ -242,6 +244,24 @@ describe('RealtimeBoardPage scope', () => {
       expect(getDossierSummaries).toHaveBeenCalledTimes(3);
     } finally {
       Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops polling quotes while the market is closed and resumes when it reopens', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage();
+      await waitFor(() => expect(getQuotes).toHaveBeenCalled());
+      getMarketOpen.mockResolvedValue(false);
+      await act(() => vi.advanceTimersByTimeAsync(5 * 60_000 + 30_000)); // status check turns closed
+      const calls = getQuotes.mock.calls.length;
+      await act(() => vi.advanceTimersByTimeAsync(4 * 60_000)); // closed: no quote requests, no status request
+      expect(getQuotes.mock.calls.length).toBe(calls);
+      getMarketOpen.mockResolvedValue(true);
+      await act(() => vi.advanceTimersByTimeAsync(2 * 60_000)); // next status check reopens
+      expect(getQuotes.mock.calls.length).toBeGreaterThan(calls);
+    } finally {
       vi.useRealTimers();
     }
   });
