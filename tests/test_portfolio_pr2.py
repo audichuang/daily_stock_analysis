@@ -941,6 +941,26 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertEqual(self._filter([(date(2026, 1, 9), 6.00)]), [])
         self.assertEqual(self._filter([(date(2026, 1, 9), 7.31)]), [(date(2026, 1, 9), 7.31)])
 
+    def test_fx_outlier_reference_survives_arbitrarily_long_stale_streak(self) -> None:
+        self._seed_fx(date(2026, 1, 1), 7.30, "yfinance", False)
+        for day in range(2, 10):  # 8 stale carries; differing value proves they are skipped, not used
+            self._seed_fx(date(2026, 1, day), 6.10, "yfinance", True)
+        self.assertEqual(self._filter([(date(2026, 1, 10), 6.00)]), [])
+        self.assertEqual(self._filter([(date(2026, 1, 10), 7.31)]), [(date(2026, 1, 10), 7.31)])
+        self._seed_fx(date(2026, 1, 1), 7.30, "yfinance", False)
+        for day in range(2, 40):  # a month-long streak, crossing into February
+            self._seed_fx(date(2026, 1, 1) + timedelta(days=day - 1), 7.30, "yfinance", True)
+        self.assertEqual(self._filter([(date(2026, 2, 10), 6.00)], as_of=date(2026, 2, 10)), [])
+
+    def test_fx_refresh_filter_failure_does_not_carry_raw_latest_bar(self) -> None:
+        self._seed_fx(date(2026, 1, 7), 7.30, "yfinance", False)
+        frame = self._fx_frame([("2026-01-06", 7.31), ("2026-01-07", 7.32), ("2026-01-08", 6.00)])
+        with patch.object(PortfolioService, "_last_real_stored_rate", side_effect=RuntimeError("db down")):
+            self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 8))
+        today = self._fx_row(date(2026, 1, 8))
+        self.assertTrue(today.is_stale)
+        self.assertAlmostEqual(today.rate, 7.30)  # last stored row, never the unchecked raw 6.00
+
     def test_fx_refresh_rejected_latest_carries_from_accepted_bar_over_same_day_carry(self) -> None:
         self._seed_fx(date(2026, 1, 2), 7.20, "yfinance", False)
         self._seed_fx(date(2026, 1, 8), 7.20, "yfinance", True)  # carry written by an earlier failed refresh

@@ -47,7 +47,6 @@ PORTFOLIO_AGGREGATE_CURRENCY = "CNY"
 # 手動刷新一次之後就一直是 False——8 天前的匯率照樣顯示「最新」。3 天涵蓋週末。
 PORTFOLIO_FX_MAX_AGE_DAYS = 3
 FX_FALLBACK_SOURCE = "fallback_1_to_1"
-FX_REFERENCE_MAX_AGE_DAYS = 7  # max stored rows (days) walked back for the outlier reference
 FX_OUTLIER_MAX_DEVIATION = 0.02  # a bar this far (relative) from its reference counts as deviating
 
 
@@ -1660,17 +1659,18 @@ class PortfolioService:
             "error_count": 0,
         }
         for from_currency, to_currency in pairs:
-            closes: List[Tuple[date, float]] = []
+            # `accepted` is only set after the outlier filter succeeds; raw downloads never reach the fallback.
+            accepted: List[Tuple[date, float]] = []
             try:
                 # One download feeds both today's rate and the history backfill.
-                closes = self._fetch_fx_closes_from_yfinance(
+                fetched = self._fetch_fx_closes_from_yfinance(
                     from_currency=from_currency,
                     to_currency=to_currency,
                     as_of_date=as_of_date,
                 )
-                fetched_last = closes[-1] if closes else None
-                closes = self._filter_fx_outliers(
-                    from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date, closes=closes
+                fetched_last = fetched[-1] if fetched else None
+                closes = accepted = self._filter_fx_outliers(
+                    from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date, closes=fetched
                 )
                 # If the newest bar was rejected, today's rate must not silently become an older bar.
                 rate = closes[-1][1] if closes and closes[-1] == fetched_last else None
@@ -1699,9 +1699,9 @@ class PortfolioService:
                     exc,
                 )
 
-            if closes:
+            if accepted:
                 # Carry from the newest accepted bar, not from an older same-day carry row.
-                fallback = SimpleNamespace(rate=closes[-1][1], source="yfinance")
+                fallback = SimpleNamespace(rate=accepted[-1][1], source="yfinance")
             else:
                 fallback = self.repo.get_latest_fx_rate(
                     from_currency=from_currency,
@@ -1799,16 +1799,14 @@ class PortfolioService:
     def _last_real_stored_rate(
         self, *, from_currency: str, to_currency: str, before: date
     ) -> Optional[float]:
-        """Latest stored non-stale rate dated before `before`, walking back past stale carries."""
-        cursor = before - timedelta(days=1)
-        for _ in range(FX_REFERENCE_MAX_AGE_DAYS + 1):
-            row = self.repo.get_latest_fx_rate(from_currency=from_currency, to_currency=to_currency, as_of=cursor)
-            if row is None:
-                return None
-            if not row.is_stale and float(row.rate or 0.0) > 0:
-                return float(row.rate)
-            cursor = row.rate_date - timedelta(days=1)
-        return None
+        """Latest stored non-stale rate dated before `before`, however long the stale streak is."""
+        row = self.repo.get_latest_fx_rate(
+            from_currency=from_currency,
+            to_currency=to_currency,
+            as_of=before - timedelta(days=1),
+            real_only=True,
+        )
+        return float(row.rate) if row is not None else None
 
     def _filter_fx_outliers(
         self,
