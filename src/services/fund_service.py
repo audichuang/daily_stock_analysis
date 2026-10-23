@@ -3,7 +3,7 @@
 
 資料面：
 - 基金清單與淨值讀 ``market`` schema（``market.fund_info``／``market.fund_nav``），由
-  ``market_data.funds`` 每日從投信投顧公會入庫；查詢某檔時若歷史太短，當下從鉅亨補一次
+  ``market_data.funds`` 每日從投信投顧公會入庫；查詢某檔時若歷史未涵蓋全期，當下從鉅亨補一次
   （補過的基金之後會被 ``daily`` 一併保鮮）。
 - 前十大持股即時抓鉅亨、不入庫，失敗回空清單與錯誤碼，不影響其他欄位。
 
@@ -25,8 +25,8 @@ from src.storage import DatabaseManager, PortfolioFundHolding
 
 logger = logging.getLogger(__name__)
 
-# 歷史少於這麼多筆就當作還沒補過，查詢時順手從鉅亨補全期
-MIN_HISTORY_ROWS = 30
+# 歷史起點離成立日在這麼多天內，就當作已涵蓋全期（首筆淨值常晚於成立日幾週）
+INCEPTION_GRACE_DAYS = 45
 # 最新淨值日距今超過這麼多天就標 stale（基金假日不計價，連假約 9~10 天）
 STALE_AFTER_DAYS = 10
 MARKET_STATEMENT_TIMEOUT_MS = 5000
@@ -35,6 +35,8 @@ MARKET_STATEMENT_TIMEOUT_MS = 5000
 RETURN_PERIODS = (
     ("w1", 7), ("m1", 30), ("m3", 91), ("m6", 182), ("y1", 365), ("y3", 365 * 3), ("y5", 365 * 5),
 )
+# 歷史涵蓋最長報酬期間（近五年）就不必再補
+FULL_HISTORY_DAYS = max(days for _, days in RETURN_PERIODS)
 
 
 class FundUnavailableError(RuntimeError):
@@ -117,6 +119,19 @@ def nav_on_or_before(series: List[Dict[str, Any]], target: date) -> Optional[Dic
     return found
 
 
+_PERIOD_DAYS = dict(RETURN_PERIODS)
+PERIOD_KEYS = tuple(_PERIOD_DAYS) + ("ytd",)
+
+
+def period_base_target(last_date: date, key: str) -> date:
+    """期間報酬的起點日：最新淨值日回推（ytd 是去年最後一天）；實際基準取這天當日或之前最後一筆。
+
+    報酬卡（``compute_returns``）與走勢圖區間（``get_nav_history(period=)``）共用，兩邊才會是同一個基準日。"""
+    if key == "ytd":
+        return date(last_date.year, 1, 1) - timedelta(days=1)
+    return last_date - timedelta(days=_PERIOD_DAYS[key])
+
+
 def compute_returns(series: List[Dict[str, Any]]) -> Dict[str, Optional[float]]:
     """各期間報酬率（%）：以最新淨值日回推，起點取當日或之前最後一筆；期間不足的回 None。
 
@@ -127,18 +142,13 @@ def compute_returns(series: List[Dict[str, Any]]) -> Dict[str, Optional[float]]:
         return out
     last = series[-1]
     first_date = series[0]["date"]
-    for key, days in RETURN_PERIODS:
-        target = last["date"] - timedelta(days=days)
+    for key in PERIOD_KEYS:
+        target = period_base_target(last["date"], key)
         if target < first_date:
             continue
         base = nav_on_or_before(series, target)
         if base and base["nav"]:
             out[key] = (last["nav"] / base["nav"] - 1) * 100
-    year_start = date(last["date"].year, 1, 1) - timedelta(days=1)
-    if year_start >= first_date:
-        base = nav_on_or_before(series, year_start)
-        if base and base["nav"]:
-            out["ytd"] = (last["nav"] / base["nav"] - 1) * 100
     return out
 
 
@@ -204,9 +214,24 @@ class FundService:
         return [p for p in _records(self._market(self.gateway.history, fund_id, start=start))
                 if p.get("date") is not None and p.get("nav") is not None]
 
-    def _ensure_history(self, fund_id: str, series: List[Dict[str, Any]]):
-        """歷史太短時從鉅亨補一次；失敗只記警告，回傳 (series, 錯誤訊息)。"""
-        if len(series) >= MIN_HISTORY_ROWS:
+    @staticmethod
+    def _history_complete(info: Dict[str, Any], series: List[Dict[str, Any]]) -> bool:
+        """歷史是否已涵蓋全期：起點早於最長報酬期間，或起點貼近成立日。
+
+        不能看筆數：公會每天替約 4,400 檔各寫一筆，累積一個多月後沒補過的基金也會「夠多筆」，
+        卻只有公會入庫以來的短歷史。也不能看有沒有鉅亨來源的列：``daily`` 對已有鉅亨對照的
+        基金只補近 35 天，那些列不代表全期補過。"""
+        if not series:
+            return False
+        first, last = series[0]["date"], series[-1]["date"]
+        if first <= last - timedelta(days=FULL_HISTORY_DAYS):
+            return True
+        inception = info.get("inception_date")
+        return isinstance(inception, date) and first <= inception + timedelta(days=INCEPTION_GRACE_DAYS)
+
+    def _ensure_history(self, fund_id: str, info: Dict[str, Any], series: List[Dict[str, Any]]):
+        """歷史未涵蓋全期時從鉅亨補一次；失敗只記警告，回傳 (series, 錯誤訊息)。"""
+        if self._history_complete(info, series):
             return series, None
         try:
             self.gateway.backfill(fund_id)
@@ -217,7 +242,7 @@ class FundService:
 
     def get_detail(self, fund_id: str, today: Optional[date] = None) -> Dict[str, Any]:
         info = self._info(fund_id)
-        series, history_error = self._ensure_history(fund_id, self._series(fund_id))
+        series, history_error = self._ensure_history(fund_id, info, self._series(fund_id))
         latest = series[-1] if series else None
         today = today or date.today()
         return {
@@ -235,10 +260,21 @@ class FundService:
             "risk": compute_risk(series),
         }
 
-    def get_nav_history(self, fund_id: str, days: Optional[int] = None) -> Dict[str, Any]:
+    def get_nav_history(self, fund_id: str, days: Optional[int] = None,
+                        period: Optional[str] = None) -> Dict[str, Any]:
+        """``period``（m1…y5、ytd）：從報酬卡同一個基準點（``period_base_target`` 當日或之前最後一筆）起算，
+        首尾相除就等於 ``returns[period]``；歷史不足一個期間時回全部。``days`` 是舊參數（以今天回推、
+        取之後的第一筆），兩者都給時以 ``period`` 為準。"""
         self._info(fund_id)
-        start = date.today() - timedelta(days=days) if days else None
-        points = self._series(fund_id, start=start)
+        if period:
+            points = self._series(fund_id)
+            if points:
+                base = nav_on_or_before(points, period_base_target(points[-1]["date"], period))
+                if base is not None:
+                    points = points[points.index(base):]
+        else:
+            start = date.today() - timedelta(days=days) if days else None
+            points = self._series(fund_id, start=start)
         return {"fund_id": fund_id,
                 "points": [{"date": p["date"], "nav": p["nav"]} for p in points]}
 
@@ -321,7 +357,7 @@ class FundService:
             result = self._holding_dict(holding)
         # 持有的基金要有鉅亨對照與歷史，daily 才會持續補缺（失敗不擋建立）
         try:
-            self._ensure_history(fund_id, self._series(fund_id))
+            self._ensure_history(fund_id, info, self._series(fund_id))
         except FundUnavailableError:
             pass
         return result
@@ -332,6 +368,16 @@ class FundService:
             holding = session.get(PortfolioFundHolding, holding_id)
             if holding is None:
                 return None
+            platform = fields.get("platform")
+            if platform is not None and platform != holding.platform:
+                # 與 create 同一條規則：同通路同基金只能有一筆（否則撞唯一鍵變 500）
+                clash = (session.query(PortfolioFundHolding)
+                         .filter(PortfolioFundHolding.platform == platform,
+                                 PortfolioFundHolding.fund_id == holding.fund_id,
+                                 PortfolioFundHolding.id != holding.id)
+                         .first())
+                if clash:
+                    raise ValueError("duplicate_holding")
             for key, value in fields.items():
                 if key in allowed and value is not None:
                     setattr(holding, key, value)

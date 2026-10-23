@@ -128,6 +128,31 @@ class TestGetPortfolioSnapshotTool(unittest.TestCase):
         self.assertIn("error", invalid)
         self.assertIn("YYYY-MM-DD", invalid["error"])
 
+    @patch("src.services.portfolio_risk_service.PortfolioRiskService", _FakeRiskService)
+    def test_missing_fx_hides_cross_currency_totals_from_agent(self) -> None:
+        class _MissingFxService(_FakePortfolioService):
+            def get_portfolio_snapshot(self, **kwargs):
+                snapshot = super().get_portfolio_snapshot(**kwargs)
+                snapshot.update(fx_stale=True, fx_missing=True, fx_missing_pairs=["USD/CNY"])
+                return snapshot
+
+        with patch("src.services.portfolio_service.PortfolioService", _MissingFxService):
+            result = _handle_get_portfolio_snapshot(account_id=1, include_risk=False)
+
+        snapshot = result["snapshot"]
+        self.assertTrue(snapshot["fx_missing"])
+        self.assertEqual(snapshot["fx_missing_pairs"], ["USD/CNY"])
+        self.assertIsNone(snapshot["total_equity"])
+        self.assertIsNone(snapshot["total_market_value"])
+
+    @patch("src.services.portfolio_service.PortfolioService", _FakePortfolioService)
+    @patch("src.services.portfolio_risk_service.PortfolioRiskService", _FakeRiskService)
+    def test_totals_kept_when_fx_complete(self) -> None:
+        result = _handle_get_portfolio_snapshot(account_id=1, include_risk=False)
+
+        self.assertFalse(result["snapshot"]["fx_missing"])
+        self.assertEqual(result["snapshot"]["total_equity"], 60000.0)
+
 
 if __name__ == "__main__":
     unittest.main()

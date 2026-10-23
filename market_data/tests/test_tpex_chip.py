@@ -127,3 +127,142 @@ def test_every_tpex_source_is_market_tagged():
     # 新增 *_tpex 來源卻漏了 SOURCE_MARKET，就會以 NULL（＝上市）寫入並被上市 replace 刪掉
     assert {s for s in crawl.DAILY if s.endswith("_tpex")} == set(crawl.SOURCE_MARKET)
     assert set(crawl.SOURCE_MARKET.values()) == {"tpex"}
+
+
+def test_crawl_day_tpex_collision_does_not_overwrite_listed_row(pg_conn, monkeypatch, capsys):
+    """上櫃來源吐出與上市撞號的代號（實例：006201 → '6201'）：不能整列蓋掉上市列並改標 tpex。"""
+    _seed(pg_conn)
+    monkeypatch.setattr(crawl.sources, "crawl_tpex_chip", lambda kind, d: _frame("2330", 9)(d))
+    assert crawl.crawl_day(pg_conn, "institutional_tpex", _D) == 0
+    assert _rows(pg_conn) == {"2330": "twse", "3324": "tpex"}
+    assert pg_conn.execute(text("SELECT foreign_net FROM market.institutional "
+                                "WHERE stock_id = '2330' AND date = :d"), {"d": _D}).scalar() == 1
+    assert "**WARN institutional: 1 rows skipped" in capsys.readouterr().out
+
+
+# --- crawl_range／refresh_range 的 resume 要依市場判斷「這天做過了沒」----------------
+
+class _TxEngine:
+    def __init__(self, conn): self.conn = conn
+    def begin(self): return self
+    def __enter__(self): return self.conn
+    def __exit__(self, *a): return False
+
+
+def _calendar_day(conn):
+    # crawl_range 只抓 market.price 有的交易日
+    conn.execute(text("INSERT INTO market.price (stock_id, date) VALUES ('2330', :d)"), {"d": _D})
+
+
+def _recording_fetch(monkeypatch, calls):
+    def fetch(*args):
+        calls.append(args)
+        return _frame("6488", 5)(args[-1])
+    monkeypatch.setattr(crawl.sources, "crawl_tpex_chip", fetch)
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", fetch)
+
+
+@pytest.mark.parametrize("stored, source, fetched", [
+    ("twse", "institutional_tpex", True),    # 只有上市列：上櫃這天還沒做
+    ("tpex", "institutional_tpex", False),   # 上櫃已入庫：resume 跳過
+    ("tpex", "institutional", True),         # 只有上櫃列：上市這天還沒做
+    ("twse", "institutional", False),
+])
+def test_crawl_range_resume_is_per_market(pg_conn, monkeypatch, stored, source, fetched):
+    _calendar_day(pg_conn)
+    pg_conn.execute(text("INSERT INTO market.institutional (stock_id, date, market) "
+                         "VALUES ('3324', :d, :m)"), {"d": _D, "m": None if stored == "twse" else "tpex"})
+    calls = []
+    _recording_fetch(monkeypatch, calls)
+    crawl.crawl_range(_TxEngine(pg_conn), source, [_D], resume=True)
+    assert bool(calls) is fetched
+
+
+@pytest.mark.parametrize("stored, fetched", [("twse", False), ("tpex", True)])
+def test_refresh_range_tpex_only_refreshes_stored_tpex_days(pg_conn, monkeypatch, stored, fetched):
+    pg_conn.execute(text("INSERT INTO market.institutional (stock_id, date, market) "
+                         "VALUES ('3324', :d, :m)"), {"d": _D, "m": None if stored == "twse" else "tpex"})
+    calls = []
+    _recording_fetch(monkeypatch, calls)
+    crawl.refresh_range(_TxEngine(pg_conn), "institutional_tpex", [_D], delay=0)
+    assert bool(calls) is fetched
+
+
+# --- 撞號防護也要守住 replace 路徑與 BWIBBU_ALL 快照 ----------------------------------
+
+def _frames(*rows):
+    """多列法人 frame：rows 為 (stock_id, 淨額)。"""
+    return lambda d: pd.concat([_frame(sid, n)(d) for sid, n in rows])
+
+
+def _net(conn, sid):
+    return conn.execute(text("SELECT foreign_net, coalesce(market, 'twse') FROM market.institutional "
+                             "WHERE stock_id = :s AND date = :d"), {"s": sid, "d": _D}).fetchone()
+
+
+@pytest.mark.parametrize("source, rows, kept, written", [
+    # 每晚 refresh_range 的上櫃整日換血：先刪上櫃列再寫，撞到上市 2330 不能蓋
+    ("institutional_tpex", [("2330", 9), ("6488", 5)], ("2330", 1, "twse"), ("6488", "tpex")),
+    # 上市 backfill --force：撞到上櫃 3324 一樣不能蓋
+    ("institutional", [("3324", 9), ("2330", 7)], ("3324", 2, "tpex"), ("2330", "twse")),
+])
+def test_replace_path_keeps_other_market_collision(pg_conn, monkeypatch, capsys,
+                                                   source, rows, kept, written):
+    _seed(pg_conn)
+    fetch = _frames(*rows)
+    monkeypatch.setattr(crawl.sources, "crawl_tpex_chip", lambda kind, d: fetch(d))
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", fetch)
+    assert crawl.crawl_day(pg_conn, source, _D, replace=True) == 1
+    sid, net, market = kept
+    assert tuple(_net(pg_conn, sid)) == (net, market), "另一市場的列被整日換血蓋掉"
+    # 反向：同市場沒撞號的列照常換血寫入
+    assert _net(pg_conn, written[0])[1] == written[1]
+    assert "**WARN institutional: 1 rows skipped" in capsys.readouterr().out
+
+
+def test_6201_repair_needs_delete_then_force(pg_conn, monkeypatch, capsys):
+    """6201 2016-09-26 的修復步驟：不帶 --force 的 backfill 被 resume 跳過；只 --force 不先刪
+    上櫃那列會被防護擋；兩步都做才寫回上市列（見 docs/market-data-pitfalls.md）。"""
+    _calendar_day(pg_conn)
+    _seed(pg_conn)
+    pg_conn.execute(text("INSERT INTO market.institutional (stock_id, date, foreign_net, market) "
+                         "VALUES ('6201', :d, 14, 'tpex')"), {"d": _D})
+    calls = []
+
+    def fetch(d):
+        calls.append(d)
+        return _frames(("2330", 1), ("6201", 1022))(d)
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", fetch)
+    eng = _TxEngine(pg_conn)
+
+    crawl.crawl_range(eng, "institutional", [_D], resume=True)                 # 不帶 --force
+    assert calls == [] and tuple(_net(pg_conn, "6201")) == (14, "tpex")
+
+    crawl.crawl_range(eng, "institutional", [_D], resume=False, replace=True)  # 只 --force
+    assert tuple(_net(pg_conn, "6201")) == (14, "tpex")
+    assert "6201" in capsys.readouterr().out
+
+    pg_conn.execute(text("DELETE FROM market.institutional WHERE stock_id = '6201' "
+                         "AND date = :d AND market = 'tpex'"), {"d": _D})
+    crawl.crawl_range(eng, "institutional", [_D], resume=False, replace=True)
+    assert tuple(_net(pg_conn, "6201")) == (1022, "twse")
+    assert _rows(pg_conn)["3324"] == "tpex"
+
+
+def _valuation(conn, sid):
+    return conn.execute(text("SELECT pe_ratio, coalesce(market, 'twse') FROM market.valuation "
+                             "WHERE stock_id = :s AND date = :d"), {"s": sid, "d": _D}).fetchone()
+
+
+def test_crawl_valuation_snapshot_keeps_tpex_collision(pg_conn, monkeypatch, capsys):
+    """BWIBBU_ALL（上市快照）撞到同日上櫃列：不能蓋掉並改標上市；同市場舊列照常更新。"""
+    pg_conn.execute(text("INSERT INTO market.valuation (stock_id, date, pe_ratio, market) "
+                         "VALUES ('6201', :d, 14, 'tpex'), ('2330', :d, 1, NULL)"), {"d": _D})
+    roc = f"{_D.year - 1911}{_D:%m%d}"
+    monkeypatch.setattr(crawl.sources, "fetch_valuation", lambda: [
+        {"Code": sid, "Date": roc, "PEratio": pe, "PBratio": "1", "DividendYield": "1"}
+        for sid, pe in (("6201", "99"), ("2330", "20"))])
+    assert crawl.crawl_valuation(pg_conn) == 1
+    assert tuple(_valuation(pg_conn, "6201")) == (14, "tpex")
+    assert tuple(_valuation(pg_conn, "2330")) == (20, "twse"), "同市場（上市）舊列要照常更新"
+    assert "**WARN valuation: 1 rows skipped" in capsys.readouterr().out

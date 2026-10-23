@@ -1756,13 +1756,22 @@ class TestPersistUsageHelper(unittest.TestCase):
             self.assertIsNone(row.tokenizer_version)
 
     def test_persist_usage_never_raises(self):
-        # Pass a deliberately bad db state by resetting the singleton
-        DatabaseManager.reset_instance()
-        # Should silently swallow the error, not raise
-        try:
-            persist_llm_usage({"total_tokens": 5}, "m", call_type="analysis")
-        except Exception as exc:
-            self.fail(f"persist_llm_usage raised unexpectedly: {exc}")
+        # 用注入的失敗製造「資料庫不可用」，不要 reset singleton：reset 之後 persist_llm_usage
+        # 會依設定新建一個 DatabaseManager，寫進 .env 指到的庫——conftest 守門之前那就是
+        # 正式 dsa.llm_usage（曾累積 42 列 model='m'、total_tokens=5，都是這支測試留下的，已清除）。
+        with patch(
+            "src.storage.DatabaseManager.get_instance",
+            side_effect=RuntimeError("db unavailable"),
+        ) as get_instance, self.assertLogs("src.storage", level="WARNING") as logs:
+            try:
+                persist_llm_usage({"total_tokens": 5}, "m", call_type="analysis")
+            except Exception as exc:
+                self.fail(f"persist_llm_usage raised unexpectedly: {exc}")
+
+        get_instance.assert_called_once()
+        self.assertTrue(any("failed to persist usage record" in line for line in logs.output))
+        with self.db.session_scope() as session:
+            self.assertEqual(session.query(LLMUsage).count(), 0)
 
 
 class TestLLMUsageMigration(unittest.TestCase):

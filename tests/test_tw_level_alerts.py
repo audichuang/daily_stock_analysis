@@ -195,6 +195,21 @@ def _endpoint_client(monkeypatch, enabled):
     return TestClient(app), writes
 
 
+def test_endpoint_refuses_levels_on_old_basis_after_adjustment(monkeypatch):
+    # 除權息／減資當天摘要仍是舊基準的價位：照建會建出錯的觸發價，試算也一樣擋
+    from src.services import tw_stock_watch
+
+    client, writes = _endpoint_client(monkeypatch, enabled=True)
+    monkeypatch.setattr(tw_stock_watch, "_one", lambda code: {**SUMMARY, "adjusted_after": True})
+    for body in ({"support": SUP}, {"support": SUP, "dry_run": True}):
+        r = client.post("/api/v1/stocks/3324.TWO/level-alerts", json=body)
+        assert r.status_code == 409 and r.json()["detail"]["error"] == "levels_stale"
+    assert writes == []
+    monkeypatch.setattr(tw_stock_watch, "_one", lambda code: {**SUMMARY, "adjusted_after": False})
+    assert client.post("/api/v1/stocks/3324.TWO/level-alerts", json={"support": SUP}).status_code == 200
+    assert len(writes) == 1
+
+
 def test_endpoint_refuses_writes_while_disabled_but_allows_dry_run(monkeypatch):
     client, writes = _endpoint_client(monkeypatch, enabled=False)
     r = client.post("/api/v1/stocks/3324.TWO/level-alerts", json={"support": SUP})
@@ -328,7 +343,7 @@ def test_message_warns_when_adjustment_after_as_of(monkeypatch):
     monkeypatch.setattr(tw_stock_watch, "_one", lambda code: SUMMARY)
     monkeypatch.setattr(la, "_adjusted_after", lambda code, as_of: calls.append((code, as_of)) or True)
     md = la.build_level_alert_message(VALID_META, {"observed_value": 1236.0})
-    assert md.splitlines()[0] == "⚠️ 價位建立後（2026-10-21）有除權息，價位基準已變動，請在盯盤看板重建警報"
+    assert md.splitlines()[0] == "⚠️ 價位建立後（2026-10-21）有除權息，價位基準已變動，請等盤後資料更新後在盯盤看板重建警報"
     assert calls == [("3324.TWO", "2026-10-21")]
     monkeypatch.setattr(la, "_adjusted_after", lambda code, as_of: False)
     md = la.build_level_alert_message(VALID_META, {"observed_value": 1236.0})

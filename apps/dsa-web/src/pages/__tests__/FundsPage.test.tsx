@@ -93,7 +93,18 @@ describe('FundsPage', () => {
     expect(await screen.findByText('+157.99%')).toBeInTheDocument();
     expect(screen.getByText('TW000T3604Y3')).toBeInTheDocument();
     expect(await screen.findByText('创意')).toBeInTheDocument();
-    await waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/funds/18480065/nav', { params: { days: 366 } }));
+    // 走勢區間用與報酬卡同一個基準點（period），不再以今天回推天數
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/funds/18480065/nav', { params: { period: 'y1' } }));
+  });
+
+  it('asks the chart for the same period basis as the return cards, and the full history for All', async () => {
+    renderPage('/funds?fund=18480065');
+    await screen.findByText('+157.99%');
+    fireEvent.click(screen.getByRole('button', { name: '5Y' }));
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/funds/18480065/nav', { params: { period: 'y5' } }));
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    await waitFor(() => expect(get).toHaveBeenLastCalledWith('/api/v1/funds/18480065/nav', { params: {} }));
+    expect(get.mock.calls.some(([, cfg]) => cfg?.params?.days !== undefined)).toBe(false);
   });
 
   it('searches funds by keyword', async () => {
@@ -102,5 +113,68 @@ describe('FundsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Search/ }));
     expect(await screen.findByText('统一奔腾基金')).toBeInTheDocument();
     expect(get).toHaveBeenCalledWith('/api/v1/funds/search', { params: { q: '奔腾', limit: 20 } });
+  });
+
+  describe('holding form picks up the selected fund', () => {
+    // 搜尋結果 73990253 的詳情／走勢／持股，沿用 18480065 的形狀換掉代號與名稱
+    const routeWithSecondFund = (url: string) => {
+      if (url === '/api/v1/funds/73990253') {
+        return Promise.resolve({ data: { ...detailResponse, fund_id: '73990253', name: '统一奔腾基金' } });
+      }
+      if (url === '/api/v1/funds/73990253/nav') return Promise.resolve({ data: { fund_id: '73990253', points: [] } });
+      if (url === '/api/v1/funds/73990253/holdings') {
+        return Promise.resolve({ data: { fund_id: '73990253', items: [], error: 'not_mapped' } });
+      }
+      return route(url);
+    };
+
+    const pickSearchResult = async () => {
+      fireEvent.change(screen.getByPlaceholderText('Fund or company'), { target: { value: '奔腾' } });
+      fireEvent.click(screen.getByRole('button', { name: /Search/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /统一奔腾基金/ }));
+      await screen.findByRole('heading', { name: '统一奔腾基金' });
+    };
+
+    beforeEach(() => {
+      get.mockImplementation(routeWithSecondFund);
+    });
+
+    it('fills an empty add form once a fund is searched and selected', async () => {
+      renderPage();
+      await screen.findAllByText('安联台湾科技基金');
+      fireEvent.click(screen.getByRole('button', { name: 'Add holding' }));
+      expect(screen.getByText('Search and select a fund below first')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+      await pickSearchResult();
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
+      expect(screen.queryByText('Search and select a fund below first')).not.toBeInTheDocument();
+      expect(screen.getByText('Add holding：统一奔腾基金')).toBeInTheDocument();
+    });
+
+    it('keeps the fund of an add form that already has one', async () => {
+      renderPage('/funds?fund=18480065');
+      await screen.findByText('+157.99%');
+      fireEvent.click(screen.getByRole('button', { name: 'Add holding' }));
+      expect(screen.getByText('Add holding：安联台湾科技基金')).toBeInTheDocument();
+
+      await pickSearchResult();
+
+      expect(screen.getByText('Add holding：安联台湾科技基金')).toBeInTheDocument();
+      expect(screen.queryByText('Add holding：统一奔腾基金')).not.toBeInTheDocument();
+    });
+
+    it('does not retarget an edit form when another fund is selected', async () => {
+      renderPage();
+      await screen.findAllByText('安联台湾科技基金');
+      fireEvent.click(screen.getAllByRole('button', { name: 'Edit holding' })[0]);
+      expect(screen.getByText('Edit holding：安联台湾科技基金')).toBeInTheDocument();
+
+      await pickSearchResult();
+
+      expect(screen.getByText('Edit holding：安联台湾科技基金')).toBeInTheDocument();
+      expect(screen.queryByText('Edit holding：统一奔腾基金')).not.toBeInTheDocument();
+    });
   });
 });

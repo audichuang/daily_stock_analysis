@@ -7,6 +7,7 @@ import type {
   FundHoldingListResponse,
   FundHoldingUpdateRequest,
   FundNavHistoryResponse,
+  FundNavPeriod,
   FundSearchResponse,
   FundTopHoldingsResponse,
 } from '../types/funds';
@@ -33,10 +34,12 @@ export const fundsApi = {
     return toCamelCase<FundDetail>(response.data);
   },
 
-  async getNavHistory(fundId: string, days?: number): Promise<FundNavHistoryResponse> {
+  /** period：與報酬卡同一個基準點起算（首尾相除＝returns[period]）；days 是舊的以今天回推。 */
+  async getNavHistory(fundId: string, range: { period?: FundNavPeriod; days?: number } = {}): Promise<FundNavHistoryResponse> {
+    const params = range.period ? { period: range.period } : range.days ? { days: range.days } : {};
     const response = await apiClient.get<Record<string, unknown>>(
       `/api/v1/funds/${encodeURIComponent(fundId)}/nav`,
-      { params: days ? { days } : {} },
+      { params },
     );
     return toCamelCase<FundNavHistoryResponse>(response.data);
   },

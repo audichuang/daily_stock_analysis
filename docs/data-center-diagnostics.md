@@ -17,6 +17,11 @@ Web 数据中心位于 `/data`，用于只读查看数据源能力、数据集�
 - Overview 请求失败时整页显示可重试错误；接口成功但 provider/dataset 均为空时显示 empty 状态。
 - 单个 provider 或 dataset 的 `partial`、`unknown`、`stale`、`unavailable` 只影响对应条目，其余条目继续展示。
 
+## 台股路由（本 fork）
+
+- 即時報價：`tw.realtime` 場景。設了 `SHIOAJI_API_KEY`／`SHIOAJI_SECRET_KEY` 時是 `shioaji → yfinance`，沒設時只有 `yfinance`；與 `data_provider/base.py` 的台股分支同一份判定。Shioaji 只服務 `realtime_quote`，可用性探針要帶這個 capability，否則會被誤判成 unavailable。
+- 日 K：`marketdb`（`MarketDBFetcher`，本地 Postgres `market` schema）只登記台股，`yfinance` 是備援。沒設 `DATABASE_URL` 時 `marketdb` 顯示 `unconfigured`，台股日 K 會標成從它 fallback。
+
 ## 安全边界
 
 该页面不调用 `/api/v1/system/config`，不展示 API Key、Token、Cookie 或原始环境变量。需要修改配置时仅跳转到 Settings，由现有配置脱敏和权限边界负责处理。

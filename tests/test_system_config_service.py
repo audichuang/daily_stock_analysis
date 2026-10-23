@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import requests
 
@@ -1672,6 +1672,69 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         storage_check = next(check for check in status["checks"] if check["key"] == "storage")
         self.assertEqual(storage_check["status"], "configured")
         self.assertFalse(missing_parent.exists())
+
+    def _storage_check_with_app_engine(self, engine, *, storage_url: str = "postgresql://u:pw@db/dsa"):
+        db_path = Path(self.temp_dir.name) / "stock_analysis.db"
+        self._rewrite_env(
+            "LITELLM_MODEL=gemini/gemini-3-flash-preview",
+            "GEMINI_API_KEY=secret-key-value",
+            "STOCK_LIST=600519",
+            f"DATABASE_PATH={db_path}",
+        )
+        fake_db = SimpleNamespace(_engine=engine)
+        with patch.dict(os.environ, {"STORAGE_DATABASE_URL": storage_url}, clear=True), \
+             patch("src.storage.DatabaseManager.get_instance", return_value=fake_db):
+            status = self.service.get_setup_status()
+        return next(check for check in status["checks"] if check["key"] == "storage")
+
+    def test_get_setup_status_storage_check_probes_app_database_when_storage_url_set(self) -> None:
+        # 設了 STORAGE_DATABASE_URL 時應用庫是它，不是 DATABASE_PATH 的 SQLite（已凍結）。
+        engine = MagicMock()
+        engine.url.render_as_string.return_value = "postgresql://u:***@db/dsa"
+        engine.url.get_backend_name.return_value = "postgresql"
+
+        check = self._storage_check_with_app_engine(engine)
+
+        self.assertEqual(check["status"], "configured")
+        self.assertIn("postgresql://u:***@db/dsa", check["message"])
+        self.assertNotIn("stock_analysis.db", check["message"])
+        self.assertNotIn("pw", check["message"])
+        engine.connect.assert_called_once()
+
+    def test_get_setup_status_storage_check_flags_unreachable_app_database(self) -> None:
+        # 正式 Postgres 掛掉而 SQLite 父目錄可寫：舊邏輯在這裡亮綠燈。
+        engine = MagicMock()
+        engine.url.render_as_string.return_value = "postgresql://u:***@db/dsa"
+        engine.url.get_backend_name.return_value = "postgresql"
+        engine.connect.side_effect = ConnectionRefusedError("db down")
+
+        check = self._storage_check_with_app_engine(engine)
+
+        self.assertEqual(check["status"], "needs_action")
+        self.assertIn("ConnectionRefusedError", check["message"])
+
+    def test_get_setup_status_storage_check_flags_running_sqlite_despite_storage_url(self) -> None:
+        # 設了 STORAGE_DATABASE_URL 但執行中的引擎仍是 SQLite（改了設定沒重啟）：要標需處理，
+        # 而且不能拿 SQLite 的 SELECT 1 成功當成應用庫正常。
+        engine = MagicMock()
+        engine.url.render_as_string.return_value = "sqlite:///data/stock_analysis.db"
+        engine.url.get_backend_name.return_value = "sqlite"
+
+        check = self._storage_check_with_app_engine(engine)
+
+        self.assertEqual(check["status"], "needs_action")
+        self.assertIn("SQLite", check["message"])
+        self.assertIn("重新啟動", check["next_step"])
+        engine.connect.assert_not_called()
+
+    def test_get_setup_status_storage_check_keeps_sqlite_path_without_storage_url(self) -> None:
+        # 反向：沒設 STORAGE_DATABASE_URL 時仍走 SQLite 路徑檢查，不去碰應用庫連線。
+        engine = MagicMock()
+        check = self._storage_check_with_app_engine(engine, storage_url="")
+
+        self.assertEqual(check["status"], "configured")
+        self.assertIn("stock_analysis.db", check["message"])
+        engine.connect.assert_not_called()
 
     def test_export_desktop_env_returns_raw_text(self) -> None:
         self.env_path.write_text(

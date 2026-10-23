@@ -52,8 +52,11 @@ def _series(days: int, end: Optional[date] = None, start_nav: float = 100.0, ste
 
 class FakeMarket:
     def __init__(self, series=None, info=INFO, navs=None, fail=False):
-        self.series = series if series is not None else _series(800)
+        # 預設給超過五年的歷史（已涵蓋全期，不會觸發補歷史）
+        self.series = series if series is not None else _series(365 * 5 + 30)
         self.info_row = info
+        # 其他基金代號 → info，給「同通路有別檔基金」這類情境用
+        self.other_infos = {}
         self.navs = navs
         self.fail = fail
         self.backfills = []
@@ -81,7 +84,8 @@ class FakeMarket:
 
         return FundGateway(
             search=lambda q, limit: (self._check(), pd.DataFrame([{**INFO, "nav": 783.21, "nav_date": _today()}]))[1],
-            info=lambda fund_id: (self._check(), self.info_row if fund_id == INFO["fund_id"] else None)[1],
+            info=lambda fund_id: (self._check(), self.info_row if fund_id == INFO["fund_id"]
+                                  else self.other_infos.get(fund_id))[1],
             history=history, latest_navs=latest_navs, backfill=backfill,
             top_holdings=lambda fund_id: [{"name": "創意", "sector": "科技", "weight": 7.65, "country": "台灣"}],
         )
@@ -147,18 +151,90 @@ class FundApiTests(unittest.TestCase):
         self.assertIsNotNone(body["returns"]["y1"])
         self.assertEqual(self.market.backfills, [])    # 歷史夠長就不補
 
+    def test_nav_period_starts_at_the_same_base_as_the_return_card(self):
+        # 淨值日落後今天 3 天、中間有缺日：以今天回推（舊 days 寫法）會選到不同的基準日
+        end = _today() - timedelta(days=3)
+        series = [p for p in _series(2000, end=end, step=0.37) if p["date"].weekday() < 5]
+        self.market.series = series
+        returns = self.client.get("/api/v1/funds/18480065").json()["returns"]
+        for key in ("m1", "m3", "y1", "y3", "y5", "ytd"):
+            points = self.client.get("/api/v1/funds/18480065/nav", params={"period": key}).json()["points"]
+            self.assertAlmostEqual((points[-1]["nav"] / points[0]["nav"] - 1) * 100, returns[key], places=9, msg=key)
+            # 基準是起點日當日或之前最後一筆：再往前一筆就超出區間
+            # 錨點是最後一筆淨值日：end 落在週末時序列只到週五（舊寫法用 end，週二、週三跑必紅）
+            target = fund_service.period_base_target(series[-1]["date"], key)
+            self.assertLessEqual(date.fromisoformat(points[0]["date"]), target)
+            nxt = date.fromisoformat(points[1]["date"])
+            self.assertGreater(nxt, target, msg=key)
+
+    def test_nav_period_base_holds_when_end_falls_on_weekend(self):
+        # 固定案例：today 為週二、週三時 end 落在週六、週日，序列只到週五
+        for today in (date(2026, 10, 27), date(2026, 10, 28)):
+            with patch(f"{__name__}._today", return_value=today):
+                self.test_nav_period_starts_at_the_same_base_as_the_return_card()
+
+    def test_nav_period_falls_back_to_all_history_when_too_short(self):
+        self.market.series = _series(60)
+        points = self.client.get("/api/v1/funds/18480065/nav", params={"period": "y5"}).json()["points"]
+        self.assertEqual(len(points), 60)
+        self.assertEqual(self.client.get("/api/v1/funds/18480065/nav", params={"period": "y9"}).status_code, 422)
+
     def test_detail_backfills_short_history_once(self):
         self.market.series = _series(3)
         body = self.client.get("/api/v1/funds/18480065").json()
         self.assertEqual(self.market.backfills, ["18480065"])
         self.assertEqual(body["history_points"], 400)
 
+    def test_detail_backfills_when_only_sitca_rows_accumulated(self):
+        # 公會每日值累積到 30 筆以上，但只有入庫以來的短歷史：仍要補全期
+        self.market.series = _series(45)
+        body = self.client.get("/api/v1/funds/18480065").json()
+        self.assertEqual(self.market.backfills, ["18480065"])
+        self.assertEqual(body["history_points"], 400)
+        self.assertIsNotNone(body["returns"]["y1"])
+
+    def test_detail_skips_backfill_when_history_reaches_inception(self):
+        # 新成立的基金：歷史起點貼近成立日就已是全期，不要每次打開都打鉅亨
+        self.market.series = _series(45)
+        self.market.info_row = {**INFO, "inception_date": _today() - timedelta(days=50)}
+        self.client.get("/api/v1/funds/18480065")
+        self.assertEqual(self.market.backfills, [])
+
+    def test_detail_backfills_when_history_starts_long_after_inception(self):
+        # 起點離成立日很遠、又不滿五年：缺前段歷史，要補
+        self.market.series = _series(400)
+        self.client.get("/api/v1/funds/18480065")
+        self.assertEqual(self.market.backfills, ["18480065"])
+
+    def test_detail_backfills_when_gap_to_inception_just_exceeds_grace(self):
+        # 起點比成立日晚、剛超過寬限期：前段歷史仍缺，要補（防寬限被放寬過頭）
+        self.market.series = _series(45)
+        first = self.market.series[0]["date"]
+        gap = fund_service.INCEPTION_GRACE_DAYS + 15
+        self.market.info_row = {**INFO, "inception_date": first - timedelta(days=gap)}
+        self.client.get("/api/v1/funds/18480065")
+        self.assertEqual(self.market.backfills, ["18480065"])
+
+    def test_detail_skips_backfill_when_gap_to_inception_within_grace(self):
+        # 起點在寬限期內（公會晚幾週才有第一筆淨值）：視為全期，不補（防寬限被收得過緊）
+        self.market.series = _series(45)
+        first = self.market.series[0]["date"]
+        gap = fund_service.INCEPTION_GRACE_DAYS - 5
+        self.market.info_row = {**INFO, "inception_date": first - timedelta(days=gap)}
+        self.client.get("/api/v1/funds/18480065")
+        self.assertEqual(self.market.backfills, [])
+
+    def test_create_holding_backfills_sitca_only_history(self):
+        self.market.series = _series(45)
+        self.assertEqual(self._create().status_code, 200)
+        self.assertEqual(self.market.backfills, ["18480065"])
+
     def test_stale_nav_is_flagged(self):
-        self.market.series = _series(400, end=_today() - timedelta(days=fund_service.STALE_AFTER_DAYS + 1))
+        self.market.series = _series(365 * 5 + 30, end=_today() - timedelta(days=fund_service.STALE_AFTER_DAYS + 1))
         self.assertTrue(self.client.get("/api/v1/funds/18480065").json()["is_stale"])
 
     def test_recent_nav_is_not_stale(self):
-        self.market.series = _series(400, end=_today() - timedelta(days=fund_service.STALE_AFTER_DAYS))
+        self.market.series = _series(365 * 5 + 30, end=_today() - timedelta(days=fund_service.STALE_AFTER_DAYS))
         self.assertFalse(self.client.get("/api/v1/funds/18480065").json()["is_stale"])
 
     def test_unknown_fund_is_404_with_code(self):
@@ -210,6 +286,38 @@ class FundApiTests(unittest.TestCase):
         self.assertEqual(r.json()["units"], 600)
         self.assertEqual(self.client.delete(f"/api/v1/funds/holdings/{hid}").status_code, 200)
         self.assertEqual(self.client.delete(f"/api/v1/funds/holdings/{hid}").status_code, 404)
+
+    def test_update_platform_to_existing_one_is_409(self):
+        first = self._create(platform="國泰世華").json()["id"]
+        self._create(platform="鉅亨買基金")
+        r = self.client.put(f"/api/v1/funds/holdings/{first}", json={"platform": "鉅亨買基金"})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["error"], "duplicate_holding")
+        # 交易已回滾，原本那筆不受影響
+        platforms = sorted(i["platform"] for i in self.client.get("/api/v1/funds/holdings").json()["items"])
+        self.assertEqual(platforms, ["國泰世華", "鉅亨買基金"])
+
+    def test_update_keeping_own_platform_or_moving_to_free_one_succeeds(self):
+        first = self._create(platform="國泰世華").json()["id"]
+        self._create(platform="鉅亨買基金")
+        r = self.client.put(f"/api/v1/funds/holdings/{first}", json={"platform": "國泰世華", "units": 600})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["units"], 600)
+        r = self.client.put(f"/api/v1/funds/holdings/{first}", json={"platform": "基富通"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["platform"], "基富通")
+
+    def test_update_platform_to_one_holding_only_other_fund_succeeds(self):
+        # 目標通路上只有「別檔」基金：不是重複持倉，查重必須連基金代號一起比
+        self.market.other_infos["99990001"] = {**INFO, "fund_id": "99990001", "name": "另一檔基金"}
+        mine = self._create(platform="國泰世華").json()["id"]
+        self.assertEqual(self._create(fund_id="99990001", platform="鉅亨買基金").status_code, 200)
+        r = self.client.put(f"/api/v1/funds/holdings/{mine}", json={"platform": "鉅亨買基金"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["platform"], "鉅亨買基金")
+        items = self.client.get("/api/v1/funds/holdings").json()["items"]
+        self.assertEqual(sorted((i["platform"], i["fund_id"]) for i in items),
+                         [("鉅亨買基金", "18480065"), ("鉅亨買基金", "99990001")])
 
     def test_holding_for_unknown_fund_is_404(self):
         self.assertEqual(self._create(fund_id="NOPE1").status_code, 404)

@@ -16,6 +16,7 @@ YfinanceFetcher - 兜底数据源 (Priority 4)
 
 import csv
 import logging
+import math
 import re
 from datetime import datetime
 from io import StringIO
@@ -406,20 +407,54 @@ class YfinanceFetcher(BaseFetcher):
             行情字典，失败时返回 None
         """
         ticker = yf.Ticker(yf_code)
-        # 取近两日数据以计算涨跌幅
-        hist = ticker.history(period='2d')
+        # 多取幾日以便找到前一場（漲跌幅的基準）。keepna=True：Yahoo 偶發把整場日線回成空值
+        # （OHLC 全空、成交量 0），預設的 keepna=False 會把這列整個丟掉，上一場就靜默變成
+        # 「前兩場」（踩過：2026-10-23 ^GSPC/^DJI 的 10-21 被丟，SPX 拿 10-20 當基準報 -0.64%，
+        # 對 10-21 實為 -1.21%）。保留空列才看得出中間缺了一場。
+        hist = ticker.history(period='5d', keepna=True)
         if hist.empty:
             return None
+        nan = float('nan')
+        # 結尾「整列全空」的列（keepna=False 會丟的形狀）不當最新列：開盤前若出現這種占位列，
+        # 拿 fast_info 補價會把上一場收盤標成這一場。但要留警告——也可能是最新一場整列缺漏，
+        # 這時最新列其實是上一場。
+        trailing_blank = 0
+        while trailing_blank < len(hist) and self._is_blank_daily_row(hist.iloc[-1 - trailing_blank]):
+            trailing_blank += 1
+        if trailing_blank == len(hist):
+            return None
+        if trailing_blank:
+            logger.warning(
+                f"[Yfinance] {yf_code} 最後 {trailing_blank} 列日線整列為空（{hist.index[-1]}），"
+                f"以 {hist.index[-1 - trailing_blank]} 為最新一列；若該場已收盤，現價可能是上一場"
+            )
+            hist = hist.iloc[:-trailing_blank]
         today_row = hist.iloc[-1]
-        prev_row = hist.iloc[-2] if len(hist) > 1 else today_row
+        # 基準只取緊鄰的前一列：它為空就是沒有讀數，不往前跳——跳過去會拿前兩場當「昨收」，
+        # 給出看起來可信的錯誤漲跌（沒有讀數不是 0，見 src/AGENTS.md）。
+        prev_close = float(hist.iloc[-2]['Close']) if len(hist) > 1 else nan
+        if len(hist) > 1 and not math.isfinite(prev_close):
+            logger.warning(
+                f"[Yfinance] {yf_code} 前一場 ({hist.index[-2]}) 收盤價為空，漲跌幅留空"
+            )
         price = float(today_row['Close'])
-        prev_close = float(prev_row['Close'])
-        change = price - prev_close
-        change_pct = (change / prev_close) * 100 if prev_close else 0
+        if not math.isfinite(price):
+            # Yahoo 偶發把最新一列的 OHLC 回成空值、只留成交量（這種列 keepna=False 也會留下；
+            # 踩過：2026-10-22 紐約盤前 SPX/IXIC/DJI 全空）。
+            # 不能退回前一列——那是上一場的收盤，會被當成這一場。改讀 fast_info.last_price：
+            # yfinance 在日線收盤為空時會改用 chart metadata 的 regularMarketPrice。
+            price = self._fast_info_last_price(ticker)
+            logger.warning(
+                f"[Yfinance] {yf_code} 最新一列 ({hist.index[-1]}) 收盤價為空，"
+                f"改用 fast_info 最新價: {price}"
+            )
+        has_prev = math.isfinite(prev_close) and prev_close != 0
+        change = price - prev_close if has_prev else nan
+        change_pct = (change / prev_close) * 100 if has_prev else nan
         high = float(today_row['High'])
         low = float(today_row['Low'])
         # 振幅 = (最高 - 最低) / 昨收 * 100
-        amplitude = ((high - low) / prev_close * 100) if prev_close else 0
+        amplitude = ((high - low) / prev_close * 100) if has_prev else nan
         return {
             'code': return_code,
             'name': name,
@@ -434,6 +469,23 @@ class YfinanceFetcher(BaseFetcher):
             'amount': 0.0,  # Yahoo Finance 不提供准确成交额
             'amplitude': amplitude,
         }
+
+    @staticmethod
+    def _is_blank_daily_row(row: Any) -> bool:
+        """OHLC 全空且成交量為空或 0：yfinance keepna=False 會整列丟掉的形狀。"""
+        prices_blank = all(pd.isna(row.get(col)) for col in ('Open', 'High', 'Low', 'Close'))
+        volume = row.get('Volume')
+        return bool(prices_blank and (pd.isna(volume) or float(volume) == 0))
+
+    @staticmethod
+    def _fast_info_last_price(ticker: Any) -> float:
+        """讀 fast_info 的最新價；拿不到或非有限值時回 NaN（不得回 0）。"""
+        try:
+            value = float(ticker.fast_info.last_price)
+        except Exception as exc:  # noqa: BLE001 - 補救路徑失敗就當沒有讀數
+            logger.debug(f"[Yfinance] fast_info.last_price 讀取失敗: {exc}")
+            return float('nan')
+        return value if math.isfinite(value) and value > 0 else float('nan')
 
     def get_main_indices(self, region: str = "cn") -> Optional[List[Dict[str, Any]]]:
         """

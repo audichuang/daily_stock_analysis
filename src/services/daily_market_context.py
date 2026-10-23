@@ -44,9 +44,11 @@ _MARKET_REVIEW_LOCK_WAIT_BACKOFF_MULTIPLIER = 1.5
 _MARKET_REVIEW_LOCK_WAIT_MAX_ATTEMPTS = 40
 
 # 簡繁並列：zh-TW 復盤與 market_light guidance 是繁體，只放簡體會靜默漏判。
+# 例外：繁體不收裸的「降溫」——台股複盤常寫「追價力道降溫」「通膨降溫」，創新高日也會出現，
+# 而 market_cooling 會觸發護欄把買進壓成觀望（10-06 實例）。簡體「降温」是上游既有行為，未動。
 _RISK_PATTERNS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("high_risk", ("高风险", "风险偏高", "风险较高", "高風險", "風險偏高", "風險較高", "high risk", "elevated risk")),
-    ("market_cooling", ("退潮", "降温", "降溫", "risk-off", "risk off", "cooling")),
+    ("market_cooling", ("退潮", "降温", "risk-off", "risk off", "cooling")),
     ("conservative", ("观望", "谨慎", "保守", "等待确认", "觀望", "謹慎", "等待確認", "watch", "cautious", "conservative")),
     (
         "low_position_cap",

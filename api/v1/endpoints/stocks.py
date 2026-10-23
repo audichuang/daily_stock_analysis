@@ -558,7 +558,7 @@ def _level_alerts_enabled() -> bool:
     response_model=LevelAlertResponse,
     responses={
         400: {"description": "非台股或價位不在今天的 SMC 價位裡", "model": ErrorResponse},
-        409: {"description": "TW_LEVEL_ALERTS_ENABLED 未開啟（dry_run 不受限）", "model": ErrorResponse},
+        409: {"description": "TW_LEVEL_ALERTS_ENABLED 未開啟（dry_run 不受限），或資料基準日之後有股價調整（levels_stale）", "model": ErrorResponse},
         503: {"description": "讀取 SMC 價位或寫入警報規則失敗（舊規則保留）", "model": ErrorResponse},
     },
     summary="建立台股 SMC 價位警報",
@@ -587,6 +587,9 @@ def create_level_alerts(stock_code: str, body: LevelAlertRequest) -> LevelAlertR
     except Exception as e:
         logger.error(f"讀取 SMC 價位失敗 {code}: {e}", exc_info=True)
         raise api_error(503, "level_alerts_unavailable", "讀取 SMC 價位失敗，請稍後再試")
+    if summary.get("adjusted_after"):
+        # 除權息／減資當天價位還是舊基準，照建會建出錯的觸發價；盤後資料更新才重算
+        raise api_error(409, "levels_stale", "資料基準日之後有除權息或減資，價位要等盤後資料更新後再建立")
     if not body.dry_run:
         from src.services.alert_service import AlertServiceError
 

@@ -473,11 +473,56 @@ def test_negation_sharing_chars_with_buy_marker_is_not_softened(decision_type, a
 
 
 @pytest.mark.parametrize("advice", [
+    "持有，不需要加倉", "持有，無需加倉", "持有，毋須加倉", "持有，不再加倉", "持有，不急於加倉",
+    "持有，不考慮加倉", "持有，不必加倉", "持有，不用加倉", "現階段不適合加倉", "持有，沒必要加倉",
+    "持有，无需加仓", "持有，不需要加仓",
+    # 整詞否定與買進詞之間只隔極短虛詞仍是否定
+    "持有，不需要再加倉", "持有，不必急著加倉", "持有，無需急於加倉", "持有，不必積極加倉", "持有，不用再去加倉",
+])
+def test_hold_with_spelled_out_refusal_is_not_softened(advice) -> None:
+    # 否定詞不緊貼買進詞（「不需要加倉」）：舊判斷只認緊貼單字，把持有當成積極買進、改寫成觀望並記 raw_score
+    result = _result()
+    result.decision_type = "hold"
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = "hold"
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert adjustments == []
+    assert result.operation_advice == advice
+    assert "decision_score_calibration" not in result.dashboard
+
+
+@pytest.mark.parametrize("decision_type", ["buy", "hold"])
+@pytest.mark.parametrize("advice", [
+    "回測不再破底即可加倉", "站穩後不再破底即加倉", "不再觀望積極加倉", "不用等回檔直接加倉",
+    "不必等拉回分批買入", "不需等待立即買入", "不考慮停損積極加倉",
+    # 頓號不切子句：「不必追高、」否定的是追高，後面的買進仍要過護欄
+    "不必追高、分批買入", "無需追高、逢低加倉", "賣壓不再建議加倉", "不用擔心短線震盪建議買入", "不需觀望積極買入",
+])
+def test_spelled_out_negation_of_other_verb_does_not_shield_buy(decision_type, advice) -> None:
+    # 「不再／不用／不必／不需／不考慮」修飾的是別的動詞（破底、等回檔、追高）時不是否定買進：
+    # 若在子句任意位置出現就算否定，保守大盤日的買進會原封不動放行
+    result = _result()
+    result.decision_type = decision_type
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = decision_type
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh-TW")
+
+    assert "daily_market_context_buy_softened" in adjustments
+
+
+@pytest.mark.parametrize("advice", [
     "特別建議買入", "股價不貴，建議買入", "股價不貴建議買入",
     # 「不追高」否定的是追價、不是買進；提示詞本身就要求 LLM 寫「不追高」
     "逢低買進，不追高", "建議買進，但不追高", "買入，不追高",
     # 雙重否定與反問仍是要買
     "沒有理由不加倉", "不得不加倉", "何不加倉", "並無不加倉之理", "並非不建議買入",
+    # 雙重否定套在整詞否定上（「並非不需要」）也是要買：整詞否定的判斷不能略過雙重否定
+    "並非不需要加倉", "並非無需加倉", "並非不必再加倉", "沒有理由不需要加倉",
+    # 不帶否定字的「需要／必要／考慮／適合」不是否定：否定詞表只能收整詞
+    "持有，需要加倉", "持有，有必要加倉", "持有，考慮加倉", "現階段適合加倉", "急於加倉",
 ])
 def test_non_negating_words_do_not_shield_buy(advice) -> None:
     # 「特別」的「別」、句中不貼著買進詞的「不」都不是否定：保守市況仍要降級

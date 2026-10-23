@@ -55,7 +55,8 @@ def read_only_engine():
 def load_margin_delta(engine, index, adj_close):
     """上市融資餘額 5 日的「價格中立」變化（元）。
 
-    `market.margin` 只有上市（實測對 stock_info 只有 twse 與已下市的 None）。直接加總張數會被
+    `market.margin` 自 10-22 起也有上櫃列（`market = 'tpex'`，2010 年起），查詢只取上市
+    （`market IS NULL`），維持 docs/tw-signal-research-2026-10.md 那批數字的口徑。直接加總張數會被
     分割弄壞、直接加總金額又會被股價漲跌帶著走（指數跌→金額機械性變小），所以用
     Σ bal_t·P_t/(1+r_5d) − bal_{t-5}·P_{t-5}：等於「現在的張數按 5 天前價格估值」減去
     「5 天前的融資金額」，分割與股價變動都抵銷。只加總兩端都有資料的股票，避免新上市
@@ -65,7 +66,7 @@ def load_margin_delta(engine, index, adj_close):
         m = pd.read_sql(text(
             "select m.stock_id, m.date, m.margin_balance::float8 bal, p.close::float8 px "
             "from market.margin m join market.price p using (stock_id, date) "
-            "where m.date between :s and :e"), c,
+            "where m.date between :s and :e and m.market is null"), c,
             params={"s": index[0].date(), "e": index[-1].date()}, parse_dates=["date"])
     m = m[m["stock_id"].map(is_common_stock)]
     bal = m.pivot(index="date", columns="stock_id", values="bal").reindex(index)

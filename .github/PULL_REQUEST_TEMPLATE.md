@@ -29,7 +29,7 @@ For English contributors: please fill in English. All fields marked (EN) accept 
 > 建议先执行并粘贴以下命令输出，避免与实际 diff 不一致：
 
 ```bash
-BASE_REF=$(git merge-base HEAD origin/main)
+BASE_REF=$(git merge-base HEAD origin/develop)
 git diff --stat "$BASE_REF"..HEAD
 git diff --name-only "$BASE_REF"..HEAD
 ```

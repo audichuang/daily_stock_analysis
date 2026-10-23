@@ -28,6 +28,9 @@ export interface FundReturns {
   y5: number | null;
 }
 
+/** 淨值走勢區間：後端以報酬卡同一個基準點起算。 */
+export type FundNavPeriod = keyof FundReturns;
+
 export interface FundRisk {
   maxDrawdown: number | null;
   volatility: number | null;

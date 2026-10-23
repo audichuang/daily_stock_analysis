@@ -85,6 +85,31 @@ _NEGATION_HINTS_ZH = (
     "不允許",
     "別",
 )
+# 「持有，不需要加倉」這類整詞否定：否定詞不緊貼買進詞，緊貼單字規則看不到（繁簡並列）。
+# 只收帶否定字的整詞，不收裸的「需要／必要／考慮」，否則「需要加倉」會逃過護欄。
+# 這些詞常修飾別的動詞（「不再破底即可加倉」「不必追高、分批買入」「不用等回檔直接加倉」），
+# 所以不能像上面的詞表一樣在子句裡任意位置出現就算：必須緊貼買進詞，中間最多隔 _NEGATION_PHRASE_FILLERS_ZH
+_NEGATION_PHRASES_ZH = (
+    "不需要",
+    "不需",
+    "无需",
+    "無需",
+    "毋须",
+    "毋須",
+    "不必",
+    "不用",
+    "不考虑",
+    "不考慮",
+    "没必要",
+    "沒必要",
+    "不适合",
+    "不適合",
+    "不急于",
+    "不急於",
+    "不再",
+)
+# 整詞否定與買進詞之間允許的極短虛詞：「不需要再加倉」「不必急著加倉」「無需急於加倉」「不必積極加倉」
+_NEGATION_PHRASE_FILLERS_ZH = ("再", "去", "急著", "急着", "急於", "急于", "继续", "繼續", "积极", "積極")
 _NEGATION_HINTS_EN = (" not ", "do not", "don't", "no ", "never", "avoid")
 _NEGATION_HINTS_KO = ("권하지 않", "하지 않", "하지 마", "불가", "금지", "피하", "보류", "않", "말")
 _NEGATION_LOOKBACK = 16
@@ -352,9 +377,27 @@ def _contains_negation_near_marker(context: str, negation_hints: tuple[str, ...]
             head = tail[:-1]
             rhetorical = head.endswith("何") and not head[:-1].endswith(_RHETORICAL_HE_EXCLUDED)
             return not (head.endswith(_DOUBLE_NEGATION_ZH) or rhetorical)
+        if _ends_with_negation_phrase_zh(tail):
+            return True
         for compound in _NEGATION_FALSE_COMPOUNDS_ZH:
             tail = tail.replace(compound, "")
     return any(hint in tail for hint in negation_hints)
+
+
+def _ends_with_negation_phrase_zh(tail: str) -> bool:
+    """整詞否定只在緊貼買進詞（中間最多隔幾個虛詞）時才算，避免否定別的動詞也把買進遮掉。
+
+    前面再接雙重否定（「並非不需要加倉」）就是要買，與單字否定同一套排除。
+    """
+    for _ in range(len(_NEGATION_PHRASE_FILLERS_ZH) + 1):
+        phrase = max((p for p in _NEGATION_PHRASES_ZH if tail.endswith(p)), key=len, default=None)
+        if phrase is not None:
+            return not tail[: -len(phrase)].endswith(_DOUBLE_NEGATION_ZH)
+        filler = next((f for f in _NEGATION_PHRASE_FILLERS_ZH if tail.endswith(f)), None)
+        if filler is None:
+            return False
+        tail = tail[: -len(filler)]
+    return False
 
 
 def _cap_conservative_sentiment_score(value: Any) -> int:

@@ -56,6 +56,9 @@ export type MarketIndex = {
   current: number | null;
   change: number | null;
   changePct: number | null;
+  /** 後端取值路徑：`shioaji` 即時快照、`official_close` 本地官方收盤（前一場）；缺省是 yfinance 延遲。 */
+  source: string | null;
+  asOf: string | null;
 };
 
 type RawIndex = {
@@ -64,6 +67,8 @@ type RawIndex = {
   current?: number | null;
   change?: number | null;
   change_pct?: number | null;
+  source?: string | null;
+  as_of?: string | null;
 };
 
 // 后端字段为 snake_case，这里转成前端 camelCase
@@ -189,6 +194,8 @@ export const stocksApi = {
       current: r.current ?? null,
       change: r.change ?? null,
       changePct: r.change_pct ?? null,
+      source: r.source ?? null,
+      asOf: r.as_of ?? null,
     }));
   },
 
@@ -262,6 +269,8 @@ export type DossierSummary = {
   levels: DossierLevel[];
   changes: Array<{ kind: string; tone: DossierTone; text: string }>;
   verdicts: Record<string, { badge?: string | null; tone?: DossierTone | null }> | null;
+  /** 資料基準日之後有除權息／分割／減資：價位還是舊基準，不能拿即時價量距離。舊後端沒有這欄。 */
+  adjustedAfter?: boolean;
 };
 export type DossierSummaryItem = { stockCode: string; summary: DossierSummary | null; error?: string | null };
 export type DossierSummaryBatch = { items: DossierSummaryItem[]; levelAlertsEnabled: boolean };

@@ -231,7 +231,8 @@ def crawl_day(conn, source, d, replace=False, min_ratio=0.5):
         conn.execute(text(
             f"DELETE FROM market.{model.__tablename__} WHERE date = :d"
             + market_filter(model.__tablename__, market)), {"d": d, "market": market})
-    return upsert(conn, model.__table__, recs, pk, coalesce=coalesce)
+    return upsert(conn, model.__table__, recs, pk, coalesce=coalesce,
+                  market_guard=model.__tablename__ in MARKET_SPLIT_TABLES)
 
 
 def _stored_rows(conn, table, d, market=None):
@@ -303,7 +304,7 @@ def crawl_valuation(conn):
         return 0
     df = etl.transform_valuation(rows).reset_index()
     recs = _to_records(df, models.Valuation.__table__, filter_stock_id=True)
-    return upsert(conn, models.Valuation.__table__, recs, ["stock_id", "date"])
+    return upsert(conn, models.Valuation.__table__, recs, ["stock_id", "date"], market_guard=True)
 
 
 _HOLDING_PK = ["stock_id", "date", "level"]
