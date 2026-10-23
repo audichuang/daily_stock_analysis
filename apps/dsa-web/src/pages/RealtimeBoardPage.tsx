@@ -27,6 +27,9 @@ import { isTwStockCode, stockCodeMatchKey } from '../utils/stockCode';
 import { BoardDossierCell, BoardDossierPanel } from '../components/board/BoardDossier';
 
 const POLL_INTERVAL_MS = 30_000;
+// 看板代碼分市場：只有明確的台股／美股格式才參與閘門，其餘（.T、.HK、.KS、A 股…）歸 other 照常輪詢
+const boardMarketOf = (c: string): 'tw' | 'us' | 'other' =>
+  isTwStockCode(c) ? 'tw' : /^[A-Za-z]{1,5}(\.[A-Za-z])?$/.test(c) ? 'us' : 'other';
 const MARKET_STATUS_TTL_MS = 5 * 60_000; // 休市時只每 5 分鐘問一次後端開盤狀態，不打報價
 const DOSSIER_CHUNK = 50; // 與後端 MAX_BATCH_CODES 一致
 const DOSSIER_REFRESH_MS = 15 * 60_000; // 摘要是日資料，盤中不必跟 30 秒報價一起抓
@@ -237,16 +240,19 @@ const RealtimeBoardPage: React.FC = () => {
   const refreshSeqRef = useRef(0); // 世代守卫：丢弃旧轮询迟到的 chunk，避免覆盖更新的数据
 
   // 分批并发刷新：每批回来就只 merge 那几列（in-place），不整页清空、不等最慢的
-  const refresh = useCallback(() => {
+  // 手動刷新／初次載入全抓；輪詢時傳入已濾掉休市市場的代碼，並以 withIndices 決定要不要抓台股指數
+  const refresh = useCallback((targetCodes?: string[], withIndices = true) => {
     // 大盘指数（盯盘辅助，失败不影响个股；沿用同一刷新 timer，不另开）
-    stocksApi
-      .getIndices('tw')
-      .then(setIndices)
-      .catch(() => {
-        /* 指数为辅助资料，失败保留旧值、不报错 */
-      });
+    if (withIndices) {
+      stocksApi
+        .getIndices('tw')
+        .then(setIndices)
+        .catch(() => {
+          /* 指数为辅助资料，失败保留旧值、不报错 */
+        });
+    }
     const seq = ++refreshSeqRef.current;
-    const cs = codesRef.current;
+    const cs = targetCodes ?? codesRef.current;
     for (let i = 0; i < cs.length; i += CHUNK) {
       const chunk = cs.slice(i, i + CHUNK);
       stocksApi
@@ -370,21 +376,25 @@ const RealtimeBoardPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    let open = true;
+    let status: Record<string, boolean> = {}; // 缺值＝當開盤
     let checkedAt = Date.now(); // 進頁面的首次刷新已在別處發出
     const timer = window.setInterval(() => {
       if (document.hidden) return;
       const run = () => {
-        if (open) refresh();
+        // 逐市場濾掉休市的代碼；台股指數只看台股是否開盤
+        const live = (codesRef.current ?? []).filter((c) => status[boardMarketOf(c)] !== false);
+        const withIndices = status.tw !== false;
+        if (live.length || withIndices) refresh(live, withIndices);
       };
       if (Date.now() - checkedAt < MARKET_STATUS_TTL_MS) return run();
       checkedAt = Date.now();
-      const markets = Array.from(new Set((codesRef.current ?? []).map((c) => (isTwStockCode(c) ? 'tw' : 'us'))));
+      // 台股永遠帶上（指數列依它決定）；other（日港陸韓等）後端不分流，一律當開盤
+      const markets = Array.from(new Set(['tw', ...(codesRef.current ?? []).map(boardMarketOf)])).filter((m) => m !== 'other');
       stocksApi
-        .getMarketOpen(markets.length ? markets : ['tw'])
-        .catch(() => true) // 查不到就當開盤，寧可多打不凍結看板
-        .then((o) => {
-          open = o;
+        .getMarketStatus(markets)
+        .catch(() => ({}) as Record<string, boolean>) // 查不到就當開盤，寧可多打不凍結看板
+        .then((m) => {
+          status = m;
           run();
         });
     }, POLL_INTERVAL_MS);

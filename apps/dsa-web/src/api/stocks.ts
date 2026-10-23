@@ -185,12 +185,12 @@ export const stocksApi = {
     }));
   },
 
-  /** 看板輪詢閘門：任一市場在盤中（含前後緩衝）才為 true；後端依交易所日曆判斷休市。 */
-  async getMarketOpen(markets: string[]): Promise<boolean> {
+  /** 看板輪詢閘門：各市場是否在盤中（含前後緩衝）；後端依交易所日曆判斷休市，未知市場回 true。 */
+  async getMarketStatus(markets: string[]): Promise<Record<string, boolean>> {
     const response = await apiClient.get('/api/v1/stocks/market-status', {
       params: { markets: markets.join(',') },
     });
-    return (response.data as { open?: boolean }).open !== false;
+    return (response.data as { markets?: Record<string, boolean> }).markets ?? {};
   },
 
   async getIndices(region = 'tw'): Promise<MarketIndex[]> {

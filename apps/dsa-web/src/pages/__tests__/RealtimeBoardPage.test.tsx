@@ -4,21 +4,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import RealtimeBoardPage from '../RealtimeBoardPage';
 
-const { getWatchlist, getSnapshot, listHoldings, getQuotes, getIndices, getDossierSummaries, getMarketOpen } = vi.hoisted(() => ({
+const { getWatchlist, getSnapshot, listHoldings, getQuotes, getIndices, getDossierSummaries, getMarketStatus } = vi.hoisted(() => ({
   getDossierSummaries: vi.fn(),
   getWatchlist: vi.fn(),
   getSnapshot: vi.fn(),
   listHoldings: vi.fn(),
   getQuotes: vi.fn(),
   getIndices: vi.fn(),
-  getMarketOpen: vi.fn(),
+  getMarketStatus: vi.fn(),
 }));
 
 vi.mock('../../api/systemConfig', () => ({ systemConfigApi: { getWatchlist } }));
 vi.mock('../../api/portfolio', () => ({ portfolioApi: { getSnapshot } }));
 vi.mock('../../api/funds', () => ({ fundsApi: { listHoldings } }));
 vi.mock('../../api/stocks', () => ({
-  stocksApi: { getQuotes, getIndices, getMarketOpen, getDossierSummaries, getTrend: vi.fn().mockResolvedValue([]) },
+  stocksApi: { getQuotes, getIndices, getMarketStatus, getDossierSummaries, getTrend: vi.fn().mockResolvedValue([]) },
 }));
 vi.mock('recharts', () => {
   const Stub = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
@@ -67,7 +67,7 @@ describe('RealtimeBoardPage scope', () => {
       totals: [], navError: null,
     });
     getIndices.mockResolvedValue([]);
-    getMarketOpen.mockResolvedValue(true);
+    getMarketStatus.mockResolvedValue({ tw: true, us: true });
     getDossierSummaries.mockResolvedValue({ items: [], levelAlertsEnabled: false });
     getQuotes.mockImplementation((codes: string[]) =>
       Promise.resolve(codes.map((c) => quote(c, c === '2330.TW' ? 1000 : c === '2887.TW' ? 40 : 200))),
@@ -253,14 +253,65 @@ describe('RealtimeBoardPage scope', () => {
     try {
       renderPage();
       await waitFor(() => expect(getQuotes).toHaveBeenCalled());
-      getMarketOpen.mockResolvedValue(false);
+      getMarketStatus.mockResolvedValue({ tw: false, us: false });
       await act(() => vi.advanceTimersByTimeAsync(5 * 60_000 + 30_000)); // status check turns closed
       const calls = getQuotes.mock.calls.length;
       await act(() => vi.advanceTimersByTimeAsync(4 * 60_000)); // closed: no quote requests, no status request
       expect(getQuotes.mock.calls.length).toBe(calls);
-      getMarketOpen.mockResolvedValue(true);
+      getMarketStatus.mockResolvedValue({ tw: true, us: true });
       await act(() => vi.advanceTimersByTimeAsync(2 * 60_000)); // next status check reopens
       expect(getQuotes.mock.calls.length).toBeGreaterThan(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  const pollAfterStatusCheck = async (status: Record<string, boolean>) => {
+    await waitFor(() => expect(getQuotes).toHaveBeenCalled());
+    getMarketStatus.mockResolvedValue(status);
+    getQuotes.mockClear();
+    getIndices.mockClear();
+    await act(() => vi.advanceTimersByTimeAsync(5 * 60_000 + 30_000));
+    getQuotes.mockClear();
+    getIndices.mockClear();
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    return getQuotes.mock.calls.flatMap((c) => c[0] as string[]);
+  };
+
+  it('polls only open markets: tw closed and us open skips tw quotes and the tw index', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage();
+      const polled = await pollAfterStatusCheck({ tw: false, us: true });
+      expect(new Set(polled)).toEqual(new Set(['NVDA']));
+      expect(getIndices).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps refreshing the tw index when a us-only board sees tw open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getWatchlist.mockResolvedValue(['NVDA']);
+      getSnapshot.mockResolvedValue({ accounts: [] });
+      renderPage();
+      const polled = await pollAfterStatusCheck({ tw: true, us: false });
+      expect(polled).toEqual([]);
+      expect(getIndices).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never gates non-tw non-us codes (7203.T) on the us market', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getWatchlist.mockResolvedValue(['7203.T', 'NVDA']);
+      getSnapshot.mockResolvedValue({ accounts: [] });
+      renderPage();
+      const polled = await pollAfterStatusCheck({ tw: false, us: false });
+      expect(new Set(polled)).toEqual(new Set(['7203.T']));
     } finally {
       vi.useRealTimers();
     }

@@ -1,6 +1,6 @@
 # 实时盯盘看板（Realtime Board）
 
-Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价，前端每 30 秒轮询一次并支持手动刷新。
+Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价，前端每 30 秒轮询一次并支持手动刷新。轮询依交易所日历逐市场闸门：只抓盘中（含前后缓冲）市场的代码，台股指数只看台股是否开盘；休市时每 5 分钟问一次后端开盘状态，查不到一律当开盘；非台股／美股格式（日、港、陆、韩股）不参与闸门、照常轮询。手动刷新永远全抓。
 
 ## 顯示範圍：自選／持股／全部
 
@@ -94,6 +94,7 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 - `GET /api/v1/stocks/quotes?codes=2330.TW,2317.TW`：批次行情，返回 `{ items: [{ stock_code, quote|null, error }] }`。
   - 单个代码失败回 `quote: null, error: "no_data"`，**绝不 500 整批**。
   - 单次最多 50 个代码（超出 400），代码去重保序。
+- `GET /api/v1/stocks/market-status?markets=tw,us`：各市場是否在輪詢時段（交易所日曆，含假日、颱風假與前後緩衝），回 `{ markets: {tw: bool, us: bool}, open }`；未知市場或日曆異常回 true，看板只讀 `markets`。
 - `GET /api/v1/stocks/dossier-summary?codes=2330.TW,3324.TWO`：台股四維度摘要（批次），返回 `{ items: [{ stock_code, summary|null, error }] }`；非台股 `unsupported_market`、查無資料 `no_data`、讀取失敗 `unavailable`，整批仍 200；上限 50 個，用原始輸入計算。見上方「四維度摘要」。
 - `GET /api/v1/stocks/{code}/quote`：单股行情，响应追加 `source` / `as_of` / `is_stale`（与批次一致）。
 - `GET /api/v1/stocks/indices?region=tw`：盯盤上方的大盤指數條（加權 `TWII`、櫃買 `TPEX`），失敗回空列表。台股依序：
