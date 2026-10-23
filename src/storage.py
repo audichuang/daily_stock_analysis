@@ -3835,8 +3835,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         return data
 
     @staticmethod
-    def _parse_sniper_value(value: Any) -> Optional[float]:
-        return parse_sniper_value(value)
+    def _parse_sniper_value(value: Any, field: Optional[str] = None) -> Optional[float]:
+        return parse_sniper_value(value, field)
 
     def _extract_sniper_points(self, result: Any) -> Dict[str, Optional[float]]:
         """Extract normalized sniper point values from an AnalysisResult."""

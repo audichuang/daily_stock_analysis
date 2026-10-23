@@ -10,21 +10,25 @@ from typing import Any, Dict, Optional
 
 SNIPER_KEYS = ("ideal_buy", "secondary_buy", "stop_loss", "take_profit")
 
-# 明確表示「不設定」的措辭：即使文字裡帶有參考價位也視為沒有價位
+# 整段以「暫不／不設定」開頭才視為沒有價位；句中的「跌破…暫不進場」「暫不建議追高，回測X元再買」不算
 _NOT_SET_RE = re.compile(
-    r"[暫暂]不(?:設定|设定|設置|设置|設|设|建議|建议|買|买|進場|进场|入場|入场)|不設定|不设定|N/A",
+    r"^\s*(?:[暫暂]不(?:設定|设定|設置|设置|設|设|建議[買买進进入]|建议[買买進进入]|[買买]|進場|进场|入場|入场)|不設定|不设定|N/A)",
     re.IGNORECASE,
 )
-# 條件式進場句後的明確目標句（停損於／目標價…）：取錨點後的數字，而非句首的進場價
-_TARGET_ANCHOR_RE = re.compile(
-    r"(?:停損|止損|止损|停利|停盈|止盈)(?:價|价|位)?(?:於|于|設在|设在|設定在|设定在|設定為|设定为|設|设|在)"
-    r"|目標價(?:位)?(?:於|于|設在|设在|在|為|为)?|目标价(?:位)?(?:於|于|设在|在|为)?"
-)
+# 欄位專屬錨點：只有 stop_loss／take_profit 會在「條件式進場句 + 目標句」裡取錨點後的數字
+_VERB = r"(?:於|于|設在|设在|設定在|设定在|設定為|设定为|設|设|在)"
+_FIELD_ANCHOR_RE = {
+    "stop_loss": re.compile(r"(?:停損|止損|止损)(?:價|价|位)?" + _VERB),
+    "take_profit": re.compile(r"(?:停利|停盈|止盈|目標價|目标价)(?:位)?" + _VERB + "?"),
+}
 _PRICE_RE = re.compile(r"[^\d\-]{0,6}(\d+(?:\.\d+)?)\s*元")
 
 
-def parse_sniper_value(value: Any) -> Optional[float]:
-    """Parse a sniper point value from report text into a positive price."""
+def parse_sniper_value(value: Any, field: Optional[str] = None) -> Optional[float]:
+    """Parse a sniper point value from report text into a positive price.
+
+    ``field`` (one of SNIPER_KEYS) enables the field-specific anchor path.
+    """
 
     if value is None:
         return None
@@ -45,13 +49,14 @@ def parse_sniper_value(value: Any) -> Optional[float]:
     if _NOT_SET_RE.search(text):
         return None
 
-    # 只在「進場條件 + 目標句」同時出現時才以錨點為準（取最後一個錨點）
-    anchors = list(_TARGET_ANCHOR_RE.finditer(text))
-    if anchors and len(re.findall(r"\d+(?:\.\d+)?\s*元", text)) > 1:
-        m = _PRICE_RE.match(text, anchors[-1].end())
-        if m:
-            parsed = float(m.group(1))
-            return parsed if parsed > 0 else None
+    # 條件式進場句 + 目標句同時出現時，以該欄位自己的第一個錨點為準（買點欄位不走這條）
+    anchor_re = _FIELD_ANCHOR_RE.get(field or "")
+    if anchor_re and len(re.findall(r"\d+(?:\.\d+)?\s*元", text)) > 1:
+        for anchor in anchor_re.finditer(text):
+            m = _PRICE_RE.match(text, anchor.end())
+            if m:
+                parsed = float(m.group(1))
+                return parsed if parsed > 0 else None
 
     colon_pos = max(text.rfind("："), text.rfind(":"))
     yuan_pos = text.find("元", colon_pos + 1 if colon_pos != -1 else 0)
@@ -113,7 +118,7 @@ def extract_sniper_points(result: Any) -> Dict[str, Optional[float]]:
         if isinstance(raw_response, Mapping):
             raw_points = find_sniper_points(raw_response) or raw_points
 
-    return {key: parse_sniper_value(raw_points.get(key)) for key in SNIPER_KEYS}
+    return {key: parse_sniper_value(raw_points.get(key), key) for key in SNIPER_KEYS}
 
 
 def _has_any_sniper_value(points: Mapping[str, Any]) -> bool:
