@@ -47,6 +47,8 @@ PORTFOLIO_AGGREGATE_CURRENCY = "CNY"
 # 手動刷新一次之後就一直是 False——8 天前的匯率照樣顯示「最新」。3 天涵蓋週末。
 PORTFOLIO_FX_MAX_AGE_DAYS = 3
 FX_FALLBACK_SOURCE = "fallback_1_to_1"
+# Sources written by the automated FX refresh; any other non-stale row is a manual entry and is never touched.
+FX_AUTO_SOURCES = ("yfinance", "yfinance_backfill", "yfinance_cross")
 FX_OUTLIER_MAX_DEVIATION = 0.02  # a bar this far (relative) from its reference counts as deviating
 
 
@@ -1661,6 +1663,7 @@ class PortfolioService:
         for from_currency, to_currency in pairs:
             # `accepted` is only set after the outlier filter succeeds; raw downloads never reach the fallback.
             accepted: List[Tuple[date, float]] = []
+            repairs: Dict[date, float] = {}
             try:
                 # One download feeds both today's rate and the history backfill.
                 fetched = self._fetch_fx_closes_from_yfinance(
@@ -1715,7 +1718,13 @@ class PortfolioService:
 
             if accepted:
                 # Carry from the newest accepted bar, not from an older same-day carry row.
-                fallback = SimpleNamespace(rate=accepted[-1][1], source="yfinance")
+                carry_date, carry_rate = accepted[-1]
+                # A repaired (cross-rate) day newer than the last accepted bar is the freshest known value.
+                last_finished = min(as_of_date, self._london_today())
+                for repair_date, repair_rate in repairs.items():
+                    if carry_date < repair_date < last_finished:
+                        carry_date, carry_rate = repair_date, repair_rate
+                fallback = SimpleNamespace(rate=carry_rate, source="yfinance")
             else:
                 fallback = self.repo.get_latest_fx_rate(
                     from_currency=from_currency,
@@ -1878,7 +1887,9 @@ class PortfolioService:
                 prev = kept[-1][1] if kept else self._last_real_stored_rate(
                     from_currency=from_currency, to_currency=to_currency, before=bar_date
                 )
-                nxt = closes[i + 1][1]
+                # Prefer the next bar's cross rate: its raw value may itself be rejected below.
+                nxt_date, nxt_raw = closes[i + 1]
+                nxt = cross_closes.get(nxt_date, nxt_raw)
                 bad = prev is not None and deviates(value, prev) and deviates(value, nxt)
                 reference = prev
             else:
@@ -1936,7 +1947,7 @@ class PortfolioService:
                     from_currency=from_currency, to_currency=to_currency, as_of=bar_date
                 )
                 if existing is not None and existing.rate_date == bar_date:
-                    manual = not existing.is_stale and existing.source not in ("yfinance", "yfinance_backfill")
+                    manual = not existing.is_stale and existing.source not in FX_AUTO_SOURCES
                     if manual or abs(float(existing.rate) / cross - 1.0) <= FX_OUTLIER_MAX_DEVIATION:
                         continue
                 self.repo.save_fx_rate(
@@ -1958,7 +1969,7 @@ class PortfolioService:
                     existing is not None
                     and existing.rate_date == bar_date
                     and not existing.is_stale
-                    and existing.source not in ("yfinance", "yfinance_backfill")
+                    and existing.source not in FX_AUTO_SOURCES
                 ):
                     continue
                 self.repo.save_fx_rate(

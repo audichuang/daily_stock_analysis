@@ -1542,6 +1542,53 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertIn("drawdown", payload)
         self.assertIn("stop_loss", payload)
 
+    # ---- review follow-ups: cross rows stay automated, next-neighbour uses cross, stale carry from repairs ----
+    def test_fx_refresh_overwrites_stored_cross_row_with_correct_value(self) -> None:
+        days = [date(2026, 1, 6), date(2026, 1, 7), date(2026, 1, 8)]
+        pair = list(zip(days, [0.2054, 0.2050, 0.2050]))
+        twd = [(d, 32.6) for d in days]
+        cny = [(d, 6.665) for d in days]
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=days[1], rate=0.1840,
+            source="yfinance_cross", is_stale=False,
+        )
+        self._refresh_twd_cny(pair, twd, cny, days[2], days[2])
+        row = self._twd_row(days[1])
+        self.assertAlmostEqual(row.rate, 0.2050)
+        self.assertEqual(row.source, "yfinance_backfill")
+
+    def test_fx_refresh_cross_row_wrong_is_repaired_again(self) -> None:
+        pair, twd, cny = self._junk_window()
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 7), rate=0.1840,
+            source="yfinance_cross", is_stale=False,
+        )
+        self._refresh_twd_cny(pair, twd, cny, date(2026, 1, 8), date(2026, 1, 8))
+        self.assertAlmostEqual(self._twd_row(date(2026, 1, 7)).rate, 6.665 / 32.6)
+
+    def test_fx_outlier_next_neighbour_uses_cross_when_next_is_rejected(self) -> None:
+        closes = [(date(2026, 1, 6), 0.2054), (date(2026, 1, 7), 0.1963), (date(2026, 1, 8), 0.1963)]
+        out = self._filter(closes, pair=("TWD", "CNY"), cross_closes=self._cross(6, 8))
+        self.assertEqual(out, closes[:1])
+
+    def test_fx_outlier_next_neighbour_cross_keeps_real_jump(self) -> None:
+        closes = [(date(2026, 1, 6), 0.2054), (date(2026, 1, 7), 0.2200), (date(2026, 1, 8), 0.2201)]
+        cross = {date(2026, 1, 6): 0.2054, date(2026, 1, 8): 0.2200}
+        self.assertEqual(self._filter(closes, pair=("TWD", "CNY"), cross_closes=cross), closes)
+
+    def test_fx_refresh_stale_carry_starts_from_newer_repaired_day(self) -> None:
+        pair, twd, cny = self._junk_window()
+        self._refresh_twd_cny(pair, twd, cny, date(2026, 1, 8), date(2026, 1, 8))
+        today = self._twd_row(date(2026, 1, 8))
+        self.assertTrue(today.is_stale)
+        self.assertAlmostEqual(today.rate, 6.665 / 32.6)  # not 0.2054 from 01-06
+
+    def test_fx_refresh_stale_carry_ignores_repair_not_older_than_accepted(self) -> None:
+        days = [date(2026, 1, 6), date(2026, 1, 7), date(2026, 1, 8)]
+        pair = list(zip(days, [0.1963, 0.2054, 0.1963]))  # junk on 01-06 (repaired), 01-07 accepted
+        self._refresh_twd_cny(pair, [(d, 32.6) for d in days], [(d, 6.665) for d in days], days[2], days[2])
+        self.assertAlmostEqual(self._twd_row(days[2]).rate, 0.2054)
+
 
 if __name__ == "__main__":
     unittest.main()
