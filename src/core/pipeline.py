@@ -1192,6 +1192,17 @@ class StockAnalysisPipeline:
         # Issue #234：盘中分析使用实时 OHLC 与趋势 MA 覆盖 today。
         # 防护条件：trend_result.ma5 > 0 表示 MA 计算已成功且数据量充足。
         realtime_overridden = False
+        if realtime_quote and _premarket_session_unknown(realtime_quote):
+            # 開盤前／休市日報價不帶日期又可能落後一場（Stooq）：屬於哪一場不明，
+            # 標成哪一場都會錯位，整根不覆蓋、保留 DB 的官方 K；報價本身仍在 enhanced['realtime']。
+            _market = get_market_for_stock(normalize_stock_code(enhanced.get('code', '')))
+            _now = get_market_now(_market)
+            if not (
+                _market
+                and is_market_open(_market, _now.date())
+                and infer_market_phase(_market, _now) != MarketPhase.PREMARKET
+            ):
+                realtime_quote = None
         if realtime_quote and trend_result and trend_result.ma5 > 0:
             price = getattr(realtime_quote, 'price', None)
             if price is not None and price > 0:
@@ -1215,9 +1226,6 @@ class StockAnalysisPipeline:
                 orig_date_norm = _coerce_to_date(orig_today.get('date'))
                 # provider 時間優先；抓取時間可能是休市日，不能直接當作報價場次。
                 quote_session = _coerce_to_date(getattr(realtime_quote, 'provider_timestamp', None))
-                if quote_session is None and not quote_is_today and orig_date_norm is not None \
-                        and _premarket_session_unknown(realtime_quote):
-                    quote_session = orig_date_norm  # 場次不明：不平移、不標成 DB 沒有的那一場
                 if quote_session is None:
                     quote_session = market_today_date if quote_is_today else get_effective_trading_date(
                         market, current_time=market_now

@@ -702,15 +702,29 @@ class TestEnhanceContextYesterdayAlignment(unittest.TestCase):
         self.assertEqual(enhanced["price_change_ratio"], 10.0)  # 對 T-2 的 100，不是 T-3 的 105
 
     def test_premarket_undated_stooq_quote_is_not_labelled_as_missing_prior_session(self) -> None:
-        """Stooq 兜底不帶日期：DB 停在 T-2 時不能把它標成 T-1、也不平移 yesterday。"""
+        """Stooq 兜底不帶日期：場次不明就整根不覆蓋——不標成 T-1、也不拿它蓋 T-2 的官方 K。
+
+        Codex 重現：DB 收盤 90（T-3）／100（T-2），報價 110：標成 T-1 會錯位；
+        標成 T-2 又覆蓋 OHLC，漲幅算成 22.22%（110 對 90）。
+        """
         t3 = self.today - timedelta(days=3)
         ctx = self._context(self.t2)
-        ctx["yesterday"]["date"] = t3
-        quote = _make_realtime_quote(price=100.0, volume=900, change_pct=None, source=RealtimeSource.STOOQ)
+        ctx["yesterday"].update(date=t3, close=90.0)
+        orig_today, orig_yesterday = dict(ctx["today"]), dict(ctx["yesterday"])
+        quote = _make_realtime_quote(price=110.0, volume=900, change_pct=None, source=RealtimeSource.STOOQ)
         with patch("src.core.pipeline.get_effective_trading_date", return_value=self.t1):
             enhanced = self._enhance(ctx, quote, market="us", phase=MarketPhase.PREMARKET)
-        self.assertEqual(enhanced["today"]["date"], self.t2.isoformat())
-        self.assertEqual(enhanced["yesterday"], ctx["yesterday"])
+        self.assertEqual({k: enhanced["today"][k] for k in orig_today}, orig_today)
+        self.assertNotIn("is_estimated", enhanced["today"])
+        self.assertEqual(enhanced["yesterday"], orig_yesterday)
+        self.assertEqual(enhanced["price_change_ratio"], -4.76)  # 沿用 DB 兩根官方 K 的舊值
+
+    def test_postmarket_undated_stooq_quote_still_overrides_today(self) -> None:
+        """反向：盤中／盤後的 Stooq 報價屬於今天，照常覆蓋（只擋場次不明的那段）。"""
+        quote = _make_realtime_quote(price=94.0, volume=500, change_pct=None, source=RealtimeSource.STOOQ)
+        enhanced = self._enhance(self._context(self.t1), quote, market="us")
+        self.assertEqual(enhanced["today"]["close"], 94.0)
+        self.assertEqual(enhanced["today"]["date"], self.today.isoformat())
 
     def test_premarket_with_prior_bar_in_db_labels_prior_session_without_shift(self) -> None:
         """反向：DB 已有 T-1 時不平移，但日期仍是 T-1 不是掛鐘日。"""
