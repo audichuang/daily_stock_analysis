@@ -841,6 +841,65 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertIsNotNone(accounts[us_id]["total_market_value_aggregate"])
         self.assertFalse(snapshot["fx_stale"])
 
+    def _risk_fx_fixture(self, usd_rate_date):
+        """TWD 帳戶（有匯率）+ USD 帳戶持 AAPL；USD->CNY 只在 usd_rate_date 有（None 表示全程缺）。"""
+        tw_id, us_id = self._usd_and_twd_accounts()
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 1),
+            rate=0.2, source="manual", is_stale=False,
+        )
+        self.service.record_trade(
+            account_id=us_id, symbol="AAPL", trade_date=date(2026, 1, 1), side="buy",
+            quantity=1, price=50, market="us", currency="USD",
+        )
+        for day in (1, 2, 3):
+            self._save_close("AAPL", date(2026, 1, day), 50.0)
+        if usd_rate_date is not None:
+            self.service.repo.save_fx_rate(
+                from_currency="USD", to_currency="CNY", rate_date=usd_rate_date,
+                rate=7.0, source="manual", is_stale=False,
+            )
+        return tw_id, us_id
+
+    def test_risk_drawdown_excludes_dates_with_missing_fx_and_flags(self) -> None:
+        self._risk_fx_fixture(date(2026, 1, 3))
+
+        report = self.risk_service.get_risk_report(as_of=date(2026, 1, 3), cost_method="fifo")
+
+        dd = report["drawdown"]
+        self.assertTrue(dd["fx_missing"])
+        self.assertEqual(dd["fx_missing_pairs"], ["USD/CNY"])
+        # 1/1、1/2 美元帳戶沒有匯率：整天剔除，只剩 1/3 一個點，不拿 1:1 假 NAV 算回撤
+        self.assertEqual(dd["fx_excluded_dates"], ["2026-01-01", "2026-01-02"])
+        self.assertEqual(dd["series_points"], 1)
+
+    def test_risk_drawdown_with_all_fx_present_is_unchanged(self) -> None:
+        # 反向：匯率齊全時不剔除任何一天、不標旗標。
+        self._risk_fx_fixture(date(2026, 1, 1))
+
+        report = self.risk_service.get_risk_report(as_of=date(2026, 1, 3), cost_method="fifo")
+
+        dd = report["drawdown"]
+        self.assertFalse(dd["fx_missing"])
+        self.assertEqual(dd["fx_missing_pairs"], [])
+        self.assertEqual(dd["fx_excluded_dates"], [])
+        self.assertEqual(dd["series_points"], 3)
+        self.assertFalse(report["concentration"]["fx_missing"])
+        self.assertIsNotNone(report["concentration"]["top_weight_pct"])
+
+    def test_risk_concentration_hides_weights_when_fx_missing(self) -> None:
+        self._risk_fx_fixture(None)
+
+        report = self.risk_service.get_risk_report(as_of=date(2026, 1, 2), cost_method="fifo")
+
+        for block, rows_key in (("concentration", "top_positions"), ("sector_concentration", "top_sectors")):
+            conc = report[block]
+            self.assertTrue(conc["fx_missing"], block)
+            self.assertEqual(conc["fx_missing_pairs"], ["USD/CNY"], block)
+            self.assertIsNone(conc["top_weight_pct"], block)
+            self.assertFalse(conc["alert"], block)
+            self.assertTrue(all(r["weight_pct"] is None and not r["is_alert"] for r in conc[rows_key]), block)
+
     def test_fx_rate_older_than_max_age_reads_as_stale(self) -> None:
         # is_stale 是寫入時的旗標：10-15 刷新一次後 10-23 仍標「最新」。讀取端要看匯率日期。
         account = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
