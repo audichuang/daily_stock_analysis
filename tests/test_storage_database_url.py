@@ -57,6 +57,23 @@ def test_storage_engine_refuses_production_url(monkeypatch):
     storage.create_engine("postgresql+psycopg://u:p@db.invalid:5432/other")
 
 
+def test_prod_url_guard_finds_dotenv_above_a_worktree(tmp_path):
+    """git worktree 底下沒有 .env；守門要往上找到主 repo 的 .env，否則 worktree 跑測試會寫進正式庫。"""
+    import src.storage as storage
+
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    (tmp_path / ".env").write_text("STORAGE_DATABASE_URL=postgresql+psycopg://u:p@db.invalid/prod\n", encoding="utf-8")
+    worktree_tests = tmp_path / ".claude" / "worktrees" / "wt" / "tests"
+    worktree_tests.mkdir(parents=True)
+    conftest_path = worktree_tests / "conftest.py"
+
+    assert find(conftest_path) == "postgresql+psycopg://u:p@db.invalid/prod"
+
+    # The nearest .env wins, so a worktree with its own .env is still guarded by that one.
+    (worktree_tests.parent / ".env").write_text("STORAGE_DATABASE_URL=postgresql+psycopg://u:p@db.invalid/near\n", encoding="utf-8")
+    assert find(conftest_path) == "postgresql+psycopg://u:p@db.invalid/near"
+
+
 def _manager_for(url: str):
     return SimpleNamespace(_engine=create_engine(url))
 
