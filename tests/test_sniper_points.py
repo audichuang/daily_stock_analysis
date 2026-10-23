@@ -137,3 +137,120 @@ def test_no_buypoint_phrases_do_not_overreach(text, expected):
 ])
 def test_prod_1021_not_set_with_ma_price_is_none(text):
     assert parse_sniper_value(text, "ideal_buy") is None
+
+
+# 2026-10-22／23 正式庫原文（dsa.analysis_history）：各種「沒有買點」的說法，句內的 MA／觀察價不是買點
+@pytest.mark.parametrize("text", [
+    "暫時無理想買點，需等待股價站穩MA5（約238.1元）且量能放大至5日均量以上。",  # 22
+    "未出現買點，需等待站回MA10（241.8元）且量能放大",  # 42
+    "暫無明確買點，等待站回MA5（約281.2元）且成交量放大至5日均量以上再評估",  # 116
+    "暫無次優買點，若回測118元不破且量縮可小量試單。",  # 127
+    "次優買點：暫時從缺；須先站回MA20(14.56元)並形成多頭排列後再重新評估。",  # 160
+    "理想買入點：暫時無（需站穩 MA20 274.8 元以上且量能放大才考慮）",  # 178
+    "尚無理想買點，需等股價站回MA20（120.3元）且量能溫和放大。",  # 254
+    "暫時無理想買點；若後續放量站穩MA10（279.4元）且均線轉多頭，可於回踩MA5（約278.7元）不破時輕倉試單",  # 342
+    "不建議於目前位置買進（未形成多頭排列）。觀察價：待收盤站回 MA5 368.2 元且量能放大後再評估。",  # 399
+    "理想買點：暫時不成立。需先站回 MA5（493.90 元）並帶量收復，回測 493.90 元不破且三大法人轉為淨買超，才考慮第一筆試單。",  # 425
+    "次優買入點：資料不支持在空頭排列下接刀，暫不設定；如果股價回測241.00元附近量縮止穩，只當作觀察訊號，不當買點",  # 796
+    "理想買入點：目前不成立。須等收盤站回MA5 133.40元、法人轉買超，之後回測133.40元不破才考慮",  # 975
+    "次優買入點：不建議在126.50元附近逆勢承接，僅作為觀察止跌的參考價位",  # 975
+    "理想買點：目前空頭排列，不設主動買點。只有在45.00元附近止跌、量縮且不破低時，才考慮試單",  # 1005
+    "暂时无理想买点，需等待股价站稳MA5（约238.1元）",
+    "暂无次优买点，若回测118元不破",
+    "尚无理想买点，需等股价站回MA20（120.3元）",
+    "未出现买点，需等待站回MA10（241.8元）",
+    "次优买点：暂时从缺；须先站回MA20(14.56元)",
+    "理想买点：目前空头排列，不设主动买点。只有在45.00元附近止跌",
+    "不建议于目前位置买进。观察价：待收盘站回 MA5 368.2 元",
+    "次优买入点：资料不支持在空头排列下接刀，暂不设定；如果股价回测241.00元附近",
+])
+def test_prod_1022_not_set_wording_is_none(text):
+    assert parse_sniper_value(text, "ideal_buy") is None
+    assert parse_sniper_value(text, "secondary_buy") is None
+
+
+# 反向：看起來像但後面是真實價位，必須保留（402／438／461 正式庫原文）
+@pytest.mark.parametrize("text, expected", [
+    ("理想買點：不建議現價追買。若回測 262.0 元（今日低點）附近且量縮收腳、外資轉為淨買超，可小量試單，參考價 262.5 元。", 262.0),
+    ("不建議現價追，回測1659元再試單", 1659.0),
+    ("不建議現價進場；若回踩 MA10 171.95 元附近縮量止穩，可小倉試探。", 171.95),
+    ("理想買入點：1000元（條件成立才買）", 1000.0),
+    ("12.5元（觀望，暫不設定）", 12.5),
+    ("理想買入點：250.50元（只限收盤放量站回MA20 249.95元之上、隔日回測不破時才進場；目前條件未成立）", 250.5),
+    ("暫無明顯支撐，回測100元附近再評估", 100.0),
+    ("不建議在目前價位追高，回測100元附近再買", 100.0),
+])
+def test_prod_1022_wording_reverse_keeps_price(text, expected):
+    assert parse_sniper_value(text, "ideal_buy") == expected
+
+
+# Code review 重現的誤判：句首說沒有／不成立，但後面另給了這個欄位可執行的價位，必須保留
+@pytest.mark.parametrize("text, field, expected", [
+    ("理想買入點：從缺，回測118元可試單", "ideal_buy", 118.0),
+    ("尚無理想買點，回測118.5元可試單", "ideal_buy", 118.5),
+    ("暫無明確支撐，118元附近試單", "ideal_buy", 118.0),
+    ("次優買入點：未出現買點前先觀察，站回125元再買", "secondary_buy", 125.0),
+    ("不建議在126.5元附近承接，回測120元再買", "secondary_buy", 120.0),
+    ("目標價：不成立則看130元", "take_profit", 130.0),
+    ("目標價：不成立，暫看 120 元", "take_profit", 120.0),
+    ("不成立則停損 90 元", "stop_loss", 90.0),
+    ("空頭排列，不給目標價，反彈 110 元減碼", "take_profit", 110.0),
+])
+def test_not_set_prefix_keeps_later_actionable_price(text, field, expected):
+    assert parse_sniper_value(text, field) == expected
+
+
+# 反向：後面只是條件式重新評估價、被拒絕的價位或 MA 價，仍是沒有價位
+@pytest.mark.parametrize("text, field", [
+    ("暫時無理想買點，需站回 120 元再評估", "ideal_buy"),
+    ("不建議在 126.50 元附近逆勢承接", "secondary_buy"),
+    ("不建議在126.50元附近逆勢承接", "secondary_buy"),
+    ("理想買入點：暫不設定。要等放量站回 MA5（360.70 元）而且 MA5 拐頭向上，才考慮在 361.00 元附近小量試單", "ideal_buy"),
+    ("次優買入點：暫不設定。空頭排列中不在 MA5 875.80 元附近承接，也不在 864.00 元附近承接。", "secondary_buy"),
+    ("次要買點：不建議。在空頭排列下回測MA5 242.70元附近承接，風險報酬比不到1", "secondary_buy"),
+    ("理想買點：暫時不成立，站回120元才重新評估", "ideal_buy"),
+    ("目標價：暫不設定。站回MA5 100元再評估", "take_profit"),
+    ("停損：暫不設定", "stop_loss"),
+])
+def test_not_set_prefix_without_actionable_price_is_none(text, field):
+    assert parse_sniper_value(text, field) is None
+
+
+# Review round 2：句首沒有價位時，停損／停利只取「直接綁定該欄位動作」的價位本身，不回落到泛用解析的第一個數字
+@pytest.mark.parametrize("text, field, expected", [
+    ("暫不設定，現價125元，跌破118元停損", "stop_loss", 118.0),
+    ("不給目標價，MA60 130元附近不追，反彈110元減碼", "take_profit", 110.0),
+    ("暫不設定；季線130元壓力大，反彈至120元減碼", "take_profit", 120.0),
+])
+def test_sell_not_set_prefix_returns_action_bound_price(text, field, expected):
+    assert parse_sniper_value(text, field) == expected
+
+
+@pytest.mark.parametrize("text, field", [
+    ("停利：暫不設定（現價 125 元已跌破均線）", "take_profit"),
+    ("N/A（已出清，不再估算 130 元）", "take_profit"),
+    ("暫不設定，近5日跌3.2元", "take_profit"),
+    ("暫不設定，參考MA20(118元)", "stop_loss"),
+    ("不設停損，若跌破前低118元再評估", "stop_loss"),
+    ("不設停損，跌破118元再評估", "stop_loss"),
+    ("暫不設定，不再看130元", "take_profit"),
+])
+def test_sell_not_set_prefix_without_action_bound_price_is_none(text, field):
+    assert parse_sniper_value(text, field) is None
+
+
+@pytest.mark.parametrize("text,field,expected", [
+    # 買點用語（尚無／暫無明確／從缺／不成立）不作用在停損／停利，維持正式版取得到的價位
+    ("尚無明確支撐，跌破前低118元", "stop_loss", 118.0),
+    ("未出現明確買點，若持有跌破前低118元", "stop_loss", 118.0),
+    ("暫無明確目標，反彈至前高150元", "take_profit", 150.0),
+    ("暫時無明確目標價，上看前高150元", "take_profit", 150.0),
+    ("暫無明確目標，先看前高150元", "take_profit", 150.0),
+    ("從缺（建議以118元為停損）", "stop_loss", 118.0),
+    ("暫不設定，持有者以118元作為停損", "stop_loss", 118.0),
+    # 買點欄位仍用較寬的清單
+    ("尚無理想買點，站回120元再評估", "ideal_buy", None),
+    ("暫無明確買點", "ideal_buy", None),
+])
+def test_buy_only_not_set_words_do_not_touch_sell_fields(text, field, expected):
+    assert parse_sniper_value(text, field=field) == expected

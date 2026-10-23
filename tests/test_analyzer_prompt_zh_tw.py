@@ -133,3 +133,23 @@ def test_institutional_trend_lines_per_language():
     assert "三大法人近期趨勢" in tw and "外資：" in tw
     zh = _trend_lines("zh")
     assert "三大法人近期趋势" in zh and re.search(r"外资：", zh)
+
+
+def test_sell_sniper_and_cost_rules_route_waiting_price_to_watch_conditions():
+    # 減倉／賣出或條件未成立時買點寫「暫不設定」，等待價位改寫進 watch_conditions，停利只給一個價
+    zh_tw = _prompt("zh-TW", code="2330.TW")
+    assert "`ideal_buy`、`secondary_buy` 只寫「暫不設定」、不得寫任何價位" in zh_tw
+    assert "`take_profit` 只寫一個價位（減倉／賣出時是持股者的反彈減碼價）" in zh_tw
+    assert "要等的更低買點寫進 `dashboard.phase_decision.watch_conditions`" in zh_tw
+    assert "說明要等哪個更低的買點" not in zh_tw
+    assert "暂不设定" not in zh_tw  # zh-TW 本體不得混入簡體
+    zh = _prompt("zh", code="2330.TW")
+    assert "`ideal_buy`、`secondary_buy` 只写“暂不设定”、不得写任何价位" in zh
+    assert "要等的更低买点写进 `dashboard.phase_decision.watch_conditions`" in zh
+    assert "暫不設定" not in zh
+    en = _prompt("en", code="2330.TW")
+    assert '`ideal_buy` and `secondary_buy` must be exactly "N/A"' in en
+    assert "`take_profit` holds exactly one price" in en
+    assert "put the lower entry to wait for in `dashboard.phase_decision.watch_conditions`" in en
+    assert "name the lower entry to wait for" not in en
+    assert _cjk_chars(en) == ""

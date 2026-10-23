@@ -147,6 +147,55 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
         self.assertIn("支撑/压力位", prompt)
         self.assertIn("洗盘观察", prompt)
 
+    def test_analysis_prompt_sniper_points_blank_for_sell_and_sell_rules_consistent(self) -> None:
+        # 減倉／賣出報告曾被「必須給具體價格」逼出「暫不設定；站回 MA5 X 元」與「反彈到 MA5 X 元減碼」同價位
+        old_holder_rule = "只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。"
+        for legacy in (True, False):
+            for lang in ("zh", "zh-TW", "en"):
+                with self.subTest(legacy=legacy, lang=lang):
+                    with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
+                        analyzer = GeminiAnalyzer(
+                            skill_instructions="",
+                            default_skill_policy="",
+                            use_legacy_default_prompt=legacy,
+                        )
+                    prompt = analyzer._get_analysis_system_prompt(lang, stock_code="2408.TW")
+                    self.assertNotIn(old_holder_rule, prompt)
+                    if lang == "en":
+                        self.assertIn('`ideal_buy` and `secondary_buy` must be exactly "N/A"', prompt)
+                        self.assertIn("go in `dashboard.phase_decision.watch_conditions`", prompt)
+                        self.assertIn("`take_profit` holds exactly one price", prompt)
+                        # overdo guard: a watch report's concrete pullback limit price stays
+                        self.assertIn("keep that price", prompt)
+                        self.assertIn("bearish alignment alone, without a high-volume break below the prior low", prompt)
+                        self.assertNotIn("Only give Sell/Reduce after a break below key support", prompt)
+                        # reduce/sell definitions must match in every variant (legacy and skill-aware)
+                        self.assertIn("Close below MA20 plus at least one of", prompt)
+                        self.assertIn("High-volume break below the prior low/key support or stop-loss", prompt)
+                        self.assertIn("Bearish alignment alone, without a high-volume break", prompt)
+                        self.assertNotIn("The main conclusion is weakening", prompt)
+                        self.assertNotIn("Trend or risk has clearly deteriorated", prompt)
+                        if legacy:
+                            self.assertIn("N/A for Reduce/Sell", prompt)
+                            self.assertNotIn("Weakening trend or break below key moving averages", prompt)
+                            self.assertNotIn("❌ Bearish alignment or clearly deteriorating trend", prompt)
+                    else:
+                        self.assertIn("`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位", prompt)
+                        self.assertIn("写进 `dashboard.phase_decision.watch_conditions`", prompt)
+                        self.assertIn("`take_profit` 只写一个价位", prompt)
+                        self.assertIn("照常写该价位", prompt)
+                        self.assertIn("只写“暂不设定”\",", prompt)  # JSON template line
+                        self.assertIn("收盘跌破 MA20，且至少符合以下一项：空头排列", prompt)
+                        self.assertIn("放量跌破前低/关键支撑或止损位", prompt)
+                        self.assertIn("仅有空头排列、未放量跌破前低/关键支撑时属于减仓，不是卖出", prompt)
+                        self.assertNotIn("主要结论转弱", prompt)
+                        self.assertNotIn("趋势或风险显著恶化", prompt)
+                        if legacy:
+                            self.assertNotIn("趋势走弱或跌破关键均线", prompt)
+                            self.assertNotIn("❌ 空头排列或趋势显著恶化", prompt)
+                        else:
+                            self.assertIn("仅有空头排列、未放量跌破前低/关键支撑或止损位时，最多减仓，不给卖出", prompt)
+
     def test_analysis_prompt_score_scale_splits_reduce_and_sell_bands(self) -> None:
         for legacy in (False, True):
             with self.subTest(legacy=legacy):

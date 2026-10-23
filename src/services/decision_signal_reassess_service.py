@@ -421,19 +421,16 @@ def _confidence_from_level(value: Any) -> Optional[float]:
 def _extract_persisted_sniper_points(record: AnalysisHistory, raw_result: Mapping[str, Any]) -> dict[str, Optional[float]]:
     raw_points = find_sniper_points(raw_result) or {}
     return {
-        "ideal_buy": _first_price("ideal_buy", getattr(record, "ideal_buy", None), raw_points.get("ideal_buy")),
-        "secondary_buy": _first_price("secondary_buy", getattr(record, "secondary_buy", None), raw_points.get("secondary_buy")),
-        "stop_loss": _first_price("stop_loss", getattr(record, "stop_loss", None), raw_points.get("stop_loss")),
-        "take_profit": _first_price("take_profit", getattr(record, "take_profit", None), raw_points.get("take_profit")),
+        field: _raw_first_price(field, raw_points.get(field), getattr(record, field, None))
+        for field in ("ideal_buy", "secondary_buy", "stop_loss", "take_profit")
     }
 
 
-def _first_price(field: str, *values: Any) -> Optional[float]:
-    for value in values:
-        parsed = parse_sniper_value(value, field)
-        if parsed is not None:
-            return parsed
-    return None
+def _raw_first_price(field: str, raw_value: Any, stored_value: Any) -> Optional[float]:
+    # 原文有寫該欄位就只信原文的解析結果（含 None），避免舊 parser 存下的過期價位復活；原文缺漏才退回已存欄位。
+    if raw_value is not None and str(raw_value).strip():
+        return parse_sniper_value(raw_value, field)
+    return parse_sniper_value(stored_value, field)
 
 
 def _entry_range(ideal_buy: Optional[float], secondary_buy: Optional[float]) -> tuple[Optional[float], Optional[float]]:

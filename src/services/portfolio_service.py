@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from zoneinfo import ZoneInfo
 
 from data_provider.base import canonical_stock_code, normalize_stock_code
 from src.config import get_config
@@ -1647,11 +1648,13 @@ class PortfolioService:
         }
         for from_currency, to_currency in pairs:
             try:
-                rate = self._fetch_fx_rate_from_yfinance(
+                # One download feeds both today's rate and the history backfill.
+                closes = self._fetch_fx_closes_from_yfinance(
                     from_currency=from_currency,
                     to_currency=to_currency,
                     as_of_date=as_of_date,
                 )
+                rate = closes[-1][1] if closes else None
                 if rate is not None and rate > 0:
                     self.repo.save_fx_rate(
                         from_currency=from_currency,
@@ -1662,6 +1665,9 @@ class PortfolioService:
                         is_stale=False,
                     )
                     summary["updated_count"] += 1
+                    self._backfill_fx_history(
+                        from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date, closes=closes
+                    )
                     continue
             except Exception as exc:
                 logger.warning(
@@ -1692,15 +1698,15 @@ class PortfolioService:
         return summary
 
     @staticmethod
-    def _fetch_fx_rate_from_yfinance(
+    def _fetch_fx_closes_from_yfinance(
         *,
         from_currency: str,
         to_currency: str,
         as_of_date: date,
-    ) -> Optional[float]:
-        """Fetch latest available FX close rate around as_of date."""
+    ) -> List[Tuple[date, float]]:
+        """Fetch daily FX closes as (bar_date, close) for [as_of-7d, as_of], NaN and non-positive dropped."""
         if yf is None:
-            return None
+            return []
         symbol = f"{from_currency}{to_currency}=X"
         ticker = yf.Ticker(symbol)
         history = ticker.history(
@@ -1710,14 +1716,54 @@ class PortfolioService:
             auto_adjust=False,
         )
         if history is None or history.empty or "Close" not in history:
-            return None
+            return []
         close = history["Close"].dropna()
-        if close.empty:
-            return None
-        value = float(close.iloc[-1])
-        if value <= 0:
-            return None
-        return value
+        return [(idx.date(), float(value)) for idx, value in close.items() if float(value) > 0]
+
+    @staticmethod
+    def _london_today() -> date:
+        """Today's date in London; yfinance FX daily bars are dated on that calendar."""
+        return datetime.now(ZoneInfo("Europe/London")).date()
+
+    def _backfill_fx_history(
+        self,
+        *,
+        from_currency: str,
+        to_currency: str,
+        as_of_date: date,
+        closes: List[Tuple[date, float]],
+    ) -> None:
+        """Save finished daily bars under their own dates.
+
+        Rows from manual entries are never touched; stale carries and automated
+        yfinance rows (possibly intraday values) are replaced by the finished close.
+        """
+        try:
+            last_finished = min(as_of_date, self._london_today())
+            for bar_date, value in closes:
+                # A bar dated today (London) or later may still be open.
+                if bar_date >= last_finished:
+                    continue
+                existing = self.repo.get_latest_fx_rate(
+                    from_currency=from_currency, to_currency=to_currency, as_of=bar_date
+                )
+                if (
+                    existing is not None
+                    and existing.rate_date == bar_date
+                    and not existing.is_stale
+                    and existing.source not in ("yfinance", "yfinance_backfill")
+                ):
+                    continue
+                self.repo.save_fx_rate(
+                    from_currency=from_currency,
+                    to_currency=to_currency,
+                    rate_date=bar_date,
+                    rate=value,
+                    source="yfinance_backfill",
+                    is_stale=False,
+                )
+        except Exception as exc:
+            logger.warning("FX history backfill failed for %s/%s: %s", from_currency, to_currency, exc)
 
     def _require_active_account(self, account_id: int) -> Any:
         account = self.repo.get_account(account_id, include_inactive=False)

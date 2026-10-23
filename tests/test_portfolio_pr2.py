@@ -76,6 +76,9 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.risk_service = PortfolioRiskService(portfolio_service=self.service)
         self._board_fetch_patcher = patch.object(PortfolioRiskService, "_fetch_belong_boards", return_value=[])
         self._board_fetch_patcher.start()
+        # 匯率刷新會順手補歷史日線；預設關掉 yfinance，避免測試連外。
+        self._yf_patcher = patch("src.services.portfolio_service.yf", None)
+        self._yf_patcher.start()
         self.client = TestClient(create_app(static_dir=data_dir / "empty-static"))
 
     def tearDown(self) -> None:
@@ -84,6 +87,7 @@ class PortfolioPr2TestCase(unittest.TestCase):
         os.environ.pop("ENV_FILE", None)
         os.environ.pop("DATABASE_PATH", None)
         self._board_fetch_patcher.stop()
+        self._yf_patcher.stop()
         self.temp_dir.cleanup()
 
     def _save_close(self, symbol: str, on_date: date, close: float) -> None:
@@ -725,7 +729,7 @@ class PortfolioPr2TestCase(unittest.TestCase):
             is_stale=False,
         )
 
-        with patch.object(PortfolioService, "_fetch_fx_rate_from_yfinance", side_effect=AssertionError("should not call")):
+        with patch.object(PortfolioService, "_fetch_fx_closes_from_yfinance", side_effect=AssertionError("should not call")):
             self.service.get_portfolio_snapshot(account_id=aid, as_of=date(2026, 1, 1), cost_method="fifo")
 
     def test_fx_refresh_fallback_marks_stale(self) -> None:
@@ -747,7 +751,7 @@ class PortfolioPr2TestCase(unittest.TestCase):
             is_stale=False,
         )
 
-        with patch.object(PortfolioService, "_fetch_fx_rate_from_yfinance", return_value=None):
+        with patch.object(PortfolioService, "_fetch_fx_closes_from_yfinance", return_value=[]):
             summary = self.service.refresh_fx_rates(account_id=aid, as_of=date(2026, 1, 2))
 
         self.assertEqual(summary["pair_count"], 1)
@@ -774,9 +778,9 @@ class PortfolioPr2TestCase(unittest.TestCase):
 
         def fake_fetch(*, from_currency, to_currency, as_of_date):
             calls.append((from_currency, to_currency))
-            return 0.2
+            return [(as_of_date, 0.2)]
 
-        with patch.object(PortfolioService, "_fetch_fx_rate_from_yfinance", side_effect=fake_fetch):
+        with patch.object(PortfolioService, "_fetch_fx_closes_from_yfinance", side_effect=fake_fetch):
             summary = self.service.refresh_fx_rates(account_id=aid, as_of=date(2026, 1, 2))
 
         self.assertEqual(calls, [("TWD", "CNY")])
@@ -786,12 +790,116 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertAlmostEqual(snapshot["total_cash"], 200.0, places=6)
         self.assertFalse(snapshot["fx_stale"])
 
+    def _fx_frame(self, closes):
+        index = pd.DatetimeIndex([pd.Timestamp(d, tz="Asia/Shanghai") for d, _ in closes])
+        return pd.DataFrame({"Close": [c for _, c in closes]}, index=index)
+
+    def _refresh_usd_with_frame(self, frame, as_of):
+        account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="CNY")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="USD"
+        )
+        yf_mock = MagicMock()
+        yf_mock.Ticker.return_value.history.return_value = frame
+        with patch("src.services.portfolio_service.yf", yf_mock):
+            self.service.refresh_fx_rates(account_id=account["id"], as_of=as_of)
+
+    def _fx_row(self, on_date):
+        row = self.service.repo.get_latest_fx_rate(from_currency="USD", to_currency="CNY", as_of=on_date)
+        return row if row is not None and row.rate_date == on_date else None
+
+    def test_fx_refresh_backfills_historic_bars_under_own_dates(self) -> None:
+        frame = self._fx_frame([("2026-01-05", 7.01), ("2026-01-06", float("nan")), ("2026-01-07", 7.03), ("2026-01-08", 7.99)])
+        self._refresh_usd_with_frame(frame, date(2026, 1, 8))
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 5)).rate, 7.01)
+        self.assertEqual(self._fx_row(date(2026, 1, 5)).source, "yfinance_backfill")
+        self.assertIsNone(self._fx_row(date(2026, 1, 6)))  # NaN close skipped
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 7)).rate, 7.03)
+        today = self._fx_row(date(2026, 1, 8))  # today's row keeps the original behaviour
+        self.assertAlmostEqual(today.rate, 7.99)
+        self.assertEqual(today.source, "yfinance")
+
+    def test_fx_refresh_backfill_never_overwrites_manual_rows(self) -> None:
+        self.service.repo.save_fx_rate(
+            from_currency="USD", to_currency="CNY", rate_date=date(2026, 1, 5), rate=6.5, source="manual", is_stale=False
+        )
+        frame = self._fx_frame([("2026-01-05", 7.01), ("2026-01-07", 7.03), ("2026-01-08", 7.99)])
+        self._refresh_usd_with_frame(frame, date(2026, 1, 8))
+        kept = self._fx_row(date(2026, 1, 5))
+        self.assertAlmostEqual(kept.rate, 6.5)
+        self.assertEqual(kept.source, "manual")
+
+    def _london_frame(self, closes):
+        index = pd.DatetimeIndex([pd.Timestamp(d, tz="Europe/London") for d, _ in closes])
+        return pd.DataFrame({"Close": [c for _, c in closes]}, index=index)
+
+    def _seed_fx(self, on_date, rate, source, is_stale):
+        self.service.repo.save_fx_rate(
+            from_currency="USD", to_currency="CNY", rate_date=on_date, rate=rate, source=source, is_stale=is_stale
+        )
+
+    def _refresh_at_london(self, frame, as_of, london_today):
+        with patch.object(PortfolioService, "_london_today", return_value=london_today):
+            self._refresh_usd_with_frame(frame, as_of)
+
+    def test_fx_backfill_overwrites_stale_row_with_real_close(self) -> None:
+        self._seed_fx(date(2026, 1, 5), 6.5, "manual", True)  # stale carry of an earlier rate
+        frame = self._london_frame([("2026-01-05", 7.01), ("2026-01-08", 7.99)])
+        self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 8))
+        row = self._fx_row(date(2026, 1, 5))
+        self.assertAlmostEqual(row.rate, 7.01)
+        self.assertFalse(bool(row.is_stale))
+
+    def test_fx_backfill_overwrites_yfinance_intraday_row_with_close(self) -> None:
+        self._seed_fx(date(2026, 1, 7), 7.00, "yfinance", False)  # same-day refresh value
+        frame = self._london_frame([("2026-01-07", 7.03), ("2026-01-08", 7.99)])
+        self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 8))
+        row = self._fx_row(date(2026, 1, 7))
+        self.assertAlmostEqual(row.rate, 7.03)
+        self.assertEqual(row.source, "yfinance_backfill")
+
+    def test_fx_backfill_keeps_manual_row(self) -> None:
+        self._seed_fx(date(2026, 1, 7), 6.5, "manual", False)
+        frame = self._london_frame([("2026-01-07", 7.03), ("2026-01-08", 7.99)])
+        self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 8))
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 7)).rate, 6.5)
+
+    def test_fx_backfill_skips_bar_still_open_in_london(self) -> None:
+        # Taipei 2026-01-08 03:00 is London 2026-01-07 19:00: the 01-07 bar is still open.
+        frame = self._london_frame([("2026-01-06", 7.02), ("2026-01-07", 7.55)])
+        self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 7))
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 6)).rate, 7.02)
+        self.assertIsNone(self._fx_row(date(2026, 1, 7)))
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 8)).rate, 7.55)  # today's rate unchanged
+
+    def test_fx_refresh_downloads_pair_once(self) -> None:
+        account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="CNY")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="USD"
+        )
+        yf_mock = MagicMock()
+        yf_mock.Ticker.return_value.history.return_value = self._london_frame(
+            [("2026-01-07", 7.03), ("2026-01-08", 7.99)]
+        )
+        with patch("src.services.portfolio_service.yf", yf_mock):
+            self.service.refresh_fx_rates(account_id=account["id"], as_of=date(2026, 1, 8))
+        self.assertEqual(yf_mock.Ticker.return_value.history.call_count, 1)
+
+    def test_fx_refresh_without_as_of_bar_saves_last_bar_under_its_own_date(self) -> None:
+        # No bar for as_of itself: today's row takes the last close (old behaviour)
+        # and that bar is also saved under its own date.
+        frame = self._fx_frame([("2026-01-05", 7.01), ("2026-01-07", 7.03)])
+        self._refresh_usd_with_frame(frame, date(2026, 1, 8))
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 8)).rate, 7.03)
+        self.assertEqual(self._fx_row(date(2026, 1, 8)).source, "yfinance")
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 7)).rate, 7.03)
+
     def test_fx_refresh_cny_account_does_not_fetch_aggregate_pair(self) -> None:
         account = self.service.create_account(name="CN", broker="Demo", market="cn", base_currency="CNY")
         self.service.record_cash_ledger(
             account_id=account["id"], event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="CNY"
         )
-        with patch.object(PortfolioService, "_fetch_fx_rate_from_yfinance", side_effect=AssertionError("should not call")):
+        with patch.object(PortfolioService, "_fetch_fx_closes_from_yfinance", side_effect=AssertionError("should not call")):
             summary = self.service.refresh_fx_rates(account_id=account["id"], as_of=date(2026, 1, 2))
         self.assertEqual(summary["pair_count"], 0)
 
@@ -1036,7 +1144,7 @@ class PortfolioPr2TestCase(unittest.TestCase):
         disabled_config = SimpleNamespace(portfolio_fx_update_enabled=False)
         with patch("src.services.portfolio_service.get_config", return_value=disabled_config) as get_config_mock, patch.object(
             PortfolioService,
-            "_fetch_fx_rate_from_yfinance",
+            "_fetch_fx_closes_from_yfinance",
             side_effect=AssertionError("should not call"),
         ), patch.object(self.service.repo, "save_fx_rate", wraps=self.service.repo.save_fx_rate) as save_fx_rate_mock:
             summary = self.service.refresh_fx_rates(account_id=aid, as_of=date(2026, 1, 2))
@@ -1067,7 +1175,7 @@ class PortfolioPr2TestCase(unittest.TestCase):
             return_value=[],
         ), patch.object(
             PortfolioService,
-            "_fetch_fx_rate_from_yfinance",
+            "_fetch_fx_closes_from_yfinance",
             side_effect=AssertionError("should not call"),
         ):
             summary = self.service.refresh_fx_rates(account_id=aid, as_of=date(2026, 1, 2))
@@ -1092,7 +1200,7 @@ class PortfolioPr2TestCase(unittest.TestCase):
         disabled_config = SimpleNamespace(portfolio_fx_update_enabled=False)
         with patch("src.services.portfolio_service.get_config", return_value=disabled_config), patch.object(
             PortfolioService,
-            "_fetch_fx_rate_from_yfinance",
+            "_fetch_fx_closes_from_yfinance",
             side_effect=AssertionError("should not call"),
         ):
             response = self.client.post(
@@ -1120,7 +1228,7 @@ class PortfolioPr2TestCase(unittest.TestCase):
             currency="USD",
         )
 
-        with patch.object(PortfolioService, "_fetch_fx_rate_from_yfinance", return_value=None):
+        with patch.object(PortfolioService, "_fetch_fx_closes_from_yfinance", return_value=[]):
             response = self.client.post(
                 "/api/v1/portfolio/fx/refresh",
                 params={"account_id": account_id, "as_of": "2026-01-02"},
