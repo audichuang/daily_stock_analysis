@@ -55,7 +55,9 @@ class BacktestEngine:
     # Operation advice keywords (Chinese + English)
     _BULLISH_KEYWORDS = (
         "买入",
+        "买进",
         "加仓",
+        "加码",
         "强烈买入",
         "增持",
         "建仓",
@@ -66,6 +68,7 @@ class BacktestEngine:
     _BEARISH_KEYWORDS = (
         "卖出",
         "减仓",
+        "减码",
         "强烈卖出",
         "清仓",
         "strong sell",
@@ -86,6 +89,13 @@ class BacktestEngine:
         "观望",
         "等待",
         "wait",
+    )
+
+    # Traditional -> simplified for every character the keyword tables use, so
+    # TW advice such as "減碼" / "賣出" matches the simplified keywords.
+    _TRAD_TO_SIMP = str.maketrans(
+        "買賣減倉碼強觀盤盪蕩議應當暫無須別沒進",
+        "买卖减仓码强观盘荡荡议应当暂无须别没进",
     )
 
     # Negation prefixes (trailing spaces stripped for suffix-matching against prefix text).
@@ -480,7 +490,7 @@ class BacktestEngine:
 
     @staticmethod
     def _normalize_text(value: Optional[str]) -> str:
-        return str(value or "").strip().lower()
+        return str(value or "").strip().lower().translate(BacktestEngine._TRAD_TO_SIMP)
 
     @classmethod
     def _matches_intent(cls, text: str, keywords: Sequence[str]) -> bool:

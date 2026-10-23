@@ -89,7 +89,7 @@
 | 1 | **波段線的驗證迴路停擺**（日誌 08-14～10-19 沒跑）。基本面資料的出口在這條線 | 先讓 `tw-swing-research` 與 `make verify-decisions` 恢復並累積到期樣本 | 事實 |
 | 2 | 初版法人沒有標示（§2 表） | prompt 加註；影子評估改用定版 | 強 |
 | 3 | 回測方向判斷只認簡體關鍵字，也缺 `减码` | 補繁體與減碼，並寫 mutation 測試。實際判錯的只有 completed 中的 17 筆（約 10%）：減倉、賣出、減碼。「觀望」「持有觀察」本來就判對 | 強 |
-| 4 | 台股回測大量 `insufficient_data`（2330 有 37 筆） | 根因是 `backtest_service.py:151-184` 拿不到台股日線視窗，不是 `get_candidates`；要先查日線補數這條路。`decision_signal_outcomes` 是 0 筆，也沒有排程在產 | 強 |
+| 4 | 台股回測大量 `insufficient_data`（2330 有 37 筆） | ~~根因是 `backtest_service.py:151-184` 拿不到台股日線視窗，不是 `get_candidates`；要先查日線補數這條路。~~ **【作廢，10-23 唯讀查證】** `dsa.stock_daily` 與 `market.price` 的台股日線都完整，這些列現在往後都有 10 根以上 K 棒。真因是三件事疊加：評估時點（分析後第 14 個自然日）當天的 K 棒尚未入庫，加上休市日讓 14 日內只剩 8～9 個交易日，再加上舊版 `get_candidates` 把 `insufficient_data` 列永久排除、K 棒補齊後也不重評（已改為允許重試）。`decision_signal_outcomes` 是 0 筆，也沒有排程在產 | 強 |
 | 5 | 估值沒有錨（只有單點近四季 PE） | PE、PB 的 3 年百分位與遠期 PE 放進**波段線與 value-research**（dossier 已算好）。每日線只修上市估值晚一天的問題。不給檢查項 6 門檻，否則等於變相護欄 | 中（解釋力，不是預測力） |
 | 6 | 月營收只用水位，沒算驚奇 | 在 20～60 日波段線試做「實際值對比去年同月×近 3 月 YoY 趨勢」的驚奇，先用 10 日公告日做保守版；每日報告只在公布後幾天顯示一行事件列 | inconclusive |
 | 7 | 季報只給 4 個淺欄位；cash_flows（341 萬列）、income_sheet_cumulate 沒有讀取端 | 三率、EPS、FCF 給波段、earnings-review、value-research 用；每日線只在財報公布後顯示「本季毛利率對上季／去年同季」一行。沒有讀取端不等於浪費，要先問哪條線需要它 | 中 |
