@@ -14,6 +14,7 @@ import argparse
 import json
 import logging
 import sys
+from decimal import ROUND_HALF_UP, Decimal
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
@@ -45,6 +46,20 @@ def _opt(v):
     return None if v is None or pd.isna(v) else float(v)
 
 
+def _half_up_1dp(x):
+    """四捨五入到小數 1 位（half-up）。float 的 66.95 會因二進位表示被 f-string 印成 67.0 或 66.9，先在這裡定案。"""
+    return float(Decimal(str(x)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+
+
+def _revenue_yoy(r, by_month):
+    """月營收年增率（%，1 位小數）：有去年同月營收就自己算，否則退回庫裡存的 yoy（本身已四捨五入到 2 位）。"""
+    prev = by_month.get((r.revenue_month.year - 1, r.revenue_month.month))
+    if prev:
+        return _half_up_1dp(Decimal(int(r.revenue)) / Decimal(int(prev)) * 100 - 100)
+    y = _opt(r.yoy)
+    return None if y is None else _half_up_1dp(y)
+
+
 def _quarter_label(d):
     d = pd.Timestamp(d)
     q = _QUARTER_OF.get((d.month, d.day))
@@ -56,12 +71,14 @@ def _quarter_label(d):
 def fundamentals(engine, sid, as_of):
     rev = _sql(engine, "SELECT revenue_month, revenue, yoy, announce_date FROM market.monthly_revenue "
                        "WHERE stock_id = :s AND (announce_date IS NULL OR announce_date <= :d) "
-                       "ORDER BY revenue_month DESC LIMIT 24", s=sid, d=as_of)
+                       "ORDER BY revenue_month DESC LIMIT 36", s=sid, d=as_of)
+    by_month = {(r.revenue_month.year, r.revenue_month.month): r.revenue for r in rev.itertuples()}
     months = [{"month": f"{r.revenue_month:%Y-%m}", "revenue_k": int(r.revenue),
-               "yoy_pct": _opt(r.yoy),
+               "yoy_pct": _revenue_yoy(r, by_month),
                "announced": None if pd.isna(r.announce_date) else str(r.announce_date)}
               for r in rev.head(13).itertuples()][::-1]
     ttm_yoy = None
+    rev = rev.head(24)
     # 要連續 24 個月才算：中間缺月時兩個 12 列窗口會錯開，算出來不是「近 12 個月」
     span = None if len(rev) != 24 else (
         (rev.revenue_month.iloc[0].year - rev.revenue_month.iloc[-1].year) * 12
@@ -302,11 +319,13 @@ def render(p):
     else:
         w.append(f"- 現價 {s['price']:,.2f}")
         for e in s["events"]:
-            w.append(f"- {pd.Timestamp(e['date']).date()} {e['kind']} {e['direction']}（突破 {e['level']:,.2f}）")
+            w.append(f"- {pd.Timestamp(e['date']).date()} {e['kind']} {e['direction']}（{'突破' if e['direction'] == 'bullish' else '跌破'} {e['level']:,.2f}）")
         if s["fib"]:
             fb = s["fib"]
+            last = s.get("last_event")
+            ote = "OTE" if not last else "OTE 多方" if last["direction"] == "bullish" else "OTE 空方"   # 與 HTML 報告同一套標籤
             w.append(f"- Fib 位置 {fb['position'] * 100:.1f}%（{fb['zone']}，區間 {fb['range_low']:,.2f}~"
-                     f"{fb['range_high']:,.2f}）；OTE {fb['ote_low']:,.2f}~{fb['ote_high']:,.2f}"
+                     f"{fb['range_high']:,.2f}）；{ote} {fb['ote_low']:,.2f}~{fb['ote_high']:,.2f}"
                      f"（{'在內' if fb['in_ote'] else '不在內'}）")
         w += [f"- 有效 OB（{o['direction']}）{o['low']:,.2f}~{o['high']:,.2f}（{pd.Timestamp(o['date']).date()}）"
               for o in s["order_blocks"]]
