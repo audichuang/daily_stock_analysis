@@ -2197,9 +2197,12 @@ def test_reassess_persist_guardrail_block_returns_structured_error_without_write
     decision_profile,
 ) -> None:
     client, db = client_and_db
+    raw = _valid_reassess_raw(invalidation="跌破关键支撑")
+    # 原文狙擊點優先於已存欄位，所以倒置的停損／停利要寫進原文
+    raw["dashboard"]["battle_plan"]["sniper_points"].update(stop_loss=1900, take_profit=1800)
     record_id = _save_reassess_history(
         db,
-        raw_result=_valid_reassess_raw(invalidation="跌破关键支撑"),
+        raw_result=raw,
         context_snapshot=_valid_reassess_context(),
         stop_loss=1900,
         take_profit=1800,
