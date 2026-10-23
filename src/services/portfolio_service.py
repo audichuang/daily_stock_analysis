@@ -1669,15 +1669,29 @@ class PortfolioService:
                     as_of_date=as_of_date,
                 )
                 fetched_last = fetched[-1] if fetched else None
-                closes = accepted = self._filter_fx_outliers(
-                    from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date, closes=fetched
+                cross_closes = self._fetch_fx_cross_closes(
+                    from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date
                 )
+                closes = accepted = self._filter_fx_outliers(
+                    from_currency=from_currency,
+                    to_currency=to_currency,
+                    as_of_date=as_of_date,
+                    closes=fetched,
+                    cross_closes=cross_closes,
+                )
+                kept_dates = {d for d, _ in closes}
+                # Bars the cross check rejected: their stored auto rows may hold the same junk (see backfill).
+                repairs = {d: cross_closes[d] for d, _ in fetched if d not in kept_dates and d in cross_closes}
                 # If the newest bar was rejected, today's rate must not silently become an older bar.
                 rate = closes[-1][1] if closes and closes[-1] == fetched_last else None
                 # Backfill the bars that passed the filter even when the newest one was rejected, so the
                 # stale carry below starts from the latest accepted value instead of an older stored one.
                 self._backfill_fx_history(
-                    from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date, closes=closes
+                    from_currency=from_currency,
+                    to_currency=to_currency,
+                    as_of_date=as_of_date,
+                    closes=closes,
+                    repairs=repairs,
                 )
                 if rate is not None and rate > 0:
                     self.repo.save_fx_rate(
@@ -1796,6 +1810,25 @@ class PortfolioService:
             return None
         return dst / src if src and dst else None
 
+    @classmethod
+    def _fetch_fx_cross_closes(
+        cls, *, from_currency: str, to_currency: str, as_of_date: date
+    ) -> Dict[date, float]:
+        """Per London day from->to rate implied by the two USD legs, same window and close rule as the pair.
+
+        Empty when either side is USD (the leg is the pair's own ticker, so it cannot check itself), when
+        yfinance is missing, or on any failure; days missing from either leg are simply absent.
+        """
+        if yf is None or from_currency == to_currency or "USD" in (from_currency, to_currency):
+            return {}
+        try:
+            src = dict(cls._fetch_fx_closes_from_yfinance(from_currency="USD", to_currency=from_currency, as_of_date=as_of_date))
+            dst = dict(cls._fetch_fx_closes_from_yfinance(from_currency="USD", to_currency=to_currency, as_of_date=as_of_date))
+        except Exception as exc:
+            logger.warning("交叉匯率序列取得失敗 %s/%s：%s", from_currency, to_currency, exc)
+            return {}
+        return {d: dst[d] / src[d] for d in src.keys() & dst.keys() if src[d] > 0 and dst[d] > 0}
+
     def _last_real_stored_rate(
         self, *, from_currency: str, to_currency: str, before: date
     ) -> Optional[float]:
@@ -1815,6 +1848,7 @@ class PortfolioService:
         to_currency: str,
         as_of_date: date,
         closes: List[Tuple[date, float]],
+        cross_closes: Optional[Dict[date, float]] = None,
     ) -> List[Tuple[date, float]]:
         """Drop junk bars (TWDCNY=X once printed 0.1962 against ~0.2047 from the USD cross).
 
@@ -1822,14 +1856,25 @@ class PortfolioService:
         FX_OUTLIER_MAX_DEVIATION. A real jump has the next bar on the new level and passes. The newest bar has
         no next neighbour, so it is compared with the cross rate (or, without one, the previous real value,
         walking back past stale carries); no reference at all means accept.
+
+        For a pair with no USD side, every bar whose London day has a cross rate (`cross_closes`, fetched when
+        None) is checked against it instead: junk can repeat on consecutive bars, so two bad neighbours would
+        vouch for each other under the neighbour rule. Days without a cross rate fall back to the rules above.
         """
+        if cross_closes is None:
+            cross_closes = self._fetch_fx_cross_closes(
+                from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date
+            )
 
         def deviates(a: float, b: float) -> bool:
             return abs(a / b - 1.0) > FX_OUTLIER_MAX_DEVIATION
 
         kept: List[Tuple[date, float]] = []
         for i, (bar_date, value) in enumerate(closes):
-            if i + 1 < len(closes):
+            if bar_date in cross_closes:
+                reference = cross_closes[bar_date]
+                bad = deviates(value, reference)
+            elif i + 1 < len(closes):
                 prev = kept[-1][1] if kept else self._last_real_stored_rate(
                     from_currency=from_currency, to_currency=to_currency, before=bar_date
                 )
@@ -1870,14 +1915,38 @@ class PortfolioService:
         to_currency: str,
         as_of_date: date,
         closes: List[Tuple[date, float]],
+        repairs: Optional[Dict[date, float]] = None,
     ) -> None:
         """Save finished daily bars under their own dates.
 
         Rows from manual entries are never touched; stale carries and automated
         yfinance rows (possibly intraday values) are replaced by the finished close.
+
+        `repairs` maps days whose bar the cross check rejected to the cross rate. An earlier run (before the
+        check existed) may have stored the junk bar as a non-stale row; keeping it would feed bad rates to
+        snapshots, and a stale carry would just propagate it. The cross rate comes from the two real USD legs,
+        so a stored automated row (or a missing one) that deviates from it is rewritten as 'yfinance_cross'.
         """
         try:
             last_finished = min(as_of_date, self._london_today())
+            for bar_date, cross in (repairs or {}).items():
+                if bar_date >= last_finished:
+                    continue
+                existing = self.repo.get_latest_fx_rate(
+                    from_currency=from_currency, to_currency=to_currency, as_of=bar_date
+                )
+                if existing is not None and existing.rate_date == bar_date:
+                    manual = not existing.is_stale and existing.source not in ("yfinance", "yfinance_backfill")
+                    if manual or abs(float(existing.rate) / cross - 1.0) <= FX_OUTLIER_MAX_DEVIATION:
+                        continue
+                self.repo.save_fx_rate(
+                    from_currency=from_currency,
+                    to_currency=to_currency,
+                    rate_date=bar_date,
+                    rate=cross,
+                    source="yfinance_cross",
+                    is_stale=False,
+                )
             for bar_date, value in closes:
                 # A bar dated today (London) or later may still be open.
                 if bar_date >= last_finished:
