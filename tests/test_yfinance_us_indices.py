@@ -12,6 +12,8 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 import pandas as pd
+import pytest
+from types import SimpleNamespace
 
 # 在导入 data_provider 前 mock 可能缺失的依赖，避免环境差异导致测试无法运行
 if 'fake_useragent' not in sys.modules:
@@ -138,6 +140,8 @@ class TestFetchYfTickerData(unittest.TestCase):
         for volume in (0.0, 1.2e9):  # 整列空白／只剩成交量（1102 的形狀）都一樣
             with self.subTest(volume=volume):
                 mock_yf = _make_mock_yf(self._hist_with_blank_middle_row(volume))
+                # fast_info 也沒有前收（MagicMock 的 float() 會是 1.0，須明確給 NaN）
+                mock_yf.Ticker.return_value.fast_info = SimpleNamespace(regular_market_previous_close=math.nan)
                 with self.assertLogs('data_provider.yfinance_fetcher', level='WARNING'):
                     result = self.fetcher._fetch_yf_ticker_data(mock_yf, '^GSPC', '标普500指数', 'SPX')
                 self.assertEqual(result['current'], 7663.43)
@@ -277,3 +281,67 @@ class TestGetUsMainIndices(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def _fake_yf_for_ticker_data(hist, fast_info):
+
+    ticker = SimpleNamespace(history=lambda **kw: hist, fast_info=fast_info)
+    return SimpleNamespace(Ticker=lambda code: ticker)
+
+
+def test_ticker_data_blank_prev_row_falls_back_to_fast_info_prev_close() -> None:
+    import pandas as pd
+    from data_provider.yfinance_fetcher import YfinanceFetcher
+
+    nan = float("nan")
+    hist = pd.DataFrame(
+        {"Open": [nan, 99.0], "High": [nan, 101.0], "Low": [nan, 98.0],
+         "Close": [nan, 100.0], "Volume": [0, 5]},
+        index=pd.DatetimeIndex(["2026-10-21", "2026-10-22"]),
+    )
+    info = SimpleNamespace(regular_market_previous_close=nan, previous_close=125.0)
+    yf = _fake_yf_for_ticker_data(hist, info)
+
+    out = YfinanceFetcher()._fetch_yf_ticker_data(yf, "^X", "X", "X")
+
+    assert out["prev_close"] == 125.0
+    assert out["change_pct"] == pytest.approx(-20.0)
+
+
+def test_ticker_data_blank_prev_row_without_fast_info_stays_unknown() -> None:
+    import math
+    import pandas as pd
+    from data_provider.yfinance_fetcher import YfinanceFetcher
+
+    nan = float("nan")
+    hist = pd.DataFrame(
+        {"Open": [nan, 99.0], "High": [nan, 101.0], "Low": [nan, 98.0],
+         "Close": [nan, 100.0], "Volume": [0, 5]},
+        index=pd.DatetimeIndex(["2026-10-21", "2026-10-22"]),
+    )
+    yf = _fake_yf_for_ticker_data(hist, SimpleNamespace(regular_market_previous_close=nan))
+
+    out = YfinanceFetcher()._fetch_yf_ticker_data(yf, "^X", "X", "X")
+
+    assert math.isnan(out["prev_close"]) and math.isnan(out["change_pct"])
+
+
+def test_ticker_data_trailing_blank_row_blocks_fast_info_prev_close_fallback() -> None:
+    """反向：結尾空列被丟時 fast_info 前收屬於更新的一場，不能套到這一列上。"""
+    import pandas as pd
+    from data_provider.yfinance_fetcher import YfinanceFetcher
+
+    nan = float("nan")
+    hist = pd.DataFrame(
+        {"Open": [99.0, nan, 99.0, nan], "High": [101.0, nan, 101.0, nan],
+         "Low": [98.0, nan, 98.0, nan], "Close": [100.0, nan, 100.0, nan],
+         "Volume": [5, 0, 5, 0]},
+        index=pd.DatetimeIndex(["2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22"]),
+    )
+    yf = _fake_yf_for_ticker_data(hist, SimpleNamespace(previous_close=125.0))
+
+    out = YfinanceFetcher()._fetch_yf_ticker_data(yf, "^X", "X", "X")
+
+    import math
+
+    assert math.isnan(out["prev_close"]) and math.isnan(out["change_pct"])
