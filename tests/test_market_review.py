@@ -1013,16 +1013,17 @@ class MarketReviewMissingRegionsTestCase(unittest.TestCase):
 
 
 class PrewarmReviewReuseTestCase(unittest.TestCase):
-    """Prewarm (daily_market_context) and formal review must share one LLM run per region."""
+    """Prewarm (daily_market_context) and formal review of the same query share one LLM run per region."""
 
     def setUp(self) -> None:
         market_review_module._PREWARM_REVIEWS.clear()
         self.addCleanup(market_review_module._PREWARM_REVIEWS.clear)
 
-    def _run(self, region: str, trigger_source: str, factory: MagicMock):
+    def _run(self, region: str, trigger_source: str, factory: MagicMock, qid: str = "Q1"):
         notifier = MagicMock()
         notifier.save_report_to_file.return_value = "/tmp/x.md"
         notifier.is_available.return_value = False
+        prewarm = trigger_source == "daily_market_context"
         with patch.object(market_review_module, "MarketAnalyzer", factory), patch.object(
             market_review_module, "_persist_market_review_history"
         ):
@@ -1032,14 +1033,19 @@ class PrewarmReviewReuseTestCase(unittest.TestCase):
                 override_region=region,
                 send_notification=False,
                 trigger_source=trigger_source,
+                query_id=f"market_context_{qid}_{region}" if prewarm else qid,
             )
 
     @staticmethod
-    def _factory() -> MagicMock:
+    def _factory(used_template: bool = False) -> MagicMock:
         factory = MagicMock()
         factory.side_effect = lambda **kw: MagicMock(
             run_daily_review_with_snapshot=MagicMock(
-                return_value=SimpleNamespace(report=f"{kw['region']} body", market_light_snapshot={})
+                return_value=SimpleNamespace(
+                    report=f"{kw['region']} body",
+                    market_light_snapshot={},
+                    used_template=used_template,
+                )
             )
         )
         return factory
@@ -1073,6 +1079,64 @@ class PrewarmReviewReuseTestCase(unittest.TestCase):
         with patch.object(market_review_module.time, "monotonic", return_value=10**9):
             self._run("tw", "cli", factory)
         self.assertEqual(factory.call_count, 2)
+
+    def test_prewarm_of_other_query_is_not_reused(self) -> None:
+        factory = self._factory()
+        self._run("tw", "daily_market_context", factory, qid="A")
+        self._run("tw", "api", factory, qid="B")
+        self.assertEqual(factory.call_count, 2)  # B regenerates
+        self._run("tw", "api", factory, qid="A")
+        self.assertEqual(factory.call_count, 2)  # A's entry survived B
+
+    def test_prewarm_without_caller_query_id_is_not_cached(self) -> None:
+        factory = self._factory()
+        self._run("tw", "daily_market_context", factory, qid="0" * 32)
+        self.assertEqual(market_review_module._PREWARM_REVIEWS, {})
+
+    def test_template_prewarm_is_not_cached(self) -> None:
+        factory = self._factory(used_template=True)
+        self._run("tw", "daily_market_context", factory)
+        self.assertEqual(market_review_module._PREWARM_REVIEWS, {})
+        self._run("tw", "cli", factory)
+        self.assertEqual(factory.call_count, 2)  # formal run retries the LLM
+
+
+class UsedTemplateFlagTestCase(unittest.TestCase):
+    """The review result must say when the report is the static fallback template."""
+
+    def _parts(self, analyzer):
+        from src.market_analyzer import MarketAnalyzer, MarketOverview
+
+        ma = MarketAnalyzer(analyzer=analyzer, region="cn", config=SimpleNamespace(report_language="zh"))
+        with patch.object(ma, "get_market_overview", return_value=MarketOverview(date="2026-10-23")), patch.object(
+            ma, "search_market_news", return_value=[]
+        ), patch.object(ma, "_merge_persisted_market_intelligence", return_value=[]), patch.object(
+            ma, "_get_analyzer_generation_backend_config_error", return_value=None
+        ):
+            return ma._run_daily_review_parts()
+
+    def test_no_analyzer_marks_template(self) -> None:
+        self.assertTrue(self._parts(None).used_template)
+
+    def test_empty_llm_reply_marks_template(self) -> None:
+        class EmptyAnalyzer:
+            def is_available(self):
+                return True
+
+            def generate_text(self, *args, **kwargs):
+                return ""
+
+        self.assertTrue(self._parts(EmptyAnalyzer()).used_template)
+
+    def test_real_llm_reply_is_not_template(self) -> None:
+        class OkAnalyzer:
+            def is_available(self):
+                return True
+
+            def generate_text(self, *args, **kwargs):
+                return "## LLM body"
+
+        self.assertFalse(self._parts(OkAnalyzer()).used_template)
 
 
 if __name__ == "__main__":
