@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 匯率刷新：下載全被交叉匯率拒收且沒有乾淨替代值時，刪掉當天的自動來源錯誤列並標缺匯率（不再沿用錯值）；主序列抓不到就不打交叉匯率；整個刷新最多 20 秒（每次 yfinance 呼叫含 Ticker 建構都在有時限的執行緒內），不再超過前端 30 秒逾時
+- [測試] `tests/conftest.py` 的正式庫防線改為往上層逐層找 `.env`，git worktree 內跑測試也會擋下正式應用庫
 - [文件] `docs/tw-analysis-overview.md` 同步 10-23 修正：法人初版標示、上市估值改讀本地當日值、18:00 報告新聞先走 FinMind、個股檔案邏輯位置；開關表加「Mac 正式」欄
 - [修復] Shioaji 查合約時遇到「連線未建立」這類例外，持續超過約 60 秒就作廢 session 並記 WARNING，下一次請求自動重新登入（10-23 NAS 斷線後一直沿用壞掉的 session 3.5 小時、報價全退回 yfinance）；死 session 的登出不佔用共用執行緒
 - [修復] 非美元交叉幣別對（如 TWD/CNY）的每一根匯率都以同日 USD 兩腿推算的交叉匯率驗證，偏離 >2% 拒收；連續多根垃圾報價不再被當成真實跳動收下，庫裡已存的自動來源垃圾列會改寫成交叉匯率值（`source=yfinance_cross`）

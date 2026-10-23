@@ -35,9 +35,18 @@ T = TypeVar("T")
 # 两层：载入时就占住这个键（load_dotenv 不覆写已存在的键）；再在建 engine 的出口
 # 拒绝正式库 URL，挡住 patch.dict(clear=True) 之后又重载 .env 的路径。
 # market_data/tests 刻意连 DATABASE_URL 并以 rollback 保护，这里不碰它。
-_PROD_STORAGE_DATABASE_URL = (
-    dotenv_values(Path(__file__).resolve().parents[1] / ".env").get("STORAGE_DATABASE_URL") or ""
-).strip()
+# 往上層逐層找 .env：git worktree（.claude/worktrees/<name>）自己沒有 .env，但 .venv 是連到主 repo
+# 的 symlink，LiteLLM DEV 模式的 load_dotenv() 會從套件位置往上找到主 repo 的 .env，把正式庫補回來
+# （2026-10-23 踩過：worktree 跑 test_portfolio_pr2 在正式庫寫入 218 個 Demo 帳戶）。
+def _find_prod_storage_url(start: Path) -> str:
+    for parent in start.resolve().parents:
+        env_file = parent / ".env"
+        if env_file.is_file():
+            return (dotenv_values(env_file).get("STORAGE_DATABASE_URL") or "").strip()
+    return ""
+
+
+_PROD_STORAGE_DATABASE_URL = _find_prod_storage_url(Path(__file__))
 os.environ["STORAGE_DATABASE_URL"] = ""
 # 本机 data/ 的台股临时休市清单（market_data.closures）不能漏进测试的交易日判断。
 os.environ["TW_ADHOC_CLOSED_FILE"] = os.devnull

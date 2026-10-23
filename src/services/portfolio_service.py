@@ -5,8 +5,11 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
@@ -49,7 +52,57 @@ PORTFOLIO_FX_MAX_AGE_DAYS = 3
 FX_FALLBACK_SOURCE = "fallback_1_to_1"
 # Sources written by the automated FX refresh; any other non-stale row is a manual entry and is never touched.
 FX_AUTO_SOURCES = ("yfinance", "yfinance_backfill", "yfinance_cross")
+FX_REFRESH_BUDGET_SECONDS = 20.0  # whole-refresh network budget; the web client gives up at 30s
+FX_REQUEST_TIMEOUT_SECONDS = 10.0  # per yfinance request, capped by the remaining budget
+_FX_DEADLINE: ContextVar[Optional[float]] = ContextVar("fx_refresh_deadline", default=None)
 FX_OUTLIER_MAX_DEVIATION = 0.02  # a bar this far (relative) from its reference counts as deviating
+
+
+
+def _fx_request_timeout() -> Optional[float]:
+    """Seconds a yfinance request may take, or None when the refresh budget is spent (skip the request)."""
+    deadline = _FX_DEADLINE.get()
+    if deadline is None:
+        return FX_REQUEST_TIMEOUT_SECONDS
+    remaining = deadline - time.monotonic()
+    return min(FX_REQUEST_TIMEOUT_SECONDS, remaining) if remaining > 0 else None
+
+def _fx_call(fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+    """Run a yfinance call in a daemon thread and give up when the refresh budget runs out.
+
+    yfinance's cookie/crumb handshake ignores `timeout`, so a single history() can outlive the budget.
+    On expiry the result is discarded (the thread only returns a value, it writes nothing) and None
+    comes back. The budget is computed here, in the caller's thread: ContextVars do not reach new threads.
+    """
+    timeout = _fx_request_timeout()
+    if timeout is None:
+        return None
+    box: Dict[str, Any] = {}
+
+    def run() -> None:
+        try:
+            box["value"] = fn(*args, timeout=timeout, **kwargs)
+        except BaseException as exc:  # re-raised in the caller below
+            box["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        logger.warning("yfinance 請求超過剩餘時限 %.1fs，放棄此次結果", timeout)
+        return None
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def _ticker_history(symbol: str, **kwargs: Any) -> Any:
+    """Build the yfinance Ticker and fetch history in one call, so _fx_call bounds both.
+
+    Ticker construction can block on yfinance's shared locks (an abandoned cookie request
+    holding them while a concurrent yf.download waits), so it must not run outside the budget.
+    """
+    return yf.Ticker(symbol).history(**kwargs)
 
 
 def _london_date(ts: Any) -> date:
@@ -719,16 +772,20 @@ class PortfolioService:
             "stale_count": 0,
             "error_count": 0,
         }
-        for account in account_rows:
-            item = self._refresh_account_fx_rates(
-                account=account,
-                as_of_date=as_of_date,
-                refresh_enabled=refresh_enabled,
-            )
-            summary["pair_count"] += item["pair_count"]
-            summary["updated_count"] += item["updated_count"]
-            summary["stale_count"] += item["stale_count"]
-            summary["error_count"] += item["error_count"]
+        token = _FX_DEADLINE.set(time.monotonic() + FX_REFRESH_BUDGET_SECONDS)
+        try:
+            for account in account_rows:
+                item = self._refresh_account_fx_rates(
+                    account=account,
+                    as_of_date=as_of_date,
+                    refresh_enabled=refresh_enabled,
+                )
+                summary["pair_count"] += item["pair_count"]
+                summary["updated_count"] += item["updated_count"]
+                summary["stale_count"] += item["stale_count"]
+                summary["error_count"] += item["error_count"]
+        finally:
+            _FX_DEADLINE.reset(token)
         return summary
 
     # ------------------------------------------------------------------
@@ -1664,6 +1721,7 @@ class PortfolioService:
             # `accepted` is only set after the outlier filter succeeds; raw downloads never reach the fallback.
             accepted: List[Tuple[date, float]] = []
             repairs: Dict[date, float] = {}
+            all_rejected = False
             try:
                 # One download feeds both today's rate and the history backfill.
                 fetched = self._fetch_fx_closes_from_yfinance(
@@ -1672,8 +1730,13 @@ class PortfolioService:
                     as_of_date=as_of_date,
                 )
                 fetched_last = fetched[-1] if fetched else None
-                cross_closes = self._fetch_fx_cross_closes(
-                    from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date
+                # Nothing downloaded means nothing to check: skip the four USD-leg requests.
+                cross_closes = (
+                    self._fetch_fx_cross_closes(
+                        from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date
+                    )
+                    if fetched
+                    else {}
                 )
                 closes = accepted = self._filter_fx_outliers(
                     from_currency=from_currency,
@@ -1682,6 +1745,7 @@ class PortfolioService:
                     closes=fetched,
                     cross_closes=cross_closes,
                 )
+                all_rejected = bool(fetched) and not closes
                 kept_dates = {d for d, _ in closes}
                 # Bars the cross check rejected: their stored auto rows may hold the same junk (see backfill).
                 repairs = {d: cross_closes[d] for d, _ in fetched if d not in kept_dates and d in cross_closes}
@@ -1716,15 +1780,31 @@ class PortfolioService:
                     exc,
                 )
 
-            if accepted:
-                # Carry from the newest accepted bar, not from an older same-day carry row.
-                carry_date, carry_rate = accepted[-1]
-                # A repaired (cross-rate) day newer than the last accepted bar is the freshest known value.
-                last_finished = min(as_of_date, self._london_today())
-                for repair_date, repair_rate in repairs.items():
-                    if carry_date < repair_date < last_finished:
-                        carry_date, carry_rate = repair_date, repair_rate
-                fallback = SimpleNamespace(rate=carry_rate, source="yfinance")
+            carry: Optional[Tuple[date, float]] = accepted[-1] if accepted else None
+            # A repaired (cross-rate) day newer than the last accepted bar is the freshest known value.
+            last_finished = min(as_of_date, self._london_today())
+            for repair_date, repair_rate in repairs.items():
+                if (carry is None or carry[0] < repair_date) and repair_date < last_finished:
+                    carry = (repair_date, repair_rate)
+            if carry is not None:
+                # Carry from the newest accepted/repaired bar, not from an older same-day carry row.
+                fallback = SimpleNamespace(rate=carry[1], source="yfinance")
+            elif all_rejected:
+                # Every downloaded bar failed the cross check, so a stored automated row for today may be the
+                # same junk. Only a real (non-stale) row from before today is safe; otherwise carry nothing.
+                last_real = self._last_real_stored_rate(
+                    from_currency=from_currency, to_currency=to_currency, before=as_of_date
+                )
+                fallback = SimpleNamespace(rate=last_real, source="yfinance") if last_real else None
+                if fallback is None:
+                    # No clean value to carry: drop today's automated (junk) row so conversion reports the
+                    # pair as missing instead of using it. Manual rows are never touched.
+                    removed = self.repo.delete_fx_rate(
+                        from_currency=from_currency, to_currency=to_currency,
+                        rate_date=as_of_date, only_sources=FX_AUTO_SOURCES,
+                    )
+                    if removed:
+                        logger.warning("匯率 %s/%s %s 全數被拒收且無乾淨替代值，已刪除當日自動來源列", from_currency, to_currency, as_of_date.isoformat())
             else:
                 fallback = self.repo.get_latest_fx_rate(
                     from_currency=from_currency,
@@ -1762,12 +1842,12 @@ class PortfolioService:
         if yf is None:
             return []
         symbol = f"{from_currency}{to_currency}=X"
-        ticker = yf.Ticker(symbol)
         start = (as_of_date - timedelta(days=7)).isoformat()
         closes: Dict[date, float] = {}
         try:
-            hourly = ticker.history(
-                start=start, end=(as_of_date + timedelta(days=1)).isoformat(), interval="1h", auto_adjust=False
+            hourly = _fx_call(
+                _ticker_history, symbol,
+                start=start, end=(as_of_date + timedelta(days=1)).isoformat(), interval="1h", auto_adjust=False,
             )
             if hourly is not None and not hourly.empty and "Close" in hourly:
                 for ts, value in hourly["Close"].dropna().items():
@@ -1780,8 +1860,9 @@ class PortfolioService:
         # Daily bars fill London days without hourly data; the end is a few days past as_of only to get the
         # successor bar's Open (output stays <= as_of).
         try:
-            daily = ticker.history(
-                start=start, end=(as_of_date + timedelta(days=4)).isoformat(), interval="1d", auto_adjust=False
+            daily = _fx_call(
+                _ticker_history, symbol,
+                start=start, end=(as_of_date + timedelta(days=4)).isoformat(), interval="1d", auto_adjust=False,
             )
             if daily is not None and not daily.empty and "Close" in daily:
                 rows = [(_london_date(ts), row) for ts, row in daily.iterrows()]
@@ -1808,7 +1889,7 @@ class PortfolioService:
         def leg(currency: str) -> Optional[float]:
             if currency == "USD":
                 return 1.0
-            history = yf.Ticker(f"USD{currency}=X").history(period="5d", interval="1d", auto_adjust=False)
+            history = _fx_call(_ticker_history, f"USD{currency}=X", period="5d", interval="1d", auto_adjust=False)
             close = history["Close"].dropna() if history is not None and not history.empty else None
             return float(close.iloc[-1]) if close is not None and len(close) and float(close.iloc[-1]) > 0 else None
 
