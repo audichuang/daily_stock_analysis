@@ -546,3 +546,43 @@ def test_explicit_refusal_ending_in_he_is_not_rhetorical(advice) -> None:
 
     assert adjustments == []
     assert result.operation_advice == advice
+
+
+@pytest.mark.parametrize("decision_type", ["buy", "hold"])
+@pytest.mark.parametrize("advice", [
+    # 提示型否定管的是別的動詞或被轉折／頓號切開，後面的買進仍要降級
+    "不宜追高但可分批買入", "避免追高、分批買入", "為避免踏空建議加倉", "別猶豫加倉", "千萬別錯過加倉機會",
+    "告別盤整建議加倉", "量縮不要緊加倉", "避免追高，分批买入", "不宜追高 分批買入", "不建議追高惟可加倉",
+    # 雙重否定（枚舉以外）與反問仍是要買
+    "沒理由不加倉", "不能不加倉", "不可不加倉", "不是不需要加倉", "無法不加倉",
+    # 台灣慣用買進詞
+    "建議買進", "逢低加碼", "積極佈局", "逢低布局", "分批進場", "建议买进", "逢低加码",
+])
+def test_hint_negation_gaps_and_taiwan_buy_terms_are_softened(decision_type, advice) -> None:
+    result = _result()
+    result.decision_type = decision_type
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = decision_type
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert result.operation_advice == "观望"
+    assert result.dashboard["decision_type"] == "hold"
+    assert adjustments
+
+
+@pytest.mark.parametrize("decision_type", ["buy", "hold"])
+@pytest.mark.parametrize("advice", [
+    "不建議買入", "不加倉", "暫不買進", "暫不加碼", "不建議買進", "避免加倉", "避免積極佈局", "不宜加碼", "別加倉",
+    "別急著買進", "不宜貿然加倉", "不要加倉", "不應逢低加碼", "暂不建议买进", "不建議分批進場",
+])
+def test_true_negation_of_buy_is_not_softened(decision_type, advice) -> None:
+    result = _result()
+    result.decision_type = decision_type
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = decision_type
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert adjustments == []
+    assert result.operation_advice == advice
