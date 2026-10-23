@@ -68,14 +68,14 @@ _PREWARM_REVIEWS: Dict[Any, Any] = {}
 def _prewarm_caller_query_id(query_id: Optional[str], region: str) -> Optional[str]:
     """Recover the caller's query_id from `market_context_{qid}_{region}`.
 
-    Returns None for uuid-generated ids (no caller), which are never cached.
+    Real callers (CLI/API) use uuid4().hex ids, so format cannot tell them from
+    the uuid daily_market_context generates when it has no caller; an entry for
+    that orphan id is harmless (nobody pops it).
     """
     prefix, suffix = "market_context_", f"_{region}"
     if not (query_id and query_id.startswith(prefix) and query_id.endswith(suffix)):
         return None
     qid = query_id[len(prefix):-len(suffix)]
-    if re.fullmatch(r"[0-9a-f]{32}", qid):
-        return None
     return qid or None
 
 

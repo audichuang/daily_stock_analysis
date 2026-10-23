@@ -1088,10 +1088,14 @@ class PrewarmReviewReuseTestCase(unittest.TestCase):
         self._run("tw", "api", factory, qid="A")
         self.assertEqual(factory.call_count, 2)  # A's entry survived B
 
-    def test_prewarm_without_caller_query_id_is_not_cached(self) -> None:
+    def test_formal_review_reuses_prewarm_with_real_uuid_hex_query_id(self) -> None:
+        # CLI/API query ids are uuid4().hex; they must not be mistaken for "no caller".
+        qid = "102e6b6442b04b0883a7a80b014097d0"
         factory = self._factory()
-        self._run("tw", "daily_market_context", factory, qid="0" * 32)
-        self.assertEqual(market_review_module._PREWARM_REVIEWS, {})
+        self._run("tw", "daily_market_context", factory, qid=qid)
+        self.assertEqual(factory.call_count, 1)
+        self._run("tw", "cli", factory, qid=qid)
+        self.assertEqual(factory.call_count, 1)
 
     def test_template_prewarm_is_not_cached(self) -> None:
         factory = self._factory(used_template=True)
