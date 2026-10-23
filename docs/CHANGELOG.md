@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 停利／停損文字中的數字比例（如「風險報酬比 1:1」）不再被當成欄位冒號，停利價不再抓到比例後面的價位（`MA5：118` 這類標籤照舊）
+- [修復] 上櫃減資改用 TPEx 官方「減資恢復買賣參考價」（`bulletin/revivt`）產生復權因子，不再以開盤價回推（誤差約 9%、跳空小的現金減資會漏記）；開盤價推導只在官方沒涵蓋時當備援
+- [修復] 大盤複盤同一場次同一語言只生成一次並重用，預熱快取在常駐服務中會清掉過期項目
+- [修復] 媒體點名在名稱與 LLM 給的代碼衝突時，名稱至少要有一半的字與該代碼的公司名相同才採用代碼，避免誤配到別檔股票
 - [修復] 個股情報搜尋：某個維度的搜尋來源失敗或回空時，改試下一個來源，不再整個維度判失敗（原本公開 SearXNG 被擋，「機構分析／公司公告」連續三週全空）；台股最新新聞維度先走 FinMind，18:00 每日報告也會用到
 - [修復] 交易日曆會自動偵測當天的颱風臨時休市（每小時最多查一次、逾時 3 秒、失敗只記 warning），NAS 正式站不必靠 Mac 寫清單也能知道；新增 `TW_CLOSURE_AUTODETECT`（預設 true）
 - [修復] 回測方向判斷認得繁中的「減倉／賣出／減碼／買進」，簡體補「减码」；資料不足（insufficient_data）的回測列在日線到齊後會重評
