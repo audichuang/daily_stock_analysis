@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.agent.tools.data_tools import _handle_get_portfolio_snapshot
+from src.agent.tools.data_tools import _compact_portfolio_risk, _handle_get_portfolio_snapshot
 
 
 class _FakePortfolioService:
@@ -152,6 +152,30 @@ class TestGetPortfolioSnapshotTool(unittest.TestCase):
 
         self.assertFalse(result["snapshot"]["fx_missing"])
         self.assertEqual(result["snapshot"]["total_equity"], 60000.0)
+
+
+class CompactPortfolioRiskFxTestCase(unittest.TestCase):
+    def test_fx_flags_survive_compaction(self) -> None:
+        out = _compact_portfolio_risk({
+            "concentration": {
+                "top_weight_pct": None, "fx_missing": True, "fx_missing_pairs": ["USD/TWD"],
+                "top_positions": [],
+            },
+            "drawdown": {
+                "max_drawdown_pct": 3.0, "fx_missing": True, "fx_missing_pairs": ["USD/TWD"],
+                "fx_excluded_dates": ["2026-05-19"],
+            },
+        })
+        self.assertTrue(out["concentration"]["fx_missing"])
+        self.assertEqual(out["concentration"]["fx_missing_pairs"], ["USD/TWD"])
+        self.assertTrue(out["drawdown"]["fx_missing"])
+        self.assertEqual(out["drawdown"]["fx_missing_pairs"], ["USD/TWD"])
+        self.assertEqual(out["drawdown"]["fx_excluded_dates"], ["2026-05-19"])
+
+    def test_fx_flags_default_clean(self) -> None:
+        out = _compact_portfolio_risk({"concentration": {}, "drawdown": {}})
+        self.assertFalse(out["concentration"]["fx_missing"])
+        self.assertEqual(out["drawdown"]["fx_excluded_dates"], [])
 
 
 if __name__ == "__main__":

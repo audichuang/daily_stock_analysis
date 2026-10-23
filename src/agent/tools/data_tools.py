@@ -260,6 +260,8 @@ def _compact_portfolio_risk(risk: dict, top_n: int = 10) -> dict:
         "concentration": {
             "alert": concentration.get("alert", False),
             "top_weight_pct": concentration.get("top_weight_pct"),
+            "fx_missing": concentration.get("fx_missing", False),
+            "fx_missing_pairs": concentration.get("fx_missing_pairs") or [],
             "top_positions": top_positions,
         },
         "drawdown": {
@@ -267,6 +269,9 @@ def _compact_portfolio_risk(risk: dict, top_n: int = 10) -> dict:
             "max_drawdown_pct": drawdown.get("max_drawdown_pct"),
             "current_drawdown_pct": drawdown.get("current_drawdown_pct"),
             "fx_stale": drawdown.get("fx_stale", False),
+            "fx_missing": drawdown.get("fx_missing", False),
+            "fx_missing_pairs": drawdown.get("fx_missing_pairs") or [],
+            "fx_excluded_dates": drawdown.get("fx_excluded_dates") or [],
         },
         "stop_loss": {
             "near_alert": stop_loss.get("near_alert", False),
