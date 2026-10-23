@@ -1,4 +1,4 @@
-# 台股分析現況總覽（2026-10-22）
+# 台股分析現況總覽（2026-10-23 更新）
 
 > 一頁看懂：每日個股分析抓哪些數據、怎麼判斷、哪些規則會改掉 LLM 的結論、有哪些開關，以及 2026-10-22 那輪診斷與回測**已經回答過的問題**。
 > 細節以各連結文件為準；本頁數字或行為和程式不一致時，以程式為準並回頭修這裡。
@@ -21,18 +21,18 @@
 |---|---|---|---|
 | 日線 OHLCV、均線、乖離、MACD、RSI、ATR14 | 本地 `market.price`（前復權算指標）→ yfinance | 是 | 顯示價是未還原；指標用還原價（`docs/realtime-board.md`） |
 | 即時報價、漲跌停 | Shioaji → yfinance | 是 | `source` 變 `fallback` 代表 Shioaji 金鑰沒注入、已降級 |
-| 三大法人（當日＋5／20 日累計） | 當日 TWSE T86／TPEx；趨勢讀本地 `market.institutional` | 是 | 單位是**股**；18:00 拿到的是初版；上櫃歷史自 2018-01-15（#39） |
+| 三大法人（當日＋5／20 日累計） | 當日 TWSE T86／TPEx；趨勢讀本地 `market.institutional` | 是 | 單位是**股**；18:00 拿到的是初版，prompt 標「初版，投信常於隔夜修正」（約 1/4 份報告與定版不同，多在投信欄）；隔日 `daily` 由 `REVISED_SOURCES` 換成定版；上櫃歷史自 2018-01-15（#39） |
 | 融資融券（餘額、5／20 場變化、券資比） | 本地 `market.margin` | 是 | 單位是**張**，T+1；上櫃同表 `market='tpex'`（#39） |
-| 估值（近四季本益比、淨值比、殖利率） | `TwseFundamentalAdapter`（官方即時 API） | 是 | 整包 `as_of` 落後 10 曆日就拒收 |
+| 估值（近四季本益比、淨值比、殖利率） | 上市優先讀本地 `market.valuation` 當日值，退回 `TwseFundamentalAdapter`（BWIBBU 只有 T-1）；上櫃走 TPEx OpenAPI | 是，附 `as_of` 日期 | 整包 `as_of` 落後 10 曆日就拒收 |
 | 月營收（單月、月增、年增、累計年增） | 官方 OpenAPI | 是 | 不讀本地 DB 的 16 年 PIT 資料 |
 | 月營收動能（前 3 月均年增 vs 本月、強勢股大幅降速） | 本地 `market.monthly_revenue` | 是，資訊列 | `src/services/tw_backtest_context.py`；只當資訊 |
 | 大盤狀態（0050 季線與斜率、站上月線／季線家數比例） | 本地 `market.price` 自算 | 是，資訊區塊 | 每日快取一次；附回測可信度文案 |
 | 處置／注意股、未來 10 交易日法說會與除權息 | `market_data/risk_flags.py`、`events.py` 即時抓官方 | 是（`TW_LIVE_EVENTS_ENABLED`） | 回應日期不新鮮就寫「未確認」，不寫「否」 |
 | 賣方共識（EPS 修正方向、分歧、評級、目標價） | yfinance（`data_provider/analyst_consensus.py`） | 是（`ANALYST_CONSENSUS_ENABLED`，預設關） | 目標價系統性偏多；明寫不得據此提高信心或放寬門檻 |
 | 每日大盤脈絡（紅綠燈、複盤摘要、風險標籤） | 當日大盤複盤 | 是 | 黃燈不再自動標 conservative（§3） |
-| 新聞 | FinMind 台股新聞（Doppler 注入）→ 通用搜尋 | 是 | `make analyze` 不含 Doppler，會退回通用搜尋 |
+| 新聞 | FinMind 台股新聞（Doppler 注入）→ 通用搜尋 | 是 | 18:00 每日報告的情報搜尋在台股也先走 FinMind；任一維度的來源失敗會換下一個來源；`make analyze` 不含 Doppler，會退回通用搜尋 |
 | 財報（營收、淨利、現金流、ROE） | yfinance 季報 | 是 | 逐欄標 `quarter`／`ttm` 口徑 |
-| 上櫃估值、集保大戶、券商分點、SMC 結構、合約負債 | #39：`market.valuation`、`market.holding_dist`、`tw_broker_branch.py`、`smc_structure.py` | **否**（只在 `scripts/tw_stock_dossier.py`） | 集保與上櫃回補 2026-10-22 起跑 |
+| 估值歷史百分位、集保大戶、券商分點、SMC 結構、合約負債 | #39：`market.valuation`、`market.holding_dist`、`tw_broker_branch.py`、`smc_structure.py` | **否**（只在個股檔案：邏輯在 `src/services/tw_stock_dossier.py`，`scripts/tw_stock_dossier.py` 與 Web `/stocks` 都用它） | 集保與上櫃回補 2026-10-22 起跑 |
 | A 股主力資金流、龍虎榜 | — | 台股固定 `not_supported` | 這是零買進的主因之一（§4） |
 
 資料取數地圖與坑：`data_provider/AGENTS.md`、`market_data/AGENTS.md`、`docs/market-data-pitfalls.md`。
@@ -78,16 +78,16 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
 
 ## 5. 開關一覽（`.env`；NAS 另在 `config/.env`）
 
-| key | 預設 | 作用 | 建議 |
-|---|---|---|---|
-| `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE` | `true` | `false`＝台股資金流改看三大法人、`not_supported` 不降級 | 等影子數據 2～3 個月 |
-| `TW_MA_ALIGNMENT_WEIGHTED` | `false` | 台股多頭排列改加分項 | 可開，但同時設 `TW_MA_ALIGNMENT_AB_RATIO=0.5`：一半標 `tw-ma-weighted`、一半標 `tw-ma-control` 當同期對照；只開這項（比例預設 1）就沒有對照組 |
-| `TW_MA_ALIGNMENT_AB_RATIO` | `1` | 上項的加權組比例 | 實驗期間 `0.5` |
-| `ANALYST_CONSENSUS_ENABLED` | `false` | 賣方共識資訊區塊 | 可開 |
-| `TW_LIVE_EVENTS_ENABLED` | `true` | 處置／注意與事件日曆 | 保持開 |
-| `TW_BROKER_INDEX_TARGETS` | 空 | 人工維護一行券商年底指數目標，30 天未更新就不顯示 | 選用 |
-| `PROMPT_VARIANT` | `baseline` | 報告上的提示詞版本標籤 | A/B 時改 |
-| `TW_BROKER_FEE_DISCOUNT` | `1.0` | 手續費折扣，影響交易成本護欄與回測 | 填券商實際折扣 |
+| key | 預設 | Mac 正式（2026-10-23） | 作用 | 建議 |
+|---|---|---|---|---|
+| `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE` | `true` | 未設（`true`） | `false`＝台股資金流改看三大法人、`not_supported` 不降級 | 等影子數據 2～3 個月 |
+| `TW_MA_ALIGNMENT_WEIGHTED` | `false` | `true` | 台股多頭排列改加分項 | 可開，但同時設 `TW_MA_ALIGNMENT_AB_RATIO=0.5`：一半標 `tw-ma-weighted`、一半標 `tw-ma-control` 當同期對照；只開這項（比例預設 1）就沒有對照組 |
+| `TW_MA_ALIGNMENT_AB_RATIO` | `1` | `0.5` | 上項的加權組比例 | 實驗期間 `0.5` |
+| `ANALYST_CONSENSUS_ENABLED` | `false` | `true` | 賣方共識資訊區塊 | 可開 |
+| `TW_LIVE_EVENTS_ENABLED` | `true` | 未設（`true`） | 處置／注意與事件日曆 | 保持開 |
+| `TW_BROKER_INDEX_TARGETS` | 空 | 未設 | 人工維護一行券商年底指數目標，30 天未更新就不顯示 | 選用 |
+| `PROMPT_VARIANT` | `baseline` | 未設（`baseline`） | 報告上的提示詞版本標籤 | A/B 時改 |
+| `TW_BROKER_FEE_DISCOUNT` | `1.0` | 未設（`1.0`） | 手續費折扣，影響交易成本護欄與回測 | 填券商實際折扣 |
 
 ## 6. 怎麼量測（改規則前後都要跑）
 

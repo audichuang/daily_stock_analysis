@@ -100,7 +100,7 @@
 
 被批評者刪除的建議：「先修回測才能評估任何資料接入」不成立，因為 §6 的量測工具直接讀 `market.price`，不經過 `backtest_results`。「從 context_snapshot 回溯共識修正序列」也不成立，因為快照只有一天。集保散戶層與產業維度的研究，降級併入 §7 的既有待辦。
 
-## 6. 文件與程式不符（待修）
+## 6. 文件與程式不符（2026-10-23 已全部修正：#65 修 pitfalls；本節其餘各項在 docs/1023-overview-sync 修 `tw-analysis-overview.md` §2、§5）
 
 - `docs/tw-analysis-overview.md` §2：
   - 「新聞：FinMind → 通用搜尋」只對 agent 路徑成立。

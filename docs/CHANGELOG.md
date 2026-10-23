@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [文件] `docs/tw-analysis-overview.md` 同步 10-23 修正：法人初版標示、上市估值改讀本地當日值、18:00 報告新聞先走 FinMind、個股檔案邏輯位置；開關表加「Mac 正式」欄
 - [修復] Shioaji 查合約時遇到「連線未建立」這類例外，持續超過約 60 秒就作廢 session 並記 WARNING，下一次請求自動重新登入（10-23 NAS 斷線後一直沿用壞掉的 session 3.5 小時、報價全退回 yfinance）；死 session 的登出不佔用共用執行緒
 - [修復] 非美元交叉幣別對（如 TWD/CNY）的每一根匯率都以同日 USD 兩腿推算的交叉匯率驗證，偏離 >2% 拒收；連續多根垃圾報價不再被當成真實跳動收下，庫裡已存的自動來源垃圾列會改寫成交叉匯率值（`source=yfinance_cross`）
 - [修復] 個股 prompt 的台股量比改用 5 日均量口徑並標明口徑（Shioaji 的值改稱「較昨量」）；報價當下或傳入的盤別任一方是盤中，就標成盤中口徑並加警語，不把盤中部分量判成縮量；當日三大法人標註「初版，投信常於隔夜修正」；上市估值優先讀本地當日值並附日期
