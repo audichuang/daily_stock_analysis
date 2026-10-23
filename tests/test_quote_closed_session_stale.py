@@ -50,3 +50,17 @@ def test_unknown_market_keeps_old_behavior(monkeypatch):
     q = _enrich(monkeypatch, "???", datetime(2026, 10, 23, 13, 30, tzinfo=TW),
                 datetime(2026, 10, 23, 18, 0, tzinfo=TW))
     assert q.is_stale is True
+
+
+def test_premarket_quote_from_previous_session_is_fresh(monkeypatch):
+    # Fri 2026-10-23 07:30 premarket, last tick Thu 13:30: Thursday is the last closed session
+    q = _enrich(monkeypatch, "2330.TW", datetime(2026, 10, 22, 13, 30, tzinfo=TW),
+                datetime(2026, 10, 23, 7, 30, tzinfo=TW))
+    assert q.is_stale is False
+
+
+def test_premarket_quote_two_sessions_old_is_stale(monkeypatch):
+    # Reverse check: Wed quote at Fri premarket is older than the last closed session
+    q = _enrich(monkeypatch, "2330.TW", datetime(2026, 10, 21, 13, 30, tzinfo=TW),
+                datetime(2026, 10, 23, 7, 30, tzinfo=TW))
+    assert q.is_stale is True
