@@ -254,3 +254,20 @@ def test_sell_not_set_prefix_without_action_bound_price_is_none(text, field):
 ])
 def test_buy_only_not_set_words_do_not_touch_sell_fields(text, field, expected):
     assert parse_sniper_value(text, field=field) == expected
+
+
+# 文字中的數字比例「1:1」不是欄位標籤冒號
+@pytest.mark.parametrize("text, expected", [
+    ("目標位：2,080.00元。風險報酬比勉強達到1:1。第一個壓力在MA10（1,978.50元）附近。", 2080.0),
+    ("目標位：2,080.00元。風險報酬比勉強達到1：1。第一個壓力在MA10（1,978.50元）附近。", 2080.0),
+    ("目標位：2,080.00元。風報比1比1。第一個壓力在MA10（1,978.50元）附近。", 2080.0),
+    ("停利：2，080.00元", 2080.0),
+    ("停利：2,080元", 2080.0),
+])
+def test_numeric_ratio_colon_is_not_field_label(text, expected):
+    assert parse_sniper_value(text, "take_profit") == expected
+
+
+@pytest.mark.parametrize("ma", ["MA5", "ma5", "Ma10"])
+def test_letter_digit_colon_label_is_kept(ma):
+    assert parse_sniper_value(f"現價125元，停損參考{ma}：118元", "stop_loss") == 118.0
