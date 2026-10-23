@@ -38,8 +38,24 @@ _BUY_ACTION_RE = re.compile(
     r"(?:(?:回測|回测|回檔|回档|拉回|站回)(?:到|至|約|约)?\s*|(?:^|(?<=[^在於于\s\d.A-Za-z]))\s*(?=\d[\d.]*\s*元附近))"
     r"(\d+(?:\.\d+)?)\s*元" + _BUY_VERB
 )
-# 停損／停利欄位：「不成立則看 130 元」「不給目標價，反彈 110 元減碼」後面的明確價位（非 MA 價）照常解析
-_SELL_PRICE_RE = re.compile(r"(?<!MA)(?<!MA\d)(?<!MA\d\d)(?<!MA\d\s)(?<!MA\d\d\s)(?<![\d.])\d+(?:\.\d+)?\s*元")
+# 停損／停利欄位：句首沒有價位時，只取直接綁定該欄位動作的價位本身——「動作 X 元」或「X 元（附近）動作」。
+# 「現價／參考／MA 價／季線 X 元」不接動作所以不算；「不再看 X 元」「跌破 X 元再評估」也不算。
+_SELL_PRICE = r"(?<![\d.])(\d+(?:\.\d+)?)\s*元"
+_NOT_REASSESS = r"(?![^。；;]{0,6}?(?:[再才]|重新)(?:評估|评估))"
+
+
+def _sell_action_re(pre: str, post: str) -> "re.Pattern[str]":
+    return re.compile(
+        r"(?:(?<!不)(?<!不再)(?:" + pre + r")(?:[價价位])?(?:設在|设在|[於于在設设為为至到])?\s*" + _SELL_PRICE
+        + r"|(?<!MA)(?<!MA\d)(?<!MA\d\d)(?<!MA\d\s)(?<!MA\d\d\s)" + _SELL_PRICE + r"(?:附近)?(?:" + post + r"))"
+        + _NOT_REASSESS
+    )
+
+
+_SELL_ACTION_RE = {
+    "stop_loss": _sell_action_re(r"跌破|停損|止損|止损|出清|出場|出场", r"停損|止損|止损|出清|出場|出场"),
+    "take_profit": _sell_action_re(r"反彈|反弹|暫看|暂看|看|目標|目标|減碼|减码|停利|止盈", r"減碼|减码|停利|止盈|出場|出场"),
+}
 # 冒號後第一個價位緊接「進場／買進／成交」（如「如果在1909元進場」）才是條件式進場句，此時改取欄位錨點後的價位
 _ENTRY_AFTER_RE = re.compile(r"[^，,。；;]{0,6}?(?:進場|进场|買進|买进|買入|买入|成交|承接)")
 # 欄位專屬錨點：只有 stop_loss／take_profit 會走錨點路徑
@@ -79,8 +95,11 @@ def parse_sniper_value(value: Any, field: Optional[str] = None) -> Optional[floa
         if field not in ("stop_loss", "take_profit"):
             action = _BUY_ACTION_RE.search(rest)
             return float(action.group(1)) if action and float(action.group(1)) > 0 else None
-        if not _SELL_PRICE_RE.search(rest):
+        action = _SELL_ACTION_RE[field].search(rest)
+        if not action:
             return None
+        parsed = float(action.group(1) or action.group(2))
+        return parsed if parsed > 0 else None
 
     # 條件式進場句才取該欄位自己的第一個錨點（買點欄位不走這條）
     anchor_re = _FIELD_ANCHOR_RE.get(field or "")

@@ -214,3 +214,26 @@ def test_not_set_prefix_keeps_later_actionable_price(text, field, expected):
 ])
 def test_not_set_prefix_without_actionable_price_is_none(text, field):
     assert parse_sniper_value(text, field) is None
+
+
+# Review round 2：句首沒有價位時，停損／停利只取「直接綁定該欄位動作」的價位本身，不回落到泛用解析的第一個數字
+@pytest.mark.parametrize("text, field, expected", [
+    ("暫不設定，現價125元，跌破118元停損", "stop_loss", 118.0),
+    ("不給目標價，MA60 130元附近不追，反彈110元減碼", "take_profit", 110.0),
+    ("暫不設定；季線130元壓力大，反彈至120元減碼", "take_profit", 120.0),
+])
+def test_sell_not_set_prefix_returns_action_bound_price(text, field, expected):
+    assert parse_sniper_value(text, field) == expected
+
+
+@pytest.mark.parametrize("text, field", [
+    ("停利：暫不設定（現價 125 元已跌破均線）", "take_profit"),
+    ("N/A（已出清，不再估算 130 元）", "take_profit"),
+    ("暫不設定，近5日跌3.2元", "take_profit"),
+    ("暫不設定，參考MA20(118元)", "stop_loss"),
+    ("不設停損，若跌破前低118元再評估", "stop_loss"),
+    ("不設停損，跌破118元再評估", "stop_loss"),
+    ("暫不設定，不再看130元", "take_profit"),
+])
+def test_sell_not_set_prefix_without_action_bound_price_is_none(text, field):
+    assert parse_sniper_value(text, field) is None
