@@ -10,9 +10,10 @@
 | dividend  | twse_twt49u     | 上市除權息        | 官方公告值 |
 | dividend  | tpex_exdailyq   | 上櫃除權息        | 官方公告值 |
 | reduction | twse_twtauu     | 上市減資          | 官方公告值 |
+| reduction | tpex_revivt     | 上櫃減資          | 官方公告值 |
 | split     | verified_manual | 人工核對的 ETF    | 比對公告後寫死 |
 | split     | inferred_price  | 普通股分割(≈1/N)  | 吸附到精確 1/N |
-| inferred  | inferred_price  | 上櫃減資等剩餘事件 | 回推,誤差 ≤10% |
+| inferred  | inferred_price  | 官方沒涵蓋的剩餘事件 | 優先以 close-change 回推,退而用開盤價 |
 
 推導的理論依據：台股普通股有漲跌幅限制（``PRICE_LIMIT_CHANGE`` 之前 ±7%、之後 ±10%），
 所以單日跳空超過當時限制 × 1.1（約 7.7%／11%）必為公司行動。
@@ -27,7 +28,8 @@
     但比例吸附到精確 1/N 或 N 倍時例外收錄——減資停牌本來就是 2~3 週
 
 **已知限制**：
-  - 剩餘的推導值主要是上櫃減資（TWTAUU 僅上市，無公開的上櫃減資端點），以開盤價回推、
+  - 上櫃減資走 TPEx ``bulletin/revivt``（``tpex_revivt``）。剩餘推導值只是官方沒涵蓋的事件，
+    參考價優先用 ``close - change``（官方漲跌是對恢復後參考價算的），缺值才退回開盤價，
     無法證明精確；正式用途應逐筆與官方公告對表。
   - 同一檔同一天只能存一筆事件（PK 為 ``(stock_id, date)``）。三個官方來源實測**零交集**
     （上市除權息 14,908 × 上市減資 347 × 上櫃除權息 10,892，兩兩交集皆 0 筆），故此限制
@@ -185,6 +187,17 @@ def fetch_reductions(start, end, chunk_days=365):
     return df
 
 
+def fetch_tpex_reductions(start, end, chunk_days=365):
+    """抓上櫃減資恢復買賣的官方參考價（TPEx ``bulletin/revivt``）。"""
+    df = _fetch_by_year(sources.crawl_tpex_revivt, start, end, chunk_days)
+    if not len(df):
+        return df
+    df["factor"] = df["reference_price"] / df["close_before"]
+    df["kind"] = "reduction"
+    df["source"] = "tpex_revivt"
+    return df
+
+
 def fetch_tpex_dividends(start, end, chunk_days=365):
     """抓上櫃除權除息計算結果表（官方參考價）。
 
@@ -213,29 +226,46 @@ def infer_rows(conn, known, start):
     # 事件本身仍只收 >= start（rebuild 只刪這段，寫回更早的列會與既有資料不一致）。
     lookback = (pd.Timestamp(start) - pd.Timedelta(days=60)).date()
     px = pd.read_sql(text(
-        "select stock_id, date, open, close from market.price "
+        "select stock_id, date, open, close, change from market.price "
         "where date >= :s and close > 0 and open > 0"
     ), conn, params={"s": lookback}, parse_dates=["date"])
-    for col in ("open", "close"):
+    for col in ("open", "close", "change"):
         px[col] = px[col].astype(float)
     px = px.sort_values(["stock_id", "date"])
     g = px.groupby("stock_id")
     px["prev"] = g["close"].shift(1)
     px["seq"] = g.cumcount()
     px["gap"] = g["date"].diff().dt.days
+    px["prev_date"] = g["date"].shift(1)
     px = px[px["prev"].notna()]
     px["factor"] = px["open"] / px["prev"]
+    # 偵測仍看開盤跳空；但事件日的官方漲跌是對恢復後參考價算的，close - change 就是參考價，
+    # 比開盤價準（實測開盤代理與官方差約 9%）。只在 change 有值、參考價為正、且開盤落在
+    # 參考價 ±11% 內才採用——change 為 0 常是缺值佔位（歷史 MI_INDEX 的「X」存成 0），
+    # 此時 close - change 退化成收盤價，會抹掉事件日報酬，所以排除，退回開盤價。
+    ref = px["close"] - px["change"]
+    ok = (ref.notna() & (px["change"] != 0) & (ref > 0)
+          & ((px["open"] / ref - 1).abs() <= 0.11))
+    px["ref"] = ref.where(ok, px["open"])
 
     # 門檻跟著當時實際的漲跌幅限制走：2015-06-01 前是 ±7%，之後才放寬為 ±10%。
     # 固定用 15% 會漏掉舊制下 7~15% 的公司行動（獨立審查指出）。取 1.1 倍緩衝。
     limit = np.where(px["date"] < pd.Timestamp(PRICE_LIMIT_CHANGE), 0.07, 0.10) * 1.1
     jump = px[(px["factor"] - 1).abs() > limit].copy()
-    explained = pd.Series([(s, d) in known for s, d in zip(jump["stock_id"], jump["date"])],
-                          index=jump.index)
+    # 已知事件的日期可能落在沒有 K 棒的日子（恢復日當天該檔未成交），跳空就出現在下一根 K，
+    # 精確比對會漏掉而重複還原。所以「前一根 K 之後、本根 K 以前（含當天）」有任何已知事件都算已解釋。
+    known_by_stock = {}
+    for s_, d_ in known:
+        known_by_stock.setdefault(s_, []).append(pd.Timestamp(d_))
+    explained = pd.Series(
+        [any(pd.Timestamp(pd_) < k <= d for k in known_by_stock.get(s, ()))
+         for s, d, pd_ in zip(jump["stock_id"], jump["date"], jump["prev_date"])],
+        index=jump.index)
     jump = jump[~explained & (jump["seq"] >= MIN_BARS_BEFORE)]
 
     # 只推導普通股。非普通股（ETF/ETN/TDR）不受漲跌幅限制，價格推導必然製造假事件。
-    jump = jump[jump["stock_id"].map(is_common_stock)].copy()
+    jump = jump[jump["stock_id"].map(is_common_stock).astype(bool)].copy()
+    jump["factor"] = jump["ref"] / jump["prev"]
     snapped = jump["factor"].map(_snap_to_split)
     jump["factor"] = snapped.map(lambda s: s[0])
     jump["is_split"] = snapped.map(lambda s: s[1])
@@ -253,11 +283,11 @@ def infer_rows(conn, known, start):
     jump["kind"] = jump["is_split"].map({True: "split", False: "inferred"})
     jump["source"] = "inferred_price"
     jump["close_before"] = jump["prev"]
-    jump["reference_price"] = jump["open"]
+    jump["reference_price"] = jump["ref"]
     return jump[["stock_id", "date", "factor", "kind", "source", "close_before", "reference_price"]]
 
 
-_NETWORK_SOURCES = ("tpex_exdailyq", "twse_twtauu")
+_NETWORK_SOURCES = ("tpex_exdailyq", "tpex_revivt", "twse_twtauu")
 
 
 def existing_official_rows(conn, start, sources_=_NETWORK_SOURCES):
@@ -313,6 +343,10 @@ def refresh_recent(engine=None, start=None, end=None):
     with eng.connect() as conn:
         off = official_rows(conn).reindex(columns=ADJUSTMENT_COLUMNS)
         existing = existing_official_rows(conn, start_d)
+        # infer_rows reads a 60-day lookback, so events before start_d still explain the first bar
+        # inside the window; without them the same event is restored twice (0.5 becomes 0.25).
+        lookback_known = existing_official_rows(conn, start_d - datetime.timedelta(days=60))
+    pre_known = set(zip(off["stock_id"], off["date"])) if len(off) else set()
     if len(off):
         dates = pd.to_datetime(off["date"], errors="coerce")
         off = off[(dates >= pd.Timestamp(start_d)) & (dates <= pd.Timestamp(end_d))]
@@ -323,6 +357,8 @@ def refresh_recent(engine=None, start=None, end=None):
     reductions = fetch_reductions(start_d, end_d)
     require_source_coverage(existing, tpex, "tpex_exdailyq")
     require_source_coverage(existing, reductions, "twse_twtauu")
+    tpex_red = fetch_tpex_reductions(start_d, end_d)
+    require_source_coverage(existing, tpex_red, "tpex_revivt")
     verified = pd.DataFrame([
         {"stock_id": sid, "date": pd.Timestamp(day), "factor": factor,
          "kind": "split", "source": "verified_manual",
@@ -331,9 +367,10 @@ def refresh_recent(engine=None, start=None, end=None):
         if start_d <= datetime.date.fromisoformat(day) <= end_d
     ], columns=ADJUSTMENT_COLUMNS)
 
-    # 順序即來源優先序：上市公告 > 上櫃公告 > 減資公告 > 人工核對 > 價格推導。
-    merged = merge_adjustment_rows(off, tpex, reductions, verified)
-    known = set(zip(merged["stock_id"], merged["date"]))
+    # 順序即來源優先序：上市公告 > 上櫃公告 > 減資公告（上市、上櫃） > 人工核對 > 價格推導。
+    merged = merge_adjustment_rows(off, tpex, reductions, tpex_red, verified)
+    known = set(zip(merged["stock_id"], merged["date"])) | pre_known
+    known |= set(zip(lookback_known["stock_id"], lookback_known["date"]))
     with eng.connect() as conn:
         inferred = infer_rows(conn, known, start_d)
     if len(inferred):
@@ -369,7 +406,7 @@ def rebuild(engine=None, start="2013-01-01", with_reductions=True):
         off = official_rows(conn)
 
     # 順序即優先序（下面 drop_duplicates keep="first"）：
-    # 上市除權息 > 上櫃除權息 > 減資 > 人工核對 > 價格推導
+    # 上市除權息 > 上櫃除權息 > 減資（上市、上櫃） > 人工核對 > 價格推導
     parts = [off]
     if with_reductions:
         today = datetime.date.today()
@@ -387,6 +424,12 @@ def rebuild(engine=None, start="2013-01-01", with_reductions=True):
                 "TWTAUU 減資來源抓取失敗（可能被 TWSE 暫時封鎖）；已中止，未更動 DB。"
                 "確定要跳過減資請加 --no-reductions（會沿用 DB 既有官方列）。")
         parts.append(red)
+        tpex_red = fetch_tpex_reductions(start_d, today)
+        if not len(tpex_red):
+            raise RuntimeError(
+                "TPEx 上櫃減資（revivt）來源抓取失敗；已中止，未更動 DB。"
+                "確定要跳過請加 --no-reductions（會沿用 DB 既有官方列）。")
+        parts.append(tpex_red)
     else:
         with eng.connect() as conn:
             keep = existing_official_rows(conn, start_d)

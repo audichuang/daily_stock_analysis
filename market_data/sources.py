@@ -14,6 +14,7 @@ from io import StringIO
 import pandas as pd
 import requests
 
+from market_data import tw_official_http
 from market_data.crawler import _UA, requests_get, requests_post
 
 # ---------------------------------------------------------------------------
@@ -576,6 +577,62 @@ def crawl_tpex_ex_dividend(start, end):
     if payload.get("stat") != "ok":
         return None
     return parse_tpex_ex_dividend(payload)
+
+
+def parse_tpex_revivt(payload):
+    """TPEx ``bulletin/revivt``（減資恢復買賣）JSON -> DataFrame(stock_id, date, close_before, reference_price)。
+
+    欄位靠 ``fields`` 動態定位；恢復日是**緊湊民國**「1151002」（不是斜線格式）。
+    ``reference_price`` 取「減資恢復買賣開始日參考價格」（官方公告的恢復後參考價）。
+    """
+    tables = payload.get("tables") or []
+    if not tables:
+        raise ValueError("revivt 回應沒有 tables")
+    t = tables[0]
+    idx = {name: i for i, name in enumerate(t.get("fields") or [])}
+    need = ("恢復買賣日期", "股票代號", "最後交易日之收盤價格", "減資恢復買賣開始日參考價格")
+    if not all(k in idx for k in need):
+        raise ValueError(f"revivt 欄位不符預期: {t.get('fields')}")
+    rows, skipped = [], 0
+    for r in t.get("data") or []:
+        try:
+            before = float(str(r[idx["最後交易日之收盤價格"]]).replace(",", ""))
+            ref = float(str(r[idx["減資恢復買賣開始日參考價格"]]).replace(",", ""))
+            if before <= 0 or ref <= 0:
+                skipped += 1
+                continue
+            raw = str(r[idx["恢復買賣日期"]]).strip()
+            rows.append({
+                "stock_id": str(r[idx["股票代號"]]).strip(),
+                "date": pd.Timestamp(int(raw[:-4]) + 1911, int(raw[-4:-2]), int(raw[-2:])),
+                "close_before": before,
+                "reference_price": ref,
+            })
+        except (ValueError, TypeError, IndexError):
+            skipped += 1
+    if skipped and not rows:
+        raise ValueError(f"revivt 全部 {skipped} 列都無法解析，格式可能已變更")
+    return pd.DataFrame(rows, columns=["stock_id", "date", "close_before", "reference_price"])
+
+
+def crawl_tpex_revivt(start, end):
+    """上櫃減資恢復買賣的官方參考價（``bulletin/revivt``，吃西元 ``startDate``/``endDate``）。
+
+    走 ``tw_official_http``（不重試、不暖 cookie）。官方端點日期參數不合法時會靜默退回別的
+    區間，所以必須核對回應自帶的 ``date``（``YYYYMMDD~YYYYMMDD``）等於請求區間，不符就回 None。
+    失敗一律回 None（呼叫端 ``_fetch_by_year`` 會 raise）；區間內沒有減資是空 DataFrame。
+    """
+    resp, reason = tw_official_http.get(
+        "https://www.tpex.org.tw/www/zh-tw/bulletin/revivt",
+        params={"startDate": start.strftime("%Y/%m/%d"),
+                "endDate": end.strftime("%Y/%m/%d"), "response": "json"},
+        expect="json")
+    if reason:
+        return None
+    payload = resp.json()
+    if payload.get("stat") != "ok" or payload.get("date") != f"{start:%Y%m%d}~{end:%Y%m%d}":
+        return None
+    return parse_tpex_revivt(payload)
 
 
 # BWIBBU_d 的中文欄名 -> valuation 表欄名。欄位順序隨年代變動,一律靠 fields 動態定位。
