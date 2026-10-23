@@ -54,8 +54,9 @@ def _half_up_1dp(x):
 def _revenue_yoy(r, by_month):
     """月營收年增率（%，1 位小數）：有去年同月營收就自己算，否則退回庫裡存的 yoy（本身已四捨五入到 2 位）。"""
     prev = by_month.get((r.revenue_month.year - 1, r.revenue_month.month))
-    if prev:
-        return _half_up_1dp(Decimal(int(r.revenue)) / Decimal(int(prev)) * 100 - 100)
+    cur, prev = _opt(r.revenue), _opt(prev)  # revenue 可為 NULL（NaN）：不能用真值判斷
+    if cur is not None and prev is not None and prev > 0:
+        return _half_up_1dp(Decimal(int(cur)) / Decimal(int(prev)) * 100 - 100)
     y = _opt(r.yoy)
     return None if y is None else _half_up_1dp(y)
 
@@ -73,14 +74,15 @@ def fundamentals(engine, sid, as_of):
                        "WHERE stock_id = :s AND (announce_date IS NULL OR announce_date <= :d) "
                        "ORDER BY revenue_month DESC LIMIT 36", s=sid, d=as_of)
     by_month = {(r.revenue_month.year, r.revenue_month.month): r.revenue for r in rev.itertuples()}
-    months = [{"month": f"{r.revenue_month:%Y-%m}", "revenue_k": int(r.revenue),
+    months = [{"month": f"{r.revenue_month:%Y-%m}",
+               "revenue_k": None if pd.isna(r.revenue) else int(r.revenue),
                "yoy_pct": _revenue_yoy(r, by_month),
                "announced": None if pd.isna(r.announce_date) else str(r.announce_date)}
               for r in rev.head(13).itertuples()][::-1]
     ttm_yoy = None
     rev = rev.head(24)
     # 要連續 24 個月才算：中間缺月時兩個 12 列窗口會錯開，算出來不是「近 12 個月」
-    span = None if len(rev) != 24 else (
+    span = None if len(rev) != 24 or rev.revenue.isna().any() else (
         (rev.revenue_month.iloc[0].year - rev.revenue_month.iloc[-1].year) * 12
         + rev.revenue_month.iloc[0].month - rev.revenue_month.iloc[-1].month)
     if span == 23:
@@ -270,7 +272,7 @@ def render(p):
         w.append(f"> 讀取失敗、以「無資料」呈現的段落：{'、'.join(p['errors'])}\n")
     f = p["fundamentals"]
     w.append("## 基本面\n\n| 月份 | 營收(千元) | YoY% | 公告日 |\n|---|---:|---:|---|")
-    w += [f"| {m['month']} | {m['revenue_k']:,} | {_f(m['yoy_pct'], '+.1f')} | {m['announced'] or NA} |"
+    w += [f"| {m['month']} | {_f(m['revenue_k'], ',')} | {_f(m['yoy_pct'], '+.1f')} | {m['announced'] or NA} |"
           for m in f["monthly_revenue"]] or [f"| {NA} | | | |"]
     w.append(f"\n近 12 個月累計營收年增：{_f(f['ttm_revenue_yoy_pct'], '+.1f', '%')}\n")
     w.append("| 季度 | 毛利率% | 營益率% | 淨利率% | EPS |\n|---|---:|---:|---:|---:|")
