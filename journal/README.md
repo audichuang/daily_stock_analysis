@@ -77,7 +77,7 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
 
 結論一律要求 **bootstrap 區間不跨零且已到期 ≥20 筆**，否則標為 inconclusive。
 - `media-picks.jsonl` — **財經電視節目點名**（`make media-picks`，`scripts/tw_media_picks.py`），一筆點名一行。
-  來源是固定頻道的完整版，清單與篩選規則在腳本的 `CHANNELS`（電視財經節目 10 個、投顧分析師每日解盤 13 個、獨立 YouTuber 2 個、研究型 2 個）：NotebookLM 產生逐字稿並逐集列出點名，
+  來源是固定頻道的完整版，清單與篩選規則在腳本的 `CHANNELS`（電視財經節目 10 個、投顧分析師每日解盤 12 個、獨立 YouTuber 1 個、研究型 2 個）：NotebookLM 產生逐字稿並逐集列出點名，
   股名對照 `apps/dsa-web/public/stocks.index.json` 轉代號，再附播出當時已知的本地數據。
   收盤資料還沒入庫（看 `market.price` 的最新場次；上市、上櫃都抓到才會寫入那天，例如下午手動跑、或上櫃行情抓失敗）時，該集先不寫、留給下一輪（stderr 印 `[defer]`）；`--since` 預設 4 天前，週五延後的集數隔週一仍補得到，但收盤資料停更超過這個窗口的集數會漏掉，要手動帶 `--since` 補。
   **這是候選來源，不是買進訊號**：上一輪掃描的點名事後表現是 inconclusive（`docs/research/2026-10-22-tw-media-sweep.md`）。
@@ -87,7 +87,7 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   | --- | --- |
   | `date` | 播出日：標題裡有日期（`20261020`、`2026.10.20`、`2026/10/20`，且在上傳日之前 14 天內）就用它，否則退回上傳日。**2026-10-23 之前寫入的列（沒有 `date_source` 欄）一律是上傳日**：有 5 支影片、137 列晚於標題日期（例如 `2JgSp6Oa-jk` 標題 20261016、`date` 寫 10-20），這些列的 `data` 含播出後的行情；另外 2026-10-22 16～17 點擷取的列有一部分 `data.as_of` 是前一天收盤（當時收盤還沒入庫）；標題含「盤前」的舊列（陳昆仁 #財經早點名）可能用了播出日收盤。回驗舊列以標題日期為準、用 `data.as_of` 判斷 `data` 的實際基準，jsonl 不改寫 |
   | `upload_date` / `date_source` | YouTube 上傳日；`date` 的來源（`title` 標題日期、`upload` 上傳日）。2026-10-23 起才有 |
-  | `show` / `kind` / `video_id` / `url` / `title` | 節目、來源類別、影片。`kind`：`tv`（電視財經節目）、`advisor`（投顧分析師，頻道本身在招攬會員，有利益衝突）、`kol`（一綺聊股、股癌這類非投顧的 YouTuber）、`research`（財報狗、MoneyDJ 這類研究型）；回驗要分開算。瘋狂股市福利社、理周TV 是多位投顧同台，同一人同一天的看法可能在不同 `show` 各記一次，算「幾個頻道看多」時要用 `speaker` 去重。2026-10-22 第一次 commit 的那批沒有這欄，都是 `tv` |
+  | `show` / `kind` / `video_id` / `url` / `title` | 節目、來源類別、影片。`kind`：`tv`（電視財經節目）、`advisor`（投顧分析師，頻道本身在招攬會員，有利益衝突）、`kol`（一綺聊股這類非投顧的 YouTuber）、`research`（財報狗、MoneyDJ 這類研究型）；回驗要分開算。瘋狂股市福利社、理周TV 是多位投顧同台，同一人同一天的看法可能在不同 `show` 各記一次，算「幾個頻道看多」時要用 `speaker` 去重。2026-10-22 第一次 commit 的那批沒有這欄，都是 `tv` |
   | `name` / `name_said` | NotebookLM 還原的正確股名／逐字稿裡的寫法（語音辨識常有同音錯字，例如「建頂」） |
   | `stock_code` / `resolve` / `code_llm` | 對到的代號、怎麼對到的、NotebookLM 原本給的代號。順序：逐字稿念的是數字（ETF 常這樣）就用那個代號（`code`）；否則先用還原後的股名比對（`exact`／`alias`），比對不到才用 NotebookLM 給的代號（名稱吻合 `code`，不吻合 `code_mismatch`，要人工確認）；最後才是字面相近（`fuzzy`，要人工確認）或 `unresolved`（留 `null`）。實測 NotebookLM 的股名比它猜的代號可靠（宜鼎被給成宜特的代號）。整集沒有點名時寫一行 `no_picks`，避免重抓 |
   | `stance` | `bullish`／`bearish`／`avoid`／`neutral`；同一檔不同來賓看法不同時分兩行 |
