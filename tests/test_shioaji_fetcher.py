@@ -537,10 +537,31 @@ def test_contract_failure_on_replaced_session_does_not_kill_new_session(monkeypa
     assert sf._contract_fail_since == clock.t - 1000  # untouched: stale failures are ignored, not counted
 
 
-def test_invalidate_skips_when_api_swapped_between_check_and_invalidate(monkeypatch):
-    _dead_contract_env(monkeypatch)
-    old_api = object()
+def test_stale_session_failure_keeps_new_session_clock(monkeypatch):
+    state, clock = _dead_contract_env(monkeypatch)
+    old_api = sf._ensure_session()
     new_api = object()
-    sf._api, sf._logged_in = new_api, True
-    sf._invalidate_dead_session(old_api, RuntimeError("dead"))
-    assert sf._api is new_api and sf._logged_in is True
+    sf._api = new_api
+    sf._contract_fail_since = clock.t - 5  # new session's own clock
+    sf._lookup_contract(old_api, lambda a: a.Contracts.Stocks["2330"])
+    assert sf._contract_fail_since == clock.t - 5
+
+
+def test_new_session_does_not_inherit_old_failure_clock(monkeypatch):
+    state, clock = _dead_contract_env(monkeypatch)
+    f = sf.ShioajiFetcher()
+    f.get_realtime_quote("2330.TW")
+    clock.t += 100
+    sf._api, sf._logged_in = None, False  # e.g. snapshot-failure invalidation; clock left behind
+    f.get_realtime_quote("2330.TW")  # relogin + one contract failure
+    assert state["login"] == 2
+    assert sf._api is not None  # single failure must not kill the fresh session
+
+
+def test_dead_session_invalidation_trips_login_breaker(monkeypatch):
+    state, clock = _dead_contract_env(monkeypatch)
+    f = sf.ShioajiFetcher()
+    for _ in range(40):
+        f.get_realtime_quote("2330.TW")
+        clock.t += sf._CONTRACT_FAIL_WINDOW_S + 1
+    assert state["login"] <= 3  # breaker opens after threshold failures, cooldown blocks relogin

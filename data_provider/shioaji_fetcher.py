@@ -148,7 +148,7 @@ def _attempt_login() -> Optional[Any]:
 
     返回可用 api 或 None。半开探测名额在此消耗，与下游 record_* 一一配对。
     """
-    global _api, _logged_in, _logout_registered
+    global _api, _logged_in, _logout_registered, _contract_fail_since
     # 先验金钥：无金钥的直呼/竞态不应消耗熔断器半开探测名额（否则 is_available 占用名额却无 record 配对）。
     api_key, secret_key = _credentials()
     if not api_key or not secret_key:
@@ -174,6 +174,7 @@ def _attempt_login() -> Optional[Any]:
         return None
     _api = api
     _logged_in = True
+    _contract_fail_since = None  # a new session never inherits the old one's failure clock
     if not _logout_registered:
         import atexit
 
@@ -201,28 +202,9 @@ _CONTRACT_FAIL_WINDOW_S = 60.0
 _contract_fail_since: Optional[float] = None
 
 
-def _invalidate_dead_session(api: Any, err: Exception) -> None:
-    """作废死掉的 session（仅当 _api 仍是 api），best-effort 登出；下次请求走慢路径重新登入。"""
-    global _api, _logged_in, _contract_fail_since
-    with _SESSION_LOCK:
-        if _api is not api:
-            # 已被别的线程换成新 session：计数属于旧 session，丢弃，不动新的。
-            _contract_fail_since = None
-            return
-        _api = None
-        _logged_in = False
-        _contract_fail_since = None
-    logger.warning("[ShioajiFetcher] 合约查询持续失败超过 %.0f 秒，作废 session 以便重新登入: %s: %s",
-                   _CONTRACT_FAIL_WINDOW_S, type(err).__name__, str(err)[:200])
-    try:
-        _executor.submit(api.logout)  # fire-and-forget; never block the request thread on a dead SDK
-    except Exception:
-        pass
-
-
 def _lookup_contract(api: Any, getter: Callable[[Any], Any]) -> Optional[Any]:
     """查合约；丢例外时累计连续失败并在持续超过门槛时作废 session。查无（None/KeyError）不算失败。"""
-    global _contract_fail_since
+    global _api, _logged_in, _contract_fail_since
     try:
         contract = getter(api)
     except KeyError:
@@ -230,6 +212,8 @@ def _lookup_contract(api: Any, getter: Callable[[Any], Any]) -> Optional[Any]:
     except Exception as e:
         logger.debug("[ShioajiFetcher] 合约查询失败: %s", e)
         now = time.monotonic()
+        # Timer, threshold check and invalidation share one critical section so a concurrent
+        # success or a session swap cannot make us act on another session's clock.
         with _SESSION_LOCK:
             if _api is not api:
                 return None  # stale session already replaced; its failures say nothing about the new one
@@ -237,7 +221,17 @@ def _lookup_contract(api: Any, getter: Callable[[Any], Any]) -> Optional[Any]:
                 _contract_fail_since = now
             if now - _contract_fail_since < _CONTRACT_FAIL_WINDOW_S:
                 return None
-        _invalidate_dead_session(api, e)
+            _api = None
+            _logged_in = False
+            _contract_fail_since = None
+            # Count it so repeated dead-session relogins trip the breaker instead of burning login quota.
+            _login_breaker.record_failure(_BREAKER_KEY, str(e)[:200])
+        logger.warning("[ShioajiFetcher] 合约查询持续失败超过 %.0f 秒，作废 session 以便重新登入: %s: %s",
+                       _CONTRACT_FAIL_WINDOW_S, type(e).__name__, str(e)[:200])
+        try:
+            _executor.submit(api.logout)  # fire-and-forget; never block the request thread on a dead SDK
+        except Exception:
+            pass
         return None
     with _SESSION_LOCK:
         if _api is api:
