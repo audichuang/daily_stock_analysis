@@ -316,4 +316,63 @@ describe('RealtimeBoardPage scope', () => {
       vi.useRealTimers();
     }
   });
+  it('polls AAPL.US and BRK-B as us codes: zero quote requests when both markets are closed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getWatchlist.mockResolvedValue(['AAPL.US', 'BRK-B']);
+      getSnapshot.mockResolvedValue({ accounts: [] });
+      renderPage();
+      const polled = await pollAfterStatusCheck({ tw: false, us: false });
+      expect(polled).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a pending manual full refresh alive when a subset poll tick fires first', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      renderPage();
+      await waitFor(() => expect(getQuotes).toHaveBeenCalled());
+      getMarketStatus.mockResolvedValue({ tw: false, us: true });
+      await act(() => vi.advanceTimersByTimeAsync(5 * 60_000 + 30_000)); // status turns tw closed
+      const pending: Array<() => void> = [];
+      getQuotes.mockImplementation(
+        (codes: string[]) =>
+          new Promise((resolve) => {
+            pending.push(() => resolve(codes.map((c) => quote(c, c === '2330.TW' ? 1234 : 200))));
+          }),
+      );
+      fireEvent.click(screen.getByRole('button', { name: /刷新|重新整理|refresh/i }));
+      const manual = pending.splice(0); // full refresh, still in flight
+      await act(() => vi.advanceTimersByTimeAsync(30_000)); // us-only tick fires before tw chunks return
+      await act(async () => {
+        manual.forEach((f) => f());
+        pending.splice(0).forEach((f) => f());
+      });
+      expect(await screen.findByText(/1,?234/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('still drops a late response for codes that a newer refresh already covered', async () => {
+    renderPage();
+    await waitFor(() => expect(getQuotes).toHaveBeenCalled());
+    const pending: Array<(price: number) => void> = [];
+    getQuotes.mockImplementation(
+      (codes: string[]) =>
+        new Promise((resolve) => {
+          pending.push((price) => resolve(codes.map((c) => quote(c, c === '2330.TW' ? price : 200))));
+        }),
+    );
+    const btn = screen.getByRole('button', { name: /刷新|重新整理|refresh/i });
+    fireEvent.click(btn);
+    const older = pending.splice(0);
+    fireEvent.click(btn);
+    const newer = pending.splice(0);
+    await act(async () => newer.forEach((f) => f(2222)));
+    await act(async () => older.forEach((f) => f(1111)));
+    expect(await screen.findByText(/2,?222/)).toBeTruthy();
+    expect(screen.queryByText(/1,?111/)).toBeNull();
+  });
 });

@@ -29,7 +29,7 @@ import { BoardDossierCell, BoardDossierPanel } from '../components/board/BoardDo
 const POLL_INTERVAL_MS = 30_000;
 // 看板代碼分市場：只有明確的台股／美股格式才參與閘門，其餘（.T、.HK、.KS、A 股…）歸 other 照常輪詢
 const boardMarketOf = (c: string): 'tw' | 'us' | 'other' =>
-  isTwStockCode(c) ? 'tw' : /^[A-Za-z]{1,5}(\.[A-Za-z])?$/.test(c) ? 'us' : 'other';
+  isTwStockCode(c) ? 'tw' : /^[A-Za-z]{1,5}([.-][A-Za-z]|\.US)?$/i.test(c) ? 'us' : 'other';
 const MARKET_STATUS_TTL_MS = 5 * 60_000; // 休市時只每 5 分鐘問一次後端開盤狀態，不打報價
 const DOSSIER_CHUNK = 50; // 與後端 MAX_BATCH_CODES 一致
 const DOSSIER_REFRESH_MS = 15 * 60_000; // 摘要是日資料，盤中不必跟 30 秒報價一起抓
@@ -237,7 +237,9 @@ const RealtimeBoardPage: React.FC = () => {
   // 不用橫滑整張表才找得到撐壓、結論卡與「四維度分析」按鈕
   const tableBoxRef = useRef<HTMLDivElement | null>(null);
   const [tableBoxWidth, setTableBoxWidth] = useState<number | null>(null);
-  const refreshSeqRef = useRef(0); // 世代守卫：丢弃旧轮询迟到的 chunk，避免覆盖更新的数据
+  const refreshSeqRef = useRef(0);
+  // 世代守卫（逐代码）：只丢弃「之后又被别的刷新抓过」的代码的迟到结果；子集轮询不会作废没涵盖的代码
+  const codeSeqRef = useRef<Map<string, number>>(new Map());
 
   // 分批并发刷新：每批回来就只 merge 那几列（in-place），不整页清空、不等最慢的
   // 手動刷新／初次載入全抓；輪詢時傳入已濾掉休市市場的代碼，並以 withIndices 決定要不要抓台股指數
@@ -253,15 +255,17 @@ const RealtimeBoardPage: React.FC = () => {
     }
     const seq = ++refreshSeqRef.current;
     const cs = targetCodes ?? codesRef.current;
+    for (const c of cs) codeSeqRef.current.set(stockCodeMatchKey(c), seq);
     for (let i = 0; i < cs.length; i += CHUNK) {
       const chunk = cs.slice(i, i + CHUNK);
       stocksApi
         .getQuotes(chunk)
         .then((items) => {
-          if (seq !== refreshSeqRef.current) return; // 已有更新的刷新发起，丢弃迟到结果
+          const fresh = items.filter((it) => codeSeqRef.current.get(stockCodeMatchKey(it.stockCode)) === seq);
+          if (!fresh.length) return; // 这些代码已有更新的刷新发起，丢弃迟到结果
           setQuotes((prev) => {
             const next = { ...prev };
-            for (const it of items) next[it.stockCode] = it;
+            for (const it of fresh) next[it.stockCode] = it;
             return next;
           });
           setError(null);
