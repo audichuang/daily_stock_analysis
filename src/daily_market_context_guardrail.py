@@ -52,28 +52,18 @@ _AGGRESSIVE_BUY_MARKERS_ZH = (
     "積極買入",
     "激進買入",
     "加倉",
-    # 台灣慣用詞（買進／加碼／佈局／進場）：缺了這些，hold 寫「建議買進」「逢低加碼」會直接放行
-    "買進",
-    "买进",
+    # 台灣慣用詞：加碼與加倉同義，可裸用
     "加碼",
     "加码",
-    "逢低佈局",
-    "分批佈局",
-    "積極佈局",
-    "逢低布局",
-    "分批布局",
-    "积极布局",
-    "逢低進場",
-    "分批進場",
-    "積極進場",
-    "立即進場",
-    "馬上進場",
-    "逢低进场",
-    "分批进场",
-    "积极进场",
-    "立即进场",
-    "马上进场",
 )
+# 裸「買進／進場／佈局」也常當名詞（「買進訊號未出現」），只在前面接建議／動作語境時才算積極買進
+_BARE_BUY_VERBS_ZH = ("買進", "买进", "進場", "进场", "佈局", "布局")
+_BUY_ADVICE_PREFIXES_ZH = (
+    "建議", "建议", "可", "可以", "宜", "應", "应", "分批", "逢低", "積極", "积极", "立即", "馬上", "马上", "立刻",
+)
+_AGGRESSIVE_BUY_MARKERS_ZH += tuple(p + v for p in _BUY_ADVICE_PREFIXES_ZH for v in _BARE_BUY_VERBS_ZH)
+# 判斷「買進本身被否定」時要看得到裸動詞：「不建議此時進場」「不建議於現價買入」沒有建議語境，仍是否定買進
+_NEGATABLE_BUY_MARKERS_ZH = _AGGRESSIVE_BUY_MARKERS_ZH + _BARE_BUY_VERBS_ZH + ("買入", "买入")
 _AGGRESSIVE_BUY_MARKERS_EN = ("buy now", "strong buy", "aggressive buy", "chase", "add aggressively")
 _AGGRESSIVE_BUY_MARKERS_KO = (
     "즉시 매수",
@@ -85,8 +75,8 @@ _AGGRESSIVE_BUY_MARKERS_KO = (
     "추격 매수",
     "비중 확대",
 )
-# 提示型否定：必須緊貼買進詞（中間最多隔 _NEGATION_PHRASE_FILLERS_ZH 的虛詞），不能在子句任意位置出現就算：
-# 「避免踏空建議加倉」「別猶豫加倉」的否定管的是別的動詞（繁簡並列）
+# 提示型否定：同一子句內出現在買進詞之前就算否定（「不建議在此價位買進」），
+# 但否定詞之後若出現 _AFFIRMATIVE_PIVOTS_ZH（「為避免踏空建議加倉」）就是另起肯定，不算（繁簡並列）
 _NEGATION_HINTS_ZH = (
     "暂不",
     "不建议",
@@ -158,6 +148,7 @@ _CHASE_MARKERS = ("追高", "chase")
 _NEGATION_FALSE_COMPOUNDS_ZH = (
     "特別", "特别", "區別", "区别", "個別", "个别", "分別", "分别", "類別", "类别", "級別", "级别", "差別", "差别",
     "識別", "识别", "告別", "告别",
+    "別猶豫", "别犹豫", "別錯過", "别错过", "不要緊", "不要紧",
 )
 _GUARDRAIL_SENTIMENT_SCORE = 52
 
@@ -352,7 +343,8 @@ def _has_aggressive_buy_signal(result: Any, *, language: str) -> bool:
         if _contains_any(advice, markers, language=language):
             return True
         # 「不追高」否定的是追價，不是買進本身：「逢低買進，不追高」仍是買進，不能因此跳過護欄
-        buy_markers = tuple(m for m in markers if m not in _CHASE_MARKERS)
+        negatable = markers if language in ("en", "ko") else _NEGATABLE_BUY_MARKERS_ZH
+        buy_markers = tuple(m for m in negatable if m not in _CHASE_MARKERS)
         if _contains_any(advice, buy_markers, language=language, require_negation=True):
             return False
         return True
@@ -397,41 +389,53 @@ def _contains_any(
 
 def _contains_negation_near_marker(context: str, negation_hints: tuple[str, ...], *, zh: bool = False) -> bool:
     separators = ("，", ",", "。", "；", ";", "：", ":", "？", "!", "！", "）", ")", "（", "(")
-    tail = context
-    sep_pos = -1
-    for separator in separators:
-        candidate = context.rfind(separator)
-        if candidate > sep_pos:
-            sep_pos = candidate
-    if sep_pos >= 0:
-        tail = context[sep_pos + 1 :]
     if zh:
-        return _ends_with_negation_zh(tail)
+        separators += _CLAUSE_SEPARATORS_ZH
+    cut = max((context.rfind(s) + len(s) for s in separators if s in context), default=0)
+    tail = context[cut:]
+    if zh:
+        return _negates_marker_zh(tail)
     return any(hint in tail for hint in negation_hints)
 
 
-_NEGATION_WORDS_ZH = _NEGATION_HINTS_ZH + _NEGATION_PHRASES_ZH
+# 中文另切的子句邊界：頓號、空白與轉折詞後面是另一個判斷（「不宜追高但可分批買入」）
+_CLAUSE_SEPARATORS_ZH = ("、", " ", "\u3000", "但", "惟", "不過", "不过", "然而")
+# 提示型否定之後出現這些詞，表示句子轉回肯定建議：「避免追高，可分批買入」「為避免踏空建議加倉」
+# ponytail: 單字 pivot 會命中「可能／應該」等詞（「不建議在可能回檔前買進」會被降級），誤判時改收整詞，不要再加長虛詞表
+_AFFIRMATIVE_PIVOTS_ZH = ("建議", "建议", "可", "應", "应", "宜", "再度")
 
 
-def _ends_with_negation_zh(tail: str) -> bool:
-    """否定只在緊貼買進詞（中間最多隔幾個虛詞）時才算，避免否定別的動詞也把買進遮掉。
+def _negates_marker_zh(tail: str) -> bool:
+    """買進詞前同一子句的尾巴是否否定了買進本身。
 
-    前面再接雙重否定（「並非不需要加倉」「不能不加倉」）或反問（「何不加倉」）就是要買。
+    緊貼單字否定與整詞否定（中間最多隔幾個虛詞）先判；前面再接雙重否定（「不能不加倉」
+    「並非不需要加倉」）或反問（「何不加倉」）就是要買。其餘看提示型否定在子句中的位置。
     """
+    rest = tail
     while True:
-        if tail.endswith(_NEGATION_FALSE_COMPOUNDS_ZH):
+        if rest.endswith(_NEGATION_FALSE_COMPOUNDS_ZH):
             return False
-        if tail.endswith(_NEGATION_IMMEDIATE_ZH):
-            head = tail[:-1]
+        if rest.endswith(_NEGATION_IMMEDIATE_ZH):
+            head = rest[:-1]
             rhetorical = head.endswith("何") and not head[:-1].endswith(_RHETORICAL_HE_EXCLUDED)
             return not (head.endswith(_DOUBLE_NEGATION_ZH) or rhetorical)
-        word = max((w for w in _NEGATION_WORDS_ZH if tail.endswith(w)), key=len, default=None)
-        if word is not None:
-            return not tail[: -len(word)].endswith(_DOUBLE_NEGATION_ZH)
-        filler = next((f for f in _NEGATION_PHRASE_FILLERS_ZH if tail.endswith(f)), None)
+        phrase = max((w for w in _NEGATION_PHRASES_ZH if rest.endswith(w)), key=len, default=None)
+        if phrase is not None:
+            return not rest[: -len(phrase)].endswith(_DOUBLE_NEGATION_ZH)
+        filler = next((f for f in _NEGATION_PHRASE_FILLERS_ZH if rest.endswith(f)), None)
         if filler is None:
-            return False
-        tail = tail[: -len(filler)]
+            break
+        rest = rest[: -len(filler)]
+    for compound in _NEGATION_FALSE_COMPOUNDS_ZH:
+        tail = tail.replace(compound, "")
+    # 取子句中最後一個提示型否定；肯定轉折只看它「之後」的字（「不建議」本身含「建議」）
+    hits = [(tail.rfind(h), h) for h in _NEGATION_HINTS_ZH if h in tail]
+    if not hits:
+        return False
+    start, hint = max(hits, key=lambda item: (item[0] + len(item[1]), len(item[1])))
+    if tail[:start].endswith(_DOUBLE_NEGATION_ZH):
+        return False
+    return not any(pivot in tail[start + len(hint):] for pivot in _AFFIRMATIVE_PIVOTS_ZH)
 
 
 def _cap_conservative_sentiment_score(value: Any) -> int:
