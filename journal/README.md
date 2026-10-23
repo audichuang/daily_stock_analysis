@@ -96,7 +96,7 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   | `stock_code` / `resolve` / `code_llm` | 對到的代號、怎麼對到的、NotebookLM 原本給的代號。順序：逐字稿念的是數字（ETF 常這樣）就用那個代號（`code`）；否則先用還原後的股名比對（`exact`／`alias`），比對不到才用 NotebookLM 給的代號（名稱吻合 `code`，不吻合 `code_mismatch`，要人工確認）；最後才是字面相近（`fuzzy`，要人工確認）或 `unresolved`（留 `null`）。實測 NotebookLM 的股名比它猜的代號可靠（宜鼎被給成宜特的代號）。整集沒有點名時寫一行 `no_picks`，避免重抓 |
   | `stance` | `bullish`／`bearish`／`avoid`／`neutral`；同一檔不同來賓看法不同時分兩行 |
   | `speaker` / `reason` / `theme` / `condition` / `quote` | 誰說的、理由、題材、節目給的價位或進出場條件（原話）、關鍵原話 |
-  | `data` | 播出當時已知的最近一個收盤（`as_of` 是實際的交易日；節目收盤後播出用播出日收盤，標題含「盤前」的節目用前一天以前的收盤）：`close`、`vs_ma20_pct`／`vs_ma60_pct`（前復權）、`from_60d_high_pct`、`ret_5d_pct`、`revenue_yoy_3m`（已公告的最近三個月）、`foreign_5d_lots`／`trust_5d_lots`（上市、上櫃都有；窗口內法人資料有缺日時才是 `null`）。無行情時整欄 `null` |
+  | `data` | 播出當時已知的最近一個收盤（`as_of` 是實際的交易日；播出日 17:00 後才上傳的用播出日；標題含「盤前」、或播出日 17:00 前就上傳的〔盤中連線〕用前一天以前的，因為當天的個股法人買賣超下午才公布；2026-10-23 晚上以前寫入的列只看標題的「盤前」，下午上傳的集數可能含當天法人）：`close`、`vs_ma20_pct`／`vs_ma60_pct`（前復權）、`from_60d_high_pct`、`ret_5d_pct`、`revenue_yoy_3m`（已公告的最近三個月）、`foreign_5d_lots`／`trust_5d_lots`（上市、上櫃都有；窗口內法人資料有缺日時才是 `null`）。無行情時整欄 `null` |
   | `extracted_at` / `notebook_id` | 擷取時點、NotebookLM notebook（一天一本，30 天後刪；逐字稿另存 `data/media_picks/`，gitignore） |
 
 - `ptt-picks.jsonl` — **PTT 股票板 `[標的]` 文**（`make ptt-picks`，`scripts/tw_ptt_picks.py`），一篇一行。
@@ -106,10 +106,11 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   | 欄位 | 意思 |
   | --- | --- |
   | `date` / `posted_at` / `article_id` / `url` / `title` / `author` | 發文日與時刻（台北，取自文章檔名的 unix 秒）、文章、PTT ID |
-  | `target` / `stock_code` / `resolve` | 作者寫的標的、對到的代號、怎麼對到的：作者有寫代號就用代號（`code`），否則比對股名（同 media-picks）；沒寫代號又是大盤、台指期、費半這類字眼時是 `market`（不做字面相近比對，否則「台灣大盤」會被對成台灣大） |
+  | `target` / `stock_code` / `resolve` | 作者寫的標的、對到的代號、怎麼對到的：先比對股名，比對不到才用作者寫的數字（股名吻合 `code`、不吻合 `code_mismatch`，例如小米 1810、年份 2025 都是四位數）；板規範本的 `(例 2330.TW 台積電)` 會先拿掉；沒寫代號又是大盤、台指期、費半這類字眼時是 `market`（不做字面相近比對，否則「台灣大盤」會被對成台灣大） |
   | `category` / `stance` | 作者填的分類原文；`stance` 只在分類（或標題結尾）只出現「多」或只出現「空」時才是 `bullish`／`bearish`，討論、請益、多空都寫的是 `neutral` |
   | `reason` / `condition` | 分析／正文（前 500 字）、進退場機制（前 300 字，板規範本的提示字已拿掉）；沒照範本寫的文章 `reason` 是全文前 500 字 |
   | `has_statement` | 對帳單欄有附連結 |
   | `push_up` / `push_down` / `push_neutral` | 擷取當下的推／噓／→ 數 |
-  | `data` | 發文當時已知的最近收盤，欄位同 media-picks；13:30 前發的文用前一天以前的收盤 |
+  | `edited_at` | 最後一次編輯的時刻（`※ 編輯` 標記）；內文是擷取當下讀的，編輯過的文可能在行情走完後改了多空或進出場，回驗時要排除或改用這個時刻 |
+  | `data` | 發文當時已知的資料，欄位同 media-picks；17:00 前發的文用前一天以前的（當天個股法人買賣超下午才公布） |
   | `extracted_at` | 擷取時點 |

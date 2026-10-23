@@ -28,7 +28,6 @@ import tw_media_picks as mp  # noqa: E402
 JOURNAL = mp.ROOT / "journal" / "ptt-picks.jsonl"
 BOARD = "https://www.ptt.cc/bbs/Stock"
 TPE = timezone(timedelta(hours=8))
-CLOSE = (13, 30)
 MARKET = re.compile(r"大盤|台股|台指|加權|櫃買|費半|那斯達克|標普")
 
 
@@ -40,8 +39,8 @@ def post_time(article_id: str) -> datetime:
 
 
 def data_cutoff(posted: datetime) -> date:
-    """收盤前發的文只知道前一天的收盤。"""
-    return posted.date() if (posted.hour, posted.minute) >= CLOSE else posted.date() - timedelta(days=1)
+    """當天的收盤與法人公布前（`mp.DATA_KNOWN`）發的文，只知道前一天的資料。"""
+    return posted.date() if (posted.hour, posted.minute) >= mp.DATA_KNOWN else posted.date() - timedelta(days=1)
 
 
 def parse_search(page: str) -> list[tuple[str, str]]:
@@ -56,7 +55,10 @@ def parse_search(page: str) -> list[tuple[str, str]]:
 
 # template labels at line start, optionally numbered ("2.分類：多")
 _LABEL = re.compile(r"^[ \t]*(?:\d+\s*[.、]\s*)?(標的|分類|分析\s*/?\s*正文|分析|正文|進退場機制|對帳單)\s*[:：]", re.M)
-_PLACEHOLDER = re.compile(r"[(（]喊多喊空者.*?[)）]", re.S)  # left over from the board template
+# left over from the board template: its hints and its sample target "(例 2330.TW 台積電)"
+_PLACEHOLDER = re.compile(r"[(（](?:喊多喊空者|例\s*\d{4}|請選擇).*?[)）]", re.S)  # not 例外／例如 prose
+_UNFILLED_CATEGORY = re.compile(r"多\s*/\s*空\s*/\s*討論\s*/\s*心得")
+_EDIT = re.compile(r"※ 編輯: \S+ \([^)]*\), (\d\d/\d\d/\d{4} \d\d:\d\d:\d\d)")
 
 
 def _sections(body: str) -> dict[str, str]:
@@ -80,7 +82,12 @@ def stance_of(category: str | None, title: str) -> str:
 
 
 def parse_article(page: str, title: str) -> dict:
-    """文章頁 -> 標的、多空、理由、進退場、推噓。欄位缺就是 None，不猜。"""
+    """文章頁 -> 標的、多空、理由、進退場、推噓。欄位缺就是 None，不猜。
+
+    不是文章頁（維護頁、擋爬頁、改版）就丟 ValueError：寫進 journal 的列不會再重抓。"""
+    if '<div id="main-content"' not in page or "article-meta-value" not in page:
+        raise ValueError("不是 PTT 文章頁")
+    edits = _EDIT.findall(page)
     main = page.split('<div id="main-content"', 1)[-1].split(">", 1)[-1]
     pushes = re.findall(r'<span class="[^"]*push-tag">(推|噓|→) ?</span>', main)
     body = re.sub(r'<div class="push">.*', "", main, flags=re.S)  # comments come after the body
@@ -88,6 +95,8 @@ def parse_article(page: str, title: str) -> dict:
     body = body.split("※ 發信站", 1)[0].rsplit("\n--\n", 1)[0]
     body = re.split(r"\n-----\n", body, maxsplit=1)[0]  # app footer ("-----\nSent from MeowPtt")
     s = _sections(body)
+    if _UNFILLED_CATEGORY.fullmatch(s.get("分類", "")):
+        s.pop("分類")
     free = re.sub(r"\s+", " ", body.split("\n", 1)[-1].lstrip("-\n ")).strip()  # no template: keep the text
     return {
         "target": s.get("標的") or title.replace("[標的]", "").strip(),
@@ -97,6 +106,9 @@ def parse_article(page: str, title: str) -> dict:
         "condition": (s.get("進退場機制") or "")[:300] or None,
         "has_statement": bool(re.search(r"https?://", s.get("對帳單", ""))),
         "push_up": pushes.count("推"), "push_down": pushes.count("噓"), "push_neutral": pushes.count("→"),
+        # the body is read at scrape time: an edit after posting may have changed the call
+        "edited_at": datetime.strptime(edits[-1], "%m/%d/%Y %H:%M:%S").replace(tzinfo=TPE).isoformat()
+        if edits else None,
     }
 
 
@@ -110,10 +122,13 @@ def split_target(target: str) -> tuple[str, str | None]:
 
 
 def resolve_target(target: str, index) -> tuple[str | None, str]:
+    target = _PLACEHOLDER.sub(" ", target)
     name, code = split_target(target)
     if not code and MARKET.search(target):
         return None, "market"  # fuzzy would turn 台灣大盤 into 台灣大
-    return mp.resolve(name, code, index, code)  # the author typed the code: trust it like a spoken one
+    # Name first, typed number second: a foreign ticker (1810 小米) or a year (2025) is also four digits,
+    # and a number that disagrees with the name comes back as code_mismatch.
+    return mp.resolve(name, code, index)
 
 
 def already_done(path=JOURNAL) -> set[str]:
@@ -205,7 +220,7 @@ def main(argv=None):
                "target": p["target"], "stock_code": code, "resolve": how, "category": p["category"],
                "stance": p["stance"], "reason": p["reason"], "condition": p["condition"],
                "has_statement": p["has_statement"], "push_up": p["push_up"], "push_down": p["push_down"],
-               "push_neutral": p["push_neutral"], "data": data, "extracted_at": now}
+               "push_neutral": p["push_neutral"], "edited_at": p["edited_at"], "data": data, "extracted_at": now}
         JOURNAL.parent.mkdir(exist_ok=True)
         with JOURNAL.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")

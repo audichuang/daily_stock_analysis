@@ -24,7 +24,7 @@ import re
 import subprocess
 import time
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,7 +38,6 @@ KEEP_NOTEBOOK_DAYS = 30
 
 # (show, kind, channel id, title regex, min seconds) — only full episodes; clips and highlights
 # repeat them. kind keeps the later back-test separable: tv / advisor (投顧, sells memberships) / kol / research.
-# Upload must be after the 13:30 close unless the title says 盤前 (data_cutoff only reads the title).
 # Tried and dropped 2026-10-23: 劉姸希 (half the picks are past-gain promos tagged bullish), 股癌 (US-heavy, 2 neutral picks per episode).
 CHANNELS = [
     ("錢線百分百", "tv", "UC_ObC9O0ZQ2FhW6u9_iFlZA", r"完整版", 1200),
@@ -239,9 +238,22 @@ def air_date(title: str, uploaded: date) -> tuple[date, str]:
     return uploaded, "upload"
 
 
-def data_cutoff(title: str, aired: date) -> date:
-    """`data` 可以用到哪一天的收盤。盤前節目在開盤前播出，播出當天的收盤還不存在，只能用前一天以前的。"""
-    return aired - timedelta(days=1) if "盤前" in (title or "") else aired
+TPE = timezone(timedelta(hours=8))
+# The close is out at 13:30, but `data` also carries that day's per-stock institutional flows, which
+# TWSE/TPEx publish later in the afternoon. Before this time only the previous session is fully public.
+DATA_KNOWN = (17, 0)
+
+
+def data_cutoff(title: str, aired: date, published: datetime | None = None) -> date:
+    """`data` 可以用到哪一天的資料。盤前節目、或播出當天 17:00 前就上傳的（盤中連線），當天的收盤與法人
+    都還沒公布，只能用前一天以前的。"""
+    # no timestamp (yt-dlp may drop it): can't show the day was already public
+    if "盤前" in (title or "") or published is None:
+        return aired - timedelta(days=1)
+    p = published.astimezone(TPE)
+    if p.date() < aired or (p.date() == aired and (p.hour, p.minute) < DATA_KNOWN):
+        return aired - timedelta(days=1)
+    return aired
 
 
 def required_session(cutoff: date) -> date:
@@ -288,9 +300,13 @@ def new_episodes(since: date, done: set[str]) -> list[dict]:
             if not dur.replace(".", "").isdigit() or float(dur) < min_sec:
                 continue
             try:
-                up = _run(["yt-dlp", *YT_LANG, "--skip-download", "--print", "%(upload_date)s",
-                           f"https://www.youtube.com/watch?v={vid}"], 120).strip()
-                uploaded = datetime.strptime(up, "%Y%m%d").date()
+                up, ts = (_run(["yt-dlp", *YT_LANG, "--skip-download", "--print", "%(upload_date)s %(timestamp)s",
+                                f"https://www.youtube.com/watch?v={vid}"], 120).split() + ["NA"])[:2]
+                # upload_date is the UTC day; the timestamp gives the Taipei day and hour. Without a
+                # timestamp, the start of that UTC day (08:00 Taipei) is the earliest it could have been.
+                published = (datetime.fromtimestamp(int(ts), TPE) if ts.isdigit()
+                             else datetime.strptime(up, "%Y%m%d").replace(tzinfo=timezone.utc).astimezone(TPE))
+                uploaded = published.date()
             except Exception as exc:
                 print(f"[warn] {vid} 取不到上傳日：{exc}", file=sys.stderr)
                 continue
@@ -298,7 +314,7 @@ def new_episodes(since: date, done: set[str]) -> list[dict]:
                 break  # the tab is newest-first by upload; everything below is older
             aired, aired_from = air_date(title, uploaded)
             eps.append({"show": show, "kind": kind, "video_id": vid, "title": title, "aired": aired,
-                        "aired_from": aired_from, "uploaded": uploaded, "cutoff": data_cutoff(title, aired),
+                        "aired_from": aired_from, "uploaded": uploaded, "cutoff": data_cutoff(title, aired, published),
                         "url": f"https://www.youtube.com/watch?v={vid}"})
     return sorted(eps, key=lambda e: e["aired"])
 
