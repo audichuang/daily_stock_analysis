@@ -57,6 +57,10 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
   `foreign_fut_oi`（外資台指期大台淨未平倉口數，整數，負＝淨空）、`foreign_fut_oi_chg`（較前一交易日的
   口數變化，整數）、`pc_oi_ratio`（臺指選擇權 P/C 未平倉比，**小數**：文字輸出的 66.17% 在 JSON 已是 0.6617）。
   不可用或沒有日變化時 JSON 裡已是 `null`（原因在 `reasons`），照填 `null`，不要去搜尋補數字。它們只是 `reason` 的佐證，不是 regime 門檻。
+  **休市日的列不計分**：臨時休市（颱風假等，`market_data.closures.adhoc_closed_dates()`）或非交易日那天盤前判讀照跑也會留一行
+  （例如 2026-10-23），journal 不改原行，所以回驗一律在讀取端排除 `date` 落在休市日的列，並在輸出標明排除幾筆。
+  `swing-decisions.jsonl` 已由 `scripts/verify_swing_decisions.py` 的 `read_log` 做掉；日後寫 morning-calls 回驗要沿用同一個判斷
+  （`tw_closed_reason(day, fetch=lambda: None)`），不要另寫。
 
 ## 怎麼用
 
