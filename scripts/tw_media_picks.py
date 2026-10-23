@@ -37,7 +37,8 @@ NB_PREFIX = "dsa 媒體點名 "
 KEEP_NOTEBOOK_DAYS = 30
 
 # (show, kind, channel id, title regex, min seconds) — only full episodes; clips and highlights
-# repeat them. kind keeps the later back-test separable: tv / advisor (投顧, sells memberships) / research
+# repeat them. kind keeps the later back-test separable: tv / advisor (投顧, sells memberships) / kol / research.
+# Upload must be after the 13:30 close unless the title says 盤前 (data_cutoff only reads the title).
 CHANNELS = [
     ("錢線百分百", "tv", "UC_ObC9O0ZQ2FhW6u9_iFlZA", r"完整版", 1200),
     ("理財達人秀", "tv", "UCQvsuaih5lE0n_Ne54nNezg", r"【(理財達人秀|兆華艾綸說)】", 2400),
@@ -58,6 +59,14 @@ CHANNELS = [
     ("謝文琪", "advisor", "UCUSfi6ugUr9r-1UUS48uivw", r".", 1500),
     ("陳學進", "advisor", "UCTJBg089Av1LV8Nhd5YPDTw", r"理周TV", 1200),
     ("豐銀投顧", "advisor", "UCqLsAvnCtSU7CeSrfjy2Btw", r".", 1200),
+    # roundtables of advisors listed above: the same person's call can repeat under another show
+    ("瘋狂股市福利社", "tv", "UCAg1jxXzYrVSfkJyeOH2gqg", r"║", 1200),
+    ("理周TV", "advisor", "UCmd2Sny4QM9zlgaD2gVn-Zg", r"^(?!.*精華)", 1100),
+    ("劉姸希", "advisor", "UCG_uX93skERZf3kIadGfU-A", r"甜心盤後節目", 1000),
+    ("老王愛說笑", "advisor", "UCvnLmiWt_zIVIh0zUm_j4Hw", r"老王不只三分鐘", 1800),
+    # kol: independent YouTubers, no advisor licence; 股癌 leans US stocks
+    ("一綺聊股", "kol", "UCuXjCbU_zwwuE0rMbJfY9aQ", r"台股", 1200),
+    ("股癌", "kol", "UC23rnlQU_qE3cec9x709peA", r"^EP\d+", 2400),
     ("財報狗", "research", "UC2TsM2pyabGznSvB9llmsFA", r"財經時事放大鏡", 1200),
     ("MoneyDJ", "research", "UC8qLLXh5cuY_jtvOHsSYmTA", r"^Ep\.", 1200),
 ]
