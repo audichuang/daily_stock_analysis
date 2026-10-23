@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 颱風假等臨時休市：`python -m market_data.closures` 讀人事行政總處停班停課頁，臺北市全日或上午停班就判台股休市（證交所休市原則）並記進 `data/tw_adhoc_closed_dates.txt`；`trading_calendar` 的 XTAI 日曆與 `health.expected_session` 都讀這份清單，Mac 排程的 precheck 與 `daily_report.sh` 改用它，休市日不再用前一日收盤價推盤中賣出提醒、18:00 報告也不會被 `health --strict` 擋下
 - [chore] `docker/Dockerfile` 建置期 smoke 也 import `market_data` 與台股服務模組：發版映像（`ghcr-main.yml`）沒有其他關卡，新 package 漏 `COPY` 時建置就失敗，不會到容器裡才靜默退回別的資料源
 - [修復] 基金補歷史改看「起點是否涵蓋近五年或成立日」，不再只看筆數：公會每日值累積滿 30 筆後，沒查過的基金第一次打開或建立持倉時仍會從鉅亨補全期，近 3 月以上報酬與近一年風險不再是 null 或只用一個多月資料算
 - [修復] `PUT /api/v1/funds/holdings/{id}` 把通路改成同基金已有的通路時回 409 `duplicate_holding`，原本是未處理的唯一鍵錯誤（500）

@@ -3,6 +3,9 @@ import pathlib
 
 import pytest
 
+# 本機 data/ 的臨時休市清單不能漏進測試的交易日判斷（見 market_data.closures）。
+os.environ["TW_ADHOC_CLOSED_FILE"] = os.devnull
+
 # load DATABASE_URL from the repo-root .env for DB-backed tests
 _envf = pathlib.Path(__file__).resolve().parents[2] / ".env"
 if _envf.exists():

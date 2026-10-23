@@ -17,6 +17,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from enum import Enum
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
@@ -36,6 +37,34 @@ except ImportError:
         "exchange-calendars not installed; trading day check disabled. "
         "Run: pip install exchange-calendars"
     )
+
+@lru_cache(maxsize=8)
+def _xtai_with_closures(closed: frozenset):
+    base = type(xcals.get_calendar("XTAI"))
+
+    class _XTAIWithClosures(base):
+        @property
+        def adhoc_holidays(self):
+            return super().adhoc_holidays + [pd.Timestamp(d) for d in sorted(closed)]
+
+    return _XTAIWithClosures()
+
+
+def _get_calendar(ex: str):
+    """exchange-calendars calendar; XTAI also skips ad-hoc closures (typhoon days)
+    listed by ``market_data.closures``, which the bundled calendar does not know."""
+    if ex == "XTAI":
+        try:
+            from market_data.closures import adhoc_closed_dates
+
+            closed = frozenset(adhoc_closed_dates())
+        except Exception as e:
+            logger.warning("trading_calendar ad-hoc closure list unavailable: %s", e)
+            closed = frozenset()
+        if closed:
+            return _xtai_with_closures(closed)
+    return xcals.get_calendar(ex)
+
 
 # Market -> exchange code (exchange-calendars)
 MARKET_EXCHANGE = {
@@ -174,7 +203,7 @@ def is_market_open(market: str, check_date: date) -> bool:
     if not ex:
         return True
     try:
-        cal = xcals.get_calendar(ex)
+        cal = _get_calendar(ex)
         session = datetime(check_date.year, check_date.month, check_date.day)
         return cal.is_session(session)
     except Exception as e:
@@ -190,7 +219,7 @@ def get_trading_dates(market: str, start_date: date, end_date: date) -> Optional
     if not _XCALS_AVAILABLE or market not in MARKET_EXCHANGE:
         return None
     try:
-        sessions = xcals.get_calendar(MARKET_EXCHANGE[market]).sessions_in_range(start_date, end_date)
+        sessions = _get_calendar(MARKET_EXCHANGE[market]).sessions_in_range(start_date, end_date)
         return sessions.tz_localize(None).normalize()
     except Exception as exc:
         logger.warning("trading_calendar.get_trading_dates unavailable: %s", exc)
@@ -211,7 +240,7 @@ def get_next_trading_date(market: str, check_date: date) -> Optional[date]:
     if not ex:
         return None
     try:
-        cal = xcals.get_calendar(ex)
+        cal = _get_calendar(ex)
         return cal.date_to_session(check_date + timedelta(days=1), direction="next").date()
     except Exception as e:
         logger.warning("trading_calendar.get_next_trading_date unavailable: %s", e)
@@ -267,7 +296,7 @@ def get_effective_trading_date(
         return fallback_date
 
     try:
-        cal = xcals.get_calendar(ex)
+        cal = _get_calendar(ex)
         local_date = market_now.date()
 
         if not cal.is_session(local_date):
@@ -339,7 +368,7 @@ def resolve_historical_daily_bar_date(
         return None
 
     try:
-        cal = xcals.get_calendar(MARKET_EXCHANGE[market])
+        cal = _get_calendar(MARKET_EXCHANGE[market])
         is_session = bool(cal.is_session(target_date))
 
         if normalized_phase in {
@@ -428,7 +457,7 @@ def infer_market_phase(
     local_date = market_now.date()
 
     try:
-        cal = xcals.get_calendar(ex)
+        cal = _get_calendar(ex)
         if not cal.is_session(local_date):
             return MarketPhase.NON_TRADING
 
@@ -507,7 +536,7 @@ def _session_open_close_for_today(
     if not ex or not tz_name or not _XCALS_AVAILABLE:
         return None, None
 
-    cal = xcals.get_calendar(ex)
+    cal = _get_calendar(ex)
     local_date = market_now.date()
     if not cal.is_session(local_date):
         return None, None
