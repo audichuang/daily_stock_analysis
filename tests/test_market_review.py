@@ -1012,5 +1012,68 @@ class MarketReviewMissingRegionsTestCase(unittest.TestCase):
         self.assertEqual(market_review_module.last_run_missing_regions(), ["tw"])
 
 
+class PrewarmReviewReuseTestCase(unittest.TestCase):
+    """Prewarm (daily_market_context) and formal review must share one LLM run per region."""
+
+    def setUp(self) -> None:
+        market_review_module._PREWARM_REVIEWS.clear()
+        self.addCleanup(market_review_module._PREWARM_REVIEWS.clear)
+
+    def _run(self, region: str, trigger_source: str, factory: MagicMock):
+        notifier = MagicMock()
+        notifier.save_report_to_file.return_value = "/tmp/x.md"
+        notifier.is_available.return_value = False
+        with patch.object(market_review_module, "MarketAnalyzer", factory), patch.object(
+            market_review_module, "_persist_market_review_history"
+        ):
+            return run_market_review(
+                notifier,
+                config=SimpleNamespace(report_language="zh", market_review_region=region),
+                override_region=region,
+                send_notification=False,
+                trigger_source=trigger_source,
+            )
+
+    @staticmethod
+    def _factory() -> MagicMock:
+        factory = MagicMock()
+        factory.side_effect = lambda **kw: MagicMock(
+            run_daily_review_with_snapshot=MagicMock(
+                return_value=SimpleNamespace(report=f"{kw['region']} body", market_light_snapshot={})
+            )
+        )
+        return factory
+
+    def test_formal_review_reuses_prewarmed_regions(self) -> None:
+        factory = self._factory()
+        self._run("tw", "daily_market_context", factory)
+        self._run("us", "daily_market_context", factory)
+        self.assertEqual(factory.call_count, 2)
+
+        result = self._run("tw,us", "cli", factory)
+
+        self.assertEqual(factory.call_count, 2)  # no new MarketAnalyzer
+        self.assertIn("tw body", result)
+        self.assertIn("us body", result)
+
+    def test_formal_review_does_not_feed_cache_and_reuse_is_one_shot(self) -> None:
+        factory = self._factory()
+        self._run("tw", "cli", factory)
+        self._run("tw", "cli", factory)
+        self.assertEqual(factory.call_count, 2)  # formal runs never reuse each other
+
+        self._run("tw", "daily_market_context", factory)
+        self._run("tw", "cli", factory)  # consumes cache
+        self._run("tw", "cli", factory)  # regenerates
+        self.assertEqual(factory.call_count, 4)
+
+    def test_expired_prewarm_is_not_reused(self) -> None:
+        factory = self._factory()
+        self._run("tw", "daily_market_context", factory)
+        with patch.object(market_review_module.time, "monotonic", return_value=10**9):
+            self._run("tw", "cli", factory)
+        self.assertEqual(factory.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
