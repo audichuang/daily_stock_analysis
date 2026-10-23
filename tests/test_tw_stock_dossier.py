@@ -156,6 +156,8 @@ def _yoy_fixture(monkeypatch, cur, prev, stored):
 @pytest.mark.parametrize("cur,prev,stored,expected", [
     (164351, 100000, 64.35, 64.4),   # 庫裡 64.35 是 64.351 的二次四捨五入，f"{64.35:+.1f}" 會印 64.3
     (166950, 100000, 66.95, 67.0),   # 恰為 .x5：half-up 進位
+    (164349, 100000, 64.35, 64.3),   # 真值 64.349：要由營收自算，拿庫裡的 64.35 再 half-up 會變 64.4
+    (166850, 100000, 66.85, 66.9),   # half-up 而非 half-even（後者得 66.8）
     (160000, 0, 61.26, 61.3),        # 沒有去年同月：退回庫裡的值並同樣 half-up
 ])
 def test_monthly_yoy_is_rounded_once_half_up(monkeypatch, cur, prev, stored, expected):
