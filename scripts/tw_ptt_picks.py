@@ -43,10 +43,13 @@ def data_cutoff(posted: datetime) -> date:
     return posted.date() if (posted.hour, posted.minute) >= mp.DATA_KNOWN else posted.date() - timedelta(days=1)
 
 
+_ENTRY = re.compile(r'<a href="/bbs/Stock/(M\.\d+\.A\.[0-9A-F]+)\.html">([^<]*)</a>')
+
+
 def parse_search(page: str) -> list[tuple[str, str]]:
     """搜尋結果頁 -> [(article_id, title)]；只留 `[標的]` 原文（刪文沒有連結，自然略過）。"""
     out = []
-    for aid, title in re.findall(r'<a href="/bbs/Stock/(M\.\d+\.A\.[0-9A-F]+)\.html">([^<]*)</a>', page):
+    for aid, title in _ENTRY.findall(page):
         title = html.unescape(title).strip()
         if title.startswith("[標的]"):
             out.append((aid, title))
@@ -148,27 +151,48 @@ def _get(url: str) -> str:
 
 
 def new_articles(since: date, done: set[str], max_pages: int = 20) -> list[dict]:
+    import requests
+
     out = []
     for page in range(1, max_pages + 1):
-        hits = parse_search(_get(f"{BOARD}/search?page={page}&q=%5B%E6%A8%99%E7%9A%84%5D"))
-        if not hits:
+        try:
+            html_ = _get(f"{BOARD}/search?page={page}&q=%5B%E6%A8%99%E7%9A%84%5D")
+        except requests.HTTPError as exc:
+            if page > 1 and getattr(exc.response, "status_code", None) == 404:
+                break  # past the last page
+            raise
+        # Paging and the stop rule look at every entry, replies included: a page of replies is not the end.
+        entries = _ENTRY.findall(html_)
+        if not entries:
+            if page == 1:  # the board always has [標的] posts: an empty first page is a layout change or a block
+                raise RuntimeError("PTT 搜尋頁沒有任何文章，可能改版或被擋")
             break
-        older = False
-        for aid, title in hits:
+        for aid, title in parse_search(html_):
             posted = post_time(aid)
-            if posted.date() < since:
-                older = True
-                continue
-            if aid not in done:
+            if posted.date() >= since and aid not in done:
                 out.append({"article_id": aid, "title": title, "posted": posted, "cutoff": data_cutoff(posted),
                             "url": f"{BOARD}/{aid}.html"})
-        if older:
+        if any(post_time(aid).date() < since for aid, _ in entries):
             break  # search is newest-first
         time.sleep(0.5)
     return sorted(out, key=lambda a: a["posted"])
 
 
 # ---------- main ----------
+
+def build_row(a: dict, page: str, index, engine, now: str) -> dict:
+    """一篇文章 -> journal 一列。snapshot 出錯就往外丟（不寫 journal，下一輪重抓）；沒有行情（None）照寫。"""
+    p = parse_article(page, a["title"])
+    author = re.search(r'作者</span><span class="article-meta-value">([^ <]+)', page)
+    code, how = resolve_target(p["target"], index)
+    data = mp.snapshot(code, a["cutoff"], engine) if code and engine is not None else None
+    return {"date": str(a["posted"].date()), "posted_at": a["posted"].isoformat(), "article_id": a["article_id"],
+            "url": a["url"], "title": a["title"], "author": author.group(1) if author else None,
+            "target": p["target"], "stock_code": code, "resolve": how, "category": p["category"],
+            "stance": p["stance"], "reason": p["reason"], "condition": p["condition"],
+            "has_statement": p["has_statement"], "push_up": p["push_up"], "push_down": p["push_down"],
+            "push_neutral": p["push_neutral"], "edited_at": p["edited_at"], "data": data, "extracted_at": now}
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -201,30 +225,15 @@ def main(argv=None):
             print(f"[defer] {a['article_id']}：{a['cutoff']} 的收盤還沒入庫，下一輪再處理", file=sys.stderr)
             continue
         try:
-            page = _get(a["url"])
-            p = parse_article(page, a["title"])
-        except Exception as exc:  # one article failing must not stop the rest
+            row = build_row(a, _get(a["url"]), index, engine, now)
+        except Exception as exc:  # not journaled, so the next run retries it; the rest still run
             failed += 1
             print(f"[error] {a['article_id']}：{exc}", file=sys.stderr)
             continue
-        author = re.search(r'作者</span><span class="article-meta-value">([^ <]+)', page)
-        code, how = resolve_target(p["target"], index)
-        data = None
-        if code and engine is not None:
-            try:
-                data = mp.snapshot(code, a["cutoff"], engine)
-            except Exception as exc:
-                print(f"[warn] {code} 數據失敗：{exc}", file=sys.stderr)
-        row = {"date": str(a["posted"].date()), "posted_at": a["posted"].isoformat(), "article_id": a["article_id"],
-               "url": a["url"], "title": a["title"], "author": author.group(1) if author else None,
-               "target": p["target"], "stock_code": code, "resolve": how, "category": p["category"],
-               "stance": p["stance"], "reason": p["reason"], "condition": p["condition"],
-               "has_statement": p["has_statement"], "push_up": p["push_up"], "push_down": p["push_down"],
-               "push_neutral": p["push_neutral"], "edited_at": p["edited_at"], "data": data, "extracted_at": now}
         JOURNAL.parent.mkdir(exist_ok=True)
         with JOURNAL.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        print(f"{a['posted']:%m-%d} {p['target'][:20]} → {code or '未對到'}（{how}）{p['stance']}")
+        print(f"{a['posted']:%m-%d} {row['target'][:20]} → {row['stock_code'] or '未對到'}（{row['resolve']}）{row['stance']}")
         time.sleep(0.5)
     return 1 if arts and failed == len(arts) else 0
 

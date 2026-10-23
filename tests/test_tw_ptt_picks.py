@@ -106,3 +106,80 @@ def test_parse_search_keeps_only_original_target_posts():
 def test_template_cleanup_keeps_prose_that_starts_with_例():
     p = tp.parse_article(page("標的：2316 楠梓電\n進退場機制：1000 進場（例外：跌破 900 立即停損）\n"), "[標的] 2316")
     assert p["condition"] == "1000 進場（例外：跌破 900 立即停損）"
+
+
+def _search(*entries):
+    return "".join(f'<a href="/bbs/Stock/{aid}.html">{title}</a>' for aid, title in entries)
+
+
+# 2026-10-21 / 10-21 / 09-22 Taipei
+NEW1, NEW2, OLD = "M.1792560350.A.0E7", "M.1792560400.A.111", "M.1790000000.A.222"
+
+
+def test_new_articles_reads_past_a_page_of_replies(monkeypatch):
+    pages = {1: _search((NEW1, "Re: [標的] 2316 楠梓電")), 2: _search((NEW2, "[標的] 2316 楠梓電")),
+             3: _search((OLD, "[標的] 舊文"))}
+    monkeypatch.setattr(tp, "_get", lambda url: pages[int(url.split("page=")[1].split("&")[0])])
+    monkeypatch.setattr(tp.time, "sleep", lambda s: None)
+    got = tp.new_articles(date(2026, 10, 20), set())
+    assert [a["article_id"] for a in got] == [NEW2]
+
+
+def test_new_articles_stops_at_an_old_reply_and_past_the_last_page(monkeypatch):
+    import requests
+
+    def get(url):
+        page = int(url.split("page=")[1].split("&")[0])
+        if page == 1:
+            return _search((NEW2, "[標的] 新"), (OLD, "Re: [標的] 舊"))
+        raise AssertionError("an older reply already proves the rest is older")
+
+    monkeypatch.setattr(tp, "_get", get)
+    assert [a["article_id"] for a in tp.new_articles(date(2026, 10, 20), set())] == [NEW2]
+
+    def get404(url):
+        if "page=1&" in url:
+            return _search((NEW2, "[標的] 新"))
+        raise requests.HTTPError(response=type("R", (), {"status_code": 404})())
+
+    monkeypatch.setattr(tp, "_get", get404)
+    monkeypatch.setattr(tp.time, "sleep", lambda s: None)
+    assert [a["article_id"] for a in tp.new_articles(date(2026, 10, 20), set())] == [NEW2]
+
+
+def test_new_articles_fails_loudly_when_the_search_page_has_no_entries(monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(tp, "_get", lambda url: "<html>改版或擋爬</html>")
+    with pytest.raises(RuntimeError):
+        tp.new_articles(date(2026, 10, 20), set())
+
+
+def test_snapshot_failure_is_retried_instead_of_journaling_null_data(monkeypatch):
+    import pytest
+
+    art = {"article_id": NEW2, "title": "[標的] 2316 楠梓電 多", "posted": tp.post_time(NEW2),
+           "cutoff": date(2026, 10, 20), "url": "u"}
+    html_ = page("標的：2316 楠梓電\n分類：多\n")
+
+    def boom(code, as_of, engine):
+        raise ConnectionError("db down")
+
+    monkeypatch.setattr(tp.mp, "snapshot", boom)
+    with pytest.raises(ConnectionError):
+        tp.build_row(art, html_, INDEX, engine=object(), now="t")
+    monkeypatch.setattr(tp.mp, "snapshot", lambda code, as_of, engine: None)  # no history is not a failure
+    row = tp.build_row(art, html_, INDEX, engine=object(), now="t")
+    assert row["stock_code"] == "2316.TW" and row["data"] is None and row["author"] == "someone"
+
+
+def test_a_404_on_the_first_search_page_is_an_error_not_an_empty_run(monkeypatch):
+    import pytest
+    import requests
+
+    def get404(url):
+        raise requests.HTTPError(response=type("R", (), {"status_code": 404})())
+
+    monkeypatch.setattr(tp, "_get", get404)
+    with pytest.raises(requests.HTTPError):
+        tp.new_articles(date(2026, 10, 20), set())
