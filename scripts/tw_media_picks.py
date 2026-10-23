@@ -173,6 +173,14 @@ def _by_name(parts, index) -> tuple[str, str] | None:
     return None
 
 
+_COMPANY_SUFFIXES = ("電子", "科技", "工業")
+
+
+def _is_full_name(full: str, short: str) -> bool:
+    """True for 台達電子 / 聯發科技 vs 台達電 / 聯發科: the short name already uses the suffix's first char."""
+    return any(full.endswith(s) and full[:-len(s)] + s[0] == short for s in _COMPANY_SUFFIXES)
+
+
 def resolve(name: str, code: str | None, index, said: str | None = None) -> tuple[str | None, str]:
     """-> (canonical code like 3044.TW, how).
 
@@ -213,6 +221,9 @@ def resolve(name: str, code: str | None, index, said: str | None = None) -> tupl
         c, n = hit
         agree = not parts or any(p in (str(code).upper(), c.split(".")[0]) or p in _norm(n) or _norm(n) in p
                                   for p in parts)
+        if not agree and not any(set(p) & set(_norm(n)) for p in parts):
+            # No shared character at all: the LLM's code belongs to another company (光紘 -> 3669 圓展).
+            return None, "unresolved"
         return c, "code" if agree else "code_mismatch"
     names = {_norm(n): c for c, n, _ in index}
     for p in parts:
@@ -220,7 +231,7 @@ def resolve(name: str, code: str | None, index, said: str | None = None) -> tupl
         # A name that is a strict substring of the input is a different, shorter company
         # ("三商銀" -> 三商, a bank group is not the retailer); two equally close names are a coin flip
         # ("冠電" -> 虹冠電 or 冠西電). Both stay unresolved instead of attaching the wrong quote.
-        if close and close[0] != p and close[0] in p:
+        if close and close[0] != p and close[0] in p and not _is_full_name(p, close[0]):
             continue
         if len(close) > 1 and difflib.SequenceMatcher(None, p, close[0]).ratio() == \
                 difflib.SequenceMatcher(None, p, close[1]).ratio():

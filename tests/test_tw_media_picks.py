@@ -38,7 +38,8 @@ def test_resolve_order():
     assert mp.resolve("台積電公司", "2330", INDEX) == ("2330.TW", "code")
     # the name wins over a wrong code the LLM guessed
     assert mp.resolve("健鼎", "2330", INDEX) == ("3044.TW", "exact")
-    assert mp.resolve("隨便", "2330", INDEX) == ("2330.TW", "code_mismatch")
+    assert mp.resolve("隨便", "2330", INDEX) == (None, "unresolved")  # shares no character with 台積電
+    assert mp.resolve("台積隨便", "2330", INDEX) == ("2330.TW", "code_mismatch")
     assert mp.resolve("臻鼎", None, [("4958.TW", "臻鼎-KY", [])]) == ("4958.TW", "exact")
     assert mp.resolve("健鼎", None, INDEX) == ("3044.TW", "exact")
     assert mp.resolve("台50", None, INDEX) == ("0050.TW", "alias")
@@ -389,7 +390,11 @@ def test_fuzzy_is_vetoed_by_a_conflicting_llm_code():
 def test_fuzzy_rejects_substring_and_tied_candidates():
     idx = [("2905.TW", "三商", []), ("3257.TW", "虹冠電", []), ("4999.TW", "冠西電", []), ("2330.TW", "台積電", [])]
     assert mp.resolve("三商銀", None, idx) == (None, "unresolved")  # candidate is a shorter name inside the input
-    assert mp.resolve("三商銀", "2905", idx)[1] != "fuzzy"
+    # full company names with a suffix are not "a different, shorter company"
+    idx2 = [("2308.TW", "台達電", []), ("2454.TW", "聯發科", []), ("2383.TW", "台光電", [])] + idx
+    assert mp.resolve("台達電子", None, idx2) == ("2308.TW", "fuzzy")
+    assert mp.resolve("聯發科技", None, idx2) == ("2454.TW", "fuzzy")
+    assert mp.resolve("三商銀", None, idx2) == (None, "unresolved")
     assert mp.resolve("冠電", None, idx) == (None, "unresolved")  # two equally close names
     assert mp.resolve("台積", None, idx) == ("2330.TW", "fuzzy")  # genuine abbreviation still resolves
 
