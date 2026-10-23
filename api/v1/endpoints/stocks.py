@@ -638,6 +638,24 @@ def get_stock_profile(
 
 
 @router.get(
+    "/market-status",
+    responses={200: {"description": "各市場是否在輪詢時段"}},
+    summary="看板輪詢用：市場是否開盤中",
+    description="依交易所日曆（含假日、颱風假）回傳各市場是否在盤中（前後留緩衝）；未知市場或日曆異常一律回 open=true，不凍結看板。",
+)
+def get_market_status(
+    markets: str = Query("tw", description="逗號分隔市場，如 tw,us"),
+) -> dict:
+    from src.core.trading_calendar import is_market_polling_window
+
+    result = {
+        m: is_market_polling_window(m)
+        for m in dict.fromkeys(x.strip().lower() for x in markets.split(",") if x.strip())
+    }
+    return {"markets": result, "open": any(result.values()) if result else True}
+
+
+@router.get(
     "/indices",
     responses={200: {"description": "大盘指数列表"}},
     summary="获取大盘指数实时行情",
