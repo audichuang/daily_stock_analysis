@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 
 from market_data.adjust import ADJUSTMENT_WINDOW_DAYS
-from market_data.closures import adhoc_closed_dates
+from market_data.closures import adhoc_closed_dates, autodetect_today
 from market_data.crawl import RECENT_SESSIONS, market_filter
 from market_data.db import get_engine
 from market_data.financial_statement import afterIFRS
@@ -47,6 +47,7 @@ def _xtai_session_checker():
     except Exception:
         return None
     # 颱風假等臨時休市日曆不知道，由 `market_data.closures` 的清單補上。
+    autodetect_today()
     closed = adhoc_closed_dates()
     return lambda day: bool(calendar.is_session(day)) and _as_date(day) not in closed
 

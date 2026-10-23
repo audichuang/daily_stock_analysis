@@ -55,8 +55,9 @@ def _get_calendar(ex: str):
     listed by ``market_data.closures``, which the bundled calendar does not know."""
     if ex == "XTAI":
         try:
-            from market_data.closures import adhoc_closed_dates
+            from market_data.closures import adhoc_closed_dates, autodetect_today
 
+            autodetect_today()
             closed = frozenset(adhoc_closed_dates())
         except Exception as e:
             logger.warning("trading_calendar ad-hoc closure list unavailable: %s", e)
