@@ -262,7 +262,7 @@ def test_snap_rejects_etf_crash_ratios():
             assert got == pytest.approx(0.5)
 
 
-def _window_boundary_run(monkeypatch, start):
+def _window_boundary_run(monkeypatch, start, lookback_event=False, extra_gap=False):
     import contextlib
     from market_data import adjust
 
@@ -274,6 +274,21 @@ def _window_boundary_run(monkeypatch, start):
         "close": 100.0 if d < dk else 50.0, "change": 0.0} for d in days])
     off = pd.DataFrame([{"stock_id": "2330", "date": dk,
                          "close_before": 100.0, "reference_price": 50.0}])
+    if lookback_event:
+        # Event lives only in price_adjustment (before the window), not in ex_dividend.
+        off = off.iloc[0:0]
+        px["stock_id"] = "5555"
+        known_row = pd.DataFrame([{
+            "stock_id": "5555", "date": dk, "factor": 0.5, "kind": "split",
+            "source": "tpex_revivt", "close_before": 100.0, "reference_price": 50.0}])
+    if extra_gap:
+        # Unrelated stock with an unexplained halving on 07-20.
+        gd = pd.Timestamp("2026-07-20")
+        other = pd.DataFrame([{
+            "stock_id": "2330", "date": d, "open": 100.0 if d < gd else 50.0,
+            "close": 100.0 if d < gd else 50.0, "change": 0.0}
+            for d in pd.bdate_range("2026-05-01", "2026-08-10")])
+        px = pd.concat([px, other], ignore_index=True)
 
     def fake_read_sql(sql, conn, params=None, parse_dates=None):
         s = str(sql)
@@ -281,6 +296,8 @@ def _window_boundary_run(monkeypatch, start):
             return px[px.date >= pd.Timestamp(params["s"])].copy()
         if "ex_dividend" in s:
             return off.copy()
+        if lookback_event and "from market.price_adjustment" in s:
+            return known_row[known_row.date >= pd.Timestamp(params["s"])].copy()
         return pd.DataFrame(columns=cols)
 
     rows = []
@@ -321,4 +338,17 @@ def test_refresh_recent_window_still_infers_unexplained_gap(monkeypatch):
     real = adjust.official_rows
     monkeypatch.setattr(adjust, "official_rows", lambda conn: real(conn).iloc[0:0])
     rows = _window_boundary_run(monkeypatch, date(2026, 7, 10))
+    assert [r["stock_id"] for r in rows if r["source"] == "inferred_price"] == ["2330"]
+
+
+def test_refresh_recent_lookback_known_event_not_reinferred(monkeypatch):
+    # Event 07-15 sits before the window in price_adjustment; first bar 07-16 shows its gap.
+    rows = _window_boundary_run(monkeypatch, date(2026, 7, 16), lookback_event=True)
+    assert [r for r in rows if r["source"] == "inferred_price"] == []
+
+
+def test_refresh_recent_nonempty_known_still_infers_unrelated_gap(monkeypatch):
+    # Reverse guard: a non-empty known set must not suppress inference for other stocks.
+    rows = _window_boundary_run(
+        monkeypatch, date(2026, 7, 16), lookback_event=True, extra_gap=True)
     assert [r["stock_id"] for r in rows if r["source"] == "inferred_price"] == ["2330"]
