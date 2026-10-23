@@ -148,10 +148,19 @@ class YfinanceFetcher(BaseFetcher):
         另一個坑：`fast_info` 是 **dict-like**，camelCase 只能用 `[]` 取、屬性存取要 snake_case，
         所以 `getattr(info, 'previousClose')` 一直回 None，真正生效的是 snake_case 那個候選。
         """
-        return (getattr(info, 'regular_market_previous_close', None)
-                or getattr(info, 'regularMarketPreviousClose', None)
-                or getattr(info, 'previousClose', None)
-                or getattr(info, 'previous_close', None))
+
+        # 不能用 `or` 串：NaN 是 truthy，會讓 regular_market_previous_close=nan 蓋掉
+        # 有效的 previous_close（踩過：2026-10-23 ^GSPC/^IXIC/^DJI/^VIX 漲跌幅全空）。
+        # 取第一個「有限且 > 0」的值；沒有就回 None 讓上層走 history 兜底。
+        for name in ('regular_market_previous_close', 'regularMarketPreviousClose',
+                     'previousClose', 'previous_close'):
+            try:
+                value = float(getattr(info, name, None))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > 0:
+                return value
+        return None
 
     @staticmethod
     def _is_tw_suffix_stock(stock_code: str) -> bool:
@@ -301,6 +310,9 @@ class YfinanceFetcher(BaseFetcher):
                 end=end_date,
                 progress=False,  # 禁止进度条
                 auto_adjust=auto_adjust,
+                # 保留 Yahoo 回成空值的整場列，_normalize_data 才看得出缺了一場
+                # （否則空列被丟、空列後一場的 pct_chg 會拿前兩場當基準）
+                keepna=True,
                 multi_level_index=True
             )
 
@@ -343,6 +355,13 @@ class YfinanceFetcher(BaseFetcher):
             # 取第一级列名（Price level: Close, High, Low, etc.）
             df.columns = df.columns.get_level_values(0)
 
+        # keepna=True 才會有的整列空值（OHLC 全空、成交量 0）：先標記，算完 pct_chg 再丟。
+        blank_mask = (
+            df.apply(self._is_blank_daily_row, axis=1)
+            if 'Close' in df.columns and len(df)
+            else pd.Series(False, index=df.index)
+        ).astype(bool)
+
         # 重置索引，将日期从索引变为列
         df = df.reset_index()
 
@@ -373,8 +392,15 @@ class YfinanceFetcher(BaseFetcher):
 
         # 计算涨跌幅（因为 yfinance 不直接提供）
         if 'close' in df.columns:
-            df['pct_chg'] = df['close'].pct_change() * 100
-            df['pct_chg'] = df['pct_chg'].fillna(0).round(2)
+            # fill_method=None：空列不得被前值填補，空列後一場的基準未知 → pct_chg 留 NaN（不是 0）。
+            df['pct_chg'] = df['close'].pct_change(fill_method=None) * 100
+            if len(df) and pd.isna(df['pct_chg'].iloc[0]):
+                df.loc[df.index[0], 'pct_chg'] = 0  # 視窗第一列沒有前一場，維持既有的 0
+            df['pct_chg'] = df['pct_chg'].round(2)
+
+        # 空列本身不回傳（不捏造價格、不寫入空 K）
+        if blank_mask.any():
+            df = df.loc[~blank_mask.to_numpy()].reset_index(drop=True)
 
         # 计算成交额（yfinance 不提供，使用估算值）
         # 成交额 ≈ 成交量 * 平均价格
@@ -448,6 +474,12 @@ class YfinanceFetcher(BaseFetcher):
                 f"[Yfinance] {yf_code} 最新一列 ({hist.index[-1]}) 收盤價為空，"
                 f"改用 fast_info 最新價: {price}"
             )
+        if len(hist) > 1 and not math.isfinite(prev_close) and not trailing_blank:
+            # 前一列日線為空：fast_info 的正規前收是 Yahoo 自己報的上一場收盤，可用（不是前兩場）。
+            # 結尾有被丟的空列時 fast_info 的前收對應的是更新的一場，不能套在這一列上。
+            fast_prev = self._prev_close_from_fast_info(self._safe_fast_info(ticker))
+            if fast_prev is not None:
+                prev_close = fast_prev
         has_prev = math.isfinite(prev_close) and prev_close != 0
         change = price - prev_close if has_prev else nan
         change_pct = (change / prev_close) * 100 if has_prev else nan
@@ -476,6 +508,15 @@ class YfinanceFetcher(BaseFetcher):
         prices_blank = all(pd.isna(row.get(col)) for col in ('Open', 'High', 'Low', 'Close'))
         volume = row.get('Volume')
         return bool(prices_blank and (pd.isna(volume) or float(volume) == 0))
+
+    @staticmethod
+    def _safe_fast_info(ticker: Any) -> Any:
+        """取 fast_info；失敗回 None（_prev_close_from_fast_info 對 None 回 None）。"""
+        try:
+            return ticker.fast_info
+        except Exception as exc:  # noqa: BLE001 - 補救路徑失敗就當沒有讀數
+            logger.debug(f"[Yfinance] fast_info 讀取失敗: {exc}")
+            return None
 
     @staticmethod
     def _fast_info_last_price(ticker: Any) -> float:

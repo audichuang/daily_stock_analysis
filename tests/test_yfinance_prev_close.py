@@ -49,3 +49,14 @@ def test_zero_is_not_treated_as_a_valid_close():
     """0 會讓下游的 `prev_close > 0` 守門擋掉；這裡確認它不會蓋掉真正的候選。"""
     info = SimpleNamespace(regular_market_previous_close=0, previous_close=812.48)
     assert prev_close(info) == 812.48
+
+
+def test_nan_regular_close_does_not_shadow_valid_previous_close():
+    """^GSPC 實測形狀：regular_market_previous_close=nan、previous_close=7757.22。"""
+    nan = float("nan")
+    info = SimpleNamespace(regular_market_previous_close=nan, previous_close=7757.22)
+    assert prev_close(info) == 7757.22
+    assert prev_close(SimpleNamespace(regular_market_previous_close=nan)) is None
+    # 過頭檢查：非有限值（inf）與負值同樣不採用
+    assert prev_close(SimpleNamespace(regular_market_previous_close=float("inf"), previous_close=5.0)) == 5.0
+    assert prev_close(SimpleNamespace(regular_market_previous_close=-1.0, previous_close=5.0)) == 5.0
