@@ -28,6 +28,8 @@
 
 ## 踩雷
 
+- **點名類 journal 附的 `data` 只能用當時已公開的資料。**當天 17:00(`tw_media_picks.DATA_KNOWN`)前上傳或發文的只用前一天:收盤 13:30 就有,個股法人下午才公布。上傳時刻要用 yt-dlp 的 `timestamp` 換台北時間——`upload_date` 是 UTC 日期,而且不是每支影片都有時間戳。新增來源一律走 `data_cutoff` 這條規則,別自己判斷「盤前」。
+
 - **`migrate_sqlite_to_pg.py` 是已完成的一次性遷移,不要再執行。**它沒有 argparse(任何參數都被當成 sqlite 路徑),對 `market` schema 七張表逐一 `TRUNCATE` 後重灌,而且**每張表各自 commit**——中途失敗時前面的表已經被舊資料換掉。該 schema 是台股歷史的唯一資料源、沒有備份。
 - **`--help` 不是安全探針**:沒有 argparse 的腳本 `main()` 直接做事、把參數忽略或當成路徑。拿 `--help` 掃一遍會真的執行它們(踩過:一次掃描重寫了進版控的 `stocks.index.json`);要探能不能跑,先 `grep -c argparse`。
 - **`daily_report.sh` 被 `source` 時只載入函式、不跑 main**,`tests/test_daily_report_sh.py` 靠這點測試;不要直接執行腳本去測。逾時、鎖與完成標記的語意見 `docs/daily-report-ops.md`。
