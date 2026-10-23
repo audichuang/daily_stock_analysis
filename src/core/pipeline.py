@@ -1179,18 +1179,19 @@ class StockAnalysisPipeline:
                 # During the session the quote volume is a partial-day cumulative figure divided by
                 # full-day averages, so it reads "shrinking" by construction; label it instead of judging it.
                 _tw_market = get_market_for_stock(normalize_stock_code(context.get('code') or ''))
-                # Prefer the caller-supplied phase (same source as is_partial_bar below); wall clock is the fallback.
-                _phase = None
+                # Intraday if EITHER the caller-supplied phase or the wall clock says so: a mislabelled
+                # partial-day cumulative volume reads as "shrinking", so err towards the intraday label.
+                _phases = set()
                 if isinstance(market_phase_context, dict) and market_phase_context.get('phase'):
                     try:
-                        _phase = MarketPhase(market_phase_context['phase'])
+                        _phases.add(MarketPhase(market_phase_context['phase']))
                     except ValueError:
-                        _phase = None
-                if _phase is None and _tw_market:
-                    _phase = infer_market_phase(_tw_market, get_market_now(_tw_market))
-                if _tw_market and _phase in (
+                        pass
+                if _tw_market:
+                    _phases.add(infer_market_phase(_tw_market, get_market_now(_tw_market)))
+                if _tw_market and _phases & {
                     MarketPhase.INTRADAY, MarketPhase.LUNCH_BREAK, MarketPhase.CLOSING_AUCTION,
-                ):
+                }:
                     rt['volume_ratio_basis'] = 'avg5_intraday'
                     if rt.get('volume_ratio') is not None:
                         rt['volume_ratio_desc'] = '盘中累计量未按时间换算，不据此判断缩量'

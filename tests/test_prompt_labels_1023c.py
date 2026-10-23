@@ -75,15 +75,19 @@ def test_tw_intraday_volume_ratio_is_labelled_not_judged():
     assert post["volume_ratio_basis"] == "avg5" and post["volume_ratio_desc"] == "极度萎缩"
 
 
-def test_tw_volume_ratio_basis_follows_passed_phase_context_not_wall_clock():
-    from src.core.trading_calendar import MarketPhase
-    # context says intraday while the wall clock says postmarket: stay labelled intraday
-    rt = _enhance("2330.TW", 1.0, _quote(), trend_vr=0.4, phase=MarketPhase.POSTMARKET,
-                  ctx_phase={"phase": "intraday"})
+def test_tw_volume_ratio_basis_intraday_if_either_context_or_wall_clock_says_so():
+    from src.core.trading_calendar import MarketPhase as MP
+    # context intraday, clock postmarket -> intraday
+    rt = _enhance("2330.TW", 1.0, _quote(), trend_vr=0.4, phase=MP.POSTMARKET, ctx_phase={"phase": "intraday"})
     assert rt["volume_ratio_basis"] == "avg5_intraday"
-    # reverse: context says postmarket while the wall clock says intraday
-    rt = _enhance("2330.TW", 1.0, _quote(), trend_vr=0.4, phase=MarketPhase.INTRADAY,
-                  ctx_phase={"phase": MarketPhase.POSTMARKET})
+    # context postmarket, clock intraday -> intraday (clock still wins when it says intraday)
+    rt = _enhance("2330.TW", 1.0, _quote(), trend_vr=0.4, phase=MP.INTRADAY, ctx_phase={"phase": MP.POSTMARKET})
+    assert rt["volume_ratio_basis"] == "avg5_intraday"
+    # context premarket, clock 09:01 intraday -> intraday
+    rt = _enhance("2330.TW", 1.0, _quote(), trend_vr=0.4, phase=MP.INTRADAY, ctx_phase={"phase": "premarket"})
+    assert rt["volume_ratio_basis"] == "avg5_intraday"
+    # reverse: both postmarket -> plain 5-day basis
+    rt = _enhance("2330.TW", 1.0, _quote(), trend_vr=0.4, phase=MP.POSTMARKET, ctx_phase={"phase": "postmarket"})
     assert rt["volume_ratio_basis"] == "avg5" and rt["volume_ratio_desc"] == "极度萎缩"
 
 
