@@ -546,3 +546,115 @@ def test_explicit_refusal_ending_in_he_is_not_rhetorical(advice) -> None:
 
     assert adjustments == []
     assert result.operation_advice == advice
+
+
+@pytest.mark.parametrize("decision_type", ["buy", "hold"])
+@pytest.mark.parametrize("advice", [
+    # 提示型否定管的是別的動詞或被轉折／頓號切開，後面的買進仍要降級
+    "不宜追高但可分批買入", "避免追高、分批買入", "為避免踏空建議加倉", "別猶豫加倉", "千萬別錯過加倉機會",
+    "告別盤整建議加倉", "量縮不要緊加倉", "避免追高，分批买入", "不宜追高 分批買入", "不建議追高惟可加倉",
+    # 雙重否定（枚舉以外）與反問仍是要買
+    "沒理由不加倉", "不能不加倉", "不可不加倉", "不是不需要加倉", "無法不加倉",
+    # 台灣慣用買進詞
+    "建議買進", "逢低加碼", "積極佈局", "逢低布局", "分批進場", "建议买进", "逢低加码",
+])
+def test_hint_negation_gaps_and_taiwan_buy_terms_are_softened(decision_type, advice) -> None:
+    result = _result()
+    result.decision_type = decision_type
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = decision_type
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert result.operation_advice == "观望"
+    assert result.dashboard["decision_type"] == "hold"
+    assert adjustments
+
+
+@pytest.mark.parametrize("decision_type", ["buy", "hold"])
+@pytest.mark.parametrize("advice", [
+    "不建議買入", "不加倉", "暫不買進", "暫不加碼", "不建議買進", "避免加倉", "避免積極佈局", "不宜加碼", "別加倉",
+    "別急著買進", "不宜貿然加倉", "不要加倉", "不應逢低加碼", "暂不建议买进", "不建議分批進場",
+])
+def test_true_negation_of_buy_is_not_softened(decision_type, advice) -> None:
+    result = _result()
+    result.decision_type = decision_type
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = decision_type
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert adjustments == []
+    assert result.operation_advice == advice
+
+
+@pytest.mark.parametrize("decision_type", ["buy", "hold"])
+@pytest.mark.parametrize("advice", [
+    # 否定詞與買進詞之間隔著一般詞語（價位、時機、幅度）仍是否定：只認固定虛詞會把這些真否定降級
+    "不建議在此價位買進", "不建議此時進場", "不建議大舉加碼", "不宜過早佈局", "暫時不要追價買進",
+    "不要在高檔加倉", "不建議於現價買入", "不建議大幅加倉",
+])
+def test_negation_separated_by_ordinary_words_is_not_softened(decision_type, advice) -> None:
+    result = _result()
+    result.decision_type = decision_type
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = decision_type
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert adjustments == []
+    assert result.operation_advice == advice
+
+
+@pytest.mark.parametrize("advice", ["買進訊號未出現，觀望", "尚未出現買進訊號", "等待买进讯号"])
+def test_bare_buy_noun_in_hold_is_not_buy_signal(advice) -> None:
+    # 裸「買進」當名詞（買進訊號）不是建議：hold 不能被改寫成觀望
+    result = _result()
+    result.decision_type = "hold"
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = "hold"
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert adjustments == []
+    assert result.operation_advice == advice
+
+
+@pytest.mark.parametrize("decision_type", ["buy", "hold"])
+@pytest.mark.parametrize("advice", [
+    "建議進場", "建議布局", "可以佈局", "可進場", "建議買進",
+    # 雙重否定套在提示型否定上（「並非不建議」）也是要買
+    "並非不建議加倉", "為避免踏空，建議進場",
+])
+def test_advice_context_buy_verbs_are_softened(decision_type, advice) -> None:
+    result = _result()
+    result.decision_type = decision_type
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = decision_type
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert result.operation_advice == "观望"
+    assert adjustments
+
+
+@pytest.mark.parametrize("decision_type", ["buy", "hold"])
+@pytest.mark.parametrize("advice", [
+    # 否定詞與買進詞之間夾著別的動詞或連接詞：否定綁在那個動詞上，買進本身是肯定
+    "不要猶豫加碼", "不要犹豫加仓", "不要遲疑加碼", "不要錯過加碼", "千萬不要錯過加碼", "不要錯過機會加碼",
+    "別擔心加碼", "不要害怕直接加碼", "不建議賣出反而加碼", "不建議減碼並加碼", "不建議減碼並逢低加碼",
+    "不要只是持有而要加碼", "不建議賣出而應買進", "不可錯失良機加碼", "避免踏空積極佈局",
+    # 裸「買進」前面不必是固定建議詞
+    "擇機買進", "現價買進", "低接買進", "可考慮買進",
+])
+def test_negation_of_intervening_verb_does_not_shield_buy(decision_type, advice) -> None:
+    result = _result()
+    result.decision_type = decision_type
+    result.operation_advice = advice
+    result.dashboard["decision_type"] = decision_type
+
+    adjustments = apply_daily_market_context_guardrail(result, daily_market_context=_HIGH_RISK_TW, report_language="zh")
+
+    assert result.operation_advice == "观望"
+    assert result.dashboard["decision_type"] == "hold"
+    assert adjustments

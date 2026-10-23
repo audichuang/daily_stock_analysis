@@ -138,3 +138,94 @@ def test_ttm_revenue_yoy_needs_24_consecutive_months(monkeypatch, gap, expected)
 
     monkeypatch.setattr(dossier, "_sql", fake_sql)
     assert dossier.fundamentals(None, "9999", "2026-10-22")["ttm_revenue_yoy_pct"] == expected
+
+
+def _yoy_fixture(monkeypatch, cur, prev, stored):
+    import pandas as pd
+
+    # 25 個連續月份（含去年同月）：最新月營收 cur，去年同月 prev，其餘 100
+    months = pd.period_range("2024-09", "2026-09", freq="M").to_timestamp()[::-1]
+    revs = [cur if i == 0 else prev if i == 12 else 100 for i in range(len(months))]
+    rev = pd.DataFrame({"revenue_month": months, "revenue": revs,
+                        "yoy": [stored] + [None] * (len(months) - 1), "announce_date": None})
+    monkeypatch.setattr(dossier, "_sql", lambda e, sql, **kw: rev if "monthly_revenue" in sql
+                        else pd.DataFrame(columns=["date", "account", "value"]))
+    return dossier.fundamentals(None, "9999", "2026-10-22")["monthly_revenue"][-1]["yoy_pct"]
+
+
+@pytest.mark.parametrize("cur,prev,stored,expected", [
+    (164351, 100000, 64.35, 64.4),   # 庫裡 64.35 是 64.351 的二次四捨五入，f"{64.35:+.1f}" 會印 64.3
+    (166950, 100000, 66.95, 67.0),   # 恰為 .x5：half-up 進位
+    (164349, 100000, 64.35, 64.3),   # 真值 64.349：要由營收自算，拿庫裡的 64.35 再 half-up 會變 64.4
+    (166850, 100000, 66.85, 66.9),   # half-up 而非 half-even（後者得 66.8）
+    (160000, 0, 61.26, 61.3),        # 沒有去年同月：退回庫裡的值並同樣 half-up
+])
+def test_monthly_yoy_is_rounded_once_half_up(monkeypatch, cur, prev, stored, expected):
+    v = _yoy_fixture(monkeypatch, cur, prev, stored)
+    assert v == expected and f"{v:+.1f}" == f"{expected:+.1f}"
+
+
+def test_render_labels_structure_direction():
+    smc = {"price": 100.0, "events": [{"date": "2026-07-08", "kind": "BOS", "direction": "bearish", "level": 968.0},
+                                      {"date": "2026-07-09", "kind": "BOS", "direction": "bullish", "level": 970.0}],
+           "last_event": {"direction": "bearish"},
+           "fib": {"position": 0.5, "zone": "premium", "range_low": 1, "range_high": 2, "ote_low": 1.5,
+                   "ote_high": 1.8, "in_ote": False},
+           "order_blocks": [], "fvgs": [], "bsl": [], "ssl": []}
+    payload = {"stock_id": "9999", "name": None, "as_of": "2026-08-28",
+               "fundamentals": {"monthly_revenue": [], "ttm_revenue_yoy_pct": None, "quarters": []},
+               "contract_liabilities": [],
+               "chips": {"institutional": None, "margin": None, "holding": None, "branch": None},
+               "valuation": None, "smc": smc}
+    md = dossier.render(payload)
+    assert "bearish（跌破 968.00）" in md and "bullish（突破 970.00）" in md
+    assert "OTE 空方 1.50~1.80" in md
+    smc["last_event"] = {"direction": "bullish"}
+    assert "OTE 多方 1.50~1.80" in dossier.render(payload)
+
+
+def _nan_rev_fixture(monkeypatch, cur, prev, stored):
+    import pandas as pd
+
+    # revenue 欄可為 NULL（讀成 NaN）：25 個連續月份，最新月 cur、去年同月 prev
+    months = pd.period_range("2024-09", "2026-09", freq="M").to_timestamp()[::-1]
+    revs = [cur if i == 0 else prev if i == 12 else 100 for i in range(len(months))]
+    rev = pd.DataFrame({"revenue_month": months, "revenue": revs,
+                        "yoy": [stored] + [None] * (len(months) - 1), "announce_date": None})
+    monkeypatch.setattr(dossier, "_sql", lambda e, sql, **kw: rev if "monthly_revenue" in sql
+                        else pd.DataFrame(columns=["date", "account", "value"]))
+    return dossier.fundamentals(None, "9999", "2026-10-22")
+
+
+@pytest.mark.parametrize("cur,prev,stored,expected", [
+    (160000, float("nan"), 61.26, 61.3),            # 去年同月 NULL：退回庫裡 yoy
+    (160000, float("nan"), float("nan"), None),     # 兩者皆無：None
+    (float("nan"), 100000, 61.26, 61.3),            # 當月 NULL：退回庫裡 yoy
+])
+def test_monthly_yoy_nan_revenue_does_not_crash(monkeypatch, cur, prev, stored, expected):
+    f = _nan_rev_fixture(monkeypatch, cur, prev, stored)
+    assert f["monthly_revenue"][-1]["yoy_pct"] == expected
+    # 當月營收 NaN 也不能炸 int()，且 render 要印「無資料」而非 None／nan
+    payload = {"stock_id": "9999", "name": None, "as_of": "2026-10-22", "fundamentals": f,
+               "contract_liabilities": [],
+               "chips": {"institutional": None, "margin": None, "holding": None, "branch": None},
+               "valuation": None, "smc": None}
+    dossier.render(payload)
+
+
+def test_monthly_yoy_computed_from_revenue_over_stored(monkeypatch):
+    # 兩者皆有限時必須用營收自算（stored 故意給錯值）
+    f = _nan_rev_fixture(monkeypatch, 150000, 100000, 99.0)
+    assert f["monthly_revenue"][-1]["yoy_pct"] == 50.0
+
+
+def test_ttm_yoy_none_when_window_has_null_revenue(monkeypatch):
+    import pandas as pd
+
+    months = pd.period_range("2024-10", "2026-09", freq="M").to_timestamp()[::-1]
+    revs = [100.0] * 24
+    revs[5] = float("nan")
+    rev = pd.DataFrame({"revenue_month": months, "revenue": revs, "yoy": None, "announce_date": None})
+    monkeypatch.setattr(dossier, "_sql", lambda e, sql, **kw: rev if "monthly_revenue" in sql
+                        else pd.DataFrame(columns=["date", "account", "value"]))
+    assert dossier.fundamentals(None, "9999", "2026-10-22")["ttm_revenue_yoy_pct"] is None

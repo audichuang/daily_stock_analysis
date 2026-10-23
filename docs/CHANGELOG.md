@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 風險頁回撤與集中度不再把缺匯率的帳戶 1:1 加總：某天任一帳戶缺匯率就整天不進回撤序列，集中度不給權重；回應追加 `fx_missing`、`fx_missing_pairs`、`fx_excluded_dates`，舊欄位保留
+- [修復] 狙擊點解析：「停損位：如果在 1,909 元進場…停損於 1,778 元」改取停損錨點後的價位（原本存成進場價）；欄位寫「暫不設定／暫不買進」等改存空值，不再抓出條件句裡的數字
+- [修復] yfinance：`fast_info` 前收是 NaN 時改取下一個有效值，美股指數漲跌幅不再是空的；日線遇到 Yahoo 空白場次時，下一場的漲跌幅留空（未知），不再跨兩場計算
+- [修復] 盤勢護欄：否定詞要緊貼它否定的買進詞才算（「不宜追高但可分批買入」「告別盤整建議加倉」不再逃過軟化），補「不能不／沒理由不」等雙重否定與台灣用語「買進／加碼／佈局」
+- [修復] 個股資料包：月營收 YoY 由營收自算後只做一次 half-up 捨入（原本兩次捨入會差 0.1pp）；Markdown 版空方結構事件寫「跌破」、OTE 標多空方向
+- [文件] `docs/tw-stock-dossier.md` 和 botbook 對照段改為「對方以公告月標示，對齊後一致」，並補上自營商口徑、SMC 相等低點、前復權價、PE 百分位等差異
 - [新功能] 颱風假等臨時休市：`python -m market_data.closures` 讀人事行政總處停班停課頁，臺北市全日或上午停班就判台股休市（證交所休市原則）並記進 `data/tw_adhoc_closed_dates.txt`；`trading_calendar` 的 XTAI 日曆與 `health.expected_session` 都讀這份清單，Mac 排程的 precheck 與 `daily_report.sh` 改用它，休市日不再用前一日收盤價推盤中賣出提醒、18:00 報告也不會被 `health --strict` 擋下
 - [chore] `docker/Dockerfile` 建置期 smoke 也 import `market_data` 與台股服務模組：發版映像（`ghcr-main.yml`）沒有其他關卡，新 package 漏 `COPY` 時建置就失敗，不會到容器裡才靜默退回別的資料源
 - [修復] 基金補歷史改看「起點是否涵蓋近五年或成立日」，不再只看筆數：公會每日值累積滿 30 筆後，沒查過的基金第一次打開或建立持倉時仍會從鉅亨補全期，近 3 月以上報酬與近一年風險不再是 null 或只用一個多月資料算

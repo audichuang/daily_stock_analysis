@@ -11,7 +11,7 @@ from src.config import Config, get_config
 from src.repositories.portfolio_repo import PortfolioRepository
 from src.services.decision_signal_service import DecisionSignalService
 from src.services.decision_signal_summary import summarize_decision_signal
-from src.services.portfolio_service import PortfolioService
+from src.services.portfolio_service import FX_FALLBACK_SOURCE, PortfolioService, _format_fx_pair
 
 logger = logging.getLogger(__name__)
 
@@ -279,9 +279,38 @@ class PortfolioRiskService:
             return as_of_date
         return max(window_start, min(first_activity_candidates))
 
+    def _convert_to_cny(
+        self,
+        *,
+        amount: float,
+        from_currency: str,
+        as_of_date: date,
+        missing_pairs: set,
+    ) -> Tuple[float, bool]:
+        """換成 CNY；查無匯率（落到 1:1 回退）時把幣別對記進 missing_pairs，呼叫端決定怎麼處理假數字。"""
+        converted, stale, source = self.portfolio_service.convert_amount(
+            amount=amount,
+            from_currency=from_currency,
+            to_currency="CNY",
+            as_of_date=as_of_date,
+        )
+        if source == FX_FALLBACK_SOURCE:
+            missing_pairs.add((str(from_currency).strip().upper(), "CNY"))
+        return converted, stale
+
+    @staticmethod
+    def _fx_missing_fields(missing_pairs: set, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """旗標欄位；傳入 snapshot 時併入快照自己標的缺匯率（彙總分母也是假數字）。"""
+        pairs = {_format_fx_pair(pair) for pair in missing_pairs}
+        snapshot_missing = bool(snapshot and snapshot.get("fx_missing"))
+        if snapshot_missing:
+            pairs |= {str(p) for p in snapshot.get("fx_missing_pairs") or []}
+        return {"fx_missing": bool(pairs) or snapshot_missing, "fx_missing_pairs": sorted(pairs)}
+
     def _build_concentration(self, snapshot: Dict[str, Any], threshold_pct: float, *, as_of_date: date) -> Dict[str, Any]:
         total_mv = float(snapshot.get("total_market_value", 0.0) or 0.0)
         exposure_by_symbol: Dict[str, float] = {}
+        missing_pairs: set = set()
         for account in snapshot.get("accounts", []):
             for pos in account.get("positions", []):
                 symbol = str(pos.get("symbol") or "").strip().upper()
@@ -289,13 +318,17 @@ class PortfolioRiskService:
                     continue
                 market_value = float(pos.get("market_value_base") or 0.0)
                 valuation_currency = str(pos.get("valuation_currency") or account.get("base_currency") or "CNY")
-                converted, _, _ = self.portfolio_service.convert_amount(
+                converted, _ = self._convert_to_cny(
                     amount=market_value,
                     from_currency=valuation_currency,
-                    to_currency="CNY",
                     as_of_date=as_of_date,
+                    missing_pairs=missing_pairs,
                 )
                 exposure_by_symbol[symbol] = exposure_by_symbol.get(symbol, 0.0) + converted
+
+        # 缺匯率時外幣被 1:1 當 CNY 加總，權重是假的：不給數字、不觸發警報，交給旗標說明。
+        fx_fields = self._fx_missing_fields(missing_pairs, snapshot)
+        fx_missing = fx_fields["fx_missing"]
 
         rows = []
         for symbol, exposure in exposure_by_symbol.items():
@@ -304,8 +337,8 @@ class PortfolioRiskService:
                 {
                     "symbol": symbol,
                     "market_value_base": round(exposure, 6),
-                    "weight_pct": round(weight, 4),
-                    "is_alert": bool(weight >= threshold_pct),
+                    "weight_pct": None if fx_missing else round(weight, 4),
+                    "is_alert": False if fx_missing else bool(weight >= threshold_pct),
                 }
             )
         rows.sort(key=lambda item: item["market_value_base"], reverse=True)
@@ -313,9 +346,10 @@ class PortfolioRiskService:
         top_weight = rows[0]["weight_pct"] if rows else 0.0
         return {
             "total_market_value": round(total_mv, 6),
-            "top_weight_pct": round(float(top_weight), 4),
-            "alert": bool(top_weight >= threshold_pct),
+            "top_weight_pct": None if fx_missing else round(float(top_weight or 0.0), 4),
+            "alert": False if fx_missing else bool(top_weight >= threshold_pct),
             "top_positions": rows[:10],
+            **fx_fields,
         }
 
     def _build_sector_concentration(
@@ -335,6 +369,7 @@ class PortfolioRiskService:
         }
         errors: List[str] = []
         board_cache: Dict[Tuple[str, str], str] = {}
+        missing_pairs: set = set()
 
         for account in snapshot.get("accounts", []):
             for pos in account.get("positions", []):
@@ -345,11 +380,11 @@ class PortfolioRiskService:
 
                 market_value = float(pos.get("market_value_base") or 0.0)
                 valuation_currency = str(pos.get("valuation_currency") or account.get("base_currency") or "CNY")
-                converted, _, _ = self.portfolio_service.convert_amount(
+                converted, _ = self._convert_to_cny(
                     amount=market_value,
                     from_currency=valuation_currency,
-                    to_currency="CNY",
                     as_of_date=as_of_date,
+                    missing_pairs=missing_pairs,
                 )
 
                 sector = self._resolve_primary_sector(
@@ -362,6 +397,9 @@ class PortfolioRiskService:
                 sector_exposure[sector] = sector_exposure.get(sector, 0.0) + converted
                 sector_symbols.setdefault(sector, set()).add(symbol)
 
+        fx_fields = self._fx_missing_fields(missing_pairs, snapshot)
+        fx_missing = fx_fields["fx_missing"]
+
         rows = []
         for sector, exposure in sector_exposure.items():
             weight = (exposure / total_mv * 100.0) if total_mv > 0 else 0.0
@@ -369,9 +407,9 @@ class PortfolioRiskService:
                 {
                     "sector": sector,
                     "market_value_base": round(exposure, 6),
-                    "weight_pct": round(weight, 4),
+                    "weight_pct": None if fx_missing else round(weight, 4),
                     "symbol_count": len(sector_symbols.get(sector, set())),
-                    "is_alert": bool(weight >= threshold_pct),
+                    "is_alert": False if fx_missing else bool(weight >= threshold_pct),
                 }
             )
         rows.sort(key=lambda item: item["market_value_base"], reverse=True)
@@ -379,11 +417,12 @@ class PortfolioRiskService:
 
         return {
             "total_market_value": round(total_mv, 6),
-            "top_weight_pct": round(float(top_weight), 4),
-            "alert": bool(top_weight >= threshold_pct),
+            "top_weight_pct": None if fx_missing else round(float(top_weight or 0.0), 4),
+            "alert": False if fx_missing else bool(top_weight >= threshold_pct),
             "top_sectors": rows[:10],
             "coverage": coverage,
             "errors": errors[:20],
+            **fx_fields,
         }
 
     def _resolve_primary_sector(
@@ -485,21 +524,33 @@ class PortfolioRiskService:
                 "current_drawdown_pct": 0.0,
                 "alert": False,
                 "fx_stale": False,
+                **self._fx_missing_fields(set()),
+                "fx_excluded_dates": [],
             }
 
         grouped: Dict[str, float] = {}
         stale_flag = False
+        missing_pairs: set = set()
+        missing_dates: set = set()
         for row in rows:
             key = row.snapshot_date.isoformat()
-            converted, stale, _ = self.portfolio_service.convert_amount(
+            row_missing: set = set()
+            converted, stale = self._convert_to_cny(
                 amount=float(row.total_equity or 0.0),
                 from_currency=str(row.base_currency or "CNY"),
-                to_currency="CNY",
                 as_of_date=row.snapshot_date,
+                missing_pairs=row_missing,
             )
+            if row_missing:
+                # 該日有帳戶查無匯率：1:1 的假數字會讓合計 NAV 偏低，整天剔除而不是少加一個帳戶。
+                missing_pairs |= row_missing
+                missing_dates.add(key)
+                continue
             grouped[key] = grouped.get(key, 0.0) + converted
             stale_flag = stale_flag or stale or bool(row.fx_stale)
 
+        for key in missing_dates:
+            grouped.pop(key, None)
         series: List[Tuple[str, float]] = sorted(grouped.items(), key=lambda item: item[0])
         peak = 0.0
         max_drawdown = 0.0
@@ -519,6 +570,8 @@ class PortfolioRiskService:
             "current_drawdown_pct": round(current_drawdown, 4),
             "alert": bool(max_drawdown >= threshold_pct),
             "fx_stale": stale_flag,
+            **self._fx_missing_fields(missing_pairs),
+            "fx_excluded_dates": sorted(missing_dates),
         }
 
     @staticmethod

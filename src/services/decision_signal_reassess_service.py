@@ -421,16 +421,16 @@ def _confidence_from_level(value: Any) -> Optional[float]:
 def _extract_persisted_sniper_points(record: AnalysisHistory, raw_result: Mapping[str, Any]) -> dict[str, Optional[float]]:
     raw_points = find_sniper_points(raw_result) or {}
     return {
-        "ideal_buy": _first_price(getattr(record, "ideal_buy", None), raw_points.get("ideal_buy")),
-        "secondary_buy": _first_price(getattr(record, "secondary_buy", None), raw_points.get("secondary_buy")),
-        "stop_loss": _first_price(getattr(record, "stop_loss", None), raw_points.get("stop_loss")),
-        "take_profit": _first_price(getattr(record, "take_profit", None), raw_points.get("take_profit")),
+        "ideal_buy": _first_price("ideal_buy", getattr(record, "ideal_buy", None), raw_points.get("ideal_buy")),
+        "secondary_buy": _first_price("secondary_buy", getattr(record, "secondary_buy", None), raw_points.get("secondary_buy")),
+        "stop_loss": _first_price("stop_loss", getattr(record, "stop_loss", None), raw_points.get("stop_loss")),
+        "take_profit": _first_price("take_profit", getattr(record, "take_profit", None), raw_points.get("take_profit")),
     }
 
 
-def _first_price(*values: Any) -> Optional[float]:
+def _first_price(field: str, *values: Any) -> Optional[float]:
     for value in values:
-        parsed = parse_sniper_value(value)
+        parsed = parse_sniper_value(value, field)
         if parsed is not None:
             return parsed
     return None
