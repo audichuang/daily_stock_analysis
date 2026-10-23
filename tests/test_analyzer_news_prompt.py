@@ -169,9 +169,14 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
                         self.assertIn("keep that price", prompt)
                         self.assertIn("bearish alignment alone, without a high-volume break below the prior low", prompt)
                         self.assertNotIn("Only give Sell/Reduce after a break below key support", prompt)
+                        # reduce/sell definitions must match in every variant (legacy and skill-aware)
+                        self.assertIn("Close below MA20 plus at least one of", prompt)
+                        self.assertIn("High-volume break below the prior low/key support or stop-loss", prompt)
+                        self.assertIn("Bearish alignment alone, without a high-volume break", prompt)
+                        self.assertNotIn("The main conclusion is weakening", prompt)
+                        self.assertNotIn("Trend or risk has clearly deteriorated", prompt)
                         if legacy:
                             self.assertIn("N/A for Reduce/Sell", prompt)
-                            self.assertIn("Close below MA20 plus at least one of", prompt)
                             self.assertNotIn("Weakening trend or break below key moving averages", prompt)
                             self.assertNotIn("❌ Bearish alignment or clearly deteriorating trend", prompt)
                     else:
@@ -180,9 +185,12 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
                         self.assertIn("`take_profit` 只写一个价位", prompt)
                         self.assertIn("照常写该价位", prompt)
                         self.assertIn("只写“暂不设定”\",", prompt)  # JSON template line
+                        self.assertIn("收盘跌破 MA20，且至少符合以下一项：空头排列", prompt)
+                        self.assertIn("放量跌破前低/关键支撑或止损位", prompt)
+                        self.assertIn("仅有空头排列、未放量跌破前低/关键支撑时属于减仓，不是卖出", prompt)
+                        self.assertNotIn("主要结论转弱", prompt)
+                        self.assertNotIn("趋势或风险显著恶化", prompt)
                         if legacy:
-                            self.assertIn("收盘跌破 MA20，且至少符合以下一项：空头排列", prompt)
-                            self.assertIn("仅有空头排列、未放量跌破前低/关键支撑时属于减仓，不是卖出", prompt)
                             self.assertNotIn("趋势走弱或跌破关键均线", prompt)
                             self.assertNotIn("❌ 空头排列或趋势显著恶化", prompt)
                         else:

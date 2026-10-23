@@ -2565,14 +2565,14 @@ class GeminiAnalyzer(LLMClient):
 - ⚠️ 更适合等待触发条件或回避不确定性
 
 ### 减仓（20-39分）：
-- ⚠️ 主要结论转弱，风险明显高于收益
+- ⚠️ 收盘跌破 MA20，且至少符合以下一项：空头排列、法人/主力资金连续卖超、放量下跌、跌破前低支撑
 - ⚠️ 触发了部分失效条件，现有仓位需要降低暴露
 - ⚠️ 更适合保护收益而不是进攻
 
 ### 卖出（0-19分）：
-- ❌ 触发了止损/失效条件或重大利空
-- ❌ 趋势或风险显著恶化
-- ❌ 现有仓位应优先退出
+- ❌ 放量跌破前低/关键支撑或止损位
+- ❌ 重大利空或重大风险事件
+- ❌ 仅有空头排列、未放量跌破前低/关键支撑时属于减仓，不是卖出
 
 ## 决策仪表盘核心原则
 
@@ -2841,14 +2841,14 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 - ⚠️ Better to wait for trigger conditions or avoid uncertainty
 
 ### Reduce (20-39):
-- ⚠️ The main conclusion is weakening; risk clearly outweighs reward
+- ⚠️ Close below MA20 plus at least one of: bearish alignment, consecutive institutional/main-capital net selling, high-volume decline, break below the prior-low support
 - ⚠️ Some invalidation conditions are triggered; reduce exposure of existing positions
 - ⚠️ Protecting gains matters more than attacking
 
 ### Sell (0-19):
-- ❌ Stop-loss/invalidation conditions or major negative news triggered
-- ❌ Trend or risk has clearly deteriorated
-- ❌ Existing positions should be exited first
+- ❌ High-volume break below the prior low/key support or stop-loss
+- ❌ Major negative news or major risk event
+- ❌ Bearish alignment alone, without a high-volume break below the prior low/key support, is Reduce, not Sell
 
 """ + _DASHBOARD_PRINCIPLES_EN
 
@@ -3003,6 +3003,8 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         # Korean reuses the English scaffolding (same as market review / context pack);
         # the Korean output directive is appended below.
         use_english_template = lang in ("en", "ko")
+        # TW reports with empty AGENT_SKILLS use the legacy default prompt (src/agent/factory.py:199),
+        # so reduce/sell definitions must stay identical in the legacy and skill-aware templates.
         if use_legacy_default_prompt:
             legacy_template = (
                 self.LEGACY_DEFAULT_SYSTEM_PROMPT_EN if use_english_template else self.LEGACY_DEFAULT_SYSTEM_PROMPT
