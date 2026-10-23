@@ -80,6 +80,9 @@ _FIELD_ANCHOR_RE = {
 _PRICE_RE = re.compile(r"[^\d\-]{0,6}(\d+(?:\.\d+)?)\s*元")
 
 
+_RATIO_RE = re.compile(r"(?<![A-Za-z\d.])(\d+(?:\.\d+)?)\s*[:：]\s*(\d+(?:\.\d+)?)")
+
+
 def parse_sniper_value(value: Any, field: Optional[str] = None) -> Optional[float]:
     """Parse a sniper point value from report text into a positive price.
 
@@ -95,6 +98,9 @@ def parse_sniper_value(value: Any, field: Optional[str] = None) -> Optional[floa
     text = str(value).replace(",", "").replace("，", "").strip()
     if not text or text in {"-", "—", "N/A"}:
         return None
+    # Neutralise numeric ratios like "1:1" so they are not taken as a field-label colon;
+    # "MA5：118" style (letter before the number) keeps its colon.
+    text = _RATIO_RE.sub(r"\1比\2", text)
 
     try:
         parsed = float(text)
