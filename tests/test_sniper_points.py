@@ -237,3 +237,20 @@ def test_sell_not_set_prefix_returns_action_bound_price(text, field, expected):
 ])
 def test_sell_not_set_prefix_without_action_bound_price_is_none(text, field):
     assert parse_sniper_value(text, field) is None
+
+
+@pytest.mark.parametrize("text,field,expected", [
+    # 買點用語（尚無／暫無明確／從缺／不成立）不作用在停損／停利，維持正式版取得到的價位
+    ("尚無明確支撐，跌破前低118元", "stop_loss", 118.0),
+    ("未出現明確買點，若持有跌破前低118元", "stop_loss", 118.0),
+    ("暫無明確目標，反彈至前高150元", "take_profit", 150.0),
+    ("暫時無明確目標價，上看前高150元", "take_profit", 150.0),
+    ("暫無明確目標，先看前高150元", "take_profit", 150.0),
+    ("從缺（建議以118元為停損）", "stop_loss", 118.0),
+    ("暫不設定，持有者以118元作為停損", "stop_loss", 118.0),
+    # 買點欄位仍用較寬的清單
+    ("尚無理想買點，站回120元再評估", "ideal_buy", None),
+    ("暫無明確買點", "ideal_buy", None),
+])
+def test_buy_only_not_set_words_do_not_touch_sell_fields(text, field, expected):
+    assert parse_sniper_value(text, field=field) == expected

@@ -29,6 +29,19 @@ _NOT_SET_RE = re.compile(
     r"|N/A)",
     re.IGNORECASE,
 )
+# 停損／停利欄位沿用正式版（ead2e474）的較窄清單：「尚無／暫無明確／從缺／不成立」是描述買點的用語，
+# 套到賣出欄位會把「暫無明確目標，反彈至前高150元」這類原本取得到的價位清掉。
+_SELL_NOT_SET_RE = re.compile(
+    r"^\s*(?:[^：:\d]{0,10}[：:])?\s*(?:目前|現在|现在|現階段|现阶段)?\s*"
+    r"(?:[觀观]望[，,、]?\s*)?(?:"
+    r"[暫暂]?不(?:設定|设定|設置|设置|設|设|給|给|提供|[買买]|進場|进场|入場|入场)"
+    r"|[暫暂]?不(?:建議|建议)(?:[買买進进入]|做多|" + _END + r")"
+    r"|[暫暂]不(?:適用|适用|成立)"
+    r"|[無无](?:理想|" + _END + r")"
+    r"|[暫暂][無无](?:[買买]|[價价]位|理想|進場|进场|建議|建议|" + _END + r")"
+    r"|N/A)",
+    re.IGNORECASE,
+)
 # 句首「沒有價位」之後仍可能給出這個欄位可執行的價位，此時保留該價位而不是回 None。
 # 買點欄位：價位要直接接買進動作才算——「回測／回檔／拉回／站回 X 元（附近）（再／可）試單／買／承接／掛單／布局」，
 # 或「X 元附近試單」（前面不是「在／於」，排除「才考慮在 X 元附近試單」「不在 X 元附近承接」）。
@@ -47,7 +60,7 @@ _NOT_REASSESS = r"(?![^。；;]{0,6}?(?:[再才]|重新)(?:評估|评估))"
 def _sell_action_re(pre: str, post: str) -> "re.Pattern[str]":
     return re.compile(
         r"(?:(?<!不)(?<!不再)(?:" + pre + r")(?:[價价位])?(?:設在|设在|[於于在設设為为至到])?\s*" + _SELL_PRICE
-        + r"|(?<!MA)(?<!MA\d)(?<!MA\d\d)(?<!MA\d\s)(?<!MA\d\d\s)" + _SELL_PRICE + r"(?:附近)?(?:" + post + r"))"
+        + r"|(?<!MA)(?<!MA\d)(?<!MA\d\d)(?<!MA\d\s)(?<!MA\d\d\s)" + _SELL_PRICE + r"(?:附近)?(?:[為为]|作[為为])?(?:" + post + r"))"
         + _NOT_REASSESS
     )
 
@@ -89,10 +102,11 @@ def parse_sniper_value(value: Any, field: Optional[str] = None) -> Optional[floa
     except ValueError:
         pass
 
-    not_set = _NOT_SET_RE.search(text)
+    sell_field = field in ("stop_loss", "take_profit")
+    not_set = (_SELL_NOT_SET_RE if sell_field else _NOT_SET_RE).search(text)
     if not_set:
         rest = text[not_set.end():]
-        if field not in ("stop_loss", "take_profit"):
+        if not sell_field:
             action = _BUY_ACTION_RE.search(rest)
             return float(action.group(1)) if action and float(action.group(1)) > 0 else None
         action = _SELL_ACTION_RE[field].search(rest)
