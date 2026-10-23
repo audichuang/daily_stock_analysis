@@ -225,8 +225,22 @@ class TwseFundamentalAdapter:
         if not code:
             return {}
         local = self._local_valuation(code)
-        if local:
+        if local and local.get("as_of") == _today().isoformat():
             return local
+        api = self._api_valuation(code)
+        if not local:
+            return api
+        if not api:
+            return local
+        # Both exist: take the newer as_of (ties go to local), and fill its gaps from the other.
+        newer, other = (local, api) if local["as_of"] >= api.get("as_of", "") else (api, local)
+        out = dict(newer)
+        for key in ("pe_ratio", "pb_ratio", "dividend_yield"):
+            if out.get(key) is None:
+                out[key] = other.get(key)
+        return out
+
+    def _api_valuation(self, code: str) -> Dict[str, Optional[float]]:
         for name, build, label in (
             ("valuation_twse", self._build_twse_valuation, "上市估值"),
             ("valuation_tpex", self._build_tpex_valuation, "上柜估值"),
@@ -250,7 +264,10 @@ class TwseFundamentalAdapter:
         try:
             from market_data import market_repo
 
-            row = market_repo.latest_valuation(code)
+            from market_data.db import get_engine
+
+            # Short statement timeout; connect timeout comes from get_engine itself.
+            row = market_repo.latest_valuation(code, engine=get_engine(statement_timeout_ms=3000))
             if not row:
                 return {}
             as_of = row["date"]

@@ -4627,8 +4627,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         _rt_ctx = context.get('realtime') if isinstance(context.get('realtime'), dict) else {}
         _vr_basis = _rt_ctx.get('volume_ratio_basis')
         _vr_prev = _rt_ctx.get('volume_ratio_vs_prev')
-        _vr_basis_en = f" (vs {_vr_basis} avg volume)" if _vr_basis else ""
-        _vr_basis_zh = f"（對{_vr_basis}）" if _vr_basis else ""
+        # basis is a language-neutral code ("avg5"), rendered per language here.
+        _vr_basis_en = " (vs 5-day avg volume)" if _vr_basis == "avg5" else ""
+        _vr_basis_zh = "（對5日均量）" if _vr_basis == "avg5" else ""
         _vr_prev_row_en = (
             f"| Volume vs Yesterday (cumulative volume / yesterday's volume, not the 5-day basis) | {_vr_prev} | |\n"
             if _vr_prev is not None else ""

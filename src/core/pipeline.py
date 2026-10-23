@@ -1165,14 +1165,17 @@ class StockAnalysisPipeline:
                 rt = enhanced['realtime']
                 if quote_source_name == RealtimeSource.SHIOAJI.value and volume_ratio is not None:
                     rt['volume_ratio_vs_prev'] = volume_ratio
-                avg5_ratio = (context.get('today') or {}).get('volume_ratio')
-                if avg5_ratio is not None:
+                # Take the ratio from trend_result: it is computed on the series already extended to the
+                # quote session. context['today'] is the latest DB row, which may be T-1 (intraday / before
+                # the daily bar lands) and would put yesterday's ratio on today's headline signal.
+                avg5_ratio = getattr(trend_result, 'volume_ratio_5d', None) if trend_result else None
+                if avg5_ratio is not None and avg5_ratio > 0:
                     rt['volume_ratio'] = avg5_ratio
                     rt['volume_ratio_desc'] = self._describe_volume_ratio(avg5_ratio)
                 else:
                     rt['volume_ratio'] = None
                     rt['volume_ratio_desc'] = '无数据'
-                rt['volume_ratio_basis'] = '5日均量'
+                rt['volume_ratio_basis'] = 'avg5'
             # 移除 None 值以减少上下文大小
             enhanced['realtime'] = {k: v for k, v in enhanced['realtime'].items() if v is not None}
         

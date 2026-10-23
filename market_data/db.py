@@ -27,7 +27,9 @@ def database_url() -> str:
 
 @lru_cache(maxsize=8)
 def _engine_for(url: str, statement_timeout_ms: int | None = None):
-    connect_args = {}
+    # Bound the TCP connect: a blackholed host otherwise blocks 60s+ per attempt and starves callers'
+    # own budgets (e.g. the TW valuation API fallback).
+    connect_args = {"connect_timeout": 5}
     if statement_timeout_ms:
         # Postgres per-connection statement timeout (psycopg): abort runaway reads.
         connect_args["options"] = f"-c statement_timeout={int(statement_timeout_ms)}"

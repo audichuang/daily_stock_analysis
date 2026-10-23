@@ -280,7 +280,8 @@ class TestTwInstitutionReportWiring(unittest.TestCase):
         data = ctx["institution"]["data"]
         self.assertEqual(
             set(data.keys()),
-            {"foreign_net", "trust_net", "dealer_net", "total_net", "unit", "date", "source"},
+            {"foreign_net", "trust_net", "dealer_net", "total_net", "unit", "date", "source",
+             "is_preliminary"},
         )
         forbidden = ("capital_flow_signal", "signal", "score", "weight", "normalized", "rating")
         for key in forbidden:
