@@ -2294,10 +2294,10 @@ class GeminiAnalyzer(LLMClient):
 
         "battle_plan": {
             "sniper_points": {
-                "ideal_buy": "理想买入点：XX元（在MA5附近）",
-                "secondary_buy": "次优买入点：XX元（在MA10附近）",
+                "ideal_buy": "理想买入点：XX元（在MA5附近）；减仓/卖出或买进条件未成立时只写“暂不设定”",
+                "secondary_buy": "次优买入点：XX元（在MA10附近）；减仓/卖出或买进条件未成立时只写“暂不设定”",
                 "stop_loss": "止损位：XX元（跌破MA20或X%）",
-                "take_profit": "目标位：XX元（前高/整数关口）"
+                "take_profit": "目标位：XX元（前高/整数关口；只写一个价位）"
             },
             "position_strategy": {
                 "suggested_position": "建议仓位：X成",
@@ -2379,20 +2379,20 @@ class GeminiAnalyzer(LLMClient):
 - ⚠️ 有风险事件
 
 ### 减仓（20-39分）：
-- ⚠️ 趋势走弱或跌破关键均线
+- ⚠️ 收盘跌破 MA20，且至少符合以下一项：空头排列、法人/主力资金连续卖超、放量下跌、跌破前低支撑
 - ⚠️ 资金/量能转弱，风险明显高于收益
 - ⚠️ 以降低仓位和保护收益为主
 
 ### 卖出（0-19分）：
-- ❌ 空头排列或趋势显著恶化
-- ❌ 跌破关键支撑/止损位
-- ❌ 放量下跌或重大利空
+- ❌ 放量跌破前低/关键支撑或止损位
+- ❌ 重大利空或重大风险事件
+- ❌ 仅有空头排列、未放量跌破前低/关键支撑时属于减仓，不是卖出
 
 ## 决策仪表盘核心原则
 
 1. **核心结论先行**：一句话说清该买该卖
 2. **分持仓建议**：空仓者和持仓者给不同建议
-3. **精确狙击点**：必须给出具体价格，不说模糊的话
+3. **精确狙击点**：必须给出具体价格，不说模糊的话。例外：`decision_type` 为 `sell`（减仓/卖出），或必须先满足某个条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；观望但有明确回测挂单价（如回测 X 元可试单）时照常写该价位。`take_profit` 只写一个价位（减仓/卖出时为持仓者的反弹减码价），不得写“X元进场者看Y元”这类多价位句
 4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
 5. **风险优先级**：舆情中的风险点要醒目标出
 
@@ -2402,7 +2402,7 @@ class GeminiAnalyzer(LLMClient):
 - 操作建议必须同时参考价格位置（支撑/压力位）、量能/筹码、主力资金流向和风险事件。
 - 股价位于支撑与压力之间、资金流不明确时，优先输出“持有/震荡/观望/洗盘观察”等可执行的中性建议；`decision_type` 仍保持 `hold`。
 - 只有在接近支撑确认或有效突破压力，且资金流/量价配合时，才能给出买入；接近压力且资金流出时不得追买。
-- 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。
+- 只有在收盘跌破 MA20，且符合空头排列、法人/主力资金连续卖超、放量下跌、跌破前低支撑至少一项时，才能给出减仓；只有放量跌破前低/关键支撑或出现重大风险事件时，才能给出卖出。
 - 必须输出 `dashboard.phase_decision` 七字段；盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点。
 - 建议输出可选展示字段 `dashboard.signal_attribution` 六字段；解释推荐理由的构成，包括技术指标、新闻舆情、基本面、市场环境的贡献度，以及最强看多/看空信号。
 - 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。"""
@@ -2482,10 +2482,10 @@ class GeminiAnalyzer(LLMClient):
 
         "battle_plan": {
             "sniper_points": {
-                "ideal_buy": "理想入场位：XX元（满足主要技能触发条件）",
-                "secondary_buy": "次优入场位：XX元（更保守或确认后执行）",
+                "ideal_buy": "理想入场位：XX元（满足主要技能触发条件）；减仓/卖出或触发条件未成立时只写“暂不设定”",
+                "secondary_buy": "次优入场位：XX元（更保守或确认后执行）；减仓/卖出或触发条件未成立时只写“暂不设定”",
                 "stop_loss": "止损位：XX元（失效条件或X%风险）",
-                "take_profit": "目标位：XX元（按阻力位/风险回报比制定）"
+                "take_profit": "目标位：XX元（按阻力位/风险回报比制定；只写一个价位）"
             },
             "position_strategy": {
                 "suggested_position": "建议仓位：X成",
@@ -2578,7 +2578,7 @@ class GeminiAnalyzer(LLMClient):
 
 1. **核心结论先行**：一句话说清该买该卖
 2. **分持仓建议**：空仓者和持仓者给不同建议
-3. **精确狙击点**：必须给出具体价格，不说模糊的话
+3. **精确狙击点**：必须给出具体价格，不说模糊的话。例外：`decision_type` 为 `sell`（减仓/卖出），或必须先满足某个条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；观望但有明确回测挂单价（如回测 X 元可试单）时照常写该价位。`take_profit` 只写一个价位（减仓/卖出时为持仓者的反弹减码价），不得写“X元进场者看Y元”这类多价位句
 4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
 5. **风险优先级**：舆情中的风险点要醒目标出
 
@@ -2588,7 +2588,7 @@ class GeminiAnalyzer(LLMClient):
 - 操作建议必须同时参考价格位置（支撑/压力位）、量能/筹码、主力资金流向和风险事件。
 - 股价位于支撑与压力之间、资金流不明确时，优先输出“持有/震荡/观望/洗盘观察”等可执行的中性建议；`decision_type` 仍保持 `hold`。
 - 只有在接近支撑确认或有效突破压力，且资金流/量价配合时，才能给出买入；接近压力且资金流出时不得追买。
-- 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。
+- 只有符合上方评分标准“减仓”或“卖出”段的条件时，才能给出减仓/卖出；仅有空头排列、未放量跌破前低/关键支撑或止损位时，最多减仓，不给卖出。
 - 必须输出 `dashboard.phase_decision` 七字段；盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点。
 - 建议输出可选展示字段 `dashboard.signal_attribution` 六字段；解释推荐理由的构成，包括技术指标、新闻舆情、基本面、市场环境的贡献度，以及最强看多/看空信号。
 - 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。"""
@@ -2714,7 +2714,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
 1. **Conclusion first**: say clearly in one sentence whether to buy or sell
 2. **Position-specific advice**: give different advice to those without a position and to holders
-3. **Precise sniper levels**: always give concrete prices, never vague wording
+3. **Precise sniper levels**: always give concrete prices, never vague wording. Exception: when `decision_type` is `sell` (Reduce/Sell), or a condition must be met first (e.g. close back above MA5) before a buy is re-evaluated, `ideal_buy` and `secondary_buy` must be exactly "N/A" with no price, and the re-entry condition and price go in `dashboard.phase_decision.watch_conditions`; for Watch with a concrete pullback limit price (e.g. a starter position on a pullback to X), keep that price. `take_profit` holds exactly one price (for Reduce/Sell, the holder's rebound-reduce price), never multi-price wording such as "entries at X look to Y"
 4. **Visual checklist**: use ✅⚠️❌ to show the result of each check
 5. **Risk priority**: highlight risk points from the news clearly
 
@@ -2724,7 +2724,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 - Operation advice must consider price position (support/resistance), volume/chips, main capital flow and risk events together.
 - When the price is between support and resistance and capital flow is unclear, prefer actionable neutral advice such as "Hold/Sideways/Watch/Shakeout watch"; `decision_type` stays `hold`.
 - Only give Buy near a confirmed support or after a valid breakout above resistance, with capital flow/volume confirming; never chase near resistance while capital flows out.
-- Only give Sell/Reduce after a break below key support, persistent main capital outflow, or a clear increase in risk.
+- Only give Reduce/Sell when the Reduce or Sell criteria in the scoring table above are met; bearish alignment alone, without a high-volume break below the prior low/key support or stop-loss, is at most Reduce, never Sell.
 - `dashboard.phase_decision` must contain all seven fields; intraday, lunch break and near the close must give the current action, watch conditions and the next checkpoint.
 - The optional display field `dashboard.signal_attribution` (six fields) is recommended; explain what drives the recommendation, including the contribution of technical indicators, news sentiment, fundamentals and market conditions, and the strongest bullish/bearish signals.
 - Pre-market, on non-trading days or in an unknown phase, never fabricate today's intraday move; when quote/daily_bars/technical is stale, fallback, missing, fetch_failed, partial or estimated, `confidence_level` must not be High."""
@@ -2737,10 +2737,10 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
 """ + CANONICAL_DECISION_SCALE_PROMPT_EN + """
 
-""" + _DASHBOARD_JSON_HEAD_EN + """                "ideal_buy": "Ideal buy point: XX (near MA5)",
-                "secondary_buy": "Secondary buy point: XX (near MA10)",
+""" + _DASHBOARD_JSON_HEAD_EN + """                "ideal_buy": "Ideal buy point: XX (near MA5); N/A for Reduce/Sell or when the buy condition is not yet met",
+                "secondary_buy": "Secondary buy point: XX (near MA10); N/A for Reduce/Sell or when the buy condition is not yet met",
                 "stop_loss": "Stop-loss: XX (break below MA20 or X%)",
-                "take_profit": "Target: XX (previous high/round-number level)"
+                "take_profit": "Target: XX (previous high/round-number level; one price only)"
             },
             "position_strategy": {
                 "suggested_position": "Suggested position: X/10",
@@ -2780,14 +2780,14 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 - ⚠️ Risk events present
 
 ### Reduce (20-39):
-- ⚠️ Weakening trend or break below key moving averages
+- ⚠️ Close below MA20 plus at least one of: bearish alignment, consecutive institutional/main-capital net selling, high-volume decline, break below the prior-low support
 - ⚠️ Weakening capital/volume, risk clearly outweighs reward
 - ⚠️ Focus on reducing the position and protecting gains
 
 ### Sell (0-19):
-- ❌ Bearish alignment or clearly deteriorating trend
-- ❌ Break below key support/stop-loss
-- ❌ High-volume decline or major negative news
+- ❌ High-volume break below the prior low/key support or stop-loss
+- ❌ Major negative news or major risk event
+- ❌ Bearish alignment alone, without a high-volume break below the prior low/key support, is Reduce, not Sell
 
 """ + _DASHBOARD_PRINCIPLES_EN
 
@@ -2800,10 +2800,10 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
 """ + CANONICAL_DECISION_SCALE_PROMPT_EN + """
 
-""" + _DASHBOARD_JSON_HEAD_EN + """                "ideal_buy": "Ideal entry: XX (main skill trigger conditions met)",
-                "secondary_buy": "Secondary entry: XX (more conservative or after confirmation)",
+""" + _DASHBOARD_JSON_HEAD_EN + """                "ideal_buy": "Ideal entry: XX (main skill trigger conditions met); N/A for Reduce/Sell or when the trigger is not yet met",
+                "secondary_buy": "Secondary entry: XX (more conservative or after confirmation); N/A for Reduce/Sell or when the trigger is not yet met",
                 "stop_loss": "Stop-loss: XX (invalidation condition or X% risk)",
-                "take_profit": "Target: XX (based on resistance/risk-reward ratio)"
+                "take_profit": "Target: XX (based on resistance/risk-reward ratio; one price only)"
             },
             "position_strategy": {
                 "suggested_position": "Suggested position: X/10",
@@ -4975,14 +4975,14 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 prompt += f"""
 ### Taiwan Trading Costs (deduct before giving price levels)
 - A round trip (buy then sell) costs about {round_trip:.2f}% (brokerage fee both ways, securities transaction tax on the sale, slippage on both sides).
-- The target's net return after costs must be at least {min_rr:g}x the stop-loss net loss; if it cannot be, do not give a buy conclusion — say hold-and-watch and name the lower entry to wait for.
+- The target's net return after costs must be at least {min_rr:g}x the stop-loss net loss; if it cannot be, do not give a buy conclusion — say hold-and-watch, set `ideal_buy`/`secondary_buy` to "N/A", and put the lower entry to wait for in `dashboard.phase_decision.watch_conditions`.
 - When the target is too close to the entry (e.g. under 2%), costs eat most of the profit; do not tighten the stop below normal daily volatility just to make the risk/reward work.
 """
             else:
                 prompt += f"""
 ### {L("台股交易成本（給價位前必須扣除）", "台股交易成本（给价位前必须扣除）")}
 - {L(f"一趟買進再賣出約 {round_trip:.2f}%（手續費雙邊、賣出證交稅、買賣滑價）。", f"一趟买进再卖出约 {round_trip:.2f}%（手续费双边、卖出证交税、买卖滑价）。")}
-- {L(f"目標價扣掉成本後的淨報酬，至少要是停損淨虧損的 {min_rr:g} 倍；做不到就不要給買入結論，改為觀望並說明要等哪個更低的買點。", f"目标价扣掉成本后的净报酬，至少要是止损净亏损的 {min_rr:g} 倍；做不到就不要给买入结论，改为观望并说明要等哪个更低的买点。")}
+- {L(f"目標價扣掉成本後的淨報酬，至少要是停損淨虧損的 {min_rr:g} 倍；做不到就不要給買入結論，改為觀望，`ideal_buy`、`secondary_buy` 寫「暫不設定」，要等的更低買點寫進 `dashboard.phase_decision.watch_conditions`。", f"目标价扣掉成本后的净报酬，至少要是止损净亏损的 {min_rr:g} 倍；做不到就不要给买入结论，改为观望，`ideal_buy`、`secondary_buy` 写“暂不设定”，要等的更低买点写进 `dashboard.phase_decision.watch_conditions`。")}
 - {L("目標價離買點太近（例如不到 2%）時，成本會吃掉大部分利潤；不要為了湊出風報比而把停損設得比日常波動還窄。", "目标价离买点太近（例如不到 2%）时，成本会吃掉大部分利润；不要为了凑出风报比而把止损设得比日常波动还窄。")}
 """
             trend_ctx = context.get("trend_analysis")
@@ -5383,7 +5383,7 @@ If the stock name shown above is "Stock {code}" or incorrect, **state the correc
 - **Stock name**: must output the correct company name (e.g. "Apple" rather than "Stock AAPL")
 - **Core conclusion**: say clearly in one sentence whether to buy, sell or wait
 - **Position-specific advice**: what to do without a position vs. what to do as a holder
-- **Concrete sniper levels**: buy price, stop-loss price, target price (to two decimals)
+- **Concrete sniper levels**: buy price, stop-loss price, target price (to two decimals); when `decision_type` is `sell` (Reduce/Sell), or a condition must be met first (e.g. close back above MA5) before a buy is re-evaluated, `ideal_buy` and `secondary_buy` must be exactly "N/A" with no price, and re-entry conditions and prices go in `dashboard.phase_decision.watch_conditions`; `take_profit` holds exactly one price (for Reduce/Sell, the holder's rebound-reduce price)
 - **Checklist**: mark each item with ✅/⚠️/❌
 - **News time compliance**: `latest_news`, `risk_alerts` and `positive_catalysts` must not contain information older than the last {news_window_days} days or with an unknown date
 - **Technical consistency**: never use mutually exclusive conclusions such as "bearish alignment" and "bullish alignment" as valid evidence at the same time; if fundamentals/events conflict with technicals, state explicitly "event-led, technicals not yet confirmed" or "fundamentals lean positive, but technicals are not yet confirmed"
@@ -5396,7 +5396,7 @@ Output the complete Decision Dashboard in JSON format."""
 - **{L("股票名稱", "股票名称")}**：{L('必須輸出正確的中文全稱（如"貴州茅台"而非"股票600519"）', '必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）')}
 - **{L("核心結論", "核心结论")}**：{L("一句話說清該買/該賣/該等", "一句话说清该买/该卖/该等")}
 - **{L("持倉分類建議", "持仓分类建议")}**：{L("空倉者怎麼做 vs 持倉者怎麼做", "空仓者怎么做 vs 持仓者怎么做")}
-- **{L("具體狙擊點位", "具体狙击点位")}**：{L("買入價、停損價、目標價（精確到分）", "买入价、止损价、目标价（精确到分）")}
+- **{L("具體狙擊點位", "具体狙击点位")}**：{L("買入價、停損價、目標價（精確到分）；`decision_type` 為 `sell`（減倉／賣出），或須先滿足條件（如收盤站回 MA5）才重新評估買進時，`ideal_buy`、`secondary_buy` 只寫「暫不設定」、不得寫任何價位，重新進場的條件與價位寫進 `dashboard.phase_decision.watch_conditions`；`take_profit` 只寫一個價位（減倉／賣出時是持股者的反彈減碼價）", "买入价、止损价、目标价（精确到分）；`decision_type` 为 `sell`（减仓/卖出），或须先满足条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”、不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；`take_profit` 只写一个价位（减仓/卖出时是持仓者的反弹减码价）")}
 - **{L("檢查清單", "检查清单")}**：{L("每項用 ✅/⚠️/❌ 標記", "每项用 ✅/⚠️/❌ 标记")}
 - **{L("消息面時間合規", "消息面时间合规")}**：{L(f"`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或時間未知的資訊", f"`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或时间未知的信息")}
 - **{L("技術面一致性", "技术面一致性")}**：{L("嚴禁把「空頭排列」和「多頭排列」等互斥結論同時當作有效依據；若基本面/事件面與技術面衝突，必須明確寫「事件先行、技術待確認」或「基本面偏多，但技術面尚未確認」", "严禁把“空头排列”和“多头排列”等互斥结论同时当作有效依据；若基本面/事件面与技术面冲突，必须明确写“事件先行、技术待确认”或“基本面偏多，但技术面尚未确认”")}
