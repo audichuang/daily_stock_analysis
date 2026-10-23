@@ -52,40 +52,14 @@ def _xtai_with_closures(closed: frozenset):
     return _XTAIWithClosures()
 
 
-_CLOSURE_CHECK_INTERVAL = 3600.0
-_closure_last_check: Optional[Tuple[date, float]] = None
-
-
-def _autodetect_today_closure() -> None:
-    """Let any process (e.g. the NAS web service, which no cron touches) learn about
-    a typhoon closure: at most once per hour, ask ``market_data.closures`` whether
-    *today* is closed and let it record the day in the shared list. Fail-open and
-    short timeout; never looks at other dates. ``TW_CLOSURE_AUTODETECT=false`` disables."""
-    global _closure_last_check
-    if os.environ.get("TW_CLOSURE_AUTODETECT", "true").strip().lower() in ("0", "false", "no", "off"):
-        return
-    today = datetime.now(ZoneInfo("Asia/Taipei")).date()
-    now = time.monotonic()
-    last = _closure_last_check
-    if last and last[0] == today and now - last[1] < _CLOSURE_CHECK_INTERVAL:
-        return
-    _closure_last_check = (today, now)
-    try:
-        from market_data import closures
-
-        closures.tw_closed_reason(today, fetch=lambda: closures.fetch_dgpa_closures(timeout=3))
-    except Exception as e:  # noqa: BLE001 - never block calendar lookups
-        logger.warning("trading_calendar closure autodetect failed: %s", e)
-
-
 def _get_calendar(ex: str):
     """exchange-calendars calendar; XTAI also skips ad-hoc closures (typhoon days)
     listed by ``market_data.closures``, which the bundled calendar does not know."""
     if ex == "XTAI":
-        _autodetect_today_closure()
         try:
-            from market_data.closures import adhoc_closed_dates
+            from market_data.closures import adhoc_closed_dates, autodetect_today
 
+            autodetect_today()
             closed = frozenset(adhoc_closed_dates())
         except Exception as e:
             logger.warning("trading_calendar ad-hoc closure list unavailable: %s", e)

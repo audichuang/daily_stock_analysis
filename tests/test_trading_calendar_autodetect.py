@@ -15,7 +15,7 @@ TODAY = datetime.datetime.now(tc.ZoneInfo("Asia/Taipei")).date()
 def armed(monkeypatch, tmp_path):
     monkeypatch.setenv("TW_CLOSURE_AUTODETECT", "true")
     monkeypatch.setenv("TW_ADHOC_CLOSED_FILE", str(tmp_path / "closed.txt"))
-    monkeypatch.setattr(tc, "_closure_last_check", None)
+    monkeypatch.setattr(closures, "_autodetect_last", None)
     # Weekend runs would short-circuit on the calendar; pretend the calendar is open.
     monkeypatch.setattr(closures, "_calendar_says_open", lambda day: True)
     calls = []
@@ -58,7 +58,19 @@ def test_open_day_rechecked_only_after_interval(armed, monkeypatch):
     tc._get_calendar("XTAI")
     tc._get_calendar("XTAI")
     assert armed == [3]
-    day, t = tc._closure_last_check
-    monkeypatch.setattr(tc, "_closure_last_check", (day, t - tc._CLOSURE_CHECK_INTERVAL - 1))
+    day, t = closures._autodetect_last
+    monkeypatch.setattr(closures, "_autodetect_last", (day, t - closures._AUTODETECT_INTERVAL - 1))
     tc._get_calendar("XTAI")
     assert armed == [3, 3]
+
+
+def test_cold_health_expected_session_autodetects(armed):
+    """health.expected_session in a cold process (no trading_calendar lookup first)
+    must still learn today's closure instead of expecting today's data."""
+    from market_data import health
+
+    pytest.importorskip("exchange_calendars")
+    now = datetime.datetime.combine(TODAY, datetime.time(18, 0), tzinfo=tc.ZoneInfo("Asia/Taipei"))
+    got = health.expected_session(now=now, is_session=None)
+    assert armed == [3]  # fetched via health path alone
+    assert got != TODAY
