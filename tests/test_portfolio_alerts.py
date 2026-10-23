@@ -213,6 +213,53 @@ class PortfolioAlertsTestCase(unittest.TestCase):
         self.assertEqual([item.symbol for item in targets], ["SH000001", "SZ000001", "000001", "SH600519"])
         self.assertEqual(overflow, 0)
 
+    def test_concentration_fx_missing_is_unavailable_not_zero(self) -> None:
+        report = _risk_report()
+        report["concentration"].update({
+            "top_weight_pct": None, "alert": False,
+            "fx_missing": True, "fx_missing_pairs": ["USD/TWD"],
+        })
+        report["concentration"]["top_positions"] = [{"symbol": "AAPL", "weight_pct": None}]
+        result = evaluate_portfolio_risk_alert(
+            _risk_rule("portfolio_concentration"), risk_service=FakeRiskService(report)
+        )
+        self._assert_fx_unavailable(result, "top_weight_pct")
+
+    def test_drawdown_fx_missing_is_unavailable_not_partial_reading(self) -> None:
+        report = _risk_report()
+        report["drawdown"].update({
+            "fx_missing": True, "fx_missing_pairs": ["USD/TWD"],
+            "fx_excluded_dates": ["2026-05-19"], "alert": False,
+        })
+        result = evaluate_portfolio_risk_alert(
+            _risk_rule("portfolio_drawdown"), risk_service=FakeRiskService(report)
+        )
+        self._assert_fx_unavailable(result, "max_drawdown_pct")
+
+    def test_none_readings_are_unavailable_even_without_fx_flag(self) -> None:
+        report = _risk_report()
+        report["concentration"]["top_weight_pct"] = None
+        report["drawdown"]["max_drawdown_pct"] = float("nan")
+        for alert_type in ("portfolio_concentration", "portfolio_drawdown"):
+            result = evaluate_portfolio_risk_alert(
+                _risk_rule(alert_type), risk_service=FakeRiskService(report)
+            )
+            self.assertIsNone(result["observed_value"])
+            self.assertFalse(result["triggered"])
+            self.assertNotIn("0.00%", result["message"])
+
+    def _assert_fx_unavailable(self, result, key) -> None:
+        self.assertFalse(result["triggered"])
+        self.assertIsNone(result["observed_value"])
+        self.assertEqual(result["record_status"], "skipped")
+        self.assertIn("FX", result["message"])
+        self.assertNotIn("0.00%", result["message"])
+        diagnostics = json.loads(result["diagnostics"])
+        self.assertFalse(diagnostics["data_available"])
+        self.assertTrue(diagnostics["fx_missing"])
+        self.assertEqual(diagnostics["fx_missing_pairs"], ["USD/TWD"])
+        self.assertIsNone(diagnostics.get(key))
+
     def test_watchlist_expansion_refreshes_stock_list(self) -> None:
         class Config:
             stock_list = ["600519", "600519", "aapl"]

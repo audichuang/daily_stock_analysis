@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import math
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -437,16 +438,58 @@ def _evaluate_stop_loss(rule: PortfolioRiskAlert, report: Dict[str, Any]) -> Dic
     )
 
 
+def _finite_or_none(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _fx_unavailable_result(
+    rule: PortfolioRiskAlert,
+    report: Dict[str, Any],
+    block: Dict[str, Any],
+    *,
+    label: str,
+    threshold: Optional[float],
+    diagnostics: Dict[str, Any],
+) -> Dict[str, Any]:
+    # 缺值不是 0：匯率缺漏或讀數非有限數時不給 observed、不觸發，標記 skipped。
+    fx_missing = bool(block.get("fx_missing"))
+    diagnostics.update({
+        "data_available": False,
+        "fx_missing": fx_missing,
+        "fx_missing_pairs": list(block.get("fx_missing_pairs") or []),
+    })
+    reason = "FX rate missing" if fx_missing else "reading unavailable"
+    return _portfolio_result(
+        rule,
+        triggered=False,
+        observed_value=None,
+        threshold=threshold,
+        message=f"{_display_account(report)} {label} unavailable ({reason})",
+        record_status="skipped",
+        diagnostics=diagnostics,
+    )
+
+
 def _evaluate_concentration(rule: PortfolioRiskAlert, report: Dict[str, Any]) -> Dict[str, Any]:
     concentration = report.get("concentration") or {}
-    observed = float(concentration.get("top_weight_pct") or 0.0)
+    observed = _finite_or_none(concentration.get("top_weight_pct"))
     threshold = _threshold(report, "concentration_alert_pct")
-    triggered = bool(concentration.get("alert"))
     diagnostics = _base_diagnostics(report, top_items=concentration.get("top_positions") or [])
     diagnostics.update({
         "total_market_value": concentration.get("total_market_value"),
         "top_weight_pct": observed,
     })
+    if observed is None or concentration.get("fx_missing"):
+        diagnostics["top_weight_pct"] = None
+        return _fx_unavailable_result(
+            rule, report, concentration,
+            label="concentration top weight", threshold=threshold, diagnostics=diagnostics,
+        )
+    triggered = bool(concentration.get("alert"))
     message = f"{_display_account(report)} concentration top weight {observed:.2f}%"
     return _portfolio_result(
         rule,
@@ -460,16 +503,25 @@ def _evaluate_concentration(rule: PortfolioRiskAlert, report: Dict[str, Any]) ->
 
 def _evaluate_drawdown(rule: PortfolioRiskAlert, report: Dict[str, Any]) -> Dict[str, Any]:
     drawdown = report.get("drawdown") or {}
-    observed = float(drawdown.get("max_drawdown_pct") or 0.0)
+    observed = _finite_or_none(drawdown.get("max_drawdown_pct"))
     threshold = _threshold(report, "drawdown_alert_pct")
-    triggered = bool(drawdown.get("alert"))
     diagnostics = _base_diagnostics(report)
     diagnostics.update({
         "series_points": drawdown.get("series_points"),
         "current_drawdown_pct": drawdown.get("current_drawdown_pct"),
         "max_drawdown_pct": observed,
         "fx_stale": bool(drawdown.get("fx_stale")),
+        "fx_excluded_dates": list(drawdown.get("fx_excluded_dates") or []),
     })
+    if observed is None or drawdown.get("fx_missing"):
+        # 缺匯率時剔除日期後的回撤只是部分序列，不當成讀數。
+        diagnostics["max_drawdown_pct"] = None
+        diagnostics["current_drawdown_pct"] = None
+        return _fx_unavailable_result(
+            rule, report, drawdown,
+            label="max drawdown", threshold=threshold, diagnostics=diagnostics,
+        )
+    triggered = bool(drawdown.get("alert"))
     message = f"{_display_account(report)} max drawdown {observed:.2f}%"
     return _portfolio_result(
         rule,
