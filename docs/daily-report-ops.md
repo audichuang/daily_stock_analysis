@@ -15,6 +15,15 @@
 
 這些排程共用同一個主 checkout，手動作業別把它的 working tree 留在別的分支或髒狀態。
 
+## 颱風假等臨時休市
+
+交易日曆（exchange_calendars XTAI）不知道颱風假，官方 holidaySchedule 也不會補。07:30／10:00,13:00／19:00 三個排程的 precheck 跑 `uv run --env-file .env python -m market_data.closures`（開市回 0、休市回 1），18:00 的 `daily_report.sh` 開頭也跑一次（只記錄、不擋）：
+
+- 查人事行政總處停班停課頁（`market_data.closures.DGPA_URL`）；臺北市全體公教機關**全日或上午**停止上班就當休市（證交所休市原則；下午停班照常交易，校級／區域停班不算），記進臨時休市清單 `data/tw_adhoc_closed_dates.txt`（`TW_ADHOC_CLOSED_FILE` 可改）。頁面的「今天／明天」以頁面自己的「更新時間」為準；版面認不出來時印 WARN。
+- `trading_calendar` 的 XTAI 日曆（`is_market_open`、`get_effective_trading_date`、`get_trading_dates`…）與 `health.expected_session` 都讀這份清單，所以休市當天 18:00 的 `health --strict` 不會把它當缺資料擋下、美股復盤照跑，連假後第一個交易日的盤前判讀也不會去找休市那天的資料。
+- 頁面連不上或改版 → 只依交易日曆（fail-open，照常跑）。其他原因的臨時休市手動在清單加一行 `YYYY-MM-DD  # 原因`。
+- 2026-10-23（薔琵颱風）時還沒有這個機制，是手動暫停盤中與持股計畫排程。
+
 `portfolio-check` 讀的個人持股計畫在 gitignore 的 `.memory/`（由 `.claude/settings.local.json` 的 `autoMemoryDirectory` 指定，兩個 Claude 帳號共用）；換機器或重建 checkout 時要一起搬。
 
 ## 每日報告的卡住防護與診斷

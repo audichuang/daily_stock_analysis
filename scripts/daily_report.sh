@@ -223,6 +223,8 @@ main() {
   # 同一天且同一交易场次已成功推过一份就不再跑；要重跑设 DAILY_REPORT_FORCE=1。
   # 键含场次：盘中手动跑（场次=前一交易日）不会挡掉 18:00，台股休市日也不会连美股一起跳过。
   DONE_MARK="logs/.daily_report_last_session"
+  # 颱風假：先查停班停課頁、記進臨時休市清單，expected_session 才不會把休市日當成缺資料擋下。
+  uv run --env-file .env python -m market_data.closures >>"$LOG" 2>&1 || true
   SESSION_KEY=$(session_key "$(current_expected_session)")
   if [[ "${DAILY_REPORT_FORCE:-0}" != "1" ]] && session_already_reported "$DONE_MARK" "$SESSION_KEY"; then
     log "本交易場次已產出過報告（${DONE_MARK}＝${SESSION_KEY}），本次不重複跑；要重跑請設 DAILY_REPORT_FORCE=1"

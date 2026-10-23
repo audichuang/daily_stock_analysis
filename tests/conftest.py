@@ -39,6 +39,8 @@ _PROD_STORAGE_DATABASE_URL = (
     dotenv_values(Path(__file__).resolve().parents[1] / ".env").get("STORAGE_DATABASE_URL") or ""
 ).strip()
 os.environ["STORAGE_DATABASE_URL"] = ""
+# 本机 data/ 的台股临时休市清单（market_data.closures）不能漏进测试的交易日判断。
+os.environ["TW_ADHOC_CLOSED_FILE"] = os.devnull
 # 台股 prompt 的處置／事件即時名單會打官方端點；測試一律關掉，要測的自己注入 config
 os.environ["TW_LIVE_EVENTS_ENABLED"] = "false"
 # 賣方共識會連 yfinance、指數目標會多一行 prompt；擋掉 .env 漏入，要測的自己注入 config
