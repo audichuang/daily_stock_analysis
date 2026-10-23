@@ -19,7 +19,7 @@ _NOT_SET_RE = re.compile(
     r"[暫暂]?不(?:設定|设定|設置|设置|設|设|給|给|提供|[買买]|進場|进场|入場|入场)"
     r"|[暫暂]?不(?:建議|建议)(?:[買买進进入]|做多|" + _END + r")"
     # 「不建議於目前位置買進」「不建議在126.50元附近逆勢承接」；「不建議現價追，回測X元」不算
-    r"|不(?:建議|建议)(?:於|于|在)(?:(?:目前|現在|现在)位置|\d+(?:\.\d+)?\s*元附近(?:逆勢|逆势)?(?:承接|接刀))"
+    r"|不(?:建議|建议)(?:於|于|在)\s*(?:(?:目前|現在|现在)位置|\d+(?:\.\d+)?\s*元附近(?:逆勢|逆势)?(?:承接|接刀))"
     r"|(?:資料|资料)不支持[^。；;\d]{0,20}?[暫暂]不(?:設定|设定)"
     r"|[暫暂]不(?:適用|适用)"
     r"|(?:[暫暂](?:時|时)?)?(?:不成立|[從从]缺)"
@@ -29,6 +29,17 @@ _NOT_SET_RE = re.compile(
     r"|N/A)",
     re.IGNORECASE,
 )
+# 句首「沒有價位」之後仍可能給出這個欄位可執行的價位，此時保留該價位而不是回 None。
+# 買點欄位：價位要直接接買進動作才算——「回測／回檔／拉回／站回 X 元（附近）（再／可）試單／買／承接／掛單／布局」，
+# 或「X 元附近試單」（前面不是「在／於」，排除「才考慮在 X 元附近試單」「不在 X 元附近承接」）。
+# 「站回 X 元再買」與「回測 X 元再試單」一樣視為條件式買點；「再評估／才考慮／不破」之類只是重新評估條件，不算。
+_BUY_VERB = r"(?:附近)?(?:再|可)?(?:小量|分批|輕倉|轻仓)?(?:試單|试单|承接|掛單|挂单|布局|佈局|[買买](?![點点]))"
+_BUY_ACTION_RE = re.compile(
+    r"(?:(?:回測|回测|回檔|回档|拉回|站回)(?:到|至|約|约)?\s*|(?:^|(?<=[^在於于\s\d.A-Za-z]))\s*(?=\d[\d.]*\s*元附近))"
+    r"(\d+(?:\.\d+)?)\s*元" + _BUY_VERB
+)
+# 停損／停利欄位：「不成立則看 130 元」「不給目標價，反彈 110 元減碼」後面的明確價位（非 MA 價）照常解析
+_SELL_PRICE_RE = re.compile(r"(?<!MA)(?<!MA\d)(?<!MA\d\d)(?<!MA\d\s)(?<!MA\d\d\s)(?<![\d.])\d+(?:\.\d+)?\s*元")
 # 冒號後第一個價位緊接「進場／買進／成交」（如「如果在1909元進場」）才是條件式進場句，此時改取欄位錨點後的價位
 _ENTRY_AFTER_RE = re.compile(r"[^，,。；;]{0,6}?(?:進場|进场|買進|买进|買入|买入|成交|承接)")
 # 欄位專屬錨點：只有 stop_loss／take_profit 會走錨點路徑
@@ -62,8 +73,14 @@ def parse_sniper_value(value: Any, field: Optional[str] = None) -> Optional[floa
     except ValueError:
         pass
 
-    if _NOT_SET_RE.search(text):
-        return None
+    not_set = _NOT_SET_RE.search(text)
+    if not_set:
+        rest = text[not_set.end():]
+        if field not in ("stop_loss", "take_profit"):
+            action = _BUY_ACTION_RE.search(rest)
+            return float(action.group(1)) if action and float(action.group(1)) > 0 else None
+        if not _SELL_PRICE_RE.search(rest):
+            return None
 
     # 條件式進場句才取該欄位自己的第一個錨點（買點欄位不走這條）
     anchor_re = _FIELD_ANCHOR_RE.get(field or "")

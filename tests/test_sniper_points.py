@@ -182,3 +182,35 @@ def test_prod_1022_not_set_wording_is_none(text):
 ])
 def test_prod_1022_wording_reverse_keeps_price(text, expected):
     assert parse_sniper_value(text, "ideal_buy") == expected
+
+
+# Code review 重現的誤判：句首說沒有／不成立，但後面另給了這個欄位可執行的價位，必須保留
+@pytest.mark.parametrize("text, field, expected", [
+    ("理想買入點：從缺，回測118元可試單", "ideal_buy", 118.0),
+    ("尚無理想買點，回測118.5元可試單", "ideal_buy", 118.5),
+    ("暫無明確支撐，118元附近試單", "ideal_buy", 118.0),
+    ("次優買入點：未出現買點前先觀察，站回125元再買", "secondary_buy", 125.0),
+    ("不建議在126.5元附近承接，回測120元再買", "secondary_buy", 120.0),
+    ("目標價：不成立則看130元", "take_profit", 130.0),
+    ("目標價：不成立，暫看 120 元", "take_profit", 120.0),
+    ("不成立則停損 90 元", "stop_loss", 90.0),
+    ("空頭排列，不給目標價，反彈 110 元減碼", "take_profit", 110.0),
+])
+def test_not_set_prefix_keeps_later_actionable_price(text, field, expected):
+    assert parse_sniper_value(text, field) == expected
+
+
+# 反向：後面只是條件式重新評估價、被拒絕的價位或 MA 價，仍是沒有價位
+@pytest.mark.parametrize("text, field", [
+    ("暫時無理想買點，需站回 120 元再評估", "ideal_buy"),
+    ("不建議在 126.50 元附近逆勢承接", "secondary_buy"),
+    ("不建議在126.50元附近逆勢承接", "secondary_buy"),
+    ("理想買入點：暫不設定。要等放量站回 MA5（360.70 元）而且 MA5 拐頭向上，才考慮在 361.00 元附近小量試單", "ideal_buy"),
+    ("次優買入點：暫不設定。空頭排列中不在 MA5 875.80 元附近承接，也不在 864.00 元附近承接。", "secondary_buy"),
+    ("次要買點：不建議。在空頭排列下回測MA5 242.70元附近承接，風險報酬比不到1", "secondary_buy"),
+    ("理想買點：暫時不成立，站回120元才重新評估", "ideal_buy"),
+    ("目標價：暫不設定。站回MA5 100元再評估", "take_profit"),
+    ("停損：暫不設定", "stop_loss"),
+])
+def test_not_set_prefix_without_actionable_price_is_none(text, field):
+    assert parse_sniper_value(text, field) is None
