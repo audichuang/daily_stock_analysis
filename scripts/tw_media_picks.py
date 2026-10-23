@@ -216,7 +216,15 @@ def resolve(name: str, code: str | None, index, said: str | None = None) -> tupl
         return c, "code" if agree else "code_mismatch"
     names = {_norm(n): c for c, n, _ in index}
     for p in parts:
-        close = difflib.get_close_matches(p, names, n=1, cutoff=0.67)
+        close = difflib.get_close_matches(p, names, n=2, cutoff=0.67)
+        # A name that is a strict substring of the input is a different, shorter company
+        # ("三商銀" -> 三商, a bank group is not the retailer); two equally close names are a coin flip
+        # ("冠電" -> 虹冠電 or 冠西電). Both stay unresolved instead of attaching the wrong quote.
+        if close and close[0] != p and close[0] in p:
+            continue
+        if len(close) > 1 and difflib.SequenceMatcher(None, p, close[0]).ratio() == \
+                difflib.SequenceMatcher(None, p, close[1]).ratio():
+            continue
         if close:
             # The LLM gave a code that is not in the index, so it is no evidence for this near-name
             # (live run: "期元大S&P原油正2" with 00672L came back as the gold fund 00708L).

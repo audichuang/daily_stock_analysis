@@ -382,8 +382,16 @@ def test_fuzzy_is_vetoed_by_a_conflicting_llm_code():
     # LLM code 00672L is not in the index; the gold fund is a near-name, not the oil fund
     assert mp.resolve("期元大S&P原油正2", "00672L", idx) == (None, "unresolved")
     assert mp.resolve("期元大S&P黃金正2", "00708L", idx)[1] == "exact"
-    # no LLM code: still fuzzy, flagged for a human
+    # no LLM code: a longer name containing the input is still fuzzy, flagged for a human
     assert mp.resolve("冠電", None, idx) == ("3257.TW", "fuzzy")
+
+
+def test_fuzzy_rejects_substring_and_tied_candidates():
+    idx = [("2905.TW", "三商", []), ("3257.TW", "虹冠電", []), ("4999.TW", "冠西電", []), ("2330.TW", "台積電", [])]
+    assert mp.resolve("三商銀", None, idx) == (None, "unresolved")  # candidate is a shorter name inside the input
+    assert mp.resolve("三商銀", "2905", idx)[1] != "fuzzy"
+    assert mp.resolve("冠電", None, idx) == (None, "unresolved")  # two equally close names
+    assert mp.resolve("台積", None, idx) == ("2330.TW", "fuzzy")  # genuine abbreviation still resolves
 
 
 def test_media_aliases_beat_a_wrong_llm_code(tmp_path):
@@ -396,6 +404,14 @@ def test_media_aliases_beat_a_wrong_llm_code(tmp_path):
     assert mp.resolve("業成", "6456", idx) == ("6456.TW", "alias")
 
 
-def test_media_aliases_point_at_the_expected_stocks():
-    idx = {c: n for c, n, _ in mp.load_index()}
-    assert [idx.get(c) for c in ("2330.TW", "6234.TWO", "6456.TW", "6902.TW")] == ["台積電", "高僑", "GIS-KY", "GOGOLOOK"]
+def test_every_media_alias_resolves_to_its_stock_against_a_conflicting_code():
+    idx = mp.load_index()
+    expected = {"台灣積體電路製造": "2330.TW", "日月光投資控股": "3711.TW", "高橋": "6234.TWO", "業成": "6456.TW",
+                "業成科技": "6456.TW", "走著瞧": "6902.TW", "走著瞧-創": "6902.TW"}  # independent of MEDIA_ALIASES
+    assert {a for al in mp.MEDIA_ALIASES.values() for a in al} == set(expected)  # new alias needs a line here
+    names = {c: n for c, n, _ in idx}
+    assert [names[c] for c in ("2330.TW", "3711.TW", "6234.TWO", "6456.TW", "6902.TW")] == [
+        "台積電", "日月光投控", "高僑", "GIS-KY", "GOGOLOOK"]
+    for alias, code in expected.items():
+        other = "2317" if code != "2317.TW" else "2330"  # valid code of a different stock
+        assert mp.resolve(alias, other, idx) == (code, "alias"), alias
