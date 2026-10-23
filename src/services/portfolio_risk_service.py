@@ -534,7 +534,6 @@ class PortfolioRiskService:
         stale_flag = False
         missing_pairs: set = set()
         missing_dates: set = set()
-        payload_pairs: set = set()
         for row in rows:
             key = row.snapshot_date.isoformat()
             row_missing: set = set()
@@ -550,7 +549,6 @@ class PortfolioRiskService:
                 # 該日有帳戶查無匯率：1:1 的假數字會讓合計 NAV 偏低，整天剔除而不是少加一個帳戶。
                 missing_pairs |= row_missing
                 missing_dates.add(key)
-                payload_pairs |= set(payload_missing)
                 continue
             grouped[key] = grouped.get(key, 0.0) + converted
             stale_flag = stale_flag or stale or bool(row.fx_stale)
@@ -570,12 +568,9 @@ class PortfolioRiskService:
             max_drawdown = max(max_drawdown, drawdown)
             current_drawdown = drawdown
 
+        # Snapshot-payload flags only exclude their day (data_quality=partial); fx_missing keeps its
+        # current-rate-table meaning so it recovers once the rate is filled in.
         fx_fields = self._fx_missing_fields(missing_pairs)
-        if payload_pairs:
-            fx_fields = {
-                "fx_missing": True,
-                "fx_missing_pairs": sorted(set(fx_fields["fx_missing_pairs"]) | payload_pairs),
-            }
         return {
             "series_points": len(series),
             "max_drawdown_pct": round(max_drawdown, 4),

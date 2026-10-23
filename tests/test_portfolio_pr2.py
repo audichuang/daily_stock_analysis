@@ -38,6 +38,10 @@ def _reset_auth_globals() -> None:
     auth._rate_limit = {}
 
 
+# setUp patches the method away; keep the real one for tests of its own logic.
+_REAL_FETCH_FX_CROSS_RATE = PortfolioService.__dict__["_fetch_fx_cross_rate"].__func__
+
+
 class PortfolioPr2TestCase(unittest.TestCase):
     """End-to-end style tests for PR2 import, dedup, risk and fx behavior."""
 
@@ -876,10 +880,11 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertAlmostEqual(self._fx_row(date(2026, 1, 8)).rate, 7.04)  # today's rate unchanged
 
     # ---- outlier filter: only isolated spikes are rejected ----
-    def _filter(self, closes, as_of=date(2026, 1, 8)):
-        return self.service._filter_fx_outliers(
-            from_currency="USD", to_currency="CNY", as_of_date=as_of, closes=closes
-        )
+    def _filter(self, closes, as_of=date(2026, 1, 8), pair=("USD", "CNY"), london_today=date(2026, 1, 8)):
+        with patch.object(PortfolioService, "_london_today", return_value=london_today):
+            return self.service._filter_fx_outliers(
+                from_currency=pair[0], to_currency=pair[1], as_of_date=as_of, closes=closes
+            )
 
     def test_fx_outlier_isolated_spike_rejected(self) -> None:
         closes = [(date(2026, 1, 5), 7.30), (date(2026, 1, 6), 6.00), (date(2026, 1, 7), 7.31), (date(2026, 1, 8), 7.32)]
@@ -890,11 +895,37 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertEqual(self._filter(closes), closes)
 
     def test_fx_outlier_latest_checked_against_cross_rate(self) -> None:
-        closes = [(date(2026, 1, 7), 7.30), (date(2026, 1, 8), 7.00)]
-        with patch.object(PortfolioService, "_fetch_fx_cross_rate", return_value=7.31):
-            self.assertEqual(self._filter(closes), closes[:1])
-        with patch.object(PortfolioService, "_fetch_fx_cross_rate", return_value=7.01):
-            self.assertEqual(self._filter(closes), closes)  # cross says the new level is real
+        closes = [(date(2026, 1, 7), 0.2050), (date(2026, 1, 8), 0.1962)]
+        kw = {"pair": ("TWD", "CNY")}
+        with patch.object(PortfolioService, "_fetch_fx_cross_rate", return_value=0.2047):
+            self.assertEqual(self._filter(closes, **kw), closes[:1])
+        with patch.object(PortfolioService, "_fetch_fx_cross_rate", return_value=0.1963):
+            self.assertEqual(self._filter(closes, **kw), closes)  # cross says the new level is real
+
+    def test_fx_outlier_cross_rate_ignored_for_historical_as_of(self) -> None:
+        closes = [(date(2026, 1, 7), 7.30), (date(2026, 1, 8), 7.31)]
+        with patch.object(PortfolioService, "_fetch_fx_cross_rate", return_value=7.60):
+            out = self._filter(closes, pair=("TWD", "CNY"), london_today=date(2026, 6, 1))
+        self.assertEqual(out, closes)
+
+    def test_fx_cross_rate_none_when_a_leg_is_usd(self) -> None:
+        yf_mock = MagicMock()
+        yf_mock.Ticker.return_value.history.return_value = self._fx_frame([("2026-01-08", 20.0)])
+        with patch("src.services.portfolio_service.yf", yf_mock):
+            self.assertIsNone(_REAL_FETCH_FX_CROSS_RATE(from_currency="USD", to_currency="TWD"))
+            self.assertIsNone(_REAL_FETCH_FX_CROSS_RATE(from_currency="TWD", to_currency="USD"))
+            self.assertAlmostEqual(
+                _REAL_FETCH_FX_CROSS_RATE(from_currency="TWD", to_currency="CNY"), 1.0
+            )
+
+    def test_fx_refresh_rejected_latest_still_backfills_accepted_history(self) -> None:
+        self._seed_fx(date(2026, 1, 2), 7.20, "yfinance", False)
+        frame = self._fx_frame([("2026-01-05", 7.31), ("2026-01-06", 7.32), ("2026-01-07", 7.33), ("2026-01-08", 6.00)])
+        self._refresh_at_london(frame, date(2026, 1, 8), date(2026, 1, 8))
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 7)).rate, 7.33)
+        today = self._fx_row(date(2026, 1, 8))
+        self.assertTrue(today.is_stale)
+        self.assertAlmostEqual(today.rate, 7.33)
 
     def test_fx_outlier_latest_garbage_rejected_when_previous_row_is_stale_carry(self) -> None:
         self._seed_fx(date(2026, 1, 5), 7.30, "yfinance", False)
@@ -1076,8 +1107,9 @@ class PortfolioPr2TestCase(unittest.TestCase):
         report = self.risk_service.get_risk_report(as_of=date(2026, 1, 3), cost_method="fifo")
 
         dd = report["drawdown"]
-        self.assertTrue(dd["fx_missing"])
-        self.assertIn("USD/TWD", dd["fx_missing_pairs"])
+        # Payload flags only exclude their days; fx_missing still reflects the current rate table (TWD->CNY is present).
+        self.assertFalse(dd["fx_missing"])
+        self.assertEqual(dd["fx_missing_pairs"], [])
         self.assertEqual(dd["fx_excluded_dates"], ["2026-01-01", "2026-01-02", "2026-01-03"])
         self.assertEqual(dd["series_points"], 0)
         self.assertEqual(dd["data_quality"], "partial")

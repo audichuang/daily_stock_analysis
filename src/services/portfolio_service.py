@@ -1672,6 +1672,11 @@ class PortfolioService:
                 )
                 # If the newest bar was rejected, today's rate must not silently become an older bar.
                 rate = closes[-1][1] if closes and closes[-1] == fetched_last else None
+                # Backfill the bars that passed the filter even when the newest one was rejected, so the
+                # stale carry below starts from the latest accepted value instead of an older stored one.
+                self._backfill_fx_history(
+                    from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date, closes=closes
+                )
                 if rate is not None and rate > 0:
                     self.repo.save_fx_rate(
                         from_currency=from_currency,
@@ -1682,9 +1687,6 @@ class PortfolioService:
                         is_stale=False,
                     )
                     summary["updated_count"] += 1
-                    self._backfill_fx_history(
-                        from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date, closes=closes
-                    )
                     continue
             except Exception as exc:
                 logger.warning(
@@ -1770,7 +1772,8 @@ class PortfolioService:
     @staticmethod
     def _fetch_fx_cross_rate(*, from_currency: str, to_currency: str) -> Optional[float]:
         """Latest from->to rate implied by the two USD legs (TWDCNY ~ USDCNY / USDTWD); None if unavailable."""
-        if yf is None or from_currency == to_currency:
+        # A USD leg is just the same USDxxx=X ticker the newest bar came from, so it cannot cross-check it.
+        if yf is None or from_currency == to_currency or "USD" in (from_currency, to_currency):
             return None
 
         def leg(currency: str) -> Optional[float]:
@@ -1830,7 +1833,12 @@ class PortfolioService:
                 bad = prev is not None and deviates(value, prev) and deviates(value, nxt)
                 reference = prev
             else:
-                reference = self._fetch_fx_cross_rate(from_currency=from_currency, to_currency=to_currency)
+                # The cross rate is today's value; it is meaningless for a historical as_of.
+                reference = (
+                    self._fetch_fx_cross_rate(from_currency=from_currency, to_currency=to_currency)
+                    if as_of_date >= self._london_today()
+                    else None
+                )
                 if reference is None:
                     reference = kept[-1][1] if kept else self._last_real_stored_rate(
                         from_currency=from_currency, to_currency=to_currency, before=bar_date
