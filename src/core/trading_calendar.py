@@ -528,6 +528,38 @@ def _phase_booleans(
     return is_trading_day, is_market_open_now, is_partial_bar
 
 
+def last_closed_session_open(
+    market: Optional[str], current_time: Optional[datetime] = None
+) -> Optional[datetime]:
+    """
+    Open time (market-local, tz-aware) of the most recent fully closed session.
+
+    Returns None while the market is in session or when the phase is unknown,
+    so callers keep their intraday logic. Holidays and ad-hoc closures are
+    handled by the calendar (previous real session is returned).
+    """
+    phase = infer_market_phase(market, current_time)
+    if phase not in (
+        MarketPhase.PREMARKET,
+        MarketPhase.POSTMARKET,
+        MarketPhase.NON_TRADING,
+    ):
+        return None
+    try:
+        tz_name = MARKET_TIMEZONE[market]
+        cal = _get_calendar(MARKET_EXCHANGE[market])
+        local_date = get_market_now(market, current_time).date()
+        if phase == MarketPhase.POSTMARKET:
+            session = cal.date_to_session(local_date, direction="previous")
+        else:
+            # premarket / holiday: the current day has not closed yet
+            session = cal.date_to_session(local_date - timedelta(days=1), direction="previous")
+        return _as_market_datetime(cal.session_open(session), tz_name)
+    except Exception as e:
+        logger.warning("trading_calendar.last_closed_session_open fail-closed: %s", e)
+        return None
+
+
 def _session_open_close_for_today(
     market: str,
     market_now: datetime,

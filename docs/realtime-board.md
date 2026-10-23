@@ -85,7 +85,7 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 
 看板按 `source` + `is_stale` 诚实标示：
 
-- **实时**（绿）：`source == "shioaji"` 且 `is_stale == false`
+- **实时**（绿）：`source == "shioaji"` 且 `is_stale == false`（收盘后，属于最近已收盘场次的最后一笔 Shioaji 报价不算过期，仍显示「实时」）
 - **延迟**（琥珀）：其余有报价的情况（含 yfinance 台股）
 - **不可用**（灰）：该代码取价失败（`quote == null`），不显示 0 价
 

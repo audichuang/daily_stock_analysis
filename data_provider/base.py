@@ -2512,8 +2512,24 @@ class DataFetcherManager:
         stale_seconds = max(0, int((fetched_dt - provider_dt).total_seconds()))
         ttl = realtime_cache_ttl if realtime_cache_ttl is not None else 600
         setattr(quote, "stale_seconds", stale_seconds)
-        setattr(quote, "is_stale", stale_seconds > int(ttl))
+        is_stale = stale_seconds > int(ttl)
+        if is_stale and self._quote_in_last_closed_session(quote, provider_dt, fetched_dt):
+            # Market is closed: a quote from the latest closed session is final, not stale.
+            is_stale = False
+        setattr(quote, "is_stale", is_stale)
         return quote
+
+    @staticmethod
+    def _quote_in_last_closed_session(quote, provider_dt: datetime, now: datetime) -> bool:
+        try:
+            from src.core.trading_calendar import get_market_for_stock, last_closed_session_open
+
+            market = get_market_for_stock(getattr(quote, "code", "") or "")
+            session_open = last_closed_session_open(market, now) if market else None
+            return session_open is not None and provider_dt >= session_open
+        except Exception as exc:
+            logger.debug("closed-session freshness check skipped: %s", exc)
+            return False
     
     def get_realtime_quote(self, stock_code: str, *, log_final_failure: bool = True, skip_supplement: bool = False,
                            analysis_target: Optional[AnalysisTarget] = None):
