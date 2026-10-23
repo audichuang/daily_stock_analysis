@@ -102,6 +102,7 @@ from src.services.decision_signal_extractor import (
 from src.services.stock_list_parser import AnalysisTarget, ParseStatus
 from src.services.decision_signal_summary import summarize_decision_signal
 from src.enums import ReportType
+from src.trade_cost_guardrail import is_tw_code
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 from src.core.trading_calendar import (
     MarketPhase,
@@ -1158,6 +1159,20 @@ class StockAnalysisPipeline:
                 'stale_seconds': getattr(realtime_quote, 'stale_seconds', None),
                 'fallback_from': getattr(realtime_quote, 'fallback_from', None),
             }
+            # 台股量比口徑：Shioaji 的量比是「當日累計量／昨量」，與日線的 5 日均量口徑
+            # （context['today']['volume_ratio']）不同；以 5 日均量為主，Shioaji 值另存為較昨量。
+            if is_tw_code(context.get('code') or getattr(realtime_quote, 'code', '')):
+                rt = enhanced['realtime']
+                if quote_source_name == RealtimeSource.SHIOAJI.value and volume_ratio is not None:
+                    rt['volume_ratio_vs_prev'] = volume_ratio
+                avg5_ratio = (context.get('today') or {}).get('volume_ratio')
+                if avg5_ratio is not None:
+                    rt['volume_ratio'] = avg5_ratio
+                    rt['volume_ratio_desc'] = self._describe_volume_ratio(avg5_ratio)
+                else:
+                    rt['volume_ratio'] = None
+                    rt['volume_ratio_desc'] = '无数据'
+                rt['volume_ratio_basis'] = '5日均量'
             # 移除 None 值以减少上下文大小
             enhanced['realtime'] = {k: v for k, v in enhanced['realtime'].items() if v is not None}
         

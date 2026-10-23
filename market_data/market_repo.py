@@ -56,6 +56,13 @@ def institutional(stock_id, start=None, end=None, engine=None):
     return _q(sql + " ORDER BY date", params, engine)
 
 
+def latest_valuation(stock_id, engine=None):
+    """Latest ``market.valuation`` row as dict(date, pe_ratio, pb_ratio, dividend_yield); None when absent."""
+    df = _q("SELECT date, pe_ratio, pb_ratio, dividend_yield FROM market.valuation "
+            "WHERE stock_id = :sid ORDER BY date DESC LIMIT 1", {"sid": stock_id}, engine)
+    return None if df.empty else df.iloc[0].to_dict()
+
+
 def margin(stock_id, start=None, end=None, engine=None):
     """單檔融資融券歷史（升序）：融資/融券的餘額、買進（融資）、賣出（融券）等六欄。
 
