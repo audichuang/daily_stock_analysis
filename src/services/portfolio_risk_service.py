@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -526,12 +527,14 @@ class PortfolioRiskService:
                 "fx_stale": False,
                 **self._fx_missing_fields(set()),
                 "fx_excluded_dates": [],
+                "data_quality": "ok",
             }
 
         grouped: Dict[str, float] = {}
         stale_flag = False
         missing_pairs: set = set()
         missing_dates: set = set()
+        payload_pairs: set = set()
         for row in rows:
             key = row.snapshot_date.isoformat()
             row_missing: set = set()
@@ -541,10 +544,13 @@ class PortfolioRiskService:
                 as_of_date=row.snapshot_date,
                 missing_pairs=row_missing,
             )
-            if row_missing:
+            # 落庫當下帳戶內（交易幣別 → 帳戶幣別）就走了 1:1 回退時，equity 本身是假數字。
+            payload_missing = self._snapshot_payload_fx_missing(row)
+            if row_missing or payload_missing:
                 # 該日有帳戶查無匯率：1:1 的假數字會讓合計 NAV 偏低，整天剔除而不是少加一個帳戶。
                 missing_pairs |= row_missing
                 missing_dates.add(key)
+                payload_pairs |= set(payload_missing)
                 continue
             grouped[key] = grouped.get(key, 0.0) + converted
             stale_flag = stale_flag or stale or bool(row.fx_stale)
@@ -564,15 +570,34 @@ class PortfolioRiskService:
             max_drawdown = max(max_drawdown, drawdown)
             current_drawdown = drawdown
 
+        fx_fields = self._fx_missing_fields(missing_pairs)
+        if payload_pairs:
+            fx_fields = {
+                "fx_missing": True,
+                "fx_missing_pairs": sorted(set(fx_fields["fx_missing_pairs"]) | payload_pairs),
+            }
         return {
             "series_points": len(series),
             "max_drawdown_pct": round(max_drawdown, 4),
             "current_drawdown_pct": round(current_drawdown, 4),
             "alert": bool(max_drawdown >= threshold_pct),
             "fx_stale": stale_flag,
-            **self._fx_missing_fields(missing_pairs),
+            **fx_fields,
             "fx_excluded_dates": sorted(missing_dates),
+            # Additive: max/current drawdown come from a partial series when dates were excluded.
+            "data_quality": "partial" if missing_dates else "ok",
         }
+
+    @staticmethod
+    def _snapshot_payload_fx_missing(row: Any) -> List[str]:
+        """FX pairs the snapshot itself flagged as missing when it was persisted (older rows: none)."""
+        try:
+            payload = json.loads(row.payload or "{}")
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(payload, dict) or not payload.get("fx_missing"):
+            return []
+        return [str(p) for p in payload.get("fx_missing_pairs") or []] or ["?"]
 
     @staticmethod
     def _build_stop_loss(snapshot: Dict[str, Any], thresholds: Dict[str, Any]) -> Dict[str, Any]:

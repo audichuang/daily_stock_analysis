@@ -126,6 +126,8 @@ export interface PortfolioDrawdownBlock {
   currentDrawdownPct: number;
   alert: boolean;
   fxStale: boolean;
+  fxMissing?: boolean;
+  dataQuality?: string;
 }
 
 export interface PortfolioStopLossItem {

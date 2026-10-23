@@ -389,6 +389,8 @@ function getPortfolioRiskAvailability(
       && drawdown.seriesPoints > 1
       && hasBooleanField(drawdown, 'fxStale')
       && drawdown.fxStale === false
+      && drawdown.fxMissing !== true
+      && drawdown.dataQuality !== 'partial'
       && hasBooleanField(drawdown, 'alert'),
     stopLoss: priceCoverageAvailable
       && hasNumberField(stopLoss, 'triggeredCount')
