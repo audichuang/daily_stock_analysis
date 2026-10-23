@@ -52,6 +52,27 @@ _AGGRESSIVE_BUY_MARKERS_ZH = (
     "積極買入",
     "激進買入",
     "加倉",
+    # 台灣慣用詞（買進／加碼／佈局／進場）：缺了這些，hold 寫「建議買進」「逢低加碼」會直接放行
+    "買進",
+    "买进",
+    "加碼",
+    "加码",
+    "逢低佈局",
+    "分批佈局",
+    "積極佈局",
+    "逢低布局",
+    "分批布局",
+    "积极布局",
+    "逢低進場",
+    "分批進場",
+    "積極進場",
+    "立即進場",
+    "馬上進場",
+    "逢低进场",
+    "分批进场",
+    "积极进场",
+    "立即进场",
+    "马上进场",
 )
 _AGGRESSIVE_BUY_MARKERS_EN = ("buy now", "strong buy", "aggressive buy", "chase", "add aggressively")
 _AGGRESSIVE_BUY_MARKERS_KO = (
@@ -64,23 +85,29 @@ _AGGRESSIVE_BUY_MARKERS_KO = (
     "추격 매수",
     "비중 확대",
 )
+# 提示型否定：必須緊貼買進詞（中間最多隔 _NEGATION_PHRASE_FILLERS_ZH 的虛詞），不能在子句任意位置出現就算：
+# 「避免踏空建議加倉」「別猶豫加倉」的否定管的是別的動詞（繁簡並列）
 _NEGATION_HINTS_ZH = (
     "暂不",
     "不建议",
     "不应",
     "不宜",
     "不能",
+    "不可",
+    "不得",
+    "不该",
     "无法",
     "不允许",
     "禁止",
     "避免",
     "不要",
+    "切勿",
     "别",
     "先不",
-    # 繁體：補了繁體買進詞就必須補否定詞，否則「暫不建議買入」會被誤判成激進買進
     "暫不",
     "不建議",
     "不應",
+    "不該",
     "無法",
     "不允許",
     "別",
@@ -109,7 +136,10 @@ _NEGATION_PHRASES_ZH = (
     "不再",
 )
 # 整詞否定與買進詞之間允許的極短虛詞：「不需要再加倉」「不必急著加倉」「無需急於加倉」「不必積極加倉」
-_NEGATION_PHRASE_FILLERS_ZH = ("再", "去", "急著", "急着", "急於", "急于", "继续", "繼續", "积极", "積極")
+_NEGATION_PHRASE_FILLERS_ZH = (
+    "再", "去", "急著", "急着", "急於", "急于", "继续", "繼續", "积极", "積極",
+    "先", "逢低", "分批", "現在", "现在", "立即", "馬上", "马上", "直接", "輕易", "轻易", "貿然", "贸然", "盲目", "隨意", "随意",
+)
 _NEGATION_HINTS_EN = (" not ", "do not", "don't", "no ", "never", "avoid")
 _NEGATION_HINTS_KO = ("권하지 않", "하지 않", "하지 마", "불가", "금지", "피하", "보류", "않", "말")
 _NEGATION_LOOKBACK = 16
@@ -117,14 +147,17 @@ _NEGATION_LOOKBACK = 16
 # 只認緊貼在買進詞前面的單字，避免「股價不貴，建議買入」這類句子被當成否定
 _NEGATION_IMMEDIATE_ZH = ("不", "勿", "没", "沒", "未")
 # 雙重否定與反問：「不得不加倉」「沒有理由不加倉」「何不加倉」是要買，緊貼的「不」不算否定
-_DOUBLE_NEGATION_ZH = ("不得", "没有理由", "沒有理由", "无", "無", "非")
+_DOUBLE_NEGATION_ZH = (
+    "不得", "没有理由", "沒有理由", "没理由", "沒理由", "无", "無", "非",
+    "不能", "不可", "不是", "无法", "無法", "不应", "不應", "不宜",
+)
 # 「何不加倉」是反問（要買），但「無論如何不／不管如何不／為何不」是明確否定，所以「何」只認不接在這些字後面時
 _RHETORICAL_HE_EXCLUDED = ("如", "為", "为", "論", "论", "管")
 _CHASE_MARKERS = ("追高", "chase")
 # 含「別／别」但不是否定的詞：「特別建議買入」不能因為「別」就逃過護欄
 _NEGATION_FALSE_COMPOUNDS_ZH = (
     "特別", "特别", "區別", "区别", "個別", "个别", "分別", "分别", "類別", "类别", "級別", "级别", "差別", "差别",
-    "識別", "识别",
+    "識別", "识别", "告別", "告别",
 )
 _GUARDRAIL_SENTIMENT_SCORE = 52
 
@@ -373,31 +406,32 @@ def _contains_negation_near_marker(context: str, negation_hints: tuple[str, ...]
     if sep_pos >= 0:
         tail = context[sep_pos + 1 :]
     if zh:
+        return _ends_with_negation_zh(tail)
+    return any(hint in tail for hint in negation_hints)
+
+
+_NEGATION_WORDS_ZH = _NEGATION_HINTS_ZH + _NEGATION_PHRASES_ZH
+
+
+def _ends_with_negation_zh(tail: str) -> bool:
+    """否定只在緊貼買進詞（中間最多隔幾個虛詞）時才算，避免否定別的動詞也把買進遮掉。
+
+    前面再接雙重否定（「並非不需要加倉」「不能不加倉」）或反問（「何不加倉」）就是要買。
+    """
+    while True:
+        if tail.endswith(_NEGATION_FALSE_COMPOUNDS_ZH):
+            return False
         if tail.endswith(_NEGATION_IMMEDIATE_ZH):
             head = tail[:-1]
             rhetorical = head.endswith("何") and not head[:-1].endswith(_RHETORICAL_HE_EXCLUDED)
             return not (head.endswith(_DOUBLE_NEGATION_ZH) or rhetorical)
-        if _ends_with_negation_phrase_zh(tail):
-            return True
-        for compound in _NEGATION_FALSE_COMPOUNDS_ZH:
-            tail = tail.replace(compound, "")
-    return any(hint in tail for hint in negation_hints)
-
-
-def _ends_with_negation_phrase_zh(tail: str) -> bool:
-    """整詞否定只在緊貼買進詞（中間最多隔幾個虛詞）時才算，避免否定別的動詞也把買進遮掉。
-
-    前面再接雙重否定（「並非不需要加倉」）就是要買，與單字否定同一套排除。
-    """
-    for _ in range(len(_NEGATION_PHRASE_FILLERS_ZH) + 1):
-        phrase = max((p for p in _NEGATION_PHRASES_ZH if tail.endswith(p)), key=len, default=None)
-        if phrase is not None:
-            return not tail[: -len(phrase)].endswith(_DOUBLE_NEGATION_ZH)
+        word = max((w for w in _NEGATION_WORDS_ZH if tail.endswith(w)), key=len, default=None)
+        if word is not None:
+            return not tail[: -len(word)].endswith(_DOUBLE_NEGATION_ZH)
         filler = next((f for f in _NEGATION_PHRASE_FILLERS_ZH if tail.endswith(f)), None)
         if filler is None:
             return False
         tail = tail[: -len(filler)]
-    return False
 
 
 def _cap_conservative_sentiment_score(value: Any) -> int:
