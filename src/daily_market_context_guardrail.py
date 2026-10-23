@@ -385,10 +385,14 @@ def _contains_negation_near_marker(context: str, negation_hints: tuple[str, ...]
 
 
 def _ends_with_negation_phrase_zh(tail: str) -> bool:
-    """整詞否定只在緊貼買進詞（中間最多隔幾個虛詞）時才算，避免否定別的動詞也把買進遮掉。"""
+    """整詞否定只在緊貼買進詞（中間最多隔幾個虛詞）時才算，避免否定別的動詞也把買進遮掉。
+
+    前面再接雙重否定（「並非不需要加倉」）就是要買，與單字否定同一套排除。
+    """
     for _ in range(len(_NEGATION_PHRASE_FILLERS_ZH) + 1):
-        if tail.endswith(_NEGATION_PHRASES_ZH):
-            return True
+        phrase = max((p for p in _NEGATION_PHRASES_ZH if tail.endswith(p)), key=len, default=None)
+        if phrase is not None:
+            return not tail[: -len(phrase)].endswith(_DOUBLE_NEGATION_ZH)
         filler = next((f for f in _NEGATION_PHRASE_FILLERS_ZH if tail.endswith(f)), None)
         if filler is None:
             return False

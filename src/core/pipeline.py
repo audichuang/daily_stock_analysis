@@ -31,7 +31,7 @@ from src.data.stock_mapping import is_meaningful_stock_name
 from src.storage import get_db
 from data_provider import DataFetcherManager
 from data_provider.base import is_bse_code, normalize_stock_code
-from data_provider.realtime_types import ChipDistribution
+from data_provider.realtime_types import ChipDistribution, RealtimeSource
 from src.analyzer import (
     GeminiAnalyzer,
     AnalysisResult,
@@ -165,6 +165,19 @@ def _coerce_to_date(value: Any) -> Optional[date]:
         return date.fromisoformat(str(value)[:10])
     except ValueError:
         return None
+
+
+# 不帶報價日期、又可能落後一場的兜底來源：Stooq 的 CSV 日期在建報價時就丟了，DB 缺 T-1 時
+# 它也可能同樣停在 T-2（實測 2026-10-22 紐約盤前），盤前不能憑日曆把它當成上一場收盤。
+_UNDATED_LAGGING_SOURCES = frozenset({RealtimeSource.STOOQ.value})
+
+
+def _premarket_session_unknown(quote: Any) -> bool:
+    """盤前報價沒有自帶日期、來源又可能落後一場時，它屬於哪一場無從得知。"""
+    if _coerce_to_date(getattr(quote, 'provider_timestamp', None)) is not None:
+        return False
+    source = getattr(quote, 'source', None)
+    return str(getattr(source, 'value', source)) in _UNDATED_LAGGING_SOURCES
 
 
 def _share_image_payload(result: Any) -> Optional[Dict[str, Any]]:
@@ -1202,6 +1215,9 @@ class StockAnalysisPipeline:
                 orig_date_norm = _coerce_to_date(orig_today.get('date'))
                 # provider 時間優先；抓取時間可能是休市日，不能直接當作報價場次。
                 quote_session = _coerce_to_date(getattr(realtime_quote, 'provider_timestamp', None))
+                if quote_session is None and not quote_is_today and orig_date_norm is not None \
+                        and _premarket_session_unknown(realtime_quote):
+                    quote_session = orig_date_norm  # 場次不明：不平移、不標成 DB 沒有的那一場
                 if quote_session is None:
                     quote_session = market_today_date if quote_is_today else get_effective_trading_date(
                         market, current_time=market_now
@@ -2813,6 +2829,8 @@ class StockAnalysisPipeline:
             # 才把報價當成那一場補上——否則均線等指標都算在少了 T-1 的序列上，
             # 而 today 估算列卻標 T-1。
             bar_date = get_effective_trading_date(market, current_time=market_now)
+            if _premarket_session_unknown(realtime_quote):
+                return df
             provider_date = _coerce_to_date(getattr(realtime_quote, 'provider_timestamp', None))
             if provider_date is not None and provider_date < bar_date:
                 bar_date = provider_date

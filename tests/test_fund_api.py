@@ -161,10 +161,17 @@ class FundApiTests(unittest.TestCase):
             points = self.client.get("/api/v1/funds/18480065/nav", params={"period": key}).json()["points"]
             self.assertAlmostEqual((points[-1]["nav"] / points[0]["nav"] - 1) * 100, returns[key], places=9, msg=key)
             # 基準是起點日當日或之前最後一筆：再往前一筆就超出區間
-            target = fund_service.period_base_target(end, key)
+            # 錨點是最後一筆淨值日：end 落在週末時序列只到週五（舊寫法用 end，週二、週三跑必紅）
+            target = fund_service.period_base_target(series[-1]["date"], key)
             self.assertLessEqual(date.fromisoformat(points[0]["date"]), target)
             nxt = date.fromisoformat(points[1]["date"])
             self.assertGreater(nxt, target, msg=key)
+
+    def test_nav_period_base_holds_when_end_falls_on_weekend(self):
+        # 固定案例：today 為週二、週三時 end 落在週六、週日，序列只到週五
+        for today in (date(2026, 10, 27), date(2026, 10, 28)):
+            with patch(f"{__name__}._today", return_value=today):
+                self.test_nav_period_starts_at_the_same_base_as_the_return_card()
 
     def test_nav_period_falls_back_to_all_history_when_too_short(self):
         self.market.series = _series(60)

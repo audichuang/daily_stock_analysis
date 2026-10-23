@@ -38,10 +38,10 @@ def _make_realtime_quote(
     change_pct: float = 0.96,
     **overrides,
 ) -> UnifiedRealtimeQuote:
+    overrides.setdefault("source", RealtimeSource.TENCENT)
     return UnifiedRealtimeQuote(
         code="600519",
         name="贵州茅台",
-        source=RealtimeSource.TENCENT,
         price=price,
         open_price=open_price,
         high=high,
@@ -184,11 +184,11 @@ class TestPremarketGuard(unittest.TestCase):
             self.config = Config._load_from_env()
         self.pipeline = StockAnalysisPipeline(config=self.config)
 
-    def _premarket_augment(self, *, db_last_offset: int, session_offset: int, provider_offset=None):
+    def _premarket_augment(self, *, db_last_offset: int, session_offset: int, provider_offset=None, **quote_kw):
         """盤前補 K：DB 最新列在 today-db_last_offset、上一場在 today-session_offset。"""
         today = date.today()
         now = datetime(today.year, today.month, today.day, 10, 0, tzinfo=timezone.utc)
-        quote = _make_realtime_quote(price=999.0)
+        quote = _make_realtime_quote(price=999.0, **quote_kw)
         if provider_offset is not None:
             quote.provider_timestamp = (today - timedelta(days=provider_offset)).isoformat()
         df = _make_historical_df(last_date=today - timedelta(days=db_last_offset))
@@ -225,6 +225,23 @@ class TestPremarketGuard(unittest.TestCase):
         self.assertEqual(len(result), len(df))
         _, df, result = self._premarket_augment(db_last_offset=2, session_offset=1, provider_offset=0)
         self.assertEqual(result.iloc[-1]["date"], date.today() - timedelta(days=1))
+
+    def test_premarket_undated_stooq_quote_is_not_appended_as_prior_session(self) -> None:
+        """Stooq 兜底不帶日期、可能和 DB 一樣停在 T-2：不能憑日曆把它補成 T-1 那根。
+
+        實測 2026-10-22 08:00 紐約、DB 與 Stooq 都停在 10/20：舊行為補出 10/21 假 K，MA5 102.0→102.8。
+        """
+        _, df, result = self._premarket_augment(db_last_offset=2, session_offset=1, source=RealtimeSource.STOOQ)
+        self.assertEqual(len(result), len(df))
+        self.assertNotEqual(result.iloc[-1]["close"], 999.0)
+
+    def test_premarket_dated_stooq_quote_for_prior_session_is_appended(self) -> None:
+        """反向：Stooq 報價自帶的日期就是缺的那一場時照補。"""
+        today, df, result = self._premarket_augment(
+            db_last_offset=2, session_offset=1, provider_offset=1, source=RealtimeSource.STOOQ
+        )
+        self.assertEqual(len(result), len(df) + 1)
+        self.assertEqual(result.iloc[-1]["date"], today - timedelta(days=1))
 
     @patch("src.core.pipeline.get_market_now")
     @patch("src.core.pipeline.is_market_open", return_value=True)
@@ -683,6 +700,17 @@ class TestEnhanceContextYesterdayAlignment(unittest.TestCase):
         self.assertEqual(enhanced["date"], self.t1.isoformat())
         self.assertEqual(enhanced["yesterday"]["date"], self.t2)
         self.assertEqual(enhanced["price_change_ratio"], 10.0)  # 對 T-2 的 100，不是 T-3 的 105
+
+    def test_premarket_undated_stooq_quote_is_not_labelled_as_missing_prior_session(self) -> None:
+        """Stooq 兜底不帶日期：DB 停在 T-2 時不能把它標成 T-1、也不平移 yesterday。"""
+        t3 = self.today - timedelta(days=3)
+        ctx = self._context(self.t2)
+        ctx["yesterday"]["date"] = t3
+        quote = _make_realtime_quote(price=100.0, volume=900, change_pct=None, source=RealtimeSource.STOOQ)
+        with patch("src.core.pipeline.get_effective_trading_date", return_value=self.t1):
+            enhanced = self._enhance(ctx, quote, market="us", phase=MarketPhase.PREMARKET)
+        self.assertEqual(enhanced["today"]["date"], self.t2.isoformat())
+        self.assertEqual(enhanced["yesterday"], ctx["yesterday"])
 
     def test_premarket_with_prior_bar_in_db_labels_prior_session_without_shift(self) -> None:
         """反向：DB 已有 T-1 時不平移，但日期仍是 T-1 不是掛鐘日。"""
