@@ -219,6 +219,8 @@ class MarketLightReviewResult:
     report: str
     market_light_snapshot: Optional[Dict[str, Any]]
     structured_payload: Dict[str, Any] = field(default_factory=dict)
+    # True when the report is the static template (no analyzer / empty LLM reply).
+    used_template: bool = False
 
 
 def _market_light_has_reading(snapshot: Optional[Dict[str, Any]]) -> bool:
@@ -1187,6 +1189,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 "[大盘] %s action=generate_review status=fallback_template reason=no_analyzer",
                 self._log_context(),
             )
+            self._used_template = True
             return self._generate_template_review(overview, news)
 
         # 构建 Prompt
@@ -1277,6 +1280,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             "[大盘] %s action=generate_review status=fallback_template reason=empty_llm_response",
             self._log_context(),
         )
+        self._used_template = True
         return self._generate_template_review(overview, news)
 
     def _get_analyzer_generation_backend_config_error(self) -> Optional[GenerationError]:
@@ -2858,6 +2862,7 @@ Market conditions can change quickly. The data above is for reference only and d
         news = self._merge_persisted_market_intelligence(news)
 
         # 3. 生成复盘报告
+        self._used_template = False
         report = self.generate_market_review(overview, news)
         # 在**源头**就把无读数的快照压成 None，而不是让每个消费端各自防守。
         # 评分器在所有维度不可用时仍回一个分数为预设 50 的完整快照；那个 50 会一路
@@ -2881,6 +2886,7 @@ Market conditions can change quickly. The data above is for reference only and d
             report=report,
             market_light_snapshot=snapshot,
             structured_payload=structured_payload,
+            used_template=getattr(self, "_used_template", False),
         )
 
     def _merge_persisted_market_intelligence(self, news: List) -> List:
