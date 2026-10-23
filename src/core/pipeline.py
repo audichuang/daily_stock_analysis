@@ -1179,7 +1179,16 @@ class StockAnalysisPipeline:
                 # During the session the quote volume is a partial-day cumulative figure divided by
                 # full-day averages, so it reads "shrinking" by construction; label it instead of judging it.
                 _tw_market = get_market_for_stock(normalize_stock_code(context.get('code') or ''))
-                if _tw_market and infer_market_phase(_tw_market, get_market_now(_tw_market)) in (
+                # Prefer the caller-supplied phase (same source as is_partial_bar below); wall clock is the fallback.
+                _phase = None
+                if isinstance(market_phase_context, dict) and market_phase_context.get('phase'):
+                    try:
+                        _phase = MarketPhase(market_phase_context['phase'])
+                    except ValueError:
+                        _phase = None
+                if _phase is None and _tw_market:
+                    _phase = infer_market_phase(_tw_market, get_market_now(_tw_market))
+                if _tw_market and _phase in (
                     MarketPhase.INTRADAY, MarketPhase.LUNCH_BREAK, MarketPhase.CLOSING_AUCTION,
                 ):
                     rt['volume_ratio_basis'] = 'avg5_intraday'
