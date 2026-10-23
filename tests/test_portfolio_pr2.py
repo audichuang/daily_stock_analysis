@@ -880,10 +880,10 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertAlmostEqual(self._fx_row(date(2026, 1, 8)).rate, 7.04)  # today's rate unchanged
 
     # ---- outlier filter: only isolated spikes are rejected ----
-    def _filter(self, closes, as_of=date(2026, 1, 8), pair=("USD", "CNY"), london_today=date(2026, 1, 8)):
+    def _filter(self, closes, as_of=date(2026, 1, 8), pair=("USD", "CNY"), london_today=date(2026, 1, 8), **kw):
         with patch.object(PortfolioService, "_london_today", return_value=london_today):
             return self.service._filter_fx_outliers(
-                from_currency=pair[0], to_currency=pair[1], as_of_date=as_of, closes=closes
+                from_currency=pair[0], to_currency=pair[1], as_of_date=as_of, closes=closes, **kw
             )
 
     def test_fx_outlier_isolated_spike_rejected(self) -> None:
@@ -907,6 +907,100 @@ class PortfolioPr2TestCase(unittest.TestCase):
         with patch.object(PortfolioService, "_fetch_fx_cross_rate", return_value=7.60):
             out = self._filter(closes, pair=("TWD", "CNY"), london_today=date(2026, 6, 1))
         self.assertEqual(out, closes)
+
+    # ---- cross-rate check on every bar (non-USD pairs): consecutive junk cannot vouch for itself ----
+    def _cross(self, *days, rate=0.2045):
+        return {date(2026, 1, d): rate for d in days}
+
+    def test_fx_outlier_consecutive_junk_rejected_with_cross_rate(self) -> None:
+        closes = [(date(2026, 1, 6), 0.2054), (date(2026, 1, 7), 0.1963), (date(2026, 1, 8), 0.1963)]
+        kw = {"pair": ("TWD", "CNY")}
+        self.assertEqual(self._filter(closes, cross_closes={}, **kw), closes)  # neighbour rule alone is fooled
+        self.assertEqual(self._filter(closes, cross_closes=self._cross(6, 7, 8), **kw), closes[:1])
+
+    def test_fx_outlier_real_jump_accepted_when_cross_jumps_too(self) -> None:
+        closes = [(date(2026, 1, 6), 0.2054), (date(2026, 1, 7), 0.2200), (date(2026, 1, 8), 0.2201)]
+        cross = {date(2026, 1, 6): 0.2054, date(2026, 1, 7): 0.2199, date(2026, 1, 8): 0.2200}
+        self.assertEqual(self._filter(closes, pair=("TWD", "CNY"), cross_closes=cross), closes)
+
+    def test_fx_outlier_missing_cross_day_falls_back_to_neighbour_rule(self) -> None:
+        closes = [(date(2026, 1, 6), 0.2054), (date(2026, 1, 7), 0.1963), (date(2026, 1, 8), 0.2050)]
+        out = self._filter(closes, pair=("TWD", "CNY"), cross_closes=self._cross(6, 8))
+        self.assertEqual([d for d, _ in out], [date(2026, 1, 6), date(2026, 1, 8)])
+
+    def test_fx_outlier_usd_pair_ignores_cross_and_keeps_neighbour_rule(self) -> None:
+        closes = [(date(2026, 1, 6), 7.30), (date(2026, 1, 7), 6.00), (date(2026, 1, 8), 6.00)]
+        with patch("src.services.portfolio_service.yf", MagicMock()), patch.object(
+            PortfolioService, "_fetch_fx_closes_from_yfinance", side_effect=AssertionError("no cross for USD")
+        ):
+            self.assertEqual(self._filter(closes), closes)  # two adjacent junk bars still pass: unchanged
+            self.assertEqual(PortfolioService._fetch_fx_cross_closes(
+                from_currency="USD", to_currency="CNY", as_of_date=date(2026, 1, 8)), {})
+
+    def test_fx_cross_closes_built_from_usd_legs_per_day(self) -> None:
+        legs = {
+            "TWD": [(date(2026, 1, 6), 32.0), (date(2026, 1, 7), 32.5)],
+            "CNY": [(date(2026, 1, 7), 6.5), (date(2026, 1, 8), 6.6)],
+        }
+        fake = lambda *, from_currency, to_currency, as_of_date: legs[to_currency]  # noqa: E731
+        with patch("src.services.portfolio_service.yf", MagicMock()), patch.object(
+            PortfolioService, "_fetch_fx_closes_from_yfinance", side_effect=fake
+        ):
+            out = PortfolioService._fetch_fx_cross_closes(
+                from_currency="TWD", to_currency="CNY", as_of_date=date(2026, 1, 8)
+            )
+        self.assertEqual(list(out), [date(2026, 1, 7)])  # only the day both legs have
+        self.assertAlmostEqual(out[date(2026, 1, 7)], 6.5 / 32.5)
+
+    def _refresh_twd_cny(self, pair_closes, usd_twd, usd_cny, as_of, london_today):
+        account = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=date(2026, 1, 1), direction="in", amount=1000.0, currency="TWD"
+        )
+        table = {("TWD", "CNY"): pair_closes, ("USD", "TWD"): usd_twd, ("USD", "CNY"): usd_cny}
+        fake = lambda *, from_currency, to_currency, as_of_date: table[(from_currency, to_currency)]  # noqa: E731
+        with patch("src.services.portfolio_service.yf", MagicMock()), patch.object(
+            PortfolioService, "_fetch_fx_closes_from_yfinance", side_effect=fake
+        ), patch.object(PortfolioService, "_london_today", return_value=london_today):
+            self.service.refresh_fx_rates(account_id=account["id"], as_of=as_of)
+
+    def _twd_row(self, on_date):
+        row = self.service.repo.get_latest_fx_rate(from_currency="TWD", to_currency="CNY", as_of=on_date)
+        return row if row is not None and row.rate_date == on_date else None
+
+    def _junk_window(self):
+        days = [date(2026, 1, 6), date(2026, 1, 7), date(2026, 1, 8)]
+        pair = list(zip(days, [0.2054, 0.1963, 0.1963]))
+        return pair, [(d, 32.6) for d in days], [(d, 6.665) for d in days]
+
+    def test_fx_refresh_rewrites_stored_junk_row_from_cross_rate(self) -> None:
+        pair, twd, cny = self._junk_window()
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 7), rate=0.1963,
+            source="yfinance_backfill", is_stale=False,
+        )
+        self._refresh_twd_cny(pair, twd, cny, date(2026, 1, 8), date(2026, 1, 8))
+        row = self._twd_row(date(2026, 1, 7))
+        self.assertAlmostEqual(row.rate, 6.665 / 32.6)
+        self.assertEqual(row.source, "yfinance_cross")
+        self.assertFalse(bool(row.is_stale))
+        self.assertTrue(self._twd_row(date(2026, 1, 8)).is_stale)  # rejected newest bar is a carry, not 0.1963
+
+    def test_fx_refresh_cross_repair_fills_missing_day_but_spares_manual_and_close_rows(self) -> None:
+        pair, twd, cny = self._junk_window()
+        self._refresh_twd_cny(pair, twd, cny, date(2026, 1, 8), date(2026, 1, 8))
+        self.assertEqual(self._twd_row(date(2026, 1, 7)).source, "yfinance_cross")  # no row before: filled
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 7), rate=0.19, source="manual", is_stale=False
+        )
+        self._refresh_twd_cny(pair, twd, cny, date(2026, 1, 8), date(2026, 1, 8))
+        self.assertAlmostEqual(self._twd_row(date(2026, 1, 7)).rate, 0.19)  # manual untouched
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 7), rate=0.2040,
+            source="yfinance_backfill", is_stale=False,
+        )
+        self._refresh_twd_cny(pair, twd, cny, date(2026, 1, 8), date(2026, 1, 8))
+        self.assertAlmostEqual(self._twd_row(date(2026, 1, 7)).rate, 0.2040)  # within tolerance: left alone
 
     def test_fx_cross_rate_none_when_a_leg_is_usd(self) -> None:
         yf_mock = MagicMock()
@@ -1447,6 +1541,53 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertIn("sector_concentration", payload)
         self.assertIn("drawdown", payload)
         self.assertIn("stop_loss", payload)
+
+    # ---- review follow-ups: cross rows stay automated, next-neighbour uses cross, stale carry from repairs ----
+    def test_fx_refresh_overwrites_stored_cross_row_with_correct_value(self) -> None:
+        days = [date(2026, 1, 6), date(2026, 1, 7), date(2026, 1, 8)]
+        pair = list(zip(days, [0.2054, 0.2050, 0.2050]))
+        twd = [(d, 32.6) for d in days]
+        cny = [(d, 6.665) for d in days]
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=days[1], rate=0.1840,
+            source="yfinance_cross", is_stale=False,
+        )
+        self._refresh_twd_cny(pair, twd, cny, days[2], days[2])
+        row = self._twd_row(days[1])
+        self.assertAlmostEqual(row.rate, 0.2050)
+        self.assertEqual(row.source, "yfinance_backfill")
+
+    def test_fx_refresh_cross_row_wrong_is_repaired_again(self) -> None:
+        pair, twd, cny = self._junk_window()
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 7), rate=0.1840,
+            source="yfinance_cross", is_stale=False,
+        )
+        self._refresh_twd_cny(pair, twd, cny, date(2026, 1, 8), date(2026, 1, 8))
+        self.assertAlmostEqual(self._twd_row(date(2026, 1, 7)).rate, 6.665 / 32.6)
+
+    def test_fx_outlier_next_neighbour_uses_cross_when_next_is_rejected(self) -> None:
+        closes = [(date(2026, 1, 6), 0.2054), (date(2026, 1, 7), 0.1963), (date(2026, 1, 8), 0.1963)]
+        out = self._filter(closes, pair=("TWD", "CNY"), cross_closes=self._cross(6, 8))
+        self.assertEqual(out, closes[:1])
+
+    def test_fx_outlier_next_neighbour_cross_keeps_real_jump(self) -> None:
+        closes = [(date(2026, 1, 6), 0.2054), (date(2026, 1, 7), 0.2200), (date(2026, 1, 8), 0.2201)]
+        cross = {date(2026, 1, 6): 0.2054, date(2026, 1, 8): 0.2200}
+        self.assertEqual(self._filter(closes, pair=("TWD", "CNY"), cross_closes=cross), closes)
+
+    def test_fx_refresh_stale_carry_starts_from_newer_repaired_day(self) -> None:
+        pair, twd, cny = self._junk_window()
+        self._refresh_twd_cny(pair, twd, cny, date(2026, 1, 8), date(2026, 1, 8))
+        today = self._twd_row(date(2026, 1, 8))
+        self.assertTrue(today.is_stale)
+        self.assertAlmostEqual(today.rate, 6.665 / 32.6)  # not 0.2054 from 01-06
+
+    def test_fx_refresh_stale_carry_ignores_repair_not_older_than_accepted(self) -> None:
+        days = [date(2026, 1, 6), date(2026, 1, 7), date(2026, 1, 8)]
+        pair = list(zip(days, [0.1963, 0.2054, 0.1963]))  # junk on 01-06 (repaired), 01-07 accepted
+        self._refresh_twd_cny(pair, [(d, 32.6) for d in days], [(d, 6.665) for d in days], days[2], days[2])
+        self.assertAlmostEqual(self._twd_row(days[2]).rate, 0.2054)
 
 
 if __name__ == "__main__":
