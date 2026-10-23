@@ -375,3 +375,29 @@ def test_latest_price_date_reads_market_price_and_handles_an_empty_table(monkeyp
     assert "market.price" in seen[0] and "market_index" not in seen[0]
     monkeypatch.setattr(market_repo, "_q", lambda sql, params, engine: pd.DataFrame({"d": [None]}))
     assert market_repo.latest_price_date(engine=object()) is None
+
+
+def test_cutoff_uses_the_upload_time_when_the_title_does_not_say_盤前(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    tpe = timezone(timedelta(hours=8))
+
+    def ts(h, m):
+        return int(datetime(2026, 10, 6, h, m, tzinfo=tpe).timestamp())
+
+    listing = "\n".join(["am\t1400\t20261006 盤中連線!分析師", "pm\t1400\t20261006 盤後分析師",
+                         "early\t1400\t晨間節目"])
+    # yt-dlp's upload_date is the UTC day: 07:00 Taipei is still 10-05 there
+    meta = {"am": f"20261006 {ts(10, 3)}", "pm": f"20261006 {ts(19, 0)}", "early": f"20261005 {ts(7, 0)}"}
+
+    def fake_run(cmd, timeout=600):
+        if "--flat-playlist" in cmd:
+            return listing
+        return meta[cmd[-1].rsplit("=", 1)[1]]
+
+    monkeypatch.setattr(mp, "_run", fake_run)
+    monkeypatch.setattr(mp, "CHANNELS", [("節目", "tv", "UCx", r".", 1200)])
+    eps = {e["video_id"]: e for e in mp.new_episodes(mp.date(2026, 10, 1), set())}
+    assert eps["am"]["cutoff"] == mp.date(2026, 10, 5)  # a morning segment only knows the previous close
+    assert eps["pm"]["cutoff"] == mp.date(2026, 10, 6)
+    assert eps["early"]["uploaded"] == mp.date(2026, 10, 6) and eps["early"]["cutoff"] == mp.date(2026, 10, 5)

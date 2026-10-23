@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import tw_ptt_picks as tp  # noqa: E402
 
 INDEX = [("6811.TWO", "宏碁資訊", []), ("2316.TW", "楠梓電", []), ("3045.TW", "台灣大", []),
-         ("0052.TW", "富邦科技", [])]
+         ("0052.TW", "富邦科技", []), ("2330.TW", "台積電", []), ("1810.TW", "和成", []), ("2025.TW", "千興", [])]
 
 META = ('<div id="main-content" class="bbs-screen bbs-content"><div class="article-metaline">'
         '<span class="article-meta-tag">作者</span><span class="article-meta-value">someone (暱稱)</span></div>'
@@ -53,17 +53,47 @@ def test_stance_of_needs_one_side_only():
 
 
 def test_resolve_target_uses_typed_code_and_keeps_market_out_of_fuzzy():
-    assert tp.resolve_target("宏碁資訊-6811", INDEX) == ("6811.TWO", "code")
+    assert tp.resolve_target("宏碁資訊-6811", INDEX) == ("6811.TWO", "exact")
     assert tp.resolve_target("2316.TW 楠梓電", INDEX) == ("2316.TW", "code")
     assert tp.resolve_target("楠梓電", INDEX) == ("2316.TW", "exact")
     assert tp.resolve_target("台灣大盤", INDEX) == (None, "market")
-    assert tp.resolve_target("0052 台股科技", INDEX) == ("0052.TW", "code")  # a typed code beats the market words
+    assert tp.resolve_target("0052 富邦科技 台股", INDEX) == ("0052.TW", "code")  # a typed code beats the market words
     assert tp.resolve_target("SOXS", INDEX) == (None, "unresolved")
 
 
-def test_data_cutoff_uses_previous_close_before_1330():
-    assert tp.data_cutoff(tp.post_time("M.1792560300.A.000")) == date(2026, 10, 20)  # 13:25 Taipei
-    assert tp.data_cutoff(tp.post_time("M.1792560600.A.000")) == date(2026, 10, 21)  # 13:30 Taipei
+def test_data_cutoff_waits_for_the_day_to_be_public():
+    # the close is out at 13:30 but per-stock institutional flows only later; 17:00 covers both
+    assert tp.data_cutoff(tp.post_time("M.1792560660.A.000")) == date(2026, 10, 20)  # 13:31 Taipei
+    assert tp.data_cutoff(tp.post_time("M.1792573140.A.000")) == date(2026, 10, 20)  # 16:59
+    assert tp.data_cutoff(tp.post_time("M.1792573200.A.000")) == date(2026, 10, 21)  # 17:00
+
+
+def test_template_examples_and_foreign_or_year_numbers_are_not_trusted_codes():
+    assert tp.resolve_target(tp.parse_article(page("標的：(例 2330.TW 台積電) MU.US美光\n分類：多\n"),
+                                              "[標的] MU 美光 多")["target"], INDEX)[0] is None
+    assert tp.resolve_target("1810小米集團-W (例 2330 台積電)", INDEX) == ("1810.TW", "code_mismatch")
+    assert tp.resolve_target("台積電 2025目標", INDEX)[1] != "code"
+    assert tp.resolve_target("2330 台積電", INDEX) == ("2330.TW", "exact")
+
+
+def test_unfilled_category_template_falls_back_to_the_title():
+    p = tp.parse_article(page("標的：2316 楠梓電\n分類：多/空/討論/心得 (請選擇並刪除無關分類)\n分析/正文：x\n"),
+                         "[標的] 2316 楠梓電 多")
+    assert p["category"] is None and p["stance"] == "bullish"
+
+
+def test_non_article_page_is_an_error_not_a_row():
+    import pytest
+
+    with pytest.raises(ValueError):
+        tp.parse_article("<html><body>Service unavailable</body></html>", "[標的] 2330 多")
+
+
+def test_edit_time_is_kept_so_backtests_can_tell_rewritten_posts():
+    edits = ("※ 編輯: a (1.2.3.4 臺灣), 10/19/2026 22:00:37\n"
+             "※ 編輯: a (1.2.3.4 臺灣), 10/21/2026 09:01:57\n")
+    assert tp.parse_article(page("標的：2316\n") + edits, "[標的] 2316")["edited_at"] == "2026-10-21T09:01:57+08:00"
+    assert tp.parse_article(page("標的：2316\n"), "[標的] 2316")["edited_at"] is None
 
 
 def test_parse_search_keeps_only_original_target_posts():
