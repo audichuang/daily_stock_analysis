@@ -375,3 +375,27 @@ def test_latest_price_date_reads_market_price_and_handles_an_empty_table(monkeyp
     assert "market.price" in seen[0] and "market_index" not in seen[0]
     monkeypatch.setattr(market_repo, "_q", lambda sql, params, engine: pd.DataFrame({"d": [None]}))
     assert market_repo.latest_price_date(engine=object()) is None
+
+
+def test_fuzzy_is_vetoed_by_a_conflicting_llm_code():
+    idx = [("00708L.TW", "期元大S&P黃金正2", []), ("3257.TW", "虹冠電", [])]
+    # LLM code 00672L is not in the index; the gold fund is a near-name, not the oil fund
+    assert mp.resolve("期元大S&P原油正2", "00672L", idx) == (None, "unresolved")
+    assert mp.resolve("期元大S&P黃金正2", "00708L", idx)[1] == "exact"
+    # no LLM code: still fuzzy, flagged for a human
+    assert mp.resolve("冠電", None, idx) == ("3257.TW", "fuzzy")
+
+
+def test_media_aliases_beat_a_wrong_llm_code(tmp_path):
+    f = tmp_path / "idx.json"
+    rows = [["5234.TW", "5234.TW", "達興材料", "", "", [], "TW"], ["6234.TWO", "6234.TWO", "高僑", "", "", [], "TW"],
+            ["6456.TW", "6456.TW", "GIS-KY", "", "", [], "TW"]]
+    f.write_text(json.dumps(rows), encoding="utf-8")
+    idx = mp.load_index(f)
+    assert mp.resolve("高橋", "5234", idx) == ("6234.TWO", "alias")
+    assert mp.resolve("業成", "6456", idx) == ("6456.TW", "alias")
+
+
+def test_media_aliases_point_at_the_expected_stocks():
+    idx = {c: n for c, n, _ in mp.load_index()}
+    assert [idx.get(c) for c in ("2330.TW", "6234.TWO", "6456.TW", "6902.TW")] == ["台積電", "高僑", "GIS-KY", "GOGOLOOK"]
