@@ -65,12 +65,21 @@ _PREWARM_REVIEW_TTL_SECONDS = 4 * 3600
 _PREWARM_REVIEWS: Dict[Any, Any] = {}
 
 
+def _purge_prewarm_reviews() -> None:
+    """Drop entries past the TTL or from a previous day (orphan ids are never popped)."""
+    now, today = time.monotonic(), datetime.now().date()
+    for k, (ts, _) in list(_PREWARM_REVIEWS.items()):
+        if now - ts >= _PREWARM_REVIEW_TTL_SECONDS or k[1] != today:
+            _PREWARM_REVIEWS.pop(k, None)
+
+
 def _prewarm_caller_query_id(query_id: Optional[str], region: str) -> Optional[str]:
     """Recover the caller's query_id from `market_context_{qid}_{region}`.
 
     Real callers (CLI/API) use uuid4().hex ids, so format cannot tell them from
     the uuid daily_market_context generates when it has no caller; an entry for
-    that orphan id is harmless (nobody pops it).
+    that orphan id is never popped, so writers purge expired/stale-date entries
+    (see _purge_prewarm_reviews) to keep the long-lived serve process bounded.
     """
     prefix, suffix = "market_context_", f"_{region}"
     if not (query_id and query_id.startswith(prefix) and query_id.endswith(suffix)):
@@ -117,6 +126,7 @@ def _generate_region_review(
         and review_result.report
         and not getattr(review_result, "used_template", False)
     ):
+        _purge_prewarm_reviews()
         _PREWARM_REVIEWS[key] = (time.monotonic(), review_result)
     return review_result
 

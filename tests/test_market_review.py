@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import date
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -1096,6 +1097,21 @@ class PrewarmReviewReuseTestCase(unittest.TestCase):
         self.assertEqual(factory.call_count, 1)
         self._run("tw", "cli", factory, qid=qid)
         self.assertEqual(factory.call_count, 1)
+
+    def test_prewarm_purges_expired_and_stale_date_entries(self) -> None:
+        factory = self._factory()
+        for i in range(3):
+            self._run("tw", "daily_market_context", factory, qid=f"orphan{i}")
+        self.assertEqual(len(market_review_module._PREWARM_REVIEWS), 3)
+        with patch.object(market_review_module.time, "monotonic", return_value=10**9):
+            self._run("tw", "daily_market_context", factory, qid="fresh")
+        self.assertEqual(len(market_review_module._PREWARM_REVIEWS), 1)
+        # stale date: entry younger than TTL but from another day is also dropped
+        k = next(iter(market_review_module._PREWARM_REVIEWS))
+        v = market_review_module._PREWARM_REVIEWS.pop(k)
+        market_review_module._PREWARM_REVIEWS[(k[0], date(2000, 1, 1), *k[2:])] = v
+        self._run("tw", "daily_market_context", factory, qid="fresh2")
+        self.assertEqual(len(market_review_module._PREWARM_REVIEWS), 1)
 
     def test_template_prewarm_is_not_cached(self) -> None:
         factory = self._factory(used_template=True)
