@@ -143,7 +143,7 @@ class PriceAdjustment(Base):
     date: Mapped[_date] = mapped_column(Date, primary_key=True)  # 事件生效日(除權息日/恢復買賣日)
     factor: Mapped[float] = mapped_column(Numeric(18, 10), nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)  # dividend|split|reduction|inferred
-    source: Mapped[str] = mapped_column(String(24), nullable=False)  # twse_twt49u|twse_twtauu|inferred_price
+    source: Mapped[str] = mapped_column(String(24), nullable=False)  # twse_twt49u|twse_twtauu|tpex_revivt|inferred_price
     close_before: Mapped[float | None] = mapped_column(Numeric(12, 4))
     reference_price: Mapped[float | None] = mapped_column(Numeric(12, 4))
 

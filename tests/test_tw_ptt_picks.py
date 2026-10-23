@@ -71,7 +71,8 @@ def test_data_cutoff_waits_for_the_day_to_be_public():
 def test_template_examples_and_foreign_or_year_numbers_are_not_trusted_codes():
     assert tp.resolve_target(tp.parse_article(page("標的：(例 2330.TW 台積電) MU.US美光\n分類：多\n"),
                                               "[標的] MU 美光 多")["target"], INDEX)[0] is None
-    assert tp.resolve_target("1810小米集團-W (例 2330 台積電)", INDEX) == ("1810.TW", "code_mismatch")
+    # a foreign ticker sharing no name with the local company is not attached to it
+    assert tp.resolve_target("1810小米集團-W (例 2330 台積電)", INDEX) == (None, "unresolved")
     assert tp.resolve_target("台積電 2025目標", INDEX)[1] != "code"
     assert tp.resolve_target("2330 台積電", INDEX) == ("2330.TW", "exact")
 

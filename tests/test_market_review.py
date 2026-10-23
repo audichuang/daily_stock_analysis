@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import date
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -1010,6 +1011,152 @@ class MarketReviewMissingRegionsTestCase(unittest.TestCase):
         market_review_module.last_run_missing_regions().append("us")
 
         self.assertEqual(market_review_module.last_run_missing_regions(), ["tw"])
+
+
+class PrewarmReviewReuseTestCase(unittest.TestCase):
+    """Prewarm (daily_market_context) and formal review of the same query share one LLM run per region."""
+
+    def setUp(self) -> None:
+        market_review_module._PREWARM_REVIEWS.clear()
+        self.addCleanup(market_review_module._PREWARM_REVIEWS.clear)
+
+    def _run(self, region: str, trigger_source: str, factory: MagicMock, qid: str = "Q1"):
+        notifier = MagicMock()
+        notifier.save_report_to_file.return_value = "/tmp/x.md"
+        notifier.is_available.return_value = False
+        prewarm = trigger_source == "daily_market_context"
+        with patch.object(market_review_module, "MarketAnalyzer", factory), patch.object(
+            market_review_module, "_persist_market_review_history"
+        ):
+            return run_market_review(
+                notifier,
+                config=SimpleNamespace(report_language="zh", market_review_region=region),
+                override_region=region,
+                send_notification=False,
+                trigger_source=trigger_source,
+                query_id=f"market_context_{qid}_{region}" if prewarm else qid,
+            )
+
+    @staticmethod
+    def _factory(used_template: bool = False) -> MagicMock:
+        factory = MagicMock()
+        factory.side_effect = lambda **kw: MagicMock(
+            run_daily_review_with_snapshot=MagicMock(
+                return_value=SimpleNamespace(
+                    report=f"{kw['region']} body",
+                    market_light_snapshot={},
+                    used_template=used_template,
+                )
+            )
+        )
+        return factory
+
+    def test_formal_review_reuses_prewarmed_regions(self) -> None:
+        factory = self._factory()
+        self._run("tw", "daily_market_context", factory)
+        self._run("us", "daily_market_context", factory)
+        self.assertEqual(factory.call_count, 2)
+
+        result = self._run("tw,us", "cli", factory)
+
+        self.assertEqual(factory.call_count, 2)  # no new MarketAnalyzer
+        self.assertIn("tw body", result)
+        self.assertIn("us body", result)
+
+    def test_formal_review_does_not_feed_cache_and_reuse_is_one_shot(self) -> None:
+        factory = self._factory()
+        self._run("tw", "cli", factory)
+        self._run("tw", "cli", factory)
+        self.assertEqual(factory.call_count, 2)  # formal runs never reuse each other
+
+        self._run("tw", "daily_market_context", factory)
+        self._run("tw", "cli", factory)  # consumes cache
+        self._run("tw", "cli", factory)  # regenerates
+        self.assertEqual(factory.call_count, 4)
+
+    def test_expired_prewarm_is_not_reused(self) -> None:
+        factory = self._factory()
+        self._run("tw", "daily_market_context", factory)
+        with patch.object(market_review_module.time, "monotonic", return_value=10**9):
+            self._run("tw", "cli", factory)
+        self.assertEqual(factory.call_count, 2)
+
+    def test_prewarm_of_other_query_is_not_reused(self) -> None:
+        factory = self._factory()
+        self._run("tw", "daily_market_context", factory, qid="A")
+        self._run("tw", "api", factory, qid="B")
+        self.assertEqual(factory.call_count, 2)  # B regenerates
+        self._run("tw", "api", factory, qid="A")
+        self.assertEqual(factory.call_count, 2)  # A's entry survived B
+
+    def test_formal_review_reuses_prewarm_with_real_uuid_hex_query_id(self) -> None:
+        # CLI/API query ids are uuid4().hex; they must not be mistaken for "no caller".
+        qid = "102e6b6442b04b0883a7a80b014097d0"
+        factory = self._factory()
+        self._run("tw", "daily_market_context", factory, qid=qid)
+        self.assertEqual(factory.call_count, 1)
+        self._run("tw", "cli", factory, qid=qid)
+        self.assertEqual(factory.call_count, 1)
+
+    def test_prewarm_purges_expired_and_stale_date_entries(self) -> None:
+        factory = self._factory()
+        for i in range(3):
+            self._run("tw", "daily_market_context", factory, qid=f"orphan{i}")
+        self.assertEqual(len(market_review_module._PREWARM_REVIEWS), 3)
+        with patch.object(market_review_module.time, "monotonic", return_value=10**9):
+            self._run("tw", "daily_market_context", factory, qid="fresh")
+        self.assertEqual(len(market_review_module._PREWARM_REVIEWS), 1)
+        # stale date: entry younger than TTL but from another day is also dropped
+        k = next(iter(market_review_module._PREWARM_REVIEWS))
+        v = market_review_module._PREWARM_REVIEWS.pop(k)
+        market_review_module._PREWARM_REVIEWS[(k[0], date(2000, 1, 1), *k[2:])] = v
+        self._run("tw", "daily_market_context", factory, qid="fresh2")
+        self.assertEqual(len(market_review_module._PREWARM_REVIEWS), 1)
+
+    def test_template_prewarm_is_not_cached(self) -> None:
+        factory = self._factory(used_template=True)
+        self._run("tw", "daily_market_context", factory)
+        self.assertEqual(market_review_module._PREWARM_REVIEWS, {})
+        self._run("tw", "cli", factory)
+        self.assertEqual(factory.call_count, 2)  # formal run retries the LLM
+
+
+class UsedTemplateFlagTestCase(unittest.TestCase):
+    """The review result must say when the report is the static fallback template."""
+
+    def _parts(self, analyzer):
+        from src.market_analyzer import MarketAnalyzer, MarketOverview
+
+        ma = MarketAnalyzer(analyzer=analyzer, region="cn", config=SimpleNamespace(report_language="zh"))
+        with patch.object(ma, "get_market_overview", return_value=MarketOverview(date="2026-10-23")), patch.object(
+            ma, "search_market_news", return_value=[]
+        ), patch.object(ma, "_merge_persisted_market_intelligence", return_value=[]), patch.object(
+            ma, "_get_analyzer_generation_backend_config_error", return_value=None
+        ):
+            return ma._run_daily_review_parts()
+
+    def test_no_analyzer_marks_template(self) -> None:
+        self.assertTrue(self._parts(None).used_template)
+
+    def test_empty_llm_reply_marks_template(self) -> None:
+        class EmptyAnalyzer:
+            def is_available(self):
+                return True
+
+            def generate_text(self, *args, **kwargs):
+                return ""
+
+        self.assertTrue(self._parts(EmptyAnalyzer()).used_template)
+
+    def test_real_llm_reply_is_not_template(self) -> None:
+        class OkAnalyzer:
+            def is_available(self):
+                return True
+
+            def generate_text(self, *args, **kwargs):
+                return "## LLM body"
+
+        self.assertFalse(self._parts(OkAnalyzer()).used_template)
 
 
 if __name__ == "__main__":
