@@ -105,11 +105,46 @@ lock_age_seconds() {
   perl -e 'print time - (stat shift)[9]' "$1"
 }
 
-# 锁持有者还活着，但锁已存在超过门槛（预设 3 小时）→ 视为卡住。
+# 锁持有者还活着，但锁已存在超过门槛（$2 秒；缺省读 DAILY_REPORT_STALE_LOCK_SECONDS，预设 3 小时）→ 视为卡住。
 lock_is_stale() {
-  local age
+  local age limit="${2:-${DAILY_REPORT_STALE_LOCK_SECONDS:-10800}}"
   age=$(lock_age_seconds "$1" 2>/dev/null) || return 1
-  [[ "$age" =~ ^[0-9]+$ ]] && (( age > ${DAILY_REPORT_STALE_LOCK_SECONDS:-10800} ))
+  [[ "$age" =~ ^[0-9]+$ ]] && (( age > limit ))
+}
+
+# acquire_lock LOCK LABEL STALE_SECONDS [KEEP_LOG_ON_SKIP=0] [FAIL_TITLE]：每日报告与媒体点名共用的 mkdir 锁。
+# 持有者活着且锁龄超过 STALE_SECONDS → 记 FAILED、推 Bark、exit 1（不静默跳过）；
+# 持有者活着且没过期 → 记「本次不重複跑」、exit 0（KEEP_LOG_ON_SKIP=1 保留 $LOG，排程的 Claude 要 grep 它；否则删掉）；
+# 持有者已死 → 清掉旧锁重取。成功则写 pid、设 EXIT trap 清锁，LOCK 留在全域供 trap 用。
+acquire_lock() {
+  LOCK="$1"
+  local label="$2" stale_secs="$3" keep_log="${4:-0}" title="${5:-}"
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    if kill -0 "$(cat "$LOCK/pid" 2>/dev/null)" 2>/dev/null; then
+      if lock_is_stale "$LOCK" "$stale_secs"; then
+        # 持有者活着但锁龄过久：上一轮卡死了。留下本轮 log、推播，不要像以前那样静默退出。
+        local hours
+        hours=$(( $(lock_age_seconds "$LOCK") / 3600 ))
+        log "FAILED: 前一輪${label}（pid $(cat "$LOCK/pid")）已卡住約 ${hours} 小時，本輪未執行"
+        notify_failure "前一輪${label}（pid $(cat "$LOCK/pid")）已卡住約 ${hours} 小時仍未結束，本輪未執行。log: $LOG" ${title:+"$title"}
+        exit 1
+      fi
+      log "另一輪${label}仍在執行（pid $(cat "$LOCK/pid")），本次不重複跑"
+      [[ "$keep_log" == "1" ]] || rm -f "$LOG"
+      exit 0
+    fi
+    rm -rf "$LOCK" && mkdir "$LOCK"   # 前一輪被砍掉留下的鎖
+  fi
+  echo $$ >"$LOCK/pid"
+  trap 'rm -rf "$LOCK"' EXIT
+}
+
+# spawn_detached SCRIPT LAUNCHER_LOG：新 session 里跑 bash SCRIPT（不带参数），pid 放 DETACHED_PID。
+# 每日报告与媒体点名的 --detach 共用；呼叫端前缀的环境变数会带进子行程。
+spawn_detached() {
+  nohup perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die "exec: $!"' bash "$1" \
+    >>"$2" 2>&1 </dev/null &
+  DETACHED_PID=$!
 }
 
 run_step() {
@@ -211,9 +246,8 @@ main() {
   # 结束一轮后，它的 terminal 会被收掉，连同背景子行程一起砍——报告不能跟着 agent 的寿命走。
   if [[ "${1:-}" == "--detach" ]]; then
     mkdir -p logs
-    nohup perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die "exec: $!"' bash "$0" \
-      >>logs/daily_report_launcher.log 2>&1 </dev/null &
-    echo "daily report started in background (pid $!); progress: newest logs/daily_report_*.log"
+    spawn_detached "$0" logs/daily_report_launcher.log
+    echo "daily report started in background (pid $DETACHED_PID); progress: newest logs/daily_report_*.log"
     exit 0
   fi
 
@@ -232,24 +266,7 @@ main() {
     exit 0
   fi
 
-  LOCK="logs/.daily_report.lock"
-  if ! mkdir "$LOCK" 2>/dev/null; then
-    if kill -0 "$(cat "$LOCK/pid" 2>/dev/null)" 2>/dev/null; then
-      if lock_is_stale "$LOCK"; then
-        # 持有者活着但锁龄过久：上一轮卡死了。留下本轮 log、推播，不要像以前那样静默退出。
-        hours=$(( $(lock_age_seconds "$LOCK") / 3600 ))
-        log "FAILED: 前一輪每日報告（pid $(cat "$LOCK/pid")）已卡住約 ${hours} 小時，本輪未執行"
-        notify_failure "前一輪每日報告（pid $(cat "$LOCK/pid")）已卡住約 ${hours} 小時仍未結束，本輪未執行。log: $LOG"
-        exit 1
-      fi
-      log "另一輪每日報告仍在執行（pid $(cat "$LOCK/pid")），本次不重複跑"
-      rm -f "$LOG"
-      exit 0
-    fi
-    rm -rf "$LOCK" && mkdir "$LOCK"   # 前一輪被砍掉留下的鎖
-  fi
-  echo $$ >"$LOCK/pid"
-  trap 'rm -rf "$LOCK"' EXIT
+  acquire_lock "logs/.daily_report.lock" 每日報告 "${DAILY_REPORT_STALE_LOCK_SECONDS:-10800}"
 
   log "daily report start (log: $LOG)"
   run_step "台股資料更新 (market_data daily)" uv run --env-file .env python -m market_data.cli daily

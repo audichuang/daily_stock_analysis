@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 媒體點名排程的審查修正：journal push 被拒時先 `pull --rebase` 再推，之後同步 `develop` 遇到只剩未推的 journal commit 會 rebase 而不是整輪中止；鎖改與每日報告共用 `acquire_lock`（卡死超過 3 小時推 Bark，不再每晚靜默跳過）；`--detach` 印出本輪確切 log 路徑（不再可能讀到前一晚的 log）；`RESULT since=` 摘要失敗也照記；摘要回灌代號覆核（更正的點名改掛到正確代號、不是個股的拿掉）；`media_picks_summary.py` 必須指定 `--json`／`--index`／`--code`（移除沒人用的全文模式），缺日期的歷史列不再讓索引當掉
 - [改進] 23:00 媒體點名排程改成「腳本擷取＋Claude 判讀」：`make media-picks-detached`（`scripts/media_picks_job.sh`）脫離 session 跑完同步、擷取、commit journal 與摘要（`scripts/media_picks_summary.py`，看多排行改依講者去重、只收本輪寫入的列），失敗自己推 Bark；排程的 Claude 改做代號覆核（寫進新的 `journal/media-picks-review.jsonl`）與研究建議。起因是 10-23 那輪被 Hindsight 調查子程序觸發的 Orca Stop hook 中途收掉
 - [改進] 媒體點名摘要改成只整理證據、不下結論：拿掉 `data_ok` 門檻與只收看多的排行，改成每檔列出每位講者的理由／條件／引述（多空中性都收）、播出當時的數據與之前被點名的紀錄（首次日期與至今漲跌、近 7 天被點名天數），全文約 160 KB 太大，改分兩層：`--index` 精簡索引（約 20 KB）給主 agent 挑檔，`--code` 單檔完整證據給子 agent；排程的 Claude 挑最多 8 檔、一檔一個子 agent 平行跑 `tw_stock_dossier` 判斷好壞，結論寫進新的 `journal/media-picks-verdicts.jsonl` 供日後回驗
 - [文件] 新增 `docs/tw-data-integrity.md`：資料正確性判準、各資料集驗證範圍、已知不修的差異、10-23～24 修正紀錄與維運 runbook

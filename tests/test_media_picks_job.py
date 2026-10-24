@@ -209,3 +209,192 @@ def test_commit_journal_reports_none_when_unchanged(repo):
     head = _git(repo, "rev-parse", "HEAD")
     assert _commit_journal(repo) == "none"
     assert _git(repo, "rev-parse", "HEAD") == head
+
+
+# ---- push／sync／鎖／detach／summary 的失敗路徑（stub 掉 notify_failure，絕不送 Bark） ----
+
+def _sh(cwd, body, env_extra=None):
+    """source job 腳本後跑 body；notify_failure 換成寫檔，LOG 預設丟掉。"""
+    prelude = (f'source "{JOB}"; LOG="${{LOG:-/dev/null}}"; '
+               'notify_failure() { printf "%s\\n" "$*" >>"${NOTIFY_FILE:-/dev/null}"; }; ')
+    import os
+    env = dict(os.environ)
+    env.update(env_extra or {})
+    return subprocess.run(["bash", "-c", prelude + body], cwd=cwd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=90, env=env)
+
+
+def _advance_origin(tmp_path, repo, filename, content):
+    """另一個 clone 往 origin/develop 推一個 commit，模擬別處先推了 develop。"""
+    other = tmp_path / "other"
+    remote = _git(repo, "remote", "get-url", "origin")
+    if not other.exists():
+        _git(tmp_path, "clone", "-q", remote, str(other))
+        _git(other, "config", "user.email", "o@example.com")
+        _git(other, "config", "user.name", "o")
+    path = other / filename
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    _git(other, "add", ".")
+    _git(other, "commit", "-q", "-m", f"other {filename}")
+    _git(other, "push", "-q", "origin", "develop")
+
+
+def _remote_files(repo, ref="develop"):
+    return set(_git(repo, "ls-tree", "-r", "--name-only", f"origin/{ref}").split())
+
+
+def test_commit_journal_rebases_and_retries_when_push_rejected(repo, tmp_path):
+    _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", '{"theirs": 1}\n')
+    with (repo / "journal" / "media-picks.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"mine": 1}\n')
+
+    assert _commit_journal(repo) == "ok"
+    _git(repo, "fetch", "-q", "origin")
+    assert _git(repo, "rev-parse", "HEAD") == _git(repo, "rev-parse", "origin/develop")
+    assert _remote_files(repo) >= {"journal/ptt-picks.jsonl", "journal/media-picks.jsonl"}
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+def test_commit_journal_fails_and_aborts_rebase_on_conflict(repo, tmp_path):
+    _advance_origin(tmp_path, repo, "journal/media-picks.jsonl", '{"theirs": 1}\n')   # 同一檔同一行 → 衝突
+    (repo / "journal" / "media-picks.jsonl").write_text('{"mine": 1}\n', encoding="utf-8")
+
+    assert _commit_journal(repo) == "fail"
+    assert not (repo / ".git" / "rebase-merge").exists() and not (repo / ".git" / "rebase-apply").exists()
+    assert _git(repo, "branch", "--show-current") == "develop"
+
+
+def test_commit_journal_pushes_leftover_local_commit_without_new_changes(repo):
+    with (repo / "journal" / "media-picks.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"leftover": 1}\n')
+    _git(repo, "commit", "-q", "-am", "journal: leftover")     # 上一晚 push 失敗留下的
+    assert _git(repo, "status", "--porcelain") == ""
+
+    assert _commit_journal(repo) == "ok"
+    assert _git(repo, "rev-parse", "HEAD") == _git(repo, "ls-remote", "origin", "develop").split()[0]
+
+
+def test_sync_develop_rebases_when_only_journal_commits_are_local(repo, tmp_path):
+    with (repo / "journal" / "media-picks.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"mine": 1}\n')
+    _git(repo, "commit", "-q", "-am", "journal: mine")
+    _advance_origin(tmp_path, repo, "other.txt", "changed upstream\n")
+
+    r = _sh(repo, "sync_develop")
+    assert r.returncode == 0, r.stderr
+    assert _git(repo, "log", "--format=%s", "-3").splitlines()[0] == "journal: mine"
+    assert (repo / "other.txt").read_text(encoding="utf-8") == "changed upstream\n"
+    assert _git(repo, "merge-base", "--is-ancestor", "origin/develop", "HEAD") == ""
+
+
+def test_sync_develop_refuses_rebase_when_local_commit_touches_non_journal(repo, tmp_path):
+    (repo / "other.txt").write_text("local edit\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "local non-journal")
+    _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", "{}\n")
+    head = _git(repo, "rev-parse", "HEAD")
+
+    r = _sh(repo, "sync_develop")
+    assert r.returncode == 1
+    assert "other.txt" in r.stderr
+    assert _git(repo, "rev-parse", "HEAD") == head      # 沒被動過
+
+
+def test_sync_develop_fast_forwards_when_nothing_local(repo, tmp_path):
+    _advance_origin(tmp_path, repo, "other.txt", "x\n")
+    assert _sh(repo, "sync_develop").returncode == 0
+    assert (repo / "other.txt").read_text(encoding="utf-8") == "x\n"
+
+
+def _lock_run(tmp_path, holder_pid, age_s, keep_log, stale_s=100):
+    import os
+    lock = tmp_path / "logs" / ".job.lock"
+    lock.mkdir(parents=True, exist_ok=True)
+    if holder_pid is not None:
+        (lock / "pid").write_text(str(holder_pid))
+    t = datetime.now().timestamp() - age_s
+    os.utime(lock, (t, t))
+    log = tmp_path / "job.log"
+    notify = tmp_path / "notify.txt"
+    r = _sh(tmp_path, f'acquire_lock logs/.job.lock 媒體點名 {stale_s} {keep_log} "TITLE"; echo acquired',
+            {"LOG": str(log), "NOTIFY_FILE": str(notify)})
+    return r, log, notify, lock
+
+
+@pytest.fixture()
+def live_holder():
+    p = subprocess.Popen(["sleep", "60"])
+    yield p.pid
+    p.kill()
+    p.wait()
+
+
+def test_acquire_lock_stale_live_holder_fails_and_notifies(tmp_path, live_holder):
+    r, log, notify, _ = _lock_run(tmp_path, live_holder, age_s=500, keep_log=1)
+    assert r.returncode == 1 and "acquired" not in r.stdout
+    assert "FAILED:" in log.read_text(encoding="utf-8")
+    assert "已卡住" in notify.read_text(encoding="utf-8") and "TITLE" in notify.read_text(encoding="utf-8")
+
+
+def test_acquire_lock_fresh_live_holder_skips_and_keeps_log(tmp_path, live_holder):
+    r, log, notify, _ = _lock_run(tmp_path, live_holder, age_s=5, keep_log=1)
+    assert r.returncode == 0 and "acquired" not in r.stdout
+    assert "本次不重複跑" in log.read_text(encoding="utf-8")
+    assert not notify.exists()
+
+
+def test_acquire_lock_skip_removes_log_unless_asked_to_keep(tmp_path, live_holder):
+    log = tmp_path / "job.log"
+    log.write_text("x", encoding="utf-8")
+    r, log, _, _ = _lock_run(tmp_path, live_holder, age_s=5, keep_log=0)
+    assert r.returncode == 0
+    assert not log.exists()
+
+
+def test_acquire_lock_dead_holder_is_reacquired(tmp_path):
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    r, _, notify, lock = _lock_run(tmp_path, dead.pid, age_s=5000, keep_log=1)
+    assert r.returncode == 0 and "acquired" in r.stdout
+    assert not notify.exists()
+    assert not lock.exists()      # EXIT trap 清掉了本輪的鎖
+
+
+def test_pick_run_id_honours_env_and_detach_prints_exact_log_path(tmp_path):
+    r = _sh(tmp_path, 'pick_run_id', {"MEDIA_PICKS_RUN_ID": "20261101_230000"})
+    assert r.stdout.strip() == "20261101_230000"
+    assert _sh(tmp_path, 'unset MEDIA_PICKS_RUN_ID; pick_run_id').stdout.strip() != ""
+
+    body = ('spawn_detached() { echo "spawn script=$1 id=$MEDIA_PICKS_RUN_ID" >&2; DETACHED_PID=4242; }; '
+            'unset MEDIA_PICKS_RUN_ID; detach_media /x/media_picks_job.sh')
+    r = _sh(tmp_path, body)
+    assert r.returncode == 0
+    path_line = next(ln for ln in r.stdout.splitlines() if ln.startswith("log: "))
+    run_id = path_line.removeprefix("log: logs/media_picks_job_").removesuffix(".log")
+    assert f"spawn script=/x/media_picks_job.sh id={run_id}" in r.stderr     # 子行程拿到同一個 id
+    assert "pid 4242" in r.stdout
+
+
+def test_summarize_run_logs_since_even_when_summary_fails(tmp_path):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "uv").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    (bindir / "uv").chmod(0o755)
+    log = tmp_path / "job.log"
+    r = _sh(tmp_path, 'summarize_run 2026-10-26T23:00:00+0800 "$PWD/s.json"; echo rc=$?',
+            {"LOG": str(log), "PATH": f"{bindir}:/usr/bin:/bin"})
+    text = log.read_text(encoding="utf-8")
+    assert "rc=1" in r.stdout
+    assert "RESULT since=2026-10-26T23:00:00+0800" in text and "RESULT summary=none" in text
+
+
+def test_sync_develop_aborts_rebase_on_conflict(repo, tmp_path):
+    (repo / "journal" / "media-picks.jsonl").write_text('{"mine": 1}\n', encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "journal: mine")
+    _advance_origin(tmp_path, repo, "journal/media-picks.jsonl", '{"theirs": 1}\n')   # 同一行 → 衝突
+    head = _git(repo, "rev-parse", "HEAD")
+
+    r = _sh(repo, "sync_develop")
+    assert r.returncode == 1
+    assert not (repo / ".git" / "rebase-merge").exists() and not (repo / ".git" / "rebase-apply").exists()
+    assert _git(repo, "rev-parse", "HEAD") == head
