@@ -2333,7 +2333,12 @@ class StockAnalysisPipeline:
                     if trend_decision:
                         self._mark_trend_fallback_source(result)
             else:
-                result.decision_type = normalize_decision_signal(raw_decision)
+                # Unknown labels ("add", "accumulate") must not become an explicit hold that skips buy guardrails
+                result.decision_type = (
+                    normalize_decision_signal(raw_decision, default="")
+                    or infer_decision_type_from_advice(result.operation_advice, default="")
+                    or "hold"
+                )
             result.confidence_level = localize_confidence_level(
                 self._agent_dashboard_value(dash, nested_dashboard, "confidence_level")
                 or result.confidence_level,

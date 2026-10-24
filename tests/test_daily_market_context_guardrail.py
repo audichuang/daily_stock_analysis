@@ -337,7 +337,7 @@ def test_buy_without_real_risk_context_is_not_softened(context) -> None:
 
 
 @pytest.mark.parametrize("decision_type", ["", "unknown"])
-@pytest.mark.parametrize("advice", ["买入", "Buy"])
+@pytest.mark.parametrize("advice", ["买入", "Buy", "建議買進", "逢低加碼"])
 def test_fallback_to_shared_advice_map_when_decision_type_invalid(decision_type, advice) -> None:
     result = _typed(decision_type, advice, "zh")
 

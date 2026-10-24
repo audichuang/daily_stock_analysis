@@ -74,6 +74,16 @@ class ReportLanguageTestCase(unittest.TestCase):
         self.assertEqual(get_bias_status_emoji("Safe"), "✅")
         self.assertEqual(get_bias_status_emoji("Caution"), "⚠️")
 
+    def test_infer_decision_type_from_advice_matches_traditional_chinese(self) -> None:
+        for advice, expected in [
+            ("建議買進", "buy"), ("買入", "buy"), ("強烈買入", "buy"), ("逢低加碼", "buy"), ("加倉", "buy"),
+            ("觀望", "hold"), ("持有觀察", "hold"), ("洗盤觀察", "hold"),
+            ("減碼", "sell"), ("減倉", "sell"), ("賣出", "sell"), ("減碼，跌破500再進場", "sell"),
+            ("暫不加倉，繼續持有觀察", "hold"), ("不建議買進", ""), ("沒有加碼理由，觀望", "hold"),
+        ]:
+            with self.subTest(advice=advice):
+                self.assertEqual(infer_decision_type_from_advice(advice, default=""), expected)
+
     def test_infer_decision_type_from_advice_matches_chinese_phrases(self) -> None:
         self.assertEqual(infer_decision_type_from_advice("建议买入"), "buy")
         self.assertEqual(infer_decision_type_from_advice("建议持有"), "hold")
