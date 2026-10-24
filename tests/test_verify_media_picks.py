@@ -95,7 +95,7 @@ def test_bearish_hit_is_negative_excess():
     ex = [-0.05, -0.02, 0.01]
     assert vmp.hit_mask(ex, "bear").tolist() == [True, True, False]
     assert vmp.hit_mask(ex, "bull").tolist() == [False, False, True]
-    df = pd.DataFrame({"excess": ex, "code": ["a", "b", "c"]})
+    df = pd.DataFrame({"excess": ex, "excess_gross": ex, "code": ["a", "b", "c"]})
     assert vmp.stats(df, "bear", n_boot=50)["hit"] == pytest.approx(2 / 3)
     assert vmp.stats(df, "bull", n_boot=50)["hit"] == pytest.approx(1 / 3)
 
@@ -149,7 +149,7 @@ def test_verdict_entry_is_session_after_written_day():
 
 def _df(vals, codes=None):
     codes = codes or [f"c{i}" for i in range(len(vals))]
-    return pd.DataFrame({"excess": vals, "code": codes})
+    return pd.DataFrame({"excess": vals, "excess_gross": vals, "code": codes})
 
 
 def test_inconclusive_when_n_below_20_even_if_ci_excludes_zero():
@@ -179,7 +179,9 @@ def test_spread_label_needs_both_groups_enough():
 
 
 def _events(rows):
-    return pd.DataFrame([{"kind": "call", "h": 10, "status": "ok", "media_kind": "tv"} | r for r in rows])
+    """每列預設毛超額＝淨超額、各自不同進場日（dates 不是被測性質時不擋 enough）。"""
+    return pd.DataFrame([{"kind": "call", "h": 10, "status": "ok", "media_kind": "tv", "excess_gross": r["excess"],
+                          "entry_date": DAYS[i % len(DAYS)]} | r for i, r in enumerate(rows)])
 
 
 def test_speaker_records_shape_and_directions():
@@ -193,7 +195,8 @@ def test_speaker_records_shape_and_directions():
     rec = vmp.speaker_records(_events(rows), horizon=10)
     assert set(rec) == {"甲", "乙"} and set(rec["甲"]) == {"bull", "bear"} and set(rec["乙"]) == {"bull"}
     bull = rec["甲"]["bull"]
-    assert bull == {"n_calls": 3, "n": 2, "hit_rate": 0.5, "mean_excess": pytest.approx(0.02), "enough": False}
+    assert bull == {"n_calls": 3, "n": 2, "dates": 2, "hit_rate": 0.5, "mean_excess": pytest.approx(0.02),
+                    "enough": False}
     assert rec["甲"]["bear"]["hit_rate"] == 0.5 and rec["甲"]["bear"]["mean_excess"] == pytest.approx(-0.005)
 
 
@@ -219,3 +222,43 @@ def test_few_entry_dates_is_inconclusive_even_with_tight_ci():
     df["entry_date"] = [DAYS[i % 5] for i in range(40)]
     s = vmp.stats(df, n_boot=200)
     assert s["dates"] == 5 and s["label"] == "顯著為負"
+
+
+def test_spread_needs_five_entry_dates_on_each_side():
+    a, b = _df([0.06 + i * 0.001 for i in range(20)]), _df([-0.06 - i * 0.001 for i in range(20)])
+    a["entry_date"], b["entry_date"] = DAYS[0], DAYS[0]                      # 兩組各 20 筆、只有一個進場日
+    s = vmp.spread_stats(a, b, n_boot=200)
+    assert s["diff"] > 0.1 and s["ci"][0] > 0 and s["dates"] == 1 and s["label"] == "inconclusive"
+    a["entry_date"] = [DAYS[i % 5] for i in range(20)]
+    assert vmp.spread_stats(a, b, n_boot=200)["label"] == "inconclusive"     # 只有 research 夠、avoid 還是 1 天
+    b["entry_date"] = [DAYS[i % 5] for i in range(20)]
+    s = vmp.spread_stats(a, b, n_boot=200)
+    assert s["dates"] == 5 and s["label"] == "顯著為正"
+
+
+def test_flat_stock_vs_flat_benchmark_is_neither_bull_nor_bear_hit():
+    ev = vmp.build_events([pick(DAYS[3])], panels([100.0] * 40, [100.0] * 40), (5,))
+    r = ev.iloc[0]
+    assert r["excess"] < 0 and r["excess_gross"] == pytest.approx(0.0)       # 淨超額被稅差 0.2% 壓成負，毛超額為 0
+    ok = ev[ev["status"] == "ok"]
+    assert vmp.stats(ok, "bear", n_boot=50)["hit"] == 0.0
+    assert vmp.stats(ok, "bull", n_boot=50)["hit"] == 0.0
+    rec = vmp.speaker_records(ev.assign(stance="bearish"), horizon=5)["甲"]["bear"]
+    assert rec["hit_rate"] == 0.0 and rec["mean_excess"] == pytest.approx(0.0)
+
+
+def test_bear_mean_is_gross_bull_mean_is_net():
+    df = _df([-0.002] * 3, ["a", "b", "c"]).assign(excess_gross=[0.0, 0.0, 0.0])
+    assert vmp.stats(df, "bull", n_boot=50)["mean"] == pytest.approx(-0.002)
+    assert vmp.stats(df, "bear", n_boot=50)["mean"] == pytest.approx(0.0)
+
+
+def test_speaker_records_need_five_entry_dates_for_enough():
+    rows = [{"speaker": "甲", "stance": "bullish", "excess": 0.01, "code": f"c{i}"} for i in range(20)]
+    same_day = _events(rows).assign(entry_date=DAYS[0])
+    rec = vmp.speaker_records(same_day)["甲"]["bull"]
+    assert rec["n"] == 20 and rec["dates"] == 1 and rec["enough"] is False
+    four = _events(rows).assign(entry_date=[DAYS[i % 4] for i in range(20)])
+    assert vmp.speaker_records(four)["甲"]["bull"]["enough"] is False
+    five = _events(rows).assign(entry_date=[DAYS[i % 5] for i in range(20)])
+    assert vmp.speaker_records(five)["甲"]["bull"]["enough"] is True

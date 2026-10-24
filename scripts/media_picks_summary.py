@@ -13,10 +13,14 @@
   多空人數依**講者**去重（同台投顧在不同節目各記一次，用節目計數會偏高；沒有講者才退回節目）。``history`` 是本輪之前
   journal 裡的紀錄：首次被點名的日期與當時收盤、近 7 天被點名幾天，用來分辨「新出現」和「已經被喊了一陣子」。
 - ``ptt``：本輪新的 PTT 標的文，附作者的理由與進退場條件。
+- ``holdings``（只有帶 ``--holdings`` 才有內容）：``scripts/portfolio_codes.py`` 的持股清單 × 本輪點名。每檔 ``stocks`` 帶
+  ``held``；``holdings.mentioned`` 列出被節目或 PTT 點名的持股（多空中性人數、PTT 篇數、``alert``＝有看空／避開的講者
+  或看空的 PTT 文）。``--index`` 第一段就是這份，``--code`` 對持股開頭標「（你持有這檔）」。
 
     uv run --no-project python scripts/media_picks_summary.py --since 2026-10-26T23:00:00+08:00 --json
     uv run --no-project python scripts/media_picks_summary.py --since 2026-10-26T23:00:00+08:00 --index
     uv run --no-project python scripts/media_picks_summary.py --since 2026-10-26T23:00:00+08:00 --code 2330.TW
+    uv run --no-project python scripts/media_picks_summary.py --since ... --index --holdings logs/media_picks_job_<id>.holdings.json
 """
 import argparse
 import json
@@ -144,8 +148,49 @@ def _voices(st: dict) -> int:
     return st["bull_voices"] + st["bear_voices"] + st["neutral_voices"]
 
 
+def load_holdings(path) -> dict | None:
+    """讀 portfolio_codes.py 的輸出；沒給、檔不存在、壞掉、內含 error 一律回 None（stderr 記一行，不中斷摘要）。"""
+    if not path:
+        return None
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or data.get("error") or not isinstance(data.get("codes"), list):
+            raise ValueError(data.get("error") if isinstance(data, dict) and data.get("error") else "格式不符")
+        return {c["code"]: c for c in data["codes"] if isinstance(c, dict) and c.get("code")}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"持股清單 {path} 讀不到，略過（{exc}）", file=sys.stderr)
+        return None
+
+
+def _holdings_block(stocks: list, ptt_rows: list, held: dict | None) -> dict:
+    """持股 × 本輪點名。available＝有讀到持股清單；mentioned 只收本輪被節目或 PTT 點名的持股。"""
+    if held is None:
+        return {"available": False, "count": 0, "mentioned": []}
+    by_code = {st["code"]: st for st in stocks}
+    ptt_stance: dict[str, list] = {}
+    for p in ptt_rows:
+        if p["stock_code"] in held:
+            ptt_stance.setdefault(p["stock_code"], []).append(_side(p["stance"]))
+    mentioned = []
+    for code in sorted(held):
+        st, ptt = by_code.get(code), ptt_stance.get(code, [])
+        if st is None and not ptt:
+            continue
+        bull, bear, neutral = (st["bull_voices"], st["bear_voices"], st["neutral_voices"]) if st else (0, 0, 0)
+        mentioned.append({
+            "code": code,
+            "name": (st and st["name"]) or held[code].get("name") or code,
+            "bull_voices": bull, "bear_voices": bear, "neutral_voices": neutral,
+            "ptt_articles": len(ptt),
+            "ptt_bear_articles": ptt.count("bear"),
+            "alert": bear > 0 or "bear" in ptt,
+        })
+    return {"available": True, "count": len(held), "mentioned": mentioned}
+
+
 def summarize(since: datetime, journal_dir: Path = JOURNAL_DIR, transcript_dir: Path = TRANSCRIPT_DIR,
-              stock_index: Path = STOCK_INDEX) -> dict:
+              stock_index: Path = STOCK_INDEX, holdings: Path | None = None) -> dict:
+    held = load_holdings(holdings)
     all_media = _read_jsonl(journal_dir / "media-picks.jsonl")
     ptt, _ = _split(_read_jsonl(journal_dir / "ptt-picks.jsonl"), since)
     verdicts = _read_jsonl(journal_dir / "media-picks-review.jsonl")
@@ -206,6 +251,7 @@ def summarize(since: datetime, journal_dir: Path = JOURNAL_DIR, transcript_dir: 
             "data": data,
             "history": _history(prior_by_code.get(code, []), since, (data or {}).get("close")),
             "ptt": ptt_by_code.get(code, []),
+            "held": held is not None and code in held,
         })
     stocks.sort(key=lambda s: (-_voices(s), -s["bull_voices"], s["code"]))
 
@@ -226,6 +272,7 @@ def summarize(since: datetime, journal_dir: Path = JOURNAL_DIR, transcript_dir: 
         "review": review,
         "stocks": stocks,
         "ptt": ptt_rows,
+        "holdings": _holdings_block(stocks, ptt_rows, held),
     }
 
 
@@ -245,6 +292,20 @@ def _fmt_history(h) -> str:
     if h["since_first_pct"] is not None:
         s += f"、首次至今 {h['since_first_pct']:+}%（{h['first_close_as_of']} 收 {h['first_close']}）"
     return s
+
+
+def _holdings_section(h: dict) -> list:
+    """索引第一段：三種狀態——清單取不到、本輪沒點名、有點名（一檔一行，有看空加警示）。"""
+    if not h["available"]:
+        return ["## 持股清單取不到", "（沒有讀到持股清單，這輪無法標出你的持股；其餘照常判讀）"]
+    if not h["mentioned"]:
+        return ["## 你的持股本輪沒有被點名"]
+    lines = [f"## 你的持股被點名 {len(h['mentioned'])} 檔"]
+    for m in h["mentioned"]:
+        warn = "｜⚠ 有看空" if m["alert"] else ""
+        lines.append(f"- {m['name']} {m['code']}｜多 {m['bull_voices']} 空 {m['bear_voices']} 中 {m['neutral_voices']}"
+                     f"｜PTT {m['ptt_articles']}{warn}")
+    return lines
 
 
 def _header(s: dict) -> list:
@@ -311,7 +372,7 @@ def _index(s: dict) -> str:
     """主 agent 挑檔用：多位講者的檔一行含數據與題材，只有一位講者的壓成短行；原話用 --code 取。"""
     multi = [st for st in s["stocks"] if _voices(st) >= INDEX_FULL_VOICES]
     single = [st for st in s["stocks"] if _voices(st) < INDEX_FULL_VOICES]
-    lines = _header(s) + ["", f"## {len(multi)} 檔有 {INDEX_FULL_VOICES} 位以上講者（依講者數排序）"]
+    lines = _holdings_section(s["holdings"]) + [""] + _header(s) + ["", f"## {len(multi)} 檔有 {INDEX_FULL_VOICES} 位以上講者（依講者數排序）"]
     lines += [_index_line(st) for st in multi]
     lines += ["", f"## {len(single)} 檔只有 1 位講者"] + [_index_line(st) for st in single]
     lines += ["", f"## PTT 新文章 {len(s['ptt'])} 篇"]
@@ -330,6 +391,8 @@ def stock_detail(s: dict, code: str) -> str:
     if st is None and not posts:
         return f"本輪沒有人點名 {code}"
     lines = (_stock_block(st) if st else [f"### {code}（節目沒點名，只有 PTT）"])
+    if code in {m["code"] for m in s["holdings"]["mentioned"]}:
+        lines.insert(0, "（你持有這檔）")
     for p in posts:
         head, *rest = _ptt_block(p)
         lines += ["", "PTT：" + head.lstrip("# ")] + rest
@@ -384,6 +447,7 @@ def main(argv=None) -> int:
     out.add_argument("--code", help="只輸出這一檔的完整證據，帶 .TW／.TWO（逐檔判斷用）")
     out.add_argument("--judge-since", action="store_true",
                      help="印出本輪review與判斷該用的起點（上一輪判讀中斷時比 --since 早）")
+    ap.add_argument("--holdings", type=Path, help="portfolio_codes.py 輸出的 JSON；缺檔或壞檔只在 stderr 記一行、當作沒有")
     ap.add_argument("--logs-dir", type=Path, default=LOGS_DIR, help="找各輪 RESULT since= 的 log 目錄（預設 logs/）")
     ap.add_argument("--journal-dir", type=Path, default=JOURNAL_DIR, help="journal 目錄（預設 journal/）")
     args = ap.parse_args(argv)
@@ -394,7 +458,7 @@ def main(argv=None) -> int:
         verdicts = _read_jsonl(args.journal_dir / "media-picks-verdicts.jsonl")
         print(judge_since(since, verdicts, round_sinces(args.logs_dir)).isoformat())
         return 0
-    s = summarize(since, journal_dir=args.journal_dir)
+    s = summarize(since, journal_dir=args.journal_dir, holdings=args.holdings)
     if args.json:
         print(json.dumps(s, ensure_ascii=False, indent=1))
     elif args.index:

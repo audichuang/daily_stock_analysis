@@ -157,20 +157,24 @@ class _SummaryWithVoices(_Summary):
             {"speaker": "甲", "show": "A"}, {"speaker": "", "show": "某節目"}]}]}
 
 
-_REC = {"甲": {"bull": {"n_calls": 30, "n": 25, "hit_rate": 0.6, "mean_excess": 0.0123, "enough": True},
-               "bear": {"n_calls": 3, "n": 2, "hit_rate": 1.0, "mean_excess": -0.05, "enough": False}},
-        "乙": {"bull": {"n_calls": 40, "n": 40, "hit_rate": 0.9, "mean_excess": 0.2, "enough": True}}}
+_REC = {"甲": {"bull": {"n_calls": 30, "n": 25, "dates": 9, "hit_rate": 0.6, "mean_excess": 0.0123, "enough": True},
+               "bear": {"n_calls": 3, "n": 2, "dates": 2, "hit_rate": 1.0, "mean_excess": -0.05, "enough": False}},
+        "乙": {"bull": {"n_calls": 40, "n": 40, "dates": 12, "hit_rate": 0.9, "mean_excess": 0.2, "enough": True}}}
 
 
 def test_records_section_formats_enough_and_small_samples():
     text = judge.records_section(_REC, ["甲", "乙"])
     assert "三、講者過去紀錄" in text
     assert "命中率 60%" in text and "+1.23%" in text                      # n=25 夠
-    assert "已到期 2 筆（共 3 次點名），樣本不足（n<20），不要拿來加減分" in text   # n=2 不夠
+    assert "已到期 2 筆、進場日 2 天（共 3 次點名），樣本不足" in text            # n=2 不夠
     assert "看空／避開，無紀錄" in text                                      # 乙沒有看空紀錄
     # 邊界：n=19 不夠、n=20 夠
-    edge = lambda n: judge.records_section({"甲": {"bull": {"n_calls": n, "n": n, "hit_rate": 0.5, "mean_excess": 0.01}}}, ["甲"])  # noqa: E731
+    edge = lambda n, d=9: judge.records_section({"甲": {"bull": {"n_calls": n, "n": n, "dates": d, "hit_rate": 0.5, "mean_excess": 0.01}}}, ["甲"])  # noqa: E731
     assert "樣本不足" in edge(19).split("\n")[3] and "樣本不足" not in edge(20)
+    # 進場日邊界：n 夠但進場日只有 4 天不夠、5 天夠；沒有 dates 欄一律不夠
+    assert "樣本不足" in edge(20, 4) and "樣本不足" not in edge(20, 5)
+    no_dates = judge.records_section({"甲": {"bull": {"n_calls": 30, "n": 30, "hit_rate": 0.5, "mean_excess": 0.01}}}, ["甲"])
+    assert "樣本不足" in no_dates
 
 
 def test_records_section_failure_text_and_unknown_speaker():

@@ -36,6 +36,7 @@ JUDGE_TIMEOUT = 300
 # 講者紀錄（verify_media_picks.py --speaker-records，要連 DB）與資料包平行跑，逾時要比資料包短，不能拖長整體時間。
 RECORDS_TIMEOUT = 60
 MIN_RECORD_N = 20  # 與 verify_media_picks.MIN_N 同值：低於它的講者紀錄一律不給加減分
+MIN_RECORD_DATES = 5  # 與 verify_media_picks.MIN_DATES 同值：進場日太集中（同日共享大盤波動）也算樣本不足
 
 BRIEF = """你在分析一檔台股，判斷財經節目／PTT 對它的看法站不站得住。下面附了兩份證據，只能根據它們判斷，不要假設你查得到別的資料。
 
@@ -46,7 +47,7 @@ BRIEF = """你在分析一檔台股，判斷財經節目／PTT 對它的看法�
 - 看多的理由是什麼？資料包支不支持？例如「訂單滿」要看合約負債和營收走勢，「EPS 上修」要看毛利率是否在擴張。
 - 講者有說條件的話（「站回季線」「拉回 4500 以下」），現在符不符合。
 - 看空或要避開的講者說了什麼，有沒有道理。
-- 來源可不可信：投顧頻道在招攬會員，有利益衝突。證據裡「三、講者過去紀錄」是這些講者過去點名的實測（10 日超額報酬）：樣本不足（n<20）的紀錄是雜訊，一律忽略、不要拿來加減分；n 夠了也只當輔助，不能蓋過這檔本身的資料。好幾個不同節目的講者各自講，比同一位投顧在好幾個節目重複講更有份量。research 類通常比較有根據。PTT 作者是匿名網友，文章編輯過的話，內容可能在發文後改過。
+- 來源可不可信：投顧頻道在招攬會員，有利益衝突。證據裡「三、講者過去紀錄」是這些講者過去點名的實測（10 日超額報酬）：樣本不足（n<20 或進場日不到 5 天）的紀錄是雜訊，一律忽略、不要拿來加減分；n 夠了也只當輔助，不能蓋過這檔本身的資料。好幾個不同節目的講者各自講，比同一位投顧在好幾個節目重複講更有份量。research 類通常比較有根據。PTT 作者是匿名網友，文章編輯過的話，內容可能在發文後改過。
 - 時機：首次被點名到現在已經漲了多少？近 7 天是不是天天被點名（可能已經太熱）？股價現在在結構的哪裡？估值百分位高不高？法人 5 日和 20 日的方向是不是一致？融資有沒有暴增？
 - 什麼事發生，你的看法就會改變。
 
@@ -103,15 +104,17 @@ def load_records(timeout: int = RECORDS_TIMEOUT) -> dict:
 def _record_side(name: str, r) -> str:
     if not r or not r.get("n_calls"):
         return f"{name}無紀錄"
-    if r["n"] < MIN_RECORD_N:
-        return f"{name}已到期 {r['n']} 筆（共 {r['n_calls']} 次點名），樣本不足（n<{MIN_RECORD_N}），不要拿來加減分"
+    dates = r.get("dates") or 0
+    if r["n"] < MIN_RECORD_N or dates < MIN_RECORD_DATES:
+        return (f"{name}已到期 {r['n']} 筆、進場日 {dates} 天（共 {r['n_calls']} 次點名），"
+                f"樣本不足（n<{MIN_RECORD_N} 或進場日<{MIN_RECORD_DATES}），不要拿來加減分")
     return (f"{name}已到期 {r['n']} 筆，命中率 {r['hit_rate'] * 100:.0f}%，10 日平均超額 0050 {r['mean_excess'] * 100:+.2f}%"
-            "（看多命中＝超額>0，看空命中＝超額<0）")
+            "（命中：不扣成本的超額，看多>0、看空<0；平均：看多扣成本、看空不扣）")
 
 
 def records_section(records, speakers) -> str:
     """「三、講者過去紀錄」段落。``records`` 是 dict，或載入失敗時的例外／說明字串。"""
-    head = "\n\n## 三、講者過去紀錄（過去點名後 10 個交易日相對 0050 的超額報酬，扣成本）\n"
+    head = "\n\n## 三、講者過去紀錄（過去點名後 10 個交易日相對 0050 的超額報酬；命中看不扣成本的超額，平均超額看多扣成本、看空不扣）\n"
     if isinstance(records, BaseException) or isinstance(records, str):
         return head + f"（講者紀錄取不到：{records}）\n"
     names = sorted({s for s in speakers if s})
