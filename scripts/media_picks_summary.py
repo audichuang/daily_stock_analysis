@@ -111,6 +111,7 @@ def _apply_reviews(rows: list, verdicts: list, stock_index: Path) -> list:
                 if names is None:  # 索引約 4 萬列，只在真的有更正時才載
                     names = _official_names(stock_index) if stock_index.exists() else {}
                 r["name"] = names.get(fixed) or r.get("name_said")
+                r["data"] = None  # 快照是照原（錯的）代號抓的，留著會把別檔的收盤價算進這檔的數據與歷史
         out.append(r)
     return out
 

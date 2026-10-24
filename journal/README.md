@@ -104,7 +104,7 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   `code_mismatch`／`fuzzy`／`unresolved` 的點名：語音辨識的同音誤字（「上權」→上詮）、NotebookLM 還原成全名而對不到索引
   （「台灣化學纖維」→台化 1326）、已下市或併入的公司（新光金）。回驗讀 `media-picks.jsonl` 時，以
   `(video_id, name_said, stock_code)` 對上這裡的最後一筆覆核，`verdict` 為 `correct` 就改用 `corrected_code`、`not_stock`／`unclear` 就排除。
-  `scripts/media_picks_summary.py` 下次執行時會回灌：`correct` 的點名改掛到 `corrected_code`（本輪與歷史列都改，原代號留在 `corrected_from`），`not_stock` 不計入個股；`unclear` 照原代號，回驗時自行排除。
+  `scripts/media_picks_summary.py` 下次執行時會回灌：`correct` 的點名改掛到 `corrected_code`（本輪與歷史列都改，原代號留在 `corrected_from`；該列的 `data` 是照錯的代號抓的，回灌時丟掉），`not_stock` 不計入個股；`unclear` 照原代號，回驗時自行排除。
 
   | 欄位 | 意思 |
   | --- | --- |

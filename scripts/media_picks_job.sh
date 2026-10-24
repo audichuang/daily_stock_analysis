@@ -27,10 +27,11 @@ git_net() {
 }
 
 # push_develop：push 被拒（別處先推了 develop）就 pull --rebase 再推一次；rebase 失敗要 abort，
-# 不然主 checkout 卡在 rebase 中途，之後每晚都同步失敗。--autostash：排程的 Claude 追加的檔可能還沒 commit。
+# 不然主 checkout 卡在 rebase 中途，之後每晚都同步失敗。不加 --autostash：工作樹有未 commit 的改動時 rebase 會拒絕、
+# 我們就照 fail 處理（Bark），不要偷偷替人 stash（stash 堆疊跨 worktree 共用）。
 push_develop() {
   git_net push -q origin develop && return 0
-  if git_net pull --rebase --autostash -q origin develop; then
+  if git_net pull --rebase -q origin develop; then
     git_net push -q origin develop
     return
   fi
@@ -38,11 +39,35 @@ push_develop() {
   return 1
 }
 
+# journal_only_ahead：origin/develop..HEAD 的每個 commit 都只動 journal/ 且沒有 merge commit 才回 0；
+# 原因寫 stderr。push 與 rebase 前都要過這關，不然會把人在主 checkout 留下的非 journal commit 一起推上去。
+journal_only_ahead() {
+  local f
+  git rev-parse -q --verify origin/develop >/dev/null || { echo "找不到 origin/develop" >&2; return 1; }
+  if [[ -n "$(git rev-list --merges origin/develop..HEAD)" ]]; then
+    echo "本地領先 origin/develop 的 commit 含 merge commit" >&2
+    return 1
+  fi
+  while IFS= read -r f; do
+    [[ -z "$f" || "$f" == journal/* ]] && continue
+    echo "本地領先 origin/develop 的 commit 動到 journal/ 以外的檔（${f}）" >&2
+    return 1
+  done < <(git log --no-merges --name-only --format= origin/develop..HEAD)
+}
+
 # commit_journal：只 commit＋push 兩個 journal 檔；印 none（沒變更也沒有未推的 commit）／ok／fail。
 # `git commit -- <檔>` 只收這兩個檔，即使 index 裡有別的暫存也不會帶進去。
 # 沒有新變更但本地領先 origin/develop（上一晚 push 失敗留下的）也要推，不然永遠卡著。
+# 先確認仍在 develop（人可能在 40 分鐘擷取期間切了分支）且領先的 commit 都只動 journal/，才 commit／push。
 commit_journal() {
-  local existing=() f changed=0
+  local existing=() f changed=0 branch
+  branch=$(git branch --show-current)
+  if [[ "$branch" != "develop" ]]; then
+    echo "主 checkout 目前在 ${branch:-detached HEAD}，不是 develop，不 commit／push" >&2
+    echo fail
+    return 0
+  fi
+  journal_only_ahead || { echo fail; return 0; }
   for f in "${JOURNAL_FILES[@]}"; do
     [[ -e "$f" ]] && existing+=("$f")
   done
@@ -70,17 +95,8 @@ commit_journal() {
 sync_develop() {
   git_net fetch -q origin || { echo "git fetch 失敗或逾時" >&2; return 1; }
   git merge --ff-only -q origin/develop >&2 && return 0
-  local f
-  if [[ -n "$(git rev-list --merges origin/develop..HEAD)" ]]; then
-    echo "本地有 merge commit，不自動 rebase" >&2
-    return 1
-  fi
-  while IFS= read -r f; do
-    [[ -z "$f" || "$f" == journal/* ]] && continue
-    echo "本地獨有 commit 動到 journal/ 以外的檔（${f}），不自動 rebase" >&2
-    return 1
-  done < <(git log --no-merges --name-only --format= origin/develop..HEAD)
-  if ! git rebase --autostash -q origin/develop >&2; then
+  journal_only_ahead || { echo "不自動 rebase" >&2; return 1; }
+  if ! git rebase -q origin/develop >&2; then
     git rebase --abort >&2 2>/dev/null
     echo "rebase origin/develop 失敗，已 abort" >&2
     return 1

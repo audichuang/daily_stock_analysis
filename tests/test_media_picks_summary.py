@@ -178,3 +178,37 @@ def test_cli_requires_an_output_flag():
     with pytest.raises(SystemExit) as e:
         mod.main(["--since", "2026-10-26T23:00:00+08:00"])
     assert e.value.code == 2
+
+
+WRONG_DATA = {"as_of": "2026-10-26", "close": 999.0}
+
+
+def test_corrected_row_drops_wrong_stock_data(tmp_path, index_path):
+    wrong = _pick(name_said="台花", stock_code="2330.TW", resolve="code_mismatch", data=WRONG_DATA)
+    s = _run(tmp_path, index_path, [wrong], [_verdict(wrong, "correct", "1326.TW")])
+    assert _codes(s)["1326.TW"]["data"] is None
+    assert "數據：無" in mod.stock_detail(s, "1326.TW")
+
+
+def test_corrected_row_keeps_other_rows_data(tmp_path, index_path):
+    wrong = _pick(name_said="台花", stock_code="2330.TW", resolve="code_mismatch", data=WRONG_DATA)
+    good = _pick(video_id="v2", stock_code="1326.TW", name="台化", data={"as_of": "2026-10-26", "close": 50.0})
+    s = _run(tmp_path, index_path, [wrong, good], [_verdict(wrong, "correct", "1326.TW")])
+    assert _codes(s)["1326.TW"]["data"]["close"] == 50.0
+
+
+def test_history_ignores_wrong_close_of_corrected_prior_row(tmp_path, index_path):
+    old = _pick(video_id="v0", name_said="台花", stock_code="2330.TW", resolve="code_mismatch",
+                extracted_at=BEFORE, date="2026-10-20", data={"as_of": "2026-10-20", "close": 999.0})
+    now = _pick(video_id="v9", stock_code="1326.TW", name="台化", data={"as_of": "2026-10-26", "close": 50.0})
+    s = _run(tmp_path, index_path, [old, now], [_verdict(old, "correct", "1326.TW")])
+    h = _codes(s)["1326.TW"]["history"]
+    assert h["first_named"] == "2026-10-20"
+    assert h["first_close"] is None and h["since_first_pct"] is None
+
+
+@pytest.mark.parametrize("verdict", ["confirm", "unclear"])
+def test_confirm_unclear_keep_data(tmp_path, index_path, verdict):
+    r = _pick(resolve="fuzzy", data={"as_of": "2026-10-26", "close": 900.0})
+    s = _run(tmp_path, index_path, [r], [_verdict(r, verdict)])
+    assert _codes(s)["2330.TW"]["data"]["close"] == 900.0

@@ -398,3 +398,85 @@ def test_sync_develop_aborts_rebase_on_conflict(repo, tmp_path):
     assert r.returncode == 1
     assert not (repo / ".git" / "rebase-merge").exists() and not (repo / ".git" / "rebase-apply").exists()
     assert _git(repo, "rev-parse", "HEAD") == head
+
+
+# ---- 只推 journal 的守門：非 journal 的本地 commit、切分支、髒工作樹 ----
+
+def _origin_head(repo):
+    return _git(repo, "ls-remote", "origin", "develop").split()[0]
+
+
+def _human_commit(repo):
+    (repo / "other.txt").write_text("human work\n", encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "human: non-journal")
+
+
+def test_commit_journal_refuses_to_push_human_commit_alongside_journal_change(repo):
+    _human_commit(repo)                       # ff-only 對它回「Already up to date」，sync 的守門不會跑
+    before = _origin_head(repo)
+    with (repo / "journal" / "media-picks.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"mine": 1}\n')
+
+    assert _commit_journal(repo) == "fail"
+    assert _origin_head(repo) == before
+    assert "journal: media picks" not in _git(repo, "log", "--format=%s")
+
+
+def test_commit_journal_refuses_to_push_human_commit_without_journal_change(repo):
+    _human_commit(repo)
+    before = _origin_head(repo)
+
+    assert _commit_journal(repo) == "fail"
+    assert _origin_head(repo) == before
+
+
+def test_commit_journal_refuses_merge_commit_ahead(repo):
+    _git(repo, "checkout", "-q", "-b", "side")
+    (repo / "journal" / "ptt-picks.jsonl").write_text("{}\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "side")
+    _git(repo, "checkout", "-q", "develop")
+    (repo / "journal" / "media-picks.jsonl").write_text('{"d": 1}\n', encoding="utf-8")
+    _git(repo, "commit", "-q", "-am", "dev")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    before = _origin_head(repo)
+
+    assert _commit_journal(repo) == "fail"
+    assert _origin_head(repo) == before
+
+
+def test_commit_journal_refuses_when_branch_switched(repo):
+    _git(repo, "checkout", "-q", "-b", "feature")
+    with (repo / "journal" / "media-picks.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"mine": 1}\n')
+    before_head = _git(repo, "rev-parse", "HEAD")
+    before_origin = _origin_head(repo)
+
+    assert _commit_journal(repo) == "fail"
+    assert _git(repo, "rev-parse", "HEAD") == before_head       # feature 上沒有多一個 commit
+    assert _origin_head(repo) == before_origin
+
+
+def test_commit_journal_fails_safely_on_dirty_tree_when_push_rejected(repo, tmp_path):
+    _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", '{"theirs": 1}\n')
+    (repo / "other.txt").write_text("uncommitted human edit\n", encoding="utf-8")   # tracked 且未 commit
+    with (repo / "journal" / "media-picks.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"mine": 1}\n')
+
+    assert _commit_journal(repo) == "fail"
+    assert not (repo / ".git" / "rebase-merge").exists() and not (repo / ".git" / "rebase-apply").exists()
+    assert (repo / "other.txt").read_text(encoding="utf-8") == "uncommitted human edit\n"
+    assert _git(repo, "stash", "list") == ""
+
+
+def test_sync_develop_fails_safely_on_dirty_tree(repo, tmp_path):
+    with (repo / "journal" / "media-picks.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"mine": 1}\n')
+    _git(repo, "commit", "-q", "-am", "journal: mine")
+    _advance_origin(tmp_path, repo, "other.txt", "upstream\n")
+    (repo / "journal" / "ptt-picks.jsonl").write_text("{}\n", encoding="utf-8")
+    _git(repo, "add", ".")                                       # 髒（已暫存）
+    r = _sh(repo, "sync_develop")
+    assert r.returncode == 1
+    assert not (repo / ".git" / "rebase-merge").exists() and not (repo / ".git" / "rebase-apply").exists()
+    assert _git(repo, "stash", "list") == ""
