@@ -132,6 +132,8 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   | `since` | 本輪的 since（log 的 `RESULT since=`，帶時區），表示判到這一輪為止；下一輪的 `media_picks_summary.py --judge-since` 用它找出還沒判過的輪次。補判時判讀範圍會往前涵蓋，但這裡仍記本輪的 since |
   | `written_at` | 寫入時點（帶時區） |
 
+  **回驗**：`scripts/verify_media_picks.py`（`make verify-media-picks`）把每筆 verdict（進場＝`written_at` 台北日期之後第一個交易日的開盤）與每個講者點名（進場＝播出日之後第一個交易日的開盤，播出當天的價格一律不用）接上 5／10／20 個交易日後相對 0050 的超額報酬（扣成本），依 verdict、講者（看多與看空分開，看空命中＝超額<0）分表。**n<20 或 bootstrap 95% CI 跨零一律標 inconclusive**；視窗未走完的事件排除並計數、不補值。逐檔判斷（`media_picks_judge.py`）會把講者的 10 日紀錄附進提示詞，n<20 時明寫「樣本不足」要求忽略。
+
 - `ptt-picks.jsonl` — **PTT 股票板 `[標的]` 文**（`make ptt-picks`，`scripts/tw_ptt_picks.py`），一篇一行。
   `[標的]` 是板規格式的推薦文（標的／分類／分析／進退場機制），直接解析原文、不經 LLM；`Re:` 回文不收。實測一週約 12 篇，其中約一半是大盤／台指期或美股（`resolve=market`，不附 `data`）。
   跟媒體點名一樣是**候選來源，不是買進訊號**；作者是匿名網友，推／噓數是擷取當下的值（文章越新越少），不是最終值。

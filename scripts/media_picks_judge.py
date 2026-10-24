@@ -33,17 +33,20 @@ REQUIRED = ("code", "verdict", "thesis", "evidence", "risks", "flip", "data_as_o
 BASH_CEILING = 600
 DOSSIER_TIMEOUT = 120
 JUDGE_TIMEOUT = 300
+# 講者紀錄（verify_media_picks.py --speaker-records，要連 DB）與資料包平行跑，逾時要比資料包短，不能拖長整體時間。
+RECORDS_TIMEOUT = 60
+MIN_RECORD_N = 20  # 與 verify_media_picks.MIN_N 同值：低於它的講者紀錄一律不給加減分
 
 BRIEF = """你在分析一檔台股，判斷財經節目／PTT 對它的看法站不站得住。下面附了兩份證據，只能根據它們判斷，不要假設你查得到別的資料。
 
-一、講者原話：每位講者的題材、理由、條件、引述，播出當時的數據，之前被點名的紀錄，以及談到這檔的 PTT 文。
+一、講者原話：每位講者的題材、理由、條件、引述，播出當時的數據，之前被點名的紀錄，以及談到這檔的 PTT 文；文末另附「三、講者過去紀錄」。
 二、資料包：13 個月營收與 YoY、8 季毛利率／營益率／EPS、合約負債、法人 5 日與 20 日買賣超、融資融券、千張大戶、本益比與 3 年百分位，以及 SMC 結構，資料到最近一個交易日。
 
 逐項想清楚再下判斷：
 - 看多的理由是什麼？資料包支不支持？例如「訂單滿」要看合約負債和營收走勢，「EPS 上修」要看毛利率是否在擴張。
 - 講者有說條件的話（「站回季線」「拉回 4500 以下」），現在符不符合。
 - 看空或要避開的講者說了什麼，有沒有道理。
-- 來源可不可信：投顧頻道在招攬會員，有利益衝突。好幾個不同節目的講者各自講，比同一位投顧在好幾個節目重複講更有份量。research 類通常比較有根據。PTT 作者是匿名網友，文章編輯過的話，內容可能在發文後改過。
+- 來源可不可信：投顧頻道在招攬會員，有利益衝突。證據裡「三、講者過去紀錄」是這些講者過去點名的實測（10 日超額報酬）：樣本不足（n<20）的紀錄是雜訊，一律忽略、不要拿來加減分；n 夠了也只當輔助，不能蓋過這檔本身的資料。好幾個不同節目的講者各自講，比同一位投顧在好幾個節目重複講更有份量。research 類通常比較有根據。PTT 作者是匿名網友，文章編輯過的話，內容可能在發文後改過。
 - 時機：首次被點名到現在已經漲了多少？近 7 天是不是天天被點名（可能已經太熱）？股價現在在結構的哪裡？估值百分位高不高？法人 5 日和 20 日的方向是不是一致？融資有沒有暴增？
 - 什麼事發生，你的看法就會改變。
 
@@ -83,6 +86,42 @@ def dossier(code: str, timeout: int) -> str:
     return p.stdout
 
 
+def load_records(timeout: int = RECORDS_TIMEOUT) -> dict:
+    """跑 ``verify_media_picks.py --speaker-records`` 取講者紀錄（一次，不是每檔一次）；失敗丟例外，由呼叫端轉成說明文字。
+
+    走子程序（同資料包）：本腳本常用 ``uv run --no-project`` 跑，這個環境沒有 pandas／DB 驅動。"""
+    cmd = ["uv", "run", "--env-file", ".env", "python", "scripts/verify_media_picks.py", "--speaker-records"]
+    try:
+        p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout, env=child_env())
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"逾時 {timeout} 秒") from None
+    if p.returncode != 0:
+        raise RuntimeError(f"rc={p.returncode}：{p.stderr.strip()[-200:]}")
+    return json.loads(p.stdout.strip().splitlines()[-1])
+
+
+def _record_side(name: str, r) -> str:
+    if not r or not r.get("n_calls"):
+        return f"{name}無紀錄"
+    if r["n"] < MIN_RECORD_N:
+        return f"{name}已到期 {r['n']} 筆（共 {r['n_calls']} 次點名），樣本不足（n<{MIN_RECORD_N}），不要拿來加減分"
+    return (f"{name}已到期 {r['n']} 筆，命中率 {r['hit_rate'] * 100:.0f}%，10 日平均超額 0050 {r['mean_excess'] * 100:+.2f}%"
+            "（看多命中＝超額>0，看空命中＝超額<0）")
+
+
+def records_section(records, speakers) -> str:
+    """「三、講者過去紀錄」段落。``records`` 是 dict，或載入失敗時的例外／說明字串。"""
+    head = "\n\n## 三、講者過去紀錄（過去點名後 10 個交易日相對 0050 的超額報酬，扣成本）\n"
+    if isinstance(records, BaseException) or isinstance(records, str):
+        return head + f"（講者紀錄取不到：{records}）\n"
+    names = sorted({s for s in speakers if s})
+    if not names:
+        return head + "（本輪這檔沒有可查紀錄的講者）\n"
+    lines = [f"- {n}：{_record_side('看多，', (records.get(n) or {}).get('bull'))}；"
+             f"{_record_side('看空／避開，', (records.get(n) or {}).get('bear'))}" for n in names]
+    return head + "\n".join(lines) + "\n"
+
+
 def parse_verdict(text: str, code: str) -> dict:
     """取回應裡第一個 { 到最後一個 } 當 JSON，檢查欄位；不合格丟 ValueError（主 agent 會看到原因）。"""
     start, end = text.find("{"), text.rfind("}")
@@ -116,14 +155,29 @@ def judge_one(code: str, media_text: str, dossier_text: str, model, timeout: int
 
 
 def run(since: datetime, codes: list, jobs: int = MAX_CODES, model=None, timeout: int = JUDGE_TIMEOUT,
-        dossier_fn=dossier, summary_mod=None) -> list:
+        dossier_fn=dossier, summary_mod=None, records_fn=None) -> list:
     mod = summary_mod or _load_summary()
     s = mod.summarize(since)
+    load = records_fn or load_records
 
-    def one(code):
-        return judge_one(code, mod.stock_detail(s, code), dossier_fn(code, DOSSIER_TIMEOUT), model, timeout)
+    def voices(code):
+        st = next((x for x in s.get("stocks", []) if x.get("code") == code), None)
+        return [(v.get("speaker") or "").strip() or f"[{v.get('show')}]" for v in (st or {}).get("voices", [])]
 
-    with ThreadPoolExecutor(max_workers=max(1, min(jobs, len(codes)))) as ex:
+    def fetch_records():
+        try:
+            return load()
+        except Exception as e:  # 講者紀錄只是輔助：任何失敗都不能讓判斷失敗
+            return e
+
+    with ThreadPoolExecutor(max_workers=max(1, min(jobs, len(codes))) + 1) as ex:
+        records = ex.submit(fetch_records)   # 一次 DB 載入，與各檔資料包平行
+
+        def one(code):
+            dossier_text = dossier_fn(code, DOSSIER_TIMEOUT)
+            media_text = mod.stock_detail(s, code) + records_section(records.result(), voices(code))
+            return judge_one(code, media_text, dossier_text, model, timeout)
+
         return list(ex.map(one, codes))
 
 
