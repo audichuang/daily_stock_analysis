@@ -1002,6 +1002,19 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self._refresh_twd_cny(pair, twd, cny, date(2026, 1, 8), date(2026, 1, 8))
         self.assertAlmostEqual(self._twd_row(date(2026, 1, 7)).rate, 0.2040)  # within tolerance: left alone
 
+    def test_fx_refresh_cross_repair_replaces_stale_carry_even_within_tolerance(self) -> None:
+        """2026-10-16: the junk bar was rejected and the day kept a stale carry close to the cross rate."""
+        pair, twd, cny = self._junk_window()
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 7), rate=6.665 / 32.6 * 1.005,
+            source="yfinance", is_stale=True,
+        )
+        self._refresh_twd_cny(pair, twd, cny, date(2026, 1, 8), date(2026, 1, 8))
+        row = self._twd_row(date(2026, 1, 7))
+        self.assertAlmostEqual(row.rate, 6.665 / 32.6)
+        self.assertEqual(row.source, "yfinance_cross")
+        self.assertFalse(bool(row.is_stale))
+
     def test_fx_cross_rate_none_when_a_leg_is_usd(self) -> None:
         yf_mock = MagicMock()
         yf_mock.Ticker.return_value.history.return_value = self._fx_frame([("2026-01-08", 20.0)])
