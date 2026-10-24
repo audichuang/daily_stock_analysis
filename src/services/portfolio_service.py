@@ -1832,7 +1832,7 @@ class PortfolioService:
         to_currency: str,
         as_of_date: date,
     ) -> List[Tuple[date, float]]:
-        """Fetch FX closes as (london_date, close) for [as_of-7d, as_of], NaN and non-positive dropped.
+        """Fetch FX closes as (london_date, close) for [as_of-7d, as_of], NaN, non-positive, Saturday and weekend-daily bars dropped.
 
         yfinance 1d FX bars are dated on the London calendar and their Close is roughly the 00:00 London
         open (USDTWD 2026-10-22: 1d Close 32.366 vs the 23:00 hourly bar 32.597), i.e. a day behind. So a
@@ -1852,7 +1852,8 @@ class PortfolioService:
             if hourly is not None and not hourly.empty and "Close" in hourly:
                 for ts, value in hourly["Close"].dropna().items():
                     # Bars are chronological, so the last assignment per day is the day's last bar.
-                    if float(value) > 0 and _london_date(ts) <= as_of_date:
+                    # Saturday has no session; Sunday-evening bars are the real FX reopening and must stay
+                    if float(value) > 0 and _london_date(ts) <= as_of_date and _london_date(ts).weekday() != 5:
                         closes[_london_date(ts)] = float(value)
         except Exception as exc:
             logger.warning("匯率 1h 資料取得失敗 %s，改用日K：%s", symbol, exc)
@@ -1867,7 +1868,8 @@ class PortfolioService:
             if daily is not None and not daily.empty and "Close" in daily:
                 rows = [(_london_date(ts), row) for ts, row in daily.iterrows()]
                 for i, (bar_date, row) in enumerate(rows):
-                    if bar_date > as_of_date or bar_date in closes:
+                    # No daily close on London weekends; Yahoo's Saturday bar repeats stale junk (10-24: 0.1963)
+                    if bar_date > as_of_date or bar_date in closes or bar_date.weekday() >= 5:
                         continue
                     value = rows[i + 1][1].get("Open") if i + 1 < len(rows) else None
                     if value is None or value != value or float(value) <= 0:
