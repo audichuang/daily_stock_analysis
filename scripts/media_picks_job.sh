@@ -6,7 +6,7 @@
 # Hindsight 的 repo 調查子程序繼承了 ORCA_* 環境變數，它結束時觸發 Orca 的 Stop hook，排程的 terminal 被收掉、
 # 前景的 make media-picks 跟著被 SIGTERM）。也因為那時 agent 可能已經不在，任何一步失敗都由本腳本自己推 Bark。
 #
-# log：logs/media_picks_job_<時刻>.log，最後一行 `media picks done` 或 `FAILED: …`；摘要：同名 .summary.json。
+# log：logs/media_picks_job_<時刻>.log，最後一行 `media picks done` 或 `FAILED: …`；摘要：同名 .summary.json／.summary.md。
 # 可被 source 載入函式（測試用），只有直接執行才跑 main。逾時與 Bark 共用 daily_report.sh 的函式。
 
 # shellcheck source=scripts/daily_report.sh
@@ -97,8 +97,11 @@ main() {
   log "RESULT journal push=$push"
   [[ "$push" == "fail" ]] && problems+=("journal commit／push 失敗")
 
-  if uv run --no-project python scripts/media_picks_summary.py --since "$run_start" --json >"$summary" 2>>"$LOG"; then
+  # JSON 給程式切片、markdown 給 Claude 從頭讀（每檔講者原話＋數據＋歷史）
+  if uv run --no-project python scripts/media_picks_summary.py --since "$run_start" --json >"$summary" 2>>"$LOG" \
+    && uv run --no-project python scripts/media_picks_summary.py --since "$run_start" >"${summary%.json}.md" 2>>"$LOG"; then
     log "RESULT summary=$summary"
+    log "RESULT summary_md=${summary%.json}.md"
   else
     problems+=("摘要產生失敗")
     log "RESULT summary=none"

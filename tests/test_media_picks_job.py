@@ -18,7 +18,6 @@ summary_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(summary_mod)
 
 SINCE = datetime.fromisoformat("2026-10-26T23:00:00+08:00")
-GOOD_DATA = {"vs_ma20_pct": 3.0, "vs_ma60_pct": 8.0, "revenue_yoy_3m": [25.0, 30.0, 28.0]}
 
 
 def _pick(**kw):
@@ -52,17 +51,51 @@ def test_keeps_rows_after_midnight_and_drops_earlier_runs(tmp_path):
     assert s["media"]["picks"] == 2
 
 
-def test_bullish_counts_distinct_speakers_not_shows(tmp_path):
+def test_stocks_count_distinct_speakers_and_keep_every_stance(tmp_path):
     s = _summarize(tmp_path, [
-        _pick(show="瘋狂股市福利社", speaker="李四"),
+        _pick(show="瘋狂股市福利社", speaker="李四", reason="訂單滿到明年"),
         _pick(show="理周TV", speaker="李四"),          # 同一位投顧在兩個節目
         _pick(show="錢線百分百", speaker=None),         # 沒有講者 → 節目當單位
         _pick(show="TVBS金臨天下", speaker="", stance="bearish"),
+        _pick(show="財報狗", speaker="Sky", stance="neutral", kind="research"),
+        _pick(stock_code="2317.TW", name="鴻海", stance="avoid", speaker="王五"),  # 只有看空也要收
     ])
-    (top,) = s["bullish"]
-    assert top["bull_voices"] == 2
-    assert top["bear_voices"] == 1
-    assert top["shows"] == sorted(["瘋狂股市福利社", "理周TV", "錢線百分百"])
+    by_code = {st["code"]: st for st in s["stocks"]}
+    tsmc = by_code["2330.TW"]
+    assert (tsmc["bull_voices"], tsmc["bear_voices"], tsmc["neutral_voices"]) == (2, 1, 1)
+    assert len(tsmc["voices"]) == 5  # 原話逐筆保留，不因講者去重而丟掉
+    assert tsmc["voices"][0]["reason"] == "訂單滿到明年"
+    assert by_code["2317.TW"]["bear_voices"] == 1
+    assert [st["code"] for st in s["stocks"]] == ["2330.TW", "2317.TW"]
+
+
+def test_history_uses_only_rows_before_this_round(tmp_path):
+    s = _summarize(tmp_path, [
+        _pick(date="2026-10-01", speaker="甲", data={"close": 80.0, "as_of": "2026-09-30"},
+              extracted_at="2026-10-01T23:30:00+08:00"),                        # 超過 7 天：只算首次
+        _pick(date="2026-10-22", speaker="乙", stance="bearish", extracted_at="2026-10-22T23:30:00+08:00"),
+        _pick(date="2026-10-23", speaker="丙", data={"close": 90.0, "as_of": "2026-10-23"},
+              extracted_at="2026-10-23T23:30:00+08:00"),                        # 首次收盤要取最早那筆
+        _pick(date="2026-10-26", speaker="丁", data={"close": 100.0, "as_of": "2026-10-26"}),  # 本輪
+    ])
+    (st,) = s["stocks"]
+    h = st["history"]
+    assert h["first_named"] == "2026-10-01"
+    assert h["named_days_7d"] == 2
+    assert (h["prior_bull_voices"], h["prior_bear_voices"]) == (2, 1)
+    assert h["since_first_pct"] == 25.0
+    assert st["bull_voices"] == 1  # 之前的列不混進本輪
+
+
+def test_history_is_none_for_first_mention_and_ptt_is_linked(tmp_path):
+    s = _summarize(tmp_path, [_pick()], ptt=[
+        {"article_id": "M.1", "stock_code": "2330.TW", "resolve": "exact", "reason": "長多",
+         "extracted_at": "2026-10-26T23:40:00+08:00"},
+    ])
+    (st,) = s["stocks"]
+    assert st["history"] is None
+    assert st["ptt"] == ["M.1"]
+    assert s["ptt"][0]["reason"] == "長多"
 
 
 def test_review_lists_only_uncertain_codes_and_marks_reviewed(tmp_path):
@@ -85,17 +118,6 @@ def test_review_lists_only_uncertain_codes_and_marks_reviewed(tmp_path):
     assert by_said["台化"]["already_reviewed"] is False
     assert by_said["台化"]["transcript"].endswith("v1.txt")
     assert s["media"]["picks"] == 4  # no_picks 不算點名
-
-
-@pytest.mark.parametrize("data, expected", [
-    (GOOD_DATA, True),
-    (None, False),
-    ({**GOOD_DATA, "vs_ma60_pct": -0.5}, False),
-    ({**GOOD_DATA, "revenue_yoy_3m": [40.0, 30.0, 25.0]}, False),  # 降速超過 10 個百分點
-    ({**GOOD_DATA, "revenue_yoy_3m": [25.0, None, 28.0]}, False),
-])
-def test_data_ok(data, expected):
-    assert summary_mod.data_ok(data) is expected
 
 
 # ---- media_picks_job.sh ----
