@@ -31,5 +31,6 @@
 
 ## 其他
 
+- 資料對不對、怎麼逐日對官方、怎麼整日重抓:`docs/tw-data-integrity.md`(工具 `scripts/audit_market_vs_official.py`)。
 - 踩雷案例、實測數字與資料語意全文:`docs/market-data-pitfalls.md`;境內基金(`funds.py`):`docs/tw-funds.md`。
 - 怎麼更新/回補/稽核/跑模組測試:skill `update-market-data`。
