@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改進] 23:00 媒體點名排程改成「腳本擷取＋Claude 判讀」：`make media-picks-detached`（`scripts/media_picks_job.sh`）脫離 session 跑完同步、擷取、commit journal 與摘要（`scripts/media_picks_summary.py`，看多排行改依講者去重、只收本輪寫入的列），失敗自己推 Bark；排程的 Claude 改做代號覆核（寫進新的 `journal/media-picks-review.jsonl`）與研究建議。起因是 10-23 那輪被 Hindsight 調查子程序觸發的 Orca Stop hook 中途收掉
 - [文件] 新增 `docs/tw-data-integrity.md`：資料正確性判準、各資料集驗證範圍、已知不修的差異、10-23～24 修正紀錄與維運 runbook
 - [新功能] `scripts/audit_market_vs_official.py`：逐日逐列比對 `market` schema 與 TWSE／TPEx 官方（法人、融資、日線），唯讀，`--summary` 有差異時結束碼 1
 - [修復] `scripts/backfill_price_change_sign.py` 加 `SIGNED_SINCE`（2026-08-23）截止日：之後爬進來的列已帶正確號，重跑不再把上櫃正值誤翻成負

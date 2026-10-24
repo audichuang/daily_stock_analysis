@@ -99,6 +99,20 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   | `data` | 播出當時已知的最近一個收盤（`as_of` 是實際的交易日；播出日 17:00 後才上傳的用播出日；標題含「盤前」、或播出日 17:00 前就上傳的〔盤中連線〕用前一天以前的，因為當天的個股法人買賣超下午才公布；2026-10-23 晚上以前寫入的列只看標題的「盤前」，下午上傳的集數可能含當天法人）：`close`、`vs_ma20_pct`／`vs_ma60_pct`（前復權）、`from_60d_high_pct`、`ret_5d_pct`、`revenue_yoy_3m`（已公告的最近三個月）、`foreign_5d_lots`／`trust_5d_lots`（上市、上櫃都有；窗口內法人資料有缺日時才是 `null`）。無行情時整欄 `null` |
   | `extracted_at` / `notebook_id` | 擷取時點、NotebookLM notebook（一天一本，30 天後刪；逐字稿另存 `data/media_picks/`，gitignore） |
 
+- `media-picks-review.jsonl` — **媒體點名的代號覆核**，一筆覆核一行，由 23:00 排程的 Claude 讀
+  `scripts/media_picks_summary.py` 的 `review` 清單後追加（`media-picks.jsonl` 原行不改）。對象是 `resolve` 為
+  `code_mismatch`／`fuzzy`／`unresolved` 的點名：語音辨識的同音誤字（「上權」→上詮）、NotebookLM 還原成全名而對不到索引
+  （「台灣化學纖維」→台化 1326）、已下市或併入的公司（新光金）。回驗讀 `media-picks.jsonl` 時，以
+  `(video_id, name_said, stock_code)` 對上這裡的最後一筆覆核，`verdict` 為 `correct` 就改用 `corrected_code`、`not_stock`／`unclear` 就排除。
+
+  | 欄位 | 意思 |
+  | --- | --- |
+  | `video_id` / `show` / `name_said` / `stock_code` | 被覆核那一行的原值（`stock_code` 可能是 `null`），三者合起來對回原行 |
+  | `verdict` | `confirm`（原代號對）／`correct`（改成 `corrected_code`）／`not_stock`（不是個股，例如指數、產業、人名）／`unclear`（逐字稿也判斷不了） |
+  | `corrected_code` | `verdict=correct` 時的代號，帶 `.TW`／`.TWO` 後綴；其他情況 `null` |
+  | `reason` | 判斷依據，一句話（例如逐字稿上下文、索引裡的正式名稱） |
+  | `reviewed_at` | 覆核時點（帶時區） |
+
 - `ptt-picks.jsonl` — **PTT 股票板 `[標的]` 文**（`make ptt-picks`，`scripts/tw_ptt_picks.py`），一篇一行。
   `[標的]` 是板規格式的推薦文（標的／分類／分析／進退場機制），直接解析原文、不經 LLM；`Re:` 回文不收。實測一週約 12 篇，其中約一半是大盤／台指期或美股（`resolve=market`，不附 `data`）。
   跟媒體點名一樣是**候選來源，不是買進訊號**；作者是匿名網友，推／噓數是擷取當下的值（文章越新越少），不是最終值。
