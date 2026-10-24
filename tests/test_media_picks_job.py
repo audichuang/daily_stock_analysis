@@ -625,3 +625,159 @@ def test_main_logs_since_right_after_lock_before_extraction():
     lock, since, extract = (main.index('acquire_lock "logs/.media_picks_job.lock"'),
                             main.index('log "RESULT since=$run_start"'), main.index("make media-picks"))
     assert lock < since < extract
+
+
+# ---- 持股標示：holdings.json × 本輪點名 ----
+
+def _holdings_file(tmp_path, *codes, name="holdings.json"):
+    p = tmp_path / name
+    p.write_text(json.dumps({"as_of": "2026-10-26", "codes": [
+        {"code": c, "name": c, "accounts": ["a"], "quantity": 1000} for c in codes]}), encoding="utf-8")
+    return p
+
+
+def _held_summary(tmp_path, media, ptt=(), holdings=None):
+    _write(tmp_path / "media-picks.jsonl", media)
+    _write(tmp_path / "ptt-picks.jsonl", ptt)
+    return summary_mod.summarize(SINCE, journal_dir=tmp_path, transcript_dir=tmp_path / "transcripts", holdings=holdings)
+
+
+def _ptt(code="2330.TW", stance=None, **kw):
+    row = {"article_id": "M.1", "title": "[標的] x", "stock_code": code, "resolve": "exact", "stance": stance,
+           "push_up": 1, "push_down": 0, "extracted_at": "2026-10-26T23:40:00+08:00"}
+    row.update(kw)
+    return row
+
+
+def test_held_flag_and_holdings_block_counts(tmp_path):
+    h = _holdings_file(tmp_path, "2330.TW", "6191.TW")
+    s = _held_summary(tmp_path, [
+        _pick(speaker="甲"), _pick(speaker="乙", stance="neutral"),
+        _pick(stock_code="2317.TW", name="鴻海", speaker="丙"),
+    ], ptt=[_ptt(stance="bullish")], holdings=h)
+    assert {st["code"]: st["held"] for st in s["stocks"]} == {"2330.TW": True, "2317.TW": False}
+    (m,) = s["holdings"]["mentioned"]               # 6191 沒被點名 → 不列
+    assert (m["code"], m["bull_voices"], m["bear_voices"], m["neutral_voices"], m["ptt_articles"]) == ("2330.TW", 1, 0, 1, 1)
+    assert m["alert"] is False
+    assert s["holdings"]["available"] and s["holdings"]["count"] == 2
+
+
+@pytest.mark.parametrize("stance", ["bearish", "avoid"])
+def test_alert_on_bearish_or_avoid_voice(tmp_path, stance):
+    s = _held_summary(tmp_path, [_pick(speaker="甲"), _pick(speaker="乙", stance=stance)],
+                      holdings=_holdings_file(tmp_path, "2330.TW"))
+    assert s["holdings"]["mentioned"][0]["alert"] is True
+
+
+def test_no_alert_on_neutral_voice_or_non_bear_ptt(tmp_path):
+    s = _held_summary(tmp_path, [_pick(stance="neutral")], ptt=[_ptt(stance="neutral"), _ptt(stance="bullish", article_id="M.2")],
+                      holdings=_holdings_file(tmp_path, "2330.TW"))
+    assert s["holdings"]["mentioned"][0]["alert"] is False
+
+
+def test_alert_on_bearish_ptt_even_without_tv_mention(tmp_path):
+    s = _held_summary(tmp_path, [_pick(stock_code="2317.TW", name="鴻海")], ptt=[_ptt(stance="bearish")],
+                      holdings=_holdings_file(tmp_path, "2330.TW"))
+    (m,) = s["holdings"]["mentioned"]
+    assert (m["code"], m["alert"], m["ptt_articles"], m["ptt_bear_articles"], m["bear_voices"]) == ("2330.TW", True, 1, 1, 0)
+
+
+def test_index_first_section_in_three_states(tmp_path):
+    media = [_pick(speaker="甲", stance="bullish"), _pick(speaker="乙", stance="bearish")]
+    mentioned = summary_mod._index(_held_summary(tmp_path, media, holdings=_holdings_file(tmp_path, "2330.TW")))
+    assert mentioned.startswith("## 你的持股被點名 1 檔\n- 2330.TW 2330.TW｜多 1 空 1 中 0｜PTT 0｜⚠ 有看空\n") or \
+        mentioned.startswith("## 你的持股被點名 1 檔\n- 台積電 2330.TW｜多 1 空 1 中 0｜PTT 0｜⚠ 有看空\n")
+    quiet = summary_mod._index(_held_summary(tmp_path, media, holdings=_holdings_file(tmp_path, "6191.TW")))
+    assert quiet.startswith("## 你的持股本輪沒有被點名\n")
+    missing = summary_mod._index(_held_summary(tmp_path, media, holdings=None))
+    assert missing.startswith("## 持股清單取不到\n")
+    for text in (mentioned, quiet, missing):
+        assert text.index("# 本輪") > text.index("## ")        # 持股段在標題行之前＝第一段
+
+
+def test_index_line_has_no_alert_marker_when_not_bearish(tmp_path):
+    out = summary_mod._index(_held_summary(tmp_path, [_pick()], holdings=_holdings_file(tmp_path, "2330.TW")))
+    assert "⚠" not in out
+
+
+def test_code_detail_prefix_only_for_held(tmp_path):
+    s = _held_summary(tmp_path, [_pick(), _pick(stock_code="2317.TW", name="鴻海")],
+                      holdings=_holdings_file(tmp_path, "2330.TW"))
+    assert summary_mod.stock_detail(s, "2330.TW").startswith("（你持有這檔）\n")
+    assert not summary_mod.stock_detail(s, "2317.TW").startswith("（你持有這檔）")
+
+
+@pytest.mark.parametrize("content", [None, "not json{", '{"error": "boom"}', '{"error": "boom", "codes": []}', '{"codes": "x"}', "[]"])
+def test_missing_or_garbled_holdings_file_is_ignored(tmp_path, capsys, content):
+    p = tmp_path / "h.json"
+    if content is not None:
+        p.write_text(content, encoding="utf-8")
+    s = _held_summary(tmp_path, [_pick()], holdings=p)
+    assert s["holdings"] == {"available": False, "count": 0, "mentioned": []}
+    assert s["stocks"][0]["held"] is False
+    assert "持股清單" in capsys.readouterr().err
+
+
+def test_cli_holdings_flag_reaches_index(tmp_path, capsys):
+    _write(tmp_path / "media-picks.jsonl", [_pick()])
+    _write(tmp_path / "ptt-picks.jsonl", [])
+    h = _holdings_file(tmp_path, "2330.TW")
+    assert summary_mod.main(["--since", SINCE.isoformat(), "--index", "--journal-dir", str(tmp_path),
+                             "--holdings", str(h)]) == 0
+    assert capsys.readouterr().out.startswith("## 你的持股被點名 1 檔")
+
+
+# ---- job：capture_holdings 與 summarize_run 的 --holdings ----
+
+def _stub_uv(tmp_path, script):
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    (bindir / "uv").write_text("#!/bin/sh\n" + script, encoding="utf-8")
+    (bindir / "uv").chmod(0o755)
+    # BASH_ENV 清掉：本機的 toolchain.sh 會在 bash 啟動時把 ~/.local/bin 塞到 PATH 前面，真的 uv 會蓋掉 stub
+    return {"PATH": f"{bindir}:/usr/bin:/bin:/opt/homebrew/bin", "LOG": str(tmp_path / "job.log"), "BASH_ENV": ""}
+
+
+def test_capture_holdings_failure_is_non_fatal_and_logged(tmp_path):
+    env = _stub_uv(tmp_path, 'echo \'{"error": "OperationalError: 讀持倉失敗"}\'\nexit 1\n')
+    r = _sh(tmp_path, 'capture_holdings "$PWD/h.json"; echo rc=$?', env)
+    text = (tmp_path / "job.log").read_text(encoding="utf-8")
+    assert "rc=1" in r.stdout
+    assert "RESULT holdings=none (" in text and "OperationalError" in text
+    assert not (tmp_path / "h.json").exists() and not (tmp_path / "h.json.tmp").exists()
+
+
+def test_capture_holdings_timeout_is_non_fatal(tmp_path):
+    env = _stub_uv(tmp_path, "sleep 30\n")
+    env["MEDIA_PICKS_HOLDINGS_TIMEOUT_SECONDS"] = "1"
+    r = _sh(tmp_path, 'capture_holdings "$PWD/h.json"; echo rc=$?', env)
+    assert "rc=1" in r.stdout
+    assert "RESULT holdings=none" in (tmp_path / "job.log").read_text(encoding="utf-8")
+
+
+def test_capture_holdings_success_logs_path_and_keeps_output(tmp_path):
+    env = _stub_uv(tmp_path, 'echo \'{"as_of": "x", "codes": []}\'\n')
+    r = _sh(tmp_path, 'capture_holdings "$PWD/h.json"; echo rc=$?', env)
+    assert "rc=0" in r.stdout
+    assert f"RESULT holdings={tmp_path}/h.json" in (tmp_path / "job.log").read_text(encoding="utf-8")
+    assert json.loads((tmp_path / "h.json").read_text(encoding="utf-8"))["as_of"] == "x"
+
+
+def test_summarize_run_passes_holdings_to_both_invocations_only_when_file_exists(tmp_path):
+    argv_log = tmp_path / "argv.txt"
+    env = _stub_uv(tmp_path, f'echo "$@" >>"{argv_log}"\n')
+    (tmp_path / "h.json").write_text("{}", encoding="utf-8")
+    _sh(tmp_path, 'summarize_run 2026-10-26T23:00:00+0800 "$PWD/s.json" "$PWD/h.json"', env)
+    calls = argv_log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 2 and all(f"--holdings {tmp_path}/h.json" in c for c in calls)
+
+    argv_log.unlink()
+    _sh(tmp_path, 'summarize_run 2026-10-26T23:00:00+0800 "$PWD/s.json" "$PWD/gone.json"', env)
+    _sh(tmp_path, 'summarize_run 2026-10-26T23:00:00+0800 "$PWD/s.json"', env)
+    assert "--holdings" not in argv_log.read_text(encoding="utf-8")
+
+
+def test_main_wires_holdings_step_after_commit_and_before_summary():
+    body = JOB.read_text(encoding="utf-8")
+    assert body.index("commit_journal 2>>") < body.index('capture_holdings "$holdings"') < body.index('summarize_run "$run_start"')
+    assert 'capture_holdings "$holdings" || holdings=""' in body       # 失敗只清掉路徑、不進 problems

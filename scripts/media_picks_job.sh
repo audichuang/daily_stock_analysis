@@ -6,7 +6,7 @@
 # Hindsight 的 repo 調查子程序繼承了 ORCA_* 環境變數，它結束時觸發 Orca 的 Stop hook，排程的 terminal 被收掉、
 # 前景的 make media-picks 跟著被 SIGTERM）。也因為那時 agent 可能已經不在，任何一步失敗都由本腳本自己推 Bark。
 #
-# log：logs/media_picks_job_<時刻>.log（--detach 會印出 `log: <路徑>`），最後一行 `media picks done` 或 `FAILED: …`；摘要：同名 .summary.json／.summary.index.md。
+# log：logs/media_picks_job_<時刻>.log（--detach 會印出 `log: <路徑>`），最後一行 `media picks done` 或 `FAILED: …`；摘要：同名 .summary.json／.summary.index.md；持股清單 .holdings.json（`RESULT holdings=`，取不到記 none）。
 # 可被 source 載入函式（測試用），只有直接執行才跑 main。逾時與 Bark 共用 daily_report.sh 的函式。
 
 # shellcheck source=scripts/daily_report.sh
@@ -149,13 +149,33 @@ detach_media() {
   echo "log: logs/media_picks_job_${run_id}.log"
 }
 
-# summarize_run RUN_START SUMMARY：RESULT since= 無條件先記（摘要失敗時 Claude 仍要用同一個值手動取證）；
+# capture_holdings OUT：唯讀讀應用庫的台股持股清單寫成 JSON（portfolio_codes.py）。失敗不拖垮本輪：
+# 記 `RESULT holdings=none (原因)`、回 1，摘要照產、只是沒有「你的持股被點名」那一段；成功記 `RESULT holdings=<路徑>`。
+# 子行程用 --env-file .env 取 STORAGE_DATABASE_URL；輸出先寫暫存檔，成功才改名，避免留下半份檔被當成有效清單。
+capture_holdings() {
+  local out="$1" tmp reason
+  tmp="${out}.tmp"
+  if run_with_timeout "${MEDIA_PICKS_HOLDINGS_TIMEOUT_SECONDS:-60}" \
+      uv run --env-file .env python scripts/portfolio_codes.py >"$tmp" 2>>"$LOG"; then
+    mv -f "$tmp" "$out"
+    log "RESULT holdings=$out"
+    return 0
+  fi
+  reason=$(head -c 200 "$tmp" 2>/dev/null | tr '\n' ' ')
+  rm -f "$tmp"
+  log "RESULT holdings=none (${reason:-沒有輸出，逾時或程式失敗})"
+  return 1
+}
+
+# summarize_run RUN_START SUMMARY [HOLDINGS]：RESULT since= 無條件先記（摘要失敗時 Claude 仍要用同一個值手動取證）；
 # JSON 給程式切片，索引給主 agent 挑檔（單檔完整證據由子 agent 自己用 --code 取，--since 照 RESULT since= 那個值）。
+# HOLDINGS 有檔才帶 --holdings（索引第一段標出被點名的持股）。
 summarize_run() {
-  local run_start="$1" summary="$2"
+  local run_start="$1" summary="$2" holdings="${3:-}" extra=()
+  [[ -n "$holdings" && -f "$holdings" ]] && extra=(--holdings "$holdings")
   log "RESULT since=$run_start"
-  if uv run --no-project python scripts/media_picks_summary.py --since "$run_start" --json >"$summary" 2>>"$LOG" \
-    && uv run --no-project python scripts/media_picks_summary.py --since "$run_start" --index >"${summary%.json}.index.md" 2>>"$LOG"; then
+  if uv run --no-project python scripts/media_picks_summary.py --since "$run_start" --json ${extra[@]+"${extra[@]}"} >"$summary" 2>>"$LOG" \
+    && uv run --no-project python scripts/media_picks_summary.py --since "$run_start" --index ${extra[@]+"${extra[@]}"} >"${summary%.json}.index.md" 2>>"$LOG"; then
     log "RESULT summary=$summary"
     log "RESULT summary_index=${summary%.json}.index.md"
   else
@@ -220,7 +240,11 @@ main() {
   log "RESULT journal push=$push"
   [[ "$push" == "fail" ]] && problems+=("journal commit／push 失敗")
 
-  summarize_run "$run_start" "$summary" || problems+=("摘要產生失敗")
+  # 持股清單（唯讀）：取不到只少一段，不算本輪失敗、不推 Bark
+  local holdings="logs/media_picks_job_${run_id}.holdings.json"
+  capture_holdings "$holdings" || holdings=""
+
+  summarize_run "$run_start" "$summary" "$holdings" || problems+=("摘要產生失敗")
 
   if (( ${#problems[@]} > 0 )); then
     notify_failure "$(IFS='；'; echo "${problems[*]}")。log: $LOG" "媒體點名部分失敗 $(date +%F)"
