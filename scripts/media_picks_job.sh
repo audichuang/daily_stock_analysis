@@ -55,6 +55,36 @@ journal_only_ahead() {
   done < <(git log --no-merges --no-renames --name-only --format= origin/develop..HEAD)
 }
 
+# push_journal_cli：排程的 Claude 自己 commit 完 journal（review／verdicts）後呼叫，把 push 的守門放在有測試的程式碼裡。
+# 只在 develop、且領先 origin/develop 的 commit 全是 journal/ 才推（被拒就 pull --rebase 再推，失敗 abort rebase）。
+# stdout 只印最後一行：`push ok`／`push none`（沒有領先）／`push refused: <原因>`／`push failed`；原因同時寫 stderr。0＝ok／none，1＝其餘。
+push_journal_cli() {
+  local branch reason
+  branch=$(git branch --show-current)
+  if [[ "$branch" != "develop" ]]; then
+    reason="目前在 ${branch:-detached HEAD}，不是 develop"
+    echo "$reason" >&2
+    echo "push refused: $reason"
+    return 1
+  fi
+  if ! reason=$(journal_only_ahead 2>&1 >/dev/null); then
+    echo "$reason" >&2
+    echo "push refused: $reason"
+    return 1
+  fi
+  if [[ -z "$(git log --format=%h origin/develop..HEAD 2>/dev/null)" ]]; then
+    echo "push none"
+    return 0
+  fi
+  if push_develop; then
+    echo "push ok"
+  else
+    echo "journal push 失敗（push 被拒且 rebase 失敗，或逾時）" >&2
+    echo "push failed"
+    return 1
+  fi
+}
+
 # commit_journal：只 commit＋push 兩個 journal 檔；印 none（沒變更也沒有未推的 commit）／ok／fail。
 # `git commit -- <檔>` 只收這兩個檔，即使 index 裡有別的暫存也不會帶進去。
 # 沒有新變更但本地領先 origin/develop（上一晚 push 失敗留下的）也要推，不然永遠卡著。
@@ -141,6 +171,12 @@ main() {
   [[ -d /opt/homebrew/bin ]] && PATH="/opt/homebrew/bin:$PATH"
   export PATH="$HOME/.local/bin:$PATH"
 
+  # --push-journal：不取鎖、不擷取、不通知，只做 push_journal_cli（失敗由呼叫的 Claude 處理）
+  if [[ "${1:-}" == "--push-journal" ]]; then
+    push_journal_cli
+    exit $?
+  fi
+
   if [[ "${1:-}" == "--detach" ]]; then
     detach_media "$0"
     exit 0
@@ -159,6 +195,8 @@ main() {
   log "media picks start (pid $$, log: $LOG)"
   # 卡死的前一輪：FAILED＋Bark；正常在跑：跳過但保留 log（排程的 Claude 靠它判斷）
   acquire_lock "logs/.media_picks_job.lock" 媒體點名 "${MEDIA_PICKS_STALE_LOCK_SECONDS:-10800}" 1 "媒體點名失敗 $(date +%F)"
+  # 拿到鎖就先記 since：擷取中途掛掉的一輪也要讓 media_picks_summary.py --judge-since 看得到，它寫下的列才會被補判
+  log "RESULT since=$run_start"
 
   local branch
   branch=$(git branch --show-current)

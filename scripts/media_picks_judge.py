@@ -28,6 +28,11 @@ ROOT = Path(__file__).resolve().parent.parent
 MAX_CODES = 8
 VERDICTS = ("research", "watch", "avoid")
 REQUIRED = ("code", "verdict", "thesis", "evidence", "risks", "flip", "data_as_of")
+# 主 agent 的 Bash 單次上限 600 秒，而結果要全部回來才一次印出：被外層砍掉就一檔都拿不到。
+# 每檔最壞是「資料包＋判斷」串行，兩者加起來要留出 uv／claude 冷啟動的餘裕。
+BASH_CEILING = 600
+DOSSIER_TIMEOUT = 120
+JUDGE_TIMEOUT = 300
 
 BRIEF = """你在分析一檔台股，判斷財經節目／PTT 對它的看法站不站得住。下面附了兩份證據，只能根據它們判斷，不要假設你查得到別的資料。
 
@@ -110,13 +115,13 @@ def judge_one(code: str, media_text: str, dossier_text: str, model, timeout: int
         return {"code": code, "ok": False, "error": str(e), "raw": p.stdout[-500:]}
 
 
-def run(since: datetime, codes: list, jobs: int = MAX_CODES, model=None, timeout: int = 420,
+def run(since: datetime, codes: list, jobs: int = MAX_CODES, model=None, timeout: int = JUDGE_TIMEOUT,
         dossier_fn=dossier, summary_mod=None) -> list:
     mod = summary_mod or _load_summary()
     s = mod.summarize(since)
 
     def one(code):
-        return judge_one(code, mod.stock_detail(s, code), dossier_fn(code, 180), model, timeout)
+        return judge_one(code, mod.stock_detail(s, code), dossier_fn(code, DOSSIER_TIMEOUT), model, timeout)
 
     with ThreadPoolExecutor(max_workers=max(1, min(jobs, len(codes)))) as ex:
         return list(ex.map(one, codes))
@@ -128,7 +133,7 @@ def main(argv=None) -> int:
     ap.add_argument("codes", nargs="+", help=f"要判斷的代號，帶 .TW／.TWO，最多 {MAX_CODES} 檔")
     ap.add_argument("--model", default=os.environ.get("MEDIA_PICKS_JUDGE_MODEL") or None,
                     help="claude -p 的模型；不給就用 CLI 預設（也可設 MEDIA_PICKS_JUDGE_MODEL）")
-    ap.add_argument("--timeout", type=int, default=420, help="每檔 claude -p 的逾時秒數")
+    ap.add_argument("--timeout", type=int, default=JUDGE_TIMEOUT, help="每檔 claude -p 的逾時秒數（加上資料包的時間要低於 Bash 的 600 秒上限）")
     args = ap.parse_args(argv)
     if len(args.codes) > MAX_CODES:
         ap.error(f"最多 {MAX_CODES} 檔")

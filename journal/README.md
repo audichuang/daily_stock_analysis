@@ -129,6 +129,7 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   | `flip` | 什麼變化會改變看法 |
   | `bull_voices` / `bear_voices` | 本輪看多／看空的講者數（依講者去重） |
   | `data_as_of` | 資料包的基準日 |
+  | `since` | 本輪的 since（log 的 `RESULT since=`，帶時區），表示判到這一輪為止；下一輪的 `media_picks_summary.py --judge-since` 用它找出還沒判過的輪次。補判時判讀範圍會往前涵蓋，但這裡仍記本輪的 since |
   | `written_at` | 寫入時點（帶時區） |
 
 - `ptt-picks.jsonl` — **PTT 股票板 `[標的]` 文**（`make ptt-picks`，`scripts/tw_ptt_picks.py`），一篇一行。

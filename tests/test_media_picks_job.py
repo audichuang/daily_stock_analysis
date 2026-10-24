@@ -490,3 +490,138 @@ def test_sync_develop_fails_safely_on_dirty_tree(repo, tmp_path):
     assert r.returncode == 1
     assert not (repo / ".git" / "rebase-merge").exists() and not (repo / ".git" / "rebase-apply").exists()
     assert _git(repo, "stash", "list") == ""
+
+
+# ---- push_journal_cli（--push-journal 的本體）：只推 journal commit，最後一行 stdout 是結果 ----
+
+def _push_cli(repo):
+    r = _sh(repo, "push_journal_cli")
+    return r.returncode, r.stdout.strip(), r.stderr
+
+
+def _journal_commit(repo, line='{"mine": 1}\n'):
+    with (repo / "journal" / "media-picks.jsonl").open("a", encoding="utf-8") as f:
+        f.write(line)
+    _git(repo, "commit", "-q", "-am", "journal: mine")
+
+
+def test_push_journal_cli_pushes_journal_only_commit(repo):
+    _journal_commit(repo)
+    assert _push_cli(repo)[:2] == (0, "push ok")
+    assert _origin_head(repo) == _git(repo, "rev-parse", "HEAD")
+
+
+def test_push_journal_cli_reports_none_when_nothing_ahead(repo):
+    before = _origin_head(repo)
+    assert _push_cli(repo)[:2] == (0, "push none")
+    assert _origin_head(repo) == before
+
+
+def test_push_journal_cli_refuses_human_commit(repo):
+    _human_commit(repo)
+    before = _origin_head(repo)
+    rc, out, err = _push_cli(repo)
+    assert rc == 1 and out.startswith("push refused: ") and "other.txt" in out and "other.txt" in err
+    assert _origin_head(repo) == before
+
+
+def test_push_journal_cli_refuses_human_commit_mixed_with_journal(repo):
+    _journal_commit(repo)
+    _human_commit(repo)
+    before = _origin_head(repo)
+    assert _push_cli(repo)[1].startswith("push refused: ")
+    assert _origin_head(repo) == before
+
+
+def test_push_journal_cli_refuses_merge_commit(repo):
+    _git(repo, "checkout", "-q", "-b", "side")
+    (repo / "journal" / "ptt-picks.jsonl").write_text("{}\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "side")
+    _git(repo, "checkout", "-q", "develop")
+    _journal_commit(repo)
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    before = _origin_head(repo)
+    rc, out, _ = _push_cli(repo)
+    assert rc == 1 and "merge" in out and out.startswith("push refused: ")
+    assert _origin_head(repo) == before
+
+
+def test_push_journal_cli_refuses_off_develop(repo):
+    _git(repo, "checkout", "-q", "-b", "feature")
+    _journal_commit(repo)
+    before = _origin_head(repo)
+    rc, out, _ = _push_cli(repo)
+    assert rc == 1 and out.startswith("push refused: ") and "feature" in out
+    assert _origin_head(repo) == before
+
+
+def test_push_journal_cli_fails_and_aborts_rebase_on_conflict(repo, tmp_path):
+    _journal_commit(repo, '{"mine": 1}\n')
+    _advance_origin(tmp_path, repo, "journal/media-picks.jsonl", '{"theirs": 1}\n')   # 同一行 → 衝突
+    before = _origin_head(repo)
+    rc, out, _ = _push_cli(repo)
+    assert (rc, out) == (1, "push failed")
+    assert _origin_head(repo) == before
+    assert not (repo / ".git" / "rebase-merge").exists() and not (repo / ".git" / "rebase-apply").exists()
+
+
+def test_push_journal_cli_stdout_is_a_single_line_and_main_dispatches_it(repo):
+    _human_commit(repo)
+    r = _sh(repo, "push_journal_cli")
+    assert len(r.stdout.splitlines()) == 1
+    body = _sh(repo, "declare -f main").stdout
+    assert body.index("--push-journal") < body.index("--detach") < body.index("acquire_lock")
+
+
+def test_push_journal_cli_rebases_when_push_rejected(repo, tmp_path):
+    _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", '{"theirs": 1}\n')   # 別處先推，不衝突
+    _journal_commit(repo)
+    assert _push_cli(repo)[:2] == (0, "push ok")
+    _git(repo, "fetch", "-q", "origin")
+    assert _git(repo, "rev-parse", "HEAD") == _git(repo, "rev-parse", "origin/develop")
+    assert _remote_files(repo) >= {"journal/ptt-picks.jsonl", "journal/media-picks.jsonl"}
+
+
+def test_push_journal_cli_ignores_dirty_tree_when_push_is_accepted(repo):
+    _journal_commit(repo)
+    (repo / "other.txt").write_text("uncommitted human edit\n", encoding="utf-8")    # 髒工作樹不該擋 push
+    assert _push_cli(repo)[:2] == (0, "push ok")
+    assert (repo / "other.txt").read_text(encoding="utf-8") == "uncommitted human edit\n"
+
+
+def test_push_journal_flag_runs_end_to_end_without_lock_or_log(repo):
+    """把腳本複製進暫存 repo 當根目錄再直接執行：驗證 main 的分派、exit code，且不取鎖、不建 log、不通知。"""
+    import shutil
+    (repo / "scripts").mkdir()
+    for name in ("media_picks_job.sh", "daily_report.sh"):
+        shutil.copy(ROOT / "scripts" / name, repo / "scripts" / name)
+    bin_dir = repo / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "curl").write_text(f'#!/bin/sh\necho curl >>"{repo}/curl.called"\n', encoding="utf-8")
+    (bin_dir / "curl").chmod(0o755)
+
+    def run():
+        import os
+        return subprocess.run(["bash", "scripts/media_picks_job.sh", "--push-journal"], cwd=repo, capture_output=True,
+                              text=True, timeout=60, env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"})
+
+    _journal_commit(repo)
+    r = run()
+    assert (r.returncode, r.stdout.strip()) == (0, "push ok")
+    assert _origin_head(repo) == _git(repo, "rev-parse", "HEAD")
+    r = run()
+    assert (r.returncode, r.stdout.strip()) == (0, "push none")
+    _human_commit(repo)
+    r = run()
+    assert r.returncode == 1 and r.stdout.startswith("push refused: ") and len(r.stdout.splitlines()) == 1
+    assert not (repo / "logs").exists() and not (repo / "curl.called").exists()
+
+
+def test_main_logs_since_right_after_lock_before_extraction():
+    # 擷取中途掛掉時 log 裡也要有本輪 since（--judge-since 靠它找出沒判過的輪次）
+    body = (ROOT / "scripts" / "media_picks_job.sh").read_text(encoding="utf-8")
+    main = body[body.index("\nmain() {"):]
+    lock, since, extract = (main.index('acquire_lock "logs/.media_picks_job.lock"'),
+                            main.index('log "RESULT since=$run_start"'), main.index("make media-picks"))
+    assert lock < since < extract
