@@ -20,12 +20,14 @@
 """
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 JOURNAL_DIR = ROOT / "journal"
+LOGS_DIR = ROOT / "logs"
 TRANSCRIPT_DIR = ROOT / "data" / "media_picks"
 REVIEW_RESOLVES = ("code_mismatch", "fuzzy", "unresolved")
 STOCK_INDEX = ROOT / "apps" / "dsa-web" / "public" / "stocks.index.json"
@@ -334,6 +336,45 @@ def stock_detail(s: dict, code: str) -> str:
     return "\n".join(lines)
 
 
+def _parse_since(text, tz=None):
+    """ISO 時刻 → 帶時區的 datetime；解析不了回 None。沒帶時區的當本機時區。"""
+    try:
+        at = datetime.fromisoformat(str(text).strip())
+    except ValueError:
+        return None
+    return at if at.tzinfo else at.astimezone() if tz is None else at.replace(tzinfo=tz)
+
+
+def round_sinces(logs_dir: Path = LOGS_DIR) -> list:
+    """logs/media_picks_job_*.log 裡每個 `RESULT since=` 的值（解析不了的略過）。"""
+    out = []
+    for path in sorted(logs_dir.glob("media_picks_job_*.log")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(r"^.*RESULT since=(\S+)", text, re.M):
+            at = _parse_since(m.group(1))
+            if at is not None:
+                out.append(at)
+    return out
+
+
+def judge_since(current: datetime, verdict_rows: list, round_sinces: list, max_days: int = 7) -> datetime:
+    """本輪review與判斷該涵蓋的起點：上一輪判讀中斷時往前涵蓋。
+
+    last＝判斷列（`since` 欄，記的是寫下那批判斷的那一輪自己的 since，不是補判的起點）裡最晚的 since；比 last 晚的各輪都沒判斷過（中斷，或那輪是空的——空輪不加內容，
+    涵蓋進來無害），取其中最早的、且落在 [current - max_days, current] 的那個；沒有 last 或沒有符合的輪就用 current。
+    FAILED 而沒有摘要的輪不用管：視窗是對 journal 列的 extracted_at 套的，往前涵蓋自然包含它們寫下的列。"""
+    lasts = [at for at in (_parse_since(r.get("since"), current.tzinfo) for r in verdict_rows if r.get("since")) if at]
+    if not lasts:
+        return current
+    last = max(lasts)
+    floor = current - timedelta(days=max_days)
+    later = [s for s in round_sinces if last < s <= current and s >= floor]
+    return min(later) if later else current
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--since", required=True, help="本輪開始時刻（ISO 8601，帶時區）")
@@ -341,11 +382,19 @@ def main(argv=None) -> int:
     out.add_argument("--json", action="store_true", help="輸出 JSON（排程用）")
     out.add_argument("--index", action="store_true", help="精簡索引（主 agent 挑檔用）")
     out.add_argument("--code", help="只輸出這一檔的完整證據，帶 .TW／.TWO（逐檔判斷用）")
+    out.add_argument("--judge-since", action="store_true",
+                     help="印出本輪review與判斷該用的起點（上一輪判讀中斷時比 --since 早）")
+    ap.add_argument("--logs-dir", type=Path, default=LOGS_DIR, help="找各輪 RESULT since= 的 log 目錄（預設 logs/）")
+    ap.add_argument("--journal-dir", type=Path, default=JOURNAL_DIR, help="journal 目錄（預設 journal/）")
     args = ap.parse_args(argv)
     since = datetime.fromisoformat(args.since)
     if since.tzinfo is None:
         since = since.astimezone()
-    s = summarize(since)
+    if args.judge_since:
+        verdicts = _read_jsonl(args.journal_dir / "media-picks-verdicts.jsonl")
+        print(judge_since(since, verdicts, round_sinces(args.logs_dir)).isoformat())
+        return 0
+    s = summarize(since, journal_dir=args.journal_dir)
     if args.json:
         print(json.dumps(s, ensure_ascii=False, indent=1))
     elif args.index:

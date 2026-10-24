@@ -134,3 +134,11 @@ def test_worst_case_per_stock_fits_under_bash_ceiling(monkeypatch):
     monkeypatch.setattr(judge, "judge_one", lambda code, m, d, model, timeout: seen.setdefault("t", timeout) and {})
     judge.run(SINCE, ["2330.TW"], dossier_fn=lambda c, t: seen.setdefault("d", t) and "", summary_mod=_Summary)
     assert seen == {"d": judge.DOSSIER_TIMEOUT, "t": judge.JUDGE_TIMEOUT}
+
+
+def test_cli_passes_judge_timeout_by_default_and_timeouts_are_nonzero(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(judge, "run", lambda since, codes, **k: seen.update(k) or [])
+    assert judge.main(["--since", "2026-10-26T23:00:00+08:00", "2330.TW"]) == 0
+    assert seen["timeout"] == judge.JUDGE_TIMEOUT
+    assert judge.JUDGE_TIMEOUT >= 60 and judge.DOSSIER_TIMEOUT >= 30   # 設成 0 會讓每檔立刻逾時

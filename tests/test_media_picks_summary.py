@@ -212,3 +212,73 @@ def test_confirm_unclear_keep_data(tmp_path, index_path, verdict):
     r = _pick(resolve="fuzzy", data={"as_of": "2026-10-26", "close": 900.0})
     s = _run(tmp_path, index_path, [r], [_verdict(r, verdict)])
     assert _codes(s)["2330.TW"]["data"]["close"] == 900.0
+
+
+# ---- judge_since：上一輪判讀中斷時往前涵蓋 ----
+
+def _t(day, hour=23):
+    return datetime.fromisoformat(f"2026-10-{day:02d}T{hour:02d}:00:00+08:00")
+
+
+CUR = _t(26)
+
+
+def test_judge_since_without_since_in_verdicts_is_current():
+    assert mod.judge_since(CUR, [{"code": "2330.TW"}], [_t(24), _t(25)]) == CUR
+    assert mod.judge_since(CUR, [], [_t(25)]) == CUR
+
+
+def test_judge_since_previous_round_judged_is_current():
+    rows = [{"since": _t(25).isoformat()}]
+    assert mod.judge_since(CUR, rows, [_t(24), _t(25), CUR]) == CUR
+
+
+def test_judge_since_previous_round_interrupted_goes_back_to_it():
+    rows = [{"since": _t(24).isoformat()}, {"code": "no-since"}]
+    assert mod.judge_since(CUR, rows, [_t(23), _t(24), _t(25), CUR]) == _t(25)
+
+
+def test_judge_since_uses_latest_since_not_row_order():
+    rows = [{"since": _t(23).isoformat()}, {"since": _t(25).isoformat()}, {"since": _t(24).isoformat()}]
+    assert mod.judge_since(CUR, rows, [_t(23), _t(24), _t(25)]) == CUR
+
+
+def test_judge_since_excludes_rounds_older_than_max_days():
+    rows = [{"since": _t(10).isoformat()}]
+    assert mod.judge_since(CUR, rows, [_t(11), _t(18), _t(25)]) == _t(25)   # 11、18 超過 7 天
+    assert mod.judge_since(CUR, rows, [_t(11)], max_days=30) == _t(11)
+    assert mod.judge_since(CUR, rows, [_t(19)]) == _t(19)                    # 剛好 7 天算在內
+
+
+def test_judge_since_ignores_rounds_after_current():
+    rows = [{"since": _t(24).isoformat()}]
+    assert mod.judge_since(CUR, rows, [_t(27), _t(28)]) == CUR
+
+
+def test_round_sinces_ignores_malformed_lines(tmp_path):
+    (tmp_path / "media_picks_job_a.log").write_text(
+        "[x] RESULT since=2026-10-25T23:00:00+0800\nRESULT since=garbage\nRESULT since=\nnoise\n"
+        "[y] RESULT since=2026-10-26T23:00:01+08:00 extra\n", encoding="utf-8")
+    (tmp_path / "other.log").write_text("RESULT since=2026-10-01T00:00:00+0800\n", encoding="utf-8")
+    assert mod.round_sinces(tmp_path) == [_t(25), datetime.fromisoformat("2026-10-26T23:00:01+08:00")]
+
+
+def test_cli_judge_since_reads_journal_and_logs(tmp_path, capsys):
+    _write(tmp_path / "media-picks-verdicts.jsonl", [{"code": "2330.TW", "since": _t(24).isoformat()}])
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "media_picks_job_1.log").write_text("RESULT since=2026-10-25T23:00:00+0800\n", encoding="utf-8")
+    argv = ["--since", CUR.isoformat(), "--judge-since", "--journal-dir", str(tmp_path), "--logs-dir", str(logs)]
+    assert mod.main(argv) == 0
+    assert capsys.readouterr().out.strip() == _t(25).isoformat()
+    with pytest.raises(SystemExit):
+        mod.main(["--since", CUR.isoformat(), "--judge-since", "--json"])
+
+
+def test_judge_since_catch_up_round_records_its_own_since():
+    # 判斷列的 since 記「本輪」的 since（判到這輪為止），不是補判的起點；否則下一輪會把剛補判過的那輪再判一次
+    rounds = [_t(23), _t(24), _t(25), CUR]
+    rows = [{"since": _t(23).isoformat()}]                       # 23 號判過，24 號中斷
+    assert mod.judge_since(_t(25), rows, rounds) == _t(24)        # 25 號補判 24 號
+    rows.append({"since": _t(25).isoformat()})                    # 25 號寫下自己的 since
+    assert mod.judge_since(CUR, rows, rounds) == CUR              # 26 號不再回頭

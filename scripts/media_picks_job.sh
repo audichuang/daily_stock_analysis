@@ -55,6 +55,36 @@ journal_only_ahead() {
   done < <(git log --no-merges --no-renames --name-only --format= origin/develop..HEAD)
 }
 
+# push_journal_cli：排程的 Claude 自己 commit 完 journal（review／verdicts）後呼叫，把 push 的守門放在有測試的程式碼裡。
+# 只在 develop、且領先 origin/develop 的 commit 全是 journal/ 才推（被拒就 pull --rebase 再推，失敗 abort rebase）。
+# stdout 只印最後一行：`push ok`／`push none`（沒有領先）／`push refused: <原因>`／`push failed`；原因同時寫 stderr。0＝ok／none，1＝其餘。
+push_journal_cli() {
+  local branch reason
+  branch=$(git branch --show-current)
+  if [[ "$branch" != "develop" ]]; then
+    reason="目前在 ${branch:-detached HEAD}，不是 develop"
+    echo "$reason" >&2
+    echo "push refused: $reason"
+    return 1
+  fi
+  if ! reason=$(journal_only_ahead 2>&1 >/dev/null); then
+    echo "$reason" >&2
+    echo "push refused: $reason"
+    return 1
+  fi
+  if [[ -z "$(git log --format=%h origin/develop..HEAD 2>/dev/null)" ]]; then
+    echo "push none"
+    return 0
+  fi
+  if push_develop; then
+    echo "push ok"
+  else
+    echo "journal push 失敗（push 被拒且 rebase 失敗，或逾時）" >&2
+    echo "push failed"
+    return 1
+  fi
+}
+
 # commit_journal：只 commit＋push 兩個 journal 檔；印 none（沒變更也沒有未推的 commit）／ok／fail。
 # `git commit -- <檔>` 只收這兩個檔，即使 index 裡有別的暫存也不會帶進去。
 # 沒有新變更但本地領先 origin/develop（上一晚 push 失敗留下的）也要推，不然永遠卡著。
@@ -140,6 +170,12 @@ main() {
   # notebooklm、yt-dlp 是 uv tool，裝在 ~/.local/bin；Orca 的 terminal 不一定帶這段 PATH
   [[ -d /opt/homebrew/bin ]] && PATH="/opt/homebrew/bin:$PATH"
   export PATH="$HOME/.local/bin:$PATH"
+
+  # --push-journal：不取鎖、不擷取、不通知，只做 push_journal_cli（失敗由呼叫的 Claude 處理）
+  if [[ "${1:-}" == "--push-journal" ]]; then
+    push_journal_cli
+    exit $?
+  fi
 
   if [[ "${1:-}" == "--detach" ]]; then
     detach_media "$0"
