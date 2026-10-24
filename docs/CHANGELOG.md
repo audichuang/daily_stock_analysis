@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 新增 `scripts/verify_media_picks.py`（`make verify-media-picks`）回驗媒體點名：講者看多／看空與排程 Claude 的 research／watch／avoid，進場取播出日／寫入日之後第一個交易日開盤，扣成本、減 0050，依 verdict 與講者分表（n<20 或 CI 跨零標 inconclusive，未到期不補值）；`media_picks_judge.py` 的逐檔提示詞新增「三、講者過去紀錄」，樣本不足（n<20）時明寫不要加減分，取不到紀錄不影響判斷
 - [修復] 媒體點名排程把兩段易錯的 shell 邏輯搬進有測試的程式碼：`media_picks_job.sh --push-journal`（只在 develop 且領先的 commit 全只動 `journal/` 才推，取代 prompt 內聯、pipefail 下會誤判的 `git log | grep -q`）與 `media_picks_summary.py --judge-since`（依 verdicts 列新增的 `since` 欄與各輪 log 的 `RESULT since=` 算出上一輪判讀中斷時要往前涵蓋的起點）；`media_picks_judge.py` 補測預設逾時確實傳到 `claude -p`
 - [修復] `media_picks_judge.py` 每檔逾時改成資料包 120 秒＋判斷 300 秒（原 180＋420＝600 秒，剛好等於主 agent 的 Bash 上限，被砍時一檔結果都拿不到）；排程 prompt 另補：Claude 自己 push 前也要求領先的 commit 只動 `journal/`、衝突時 abort rebase，上一輪判讀中斷時本輪連同上一輪補判，禁止讀 `.env`／直連資料庫（10-25 補判那輪的 psql 錯誤訊息把連線字串印進了 transcript）
 - [修復] 媒體點名排程第一次在 Orca 實跑時，主 agent 把等待擷取丟到背景就結束回合，Orca 的 Stop hook 當成做完、收掉 terminal，覆核／判斷／Bark 都沒發生：prompt 改成前景分段等待；逐檔判斷也不再用 Agent 工具（同樣在背景跑），改成新的 `scripts/media_picks_judge.py`：一檔一個 `claude -p`（不給工具、關 hook、拿掉 `ORCA_*`）平行判斷，前景等全部回來再輸出 JSON

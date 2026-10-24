@@ -15,6 +15,12 @@ _spec.loader.exec_module(judge)
 SINCE = datetime(2026, 10, 26, 23, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_records(monkeypatch):
+    """預設不跑 uv／連 DB 取講者紀錄；要測的測試自己傳 records_fn。"""
+    monkeypatch.setattr(judge, "load_records", lambda timeout=0: {})
+
+
 def _verdict(code, **kw):
     return {"code": code, "verdict": "watch", "thesis": "t", "evidence": ["營收 YoY 50%（2026-09）"], "risks": ["r"],
             "flip": "f", "data_as_of": "2026-10-23"} | kw
@@ -142,3 +148,52 @@ def test_cli_passes_judge_timeout_by_default_and_timeouts_are_nonzero(monkeypatc
     assert judge.main(["--since", "2026-10-26T23:00:00+08:00", "2330.TW"]) == 0
     assert seen["timeout"] == judge.JUDGE_TIMEOUT
     assert judge.JUDGE_TIMEOUT >= 60 and judge.DOSSIER_TIMEOUT >= 30   # 設成 0 會讓每檔立刻逾時
+
+
+class _SummaryWithVoices(_Summary):
+    @staticmethod
+    def summarize(since):
+        return {"since": since, "stocks": [{"code": "2330.TW", "voices": [
+            {"speaker": "甲", "show": "A"}, {"speaker": "", "show": "某節目"}]}]}
+
+
+_REC = {"甲": {"bull": {"n_calls": 30, "n": 25, "hit_rate": 0.6, "mean_excess": 0.0123, "enough": True},
+               "bear": {"n_calls": 3, "n": 2, "hit_rate": 1.0, "mean_excess": -0.05, "enough": False}},
+        "乙": {"bull": {"n_calls": 40, "n": 40, "hit_rate": 0.9, "mean_excess": 0.2, "enough": True}}}
+
+
+def test_records_section_formats_enough_and_small_samples():
+    text = judge.records_section(_REC, ["甲", "乙"])
+    assert "三、講者過去紀錄" in text
+    assert "命中率 60%" in text and "+1.23%" in text                      # n=25 夠
+    assert "已到期 2 筆（共 3 次點名），樣本不足（n<20），不要拿來加減分" in text   # n=2 不夠
+    assert "看空／避開，無紀錄" in text                                      # 乙沒有看空紀錄
+    # 邊界：n=19 不夠、n=20 夠
+    edge = lambda n: judge.records_section({"甲": {"bull": {"n_calls": n, "n": n, "hit_rate": 0.5, "mean_excess": 0.01}}}, ["甲"])  # noqa: E731
+    assert "樣本不足" in edge(19).split("\n")[3] and "樣本不足" not in edge(20)
+
+
+def test_records_section_failure_text_and_unknown_speaker():
+    assert "（講者紀錄取不到：boom）" in judge.records_section(RuntimeError("boom"), ["甲"])
+    assert "看多，無紀錄；看空／避開，無紀錄" in judge.records_section({}, ["新人"])
+
+
+def test_run_appends_records_once_and_survives_load_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEDIA_PICKS_CLAUDE_BIN", str(_fake_claude(tmp_path, json.dumps(_verdict("{code}")))))
+    calls = []
+    out = judge.run(SINCE, ["2330.TW", "2317.TW"], dossier_fn=lambda c, t: "", summary_mod=_SummaryWithVoices,
+                    records_fn=lambda: calls.append(1) or _REC)
+    assert all(r["ok"] for r in out) and len(calls) == 1                  # 兩檔只載一次
+    prompt = (tmp_path / "prompt-2330.TW").read_text()
+    assert "三、講者過去紀錄" in prompt and "- 甲：" in prompt and "- [某節目]：" in prompt and "乙" not in prompt
+
+    def boom():
+        raise RuntimeError("db down")
+    out = judge.run(SINCE, ["2330.TW"], dossier_fn=lambda c, t: "", summary_mod=_SummaryWithVoices, records_fn=boom)
+    assert out[0]["ok"] is True
+    assert "（講者紀錄取不到：db down）" in (tmp_path / "prompt-2330.TW").read_text()
+
+
+def test_brief_mentions_records_and_small_sample_rule():
+    assert "三、講者過去紀錄" in judge.BRIEF and "n<20" in judge.BRIEF
+    assert judge.RECORDS_TIMEOUT <= judge.DOSSIER_TIMEOUT
