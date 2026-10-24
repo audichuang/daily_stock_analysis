@@ -16,10 +16,10 @@ description: "台股每日盤前判讀：一鍵取數（補資料／隔夜收盤
 ## Step 1：一鍵取數
 
 ```bash
-make morning       # 補資料 → 昨晚國際盤收盤 → 期交所籌碼 → 待觸發計畫 → 今日 breakout 候選
+make morning       # 補資料 → 昨晚國際盤收盤 → 期交所籌碼 → 待觸發計畫 → 昨晚媒體點名 → 今日 breakout 候選
 ```
 
-五件事都在裡面，**不要用搜尋湊隔夜數字**：`scripts/overnight.py` 有日期戳、有 ADR 折算、
+六件事都在裡面，**不要用搜尋湊隔夜數字**：`scripts/overnight.py` 有日期戳、有 ADR 折算、
 有日期一致性檢查，而搜尋引擎會把不同交易日的收盤混在一起（實測差到 3.7pp）。
 `overnight.py` 任一序列失敗會回 1（表裡該列印「失敗」），`make morning` 忽略這個錯誤、後面幾段照跑；
 失敗的那幾個數字要自己補查，不能當成沒有變動。
@@ -31,6 +31,11 @@ make morning       # 補資料 → 昨晚國際盤收盤 → 期交所籌碼 →
   不要去搜尋補。兩項各自降級，一項不可用不影響另一項。
 - 日變化只在前一列正好是前一交易日時才印；印「不列日變化」時只有水位。
 - 出現 `⚠ 跨月結算` 時，未平倉變化含結算／轉倉效應，不要讀成法人換方向。
+
+**昨晚媒體點名區塊**（`scripts/media_picks_brief.py`，單跑 `uv run --env-file .env python scripts/media_picks_brief.py`）：
+濃縮 23:00 排程寫的 `journal/media-picks-verdicts.jsonl` 最近一輪（超過 4 天印「已過期」、沒有檔印「沒有媒體點名判斷」）。
+分「持股相關」（avoid 排最前）、research、watch 的翻轉條件、其餘避開名單；腳本只挑列與截短，不判斷，**不是買進訊號**。
+持股清單取不到時印「持股清單取不到」、其餘照印；整段失敗 `make morning` 照跑。
 
 今日候選的報告 §0 有一行「處置／注意股名單」狀態，§5 有「事件日曆」；待觸發計畫的代號不在候選裡，
 要查處置／注意狀態用 `uv run python -m market_data.risk_flags <代號…>`（`2424` 或 `2424.TW` 皆可）。
@@ -144,6 +149,12 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
 - `buy` → 標的只能來自 `breakout` 池，走 skill `tw-swing-research` 完成逐檔研究與 `journal/swing-decisions.jsonl` 留檔
 - `reduce` → 逐檔點出是哪一條 `invalidation` 觸發的
 - `hold` / `wait` → 寫明在等哪個數字，以及它出現時要做什麼
+
+昨晚媒體點名區塊（Step 1）怎麼用：
+
+- research 列只是線索：要放進 `tw-swing-research` 的候選清單，得同時過該 skill 自己的進場規則（`breakout` 池等），過不了就不進，**不能因為被點名而進場**。
+- watch 列預設靜默；只有今天的數據明顯達到它的翻轉條件時，才在 Bark 提一句。
+- 持股被判 avoid 的，Bark 固定留一行（名稱、代號、一句理由），不論今天動作是什麼。
 
 追加一行到 `journal/morning-calls.jsonl`（append，**進版控**）：
 
