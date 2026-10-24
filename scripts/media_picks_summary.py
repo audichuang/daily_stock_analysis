@@ -4,7 +4,7 @@
 只看 ``extracted_at`` 不早於 ``--since`` 的列（``scripts/media_picks_job.sh`` 傳本輪開始時刻；跨午夜的一輪也不會漏）。
 本腳本只整理、不下結論：好壞由 Claude 讀這份證據、再對挑出來的個股跑 ``tw_stock_dossier`` 後判斷。一輪約 160 檔、
 全文約 160 KB，所以分兩層給：``--index`` 是精簡索引（約 20 KB，主 agent 用來挑檔），``--code`` 是單一檔的完整證據
-（交給逐檔分析的子 agent）；``--json`` 是同一份資料的機器可讀版。三者必選其一（沒有全文模式）。輸出三塊：
+（交給 ``media_picks_judge.py`` 的逐檔判斷）；``--json`` 是同一份資料的機器可讀版。三者必選其一（沒有全文模式）。輸出三塊：
 
 - ``review``：代號沒把握的點名（``resolve`` 為 ``code_mismatch``／``fuzzy``／``unresolved``），附逐字稿路徑與已有的覆核
   結論，讓 Claude 判斷語音誤字；覆核結果另寫 ``journal/media-picks-review.jsonl``（原 journal 不改），下次執行時
@@ -322,7 +322,7 @@ def _index(s: dict) -> str:
 
 
 def stock_detail(s: dict, code: str) -> str:
-    """單一檔的完整證據（子 agent 用）：每位講者的原話、數據、歷史，以及談到這檔的 PTT 文。"""
+    """單一檔的完整證據（逐檔判斷用）：每位講者的原話、數據、歷史，以及談到這檔的 PTT 文。"""
     st = next((x for x in s["stocks"] if x["code"] == code), None)
     posts = [p for p in s["ptt"] if p["stock_code"] == code]
     if st is None and not posts:
@@ -340,7 +340,7 @@ def main(argv=None) -> int:
     out = ap.add_mutually_exclusive_group(required=True)
     out.add_argument("--json", action="store_true", help="輸出 JSON（排程用）")
     out.add_argument("--index", action="store_true", help="精簡索引（主 agent 挑檔用）")
-    out.add_argument("--code", help="只輸出這一檔的完整證據，帶 .TW／.TWO（子 agent 用）")
+    out.add_argument("--code", help="只輸出這一檔的完整證據，帶 .TW／.TWO（逐檔判斷用）")
     args = ap.parse_args(argv)
     since = datetime.fromisoformat(args.since)
     if since.tzinfo is None:
