@@ -16,7 +16,8 @@ TWSE 與 TPEx 各一條執行緒、每個請求間隔 >= 4 秒（TWSE 密集請�
 
     uv run --env-file .env python scripts/audit_market_vs_official.py \\
         --start 2026-01-01 --end 2026-10-23 --out data/audit/2026 --sources t86,margin,price,tpex_insti,tpex_margin,tpex_price
-    uv run --env-file .env python scripts/audit_market_vs_official.py --out data/audit/2026 --summary
+    uv run --env-file .env python scripts/audit_market_vs_official.py --out data/audit/2026 --summary --sources t86
+（``--summary`` 只看 ``--sources`` 列出的來源，預設全部；同一天重跑過以最後一筆為準）
 """
 
 import argparse
@@ -203,11 +204,13 @@ class Audit:
                 self.record(d, "tpex_price", off, {k: v for k, v in db.items() if k in off})
 
 
-def summarize(out: Path) -> int:
+def summarize(out: Path, sources=None) -> int:
+    """Per source: days, differing days, unreadable days. Exit 1 if any (only ``sources`` when given)."""
     latest = {}
     for line in (out / "result.jsonl").read_text().splitlines():
         r = json.loads(line)
-        latest[(r["date"], r["source"])] = r  # 重跑後以最後一筆為準
+        if sources is None or r["source"] in sources:
+            latest[(r["date"], r["source"])] = r  # 重跑後以最後一筆為準
     by_source = {}
     for (d, source), r in sorted(latest.items()):
         s = by_source.setdefault(source, {"days": 0, "err": [], "diff": []})
@@ -233,11 +236,11 @@ def main() -> int:
     ap.add_argument("--summary", action="store_true", help="只彙總既有 result.jsonl，不連網")
     args = ap.parse_args()
     out = Path(args.out)
+    sources = set(args.sources.split(","))
     if args.summary:
-        return summarize(out)
+        return summarize(out, sources)
     if not (args.start and args.end):
         ap.error("--start 與 --end 必填（除非 --summary）")
-    sources = set(args.sources.split(","))
     unknown = sources - set(TWSE_SOURCES + TPEX_SOURCES)
     if unknown:
         ap.error(f"未知來源：{sorted(unknown)}")
@@ -257,7 +260,7 @@ def main() -> int:
     for t in threads:
         t.join()
     print(f"checked {len(dates)} trading days", flush=True)
-    return summarize(out)
+    return summarize(out, sources)
 
 
 if __name__ == "__main__":

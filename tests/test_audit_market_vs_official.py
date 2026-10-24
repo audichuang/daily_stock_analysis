@@ -32,3 +32,12 @@ def test_summary_exit_code_follows_latest_record_per_day(tmp_path, capsys):
 def test_summary_flags_unreadable_days(tmp_path):
     _write(tmp_path, [{"date": "2012-01-02", "source": "t86", "err": "stat mismatch"}])
     assert summarize(tmp_path) == 1
+
+
+def test_summary_only_counts_requested_sources(tmp_path):
+    _write(tmp_path, [
+        {"date": "2026-07-28", "source": "t86", "err": None, "miss": 0, "extra": 0, "bad": 0},
+        {"date": "2026-07-28", "source": "price", "err": None, "miss": 0, "extra": 0, "bad": 24},
+    ])
+    assert summarize(tmp_path, {"t86"}) == 0
+    assert summarize(tmp_path, {"t86", "price"}) == 1
