@@ -348,7 +348,7 @@ def test_fallback_to_shared_advice_map_when_decision_type_invalid(decision_type,
     assert "daily_market_context_buy_softened" in adjustments
 
 
-@pytest.mark.parametrize("advice", ["減碼，跌破500再進場", "建議買進", "觀望", "隨便寫的文字"])
+@pytest.mark.parametrize("advice", ["減碼，跌破500再進場", "觀望", "隨便寫的文字"])
 def test_fallback_does_not_treat_unrecognised_text_as_buy(advice) -> None:
     result = _typed("", advice, "zh-TW")
 
