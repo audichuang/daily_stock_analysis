@@ -113,6 +113,23 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   | `reason` | 判斷依據，一句話（例如逐字稿上下文、索引裡的正式名稱） |
   | `reviewed_at` | 覆核時點（帶時區） |
 
+- `media-picks-verdicts.jsonl` — **媒體點名的 Claude 判斷**，一檔一行，由 23:00 排程的 Claude 讀完
+  `scripts/media_picks_summary.py` 的證據、對挑出來的個股跑 `scripts/tw_stock_dossier.py` 後追加。腳本只整理證據，好壞由 Claude
+  判斷；這個檔讓那些判斷可以回驗（例如 `research` 與 `avoid` 之後的報酬差）。研究名單，不是買進訊號。
+
+  | 欄位 | 意思 |
+  | --- | --- |
+  | `date` | 本輪日期（台北） |
+  | `code` / `name` | 代號（帶 `.TW`／`.TWO`，已套用代號覆核）與名稱 |
+  | `verdict` | `research`（值得隔天交給 tw-swing-research，每輪最多 3 檔）／`watch`（有道理但時機或證據不夠）／`avoid`（理由站不住、太熱或有明顯風險） |
+  | `thesis` | 講者的邏輯與資料支不支持，兩三句 |
+  | `evidence` | 判斷引用的關鍵數字（字串陣列，附數值與日期） |
+  | `risks` | 風險（字串陣列） |
+  | `flip` | 什麼變化會改變看法 |
+  | `bull_voices` / `bear_voices` | 本輪看多／看空的講者數（依講者去重） |
+  | `data_as_of` | 資料包的基準日 |
+  | `written_at` | 寫入時點（帶時區） |
+
 - `ptt-picks.jsonl` — **PTT 股票板 `[標的]` 文**（`make ptt-picks`，`scripts/tw_ptt_picks.py`），一篇一行。
   `[標的]` 是板規格式的推薦文（標的／分類／分析／進退場機制），直接解析原文、不經 LLM；`Re:` 回文不收。實測一週約 12 篇，其中約一半是大盤／台指期或美股（`resolve=market`，不附 `data`）。
   跟媒體點名一樣是**候選來源，不是買進訊號**；作者是匿名網友，推／噓數是擷取當下的值（文章越新越少），不是最終值。
