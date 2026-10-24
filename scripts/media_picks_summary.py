@@ -2,7 +2,9 @@
 """整理一輪媒體點名／PTT 標的文的新列，當作排程 Claude 判讀的證據（唯讀 journal，不連網、不碰 DB）。
 
 只看 ``extracted_at`` 不早於 ``--since`` 的列（``scripts/media_picks_job.sh`` 傳本輪開始時刻；跨午夜的一輪也不會漏）。
-本腳本只整理、不下結論：好壞由 Claude 讀這份證據、再對挑出來的個股跑 ``tw_stock_dossier`` 後判斷。輸出三塊：
+本腳本只整理、不下結論：好壞由 Claude 讀這份證據、再對挑出來的個股跑 ``tw_stock_dossier`` 後判斷。一輪約 160 檔、
+全文約 160 KB，所以分兩層給：``--index`` 是精簡索引（約 20 KB，主 agent 用來挑檔），``--code`` 是單一檔的完整證據
+（交給逐檔分析的子 agent）。輸出三塊：
 
 - ``review``：代號沒把握的點名（``resolve`` 為 ``code_mismatch``／``fuzzy``／``unresolved``），附逐字稿路徑與已有的覆核
   結論，讓 Claude 判斷語音誤字；覆核結果另寫 ``journal/media-picks-review.jsonl``（原 journal 不改）。
@@ -13,6 +15,8 @@
 
     uv run --no-project python scripts/media_picks_summary.py --since 2026-10-26T23:00:00+08:00
     uv run --no-project python scripts/media_picks_summary.py --since 2026-10-26T23:00:00+08:00 --json
+    uv run --no-project python scripts/media_picks_summary.py --since 2026-10-26T23:00:00+08:00 --index
+    uv run --no-project python scripts/media_picks_summary.py --since 2026-10-26T23:00:00+08:00 --code 2330.TW
 """
 import argparse
 import json
@@ -27,6 +31,7 @@ REVIEW_RESOLVES = ("code_mismatch", "fuzzy", "unresolved")
 BULLISH = "bullish"
 BEARISH = ("bearish", "avoid")
 RECENT_DAYS = 7
+INDEX_FULL_VOICES = 2  # 講者數達到這個值的檔在索引裡給完整一行；只有一位講者的壓成短行
 VOICE_FIELDS = ("speaker", "show", "kind", "stance", "theme", "reason", "condition", "quote")
 
 
@@ -189,45 +194,124 @@ def _fmt_history(h) -> str:
     return s
 
 
-def _text(s: dict) -> str:
-    side = {"bullish": "多", "bearish": "空", "avoid": "避"}
+SIDE = {"bullish": "多", "bearish": "空", "avoid": "避"}
+
+
+def _voices(st: dict) -> int:
+    return st["bull_voices"] + st["bear_voices"] + st["neutral_voices"]
+
+
+def _header(s: dict) -> list:
     m = s["media"]
     lines = [f"# 本輪（{s['since']} 起）新增 {m['episodes']} 集、{m['picks']} 筆點名、{m['resolved']} 筆對到代號",
              "", f"## 待覆核代號 {sum(not r['already_reviewed'] for r in s['review'])} 筆"]
     for r in s["review"]:
         mark = "（已覆核）" if r["already_reviewed"] else ""
         lines.append(f"- {r['show']} {r['name_said']} → {r['stock_code'] or '未對到'}（{r['resolve']}，LLM {r['code_llm']}）{mark}")
-    lines += ["", f"## 個股證據（{len(s['stocks'])} 檔，依講者數排序）"]
+    return lines
+
+
+def _stock_block(st: dict) -> list:
+    ptt = f"｜PTT 也有 {len(st['ptt'])} 篇" if st["ptt"] else ""
+    lines = [f"### {st['name']} {st['code']}｜多 {st['bull_voices']}、空 {st['bear_voices']}、中性 {st['neutral_voices']}"
+             f"｜{','.join(st['kinds'])}{ptt}",
+             _fmt_data(st["data"]), "歷史：" + _fmt_history(st["history"])]
+    for v in st["voices"]:
+        who = f"{v['speaker'] or '（無講者）'}／{v['show']}／{v['kind'] or 'tv'}"
+        parts = [f"題材：{v['theme']}" if v["theme"] else "", f"理由：{v['reason']}" if v["reason"] else "",
+                 f"條件：{v['condition']}" if v["condition"] else "", f"「{v['quote']}」" if v["quote"] else ""]
+        lines.append(f"- [{SIDE.get(v['stance'], '中')}] {who}｜" + "｜".join(p for p in parts if p))
+    return lines
+
+
+def _ptt_block(p: dict) -> list:
+    flags = [f for f, on in (("代號待確認", p["resolve"] in REVIEW_RESOLVES), ("有編輯", p["edited"]),
+                             ("附對帳單", p["has_statement"])) if on]
+    return [f"### {p['title']}（{p['stock_code'] or p['resolve']}，{p['category']}，推 {p['push_up']} 噓 {p['push_down']}）"
+            + (f"｜{'、'.join(flags)}" if flags else ""),
+            _fmt_data(p["data"]), f"理由：{p['reason'] or '—'}", f"進退場：{p['condition'] or '—'}"]
+
+
+def _short(text, n=24) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= n else text[:n] + "…"
+
+
+def _index_line(st: dict) -> str:
+    """索引的一行：挑檔要用的事實（多空人數、來源類型、數據、熱度、題材），不放原話。"""
+    d, h = st["data"] or {}, st["history"]
+    yoy = (d.get("revenue_yoy_3m") or [None])[-1]
+    heat = (f"首次 {h['first_named'][5:]}、7 天 {h['named_days_7d']} 天" + (
+        f"、至今 {h['since_first_pct']:+}%" if h["since_first_pct"] is not None else "")) if h else "新出現"
+    themes = list(dict.fromkeys(_short(v["theme"], 16) for v in st["voices"] if v["theme"]))[:3]
+    ptt = f"｜PTT {len(st['ptt'])}" if st["ptt"] else ""
+    if _voices(st) < INDEX_FULL_VOICES:
+        (v,) = st["voices"][:1]
+        return (f"- {st['name']} {st['code']}｜{SIDE.get(v['stance'], '中')}｜{v['kind'] or 'tv'}"
+                f"｜{_short(v['theme'], 16) or '—'}｜{heat}{ptt}")
+    return (f"- {st['name']} {st['code']}｜多 {st['bull_voices']} 空 {st['bear_voices']} 中 {st['neutral_voices']}"
+            f"｜{','.join(st['kinds'])}｜MA20 {d.get('vs_ma20_pct')}% MA60 {d.get('vs_ma60_pct')}% 5 日 {d.get('ret_5d_pct')}%"
+            f" 營收 YoY {yoy}｜{heat}｜{'；'.join(themes) or '—'}{ptt}")
+
+
+def _text(s: dict) -> str:
+    lines = _header(s) + ["", f"## 個股證據（{len(s['stocks'])} 檔，依講者數排序）"]
     for st in s["stocks"]:
-        ptt = f"｜PTT 也有 {len(st['ptt'])} 篇" if st["ptt"] else ""
-        lines += ["", f"### {st['name']} {st['code']}｜多 {st['bull_voices']}、空 {st['bear_voices']}、中性 {st['neutral_voices']}"
-                      f"｜{','.join(st['kinds'])}{ptt}",
-                  _fmt_data(st["data"]), "歷史：" + _fmt_history(st["history"])]
-        for v in st["voices"]:
-            who = f"{v['speaker'] or '（無講者）'}／{v['show']}／{v['kind'] or 'tv'}"
-            parts = [f"題材：{v['theme']}" if v["theme"] else "", f"理由：{v['reason']}" if v["reason"] else "",
-                     f"條件：{v['condition']}" if v["condition"] else "", f"「{v['quote']}」" if v["quote"] else ""]
-            lines.append(f"- [{side.get(v['stance'], '中')}] {who}｜" + "｜".join(p for p in parts if p))
+        lines += [""] + _stock_block(st)
     lines += ["", f"## PTT 新文章 {len(s['ptt'])} 篇"]
     for p in s["ptt"]:
-        flags = [f for f, on in (("代號待確認", p["resolve"] in REVIEW_RESOLVES), ("有編輯", p["edited"]),
-                                 ("附對帳單", p["has_statement"])) if on]
-        lines += ["", f"### {p['title']}（{p['stock_code'] or p['resolve']}，{p['category']}，推 {p['push_up']} 噓 {p['push_down']}）"
-                      + (f"｜{'、'.join(flags)}" if flags else ""),
-                  _fmt_data(p["data"]), f"理由：{p['reason'] or '—'}", f"進退場：{p['condition'] or '—'}"]
+        lines += [""] + _ptt_block(p)
+    return "\n".join(lines)
+
+
+def _index(s: dict) -> str:
+    """主 agent 挑檔用：多位講者的檔一行含數據與題材，只有一位講者的壓成短行；原話用 --code 取。"""
+    multi = [st for st in s["stocks"] if _voices(st) >= INDEX_FULL_VOICES]
+    single = [st for st in s["stocks"] if _voices(st) < INDEX_FULL_VOICES]
+    lines = _header(s) + ["", f"## {len(multi)} 檔有 {INDEX_FULL_VOICES} 位以上講者（依講者數排序）"]
+    lines += [_index_line(st) for st in multi]
+    lines += ["", f"## {len(single)} 檔只有 1 位講者"] + [_index_line(st) for st in single]
+    lines += ["", f"## PTT 新文章 {len(s['ptt'])} 篇"]
+    for p in s["ptt"]:
+        side = SIDE.get(p["stance"], "中")
+        lines.append(f"- {_short(p['title'], 30)}｜{p['stock_code'] or p['resolve']}｜{side}｜推 {p['push_up']} 噓 {p['push_down']}"
+                     + ("｜有編輯" if p["edited"] else "") + ("｜附對帳單" if p["has_statement"] else ""))
+    lines += ["", "單一檔的完整原話與 PTT 全文：media_picks_summary.py --since <同上> --code <代號>"]
+    return "\n".join(lines)
+
+
+def stock_detail(s: dict, code: str) -> str:
+    """單一檔的完整證據（子 agent 用）：每位講者的原話、數據、歷史，以及談到這檔的 PTT 文。"""
+    st = next((x for x in s["stocks"] if x["code"] == code), None)
+    posts = [p for p in s["ptt"] if p["stock_code"] == code]
+    if st is None and not posts:
+        return f"本輪沒有人點名 {code}"
+    lines = (_stock_block(st) if st else [f"### {code}（節目沒點名，只有 PTT）"])
+    for p in posts:
+        lines += ["", "PTT：" + _ptt_block(p)[0].lstrip("# ")] + _ptt_block(p)[1:]
     return "\n".join(lines)
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--since", required=True, help="本輪開始時刻（ISO 8601，帶時區）")
-    ap.add_argument("--json", action="store_true", help="輸出 JSON（排程用）")
+    out = ap.add_mutually_exclusive_group()
+    out.add_argument("--json", action="store_true", help="輸出 JSON（排程用）")
+    out.add_argument("--index", action="store_true", help="精簡索引（主 agent 挑檔用）")
+    out.add_argument("--code", help="只輸出這一檔的完整證據，帶 .TW／.TWO（子 agent 用）")
     args = ap.parse_args(argv)
     since = datetime.fromisoformat(args.since)
     if since.tzinfo is None:
         since = since.astimezone()
     s = summarize(since)
-    print(json.dumps(s, ensure_ascii=False, indent=1) if args.json else _text(s))
+    if args.json:
+        print(json.dumps(s, ensure_ascii=False, indent=1))
+    elif args.index:
+        print(_index(s))
+    elif args.code:
+        print(stock_detail(s, args.code))
+    else:
+        print(_text(s))
     return 0
 
 

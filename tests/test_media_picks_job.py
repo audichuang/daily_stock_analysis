@@ -98,6 +98,34 @@ def test_history_is_none_for_first_mention_and_ptt_is_linked(tmp_path):
     assert s["ptt"][0]["reason"] == "長多"
 
 
+def test_index_gives_full_line_from_two_voices_and_short_line_for_one(tmp_path):
+    s = _summarize(tmp_path, [
+        _pick(speaker="甲", theme="CoWoS", data={"vs_ma20_pct": 3.0, "revenue_yoy_3m": [1, 2, 30.0]}),
+        _pick(speaker="乙", stance="bearish"),
+        _pick(stock_code="2317.TW", name="鴻海", speaker="丙", kind="research", theme="AI伺服器"),
+    ])
+    lines = {ln.split("｜")[0]: ln for ln in summary_mod._index(s).splitlines() if ln.startswith("- ")}
+    assert "多 1 空 1 中 0" in lines["- 台積電 2330.TW"]
+    assert "營收 YoY 30.0" in lines["- 台積電 2330.TW"]
+    assert lines["- 鴻海 2317.TW"] == "- 鴻海 2317.TW｜多｜research｜AI伺服器｜新出現"
+
+
+def test_code_detail_has_only_that_stock_and_its_ptt(tmp_path):
+    s = _summarize(tmp_path, [
+        _pick(reason="CoWoS 供不應求"),
+        _pick(stock_code="2317.TW", name="鴻海", reason="GB300 出貨"),
+    ], ptt=[
+        {"article_id": "M.1", "title": "[標的] 2330 台積電 多", "stock_code": "2330.TW", "resolve": "exact",
+         "reason": "先進製程", "extracted_at": "2026-10-26T23:40:00+08:00"},
+        {"article_id": "M.2", "title": "[標的] 2317 鴻海 空", "stock_code": "2317.TW", "resolve": "exact",
+         "reason": "毛利太低", "extracted_at": "2026-10-26T23:40:00+08:00"},
+    ])
+    out = summary_mod.stock_detail(s, "2330.TW")
+    assert "CoWoS 供不應求" in out and "先進製程" in out
+    assert "GB300" not in out and "毛利太低" not in out
+    assert summary_mod.stock_detail(s, "9999.TW") == "本輪沒有人點名 9999.TW"
+
+
 def test_review_lists_only_uncertain_codes_and_marks_reviewed(tmp_path):
     (tmp_path / "transcripts").mkdir()
     (tmp_path / "transcripts" / "v1.txt").write_text("逐字稿", encoding="utf-8")
