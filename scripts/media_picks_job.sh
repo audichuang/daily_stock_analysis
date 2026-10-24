@@ -195,6 +195,8 @@ main() {
   log "media picks start (pid $$, log: $LOG)"
   # 卡死的前一輪：FAILED＋Bark；正常在跑：跳過但保留 log（排程的 Claude 靠它判斷）
   acquire_lock "logs/.media_picks_job.lock" 媒體點名 "${MEDIA_PICKS_STALE_LOCK_SECONDS:-10800}" 1 "媒體點名失敗 $(date +%F)"
+  # 拿到鎖就先記 since：擷取中途掛掉的一輪也要讓 media_picks_summary.py --judge-since 看得到，它寫下的列才會被補判
+  log "RESULT since=$run_start"
 
   local branch
   branch=$(git branch --show-current)

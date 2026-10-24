@@ -616,3 +616,12 @@ def test_push_journal_flag_runs_end_to_end_without_lock_or_log(repo):
     r = run()
     assert r.returncode == 1 and r.stdout.startswith("push refused: ") and len(r.stdout.splitlines()) == 1
     assert not (repo / "logs").exists() and not (repo / "curl.called").exists()
+
+
+def test_main_logs_since_right_after_lock_before_extraction():
+    # 擷取中途掛掉時 log 裡也要有本輪 since（--judge-since 靠它找出沒判過的輪次）
+    body = (ROOT / "scripts" / "media_picks_job.sh").read_text(encoding="utf-8")
+    main = body[body.index("\nmain() {"):]
+    lock, since, extract = (main.index('acquire_lock "logs/.media_picks_job.lock"'),
+                            main.index('log "RESULT since=$run_start"'), main.index("make media-picks"))
+    assert lock < since < extract
