@@ -1124,6 +1124,22 @@ class PortfolioPr2TestCase(unittest.TestCase):
         out = dict(self._fetch_with(hourly, daily))
         self.assertAlmostEqual(out[date(2026, 1, 5)], 7.33)
 
+    def test_fx_fetch_drops_london_weekend_bars(self) -> None:
+        """2026-10-24 (Sat): Yahoo returned a Saturday daily bar repeating junk; FX has no weekend close."""
+        hourly = self._ohlc([("2026-01-09 22:00", 7.0, 7.33), ("2026-01-10 01:00", 7.0, 6.00)])
+        daily = self._ohlc([("2026-01-09", 7.0, 6.90), ("2026-01-10", 6.0, 6.00), ("2026-01-11", 6.0, 6.00)])
+        out = dict(self._fetch_with(hourly, daily, as_of=date(2026, 1, 11)))
+        self.assertEqual(sorted(out), [date(2026, 1, 9)])
+        self.assertAlmostEqual(out[date(2026, 1, 9)], 7.33)
+
+    def test_fx_refresh_on_saturday_saves_friday_close_as_fresh(self) -> None:
+        frame = self._london_frame([("2026-01-08", 7.03), ("2026-01-09", 7.05), ("2026-01-10", 6.00)])
+        self._refresh_at_london(frame, date(2026, 1, 10), date(2026, 1, 10))
+        today = self._fx_row(date(2026, 1, 10))
+        self.assertAlmostEqual(today.rate, 7.05)
+        self.assertFalse(bool(today.is_stale))
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 9)).rate, 7.05)
+
     def test_fx_refresh_downloads_pair_once(self) -> None:
         account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="CNY")
         self.service.record_cash_ledger(
