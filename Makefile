@@ -108,6 +108,9 @@ media-picks: ## 財經電視完整版 → NotebookLM 逐字稿與點名 → 對�
 ptt-picks: ## PTT 股票板 [標的] 文 → 解析多空／理由／進退場 → 對照本地數據 → journal/ptt-picks.jsonl
 	uv run --env-file .env python scripts/tw_ptt_picks.py
 
+media-picks-detached: ## 排程用：同步 develop → media-picks → ptt-picks → commit 兩個 journal → 摘要 JSON，脫離 session 在背景跑完即返回
+	bash scripts/media_picks_job.sh --detach
+
 measure: ## 量测讯号的前瞻报酬分布（事件级、区块 bootstrap；不做部位模拟）
 	uv run --env-file .env python scripts/measure_signal_forward.py
 

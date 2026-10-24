@@ -11,9 +11,11 @@
 | 平日 10:00／13:00 | 持股盤中對照即時價，有觸發才推 Bark | skill `portfolio-check` |
 | 平日 18:00 | `make daily-report-detached`（`scripts/daily_report.sh`） | 本檔下兩節 |
 | 平日 19:00 | 持股：寫隔日條件式計畫（接在每日報告後） | skill `portfolio-check` |
-| 平日 23:00 | 媒體點名：`make media-picks` 抓 25 個財經頻道的完整版、寫 `journal/media-picks.jsonl`，接著 `make ptt-picks` 抓 PTT 股票板 `[標的]` 文、寫 `journal/ptt-picks.jsonl`（幾秒；搜尋頁抓不到時結束碼非 0），**只** commit＋push 這兩個檔到 `develop`，推 Bark 摘要（第一行固定註明僅供參考）；一輪約 40 分鐘，`--since` 預設 4 天前（看上傳日），所以晚上傳的集數隔天會補到；`date` 是標題裡的播出日，收盤資料（`market.price`，上市上櫃都到）還沒入庫的集數印 `[defer]` 留給下一輪 | `scripts/tw_media_picks.py`、`journal/README.md` |
+| 平日 23:00 | 媒體點名：排程先跑 `make media-picks-detached`（`scripts/media_picks_job.sh`，脫離 session 在背景跑完）：同步 `develop` → `make media-picks` 抓 25 個財經頻道的完整版、寫 `journal/media-picks.jsonl` → `make ptt-picks` 抓 PTT 股票板 `[標的]` 文、寫 `journal/ptt-picks.jsonl` → **只** commit＋push 這兩個檔到 `develop` → `scripts/media_picks_summary.py` 產出摘要 JSON；任一步失敗腳本自己推 Bark（agent 可能已經不在）。接著排程的 Claude 讀摘要做判讀：覆核代號沒把握的點名（語音誤字、全名對不到索引），結論追加到 `journal/media-picks-review.jsonl` 並 commit；看多排行依講者去重、配合數據給研究建議；最後推 Bark（第一行固定註明僅供參考）。一輪約 40 分鐘，`--since` 預設 4 天前（看上傳日），所以晚上傳的集數隔天會補到；`date` 是標題裡的播出日，收盤資料（`market.price`，上市上櫃都到）還沒入庫的集數印 `[defer]` 留給下一輪 | `scripts/media_picks_job.sh`、`scripts/tw_media_picks.py`、`journal/README.md` |
 
 這些排程共用同一個主 checkout，手動作業別把它的 working tree 留在別的分支或髒狀態。
+
+長時間的工作一律放進脫離 session 的腳本（`daily_report.sh --detach`、`media_picks_job.sh --detach`），agent 只負責啟動、等結果、判讀與回報：Orca 一判定 agent 結束就收掉 terminal，連前景與 `run_in_background` 的子行程一起砍。2026-10-23 23:01 實測：Hindsight 的 SessionStart hook 在 repo 累積約 20 個新 commit 時另起一個 `claude -p` 做 repo 結構調查，它繼承了 `ORCA_*` 環境變數，結束時觸發 Orca 的 Stop hook，排程的 terminal 被收掉、`make media-picks` 被 SIGTERM，Orca 的執行紀錄還記成那份調查的輸出。這個 repo 一天幾十個 commit，每個 Orca 排程都可能碰上，Hindsight 那端修好之前，排程 prompt 要假設 agent 隨時會被中途收掉。
 
 ## 颱風假等臨時休市
 
