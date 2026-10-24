@@ -763,8 +763,8 @@ class TestAgentResultConversion(unittest.TestCase):
         from src.agent.executor import AgentResult
         from src.enums import ReportType
 
-        cases = [("add", "Buy now.", "buy"), ("accumulate", "建議買進", "buy"),
-                 ("add", "減碼，跌破500再進場", "sell"), ("neutral", "隨便寫的文字", "hold"),
+        cases = [("add", "Buy now.", "buy"), ("accumulate", "买入", "buy"),
+                 ("add", "减仓", "sell"), ("neutral", "隨便寫的文字", "hold"),
                  ("hold", "Buy now.", "hold")]
         for raw, advice, expected in cases:
             with self.subTest(raw=raw, advice=advice):

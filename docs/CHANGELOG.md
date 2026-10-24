@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 - [改進] 大盤脈絡護欄判斷「積極買進」改看 LLM 的結構化 `decision_type`（缺值或非法才查共用 advice 對照表），刪掉約 250 行中文否定詞表：賣出／持有報告裡的「跌破再進場」不再被誤改成觀望（原本會把 sell 升成 hold），`decision_type=buy` 但文字寫「暫不加倉」也一律軟化
-- [修復] 共用 advice 對照表（`infer_decision_type_from_advice`）補繁中：買進／買入／加碼／加倉／觀望／減碼／賣出等與繁體否定連接詞；之前 zh-TW 報告缺 `decision_type` 時一律被當成 hold、繞過買進護欄。Agent 路徑遇到不認得的 decision 標籤（如 `add`）改先看 advice 再退回 hold
+- [修復] Agent 路徑遇到不認得的 decision 標籤（如 `add`）改先看 advice 再退回 hold，不再直接當成明確的 hold 而繞過買進護欄
 - [測試] `test_pipeline_realtime_indicators` 三支即時覆蓋測試改用固定平日，週末不再必紅（`is_market_open` 讀真實日曆）
 - [修復] 匯率刷新：下載全被交叉匯率拒收且沒有乾淨替代值時，刪掉當天的自動來源錯誤列並標缺匯率（不再沿用錯值）；主序列抓不到就不打交叉匯率；整個刷新最多 20 秒（每次 yfinance 呼叫含 Ticker 建構都在有時限的執行緒內），不再超過前端 30 秒逾時
 - [測試] `tests/conftest.py` 的正式庫防線改為往上層逐層找 `.env`，git worktree 內跑測試也會擋下正式應用庫
