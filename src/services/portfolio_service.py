@@ -2029,7 +2029,10 @@ class PortfolioService:
                 )
                 if existing is not None and existing.rate_date == bar_date:
                     manual = not existing.is_stale and existing.source not in FX_AUTO_SOURCES
-                    if manual or abs(float(existing.rate) / cross - 1.0) <= FX_OUTLIER_MAX_DEVIATION:
+                    # A stale carry is never a real close for this day, however close it is to the cross rate
+                    if manual or (
+                        not existing.is_stale and abs(float(existing.rate) / cross - 1.0) <= FX_OUTLIER_MAX_DEVIATION
+                    ):
                         continue
                 self.repo.save_fx_rate(
                     from_currency=from_currency,
