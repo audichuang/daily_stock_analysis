@@ -430,6 +430,16 @@ def test_commit_journal_refuses_to_push_human_commit_without_journal_change(repo
     assert _origin_head(repo) == before
 
 
+def test_commit_journal_refuses_rename_into_journal(repo):
+    # git log 預設偵測改名、只列新路徑；把 other.txt 搬進 journal/ 等於刪掉它，不能當成只動 journal/
+    _git(repo, "mv", "other.txt", "journal/other.txt")
+    _git(repo, "commit", "-q", "-m", "move")
+    before = _origin_head(repo)
+
+    assert _commit_journal(repo) == "fail"
+    assert _origin_head(repo) == before
+
+
 def test_commit_journal_refuses_merge_commit_ahead(repo):
     _git(repo, "checkout", "-q", "-b", "side")
     (repo / "journal" / "ptt-picks.jsonl").write_text("{}\n", encoding="utf-8")

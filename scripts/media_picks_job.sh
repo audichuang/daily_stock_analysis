@@ -52,7 +52,7 @@ journal_only_ahead() {
     [[ -z "$f" || "$f" == journal/* ]] && continue
     echo "本地領先 origin/develop 的 commit 動到 journal/ 以外的檔（${f}）" >&2
     return 1
-  done < <(git log --no-merges --name-only --format= origin/develop..HEAD)
+  done < <(git log --no-merges --no-renames --name-only --format= origin/develop..HEAD)
 }
 
 # commit_journal：只 commit＋push 兩個 journal 檔；印 none（沒變更也沒有未推的 commit）／ok／fail。
