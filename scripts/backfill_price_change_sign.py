@@ -59,6 +59,11 @@ EPS = 1e-6
 # 少了這段回看，每檔每年的第一個交易日永遠拿不到 prev_close，會被靜默跳過。
 LOOKBACK_DAYS = 30
 
+# 爬取端 2026-08-23 起上市列就帶正確正負號；之後的列一律不碰。上櫃列（TPEx JSON 本來就帶號）
+# 在 price 表分不出市場（market 全是 NULL），若參考價不是「前收×當日因子」（前一日無成交、
+# 除權息日沒成交）會被誤翻成負號——2026-10-24 全量比對抓到過。這道截止日至少讓重跑不再污染新列。
+SIGNED_SINCE = datetime.date(2026, 8, 23)
+
 _BASE_CTE = """
 with base as (
     select p.stock_id, p.date, p.close, p.change,
@@ -74,6 +79,7 @@ with base as (
 
 _PREDICATE = """
     where date >= :start
+      and date < :signed_since
       and prev_close is not null
       and change is not null
       and change > :eps
@@ -116,6 +122,7 @@ def main() -> int:
             "lookback_start": start - datetime.timedelta(days=LOOKBACK_DAYS),
             "end": datetime.date(year + 1, 1, 1),
             "eps": EPS,
+            "signed_since": SIGNED_SINCE,
         }
         if args.apply:
             # 逐年一個 transaction：中斷只會少補幾年，不會留下半套符號。

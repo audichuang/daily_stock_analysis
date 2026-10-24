@@ -31,13 +31,14 @@ def _seed(conn, rows):
             {"s": stock_id, "d": d, "c": close, "ch": change})
 
 
-def _select(conn, year):
+def _select(conn, year, signed_since=datetime.date(2100, 1, 1)):
     start = datetime.date(year, 1, 1)
     return conn.execute(text(_SELECT), {
         "start": start,
         "lookback_start": start - datetime.timedelta(days=LOOKBACK_DAYS),
         "end": datetime.date(year + 1, 1, 1),
         "eps": EPS,
+        "signed_since": signed_since,
     }).fetchall()
 
 
@@ -95,3 +96,14 @@ def test_reference_price_beats_the_raw_close_diff(pg_conn):
         "INSERT INTO market.price_adjustment (stock_id, date, factor, kind, source) "
         "VALUES ('T006', :d, 0.5, 'test', 'test')"), {"d": NEW_YEAR_FIRST})
     assert [r for r in _select(pg_conn, 2099) if r[0] == "T006"] == []
+
+
+def test_rows_crawled_with_signs_are_never_flipped(pg_conn):
+    """截止日之後的列爬取時就帶號：上櫃無成交後的正確 +0.15 不得被當成「應為負」翻掉。"""
+    _seed(pg_conn, [
+        ("T020", PREV_YEAR_LAST, 29.2, 0.1),
+        ("T020", NEW_YEAR_FIRST, 28.95, 0.15),   # 參考價 28.80（前一日無成交）⇒ 官方 +0.15
+    ])
+    assert ("T020", NEW_YEAR_FIRST) not in [(r[0], r[1]) for r in _select(pg_conn, 2099, signed_since=NEW_YEAR_FIRST)]
+    # 反向：截止日之前同樣形狀仍會被選（腳本本來的工作）
+    assert ("T020", NEW_YEAR_FIRST) in [(r[0], r[1]) for r in _select(pg_conn, 2099)]

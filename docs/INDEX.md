@@ -77,6 +77,7 @@
 | [台股波段候选流水线](tw-swing-pipeline.md) | 量化预筛 → AI 事件面研究 → 回验四层的契约：冻结的讯号定义、前瞻报酬分布与区块 bootstrap 区间、组合层（资金竞争／排序／走前验证）结论、回验指标，以及明确站不住的部分 |
 | [台股個股四維度資料包](tw-stock-dossier.md) | Web「四維度分析」抽屜與 `/stock-report` 的 HTML 報告、解讀快取；`tw_stock_dossier.py` 各段的來源與限制（分點只有前 15 名、HHI 口徑、SMC 定義），以及與 botbook.cc 範例報告的逐項對照 |
 | [台股 SMC 價位警報（預設關閉）](tw-level-alerts.md) | 看板「建立價位警報」的規則設計、Markdown 訊息版型、重建語意，以及啟用前檢查清單 |
+| [台股資料正確性](tw-data-integrity.md) | 什麼叫「對」（逐列對官方的判準）、各資料集驗證到哪、已知不修的差異、2026-10-23～24 修了什麼，以及逐日比對工具 `scripts/audit_market_vs_official.py` 與重抓的 runbook |
 | [market_data 踩雷全集](market-data-pitfalls.md) | `market` schema 的資料語意、踩雷案例與實測數字（未還原價、只有上市的表、T86 初版、端點凍結） |
 | [台股交易成本口徑](tw-trading-costs.md) | 回測、決策回驗與成本護欄共用的 `tw_trade_costs`：手續費、證交稅、滑價、年化天數 |
 | [台灣境內基金](tw-funds.md) | 基金淨值資料來源、API、Web `/funds` 與基金持倉 |
