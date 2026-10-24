@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 - [修復] `scripts/backfill_price_change_sign.py` 加 `SIGNED_SINCE`（2026-08-23）截止日：之後爬進來的列已帶正確號，重跑不再把上櫃正值誤翻成負
 - [文件] 資料稽核 §9：抽樣與 2026 全年逐日比對官方（上市法人 10 天停在初版、上市日線 48 天量能缺盤後定價／鉅額，已整日重抓、重比 0 差異；2024～2025 上市法人另有 82 天停在初版／自營商存成 0／錯置他日，亦已重抓）；`market-data-pitfalls` 更正「T86 09-24 以前一致」並記上櫃翻號
+- [修復] 匯率抓取丟掉倫敦週六的 K 棒與週末日K（週日晚間重新開盤的 1h 保留）：Yahoo 週六會回一根重複垃圾值的日K（10-24 TWD/CNY 0.1963），被拒收後當天變成過期沿用，持倉風險卡片整片隱藏；現在週末直接沿用週五收盤、不標過期
+- [修復] 匯率交叉修補不再略過「離交叉匯率不到 2% 的過期沿用列」：那天本來就沒有真收盤（例 10-16 TWD/CNY），沿用列會讓回撤卡片因 `fx_stale` 一直隱藏，現在改寫成 `yfinance_cross`
 - [改進] 大盤脈絡護欄判斷「積極買進」改看 LLM 的結構化 `decision_type`（缺值或非法才查共用 advice 對照表），刪掉約 250 行中文否定詞表：賣出／持有報告裡的「跌破再進場」不再被誤改成觀望（原本會把 sell 升成 hold），`decision_type=buy` 但文字寫「暫不加倉」也一律軟化
 - [修復] Agent 路徑遇到不認得的 decision 標籤（如 `add`）改先看 advice 再退回 hold，不再直接當成明確的 hold 而繞過買進護欄
 - [測試] `test_pipeline_realtime_indicators` 三支即時覆蓋測試改用固定平日，週末不再必紅（`is_market_open` 讀真實日曆）

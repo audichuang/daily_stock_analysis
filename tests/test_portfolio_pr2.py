@@ -1002,6 +1002,19 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self._refresh_twd_cny(pair, twd, cny, date(2026, 1, 8), date(2026, 1, 8))
         self.assertAlmostEqual(self._twd_row(date(2026, 1, 7)).rate, 0.2040)  # within tolerance: left alone
 
+    def test_fx_refresh_cross_repair_replaces_stale_carry_even_within_tolerance(self) -> None:
+        """2026-10-16: the junk bar was rejected and the day kept a stale carry close to the cross rate."""
+        pair, twd, cny = self._junk_window()
+        self.service.repo.save_fx_rate(
+            from_currency="TWD", to_currency="CNY", rate_date=date(2026, 1, 7), rate=6.665 / 32.6 * 1.005,
+            source="yfinance", is_stale=True,
+        )
+        self._refresh_twd_cny(pair, twd, cny, date(2026, 1, 8), date(2026, 1, 8))
+        row = self._twd_row(date(2026, 1, 7))
+        self.assertAlmostEqual(row.rate, 6.665 / 32.6)
+        self.assertEqual(row.source, "yfinance_cross")
+        self.assertFalse(bool(row.is_stale))
+
     def test_fx_cross_rate_none_when_a_leg_is_usd(self) -> None:
         yf_mock = MagicMock()
         yf_mock.Ticker.return_value.history.return_value = self._fx_frame([("2026-01-08", 20.0)])
@@ -1110,6 +1123,35 @@ class PortfolioPr2TestCase(unittest.TestCase):
         daily = self._ohlc([("2026-01-05", 7.0, 6.90), ("2026-01-06", 7.1, 7.2)])
         out = dict(self._fetch_with(hourly, daily))
         self.assertAlmostEqual(out[date(2026, 1, 5)], 7.33)
+
+    def test_fx_fetch_drops_london_weekend_bars(self) -> None:
+        """2026-10-24 (Sat): Yahoo returned a Saturday daily bar repeating junk; FX has no weekend close."""
+        hourly = self._ohlc([("2026-01-09 22:00", 7.0, 7.33), ("2026-01-10 01:00", 7.0, 6.00)])
+        daily = self._ohlc([("2026-01-09", 7.0, 6.90), ("2026-01-10", 6.0, 6.00), ("2026-01-11", 6.0, 6.00)])
+        out = dict(self._fetch_with(hourly, daily, as_of=date(2026, 1, 11)))
+        self.assertEqual(sorted(out), [date(2026, 1, 9)])
+        self.assertAlmostEqual(out[date(2026, 1, 9)], 7.33)
+
+    def test_fx_fetch_keeps_sunday_reopening_hourly_bars(self) -> None:
+        """FX reopens Sunday evening London; that bar is a real price and the neighbour for Monday's check."""
+        hourly = self._ohlc([("2026-01-09 22:00", 7.0, 7.05), ("2026-01-11 23:00", 7.0, 7.30), ("2026-01-12 01:00", 7.0, 7.31)])
+        out = dict(self._fetch_with(hourly, None, as_of=date(2026, 1, 12)))
+        self.assertEqual(sorted(out), [date(2026, 1, 9), date(2026, 1, 11), date(2026, 1, 12)])
+
+    def test_fx_refresh_monday_after_weekend_gap_is_fresh(self) -> None:
+        frame = self._london_frame([("2026-01-08", 7.03), ("2026-01-09", 7.05), ("2026-01-11 23:00", 7.30), ("2026-01-12 01:00", 7.31)])
+        self._refresh_at_london(frame, date(2026, 1, 12), date(2026, 1, 12))
+        today = self._fx_row(date(2026, 1, 12))
+        self.assertAlmostEqual(today.rate, 7.31)
+        self.assertFalse(bool(today.is_stale))
+
+    def test_fx_refresh_on_saturday_saves_friday_close_as_fresh(self) -> None:
+        frame = self._london_frame([("2026-01-08", 7.03), ("2026-01-09", 7.05), ("2026-01-10", 6.00)])
+        self._refresh_at_london(frame, date(2026, 1, 10), date(2026, 1, 10))
+        today = self._fx_row(date(2026, 1, 10))
+        self.assertAlmostEqual(today.rate, 7.05)
+        self.assertFalse(bool(today.is_stale))
+        self.assertAlmostEqual(self._fx_row(date(2026, 1, 9)).rate, 7.05)
 
     def test_fx_refresh_downloads_pair_once(self) -> None:
         account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="CNY")
