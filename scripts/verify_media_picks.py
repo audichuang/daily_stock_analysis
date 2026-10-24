@@ -16,7 +16,8 @@
 排除並計數，絕不補值**（用最後收盤補會把還沒發生的事當成已實現）。
 
 統計：均值超額的 95% CI 用 `shadow_buy_eval.cluster_bootstrap_ci`（以代號為單位重抽——同一檔被多位講者、多天點名的事件高度相關，
-逐筆重抽會把 CI 抽得太窄）。**n < 20、CI 跨零、或進場日不足 5 個不同交易日一律標 inconclusive**（同日事件共享大盤波動，只以代號重抽的 CI 會過窄）。看空（bearish＋avoid）的「命中」是超額 < 0。
+逐筆重抽會把 CI 抽得太窄）。**n < 20、CI 跨零、或進場日不足 5 個不同交易日一律標 inconclusive**（同日事件共享大盤波動，只以代號重抽的 CI 會過窄）。看空（bearish＋avoid）的「命中」是**毛**超額 < 0（命中不論多空都用毛超額、不扣成本；看多均值用淨、看空均值用毛）。
+research − avoid 差同樣要求兩組各自進場日 ≥ 5 天。
 同一檔連續幾天被判斷的視窗互相重疊，所以有效樣本比 n 更少；CI 已用代號為 cluster，但仍要當作偏樂觀。
 
     uv run --env-file .env python scripts/verify_media_picks.py
@@ -56,7 +57,7 @@ BULL = ("bullish",)
 BEAR = ("bearish", "avoid")
 TAIPEI = "Asia/Taipei"
 COLS = ["kind", "code", "anchor", "speaker", "show", "media_kind", "stance", "verdict", "h", "status", "ret",
-        "bench", "excess", "entry_date"]
+        "bench", "excess", "entry_date", "ret_gross", "bench_gross", "excess_gross"]
 STATUSES = ("ok", "censored", "no_price", "unknown_code")
 
 
@@ -144,7 +145,8 @@ def build_events(picks: list, panels: dict, horizons=HORIZONS, *, fee_discount=1
         i0 = int(cal.searchsorted(p["anchor"], side="right"))   # side=right：anchor 當天（含）不算
         for h in horizons:
             base = {k: v for k, v in p.items()} | {"h": h, "ret": np.nan, "bench": np.nan, "excess": np.nan,
-                                                   "entry_date": pd.NaT}
+                                                   "entry_date": pd.NaT, "ret_gross": np.nan,
+                                                   "bench_gross": np.nan, "excess_gross": np.nan}
             if sid is None or sid not in cl.columns:
                 rows.append(base | {"status": "unknown_code"})
                 continue
@@ -161,8 +163,9 @@ def build_events(picks: list, panels: dict, horizons=HORIZONS, *, fee_discount=1
             kw = {"entry_notional": notional, "fee_discount": fee_discount}
             ret = round_trip_return(float(e), float(x), tax_rate=_tax(sid), **kw)
             bench = round_trip_return(float(be), float(bx), tax_rate=ETF_TRANSACTION_TAX_RATE, **kw)
+            rg, bg = float(x) / float(e) - 1.0, float(bx) / float(be) - 1.0   # 不扣成本：命中判定用
             rows.append(base | {"status": "ok", "ret": ret, "bench": bench, "excess": ret - bench,
-                                "entry_date": e_d})
+                                "entry_date": e_d, "ret_gross": rg, "bench_gross": bg, "excess_gross": rg - bg})
     return pd.DataFrame(rows).reindex(columns=COLS)   # 欄位固定：只有一種事件時另一種的欄位也在
 
 
@@ -175,21 +178,27 @@ def label(n: int, ci, min_n: int = MIN_N, dates: int | None = None) -> str:
 
 
 def hit_mask(excess, side: str):
-    """看多（及 verdict）命中 = 超額 > 0；看空命中 = 超額 < 0。"""
+    """看多（及 verdict）命中 = 超額 > 0；看空命中 = 超額 < 0。呼叫端要餵**毛**超額（不扣成本）：
+    個股賣出稅 0.3% 對 0050 的 0.1%，一檔完全沒動的股票淨超額會是負的，被誤算成看空命中。"""
     e = np.asarray(excess, dtype=float)
     return e < 0 if side == "bear" else e > 0
 
 
+def _mean_col(side: str) -> str:
+    """均值／CI 用的超額欄：看多＝淨（可交易）；看空＝毛，因為看空側的淨超額被股票多出的 0.2% 稅差往負推。"""
+    return "excess_gross" if side == "bear" else "excess"
+
+
 def stats(df: pd.DataFrame, side: str = "bull", n_boot: int = 2000, seed: int = 42) -> dict:
     """``df`` 須是 status==ok 的列。回 n、檔數、均值／中位超額、命中率、CI、標籤。"""
-    ex = df["excess"].to_numpy(dtype=float)
+    ex = df[_mean_col(side)].to_numpy(dtype=float)     # 看多：淨超額（可交易）；看空：毛超額
     n = len(ex)
     if not n:
         return {"n": 0, "codes": 0, "dates": 0, "mean": None, "median": None, "hit": None, "ci": None, "label": "inconclusive"}
     ci = cluster_bootstrap_ci(ex, df["code"].tolist(), n_boot, seed)
     dates = int(df["entry_date"].nunique()) if "entry_date" in df else None
     return {"n": n, "codes": int(df["code"].nunique()), "dates": dates, "mean": float(ex.mean()), "median": float(np.median(ex)),
-            "hit": float(hit_mask(ex, side).mean()), "ci": list(ci) if ci else None, "label": label(n, ci, dates=dates)}
+            "hit": float(hit_mask(df["excess_gross"], side).mean()), "ci": list(ci) if ci else None, "label": label(n, ci, dates=dates)}
 
 
 def spread_stats(a: pd.DataFrame, b: pd.DataFrame, n_boot: int = 2000, seed: int = 42) -> dict:
@@ -198,8 +207,10 @@ def spread_stats(a: pd.DataFrame, b: pd.DataFrame, n_boot: int = 2000, seed: int
         return {"n_a": len(a), "n_b": len(b), "diff": None, "ci": None, "label": "inconclusive"}
     ci = cluster_bootstrap_ci(a["excess"], a["code"].tolist(), n_boot, seed,
                               other=(b["excess"], b["code"].tolist()))
+    dates = min(int(a["entry_date"].nunique()), int(b["entry_date"].nunique())) if "entry_date" in a else None
     return {"n_a": len(a), "n_b": len(b), "diff": float(a["excess"].mean() - b["excess"].mean()),
-            "ci": list(ci) if ci else None, "label": label(min(len(a), len(b)), ci)}
+            "dates": dates, "ci": list(ci) if ci else None,
+            "label": label(min(len(a), len(b)), ci, dates=dates)}
 
 
 def _ok(ev: pd.DataFrame, **filters) -> pd.DataFrame:
@@ -212,8 +223,9 @@ def _ok(ev: pd.DataFrame, **filters) -> pd.DataFrame:
 def speaker_records(events: pd.DataFrame, horizon: int = SPEAKER_HORIZON, min_n: int = MIN_N) -> dict:
     """{講者: {"bull": {...}, "bear": {...}}}，只看 ``horizon`` 的 call 事件（純函式）。
 
-    每側：``n_calls``（所有點名，含尚未到期）、``n``（已到期且有價格）、``hit_rate``、``mean_excess``、
-    ``enough``（n >= min_n）。看多命中 = 超額 > 0，看空（bearish＋avoid）命中 = 超額 < 0。
+    每側：``n_calls``（所有點名，含尚未到期）、``n``（已到期且有價格）、``dates``（不同進場日數）、``hit_rate``、
+    ``mean_excess``、``enough``（n >= min_n 且 dates >= MIN_DATES）。命中一律以毛超額判（看多 > 0，看空
+    〔bearish＋avoid〕< 0）；mean_excess 看多是淨、看空是毛。
     """
     out: dict = {}
     if events is None or events.empty:
@@ -222,11 +234,12 @@ def speaker_records(events: pd.DataFrame, horizon: int = SPEAKER_HORIZON, min_n:
     for (speaker, side), g in ev.assign(side=np.where(ev["stance"].isin(BULL), "bull", "bear")).groupby(
             ["speaker", "side"]):
         done = g[g["status"] == "ok"]
-        rec = {"n_calls": int(len(g)), "n": int(len(done)), "hit_rate": None, "mean_excess": None,
-               "enough": bool(len(done) >= min_n)}
+        dates = int(done["entry_date"].nunique()) if "entry_date" in done else 0
+        rec = {"n_calls": int(len(g)), "n": int(len(done)), "dates": dates, "hit_rate": None, "mean_excess": None,
+               "enough": bool(len(done) >= min_n and dates >= MIN_DATES)}
         if len(done):
-            rec["hit_rate"] = float(hit_mask(done["excess"], side).mean())
-            rec["mean_excess"] = float(done["excess"].mean())
+            rec["hit_rate"] = float(hit_mask(done["excess_gross"], side).mean())
+            rec["mean_excess"] = float(done[_mean_col(side)].mean())
         out.setdefault(speaker, {})[side] = rec
     return out
 
@@ -288,7 +301,9 @@ def render(res: dict, meta: dict) -> str:
            f"- journal：{meta['verdicts']} 筆 verdict、{meta['calls']} 個去重後的講者點名事件"
            f"（原始看多／看空點名 {meta['raw_calls']} 列）",
            f"- 口徑：進場 = 嚴格晚於 written_at／播出日的第一個交易日開盤；持有 h 個交易日（進場日算第 1 天）；"
-           f"前復權價、雙邊成本；超額 = 個股 − 0050（同成本）。命中：看多／verdict 超額 > 0，看空超額 < 0。",
+           f"前復權價、雙邊成本；超額 = 個股 − 0050（同成本）。**命中一律用毛超額（兩邊都不扣成本）**：看多／verdict 毛超額 > 0，"
+           f"看空 < 0（股票賣出稅 0.3% 對 0050 的 0.1%，淨超額會把「沒動」誤判成看空命中）。均值超額：看多＝淨（可交易）、"
+           f"看空＝毛。",
            f"- **結論一律 inconclusive** 當 n < {MIN_N} 或 95% CI 跨零；CI 以代號為單位重抽，同檔重疊視窗仍使有效樣本偏少。",
            f"- 排除（不補值）：{meta['dropped']}", ""]
     out += ["## 排除筆數（依 事件類型@持有天數）", "",
@@ -303,8 +318,9 @@ def render(res: dict, meta: dict) -> str:
         if sp:
             out += ["", f"research − avoid 均值超額差：n={sp['n_a']}／{sp['n_b']}，"
                         f"{_pct(sp['diff']) if sp['diff'] is not None else '—'}，CI {_ci_txt(sp['ci'])}，"
-                        f"**{sp['label']}**" + (f"（任一組 n<{MIN_N}）" if min(sp["n_a"], sp["n_b"]) < MIN_N else "")]
-        for side, title in (("bull", "講者看多（bullish）"), ("bear", "講者看空／避開（bearish＋avoid，命中 = 超額 < 0）")):
+                        f"**{sp['label']}**" + (f"（任一組 n<{MIN_N}）" if min(sp["n_a"], sp["n_b"]) < MIN_N else
+                                         f"（任一組進場日<{MIN_DATES} 天）" if sp.get("dates") is not None and sp["dates"] < MIN_DATES else "")]
+        for side, title in (("bull", "講者看多（bullish）"), ("bear", "講者看空／避開（bearish＋avoid，命中與均值皆用毛超額 < 0 為命中）")):
             out += ["", f"### {title}", "", HEAD]
             for name, s in res["calls"].get(h, {}).get(side, {}).items():
                 out.append(_row(name, s))

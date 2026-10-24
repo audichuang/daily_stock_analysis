@@ -157,12 +157,14 @@ capture_holdings() {
   tmp="${out}.tmp"
   if run_with_timeout "${MEDIA_PICKS_HOLDINGS_TIMEOUT_SECONDS:-60}" \
       uv run --env-file .env python scripts/portfolio_codes.py >"$tmp" 2>>"$LOG"; then
-    mv -f "$tmp" "$out"
+    # 只留最後一行當 JSON（與 media_picks_brief 同）：import 時多印的雜訊行不該讓整份清單報廢
+    tail -n 1 "$tmp" >"${tmp}.last" && mv -f "${tmp}.last" "$out"
+    rm -f "$tmp"
     log "RESULT holdings=$out"
     return 0
   fi
-  reason=$(head -c 200 "$tmp" 2>/dev/null | tr '\n' ' ')
-  rm -f "$tmp"
+  reason=$(tail -n 1 "$tmp" 2>/dev/null | head -c 200 | tr '\n' ' ')
+  rm -f "$tmp" "${tmp}.last"
   log "RESULT holdings=none (${reason:-沒有輸出，逾時或程式失敗})"
   return 1
 }

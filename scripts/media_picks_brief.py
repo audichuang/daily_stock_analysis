@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""07:30 盤前判讀用的「昨晚媒體點名」簡報：讀 journal/media-picks-verdicts.jsonl 最近一輪的判斷，濃縮成一小塊給 morning agent。
+"""07:30 盤前判讀用的「最近一輪媒體點名」簡報：讀 journal/media-picks-verdicts.jsonl 最近一輪的判斷，濃縮成一小塊給 morning agent。
 
 唯讀、不連網、不跑 LLM、不下結論：只挑列、對持股、截短文字。同一 (date, code) 有多列時以檔案裡最後一列為準。
 最近一輪的日期比 ``--today`` 早超過 ``--max-age-days``（預設 4 個日曆天，週五晚上的一輪週一早上還看得到；剛好 4 天
@@ -47,9 +47,18 @@ def _short(text, limit: int) -> str:
     return t if len(t) <= limit else t[:limit].rstrip() + "…"
 
 
+def _valid_date(value) -> bool:
+    """date 欄必須是 YYYY-MM-DD；壞列略過，不能讓整份簡報崩掉。"""
+    try:
+        date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def latest_round(rows: list) -> tuple[str | None, list]:
     """最近一個 date 的列；同 (date, code) 以最後一列為準。"""
-    dated = [r for r in rows if r.get("date") and r.get("code")]
+    dated = [r for r in rows if _valid_date(r.get("date")) and r.get("code")]
     if not dated:
         return None, []
     latest = max(r["date"] for r in dated)
@@ -92,7 +101,7 @@ def render(b: dict) -> str:
         return "沒有媒體點名判斷"
     if b["status"] == "stale":
         return f"（最近一輪媒體點名判斷是 {b['date']}，已過期）"
-    lines = [f"===== 昨晚媒體點名（{b['date']}，僅供參考，不是買進訊號）====="]
+    lines = [f"===== 最近一輪媒體點名（{b['date']}，僅供參考，不是買進訊號）====="]
     if not b["holdings_available"]:
         lines.append("持股清單取不到")
     if b["held"]:

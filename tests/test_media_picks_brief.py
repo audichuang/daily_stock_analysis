@@ -45,7 +45,7 @@ def test_latest_date_and_last_row_wins(tmp_path, capsys):
 def test_stale_boundary(tmp_path, capsys):
     rows = [_v("2026-10-20", "2222.TW", "research")]
     ok = _run(tmp_path, capsys, rows, "--today", "2026-10-24", holdings=_held())  # 剛好 4 天
-    assert "已過期" not in ok and "昨晚媒體點名" in ok
+    assert "已過期" not in ok and "最近一輪媒體點名" in ok
     stale = _run(tmp_path, capsys, rows, "--today", "2026-10-25", holdings=_held())  # 5 天
     assert stale.strip() == "（最近一輪媒體點名判斷是 2026-10-20，已過期）"
 
@@ -69,7 +69,7 @@ def test_sections(tmp_path, capsys):
         _v("2026-10-25", "4000.TW", "avoid", "丁"),
         _v("2026-10-25", "5000.TW", "watch", "戊", flip="戊翻轉"),
     ], "--today", "2026-10-26", holdings=_held("5000.TW"))
-    assert "===== 昨晚媒體點名（2026-10-25，僅供參考，不是買進訊號）=====" in out
+    assert "===== 最近一輪媒體點名（2026-10-25，僅供參考，不是買進訊號）=====" in out
     assert "【持股相關】\n- 戊 5000.TW｜watch" in out
     research = out.split("【research】")[1].split("【")[0]
     assert "甲論點" in research and "甲翻轉" in research
@@ -107,3 +107,14 @@ def test_json_output(tmp_path, capsys):
                holdings=_held("1000.TW"))
     d = json.loads(out)
     assert d["status"] == "ok" and d["held"][0]["code"] == "1000.TW"
+
+
+def test_malformed_date_rows_are_skipped_not_crash(tmp_path, capsys):
+    rows = [_v("2026-10-25", "2222.TW", "research", "乙"),
+            _v("not-a-date", "3333.TW", "research", "丙"),          # 字串排序比 2026-... 大：沒濾掉會被當成最近一輪
+            _v("2026-13-45", "4444.TW", "research", "丁"),
+            {"date": 20261025, "code": "5555.TW", "verdict": "research"},
+            {"date": None, "code": "6666.TW", "verdict": "research"}]
+    out = _run(tmp_path, capsys, rows, "--today", "2026-10-26", holdings=_held())
+    assert "2026-10-25" in out and "乙" in out
+    assert "丙" not in out and "丁" not in out and "5555" not in out
