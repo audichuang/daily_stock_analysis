@@ -125,3 +125,12 @@ def test_cli_accepts_exactly_max_codes(monkeypatch, capsys):
     monkeypatch.setattr(judge, "run", lambda since, codes, **k: seen.append(codes) or [])
     assert judge.main(["--since", "2026-10-26T23:00:00+08:00"] + [f"{1000 + i}.TW" for i in range(judge.MAX_CODES)]) == 0
     assert len(seen[0]) == judge.MAX_CODES and capsys.readouterr().out.strip() == "[]"
+
+
+def test_worst_case_per_stock_fits_under_bash_ceiling(monkeypatch):
+    # 平行跑時總時長 ≈ 單檔最壞（資料包＋判斷串行）；至少留 120 秒給摘要、uv 與 claude 冷啟動
+    assert judge.DOSSIER_TIMEOUT + judge.JUDGE_TIMEOUT <= judge.BASH_CEILING - 120
+    seen = {}
+    monkeypatch.setattr(judge, "judge_one", lambda code, m, d, model, timeout: seen.setdefault("t", timeout) and {})
+    judge.run(SINCE, ["2330.TW"], dossier_fn=lambda c, t: seen.setdefault("d", t) and "", summary_mod=_Summary)
+    assert seen == {"d": judge.DOSSIER_TIMEOUT, "t": judge.JUDGE_TIMEOUT}
