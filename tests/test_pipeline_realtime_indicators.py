@@ -301,7 +301,7 @@ class TestEnhanceContextRealtimeOverride(unittest.TestCase):
     def test_today_overridden_when_realtime_and_trend_exist(
         self, _mock_market, mock_now
     ) -> None:
-        today = date.today()
+        today = date(2026, 10, 21)  # fixed weekday: is_market_open() reads the real calendar
         # 固定市场时钟，使 _enhance_context 设置 enhanced['date'] == date.today().isoformat()，
         # 不受 get_market_now 通常使用的市场时区影响（例如 CST=UTC+8）。
         mock_now.return_value = datetime(
@@ -341,7 +341,7 @@ class TestEnhanceContextRealtimeOverride(unittest.TestCase):
     def test_tencent_688691_volume_change_ratio_uses_normalized_share_volume(
         self, _mock_market, mock_now
     ) -> None:
-        today = date.today()
+        today = date(2026, 10, 21)  # fixed weekday: is_market_open() reads the real calendar
         mock_now.return_value = datetime(
             today.year, today.month, today.day, 10, 0, tzinfo=timezone.utc
         )
@@ -458,7 +458,7 @@ class TestEnhanceContextRealtimeOverride(unittest.TestCase):
     def test_realtime_today_does_not_backfill_historical_amount_or_source(
         self, _mock_market, mock_now
     ) -> None:
-        today = date.today()
+        today = date(2026, 10, 21)  # fixed weekday: is_market_open() reads the real calendar
         mock_now.return_value = datetime(
             today.year, today.month, today.day, 10, 0, tzinfo=timezone.utc
         )

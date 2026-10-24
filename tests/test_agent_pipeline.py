@@ -756,6 +756,30 @@ class TestAgentResultConversion(unittest.TestCase):
         self.assertEqual(raw_result["action"], "watch")
         self.assertEqual(raw_result["action_label"], "观望")
 
+    def test_convert_unknown_decision_label_falls_back_to_advice_not_hold(self):
+        """Unknown decision_type labels must not become an explicit hold that skips buy guardrails."""
+        pipeline = self._make_pipeline()
+
+        from src.agent.executor import AgentResult
+        from src.enums import ReportType
+
+        cases = [("add", "Buy now.", "buy"), ("accumulate", "买入", "buy"),
+                 ("add", "减仓", "sell"), ("neutral", "隨便寫的文字", "hold"),
+                 ("hold", "Buy now.", "hold")]
+        for raw, advice, expected in cases:
+            with self.subTest(raw=raw, advice=advice):
+                agent_result = AgentResult(
+                    success=True,
+                    content="{}",
+                    dashboard={"sentiment_score": 82, "operation_advice": advice,
+                               "decision_type": raw, "analysis_summary": "x"},
+                    provider="gemini",
+                )
+                result = pipeline._agent_result_to_analysis_result(
+                    agent_result, "2330.TW", "台積電", ReportType.SIMPLE, "q-unknown"
+                )
+                self.assertEqual(result.decision_type, expected)
+
     def test_final_action_refresh_preserves_explicit_action_when_advice_is_unchanged(self):
         """Pre-save refresh must not overwrite an explicit Agent action without a final advice rewrite."""
         pipeline = self._make_pipeline()
