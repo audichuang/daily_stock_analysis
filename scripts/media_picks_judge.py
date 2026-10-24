@@ -109,12 +109,12 @@ def _record_side(name: str, r) -> str:
         return (f"{name}已到期 {r['n']} 筆、進場日 {dates} 天（共 {r['n_calls']} 次點名），"
                 f"樣本不足（n<{MIN_RECORD_N} 或進場日<{MIN_RECORD_DATES}），不要拿來加減分")
     return (f"{name}已到期 {r['n']} 筆，命中率 {r['hit_rate'] * 100:.0f}%，10 日平均超額 0050 {r['mean_excess'] * 100:+.2f}%"
-            "（看多命中＝超額>0，看空命中＝超額<0）")
+            "（命中：不扣成本的超額，看多>0、看空<0；平均：看多扣成本、看空不扣）")
 
 
 def records_section(records, speakers) -> str:
     """「三、講者過去紀錄」段落。``records`` 是 dict，或載入失敗時的例外／說明字串。"""
-    head = "\n\n## 三、講者過去紀錄（過去點名後 10 個交易日相對 0050 的超額報酬，扣成本）\n"
+    head = "\n\n## 三、講者過去紀錄（過去點名後 10 個交易日相對 0050 的超額報酬；命中看不扣成本的超額，平均超額看多扣成本、看空不扣）\n"
     if isinstance(records, BaseException) or isinstance(records, str):
         return head + f"（講者紀錄取不到：{records}）\n"
     names = sorted({s for s in speakers if s})
