@@ -9,8 +9,6 @@ import datetime
 
 import pandas as pd
 
-from market_data.revenue_deadline import effective_announce_dates
-
 _PRICE_MAP = {
     "開盤價": "open", "最高價": "high", "最低價": "low", "收盤價": "close",
     "漲跌價差": "change", "成交股數": "volume", "成交金額": "turnover",
@@ -69,11 +67,9 @@ def transform_ex_dividend(df):
 
 
 def transform_monthly_revenue(df):
-    placeholder = pd.to_datetime(df["date"])
-    revenue_month = placeholder.dt.to_period("M").dt.to_timestamp() - pd.DateOffset(months=1)
-    # 公告日取「佔位次月 10 日」與法定期限較晚者（2020-01 展延、2026 起保險類 15 日），
-    # 規則唯一來源在 revenue_deadline；DB 既有列不回頭改寫。
-    announce = effective_announce_dates(df["stock_id"], placeholder, revenue_month)
+    # announce_date 維持次月 10 日佔位不變；法定期限由回測讀取端（revenue_deadline）套用
+    announce = pd.to_datetime(df["date"])
+    revenue_month = announce.dt.to_period("M").dt.to_timestamp() - pd.DateOffset(months=1)
     out = pd.DataFrame({
         "stock_id": df["stock_id"],
         "revenue_month": revenue_month,

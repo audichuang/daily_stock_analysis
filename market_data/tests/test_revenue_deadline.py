@@ -1,4 +1,4 @@
-"""月營收法定公告期限：共用規則本身與兩個寫入端（彙總報表 ETL、MOPS 個別公司頁）。"""
+"""月營收法定公告期限：共用規則本身與寫入端維持次月 10 日佔位的迴歸測試。"""
 
 from pathlib import Path
 
@@ -45,23 +45,24 @@ def test_effective_dates_keep_later_actual_and_nat():
     assert out.dtype == ann.dtype
 
 
-def test_etl_monthly_revenue_applies_deadline_to_new_rows():
-    # 彙總報表 crawler 一律給「次月 10 日」佔位
+def test_etl_monthly_revenue_keeps_tenth_placeholder():
+    # 寫入端維持次月 10 日佔位不變，法定期限由回測讀取端（revenue_deadline）套用
     df = pd.DataFrame({"stock_id": ["2881", "2330", "2330"],
                        "date": ["2026-04-10", "2026-04-10", "2020-02-10"],
                        "當月營收": [1, 2, 3], "去年同月增減(%)": [1.0, 2.0, 3.0],
                        "上月比較增減(%)": [0.0, 0.0, 0.0]})
     out = etl.transform_monthly_revenue(df)
-    assert [str(d)[:10] for d in out["announce_date"]] == ["2026-04-15", "2026-04-10", "2020-02-15"]
+    assert [str(d)[:10] for d in out["announce_date"]] == ["2026-04-10", "2026-04-10", "2020-02-10"]
     assert [str(d)[:10] for d in out["revenue_month"]] == ["2026-03-01", "2026-03-01", "2020-01-01"]
 
 
 @pytest.mark.parametrize("sid, roc, year, month, expected", [
-    ("2881", "115年03月", 2026, 3, "2026-04-15"),
+    ("2881", "115年03月", 2026, 3, "2026-04-10"),
     ("2330", "115年03月", 2026, 3, "2026-04-10"),
-    ("2330", "109年01月", 2020, 1, "2020-02-15"),
+    ("2330", "109年01月", 2020, 1, "2020-02-10"),
+    ("2881", "115年12月", 2026, 12, "2027-01-10"),
 ])
-def test_company_revenue_page_announce_uses_deadline(sid, roc, year, month, expected):
+def test_company_revenue_page_announce_keeps_tenth_placeholder(sid, roc, year, month, expected):
     html = FIX.read_text(encoding="utf-8", errors="replace").replace("109年06月", roc)
     rec, reason = sources.parse_company_monthly_revenue(html, sid, year, month)
     assert reason == "ok"
