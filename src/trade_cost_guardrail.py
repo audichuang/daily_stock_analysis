@@ -23,7 +23,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from src.report_language import localize_operation_advice, normalize_report_language
-from src.schemas.decision_scale import record_guardrail_score_adjustment
+from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.services.market_symbol_utils import get_suffix_market
 from src.utils.sniper_points import extract_sniper_points
 from src.utils.tw_trade_costs import DEFAULT_SLIPPAGE_RATE, per_share_cost_multipliers
@@ -91,7 +91,10 @@ def evaluate_levels(
 def _is_buy(result: Any) -> bool:
     action = str(getattr(result, "action", "") or "").strip().lower()
     decision_type = str(getattr(result, "decision_type", "") or "").strip().lower()
-    return action in _BUY_ACTIONS or decision_type == "buy"
+    # 持有但分數落在買入區間時，也要先檢核成本，避免後續分數對齊繞過護欄；sell 不觸發。
+    return (action in _BUY_ACTIONS or decision_type == "buy"
+            or (decision_type == "hold"
+                and action_for_score(getattr(result, "sentiment_score", None)) == "buy"))
 
 
 def _wording(language: str, check: Dict[str, Any]) -> Dict[str, str]:
@@ -172,6 +175,9 @@ def apply_trade_cost_guardrail(
         result.sentiment_score = min(int(getattr(result, "sentiment_score", 50)), _GUARDRAIL_SENTIMENT_CAP)
     except (TypeError, ValueError):
         result.sentiment_score = 50
+    # 將舊動作改成觀望，避免原分數提升的買入動作殘留。
+    result.action = "watch"
+    result.action_label = None
     dashboard["sentiment_score"] = result.sentiment_score
     # 護欄前的原始分數／動作：落庫給 scripts/shadow_buy_eval.py 回推 LLM 原判
     record_guardrail_score_adjustment(

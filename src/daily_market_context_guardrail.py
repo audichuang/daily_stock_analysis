@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, List
 
-from src.schemas.decision_scale import record_guardrail_score_adjustment
+from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.report_language import (
     infer_decision_type_from_advice,
     localize_confidence_level,
@@ -72,6 +72,9 @@ def apply_daily_market_context_guardrail(
     result.sentiment_score = _cap_conservative_sentiment_score(
         getattr(result, "sentiment_score", 0)
     )
+    # 將舊動作改成觀望，避免原分數提升的買入動作殘留。
+    result.action = "watch"
+    result.action_label = None
 
     dashboard = getattr(result, "dashboard", None)
     if not isinstance(dashboard, dict):
@@ -209,15 +212,20 @@ def _is_conservative_context(context: Any) -> bool:
 
 
 def _is_buy_decision(result: Any) -> bool:
-    """Trigger on the LLM's structured decision_type, not on advice wording.
+    """Trigger on the LLM's structured decision_type or a buy-band score, not on advice wording.
 
     Not result.action: score alignment upstream can lift hold/watch to buy.
     """
     decision_type = str(getattr(result, "decision_type", "") or "").strip().lower()
-    if decision_type in {"buy", "hold", "sell"}:
-        return decision_type == "buy"
-    # Malformed result only: reuse the shared advice map, no local lexicon
-    return infer_decision_type_from_advice(getattr(result, "operation_advice", ""), default="") == "buy"
+    if decision_type not in {"buy", "hold", "sell"}:
+        # Malformed result only: reuse the shared advice map, no local lexicon
+        decision_type = infer_decision_type_from_advice(getattr(result, "operation_advice", ""), default="")
+    if decision_type == "buy":
+        return True
+    # hold＋買入區分數（≥60）：不壓分、不留 guardrail_reason 的話，下游 build_action_fields
+    # 的分數對齊會把 hold/watch 升回 buy，高風險日照樣發出買入；分數區間沿用 canonical 口徑。
+    # sell 不走這條：對齊不會把賣出升成買入，觸發反而把賣出改成觀望
+    return decision_type == "hold" and action_for_score(getattr(result, "sentiment_score", None)) == "buy"
 
 
 def _cap_conservative_sentiment_score(value: Any) -> int:
