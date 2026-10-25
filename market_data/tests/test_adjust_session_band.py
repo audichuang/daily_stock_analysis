@@ -55,10 +55,10 @@ def test_6103_two_limit_downs_across_untraded_session_is_not_an_event(monkeypatc
 
 
 @pytest.mark.parametrize("opened, event_day", [
-    (54.0, "2024-03-18"), (48.0, "2024-03-19"), (53.0, "2024-03-18"),
+    (53.15, "2024-03-18"), (48.0, "2024-03-19"), (53.0, "2024-03-18"),
 ])
 def test_multi_session_limit_locked_legal_decline_is_not_an_event(monkeypatch, opened, event_day):
-    # 分別跨 6、7、6 個交易日的合法累積跌幅，不可被價格帶吸附成 1:2 分割。
+    # 分別接近 6、7、6 次跌停（含升降單位捨入），不可被價格帶吸附成 1:2 分割。
     bars = _history("2024-03-08", price=100.0) + [
         _bar("2024-03-08", 100.0, 100.0, 100.0, 100.0, 0.0),
         _bar(event_day, opened, opened, opened, opened, 0.0),
@@ -157,6 +157,45 @@ def test_falls_back_to_observed_dates_when_calendar_raises(monkeypatch):
 
 
 # --- M5：change 不可用時，分割首日鎖漲跌停 ---
+
+@pytest.mark.parametrize("change", [0.0, None])
+@pytest.mark.parametrize("event_day", ["2024-03-18", "2024-03-20"])
+def test_suspended_half_split_locked_limit_up_inside_compounded_band(monkeypatch, change, event_day):
+    # 跨 6／8 場停牌：101 / 2 × 1.1 = 55.55，取到升降單位 55.5，仍須辨識 1:2。
+    bars = _history("2024-03-08", price=101.0) + [
+        _bar("2024-03-08", 101.0, 101.0, 101.0, 101.0, 0.0),
+        _bar(event_day, 55.5, 55.5, 55.5, 55.5, change),
+    ]
+    row, = _run(monkeypatch, "6103", bars).to_dict("records")
+    assert row["kind"] == "split"
+    assert row["factor"] == 0.5
+    assert row["reference_price"] == 50.5
+
+
+@pytest.mark.parametrize("change", [0.0, None])
+@pytest.mark.parametrize("event_day", ["2024-03-19", "2024-03-21"])
+def test_seven_limit_downs_with_tick_rounding_are_not_an_event(monkeypatch, change, event_day):
+    # 100 × 0.9^7 ≈ 47.82969，取到 47.8；跨 7／9 場皆可由七次跌停解釋。
+    bars = _history("2024-03-08", price=100.0) + [
+        _bar("2024-03-08", 100.0, 100.0, 100.0, 100.0, 0.0),
+        _bar(event_day, 47.8, 47.8, 47.8, 47.8, change),
+    ]
+    assert _run(monkeypatch, "6103", bars).empty
+
+
+@pytest.mark.parametrize("opened, is_split", [(47.65, False), (48.05, False), (47.55, True), (48.1, True)])
+def test_consecutive_limit_guard_has_small_relative_tolerance(monkeypatch, opened, is_split):
+    # 七次跌停理論價約 47.82969：相對誤差 0.5% 內拒收，外側仍可吸附唯一的 1:2。
+    bars = _history("2024-03-08", price=100.0) + [
+        _bar("2024-03-08", 100.0, 100.0, 100.0, 100.0, 0.0),
+        _bar("2024-03-19", opened, opened, opened, opened, 0.0),
+    ]
+    rows = _run(monkeypatch, "6103", bars)
+    assert (len(rows) == 1) == is_split
+    if is_split:
+        assert rows.iloc[0]["kind"] == "split"
+        assert rows.iloc[0]["factor"] == 0.5
+
 
 def test_true_1_to_10_split_locked_limit_up_snaps_to_exact_tenth(monkeypatch):
     # 6919 2025-07-21：停牌前末筆在 07-11，跨 6 個交易日；參考價 121.5、鎖漲停 133.5。

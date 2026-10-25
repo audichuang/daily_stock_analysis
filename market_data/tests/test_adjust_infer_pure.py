@@ -1,9 +1,13 @@
 """公司行動推斷的合成 K 線測試，不連資料庫（monkeypatch ``pd.read_sql``，日曆以 ``is_session`` 注入）。"""
 
+import sys
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
+import requests
 
-from market_data import adjust, health
+from market_data import adjust, closures, health
 
 
 def _weekday(day):
@@ -26,7 +30,7 @@ def _infer(prices, is_session=_weekday):
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(adjust.pd, "read_sql", lambda *a, **k: prices.copy())
         # is_session=None 時走預設日曆；此處固定成「取不到日曆」，與本機 exchange_calendars 無關。
-        mp.setattr(health, "_xtai_session_checker", lambda: None)
+        mp.setattr(health, "_xtai_session_checker", lambda autodetect=True: None)
         return adjust.infer_rows(None, set(), prices.iloc[-1]["date"].date(), is_session=is_session)
 
 
@@ -60,11 +64,14 @@ def test_limit_locked_one_to_ten_split_uses_exact_reference(change):
     assert row["source"] == "inferred_price"
 
 
-@pytest.mark.parametrize("opened", [54.0, 55.2])
-def test_multi_session_move_within_compounded_band_does_not_snap_to_matching_split(opened):
-    # 跨 6 個交易日跌至 54／55.2 仍在複利範圍；即使只符合 1:2 價格帶，也不可吸附。
+@pytest.mark.parametrize("opened, is_split", [(54.0, True), (55.2, True), (53.15, False)])
+def test_multi_session_band_snap_excludes_consecutive_limit_moves(opened, is_split):
+    # 跨 6 場仍可吸附唯一的 1:2；只有接近六次跌停的 53.15 須排除。
     prices = _prices(opened=opened, event_day="2024-03-18")
-    assert _infer(prices).empty
+    rows = _infer(prices)
+    assert (len(rows) == 1) == is_split
+    if is_split:
+        assert rows.iloc[0]["kind"] == "split" and rows.iloc[0]["factor"] == 0.5
 
 
 @pytest.mark.parametrize("opened, factor", [(40.0, 0.4), (250.0, 2.5)])
@@ -219,7 +226,7 @@ def test_infer_rows_reads_extremes_and_passes_calendar(monkeypatch, use_default)
         return pd.concat([prices, gap_prices], ignore_index=True)
 
     monkeypatch.setattr(adjust.pd, "read_sql", read_sql)
-    monkeypatch.setattr(health, "_xtai_session_checker", lambda: _weekday)
+    monkeypatch.setattr(health, "_xtai_session_checker", lambda autodetect=True: _weekday)
     kwargs = {} if use_default else {"is_session": _weekday}
     rows = adjust.infer_rows(None, set(), prices.iloc[0]["date"].date(), **kwargs)
     row, = rows.to_dict("records")
@@ -229,6 +236,54 @@ def test_infer_rows_reads_extremes_and_passes_calendar(monkeypatch, use_default)
 
 def test_infer_rows_unavailable_default_calendar_falls_back_to_observed_dates(monkeypatch):
     monkeypatch.setattr(adjust.pd, "read_sql", lambda *a, **k: _prices(event_day="2024-03-12"))
-    monkeypatch.setattr(health, "_xtai_session_checker", lambda: None)
+    monkeypatch.setattr(health, "_xtai_session_checker", lambda autodetect=True: None)
     row, = adjust.infer_rows(None, set(), "2024-03-01").to_dict("records")
     assert row["kind"] == "inferred" and row["factor"] == 1.2
+
+
+@pytest.mark.parametrize("calendar_available", [True, False])
+@pytest.mark.parametrize("file_exists", [True, False])
+def test_infer_default_calendar_never_autodetects_or_writes_closures(
+        monkeypatch, tmp_path, calendar_available, file_exists):
+    path = tmp_path / "closed.txt"
+    if file_exists:
+        path.write_text("2024-03-11  # 臨時休市\n", encoding="utf-8")
+    before = (path.read_bytes(), path.stat().st_mtime_ns) if file_exists else None
+    monkeypatch.setattr(closures, "closed_file", lambda: path)
+    monkeypatch.setenv("TW_CLOSURE_AUTODETECT", "true")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("推導不得自動偵測休市、連網或寫入休市清單")
+
+    monkeypatch.setattr(requests, "get", forbidden)
+    monkeypatch.setattr(requests.Session, "request", forbidden)
+    monkeypatch.setattr(closures, "autodetect_today", forbidden)
+    monkeypatch.setattr(health, "autodetect_today", forbidden)
+    monkeypatch.setattr(closures, "fetch_dgpa_closures", forbidden)
+    # 用可用／不可用的日曆替身，確保未安裝 exchange_calendars 也驗得到自動偵測的退化。
+    xcals = SimpleNamespace(get_calendar=lambda name: SimpleNamespace(is_session=_weekday))
+    monkeypatch.setitem(sys.modules, "exchange_calendars", xcals if calendar_available else None)
+    prices = _prices(event_day="2024-03-12")
+    monkeypatch.setattr(adjust.pd, "read_sql", lambda *a, **k: prices.copy())
+
+    rows = adjust.infer_rows(None, set(), "2024-03-01", is_session=None)
+    # 日曆可用時須保留本機清單；沒有清單才會數到兩場、排除這筆一般跳空。
+    assert (len(rows) == 1) == (file_exists or not calendar_available)
+    if len(rows):
+        assert rows.iloc[0]["kind"] == "inferred" and rows.iloc[0]["factor"] == 1.2
+    if file_exists:
+        assert (path.read_bytes(), path.stat().st_mtime_ns) == before
+    else:
+        assert not path.exists()
+
+
+def test_health_default_calendar_keeps_closure_autodetection(monkeypatch):
+    calls = []
+    xcals = SimpleNamespace(get_calendar=lambda name: SimpleNamespace(is_session=_weekday))
+    monkeypatch.setitem(sys.modules, "exchange_calendars", xcals)
+    monkeypatch.setattr(health, "autodetect_today", lambda: calls.append(True))
+    monkeypatch.setattr(health, "adhoc_closed_dates", lambda: {pd.Timestamp("2024-03-11").date()})
+    checker = health._xtai_session_checker()
+    assert calls == [True]
+    assert not checker(pd.Timestamp("2024-03-11").date())
+    assert checker(pd.Timestamp("2024-03-12").date())
