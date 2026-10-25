@@ -690,3 +690,30 @@ def test_extract_and_persist_index_signal_with_market_override(isolated_db) -> N
     latest = service.get_latest_active(stock_code="csi930955", market="cn")
     assert latest["total"] == 1
     assert latest["items"][0]["source_report_id"] == 955
+
+
+@pytest.mark.parametrize(
+    ("advice", "score", "expected"),
+    [("觀望", 50, "watch"), ("不建議買入", 35, "avoid")],
+)
+def test_build_payload_keeps_traditional_zh_tw_advice(advice: str, score: int, expected: str) -> None:
+    # H1：zh-TW 報告的繁體建議（護欄改寫後 action 被清空）要能正規化，否則整筆 DecisionSignal 被略過
+    result = _result(
+        code="2330.TW",
+        name="台積電",
+        operation_advice=advice,
+        action=None,
+        sentiment_score=score,
+        report_language="zh-TW",
+    )
+
+    payload = build_decision_signal_payload_from_report(
+        result,
+        trace_id="trace-zh-tw",
+        query_source="api",
+        report_type="full",
+        profile_source=BUILD_PROFILE_SOURCE,
+    )
+
+    assert payload is not None
+    assert payload["action"] == expected
