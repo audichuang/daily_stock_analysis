@@ -13,7 +13,7 @@
 
 **公告日是假的**：`market.monthly_revenue.announce_date` 全部 = 營收月次月 10 日（法定期限）。
 實際多數公司 5~9 日就公布（偏保守、晚看到），逾期申報與主管機關展延才會偷看未來；
-已知的展延寫在 `KNOWN_DEADLINE_EXTENSIONS`，有效公告日取兩者較晚者。
+法定期限（含展延、2026 起保險類 15 日）在 `market_data.revenue_deadline`，有效公告日取兩者較晚者。
 可用日沿用 `pit_revenue_panel` 的語意：公告日之後的第一個交易日（嚴格 `<`）收盤可見，
 隔日開盤進場。
 
@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from market_data.db import database_url  # noqa: E402
+from market_data.revenue_deadline import apply_revenue_deadline  # noqa: E402
 from measure_signal_forward import (  # noqa: E402
     DEFAULT_POSITION_NOTIONAL,
     build_signals,
@@ -49,28 +50,20 @@ from screen_tw import exclude_otc_revenue  # noqa: E402
 from src.services.tw_backtest_context import revenue_features  # noqa: E402  與 live prompt 共用
 from tw_trade_costs import round_trip_return  # noqa: E402
 
-# 營收月 → 主管機關展延後的實際期限。2020-01 營收因疫情展延至 2/15（中央社 2020-02-03）。
-KNOWN_DEADLINE_EXTENSIONS = {pd.Timestamp("2020-01-01"): pd.Timestamp("2020-02-15")}
 FLAGS = ("decel_lt0", "decel_le20", "mom_neg", "broke_record_streak", "yoy_turn_neg")
 
 
 def effective_announce(rv):
-    """有效公告日 = max(DB 的佔位公告日, 已知展延期限)。"""
-    ext = rv["revenue_month"].map(KNOWN_DEADLINE_EXTENSIONS)
-    out = rv.copy()
-    out["announce_date"] = pd.concat([rv["announce_date"], ext], axis=1).max(axis=1).astype(
-        rv["announce_date"].dtype)
-    return out
+    """有效公告日 = max(DB 的佔位公告日, 法定期限)；期限規則在 market_data.revenue_deadline。"""
+    return apply_revenue_deadline(rv, date_col="announce_date")
 
 
 def correct_pit_dates(rv_pit):
-    """msf.load() 形狀的 (stock_id, date, yoy)：DB 的 date 是佔位「次月 10 日」，套上已知展延。"""
-    # 佔位日 = 次月 10 日 → 營收月 = 公告日的前一個月
-    month = (rv_pit["date"].dt.to_period("M") - 1).dt.to_timestamp()
-    ext = month.map(KNOWN_DEADLINE_EXTENSIONS)
-    out = rv_pit.copy()
-    out["date"] = pd.concat([rv_pit["date"], ext], axis=1).max(axis=1).astype(rv_pit["date"].dtype)
-    return out
+    """msf.load() 形狀的 (stock_id, date, yoy)：套共用法定期限（重複套用結果不變）。
+
+    有 revenue_month 欄就用它，否則由佔位日「次月 10 日」推回營收月。
+    """
+    return apply_revenue_deadline(rv_pit, date_col="date")
 
 
 def candidate_yoy_frame(rv):

@@ -16,6 +16,7 @@ import requests
 
 from market_data import tw_official_http
 from market_data.crawler import _UA, requests_get, requests_post
+from market_data.revenue_deadline import publication_deadline_date
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -496,7 +497,8 @@ def parse_company_monthly_revenue(html, stock_id, year, month):
     if rev is None:
         return None, "no_data"
     rm = datetime.date(year, month, 1)
-    nxt = datetime.date(year + (month == 12), month % 12 + 1, 10)
+    # 公告日＝法定期限（含 2020-01 展延、2026 起保險類 15 日），規則見 revenue_deadline
+    nxt = publication_deadline_date(stock_id, year, month)
     return {"stock_id": stock_id, "revenue_month": pd.Timestamp(rm),
             "revenue": rev, "yoy": yoy, "mom": None,
             "announce_date": pd.Timestamp(nxt)}, "ok"
