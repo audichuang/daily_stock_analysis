@@ -11,11 +11,18 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from market_data import crawler, sources
 
 _DAY = date(2026, 10, 22)
 _FIXTURE = Path(__file__).parent / "fixtures" / "tpex_otc.json"
+_INVALID_TITLE_DATES = [
+    pytest.param("115年02月30日", id="invalid-day"),
+    pytest.param("115年13月22日", id="invalid-month"),
+    pytest.param("10000年10月22日", id="out-of-range-year"),
+    pytest.param("100000000000年10月22日", id="overflowing-year"),
+]
 
 
 def _tpex_raw(mutate=None):
@@ -82,6 +89,39 @@ def test_crawl_tpex_price_returns_none_on_stale_payload(monkeypatch):
     assert len(sources.crawl_tpex_price(_DAY)) == 2
 
 
+@pytest.mark.parametrize("kind,fixture,day", [
+    ("price", "tpex_otc.json", _DAY),
+    ("institutional", "tpex_insti.json", date(2026, 8, 28)),
+    ("margin", "tpex_margin.json", date(2026, 8, 28)),
+    ("valuation", "tpex_pe.json", date(2026, 8, 28)),
+], ids=["price", "institutional", "margin", "valuation"])
+def test_tpex_overflowing_table_date_is_rejected(monkeypatch, capsys, kind, fixture, day):
+    payload = json.loads((_FIXTURE.parent / fixture).read_text(encoding="utf-8"))
+    table_date = payload["tables"][0]["date"]
+
+    class _R:
+        status_code = 200
+
+        def __init__(self):
+            self.content = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.text = self.content.decode("utf-8")
+
+        def json(self):
+            return json.loads(self.content)
+
+    monkeypatch.setattr(sources, "requests_get", lambda *a, **k: _R())
+    crawl = sources.crawl_tpex_price if kind == "price" else lambda d: sources.crawl_tpex_chip(kind, d)
+    payload["tables"][0]["date"] = "100000000000/10/22"
+    assert crawl(day) is None
+    warning = capsys.readouterr().out
+    assert "**WARN: TPEx" in warning and "拒收" in warning
+    # 反向：原始的相符日期仍須解析成功，不能把所有資料一律拒收。
+    payload["tables"][0]["date"] = table_date
+    df = crawl(day)
+    assert df is not None and len(df)
+    assert set(df.index.get_level_values("date")) == {pd.Timestamp(day)}
+
+
 # --- TWSE MI_INDEX csv ---------------------------------------------------------
 
 _HEADER = (
@@ -120,3 +160,38 @@ def test_twse_price_previous_day_title_is_rejected(monkeypatch, capsys):
 
 def test_twse_price_title_without_date_is_rejected(monkeypatch):
     assert _twse(monkeypatch, '"價格指數(臺灣證券交易所)"') is None
+
+
+@pytest.mark.parametrize("title_date", _INVALID_TITLE_DATES)
+def test_twse_price_invalid_title_date_is_rejected(monkeypatch, capsys, title_date):
+    assert _twse(monkeypatch, f'"{title_date} 價格指數(臺灣證券交易所)"') is None
+    warning = capsys.readouterr().out
+    assert "**WARN: MI_INDEX" in warning and "拒收" in warning
+    # 反向：不能因拒收無效日期，就連相符日期也一起擋掉。
+    df = _twse(monkeypatch, '"115年10月22日 價格指數(臺灣證券交易所)"')
+    assert df.at[("2330", pd.Timestamp(_DAY)), "收盤價"] == 2350.0
+
+
+@pytest.mark.parametrize("crawl,report,body,column,value", [
+    (sources.crawl_institutional, "T86",
+     '"證券代號","證券名稱","外陸資買賣超股數(不含外資自營商)"\n"2330","台積電","12,345"',
+     "外陸資買賣超股數(不含外資自營商)", 12345),
+    (sources.crawl_margin, "MI_MARGN",
+     '"代號","名稱","買進","賣出","現金償還","前日餘額","今日餘額","次一營業日限額",'
+     '"買進","賣出","現券償還","前日餘額","今日餘額","次一營業日限額","資券互抵","註記",\n'
+     '"2330","台積電","10","20","0","1,000","1,100","5,000","1","2","0","30","31","500","0"," ",',
+     "融資今日餘額", 1100),
+], ids=["T86", "MI_MARGN"])
+@pytest.mark.parametrize("title_date", _INVALID_TITLE_DATES)
+def test_twse_chip_invalid_title_date_is_rejected(
+    monkeypatch, capsys, crawl, report, body, column, value, title_date,
+):
+    raw = f'"{title_date} {report}"\r\n{body}'.encode("big5")
+    monkeypatch.setattr(sources, "_twse_csv", lambda url: raw)
+    assert crawl(_DAY) is None
+    warning = capsys.readouterr().out
+    assert f"**WARN: {report}" in warning and "拒收" in warning
+    # 反向：相同 Big5 資料只換成相符日期，必須經過真正的 parser 並保留數值。
+    raw = f'"115年10月22日 {report}"\r\n{body}'.encode("big5")
+    df = crawl(_DAY)
+    assert df.at[("2330", pd.Timestamp(_DAY)), column] == value

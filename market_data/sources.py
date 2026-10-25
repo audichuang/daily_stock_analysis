@@ -232,7 +232,10 @@ def _title_date_matches(raw, date, name):
     text = raw if isinstance(raw, str) else raw.decode("big5", errors="replace")
     head = text.lstrip("\ufeff \r\n").split("\n", 1)[0]
     m = re.search(r"\d+年\d+月\d+日", head)
-    got = _roc_to_date(m.group(0)) if m else None
+    try:
+        got = _roc_to_date(m.group(0)) if m else None
+    except (ValueError, OverflowError):
+        got = None
     if got == date:
         return True
     print(f"**WARN: {name} 回應日期 {got or '(無)'} ≠ 請求日 {date},拒收"
@@ -827,7 +830,7 @@ def _tpex_table(payload, date, what):
         return None
     try:
         table_day = _roc_slash_to_date(tables[0]["date"]).strftime("%Y%m%d")
-    except (KeyError, ValueError, TypeError):
+    except (KeyError, ValueError, TypeError, OverflowError):
         table_day = "(無)"
     if table_day != want:
         print(f"**WARN: TPEx {what} 資料表日期 {table_day} ≠ 請求日 {want},拒收", flush=True)
