@@ -818,7 +818,7 @@ class StockAnalysisPipeline:
                 if historical_bars:
                     df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
                     df = self._build_trend_input_frame(df, realtime_quote, code, market)
-                    trend_result = self.trend_analyzer.analyze(df, code)
+                    trend_result = self._run_trend_analysis(df, code, market_phase_context_dict)
                     logger.info(f"{stock_name}({code}) 趋势分析: {trend_result.trend_status.value}, "
                               f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
             except Exception as e:
@@ -1179,20 +1179,7 @@ class StockAnalysisPipeline:
                 rt['volume_ratio_basis'] = 'avg5'
                 # During the session the quote volume is a partial-day cumulative figure divided by
                 # full-day averages, so it reads "shrinking" by construction; label it instead of judging it.
-                _tw_market = get_market_for_stock(normalize_stock_code(context.get('code') or ''))
-                # Intraday if EITHER the caller-supplied phase or the wall clock says so: a mislabelled
-                # partial-day cumulative volume reads as "shrinking", so err towards the intraday label.
-                _phases = set()
-                if isinstance(market_phase_context, dict) and market_phase_context.get('phase'):
-                    try:
-                        _phases.add(MarketPhase(market_phase_context['phase']))
-                    except ValueError:
-                        pass
-                if _tw_market:
-                    _phases.add(infer_market_phase(_tw_market, get_market_now(_tw_market)))
-                if _tw_market and _phases & {
-                    MarketPhase.INTRADAY, MarketPhase.LUNCH_BREAK, MarketPhase.CLOSING_AUCTION,
-                }:
+                if self._is_tw_intraday_volume(context.get('code') or '', market_phase_context):
                     rt['volume_ratio_basis'] = 'avg5_intraday'
                     if rt.get('volume_ratio') is not None:
                         rt['volume_ratio_desc'] = '盘中累计量未按时间换算，不据此判断缩量'
@@ -2830,6 +2817,41 @@ class StockAnalysisPipeline:
             return "短期走弱 🔽"
         else:
             return "震荡整理 ↔️"
+
+    @staticmethod
+    def _is_tw_intraday_volume(code: str, market_phase_context: Optional[Dict[str, Any]]) -> bool:
+        """台股盤中（含午休、收盤集合競價）時最後一根量是部分累計量，不能拿來判縮放量。
+
+        呼叫端給的 phase 或牆鐘任一說盤中就算盤中：誤把部分累計量當全日量會讀成「縮量」，
+        寧可往盤中靠。量比標籤（_enhance_context）與趨勢評分共用這一個判定。
+        """
+        if not is_tw_code(code):
+            return False
+        market = get_market_for_stock(normalize_stock_code(code))
+        phases = set()
+        if isinstance(market_phase_context, dict) and market_phase_context.get('phase'):
+            try:
+                phases.add(MarketPhase(market_phase_context['phase']))
+            except ValueError:
+                pass
+        if market:
+            phases.add(infer_market_phase(market, get_market_now(market)))
+        return bool(market) and bool(phases & {
+            MarketPhase.INTRADAY, MarketPhase.LUNCH_BREAK, MarketPhase.CLOSING_AUCTION,
+        })
+
+    def _run_trend_analysis(
+        self,
+        df: pd.DataFrame,
+        code: str,
+        market_phase_context: Optional[Dict[str, Any]],
+    ) -> TrendAnalysisResult:
+        """趨勢分析；台股盤中不判量能（不給縮量回調滿分），收盤後行為不變。"""
+        return self.trend_analyzer.analyze(
+            df,
+            code,
+            intraday_volume=self._is_tw_intraday_volume(code, market_phase_context),
+        )
 
     def _build_trend_input_frame(
         self,

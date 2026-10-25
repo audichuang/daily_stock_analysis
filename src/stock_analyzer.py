@@ -48,6 +48,8 @@ class VolumeStatus(Enum):
     SHRINK_VOLUME_UP = "缩量上涨"      # 无量上涨
     SHRINK_VOLUME_DOWN = "缩量回调"    # 缩量回调（好）
     NORMAL = "量能正常"
+    # 盤中（含午休、收盤集合競價）最後一根是部分累計量，對全日 5 日均量必然偏低，不判縮放量
+    INTRADAY_UNJUDGED = "盤中不判讀"
 
 
 class BuySignal(Enum):
@@ -207,13 +209,17 @@ class StockTrendAnalyzer:
         """初始化分析器"""
         pass
     
-    def analyze(self, df: pd.DataFrame, code: str) -> TrendAnalysisResult:
+    def analyze(
+        self, df: pd.DataFrame, code: str, *, intraday_volume: bool = False
+    ) -> TrendAnalysisResult:
         """
         分析股票趋势
         
         Args:
             df: 包含 OHLCV 数据的 DataFrame
             code: 股票代码
+            intraday_volume: 最後一根是盤中部分累計量時為 True：量比照算（供顯示），
+                但不判縮量／放量、量能給中性分（由呼叫端依市場階段判定）
             
         Returns:
             TrendAnalysisResult 分析结果
@@ -251,7 +257,7 @@ class StockTrendAnalyzer:
         self._calculate_bias(result)
 
         # 3. 量能分析
-        self._analyze_volume(df, result)
+        self._analyze_volume(df, result, intraday_volume=intraday_volume)
 
         # 4. 支撑压力分析
         self._analyze_support_resistance(df, result)
@@ -431,7 +437,9 @@ class StockTrendAnalyzer:
         if result.ma20 > 0:
             result.bias_ma20 = (price - result.ma20) / result.ma20 * 100
     
-    def _analyze_volume(self, df: pd.DataFrame, result: TrendAnalysisResult) -> None:
+    def _analyze_volume(
+        self, df: pd.DataFrame, result: TrendAnalysisResult, intraday_volume: bool = False
+    ) -> None:
         """
         分析量能
         
@@ -446,6 +454,13 @@ class StockTrendAnalyzer:
         if vol_5d_avg > 0:
             result.volume_ratio_5d = float(latest['volume']) / vol_5d_avg
         
+        # 盤中累計量未按時間換算（10:00 約只有全日三成），拿來比全日均量必然「縮量」：
+        # 量比保留供顯示，但不判縮放量，也不讓評分吃到縮量回調的滿分
+        if intraday_volume:
+            result.volume_status = VolumeStatus.INTRADAY_UNJUDGED
+            result.volume_trend = "盤中累計量未按時間換算，量能不判讀（收盤後再看）"
+            return
+
         # 判断价格变化
         prev_close = df.iloc[-2]['close']
         price_change = (latest['close'] - prev_close) / prev_close * 100
@@ -692,6 +707,7 @@ class StockTrendAnalyzer:
             VolumeStatus.SHRINK_VOLUME_DOWN: 15,  # 缩量回调最佳
             VolumeStatus.HEAVY_VOLUME_UP: 12,     # 放量上涨次之
             VolumeStatus.NORMAL: 10,
+            VolumeStatus.INTRADAY_UNJUDGED: 10,   # 盤中不判讀：與量能正常同分（中性）
             VolumeStatus.SHRINK_VOLUME_UP: 6,     # 无量上涨较差
             VolumeStatus.HEAVY_VOLUME_DOWN: 0,    # 放量下跌最差
         }

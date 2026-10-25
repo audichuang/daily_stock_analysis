@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修復] 回測的月營收可見日不再早於法定公告期限：期限規則集中到 `market_data/revenue_deadline.py`（一般次月 10 日；2020-01 營收全面展延至 2/15；依《公開發行公司財務報告及營運情形公告申報特殊適用範圍辦法》第 3 條，2026-01 營收起保險業及具保險子公司者放寬至 15 日，保守口徑為 28xx 全部加 5880、2207），`backtest_screen`、`measure_signal_forward`（含 `portfolio_walkforward`、`measure_market_regime`）、`measure_revenue_momentum` 讀取時一律取「DB 公告日」與期限較晚者，可見日仍是其後第一個交易日；DB announce_date 維持次月 10 日佔位不變（寫入端不變），live 篩選 `screen_tw` 與 dossier 不受影響
 - [修復] API、服務與回測結果序列化保留 dashboard 的非買入護欄原因；矛盾原因延至真正護欄完成後才記錄，且未壓分時不再留下原始／調整分數，避免遮住大盤或成本原因及誤計影子評估降級
 - [修復] 僅結構化 `decision_type=sell` 與買入區分數矛盾時阻擋發布買入／加倉，退回非買入建議動作或觀望，僅實際阻擋時記錄原因；hold／buy 決策搭配觀望／減倉／回避等建議仍依既有分數對齊規則處理；支撐附近回跌的持有結論即使已寫「洗盤觀察」，也會清掉殘留買入動作並保留原分數
+- [修復] 台股盤中（含午休、收盤集合競價）趨勢分析不再拿部分累計量對全日 5 日均量判縮量／放量：量能狀態改標「盤中不判讀」、量能給中性 10 分（同量能正常），不再出現「✅ 缩量回调，主力洗盘」與 15 分滿分；盤中判定與量比標籤共用同一個 `_is_tw_intraday_volume`（呼叫端 phase 或牆鐘任一說盤中即算），收盤後與非台股行為不變
 - [修復] `REPORT_LANGUAGE=zh-TW` 時繁體操作建議（「觀望」「買入」「規避」「風險預警」「不建議買入」「暫不加倉」等）`normalize_decision_action()` 一律回 None，護欄改寫後的結果因此不寫 DecisionSignal；`_normalize_key` 改為先逐字折成簡體再比對（否定片語照樣優先），折疊表從 `BacktestEngine._TRAD_TO_SIMP` 搬到共用的 `src/utils/zh_fold.py`、兩邊同用一份，並補上片語表需要的字（風險預觸發規佈迴，「迴避」折成「回避」）
 - [修復] 買入區分數的持有結論未命中買入降級時，仍套用原本的洗盤／區間文字細化並保留結構護欄理由，避免支撐附近回跌被最終分數對齊誤升為買入；符合降級條件與上漲流入的既有行為不變
 - [修復] 大盤高風險、交易成本與資金流／結構護欄對 `decision_type=hold` 但分數落在共用買入區間（≥60，例如 68）的結論也會觸發壓分並寫入 `guardrail_reason`，且一併清掉已被分數對齊升成買入的殘留 `action`，不再於高風險日發出「買入」；`sell` 與觀望區分數（40–59）的 hold 維持不動
