@@ -52,12 +52,19 @@ def test_ordinary_move_has_no_event(opened):
 @pytest.mark.parametrize("change", [0.0, None])
 def test_limit_locked_one_to_ten_split_uses_exact_reference(change):
     prices = _prices(previous=1215.0, opened=133.5, change=change,
-                     previous_day="2025-07-18", event_day="2025-07-21")
+                     previous_day="2025-07-11", event_day="2025-07-21")
     row, = _infer(prices).to_dict("records")
     assert row["factor"] == 0.1
     assert row["reference_price"] == 121.5
     assert row["kind"] == "split"
     assert row["source"] == "inferred_price"
+
+
+@pytest.mark.parametrize("opened", [54.0, 55.2])
+def test_multi_session_move_within_compounded_band_does_not_snap_to_matching_split(opened):
+    # 跨 6 個交易日跌至 54／55.2 仍在複利範圍；即使只符合 1:2 價格帶，也不可吸附。
+    prices = _prices(opened=opened, event_day="2024-03-18")
+    assert _infer(prices).empty
 
 
 @pytest.mark.parametrize("opened, factor", [(40.0, 0.4), (250.0, 2.5)])

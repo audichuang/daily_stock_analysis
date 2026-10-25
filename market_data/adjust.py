@@ -18,7 +18,7 @@
 推導的理論依據：台股普通股有漲跌幅限制（``PRICE_LIMIT_CHANGE`` 之前 ±7%、之後 ±10%），
 所以單日跳空超過當時限制 × 1.1（約 7.7%／11%）必為公司行動。兩根 K 之間隔了 n 個
 該檔沒成交的交易日時，門檻改為複利的 (1±限制×1.1)^n（連續鎖漲跌停是合法的）；吸附到
-精確 1/N 或 N 倍的跳空例外，仍用單日門檻。
+精確 1/N 或 N 倍的價格比例跳空例外，仍用單日門檻；價格帶吸附則須先超出複利門檻。
 **這個前提只對普通股成立**——ETF／ETN／TDR 依官方規則不受漲跌幅限制（部分海外 ETF、
 槓反產品、第二上市外國證券），對它們推導必然製造假事件，故一律排除、只收官方值或
 ``VERIFIED_ACTIONS`` 白名單。
@@ -129,7 +129,8 @@ def _limit_band_split(prev, low, high, lim):
     面額分割首日常一開盤就鎖漲／跌停（6919 2025-07-21 1:10：參考價 121.5、整天鎖漲停 133.5、
     change 存成 0），此時退回開盤價當參考價會得到 0.1099，離 1/10 達 9.9%，過不了
     ``SPLIT_TOLERANCE``。但普通股當日成交價不可能超出參考價 ±限制，所以「[low, high]
-    塞得進 prev/N 的漲跌停帶」本身就是比例證據。回傳 N；沒有或多個 N 符合回 None。
+    塞得進 prev/N 的漲跌停帶」可作為比例證據，呼叫端須先排除複利門檻能解釋的累積漲跌。
+    回傳 N；沒有或多個 N 符合回 None。
     """
     if not (prev > 0 and low > 0 and high >= low):
         return None
@@ -282,7 +283,7 @@ def infer_rows(conn, known, start, is_session=None):
     2024-03-08 收 38.45、03-11 無成交、03-12 開 31.95 是兩根合法跌停，舊版單日門檻把它
     存成因子 0.901，推導列裡約 519/529 筆是這種假事件。吸附到精確 1/N（或 N 倍）的跳空
     不受複利門檻限制（減資／分割停止買賣期間參考價不會逐日累積），仍沿用單日門檻。
-    價格帶吸附僅限相鄰交易日，且只有唯一的 1/N 價格帶符合時才採用。
+    價格帶吸附須先超出複利門檻，且只有唯一的 1/N 價格帶符合時才採用，可涵蓋分割停牌多日。
     ``is_session`` 為 ``date -> bool``，預設取 ``health`` 的 XTAI 日曆（見 ``_session_index``）。
     """
     # 多讀 60 天再往前算 seq/gap：查詢先截在 `start` 的話，任何**既有**股票在起點後的
@@ -339,10 +340,14 @@ def infer_rows(conn, known, start, is_session=None):
     if len(jump):
         sessions = _session_index(px["date"].min(), px["date"].max(), px["date"], is_session)
         n_sess = _sessions_between(jump["prev_date"], jump["date"], sessions)
+        # 複利門檻：非比例跳空要超過 n 個交易日累積的漲跌停才算公司行動。
+        lim_n = jump["lim"].to_numpy() * 1.1
+        move = jump["open"] / jump["prev"]
+        beyond = (move > (1 + lim_n) ** n_sess) | (move < (1 - lim_n) ** n_sess)
         # change 不可用（缺值或 0 佔位）而退回開盤價時，鎖漲跌停的分割首日開盤價本身就離參考價
         # 達一個漲跌幅，吸附不到 1/N；改看當日 [low, high] 是否落在某個 prev/N 的漲跌停帶內。
-        # 僅限相鄰交易日：跨多個交易日的累積漲跌不能當成精確分割的證據。
-        for i in jump.index[~jump["is_split"] & ~jump["ref_ok"] & (n_sess == 1)]:
+        # 分割停牌可跨多個交易日，但複利範圍內的累積漲跌不能當成精確分割的證據。
+        for i in jump.index[~jump["is_split"] & ~jump["ref_ok"] & beyond]:
             row = jump.loc[i]
             lo = np.nanmin([row["low"], row["open"], row["close"]])
             hi = np.nanmax([row["high"], row["open"], row["close"]])
@@ -350,10 +355,6 @@ def infer_rows(conn, known, start, is_session=None):
             if n is not None:
                 jump.loc[i, ["factor", "ref"]] = [1 / n, row["prev"] / n]
                 jump.loc[i, "is_split"] = True
-        # 複利門檻：非比例跳空要超過 n 個交易日累積的漲跌停才算公司行動。
-        lim_n = jump["lim"].to_numpy() * 1.1
-        move = jump["open"] / jump["prev"]
-        beyond = (move > (1 + lim_n) ** n_sess) | (move < (1 - lim_n) ** n_sess)
         jump = jump[jump["is_split"] | beyond]
     # 停牌後復牌的跳空多半反映停牌期間累積的資訊，不是公司行動 → 不推導。
     # **精確 1/N（或 N 倍）比例是例外**：減資的停止買賣窗口本來就是 2~3 週，用 gap 一刀切

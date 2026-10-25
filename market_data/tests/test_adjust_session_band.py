@@ -67,16 +67,16 @@ def test_multi_session_limit_locked_legal_decline_is_not_an_event(monkeypatch, o
 
 
 @pytest.mark.parametrize("opened, event_day", [(48.0, "2024-03-18"), (53.0, "2024-03-15")])
-def test_multi_session_limit_locked_gap_beyond_band_remains_inferred(monkeypatch, opened, event_day):
-    # 6 個交易日跌到 48、5 個交易日跌到 53 皆超過複利門檻，但不足以證明精確的 1:2 分割。
+def test_multi_session_limit_locked_gap_beyond_band_snaps_to_unique_split(monkeypatch, opened, event_day):
+    # 6 個交易日跌到 48、5 個交易日跌到 53 皆超過複利門檻，且只符合 1:2 的價格帶。
     bars = _history("2024-03-08", price=100.0) + [
         _bar("2024-03-08", 100.0, 100.0, 100.0, 100.0, 0.0),
         _bar(event_day, opened, opened, opened, opened, 0.0),
     ]
     row, = _run(monkeypatch, "6103", bars).to_dict("records")
-    assert row["kind"] == "inferred"
-    assert row["factor"] == pytest.approx(opened / 100.0)
-    assert row["reference_price"] == pytest.approx(opened)
+    assert row["kind"] == "split"
+    assert row["factor"] == 0.5
+    assert row["reference_price"] == 50.0
 
 
 def test_non_session_days_do_not_widen_the_band(monkeypatch):
@@ -159,9 +159,9 @@ def test_falls_back_to_observed_dates_when_calendar_raises(monkeypatch):
 # --- M5：change 不可用時，分割首日鎖漲跌停 ---
 
 def test_true_1_to_10_split_locked_limit_up_snaps_to_exact_tenth(monkeypatch):
-    # 6919 2025-07-21：前收 1215、參考價 121.5、整天鎖漲停 133.5、change 存成 0
-    bars = _history("2025-07-18", price=1215.0) + [
-        _bar("2025-07-18", 1215.0, 1215.0, 1215.0, 1215.0, 0.0),
+    # 6919 2025-07-21：停牌前末筆在 07-11，跨 6 個交易日；參考價 121.5、鎖漲停 133.5。
+    bars = _history("2025-07-11", price=1215.0) + [
+        _bar("2025-07-11", 1215.0, 1215.0, 1215.0, 1215.0, 0.0),
         _bar("2025-07-21", 133.5, 133.5, 133.5, 133.5, 0.0),
     ]
     hit = _run(monkeypatch, "6919", bars)
@@ -174,8 +174,8 @@ def test_true_1_to_10_split_locked_limit_up_snaps_to_exact_tenth(monkeypatch):
 
 def test_split_locked_limit_down_snaps_too(monkeypatch):
     # 1:10，首日鎖跌停 109.5（參考價 121.5 × 0.9 → 取到升降單位）
-    bars = _history("2025-07-18", price=1215.0) + [
-        _bar("2025-07-18", 1215.0, 1215.0, 1215.0, 1215.0, 0.0),
+    bars = _history("2025-07-11", price=1215.0) + [
+        _bar("2025-07-11", 1215.0, 1215.0, 1215.0, 1215.0, 0.0),
         _bar("2025-07-21", 109.5, 109.5, 109.5, 109.5, None),
     ]
     hit = _run(monkeypatch, "6920", bars)
@@ -184,14 +184,26 @@ def test_split_locked_limit_down_snaps_too(monkeypatch):
 
 def test_1_to_2_5_split_snaps_to_0_4(monkeypatch):
     # 6548 型 1:2.5：前收 250、參考價 100、開盤鎖漲停 110、change 缺值
-    bars = _history("2025-07-18", price=250.0) + [
-        _bar("2025-07-18", 250.0, 250.0, 250.0, 250.0, 0.0),
+    bars = _history("2025-07-11", price=250.0) + [
+        _bar("2025-07-11", 250.0, 250.0, 250.0, 250.0, 0.0),
         _bar("2025-07-21", 110.0, 110.0, 108.0, 110.0, None),
     ]
     hit = _run(monkeypatch, "6548", bars)
     assert len(hit) == 1
     assert hit.iloc[0]["kind"] == "split"
     assert hit.iloc[0]["factor"] == pytest.approx(0.4)
+
+
+def test_limit_locked_split_after_longer_suspension_uses_exact_reference(monkeypatch):
+    # 合成停牌 20 天、跨 14 個交易日：跌幅超出複利範圍，吸附後須保留分割的長 gap 例外。
+    bars = _history("2025-07-01", price=1215.0) + [
+        _bar("2025-07-01", 1215.0, 1215.0, 1215.0, 1215.0, 0.0),
+        _bar("2025-07-21", 133.5, 133.5, 133.5, 133.5, 0.0),
+    ]
+    row, = _run(monkeypatch, "6923", bars).to_dict("records")
+    assert row["kind"] == "split"
+    assert row["factor"] == 0.1
+    assert row["reference_price"] == 121.5
 
 
 def test_snap_to_split_knows_2_5():
