@@ -18,7 +18,7 @@
 推導的理論依據：台股普通股有漲跌幅限制（``PRICE_LIMIT_CHANGE`` 之前 ±7%、之後 ±10%），
 所以單日跳空超過當時限制 × 1.1（約 7.7%／11%）必為公司行動。兩根 K 之間隔了 n 個
 該檔沒成交的交易日時，門檻改為複利的 (1±限制×1.1)^n（連續鎖漲跌停是合法的）；吸附到
-精確 1/N 或 N 倍的價格比例跳空例外，仍用單日門檻；複利範圍內的價格帶吸附須排除連續漲跌停。
+精確 1/N 或 N 倍的價格比例跳空例外，仍用單日門檻；價格帶吸附則須先超出複利門檻。
 **這個前提只對普通股成立**——ETF／ETN／TDR 依官方規則不受漲跌幅限制（部分海外 ETF、
 槓反產品、第二上市外國證券），對它們推導必然製造假事件，故一律排除、只收官方值或
 ``VERIFIED_ACTIONS`` 白名單。
@@ -129,7 +129,7 @@ def _limit_band_split(prev, low, high, lim):
     面額分割首日常一開盤就鎖漲／跌停（6919 2025-07-21 1:10：參考價 121.5、整天鎖漲停 133.5、
     change 存成 0），此時退回開盤價當參考價會得到 0.1099，離 1/10 達 9.9%，過不了
     ``SPLIT_TOLERANCE``。但普通股當日成交價不可能超出參考價 ±限制，所以「[low, high]
-    塞得進 prev/N 的漲跌停帶」可作為比例證據；複利範圍內須由呼叫端排除連續漲跌停。
+    塞得進 prev/N 的漲跌停帶」可作為比例證據，呼叫端須先排除複利門檻能解釋的累積漲跌。
     回傳 N；沒有或多個 N 符合回 None。
     """
     if not (prev > 0 and low > 0 and high >= low):
@@ -283,8 +283,10 @@ def infer_rows(conn, known, start, is_session=None):
     2024-03-08 收 38.45、03-11 無成交、03-12 開 31.95 是兩根合法跌停，舊版單日門檻把它
     存成因子 0.901，推導列裡約 519/529 筆是這種假事件。吸附到精確 1/N（或 N 倍）的跳空
     不受複利門檻限制（減資／分割停止買賣期間參考價不會逐日累積），仍沿用單日門檻。
-    價格帶吸附只採用唯一的 1/N 價格帶，可涵蓋分割停牌多日；複利範圍內若開盤／前收與
-    任一 (1±限制)^k（k=1..n）相差不超過 0.5%，視為連續漲跌停而不吸附。超出複利門檻的路徑不變。
+    價格帶吸附須先超出複利門檻，且只有唯一的 1/N 價格帶符合時才採用，可涵蓋分割停牌多日。
+    已知限制：停牌後復牌、首日鎖漲跌停且 change 不可用的 1:2／1:2.5 分割落在複利範圍內，
+    單看價格分不出它和連續漲跌停，故不推導（寧可漏記也不把歷史價整段乘錯）；待接官方
+    「變更面額恢復買賣」資料補上。
     ``is_session`` 為 ``date -> bool``，預設只讀 ``health`` 的 XTAI 日曆與本機休市清單，不連網或寫檔。
     """
     # 多讀 60 天再往前算 seq/gap：查詢先截在 `start` 的話，任何**既有**股票在起點後的
@@ -347,15 +349,9 @@ def infer_rows(conn, known, start, is_session=None):
         beyond = (move > (1 + lim_n) ** n_sess) | (move < (1 - lim_n) ** n_sess)
         # change 不可用（缺值或 0 佔位）而退回開盤價時，鎖漲跌停的分割首日開盤價本身就離參考價
         # 達一個漲跌幅，吸附不到 1/N；改看當日 [low, high] 是否落在某個 prev/N 的漲跌停帶內。
-        for i in jump.index[~jump["is_split"] & ~jump["ref_ok"]]:
+        # 分割停牌可跨多個交易日，但複利範圍內的累積漲跌不能當成精確分割的證據。
+        for i in jump.index[~jump["is_split"] & ~jump["ref_ok"] & beyond]:
             row = jump.loc[i]
-            if not beyond.loc[i]:
-                k = np.arange(1, n_sess.loc[i] + 1)
-                limits = np.concatenate([(1 + row["lim"]) ** k, (1 - row["lim"]) ** k])
-                # 沿用價格帶的 0.5% 相對捨入餘裕：七次跌停取 tick 仍會命中，
-                # 1:2 鎖漲停的 0.55 與最近的 0.9^6 相差約 3.49%，則可保留。
-                if (np.abs(move.loc[i] / limits - 1) <= _LIMIT_BAND_SLACK).any():
-                    continue
             lo = np.nanmin([row["low"], row["open"], row["close"]])
             hi = np.nanmax([row["high"], row["open"], row["close"]])
             n = _limit_band_split(row["prev"], lo, hi, row["lim"])

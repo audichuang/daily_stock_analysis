@@ -160,16 +160,14 @@ def test_falls_back_to_observed_dates_when_calendar_raises(monkeypatch):
 
 @pytest.mark.parametrize("change", [0.0, None])
 @pytest.mark.parametrize("event_day", ["2024-03-18", "2024-03-20"])
-def test_suspended_half_split_locked_limit_up_inside_compounded_band(monkeypatch, change, event_day):
-    # 跨 6／8 場停牌：101 / 2 × 1.1 = 55.55，取到升降單位 55.5，仍須辨識 1:2。
+def test_suspended_half_split_locked_limit_up_inside_compounded_band_is_not_inferred(monkeypatch, change, event_day):
+    # 已知限制：跨 6／8 場停牌後 1:2 鎖漲停（55.5）落在複利範圍內，單看價格分不出它和
+    # 連續漲跌停；寧可漏記也不把歷史價整段乘 0.5，待接官方「變更面額恢復買賣」資料補上。
     bars = _history("2024-03-08", price=101.0) + [
         _bar("2024-03-08", 101.0, 101.0, 101.0, 101.0, 0.0),
         _bar(event_day, 55.5, 55.5, 55.5, 55.5, change),
     ]
-    row, = _run(monkeypatch, "6103", bars).to_dict("records")
-    assert row["kind"] == "split"
-    assert row["factor"] == 0.5
-    assert row["reference_price"] == 50.5
+    assert _run(monkeypatch, "6103", bars).empty
 
 
 @pytest.mark.parametrize("change", [0.0, None])
@@ -183,9 +181,9 @@ def test_seven_limit_downs_with_tick_rounding_are_not_an_event(monkeypatch, chan
     assert _run(monkeypatch, "6103", bars).empty
 
 
-@pytest.mark.parametrize("opened, is_split", [(47.65, False), (48.05, False), (47.55, True), (48.1, True)])
+@pytest.mark.parametrize("opened, is_split", [(47.65, False), (48.05, False), (47.55, False), (48.1, False)])
 def test_consecutive_limit_guard_has_small_relative_tolerance(monkeypatch, opened, is_split):
-    # 七次跌停理論價約 47.82969：相對誤差 0.5% 內拒收，外側仍可吸附唯一的 1:2。
+    # 七次跌停理論價約 47.82969 附近：落在複利範圍內一律不推導成分割（含捨入後的 47.55／48.1）。
     bars = _history("2024-03-08", price=100.0) + [
         _bar("2024-03-08", 100.0, 100.0, 100.0, 100.0, 0.0),
         _bar("2024-03-19", opened, opened, opened, opened, 0.0),
