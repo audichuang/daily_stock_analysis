@@ -98,7 +98,8 @@ class BacktestService:
             min_age_days = getattr(config, "backtest_min_age_days", 14)
 
         engine_version = self._engine_version(config)
-        fee_discount = float(getattr(config, "tw_broker_fee_discount", 1.0) or 1.0)
+        configured_fee_discount = getattr(config, "tw_broker_fee_discount", None)
+        fee_discount = 1.0 if configured_fee_discount is None else float(configured_fee_discount)
         neutral_band_pct = float(getattr(config, "backtest_neutral_band_pct", 2.0))
 
         eval_config = EvaluationConfig(
@@ -177,7 +178,8 @@ class BacktestService:
                     daily_identity is not None
                     and expected_start_date is not None
                     and not self._has_usable_entry_window(
-                        daily_window, analysis_date, phase, int(eval_window_days)
+                        daily_window, analysis_date, phase, int(eval_window_days),
+                        context_snapshot=analysis.context_snapshot,
                     )
                 ):
                     # 窗口不足或進場 K 棒缺開盤：補一次日線（save_daily_data 會 upsert open）。
@@ -197,7 +199,8 @@ class BacktestService:
                 level_anchor_date: Optional[date] = None
                 if daily_window is not None:
                     level_anchor_date, entry_bars = self._entry_window(
-                        daily_window, analysis_date, phase, int(eval_window_days)
+                        daily_window, analysis_date, phase, int(eval_window_days),
+                        context_snapshot=analysis.context_snapshot,
                     )
 
                 if (
@@ -306,7 +309,7 @@ class BacktestService:
 
         if raw_fallbacks:
             logger.warning(
-                "回测：%d 笔台股窗口无法还原、改用原始价（price_basis=raw）: %s",
+                "回測：%d 筆台股窗口無法還原、改用原始價（price_basis=raw）: %s",
                 sum(raw_fallbacks.values()),
                 raw_fallbacks,
             )
@@ -962,21 +965,35 @@ class BacktestService:
         analysis_date: date,
         phase: Optional[str],
         eval_window_days: int,
+        *,
+        context_snapshot: Any = None,
     ) -> Tuple[date, List[Any]]:
         """(停損停利的名目錨點日, 從進場 K 棒起算的窗口)。
 
         一般情況進場是錨點 K 棒的下一根開盤。盤中分析的錨點是前一個交易日，但分析
-        當下已看得到當天開盤，所以改成分析日之後的第一根開盤進場；沒有持久化 phase 的
-        舊紀錄維持預設（仍可能偷看半天，見 docs）。
+        當下已看得到當天開盤，所以改成分析日與持久化場次較晚者之後的第一根開盤進場。
+        場次日期缺失或無法解析時沿用分析日；沒有持久化 phase 的舊紀錄維持預設。
+        執行截止日與名目價格錨點分開，即時報價失敗時不改動原本的還原基準。
         """
         anchor = daily_window.start_bar.date
-        if phase in INTRADAY_ENTRY_GUARD_PHASES and analysis_date > anchor:
+        execution_cutoff = analysis_date
+        if phase in INTRADAY_ENTRY_GUARD_PHASES:
+            summary = extract_market_phase_summary(context_snapshot)
+            if summary:
+                for key in ("session_date", "market_local_time"):
+                    try:
+                        session_date = datetime.fromisoformat(str(summary.get(key) or "")).date()
+                    except ValueError:
+                        continue
+                    execution_cutoff = max(analysis_date, session_date)
+                    break
+        if phase in INTRADAY_ENTRY_GUARD_PHASES and execution_cutoff > anchor:
             bars = self.stock_repo.get_forward_bars(
                 code=daily_window.code,
-                analysis_date=analysis_date,
+                analysis_date=execution_cutoff,
                 eval_window_days=eval_window_days,
             )
-            return analysis_date, list(bars)
+            return max(anchor, analysis_date), list(bars)
         return anchor, list(daily_window.forward_bars)
 
     def _has_usable_entry_window(
@@ -985,10 +1002,14 @@ class BacktestService:
         analysis_date: date,
         phase: Optional[str],
         eval_window_days: int,
+        *,
+        context_snapshot: Any = None,
     ) -> bool:
         if daily_window is None:
             return False
-        _anchor, bars = self._entry_window(daily_window, analysis_date, phase, eval_window_days)
+        _anchor, bars = self._entry_window(
+            daily_window, analysis_date, phase, eval_window_days, context_snapshot=context_snapshot
+        )
         return len(bars) >= eval_window_days and is_valid_entry_open(getattr(bars[0], "open", None))
 
     def _try_fill_daily_data(self, *, code: str, analysis_date: date, eval_window_days: int) -> None:

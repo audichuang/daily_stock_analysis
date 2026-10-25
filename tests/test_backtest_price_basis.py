@@ -13,6 +13,10 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 from src.config import Config
 from src.core.backtest_engine import (
     BacktestEngine,
@@ -536,6 +540,133 @@ def test_service_premarket_analysis_enters_at_same_day_open(isolated_db):
     (row,) = _results(isolated_db, "600519")
     assert row.entry_date == D1
     assert row.start_price == 100.0
+
+
+@pytest.mark.parametrize("phase", ["intraday", "lunch_break", "closing_auction", "postmarket", "premarket"])
+@pytest.mark.parametrize("session_fields", [
+    {"session_date": "2026-10-26", "market_local_time": "2026-10-23T10:00:00+08:00"},
+    {"market_local_time": "2026-10-26T10:00:00+08:00"},
+    {"session_date": "invalid", "market_local_time": "2026-10-26T10:00:00+08:00"},
+])
+def test_service_entry_cutoff_uses_persisted_session_after_quote_failure(isolated_db, phase, session_fields):
+    anchor, session_day, next_day = date(2026, 10, 23), date(2026, 10, 26), date(2026, 10, 27)
+    history_id = _seed_history(isolated_db, code="2330.TW", analysis_date=anchor, phase=phase, effective_date=anchor)
+    with isolated_db.session_scope() as session:
+        history = session.get(AnalysisHistory, history_id)
+        snapshot = json.loads(history.context_snapshot)
+        snapshot["market_phase_summary"].update(session_fields)
+        history.context_snapshot = json.dumps(snapshot)
+    _seed_daily(isolated_db, "2330.TW", [
+        (anchor, 100.0, 101.0, 99.0, 100.0),
+        (session_day, 100.0, 101.0, 99.0, 100.0),
+        (next_day, 110.0, 111.0, 109.0, 110.0),
+        (date(2026, 10, 28), 110.0, 111.0, 109.0, 110.0),
+    ])
+    loader = _loader_from({anchor: 0.9})
+    service = BacktestService(isolated_db, factor_loader=loader)
+    with patch.object(service, "_try_fill_daily_data") as refill:
+        stats = _run(service, "2330.TW", window=2)
+
+    assert stats["completed"] == 1
+    refill.assert_not_called()
+    (row,) = _results(isolated_db, "2330.TW")
+    guarded = phase in {"intraday", "lunch_break", "closing_auction"}
+    assert row.entry_date == (next_day if guarded else session_day)
+    assert row.start_price == (110.0 if guarded else 100.0)
+    assert row.analysis_date == anchor
+    # 執行截止日不能取代停損停利的價格錨點，因子仍須讀取 10/23。
+    assert loader.calls == [("2330", [anchor, next_day, date(2026, 10, 28)] if guarded
+                            else [anchor, session_day, next_day])]
+
+
+@pytest.mark.parametrize("session_fields", [{}, {"session_date": "invalid", "market_local_time": "invalid"}])
+@pytest.mark.parametrize("analysis_date,expected_entry", [(ANCHOR, D1), (D1, D2)])
+def test_service_entry_cutoff_keeps_legacy_fallback(isolated_db, session_fields, analysis_date, expected_entry):
+    history_id = _seed_history(
+        isolated_db, code="600519", market="cn", analysis_date=analysis_date, phase="intraday"
+    )
+    with isolated_db.session_scope() as session:
+        history = session.get(AnalysisHistory, history_id)
+        snapshot = json.loads(history.context_snapshot)
+        snapshot["market_phase_summary"].update(session_fields)
+        history.context_snapshot = json.dumps(snapshot)
+    _seed_daily(isolated_db, "600519", [
+        (ANCHOR, 100.0, 101.0, 99.0, 100.0),
+        (D1, 100.0, 101.0, 99.0, 100.0),
+        (D2, 110.0, 111.0, 109.0, 110.0),
+    ])
+
+    stats = _run(BacktestService(isolated_db, factor_loader=_never_loader), "600519", window=1)
+
+    assert stats["completed"] == 1
+    (row,) = _results(isolated_db, "600519")
+    assert row.entry_date == expected_entry
+
+
+def test_service_entry_cutoff_keeps_later_analysis_date(isolated_db):
+    history_id = _seed_history(isolated_db, code="600519", market="cn", analysis_date=D2, phase="intraday")
+    with isolated_db.session_scope() as session:
+        history = session.get(AnalysisHistory, history_id)
+        snapshot = json.loads(history.context_snapshot)
+        snapshot["market_phase_summary"]["session_date"] = D1.isoformat()
+        history.context_snapshot = json.dumps(snapshot)
+    _seed_daily(isolated_db, "600519", [
+        (ANCHOR, 100.0, 101.0, 99.0, 100.0),
+        (D1, 100.0, 101.0, 99.0, 100.0),
+        (D2, 100.0, 101.0, 99.0, 100.0),
+        (D3, 110.0, 111.0, 109.0, 110.0),
+    ])
+
+    stats = _run(BacktestService(isolated_db, factor_loader=_never_loader), "600519", window=1)
+
+    assert stats["completed"] == 1
+    (row,) = _results(isolated_db, "600519")
+    assert row.entry_date == D3
+
+
+def test_service_entry_cutoff_checks_entry_open_before_refill(isolated_db):
+    history_id = _seed_history(isolated_db, code="600519", market="cn", phase="intraday")
+    with isolated_db.session_scope() as session:
+        history = session.get(AnalysisHistory, history_id)
+        snapshot = json.loads(history.context_snapshot)
+        snapshot["market_phase_summary"]["session_date"] = D1.isoformat()
+        history.context_snapshot = json.dumps(snapshot)
+    _seed_daily(isolated_db, "600519", [
+        (ANCHOR, 100.0, 101.0, 99.0, 100.0),
+        (D1, 100.0, 101.0, 99.0, 100.0),
+        (D2, None, 111.0, 109.0, 110.0),
+    ])
+    service = BacktestService(isolated_db, factor_loader=_never_loader)
+    with patch.object(service, "_try_fill_daily_data") as refill:
+        stats = _run(service, "600519", window=1)
+
+    refill.assert_called_once()
+    assert stats["insufficient"] == 1
+    assert stats["completed"] == 0
+    (row,) = _results(isolated_db, "600519")
+    assert row.eval_status == "insufficient_data"
+
+
+def test_service_broker_fee_discount_preserves_zero_and_defaults(isolated_db):
+    _seed_history(isolated_db, code="2330.TW")
+    _seed_daily(isolated_db, "2330.TW", EX_DIV_DAILY)
+    service = BacktestService(isolated_db, factor_loader=_loader_from(EX_DIV_MULTS))
+    returns = {}
+    for label, fields in [("zero", {"tw_broker_fee_discount": 0.0}),
+                          ("full", {"tw_broker_fee_discount": 1.0}),
+                          ("none", {"tw_broker_fee_discount": None}), ("missing", {})]:
+        with patch("src.services.backtest_service.get_config", return_value=SimpleNamespace(**fields)):
+            stats = service.run_backtest(code="2330.TW", force=True, eval_window_days=3, min_age_days=0)
+        assert stats["completed"] == 1
+        (row,) = _results(isolated_db, "2330.TW")
+        returns[label] = row.simulated_net_return_pct
+        assert row.stock_return_pct == pytest.approx(0.0)
+
+    assert returns["zero"] > returns["full"]
+    assert returns["zero"] == pytest.approx(((1 - 0.0015) * (1 - 0.003) / (1 + 0.0015) - 1) * 100)
+    expected_full = (STOCK_SELL_MULT / STOCK_BUY_MULT - 1) * 100
+    for label in ("full", "none", "missing"):
+        assert returns[label] == pytest.approx(expected_full)
 
 
 def test_service_factor_failure_falls_back_to_raw_and_completes(isolated_db):

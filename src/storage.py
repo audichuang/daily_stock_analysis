@@ -1658,7 +1658,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 elif self._engine.dialect.name == "postgresql":
                     self._ensure_postgres_orm_columns(table)
             except Exception as exc:
-                logger.error("回测欄位补齐失败（%s）: %s", table.name, exc)
+                logger.error("回測欄位補齊失敗（%s）: %s", table.name, exc)
 
     def _ensure_decision_signal_profile_schema(self) -> None:
         """Add and backfill nullable decision_profile for existing SQLite DBs."""

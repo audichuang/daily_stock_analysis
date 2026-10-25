@@ -1490,7 +1490,8 @@ Set the following variables in `.env` (all optional, have defaults):
 
 ### Entry and return basis
 
-- Entry is the **open** of the next trading session after the anchor bar (reports land around 18:00, so the anchor close is not tradable); intraday / lunch-break / closing-auction analyses enter after the analysis day. A missing entry open records `insufficient_data` after one refill attempt.
+- A 1-day window measures only the next eligible trading day's open-to-close return, excluding the overnight gap from the anchor close to the entry open.
+- Entry is the **open** of the next trading session after the anchor bar (reports land around 18:00, so the anchor close is not tradable); intraday / lunch-break / closing-auction analyses enter after the later of the analysis day and the persisted session date (`market_phase_summary.session_date`), so a failed realtime quote that leaves the analysis date on the previous session still cannot enter at an open already visible. A missing entry open records `insufficient_data` after one refill attempt.
 - Taiwan (`.TW`/`.TWO`) returns are dividend/split-adjusted from `market.price_adjustment` (`price_basis=adjusted`); if factors are unavailable or the window contains non-local bars the whole window falls back to raw prices (`price_basis=raw` with `adjustment_reason`); other markets are unchanged (`as_stored`). Stop/take fills are gap-aware.
 - Direction is classified on the adjusted gross return; Taiwan long positions also get a proportional `simulated_net_return_pct` (fee discount, transaction tax, two-sided slippage; excludes the minimum fee and NHI premium). Price fields stay raw.
 
