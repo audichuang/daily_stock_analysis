@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from market_data.adjust import load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
+from market_data.revenue_deadline import apply_revenue_deadline  # noqa: E402
 from screen_tw import exclude_otc_revenue  # noqa: E402
 from tw_trade_costs import round_trip_return  # noqa: E402
 
@@ -59,10 +60,13 @@ def load(engine, start, end, include_otc_revenue=False):
             "where date between :s and :e"), c,
             params={"s": hist, "e": end}, parse_dates=["date"])
         rv = pd.read_sql(text(
-            "select stock_id, announce_date as date, yoy from market.monthly_revenue "
+            "select stock_id, revenue_month, announce_date as date, yoy from market.monthly_revenue "
             "where announce_date between :s and :e and yoy is not null"), c,
-            params={"s": hist, "e": end}, parse_dates=["date"])
+            params={"s": hist, "e": end}, parse_dates=["date", "revenue_month"])
         info = pd.read_sql(text("select stock_id, industry, name from market.stock_info"), c)
+    # DB 公告日是佔位「次月 10 日」：套共用的法定期限（2020-01 展延、2026 起保險類 15 日），
+    # 下游 pit_revenue_panel 的「公告日之後第一個交易日」語意不變；live 篩選不套。
+    rv = apply_revenue_deadline(rv)
     if not include_otc_revenue:  # 與 live `screen_tw.load()` 同口徑，理由見 exclude_otc_revenue
         rv = exclude_otc_revenue(rv)
     for col in ("open", "high", "close", "volume", "turnover"):

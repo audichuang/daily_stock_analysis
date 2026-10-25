@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 回測的月營收可見日不再早於法定公告期限：期限規則集中到 `market_data/revenue_deadline.py`（一般次月 10 日；2020-01 營收全面展延至 2/15；依《公開發行公司財務報告及營運情形公告申報特殊適用範圍辦法》第 3 條，2026-01 營收起保險業及具保險子公司者放寬至 15 日，保守口徑為 28xx 全部加 5880、2207），`backtest_screen`、`measure_signal_forward`（含 `portfolio_walkforward`、`measure_market_regime`）、`measure_revenue_momentum` 讀取時一律取「DB 公告日」與期限較晚者，可見日仍是其後第一個交易日；DB announce_date 維持次月 10 日佔位不變（寫入端不變），live 篩選 `screen_tw` 與 dossier 不受影響
 - [修復] `REPORT_LANGUAGE=zh-TW` 時繁體操作建議（「觀望」「買入」「規避」「風險預警」「不建議買入」「暫不加倉」等）`normalize_decision_action()` 一律回 None，護欄改寫後的結果因此不寫 DecisionSignal；`_normalize_key` 改為先逐字折成簡體再比對（否定片語照樣優先），折疊表從 `BacktestEngine._TRAD_TO_SIMP` 搬到共用的 `src/utils/zh_fold.py`、兩邊同用一份，並補上片語表需要的字（風險預觸發規佈迴，「迴避」折成「回避」）
 - [修復] 買入區分數的持有結論未命中買入降級時，仍套用原本的洗盤／區間文字細化並保留結構護欄理由，避免支撐附近回跌被最終分數對齊誤升為買入；符合降級條件與上漲流入的既有行為不變
 - [修復] 大盤高風險、交易成本與資金流／結構護欄對 `decision_type=hold` 但分數落在共用買入區間（≥60，例如 68）的結論也會觸發壓分並寫入 `guardrail_reason`，且一併清掉已被分數對齊升成買入的殘留 `action`，不再於高風險日發出「買入」；`sell` 與觀望區分數（40–59）的 hold 維持不動

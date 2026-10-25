@@ -67,6 +67,7 @@ def transform_ex_dividend(df):
 
 
 def transform_monthly_revenue(df):
+    # announce_date 維持次月 10 日佔位不變；法定期限由回測讀取端（revenue_deadline）套用
     announce = pd.to_datetime(df["date"])
     revenue_month = announce.dt.to_period("M").dt.to_timestamp() - pd.DateOffset(months=1)
     out = pd.DataFrame({

@@ -120,3 +120,18 @@ def test_correct_pit_dates_moves_only_the_extended_month():
     assert out["date"].tolist() == [pd.Timestamp("2020-02-15"), pd.Timestamp("2020-03-10"),
                                     pd.Timestamp("2026-10-10")]
     assert rv["date"].iloc[0] == pd.Timestamp("2020-02-10")  # 不改到輸入
+
+
+def test_correct_pit_dates_moves_2026_financial_stock_to_15th():
+    rv = pd.DataFrame({
+        "stock_id": ["2881", "2330", "5880", "2881"],
+        "date": pd.to_datetime(["2026-04-10", "2026-04-10", "2026-02-10", "2025-12-10"]),
+        "yoy": [10.0, 20.0, 15.0, 12.0],
+    })
+    out = correct_pit_dates(rv)
+    assert out["date"].tolist() == [
+        pd.Timestamp("2026-04-15"),
+        pd.Timestamp("2026-04-10"),
+        pd.Timestamp("2026-02-15"),
+        pd.Timestamp("2025-12-10"),
+    ]

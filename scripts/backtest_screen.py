@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from market_data.adjust import load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
+from market_data.revenue_deadline import apply_revenue_deadline  # noqa: E402
 from screen_tw import exclude_otc_revenue  # noqa: E402
 from tw_trade_costs import (  # noqa: E402
     BROKER_FEE_RATE as FEE_RATE,
@@ -112,9 +113,12 @@ def load_panel(engine, start, end, include_otc_revenue=False):
         # 用 announce_date 而非 revenue_month 對齊——營收在次月 10 日前才公布，
         # 用所屬月份會讓策略提前看到還沒發布的數字。
         rev = pd.read_sql(text(
-            "select stock_id, announce_date as date, yoy from market.monthly_revenue "
+            "select stock_id, revenue_month, announce_date as date, yoy from market.monthly_revenue "
             "where announce_date between :s and :e and yoy is not null"
-        ), c, params={"s": hist_start, "e": end}, parse_dates=["date"])
+        ), c, params={"s": hist_start, "e": end}, parse_dates=["date", "revenue_month"])
+    # DB 公告日是佔位「次月 10 日」，不含展延與 2026 起保險類 15 日期限；回測讀取端
+    # 一律套共用的法定期限（market_data.revenue_deadline），live 篩選不套。
+    rev = apply_revenue_deadline(rev)
     if not include_otc_revenue:  # 與 live `screen_tw.load()` 同口徑，理由見 exclude_otc_revenue
         rev = exclude_otc_revenue(rev)
     for col in ("open", "high", "low", "close", "turnover", "pe_ratio"):
