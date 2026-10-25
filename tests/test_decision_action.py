@@ -431,3 +431,87 @@ def test_display_helpers_preserve_neutral_action_when_guardrail_was_applied() ->
     assert display_action_fields_for_result(result) == {"action": "hold", "action_label": "Hold"}
     assert display_operation_advice_for_result(result) == "Hold"
     assert display_decision_type_for_result(result) == "hold"
+
+
+# H1：REPORT_LANGUAGE=zh-TW 時建議文字是繁體，片語表是簡體；要先逐字折成簡體才比得到。
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("強烈買入", "buy"),
+        ("買入", "buy"),
+        ("佈局", "buy"),
+        ("建倉", "buy"),
+        ("加倉", "add"),
+        ("持有觀察", "hold"),
+        ("洗盤觀察", "hold"),
+        ("觀望", "watch"),
+        ("減倉", "reduce"),
+        ("賣出", "sell"),
+        ("強烈賣出", "sell"),
+        ("清倉", "sell"),
+        ("規避", "avoid"),
+        ("迴避", "avoid"),
+        ("風險預警", "alert"),
+        ("觸發告警", "alert"),
+        # 否定片語仍要贏過裡面的動作詞
+        ("不建議買入", "avoid"),
+        ("暫不買入", "avoid"),
+        ("不宜買入", "avoid"),
+        ("無須買入", "avoid"),
+        ("暫不佈局", "avoid"),
+        ("無須建倉", "avoid"),
+        ("暫不加倉", "hold"),
+        ("無須加倉", "hold"),
+        ("不建議加倉", "hold"),
+        ("不建議賣出", "hold"),
+        ("暫不減倉", "hold"),
+        ("無須清倉", "hold"),
+        ("無需加倉", "hold"),
+        ("無需減倉", "hold"),
+        ("不建議減倉", "hold"),
+        ("不建議清倉", "hold"),
+        ("暫不清倉", "hold"),
+        ("不建議佈局", "avoid"),
+        ("無需佈局", "avoid"),
+        ("不建議建倉", "avoid"),
+        ("暫不建倉", "avoid"),
+    ],
+)
+def test_normalize_decision_action_traditional_chinese(value: str, expected: str) -> None:
+    assert normalize_decision_action(value) == expected
+
+
+@pytest.mark.parametrize("value", ["買入或賣出", "加倉後減倉"])
+def test_normalize_decision_action_traditional_conflicts_stay_none(value: str) -> None:
+    # 反向檢查：折疊不能讓互相衝突的繁體建議被硬判成某個動作
+    assert normalize_decision_action(value) is None
+
+
+def test_normalize_decision_action_traditional_matches_every_simplified_phrase() -> None:
+    from src.schemas import decision_action as module
+    from src.utils.zh_fold import TRAD_TO_SIMP
+
+    simp_to_trad = {chr(simp): chr(trad) for trad, simp in TRAD_TO_SIMP.items()}
+    phrase_tables = list(module._ACTION_PHRASES.values()) + list(module._NEGATED_ACTION_PHRASES.values())
+    checked = 0
+    for phrases in phrase_tables:
+        for phrase in phrases:
+            traditional = "".join(simp_to_trad.get(ch, ch) for ch in phrase)
+            if traditional == phrase:
+                continue
+            checked += 1
+            assert normalize_decision_action(traditional) == normalize_decision_action(phrase), phrase
+    assert checked > 20
+
+
+def test_decision_action_and_backtest_share_one_fold_table() -> None:
+    from src.core.backtest_engine import BacktestEngine
+    from src.utils.zh_fold import TRAD_TO_SIMP
+
+    assert BacktestEngine._TRAD_TO_SIMP is TRAD_TO_SIMP
+
+
+def test_build_action_fields_traditional_advice_for_zh_tw_report() -> None:
+    fields = build_action_fields(operation_advice="觀望", report_language="zh-TW")
+
+    assert fields == {"action": "watch", "action_label": "觀望"}

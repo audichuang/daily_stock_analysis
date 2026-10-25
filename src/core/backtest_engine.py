@@ -13,6 +13,8 @@ import math
 import re
 from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence
 
+from src.utils.zh_fold import TRAD_TO_SIMP
+
 
 OVERALL_SENTINEL_CODE = "__overall__"
 
@@ -93,10 +95,8 @@ class BacktestEngine:
 
     # Traditional -> simplified for every character the keyword tables use, so
     # TW advice such as "減碼" / "賣出" matches the simplified keywords.
-    _TRAD_TO_SIMP = str.maketrans(
-        "買賣減倉碼強觀盤盪蕩議應當暫無須別沒進",
-        "买卖减仓码强观盘荡荡议应当暂无须别没进",
-    )
+    # 表本身在 src/utils/zh_fold.py，與 DecisionAction 正規化共用同一份。
+    _TRAD_TO_SIMP = TRAD_TO_SIMP
 
     # Negation prefixes (trailing spaces stripped for suffix-matching against prefix text).
     # English patterns include trailing space in their canonical form; rstrip is

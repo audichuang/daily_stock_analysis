@@ -17,6 +17,7 @@ from src.schemas.decision_scale import (
     extract_decision_guardrail_reason,
     score_action_conflicts_without_guardrail,
 )
+from src.utils.zh_fold import fold_traditional
 
 DecisionAction = Literal["buy", "add", "hold", "reduce", "sell", "watch", "avoid", "alert"]
 
@@ -236,7 +237,10 @@ _FINANCIAL_COMPOUND_SENTINEL = "financialcompound"
 
 
 def _normalize_key(value: Any) -> str:
-    return str(value or "").strip().lower().replace("_", " ").replace("-", " ")
+    # 片語表都是簡體；zh-TW 建議（「觀望」「不建議買入」）先逐字折成簡體再比對，
+    # 否則整段落空回 None，護欄改寫後的結果就寫不出 DecisionSignal。
+    text = str(value or "").strip().lower().replace("_", " ").replace("-", " ")
+    return fold_traditional(text)
 
 
 def _mask_english_financial_compounds(text: str) -> str:
