@@ -93,6 +93,12 @@ def crawl_price(date):
     content = "\n".join(lines)
     if content == "":
         return None
+    # 第一行標題自帶民國資料日（``115年10月22日 價格指數(臺灣證券交易所)``），
+    # 不等於請求日就拒收、讓 resume 之後重試（官方會回 200 卻是別天的表）。
+    # sources 在 import 期就依賴本模組，只能延遲 import。
+    from market_data.sources import _title_date_matches
+    if not _title_date_matches(r.text, date, "MI_INDEX"):
+        return None
 
     df = pd.read_csv(StringIO(content))
     df = df.astype(str).apply(lambda s: s.str.replace(",", ""))

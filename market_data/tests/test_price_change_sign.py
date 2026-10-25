@@ -35,6 +35,10 @@ _ROWS = [
 ]
 
 
+# 第一行標題自帶資料日，crawl_price 會核對它等於請求日（審查 M3）。
+_TITLE = '"115年08月21日 價格指數(臺灣證券交易所)"'
+
+
 class _Resp:
     def __init__(self, text):
         self.text = text
@@ -44,7 +48,7 @@ class _Resp:
 def _crawl(monkeypatch):
     monkeypatch.setattr(
         crawler, "_request",
-        lambda *a, **k: _Resp("\n".join(["表頭雜訊", _HEADER, *_ROWS])),
+        lambda *a, **k: _Resp("\n".join([_TITLE, _HEADER, *_ROWS])),
     )
     return crawler.crawl_price(date(2026, 8, 21))
 
