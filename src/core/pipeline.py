@@ -2407,9 +2407,8 @@ class StockAnalysisPipeline:
         score = getattr(result, "sentiment_score", None)
         if action_for_score(score) == "buy" and (
             str(getattr(result, "decision_type", None) or "").strip().lower() == "sell"
-            or advice_action in {"sell", "reduce", "avoid", "watch"}
         ):
-            # 非買入原意優先於分數，並清掉先前已被對齊成買入／加倉的動作。
+            # 僅結構化賣出決策阻擋買入區分數升級，沿用非買入建議動作，否則退回觀望。
             result.action = advice_action if advice_action and advice_action not in {"buy", "add"} else "watch"
             result.action_label = None
             if not record_contradiction:
@@ -2421,10 +2420,10 @@ class StockAnalysisPipeline:
                 result.dashboard = {}
             language = normalize_report_language(getattr(result, "report_language", "zh"))
             reason = {
-                "zh": "决策或操作建议与买入分数矛盾，保留非买入动作，禁止升为买入或加仓。",
-                "zh-TW": "決策或操作建議與買入分數矛盾，保留非買入動作，禁止升為買入或加倉。",
-                "en": "Decision or advice conflicts with the buy-band score; preserve a non-buy action instead of buy/add.",
-                "ko": "결정 또는 조언이 매수 구간 점수와 모순되어 매수나 추가 매수 대신 비매수 행동을 유지합니다.",
+                "zh": "卖出决策与买入区分数矛盾，保留非买入动作，禁止升为买入或加仓。",
+                "zh-TW": "賣出決策與買入區分數矛盾，保留非買入動作，禁止升為買入或加倉。",
+                "en": "Sell decision conflicts with the buy-band score; preserve a non-buy action instead of buy/add.",
+                "ko": "매도 결정이 매수 구간 점수와 모순되어 매수나 추가 매수 대신 비매수 행동을 유지합니다.",
             }[language]
             record_guardrail_score_adjustment(
                 result.dashboard,

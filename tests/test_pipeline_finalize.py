@@ -104,6 +104,15 @@ def _finalize_public_action(result, *, artifacts=None, snapshot_context=None):
 
 @pytest.mark.parametrize("initial_action", [None, "buy", "add"])
 @pytest.mark.parametrize(
+    "report_language, expected_reason",
+    [
+        ("zh", "卖出决策与买入区分数矛盾，保留非买入动作，禁止升为买入或加仓。"),
+        ("zh-TW", "賣出決策與買入區分數矛盾，保留非買入動作，禁止升為買入或加倉。"),
+        ("en", "Sell decision conflicts with the buy-band score; preserve a non-buy action instead of buy/add."),
+        ("ko", "매도 결정이 매수 구간 점수와 모순되어 매수나 추가 매수 대신 비매수 행동을 유지합니다."),
+    ],
+)
+@pytest.mark.parametrize(
     "decision_type, advice, expected_action, high_risk",
     [
         ("sell", "觀望", "watch", False),
@@ -111,19 +120,17 @@ def _finalize_public_action(result, *, artifacts=None, snapshot_context=None):
         ("sell", "观望", "watch", False),
         ("sell", "持有", "hold", False),
         ("sell", "买入", "watch", False),
+        ("sell", "加倉", "watch", False),
         ("sell", "", "watch", False),
-        ("buy", "减仓", "reduce", False),
-        ("hold", "卖出", "sell", False),
-        ("hold", "回避", "avoid", False),
-        ("hold", "觀望", "watch", False),
+        (" SELL ", "觀望", "watch", False),
     ],
 )
 def test_finalize_contradictory_non_buy_never_publishes_buy(
-    decision_type, advice, expected_action, initial_action, high_risk,
+    decision_type, advice, expected_action, initial_action, high_risk, report_language, expected_reason,
 ):
     result = _result(
         decision_type=decision_type, operation_advice=advice,
-        sentiment_score=68, action=initial_action,
+        sentiment_score=68, action=initial_action, report_language=report_language,
     )
     snapshot = {"daily_market_context": {"risk_tags": ["high_risk"]}} if high_risk else {}
 
@@ -133,7 +140,6 @@ def test_finalize_contradictory_non_buy_never_publishes_buy(
     assert display_action_fields_for_result(result)["action"] == expected_action
     assert result.sentiment_score == saved.sentiment_score == 68
     calibration = saved.dashboard["decision_score_calibration"]
-    expected_reason = "决策或操作建议与买入分数矛盾，保留非买入动作，禁止升为买入或加仓。"
     assert calibration["guardrail_reason"] == expected_reason
     assert signal["metadata"]["guardrail_reason"] == expected_reason
     assert raw_decision(saved.to_dict())["downgraded"] is False
@@ -141,6 +147,30 @@ def test_finalize_contradictory_non_buy_never_publishes_buy(
     assert "adjusted_score" not in calibration
     assert "raw_decision_type" not in calibration
     assert calibration["final_action"] == expected_action
+
+
+@pytest.mark.parametrize("initial_action", [None, "buy", "add"])
+@pytest.mark.parametrize("decision_type", ["hold", "buy", None])
+@pytest.mark.parametrize(
+    "advice, aligned_action",
+    [("觀望", "buy"), ("減倉", "reduce"), ("回避", "avoid"), ("賣出", "sell")],
+)
+def test_finalize_non_sell_follows_score_alignment_without_contradiction(
+    decision_type, advice, aligned_action, initial_action,
+):
+    result = _result(
+        decision_type=decision_type, operation_advice=advice,
+        sentiment_score=68, action=initial_action,
+    )
+
+    saved, signal = _finalize_public_action(result)
+
+    expected_action = initial_action or aligned_action
+    assert result.action == saved.action == signal["action"] == expected_action
+    assert display_action_fields_for_result(result)["action"] == expected_action
+    assert result.sentiment_score == saved.sentiment_score == 68
+    assert not signal["metadata"].get("guardrail_reason")
+    assert "decision_score_calibration" not in (saved.dashboard or {})
 
 
 def test_finalize_normal_buy_band_buy_still_publishes_buy():
