@@ -54,6 +54,31 @@ def test_6103_two_limit_downs_across_untraded_session_is_not_an_event(monkeypatc
     assert _run(monkeypatch, "6103", bars).empty
 
 
+@pytest.mark.parametrize("opened, event_day", [
+    (54.0, "2024-03-18"), (48.0, "2024-03-19"), (53.0, "2024-03-18"),
+])
+def test_multi_session_limit_locked_legal_decline_is_not_an_event(monkeypatch, opened, event_day):
+    # 分別跨 6、7、6 個交易日的合法累積跌幅，不可被價格帶吸附成 1:2 分割。
+    bars = _history("2024-03-08", price=100.0) + [
+        _bar("2024-03-08", 100.0, 100.0, 100.0, 100.0, 0.0),
+        _bar(event_day, opened, opened, opened, opened, 0.0),
+    ]
+    assert _run(monkeypatch, "6103", bars).empty
+
+
+@pytest.mark.parametrize("opened, event_day", [(48.0, "2024-03-18"), (53.0, "2024-03-15")])
+def test_multi_session_limit_locked_gap_beyond_band_remains_inferred(monkeypatch, opened, event_day):
+    # 6 個交易日跌到 48、5 個交易日跌到 53 皆超過複利門檻，但不足以證明精確的 1:2 分割。
+    bars = _history("2024-03-08", price=100.0) + [
+        _bar("2024-03-08", 100.0, 100.0, 100.0, 100.0, 0.0),
+        _bar(event_day, opened, opened, opened, opened, 0.0),
+    ]
+    row, = _run(monkeypatch, "6103", bars).to_dict("records")
+    assert row["kind"] == "inferred"
+    assert row["factor"] == pytest.approx(opened / 100.0)
+    assert row["reference_price"] == pytest.approx(opened)
+
+
 def test_non_session_days_do_not_widen_the_band(monkeypatch):
     # 同樣 -16.9%，但中間只隔週末（非交易日）：n=1，仍是單日門檻 → 推導
     bars = _history("2024-03-08", price=38.45) + [

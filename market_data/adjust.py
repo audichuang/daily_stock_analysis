@@ -124,24 +124,24 @@ _LIMIT_BAND_SLACK = 0.005
 
 
 def _limit_band_split(prev, low, high, lim):
-    """change 不可用時，找唯一（或最貼近）的 1/N 參考價，使當日 [low, high] 全落在其漲跌停帶內。
+    """change 不可用時，找唯一的 1/N 參考價，使當日 [low, high] 全落在其漲跌停帶內。
 
     面額分割首日常一開盤就鎖漲／跌停（6919 2025-07-21 1:10：參考價 121.5、整天鎖漲停 133.5、
     change 存成 0），此時退回開盤價當參考價會得到 0.1099，離 1/10 達 9.9%，過不了
     ``SPLIT_TOLERANCE``。但普通股當日成交價不可能超出參考價 ±限制，所以「[low, high]
-    塞得進 prev/N 的漲跌停帶」本身就是比例證據。回傳 N；沒有任何 N 符合回 None。
+    塞得進 prev/N 的漲跌停帶」本身就是比例證據。回傳 N；沒有或多個 N 符合回 None。
     """
     if not (prev > 0 and low > 0 and high >= low):
         return None
-    best, best_dist = None, None
+    matched = None
     for n in SPLIT_RATIOS:
         ref = prev / n
         if (low >= ref * (1 - lim) * (1 - _LIMIT_BAND_SLACK)
                 and high <= ref * (1 + lim) * (1 + _LIMIT_BAND_SLACK)):
-            dist = abs(np.log((low + high) / 2 / ref))
-            if best_dist is None or dist < best_dist:
-                best, best_dist = n, dist
-    return best
+            if matched is not None:
+                return None
+            matched = n
+    return matched
 
 
 def _session_index(lo, hi, observed, is_session=None):
@@ -277,11 +277,12 @@ def infer_rows(conn, known, start, is_session=None):
     `close/prev_close`，數學上強制把事件日報酬變成 0，等於把公司行動與當日市場報酬
     一起抹掉（獨立審查指出，每筆可錯 ±10%）。改用開盤價後，事件日的盤中漲跌得以保留。
 
-    **門檻按兩根 K 之間的交易日數 n 複利**：(1+限制)^n／(1-限制)^n。該檔中間幾個交易日
+    **門檻按兩根 K 之間的交易日數 n 複利**：(1+限制×1.1)^n／(1-限制×1.1)^n。該檔中間幾個交易日
     沒成交（例如鎖跌停無量）時，連續兩根 K 之間可以合法地累積多個漲跌停——6103
     2024-03-08 收 38.45、03-11 無成交、03-12 開 31.95 是兩根合法跌停，舊版單日門檻把它
     存成因子 0.901，推導列裡約 519/529 筆是這種假事件。吸附到精確 1/N（或 N 倍）的跳空
     不受複利門檻限制（減資／分割停止買賣期間參考價不會逐日累積），仍沿用單日門檻。
+    價格帶吸附僅限相鄰交易日，且只有唯一的 1/N 價格帶符合時才採用。
     ``is_session`` 為 ``date -> bool``，預設取 ``health`` 的 XTAI 日曆（見 ``_session_index``）。
     """
     # 多讀 60 天再往前算 seq/gap：查詢先截在 `start` 的話，任何**既有**股票在起點後的
@@ -335,20 +336,21 @@ def infer_rows(conn, known, start, is_session=None):
     snapped = jump["factor"].map(_snap_to_split)
     jump["factor"] = snapped.map(lambda s: s[0])
     jump["is_split"] = snapped.map(lambda s: s[1])
-    # change 不可用（缺值或 0 佔位）而退回開盤價時，鎖漲跌停的分割首日開盤價本身就離參考價
-    # 達一個漲跌幅，吸附不到 1/N；改看當日 [low, high] 是否落在某個 prev/N 的漲跌停帶內。
-    for i in jump.index[~jump["is_split"] & ~jump["ref_ok"]]:
-        row = jump.loc[i]
-        lo = np.nanmin([row["low"], row["open"], row["close"]])
-        hi = np.nanmax([row["high"], row["open"], row["close"]])
-        n = _limit_band_split(row["prev"], lo, hi, row["lim"])
-        if n is not None:
-            jump.loc[i, ["factor", "ref"]] = [1 / n, row["prev"] / n]
-            jump.loc[i, "is_split"] = True
-    # 複利門檻：非比例跳空要超過 n 個交易日累積的漲跌停才算公司行動。
     if len(jump):
         sessions = _session_index(px["date"].min(), px["date"].max(), px["date"], is_session)
         n_sess = _sessions_between(jump["prev_date"], jump["date"], sessions)
+        # change 不可用（缺值或 0 佔位）而退回開盤價時，鎖漲跌停的分割首日開盤價本身就離參考價
+        # 達一個漲跌幅，吸附不到 1/N；改看當日 [low, high] 是否落在某個 prev/N 的漲跌停帶內。
+        # 僅限相鄰交易日：跨多個交易日的累積漲跌不能當成精確分割的證據。
+        for i in jump.index[~jump["is_split"] & ~jump["ref_ok"] & (n_sess == 1)]:
+            row = jump.loc[i]
+            lo = np.nanmin([row["low"], row["open"], row["close"]])
+            hi = np.nanmax([row["high"], row["open"], row["close"]])
+            n = _limit_band_split(row["prev"], lo, hi, row["lim"])
+            if n is not None:
+                jump.loc[i, ["factor", "ref"]] = [1 / n, row["prev"] / n]
+                jump.loc[i, "is_split"] = True
+        # 複利門檻：非比例跳空要超過 n 個交易日累積的漲跌停才算公司行動。
         lim_n = jump["lim"].to_numpy() * 1.1
         move = jump["open"] / jump["prev"]
         beyond = (move > (1 + lim_n) ** n_sess) | (move < (1 - lim_n) ** n_sess)

@@ -83,12 +83,15 @@ def test_band_snap_only_tries_one_over_n(opened):
     assert row["factor"] == opened / 100.0
 
 
-def test_ambiguous_band_chooses_closest_ratio():
-    row, = _infer(_prices(previous=800.0, opened=105.0)).to_dict("records")
-    # 1/7 與 1/8 的價格帶皆可容納 105，開盤比率較接近 1/8。
-    assert row["factor"] == 0.125
-    assert row["reference_price"] == 100.0
-    assert row["kind"] == "split"
+@pytest.mark.parametrize("previous, opened", [
+    (300.0, 110.0), (100.0, 36.0), (800.0, 110.0), (1000.0, 180.0), (800.0, 105.0),
+])
+def test_ambiguous_band_does_not_snap_to_exact_split(previous, opened):
+    # 多個 1/N 價格帶重疊時，離開盤價最近的比例不一定是真分割比例。
+    row, = _infer(_prices(previous=previous, opened=opened)).to_dict("records")
+    assert row["kind"] == "inferred"
+    assert row["factor"] == pytest.approx(opened / previous)
+    assert row["reference_price"] == opened
 
 
 def test_existing_tolerance_path_still_accepts_missing_high_low():
