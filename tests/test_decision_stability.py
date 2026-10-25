@@ -6,10 +6,15 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 import src.analyzer as analyzer_module
 from src.analyzer import AnalysisResult, _capital_flow_bias, stabilize_decision_with_structure
 from src.schemas.decision_action import build_action_fields
 from src.schemas.decision_scale import extract_decision_guardrail_reason
+from src.services.decision_signal_extractor import resolve_decision_signal_action_fields
 
 
 def _result(
@@ -293,6 +298,44 @@ def _tw_context(foreign: float, trust: float, inst_status: str = "ok", inst_date
 
 
 _LEVELS = SimpleNamespace(support_levels=[30.0], resistance_levels=[34.0])
+
+
+@pytest.mark.parametrize("main_inflow", [1_000_000, 0], ids=["inflow", "neutral"])
+def test_guardrail_buy_band_hold_shakeout_survives_decision_action_finalization(main_inflow) -> None:
+    result = _result(
+        decision_type="hold",
+        operation_advice="持有",
+        score=68,
+        current_price=30.5,
+        change_pct=-1.6,
+    )
+
+    stabilize_decision_with_structure(result, _LEVELS, _fund_flow(main=main_inflow))
+    fields = resolve_decision_signal_action_fields(result, report_type="daily")
+
+    assert fields["action"] == "hold"
+    assert result.dashboard["decision_stability"]["reason"]
+    assert result.operation_advice == "洗盘观察"
+    assert result.sentiment_score == 68
+
+
+@pytest.mark.parametrize("current_price", [30.5, 32.0], ids=["near_support", "mid_range"])
+def test_guardrail_buy_band_hold_without_shakeout_finalizes_decision_action_buy(current_price) -> None:
+    result = _result(
+        decision_type="hold",
+        operation_advice="持有",
+        score=68,
+        current_price=current_price,
+        change_pct=1.0,
+    )
+
+    stabilize_decision_with_structure(result, _LEVELS, _fund_flow(main=1_000_000))
+    fields = resolve_decision_signal_action_fields(result, report_type="daily")
+
+    assert fields["action"] == "buy"
+    assert not result.dashboard.get("decision_stability", {}).get("reason")
+    assert result.operation_advice == "持有"
+    assert result.sentiment_score == 68
 
 
 @pytest.mark.usefixtures("tw_institution_path")

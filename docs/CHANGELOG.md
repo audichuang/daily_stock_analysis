@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 - [修復] `REPORT_LANGUAGE=zh-TW` 時繁體操作建議（「觀望」「買入」「規避」「風險預警」「不建議買入」「暫不加倉」等）`normalize_decision_action()` 一律回 None，護欄改寫後的結果因此不寫 DecisionSignal；`_normalize_key` 改為先逐字折成簡體再比對（否定片語照樣優先），折疊表從 `BacktestEngine._TRAD_TO_SIMP` 搬到共用的 `src/utils/zh_fold.py`、兩邊同用一份，並補上片語表需要的字（風險預觸發規佈迴，「迴避」折成「回避」）
+- [修復] 買入區分數的持有結論未命中買入降級時，仍套用原本的洗盤／區間文字細化並保留結構護欄理由，避免支撐附近回跌被最終分數對齊誤升為買入；符合降級條件與上漲流入的既有行為不變
 - [修復] 大盤高風險、交易成本與資金流／結構護欄對 `decision_type=hold` 但分數落在共用買入區間（≥60，例如 68）的結論也會觸發壓分並寫入 `guardrail_reason`，且一併清掉已被分數對齊升成買入的殘留 `action`，不再於高風險日發出「買入」；`sell` 與觀望區分數（40–59）的 hold 維持不動
 - [修復] `portfolio_codes.py` 改為純 SQLAlchemy 唯讀 SELECT 重播持股數量，不再建 `PortfolioService`／`DatabaseManager`（其初始化會對正式應用庫 create_all、寫遷移紀錄、ALTER TABLE）；`verify_media_picks` 命中一律用毛超額（看空均值也用毛，避免 0.3% vs 0.1% 稅差把沒動的股票算成看空命中）、research−avoid 差與講者紀錄同樣要求進場日 ≥5 天（`media_picks_judge` 同步）；簡報標題改「最近一輪媒體點名」、壞 `date` 的 verdict 列略過、持股擷取只取 stdout 最後一行
 - [新功能] 07:30 盤前判讀自動帶入昨晚的媒體點名判斷：新增唯讀的 `scripts/media_picks_brief.py`（讀 `journal/media-picks-verdicts.jsonl` 最近一輪，列出持股相關（avoid 優先）、research、watch 的翻轉條件與避開名單；超過 4 天印已過期、持股清單取不到照印），`make morning` 以 `@-` 接在待觸發計畫之後，`tw-morning-call` skill 補上用法（只當線索，不是買進訊號）

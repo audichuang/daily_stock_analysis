@@ -1207,40 +1207,40 @@ def stabilize_decision_with_structure(
 
         has_significant_risk = _has_structural_risk_alert(result)
 
-        if is_buy_decision:
-            if near_resistance and flow_bias != "inflow":
-                _downgrade_to_structural_hold(
-                    result,
-                    language,
-                    advice_key="range",
-                    reason_key="buy_near_resistance",
-                    current_price=current_price,
-                    support=support,
-                    resistance=resistance,
-                    flow_bias=flow_bias,
-                )
-            elif flow_bias == "outflow" and not breakout:
-                _downgrade_to_structural_hold(
-                    result,
-                    language,
-                    advice_key="range",
-                    reason_key="buy_with_outflow",
-                    current_price=current_price,
-                    support=support,
-                    resistance=resistance,
-                    flow_bias=flow_bias,
-                )
-            elif mid_range and flow_bias == "neutral":
-                _downgrade_to_structural_hold(
-                    result,
-                    language,
-                    advice_key="range",
-                    reason_key="hold_mid_range",
-                    current_price=current_price,
-                    support=support,
-                    resistance=resistance,
-                    flow_bias=flow_bias,
-                )
+        # 買入護欄未命中時，持有結論仍須繼續原本的洗盤／區間文字細化。
+        if is_buy_decision and near_resistance and flow_bias != "inflow":
+            _downgrade_to_structural_hold(
+                result,
+                language,
+                advice_key="range",
+                reason_key="buy_near_resistance",
+                current_price=current_price,
+                support=support,
+                resistance=resistance,
+                flow_bias=flow_bias,
+            )
+        elif is_buy_decision and flow_bias == "outflow" and not breakout:
+            _downgrade_to_structural_hold(
+                result,
+                language,
+                advice_key="range",
+                reason_key="buy_with_outflow",
+                current_price=current_price,
+                support=support,
+                resistance=resistance,
+                flow_bias=flow_bias,
+            )
+        elif is_buy_decision and mid_range and flow_bias == "neutral":
+            _downgrade_to_structural_hold(
+                result,
+                language,
+                advice_key="range",
+                reason_key="hold_mid_range",
+                current_price=current_price,
+                support=support,
+                resistance=resistance,
+                flow_bias=flow_bias,
+            )
         elif decision_type == "sell":
             if near_support and (flow_bias != "outflow") and not has_significant_risk:
                 _downgrade_to_structural_hold(
