@@ -68,7 +68,11 @@ _TPEX_RENAME = {
 
 
 def parse_tpex_price(raw, date):
-    tb = json.loads(raw.decode("utf-8"))["tables"][0]
+    # 回應自帶日期（外層 ``date``、表的民國 ``date``）必須等於請求日，否則拒收：
+    # 官方會回 200 卻是別天／凍結的表，直接蓋上請求日就成了不存在的一天。
+    tb = _tpex_table(json.loads(raw.decode("utf-8")), date, "上櫃股價")
+    if tb is None:
+        return None
     fields = [f.replace("<br>", "").strip() for f in tb["fields"]]
     df = pd.DataFrame(tb["data"], columns=fields)
     df = df.rename(columns={"代號": "stock_id", "名稱": "名稱", **_TPEX_RENAME})
@@ -223,8 +227,10 @@ def _title_date_matches(raw, date, name):
 
     官方對沒有交易的日子（週日、停市日）有時回另一天的整份表而非「查無資料」，
     parse 會把列蓋上請求日，存成不存在的孤兒日（margin 2021-05-23／2024-09-01 即如此）。
-    無法證明新鮮的資料不如沒有：標題缺日期一樣拒收。"""
-    head = raw.decode("big5", errors="replace").lstrip("\ufeff \r\n").split("\n", 1)[0]
+    無法證明新鮮的資料不如沒有：標題缺日期一樣拒收。
+    ``raw`` 可給 bytes（big5 解碼）或已解碼的 str（MI_INDEX 用 requests 的 ``r.text``）。"""
+    text = raw if isinstance(raw, str) else raw.decode("big5", errors="replace")
+    head = text.lstrip("\ufeff \r\n").split("\n", 1)[0]
     m = re.search(r"\d+年\d+月\d+日", head)
     got = _roc_to_date(m.group(0)) if m else None
     if got == date:
