@@ -9,8 +9,11 @@ guardrail + history-save tail.
 import os
 import sys
 import unittest
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -21,7 +24,9 @@ ensure_litellm_stub()
 from src.analyzer import AnalysisResult
 from src.core.pipeline import StockAnalysisPipeline
 from src.report_language import localize_operation_advice
+from src.schemas.decision_action import display_action_fields_for_result
 from src.services.analysis_context_builder import PipelineAnalysisArtifacts
+from scripts.shadow_buy_eval import raw_decision
 
 
 def _make_pipeline(*, save_context_snapshot: bool = True) -> StockAnalysisPipeline:
@@ -68,6 +73,184 @@ def _result(**overrides) -> AnalysisResult:
     )
     defaults.update(overrides)
     return AnalysisResult(**defaults)
+
+
+def _finalize_public_action(result, *, artifacts=None, snapshot_context=None):
+    pipeline = _make_pipeline()
+    saved_results = []
+    signals = []
+
+    def save_history(**kwargs):
+        saved_results.append(deepcopy(kwargs["result"]))
+        return 1
+
+    pipeline.db.save_analysis_history.side_effect = save_history
+    with patch("src.services.decision_signal_extractor.DecisionSignalService") as service:
+        service.return_value.create_signal.side_effect = lambda payload: signals.append(deepcopy(payload))
+        returned = pipeline._finalize_and_persist_result(
+            result,
+            artifacts or _artifacts(),
+            market_phase_summary=None,
+            analysis_context_pack_overview=None,
+            report_type="simple",
+            snapshot_context=snapshot_context or {},
+            news_content_for_save=None,
+        )
+        service.return_value.create_signal.assert_called_once()
+    pipeline.db.save_analysis_history.assert_called_once()
+    assert returned is result
+    return saved_results[0], signals[0]
+
+
+@pytest.mark.parametrize("initial_action", [None, "buy", "add"])
+@pytest.mark.parametrize(
+    "report_language, expected_reason",
+    [
+        ("zh", "卖出决策与买入区分数矛盾，保留非买入动作，禁止升为买入或加仓。"),
+        ("zh-TW", "賣出決策與買入區分數矛盾，保留非買入動作，禁止升為買入或加倉。"),
+        ("en", "Sell decision conflicts with the buy-band score; preserve a non-buy action instead of buy/add."),
+        ("ko", "매도 결정이 매수 구간 점수와 모순되어 매수나 추가 매수 대신 비매수 행동을 유지합니다."),
+    ],
+)
+@pytest.mark.parametrize(
+    "decision_type, advice, expected_action, high_risk",
+    [
+        ("sell", "觀望", "watch", False),
+        ("sell", "觀望", "watch", True),
+        ("sell", "观望", "watch", False),
+        ("sell", "持有", "hold", False),
+        ("sell", "买入", "watch", False),
+        ("sell", "加倉", "watch", False),
+        ("sell", "", "watch", False),
+        (" SELL ", "觀望", "watch", False),
+    ],
+)
+def test_finalize_contradictory_non_buy_never_publishes_buy(
+    decision_type, advice, expected_action, initial_action, high_risk, report_language, expected_reason,
+):
+    result = _result(
+        decision_type=decision_type, operation_advice=advice,
+        sentiment_score=68, action=initial_action, report_language=report_language,
+    )
+    snapshot = {"daily_market_context": {"risk_tags": ["high_risk"]}} if high_risk else {}
+
+    saved, signal = _finalize_public_action(result, snapshot_context=snapshot)
+
+    assert result.action == saved.action == signal["action"] == expected_action
+    assert display_action_fields_for_result(result)["action"] == expected_action
+    assert result.sentiment_score == saved.sentiment_score == 68
+    calibration = saved.dashboard["decision_score_calibration"]
+    assert calibration["guardrail_reason"] == expected_reason
+    assert signal["metadata"]["guardrail_reason"] == expected_reason
+    assert raw_decision(saved.to_dict())["downgraded"] is False
+    assert "raw_score" not in calibration
+    assert "adjusted_score" not in calibration
+    assert "raw_decision_type" not in calibration
+    assert calibration["final_action"] == expected_action
+
+
+@pytest.mark.parametrize("initial_action", [None, "buy", "add"])
+@pytest.mark.parametrize("decision_type", ["hold", "buy", None])
+@pytest.mark.parametrize(
+    "advice, aligned_action",
+    [("觀望", "buy"), ("減倉", "reduce"), ("回避", "avoid"), ("賣出", "sell")],
+)
+def test_finalize_non_sell_follows_score_alignment_without_contradiction(
+    decision_type, advice, aligned_action, initial_action,
+):
+    result = _result(
+        decision_type=decision_type, operation_advice=advice,
+        sentiment_score=68, action=initial_action,
+    )
+
+    saved, signal = _finalize_public_action(result)
+
+    expected_action = initial_action or aligned_action
+    assert result.action == saved.action == signal["action"] == expected_action
+    assert display_action_fields_for_result(result)["action"] == expected_action
+    assert result.sentiment_score == saved.sentiment_score == 68
+    assert not signal["metadata"].get("guardrail_reason")
+    assert "decision_score_calibration" not in (saved.dashboard or {})
+
+
+def test_finalize_normal_buy_band_buy_still_publishes_buy():
+    result = _result(sentiment_score=68)
+
+    saved, signal = _finalize_public_action(result)
+
+    assert result.action == saved.action == signal["action"] == "buy"
+    assert result.sentiment_score == 68
+    assert not signal["metadata"].get("guardrail_reason")
+    assert "decision_score_calibration" not in (saved.dashboard or {})
+
+
+@pytest.mark.parametrize("guardrail", ["market_context", "trade_cost"])
+@pytest.mark.parametrize("decision_type", ["buy", "hold"])
+@pytest.mark.parametrize("advice", ["觀望", "持有觀望"])
+def test_finalize_real_guardrail_reason_takes_precedence_over_contradiction(guardrail, decision_type, advice):
+    result = _result(
+        code="2330.TW", name="台積電", decision_type=decision_type,
+        operation_advice=advice, sentiment_score=68, report_language="en",
+        dashboard={"battle_plan": {"sniper_points": {
+            "ideal_buy": "100", "stop_loss": "97.86", "take_profit": "103.69",
+        }}},
+    )
+    snapshot = {"daily_market_context": {"risk_tags": ["high_risk"]}} if guardrail == "market_context" else {}
+
+    saved, signal = _finalize_public_action(
+        result, artifacts=_artifacts(code="2330.TW", market="tw"), snapshot_context=snapshot,
+    )
+
+    assert result.action == saved.action == signal["action"] == "watch"
+    calibration = saved.dashboard["decision_score_calibration"]
+    if guardrail == "market_context":
+        assert saved.sentiment_score == 52
+        expected_reason = "Daily market context is conservative/high risk; aggressive buy advice was softened."
+    else:
+        assert saved.sentiment_score == 59
+        assert saved.dashboard["battle_plan"]["cost_check"]["passed"] is False
+        expected_reason = saved.risk_warning
+        assert "round-trip cost" in expected_reason
+    assert calibration["guardrail_reason"] == expected_reason
+    assert signal["metadata"]["guardrail_reason"] == expected_reason
+    assert raw_decision(saved.to_dict())["downgraded"] is True
+    assert calibration["raw_score"] == 68
+    assert calibration["adjusted_score"] == saved.sentiment_score
+
+
+def test_finalize_consistent_low_score_sell_is_untouched():
+    # 反向：分數不在買入區的一致賣出照舊發布賣出，也不留矛盾原因
+    result = _result(decision_type="sell", operation_advice="卖出", sentiment_score=15, dashboard={})
+
+    saved, signal = _finalize_public_action(result)
+
+    assert result.action == saved.action == signal["action"] == "sell"
+    assert result.sentiment_score == 15
+    assert "decision_score_calibration" not in (saved.dashboard or {})
+
+
+@pytest.mark.parametrize("initial_action", [None, "buy", "add"])
+@pytest.mark.parametrize("change_pct", [-1.6, 1.0], ids=["shakeout", "no_shakeout"])
+def test_finalize_buy_band_hold_resets_action_only_for_shakeout(initial_action, change_pct):
+    result = _result(
+        decision_type="hold", operation_advice="洗盘观察", sentiment_score=68,
+        current_price=30.5, change_pct=change_pct, action=initial_action,
+    )
+    artifacts = _artifacts(
+        trend_result=SimpleNamespace(support_levels=[30.0], resistance_levels=[34.0]),
+        fundamental_context={"capital_flow": {"status": "ok", "data": {
+            "stock_flow": {"main_net_inflow": 1_000_000},
+        }}},
+    )
+
+    saved, signal = _finalize_public_action(result, artifacts=artifacts)
+
+    expected = "hold" if change_pct < 0 else initial_action or "buy"
+    assert result.action == saved.action == signal["action"] == expected
+    assert display_action_fields_for_result(result)["action"] == expected
+    assert result.operation_advice == "洗盘观察"
+    assert result.sentiment_score == saved.sentiment_score == 68
+    assert bool(signal["metadata"].get("guardrail_reason")) == (change_pct < 0)
 
 
 class FinalizeAndPersistResultTestCase(unittest.TestCase):

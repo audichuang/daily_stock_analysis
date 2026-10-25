@@ -7,6 +7,8 @@ import json
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.schemas.decision_scale import extract_decision_guardrail_reason
+
 
 _MODEL_PLACEHOLDER_VALUES = {"unknown", "error", "none", "null", "n/a"}
 SIGNAL_ATTRIBUTION_WEIGHT_KEYS: Tuple[str, ...] = (
@@ -473,24 +475,5 @@ def signal_attribution_has_content(signal_attr: Any) -> bool:
 
 
 def extract_guardrail_reason(raw_result: Any) -> Optional[str]:
-    """从分析结果（或其 metadata）中提取护栏/降级原因文本，无则返回 None。"""
-    if not isinstance(raw_result, dict):
-        return None
-    for reason in (
-        raw_result.get("guardrail_reason"),
-        raw_result.get("downgrade_reason"),
-        raw_result.get("decision_score_guardrail_reason"),
-    ):
-        if reason is not None:
-            text = str(reason).strip()
-            if text:
-                return text
-
-    metadata = raw_result.get("metadata")
-    if isinstance(metadata, dict):
-        metadata_reason = metadata.get("guardrail_reason") or metadata.get("downgrade_reason")
-        if metadata_reason is not None:
-            text = str(metadata_reason).strip()
-            if text:
-                return text
-    return None
+    """共用決策口徑，讀取頂層、metadata 與 dashboard 的已套用護欄原因。"""
+    return extract_decision_guardrail_reason(raw_result)

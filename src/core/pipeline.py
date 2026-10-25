@@ -43,6 +43,7 @@ from src.analyzer import (
 from src.notification import NotificationService, NotificationChannel
 from src.notification_sender import OutboundMessage
 from src.schemas.decision_action import normalize_decision_action
+from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.report_language import (
     get_placeholder_text,
     get_unknown_text,
@@ -2392,6 +2393,7 @@ class StockAnalysisPipeline:
         *,
         report_type: Any,
         previous_operation_advice: Any,
+        record_contradiction: bool = True,
     ) -> AnalysisResult:
         # A guardrail may rewrite the advice after the Agent action was parsed;
         # discard that stale action before using the same resolver as the
@@ -2401,6 +2403,35 @@ class StockAnalysisPipeline:
         if previous_advice != current_advice:
             result.action = None
             result.action_label = None
+        advice_action = normalize_decision_action(current_advice)
+        score = getattr(result, "sentiment_score", None)
+        if action_for_score(score) == "buy" and (
+            str(getattr(result, "decision_type", None) or "").strip().lower() == "sell"
+        ):
+            # 僅結構化賣出決策阻擋買入區分數升級，沿用非買入建議動作，否則退回觀望。
+            result.action = advice_action if advice_action and advice_action not in {"buy", "add"} else "watch"
+            result.action_label = None
+            if not record_contradiction:
+                # 中途只刷新動作，等真正護欄執行完才記錄尚未解決的矛盾。
+                return populate_decision_action_fields(
+                    result, explicit_action=result.action, report_type=report_type, align_with_score=False,
+                )
+            if not isinstance(getattr(result, "dashboard", None), dict):
+                result.dashboard = {}
+            language = normalize_report_language(getattr(result, "report_language", "zh"))
+            reason = {
+                "zh": "卖出决策与买入区分数矛盾，保留非买入动作，禁止升为买入或加仓。",
+                "zh-TW": "賣出決策與買入區分數矛盾，保留非買入動作，禁止升為買入或加倉。",
+                "en": "Sell decision conflicts with the buy-band score; preserve a non-buy action instead of buy/add.",
+                "ko": "매도 결정이 매수 구간 점수와 모순되어 매수나 추가 매수 대신 비매수 행동을 유지합니다.",
+            }[language]
+            record_guardrail_score_adjustment(
+                result.dashboard,
+                raw_score=None,
+                adjusted_score=None,
+                final_action=result.action,
+                reason=reason,
+            )
         fields = resolve_decision_signal_action_fields(
             result,
             report_type=str(report_type or ""),
@@ -3112,6 +3143,7 @@ class StockAnalysisPipeline:
             result,
             report_type=report_type,
             previous_operation_advice=getattr(result, "operation_advice", None),
+            record_contradiction=False,
         )
         pipeline_start_action = normalize_decision_action(getattr(result, "action", None))
         action_chain_valid = pipeline_start_action is not None
@@ -3122,6 +3154,7 @@ class StockAnalysisPipeline:
                 result,
                 report_type=report_type,
                 previous_operation_advice=advice_before,
+                record_contradiction=False,
             )
             action_after = normalize_decision_action(getattr(result, "action", None))
             if action_chain_valid and action_after is not None:
@@ -3182,6 +3215,12 @@ class StockAnalysisPipeline:
         if cost_adjustments:
             logger.info("[trade_cost_guardrail] Applied adjustments for %s: %s", artifacts.code, cost_adjustments)
         _capture("trade_cost", action_before_guardrail, advice_before_guardrail)
+        # 真正護欄優先留下原因，最後才記錄仍落在買入分數區的矛盾。
+        self._refresh_decision_action_for_final_result(
+            result,
+            report_type=report_type,
+            previous_operation_advice=getattr(result, "operation_advice", None),
+        )
         if isinstance(artifacts.fundamental_context, dict):
             result.fundamental_context = artifacts.fundamental_context
         # Upstream #1981 attaches market_structure_context to the result in both

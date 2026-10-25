@@ -1267,6 +1267,10 @@ def stabilize_decision_with_structure(
         elif decision_type == "hold":
             change_pct = _first_numeric_value(getattr(result, "change_pct", None))
             if change_pct is not None and change_pct < 0 and near_support and flow_bias != "outflow":
+                if action_for_score(getattr(result, "sentiment_score", None)) == "buy":
+                    # 即使洗盤文字未變，也要清掉先前依分數對齊的買入動作。
+                    result.action = "hold"
+                    result.action_label = None
                 _set_structural_hold_wording(
                     result,
                     language,
