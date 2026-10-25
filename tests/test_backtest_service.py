@@ -16,7 +16,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from src.config import Config
-from src.core.backtest_engine import OVERALL_SENTINEL_CODE
+from src.core.backtest_engine import OVERALL_SENTINEL_CODE, effective_backtest_engine_version
 from src.repositories.backtest_repo import BacktestRepository
 from src.services.backtest_service import BacktestService
 from src.services.stock_daily_start_resolver import (
@@ -24,6 +24,9 @@ from src.services.stock_daily_start_resolver import (
     resolve_stock_daily_start,
 )
 from src.storage import AnalysisHistory, BacktestResult, BacktestSummary, DatabaseManager, StockDaily
+
+# H2：服務實際寫入／查詢的版本（.env 標籤 v1 ＋ 方法 tag）。
+CURRENT_ENGINE_VERSION = effective_backtest_engine_version("v1")
 
 
 def _phase_snapshot(
@@ -114,12 +117,13 @@ class BacktestServiceTestCase(unittest.TestCase):
                 )
             )
 
-            # Forward bars (3 days) that hit take-profit on day1
+            # Forward bars (3 days) that hit take-profit on day1.
+            # H2：以 T+1 開盤進場，day1 開盤設成 100 讓進場價與舊口徑（錨點收盤）相同。
             session.add_all(
                 [
-                    StockDaily(code="600519", date=date(2024, 1, 2), high=111.0, low=100.0, close=105.0),
-                    StockDaily(code="600519", date=date(2024, 1, 3), high=108.0, low=103.0, close=106.0),
-                    StockDaily(code="600519", date=date(2024, 1, 4), high=109.0, low=104.0, close=107.0),
+                    StockDaily(code="600519", date=date(2024, 1, 2), open=100.0, high=111.0, low=100.0, close=105.0),
+                    StockDaily(code="600519", date=date(2024, 1, 3), open=105.0, high=108.0, low=103.0, close=106.0),
+                    StockDaily(code="600519", date=date(2024, 1, 4), open=106.0, high=109.0, low=104.0, close=107.0),
                 ]
             )
             session.commit()
@@ -208,7 +212,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 StockDaily(
                     code=code,
                     date=forward_date,
-                    open=end_close,
+                    open=start_close,  # H2：T+1 開盤進場，維持「start_close → end_close」的報酬
                     high=end_close + 1,
                     low=end_close - 1,
                     close=end_close,
@@ -239,7 +243,7 @@ class BacktestServiceTestCase(unittest.TestCase):
         analysis_history_id: int,
         analysis_date: date,
         eval_window_days: int = 1,
-        engine_version: str = "v1",
+        engine_version: str = CURRENT_ENGINE_VERSION,
     ) -> BacktestResult:
         return BacktestResult(
             analysis_history_id=analysis_history_id,
@@ -276,7 +280,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             min_age_days=0,
             limit=10,
             eval_window_days=1,
-            engine_version="v1",
+            engine_version=CURRENT_ENGINE_VERSION,
             force=True,
         )
 
@@ -301,7 +305,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             min_age_days=0,
             limit=10,
             eval_window_days=1,
-            engine_version="v1",
+            engine_version=CURRENT_ENGINE_VERSION,
             force=True,
         )
 
@@ -437,7 +441,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             min_age_days=0,
             limit=10,
             eval_window_days=1,
-            engine_version="v1",
+            engine_version=CURRENT_ENGINE_VERSION,
             force=True,
         )
         stats = BacktestService(self.db).run_backtest(
@@ -493,8 +497,8 @@ class BacktestServiceTestCase(unittest.TestCase):
 
         with self.db.get_session() as session:
             session.add_all([
-                StockDaily(code="600519", date=date(2024, 1, 3), high=108.0, low=103.0, close=106.0),
-                StockDaily(code="600519", date=date(2024, 1, 4), high=109.0, low=104.0, close=107.0),
+                StockDaily(code="600519", date=date(2024, 1, 3), open=105.0, high=108.0, low=103.0, close=106.0),
+                StockDaily(code="600519", date=date(2024, 1, 4), open=106.0, high=109.0, low=104.0, close=107.0),
             ])
             session.commit()
 
@@ -564,9 +568,9 @@ class BacktestServiceTestCase(unittest.TestCase):
             trend_prediction="看多",
             start_close=100.0,
             forward_bars=[
-                StockDaily(code="600519.SH", date=date(2024, 1, 3), high=111.0, low=100.0, close=105.0),
-                StockDaily(code="600519.SH", date=date(2024, 1, 4), high=108.0, low=102.0, close=106.0),
-                StockDaily(code="600519.SH", date=date(2024, 1, 5), high=109.0, low=102.0, close=107.0),
+                StockDaily(code="600519.SH", date=date(2024, 1, 3), open=100.0, high=111.0, low=100.0, close=105.0),
+                StockDaily(code="600519.SH", date=date(2024, 1, 4), open=105.0, high=108.0, low=102.0, close=106.0),
+                StockDaily(code="600519.SH", date=date(2024, 1, 5), open=106.0, high=109.0, low=102.0, close=107.0),
             ],
         )
 
@@ -627,8 +631,8 @@ class BacktestServiceTestCase(unittest.TestCase):
             )
             session.add_all(
                 [
-                    StockDaily(code="SH600519", date=date(2024, 2, 16), high=102.0, low=99.0, close=101.0),
-                    StockDaily(code="SH600519", date=date(2024, 2, 17), high=104.0, low=100.0, close=103.0),
+                    StockDaily(code="SH600519", date=date(2024, 2, 16), open=100.0, high=102.0, low=99.0, close=101.0),
+                    StockDaily(code="SH600519", date=date(2024, 2, 17), open=101.0, high=104.0, low=100.0, close=103.0),
                 ]
             )
             session.commit()
@@ -661,8 +665,8 @@ class BacktestServiceTestCase(unittest.TestCase):
             trend_prediction="看多",
             start_close=100.0,
             forward_bars=[
-                StockDaily(code="SS600519", date=date(2024, 2, 21), high=102.0, low=99.0, close=101.0),
-                StockDaily(code="SS600519", date=date(2024, 2, 22), high=104.0, low=100.0, close=103.0),
+                StockDaily(code="SS600519", date=date(2024, 2, 21), open=100.0, high=102.0, low=99.0, close=101.0),
+                StockDaily(code="SS600519", date=date(2024, 2, 22), open=101.0, high=104.0, low=100.0, close=103.0),
             ],
         )
 
@@ -719,7 +723,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 )
             )
             session.add(
-                StockDaily(code="600519", date=date(2024, 2, 26), high=104.0, low=99.0, close=103.0)
+                StockDaily(code="600519", date=date(2024, 2, 26), open=100.0, high=104.0, low=99.0, close=103.0)
             )
             session.commit()
 
@@ -789,8 +793,8 @@ class BacktestServiceTestCase(unittest.TestCase):
             )
             session.add_all(
                 [
-                    StockDaily(code="SH600519", date=date(2024, 3, 2), high=112.0, low=109.0, close=111.0),
-                    StockDaily(code="SH600519", date=date(2024, 3, 3), high=113.0, low=110.0, close=112.0),
+                    StockDaily(code="SH600519", date=date(2024, 3, 2), open=110.0, high=112.0, low=109.0, close=111.0),
+                    StockDaily(code="SH600519", date=date(2024, 3, 3), open=111.0, high=113.0, low=110.0, close=112.0),
                 ]
             )
             session.commit()
@@ -846,8 +850,8 @@ class BacktestServiceTestCase(unittest.TestCase):
             )
             session.add_all(
                 [
-                    StockDaily(code="BJ920748", date=date(2024, 4, 2), high=210.0, low=198.0, close=205.0),
-                    StockDaily(code="BJ920748", date=date(2024, 4, 3), high=215.0, low=202.0, close=210.0),
+                    StockDaily(code="BJ920748", date=date(2024, 4, 2), open=200.0, high=210.0, low=198.0, close=205.0),
+                    StockDaily(code="BJ920748", date=date(2024, 4, 3), open=205.0, high=215.0, low=202.0, close=210.0),
                 ]
             )
             session.commit()
@@ -877,7 +881,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             min_age_days=0,
             limit=10,
             eval_window_days=3,
-            engine_version="v1",
+            engine_version=CURRENT_ENGINE_VERSION,
             force=True,
         )
 
@@ -892,7 +896,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                     min_age_days=0,
                     limit=10,
                     eval_window_days=3,
-                    engine_version="v1",
+                    engine_version=CURRENT_ENGINE_VERSION,
                     force=True,
                 )
                 self.assertEqual(matches, [])
@@ -962,7 +966,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             trend_prediction="看多",
             start_close=100.0,
             forward_bars=[
-                StockDaily(code="600519.SH", date=date(2024, 2, 2), high=101.0, low=95.0, close=96.0),
+                StockDaily(code="600519.SH", date=date(2024, 2, 2), open=100.0, high=101.0, low=95.0, close=96.0),
             ],
         )
 
@@ -1030,7 +1034,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 )
             )
             session.add(
-                StockDaily(code="600519", date=date(2024, 2, 6), high=106.0, low=99.0, close=105.0)
+                StockDaily(code="600519", date=date(2024, 2, 6), open=100.0, high=106.0, low=99.0, close=105.0)
             )
             session.commit()
 
@@ -1091,8 +1095,8 @@ class BacktestServiceTestCase(unittest.TestCase):
             )
             session.add_all(
                 [
-                    StockDaily(code="600518", date=date(2024, 1, 8), high=106.0, low=99.0, close=105.0),
-                    StockDaily(code="600518", date=date(2024, 1, 9), high=110.0, low=100.0, close=108.0),
+                    StockDaily(code="600518", date=date(2024, 1, 8), open=100.0, high=106.0, low=99.0, close=105.0),
+                    StockDaily(code="600518", date=date(2024, 1, 9), open=105.0, high=110.0, low=100.0, close=108.0),
                 ]
             )
             session.commit()
@@ -1203,7 +1207,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 .one()
             )
             self.assertEqual(result.eval_status, "completed")
-            self.assertEqual(result.start_price, 100.0)
+            self.assertEqual(result.start_price, 105.0)  # H2：T+1 開盤進場
             self.assertEqual(result.end_close, 105.0)
 
     def test_run_backtest_replays_legacy_non_session_effective_date_from_local_bars(
@@ -1221,6 +1225,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 StockDaily(
                     code="600520",
                     date=date(2024, 1, 2),
+                    open=100.0,
                     high=102.0,
                     low=99.0,
                     close=101.0,
@@ -1228,6 +1233,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 StockDaily(
                     code="600520",
                     date=date(2024, 1, 3),
+                    open=101.0,
                     high=103.0,
                     low=100.0,
                     close=102.0,
@@ -1235,6 +1241,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 StockDaily(
                     code="600520",
                     date=date(2024, 1, 4),
+                    open=102.0,
                     high=104.0,
                     low=101.0,
                     close=103.0,
@@ -1307,6 +1314,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 StockDaily(
                     code="600521",
                     date=date(2024, 1, 8),
+                    open=100.0,
                     high=103.0,
                     low=99.0,
                     close=102.0,
@@ -1431,7 +1439,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             )
             self.assertEqual(result.eval_status, "completed")
             self.assertEqual(result.analysis_date, date(2026, 1, 1))
-            self.assertEqual(result.start_price, 100.0)
+            self.assertEqual(result.start_price, 105.0)  # H2：T+1 開盤進場
             self.assertEqual(result.end_close, 105.0)
 
     def test_run_backtest_refills_from_authoritative_start_date(self) -> None:
@@ -1525,7 +1533,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 .one()
             )
             self.assertEqual(result.eval_status, "completed")
-            self.assertEqual(result.start_price, 100.0)
+            self.assertEqual(result.start_price, 105.0)  # H2：T+1 開盤進場
             self.assertEqual(result.end_close, 105.0)
 
     def test_run_backtest_rejects_all_stale_daily_window_candidates(self) -> None:
@@ -1626,7 +1634,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             trend_prediction="看多",
             start_close=100.0,
             forward_bars=[
-                StockDaily(code="AAPL.US", date=date(2024, 1, 4), high=101.0, low=95.0, close=96.0),
+                StockDaily(code="AAPL.US", date=date(2024, 1, 4), open=100.0, high=101.0, low=95.0, close=96.0),
             ],
             market="us",
         )
@@ -1662,6 +1670,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 StockDaily(
                     code="NASDAQ",
                     date=date(2024, 1, 8),
+                    open=100.0,
                     high=103.0,
                     low=99.0,
                     close=102.0,
@@ -1703,7 +1712,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             trend_prediction="看多",
             start_close=100.0,
             forward_bars=[
-                StockDaily(code="AAPL", date=date(2024, 1, 7), high=104.0, low=99.0, close=103.0),
+                StockDaily(code="AAPL", date=date(2024, 1, 7), open=100.0, high=104.0, low=99.0, close=103.0),
             ],
             market="us",
         )
@@ -1750,7 +1759,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             trend_prediction="看多",
             start_close=100.0,
             forward_bars=[
-                StockDaily(code="AAPL.US", date=date(2024, 1, 9), high=104.0, low=99.0, close=103.0),
+                StockDaily(code="AAPL.US", date=date(2024, 1, 9), open=100.0, high=104.0, low=99.0, close=103.0),
             ],
             market="us",
         )
@@ -1822,7 +1831,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                         code="AAPL",
                         analysis_date=date(2024, 1, 10),
                         eval_window_days=1,
-                        engine_version="v1",
+                        engine_version=CURRENT_ENGINE_VERSION,
                         eval_status="completed",
                         evaluated_at=datetime(2024, 1, 20, 0, 0, 0),
                         operation_advice="买入",
@@ -1840,7 +1849,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                         code="AAPL.US",
                         analysis_date=date(2024, 1, 11),
                         eval_window_days=1,
-                        engine_version="v1",
+                        engine_version=CURRENT_ENGINE_VERSION,
                         eval_status="completed",
                         evaluated_at=datetime(2024, 1, 21, 0, 0, 0),
                         operation_advice="买入",
@@ -1941,6 +1950,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 StockDaily(
                     code="1810",
                     date=date(2024, 1, 2),
+                    open=100.0,
                     high=102.0,
                     low=95.0,
                     close=101.0,
@@ -2019,6 +2029,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                 StockDaily(
                     code="01810.HK",
                     date=date(2024, 1, 2),
+                    open=120.0,
                     high=122.0,
                     low=118.0,
                     close=121.0,
@@ -2085,6 +2096,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                     StockDaily(
                         code="HK01810",
                         date=date(2024, 1, 2),
+                        open=90.0,
                         high=92.0,
                         low=88.0,
                         close=91.0,
@@ -2155,9 +2167,9 @@ class BacktestServiceTestCase(unittest.TestCase):
             )
             session.add_all(
                 [
-                    StockDaily(code="000003", date=date(2024, 1, 2), high=10.5, low=9.8, close=10.2),
-                    StockDaily(code="000003", date=date(2024, 1, 3), high=10.8, low=10.1, close=10.5),
-                    StockDaily(code="000003", date=date(2024, 1, 4), high=11.0, low=10.4, close=10.8),
+                    StockDaily(code="000003", date=date(2024, 1, 2), open=10.0, high=10.5, low=9.8, close=10.2),
+                    StockDaily(code="000003", date=date(2024, 1, 3), open=10.2, high=10.8, low=10.1, close=10.5),
+                    StockDaily(code="000003", date=date(2024, 1, 4), open=10.5, high=11.0, low=10.4, close=10.8),
                 ]
             )
             session.commit()
@@ -2276,7 +2288,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                     code="000005",
                     analysis_date=date(2024, 1, 5),
                     eval_window_days=1,
-                    engine_version="v1",
+                    engine_version=CURRENT_ENGINE_VERSION,
                     eval_status="completed",
                     evaluated_at=datetime(2024, 1, 8, 0, 0, 0),
                     operation_advice="买入",
@@ -2361,7 +2373,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                     code="000006",
                     analysis_date=date(2024, 1, 5),
                     eval_window_days=1,
-                    engine_version="v1",
+                    engine_version=CURRENT_ENGINE_VERSION,
                     eval_status="completed",
                     evaluated_at=datetime(2024, 1, 8, 0, 0, 0),
                     operation_advice="买入",
@@ -2385,7 +2397,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                         low=10.0,
                         close=10.0,
                     ),
-                    StockDaily(code="000006", date=date(2024, 1, 8), high=10.6, low=9.9, close=10.5),
+                    StockDaily(code="000006", date=date(2024, 1, 8), open=10.0, high=10.6, low=9.9, close=10.5),
                 ]
             )
             session.commit()
@@ -2715,7 +2727,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             trend_prediction="看多",
             start_close=100.0,
             forward_bars=[
-                StockDaily(code="600519", date=date(2024, 1, 11), high=101.0, low=95.0, close=96.0),
+                StockDaily(code="600519", date=date(2024, 1, 11), open=100.0, high=101.0, low=95.0, close=96.0),
             ],
         )
 
@@ -2747,7 +2759,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             trend_prediction="看多",
             start_close=100.0,
             forward_bars=[
-                StockDaily(code="600519", date=date(2024, 1, 11), high=101.0, low=95.0, close=96.0),
+                StockDaily(code="600519", date=date(2024, 1, 11), open=100.0, high=101.0, low=95.0, close=96.0),
             ],
         )
 
@@ -2777,7 +2789,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             base_result = session.query(BacktestResult).filter(
                 BacktestResult.code == "600519",
                 BacktestResult.eval_window_days == 3,
-                BacktestResult.engine_version == "v1",
+                BacktestResult.engine_version == CURRENT_ENGINE_VERSION,
             ).one()
             session.add_all([
                 BacktestResult(
@@ -2785,7 +2797,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                     code=base_result.code,
                     analysis_date=base_result.analysis_date,
                     eval_window_days=1,
-                    engine_version="v1",
+                    engine_version=CURRENT_ENGINE_VERSION,
                     eval_status="completed",
                     evaluated_at=datetime(2024, 1, 5, 0, 0, 0),
                     operation_advice="买入",
@@ -2822,7 +2834,7 @@ class BacktestServiceTestCase(unittest.TestCase):
         rows = service.repo.list_results(
             code="600519",
             eval_window_days=3,
-            engine_version="v1",
+            engine_version=CURRENT_ENGINE_VERSION,
             analysis_date_from=date(2024, 1, 1),
             analysis_date_to=date(2024, 1, 1),
         )
@@ -2838,7 +2850,7 @@ class BacktestServiceTestCase(unittest.TestCase):
         )
         self.assertEqual(evaluations["total"], 1)
         self.assertEqual(len(evaluations["items"]), 1)
-        self.assertEqual(evaluations["items"][0]["engine_version"], "v1")
+        self.assertEqual(evaluations["items"][0]["engine_version"], CURRENT_ENGINE_VERSION)
         self.assertEqual(evaluations["items"][0]["operation_advice"], "买入")
         self.assertEqual(evaluations["items"][0]["action"], "buy")
         self.assertEqual(evaluations["items"][0]["action_label"], "买入")
@@ -2856,7 +2868,7 @@ class BacktestServiceTestCase(unittest.TestCase):
         self.assertIsNotNone(summary_inferred)
         assert summary_inferred is not None
         self.assertEqual(summary_inferred["eval_window_days"], 1)
-        self.assertEqual(summary_inferred["engine_version"], "v1")
+        self.assertEqual(summary_inferred["engine_version"], CURRENT_ENGINE_VERSION)
         self.assertEqual(summary_inferred["total_evaluations"], 1)
         self.assertEqual(summary_inferred["completed_count"], 1)
         self.assertEqual(summary_inferred["win_count"], 0)
@@ -2874,7 +2886,7 @@ class BacktestServiceTestCase(unittest.TestCase):
         self.assertIsNotNone(summary_explicit)
         assert summary_explicit is not None
         self.assertEqual(summary_explicit["eval_window_days"], 3)
-        self.assertEqual(summary_explicit["engine_version"], "v1")
+        self.assertEqual(summary_explicit["engine_version"], CURRENT_ENGINE_VERSION)
         self.assertEqual(summary_explicit["total_evaluations"], 1)
         self.assertEqual(summary_explicit["completed_count"], 1)
         self.assertEqual(summary_explicit["win_count"], 1)
@@ -2962,7 +2974,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             base_result = session.query(BacktestResult).filter(
                 BacktestResult.code == "600519",
                 BacktestResult.eval_window_days == 3,
-                BacktestResult.engine_version == "v1",
+                BacktestResult.engine_version == CURRENT_ENGINE_VERSION,
             ).one()
             session.add(
                 BacktestResult(
@@ -2970,7 +2982,7 @@ class BacktestServiceTestCase(unittest.TestCase):
                     code=base_result.code,
                     analysis_date=base_result.analysis_date,
                     eval_window_days=1,
-                    engine_version="v1",
+                    engine_version=CURRENT_ENGINE_VERSION,
                     eval_status="completed",
                     evaluated_at=datetime(2024, 1, 5, 0, 0, 0),
                     operation_advice="买入",
@@ -3014,7 +3026,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             trend_prediction="看多",
             start_close=100.0,
             forward_bars=[
-                StockDaily(code="600519", date=date(2024, 1, 11), high=101.0, low=95.0, close=96.0),
+                StockDaily(code="600519", date=date(2024, 1, 11), open=100.0, high=101.0, low=95.0, close=96.0),
             ],
             phase="intraday",
         )
@@ -3067,7 +3079,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             trend_prediction="看多",
             start_close=100.0,
             forward_bars=[
-                StockDaily(code="600519", date=date(2024, 1, 11), high=101.0, low=95.0, close=96.0),
+                StockDaily(code="600519", date=date(2024, 1, 11), open=100.0, high=101.0, low=95.0, close=96.0),
             ],
             phase="lunch_break",
         )
@@ -3079,7 +3091,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             trend_prediction="看多",
             start_close=100.0,
             forward_bars=[
-                StockDaily(code="600519", date=date(2024, 1, 13), high=101.0, low=95.0, close=96.0),
+                StockDaily(code="600519", date=date(2024, 1, 13), open=100.0, high=101.0, low=95.0, close=96.0),
             ],
             phase="closing_auction",
         )
@@ -3091,7 +3103,7 @@ class BacktestServiceTestCase(unittest.TestCase):
             trend_prediction="看多",
             start_close=100.0,
             forward_bars=[
-                StockDaily(code="600519", date=date(2024, 1, 15), high=101.0, low=95.0, close=96.0),
+                StockDaily(code="600519", date=date(2024, 1, 15), open=100.0, high=101.0, low=95.0, close=96.0),
             ],
             phase="non_trading",
         )
@@ -3164,9 +3176,9 @@ class BacktestServiceTestCase(unittest.TestCase):
                 StockDaily(code="000001", date=date(2024, 1, 1), open=10.0, high=10.2, low=9.8, close=10.0)
             )
             session.add_all([
-                StockDaily(code="000001", date=date(2024, 1, 2), high=10.0, low=9.5, close=9.6),
-                StockDaily(code="000001", date=date(2024, 1, 3), high=9.7, low=9.3, close=9.4),
-                StockDaily(code="000001", date=date(2024, 1, 4), high=9.5, low=9.0, close=9.1),
+                StockDaily(code="000001", date=date(2024, 1, 2), open=10.0, high=10.0, low=9.5, close=9.6),
+                StockDaily(code="000001", date=date(2024, 1, 3), open=9.6, high=9.7, low=9.3, close=9.4),
+                StockDaily(code="000001", date=date(2024, 1, 4), open=9.4, high=9.5, low=9.0, close=9.1),
             ])
             session.commit()
 

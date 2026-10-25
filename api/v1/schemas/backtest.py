@@ -73,6 +73,11 @@ class BacktestResultItem(BaseModel):
     simulated_exit_price: Optional[float] = None
     simulated_exit_reason: Optional[str] = None
     simulated_return_pct: Optional[float] = None
+    # H2：台股比例式淨報酬（不含最低手續費與二代健保），價格基準與進場日；舊版本列為 null。
+    simulated_net_return_pct: Optional[float] = None
+    entry_date: Optional[str] = None
+    price_basis: Optional[str] = None
+    adjustment_reason: Optional[str] = None
 
 
 class BacktestResultsResponse(BaseModel):

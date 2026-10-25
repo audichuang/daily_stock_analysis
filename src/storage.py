@@ -460,6 +460,13 @@ class BacktestResult(Base):
     simulated_exit_reason = Column(String(24))  # stop_loss/take_profit/window_end/cash/ambiguous_stop_loss
     simulated_return_pct = Column(Float)
 
+    # H2（engine_version 帶 `-t1o-adj`）：T+1 開盤進場、台股還原報酬、台股比例式淨報酬。
+    # 價位欄（start_price／end_close／…）仍是原始價；報酬欄是進場日還原基準。舊列這四欄為 NULL。
+    entry_date = Column(Date)
+    price_basis = Column(String(16))  # adjusted/raw/as_stored
+    adjustment_reason = Column(String(32))  # factor_unavailable/invalid_factors/non_marketdb_bars
+    simulated_net_return_pct = Column(Float)
+
     __table_args__ = (
         UniqueConstraint(
             'analysis_history_id',
@@ -1196,6 +1203,12 @@ class DecisionSignalOutcomeRecord(Base):
     max_high = Column(Float)
     min_low = Column(Float)
     stock_return_pct = Column(Float)
+    # decision-signal-v2：T+1 開盤進場與還原基準；最大不利偏移直接存（價位欄是原始價，
+    # 無法再由 start_price／min_low 推回還原口徑）。舊列為 NULL，讀取端退回舊公式。
+    entry_date = Column(Date)
+    price_basis = Column(String(16))
+    adjustment_reason = Column(String(32))
+    max_adverse_excursion_pct = Column(Float)
 
     action = Column(String(16), index=True)
     market = Column(String(8), index=True)
@@ -1432,6 +1445,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
 
             # 创建所有表
             Base.metadata.create_all(self._engine)
+            self._ensure_backtest_basis_columns()
             self._ensure_llm_usage_telemetry_columns()
             self._ensure_decision_signal_profile_schema()
             self._ensure_stock_daily_canonical_id()
@@ -1534,21 +1548,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             # fork: 应用库在 Postgres（dsa schema），表早于本次欄位存在，create_all
             # 不会补欄；不补的话下面的 select 直接 UndefinedColumn、整个 DatabaseManager 初始化失败。
             # 欄位定义直接取 ORM 模型，模型新增欄位时这里不必再改。
-            table = ConversationSessionState.__table__
-            existing = {column["name"] for column in inspect(self._engine).get_columns(table.name)}
-            clauses = []
-            for column in table.columns:
-                if column.name in existing:
-                    continue
-                clause = f"ADD COLUMN IF NOT EXISTS {column.name} {column.type.compile(dialect=self._engine.dialect)}"
-                if column.server_default is not None:
-                    clause += f" DEFAULT {column.server_default.arg.text}"
-                if not column.nullable:
-                    clause += " NOT NULL"
-                clauses.append(clause)
-            if clauses:
-                with self._engine.begin() as connection:
-                    connection.exec_driver_sql(f"ALTER TABLE {table.name} {', '.join(clauses)}")
+            self._ensure_postgres_orm_columns(ConversationSessionState.__table__)
 
         # Initialization precedes get_session() availability. Identity metadata
         # uses its own short transaction, never an accepted turn or a model call.
@@ -1594,6 +1594,71 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             CHAT_STATE_SCHEMA_VERSION,
             "Additive Chat identity, acceptance version and active-stock state",
         )
+
+    @staticmethod
+    def _postgres_add_column_ddl(table, existing: set, dialect) -> Optional[str]:
+        """依 ORM 模型產生 Postgres 補欄 DDL；沒有缺欄回 None。"""
+        clauses = []
+        for column in table.columns:
+            if column.name in existing:
+                continue
+            clause = f"ADD COLUMN IF NOT EXISTS {column.name} {column.type.compile(dialect=dialect)}"
+            if column.server_default is not None:
+                clause += f" DEFAULT {column.server_default.arg.text}"
+            if not column.nullable:
+                clause += " NOT NULL"
+            clauses.append(clause)
+        if not clauses:
+            return None
+        return f"ALTER TABLE {table.name} {', '.join(clauses)}"
+
+    def _ensure_postgres_orm_columns(self, table) -> None:
+        existing = {column["name"] for column in inspect(self._engine).get_columns(table.name)}
+        ddl = self._postgres_add_column_ddl(table, existing, self._engine.dialect)
+        if ddl:
+            with self._engine.begin() as connection:
+                connection.exec_driver_sql(ddl)
+
+    def _ensure_sqlite_nullable_orm_columns(self, table) -> None:
+        """SQLite 逐欄補上 ORM 模型新增的**可空、無預設**欄位（含鎖定重試）。"""
+        existing = {column["name"] for column in inspect(self._engine).get_columns(table.name)}
+        for column in table.columns:
+            if column.name in existing:
+                continue
+            if not column.nullable or column.server_default is not None:
+                raise RuntimeError(
+                    f"{table.name}.{column.name} 不是可空無預設欄位，不能用通用補欄"
+                )
+            sql_type = column.type.compile(dialect=self._engine.dialect)
+            for attempt in range(self._sqlite_write_retry_max + 1):
+                try:
+                    with self._engine.begin() as connection:
+                        connection.exec_driver_sql(
+                            f"ALTER TABLE {table.name} ADD COLUMN {column.name} {sql_type}"
+                        )
+                    break
+                except OperationalError as exc:
+                    if self._is_sqlite_duplicate_column_error(exc, column.name):
+                        break
+                    if self._is_sqlite_locked_error(exc) and attempt < self._sqlite_write_retry_max:
+                        time.sleep(self._sqlite_write_retry_base_delay * (2 ** attempt))
+                        continue
+                    raise
+
+    def _ensure_backtest_basis_columns(self) -> None:
+        """H2：回測／信號後驗新增的可空欄位（entry_date、price_basis…）補到既有表。
+
+        create_all 不會替已存在的表補欄；ORM select 會帶上新欄，不補就整張表讀不了。
+        失敗只記錯不拋——其他功能不該因為這兩張表補欄失敗而起不來。
+        """
+        for table in (BacktestResult.__table__, DecisionSignalOutcomeRecord.__table__):
+            try:
+                if self._is_sqlite_engine:
+                    self._ensure_sqlite_nullable_orm_columns(table)
+                elif self._engine.dialect.name == "postgresql":
+                    self._ensure_postgres_orm_columns(table)
+            except Exception as exc:
+                logger.error("回測欄位補齊失敗（%s）: %s", table.name, exc)
 
     def _ensure_decision_signal_profile_schema(self) -> None:
         """Add and backfill nullable decision_profile for existing SQLite DBs."""

@@ -9,14 +9,42 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+import logging
 import math
 import re
-from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Protocol, Sequence
 
 from src.utils.zh_fold import TRAD_TO_SIMP
 
+if TYPE_CHECKING:  # pragma: no cover
+    from src.services.backtest_price_basis import EntryBasis
+
+logger = logging.getLogger(__name__)
 
 OVERALL_SENTINEL_CODE = "__overall__"
+
+# H2：T+1 開盤進場＋台股還原報酬。`BACKTEST_ENGINE_VERSION`（.env）只是標籤前綴，
+# 實際寫進 DB 的版本一律帶這個 tag，舊口徑（收盤進場、未還原）的列以舊版本字串保留、不混算。
+BACKTEST_METHOD_TAG = "t1o-adj"
+_ENGINE_VERSION_MAX_LEN = 16  # BacktestResult／BacktestSummary.engine_version 是 String(16)
+
+
+def effective_backtest_engine_version(label: Optional[str]) -> str:
+    """`v1` → `v1-t1o-adj`；已帶 tag 的冪等；超過 16 字元時截短標籤並告警。"""
+    text = str(label or "").strip() or "v1"
+    suffix = f"-{BACKTEST_METHOD_TAG}"
+    if text.endswith(suffix):
+        base = text[: -len(suffix)]
+    else:
+        base = text
+    max_base = _ENGINE_VERSION_MAX_LEN - len(suffix)
+    if len(base) > max_base:
+        logger.warning(
+            "BACKTEST_ENGINE_VERSION=%r 太長，截成 %r 後加上 %r",
+            base, base[:max_base], suffix,
+        )
+        base = base[:max_base]
+    return f"{base}{suffix}"
 
 
 class DailyBarLike(Protocol):
@@ -26,6 +54,17 @@ class DailyBarLike(Protocol):
     high: Optional[float]
     low: Optional[float]
     close: Optional[float]
+    # `open` 也會被讀（T+1 開盤進場、跳空成交），但以 getattr 讀，舊的測試假物件不必有。
+
+
+@dataclass(frozen=True)
+class _AdjustedBar:
+    """進場基準下的 K 棒（只給停損停利判定用）。"""
+
+    date: date
+    open: Optional[float]
+    high: Optional[float]
+    low: Optional[float]
 
 
 class BacktestResultLike(Protocol):
@@ -175,6 +214,7 @@ class BacktestEngine:
         stop_loss: Optional[float],
         take_profit: Optional[float],
         config: EvaluationConfig,
+        price_context: Optional["EntryBasis"] = None,
     ) -> Dict[str, Any]:
         """Evaluate one historical analysis against forward daily bars.
 
@@ -182,7 +222,21 @@ class BacktestEngine:
         - Daily bars cannot determine intraday ordering. If stop-loss and
           take-profit are both touched in the same bar, we record
           first_hit="ambiguous" and assume stop-loss first for simulated exit.
+        - ``price_context`` 為 None 時行為與舊版完全相同；給了就代表
+          ``start_price`` 是進場 K 棒（``forward_bars[0]``）的開盤，報酬、停損停利
+          判定都換到進場日的還原基準，存檔價位仍是原始價。
         """
+        if price_context is not None:
+            return cls._evaluate_single_with_basis(
+                operation_advice=operation_advice,
+                analysis_date=analysis_date,
+                start_price=start_price,
+                forward_bars=forward_bars,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                config=config,
+                basis=price_context,
+            )
 
         if start_price is None or start_price <= 0:
             return {
@@ -283,6 +337,152 @@ class BacktestEngine:
         }
 
     @classmethod
+    def _evaluate_single_with_basis(
+        cls,
+        *,
+        operation_advice: Optional[str],
+        analysis_date: date,
+        start_price: float,
+        forward_bars: Sequence[DailyBarLike],
+        stop_loss: Optional[float],
+        take_profit: Optional[float],
+        config: EvaluationConfig,
+        basis: "EntryBasis",
+    ) -> Dict[str, Any]:
+        from src.services.backtest_price_basis import compute_tw_net_return_pct
+
+        position = cls.infer_position_recommendation(operation_advice)
+        direction_expected = cls.infer_direction_expected(operation_advice)
+        start_value = cls._finite_optional_float(start_price)
+        if start_value is None or start_value <= 0:
+            return {
+                "analysis_date": analysis_date,
+                "operation_advice": operation_advice,
+                "position_recommendation": position,
+                "direction_expected": direction_expected,
+                "eval_status": "error",
+            }
+
+        eval_days = int(config.eval_window_days)
+        if eval_days <= 0:
+            raise ValueError("eval_window_days must be positive")
+        if len(forward_bars) < eval_days:
+            return {
+                "analysis_date": analysis_date,
+                "operation_advice": operation_advice,
+                "position_recommendation": position,
+                "direction_expected": direction_expected,
+                "eval_status": "insufficient_data",
+                "eval_window_days": eval_days,
+            }
+
+        window_bars = list(forward_bars[:eval_days])
+        end_bar = window_bars[-1]
+        end_close = cls._finite_optional_float(end_bar.close)
+        highs = [h for h in (cls._finite_optional_float(b.high) for b in window_bars) if h is not None]
+        lows = [v for v in (cls._finite_optional_float(b.low) for b in window_bars) if v is not None]
+        max_high = max(highs) if highs else None
+        min_low = min(lows) if lows else None
+
+        # 分類用「進場開盤 → 期末收盤」的還原毛報酬；成本永遠不影響分類。
+        stock_return_pct: Optional[float] = None
+        if end_close is not None:
+            end_adj = end_close * basis.rel(end_bar.date)
+            stock_return_pct = (end_adj - start_value) / start_value * 100
+
+        outcome, direction_correct = cls._classify_outcome(
+            stock_return_pct=stock_return_pct,
+            direction_expected=direction_expected,
+            neutral_band_pct=config.neutral_band_pct,
+        )
+
+        level_factor = float(basis.level_factor)
+        stop_adj = None if stop_loss is None else float(stop_loss) * level_factor
+        take_adj = None if take_profit is None else float(take_profit) * level_factor
+        adjusted_bars = [
+            _AdjustedBar(
+                date=b.date,
+                open=cls._scaled(getattr(b, "open", None), basis.rel(b.date)),
+                high=cls._scaled(b.high, basis.rel(b.date)),
+                low=cls._scaled(b.low, basis.rel(b.date)),
+            )
+            for b in window_bars
+        ]
+        end_adj_close = None if end_close is None else end_close * basis.rel(end_bar.date)
+        (
+            hit_stop_loss,
+            hit_take_profit,
+            first_hit,
+            first_hit_date,
+            first_hit_days,
+            exit_adj,
+            simulated_exit_reason,
+        ) = cls._evaluate_targets(
+            position=position,
+            stop_loss=stop_adj,
+            take_profit=take_adj,
+            window_bars=adjusted_bars,
+            end_close=end_adj_close,
+            gap_aware=True,
+        )
+
+        simulated_entry_price = start_value if position == "long" else None
+        simulated_exit_price: Optional[float] = None
+        simulated_return_pct: Optional[float]
+        simulated_net_return_pct: Optional[float]
+        if position != "long":
+            simulated_return_pct = 0.0
+            simulated_net_return_pct = 0.0 if basis.cost_multipliers is not None else None
+        elif exit_adj is None:
+            simulated_return_pct = None
+            simulated_net_return_pct = None
+        else:
+            simulated_return_pct = (exit_adj - start_value) / start_value * 100
+            simulated_net_return_pct = compute_tw_net_return_pct(
+                simulated_return_pct, basis.cost_multipliers
+            )
+            exit_day = first_hit_date if first_hit_date is not None else end_bar.date
+            # 存檔用原始價：還原價除回該日的相對乘數。
+            simulated_exit_price = exit_adj / basis.rel(exit_day)
+
+        return {
+            "analysis_date": analysis_date,
+            "eval_window_days": eval_days,
+            "engine_version": config.engine_version,
+            "eval_status": "completed",
+            "operation_advice": operation_advice,
+            "position_recommendation": position,
+            "start_price": start_value,
+            "end_close": end_close,
+            "max_high": max_high,
+            "min_low": min_low,
+            "stock_return_pct": stock_return_pct,
+            "direction_expected": direction_expected,
+            "direction_correct": direction_correct,
+            "outcome": outcome,
+            "stop_loss": stop_loss,
+            "take_profit": take_profit,
+            "hit_stop_loss": hit_stop_loss,
+            "hit_take_profit": hit_take_profit,
+            "first_hit": first_hit,
+            "first_hit_date": first_hit_date,
+            "first_hit_trading_days": first_hit_days,
+            "simulated_entry_price": simulated_entry_price,
+            "simulated_exit_price": simulated_exit_price,
+            "simulated_exit_reason": simulated_exit_reason,
+            "simulated_return_pct": simulated_return_pct,
+            "simulated_net_return_pct": simulated_net_return_pct,
+            "entry_date": basis.entry_date,
+            "price_basis": basis.price_basis,
+            "adjustment_reason": basis.adjustment_reason,
+        }
+
+    @classmethod
+    def _scaled(cls, value: Any, factor: float) -> Optional[float]:
+        number = cls._finite_optional_float(value)
+        return None if number is None else number * factor
+
+    @classmethod
     def evaluate_decision_signal(
         cls,
         *,
@@ -291,8 +491,13 @@ class BacktestEngine:
         start_price: float,
         forward_bars: Sequence[DailyBarLike],
         config: EvaluationConfig,
+        price_context: Optional["EntryBasis"] = None,
     ) -> Dict[str, Any]:
-        """Evaluate a structured DecisionSignal action without text inference."""
+        """Evaluate a structured DecisionSignal action without text inference.
+
+        ``price_context`` 給了時 ``start_price`` 是 ``forward_bars[0]`` 的開盤，
+        報酬與最大不利偏移用進場日還原基準計算；存檔價位仍是原始價。
+        """
 
         start_price_value = cls._finite_optional_float(start_price)
         if start_price_value is None or start_price_value <= 0:
@@ -335,8 +540,25 @@ class BacktestEngine:
         stock_return_pct: Optional[float]
         if end_close is None:
             stock_return_pct = None
+        elif price_context is not None:
+            end_adj = end_close * price_context.rel(window_bars[-1].date)
+            stock_return_pct = (end_adj - start_price_value) / start_price_value * 100
         else:
             stock_return_pct = (end_close - start_price_value) / start_price_value * 100
+
+        basis_fields: Dict[str, Any] = {}
+        if price_context is not None:
+            basis_fields = {
+                "entry_date": price_context.entry_date,
+                "price_basis": price_context.price_basis,
+                "adjustment_reason": price_context.adjustment_reason,
+                "max_adverse_excursion_pct": cls._signal_max_adverse_excursion_pct(
+                    direction_expected=direction_expected,
+                    start_price=start_price_value,
+                    window_bars=window_bars,
+                    basis=price_context,
+                ),
+            }
 
         outcome, direction_correct = cls._classify_signal_outcome(
             stock_return_pct=stock_return_pct,
@@ -356,6 +578,7 @@ class BacktestEngine:
                 "end_close": end_close,
                 "max_high": max_high,
                 "min_low": min_low,
+                **basis_fields,
             }
 
         return {
@@ -371,7 +594,34 @@ class BacktestEngine:
             "max_high": max_high,
             "min_low": min_low,
             "stock_return_pct": stock_return_pct,
+            **basis_fields,
         }
+
+    @classmethod
+    def _signal_max_adverse_excursion_pct(
+        cls,
+        *,
+        direction_expected: str,
+        start_price: float,
+        window_bars: Sequence[DailyBarLike],
+        basis: "EntryBasis",
+    ) -> Optional[float]:
+        """進場基準下的最大不利偏移（%）：看多／持有看最低價，看空看最高價。"""
+        if direction_expected in ("up", "not_down"):
+            lows = [
+                v for v in (cls._scaled(b.low, basis.rel(b.date)) for b in window_bars) if v is not None
+            ]
+            if not lows:
+                return None
+            return max(0.0, (start_price - min(lows)) / start_price * 100)
+        if direction_expected == "not_up":
+            highs = [
+                v for v in (cls._scaled(b.high, basis.rel(b.date)) for b in window_bars) if v is not None
+            ]
+            if not highs:
+                return None
+            return max(0.0, (max(highs) - start_price) / start_price * 100)
+        return None
 
     @classmethod
     def compute_summary(
@@ -701,8 +951,9 @@ class BacktestEngine:
         position: str,
         stop_loss: Optional[float],
         take_profit: Optional[float],
-        window_bars: List[DailyBarLike],
+        window_bars: Sequence[Any],
         end_close: Optional[float],
+        gap_aware: bool = False,
     ) -> tuple[
         Optional[bool],
         Optional[bool],
@@ -759,21 +1010,23 @@ class BacktestEngine:
 
             first_hit_date = bar.date
             first_hit_days = idx
+            # 跳空：開盤就已越過停損／停利，只能以開盤價成交（停損更差、停利更好）。
+            bar_open = getattr(bar, "open", None) if gap_aware else None
 
             if stop_hit and tp_hit:
                 first_hit = "ambiguous"
-                exit_price = stop_loss
+                exit_price = stop_loss if bar_open is None else min(bar_open, stop_loss)
                 exit_reason = "ambiguous_stop_loss"
                 break
 
             if stop_hit:
                 first_hit = "stop_loss"
-                exit_price = stop_loss
+                exit_price = stop_loss if bar_open is None else min(bar_open, stop_loss)
                 exit_reason = "stop_loss"
                 break
 
             first_hit = "take_profit"
-            exit_price = take_profit
+            exit_price = take_profit if bar_open is None else max(bar_open, take_profit)
             exit_reason = "take_profit"
             break
 

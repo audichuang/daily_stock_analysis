@@ -107,7 +107,10 @@ def test_numeric_storage_key_requires_matching_existing_source(db, chat_stock_in
     from src.services.stock_list_parser import default_index_registry
     from src.storage import AnalysisHistory, BacktestResult, BacktestSummary
 
-    engine = Config.get_instance().backtest_engine_version
+    from src.core.backtest_engine import effective_backtest_engine_version
+
+    # H2：服務以「.env 標籤＋方法 tag」讀寫，種子要用同一個版本字串。
+    engine = effective_backtest_engine_version(Config.get_instance().backtest_engine_version)
     marker = expected_marker or 77
     with db.get_session() as session:
         session.add(BacktestSummary(scope="stock", code="005930", eval_window_days=30, engine_version=engine,

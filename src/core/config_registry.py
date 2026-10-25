@@ -3860,7 +3860,7 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "BACKTEST_ENGINE_VERSION": {
         "title": "Backtest Engine Version",
-        "description": "Backtest engine version label.",
+        "description": "Backtest engine version label; stored results append the method tag (e.g. v1 -> v1-t1o-adj).",
         "category": "backtest",
         "data_type": "string",
         "ui_control": "text",

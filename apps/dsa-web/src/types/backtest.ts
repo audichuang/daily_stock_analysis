@@ -69,6 +69,10 @@ export interface BacktestResultItem {
   simulatedExitPrice?: number;
   simulatedExitReason?: string;
   simulatedReturnPct?: number;
+  entryDate?: string | null;
+  priceBasis?: string | null;
+  adjustmentReason?: string | null;
+  simulatedNetReturnPct?: number | null;
 }
 
 export interface BacktestResultsResponse {

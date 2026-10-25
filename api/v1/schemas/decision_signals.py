@@ -156,6 +156,11 @@ class DecisionSignalOutcomeItem(BaseModel):
     holding_state: str
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    # decision-signal-v2：T+1 開盤進場日、價格基準（adjusted/raw/as_stored）與還原口徑的最大不利偏移。
+    entry_date: Optional[str] = None
+    price_basis: Optional[str] = None
+    adjustment_reason: Optional[str] = None
+    max_adverse_excursion_pct: Optional[float] = None
 
 
 class DecisionSignalOutcomeRunResponse(BaseModel):

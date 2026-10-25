@@ -18,6 +18,11 @@ from src.repositories.decision_signal_outcome_repo import (
 )
 from src.repositories.decision_signal_repo import DecisionSignalRepository
 from src.repositories.stock_repo import StockRepository
+from src.services.backtest_price_basis import (
+    FactorLoader,
+    is_valid_entry_open,
+    resolve_entry_basis,
+)
 from src.schemas.decision_profile import VALID_DECISION_PROFILES
 from src.services.decision_signal_data_quality import normalize_decision_signal_data_quality
 from src.services.decision_signal_service import (
@@ -38,7 +43,8 @@ from src.utils.sanitize import sanitize_decision_signal_text
 
 logger = logging.getLogger(__name__)
 
-DECISION_SIGNAL_OUTCOME_ENGINE_VERSION = "decision-signal-v1"
+# v2（H2）：T+1 開盤進場、台股還原報酬；v1 列（錨點收盤進場、未還原）保留不刪，以版本區隔。
+DECISION_SIGNAL_OUTCOME_ENGINE_VERSION = "decision-signal-v2"
 SUPPORTED_OUTCOME_HORIZONS = {
     "1d": 1,
     "3d": 3,
@@ -57,6 +63,8 @@ RETRYABLE_UNABLE_REASONS = frozenset({
     "insufficient_forward_bars",
     "missing_end_close",
     "invalid_end_close",
+    "missing_entry_open",
+    "invalid_entry_open",
 })
 BATCH_CANDIDATE_SCAN_PAGE_SIZE = 500
 MIN_PROFILE_CALIBRATION_SAMPLE_SIZE = 30
@@ -97,10 +105,12 @@ class DecisionSignalOutcomeService:
         signal_repo: Optional[DecisionSignalRepository] = None,
         stock_repo: Optional[StockRepository] = None,
         db_manager: Optional[DatabaseManager] = None,
+        factor_loader: Optional[FactorLoader] = None,
     ):
         self.repo = repo or DecisionSignalOutcomeRepository(db_manager)
         self.signal_repo = signal_repo or DecisionSignalRepository(db_manager)
         self.stock_repo = stock_repo or StockRepository(db_manager)
+        self.factor_loader = factor_loader
 
     def run_outcomes(
         self,
@@ -587,16 +597,39 @@ class DecisionSignalOutcomeService:
             analysis_date=anchor_date,
             eval_window_days=eval_days,
         )
+        unable_context = {
+            "direction_expected": direction,
+            "anchor_date": anchor_date,
+            "eval_window_days": eval_days,
+        }
+        # 先看窗口夠不夠，再看進場開盤：兩者都可重試，但空窗口不該被報成缺開盤。
+        if len(forward_bars) < eval_days:
+            return self._unable_fields(base, reason="insufficient_forward_bars", **unable_context)
+        # 信號在錨點日（session_date）收盤後才算得出來，可成交的第一個價格是下一根的開盤。
+        entry_open = getattr(forward_bars[0], "open", None)
+        if entry_open is None:
+            return self._unable_fields(base, reason="missing_entry_open", **unable_context)
+        if not is_valid_entry_open(entry_open):
+            return self._unable_fields(base, reason="invalid_entry_open", **unable_context)
+
+        window_bars = list(forward_bars[:eval_days])
+        basis = resolve_entry_basis(
+            code=signal.stock_code,
+            anchor_date=anchor_date,
+            window_bars=window_bars,
+            factor_loader=self.factor_loader,
+        )
         evaluation = BacktestEngine.evaluate_decision_signal(
             direction_expected=direction,
             anchor_date=anchor_date,
-            start_price=float(start_price),
-            forward_bars=forward_bars,
+            start_price=float(entry_open),
+            forward_bars=window_bars,
             config=EvaluationConfig(
                 eval_window_days=eval_days,
                 neutral_band_pct=2.0,
                 engine_version=DECISION_SIGNAL_OUTCOME_ENGINE_VERSION,
             ),
+            price_context=basis,
         )
         return {
             **base,
@@ -607,11 +640,15 @@ class DecisionSignalOutcomeService:
             "unable_reason": evaluation.get("unable_reason"),
             "anchor_date": anchor_date,
             "eval_window_days": eval_days,
-            "start_price": evaluation.get("start_price", start_price),
+            "start_price": evaluation.get("start_price", float(entry_open)),
             "end_close": evaluation.get("end_close"),
             "max_high": evaluation.get("max_high"),
             "min_low": evaluation.get("min_low"),
             "stock_return_pct": evaluation.get("stock_return_pct"),
+            "entry_date": evaluation.get("entry_date", basis.entry_date),
+            "price_basis": evaluation.get("price_basis", basis.price_basis),
+            "adjustment_reason": evaluation.get("adjustment_reason", basis.adjustment_reason),
+            "max_adverse_excursion_pct": evaluation.get("max_adverse_excursion_pct"),
         }
 
     @staticmethod
@@ -665,6 +702,10 @@ class DecisionSignalOutcomeService:
             "max_high": None,
             "min_low": None,
             "stock_return_pct": None,
+            "entry_date": None,
+            "price_basis": None,
+            "adjustment_reason": None,
+            "max_adverse_excursion_pct": None,
         }
 
     def _anchor_date(self, signal: DecisionSignalRecord) -> Optional[date]:
@@ -839,6 +880,10 @@ class DecisionSignalOutcomeService:
             "max_high": row.max_high,
             "min_low": row.min_low,
             "stock_return_pct": row.stock_return_pct,
+            "entry_date": row.entry_date.isoformat() if getattr(row, "entry_date", None) else None,
+            "price_basis": getattr(row, "price_basis", None),
+            "adjustment_reason": getattr(row, "adjustment_reason", None),
+            "max_adverse_excursion_pct": getattr(row, "max_adverse_excursion_pct", None),
             "action": row.action,
             "market": row.market,
             "market_phase": row.market_phase,
@@ -954,6 +999,15 @@ class DecisionSignalOutcomeService:
         cls,
         row: DecisionSignalOutcomeRecord,
     ) -> Optional[float]:
+        # v2 起直接存還原基準的 MAE；價位欄是原始價，除權息窗口用舊公式會失真。
+        stored = getattr(row, "max_adverse_excursion_pct", None)
+        if stored is not None:
+            try:
+                value = float(stored)
+            except (TypeError, ValueError):
+                value = None
+            if value is not None and math.isfinite(value):
+                return max(0.0, value)
         if not cls._is_positive_finite(row.start_price):
             return None
         start_price = float(row.start_price)

@@ -403,6 +403,6 @@ describe('BacktestPage', () => {
 
     expect(screen.getByText('实际表现')).toBeInTheDocument();
     expect(screen.getByText('准确性')).toBeInTheDocument();
-    expect(screen.getByText('1 日验证模式会用下一个交易日收盘表现校验 AI 预测。')).toBeInTheDocument();
+    expect(screen.getByText('1 日验证模式会用下一个可进场交易日的开盘至收盘收益校验 AI 预测，不含隔夜跳空。')).toBeInTheDocument();
   });
 });

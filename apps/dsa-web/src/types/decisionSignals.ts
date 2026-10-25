@@ -204,6 +204,10 @@ export interface DecisionSignalOutcomeItem {
   holdingState: 'holding' | 'empty' | 'unknown';
   createdAt?: string | null;
   updatedAt?: string | null;
+  entryDate?: string | null;
+  priceBasis?: string | null;
+  adjustmentReason?: string | null;
+  maxAdverseExcursionPct?: number | null;
 }
 
 export interface DecisionSignalOutcomeRunRequest {

@@ -10,7 +10,10 @@ from datetime import date, datetime
 import pytest
 
 from src.config import Config
-from src.services.decision_signal_outcome_service import DecisionSignalOutcomeService
+from src.services.decision_signal_outcome_service import (
+    DECISION_SIGNAL_OUTCOME_ENGINE_VERSION,
+    DecisionSignalOutcomeService,
+)
 from src.storage import DatabaseManager, DecisionSignalOutcomeRecord, DecisionSignalRecord, StockDaily
 
 
@@ -120,7 +123,7 @@ def _seed_calibration_outcomes(
             session.add(DecisionSignalOutcomeRecord(
                 signal_id=signal.id,
                 horizon=horizon,
-                engine_version="decision-signal-v1",
+                engine_version=DECISION_SIGNAL_OUTCOME_ENGINE_VERSION,
                 eval_status="completed",
                 outcome=outcome_value,
                 direction_expected="not_up" if action in {"sell", "reduce", "avoid"} else "up",
@@ -153,17 +156,20 @@ def _seed_bars(
 ) -> None:
     with db.session_scope() as session:
         session.add(StockDaily(code=code, date=anchor, open=start_close, high=start_close, low=start_close, close=start_close))
+        # H2（decision-signal-v2）以 T+1 開盤進場：開盤設成前一根收盤，報酬口徑維持「start_close → close」。
+        previous_close = start_close
         for index, close in enumerate(closes, start=1):
             session.add(
                 StockDaily(
                     code=code,
                     date=date(2024, 1, 2 + index),
-                    open=close,
+                    open=previous_close,
                     high=close + 1,
                     low=close - 1,
                     close=close,
                 )
             )
+            previous_close = close
 
 
 def _set_outcome_updated_at(
@@ -561,9 +567,9 @@ def test_missing_anchor_price_is_retried_after_data_arrives(isolated_db) -> None
     signal_id = _add_signal(isolated_db, action="buy", horizon="3d", session_date="2024-01-03")
     with isolated_db.session_scope() as session:
         session.add(StockDaily(code="600519", date=date(2024, 1, 2), close=100.0, high=101.0, low=99.0))
-        session.add(StockDaily(code="600519", date=date(2024, 1, 4), close=105.0, high=106.0, low=104.0))
-        session.add(StockDaily(code="600519", date=date(2024, 1, 5), close=106.0, high=107.0, low=105.0))
-        session.add(StockDaily(code="600519", date=date(2024, 1, 6), close=107.0, high=108.0, low=106.0))
+        session.add(StockDaily(code="600519", date=date(2024, 1, 4), open=100.0, close=105.0, high=106.0, low=104.0))
+        session.add(StockDaily(code="600519", date=date(2024, 1, 5), open=105.0, close=106.0, high=107.0, low=105.0))
+        session.add(StockDaily(code="600519", date=date(2024, 1, 6), open=106.0, close=107.0, high=108.0, low=106.0))
     service = DecisionSignalOutcomeService(db_manager=isolated_db)
 
     item = service.run_outcomes(signal_id=signal_id)["items"][0]
@@ -587,7 +593,7 @@ def test_insufficient_forward_bars_and_force_idempotency(isolated_db) -> None:
     insufficient_id = _add_signal(isolated_db, action="buy", horizon="3d", session_date="2024-01-10")
     with isolated_db.session_scope() as session:
         session.add(StockDaily(code="600519", date=date(2024, 1, 10), close=100.0, high=101.0, low=99.0))
-        session.add(StockDaily(code="600519", date=date(2024, 1, 11), close=103.0, high=104.0, low=102.0))
+        session.add(StockDaily(code="600519", date=date(2024, 1, 11), open=100.0, close=103.0, high=104.0, low=102.0))
     service = DecisionSignalOutcomeService(db_manager=isolated_db)
 
     insufficient = service.run_outcomes(signal_id=insufficient_id)["items"][0]
@@ -599,8 +605,8 @@ def test_insufficient_forward_bars_and_force_idempotency(isolated_db) -> None:
     assert retried_still_unable["items"][0]["unable_reason"] == "insufficient_forward_bars"
 
     with isolated_db.session_scope() as session:
-        session.add(StockDaily(code="600519", date=date(2024, 1, 12), close=104.0, high=105.0, low=103.0))
-        session.add(StockDaily(code="600519", date=date(2024, 1, 13), close=105.0, high=106.0, low=104.0))
+        session.add(StockDaily(code="600519", date=date(2024, 1, 12), open=103.0, close=104.0, high=105.0, low=103.0))
+        session.add(StockDaily(code="600519", date=date(2024, 1, 13), open=104.0, close=105.0, high=106.0, low=104.0))
     retried_completed = service.run_outcomes(signal_id=insufficient_id)
 
     assert retried_completed["evaluated"] == 1
@@ -645,7 +651,7 @@ def test_batch_prioritizes_missing_before_retryable_unable(isolated_db) -> None:
     newer_retryable_id = _add_signal(isolated_db, code="000021", action="buy", horizon="3d", session_date="2024-01-10")
     with isolated_db.session_scope() as session:
         session.add(StockDaily(code="000021", date=date(2024, 1, 10), close=100.0, high=101.0, low=99.0))
-        session.add(StockDaily(code="000021", date=date(2024, 1, 11), close=103.0, high=104.0, low=102.0))
+        session.add(StockDaily(code="000021", date=date(2024, 1, 11), open=100.0, close=103.0, high=104.0, low=102.0))
     service = DecisionSignalOutcomeService(db_manager=isolated_db)
     retryable = service.run_outcomes(signal_id=newer_retryable_id)["items"][0]
     _seed_bars(isolated_db, code="000020", closes=[104.0])
@@ -681,7 +687,7 @@ def test_batch_rotates_retryable_unable_by_oldest_retry_timestamp(isolated_db) -
     for code in ("000030", "000031"):
         with isolated_db.session_scope() as session:
             session.add(StockDaily(code=code, date=date(2024, 1, 10), close=100.0, high=101.0, low=99.0))
-            session.add(StockDaily(code=code, date=date(2024, 1, 11), close=103.0, high=104.0, low=102.0))
+            session.add(StockDaily(code=code, date=date(2024, 1, 11), open=100.0, close=103.0, high=104.0, low=102.0))
     service = DecisionSignalOutcomeService(db_manager=isolated_db)
     service.run_outcomes(signal_id=oldest_retryable_id)
     service.run_outcomes(signal_id=newer_retryable_id)

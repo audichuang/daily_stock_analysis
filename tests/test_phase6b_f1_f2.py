@@ -14,6 +14,7 @@ from sqlalchemy import event
 from tests.test_agent_active_stock_integration import (  # noqa: F401
     isolated_database_manager, db, chat_stock_index, actual_chat_api, action_chat_api,
 )
+from src.core.backtest_engine import effective_backtest_engine_version  # H2：服務讀寫的版本字串
 from src.config import Config
 
 
@@ -150,7 +151,7 @@ def test_f2_validated_target_reaches_summary_recent_and_sql(db, monkeypatch, tok
     payload = loader._CHAT_INDEX_PAYLOAD_CACHE
     validate_stock_index_payload(payload)
     loader._validate_index_rows_semantics(loader._extract_active_index_rows(payload), loader._extract_active_non_index_rows(payload))
-    engine = Config.get_instance().backtest_engine_version
+    engine = effective_backtest_engine_version(Config.get_instance().backtest_engine_version)
     service = AgentChatSessionService(db)
     resolved = service.prepare_session_turn(Config.get_instance(), f"f2-{token}", f"分析{token}", [])
     accepted = service.commit_user_turn(resolved)
@@ -222,7 +223,7 @@ def numeric_backtest_data(db):
     from src.storage import AnalysisHistory, BacktestSummary, BacktestResult
 
     service = BacktestService(db)
-    engine = Config.get_instance().backtest_engine_version
+    engine = effective_backtest_engine_version(Config.get_instance().backtest_engine_version)
     with db.get_session() as session:
         history = AnalysisHistory(code="600519", name="SYNTHETIC unqualified legacy row", report_type="simple")
         session.add(history)
