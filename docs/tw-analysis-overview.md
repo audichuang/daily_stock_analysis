@@ -19,7 +19,7 @@
 
 | 數據 | 來源 | 進 prompt | 注意 |
 |---|---|---|---|
-| 日線 OHLCV、均線、乖離、MACD、RSI、ATR14 | 本地 `market.price`（前復權算指標）→ yfinance | 是 | 顯示價是未還原；指標用還原價（`docs/realtime-board.md`）；盤中（含午休、收盤集合競價）最後一根是部分累計量，量比只顯示、量能狀態標「盤中不判讀」並給中性 10 分，收盤後才判縮放量 |
+| 日線 OHLCV、均線、乖離、MACD、RSI、ATR14 | 本地 `market.price`（前復權算指標）→ yfinance | 是 | 顯示價是未還原；指標用還原價（`docs/realtime-board.md`）；盤中（含午休、收盤集合競價）僅在趨勢輸入最後一根是今日部分 K（即時疊上或 DB 已有）時，量能狀態標「盤中不判讀」並給中性 10 分，日期不明時也保守不判讀；最後一根仍是昨日完整 K 或已收盤則照常判縮放量，量比標籤不變 |
 | 即時報價、漲跌停 | Shioaji → yfinance | 是 | `source` 變 `fallback` 代表 Shioaji 金鑰沒注入、已降級 |
 | 三大法人（當日＋5／20 日累計） | 當日 TWSE T86／TPEx；趨勢讀本地 `market.institutional` | 是 | 單位是**股**；18:00 拿到的是初版，prompt 標「初版，投信常於隔夜修正」（約 1/4 份報告與定版不同，多在投信欄）；隔日 `daily` 由 `REVISED_SOURCES` 換成定版；上櫃歷史自 2018-01-15（#39） |
 | 融資融券（餘額、5／20 場變化、券資比） | 本地 `market.margin` | 是 | 單位是**張**，T+1；上櫃同表 `market='tpex'`（#39） |

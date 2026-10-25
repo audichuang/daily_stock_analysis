@@ -2820,10 +2820,10 @@ class StockAnalysisPipeline:
 
     @staticmethod
     def _is_tw_intraday_volume(code: str, market_phase_context: Optional[Dict[str, Any]]) -> bool:
-        """台股盤中（含午休、收盤集合競價）時最後一根量是部分累計量，不能拿來判縮放量。
+        """台股是否處於量能可能仍是部分累計量的盤中階段（含午休、收盤集合競價）。
 
         呼叫端給的 phase 或牆鐘任一說盤中就算盤中：誤把部分累計量當全日量會讀成「縮量」，
-        寧可往盤中靠。量比標籤（_enhance_context）與趨勢評分共用這一個判定。
+        寧可往盤中靠。量比標籤（_enhance_context）沿用此判定；趨勢評分另查輸入最後一根日期。
         """
         if not is_tw_code(code):
             return False
@@ -2846,11 +2846,18 @@ class StockAnalysisPipeline:
         code: str,
         market_phase_context: Optional[Dict[str, Any]],
     ) -> TrendAnalysisResult:
-        """趨勢分析；台股盤中不判量能（不給縮量回調滿分），收盤後行為不變。"""
+        """台股盤中僅在輸入最後一根是今日部分 K 時不判量能；日期不明時保守不判讀。"""
+        intraday_volume = self._is_tw_intraday_volume(code, market_phase_context)
+        if intraday_volume and df is not None and not df.empty and 'date' in df.columns:
+            last_date = _coerce_to_date(df.iloc[-1]['date'])
+            if last_date is not None and not pd.isna(last_date):
+                market = get_market_for_stock(normalize_stock_code(code))
+                # 即時報價未疊上且 DB 仍停在昨日完整 K 時，量能照常判讀。
+                intraday_volume = last_date == get_market_now(market).date()
         return self.trend_analyzer.analyze(
             df,
             code,
-            intraday_volume=self._is_tw_intraday_volume(code, market_phase_context),
+            intraday_volume=intraday_volume,
         )
 
     def _build_trend_input_frame(
