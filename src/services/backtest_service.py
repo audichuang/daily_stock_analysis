@@ -25,6 +25,7 @@ from src.market_phase_summary import (
 from src.repositories.backtest_repo import BacktestRepository
 from src.repositories.stock_repo import StockRepository
 from src.schemas.decision_action import build_action_fields
+from src.schemas.decision_scale import extract_decision_guardrail_reason
 from src.services.stock_code_utils import (
     normalize_code as normalize_backtest_code,
     resolve_daily_stock_identity,
@@ -1133,7 +1134,8 @@ class BacktestService:
                 if raw.get("sentiment_score") is not None
                 else analysis_sentiment_score
             ),
-            guardrail_reason=raw.get("guardrail_reason") or raw.get("downgrade_reason"),
+            # 與 API／歷史同口徑：dashboard 已套用的護欄原因也要擋住分數對齊。
+            guardrail_reason=extract_decision_guardrail_reason(raw),
             align_with_score=True,
         )
         return {

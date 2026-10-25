@@ -2393,6 +2393,7 @@ class StockAnalysisPipeline:
         *,
         report_type: Any,
         previous_operation_advice: Any,
+        record_contradiction: bool = True,
     ) -> AnalysisResult:
         # A guardrail may rewrite the advice after the Agent action was parsed;
         # discard that stale action before using the same resolver as the
@@ -2411,6 +2412,11 @@ class StockAnalysisPipeline:
             # 非買入原意優先於分數，並清掉先前已被對齊成買入／加倉的動作。
             result.action = advice_action if advice_action and advice_action not in {"buy", "add"} else "watch"
             result.action_label = None
+            if not record_contradiction:
+                # 中途只刷新動作，等真正護欄執行完才記錄尚未解決的矛盾。
+                return populate_decision_action_fields(
+                    result, explicit_action=result.action, report_type=report_type, align_with_score=False,
+                )
             if not isinstance(getattr(result, "dashboard", None), dict):
                 result.dashboard = {}
             language = normalize_report_language(getattr(result, "report_language", "zh"))
@@ -2422,9 +2428,8 @@ class StockAnalysisPipeline:
             }[language]
             record_guardrail_score_adjustment(
                 result.dashboard,
-                raw_score=score,
-                adjusted_score=score,
-                raw_decision_type=getattr(result, "decision_type", None),
+                raw_score=None,
+                adjusted_score=None,
                 final_action=result.action,
                 reason=reason,
             )
@@ -3139,6 +3144,7 @@ class StockAnalysisPipeline:
             result,
             report_type=report_type,
             previous_operation_advice=getattr(result, "operation_advice", None),
+            record_contradiction=False,
         )
         pipeline_start_action = normalize_decision_action(getattr(result, "action", None))
         action_chain_valid = pipeline_start_action is not None
@@ -3149,6 +3155,7 @@ class StockAnalysisPipeline:
                 result,
                 report_type=report_type,
                 previous_operation_advice=advice_before,
+                record_contradiction=False,
             )
             action_after = normalize_decision_action(getattr(result, "action", None))
             if action_chain_valid and action_after is not None:
@@ -3209,6 +3216,12 @@ class StockAnalysisPipeline:
         if cost_adjustments:
             logger.info("[trade_cost_guardrail] Applied adjustments for %s: %s", artifacts.code, cost_adjustments)
         _capture("trade_cost", action_before_guardrail, advice_before_guardrail)
+        # 真正護欄優先留下原因，最後才記錄仍落在買入分數區的矛盾。
+        self._refresh_decision_action_for_final_result(
+            result,
+            report_type=report_type,
+            previous_operation_advice=getattr(result, "operation_advice", None),
+        )
         if isinstance(artifacts.fundamental_context, dict):
             result.fundamental_context = artifacts.fundamental_context
         # Upstream #1981 attaches market_structure_context to the result in both

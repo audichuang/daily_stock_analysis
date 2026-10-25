@@ -3280,5 +3280,50 @@ class BacktestServiceTestCase(unittest.TestCase):
             )
 
 
+
+class BacktestResultDashboardGuardrailTestCase(unittest.TestCase):
+    """回測結果列沿用 dashboard 已套用的護欄原因，不把非買入結論升回買入。"""
+
+    def _row(self, advice):
+        return BacktestResult(
+            analysis_history_id=1, code="2330.TW", analysis_date=date(2026, 10, 23),
+            eval_window_days=10, engine_version="v1", eval_status="completed",
+            operation_advice=advice,
+        )
+
+    def _action(self, *, decision_type, advice, action, dashboard):
+        raw = {
+            "decision_type": decision_type, "operation_advice": advice, "action": action,
+            "sentiment_score": 68, "report_language": "zh-TW", "dashboard": dashboard,
+        }
+        data = BacktestService._result_to_dict(
+            self._row(advice), raw_result=json.dumps(raw, ensure_ascii=False), report_type="detailed",
+        )
+        return data["action"], data["action_label"]
+
+    def test_dashboard_guardrail_reason_keeps_non_buy_action(self):
+        cases = [
+            ("sell", "觀望", "watch", "觀望",
+             {"decision_score_calibration": {"guardrail_reason": "保留非買入原意"}}),
+            ("hold", "洗盤觀察", "hold", "持有",
+             {"decision_stability": {"applied": True, "reason": "支撐附近洗盤，維持持有"}}),
+        ]
+        for decision_type, advice, action, label, dashboard in cases:
+            with self.subTest(decision_type=decision_type):
+                self.assertEqual(
+                    self._action(decision_type=decision_type, advice=advice, action=action, dashboard=dashboard),
+                    (action, label),
+                )
+
+    def test_without_applied_reason_still_aligns_to_buy(self):
+        # 反向：沒有已套用的原因（或洗盤未套用）時，仍按分數對齊成買入。
+        for dashboard in ({}, {"decision_stability": {"applied": False, "reason": "未套用"}}):
+            with self.subTest(dashboard=dashboard):
+                self.assertEqual(
+                    self._action(decision_type="hold", advice="洗盤觀察", action="hold", dashboard=dashboard),
+                    ("buy", "買入"),
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

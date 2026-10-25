@@ -12,6 +12,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, patch
 
+import pytest
+
 _ORIGINAL_ENVIRON = dict(os.environ)
 _MODULE_TEMP_DIR = tempfile.TemporaryDirectory()
 _MODULE_ENV_FILE = Path(_MODULE_TEMP_DIR.name) / ".env"
@@ -4877,6 +4879,86 @@ class RegisteredIndexAliasReachesTheRestEntryTestCase(unittest.TestCase):
         resolved, target = _resolve_analysis_input("贵州茅台")
         self.assertEqual(resolved, "600519")
         self.assertIsNone(target)
+
+
+@pytest.mark.parametrize("serializer", ["service", "report", "queued", "status_db", "history"])
+@pytest.mark.parametrize("reason_source", ["calibration", "stability", "absent", "inactive_stability"])
+@pytest.mark.parametrize(
+    "decision_type, advice, action, label",
+    [("sell", "觀望", "watch", "觀望"), ("hold", "洗盤觀察", "hold", "持有")],
+    ids=["contradiction", "shakeout"],
+)
+def test_response_serializers_preserve_dashboard_guardrail_actions(
+    serializer, reason_source, decision_type, advice, action, label,
+):
+    from api.v1.endpoints.history import get_stock_bar
+    from src.analyzer import AnalysisResult
+
+    dashboard = {}
+    if reason_source == "calibration":
+        dashboard["decision_score_calibration"] = {"guardrail_reason": "保留非買入原意"}
+    elif reason_source in {"stability", "inactive_stability"}:
+        dashboard["decision_stability"] = {
+            "applied": reason_source == "stability", "reason": "支撐附近洗盤，維持持有",
+        }
+    result = AnalysisResult(
+        code="2330.TW", name="台積電", decision_type=decision_type,
+        operation_advice=advice, action=action, sentiment_score=68,
+        trend_prediction="震盪", confidence_level="中", report_language="zh-TW",
+        dashboard=dashboard,
+    )
+    raw = result.to_dict()
+    report_data = {
+        "meta": {"report_type": "detailed", "report_language": "zh-TW"},
+        "summary": {"operation_advice": advice, "action": action, "sentiment_score": 68},
+        "details": {"raw_result": raw},
+    }
+    if serializer == "service":
+        response = AnalysisService.__new__(AnalysisService)._build_analysis_response(result, "q-guardrail")
+        summary = response["report"]["summary"]
+    elif serializer == "report":
+        report = _build_analysis_report(
+            report_data=report_data, query_id="q-guardrail", stock_code=result.code,
+            stock_name=result.name, context_snapshot=None, fallback_fundamental_payload=None,
+        )
+        summary = report.summary.model_dump()
+    elif serializer == "queued":
+        task = SimpleNamespace(
+            result={"report": report_data}, task_id="q-guardrail", stock_code=result.code,
+            stock_name=result.name, created_at=datetime(2026, 10, 23), completed_at=None,
+        )
+        with patch.object(analysis_endpoint_module, "_load_sync_fundamental_sources", return_value=(None, None, None)):
+            response = analysis_endpoint_module._build_task_analysis_result(task)
+        summary = response.report["summary"]
+    else:
+        record = SimpleNamespace(
+            id=1, code=result.code, name=result.name, report_type="detailed",
+            raw_result=json.dumps(raw, ensure_ascii=False), context_snapshot=None,
+            sentiment_score=68, operation_advice=advice, trend_prediction="震盪",
+            analysis_summary="等待確認", ideal_buy=None, secondary_buy=None,
+            stop_loss=None, take_profit=None, created_at=None, news_content=None,
+        )
+        db = MagicMock()
+        if serializer == "status_db":
+            queue = MagicMock()
+            queue.get_task.return_value = None
+            db.get_analysis_history.return_value = [record]
+            db.get_latest_fundamental_snapshot.return_value = None
+            with patch.object(analysis_endpoint_module, "get_task_queue", return_value=queue), \
+                    patch("src.storage.DatabaseManager.get_instance", return_value=db):
+                response = get_analysis_status("q-guardrail")
+            assert response.status == "completed"
+            summary = response.result.report["summary"]
+        else:
+            db.get_distinct_stocks_from_history.return_value = [record]
+            db.get_analysis_counts_by_code.return_value = {result.code: 1}
+            response = get_stock_bar(start_date=None, end_date=None, limit=10, db_manager=db)
+            summary = response.items[0].model_dump()
+
+    # 反向：沒有已套用的原因時，仍按既有分數口徑對齊成買入。
+    has_reason = reason_source in {"calibration", "stability"}
+    assert summary["action"] == (action if has_reason else "buy")
+    assert summary["action_label"] == (label if has_reason else "買入")
 
 
 if __name__ == "__main__":

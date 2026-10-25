@@ -26,6 +26,7 @@ from src.core.pipeline import StockAnalysisPipeline
 from src.report_language import localize_operation_advice
 from src.schemas.decision_action import display_action_fields_for_result
 from src.services.analysis_context_builder import PipelineAnalysisArtifacts
+from scripts.shadow_buy_eval import raw_decision
 
 
 def _make_pipeline(*, save_context_snapshot: bool = True) -> StockAnalysisPipeline:
@@ -131,11 +132,14 @@ def test_finalize_contradictory_non_buy_never_publishes_buy(
     assert result.action == saved.action == signal["action"] == expected_action
     assert display_action_fields_for_result(result)["action"] == expected_action
     assert result.sentiment_score == saved.sentiment_score == 68
-    assert signal["metadata"]["guardrail_reason"]
     calibration = saved.dashboard["decision_score_calibration"]
-    assert calibration["guardrail_reason"]
-    assert calibration["raw_score"] == 68
-    assert calibration["adjusted_score"] == 68
+    expected_reason = "决策或操作建议与买入分数矛盾，保留非买入动作，禁止升为买入或加仓。"
+    assert calibration["guardrail_reason"] == expected_reason
+    assert signal["metadata"]["guardrail_reason"] == expected_reason
+    assert raw_decision(saved.to_dict())["downgraded"] is False
+    assert "raw_score" not in calibration
+    assert "adjusted_score" not in calibration
+    assert "raw_decision_type" not in calibration
     assert calibration["final_action"] == expected_action
 
 
@@ -148,6 +152,40 @@ def test_finalize_normal_buy_band_buy_still_publishes_buy():
     assert result.sentiment_score == 68
     assert not signal["metadata"].get("guardrail_reason")
     assert "decision_score_calibration" not in (saved.dashboard or {})
+
+
+@pytest.mark.parametrize("guardrail", ["market_context", "trade_cost"])
+@pytest.mark.parametrize("decision_type", ["buy", "hold"])
+@pytest.mark.parametrize("advice", ["觀望", "持有觀望"])
+def test_finalize_real_guardrail_reason_takes_precedence_over_contradiction(guardrail, decision_type, advice):
+    result = _result(
+        code="2330.TW", name="台積電", decision_type=decision_type,
+        operation_advice=advice, sentiment_score=68, report_language="en",
+        dashboard={"battle_plan": {"sniper_points": {
+            "ideal_buy": "100", "stop_loss": "97.86", "take_profit": "103.69",
+        }}},
+    )
+    snapshot = {"daily_market_context": {"risk_tags": ["high_risk"]}} if guardrail == "market_context" else {}
+
+    saved, signal = _finalize_public_action(
+        result, artifacts=_artifacts(code="2330.TW", market="tw"), snapshot_context=snapshot,
+    )
+
+    assert result.action == saved.action == signal["action"] == "watch"
+    calibration = saved.dashboard["decision_score_calibration"]
+    if guardrail == "market_context":
+        assert saved.sentiment_score == 52
+        expected_reason = "Daily market context is conservative/high risk; aggressive buy advice was softened."
+    else:
+        assert saved.sentiment_score == 59
+        assert saved.dashboard["battle_plan"]["cost_check"]["passed"] is False
+        expected_reason = saved.risk_warning
+        assert "round-trip cost" in expected_reason
+    assert calibration["guardrail_reason"] == expected_reason
+    assert signal["metadata"]["guardrail_reason"] == expected_reason
+    assert raw_decision(saved.to_dict())["downgraded"] is True
+    assert calibration["raw_score"] == 68
+    assert calibration["adjusted_score"] == saved.sentiment_score
 
 
 def test_finalize_consistent_low_score_sell_is_untouched():
