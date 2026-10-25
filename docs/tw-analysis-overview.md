@@ -50,6 +50,8 @@
 3. **大盤脈絡護欄** `apply_daily_market_context_guardrail`：只在 `high_risk`、`market_cooling`、`low_position_cap` 標籤或明確倉位上限時，把積極買進軟化成觀望、分數 ≤52；「積極買進」只看 LLM 的 `decision_type=buy`（缺值或非法時才用共用 advice 對照表），不再比對報告文字。黃燈單獨出現、「謹慎／觀望」字樣都**不再**觸發（2026-10-22 修）。**已知缺口（待辦）**：LLM 漏給 `decision_type` 時，傳統解析會用共用對照表 `_OPERATION_ADVICE_CANONICAL_MAP` 推斷，但它沒有繁中詞，zh-TW 報告會被補成 hold、不受此護欄（正式庫 921/921 都有 `decision_type`，目前碰不到）。不要直接加繁中別名：「不建議買進、加碼」會被頓號拆段後讀成買入（2026-10-24 Codex 實測），要先做帶否定的拆段比對。
 4. **交易成本護欄** `apply_trade_cost_guardrail`：扣完來回成本（`TW_BROKER_FEE_DISCOUNT`）後報酬風險比不足就不給買進。
 
+Web 回測與 DecisionSignal 後驗（也是 Agent 記憶的命中率來源）以 T+1 開盤進場、台股報酬還原除權息，回測另給台股比例式淨報酬；口徑見 `docs/full-guide.md`「回测功能」與 `docs/decision-signals.md`「后验评估与反馈」。
+
 LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/agent/skills/defaults.py`）：上游 A 股「嚴進」哲學，要求多頭排列、乖離 <5%。`TW_MA_ALIGNMENT_WEIGHTED=true` 時，台股改成多頭排列為加分項、乖離 5～10% 限放量突破加 ATR 停損。
 
 ## 4. 已經回答過的問題（不要重做）

@@ -106,11 +106,12 @@ def _payload(**overrides):
 
 
 def _seed_bars(db: DatabaseManager, *, code: str = "600519") -> None:
+    # H2：T+1 開盤進場，開盤設成前一根收盤，報酬口徑維持「錨點收盤 → 期末收盤」。
     with db.session_scope() as session:
         session.add(StockDaily(code=code, date=date(2024, 1, 2), open=100, high=101, low=99, close=100))
-        session.add(StockDaily(code=code, date=date(2024, 1, 3), open=103, high=104, low=102, close=103))
-        session.add(StockDaily(code=code, date=date(2024, 1, 4), open=104, high=105, low=103, close=104))
-        session.add(StockDaily(code=code, date=date(2024, 1, 5), open=105, high=106, low=104, close=105))
+        session.add(StockDaily(code=code, date=date(2024, 1, 3), open=100, high=104, low=102, close=103))
+        session.add(StockDaily(code=code, date=date(2024, 1, 4), open=103, high=105, low=103, close=104))
+        session.add(StockDaily(code=code, date=date(2024, 1, 5), open=104, high=106, low=104, close=105))
 
 
 def test_outcome_run_list_stats_signal_outcomes_and_feedback(client_and_db) -> None:
@@ -257,7 +258,7 @@ def test_outcome_run_retries_transient_unable_by_default(client_and_db) -> None:
     signal_id = created_resp.json()["item"]["id"]
     with db.session_scope() as session:
         session.add(StockDaily(code="600519", date=date(2024, 1, 2), open=100, high=101, low=99, close=100))
-        session.add(StockDaily(code="600519", date=date(2024, 1, 3), open=103, high=104, low=102, close=103))
+        session.add(StockDaily(code="600519", date=date(2024, 1, 3), open=100, high=104, low=102, close=103))
 
     first_run = client.post(
         "/api/v1/decision-signals/outcomes/run",
@@ -267,8 +268,8 @@ def test_outcome_run_retries_transient_unable_by_default(client_and_db) -> None:
     assert first_run.json()["items"][0]["unable_reason"] == "insufficient_forward_bars"
 
     with db.session_scope() as session:
-        session.add(StockDaily(code="600519", date=date(2024, 1, 4), open=104, high=105, low=103, close=104))
-        session.add(StockDaily(code="600519", date=date(2024, 1, 5), open=105, high=106, low=104, close=105))
+        session.add(StockDaily(code="600519", date=date(2024, 1, 4), open=103, high=105, low=103, close=104))
+        session.add(StockDaily(code="600519", date=date(2024, 1, 5), open=104, high=106, low=104, close=105))
     second_run = client.post(
         "/api/v1/decision-signals/outcomes/run",
         json={"signal_id": signal_id},

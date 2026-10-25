@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import event, inspect, text
 
+from src.core.backtest_engine import effective_backtest_engine_version  # H2：服務讀寫的版本字串
 from src.agent.stock_scope import extract_stock_codes
 from src.config import Config
 from src.services.stock_list_parser import IndexRegistry
@@ -487,13 +488,13 @@ def test_convergence_saved_data_tools_read_distinct_real_sqlite_keys(db, chat_st
     with db.get_session() as session:
         for code, wins in [("000001", 11), ("sh000001", 77)]:
             session.add(BacktestSummary(scope="stock", code=code, eval_window_days=30,
-                                        engine_version=Config.get_instance().backtest_engine_version,
+                                        engine_version=effective_backtest_engine_version(Config.get_instance().backtest_engine_version),
                                         win_rate_pct=wins, total_evaluations=100, completed_count=100))
         source = AnalysisHistory(code="000001", name="SYNTHETIC CN source", report_type="simple")
         session.add(source)
         session.flush()
         session.add(BacktestResult(analysis_history_id=source.id, code="000001", analysis_date=date(2026, 10, 6),
-                                  eval_window_days=30, engine_version=Config.get_instance().backtest_engine_version,
+                                  eval_window_days=30, engine_version=effective_backtest_engine_version(Config.get_instance().backtest_engine_version),
                                   eval_status="completed", stock_return_pct=11))
         session.commit()
     monkeypatch.setattr(backtest_tools, "_get_backtest_service", lambda: BacktestService(db))

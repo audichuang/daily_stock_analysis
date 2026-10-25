@@ -103,7 +103,7 @@ Web 展示必须把这些 wire value 映射为当前 UI 语言的用户可读标
 - 命中率为 `hit / (hit + miss)`，未命中率为 `miss / (hit + miss)`，neutral 不进入这两个分母。
 - 无法评估率为 `unable / total`。
 - 标的平均区间涨跌沿用已有 completed outcome 的 `stock_return_pct` 平均值，不代表策略或组合收益。
-- 最大不利波动只使用 outcome 已保存的价格。`buy/add/hold/watch/alert` 按 `(start_price - min_low) / start_price`，`sell/reduce/avoid` 按 `(max_high - start_price) / start_price`，结果不小于 0；价格缺失、非有限或起始价非正时该行不可计算。Bucket 返回可计算行中的最大值；没有可计算行时为 `null`，不会为补齐指标读取行情。
+- 最大不利波动：v2 起直接使用 outcome 保存的 `max_adverse_excursion_pct`（進場基準、已還原）；该欄为 `NULL` 的舊列才退回以价格计算。`buy/add/hold/watch/alert` 按 `(start_price - min_low) / start_price`，`sell/reduce/avoid` 按 `(max_high - start_price) / start_price`，结果不小于 0；价格缺失、非有限或起始价非正时该行不可计算。Bucket 返回可计算行中的最大值；没有可计算行时为 `null`，不会为补齐指标读取行情。
 
 Web 在原有“信号表现统计”卡片内提供“保守 / 均衡 / 进取”三个用户入口，固定默认选择均衡，并只提供“按建议动作”和“按复盘周期”两个细分视图。它不排名、不推荐风格，也不增加请求、路由、导航或设置项；旧后端没有 `profile_calibration` 时仍显示原统计卡片。
 
@@ -223,7 +223,10 @@ P5 通过 sidecar 表保存用户反馈和后验结果，不扩展 `decision_sig
 
 - `decision_signal_feedback` 保存每个信号最新的 `useful|not_useful` 反馈、可选原因/备注和来源。
 - `decision_signal_outcomes` 按 `(signal_id, horizon, engine_version)` 幂等保存后验评估结果。
-- 当前 `engine_version=decision-signal-v1`。
+- 当前 `engine_version=decision-signal-v2`（`decision-signal-v1` 舊列保留不刪，統計只讀當前版本）。
+- v2 口徑：信號在錨點日（`session_date`）收盤後才有，進場取錨點之後第一根 K 棒的**開盤**；窗口第 N 根收盤出場。進場 K 棒缺開盤或非正值記 `unable`（`missing_entry_open`／`invalid_entry_open`，可重試），窗口不足先報 `insufficient_forward_bars`。
+- 台股（`.TW`／`.TWO`）的報酬用 `market.price_adjustment` 換到進場日還原基準（`price_basis=adjusted`），除息不再被當成下跌；讀不到因子、或窗口內有非 MarketDB 來源的 K 棒時整窗用原始價（`price_basis=raw`，`adjustment_reason` 記原因）；其他市場維持原樣（`as_stored`）。`start_price`／`end_close`／`max_high`／`min_low` 仍存原始價。
+- `not_up` 在中性帶內（含平盤）仍算 hit，v2 未改分類規則。
 - 后验评估只支持日线可验证的 `1d/3d/5d/10d`；`intraday/swing/long`、非方向动作、缺价和 forward bars 不足会写入 `eval_status=unable` 与明确 `unable_reason`。
 - 评估时冻结 action、market、market_phase、source_type、source_agent、plan_quality、data_quality_level、holding_state 等统计维度，历史统计不依赖后续 live join。
 

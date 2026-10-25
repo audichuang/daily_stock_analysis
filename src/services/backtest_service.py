@@ -12,7 +12,12 @@ from sqlalchemy import and_, select
 
 from data_provider.base import canonical_stock_code, normalize_stock_code
 from src.config import get_config
-from src.core.backtest_engine import OVERALL_SENTINEL_CODE, BacktestEngine, EvaluationConfig
+from src.core.backtest_engine import (
+    OVERALL_SENTINEL_CODE,
+    BacktestEngine,
+    EvaluationConfig,
+    effective_backtest_engine_version,
+)
 from src.market_phase_summary import (
     extract_market_phase_summary,
     normalize_analysis_phase_bucket,
@@ -27,6 +32,13 @@ from src.services.stock_code_utils import (
     _normalize_code_and_exchange,
 )
 from src.services.stock_list_parser import AnalysisTarget
+from src.services.backtest_price_basis import (
+    INTRADAY_ENTRY_GUARD_PHASES,
+    PRICE_BASIS_RAW,
+    FactorLoader,
+    is_valid_entry_open,
+    resolve_entry_basis,
+)
 from src.services.stock_daily_start_resolver import resolve_stock_daily_start
 from src.services.stock_daily_window_resolver import resolve_stock_daily_window
 from src.storage import BacktestResult, BacktestSummary, DatabaseManager
@@ -40,10 +52,20 @@ class BacktestService:
 
     MAX_DYNAMIC_SUMMARY_ROWS = 2000
 
-    def __init__(self, db_manager: Optional[DatabaseManager] = None):
+    def __init__(
+        self,
+        db_manager: Optional[DatabaseManager] = None,
+        factor_loader: Optional[FactorLoader] = None,
+    ):
         self.db = db_manager or DatabaseManager.get_instance()
         self.repo = BacktestRepository(self.db)
         self.stock_repo = StockRepository(self.db)
+        self.factor_loader = factor_loader
+
+    @staticmethod
+    def _engine_version(config: Any) -> str:
+        """實際寫入／查詢用的版本：`.env` 的標籤＋H2 方法 tag（見 backtest_engine）。"""
+        return effective_backtest_engine_version(getattr(config, "backtest_engine_version", "v1"))
 
     def run_backtest(
         self,
@@ -75,7 +97,8 @@ class BacktestService:
         if min_age_days is None:
             min_age_days = getattr(config, "backtest_min_age_days", 14)
 
-        engine_version = getattr(config, "backtest_engine_version", "v1")
+        engine_version = self._engine_version(config)
+        fee_discount = float(getattr(config, "tw_broker_fee_discount", 1.0) or 1.0)
         neutral_band_pct = float(getattr(config, "backtest_neutral_band_pct", 2.0))
 
         eval_config = EvaluationConfig(
@@ -100,6 +123,7 @@ class BacktestService:
         completed = 0
         insufficient = 0
         errors = 0
+        raw_fallbacks: Dict[str, int] = {}
         touched_codes: set[str] = set()
 
         results_to_save: List[BacktestResult] = []
@@ -148,14 +172,15 @@ class BacktestService:
                         eval_window_days=int(eval_window_days),
                     )
 
+                phase = self._persisted_phase(analysis.context_snapshot)
                 if (
                     daily_identity is not None
                     and expected_start_date is not None
-                    and (
-                        daily_window is None
-                        or len(daily_window.forward_bars) < int(eval_window_days)
+                    and not self._has_usable_entry_window(
+                        daily_window, analysis_date, phase, int(eval_window_days)
                     )
                 ):
+                    # 窗口不足或進場 K 棒缺開盤：補一次日線（save_daily_data 會 upsert open）。
                     self._try_fill_daily_data(
                         code=daily_identity.refill_code,
                         analysis_date=expected_start_date,
@@ -168,7 +193,18 @@ class BacktestService:
                         eval_window_days=int(eval_window_days),
                     )
 
-                if daily_window is None:
+                entry_bars: List[Any] = []
+                level_anchor_date: Optional[date] = None
+                if daily_window is not None:
+                    level_anchor_date, entry_bars = self._entry_window(
+                        daily_window, analysis_date, phase, int(eval_window_days)
+                    )
+
+                if (
+                    daily_window is None
+                    or len(entry_bars) < int(eval_window_days)
+                    or not is_valid_entry_open(getattr(entry_bars[0], "open", None))
+                ):
                     insufficient += 1
                     results_to_save.append(
                         BacktestResult(
@@ -184,14 +220,27 @@ class BacktestService:
                     )
                     continue
 
+                window_bars = entry_bars[: int(eval_window_days)]
+                basis = resolve_entry_basis(
+                    code=daily_window.code,
+                    anchor_date=level_anchor_date,
+                    window_bars=window_bars,
+                    factor_loader=self.factor_loader,
+                    fee_discount=fee_discount,
+                )
+                if basis.price_basis == PRICE_BASIS_RAW:
+                    reason = basis.adjustment_reason or "unknown"
+                    raw_fallbacks[reason] = raw_fallbacks.get(reason, 0) + 1
+
                 evaluation = BacktestEngine.evaluate_single(
                     operation_advice=analysis.operation_advice,
                     analysis_date=daily_window.start_bar.date,
-                    start_price=float(daily_window.start_bar.close),
-                    forward_bars=daily_window.forward_bars,
+                    start_price=float(window_bars[0].open),
+                    forward_bars=window_bars,
                     stop_loss=analysis.stop_loss,
                     take_profit=analysis.take_profit,
                     config=eval_config,
+                    price_context=basis,
                 )
 
                 status = evaluation.get("eval_status")
@@ -232,6 +281,10 @@ class BacktestService:
                         simulated_exit_price=evaluation.get("simulated_exit_price"),
                         simulated_exit_reason=evaluation.get("simulated_exit_reason"),
                         simulated_return_pct=evaluation.get("simulated_return_pct"),
+                        entry_date=evaluation.get("entry_date"),
+                        price_basis=evaluation.get("price_basis"),
+                        adjustment_reason=evaluation.get("adjustment_reason"),
+                        simulated_net_return_pct=evaluation.get("simulated_net_return_pct"),
                     )
                 )
 
@@ -250,6 +303,13 @@ class BacktestService:
                         operation_advice=analysis.operation_advice,
                     )
                 )
+
+        if raw_fallbacks:
+            logger.warning(
+                "回测：%d 笔台股窗口无法还原、改用原始价（price_basis=raw）: %s",
+                sum(raw_fallbacks.values()),
+                raw_fallbacks,
+            )
 
         saved = 0
         if results_to_save:
@@ -555,7 +615,7 @@ class BacktestService:
         analysis_target: Optional[AnalysisTarget] = None,
     ) -> Dict[str, Any]:
         config = get_config()
-        engine_version = str(getattr(config, "backtest_engine_version", "v1"))
+        engine_version = self._engine_version(config)
         code, identity_kwargs = self._read_identity(
             code, analysis_target, analysis_date_from=analysis_date_from,
             analysis_date_to=analysis_date_to, analysis_phase=analysis_phase,
@@ -622,7 +682,7 @@ class BacktestService:
         analysis_target: Optional[AnalysisTarget] = None,
     ) -> Optional[Dict[str, Any]]:
         config = get_config()
-        engine_version = str(getattr(config, "backtest_engine_version", "v1"))
+        engine_version = self._engine_version(config)
         if analysis_target is not None and scope != "stock":
             raise ValueError("Validated backtest identity requires stock scope")
         code, identity_kwargs = self._read_identity(
@@ -888,6 +948,49 @@ class BacktestService:
         logger.warning(f"无法确定分析日期，跳过记录: {analysis.code}#{getattr(analysis, 'id', '?')}")
         return None
 
+    @staticmethod
+    def _persisted_phase(context_snapshot: Any) -> Optional[str]:
+        summary = extract_market_phase_summary(context_snapshot)
+        if not isinstance(summary, dict):
+            return None
+        phase = str(summary.get("phase") or "").strip().lower()
+        return phase or None
+
+    def _entry_window(
+        self,
+        daily_window: Any,
+        analysis_date: date,
+        phase: Optional[str],
+        eval_window_days: int,
+    ) -> Tuple[date, List[Any]]:
+        """(停損停利的名目錨點日, 從進場 K 棒起算的窗口)。
+
+        一般情況進場是錨點 K 棒的下一根開盤。盤中分析的錨點是前一個交易日，但分析
+        當下已看得到當天開盤，所以改成分析日之後的第一根開盤進場；沒有持久化 phase 的
+        舊紀錄維持預設（仍可能偷看半天，見 docs）。
+        """
+        anchor = daily_window.start_bar.date
+        if phase in INTRADAY_ENTRY_GUARD_PHASES and analysis_date > anchor:
+            bars = self.stock_repo.get_forward_bars(
+                code=daily_window.code,
+                analysis_date=analysis_date,
+                eval_window_days=eval_window_days,
+            )
+            return analysis_date, list(bars)
+        return anchor, list(daily_window.forward_bars)
+
+    def _has_usable_entry_window(
+        self,
+        daily_window: Any,
+        analysis_date: date,
+        phase: Optional[str],
+        eval_window_days: int,
+    ) -> bool:
+        if daily_window is None:
+            return False
+        _anchor, bars = self._entry_window(daily_window, analysis_date, phase, eval_window_days)
+        return len(bars) >= eval_window_days and is_valid_entry_open(getattr(bars[0], "open", None))
+
     def _try_fill_daily_data(self, *, code: str, analysis_date: date, eval_window_days: int) -> None:
         refill_code = str(code or "").strip()
         if not refill_code:
@@ -1049,6 +1152,10 @@ class BacktestService:
             "simulated_exit_price": row.simulated_exit_price,
             "simulated_exit_reason": row.simulated_exit_reason,
             "simulated_return_pct": row.simulated_return_pct,
+            "simulated_net_return_pct": getattr(row, "simulated_net_return_pct", None),
+            "entry_date": row.entry_date.isoformat() if getattr(row, "entry_date", None) else None,
+            "price_basis": getattr(row, "price_basis", None),
+            "adjustment_reason": getattr(row, "adjustment_reason", None),
         }
 
     @staticmethod
