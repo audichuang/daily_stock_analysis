@@ -43,6 +43,7 @@ from src.analyzer import (
 from src.notification import NotificationService, NotificationChannel
 from src.notification_sender import OutboundMessage
 from src.schemas.decision_action import normalize_decision_action
+from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.report_language import (
     get_placeholder_text,
     get_unknown_text,
@@ -2401,6 +2402,32 @@ class StockAnalysisPipeline:
         if previous_advice != current_advice:
             result.action = None
             result.action_label = None
+        advice_action = normalize_decision_action(current_advice)
+        score = getattr(result, "sentiment_score", None)
+        if action_for_score(score) == "buy" and (
+            str(getattr(result, "decision_type", None) or "").strip().lower() == "sell"
+            or advice_action in {"sell", "reduce", "avoid", "watch"}
+        ):
+            # 非買入原意優先於分數，並清掉先前已被對齊成買入／加倉的動作。
+            result.action = advice_action if advice_action and advice_action not in {"buy", "add"} else "watch"
+            result.action_label = None
+            if not isinstance(getattr(result, "dashboard", None), dict):
+                result.dashboard = {}
+            language = normalize_report_language(getattr(result, "report_language", "zh"))
+            reason = {
+                "zh": "决策或操作建议与买入分数矛盾，保留非买入动作，禁止升为买入或加仓。",
+                "zh-TW": "決策或操作建議與買入分數矛盾，保留非買入動作，禁止升為買入或加倉。",
+                "en": "Decision or advice conflicts with the buy-band score; preserve a non-buy action instead of buy/add.",
+                "ko": "결정 또는 조언이 매수 구간 점수와 모순되어 매수나 추가 매수 대신 비매수 행동을 유지합니다.",
+            }[language]
+            record_guardrail_score_adjustment(
+                result.dashboard,
+                raw_score=score,
+                adjusted_score=score,
+                raw_decision_type=getattr(result, "decision_type", None),
+                final_action=result.action,
+                reason=reason,
+            )
         fields = resolve_decision_signal_action_fields(
             result,
             report_type=str(report_type or ""),
