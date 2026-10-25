@@ -95,6 +95,7 @@ from src.schemas.decision_action import build_action_fields
 from src.schemas.decision_scale import (
     CANONICAL_DECISION_SCALE_PROMPT_EN,
     CANONICAL_DECISION_SCALE_PROMPT_ZH,
+    action_for_score,
     score_band_metadata,
 )
 from src.schemas.report_schema import AnalysisReportSchema
@@ -1130,6 +1131,12 @@ def stabilize_decision_with_structure(
             getattr(result, "operation_advice", ""),
             default="",
         )
+        # 買入分數稍後會把持有／觀望對齊成買入，須先接受同一套資金流與結構護欄；
+        # sell 不走這條：對齊不會把賣出升成買入，套買入校準反而會跳過賣出校準。
+        is_buy_decision = decision_type == "buy" or (
+            decision_type == "hold"
+            and action_for_score(getattr(result, "sentiment_score", None)) == "buy"
+        )
 
         flow_bias, flow_reason = _capital_flow_bias_with_status(fundamental_context)
         if (
@@ -1145,7 +1152,7 @@ def stabilize_decision_with_structure(
             institution_bias = (
                 _tw_institution_flow_bias(fundamental_context)
                 if is_tw_code(getattr(result, "code", ""))
-                and (decision_type == "buy" or advice_decision_type == "buy")
+                and (is_buy_decision or advice_decision_type == "buy")
                 else None
             )
             if institution_bias is None:
@@ -1161,7 +1168,7 @@ def stabilize_decision_with_structure(
             flow_bias = institution_bias
         if flow_bias == "unavailable":
             if isinstance(fundamental_context, dict) and "capital_flow" in fundamental_context:
-                if decision_type == "buy" or advice_decision_type == "buy":
+                if is_buy_decision or advice_decision_type == "buy":
                     _downgrade_buy_without_capital_flow(
                         result,
                         language,
@@ -1200,7 +1207,7 @@ def stabilize_decision_with_structure(
 
         has_significant_risk = _has_structural_risk_alert(result)
 
-        if decision_type == "buy":
+        if is_buy_decision:
             if near_resistance and flow_bias != "inflow":
                 _downgrade_to_structural_hold(
                     result,
@@ -1669,6 +1676,9 @@ def _bound_hold_watch_sentiment_score(
         score = 50
     adjusted_score = min(59, max(45, score))
     result.sentiment_score = adjusted_score
+    # 壓分時同步更新動作，避免原分數提升的買入動作殘留。
+    result.action = final_action
+    result.action_label = None
     _record_decision_score_calibration(
         result,
         raw_score=score,

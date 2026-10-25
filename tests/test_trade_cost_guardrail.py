@@ -26,6 +26,8 @@ from src.trade_cost_guardrail import (  # noqa: E402
     evaluate_levels,
     format_cost_check,
 )
+from src.schemas.decision_action import build_action_fields  # noqa: E402
+from src.schemas.decision_scale import extract_decision_guardrail_reason  # noqa: E402
 
 # 回測裡的中位間距：目標 +3.69%、停損 -2.14%
 TYPICAL = {"ideal_buy": 100.0, "stop_loss": 97.86, "take_profit": 103.69}
@@ -86,6 +88,61 @@ class TestEvaluateLevels(unittest.TestCase):
 
 
 class TestApplyGuardrail(unittest.TestCase):
+    def test_softening_discards_buy_action_already_lifted_by_score(self):
+        r = _result(TYPICAL, decision_type="hold", action="buy", advice="觀望")
+        r.sentiment_score = 68
+
+        apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW")
+
+        self.assertEqual(build_action_fields(
+            operation_advice=r.operation_advice,
+            explicit_action=r.action,
+            sentiment_score=r.sentiment_score,
+            guardrail_reason=extract_decision_guardrail_reason({"dashboard": r.dashboard}),
+            align_with_score=True,
+        )["action"], "watch")
+
+    def test_hold_with_buy_band_score_is_softened_before_final_alignment(self):
+        r = _result(TYPICAL, decision_type="hold", action="watch", advice="觀望")
+        r.sentiment_score = 68
+
+        self.assertEqual(apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW"),
+                         ["trade_cost_buy_softened"])
+        self.assertEqual(r.sentiment_score, 59)
+        reason = extract_decision_guardrail_reason({"dashboard": r.dashboard})
+        self.assertTrue(reason)
+        calibration = r.dashboard["decision_score_calibration"]
+        self.assertEqual((calibration["raw_score"], calibration["raw_decision_type"]), (68, "hold"))
+        self.assertEqual(build_action_fields(
+            operation_advice=r.operation_advice,
+            explicit_action=r.action,
+            sentiment_score=r.sentiment_score,
+            guardrail_reason=reason,
+            align_with_score=True,
+        )["action"], "watch")
+
+    def test_hold_outside_buy_band_is_untouched_when_cost_check_fails(self):
+        r = _result(TYPICAL, decision_type="hold", action="watch", advice="持有觀察")
+        r.sentiment_score = 55
+
+        self.assertEqual(apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW"), [])
+        self.assertFalse(r.dashboard["battle_plan"]["cost_check"]["passed"])
+        self.assertEqual(r.sentiment_score, 55)
+        self.assertEqual((r.decision_type, r.operation_advice), ("hold", "持有觀察"))
+        self.assertEqual(r.risk_warning, "")
+        self.assertIsNone(extract_decision_guardrail_reason({"dashboard": r.dashboard}))
+        self.assertNotIn("decision_score_calibration", r.dashboard)
+
+    def test_sell_with_buy_band_score_is_untouched_when_cost_check_fails(self):
+        # 反向檢查：分數區間只補 hold 的洞，賣出不能被成本護欄改成觀望
+        r = _result(TYPICAL, decision_type="sell", action="sell", advice="卖出")
+        r.sentiment_score = 68
+
+        self.assertEqual(apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW"), [])
+        self.assertEqual((r.decision_type, r.action, r.operation_advice), ("sell", "sell", "卖出"))
+        self.assertEqual(r.sentiment_score, 68)
+        self.assertNotIn("decision_score_calibration", r.dashboard)
+
     def test_failing_buy_is_softened_to_watch(self):
         r = _result(TYPICAL)
         self.assertEqual(apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW"),
@@ -124,6 +181,7 @@ class TestApplyGuardrail(unittest.TestCase):
     def test_non_buy_gets_the_check_but_keeps_its_advice(self):
         # 掛單照價位做的人看的是價位不是評級，所以觀望的報告也要有檢核
         r = _result(TYPICAL, decision_type="hold", action="watch", advice="观望")
+        r.sentiment_score = 55
         self.assertEqual(apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW"), [])
         self.assertEqual(r.operation_advice, "观望")
         self.assertFalse(r.dashboard["battle_plan"]["cost_check"]["passed"])

@@ -8,6 +8,8 @@ import pytest
 
 import src.analyzer as analyzer_module
 from src.analyzer import AnalysisResult, _capital_flow_bias, stabilize_decision_with_structure
+from src.schemas.decision_action import build_action_fields
+from src.schemas.decision_scale import extract_decision_guardrail_reason
 
 
 def _result(
@@ -291,6 +293,68 @@ def _tw_context(foreign: float, trust: float, inst_status: str = "ok", inst_date
 
 
 _LEVELS = SimpleNamespace(support_levels=[30.0], resistance_levels=[34.0])
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+@pytest.mark.parametrize("scenario", ["unavailable", "near_resistance", "outflow", "tw_institution"])
+@pytest.mark.parametrize("score", [68, 55])
+@pytest.mark.parametrize("initial_action", ["hold", "buy"])
+def test_structure_guardrail_handles_hold_score_band_before_final_alignment(scenario, score, initial_action) -> None:
+    result = _result(
+        decision_type="hold", operation_advice="持有觀察", score=score,
+        current_price=31.0 if scenario == "outflow" else 33.4,
+    )
+    result.action = initial_action
+    context = {
+        "unavailable": _failed_fund_flow(),
+        "near_resistance": _fund_flow(main=0),
+        "outflow": _fund_flow(main=-1_000_000),
+        "tw_institution": _tw_context(-1_000_000, -200_000),
+    }[scenario]
+    if scenario == "tw_institution":
+        result.code = "2330.TW"
+
+    stabilize_decision_with_structure(result, _LEVELS, context)
+
+    reason = extract_decision_guardrail_reason({"dashboard": result.dashboard})
+    if score == 68:
+        assert result.sentiment_score == 59
+        assert reason
+        calibration = result.dashboard["decision_score_calibration"]
+        assert calibration["raw_score"] == 68
+        assert calibration["guardrail_reason"]
+        assert result.dashboard["decision_stability"]["applied"] is True
+        assert build_action_fields(
+            operation_advice=result.operation_advice,
+            explicit_action=result.action,
+            sentiment_score=result.sentiment_score,
+            guardrail_reason=reason,
+            align_with_score=True,
+        )["action"] in {"hold", "watch"}
+    else:
+        assert result.sentiment_score == 55
+        assert result.operation_advice == "持有觀察"
+        assert "decision_score_calibration" not in result.dashboard
+        assert not result.dashboard.get("decision_stability", {}).get("applied")
+        assert reason is None
+    assert result.decision_type == "hold"
+
+
+@pytest.mark.parametrize("scenario", ["near_resistance", "outflow"])
+def test_structure_guardrail_leaves_sell_with_buy_band_score_on_sell_path(scenario) -> None:
+    # 反向檢查：分數區間只補 hold 的洞，賣出＋高分不能被送進買入校準
+    result = _result(
+        decision_type="sell", operation_advice="卖出", score=68,
+        current_price=31.0 if scenario == "outflow" else 33.4,
+    )
+    context = _fund_flow(main=-1_000_000) if scenario == "outflow" else _fund_flow(main=0)
+
+    stabilize_decision_with_structure(result, _LEVELS, context)
+
+    assert result.decision_type == "sell"
+    assert result.operation_advice == "卖出"
+    assert result.sentiment_score == 68
+    assert "decision_score_calibration" not in result.dashboard
 
 
 @pytest.mark.usefixtures("tw_institution_path")

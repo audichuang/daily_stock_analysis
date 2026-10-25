@@ -7,6 +7,8 @@ import pytest
 
 from src.analyzer import AnalysisResult
 from src.daily_market_context_guardrail import apply_daily_market_context_guardrail
+from src.schemas.decision_action import build_action_fields
+from src.schemas.decision_scale import extract_decision_guardrail_reason
 
 
 def _result() -> AnalysisResult:
@@ -186,6 +188,34 @@ def test_each_remaining_trigger_alone_still_softens_buy(risk_tags, position_cap)
 _RISKY_CONTEXT = {"summary": "大盘退潮，高风险。", "risk_tags": ["high_risk"]}
 
 
+@pytest.mark.parametrize("initial_action", ["watch", "buy"])
+def test_hold_with_buy_band_score_is_softened_before_final_alignment(initial_action) -> None:
+    result = _result()
+    result.decision_type = "hold"
+    result.operation_advice = "觀望"
+    result.sentiment_score = 68
+    result.action = initial_action
+
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh-TW"
+    )
+
+    assert "daily_market_context_buy_softened" in adjustments
+    assert result.sentiment_score == 52
+    reason = extract_decision_guardrail_reason({"dashboard": result.dashboard})
+    assert reason
+    calibration = result.dashboard["decision_score_calibration"]
+    assert calibration["raw_score"] == 68
+    assert calibration["raw_decision_type"] == "hold"
+    assert build_action_fields(
+        operation_advice=result.operation_advice,
+        explicit_action=result.action,
+        sentiment_score=result.sentiment_score,
+        guardrail_reason=reason,
+        align_with_score=True,
+    )["action"] == "watch"
+
+
 def test_softening_persists_pre_guardrail_score_for_shadow_eval() -> None:
     # 護欄前的 LLM 原判要落庫，scripts/shadow_buy_eval.py 才數得到被大盤護欄壓掉的買進
     result = _result()
@@ -271,7 +301,10 @@ _ADVERSARIAL_ADVICE = [
 @pytest.mark.parametrize("decision_type", ["hold", "sell"])
 @pytest.mark.parametrize("advice", _ADVERSARIAL_ADVICE)
 def test_non_buy_decision_type_is_never_softened_whatever_the_text(language, decision_type, advice) -> None:
+    # hold 用觀望區分數（買入區分數的 hold 另有測試會觸發）；sell 保留 82：分數再高也不能被改成觀望
+    score = 55 if decision_type == "hold" else 82
     result = _typed(decision_type, advice, language)
+    result.sentiment_score = score
 
     adjustments = apply_daily_market_context_guardrail(
         result, daily_market_context=_RISKY_CONTEXT, report_language=language
@@ -280,7 +313,7 @@ def test_non_buy_decision_type_is_never_softened_whatever_the_text(language, dec
     assert adjustments == []
     assert result.decision_type == decision_type
     assert result.operation_advice == advice
-    assert result.sentiment_score == 82
+    assert result.sentiment_score == score
     assert result.confidence_level == "高"
     assert "decision_score_calibration" not in result.dashboard
 
@@ -309,10 +342,54 @@ def test_buy_decision_type_is_always_softened_whatever_the_text(language, expect
     assert result.dashboard["decision_score_calibration"]["raw_decision_type"] == "buy"
 
 
-def test_score_lifted_action_buy_does_not_trigger() -> None:
-    # Prod id 125 (2317.TW): LLM said hold/watch, score alignment lifted action to buy
+def _published_action(result: AnalysisResult) -> str | None:
+    from src.schemas.decision_action import display_action_fields_for_result
+
+    return display_action_fields_for_result(result)["action"]
+
+
+@pytest.mark.parametrize("score", [60, 62, 68, 79, 85])
+def test_hold_with_buy_band_score_is_softened_so_alignment_cannot_publish_buy(score) -> None:
+    # M1／prod id 125（2317.TW）：LLM 給 hold＋買入區分數，護欄沒觸發，分數對齊把動作升成 buy
+    result = _typed("hold", "持有", "zh-TW")
+    result.sentiment_score = score
+    assert _published_action(result) == "buy"  # 前提：不擋的話對外就是買入
+
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=_HIGH_RISK_TW, report_language="zh-TW"
+    )
+
+    assert "daily_market_context_buy_softened" in adjustments
+    assert result.decision_type == "hold"
+    assert result.sentiment_score <= 52
+    calibration = result.dashboard["decision_score_calibration"]
+    assert calibration["raw_score"] == score
+    assert calibration["raw_decision_type"] == "hold"
+    assert calibration["guardrail_reason"]
+    assert _published_action(result) != "buy"
+
+
+@pytest.mark.parametrize("score", [40, 55, 59])
+def test_hold_with_watch_band_score_is_untouched(score) -> None:
+    # 反向：觀望區分數（40–59）的 hold 不會被對齊升成 buy，護欄不能動它
     result = _typed("hold", "觀望", "zh-TW")
-    result.sentiment_score = 62
+    result.sentiment_score = score
+
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=_HIGH_RISK_TW, report_language="zh-TW"
+    )
+
+    assert adjustments == []
+    assert result.sentiment_score == score
+    assert result.operation_advice == "觀望"
+    assert result.confidence_level == "高"
+    assert "decision_score_calibration" not in result.dashboard
+
+
+def test_action_buy_alone_does_not_trigger() -> None:
+    # 只看 decision_type 與分數，不看 result.action：觀望區分數配上被改寫成 buy 的 action 不觸發
+    result = _typed("hold", "觀望", "zh-TW")
+    result.sentiment_score = 55
     result.action = "buy"
 
     adjustments = apply_daily_market_context_guardrail(
@@ -320,8 +397,30 @@ def test_score_lifted_action_buy_does_not_trigger() -> None:
     )
 
     assert adjustments == []
-    assert result.sentiment_score == 62
-    assert result.decision_type == "hold"
+    assert result.sentiment_score == 55
+
+
+def test_sell_with_buy_band_score_is_untouched() -> None:
+    # 反向：sell 不會被對齊升成 buy，買入區分數也不能讓護欄把賣出改成觀望
+    result = _typed("sell", "賣出", "zh-TW")
+    result.sentiment_score = 68
+
+    assert apply_daily_market_context_guardrail(
+        result, daily_market_context=_HIGH_RISK_TW, report_language="zh-TW"
+    ) == []
+    assert result.decision_type == "sell"
+    assert result.operation_advice == "賣出"
+    assert result.sentiment_score == 68
+
+
+def test_hold_with_buy_band_score_on_neutral_day_is_untouched() -> None:
+    result = _typed("hold", "觀望", "zh-TW")
+    result.sentiment_score = 68
+
+    assert apply_daily_market_context_guardrail(
+        result, daily_market_context={"summary": "指數震盪。", "risk_tags": []}, report_language="zh-TW"
+    ) == []
+    assert result.sentiment_score == 68
 
 
 @pytest.mark.parametrize("context", [
@@ -351,8 +450,37 @@ def test_fallback_to_shared_advice_map_when_decision_type_invalid(decision_type,
 @pytest.mark.parametrize("advice", ["減碼，跌破500再進場", "觀望", "隨便寫的文字"])
 def test_fallback_does_not_treat_unrecognised_text_as_buy(advice) -> None:
     result = _typed("", advice, "zh-TW")
+    result.sentiment_score = 55
 
     assert apply_daily_market_context_guardrail(
         result, daily_market_context=_RISKY_CONTEXT, report_language="zh-TW"
     ) == []
     assert result.operation_advice == advice
+
+
+def test_malformed_decision_type_with_hold_advice_and_buy_band_score_is_softened() -> None:
+    # decision_type 壞掉時沿用共用 advice map 推回 hold，再套同一條買入區分數規則
+    result = _typed("", "持有", "zh-TW")
+    result.sentiment_score = 68
+
+    assert _published_action(result) == "buy"
+
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh-TW"
+    )
+
+    assert "daily_market_context_buy_softened" in adjustments
+    assert _published_action(result) != "buy"
+
+
+@pytest.mark.parametrize("advice", ["減碼，跌破500再進場", "隨便寫的文字"])
+def test_malformed_decision_type_not_inferred_hold_ignores_buy_band_score(advice) -> None:
+    # 反向：推不出 hold（推成 sell 或推不出）時，買入區分數不觸發
+    result = _typed("", advice, "zh-TW")
+    result.sentiment_score = 82
+
+    assert apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh-TW"
+    ) == []
+    assert result.operation_advice == advice
+    assert result.sentiment_score == 82
