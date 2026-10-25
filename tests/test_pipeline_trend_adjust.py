@@ -195,7 +195,7 @@ class AnalyzeStockWiringTestCase(unittest.TestCase):
         ]
         seen = []
         pipeline.trend_analyzer = MagicMock()
-        pipeline.trend_analyzer.analyze.side_effect = lambda df, c: seen.append(df.copy()) or MagicMock()
+        pipeline.trend_analyzer.analyze.side_effect = lambda df, c, **_kw: seen.append(df.copy()) or MagicMock()
         calls = []
         with patch("market_data.market_repo.front_adjust_multipliers",
                    side_effect=_fake_front_adjust({EVENT_DAY: FACTOR}, calls)), \
