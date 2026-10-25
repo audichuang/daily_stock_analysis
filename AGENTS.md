@@ -78,7 +78,7 @@
 > 个人 fork（`audichuang/daily_stock_analysis`），**不并回上游**。以下是从代码推断不出、任何任务都可能踩到的约定：
 
 - **环境用 `uv`**：`uv venv --python 3.12`、`uv pip install -r requirements.txt`，执行一律 `uv run python …`。
-- **origin 的 fetch refspec 在本机 checkout 只抓 `main` 与 `develop`**，`origin/<其他分支>` 一律不存在：看远端分支用 `git ls-remote` 或 `git fetch origin <分支>`（`FETCH_HEAD`）。同步上游走 skill `dsa-upstream-sync`（merge，不 rebase）。
+- **origin 的 fetch refspec 在本机 checkout 只抓 `main` 与 `develop`**，`origin/<其他分支>` 一律不存在：看远端分支用 `git ls-remote` 或 `git fetch origin <分支>`（`FETCH_HEAD`）；rebase 後重推工作分支，裸 `--force-with-lease` 沒有追蹤參照會被拒，要寫成 `--force-with-lease=<分支>:<ls-remote 取的 sha>`。同步上游走 skill `dsa-upstream-sync`（merge，不 rebase）。
 - **台股代码必须带 `.TW`（上市）／`.TWO`（上柜）后缀**（裸 `2330` 不进台股语义），代码是 4~6 位数字加至多一个大写字母（`00631L`、`2887A`）。这条格式**没有单一来源**，前后端、报告渲染、索引种子脚本各有一份正则；语意真源是 `src/services/market_symbol_utils.py`，改一处要全扫（踩过：`00631L` 搜不到、海报印成 `00631`）。
 - **TWSE/TPEx 官方端点会停止更新却照样回 200**（实测冻结 79 天）：消费端一律比对回应自带的日期，拿不到参照就拒收。
 - **`.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` 必须保持 `false`**，否则运行时会从上游拉索引、覆盖本地台股／美股增量（`.env.example` 是上游的 `true`，勿照抄）。台股索引用 `make refresh-tw` 重建。
