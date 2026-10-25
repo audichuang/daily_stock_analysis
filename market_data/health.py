@@ -35,9 +35,10 @@ SESSION_COMPLETE_AFTER = datetime.time(17, 0)
 _SESSION_LOOKBACK_DAYS = 15
 
 
-def _xtai_session_checker():
+def _xtai_session_checker(autodetect=True):
     """回傳 XTAI 的 ``is_session(date)``；exchange_calendars 不可用時回 None。
 
+    ``autodetect=False`` 時只讀既有本機休市清單，不連網偵測或寫入；其他呼叫端預設仍自動偵測。
     日曆取不到時由呼叫端**跳過**檢查，不退回週一~五：退回去會把國定假日
     （颱風以外的已知休市日）誤判成缺資料而擋掉報告。"""
     try:
@@ -47,7 +48,8 @@ def _xtai_session_checker():
     except Exception:
         return None
     # 颱風假等臨時休市日曆不知道，由 `market_data.closures` 的清單補上。
-    autodetect_today()
+    if autodetect:
+        autodetect_today()
     closed = adhoc_closed_dates()
     return lambda day: bool(calendar.is_session(day)) and _as_date(day) not in closed
 
