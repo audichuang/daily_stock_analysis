@@ -16,7 +16,9 @@
 | inferred  | inferred_price  | 官方沒涵蓋的剩餘事件 | 優先以 close-change 回推,退而用開盤價 |
 
 推導的理論依據：台股普通股有漲跌幅限制（``PRICE_LIMIT_CHANGE`` 之前 ±7%、之後 ±10%），
-所以單日跳空超過當時限制 × 1.1（約 7.7%／11%）必為公司行動。
+所以單日跳空超過當時限制 × 1.1（約 7.7%／11%）必為公司行動。兩根 K 之間隔了 n 個
+該檔沒成交的交易日時，門檻改為複利的 (1±限制×1.1)^n（連續鎖漲跌停是合法的）；吸附到
+精確 1/N 或 N 倍的跳空例外，仍用單日門檻。
 **這個前提只對普通股成立**——ETF／ETN／TDR 依官方規則不受漲跌幅限制（部分海外 ETF、
 槓反產品、第二上市外國證券），對它們推導必然製造假事件，故一律排除、只收官方值或
 ``VERIFIED_ACTIONS`` 白名單。
@@ -57,7 +59,7 @@ from market_data.writer import upsert
 
 # 台股漲跌幅限制在 2015-06-01 由 ±7% 放寬為 ±10%；門檻依當時制度取 1.1 倍緩衝。
 PRICE_LIMIT_CHANGE = "2015-06-01"
-SPLIT_RATIOS = (2, 3, 4, 5, 6, 7, 8, 10, 20, 25, 50, 100)
+SPLIT_RATIOS = (2, 2.5, 3, 4, 5, 6, 7, 8, 10, 20, 25, 50, 100)   # 2.5：6548 的 1:2.5
 MIN_BARS_BEFORE = 6     # 上市初期不推導（前 5 日無漲跌幅限制）
 STALE_GAP_DAYS = 14     # 距前一筆交易超過此天數視為停牌後恢復，不推導
 MAX_SPLIT_GAP_DAYS = 60  # 精確比例可越過 STALE_GAP_DAYS，但停牌超過此天數一律不推導
@@ -114,6 +116,60 @@ def _snap_to_split(factor):
             if abs(factor - target) / target < SPLIT_TOLERANCE:
                 return target, True
     return factor, False
+
+
+# 漲跌停價是參考價 ×(1±限制) 再取到升降單位；面額分割的恢復參考價（前收 / N）也會取到
+# 升降單位，所以判斷「當日價格落在某個 1/N 參考價的漲跌停帶內」時留一點捨入餘裕。
+_LIMIT_BAND_SLACK = 0.005
+
+
+def _limit_band_split(prev, low, high, lim):
+    """change 不可用時，找唯一（或最貼近）的 1/N 參考價，使當日 [low, high] 全落在其漲跌停帶內。
+
+    面額分割首日常一開盤就鎖漲／跌停（6919 2025-07-21 1:10：參考價 121.5、整天鎖漲停 133.5、
+    change 存成 0），此時退回開盤價當參考價會得到 0.1099，離 1/10 達 9.9%，過不了
+    ``SPLIT_TOLERANCE``。但普通股當日成交價不可能超出參考價 ±限制，所以「[low, high]
+    塞得進 prev/N 的漲跌停帶」本身就是比例證據。回傳 N；沒有任何 N 符合回 None。
+    """
+    if not (prev > 0 and low > 0 and high >= low):
+        return None
+    best, best_dist = None, None
+    for n in SPLIT_RATIOS:
+        ref = prev / n
+        if (low >= ref * (1 - lim) * (1 - _LIMIT_BAND_SLACK)
+                and high <= ref * (1 + lim) * (1 + _LIMIT_BAND_SLACK)):
+            dist = abs(np.log((low + high) / 2 / ref))
+            if best_dist is None or dist < best_dist:
+                best, best_dist = n, dist
+    return best
+
+
+def _session_index(lo, hi, observed, is_session=None):
+    """``lo``~``hi`` 之間的交易日（DatetimeIndex）。
+
+    優先用 ``health`` 的 XTAI 日曆（含臨時休市清單）；日曆取不到或拋例外（例如日期超出
+    exchange_calendars 的範圍）時退回 ``observed``——price 表裡全市場出現過的日期本身
+    就是交易日清單。不退回週一~五：國定假日會被算成交易日，把複利門檻放寬。
+    """
+    if is_session is None:
+        from market_data import health   # 延遲 import：health 在模組層 import 本模組
+        is_session = health._xtai_session_checker()
+    if is_session is not None and pd.notna(lo) and pd.notna(hi):
+        try:
+            days = pd.date_range(pd.Timestamp(lo).normalize(), pd.Timestamp(hi).normalize(),
+                                 freq="D")
+            return pd.DatetimeIndex([d for d in days if is_session(d.date())])
+        except Exception:   # noqa: BLE001 - 日曆範圍外：退回資料本身的日期
+            pass
+    return pd.DatetimeIndex(sorted(pd.unique(pd.to_datetime(observed))))
+
+
+def _sessions_between(prev_dates, dates, sessions):
+    """每列 ``(prev_date, date]`` 之間的交易日數，至少 1。"""
+    values = sessions.values
+    before = np.searchsorted(values, pd.to_datetime(prev_dates).values, side="right")
+    upto = np.searchsorted(values, pd.to_datetime(dates).values, side="right")
+    return np.maximum(upto - before, 1)
 
 
 def official_rows(conn):
@@ -213,23 +269,31 @@ def fetch_tpex_dividends(start, end, chunk_days=365):
     return df
 
 
-def infer_rows(conn, known, start):
+def infer_rows(conn, known, start, is_session=None):
     """從價格跳空回推未被官方資料解釋的公司行動。``known`` 是已解釋的 (stock_id, date)。
 
     **用開盤價當參考價的代理**，不是收盤價。台股除權息／恢復買賣當日的開盤競價基準
     就是官方參考價，開盤價偏離它的幅度遠小於收盤價。用收盤價會讓 factor 定義成
     `close/prev_close`，數學上強制把事件日報酬變成 0，等於把公司行動與當日市場報酬
     一起抹掉（獨立審查指出，每筆可錯 ±10%）。改用開盤價後，事件日的盤中漲跌得以保留。
+
+    **門檻按兩根 K 之間的交易日數 n 複利**：(1+限制)^n／(1-限制)^n。該檔中間幾個交易日
+    沒成交（例如鎖跌停無量）時，連續兩根 K 之間可以合法地累積多個漲跌停——6103
+    2024-03-08 收 38.45、03-11 無成交、03-12 開 31.95 是兩根合法跌停，舊版單日門檻把它
+    存成因子 0.901，推導列裡約 519/529 筆是這種假事件。吸附到精確 1/N（或 N 倍）的跳空
+    不受複利門檻限制（減資／分割停止買賣期間參考價不會逐日累積），仍沿用單日門檻。
+    ``is_session`` 為 ``date -> bool``，預設取 ``health`` 的 XTAI 日曆（見 ``_session_index``）。
     """
     # 多讀 60 天再往前算 seq/gap：查詢先截在 `start` 的話，任何**既有**股票在起點後的
     # 前 6 根 K 都會被 MIN_BARS_BEFORE 當成「新上市」排除，那幾天的公司行動就永久漏記。
     # 事件本身仍只收 >= start（rebuild 只刪這段，寫回更早的列會與既有資料不一致）。
     lookback = (pd.Timestamp(start) - pd.Timedelta(days=60)).date()
     px = pd.read_sql(text(
-        "select stock_id, date, open, close, change from market.price "
+        "select stock_id, date, open, high, low, close, change from market.price "
         "where date >= :s and close > 0 and open > 0"
     ), conn, params={"s": lookback}, parse_dates=["date"])
-    for col in ("open", "close", "change"):
+    px = px.reindex(columns=[*px.columns, *({"high", "low"} - set(px.columns))])
+    for col in ("open", "high", "low", "close", "change"):
         px[col] = px[col].astype(float)
     px = px.sort_values(["stock_id", "date"])
     g = px.groupby("stock_id")
@@ -250,7 +314,9 @@ def infer_rows(conn, known, start):
 
     # 門檻跟著當時實際的漲跌幅限制走：2015-06-01 前是 ±7%，之後才放寬為 ±10%。
     # 固定用 15% 會漏掉舊制下 7~15% 的公司行動（獨立審查指出）。取 1.1 倍緩衝。
-    limit = np.where(px["date"] < pd.Timestamp(PRICE_LIMIT_CHANGE), 0.07, 0.10) * 1.1
+    px["lim"] = np.where(px["date"] < pd.Timestamp(PRICE_LIMIT_CHANGE), 0.07, 0.10)
+    px["ref_ok"] = ok
+    limit = px["lim"] * 1.1
     jump = px[(px["factor"] - 1).abs() > limit].copy()
     # 已知事件的日期可能落在沒有 K 棒的日子（恢復日當天該檔未成交），跳空就出現在下一根 K，
     # 精確比對會漏掉而重複還原。所以「前一根 K 之後、本根 K 以前（含當天）」有任何已知事件都算已解釋。
@@ -269,6 +335,24 @@ def infer_rows(conn, known, start):
     snapped = jump["factor"].map(_snap_to_split)
     jump["factor"] = snapped.map(lambda s: s[0])
     jump["is_split"] = snapped.map(lambda s: s[1])
+    # change 不可用（缺值或 0 佔位）而退回開盤價時，鎖漲跌停的分割首日開盤價本身就離參考價
+    # 達一個漲跌幅，吸附不到 1/N；改看當日 [low, high] 是否落在某個 prev/N 的漲跌停帶內。
+    for i in jump.index[~jump["is_split"] & ~jump["ref_ok"]]:
+        row = jump.loc[i]
+        lo = np.nanmin([row["low"], row["open"], row["close"]])
+        hi = np.nanmax([row["high"], row["open"], row["close"]])
+        n = _limit_band_split(row["prev"], lo, hi, row["lim"])
+        if n is not None:
+            jump.loc[i, ["factor", "ref"]] = [1 / n, row["prev"] / n]
+            jump.loc[i, "is_split"] = True
+    # 複利門檻：非比例跳空要超過 n 個交易日累積的漲跌停才算公司行動。
+    if len(jump):
+        sessions = _session_index(px["date"].min(), px["date"].max(), px["date"], is_session)
+        n_sess = _sessions_between(jump["prev_date"], jump["date"], sessions)
+        lim_n = jump["lim"].to_numpy() * 1.1
+        move = jump["open"] / jump["prev"]
+        beyond = (move > (1 + lim_n) ** n_sess) | (move < (1 - lim_n) ** n_sess)
+        jump = jump[jump["is_split"] | beyond]
     # 停牌後復牌的跳空多半反映停牌期間累積的資訊，不是公司行動 → 不推導。
     # **精確 1/N（或 N 倍）比例是例外**：減資的停止買賣窗口本來就是 2~3 週，用 gap 一刀切
     # 會把最常見的上櫃減資整批漏掉——實測 gap>=14 被排除的 152 筆裡有 13 筆吸附到精確比例，
