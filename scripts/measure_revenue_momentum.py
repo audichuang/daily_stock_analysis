@@ -22,6 +22,9 @@ CI 用月區塊 bootstrap（以月為單位重抽、區塊 3 個月）；區間�
 用法：
     uv run --env-file .env python scripts/measure_revenue_momentum.py
     uv run --env-file .env python scripts/measure_revenue_momentum.py --include-otc-revenue
+    # SUS／營收÷歷史最高 當候選池的補充或取代 YoY≥20（只跑這段，不印上面三段）
+    uv run --env-file .env python scripts/measure_revenue_momentum.py --experiment surprise \
+        --start 2020-01-01 --end 2026-07-24
 """
 
 import argparse
@@ -40,18 +43,45 @@ from market_data.db import database_url  # noqa: E402
 from market_data.revenue_deadline import apply_revenue_deadline  # noqa: E402
 from measure_signal_forward import (  # noqa: E402
     DEFAULT_POSITION_NOTIONAL,
+    HIT_THRESHOLD,
+    apply_thresholds,
     build_signals,
     forward_returns,
     load,
     paired_block_bootstrap,
     pit_revenue_panel,
     to_events,
+    two_arm_block_bootstrap,
 )
 from screen_tw import exclude_otc_revenue  # noqa: E402
-from src.services.tw_backtest_context import revenue_features  # noqa: E402  與 live prompt 共用
+from src.services.tw_backtest_context import (  # noqa: E402  與 live prompt 共用
+    RECORD_MIN_HISTORY,
+    revenue_features,
+)
 from tw_trade_costs import round_trip_return  # noqa: E402
 
 FLAGS = ("decel_lt0", "decel_le20", "mom_neg", "broke_record_streak", "yoy_turn_neg")
+
+# --experiment surprise：SUS 與營收÷歷史最高（docs/research/2026-10-26-exp-revenue-sus.md 事先登記）
+SUS_WINDOW = 24           # 過去 24 個月的季節差估漂移與標準差
+SUS_MIN_PERIODS = 18      # 至少 18 個有效季節差才算 SUS
+TOP_QUANTILE = 0.8        # 同營收月橫斷面百分位 > 80%＝前五分之一
+# 閘門名 → (特徵欄, 判定方式)；前四個是主檢定用的百分位閘門與探索用的絕對門檻
+SURPRISE_GATES = {
+    "sus_top20": ("sus", "top"),
+    "ath_top20": ("ath_ratio", "top"),
+    "sus_ge1": ("sus", 1.0),
+    "ath_ge1": ("ath_ratio", 1.0),
+    "sus_pit_top20": ("sus_pit", "top"),
+}
+PRIMARY_GATES = ("sus_top20", "ath_top20")
+# 事先登記的更正前視否決（研究文件 §0.5）：主檢定閘門 → 它的 PIT 穩健性變體
+PIT_VETO = {"sus_top20": "sus_pit_top20"}
+SURVIVED = "通過且存活"
+RAW_DM, RAW_DH = "_均值差", "_P30差"   # compare_arm 列裡的原始差（小數）；底線開頭＝不顯示
+PIT_VETOED = "通過但 SUS_pit 方向相反（更正前視污染）→ 不存活"
+PRIMARY_LEVEL = 95.0
+BONFERRONI_LEVEL = 98.75   # 4 個主檢定（2 訊號 × 補充／取代）
 
 
 def effective_announce(rv):
@@ -167,6 +197,178 @@ def pool_exit_rows(ev, feat_panels, piv, h_hold, a):
     return pd.DataFrame(rows, columns=["stock_id", "month", "r", *FLAGS])
 
 
+def _sus(d, window=SUS_WINDOW, min_periods=SUS_MIN_PERIODS):
+    """季節隨機漫步含漂移：(d_t − 過去 window 個月 d 的均值) / 標準差；只用 t 之前的 d。"""
+    hist = d.shift(1).rolling(window, min_periods=min_periods)
+    mu, sd = hist.mean(), hist.std()
+    return ((d - mu) / sd.where(sd > 0)).where(d.notna())
+
+
+def revenue_surprise_features(rv, window=SUS_WINDOW, min_periods=SUS_MIN_PERIODS,
+                              min_history=RECORD_MIN_HISTORY):
+    """逐檔依營收月算 SUS、SUS_pit、營收÷歷史最高；資料不足為 NaN。
+
+    與 ``revenue_features`` 分開：那支和 live prompt 共用，這裡只給量測用。
+    每檔先補成連續月份，缺月不跨接（shift(12) 遇缺月自然變 NaN）。
+
+    - ``sus``：季節差 ``R_t − R_{t−12}`` 用入庫的營收水準（歷史月份是更正後的值，見
+      docs/research/2026-10-26-exp-revenue-sus.md §0.1）。
+    - ``sus_pit``：季節差改用 MOPS 當時公告的 YoY 反推 ``R_t · yoy / (100 + yoy)``，
+      避開上年同月的事後更正。
+    - ``ath_ratio``：``R_t / 之前所有月份的最高``，至少 ``min_history`` 個月歷史。
+    """
+    out = []
+    for sid, g in rv.sort_values("revenue_month").groupby("stock_id", sort=False):
+        g = g.set_index("revenue_month").asfreq("MS")
+        rev, yoy = g["revenue"].astype(float), g["yoy"].astype(float)
+        d = rev - rev.shift(12)
+        d_pit = (rev * yoy / (100.0 + yoy)).where(100.0 + yoy > 0)
+        prior_max = rev.shift(1).expanding(min_periods=min_history).max()
+        f = pd.DataFrame({
+            "stock_id": sid, "announce_date": g["announce_date"],
+            "sus": _sus(d, window, min_periods), "sus_pit": _sus(d_pit, window, min_periods),
+            "ath_ratio": (rev / prior_max.where(prior_max > 0)).where(rev.notna()),
+        })
+        out.append(f[g["revenue"].notna()].reset_index())
+    if not out:
+        return pd.DataFrame(columns=["revenue_month", "stock_id", "announce_date",
+                                     "sus", "sus_pit", "ath_ratio"])
+    return pd.concat(out, ignore_index=True)
+
+
+def visible_cohort_pct(x, month, announce):
+    """同營收月橫斷面百分位，只和「自己可見時已可見」的同月股票比（PIT）。
+
+    同一營收月的有效公告日不一定相同：自 2026-01 起保險類期限是 15 日、其他 10 日；
+    2020-01 全面展延則整月同一天。對每個公告日 d，用該月 ``announce_date <= d`` 的列排名，
+    只取 d 那批的結果——10 日那批不會被 15 日才公布的數值影響，15 日那批仍對整個月排名。
+    公告日 NaT 的列沒有可見日，回 NaN。NaN 特徵不計入分母（``rank`` 的預設語意）。
+    """
+    pct = pd.Series(np.nan, index=x.index)
+    frame = pd.DataFrame({"x": x, "m": month, "d": announce})
+    for _, g in frame.dropna(subset=["d"]).groupby("m", sort=False):
+        for d in g["d"].unique():
+            seen = g.loc[g["d"] <= d, "x"].rank(pct=True)
+            cohort = g.index[g["d"] == d]
+            pct.loc[cohort] = seen.loc[cohort]
+    return pct
+
+
+def gate_flags(feat, gates=SURPRISE_GATES, q=TOP_QUANTILE):
+    """特徵 → 1.0/0.0 閘門旗標（NaN＝資料不足，不當成「不通過」）。
+
+    ``"top"``：同一營收月的橫斷面百分位 > q，只和自己可見當下已可見的同月股票比
+    （``visible_cohort_pct``；保險類 15 日期限讓同月公告日不一致）。數字門檻：特徵 ≥ 門檻。
+    """
+    out = feat[["stock_id", "revenue_month", "announce_date"]].copy()
+    for name, (col, rule) in gates.items():
+        x = feat[col].astype(float)
+        if rule == "top":
+            pct = visible_cohort_pct(x, feat["revenue_month"], feat["announce_date"])
+            out[name] = (pct > q).astype(float).where(x.notna() & pct.notna())
+        else:
+            out[name] = (x >= rule).astype(float).where(x.notna())
+    return out
+
+
+def gate_panels(flags, index, columns, gates=SURPRISE_GATES):
+    """閘門旗標 → 交易日面板（與 YoY 閘門同一條 PIT 路徑：公告日之後第一個交易日、45 曆日保鮮）。"""
+    return {g: pit_revenue_panel(flags.rename(columns={"announce_date": "date"})
+                                 .assign(yoy=flags[g])[["stock_id", "date", "yoy"]].dropna(),
+                                 index, columns) for g in gates}
+
+
+def compare_arm(label, arm, ref, n_days, h, a, primary=False):
+    """一個組相對候選池（ref）的均值差、P(≥30%) 差與區塊 bootstrap 區間、判定。"""
+    row = {"組": label, "n": len(arm), "均值%": np.nan, "P30%": np.nan}
+    if len(arm):
+        row["均值%"] = round(arm["r"].mean() * 100, 2)
+        row["P30%"] = round((arm["r"] >= HIT_THRESHOLD).mean() * 100, 1)
+    dm = arm["r"].mean() - ref["r"].mean() if len(arm) else np.nan
+    dh = ((arm["r"] >= HIT_THRESHOLD).mean() - (ref["r"] >= HIT_THRESHOLD).mean()
+          if len(arm) else np.nan)
+    row["均值差pp"] = round(dm * 100, 2)
+    row["P30差pp"] = round(dh * 100, 1)
+    # 原始差（小數，未四捨五入）給判準與否決用；底線開頭的鍵不印進表格。
+    row[RAW_DM], row[RAW_DH] = dm, dh
+    ci = (two_arm_block_bootstrap(arm, ref, n_days, n=a.bootstrap, block=h,
+                                  seed=a.bootstrap_seed,
+                                  levels=(PRIMARY_LEVEL, BONFERRONI_LEVEL))
+          if a.bootstrap and len(arm) else None)
+    for k, name in (("mean", "均值差"), ("hit", "P30差")):
+        for lv in (PRIMARY_LEVEL, BONFERRONI_LEVEL):
+            row[f"{name}{lv:g}%CI"] = (
+                "n/a" if ci is None else f"{ci[k][lv][0] * 100:+.2f}~{ci[k][lv][1] * 100:+.2f}")
+    row["判定"] = verdict(dm, dh, ci, len(arm), a.min_events) if primary else "探索"
+    return row
+
+
+def verdict(dm, dh, ci, n, min_events):
+    """事先登記的判準：點估計兩者 > 0、95% 區間兩者下界 > 0、n ≥ min_events；
+    再加 Bonferroni 98.75% 區間兩者下界 > 0 才算「存活」。其餘一律 inconclusive。"""
+    if ci is None or n < min_events or not (dm > 0 and dh > 0):
+        return "inconclusive"
+    if not all(ci[k][PRIMARY_LEVEL][0] > 0 for k in ("mean", "hit")):
+        return "inconclusive"
+    if all(ci[k][BONFERRONI_LEVEL][0] > 0 for k in ("mean", "hit")):
+        return SURVIVED
+    return "通過（未過 Bonferroni）"
+
+
+def apply_pit_veto(rows):
+    """事先登記的否決：主檢定「通過且存活」但同一組（補充／取代）的 PIT 變體方向相反 → 不存活。
+
+    ``rows`` 是 ``{(組別, 閘門): compare_arm 的列}``，就地改 ``判定``。「方向相反」採保守口徑：
+    PIT 變體的均值差或 P30 差點估計任一不 > 0（與判準 (a) 同一條線）。比的是原始差
+    （``RAW_DM``／``RAW_DH``），不是四捨五入後的顯示值：+0.02pp 的 P30 差顯示成 0.0 也仍 > 0。
+    只降級「通過且存活」，其他判定本來就不寫進長期文件，不動。
+    """
+    for (arm, gate), row in rows.items():
+        pit = rows.get((arm, PIT_VETO.get(gate)))
+        if pit is None or row.get("判定") != SURVIVED:
+            continue
+        if not (pit[RAW_DM] > 0 and pit[RAW_DH] > 0):
+            row["判定"] = PIT_VETOED
+    return rows
+
+
+def surprise_report(piv, rv, sig, extra, horizons, a):
+    """SUS／營收÷歷史最高 當候選池的補充（切分池內事件）或取代 YoY≥20 的閘門。"""
+    idx, cols = piv["close"].index, piv["close"].columns
+    feat = revenue_surprise_features(rv[rv["stock_id"].map(is_common_stock)])
+    flags = gate_flags(feat)
+    panels = gate_panels(flags, idx, cols)
+    n_days = len(idx)
+    print(f"營收特徵 {len(feat):,} 列；非 NaN：SUS {feat['sus'].notna().sum():,}　"
+          f"SUS_pit {feat['sus_pit'].notna().sum():,}　ATH {feat['ath_ratio'].notna().sum():,}\n")
+    for h in horizons:
+        ret, _ = forward_returns(piv, h, "last")
+        _, pool = to_events(sig, ret, h, panels, entry_notional=a.position_notional)
+        if not len(pool):
+            continue
+        rows = {("對照", None): {"組": "候選池（YoY≥20，對照）", "n": len(pool),
+                                  "均值%": round(pool["r"].mean() * 100, 2),
+                                  "P30%": round((pool["r"] >= HIT_THRESHOLD).mean() * 100, 1)}}
+        for g in SURPRISE_GATES:
+            primary = h == a.pool_hold and g in PRIMARY_GATES
+            cover = pool[g].notna().mean() * 100
+            rows[("補充", g)] = compare_arm(f"補充 {g}（池內閘門=1；池內有值 {cover:.0f}%）",
+                                            pool.loc[pool[g] == 1], pool, n_days, h, a, primary)
+            rep = apply_thresholds(piv["close"], extra, panels[g], a.d5, a.vol_lo, a.vol_hi, 1.0)
+            rep.loc[:pd.Timestamp(a.start)] = False
+            _, rep_ev = to_events(rep, ret, h, {}, entry_notional=a.position_notional)
+            rows[("取代", g)] = compare_arm(f"取代 {g}（價格條件 ∩ 閘門）", rep_ev, pool, n_days,
+                                            h, a, primary)
+        apply_pit_veto(rows)
+        tag = "主" if h == a.pool_hold else "次要"
+        print(f"=== h={h}（{tag}）：組 − 候選池；雙臂交易日區塊 bootstrap block={h}、"
+              f"{a.bootstrap} 次、seed={a.bootstrap_seed} ===")
+        with pd.option_context("display.width", 250, "display.max_columns", 30):
+            table = pd.DataFrame(list(rows.values())).set_index("組")
+            table = table.loc[:, [c for c in table.columns if not str(c).startswith("_")]]
+            print(table.to_string(), "\n")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="月營收動能轉弱的前瞻報酬量測（唯讀）")
     p.add_argument("--start", default="2019-01-01")
@@ -181,7 +383,14 @@ def main(argv=None):
     p.add_argument("--position-notional", type=float, default=DEFAULT_POSITION_NOTIONAL)
     p.add_argument("--include-otc-revenue", action="store_true",
                    help="月營收放入上櫃（預設上市口徑，與 screen_tw 相同）")
+    p.add_argument("--experiment", choices=("momentum", "surprise"), default="momentum",
+                   help="momentum＝動能轉弱（預設、既有輸出）；surprise＝SUS／營收÷歷史最高 "
+                        "補充或取代 YoY≥20（docs/research/2026-10-26-exp-revenue-sus.md）")
+    p.add_argument("--min-events", type=int, default=300,
+                   help="surprise 主檢定的組內事件數下限，不足判 inconclusive")
     a = p.parse_args(argv)
+    # 候選池價格條件：與 measure_signal_forward 預設相同（surprise 的取代組要重用）
+    a.d5, a.vol_lo, a.vol_hi = 0.05, 1.3, 2.0
     horizons = [int(h) for h in a.horizons.split(",")]
 
     eng = create_engine(database_url(), connect_args={
@@ -210,8 +419,11 @@ def main(argv=None):
 
     # 候選池也要用修正後的公告日：load() 回的營收是 DB 佔位日，展延月（2020-01）會提前看到營收
     sig, extra = build_signals(piv, pit_revenue_panel(candidate_yoy_frame(rv), idx, cols), a.min_turnover * 1e8,
-                               0.05, 1.3, 2.0, 20.0)
+                               a.d5, a.vol_lo, a.vol_hi, 20.0)
     sig.loc[:pd.Timestamp(a.start)] = False
+    if a.experiment == "surprise":
+        surprise_report(piv, rv, sig, extra, horizons + [a.pool_hold], a)
+        return 0
     liquid = extra["liquid"].fillna(False)
 
     months = pd.period_range(a.start, a.end, freq="M").to_timestamp()

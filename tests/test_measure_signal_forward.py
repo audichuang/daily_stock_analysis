@@ -444,3 +444,64 @@ def test_lhr_report_vetoes_at_threshold_inclusive(capsys):
     out = capsys.readouterr().out
     assert "否決比例 50.0%" in out        # lhr=1 與 2 被否決，0 留下
     assert "留下  n=    2  均值  +50.00%" in out
+# --- two_arm_block_bootstrap：取代型閘門與原池子不是逐筆配對，兩臂要共用同一組重抽區塊 ---
+
+def _arm(days, r, per_day=1):
+    import numpy as np
+    ti = np.repeat(np.asarray(days), per_day)
+    return pd.DataFrame({"ti": ti, "r": np.full(len(ti), r, dtype=float)})
+
+
+def test_two_arm_bootstrap_identical_arms_have_zero_interval():
+    from measure_signal_forward import two_arm_block_bootstrap
+    ev = _arm(range(0, 300, 3), 0.1)
+    ci = two_arm_block_bootstrap(ev, ev.copy(), 300, n=200, block=20, seed=1)
+    assert ci["mean"][95.0] == (0.0, 0.0)
+    assert ci["hit"][95.0] == (0.0, 0.0)
+
+
+def test_two_arm_bootstrap_shares_blocks_between_arms():
+    # 兩臂同日、報酬恆差 0.05：共用區塊時每次重抽的差都是 0.05；各自獨立重抽就不是
+    from measure_signal_forward import two_arm_block_bootstrap
+    import numpy as np
+    days = np.arange(0, 300, 2)
+    rng = np.random.default_rng(0)
+    base = rng.normal(0, 0.2, len(days))
+    ref = pd.DataFrame({"ti": days, "r": base})
+    arm = pd.DataFrame({"ti": days, "r": base + 0.05})
+    ci = two_arm_block_bootstrap(arm, ref, 300, n=300, block=20, seed=3)
+    lo, hi = ci["mean"][95.0]
+    assert lo == pytest.approx(0.05) and hi == pytest.approx(0.05)
+
+
+def test_two_arm_bootstrap_does_not_require_one_to_one_pairing():
+    # 對照組每天兩筆、比較組每天一筆、報酬相同：差為 0，不能因為筆數不同就配對失敗
+    from measure_signal_forward import two_arm_block_bootstrap
+    arm = _arm(range(0, 300, 5), 0.2)
+    ref = _arm(range(0, 300, 5), 0.2, per_day=2)
+    ci = two_arm_block_bootstrap(arm, ref, 300, n=100, block=20, seed=1)
+    assert ci["mean"][95.0] == (0.0, 0.0)
+
+
+def test_two_arm_bootstrap_hit_counts_exactly_thirty_percent():
+    from measure_signal_forward import two_arm_block_bootstrap
+    arm = _arm(range(0, 300, 5), 0.30)
+    ref = _arm(range(0, 300, 5), 0.2999)
+    ci = two_arm_block_bootstrap(arm, ref, 300, n=100, block=20, seed=1)
+    assert ci["hit"][95.0] == (1.0, 1.0)
+
+
+def test_two_arm_bootstrap_levels_are_nested_and_inconclusive_when_too_short():
+    from measure_signal_forward import two_arm_block_bootstrap
+    import numpy as np
+    rng = np.random.default_rng(5)
+    days = np.arange(0, 400)
+    arm = pd.DataFrame({"ti": days, "r": rng.normal(0.02, 0.2, len(days))})
+    ref = pd.DataFrame({"ti": days, "r": rng.normal(0.0, 0.2, len(days))})
+    ci = two_arm_block_bootstrap(arm, ref, 400, n=500, block=20, seed=2, levels=(95.0, 98.75))
+    w95 = ci["mean"][95.0][1] - ci["mean"][95.0][0]
+    w99 = ci["mean"][98.75][1] - ci["mean"][98.75][0]
+    assert w99 > w95 > 0
+    # 事件全落在同一個區塊內 → 無法估計（inconclusive），不可給出假區間
+    short = _arm(range(0, 10), 0.1)
+    assert two_arm_block_bootstrap(short, short, 400, n=100, block=20) is None

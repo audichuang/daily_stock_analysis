@@ -625,6 +625,56 @@ def disposal_verdict(n, d_mean, d_hit, ci_mean, min_events=DISPOSAL_MIN_EVENTS):
     return "inconclusive"
 
 
+def two_arm_block_bootstrap(arm, ref, n_days, *, threshold=HIT_THRESHOLD, n=1000, block=60,
+                            seed=42, levels=(95.0,)):
+    """兩組事件差（``arm`` − ``ref``）的 circular 交易日區塊 bootstrap 區間。
+
+    回傳 ``{"mean": {level: (lo, hi)}, "hit": {level: (lo, hi)}}``；``hit`` 是
+    P(淨報酬 ≥ threshold) 的差。資料不足回 ``None``（inconclusive）。
+
+    與 ``paired_block_bootstrap`` 的差別：兩組不是逐筆配對（取代型閘門的池子與原池子
+    事件集合不同、可能重疊），所以每次重抽**同一組**交易日區塊、兩組各自取落在這些日子的
+    事件算統計量再相減——同日橫斷面與兩組的重疊都被一起保留，不會把重疊事件當獨立樣本。
+    ``ti`` 是事件在 ``0..n_days-1`` 交易日曆上的位置（``to_events`` 的輸出）。
+    """
+    if n < 2 or block < 1 or n_days < block * 2:
+        return None
+
+    def per_day(ev):
+        ev = ev.loc[np.isfinite(ev["r"].astype(float))]
+        ti = ev["ti"].to_numpy(dtype=int)
+        if not len(ti) or ti.max() - ti.min() < block:
+            return None
+        if ti.min() < 0 or ti.max() >= n_days:
+            raise ValueError("event ti outside the session calendar")
+        r = ev["r"].to_numpy(dtype=float)
+        return (np.bincount(ti, minlength=n_days).astype(float),
+                np.bincount(ti, weights=r, minlength=n_days),
+                np.bincount(ti, weights=(r >= threshold).astype(float), minlength=n_days))
+
+    a, b = per_day(arm), per_day(ref)
+    if a is None or b is None:
+        return None
+    rng = np.random.default_rng(seed)
+    n_blocks = int(np.ceil(n_days / block))
+    starts = rng.integers(0, n_days, size=(n, n_blocks))
+    days = ((starts[:, :, None] + np.arange(block)) % n_days).reshape(n, -1)[:, :n_days]
+    ca, sa, ha = (x[days].sum(axis=1) for x in a)
+    cb, sb, hb = (x[days].sum(axis=1) for x in b)
+    ok = (ca > 0) & (cb > 0)
+    if ok.sum() < 2:
+        return None
+    diffs = {"mean": (sa[ok] / ca[ok]) - (sb[ok] / cb[ok]),
+             "hit": (ha[ok] / ca[ok]) - (hb[ok] / cb[ok])}
+    out = {}
+    for k, d in diffs.items():
+        out[k] = {}
+        for lv in levels:
+            tail = (100.0 - lv) / 2
+            out[k][lv] = (float(np.percentile(d, tail)), float(np.percentile(d, 100.0 - tail)))
+    return out
+
+
 def describe(ev, label):
     r = ev["r"]
     win, loss = r[r > 0], r[r <= 0]

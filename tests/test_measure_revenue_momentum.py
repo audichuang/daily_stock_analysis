@@ -333,3 +333,269 @@ def test_main_filters_every_panel_with_the_shared_universe(monkeypatch):
 
     assert sorted(seen) == sorted(UNIVERSE_CODES)
     assert captured and all(set(cols) == UNIVERSE_COMMON for cols in captured.values())
+
+
+# --- --experiment surprise：SUS、營收÷歷史最高、閘門與判準 ---
+
+def _seasonal_series(diffs, tail_d):
+    """前 12 月 100，之後 R_m = R_{m-12} + d_m；最後一個月的 d 是 tail_d。"""
+    rev = [100.0] * 12
+    for i, d in enumerate(list(diffs) + [tail_d]):
+        rev.append(rev[i] + d)
+    return rev
+
+
+def test_sus_uses_prior_24_seasonal_diffs_with_drift():
+    rev = _seasonal_series([10, 20] * 12, 30)          # 第 37 月（2021-01）d=30
+    f = revmom.revenue_surprise_features(_rv(rev, [10.0] * len(rev)))
+    expected = (30 - 15) / np.std([10, 20] * 12, ddof=1)
+    assert _row(f, "2021-01-01")["sus"] == pytest.approx(expected)
+
+
+def test_sus_min_periods_is_exactly_eighteen():
+    # 第 12 月起才有季節差：第 30 月（index 30）之前有 18 個有效 d、第 29 月只有 17 個
+    rev = _seasonal_series([10, 20] * 9, 30)            # index 30 = 2020-07
+    f = revmom.revenue_surprise_features(_rv(rev, [10.0] * len(rev)))
+    assert not np.isnan(_row(f, "2020-07-01")["sus"])
+    assert np.isnan(_row(f, "2020-06-01")["sus"])       # 17 個 → 未知
+
+
+def test_sus_does_not_bridge_missing_month():
+    rev = _seasonal_series([10, 20] * 12, 30)
+    f = revmom.revenue_surprise_features(_rv(rev, [10.0] * len(rev), drop=(24,)))
+    assert np.isnan(_row(f, "2021-01-01")["sus"])        # 上年同月（2020-01）被拿掉
+    assert not np.isnan(_row(f, "2020-12-01")["sus"])    # 其他月份不受影響
+
+
+def test_sus_pit_uses_reported_yoy_not_stored_prior_year_level():
+    # 入庫的上年同月被事後改大（季節差全 0），但當時公告的 YoY 是 20% → d_pit = R·20/120
+    rev = [100.0] * 37
+    yoy = [0.0, 0.0] * 18 + [20.0]
+    yoy[12:36] = [5.0, 10.0] * 12
+    f = revmom.revenue_surprise_features(_rv(rev, yoy))
+    r = _row(f, "2021-01-01")
+    assert np.isnan(r["sus"])                             # 入庫水準：季節差 std=0 → 未知
+    d_hist = [100 * y / (100 + y) for y in [5.0, 10.0] * 12]
+    expected = (100 * 20 / 120 - np.mean(d_hist)) / np.std(d_hist, ddof=1)
+    assert r["sus_pit"] == pytest.approx(expected)
+
+
+def test_sus_pit_is_nan_when_yoy_is_minus_hundred():
+    rev = [100.0] * 37
+    yoy = [5.0, 10.0] * 18 + [-100.0]
+    f = revmom.revenue_surprise_features(_rv(rev, yoy))
+    assert np.isnan(_row(f, "2021-01-01")["sus_pit"])
+
+
+def test_ath_ratio_needs_24_months_and_uses_prior_max_only():
+    rev = [100.0] * 23 + [150.0, 120.0, 180.0]
+    f = revmom.revenue_surprise_features(_rv(rev, [10.0] * len(rev)))
+    assert np.isnan(_row(f, "2019-12-01")["ath_ratio"])  # 只有 23 個月歷史
+    assert _row(f, "2020-01-01")["ath_ratio"] == pytest.approx(120 / 150)
+    assert _row(f, "2020-02-01")["ath_ratio"] == pytest.approx(180 / 150)  # 不含自己
+
+
+def test_gate_flags_top_quintile_is_strict_and_per_month():
+    m1, m2 = pd.Timestamp("2020-01-01"), pd.Timestamp("2020-02-01")
+    feat = pd.DataFrame({
+        "stock_id": [f"{1000 + i}" for i in range(10)] * 2 + ["9999"],
+        "revenue_month": [m1] * 10 + [m2] * 10 + [m2],
+        "announce_date": [m1 + pd.Timedelta(days=40)] * 10 + [m2 + pd.Timedelta(days=40)] * 11,
+        "sus": list(range(1, 11)) + list(range(110, 100, -1)) + [np.nan],  # 兩月水準不同
+        "sus_pit": 0.0, "ath_ratio": [0.99, 1.0] * 10 + [np.nan],
+    })
+    g = revmom.gate_flags(feat)
+    jan = g[g["revenue_month"] == m1].set_index("stock_id")["sus_top20"]
+    assert jan[jan == 1].index.tolist() == ["1008", "1009"]   # 百分位 0.9、1.0；0.8 不算；不跨月混排
+    feb = g[g["revenue_month"] == m2].set_index("stock_id")["sus_top20"]
+    assert feb[feb == 1].index.tolist() == ["1000", "1001"]   # 各月各自排名
+    assert np.isnan(feb["9999"])                               # 缺值不是「不通過」
+    assert g["ath_ge1"].iloc[:2].tolist() == [0.0, 1.0]       # 絕對門檻含等號
+
+
+def test_gate_panels_follow_revenue_pit_visibility():
+    days = pd.bdate_range("2020-02-03", periods=20)
+    flags = pd.DataFrame({"stock_id": ["2330"], "revenue_month": [pd.Timestamp("2020-01-01")],
+                          "announce_date": [pd.Timestamp("2020-02-17")], "g": [1.0]})
+    p = revmom.gate_panels(flags, days, pd.Index(["2330"]), gates={"g": ("x", "top")})["g"]
+    assert np.isnan(p.at[pd.Timestamp("2020-02-17"), "2330"])  # 公告日當天不可見
+    assert p.at[pd.Timestamp("2020-02-18"), "2330"] == 1.0
+
+
+def _ci(lo95, lo99):
+    return {k: {95.0: (lo95, 1.0), 98.75: (lo99, 1.0)} for k in ("mean", "hit")}
+
+
+def test_verdict_requires_both_stats_and_both_intervals():
+    assert revmom.verdict(0.02, 0.03, _ci(0.01, 0.005), 400, 300) == "通過且存活"
+    assert revmom.verdict(0.02, 0.03, _ci(0.01, -0.01), 400, 300) == "通過（未過 Bonferroni）"
+    assert revmom.verdict(0.02, 0.03, _ci(-0.01, -0.02), 400, 300) == "inconclusive"
+    assert revmom.verdict(0.02, -0.01, _ci(0.01, 0.005), 400, 300) == "inconclusive"
+    assert revmom.verdict(0.02, 0.03, _ci(0.01, 0.005), 299, 300) == "inconclusive"
+    assert revmom.verdict(0.02, 0.03, _ci(0.01, 0.005), 300, 300) == "通過且存活"  # n ≥ 300 含等號
+    assert revmom.verdict(0.02, 0.03, None, 400, 300) == "inconclusive"
+    one_side = {"mean": {95.0: (0.01, 1), 98.75: (0.01, 1)}, "hit": {95.0: (-0.01, 1), 98.75: (-0.01, 1)}}
+    assert revmom.verdict(0.02, 0.03, one_side, 400, 300) == "inconclusive"
+
+
+def test_main_surprise_mode_skips_momentum_sections(monkeypatch):
+    days = pd.bdate_range("2026-04-01", periods=60)
+    cols = pd.Index(["2330", "2454"])
+    prices = pd.DataFrame(100.0, index=days, columns=cols)
+    piv = {k: prices.copy() for k in ("open", "high", "close", "volume", "turnover")}
+    rv = pd.concat([_rv([100] * 6, [40] * 6, start="2025-12-01", sid=s) for s in cols],
+                   ignore_index=True)
+    sig = pd.DataFrame(False, index=days, columns=cols)
+    monkeypatch.setattr(revmom, "database_url", lambda: "unused")
+    engine = SimpleNamespace(connect=lambda: nullcontext(object()))
+    monkeypatch.setattr(revmom, "create_engine", lambda *args, **kwargs: engine)
+    monkeypatch.setattr(revmom, "load", lambda *args: (piv, None, None))
+    monkeypatch.setattr(revmom.pd, "read_sql", lambda *args, **kwargs: rv.copy())
+    monkeypatch.setattr(revmom, "build_signals", lambda *args: (
+        sig, {"liquid": pd.DataFrame(True, index=days, columns=cols)}))
+    seen = {}
+    monkeypatch.setattr(revmom, "surprise_report",
+                        lambda piv_, rv_, sig_, extra, horizons, a: seen.update(h=horizons))
+    monkeypatch.setattr(revmom, "release_cross_section",
+                        lambda *a, **k: pytest.fail("momentum section ran in surprise mode"))
+    assert revmom.main(["--experiment", "surprise", "--start", "2026-03-31",
+                        "--end", "2026-06-23", "--horizons", "5,10", "--pool-hold", "60",
+                        "--bootstrap", "0"]) == 0
+    assert seen["h"] == [5, 10, 60]
+
+
+def _arm_row(verdict_label, dm, dh):
+    return {"組": "x", "n": 400, "均值差pp": dm, "P30差pp": dh, "判定": verdict_label,
+            revmom.RAW_DM: dm / 100, revmom.RAW_DH: dh / 100}
+
+
+@pytest.mark.parametrize("pit_dm,pit_dh,vetoed", [
+    (-0.5, 1.0, True),      # 均值差反向
+    (1.0, -0.3, True),      # P30 差反向
+    (0.0, 1.0, True),       # 不 > 0 也算方向不同（與判準 (a) 同一條線）
+    (1.5, 0.8, False),      # 同方向 → 不否決
+])
+def test_pit_veto_downgrades_surviving_sus_only_when_pit_points_other_way(pit_dm, pit_dh, vetoed):
+    rows = {("補充", "sus_top20"): _arm_row(revmom.SURVIVED, 2.0, 2.0),
+            ("補充", "sus_pit_top20"): _arm_row("探索", pit_dm, pit_dh)}
+    revmom.apply_pit_veto(rows)
+    assert rows[("補充", "sus_top20")]["判定"] == (revmom.PIT_VETOED if vetoed else revmom.SURVIVED)
+
+
+def test_pit_veto_pairs_same_arm_and_leaves_other_verdicts_alone():
+    rows = {
+        ("補充", "sus_top20"): _arm_row(revmom.SURVIVED, 2.0, 2.0),
+        ("補充", "sus_pit_top20"): _arm_row("探索", 1.0, 1.0),     # 補充組同方向
+        ("取代", "sus_top20"): _arm_row(revmom.SURVIVED, 2.0, 2.0),
+        ("取代", "sus_pit_top20"): _arm_row("探索", -1.0, -1.0),   # 只有取代組反向
+        ("補充", "ath_top20"): _arm_row(revmom.SURVIVED, 2.0, 2.0),  # ATH 沒有 PIT 變體
+        ("補充", "sus_ge1"): _arm_row("探索", 2.0, 2.0),
+    }
+    rows[("取代", "sus_top20")]["判定"] = "通過（未過 Bonferroni）"   # 本來就不存活：不改
+    revmom.apply_pit_veto(rows)
+    assert rows[("補充", "sus_top20")]["判定"] == revmom.SURVIVED
+    assert rows[("取代", "sus_top20")]["判定"] == "通過（未過 Bonferroni）"
+    assert rows[("補充", "ath_top20")]["判定"] == revmom.SURVIVED
+    rows[("取代", "sus_top20")]["判定"] = revmom.SURVIVED
+    revmom.apply_pit_veto(rows)
+    assert rows[("取代", "sus_top20")]["判定"] == revmom.PIT_VETOED
+    assert rows[("補充", "sus_top20")]["判定"] == revmom.SURVIVED     # 不跨組配對
+
+
+def _tiny_diff_pit_row(variant):
+    """以真 compare_arm 產生 PIT 變體列：候選池 6000 筆（1000 筆命中），變體只差一筆。
+
+    差距都小到顯示四捨五入會失真：均值差約 +0.007pp（顯示 0.01）、P30 差約 ±0.014pp 或 0
+    （顯示 0.0）。否決必須看原始差，不是顯示值。
+    """
+    hit = revmom.HIT_THRESHOLD
+    ref = pd.DataFrame({"r": [hit + 0.2] * 1000 + [0.0] * 5000})
+    if variant == "extra_hit":          # 多一筆命中 → 兩者原始差都 > 0
+        arm = pd.concat([ref, pd.DataFrame({"r": [hit + 0.2]})], ignore_index=True)
+    elif variant == "bump_no_hit":      # 一筆未命中上調但沒跨門檻 → P30 差恰為 0
+        arm = ref.copy()
+        arm.loc[arm.index[-1], "r"] = hit / 2
+    else:                               # 多一筆大漲未命中 → 均值差 > 0、P30 差 < 0 但顯示 -0.0
+        arm = pd.concat([ref, pd.DataFrame({"r": [hit * 0.99]})], ignore_index=True)
+    a = SimpleNamespace(bootstrap=0, bootstrap_seed=42, min_events=1)
+    return revmom.compare_arm("sus_pit_top20", arm, ref, n_days=100, h=60, a=a)
+
+
+@pytest.mark.parametrize("variant,vetoed", [
+    ("extra_hit", False),     # 原始差皆 > 0：顯示值 P30差pp=0.0 不能造成誤否決
+    ("bump_no_hit", True),    # P30 原始差恰為 0：不 > 0 → 否決（擋「改成 ≥ 0」的過度修正）
+    ("near_miss", True),      # P30 原始差 < 0、顯示 -0.0：否決（擋容差／取絕對值）
+])
+def test_pit_veto_uses_raw_differences_not_rounded_display(variant, vetoed):
+    pit = _tiny_diff_pit_row(variant)
+    if variant == "extra_hit":
+        assert pit["P30差pp"] == 0.0      # 前提：顯示值確實被四捨五入成 0
+    rows = {("補充", "sus_top20"): _arm_row(revmom.SURVIVED, 2.0, 2.0),
+            ("補充", "sus_pit_top20"): pit}
+    revmom.apply_pit_veto(rows)
+    assert rows[("補充", "sus_top20")]["判定"] == (revmom.PIT_VETOED if vetoed else revmom.SURVIVED)
+
+
+def test_surprise_report_applies_pit_veto_to_printed_verdict(monkeypatch, capsys):
+    days = pd.bdate_range("2020-01-01", periods=5)
+    cols = pd.Index(["2330"])
+    piv = {"close": pd.DataFrame(100.0, index=days, columns=cols)}
+    pool = pd.DataFrame({"r": [0.1], **{g: [1.0] for g in revmom.SURPRISE_GATES}})
+    monkeypatch.setattr(revmom, "revenue_surprise_features",
+                        lambda rv: pd.DataFrame({"sus": [], "sus_pit": [], "ath_ratio": []}))
+    monkeypatch.setattr(revmom, "gate_flags", lambda feat: None)
+    monkeypatch.setattr(revmom, "gate_panels",
+                        lambda flags, idx, cols: {g: None for g in revmom.SURPRISE_GATES})
+    monkeypatch.setattr(revmom, "forward_returns", lambda piv_, h, how: (None, None))
+    monkeypatch.setattr(revmom, "to_events", lambda *a, **k: (None, pool))
+    monkeypatch.setattr(revmom, "apply_thresholds",
+                        lambda *a, **k: pd.DataFrame(False, index=days, columns=cols))
+
+    def fake_compare(label, arm, ref, n_days, h, a, primary=False):
+        if "sus_pit_top20" in label:
+            return {**_arm_row("探索", -1.0, -1.0), "組": label}
+        return {**_arm_row(revmom.SURVIVED if primary else "探索", 2.0, 2.0), "組": label}
+
+    monkeypatch.setattr(revmom, "compare_arm", fake_compare)
+    a = SimpleNamespace(pool_hold=60, start="2020-01-01", d5=0.05, vol_lo=1.3, vol_hi=2.0,
+                        position_notional=200_000, bootstrap=0, bootstrap_seed=42)
+    revmom.surprise_report(piv, pd.DataFrame({"stock_id": []}), None, {}, [60], a)
+    out = capsys.readouterr().out
+    sus_lines = [ln for ln in out.splitlines() if "sus_top20（" in ln]
+    ath_lines = [ln for ln in out.splitlines() if "ath_top20" in ln]
+    assert len(sus_lines) == 2, out
+    assert all(revmom.PIT_VETOED in ln for ln in sus_lines)
+    assert all(revmom.SURVIVED in ln and revmom.PIT_VETOED not in ln for ln in ath_lines)
+    assert revmom.RAW_DM not in out and revmom.RAW_DH not in out   # 原始差不印進表格
+
+
+def _mixed_deadline_feat(insurance_sus):
+    """2026-01 營收月：10 檔 10 日可見、2 檔（保險類）15 日才可見。"""
+    m = pd.Timestamp("2026-01-01")
+    early, late = pd.Timestamp("2026-02-10"), pd.Timestamp("2026-02-16")
+    return pd.DataFrame({
+        "stock_id": [f"{1100 + i}" for i in range(10)] + ["2881", "2882"],
+        "revenue_month": [m] * 12,
+        "announce_date": [early] * 10 + [late] * 2,
+        "sus": list(range(1, 11)) + list(insurance_sus),
+        "sus_pit": 0.0, "ath_ratio": 1.0,
+    })
+
+
+def test_gate_flags_early_cohort_ignores_values_not_yet_visible():
+    # 10 日可見的那批只能和 10 日已可見的同月股票比；15 日才公布的保險類數值不能改變它們的旗標
+    low = revmom.gate_flags(_mixed_deadline_feat([-5.0, -4.0])).set_index("stock_id")["sus_top20"]
+    high = revmom.gate_flags(_mixed_deadline_feat([50.0, 60.0])).set_index("stock_id")["sus_top20"]
+    early = [f"{1100 + i}" for i in range(10)]
+    assert low[early].tolist() == high[early].tolist()
+    assert low[low == 1].index.tolist() == ["1108", "1109"]          # 只在 10 檔內排名
+    assert high[early][high[early] == 1].index.tolist() == ["1108", "1109"]
+
+
+def test_gate_flags_late_cohort_ranks_against_whole_visible_month():
+    # 15 日那批可見時整個月份都已可見 → 對全部 12 檔排名，而不是只在保險類兩檔之間排
+    g = revmom.gate_flags(_mixed_deadline_feat([5.5, 3.0])).set_index("stock_id")["sus_top20"]
+    assert g["2881"] == 0.0     # 兩檔中最高，但在 12 檔裡只排 7/12
+    assert g["2882"] == 0.0
+    g = revmom.gate_flags(_mixed_deadline_feat([20.0, 3.0])).set_index("stock_id")["sus_top20"]
+    assert g["2881"] == 1.0
