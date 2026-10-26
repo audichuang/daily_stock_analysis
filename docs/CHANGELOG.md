@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] LHR（近 20 日淨漲停天數）否決實驗：`measure_signal_forward.py --lhr` 新增量測（預設輸出不變）；否決會砍掉高波動右尾，h60 留下的池子均值 −4.35pp、P(≥30%) −5.84pp（block bootstrap 區間皆為負），列入已研究清單，live 篩選不改
 - [文档] 外資／投信「橫斷面對立極端」構念以 2013–2019 樣本外檢定（新增唯讀量測腳本 `scripts/measure_inst_divergence.py`）：h250 依凍結判準封存為假陽性（雙中間超額 +1.10%、階梯消失），h60 inconclusive；live 篩選規則不變
 - [文档] 外資／投信「橫斷面對立極端」構念以 2013–2019 樣本外檢定（新增唯讀量測腳本 `scripts/measure_inst_divergence.py`）：h250 未通過凍結的晉升判準、依規則封存（雙中間超額 +1.10%、階梯消失；區間全部跨零，統計上 inconclusive、非否證），h60 inconclusive；live 篩選規則不變
+- [新功能] 新增 `scripts/fetch_twse_disposal_history.py`（TWSE 處置公告歷史快取到 `data/`、列出處置期制度沿革）與 `measure_signal_forward.py --disposal-cache`（突破池處置公告延後進場／剔除實驗）；回測結論：延後進場 inconclusive、剔除較差，live 維持只標記不剔除。
+- [修复] 處置延後實驗（`measure_signal_forward.py --disposal-cache`）的表格逐臂並列同一批配對事件的正常進場列（原本拿全部受影響事件比，方向與成對差相反）、成對差列印「實際延後」件數，面板之後才公告的處置不再被算成持有中公告（h60 124 → 123）；研究文件同步改正。
 - [修复] `backfill --delay` 省略時沿用各來源函式預設，避免 TAIEX 月回補的 2 秒間隔被 CLI 的 0 覆蓋；保留顯式 0 與逐日來源行為，補測收盤衝突採 OHLC、FMTQIK 獨有日期仍保留。
 - [测试] 補齊 `backtest_screen` 一般回測、全因子比較與隨機對照的研究宇宙回歸測試：經真實指標、排名與交易迴圈確認 ETF／TDR／特別股不入選、9 開頭普通股仍可成交，並釘住共用 `is_common_stock` 判斷的呼叫與回傳值。
 - [测试] 補齊研究宇宙回歸測試：`backtest_screen` 一般回測、全因子比較與隨機對照經真實指標、排名與交易迴圈確認 ETF／TDR／特別股不入選、9 開頭普通股仍可成交，遮罩後候選仍補滿 top_n；`portfolio_walkforward` 池子與 `measure_revenue_momentum` 母體逐檔經共用 `is_common_stock`，退回 `startswith("00")`（TDR 9105、特別股 2887A 回到候選）或擋太寬（誤殺 9802／9904／9921）都會紅
