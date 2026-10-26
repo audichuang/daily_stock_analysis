@@ -52,6 +52,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 公會只提供每檔最新淨值，歷史無法重抓；兩表都要先檢查，才可移除任何索引或資料表。
+    bind = op.get_bind()
+    row_counts = {
+        table: bind.execute(sa.text(f"SELECT count(*) FROM market.{table}")).scalar_one()
+        for table in ('fund_info', 'fund_nav')
+    }
+    if any(row_counts.values()):
+        counts = '、'.join(f"{table} {count:,} 列" for table, count in row_counts.items())
+        raise RuntimeError(
+            f"拒絕降版：{counts}仍在。market schema 無備份，公會歷史淨值無法重抓；"
+            "請先匯出兩表並確認備份，再自行清空兩表後重跑 downgrade")
     op.drop_index('ix_fund_nav_date', table_name='fund_nav', schema='market')
     op.drop_table('fund_nav', schema='market')
     op.drop_index('ix_fund_info_isin', table_name='fund_info', schema='market')

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 基金 migration `c7d2e9f41a08` 降版前統一檢查 `fund_info` 與 `fund_nav`，任一表有資料就保留全部索引與資料表並拒絕降版，避免公會歷史淨值永久遺失；兩表皆空時仍可正常降版。
 - [修復] `scripts/audit_market_vs_official.py`：單一 (日期, 來源) 解析、讀快取或查 DB 出例外改記成 `crash` err 並繼續下一天，其餘 worker 例外印 `worker failed`；預期範圍寫進 `expected.json`，彙總（含離線 `--summary`）列出 `missing`，差異／讀不到／缺漏／全無結果都以結束碼 1 回報（原本執行緒死掉仍印「checked N days」並回 0）；上櫃三條路徑改走正式爬蟲的 `_tpex_table`，多比對 `stat` 與資料表民國日期，凍結舊表、0 列不再判成乾淨。集保個股查詢頁資料日期無法解析（無效日月、溢位民國年）改為只拒收該週，不再中斷整檔歷史查詢
 - [文档] 突破池 974 事件／20.2% 基準率與月營收動能 CI 標註為月營收期限遇休市順延前所量、待重測；`tw-swing-pipeline.md` 不再宣稱能用當前程式碼原樣重跑
 - [修復] 月營收法定公告期限補上 2905 三商（三商投控持有三商美邦人壽，2026-01 營收起 15 日），期限遇週末、國定假日或颱風假順延到當日或之後第一個台股交易日（XTAI 加本機臨時休市清單、不連網；日曆不可用時只順延週六日），回測不再提早一個交易日看到逾 10 日申報的營收；`screen_tw --date` 回放、`tw_stock_dossier` 帶基準日與媒體點名的播出日快照改用同一個 `market_data/revenue_deadline.py` 有效公告日判斷可見，live（不帶日期）不變
