@@ -682,9 +682,9 @@ def test_journal_push_revalidates_after_rebase(repo, tmp_path, entrypoint, resul
     _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", '{}\n')
     remote_before = _origin_head(repo)
     r = _sh(repo, f'''
-git_net() {{
-  command git "$@" >&2 || return $?
-  if [[ "$1" == pull ]]; then
+git() {{
+  command git "$@" || return $?
+  if [[ "$1" == rebase ]]; then
     printf 'human work\\n' >other.txt
     command git commit -q -am 'human: raced rebase' >&2
   fi
@@ -706,7 +706,7 @@ git_net() {{
   if [[ "$1" == push ]]; then
     command git push -q origin "{intermediate}:refs/heads/develop" >&2
     command git fetch -q origin >&2
-  elif [[ "$1" == pull ]]; then
+  elif [[ "$1" == fetch ]]; then
     echo rebase-attempted >&2
     return 1
   fi
@@ -774,6 +774,33 @@ git_net() {{
     assert _git(repo, "rev-parse", "feature") == feature_sha      # feature 沒被 rebase
     assert _git(repo, "rev-parse", "develop") == develop_sha
     assert _origin_head(repo) == remote_before
+
+
+@pytest.mark.parametrize("entrypoint, result", [("push_journal_cli", "push failed"), ("commit_journal", "fail")])
+def test_journal_push_retry_refuses_rebase_when_branch_switches_during_network_step(repo, tmp_path, entrypoint, result):
+    """push 被拒後的重試：別的 session 在網路步驟（fetch／pull）期間切到帶非 journal commit 的分支，那條分支不能被 rebase。"""
+    develop_sha, _ = _feature_branch_ahead(repo)
+    _git(repo, "checkout", "-q", "feature")
+    (repo / "code.txt").write_text("feature work\n", encoding="utf-8")
+    _git(repo, "add", "code.txt")
+    _git(repo, "commit", "-q", "-m", "feature: code")
+    feature_sha = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "develop")
+    _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", '{"theirs": 1}\n')
+    remote_before = _origin_head(repo)
+    r = _sh(repo, f'''
+git_net() {{
+  if [[ "$1" == fetch || "$1" == pull ]]; then command git checkout -q feature >&2; fi
+  command git "$@" >&2
+}}
+{entrypoint}
+''')
+    assert r.stdout.strip() == result, r.stderr
+    assert _git(repo, "branch", "--show-current") == "feature"    # 切換確實發生在重試的網路步驟
+    assert _git(repo, "rev-parse", "feature") == feature_sha      # feature 沒被 rebase
+    assert _git(repo, "rev-parse", "develop") == develop_sha
+    assert _origin_head(repo) == remote_before
+    assert _git(repo, "status", "--porcelain") == ""              # 沒有卡在 rebase 中途
 
 
 def test_push_develop_never_rewinds_when_local_head_is_behind(repo, tmp_path):

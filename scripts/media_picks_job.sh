@@ -26,7 +26,7 @@ git_net() {
   run_with_timeout "${MEDIA_PICKS_GIT_TIMEOUT_SECONDS:-120}" git "$@" >&2
 }
 
-# push_develop：每次只推已驗證的 SHA，lease 綁定同一輪驗證的 origin/develop；被拒就 rebase、重新驗證再推一次。
+# push_develop：每次只推已驗證的 SHA，lease 綁定同一輪驗證的 origin/develop；被拒就 fetch＋rebase、重新驗證再推一次。
 # rebase 失敗要 abort，
 # 不然主 checkout 卡在 rebase 中途，之後每晚都同步失敗。不加 --autostash：工作樹有未 commit 的改動時 rebase 會拒絕、
 # 我們就照 fail 處理（Bark），不要偷偷替人 stash（stash 堆疊跨 worktree 共用）。
@@ -44,13 +44,16 @@ push_develop() {
       return 0
     fi
     (( attempt == 1 )) || return 1
-    # pull --rebase 改寫的是目前分支：重試前再確認仍在 develop，不然會去 rebase 別人的分支。
+    # 不用 pull --rebase：它在 fetch 的網路等待期間就決定好要 rebase 目前分支，主 checkout 這時被別的 session
+    # 切走就會改寫別人的分支。先 fetch（網路），再做純本地的驗證，分支檢查放最後、緊接 rebase，
+    # 把「檢查完到改寫」的空窗縮到只剩本地指令。要完全關掉得用獨立 checkout 或大家都遵守的鎖，不在這裡做。
+    git_net fetch -q origin develop || return 1
+    journal_only_ahead origin/develop refs/heads/develop || return 1
     if [[ "$(git branch --show-current)" != "develop" ]]; then
       echo "重試前發現目前不在 develop，不 rebase" >&2
       return 1
     fi
-    journal_only_ahead origin/develop refs/heads/develop || return 1
-    if ! git_net pull --rebase -q origin develop; then
+    if ! git rebase -q origin/develop >&2; then
       git rebase --abort >&2 2>/dev/null
       return 1
     fi
@@ -80,7 +83,7 @@ journal_only_ahead() {
 }
 
 # push_journal_cli：排程的 Claude 自己 commit 完 journal（review／verdicts）後呼叫，把 push 的守門放在有測試的程式碼裡。
-# 只在 develop、且領先 origin/develop 的 commit 全是 journal/ 才推（被拒就 pull --rebase 再推，失敗 abort rebase）。
+# 只在 develop、且領先 origin/develop 的 commit 全是 journal/ 才推（被拒就 fetch＋rebase 再推，失敗 abort rebase）。
 # stdout 只印最後一行：`push ok`／`push none`（沒有領先）／`push refused: <原因>`／`push failed`；原因同時寫 stderr。0＝ok／none，1＝其餘。
 push_journal_cli() {
   local branch reason
