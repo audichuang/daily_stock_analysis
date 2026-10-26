@@ -293,3 +293,42 @@ def test_walk_forward_training_uses_requested_cost_assumptions(monkeypatch):
         "entry_notional": 123_456,
         "fee_discount": 0.6,
     } for call in calls)
+
+
+# ---- 研究宇宙：組合模擬的池子必須走共用的 `is_common_stock` -------------------------------
+UNIVERSE_CODES = ["2330", "6488", "5305", "9802", "9904", "9921", "9105", "912000",
+                  "00878", "0050", "00631L", "2887A", "70001"]
+UNIVERSE_COMMON = {"2330", "6488", "5305", "9802", "9904", "9921"}
+
+
+def test_pool_filters_with_the_shared_universe_predicate(monkeypatch):
+    """退回 `startswith("00")` 會讓 TDR／特別股回到池子；擋太寬（整個 9 開頭）會誤殺普通股。"""
+    from market_data.adjust import is_common_stock
+
+    days = pd.bdate_range("2026-01-05", periods=5)
+    panel = pd.DataFrame(100.0, index=days, columns=UNIVERSE_CODES)
+    piv = {k: panel.copy() for k in ("open", "high", "low", "close", "volume", "turnover")}
+    info = pd.DataFrame({"stock_id": UNIVERSE_CODES, "name": UNIVERSE_CODES})
+    monkeypatch.setattr(portfolio, "get_engine", lambda: object())
+    monkeypatch.setattr(portfolio, "load", lambda *a: (piv, pd.DataFrame(), info))
+    seen = []
+    captured = {}
+
+    def checked(sid):
+        seen.append(sid)
+        return is_common_stock(sid)
+
+    class PoolCaptured(Exception):
+        pass
+
+    def capture(rv, index, columns):
+        captured["columns"] = list(columns)
+        raise PoolCaptured
+
+    monkeypatch.setattr(portfolio, "is_common_stock", checked)
+    monkeypatch.setattr(portfolio, "pit_revenue_panel", capture)
+    with pytest.raises(PoolCaptured):
+        main(["--start", f"{days[0]:%Y-%m-%d}", "--end", f"{days[-1]:%Y-%m-%d}"])
+
+    assert sorted(seen) == sorted(UNIVERSE_CODES)
+    assert set(captured["columns"]) == UNIVERSE_COMMON

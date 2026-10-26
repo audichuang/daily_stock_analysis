@@ -444,3 +444,21 @@ def test_run_unfilled_sell_order_is_retried_not_dropped():
     assert len(trades) == 1
     assert trades["exit_day"].iloc[0] == days[3]          # 順延一天成交，不是消失
     assert trades["reason"].iloc[0] == "跌破MA60"
+
+
+# ---- 研究宇宙：遮罩後候選仍要補滿 top_n（入口宇宙見 test_main_uses_shared_universe_*） -----
+UNIVERSE_COMMON = {"2330", "6488", "5305", "9802", "9904", "9921"}
+
+
+def test_precompute_signals_drops_masked_picks_and_refills_top_n(monkeypatch):
+    """遮罩掉的代碼不能只留空位：取 top_n*3 名再過濾，候選數仍補滿 top_n。"""
+    import backtest_screen as bs
+
+    day = pd.Timestamp("2026-01-05")
+    ranked = ["9105", "2887A", "0050", "2330", "9802", "6488"]
+    monkeypatch.setattr(bs, "signals_on", lambda ind, d, mt, n, factor: ranked[:n])
+    mask = {s: s not in UNIVERSE_COMMON for s in ranked}
+
+    out = bs.precompute_signals({}, [day], 0, 2, mask)
+
+    assert out[day] == ["2330", "9802"]

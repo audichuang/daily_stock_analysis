@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - [修复] `backfill --delay` 省略時沿用各來源函式預設，避免 TAIEX 月回補的 2 秒間隔被 CLI 的 0 覆蓋；保留顯式 0 與逐日來源行為，補測收盤衝突採 OHLC、FMTQIK 獨有日期仍保留。
 - [测试] 補齊 `backtest_screen` 一般回測、全因子比較與隨機對照的研究宇宙回歸測試：經真實指標、排名與交易迴圈確認 ETF／TDR／特別股不入選、9 開頭普通股仍可成交，並釘住共用 `is_common_stock` 判斷的呼叫與回傳值。
+- [测试] 補齊研究宇宙回歸測試：`backtest_screen` 一般回測、全因子比較與隨機對照經真實指標、排名與交易迴圈確認 ETF／TDR／特別股不入選、9 開頭普通股仍可成交，遮罩後候選仍補滿 top_n；`portfolio_walkforward` 池子與 `measure_revenue_momentum` 母體逐檔經共用 `is_common_stock`，退回 `startswith("00")`（TDR 9105、特別股 2887A 回到候選）或擋太寬（誤殺 9802／9904／9921）都會紅
 - [修复] 測試守門在 worktree 自帶不同 URL 的 `.env` 時，同時拒絕最近 `.env` 與主 checkout（經 Git common dir 找到）的 `STORAGE_DATABASE_URL`，並擋主 checkout 的 `DATABASE_URL`（主 checkout 本身與 worktree 自己宣告同一條時不擋，保留 `market_data/tests` 的 rollback 連線）；以 SQLAlchemy `URL` 物件傳入的正式庫也擋；所有 Copilot 指令鏡像補回 `gh-wait` 等 CI 的規則
 - [修复] 媒體／PTT 共用快照固定以 PIT 法定公告期限過濾月營收，cutoff 等於或晚於最新行情日也不切換 live，避免週末／連假補抓時把期限尚未到的營收永久寫入 journal；Web／個股報告維持既有 live 判定。
 - [文档] 突破候選池基準重測（休市日復權修正、月營收期限順延、宇宙統一之後）：`confidence` 錨點 P(≥30%) 由 20.2% 改為 20.4%（block bootstrap 95% 14.5%~26.5%、974 事件），均值 +10.07%（+3.22%~+16.93%），舊數字在 `tw-swing-research` SKILL 與 `docs/tw-swing-pipeline.md` 原處標作廢；`screen_tw` 的 `measured_base_rate` 與回驗 `BASE_RATE` 未改

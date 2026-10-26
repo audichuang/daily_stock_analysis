@@ -287,3 +287,47 @@ def test_pool_exit_rows_reads_flag_at_own_visible_day_not_other_stocks():
         assert out[f].tolist() == [6.0, 13.0]
     # 進場＝可見日隔日開盤（列 7／14），出場＝第 22 列收盤
     assert out["r"].tolist() == pytest.approx([42 / 17 - 1, 42 / 24 - 1])
+
+
+# ---- 研究宇宙：量測母體必須走共用的 `is_common_stock` -------------------------------------
+UNIVERSE_CODES = ["2330", "6488", "5305", "9802", "9904", "9921", "9105", "912000",
+                  "00878", "0050", "00631L", "2887A", "70001"]
+UNIVERSE_COMMON = {"2330", "6488", "5305", "9802", "9904", "9921"}
+
+
+def test_main_filters_every_panel_with_the_shared_universe(monkeypatch):
+    """退回 `startswith("00")` 會讓 TDR／特別股進母體；擋太寬（整個 9 開頭）會誤殺普通股。"""
+    from market_data.adjust import is_common_stock
+
+    days = pd.bdate_range("2026-04-01", periods=10)
+    prices = pd.DataFrame(100.0, index=days, columns=UNIVERSE_CODES)
+    piv = {k: prices.copy() for k in ("open", "high", "close", "volume", "turnover")}
+    rv = _rv([100] * 6, [40, 40, 40, 20, 30, 40], start="2025-12-01", sid="2330")
+    monkeypatch.setattr(revmom, "database_url", lambda: "unused")
+    engine = SimpleNamespace(connect=lambda: nullcontext(object()))
+    monkeypatch.setattr(revmom, "create_engine", lambda *args, **kwargs: engine)
+    monkeypatch.setattr(revmom, "load", lambda *args: (piv, None, None))
+    monkeypatch.setattr(revmom.pd, "read_sql", lambda *args, **kwargs: rv.copy())
+    seen = []
+    captured = {}
+
+    def checked(sid):
+        seen.append(sid)
+        return is_common_stock(sid)
+
+    class PanelsCaptured(Exception):
+        pass
+
+    def capture(filtered, yoy, *args):
+        captured.update({k: list(v.columns) for k, v in filtered.items()})
+        captured["yoy"] = list(yoy.columns)
+        raise PanelsCaptured
+
+    monkeypatch.setattr(revmom, "is_common_stock", checked)
+    monkeypatch.setattr(revmom, "build_signals", capture)
+    with pytest.raises(PanelsCaptured):
+        revmom.main(["--start", "2026-04-01", "--end", f"{days[-1]:%Y-%m-%d}",
+                     "--horizons", "5", "--bootstrap", "0"])
+
+    assert sorted(seen) == sorted(UNIVERSE_CODES)
+    assert captured and all(set(cols) == UNIVERSE_COMMON for cols in captured.values())
