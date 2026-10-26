@@ -50,6 +50,8 @@ DEFAULT_POSITION_NOTIONAL = 200_000.0
 # 不同的保鮮期,就是在量一個不會下單的訊號集。
 REVENUE_STALE_DAYS = 45
 WARMUP_DAYS = 400     # 算 60 日高與 60 日均量要的暖機
+# `confidence` 錨點的命中門檻：第 h 日收盤淨報酬 ≥ +30%（tw-swing-research 的語意定義）。
+HIT_THRESHOLD = 0.30
 
 
 def load(engine, start, end, include_otc_revenue=False):
@@ -264,6 +266,17 @@ def block_bootstrap(ev, calendar, n=1000, block=60, seed=42):
     return paired_block_bootstrap(paired, calendar, n=n, block=block, seed=seed)
 
 
+def hit_rate_bootstrap(ev, calendar, threshold=HIT_THRESHOLD, n=1000, block=60, seed=42):
+    """P(淨報酬 ≥ threshold) 的 circular block bootstrap 95% 區間。
+
+    錨點用的是命中率而不是均值，所以把每個事件換成 0/1 命中指標再走同一個取樣核心；
+    資料不足時同樣回傳 ``None``（inconclusive）。
+    """
+    hit = (ev["r"] >= threshold).astype(float)
+    paired = pd.DataFrame({"date": ev["ti"], "diff": hit})
+    return paired_block_bootstrap(paired, calendar, n=n, block=block, seed=seed)
+
+
 def describe(ev, label):
     r = ev["r"]
     win, loss = r[r > 0], r[r <= 0]
@@ -273,7 +286,7 @@ def describe(ev, label):
         "均值": f"{r.mean() * 100:+.2f}%", "中位": f"{r.median() * 100:+.2f}%",
         "勝率": f"{(r > 0).mean() * 100:.1f}%",
         "賺賠比": f"{rr:.2f}", "兩平勝率": f"{1 / (1 + rr) * 100:.1f}%",
-        "P(≥30%)": f"{(r >= .3).mean() * 100:.1f}%", "P(≤-20%)": f"{(r <= -.2).mean() * 100:.1f}%",
+        "P(≥30%)": f"{(r >= HIT_THRESHOLD).mean() * 100:.1f}%", "P(≤-20%)": f"{(r <= -.2).mean() * 100:.1f}%",
         "最差": f"{r.min() * 100:+.0f}%",
     }
 
@@ -399,6 +412,14 @@ def main(argv=None):
                   f"{(ev['r'].mean() - iid) * 100:+.2f}% ~ "
                   f"{(ev['r'].mean() + iid) * 100:+.2f}%——事件在時間上聚集，"
                   "IID 是假精度）")
+        hit_ci = hit_rate_bootstrap(ev, np.arange(len(close.index)), n=a.bootstrap,
+                                    block=a.horizon, seed=a.bootstrap_seed)
+        hit = (ev["r"] >= HIT_THRESHOLD).mean()
+        if hit_ci is None:
+            print(f"候選池 P(≥{HIT_THRESHOLD:.0%}) {hit * 100:.1f}%：區塊 bootstrap inconclusive")
+        else:
+            print(f"候選池 P(≥{HIT_THRESHOLD:.0%}) {hit * 100:.1f}%（n={len(ev)}）的區塊 bootstrap "
+                  f"95% 區間: {hit_ci[0] * 100:.1f}% ~ {hit_ci[1] * 100:.1f}%")
 
     print("\n=== 逐年（事件級）===")
     ev["y"] = ev["date"].dt.year

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - [修复] 測試守門在 worktree 自帶不同 URL 的 `.env` 時，同時拒絕最近 `.env` 與主 checkout（經 Git common dir 找到）的 `STORAGE_DATABASE_URL`，並擋主 checkout 的 `DATABASE_URL`（主 checkout 本身與 worktree 自己宣告同一條時不擋，保留 `market_data/tests` 的 rollback 連線）；以 SQLAlchemy `URL` 物件傳入的正式庫也擋；所有 Copilot 指令鏡像補回 `gh-wait` 等 CI 的規則
 - [修复] 媒體／PTT 共用快照固定以 PIT 法定公告期限過濾月營收，cutoff 等於或晚於最新行情日也不切換 live，避免週末／連假補抓時把期限尚未到的營收永久寫入 journal；Web／個股報告維持既有 live 判定。
+- [改进] `scripts/measure_signal_forward.py` 另印候選池 P(≥30%)（`confidence` 錨點）的區塊 bootstrap 95% 區間與事件數，沿用均值區間的同一取樣核心
 - [修复] `screen_tw --date`、個股資料包帶基準日（Web `GET /api/v1/stocks/{code}/dossier?date=`、`stock-report --date`）與媒體／PTT 快照共用 `market_data.revenue_deadline.is_historical_replay`：只有明確指定日期嚴格早於全市場 `market.price` 最新日期才套月營收法定公告期限，帶今天／最新或未來日期改走 live、保留期限前已公告的營收（如 28xx 保險類 11~15 日），個股價格落後不再誤觸 PIT；最新日期取不到時保守當回放
 - [修复] 媒體點名／PTT 標的文的資料快照（`scripts/tw_media_picks.py` 的 `snapshot()`，兩支排程共用）恢復一律依月營收法定公告期限判斷可見：寫進 append-only journal 的 `revenue_yoy_3m` 不再因截止日等於全市場最新場次（當天處理、週五截止的集數週末才處理）而走 live，保險類 11~15 日在截止日之後才申報的營收不會永久寫進紀錄；Web／`stock-report`／`screen_tw` 的 live 判定不變
 - [修复] `screen_tw --date`、個股資料包帶基準日（Web `GET /api/v1/stocks/{code}/dossier?date=`、`stock-report --date`）共用 `market_data.revenue_deadline.is_historical_replay`：只有明確指定日期嚴格早於全市場 `market.price` 最新日期才套月營收法定公告期限，帶今天／最新或未來日期改走 live、保留期限前已公告的營收（如 28xx 保險類 11~15 日），個股價格落後不再誤觸 PIT；最新日期取不到時保守當回放
