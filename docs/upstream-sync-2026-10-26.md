@@ -26,7 +26,7 @@
 
 | 檔案 | 裁決 |
 | --- | --- |
-| `.github/ci-test-durations.json` | 取 fork 版（10-23 自 fork CI 重新擷取，含 `market_data/tests` 等 fork 測試）。上游新增測試檔沒有時長紀錄，分片時用預設值，不影響正確性；下次重擷取時自然補上 |
+| `.github/ci-test-durations.json` | 取 fork 版（10-23 自 fork CI 重新擷取，含 `market_data/tests` 等 fork 測試）。上游新增測試檔沒有時長紀錄，分片時用預設值，不影響正確性；已刪除的兩個 codex 測試條目也還留著（分片器會忽略不存在的檔）。下次重擷取時一併更新 |
 | `apps/dsa-web/src/pages/ChatPage.tsx` | 空狀態：fork 的 `title={t('chat.emptyTitle')}`（三語文案）＋上游的 `description={t('chat.emptyDescriptionDefault')}`（Codex 分支已移除）。標題列的 Badge 與送出按鈕自動合併為「上游邏輯＋fork 的 `t()` 文案」 |
 | `main.py` | 兩個新函式都留：fork 的 `_merge_portfolio_holdings` 與上游的 `_resolve_gate_expected_stock_codes`，並另開 commit 讓後者也併入持股（見下） |
 | `tests/test_stock_watchlist_api.py` | 兩邊都留：import 取聯集（fork 需要 `_watchlist_match_key`，上游需要 `os`／`patch`／`Config` 等）；fork 的 ASCII 閘門、台股帶字母代碼、指數與同碼個股共存測試接在前，上游三個「保留容器環境覆蓋」測試接在後 |
@@ -42,6 +42,8 @@
 - **新依賴**：`fastapi-guard>=8.1.1`，未安裝
 - **Web zh-TW 字典**：上游刪了 22 鍵（Codex 專屬文案與「停止分析」）、新增 3 鍵（`settings.agentBackendRemoved`、`settings.agentBackendRemovedLabel`、`chat.historicalCodexBackendBadge`），另改寫 2 鍵的說明。zh-TW 是 `Record<UiTextKey, string>`，少鍵多鍵都會讓 `tsc` 失敗。**已修**（commit `7a28c412`）：刪 22 鍵、補 3 鍵繁體、2 鍵說明改成新語意
 - **啟動去重閘門漏看持股**：上游 `_resolve_gate_expected_stock_codes` 宣稱與 `run_full_analysis` 的目標解析鏈一致，但 fork 的 `run_full_analysis` 對設定清單還會併入持股帳本。閘門少併這一步，當天新增的持股會被判成「當日全量已覆蓋」而跳過啟動補跑。**已修**（commit `e29e9d25`）：設定清單路徑（`stock_codes is None`）也走 `_merge_portfolio_holdings`，明確指定代碼時不併；新測試 `test_startup_gate_expected_codes_mirror_the_run_holdings_merge` 做過雙向 mutation（拿掉修法紅、改成無條件併入也紅）
+- **Uvicorn 代理頭**：#2416 讓 `main.py`／`server.py`／`webui.py` 的 `uvicorn.run` 帶上 `uvicorn_proxy_kwargs()`，但它在 `GUARD_ENABLED` 未開時回 `{}`，NAS（反向代理後）預設行為不變
+- **啟動去重的作用範圍**：只在 `python main.py --schedule` 生效；NAS compose 的 `server` 服務跑 `--serve-only`，不受影響
 - **`src/AGENTS.md`** 還寫著 `codex_app_server` 走本機 Codex，已更正（commit `1addc0c5`）
 
 ## 驗證
@@ -53,7 +55,7 @@
 | 上述 19 個失敗 | 全在 `tests/test_api_security_guard.py`，原因皆為 `ModuleNotFoundError: No module named 'guard'`——**需安裝依賴**，不是回歸 |
 | Web `npm run lint` / `tsc -b` / `npm run build` | 0 error（1 個既有 warning）/ 綠 / 綠（借主 checkout 的 `node_modules`，`package.json` 本輪未變） |
 | Web 受影響 vitest（ChatPage、settings 元件、agentChatStore、api、SettingsPage、i18n） | 22 檔、439 passed |
-| `scripts/check_ai_assets.py` | OK |
+| `scripts/check_ai_assets.py` / `tests/test_fork_infra_docs_contracts.py` | OK / 10 passed |
 | 全量離線測試 `ci_gate.sh` | **未跑**（§1 要先確認）；合併前請先 `uv pip install -r requirements.txt` 裝上 `fastapi-guard` 再跑 |
 | 阻斷 CI | 推分支後由 push 觸發（`chore/**` 在 `ci.yml` 的 `on:` 清單內；CI 會照 `requirements.txt` 裝 `fastapi-guard`）；排程不等結果，合併前看該 run |
 
