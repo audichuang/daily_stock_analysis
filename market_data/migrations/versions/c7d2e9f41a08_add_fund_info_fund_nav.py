@@ -52,7 +52,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # 公會只提供每檔最新淨值，歷史無法重抓；兩表都要先檢查，才可移除任何索引或資料表。
+    # market schema 是唯一資料源、沒有備份；公會淨值檔每檔只留最新一筆，入庫累積的每日淨值抓不回來
+    # （鉅亨只補得到有對照的基金），fund_info.cnyes_id 的 ISIN 對照也要逐檔重查。
+    # 兩表都先檢查，任一表有資料就在移除任何索引或資料表前拒絕（同 d3a8b6e15c27 的護欄）。
     bind = op.get_bind()
     row_counts = {
         table: bind.execute(sa.text(f"SELECT count(*) FROM market.{table}")).scalar_one()

@@ -22,7 +22,7 @@
 ## 儲存
 
 - `market.fund_info`、`market.fund_nav`：Alembic revision `c7d2e9f41a08`。寫入在 `market_data/funds.py`，讀取在 `market_data/market_repo.py` 的 `fund_*` 函式。
-- 此 revision 降版前會檢查兩表列數，任一表有資料就拒絕，且不移除任何索引或資料表；只有兩表皆空才可降版。`market` 是唯一資料源、無備份，公會歷史淨值無法重抓；確定要降版時，先停基金寫入端，匯出兩表並確認備份，再自行清空兩表後重跑。
+- 此 revision 降版前會檢查兩表列數，任一表有資料就拒絕，且不移除任何索引或資料表；只有兩表皆空才可降版。`market` 是唯一資料源、無備份，公會歷史淨值無法重抓；確定要降版時，先停基金寫入端，匯出兩表並確認備份，再 `TRUNCATE market.fund_nav, market.fund_info` 後重跑。
 - `dsa.portfolio_fund_holdings`（應用庫，由 `create_all` 建立）：基金持倉表，只存通路、基金統編、單位數、總成本、對帳日和備註。**不存價格**，市值在讀取時用最新淨值現算。
 - **基金刻意不併進股票帳本**（`portfolio_trades`）。基金代碼進了那張表，會被即時報價和每日個股分析當成 A 股代碼處理：找不到報價，而且是靜默失敗。
 
