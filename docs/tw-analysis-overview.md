@@ -23,7 +23,6 @@
 | 即時報價、漲跌停 | Shioaji → yfinance | 是 | `source` 變 `fallback` 代表 Shioaji 金鑰沒注入、已降級 |
 | 三大法人（當日＋5／20 日累計） | 當日 TWSE T86／TPEx；趨勢讀本地 `market.institutional` | 是 | 單位是**股**；18:00 拿到的是初版，prompt 標「初版，投信常於隔夜修正」（約 1/4 份報告與定版不同，多在投信欄）；隔日 `daily` 由 `REVISED_SOURCES` 換成定版；上櫃歷史自 2018-01-15（#39） |
 | 融資融券（餘額、5／20 場變化、券資比） | 本地 `market.margin` | 是 | 單位是**張**，T+1；上櫃同表 `market='tpex'`（#39） |
-| 外資大台 TXF 淨未平倉 | 期交所官方 CSV；每日可累積至 `market.taifex_foreign_futures_oi` | 否（盤前腳本即時列數字） | `TAIFEX_OI_ACCUMULATE_ENABLED` 預設關閉；須先 migration 再啟用，只存官方近 14 天窗口且驗回應日期，詳見 `docs/market-data-pitfalls.md`「期交所外資大台未平倉」 |
 | 估值（近四季本益比、淨值比、殖利率） | 上市優先讀本地 `market.valuation` 當日值，退回 `TwseFundamentalAdapter`（BWIBBU 只有 T-1）；上櫃走 TPEx OpenAPI | 是，附 `as_of` 日期 | 整包 `as_of` 落後 10 曆日就拒收 |
 | 月營收（單月、月增、年增、累計年增） | 官方 OpenAPI | 是 | 不讀本地 DB 的 16 年 PIT 資料 |
 | 月營收動能（前 3 月均年增 vs 本月、強勢股大幅降速） | 本地 `market.monthly_revenue` | 是，資訊列 | `src/services/tw_backtest_context.py`；只當資訊 |
@@ -109,7 +108,8 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
 - **2～5 天短波段專用契約與新訊號**：不要把現有突破訊號直接縮短持有期，已證實為負。
 - 影子評估累積 2～3 個月後，再決定 `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE` 與 `TW_MA_ALIGNMENT_WEIGHTED`。
 - 把 #39 的上櫃籌碼、集保、分點接進個股 prompt（目前只在 dossier）。
-- 資料：期交所法人未平倉入庫、當沖比與借券（FinMind 免費）、加權／櫃買指數歷史（`market_index` 只從 2026-07 開始）。
+- 資料：當沖比與借券（FinMind 免費）、加權／櫃買指數歷史（`market_index` 只從 2026-07 開始）。
+- 期交所法人台指期未平倉已可入庫（`market.taifex_fut_oi`，`TAIFEX_OI_PERSIST_ENABLED` 預設關，2026-10-26 起；只累積不回補，還沒有任何讀取端或回測），P/C 比仍只抓不存。
 - 強勢股營收降速改用 `decel_lt0`（兩個期距都穩），目前用的是 `decel_le20`。
 - `dsa` 正式庫裡有 5 筆測試資料待清（id 3／6／398 等，需使用者確認）。
 - 波段日誌 08-14～10-19 停擺：同期 33 個交易日有 27 天有候選，是流程沒跑，不是市場沒機會。

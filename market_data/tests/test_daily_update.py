@@ -12,7 +12,9 @@ def _no_fund_network(monkeypatch):
     monkeypatch.setattr(funds, "daily_update", lambda eng, asof=None: calls.append(asof))
     # 集保段同理（會連 TDCC 開放資料）
     monkeypatch.setattr(crawl.sources, "fetch_tdcc_latest", lambda: None)
-    monkeypatch.setenv("TAIFEX_OI_ACCUMULATE_ENABLED", "false")
+    # 期交所段預設關；開關從外部環境漏進來也不能讓本檔連期交所
+    monkeypatch.delenv(taifex.FLAG_ENV, raising=False)
+    monkeypatch.setattr(taifex, "fetch_csv", lambda url, data: (None, "測試不連期交所"))
     return calls
 
 
@@ -285,24 +287,35 @@ def test_twse_source_failure_still_aborts_daily(monkeypatch):
         crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
 
 
-@pytest.mark.parametrize("asof", [None, date(2024, 6, 5)])
-def test_daily_delegates_taifex_with_original_asof(monkeypatch, asof):
-    _stub_stock_steps(monkeypatch)
-    calls = []
-    engine = _Eng()
-    monkeypatch.setattr(taifex, "daily_update", lambda eng, asof=None: calls.append((eng, asof)))
-    crawl.daily_update(engine=engine, asof=asof)
-    assert calls == [(engine, asof)]
+def test_taifex_step_is_off_by_default(monkeypatch):
+    """開關沒設（預設）就不呼叫期交所入庫，連表都不碰——正式庫沒跑 migration 前 daily 不受影響。"""
+    calls = _stub_daily(monkeypatch, failing=set())
+    monkeypatch.setattr(taifex, "update", lambda eng, asof=None: calls.append(("taifex", asof)))
+    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+    assert not [c for c in calls if c[0] == "taifex"]
+    monkeypatch.setenv(taifex.FLAG_ENV, "false")
+    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+    assert not [c for c in calls if c[0] == "taifex"]
 
 
-def test_taifex_failure_warns_and_does_not_block_adjustment(monkeypatch, capsys):
-    adjusted = []
-    _stub_stock_steps(monkeypatch, adjusted)
+def test_taifex_step_runs_with_same_asof_when_enabled(monkeypatch):
+    calls = _stub_daily(monkeypatch, failing=set())
+    monkeypatch.setattr(taifex, "update", lambda eng, asof=None: calls.append(("taifex", asof)))
+    monkeypatch.setenv(taifex.FLAG_ENV, "true")
+    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+    assert ("taifex", date(2024, 6, 5)) in calls
+    # 在復權刷新之前跑：復權失敗會 raise，不能讓期交所段跟著被跳過
+    assert calls.index(("taifex", date(2024, 6, 5))) < calls.index(("adjust",))
 
-    def boom(engine, asof=None):
-        raise RuntimeError("fixture write failed")
 
-    monkeypatch.setattr(taifex, "daily_update", boom)
-    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5))
-    assert adjusted == [1]
-    assert "**WARN taifex_foreign_futures_oi: fixture write failed" in capsys.readouterr().out
+def test_taifex_failure_is_reported_and_daily_continues(monkeypatch, capsys):
+    calls = _stub_daily(monkeypatch, failing=set())
+
+    def boom(eng, asof=None):
+        raise RuntimeError("relation market.taifex_fut_oi does not exist")
+
+    monkeypatch.setattr(taifex, "update", boom)
+    monkeypatch.setenv(taifex.FLAG_ENV, "1")
+    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+    assert ("adjust",) in calls, "期交所段失敗不能讓復權刷新與後續報告陪葬"
+    assert "**WARN taifex_fut_oi: relation market.taifex_fut_oi does not exist" in capsys.readouterr().out

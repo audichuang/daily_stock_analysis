@@ -2,8 +2,8 @@
 """期交所籌碼：外資台指期（大台 TXF）淨未平倉＋日變化、臺指選擇權 P/C 未平倉比。
 
 給 `make morning` 的「期交所籌碼（前一交易日）」區塊與 skill `tw-morning-call` 用。
-本腳本只抓不入庫：日變化直接從回應算；共用取數／解析在 `market_data.taifex`，
-每日 market_data 更新可另以預設關閉的旗標累積外資 TXF 淨未平倉（見 docs/market-data-pitfalls.md）。
+本腳本只抓不入庫：一次 POST 就拿得到一段日期，日變化直接從回應算，不碰 DB。期貨端點、抓取與
+解析和每日入庫（`market_data/taifex.py` → ``market.taifex_fut_oi``，``TAIFEX_OI_PERSIST_ENABLED``）共用。
 
 **新鮮度規則**：回應裡最新一列的日期必須等於預期場次（`market_data.health.expected_session`，
 或 ``--as-of`` 覆寫），否則**不印數字、改印原因**——期交所查非交易日／尚未公布時照樣回
@@ -42,10 +42,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from market_data import health  # noqa: E402
-from market_data.taifex import (  # noqa: E402
-    FUT_URL, PC_URL, fetch_rows, parse_fut, parse_pc, pick, query_dates,
-)
+from market_data import taifex  # noqa: E402
 from market_data.tw_official_http import md  # noqa: E402
+
+FUT_URL = taifex.FUT_URL
+PC_URL = "https://www.taifex.com.tw/cht/3/pcRatioDown"
+# 起日往前推的曆日數（與入庫共用）：P/C 端點一次最多查約一個月，14 天裝得下長假。
+LOOKBACK_DAYS = taifex.LOOKBACK_DAYS
 
 _FUT_ITEM = "外資台指期淨未平倉"
 _PC_ITEM = "臺指選擇權 P/C"
@@ -53,6 +56,39 @@ _NOTE = "說明：只列數字、不給門檻——本 repo 沒有回測支持�
 _SETTLEMENT = "⚠ 跨月結算，未平倉變化含結算／轉倉效應"
 _NO_CALENDAR_SETTLEMENT = "⚠ 交易日曆不可用，未檢查是否落在結算週"
 _NO_CALENDAR = "交易日曆不可用，期交所區塊略過（不退回週一~五猜場次）"
+
+
+_parse_date = taifex.parse_date
+_reader = taifex.csv_reader
+
+
+def parse_fut(text):
+    """期貨 CSV → ``[(日期, 外資及陸資 臺股期貨 多空未平倉口數淨額)]``，依日期由舊到新。
+
+    解析與入庫共用 `taifex.parse_fut_rows`（依欄名取值；表頭缺欄位時 raise ValueError）。"""
+    return sorted((r["date"], r["net_oi"]) for r in taifex.parse_fut_rows(text) if r["identity"] == "foreign")
+
+
+def parse_pc(text):
+    """P/C CSV → ``[(日期, 未平倉比%, 成交量比%)]``，依日期由舊到新。
+
+    回應本身由新到舊、每列結尾多一個逗號（落在 DictReader 的 key None，忽略）。"""
+    reader = _reader(text, ("日期", "買賣權未平倉量比率%", "買賣權成交量比率%"))
+    rows = []
+    for row in reader:
+        rows.append((_parse_date(row["日期"]), float(row["買賣權未平倉量比率%"]),
+                     float(row["買賣權成交量比率%"])))
+    return sorted(rows)
+
+
+def pick(rows, session):
+    """新鮮度：最新一列日期必須＝場次。回 ``((最新列, 前一列或 None), None)`` 或 ``(None, 原因)``。"""
+    if not rows:
+        return None, "無資料列（非交易日或尚未公布）"
+    latest = rows[-1]
+    if latest[0] != session:
+        return None, f"最新一列 {latest[0]} ≠ 預期場次 {session}，無法證明新鮮，不採用"
+    return (latest, rows[-2] if len(rows) >= 2 else None), None
 
 
 def change_basis(prev, session, is_session=None):
@@ -84,6 +120,9 @@ def near_settlement(day, is_session=None):
     if before is None or after is None:
         return None
     return before <= day <= after
+
+
+_fetch = taifex.fetch_csv
 
 
 def _fut_line(latest, prev, basis):
@@ -123,7 +162,12 @@ class Item:
 
 def _section(name, url, data, parser, session, is_session):
     """單一端點：抓取 → 解析 → 新鮮度 → 日變化可否計算，回 `Item`。"""
-    rows, reason = fetch_rows(url, data, parser)
+    text, reason = _fetch(url, data)
+    if reason is None:
+        try:
+            rows = parser(text)
+        except ValueError as error:
+            reason = f"格式不符：{error}"
     if reason is None:
         picked, reason = pick(rows, session)
     if reason is not None:
@@ -134,7 +178,8 @@ def _section(name, url, data, parser, session, is_session):
 
 def collect(session, is_session=None):
     """抓兩個端點，回 ``(期貨 Item, P/C Item, ⚠ 註記清單)``。"""
-    dates = query_dates(session)
+    start = session - datetime.timedelta(days=LOOKBACK_DAYS)
+    dates = {"queryStartDate": start.strftime("%Y/%m/%d"), "queryEndDate": session.strftime("%Y/%m/%d")}
     fut = _section(_FUT_ITEM, FUT_URL, {**dates, "commodityId": "TXF"}, parse_fut, session, is_session)
     pc = _section(_PC_ITEM, PC_URL, dates, parse_pc, session, is_session)
     notes = []

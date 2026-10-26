@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - [修复] 測試的正式庫守門在樹外 worktree（如 dsa-upstream-sync 的 `~/.cache/dsa-upstream-sync/<date>`）往上找不到 `.env`、或最近的 `.env` 沒設 `STORAGE_DATABASE_URL` 時，改經 `git rev-parse --git-common-dir` 讀主 checkout 的 `.env`；AGENTS.md §9 等 CI 改用 `gh-wait`
 - [新功能] 每日行情更新可用預設關閉的 `TAIFEX_OI_ACCUMULATE_ENABLED` 累積期交所外資大台 TXF 淨未平倉至 market schema，與盤前腳本共用解析及回應日期護欄、按官方近 14 天原日期冪等寫入；單一來源失敗只報警告，新增 migration 非空表拒絕降版。
+- [新功能] 期交所三大法人臺股期貨（大台 TXF）未平倉每日入庫 `market.taifex_fut_oi`（新 migration `e4f7a2c9b1d3`，表內有資料時拒絕降版）：`TAIFEX_OI_PERSIST_ENABLED=true` 時 `market_data.cli daily` 抓近 14 曆日窗口並以回應每列自帶日期 upsert，窗口外日期整包拒收、身份別不齊的日子不寫、最新一列早於預期場次印停更 WARN，期交所或資料表失敗只報不擋；預設關（不連期交所、不碰該表），另有不看開關的 `python -m market_data.cli taifex-oi`；`scripts/taifex_positions.py` 改與入庫共用 `market_data/taifex.py` 的端點、抓取與解析（輸出不變）
 - [修复] 四維度 HTML 報告遇到月營收為 NULL 的月份不再整份失敗（端點回 503），該月印「無資料」、長條寬 0；盯盤看板「外資 5 日轉向」提示改為只在法人資料日等於資料基準日時出現並標示日期，法人資料停更時不再把舊累計當成最近一日的變化
 - [修复] 持倉快照依各股票與基金自身幣別換算後再加總，支援非台幣／美元帳戶；缺價或缺匯率保留持倉並標示估值不完整、停算權重，避免假損失與零分母中斷，零成本僅略過損益率。
 - [修复] 台股 live 漏斗 `scripts/screen_tw.py` 改用與量測端相同的宇宙判斷 `market_data.adjust.is_common_stock`（四位數普通股，排除 ETF 00xx、TDR 91xx 與 912000 類、特別股 2887A），不再只排 00 開頭而讓 TDR 進候選池；`measure_signal_forward`、`measure_revenue_momentum`、`portfolio_walkforward` 改呼叫同一個函式（行為不變），`backtest_screen` 的選股排除也從只擋 00 改成同一判斷（會擋掉 TDR／特別股，回測數字可能小幅變動）；漏斗步驟標籤改為「排除 ETF／TDR／非普通股與創新板」；`docs/tw-analysis-overview.md` 補上大盤脈絡護欄也比對摘要文字（退潮／高風險／輕倉／cooling／risk-off 等）

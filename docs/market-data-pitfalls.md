@@ -40,13 +40,13 @@
 - **殖利率「沒配息」兩端點寫法不同**：快照 `BWIBBU_ALL` 留空字串，`BWIBBU_d` 印 `0.00`。`etl.transform_valuation` 自 2026-10-19 起把快照空白殖利率存成 0（本益比空白仍是 NULL——虧損無法計算）；2026-07-03~10-16 的 1.47 萬筆 NULL 已用 `backfill valuation --force` 回補成 0（逐日比對：列數、PE、PB 全不變），全表殖利率已無 NULL。NaN 會讓 `scripts/backtest_screen.py` 把 `divy` 加進分數時該檔掉出排名。
 - **valuation 的 `--force` 只有列數門檻（新列 ≥ 舊列一半），沒有法人那種欄位品質守門**——來源少一欄就整欄蓋成 NULL。
 
-## 期交所外資大台未平倉
+## 期交所法人台指期未平倉
 
-- `market_data.taifex` 與 `scripts/taifex_positions.py` 共用官方 CSV 取數、cp950 解析與新鮮度護欄。盤前腳本仍只讀；只有 `market_data.cli daily` 的期交所段會寫入 `market.taifex_foreign_futures_oi`，且須明確設定 `TAIFEX_OI_ACCUMULATE_ENABLED=true`（預設 `false`，不抓取、不讀寫該表）。此旗標由 market_data 直接讀環境變數，不依賴 Web／API 設定載入；本地、Docker、Actions 都須在實際執行 daily 的環境明確注入，API／Web／Desktop 不會自行累積。
-- 啟用前先在已設定 `DATABASE_URL` 的維運環境執行 `uv run --frozen python -m alembic -c market_data/alembic.ini upgrade head`（新增 migration `e4b7c2a91f06`），再開旗標並執行 `uv run --frozen python -m market_data.cli daily`。本次程式變更不會自動遷移或寫正式庫。`docker/Dockerfile` 現有 `COPY market_data/*.py` 已涵蓋新模組；映像不含 migrations，仍須在維運 checkout 遷移。
-- 表契約：`date` 是回應每列自帶日期、也是唯一主鍵；`foreign_fut_oi` 是外資及陸資「臺股期貨」（大台 TXF，不含小台／微台）多空未平倉口數淨額，整數口數、負值為淨空，0 為有效讀數。每輪只查預期場次往前 14 個曆日的官方窗口，最新一列日期須等於預期場次；缺日期、日期無效、超出查詢窗口、凍結舊資料、空回應或錯誤頁皆拒收。窗口內按原日期 upsert，重跑不重複、官方修正可覆蓋，不補造缺日或擴張歷史回補。
-- 預設場次沿用 `health.expected_session`（台北時間 17:00 前取前一場次；日曆不可用則略過），直接呼叫 `crawl.daily_update(asof=...)` 時取該日或之前最近交易日。成功在交易提交後印 `taifex_foreign_futures_oi N rows, latest YYYY-MM-DD`；來源或寫入失敗只印 `**WARN`，不擋復權與其他每日流程。尚無 OI 查詢 API／交易門檻／回測；日變化與 P/C 仍由盤前腳本即時計算，P/C 未入此表。
-- 回滾先關閉旗標再退程式，保留已累積的資料。migration 降版在任何刪表操作前檢查列數，非空即拒絕；確定匯出並驗證備份、人工清空後才可降版，空表仍能正常降版。
+- `market_data/taifex.py` 與 `scripts/taifex_positions.py` 共用期貨端點、cp950 取數與解析；盤前腳本仍只讀。寫入 `market.taifex_fut_oi` 的只有兩條路：`market_data.cli daily`（須明確設 `TAIFEX_OI_PERSIST_ENABLED=true`，預設關＝不連期交所、不碰該表）與不看開關的手動 `python -m market_data.cli taifex-oi [--asof YYYY-MM-DD]`。旗標由 market_data 直接讀環境變數，實際執行 daily 的環境（本機、Docker、Actions）都要自己注入。
+- 啟用前先對 `DATABASE_URL` 的 market 庫跑 `uv run --frozen python -m alembic -c market_data/alembic.ini upgrade head`（migration `e4f7a2c9b1d3`）。沒跑 migration 就開旗標只會印 `**WARN taifex_fut_oi`，不擋 daily。
+- 表契約：主鍵 `(date, commodity_id, identity)`，目前只存大台 `TXF`，`identity` 為 `dealer`／`trust`／`foreign`；口數單位口、契約金額單位千元，淨額負值為淨空。`date` 是回應每列自帶日期，不是抓取日。
+- 每輪只查迄日（已收盤的預期場次，未收盤時退到前一交易日）往前 14 曆日的窗口：任何一列落在窗口外整包拒收；同日身份別不齊只丟那天；最新一列早於預期場次時照寫已有日期並另印停更 WARN。窗口內按原日期 upsert，重跑不重複、官方更正會覆蓋；不回補更早歷史。P/C 比仍只抓不存。
+- 降版在刪表前檢查列數，非空即拒絕（market schema 無備份、期交所查不回舊窗口）；先匯出確認備份、人工清空再降版。回滾先關旗標再退程式，保留已累積的資料。
 
 ## 月營收／財報
 

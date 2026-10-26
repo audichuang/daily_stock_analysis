@@ -1,25 +1,65 @@
-"""期交所共用 CSV 取數／解析與外資大台 TXF 淨未平倉每日累積。"""
+"""期交所三大法人臺股期貨（大台 TXF）未平倉：抓取、解析、入庫 ``market.taifex_fut_oi``。
+
+`scripts/taifex_positions.py`（`make morning` 的期交所籌碼區塊）與每日入庫共用這裡的
+端點、抓取與解析；盤前那支仍只印、不寫 DB。入庫由 ``crawl.daily_update`` 在
+``TAIFEX_OI_PERSIST_ENABLED`` 為真時呼叫（預設關，正式庫沒跑 migration 前開了也只印 WARN），
+手動單跑用 ``python -m market_data.cli taifex-oi``。
+
+**不回補歷史**：每次只查 ``LOOKBACK_DAYS`` 曆日的窗口，靠每天累積；窗口內已入庫的日子
+冪等 upsert。
+
+**資料日以回應每列自帶的日期為準**（端點停更照樣回 200，見 repo `AGENTS.md` §10）：
+
+- 任何一列落在查詢窗口外（晚於迄日或早於起日）→ 回應對不上請求，**整包拒收**；
+- 同一日三種身份別（自營商／投信／外資及陸資）不齊 → 只丟那一天、印 WARN（截斷回應）；
+- 最新一列早於預期場次 → 照寫已有的日子（各自帶原日期，不會被當成今天），另印 WARN，
+  這是唯一的停更訊號。
+
+HTTP 走 `tw_official_http.post`（短 timeout、不重試）；錯誤頁判斷用它的 ``error_reason``，
+判定可用之後才以 cp950 解碼 CSV（正常 CSV 是 MS950，卻標成 ``text/html``）。
+``queryEndDate`` 一律填已收盤的場次，不填未來日：迄日落在未來時期交所整筆回 ``日期時間錯誤``。
+"""
 
 import csv
 import datetime
 import io
 import os
 
+from market_data import health, models
 from market_data import tw_official_http as http
-from market_data.models import TaifexForeignFuturesOi
-from market_data.writer import upsert
 
 FUT_URL = "https://www.taifex.com.tw/cht/3/futContractsDateDown"
-PC_URL = "https://www.taifex.com.tw/cht/3/pcRatioDown"
-# 起日往前推的曆日數：P/C 端點一次最多查約一個月，14 天裝得下長假。
+# 起日往前推的曆日數：14 天裝得下長假，也是每日入庫的窗口（不另外回補更早的歷史）。
 LOOKBACK_DAYS = 14
+COMMODITY_TXF = "TXF"
+_COMMODITY_NAMES = {"臺股期貨": COMMODITY_TXF}
+IDENTITIES = {"自營商": "dealer", "投信": "trust", "外資及陸資": "foreign"}
+_PK = ["date", "commodity_id", "identity"]
+# CSV 欄名 → 表欄位（口數與契約金額千元）
+_OI_COLUMNS = {
+    "多方未平倉口數": "long_oi",
+    "空方未平倉口數": "short_oi",
+    "多空未平倉口數淨額": "net_oi",
+    "多方未平倉契約金額(千元)": "long_oi_amount",
+    "空方未平倉契約金額(千元)": "short_oi_amount",
+    "多空未平倉契約金額淨額(千元)": "net_oi_amount",
+}
+_REQUIRED = ("日期", "商品名稱", "身份別", *_OI_COLUMNS)
+FLAG_ENV = "TAIFEX_OI_PERSIST_ENABLED"
+_TRUE = ("1", "true", "yes", "on")
 
 
-def _parse_date(text):
+def persist_enabled():
+    """``TAIFEX_OI_PERSIST_ENABLED`` 是否為真；未設或其他值一律視為關（不連期交所、不寫 DB）。"""
+    return os.environ.get(FLAG_ENV, "").strip().lower() in _TRUE
+
+
+def parse_date(text):
     return datetime.datetime.strptime(text.strip(), "%Y/%m/%d").date()
 
 
-def _reader(text, required):
+def csv_reader(text, required):
+    """依欄名讀 CSV；表頭缺必要欄位時 raise ValueError（端點可能改版）。"""
     reader = csv.DictReader(io.StringIO(text))
     missing = [name for name in required if name not in (reader.fieldnames or [])]
     if missing:
@@ -27,42 +67,41 @@ def _reader(text, required):
     return reader
 
 
-def parse_fut(text):
-    """期貨 CSV → ``[(日期, 外資及陸資 臺股期貨 多空未平倉口數淨額)]``，依日期由舊到新。
+def _int(text):
+    return int((text or "").strip().replace(",", ""))
 
-    依欄名取值、不靠欄位位置；表頭缺必要欄位時 raise ValueError。"""
-    reader = _reader(text, ("日期", "商品名稱", "身份別", "多空未平倉口數淨額"))
+
+def parse_fut_rows(text):
+    """期貨 CSV → 臺股期貨各身份別的未平倉 dict 清單（鍵同 ``models.TaifexFutOI``），依日期、身份別排序。
+
+    依欄名取值、不靠欄位位置；表頭缺欄位、或出現不認得的身份別時 raise ValueError。
+    其他商品的列略過（``commodityId=TXF`` 時本來就只有臺股期貨）。"""
     rows = []
-    for row in reader:
-        if (row["商品名稱"] or "").strip() != "臺股期貨" or (row["身份別"] or "").strip() != "外資及陸資":
+    for row in csv_reader(text, _REQUIRED):
+        commodity = _COMMODITY_NAMES.get((row["商品名稱"] or "").strip())
+        if commodity is None:
             continue
-        rows.append((_parse_date(row["日期"]), int(row["多空未平倉口數淨額"].strip())))
-    return sorted(rows)
+        name = (row["身份別"] or "").strip()
+        if name not in IDENTITIES:
+            raise ValueError(f"不認得的身份別 {name!r}（端點可能改版）")
+        rec = {"date": parse_date(row["日期"]), "commodity_id": commodity, "identity": IDENTITIES[name]}
+        for column, field in _OI_COLUMNS.items():
+            rec[field] = _int(row[column])
+        rows.append(rec)
+    return sorted(rows, key=lambda r: (r["date"], r["identity"]))
 
 
-def parse_pc(text):
-    """P/C CSV → ``[(日期, 未平倉比%, 成交量比%)]``，依日期由舊到新。
-
-    回應本身由新到舊、每列結尾多一個逗號（落在 DictReader 的 key None，忽略）。"""
-    reader = _reader(text, ("日期", "買賣權未平倉量比率%", "買賣權成交量比率%"))
-    rows = []
-    for row in reader:
-        rows.append((_parse_date(row["日期"]), float(row["買賣權未平倉量比率%"]),
-                     float(row["買賣權成交量比率%"])))
-    return sorted(rows)
+def query_window(end, start=None):
+    """``(起日, 迄日)``；起日預設 ``end - LOOKBACK_DAYS``。"""
+    return (start or end - datetime.timedelta(days=LOOKBACK_DAYS)), end
 
 
-def pick(rows, session):
-    """新鮮度：最新一列日期必須＝場次。回 ``((最新列, 前一列或 None), None)`` 或 ``(None, 原因)``。"""
-    if not rows:
-        return None, "無資料列（非交易日或尚未公布）"
-    latest = rows[-1]
-    if latest[0] != session:
-        return None, f"最新一列 {latest[0]} ≠ 預期場次 {session}，無法證明新鮮，不採用"
-    return (latest, rows[-2] if len(rows) >= 2 else None), None
+def query_data(start, end, commodity=COMMODITY_TXF):
+    return {"queryStartDate": start.strftime("%Y/%m/%d"), "queryEndDate": end.strftime("%Y/%m/%d"),
+            "commodityId": commodity}
 
 
-def _fetch(url, data):
+def fetch_csv(url, data):
     """回 ``(CSV 文字, None)`` 或 ``(None, 原因)``。錯誤頁先交給 `tw_official_http.error_reason` 判斷，可用才以 cp950 解碼。"""
     resp, reason = http.post(url, data=data, expect="csv")
     if reason is not None:
@@ -70,54 +109,70 @@ def _fetch(url, data):
     return resp.content.decode("cp950", errors="replace"), None
 
 
-def query_dates(session):
-    """只查官方近期窗口，迄日固定為已選定的場次，不拿今天冒充資料日。"""
-    start = session - datetime.timedelta(days=LOOKBACK_DAYS)
-    return {"queryStartDate": start.strftime("%Y/%m/%d"),
-            "queryEndDate": session.strftime("%Y/%m/%d")}
+def guard_rows(rows, start, end):
+    """入庫前的資料日檢查，回 ``(可寫的列, 被丟掉的不完整日期)``。
+
+    任何一列落在 ``[start, end]`` 外就 raise ValueError（整包拒收：回應對不上請求）；
+    同一日身份別不齊（截斷回應）只丟那一天。同鍵重複但數值不同也 raise。"""
+    outside = sorted({r["date"] for r in rows if not start <= r["date"] <= end})
+    if outside:
+        raise ValueError(f"回應含查詢窗口 {start}~{end} 以外的日期 {outside}，整包拒收")
+    by_key = {}
+    for rec in rows:
+        key = tuple(rec[k] for k in _PK)
+        if key in by_key and by_key[key] != rec:
+            raise ValueError(f"同一鍵 {key} 出現兩個不同的值，整包拒收")
+        by_key[key] = rec
+    want = set(IDENTITIES.values())
+    seen = {}
+    for date, _commodity, identity in by_key:
+        seen.setdefault(date, set()).add(identity)
+    incomplete = sorted(d for d, ids in seen.items() if ids != want)
+    kept = [r for r in by_key.values() if r["date"] not in incomplete]
+    return sorted(kept, key=lambda r: (r["date"], r["identity"])), incomplete
 
 
-def fetch_rows(url, data, parser):
-    """共用取數／解析接縫；來源失敗回原因，不影響另一端點或每日其他來源。"""
-    text, reason = _fetch(url, data)
-    if reason is not None:
-        return None, reason
+def store(conn, records):
+    """upsert 進 ``market.taifex_fut_oi``，回寫入列數（期交所事後更正會覆蓋舊值）。"""
+    from market_data.writer import upsert
+
+    return upsert(conn, models.TaifexFutOI.__table__, records, _PK)
+
+
+def target_session(asof=None, now=None, is_session=None):
+    """要查的迄日：已收盤的預期場次，``asof`` 較早時取 ``asof`` 當天或之前最近的交易日。
+
+    日曆不可用回 None——不退回週一~五猜，也不拿今天當迄日（未收盤時期交所整筆回日期錯誤）。"""
+    expected = health.expected_session(now=now, is_session=is_session)
+    if expected is None or asof is None or asof >= expected:
+        return expected
+    return health.session_before(asof + datetime.timedelta(days=1), is_session=is_session)
+
+
+def update(engine, asof=None, now=None, is_session=None, out=print):
+    """抓 ``LOOKBACK_DAYS`` 窗口 → 資料日檢查 → 一個交易 upsert，commit 後才印列數。
+
+    資料問題（端點錯誤、格式不符、窗口外日期、日曆不可用）只印 ``**WARN`` 回 0，不 raise；
+    DB 錯誤（例如正式庫還沒跑 migration）照常拋，由呼叫端決定要不要擋。"""
+    end = target_session(asof, now=now, is_session=is_session)
+    if end is None:
+        out("**WARN taifex_fut_oi: 交易日曆不可用，略過（不退回週一~五猜場次）")
+        return 0
+    start, end = query_window(end)
+    text, reason = fetch_csv(FUT_URL, query_data(start, end))
     try:
-        return parser(text), None
+        if reason is not None:
+            raise ValueError(reason)
+        records, incomplete = guard_rows(parse_fut_rows(text), start, end)
     except ValueError as error:
-        return None, f"格式不符：{error}"
-
-
-def daily_update(engine, asof=None):
-    """每日增量：預設關閉；啟用後只存官方 14 天窗口內已自證日期的 TXF 外資淨額。
-
-    未指定 asof 時沿用 health 的台北時間／17:00 門檻；指定時取該日或之前最近場次。
-    不建表、不補造歷史、不存日變化；重跑以 date upsert 吃進官方修正。
-    """
-    if os.getenv("TAIFEX_OI_ACCUMULATE_ENABLED", "false").strip().lower() != "true":
+        out(f"**WARN taifex_fut_oi {start}~{end}: {error}；不寫入")
         return 0
-    # 惰性 import：health 也依賴 crawl，避免形成模組初始化循環。
-    from market_data import health
-
-    now = datetime.datetime.combine(asof, health.SESSION_COMPLETE_AFTER) if asof is not None else None
-    session = health.expected_session(now=now)
-    name = TaifexForeignFuturesOi.__tablename__
-    if session is None:
-        print(f"**WARN {name}: 交易日曆不可用，略過（不猜場次）", flush=True)
-        return 0
-    rows, reason = fetch_rows(FUT_URL, {**query_dates(session), "commodityId": "TXF"}, parse_fut)
-    if reason is None:
-        _, reason = pick(rows, session)
-    if reason is None:
-        start = session - datetime.timedelta(days=LOOKBACK_DAYS)
-        if any(not start <= row[0] <= session for row in rows):
-            reason = f"回應資料日超出查詢窗口 {start}..{session}，拒收"
-    if reason is not None:
-        print(f"**WARN {name}: {reason}", flush=True)
-        return 0
-    records = [{"date": day, "foreign_fut_oi": value} for day, value in rows]
+    if incomplete:
+        out(f"**WARN taifex_fut_oi: {', '.join(map(str, incomplete))} 身份別不齊（回應可能截斷），這幾天不寫入")
     with engine.begin() as conn:
-        written = upsert(conn, TaifexForeignFuturesOi.__table__, records, ["date"])
-    # 離開交易後才報數；失敗由 crawl.daily_update 捕捉並繼續其他來源。
-    print(f"{name} {written:,} rows, latest {session}", flush=True)
-    return written
+        n = store(conn, records)
+    latest = max((r["date"] for r in records), default=None)
+    out(f"taifex_fut_oi {n:,} rows, latest {latest}")
+    if latest != end:
+        out(f"**WARN taifex_fut_oi: 最新一列 {latest} ≠ 預期場次 {end}（尚未公布或端點停更）")
+    return n

@@ -610,7 +610,6 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
     from market_data.db import get_engine
 
     eng = engine or get_engine()
-    taifex_asof = asof
     asof = asof or _dt.date.today()
     # ``days`` 是**交易日**不是曆日:用 5 個曆日的話,週末＋連假一來實際只回補 2~3 個交易日,
     # 而法人/融資是 T+1 才補齊的,窗口太窄會讓那幾天永久缺。asof 自己也要進去——當日的
@@ -626,7 +625,6 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
     # valuation 不進 REVISED_SOURCES:它沒有「初版→定版」的修正語意。
     # 上櫃來源只報不擋：TPEx 掛掉（含連續空日的 RuntimeError）不能讓後面的快照、月營收、
     # 復權與每日報告陪葬；上市來源維持 fail-fast。cli backfill 不經這裡，照舊會中止。
-
     def _run(fn, source, *args):
         if source not in SOURCE_MARKET:
             return fn(eng, source, *args)
@@ -674,12 +672,14 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
         print(f"holding_dist {n:,} rows, latest {latest}")
     except Exception as exc:
         print(f"**WARN holding_dist: {exc}")
-    # 預設關閉的期交所累積；保留原始 asof，未覆寫時由期交所段判斷盤前／盤後場次。
+    # 期交所法人台指期未平倉：預設關（TAIFEX_OI_PERSIST_ENABLED），關時不連期交所也不碰該表；
+    # 開了也只報不擋——正式庫還沒跑 migration、期交所掛掉都不該讓復權與每日報告陪葬
     from market_data import taifex
-    try:
-        taifex.daily_update(eng, asof=taifex_asof)
-    except Exception as exc:
-        print(f"**WARN taifex_foreign_futures_oi: {exc}")
+    if taifex.persist_enabled():
+        try:
+            taifex.update(eng, asof=asof)
+        except Exception as exc:
+            print(f"**WARN taifex_fut_oi: {exc}")
     try:
         adjust.refresh_recent(
             eng, asof - _dt.timedelta(days=adjust.ADJUSTMENT_WINDOW_DAYS),
