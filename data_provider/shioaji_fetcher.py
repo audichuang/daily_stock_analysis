@@ -13,14 +13,14 @@ DataFetcherManager 零网络代价跳过，台股自动降级 yfinance。
    - double-checked locking 防冷启并发双登入。
    - 登入/快照各有硬 timeout（futures），防 SDK 卡死拖垮 FastAPI 线程池。
    - 快照不持 _SESSION_LOCK（否则整批被序列化成一条 mutex，造成延迟悬崖）。
-2. 熔断器（_login_breaker）只在 _attempt_login 这唯一一处交互：
-   - is_available() 仅此处调用一次（消耗半开探测名额），与 record 一一配对。
+2. 熔斷器（_login_breaker）僅在 _attempt_login 檢查登入許可：
+   - is_available() 僅此處呼叫一次（消耗半開探測名額）；登入失敗或作廢目前 session 記失敗。
    - is_available_for_request **不读熔断器**：CircuitBreaker 的 OPEN→HALF_OPEN 时间转移
      只发生在 is_available() 内（get_status 是惰性纯读不触发），若把 get_status=="open"
      当 gate 会永久卡在 OPEN 无法恢复。故冷却中靠 _attempt_login 内的 is_available() 拦下
      （零登入），冷却到期自动半开重试。
-3. 熔断 key 以「端到端拿到 quote」为准：登入成功但快照空（午休/收盘无 tick）→
-   record_inconclusive（半开转回 OPEN，避免假复原），而非 record_success。
+3. 熔斷 key 以「端到端拿到有效個股或指數報價」為準：登入成功但快照空（午休／收盤無 tick）→
+   record_inconclusive（半開轉回 OPEN，避免假復原），而非 record_success。
 4. 仅服务 realtime_quote：不参与日线/统计路由（_DAILY_MARKET_FETCHER_SUPPORT 映射为空集合，
    不实现真实的 _fetch_raw_data / _normalize_data）。
 """
@@ -144,9 +144,9 @@ def _logout_at_exit() -> None:
 
 
 def _attempt_login() -> Optional[Any]:
-    """唯一碰熔断器与真正 login 的地方；必须在 _SESSION_LOCK 内调用。
+    """唯一檢查熔斷器登入許可與真正 login 的地方；必須在 _SESSION_LOCK 內呼叫。
 
-    返回可用 api 或 None。半开探测名额在此消耗，与下游 record_* 一一配对。
+    回傳可用 api 或 None。半開探測名額在此消耗，由登入失敗或下游報價結果記錄結果。
     """
     global _api, _logged_in, _logout_registered, _contract_fail_since
     # 先验金钥：无金钥的直呼/竞态不应消耗熔断器半开探测名额（否则 is_available 占用名额却无 record 配对）。
@@ -202,9 +202,21 @@ _CONTRACT_FAIL_WINDOW_S = 60.0
 _contract_fail_since: Optional[float] = None
 
 
+def _invalidate_session(api: Any, error: Exception) -> None:
+    """僅作廢仍在使用的 session，並將該次失敗計入既有登入熔斷器。"""
+    global _api, _logged_in, _contract_fail_since
+    with _SESSION_LOCK:
+        if _api is not api:
+            return
+        _api = None
+        _logged_in = False
+        _contract_fail_since = None
+        _login_breaker.record_failure(_BREAKER_KEY, str(error)[:200])
+
+
 def _lookup_contract(api: Any, getter: Callable[[Any], Any]) -> Optional[Any]:
     """查合约；丢例外时累计连续失败并在持续超过门槛时作废 session。查无（None/KeyError）不算失败。"""
-    global _api, _logged_in, _contract_fail_since
+    global _contract_fail_since
     try:
         contract = getter(api)
     except KeyError:
@@ -221,9 +233,7 @@ def _lookup_contract(api: Any, getter: Callable[[Any], Any]) -> Optional[Any]:
                 _contract_fail_since = now
             if now - _contract_fail_since < _CONTRACT_FAIL_WINDOW_S:
                 return None
-            _api = None
-            _logged_in = False
-            _contract_fail_since = None
+            _invalidate_session(api, e)
         logger.warning("[ShioajiFetcher] 合约查询持续失败超过 %.0f 秒，作废 session 以便重新登入: %s: %s",
                        _CONTRACT_FAIL_WINDOW_S, type(e).__name__, str(e)[:200])
         try:
@@ -354,6 +364,7 @@ def shioaji_main_indices() -> Optional[list]:
             snaps = fut.result(timeout=_SNAPSHOT_TIMEOUT_S)
     except Exception as e:
         logger.warning("[ShioajiFetcher] 指數快照失敗/超時: %s", type(e).__name__)
+        _invalidate_session(api, e)
         return None
 
     results = []
@@ -386,6 +397,10 @@ def shioaji_main_indices() -> Optional[list]:
     # 依固定順序（加權在前）
     order = [out for _, _, out, _ in _TW_MAIN_INDEX_CONTRACTS]
     results.sort(key=lambda r: order.index(r["code"]))
+    if results:
+        _login_breaker.record_success(_BREAKER_KEY)
+    else:
+        _login_breaker.record_inconclusive(_BREAKER_KEY)
     return results or None
 
 
@@ -409,7 +424,6 @@ def prime_snapshots(codes) -> int:
     未安装/无金钥/无 session 时 no-op 返回 0（per-code 路径照常单档兜底/降级 yfinance）。
     熔断与失败语义对齐单档路径（见 get_realtime_quote）。
     """
-    global _api, _logged_in
     if not _HAS_SHIOAJI or not codes:
         return 0
     api = _ensure_session()
@@ -434,11 +448,7 @@ def prime_snapshots(codes) -> int:
             snaps = fut.result(timeout=min(30.0, max(_SNAPSHOT_TIMEOUT_S, len(contracts) * 0.5)))
     except Exception as e:
         logger.warning("[ShioajiFetcher] 批次快照失败/超时 (%d 档): %s", len(contracts), type(e).__name__)
-        with _SESSION_LOCK:
-            if _api is api:  # 仅当仍是本次会话才作废，避免误清他线程新 session（race）
-                _api = None
-                _logged_in = False
-                _login_breaker.record_failure(_BREAKER_KEY, str(e)[:200])
+        _invalidate_session(api, e)
         return 0
 
     if not snaps:
@@ -518,7 +528,6 @@ class ShioajiFetcher(BaseFetcher):
         return code
 
     def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
-        global _api, _logged_in
         if not _HAS_SHIOAJI:
             return None
 
@@ -552,13 +561,7 @@ class ShioajiFetcher(BaseFetcher):
         except Exception as e:
             # 可能 session 已死 → 标记重登（受 breaker 约束），记一次 failure。
             logger.warning("[ShioajiFetcher] 快照失败/超时 %s: %s", code, type(e).__name__)
-            with _SESSION_LOCK:
-                # 仅当当前会话仍是本次使用的 api 时才作废+记 failure，避免旧 api 的延迟失败
-                # 误清掉另一线程刚登入的新 session（race）。
-                if _api is api:
-                    _api = None
-                    _logged_in = False
-                    _login_breaker.record_failure(_BREAKER_KEY, str(e)[:200])
+            _invalidate_session(api, e)
             return None
 
         if not snaps:

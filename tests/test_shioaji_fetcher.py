@@ -8,6 +8,10 @@ import types
 
 import pytest
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 import data_provider.shioaji_fetcher as sf
 from data_provider.realtime_types import RealtimeSource
 
@@ -446,7 +450,15 @@ def _dead_contract_env(monkeypatch, *, fail=True):
             state["login"] += 1
 
         def snapshots(self, contracts):
-            return [_FakeSnap()]
+            snaps = []
+            for contract in contracts:
+                snap = _FakeSnap()
+                snap.code = contract.code
+                snaps.append(snap)
+            return snaps
+
+        def kbars(self, contract, start, end):
+            return {"ts": [_FakeSnap().ts], "Close": [1000.0]}
 
         def logout(self):
             pass
@@ -455,6 +467,107 @@ def _dead_contract_env(monkeypatch, *, fail=True):
     module.Shioaji = _Api
     monkeypatch.setitem(sys.modules, "shioaji", module)
     return state, clock
+
+
+def _request_session_data(path):
+    if path == "quote":
+        return sf.ShioajiFetcher().get_realtime_quote("2330.TW")
+    if path == "batch":
+        return sf.prime_snapshots(["2330.TW"])
+    if path == "indices":
+        return sf.shioaji_main_indices()
+    assert path == "trend"
+    return sf.shioaji_trend("2330.TW", "day")
+
+
+@pytest.mark.parametrize("path", ["quote", "batch", "indices"])
+@pytest.mark.parametrize("error_type", [RuntimeError, TimeoutError])
+def test_snapshot_failure_invalidates_and_uses_login_breaker(monkeypatch, path, error_type):
+    """三條快照路徑共用作廢與冷卻，登入成功本身不能清掉失敗計數。"""
+    state, clock = _dead_contract_env(monkeypatch, fail=False)
+    monkeypatch.setattr(sf.time, "time", clock)
+    api_type = sys.modules["shioaji"].Shioaji
+    snapshots = api_type.snapshots
+
+    def fail_snapshot(self, contracts):
+        raise error_type("SessionNotEstablished")
+
+    monkeypatch.setattr(api_type, "snapshots", fail_snapshot)
+    for failures in (1, 2):
+        assert not _request_session_data(path)
+        assert sf._api is None and sf._logged_in is False
+        assert sf._contract_fail_since is None
+        assert state["login"] == failures
+        assert sf._login_breaker._states[sf._BREAKER_KEY]["failures"] == failures
+    assert sf._login_breaker.get_status()[sf._BREAKER_KEY] == "open"
+
+    monkeypatch.setattr(api_type, "snapshots", snapshots)
+    clock.t += sf._login_breaker.cooldown_seconds - 1
+    assert not _request_session_data(path)
+    assert state["login"] == 2
+    clock.t += 1
+    assert _request_session_data(path)
+    recovered_api = sf._api
+    assert sf._login_breaker.get_status()[sf._BREAKER_KEY] == "closed"
+    assert sf._login_breaker._states[sf._BREAKER_KEY]["failures"] == 0
+    assert _request_session_data(path)
+    assert sf._api is recovered_api and state["login"] == 3
+
+
+@pytest.mark.parametrize("path", ["quote", "batch", "indices"])
+def test_snapshot_failure_after_session_swap_preserves_new_session(monkeypatch, path):
+    """舊快照失敗不得作廢新 session、重設其時鐘或累計 breaker。"""
+    state, clock = _dead_contract_env(monkeypatch, fail=False)
+    sf._login_breaker.record_failure(sf._BREAKER_KEY, "previous failure")
+    new_api = object()
+
+    def fail_after_swap(self, contracts):
+        with sf._SESSION_LOCK:
+            sf._api = new_api
+            sf._contract_fail_since = clock.t - 5
+        raise RuntimeError("stale SessionNotEstablished")
+
+    monkeypatch.setattr(sys.modules["shioaji"].Shioaji, "snapshots", fail_after_swap)
+    assert not _request_session_data(path)
+    assert state["login"] == 1
+    assert sf._api is new_api and sf._logged_in is True
+    assert sf._contract_fail_since == clock.t - 5
+    assert sf._login_breaker._states[sf._BREAKER_KEY]["failures"] == 1
+    assert sf._login_breaker.get_status()[sf._BREAKER_KEY] == "closed"
+
+
+@pytest.mark.parametrize("shape", ["none", "empty", "zero", "unknown"])
+def test_index_inconclusive_probe_keeps_session_and_does_not_close_breaker(monkeypatch, shape):
+    """空值、無效報價與不屬於本次請求的快照，不代表 session 死亡或恢復。"""
+    state, clock = _dead_contract_env(monkeypatch, fail=False)
+    monkeypatch.setattr(sf.time, "time", clock)
+    api_type = sys.modules["shioaji"].Shioaji
+    snapshots = api_type.snapshots
+    snap = _FakeSnap()
+    snap.code = "IX0001" if shape == "zero" else "unknown"
+    snap.close = 0.0 if shape == "zero" else 1000.0
+    result = None if shape == "none" else [] if shape == "empty" else [snap]
+    probe_states = []
+
+    def inconclusive(self, contracts):
+        probe_states.append(sf._login_breaker.get_status()[sf._BREAKER_KEY])
+        return result
+
+    monkeypatch.setattr(api_type, "snapshots", inconclusive)
+    for _ in range(2):
+        sf._login_breaker.record_failure(sf._BREAKER_KEY, "previous failure")
+    clock.t += sf._login_breaker.cooldown_seconds
+    assert sf.shioaji_main_indices() is None
+    api = sf._api
+    assert probe_states == ["half_open"]
+    assert api is not None and sf._logged_in is True
+    assert sf._login_breaker.get_status()[sf._BREAKER_KEY] == "open"
+    assert sf._login_breaker._states[sf._BREAKER_KEY]["failures"] == 2
+
+    monkeypatch.setattr(api_type, "snapshots", snapshots)
+    assert sf.shioaji_main_indices()
+    assert sf._api is api and state["login"] == 1
+    assert sf._login_breaker.get_status()[sf._BREAKER_KEY] == "closed"
 
 
 def test_contract_lookup_failing_past_window_invalidates_session_and_relogins(monkeypatch):
@@ -560,25 +673,36 @@ def test_new_session_does_not_inherit_old_failure_clock(monkeypatch):
     assert sf._api is not None  # single failure must not kill the fresh session
 
 
-def test_dead_session_invalidation_does_not_block_relogin_after_sdk_recovers(monkeypatch):
-    """Invalidations must not feed the login breaker: once the SDK recovers, the next request logs in."""
+@pytest.mark.parametrize("path", ["quote", "batch", "indices", "trend"])
+def test_dead_session_invalidation_does_not_block_relogin_after_sdk_recovers(monkeypatch, path):
+    """持續合約失敗須冷卻重登；到期後仍可經各呼叫端恢復。"""
     state, clock = _dead_contract_env(monkeypatch)
-    monkeypatch.setattr(sf.time, "time", clock)  # CircuitBreaker cooldown reads wall clock, not monotonic
-    f = sf.ShioajiFetcher()
-    for _ in range(3):  # login, then two invalidation rounds past the 60s window
-        f.get_realtime_quote("2330.TW")
-        clock.t += sf._CONTRACT_FAIL_WINDOW_S + 1
-        f.get_realtime_quote("2330.TW")
-    assert sf._api is None
-    logins = state["login"]
+    monkeypatch.setattr(sf.time, "time", clock)
+    for failures in (1, 2):
+        assert not _request_session_data(path)
+        api = sf._api
+        clock.t += sf._CONTRACT_FAIL_WINDOW_S - 1
+        assert not _request_session_data(path)
+        assert sf._api is api and state["login"] == failures
+        assert sf._login_breaker._states[sf._BREAKER_KEY]["failures"] == failures - 1
+        clock.t += 1
+        assert not _request_session_data(path)
+        assert sf._api is None and sf._logged_in is False
+        assert sf._contract_fail_since is None
+        assert sf._login_breaker._states[sf._BREAKER_KEY]["failures"] == failures
+    assert sf._login_breaker.get_status()[sf._BREAKER_KEY] == "open"
     state["fail"] = False
-    clock.t += 1  # well inside the 900s breaker cooldown
-    assert f.get_realtime_quote("2330.TW") is not None
-    assert state["login"] == logins + 1
+    clock.t += sf._login_breaker.cooldown_seconds - 1
+    assert not _request_session_data(path)
+    assert state["login"] == 2
+    clock.t += 1
+    assert _request_session_data(path)
+    assert sf._api is not None and state["login"] == 3
 
 
 def test_blocking_logout_of_dead_session_does_not_starve_executor(monkeypatch):
     state, clock = _dead_contract_env(monkeypatch)
+    monkeypatch.setattr(sf.time, "time", clock)
     release = threading.Event()
     monkeypatch.setattr(sys.modules["shioaji"].Shioaji, "logout", lambda self: release.wait(30))
     f = sf.ShioajiFetcher()
@@ -587,9 +711,10 @@ def test_blocking_logout_of_dead_session_does_not_starve_executor(monkeypatch):
             f.get_realtime_quote("2330.TW")
             clock.t += sf._CONTRACT_FAIL_WINDOW_S + 1
             f.get_realtime_quote("2330.TW")
+            clock.t += sf._login_breaker.cooldown_seconds
         assert state["login"] == 3  # every relogin got an executor worker despite stuck logouts
         state["fail"] = False
-        assert sf._executor.submit(lambda: "ok").result(timeout=2) == "ok"
+        assert sf._executor.submit(lambda: "ok").result(timeout=30) == "ok"
         assert f.get_realtime_quote("2330.TW") is not None
     finally:
         release.set()

@@ -112,7 +112,7 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 - **金钥**：`SHIOAJI_API_KEY` / `SHIOAJI_SECRET_KEY`，由 Doppler（project `shioaji`, config `dev`）注入，不落地 `.env`。
 - **自动降级**：未安装 `shioaji` 套件 / 无金钥 / 登入熔断中 → fetcher 判定不可用，台股自动走 yfinance。
 - **session**：模组级持久 session（登入慢且有每日次数上限），double-checked locking 防并发双登入，登入/快照各有硬 timeout，快照不持会话锁。
-- **熔断**：专属登入熔断器（连续 2 次失败熔断、冷却 900s）。熔断器仅在真正登入点交互；冷却期内每次轮询零登入，避免 relogin-storm。熔断 key 以「端到端拿到合法报价」为准（登入成功但快照空 → 不计为成功，避免假复原）。
+- **熔斷**：專屬登入熔斷器（連續 2 次失敗熔斷、冷卻 900s），僅在真正登入點檢查許可；登入成功本身不清除失敗計數。個股、批次與指數快照失敗／逾時都僅作廢本次使用且仍為目前的 session，並記一次失敗；合約查詢的非 `KeyError` 例外持續滿 60 秒才作廢並記一次失敗，短暫失敗與查無合約不累計 breaker。冷卻期內零重登，到期後允許半開探測；有效個股或指數報價才記成功，空快照或無效報價記不確定（保留 session，半開轉回冷卻），避免反覆重登或假復原。
 
 ## 走势图（折线）数据源
 
@@ -163,7 +163,7 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
 | --- | --- | --- |
 | 未安装 shioaji / 无金钥 | yfinance | 延迟 |
 | 有金钥、首次请求 | shioaji | 实时 |
-| session 已死 | 本次 yfinance，下次重连回 shioaji | 本次延迟 |
+| session 已死 | 本次 yfinance，下次受登入熔斷器約束重連；合約查詢持續失敗滿 60 秒才作廢 | 本次延遲 |
 | 重连失败 / 登入日上限（熔断 OPEN） | yfinance（冷却期零登入） | 延迟 |
 | Shioaji 部分字段缺失 | shioaji（yfinance 补字段） | 实时 |
 | 登入成功但快照空（午休/收盘无 tick） | yfinance | 延迟 |
