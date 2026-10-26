@@ -367,6 +367,55 @@ def _today():
     return _dt.date.today()
 
 
+def _store_index(conn, rows):
+    """兩種指數來源共用寫入：只以新非空值覆蓋互補欄位，收盤仍採官方新值。"""
+    if not rows:
+        return 0
+    df = etl.transform_index(rows).reset_index()
+    recs = _to_records(df, models.MarketIndex.__table__, filter_stock_id=False)
+    return upsert(conn, models.MarketIndex.__table__, recs, ["index_id", "date"],
+                  coalesce=("open", "high", "low", "change", "turnover"))
+
+
+def backfill_index(engine, start, end, resume=True, delay=_INDEX_MONTH_DELAY_SECONDS):
+    """依月補 TAIEX OHLC，每月一交易；resume 只跳過 OHLC 都齊的日期。
+
+    不套用 daily 快照的「加抓當月」，只寫指定日期範圍。單月來源失敗保留舊值並繼續，
+    重跑同區間會補缺；resume=False 重新採官方 OHLC，仍不刪除其他欄位或指數。
+    """
+    import datetime as _dt
+    import time as _time
+
+    if start > end or delay < 0:
+        raise ValueError("index backfill requires start <= end and delay >= 0")
+    existing = set()
+    if resume:
+        with engine.begin() as conn:
+            existing = {r[0] for r in conn.execute(text(
+                "SELECT date FROM market.market_index WHERE index_id = 'TAIEX' "
+                "AND date BETWEEN :start AND :end AND open IS NOT NULL "
+                "AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL"),
+                {"start": start, "end": end})}
+    month = start.replace(day=1)
+    total = 0
+    while month <= end:
+        if month != start.replace(day=1) and delay:
+            _time.sleep(delay)
+        rows = sources.fetch_index_ohlc(month)
+        if rows:
+            rows = [r for r in rows if start <= etl._roc_yyyymmdd(r["Date"]) <= end
+                    and etl._roc_yyyymmdd(r["Date"]) not in existing]
+            with engine.begin() as conn:
+                n = _store_index(conn, rows)
+            latest = max((etl._roc_yyyymmdd(r["Date"]) for r in rows), default=None)
+            print(f"index {month:%Y-%m} {n:,} rows, latest {latest}", flush=True)
+            total += n
+        else:
+            print(f"**WARN index {month:%Y-%m}: OHLC 來源無資料，保留既有值，重跑可補缺", flush=True)
+        month = (month.replace(day=28) + _dt.timedelta(days=4)).replace(day=1)
+    return total
+
+
 def crawl_index(conn, dates=None):
     """FMTQIK 加權指數。FMTQIK 帶 date 只回**該月整月**,所以依 ``dates``（daily 的回補窗口）
     涉及的每個月各打一次,再加上今天所在的月份;``dates=None`` 就只抓當月（`cli snapshot` 行為不變）。
@@ -389,11 +438,7 @@ def crawl_index(conn, dates=None):
                                    fallback=ym == (today.year, today.month))
         for r in rows or ():
             by_date[r["Date"]] = r
-    if not by_date:
-        return 0
-    df = etl.transform_index(list(by_date.values())).reset_index()
-    recs = _to_records(df, models.MarketIndex.__table__, filter_stock_id=False)
-    return upsert(conn, models.MarketIndex.__table__, recs, ["index_id", "date"])
+    return _store_index(conn, list(by_date.values()))
 
 
 def crawl_snapshots(engine, dates=None):

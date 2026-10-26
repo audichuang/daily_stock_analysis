@@ -60,6 +60,43 @@
 
 - **快照段（valuation/index/stock_info）一律走 `crawl.crawl_snapshots()`**：直接呼叫那三個函式會丟掉 upsert 列數，而那是唯一的可觀測訊號。踩過：2026-07-28 18:10 跑 `snapshot` 全無輸出、`market_index` 停在 07-27，讀三層原始碼才確認是 FMTQIK **當日尚未發布**（不是被封、不是改版，三者處置不同）。`crawl_snapshots` 對有日期維度的兩張表加印 `latest <date>`——**列數本身不夠**，這兩個端點回近月／全市場整包，未發布時照樣回一樣多的列（實測 `index 18 rows` 而最新仍是 07-27）。
 - **index 依 daily 窗口逐月抓**：FMTQIK 帶 `date` 只回該月整月，`crawl_index(conn, dates)` 對窗口涉及的每個月（加上今天所在月）各打一次，月間 sleep `_INDEX_MONTH_DELAY_SECONDS`；`cli snapshot` 不傳 dates、只抓當月。**只有當月允許退到 openapi**，過去月份失敗只印 `**WARN`、缺口由 `health --strict` 擋。踩過的死結：月底最後一個交易日漏跑，隔月 daily 補得回 price 卻補不回 TAIEX，`missing_index_dates` 連擋最多 5 個交易日，而修復訊息叫你重跑的 daily 修不了。
+- **TAIEX 歷史 OHLC 回補**：`backfill index` 使用 [TWSE MI_5MINS_HIST 月表](https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST?date=20100101&response=json)，`market_index` 新增 nullable `open/high/low NUMERIC(14,2)`，沿用 `(index_id,date)` 主鍵與既有 writer。2026-10-26 擷取的 `market_data/tests/fixtures/taiex_201001.json` 有 20 個交易日，2010-01-04 收盤 8,207.85、2010-01-29 為 7,640.44。這是來源可用性驗證，**不代表正式庫已回補**；ticket 原始盤點為 2026-07-01～10-22 共 78 列。
+- **兩個來源互補，不能互洗 NULL**：MI_5MINS_HIST 提供 OHLC、不提供 `change/turnover`；FMTQIK 提供 `close/change/turnover`、不提供開高低。兩條路徑共用 `_store_index`，缺少的互補欄位以 `coalesce(新值,舊值)` 保留，非空新值（含 0）仍可更新，收盤採新官方值；不跨缺日推算漲跌。既有 daily／snapshot 維持 FMTQIK，**不會自動補新日期的開高低**，研究前可重跑指定 OHLC 區間。
+- **月份必須由每列日期證明**：MI_5MINS_HIST 與 FMTQIK（含 OpenAPI 備援）都檢查每列日期的年、月；外層 `date` 可能只是回顯請求參數，不能拿它證明新鮮度。任一列日期缺失、無效、混入其他月份就整份拒收；OHLC 缺欄、非有限正數或高低範圍錯誤同樣拒收，保留既有資料。來源失敗印 `**WARN` 並回 None，回補仍繼續後續月份，exit code 不能當完成證據。
+
+合併後的正式回補順序（需在主 checkout 操作；本次程式票未執行 migration 或正式寫入）：
+
+```bash
+git pull --ff-only
+uv run --frozen --env-file .env python -m alembic -c market_data/alembic.ini upgrade head
+uv run --frozen --env-file .env python -m market_data.cli backfill index --start 2010-01-01 --end "$(date +%F)" --delay 3
+uv run --frozen --env-file .env python -m market_data.cli health --strict
+```
+
+先遷移資料庫，再讓寫入端使用新程式（共用寫入會引用新增欄位）。回補每月最多一個 OHLC 請求、月間依 `--delay` 等待、每月獨立 commit，stdout 的 `index YYYY-MM N rows, latest <date>` 在 commit 後才印；只寫 `--start/--end` 閉區間，不額外抓當月。預設 resume 只跳過四個 OHLC 都非 NULL 的日期，因此舊的 close-only 列仍會補齊；重跑同區間可補失敗月份。`--force` 重取並更新指定區間的 OHLC，**不先 DELETE、不刪其他欄位或其他指數**。
+
+完成後用唯讀查詢確認整段的起訖、總列數、四欄完整列數及逐年交易日差集；以 `price` 的獨立成交日期作交叉檢查，若 price 本身有缺口，再核對交易日曆與官方月表（`health --strict` 只守近期，無法證明 2010 起全期齊全）：
+
+```sql
+SELECT min(date), max(date), count(*) AS rows,
+       count(*) FILTER (WHERE open IS NOT NULL AND high IS NOT NULL
+                        AND low IS NOT NULL AND close IS NOT NULL) AS ohlc_rows
+FROM market.market_index WHERE index_id = 'TAIEX' AND date >= DATE '2010-01-01';
+
+WITH sessions AS (
+    SELECT DISTINCT date FROM market.price WHERE date >= DATE '2010-01-01'
+), complete AS (
+    SELECT date FROM market.market_index WHERE index_id = 'TAIEX'
+    AND open IS NOT NULL AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL
+)
+SELECT extract(year FROM s.date) AS year, count(*) AS trading_days,
+       count(i.date) AS ohlc_days,
+       array_agg(s.date ORDER BY s.date) FILTER (WHERE i.date IS NULL) AS missing
+FROM sessions s LEFT JOIN complete i USING (date)
+GROUP BY 1 ORDER BY 1;
+```
+
+另抽查 2010-01-04、2010-01-29、跨年與最近已收盤場次，逐日將 DB 收盤對照上述官方端點（`date=YYYYMM01`）。跨年與近期值須在正式回補後另行取證，不能用 fixture 測試取代。回滾程式可保留 nullable 新欄；migration 降版在任一開高低欄已有值時拒絕刪欄，避免丟失唯一歷史資料。
 
 ## 爬取層與可觀測性
 
