@@ -789,16 +789,13 @@ def main(argv=None):
     p.add_argument("--lhr-window", type=int, default=LHR_WINDOW, help="LHR 回看交易日數")
     p.add_argument("--lhr-veto", type=float, nargs="+", default=[1.0, 2.0],
                    help="否決門檻（淨漲停天數 ≥ 此值即否決）；第一個為事先登記的主判準")
-<<<<<<< HEAD
     p.add_argument("--disposal-cache", default=None, metavar="PATH",
                    help="TWSE 處置公告快取 CSV（scripts/fetch_twse_disposal_history.py 產生）；"
                         "加上後另印處置公告延後進場實驗（只上市）")
-=======
     p.add_argument("--pb", action="store_true",
                    help="加跑 PB（股價淨值比）否決實驗：先報池內占比與閘門；預設輸出不變")
     p.add_argument("--pb-veto", type=float, nargs="+", default=[2.0],
                    help="PB 否決門檻（PB ≥ 此值即否決）；第一個為事先登記的主判準")
->>>>>>> b40886fa (feat(research): add opt-in inverse-vol weighting and PB veto measurements)
     a = p.parse_args(argv)
     if a.position_notional <= 0:
         p.error("--position-notional must be positive")
@@ -915,7 +912,6 @@ def main(argv=None):
 
     if a.lhr:
         report_lhr_veto(ev, np.arange(len(close.index)), a)
-<<<<<<< HEAD
     if a.disposal_cache:
         from fetch_twse_disposal_history import load_cache
         from screen_tw import _seed_market_map
@@ -923,10 +919,8 @@ def main(argv=None):
         report_disposal(ev, load_cache(a.disposal_cache), ret, close.index, a.horizon,
                         n_boot=a.bootstrap, seed=a.bootstrap_seed, tpex_codes=tpex,
                         event_args=event_args)
-=======
     if a.pb:
         report_pb_veto(ev, np.arange(len(close.index)), a)
->>>>>>> b40886fa (feat(research): add opt-in inverse-vol weighting and PB veto measurements)
 
     print("\n=== 逐年（事件級）===")
     ev["y"] = ev["date"].dt.year

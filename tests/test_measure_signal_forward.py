@@ -444,7 +444,6 @@ def test_lhr_report_vetoes_at_threshold_inclusive(capsys):
     out = capsys.readouterr().out
     assert "否決比例 50.0%" in out        # lhr=1 與 2 被否決，0 留下
     assert "留下  n=    2  均值  +50.00%" in out
-<<<<<<< HEAD
 # --- two_arm_block_bootstrap：取代型閘門與原池子不是逐筆配對，兩臂要共用同一組重抽區塊 ---
 
 def _arm(days, r, per_day=1):
@@ -506,7 +505,6 @@ def test_two_arm_bootstrap_levels_are_nested_and_inconclusive_when_too_short():
     # 事件全落在同一個區塊內 → 無法估計（inconclusive），不可給出假區間
     short = _arm(range(0, 10), 0.1)
     assert two_arm_block_bootstrap(short, short, 400, n=100, block=20) is None
-=======
 
 
 def _pb_args(**kw):
@@ -563,4 +561,3 @@ def test_pb_panel_uses_same_day_value_and_stops_forward_filling_after_limit():
     assert pd.isna(p.at[days[5], "1101"])        # 超過就是缺值，不無限期沿用
     assert p["2330"].isna().all()                # PB ≤ 0（淨值為負）視為缺值
     assert p["9999"].isna().all()
->>>>>>> b40886fa (feat(research): add opt-in inverse-vol weighting and PB veto measurements)
