@@ -23,14 +23,14 @@ TWSE `MI_INDEX` 的 `漲跌價差` 只有絕對值，方向在獨立的 `漲跌(
 `DEFAULT_START_YEAR = 2013`，與 `market_data/adjust.py` 的起算年一致（2013 之前的 `price`
 混有權證，且 `price_adjustment` 也沒有那段的因子）。實測 pre-2013 有 **283,482 列**符號仍錯，
 刻意不補：那段沒有復權因子，硬補會讓除權息日拿到「已知是錯的」方向——把「一律錯」換成
-「大部分對、除權息日錯」。`adjust.infer_rows` 只信任 `SIGNED_SINCE` 起的非零值；
-要補就得先把 `price_adjustment` 往前重建。
+「大部分對、除權息日錯」。要補就得先把 `price_adjustment` 往前重建。
 
-## 消費端與風險
+## 為什麼可以放心跑
 
-`market_repo.to_daily_frame` 不再讀這一欄；`adjust.infer_rows` 仍會讀，但只信任
-`SIGNED_SINCE` 起的非零值。更早的回補可能因參考因子不準或前一日無成交而翻錯號，
-不能視為官方參考價的證據。可重複執行：只改「符號與判定不符」的列。
+`market_repo.to_daily_frame` 已改成不再讀這一欄；唯一的讀取端是 `market_data.adjust.infer_rows`
+拿 `close - change` 當推導參考價，而它只信 `SIGNED_SINCE` 之後的正負號、之前的列只用絕對值
+（方向由漲跌停帶證明）——本腳本只改之前的列的號，所以不影響任何計算，純屬資料衛生
+（給直接寫 SQL 的人用）。可重複執行：只改「符號與判定不符」的列。
 
     uv run --env-file .env python scripts/backfill_price_change_sign.py            # dry-run
     uv run --env-file .env python scripts/backfill_price_change_sign.py --apply
@@ -45,8 +45,8 @@ from sqlalchemy import text
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from market_data.adjust import CHANGE_SIGNED_SINCE  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
-from market_data.adjust import SIGNED_SINCE  # noqa: E402
 
 # 2013 之前的 price 混有權證（5 位代號，2010 上半年每日 2,200+ 檔），
 # 與 market_data/adjust.py 的起算年一致。
@@ -61,9 +61,12 @@ EPS = 1e-6
 # 少了這段回看，每檔每年的第一個交易日永遠拿不到 prev_close，會被靜默跳過。
 LOOKBACK_DAYS = 30
 
-# SIGNED_SINCE 起上市列就帶正確正負號；之後的列一律不碰。上櫃列（TPEx JSON 本來就帶號）
+# 爬取端 2026-08-23 起上市列就帶正確正負號；之後的列一律不碰。上櫃列（TPEx JSON 本來就帶號）
 # 在 price 表分不出市場（market 全是 NULL），若參考價不是「前收×當日因子」（前一日無成交、
 # 除權息日沒成交）會被誤翻成負號——2026-10-24 全量比對抓到過。這道截止日至少讓重跑不再污染新列。
+# 唯一來源在 `market_data.adjust`：`infer_rows` 也只信這天之後的 change。
+SIGNED_SINCE = CHANGE_SIGNED_SINCE
+
 _BASE_CTE = """
 with base as (
     select p.stock_id, p.date, p.close, p.change,
