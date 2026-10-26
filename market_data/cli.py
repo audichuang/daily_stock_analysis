@@ -4,6 +4,7 @@
     python -m market_data.cli backfill price --start 2010-01-01 --end 2026-07-01
     python -m market_data.cli backfill institutional_tpex --start 2018-01-15 --end 2026-10-21 --delay 3
     python -m market_data.cli snapshot              # valuation + index + stock_info
+    python -m market_data.cli backfill index --start 2010-01-01 --end 2026-10-26 --delay 3  # TAIEX 逐月回補
     python -m market_data.cli funds                 # 境內基金每日淨值
     python -m market_data.cli fund-history 18480065 # 單檔基金歷史淨值
     python -m market_data.cli holding               # 集保股權分散最新一週(全市場)
@@ -102,9 +103,15 @@ def main(argv=None):
         raise SystemExit(health.run(eng, strict=args.strict))
     elif args.command == "backfill":
         if args.source == "index":
-            crawl.backfill_index(eng, datetime.date.fromisoformat(args.start),
-                                 datetime.date.fromisoformat(args.end),
-                                 resume=not args.force, delay=args.delay)
+            res = crawl.backfill_index(eng, datetime.date.fromisoformat(args.start),
+                                       datetime.date.fromisoformat(args.end),
+                                       resume=not args.force, delay=args.delay)
+            print(f"market_index rows upserted: {res['written']:,}  months fetched: "
+                  f"{res['months']}  skipped (complete): {res['skipped']}", flush=True)
+            if res["failed"] or res["partial"] or res["short"]:
+                print(f"  **抓不到的月份: {res['failed']}  只拿到單一來源: {res['partial']}  "
+                      f"缺日的月份: {sorted(res['short'])}", flush=True)
+                raise SystemExit(1)
         else:
             crawl.crawl_range(eng, args.source, _dates(args.start, args.end),
                               resume=not args.force, replace=args.force, delay=args.delay)

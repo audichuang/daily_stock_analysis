@@ -9,7 +9,7 @@
 - price 一天 TWSE+TPEx **兩市場都到才寫**——單邊寫入會讓 resume 標記該日完成、另一邊永久缺。別「順手優化」。
 - price 的**截斷防護**(低於近 5 日中位數九成 → STOCK_DAY_ALL 備援 → 仍不足整天跳過)不要移除:TWSE 回過截斷但非空的回應。
 - 會被官方事後修正的來源要加進 `crawl.REVISED_SOURCES`(目前是 institutional 與 institutional_tpex,T86 18:00 是初版、上櫃比照);沒列進去的會凍結在初版。
-- 快照段(valuation/index/stock_info)只經 `crawl.crawl_snapshots()`;直接呼叫會丟掉列數與 `latest <date>`,那是唯一的可觀測訊號。
+- 快照段(valuation/index/stock_info)只經 `crawl.crawl_snapshots()`;直接呼叫會丟掉列數與 `latest <date>`,那是唯一的可觀測訊號。加權指數長區間回補是例外,走 `cli backfill index`(逐月一個交易、兩個來源合併,見 `docs/market-data-pitfalls.md`)。
 - `sources` 取得層失敗只印 `**WARN`、回 `None`,exit code 不反映失敗;新來源照這個契約,自動化判成敗看 stdout。
 - psycopg 多列 INSERT 的 `rowcount` 不可靠(要數就 `RETURNING`);單一 INSERT 綁定參數上限 65,535,寬表要分批(`funds._chunks`)。
 - `adjust` 的重建是先刪區間再寫,所以官方來源抓不齊就要 raise、離線模式要讀回既有官方列——`_fetch_by_year`、`existing_official_rows`、`infer_rows` 的 docstring 寫了不能「順手優化」掉的理由。

@@ -837,8 +837,9 @@ def fetch_index(asof=None, fallback=True):
                 rows = _index_month_rows(parse_index_report(payload), asof, "FMTQIK")
                 if rows:
                     return rows
-        except (ValueError, TypeError, IndexError, AttributeError, OverflowError):
-            pass
+        except (ValueError, TypeError, IndexError, AttributeError, OverflowError) as exc:
+            # 印出原因:「回應月份不符(停更)」與「尚未發布」在 log 裡要分得開
+            print(f"**WARN: FMTQIK rwd {asof:%Y-%m}: {exc}", flush=True)
     if not fallback:
         print(f"**WARN: FMTQIK {asof:%Y-%m} rwd 失敗或無資料,不走 openapi fallback"
               "(openapi 只給當月,補不了這個月)")

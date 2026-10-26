@@ -61,8 +61,8 @@
 - **快照段（valuation/index/stock_info）一律走 `crawl.crawl_snapshots()`**：直接呼叫那三個函式會丟掉 upsert 列數，而那是唯一的可觀測訊號。踩過：2026-07-28 18:10 跑 `snapshot` 全無輸出、`market_index` 停在 07-27，讀三層原始碼才確認是 FMTQIK **當日尚未發布**（不是被封、不是改版，三者處置不同）。`crawl_snapshots` 對有日期維度的兩張表加印 `latest <date>`——**列數本身不夠**，這兩個端點回近月／全市場整包，未發布時照樣回一樣多的列（實測 `index 18 rows` 而最新仍是 07-27）。
 - **index 依 daily 窗口逐月抓**：FMTQIK 帶 `date` 只回該月整月，`crawl_index(conn, dates)` 對窗口涉及的每個月（加上今天所在月）各打一次，月間 sleep `_INDEX_MONTH_DELAY_SECONDS`；`cli snapshot` 不傳 dates、只抓當月。**只有當月允許退到 openapi**，過去月份失敗只印 `**WARN`、缺口由 `health --strict` 擋。踩過的死結：月底最後一個交易日漏跑，隔月 daily 補得回 price 卻補不回 TAIEX，`missing_index_dates` 連擋最多 5 個交易日，而修復訊息叫你重跑的 daily 修不了。
 - **TAIEX 歷史 OHLC 回補**：`backfill index` 使用 [TWSE MI_5MINS_HIST 月表](https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST?date=20100101&response=json)，`market_index` 新增 nullable `open/high/low NUMERIC(14,2)`，沿用 `(index_id,date)` 主鍵與既有 writer。2026-10-26 擷取的 `market_data/tests/fixtures/taiex_201001.json` 有 20 個交易日，2010-01-04 收盤 8,207.85、2010-01-29 為 7,640.44。這是來源可用性驗證，**不代表正式庫已回補**；ticket 原始盤點為 2026-07-01～10-22 共 78 列。
-- **兩個來源互補，不能互洗 NULL**：MI_5MINS_HIST 提供 OHLC、不提供 `change/turnover`；FMTQIK 提供 `close/change/turnover`、不提供開高低。兩條路徑共用 `_store_index`，缺少的互補欄位以 `coalesce(新值,舊值)` 保留，非空新值（含 0）仍可更新，收盤採新官方值；不跨缺日推算漲跌。既有 daily／snapshot 維持 FMTQIK，**不會自動補新日期的開高低**，研究前可重跑指定 OHLC 區間。
-- **月份必須由每列日期證明**：MI_5MINS_HIST 與 FMTQIK（含 OpenAPI 備援）都檢查每列日期的年、月；外層 `date` 可能只是回顯請求參數，不能拿它證明新鮮度。任一列日期缺失、無效、混入其他月份就整份拒收；OHLC 缺欄、非有限正數或高低範圍錯誤同樣拒收，保留既有資料。來源失敗印 `**WARN` 並回 None，回補仍繼續後續月份，exit code 不能當完成證據。
+- **兩個來源互補，不能互洗 NULL**：MI_5MINS_HIST 提供 OHLC、不提供 `change/turnover`；FMTQIK 提供 `close/change/turnover`、不提供開高低。`backfill index` 每月兩個都抓、依列日期合併後寫一次（收盤以 OHLC 月表為準，任一來源有的日期都寫）；只有 OHLC 的話回補列 `change` 為 NULL，`scripts/screen_tw.py` 回放歷史日的 `market_d1` 會變 NaN。兩條路徑共用 `_store_index`，缺少的互補欄位以 `coalesce(新值,舊值)` 保留，非空新值（含 0）仍可更新；不跨缺日推算漲跌。既有 daily／snapshot 維持 FMTQIK，**不會自動補新日期的開高低**，研究前可重跑指定區間。
+- **月份必須由每列日期證明**：MI_5MINS_HIST 與 FMTQIK（含 OpenAPI 備援）都檢查每列日期的年、月；外層 `date` 可能只是回顯請求參數，不能拿它證明新鮮度。任一列日期缺失、無效、混入其他月份就整份拒收；OHLC 缺欄、非有限正數或高低範圍錯誤同樣拒收，保留既有資料。來源失敗印 `**WARN`（FMTQIK rwd 拒收會帶原因，停更與未發布分得開）並回 None，回補仍繼續後續月份；`sources` 層本身不改 exit code，`backfill index` 結尾彙總缺口才 exit 1。
 
 合併後的正式回補順序（需在主 checkout 操作；本次程式票未執行 migration 或正式寫入）：
 
@@ -73,7 +73,7 @@ uv run --frozen --env-file .env python -m market_data.cli backfill index --start
 uv run --frozen --env-file .env python -m market_data.cli health --strict
 ```
 
-先遷移資料庫，再讓寫入端使用新程式（共用寫入會引用新增欄位）。回補每月最多一個 OHLC 請求、月間依 `--delay` 等待、每月獨立 commit，stdout 的 `index YYYY-MM N rows, latest <date>` 在 commit 後才印；只寫 `--start/--end` 閉區間，不額外抓當月。預設 resume 只跳過四個 OHLC 都非 NULL 的日期，因此舊的 close-only 列仍會補齊；重跑同區間可補失敗月份。`--force` 重取並更新指定區間的 OHLC，**不先 DELETE、不刪其他欄位或其他指數**。
+先遷移資料庫，再讓寫入端使用新程式（共用寫入會引用新增欄位）。回補每月兩個請求（MI_5MINS_HIST、FMTQIK），每個請求之間依 `--delay` 等待、每月獨立 commit，commit 後才印 `index YYYY-MM n rows (price days k)`；只寫 `--start/--end` 閉區間（`--end` 截到今天），只有當月的 FMTQIK 允許退 openapi。resume 以「該月 `price` 交易日全部六欄（開高低收、漲跌、成交金額）都非 NULL」整月跳過、不發請求，已齊全的日期不重寫，所以舊的 close-only 列與只有 OHLC 的列都會補齊；`price` 該月沒資料時無從判斷，照抓。拿到的日期少於 `price` 交易日印 `**WARN … 缺 price 有的交易日`；只拿到一個來源印 `**WARN` 照寫另一個；兩個都抓不到記為失敗月，連續 3 個月就 raise（多半被封，重跑同指令會 resume）。結尾有失敗月、單一來源月或缺日月就 **exit 1**——這是對交易日數的稽核；補班週六 `price` 沒抓而月表有，`n > k` 正常；當月在 FMTQIK 17:00 發布前跑也會 exit 1，屬時序不是缺漏。`--force` 重取並更新指定區間，**不先 DELETE、不刪其他欄位或其他指數**。
 
 完成後用唯讀查詢確認整段的起訖、總列數、四欄完整列數及逐年交易日差集；以 `price` 的獨立成交日期作交叉檢查，若 price 本身有缺口，再核對交易日曆與官方月表（`health --strict` 只守近期，無法證明 2010 起全期齊全）：
 

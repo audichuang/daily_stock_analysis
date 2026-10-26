@@ -129,9 +129,59 @@ def test_fmtqik_rejects_frozen_month_from_both_network_paths(monkeypatch, capsys
     assert "2010-01" in capsys.readouterr().out
 
 
+_FMTQIK = Path(__file__).parent / "fixtures/fmtqik_rwd_201001.json"
+
+
+def _fmtqik_payload():
+    """2010-01 FMTQIK rwd 真實回應裁成三列(1/4~1/6,日期帶前導空白)。"""
+    return json.loads(_FMTQIK.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("asof", [date(2010, 1, 1), date(2010, 1, 15), date(2010, 1, 31)])
+def test_fmtqik_accepts_any_day_of_the_requested_month(monkeypatch, asof):
+    """反向檢查:守門比的是「月」,不是請求日——同月任一天都要收(改成比日就會紅)。"""
+    monkeypatch.setattr(sources, "requests_get", lambda *a, **k: Response(_fmtqik_payload()))
+    rows = sources.fetch_index(asof, fallback=False)
+    assert [r["Date"] for r in rows] == ["0990104", "0990105", "0990106"]
+    assert rows[0]["TAIEX"] == "8,207.85" and rows[0]["TradeValue"] == "171,654,446,230"
+
+
+def test_fmtqik_rejects_other_month_and_says_why(monkeypatch, capsys):
+    """請求 2010-02 卻拿到 2010-01 整月表(端點停更照回 200):拒收,WARN 要帶原因而非只說失敗。"""
+    monkeypatch.setattr(sources, "requests_get", lambda *a, **k: Response(_fmtqik_payload()))
+    monkeypatch.setattr(sources, "_openapi_json",
+                        lambda url: pytest.fail("past month must not fall back to openapi"))
+    assert sources.fetch_index(date(2010, 2, 15), fallback=False) is None
+    out = capsys.readouterr().out
+    assert "outside requested month" in out and "2010-02" in out
+
+
+def test_fmtqik_rejects_a_table_straddling_months(monkeypatch):
+    payload = _fmtqik_payload()
+    payload["data"].append([" 99/02/01", "1", "1", "1", "8,000.00", "1.00"])
+    monkeypatch.setattr(sources, "requests_get", lambda *a, **k: Response(payload))
+    assert sources.fetch_index(date(2010, 1, 15), fallback=False) is None
+
+
+def test_fmtqik_wrong_month_on_current_month_still_falls_back(monkeypatch):
+    """當月 rwd 回錯月份視同 rwd 失敗:照舊退到 openapi(其列日期屬當月才收)。"""
+    monkeypatch.setattr(sources, "requests_get", lambda *a, **k: Response(_fmtqik_payload()))
+    openapi = [{"Date": "1151026", "TAIEX": "1", "Change": "1", "TradeValue": "1"}]
+    monkeypatch.setattr(sources, "_openapi_json", lambda url: openapi)
+    assert sources.fetch_index(date(2026, 10, 26)) == openapi
+
+
+class _Result(list):
+    def fetchall(self):
+        return list(self)
+
+
 class Engine:
-    def __init__(self, existing=()):
+    """假 engine/conn:price 日曆查詢回 ``cal``,market_index 完整日期查詢回 ``existing``。"""
+
+    def __init__(self, existing=(), cal=()):
         self.existing = existing
+        self.cal = cal
         self.statements = []
         self.committed = 0
 
@@ -142,84 +192,174 @@ class Engine:
 
     def execute(self, statement, parameters=None):
         self.statements.append((statement, parameters))
-        return [(d,) for d in self.existing]
+        rows = self.cal if "market.price" in str(statement) else self.existing
+        return _Result((d,) for d in rows)
 
 
-def test_backfill_uses_months_bounds_resume_and_committed_progress(report, monkeypatch, capsys):
-    engine = Engine(existing=[date(2010, 1, 5)])
-    fetched, pauses, written = [], [], []
+def _ohlc_rows(days):
+    return [{"Date": f"{d.year - 1911:03d}{d.month:02d}{d.day:02d}", "Open": "8000",
+             "High": "8001", "Low": "7999", "TAIEX": "8000"} for d in days]
 
-    def fetch(asof):
-        fetched.append(asof)
-        if asof.month == 2:
-            return None
-        return sources.parse_index_ohlc_report(report, asof)
 
-    monkeypatch.setattr(sources, "fetch_index_ohlc", fetch)
-    monkeypatch.setattr("time.sleep", pauses.append)
+def _fmtqik_rows(days):
+    return [{"Date": f"{d.year - 1911:03d}{d.month:02d}{d.day:02d}", "TAIEX": "8000",
+             "Change": "1.5", "TradeValue": "1,000"} for d in days]
+
+
+@pytest.fixture
+def net(monkeypatch):
+    """今天釘在 2010-03-10;兩個來源依 ``days`` 回該月的列,``fail_*`` 指定哪個月哪個來源抓不到。"""
+    state = {"days": {date(2010, 1, 4), date(2010, 1, 5), date(2010, 2, 1), date(2010, 3, 1)},
+             "fail_ohlc": set(), "fail_fmtqik": set(), "ohlc": [], "fmtqik": [],
+             "written": [], "pauses": []}
+    monkeypatch.setattr(crawl, "_today", lambda: date(2010, 3, 10))
+    monkeypatch.setattr("time.sleep", state["pauses"].append)
+
+    def month_days(asof):
+        return sorted(d for d in state["days"] if (d.year, d.month) == (asof.year, asof.month))
+
+    def ohlc(asof):
+        state["ohlc"].append(asof)
+        return None if asof.month in state["fail_ohlc"] else _ohlc_rows(month_days(asof))
+
+    def fmtqik(asof=None, fallback=True):
+        state["fmtqik"].append((asof, fallback))
+        return None if asof.month in state["fail_fmtqik"] else _fmtqik_rows(month_days(asof))
 
     def upsert(conn, table, records, pk, **kwargs):
-        assert conn is engine and table is models.MarketIndex.__table__
-        assert pk == ["index_id", "date"]
+        assert table is models.MarketIndex.__table__ and pk == ["index_id", "date"]
         assert set(kwargs["coalesce"]) == {"open", "high", "low", "change", "turnover"}
-        written.extend(records)
+        state["written"].extend(records)
         return len(records)
 
+    monkeypatch.setattr(sources, "fetch_index_ohlc", ohlc)
+    monkeypatch.setattr(sources, "fetch_index", fmtqik)
     monkeypatch.setattr(crawl, "upsert", upsert)
-    total = crawl.backfill_index(engine, date(2010, 1, 5), date(2010, 2, 3), delay=3)
-    assert total == len(written) == 18
-    assert fetched == [date(2010, 1, 1), date(2010, 2, 1)]
-    assert pauses == [3]
-    assert min(r["date"].date() for r in written) == date(2010, 1, 6)
-    assert max(r["date"].date() for r in written) == date(2010, 1, 29)
-    assert engine.committed >= 1
-    query, params = engine.statements[0]
-    assert "index_id = 'TAIEX'" in str(query)
-    for field in ("open", "high", "low", "close"):
-        assert f"{field} IS NOT NULL" in str(query)
-    assert params == {"start": date(2010, 1, 5), "end": date(2010, 2, 3)}
+    return state
+
+
+def test_backfill_merges_real_ohlc_with_fmtqik_change_and_turnover(report, monkeypatch):
+    """MI_5MINS_HIST 沒有漲跌/成交金額:不合併 FMTQIK 的話回補列 change 為 NULL,
+    `screen_tw` 回放歷史日的 market_d1 會變 NaN。反向:FMTQIK 沒有的日期照寫 OHLC,不是取交集。"""
+    monkeypatch.setattr(crawl, "_today", lambda: date(2026, 10, 26))
+    monkeypatch.setattr(sources, "fetch_index_ohlc",
+                        lambda asof: sources.parse_index_ohlc_report(report, asof))
+    monkeypatch.setattr(sources, "fetch_index",
+                        lambda asof=None, fallback=True: sources.parse_index_report(_fmtqik_payload()))
+    written = []
+    monkeypatch.setattr(crawl, "upsert", lambda conn, t, recs, pk, **kw: written.extend(recs) or len(recs))
+    cal = {date(2010, 1, 4), date(2010, 1, 5), date(2010, 1, 6)}
+    res = crawl.backfill_index(Engine(cal=cal), date(2010, 1, 1), date(2010, 1, 31), delay=0)
+    assert res["written"] == 20 and not res["failed"] and not res["partial"] and not res["short"]
+    by_day = {r["date"].date(): r for r in written}
+    first = by_day[date(2010, 1, 4)]
+    assert (float(first["open"]), float(first["close"]), float(first["change"]), int(first["turnover"])) == (
+        8222.42, 8207.85, 19.74, 171654446230)
+    last = by_day[date(2010, 1, 29)]
+    assert float(last["close"]) == 7640.44 and float(last["open"]) > 0
+    assert last["change"] is None and last["turnover"] is None   # 必須是 NULL 不是 NaN:Postgres NUMERIC 收 NaN、coalesce 擋不住
+
+
+def test_backfill_keeps_dates_only_one_source_has(net, monkeypatch):
+    """反向:FMTQIK 有、MI_5MINS_HIST 沒有的日子仍寫入(收盤取 FMTQIK),不因合併被丟掉。"""
+    net["days"] = {date(2010, 1, 4)}
+    res = crawl.backfill_index(Engine(cal={date(2010, 1, 4), date(2010, 1, 5)}),
+                               date(2010, 1, 1), date(2010, 1, 31), delay=0)
+    assert res["short"] == {"2010-01": ["2010-01-05"]}            # 兩來源都沒有 → 稽核抓到
+
+    net["written"].clear()
+    net["days"] = {date(2010, 1, 4), date(2010, 1, 5)}
+    monkeypatch.setattr(sources, "fetch_index_ohlc", lambda asof: _ohlc_rows([date(2010, 1, 4)]))
+    res = crawl.backfill_index(Engine(cal={date(2010, 1, 4), date(2010, 1, 5)}),
+                               date(2010, 1, 1), date(2010, 1, 31), delay=0)
+    assert not res["short"]
+    only_fmtqik = [r for r in net["written"] if r["date"].date() == date(2010, 1, 5)]
+    assert len(only_fmtqik) == 1 and float(only_fmtqik[0]["close"]) == 8000
+    assert only_fmtqik[0]["open"] is None and float(only_fmtqik[0]["change"]) == 1.5
+
+
+def test_backfill_months_asof_fallback_bounds_and_pauses(net, capsys):
+    engine = Engine(cal=set(net["days"]))
+    net["fail_ohlc"] = net["fail_fmtqik"] = {2}
+    res = crawl.backfill_index(engine, date(2010, 1, 5), date(2010, 3, 1), delay=3)
+    assert net["ohlc"] == [date(2010, 1, 1), date(2010, 2, 1), date(2010, 3, 1)]
+    # 過去月份 asof = 月底(或 end)且不准 openapi;只有當月(今天 3/10 所在月)允許 fallback
+    assert net["fmtqik"] == [(date(2010, 1, 31), False), (date(2010, 2, 28), False),
+                             (date(2010, 3, 1), True)]
+    assert net["pauses"] == [3] * 5                     # 每個請求之間都等,不只月與月之間
+    assert sorted(r["date"].date() for r in net["written"]) == [date(2010, 1, 5), date(2010, 3, 1)]
+    assert res["failed"] == ["2010-02"] and res["months"] == 2
     out = capsys.readouterr().out
-    assert "index 2010-01 18 rows, latest 2010-01-29" in out
-    assert "**WARN index 2010-02" in out
+    assert "index 2010-01 1 rows (price days 1)" in out and "**WARN index 2010-02" in out
+
+
+def test_backfill_resume_requires_all_six_columns(net):
+    """resume 的「已補齊」要六欄都有值:只看 OHLC 四欄的話,沒有漲跌的列永遠不會被補。"""
+    engine = Engine(existing=set(net["days"]), cal=set(net["days"]))
+    res = crawl.backfill_index(engine, date(2010, 1, 1), date(2010, 3, 1), delay=0)
+    assert res["skipped"] == 3 and net["ohlc"] == [] and net["fmtqik"] == []
+    sql = str(next(s for s, _ in engine.statements if "market.market_index" in str(s)))
+    for col in ("open", "high", "low", "close", "change", "turnover"):
+        assert f"{col} IS NOT NULL" in sql
+
+    # 反向:缺一天的月份要重抓,但已齊全的日期不重寫
+    engine = Engine(existing={date(2010, 1, 4), date(2010, 2, 1), date(2010, 3, 1)},
+                    cal=set(net["days"]))
+    res = crawl.backfill_index(engine, date(2010, 1, 1), date(2010, 3, 1), delay=0)
+    assert net["ohlc"] == [date(2010, 1, 1)] and res["skipped"] == 2
+    assert [r["date"].date() for r in net["written"]] == [date(2010, 1, 5)]
+
+
+def test_backfill_month_without_price_calendar_is_fetched(net):
+    """price 該月沒資料無從判斷完整:照抓,不因 expected 為空就當作已補。"""
+    crawl.backfill_index(Engine(existing=set(net["days"]), cal=set()),
+                         date(2010, 1, 1), date(2010, 1, 31), delay=0)
+    assert net["ohlc"] == [date(2010, 1, 1)]
 
 
 def test_force_refreshes_existing_day_without_deleting_other_fields(report, monkeypatch):
-    engine = Engine(existing=[date(2010, 1, 4)])
+    engine = Engine(existing=[date(2010, 1, 4)], cal=[date(2010, 1, 4)])
+    monkeypatch.setattr(crawl, "_today", lambda: date(2026, 10, 26))
     monkeypatch.setattr(sources, "fetch_index_ohlc",
                         lambda asof: sources.parse_index_ohlc_report(report, asof))
-    assert crawl.backfill_index(engine, date(2010, 1, 4), date(2010, 1, 4), resume=False) == 1
-    assert len(engine.statements) == 1
-    compiled = str(engine.statements[0][0].compile(dialect=postgresql.dialect()))
+    monkeypatch.setattr(sources, "fetch_index", lambda asof=None, fallback=True: None)
+    res = crawl.backfill_index(engine, date(2010, 1, 4), date(2010, 1, 4), resume=False)
+    assert res["written"] == 1 and res["partial"] == ["2010-01"]
+    assert not any("open IS NOT NULL" in str(s) for s, _ in engine.statements)   # 不查 resume
+    compiled = str(engine.statements[-1][0].compile(dialect=postgresql.dialect()))
     assert compiled.startswith("INSERT INTO market.market_index")
     for col in ("open", "high", "low", "change", "turnover"):
         assert f"{col} = coalesce(excluded.{col}, market.market_index.{col})" in compiled
     assert "close = excluded.close" in compiled
 
 
-def test_failed_month_does_not_block_a_later_month(monkeypatch):
-    engine = Engine()
-    fetched = []
-
-    def fetch(asof):
-        fetched.append(asof)
-        if asof.month == 2:
-            return None
-        return [{"Date": f"099{asof.month:02d}01", "Open": "8000", "High": "8001",
-                 "Low": "7999", "TAIEX": "8000"}]
-
-    monkeypatch.setattr(sources, "fetch_index_ohlc", fetch)
-    assert crawl.backfill_index(engine, date(2010, 1, 1), date(2010, 3, 1), delay=0) == 2
-    assert fetched == [date(2010, m, 1) for m in (1, 2, 3)]
-    assert len(engine.statements) == 3
+def test_backfill_single_source_missing_is_partial_not_failed(net, capsys):
+    net["fail_ohlc"] = {1}
+    res = crawl.backfill_index(Engine(cal=set(net["days"])), date(2010, 1, 1), date(2010, 1, 31), delay=0)
+    assert res["partial"] == ["2010-01"] and not res["failed"]
+    assert all(float(r["change"]) == 1.5 for r in net["written"])
+    assert "MI_5MINS_HIST 無資料" in capsys.readouterr().out
 
 
-def test_resume_of_complete_ohlc_does_not_write(report, monkeypatch):
-    engine = Engine(existing=[date(2010, 1, 4)])
-    monkeypatch.setattr(sources, "fetch_index_ohlc",
-                        lambda asof: sources.parse_index_ohlc_report(report, asof))
-    assert crawl.backfill_index(engine, date(2010, 1, 4), date(2010, 1, 4)) == 0
-    assert len(engine.statements) == 1
-    assert str(engine.statements[0][0]).startswith("SELECT")
+def test_backfill_stops_after_consecutive_failures(net, monkeypatch):
+    monkeypatch.setattr(crawl, "_INDEX_MAX_FAILED_STREAK", 2)
+    net["fail_ohlc"] = net["fail_fmtqik"] = {1, 2}
+    with pytest.raises(RuntimeError, match="consecutive months"):
+        crawl.backfill_index(Engine(cal=set(net["days"])), date(2010, 1, 1), date(2010, 3, 1), delay=0)
+    assert net["ohlc"] == [date(2010, 1, 1), date(2010, 2, 1)]     # 第 3 個月沒有再打
+
+
+def test_backfill_single_failure_resets_streak(net, monkeypatch):
+    """反向:失敗中間夾一個成功月,streak 歸零,不會誤停。"""
+    monkeypatch.setattr(crawl, "_INDEX_MAX_FAILED_STREAK", 2)
+    net["fail_ohlc"] = net["fail_fmtqik"] = {1, 3}
+    res = crawl.backfill_index(Engine(cal=set(net["days"])), date(2010, 1, 1), date(2010, 3, 1), delay=0)
+    assert res["failed"] == ["2010-01", "2010-03"]
+
+
+def test_backfill_clamps_end_to_today(net):
+    crawl.backfill_index(Engine(cal=set(net["days"])), date(2010, 3, 1), date(2010, 12, 31), delay=0)
+    assert net["ohlc"] == [date(2010, 3, 1)] and net["fmtqik"] == [(date(2010, 3, 10), True)]
 
 
 def test_snapshot_preserves_ohlc_and_still_updates_present_values(monkeypatch):
@@ -266,12 +406,14 @@ def test_real_writer_merges_both_sources_and_allows_official_corrections(report)
         engine.dispose()
 
 
-@pytest.mark.parametrize("start,end,delay", [(date(2010, 2, 1), date(2010, 1, 1), 0),
-                                           (date(2010, 1, 1), date(2010, 2, 1), -1)])
+@pytest.mark.parametrize("start,end,delay", [(date(2010, 2, 1), date(2010, 1, 1), 0), (date(2010, 1, 1), date(2010, 2, 1), -1)])
 def test_invalid_backfill_bounds_do_not_fetch_or_write(start, end, delay, monkeypatch):
     monkeypatch.setattr(sources, "fetch_index_ohlc", lambda d: pytest.fail("unexpected request"))
     with pytest.raises(ValueError):
         crawl.backfill_index(Engine(), start, end, delay=delay)
+
+
+_CLEAN = {"written": 1, "months": 1, "skipped": 0, "failed": [], "partial": [], "short": {}}
 
 
 @pytest.mark.parametrize("force", [False, True])
@@ -279,9 +421,19 @@ def test_cli_dispatches_index_to_monthly_backfill(monkeypatch, force):
     engine = object()
     calls = []
     monkeypatch.setattr(cli, "get_engine", lambda: engine)
-    monkeypatch.setattr(crawl, "backfill_index", lambda *a, **kw: calls.append((a, kw)))
+    monkeypatch.setattr(crawl, "backfill_index", lambda *a, **kw: calls.append((a, kw)) or _CLEAN)
     monkeypatch.setattr(crawl, "crawl_range", lambda *a, **kw: pytest.fail("daily date loop used"))
     cli.main(["backfill", "index", "--start", "2010-01-01", "--end", "2010-02-03",
               "--delay", "3"] + (["--force"] if force else []))
     assert calls == [((engine, date(2010, 1, 1), date(2010, 2, 3)),
                       {"resume": not force, "delay": 3.0})]
+
+
+@pytest.mark.parametrize("gap", [{"failed": ["2010-02"]}, {"partial": ["2010-02"]},
+                                 {"short": {"2010-02": ["2010-02-01"]}}])
+def test_cli_backfill_index_exits_nonzero_on_any_gap(monkeypatch, gap):
+    monkeypatch.setattr(cli, "get_engine", lambda: object())
+    monkeypatch.setattr(crawl, "backfill_index", lambda *a, **kw: {**_CLEAN, **gap})
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["backfill", "index", "--start", "2010-01-01", "--end", "2010-03-31"])
+    assert exc.value.code == 1

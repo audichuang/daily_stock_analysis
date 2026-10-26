@@ -377,43 +377,94 @@ def _store_index(conn, rows):
                   coalesce=("open", "high", "low", "change", "turnover"))
 
 
-def backfill_index(engine, start, end, resume=True, delay=_INDEX_MONTH_DELAY_SECONDS):
-    """依月補 TAIEX OHLC，每月一交易；resume 只跳過 OHLC 都齊的日期。
+# 連續幾個月兩個來源都抓不到就停:每個月都有交易日,沒有「整月假日」這種正常解釋,多半是被封或改版。
+_INDEX_MAX_FAILED_STREAK = 3
+# resume 認定「該日已補齊」要六欄都有值:只有 OHLC 沒有漲跌的列(或 daily 只有收盤的列)仍要重抓。
+_INDEX_COMPLETE_COLUMNS = ("open", "high", "low", "close", "change", "turnover")
 
-    不套用 daily 快照的「加抓當月」，只寫指定日期範圍。單月來源失敗保留舊值並繼續，
-    重跑同區間會補缺；resume=False 重新採官方 OHLC，仍不刪除其他欄位或指數。
-    """
+
+def _complete_index_dates(conn, start, end):
+    cond = " AND ".join(f"{c} IS NOT NULL" for c in _INDEX_COMPLETE_COLUMNS)
+    return {r[0] for r in conn.execute(text(
+        "SELECT date FROM market.market_index WHERE index_id = 'TAIEX' "
+        f"AND date BETWEEN :start AND :end AND {cond}"), {"start": start, "end": end})}
+
+
+def backfill_index(engine, start, end, resume=True, delay=_INDEX_MONTH_DELAY_SECONDS):
+    """依月補 TAIEX:MI_5MINS_HIST 給開高低收、FMTQIK 給漲跌與成交金額,同月兩表依列日期合併後寫一次。
+
+    - 每月一個交易、commit 後才印 ``index YYYY-MM n rows (price days k)``;中途被封不會整段回滾。
+    - resume:該月 price 交易日全都六欄齊全就整月跳過(不發請求);price 該月沒資料時無從判斷,照抓。
+      已齊全的日期不重寫;``resume=False`` 全部重取,仍不刪除其他欄位或指數。
+    - 只寫 ``start..end``(``end`` 截到今天)閉區間;只有當月允許 FMTQIK 退到 openapi。
+    - 兩個來源只缺一個:照寫拿到的(coalesce 保留舊值),列進 ``partial``;都缺:列進 ``failed``,
+      連續 ``_INDEX_MAX_FAILED_STREAK`` 個月都缺就 raise,重跑同指令會 resume。
+    - 拿到的日期少於 price 交易日:列進 ``short`` 並印 ``**WARN``——這是對交易日數的稽核。
+    回傳 ``{"written", "months", "skipped", "failed", "partial", "short"}``。"""
     import datetime as _dt
     import time as _time
 
+    today = _today()
+    end = min(end, today)
     if start > end or delay < 0:
-        raise ValueError("index backfill requires start <= end and delay >= 0")
-    existing = set()
-    if resume:
-        with engine.begin() as conn:
-            existing = {r[0] for r in conn.execute(text(
-                "SELECT date FROM market.market_index WHERE index_id = 'TAIEX' "
-                "AND date BETWEEN :start AND :end AND open IS NOT NULL "
-                "AND high IS NOT NULL AND low IS NOT NULL AND close IS NOT NULL"),
-                {"start": start, "end": end})}
-    month = start.replace(day=1)
-    total = 0
-    while month <= end:
-        if month != start.replace(day=1) and delay:
+        raise ValueError("index backfill requires start <= end (<= today) and delay >= 0")
+    with engine.begin() as conn:
+        cal = _trading_dates(conn, start, end)
+        complete = _complete_index_dates(conn, start, end) if resume else set()
+    stats = {"written": 0, "months": 0, "skipped": 0, "failed": [], "partial": [], "short": {}}
+    requests_sent = 0
+
+    def pause():
+        nonlocal requests_sent
+        if requests_sent and delay:
             _time.sleep(delay)
-        rows = sources.fetch_index_ohlc(month)
-        if rows:
-            rows = [r for r in rows if start <= etl._roc_yyyymmdd(r["Date"]) <= end
-                    and etl._roc_yyyymmdd(r["Date"]) not in existing]
-            with engine.begin() as conn:
-                n = _store_index(conn, rows)
-            latest = max((etl._roc_yyyymmdd(r["Date"]) for r in rows), default=None)
-            print(f"index {month:%Y-%m} {n:,} rows, latest {latest}", flush=True)
-            total += n
-        else:
-            print(f"**WARN index {month:%Y-%m}: OHLC 來源無資料，保留既有值，重跑可補缺", flush=True)
-        month = (month.replace(day=28) + _dt.timedelta(days=4)).replace(day=1)
-    return total
+        requests_sent += 1
+
+    streak = 0
+    month = start.replace(day=1)
+    while month <= end:
+        label = f"{month:%Y-%m}"
+        nxt = (month.replace(day=28) + _dt.timedelta(days=4)).replace(day=1)
+        lo, hi = max(start, month), min(end, nxt - _dt.timedelta(days=1))
+        expected = {d for d in cal if lo <= d <= hi}
+        if resume and expected and expected <= complete:
+            stats["skipped"] += 1
+            month = nxt
+            continue
+        pause()
+        ohlc = sources.fetch_index_ohlc(month)
+        pause()
+        fmtqik = sources.fetch_index(asof=hi, fallback=(month.year, month.month) == (today.year, today.month))
+        if not ohlc and not fmtqik:
+            stats["failed"].append(label)
+            streak += 1
+            print(f"**WARN index {label}: MI_5MINS_HIST 與 FMTQIK 都無資料,保留既有值,重跑可補缺", flush=True)
+            if streak >= _INDEX_MAX_FAILED_STREAK:
+                raise RuntimeError(
+                    f"index: {streak} consecutive months returned nothing (last {label}) — "
+                    f"likely IP-blocked or the endpoint changed. Stopping; rerun resumes.")
+            month = nxt
+            continue
+        streak = 0
+        if not ohlc or not fmtqik:
+            stats["partial"].append(label)
+            print(f"**WARN index {label}: {'MI_5MINS_HIST' if not ohlc else 'FMTQIK'} 無資料,"
+                  "只寫另一來源的欄位,重跑可補缺", flush=True)
+        got = {}     # 依列日期合併;收盤兩表應一致,以 OHLC 月表為準
+        for r in [*(fmtqik or ()), *(ohlc or ())]:
+            got.setdefault(etl._roc_yyyymmdd(r["Date"]), {}).update(r)
+        rows = [r for d, r in got.items() if lo <= d <= hi and d not in complete]
+        with engine.begin() as conn:
+            n = _store_index(conn, rows)
+        stats["written"] += n
+        stats["months"] += 1
+        print(f"index {label} {n:,} rows (price days {len(expected)})", flush=True)
+        short = sorted(expected - set(got))
+        if short:
+            stats["short"][label] = [d.isoformat() for d in short]
+            print(f"**WARN index {label} 缺 price 有的交易日 {stats['short'][label]}", flush=True)
+        month = nxt
+    return stats
 
 
 def crawl_index(conn, dates=None):
