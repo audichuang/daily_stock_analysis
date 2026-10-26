@@ -303,6 +303,117 @@ def test_main_filters_every_panel_with_the_shared_universe(monkeypatch):
     prices = pd.DataFrame(100.0, index=days, columns=UNIVERSE_CODES)
     piv = {k: prices.copy() for k in ("open", "high", "close", "volume", "turnover")}
     rv = _rv([100] * 6, [40, 40, 40, 20, 30, 40], start="2025-12-01", sid="2330")
+# --- --experiment surprise：SUS、營收÷歷史最高、閘門與判準 ---
+
+def _seasonal_series(diffs, tail_d):
+    """前 12 月 100，之後 R_m = R_{m-12} + d_m；最後一個月的 d 是 tail_d。"""
+    rev = [100.0] * 12
+    for i, d in enumerate(list(diffs) + [tail_d]):
+        rev.append(rev[i] + d)
+    return rev
+
+
+def test_sus_uses_prior_24_seasonal_diffs_with_drift():
+    rev = _seasonal_series([10, 20] * 12, 30)          # 第 37 月（2021-01）d=30
+    f = revmom.revenue_surprise_features(_rv(rev, [10.0] * len(rev)))
+    expected = (30 - 15) / np.std([10, 20] * 12, ddof=1)
+    assert _row(f, "2021-01-01")["sus"] == pytest.approx(expected)
+
+
+def test_sus_min_periods_is_exactly_eighteen():
+    # 第 12 月起才有季節差：第 30 月（index 30）之前有 18 個有效 d、第 29 月只有 17 個
+    rev = _seasonal_series([10, 20] * 9, 30)            # index 30 = 2020-07
+    f = revmom.revenue_surprise_features(_rv(rev, [10.0] * len(rev)))
+    assert not np.isnan(_row(f, "2020-07-01")["sus"])
+    assert np.isnan(_row(f, "2020-06-01")["sus"])       # 17 個 → 未知
+
+
+def test_sus_does_not_bridge_missing_month():
+    rev = _seasonal_series([10, 20] * 12, 30)
+    f = revmom.revenue_surprise_features(_rv(rev, [10.0] * len(rev), drop=(24,)))
+    assert np.isnan(_row(f, "2021-01-01")["sus"])        # 上年同月（2020-01）被拿掉
+    assert not np.isnan(_row(f, "2020-12-01")["sus"])    # 其他月份不受影響
+
+
+def test_sus_pit_uses_reported_yoy_not_stored_prior_year_level():
+    # 入庫的上年同月被事後改大（季節差全 0），但當時公告的 YoY 是 20% → d_pit = R·20/120
+    rev = [100.0] * 37
+    yoy = [0.0, 0.0] * 18 + [20.0]
+    yoy[12:36] = [5.0, 10.0] * 12
+    f = revmom.revenue_surprise_features(_rv(rev, yoy))
+    r = _row(f, "2021-01-01")
+    assert np.isnan(r["sus"])                             # 入庫水準：季節差 std=0 → 未知
+    d_hist = [100 * y / (100 + y) for y in [5.0, 10.0] * 12]
+    expected = (100 * 20 / 120 - np.mean(d_hist)) / np.std(d_hist, ddof=1)
+    assert r["sus_pit"] == pytest.approx(expected)
+
+
+def test_sus_pit_is_nan_when_yoy_is_minus_hundred():
+    rev = [100.0] * 37
+    yoy = [5.0, 10.0] * 18 + [-100.0]
+    f = revmom.revenue_surprise_features(_rv(rev, yoy))
+    assert np.isnan(_row(f, "2021-01-01")["sus_pit"])
+
+
+def test_ath_ratio_needs_24_months_and_uses_prior_max_only():
+    rev = [100.0] * 23 + [150.0, 120.0, 180.0]
+    f = revmom.revenue_surprise_features(_rv(rev, [10.0] * len(rev)))
+    assert np.isnan(_row(f, "2019-12-01")["ath_ratio"])  # 只有 23 個月歷史
+    assert _row(f, "2020-01-01")["ath_ratio"] == pytest.approx(120 / 150)
+    assert _row(f, "2020-02-01")["ath_ratio"] == pytest.approx(180 / 150)  # 不含自己
+
+
+def test_gate_flags_top_quintile_is_strict_and_per_month():
+    m1, m2 = pd.Timestamp("2020-01-01"), pd.Timestamp("2020-02-01")
+    feat = pd.DataFrame({
+        "stock_id": [f"{1000 + i}" for i in range(10)] * 2 + ["9999"],
+        "revenue_month": [m1] * 10 + [m2] * 10 + [m2],
+        "announce_date": [m1 + pd.Timedelta(days=40)] * 10 + [m2 + pd.Timedelta(days=40)] * 11,
+        "sus": list(range(1, 11)) + list(range(110, 100, -1)) + [np.nan],  # 兩月水準不同
+        "sus_pit": 0.0, "ath_ratio": [0.99, 1.0] * 10 + [np.nan],
+    })
+    g = revmom.gate_flags(feat)
+    jan = g[g["revenue_month"] == m1].set_index("stock_id")["sus_top20"]
+    assert jan[jan == 1].index.tolist() == ["1008", "1009"]   # 百分位 0.9、1.0；0.8 不算；不跨月混排
+    feb = g[g["revenue_month"] == m2].set_index("stock_id")["sus_top20"]
+    assert feb[feb == 1].index.tolist() == ["1000", "1001"]   # 各月各自排名
+    assert np.isnan(feb["9999"])                               # 缺值不是「不通過」
+    assert g["ath_ge1"].iloc[:2].tolist() == [0.0, 1.0]       # 絕對門檻含等號
+
+
+def test_gate_panels_follow_revenue_pit_visibility():
+    days = pd.bdate_range("2020-02-03", periods=20)
+    flags = pd.DataFrame({"stock_id": ["2330"], "revenue_month": [pd.Timestamp("2020-01-01")],
+                          "announce_date": [pd.Timestamp("2020-02-17")], "g": [1.0]})
+    p = revmom.gate_panels(flags, days, pd.Index(["2330"]), gates={"g": ("x", "top")})["g"]
+    assert np.isnan(p.at[pd.Timestamp("2020-02-17"), "2330"])  # 公告日當天不可見
+    assert p.at[pd.Timestamp("2020-02-18"), "2330"] == 1.0
+
+
+def _ci(lo95, lo99):
+    return {k: {95.0: (lo95, 1.0), 98.75: (lo99, 1.0)} for k in ("mean", "hit")}
+
+
+def test_verdict_requires_both_stats_and_both_intervals():
+    assert revmom.verdict(0.02, 0.03, _ci(0.01, 0.005), 400, 300) == "通過且存活"
+    assert revmom.verdict(0.02, 0.03, _ci(0.01, -0.01), 400, 300) == "通過（未過 Bonferroni）"
+    assert revmom.verdict(0.02, 0.03, _ci(-0.01, -0.02), 400, 300) == "inconclusive"
+    assert revmom.verdict(0.02, -0.01, _ci(0.01, 0.005), 400, 300) == "inconclusive"
+    assert revmom.verdict(0.02, 0.03, _ci(0.01, 0.005), 299, 300) == "inconclusive"
+    assert revmom.verdict(0.02, 0.03, _ci(0.01, 0.005), 300, 300) == "通過且存活"  # n ≥ 300 含等號
+    assert revmom.verdict(0.02, 0.03, None, 400, 300) == "inconclusive"
+    one_side = {"mean": {95.0: (0.01, 1), 98.75: (0.01, 1)}, "hit": {95.0: (-0.01, 1), 98.75: (-0.01, 1)}}
+    assert revmom.verdict(0.02, 0.03, one_side, 400, 300) == "inconclusive"
+
+
+def test_main_surprise_mode_skips_momentum_sections(monkeypatch):
+    days = pd.bdate_range("2026-04-01", periods=60)
+    cols = pd.Index(["2330", "2454"])
+    prices = pd.DataFrame(100.0, index=days, columns=cols)
+    piv = {k: prices.copy() for k in ("open", "high", "close", "volume", "turnover")}
+    rv = pd.concat([_rv([100] * 6, [40] * 6, start="2025-12-01", sid=s) for s in cols],
+                   ignore_index=True)
+    sig = pd.DataFrame(False, index=days, columns=cols)
     monkeypatch.setattr(revmom, "database_url", lambda: "unused")
     engine = SimpleNamespace(connect=lambda: nullcontext(object()))
     monkeypatch.setattr(revmom, "create_engine", lambda *args, **kwargs: engine)
@@ -333,3 +444,14 @@ def test_main_filters_every_panel_with_the_shared_universe(monkeypatch):
 
     assert sorted(seen) == sorted(UNIVERSE_CODES)
     assert captured and all(set(cols) == UNIVERSE_COMMON for cols in captured.values())
+    monkeypatch.setattr(revmom, "build_signals", lambda *args: (
+        sig, {"liquid": pd.DataFrame(True, index=days, columns=cols)}))
+    seen = {}
+    monkeypatch.setattr(revmom, "surprise_report",
+                        lambda piv_, rv_, sig_, extra, horizons, a: seen.update(h=horizons))
+    monkeypatch.setattr(revmom, "release_cross_section",
+                        lambda *a, **k: pytest.fail("momentum section ran in surprise mode"))
+    assert revmom.main(["--experiment", "surprise", "--start", "2026-03-31",
+                        "--end", "2026-06-23", "--horizons", "5,10", "--pool-hold", "60",
+                        "--bootstrap", "0"]) == 0
+    assert seen["h"] == [5, 10, 60]
