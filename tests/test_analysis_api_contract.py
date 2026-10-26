@@ -829,8 +829,9 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             "summary",
         )
         self.assertEqual(status.result.report["summary"]["operation_advice"], "不建议买入")
-        self.assertEqual(status.result.report["summary"]["action"], "avoid")
-        self.assertEqual(status.result.report["summary"]["action_label"], "回避")
+        # 中文否定建議一律判為未知
+        self.assertIsNone(status.result.report["summary"]["action"])
+        self.assertIsNone(status.result.report["summary"]["action_label"])
 
     def test_get_analysis_status_prefers_raw_result_action_over_summary_action(self) -> None:
         if get_analysis_status is None or analysis_endpoint_module is None:
@@ -1940,8 +1941,9 @@ class AnalysisApiContractTestCase(unittest.TestCase):
         )
 
         self.assertEqual(report.summary.operation_advice, "不建议买入")
-        self.assertEqual(report.summary.action, "avoid")
-        self.assertEqual(report.summary.action_label, "回避")
+        # 中文否定建議一律判為未知；decision_type=buy 也不能拿來補，否則會把「不建議買入」存成買入
+        self.assertIsNone(report.summary.action)
+        self.assertIsNone(report.summary.action_label)
 
     def test_build_analysis_report_aligns_score_and_legacy_advice(self) -> None:
         if _build_analysis_report is None:

@@ -7,6 +7,10 @@ import os
 
 import pytest
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 from src.analyzer import AnalysisResult
 from src.config import Config
 from src.services.decision_signal_extractor import (
@@ -694,10 +698,15 @@ def test_extract_and_persist_index_signal_with_market_override(isolated_db) -> N
 
 @pytest.mark.parametrize(
     ("advice", "score", "expected"),
-    [("觀望", 50, "watch"), ("不建議買入", 35, "avoid")],
+    [
+        ("觀望", 50, "watch"), ("不建議買入", 35, None),
+        ("不建議現在買入", 55, None), ("暫不加碼，建議賣出", 55, None),
+        ("沒有不買入的理由", 55, None), ("不買入，觸發告警及減倉", 55, None),
+        ("不建议买入", 55, None),
+    ],
 )
-def test_build_payload_keeps_traditional_zh_tw_advice(advice: str, score: int, expected: str) -> None:
-    # H1：zh-TW 報告的繁體建議（護欄改寫後 action 被清空）要能正規化，否則整筆 DecisionSignal 被略過
+def test_build_payload_keeps_traditional_zh_tw_advice(advice: str, score: int, expected: str | None) -> None:
+    # 明確建議保留動作；中文否定建議回未知，略過信號而非從內嵌動作詞誤建交易方向。
     result = _result(
         code="2330.TW",
         name="台積電",
@@ -715,5 +724,8 @@ def test_build_payload_keeps_traditional_zh_tw_advice(advice: str, score: int, e
         profile_source=BUILD_PROFILE_SOURCE,
     )
 
-    assert payload is not None
-    assert payload["action"] == expected
+    if expected is None:
+        assert payload is None
+    else:
+        assert payload is not None
+        assert payload["action"] == expected

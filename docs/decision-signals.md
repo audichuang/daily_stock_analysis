@@ -34,6 +34,24 @@
 
 Web 展示必须把这些 wire value 映射为当前 UI 语言的用户可读标签；API 响应继续保留原始枚举值。
 
+### 中文否定建議與未知動作
+
+`src/schemas/decision_action.py::normalize_decision_action` 先逐字折疊繁體為簡體；同一子句內（逗號、句號、分號、換行為界）動作詞（買／賣／加倉／加碼／增持／減倉／減碼／清倉／建倉／布局／持有／洗盤觀察／觀望／進場／等待／回避／預警／告警／警惕…）前 6 字以內出現否定詞（不／別／勿／莫／未／沒／無／避免／禁止／切勿／停止／暫緩），整段建議回傳 `None`（`_has_zh_negated_action`）。這個保守規則優先於回避、告警與交易片語，不解析雙重否定或分句方向，例如「沒有不買入的理由」「暫不加碼，建議賣出」都保持未知；原本判成回避／持有的中文否定片語（「暫不買入」「不建議加倉」）同樣改為未知。「未來／無論／不論／不管／不斷」不算否定詞。非否定建議與英文規則維持既有行為；「加碼」本身仍不新增 action 別名。
+
+所有直接呼叫端沿用既有空值處理：
+
+| 呼叫端 | `None` 的既有處理 |
+| --- | --- |
+| `decision_action.build_action_fields`、`display_action_fields` | 優先使用明確 action，再嘗試標籤／建議，無法辨識就保留空 action；`display_decision_type_for_result` 回退合法 `decision_type`，否則 `hold`。 |
+| `decision_signal_extractor._raw_action_from_report` | 明確 action 不可辨識才試建議；兩者皆未知時，payload builder 略過信號。 |
+| `decision_signal_service.DecisionSignalService._history_action_fields` | 保留空 action，歷史來源檢查不為此回補信號。 |
+| `decision_signal_reassess_service._build_candidate` | 無結構化 action 時回報不支援該快照，不猜交易方向。 |
+| `core.pipeline.StockAnalysisPipeline._refresh_decision_action_for_final_result` | 沿用共享 resolver；既有 sell 決策與買入區分數矛盾護欄仍可回退 `watch`，hold／reduce 規則不變。 |
+| `core.pipeline.StockAnalysisPipeline._finalize_and_persist_result`（含 `_capture`） | 未知起始／最終 action 使轉換鏈失效，跳過動作轉換記錄與最終解釋。 |
+| `agent.final_explanation.PipelineActionAdjustment.__post_init__`、`capture_pipeline_action_adjustment`、`build_pipeline_final_explanation` | 僅接受 canonical action；未知值明確拋出 `ValueError`，Pipeline 先檢查空值才呼叫。 |
+
+狙擊點的共享 parser `src/utils/sniper_points.py::parse_sniper_value` 在未設定判斷完成前保留句界逗號。「暫無，站回125元再評估」及「無明確買點，等站回125元再評估」回傳 `None`，後面明確寫「站回1,250元再買」則仍取 1250；「暫無明顯支撐，回測100元附近再評估」維持 100。`extract_sniper_points`、`storage.DatabaseManager._parse_sniper_value` 與 `decision_signal_reassess_service._raw_first_price` 都共用此函式；重評時原文有值便保留解析所得的 `None`，不讓舊存買點復活。
+
 ## Canonical 评分与 action 口径
 
 个股分析、技术评分 fallback、报告展示 fallback 与 `DecisionSignal` 提取共用 `decision-scale-v1` 口径。`decision_type` 只保留 `buy|hold|sell` 兼容统计；更细的可执行语义以八态 `action` 为准。

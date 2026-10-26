@@ -1056,8 +1056,9 @@ class AnalysisHistoryTestCase(unittest.TestCase):
 
         self.assertEqual(len(response.items), 1)
         self.assertEqual(response.items[0].operation_advice, "不建议买入")
-        self.assertEqual(response.items[0].action, "avoid")
-        self.assertEqual(response.items[0].action_label, "回避")
+        # 中文否定建議一律判為未知，不從文字推出動作
+        self.assertIsNone(response.items[0].action)
+        self.assertIsNone(response.items[0].action_label)
 
     def test_stock_bar_item_aligns_score_and_legacy_advice(self) -> None:
         if get_stock_bar is None:
