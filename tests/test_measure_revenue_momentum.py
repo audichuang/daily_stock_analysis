@@ -83,7 +83,7 @@ def test_effective_announce_takes_later_of_placeholder_and_extension():
     rv = _rv([100] * 3, [1, 2, 3], start="2019-12-01")
     out = effective_announce(rv)
     got = dict(zip(out["revenue_month"], out["announce_date"]))
-    assert got[pd.Timestamp("2020-01-01")] == pd.Timestamp("2020-02-15")  # 疫情展延
+    assert got[pd.Timestamp("2020-01-01")] == pd.Timestamp("2020-02-17")  # 疫情展延與週末順延
     assert got[pd.Timestamp("2019-12-01")] == pd.Timestamp("2020-01-10")  # 未展延維持佔位
     assert out["announce_date"].dtype == rv["announce_date"].dtype
 
@@ -109,16 +109,16 @@ def test_candidate_panel_uses_extended_deadline_not_placeholder():
     })
     out = candidate_yoy_frame(effective_announce(rv))
     assert list(out.columns) == ["stock_id", "date", "yoy"]
-    assert out["date"].tolist() == [pd.Timestamp("2020-02-15"), pd.Timestamp("2020-03-10")]
+    assert out["date"].tolist() == [pd.Timestamp("2020-02-17"), pd.Timestamp("2020-03-10")]
 
 
-def test_correct_pit_dates_moves_only_the_extended_month():
+def test_correct_pit_dates_applies_extension_and_weekend_roll():
     rv = pd.DataFrame({"stock_id": ["2330"] * 3,
                        "date": pd.to_datetime(["2020-02-10", "2020-03-10", "2026-10-10"]),
                        "yoy": [25.0, 30.0, 5.0]})
     out = correct_pit_dates(rv)
-    assert out["date"].tolist() == [pd.Timestamp("2020-02-15"), pd.Timestamp("2020-03-10"),
-                                    pd.Timestamp("2026-10-10")]
+    assert out["date"].tolist() == [pd.Timestamp("2020-02-17"), pd.Timestamp("2020-03-10"),
+                                    pd.Timestamp("2026-10-12")]
     assert rv["date"].iloc[0] == pd.Timestamp("2020-02-10")  # 不改到輸入
 
 
@@ -132,6 +132,6 @@ def test_correct_pit_dates_moves_2026_financial_stock_to_15th():
     assert out["date"].tolist() == [
         pd.Timestamp("2026-04-15"),
         pd.Timestamp("2026-04-10"),
-        pd.Timestamp("2026-02-15"),
+        pd.Timestamp("2026-02-23"),
         pd.Timestamp("2025-12-10"),
     ]

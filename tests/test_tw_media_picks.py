@@ -187,6 +187,25 @@ def test_snapshot_skips_null_close_before_adjusting(monkeypatch):
     json.dumps(out, allow_nan=False)
 
 
+def test_snapshot_reads_revenue_point_in_time(monkeypatch):
+    # 播出日快照是歷史回放：月營收要依法定期限判斷當時看不看得到（富邦金 15 日、休市順延）
+    import pandas as pd
+    from market_data import market_repo
+    from src.services import tw_stock_dossier as dossier
+
+    days = pd.bdate_range("2026-01-01", "2026-04-13")
+    monkeypatch.setattr(market_repo, "price_history",
+                        lambda sid, start, end, engine: pd.DataFrame({"date": days, "close": 100.0}))
+    monkeypatch.setattr(market_repo, "front_adjust_multipliers",
+                        lambda sid, dates, engine: pd.Series([1.0] * len(dates)))
+    seen = []
+    monkeypatch.setattr(dossier, "fundamentals",
+                        lambda engine, sid, d, **k: seen.append(k) or {"monthly_revenue": []})
+    monkeypatch.setattr(dossier, "chips", lambda *a, **k: {"institutional": None})
+    mp.snapshot("2881.TW", days[-1].date(), engine=None)
+    assert seen == [{"pit": True}]
+
+
 def test_single_run_lock_blocks_overlap():
     first = mp._single_run_lock()
     try:

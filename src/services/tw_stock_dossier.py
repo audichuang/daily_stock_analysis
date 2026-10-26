@@ -25,6 +25,7 @@ from data_provider.tw_margin_trend import compute_margin_trend
 from market_data import market_repo
 from market_data.db import get_engine
 from market_data.financial_statement import afterIFRS
+from market_data.revenue_deadline import effective_announce_dates
 from src.services.market_symbol_utils import split_suffix_symbol
 
 logger = logging.getLogger(__name__)
@@ -69,10 +70,19 @@ def _quarter_label(d):
     return f"{d.year - 1 if q == 4 else d.year}Q{q}"
 
 
-def fundamentals(engine, sid, as_of):
+def fundamentals(engine, sid, as_of, *, pit=False):
+    """``pit=True``（歷史基準日回放）時，月營收改以法定公告期限（`market_data.revenue_deadline`，
+    含保險類 15 日與休市順延）判斷 as_of 當天看不看得到；live 照 DB 佔位公告日（有就是已公告）。"""
+    # 實際用到的只有 25 列（13 個月明細＋最舊一列的去年同月；TTM 要 24 列）。pit 最多篩掉最新一個月
+    # （有效公告日最多晚約兩週），所以下限是 26 列；38 是留餘裕，邊界由 test_dossier_row_cap_survives_pit_drop 守
     rev = _sql(engine, "SELECT revenue_month, revenue, yoy, announce_date FROM market.monthly_revenue "
                        "WHERE stock_id = :s AND (announce_date IS NULL OR announce_date <= :d) "
-                       "ORDER BY revenue_month DESC LIMIT 36", s=sid, d=as_of)
+                       "ORDER BY revenue_month DESC LIMIT 38", s=sid, d=as_of)
+    if pit and len(rev):
+        eff = effective_announce_dates(pd.Series([sid] * len(rev), index=rev.index),
+                                       rev["announce_date"], rev["revenue_month"])
+        rev = rev[eff.isna() | (eff <= pd.Timestamp(as_of))]
+    rev = rev.head(36)
     by_month = {(r.revenue_month.year, r.revenue_month.month): r.revenue for r in rev.itertuples()}
     months = [{"month": f"{r.revenue_month:%Y-%m}",
                "revenue_k": None if pd.isna(r.revenue) else int(r.revenue),
@@ -225,6 +235,7 @@ def build(code, as_of=None, branch=True, engine=None):
              + (" AND date <= :a" if as_of else ""), s=sid, a=as_of).d.iloc[0]
     if d is None or pd.isna(d):
         raise LookupError(f"{sid}: market.price 查無資料")
+    pit = as_of is not None   # 指定基準日＝歷史回放；Web／看板不帶日期，走 live
     as_of = pd.Timestamp(d).date()
     errors = []
 
@@ -239,7 +250,7 @@ def build(code, as_of=None, branch=True, engine=None):
 
     smc, sessions = safe("技術面", lambda: technicals(engine, sid, as_of), (None, []))
     p = {"stock_id": sid, "name": safe("名稱", lambda: stock_name(sid, engine), None), "as_of": str(as_of),
-         "fundamentals": safe("基本面", lambda: fundamentals(engine, sid, as_of),
+         "fundamentals": safe("基本面", lambda: fundamentals(engine, sid, as_of, pit=pit),
                               {"monthly_revenue": [], "ttm_revenue_yoy_pct": None, "quarters": []}),
          "contract_liabilities": safe("合約負債", lambda: contract_liabilities(engine, sid, as_of), []),
          "chips": safe("籌碼面", lambda: chips(engine, sid, as_of, sessions, branch=branch),
