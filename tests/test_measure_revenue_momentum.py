@@ -525,3 +525,35 @@ def test_surprise_report_applies_pit_veto_to_printed_verdict(monkeypatch, capsys
     assert len(sus_lines) == 2, out
     assert all(revmom.PIT_VETOED in ln for ln in sus_lines)
     assert all(revmom.SURVIVED in ln and revmom.PIT_VETOED not in ln for ln in ath_lines)
+
+
+def _mixed_deadline_feat(insurance_sus):
+    """2026-01 營收月：10 檔 10 日可見、2 檔（保險類）15 日才可見。"""
+    m = pd.Timestamp("2026-01-01")
+    early, late = pd.Timestamp("2026-02-10"), pd.Timestamp("2026-02-16")
+    return pd.DataFrame({
+        "stock_id": [f"{1100 + i}" for i in range(10)] + ["2881", "2882"],
+        "revenue_month": [m] * 12,
+        "announce_date": [early] * 10 + [late] * 2,
+        "sus": list(range(1, 11)) + list(insurance_sus),
+        "sus_pit": 0.0, "ath_ratio": 1.0,
+    })
+
+
+def test_gate_flags_early_cohort_ignores_values_not_yet_visible():
+    # 10 日可見的那批只能和 10 日已可見的同月股票比；15 日才公布的保險類數值不能改變它們的旗標
+    low = revmom.gate_flags(_mixed_deadline_feat([-5.0, -4.0])).set_index("stock_id")["sus_top20"]
+    high = revmom.gate_flags(_mixed_deadline_feat([50.0, 60.0])).set_index("stock_id")["sus_top20"]
+    early = [f"{1100 + i}" for i in range(10)]
+    assert low[early].tolist() == high[early].tolist()
+    assert low[low == 1].index.tolist() == ["1108", "1109"]          # 只在 10 檔內排名
+    assert high[early][high[early] == 1].index.tolist() == ["1108", "1109"]
+
+
+def test_gate_flags_late_cohort_ranks_against_whole_visible_month():
+    # 15 日那批可見時整個月份都已可見 → 對全部 12 檔排名，而不是只在保險類兩檔之間排
+    g = revmom.gate_flags(_mixed_deadline_feat([5.5, 3.0])).set_index("stock_id")["sus_top20"]
+    assert g["2881"] == 0.0     # 兩檔中最高，但在 12 檔裡只排 7/12
+    assert g["2882"] == 0.0
+    g = revmom.gate_flags(_mixed_deadline_feat([20.0, 3.0])).set_index("stock_id")["sus_top20"]
+    assert g["2881"] == 1.0

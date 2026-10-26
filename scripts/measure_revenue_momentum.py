@@ -235,18 +235,36 @@ def revenue_surprise_features(rv, window=SUS_WINDOW, min_periods=SUS_MIN_PERIODS
     return pd.concat(out, ignore_index=True)
 
 
+def visible_cohort_pct(x, month, announce):
+    """同營收月橫斷面百分位，只和「自己可見時已可見」的同月股票比（PIT）。
+
+    同一營收月的有效公告日不一定相同：自 2026-01 起保險類期限是 15 日、其他 10 日；
+    2020-01 全面展延則整月同一天。對每個公告日 d，用該月 ``announce_date <= d`` 的列排名，
+    只取 d 那批的結果——10 日那批不會被 15 日才公布的數值影響，15 日那批仍對整個月排名。
+    公告日 NaT 的列沒有可見日，回 NaN。NaN 特徵不計入分母（``rank`` 的預設語意）。
+    """
+    pct = pd.Series(np.nan, index=x.index)
+    frame = pd.DataFrame({"x": x, "m": month, "d": announce})
+    for _, g in frame.dropna(subset=["d"]).groupby("m", sort=False):
+        for d in g["d"].unique():
+            seen = g.loc[g["d"] <= d, "x"].rank(pct=True)
+            cohort = g.index[g["d"] == d]
+            pct.loc[cohort] = seen.loc[cohort]
+    return pct
+
+
 def gate_flags(feat, gates=SURPRISE_GATES, q=TOP_QUANTILE):
     """特徵 → 1.0/0.0 閘門旗標（NaN＝資料不足，不當成「不通過」）。
 
-    ``"top"``：同一營收月的橫斷面百分位 > q。所有公司共用同一法定期限，可見日當下整個
-    橫斷面都已可見，所以百分位不偷看未來。數字門檻：特徵 ≥ 門檻。
+    ``"top"``：同一營收月的橫斷面百分位 > q，只和自己可見當下已可見的同月股票比
+    （``visible_cohort_pct``；保險類 15 日期限讓同月公告日不一致）。數字門檻：特徵 ≥ 門檻。
     """
     out = feat[["stock_id", "revenue_month", "announce_date"]].copy()
     for name, (col, rule) in gates.items():
         x = feat[col].astype(float)
         if rule == "top":
-            pct = x.groupby(feat["revenue_month"]).rank(pct=True)
-            out[name] = (pct > q).astype(float).where(x.notna())
+            pct = visible_cohort_pct(x, feat["revenue_month"], feat["announce_date"])
+            out[name] = (pct > q).astype(float).where(x.notna() & pct.notna())
         else:
             out[name] = (x >= rule).astype(float).where(x.notna())
     return out
