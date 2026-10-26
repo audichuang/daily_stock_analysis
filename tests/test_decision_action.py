@@ -3,6 +3,10 @@
 
 import pytest
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 from src.schemas.decision_action import (
     build_action_fields,
     display_action_fields_for_result,
@@ -45,8 +49,8 @@ from src.schemas.decision_scale import action_for_score, decision_type_for_score
         ("avoid", "avoid"),
         ("回避", "avoid"),
         ("规避", "avoid"),
-        ("不建议买入", "avoid"),
-        ("避免买入", "avoid"),
+        ("不建议买入", None),
+        ("避免买入", None),
         ("do not buy", "avoid"),
         ("alert", "alert"),
         ("风险预警", "alert"),
@@ -55,7 +59,7 @@ from src.schemas.decision_scale import action_for_score, decision_type_for_score
         ("risk alert", "alert"),
     ],
 )
-def test_normalize_decision_action_matrix(value: str, expected: str) -> None:
+def test_normalize_decision_action_matrix(value: str, expected: str | None) -> None:
     assert normalize_decision_action(value) == expected
 
 
@@ -93,20 +97,20 @@ def test_normalize_decision_action_unknown_or_ambiguous_returns_none(value: str 
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ("暂不买入", "avoid"),
-        ("不要买入", "avoid"),
-        ("不宜买入", "avoid"),
-        ("先不买入", "avoid"),
-        ("无需买入", "avoid"),
-        ("无须买入", "avoid"),
-        ("不建议建仓", "avoid"),
-        ("暂不建仓", "avoid"),
-        ("无需建仓", "avoid"),
-        ("无须建仓", "avoid"),
-        ("不建议布局", "avoid"),
-        ("先不布局", "avoid"),
-        ("无需布局", "avoid"),
-        ("无须布局", "avoid"),
+        ("暂不买入", None),
+        ("不要买入", None),
+        ("不宜买入", None),
+        ("先不买入", None),
+        ("无需买入", None),
+        ("无须买入", None),
+        ("不建议建仓", None),
+        ("暂不建仓", None),
+        ("无需建仓", None),
+        ("无须建仓", None),
+        ("不建议布局", None),
+        ("先不布局", None),
+        ("无需布局", None),
+        ("无须布局", None),
         ("no buy", "avoid"),
         ("no need to buy", "avoid"),
         ("need not buy", "avoid"),
@@ -116,8 +120,8 @@ def test_normalize_decision_action_unknown_or_ambiguous_returns_none(value: str 
         ("not to buy", "avoid"),
         ("avoid buying", "avoid"),
         ("avoid buying into weakness", "avoid"),
-        ("不建议加仓", "hold"),
-        ("无须加仓", "hold"),
+        ("不建议加仓", None),
+        ("无须加仓", None),
         ("no add", "hold"),
         ("no need to add", "hold"),
         ("need not add", "hold"),
@@ -126,19 +130,19 @@ def test_normalize_decision_action_unknown_or_ambiguous_returns_none(value: str 
         ("no accumulate", "hold"),
         ("can't accumulate", "hold"),
         ("not to accumulate", "hold"),
-        ("不建议卖出", "hold"),
-        ("无需卖出", "hold"),
-        ("无须卖出", "hold"),
-        ("不要卖出", "hold"),
-        ("暂不卖出", "hold"),
+        ("不建议卖出", None),
+        ("无需卖出", None),
+        ("无须卖出", None),
+        ("不要卖出", None),
+        ("暂不卖出", None),
         ("no sell", "hold"),
         ("no need to sell", "hold"),
         ("cannot sell", "hold"),
         ("can't sell", "hold"),
         ("not a sell yet", "hold"),
         ("not to sell", "hold"),
-        ("无需减仓", "hold"),
-        ("无须减仓", "hold"),
+        ("无需减仓", None),
+        ("无须减仓", None),
         ("no reduce", "hold"),
         ("no need to reduce", "hold"),
         ("cannot reduce", "hold"),
@@ -150,63 +154,67 @@ def test_normalize_decision_action_unknown_or_ambiguous_returns_none(value: str 
         ("avoid selling into weakness", "hold"),
         ("avoid trimming before earnings", "hold"),
         ("avoid reducing exposure before earnings", "hold"),
-        ("不建议清仓", "hold"),
+        ("不建议清仓", None),
     ],
 )
-def test_normalize_decision_action_handles_negated_trade_actions(value: str, expected: str) -> None:
+def test_normalize_decision_action_handles_negated_trade_actions(value: str, expected: str | None) -> None:
     assert normalize_decision_action(value) == expected
 
 
 @pytest.mark.parametrize(
-    "advice",
+    ("advice", "expected_action", "expected_label"),
     [
-        "无需买入，等待确认",
-        "无须建仓，继续观察",
-        "无需布局，等待突破",
-        "no buy until breakout",
-        "no need to buy before confirmation",
-        "cannot buy before confirmation",
-        "can't buy before confirmation",
-        "not a buy yet",
-        "not to buy",
+        ("无需买入，等待确认", None, None),
+        ("无须建仓，继续观察", None, None),
+        ("无需布局，等待突破", None, None),
+        ("no buy until breakout", "avoid", "回避"),
+        ("no need to buy before confirmation", "avoid", "回避"),
+        ("cannot buy before confirmation", "avoid", "回避"),
+        ("can't buy before confirmation", "avoid", "回避"),
+        ("not a buy yet", "avoid", "回避"),
+        ("not to buy", "avoid", "回避"),
     ],
 )
-def test_build_action_fields_prioritizes_negated_buy_advice_over_embedded_buy_phrase(advice: str) -> None:
+def test_build_action_fields_prioritizes_negated_buy_advice_over_embedded_buy_phrase(
+    advice: str, expected_action: str | None, expected_label: str | None,
+) -> None:
     assert build_action_fields(operation_advice=advice) == {
-        "action": "avoid",
-        "action_label": "回避",
+        "action": expected_action,
+        "action_label": expected_label,
     }
 
 
 @pytest.mark.parametrize(
-    "advice",
+    ("advice", "expected_action", "expected_label"),
     [
-        "无须加仓，维持仓位",
-        "无需卖出，继续持有",
-        "无须减仓，等待确认",
-        "no add before confirmation",
-        "cannot add before confirmation",
-        "no need to accumulate here",
-        "can't accumulate here",
-        "no sell before earnings",
-        "cannot sell before earnings",
-        "no need to reduce exposure",
-        "can't reduce exposure",
-        "no trim while trend holds",
-        "cannot trim while trend holds",
-        "not a sell yet",
-        "not a trim yet",
-        "not to sell",
-        "not to trim",
-        "avoid selling into weakness",
-        "avoid trimming before earnings",
-        "avoid reducing exposure before earnings",
+        ("无须加仓，维持仓位", None, None),
+        ("无需卖出，继续持有", None, None),
+        ("无须减仓，等待确认", None, None),
+        ("no add before confirmation", "hold", "持有"),
+        ("cannot add before confirmation", "hold", "持有"),
+        ("no need to accumulate here", "hold", "持有"),
+        ("can't accumulate here", "hold", "持有"),
+        ("no sell before earnings", "hold", "持有"),
+        ("cannot sell before earnings", "hold", "持有"),
+        ("no need to reduce exposure", "hold", "持有"),
+        ("can't reduce exposure", "hold", "持有"),
+        ("no trim while trend holds", "hold", "持有"),
+        ("cannot trim while trend holds", "hold", "持有"),
+        ("not a sell yet", "hold", "持有"),
+        ("not a trim yet", "hold", "持有"),
+        ("not to sell", "hold", "持有"),
+        ("not to trim", "hold", "持有"),
+        ("avoid selling into weakness", "hold", "持有"),
+        ("avoid trimming before earnings", "hold", "持有"),
+        ("avoid reducing exposure before earnings", "hold", "持有"),
     ],
 )
-def test_build_action_fields_prioritizes_negated_hold_advice_over_embedded_trade_phrase(advice: str) -> None:
+def test_build_action_fields_prioritizes_negated_hold_advice_over_embedded_trade_phrase(
+    advice: str, expected_action: str | None, expected_label: str | None,
+) -> None:
     assert build_action_fields(operation_advice=advice) == {
-        "action": "hold",
-        "action_label": "持有",
+        "action": expected_action,
+        "action_label": expected_label,
     }
 
 
@@ -453,31 +461,31 @@ def test_display_helpers_preserve_neutral_action_when_guardrail_was_applied() ->
         ("迴避", "avoid"),
         ("風險預警", "alert"),
         ("觸發告警", "alert"),
-        # 否定片語仍要贏過裡面的動作詞
-        ("不建議買入", "avoid"),
-        ("暫不買入", "avoid"),
-        ("不宜買入", "avoid"),
-        ("無須買入", "avoid"),
-        ("暫不佈局", "avoid"),
-        ("無須建倉", "avoid"),
-        ("暫不加倉", "hold"),
-        ("無須加倉", "hold"),
-        ("不建議加倉", "hold"),
-        ("不建議賣出", "hold"),
-        ("暫不減倉", "hold"),
-        ("無須清倉", "hold"),
-        ("無需加倉", "hold"),
-        ("無需減倉", "hold"),
-        ("不建議減倉", "hold"),
-        ("不建議清倉", "hold"),
-        ("暫不清倉", "hold"),
-        ("不建議佈局", "avoid"),
-        ("無需佈局", "avoid"),
-        ("不建議建倉", "avoid"),
-        ("暫不建倉", "avoid"),
+        # 否定建議保守回傳未知，不推算交易方向
+        ("不建議買入", None),
+        ("暫不買入", None),
+        ("不宜買入", None),
+        ("無須買入", None),
+        ("暫不佈局", None),
+        ("無須建倉", None),
+        ("暫不加倉", None),
+        ("無須加倉", None),
+        ("不建議加倉", None),
+        ("不建議賣出", None),
+        ("暫不減倉", None),
+        ("無須清倉", None),
+        ("無需加倉", None),
+        ("無需減倉", None),
+        ("不建議減倉", None),
+        ("不建議清倉", None),
+        ("暫不清倉", None),
+        ("不建議佈局", None),
+        ("無需佈局", None),
+        ("不建議建倉", None),
+        ("暫不建倉", None),
     ],
 )
-def test_normalize_decision_action_traditional_chinese(value: str, expected: str) -> None:
+def test_normalize_decision_action_traditional_chinese(value: str, expected: str | None) -> None:
     assert normalize_decision_action(value) == expected
 
 
@@ -515,3 +523,92 @@ def test_build_action_fields_traditional_advice_for_zh_tw_report() -> None:
     fields = build_action_fields(operation_advice="觀望", report_language="zh-TW")
 
     assert fields == {"action": "watch", "action_label": "觀望"}
+
+
+@pytest.mark.parametrize("value", [
+    "不建議現在買入", "不建议现在买入",
+    "暫不加碼，建議賣出", "暂不加码，建议卖出",
+    "沒有不買入的理由", "没有不买入的理由",
+    "不買入，觸發告警及減倉", "不买入，触发告警及减仓",
+    "不建議買入", "不建议买入", "不賣出", "不卖出",
+    "暫無買入點", "暂无买入点", "禁止買入", "禁止买入",
+    "不應買入", "不应买入",
+])
+def test_chinese_negated_advice_is_unknown_before_any_action_matching(value: str) -> None:
+    assert normalize_decision_action(value) is None
+    assert build_action_fields(operation_advice=value) == {"action": None, "action_label": None}
+
+
+@pytest.mark.parametrize("negation", [
+    "不", "別", "别", "勿", "莫", "未", "沒", "没", "無", "无",
+    "暫不", "暂不", "不宜", "不要", "不建議", "不建议", "避免", "禁止", "切勿", "停止",
+])
+def test_chinese_negation_tokens_make_nearby_actions_unknown(negation: str) -> None:
+    assert normalize_decision_action(f"{negation}現在買入") is None
+
+
+@pytest.mark.parametrize("action_word", [
+    "買入", "賣出", "加倉", "加碼", "增持", "減倉", "減碼", "清倉", "建倉", "佈局",
+    "持有", "洗盤觀察", "觀望", "等待", "回避", "規避", "風險預警", "觸發告警", "警惕",
+    "买入", "卖出", "加仓", "加码", "减仓", "减码", "清仓", "建仓", "布局",
+    "洗盘观察", "观望", "规避", "风险预警", "触发告警",
+])
+def test_chinese_negation_covers_every_action_word_before_other_advice(action_word: str) -> None:
+    assert normalize_decision_action(f"暫不{action_word}") is None
+    assert normalize_decision_action(f"暫不{action_word}，建議買入") is None
+
+
+@pytest.mark.parametrize(("value", "expected"), [
+    ("不經過完整評估買入", None),
+    ("不經過完整評估後買入", "buy"),
+    ("買入後不追高", "buy"),
+    ("賣出後暫不追高", "sell"),
+    ("買入", "buy"), ("买入", "buy"),
+    ("賣出", "sell"), ("卖出", "sell"),
+    ("減倉", "reduce"), ("减仓", "reduce"),
+    ("加倉", "add"), ("加仓", "add"),
+    ("加碼", None), ("加码", None),
+])
+def test_chinese_negation_window_preserves_existing_affirmative_behavior(
+    value: str, expected: str | None,
+) -> None:
+    assert normalize_decision_action(value) == expected
+
+
+@pytest.mark.parametrize("explicit_action", [None, "hold", "reduce"])
+def test_chinese_negated_advice_preserves_structured_action_and_legacy_fallback(explicit_action: str | None) -> None:
+    result = type("Result", (), {
+        "operation_advice": "不建議現在買入", "action": explicit_action,
+        "decision_type": "hold", "sentiment_score": 50, "report_language": "zh-TW",
+    })()
+    assert display_action_fields_for_result(result)["action"] == explicit_action
+    assert display_decision_type_for_result(result) == ("sell" if explicit_action == "reduce" else "hold")
+
+
+# 否定詞與動作詞須在同一子句（逗號、句號、換行為界），以下寫法同樣回未知
+@pytest.mark.parametrize("value", [
+    "不买入", "別急著賣出", "切勿追高買進", "暫不進場", "暫緩加倉",
+    "不要等待", "無需回避", "无需卖出，继续持有", "無須減倉，等待確認",
+])
+def test_chinese_negation_more_forms_are_unknown(value: str) -> None:
+    assert normalize_decision_action(value) is None
+
+
+# 反向檢查：否定詞在另一個子句、離動作詞超過 6 字、或屬於「未來／無論／不斷」等非否定詞，維持原判
+@pytest.mark.parametrize(("value", "expected"), [
+    ("持有", "hold"), ("觀望", "watch"), ("回避", "avoid"),
+    ("跌幅不大，建議買入", "buy"),
+    ("跌幅不大，建议买入", "buy"),
+    ("趨勢不變，繼續持有", "hold"),
+    ("不追高，等待回檔", "watch"),
+    ("切勿追高，建議減倉", "reduce"),
+    ("量能不足以支撐突破後再追價，持有", "hold"),
+    ("不只是短線題材而已的標的買入", "buy"),
+    ("未來可逢低買入", "buy"),
+    ("未來看好，建議買入", "buy"),
+    ("無論如何先持有", "hold"),
+    ("不斷走強，建議加倉", "add"),
+    ("跌幅不大\n建議買入", "buy"),
+])
+def test_chinese_negation_is_clause_bound_and_skips_non_negating_words(value: str, expected: str) -> None:
+    assert normalize_decision_action(value) == expected

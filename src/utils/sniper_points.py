@@ -14,7 +14,7 @@ SNIPER_KEYS = ("ideal_buy", "secondary_buy", "stop_loss", "take_profit")
 _END = r"(?:[。；;，,（(]|$)"
 _NOT_SET_RE = re.compile(
     r"^\s*(?:[^：:\d]{0,10}[：:])?\s*(?:目前|現在|现在|現階段|现阶段)?\s*"
-    # 「觀望，暫不設定」「目前空頭排列，不設主動買點」：逗號在解析前已被濾掉，所以前綴直接接上
+    # 「觀望，暫不設定」「目前空頭排列，不設主動買點」：前綴可接逗號或直接接未設定用語。
     r"(?:(?:[觀观]望|空[頭头]排列)[，,、]?\s*)?(?:"
     r"[暫暂]?不(?:設定|设定|設置|设置|設|设|給|给|提供|[買买]|進場|进场|入場|入场)"
     r"|[暫暂]?不(?:建議|建议)(?:[買买進进入]|做多|" + _END + r")"
@@ -24,7 +24,7 @@ _NOT_SET_RE = re.compile(
     r"|[暫暂]不(?:適用|适用)"
     r"|(?:[暫暂](?:時|时)?)?(?:不成立|[從从]缺)"
     r"|(?:尚[無无]|未出[現现])(?:理想|明[確确]|次[優优]|[買买]|[價价]位)"
-    r"|[無无](?:理想|" + _END + r")"
+    r"|[無无](?:理想|明[確确][買买][點点]|" + _END + r")"
     r"|[暫暂](?:時|时)?[無无](?:[買买]|[價价]位|理想|明[確确]|次[優优]|進場|进场|建議|建议|" + _END + r")"
     r"|N/A)",
     re.IGNORECASE,
@@ -95,23 +95,25 @@ def parse_sniper_value(value: Any, field: Optional[str] = None) -> Optional[floa
         parsed = float(value)
         return parsed if parsed > 0 else None
 
-    text = str(value).replace(",", "").replace("，", "").strip()
+    text = str(value).strip()
     if not text or text in {"-", "—", "N/A"}:
         return None
     # Neutralise numeric ratios like "1:1" so they are not taken as a field-label colon;
     # "MA5：118" style (letter before the number) keeps its colon.
     text = _RATIO_RE.sub(r"\1比\2", text)
+    numeric_text = text.replace(",", "").replace("，", "")
 
     try:
-        parsed = float(text)
+        parsed = float(numeric_text)
         return parsed if parsed > 0 else None
     except ValueError:
         pass
 
     sell_field = field in ("stop_loss", "take_profit")
+    # 未設定判斷保留句界逗號，數字解析才移除千分位逗號。
     not_set = (_SELL_NOT_SET_RE if sell_field else _NOT_SET_RE).search(text)
     if not_set:
-        rest = text[not_set.end():]
+        rest = text[not_set.end():].replace(",", "").replace("，", "")
         if not sell_field:
             action = _BUY_ACTION_RE.search(rest)
             return float(action.group(1)) if action and float(action.group(1)) > 0 else None
@@ -121,6 +123,7 @@ def parse_sniper_value(value: Any, field: Optional[str] = None) -> Optional[floa
         parsed = float(action.group(1) or action.group(2))
         return parsed if parsed > 0 else None
 
+    text = numeric_text
     # 條件式進場句才取該欄位自己的第一個錨點（買點欄位不走這條）
     anchor_re = _FIELD_ANCHOR_RE.get(field or "")
     if anchor_re:

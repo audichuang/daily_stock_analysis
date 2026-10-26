@@ -109,6 +109,7 @@ _ACTION_PHRASES: Dict[DecisionAction, tuple[str, ...]] = {
     ),
 }
 
+# 中文否定已由 _has_zh_negated_action 先一步回 None，表內中文條目已不會命中，只有英文條目仍在作用。
 _NEGATED_ACTION_PHRASES: Dict[DecisionAction, tuple[str, ...]] = {
     "avoid": (
         "暂不买入",
@@ -235,6 +236,40 @@ _ENGLISH_AVOIDED_HOLD_ACTION_TERMS = ("adding", "accumulating", "selling", "redu
 _ENGLISH_DEFERRED_ACTION_TERMS = ("buy", "add", "accumulate", "sell", "reduce", "trim")
 _FINANCIAL_COMPOUND_SENTINEL = "financialcompound"
 
+# 中文否定一律保守處理：不解析否定文法（「不建議現在買入」「沒有不買入的理由」「暫不加碼，建議賣出」
+# 這類句子先前被片語表判成相反方向），只要同一子句內、動作詞前 6 字以內出現否定詞就回 None，
+# 由呼叫端退回結構化 decision_type 或既有預設。比對的是繁轉簡後的文字，折疊表有的字只列簡體。
+_ZH_NEGATION_TOKENS = (
+    "避免", "禁止", "切勿", "停止", "暂缓", "暂緩",
+    "不", "别", "勿", "莫", "未", "没", "无",
+)
+# 「未來」「無論／不論／不管」「不斷」不是否定，排除以免把一般敘述也判成未知
+_ZH_NEGATION_EXCLUDED_COMPOUNDS = (
+    "未来", "无论", "不论", "不管", "不断",
+    # 「來／論／斷」不在共用折疊表，繁體寫法另列
+    "未來", "无論", "不論", "不斷",
+)
+_ZH_ACTION_WORDS = (
+    "买", "卖", "加仓", "加码", "增持", "减仓", "减码", "减持",
+    "清仓", "建仓", "布局", "持有", "观望",
+    # 片語表其他中文動作（洗盘观察→hold、等待→watch、回避／规避→avoid、预警／告警／警惕→alert）被否定時同樣回未知
+    "洗盘观察", "等待", "回避", "规避", "预警", "告警", "警惕",
+    # 「場」不在共用折疊表，兩種寫法都列
+    "进场", "进場", "出场", "出場",
+)
+_ZH_NEGATION_WINDOW = 6
+_ZH_NEGATED_ACTION_RE = re.compile(
+    "(?:" + "|".join(re.escape(token) for token in _ZH_NEGATION_TOKENS) + ")"
+    + rf"[^，。；;,.!?！？\n]{{0,{_ZH_NEGATION_WINDOW}}}?"
+    + "(?:" + "|".join(re.escape(word) for word in _ZH_ACTION_WORDS) + ")"
+)
+_ZH_NEGATION_EXCLUDED_RE = re.compile("|".join(re.escape(word) for word in _ZH_NEGATION_EXCLUDED_COMPOUNDS))
+
+
+def _has_zh_negated_action(text: str) -> bool:
+    masked = _ZH_NEGATION_EXCLUDED_RE.sub(lambda m: "_" * len(m.group(0)), text)
+    return bool(_ZH_NEGATED_ACTION_RE.search(masked))
+
 
 def _normalize_key(value: Any) -> str:
     # 片語表都是簡體；zh-TW 建議（「觀望」「不建議買入」）先逐字折成簡體再比對，
@@ -323,6 +358,8 @@ def normalize_decision_action(value: Any) -> Optional[DecisionAction]:
         return None
 
     if _has_english_deferred_action(text):
+        return None
+    if _has_zh_negated_action(text):
         return None
 
     negated_matches: set[DecisionAction] = set()
