@@ -70,6 +70,9 @@ class MarketIndex(Base):
 
     index_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     date: Mapped[_date] = mapped_column(Date, primary_key=True)
+    open: Mapped[float | None] = mapped_column(Numeric(14, 2))
+    high: Mapped[float | None] = mapped_column(Numeric(14, 2))
+    low: Mapped[float | None] = mapped_column(Numeric(14, 2))
     close: Mapped[float | None] = mapped_column(Numeric(14, 2))
     change: Mapped[float | None] = mapped_column(Numeric(14, 2))
     turnover: Mapped[int | None] = mapped_column(BigInteger)  # 市場成交金額

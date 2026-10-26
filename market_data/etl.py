@@ -130,14 +130,18 @@ def transform_valuation(rows):
 
 
 def transform_index(rows):
-    """FMTQIK JSON -> market_index (加權指數 TAIEX + 成交金額)."""
+    """FMTQIK／MI_5MINS_HIST -> market_index；缺少的互補欄位留 NULL。"""
     df = pd.DataFrame(rows)
+
+    def num(name):
+        raw = df[name] if name in df else pd.Series(index=df.index, dtype=object)
+        return pd.to_numeric(raw.astype(str).str.replace(",", ""), errors="coerce")
+
     out = pd.DataFrame({
         "index_id": "TAIEX",
         "date": pd.to_datetime(df["Date"].map(_roc_yyyymmdd)),
-        "close": pd.to_numeric(df["TAIEX"].astype(str).str.replace(",", ""), errors="coerce"),
-        "change": pd.to_numeric(df["Change"].astype(str).str.replace(",", ""), errors="coerce"),
-        "turnover": pd.to_numeric(df["TradeValue"].astype(str).str.replace(",", ""), errors="coerce"),
+        "open": num("Open"), "high": num("High"), "low": num("Low"),
+        "close": num("TAIEX"), "change": num("Change"), "turnover": num("TradeValue"),
     })
     return out.set_index(["index_id", "date"])
 

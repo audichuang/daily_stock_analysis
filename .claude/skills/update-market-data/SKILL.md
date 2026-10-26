@@ -36,7 +36,7 @@ uv run --env-file .env python -m market_data.health
   ```
   uv run --env-file .env python -m market_data.cli backfill {price|institutional|margin} --start YYYY-MM-DD --end YYYY-MM-DD
   ```
-  backfill 支援 price/institutional/margin/valuation(valuation 走 BWIBBU_d,回應日期不符請求日會 `**WARN` 拒收);index/stock_info 走 `uv run --env-file .env python -m market_data.cli snapshot`。
+  backfill 支援 price/institutional/margin/valuation(valuation 走 BWIBBU_d,回應日期不符請求日會 `**WARN` 拒收);index/stock_info 走 `uv run --env-file .env python -m market_data.cli snapshot`;index 長區間回補走 `uv run --env-file .env python -m market_data.cli backfill index --start 2010-01-01 --end <今天> --delay 3`(先跑 alembic upgrade;逐月、可 resume,輸出 `index YYYY-MM n rows (price days k)`;有缺月、單一來源或 n 少於 price 交易日時印 `**WARN` 並 exit 1,當月在 FMTQIK 17:00 前未發布也會 exit 1,屬時序不是缺漏)。
 - **health 報 thin days(該日有列但不完整)** → 對那幾天加 `--force` 整日換血:
   `… backfill price --start <該日> --end <該日> --force`(resume 認「有列即完成」,不加 --force 補不動)。
 - 區間長(數月以上)→ 一律加 `--delay 3` 並背景執行(會跑數小時);TWSE 密集請求會**靜默**封 IP(stdout 全空像成功),連續零列達門檻 `crawl_range` 會 raise 中止——等封鎖解除後**重跑同指令**即 resume 續補。

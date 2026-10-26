@@ -8,6 +8,7 @@ fetch directly (like ``crawler.py``); a proxy pool is only used for dev probing.
 
 import datetime
 import json
+import math
 import re
 from io import StringIO
 
@@ -758,6 +759,65 @@ def parse_index_report(payload):
     return rows
 
 
+def _index_month_rows(rows, asof, label):
+    """只信每列自帶日期；外層 date 可能只是回顯查詢參數，不能證明資料月份。"""
+    for row in rows or ():
+        raw = str(row.get("Date") or "").strip()
+        try:
+            if not re.fullmatch(r"\d{7}", raw):
+                raise ValueError("missing or invalid row date")
+            day = datetime.date(int(raw[:3]) + 1911, int(raw[3:5]), int(raw[5:]))
+            if (day.year, day.month) != (asof.year, asof.month):
+                raise ValueError(f"row date {day} outside requested month")
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise ValueError(f"{label} {asof:%Y-%m}: {exc}") from exc
+    return rows
+
+
+def parse_index_ohlc_report(payload, asof):
+    """MI_5MINS_HIST 月表 -> 既有指數 ETL 格式；欄名、列日期、OHLC 任一不可信就拒收。"""
+    fields = payload.get("fields") or []
+    idx = {name: i for i, name in enumerate(fields)}
+    mapping = {"開盤指數": "Open", "最高指數": "High", "最低指數": "Low", "收盤指數": "TAIEX"}
+    if not all(name in idx for name in ("日期", *mapping)):
+        raise ValueError(f"MI_5MINS_HIST 欄位不符預期: {fields}")
+    rows = []
+    for raw in payload.get("data") or []:
+        day = _roc_slash_to_date(raw[idx["日期"]])
+        row = {"Date": f"{day.year - 1911:03d}{day.month:02d}{day.day:02d}"}
+        for name, key in mapping.items():
+            row[key] = raw[idx[name]]
+        values = {k: float(str(row[k]).replace(",", "")) for k in mapping.values()}
+        if not all(math.isfinite(v) and v > 0 for v in values.values()):
+            raise ValueError("MI_5MINS_HIST OHLC 不是有效正數")
+        if not (values["Low"] <= min(values["Open"], values["TAIEX"])
+                <= max(values["Open"], values["TAIEX"]) <= values["High"]):
+            raise ValueError("MI_5MINS_HIST OHLC 高低範圍不符")
+        rows.append(row)
+    return _index_month_rows(rows, asof, "MI_5MINS_HIST")
+
+
+def fetch_index_ohlc(asof):
+    """帶日期的 TAIEX 月 OHLC，自 2010-01 起可回補；失敗回 None，不以當月資料冒充。"""
+    try:
+        response = requests_get(
+            "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST",
+            params={"date": asof.strftime("%Y%m%d"), "response": "json"},
+            headers={"User-Agent": _UA},
+        )
+        if response is not None:
+            payload = response.json()
+            if payload.get("stat") == "OK":
+                rows = parse_index_ohlc_report(payload, asof)
+                if rows:
+                    return rows
+    except (ValueError, TypeError, IndexError, AttributeError, OverflowError) as exc:
+        print(f"**WARN MI_5MINS_HIST {asof:%Y-%m}: {exc}", flush=True)
+        return None
+    print(f"**WARN MI_5MINS_HIST {asof:%Y-%m}: 無回應或尚無資料", flush=True)
+    return None
+
+
 def fetch_index(asof=None, fallback=True):
     """FMTQIK:加權指數 TAIEX + 市場成交金額(該月整月)。
 
@@ -774,19 +834,24 @@ def fetch_index(asof=None, fallback=True):
         try:
             payload = r.json()
             if payload.get("stat") == "OK":
-                rows = parse_index_report(payload)
+                rows = _index_month_rows(parse_index_report(payload), asof, "FMTQIK")
                 if rows:
                     return rows
-        except (ValueError, TypeError, IndexError):
-            pass
+        except (ValueError, TypeError, IndexError, AttributeError, OverflowError) as exc:
+            # 印出原因:「回應月份不符(停更)」與「尚未發布」在 log 裡要分得開
+            print(f"**WARN: FMTQIK rwd {asof:%Y-%m}: {exc}", flush=True)
     if not fallback:
         print(f"**WARN: FMTQIK {asof:%Y-%m} rwd 失敗或無資料,不走 openapi fallback"
               "(openapi 只給當月,補不了這個月)")
         return None
     # fallback 的 WARN 要帶 url,否則「當日未發布」與「端點改版」在 log 裡長得一樣
     url = "https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK"
-    return _valid_rows(_openapi_json(url),
-                       {"Date", "TAIEX", "Change", "TradeValue"}, url)
+    rows = _valid_rows(_openapi_json(url), {"Date", "TAIEX", "Change", "TradeValue"}, url)
+    try:
+        return _index_month_rows(rows, asof, "FMTQIK openapi")
+    except ValueError as exc:
+        print(f"**WARN: {exc},拒收", flush=True)
+        return None
 
 
 # ---------------------------------------------------------------------------

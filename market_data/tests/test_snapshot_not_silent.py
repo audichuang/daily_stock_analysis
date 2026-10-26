@@ -167,7 +167,7 @@ def index_env(monkeypatch):
 
     monkeypatch.setattr(sources, "fetch_index", fake_fetch)
     monkeypatch.setattr(crawl, "upsert",
-                        lambda conn, table, recs, pk: upserted.extend(r["date"] for r in recs) or len(recs))
+                        lambda conn, table, recs, pk, **kw: upserted.extend(r["date"] for r in recs) or len(recs))
     return calls, upserted
 
 

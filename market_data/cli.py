@@ -4,6 +4,7 @@
     python -m market_data.cli backfill price --start 2010-01-01 --end 2026-07-01
     python -m market_data.cli backfill institutional_tpex --start 2018-01-15 --end 2026-10-21 --delay 3
     python -m market_data.cli snapshot              # valuation + index + stock_info
+    python -m market_data.cli backfill index --start 2010-01-01 --end 2026-10-26 --delay 3  # TAIEX 逐月回補
     python -m market_data.cli funds                 # 境內基金每日淨值
     python -m market_data.cli fund-history 18480065 # 單檔基金歷史淨值
     python -m market_data.cli holding               # 集保股權分散最新一週(全市場)
@@ -42,14 +43,14 @@ def main(argv=None):
     h.add_argument("--strict", action="store_true",
                    help="近期交易日或復權事件有缺口時回傳非零")
     b = sub.add_parser("backfill", help="回補某來源日期區間")
-    b.add_argument("source", choices=list(crawl.DAILY),
+    b.add_argument("source", choices=[*crawl.DAILY, "index"],
                    help="*_tpex 為上櫃;institutional_tpex 自 2018-01-15 起才有資料")
     b.add_argument("--start", required=True)
     b.add_argument("--end", required=True)
     b.add_argument("--force", action="store_true",
-                   help="忽略 resume 並整日換血(先刪該日再寫);修 partial/髒日用")
+                   help="忽略 resume 並整日換血；index 僅更新官方 OHLC，不刪其他欄位")
     b.add_argument("--delay", type=float, default=0.0,
-                   help="每日抓取間隔秒數。長區間回補務必給(建議 3)——TWSE 密集請求會封 IP,"
+                   help="每日（index 為每月）抓取間隔秒數。長區間回補務必給(建議 3)——TWSE 密集請求會封 IP,"
                         "且失敗是靜默的(該日直接跳過不報錯)")
     sub.add_parser("snapshot", help="valuation + index + stock_info 快照")
     sub.add_parser("funds", help="境內基金:公會每日淨值/基本資料 + 已追蹤基金近期補缺")
@@ -101,8 +102,19 @@ def main(argv=None):
         from market_data import health
         raise SystemExit(health.run(eng, strict=args.strict))
     elif args.command == "backfill":
-        crawl.crawl_range(eng, args.source, _dates(args.start, args.end),
-                          resume=not args.force, replace=args.force, delay=args.delay)
+        if args.source == "index":
+            res = crawl.backfill_index(eng, datetime.date.fromisoformat(args.start),
+                                       datetime.date.fromisoformat(args.end),
+                                       resume=not args.force, delay=args.delay)
+            print(f"market_index rows upserted: {res['written']:,}  months fetched: "
+                  f"{res['months']}  skipped (complete): {res['skipped']}", flush=True)
+            if res["failed"] or res["partial"] or res["short"]:
+                print(f"  **抓不到的月份: {res['failed']}  只拿到單一來源: {res['partial']}  "
+                      f"缺日的月份: {sorted(res['short'])}", flush=True)
+                raise SystemExit(1)
+        else:
+            crawl.crawl_range(eng, args.source, _dates(args.start, args.end),
+                              resume=not args.force, replace=args.force, delay=args.delay)
     elif args.command == "snapshot":
         crawl.crawl_snapshots(eng)      # 自己管交易:每步一個,印出即代表已 commit
     elif args.command == "holding":
