@@ -1633,14 +1633,18 @@ class PortfolioService:
         return float(amount), True, FX_FALLBACK_SOURCE
 
     @staticmethod
-    def _is_fx_rate_aged(rate_row: Any, as_of_date: date) -> bool:
-        """匯率日期距 as_of_date 超過 PORTFOLIO_FX_MAX_AGE_DAYS（拿不到日期也算）。"""
-        rate_date = getattr(rate_row, "rate_date", None)
+    def _is_fx_date_aged(rate_date: Any, as_of_date: date) -> bool:
+        """日期距 as_of_date 超過 PORTFOLIO_FX_MAX_AGE_DAYS（拿不到日期也算）。"""
         if isinstance(rate_date, datetime):
             rate_date = rate_date.date()
         if not isinstance(rate_date, date):
             return True
         return (as_of_date - rate_date).days > PORTFOLIO_FX_MAX_AGE_DAYS
+
+    @classmethod
+    def _is_fx_rate_aged(cls, rate_row: Any, as_of_date: date) -> bool:
+        """匯率日期距 as_of_date 超過 PORTFOLIO_FX_MAX_AGE_DAYS（拿不到日期也算）。"""
+        return cls._is_fx_date_aged(getattr(rate_row, "rate_date", None), as_of_date)
 
     def _note_fx_rate_age(self, rate_row: Any, pair: Tuple[str, str], as_of_date: date) -> None:
         """快照估值日的換算用到舊匯率時記下幣別對；回傳的 stale 仍只看寫入時的 is_stale。
@@ -1781,8 +1785,14 @@ class PortfolioService:
                 if closes and closes[-1] == fetched_last:
                     bar_date, last_rate = closes[-1]
                     # 以資料本身的日期判斷年齡；刷新日期不能讓凍結來源重新變新鮮。
-                    if not self._is_fx_rate_aged(SimpleNamespace(rate_date=bar_date), as_of_date):
+                    if not self._is_fx_date_aged(bar_date, as_of_date):
                         rate = last_rate
+                    else:
+                        logger.warning(
+                            "匯率 %s/%s 最新K棒停在 %s，距 %s 超過 %d 天，視為過期",
+                            from_currency, to_currency, bar_date.isoformat(), as_of_date.isoformat(),
+                            PORTFOLIO_FX_MAX_AGE_DAYS,
+                        )
                 # Backfill the bars that passed the filter even when the newest one was rejected, so the
                 # stale carry below starts from the latest accepted value instead of an older stored one.
                 self._backfill_fx_history(

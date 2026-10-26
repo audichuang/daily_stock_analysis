@@ -1896,6 +1896,99 @@ class PortfolioPr2TestCase(unittest.TestCase):
             ps._FX_DEADLINE.reset(token)
         self.assertEqual(out, [(date(2026, 1, 8), 0.2050)])
 
+    # ---- 週末K棒不能當前一個平日的次日開盤 ----
+    def test_fx_fetch_daily_skips_weekend_successor_open(self) -> None:
+        """1h 失敗只剩日K：週五後面接週日K棒（Open 0.1963 垃圾），週五不能拿它當收盤。"""
+        daily = self._ohlc([
+            ("2026-10-22", 0.2040, 0.2041), ("2026-10-23", 0.2041, 0.2042), ("2026-10-25", 0.1963, 0.1963),
+        ])
+        out = dict(self._fetch_with(None, daily, as_of=date(2026, 10, 23)))
+        self.assertAlmostEqual(out[date(2026, 10, 22)], 0.2041)  # 次一個平日（週五）的 Open
+        self.assertAlmostEqual(out[date(2026, 10, 23)], 0.2042)  # 後面只有週末：退回當日 Close
+
+    def test_fx_fetch_daily_weekend_successor_falls_through_to_next_weekday_open(self) -> None:
+        daily = self._ohlc([
+            ("2026-10-23", 0.2041, 0.2042), ("2026-10-25", 0.1963, 0.1963), ("2026-10-26", 0.2045, 0.2046),
+        ])
+        out = dict(self._fetch_with(None, daily, as_of=date(2026, 10, 26)))
+        self.assertAlmostEqual(out[date(2026, 10, 23)], 0.2045)  # 跳過週日，取週一 Open（不是退回週五 Close）
+        self.assertNotIn(date(2026, 10, 25), out)
+
+    # ---- 停更的 Yahoo K棒不能以 as_of_date 存成新鮮匯率 ----
+    def test_fx_refresh_frozen_feed_saves_today_as_stale(self) -> None:
+        frame = self._london_frame([("2026-01-02", 7.01), ("2026-01-05", 7.02)])
+        self._refresh_at_london(frame, date(2026, 1, 9), date(2026, 1, 9))  # 最新K棒 4 天前
+        today = self._fx_row(date(2026, 1, 9))
+        self.assertTrue(bool(today.is_stale))
+        self.assertAlmostEqual(today.rate, 7.02)
+        self.assertFalse(bool(self._fx_row(date(2026, 1, 5)).is_stale))  # K棒本身仍照日期回補
+
+    def test_fx_refresh_monday_with_only_friday_bar_is_still_fresh(self) -> None:
+        frame = self._london_frame([("2026-01-08", 7.03), ("2026-01-09", 7.05)])
+        self._refresh_at_london(frame, date(2026, 1, 12), date(2026, 1, 12))  # 週五→週一 3 天
+        today = self._fx_row(date(2026, 1, 12))
+        self.assertFalse(bool(today.is_stale))
+        self.assertAlmostEqual(today.rate, 7.05)
+
+    # ---- 全數拒收時不能回頭挑同一天存著的垃圾列 ----
+    def test_fx_refresh_all_rejected_skips_stored_auto_row_on_rejected_day(self) -> None:
+        self._seed_fx(date(2026, 1, 8), 7.30, "yfinance", False)
+        self._seed_fx(date(2026, 1, 9), 6.00, "yfinance_backfill", False)  # 先前存進去的週五垃圾
+        frame = self._london_frame([("2026-01-09", 6.00)])
+        self._refresh_at_london(frame, date(2026, 1, 10), date(2026, 1, 10))
+        today = self._fx_row(date(2026, 1, 10))
+        self.assertTrue(bool(today.is_stale))
+        self.assertAlmostEqual(today.rate, 7.30)
+
+    def test_fx_refresh_all_rejected_still_uses_manual_row_on_rejected_day(self) -> None:
+        self._seed_fx(date(2026, 1, 8), 7.30, "yfinance", False)
+        self._seed_fx(date(2026, 1, 9), 6.00, "manual", False)  # 手動輸入的值不跳過
+        frame = self._london_frame([("2026-01-09", 5.00)])
+        self._refresh_at_london(frame, date(2026, 1, 10), date(2026, 1, 10))
+        today = self._fx_row(date(2026, 1, 10))
+        self.assertTrue(bool(today.is_stale))
+        self.assertAlmostEqual(today.rate, 6.00)
+
+    # ---- 逾時被放棄的 yfinance 執行緒數量有上限 ----
+    def test_fx_call_caps_abandoned_hung_workers_and_frees_slots(self) -> None:
+        import threading as _th
+        import time as _t
+
+        import src.services.portfolio_service as ps
+
+        release = _th.Event()
+        entered = []
+
+        def hang(*, timeout):
+            entered.append(1)
+            release.wait(5.0)
+            return "late"
+
+        def call():
+            token = ps._FX_DEADLINE.set(_t.monotonic() + 0.05)
+            try:
+                return ps._fx_call(hang)
+            finally:
+                ps._FX_DEADLINE.reset(token)
+
+        with patch.object(ps, "_FX_IN_FLIGHT", _th.BoundedSemaphore(2)):
+            try:
+                results = [call() for _ in range(5)]
+                self.assertEqual(results, [None] * 5)
+                self.assertEqual(len(entered), 2)  # 只有 2 個執行緒被啟動，其餘直接跳過
+            finally:
+                release.set()
+            deadline = _t.monotonic() + 2.0
+            while _t.monotonic() < deadline and ps._FX_IN_FLIGHT._value < 2:
+                _t.sleep(0.01)
+            # 卡住的執行緒結束後名額歸還，之後的請求照常進行（正常請求不會永久佔名額）
+            token = ps._FX_DEADLINE.set(_t.monotonic() + 1.0)
+            try:
+                for _ in range(3):
+                    self.assertEqual(ps._fx_call(lambda *, timeout: "ok"), "ok")
+            finally:
+                ps._FX_DEADLINE.reset(token)
+
 
 if __name__ == "__main__":
     unittest.main()
