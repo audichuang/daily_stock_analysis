@@ -260,6 +260,26 @@ def test_backfill_merges_real_ohlc_with_fmtqik_change_and_turnover(report, monke
     assert last["change"] is None and last["turnover"] is None   # 必須是 NULL 不是 NaN:Postgres NUMERIC 收 NaN、coalesce 擋不住
 
 
+def test_backfill_prefers_ohlc_close_without_losing_fmtqik_only_dates(net, monkeypatch):
+    """同日收盤不一致時採 OHLC；只有 FMTQIK 的日期仍保留其收盤與互補欄位。"""
+    first, second = date(2010, 1, 4), date(2010, 1, 5)
+    net["days"] = {first, second}
+    ohlc = _ohlc_rows([first])
+    ohlc[0]["TAIEX"] = "8,000.50"
+    monkeypatch.setattr(sources, "fetch_index_ohlc", lambda asof: ohlc)
+
+    res = crawl.backfill_index(Engine(cal=net["days"]), first, second, delay=0)
+
+    assert res["written"] == 2
+    by_day = {r["date"].date(): r for r in net["written"]}
+    assert tuple(float(by_day[first][c]) for c in ("open", "high", "low", "close", "change", "turnover")) == (
+        8000, 8001, 7999, 8000.50, 1.5, 1000)
+    assert float(by_day[second]["close"]) == 8000
+    assert float(by_day[second]["change"]) == 1.5 and float(by_day[second]["turnover"]) == 1000
+    assert all(by_day[second][c] is None for c in ("open", "high", "low"))
+    assert res["short"] == {"2010-01": ["2010-01-05"]}
+
+
 def test_backfill_keeps_dates_only_one_source_has(net, monkeypatch):
     """反向:FMTQIK 有、MI_5MINS_HIST 沒有的日子仍寫入(收盤取 FMTQIK),不因合併被丟掉。"""
     net["days"] = {date(2010, 1, 4)}
@@ -445,6 +465,40 @@ def test_invalid_backfill_bounds_do_not_fetch_or_write(start, end, delay, monkey
 
 
 _CLEAN = {"written": 1, "months": 1, "skipped": 0, "failed": [], "partial": [], "short": {}}
+
+
+@pytest.mark.parametrize("delay_args,pauses", [([], [2.0] * 3), (["--delay", "0"], []),
+                                            (["--delay", "3"], [3.0] * 3)])
+def test_cli_backfill_index_delay_defaults_and_overrides(net, monkeypatch, delay_args, pauses):
+    """跑實際月回補：省略參數沿用函式預設，顯式 0 不被改回預設，跨來源與跨月都等待。"""
+    days = {date(2010, 1, 4), date(2010, 1, 5), date(2010, 2, 1)}
+    net["days"] = days
+    monkeypatch.setattr(cli, "get_engine", lambda: Engine(cal=days))
+
+    cli.main(["backfill", "index", "--start", "2010-01-04", "--end", "2010-02-01", *delay_args])
+
+    assert net["pauses"] == pauses
+    assert net["ohlc"] == [date(2010, 1, 1), date(2010, 2, 1)]
+    assert net["fmtqik"] == [(date(2010, 1, 31), False), (date(2010, 2, 1), False)]
+    assert {r["date"].date() for r in net["written"]} == days
+
+
+@pytest.mark.parametrize("source", list(crawl.DAILY))
+@pytest.mark.parametrize("delay_args,pauses", [([], []), (["--delay", "0"], []),
+                                            (["--delay", "3"], [3.0, 3.0])])
+def test_cli_backfill_daily_delay_defaults_and_overrides(net, monkeypatch, source, delay_args, pauses):
+    """共享 --delay 不應替逐日來源新增等待；明確指定的間隔仍逐日生效。"""
+    days = [date(2010, 1, 4), date(2010, 1, 5)]
+    engine = Engine(cal=days if source != "price" else ())
+    seen = []
+    monkeypatch.setattr(cli, "get_engine", lambda: engine)
+    monkeypatch.setattr(crawl, "crawl_day",
+                        lambda conn, src, day, replace=False: seen.append((src, day, replace)) or 1)
+
+    cli.main(["backfill", source, "--start", "2010-01-04", "--end", "2010-01-05", *delay_args])
+
+    assert seen == [(source, day, False) for day in days]
+    assert net["pauses"] == pauses
 
 
 @pytest.mark.parametrize("force", [False, True])
