@@ -36,6 +36,7 @@ from market_data.adjust import load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
 from market_data import events, risk_flags  # noqa: E402
 from market_data.health import expected_session, session_before, sessions_after  # noqa: E402
+from market_data.revenue_deadline import revenue_as_of  # noqa: E402
 from market_data.tw_official_http import md  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -297,13 +298,15 @@ def load(engine, as_of: pd.Timestamp | None, include_otc_revenue: bool = False):
             mkt = val["market"].fillna("twse") if "market" in val else pd.Series("twse", index=val.index)
             val = val[val["date"] == val.groupby(mkt)["date"].transform("max")]
         val = val.drop(columns=["market"], errors="ignore")
-        # 用 announce_date 設上界:營收在次月才公布,以 revenue_month 篩會提前看到未發布的數字
+        # SQL 只取候選範圍；保鮮期必須在法定期限順延後判斷，不能先用佔位日刪掉。
         rev = pd.read_sql(text(
-            "select stock_id, revenue_month, yoy, mom from market.monthly_revenue "
-            "where announce_date >= :s and announce_date < :e"
-        ), c, params={"s": (as_of - pd.Timedelta(days=REVENUE_STALE_DAYS)).date(),
+            "select stock_id, revenue_month, announce_date, yoy, mom from market.monthly_revenue "
+            "where (revenue_month >= :s OR announce_date >= :s) "
+            "and (announce_date < :e OR announce_date IS NULL)"
+        ), c, params={"s": ((as_of - pd.Timedelta(days=REVENUE_STALE_DAYS)).to_period("M") - 1).start_time.date(),
                       "e": as_of.date()},
-            parse_dates=["revenue_month"])
+            parse_dates=["revenue_month", "announce_date"])
+        rev = revenue_as_of(rev, as_of, stale_days=REVENUE_STALE_DAYS)
         if not include_otc_revenue:
             rev = exclude_otc_revenue(rev)
         info = pd.read_sql(text("select stock_id, name, industry from market.stock_info"), c)

@@ -1,7 +1,7 @@
 """月營收的法定公告申報期限（point-in-time 回測用的「最早可見日」下界）。
 
 `market.monthly_revenue.announce_date` 是佔位值（營收月次月 10 日），不是實際公告日。
-回測讀取端一律以 ``effective_announce_dates`` 取「佔位公告日」與「法定期限」較晚者，
+歷史讀取端一律以 ``effective_announce_dates`` 取「佔位公告日」與「法定期限」較晚者，
 再沿用各自的「公告日之後第一個交易日」語意；DB 既有列不改寫。
 
 期限規則（取較晚者）：
@@ -14,13 +14,16 @@
    https://uanalyze.com.tw/articles/9242343173 ）。
    適用名單會變動（例：玉山金要等合併三商壽後才適用），本模組不追蹤逐家名單，採**保守假設**：
    代號 28xx 全部（含純銀行、票券，對它們只是晚看 5 天，方向安全）加上報導點名但不在
-   28xx 的 5880 合庫金、2207 和泰車。三商投控等其他具保險子公司者若上市，需補進
-   ``_INSURANCE_CLASS_EXTRA``。
+   28xx 的 5880 合庫金、2207 和泰車、2905 三商投控；後續名單異動須同步維護。
+   三商投控適用依據：https://www.twse.com.tw/staticFiles/news/news/tsecnews/8a8216d69c37647f019c4b9838ce0016.pdf
+4. 期限落在休市日，沿用 XTAI 與本機臨時休市清單順延至下一交易日。
 """
 
 import datetime
 
 import pandas as pd
+
+from market_data.health import _xtai_session_checker, sessions_after
 
 # 營收月 → 主管機關全面展延後的期限
 MARKET_WIDE_EXTENSIONS = {pd.Timestamp("2020-01-01"): pd.Timestamp("2020-02-15")}
@@ -29,7 +32,7 @@ INSURANCE_RULE_FROM = pd.Timestamp("2026-01-01")   # 適用的第一個營收月
 INSURANCE_DEADLINE_DAY = 15
 DEFAULT_DEADLINE_DAY = 10
 _INSURANCE_CLASS_PREFIX = "28"
-_INSURANCE_CLASS_EXTRA = frozenset({"5880", "2207"})
+_INSURANCE_CLASS_EXTRA = frozenset({"5880", "2207", "2905"})
 
 
 def _bare(stock_id) -> str:
@@ -47,15 +50,28 @@ def is_insurance_class(stock_id) -> bool:
 
 
 def publication_deadline(stock_id, revenue_month) -> pd.Timestamp:
-    """某檔某營收月的法定公告期限（含展延）。"""
+    """某檔某營收月的法定公告期限（含展延與休市順延），只讀日曆、不連網。"""
     rm = pd.Timestamp(revenue_month).to_period("M").to_timestamp()
+    return _publication_deadline(rm, is_insurance_class(stock_id), _xtai_session_checker(autodetect=False))
+
+
+def _publication_deadline(rm, insurance_class, is_session) -> pd.Timestamp:
+    """純量與批次共用唯一規則；批次按月份與類別去重，避免逐列查日曆。"""
+    if pd.isna(rm):
+        return pd.NaT
     nxt = rm + pd.DateOffset(months=1)
     day = (INSURANCE_DEADLINE_DAY
-           if rm >= INSURANCE_RULE_FROM and is_insurance_class(stock_id)
+           if rm >= INSURANCE_RULE_FROM and insurance_class
            else DEFAULT_DEADLINE_DAY)
     deadline = nxt + pd.DateOffset(days=day - 1)
     ext = MARKET_WIDE_EXTENSIONS.get(rm)
-    return max(deadline, ext) if ext is not None else deadline
+    deadline = max(deadline, ext) if ext is not None else deadline
+    # 從前一天起找下一場，期限本身是交易日時維持當日；不可再多延一場。
+    rolled = (sessions_after(deadline.date() - datetime.timedelta(days=1), 1, is_session=is_session)
+              if is_session is not None else None)
+    if rolled is None:
+        raise ValueError(f"無法確認月營收期限的台股交易日：{deadline.date()}")
+    return pd.Timestamp(rolled)
 
 
 def publication_deadline_date(stock_id, year: int, month: int) -> datetime.date:
@@ -68,23 +84,20 @@ def effective_announce_dates(stock_id: pd.Series, announce: pd.Series,
 
     ``revenue_month`` 缺席時由公告日推回「前一個月」——DB 公告日一律落在營收月的次月
     （佔位 10 日或展延後日期）；若推錯成更晚的月份，結果只會更晚（保守方向）。
-    公告日為 NaT 的列維持 NaT。
+    公告日為 NaT 但有營收月時採法定期限；兩者皆缺才維持 NaT，避免 NULL 繞過歷史上界。
     """
     ann = pd.to_datetime(announce)
     if revenue_month is None:
         rm = (ann.dt.to_period("M") - 1).dt.to_timestamp()
     else:
         rm = pd.to_datetime(revenue_month)
-    # 向量化版的 publication_deadline（回測一次讀十幾萬列，逐列算要數秒）
     rm = rm.dt.to_period("M").dt.to_timestamp()
     sid = pd.Series(list(stock_id), index=ann.index)
-    ins = sid.map(is_insurance_class) & (rm >= INSURANCE_RULE_FROM)
-    days = pd.to_timedelta(ins.map({True: INSURANCE_DEADLINE_DAY - 1,
-                                    False: DEFAULT_DEADLINE_DAY - 1}), unit="D")
-    dl = rm + pd.DateOffset(months=1) + days
-    ext = rm.map(MARKET_WIDE_EXTENSIONS)
-    dl = pd.concat([dl, ext], axis=1).max(axis=1).where(rm.notna()).astype(ann.dtype)
-    return ann.where(ann.isna() | dl.isna() | (ann >= dl), dl)
+    keys = list(zip(rm, sid.map(is_insurance_class)))
+    checker = _xtai_session_checker(autodetect=False)
+    deadlines = {key: _publication_deadline(*key, checker) for key in set(keys)}
+    dl = pd.Series([deadlines[key] for key in keys], index=ann.index, dtype=ann.dtype)
+    return ann.where(dl.isna() | (ann >= dl), dl)
 
 
 def apply_revenue_deadline(df: pd.DataFrame, date_col: str = "date",
@@ -96,3 +109,16 @@ def apply_revenue_deadline(df: pd.DataFrame, date_col: str = "date",
     rm = out[revenue_month_col] if revenue_month_col in out else None
     out[date_col] = effective_announce_dates(out["stock_id"], out[date_col], rm)
     return out
+
+
+def revenue_as_of(df: pd.DataFrame, as_of, date_col: str = "announce_date",
+                  stale_days: int = None) -> pd.DataFrame:
+    """以共用有效公告日篩選歷史可見列；當天公告保守視為盤後，保鮮期按曆日計。"""
+    out = apply_revenue_deadline(df, date_col=date_col)
+    if out.empty:
+        return out
+    cutoff = pd.Timestamp(as_of).normalize()
+    visible = out[date_col] < cutoff
+    if stale_days is not None:
+        visible &= out[date_col] >= cutoff - pd.Timedelta(days=stale_days)
+    return out.loc[visible].copy()

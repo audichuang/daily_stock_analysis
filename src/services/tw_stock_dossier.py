@@ -25,6 +25,7 @@ from data_provider.tw_margin_trend import compute_margin_trend
 from market_data import market_repo
 from market_data.db import get_engine
 from market_data.financial_statement import afterIFRS
+from market_data.revenue_deadline import revenue_as_of
 from src.services.market_symbol_utils import split_suffix_symbol
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,9 @@ def _quarter_label(d):
 def fundamentals(engine, sid, as_of):
     rev = _sql(engine, "SELECT revenue_month, revenue, yoy, announce_date FROM market.monthly_revenue "
                        "WHERE stock_id = :s AND (announce_date IS NULL OR announce_date <= :d) "
+                       "AND revenue_month < :d "
                        "ORDER BY revenue_month DESC LIMIT 36", s=sid, d=as_of)
+    rev = revenue_as_of(rev.assign(stock_id=sid), as_of)
     by_month = {(r.revenue_month.year, r.revenue_month.month): r.revenue for r in rev.itertuples()}
     months = [{"month": f"{r.revenue_month:%Y-%m}",
                "revenue_k": None if pd.isna(r.revenue) else int(r.revenue),
