@@ -3,20 +3,32 @@
 from __future__ import annotations
 
 import sys
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
+
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import measure_revenue_momentum as revmom  # noqa: E402
 from measure_revenue_momentum import (  # noqa: E402
+    FLAGS,
     candidate_yoy_frame,
     correct_pit_dates,
     effective_announce,
+    fmt_row,
     month_diffs,
+    pit_revenue_panel,
+    pool_exit_rows,
     revenue_features,
 )
 
@@ -135,3 +147,143 @@ def test_correct_pit_dates_moves_2026_financial_stock_to_15th():
         pd.Timestamp("2026-02-23"),
         pd.Timestamp("2025-12-10"),
     ]
+
+
+def _exit_inputs(releases):
+    days = pd.bdate_range("2026-04-01", periods=60)
+    cols = pd.Index(["2330.TW", "2454.TW", "00631L.TW"])
+    open_ = pd.DataFrame(
+        np.arange(len(days) * len(cols)).reshape(len(days), len(cols)) + 100.0,
+        index=days, columns=cols,
+    )
+    piv = {"open": open_, "close": open_ + 10.0}
+    feat = pd.DataFrame(releases, columns=["stock_id", "announce_date", "flag"])
+    feat["announce_date"] = pd.to_datetime(feat["announce_date"])
+    panels = {f: pit_revenue_panel(
+        feat.rename(columns={"announce_date": "date", "flag": "yoy"}).dropna(), days, cols,
+    ) for f in FLAGS}
+    panels["_ann"] = feat.set_index("stock_id")["announce_date"].dropna()
+    return panels, piv
+
+
+def test_pool_exit_rows_uses_only_held_stocks_own_releases():
+    panels, piv = _exit_inputs([
+        ("2330.TW", "2026-04-10", 1.0),
+        ("2454.TW", "2026-04-15", 0.0),
+        ("2454.TW", None, 0.0),
+    ])
+    ev = pd.DataFrame({"ti": [0, 0, 0], "stock_id": piv["close"].columns})
+
+    out = pool_exit_rows(ev, panels, piv, 40, SimpleNamespace())
+
+    assert out["stock_id"].tolist() == ["2330.TW", "2454.TW"]
+    assert out["month"].tolist() == [pd.Timestamp("2026-04-01")] * 2
+    for row, sid, entry in zip(out.itertuples(), ["2330.TW", "2454.TW"],
+                               ["2026-04-14", "2026-04-17"]):
+        assert row.r == pytest.approx(piv["close"].iloc[40][sid] / piv["open"].loc[entry, sid] - 1)
+        assert all(getattr(row, f) == float(sid == "2330.TW") for f in FLAGS)
+
+
+def test_pool_exit_rows_deduplicates_visible_day_but_keeps_genuine_releases():
+    panels, piv = _exit_inputs([
+        ("2330.TW", "2026-04-10", 1.0),
+        ("2330.TW", "2026-04-10", 1.0),
+        ("2330.TW", "2026-04-11", 1.0),  # 週末公告與週五公告同在週一可見
+        ("2330.TW", "2026-04-20", 1.0),  # 同月、同旗標，仍是新的公布
+        ("2330.TW", "2026-05-15", 0.0),
+        ("2454.TW", "2026-04-20", 0.0),  # 同日的另一檔也必須保留
+    ])
+    ev = pd.DataFrame({"ti": [0, 0], "stock_id": ["2330.TW", "2454.TW"]})
+
+    out = pool_exit_rows(ev, panels, piv, 40, SimpleNamespace())
+
+    assert out["stock_id"].tolist() == ["2330.TW"] * 3 + ["2454.TW"]
+    assert out["month"].tolist() == pd.to_datetime([
+        "2026-04-01", "2026-04-01", "2026-05-01", "2026-04-01",
+    ]).tolist()
+    for f in FLAGS:
+        assert out[f].tolist() == [1.0, 1.0, 0.0, 0.0]
+    entries = ["2026-04-14", "2026-04-22", "2026-05-19", "2026-04-22"]
+    expected = [piv["close"].iloc[40][sid] / piv["open"].loc[d, sid] - 1
+                for sid, d in zip(out["stock_id"], entries)]
+    assert out["r"].tolist() == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("releases", [
+    [("2454.TW", "2026-04-15", 0.0)],
+    [("2330.TW", None, 1.0)],
+    [("2330.TW", "2026-03-30", 1.0), ("2330.TW", "2026-05-26", 0.0),
+     ("2330.TW", "2026-07-01", 1.0)],
+])
+def test_pool_exit_rows_with_no_eligible_own_release_can_still_be_summarized(releases):
+    panels, piv = _exit_inputs(releases)
+    ev = pd.DataFrame({"ti": [0], "stock_id": ["2330.TW"]})
+
+    out = pool_exit_rows(ev, panels, piv, 40, SimpleNamespace())
+
+    assert out.empty
+    assert list(out.columns) == ["stock_id", "month", "r", *FLAGS]
+    for f in FLAGS:
+        summary = fmt_row("持有中", out, f, pd.DatetimeIndex([]), SimpleNamespace(bootstrap=0))
+        assert summary["n旗標"] == summary["n無"] == summary["月數"] == 0
+        assert summary["判定"] == "inconclusive"
+
+
+def test_main_retains_stock_identity_for_exit_release_dates(monkeypatch):
+    days = pd.bdate_range("2026-04-01", periods=60)
+    cols = pd.Index(["2330", "2454"])
+    prices = pd.DataFrame(100.0, index=days, columns=cols)
+    piv = {k: prices.copy() for k in ("open", "high", "close", "volume", "turnover")}
+    rv = pd.concat([
+        _rv([100] * 6, [40, 40, 40, 20, 30, 40], start="2025-12-01", sid=s)
+        for s in cols
+    ], ignore_index=True)
+    rv.loc[rv["stock_id"] == "2454", "announce_date"] += pd.Timedelta(days=5)
+    sig = pd.DataFrame(False, index=days, columns=cols)
+    sig.iloc[0] = True
+    monkeypatch.setattr(revmom, "database_url", lambda: "unused")
+    engine = SimpleNamespace(connect=lambda: nullcontext(object()))
+    monkeypatch.setattr(revmom, "create_engine", lambda *args, **kwargs: engine)
+    monkeypatch.setattr(revmom, "load", lambda *args: (piv, None, None))
+    monkeypatch.setattr(revmom.pd, "read_sql", lambda *args, **kwargs: rv.copy())
+    monkeypatch.setattr(revmom, "build_signals", lambda *args: (
+        sig, {"liquid": pd.DataFrame(True, index=days, columns=cols)},
+    ))
+    actual_pool_exit_rows = revmom.pool_exit_rows
+    observed = []
+
+    def capture_exit_rows(*args):
+        out = actual_pool_exit_rows(*args)
+        observed.append(out)
+        return out
+
+    monkeypatch.setattr(revmom, "pool_exit_rows", capture_exit_rows)
+
+    assert revmom.main([
+        "--start", "2026-03-31", "--end", "2026-06-23", "--horizons", "5",
+        "--pool-hold", "40", "--bootstrap", "0",
+    ]) == 0
+    assert len(observed) == 1
+    assert observed[0]["stock_id"].value_counts().to_dict() == {"2330": 2, "2454": 2}
+
+
+def test_pool_exit_rows_reads_flag_at_own_visible_day_not_other_stocks():
+    """旗標面板值＝列號，可追出每列讀的是哪個可見日；別檔公告日不能替持股多生一列。"""
+    idx = pd.bdate_range("2020-03-02", periods=30)
+    cols = pd.Index(["2330.TW", "2454.TW"])
+    rown = np.arange(len(idx), dtype=float)[:, None].repeat(len(cols), axis=1)
+    piv = {"open": pd.DataFrame(rown + 10, index=idx, columns=cols),
+           "close": pd.DataFrame(rown + 20, index=idx, columns=cols)}
+    panels = {f: pd.DataFrame(rown, index=idx, columns=cols) for f in FLAGS}
+    # 2330：第 5、12 列公告；2454 在第 8 列公告；2330 第 25 列公告已超過出場日
+    panels["_ann"] = pd.Series([idx[5], idx[12], idx[8], idx[25]],
+                               index=["2330.TW", "2330.TW", "2454.TW", "2330.TW"])
+    ev = pd.DataFrame({"ti": [2], "stock_id": ["2330.TW"]})
+
+    out = pool_exit_rows(ev, panels, piv, 20, SimpleNamespace())  # 出場列 22
+
+    assert (out["stock_id"] == "2330.TW").all()
+    for f in FLAGS:
+        assert out[f].tolist() == [6.0, 13.0]
+    # 進場＝可見日隔日開盤（列 7／14），出場＝第 22 列收盤
+    assert out["r"].tolist() == pytest.approx([42 / 17 - 1, 42 / 24 - 1])
