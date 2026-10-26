@@ -17,7 +17,7 @@
     others＝其餘；0050＝raw-buy 那些事件同一個進出場視窗的 0050。
   - 進場：報告日期**之後**第一個交易日的開盤（盤前報告也延到隔日，避免時區與前視疑慮）。
   - 出場（兩種都算）：(1) 第 h 個交易日收盤（進場日算第 1 天）；(2) 視窗內先碰報告的
-    stop_loss／take_profit 就出場，同日兩者都碰算停損，未碰則同 (1)。觸發與損益都在**還原**價空間（價位乘報告日因子：報告日非交易日時取之前最後一個交易日）
+    stop_loss／take_profit 就出場，開盤已觸價時以開盤成交；開盤在兩價之間且同日雙觸價才算停損，未碰則同 (1)。觸發與損益都在**還原**價空間（價位乘報告日因子：報告日非交易日時取之前最後一個交易日）
     （報告價位是報告日的名目價，報告日到出場之間的除權息／分割因此不會誤觸），損益用前復權價。價位缺值或不滿足 stop < 進場開盤 < take 時不套價位。
   - 成本：`src/utils/tw_trade_costs.round_trip_return`（含雙邊滑價、手續費、賣方證交稅；
     00 開頭用 ETF 稅率），固定名目本金。
@@ -47,6 +47,7 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from src.core.backtest_engine import resolve_long_exit  # noqa: E402
 from src.utils.tw_trade_costs import (  # noqa: E402
     ETF_TRANSACTION_TAX_RATE,
     STOCK_TRANSACTION_TAX_RATE,
@@ -107,13 +108,13 @@ def trade_return(o, h, lo, c, adj, *, stop=None, take=None, level_adj=None, tax_
             continue
         if use_levels:
             o_adj, h_adj, lo_adj = o[k] * adj[k], h[k] * adj[k], lo[k] * adj[k]
-            if lo_adj <= stop_adj:
-                exit_adj, kind = min(o_adj, stop_adj), "stop"
-            elif h_adj >= take_adj:
-                exit_adj, kind = max(o_adj, take_adj), "take"
-            else:
-                exit_adj = None
-            if exit_adj is not None:
+            fill = resolve_long_exit(
+                bar_open=o_adj, stop_loss=stop_adj, take_profit=take_adj,
+                stop_hit=lo_adj <= stop_adj, tp_hit=h_adj >= take_adj,
+            )
+            if fill is not None:
+                exit_adj, reason = fill
+                kind = "take" if reason == "take_profit" else "stop"
                 return _net(entry * adj[0], exit_adj, tax_rate, notional, fee_discount), kind
         if np.isfinite(c[k]):
             last = k

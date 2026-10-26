@@ -29,6 +29,27 @@ BACKTEST_METHOD_TAG = "t1o-adj"
 _ENGINE_VERSION_MAX_LEN = 16  # BacktestResult／BacktestSummary.engine_version 是 String(16)
 
 
+def resolve_long_exit(
+    *,
+    bar_open: Optional[float],
+    stop_loss: Optional[float],
+    take_profit: Optional[float],
+    stop_hit: bool,
+    tp_hit: bool,
+) -> Optional[tuple[float, str]]:
+    """共用做多成交順序：開盤觸價優先，盤中雙觸價才保守算停損。"""
+    if bar_open is not None:
+        if stop_loss is not None and bar_open <= stop_loss:
+            return bar_open, "stop_loss"
+        if take_profit is not None and bar_open >= take_profit:
+            return bar_open, "take_profit"
+    if stop_hit and stop_loss is not None:
+        return stop_loss, "ambiguous_stop_loss" if tp_hit else "stop_loss"
+    if tp_hit and take_profit is not None:
+        return take_profit, "take_profit"
+    return None
+
+
 def effective_backtest_engine_version(label: Optional[str]) -> str:
     """`v1` → `v1-t1o-adj`；已帶 tag 的冪等；超過 16 字元時截短標籤並告警。"""
     text = str(label or "").strip() or "v1"
@@ -1005,29 +1026,20 @@ class BacktestEngine:
             if tp_hit:
                 hit_tp = True
 
-            if not stop_hit and not tp_hit:
+            fill = resolve_long_exit(
+                bar_open=getattr(bar, "open", None) if gap_aware else None,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                stop_hit=stop_hit,
+                tp_hit=tp_hit,
+            )
+            if fill is None:
                 continue
 
             first_hit_date = bar.date
             first_hit_days = idx
-            # 跳空：開盤就已越過停損／停利，只能以開盤價成交（停損更差、停利更好）。
-            bar_open = getattr(bar, "open", None) if gap_aware else None
-
-            if stop_hit and tp_hit:
-                first_hit = "ambiguous"
-                exit_price = stop_loss if bar_open is None else min(bar_open, stop_loss)
-                exit_reason = "ambiguous_stop_loss"
-                break
-
-            if stop_hit:
-                first_hit = "stop_loss"
-                exit_price = stop_loss if bar_open is None else min(bar_open, stop_loss)
-                exit_reason = "stop_loss"
-                break
-
-            first_hit = "take_profit"
-            exit_price = take_profit if bar_open is None else max(bar_open, take_profit)
-            exit_reason = "take_profit"
+            exit_price, exit_reason = fill
+            first_hit = "ambiguous" if exit_reason == "ambiguous_stop_loss" else exit_reason
             break
 
         return (

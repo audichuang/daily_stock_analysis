@@ -39,6 +39,7 @@ from src.services.backtest_price_basis import (
     FactorLoader,
     is_valid_entry_open,
     resolve_entry_basis,
+    resolve_entry_cutoff,
 )
 from src.services.stock_daily_start_resolver import resolve_stock_daily_start
 from src.services.stock_daily_window_resolver import resolve_stock_daily_window
@@ -971,30 +972,29 @@ class BacktestService:
     ) -> Tuple[date, List[Any]]:
         """(停損停利的名目錨點日, 從進場 K 棒起算的窗口)。
 
-        一般情況進場是錨點 K 棒的下一根開盤。盤中分析的錨點是前一個交易日，但分析
-        當下已看得到當天開盤，所以改成分析日與持久化場次較晚者之後的第一根開盤進場。
+        盤前以該場次開盤進場，但不回頭跨越已使用的完整錨點 K 棒。盤中分析的錨點是前一個
+        交易日，但分析當下已看得到當天開盤，所以改成分析日與持久化場次較晚者之後的第一根開盤進場。
         場次日期缺失或無法解析時沿用分析日；沒有持久化 phase 的舊紀錄維持預設。
         執行截止日與名目價格錨點分開，即時報價失敗時不改動原本的還原基準。
         """
         anchor = daily_window.start_bar.date
-        execution_cutoff = analysis_date
-        if phase in INTRADAY_ENTRY_GUARD_PHASES:
-            summary = extract_market_phase_summary(context_snapshot)
-            if summary:
-                for key in ("session_date", "market_local_time"):
-                    try:
-                        session_date = datetime.fromisoformat(str(summary.get(key) or "")).date()
-                    except ValueError:
-                        continue
-                    execution_cutoff = max(analysis_date, session_date)
-                    break
-        if phase in INTRADAY_ENTRY_GUARD_PHASES and execution_cutoff > anchor:
+        execution_cutoff = max(
+            anchor,
+            resolve_entry_cutoff(
+                anchor_date=anchor,
+                analysis_date=analysis_date,
+                phase=phase,
+                market_phase_summary=extract_market_phase_summary(context_snapshot),
+            ),
+        )
+        if execution_cutoff > anchor:
             bars = self.stock_repo.get_forward_bars(
                 code=daily_window.code,
                 analysis_date=execution_cutoff,
                 eval_window_days=eval_window_days,
             )
-            return max(anchor, analysis_date), list(bars)
+            level_anchor = max(anchor, analysis_date) if phase in INTRADAY_ENTRY_GUARD_PHASES else anchor
+            return level_anchor, list(bars)
         return anchor, list(daily_window.forward_bars)
 
     def _has_usable_entry_window(

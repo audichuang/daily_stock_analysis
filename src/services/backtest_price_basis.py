@@ -16,7 +16,7 @@ MarketDB 列沒有，混在同一筆報酬裡兩個基準會互相污染）。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import logging
 import math
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
@@ -42,6 +42,33 @@ INTRADAY_ENTRY_GUARD_PHASES = frozenset({"intraday", "lunch_break", "closing_auc
 
 # factor_loader(stock_id, dates) -> {date: m_t}；回傳的 key 必須涵蓋所有輸入日期。
 FactorLoader = Callable[[str, Sequence[date]], Mapping[date, float]]
+
+
+def resolve_entry_cutoff(
+    *,
+    anchor_date: date,
+    analysis_date: date,
+    phase: Optional[str],
+    market_phase_summary: Optional[Mapping[str, Any]] = None,
+) -> date:
+    """回測與訊號後驗共用的進場截止日；查詢第一根日期嚴格大於此日的 K 棒。
+
+    盤前可在該場次開盤進場；盤中須等分析日與持久化場次較晚者之後。
+    其餘階段與缺 phase 的舊紀錄沿用名目錨點之後進場。
+    """
+    if phase != "premarket" and phase not in INTRADAY_ENTRY_GUARD_PHASES:
+        return anchor_date
+    session_date = analysis_date
+    for key in ("session_date", "market_local_time"):
+        try:
+            persisted_date = datetime.fromisoformat(str((market_phase_summary or {}).get(key) or "")).date()
+        except ValueError:
+            continue
+        session_date = max(analysis_date, persisted_date)
+        break
+    if phase == "premarket":
+        return session_date - timedelta(days=1)
+    return max(anchor_date, session_date)
 
 
 @dataclass(frozen=True)

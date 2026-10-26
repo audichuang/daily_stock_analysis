@@ -289,6 +289,36 @@ def test_gap_above_take_profit_exits_at_open():
     assert result["simulated_exit_price"] == pytest.approx(112.0)
 
 
+@pytest.mark.parametrize("scale", [1.0, 0.5])
+@pytest.mark.parametrize("open_,exit_,first_hit,reason", [
+    (112.0, 112.0, "take_profit", "take_profit"),
+    (110.0, 110.0, "take_profit", "take_profit"),
+    (93.0, 93.0, "stop_loss", "stop_loss"),
+    (95.0, 95.0, "stop_loss", "stop_loss"),
+    (100.0, 95.0, "ambiguous", "ambiguous_stop_loss"),
+    (109.0, 95.0, "ambiguous", "ambiguous_stop_loss"),
+])
+def test_gap_fill_precedes_intrabar_ambiguity(scale, open_, exit_, first_hit, reason):
+    bars = [
+        _bar(D1, open_=100.0, high=101.0, low=99.0, close=100.0),
+        _bar(D2, open_=open_ * scale, high=113.0 * scale, low=92.0 * scale, close=100.0 * scale),
+    ]
+    basis = resolve_entry_basis(
+        code="2330.TW", anchor_date=ANCHOR, window_bars=bars,
+        factor_loader=_loader_from({ANCHOR: scale, D1: scale, D2: 1.0}),
+    )
+    result = _eval_single("買入", bars, basis, stop=95.0, take=110.0)
+
+    assert result["first_hit"] == first_hit
+    assert result["simulated_exit_reason"] == reason
+    assert result["first_hit_date"] == D2
+    assert result["first_hit_trading_days"] == 2
+    assert result["hit_stop_loss"] is True
+    assert result["hit_take_profit"] is True
+    assert result["simulated_exit_price"] == pytest.approx(exit_ * scale)
+    assert result["simulated_return_pct"] == pytest.approx(exit_ - 100.0)
+
+
 def test_stop_level_is_rescaled_when_entry_day_is_ex_date():
     # 錨點日訂的停損 97 是除息前的名目價；T+1 除息 3.5% 後等價停損約 93.6，低點 95 不該觸發。
     bars = [_bar(D1, open_=96.5, high=97.0, low=95.0, close=96.0)]
@@ -790,6 +820,67 @@ def test_signal_enters_at_t_plus_1_open(isolated_db):
     assert item["start_price"] == 105.0
     assert item["stock_return_pct"] == pytest.approx(0.0)
     assert item["price_basis"] == "as_stored"
+
+
+@pytest.mark.parametrize("phase", [
+    "premarket", "intraday", "lunch_break", "closing_auction", "postmarket", "unknown",
+])
+@pytest.mark.parametrize("phase_source", ["metadata", "signal"])
+def test_signal_entry_session_matches_backtest(isolated_db, phase, phase_source):
+    effective_date = ANCHOR if phase in {"premarket", "intraday", "lunch_break", "closing_auction"} else D1
+    _seed_history(isolated_db, code="2330.TW", analysis_date=D1, phase=phase, effective_date=effective_date)
+    signal_id = _add_signal(isolated_db, horizon="1d", session_date=D1)
+    with isolated_db.session_scope() as session:
+        signal = session.get(DecisionSignalRecord, signal_id)
+        signal.created_at = datetime(2024, 7, 2, 7, 30)
+        signal.market_phase = phase if phase_source == "signal" else "postmarket"
+        metadata = json.loads(signal.metadata_json)
+        if phase_source == "metadata":
+            metadata["market_phase_summary"]["phase"] = phase
+        signal.metadata_json = json.dumps(metadata)
+    _seed_daily(isolated_db, "2330.TW", [
+        (ANCHOR, 90.0, 91.0, 89.0, 90.0),
+        (D1, 100.0, 111.0, 99.0, 110.0),
+        (D2, 200.0, 201.0, 199.0, 200.0),
+    ])
+    loader = _loader_from({})
+    backtest = BacktestService(isolated_db, factor_loader=loader)
+    with patch.object(backtest, "_try_fill_daily_data") as refill:
+        stats = _run(backtest, "2330.TW", window=1)
+    assert stats["completed"] == 1
+    refill.assert_not_called()
+    (row,) = _results(isolated_db, "2330.TW")
+    service = DecisionSignalOutcomeService(db_manager=isolated_db, factor_loader=loader)
+    item = service.run_outcomes(signal_id=signal_id)["items"][0]
+
+    expected_entry = D1 if phase == "premarket" else D2
+    assert item["eval_status"] == "completed"
+    assert item["entry_date"] == row.entry_date.isoformat() == expected_entry.isoformat()
+    assert item["start_price"] == row.start_price == (100.0 if phase == "premarket" else 200.0)
+    assert item["end_close"] == row.end_close == (110.0 if phase == "premarket" else 200.0)
+    assert item["stock_return_pct"] == pytest.approx(row.stock_return_pct)
+    assert item["stock_return_pct"] == pytest.approx(10.0 if phase == "premarket" else 0.0)
+    assert item["anchor_date"] == D1.isoformat()
+
+
+@pytest.mark.parametrize("entry_open,expected_reason", [(100.0, None), (None, "missing_entry_open")])
+def test_premarket_signal_uses_completed_session_without_waiting_for_next(isolated_db, entry_open, expected_reason):
+    signal_id = _add_signal(isolated_db, horizon="1d", session_date=D1)
+    with isolated_db.session_scope() as session:
+        signal = session.get(DecisionSignalRecord, signal_id)
+        signal.market_phase = "premarket"
+    _seed_daily(isolated_db, "2330.TW", [
+        (ANCHOR, 90.0, 91.0, 89.0, 90.0),
+        (D1, entry_open, 111.0, 99.0, 110.0),
+    ])
+    service = DecisionSignalOutcomeService(db_manager=isolated_db, factor_loader=_loader_from({}))
+    item = service.run_outcomes(signal_id=signal_id)["items"][0]
+
+    assert item["unable_reason"] == expected_reason
+    assert item["eval_status"] == ("completed" if expected_reason is None else "unable")
+    if expected_reason is None:
+        assert item["entry_date"] == D1.isoformat()
+        assert item["stock_return_pct"] == pytest.approx(10.0)
 
 
 def test_mae_prefers_stored_column_and_falls_back_for_legacy_rows():

@@ -22,6 +22,7 @@ from src.services.backtest_price_basis import (
     FactorLoader,
     is_valid_entry_open,
     resolve_entry_basis,
+    resolve_entry_cutoff,
 )
 from src.schemas.decision_profile import VALID_DECISION_PROFILES
 from src.services.decision_signal_data_quality import normalize_decision_signal_data_quality
@@ -592,9 +593,19 @@ class DecisionSignalOutcomeService:
                 start_price=start_price,
             )
 
+        metadata = self._json_loads(signal.metadata_json)
+        summary = metadata.get("market_phase_summary") if isinstance(metadata, dict) else None
+        summary = summary if isinstance(summary, dict) else {}
+        phase = str(summary.get("phase") or signal.market_phase or "").strip().lower()
+        execution_cutoff = resolve_entry_cutoff(
+            anchor_date=anchor_date,
+            analysis_date=anchor_date,
+            phase=phase,
+            market_phase_summary=summary,
+        )
         forward_bars = self.stock_repo.get_forward_bars(
             code=signal.stock_code,
-            analysis_date=anchor_date,
+            analysis_date=execution_cutoff,
             eval_window_days=eval_days,
         )
         unable_context = {
@@ -605,7 +616,7 @@ class DecisionSignalOutcomeService:
         # 先看窗口夠不夠，再看進場開盤：兩者都可重試，但空窗口不該被報成缺開盤。
         if len(forward_bars) < eval_days:
             return self._unable_fields(base, reason="insufficient_forward_bars", **unable_context)
-        # 信號在錨點日（session_date）收盤後才算得出來，可成交的第一個價格是下一根的開盤。
+        # 進場場次由共用截止日決定，盤前包含當天；不可用後一根有開盤的 K 棒替補。
         entry_open = getattr(forward_bars[0], "open", None)
         if entry_open is None:
             return self._unable_fields(base, reason="missing_entry_open", **unable_context)
