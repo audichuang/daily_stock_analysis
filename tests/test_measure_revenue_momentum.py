@@ -455,3 +455,73 @@ def test_main_surprise_mode_skips_momentum_sections(monkeypatch):
                         "--end", "2026-06-23", "--horizons", "5,10", "--pool-hold", "60",
                         "--bootstrap", "0"]) == 0
     assert seen["h"] == [5, 10, 60]
+
+
+def _arm_row(verdict_label, dm, dh):
+    return {"組": "x", "n": 400, "均值差pp": dm, "P30差pp": dh, "判定": verdict_label}
+
+
+@pytest.mark.parametrize("pit_dm,pit_dh,vetoed", [
+    (-0.5, 1.0, True),      # 均值差反向
+    (1.0, -0.3, True),      # P30 差反向
+    (0.0, 1.0, True),       # 不 > 0 也算方向不同（與判準 (a) 同一條線）
+    (1.5, 0.8, False),      # 同方向 → 不否決
+])
+def test_pit_veto_downgrades_surviving_sus_only_when_pit_points_other_way(pit_dm, pit_dh, vetoed):
+    rows = {("補充", "sus_top20"): _arm_row(revmom.SURVIVED, 2.0, 2.0),
+            ("補充", "sus_pit_top20"): _arm_row("探索", pit_dm, pit_dh)}
+    revmom.apply_pit_veto(rows)
+    assert rows[("補充", "sus_top20")]["判定"] == (revmom.PIT_VETOED if vetoed else revmom.SURVIVED)
+
+
+def test_pit_veto_pairs_same_arm_and_leaves_other_verdicts_alone():
+    rows = {
+        ("補充", "sus_top20"): _arm_row(revmom.SURVIVED, 2.0, 2.0),
+        ("補充", "sus_pit_top20"): _arm_row("探索", 1.0, 1.0),     # 補充組同方向
+        ("取代", "sus_top20"): _arm_row(revmom.SURVIVED, 2.0, 2.0),
+        ("取代", "sus_pit_top20"): _arm_row("探索", -1.0, -1.0),   # 只有取代組反向
+        ("補充", "ath_top20"): _arm_row(revmom.SURVIVED, 2.0, 2.0),  # ATH 沒有 PIT 變體
+        ("補充", "sus_ge1"): _arm_row("探索", 2.0, 2.0),
+    }
+    rows[("取代", "sus_top20")]["判定"] = "通過（未過 Bonferroni）"   # 本來就不存活：不改
+    revmom.apply_pit_veto(rows)
+    assert rows[("補充", "sus_top20")]["判定"] == revmom.SURVIVED
+    assert rows[("取代", "sus_top20")]["判定"] == "通過（未過 Bonferroni）"
+    assert rows[("補充", "ath_top20")]["判定"] == revmom.SURVIVED
+    rows[("取代", "sus_top20")]["判定"] = revmom.SURVIVED
+    revmom.apply_pit_veto(rows)
+    assert rows[("取代", "sus_top20")]["判定"] == revmom.PIT_VETOED
+    assert rows[("補充", "sus_top20")]["判定"] == revmom.SURVIVED     # 不跨組配對
+
+
+def test_surprise_report_applies_pit_veto_to_printed_verdict(monkeypatch, capsys):
+    days = pd.bdate_range("2020-01-01", periods=5)
+    cols = pd.Index(["2330"])
+    piv = {"close": pd.DataFrame(100.0, index=days, columns=cols)}
+    pool = pd.DataFrame({"r": [0.1], **{g: [1.0] for g in revmom.SURPRISE_GATES}})
+    monkeypatch.setattr(revmom, "revenue_surprise_features",
+                        lambda rv: pd.DataFrame({"sus": [], "sus_pit": [], "ath_ratio": []}))
+    monkeypatch.setattr(revmom, "gate_flags", lambda feat: None)
+    monkeypatch.setattr(revmom, "gate_panels",
+                        lambda flags, idx, cols: {g: None for g in revmom.SURPRISE_GATES})
+    monkeypatch.setattr(revmom, "forward_returns", lambda piv_, h, how: (None, None))
+    monkeypatch.setattr(revmom, "to_events", lambda *a, **k: (None, pool))
+    monkeypatch.setattr(revmom, "apply_thresholds",
+                        lambda *a, **k: pd.DataFrame(False, index=days, columns=cols))
+
+    def fake_compare(label, arm, ref, n_days, h, a, primary=False):
+        if "sus_pit_top20" in label:
+            return {"組": label, "n": 400, "均值差pp": -1.0, "P30差pp": -1.0, "判定": "探索"}
+        return {"組": label, "n": 400, "均值差pp": 2.0, "P30差pp": 2.0,
+                "判定": revmom.SURVIVED if primary else "探索"}
+
+    monkeypatch.setattr(revmom, "compare_arm", fake_compare)
+    a = SimpleNamespace(pool_hold=60, start="2020-01-01", d5=0.05, vol_lo=1.3, vol_hi=2.0,
+                        position_notional=200_000, bootstrap=0, bootstrap_seed=42)
+    revmom.surprise_report(piv, pd.DataFrame({"stock_id": []}), None, {}, [60], a)
+    out = capsys.readouterr().out
+    sus_lines = [ln for ln in out.splitlines() if "sus_top20（" in ln]
+    ath_lines = [ln for ln in out.splitlines() if "ath_top20" in ln]
+    assert len(sus_lines) == 2, out
+    assert all(revmom.PIT_VETOED in ln for ln in sus_lines)
+    assert all(revmom.SURVIVED in ln and revmom.PIT_VETOED not in ln for ln in ath_lines)

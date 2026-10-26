@@ -75,6 +75,10 @@ SURPRISE_GATES = {
     "sus_pit_top20": ("sus_pit", "top"),
 }
 PRIMARY_GATES = ("sus_top20", "ath_top20")
+# 事先登記的更正前視否決（研究文件 §0.5）：主檢定閘門 → 它的 PIT 穩健性變體
+PIT_VETO = {"sus_top20": "sus_pit_top20"}
+SURVIVED = "通過且存活"
+PIT_VETOED = "通過但 SUS_pit 方向相反（更正前視污染）→ 不存活"
 PRIMARY_LEVEL = 95.0
 BONFERRONI_LEVEL = 98.75   # 4 個主檢定（2 訊號 × 補充／取代）
 
@@ -286,8 +290,24 @@ def verdict(dm, dh, ci, n, min_events):
     if not all(ci[k][PRIMARY_LEVEL][0] > 0 for k in ("mean", "hit")):
         return "inconclusive"
     if all(ci[k][BONFERRONI_LEVEL][0] > 0 for k in ("mean", "hit")):
-        return "通過且存活"
+        return SURVIVED
     return "通過（未過 Bonferroni）"
+
+
+def apply_pit_veto(rows):
+    """事先登記的否決：主檢定「通過且存活」但同一組（補充／取代）的 PIT 變體方向相反 → 不存活。
+
+    ``rows`` 是 ``{(組別, 閘門): compare_arm 的列}``，就地改 ``判定``。「方向相反」採保守口徑：
+    PIT 變體的均值差或 P30 差點估計任一不 > 0（與判準 (a) 同一條線）。只降級「通過且存活」，
+    其他判定本來就不寫進長期文件，不動。
+    """
+    for (arm, gate), row in rows.items():
+        pit = rows.get((arm, PIT_VETO.get(gate)))
+        if pit is None or row.get("判定") != SURVIVED:
+            continue
+        if not (pit["均值差pp"] > 0 and pit["P30差pp"] > 0):
+            row["判定"] = PIT_VETOED
+    return rows
 
 
 def surprise_report(piv, rv, sig, extra, horizons, a):
@@ -304,24 +324,25 @@ def surprise_report(piv, rv, sig, extra, horizons, a):
         _, pool = to_events(sig, ret, h, panels, entry_notional=a.position_notional)
         if not len(pool):
             continue
-        rows = [{"組": "候選池（YoY≥20，對照）", "n": len(pool),
-                 "均值%": round(pool["r"].mean() * 100, 2),
-                 "P30%": round((pool["r"] >= HIT_THRESHOLD).mean() * 100, 1)}]
+        rows = {("對照", None): {"組": "候選池（YoY≥20，對照）", "n": len(pool),
+                                  "均值%": round(pool["r"].mean() * 100, 2),
+                                  "P30%": round((pool["r"] >= HIT_THRESHOLD).mean() * 100, 1)}}
         for g in SURPRISE_GATES:
             primary = h == a.pool_hold and g in PRIMARY_GATES
             cover = pool[g].notna().mean() * 100
-            rows.append(compare_arm(f"補充 {g}（池內閘門=1；池內有值 {cover:.0f}%）",
-                                    pool.loc[pool[g] == 1], pool, n_days, h, a, primary))
+            rows[("補充", g)] = compare_arm(f"補充 {g}（池內閘門=1；池內有值 {cover:.0f}%）",
+                                            pool.loc[pool[g] == 1], pool, n_days, h, a, primary)
             rep = apply_thresholds(piv["close"], extra, panels[g], a.d5, a.vol_lo, a.vol_hi, 1.0)
             rep.loc[:pd.Timestamp(a.start)] = False
             _, rep_ev = to_events(rep, ret, h, {}, entry_notional=a.position_notional)
-            rows.append(compare_arm(f"取代 {g}（價格條件 ∩ 閘門）", rep_ev, pool, n_days, h, a,
-                                    primary))
+            rows[("取代", g)] = compare_arm(f"取代 {g}（價格條件 ∩ 閘門）", rep_ev, pool, n_days,
+                                            h, a, primary)
+        apply_pit_veto(rows)
         tag = "主" if h == a.pool_hold else "次要"
         print(f"=== h={h}（{tag}）：組 − 候選池；雙臂交易日區塊 bootstrap block={h}、"
               f"{a.bootstrap} 次、seed={a.bootstrap_seed} ===")
         with pd.option_context("display.width", 250, "display.max_columns", 30):
-            print(pd.DataFrame(rows).set_index("組").to_string(), "\n")
+            print(pd.DataFrame(list(rows.values())).set_index("組").to_string(), "\n")
 
 
 def main(argv=None):
