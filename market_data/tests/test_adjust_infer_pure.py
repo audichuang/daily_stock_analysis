@@ -122,12 +122,47 @@ def test_split_band_requires_both_extremes_inside(opened, low, high):
     assert row["factor"] == opened / 100.0
 
 
-def test_usable_change_keeps_existing_reference_path():
-    prices = _prices(previous=1215.0, opened=133.5, close=133.5, change=3.5)
+@pytest.mark.parametrize("previous_day, event_day, reference, kind", [
+    ("2024-03-08", "2024-03-11", 121.5, "split"),
+    ("2026-09-18", "2026-09-21", 130.0, "inferred"),
+])
+def test_usable_change_keeps_existing_reference_path(previous_day, event_day, reference, kind):
+    prices = _prices(previous=1215.0, opened=133.5, close=133.5, change=3.5,
+                     previous_day=previous_day, event_day=event_day)
     row, = _infer(prices).to_dict("records")
-    assert row["factor"] == 130.0 / 1215.0
-    assert row["reference_price"] == 130.0
+    assert row["factor"] == reference / 1215.0
+    assert row["reference_price"] == reference
+    assert row["kind"] == kind
+
+
+@pytest.mark.parametrize("event_day, signed", [
+    ("2018-08-28", False), ("2026-08-22", False),
+    ("2026-08-23", True), ("2026-08-24", True),
+])
+@pytest.mark.parametrize("change", [-3.0, 3.0])
+def test_reference_requires_known_signed_change(event_day, signed, change):
+    # 舊回補的錯號仍會通過 ±11% 檢查；只看數值合理或負號皆無法證明來源可信。
+    previous_day = pd.Timestamp(event_day) - pd.Timedelta(days=1)
+    prices = _prices(previous=80.0, opened=105.0, close=103.0, change=change,
+                     previous_day=previous_day, event_day=event_day)
+    row, = _infer(prices).to_dict("records")
+    reference = 103.0 - change if signed else 105.0
+    assert row["reference_price"] == reference
+    assert row["factor"] == reference / 80.0
     assert row["kind"] == "inferred"
+
+
+def test_change_trust_uses_each_event_date_in_a_mixed_window(monkeypatch):
+    before = _prices(previous=80.0, opened=105.0, close=103.0, change=-3.0,
+                     previous_day="2026-08-20", event_day="2026-08-21")
+    after = _prices(previous=80.0, opened=105.0, close=103.0, change=-3.0,
+                    previous_day="2026-08-21", event_day="2026-08-24")
+    after["stock_id"] = "6104"
+    px = pd.concat([before, after], ignore_index=True)
+    monkeypatch.setattr(adjust.pd, "read_sql", lambda *a, **k: px.copy())
+    rows = adjust.infer_rows(None, set(), "2026-08-01", is_session=_weekday)
+    # 不能用查詢起點或最後日期決定整批的信任度。
+    assert rows.set_index("stock_id")["reference_price"].to_dict() == {"6103": 105.0, "6104": 106.0}
 
 
 @pytest.mark.parametrize("opened, is_event", [(79.3, False), (123.0, False), (79.0, True), (124.0, True)])

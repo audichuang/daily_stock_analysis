@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 復權推導（`market_data/adjust.py`）的交易日改成 XTAI 日曆聯集 price 表全市場有列的日期，補上 XTAI 沒有的補班週六（5348 2016-06-04、5455／4131 2016-02-01 的兩根合法漲跌停不再被存成假公司行動）；`close - change` 參考價只信 `CHANGE_SIGNED_SINCE`（2026-08-23）之後的正負號，更早的列只用 |change|、須由漲跌停帶唯一證明方向，否則退回開盤價（翻錯號的舊列不再能把參考價推偏 2|change|）。既有 `inferred_price` 列要重跑 `cli adjust` 才會更新
 - [修復] 回測的月營收可見日不再早於法定公告期限：期限規則集中到 `market_data/revenue_deadline.py`（一般次月 10 日；2020-01 營收全面展延至 2/15；依《公開發行公司財務報告及營運情形公告申報特殊適用範圍辦法》第 3 條，2026-01 營收起保險業及具保險子公司者放寬至 15 日，保守口徑為 28xx 全部加 5880、2207），`backtest_screen`、`measure_signal_forward`（含 `portfolio_walkforward`、`measure_market_regime`）、`measure_revenue_momentum` 讀取時一律取「DB 公告日」與期限較晚者，可見日仍是其後第一個交易日；DB announce_date 維持次月 10 日佔位不變（寫入端不變），live 篩選 `screen_tw` 與 dossier 不受影響
 - [修復] API、服務與回測結果序列化保留 dashboard 的非買入護欄原因；矛盾原因延至真正護欄完成後才記錄，且未壓分時不再留下原始／調整分數，避免遮住大盤或成本原因及誤計影子評估降級
 - [修復] 僅結構化 `decision_type=sell` 與買入區分數矛盾時阻擋發布買入／加倉，退回非買入建議動作或觀望，僅實際阻擋時記錄原因；hold／buy 決策搭配觀望／減倉／回避等建議仍依既有分數對齊規則處理；支撐附近回跌的持有結論即使已寫「洗盤觀察」，也會清掉殘留買入動作並保留原分數

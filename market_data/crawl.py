@@ -29,8 +29,9 @@ def _mask_uncomparable_backup_changes(backup, d, conn):
     **已知偽陽性**：官方 `漲跌價差` 比的是當日**參考價**，不是前一根收盤。所以除權息
     當日收盤剛好落在參考價上的個股，官方給的 `0.00` 是真讀數，但這裡看到的是
     `close != prev_close`（除權息斷崖）⇒ 會被誤遮成 NULL。要擋掉得把
-    `price_adjustment` 的因子也讀進來比對；目前刻意不做——這一欄沒有任何程式碼在讀
-    （`to_daily_frame` 已改用 `close.shift(1)`），誤遮的代價是 0，而多讀一張表會讓
+    `price_adjustment` 的因子也讀進來比對；目前刻意不做——報酬計算不讀這一欄
+    （`to_daily_frame` 已改用 `close.shift(1)`），唯一讀它的 `adjust.infer_rows` 對
+    0 與 NULL 同樣退回開盤價，誤遮的代價是 0，而多讀一張表會讓
     爬取路徑多一個失敗點。改用途之前先把這條處理掉。
     """
     zeros = backup.index[backup["漲跌價差"].eq(0)]
