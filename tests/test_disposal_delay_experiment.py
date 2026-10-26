@@ -29,6 +29,7 @@ from measure_signal_forward import (  # noqa: E402
     disposal_context,
     disposal_verdict,
     exclusion_block_bootstrap,
+    report_disposal,
 )
 from tw_trade_costs import round_trip_return  # noqa: E402
 
@@ -93,6 +94,22 @@ def test_weekend_announcement_maps_to_previous_session():
     assert ctx.at[0, "affected"] and ctx.at[0, "a_idx"] == fri
 
 
+def test_announcement_after_panel_end_is_not_counted_as_later():
+    """面板之後才公告的處置不能被 searchsorted 夾到最後一列、算成「持有中才公告」。"""
+    after = DAYS[-1] + pd.Timedelta(days=7)
+    disp = pd.DataFrame({"stock_id": ["1111"], "announce": [after],
+                         "start": [after + pd.Timedelta(days=1)],
+                         "end": [after + pd.Timedelta(days=10)]})
+    ctx = disposal_context(_ev(34), disp, DAYS, h=5)          # ti + h == 最後一列
+    assert not ctx.at[0, "later"] and not ctx.at[0, "affected"]
+
+
+def test_announcement_on_last_panel_day_is_still_counted_as_later():
+    """反向檢查：面板最後一天公告的仍在持有窗內，不能被一起丟掉。"""
+    ctx = disposal_context(_ev(34), _disp(39, 39, 39), DAYS, h=5)
+    assert ctx.at[0, "later"]
+
+
 # ── 各臂報酬：持有長度不變 ──────────────────────────────────────
 
 
@@ -128,6 +145,53 @@ def test_delayed_arm_past_panel_end_is_nan_not_settled():
     ret = _ret_panel()
     arms = disposal_arm_returns(ev, ctx, ret, delays=(3,))
     assert np.isnan(arms.at[0, "delay_3"])
+
+
+# ── report_disposal：配對、差的方向、表格基準 ─────────────────────
+
+
+def _report_inputs():
+    """三個受影響事件（一個被延後、一個處置中＝延後等於正常、一個延後臂右端截斷）與兩個未受影響事件。"""
+    stocks = ["1111", "2222", "3333", "4444", "5555"]
+    ret = pd.DataFrame(np.nan, index=DAYS, columns=stocks)
+    ret.loc[DAYS[:35], :] = 0.0
+    ret.iloc[10, 0], ret.iloc[13, 0] = 0.05, 0.40   # 1111：正常 +5%、延後 3 日 +40%
+    ret.iloc[10, 2] = 0.20                           # 3333：公告後第 3 天才是訊號日，延後 3 日等於正常
+    ret.iloc[:35, 3], ret.iloc[:35, 4] = 0.10, 0.30
+    net = lambda g: round_trip_return(1.0, 1.0 + g, entry_notional=DEFAULT_POSITION_NOTIONAL)  # noqa: E731
+    # 刻意不照股票代號排序，避免靠位置對齊碰巧對到
+    ev = pd.DataFrame({"stock_id": ["3333", "2222", "5555", "1111", "4444"],
+                       "ti": [10, 33, 10, 10, 12]}, index=[7, 3, 9, 1, 5])
+    ev["date"] = DAYS[ev["ti"]]
+    ev["r"] = [net(0.20), -0.50, net(0.30), net(0.05), net(0.10)]
+    disp = pd.DataFrame({"stock_id": ["1111", "2222", "3333"],
+                         "announce": DAYS[[10, 33, 7]], "start": DAYS[[11, 34, 8]],
+                         "end": DAYS[[20, 39, 15]]})
+    return ev, disp, ret, net
+
+
+def test_report_disposal_pairs_arms_with_the_same_events_and_sign():
+    ev, disp, ret, net = _report_inputs()
+    s = report_disposal(ev, disp, ret, DAYS, 5, delays=(3,), n_boot=0)
+    arm = s["arms"]["delay_3"]
+    # 2222 的延後臂超出面板 → 不入配對；1111 被延後、3333 處置中（差 0）
+    assert arm["n"] == 2 and arm["n_delayed"] == 1
+    assert arm["d_mean"] == pytest.approx(((net(0.40) - net(0.05)) + 0.0) / 2)
+    assert arm["d_mean"] > 0                                   # 臂 − 正常，不是反過來
+    assert arm["d_hit"] == pytest.approx(0.5)
+    # 表格的正常進場列要和臂同一批事件，不能混入被截掉的 −50% 事件
+    assert arm["base_mean"] == pytest.approx((net(0.05) + net(0.20)) / 2)
+    assert arm["arm_mean"] == pytest.approx((net(0.40) + net(0.20)) / 2)
+    ex = s["arms"]["exclude"]
+    assert s["n_affected"] == 3 and ex["n"] == 3
+    assert ex["d_mean"] == pytest.approx((net(0.10) + net(0.30)) / 2 - ev["r"].mean())
+
+
+def test_report_disposal_prints_paired_normal_row_per_arm(capsys):
+    ev, disp, ret, _ = _report_inputs()
+    report_disposal(ev, disp, ret, DAYS, 5, delays=(3,), n_boot=0)
+    out = capsys.readouterr().out
+    assert "正常進場（delay_3 配對）" in out and "正常進場（全部）" in out
 
 
 # ── 判準與剔除的 bootstrap ──────────────────────────────────────
