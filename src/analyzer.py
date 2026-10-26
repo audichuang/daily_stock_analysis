@@ -412,6 +412,8 @@ def check_content_integrity(
             if parse_structured_price(structured.get("stop_loss")) is None:
                 missing.append("dashboard.battle_plan.sniper_points.stop_loss")
         else:
+            # 沒給或給壞了 sniper_prices：系統只讀這裡的數字、不從文字猜價，要模型補給
+            missing.append("dashboard.battle_plan.sniper_prices")
             sp = battle.get("sniper_points")
             sp = sp if isinstance(sp, dict) else {}
             if _is_invalid_stop_loss(sp.get("stop_loss")):
@@ -5682,6 +5684,8 @@ Output the complete Decision Dashboard in JSON format."""
                     lines.append("- dashboard.intelligence.risk_alerts: risk alert list (can be empty)")
                 elif f == "dashboard.battle_plan.sniper_points.stop_loss":
                     lines.append("- dashboard.battle_plan.sniper_points.stop_loss: stop-loss level; also write it as a plain number in dashboard.battle_plan.sniper_prices.stop_loss")
+                elif f == "dashboard.battle_plan.sniper_prices":
+                    lines.append("- dashboard.battle_plan.sniper_prices: object with ideal_buy, secondary_buy, stop_loss, take_profit as plain numbers (no unit, no range), matching sniper_points; use null for a slot with no executable price")
                 elif f == "dashboard.phase_decision.phase_context":
                     lines.append("- dashboard.phase_decision.phase_context: public market phase summary subset")
                 elif f == "dashboard.phase_decision.action_window":
@@ -5718,6 +5722,8 @@ Output the complete Decision Dashboard in JSON format."""
                 lines.append(L("- dashboard.intelligence.risk_alerts: 風險警報列表（可為空陣列）", "- dashboard.intelligence.risk_alerts: 风险警报列表（可为空数组）"))
             elif f == "dashboard.battle_plan.sniper_points.stop_loss":
                 lines.append(L("- dashboard.battle_plan.sniper_points.stop_loss: 止損價；同時以純數字寫進 dashboard.battle_plan.sniper_prices.stop_loss", "- dashboard.battle_plan.sniper_points.stop_loss: 止损价；同时以纯数字写进 dashboard.battle_plan.sniper_prices.stop_loss"))
+            elif f == "dashboard.battle_plan.sniper_prices":
+                lines.append(L("- dashboard.battle_plan.sniper_prices: 物件，含 ideal_buy、secondary_buy、stop_loss、take_profit 四格純數字（不帶「元」、不寫區間），與 sniper_points 同一組價位；某格沒有可執行價位填 null", "- dashboard.battle_plan.sniper_prices: 对象，含 ideal_buy、secondary_buy、stop_loss、take_profit 四格纯数字（不带“元”、不写区间），与 sniper_points 同一组价位；某格没有可执行价位填 null"))
             elif f == "dashboard.phase_decision.phase_context":
                 lines.append(L("- dashboard.phase_decision.phase_context: 公開低敏市場階段摘要子集", "- dashboard.phase_decision.phase_context: 公开低敏市场阶段摘要子集"))
             elif f == "dashboard.phase_decision.action_window":

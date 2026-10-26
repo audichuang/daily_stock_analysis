@@ -36,7 +36,7 @@ class TestCheckContentIntegrity(unittest.TestCase):
             dashboard={
                 "core_conclusion": {"one_sentence": "持有观望"},
                 "intelligence": {"risk_alerts": []},
-                "battle_plan": {"sniper_points": {"stop_loss": "110元"}},
+                "battle_plan": {"sniper_points": {"stop_loss": "110元"}, "sniper_prices": {"stop_loss": 110}},
             },
         )
         ok, missing = check_content_integrity(result)
@@ -79,9 +79,10 @@ class TestCheckContentIntegrity(unittest.TestCase):
         self.assertTrue(ok, missing)
 
     def test_legacy_without_structured_keeps_text_rule(self) -> None:
-        """沒有 sniper_prices 的舊輸出沿用文字非空規則。"""
-        ok, _ = check_content_integrity(self._buy_result_with_battle({"sniper_points": {"stop_loss": "止損位：110元"}}))
-        self.assertTrue(ok)
+        """沒有 sniper_prices 時要模型補給數字區塊；停損文字的非空規則照舊另外檢查。"""
+        ok, missing = check_content_integrity(self._buy_result_with_battle({"sniper_points": {"stop_loss": "止損位：110元"}}))
+        self.assertFalse(ok)
+        self.assertEqual(missing, ["dashboard.battle_plan.sniper_prices"])
         ok, missing = check_content_integrity(self._buy_result_with_battle({"sniper_points": {"stop_loss": " "}}))
         self.assertFalse(ok)
         self.assertIn("dashboard.battle_plan.sniper_points.stop_loss", missing)
@@ -99,7 +100,7 @@ class TestCheckContentIntegrity(unittest.TestCase):
             dashboard={
                 "core_conclusion": {"one_sentence": "持有观望"},
                 "intelligence": {"risk_alerts": []},
-                "battle_plan": {"sniper_points": {"stop_loss": "110元"}},
+                "battle_plan": {"sniper_points": {"stop_loss": "110元"}, "sniper_prices": {"stop_loss": 110}},
             },
         )
         ok, missing = check_content_integrity(result)
@@ -239,7 +240,7 @@ class TestCheckContentIntegrity(unittest.TestCase):
             dashboard={
                 "core_conclusion": {"one_sentence": "持有"},
                 "intelligence": {"risk_alerts": []},
-                "battle_plan": {"sniper_points": {"stop_loss": "110"}},
+                "battle_plan": {"sniper_points": {"stop_loss": "110"}, "sniper_prices": {"stop_loss": 110}},
             },
         )
 
@@ -527,7 +528,7 @@ class TestApplyPlaceholderFill(unittest.TestCase):
             dashboard={
                 "core_conclusion": {"one_sentence": "持有观望"},
                 "intelligence": {"risk_alerts": []},
-                "battle_plan": {"sniper_points": {"stop_loss": "100"}},
+                "battle_plan": {"sniper_points": {"stop_loss": "100"}, "sniper_prices": {"stop_loss": 100}},
                 "phase_decision": {
                     "phase_context": "invalid",
                     "watch_conditions": "invalid",

@@ -293,3 +293,55 @@ def test_malformed_structured_block_does_not_fall_back_to_text(block):
     assert extract_sniper_points(raw) == dict.fromkeys(SNIPER_KEYS)
     assert extract_sniper_points(SimpleNamespace(dashboard=raw["dashboard"])) == dict.fromkeys(SNIPER_KEYS)
 
+
+# ---- 買入／持有沒有 sniper_prices：要模型補，不從文字猜 ----
+
+LABELLED_POINTS = {
+    "ideal_buy": "理想买入点：100元（在MA5附近）",
+    "secondary_buy": "次优买入点：100元（在MA10附近）",
+    "stop_loss": "止损：99元（跌破MA20）",
+    "take_profit": "目标：101元",
+}
+
+
+def result_without_block(decision_type):
+    result = result_with({})
+    result.decision_type = decision_type
+    del result.dashboard["battle_plan"]["sniper_prices"]
+    result.dashboard["battle_plan"]["sniper_points"] = dict(LABELLED_POINTS)
+    return result
+
+
+@pytest.mark.parametrize("decision_type", ["buy", "hold"])
+def test_missing_structured_block_on_buy_hold_triggers_repair(decision_type):
+    result = result_without_block(decision_type)
+    field = "dashboard.battle_plan.sniper_prices"
+    assert check_content_integrity(result) == (False, [field])
+    analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
+    for language in ("zh", "zh-TW", "en", "ko"):
+        assert "dashboard.battle_plan.sniper_prices" in analyzer._build_integrity_complement_prompt([field], language)
+    # 補全失敗時也不替模型編價位
+    apply_placeholder_fill(result, [field])
+    assert "sniper_prices" not in result.dashboard["battle_plan"]
+    assert extract_sniper_points(result) == dict.fromkeys(SNIPER_KEYS)
+
+
+@pytest.mark.parametrize("block", ["110", [110]])
+def test_malformed_structured_block_on_buy_triggers_repair(block):
+    result = result_without_block("buy")
+    result.dashboard["battle_plan"]["sniper_prices"] = block
+    ok, missing = check_content_integrity(result)
+    assert not ok and "dashboard.battle_plan.sniper_prices" in missing
+
+
+def test_missing_block_and_stop_text_reports_both():
+    result = result_without_block("buy")
+    result.dashboard["battle_plan"]["sniper_points"]["stop_loss"] = ""
+    assert check_content_integrity(result) == (False, [
+        "dashboard.battle_plan.sniper_prices",
+        "dashboard.battle_plan.sniper_points.stop_loss",
+    ])
+
+
+def test_sell_without_structured_block_is_not_over_required():
+    assert check_content_integrity(result_without_block("sell")) == (True, [])

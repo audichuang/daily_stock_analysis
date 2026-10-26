@@ -384,7 +384,7 @@ class TestSignalAttributionE2E:
 
         # 情况 2: signal_attribution 缺失
         dashboard_no_attr = self._make_dashboard_with_signal_attr(None)
-        dashboard_no_attr["battle_plan"] = {"sniper_points": {"stop_loss": "100"}}
+        dashboard_no_attr["battle_plan"] = {"sniper_points": {"stop_loss": "100"}, "sniper_prices": {"stop_loss": 100}}
         result_no_attr = self._make_result(dashboard_no_attr)
 
         passed, missing = check_content_integrity(result_no_attr)
@@ -399,7 +399,7 @@ class TestSignalAttributionE2E:
             # 缺少 fundamentals 和 market_conditions
         }
         dashboard_incomplete = self._make_dashboard_with_signal_attr(signal_attr_incomplete)
-        dashboard_incomplete["battle_plan"] = {"sniper_points": {"stop_loss": "100"}}
+        dashboard_incomplete["battle_plan"] = {"sniper_points": {"stop_loss": "100"}, "sniper_prices": {"stop_loss": 100}}
         result_incomplete = self._make_result(dashboard_incomplete)
 
         passed, missing = check_content_integrity(result_incomplete)
