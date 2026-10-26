@@ -10,7 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 - [修复] 測試守門在 worktree 自帶不同 URL 的 `.env` 時，同時拒絕最近 `.env` 與主 checkout（經 Git common dir 找到）的 `STORAGE_DATABASE_URL`，並擋主 checkout 的 `DATABASE_URL`（主 checkout 本身與 worktree 自己宣告同一條時不擋，保留 `market_data/tests` 的 rollback 連線）；以 SQLAlchemy `URL` 物件傳入的正式庫也擋；所有 Copilot 指令鏡像補回 `gh-wait` 等 CI 的規則
+- [修复] 媒體／PTT 共用快照固定以 PIT 法定公告期限過濾月營收，cutoff 等於或晚於最新行情日也不切換 live，避免週末／連假補抓時把期限尚未到的營收永久寫入 journal；Web／個股報告維持既有 live 判定。
 - [修复] `screen_tw --date`、個股資料包帶基準日（Web `GET /api/v1/stocks/{code}/dossier?date=`、`stock-report --date`）與媒體／PTT 快照共用 `market_data.revenue_deadline.is_historical_replay`：只有明確指定日期嚴格早於全市場 `market.price` 最新日期才套月營收法定公告期限，帶今天／最新或未來日期改走 live、保留期限前已公告的營收（如 28xx 保險類 11~15 日），個股價格落後不再誤觸 PIT；最新日期取不到時保守當回放
+- [修复] 媒體點名／PTT 標的文的資料快照（`scripts/tw_media_picks.py` 的 `snapshot()`，兩支排程共用）恢復一律依月營收法定公告期限判斷可見：寫進 append-only journal 的 `revenue_yoy_3m` 不再因截止日等於全市場最新場次（當天處理、週五截止的集數週末才處理）而走 live，保險類 11~15 日在截止日之後才申報的營收不會永久寫進紀錄；Web／`stock-report`／`screen_tw` 的 live 判定不變
+- [修复] `screen_tw --date`、個股資料包帶基準日（Web `GET /api/v1/stocks/{code}/dossier?date=`、`stock-report --date`）共用 `market_data.revenue_deadline.is_historical_replay`：只有明確指定日期嚴格早於全市場 `market.price` 最新日期才套月營收法定公告期限，帶今天／最新或未來日期改走 live、保留期限前已公告的營收（如 28xx 保險類 11~15 日），個股價格落後不再誤觸 PIT；最新日期取不到時保守當回放
 - [修复] 測試的正式庫守門在樹外 worktree（如 dsa-upstream-sync 的 `~/.cache/dsa-upstream-sync/<date>`）往上找不到 `.env`、或最近的 `.env` 沒設 `STORAGE_DATABASE_URL` 時，改經 `git rev-parse --git-common-dir` 讀主 checkout 的 `.env`；AGENTS.md §9 等 CI 改用 `gh-wait`
 - [新功能] 每日行情更新可用預設關閉的 `TAIFEX_OI_ACCUMULATE_ENABLED` 累積期交所外資大台 TXF 淨未平倉至 market schema，與盤前腳本共用解析及回應日期護欄、按官方近 14 天原日期冪等寫入；單一來源失敗只報警告，新增 migration 非空表拒絕降版。
 - [新功能] 期交所三大法人臺股期貨（大台 TXF）未平倉每日入庫 `market.taifex_fut_oi`（新 migration `e4f7a2c9b1d3`，表內有資料時拒絕降版）：`TAIFEX_OI_PERSIST_ENABLED=true` 時 `market_data.cli daily` 抓近 14 曆日窗口並以回應每列自帶日期 upsert，窗口外日期整包拒收、身份別不齊的日子不寫、最新一列早於預期場次印停更 WARN，期交所或資料表失敗只報不擋；預設關（不連期交所、不碰該表），另有不看開關的 `python -m market_data.cli taifex-oi`；`scripts/taifex_positions.py` 改與入庫共用 `market_data/taifex.py` 的端點、抓取與解析（輸出不變）

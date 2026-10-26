@@ -14,6 +14,7 @@ DB 的 announce_date 是佔位「次月 10 日」：2020-01 營收展延到 2/15
 
 from __future__ import annotations
 
+import json
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -263,6 +264,82 @@ def test_dossier_build_replays_only_before_latest_market_date(monkeypatch, as_of
     assert out["errors"] == []
     assert out["as_of"] == price_date
     assert out["fundamentals"]["monthly_revenue"][-1]["month"] == month
+
+
+@pytest.mark.parametrize("source", ["media", "ptt", "web"])
+@pytest.mark.parametrize("cutoff, latest, sid, snapshot_yoy", [
+    ("2026-04-10", "2026-04-10", "2881", [10.0, 20.0, 30.0]),
+    ("2026-04-11", "2026-04-10", "2881", [10.0, 20.0, 30.0]),
+    ("2026-04-15", "2026-04-15", "2881", [20.0, 30.0, 90.0]),
+    ("2026-04-10", "2026-04-10", "2330", [20.0, 30.0, 90.0]),
+])
+def test_journal_revenue_keeps_cutoff_pit_while_web_stays_live(
+        monkeypatch, tmp_path, source, cutoff, latest, sid, snapshot_yoy):
+    from tests.litellm_stub import ensure_litellm_stub
+
+    ensure_litellm_stub()
+    import tw_media_picks as mp
+    import tw_ptt_picks as tp
+    from src.services import tw_stock_dossier as dossier
+
+    cutoff, latest = pd.Timestamp(cutoff).date(), pd.Timestamp(latest).date()
+    # 週末才入庫的保險類 3 月營收仍帶 4/10 佔位日；4/15 前的 journal 不能永久寫入這個 90%。
+    rev = pd.DataFrame({
+        "revenue_month": pd.to_datetime(["2026-03-01", "2026-02-01", "2026-01-01", "2025-12-01"]),
+        "revenue": 100, "yoy": [90.0, 30.0, 20.0, 10.0],
+        "announce_date": [mp.date(2026, 4, 10), mp.date(2026, 3, 10),
+                          mp.date(2026, 2, 10), mp.date(2026, 1, 10)],
+    })
+
+    def fake_sql(engine, sql, **kw):
+        if "market.price" in sql:
+            return pd.DataFrame({"d": [latest]})
+        if "monthly_revenue" in sql:
+            return rev[rev["announce_date"] <= kw["d"]].copy()
+        return pd.DataFrame(columns=["date", "account", "value"])
+
+    monkeypatch.setattr(dossier, "_sql", fake_sql)
+    monkeypatch.setattr(dossier.market_repo, "latest_price_date", lambda engine: latest)
+    days = pd.bdate_range(end=latest, periods=65)
+    monkeypatch.setattr(dossier.market_repo, "price_history",
+                        lambda sid, start, end, engine: pd.DataFrame({"date": days, "close": 100.0}))
+    monkeypatch.setattr(dossier.market_repo, "front_adjust_multipliers",
+                        lambda sid, dates, engine: pd.Series(1.0, index=dates.index))
+    monkeypatch.setattr(dossier, "technicals", lambda *a, **k: (None, []))
+    monkeypatch.setattr(dossier, "stock_name", lambda sid, engine=None: None)
+    monkeypatch.setattr(dossier, "contract_liabilities", lambda *a: [])
+    monkeypatch.setattr(dossier, "chips", lambda *a, **k: {})
+    monkeypatch.setattr(dossier, "valuation", lambda *a: None)
+    # 固定純平日日曆，營收期限仍走正式的 effective_announce_dates。
+    from market_data import health
+    monkeypatch.setattr(health, "_xtai_session_checker", lambda **k: lambda d: d.weekday() < 5)
+
+    code, name = f"{sid}.TW", "富邦金" if sid == "2881" else "台積電"
+    index, engine = [(code, name, [])], object()
+    published = mp.datetime.combine(cutoff + mp.timedelta(days=1), mp.datetime.min.time(), tzinfo=mp.TPE)
+    assert mp.data_cutoff("節目", published.date(), published) == tp.data_cutoff(published) == cutoff
+    now = published.replace(hour=23).isoformat()
+    if source == "media":
+        monkeypatch.setattr(mp, "TRANSCRIPTS", tmp_path)
+        # NotebookLM 回傳 JSON；其餘命令的回應在 process 中不會被讀取。
+        monkeypatch.setattr(mp, "nb", lambda *a, **k: {"answer": json.dumps([{"name": name, "code": sid}])})
+        ep = {"show": "節目", "kind": "tv", "video_id": "v", "url": "u", "title": "節目",
+              "aired": published.date(), "cutoff": cutoff, "source_id": "s"}
+        row, = mp.process(ep, "nb", index, engine)
+    elif source == "ptt":
+        art = {"article_id": "a", "title": f"[標的] {name}", "posted": published, "cutoff": cutoff, "url": "u"}
+        page = f'<div id="main-content"><span class="article-meta-value">{name}</span>\n標的：{sid} {name}\n分類：多\n'
+        row = tp.build_row(art, page, index, engine, now)
+    else:
+        out = dossier.build(code, as_of=cutoff, branch=False, engine=engine)
+        assert out["errors"] == []
+        assert out["fundamentals"]["monthly_revenue"][-1]["month"] == "2026-03"
+        assert [m["yoy_pct"] for m in out["fundamentals"]["monthly_revenue"][-3:]] == [20.0, 30.0, 90.0]
+        return
+
+    assert row["stock_code"] == code
+    assert row["data"]["as_of"] == str(latest)
+    assert row["data"]["revenue_yoy_3m"] == snapshot_yoy
 
 
 def _dossier_limited(monkeypatch, sid, as_of, pit):
