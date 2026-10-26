@@ -164,6 +164,55 @@ def test_store_events_keeps_past_events(pg_conn):
     assert labels == ["1900Q1", "1900Q2"], "已經過去的事件是歷史，不能因為這次沒抓到就刪"
 
 
+def test_fomc_fallback_keeps_confirmed_meetings(pg_conn):
+    """官網掛掉時只剩 Kalshi：不能刪掉 Kalshi 視野外的已確認會議，也不能用 estimated 蓋掉 confirmed。"""
+    today = D(2099, 1, 1)
+    fed = [{**_event("ZZFED", "2099-01", D(2099, 1, 28), etype="fomc"), "status": "confirmed"},
+           {**_event("ZZFED", "2099-03", D(2099, 3, 18), etype="fomc"), "status": "confirmed"}]
+    macro.store_events(pg_conn, fed, today)
+    kalshi_only = [_event("ZZFED", "2099-01", D(2099, 1, 29), etype="fomc"),
+                   _event("ZZFED", "2099-05", D(2099, 5, 6), etype="fomc")]
+    macro.store_events(pg_conn, kalshi_only, today)
+    rows = pg_conn.execute(text(
+        "SELECT label, event_date, status FROM market.event_calendar WHERE symbol = 'ZZFED' ORDER BY 1")).all()
+    assert [tuple(r) for r in rows] == [("2099-01", D(2099, 1, 28), "confirmed"),
+                                        ("2099-03", D(2099, 3, 18), "confirmed"),
+                                        ("2099-05", D(2099, 5, 6), "estimated")]
+    # 官網恢復後，confirmed 照常覆蓋
+    macro.store_events(pg_conn, [{**_event("ZZFED", "2099-05", D(2099, 5, 5), etype="fomc"),
+                                  "status": "confirmed"}], today)
+    assert pg_conn.execute(text(
+        "SELECT event_date FROM market.event_calendar WHERE symbol = 'ZZFED' AND label = '2099-05'")).scalar() \
+        == D(2099, 5, 5)
+    # 官網自己改期（confirmed 蓋 confirmed）也要生效
+    macro.store_events(pg_conn, [{**_event("ZZFED", "2099-01", D(2099, 1, 27), etype="fomc"),
+                                  "status": "confirmed"}], today)
+    assert pg_conn.execute(text(
+        "SELECT event_date FROM market.event_calendar WHERE symbol = 'ZZFED' AND label = '2099-01'")).scalar() \
+        == D(2099, 1, 27)
+
+
+def test_fetch_series_stores_unadjusted_closes(monkeypatch):
+    """還原價會在除息後改寫整段歷史，而每天只重抓 3 個月；一定要抓未還原收盤。"""
+    import sys
+    import types
+
+    seen = []
+
+    class _Ticker:
+        def __init__(self, sid): self.sid = sid
+
+        def history(self, period, auto_adjust=True):
+            seen.append(auto_adjust)
+            idx = pd.DatetimeIndex(["2099-01-02"])
+            return pd.DataFrame({"Close": [1.0]}, index=idx)
+
+    monkeypatch.setitem(sys.modules, "yfinance", types.SimpleNamespace(Ticker=_Ticker))
+    monkeypatch.setattr(macro, "SERIES", (macro.Series("ZZ", "zz", "macro", "index", False, ""),))
+    rows, failed = macro.fetch_series(today=D(2099, 1, 3), out=lambda *_: None)
+    assert seen == [False] and failed == [] and rows[0]["date"] == D(2099, 1, 2)
+
+
 def test_store_series_and_rates_are_idempotent_upserts(pg_conn):
     rows = [{"series_id": "ZZ:TEST", "date": D(1900, 1, 2), "value": 1.0, "source": "test", "updated_at": NOW}]
     macro.store_series(pg_conn, rows)

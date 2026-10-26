@@ -15,10 +15,11 @@
 ## 語意與坑
 
 - **日期是資料列自帶的交易日**，不是抓取日。期貨與匯率在台北白天抓到的最後一列是盤中值，下次抓取同日會被覆蓋；`make morning` 07:30 跑的時候美股已收盤。
+- **存的是未還原收盤**（`auto_adjust=False`）：還原價在除息、分割後會改寫整段歷史，而每天只重抓近 3 個月，混著存會讓 MA200 與一年高點同時用到兩種還原基準。代價是 ETF（HYG、EWT）除息日會有一個小缺口，個股分割日會有一個跳點。
 - **殖利率類（`kind=yield`）單位是百分比**（4.99 = 4.99%），儀表的變化用 bp 表示。
 - **機率用買賣價中點，不用 `last_price`**：最後成交可能是很久以前的。實測 2026-10-26 的 2027 年 3 月「降 25bp」最後成交 0.35，買賣價卻是 0.06／0.13。沒有賣單（ask 為 0）的結果記 `prob_mid = NULL`，儀表會標「無報價」，不當成 0。各結果是獨立合約，中點加總不一定是 100%。
 - **利率預期沒有歷史快照可補**：Kalshi 只給「現在」的報價，所以 `rate_expectations` 只從開始入庫那天起累積。漏跑一天就永遠少一天，降版 migration 在表內有資料時會拒絕。
-- **FOMC 決議日以 Fed 官網為準**：取每場會議的最後一天，跨月會議（`April/May` + `30-1`）取後一個月，非例會（unscheduled、notation vote）略過。Kalshi 合約收盤時間換成美東日期當交叉對照；`source` 欄是 `fed+kalshi`（一致）、`fed(kalshi不符)`、`fed`、`kalshi`（官網還沒列，`status=estimated`）。
+- **FOMC 決議日以 Fed 官網為準**：取每場會議的最後一天，跨月會議（`April/May` + `30-1`）取後一個月，非例會（unscheduled、notation vote）略過。Kalshi 合約收盤時間換成美東日期當交叉對照；官網抓不到的那天只剩 Kalshi：不刪任何 FOMC 列，`estimated` 也不覆蓋已經 `confirmed` 的同一場會議；`source` 欄是 `fed+kalshi`（一致）、`fed(kalshi不符)`、`fed`、`kalshi`（官網還沒列，`status=estimated`）。
 - **財報日一律 `estimated`**：yfinance 不給確認狀態，而且實測 MSFT 2026-10-28 盤後的財報，yfinance 給的是 10-29。看到財報日要知道可能差一天。財報的 `label` 是財報日所在季度（`2026Q4`），同季改期會更新同一列；跨季改期時，同一檔未來日期、但這次沒抓到的那筆會被刪掉，已經過去的事件不刪。
 - watchlist 預設 `MSFT GOOGL AMZN META AAPL NVDA TSM MU AVGO AMD ORCL TSLA`，用 `.env` 的 `MACRO_EARNINGS_WATCHLIST`（逗號分隔）覆蓋。
 - 台灣法說會與央行理監事會**還沒入庫**：法說會由 `market_data/events.py` 即時抓、只出現在 screen 報告的事件日曆。

@@ -149,7 +149,9 @@ def fetch_series(period=YF_PERIOD, today=None, out=print):
                 url = FRED_URL.format(id=s.id.split(":", 1)[1], start=today - datetime.timedelta(days=days))
                 got = parse_fred_csv(s.id, http_get(url).text)
             else:
-                got = yf_rows(s.id, yf.Ticker(s.id).history(period=period)["Close"])
+                # auto_adjust=False：存未還原收盤。預設的還原價在除息／分割後會改寫整段歷史，而每天只
+                # 重抓近 3 個月，舊列會停在舊的還原基準，MA200 與一年高點就混了兩種口徑
+                got = yf_rows(s.id, yf.Ticker(s.id).history(period=period, auto_adjust=False)["Close"])
             if not got:
                 raise ValueError("回應沒有資料")
             rows.extend(got)
@@ -294,22 +296,31 @@ def earnings_event(symbol, calendar, now=None):
 
 
 def store_events(conn, rows, today):
-    """upsert 事件；同一 (event_type, symbol) 今天以後、但這次沒抓到的 label 刪掉
-    （財報改期跨季時舊的那筆不留著當幽靈事件）。只動這次有抓到的 symbol。"""
+    """upsert 事件，回寫入列數。
+
+    - 財報：同一 symbol 今天以後、但這次沒抓到的 label 刪掉（改期跨季時舊的那筆不留著當幽靈事件）；
+      只動這次有抓到的 symbol，已經過去的事件不刪。
+    - FOMC：不刪任何列（官網掛掉時只剩 Kalshi，那不是完整行事曆）；``estimated`` 的列不覆蓋
+      已經是 ``confirmed`` 的同一場會議。"""
     from sqlalchemy import text
 
     from market_data.writer import upsert
 
     if not rows:
         return 0
+    confirmed = set(conn.execute(text(
+        "SELECT symbol, label FROM market.event_calendar WHERE event_type = 'fomc' AND status = 'confirmed'")).all())
+    rows = [r for r in rows if not (r["event_type"] == "fomc" and r["status"] != "confirmed"
+                                    and (r["symbol"], r["label"]) in confirmed)]
     keep = {}
     for r in rows:
-        keep.setdefault((r["event_type"], r["symbol"]), []).append(r["label"])
-    for (etype, symbol), labels in keep.items():
+        if r["event_type"] == "earnings":
+            keep.setdefault(r["symbol"], []).append(r["label"])
+    for symbol, labels in keep.items():
         conn.execute(text(
-            "DELETE FROM market.event_calendar WHERE event_type = :t AND symbol = :s "
+            "DELETE FROM market.event_calendar WHERE event_type = 'earnings' AND symbol = :s "
             "AND event_date >= :today AND NOT (label = ANY(:labels))"),
-            {"t": etype, "s": symbol, "today": today, "labels": labels})
+            {"s": symbol, "today": today, "labels": labels})
     return upsert(conn, models.EventCalendar.__table__, rows, ["event_type", "symbol", "label"])
 
 
