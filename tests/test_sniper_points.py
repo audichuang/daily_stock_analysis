@@ -311,3 +311,31 @@ def test_not_set_followed_by_comma_is_none(text):
 ])
 def test_not_set_followed_by_comma_keeps_actionable_price(text, field, expected):
     assert parse_sniper_value(text, field) == expected
+
+
+# 「目前／現階段」前綴後面接逗號再寫未設定用語：前綴後的分隔符也要允許，否則再評估價位會被當成買點／停損
+@pytest.mark.parametrize("text, field", [
+    ("目前，暫無買點，回調到120元再看", "ideal_buy"),
+    ("目前，暫無買點，等站回125元再評估", "ideal_buy"),
+    ("理想買入點：目前，暫無買點，等站回125元再評估", "ideal_buy"),
+    ("現階段、暫不設定，站回125元再評估", "secondary_buy"),
+    ("现阶段,暂无买点,等站回125元再评估", "ideal_buy"),
+    ("目前，暫不設定，跌破95元再評估", "stop_loss"),
+    ("停損點：目前，暫不設定，跌破95元再評估", "stop_loss"),
+    ("目前，暫無，突破150元再評估", "take_profit"),
+])
+def test_prefix_comma_not_set_is_none(text, field):
+    assert parse_sniper_value(text, field) is None
+
+
+# 反向：前綴加逗號後沒有未設定用語、或之後給了可執行價位，照常取值
+@pytest.mark.parametrize("text, field, expected", [
+    ("目前，回測118元可試單", "ideal_buy", 118.0),
+    ("目前，118元", "ideal_buy", 118.0),
+    ("目前，暫無買點，回測118元可試單", "ideal_buy", 118.0),
+    ("目前，跌破95元停損", "stop_loss", 95.0),
+    ("目前，暫不設定，跌破95元停損", "stop_loss", 95.0),
+    ("目前，150元", "take_profit", 150.0),
+])
+def test_prefix_comma_reverse_keeps_price(text, field, expected):
+    assert parse_sniper_value(text, field) == expected
