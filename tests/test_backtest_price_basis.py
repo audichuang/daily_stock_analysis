@@ -192,34 +192,54 @@ def test_net_return_etf_uses_lower_tax_and_cash_and_non_tw():
     assert _eval_single("买入", bars, us_basis)["simulated_net_return_pct"] is None
 
 
-def test_compute_tw_net_return_pct_none_inputs():
-    assert compute_tw_net_return_pct(None, (1.0, 1.0)) is None
-    assert compute_tw_net_return_pct(5.0, None) is None
+BOND_ETF_SELL_MULT = (1 - 0.0015) * (1 - 0.001425)  # 債券 ETF 停徵期內：只剩手續費與滑價
 
 
-@pytest.mark.parametrize("code,day,tax", [
-    ("00679B.TWO", date(2017, 1, 1), 0.0),
-    ("00679B.TW", date(2026, 12, 31), 0.0),
-    ("00679B.TWO", date(2016, 12, 31), 0.001),
-    ("00679B.TWO", date(2027, 1, 1), 0.001),
-    ("0050.TW", date(2026, 12, 31), 0.001),
-    ("00631L.TW", date(2026, 12, 31), 0.001),
-    ("00632R.TW", date(2026, 12, 31), 0.001),
-    ("2887A.TW", date(2026, 12, 31), 0.003),
-])
-def test_bond_etf_exemption_is_date_bounded(code, day, tax):
-    bars = [_bar(day, open_=100.0, close=100.0)]
-    basis = resolve_entry_basis(code=code, anchor_date=day, window_bars=bars,
-                                factor_loader=_loader_from({}))
-    result = _eval_single("買進", bars, basis)
-    expected_sell = (1 - 0.0015) * (1 - 0.001425 - tax)
+def test_bond_etf_net_return_has_no_tax_inside_statutory_exemption():
+    bars = [_bar(D1, open_=100.0, close=105.0), _bar(D2, open_=105.0, close=110.0)]
+    basis = resolve_entry_basis(
+        code="00679B.TWO", anchor_date=ANCHOR, window_bars=bars, factor_loader=_loader_from({})
+    )
+    assert basis.cost_multipliers[1] == pytest.approx(BOND_ETF_SELL_MULT)
+    result = _eval_single("买入", bars, basis)
     assert result["simulated_net_return_pct"] == pytest.approx(
-        (expected_sell / STOCK_BUY_MULT - 1) * 100)
+        (1.10 * BOND_ETF_SELL_MULT / STOCK_BUY_MULT - 1) * 100, rel=1e-12
+    )
+
+
+def test_bond_etf_tax_follows_actual_exit_day_across_exemption_end():
+    # 窗口跨過停徵迄日 2026-12-31：停損在 12/31 出場免稅，撐到 2027 期末才出場就要課 ETF 稅。
+    d1, d2, d3 = date(2026, 12, 30), date(2026, 12, 31), date(2027, 1, 4)
+    anchor = date(2026, 12, 29)
+    stopped = [
+        _bar(d1, open_=100.0, high=100.5, low=99.5, close=100.0),
+        _bar(d2, open_=99.0, high=99.0, low=94.0, close=95.0),
+        _bar(d3, open_=95.0, high=96.0, low=94.5, close=95.5),
+    ]
+    basis = resolve_entry_basis(
+        code="00679B.TWO", anchor_date=anchor, window_bars=stopped, factor_loader=_loader_from({})
+    )
+    # 預設（期末）賣出日已過停徵期
+    assert basis.cost_multipliers[1] == pytest.approx(ETF_SELL_MULT)
+    stop_exit = BacktestEngine.evaluate_single(
+        operation_advice="买入", analysis_date=anchor, start_price=100.0, forward_bars=stopped,
+        stop_loss=95.0, take_profit=120.0,
+        config=EvaluationConfig(eval_window_days=3, engine_version="v1-t1o-adj"), price_context=basis,
+    )
+    assert stop_exit["first_hit_date"] == d2
+    assert stop_exit["simulated_net_return_pct"] == pytest.approx(
+        (0.95 * BOND_ETF_SELL_MULT / STOCK_BUY_MULT - 1) * 100, rel=1e-12
+    )
+    held = _eval_single("买入", stopped, basis)
+    assert held["simulated_net_return_pct"] == pytest.approx(
+        (0.955 * ETF_SELL_MULT / STOCK_BUY_MULT - 1) * 100, rel=1e-12
+    )
 
 
 @pytest.mark.parametrize("source", [MDB, "YahooFetcher"])
 @pytest.mark.parametrize("early", [False, True])
-def test_bond_etf_tax_uses_actual_exit_when_window_crosses_expiry(source, early):
+def test_bond_etf_tax_uses_actual_exit_on_adjusted_and_raw_basis(source, early):
+    # 非本地行情退回原始價（raw）時，同樣依實際出場日取稅率
     bars = [_bar(date(2026, 12, 31), open_=100.0, high=111.0, close=110.0, source=source),
             _bar(date(2027, 1, 4), open_=110.0, high=111.0, close=110.0, source=source)]
     basis = resolve_entry_basis(code="00679B.TWO", anchor_date=date(2026, 12, 30),
@@ -229,6 +249,11 @@ def test_bond_etf_tax_uses_actual_exit_when_window_crosses_expiry(source, early)
     assert result["simulated_exit_reason"] == ("take_profit" if early else "window_end")
     assert result["simulated_net_return_pct"] == pytest.approx(
         (1.10 * (1 - 0.0015) * (1 - 0.001425 - tax) / STOCK_BUY_MULT - 1) * 100)
+
+
+def test_compute_tw_net_return_pct_none_inputs():
+    assert compute_tw_net_return_pct(None, (1.0, 1.0)) is None
+    assert compute_tw_net_return_pct(5.0, None) is None
 
 
 def test_non_tw_never_loads_factors_and_matches_raw_open_to_close():

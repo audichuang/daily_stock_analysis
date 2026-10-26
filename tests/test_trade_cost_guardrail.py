@@ -53,6 +53,16 @@ class TestEvaluateLevels(unittest.TestCase):
         self.assertFalse(c["passed"])
         self.assertAlmostEqual(c["round_trip_cost_pct"], 0.882, places=2)
 
+    def test_bond_etf_cost_drops_tax_only_inside_statutory_exemption(self):
+        from datetime import date
+
+        inside = evaluate_levels("00679B.TWO", **TYPICAL, sale_date=date(2026, 6, 30))
+        after = evaluate_levels("00679B.TWO", **TYPICAL, sale_date=date(2027, 1, 1))
+        etf = evaluate_levels("0050.TW", **TYPICAL, sale_date=date(2026, 6, 30))
+        # 停徵期內少掉 0.1% 證交稅；期滿後與一般 ETF 相同
+        self.assertAlmostEqual(after["round_trip_cost_pct"], etf["round_trip_cost_pct"], places=6)
+        self.assertAlmostEqual(after["round_trip_cost_pct"] - inside["round_trip_cost_pct"], 0.1, delta=0.005)
+
     def test_wide_levels_pass(self):
         self.assertTrue(evaluate_levels("2330.TW", **WIDE)["passed"])
 

@@ -20,13 +20,18 @@
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from src.report_language import localize_operation_advice, normalize_report_language
 from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.services.market_symbol_utils import get_suffix_market
 from src.utils.sniper_points import extract_sniper_points
-from src.utils.tw_trade_costs import DEFAULT_SLIPPAGE_RATE, per_share_cost_multipliers
+from src.utils.tw_trade_costs import (
+    DEFAULT_SLIPPAGE_RATE,
+    per_share_cost_multipliers,
+    tw_sell_tax_rate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +55,12 @@ def evaluate_levels(
     fee_discount: float = 1.0,
     slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     atr_pct: Optional[float] = None,
+    sale_date: Optional[date] = None,
 ) -> Dict[str, Any]:
     """回傳一份 cost_check。``status`` 區分「檢核過」與「沒辦法檢核」，缺這份資料
-    跟「檢核沒過」是兩件事，讀的人要分得出來。"""
+    跟「檢核沒過」是兩件事，讀的人要分得出來。
+
+    ``sale_date`` 是假設的賣出日，決定證交稅率（債券 ETF 停徵有期限）；未給用今天。"""
     base: Dict[str, Any] = {"min_net_rr": min_net_rr}
     if not is_tw_code(code):
         return {**base, "status": "unsupported_market", "passed": None}
@@ -62,7 +70,8 @@ def evaluate_levels(
 
     stock_id = str(code).split(".")[0]
     buy_mult, sell_mult = per_share_cost_multipliers(
-        is_etf=stock_id.startswith("00"), fee_discount=fee_discount, slippage_rate=slippage_rate)
+        tax_rate=tw_sell_tax_rate(stock_id, sale_date or date.today()),
+        fee_discount=fee_discount, slippage_rate=slippage_rate)
     paid = ideal_buy * buy_mult
     net_up = take_profit * sell_mult / paid - 1
     net_down = 1 - stop_loss * sell_mult / paid

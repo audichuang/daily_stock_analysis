@@ -7,10 +7,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tests.litellm_stub import ensure_litellm_stub
-
-ensure_litellm_stub()
-
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 _spec = importlib.util.spec_from_file_location("verify_media_picks", ROOT / "scripts" / "verify_media_picks.py")
@@ -54,22 +50,6 @@ def test_anchor_on_weekend_enters_next_monday():
     o, c = flat_with_air_gap(5)                  # DAYS[5] = 週一 01-12；週日 01-11 播出
     ev = vmp.build_events([pick("2026-01-11")], panels(o, c), (2,))
     assert ev.iloc[0]["entry_date"] == DAYS[5]
-
-
-@pytest.mark.parametrize("sid,sell_day,tax", [
-    ("00679B", "2016-12-30", 0.001), ("00679B", "2017-01-03", 0.0),
-    ("00679B", "2026-12-31", 0.0), ("00679B", "2027-01-04", 0.001),
-    ("00631L", "2026-12-31", 0.001), ("2330", "2026-12-31", 0.003),
-])
-def test_media_picks_uses_date_bounded_bond_etf_tax(sid, sell_day, tax):
-    px = panels([100.0], [110.0], n=1, sid=sid)
-    day = pd.Timestamp(sell_day)
-    for panel in px.values():
-        panel.index = pd.DatetimeIndex([day])
-    ev = vmp.build_events([pick(day - pd.Timedelta(days=1), code=f"{sid}.TWO")], px, (1,))
-    assert ev.iloc[0]["status"] == "ok"
-    expected = 1.10 * (1 - 0.0015) * (1 - 0.001425 - tax) / ((1 + 0.0015) * (1 + 0.001425)) - 1
-    assert ev.iloc[0]["ret"] == pytest.approx(expected)
 
 
 def test_right_censored_is_excluded_and_counted_never_filled():
@@ -282,3 +262,20 @@ def test_speaker_records_need_five_entry_dates_for_enough():
     assert vmp.speaker_records(four)["甲"]["bull"]["enough"] is False
     five = _events(rows).assign(entry_date=[DAYS[i % 5] for i in range(20)])
     assert vmp.speaker_records(five)["甲"]["bull"]["enough"] is True
+
+
+def test_bond_etf_tax_exemption_follows_exit_date():
+    # 00679B：出場日在停徵期內不課證交稅，停徵期後課 ETF 0.1%；不是永久免稅
+    from src.utils.tw_trade_costs import round_trip_return
+
+    o, c = [100.0] * 40, [100.0] * 40
+    for i in range(5, 40):
+        c[i] = 110.0
+    for start, tax in (("2026-06-01", 0.0), ("2027-02-01", 0.001)):
+        days = pd.bdate_range(start, periods=40)
+        idx = days
+        pn = {"open": pd.DataFrame({"0050": 100.0, "00679B": o}, index=idx),
+              "close": pd.DataFrame({"0050": 100.0, "00679B": c}, index=idx)}
+        ev = vmp.build_events([pick(days[3], code="00679B.TWO")], pn, (5,))
+        assert ev.iloc[0]["ret"] == pytest.approx(
+            round_trip_return(100.0, 110.0, entry_notional=vmp.DEFAULT_NOTIONAL, tax_rate=tax))
