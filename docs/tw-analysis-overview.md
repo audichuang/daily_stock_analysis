@@ -108,7 +108,8 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
 - **2～5 天短波段專用契約與新訊號**：不要把現有突破訊號直接縮短持有期，已證實為負。
 - 影子評估累積 2～3 個月後，再決定 `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE` 與 `TW_MA_ALIGNMENT_WEIGHTED`。
 - 把 #39 的上櫃籌碼、集保、分點接進個股 prompt（目前只在 dossier）。
-- 資料：期交所法人未平倉入庫、當沖比與借券（FinMind 免費）、加權／櫃買指數歷史（`market_index` 只從 2026-07 開始）。
+- 資料：當沖比與借券（FinMind 免費）、加權／櫃買指數歷史（`market_index` 只從 2026-07 開始）。
+- 期交所法人台指期未平倉已可入庫（`market.taifex_fut_oi`，`TAIFEX_OI_PERSIST_ENABLED` 預設關，2026-10-26 起；只累積不回補，還沒有任何讀取端或回測），P/C 比仍只抓不存。
 - 強勢股營收降速改用 `decel_lt0`（兩個期距都穩），目前用的是 `decel_le20`。
 - `dsa` 正式庫裡有 5 筆測試資料待清（id 3／6／398 等，需使用者確認）。
 - 波段日誌 08-14～10-19 停擺：同期 33 個交易日有 27 天有候選，是流程沒跑，不是市場沒機會。

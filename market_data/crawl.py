@@ -672,6 +672,14 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
         print(f"holding_dist {n:,} rows, latest {latest}")
     except Exception as exc:
         print(f"**WARN holding_dist: {exc}")
+    # 期交所法人台指期未平倉：預設關（TAIFEX_OI_PERSIST_ENABLED），關時不連期交所也不碰該表；
+    # 開了也只報不擋——正式庫還沒跑 migration、期交所掛掉都不該讓復權與每日報告陪葬
+    from market_data import taifex
+    if taifex.persist_enabled():
+        try:
+            taifex.update(eng, asof=asof)
+        except Exception as exc:
+            print(f"**WARN taifex_fut_oi: {exc}")
     try:
         adjust.refresh_recent(
             eng, asof - _dt.timedelta(days=adjust.ADJUSTMENT_WINDOW_DAYS),

@@ -2,7 +2,8 @@
 """期交所籌碼：外資台指期（大台 TXF）淨未平倉＋日變化、臺指選擇權 P/C 未平倉比。
 
 給 `make morning` 的「期交所籌碼（前一交易日）」區塊與 skill `tw-morning-call` 用。
-只抓不入庫：一次 POST 就拿得到一段日期，日變化直接從回應算，不建表、不碰 DB。
+本腳本只抓不入庫：一次 POST 就拿得到一段日期，日變化直接從回應算，不碰 DB。期貨端點、抓取與
+解析和每日入庫（`market_data/taifex.py` → ``market.taifex_fut_oi``，``TAIFEX_OI_PERSIST_ENABLED``）共用。
 
 **新鮮度規則**：回應裡最新一列的日期必須等於預期場次（`market_data.health.expected_session`，
 或 ``--as-of`` 覆寫），否則**不印數字、改印原因**——期交所查非交易日／尚未公布時照樣回
@@ -32,9 +33,7 @@ CSV（正常 CSV 是 MS950，卻標成 ``text/html``）。
 """
 
 import argparse
-import csv
 import datetime
-import io
 import json
 import sys
 from dataclasses import dataclass
@@ -43,13 +42,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from market_data import health  # noqa: E402
-from market_data import tw_official_http as http  # noqa: E402
+from market_data import taifex  # noqa: E402
 from market_data.tw_official_http import md  # noqa: E402
 
-FUT_URL = "https://www.taifex.com.tw/cht/3/futContractsDateDown"
+FUT_URL = taifex.FUT_URL
 PC_URL = "https://www.taifex.com.tw/cht/3/pcRatioDown"
-# 起日往前推的曆日數：P/C 端點一次最多查約一個月，14 天裝得下長假。
-LOOKBACK_DAYS = 14
+# 起日往前推的曆日數（與入庫共用）：P/C 端點一次最多查約一個月，14 天裝得下長假。
+LOOKBACK_DAYS = taifex.LOOKBACK_DAYS
 
 _FUT_ITEM = "外資台指期淨未平倉"
 _PC_ITEM = "臺指選擇權 P/C"
@@ -59,29 +58,15 @@ _NO_CALENDAR_SETTLEMENT = "⚠ 交易日曆不可用，未檢查是否落在結�
 _NO_CALENDAR = "交易日曆不可用，期交所區塊略過（不退回週一~五猜場次）"
 
 
-def _parse_date(text):
-    return datetime.datetime.strptime(text.strip(), "%Y/%m/%d").date()
-
-
-def _reader(text, required):
-    reader = csv.DictReader(io.StringIO(text))
-    missing = [name for name in required if name not in (reader.fieldnames or [])]
-    if missing:
-        raise ValueError(f"表頭缺欄位 {missing}（端點可能改版）")
-    return reader
+_parse_date = taifex.parse_date
+_reader = taifex.csv_reader
 
 
 def parse_fut(text):
     """期貨 CSV → ``[(日期, 外資及陸資 臺股期貨 多空未平倉口數淨額)]``，依日期由舊到新。
 
-    依欄名取值、不靠欄位位置；表頭缺必要欄位時 raise ValueError。"""
-    reader = _reader(text, ("日期", "商品名稱", "身份別", "多空未平倉口數淨額"))
-    rows = []
-    for row in reader:
-        if (row["商品名稱"] or "").strip() != "臺股期貨" or (row["身份別"] or "").strip() != "外資及陸資":
-            continue
-        rows.append((_parse_date(row["日期"]), int(row["多空未平倉口數淨額"].strip())))
-    return sorted(rows)
+    解析與入庫共用 `taifex.parse_fut_rows`（依欄名取值；表頭缺欄位時 raise ValueError）。"""
+    return sorted((r["date"], r["net_oi"]) for r in taifex.parse_fut_rows(text) if r["identity"] == "foreign")
 
 
 def parse_pc(text):
@@ -137,12 +122,7 @@ def near_settlement(day, is_session=None):
     return before <= day <= after
 
 
-def _fetch(url, data):
-    """回 ``(CSV 文字, None)`` 或 ``(None, 原因)``。錯誤頁先交給 `tw_official_http.error_reason` 判斷，可用才以 cp950 解碼。"""
-    resp, reason = http.post(url, data=data, expect="csv")
-    if reason is not None:
-        return None, (f"期交所回應：{reason}" if resp is not None else reason)
-    return resp.content.decode("cp950", errors="replace"), None
+_fetch = taifex.fetch_csv
 
 
 def _fut_line(latest, prev, basis):

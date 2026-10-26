@@ -8,6 +8,7 @@
     python -m market_data.cli fund-history 18480065 # 單檔基金歷史淨值
     python -m market_data.cli holding               # 集保股權分散最新一週(全市場)
     python -m market_data.cli holding-history 3324 6191  # 個股近一年集保(每檔約 51 個請求)
+    python -m market_data.cli taifex-oi             # 期交所法人台指期未平倉(近 14 曆日窗口,不看開關)
 """
 
 import argparse
@@ -57,6 +58,10 @@ def main(argv=None):
     hh.add_argument("stock_id", nargs="+", help="不帶後綴的代號,如 3324")
     hh.add_argument("--weeks", type=int, default=None, help="只補最近 N 週,預設查詢頁提供的全部(約 51 週)")
     hh.add_argument("--delay", type=float, default=1.0, help="每週請求間隔秒數")
+    tx = sub.add_parser("taifex-oi", help="期交所三大法人臺股期貨未平倉:近 14 曆日窗口 upsert"
+                        "(手動單跑,不看 TAIFEX_OI_PERSIST_ENABLED;不回補更早歷史)")
+    tx.add_argument("--asof", type=datetime.date.fromisoformat, default=None,
+                    help="迄日上限 YYYY-MM-DD,預設取已收盤的預期場次")
     fh = sub.add_parser("fund-history", help="從鉅亨補單檔基金的歷史淨值(不覆蓋公會官方值)")
     fh.add_argument("fund_id", nargs="+", help="公會基金統編,如 18480065")
     fh.add_argument("--start", default=None, help="起日 YYYY-MM-DD,預設全期")
@@ -107,6 +112,9 @@ def main(argv=None):
     elif args.command == "holding-history":
         n = crawl.backfill_holding_dist(eng, args.stock_id, weeks=args.weeks, delay=args.delay)
         print(f"holding_dist rows upserted: {n:,}")
+    elif args.command == "taifex-oi":
+        from market_data import taifex
+        taifex.update(eng, asof=args.asof)
     elif args.command == "funds":
         from market_data import funds
         funds.daily_update(eng)

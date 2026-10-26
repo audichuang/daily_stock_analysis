@@ -40,6 +40,14 @@
 - **殖利率「沒配息」兩端點寫法不同**：快照 `BWIBBU_ALL` 留空字串，`BWIBBU_d` 印 `0.00`。`etl.transform_valuation` 自 2026-10-19 起把快照空白殖利率存成 0（本益比空白仍是 NULL——虧損無法計算）；2026-07-03~10-16 的 1.47 萬筆 NULL 已用 `backfill valuation --force` 回補成 0（逐日比對：列數、PE、PB 全不變），全表殖利率已無 NULL。NaN 會讓 `scripts/backtest_screen.py` 把 `divy` 加進分數時該檔掉出排名。
 - **valuation 的 `--force` 只有列數門檻（新列 ≥ 舊列一半），沒有法人那種欄位品質守門**——來源少一欄就整欄蓋成 NULL。
 
+## 期交所法人台指期未平倉
+
+- `market_data/taifex.py` 與 `scripts/taifex_positions.py` 共用期貨端點、cp950 取數與解析；盤前腳本仍只讀。寫入 `market.taifex_fut_oi` 的只有兩條路：`market_data.cli daily`（須明確設 `TAIFEX_OI_PERSIST_ENABLED=true`，預設關＝不連期交所、不碰該表）與不看開關的手動 `python -m market_data.cli taifex-oi [--asof YYYY-MM-DD]`。旗標由 market_data 直接讀環境變數，實際執行 daily 的環境（本機、Docker、Actions）都要自己注入。
+- 啟用前先對 `DATABASE_URL` 的 market 庫跑 `uv run --frozen python -m alembic -c market_data/alembic.ini upgrade head`（migration `e4f7a2c9b1d3`）。沒跑 migration 就開旗標只會印 `**WARN taifex_fut_oi`，不擋 daily。
+- 表契約：主鍵 `(date, commodity_id, identity)`，目前只存大台 `TXF`，`identity` 為 `dealer`／`trust`／`foreign`；口數單位口、契約金額單位千元，淨額負值為淨空。`date` 是回應每列自帶日期，不是抓取日。
+- 每輪只查迄日（已收盤的預期場次，未收盤時退到前一交易日）往前 14 曆日的窗口：任何一列落在窗口外整包拒收；同日身份別不齊只丟那天；最新一列早於預期場次時照寫已有日期並另印停更 WARN。窗口內按原日期 upsert，重跑不重複、官方更正會覆蓋；不回補更早歷史。P/C 比仍只抓不存。
+- 降版在刪表前檢查列數，非空即拒絕（market schema 無備份、期交所查不回舊窗口）；先匯出確認備份、人工清空再降版。回滾先關旗標再退程式，保留已累積的資料。
+
 ## 月營收／財報
 
 - `monthly_revenue.revenue` 單位是**千元**（MOPS 原始單位）；`twse_fundamental_adapter` 是 `*1000` 轉元後才用。

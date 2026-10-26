@@ -234,3 +234,25 @@ class HoldingDist(Base):
     holders: Mapped[int | None] = mapped_column(Integer)
     shares: Mapped[int | None] = mapped_column(BigInteger)
     pct: Mapped[float | None] = mapped_column(Numeric(8, 2))  # 占集保庫存數比例 %
+
+
+class TaifexFutOI(Base):
+    """期交所三大法人期貨未平倉（每日，每商品每身份別一列），來源 ``futContractsDateDown``。
+
+    目前只入庫臺股期貨（大台 ``TXF``，不含小台）。``identity``：``dealer`` 自營商、``trust`` 投信、
+    ``foreign`` 外資及陸資。口數單位：口；契約金額單位：千元。淨額＝多方−空方，負值＝淨空。
+    ``date`` 是回應每列自帶的交易日，不是抓取日；只從開始入庫那天起每日累積，不回補更早歷史
+    （寫入見 ``market_data/taifex.py``）。
+    """
+
+    __tablename__ = "taifex_fut_oi"
+
+    date: Mapped[_date] = mapped_column(Date, primary_key=True)
+    commodity_id: Mapped[str] = mapped_column(String(8), primary_key=True)  # TXF
+    identity: Mapped[str] = mapped_column(String(8), primary_key=True)  # dealer|trust|foreign
+    long_oi: Mapped[int | None] = mapped_column(BigInteger)
+    short_oi: Mapped[int | None] = mapped_column(BigInteger)
+    net_oi: Mapped[int | None] = mapped_column(BigInteger)
+    long_oi_amount: Mapped[int | None] = mapped_column(BigInteger)
+    short_oi_amount: Mapped[int | None] = mapped_column(BigInteger)
+    net_oi_amount: Mapped[int | None] = mapped_column(BigInteger)
