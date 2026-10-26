@@ -319,3 +319,34 @@ def test_taifex_failure_is_reported_and_daily_continues(monkeypatch, capsys):
     crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
     assert ("adjust",) in calls, "期交所段失敗不能讓復權刷新與後續報告陪葬"
     assert "**WARN taifex_fut_oi: relation market.taifex_fut_oi does not exist" in capsys.readouterr().out
+
+
+def test_macro_step_runs_when_enabled_and_skips_when_off(monkeypatch):
+    from market_data import macro
+
+    calls = _stub_daily(monkeypatch, failing=set())
+    monkeypatch.setattr(macro, "update", lambda eng, **k: calls.append(("macro",)))
+    monkeypatch.setenv(macro.FLAG_ENV, "false")
+    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+    assert ("macro",) not in calls
+    calls.clear()
+    monkeypatch.delenv(macro.FLAG_ENV)          # 未設＝預設開
+    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+    assert ("macro",) in calls
+    # 在復權刷新之前跑：復權失敗會 raise，不能讓總經段跟著被跳過
+    assert calls.index(("macro",)) < calls.index(("adjust",))
+
+
+def test_macro_failure_is_reported_and_daily_continues(monkeypatch, capsys):
+    from market_data import macro
+
+    calls = _stub_daily(monkeypatch, failing=set())
+
+    def boom(eng, **k):
+        raise RuntimeError("relation market.macro_series does not exist")
+
+    monkeypatch.setattr(macro, "update", boom)
+    monkeypatch.setenv(macro.FLAG_ENV, "true")
+    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+    assert ("adjust",) in calls, "總經段失敗不能讓復權刷新與後續報告陪葬"
+    assert "**WARN macro: relation market.macro_series does not exist" in capsys.readouterr().out

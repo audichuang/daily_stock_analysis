@@ -5,8 +5,9 @@ New tables/columns are added via Alembic migrations, not by editing a live DB.
 """
 
 from datetime import date as _date
+from datetime import datetime as _datetime
 
-from sqlalchemy import BigInteger, Date, Integer, Numeric, String
+from sqlalchemy import BigInteger, Date, DateTime, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from market_data.db import Base
@@ -259,3 +260,67 @@ class TaifexFutOI(Base):
     long_oi_amount: Mapped[int | None] = mapped_column(BigInteger)
     short_oi_amount: Mapped[int | None] = mapped_column(BigInteger)
     net_oi_amount: Mapped[int | None] = mapped_column(BigInteger)
+
+
+class MacroSeries(Base):
+    """總經／國際盤日線（美債殖利率、美元、匯率、原油、黃金、費半、韓股等），一序列一日一列。
+
+    ``series_id`` 是 yfinance 代號（``^TNX``、``CL=F``）或 ``FRED:DGS2`` 這類加來源前綴的代號；
+    清單只有一份，在 ``market_data/macro.py`` 的 ``SERIES``。``date`` 是資料列自帶的交易日、
+    不是抓取日；期貨／匯率最後一列可能是盤中值，下次抓取同日會被覆蓋。``value`` 是收盤值，
+    殖利率類單位是百分比（4.99 = 4.99%）。寫入見 ``market_data/macro.py``。
+    """
+
+    __tablename__ = "macro_series"
+
+    series_id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    date: Mapped[_date] = mapped_column(Date, primary_key=True)
+    value: Mapped[float | None] = mapped_column(Numeric(18, 6))
+    source: Mapped[str | None] = mapped_column(String(16))  # yfinance | fred
+    updated_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RateExpectation(Base):
+    """Fed 每場會議各結果的市場隱含機率快照（Kalshi ``KXFEDDECISION``），每天一份。
+
+    ``outcome``：``hike_gt25``、``hike_25``、``hold``、``cut_25``、``cut_gt25``。``prob_mid`` 是
+    買賣價中點（``last_price`` 可能是很久以前的成交，不能當機率）；各結果是獨立合約，
+    中點加總不一定剛好 1。``snapshot_date`` 是抓取當天（台北日期），``source_updated_at`` 是
+    Kalshi 回應裡該合約的最後更新時間——舊了代表沒人交易。
+    """
+
+    __tablename__ = "rate_expectations"
+
+    snapshot_date: Mapped[_date] = mapped_column(Date, primary_key=True)
+    meeting_date: Mapped[_date] = mapped_column(Date, primary_key=True)
+    outcome: Mapped[str] = mapped_column(String(12), primary_key=True)
+    prob_mid: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    yes_bid: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    yes_ask: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    last_price: Mapped[float | None] = mapped_column(Numeric(6, 4))
+    volume: Mapped[float | None] = mapped_column(Numeric(18, 2))
+    open_interest: Mapped[float | None] = mapped_column(Numeric(18, 2))
+    source_updated_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str | None] = mapped_column(String(16))  # kalshi
+
+
+class EventCalendar(Base):
+    """重大事件行事曆：FOMC 決議日、美股巨頭財報日。
+
+    鍵是 ``(event_type, symbol, label)``，``event_date`` 是可變欄位——財報日常改期，鍵含日期的話
+    改期會多出一列而不是更新。``label`` 對 FOMC 是會議月份（``2026-10``），對財報是財報日所在
+    季度（``2026Q4``）。``status``：``confirmed``（官方來源或兩來源一致）／``estimated``
+    （單一非官方來源，例如 yfinance 財報日）。寫入見 ``market_data/macro.py``。
+    """
+
+    __tablename__ = "event_calendar"
+
+    event_type: Mapped[str] = mapped_column(String(16), primary_key=True)  # fomc | earnings
+    symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
+    label: Mapped[str] = mapped_column(String(16), primary_key=True)
+    event_date: Mapped[_date] = mapped_column(Date)
+    status: Mapped[str | None] = mapped_column(String(12))
+    title: Mapped[str | None] = mapped_column(String(128))
+    time_note: Mapped[str | None] = mapped_column(String(64))
+    source: Mapped[str | None] = mapped_column(String(24))
+    updated_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
