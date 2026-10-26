@@ -78,6 +78,7 @@ def fundamentals(p, nar):
     f, notes = p["fundamentals"], nar.get("notes") or {}
     months = f["monthly_revenue"]
     if months:
+        # 營收欄可為 NULL（資料包給 None）：該月印「無資料」、長條寬 0，比例尺只看有值的月份
         top = max((m["revenue_k"] for m in months if m["revenue_k"] is not None), default=0) or 1
         rows = "".join(
             f'<div class="bar-row"><div class="lbl">{_e(m["month"][2:].replace("-", "/"))}</div>'
