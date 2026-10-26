@@ -35,17 +35,21 @@ T = TypeVar("T")
 # 就整批写进正式库（2026-10-08 踩过：告警规则、持仓、决策信号、LLM 用量）。
 # 两层：载入时就占住这个键（load_dotenv 不覆写已存在的键）；再在建 engine 的出口
 # 拒绝正式库 URL，挡住 patch.dict(clear=True) 之后又重载 .env 的路径。
-# market_data/tests 刻意连 DATABASE_URL 并以 rollback 保护，这里不碰它。
+# market_data/tests 刻意連 DATABASE_URL 並以 rollback 保護；只有 worktree 自帶另一份 .env 時才擋主 checkout 的 DATABASE_URL（見下方）。
 # 往上層逐層找 .env：git worktree（.claude/worktrees/<name>）自己沒有 .env，但 .venv 是連到主 repo
 # 的 symlink，LiteLLM DEV 模式的 load_dotenv() 會從套件位置往上找到主 repo 的 .env，把正式庫補回來
 # （2026-10-23 踩過：worktree 跑 test_portfolio_pr2 在正式庫寫入 218 個 Demo 帳戶）。
 # 樹外 worktree（dsa-upstream-sync 的 ~/.cache/dsa-upstream-sync/<date>）往上找不到 .env，
 # 但 PATH 用的仍是主 repo 的 .venv，LiteLLM 一樣會補回正式庫；所以往上找不到可用的 URL 時，
-# 改用 `git rev-parse --git-common-dir` 定位主 checkout，讀它的 .env。
-def _storage_url_in(env_file: Path) -> str:
+# 改用 `git rev-parse --git-common-dir` 定位主 checkout，讀它的 .env（找得到時一律也讀，見下方）。
+def _env_value_in(env_file: Path, key: str) -> str:
     if not env_file.is_file():
         return ""
-    return (dotenv_values(env_file).get("STORAGE_DATABASE_URL") or "").strip()
+    return (dotenv_values(env_file).get(key) or "").strip()
+
+
+def _storage_url_in(env_file: Path) -> str:
+    return _env_value_in(env_file, "STORAGE_DATABASE_URL")
 
 
 def _main_checkout_root(start_dir: Path) -> Path | None:
@@ -72,22 +76,40 @@ def _main_checkout_root(start_dir: Path) -> Path | None:
     return common_path.parent
 
 
-def _find_prod_storage_url(start: Path) -> str:
+# 最近的 .env 與主 checkout 的 .env 不是同一份時（worktree 自帶 .env），兩邊的正式庫都要擋：
+# LiteLLM DEV 模式的 load_dotenv() 從主 repo 的 .venv 往上找，補回來的是主 checkout 的 URL，
+# 不是 worktree 那份。此時連主 checkout 的 DATABASE_URL（market schema，無備份）也一併拒絕；
+# 最近的 .env 就是主 checkout 的 .env（或它自己也宣告同一條 DATABASE_URL）時不擋，
+# market_data/tests 要靠它連 market 並 rollback。往上找不到 .env 的樹外 worktree 也不擋 DATABASE_URL：
+# 那時沒有「另一份 .env」的情形，維持原本只擋 STORAGE_DATABASE_URL。
+def _find_prod_database_urls(start: Path) -> frozenset[str]:
     start = start.resolve()
+    urls: set[str] = set()
+    nearest_env: Path | None = None
     for parent in start.parents:
         env_file = parent / ".env"
         if env_file.is_file():
-            url = _storage_url_in(env_file)
-            if url:
-                return url
+            nearest_env = env_file
             break
+    if nearest_env is not None:
+        nearest_url = _storage_url_in(nearest_env)
+        if nearest_url:
+            urls.add(nearest_url)
     main_root = _main_checkout_root(start.parent)
-    if main_root is None:
-        return ""
-    return _storage_url_in(main_root / ".env")
+    if main_root is not None:
+        main_env = main_root / ".env"
+        main_url = _storage_url_in(main_env)
+        if main_url:
+            urls.add(main_url)
+        if nearest_env is not None and nearest_env.resolve() != main_env.resolve():
+            main_market_url = _env_value_in(main_env, "DATABASE_URL")
+            # worktree 自己的 .env 宣告同一條 DATABASE_URL 時，那是它的 market_data/tests 刻意要連的。
+            if main_market_url and main_market_url != _env_value_in(nearest_env, "DATABASE_URL"):
+                urls.add(main_market_url)
+    return frozenset(urls)
 
 
-_PROD_STORAGE_DATABASE_URL = _find_prod_storage_url(Path(__file__))
+_PROD_DATABASE_URLS = _find_prod_database_urls(Path(__file__))
 os.environ["STORAGE_DATABASE_URL"] = ""
 # 本机 data/ 的台股临时休市清单（market_data.closures）不能漏进测试的交易日判断。
 os.environ["TW_ADHOC_CLOSED_FILE"] = os.devnull
@@ -102,10 +124,19 @@ os.environ["TW_BROKER_INDEX_TARGETS"] = ""
 _original_create_engine = sqlalchemy.create_engine
 
 
+def _url_text(url) -> str:
+    # sqlalchemy.URL 的 str() 會把密碼遮成 ***，比對前要還原成完整字串。
+    render = getattr(url, "render_as_string", None)
+    if callable(render):
+        return render(hide_password=False).strip()
+    return str(url).strip()
+
+
 def _create_engine_refusing_prod_storage(url, *args, **kwargs):
-    if _PROD_STORAGE_DATABASE_URL and str(url).strip() == _PROD_STORAGE_DATABASE_URL:
+    if _url_text(url) in _PROD_DATABASE_URLS:
         raise RuntimeError(
-            "tests must not connect to the production STORAGE_DATABASE_URL from .env"
+            "tests must not connect to a production database URL from .env "
+            "(STORAGE_DATABASE_URL / main checkout DATABASE_URL)"
         )
     return _original_create_engine(url, *args, **kwargs)
 

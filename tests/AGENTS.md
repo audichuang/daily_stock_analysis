@@ -6,7 +6,7 @@
 
 測試根有兩個:`tests/`(主套件)與 `market_data/tests/`(台股 DB,本 fork 增量)。**這份清單寫在兩處,必須一致**:`setup.cfg` 的 `testpaths` 與 `scripts/ci_test_shard.py` 的 `TEST_ROOTS`——漏一處就是整個根被靜默排除,看起來跟通過一模一樣。新增測試檔不登記時長表也照跑(沒紀錄的檔用中位數分片),但缺得多 shard 就失衡(踩過:缺 107 檔時三片 148／296／409 秒);各片差距明顯時照 `scripts/ci_durations_from_junit.py` 開頭的步驟重算。分片以整個檔為單位,單一檔比平均每片還長時它會獨占一片(目前是 `test_agent_active_stock_integration.py`),那片偏長是預期,重算解決不了。改名或刪除已登記的檔會紅。
 
-這裡幾乎沒有全域的隔離:`os.environ`、時鐘、對外連線都不會自動還原或攔截。`conftest.py` 只做兩件事:在 import 時把 `TestClient` 換成不開執行緒的版本;以及**把 `STORAGE_DATABASE_URL` 釘成空字串,並讓 `create_engine` 拒絕 `.env` 裡那條正式應用庫 URL**(守門測試在 `test_storage_database_url.py`)。先沿父目錄找最近的 `.env`；找不到或它沒設 URL 時，改經 `git rev-parse --git-common-dir` 讀主 checkout 的 `.env`，涵蓋樹外 worktree(dsa-upstream-sync 的 `~/.cache/dsa-upstream-sync/<date>`)。marker 只有 `network` 有作用(`unit`、`integration` 沒人用,標了也不會被 CI 跳過)。
+這裡幾乎沒有全域的隔離:`os.environ`、時鐘、對外連線都不會自動還原或攔截。`conftest.py` 只做兩件事:在 import 時把 `TestClient` 換成不開執行緒的版本;以及**把 `STORAGE_DATABASE_URL` 釘成空字串,並讓 `create_engine` 拒絕 `.env` 裡那條正式應用庫 URL**(守門測試在 `test_storage_database_url.py`)。先沿父目錄找最近的 `.env`，並一律經 `git rev-parse --git-common-dir` 讀主 checkout 的 `.env`，涵蓋樹外 worktree(dsa-upstream-sync 的 `~/.cache/dsa-upstream-sync/<date>`)；兩份 URL 都擋。最近的 `.env` 不是主 checkout 那份(worktree 自帶 `.env`)時，主 checkout 的 `DATABASE_URL` 也擋，除非 worktree 的 `.env` 自己宣告同一條。marker 只有 `network` 有作用(`unit`、`integration` 沒人用,標了也不會被 CI 跳過)。
 
 ## 寫新測試要遵守
 
@@ -46,4 +46,4 @@
 - 單測 timeout 直接打 `pytest` 是 300 秒,經 `ci_gate.sh` 是 120 秒。
 - `test_python_version_compat.py` 在本機拿不到 CI 那個 Python 版本時是 **skip 不是 fail**;看到它綠不代表 3.11 已經剖析過。
 - 連外與時段兩種要修。`.env` 漏入的「預設值」類假紅是既有問題、CI 綠,真正的修法是隔離 `os.environ`——記錄下來即可,不要順手改。
-- **例外:會指向正式資料的鍵不是假紅,是事故。**2026-10-08 全量把 `.env` 的 `STORAGE_DATABASE_URL`(NAS 共用的正式 `dsa` 應用庫)帶進行程,測試只改了 `DATABASE_PATH`,於是告警規則、持倉帳戶、決策信號、LLM 用量等 fixture 全寫進正式庫,還改到一筆真實訊號;症狀只是一個告警測試卡在連新浪。現已由 conftest 擋住;**以後 `.env` 新增任何指向正式服務的 URL/金鑰,要在 conftest 照樣中和**,別等它漏。`DATABASE_URL` 例外:`market_data/tests` 刻意連它並用 rollback 保護。
+- **例外:會指向正式資料的鍵不是假紅,是事故。**2026-10-08 全量把 `.env` 的 `STORAGE_DATABASE_URL`(NAS 共用的正式 `dsa` 應用庫)帶進行程,測試只改了 `DATABASE_PATH`,於是告警規則、持倉帳戶、決策信號、LLM 用量等 fixture 全寫進正式庫,還改到一筆真實訊號;症狀只是一個告警測試卡在連新浪。現已由 conftest 擋住;**以後 `.env` 新增任何指向正式服務的 URL/金鑰,要在 conftest 照樣中和**,別等它漏。`DATABASE_URL` 例外:`market_data/tests` 刻意連它並用 rollback 保護——只有 worktree 自帶另一份 `.env` 時，主 checkout 的 `DATABASE_URL` 才會被 conftest 拒絕。
