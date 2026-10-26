@@ -444,6 +444,7 @@ def test_lhr_report_vetoes_at_threshold_inclusive(capsys):
     out = capsys.readouterr().out
     assert "否決比例 50.0%" in out        # lhr=1 與 2 被否決，0 留下
     assert "留下  n=    2  均值  +50.00%" in out
+<<<<<<< HEAD
 # --- two_arm_block_bootstrap：取代型閘門與原池子不是逐筆配對，兩臂要共用同一組重抽區塊 ---
 
 def _arm(days, r, per_day=1):
@@ -505,3 +506,61 @@ def test_two_arm_bootstrap_levels_are_nested_and_inconclusive_when_too_short():
     # 事件全落在同一個區塊內 → 無法估計（inconclusive），不可給出假區間
     short = _arm(range(0, 10), 0.1)
     assert two_arm_block_bootstrap(short, short, 400, n=100, block=20) is None
+=======
+
+
+def _pb_args(**kw):
+    from types import SimpleNamespace
+
+    base = dict(pb_veto=[2.0], bootstrap=0, horizon=60, bootstrap_seed=42)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def _pb_events():
+    return pd.DataFrame({
+        "ti": [0, 1, 2, 3], "date": pd.to_datetime(["2021-01-04"] * 2 + ["2022-01-03"] * 2),
+        "r": [0.5, -0.1, 0.4, -0.2], "pb": [1.99, 2.0, float("nan"), 3.0],
+        "vol20": [0.01, 0.02, 0.03, 0.04]})
+
+
+def test_pb_veto_is_inclusive_at_two_and_keeps_missing_pb(monkeypatch, capsys):
+    """PB=2.0 否決、1.99 與缺值留下：改成 `>` 會少否決一個，把缺值當否決會多一個。"""
+    import measure_signal_forward as msf
+
+    monkeypatch.setattr(msf, "PB_GATE_MIN_KEPT", 1)
+    monkeypatch.setattr(msf, "PB_GATE_MIN_VETOED", 1)
+    assert msf.report_pb_veto(_pb_events(), range(10), _pb_args()) is True
+    out = capsys.readouterr().out
+    assert "否決比例 50.0%" in out
+    assert "留下  n=    2  均值  +45.00%" in out
+    assert "否決  n=    2  均值  -15.00%" in out
+    assert "缺 PB 的 1 個不否決" in out
+
+
+def test_pb_veto_gate_skips_the_comparison_when_the_pool_would_be_hollowed(capsys):
+    """預設閘門（留下 ≥ 300、否決 ≥ 100）沒過就只報占比，不印任何否決比較。"""
+    from measure_signal_forward import report_pb_veto
+
+    assert report_pb_veto(_pb_events(), range(10), _pb_args()) is False
+    out = capsys.readouterr().out
+    assert "閘門未過" in out
+    assert "PB ≥ 2 占全部事件 50.0%" in out
+    assert "-- 否決 PB" not in out
+
+
+def test_pb_panel_uses_same_day_value_and_stops_forward_filling_after_limit():
+    from measure_signal_forward import pb_panel
+
+    days = pd.bdate_range("2021-01-04", periods=10)
+    rows = pd.DataFrame({"stock_id": ["1101", "1101", "2330"],
+                         "date": [days[0], days[1], days[0]],
+                         "pb_ratio": [1.5, 2.5, -1.0]})
+    p = pb_panel(rows, days, ["1101", "2330", "9999"], ffill_limit=3)
+    assert p.at[days[0], "1101"] == 1.5          # D 日用 D 日值（不平移）
+    assert p.at[days[1], "1101"] == 2.5
+    assert p.at[days[4], "1101"] == 2.5          # 缺列沿用 3 個交易列
+    assert pd.isna(p.at[days[5], "1101"])        # 超過就是缺值，不無限期沿用
+    assert p["2330"].isna().all()                # PB ≤ 0（淨值為負）視為缺值
+    assert p["9999"].isna().all()
+>>>>>>> b40886fa (feat(research): add opt-in inverse-vol weighting and PB veto measurements)

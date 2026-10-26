@@ -334,3 +334,60 @@ def test_pool_filters_with_the_shared_universe_predicate(monkeypatch):
 
     assert sorted(seen) == sorted(UNIVERSE_CODES)
     assert set(captured["columns"]) == UNIVERSE_COMMON
+
+
+def test_unit_weights_reproduce_equal_weight_exactly():
+    """weights=None 必須就是原本的等權；全 1.0 的倍數也不能改變任何一位。"""
+    piv = _piv()
+    sig, f, yoy = _blank(piv)
+    sig.iloc[10] = True
+    base = simulate(piv, sig, f, yoy, 5, 5, "2026-01-05", "2026-02-20")
+    ones = {(d, s): 1.0 for d in sig.index for s in sig.columns if sig.at[d, s]}
+    same = simulate(piv, sig, f, yoy, 5, 5, "2026-01-05", "2026-02-20", weights=ones)
+    pd.testing.assert_series_equal(base[0], same[0])
+    pd.testing.assert_frame_equal(base[1], same[1])
+
+
+def test_inverse_vol_weights_give_the_lower_vol_stock_the_larger_position():
+    from portfolio_walkforward import invvol_weights
+
+    piv = _piv()
+    sig, f, yoy = _blank(piv)
+    sig.iloc[10, :2] = True                   # 1111、2222 同日觸發
+    d = sig.index[10]
+    vol = pd.DataFrame(0.02, index=sig.index, columns=sig.columns)
+    vol.loc[d, "1111"], vol.loc[d, "2222"], vol.loc[d, "3333"] = 0.01, 0.04, 0.02
+    w = invvol_weights(sig, vol, ref="xs")    # 參考 = 當日中位 0.02
+    assert w[(d, "1111")] == pytest.approx(2.0)
+    assert w[(d, "2222")] == pytest.approx(0.5)
+    _, tr, _, _ = simulate(piv, sig, f, yoy, 5, 5, "2026-01-05", "2026-02-20", weights=w)
+    cost = tr.set_index("stock_id")["cost"]
+    assert cost["1111"] > 3 * cost["2222"]    # 2.0 倍 vs 0.5 倍等權份額
+
+
+def test_inverse_vol_weights_clip_wait_for_reference_and_default_missing_vol():
+    from portfolio_walkforward import invvol_weights
+
+    days = pd.bdate_range("2026-01-05", periods=4)
+    cols = ["1111", "2222", "3333"]
+    sig = pd.DataFrame(True, index=days, columns=cols)
+    vol = pd.DataFrame([[0.01, 0.03, 0.30]] * 4, index=days, columns=cols)
+    vol.iloc[3, 1] = float("nan")
+    w = invvol_weights(sig, vol, ref="expanding", min_ref=6)
+    assert {w[(days[0], s)] for s in cols} == {1.0}       # 只有 3 格，參考值還不可信
+    assert w[(days[1], "1111")] == pytest.approx(2.0)     # 0.03/0.01=3 → 上限 2
+    assert w[(days[1], "2222")] == pytest.approx(1.0)     # 未截斷的就是原比值
+    assert w[(days[1], "3333")] == pytest.approx(0.5)     # 0.03/0.30=0.1 → 下限 0.5
+    assert w[(days[3], "2222")] == 1.0                    # vol20 缺值 → 等權
+
+
+def test_compare_weighting_reports_zero_difference_for_identical_arms(capsys):
+    from portfolio_walkforward import compare_weighting
+
+    piv = _piv(n=200)
+    sig, f, yoy = _blank(piv)
+    sig.iloc[10] = True
+    eq, tr, _, cn = simulate(piv, sig, f, yoy, 5, 5, "2026-01-05", "2026-10-01")
+    diff, ci = compare_weighting(eq, tr, cn, eq, tr, cn, "invvol", 20, 50, 42)
+    assert (diff == 0).all() and ci == (0.0, 0.0)
+    assert "平均持股比重" in capsys.readouterr().out
