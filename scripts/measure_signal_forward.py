@@ -417,6 +417,198 @@ def hit_rate_bootstrap(ev, calendar, threshold=HIT_THRESHOLD, n=1000, block=60, 
     return paired_block_bootstrap(paired, calendar, n=n, block=block, seed=seed)
 
 
+# ── 處置公告延後進場（docs/research/2026-10-26-exp-disposal-delay.md）──────────────
+DISPOSAL_DELAYS = (3, 4)
+DISPOSAL_MIN_EVENTS = 30   # 事先登記的最低受影響事件數；不足一律 inconclusive
+DISPOSAL_RULE_CHANGE = pd.Timestamp("2026-08-10")  # 處置期 10→5 日、撮合約 2 分鐘一次的新制起日
+
+
+def disposal_context(ev, disp, index, h):
+    """每個事件在訊號日 D 收盤後「已公告、且處置期涵蓋進場日 D+1」的處置（與 live
+    `risk_flags` 以 next_session 查名單同語意）。
+
+    ``disp`` 欄位 stock_id／announce／start／end（Timestamp）；``index`` 是面板交易日。
+    公告日落在非交易日時取「之前最後一個交易日」——它在 D+1 開盤前就已公開。
+    回傳與 ``ev`` 同索引的 DataFrame：``affected``、``a_idx``（涵蓋列中最晚的公告）、
+    ``e_idx``（涵蓋列中最晚的處置迄日）、``later``（D 之後、D+h 之內才公告——持有中才知道，
+    只描述、不是實驗組）。"""
+    index = pd.DatetimeIndex(index)
+    out = pd.DataFrame({"affected": False, "a_idx": np.nan, "e_idx": np.nan, "later": False},
+                       index=ev.index)
+    if not len(ev) or not len(disp):
+        return out
+    d = disp.copy()
+    d["stock_id"] = d["stock_id"].astype(str)
+    d["a"] = index.searchsorted(pd.DatetimeIndex(d["announce"]), side="right") - 1
+    d["s"] = index.searchsorted(pd.DatetimeIndex(d["start"]), side="left")
+    d["e"] = index.searchsorted(pd.DatetimeIndex(d["end"]), side="right") - 1
+    by_stock = {s: g for s, g in d.groupby("stock_id")}
+    for i, sid, ti in zip(ev.index, ev["stock_id"].astype(str), ev["ti"].astype(int)):
+        g = by_stock.get(sid)
+        if g is None:
+            continue
+        cover = g[(g["a"] <= ti) & (g["s"] <= ti + 1) & (g["e"] >= ti + 1)]
+        if len(cover):
+            out.at[i, "affected"] = True
+            out.at[i, "a_idx"] = float(cover["a"].max())
+            out.at[i, "e_idx"] = float(cover["e"].max())
+        out.at[i, "later"] = bool(((g["a"] > ti) & (g["a"] <= ti + h)).any())
+    return out
+
+
+def disposal_arm_returns(ev, ctx, ret, delays=DISPOSAL_DELAYS, *,
+                         entry_notional=DEFAULT_POSITION_NOTIONAL, fee_discount=1.0):
+    """受影響事件在各延後臂的淨報酬（持有長度不變：進場日往後挪幾天，出場日就挪幾天）。
+
+    延後 k 日：以第 ``max(ti, a_idx + k)`` 列當「訊號日」，即公告後第 k+1 個交易日開盤買進、
+    持有同樣 h 日；``k=0`` 等於正常進場（公告日 = 訊號日時）。處置期後：以 ``max(ti, e_idx)``
+    為訊號日，處置迄日後第一個交易日開盤買進。``ret`` 是 `forward_returns` 的毛報酬面板，
+    超出面板（右端截斷）留 NaN、配對時剔除。回傳 DataFrame：``delay_k`` 各欄與 ``after_end``。"""
+    cols = {f"delay_{k}": [] for k in delays}
+    cols["after_end"] = []
+    n = len(ret.index)
+    hit = ev.index[ctx["affected"].to_numpy(dtype=bool)]
+
+    def net_at(t, sid):
+        if t >= n:
+            return np.nan
+        r = ret.iat[t, ret.columns.get_loc(sid)]
+        if pd.isna(r):
+            return np.nan
+        return round_trip_return(1.0, 1.0 + float(r), entry_notional=entry_notional,
+                                 fee_discount=fee_discount)
+
+    for i in hit:
+        ti, sid = int(ev.at[i, "ti"]), ev.at[i, "stock_id"]
+        for k in delays:
+            cols[f"delay_{k}"].append(net_at(max(ti, int(ctx.at[i, "a_idx"]) + k), sid))
+        cols["after_end"].append(net_at(max(ti, int(ctx.at[i, "e_idx"])), sid))
+    return pd.DataFrame(cols, index=hit)
+
+
+def exclusion_block_bootstrap(frame, calendar, n=1000, block=60, seed=42):
+    """「剔除」對池均值的效果 = mean(未剔除) − mean(全部)，其 circular block bootstrap 95% 區間。
+
+    ``frame`` 欄位 ``date``（``calendar`` 上的鍵）、``value``、``excluded``（bool）。取樣方式與
+    `paired_block_bootstrap` 相同（整段交易日、同日橫斷面一起抽），但統計量是兩組均值差，
+    不是成對差，所以另寫；資料不足或某次重抽沒有任何未剔除事件時回 ``None``。"""
+    calendar = pd.Index(calendar)
+    n_days = len(calendar)
+    if n < 2 or block < 1 or n_days < block * 2:
+        return None
+    f = frame.loc[:, ["date", "value", "excluded"]].dropna(subset=["value"])
+    if not f["date"].isin(calendar).all() or f["date"].nunique() < 2 or not f["excluded"].any():
+        return None
+    pos = calendar.get_indexer(pd.Index(f["date"].unique()))
+    if pos.max() - pos.min() < block:
+        return None
+    by_day = {d: (g["value"].to_numpy(dtype=float), g["excluded"].to_numpy(dtype=bool))
+              for d, g in f.groupby("date")}
+    rng = np.random.default_rng(seed)
+    n_blocks = int(np.ceil(n_days / block))
+    stats = []
+    for _ in range(n):
+        vals, excl = [], []
+        sampled = 0
+        for st in rng.integers(0, n_days, size=n_blocks):
+            for k in range(block):
+                if sampled == n_days:
+                    break
+                d = calendar[(int(st) + k) % n_days]
+                if d in by_day:
+                    vals.append(by_day[d][0])
+                    excl.append(by_day[d][1])
+                sampled += 1
+        if not vals:
+            continue
+        v, x = np.concatenate(vals), np.concatenate(excl)
+        if x.all():
+            continue
+        stats.append(v[~x].mean() - v.mean())
+    if len(stats) < 2:
+        return None
+    return float(np.percentile(stats, 2.5)), float(np.percentile(stats, 97.5))
+
+
+def report_disposal(ev, disp, ret, index, h, *, delays=DISPOSAL_DELAYS, n_boot=2000, seed=42,
+                    tpex_codes=frozenset(), event_args=None):
+    """印出處置公告實驗（正常／延後 k 日／處置期後／剔除），只上市；回傳摘要 dict 供測試。"""
+    event_args = event_args or {}
+    tw = ev[~ev["stock_id"].astype(str).isin(tpex_codes)].copy()
+    print(f"\n=== 處置公告實驗（只上市；h={h}）===")
+    print(f"候選池事件 {len(ev)} 個，排除上櫃 {len(ev) - len(tw)} 個 → 上市 {len(tw)} 個")
+    ctx = disposal_context(tw, disp, index, h)
+    aff = tw[ctx["affected"]]
+    pre = int((pd.DatetimeIndex(aff["date"]) < DISPOSAL_RULE_CHANGE).sum()) if len(aff) else 0
+    print(f"訊號日收盤已公告、處置期涵蓋 D+1 的受影響事件 {len(aff)} 個"
+          f"（訊號日在 {DISPOSAL_RULE_CHANGE:%Y-%m-%d} 新制前 {pre}、後 {len(aff) - pre}）；"
+          f"持有中才公告（只描述）{int(ctx['later'].sum())} 個")
+    summary = {"n_twse": len(tw), "n_affected": len(aff), "arms": {}}
+    if not len(aff):
+        print("受影響事件為 0：inconclusive")
+        return summary
+    arms = disposal_arm_returns(tw, ctx, ret, delays, **event_args)
+    rows = [describe(aff, "受影響·正常進場")]
+    for col in arms.columns:
+        paired = aff.assign(r=arms[col]).dropna(subset=["r"])
+        rows.append(describe(paired, f"受影響·{col}"))
+    unaff = tw[~ctx["affected"]]
+    rows.append(describe(unaff, "未受影響"))
+    print(pd.DataFrame(rows).set_index("組").to_string())
+
+    cal = np.arange(len(index))
+    print(f"\n成對差（臂 − 正常；同一批事件、持有長度相同；block={h}、{n_boot} 次、seed={seed}）：")
+    for col in arms.columns:
+        pair = pd.DataFrame({"date": aff["ti"].to_numpy(), "arm": arms[col].to_numpy(),
+                             "base": aff["r"].to_numpy()}).dropna()
+        n_pair = len(pair)
+        d_mean = (pair["arm"] - pair["base"]).mean() if n_pair else np.nan
+        d_hit = ((pair["arm"] >= HIT_THRESHOLD).astype(float)
+                 - (pair["base"] >= HIT_THRESHOLD).astype(float)).mean() if n_pair else np.nan
+        ci_m = ci_h = None
+        if n_boot and n_pair:
+            ci_m = paired_block_bootstrap(pair.assign(diff=pair["arm"] - pair["base"]), cal,
+                                          n=n_boot, block=h, seed=seed)
+            ci_h = paired_block_bootstrap(pair.assign(
+                diff=(pair["arm"] >= HIT_THRESHOLD).astype(float)
+                - (pair["base"] >= HIT_THRESHOLD).astype(float)), cal, n=n_boot, block=h, seed=seed)
+        verdict = disposal_verdict(n_pair, d_mean, d_hit, ci_m)
+        fmt = (lambda c, s=100: "inconclusive" if c is None
+               else f"{c[0] * s:+.2f} ~ {c[1] * s:+.2f}")
+        print(f"  {col}: n={n_pair}  均值差 {d_mean * 100:+.2f}pp（95% {fmt(ci_m)}）  "
+              f"P(≥30%) 差 {d_hit * 100:+.1f}pp（95% {fmt(ci_h)}）→ {verdict}")
+        summary["arms"][col] = {"n": n_pair, "d_mean": d_mean, "d_hit": d_hit,
+                                "ci_mean": ci_m, "ci_hit": ci_h, "verdict": verdict}
+
+    frame = pd.DataFrame({"date": tw["ti"].to_numpy(), "value": tw["r"].to_numpy(),
+                          "excluded": ctx["affected"].to_numpy(dtype=bool)})
+    d_mean = unaff["r"].mean() - tw["r"].mean()
+    d_hit = (unaff["r"] >= HIT_THRESHOLD).mean() - (tw["r"] >= HIT_THRESHOLD).mean()
+    ci_m = exclusion_block_bootstrap(frame, cal, n=n_boot, block=h, seed=seed) if n_boot else None
+    ci_h = (exclusion_block_bootstrap(frame.assign(value=(frame["value"] >= HIT_THRESHOLD)
+                                                   .astype(float)), cal, n=n_boot, block=h,
+                                      seed=seed) if n_boot else None)
+    verdict = disposal_verdict(len(aff), d_mean, d_hit, ci_m)
+    fmt = (lambda c: "inconclusive" if c is None else f"{c[0] * 100:+.2f} ~ {c[1] * 100:+.2f}")
+    print(f"剔除（未受影響池 − 上市全池）: 剔除 {len(aff)} 個  均值差 {d_mean * 100:+.2f}pp"
+          f"（95% {fmt(ci_m)}）  P(≥30%) 差 {d_hit * 100:+.1f}pp（95% {fmt(ci_h)}）→ {verdict}")
+    summary["arms"]["exclude"] = {"n": len(aff), "d_mean": d_mean, "d_hit": d_hit,
+                                  "ci_mean": ci_m, "ci_hit": ci_h, "verdict": verdict}
+    return summary
+
+
+def disposal_verdict(n, d_mean, d_hit, ci_mean, min_events=DISPOSAL_MIN_EVENTS):
+    """事先登記的判準：n ≥ 下限，均值差與 P(≥30%) 差的點估計都 > 0，且均值差區間整段 > 0。
+    區間整段 < 0 且兩個點估計都 < 0 記「較差」；其餘一律 inconclusive。"""
+    if n < min_events or ci_mean is None or pd.isna(d_mean) or pd.isna(d_hit):
+        return "inconclusive"
+    if d_mean > 0 and d_hit > 0 and ci_mean[0] > 0:
+        return "通過"
+    if d_mean < 0 and d_hit < 0 and ci_mean[1] < 0:
+        return "較差"
+    return "inconclusive"
+
+
 def describe(ev, label):
     r = ev["r"]
     win, loss = r[r > 0], r[r <= 0]
@@ -459,11 +651,17 @@ def main(argv=None):
                         "精準補只要幾十個請求。")
     p.add_argument("--include-otc-revenue", action="store_true",
                    help="月營收放入上櫃（預設只用上市口徑，與 screen_tw 預設相同；放入後是另一個池子，數字不可與既有基準比較）")
+<<<<<<< HEAD
     p.add_argument("--lhr", action="store_true",
                    help="加跑 LHR（漲停率減跌停率）否決實驗；預設輸出不變")
     p.add_argument("--lhr-window", type=int, default=LHR_WINDOW, help="LHR 回看交易日數")
     p.add_argument("--lhr-veto", type=float, nargs="+", default=[1.0, 2.0],
                    help="否決門檻（淨漲停天數 ≥ 此值即否決）；第一個為事先登記的主判準")
+=======
+    p.add_argument("--disposal-cache", default=None, metavar="PATH",
+                   help="TWSE 處置公告快取 CSV（scripts/fetch_twse_disposal_history.py 產生）；"
+                        "加上後另印處置公告延後進場實驗（只上市）")
+>>>>>>> 059f0d8d (research: pre-register disposal-delay experiment, add TWSE punish history fetcher and --disposal-cache arms)
     a = p.parse_args(argv)
     if a.position_notional <= 0:
         p.error("--position-notional must be positive")
@@ -569,8 +767,18 @@ def main(argv=None):
             print(f"候選池 P(≥{HIT_THRESHOLD:.0%}) {hit * 100:.1f}%（n={len(ev)}）的區塊 bootstrap "
                   f"95% 區間: {hit_ci[0] * 100:.1f}% ~ {hit_ci[1] * 100:.1f}%")
 
+<<<<<<< HEAD
     if a.lhr:
         report_lhr_veto(ev, np.arange(len(close.index)), a)
+=======
+    if a.disposal_cache:
+        from fetch_twse_disposal_history import load_cache
+        from screen_tw import _seed_market_map
+        tpex = frozenset(s for s, m in _seed_market_map().items() if m == "tpex")
+        report_disposal(ev, load_cache(a.disposal_cache), ret, close.index, a.horizon,
+                        n_boot=a.bootstrap, seed=a.bootstrap_seed, tpex_codes=tpex,
+                        event_args=event_args)
+>>>>>>> 059f0d8d (research: pre-register disposal-delay experiment, add TWSE punish history fetcher and --disposal-cache arms)
 
     print("\n=== 逐年（事件級）===")
     ev["y"] = ev["date"].dt.year
