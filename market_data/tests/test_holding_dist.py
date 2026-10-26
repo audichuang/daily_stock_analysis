@@ -44,6 +44,19 @@ def test_query_page_rejects_a_different_week():
     assert sources.parse_tdcc_query(html, "3324", "20260918") is None
 
 
+@pytest.mark.parametrize("invalid", [
+    "115年02月30日", "115年13月11日", "10000年09月11日", "100000000000年09月11日",
+])
+def test_query_invalid_roc_date_is_rejected_without_raising(invalid, capsys):
+    html = (_FX / "tdcc_query_3324.html").read_text()
+    assert sources.parse_tdcc_query(html.replace("115年09月11日", invalid), "3324", "20260911") is None
+    assert "**WARN" in capsys.readouterr().out
+    # 反向：日期合法時，保留真實表格與數值。
+    df = sources.parse_tdcc_query(html, "3324", "20260911")
+    assert df is not None and df.date.unique().tolist() == [pd.Timestamp(2026, 9, 11)]
+    assert df[df.level == 17].iloc[0].pct == 100.0
+
+
 def test_crawl_holding_dist_upserts_and_warns_when_stale(pg_conn, monkeypatch, capsys):
     df = sources.parse_tdcc_opendata(_opendata())
     df["date"] = pd.Timestamp(2099, 1, 2)      # 遠離真實資料（本機連正式庫，交易會 rollback）
@@ -142,6 +155,19 @@ class _FakeResp:
     def raise_for_status(self):
         if self.error:
             raise self.error
+
+
+@pytest.mark.parametrize("invalid", ["115年02月30日", "100000000000年09月18日"])
+def test_history_skips_bad_roc_week_and_keeps_both_neighbours(monkeypatch, capsys, invalid):
+    ses = _TdccSession(["20260925", "20260918", "20260911"])
+    ses.pages["20260918"] = ses.pages["20260918"].replace("115年09月18日", invalid)
+    monkeypatch.setattr(sources.requests, "Session", lambda: ses)
+    df = sources.crawl_tdcc_history("3324", delay=0)
+    assert ses.sent == ["T0", "T1", "T2"] and ses.gets == 1
+    assert df is not None and sorted(df.date.unique().tolist()) == [
+        pd.Timestamp(2026, 9, 11), pd.Timestamp(2026, 9, 25),
+    ]
+    assert "**WARN" in capsys.readouterr().out
 
 
 def test_history_refreshes_token_after_a_timed_out_week(monkeypatch, capsys):

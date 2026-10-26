@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修复] 官方資料稽核將工作執行緒例外與預期範圍缺漏回報為非零結束碼，離線彙總保留缺漏檢查；上櫃三條路徑共用表內日期護欄，集保無效或溢位的民國日期僅跳過該週並保留其餘歷史。
 - [文档] 突破池 974 事件／20.2% 基準率與月營收動能 CI 標註為月營收期限遇休市順延前所量、待重測；`tw-swing-pipeline.md` 不再宣稱能用當前程式碼原樣重跑
 - [修復] 月營收法定公告期限補上 2905 三商（三商投控持有三商美邦人壽，2026-01 營收起 15 日），期限遇週末、國定假日或颱風假順延到當日或之後第一個台股交易日（XTAI 加本機臨時休市清單、不連網；日曆不可用時只順延週六日），回測不再提早一個交易日看到逾 10 日申報的營收；`screen_tw --date` 回放、`tw_stock_dossier` 帶基準日與媒體點名的播出日快照改用同一個 `market_data/revenue_deadline.py` 有效公告日判斷可見，live（不帶日期）不變
 - [修復] 復權推導（`market_data/adjust.py`）的交易日改成 XTAI 日曆聯集 price 表全市場有列的日期，補上 XTAI 沒有的補班週六（5348 2016-06-04、5455／4131 2016-02-01 的兩根合法漲跌停不再被存成假公司行動）；`close - change` 參考價只信 `CHANGE_SIGNED_SINCE`（2026-08-23）之後的正負號，更早的列只用 |change|、須由漲跌停帶唯一證明方向，否則退回開盤價（翻錯號的舊列不再能把參考價推偏 2|change|）。既有 `inferred_price` 列要重跑 `cli adjust` 才會更新

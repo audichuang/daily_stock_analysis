@@ -13,6 +13,7 @@
 TWSE 與 TPEx 各一條執行緒、每個請求間隔 >= 4 秒（TWSE 密集請求會封 IP）。由新到舊跑，中斷後重跑會
 跳過 ``result.jsonl`` 已成功記錄的 (日期, 來源)。比對結果：``miss``＝官方有 DB 沒有、``extra``＝DB 有官方
 沒有、``bad``＝兩邊都有但數值不同的列數；``err``＝官方回應日期不符或格式不認得（不是資料錯，要人工看）。
+預期的 (日期, 來源) 存在 ``OUT/expected.json``；執行緒失敗或彙總缺漏都以非零結束碼回報。
 
     uv run --env-file .env python scripts/audit_market_vs_official.py \\
         --start 2026-01-01 --end 2026-10-23 --out data/audit/2026 --sources t86,margin,price,tpex_insti,tpex_margin,tpex_price
@@ -28,6 +29,8 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -36,10 +39,12 @@ from sqlalchemy import text
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from market_data.db import get_engine  # noqa: E402
+from market_data.sources import _tpex_table  # noqa: E402
 
 TWSE_SOURCES = ("t86", "margin", "price")
 TPEX_SOURCES = ("tpex_insti", "tpex_margin", "tpex_price")
 REQUEST_GAP_SECONDS = 4
+SOURCE_START = {"t86": "2012-05-02", "tpex_insti": "2018-01-15"}
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
 T86_FIELDS = (
     ("外陸資買賣超股數(不含外資自營商)", "外資買賣超股數"),  # foreign_net：舊年份只有「外資買賣超股數」
@@ -60,6 +65,26 @@ def num(value):
         return None
 
 
+def source_available(d, source):
+    return d >= SOURCE_START.get(source, "")
+
+
+def latest_results(out):
+    """重跑與彙總共用最後一筆狀態，不能讓較早的成功蓋過後來的錯誤。"""
+    path = out / "result.jsonl"
+    latest = {}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            r = json.loads(line)
+            latest[(r["date"], r["source"])] = r
+    return latest
+
+
+def expected_results(out):
+    path = out / "expected.json"
+    return {tuple(pair) for pair in json.loads(path.read_text())} if path.exists() else set()
+
+
 class Audit:
     def __init__(self, engine, out: Path, sources: set):
         self.engine = engine
@@ -69,12 +94,27 @@ class Audit:
         self.raw.mkdir(parents=True, exist_ok=True)
         self.result = out / "result.jsonl"
         self.lock = threading.Lock()
-        self.done = set()
-        if self.result.exists():
-            for line in self.result.read_text().splitlines():
-                r = json.loads(line)
-                if r.get("err") is None:
-                    self.done.add((r["date"], r["source"]))
+        self.done = {pair for pair, r in latest_results(out).items() if r.get("err") is None}
+
+    def run(self, dates) -> int:
+        # 先記錄計畫，即使第一筆就失敗或行程中斷，離線彙總也看得到未完成範圍。
+        expected = expected_results(self.out)
+        expected.update((d, source) for d in dates for source in self.sources if source_available(d, source))
+        (self.out / "expected.json").write_text(json.dumps(sorted(expected)))
+        failed = False
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {}
+            if self.sources & set(TWSE_SOURCES):
+                futures[pool.submit(self.twse, dates)] = "TWSE"
+            if self.sources & set(TPEX_SOURCES):
+                futures[pool.submit(self.tpex, dates)] = "TPEx"
+            for future, market in futures.items():
+                try:
+                    future.result()
+                except Exception as exc:
+                    failed = True
+                    print(f"{market} worker failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return int(failed)
 
     def db(self, sql, **params):
         with self.engine.connect() as c:
@@ -112,12 +152,12 @@ class Audit:
             print(json.dumps(r, ensure_ascii=False, default=str)[:300], flush=True)
 
     def want(self, d, source):
-        return source in self.sources and (d, source) not in self.done
+        return source in self.sources and source_available(d, source) and (d, source) not in self.done
 
     def twse(self, dates):
         for d in dates:
             ymd = d.replace("-", "")
-            if self.want(d, "t86") and d >= "2012-05-02":
+            if self.want(d, "t86"):
                 j = self.get(f"https://www.twse.com.tw/rwd/zh/fund/T86?date={ymd}&selectType=ALLBUT0999&response=json",
                              f"t86_{ymd}.json")
                 fields = (j or {}).get("fields") or []
@@ -165,24 +205,24 @@ class Audit:
     def tpex(self, dates):
         for d in dates:
             ds, ymd = d.replace("-", "/"), d.replace("-", "")
-            if self.want(d, "tpex_insti") and d >= "2018-01-15":
+            if self.want(d, "tpex_insti"):
                 j = self.get("https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade?" + urllib.parse.urlencode(
                     {"type": "Daily", "sect": "EW", "date": ds, "response": "json"}), f"tpi_{ymd}.json")
-                if not j or j.get("date") != ymd:
-                    self.record(d, "tpex_insti", err=f"{(j or {}).get('stat')} {(j or {}).get('date')}")
+                tb = _tpex_table(j or {}, date.fromisoformat(d), "稽核三大法人")
+                if tb is None:
+                    self.record(d, "tpex_insti", err="TPEx 資料表未發布或日期無法驗證")
                 else:
-                    off = {r[0].strip(): [num(r[i]) for i in (4, 13, 22, 23)]
-                           for tb in j.get("tables", []) for r in tb.get("data", [])}
+                    off = {r[0].strip(): [num(r[i]) for i in (4, 13, 22, 23)] for r in tb["data"]}
                     self.record(d, "tpex_insti", off, self.db(
                         "select stock_id, foreign_net, trust_net, dealer_net, total_net from market.institutional "
                         "where date = :d and market = 'tpex'", d=d))
             if self.want(d, "tpex_margin"):
                 j = self.get("https://www.tpex.org.tw/www/zh-tw/margin/balance?" + urllib.parse.urlencode(
                     {"date": ds, "response": "json"}), f"tpm_{ymd}.json")
-                tb = ((j or {}).get("tables") or [{}])[0]
-                f = tb.get("fields") or []
-                if not j or j.get("date") != ymd:
-                    self.record(d, "tpex_margin", err=f"{(j or {}).get('stat')} {(j or {}).get('date')}")
+                tb = _tpex_table(j or {}, date.fromisoformat(d), "稽核融資融券")
+                f = (tb or {}).get("fields") or []
+                if tb is None:
+                    self.record(d, "tpex_margin", err="TPEx 資料表未發布或日期無法驗證")
                 elif len(f) < 15 or f[3] != "資買" or f[6] != "資餘額" or f[11] != "券賣" or f[14] != "券餘額":
                     self.record(d, "tpex_margin", err=f"header {f}")
                 else:
@@ -193,38 +233,48 @@ class Audit:
             if self.want(d, "tpex_price"):
                 j = self.get(f"https://www.tpex.org.tw/www/zh-tw/afterTrading/otc?date={ds}&type=EW&response=json",
                              f"tpp_{ymd}.json")
-                if not j or j.get("date") != ymd:
-                    self.record(d, "tpex_price", err=f"{(j or {}).get('stat')}")
+                tb = _tpex_table(j or {}, date.fromisoformat(d), "稽核股價")
+                if tb is None:
+                    self.record(d, "tpex_price", err="TPEx 資料表未發布或日期無法驗證")
                     continue
                 # 代號、名稱、收盤、漲跌、開盤、最高、最低、成交股數、成交金額、成交筆數
                 off = {r[0].strip(): [num(r[i]) for i in (4, 5, 6, 2, 7, 8, 9)]
-                       for tb in j.get("tables", []) for r in tb.get("data", []) if num(r[2]) is not None}
+                       for r in tb["data"] if num(r[2]) is not None}
                 db = self.db("select stock_id, open, high, low, close, volume, turnover, transactions "
                              "from market.price where date = :d", d=d)
                 self.record(d, "tpex_price", off, {k: v for k, v in db.items() if k in off})
 
 
 def summarize(out: Path, sources=None) -> int:
-    """Per source: days, differing days, unreadable days. Exit 1 if any (only ``sources`` when given)."""
-    latest = {}
-    for line in (out / "result.jsonl").read_text().splitlines():
-        r = json.loads(line)
-        if sources is None or r["source"] in sources:
-            latest[(r["date"], r["source"])] = r  # 重跑後以最後一筆為準
+    """逐來源回報已記錄、差異、無法讀取與缺漏日數；任一異常以結束碼 1 回報。"""
+    latest = latest_results(out)
+    expected = expected_results(out)
+    if not (out / "expected.json").exists():
+        print("coverage unverified: expected.json missing; summarizing recorded results only")
     by_source = {}
-    for (d, source), r in sorted(latest.items()):
-        s = by_source.setdefault(source, {"days": 0, "err": [], "diff": []})
+    for d, source in sorted(set(latest) | expected):
+        if sources is not None and source not in sources:
+            continue
+        s = by_source.setdefault(source, {"days": 0, "err": [], "diff": [], "missing": []})
+        r = latest.get((d, source))
+        if r is None:
+            s["missing"].append(d)
+            continue
         s["days"] += 1
         if r.get("err"):
             s["err"].append(d)
         elif r.get("miss") or r.get("extra") or r.get("bad"):
             s["diff"].append(d)
     for source, s in by_source.items():
-        print(f"{source}: {s['days']} days, differing {len(s['diff'])}, unreadable {len(s['err'])}")
-        for label in ("diff", "err"):
+        print(f"{source}: {s['days']} days, differing {len(s['diff'])}, "
+              f"unreadable {len(s['err'])}, missing {len(s['missing'])}")
+        for label in ("diff", "err", "missing"):
             if s[label]:
                 print(f"  {label}: {' '.join(s[label])}")
-    return 1 if any(s["diff"] or s["err"] for s in by_source.values()) else 0
+    if not by_source:
+        print("coverage incomplete: no audit results for requested sources")
+        return 1
+    return int(any(s["diff"] or s["err"] or s["missing"] for s in by_source.values()))
 
 
 def main() -> int:
@@ -250,17 +300,9 @@ def main() -> int:
             "select distinct date from market.price where date between :s and :e order by 1 desc"),
             {"s": args.start, "e": args.end})]
     audit = Audit(engine, out, sources)
-    threads = []
-    if sources & set(TWSE_SOURCES):
-        threads.append(threading.Thread(target=audit.twse, args=(dates,)))
-    if sources & set(TPEX_SOURCES):
-        threads.append(threading.Thread(target=audit.tpex, args=(dates,)))
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    print(f"checked {len(dates)} trading days", flush=True)
-    return summarize(out, sources)
+    status = audit.run(dates)
+    print(f"requested {len(dates)} trading days", flush=True)
+    return max(status, summarize(out, sources))
 
 
 if __name__ == "__main__":

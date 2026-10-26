@@ -114,9 +114,21 @@
 uv run --env-file .env python scripts/audit_market_vs_official.py \
     --start 2026-09-01 --end 2026-10-23 --out data/audit/2026-10 \
     --sources t86,margin,price,tpex_insti,tpex_margin,tpex_price
-# 只看彙總（不連網）；有差異或讀不到的日子時結束碼 1
+# 只看彙總（不連網）；有差異、讀不到或缺漏的日子時結束碼 1
 uv run --env-file .env python scripts/audit_market_vs_official.py --out data/audit/2026-10 --summary
 ```
+
+開始請求前，工具把預期的「日期 × 來源」寫入同目錄的 `expected.json`，同目錄重跑時累積範圍；
+來源尚未開放的日期（T86 早於 2012-05-02、上櫃法人早於 2018-01-15）不計入預期範圍。
+彙總的 `days` 是實際有結果的日數，`missing` 列出預期卻沒有結果的日期；全無結果也以結束碼 1 回報。
+工作執行緒因格式、快取或 DB 例外中斷時，主流程印出 `worker failed` 並以結束碼 1 結束，
+另一市場仍會等到完成；之後離線 `--summary` 也會根據 `expected.json` 回報缺漏。
+舊目錄若沒有 `expected.json`，只彙總已記錄結果並印出 `coverage unverified`，不能用它證明範圍完整。
+舊版已標成功的 TPEx 結果不會因升級而自動重驗；要重新驗證表內日期，請改用新的 `--out` 目錄完整重跑。
+重跑及彙總都以同日期、同來源的最後一筆狀態為準；最後一筆為錯誤時會重試，成功結果沿用。
+
+三條 TPEx 稽核路徑與正式爬蟲共用 `_tpex_table`：狀態須為 `ok`，外層日期與第一個資料表的
+民國日期都必須等於請求日，且表內須有資料；日期缺漏、無效、溢位或凍結表都記為 `err`，不與 DB 比對。
 
 `result.jsonl` 每天每個來源一行，欄位意思如下：
 
