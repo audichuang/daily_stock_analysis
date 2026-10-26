@@ -15,6 +15,10 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 from fastapi.testclient import TestClient
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 try:
     import litellm  # noqa: F401
 except ModuleNotFoundError:
@@ -1118,6 +1122,47 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertAlmostEqual(out[date(2026, 1, 5)], 7.1)  # next bar's Open
         self.assertAlmostEqual(out[date(2026, 1, 6)], 7.2)  # no successor: daily Close (warned)
 
+    def test_fx_daily_successor_skips_weekends_but_keeps_next_weekday_open(self) -> None:
+        for next_weekday in (False, True):
+            with self.subTest(next_weekday=next_weekday):
+                rows = [
+                    ("2026-10-22", 0.2040, 0.2041),
+                    ("2026-10-23", 0.2041, 0.2042),
+                    ("2026-10-24", 0.1963, 0.1963),
+                    ("2026-10-25", 0.1963, 0.1963),
+                ]
+                if next_weekday:
+                    rows.append(("2026-10-26", 0.2043, 0.2044))
+                closes = self._fetch_with(None, self._ohlc(rows), as_of=date(2026, 10, 23))
+                self.assertEqual(closes, [
+                    (date(2026, 10, 22), 0.2041),
+                    (date(2026, 10, 23), 0.2043 if next_weekday else 0.2042),
+                ])
+
+    def test_fx_refresh_uses_bar_age_including_weekend_allowance(self) -> None:
+        bar_date = date(2026, 1, 6)
+        account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="USD")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=bar_date, direction="in", amount=1000.0, currency="USD"
+        )
+        for age in (0, 1, 2, 3, 4, 6, 7):
+            with self.subTest(age=age):
+                as_of = bar_date + timedelta(days=age)
+                with patch.object(PortfolioService, "_fetch_fx_closes_from_yfinance", return_value=[(bar_date, 7.05)]), patch.object(
+                    PortfolioService, "_london_today", return_value=as_of
+                ):
+                    summary = self.service.refresh_fx_rates(account_id=account["id"], as_of=as_of)
+                row = self._fx_row(as_of)
+                self.assertAlmostEqual(row.rate, 7.05)
+                self.assertEqual(bool(row.is_stale), age > 3)
+                self.assertEqual(summary["updated_count"], int(age <= 3))
+                self.assertEqual(summary["stale_count"], int(age > 3))
+                snapshot = self.service.get_portfolio_snapshot(
+                    account_id=account["id"], as_of=as_of, include_realtime=False
+                )
+                self.assertEqual(snapshot["fx_stale"], age > 3)
+        self.assertFalse(self._fx_row(bar_date).is_stale)
+
     def test_fx_fetch_hourly_beats_daily_for_same_day(self) -> None:
         hourly = self._ohlc([("2026-01-05 22:00", 7.0, 7.33)])
         daily = self._ohlc([("2026-01-05", 7.0, 6.90), ("2026-01-06", 7.1, 7.2)])
@@ -1666,6 +1711,52 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertTrue(row.is_stale)
         self.assertAlmostEqual(row.rate, 0.2050)
 
+    def test_fx_refresh_rejected_middle_bar_keeps_stored_row_matching_next_neighbour(self) -> None:
+        """中間K棒須同時偏離前後鄰居才拒收；快取清理不可比它更嚴，只比前一個鄰居。"""
+        d5, d6, d7 = date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)
+        self._seed_twd(d5, 7.0, "yfinance", False)
+        self._seed_twd(d6, 7.2, "yfinance_backfill", False)  # 偏離前鄰 7.0，但符合後鄰 7.2
+        self._refresh_twd_cny([(d6, 5.0), (d7, 7.2)], [], [], d7, date(2026, 1, 8))
+        row = self._twd_row(d6)
+        self.assertIsNotNone(row)
+        self.assertAlmostEqual(row.rate, 7.2)
+        self.assertFalse(bool(row.is_stale))
+
+    def test_fx_refresh_rejected_middle_bar_drops_stored_row_deviating_from_both_neighbours(self) -> None:
+        d5, d6, d7 = date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)
+        self._seed_twd(d5, 7.0, "yfinance", False)
+        self._seed_twd(d6, 6.0, "yfinance_backfill", False)  # 前後鄰居 7.0／7.2 都偏離
+        self._refresh_twd_cny([(d6, 5.0), (d7, 7.2)], [], [], d7, date(2026, 1, 8))
+        self.assertIsNone(self._twd_row(d6))
+
+    def test_fx_refresh_rejected_middle_bar_ignores_raw_next_neighbour_that_was_also_rejected(self) -> None:
+        """後鄰K棒自己也被拒收時，它的原始值不能當保留快取的依據，否則垃圾列會被全拒收的回退沿用。"""
+        d5, d6, d7 = date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)
+        self._seed_twd(d5, 0.2045, "yfinance", False)
+        self._seed_twd(d6, 0.1963, "yfinance_backfill", False)  # 只符合同樣被拒收的後鄰原始值
+        with patch.object(PortfolioService, "_fetch_fx_cross_closes", return_value={}), patch.object(
+            PortfolioService, "_fetch_fx_cross_rate", return_value=0.2045
+        ):
+            self._refresh_twd_cny([(d6, 0.1900), (d7, 0.1963)], [], [], d7, d7)
+        self.assertIsNone(self._twd_row(d6))
+        row = self._twd_row(d7)
+        self.assertIsNotNone(row)
+        self.assertTrue(row.is_stale)
+        self.assertAlmostEqual(row.rate, 0.2045)
+
+    def test_fx_refresh_rejected_middle_bar_keeps_stored_row_matching_accepted_next_neighbour(self) -> None:
+        """反向檢查：後鄰K棒被接受時，符合它的已存列仍要保留。"""
+        d5, d6, d7 = date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)
+        self._seed_twd(d5, 0.2045, "yfinance", False)
+        self._seed_twd(d6, 0.1963, "yfinance_backfill", False)
+        with patch.object(PortfolioService, "_fetch_fx_cross_closes", return_value={}), patch.object(
+            PortfolioService, "_fetch_fx_cross_rate", return_value=0.1963
+        ):
+            self._refresh_twd_cny([(d6, 0.1900), (d7, 0.1963)], [], [], d7, d7)
+        row = self._twd_row(d6)
+        self.assertIsNotNone(row)
+        self.assertAlmostEqual(row.rate, 0.1963)
+
     def test_fx_refresh_all_bars_rejected_without_any_clean_source_drops_junk_row_and_marks_missing(self) -> None:
         d8 = date(2026, 1, 8)
         self._seed_twd(d8, 0.1963, "yfinance", False)
@@ -1681,6 +1772,46 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self._refresh_twd_cny([(d8, 0.1963)], [(d8, 32.6)], [(d8, 6.665)], d8, d8)
         self.assertAlmostEqual(self._twd_row(d8).rate, 0.1963)
         self.assertEqual(self._twd_row(d8).source, "manual")
+
+    def _refresh_rejected_friday(self):
+        friday, saturday = date(2026, 10, 23), date(2026, 10, 24)
+        with patch.object(PortfolioService, "_fetch_fx_cross_closes", return_value={}), patch.object(
+            PortfolioService, "_fetch_fx_cross_rate", return_value=0.2045
+        ):
+            self._refresh_twd_cny([(friday, 0.1963)], [], [], saturday, saturday)
+        return friday, saturday
+
+    def test_fx_all_rejected_skips_stored_junk_before_as_of_and_keeps_earlier_real_rate(self) -> None:
+        for safe_source in ("manual", "yfinance_backfill"):
+            with self.subTest(safe_source=safe_source):
+                self._seed_twd(date(2026, 10, 22), 0.2045, safe_source, False)
+                self._seed_twd(date(2026, 10, 23), 0.1963, "yfinance_backfill", False)
+                friday, saturday = self._refresh_rejected_friday()
+                self.assertIsNone(self._twd_row(friday))
+                row = self._twd_row(saturday)
+                self.assertAlmostEqual(row.rate, 0.2045)
+                self.assertTrue(row.is_stale)
+                self.assertEqual(self._twd_row(date(2026, 10, 22)).source, safe_source)
+
+    def test_fx_all_rejected_without_clean_rate_cannot_reuse_prior_junk_in_snapshot(self) -> None:
+        self._seed_twd(date(2026, 10, 23), 0.1963, "yfinance_backfill", False)
+        self._seed_twd(date(2026, 10, 24), 0.1963, "yfinance", False)
+        friday, saturday = self._refresh_rejected_friday()
+        self.assertIsNone(self._twd_row(friday))
+        self.assertIsNone(self._twd_row(saturday))
+        snapshot = self.service.get_portfolio_snapshot(as_of=saturday, include_realtime=False)
+        self.assertTrue(snapshot["fx_missing"])
+        self.assertEqual(snapshot["fx_missing_pairs"], ["TWD/CNY"])
+
+    def test_fx_all_rejected_preserves_manual_and_valid_auto_rates_on_rejected_prior_date(self) -> None:
+        for source, rate in (("manual", 0.1900), ("yfinance_backfill", 0.2030)):
+            with self.subTest(source=source):
+                self._seed_twd(date(2026, 10, 23), rate, source, False)
+                friday, saturday = self._refresh_rejected_friday()
+                self.assertEqual(self._twd_row(friday).source, source)
+                self.assertAlmostEqual(self._twd_row(friday).rate, rate)
+                self.assertAlmostEqual(self._twd_row(saturday).rate, rate)
+                self.assertTrue(self._twd_row(saturday).is_stale)
 
     def test_fx_refresh_empty_main_series_skips_cross_legs(self) -> None:
         account = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")
@@ -1810,6 +1941,99 @@ class PortfolioPr2TestCase(unittest.TestCase):
         finally:
             ps._FX_DEADLINE.reset(token)
         self.assertEqual(out, [(date(2026, 1, 8), 0.2050)])
+
+    # ---- 週末K棒不能當前一個平日的次日開盤 ----
+    def test_fx_fetch_daily_skips_weekend_successor_open(self) -> None:
+        """1h 失敗只剩日K：週五後面接週日K棒（Open 0.1963 垃圾），週五不能拿它當收盤。"""
+        daily = self._ohlc([
+            ("2026-10-22", 0.2040, 0.2041), ("2026-10-23", 0.2041, 0.2042), ("2026-10-25", 0.1963, 0.1963),
+        ])
+        out = dict(self._fetch_with(None, daily, as_of=date(2026, 10, 23)))
+        self.assertAlmostEqual(out[date(2026, 10, 22)], 0.2041)  # 次一個平日（週五）的 Open
+        self.assertAlmostEqual(out[date(2026, 10, 23)], 0.2042)  # 後面只有週末：退回當日 Close
+
+    def test_fx_fetch_daily_weekend_successor_falls_through_to_next_weekday_open(self) -> None:
+        daily = self._ohlc([
+            ("2026-10-23", 0.2041, 0.2042), ("2026-10-25", 0.1963, 0.1963), ("2026-10-26", 0.2045, 0.2046),
+        ])
+        out = dict(self._fetch_with(None, daily, as_of=date(2026, 10, 26)))
+        self.assertAlmostEqual(out[date(2026, 10, 23)], 0.2045)  # 跳過週日，取週一 Open（不是退回週五 Close）
+        self.assertNotIn(date(2026, 10, 25), out)
+
+    # ---- 停更的 Yahoo K棒不能以 as_of_date 存成新鮮匯率 ----
+    def test_fx_refresh_frozen_feed_saves_today_as_stale(self) -> None:
+        frame = self._london_frame([("2026-01-02", 7.01), ("2026-01-05", 7.02)])
+        self._refresh_at_london(frame, date(2026, 1, 9), date(2026, 1, 9))  # 最新K棒 4 天前
+        today = self._fx_row(date(2026, 1, 9))
+        self.assertTrue(bool(today.is_stale))
+        self.assertAlmostEqual(today.rate, 7.02)
+        self.assertFalse(bool(self._fx_row(date(2026, 1, 5)).is_stale))  # K棒本身仍照日期回補
+
+    def test_fx_refresh_monday_with_only_friday_bar_is_still_fresh(self) -> None:
+        frame = self._london_frame([("2026-01-08", 7.03), ("2026-01-09", 7.05)])
+        self._refresh_at_london(frame, date(2026, 1, 12), date(2026, 1, 12))  # 週五→週一 3 天
+        today = self._fx_row(date(2026, 1, 12))
+        self.assertFalse(bool(today.is_stale))
+        self.assertAlmostEqual(today.rate, 7.05)
+
+    # ---- 全數拒收時不能回頭挑同一天存著的垃圾列 ----
+    def test_fx_refresh_all_rejected_skips_stored_auto_row_on_rejected_day(self) -> None:
+        self._seed_fx(date(2026, 1, 8), 7.30, "yfinance", False)
+        self._seed_fx(date(2026, 1, 9), 6.00, "yfinance_backfill", False)  # 先前存進去的週五垃圾
+        frame = self._london_frame([("2026-01-09", 6.00)])
+        self._refresh_at_london(frame, date(2026, 1, 10), date(2026, 1, 10))
+        today = self._fx_row(date(2026, 1, 10))
+        self.assertTrue(bool(today.is_stale))
+        self.assertAlmostEqual(today.rate, 7.30)
+
+    def test_fx_refresh_all_rejected_still_uses_manual_row_on_rejected_day(self) -> None:
+        self._seed_fx(date(2026, 1, 8), 7.30, "yfinance", False)
+        self._seed_fx(date(2026, 1, 9), 6.00, "manual", False)  # 手動輸入的值不跳過
+        frame = self._london_frame([("2026-01-09", 5.00)])
+        self._refresh_at_london(frame, date(2026, 1, 10), date(2026, 1, 10))
+        today = self._fx_row(date(2026, 1, 10))
+        self.assertTrue(bool(today.is_stale))
+        self.assertAlmostEqual(today.rate, 6.00)
+
+    # ---- 逾時被放棄的 yfinance 執行緒數量有上限 ----
+    def test_fx_call_caps_abandoned_hung_workers_and_frees_slots(self) -> None:
+        import threading as _th
+        import time as _t
+
+        import src.services.portfolio_service as ps
+
+        release = _th.Event()
+        entered = []
+
+        def hang(*, timeout):
+            entered.append(1)
+            release.wait(5.0)
+            return "late"
+
+        def call():
+            token = ps._FX_DEADLINE.set(_t.monotonic() + 0.05)
+            try:
+                return ps._fx_call(hang)
+            finally:
+                ps._FX_DEADLINE.reset(token)
+
+        with patch.object(ps, "_FX_IN_FLIGHT", _th.BoundedSemaphore(2)):
+            try:
+                results = [call() for _ in range(5)]
+                self.assertEqual(results, [None] * 5)
+                self.assertEqual(len(entered), 2)  # 只有 2 個執行緒被啟動，其餘直接跳過
+            finally:
+                release.set()
+            deadline = _t.monotonic() + 2.0
+            while _t.monotonic() < deadline and ps._FX_IN_FLIGHT._value < 2:
+                _t.sleep(0.01)
+            # 卡住的執行緒結束後名額歸還，之後的請求照常進行（正常請求不會永久佔名額）
+            token = ps._FX_DEADLINE.set(_t.monotonic() + 1.0)
+            try:
+                for _ in range(3):
+                    self.assertEqual(ps._fx_call(lambda *, timeout: "ok"), "ok")
+            finally:
+                ps._FX_DEADLINE.reset(token)
 
 
 if __name__ == "__main__":
