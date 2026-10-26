@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from market_data import adjust, crawl, funds
+from market_data import adjust, crawl, funds, taifex
 
 
 @pytest.fixture(autouse=True)
@@ -12,6 +12,7 @@ def _no_fund_network(monkeypatch):
     monkeypatch.setattr(funds, "daily_update", lambda eng, asof=None: calls.append(asof))
     # 集保段同理（會連 TDCC 開放資料）
     monkeypatch.setattr(crawl.sources, "fetch_tdcc_latest", lambda: None)
+    monkeypatch.setenv("TAIFEX_OI_ACCUMULATE_ENABLED", "false")
     return calls
 
 
@@ -282,3 +283,26 @@ def test_twse_source_failure_still_aborts_daily(monkeypatch):
     _stub_daily(monkeypatch, failing={"institutional"})
     with pytest.raises(RuntimeError, match="institutional"):
         crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+
+
+@pytest.mark.parametrize("asof", [None, date(2024, 6, 5)])
+def test_daily_delegates_taifex_with_original_asof(monkeypatch, asof):
+    _stub_stock_steps(monkeypatch)
+    calls = []
+    engine = _Eng()
+    monkeypatch.setattr(taifex, "daily_update", lambda eng, asof=None: calls.append((eng, asof)))
+    crawl.daily_update(engine=engine, asof=asof)
+    assert calls == [(engine, asof)]
+
+
+def test_taifex_failure_warns_and_does_not_block_adjustment(monkeypatch, capsys):
+    adjusted = []
+    _stub_stock_steps(monkeypatch, adjusted)
+
+    def boom(engine, asof=None):
+        raise RuntimeError("fixture write failed")
+
+    monkeypatch.setattr(taifex, "daily_update", boom)
+    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5))
+    assert adjusted == [1]
+    assert "**WARN taifex_foreign_futures_oi: fixture write failed" in capsys.readouterr().out

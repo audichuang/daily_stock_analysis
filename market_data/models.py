@@ -234,3 +234,12 @@ class HoldingDist(Base):
     holders: Mapped[int | None] = mapped_column(Integer)
     shares: Mapped[int | None] = mapped_column(BigInteger)
     pct: Mapped[float | None] = mapped_column(Numeric(8, 2))  # 占集保庫存數比例 %
+
+
+class TaifexForeignFuturesOi(Base):
+    """外資及陸資大台 TXF 淨未平倉（口）；負值為淨空，日期取自期交所回應。"""
+
+    __tablename__ = "taifex_foreign_futures_oi"
+
+    date: Mapped[_date] = mapped_column(Date, primary_key=True)
+    foreign_fut_oi: Mapped[int] = mapped_column(BigInteger, nullable=False)

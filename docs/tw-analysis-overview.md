@@ -23,6 +23,7 @@
 | 即時報價、漲跌停 | Shioaji → yfinance | 是 | `source` 變 `fallback` 代表 Shioaji 金鑰沒注入、已降級 |
 | 三大法人（當日＋5／20 日累計） | 當日 TWSE T86／TPEx；趨勢讀本地 `market.institutional` | 是 | 單位是**股**；18:00 拿到的是初版，prompt 標「初版，投信常於隔夜修正」（約 1/4 份報告與定版不同，多在投信欄）；隔日 `daily` 由 `REVISED_SOURCES` 換成定版；上櫃歷史自 2018-01-15（#39） |
 | 融資融券（餘額、5／20 場變化、券資比） | 本地 `market.margin` | 是 | 單位是**張**，T+1；上櫃同表 `market='tpex'`（#39） |
+| 外資大台 TXF 淨未平倉 | 期交所官方 CSV；每日可累積至 `market.taifex_foreign_futures_oi` | 否（盤前腳本即時列數字） | `TAIFEX_OI_ACCUMULATE_ENABLED` 預設關閉；須先 migration 再啟用，只存官方近 14 天窗口且驗回應日期，詳見 `docs/market-data-pitfalls.md`「期交所外資大台未平倉」 |
 | 估值（近四季本益比、淨值比、殖利率） | 上市優先讀本地 `market.valuation` 當日值，退回 `TwseFundamentalAdapter`（BWIBBU 只有 T-1）；上櫃走 TPEx OpenAPI | 是，附 `as_of` 日期 | 整包 `as_of` 落後 10 曆日就拒收 |
 | 月營收（單月、月增、年增、累計年增） | 官方 OpenAPI | 是 | 不讀本地 DB 的 16 年 PIT 資料 |
 | 月營收動能（前 3 月均年增 vs 本月、強勢股大幅降速） | 本地 `market.monthly_revenue` | 是，資訊列 | `src/services/tw_backtest_context.py`；只當資訊 |
