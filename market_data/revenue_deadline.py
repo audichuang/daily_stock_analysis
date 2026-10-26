@@ -54,9 +54,15 @@ MAX_DEADLINE_LAG_DAYS = 20
 
 
 def is_historical_replay(as_of, latest) -> bool:
-    """明確指定的日期早於全市場最新價格日才回放；不以個股落後的 K 棒日期判斷。"""
-    if as_of is None or latest is None or pd.isna(as_of) or pd.isna(latest):
+    """明確指定的日期**嚴格早於**全市場 ``market.price`` 最新日才算歷史回放（要套法定期限）。
+
+    ``as_of`` 為 None／NaT（沒帶日期）、等於或晚於最新日（Web ``?date=`` 帶今天、週末帶今天而最新是週五）
+    都是 live；不以個股落後的 K 棒日期判斷。``latest`` 取不到（None／NaT）時無從判斷，保守當回放
+    （套期限只會讓營收晚看到，不會偷看未來）。比較到日，時分忽略。"""
+    if as_of is None or pd.isna(as_of):
         return False
+    if latest is None or pd.isna(latest):
+        return True
     return pd.Timestamp(as_of).date() < pd.Timestamp(latest).date()
 
 

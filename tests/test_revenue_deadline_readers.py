@@ -122,24 +122,6 @@ def test_measure_revenue_momentum_readers_apply_deadline():
 
 # ---- 歷史回放讀取端：screen_tw --date、tw_stock_dossier 帶 as_of -------------------------
 
-@pytest.mark.parametrize("as_of, latest, replay", [
-    (None, "2026-04-13", False),
-    ("2026-04-12", "2026-04-13", True),
-    ("2026-04-13", "2026-04-13", False),
-    ("2026-04-14", "2026-04-13", False),
-    (pd.Timestamp("2026-04-13").date(), pd.Timestamp("2026-04-13"), False),
-    (pd.Timestamp("2026-04-12"), pd.Timestamp("2026-04-13").date(), True),
-    ("2026-04-13 00:00:00", "2026-04-13 13:30:00", False),
-    ("2026-04-12", None, False),
-    (pd.NaT, "2026-04-13", False),
-    ("2026-04-12", pd.NaT, False),
-])
-def test_replay_requires_an_explicit_date_before_latest(as_of, latest, replay):
-    from market_data.revenue_deadline import is_historical_replay
-
-    assert is_historical_replay(as_of, latest) is replay
-
-
 class _ScreenConn:
     def __init__(self, latest):
         self.latest = latest
@@ -202,6 +184,13 @@ def _screen_rev(monkeypatch, as_of, latest="2026-05-29"):
 ])
 def test_screen_tw_replay_applies_deadline(monkeypatch, as_of, visible):
     assert _screen_rev(monkeypatch, pd.Timestamp(as_of), latest="2026-06-01")[0] == visible
+
+
+def test_screen_tw_date_before_latest_replays(monkeypatch):
+    # 反向：最新場次只晚一天，04-13 仍是回放，照套期限且 SQL 窗口放寬
+    sids, seen = _screen_rev(monkeypatch, pd.Timestamp("2026-04-13"), latest="2026-04-14")
+    assert sids == ["2330"]
+    assert pd.Timestamp(seen["s"]) < pd.Timestamp("2026-04-13") - pd.Timedelta(days=45)
 
 
 @pytest.mark.parametrize("as_of", [None, "2026-04-13", "2026-04-14"])
