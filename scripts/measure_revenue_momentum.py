@@ -78,6 +78,7 @@ PRIMARY_GATES = ("sus_top20", "ath_top20")
 # 事先登記的更正前視否決（研究文件 §0.5）：主檢定閘門 → 它的 PIT 穩健性變體
 PIT_VETO = {"sus_top20": "sus_pit_top20"}
 SURVIVED = "通過且存活"
+RAW_DM, RAW_DH = "_均值差", "_P30差"   # compare_arm 列裡的原始差（小數）；底線開頭＝不顯示
 PIT_VETOED = "通過但 SUS_pit 方向相反（更正前視污染）→ 不存活"
 PRIMARY_LEVEL = 95.0
 BONFERRONI_LEVEL = 98.75   # 4 個主檢定（2 訊號 × 補充／取代）
@@ -288,6 +289,8 @@ def compare_arm(label, arm, ref, n_days, h, a, primary=False):
           if len(arm) else np.nan)
     row["均值差pp"] = round(dm * 100, 2)
     row["P30差pp"] = round(dh * 100, 1)
+    # 原始差（小數，未四捨五入）給判準與否決用；底線開頭的鍵不印進表格。
+    row[RAW_DM], row[RAW_DH] = dm, dh
     ci = (two_arm_block_bootstrap(arm, ref, n_days, n=a.bootstrap, block=h,
                                   seed=a.bootstrap_seed,
                                   levels=(PRIMARY_LEVEL, BONFERRONI_LEVEL))
@@ -316,14 +319,15 @@ def apply_pit_veto(rows):
     """事先登記的否決：主檢定「通過且存活」但同一組（補充／取代）的 PIT 變體方向相反 → 不存活。
 
     ``rows`` 是 ``{(組別, 閘門): compare_arm 的列}``，就地改 ``判定``。「方向相反」採保守口徑：
-    PIT 變體的均值差或 P30 差點估計任一不 > 0（與判準 (a) 同一條線）。只降級「通過且存活」，
-    其他判定本來就不寫進長期文件，不動。
+    PIT 變體的均值差或 P30 差點估計任一不 > 0（與判準 (a) 同一條線）。比的是原始差
+    （``RAW_DM``／``RAW_DH``），不是四捨五入後的顯示值：+0.02pp 的 P30 差顯示成 0.0 也仍 > 0。
+    只降級「通過且存活」，其他判定本來就不寫進長期文件，不動。
     """
     for (arm, gate), row in rows.items():
         pit = rows.get((arm, PIT_VETO.get(gate)))
         if pit is None or row.get("判定") != SURVIVED:
             continue
-        if not (pit["均值差pp"] > 0 and pit["P30差pp"] > 0):
+        if not (pit[RAW_DM] > 0 and pit[RAW_DH] > 0):
             row["判定"] = PIT_VETOED
     return rows
 
@@ -360,7 +364,9 @@ def surprise_report(piv, rv, sig, extra, horizons, a):
         print(f"=== h={h}（{tag}）：組 − 候選池；雙臂交易日區塊 bootstrap block={h}、"
               f"{a.bootstrap} 次、seed={a.bootstrap_seed} ===")
         with pd.option_context("display.width", 250, "display.max_columns", 30):
-            print(pd.DataFrame(list(rows.values())).set_index("組").to_string(), "\n")
+            table = pd.DataFrame(list(rows.values())).set_index("組")
+            table = table.loc[:, [c for c in table.columns if not str(c).startswith("_")]]
+            print(table.to_string(), "\n")
 
 
 def main(argv=None):

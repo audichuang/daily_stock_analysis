@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] 外資／投信「橫斷面對立極端」構念以 2013–2019 樣本外檢定（新增唯讀量測腳本 `scripts/measure_inst_divergence.py`）：h250 未通過凍結的晉升判準、依規則封存（雙中間超額 +1.10%、階梯消失；區間全部跨零，統計上 inconclusive、非否證），h60 inconclusive；live 篩選規則不變
 - [新功能] 新增 `scripts/fetch_twse_disposal_history.py`（TWSE 處置公告歷史快取到 `data/`、列出處置期制度沿革）與 `measure_signal_forward.py --disposal-cache`（突破池處置公告延後進場／剔除實驗）；回測結論：延後進場 inconclusive、剔除較差，live 維持只標記不剔除。
 - [修复] 處置延後實驗（`measure_signal_forward.py --disposal-cache`）的表格逐臂並列同一批配對事件的正常進場列（原本拿全部受影響事件比，方向與成對差相反）、成對差列印「實際延後」件數，面板之後才公告的處置不再被算成持有中公告（h60 124 → 123）；研究文件同步改正。
+- [修复] `measure_revenue_momentum.py --experiment surprise` 的 SUS_pit 否決改比原始差而非四捨五入後的顯示值：P30 差 +0.02pp 顯示成 0.0 時不再誤判 PIT 方向相反、把存活組改判不存活。
 - [修复] `measure_revenue_momentum.py --experiment surprise` 的前 20% 閘門改為只和自己可見當下已可見的同月股票排名：2026-01 起保險類 15 日才公布，原本整月一起排會讓 10 日可見的股票在 11~15 日的旗標偷看保險類尚未公布的營收。
 - [修复] `measure_revenue_momentum.py --experiment surprise` 把事先登記的 SUS_pit 否決寫進判定：SUS 主檢定「通過且存活」而同組 SUS_pit 點估計方向相反時改判「不存活（更正前視污染）」，不再只靠研究文件手動套用。
 - [新功能] `scripts/measure_revenue_momentum.py --experiment surprise` 量測 SUS（標準化未預期營收）與營收÷歷史最高在突破候選池當 YoY≥20 的補充或取代閘門，`measure_signal_forward.two_arm_block_bootstrap` 給兩組事件差的交易日區塊區間；結果見 `docs/research/2026-10-26-exp-revenue-sus.md`，不改 live 規則

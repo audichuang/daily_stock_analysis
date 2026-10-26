@@ -458,7 +458,8 @@ def test_main_surprise_mode_skips_momentum_sections(monkeypatch):
 
 
 def _arm_row(verdict_label, dm, dh):
-    return {"組": "x", "n": 400, "均值差pp": dm, "P30差pp": dh, "判定": verdict_label}
+    return {"組": "x", "n": 400, "均值差pp": dm, "P30差pp": dh, "判定": verdict_label,
+            revmom.RAW_DM: dm / 100, revmom.RAW_DH: dh / 100}
 
 
 @pytest.mark.parametrize("pit_dm,pit_dh,vetoed", [
@@ -494,6 +495,40 @@ def test_pit_veto_pairs_same_arm_and_leaves_other_verdicts_alone():
     assert rows[("補充", "sus_top20")]["判定"] == revmom.SURVIVED     # 不跨組配對
 
 
+def _tiny_diff_pit_row(variant):
+    """以真 compare_arm 產生 PIT 變體列：候選池 6000 筆（1000 筆命中），變體只差一筆。
+
+    差距都小到顯示四捨五入會失真：均值差約 +0.007pp（顯示 0.01）、P30 差約 ±0.014pp 或 0
+    （顯示 0.0）。否決必須看原始差，不是顯示值。
+    """
+    hit = revmom.HIT_THRESHOLD
+    ref = pd.DataFrame({"r": [hit + 0.2] * 1000 + [0.0] * 5000})
+    if variant == "extra_hit":          # 多一筆命中 → 兩者原始差都 > 0
+        arm = pd.concat([ref, pd.DataFrame({"r": [hit + 0.2]})], ignore_index=True)
+    elif variant == "bump_no_hit":      # 一筆未命中上調但沒跨門檻 → P30 差恰為 0
+        arm = ref.copy()
+        arm.loc[arm.index[-1], "r"] = hit / 2
+    else:                               # 多一筆大漲未命中 → 均值差 > 0、P30 差 < 0 但顯示 -0.0
+        arm = pd.concat([ref, pd.DataFrame({"r": [hit * 0.99]})], ignore_index=True)
+    a = SimpleNamespace(bootstrap=0, bootstrap_seed=42, min_events=1)
+    return revmom.compare_arm("sus_pit_top20", arm, ref, n_days=100, h=60, a=a)
+
+
+@pytest.mark.parametrize("variant,vetoed", [
+    ("extra_hit", False),     # 原始差皆 > 0：顯示值 P30差pp=0.0 不能造成誤否決
+    ("bump_no_hit", True),    # P30 原始差恰為 0：不 > 0 → 否決（擋「改成 ≥ 0」的過度修正）
+    ("near_miss", True),      # P30 原始差 < 0、顯示 -0.0：否決（擋容差／取絕對值）
+])
+def test_pit_veto_uses_raw_differences_not_rounded_display(variant, vetoed):
+    pit = _tiny_diff_pit_row(variant)
+    if variant == "extra_hit":
+        assert pit["P30差pp"] == 0.0      # 前提：顯示值確實被四捨五入成 0
+    rows = {("補充", "sus_top20"): _arm_row(revmom.SURVIVED, 2.0, 2.0),
+            ("補充", "sus_pit_top20"): pit}
+    revmom.apply_pit_veto(rows)
+    assert rows[("補充", "sus_top20")]["判定"] == (revmom.PIT_VETOED if vetoed else revmom.SURVIVED)
+
+
 def test_surprise_report_applies_pit_veto_to_printed_verdict(monkeypatch, capsys):
     days = pd.bdate_range("2020-01-01", periods=5)
     cols = pd.Index(["2330"])
@@ -511,9 +546,8 @@ def test_surprise_report_applies_pit_veto_to_printed_verdict(monkeypatch, capsys
 
     def fake_compare(label, arm, ref, n_days, h, a, primary=False):
         if "sus_pit_top20" in label:
-            return {"組": label, "n": 400, "均值差pp": -1.0, "P30差pp": -1.0, "判定": "探索"}
-        return {"組": label, "n": 400, "均值差pp": 2.0, "P30差pp": 2.0,
-                "判定": revmom.SURVIVED if primary else "探索"}
+            return {**_arm_row("探索", -1.0, -1.0), "組": label}
+        return {**_arm_row(revmom.SURVIVED if primary else "探索", 2.0, 2.0), "組": label}
 
     monkeypatch.setattr(revmom, "compare_arm", fake_compare)
     a = SimpleNamespace(pool_hold=60, start="2020-01-01", d5=0.05, vol_lo=1.3, vol_hi=2.0,
@@ -525,6 +559,7 @@ def test_surprise_report_applies_pit_veto_to_printed_verdict(monkeypatch, capsys
     assert len(sus_lines) == 2, out
     assert all(revmom.PIT_VETOED in ln for ln in sus_lines)
     assert all(revmom.SURVIVED in ln and revmom.PIT_VETOED not in ln for ln in ath_lines)
+    assert revmom.RAW_DM not in out and revmom.RAW_DH not in out   # 原始差不印進表格
 
 
 def _mixed_deadline_feat(insurance_sus):
