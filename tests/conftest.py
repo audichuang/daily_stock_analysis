@@ -14,6 +14,7 @@ from typing import Any, TypeVar
 from warnings import warn
 
 import os
+import subprocess
 from pathlib import Path
 
 import anyio.to_thread
@@ -38,12 +39,52 @@ T = TypeVar("T")
 # 往上層逐層找 .env：git worktree（.claude/worktrees/<name>）自己沒有 .env，但 .venv 是連到主 repo
 # 的 symlink，LiteLLM DEV 模式的 load_dotenv() 會從套件位置往上找到主 repo 的 .env，把正式庫補回來
 # （2026-10-23 踩過：worktree 跑 test_portfolio_pr2 在正式庫寫入 218 個 Demo 帳戶）。
+# 樹外 worktree（dsa-upstream-sync 的 ~/.cache/dsa-upstream-sync/<date>）往上找不到 .env，
+# 但 PATH 用的仍是主 repo 的 .venv，LiteLLM 一樣會補回正式庫；所以往上找不到可用的 URL 時，
+# 改用 `git rev-parse --git-common-dir` 定位主 checkout，讀它的 .env。
+def _storage_url_in(env_file: Path) -> str:
+    if not env_file.is_file():
+        return ""
+    return (dotenv_values(env_file).get("STORAGE_DATABASE_URL") or "").strip()
+
+
+def _main_checkout_root(start_dir: Path) -> Path | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(start_dir), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    common_dir = result.stdout.strip()
+    if result.returncode != 0 or not common_dir:
+        return None
+    common_path = Path(common_dir)
+    if not common_path.is_absolute():
+        common_path = start_dir / common_path
+    common_path = common_path.resolve()
+    # 一般 checkout 的 common dir 是 <主 repo>/.git；bare repo 沒有工作目錄，也就沒有 .env。
+    if common_path.name != ".git":
+        return None
+    return common_path.parent
+
+
 def _find_prod_storage_url(start: Path) -> str:
-    for parent in start.resolve().parents:
+    start = start.resolve()
+    for parent in start.parents:
         env_file = parent / ".env"
         if env_file.is_file():
-            return (dotenv_values(env_file).get("STORAGE_DATABASE_URL") or "").strip()
-    return ""
+            url = _storage_url_in(env_file)
+            if url:
+                return url
+            break
+    main_root = _main_checkout_root(start.parent)
+    if main_root is None:
+        return ""
+    return _storage_url_in(main_root / ".env")
 
 
 _PROD_STORAGE_DATABASE_URL = _find_prod_storage_url(Path(__file__))
