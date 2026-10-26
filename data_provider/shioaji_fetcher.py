@@ -14,7 +14,8 @@ DataFetcherManager 零网络代价跳过，台股自动降级 yfinance。
    - 登入/快照各有硬 timeout（futures），防 SDK 卡死拖垮 FastAPI 线程池。
    - 快照不持 _SESSION_LOCK（否则整批被序列化成一条 mutex，造成延迟悬崖）。
 2. 熔斷器（_login_breaker）僅在 _attempt_login 檢查登入許可：
-   - is_available() 僅此處呼叫一次（消耗半開探測名額）；登入失敗或作廢目前 session 記失敗。
+   - is_available() 僅此處呼叫一次（消耗半開探測名額）；登入失敗、快照失敗作廢目前 session、
+     或查合約重登無效（見 _relogin_unproven）記失敗。
    - is_available_for_request **不读熔断器**：CircuitBreaker 的 OPEN→HALF_OPEN 时间转移
      只发生在 is_available() 内（get_status 是惰性纯读不触发），若把 get_status=="open"
      当 gate 会永久卡在 OPEN 无法恢复。故冷却中靠 _attempt_login 内的 is_available() 拦下
@@ -200,23 +201,35 @@ def _ensure_session() -> Optional[Any]:
 # 27 次错误若按次数会误触发；10-23 的 3.5 小时中断则在 60 秒后的下一次请求即触发。
 _CONTRACT_FAIL_WINDOW_S = 60.0
 _contract_fail_since: Optional[float] = None
+# 查合約作廢後的登入熔斷計費規則（沿用 _login_breaker，不另設機制）：
+# - 第一次作廢不計費：session 死掉、重登就好是常態，SDK 恢復後下一個請求要能立刻重登。
+# - 上一次作廢後重登的 session 從未查到過合約、又因同樣原因被作廢 → 重登沒用，計一次 failure。
+#   連續兩次（failure_threshold=2）即熔斷 900s，避免 SDK 長期故障時每 60 秒重登一次燒登入額度。
+# 旗標在作廢時設 True，只有「目前 session 查合約成功」才清掉；登入成功本身不清（登入證明不了 session 能用）。
+_relogin_unproven = False
 
 
-def _invalidate_session(api: Any, error: Exception) -> None:
-    """僅作廢仍在使用的 session，並將該次失敗計入既有登入熔斷器。"""
+def _invalidate_if_current(api: Any, *, error: Optional[BaseException] = None,
+                           charge_breaker: bool = True) -> bool:
+    """作廢 session 的共用入口：必須在 _SESSION_LOCK 內呼叫。
+
+    只有 ``api`` 仍是目前的 session 才作廢（避免舊 api 的延遲失敗誤清另一執行緒剛登入的新 session），
+    ``charge_breaker`` 為 True 時記一次登入熔斷 failure。回傳是否真的作廢了。
+    """
     global _api, _logged_in, _contract_fail_since
-    with _SESSION_LOCK:
-        if _api is not api:
-            return
-        _api = None
-        _logged_in = False
-        _contract_fail_since = None
-        _login_breaker.record_failure(_BREAKER_KEY, str(error)[:200])
+    if _api is not api:
+        return False
+    _api = None
+    _logged_in = False
+    _contract_fail_since = None
+    if charge_breaker:
+        _login_breaker.record_failure(_BREAKER_KEY, str(error)[:200] if error is not None else None)
+    return True
 
 
 def _lookup_contract(api: Any, getter: Callable[[Any], Any]) -> Optional[Any]:
     """查合约；丢例外时累计连续失败并在持续超过门槛时作废 session。查无（None/KeyError）不算失败。"""
-    global _contract_fail_since
+    global _contract_fail_since, _relogin_unproven
     try:
         contract = getter(api)
     except KeyError:
@@ -233,7 +246,10 @@ def _lookup_contract(api: Any, getter: Callable[[Any], Any]) -> Optional[Any]:
                 _contract_fail_since = now
             if now - _contract_fail_since < _CONTRACT_FAIL_WINDOW_S:
                 return None
-            _invalidate_session(api, e)
+            # 上一次作廢後的重登從未查到合約 → 重登無效，計費讓熔斷器退避（規則見 _relogin_unproven）。
+            futile_relogin = _relogin_unproven
+            _invalidate_if_current(api, error=e, charge_breaker=futile_relogin)
+            _relogin_unproven = True
         logger.warning("[ShioajiFetcher] 合约查询持续失败超过 %.0f 秒，作废 session 以便重新登入: %s: %s",
                        _CONTRACT_FAIL_WINDOW_S, type(e).__name__, str(e)[:200])
         try:
@@ -245,6 +261,7 @@ def _lookup_contract(api: Any, getter: Callable[[Any], Any]) -> Optional[Any]:
     with _SESSION_LOCK:
         if _api is api:
             _contract_fail_since = None
+            _relogin_unproven = False
     return contract
 
 
@@ -364,7 +381,10 @@ def shioaji_main_indices() -> Optional[list]:
             snaps = fut.result(timeout=_SNAPSHOT_TIMEOUT_S)
     except Exception as e:
         logger.warning("[ShioajiFetcher] 指數快照失敗/超時: %s", type(e).__name__)
-        _invalidate_session(api, e)
+        # 與個股快照路徑一致：session 可能已死，作廢並記一次登入熔斷 failure，
+        # 否則只看指數的呼叫端會一直沿用死 session、看板指數長期退回其他來源。
+        with _SESSION_LOCK:
+            _invalidate_if_current(api, error=e)
         return None
 
     results = []
@@ -394,13 +414,15 @@ def shioaji_main_indices() -> Optional[list]:
             "as_of": _ns_to_iso(getattr(snap, "ts", None)),
             "source": "shioaji",  # 前端靠它分「即時／收盤／延遲」標示
         })
-    # 依固定順序（加權在前）
-    order = [out for _, _, out, _ in _TW_MAIN_INDEX_CONTRACTS]
-    results.sort(key=lambda r: order.index(r["code"]))
+    # 熔斷記帳與個股路徑一致：端到端拿到合法報價才算成功，否則不確定（半開轉回 OPEN 避免假復原）。
+    # 只成功時不記 success 的話，只看指數的呼叫端 failure 永遠不歸零，兩次無關的失敗就會熔斷。
     if results:
         _login_breaker.record_success(_BREAKER_KEY)
     else:
         _login_breaker.record_inconclusive(_BREAKER_KEY)
+    # 依固定順序（加權在前）
+    order = [out for _, _, out, _ in _TW_MAIN_INDEX_CONTRACTS]
+    results.sort(key=lambda r: order.index(r["code"]))
     return results or None
 
 
@@ -448,7 +470,8 @@ def prime_snapshots(codes) -> int:
             snaps = fut.result(timeout=min(30.0, max(_SNAPSHOT_TIMEOUT_S, len(contracts) * 0.5)))
     except Exception as e:
         logger.warning("[ShioajiFetcher] 批次快照失败/超时 (%d 档): %s", len(contracts), type(e).__name__)
-        _invalidate_session(api, e)
+        with _SESSION_LOCK:
+            _invalidate_if_current(api, error=e)  # 只有仍是本次 session 才作廢（race 守衛在 helper 內）
         return 0
 
     if not snaps:
@@ -475,12 +498,13 @@ def prime_snapshots(codes) -> int:
 def _reset_for_tests() -> None:
     """清模组级状态 + 熔断器 + 批次缓存（供测试隔离）。"""
     global _api, _logged_in, _logout_registered
-    global _contract_fail_since
+    global _contract_fail_since, _relogin_unproven
     with _SESSION_LOCK:
         _api = None
         _logged_in = False
         _logout_registered = False
         _contract_fail_since = None
+        _relogin_unproven = False
     with _SNAPSHOT_CACHE_LOCK:
         _SNAPSHOT_CACHE.clear()
     _login_breaker.reset()
@@ -561,7 +585,10 @@ class ShioajiFetcher(BaseFetcher):
         except Exception as e:
             # 可能 session 已死 → 标记重登（受 breaker 约束），记一次 failure。
             logger.warning("[ShioajiFetcher] 快照失败/超时 %s: %s", code, type(e).__name__)
-            _invalidate_session(api, e)
+            with _SESSION_LOCK:
+                # 仅当当前会话仍是本次使用的 api 时才作废+记 failure，避免旧 api 的延迟失败
+                # 误清掉另一线程刚登入的新 session（race）。
+                _invalidate_if_current(api, error=e)
             return None
 
         if not snaps:
