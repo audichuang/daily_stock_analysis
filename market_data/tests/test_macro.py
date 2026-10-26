@@ -253,3 +253,11 @@ def test_update_sections_fail_independently(monkeypatch, capsys):
     assert stored == ["series", "events"]
     assert result["macro_series"] == 1 and result["rate_expectations"] == 0
     assert "**WARN rate_expectations" in out and "**WARN event_calendar fomc" in out
+
+
+def test_daily_refetches_the_whole_window_the_brief_reads():
+    """Yahoo 的 Close 已做分割調整；只重抓近期的話，分割後新舊列尺度不同（假的 −50% 回撤）。
+    每日窗口必須涵蓋儀表讀的一年高點與 MA200（約 260 個交易日）。"""
+    years = {"1y": 1, "2y": 2, "5y": 5, "10y": 10, "max": 99}
+    assert years.get(macro.YF_PERIOD, 0) >= 2
+    assert macro.FRED_LOOKBACK_DAYS >= 400
