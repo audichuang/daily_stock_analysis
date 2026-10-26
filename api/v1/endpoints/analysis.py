@@ -56,6 +56,8 @@ from api.v1.schemas.history import (
 )
 from api.v1.schemas.run_flow import RunFlowSnapshot
 from data_provider.base import canonical_stock_code, normalize_stock_code
+from src.utils.sniper_points import find_sniper_points, find_sniper_prices, resolve_sniper_prices
+
 from src.data.stock_index_loader import resolve_index_stock_code
 from src.config import Config
 from src.core.market_review_lock import (
@@ -1377,6 +1379,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                     analysis_summary=record.analysis_summary,
                 ),
                 strategy=ReportStrategy(
+                    sniper_prices=resolve_sniper_prices(raw_result, record),
                     ideal_buy=_stringify_report_strategy_value(getattr(record, 'ideal_buy', None)),
                     secondary_buy=_stringify_report_strategy_value(getattr(record, 'secondary_buy', None)),
                     stop_loss=_stringify_report_strategy_value(getattr(record, 'stop_loss', None)),
@@ -1585,9 +1588,19 @@ def _build_analysis_report(
         sentiment_label=summary_data.get("sentiment_label")
     )
 
+    # 重建快取報告時仍以模型原始契約為準，避免舊 strategy 數值覆蓋明確 null。
+    raw_prices = find_sniper_prices(raw_result_data)
+    sniper_prices = None
+    if raw_prices is not None:
+        sniper_prices = resolve_sniper_prices(raw_result_data)
+        if not strategy_data:
+            strategy_data = find_sniper_points(raw_result_data) or {}
+    elif find_sniper_prices(strategy_data) is not None:
+        sniper_prices = resolve_sniper_prices(strategy_data)
     strategy = None
-    if strategy_data:
+    if strategy_data or raw_prices is not None:
         strategy = ReportStrategy(
+            sniper_prices=sniper_prices,
             ideal_buy=_stringify_report_strategy_value(strategy_data.get("ideal_buy")),
             secondary_buy=_stringify_report_strategy_value(strategy_data.get("secondary_buy")),
             stop_loss=_stringify_report_strategy_value(strategy_data.get("stop_loss")),

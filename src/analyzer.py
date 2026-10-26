@@ -349,6 +349,9 @@ def _legacy_audit_marker_specs(
 from src.llm.client import LLMClient, _AllModelsFailedError, _LiteLLMStreamError  # noqa: F401
 
 from src.utils.data_processing import normalize_report_signal_attribution
+from src.utils.sniper_points import (
+    SNIPER_PRICES_PROMPT, missing_stop_loss_field, find_sniper_prices,
+)
 
 
 def check_content_integrity(
@@ -376,15 +379,6 @@ def check_content_integrity(
     def _is_invalid_risk_alerts(value: Any) -> bool:
         return not isinstance(value, list)
 
-    def _is_invalid_stop_loss(value: Any) -> bool:
-        if value is None:
-            return True
-        if isinstance(value, (list, tuple, dict)):
-            return True
-        if isinstance(value, str):
-            return not value.strip()
-        return False
-
     if result.sentiment_score is None:
         missing.append("sentiment_score")
     advice = result.operation_advice
@@ -405,11 +399,9 @@ def check_content_integrity(
     if result.decision_type in ("buy", "hold"):
         battle = dash.get("battle_plan")
         battle = battle if isinstance(battle, dict) else {}
-        sp = battle.get("sniper_points")
-        sp = sp if isinstance(sp, dict) else {}
-        stop_loss = sp.get("stop_loss")
-        if _is_invalid_stop_loss(stop_loss):
-            missing.append("dashboard.battle_plan.sniper_points.stop_loss")
+        stop_loss_field = missing_stop_loss_field(battle)
+        if stop_loss_field:
+            missing.append(stop_loss_field)
     if require_phase_decision:
         phase_decision = dash.get("phase_decision")
         phase_decision = phase_decision if isinstance(phase_decision, dict) else {}
@@ -442,15 +434,6 @@ def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) 
 
     def _is_invalid_risk_alerts(value: Any) -> bool:
         return not isinstance(value, list)
-
-    def _is_invalid_stop_loss(value: Any) -> bool:
-        if value is None:
-            return True
-        if isinstance(value, (list, tuple, dict)):
-            return True
-        if isinstance(value, str):
-            return not value.strip()
-        return False
 
     report_language = normalize_report_language(getattr(result, "report_language", "zh"))
     placeholder = get_placeholder_text(report_language)
@@ -517,7 +500,7 @@ def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) 
             if _is_invalid_risk_alerts(intelligence.get("risk_alerts")):
                 risk_warning_values = _normalize_risk_warning_values(result.risk_warning)
                 intelligence["risk_alerts"] = risk_warning_values
-        elif field == "dashboard.battle_plan.sniper_points.stop_loss":
+        elif field in ("dashboard.battle_plan.sniper_points.stop_loss", "dashboard.battle_plan.sniper_prices.stop_loss"):
             if not result.dashboard:
                 result.dashboard = {}
             battle_plan = result.dashboard.get("battle_plan")
@@ -528,8 +511,14 @@ def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) 
             if not isinstance(sniper_points, dict):
                 sniper_points = {}
                 battle_plan["sniper_points"] = sniper_points
-            if _is_invalid_stop_loss(sniper_points.get("stop_loss")):
-                sniper_points["stop_loss"] = placeholder
+            if missing_stop_loss_field(battle_plan):
+                if find_sniper_prices(battle_plan) is not None:
+                    prices = dict(find_sniper_prices(battle_plan))
+                    prices["stop_loss"] = None
+                    battle_plan["sniper_prices"] = prices
+                if (not isinstance(sniper_points.get("stop_loss"), (str, int, float))
+                        or not str(sniper_points.get("stop_loss")).strip()):
+                    sniper_points["stop_loss"] = placeholder
         elif field.startswith("dashboard.phase_decision."):
             if not result.dashboard:
                 result.dashboard = {}
@@ -2307,6 +2296,7 @@ class GeminiAnalyzer(LLMClient):
         },
 
         "battle_plan": {
+            "sniper_prices": {"ideal_buy": null, "secondary_buy": null, "stop_loss": null, "take_profit": null},
             "sniper_points": {
                 "ideal_buy": "理想买入点：XX元（在MA5附近）；减仓/卖出或买进条件未成立时只写“暂不设定”",
                 "secondary_buy": "次优买入点：XX元（在MA10附近）；减仓/卖出或买进条件未成立时只写“暂不设定”",
@@ -2495,6 +2485,7 @@ class GeminiAnalyzer(LLMClient):
         },
 
         "battle_plan": {
+            "sniper_prices": {"ideal_buy": null, "secondary_buy": null, "stop_loss": null, "take_profit": null},
             "sniper_points": {
                 "ideal_buy": "理想入场位：XX元（满足主要技能触发条件）；减仓/卖出或触发条件未成立时只写“暂不设定”",
                 "secondary_buy": "次优入场位：XX元（更保守或确认后执行）；减仓/卖出或触发条件未成立时只写“暂不设定”",
@@ -2675,6 +2666,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         },
 
         "battle_plan": {
+            "sniper_prices": {"ideal_buy": null, "secondary_buy": null, "stop_loss": null, "take_profit": null},
             "sniper_points": {
 """
 
@@ -3045,6 +3037,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 .replace("{default_skill_policy_section}", default_skill_policy_section)
                 .replace("{skills_section}", skills_section)
             )
+        base_prompt += SNIPER_PRICES_PROMPT
         if self._tw_ma_weighted_active(stock_code, lang):
             base_prompt = _apply_tw_ma_weighted_system_rules(
                 base_prompt, getattr(self._get_runtime_config(), "bias_threshold", 5.0)
@@ -5650,8 +5643,8 @@ Output the complete Decision Dashboard in JSON format."""
                     lines.append("- dashboard.core_conclusion.one_sentence: one-line decision")
                 elif f == "dashboard.intelligence.risk_alerts":
                     lines.append("- dashboard.intelligence.risk_alerts: risk alert list (can be empty)")
-                elif f == "dashboard.battle_plan.sniper_points.stop_loss":
-                    lines.append("- dashboard.battle_plan.sniper_points.stop_loss: stop-loss level")
+                elif f in ("dashboard.battle_plan.sniper_points.stop_loss", "dashboard.battle_plan.sniper_prices.stop_loss"):
+                    lines.append(SNIPER_PRICES_PROMPT)
                 elif f == "dashboard.phase_decision.phase_context":
                     lines.append("- dashboard.phase_decision.phase_context: public market phase summary subset")
                 elif f == "dashboard.phase_decision.action_window":
@@ -5686,8 +5679,8 @@ Output the complete Decision Dashboard in JSON format."""
                 lines.append(L("- dashboard.core_conclusion.one_sentence: 一句話決策", "- dashboard.core_conclusion.one_sentence: 一句话决策"))
             elif f == "dashboard.intelligence.risk_alerts":
                 lines.append(L("- dashboard.intelligence.risk_alerts: 風險警報列表（可為空陣列）", "- dashboard.intelligence.risk_alerts: 风险警报列表（可为空数组）"))
-            elif f == "dashboard.battle_plan.sniper_points.stop_loss":
-                lines.append(L("- dashboard.battle_plan.sniper_points.stop_loss: 止損價", "- dashboard.battle_plan.sniper_points.stop_loss: 止损价"))
+            elif f in ("dashboard.battle_plan.sniper_points.stop_loss", "dashboard.battle_plan.sniper_prices.stop_loss"):
+                lines.append(SNIPER_PRICES_PROMPT)
             elif f == "dashboard.phase_decision.phase_context":
                 lines.append(L("- dashboard.phase_decision.phase_context: 公開低敏市場階段摘要子集", "- dashboard.phase_decision.phase_context: 公开低敏市场阶段摘要子集"))
             elif f == "dashboard.phase_decision.action_window":

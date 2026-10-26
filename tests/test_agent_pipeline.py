@@ -1441,7 +1441,8 @@ class TestAgentResultConversion(unittest.TestCase):
         )
 
         ok, missing = check_content_integrity(result)
-        self.assertTrue(ok, missing)
+        self.assertFalse(ok)
+        self.assertEqual(missing, ["dashboard.battle_plan.sniper_points.stop_loss"])
         self.assertEqual(result.sentiment_score, 62)
         self.assertEqual(result.dashboard["sentiment_score"], 62)
         self.assertEqual(result.dashboard["core_conclusion"]["one_sentence"], result.analysis_summary)

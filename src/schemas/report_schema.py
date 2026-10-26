@@ -10,7 +10,7 @@ Uses Optional for lenient parsing; business-layer integrity checks are separate.
 """
 
 import math
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -98,6 +98,15 @@ class SniperPoints(BaseModel):
     take_profit: Optional[Union[str, int, float]] = None
 
 
+class SniperPrices(BaseModel):
+    """模型可執行價格；缺欄位維持舊報告相容性。"""
+
+    ideal_buy: Optional[Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]] = None
+    secondary_buy: Optional[Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]] = None
+    stop_loss: Optional[Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]] = None
+    take_profit: Optional[Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]] = None
+
+
 class PositionStrategy(BaseModel):
     """Position strategy."""
 
@@ -110,6 +119,7 @@ class BattlePlan(BaseModel):
     """Battle plan block."""
 
     sniper_points: Optional[SniperPoints] = None
+    sniper_prices: Optional[SniperPrices] = None
     position_strategy: Optional[PositionStrategy] = None
     action_checklist: Optional[List[str]] = None
 

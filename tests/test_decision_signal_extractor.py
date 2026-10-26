@@ -59,10 +59,10 @@ def _result(**overrides) -> AnalysisResult:
     result.dashboard = {
         "battle_plan": {
             "sniper_points": {
-                "ideal_buy": "理想买入点：1700元",
-                "secondary_buy": "1680-1690（回踩MA5附近）",
-                "stop_loss": "止损位：1600元",
-                "take_profit": "目标位：1850元",
+                "ideal_buy": "1700元",
+                "secondary_buy": "1680-1690",
+                "stop_loss": "1600元",
+                "take_profit": "1850元",
             },
             "action_checklist": ["放量突破前高", "回踩不破MA10"],
         },
@@ -393,7 +393,7 @@ def test_build_payload_maps_secondary_only_entry_to_entry_high() -> None:
     result = _result()
     result.dashboard = {
         "battle_plan": {
-            "sniper_points": {"secondary_buy": "次优买入点：1680元"},
+            "sniper_points": {"secondary_buy": "1680元"},
         },
     }
 

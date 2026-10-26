@@ -17,6 +17,7 @@ from typing import List, Optional
 from src.agent.agents.base_agent import BaseAgent
 from src.agent.protocols import AgentContext, AgentOpinion, normalize_decision_signal
 from src.report_language import normalize_report_language
+from src.utils.sniper_points import SNIPER_PRICES_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,7 @@ should sum to 100; all-zero means no effective signal and must not be faked.
 ``strongest_bullish_signal`` is the name of the strongest bullish signal (e.g., MACD golden cross, earnings surprise, low valuation).
 ``strongest_bearish_signal`` is the name of the strongest bearish signal (e.g., MA death cross, earnings warning, high valuation).
 """
+        prompt += SNIPER_PRICES_PROMPT
         if report_language == "en":
             return prompt + """
 

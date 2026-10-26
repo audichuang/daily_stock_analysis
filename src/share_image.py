@@ -22,6 +22,8 @@ from typing import Any, Iterable, Mapping, Optional
 
 import markdown2
 
+from src.utils.sniper_points import find_sniper_points, find_sniper_prices, parse_sniper_value, resolve_sniper_prices
+
 
 PROJECT_URL = "https://github.com/ZhuLinsen/daily_stock_analysis"
 PROJECT_REPOSITORY = "ZhuLinsen/daily_stock_analysis"
@@ -641,17 +643,8 @@ def _price_tokens(value: object) -> list[str]:
 
 
 def _compact_sniper_value(key: str, value: object) -> str:
-    text = _clean_value(value, limit=120)
-    if not text:
-        return ""
-    if key == "ideal_buy" and any(token in text for token in ("暂无", "暂不", "不满足")):
-        return "等待企稳"
-    prices = _price_tokens(text)
-    if not prices:
-        return _compact_text(text, limit=18)
-    if key == "take_profit" and len(prices) >= 2:
-        return f"{prices[0]}–{prices[1]}"
-    return prices[0]
+    price = parse_sniper_value(value, key)
+    return f"{price:g}" if price is not None else ""
 
 
 def _compact_position(value: object, *, holding: bool) -> str:
@@ -1169,7 +1162,7 @@ def _stock_data_from_payload(
     trend = _nested_mapping(data_view, "trend_status")
     intelligence = _nested_mapping(dashboard, "intelligence")
     battle = _nested_mapping(dashboard, "battle_plan")
-    sniper = _nested_mapping(battle, "sniper_points")
+    sniper = resolve_sniper_prices(battle)
     position_advice = _nested_mapping(core, "position_advice")
     phase = _nested_mapping(dashboard, "phase_decision")
 
@@ -1261,7 +1254,10 @@ def _stock_data_from_payload(
         value = _compact_sniper_value(key, sniper.get(key))
         if value:
             payload_sniper.append((label, value, tone))
-    poster.sniper = _merge_metrics(poster.sniper, payload_sniper)
+    if find_sniper_prices(battle) is not None or find_sniper_points(battle) is not None:
+        poster.sniper = payload_sniper
+    else:
+        poster.sniper = _merge_metrics(poster.sniper, payload_sniper)
 
     catalysts = intelligence.get("positive_catalysts")
     risks = intelligence.get("risk_alerts")

@@ -27,6 +27,7 @@ from src.config import Config, get_config
 from src.enums import ReportType
 from src.market_phase_summary import format_public_market_status_line, format_public_phase_pack_excerpt
 from src.trade_cost_guardrail import format_cost_check
+from src.utils.sniper_points import display_sniper_prices
 from src.notification_routing import (
     get_notification_route_config,
     split_notification_route_channels,
@@ -1867,7 +1868,7 @@ class NotificationService:
                     lines.append("")
 
                 # 狙击点位
-                sniper = battle.get('sniper_points', {}) if battle else {}
+                sniper = display_sniper_prices(battle) if battle else {}
                 if sniper:
                     ideal_buy = str(sniper.get('ideal_buy', ''))
                     stop_loss = str(sniper.get('stop_loss', ''))
@@ -2180,7 +2181,7 @@ class NotificationService:
             lines.append("")
 
         # 狙击点位
-        sniper = battle.get('sniper_points', {}) if battle else {}
+        sniper = display_sniper_prices(battle) if battle else {}
         if sniper:
             lines.extend([
                 f"### 🎯 {labels['action_points_heading']}",

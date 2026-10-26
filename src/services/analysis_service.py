@@ -32,6 +32,7 @@ from src.services.run_diagnostics import (
     reset_run_diagnostic_context,
 )
 from src.services.empty_news import empty_news_disclosure
+from src.utils.sniper_points import extract_sniper_points
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +258,7 @@ class AnalysisService:
                 "sentiment_label": sentiment_label,
             },
             "strategy": {
+                "sniper_prices": extract_sniper_points(result),
                 "ideal_buy": sniper_points.get("ideal_buy"),
                 "secondary_buy": sniper_points.get("secondary_buy"),
                 "stop_loss": sniper_points.get("stop_loss"),

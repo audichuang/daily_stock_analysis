@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from bot.commands.base import BotCommand
 from bot.models import BotMessage, BotResponse
 from data_provider.base import canonical_stock_code
+from src.utils.sniper_points import display_sniper_prices
+
 from src.config import get_config
 from src.storage import get_db
 
@@ -547,7 +549,7 @@ class AskCommand(BotCommand):
         battle_plan = dashboard_block.get("battle_plan")
         if not isinstance(battle_plan, dict):
             battle_plan = {}
-        sniper = battle_plan.get("sniper_points")
+        sniper = display_sniper_prices(battle_plan)
         if isinstance(sniper, dict):
             price_parts = []
             for key in ("ideal_buy", "secondary_buy", "stop_loss", "take_profit"):

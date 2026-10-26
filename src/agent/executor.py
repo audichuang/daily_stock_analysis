@@ -20,6 +20,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from src.utils.sniper_points import SNIPER_PRICES_PROMPT
+
 from src.config import get_config
 from src.agent.chat_context import build_agent_chat_context_bundle, build_visible_chat_history
 from src.agent.llm_adapter import LLMToolAdapter
@@ -137,6 +139,7 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
             "sentiment_summary": ""
         }},
         "battle_plan": {{
+            "sniper_prices": {{"ideal_buy": null, "secondary_buy": null, "stop_loss": null, "take_profit": null}},
             "sniper_points": {{"ideal_buy": "", "secondary_buy": "", "stop_loss": "", "take_profit": ""}},
             "position_strategy": {{"suggested_position": "", "entry_plan": "", "risk_control": ""}},
             "action_checklist": []
@@ -225,7 +228,7 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
 - 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。
 
 {language_section}
-"""
+""" + SNIPER_PRICES_PROMPT
 
 AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数据工具和可切换交易技能，负责生成专业的【决策仪表盘】分析报告。
 
@@ -296,6 +299,7 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
             "sentiment_summary": ""
         }},
         "battle_plan": {{
+            "sniper_prices": {{"ideal_buy": null, "secondary_buy": null, "stop_loss": null, "take_profit": null}},
             "sniper_points": {{"ideal_buy": "", "secondary_buy": "", "stop_loss": "", "take_profit": ""}},
             "position_strategy": {{"suggested_position": "", "entry_plan": "", "risk_control": ""}},
             "action_checklist": []
@@ -381,7 +385,7 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
 - 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。
 
 {language_section}
-"""
+""" + SNIPER_PRICES_PROMPT
 
 LEGACY_DEFAULT_CHAT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{market_role}投资分析 Agent，拥有数据工具和交易技能，负责解答用户的股票投资问题。
 

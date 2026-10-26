@@ -60,7 +60,7 @@ npx playwright install chromium
 | 操作、评分、趋势 | `action_label` / `operation_advice`、`sentiment_score`、`trend_prediction`、`confidence_level` | 使用最终校准结果，评分范围 0–100，并标明结论置信度 |
 | 核心结论 | `dashboard.core_conclusion.one_sentence` | 没有时隐藏 |
 | 市场快照 | `market_snapshot` | 当前/收盘价、涨跌幅、量比、换手率按可用字段展示；数据源进入底部声明 |
-| 执行计划 | `dashboard.battle_plan.sniper_points` | 只展示理想/确认买入、止损和首个目标价格；复杂触发条件保留在完整报告 |
+| 執行計畫 | `dashboard.battle_plan.sniper_prices` | 展示模型判斷的單一可執行價格；null 隱藏，舊版僅接受純數值／純區間，不從敘述句抓價，完整條件保留在報告 |
 | 技术参考 | `dashboard.data_perspective` | 展示均线状态、趋势分、MA5 乖离、支撑和压力；结构化量比/换手已进入快照时不重复展示冗长量能描述，旧记录缺失结构化量能时仍保留 Markdown 兜底 |
 | 下一步观察 | `dashboard.phase_decision` | 展示行动窗口、下次检查时间和最多两条观察条件 |
 | 催化与风险 | `dashboard.intelligence` | `positive_catalysts` 与 `risk_alerts` 最多各展示 2 条短摘要 |

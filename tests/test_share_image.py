@@ -235,6 +235,7 @@ def test_stock_share_image_prefers_structured_json_and_compacts_trade_points():
                 "risk_alerts": ["近7个交易日累计下跌16.07%，趋势破位未止跌"],
             },
             "battle_plan": {
+                "sniper_prices": {"ideal_buy": None, "secondary_buy": 55.13, "stop_loss": 47.47, "take_profit": 53.24},
                 "sniper_points": {
                     "ideal_buy": "暂无理想买点：需先收复并站稳MA5（52.68）且放量",
                     "secondary_buy": "放量收复MA10（55.13）确认趋势反转后介入",
@@ -264,11 +265,11 @@ def test_stock_share_image_prefers_structured_json_and_compacts_trade_points():
     assert 'class="signal-trend negative"' in html
     assert "置信度 中" in html
     assert 'class="metric red"><span>涨跌</span><strong>+2.29%</strong>' in html
-    assert "等待企稳" in html
+    assert "理想买入</span>" not in html
     assert "确认买入" in html
     assert "确认买入</span><strong>55.13" in html
     assert "47.47" in html
-    assert "53.24–55.13" in html
+    assert "目标</span><strong>53.24" in html
     assert "25/100" in html
     assert "-6.02%" in html
     assert "下一步观察" in html
@@ -1002,7 +1003,7 @@ def test_partial_stock_payload_preserves_markdown_snapshot_technical_and_trade_p
     assert "1425.00" in html
     assert "+1.20%" in html
     assert "量比 1.35" in html
-    assert "<strong>1420</strong>" in html
+    assert "<strong>1450</strong>" in html
     assert "1350" in html
 
 

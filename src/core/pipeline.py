@@ -26,6 +26,8 @@ from typing import List, Dict, Any, Optional, Sequence, Tuple, Callable
 
 import pandas as pd
 
+from src.utils.sniper_points import find_sniper_prices
+
 from src.config import FUNDAMENTAL_STAGE_TIMEOUT_SECONDS_DEFAULT, get_config, Config
 from src.data.stock_mapping import is_meaningful_stock_name
 from src.storage import get_db
@@ -2683,7 +2685,8 @@ class StockAnalysisPipeline:
             if not isinstance(sniper_points, dict):
                 sniper_points = {}
                 battle["sniper_points"] = sniper_points
-            if self._is_agent_field_missing(sniper_points.get("stop_loss"), scalar=True):
+            if (find_sniper_prices(battle) is None
+                    and self._is_agent_field_missing(sniper_points.get("stop_loss"), scalar=True)):
                 sniper_points["stop_loss"] = self._stop_loss_fallback_from_trend(
                     trend_result,
                     report_language,

@@ -122,8 +122,16 @@ export interface ReportSummary {
   sentimentLabel?: SentimentLabel;
 }
 
+export interface SniperPrices {
+  idealBuy?: number | null;
+  secondaryBuy?: number | null;
+  stopLoss?: number | null;
+  takeProfit?: number | null;
+}
+
 /** Strategy section */
 export interface ReportStrategy {
+  sniperPrices?: SniperPrices | null;
   idealBuy?: string;
   secondaryBuy?: string;
   stopLoss?: string;

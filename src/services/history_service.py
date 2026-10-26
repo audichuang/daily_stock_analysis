@@ -57,7 +57,7 @@ from src.schemas.decision_action import (
     display_operation_advice_for_result,
 )
 from src.schemas.decision_scale import extract_decision_guardrail_reason
-from src.utils.sniper_points import find_sniper_points
+from src.utils.sniper_points import find_sniper_points, resolve_sniper_prices
 from src.utils.data_processing import (
     extract_realtime_detail_fields,
     normalize_model_used,
@@ -792,6 +792,7 @@ class HistoryService:
             "trend_prediction": record.trend_prediction,
             "sentiment_score": record.sentiment_score,
             "sentiment_label": self._get_sentiment_label(record.sentiment_score or 50),
+            "sniper_prices": resolve_sniper_prices(raw_result, record),
             "ideal_buy": sniper_points.get("ideal_buy"),
             "secondary_buy": sniper_points.get("secondary_buy"),
             "stop_loss": sniper_points.get("stop_loss"),
