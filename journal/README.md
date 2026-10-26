@@ -96,7 +96,7 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   | `stock_code` / `resolve` / `code_llm` | 對到的代號、怎麼對到的、NotebookLM 原本給的代號。順序：逐字稿念的是數字（ETF 常這樣）就用那個代號（`code`）；否則先用還原後的股名比對（`exact`／`alias`），比對不到才用 NotebookLM 給的代號（名稱吻合 `code`，不吻合 `code_mismatch`，要人工確認）；最後才是字面相近（`fuzzy`，要人工確認）或 `unresolved`（留 `null`）。實測 NotebookLM 的股名比它猜的代號可靠（宜鼎被給成宜特的代號）。整集沒有點名時寫一行 `no_picks`，避免重抓 |
   | `stance` | `bullish`／`bearish`／`avoid`／`neutral`；同一檔不同來賓看法不同時分兩行 |
   | `speaker` / `reason` / `theme` / `condition` / `quote` | 誰說的、理由、題材、節目給的價位或進出場條件（原話）、關鍵原話 |
-  | `data` | 播出當時已知的最近一個收盤（`as_of` 是實際的交易日；播出日 17:00 後才上傳的用播出日；標題含「盤前」、或播出日 17:00 前就上傳的〔盤中連線〕用前一天以前的，因為當天的個股法人買賣超下午才公布；2026-10-23 晚上以前寫入的列只看標題的「盤前」，下午上傳的集數可能含當天法人）：`close`、`vs_ma20_pct`／`vs_ma60_pct`（前復權）、`from_60d_high_pct`、`ret_5d_pct`、`revenue_yoy_3m`（截止日依法定公告期限已看得到的最近三個月，保險類 15 日、遇休市順延）、`foreign_5d_lots`／`trust_5d_lots`（上市、上櫃都有；窗口內法人資料有缺日時才是 `null`）。無行情時整欄 `null` |
+  | `data` | 播出當時已知的最近一個收盤（`as_of` 是實際的交易日；播出日 17:00 後才上傳的用播出日；標題含「盤前」、或播出日 17:00 前就上傳的〔盤中連線〕用前一天以前的，因為當天的個股法人買賣超下午才公布；2026-10-23 晚上以前寫入的列只看標題的「盤前」，下午上傳的集數可能含當天法人）：`close`、`cum_adj_factor`（首個交易日至 `as_of` 的除權息／分割因子連乘，沿用 `market_data` 的事件對齊與去重；跨日快照以 `close / cum_adj_factor` 比較首次至今報酬，任一端舊快照缺因子時退回原始價並明標未還原）、`vs_ma20_pct`／`vs_ma60_pct`（前復權）、`from_60d_high_pct`、`ret_5d_pct`、`revenue_yoy_3m`（截止日依法定公告期限已看得到的最近三個月，保險類 15 日、遇休市順延）、`foreign_5d_lots`／`trust_5d_lots`（上市、上櫃都有；窗口內法人資料有缺日時才是 `null`）。無行情時整欄 `null` |
   | `extracted_at` / `notebook_id` | 擷取時點、NotebookLM notebook（一天一本，30 天後刪；逐字稿另存 `data/media_picks/`，gitignore） |
 
 - `media-picks-review.jsonl` — **媒體點名的代號覆核**，一筆覆核一行，由 23:00 排程的 Claude 讀
@@ -118,6 +118,8 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   `scripts/media_picks_summary.py` 的證據、對挑出來的個股跑 `scripts/tw_stock_dossier.py` 後追加。腳本只整理證據，好壞由 Claude
   判斷；這個檔讓那些判斷可以回驗（例如 `research` 與 `avoid` 之後的報酬差）。研究名單，不是買進訊號。
 
+  選檔前也讀摘要的「前幾輪點名過、判斷檔沒有涵蓋的檔」（JSON `unjudged`，索引末段只放每輪統計與判斷過卻沒寫進判斷檔的檔，完整清單用 `--unjudged`）：回看 7 天、早於本輪擷取、且此檔沒有涵蓋那次點名的判斷列（有 `written_at` 的列只看它是否不早於那次擷取；沒有 `written_at` 的舊列才看 `since`）（已套用代號覆核；更早的舊判斷不算涵蓋，列在 `last_verdict`）。附點名時段、多空人數、`media_picks_judge.py --log` 記下的判斷紀錄；沒有判斷紀錄不代表判過。要不要補判、補哪幾檔由主 agent 決定，新舊候選共用 8 檔上限；補判的檔 `--code`（也就是逐檔判斷拿到的原話）會附上前幾輪的舊證據。舊證據的原話帶代號比對狀態（`resolve`、說的名稱、LLM 代號、影片 id、覆核結果）：前幾輪代號沒把握的點名不在本輪 review 清單，`--unjudged` 會標「代號沒把握且未覆核 N 筆」，要不要先覆核（逐字稿在 `data/media_picks/<video_id>.txt`）由主 agent 決定。腳本不自動補判、不推定投資建議；`since` 與 `--judge-since` 保留原語義。
+
   | 欄位 | 意思 |
   | --- | --- |
   | `date` | 本輪日期（台北） |
@@ -129,19 +131,19 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   | `flip` | 什麼變化會改變看法 |
   | `bull_voices` / `bear_voices` | 本輪看多／看空的講者數（依講者去重） |
   | `data_as_of` | 資料包的基準日 |
-  | `since` | 本輪的 since（log 的 `RESULT since=`，帶時區），表示判到這一輪為止；下一輪的 `media_picks_summary.py --judge-since` 用它找出還沒判過的輪次。補判時判讀範圍會往前涵蓋，但這裡仍記本輪的 since |
+  | `since` | 本輪的 since（log 的 `RESULT since=`，帶時區），表示判到這一輪為止；下一輪的 `media_picks_summary.py --judge-since` 用它找出還沒判過的輪次。補判時判讀範圍會往前涵蓋，但這裡仍記本輪的 since。`media_picks_summary.py` 的「前幾輪點名過、判斷檔沒有涵蓋的檔」也用它：同代號 `written_at` 不早於那次擷取才算涵蓋；沒有 `written_at` 的舊列才退回 `since` 不早於那次點名所屬那一輪 |
   | `written_at` | 寫入時點（帶時區） |
 
   **回驗**：`scripts/verify_media_picks.py`（`make verify-media-picks`）把每筆 verdict（進場＝`written_at` 台北日期之後第一個交易日的開盤）與每個講者點名（進場＝播出日之後第一個交易日的開盤，播出當天的價格一律不用）接上 5／10／20 個交易日後相對 0050 的超額報酬（扣成本），依 verdict、講者（看多與看空分開，看空命中＝超額<0）分表。**命中一律用毛超額（兩邊都不扣成本）**：個股賣出稅 0.3% 對 0050 的 0.1%，淨超額會讓一檔沒動的股票被算成看空命中；均值超額看多用淨（可交易）、看空用毛，報告表頭有註明。**n<20、進場日不足 5 個不同交易日（research−avoid 差兩組各自要 ≥5 天）或 bootstrap 95% CI 跨零一律標 inconclusive**；視窗未走完的事件排除並計數、不補值。逐檔判斷（`media_picks_judge.py`）會把講者的 10 日紀錄附進提示詞，n<20 或進場日<5 天時明寫「樣本不足」要求忽略。
 
 - `ptt-picks.jsonl` — **PTT 股票板 `[標的]` 文**（`make ptt-picks`，`scripts/tw_ptt_picks.py`），一篇一行。
   `[標的]` 是板規格式的推薦文（標的／分類／分析／進退場機制），直接解析原文、不經 LLM；`Re:` 回文不收。實測一週約 12 篇，其中約一半是大盤／台指期或美股（`resolve=market`，不附 `data`）。
-  跟媒體點名一樣是**候選來源，不是買進訊號**；作者是匿名網友，推／噓數是擷取當下的值（文章越新越少），不是最終值。
+  跟媒體點名一樣是**候選來源，不是買進訊號**；作者是匿名網友，推／噓數是擷取當下的值（文章越新越少），不是最終值。同一次搜尋翻頁會按文章 ID 去重，避免翻頁時有新文章將同一篇擠到下一頁而重複寫入；不同文章仍各自保留。
 
   | 欄位 | 意思 |
   | --- | --- |
   | `date` / `posted_at` / `article_id` / `url` / `title` / `author` | 發文日與時刻（台北，取自文章檔名的 unix 秒）、文章、PTT ID |
-  | `target` / `stock_code` / `resolve` | 作者寫的標的、對到的代號、怎麼對到的：先比對股名，比對不到才用作者寫的數字（股名吻合 `code`、不吻合 `code_mismatch`，例如小米 1810、年份 2025 都是四位數）；板規範本的 `(例 2330.TW 台積電)` 會先拿掉；沒寫代號又是大盤、台指期、費半這類字眼時是 `market`（不做字面相近比對，否則「台灣大盤」會被對成台灣大） |
+  | `target` / `stock_code` / `resolve` | 作者寫的標的、對到的代號、怎麼對到的：先比對股名，比對不到才用作者寫的數字（含只寫 `2330.TW`、`00631L.TW`、`6811.TWO` 而沒有名稱；台股後綴隨代號移除，其他市場後綴不移除；股名吻合 `code`、不吻合 `code_mismatch`，例如小米 1810、年份 2025 都是四位數）；板規範本的 `(例 2330.TW 台積電)` 會先拿掉；沒寫代號又是大盤、台指期、費半這類字眼時是 `market`（不做字面相近比對，否則「台灣大盤」會被對成台灣大） |
   | `category` / `stance` | 作者填的分類原文；`stance` 只在分類（或標題結尾）只出現「多」或只出現「空」時才是 `bullish`／`bearish`，討論、請益、多空都寫的是 `neutral` |
   | `reason` / `condition` | 分析／正文（前 500 字）、進退場機制（前 300 字，板規範本的提示字已拿掉）；沒照範本寫的文章 `reason` 是全文前 500 字 |
   | `has_statement` | 對帳單欄有附連結 |

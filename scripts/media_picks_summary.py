@@ -4,7 +4,8 @@
 只看 ``extracted_at`` 不早於 ``--since`` 的列（``scripts/media_picks_job.sh`` 傳本輪開始時刻；跨午夜的一輪也不會漏）。
 本腳本只整理、不下結論：好壞由 Claude 讀這份證據、再對挑出來的個股跑 ``tw_stock_dossier`` 後判斷。一輪約 160 檔、
 全文約 160 KB，所以分兩層給：``--index`` 是精簡索引（約 20 KB，主 agent 用來挑檔），``--code`` 是單一檔的完整證據
-（交給 ``media_picks_judge.py`` 的逐檔判斷）；``--json`` 是同一份資料的機器可讀版。三者必選其一（沒有全文模式）。輸出三塊：
+（交給 ``media_picks_judge.py`` 的逐檔判斷）；``--json`` 是同一份資料的機器可讀版；``--unjudged`` 是下面 ``unjudged`` 的完整清單。
+輸出模式必選其一（沒有全文模式）。輸出這幾塊：
 
 - ``review``：代號沒把握的點名（``resolve`` 為 ``code_mismatch``／``fuzzy``／``unresolved``），附逐字稿路徑與已有的覆核
   結論，讓 Claude 判斷語音誤字；覆核結果另寫 ``journal/media-picks-review.jsonl``（原 journal 不改），下次執行時
@@ -16,6 +17,10 @@
 - ``holdings``（只有帶 ``--holdings`` 才有內容）：``scripts/portfolio_codes.py`` 的持股清單 × 本輪點名。每檔 ``stocks`` 帶
   ``held``；``holdings.mentioned`` 列出被節目或 PTT 點名的持股（多空中性人數、PTT 篇數、``alert``＝有看空／避開的講者
   或看空的 PTT 文）。``--index`` 第一段就是這份，``--code`` 對持股開頭標「（你持有這檔）」。
+- ``unjudged``：本輪之前 7 天內被點名、判斷檔（``media-picks-verdicts.jsonl``）沒有涵蓋那次點名的檔，附點名時段、多空人數、
+  上次判斷、``media_picks_judge.py --log`` 記下的判斷紀錄（成功或失敗原因），以及每一輪的點名數與判斷列數。只給事實：
+  某輪只判了一部分（逾時、``ok: false``、主 agent 中途被收掉）時要不要補判、補哪幾檔，由主 agent 讀完自己決定。
+  ``--index`` 只放每輪一行與「判斷過卻沒寫進判斷檔」的檔，完整清單用 ``--unjudged``。
 
     uv run --no-project python scripts/media_picks_summary.py --since 2026-10-26T23:00:00+08:00 --json
     uv run --no-project python scripts/media_picks_summary.py --since 2026-10-26T23:00:00+08:00 --index
@@ -40,7 +45,12 @@ STANCES = {"bullish": ("bull", "多"), "bearish": ("bear", "空"), "avoid": ("be
 UNRESOLVED = "未對到"  # corrected_from 的佔位：原本沒對到代號
 RECENT_DAYS = 7
 INDEX_FULL_VOICES = 2  # 講者數達到這個值的檔在索引裡給完整一行；只有一位講者的壓成短行
-VOICE_FIELDS = ("speaker", "show", "kind", "stance", "theme", "reason", "condition", "quote", "corrected_from")
+# media_picks_judge.py --log 追加到該輪 log 的判斷紀錄：「<時刻> | JUDGE <JSON>」，JSON 是腳本自己寫的 {at, since, code, ok, error}
+JUDGE_TAG = "| JUDGE "
+# resolve／name_said／code_llm／video_id／review_verdict 是代號比對狀態：前幾輪沒把握的點名不在本輪 review 清單，
+# 舊證據要自己帶著，判斷的人才看得出這段原話可能講的是別檔
+VOICE_FIELDS = ("speaker", "show", "kind", "stance", "theme", "reason", "condition", "quote", "corrected_from",
+                "resolve", "name_said", "code_llm", "video_id", "review_verdict")
 
 
 def _side(stance) -> str:
@@ -101,7 +111,8 @@ def _apply_reviews(rows: list, verdicts: list, stock_index: Path) -> list:
     """把覆核結論套到每一列（本輪與歷史都套，歷史才看得到更正後的代號）；回傳拷貝，不動輸入。
 
     比對鍵用原始 stock_code；同鍵多筆以最後一筆為準（檔案是 append-only）。
-    只有 correct 且 corrected_code 非空才改代號，not_stock 清掉代號，confirm／unclear 不動。"""
+    只有 correct 且 corrected_code 非空才改代號，not_stock 清掉代號，confirm／unclear 不動代號；
+    有覆核的列都記下 review_verdict（顯示用，讓前幾輪的舊證據看得出這筆覆核過沒有）。"""
     latest = {review_key(v): v for v in verdicts}
     if not any(review_key(r) in latest for r in rows):
         return rows
@@ -110,6 +121,8 @@ def _apply_reviews(rows: list, verdicts: list, stock_index: Path) -> list:
     for r in rows:
         v = latest.get(review_key(r))
         verdict = v and v.get("verdict")
+        if verdict:
+            r = dict(r, review_verdict=verdict)
         fixed = ((v.get("corrected_code") or "").strip() or None) if verdict == "correct" else None
         if verdict == "not_stock" or fixed:
             r = dict(r, stock_code=fixed, corrected_from=r.get("stock_code") or UNRESOLVED)
@@ -126,13 +139,27 @@ def _pct(a, b):
     return round((a / b - 1) * 100, 1) if a and b else None
 
 
-def _history(prior: list, since: datetime, close_now) -> dict | None:
+def _since_first(now: dict | None, first: dict | None) -> tuple:
+    """首次被點名至今的漲跌 % 與是否已還原。
+
+    快照的 close 是各自 as_of 當天的原始收盤，跨除權息／分割直接相除會把配息當成下跌（分割更會差到 -75%）。
+    兩份快照都有 cum_adj_factor（上市以來到 as_of 的因子連乘）時換到同一基準：
+    (close_now / F_now) / (close_first / F_first) - 1。舊列沒有這個欄位，退回原始收盤相除並標成未還原。"""
+    a, b = (now or {}).get("close"), (first or {}).get("close")
+    fa, fb = (now or {}).get("cum_adj_factor"), (first or {}).get("cum_adj_factor")
+    if a and b and fa and fb:
+        return _pct(a / fa, b / fb), True
+    return _pct(a, b), False
+
+
+def _history(prior: list, since: datetime, data_now) -> dict | None:
     """本輪之前的點名紀錄。`date` 是節目播出日；收盤取該列 data（播出當時已知的資料）。"""
     if not prior:
         return None
     prior = sorted(prior, key=lambda r: (r.get("date") or "", r.get("extracted_at") or ""))
     recent_from = (since.date() - timedelta(days=RECENT_DAYS)).isoformat()
     first_px = next((r["data"] for r in prior if (r.get("data") or {}).get("close")), None)
+    pct, adjusted = _since_first(data_now, first_px)
     return {
         "first_named": next((r["date"] for r in prior if r.get("date")), None),  # 缺 date 的列排最前，要跳過
         "named_days_7d": len({r.get("date") for r in prior if (r.get("date") or "") >= recent_from}),
@@ -140,7 +167,8 @@ def _history(prior: list, since: datetime, close_now) -> dict | None:
         "prior_bear_voices": len({_voice(r) for r in prior if _side(r.get("stance")) == "bear"}),
         "first_close": first_px and first_px.get("close"),
         "first_close_as_of": first_px and first_px.get("as_of"),
-        "since_first_pct": _pct(close_now, first_px and first_px.get("close")),
+        "since_first_pct": pct,
+        "since_first_adjusted": adjusted,  # False＝有一端是舊快照（沒有 cum_adj_factor），跨除權息會失真
     }
 
 
@@ -188,39 +216,119 @@ def _holdings_block(stocks: list, ptt_rows: list, held: dict | None) -> dict:
     return {"available": True, "count": len(held), "mentioned": mentioned}
 
 
-def summarize(since: datetime, journal_dir: Path = JOURNAL_DIR, transcript_dir: Path = TRANSCRIPT_DIR,
-              stock_index: Path = STOCK_INDEX, holdings: Path | None = None) -> dict:
-    held = load_holdings(holdings)
-    all_media = _read_jsonl(journal_dir / "media-picks.jsonl")
-    ptt, _ = _split(_read_jsonl(journal_dir / "ptt-picks.jsonl"), since)
-    verdicts = _read_jsonl(journal_dir / "media-picks-review.jsonl")
-    reviewed = {review_key(r) for r in verdicts}
+def _verdict_marks(v: dict, tz) -> tuple:
+    """判斷列的 (since, written_at)：舊列可能缺 since，再缺 written_at 就退回 date（當天 00:00）；都沒有就是 (None, None)。"""
+    since = _parse_since(v.get("since"), tz) if v.get("since") else None
+    written = _parse_since(v.get("written_at"), tz) if v.get("written_at") else None
+    if since is None and written is None and v.get("date"):
+        written = _parse_since(v["date"], tz)
+    return since, written
 
-    # review 清單要顯示「原始」代號（覆核的比對鍵），所以用未套用覆核的列；個股統計用套用後的列
-    raw_picks = [r for r in _split(all_media, since)[0] if r.get("resolve") != "no_picks"]
-    media, media_before = _split(_apply_reviews(all_media, verdicts, stock_index), since)
 
-    picks = [r for r in media if r.get("resolve") != "no_picks"]
-    review = []
-    for r in raw_picks:
-        if r.get("resolve") not in REVIEW_RESOLVES:
-            continue
-        transcript = transcript_dir / f"{r.get('video_id')}.txt"
-        review.append({
-            "video_id": r.get("video_id"),
-            "show": r.get("show"),
-            "date": r.get("date"),
-            "name_said": r.get("name_said"),
-            "name": r.get("name"),
-            "code_llm": r.get("code_llm"),
-            "stock_code": r.get("stock_code"),
-            "resolve": r.get("resolve"),
-            "stance": r.get("stance"),
-            "quote": r.get("quote"),
-            "transcript": _display_path(transcript) if transcript.exists() else None,
-            "already_reviewed": review_key(r) in reviewed,
+def _round_of(at: datetime, rounds: list):
+    """擷取時點屬於哪一輪：不晚於它的最後一個 round since；比所有輪都早（或沒有 log）回 None。"""
+    return next((r for r in reversed(rounds) if r <= at), None)
+
+
+def unjudged_block(rows: list, ptt_rows: list, verdict_rows: list, rounds: list, judge_rows: list,
+                   since: datetime, current_codes: set, max_days: int = RECENT_DAYS,
+                   held: dict | None = None) -> dict:
+    """前幾輪（[since - max_days, since)）被點名、判斷檔裡沒有涵蓋那次點名的判斷列的檔，附上查得到的事實。
+
+    只整理事實、不決定要不要補判：要不要放進今晚的 media_picks_judge.py 由主 agent 看完自己決定。
+    一次點名算「有判斷」：判斷檔有同代號、`written_at` 不早於那次點名的 extracted_at；沒有 `written_at` 的舊列才退回
+    `since` 不早於那次點名所屬那一輪的 since。比它早的舊判斷不算，記成 last_verdict。
+    judge_attempts 是 media_picks_judge.py --log 記下、在那次點名之後的判斷紀錄（ok／error）；沒帶 --log 的輪就是空的。
+    rounds 的每輪統計依判斷紀錄的 `at`（實際開判時刻）歸到它落在的那一輪，不是依呼叫時傳的 since（補判會傳較早的 since）。"""
+    tz = since.tzinfo
+    floor = since - timedelta(days=max_days)
+    rounds = sorted(set(rounds))
+    marks: dict[str, list] = {}
+    for v in verdict_rows:
+        if v.get("code"):
+            marks.setdefault(v["code"], []).append((_verdict_marks(v, tz), v))
+    attempts: dict[str, list] = {}
+    for j in judge_rows:
+        at = _parse_since(j.get("at"), tz) if j.get("at") else None
+        if at is not None and j.get("code"):
+            attempts.setdefault(j["code"], []).append((at, j))
+
+    def covered(code, at, rnd):
+        # 有 written_at 就只看它：寫下判斷時還沒擷取到的點名不算判過（同一輪 log 之後手動補跑、或中間一輪 log 不見、
+        # 點名被歸到更早那輪時，since 都會誤判成涵蓋）；沒有 written_at 的舊列才退回比 since 與那次點名所屬那一輪
+        return any(v_written >= at if v_written is not None else (v_since is not None and rnd is not None and v_since >= rnd)
+                   for (v_since, v_written), _ in marks.get(code, []))
+
+    named: dict[str, list] = {}
+    for kind, src in (("media", rows), ("ptt", ptt_rows)):
+        for r in src:
+            at = _extracted_at(r, tz)
+            if at is None or not floor <= at < since or not r.get("stock_code") or r.get("resolve") == "no_picks":
+                continue
+            rnd = _round_of(at, rounds)
+            if not covered(r["stock_code"], at, rnd):
+                named.setdefault(r["stock_code"], []).append((at, rnd, kind, r))
+
+    codes = []
+    for code, hits in named.items():
+        hits.sort(key=lambda h: h[0])
+        first_at = hits[0][0]
+        media = [r for _, _, kind, r in hits if kind == "media"]
+        ptt = [r for _, _, kind, r in hits if kind == "ptt"]
+        bull = {_voice(r) for r in media if _side(r.get("stance")) == "bull"}
+        bear = {_voice(r) for r in media if _side(r.get("stance")) == "bear"}
+        older = [((v_since or v_written), v) for (v_since, v_written), v in marks.get(code, [])
+                 if (v_since or v_written) is not None]
+        last = max(older, key=lambda x: x[0])[1] if older else None
+        codes.append({
+            "code": code,
+            "name": (media or ptt)[-1].get("name") or (media or ptt)[-1].get("name_said") or (media or ptt)[-1].get("target"),
+            "rounds": sorted({rnd.isoformat() for _, rnd, _, _ in hits if rnd is not None}),
+            "first_extracted_at": first_at.isoformat(),
+            "last_extracted_at": hits[-1][0].isoformat(),
+            "named_dates": sorted({r.get("date") for r in media if r.get("date")}),
+            "bull_voices": len(bull), "bear_voices": len(bear),
+            "neutral_voices": len({_voice(r) for r in media} - bull - bear),
+            "ptt_articles": len({r.get("article_id") for r in ptt}),
+            # 代號沒把握（code_mismatch／fuzzy／unresolved）又沒有覆核紀錄的點名與 PTT 文數：只是計數，要不要先覆核由主 agent 決定
+            "unreviewed_uncertain_rows": (
+                sum(1 for r in media if r.get("resolve") in REVIEW_RESOLVES and not r.get("review_verdict"))
+                + sum(1 for r in ptt if r.get("resolve") in REVIEW_RESOLVES)),
+            "last_verdict": last and {k: last.get(k) for k in ("date", "since", "verdict")},
+            "judge_attempts": [{"at": at.isoformat(), "ok": bool(j.get("ok")), "error": j.get("error")}
+                               for at, j in sorted(attempts.get(code, []), key=lambda x: x[0]) if at >= first_at],
+            "named_this_round": code in current_codes,
+            "held": held is not None and code in held,
+            # 沒被涵蓋的那幾次點名的原話與 PTT 文：主 agent 決定補判時，--code 與逐檔判斷才拿得到舊證據
+            "stock": next(iter(_stocks(media, [], ptt, held, floor)), None),
+            "ptt": _ptt_rows(ptt),
         })
+    codes.sort(key=lambda c: (c["last_extracted_at"], c["bull_voices"] + c["bear_voices"] + c["neutral_voices"]),
+               reverse=True)
 
+    in_window = [r for r in rounds if floor <= r < since]
+    by_round = []
+    for i, rnd in enumerate(in_window):
+        end = in_window[i + 1] if i + 1 < len(in_window) else since
+        named_here = {r["stock_code"] for src in (rows, ptt_rows) for r in src
+                      if r.get("stock_code") and r.get("resolve") != "no_picks"
+                      and (at := _extracted_at(r, tz)) is not None and rnd <= at < end}
+        judged_here = [j for j in judge_rows
+                       if j.get("at") and (at := _parse_since(j["at"], tz)) is not None and rnd <= at < end]
+        by_round.append({
+            "since": rnd.isoformat(),
+            "codes_named": len(named_here),
+            "unjudged_codes": sum(1 for c in codes if rnd.isoformat() in c["rounds"]),
+            "verdict_rows": sum(1 for v in verdict_rows
+                                if v.get("since") and _parse_since(v["since"], tz) == rnd),
+            "judge_logged": len(judged_here),
+            "judge_failed": sum(1 for j in judged_here if not j.get("ok")),
+        })
+    return {"from": floor.isoformat(), "rounds": by_round, "codes": codes}
+
+
+def _stocks(picks: list, media_before: list, ptt: list, held: dict | None, since: datetime) -> list:
+    """逐檔證據；本輪與「前幾輪沒有判斷」共用同一份欄位與講者去重方式。"""
     by_code: dict[str, list] = {}
     for r in picks:
         if r.get("stock_code"):
@@ -249,18 +357,59 @@ def summarize(since: datetime, journal_dir: Path = JOURNAL_DIR, transcript_dir: 
             "kinds": sorted({r.get("kind") or "tv" for r in rows}),
             "voices": [{k: r.get(k) for k in VOICE_FIELDS} for r in rows],
             "data": data,
-            "history": _history(prior_by_code.get(code, []), since, (data or {}).get("close")),
+            "history": _history(prior_by_code.get(code, []), since, data),
             "ptt": ptt_by_code.get(code, []),
             "held": held is not None and code in held,
         })
     stocks.sort(key=lambda s: (-_voices(s), -s["bull_voices"], s["code"]))
+    return stocks
 
-    ptt_rows = [
+
+def _ptt_rows(ptt: list) -> list:
+    return [
         {k: r.get(k) for k in ("article_id", "url", "title", "author", "target", "stock_code", "resolve",
                                "category", "stance", "reason", "condition", "push_up", "push_down", "data")}
         | {"edited": bool(r.get("edited_at")), "has_statement": bool(r.get("has_statement"))}
         for r in ptt
     ]
+
+
+def summarize(since: datetime, journal_dir: Path = JOURNAL_DIR, transcript_dir: Path = TRANSCRIPT_DIR,
+              stock_index: Path = STOCK_INDEX, holdings: Path | None = None, logs_dir: Path = LOGS_DIR,
+              max_days: int = RECENT_DAYS) -> dict:
+    held = load_holdings(holdings)
+    all_media = _read_jsonl(journal_dir / "media-picks.jsonl")
+    ptt, ptt_before = _split(_read_jsonl(journal_dir / "ptt-picks.jsonl"), since)
+    verdicts = _read_jsonl(journal_dir / "media-picks-review.jsonl")
+    reviewed = {review_key(r) for r in verdicts}
+
+    # review 清單要顯示「原始」代號（覆核的比對鍵），所以用未套用覆核的列；個股統計用套用後的列
+    raw_picks = [r for r in _split(all_media, since)[0] if r.get("resolve") != "no_picks"]
+    media, media_before = _split(_apply_reviews(all_media, verdicts, stock_index), since)
+
+    picks = [r for r in media if r.get("resolve") != "no_picks"]
+    review = []
+    for r in raw_picks:
+        if r.get("resolve") not in REVIEW_RESOLVES:
+            continue
+        transcript = transcript_dir / f"{r.get('video_id')}.txt"
+        review.append({
+            "video_id": r.get("video_id"),
+            "show": r.get("show"),
+            "date": r.get("date"),
+            "name_said": r.get("name_said"),
+            "name": r.get("name"),
+            "code_llm": r.get("code_llm"),
+            "stock_code": r.get("stock_code"),
+            "resolve": r.get("resolve"),
+            "stance": r.get("stance"),
+            "quote": r.get("quote"),
+            "transcript": _display_path(transcript) if transcript.exists() else None,
+            "already_reviewed": review_key(r) in reviewed,
+        })
+
+    stocks = _stocks(picks, media_before, ptt, held, since)
+    ptt_rows = _ptt_rows(ptt)
 
     return {
         "since": since.isoformat(),
@@ -273,6 +422,10 @@ def summarize(since: datetime, journal_dir: Path = JOURNAL_DIR, transcript_dir: 
         "stocks": stocks,
         "ptt": ptt_rows,
         "holdings": _holdings_block(stocks, ptt_rows, held),
+        "unjudged": unjudged_block(media_before, ptt_before, _read_jsonl(journal_dir / "media-picks-verdicts.jsonl"),
+                                   round_sinces(logs_dir), judge_log(logs_dir), since,
+                                   {st["code"] for st in stocks} | {p["stock_code"] for p in ptt_rows if p["stock_code"]},
+                                   max_days=max_days, held=held),
     }
 
 
@@ -290,7 +443,8 @@ def _fmt_history(h) -> str:
         return "之前沒被點名過"
     s = f"首次 {h['first_named'] or '?'}、近 {RECENT_DAYS} 天另有 {h['named_days_7d']} 天被點名（之前看多 {h['prior_bull_voices']} 位、看空 {h['prior_bear_voices']} 位）"
     if h["since_first_pct"] is not None:
-        s += f"、首次至今 {h['since_first_pct']:+}%（{h['first_close_as_of']} 收 {h['first_close']}）"
+        raw = "" if h.get("since_first_adjusted") else "，未還原除權息"
+        s += f"、首次至今 {h['since_first_pct']:+}%（{h['first_close_as_of']} 收 {h['first_close']}{raw}）"
     return s
 
 
@@ -327,6 +481,10 @@ def _stock_block(st: dict) -> list:
         who = f"{v['speaker'] or '（無講者）'}／{v['show']}／{v['kind'] or 'tv'}"
         if v["corrected_from"]:
             who += "（原未對到代號，覆核更正）" if v["corrected_from"] == UNRESOLVED else f"（原對到 {v['corrected_from']}，覆核更正）"
+        elif v.get("resolve") in REVIEW_RESOLVES:
+            review = f"覆核 {v['review_verdict']}" if v.get("review_verdict") else "未覆核"
+            who += (f"（代號比對 {v['resolve']}：說「{v.get('name_said') or '—'}」、LLM 代號 {v.get('code_llm') or '—'}、"
+                    f"影片 {v.get('video_id') or '—'}、{review}）")
         parts = [f"題材：{v['theme']}" if v["theme"] else "", f"理由：{v['reason']}" if v["reason"] else "",
                  f"條件：{v['condition']}" if v["condition"] else "", f"「{v['quote']}」" if v["quote"] else ""]
         lines.append(f"- [{_label(v['stance'])}] {who}｜" + "｜".join(p for p in parts if p))
@@ -356,7 +514,8 @@ def _index_line(st: dict) -> str:
     d, h = st["data"] or {}, st["history"]
     yoy = (d.get("revenue_yoy_3m") or [None])[-1]
     heat = (f"首次 {h['first_named'][5:] if h['first_named'] else '?'}、7 天 {h['named_days_7d']} 天" + (
-        f"、至今 {h['since_first_pct']:+}%" if h["since_first_pct"] is not None else "")) if h else "新出現"
+        f"、至今 {h['since_first_pct']:+}%{'' if h.get('since_first_adjusted') else '（未還原）'}"
+        if h["since_first_pct"] is not None else "")) if h else "新出現"
     themes = list(dict.fromkeys(_short(v["theme"], 16) for v in st["voices"] if v["theme"]))[:3]
     ptt = f"｜PTT {len(st['ptt'])}" if st["ptt"] else ""
     if _voices(st) < INDEX_FULL_VOICES:
@@ -380,22 +539,85 @@ def _index(s: dict) -> str:
         flags = "".join(f"｜{f}" for f in _ptt_flags(p, with_resolve=False))
         lines.append(f"- {_short(p['title'], 30)}｜{p['stock_code'] or p['resolve']}｜{_label(p['stance'])}"
                      f"｜推 {p['push_up']} 噓 {p['push_down']}{flags}")
+    lines += [""] + _unjudged_section(s["unjudged"])
     lines += ["", "單一檔的完整原話與 PTT 全文：media_picks_summary.py --since <同上> --code <代號>"]
     return "\n".join(lines)
+
+
+def _hm(iso) -> str:
+    """ISO 時刻 → 「MM-DD HH:MM」（顯示用）。"""
+    return f"{iso[5:10]} {iso[11:16]}" if iso and len(iso) >= 16 else str(iso)
+
+
+def _attempt_text(a: dict) -> str:
+    return f"{_hm(a['at'])} 判斷" + ("成功、判斷檔沒有對應的列" if a["ok"] else f"失敗：{_short(a['error'] or '?', 40)}")
+
+
+def _unjudged_line(c: dict) -> str:
+    last = c["last_verdict"]
+    seen = f"上次判斷 {last['date'] or (last['since'] or '')[:10]} {last['verdict']}" if last else "沒有判斷過"
+    tries = "；".join(_attempt_text(a) for a in c["judge_attempts"]) or "沒有判斷紀錄"
+    this = "｜本輪也有點名" if c["named_this_round"] else ""
+    ptt = f" PTT {c['ptt_articles']}" if c["ptt_articles"] else ""
+    if c.get("unreviewed_uncertain_rows"):
+        ptt += f"｜代號沒把握且未覆核 {c['unreviewed_uncertain_rows']} 筆"
+    held = "（持股）" if c.get("held") else ""
+    return (f"- {c['name'] or '?'} {c['code']}{held}｜點名 {_hm(c['first_extracted_at'])}～{_hm(c['last_extracted_at'])}"
+            f"（播出 {','.join(d[5:] for d in c['named_dates']) or '—'}）｜多 {c['bull_voices']} 空 {c['bear_voices']}"
+            f" 中 {c['neutral_voices']}{ptt}｜{seen}｜{tries}{this}")
+
+
+def _unjudged_section(u: dict) -> list:
+    """索引裡的「前幾輪還沒判斷」：每輪一行統計，逐檔只列有判斷紀錄（判過卻沒寫進判斷檔）的；完整清單用 --unjudged。
+
+    一輪約 160 檔、最多判 8 檔，前 7 天沒判斷的檔常有幾百檔，全列會撐爆索引；這裡只是切顯示，不替你挑檔。"""
+    lines = [f"## 前幾輪（{_hm(u['from'])} 起）點名過、判斷檔沒有涵蓋的檔 {len(u['codes'])} 檔"]
+    for r in u["rounds"]:
+        lines.append(f"- 輪 {_hm(r['since'])}：點名 {r['codes_named']} 檔、判斷檔 {r['verdict_rows']} 列、"
+                     f"仍沒判斷 {r['unjudged_codes']} 檔、判斷紀錄 {r['judge_logged']} 筆（失敗 {r['judge_failed']}）")
+    orphan = sum(1 for c in u["codes"] if not c["rounds"])
+    if orphan:
+        lines.append(f"- 另有 {orphan} 檔的擷取時點對不到任何一輪 log（log 已不存在或早於現存最早一輪），只在 --unjudged 清單裡")
+    tried = [c for c in u["codes"] if c["judge_attempts"]]
+    if tried:
+        lines.append(f"判斷過卻沒寫進判斷檔 {len(tried)} 檔：")
+        lines += [_unjudged_line(c) for c in tried]
+    lines.append("完整清單（每檔點名時段、多空人數、上次判斷）：media_picks_summary.py --since <同上> --unjudged")
+    return lines
+
+
+def unjudged_detail(s: dict) -> str:
+    u = s["unjudged"]
+    return "\n".join(_unjudged_section(u)[:-1] + ["", "逐檔（依最近點名時刻排序）："] + [_unjudged_line(c) for c in u["codes"]])
 
 
 def stock_detail(s: dict, code: str) -> str:
     """單一檔的完整證據（逐檔判斷用）：每位講者的原話、數據、歷史，以及談到這檔的 PTT 文。"""
     st = next((x for x in s["stocks"] if x["code"] == code), None)
     posts = [p for p in s["ptt"] if p["stock_code"] == code]
-    if st is None and not posts:
+    pending = next((c for c in s.get("unjudged", {}).get("codes", []) if c["code"] == code), None)
+    if st is None and not posts and pending is None:
         return f"本輪沒有人點名 {code}"
-    lines = (_stock_block(st) if st else [f"### {code}（節目沒點名，只有 PTT）"])
-    if code in {m["code"] for m in s["holdings"]["mentioned"]}:
+    if st:
+        lines = _stock_block(st)
+    elif posts:
+        lines = [f"### {code}（節目沒點名，只有 PTT）"]
+    else:
+        lines = [f"### {pending['name'] or ''} {code}（本輪沒有人點名，以下是前幾輪的證據）"]
+    if code in {m["code"] for m in s["holdings"]["mentioned"]} or (pending and pending["held"]):
         lines.insert(0, "（你持有這檔）")
     for p in posts:
         head, *rest = _ptt_block(p)
         lines += ["", "PTT：" + head.lstrip("# ")] + rest
+    if pending:
+        # 只附事實；要不要補判、怎麼看這些舊原話由主 agent 與逐檔判斷決定
+        lines += ["", "## 前幾輪點名過、判斷檔沒有涵蓋的證據", _unjudged_line(pending)]
+        if pending["stock"]:
+            # 舊證據沒帶更早的點名紀錄，略過「歷史」行以免誤寫成「之前沒被點名過」；完整歷史看上面的本輪區塊或 --json
+            lines += [x for x in _stock_block(pending["stock"]) if not x.startswith("歷史：")]
+        for p in pending["ptt"]:
+            head, *rest = _ptt_block(p)
+            lines += ["", "PTT：" + head.lstrip("# ")] + rest
     return "\n".join(lines)
 
 
@@ -423,6 +645,26 @@ def round_sinces(logs_dir: Path = LOGS_DIR) -> list:
     return out
 
 
+def judge_log(logs_dir: Path = LOGS_DIR) -> list:
+    """logs/media_picks_job_*.log 裡 media_picks_judge.py --log 追加的判斷紀錄（JSON 解析不了的行略過）。"""
+    out = []
+    for path in sorted(logs_dir.glob("media_picks_job_*.log")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            if JUDGE_TAG not in line:
+                continue
+            try:
+                row = json.loads(line.split(JUDGE_TAG, 1)[1])
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                out.append(row)
+    return out
+
+
 def judge_since(current: datetime, verdict_rows: list, round_sinces: list, max_days: int = 7) -> datetime:
     """本輪review與判斷該涵蓋的起點：上一輪判讀中斷時往前涵蓋。
 
@@ -445,10 +687,13 @@ def main(argv=None) -> int:
     out.add_argument("--json", action="store_true", help="輸出 JSON（排程用）")
     out.add_argument("--index", action="store_true", help="精簡索引（主 agent 挑檔用）")
     out.add_argument("--code", help="只輸出這一檔的完整證據，帶 .TW／.TWO（逐檔判斷用）")
+    out.add_argument("--unjudged", action="store_true",
+                     help="前幾輪點名過、判斷檔沒有涵蓋的檔的完整清單（主 agent 決定要不要放進今晚的判斷）")
     out.add_argument("--judge-since", action="store_true",
                      help="印出本輪review與判斷該用的起點（上一輪判讀中斷時比 --since 早）")
     ap.add_argument("--holdings", type=Path, help="portfolio_codes.py 輸出的 JSON；缺檔或壞檔只在 stderr 記一行、當作沒有")
-    ap.add_argument("--logs-dir", type=Path, default=LOGS_DIR, help="找各輪 RESULT since= 的 log 目錄（預設 logs/）")
+    ap.add_argument("--logs-dir", type=Path, default=LOGS_DIR,
+                    help="找各輪 RESULT since= 與 JUDGE 判斷紀錄的 log 目錄（預設 logs/）")
     ap.add_argument("--journal-dir", type=Path, default=JOURNAL_DIR, help="journal 目錄（預設 journal/）")
     args = ap.parse_args(argv)
     since = datetime.fromisoformat(args.since)
@@ -458,11 +703,13 @@ def main(argv=None) -> int:
         verdicts = _read_jsonl(args.journal_dir / "media-picks-verdicts.jsonl")
         print(judge_since(since, verdicts, round_sinces(args.logs_dir)).isoformat())
         return 0
-    s = summarize(since, journal_dir=args.journal_dir, holdings=args.holdings)
+    s = summarize(since, journal_dir=args.journal_dir, holdings=args.holdings, logs_dir=args.logs_dir)
     if args.json:
         print(json.dumps(s, ensure_ascii=False, indent=1))
     elif args.index:
         print(_index(s))
+    elif args.unjudged:
+        print(unjudged_detail(s))
     else:
         print(stock_detail(s, args.code))
     return 0

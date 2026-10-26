@@ -47,7 +47,8 @@ def _run(tmp_path, index_path, media, review=()):
     _write(tmp_path / "media-picks.jsonl", media)
     _write(tmp_path / "ptt-picks.jsonl", [])
     _write(tmp_path / "media-picks-review.jsonl", review)
-    return mod.summarize(SINCE, journal_dir=tmp_path, transcript_dir=tmp_path / "tr", stock_index=index_path)
+    return mod.summarize(SINCE, journal_dir=tmp_path, transcript_dir=tmp_path / "tr", stock_index=index_path,
+                         logs_dir=tmp_path / "logs")
 
 
 def _codes(s):
@@ -282,3 +283,275 @@ def test_judge_since_catch_up_round_records_its_own_since():
     assert mod.judge_since(_t(25), rows, rounds) == _t(24)        # 25 號補判 24 號
     rows.append({"since": _t(25).isoformat()})                    # 25 號寫下自己的 since
     assert mod.judge_since(CUR, rows, rounds) == CUR              # 26 號不再回頭
+
+
+# ---- 首次至今 %：跨除權息／分割要用還原後的收盤 ----
+
+def _px(close, factor=None, as_of="2026-10-23"):
+    d = {"as_of": as_of, "close": close}
+    return d if factor is None else d | {"cum_adj_factor": factor}
+
+
+def test_since_first_uses_adjusted_closes_across_dividend_and_split(tmp_path, index_path):
+    # 首次 100、之後配 5 元（因子 0.95）收 98：實際 +3.2%，不是 -2%；1 拆 4（因子 0.25）收 26：+4%，不是 -74%
+    assert mod._since_first(_px(98, 0.95), _px(100, 1.0)) == (3.2, True)
+    assert mod._since_first(_px(26, 0.25), _px(100, 1.0)) == (4.0, True)
+    s = _run(tmp_path, index_path, [_pick(extracted_at=BEFORE, date="2026-10-20", data=_px(100, 1.0, "2026-10-20")),
+                                    _pick(data=_px(98, 0.95))])
+    h = _codes(s)["2330.TW"]["history"]
+    assert (h["since_first_pct"], h["since_first_adjusted"]) == (3.2, True)
+    assert "首次至今 +3.2%（2026-10-20 收 100）" in mod.stock_detail(s, "2330.TW")
+
+
+def test_since_first_without_factor_falls_back_to_raw_and_says_so(tmp_path, index_path):
+    # 反向：舊快照沒有 cum_adj_factor，不能亂套（也不能因此消失），照原始收盤算並標出未還原
+    assert mod._since_first(_px(98, 0.95), _px(100)) == (-2.0, False)
+    assert mod._since_first(_px(98), _px(100, 1.0)) == (-2.0, False)
+    assert mod._since_first(_px(100, 1.0), _px(100, 1.0)) == (0.0, True)
+    s = _run(tmp_path, index_path, [_pick(extracted_at=BEFORE, date="2026-10-20", data=_px(100, as_of="2026-10-20")),
+                                    _pick(data=_px(98, 0.95))])
+    assert "首次至今 -2.0%（2026-10-20 收 100，未還原除權息）" in mod.stock_detail(s, "2330.TW")
+    assert "至今 -2.0%（未還原）" in mod._index(s)
+
+
+# ---- unjudged：前幾輪點名過、判斷檔沒有涵蓋的檔，只給事實讓主 agent 決定要不要補判 ----
+
+R24, R25 = "2026-10-24T23:00:00+08:00", "2026-10-25T23:00:00+08:00"
+
+
+def _logs(tmp_path, rounds=(R24, R25), judge=()):
+    d = tmp_path / "logs"
+    d.mkdir(exist_ok=True)
+    for i, r in enumerate(rounds):
+        # 同一份 log 會記兩次 RESULT since=（拿到鎖時與收尾時）
+        body = f"x | RESULT since={r}\nx | RESULT since={r}\n"
+        body += "".join(f"x | JUDGE {json.dumps(j, ensure_ascii=False)}\n" for j in judge if j["since"] == r)
+        (d / f"media_picks_job_{i}.log").write_text(body + "x | JUDGE {broken\n", encoding="utf-8")
+    return d
+
+
+def _unjudged(tmp_path, index_path, media, verdicts=(), judge=(), rounds=(R24, R25), ptt=()):
+    _logs(tmp_path, rounds, judge)
+    _write(tmp_path / "media-picks-verdicts.jsonl", list(verdicts))
+    s = _run(tmp_path, index_path, media)
+    if ptt:
+        _write(tmp_path / "ptt-picks.jsonl", list(ptt))
+        s = mod.summarize(SINCE, journal_dir=tmp_path, transcript_dir=tmp_path / "tr", stock_index=index_path,
+                          logs_dir=tmp_path / "logs")
+    return s, {c["code"]: c for c in s["unjudged"]["codes"]}
+
+
+def _prior(code="3037.TW", at="2026-10-25T23:20:00+08:00", **kw):
+    return _pick(stock_code=code, name=kw.pop("name", "欣興"), extracted_at=at, date=at[:10], **kw)
+
+
+def _v(code, since, written, verdict="watch"):
+    return {"date": written[:10], "since": since, "code": code, "verdict": verdict, "written_at": written}
+
+
+def test_unjudged_lists_prior_round_code_without_verdict(tmp_path, index_path):
+    # 25 號那輪點名了欣興與台光電，只寫下欣興的判斷（另一檔 claude 逾時）：台光電要出現在證據裡
+    media = [_prior(), _prior("2383.TW", name="台光電", stance="bearish"), _pick()]
+    s, codes = _unjudged(tmp_path, index_path, media, [_v("3037.TW", R25, "2026-10-25T23:50:00+08:00")])
+    assert set(codes) == {"2383.TW"}
+    assert "對不到任何一輪 log" not in mod._index(s)
+    # 擷取時點早於現存最早一輪 log 的檔：沒有輪可歸，要在索引說明數字為什麼對不上
+    early = _prior("1101.TW", at="2026-10-22T14:00:00+08:00", name="台泥")
+    s2, codes2 = _unjudged(tmp_path, index_path, media + [early], [_v("3037.TW", R25, "2026-10-25T23:50:00+08:00")])
+    assert codes2["1101.TW"]["rounds"] == []
+    assert "另有 1 檔的擷取時點對不到任何一輪 log" in mod._index(s2)
+    c = codes["2383.TW"]
+    assert c["rounds"] == [R25] and c["bear_voices"] == 1 and c["last_verdict"] is None
+    assert c["named_this_round"] is False and c["judge_attempts"] == []
+    (r24, r25) = s["unjudged"]["rounds"]
+    assert (r25["codes_named"], r25["verdict_rows"], r25["unjudged_codes"]) == (2, 1, 1)
+    assert r24["codes_named"] == 0
+
+
+def test_unjudged_old_verdict_does_not_cover_later_naming(tmp_path, index_path):
+    # 反向：24 號判過、25 號又被點名卻沒判，舊判斷不能把這次點名蓋掉，要記成 last_verdict
+    old = _v("3037.TW", R24, "2026-10-24T23:40:00+08:00", "avoid")
+    _, codes = _unjudged(tmp_path, index_path, [_prior()], [old])
+    assert codes["3037.TW"]["last_verdict"] == {"date": "2026-10-24", "since": R24, "verdict": "avoid"}
+    # 補判：26 號那輪以自己的 since 寫下欣興，25 號的點名就算判過了
+    catch_up = _v("3037.TW", SINCE.isoformat(), "2026-10-26T23:50:00+08:00")
+    _, codes = _unjudged(tmp_path, index_path, [_prior()], [old, catch_up])
+    assert "3037.TW" not in codes
+
+
+def test_unjudged_window_is_max_days_before_since(tmp_path, index_path):
+    # 7 天前以前的點名、以及本輪的點名都不算「前幾輪」
+    media = [_prior("1101.TW", at="2026-10-19T22:00:00+08:00", name="台泥"),
+             _prior("1102.TW", at="2026-10-19T23:30:00+08:00", name="亞泥"), _pick()]
+    s, codes = _unjudged(tmp_path, index_path, media)
+    assert set(codes) == {"1102.TW"}
+    assert s["unjudged"]["from"] == "2026-10-19T23:00:00+08:00"
+
+
+def test_unjudged_tolerates_verdict_rows_without_since(tmp_path, index_path):
+    # 舊判斷列沒有 since：退回 written_at；連 written_at 都沒有就看 date，不能 KeyError
+    rows = [{"code": "3037.TW", "verdict": "watch", "written_at": "2026-10-25T23:50:00+08:00"},
+            {"code": "2383.TW", "verdict": "avoid", "date": "2026-10-24"}]
+    _, codes = _unjudged(tmp_path, index_path, [_prior(), _prior("2383.TW", name="台光電")], rows)
+    assert "3037.TW" not in codes
+    assert codes["2383.TW"]["last_verdict"]["verdict"] == "avoid"
+
+
+def test_unjudged_surfaces_judge_log_errors_and_unwritten_successes(tmp_path, index_path):
+    judge = [{"at": "2026-10-25T23:40:00+08:00", "since": R25, "code": "3037.TW", "ok": False, "error": "claude 逾時 300 秒"},
+             {"at": "2026-10-25T23:40:00+08:00", "since": R25, "code": "2383.TW", "ok": True, "error": None},
+             {"at": "2026-10-25T23:40:00+08:00", "since": R25, "code": "2330.TW", "ok": True, "error": None}]
+    media = [_prior(), _prior("2383.TW", name="台光電"), _prior("2330.TW", name="台積電"), _pick()]
+    s, codes = _unjudged(tmp_path, index_path, media, [_v("2330.TW", R25, "2026-10-25T23:50:00+08:00")], judge)
+    assert codes["3037.TW"]["judge_attempts"] == [{"at": "2026-10-25T23:40:00+08:00", "ok": False,
+                                                   "error": "claude 逾時 300 秒"}]
+    assert codes["2383.TW"]["judge_attempts"][0]["ok"] is True
+    assert "2330.TW" not in codes                     # 判過也寫下的不列
+    r25 = s["unjudged"]["rounds"][-1]
+    assert (r25["judge_logged"], r25["judge_failed"]) == (3, 1)
+    idx = mod._index(s)
+    assert "判斷過卻沒寫進判斷檔 2 檔" in idx
+    assert "失敗：claude 逾時 300 秒" in idx and "判斷成功、判斷檔沒有對應的列" in idx
+
+
+def test_unjudged_ignores_judge_attempts_before_the_naming(tmp_path, index_path):
+    # 反向：點名之前的判斷紀錄（上週的失敗）不是這次點名的事實
+    judge = [{"at": "2026-10-24T23:40:00+08:00", "since": R24, "code": "3037.TW", "ok": False, "error": "x"}]
+    _, codes = _unjudged(tmp_path, index_path, [_prior()], judge=judge)
+    assert codes["3037.TW"]["judge_attempts"] == []
+
+
+def test_unjudged_marks_codes_named_again_this_round_and_includes_ptt(tmp_path, index_path):
+    ptt = [{"article_id": "M.1", "stock_code": "6274.TWO", "target": "台燿", "resolve": "exact", "stance": "bullish",
+            "extracted_at": "2026-10-25T23:30:00+08:00"}]
+    _, codes = _unjudged(tmp_path, index_path, [_prior("2330.TW", name="台積電"), _pick()], ptt=ptt)
+    assert codes["2330.TW"]["named_this_round"] is True
+    assert codes["6274.TWO"]["ptt_articles"] == 1 and codes["6274.TWO"]["name"] == "台燿"
+
+
+def test_unjudged_index_stays_short_but_full_list_has_every_code(tmp_path, index_path):
+    # 前幾輪常有幾百檔沒判斷：索引只放每輪一行，逐檔完整清單在 --unjudged／--json
+    media = [_prior(f"{1000 + i}.TW", name=f"股{i}") for i in range(300)] + [_pick()]
+    s, codes = _unjudged(tmp_path, index_path, media)
+    assert len(codes) == 300
+    section = mod._index(s).split("## 前幾輪", 1)[1]
+    assert len(section.splitlines()) < 10 and "1000.TW" not in section
+    full = mod.unjudged_detail(s)
+    assert all(f"{1000 + i}.TW" in full for i in range(300))
+
+
+def test_cli_unjudged_reads_logs_dir(tmp_path, capsys):
+    _write(tmp_path / "media-picks.jsonl", [_prior()])
+    logs = _logs(tmp_path)
+    argv = ["--since", SINCE.isoformat(), "--unjudged", "--journal-dir", str(tmp_path), "--logs-dir", str(logs)]
+    assert mod.main(argv) == 0
+    out = capsys.readouterr().out
+    assert "欣興 3037.TW" in out and "輪 10-25 23:00：點名 1 檔、判斷檔 0 列" in out
+
+
+def test_code_detail_carries_prior_evidence_for_unjudged_code_and_marks_holding(tmp_path, index_path):
+    # 主 agent 決定補判前幾輪沒判到的檔時，--code（也就是逐檔判斷拿到的原話）不能只回「本輪沒有人點名」
+    ptt = [{"article_id": "M.9", "title": "[標的] 欣興 多", "stock_code": "3037.TW", "target": "欣興",
+            "resolve": "exact", "stance": "bullish", "reason": "PTT 舊理由",
+            "extracted_at": "2026-10-25T23:30:00+08:00"}]
+    _logs(tmp_path)
+    _write(tmp_path / "media-picks.jsonl", [_prior(quote="舊原話載板"), _prior("2330.TW", name="台積電", quote="舊台積電原話"), _pick()])
+    _write(tmp_path / "ptt-picks.jsonl", ptt)
+    _write(tmp_path / "media-picks-review.jsonl", [])
+    (tmp_path / "held.json").write_text(json.dumps({"codes": [{"code": "3037.TW"}]}), encoding="utf-8")
+    s = mod.summarize(SINCE, journal_dir=tmp_path, transcript_dir=tmp_path / "tr", stock_index=index_path,
+                      logs_dir=tmp_path / "logs", holdings=tmp_path / "held.json")
+    text = mod.stock_detail(s, "3037.TW")
+    assert "本輪沒有人點名" in text.splitlines()[1] and "舊原話載板" in text and "PTT 舊理由" in text
+    assert text.startswith("（你持有這檔）") and "（持股）" in text
+    assert "之前沒被點名過" not in text  # 舊證據沒帶更早紀錄，不能誤寫
+    # 反向：已被判斷檔涵蓋的點名不附舊證據，本輪沒點名的檔照舊回「本輪沒有人點名」
+    _write(tmp_path / "media-picks-verdicts.jsonl", [_v("3037.TW", R25, "2026-10-25T23:50:00+08:00")])
+    s2 = mod.summarize(SINCE, journal_dir=tmp_path, transcript_dir=tmp_path / "tr", stock_index=index_path,
+                       logs_dir=tmp_path / "logs")
+    assert mod.stock_detail(s2, "3037.TW") == "本輪沒有人點名 3037.TW"
+    # 本輪也有點名、前幾輪那次沒被涵蓋的檔：本輪區塊在前，舊證據接在後面
+    both = mod.stock_detail(s, "2330.TW")
+    assert both.startswith("### 台積電 2330.TW")
+    assert both.index("前幾輪點名過、判斷檔沒有涵蓋") < both.index("舊台積電原話")
+
+
+def test_unjudged_verdict_written_before_a_later_naming_does_not_cover_it(tmp_path, index_path):
+    # 25 號 23:50 判完欣興，隔天 01:00 手動跑 ptt-picks 又被點名（下一輪 log 還沒出現，_round_of 歸到 25 號那輪）：
+    # 判斷寫下時還沒有這次點名，since 落在同一輪也不能算涵蓋
+    verdict = _v("3037.TW", R25, "2026-10-25T23:50:00+08:00")
+    late = [{"article_id": "M.2", "stock_code": "3037.TW", "target": "欣興", "resolve": "exact", "stance": "bullish",
+             "extracted_at": "2026-10-26T01:00:00+08:00"}]
+    _, codes = _unjudged(tmp_path, index_path, [_pick()], [verdict], ptt=late)
+    assert codes["3037.TW"]["ptt_articles"] == 1
+    # 反向：判斷前就擷取的同輪點名仍算判過
+    _, codes = _unjudged(tmp_path, index_path, [_prior(), _pick()], [verdict])
+    assert "3037.TW" not in codes
+
+
+def test_unjudged_missing_intermediate_log_does_not_let_older_verdict_cover(tmp_path, index_path):
+    # 25 號那輪的 log 不見了：25 號的點名被歸到 24 號那輪，24 號的判斷不能把它蓋掉
+    old = _v("3037.TW", R24, "2026-10-24T23:40:00+08:00", "avoid")
+    _, codes = _unjudged(tmp_path, index_path, [_prior(), _pick()], [old], rounds=(R24,))
+    assert codes["3037.TW"]["rounds"] == [R24]
+    assert codes["3037.TW"]["last_verdict"]["verdict"] == "avoid"
+
+
+def test_unjudged_legacy_verdict_without_written_at_still_uses_since(tmp_path, index_path):
+    # 沒有 written_at 的舊判斷列才退回「since 不早於點名所屬那一輪」
+    legacy = {"date": "2026-10-25", "since": R25, "code": "3037.TW", "verdict": "watch"}
+    _, codes = _unjudged(tmp_path, index_path, [_prior(), _pick()], [legacy])
+    assert "3037.TW" not in codes
+    # 反向：舊列的 since 早於點名那一輪就不算
+    legacy24 = dict(legacy, since=R24, date="2026-10-24")
+    _, codes = _unjudged(tmp_path, index_path, [_prior(), _pick()], [legacy24])
+    assert "3037.TW" in codes
+
+
+def test_unjudged_round_counts_verdict_rows_per_round(tmp_path, index_path):
+    verdicts = [_v("3037.TW", R24, "2026-10-24T23:40:00+08:00"), _v("2383.TW", R24, "2026-10-24T23:41:00+08:00"),
+                _v("2330.TW", R25, "2026-10-25T23:50:00+08:00")]
+    s, _ = _unjudged(tmp_path, index_path, [_pick()], verdicts)
+    r24, r25 = s["unjudged"]["rounds"]
+    assert (r24["verdict_rows"], r25["verdict_rows"]) == (2, 1)
+
+
+def test_prior_fuzzy_pick_keeps_identity_status_in_unjudged_evidence(tmp_path, index_path):
+    # 前幾輪的 fuzzy 點名不在本輪 review 清單：舊證據要帶出代號比對狀態、說的名稱、LLM 代號與影片，
+    # 主 agent／逐檔判斷才看得出「原油正二」被對到黃金 ETF 的代號，自己決定要不要判
+    fuzzy = _prior("00708L.TW", name="期元大S&P黃金正2", name_said="油價正二", code_llm="00672L",
+                   resolve="fuzzy", video_id="vid9", quote="油價正二可以留意")
+    _logs(tmp_path)
+    _write(tmp_path / "media-picks.jsonl", [fuzzy, _prior(), _pick()])
+    _write(tmp_path / "ptt-picks.jsonl", [])
+    _write(tmp_path / "media-picks-review.jsonl", [])
+    s = mod.summarize(SINCE, journal_dir=tmp_path, transcript_dir=tmp_path / "tr", stock_index=index_path,
+                      logs_dir=tmp_path / "logs")
+    c = {x["code"]: x for x in s["unjudged"]["codes"]}
+    v = c["00708L.TW"]["stock"]["voices"][0]
+    assert (v["resolve"], v["name_said"], v["code_llm"], v["video_id"]) == ("fuzzy", "油價正二", "00672L", "vid9")
+    assert c["00708L.TW"]["unreviewed_uncertain_rows"] == 1
+    text = mod.stock_detail(s, "00708L.TW")
+    assert "代號比對 fuzzy" in text and "說「油價正二」" in text and "LLM 代號 00672L" in text and "未覆核" in text
+    assert "代號沒把握且未覆核 1 筆" in mod.unjudged_detail(s)
+    # 反向：exact 的點名不加標記；覆核 confirm 過的列照實寫出覆核結果、不算未覆核
+    assert c["3037.TW"]["unreviewed_uncertain_rows"] == 0
+    assert "代號比對" not in mod.stock_detail(s, "3037.TW")
+    _write(tmp_path / "media-picks-review.jsonl", [_verdict(fuzzy, "confirm")])
+    s2 = mod.summarize(SINCE, journal_dir=tmp_path, transcript_dir=tmp_path / "tr", stock_index=index_path,
+                       logs_dir=tmp_path / "logs")
+    c2 = {x["code"]: x for x in s2["unjudged"]["codes"]}
+    assert c2["00708L.TW"]["unreviewed_uncertain_rows"] == 0
+    assert "覆核 confirm" in mod.stock_detail(s2, "00708L.TW")
+    assert "代號沒把握且未覆核" not in mod.unjudged_detail(s2)
+
+
+def test_prior_fuzzy_ptt_article_counts_as_unreviewed_uncertain(tmp_path, index_path):
+    ptt = [{"article_id": "M.3", "title": "[標的] 正二 多", "stock_code": "00708L.TW", "target": "正二",
+            "resolve": "fuzzy", "stance": "bullish", "extracted_at": "2026-10-25T23:30:00+08:00"},
+           {"article_id": "M.4", "title": "[標的] 欣興 多", "stock_code": "3037.TW", "target": "欣興",
+            "resolve": "exact", "stance": "bullish", "extracted_at": "2026-10-25T23:30:00+08:00"}]
+    s, codes = _unjudged(tmp_path, index_path, [_pick()], ptt=ptt)
+    assert codes["00708L.TW"]["unreviewed_uncertain_rows"] == 1
+    assert codes["3037.TW"]["unreviewed_uncertain_rows"] == 0
+    assert "代號待確認" in mod.stock_detail(s, "00708L.TW")

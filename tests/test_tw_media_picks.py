@@ -534,3 +534,63 @@ def test_code_mismatch_needs_half_the_name_shared_with_the_llm_code_company():
     # half of a 2-char name shared is still a plausible misheard name
     small = [("2330.TW", "泰昇", [])]
     assert mp.resolve("泰山", "2330", small) == ("2330.TW", "code_mismatch")
+
+
+def _snapshot_over_events(monkeypatch, events):
+    """真的 front_adjust_multipliers／factors_to_panel，只把 DB 換成假的：原始收盤除息日前 100、之後 98。"""
+    import pandas as pd
+    from market_data import market_repo
+    from src.services import tw_stock_dossier as dossier
+
+    ex = pd.Timestamp("2026-08-03")
+    days = pd.bdate_range("2023-01-02", "2026-10-22")
+    raw = pd.DataFrame({"date": days, "close": [100.0 if d < ex else 98.0 for d in days]})
+    monkeypatch.setattr(market_repo, "price_history",
+                        lambda sid, start, end, engine: raw[(raw["date"] >= pd.Timestamp(start or days[0]))
+                                                            & (raw["date"] <= pd.Timestamp(end))].copy())
+
+    def q(sql, params, engine):
+        ev = pd.DataFrame(events, columns=["date", "factor", "source"]).assign(stock_id=params["sid"])
+        return ev[pd.to_datetime(ev["date"]) <= pd.Timestamp(params["asof"])]
+
+    monkeypatch.setattr(market_repo, "_q", q)
+    monkeypatch.setattr(dossier, "fundamentals", lambda *a, **k: {"monthly_revenue": []})
+    monkeypatch.setattr(dossier, "chips", lambda *a, **k: {"institutional": None})
+    return (mp.snapshot("2330.TW", (ex - pd.Timedelta(days=4)).date(), engine=None),
+            mp.snapshot("2330.TW", days[-1].date(), engine=None),
+            mp.snapshot("2330.TW", ex.date(), engine=None))
+
+
+def test_snapshot_records_cumulative_adjust_factor_so_history_survives_ex_dividend(monkeypatch):
+    # 配息 5 元（因子 0.95）：原始收盤 100 → 98 其實是賺 3.2%，不是跌 2%；更早的分割（價格面板裡沒反映，
+    # 只為了驗證兩邊都含、比值消掉）
+    import importlib.util
+    from pathlib import Path
+
+    first, now, _ = _snapshot_over_events(monkeypatch, [("2024-06-03", 0.5, "official"), ("2026-08-03", 0.95, "official")])
+    assert (first["close"], now["close"]) == (100.0, 98.0)        # close 仍是當天原始收盤，報告看到的價位不變
+    assert first["cum_adj_factor"] == 0.5 and round(now["cum_adj_factor"], 6) == 0.475
+    spec = importlib.util.spec_from_file_location("media_picks_summary",
+                                                  Path(__file__).resolve().parents[1] / "scripts" / "media_picks_summary.py")
+    summary = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(summary)
+    assert summary._since_first(now, first) == (3.2, True)
+
+
+def test_snapshot_window_multipliers_stay_aligned_with_cum_factor(monkeypatch):
+    # 反向：記 cum_adj_factor 不能動到各天的前復權（乘數錯位一天，除息當天的收盤就會被乘成 93.1）；除息前一天還原成 95，60 日高就是現在的 98
+    events = [("2026-01-02", 0.9, "official"), ("2026-08-03", 0.95, "official")]
+    first, now, ex_day = _snapshot_over_events(monkeypatch, events)
+    assert first["cum_adj_factor"] == 0.9 and round(now["cum_adj_factor"], 6) == 0.855
+    assert now["from_60d_high_pct"] == 0.0 and first["from_60d_high_pct"] == 0.0
+    # 除息當天：收盤就是當天原始價 98，5 日報酬對的是還原後的 95（+3.2%）
+    assert ex_day["close"] == 98.0 and ex_day["ret_5d_pct"] == 3.2
+
+
+def test_cum_adj_factor_keeps_inferred_events_and_both_snapshots_agree(monkeypatch):
+    # 兩份快照的窗口起點不同：價格回推的 inferred 事件不能因為「窗口前的事件全擠到同一天、被官方事件撞掉」而只在一邊消失
+    events = [("2024-01-10", 0.9, "inferred_price"), ("2024-06-10", 0.95, "official"),
+              ("2026-03-02", 0.8, "inferred_price"), ("2026-03-03", 0.99, "official")]
+    first, now, _ = _snapshot_over_events(monkeypatch, events)
+    assert round(first["cum_adj_factor"], 6) == round(0.9 * 0.95 * 0.8 * 0.99, 6)
+    assert round(now["cum_adj_factor"], 6) == round(0.9 * 0.95 * 0.8 * 0.99, 6)

@@ -201,3 +201,50 @@ def test_run_appends_records_once_and_survives_load_failure(tmp_path, monkeypatc
 def test_brief_mentions_records_and_small_sample_rule():
     assert "三、講者過去紀錄" in judge.BRIEF and "n<20" in judge.BRIEF
     assert judge.RECORDS_TIMEOUT <= judge.DOSSIER_TIMEOUT
+
+
+def test_cli_log_appends_one_judge_line_per_code_that_summary_reads(tmp_path, monkeypatch):
+    # --log：每檔一行判斷紀錄寫進本輪 log，下一輪摘要讀得回來（失敗附原因、成功不帶 error）
+    log = tmp_path / "media_picks_job_1.log"
+    log.write_text("x | RESULT since=2026-10-26T23:00:00+08:00\n", encoding="utf-8")
+    out = [{"code": "2330.TW", "ok": True, "result": {}}, {"code": "3037.TW", "ok": False, "error": "claude 逾時 300 秒"}]
+    monkeypatch.setattr(judge, "run", lambda since, codes, **k: out)
+    assert judge.main(["--since", "2026-10-26T23:00:00+08:00", "--log", str(log), "2330.TW", "3037.TW"]) == 0
+    rows = judge._load_summary().judge_log(tmp_path)
+    assert [(r["code"], r["ok"], r["error"]) for r in rows] == [("2330.TW", True, None),
+                                                                ("3037.TW", False, "claude 逾時 300 秒")]
+    assert all(r["since"] == "2026-10-26T23:00:00+08:00" and r["at"] for r in rows)
+    assert log.read_text(encoding="utf-8").startswith("x | RESULT since=")   # 只追加，不改原本的 log
+
+
+def test_cli_without_log_writes_nothing_and_bad_log_path_does_not_fail(tmp_path, monkeypatch, capsys):
+    # 反向：沒給 --log 不寫任何檔；log 路徑寫不進去也照樣印出判斷結果
+    monkeypatch.setattr(judge, "run", lambda since, codes, **k: [{"code": "2330.TW", "ok": True, "result": {}}])
+    monkeypatch.chdir(tmp_path)
+    assert judge.main(["--since", "2026-10-26T23:00:00+08:00", "2330.TW"]) == 0
+    assert list(tmp_path.iterdir()) == []
+    capsys.readouterr()
+    assert judge.main(["--since", "2026-10-26T23:00:00+08:00", "--log", str(tmp_path / "no" / "x.log"), "2330.TW"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)[0]["code"] == "2330.TW" and "判斷紀錄寫不進" in captured.err
+
+
+def test_run_passes_prior_unjudged_evidence_and_speaker_records_to_agent(tmp_path, monkeypatch):
+    # 補判前幾輪的檔：提示詞要有舊原話，舊講者的過去紀錄也要附上
+    from types import SimpleNamespace
+
+    summary = judge._load_summary()
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "media_picks_job_1.log").write_text("x | RESULT since=2026-10-25T23:00:00+08:00\n", encoding="utf-8")
+    media = {"stock_code": "00631L.TW", "name": "元大台灣50正2", "extracted_at": "2026-10-25T23:30:00+08:00",
+             "video_id": "v", "speaker": "甲", "show": "節目", "reason": "補判原話", "stance": "bullish"}
+    (tmp_path / "media-picks.jsonl").write_text(json.dumps(media) + "\n", encoding="utf-8")
+    mod = SimpleNamespace(summarize=lambda since: summary.summarize(since, journal_dir=tmp_path, logs_dir=logs),
+                          stock_detail=summary.stock_detail)
+    monkeypatch.setenv("MEDIA_PICKS_CLAUDE_BIN", str(_fake_claude(tmp_path, json.dumps(_verdict("{code}")))))
+    out = judge.run(SINCE, ["00631L.TW"], dossier_fn=lambda *a: "本輪資料包", summary_mod=mod,
+                    records_fn=lambda: _REC)
+    assert out[0]["ok"] is True
+    prompt = (tmp_path / "prompt-00631L.TW").read_text()
+    assert "補判原話" in prompt and "本輪資料包" in prompt and "- 甲：" in prompt

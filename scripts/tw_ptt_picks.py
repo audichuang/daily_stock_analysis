@@ -23,7 +23,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import tw_media_picks as mp  # noqa: E402
+import tw_media_picks as mp  # noqa: E402  (它會把 repo 根目錄放進 sys.path)
+from src.services.market_symbol_utils import market_suffixes  # noqa: E402
 
 JOURNAL = mp.ROOT / "journal" / "ptt-picks.jsonl"
 BOARD = "https://www.ptt.cc/bbs/Stock"
@@ -115,11 +116,18 @@ def parse_article(page: str, title: str) -> dict:
     }
 
 
+# 台股代號 4~6 位數字＋至多一個大寫字母（00631L、2887A），可帶 .TW／.TWO 後綴（2330.TW、6811.TWO）；
+# 後綴清單取自 market_symbol_utils（語意真源）；後面不能再黏英數字，TW 吃不完 TWO 時會回頭改配 TWO。
+_TW_SUFFIXES = "|".join(market_suffixes("tw"))
+_CODE = re.compile(rf"(?<![\dA-Z])(\d{{4,6}}[A-Z]?)(?:\.(?:{_TW_SUFFIXES}))?(?![\dA-Z])")
+
+
 def split_target(target: str) -> tuple[str, str | None]:
-    """「宏碁資訊-6811」「2316 楠梓電」-> (名稱, 代號)；美股代號（SOXS）留在名稱裡，resolve 會判不到。"""
-    m = re.search(r"(?<![\dA-Z])(\d{4,6}[A-Z]?)(?![\dA-Z])", target.upper())
+    """「宏碁資訊-6811」「2316 楠梓電」「2330.TW」-> (名稱, 代號)；後綴跟代號一起拿掉，不留在名稱裡。
+    美股代號（SOXS）留在名稱裡，resolve 會判不到。"""
+    m = _CODE.search(target.upper())
     code = m.group(1) if m else None
-    name = re.sub(r"(?<![\dA-Z])\d{4,6}[A-Z]?(?![\dA-Z])", " ", target.upper() if code else target)
+    name = _CODE.sub(" ", target.upper()) if code else target
     name = re.sub(r"[-－_/／()（）\s]+", " ", name).strip()
     return name, code
 
@@ -153,7 +161,7 @@ def _get(url: str) -> str:
 def new_articles(since: date, done: set[str], max_pages: int = 20) -> list[dict]:
     import requests
 
-    out = []
+    out, seen = [], set()
     for page in range(1, max_pages + 1):
         try:
             html_ = _get(f"{BOARD}/search?page={page}&q=%5B%E6%A8%99%E7%9A%84%5D")
@@ -169,7 +177,8 @@ def new_articles(since: date, done: set[str], max_pages: int = 20) -> list[dict]
             break
         for aid, title in parse_search(html_):
             posted = post_time(aid)
-            if posted.date() >= since and aid not in done:
+            if posted.date() >= since and aid not in done and aid not in seen:
+                seen.add(aid)  # 翻頁期間有新文進來，上一頁的文章會被擠到下一頁再出現一次
                 out.append({"article_id": aid, "title": title, "posted": posted, "cutoff": data_cutoff(posted),
                             "url": f"{BOARD}/{aid}.html"})
         if any(post_time(aid).date() < since for aid, _ in entries):

@@ -9,10 +9,14 @@
 ``tw_stock_dossier.py --no-branch`` 的資料包。``claude -p`` 不給工具、不載 MCP、關掉所有 hook，並拿掉 ``ORCA_*``
 環境變數（子程序結束時若觸發 Orca 的 Stop hook，會把排程的 terminal 收掉，見 ``docs/daily-report-ops.md``）。
 
-挑哪幾檔、檢查回來的 JSON、research 上限、寫 journal 仍由主 agent 做；本腳本只負責「備證據＋問＋收」，不寫任何檔。
+挑哪幾檔、檢查回來的 JSON、research 上限、寫 journal 仍由主 agent 做；本腳本只負責「備證據＋問＋收」，不寫 journal。
 輸出（stdout）是 JSON 陣列，順序同輸入代號：``{"code", "ok", "result"}`` 或 ``{"code", "ok": false, "error", "raw"}``。
+帶 ``--log <本輪 log>`` 時，全部回來後每檔在那份 log 追加一行判斷紀錄 ``<時刻> | JUDGE {"at", "since", "code", "ok", "error"}``：
+下一輪 ``media_picks_summary.py`` 的「前幾輪還沒判斷」段落會列出「判斷過卻沒寫進判斷檔」的檔（逾時、格式不合、主 agent
+寫到一半中斷），要不要補判由主 agent 決定。寫不進去只在 stderr 記一行，不影響輸出。
 
     uv run --no-project python scripts/media_picks_judge.py --since 2026-10-26T23:00:12+0800 3037.TW 2330.TW
+    uv run --no-project python scripts/media_picks_judge.py --since ... --log logs/media_picks_job_<id>.log 3037.TW
 """
 import argparse
 import importlib.util
@@ -46,6 +50,7 @@ BRIEF = """你在分析一檔台股，判斷財經節目／PTT 對它的看法�
 逐項想清楚再下判斷：
 - 看多的理由是什麼？資料包支不支持？例如「訂單滿」要看合約負債和營收走勢，「EPS 上修」要看毛利率是否在擴張。
 - 講者有說條件的話（「站回季線」「拉回 4500 以下」），現在符不符合。
+- 原話標「代號比對 fuzzy／code_mismatch／unresolved」（PTT 文標「代號待確認」）的，代號是比對出來的、可能對錯檔：先看講者說的名稱與題材是不是這檔；對不上的原話不要當成這檔的證據，在 thesis 寫明。
 - 看空或要避開的講者說了什麼，有沒有道理。
 - 來源可不可信：投顧頻道在招攬會員，有利益衝突。證據裡「三、講者過去紀錄」是這些講者過去點名的實測（10 日超額報酬）：樣本不足（n<20 或進場日不到 5 天）的紀錄是雜訊，一律忽略、不要拿來加減分；n 夠了也只當輔助，不能蓋過這檔本身的資料。好幾個不同節目的講者各自講，比同一位投顧在好幾個節目重複講更有份量。research 類通常比較有根據。PTT 作者是匿名網友，文章編輯過的話，內容可能在發文後改過。
 - 時機：首次被點名到現在已經漲了多少？近 7 天是不是天天被點名（可能已經太熱）？股價現在在結構的哪裡？估值百分位高不高？法人 5 日和 20 日的方向是不是一致？融資有沒有暴增？
@@ -165,7 +170,10 @@ def run(since: datetime, codes: list, jobs: int = MAX_CODES, model=None, timeout
 
     def voices(code):
         st = next((x for x in s.get("stocks", []) if x.get("code") == code), None)
-        return [(v.get("speaker") or "").strip() or f"[{v.get('show')}]" for v in (st or {}).get("voices", [])]
+        pending = next((c for c in s.get("unjudged", {}).get("codes", []) if c.get("code") == code), None)
+        prior = (pending or {}).get("stock") or {}  # 補判前幾輪的檔時，舊講者的過去紀錄也要附上
+        return [(v.get("speaker") or "").strip() or f"[{v.get('show')}]"
+                for v in (st or {}).get("voices", []) + prior.get("voices", [])]
 
     def fetch_records():
         try:
@@ -184,6 +192,21 @@ def run(since: datetime, codes: list, jobs: int = MAX_CODES, model=None, timeout
         return list(ex.map(one, codes))
 
 
+def append_log(path: Path, since: datetime, results: list, now=None) -> None:
+    """每檔追加一行 ``<時刻> | JUDGE <JSON>`` 到本輪 log（格式同 media_picks_job.sh 的 log()）；寫不進去只記 stderr。"""
+    now = (now or datetime.now()).astimezone()
+    lines = "".join(
+        f"{now:%Y-%m-%d %H:%M:%S} | JUDGE "
+        + json.dumps({"at": now.isoformat(), "since": since.isoformat(), "code": r.get("code"),
+                      "ok": bool(r.get("ok")), "error": None if r.get("ok") else r.get("error")}, ensure_ascii=False)
+        + "\n" for r in results)
+    try:
+        with Path(path).open("a", encoding="utf-8") as f:
+            f.write(lines)
+    except OSError as e:
+        print(f"判斷紀錄寫不進 {path}：{e}", file=sys.stderr)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--since", required=True, help="本輪開始時刻（log 的 RESULT since= 那個值）")
@@ -191,13 +214,18 @@ def main(argv=None) -> int:
     ap.add_argument("--model", default=os.environ.get("MEDIA_PICKS_JUDGE_MODEL") or None,
                     help="claude -p 的模型；不給就用 CLI 預設（也可設 MEDIA_PICKS_JUDGE_MODEL）")
     ap.add_argument("--timeout", type=int, default=JUDGE_TIMEOUT, help="每檔 claude -p 的逾時秒數（加上資料包的時間要低於 Bash 的 600 秒上限）")
+    ap.add_argument("--log", type=Path,
+                    help="本輪 log（第 1 步的 logs/media_picks_job_<id>.log）；給了就追加每檔的判斷紀錄，下一輪摘要看得到")
     args = ap.parse_args(argv)
     if len(args.codes) > MAX_CODES:
         ap.error(f"最多 {MAX_CODES} 檔")
     since = datetime.fromisoformat(args.since)
     if since.tzinfo is None:
         since = since.astimezone()
-    print(json.dumps(run(since, args.codes, model=args.model, timeout=args.timeout), ensure_ascii=False, indent=1))
+    results = run(since, args.codes, model=args.model, timeout=args.timeout)
+    if args.log:
+        append_log(args.log, since, results)
+    print(json.dumps(results, ensure_ascii=False, indent=1))
     return 0
 
 
