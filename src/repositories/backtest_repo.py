@@ -15,7 +15,7 @@ from sqlalchemy import String, and_, delete, desc, func, or_, select
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.functions import FunctionElement
 
-from src.core.backtest_engine import OVERALL_SENTINEL_CODE
+from src.core.backtest_engine import OVERALL_SENTINEL_CODE, forward_window_calendar_days
 from src.services.stock_code_utils import resolve_daily_stock_identity
 
 from src.storage import BacktestResult, BacktestSummary, DatabaseManager, AnalysisHistory
@@ -53,6 +53,10 @@ def _compile_snapshot_market_pg(element, compiler, **kw):
     )
 
 MARKET_REVIEW_REPORT_TYPE = "market_review"
+# 窗口理應早已走完（分析建立超過 forward_window_calendar_days）仍是 insufficient_data 的分析
+# （停牌、下市、代號補不到日線、進場 K 棒開盤永遠是空的），每輪都重選會每次都連網補日線、
+# 還佔掉最新優先的 limit 名額；改成距上次評估滿這麼多天才再試一次。窗口還在長的年輕分析不受限。
+INSUFFICIENT_DATA_RETRY_COOLDOWN_DAYS = 7
 BacktestResultContextRow = Tuple[
     BacktestResult,
     Optional[str],
@@ -82,8 +86,14 @@ class BacktestRepository:
         engine_version: str,
         force: bool,
     ) -> List[AnalysisHistory]:
-        """Return AnalysisHistory rows eligible for backtest."""
-        cutoff_dt = datetime.now() - timedelta(days=min_age_days)
+        """Return AnalysisHistory rows eligible for backtest.
+
+        非 force 時已有結果的分析不再選；``insufficient_data`` 會重試，但窗口理應已走完的
+        分析（建立超過 ``forward_window_calendar_days``）距上次評估未滿
+        ``INSUFFICIENT_DATA_RETRY_COOLDOWN_DAYS`` 天時先跳過。
+        """
+        now = datetime.now()
+        cutoff_dt = now - timedelta(days=min_age_days)
 
         with self.db.get_session() as session:
             conditions = [AnalysisHistory.created_at <= cutoff_dt]
@@ -108,6 +118,25 @@ class BacktestRepository:
                     )
                 )
                 query = query.where(AnalysisHistory.id.not_in(existing_ids))
+
+                recently_insufficient_ids = select(BacktestResult.analysis_history_id).where(
+                    and_(
+                        BacktestResult.eval_window_days == eval_window_days,
+                        BacktestResult.engine_version == engine_version,
+                        BacktestResult.eval_status == "insufficient_data",
+                        BacktestResult.evaluated_at
+                        > now - timedelta(days=INSUFFICIENT_DATA_RETRY_COOLDOWN_DAYS),
+                    )
+                )
+                matured_before = now - timedelta(
+                    days=forward_window_calendar_days(eval_window_days)
+                )
+                query = query.where(
+                    or_(
+                        AnalysisHistory.created_at > matured_before,
+                        AnalysisHistory.id.not_in(recently_insufficient_ids),
+                    )
+                )
 
             query = query.order_by(desc(AnalysisHistory.created_at)).offset(offset).limit(limit)
             rows = session.execute(query).scalars().all()

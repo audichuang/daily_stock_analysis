@@ -123,6 +123,47 @@ def test_split_between_report_and_entry_keeps_levels():
     assert kind == "time"
 
 
+def test_missing_final_close_is_incomplete_not_last_finite_close():
+    # 視窗最後一天停牌／下市：不能拿第 2 天 110 冒充期末出場（舊行為報 time +9%）
+    r, kind = trade_return(*_bars([100, 108, np.nan], [101, 111, np.nan], [99, 107, np.nan],
+                                  [100, 110, np.nan]))
+    assert kind == "incomplete" and np.isnan(r)
+
+
+def test_mid_window_gap_with_final_close_is_still_time_exit():
+    # 反向：中間停牌一天但最後一天有收盤，仍是正常的期末出場
+    r, kind = trade_return(*_bars([100, np.nan, 109], [101, np.nan, 111], [99, np.nan, 108],
+                                  [100, np.nan, 110]))
+    assert kind == "time" and r == pytest.approx(_rt(100, 110))
+
+
+def test_level_hit_before_missing_tail_still_counts():
+    # 反向：停損在停牌前就觸發，出場價已知，不算未完成
+    r, kind = trade_return(*_bars([100, 99, np.nan], [101, 100, np.nan], [98, 94, np.nan],
+                                  [99, 96, np.nan]), stop=95, take=110)
+    assert kind == "stop" and r == pytest.approx(_rt(100, 95))
+
+
+@pytest.mark.parametrize("missing", [3, 4])
+def test_missing_final_close_or_factor_is_incomplete(missing):
+    # 最後一天缺收盤或缺還原因子都算不出出場價，不能回傳 NaN 卻標成 time
+    bars = list(_bars([100, 105], [101, 106], [99, 104], [100, 110]))
+    bars[missing][-1] = np.nan
+    r, kind = trade_return(*bars)
+    assert kind == "incomplete" and np.isnan(r)
+
+
+def test_per_day_tax_uses_actual_exit_day_rate():
+    bars = _bars([100, 101, 102], [101, 120, 103], [99, 100, 101], [100, 105, 110])
+    taxes = [0.0, 0.0, 0.001]  # 例：債券 ETF 停徵在第 2 天到期
+    r, kind = trade_return(*bars, stop=95, take=110, tax_rate=taxes)
+    assert kind == "take"
+    assert r == pytest.approx(round_trip_return(100, 110, entry_notional=DEFAULT_NOTIONAL, tax_rate=0.0))
+    r, kind = trade_return(*bars, tax_rate=taxes)
+    assert kind == "time"
+    assert r == pytest.approx(round_trip_return(100, 110, entry_notional=DEFAULT_NOTIONAL, tax_rate=0.001))
+
+
 def test_suspended_entry_day_returns_none():
     assert trade_return(*_bars([np.nan, 100], [np.nan, 101], [np.nan, 99], [np.nan, 100])) is None
 
@@ -244,3 +285,49 @@ def test_build_events_uses_report_day_factor_for_levels():
     ev = build_events(reports, panels, [3], threshold=60, fee_discount=1.0)
     lv = ev[ev["mode"] == "levels"].iloc[0]
     assert lv["exit"] == "take" and lv["ret"] == pytest.approx(_rt(25, 30))
+
+
+def _panels_for(sid, closes, days):
+    from shadow_buy_eval import BENCHMARK
+
+    n = len(days)
+    px = {"open": closes, "high": closes, "low": closes, "close": closes}
+    panels = {k: pd.DataFrame({sid: v, BENCHMARK: [50.0] * n}, index=days, dtype=float) for k, v in px.items()}
+    panels["adj"] = pd.DataFrame({sid: [1.0] * n, BENCHMARK: [1.0] * n}, index=days)
+    return panels
+
+
+def _one_report(sid, code, day):
+    return pd.DataFrame([{"code": code, "stock_id": sid, "day": day, "raw_score": 70, "raw_type": "buy",
+                          "stop_loss": np.nan, "take_profit": np.nan, "downgraded": False,
+                          "variant": "baseline"}])
+
+
+def test_build_events_bond_etf_tax_exempt_only_inside_statutory_period():
+    from shadow_buy_eval import build_events
+
+    closes = [100.0, 100.0, 110.0]
+    for days, tax in ((pd.to_datetime(["2026-06-01", "2026-06-02", "2026-06-03"]), 0.0),
+                      (pd.to_datetime(["2027-01-04", "2027-01-05", "2027-01-06"]), 0.001)):
+        ev = build_events(_one_report("00679B", "00679B.TWO", days[0]), _panels_for("00679B", closes, days),
+                          [2], threshold=60, fee_discount=1.0)
+        row = ev[ev["mode"] == "time"].iloc[0]
+        assert row["ret"] == pytest.approx(
+            round_trip_return(100, 110, entry_notional=DEFAULT_NOTIONAL, tax_rate=tax))
+
+
+def test_render_excludes_and_counts_incomplete_trades():
+    from shadow_buy_eval import build_events
+
+    days = pd.to_datetime(["2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06"])
+    ev = build_events(_one_report("2330", "2330.TW", days[0]),
+                      _panels_for("2330", [100.0, 100.0, 110.0, np.nan], days),
+                      [3], threshold=60, fee_discount=1.0)
+    assert set(ev["exit"]) == {"incomplete"}
+    reports = pd.DataFrame([{"code": "2330.TW", "created_at": days[0], "day": days[0], "raw_score": 70.0,
+                             "raw_type": "buy", "downgraded": False, "variant": "baseline"}])
+    from types import SimpleNamespace
+    args = SimpleNamespace(buy_threshold=60, bootstrap=50, seed=1, by_variant=False)
+    md = render(ev, reports, args)
+    assert "未完成" in md and "raw-buy 1 筆" in md
+    assert "| raw-buy | 0 |" in md  # 沒有混進報酬統計

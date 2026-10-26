@@ -5002,10 +5002,12 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         # 給出扣完成本後賠比賺多的價位。事後還有 trade_cost_guardrail 確定性檢核，這段只讓
         # 模型在出價位時就把成本算進去。
         if is_tw_code(code):
-            from src.utils.tw_trade_costs import per_share_cost_multipliers
+            from datetime import date as _date
+
+            from src.utils.tw_trade_costs import per_share_cost_multipliers, tw_sell_tax_rate
 
             buy_mult, sell_mult = per_share_cost_multipliers(
-                is_etf=str(code).split(".")[0].startswith("00"),
+                tax_rate=tw_sell_tax_rate(code, _date.today()),
                 fee_discount=getattr(self._get_runtime_config(), "tw_broker_fee_discount", 1.0),
             )
             round_trip = (1 - sell_mult / buy_mult) * 100

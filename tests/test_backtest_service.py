@@ -10,14 +10,18 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
 import pandas as pd
 
 from src.config import Config
-from src.core.backtest_engine import OVERALL_SENTINEL_CODE, effective_backtest_engine_version
-from src.repositories.backtest_repo import BacktestRepository
+from src.core.backtest_engine import (
+    OVERALL_SENTINEL_CODE,
+    effective_backtest_engine_version,
+    forward_window_calendar_days,
+)
+from src.repositories.backtest_repo import INSUFFICIENT_DATA_RETRY_COOLDOWN_DAYS, BacktestRepository
 from src.services.backtest_service import BacktestService
 from src.services.stock_daily_start_resolver import (
     DailyStockStartResolution,
@@ -501,6 +505,8 @@ class BacktestServiceTestCase(unittest.TestCase):
                 StockDaily(code="600519", date=date(2024, 1, 4), open=106.0, high=109.0, low=104.0, close=107.0),
             ])
             session.commit()
+        # 分析早已超過窗口期：冷卻期滿才重試（見下方冷卻測試），這裡把上次評估時間推回冷卻期前。
+        self._age_results(days=INSUFFICIENT_DATA_RETRY_COOLDOWN_DAYS + 1)
 
         with patch.object(BacktestService, "_try_fill_daily_data"):
             stats2 = service.run_backtest(code="600519", eval_window_days=3, min_age_days=0, limit=10)
@@ -511,6 +517,63 @@ class BacktestServiceTestCase(unittest.TestCase):
         stats3 = service.run_backtest(code="600519", eval_window_days=3, min_age_days=0, limit=10)
         self.assertEqual(stats3["processed"], 0)
         self.assertEqual(self._statuses(), ["completed"])
+
+    def _age_results(self, *, days: int) -> None:
+        with self.db.get_session() as session:
+            for row in session.query(BacktestResult).all():
+                row.evaluated_at = datetime.now() - timedelta(days=days)
+            session.commit()
+
+    def test_matured_insufficient_data_waits_for_cooldown_before_refill(self) -> None:
+        # 分析建立已超過窗口期（2024-01-01）仍湊不滿窗口：停牌／下市／代號補不到日線這類。
+        service = BacktestService(self.db)
+        with self.db.get_session() as session:
+            session.query(StockDaily).filter(StockDaily.date > date(2024, 1, 2)).delete()
+            session.commit()
+
+        with patch.object(BacktestService, "_try_fill_daily_data"):
+            stats1 = service.run_backtest(code="600519", eval_window_days=3, min_age_days=0, limit=10)
+            self.assertEqual(stats1["insufficient"], 1)
+
+            # 冷卻期內：不重選（沒被選到就不會走到連網補日線）。
+            stats2 = service.run_backtest(code="600519", eval_window_days=3, min_age_days=0, limit=10)
+            self.assertEqual(stats2["processed"], 0)
+
+            # 反向：冷卻期內只是延後，不是永久放棄——滿了就再試一次。
+            self._age_results(days=INSUFFICIENT_DATA_RETRY_COOLDOWN_DAYS + 1)
+            stats3 = service.run_backtest(code="600519", eval_window_days=3, min_age_days=0, limit=10)
+            self.assertEqual(stats3["processed"], 1)
+            self.assertEqual(stats3["insufficient"], 1)
+
+            # 反向：force 不受冷卻限制。
+            stats4 = service.run_backtest(code="600519", force=True, eval_window_days=3, min_age_days=0, limit=10)
+            self.assertEqual(stats4["processed"], 1)
+        self.assertEqual(self._statuses(), ["insufficient_data"])
+
+    def test_young_insufficient_data_is_retried_every_run(self) -> None:
+        # 窗口還在長的年輕分析：每輪都要重試，冷卻只套在理應早已走完窗口的分析上。
+        service = BacktestService(self.db)
+        young = datetime.now() - timedelta(days=1)
+        with self.db.get_session() as session:
+            session.query(AnalysisHistory).update({AnalysisHistory.created_at: young})
+            session.query(StockDaily).filter(StockDaily.date > date(2024, 1, 2)).delete()
+            session.commit()
+
+        with patch.object(BacktestService, "_try_fill_daily_data"):
+            stats1 = service.run_backtest(code="600519", eval_window_days=3, min_age_days=0, limit=10)
+            stats2 = service.run_backtest(code="600519", eval_window_days=3, min_age_days=0, limit=10)
+        self.assertEqual(stats1["insufficient"], 1)
+        self.assertEqual(stats2["processed"], 1)
+        self.assertEqual(stats2["insufficient"], 1)
+
+        # 邊界：剛好超過窗口期就改走冷卻。
+        matured = datetime.now() - timedelta(days=forward_window_calendar_days(3) + 1)
+        with self.db.get_session() as session:
+            session.query(AnalysisHistory).update({AnalysisHistory.created_at: matured})
+            session.commit()
+        with patch.object(BacktestService, "_try_fill_daily_data"):
+            stats3 = service.run_backtest(code="600519", eval_window_days=3, min_age_days=0, limit=10)
+        self.assertEqual(stats3["processed"], 0)
 
     def _statuses(self) -> list:
         with self.db.get_session() as session:

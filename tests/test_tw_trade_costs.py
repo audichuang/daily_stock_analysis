@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -19,9 +20,11 @@ from tw_trade_costs import (  # noqa: E402
     buy_cash_outflow,
     buy_fill_price,
     dividend_supplementary_premium,
+    per_share_cost_multipliers,
     round_trip_return,
     sell_cash_inflow,
     sell_fill_price,
+    tw_sell_tax_rate,
 )
 
 
@@ -109,3 +112,39 @@ def test_invalid_cost_parameters_are_rejected_even_for_zero_amounts():
         round_trip_return(100, -1, entry_notional=200_000)
     with pytest.raises(ValueError, match="premium parameters"):
         dividend_supplementary_premium(0, rate=-1)
+
+
+# 債券 ETF 證交稅停徵：《證券交易稅條例》第 2 條之 1，106/01/01～115/12/31（含首尾）；
+# 槓桿／反向債券 ETF 不適用。期待值獨立寫死，不讀被測模組的常數。
+@pytest.mark.parametrize("stock_id,sale_date,expected", [
+    ("00679B", date(2026, 6, 30), 0.0),          # 停徵期內
+    ("00679B.TWO", date(2017, 1, 1), 0.0),       # 起日當天（含後綴也認得）
+    ("00937B", date(2026, 12, 31), 0.0),         # 迄日當天
+    ("00679B", date(2027, 1, 1), 0.001),         # 停徵期後：不是永久免稅
+    ("00679B", date(2016, 12, 31), 0.001),       # 停徵期前
+    ("00680L", date(2026, 6, 30), 0.001),        # 槓桿型債券 ETF 不適用
+    ("00681R", date(2026, 6, 30), 0.001),        # 反向型債券 ETF 不適用
+    ("0050", date(2026, 6, 30), 0.001),
+    ("00631L", date(2026, 6, 30), 0.001),
+    ("2330", date(2026, 6, 30), 0.003),
+    ("2887A", date(2026, 6, 30), 0.003),         # 特別股：A 結尾但不是 00 開頭
+])
+def test_tw_sell_tax_rate_bond_etf_exemption_is_date_bounded(stock_id, sale_date, expected):
+    assert tw_sell_tax_rate(stock_id, sale_date) == pytest.approx(expected)
+
+
+def test_tw_sell_tax_rate_accepts_datetime_like_sale_date():
+    import pandas as pd
+
+    assert tw_sell_tax_rate("00679B", pd.Timestamp("2026-12-31 13:30")) == 0.0
+    assert tw_sell_tax_rate("00679B", datetime(2027, 1, 1, 9, 0)) == pytest.approx(0.001)
+
+
+def test_per_share_cost_multipliers_explicit_tax_rate_overrides_is_etf():
+    buy, sell = per_share_cost_multipliers(tax_rate=0.0)
+    assert buy == pytest.approx((1 + 0.0015) * (1 + 0.001425))
+    assert sell == pytest.approx((1 - 0.0015) * (1 - 0.001425))
+    # 沒給 tax_rate 時沿用 is_etf 舊行為
+    assert per_share_cost_multipliers(is_etf=True)[1] == pytest.approx((1 - 0.0015) * (1 - 0.001425 - 0.001))
+    with pytest.raises(ValueError):
+        per_share_cost_multipliers(tax_rate=-0.001)

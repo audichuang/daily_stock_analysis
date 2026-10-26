@@ -262,3 +262,20 @@ def test_speaker_records_need_five_entry_dates_for_enough():
     assert vmp.speaker_records(four)["甲"]["bull"]["enough"] is False
     five = _events(rows).assign(entry_date=[DAYS[i % 5] for i in range(20)])
     assert vmp.speaker_records(five)["甲"]["bull"]["enough"] is True
+
+
+def test_bond_etf_tax_exemption_follows_exit_date():
+    # 00679B：出場日在停徵期內不課證交稅，停徵期後課 ETF 0.1%；不是永久免稅
+    from src.utils.tw_trade_costs import round_trip_return
+
+    o, c = [100.0] * 40, [100.0] * 40
+    for i in range(5, 40):
+        c[i] = 110.0
+    for start, tax in (("2026-06-01", 0.0), ("2027-02-01", 0.001)):
+        days = pd.bdate_range(start, periods=40)
+        idx = days
+        pn = {"open": pd.DataFrame({"0050": 100.0, "00679B": o}, index=idx),
+              "close": pd.DataFrame({"0050": 100.0, "00679B": c}, index=idx)}
+        ev = vmp.build_events([pick(days[3], code="00679B.TWO")], pn, (5,))
+        assert ev.iloc[0]["ret"] == pytest.approx(
+            round_trip_return(100.0, 110.0, entry_notional=vmp.DEFAULT_NOTIONAL, tax_rate=tax))

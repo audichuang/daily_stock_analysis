@@ -17,6 +17,7 @@ from src.core.backtest_engine import (
     BacktestEngine,
     EvaluationConfig,
     effective_backtest_engine_version,
+    forward_window_calendar_days,
 )
 from src.market_phase_summary import (
     extract_market_phase_summary,
@@ -1036,7 +1037,7 @@ class BacktestService:
             from data_provider.base import DataFetcherManager
 
             # fetch a window that covers start + forward bars
-            end_date = analysis_date + timedelta(days=max(eval_window_days * 2, 30))
+            end_date = analysis_date + timedelta(days=forward_window_calendar_days(eval_window_days))
             manager = DataFetcherManager()
             df, source = manager.get_daily_data(
                 stock_code=refill_code,

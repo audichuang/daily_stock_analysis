@@ -21,7 +21,11 @@
     `src.core.backtest_engine.resolve_bar_exit`），開盤在兩者之間、同日兩者都碰算停損，未碰則同 (1)。觸發與損益都在**還原**價空間（價位乘報告日因子：報告日非交易日時取之前最後一個交易日）
     （報告價位是報告日的名目價，報告日到出場之間的除權息／分割因此不會誤觸），損益用前復權價。價位缺值或不滿足 stop < 進場開盤 < take 時不套價位。
   - 成本：`src/utils/tw_trade_costs.round_trip_return`（含雙邊滑價、手續費、賣方證交稅；
-    00 開頭用 ETF 稅率），固定名目本金。
+    稅率走 `tw_sell_tax_rate`，以實際出場日判斷：00 開頭用 ETF 稅率，債券 ETF 在法定停徵期內免稅），
+    固定名目本金。
+  - 未完成：視窗最後一個交易日沒有收盤或還原因子（停牌、下市）且沒先碰停損／停利的交易標 `incomplete`，
+    **不拿最後一筆有價收盤頂替出場**（那等於假設在停牌前賣掉，卻跟走完整個視窗的 0050 比），
+    不進報酬統計，在報表逐表列出筆數。進場日沒開盤的照舊直接略過。
   - 區間：以 code 群聚的 bootstrap 95% CI（同檔相鄰視窗重疊一起重抽）；
     **未處理跨檔同日的相關性，區間可能仍偏窄**。區間跨零或不足兩檔一律標 inconclusive。
 
@@ -53,12 +57,14 @@ from src.utils.tw_trade_costs import (  # noqa: E402
     ETF_TRANSACTION_TAX_RATE,
     STOCK_TRANSACTION_TAX_RATE,
     round_trip_return,
+    tw_sell_tax_rate,
 )
 
 BENCHMARK = "0050"
 DEFAULT_NOTIONAL = 200_000.0  # 與 measure_signal_forward 的 DEFAULT_POSITION_NOTIONAL 一致
 BUY_TYPES = ("buy", "strong_buy")
 UNTAGGED_VARIANT = "untagged"
+INCOMPLETE = "incomplete"  # 視窗末段沒有價格（停牌／下市），出場價未知
 
 
 def raw_decision(raw_result, final_score=None) -> dict:
@@ -91,7 +97,9 @@ def trade_return(o, h, lo, c, adj, *, stop=None, take=None, level_adj=None, tax_
 
     o/h/lo/c/adj 是從進場日（第 1 天）起、長度 = 持有天數的序列；o/h/lo/c 為未還原價，adj 為前復權因子。
     level_adj 是報告價位所屬那天（報告日）的前復權因子；未給時視為進場日（adj[0]）。
-    回傳 (淨報酬, 出場類型) ；進場日沒開盤價（停牌）回傳 None。
+    tax_rate 可以是單一稅率，或與 o 等長的逐日稅率（第 k 天出場就用第 k 個；債券 ETF 停徵看賣出日）。
+    回傳 (淨報酬, 出場類型) ；進場日沒開盤價（停牌）回傳 None；沒先碰價位、最後一天又沒收盤或還原因子
+    （停牌、下市）回傳 (nan, INCOMPLETE)——不拿較早的收盤冒充期末出場。
     """
     if not np.isfinite(o[0]):
         return None
@@ -103,7 +111,6 @@ def trade_return(o, h, lo, c, adj, *, stop=None, take=None, level_adj=None, tax_
                   and stop * f_level < entry_adj < take * f_level)
     stop_adj = stop * f_level if use_levels else None
     take_adj = take * f_level if use_levels else None
-    last = None
     for k in range(len(o)):
         if not np.isfinite(o[k]):
             continue
@@ -113,12 +120,15 @@ def trade_return(o, h, lo, c, adj, *, stop=None, take=None, level_adj=None, tax_
             if decision is not None:
                 first_hit, exit_adj = decision
                 kind = "take" if first_hit == "take_profit" else "stop"  # ambiguous 保守算停損
-                return _net(entry * adj[0], exit_adj, tax_rate, notional, fee_discount), kind
-        if np.isfinite(c[k]):
-            last = k
-    if last is None:
-        return None
-    return _net(entry * adj[0], c[last] * adj[last], tax_rate, notional, fee_discount), "time"
+                return _net(entry * adj[0], exit_adj, _tax_at(tax_rate, k), notional, fee_discount), kind
+    last = len(c) - 1
+    if not (np.isfinite(c[last]) and np.isfinite(adj[last]) and adj[last] > 0):
+        return float("nan"), INCOMPLETE
+    return _net(entry * adj[0], c[last] * adj[last], _tax_at(tax_rate, last), notional, fee_discount), "time"
+
+
+def _tax_at(tax_rate, k):
+    return float(tax_rate) if np.ndim(tax_rate) == 0 else float(tax_rate[k])
 
 
 def _net(entry_adj, exit_adj, tax_rate, notional, fee_discount):
@@ -242,11 +252,11 @@ def build_events(reports, panels, horizons, *, threshold, fee_discount):
         adj_col = panels["adj"][r.stock_id].to_numpy()
         level_adj = adj_col[i0 - 1] if i0 >= 1 else np.nan  # 報告日（或之前最後一個交易日）的因子
         group = "raw_buy" if is_raw_buy(r.raw_score, r.raw_type, threshold) else "others"
-        tax = ETF_TRANSACTION_TAX_RATE if r.stock_id.startswith("00") else STOCK_TRANSACTION_TAX_RATE
         for hz in horizons:
             if i0 + hz > len(cal):
                 continue  # 視窗還沒走完
             win = slice(i0, i0 + hz)
+            tax = [tw_sell_tax_rate(r.stock_id, d) for d in cal[win]]  # 逐日：停徵看實際賣出日
 
             def seq(sid, k):
                 return panels[k][sid].to_numpy()[win]
@@ -298,6 +308,8 @@ def _blocks(ev, args, level="") -> list:
         out += [f"{level}## {titles[mode]}", ""]
         for hz in sorted(ev["h"].unique()):
             e = ev[(ev["mode"] == mode) & (ev["h"] == hz)]
+            inc = e[e["exit"] == INCOMPLETE]
+            e = e[e["exit"] != INCOMPLETE]
             buy, oth = e[e["group"] == "raw_buy"], e[e["group"] == "others"]
             paired = buy.dropna(subset=["bench"])
             out += [f"{level}### h = {hz}", "", "| 組別 | n | 均值 | 中位數 | 勝率 | 95% CI | 判定 |",
@@ -315,6 +327,10 @@ def _blocks(ev, args, level="") -> list:
                 out.append("")
                 out.append("raw-buy 出場類型：" + "、".join(
                     f"{k} {v}" for k, v in buy["exit"].value_counts().items()))
+            if len(inc):
+                out.append(f"未完成（視窗末段停牌／下市、出場價未知，已排除）：raw-buy "
+                           f"{int((inc['group'] == 'raw_buy').sum())} 筆、others "
+                           f"{int((inc['group'] == 'others').sum())} 筆")
             out.append("")
     return out
 

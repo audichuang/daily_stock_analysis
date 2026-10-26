@@ -47,6 +47,15 @@ def effective_backtest_engine_version(label: Optional[str]) -> str:
     return f"{base}{suffix}"
 
 
+def forward_window_calendar_days(eval_window_days: int) -> int:
+    """``eval_window_days`` 個交易日的窗口最多橫跨幾個日曆日（含週末與長假的緩衝）。
+
+    補日線抓這麼寬；分析建立超過這麼久窗口仍湊不滿，就視為不會再自然長出來
+    （停牌、下市、代號查不到），回測改用冷卻期重試而不是每輪都重抓。
+    """
+    return max(int(eval_window_days) * 2, 30)
+
+
 class DailyBarLike(Protocol):
     """Protocol for objects representing a daily OHLC bar."""
 
@@ -471,10 +480,11 @@ class BacktestEngine:
             simulated_net_return_pct = None
         else:
             simulated_return_pct = (exit_adj - start_value) / start_value * 100
-            simulated_net_return_pct = compute_tw_net_return_pct(
-                simulated_return_pct, basis.cost_multipliers
-            )
             exit_day = first_hit_date if first_hit_date is not None else end_bar.date
+            # 證交稅看實際賣出日（債券 ETF 停徵有期限），不是窗口期末。
+            simulated_net_return_pct = compute_tw_net_return_pct(
+                simulated_return_pct, basis.cost_multipliers_on(exit_day)
+            )
             # 存檔用原始價：還原價除回該日的相對乘數。
             simulated_exit_price = exit_adj / basis.rel(exit_day)
 

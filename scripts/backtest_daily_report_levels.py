@@ -49,13 +49,12 @@ from market_data.adjust import load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
 from src.trade_cost_guardrail import evaluate_levels  # noqa: E402
 from tw_trade_costs import (  # noqa: E402
-    ETF_TRANSACTION_TAX_RATE,
-    STOCK_TRANSACTION_TAX_RATE,
     affordable_shares,
     buy_cash_outflow,
     buy_fill_price,
     sell_cash_inflow,
     sell_fill_price,
+    tw_sell_tax_rate,
 )
 
 REPO = Path(__file__).resolve().parent.parent
@@ -119,7 +118,6 @@ def simulate(stock_id, reports, bars, adj, notional, respect_advice, same_day_tp
     tr = pd.concat([bars["high"] - bars["low"], (bars["high"] - prev).abs(),
                     (bars["low"] - prev).abs()], axis=1).max(axis=1, skipna=False)
     atr = tr.rolling(14).mean().shift()   # 只用前一日以前的 K 棒
-    tax = ETF_TRANSACTION_TAX_RATE if stock_id.startswith("00") else STOCK_TRANSACTION_TAX_RATE
     trades, pos, li, lv = [], None, 0, None
     for i, b in bars.iterrows():
         d = b["date"]
@@ -138,7 +136,7 @@ def simulate(stock_id, reports, bars, adj, notional, respect_advice, same_day_tp
             if min_net_rr is not None and not blocked:
                 check = evaluate_levels(f"{stock_id}.TW", ideal_buy=lv.get("ideal_buy"),
                                         stop_loss=lv.get("stop_loss"), take_profit=lv.get("take_profit"),
-                                        min_net_rr=min_net_rr)
+                                        min_net_rr=min_net_rr, sale_date=d.date())
                 blocked = check["passed"] is not True
             if not blocked:
                 entered_today = True
@@ -161,25 +159,26 @@ def simulate(stock_id, reports, bars, adj, notional, respect_advice, same_day_tp
                 and (same_day_tp or not entered_today)
             if hit_stop or hit_tp:
                 raw = min(b["open"], stop) if hit_stop else max(b["open"], tp)
-                trades.append(_close(stock_id, pos, d, raw, a, "stop" if hit_stop else "take_profit", tax))
+                trades.append(_close(stock_id, pos, d, raw, a, "stop" if hit_stop else "take_profit"))
                 pos = None
             elif hold_days is not None and pos["bars"] >= hold_days:
-                trades.append(_close(stock_id, pos, d, b["close"], a, "time", tax))
+                trades.append(_close(stock_id, pos, d, b["close"], a, "time"))
                 pos = None
             else:
                 pos["bars"] += 1
     if pos is not None:
         last = bars.iloc[-1]
         trades.append(_close(stock_id, pos, last["date"], last["close"],
-                             float(adj.at[last["date"], stock_id]), "open_at_end", tax))
+                             float(adj.at[last["date"], stock_id]), "open_at_end"))
     return trades
 
 
-def _close(stock_id, pos, d, raw, a, kind, tax):
+def _close(stock_id, pos, d, raw, a, kind):
     # 前復權：把出場價換到與進場同一個基準，差額即除權息的貢獻
     exit_equiv = raw * a / pos["entry_adj"]
     fill = sell_fill_price(exit_equiv) if kind != "open_at_end" else exit_equiv
-    proceeds = sell_cash_inflow(pos["shares"], fill, tax_rate=tax)
+    # 證交稅看賣出日：債券 ETF 只在法定停徵期內免稅
+    proceeds = sell_cash_inflow(pos["shares"], fill, tax_rate=tw_sell_tax_rate(stock_id, d))
     return {"stock_id": stock_id, "entry_date": pos["entry_date"].date(), "entry": round(pos["entry_raw"], 2),
             "exit_date": d.date(), "exit": round(raw, 2), "exit_type": kind,
             "days": None, "cost": pos["cost"], "pnl": proceeds - pos["cost"],
@@ -192,7 +191,7 @@ def buy_and_hold(stock_id, bars, adj, notional):
     shares = affordable_shares(notional, fill)
     cost = buy_cash_outflow(shares, fill)
     exit_equiv = b1["close"] * float(adj.at[b1["date"], stock_id]) / float(adj.at[b0["date"], stock_id])
-    tax = ETF_TRANSACTION_TAX_RATE if stock_id.startswith("00") else STOCK_TRANSACTION_TAX_RATE
+    tax = tw_sell_tax_rate(stock_id, b1["date"])
     return sell_cash_inflow(shares, exit_equiv, tax_rate=tax) / cost - 1
 
 
