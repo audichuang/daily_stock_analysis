@@ -192,12 +192,12 @@ def test_snapshot_skips_null_close_before_adjusting(monkeypatch):
 
 @pytest.mark.parametrize("as_of, latest, pit", [
     ("2026-04-13", "2026-04-14", True),
-    ("2026-04-13", "2026-04-13", False),
-    ("2026-04-14", "2026-04-13", False),
-    ("2026-04-14", "2026-04-14", False),
+    ("2026-04-13", "2026-04-13", True),
+    ("2026-04-14", "2026-04-13", True),
+    ("2026-04-14", "2026-04-14", True),
 ])
 def test_snapshot_reads_revenue_point_in_time(monkeypatch, as_of, latest, pit):
-    # 用請求日期與全市場最新場次比較；個股最後一根 K 落後時也不能誤判為回放
+    # journal 快照固定回放；cutoff 等於或晚於全市場最新場次時也不能改讀 live
     import pandas as pd
     from market_data import market_repo
     from src.services import tw_stock_dossier as dossier

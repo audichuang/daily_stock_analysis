@@ -356,11 +356,10 @@ def new_episodes(since: date, done: set[str]) -> list[dict]:
 # ---------- local data ----------
 
 def snapshot(code: str, as_of: date, engine) -> dict | None:
-    """Data as of `as_of` (the episode's data cutoff: the air date, or the day before for 盤前 shows)."""
+    """媒體／PTT journal 的固定基準日快照；營收一律依 PIT 可見日過濾。"""
     import pandas as pd
 
     from market_data import market_repo
-    from market_data.revenue_deadline import is_historical_replay
     from src.services import tw_stock_dossier as dossier
 
     sid = code.split(".")[0]
@@ -384,9 +383,8 @@ def snapshot(code: str, as_of: date, engine) -> dict | None:
            "vs_ma20_pct": pct(last, ma[20]), "vs_ma60_pct": pct(last, ma[60]),
            "from_60d_high_pct": pct(last, close.tail(60).max()),
            "ret_5d_pct": pct(last, close.iloc[-6]) if len(close) > 5 else None}
-    # 播出日早於全市場最新場次才回放；最新日期快照保留已公告的營收
-    pit = is_historical_replay(as_of, market_repo.latest_price_date(engine=engine))
-    fund = dossier.fundamentals(engine, sid, d, pit=pit)
+    # journal 固定回放；週末最新行情仍等於 cutoff 時，也要排除有效公告日尚未到的營收。
+    fund = dossier.fundamentals(engine, sid, d, pit=True)
     out["revenue_yoy_3m"] = [m["yoy_pct"] for m in fund["monthly_revenue"][-3:]]
     inst = (dossier.chips(engine, sid, d, [], branch=False) or {}).get("institutional") or {}
     out["foreign_5d_lots"], out["trust_5d_lots"] = inst.get("foreign_5d_lots"), inst.get("trust_5d_lots")

@@ -26,8 +26,10 @@ exchange_calendars 範圍時只順延週六日並記 warning（週六日一定�
 國定假日則無從得知）。
 
 讀取端：回測（``backtest_screen``、``measure_signal_forward``、``measure_revenue_momentum``）
-一律套；回顧讀取（``screen_tw --date``、``tw_stock_dossier`` 帶 ``as_of``、媒體／PTT
-點名快照）只在明確指定的日期早於全市場 ``market.price`` 最新日期時套。
+與寫入 append-only journal 的媒體／PTT 點名快照一律套，後者即使 cutoff 等於或晚於
+全市場 ``market.price`` 最新日期也固定回放，避免週末或連假補抓時混入事後入庫的營收。
+回顧讀取（``screen_tw --date``、``tw_stock_dossier`` 帶 ``as_of``）只在明確指定的日期
+早於全市場最新日期時套。
 不帶日期、等於或晚於最新資料日的 live 不套：DB 裡有的列就是已公告，
 套了反而把已公布的營收藏到期限之後；個股分析的營收動能（``load_tw_revenue_momentum``）錨定
 官方最新月份，同屬 live，不套。
