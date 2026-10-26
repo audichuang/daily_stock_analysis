@@ -2031,6 +2031,8 @@ class PortfolioService:
             )
 
         kept: List[Tuple[date, float]] = []
+        # 中間K棒拒收時若以後鄰原始值為參考，記下後鄰日期，迴圈後確認後鄰是否也被拒收。
+        raw_next_reference: Dict[date, date] = {}
         for i, (bar_date, value) in enumerate(closes):
             references: Tuple[float, ...] = ()
             if bar_date in cross_closes:
@@ -2044,10 +2046,13 @@ class PortfolioService:
                 # Prefer the next bar's cross rate: its raw value may itself be rejected below.
                 nxt_date, nxt_raw = closes[i + 1]
                 nxt = cross_closes.get(nxt_date, nxt_raw)
+                nxt_is_raw = nxt_date not in cross_closes
                 bad = prev is not None and _fx_rates_deviate(value, prev) and _fx_rates_deviate(value, nxt)
                 reference = prev
                 # 拒收條件是兩個鄰居都偏離，任一鄰居都是可接受值的依據。
                 references = (prev, nxt) if prev is not None else ()
+                if bad and nxt_is_raw:
+                    raw_next_reference[bar_date] = nxt_date
             else:
                 # The cross rate is today's value; it is meaningless for a historical as_of.
                 reference = (
@@ -2071,6 +2076,11 @@ class PortfolioService:
                 )
                 continue
             kept.append((bar_date, value))
+        if rejected_references is not None:
+            # 後鄰K棒自己也被拒收時，它的原始值是垃圾，不可拿來保留快取列；只留前鄰作依據。
+            for bar_date, nxt_date in raw_next_reference.items():
+                if nxt_date in rejected_references:
+                    rejected_references[bar_date] = rejected_references[bar_date][:1]
         return kept
 
     @staticmethod

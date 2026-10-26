@@ -1729,6 +1729,34 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self._refresh_twd_cny([(d6, 5.0), (d7, 7.2)], [], [], d7, date(2026, 1, 8))
         self.assertIsNone(self._twd_row(d6))
 
+    def test_fx_refresh_rejected_middle_bar_ignores_raw_next_neighbour_that_was_also_rejected(self) -> None:
+        """後鄰K棒自己也被拒收時，它的原始值不能當保留快取的依據，否則垃圾列會被全拒收的回退沿用。"""
+        d5, d6, d7 = date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)
+        self._seed_twd(d5, 0.2045, "yfinance", False)
+        self._seed_twd(d6, 0.1963, "yfinance_backfill", False)  # 只符合同樣被拒收的後鄰原始值
+        with patch.object(PortfolioService, "_fetch_fx_cross_closes", return_value={}), patch.object(
+            PortfolioService, "_fetch_fx_cross_rate", return_value=0.2045
+        ):
+            self._refresh_twd_cny([(d6, 0.1900), (d7, 0.1963)], [], [], d7, d7)
+        self.assertIsNone(self._twd_row(d6))
+        row = self._twd_row(d7)
+        self.assertIsNotNone(row)
+        self.assertTrue(row.is_stale)
+        self.assertAlmostEqual(row.rate, 0.2045)
+
+    def test_fx_refresh_rejected_middle_bar_keeps_stored_row_matching_accepted_next_neighbour(self) -> None:
+        """反向檢查：後鄰K棒被接受時，符合它的已存列仍要保留。"""
+        d5, d6, d7 = date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)
+        self._seed_twd(d5, 0.2045, "yfinance", False)
+        self._seed_twd(d6, 0.1963, "yfinance_backfill", False)
+        with patch.object(PortfolioService, "_fetch_fx_cross_closes", return_value={}), patch.object(
+            PortfolioService, "_fetch_fx_cross_rate", return_value=0.1963
+        ):
+            self._refresh_twd_cny([(d6, 0.1900), (d7, 0.1963)], [], [], d7, d7)
+        row = self._twd_row(d6)
+        self.assertIsNotNone(row)
+        self.assertAlmostEqual(row.rate, 0.1963)
+
     def test_fx_refresh_all_bars_rejected_without_any_clean_source_drops_junk_row_and_marks_missing(self) -> None:
         d8 = date(2026, 1, 8)
         self._seed_twd(d8, 0.1963, "yfinance", False)
