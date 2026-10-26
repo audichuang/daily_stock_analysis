@@ -50,6 +50,8 @@ uv run --env-file .env python scripts/tw_stock_dossier.py 2330 --no-branch   # �
 
 **容錯**：資料包每一段各自容錯，任一段查詢出錯只讓那段顯示「無資料」，頁首列出讀取失敗的段落（`errors`），不會整頁 503。只有查不到價格或整個台股庫連不上時，才回 404／503。
 
+月營收為 NULL 時，HTML 保留該月份並顯示「無資料」、長條寬度為零，不參與長條最大值計算；實際營收為零仍顯示「0 千元」。所有月份都缺值時也能正常開啟報告。盯盤看板的「外資 5 日轉買／賣」僅在法人資料日與資料包 `as_of` 相同時顯示，文字帶上資料日期；法人資料落後、超前或缺少日期時省略該提示，其餘變化照常顯示。
+
 **CLI／skill**：本機要用 Claude Code 寫解讀時走 skill `/stock-report`（`.claude/skills/stock-report/SKILL.md`）。
 
 ```bash

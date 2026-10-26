@@ -25,6 +25,36 @@ def test_every_section_missing_renders_no_data():
     assert "未附解讀" in html and "四維度總覽" not in html
 
 
+@pytest.mark.parametrize("revenues, expected", [
+    ([2000, None, 1000, 0], [("26/06", "100.0", "2,000 千元"), ("26/07", "0.0", "無資料"),
+                             ("26/08", "50.0", "1,000 千元"), ("26/09", "0.0", "0 千元")]),
+    ([None, None], [("26/08", "0.0", "無資料"), ("26/09", "0.0", "無資料")]),
+    ([None, 0], [("26/08", "0.0", "無資料"), ("26/09", "0.0", "0 千元")]),
+    ([1000, 2000], [("26/08", "50.0", "1,000 千元"), ("26/09", "100.0", "2,000 千元")]),
+])
+def test_html_revenue_from_dossier_preserves_missing_zero_and_valid_rows(monkeypatch, revenues, expected):
+    import pandas as pd
+
+    from src.services import tw_stock_dossier as dossier
+
+    # 從 SQL 邊界餵 NULL，讓真正的資料包生產者把 NaN 轉成 None，再走完整 HTML 渲染。
+    months = pd.period_range(end="2026-09", periods=len(revenues), freq="M").to_timestamp()
+    rev = pd.DataFrame({"revenue_month": months[::-1], "revenue": revenues[::-1],
+                        "yoy": 12.3, "announce_date": "2026-10-10"})
+    monkeypatch.setattr(dossier, "_sql", lambda e, sql, **kw: rev if "monthly_revenue" in sql
+                        else pd.DataFrame(columns=["date", "account", "value"]))
+    f = dossier.fundamentals(None, "9999", "2026-10-21")
+    assert [m["revenue_k"] for m in f["monthly_revenue"]] == revenues
+    html = report.render({**EMPTY, "as_of": "2026-10-21", "fundamentals": f})
+    rows = re.findall(
+        r'<div class="bar-row"><div class="lbl">(.*?)</div>'
+        r'<div class="track"><div class="fill" style="width:([\d.]+)%"></div></div>'
+        r'<div class="val">(.*?)</div>', html)
+    assert rows == expected
+    assert html.count('+12.3%</span>') == len(revenues)
+    assert "最新月份 2026-09（公告日 2026-10-10）" in html
+
+
 def test_narrative_text_is_escaped():
     nar = {"verdicts": {"chips": {"badge": "<b>x</b>", "tone": "pos", "note": "<script>alert(1)</script>"}},
            "followups": ["a<i>"]}
