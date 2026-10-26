@@ -28,6 +28,7 @@
     uv run --env-file .env python scripts/measure_signal_forward.py --delisting zero
     uv run --env-file .env python scripts/measure_signal_forward.py --survivorship-bound
     uv run --env-file .env python scripts/measure_signal_forward.py --lhr   # LHR 否決實驗
+    uv run --env-file .env python scripts/measure_signal_forward.py --pb    # PB≥2 否決實驗
 """
 
 import argparse
@@ -57,6 +58,10 @@ HIT_THRESHOLD = 0.30
 # 10%，停板價由參考價算出後向下取到升降單位，實際收漲停的漲幅約落在 9.5%~10%。
 LIMIT_HIT_THRESHOLD = 0.095
 LHR_WINDOW = 20       # 漲停率減跌停率（LHR）的回看交易日數（約一個月）
+# PB 否決實驗（`--pb`）：估值缺列時最多沿用幾個交易列；閘門＝否決後池子要留多少才值得檢定。
+PB_FFILL_DAYS = 5
+PB_GATE_MIN_KEPT = 300
+PB_GATE_MIN_VETOED = 100
 
 
 def load(engine, start, end, include_otc_revenue=False):
@@ -359,24 +364,19 @@ def _arm(ev):
             "hit": (r >= HIT_THRESHOLD).mean() if len(r) else np.nan}
 
 
-def report_lhr_veto(ev, calendar, a):
-    """LHR 否決實驗（事先登記於 docs/research/2026-10-26-exp-lhr-veto.md）。
+def report_subset_veto(d, calendar, a, col, thresholds, rule_label):
+    """事件層否決的共用報告：依 ``d[col] >= 門檻`` 切「留下／否決」，比較留下的池子與原池。
 
-    同一批候選事件依訊號日 LHR 切成「留下／否決」，比較留下的池子與原池子；
-    否決在事件層做（不重跑去重），兩臂嚴格是原池子的子集。只報告、不改 live 規則。
+    否決在事件層做（不重跑去重），兩臂嚴格是原池子的子集；``d`` 須已去掉 ``col`` 缺值的列
+    （缺值的處理由各實驗事先登記）。``rule_label(thr)`` 回傳每個門檻的標題文字。
+    每個門檻印三臂的 n／均值／P(≥30%)、留下−原池的差與 block bootstrap 區間、vol20 三分位內的
+    留下／否決比較（描述用、無區間）。LHR 與 PB 否決實驗共用，輸出格式不得任意改（測試釘住）。
     """
-    w = a.lhr_window
-    print(f"\n=== LHR 否決（近 {w} 交易日收漲停天數 − 收跌停天數，門檻 {LIMIT_HIT_THRESHOLD:.1%}）===")
-    d = ev.dropna(subset=["lhr"]).copy()
-    print(f"有 LHR 的事件 {len(d)} / {len(ev)}；淨漲停天數分布：")
-    print(d["lhr"].astype(int).value_counts().sort_index().to_string())
-    rho = d[["lhr", "vol20"]].corr(method="spearman").iloc[0, 1]
-    print(f"Spearman(LHR, vol20) = {rho:+.3f}（事件層）")
     base = _arm(d)
-    for thr in a.lhr_veto:
-        veto = (d["lhr"] >= thr).to_numpy()
+    for thr in thresholds:
+        veto = (d[col] >= thr).to_numpy()
         kept, vetoed = _arm(d[~veto]), _arm(d[veto])
-        print(f"\n-- 否決 淨漲停天數 ≥ {thr:g}（LHR ≥ {thr / w:.2f}）--")
+        print(f"\n-- {rule_label(thr)} --")
         for label, arm in (("原池", base), ("留下", kept), ("否決", vetoed)):
             print(f"  {label}  n={arm['n']:5d}  均值 {arm['mean'] * 100:+7.2f}%  "
                   f"P(≥30%) {arm['hit'] * 100:5.1f}%")
@@ -404,6 +404,73 @@ def report_lhr_veto(ev, calendar, a):
             print(f"  {t}：留下 n={k_arm['n']} 均值 {k_arm['mean'] * 100:+.2f}% "
                   f"P30 {k_arm['hit'] * 100:.1f}%｜否決 n={v_arm['n']} 均值 "
                   f"{v_arm['mean'] * 100:+.2f}% P30 {v_arm['hit'] * 100:.1f}%")
+
+
+def report_lhr_veto(ev, calendar, a):
+    """LHR 否決實驗（事先登記於 docs/research/2026-10-26-exp-lhr-veto.md）。
+
+    同一批候選事件依訊號日 LHR 切成「留下／否決」，比較留下的池子與原池子；
+    否決在事件層做（不重跑去重），兩臂嚴格是原池子的子集。只報告、不改 live 規則。
+    """
+    w = a.lhr_window
+    print(f"\n=== LHR 否決（近 {w} 交易日收漲停天數 − 收跌停天數，門檻 {LIMIT_HIT_THRESHOLD:.1%}）===")
+    d = ev.dropna(subset=["lhr"]).copy()
+    print(f"有 LHR 的事件 {len(d)} / {len(ev)}；淨漲停天數分布：")
+    print(d["lhr"].astype(int).value_counts().sort_index().to_string())
+    rho = d[["lhr", "vol20"]].corr(method="spearman").iloc[0, 1]
+    print(f"Spearman(LHR, vol20) = {rho:+.3f}（事件層）")
+    report_subset_veto(d, calendar, a, "lhr", a.lhr_veto,
+                       lambda thr: f"否決 淨漲停天數 ≥ {thr:g}（LHR ≥ {thr / w:.2f}）")
+
+
+def pb_panel(rows, index, columns, ffill_limit=PB_FFILL_DAYS):
+    """``market.valuation`` 的股價淨值比對齊到交易日面板（訊號日 D 用 D 當日的 PB）。
+
+    BWIBBU_d／上櫃 peQryDate 的 D 日估值以 D 日收盤價計算、D 日盤後發布，早於 T+1 開盤
+    進場，所以用 D 日值不是前視。某天估值缺列（端點漏日）時，最多沿用前 ``ffill_limit``
+    個**交易列**的值；再久就是 NaN（不否決、另行計數），不無限期沿用舊估值。
+    PB ≤ 0 或空白（淨值為負或無法計算）一律視為缺值。
+    """
+    if not len(rows):
+        return pd.DataFrame(np.nan, index=index, columns=columns)
+    v = rows.pivot_table(index="date", columns="stock_id", values="pb_ratio", aggfunc="last")
+    v = v.astype(float).where(lambda x: x > 0)
+    return v.reindex(index=index, columns=columns).ffill(limit=ffill_limit)
+
+
+def report_pb_veto(ev, calendar, a):
+    """PB 否決實驗（事先登記於 docs/research/2026-10-26-exp-invvol-pb.md 第 2 節）。
+
+    先報 PB≥門檻 在突破池內的占比（整體與逐年）與「否決後池子還剩多少」的閘門；
+    主門檻的留下 n ≥ ``PB_GATE_MIN_KEPT`` 且否決 n ≥ ``PB_GATE_MIN_VETOED`` 才跑否決比較，
+    否則只報占比、不做檢定（池子會被掏空，或否決的樣本太少）。PB 缺值的事件不否決。
+    """
+    thr0 = a.pb_veto[0]
+    print(f"\n=== PB 否決（訊號日股價淨值比 ≥ 門檻；主門檻 {thr0:g}）===")
+    has = ev["pb"].notna()
+    print(f"有 PB 的事件 {int(has.sum())} / {len(ev)}（缺 PB 的 {int((~has).sum())} 個不否決）")
+    d = ev.copy()
+    d["pb"] = d["pb"].fillna(-np.inf)              # 缺值一律留下
+    share = (d["pb"] >= thr0)
+    print(f"PB ≥ {thr0:g} 占全部事件 {share.mean() * 100:.1f}%；"
+          f"占有 PB 的事件 {share[has].mean() * 100:.1f}%")
+    q = ev.loc[has, "pb"].quantile([.1, .25, .5, .75, .9])
+    print("有 PB 事件的分位：" + "、".join(f"P{int(k * 100)} {v:.2f}" for k, v in q.items()))
+    yearly = pd.DataFrame({"y": d["date"].dt.year, "veto": share}).groupby("y")["veto"]
+    print("逐年 PB ≥ 門檻 占比：" + "、".join(
+        f"{y} {m * 100:.0f}%（n={c}）" for y, m, c in
+        zip(yearly.mean().index, yearly.mean(), yearly.size())))
+    rho = ev.loc[has, ["pb", "vol20"]].corr(method="spearman").iloc[0, 1]
+    print(f"Spearman(PB, vol20) = {rho:+.3f}（有 PB 的事件層）")
+    n_kept, n_vetoed = int((~share).sum()), int(share.sum())
+    if n_kept < PB_GATE_MIN_KEPT or n_vetoed < PB_GATE_MIN_VETOED:
+        print(f"閘門未過：主門檻留下 {n_kept}（需 ≥ {PB_GATE_MIN_KEPT}）、否決 {n_vetoed}"
+              f"（需 ≥ {PB_GATE_MIN_VETOED}）——不做否決比較")
+        return False
+    print(f"閘門通過：主門檻留下 {n_kept}、否決 {n_vetoed}")
+    report_subset_veto(d, calendar, a, "pb", a.pb_veto,
+                       lambda thr: f"否決 PB ≥ {thr:g}")
+    return True
 
 
 def hit_rate_bootstrap(ev, calendar, threshold=HIT_THRESHOLD, n=1000, block=60, seed=42):
@@ -725,6 +792,10 @@ def main(argv=None):
     p.add_argument("--disposal-cache", default=None, metavar="PATH",
                    help="TWSE 處置公告快取 CSV（scripts/fetch_twse_disposal_history.py 產生）；"
                         "加上後另印處置公告延後進場實驗（只上市）")
+    p.add_argument("--pb", action="store_true",
+                   help="加跑 PB（股價淨值比）否決實驗：先報池內占比與閘門；預設輸出不變")
+    p.add_argument("--pb-veto", type=float, nargs="+", default=[2.0],
+                   help="PB 否決門檻（PB ≥ 此值即否決）；第一個為事先登記的主判準")
     a = p.parse_args(argv)
     if a.position_notional <= 0:
         p.error("--position-notional must be positive")
@@ -778,7 +849,16 @@ def main(argv=None):
     ev_extra = {k: extra[k] for k in ("d5", "vol_r")}
     if a.lhr:
         ev_extra["lhr"] = limit_hit_net(close, a.lhr_window)
+    if a.lhr or a.pb:
         ev_extra["vol20"] = volatility20(close)
+    if a.pb:
+        hist = (pd.Timestamp(a.start) - pd.Timedelta(days=WARMUP_DAYS)).date()
+        with eng.connect() as c:
+            vrows = pd.read_sql(text(
+                "select stock_id, date, pb_ratio from market.valuation "
+                "where date between :s and :e"), c,
+                params={"s": hist, "e": a.end}, parse_dates=["date"])
+        ev_extra["pb"] = pb_panel(vrows, close.index, close.columns)
     raw, ev = to_events(sig, ret, a.horizon, ev_extra, **event_args)
 
     flat_cost = -round_trip_return(
@@ -839,6 +919,8 @@ def main(argv=None):
         report_disposal(ev, load_cache(a.disposal_cache), ret, close.index, a.horizon,
                         n_boot=a.bootstrap, seed=a.bootstrap_seed, tpex_codes=tpex,
                         event_args=event_args)
+    if a.pb:
+        report_pb_veto(ev, np.arange(len(close.index)), a)
 
     print("\n=== 逐年（事件級）===")
     ev["y"] = ev["date"].dt.year

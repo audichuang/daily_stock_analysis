@@ -27,6 +27,7 @@
     uv run --env-file .env python scripts/portfolio_walkforward.py --rank-test 200
     uv run --env-file .env python scripts/portfolio_walkforward.py --skip-limit-gap
     uv run --env-file .env python scripts/portfolio_walkforward.py --walk-forward
+    uv run --env-file .env python scripts/portfolio_walkforward.py --weighting invvol
 """
 
 import argparse
@@ -43,7 +44,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from market_data.adjust import is_common_stock  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
 from measure_signal_forward import (  # noqa: E402
-    apply_thresholds, factors, forward_returns, load, pit_revenue_panel, to_events,
+    HIT_THRESHOLD, apply_thresholds, factors, forward_returns, load, paired_block_bootstrap,
+    pit_revenue_panel, to_events, volatility20,
 )
 
 from tw_trade_costs import (  # noqa: E402
@@ -61,6 +63,9 @@ DEFAULT_CAPITAL = 1_000_000.0
 
 DEAD_DAYS = 20            # 連續無報價超過這麼多交易日才當下市（PIT，不看未來）
 LIMIT_GAP = 0.095         # 開盤跳空達此幅度視為貼近漲停，成交量無法證明可全額成交
+# 反波動加權（`--weighting`，事先登記於 docs/research/2026-10-26-exp-invvol-pb.md 第 1 節）
+WEIGHT_CLIP = (0.5, 2.0)  # 單檔部位相對等權份額的倍數上下限
+WEIGHT_MIN_REF = 20       # 擴張窗參考波動至少要累積幾個訊號格，之前一律等權
 
 
 def rank_candidates(cand, prev, scores, mode, rng):
@@ -94,10 +99,51 @@ def daily_scores(sig, f, yoy):
     return out
 
 
+def invvol_weights(sig, vol, ref="expanding", liquid=None, clip=WEIGHT_CLIP,
+                   min_ref=WEIGHT_MIN_REF):
+    """訊號格的部位倍數 ``{(訊號日, stock_id): w}``，w = clip(參考波動 / 該股 vol20)。
+
+    只用訊號日（含）以前看得到的資料：
+
+    - ``ref="expanding"``：參考波動 = 起始以來**所有訊號格**（含當日）vol20 的中位數。
+      候選池整體波動升高時全部部位一起縮小、降低時一起放大——**這是隱性的擇時**，不是
+      新的選股因子；累積不到 ``min_ref`` 格之前一律 1.0。
+    - ``ref="xs"``：參考波動 = 當日流動池（``liquid``）vol20 的橫斷面中位數，只看「比同日
+      市場貴／便宜多少波動」。突破候選的波動多半高於市場中位，因此平均倍數會 < 1。
+
+    vol20 缺值（新上市不足 20 日）或參考值缺值時給 1.0（等權）。
+    """
+    lo, hi = clip
+    out = {}
+    hist = []
+    for d in sig.index[sig.any(axis=1)]:
+        cols = list(sig.columns[sig.loc[d].to_numpy()])
+        v = vol.loc[d, cols]
+        if ref == "expanding":
+            hist.extend(float(x) for x in v.dropna())
+            r = float(np.median(hist)) if len(hist) >= min_ref else np.nan
+        elif ref == "xs":
+            row = vol.loc[d]
+            if liquid is not None:
+                row = row[liquid.loc[d].fillna(False).astype(bool)]
+            r = float(row.median()) if row.notna().any() else np.nan
+        else:
+            raise ValueError(f"unknown ref {ref!r}")
+        for s_, x in v.items():
+            if pd.isna(x) or x <= 0 or pd.isna(r):
+                out[(d, s_)] = 1.0
+            else:
+                out[(d, s_)] = float(min(hi, max(lo, r / x)))
+    return out
+
+
 def simulate(piv, sig, f, yoy, h, slots, start, end, rank="score", seed=42,
              delisting="last", skip_limit_gap=False, scores=None,
-             capital=DEFAULT_CAPITAL, fee_discount=1.0):
+             capital=DEFAULT_CAPITAL, fee_discount=1.0, weights=None):
     """T+1 開盤買、持有 h 個交易日後收盤賣，同時最多 `slots` 檔、等權。
+
+    ``weights``（``invvol_weights`` 的輸出）給定時，每筆的預算改成「等權份額 × 倍數」，
+    仍受當下現金限制；``None`` 即原本的等權，結果逐位不變。
 
     現金流時序刻意保守：**今天開盤的買進只能用昨天收盤前就有的現金**（今天賣出的錢要到
     明天開盤才能用），否則就是用未實現的賣出款買進。
@@ -121,6 +167,7 @@ def simulate(piv, sig, f, yoy, h, slots, start, end, rank="score", seed=42,
     eq_idx, eq_val, trades, skipped = [], [], [], []
     counts = {"entries": 0, "already_held": 0, "no_open": 0, "limit_gap": 0}
     prev_equity = float(capital)
+    invested = []
     for i in range(max(i0, 1), i1):
         d, prev = dates[i], dates[i - 1]
         # 1) 進場：昨天收盤的訊號，今天開盤價成交
@@ -147,7 +194,8 @@ def simulate(piv, sig, f, yoy, h, slots, start, end, rank="score", seed=42,
                     skipped.append({"date": prev, "stock_id": s,
                                     "reason": "no_slot" if j >= free else "no_cash"})
                     continue
-                alloc = min(cash, prev_equity / slots)
+                w = 1.0 if weights is None else weights.get((prev, s), 1.0)
+                alloc = min(cash, prev_equity / slots * w)
                 px = buy_fill_price(float(open_.at[d, s]))
                 qty = affordable_shares(alloc, px, fee_discount=fee_discount)
                 cost = buy_cash_outflow(qty, px, fee_discount=fee_discount)
@@ -172,12 +220,14 @@ def simulate(piv, sig, f, yoy, h, slots, start, end, rank="score", seed=42,
             trades.append({"stock_id": s, "entry_date": p["entry_date"], "exit_date": d,
                            "entry": p["entry"], "exit": fill, "delisted": dead,
                            "deferred": d != dates[min(p["exit_i"], len(dates) - 1)],
-                           "r": proceeds / p["cost"] - 1})
+                           "cost": p["cost"], "r": proceeds / p["cost"] - 1})
         # 3) 收盤標記
         prev_equity = cash + sum(p["qty"] * float(lastc.at[d, s]) for s, p in pos.items())
         eq_idx.append(d)
         eq_val.append(prev_equity)
+        invested.append(1 - cash / prev_equity if prev_equity > 0 else 0.0)
     counts["closed"] = len(trades)
+    counts["invested_frac"] = float(np.mean(invested)) if invested else 0.0
     counts["open_at_end"] = len(pos)
     if eq_val and pos:
         terminal_day = eq_idx[-1]
@@ -286,6 +336,49 @@ def walk_forward_signals(close, f, yoy, ret, h, start, end, folds, vol_lo, *,
     return out, pd.DataFrame(picks), edges[1]
 
 
+def daily_returns(eq):
+    """權益曲線的逐日報酬；第一天以原始本金 1.0 為前值（與 `metrics()` 同口徑）。"""
+    curve = pd.Series(np.r_[1.0, eq.astype(float).to_numpy()])
+    return pd.Series(curve.pct_change().to_numpy()[1:], index=eq.index)
+
+
+def weighted_trade_stats(tr):
+    """依投入成本加權的成交均值與 P(≥30%)。
+
+    反波動加權不只改每筆的份量，也可能改成交集合：倍數 > 1 的部位先吃掉現金，同日排在
+    後面的候選會因 no_cash 被擠掉。兩臂比較時要一併看成交筆數 ``n``。
+    """
+    if not len(tr):
+        return {"n": 0, "mean": np.nan, "hit": np.nan}
+    w = tr["cost"].astype(float)
+    r = tr["r"].astype(float)
+    return {"n": len(tr), "mean": float((w * r).sum() / w.sum()),
+            "hit": float((w * (r >= HIT_THRESHOLD)).sum() / w.sum())}
+
+
+def compare_weighting(eq_w, tr_w, cn_w, eq_e, tr_e, cn_e, label, block, n_boot, seed):
+    """反波動加權 vs 等權（同訊號、同排序）。逐日報酬差以交易日區塊做 circular bootstrap。"""
+    print(f"\n=== 部位加權比較：{label} − 等權（同訊號、同排序）===")
+    rows = {"等權": {**metrics(eq_e), "平均持股比重": f"{cn_e['invested_frac'] * 100:.1f}%"},
+            label: {**metrics(eq_w), "平均持股比重": f"{cn_w['invested_frac'] * 100:.1f}%"}}
+    print(pd.DataFrame(rows).T.to_string())
+    for name, tr in (("等權", tr_e), (label, tr_w)):
+        st = weighted_trade_stats(tr)
+        print(f"{name}：成交 {st['n']} 筆　成本加權均值 {st['mean'] * 100:+.2f}%　"
+              f"成本加權 P(≥30%) {st['hit'] * 100:.1f}%")
+    diff = (daily_returns(eq_w) - daily_returns(eq_e)).dropna()
+    print(f"逐日報酬差均值 {diff.mean() * 1e4:+.2f}bp／日（年化約 "
+          f"{diff.mean() * TRADING_DAYS * 100:+.2f}pp）")
+    ci = paired_block_bootstrap(pd.DataFrame({"date": np.arange(len(diff)), "diff": diff.to_numpy()}),
+                                np.arange(len(diff)), n=n_boot, block=block, seed=seed)
+    if ci is None:
+        print("逐日報酬差的區塊 bootstrap：inconclusive（資料不足）")
+    else:
+        print(f"逐日報酬差 95% 區間（block={block}、{n_boot} 次、seed={seed}）: "
+              f"{ci[0] * 1e4:+.2f}bp ~ {ci[1] * 1e4:+.2f}bp／日")
+    return diff, ci
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="訊號的組合層驗證（資金競爭 + 走前驗證）")
     p.add_argument("--start", default="2020-01-01")
@@ -324,6 +417,12 @@ def main(argv=None):
     p.add_argument("--folds", type=int, default=5)
     p.add_argument("--include-otc-revenue", action="store_true",
                    help="月營收放入上櫃（預設只用上市口徑，與 screen_tw 預設相同；放入後是另一個池子，數字不可與既有基準比較）")
+    p.add_argument("--weighting", default="equal", choices=["equal", "invvol", "invvol-xs"],
+                   help="部位加權：equal＝等權（預設）；invvol＝以訊號格擴張窗中位 vol20 為參考的"
+                        "反波動倍數（含隱性擇時）；invvol-xs＝以當日流動池中位 vol20 為參考。"
+                        "非等權時另跑一次等權並印比較")
+    p.add_argument("--bootstrap", type=int, default=2000,
+                   help="加權比較的逐日報酬差區塊 bootstrap 次數（block = 持有期）")
     a = p.parse_args(argv)
 
     if a.capital <= 0:
@@ -363,16 +462,21 @@ def main(argv=None):
         sig.loc[:pd.Timestamp(a.start)] = False
 
     scores = daily_scores(sig, f, yoy)
+    weights = None
+    if a.weighting != "equal":
+        weights = invvol_weights(sig, volatility20(close),
+                                 ref="expanding" if a.weighting == "invvol" else "xs",
+                                 liquid=f["liquid"])
     run = dict(rank=a.rank, seed=a.seed, delisting=a.delisting,
                skip_limit_gap=a.skip_limit_gap, scores=scores,
-               capital=a.capital, fee_discount=a.fee_discount)
+               capital=a.capital, fee_discount=a.fee_discount, weights=weights)
     eq, tr, sk, cn = simulate(piv, sig, f, yoy, a.horizon, a.slots, start, a.end, **run)
     n_sig = int(sig.loc[eq.index[0]:eq.index[-1]].sum().sum())
     flat_cost = -round_trip_return(1.0, 1.0, entry_notional=a.capital / a.slots,
                                    fee_discount=a.fee_discount)
     print(f"樣本 {eq.index[0].date()} ~ {eq.index[-1].date()}　池 {len(keep)} 檔"
           f"{'（含創新板）' if a.include_tib else '（排除創新板）'}　"
-          f"持有 {a.horizon} 交易日　空位 {a.slots}　排序={a.rank}　"
+          f"持有 {a.horizon} 交易日　空位 {a.slots}　排序={a.rank}　加權={a.weighting}　"
           f"本金 {a.capital:,.0f} 元　平盤來回成本約 {flat_cost * 100:.3f}%")
     print(f"名目訊號 {n_sig:,} 筆 → 進場 {cn['entries']} 次（已平倉 {cn['closed']}、"
           f"期末仍持有 {cn['open_at_end']}）；訊號落在已持股 {cn['already_held']} 筆、"
@@ -390,7 +494,8 @@ def main(argv=None):
                                     rank="random", seed=a.seed + k,
                                     delisting=a.delisting,
                                     skip_limit_gap=a.skip_limit_gap, scores=scores,
-                                    capital=a.capital, fee_discount=a.fee_discount)
+                                    capital=a.capital, fee_discount=a.fee_discount,
+                                    weights=weights)
             rs.append(float(e2.iloc[-1]))
         rs = np.array(rs)
         pct = float((rs < base).mean() * 100)
@@ -408,7 +513,8 @@ def main(argv=None):
                                     rank=a.rank, seed=a.seed + k,
                                     delisting=a.delisting,
                                     skip_limit_gap=a.skip_limit_gap, scores=scores,
-                                    capital=a.capital, fee_discount=a.fee_discount)
+                                    capital=a.capital, fee_discount=a.fee_discount,
+                                    weights=weights)
             rs.append({"seed": a.seed + k, **metrics(e2),
                        "成交": len(t2), "均值": f"{t2['r'].mean() * 100:+.2f}%"})
         print(f"\n=== {a.rank} 排序的 {a.seeds} 個 seed ===")
@@ -420,6 +526,12 @@ def main(argv=None):
     if b is not None:
         rows["0050 買進持有"] = metrics(b)
     print("\n" + pd.DataFrame(rows).T.to_string())
+
+    if weights is not None:
+        eq_e, tr_e, _, cn_e = simulate(piv, sig, f, yoy, a.horizon, a.slots, start, a.end,
+                                       **{**run, "weights": None})
+        compare_weighting(eq, tr, cn, eq_e, tr_e, cn_e, a.weighting, a.horizon,
+                          a.bootstrap, a.seed)
 
     if len(tr):
         print(f"\n成交筆數 {len(tr)}　均值 {tr['r'].mean() * 100:+.2f}%　"
