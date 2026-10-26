@@ -399,7 +399,8 @@ def backfill_index(engine, start, end, resume=True, delay=_INDEX_MONTH_DELAY_SEC
     - 只寫 ``start..end``(``end`` 截到今天)閉區間;只有當月允許 FMTQIK 退到 openapi。
     - 兩個來源只缺一個:照寫拿到的(coalesce 保留舊值),列進 ``partial``;都缺:列進 ``failed``,
       連續 ``_INDEX_MAX_FAILED_STREAK`` 個月都缺就 raise,重跑同指令會 resume。
-    - 拿到的日期少於 price 交易日:列進 ``short`` 並印 ``**WARN``——這是對交易日數的稽核。
+    - 任一來源拿到的日期少於 price 交易日(已六欄齊全者除外):列進 ``short`` 並印 ``**WARN``
+      ——這是**逐來源**對交易日數的稽核,不是對兩表聯集。
     回傳 ``{"written", "months", "skipped", "failed", "partial", "short"}``。"""
     import datetime as _dt
     import time as _time
@@ -459,10 +460,16 @@ def backfill_index(engine, start, end, resume=True, delay=_INDEX_MONTH_DELAY_SEC
         stats["written"] += n
         stats["months"] += 1
         print(f"index {label} {n:,} rows (price days {len(expected)})", flush=True)
-        short = sorted(expected - set(got))
+        # 每個來源各自對 price 交易日稽核:用兩表聯集的話,一表被截短(當月 MI_5MINS_HIST 常晚
+        # FMTQIK 一天)的日子只寫了一半欄位,卻不算缺、CLI exit 0。已六欄齊全的日期不重寫也不算缺。
+        todo = expected - complete
+        missing = {name: sorted(todo - {etl._roc_yyyymmdd(r["Date"]) for r in (rows_ or ())})
+                   for name, rows_ in (("MI_5MINS_HIST", ohlc), ("FMTQIK", fmtqik))}
+        short = sorted(set().union(*missing.values()))
         if short:
             stats["short"][label] = [d.isoformat() for d in short]
-            print(f"**WARN index {label} 缺 price 有的交易日 {stats['short'][label]}", flush=True)
+            detail = "  ".join(f"{name} 缺 {[d.isoformat() for d in ds]}" for name, ds in missing.items() if ds)
+            print(f"**WARN index {label} 缺 price 有的交易日 {stats['short'][label]}({detail})", flush=True)
         month = nxt
     return stats
 

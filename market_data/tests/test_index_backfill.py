@@ -272,10 +272,41 @@ def test_backfill_keeps_dates_only_one_source_has(net, monkeypatch):
     monkeypatch.setattr(sources, "fetch_index_ohlc", lambda asof: _ohlc_rows([date(2010, 1, 4)]))
     res = crawl.backfill_index(Engine(cal={date(2010, 1, 4), date(2010, 1, 5)}),
                                date(2010, 1, 1), date(2010, 1, 31), delay=0)
-    assert not res["short"]
+    assert res["short"] == {"2010-01": ["2010-01-05"]}            # 照寫,但 OHLC 缺這天 → 仍算缺日
     only_fmtqik = [r for r in net["written"] if r["date"].date() == date(2010, 1, 5)]
     assert len(only_fmtqik) == 1 and float(only_fmtqik[0]["close"]) == 8000
     assert only_fmtqik[0]["open"] is None and float(only_fmtqik[0]["change"]) == 1.5
+
+
+@pytest.mark.parametrize("truncated", ["fetch_index_ohlc", "fetch_index"])
+def test_backfill_flags_dates_missing_from_either_nonempty_source(net, monkeypatch, capsys, truncated):
+    """月表被截短(當月 MI_5MINS_HIST 比 FMTQIK 晚一天、或任一表少列)但不是整個空:
+    以兩來源聯集稽核會把只寫了一半欄位的日子當成補齊、exit 0。每個來源要各自對 price 交易日。"""
+    net["days"] = {date(2010, 1, 4), date(2010, 1, 5)}
+    if truncated == "fetch_index_ohlc":
+        monkeypatch.setattr(sources, "fetch_index_ohlc", lambda asof: _ohlc_rows([date(2010, 1, 4)]))
+    else:
+        monkeypatch.setattr(sources, "fetch_index",
+                            lambda asof=None, fallback=True: _fmtqik_rows([date(2010, 1, 4)]))
+    res = crawl.backfill_index(Engine(cal={date(2010, 1, 4), date(2010, 1, 5)}),
+                               date(2010, 1, 1), date(2010, 1, 31), delay=0)
+    assert res["short"] == {"2010-01": ["2010-01-05"]} and not res["partial"]
+    assert res["written"] == 2                                     # 拿到的欄位照寫,只是稽核不放行
+    name = "MI_5MINS_HIST" if truncated == "fetch_index_ohlc" else "FMTQIK"
+    assert f"{name} 缺 ['2010-01-05']" in capsys.readouterr().out
+
+
+def test_backfill_short_audit_ignores_complete_dates_and_full_months(net, monkeypatch):
+    """反向:兩來源都齊的月份不算缺日;已六欄齊全(resume 不重寫)的日期即使這次來源沒給也不算缺。"""
+    cal = {date(2010, 1, 4), date(2010, 1, 5)}
+    net["days"] = set(cal)
+    res = crawl.backfill_index(Engine(cal=cal), date(2010, 1, 1), date(2010, 1, 31), delay=0)
+    assert not res["short"] and not res["partial"] and res["written"] == 2
+
+    monkeypatch.setattr(sources, "fetch_index_ohlc", lambda asof: _ohlc_rows([date(2010, 1, 5)]))
+    res = crawl.backfill_index(Engine(existing={date(2010, 1, 4)}, cal=cal),
+                               date(2010, 1, 1), date(2010, 1, 31), delay=0)
+    assert not res["short"]
 
 
 def test_backfill_months_asof_fallback_bounds_and_pauses(net, capsys):
