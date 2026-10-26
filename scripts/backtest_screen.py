@@ -30,7 +30,7 @@ from sqlalchemy import text
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from market_data.adjust import load_factors  # noqa: E402
+from market_data.adjust import is_common_stock, load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
 from market_data.revenue_deadline import apply_revenue_deadline  # noqa: E402
 from screen_tw import exclude_otc_revenue  # noqa: E402
@@ -677,7 +677,9 @@ def main(argv=None):
     first = min(starts) if starts else a.start
     days = [d for d in close.index if pd.Timestamp(first) <= d <= pd.Timestamp(a.end)]
     years = len(days) / TRADING_DAYS
-    etf_mask = {s: s.startswith("00") for s in close.columns}
+    # 只擋選股、不動 close（0050 還要當基準）。與 live `screen_tw.funnel` 同一個宇宙：非普通股
+    # （ETF、TDR、特別股）一律不進候選。
+    etf_mask = {s: not is_common_stock(s) for s in close.columns}
 
     print(f"回測 {days[0]:%Y-%m-%d} ~ {days[-1]:%Y-%m-%d}（{len(days)} 個交易日 / {years:.1f} 年）"
           f"　池 {close.shape[1]} 檔　top{a.top}／{a.slots} 槽")

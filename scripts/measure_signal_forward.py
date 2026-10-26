@@ -39,7 +39,7 @@ from sqlalchemy import text
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from market_data.adjust import load_factors  # noqa: E402
+from market_data.adjust import is_common_stock, load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
 from market_data.revenue_deadline import apply_revenue_deadline  # noqa: E402
 from screen_tw import exclude_otc_revenue  # noqa: E402
@@ -315,10 +315,9 @@ def main(argv=None):
     eng = get_engine()
     piv, rv, info = load(eng, a.start, a.end, a.include_otc_revenue)
     close = piv["close"]
-    # 池：四位數普通股（排除 ETF 00xx、TDR 91xx）。**創新板不在這裡排除**——用今天的名稱
+    # 池：四位數普通股（排除 ETF 00xx、TDR 91xx；與 live `screen_tw.funnel` 共用 `is_common_stock`）。**創新板不在這裡排除**——用今天的名稱
     # 後綴判定歷史宇宙是前視；它的影響改用敏感度分析看（下方 `--include-tib` 對照）。
-    keep = [s for s in close.columns
-            if len(s) == 4 and s.isdigit() and not s.startswith(("00", "91"))]
+    keep = [s for s in close.columns if is_common_stock(s)]
     piv = {k: v[keep] for k, v in piv.items()}
     close = piv["close"]
 

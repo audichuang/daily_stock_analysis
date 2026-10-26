@@ -29,6 +29,43 @@ from measure_signal_forward import (  # noqa: E402
 from tw_trade_costs import round_trip_return  # noqa: E402
 
 
+def test_measurement_filters_every_panel_with_the_shared_universe(monkeypatch):
+    import measure_signal_forward as msf
+    from market_data.adjust import is_common_stock
+
+    codes = ["2330", "6488", "5305", "9802", "9904", "9921", "9105", "912000",
+             "00878", "0050", "00631L", "2887A", "70001"]
+    days = pd.bdate_range("2026-01-01", periods=3)
+    panel = pd.DataFrame(100.0, index=days, columns=codes)
+    piv = {k: panel.copy() for k in ("open", "high", "close", "volume", "turnover")}
+    monkeypatch.setattr(msf, "get_engine", lambda: object())
+    monkeypatch.setattr(msf, "load", lambda *a: (piv, pd.DataFrame(), pd.DataFrame()))
+    seen = []
+    captured = {}
+
+    def checked(sid):
+        seen.append(sid)
+        return is_common_stock(sid)
+
+    class PanelsCaptured(Exception):
+        pass
+
+    def capture(filtered, yoy, *args):
+        captured.update(filtered)
+        captured["yoy"] = yoy
+        raise PanelsCaptured
+
+    monkeypatch.setattr(msf, "is_common_stock", checked)
+    monkeypatch.setattr(msf, "build_signals", capture)
+    with pytest.raises(PanelsCaptured):
+        msf.main([])
+
+    assert seen == codes
+    assert set(captured) == {*piv, "yoy"}
+    for value in captured.values():
+        assert value.columns.tolist() == ["2330", "6488", "5305", "9802", "9904", "9921"]
+
+
 def _piv(n_days=20, price=100.0):
     days = pd.bdate_range("2026-01-01", periods=n_days)
     cols = pd.Index(["1111", "2222"])
