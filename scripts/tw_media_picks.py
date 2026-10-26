@@ -363,15 +363,16 @@ def snapshot(code: str, as_of: date, engine) -> dict | None:
     from src.services import tw_stock_dossier as dossier
 
     sid = code.split(".")[0]
-    px = market_repo.price_history(sid, start=as_of - timedelta(days=150), end=as_of, engine=engine)
+    # 用真正的首個交易日對齊因子，避免窗口前的事件被 snap 到同一天、誤去重。
+    px = market_repo.price_history(sid, start=None, end=as_of, engine=engine)
     # Drop NULL closes before adjusting: a NaN would journal as NaN (breaks every later json.loads),
     # and adjusting first would anchor the multipliers on the dropped day.
     px = px[pd.to_numeric(px["close"], errors="coerce").notna()].copy()
     if px.empty:
         return None
     px["date"] = pd.to_datetime(px["date"])
-    close = pd.to_numeric(px["close"], errors="coerce") * \
-        market_repo.front_adjust_multipliers(sid, px["date"], engine=engine).to_numpy()
+    mult = market_repo.front_adjust_multipliers(sid, px["date"], engine=engine).to_numpy()
+    close = pd.to_numeric(px["close"], errors="coerce") * mult
     last = float(close.iloc[-1])
 
     def pct(a, b):
@@ -382,7 +383,8 @@ def snapshot(code: str, as_of: date, engine) -> dict | None:
     out = {"as_of": str(d), "close": round(last, 2),
            "vs_ma20_pct": pct(last, ma[20]), "vs_ma60_pct": pct(last, ma[60]),
            "from_60d_high_pct": pct(last, close.tail(60).max()),
-           "ret_5d_pct": pct(last, close.iloc[-6]) if len(close) > 5 else None}
+           "ret_5d_pct": pct(last, close.iloc[-6]) if len(close) > 5 else None,
+           "cum_adj_factor": float(mult[0])}
     # 快照寫進 append-only 的 journal（媒體點名與 PTT 共用），偷看到截止日後才公告的營收就永久留在紀錄裡，
     # 所以不論截止日是否等於全市場最新場次，一律依法定公告期限判斷可見（保險類 15 日、遇休市順延）。
     # 不能改用 is_historical_replay：週五截止的集數週末才處理時最新場次仍是週五，會被當成 live，

@@ -2,6 +2,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import tw_ptt_picks as tp  # noqa: E402
@@ -54,7 +56,7 @@ def test_stance_of_needs_one_side_only():
 
 def test_resolve_target_uses_typed_code_and_keeps_market_out_of_fuzzy():
     assert tp.resolve_target("宏碁資訊-6811", INDEX) == ("6811.TWO", "exact")
-    assert tp.resolve_target("2316.TW 楠梓電", INDEX) == ("2316.TW", "code")
+    assert tp.resolve_target("2316.TW 楠梓電", INDEX) == ("2316.TW", "exact")  # 後綴跟代號一起拿掉，名稱乾淨
     assert tp.resolve_target("楠梓電", INDEX) == ("2316.TW", "exact")
     assert tp.resolve_target("台灣大盤", INDEX) == (None, "market")
     assert tp.resolve_target("0052 富邦科技 台股", INDEX) == ("0052.TW", "code")  # a typed code beats the market words
@@ -184,3 +186,55 @@ def test_a_404_on_the_first_search_page_is_an_error_not_an_empty_run(monkeypatch
     monkeypatch.setattr(tp, "_get", get404)
     with pytest.raises(requests.HTTPError):
         tp.new_articles(date(2026, 10, 20), set())
+
+
+def test_code_with_tw_suffix_and_no_name_resolves():
+    # 只寫「2330.TW」：後綴要跟代號一起拿掉，留下的「.TW」不能被當成名稱（會判成 unresolved、永久寫進 journal）
+    index = INDEX + [("00631L.TW", "元大台灣50正2", [])]
+    assert tp.split_target("2330.TW") == ("", "2330")
+    assert tp.resolve_target("2330.TW", index) == ("2330.TW", "code")
+    assert tp.resolve_target("00631L.TW", index) == ("00631L.TW", "code")
+    assert tp.resolve_target("6811.TWO", index) == ("6811.TWO", "code")  # TWO 不能只吃到 TW
+    assert tp.resolve_target("2330.tw", index) == ("2330.TW", "code")
+    assert tp.split_target("台積電 2330.TW") == ("台積電", "2330")
+
+
+def test_only_tw_suffixes_are_stripped():
+    # 反向：別的市場後綴、黏著字母的不是台股後綴，照舊留在名稱裡、判不到
+    assert tp.split_target("7203.T 豐田") == (".T 豐田", "7203")
+    assert tp.resolve_target("7203.T", INDEX) == (None, "unresolved")
+    assert tp.split_target("6811.TWOX")[0] == ".TWOX"
+    assert tp.resolve_target("MU.US美光", INDEX) == (None, "unresolved")
+
+
+@pytest.mark.parametrize("code,name", [
+    ("2330.TW", "台積電"), ("00631L.TW", "元大台灣50正2"), ("6811.TWO", "宏碁資訊"),
+    ("2887A.TW", "台新金甲特"), ("123456.TWO", "測試公司"),
+])
+def test_suffixed_target_resolves_without_a_name_and_keeps_snapshot(monkeypatch, code, name):
+    index = [(code, name, [])]
+    assert tp.split_target(code) == ("", code.split(".")[0])
+    assert tp.resolve_target(code, index) == (code, "code")
+    assert tp.split_target(f"{name} ({code})") == (name, code.split(".")[0])
+    assert tp.split_target(f"{code} {name}") == (name, code.split(".")[0])
+    seen = []
+    snapshot = {"close": 100, "as_of": "2026-10-20"}
+    monkeypatch.setattr(tp.mp, "snapshot", lambda c, d, e: seen.append((c, d, e)) or snapshot)
+    engine = object()
+    art = {"article_id": NEW2, "title": f"[標的] {code}", "posted": tp.post_time(NEW2),
+           "cutoff": date(2026, 10, 20), "url": "u"}
+    row = tp.build_row(art, page(f"標的：{code}\n分類：多\n"), index, engine, "t")
+    assert row["stock_code"] == code and row["data"] == snapshot
+    assert seen == [(code, art["cutoff"], engine)]
+
+
+def test_new_articles_deduplicates_ids_but_keeps_distinct_posts_and_done_unchanged(monkeypatch):
+    pages = {1: _search((NEW2, "[標的] 2330"), (NEW2, "[標的] 2330")),
+             2: _search((NEW2, "[標的] 2330"), (NEW1, "[標的] 2330")),
+             3: _search((OLD, "[標的] 舊文"))}
+    monkeypatch.setattr(tp, "_get", lambda url: pages[int(url.split("page=")[1].split("&")[0])])
+    monkeypatch.setattr(tp.time, "sleep", lambda _: None)
+    done = {"M.1.A.AAA"}
+    assert [a["article_id"] for a in tp.new_articles(date(2026, 10, 20), done)] == [NEW1, NEW2]
+    assert done == {"M.1.A.AAA"}
+    assert [a["article_id"] for a in tp.new_articles(date(2026, 10, 20), {NEW2})] == [NEW1]

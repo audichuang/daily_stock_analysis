@@ -15,6 +15,14 @@
 
 這些排程共用同一個主 checkout，手動作業別把它的 working tree 留在別的分支或髒狀態。
 
+23:00 主 agent 選檔時，除了本輪索引，也要讀 `unjudged`（索引的「先前點名但沒有 verdict」區塊）。它列出 `[本輪 since − max_days, 本輪 since)`（預設 7 天）內擷取、且 `media-picks-verdicts.jsonl` 尚無該代號 `research`／`watch`／`avoid` 列的媒體／PTT 證據；已套用代號覆核。清單按代號排列、不截斷；曾有任何 verdict 的代號不列入，腳本不判斷 verdict 是否過期，也不推定缺判原因。`mentions` 附來源 ID、`extracted_at`，`round_since` 是既有 log 中不晚於擷取時刻的最近輪次標記（缺 log 為 `null`）。`judge_error_logged=false` 只表示沒有找到該窗口內的結構化錯誤事件，不代表成功。`--json` 提供完整清單，`--index` 每檔壓成點名筆數、最早 round since、extracted_at 範圍與錯誤筆數的一行，`--code` 連同本輪原話提供缺判舊證據；逐檔判讀也會附這些舊講者的過去紀錄。`--judge-since` 語義維持原狀，無逐檔 watermark、重試上限或新狀態檔。
+
+23:00 排程指引（Orca automation prompt 在 repo 外，以下是應加入該 prompt 的原文）：
+
+> 讀完本輪索引後，也讀「先前點名但沒有 verdict」區塊（JSON 的 `unjudged`），檢查來源、round since、extracted_at 與已有錯誤紀錄；沒有錯誤紀錄不代表成功。你依原話、資料時點、持股關聯與今晚其他候選的證據，決定哪些缺判代號值得納入今晚的 `media_picks_judge.py` 呼叫；不要把整張清單當作必須補判的待辦，也不要用文字正則決定建議。先用 `--code` 讀舊證據，新舊候選合計仍遵守 `MAX_CODES`（目前 8 檔），research 最多 3 檔。逐檔 agent 必須回傳既有 JSON verdict，只有 `ok:true` 且格式正確的結果才追加 verdict journal，`since` 仍記本輪 `RESULT since=`。呼叫 judge 時將 stderr 以 `2>>` 追加到本輪確切的 `logs/media_picks_job_<id>.log`，保留結構化錯誤事件；`ok:false` 或中斷不代表任何投資判斷，是否再判由你決定。
+
+`media_picks_judge.py` 只在 stderr 印 `{"event":"media_picks_judge_error","since":...,"code":...,"ok":false,"error":...}`，不自行寫檔；摘要只讀既有 `media_picks_job_*.log` 的這類 JSON 單行事件與 `RESULT since=` 標記，不解析自由文字的錯誤描述。既有未保存的 stdout／錯誤無法回溯，agent 被收掉而沒留下事件時仍可從 journal 的缺判證據看到代號。
+
 長時間的工作一律放進脫離 session 的腳本（`daily_report.sh --detach`、`media_picks_job.sh --detach`），agent 只負責啟動、等結果、判讀與回報：Orca 一判定 agent 結束就收掉 terminal，連前景與 `run_in_background` 的子行程一起砍。2026-10-23 23:01 實測：Hindsight 的 SessionStart hook 在 repo 累積約 20 個新 commit 時另起一個 `claude -p` 做 repo 結構調查，它繼承了 `ORCA_*` 環境變數，結束時觸發 Orca 的 Stop hook，排程的 terminal 被收掉、`make media-picks` 被 SIGTERM，Orca 的執行紀錄還記成那份調查的輸出。這個 repo 一天幾十個 commit，每個 Orca 排程都可能碰上，Hindsight 那端修好之前，排程 prompt 要假設 agent 隨時會被中途收掉。
 
 ## 颱風假等臨時休市

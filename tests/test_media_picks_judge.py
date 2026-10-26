@@ -201,3 +201,37 @@ def test_run_appends_records_once_and_survives_load_failure(tmp_path, monkeypatc
 def test_brief_mentions_records_and_small_sample_rule():
     assert "三、講者過去紀錄" in judge.BRIEF and "n<20" in judge.BRIEF
     assert judge.RECORDS_TIMEOUT <= judge.DOSSIER_TIMEOUT
+
+
+def test_run_emits_only_failed_codes_as_structured_stderr_events(monkeypatch, capsys):
+    def outcome(code, *a):
+        return ({"code": code, "ok": False, "error": "timeout", "raw": "未納入錯誤事件的原始回應"}
+                if code == "2330.TW" else {"code": code, "ok": True, "result": _verdict(code)})
+
+    monkeypatch.setattr(judge, "judge_one", outcome)
+    out = judge.run(SINCE, ["2330.TW", "6811.TWO"], dossier_fn=lambda *a: "", summary_mod=_Summary)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert [json.loads(line) for line in captured.err.splitlines()] == [
+        {"event": "media_picks_judge_error", "since": SINCE.isoformat(), "code": "2330.TW",
+         "ok": False, "error": "timeout"}]
+    assert out[0]["ok"] is False and out[1]["ok"] is True
+
+
+def test_run_passes_real_unjudged_evidence_and_speaker_records_to_agent(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    summary = judge._load_summary()
+    at = "2026-10-25T23:30:00+08:00"
+    media = {"stock_code": "00631L.TW", "name": "元大台灣50正2", "extracted_at": at,
+             "video_id": "v", "speaker": "甲", "show": "節目", "reason": "補判原話"}
+    (tmp_path / "media-picks.jsonl").write_text(json.dumps(media) + "\n", encoding="utf-8")
+    mod = SimpleNamespace(summarize=lambda since: summary.summarize(since, journal_dir=tmp_path, logs_dir=tmp_path),
+                          stock_detail=summary.stock_detail)
+    monkeypatch.setenv("MEDIA_PICKS_CLAUDE_BIN", str(_fake_claude(tmp_path, json.dumps(_verdict("{code}")))))
+    out = judge.run(SINCE, ["00631L.TW"], dossier_fn=lambda *a: "本輪資料包", summary_mod=mod,
+                    records_fn=lambda: _REC)
+    assert out[0]["ok"] is True
+    prompt = (tmp_path / "prompt-00631L.TW").read_text()
+    assert "補判原話" in prompt and "本輪資料包" in prompt and "- 甲：" in prompt
+    assert "先前點名但沒有 verdict" in prompt

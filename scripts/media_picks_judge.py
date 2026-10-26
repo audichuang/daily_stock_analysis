@@ -10,6 +10,7 @@
 環境變數（子程序結束時若觸發 Orca 的 Stop hook，會把排程的 terminal 收掉，見 ``docs/daily-report-ops.md``）。
 
 挑哪幾檔、檢查回來的 JSON、research 上限、寫 journal 仍由主 agent 做；本腳本只負責「備證據＋問＋收」，不寫任何檔。
+逐檔失敗另在 stderr 印結構化事件；主 agent 可將 stderr 追加到該輪既有 log，讓摘要取得錯誤證據。
 輸出（stdout）是 JSON 陣列，順序同輸入代號：``{"code", "ok", "result"}`` 或 ``{"code", "ok": false, "error", "raw"}``。
 
     uv run --no-project python scripts/media_picks_judge.py --since 2026-10-26T23:00:12+0800 3037.TW 2330.TW
@@ -165,7 +166,10 @@ def run(since: datetime, codes: list, jobs: int = MAX_CODES, model=None, timeout
 
     def voices(code):
         st = next((x for x in s.get("stocks", []) if x.get("code") == code), None)
-        return [(v.get("speaker") or "").strip() or f"[{v.get('show')}]" for v in (st or {}).get("voices", [])]
+        pending = next((x for x in s.get("unjudged", []) if x.get("code") == code), None)
+        prior = (pending or {}).get("stock") or {}
+        return [(v.get("speaker") or "").strip() or f"[{v.get('show')}]"
+                for v in (st or {}).get("voices", []) + prior.get("voices", [])]
 
     def fetch_records():
         try:
@@ -179,7 +183,12 @@ def run(since: datetime, codes: list, jobs: int = MAX_CODES, model=None, timeout
         def one(code):
             dossier_text = dossier_fn(code, DOSSIER_TIMEOUT)
             media_text = mod.stock_detail(s, code) + records_section(records.result(), voices(code))
-            return judge_one(code, media_text, dossier_text, model, timeout)
+            result = judge_one(code, media_text, dossier_text, model, timeout)
+            if result.get("ok") is False:
+                sys.stderr.write(json.dumps({"event": "media_picks_judge_error", "since": since.isoformat(),
+                                             "code": code, "ok": False, "error": result["error"]},
+                                            ensure_ascii=False) + "\n")
+            return result
 
         return list(ex.map(one, codes))
 
