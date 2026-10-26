@@ -356,7 +356,7 @@ def new_episodes(since: date, done: set[str]) -> list[dict]:
 # ---------- local data ----------
 
 def snapshot(code: str, as_of: date, engine) -> dict | None:
-    """媒體／PTT journal 的固定基準日快照；營收一律依 PIT 可見日過濾。"""
+    """Data as of `as_of` (the episode's data cutoff: the air date, or the day before for 盤前 shows)."""
     import pandas as pd
 
     from market_data import market_repo
@@ -383,7 +383,10 @@ def snapshot(code: str, as_of: date, engine) -> dict | None:
            "vs_ma20_pct": pct(last, ma[20]), "vs_ma60_pct": pct(last, ma[60]),
            "from_60d_high_pct": pct(last, close.tail(60).max()),
            "ret_5d_pct": pct(last, close.iloc[-6]) if len(close) > 5 else None}
-    # journal 固定回放；週末最新行情仍等於 cutoff 時，也要排除有效公告日尚未到的營收。
+    # 快照寫進 append-only 的 journal（媒體點名與 PTT 共用），偷看到截止日後才公告的營收就永久留在紀錄裡，
+    # 所以不論截止日是否等於全市場最新場次，一律依法定公告期限判斷可見（保險類 15 日、遇休市順延）。
+    # 不能改用 is_historical_replay：週五截止的集數週末才處理時最新場次仍是週五，會被當成 live，
+    # 而 DB 佔位公告日（次月 10 日）擋不住保險類 11~15 日、截止日之後才申報的營收。
     fund = dossier.fundamentals(engine, sid, d, pit=True)
     out["revenue_yoy_3m"] = [m["yoy_pct"] for m in fund["monthly_revenue"][-3:]]
     inst = (dossier.chips(engine, sid, d, [], branch=False) or {}).get("institutional") or {}

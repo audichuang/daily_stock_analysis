@@ -96,10 +96,8 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   | `stock_code` / `resolve` / `code_llm` | 對到的代號、怎麼對到的、NotebookLM 原本給的代號。順序：逐字稿念的是數字（ETF 常這樣）就用那個代號（`code`）；否則先用還原後的股名比對（`exact`／`alias`），比對不到才用 NotebookLM 給的代號（名稱吻合 `code`，不吻合 `code_mismatch`，要人工確認）；最後才是字面相近（`fuzzy`，要人工確認）或 `unresolved`（留 `null`）。實測 NotebookLM 的股名比它猜的代號可靠（宜鼎被給成宜特的代號）。整集沒有點名時寫一行 `no_picks`，避免重抓 |
   | `stance` | `bullish`／`bearish`／`avoid`／`neutral`；同一檔不同來賓看法不同時分兩行 |
   | `speaker` / `reason` / `theme` / `condition` / `quote` | 誰說的、理由、題材、節目給的價位或進出場條件（原話）、關鍵原話 |
-  | `data` | 播出當時已知的最近一個收盤（`as_of` 是實際的交易日；播出日 17:00 後才上傳的用播出日；標題含「盤前」、或播出日 17:00 前就上傳的〔盤中連線〕用前一天以前的，因為當天的個股法人買賣超下午才公布；2026-10-23 晚上以前寫入的列只看標題的「盤前」，下午上傳的集數可能含當天法人）：`close`、`vs_ma20_pct`／`vs_ma60_pct`（前復權）、`from_60d_high_pct`、`ret_5d_pct`、`revenue_yoy_3m`（已公告的最近三個月）、`foreign_5d_lots`／`trust_5d_lots`（上市、上櫃都有；窗口內法人資料有缺日時才是 `null`）。無行情時整欄 `null` |
+  | `data` | 播出當時已知的最近一個收盤（`as_of` 是實際的交易日；播出日 17:00 後才上傳的用播出日；標題含「盤前」、或播出日 17:00 前就上傳的〔盤中連線〕用前一天以前的，因為當天的個股法人買賣超下午才公布；2026-10-23 晚上以前寫入的列只看標題的「盤前」，下午上傳的集數可能含當天法人）：`close`、`vs_ma20_pct`／`vs_ma60_pct`（前復權）、`from_60d_high_pct`、`ret_5d_pct`、`revenue_yoy_3m`（截止日依法定公告期限已看得到的最近三個月，保險類 15 日、遇休市順延）、`foreign_5d_lots`／`trust_5d_lots`（上市、上櫃都有；窗口內法人資料有缺日時才是 `null`）。無行情時整欄 `null` |
   | `extracted_at` / `notebook_id` | 擷取時點、NotebookLM notebook（一天一本，30 天後刪；逐字稿另存 `data/media_picks/`，gitignore） |
-
-  媒體與 PTT 的 `data` 共用 `tw_media_picks.snapshot`：月營收固定以 `pit=True` 套用法定公告期限（保險類 15 日、休市順延），即使資料 cutoff 等於或晚於全市場最新行情日也照樣過濾，避免週末／連假補抓時把事後入庫的月份寫進 append-only journal。到達有效公告日的月份照常納入；Web／個股報告的 live 查詢仍保留 DB 中已公告的月份。這是日期粒度的保守期限代理，DB 沒有實際公告時刻，不能保證辨別同日 17:00 之後才公告的營收；既有 journal 不回寫。
 
 - `media-picks-review.jsonl` — **媒體點名的代號覆核**，一筆覆核一行，由 23:00 排程的 Claude 讀
   `scripts/media_picks_summary.py` 的 `review` 清單後追加（`media-picks.jsonl` 原行不改）。對象是 `resolve` 為

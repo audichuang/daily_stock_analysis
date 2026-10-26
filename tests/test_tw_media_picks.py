@@ -190,14 +190,14 @@ def test_snapshot_skips_null_close_before_adjusting(monkeypatch):
     json.dumps(out, allow_nan=False)
 
 
-@pytest.mark.parametrize("as_of, latest, pit", [
-    ("2026-04-13", "2026-04-14", True),
-    ("2026-04-13", "2026-04-13", True),
-    ("2026-04-14", "2026-04-13", True),
-    ("2026-04-14", "2026-04-14", True),
+@pytest.mark.parametrize("as_of, latest", [
+    ("2026-04-13", "2026-04-14"),   # 截止日早於最新場次
+    ("2026-04-13", "2026-04-13"),   # 截止日等於最新場次（當天或週末才處理）也要套
+    ("2026-04-14", "2026-04-13"),   # 個股 K 棒落後、截止日晚於最新場次也要套
+    ("2026-04-14", "2026-04-14"),
 ])
-def test_snapshot_reads_revenue_point_in_time(monkeypatch, as_of, latest, pit):
-    # journal 快照固定回放；cutoff 等於或晚於全市場最新場次時也不能改讀 live
+def test_snapshot_reads_revenue_point_in_time(monkeypatch, as_of, latest):
+    # 快照寫進 append-only journal：不論截止日與全市場最新場次的關係，月營收一律依法定期限判斷可見
     import pandas as pd
     from market_data import market_repo
     from src.services import tw_stock_dossier as dossier
@@ -213,7 +213,47 @@ def test_snapshot_reads_revenue_point_in_time(monkeypatch, as_of, latest, pit):
                         lambda engine, sid, d, **k: seen.append(k) or {"monthly_revenue": []})
     monkeypatch.setattr(dossier, "chips", lambda *a, **k: {"institutional": None})
     mp.snapshot("2881.TW", pd.Timestamp(as_of).date(), engine=None)
-    assert seen == [{"pit": pit}]
+    assert seen == [{"pit": True}]
+
+
+@pytest.mark.parametrize("code, cutoff, yoy_3m", [
+    ("2881.TW", "2026-04-13", [12.0, 1.0, 2.0]),   # 截止日＝最新場次：富邦金 2026-03 營收 04-15 才到期，不寫進 journal
+    ("2881.TW", "2026-04-10", [12.0, 1.0, 2.0]),   # 週五截止、週末才處理（最新場次仍是週五）
+    ("2330.TW", "2026-04-13", [1.0, 2.0, 3.0]),    # 反向：一般公司 10 日期限已過，照樣寫進
+    ("2881.TW", "2026-04-15", [1.0, 2.0, 3.0]),    # 反向：保險類期限當天看得到
+])
+def test_snapshot_journals_only_revenue_visible_at_cutoff(monkeypatch, code, cutoff, yoy_3m):
+    # 端到端走真的 dossier.fundamentals：截止日等於全市場最新場次時，DB 佔位公告日（次月 10 日）
+    # 不能讓截止日之後才到期的營收進 append-only journal（Web live 同日期照樣看得到，
+    # 見 test_revenue_deadline_readers.test_dossier_build_replays_only_before_latest_market_date）
+    import pandas as pd
+    from market_data import market_repo
+    from tests.litellm_stub import ensure_litellm_stub
+
+    ensure_litellm_stub()
+    from src.services import tw_stock_dossier as dossier
+
+    days = pd.bdate_range("2026-01-01", cutoff)
+    monkeypatch.setattr(market_repo, "price_history",
+                        lambda sid, start, end, engine: pd.DataFrame({"date": days, "close": 100.0}))
+    monkeypatch.setattr(market_repo, "front_adjust_multipliers",
+                        lambda sid, dates, engine: pd.Series([1.0] * len(dates)))
+    monkeypatch.setattr(market_repo, "latest_price_date", lambda engine: pd.Timestamp(cutoff).date())
+    # 沒有去年同月可算，yoy_pct 退回庫存 yoy；以月份當 yoy 值好辨認是哪幾個月
+    months = pd.period_range("2025-11", "2026-03", freq="M").to_timestamp()[::-1]
+    rev = pd.DataFrame({"revenue_month": months, "revenue": 100, "yoy": [float(m.month) for m in months],
+                        "announce_date": [(m + pd.DateOffset(months=1, days=9)).date() for m in months]})
+
+    def fake_sql(engine, sql, **kw):
+        if "monthly_revenue" in sql:
+            return rev[rev["announce_date"] <= pd.Timestamp(kw["d"]).date()].reset_index(drop=True)
+        return pd.DataFrame(columns=["date", "account", "value"])
+
+    monkeypatch.setattr(dossier, "_sql", fake_sql)
+    monkeypatch.setattr(dossier, "chips", lambda *a, **k: {"institutional": None})
+    out = mp.snapshot(code, pd.Timestamp(cutoff).date(), engine=object())
+    assert out["as_of"] == cutoff
+    assert out["revenue_yoy_3m"] == yoy_3m
 
 
 def test_single_run_lock_blocks_overlap():
