@@ -972,30 +972,42 @@ class BacktestService:
     ) -> Tuple[date, List[Any]]:
         """(停損停利的名目錨點日, 從進場 K 棒起算的窗口)。
 
-        盤前以該場次開盤進場，但不回頭跨越已使用的完整錨點 K 棒。盤中分析的錨點是前一個
-        交易日，但分析當下已看得到當天開盤，所以改成分析日與持久化場次較晚者之後的第一根開盤進場。
-        場次日期缺失或無法解析時沿用分析日；沒有持久化 phase 的舊紀錄維持預設。
+        一般情況進場是錨點 K 棒的下一根開盤。進場截止日交給共用的
+        ``resolve_entry_cutoff``（DecisionSignal 後驗用同一條）：盤中類分析的錨點是前一個
+        交易日，但分析當下已看得到當天開盤，改成分析日與持久化場次較晚者之後的第一根開盤；
+        盤前分析至遲在場次日當天開盤進場。場次日期缺失或無法解析時盤中類沿用分析日、
+        其他 phase 維持錨點；沒有持久化 phase 的舊紀錄維持預設。
         執行截止日與名目價格錨點分開，即時報價失敗時不改動原本的還原基準。
         """
         anchor = daily_window.start_bar.date
-        execution_cutoff = max(
-            anchor,
-            resolve_entry_cutoff(
-                anchor_date=anchor,
-                analysis_date=analysis_date,
-                phase=phase,
-                market_phase_summary=extract_market_phase_summary(context_snapshot),
-            ),
+        execution_cutoff = resolve_entry_cutoff(
+            phase=phase,
+            anchor_date=anchor,
+            session_date=self._persisted_session_date(context_snapshot),
+            analysis_date=analysis_date,
         )
-        if execution_cutoff > anchor:
-            bars = self.stock_repo.get_forward_bars(
-                code=daily_window.code,
-                analysis_date=execution_cutoff,
-                eval_window_days=eval_window_days,
-            )
-            level_anchor = max(anchor, analysis_date) if phase in INTRADAY_ENTRY_GUARD_PHASES else anchor
-            return level_anchor, list(bars)
-        return anchor, list(daily_window.forward_bars)
+        if execution_cutoff == anchor:
+            return anchor, list(daily_window.forward_bars)
+        bars = self.stock_repo.get_forward_bars(
+            code=daily_window.code,
+            analysis_date=execution_cutoff,
+            eval_window_days=eval_window_days,
+        )
+        level_anchor = max(anchor, analysis_date) if phase in INTRADAY_ENTRY_GUARD_PHASES else anchor
+        return level_anchor, list(bars)
+
+    @staticmethod
+    def _persisted_session_date(context_snapshot: Any) -> Optional[date]:
+        """持久化的市場場次日：先看 ``session_date``，壞掉再退回 ``market_local_time``。"""
+        summary = extract_market_phase_summary(context_snapshot)
+        if not summary:
+            return None
+        for key in ("session_date", "market_local_time"):
+            try:
+                return datetime.fromisoformat(str(summary.get(key) or "")).date()
+            except ValueError:
+                continue
+        return None
 
     def _has_usable_entry_window(
         self,

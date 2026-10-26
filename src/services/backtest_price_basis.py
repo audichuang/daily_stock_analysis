@@ -40,35 +40,43 @@ MARKET_DB_SOURCE = "MarketDBFetcher"
 # 的開盤，若仍以當天開盤進場就是偷看了半個交易日；這幾個 phase 改成分析日之後才進場。
 INTRADAY_ENTRY_GUARD_PHASES = frozenset({"intraday", "lunch_break", "closing_auction"})
 
-# factor_loader(stock_id, dates) -> {date: m_t}；回傳的 key 必須涵蓋所有輸入日期。
-FactorLoader = Callable[[str, Sequence[date]], Mapping[date, float]]
+# 盤前分析：開盤前就已產出，當天開盤可成交，進場就是場次日（session_date）當天的開盤。
+PREMARKET_PHASE = "premarket"
 
 
 def resolve_entry_cutoff(
     *,
-    anchor_date: date,
-    analysis_date: date,
     phase: Optional[str],
-    market_phase_summary: Optional[Mapping[str, Any]] = None,
+    anchor_date: date,
+    session_date: Optional[date],
+    analysis_date: Optional[date] = None,
 ) -> date:
-    """回測與訊號後驗共用的進場截止日；查詢第一根日期嚴格大於此日的 K 棒。
+    """執行截止日：進場 K 棒是第一根 ``date > 截止日`` 的日線（以其開盤進場）。
 
-    盤前可在該場次開盤進場；盤中須等分析日與持久化場次較晚者之後。
-    其餘階段與缺 phase 的舊紀錄沿用名目錨點之後進場。
+    回測與 DecisionSignal 後驗共用這一條，兩邊對同一份分析的進場日才會一致。
+
+    - ``anchor_date``：呼叫端原本的錨點（回測是分析當下最近一根完整日線，信號是場次日）。
+    - ``session_date``：持久化的市場場次日；只接受真的存下來的值，不要拿分析日頂替
+      （即時報價失敗時分析日會停在前一交易日，拿來當盤前場次日會提早一天進場）。
+    - ``analysis_date``：盤中類分析的舊紀錄沒有場次日時，退而以分析日當截止日下限。
+
+    規則：
+    - 盤中／午休／收盤集合競價：分析時已看得到當天開盤，截止日取錨點、分析日、場次日中最晚者。
+    - 盤前：場次日開盤還沒發生，截止日就是場次日前一天（場次日當天開盤進場）：錨點等於場次日
+      （行事曆失效退回自然日）時不跳過場次日，錨點落後（中間缺日線）時也不提前到場次日之前；
+      沒有場次日沿用錨點。
+    - 盤後、非交易日與未知 phase：沿用錨點。
     """
-    if phase != "premarket" and phase not in INTRADAY_ENTRY_GUARD_PHASES:
-        return anchor_date
-    session_date = analysis_date
-    for key in ("session_date", "market_local_time"):
-        try:
-            persisted_date = datetime.fromisoformat(str((market_phase_summary or {}).get(key) or "")).date()
-        except ValueError:
-            continue
-        session_date = max(analysis_date, persisted_date)
-        break
-    if phase == "premarket":
+    normalized = str(phase or "").strip().lower()
+    if normalized in INTRADAY_ENTRY_GUARD_PHASES:
+        return max(d for d in (anchor_date, analysis_date, session_date) if d is not None)
+    if normalized == PREMARKET_PHASE and session_date is not None:
         return session_date - timedelta(days=1)
-    return max(anchor_date, session_date)
+    return anchor_date
+
+
+# factor_loader(stock_id, dates) -> {date: m_t}；回傳的 key 必須涵蓋所有輸入日期。
+FactorLoader = Callable[[str, Sequence[date]], Mapping[date, float]]
 
 
 @dataclass(frozen=True)

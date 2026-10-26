@@ -593,19 +593,16 @@ class DecisionSignalOutcomeService:
                 start_price=start_price,
             )
 
-        metadata = self._json_loads(signal.metadata_json)
-        summary = metadata.get("market_phase_summary") if isinstance(metadata, dict) else None
-        summary = summary if isinstance(summary, dict) else {}
-        phase = str(summary.get("phase") or signal.market_phase or "").strip().lower()
-        execution_cutoff = resolve_entry_cutoff(
+        # 進場截止日與回測共用 resolve_entry_cutoff：盤前信號在場次日當天開盤進場，
+        # 盤中／盤後信號在場次日之後第一根開盤進場。
+        entry_cutoff = resolve_entry_cutoff(
+            phase=self._signal_phase(signal),
             anchor_date=anchor_date,
-            analysis_date=anchor_date,
-            phase=phase,
-            market_phase_summary=summary,
+            session_date=self._persisted_session_date(signal),
         )
         forward_bars = self.stock_repo.get_forward_bars(
             code=signal.stock_code,
-            analysis_date=execution_cutoff,
+            analysis_date=entry_cutoff,
             eval_window_days=eval_days,
         )
         unable_context = {
@@ -616,7 +613,7 @@ class DecisionSignalOutcomeService:
         # 先看窗口夠不夠，再看進場開盤：兩者都可重試，但空窗口不該被報成缺開盤。
         if len(forward_bars) < eval_days:
             return self._unable_fields(base, reason="insufficient_forward_bars", **unable_context)
-        # 進場場次由共用截止日決定，盤前包含當天；不可用後一根有開盤的 K 棒替補。
+        # 可成交的第一個價格是進場 K 棒（截止日之後第一根）的開盤。
         entry_open = getattr(forward_bars[0], "open", None)
         if entry_open is None:
             return self._unable_fields(base, reason="missing_entry_open", **unable_context)
@@ -720,14 +717,26 @@ class DecisionSignalOutcomeService:
         }
 
     def _anchor_date(self, signal: DecisionSignalRecord) -> Optional[date]:
+        session_date = self._persisted_session_date(signal)
+        if session_date is not None:
+            return session_date
+        return self._parse_date(signal.created_at)
+
+    def _phase_summary(self, signal: DecisionSignalRecord) -> Dict[str, Any]:
         metadata = self._json_loads(signal.metadata_json)
         if isinstance(metadata, dict):
             summary = metadata.get("market_phase_summary")
             if isinstance(summary, dict):
-                parsed = self._parse_date(summary.get("session_date"))
-                if parsed is not None:
-                    return parsed
-        return self._parse_date(signal.created_at)
+                return summary
+        return {}
+
+    def _persisted_session_date(self, signal: DecisionSignalRecord) -> Optional[date]:
+        return self._parse_date(self._phase_summary(signal).get("session_date"))
+
+    def _signal_phase(self, signal: DecisionSignalRecord) -> Optional[str]:
+        """信號產生時的市場階段：先看 metadata 的場次摘要，再退回 ``market_phase`` 欄位。"""
+        phase = self._phase_summary(signal).get("phase") or signal.market_phase
+        return str(phase) if phase else None
 
     def _data_quality_level(self, signal: DecisionSignalRecord) -> str:
         raw_summary = signal.data_quality_summary_json

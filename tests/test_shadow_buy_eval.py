@@ -60,6 +60,15 @@ def test_take_hit_and_same_day_both_counts_as_stop():
     assert kind == "stop" and r == pytest.approx(_rt(100, 95))
 
 
+def test_gap_open_beyond_a_level_fills_at_open_before_intraday_other_side():
+    # 開 112 已越過停利 110：開盤就停利出場，之後盤中跌破停損 95 不能改判成停損。
+    r, kind = trade_return(*_bars([100, 112], [101, 113], [99, 94], [100, 100]), stop=95, take=110)
+    assert kind == "take" and r == pytest.approx(_rt(100, 112))
+    # 反向：開 94 已跌破停損，之後盤中衝過停利也仍是開盤停損。
+    r, kind = trade_return(*_bars([100, 94], [101, 112], [99, 93], [100, 100]), stop=95, take=110)
+    assert kind == "stop" and r == pytest.approx(_rt(100, 94))
+
+
 @pytest.mark.parametrize("scale", [1.0, 0.5])
 @pytest.mark.parametrize("open_,exit_,expected_kind", [
     (112.0, 112.0, "take"),

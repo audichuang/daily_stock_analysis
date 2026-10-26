@@ -29,27 +29,6 @@ BACKTEST_METHOD_TAG = "t1o-adj"
 _ENGINE_VERSION_MAX_LEN = 16  # BacktestResult／BacktestSummary.engine_version 是 String(16)
 
 
-def resolve_long_exit(
-    *,
-    bar_open: Optional[float],
-    stop_loss: Optional[float],
-    take_profit: Optional[float],
-    stop_hit: bool,
-    tp_hit: bool,
-) -> Optional[tuple[float, str]]:
-    """共用做多成交順序：開盤觸價優先，盤中雙觸價才保守算停損。"""
-    if bar_open is not None:
-        if stop_loss is not None and bar_open <= stop_loss:
-            return bar_open, "stop_loss"
-        if take_profit is not None and bar_open >= take_profit:
-            return bar_open, "take_profit"
-    if stop_hit and stop_loss is not None:
-        return stop_loss, "ambiguous_stop_loss" if tp_hit else "stop_loss"
-    if tp_hit and take_profit is not None:
-        return take_profit, "take_profit"
-    return None
-
-
 def effective_backtest_engine_version(label: Optional[str]) -> str:
     """`v1` → `v1-t1o-adj`；已帶 tag 的冪等；超過 16 字元時截短標籤並告警。"""
     text = str(label or "").strip() or "v1"
@@ -86,6 +65,37 @@ class _AdjustedBar:
     open: Optional[float]
     high: Optional[float]
     low: Optional[float]
+
+
+def resolve_bar_exit(
+    *,
+    bar_open: Optional[float],
+    high: Optional[float],
+    low: Optional[float],
+    stop_loss: Optional[float],
+    take_profit: Optional[float],
+) -> Optional[tuple[str, float]]:
+    """單根日線對多單的停損停利判定；回 ``(first_hit, exit_price)``，沒碰到回 None。
+
+    ``first_hit`` 是 ``stop_loss``／``take_profit``／``ambiguous``。``bar_open`` 給了才做跳空判定：
+    開盤就在停損之下（含等於）以開盤停損、開盤就在停利之上（含等於）以開盤停利，
+    此時當根之後再碰到另一邊也不算（部位開盤已出場）。開盤落在兩者之間、同根又兩邊都碰到，
+    日線分不出先後，記 ``ambiguous`` 並保守以停損價出場。``bar_open`` 為 None 時不看跳空。
+    """
+    stop_hit = stop_loss is not None and low is not None and low <= stop_loss
+    tp_hit = take_profit is not None and high is not None and high >= take_profit
+    if not stop_hit and not tp_hit:
+        return None
+    if bar_open is not None:
+        if stop_hit and bar_open <= stop_loss:
+            return "stop_loss", bar_open
+        if tp_hit and bar_open >= take_profit:
+            return "take_profit", bar_open
+    if stop_hit and tp_hit:
+        return "ambiguous", stop_loss
+    if stop_hit:
+        return "stop_loss", stop_loss
+    return "take_profit", take_profit
 
 
 class BacktestResultLike(Protocol):
@@ -243,6 +253,8 @@ class BacktestEngine:
         - Daily bars cannot determine intraday ordering. If stop-loss and
           take-profit are both touched in the same bar, we record
           first_hit="ambiguous" and assume stop-loss first for simulated exit.
+          With ``price_context`` (gap-aware), a bar that opens at/through a
+          level fills there at the open first (see ``resolve_bar_exit``).
         - ``price_context`` 為 None 時行為與舊版完全相同；給了就代表
           ``start_price`` 是進場 K 棒（``forward_bars[0]``）的開盤，報酬、停損停利
           判定都換到進場日的還原基準，存檔價位仍是原始價。
@@ -1016,30 +1028,25 @@ class BacktestEngine:
         exit_reason = "window_end"
 
         for idx, bar in enumerate(window_bars, start=1):
-            low = bar.low
-            high = bar.high
-            stop_hit = stop_loss is not None and low is not None and low <= stop_loss
-            tp_hit = take_profit is not None and high is not None and high >= take_profit
-
-            if stop_hit:
-                hit_sl = True
-            if tp_hit:
-                hit_tp = True
-
-            fill = resolve_long_exit(
+            decision = resolve_bar_exit(
                 bar_open=getattr(bar, "open", None) if gap_aware else None,
+                high=bar.high,
+                low=bar.low,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
-                stop_hit=stop_hit,
-                tp_hit=tp_hit,
             )
-            if fill is None:
+            if decision is None:
                 continue
 
+            first_hit, exit_price = decision
             first_hit_date = bar.date
             first_hit_days = idx
-            exit_price, exit_reason = fill
-            first_hit = "ambiguous" if exit_reason == "ambiguous_stop_loss" else exit_reason
+            # 觸發旗標跟著實際出場走：跳空開盤已出場時，同根另一邊的觸價不算觸發。
+            if first_hit in ("stop_loss", "ambiguous"):
+                hit_sl = True
+            if first_hit in ("take_profit", "ambiguous"):
+                hit_tp = True
+            exit_reason = "ambiguous_stop_loss" if first_hit == "ambiguous" else first_hit
             break
 
         return (
