@@ -26,37 +26,64 @@ git_net() {
   run_with_timeout "${MEDIA_PICKS_GIT_TIMEOUT_SECONDS:-120}" git "$@" >&2
 }
 
-# push_develop：push 被拒（別處先推了 develop）就 pull --rebase 再推一次；rebase 失敗要 abort，
+# push_develop：每次只推已驗證的 SHA，lease 綁定同一輪驗證的 origin/develop；被拒就 fetch＋rebase、重新驗證再推一次。
+# rebase 失敗要 abort，
 # 不然主 checkout 卡在 rebase 中途，之後每晚都同步失敗。不加 --autostash：工作樹有未 commit 的改動時 rebase 會拒絕、
 # 我們就照 fail 處理（Bark），不要偷偷替人 stash（stash 堆疊跨 worktree 共用）。
 push_develop() {
-  git_net push -q origin develop && return 0
-  if git_net pull --rebase -q origin develop; then
-    git_net push -q origin develop
-    return
-  fi
-  git rebase --abort >&2 2>/dev/null
+  local sha origin_sha attempt
+  for attempt in 1 2; do
+    # 讀本地 develop 分支而不是 HEAD：呼叫端檢查完分支後，主 checkout 可能被別的 session 切走，
+    # 讀 HEAD 會把別的分支的 commit 推成遠端 develop。
+    sha=$(git rev-parse --verify refs/heads/develop) || return 1
+    origin_sha=$(git rev-parse --verify origin/develop) || return 1
+    journal_only_ahead "$origin_sha" "$sha" || return 1
+    # lease 允許強推，必須另守祖先關係，避免遠端已前進時把它倒退。
+    if git merge-base --is-ancestor "$origin_sha" "$sha" \
+      && git_net push -q --force-with-lease="develop:${origin_sha}" origin "${sha}:refs/heads/develop"; then
+      return 0
+    fi
+    (( attempt == 1 )) || return 1
+    # 不用 pull --rebase：它在 fetch 的網路等待期間就決定好要 rebase 目前分支，主 checkout 這時被別的 session
+    # 切走就會改寫別人的分支。先 fetch（網路），再做純本地的驗證，分支檢查放最後、緊接 rebase，
+    # 把「檢查完到改寫」的空窗縮到只剩本地指令。要完全關掉得用獨立 checkout 或大家都遵守的鎖，不在這裡做。
+    git_net fetch -q origin develop || return 1
+    journal_only_ahead origin/develop refs/heads/develop || return 1
+    if [[ "$(git branch --show-current)" != "develop" ]]; then
+      echo "重試前發現目前不在 develop，不 rebase" >&2
+      return 1
+    fi
+    if ! git rebase -q origin/develop >&2; then
+      git rebase --abort >&2 2>/dev/null
+      return 1
+    fi
+  done
   return 1
 }
 
-# journal_only_ahead：origin/develop..HEAD 的每個 commit 都只動 journal/ 且沒有 merge commit 才回 0；
+# journal_only_ahead [BASE HEAD]：固定兩端 SHA 後，每個本地 commit 都只動 journal/ 且沒有 merge 才回 0；
+# 預設讀 origin/develop..HEAD，push 時傳入該輪固定的 SHA，不讓檢查中途移動的 ref 改掉範圍。
 # 原因寫 stderr。push 與 rebase 前都要過這關，不然會把人在主 checkout 留下的非 journal commit 一起推上去。
 journal_only_ahead() {
-  local f
-  git rev-parse -q --verify origin/develop >/dev/null || { echo "找不到 origin/develop" >&2; return 1; }
-  if [[ -n "$(git rev-list --merges origin/develop..HEAD)" ]]; then
+  local f base head merges files
+  base=$(git rev-parse -q --verify "${1:-origin/develop}^{commit}") \
+    || { echo "找不到 ${1:-origin/develop}" >&2; return 1; }
+  head=$(git rev-parse -q --verify "${2:-HEAD}^{commit}") || return 1
+  merges=$(git rev-list --merges "${base}..${head}") || return 1
+  if [[ -n "$merges" ]]; then
     echo "本地領先 origin/develop 的 commit 含 merge commit" >&2
     return 1
   fi
+  files=$(git log --no-merges --no-renames --name-only --format= "${base}..${head}") || return 1
   while IFS= read -r f; do
     [[ -z "$f" || "$f" == journal/* ]] && continue
     echo "本地領先 origin/develop 的 commit 動到 journal/ 以外的檔（${f}）" >&2
     return 1
-  done < <(git log --no-merges --no-renames --name-only --format= origin/develop..HEAD)
+  done <<<"$files"
 }
 
 # push_journal_cli：排程的 Claude 自己 commit 完 journal（review／verdicts）後呼叫，把 push 的守門放在有測試的程式碼裡。
-# 只在 develop、且領先 origin/develop 的 commit 全是 journal/ 才推（被拒就 pull --rebase 再推，失敗 abort rebase）。
+# 只在 develop、且領先 origin/develop 的 commit 全是 journal/ 才推（被拒就 fetch＋rebase 再推，失敗 abort rebase）。
 # stdout 只印最後一行：`push ok`／`push none`（沒有領先）／`push refused: <原因>`／`push failed`；原因同時寫 stderr。0＝ok／none，1＝其餘。
 push_journal_cli() {
   local branch reason

@@ -5,7 +5,9 @@ job 腳本只 source、不直接執行（直接執行會同步 develop、跑真�
 """
 import importlib.util
 import json
+import os
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -360,6 +362,130 @@ def test_acquire_lock_dead_holder_is_reacquired(tmp_path):
     assert not lock.exists()      # EXIT trap 清掉了本輪的鎖
 
 
+@pytest.mark.parametrize("age_s, acquired", [(0, False), (5000, True)])
+def test_acquire_lock_without_pid_waits_for_initialization_but_recovers_old_lock(tmp_path, age_s, acquired):
+    r, log, notify, lock = _lock_run(tmp_path, None, age_s=age_s, keep_log=1)
+    assert r.returncode == 0, r.stderr
+    assert ("acquired" in r.stdout) is acquired
+    assert lock.exists() is not acquired
+    assert not notify.exists()
+    if not acquired:
+        assert "本次不重複跑" in log.read_text(encoding="utf-8")
+
+
+def _wait_until(predicate):
+    deadline = time.monotonic() + 30
+    while not predicate():
+        assert time.monotonic() < deadline, "等待鎖競態測試的同步點逾時"
+        time.sleep(0.01)
+
+
+def test_acquire_lock_serializes_two_dead_owner_recoveries(tmp_path):
+    lock = tmp_path / "lock"
+    lock.mkdir()
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    (lock / "pid").write_text(str(dead.pid), encoding="utf-8")
+    children = []
+
+    def start(name):
+        # 舊實作會在刪鎖前停住；依序放行兩個已讀到死 PID 的行程，穩定重現後來者刪掉新鎖。
+        body = f'''
+source "{JOB}"
+LOG=/dev/null
+notify_failure() {{ echo unexpected-notification >&2; }}
+rm() {{
+  if [[ "$*" == "-rf $PWD/lock" && ! -e "$PWD/{name}.remove" ]]; then
+    : >"$PWD/{name}.recovering"
+    while [[ ! -e "$PWD/{name}.remove" ]]; do sleep 0.01; done
+  fi
+  command rm "$@"
+}}
+acquire_lock "$PWD/lock" 測試 100 1
+echo $$ >"$PWD/{name}.acquired"
+while [[ ! -e "$PWD/release" ]]; do sleep 0.01; done
+'''
+        child = subprocess.Popen(["bash", "-c", body], cwd=tmp_path, env={**os.environ, "BASH_ENV": ""},
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        children.append(child)
+        return child
+
+    try:
+        start("a")
+        _wait_until(lambda: (tmp_path / "a.recovering").exists() or (tmp_path / "a.acquired").exists())
+        second = start("b")
+        if (tmp_path / "a.recovering").exists():
+            _wait_until(lambda: (tmp_path / "b.recovering").exists())
+            (tmp_path / "a.remove").touch()
+            _wait_until(lambda: (tmp_path / "a.acquired").exists())
+            (tmp_path / "b.remove").touch()
+        _wait_until(lambda: second.poll() is not None or (tmp_path / "b.acquired").exists())
+        owners = list(tmp_path.glob("*.acquired"))
+        assert len(owners) == 1, f"同一把鎖被兩個行程取得：{owners}"
+        assert (lock / "pid").read_text().strip() == owners[0].read_text().strip()
+    finally:
+        for name in ("a.remove", "b.remove", "release"):
+            (tmp_path / name).touch()
+        for child in children:
+            child.communicate(timeout=30)
+    assert not lock.exists()
+
+
+def test_acquire_lock_exit_does_not_remove_another_owner(tmp_path, live_holder):
+    lock = tmp_path / "lock"
+    r = _sh(tmp_path, f'acquire_lock "$PWD/lock" 測試 100 1; echo {live_holder} >"$PWD/lock/pid"')
+    assert r.returncode == 0, r.stderr
+    assert (lock / "pid").read_text().strip() == str(live_holder)
+
+
+def test_acquire_lock_creation_failure_never_runs_protected_work(tmp_path):
+    r = _sh(tmp_path, 'acquire_lock "$PWD/missing/lock" 測試 100 1; echo acquired')
+    assert r.returncode == 1
+    assert "acquired" not in r.stdout
+
+
+@pytest.mark.parametrize("action", ["acquire", "release"])
+def test_lock_transitions_check_owner_under_persistent_guard(tmp_path, action):
+    import fcntl
+
+    lock = tmp_path / "lock"
+    lock.mkdir()
+    (lock / "pid").write_text("99999999\n", encoding="utf-8")
+    guard = tmp_path / "lock.guard"
+    with guard.open("a") as handle:
+        inode = guard.stat().st_ino
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        body = f'''
+source "{JOB}"
+LOG=/dev/null
+LOCK="$PWD/lock"
+notify_failure() {{ echo unexpected-notification >&2; }}
+[[ "{action}" != release ]] || echo $$ >"$LOCK/pid"
+: >"$PWD/ready"
+if [[ "{action}" == acquire ]]; then
+  acquire_lock "$LOCK" 測試 100 1
+else
+  release_lock
+fi
+echo transitioned
+'''
+        child = subprocess.Popen(["bash", "-c", body], cwd=tmp_path, env={**os.environ, "BASH_ENV": ""},
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            _wait_until(lambda: (tmp_path / "ready").exists())
+            # 只有守門檔解鎖後才能讀 PID；期間換持有者，放行後必須保留新持有者的鎖。
+            with pytest.raises(subprocess.TimeoutExpired):
+                child.wait(timeout=0.1)
+            (lock / "pid").write_text(str(os.getpid()), encoding="utf-8")
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            out, err = child.communicate(timeout=30)
+    assert child.returncode == 0, err
+    assert ("transitioned" in out) is (action == "release")
+    assert (lock / "pid").read_text().strip() == str(os.getpid())
+    assert guard.stat().st_ino == inode
+
+
 def test_pick_run_id_honours_env_and_detach_prints_exact_log_path(tmp_path):
     r = _sh(tmp_path, 'pick_run_id', {"MEDIA_PICKS_RUN_ID": "20261101_230000"})
     assert r.stdout.strip() == "20261101_230000"
@@ -503,6 +629,188 @@ def _journal_commit(repo, line='{"mine": 1}\n'):
     with (repo / "journal" / "media-picks.jsonl").open("a", encoding="utf-8") as f:
         f.write(line)
     _git(repo, "commit", "-q", "-am", "journal: mine")
+
+
+@pytest.mark.parametrize("entrypoint, result", [("push_journal_cli", "push ok"), ("commit_journal", "ok")])
+def test_journal_push_pins_validated_sha_when_local_develop_moves(repo, entrypoint, result):
+    _journal_commit(repo)
+    validated = _git(repo, "rev-parse", "HEAD")
+    r = _sh(repo, f'''
+git_net() {{
+  if [[ "$1" == push ]]; then
+    printf 'human work\\n' >other.txt
+    command git commit -q -am 'human: raced validation'
+  fi
+  command git "$@" >&2
+}}
+{entrypoint}
+''')
+    assert (r.returncode, r.stdout.strip()) == (0, result), r.stderr
+    assert _origin_head(repo) == validated
+    assert _git(repo, "rev-parse", "HEAD") != validated
+    assert _git(repo, "show", "origin/develop:other.txt") == "a"
+
+
+@pytest.mark.parametrize("entrypoint, result", [("push_journal_cli", "push ok"), ("commit_journal", "ok")])
+def test_journal_push_validates_captured_range_when_head_moves_during_check(repo, entrypoint, result):
+    _journal_commit(repo)
+    validated = _git(repo, "rev-parse", "HEAD")
+    r = _sh(repo, f'''
+checks=0
+git() {{
+  if [[ "$1" == rev-list ]]; then
+    # git rev-list 在 command substitution 的子 shell，計數寫檔以跨越兩次驗證。
+    checks=$(cat .git/check-count 2>/dev/null || echo 0)
+    echo $((checks + 1)) >.git/check-count
+    if (( checks == 1 )); then
+      printf 'human work\\n' >other.txt
+      command git commit -q -am 'human: raced range check'
+    fi
+  fi
+  command git "$@"
+}}
+{entrypoint}
+''')
+    assert (r.returncode, r.stdout.strip()) == (0, result), r.stderr
+    assert _git(repo, "rev-parse", "HEAD") != validated
+    assert _origin_head(repo) == validated
+
+
+@pytest.mark.parametrize("entrypoint, result", [("push_journal_cli", "push failed"), ("commit_journal", "fail")])
+def test_journal_push_revalidates_after_rebase(repo, tmp_path, entrypoint, result):
+    _journal_commit(repo)
+    _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", '{}\n')
+    remote_before = _origin_head(repo)
+    r = _sh(repo, f'''
+git() {{
+  command git "$@" || return $?
+  if [[ "$1" == rebase ]]; then
+    printf 'human work\\n' >other.txt
+    command git commit -q -am 'human: raced rebase' >&2
+  fi
+}}
+{entrypoint}
+''')
+    assert r.stdout.strip() == result, r.stderr
+    assert r.returncode == (1 if entrypoint == "push_journal_cli" else 0)
+    assert _origin_head(repo) == remote_before
+    assert "other.txt" in r.stderr
+
+
+def test_journal_push_lease_uses_validated_origin_even_if_tracking_ref_moves(repo):
+    _journal_commit(repo)
+    intermediate = _git(repo, "rev-parse", "HEAD")
+    _journal_commit(repo, '{"second": 2}\n')
+    r = _sh(repo, f'''
+git_net() {{
+  if [[ "$1" == push ]]; then
+    command git push -q origin "{intermediate}:refs/heads/develop" >&2
+    command git fetch -q origin >&2
+  elif [[ "$1" == fetch ]]; then
+    echo rebase-attempted >&2
+    return 1
+  fi
+  command git "$@" >&2
+}}
+push_journal_cli
+''')
+    assert (r.returncode, r.stdout.strip()) == (1, "push failed"), r.stderr
+    assert "rebase-attempted" in r.stderr
+    assert _origin_head(repo) == intermediate
+
+
+def _feature_branch_ahead(repo):
+    """develop 有一個待推的 journal commit；feature 分支（同樣只動 journal/）另外領先，模擬別的 session 的分支。"""
+    _journal_commit(repo)
+    develop_sha = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    _journal_commit(repo, '{"feature": 1}\n')
+    feature_sha = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "develop")
+    return develop_sha, feature_sha
+
+
+# 第一次 `git branch --show-current` 回 develop 後立刻切到 feature：模擬分支檢查剛過、主 checkout 就被別的 session 切走。
+_SWITCH_AFTER_BRANCH_CHECK = '''
+git() {
+  if [[ "$1" == branch && "$2" == --show-current && ! -e .git/switched ]]; then
+    : >.git/switched
+    command git branch --show-current
+    command git checkout -q feature >&2
+    return 0
+  fi
+  command git "$@"
+}
+'''
+
+
+@pytest.mark.parametrize("entrypoint, result", [("push_journal_cli", "push ok"), ("commit_journal", "ok")])
+def test_journal_push_publishes_local_develop_not_head_when_branch_switches(repo, entrypoint, result):
+    develop_sha, feature_sha = _feature_branch_ahead(repo)
+    r = _sh(repo, _SWITCH_AFTER_BRANCH_CHECK + entrypoint)
+    assert _git(repo, "branch", "--show-current") == "feature"   # 切換確實發生在檢查之後
+    assert (r.returncode, r.stdout.strip()) == (0, result), r.stderr
+    assert _origin_head(repo) == develop_sha                     # 推的是本地 develop，不是 feature
+    assert _git(repo, "rev-parse", "feature") == feature_sha
+
+
+@pytest.mark.parametrize("entrypoint, result", [("push_journal_cli", "push failed"), ("commit_journal", "fail")])
+def test_journal_push_retry_refuses_rebase_after_branch_switch(repo, tmp_path, entrypoint, result):
+    develop_sha, feature_sha = _feature_branch_ahead(repo)
+    _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", '{"theirs": 1}\n')
+    remote_before = _origin_head(repo)
+    r = _sh(repo, f'''
+git_net() {{
+  command git "$@" >&2
+  local rc=$?
+  if [[ "$1" == push ]]; then command git checkout -q feature >&2; fi
+  if [[ "$1" == pull ]]; then echo rebase-attempted >&2; fi
+  return $rc
+}}
+{entrypoint}
+''')
+    assert r.stdout.strip() == result, r.stderr
+    assert "rebase-attempted" not in r.stderr
+    assert _git(repo, "rev-parse", "feature") == feature_sha      # feature 沒被 rebase
+    assert _git(repo, "rev-parse", "develop") == develop_sha
+    assert _origin_head(repo) == remote_before
+
+
+@pytest.mark.parametrize("entrypoint, result", [("push_journal_cli", "push failed"), ("commit_journal", "fail")])
+def test_journal_push_retry_refuses_rebase_when_branch_switches_during_network_step(repo, tmp_path, entrypoint, result):
+    """push 被拒後的重試：別的 session 在網路步驟（fetch／pull）期間切到帶非 journal commit 的分支，那條分支不能被 rebase。"""
+    develop_sha, _ = _feature_branch_ahead(repo)
+    _git(repo, "checkout", "-q", "feature")
+    (repo / "code.txt").write_text("feature work\n", encoding="utf-8")
+    _git(repo, "add", "code.txt")
+    _git(repo, "commit", "-q", "-m", "feature: code")
+    feature_sha = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "develop")
+    _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", '{"theirs": 1}\n')
+    remote_before = _origin_head(repo)
+    r = _sh(repo, f'''
+git_net() {{
+  if [[ "$1" == fetch || "$1" == pull ]]; then command git checkout -q feature >&2; fi
+  command git "$@" >&2
+}}
+{entrypoint}
+''')
+    assert r.stdout.strip() == result, r.stderr
+    assert _git(repo, "branch", "--show-current") == "feature"    # 切換確實發生在重試的網路步驟
+    assert _git(repo, "rev-parse", "feature") == feature_sha      # feature 沒被 rebase
+    assert _git(repo, "rev-parse", "develop") == develop_sha
+    assert _origin_head(repo) == remote_before
+    assert _git(repo, "status", "--porcelain") == ""              # 沒有卡在 rebase 中途
+
+
+def test_push_develop_never_rewinds_when_local_head_is_behind(repo, tmp_path):
+    _advance_origin(tmp_path, repo, "other.txt", "new remote work\n")
+    _git(repo, "fetch", "-q", "origin")
+    remote_before = _origin_head(repo)
+    r = _sh(repo, "push_develop")
+    assert r.returncode == 0, r.stderr
+    assert _origin_head(repo) == remote_before
+    assert _git(repo, "rev-parse", "HEAD") == remote_before
 
 
 def test_push_journal_cli_pushes_journal_only_commit(repo):
@@ -781,3 +1089,102 @@ def test_main_wires_holdings_step_after_commit_and_before_summary():
     body = JOB.read_text(encoding="utf-8")
     assert body.index("commit_journal 2>>") < body.index('capture_holdings "$holdings"') < body.index('summarize_run "$run_start"')
     assert 'capture_holdings "$holdings" || holdings=""' in body       # 失敗只清掉路徑、不進 problems
+
+
+# ---- push 推「驗過的 sha」而不是會變動的 develop ref；rebase 後重新驗證 ----
+
+def _push_with_hook(repo, hook_body, env_extra=None):
+    """把 git_net 換成：遇到 push 先執行 hook_body（第 N 次 push 時 $PUSH_N=N），再照常呼叫真正的 git。"""
+    body = ('PUSH_N=0; git_net() { if [[ "$1" == push ]]; then PUSH_N=$((PUSH_N+1)); '
+            + hook_body + '; fi; command git "$@" >&2; }; push_journal_cli')
+    r = _sh(repo, body, env_extra)
+    return r.returncode, r.stdout.strip(), r.stderr
+
+
+def test_push_sends_validated_sha_not_human_commit_landing_before_push(repo):
+    # 驗證通過之後、push 之前，主 checkout 有人疊上非 journal 的 commit：只能推驗過的那個 journal commit
+    _journal_commit(repo)
+    journal_sha = _git(repo, "rev-parse", "HEAD")
+    hook = ('if (( PUSH_N == 1 )); then echo "human work" > other.txt; '
+            'git commit -q -am "human: race" >/dev/null; fi')
+    rc, out, err = _push_with_hook(repo, hook)
+    assert (rc, out) == (0, "push ok"), err
+    assert _origin_head(repo) == journal_sha
+    assert _git(repo, "log", "-1", "--format=%s") == "human: race"      # 人的 commit 還在本地、沒被推
+
+
+def test_push_does_not_clobber_origin_when_tracking_ref_is_fresh_but_head_diverged(repo, tmp_path):
+    # origin/develop 已 fetch 到別處推的新 commit，本地 journal commit 卻疊在舊 base 上：
+    # lease 會放行非 fast-forward，必須靠祖先檢查改走 rebase，不能把別人的 commit 蓋掉
+    _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", '{"theirs": 1}\n')
+    _git(repo, "fetch", "-q", "origin")
+    _journal_commit(repo)
+    theirs = _git(repo, "rev-parse", "origin/develop")
+
+    assert _push_cli(repo)[:2] == (0, "push ok")
+    _git(repo, "fetch", "-q", "origin")
+    assert _git(repo, "merge-base", "--is-ancestor", theirs, "origin/develop") == ""
+    assert _remote_files(repo) >= {"journal/ptt-picks.jsonl", "journal/media-picks.jsonl"}
+
+
+def test_push_revalidates_after_rebase_and_refuses_human_commit(repo, tmp_path):
+    # 第一次 push 時 origin 被別處推進（lease 擋下），同時本地疊上人的 commit；rebase 後重新驗證必須擋下
+    _journal_commit(repo)
+    remote = _git(repo, "remote", "get-url", "origin")
+    other = tmp_path / "other"
+    _git(tmp_path, "clone", "-q", remote, str(other))
+    _git(other, "config", "user.email", "o@example.com")
+    _git(other, "config", "user.name", "o")
+    hook = (f'if (( PUSH_N == 1 )); then (cd "{other}" && echo x > journal/ptt-picks.jsonl && git add . '
+            '&& git commit -q -m theirs && git push -q origin develop) >/dev/null 2>&1; '
+            'echo "human work" > other.txt; git commit -q -am "human: race" >/dev/null; fi')
+    rc, out, _ = _push_with_hook(repo, hook)
+    assert (rc, out) == (1, "push failed")
+    assert _origin_head(repo) == _git(other, "rev-parse", "HEAD")      # origin 停在別處推的那個 commit
+    assert not (repo / ".git" / "rebase-merge").exists() and not (repo / ".git" / "rebase-apply").exists()
+
+
+# ---- 鎖：取鎖與死鎖接管在 flock 底下原子完成 ----
+
+def test_acquire_lock_concurrent_takeover_has_single_owner(tmp_path):
+    """死鎖留著時三輪同時啟動，只能有一輪拿到鎖。外部 mkdir 換成成功後停 1 秒的版本，
+    放大舊寫法「mkdir 與寫 pid 之間」「rm -rf＋mkdir 接管之間」的空窗（新寫法在 perl 裡做，不受影響）。"""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "mkdir").write_text('#!/bin/sh\n/bin/mkdir "$@" || exit $?\nsleep 1\n', encoding="utf-8")
+    (bindir / "mkdir").chmod(0o755)
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    lock = tmp_path / "logs" / ".job.lock"
+    lock.mkdir(parents=True)
+    (lock / "pid").write_text(str(dead.pid))
+    prelude = (f'source "{JOB}"; LOG=/dev/null; notify_failure() {{ :; }}; ')
+    body = 'acquire_lock logs/.job.lock 媒體點名 10800 1; echo acquired; sleep 6'
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
+    procs = [subprocess.Popen(["bash", "-c", prelude + body], cwd=tmp_path, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True, env=env) for _ in range(3)]
+    outs = [p.communicate(timeout=60)[0] for p in procs]
+    assert sum("acquired" in o for o in outs) == 1, outs
+    assert sum("本次不重複跑" in o for o in outs) == 2, outs
+    assert not lock.exists()
+
+
+def test_acquire_lock_treats_eperm_holder_as_alive(tmp_path):
+    # pid 1 一定活著但不是我們的行程（kill -0 回 EPERM）：不能當成死鎖接管
+    r, log, notify, lock = _lock_run(tmp_path, 1, age_s=5, keep_log=1)
+    assert r.returncode == 0 and "acquired" not in r.stdout
+    assert "本次不重複跑" in log.read_text(encoding="utf-8")
+    assert (lock / "pid").read_text().strip() == "1"
+
+
+def test_acquire_lock_reclaims_dead_lock_dir_holding_extra_files(tmp_path):
+    # 死鎖目錄裡除了 pid 還有別的檔（舊版或手動留下）：回收要整個刪掉，不能因 rmdir 失敗而整輪不跑
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    lock = tmp_path / "logs" / ".job.lock"
+    lock.mkdir(parents=True)
+    (lock / "leftover").write_text("x")
+    r, _, notify, lock = _lock_run(tmp_path, dead.pid, age_s=5, keep_log=1)
+    assert r.returncode == 0 and "acquired" in r.stdout, r.stderr
+    assert not notify.exists()
+    assert not lock.exists()
