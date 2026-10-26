@@ -138,6 +138,7 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
         }},
         "battle_plan": {{
             "sniper_points": {{"ideal_buy": "", "secondary_buy": "", "stop_loss": "", "take_profit": ""}},
+            "sniper_prices": {{"ideal_buy": 数字或null, "secondary_buy": 数字或null, "stop_loss": 数字或null, "take_profit": 数字或null}},
             "position_strategy": {{"suggested_position": "", "entry_plan": "", "risk_control": ""}},
             "action_checklist": []
         }},
@@ -209,7 +210,7 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
 
 1. **核心结论先行**：一句话说清该买该卖
 2. **分持仓建议**：空仓者和持仓者给不同建议
-3. **精确狙击点**：必须给出具体价格，不说模糊的话
+3. **精确狙击点**：必须给出具体价格，不说模糊的话；`sniper_points` 写给人看的文字，同一组价位另外以纯数字写进 `battle_plan.sniper_prices`（不带“元”、不写区间，区间进场写实际会挂单的那一个价位），没有可执行价位的格子填 null，系统只读取 `sniper_prices` 的数字
 4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
 5. **风险优先级**：舆情中的风险点要醒目标出
 
@@ -297,6 +298,7 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
         }},
         "battle_plan": {{
             "sniper_points": {{"ideal_buy": "", "secondary_buy": "", "stop_loss": "", "take_profit": ""}},
+            "sniper_prices": {{"ideal_buy": 数字或null, "secondary_buy": 数字或null, "stop_loss": 数字或null, "take_profit": 数字或null}},
             "position_strategy": {{"suggested_position": "", "entry_plan": "", "risk_control": ""}},
             "action_checklist": []
         }},
@@ -365,7 +367,7 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
 
 1. **核心结论先行**：一句话说清该买该卖
 2. **分持仓建议**：空仓者和持仓者给不同建议
-3. **精确狙击点**：必须给出具体价格，不说模糊的话
+3. **精确狙击点**：必须给出具体价格，不说模糊的话；`sniper_points` 写给人看的文字，同一组价位另外以纯数字写进 `battle_plan.sniper_prices`（不带“元”、不写区间，区间进场写实际会挂单的那一个价位），没有可执行价位的格子填 null，系统只读取 `sniper_prices` 的数字
 4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
 5. **风险优先级**：舆情中的风险点要醒目标出
 

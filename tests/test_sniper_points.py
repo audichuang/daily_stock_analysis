@@ -1,21 +1,19 @@
 # -*- coding: utf-8 -*-
-"""parse_sniper_value 對 LLM 敘述句的解析（字串取自 2026-10-22 等日正式庫 dsa.analysis_history）。"""
+"""舊版敘述句一律拒絕猜價；保留既有樣本，驗證不再解讀語意。"""
 
 import pytest
 
 from src.utils.sniper_points import extract_sniper_points, parse_sniper_value
 
-# 2345.TW：句首是條件式進場價，停損價在「停損於」之後
 STOP_2345 = "停損位：如果在1,909.00元進場，以1倍ATR14（約6.88%，約131元）設定停損於1,778.00元。持股者以收盤跌破1,770.00元為減碼點，1,700.00元為最後防線。"
 STOP_2345_SIMP = "止损位：如果在1,909.00元进场，以1倍ATR14（约6.88%，约131元）设定止损于1,778.00元。持股者以收盘跌破1,770.00元为减码点，1,700.00元为最后防线。"
 
 
 @pytest.mark.parametrize("text", [STOP_2345, STOP_2345_SIMP])
 def test_stop_loss_takes_stop_clause_after_conditional_entry(text):
-    assert parse_sniper_value(text, "stop_loss") == 1778.0
+    assert parse_sniper_value(text, "stop_loss") is None
 
 
-# 句首就給持股停損價，後段才是條件式進場的停損：維持句首的價位
 @pytest.mark.parametrize("text, expected", [
     ("停損位：持股跌破119.00元出場（約現價減1倍ATR14，ATR14約4.70%、約5.90元）；若在129.00元條件單進場，停損設在122.90元（進場價減1倍ATR14）", 119.0),
     ("止损位：持股跌破119.00元出场（约现价减1倍ATR14，ATR14约4.70%、约5.90元）；若在129.00元条件单进场，止损设在122.90元（进场价减1倍ATR14）", 119.0),
@@ -27,10 +25,12 @@ def test_stop_loss_takes_stop_clause_after_conditional_entry(text):
     ("停損位：持股者若跌破119.00元就出場；若在129.00元進場，停損設在122.90元", 119.0),
 ])
 def test_stop_loss_keeps_leading_holder_stop(text, expected):
-    assert parse_sniper_value(text, "stop_loss") == expected
+    assert parse_sniper_value(text, "stop_loss") is None
+    field = "stop_loss"
+    payload = {"battle_plan": {"sniper_points": {field: text}, "sniper_prices": {field: expected}}}
+    assert extract_sniper_points(payload)[field] == expected
 
 
-# 欄位標籤後寫明沒有價位（正式庫原文，簡繁各一）
 @pytest.mark.parametrize("text", [
     "理想買入點：暫不設定。需收盤站回 MA5 431.20 元、量比大於 1，且外資與投信同步買超，才考慮試單。",
     "理想买入点：暂不设定。需收盘站回 MA5 431.20 元、量比大于 1，且外资与投信同步买超，才考虑试单。",
@@ -56,7 +56,6 @@ def test_labelled_not_set_is_none(text):
     assert parse_sniper_value(text) is None
 
 
-# 「不」字出現在句中或後接具體價位的建議，不算沒有價位
 @pytest.mark.parametrize("text, expected", [
     ("理想買入點：1613.00 元（條件式。要收盤站回 MA5、量比大於 1，而且外資與投信同步買超才成立，目前不符合）", 1613.0),
     ("理想買點：不建議現價追買。若回測 262.0 元（今日低點）附近且量縮收腳", 262.0),
@@ -65,32 +64,35 @@ def test_labelled_not_set_is_none(text):
     ("理想買點：無明顯支撐，回測100元附近再評估", 100.0),
 ])
 def test_not_set_only_when_leading(text, expected):
-    assert parse_sniper_value(text, "ideal_buy") == expected
+    assert parse_sniper_value(text, "ideal_buy") is None
+    field = "ideal_buy"
+    payload = {"battle_plan": {"sniper_points": {field: text}, "sniper_prices": {field: expected}}}
+    assert extract_sniper_points(payload)[field] == expected
 
 
 def test_buy_field_ignores_stop_clause():
-    assert parse_sniper_value("理想買點：1,909.00元，而且要同時符合收盤站回MA5", "ideal_buy") == 1909.0
-    assert parse_sniper_value("如果在1909元進場，停損設在1778元", "ideal_buy") == 1909.0
-    assert parse_sniper_value("如果在1909元進場，停損設在1778元", None) == 1909.0
+    assert parse_sniper_value("理想買點：1,909.00元，而且要同時符合收盤站回MA5", "ideal_buy") is None
+    assert parse_sniper_value("如果在1909元進場，停損設在1778元", "ideal_buy") is None
+    assert parse_sniper_value("如果在1909元進場，停損設在1778元", None) is None
 
 
 def test_take_profit_conditional_entry_uses_target_anchor():
-    assert parse_sniper_value("目標位：若在1,909元進場，目標價2,100元", "take_profit") == 2100.0
-    assert parse_sniper_value("目標位：2,080.00元。從1,909.00元進場計算約+8.96%", "take_profit") == 2080.0
+    assert parse_sniper_value("目標位：若在1,909元進場，目標價2,100元", "take_profit") is None
+    assert parse_sniper_value("目標位：2,080.00元。從1,909.00元進場計算約+8.96%", "take_profit") is None
 
 
 def test_stop_field_ignores_target_anchor():
     text = "若在1,800元進場，停損設在1,700元，目標價2,100元"
-    assert parse_sniper_value(text, "stop_loss") == 1700.0
-    assert parse_sniper_value(text, "take_profit") == 2100.0
+    assert parse_sniper_value(text, "stop_loss") is None
+    assert parse_sniper_value(text, "take_profit") is None
 
 
 def test_plain_cases_unchanged():
-    assert parse_sniper_value("建议在 100 元附近买入") == 100.0
-    assert parse_sniper_value("價格：100.5元") == 100.5
-    assert parse_sniper_value("停損於95元", "stop_loss") == 95.0
+    assert parse_sniper_value("建议在 100 元附近买入") is None
+    assert parse_sniper_value("價格：100.5元") is None
+    assert parse_sniper_value("停損於95元", "stop_loss") is None
     # 無「元」的條件式句維持舊路徑（2421.TW 正式原文）
-    assert parse_sniper_value("停損位：空手者若在160.00進場，停損設153.50（約1倍ATR14，約-4.06%）", "stop_loss") == 153.5
+    assert parse_sniper_value("停損位：空手者若在160.00進場，停損設153.50（約1倍ATR14，約-4.06%）", "stop_loss") is None
 
 
 def test_extract_passes_field():
@@ -99,10 +101,9 @@ def test_extract_passes_field():
             return {"ideal_buy": "理想買入點：暫不設定。需收盤站回 MA5 431.20 元", "stop_loss": STOP_2345,
                     "take_profit": "目標位：2,080.00元", "secondary_buy": None}
     assert extract_sniper_points(R()) == {
-        "ideal_buy": None, "secondary_buy": None, "stop_loss": 1778.0, "take_profit": 2080.0}
+        "ideal_buy": None, "secondary_buy": None, "stop_loss": None, "take_profit": None}
 
 
-# 正式庫原文：「暫無買點」開頭、或「觀望，」之後才寫暫不設定，都是沒有價位（句內的 MA／括號價位不能被當成買點）
 @pytest.mark.parametrize("text", [
     "暫無買點。待收盤站回 MA10 約 12.77 元再評估",
     "暂无买点。待收盘站回 MA10 约 12.77 元再评估",
@@ -117,7 +118,6 @@ def test_leading_no_buypoint_phrases_are_none(text):
     assert parse_sniper_value(text) is None
 
 
-# 反向：暫無／觀望之後仍是真實價位或條件，不能被吞掉
 @pytest.mark.parametrize("text, expected", [
     ("暫無明顯支撐，回測100元附近再評估", 100.0),
     ("觀望，回測100元附近再評估", 100.0),
@@ -125,10 +125,12 @@ def test_leading_no_buypoint_phrases_are_none(text):
     ("觀望，回測100元附近再買，跌破95元暫不進場", 100.0),
 ])
 def test_no_buypoint_phrases_do_not_overreach(text, expected):
-    assert parse_sniper_value(text, "ideal_buy") == expected
+    assert parse_sniper_value(text, "ideal_buy") is None
+    field = "ideal_buy"
+    payload = {"battle_plan": {"sniper_points": {field: text}, "sniper_prices": {field: expected}}}
+    assert extract_sniper_points(payload)[field] == expected
 
 
-# 2026-10-21 正式庫原文：暫不設定之後的 MA 價位不是買點（3211.TWO／2408.TW／6669.TW／2454.TW）
 @pytest.mark.parametrize("text", [
     "理想買入點：暫不設定。收盤站回 MA10（360.05 元）、量能配合、MA5 翻揚之後才重新評估，目前不建議買進",
     "理想買入點：暫不設定；須等到放量站穩MA10 472.30元、MA5翻揚，且法人連續買超後，再以回測約472.00元不破為進場條件",
@@ -139,7 +141,6 @@ def test_prod_1021_not_set_with_ma_price_is_none(text):
     assert parse_sniper_value(text, "ideal_buy") is None
 
 
-# 2026-10-22／23 正式庫原文（dsa.analysis_history）：各種「沒有買點」的說法，句內的 MA／觀察價不是買點
 @pytest.mark.parametrize("text", [
     "暫時無理想買點，需等待股價站穩MA5（約238.1元）且量能放大至5日均量以上。",  # 22
     "未出現買點，需等待站回MA10（241.8元）且量能放大",  # 42
@@ -169,7 +170,6 @@ def test_prod_1022_not_set_wording_is_none(text):
     assert parse_sniper_value(text, "secondary_buy") is None
 
 
-# 反向：看起來像但後面是真實價位，必須保留（402／438／461 正式庫原文）
 @pytest.mark.parametrize("text, expected", [
     ("理想買點：不建議現價追買。若回測 262.0 元（今日低點）附近且量縮收腳、外資轉為淨買超，可小量試單，參考價 262.5 元。", 262.0),
     ("不建議現價追，回測1659元再試單", 1659.0),
@@ -181,10 +181,12 @@ def test_prod_1022_not_set_wording_is_none(text):
     ("不建議在目前價位追高，回測100元附近再買", 100.0),
 ])
 def test_prod_1022_wording_reverse_keeps_price(text, expected):
-    assert parse_sniper_value(text, "ideal_buy") == expected
+    assert parse_sniper_value(text, "ideal_buy") is None
+    field = "ideal_buy"
+    payload = {"battle_plan": {"sniper_points": {field: text}, "sniper_prices": {field: expected}}}
+    assert extract_sniper_points(payload)[field] == expected
 
 
-# Code review 重現的誤判：句首說沒有／不成立，但後面另給了這個欄位可執行的價位，必須保留
 @pytest.mark.parametrize("text, field, expected", [
     ("理想買入點：從缺，回測118元可試單", "ideal_buy", 118.0),
     ("尚無理想買點，回測118.5元可試單", "ideal_buy", 118.5),
@@ -197,10 +199,12 @@ def test_prod_1022_wording_reverse_keeps_price(text, expected):
     ("空頭排列，不給目標價，反彈 110 元減碼", "take_profit", 110.0),
 ])
 def test_not_set_prefix_keeps_later_actionable_price(text, field, expected):
-    assert parse_sniper_value(text, field) == expected
+    assert parse_sniper_value(text, field) is None
+    field = field
+    payload = {"battle_plan": {"sniper_points": {field: text}, "sniper_prices": {field: expected}}}
+    assert extract_sniper_points(payload)[field] == expected
 
 
-# 反向：後面只是條件式重新評估價、被拒絕的價位或 MA 價，仍是沒有價位
 @pytest.mark.parametrize("text, field", [
     ("暫時無理想買點，需站回 120 元再評估", "ideal_buy"),
     ("不建議在 126.50 元附近逆勢承接", "secondary_buy"),
@@ -216,14 +220,16 @@ def test_not_set_prefix_without_actionable_price_is_none(text, field):
     assert parse_sniper_value(text, field) is None
 
 
-# Review round 2：句首沒有價位時，停損／停利只取「直接綁定該欄位動作」的價位本身，不回落到泛用解析的第一個數字
 @pytest.mark.parametrize("text, field, expected", [
     ("暫不設定，現價125元，跌破118元停損", "stop_loss", 118.0),
     ("不給目標價，MA60 130元附近不追，反彈110元減碼", "take_profit", 110.0),
     ("暫不設定；季線130元壓力大，反彈至120元減碼", "take_profit", 120.0),
 ])
 def test_sell_not_set_prefix_returns_action_bound_price(text, field, expected):
-    assert parse_sniper_value(text, field) == expected
+    assert parse_sniper_value(text, field) is None
+    field = field
+    payload = {"battle_plan": {"sniper_points": {field: text}, "sniper_prices": {field: expected}}}
+    assert extract_sniper_points(payload)[field] == expected
 
 
 @pytest.mark.parametrize("text, field", [
@@ -253,10 +259,12 @@ def test_sell_not_set_prefix_without_action_bound_price_is_none(text, field):
     ("暫無明確買點", "ideal_buy", None),
 ])
 def test_buy_only_not_set_words_do_not_touch_sell_fields(text, field, expected):
-    assert parse_sniper_value(text, field=field) == expected
+    assert parse_sniper_value(text, field=field) is None
+    field = field
+    payload = {"battle_plan": {"sniper_points": {field: text}, "sniper_prices": {field: expected}}}
+    assert extract_sniper_points(payload)[field] == expected
 
 
-# 文字中的數字比例「1:1」不是欄位標籤冒號
 @pytest.mark.parametrize("text, expected", [
     ("目標位：2,080.00元。風險報酬比勉強達到1:1。第一個壓力在MA10（1,978.50元）附近。", 2080.0),
     ("目標位：2,080.00元。風險報酬比勉強達到1：1。第一個壓力在MA10（1,978.50元）附近。", 2080.0),
@@ -265,12 +273,15 @@ def test_buy_only_not_set_words_do_not_touch_sell_fields(text, field, expected):
     ("停利：2,080元", 2080.0),
 ])
 def test_numeric_ratio_colon_is_not_field_label(text, expected):
-    assert parse_sniper_value(text, "take_profit") == expected
+    assert parse_sniper_value(text, "take_profit") is None
+    field = "take_profit"
+    payload = {"battle_plan": {"sniper_points": {field: text}, "sniper_prices": {field: expected}}}
+    assert extract_sniper_points(payload)[field] == expected
 
 
 @pytest.mark.parametrize("ma", ["MA5", "ma5", "Ma10"])
 def test_letter_digit_colon_label_is_kept(ma):
-    assert parse_sniper_value(f"現價125元，停損參考{ma}：118元", "stop_loss") == 118.0
+    assert parse_sniper_value(f"現價125元，停損參考{ma}：118元", "stop_loss") is None
 
 
 @pytest.mark.parametrize("prefix", ["暫無", "暂无", "無", "无", "不建議", "不建议", "無明確買點", "无明确买点"])
@@ -287,10 +298,12 @@ def test_not_set_comma_is_preserved_before_reassessment_price(prefix, comma, fie
     ("暫無，回測1,250元可試單", 1250.0),
 ])
 def test_not_set_comma_fix_preserves_actionable_and_descriptive_prices(text, expected):
-    assert parse_sniper_value(text, "ideal_buy") == expected
+    assert parse_sniper_value(text, "ideal_buy") is None
+    field = "ideal_buy"
+    payload = {"battle_plan": {"sniper_points": {field: text}, "sniper_prices": {field: expected}}}
+    assert extract_sniper_points(payload)[field] == expected
 
 
-# 句首「暫無，」之後只剩重新評估條件：逗號不能先被濾掉，否則 _END 的逗號分支永遠比不到、把再評估價位當成買點
 @pytest.mark.parametrize("text", [
     "暫無，站回125元再評估",
     "暂无，站回125元再评估",
@@ -302,7 +315,6 @@ def test_not_set_followed_by_comma_is_none(text):
     assert parse_sniper_value(text) is None
 
 
-# 反向：「暫無，」之後真的給了這個欄位可執行的價位，仍要保留；千分位逗號照舊濾掉
 @pytest.mark.parametrize("text, field, expected", [
     ("暫無，回測118元可試單", "ideal_buy", 118.0),
     ("暫無，跌破95元停損", "stop_loss", 95.0),
@@ -310,10 +322,12 @@ def test_not_set_followed_by_comma_is_none(text):
     ("暫無明顯支撐，回測100元附近再評估", "ideal_buy", 100.0),
 ])
 def test_not_set_followed_by_comma_keeps_actionable_price(text, field, expected):
-    assert parse_sniper_value(text, field) == expected
+    assert parse_sniper_value(text, field) is None
+    field = field
+    payload = {"battle_plan": {"sniper_points": {field: text}, "sniper_prices": {field: expected}}}
+    assert extract_sniper_points(payload)[field] == expected
 
 
-# 「目前／現階段」前綴後面接逗號再寫未設定用語：前綴後的分隔符也要允許，否則再評估價位會被當成買點／停損
 @pytest.mark.parametrize("text, field", [
     ("目前，暫無買點，回調到120元再看", "ideal_buy"),
     ("目前，暫無買點，等站回125元再評估", "ideal_buy"),
@@ -328,7 +342,6 @@ def test_prefix_comma_not_set_is_none(text, field):
     assert parse_sniper_value(text, field) is None
 
 
-# 反向：前綴加逗號後沒有未設定用語、或之後給了可執行價位，照常取值
 @pytest.mark.parametrize("text, field, expected", [
     ("目前，回測118元可試單", "ideal_buy", 118.0),
     ("目前，118元", "ideal_buy", 118.0),
@@ -338,4 +351,7 @@ def test_prefix_comma_not_set_is_none(text, field):
     ("目前，150元", "take_profit", 150.0),
 ])
 def test_prefix_comma_reverse_keeps_price(text, field, expected):
-    assert parse_sniper_value(text, field) == expected
+    assert parse_sniper_value(text, field) is None
+    field = field
+    payload = {"battle_plan": {"sniper_points": {field: text}, "sniper_prices": {field: expected}}}
+    assert extract_sniper_points(payload)[field] == expected

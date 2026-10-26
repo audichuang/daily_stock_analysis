@@ -43,6 +43,7 @@ from src.analyzer import (
 from src.notification import NotificationService, NotificationChannel
 from src.notification_sender import OutboundMessage
 from src.schemas.decision_action import normalize_decision_action
+from src.utils.sniper_points import SNIPER_PRICES_KEY, parse_structured_price
 from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.report_language import (
     get_placeholder_text,
@@ -2683,11 +2684,25 @@ class StockAnalysisPipeline:
             if not isinstance(sniper_points, dict):
                 sniper_points = {}
                 battle["sniper_points"] = sniper_points
-            if self._is_agent_field_missing(sniper_points.get("stop_loss"), scalar=True):
-                sniper_points["stop_loss"] = self._stop_loss_fallback_from_trend(
+            structured = battle.get(SNIPER_PRICES_KEY)
+            text_missing = self._is_agent_field_missing(sniper_points.get("stop_loss"), scalar=True)
+            if isinstance(structured, dict):
+                # 模型有給結構化價位時，停損缺不缺只看 sniper_prices.stop_loss
+                stop_missing = parse_structured_price(structured.get("stop_loss")) is None
+            else:
+                stop_missing = text_missing
+            if text_missing and not stop_missing and isinstance(structured, dict):
+                # 文字漏寫但數字有給：顯示用文字直接沿用模型給的停損數字
+                sniper_points["stop_loss"] = structured.get("stop_loss")
+            # 只有模型連文字都沒給停損時才用趨勢支撐補；模型有寫文字（例如說明不設停損）就尊重它的判斷
+            if stop_missing and text_missing:
+                fallback = self._stop_loss_fallback_from_trend(
                     trend_result,
                     report_language,
                 )
+                sniper_points["stop_loss"] = fallback
+                if isinstance(structured, dict) and parse_structured_price(fallback) is not None:
+                    structured["stop_loss"] = fallback
 
     @staticmethod
     def _stop_loss_fallback_from_trend(

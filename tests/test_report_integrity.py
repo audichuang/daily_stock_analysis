@@ -36,12 +36,82 @@ class TestCheckContentIntegrity(unittest.TestCase):
             dashboard={
                 "core_conclusion": {"one_sentence": "持有观望"},
                 "intelligence": {"risk_alerts": []},
-                "battle_plan": {"sniper_points": {"stop_loss": "110元"}},
+                "battle_plan": {"sniper_points": {"stop_loss": "110元"}, "sniper_prices": {"stop_loss": 110}},
             },
         )
         ok, missing = check_content_integrity(result)
         self.assertTrue(ok)
         self.assertEqual(missing, [])
+
+    def _buy_result_with_battle(self, battle_plan):
+        return AnalysisResult(
+            code="600519",
+            name="贵州茅台",
+            trend_prediction="看多",
+            sentiment_score=70,
+            operation_advice="买入",
+            analysis_summary="稳健",
+            decision_type="buy",
+            dashboard={
+                "core_conclusion": {"one_sentence": "可买入"},
+                "intelligence": {"risk_alerts": []},
+                "battle_plan": battle_plan,
+            },
+        )
+
+    def test_structured_stop_loss_null_is_missing_even_with_text(self) -> None:
+        """有 sniper_prices 時停損缺不缺看結構化數字：null 即缺，文字有寫價位也不算。"""
+        result = self._buy_result_with_battle({
+            "sniper_points": {"stop_loss": "118元"},
+            "sniper_prices": {"stop_loss": None},
+        })
+        ok, missing = check_content_integrity(result)
+        self.assertFalse(ok)
+        self.assertIn("dashboard.battle_plan.sniper_points.stop_loss", missing)
+
+    def test_structured_stop_loss_number_passes_even_with_blank_text(self) -> None:
+        """反向：結構化停損有數字，文字空白也不算缺。"""
+        result = self._buy_result_with_battle({
+            "sniper_points": {"stop_loss": ""},
+            "sniper_prices": {"stop_loss": 110},
+        })
+        ok, missing = check_content_integrity(result)
+        self.assertTrue(ok, missing)
+
+    def test_structured_malformed_non_stop_slot_requests_repair(self) -> None:
+        """停損有效、但進場或目標格給了解析不了的非 null 值（如「100元」）時，要模型重給 sniper_prices。"""
+        for slot in ("ideal_buy", "secondary_buy", "take_profit"):
+            prices = {"ideal_buy": 100, "secondary_buy": None, "stop_loss": 99, "take_profit": 101}
+            prices[slot] = f"{prices[slot] or 98}元"
+            with self.subTest(slot=slot):
+                ok, missing = check_content_integrity(self._buy_result_with_battle({
+                    "sniper_points": {"stop_loss": "99元"},
+                    "sniper_prices": prices,
+                }))
+                self.assertFalse(ok)
+                self.assertEqual(missing, ["dashboard.battle_plan.sniper_prices"])
+
+    def test_structured_explicit_null_slot_is_not_malformed(self) -> None:
+        """反向：非停損格明確填 null 代表沒有可執行價位，不要求重給；數字字串照常接受。"""
+        for prices in (
+            {"ideal_buy": None, "secondary_buy": None, "stop_loss": 99, "take_profit": None},
+            {"ideal_buy": "100", "secondary_buy": 98.5, "stop_loss": 99, "take_profit": 101},
+        ):
+            with self.subTest(prices=prices):
+                ok, missing = check_content_integrity(self._buy_result_with_battle({
+                    "sniper_points": {"stop_loss": "99元"},
+                    "sniper_prices": prices,
+                }))
+                self.assertTrue(ok, missing)
+
+    def test_legacy_without_structured_keeps_text_rule(self) -> None:
+        """沒有 sniper_prices 時要模型補給數字區塊；停損文字的非空規則照舊另外檢查。"""
+        ok, missing = check_content_integrity(self._buy_result_with_battle({"sniper_points": {"stop_loss": "止損位：110元"}}))
+        self.assertFalse(ok)
+        self.assertEqual(missing, ["dashboard.battle_plan.sniper_prices"])
+        ok, missing = check_content_integrity(self._buy_result_with_battle({"sniper_points": {"stop_loss": " "}}))
+        self.assertFalse(ok)
+        self.assertIn("dashboard.battle_plan.sniper_points.stop_loss", missing)
 
     def test_pass_when_signal_attribution_missing(self) -> None:
         """Signal attribution is optional and does not enter missing_fields."""
@@ -56,7 +126,7 @@ class TestCheckContentIntegrity(unittest.TestCase):
             dashboard={
                 "core_conclusion": {"one_sentence": "持有观望"},
                 "intelligence": {"risk_alerts": []},
-                "battle_plan": {"sniper_points": {"stop_loss": "110元"}},
+                "battle_plan": {"sniper_points": {"stop_loss": "110元"}, "sniper_prices": {"stop_loss": 110}},
             },
         )
         ok, missing = check_content_integrity(result)
@@ -196,7 +266,7 @@ class TestCheckContentIntegrity(unittest.TestCase):
             dashboard={
                 "core_conclusion": {"one_sentence": "持有"},
                 "intelligence": {"risk_alerts": []},
-                "battle_plan": {"sniper_points": {"stop_loss": "110"}},
+                "battle_plan": {"sniper_points": {"stop_loss": "110"}, "sniper_prices": {"stop_loss": 110}},
             },
         )
 
@@ -484,7 +554,7 @@ class TestApplyPlaceholderFill(unittest.TestCase):
             dashboard={
                 "core_conclusion": {"one_sentence": "持有观望"},
                 "intelligence": {"risk_alerts": []},
-                "battle_plan": {"sniper_points": {"stop_loss": "100"}},
+                "battle_plan": {"sniper_points": {"stop_loss": "100"}, "sniper_prices": {"stop_loss": 100}},
                 "phase_decision": {
                     "phase_context": "invalid",
                     "watch_conditions": "invalid",

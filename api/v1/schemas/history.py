@@ -17,6 +17,7 @@ from api.v1.schemas.market_phase import MarketPhaseSummary
 from api.v1.schemas.research_artifact import ResearchArtifact
 from src.report_language import SUPPORTED_REPORT_LANGUAGES
 from src.schemas.decision_action import DecisionAction
+from src.schemas.report_schema import SniperPrices
 
 
 class HistoryItem(BaseModel):
@@ -182,6 +183,8 @@ class ReportSummary(BaseModel):
 
 class ReportStrategy(BaseModel):
     """策略点位区"""
+
+    sniper_prices: Optional[SniperPrices] = None
 
     ideal_buy: Optional[str] = Field(None, description="理想买入价")
     secondary_buy: Optional[str] = Field(None, description="第二买入价")

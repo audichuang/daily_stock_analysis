@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from math import ceil
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
+from src.utils.sniper_points import find_sniper_prices
+
 from src.agent.chat_context import build_visible_chat_history
 from src.agent.dashboard_payload import sanitize_agent_dashboard_payload
 from src.agent.disagreement import build_agent_disagreement_summary
@@ -1557,39 +1559,40 @@ class AgentOrchestrator:
         else:
             sniper = dict(sniper)
 
-        ideal_buy = _pick_first_level(
-            sniper.get("ideal_buy"),
-            key_levels.get("ideal_buy_if_valuation_improves"),
-            key_levels.get("ideal_buy"),
-            key_levels.get("support"),
-            key_levels.get("immediate_support"),
-        )
-        sniper["ideal_buy"] = ideal_buy if ideal_buy is not None else "N/A"
-
-        secondary_buy = _coerce_level_value(sniper.get("secondary_buy"))
-        if secondary_buy is None:
-            secondary_buy = _pick_first_level(
-                key_levels.get("secondary_buy"),
+        if find_sniper_prices(battle) is None:
+            ideal_buy = _pick_first_level(
+                sniper.get("ideal_buy"),
+                key_levels.get("ideal_buy_if_valuation_improves"),
+                key_levels.get("ideal_buy"),
                 key_levels.get("support"),
                 key_levels.get("immediate_support"),
             )
-        if _level_values_equal(secondary_buy, sniper.get("ideal_buy")):
-            secondary_buy = None
-        sniper["secondary_buy"] = secondary_buy if secondary_buy is not None else "N/A"
-        sniper.setdefault(
-            "stop_loss",
-            key_levels.get("stop_loss")
-            or key_levels.get("strong_support_stop_loss")
-            or "待补充",
-        )
-        sniper.setdefault(
-            "take_profit",
-            key_levels.get("take_profit")
-            or key_levels.get("next_breakout_target")
-            or key_levels.get("current_resistance")
-            or key_levels.get("resistance")
-            or "N/A",
-        )
+            sniper["ideal_buy"] = ideal_buy if ideal_buy is not None else "N/A"
+
+            secondary_buy = _coerce_level_value(sniper.get("secondary_buy"))
+            if secondary_buy is None:
+                secondary_buy = _pick_first_level(
+                    key_levels.get("secondary_buy"),
+                    key_levels.get("support"),
+                    key_levels.get("immediate_support"),
+                )
+            if _level_values_equal(secondary_buy, sniper.get("ideal_buy")):
+                secondary_buy = None
+            sniper["secondary_buy"] = secondary_buy if secondary_buy is not None else "N/A"
+            sniper.setdefault(
+                "stop_loss",
+                key_levels.get("stop_loss")
+                or key_levels.get("strong_support_stop_loss")
+                or "待补充",
+            )
+            sniper.setdefault(
+                "take_profit",
+                key_levels.get("take_profit")
+                or key_levels.get("next_breakout_target")
+                or key_levels.get("current_resistance")
+                or key_levels.get("resistance")
+                or "N/A",
+            )
 
         risk_alerts = self._collect_risk_alerts(ctx, intelligence)
         positive_catalysts = self._collect_positive_catalysts(ctx, intelligence)

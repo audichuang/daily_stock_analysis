@@ -10,7 +10,7 @@ Uses Optional for lenient parsing; business-layer integrity checks are separate.
 """
 
 import math
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -98,6 +98,22 @@ class SniperPoints(BaseModel):
     take_profit: Optional[Union[str, int, float]] = None
 
 
+# 正數價位；寬鬆模式接受純數字字串，句子、非正數與 NaN/inf 一律不通過
+_SniperPrice = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+
+
+class SniperPrices(BaseModel):
+    """模型判斷的狙擊點位數字；每格是價位或 null（null = 模型判斷沒有可執行價位）。
+
+    與 ``SniperPoints`` 同一組價位，``SniperPoints`` 是給人看的文字，系統只讀這裡的數字。
+    """
+
+    ideal_buy: Optional[_SniperPrice] = None
+    secondary_buy: Optional[_SniperPrice] = None
+    stop_loss: Optional[_SniperPrice] = None
+    take_profit: Optional[_SniperPrice] = None
+
+
 class PositionStrategy(BaseModel):
     """Position strategy."""
 
@@ -110,6 +126,7 @@ class BattlePlan(BaseModel):
     """Battle plan block."""
 
     sniper_points: Optional[SniperPoints] = None
+    sniper_prices: Optional[SniperPrices] = None
     position_strategy: Optional[PositionStrategy] = None
     action_checklist: Optional[List[str]] = None
 

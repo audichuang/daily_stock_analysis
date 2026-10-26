@@ -632,6 +632,7 @@ def get_history_detail(
         )
         
         strategy = ReportStrategy(
+            sniper_prices=result.get("sniper_prices"),
             ideal_buy=result.get("ideal_buy"),
             secondary_buy=result.get("secondary_buy"),
             stop_loss=result.get("stop_loss"),

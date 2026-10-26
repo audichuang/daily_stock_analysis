@@ -21,7 +21,7 @@ from src.services.decision_signal_data_quality import normalize_decision_signal_
 from src.services.decision_signal_service import DecisionSignalService
 from src.storage import AnalysisHistory, DatabaseManager
 from src.utils.data_processing import parse_json_field
-from src.utils.sniper_points import find_sniper_points, parse_sniper_value
+from src.utils.sniper_points import resolve_sniper_prices
 
 
 class DecisionSignalSourceReportNotFoundError(Exception):
@@ -419,18 +419,7 @@ def _confidence_from_level(value: Any) -> Optional[float]:
 
 
 def _extract_persisted_sniper_points(record: AnalysisHistory, raw_result: Mapping[str, Any]) -> dict[str, Optional[float]]:
-    raw_points = find_sniper_points(raw_result) or {}
-    return {
-        field: _raw_first_price(field, raw_points.get(field), getattr(record, field, None))
-        for field in ("ideal_buy", "secondary_buy", "stop_loss", "take_profit")
-    }
-
-
-def _raw_first_price(field: str, raw_value: Any, stored_value: Any) -> Optional[float]:
-    # 原文有寫該欄位就只信原文的解析結果（含 None），避免舊 parser 存下的過期價位復活；原文缺漏才退回已存欄位。
-    if raw_value is not None and str(raw_value).strip():
-        return parse_sniper_value(raw_value, field)
-    return parse_sniper_value(stored_value, field)
+    return resolve_sniper_prices(raw_result, record)
 
 
 def _entry_range(ideal_buy: Optional[float], secondary_buy: Optional[float]) -> tuple[Optional[float], Optional[float]]:

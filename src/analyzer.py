@@ -349,6 +349,7 @@ def _legacy_audit_marker_specs(
 from src.llm.client import LLMClient, _AllModelsFailedError, _LiteLLMStreamError  # noqa: F401
 
 from src.utils.data_processing import normalize_report_signal_attribution
+from src.utils.sniper_points import SNIPER_KEYS, SNIPER_PRICES_KEY, parse_structured_price
 
 
 def check_content_integrity(
@@ -405,11 +406,26 @@ def check_content_integrity(
     if result.decision_type in ("buy", "hold"):
         battle = dash.get("battle_plan")
         battle = battle if isinstance(battle, dict) else {}
-        sp = battle.get("sniper_points")
-        sp = sp if isinstance(sp, dict) else {}
-        stop_loss = sp.get("stop_loss")
-        if _is_invalid_stop_loss(stop_loss):
-            missing.append("dashboard.battle_plan.sniper_points.stop_loss")
+        structured = battle.get(SNIPER_PRICES_KEY)
+        if isinstance(structured, dict):
+            # 模型有給結構化價位時，停損缺不缺只看 sniper_prices.stop_loss 是不是正數，不看文字
+            if parse_structured_price(structured.get("stop_loss")) is None:
+                missing.append("dashboard.battle_plan.sniper_points.stop_loss")
+            # 其他格明確 null 代表沒有可執行價位；非 null 卻解析不了（如「100元」、區間）就要模型重給，
+            # 否則會變成缺價位、靜默跳過交易成本護欄
+            if any(
+                structured.get(key) is not None and parse_structured_price(structured.get(key)) is None
+                for key in SNIPER_KEYS
+                if key != "stop_loss"
+            ):
+                missing.append("dashboard.battle_plan.sniper_prices")
+        else:
+            # 沒給或給壞了 sniper_prices：系統只讀這裡的數字、不從文字猜價，要模型補給
+            missing.append("dashboard.battle_plan.sniper_prices")
+            sp = battle.get("sniper_points")
+            sp = sp if isinstance(sp, dict) else {}
+            if _is_invalid_stop_loss(sp.get("stop_loss")):
+                missing.append("dashboard.battle_plan.sniper_points.stop_loss")
     if require_phase_decision:
         phase_decision = dash.get("phase_decision")
         phase_decision = phase_decision if isinstance(phase_decision, dict) else {}
@@ -2313,6 +2329,12 @@ class GeminiAnalyzer(LLMClient):
                 "stop_loss": "止损位：XX元（跌破MA20或X%）",
                 "take_profit": "目标位：XX元（前高/整数关口；只写一个价位）"
             },
+            "sniper_prices": {
+                "ideal_buy": 理想买入价数字或null,
+                "secondary_buy": 次优买入价数字或null,
+                "stop_loss": 止损价数字或null,
+                "take_profit": 目标价数字或null
+            },
             "position_strategy": {
                 "suggested_position": "建议仓位：X成",
                 "entry_plan": "分批建仓策略描述",
@@ -2406,7 +2428,7 @@ class GeminiAnalyzer(LLMClient):
 
 1. **核心结论先行**：一句话说清该买该卖
 2. **分持仓建议**：空仓者和持仓者给不同建议
-3. **精确狙击点**：必须给出具体价格，不说模糊的话。例外：`decision_type` 为 `sell`（减仓/卖出），或必须先满足某个条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；观望但有明确回测挂单价（如回测 X 元可试单）时照常写该价位。`take_profit` 只写一个价位（减仓/卖出时为持仓者的反弹减码价），不得写“X元进场者看Y元”这类多价位句
+3. **精确狙击点**：必须给出具体价格，不说模糊的话。例外：`decision_type` 为 `sell`（减仓/卖出），或必须先满足某个条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；观望但有明确回测挂单价（如回测 X 元可试单）时照常写该价位。`take_profit` 只写一个价位（减仓/卖出时为持仓者的反弹减码价），不得写“X元进场者看Y元”这类多价位句。`sniper_points` 是给人看的文字；同一组价位必须另外以纯数字写进 `dashboard.battle_plan.sniper_prices`（不带“元”、不写区间；区间进场时写你实际会挂单的那一个价位，区间与条件留在文字里），某一格没有可执行价位（如“暂不设定”）就填 `null`。两边必须一致，系统只读取 `sniper_prices` 的数字，不会从文字推断价位
 4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
 5. **风险优先级**：舆情中的风险点要醒目标出
 
@@ -2501,6 +2523,12 @@ class GeminiAnalyzer(LLMClient):
                 "stop_loss": "止损位：XX元（失效条件或X%风险）",
                 "take_profit": "目标位：XX元（按阻力位/风险回报比制定；只写一个价位）"
             },
+            "sniper_prices": {
+                "ideal_buy": 理想买入价数字或null,
+                "secondary_buy": 次优买入价数字或null,
+                "stop_loss": 止损价数字或null,
+                "take_profit": 目标价数字或null
+            },
             "position_strategy": {
                 "suggested_position": "建议仓位：X成",
                 "entry_plan": "分批建仓策略描述",
@@ -2592,7 +2620,7 @@ class GeminiAnalyzer(LLMClient):
 
 1. **核心结论先行**：一句话说清该买该卖
 2. **分持仓建议**：空仓者和持仓者给不同建议
-3. **精确狙击点**：必须给出具体价格，不说模糊的话。例外：`decision_type` 为 `sell`（减仓/卖出），或必须先满足某个条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；观望但有明确回测挂单价（如回测 X 元可试单）时照常写该价位。`take_profit` 只写一个价位（减仓/卖出时为持仓者的反弹减码价），不得写“X元进场者看Y元”这类多价位句
+3. **精确狙击点**：必须给出具体价格，不说模糊的话。例外：`decision_type` 为 `sell`（减仓/卖出），或必须先满足某个条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；观望但有明确回测挂单价（如回测 X 元可试单）时照常写该价位。`take_profit` 只写一个价位（减仓/卖出时为持仓者的反弹减码价），不得写“X元进场者看Y元”这类多价位句。`sniper_points` 是给人看的文字；同一组价位必须另外以纯数字写进 `dashboard.battle_plan.sniper_prices`（不带“元”、不写区间；区间进场时写你实际会挂单的那一个价位，区间与条件留在文字里），某一格没有可执行价位（如“暂不设定”）就填 `null`。两边必须一致，系统只读取 `sniper_prices` 的数字，不会从文字推断价位
 4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
 5. **风险优先级**：舆情中的风险点要醒目标出
 
@@ -2728,7 +2756,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
 1. **Conclusion first**: say clearly in one sentence whether to buy or sell
 2. **Position-specific advice**: give different advice to those without a position and to holders
-3. **Precise sniper levels**: always give concrete prices, never vague wording. Exception: when `decision_type` is `sell` (Reduce/Sell), or a condition must be met first (e.g. close back above MA5) before a buy is re-evaluated, `ideal_buy` and `secondary_buy` must be exactly "N/A" with no price, and the re-entry condition and price go in `dashboard.phase_decision.watch_conditions`; for Watch with a concrete pullback limit price (e.g. a starter position on a pullback to X), keep that price. `take_profit` holds exactly one price (for Reduce/Sell, the holder's rebound-reduce price), never multi-price wording such as "entries at X look to Y"
+3. **Precise sniper levels**: always give concrete prices, never vague wording. Exception: when `decision_type` is `sell` (Reduce/Sell), or a condition must be met first (e.g. close back above MA5) before a buy is re-evaluated, `ideal_buy` and `secondary_buy` must be exactly "N/A" with no price, and the re-entry condition and price go in `dashboard.phase_decision.watch_conditions`; for Watch with a concrete pullback limit price (e.g. a starter position on a pullback to X), keep that price. `take_profit` holds exactly one price (for Reduce/Sell, the holder's rebound-reduce price), never multi-price wording such as "entries at X look to Y". `sniper_points` is human-readable text; the same levels must also be written as plain numbers in `dashboard.battle_plan.sniper_prices` (no currency unit, no ranges; for a range entry give the one price you would actually place the order at and keep the range and conditions in the text), and any slot without an actionable price (e.g. "N/A") is `null`. Both must agree; the system reads only the numbers in `sniper_prices` and never infers prices from the text
 4. **Visual checklist**: use ✅⚠️❌ to show the result of each check
 5. **Risk priority**: highlight risk points from the news clearly
 
@@ -2755,6 +2783,12 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 "secondary_buy": "Secondary buy point: XX (near MA10); N/A for Reduce/Sell or when the buy condition is not yet met",
                 "stop_loss": "Stop-loss: XX (break below MA20 or X%)",
                 "take_profit": "Target: XX (previous high/round-number level; one price only)"
+            },
+            "sniper_prices": {
+                "ideal_buy": ideal buy price as a number, or null,
+                "secondary_buy": secondary buy price as a number, or null,
+                "stop_loss": stop-loss price as a number, or null,
+                "take_profit": target price as a number, or null
             },
             "position_strategy": {
                 "suggested_position": "Suggested position: X/10",
@@ -2818,6 +2852,12 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 "secondary_buy": "Secondary entry: XX (more conservative or after confirmation); N/A for Reduce/Sell or when the trigger is not yet met",
                 "stop_loss": "Stop-loss: XX (invalidation condition or X% risk)",
                 "take_profit": "Target: XX (based on resistance/risk-reward ratio; one price only)"
+            },
+            "sniper_prices": {
+                "ideal_buy": ideal buy price as a number, or null,
+                "secondary_buy": secondary buy price as a number, or null,
+                "stop_loss": stop-loss price as a number, or null,
+                "take_profit": target price as a number, or null
             },
             "position_strategy": {
                 "suggested_position": "Suggested position: X/10",
@@ -5023,7 +5063,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 prompt += f"""
 ### {L("台股交易成本（給價位前必須扣除）", "台股交易成本（给价位前必须扣除）")}
 - {L(f"一趟買進再賣出約 {round_trip:.2f}%（手續費雙邊、賣出證交稅、買賣滑價）。", f"一趟买进再卖出约 {round_trip:.2f}%（手续费双边、卖出证交税、买卖滑价）。")}
-- {L(f"目標價扣掉成本後的淨報酬，至少要是停損淨虧損的 {min_rr:g} 倍；做不到就不要給買入結論，改為觀望，`ideal_buy`、`secondary_buy` 寫「暫不設定」，要等的更低買點寫進 `dashboard.phase_decision.watch_conditions`。", f"目标价扣掉成本后的净报酬，至少要是止损净亏损的 {min_rr:g} 倍；做不到就不要给买入结论，改为观望，`ideal_buy`、`secondary_buy` 写“暂不设定”，要等的更低买点写进 `dashboard.phase_decision.watch_conditions`。")}
+- {L(f"目標價扣掉成本後的淨報酬，至少要是停損淨虧損的 {min_rr:g} 倍；做不到就不要給買入結論，改為觀望，`ideal_buy`、`secondary_buy` 寫「暫不設定」、`sniper_prices` 的這兩格填 `null`，要等的更低買點寫進 `dashboard.phase_decision.watch_conditions`。", f"目标价扣掉成本后的净报酬，至少要是止损净亏损的 {min_rr:g} 倍；做不到就不要给买入结论，改为观望，`ideal_buy`、`secondary_buy` 写“暂不设定”、`sniper_prices` 的这两格填 `null`，要等的更低买点写进 `dashboard.phase_decision.watch_conditions`。")}
 - {L("目標價離買點太近（例如不到 2%）時，成本會吃掉大部分利潤；不要為了湊出風報比而把停損設得比日常波動還窄。", "目标价离买点太近（例如不到 2%）时，成本会吃掉大部分利润；不要为了凑出风报比而把止损设得比日常波动还窄。")}
 """
             trend_ctx = context.get("trend_analysis")
@@ -5424,7 +5464,7 @@ If the stock name shown above is "Stock {code}" or incorrect, **state the correc
 - **Stock name**: must output the correct company name (e.g. "Apple" rather than "Stock AAPL")
 - **Core conclusion**: say clearly in one sentence whether to buy, sell or wait
 - **Position-specific advice**: what to do without a position vs. what to do as a holder
-- **Concrete sniper levels**: buy price, stop-loss price, target price (to two decimals); when `decision_type` is `sell` (Reduce/Sell), or a condition must be met first (e.g. close back above MA5) before a buy is re-evaluated, `ideal_buy` and `secondary_buy` must be exactly "N/A" with no price, and re-entry conditions and prices go in `dashboard.phase_decision.watch_conditions`; `take_profit` holds exactly one price (for Reduce/Sell, the holder's rebound-reduce price)
+- **Concrete sniper levels**: buy price, stop-loss price, target price (to two decimals); when `decision_type` is `sell` (Reduce/Sell), or a condition must be met first (e.g. close back above MA5) before a buy is re-evaluated, `ideal_buy` and `secondary_buy` must be exactly "N/A" with no price, and re-entry conditions and prices go in `dashboard.phase_decision.watch_conditions`; `take_profit` holds exactly one price (for Reduce/Sell, the holder's rebound-reduce price); also write the same levels as plain numbers in `dashboard.battle_plan.sniper_prices` (`null` when a slot has no actionable price), which is the only place the system reads prices from
 - **Checklist**: mark each item with ✅/⚠️/❌
 - **News time compliance**: `latest_news`, `risk_alerts` and `positive_catalysts` must not contain information older than the last {news_window_days} days or with an unknown date
 - **Technical consistency**: never use mutually exclusive conclusions such as "bearish alignment" and "bullish alignment" as valid evidence at the same time; if fundamentals/events conflict with technicals, state explicitly "event-led, technicals not yet confirmed" or "fundamentals lean positive, but technicals are not yet confirmed"
@@ -5437,7 +5477,7 @@ Output the complete Decision Dashboard in JSON format."""
 - **{L("股票名稱", "股票名称")}**：{L('必須輸出正確的中文全稱（如"貴州茅台"而非"股票600519"）', '必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）')}
 - **{L("核心結論", "核心结论")}**：{L("一句話說清該買/該賣/該等", "一句话说清该买/该卖/该等")}
 - **{L("持倉分類建議", "持仓分类建议")}**：{L("空倉者怎麼做 vs 持倉者怎麼做", "空仓者怎么做 vs 持仓者怎么做")}
-- **{L("具體狙擊點位", "具体狙击点位")}**：{L("買入價、停損價、目標價（精確到分）；`decision_type` 為 `sell`（減倉／賣出），或須先滿足條件（如收盤站回 MA5）才重新評估買進時，`ideal_buy`、`secondary_buy` 只寫「暫不設定」、不得寫任何價位，重新進場的條件與價位寫進 `dashboard.phase_decision.watch_conditions`；`take_profit` 只寫一個價位（減倉／賣出時是持股者的反彈減碼價）", "买入价、止损价、目标价（精确到分）；`decision_type` 为 `sell`（减仓/卖出），或须先满足条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”、不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；`take_profit` 只写一个价位（减仓/卖出时是持仓者的反弹减码价）")}
+- **{L("具體狙擊點位", "具体狙击点位")}**：{L("買入價、停損價、目標價（精確到分）；`decision_type` 為 `sell`（減倉／賣出），或須先滿足條件（如收盤站回 MA5）才重新評估買進時，`ideal_buy`、`secondary_buy` 只寫「暫不設定」、不得寫任何價位，重新進場的條件與價位寫進 `dashboard.phase_decision.watch_conditions`；`take_profit` 只寫一個價位（減倉／賣出時是持股者的反彈減碼價）；同一組價位另外以純數字寫進 `dashboard.battle_plan.sniper_prices`（沒有可執行價位的格子填 `null`），系統只從這裡讀價位", "买入价、止损价、目标价（精确到分）；`decision_type` 为 `sell`（减仓/卖出），或须先满足条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”、不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；`take_profit` 只写一个价位（减仓/卖出时是持仓者的反弹减码价）；同一组价位另外以纯数字写进 `dashboard.battle_plan.sniper_prices`（没有可执行价位的格子填 `null`），系统只从这里读价位")}
 - **{L("檢查清單", "检查清单")}**：{L("每項用 ✅/⚠️/❌ 標記", "每项用 ✅/⚠️/❌ 标记")}
 - **{L("消息面時間合規", "消息面时间合规")}**：{L(f"`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或時間未知的資訊", f"`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或时间未知的信息")}
 - **{L("技術面一致性", "技术面一致性")}**：{L("嚴禁把「空頭排列」和「多頭排列」等互斥結論同時當作有效依據；若基本面/事件面與技術面衝突，必須明確寫「事件先行、技術待確認」或「基本面偏多，但技術面尚未確認」", "严禁把“空头排列”和“多头排列”等互斥结论同时当作有效依据；若基本面/事件面与技术面冲突，必须明确写“事件先行、技术待确认”或“基本面偏多，但技术面尚未确认”")}
@@ -5651,7 +5691,9 @@ Output the complete Decision Dashboard in JSON format."""
                 elif f == "dashboard.intelligence.risk_alerts":
                     lines.append("- dashboard.intelligence.risk_alerts: risk alert list (can be empty)")
                 elif f == "dashboard.battle_plan.sniper_points.stop_loss":
-                    lines.append("- dashboard.battle_plan.sniper_points.stop_loss: stop-loss level")
+                    lines.append("- dashboard.battle_plan.sniper_points.stop_loss: stop-loss level; also write it as a plain number in dashboard.battle_plan.sniper_prices.stop_loss")
+                elif f == "dashboard.battle_plan.sniper_prices":
+                    lines.append("- dashboard.battle_plan.sniper_prices: object with ideal_buy, secondary_buy, stop_loss, take_profit as plain numbers (no unit, no range), matching sniper_points; use null for a slot with no executable price")
                 elif f == "dashboard.phase_decision.phase_context":
                     lines.append("- dashboard.phase_decision.phase_context: public market phase summary subset")
                 elif f == "dashboard.phase_decision.action_window":
@@ -5687,7 +5729,9 @@ Output the complete Decision Dashboard in JSON format."""
             elif f == "dashboard.intelligence.risk_alerts":
                 lines.append(L("- dashboard.intelligence.risk_alerts: 風險警報列表（可為空陣列）", "- dashboard.intelligence.risk_alerts: 风险警报列表（可为空数组）"))
             elif f == "dashboard.battle_plan.sniper_points.stop_loss":
-                lines.append(L("- dashboard.battle_plan.sniper_points.stop_loss: 止損價", "- dashboard.battle_plan.sniper_points.stop_loss: 止损价"))
+                lines.append(L("- dashboard.battle_plan.sniper_points.stop_loss: 止損價；同時以純數字寫進 dashboard.battle_plan.sniper_prices.stop_loss", "- dashboard.battle_plan.sniper_points.stop_loss: 止损价；同时以纯数字写进 dashboard.battle_plan.sniper_prices.stop_loss"))
+            elif f == "dashboard.battle_plan.sniper_prices":
+                lines.append(L("- dashboard.battle_plan.sniper_prices: 物件，含 ideal_buy、secondary_buy、stop_loss、take_profit 四格純數字（不帶「元」、不寫區間），與 sniper_points 同一組價位；某格沒有可執行價位填 null", "- dashboard.battle_plan.sniper_prices: 对象，含 ideal_buy、secondary_buy、stop_loss、take_profit 四格纯数字（不带“元”、不写区间），与 sniper_points 同一组价位；某格没有可执行价位填 null"))
             elif f == "dashboard.phase_decision.phase_context":
                 lines.append(L("- dashboard.phase_decision.phase_context: 公開低敏市場階段摘要子集", "- dashboard.phase_decision.phase_context: 公开低敏市场阶段摘要子集"))
             elif f == "dashboard.phase_decision.action_window":

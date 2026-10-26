@@ -453,6 +453,7 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         result = self._build_result()
         result.dashboard = {
             "battle_plan": {
+                "sniper_prices": {"ideal_buy": 125.5, "secondary_buy": 120, "stop_loss": 110, "take_profit": 150},
                 "sniper_points": {
                     "ideal_buy": "理想买入点：125.5元",
                     "secondary_buy": "120",
@@ -647,10 +648,11 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual([item.stock_name for item in stock_bar.items], ["NVIDIA Corporation"])
 
     def test_save_analysis_history_persists_sniper_columns_via_shared_parser(self) -> None:
-        """迁出 sniper parser 后历史狙击点位列仍按原规则保存。"""
+        """歷史數值欄位共用模型價格，原文仍保留。"""
         result = self._build_result()
         result.dashboard = {
             "battle_plan": {
+                "sniper_prices": {"ideal_buy": 125.5, "secondary_buy": 1.53, "stop_loss": None, "take_profit": 150},
                 "sniper_points": {
                     "ideal_buy": "理想买入点：125.5元",
                     "secondary_buy": "1.52-1.53 (回踩MA5/10附近)",

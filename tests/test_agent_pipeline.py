@@ -973,7 +973,8 @@ class TestAgentResultConversion(unittest.TestCase):
         )
 
         ok, missing = check_content_integrity(result)
-        self.assertTrue(ok, missing)
+        # agent 沒給 sniper_prices：程式不替它編價位，只標出缺漏（weak 模式不重試）
+        self.assertEqual(missing, ["dashboard.battle_plan.sniper_prices"])
         self.assertEqual(result.sentiment_score, 68)
         self.assertEqual(result.analysis_summary, "趋势结论：多头排列；操作建议：买入。")
         self.assertEqual(result.dashboard["sentiment_score"], 68)
@@ -1359,6 +1360,72 @@ class TestAgentResultConversion(unittest.TestCase):
         self.assertEqual(result.dashboard["battle_plan"]["sniper_points"]["stop_loss"], 108.5)
         self.assertIn("trend:fallback", result.data_sources)
 
+    def _convert_with_battle_plan(self, battle_plan):
+        from src.agent.executor import AgentResult
+        from src.enums import ReportType
+        from src.stock_analyzer import BuySignal, TrendAnalysisResult, TrendStatus
+
+        pipeline = self._make_pipeline()
+        agent_result = AgentResult(
+            success=True,
+            content="{}",
+            dashboard={
+                "stock_name": "贵州茅台",
+                "dashboard": {
+                    "core_conclusion": {"one_sentence": "AI 已给出的核心结论"},
+                    "intelligence": {"risk_alerts": ["AI 风险"]},
+                    "battle_plan": battle_plan,
+                },
+            },
+            provider="gemini",
+        )
+        trend_result = TrendAnalysisResult(
+            code="600519",
+            trend_status=TrendStatus.BULL,
+            buy_signal=BuySignal.BUY,
+            signal_score=66,
+            support_levels=[108.5],
+            risk_factors=["跌破 MA20"],
+        )
+        return pipeline._agent_result_to_analysis_result(
+            agent_result,
+            "600519",
+            "贵州茅台",
+            ReportType.SIMPLE,
+            "q-structured-stop",
+            trend_result=trend_result,
+        )
+
+    def test_convert_structured_stop_loss_is_kept_over_trend_fallback(self):
+        """模型給了結構化停損：文字漏寫時沿用該數字，不換成趨勢支撐 108.5。"""
+        result = self._convert_with_battle_plan({
+            "sniper_points": {"stop_loss": ""},
+            "sniper_prices": {"stop_loss": 110},
+        })
+        battle = result.dashboard["battle_plan"]
+        self.assertEqual(battle["sniper_prices"]["stop_loss"], 110)
+        self.assertEqual(battle["sniper_points"]["stop_loss"], 110)
+
+    def test_convert_structured_null_stop_with_text_is_not_overridden(self):
+        """模型結構化停損給 null 但文字有說明：尊重模型判斷，不用趨勢支撐補數字。"""
+        result = self._convert_with_battle_plan({
+            "sniper_points": {"stop_loss": "暫無，為避免在118元停損而錯失反彈，改以110元停損"},
+            "sniper_prices": {"stop_loss": None},
+        })
+        battle = result.dashboard["battle_plan"]
+        self.assertIsNone(battle["sniper_prices"]["stop_loss"])
+        self.assertTrue(battle["sniper_points"]["stop_loss"].startswith("暫無"))
+
+    def test_convert_structured_null_stop_without_text_uses_trend_fallback_in_both(self):
+        """反向：模型文字與數字都沒給停損，趨勢支撐同時補進文字與結構化欄位。"""
+        result = self._convert_with_battle_plan({
+            "sniper_points": {"stop_loss": ""},
+            "sniper_prices": {"stop_loss": None},
+        })
+        battle = result.dashboard["battle_plan"]
+        self.assertEqual(battle["sniper_prices"]["stop_loss"], 108.5)
+        self.assertEqual(battle["sniper_points"]["stop_loss"], 108.5)
+
     def test_convert_risk_alerts_string_placeholder_uses_local_risk_factors(self):
         """String-like placeholder risk alerts should be replaced with local trend risk factors."""
         pipeline = self._make_pipeline()
@@ -1398,7 +1465,8 @@ class TestAgentResultConversion(unittest.TestCase):
         )
 
         ok, missing = check_content_integrity(result)
-        self.assertTrue(ok, missing)
+        # agent 沒給 sniper_prices：程式不替它編價位，只標出缺漏（weak 模式不重試）
+        self.assertEqual(missing, ["dashboard.battle_plan.sniper_prices"])
         self.assertEqual(result.dashboard["intelligence"]["risk_alerts"], ["涨幅过快", "回撤放大"])
 
     def test_convert_placeholder_dashboard_is_completed_from_local_context(self):
@@ -1441,7 +1509,8 @@ class TestAgentResultConversion(unittest.TestCase):
         )
 
         ok, missing = check_content_integrity(result)
-        self.assertTrue(ok, missing)
+        # agent 沒給 sniper_prices：程式不替它編價位，只標出缺漏（weak 模式不重試）
+        self.assertEqual(missing, ["dashboard.battle_plan.sniper_prices"])
         self.assertEqual(result.sentiment_score, 62)
         self.assertEqual(result.dashboard["sentiment_score"], 62)
         self.assertEqual(result.dashboard["core_conclusion"]["one_sentence"], result.analysis_summary)
