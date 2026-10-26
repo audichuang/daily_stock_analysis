@@ -303,6 +303,38 @@ def test_main_filters_every_panel_with_the_shared_universe(monkeypatch):
     prices = pd.DataFrame(100.0, index=days, columns=UNIVERSE_CODES)
     piv = {k: prices.copy() for k in ("open", "high", "close", "volume", "turnover")}
     rv = _rv([100] * 6, [40, 40, 40, 20, 30, 40], start="2025-12-01", sid="2330")
+    monkeypatch.setattr(revmom, "database_url", lambda: "unused")
+    engine = SimpleNamespace(connect=lambda: nullcontext(object()))
+    monkeypatch.setattr(revmom, "create_engine", lambda *args, **kwargs: engine)
+    monkeypatch.setattr(revmom, "load", lambda *args: (piv, None, None))
+    monkeypatch.setattr(revmom.pd, "read_sql", lambda *args, **kwargs: rv.copy())
+    seen = []
+    captured = {}
+
+    def checked(sid):
+        seen.append(sid)
+        return is_common_stock(sid)
+
+    class PanelsCaptured(Exception):
+        pass
+
+    def capture(filtered, yoy, *args):
+        captured.update({k: list(v.columns) for k, v in filtered.items()})
+        captured["yoy"] = list(yoy.columns)
+        raise PanelsCaptured
+
+    # 先釘住腳本綁的就是共用謂詞；否則下面的 spy 會蓋掉錯誤的本地綁定，守門形同虛設。
+    assert revmom.is_common_stock is is_common_stock
+    monkeypatch.setattr(revmom, "is_common_stock", checked)
+    monkeypatch.setattr(revmom, "build_signals", capture)
+    with pytest.raises(PanelsCaptured):
+        revmom.main(["--start", "2026-04-01", "--end", f"{days[-1]:%Y-%m-%d}",
+                     "--horizons", "5", "--bootstrap", "0"])
+
+    assert sorted(seen) == sorted(UNIVERSE_CODES)
+    assert captured and all(set(cols) == UNIVERSE_COMMON for cols in captured.values())
+
+
 # --- --experiment surprise：SUS、營收÷歷史最高、閘門與判準 ---
 
 def _seasonal_series(diffs, tail_d):
@@ -419,31 +451,6 @@ def test_main_surprise_mode_skips_momentum_sections(monkeypatch):
     monkeypatch.setattr(revmom, "create_engine", lambda *args, **kwargs: engine)
     monkeypatch.setattr(revmom, "load", lambda *args: (piv, None, None))
     monkeypatch.setattr(revmom.pd, "read_sql", lambda *args, **kwargs: rv.copy())
-    seen = []
-    captured = {}
-
-    def checked(sid):
-        seen.append(sid)
-        return is_common_stock(sid)
-
-    class PanelsCaptured(Exception):
-        pass
-
-    def capture(filtered, yoy, *args):
-        captured.update({k: list(v.columns) for k, v in filtered.items()})
-        captured["yoy"] = list(yoy.columns)
-        raise PanelsCaptured
-
-    # 先釘住腳本綁的就是共用謂詞；否則下面的 spy 會蓋掉錯誤的本地綁定，守門形同虛設。
-    assert revmom.is_common_stock is is_common_stock
-    monkeypatch.setattr(revmom, "is_common_stock", checked)
-    monkeypatch.setattr(revmom, "build_signals", capture)
-    with pytest.raises(PanelsCaptured):
-        revmom.main(["--start", "2026-04-01", "--end", f"{days[-1]:%Y-%m-%d}",
-                     "--horizons", "5", "--bootstrap", "0"])
-
-    assert sorted(seen) == sorted(UNIVERSE_CODES)
-    assert captured and all(set(cols) == UNIVERSE_COMMON for cols in captured.values())
     monkeypatch.setattr(revmom, "build_signals", lambda *args: (
         sig, {"liquid": pd.DataFrame(True, index=days, columns=cols)}))
     seen = {}
