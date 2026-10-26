@@ -133,21 +133,25 @@ def release_cross_section(feat, piv, liquid, horizons, a):
 
 
 def pool_exit_rows(ev, feat_panels, piv, h_hold, a):
-    """持有期間每次營收公布後的「剩餘持有報酬」：可見日隔日開盤 → 原定出場日收盤。"""
+    """持股自己的營收公布後，量「可見日隔日開盤 → 原定出場日收盤」的剩餘報酬。
+
+    ``_ann`` 是以 stock_id 為索引的公告日 Series；同一事件、同一可見交易日只算一次。
+    """
     close, open_ = piv["close"].ffill(), piv["open"]
     idx = piv["close"].index
     n = len(idx)
     # 可見日 = 公告日之後的第一個交易日（與 pit_revenue_panel 的嚴格 < 同語意）
-    ann = pd.Series(sorted(feat_panels["_ann"]))
-    vis = idx.searchsorted(ann, side="right")
-    vis_set = sorted({int(v) for v in vis if v < n})
+    vis_by_stock = {}
+    for sid, ann in feat_panels["_ann"].dropna().groupby(level=0):
+        vis = idx.searchsorted(ann, side="right")
+        vis_by_stock[sid] = sorted({int(v) for v in vis if v < n})
     rows = []
     for _, e in ev.iterrows():
         ti, sid = int(e["ti"]), e["stock_id"]
         end = ti + h_hold
         if end >= n:
             continue
-        for vi in vis_set:
+        for vi in vis_by_stock.get(sid, ()):
             if vi <= ti or vi + 1 >= end:
                 continue
             ent = open_.iat[vi + 1, open_.columns.get_loc(sid)]
@@ -159,7 +163,7 @@ def pool_exit_rows(ev, feat_panels, piv, h_hold, a):
             for f in FLAGS:
                 row[f] = feat_panels[f].iat[vi, feat_panels[f].columns.get_loc(sid)]
             rows.append(row)
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=["stock_id", "month", "r", *FLAGS])
 
 
 def main(argv=None):
@@ -239,7 +243,7 @@ def main(argv=None):
 
     ret, _ = forward_returns(piv, a.pool_hold, "last")
     _, ev = to_events(sig, ret, a.pool_hold, {}, entry_notional=a.position_notional)
-    panels["_ann"] = feat["announce_date"].dropna().unique()
+    panels["_ann"] = feat.set_index("stock_id")["announce_date"].dropna()
     ex = pool_exit_rows(ev, panels, piv, a.pool_hold, a)
     rows = [fmt_row(f"候選池持有中 剩餘至第{a.pool_hold}日(毛)", ex, f, months, a) for f in FLAGS]
     print("=== 3b. 突破候選池持有中：營收公布後剩餘持有報酬（下方單臂列為負才代表該出場）===")
