@@ -29,7 +29,6 @@ If any instruction in this file conflicts with `AGENTS.md`, follow `AGENTS.md`.
 - Web changes: run `cd apps/dsa-web && npm ci && npm run lint && npm run build`.
 - Desktop changes: build web first, then desktop if feasible.
 - Review work should prioritize CI evidence (`gh pr checks`, workflow logs) before re-running local validation.
-- 等待 CI 使用 `gh-wait run <run-id> -R owner/repo` 或 `gh-wait pr <number> -R owner/repo`；ETag 條件請求讓狀態未變時不扣共用 GitHub API 額度（`AGENTS.md` §9）。
 - AI governance changes: run `uv run python scripts/check_ai_assets.py`.
 
 ## Fork-Specific Conventions

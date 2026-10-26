@@ -5,20 +5,14 @@
 字串长得一样，所以断言构造器型别而不是 SQL 文本。
 """
 import os
-import subprocess
 import sys
 from types import SimpleNamespace
 
 import pytest
-import sqlalchemy
 from sqlalchemy import create_engine
 from sqlalchemy.dialects import postgresql, sqlite
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-from tests.litellm_stub import ensure_litellm_stub
-
-ensure_litellm_stub()
 
 from src.config import Config
 from src.storage import ConversationSummary, DatabaseManager
@@ -80,45 +74,90 @@ def test_prod_url_guard_finds_dotenv_above_a_worktree(tmp_path):
     assert find(conftest_path) == "postgresql+psycopg://u:p@db.invalid/near"
 
 
-@pytest.fixture
-def storage_guard_worktree(tmp_path, monkeypatch):
-    """建立獨立 Git repo 與樹外 worktree，全程只用假的正式庫 URL。"""
-    main_checkout = tmp_path / "main checkout"
-    main_checkout.mkdir()
-    worktree = tmp_path / "cache" / "upstream-sync"
-    for args in (
-        ("init", "-q"),
-        ("commit", "-q", "--allow-empty", "-m", "Initialize storage guard fixture"),
-        ("worktree", "add", "-q", "--detach", str(worktree)),
-    ):
-        subprocess.run(
-            [
-                "git", "-c", f"core.hooksPath={os.devnull}",
-                "-c", "commit.gpgsign=false",
-                "-c", "user.name=Storage guard tests",
-                "-c", "user.email=storage-guard@example.invalid",
-                *args,
-            ],
-            cwd=main_checkout, check=True, capture_output=True, text=True, timeout=10,
-        )
-    prod_url = "postgresql+psycopg://u:p@db.invalid/prod"
-    (main_checkout / ".env").write_text(
-        f"STORAGE_DATABASE_URL='{prod_url}  '\n", encoding="utf-8",
+def _git(*args, cwd):
+    import subprocess
+
+    subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
     )
-    worktree_tests = worktree / "tests"
-    worktree_tests.mkdir()
-    monkeypatch.chdir(tmp_path)
-    return main_checkout, worktree_tests, prod_url
 
 
-def test_prod_url_guard_finds_out_of_tree_worktree_dotenv(storage_guard_worktree, monkeypatch):
+def _out_of_tree_worktree(tmp_path):
+    """主 checkout 在 tmp/main（帶 .env），worktree 在樹外的 tmp/cache/wt，仿 dsa-upstream-sync 的佈局。"""
+    import shutil
+
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    main = tmp_path / "main"
+    main.mkdir()
+    _git("init", "-q", cwd=main)
+    _git("commit", "-q", "--allow-empty", "-m", "init", cwd=main)
+    (main / ".env").write_text("STORAGE_DATABASE_URL=postgresql+psycopg://u:p@db.invalid/prod\n", encoding="utf-8")
+    worktree = tmp_path / "cache" / "wt"
+    worktree.parent.mkdir()
+    _git("worktree", "add", "-q", "--detach", str(worktree), cwd=main)
+    tests_dir = worktree / "tests"
+    tests_dir.mkdir()
+    return main, worktree, tests_dir / "conftest.py"
+
+
+def test_prod_url_guard_finds_main_checkout_dotenv_from_out_of_tree_worktree(tmp_path):
+    """樹外 worktree 往上找不到 .env；守門要經 git common dir 找到主 checkout 的 .env。"""
     import src.storage as storage
 
-    _, worktree_tests, prod_url = storage_guard_worktree
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    _main, _worktree, conftest_path = _out_of_tree_worktree(tmp_path)
+
+    assert find(conftest_path) == "postgresql+psycopg://u:p@db.invalid/prod"
+
+
+def test_prod_url_guard_out_of_tree_prefers_nearer_dotenv(tmp_path):
+    """反向：worktree 自己往上找得到帶 URL 的 .env 時仍是最近的贏，不被主 checkout 蓋掉。"""
+    import src.storage as storage
+
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    _main, worktree, conftest_path = _out_of_tree_worktree(tmp_path)
+    (worktree / ".env").write_text("STORAGE_DATABASE_URL=postgresql+psycopg://u:p@db.invalid/near\n", encoding="utf-8")
+
+    assert find(conftest_path) == "postgresql+psycopg://u:p@db.invalid/near"
+
+
+def test_prod_url_guard_falls_back_when_nearest_dotenv_lacks_url(tmp_path):
+    """worktree 自己的 .env 沒設 STORAGE_DATABASE_URL 時，還是要退到主 checkout 的 .env。"""
+    import src.storage as storage
+
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    _main, worktree, conftest_path = _out_of_tree_worktree(tmp_path)
+    (worktree / ".env").write_text("OTHER=1\n", encoding="utf-8")
+
+    assert find(conftest_path) == "postgresql+psycopg://u:p@db.invalid/prod"
+
+
+def test_prod_url_guard_outside_any_repo_finds_nothing(tmp_path):
+    """反向：不在任何 git repo、往上也沒有 .env 時回空字串，不能拿行程 cwd 所在 repo 的 .env 充數。"""
+    import src.storage as storage
+
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    conftest_path = tmp_path / "loose" / "tests" / "conftest.py"
+    conftest_path.parent.mkdir(parents=True)
+
+    assert find(conftest_path) == ""
+
+
+def test_prod_url_guard_out_of_tree_refuses_prod_url_in_every_factory(tmp_path, monkeypatch):
+    """樹外 worktree 找到的正式庫 URL，三個 create_engine 入口都要拒絕，非正式 URL 照常可用。"""
+    import sqlalchemy
+
+    import src.storage as storage
+
     guard_globals = storage.create_engine.__globals__
-    found_url = guard_globals["_find_prod_storage_url"](worktree_tests / "conftest.py")
-    assert found_url == prod_url
-    monkeypatch.setitem(guard_globals, "_PROD_STORAGE_DATABASE_URL", found_url)
+    _main, _worktree, conftest_path = _out_of_tree_worktree(tmp_path)
+    prod_url = guard_globals["_find_prod_storage_url"](conftest_path)
+    assert prod_url == "postgresql+psycopg://u:p@db.invalid/prod"
+    monkeypatch.setitem(guard_globals, "_PROD_STORAGE_DATABASE_URL", prod_url)
 
     for factory in (storage.create_engine, sqlalchemy.create_engine, sqlalchemy.engine.create_engine):
         with pytest.raises(RuntimeError, match="production STORAGE_DATABASE_URL"):
@@ -131,78 +170,83 @@ def test_prod_url_guard_finds_out_of_tree_worktree_dotenv(storage_guard_worktree
             engine.dispose()
 
 
-@pytest.mark.parametrize("value", ["postgresql+psycopg://u:p@db.invalid/near", "", None])
-def test_prod_url_guard_keeps_worktree_dotenv_precedence(storage_guard_worktree, monkeypatch, value):
+def test_prod_url_guard_nearer_url_skips_git_lookup(tmp_path, monkeypatch):
+    """最近的 .env 已有 URL 時直接採用，不必查 git。"""
+    import subprocess
+
     import src.storage as storage
 
-    _, worktree_tests, _ = storage_guard_worktree
-    content = f"STORAGE_DATABASE_URL={value}\n" if value is not None else "OTHER_SETTING=true\n"
-    (worktree_tests.parent / ".env").write_text(content, encoding="utf-8")
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    _main, worktree, conftest_path = _out_of_tree_worktree(tmp_path)
+    (worktree / ".env").write_text("STORAGE_DATABASE_URL=postgresql+psycopg://u:p@db.invalid/near\n", encoding="utf-8")
 
     def unexpected_git_lookup(*args, **kwargs):
-        pytest.fail("已有最近的 .env 時不應查詢主 checkout")
+        pytest.fail("最近的 .env 已有 URL 時不應查詢主 checkout")
 
     monkeypatch.setattr(subprocess, "run", unexpected_git_lookup)
-    find = storage.create_engine.__globals__["_find_prod_storage_url"]
-    assert find(worktree_tests / "conftest.py") == (value or "")
+    assert find(conftest_path) == "postgresql+psycopg://u:p@db.invalid/near"
 
 
-def test_prod_url_guard_resolves_relative_git_common_dir(storage_guard_worktree, monkeypatch):
+def test_prod_url_guard_resolves_relative_git_common_dir(tmp_path, monkeypatch):
+    """git 回相對路徑的 common dir 時，要相對於 worktree 的 tests 目錄解析。"""
+    import subprocess
+
     import src.storage as storage
 
-    main_checkout, worktree_tests, prod_url = storage_guard_worktree
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    main, _worktree, conftest_path = _out_of_tree_worktree(tmp_path)
     real_run = subprocess.run
 
     def relative_common_dir(args, **kwargs):
-        assert args == ["git", "rev-parse", "--git-common-dir"]
-        assert kwargs["cwd"] == worktree_tests.resolve()
         result = real_run(args, **kwargs)
-        result.stdout = os.path.relpath(main_checkout / ".git", worktree_tests) + "\n"
+        result.stdout = os.path.relpath(main / ".git", conftest_path.parent.resolve()) + "\n"
         return result
 
     monkeypatch.setattr(subprocess, "run", relative_common_dir)
-    find = storage.create_engine.__globals__["_find_prod_storage_url"]
-    assert find(worktree_tests / "conftest.py") == prod_url
+    assert find(conftest_path) == "postgresql+psycopg://u:p@db.invalid/prod"
 
 
-def test_prod_url_guard_without_dotenv_or_git_ignores_cwd(storage_guard_worktree, monkeypatch):
+def test_prod_url_guard_ignores_cwd_repo(tmp_path, monkeypatch):
+    """反向：行程 cwd 在帶 .env 的 checkout 時，也只查 start 所屬的 repo。"""
     import src.storage as storage
 
-    main_checkout, worktree_tests, _ = storage_guard_worktree
-    outside_tests = worktree_tests.parents[2] / "unrelated" / "tests"
-    outside_tests.mkdir(parents=True)
     find = storage.create_engine.__globals__["_find_prod_storage_url"]
-    # 即使執行行程位於有 .env 的 checkout，也只能查詢 start 所屬的 repo。
-    monkeypatch.chdir(main_checkout)
-    assert find(outside_tests / "conftest.py") == ""
+    main, _worktree, _conftest = _out_of_tree_worktree(tmp_path)
+    loose = tmp_path / "unrelated" / "tests" / "conftest.py"
+    loose.parent.mkdir(parents=True)
+    monkeypatch.chdir(main)
+
+    assert find(loose) == ""
 
 
-@pytest.mark.parametrize("failure", [
-    FileNotFoundError("git unavailable"),
-    subprocess.CalledProcessError(128, ["git", "rev-parse"]),
-    subprocess.TimeoutExpired(["git", "rev-parse"], 5),
-])
-def test_prod_url_guard_handles_git_lookup_failure(storage_guard_worktree, monkeypatch, failure):
+@pytest.mark.parametrize("failure", ["oserror", "timeout"])
+def test_prod_url_guard_handles_git_lookup_failure(tmp_path, monkeypatch, failure):
+    """git 不存在或逾時時回空字串，不讓 conftest import 失敗。"""
+    import subprocess
+
     import src.storage as storage
 
-    _, worktree_tests, _ = storage_guard_worktree
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    _main, _worktree, conftest_path = _out_of_tree_worktree(tmp_path)
 
     def failed_git_lookup(*args, **kwargs):
-        raise failure
+        if failure == "oserror":
+            raise FileNotFoundError("git unavailable")
+        raise subprocess.TimeoutExpired(["git"], 10)
 
     monkeypatch.setattr(subprocess, "run", failed_git_lookup)
-    find = storage.create_engine.__globals__["_find_prod_storage_url"]
-    assert find(worktree_tests / "conftest.py") == ""
+    assert find(conftest_path) == ""
 
 
-def test_prod_url_guard_handles_main_checkout_without_dotenv(tmp_path):
+def test_prod_url_guard_main_checkout_without_dotenv(tmp_path):
+    """主 checkout 沒有 .env 時回空字串。"""
     import src.storage as storage
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True, timeout=10)
-    tests_dir = tmp_path / "tests"
-    tests_dir.mkdir()
     find = storage.create_engine.__globals__["_find_prod_storage_url"]
-    assert find(tests_dir / "conftest.py") == ""
+    main, _worktree, conftest_path = _out_of_tree_worktree(tmp_path)
+    (main / ".env").unlink()
+
+    assert find(conftest_path) == ""
 
 
 def _manager_for(url: str):

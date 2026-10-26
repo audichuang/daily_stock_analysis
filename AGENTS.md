@@ -69,7 +69,7 @@
 
 ## 9. 合入与发布
 
-- 分支模型：工作分支 → PR 合進 **`develop`**（GitHub 預設分支，日常整合）；`main` 只代表已發版。推工作分支後用 `gh run list --branch <分支>` 取得 run，再用 `gh-wait run <run-id> -R owner/repo` 或 `gh-wait pr <number> -R owner/repo` 等待 CI（ETag 條件請求，狀態未變不扣共用 API 額度）；綠了就自己合進 `develop`（§1），交付說明引用那次 run。
+- 分支模型：工作分支 → PR 合進 **`develop`**（GitHub 預設分支，日常整合）；`main` 只代表已發版。推工作分支後用 `gh run list --branch <分支>` 找到 run，再用 `gh-wait run <run-id> -R audichuang/daily_stock_analysis`（或 `gh-wait pr <PR 號> -R …`，放背景跑）等 CI 綠，不用輪詢式等待指令（全域 gh-quota 規則，hook 會擋），綠了就自己合進 `develop`（§1）；交付說明引用那次 run。
 - 發版（要先確認，§1）：`develop` fast-forward 進 `main`、push `main`，再在 `main` 上打 annotated tag `rel-YYYY.MM.DD`（同日第二版加 `.2`）並 push tag，`ghcr-main.yml` 依 tag 建映像。不用 `v*.*.*`——那是上游的版號，會觸發上游的 release／Docker Hub／桌面端 workflow。
 - 打 tag 只建映像，不会部署到 NAS；部署流程见 `docs/nas-deploy.md`。
 
