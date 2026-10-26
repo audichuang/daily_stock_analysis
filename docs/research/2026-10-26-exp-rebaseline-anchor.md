@@ -85,6 +85,8 @@ uv run --frozen python scripts/measure_signal_forward.py --end 2026-10-22   # �
 
 補充列（h60、`--end 2026-10-22`，非錨點）：1,071 事件、均值 +9.43%（+3.47% ~ +15.69%）、P(≥30%) 20.0%［14.7~25.5］、對等基準 +4.47%／11.9%。
 
+在主 checkout 重現：`make measure`（＝`uv run --env-file .env python scripts/measure_signal_forward.py`）；次要期距加 `--horizon 20|10|5`。上面事先登記的 `uv run --frozen` 形式是 worktree 內以匯出 `DATABASE_URL` 跑的同一支腳本、同一組參數。
+
 ## 2. 判定
 
 - (a) 均值區間 +3.22% ~ +16.93% 排除 0：**成立**。

@@ -10,7 +10,7 @@ description: "台股波段的逐檔研究：對量化篩出的候選做事件面
 中位 +1.13%、勝率 51.6%、兩平勝率 31.3%、P(≥30%) 20.4%（`confidence` 的錨點；block bootstrap 95%
 14.5%~26.5%）、P(≤-20%) 14.9%、最差 -54%**。對等基準（同池、有月營收、7,325 個事件）均值 +4.69%、
 P(≥30%) 12.0%。以上是 2026-10-26 在休市日復權修正、月營收期限順延、宇宙統一之後的重測
-（`uv run --frozen python scripts/measure_signal_forward.py`，預設窗與參數，見
+（`uv run --env-file .env python scripts/measure_signal_forward.py`（＝`make measure`），預設窗與參數，見
 `docs/research/2026-10-26-exp-rebaseline-anchor.md`）；重測前的 +9.93%／20.2%／7,319 事件等數字**作廢**。
 完整分布與 bootstrap 區間見 `docs/tw-swing-pipeline.md`
 （**別引用 IID 區間**，事件在時間上聚集，那是假精度）。

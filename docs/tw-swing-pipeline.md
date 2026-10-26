@@ -157,7 +157,7 @@ strict 会让盘后跑的 `make morning` 每天先红一次。代价是**当天 
 重测前的 3,951 → 404 → 3,547 → 974 **作废**。）
 
 > **2026-10-26 已重測**（SW-F1 休市日復權修正、data-repair 重建 `price_adjustment`、月營收期限遇休市順延、
-> 量測與 live 共用 `is_common_stock` 之後）：`uv run --frozen python scripts/measure_signal_forward.py`
+> 量測與 live 共用 `is_common_stock` 之後）：`uv run --env-file .env python scripts/measure_signal_forward.py`（＝`make measure`）
 > （預設窗 2020-01-01 ~ 2026-07-24、`--delisting last`、bootstrap 2,000 次 seed=42；`DATABASE_URL` 指向
 > `market` schema、唯讀），程式 `ecf47895`、`market.price` 最新日 2026-10-22。事先登記、判準與次要期距見
 > `docs/research/2026-10-26-exp-rebaseline-anchor.md`。下表「作废」列是重測前的數字，留作對照、不要引用。
