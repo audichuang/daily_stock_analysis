@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] CI `docker-build` 的映像 tag 改為每個 run 唯一（`stock-analysis:test-<run_id>-<run_attempt>`），兩個 smoke 步驟只跑本 run 建的映像，job 結束（含失敗）以 `always()` 只刪除該 tag；避免 ttnas 共用 docker daemon 時兩個分支同時建置，smoke 跑到別的分支的映像而誤綠或誤紅
 - [修复] 測試的正式庫守門在樹外 worktree（如 dsa-upstream-sync 的 `~/.cache/dsa-upstream-sync/<date>`）往上找不到 `.env`、或最近的 `.env` 沒設 `STORAGE_DATABASE_URL` 時，改經 `git rev-parse --git-common-dir` 讀主 checkout 的 `.env`；AGENTS.md §9 等 CI 改用 `gh-wait`
 - [修复] 四維度 HTML 報告遇到月營收為 NULL 的月份不再整份失敗（端點回 503），該月印「無資料」、長條寬 0；盯盤看板「外資 5 日轉向」提示改為只在法人資料日等於資料基準日時出現並標示日期，法人資料停更時不再把舊累計當成最近一日的變化
 - [修复] 持倉快照依各股票與基金自身幣別換算後再加總，支援非台幣／美元帳戶；缺價或缺匯率保留持倉並標示估值不完整、停算權重，避免假損失與零分母中斷，零成本僅略過損益率。
