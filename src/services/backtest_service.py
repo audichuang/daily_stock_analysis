@@ -975,7 +975,8 @@ class BacktestService:
         一般情況進場是錨點 K 棒的下一根開盤。進場截止日交給共用的
         ``resolve_entry_cutoff``（DecisionSignal 後驗用同一條）：盤中類分析的錨點是前一個
         交易日，但分析當下已看得到當天開盤，改成分析日與持久化場次較晚者之後的第一根開盤；
-        盤前分析至遲在場次日當天開盤進場。場次日期缺失或無法解析時盤中類沿用分析日、
+        盤前分析要有持久化的開盤前證據（``minutes_to_open``）才在場次日當天開盤進場，
+        沒有證據（盤中或收盤後手動覆寫成盤前）至少等到場次日之後。場次日期缺失或無法解析時盤中類沿用分析日、
         其他 phase 維持錨點；沒有持久化 phase 的舊紀錄維持預設。
         執行截止日與名目價格錨點分開，即時報價失敗時不改動原本的還原基準。
         """
@@ -985,6 +986,7 @@ class BacktestService:
             anchor_date=anchor,
             session_date=self._persisted_session_date(context_snapshot),
             analysis_date=analysis_date,
+            minutes_to_open=(extract_market_phase_summary(context_snapshot) or {}).get("minutes_to_open"),
         )
         if execution_cutoff == anchor:
             return anchor, list(daily_window.forward_bars)

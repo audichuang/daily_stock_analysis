@@ -593,12 +593,13 @@ class DecisionSignalOutcomeService:
                 start_price=start_price,
             )
 
-        # 進場截止日與回測共用 resolve_entry_cutoff：盤前信號在場次日當天開盤進場，
+        # 進場截止日與回測共用 resolve_entry_cutoff：盤前信號（有開盤前證據）在場次日當天開盤進場，
         # 盤中／盤後信號在場次日之後第一根開盤進場。
         entry_cutoff = resolve_entry_cutoff(
             phase=self._signal_phase(signal),
             anchor_date=anchor_date,
             session_date=self._persisted_session_date(signal),
+            minutes_to_open=self._phase_summary(signal).get("minutes_to_open"),
         )
         forward_bars = self.stock_repo.get_forward_bars(
             code=signal.stock_code,

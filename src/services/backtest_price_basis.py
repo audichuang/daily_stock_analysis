@@ -50,6 +50,7 @@ def resolve_entry_cutoff(
     anchor_date: date,
     session_date: Optional[date],
     analysis_date: Optional[date] = None,
+    minutes_to_open: Any = None,
 ) -> date:
     """執行截止日：進場 K 棒是第一根 ``date > 截止日`` 的日線（以其開盤進場）。
 
@@ -59,20 +60,39 @@ def resolve_entry_cutoff(
     - ``session_date``：持久化的市場場次日；只接受真的存下來的值，不要拿分析日頂替
       （即時報價失敗時分析日會停在前一交易日，拿來當盤前場次日會提早一天進場）。
     - ``analysis_date``：盤中類分析的舊紀錄沒有場次日時，退而以分析日當截止日下限。
+    - ``minutes_to_open``：持久化的距開盤分鐘數，是「分析真的寫在開盤前」的唯一證據。
+      行事曆只在 phase 為盤前且當下早於場次開盤時才給值；手動指定 ``analysis_phase=premarket``
+      只覆寫 phase，收盤後覆寫時這欄是空的。回測與信號兩邊的持久化摘要都保留它。
 
     規則：
     - 盤中／午休／收盤集合競價：分析時已看得到當天開盤，截止日取錨點、分析日、場次日中最晚者。
-    - 盤前：場次日開盤還沒發生，截止日就是場次日前一天（場次日當天開盤進場）：錨點等於場次日
-      （行事曆失效退回自然日）時不跳過場次日，錨點落後（中間缺日線）時也不提前到場次日之前；
-      沒有場次日沿用錨點。
+    - 盤前且有開盤前證據（``minutes_to_open`` 為非負整數）：場次日開盤還沒發生，截止日就是
+      場次日前一天（場次日當天開盤進場）：錨點等於場次日時不跳過場次日，錨點落後（中間缺日線）
+      時也不提前到場次日之前。
+    - 盤前但沒有開盤前證據（盤中或收盤後手動覆寫成盤前、行事曆失效、舊紀錄）：截止日取錨點與
+      場次日較晚者，寧可晚一天進場也不回溯吃到已發生的開盤；沒有場次日沿用錨點。
     - 盤後、非交易日與未知 phase：沿用錨點。
     """
     normalized = str(phase or "").strip().lower()
     if normalized in INTRADAY_ENTRY_GUARD_PHASES:
         return max(d for d in (anchor_date, analysis_date, session_date) if d is not None)
     if normalized == PREMARKET_PHASE and session_date is not None:
-        return session_date - timedelta(days=1)
+        if _is_pre_open_minutes(minutes_to_open):
+            return session_date - timedelta(days=1)
+        # 沒有開盤前證據：當成場次日開盤已發生（手動覆寫的盤前可能寫在盤中或收盤後），
+        # 至少要等場次日之後才進場。
+        return max(anchor_date, session_date)
     return anchor_date
+
+
+def _is_pre_open_minutes(value: Any) -> bool:
+    """距開盤分鐘數是否構成開盤前證據：非負整數（容忍持久化後變成的數字字串）。"""
+    if value is None or isinstance(value, bool):
+        return False
+    try:
+        return int(value) >= 0
+    except (TypeError, ValueError):
+        return False
 
 
 # factor_loader(stock_id, dates) -> {date: m_t}；回傳的 key 必須涵蓋所有輸入日期。
