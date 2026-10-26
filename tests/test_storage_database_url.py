@@ -5,14 +5,20 @@
 字串长得一样，所以断言构造器型别而不是 SQL 文本。
 """
 import os
+import subprocess
 import sys
 from types import SimpleNamespace
 
 import pytest
+import sqlalchemy
 from sqlalchemy import create_engine
 from sqlalchemy.dialects import postgresql, sqlite
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
 
 from src.config import Config
 from src.storage import ConversationSummary, DatabaseManager
@@ -72,6 +78,131 @@ def test_prod_url_guard_finds_dotenv_above_a_worktree(tmp_path):
     # The nearest .env wins, so a worktree with its own .env is still guarded by that one.
     (worktree_tests.parent / ".env").write_text("STORAGE_DATABASE_URL=postgresql+psycopg://u:p@db.invalid/near\n", encoding="utf-8")
     assert find(conftest_path) == "postgresql+psycopg://u:p@db.invalid/near"
+
+
+@pytest.fixture
+def storage_guard_worktree(tmp_path, monkeypatch):
+    """建立獨立 Git repo 與樹外 worktree，全程只用假的正式庫 URL。"""
+    main_checkout = tmp_path / "main checkout"
+    main_checkout.mkdir()
+    worktree = tmp_path / "cache" / "upstream-sync"
+    for args in (
+        ("init", "-q"),
+        ("commit", "-q", "--allow-empty", "-m", "Initialize storage guard fixture"),
+        ("worktree", "add", "-q", "--detach", str(worktree)),
+    ):
+        subprocess.run(
+            [
+                "git", "-c", f"core.hooksPath={os.devnull}",
+                "-c", "commit.gpgsign=false",
+                "-c", "user.name=Storage guard tests",
+                "-c", "user.email=storage-guard@example.invalid",
+                *args,
+            ],
+            cwd=main_checkout, check=True, capture_output=True, text=True, timeout=10,
+        )
+    prod_url = "postgresql+psycopg://u:p@db.invalid/prod"
+    (main_checkout / ".env").write_text(
+        f"STORAGE_DATABASE_URL='{prod_url}  '\n", encoding="utf-8",
+    )
+    worktree_tests = worktree / "tests"
+    worktree_tests.mkdir()
+    monkeypatch.chdir(tmp_path)
+    return main_checkout, worktree_tests, prod_url
+
+
+def test_prod_url_guard_finds_out_of_tree_worktree_dotenv(storage_guard_worktree, monkeypatch):
+    import src.storage as storage
+
+    _, worktree_tests, prod_url = storage_guard_worktree
+    guard_globals = storage.create_engine.__globals__
+    found_url = guard_globals["_find_prod_storage_url"](worktree_tests / "conftest.py")
+    assert found_url == prod_url
+    monkeypatch.setitem(guard_globals, "_PROD_STORAGE_DATABASE_URL", found_url)
+
+    for factory in (storage.create_engine, sqlalchemy.create_engine, sqlalchemy.engine.create_engine):
+        with pytest.raises(RuntimeError, match="production STORAGE_DATABASE_URL"):
+            factory(prod_url)
+        engine = factory("sqlite:///:memory:")
+        try:
+            with engine.connect() as connection:
+                assert connection.exec_driver_sql("SELECT 1").scalar_one() == 1
+        finally:
+            engine.dispose()
+
+
+@pytest.mark.parametrize("value", ["postgresql+psycopg://u:p@db.invalid/near", "", None])
+def test_prod_url_guard_keeps_worktree_dotenv_precedence(storage_guard_worktree, monkeypatch, value):
+    import src.storage as storage
+
+    _, worktree_tests, _ = storage_guard_worktree
+    content = f"STORAGE_DATABASE_URL={value}\n" if value is not None else "OTHER_SETTING=true\n"
+    (worktree_tests.parent / ".env").write_text(content, encoding="utf-8")
+
+    def unexpected_git_lookup(*args, **kwargs):
+        pytest.fail("已有最近的 .env 時不應查詢主 checkout")
+
+    monkeypatch.setattr(subprocess, "run", unexpected_git_lookup)
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    assert find(worktree_tests / "conftest.py") == (value or "")
+
+
+def test_prod_url_guard_resolves_relative_git_common_dir(storage_guard_worktree, monkeypatch):
+    import src.storage as storage
+
+    main_checkout, worktree_tests, prod_url = storage_guard_worktree
+    real_run = subprocess.run
+
+    def relative_common_dir(args, **kwargs):
+        assert args == ["git", "rev-parse", "--git-common-dir"]
+        assert kwargs["cwd"] == worktree_tests.resolve()
+        result = real_run(args, **kwargs)
+        result.stdout = os.path.relpath(main_checkout / ".git", worktree_tests) + "\n"
+        return result
+
+    monkeypatch.setattr(subprocess, "run", relative_common_dir)
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    assert find(worktree_tests / "conftest.py") == prod_url
+
+
+def test_prod_url_guard_without_dotenv_or_git_ignores_cwd(storage_guard_worktree, monkeypatch):
+    import src.storage as storage
+
+    main_checkout, worktree_tests, _ = storage_guard_worktree
+    outside_tests = worktree_tests.parents[2] / "unrelated" / "tests"
+    outside_tests.mkdir(parents=True)
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    # 即使執行行程位於有 .env 的 checkout，也只能查詢 start 所屬的 repo。
+    monkeypatch.chdir(main_checkout)
+    assert find(outside_tests / "conftest.py") == ""
+
+
+@pytest.mark.parametrize("failure", [
+    FileNotFoundError("git unavailable"),
+    subprocess.CalledProcessError(128, ["git", "rev-parse"]),
+    subprocess.TimeoutExpired(["git", "rev-parse"], 5),
+])
+def test_prod_url_guard_handles_git_lookup_failure(storage_guard_worktree, monkeypatch, failure):
+    import src.storage as storage
+
+    _, worktree_tests, _ = storage_guard_worktree
+
+    def failed_git_lookup(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(subprocess, "run", failed_git_lookup)
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    assert find(worktree_tests / "conftest.py") == ""
+
+
+def test_prod_url_guard_handles_main_checkout_without_dotenv(tmp_path):
+    import src.storage as storage
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True, timeout=10)
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    find = storage.create_engine.__globals__["_find_prod_storage_url"]
+    assert find(tests_dir / "conftest.py") == ""
 
 
 def _manager_for(url: str):

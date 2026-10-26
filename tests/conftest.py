@@ -14,6 +14,7 @@ from typing import Any, TypeVar
 from warnings import warn
 
 import os
+import subprocess
 from pathlib import Path
 
 import anyio.to_thread
@@ -39,10 +40,33 @@ T = TypeVar("T")
 # 的 symlink，LiteLLM DEV 模式的 load_dotenv() 會從套件位置往上找到主 repo 的 .env，把正式庫補回來
 # （2026-10-23 踩過：worktree 跑 test_portfolio_pr2 在正式庫寫入 218 個 Demo 帳戶）。
 def _find_prod_storage_url(start: Path) -> str:
-    for parent in start.resolve().parents:
+    start = start.resolve()
+    for parent in start.parents:
         env_file = parent / ".env"
         if env_file.is_file():
             return (dotenv_values(env_file).get("STORAGE_DATABASE_URL") or "").strip()
+
+    # 樹外 worktree 的父目錄不含主 repo；從共用 Git 目錄定位主 checkout。
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=start.parent,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if not result.stdout.strip():
+        return ""
+    common_dir = Path(result.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = start.parent / common_dir
+    env_file = common_dir.resolve().parent / ".env"
+    if env_file.is_file():
+        return (dotenv_values(env_file).get("STORAGE_DATABASE_URL") or "").strip()
     return ""
 
 

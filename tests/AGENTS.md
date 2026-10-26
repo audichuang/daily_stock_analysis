@@ -6,7 +6,7 @@
 
 測試根有兩個:`tests/`(主套件)與 `market_data/tests/`(台股 DB,本 fork 增量)。**這份清單寫在兩處,必須一致**:`setup.cfg` 的 `testpaths` 與 `scripts/ci_test_shard.py` 的 `TEST_ROOTS`——漏一處就是整個根被靜默排除,看起來跟通過一模一樣。新增測試檔不登記時長表也照跑(沒紀錄的檔用中位數分片),但缺得多 shard 就失衡(踩過:缺 107 檔時三片 148／296／409 秒);各片差距明顯時照 `scripts/ci_durations_from_junit.py` 開頭的步驟重算。分片以整個檔為單位,單一檔比平均每片還長時它會獨占一片(目前是 `test_agent_active_stock_integration.py`),那片偏長是預期,重算解決不了。改名或刪除已登記的檔會紅。
 
-這裡幾乎沒有全域的隔離:`os.environ`、時鐘、對外連線都不會自動還原或攔截。`conftest.py` 只做兩件事:在 import 時把 `TestClient` 換成不開執行緒的版本;以及**把 `STORAGE_DATABASE_URL` 釘成空字串,並讓 `create_engine` 拒絕 `.env` 裡那條正式應用庫 URL**(守門測試在 `test_storage_database_url.py`)。marker 只有 `network` 有作用(`unit`、`integration` 沒人用,標了也不會被 CI 跳過)。
+這裡幾乎沒有全域的隔離:`os.environ`、時鐘、對外連線都不會自動還原或攔截。`conftest.py` 只做兩件事:在 import 時把 `TestClient` 換成不開執行緒的版本;以及**把 `STORAGE_DATABASE_URL` 釘成空字串,並讓 `create_engine` 拒絕 `.env` 裡那條正式應用庫 URL**(守門測試在 `test_storage_database_url.py`)。先沿父目錄尋找最近的 `.env`；找不到才透過 `git rev-parse --git-common-dir` 定位主 checkout，涵蓋樹外 worktree。marker 只有 `network` 有作用(`unit`、`integration` 沒人用,標了也不會被 CI 跳過)。
 
 ## 寫新測試要遵守
 

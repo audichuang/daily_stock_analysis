@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 測試正式應用庫防護在父目錄找不到 `.env` 時改從 Git 共用目錄定位主 checkout，涵蓋樹外 worktree 並保留最近 `.env` 優先；CI 等待規則與治理鏡像統一使用 `gh-wait`。
 - [修复] 四維度 HTML 報告遇到月營收為 NULL 的月份不再整份失敗（端點回 503），該月印「無資料」、長條寬 0；盯盤看板「外資 5 日轉向」提示改為只在法人資料日等於資料基準日時出現並標示日期，法人資料停更時不再把舊累計當成最近一日的變化
 - [修复] 持倉快照依各股票與基金自身幣別換算後再加總，支援非台幣／美元帳戶；缺價或缺匯率保留持倉並標示估值不完整、停算權重，避免假損失與零分母中斷，零成本僅略過損益率。
 - [修复] 台股 live 漏斗 `scripts/screen_tw.py` 改用與量測端相同的宇宙判斷 `market_data.adjust.is_common_stock`（四位數普通股，排除 ETF 00xx、TDR 91xx 與 912000 類、特別股 2887A），不再只排 00 開頭而讓 TDR 進候選池；`measure_signal_forward`、`measure_revenue_momentum`、`portfolio_walkforward` 改呼叫同一個函式（行為不變），`backtest_screen` 的選股排除也從只擋 00 改成同一判斷（會擋掉 TDR／特別股，回測數字可能小幅變動）；漏斗步驟標籤改為「排除 ETF／TDR／非普通股與創新板」；`docs/tw-analysis-overview.md` 補上大盤脈絡護欄也比對摘要文字（退潮／高風險／輕倉／cooling／risk-off 等）
