@@ -27,6 +27,7 @@
     uv run --env-file .env python scripts/measure_signal_forward.py
     uv run --env-file .env python scripts/measure_signal_forward.py --delisting zero
     uv run --env-file .env python scripts/measure_signal_forward.py --survivorship-bound
+    uv run --env-file .env python scripts/measure_signal_forward.py --lhr   # LHR 否決實驗
 """
 
 import argparse
@@ -52,6 +53,10 @@ REVENUE_STALE_DAYS = 45
 WARMUP_DAYS = 400     # 算 60 日高與 60 日均量要的暖機
 # `confidence` 錨點的命中門檻：第 h 日收盤淨報酬 ≥ +30%（tw-swing-research 的語意定義）。
 HIT_THRESHOLD = 0.30
+# 收盤漲／跌停判定（`--lhr` 實驗用）。與 `portfolio_walkforward.LIMIT_GAP` 同值：2015-06 起漲跌幅
+# 10%，停板價由參考價算出後向下取到升降單位，實際收漲停的漲幅約落在 9.5%~10%。
+LIMIT_HIT_THRESHOLD = 0.095
+LHR_WINDOW = 20       # 漲停率減跌停率（LHR）的回看交易日數（約一個月）
 
 
 def load(engine, start, end, include_otc_revenue=False):
@@ -128,6 +133,28 @@ def factors(piv, min_turnover):
             "d5": close.pct_change(5),
             "hi60_prior": high.shift(5).rolling(61).max(),
             "vol_r": vol.rolling(5).mean() / vol.rolling(60).mean()}
+
+
+def limit_hit_net(close, window=LHR_WINDOW, threshold=LIMIT_HIT_THRESHOLD):
+    """近 ``window`` 個交易日（含當日）收漲停天數減收跌停天數；LHR = 回傳值 / window。
+
+    - 用**還原後**收盤的日報酬判定：除權息日的停板價以參考價（已扣權息）計算，還原價的
+      日報酬才對得上；原始收盤在除權息日會出現假跌停。
+    - 只看收盤（收在停板），不看盤中觸及——量測端沒有載入 low，觸及跌停無從判定，
+      兩邊口徑一致才能相減。
+    - 前一日沒有價格（停牌、未上市）的那天不算命中；新股上市前五日無漲跌幅限制、
+      漲跌超過 10% 也會被算成命中，屬已知誤差。
+    """
+    chg = close.pct_change(fill_method=None)
+    up = (chg >= threshold).astype(float)
+    dn = (chg <= -threshold).astype(float)
+    net = (up - dn).rolling(window, min_periods=window).sum()
+    return net.where(close.notna())
+
+
+def volatility20(close):
+    """20 日日報酬標準差；定義與 `backtest_screen.py` 的 ``vol20`` 相同（研究過的單調因子）。"""
+    return close.pct_change(fill_method=None).rolling(20).std()
 
 
 def apply_thresholds(close, f, yoy, d5_min, vol_lo, vol_hi, yoy_min):
@@ -266,6 +293,119 @@ def block_bootstrap(ev, calendar, n=1000, block=60, seed=42):
     return paired_block_bootstrap(paired, calendar, n=n, block=block, seed=seed)
 
 
+def subset_diff_bootstrap(ev, keep, calendar, values, n=1000, block=60, seed=42):
+    """「留下的子集」相對「全部事件」的差異之 circular block bootstrap 95% 區間。
+
+    回答「套否決後池子有沒有變好」：每次重抽同一批交易日區塊，對每個 ``values`` 指標算
+    ``mean(子集) − mean(全部)``。與 ``paired_block_bootstrap`` 用同一種取樣（同日橫斷面整塊
+    進出、環狀、抽滿整個日曆），但兩者是獨立的亂數流——不改既有函式，錨點區間才可重現。
+
+    ``ev["date"]`` 須是 ``calendar`` 內的值；``keep`` 為與 ``ev`` 同長的布林；``values`` 為
+    ``{名稱: 與 ev 同長的數值}``。子集差 ``mean(kept) − mean(all) = (1−f)(mean(kept) − mean(vetoed))``，
+    與「留下 vs 被否決」同號。資料不足（區塊不夠、子集為空、全被否決）回傳 ``None``。
+    """
+    if n < 2 or block < 1:
+        return None
+    calendar = pd.Index(calendar)
+    n_days = len(calendar)
+    if n_days < block * 2:
+        return None
+    if not calendar.is_unique or not calendar.is_monotonic_increasing:
+        raise ValueError("calendar must be an ordered, unique full session index")
+    keep = np.asarray(keep, dtype=bool)
+    dates = pd.Index(ev["date"])
+    if len(dates) != len(keep) or not keep.any() or keep.all():
+        return None
+    if not dates.isin(calendar).all() or dates.nunique() < 2:
+        return None
+    pos = calendar.get_indexer(dates)
+    if pos.max() - pos.min() < block:
+        return None
+    vals = {k: np.asarray(v, dtype=float) for k, v in values.items()}
+    rows_by_pos = {}
+    for i, q in enumerate(pos):
+        rows_by_pos.setdefault(int(q), []).append(i)
+    rng = np.random.default_rng(seed)
+    n_blocks = int(np.ceil(n_days / block))
+    diffs = {k: [] for k in vals}
+    for _ in range(n):
+        idx = []
+        sampled_days = 0
+        for st in rng.integers(0, n_days, size=n_blocks):
+            for k in range(block):
+                if sampled_days == n_days:
+                    break
+                idx.extend(rows_by_pos.get((int(st) + k) % n_days, ()))
+                sampled_days += 1
+        if not idx:
+            continue
+        idx = np.asarray(idx)
+        kept = keep[idx]
+        if not kept.any():
+            continue
+        for name, v in vals.items():
+            diffs[name].append(v[idx][kept].mean() - v[idx].mean())
+    out = {}
+    for name, d in diffs.items():
+        if len(d) < 2:
+            return None
+        out[name] = (float(np.percentile(d, 2.5)), float(np.percentile(d, 97.5)))
+    return out
+
+
+def _arm(ev):
+    r = ev["r"]
+    return {"n": len(ev), "mean": r.mean() if len(r) else np.nan,
+            "hit": (r >= HIT_THRESHOLD).mean() if len(r) else np.nan}
+
+
+def report_lhr_veto(ev, calendar, a):
+    """LHR 否決實驗（事先登記於 docs/research/2026-10-26-exp-lhr-veto.md）。
+
+    同一批候選事件依訊號日 LHR 切成「留下／否決」，比較留下的池子與原池子；
+    否決在事件層做（不重跑去重），兩臂嚴格是原池子的子集。只報告、不改 live 規則。
+    """
+    w = a.lhr_window
+    print(f"\n=== LHR 否決（近 {w} 交易日收漲停天數 − 收跌停天數，門檻 {LIMIT_HIT_THRESHOLD:.1%}）===")
+    d = ev.dropna(subset=["lhr"]).copy()
+    print(f"有 LHR 的事件 {len(d)} / {len(ev)}；淨漲停天數分布：")
+    print(d["lhr"].astype(int).value_counts().sort_index().to_string())
+    rho = d[["lhr", "vol20"]].corr(method="spearman").iloc[0, 1]
+    print(f"Spearman(LHR, vol20) = {rho:+.3f}（事件層）")
+    base = _arm(d)
+    for thr in a.lhr_veto:
+        veto = (d["lhr"] >= thr).to_numpy()
+        kept, vetoed = _arm(d[~veto]), _arm(d[veto])
+        print(f"\n-- 否決 淨漲停天數 ≥ {thr:g}（LHR ≥ {thr / w:.2f}）--")
+        for label, arm in (("原池", base), ("留下", kept), ("否決", vetoed)):
+            print(f"  {label}  n={arm['n']:5d}  均值 {arm['mean'] * 100:+7.2f}%  "
+                  f"P(≥30%) {arm['hit'] * 100:5.1f}%")
+        print(f"  否決比例 {veto.mean() * 100:.1f}%；留下−原池：均值 "
+              f"{(kept['mean'] - base['mean']) * 100:+.2f}pp、P(≥30%) "
+              f"{(kept['hit'] - base['hit']) * 100:+.2f}pp")
+        if a.bootstrap:
+            ci = subset_diff_bootstrap(
+                d.assign(date=d["ti"]), ~veto, calendar,
+                {"mean": d["r"], "hit": (d["r"] >= HIT_THRESHOLD).astype(float)},
+                n=a.bootstrap, block=a.horizon, seed=a.bootstrap_seed)
+            if ci is None:
+                print("  區塊 bootstrap：inconclusive（資料不足）")
+            else:
+                for name, label in (("mean", "均值"), ("hit", "P(≥30%)")):
+                    lo, hi = ci[name]
+                    print(f"  留下−原池 {label} 95% 區間（block={a.horizon}、{a.bootstrap} 次、"
+                          f"seed={a.bootstrap_seed}）: {lo * 100:+.2f}pp ~ {hi * 100:+.2f}pp")
+        # 波動控制：在 vol20 三分位內各自比較（描述用、無區間）
+        q = d["vol20"].rank(pct=True, method="first")
+        terc = pd.cut(q, [0, 1 / 3, 2 / 3, 1], labels=["低波動", "中波動", "高波動"])
+        for t in ("低波動", "中波動", "高波動"):
+            m = (terc == t).to_numpy()
+            k_arm, v_arm = _arm(d[m & ~veto]), _arm(d[m & veto])
+            print(f"  {t}：留下 n={k_arm['n']} 均值 {k_arm['mean'] * 100:+.2f}% "
+                  f"P30 {k_arm['hit'] * 100:.1f}%｜否決 n={v_arm['n']} 均值 "
+                  f"{v_arm['mean'] * 100:+.2f}% P30 {v_arm['hit'] * 100:.1f}%")
+
+
 def hit_rate_bootstrap(ev, calendar, threshold=HIT_THRESHOLD, n=1000, block=60, seed=42):
     """P(淨報酬 ≥ threshold) 的 circular block bootstrap 95% 區間。
 
@@ -319,6 +459,11 @@ def main(argv=None):
                         "精準補只要幾十個請求。")
     p.add_argument("--include-otc-revenue", action="store_true",
                    help="月營收放入上櫃（預設只用上市口徑，與 screen_tw 預設相同；放入後是另一個池子，數字不可與既有基準比較）")
+    p.add_argument("--lhr", action="store_true",
+                   help="加跑 LHR（漲停率減跌停率）否決實驗；預設輸出不變")
+    p.add_argument("--lhr-window", type=int, default=LHR_WINDOW, help="LHR 回看交易日數")
+    p.add_argument("--lhr-veto", type=float, nargs="+", default=[1.0, 2.0],
+                   help="否決門檻（淨漲停天數 ≥ 此值即否決）；第一個為事先登記的主判準")
     a = p.parse_args(argv)
     if a.position_notional <= 0:
         p.error("--position-notional must be positive")
@@ -369,8 +514,11 @@ def main(argv=None):
     sig.loc[:pd.Timestamp(a.start)] = False
     ret, delisted = forward_returns(piv, a.horizon, a.delisting)
     event_args = {"entry_notional": a.position_notional, "fee_discount": a.fee_discount}
-    raw, ev = to_events(sig, ret, a.horizon,
-                        {k: extra[k] for k in ("d5", "vol_r")}, **event_args)
+    ev_extra = {k: extra[k] for k in ("d5", "vol_r")}
+    if a.lhr:
+        ev_extra["lhr"] = limit_hit_net(close, a.lhr_window)
+        ev_extra["vol20"] = volatility20(close)
+    raw, ev = to_events(sig, ret, a.horizon, ev_extra, **event_args)
 
     flat_cost = -round_trip_return(
         1.0, 1.0, entry_notional=a.position_notional, fee_discount=a.fee_discount)
@@ -420,6 +568,9 @@ def main(argv=None):
         else:
             print(f"候選池 P(≥{HIT_THRESHOLD:.0%}) {hit * 100:.1f}%（n={len(ev)}）的區塊 bootstrap "
                   f"95% 區間: {hit_ci[0] * 100:.1f}% ~ {hit_ci[1] * 100:.1f}%")
+
+    if a.lhr:
+        report_lhr_veto(ev, np.arange(len(close.index)), a)
 
     print("\n=== 逐年（事件級）===")
     ev["y"] = ev["date"].dt.year

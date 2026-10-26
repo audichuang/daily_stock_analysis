@@ -334,3 +334,113 @@ def test_single_day_suspension_is_not_treated_as_delisting():
     ret, delisted = forward_returns(piv, h, "last")
     assert not delisted.iloc[:, 0].any()
     assert pd.isna(ret.iloc[5, 0])               # T+5 剛好落在缺價日 → 報酬未知
+
+
+# ── LHR 否決實驗（docs/research/2026-10-26-exp-lhr-veto.md）──
+
+def _close_from_changes(changes, start=100.0):
+    prices = [start]
+    for c in changes:
+        prices.append(prices[-1] * (1 + c))
+    idx = pd.bdate_range("2026-01-01", periods=len(prices))
+    return pd.DataFrame({"A": prices}, index=idx)
+
+
+def test_limit_hit_net_counts_closes_at_limit_and_subtracts_limit_down():
+    from measure_signal_forward import limit_hit_net
+
+    # 9.6% 算收漲停、9.4% 不算；-9.6% 扣一天
+    close = _close_from_changes([0.096, 0.0, 0.094, -0.096, 0.096])
+    net = limit_hit_net(close, window=5)["A"]
+    assert net.iloc[-1] == 1.0          # +1 +0 +0 -1 +1
+    assert net.iloc[:4].isna().all()    # 不滿一個視窗不給值
+    assert net.iloc[4] == 0.0           # 第 1~4 天變動：+1 +0 +0 -1
+
+
+def test_limit_hit_net_window_excludes_days_before_lookback():
+    from measure_signal_forward import limit_hit_net
+
+    # 第一天漲停已滑出 3 日視窗，最後一天收跌停
+    close = _close_from_changes([0.098, 0.0, 0.0, 0.0, -0.098])
+    net = limit_hit_net(close, window=3)["A"]
+    assert net.iloc[-1] == -1.0
+    assert net.iloc[3] == 1.0           # 視窗第 1~3 天仍含那天漲停
+    assert net.iloc[4] == 0.0           # 視窗第 2~4 天已不含
+
+
+def test_limit_hit_net_ignores_day_after_missing_price():
+    from measure_signal_forward import limit_hit_net
+
+    close = _close_from_changes([0.0, 0.0, 0.0, 0.0])
+    close.iloc[2, 0] = float("nan")
+    close.iloc[3, 0] = close.iloc[1, 0] * 1.2   # 停牌跨日的 +20% 不是單日漲停
+    net = limit_hit_net(close, window=3)["A"]
+    assert net.iloc[3] == 0.0
+    assert pd.isna(net.iloc[2])                 # 當日沒價格不給值
+
+
+def _lhr_events(kept_r, vetoed_r, n_days=400):
+    rows = []
+    for d in range(0, n_days, 2):
+        rows.append({"date": d, "r": kept_r, "keep": True})
+        rows.append({"date": d + 1, "r": vetoed_r, "keep": False})
+    return pd.DataFrame(rows)
+
+
+def test_subset_diff_bootstrap_detects_veto_that_removes_bad_events():
+    from measure_signal_forward import subset_diff_bootstrap
+
+    ev = _lhr_events(kept_r=0.40, vetoed_r=-0.20)
+    ci = subset_diff_bootstrap(ev, ev["keep"], range(400),
+                               {"mean": ev["r"], "hit": (ev["r"] >= 0.30).astype(float)},
+                               n=200, block=20, seed=1)
+    # 留下全是 +40%（全命中）、原池一半 −20%：均值差約 +30pp、命中率差約 +50pp
+    assert 0.25 < ci["mean"][0] <= ci["mean"][1] < 0.35
+    assert 0.40 < ci["hit"][0] <= ci["hit"][1] < 0.60
+
+
+def test_subset_diff_bootstrap_sign_is_negative_when_veto_cuts_the_right_tail():
+    from measure_signal_forward import subset_diff_bootstrap
+
+    ev = _lhr_events(kept_r=-0.20, vetoed_r=0.40)
+    ci = subset_diff_bootstrap(ev, ev["keep"], range(400), {"mean": ev["r"]},
+                               n=200, block=20, seed=1)
+    assert ci["mean"][1] < 0
+
+
+def test_subset_diff_bootstrap_is_zero_when_arms_are_identical():
+    from measure_signal_forward import subset_diff_bootstrap
+
+    ev = _lhr_events(kept_r=0.10, vetoed_r=0.10)
+    ci = subset_diff_bootstrap(ev, ev["keep"], range(400), {"mean": ev["r"]},
+                               n=50, block=20, seed=1)
+    assert ci["mean"] == pytest.approx((0.0, 0.0))
+
+
+def test_subset_diff_bootstrap_is_inconclusive_without_data_or_without_a_veto():
+    from measure_signal_forward import subset_diff_bootstrap
+
+    ev = _lhr_events(kept_r=0.4, vetoed_r=-0.2, n_days=10)   # 全在一個區塊內
+    assert subset_diff_bootstrap(ev, ev["keep"], range(400), {"mean": ev["r"]},
+                                 n=50, block=20) is None
+    ev = _lhr_events(kept_r=0.4, vetoed_r=-0.2)
+    all_kept = pd.Series(True, index=ev.index)
+    assert subset_diff_bootstrap(ev, all_kept, range(400), {"mean": ev["r"]},
+                                 n=50, block=20) is None
+    assert subset_diff_bootstrap(ev, ~all_kept, range(400), {"mean": ev["r"]},
+                                 n=50, block=20) is None
+
+
+def test_lhr_report_vetoes_at_threshold_inclusive(capsys):
+    from types import SimpleNamespace
+
+    from measure_signal_forward import report_lhr_veto
+
+    ev = pd.DataFrame({"ti": [0, 1, 2, 3], "r": [0.5, 0.5, -0.1, -0.1],
+                       "lhr": [0.0, 0.0, 1.0, 2.0], "vol20": [0.01, 0.02, 0.03, 0.04]})
+    a = SimpleNamespace(lhr_window=20, lhr_veto=[1.0], bootstrap=0, horizon=60,
+                        bootstrap_seed=42)
+    report_lhr_veto(ev, range(10), a)
+    out = capsys.readouterr().out
+    assert "否決比例 50.0%" in out        # lhr=1 與 2 被否決，0 留下
+    assert "留下  n=    2  均值  +50.00%" in out
