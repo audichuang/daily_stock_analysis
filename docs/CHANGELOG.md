@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] `measure_revenue_momentum.py --experiment surprise` 的前 20% 閘門改為只和自己可見當下已可見的同月股票排名：2026-01 起保險類 15 日才公布，原本整月一起排會讓 10 日可見的股票在 11~15 日的旗標偷看保險類尚未公布的營收。
 - [修复] `measure_revenue_momentum.py --experiment surprise` 把事先登記的 SUS_pit 否決寫進判定：SUS 主檢定「通過且存活」而同組 SUS_pit 點估計方向相反時改判「不存活（更正前視污染）」，不再只靠研究文件手動套用。
 - [新功能] `scripts/measure_revenue_momentum.py --experiment surprise` 量測 SUS（標準化未預期營收）與營收÷歷史最高在突破候選池當 YoY≥20 的補充或取代閘門，`measure_signal_forward.two_arm_block_bootstrap` 給兩組事件差的交易日區塊區間；結果見 `docs/research/2026-10-26-exp-revenue-sus.md`，不改 live 規則
+- [改进] 反波動部位加權與 PB≥2 否決實驗：`portfolio_walkforward.py --weighting invvol|invvol-xs`、`measure_signal_forward.py --pb` 新增量測（預設輸出不變）；反波動加權讓 h60 組合逐日報酬差區間整段為負（Sharpe 1.19→1.00），突破池 76% 事件 PB≥2、否決後池子不足而未檢定，列入已研究清單，live 篩選與部位規則不改
 - [修复] `backfill --delay` 省略時沿用各來源函式預設，避免 TAIEX 月回補的 2 秒間隔被 CLI 的 0 覆蓋；保留顯式 0 與逐日來源行為，補測收盤衝突採 OHLC、FMTQIK 獨有日期仍保留。
 - [测试] 補齊 `backtest_screen` 一般回測、全因子比較與隨機對照的研究宇宙回歸測試：經真實指標、排名與交易迴圈確認 ETF／TDR／特別股不入選、9 開頭普通股仍可成交，並釘住共用 `is_common_stock` 判斷的呼叫與回傳值。
 - [测试] 補齊研究宇宙回歸測試：`backtest_screen` 一般回測、全因子比較與隨機對照經真實指標、排名與交易迴圈確認 ETF／TDR／特別股不入選、9 開頭普通股仍可成交，遮罩後候選仍補滿 top_n；`portfolio_walkforward` 池子與 `measure_revenue_momentum` 母體逐檔經共用 `is_common_stock`，退回 `startswith("00")`（TDR 9105、特別股 2887A 回到候選）或擋太寬（誤殺 9802／9904／9921）都會紅
