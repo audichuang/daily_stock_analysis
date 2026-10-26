@@ -217,6 +217,9 @@ jobs:
     runs-on: [self-hosted, ttnas]
     needs: [changes, ai-governance]
     if: needs.changes.outputs.docker == 'true'
+    env:
+      # fork：共用 daemon 上的並行 run 與重跑各自保有獨立的測試映像。
+      CI_IMAGE_TAG: stock-analysis:test-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v5
@@ -230,13 +233,13 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile
-          tags: stock-analysis:test
+          tags: ${{ env.CI_IMAGE_TAG }}
           load: true
       - name: 🐳 Docker smoke
-        run: docker run --rm stock-analysis:test python -c "print('✅ Docker OK')"
+        run: docker run --rm "$CI_IMAGE_TAG" python -c "print('✅ Docker OK')"
       - name: 🔍 Docker smoke imports
         run: |
-          docker run --rm stock-analysis:test python -c "
+          docker run --rm "$CI_IMAGE_TAG" python -c "
           from src.config import get_config; print('✅ config')
           from src.storage import DatabaseManager; print('✅ storage')
           from src.notification import NotificationService; print('✅ notification')
@@ -249,6 +252,9 @@ jobs:
           import market_data.db, market_data.closures, market_data.market_repo, market_data.adjust, market_data.events, market_data.funds, market_data.health, market_data.risk_flags, market_data.sources, market_data.financial_statement, market_data.revenue_deadline; print('✅ market_data')
           print('✅ All Docker imports OK')
           "
+      - name: 🧹 Remove CI image
+        if: always()
+        run: docker image rm "$CI_IMAGE_TAG"
 
   # fork 增量：桌面打包 job（Windows、macOS）都已移除——本 fork 只發 NAS 的 Docker 映像、不發桌面版
   #（使用者 2026-10-22）。futu_packaging 過濾器留著給上游的契約測試；打包腳本仍由
