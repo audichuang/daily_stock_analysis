@@ -40,6 +40,7 @@ CANONICAL_DECISION_SCALE_PROMPT_ZH = """## Canonical 评分与动作口径
 - 20-39：减仓，`action=reduce`，`decision_type=sell`。
 - 0-19：卖出，`action=sell`，`decision_type=sell`。
 - `decision_type` 只保留 `buy|hold|sell` 兼容统计；更细建议必须写入 `action`。
+- `action` 必填且只能是 `buy|add|hold|reduce|sell|watch|avoid|alert` 其中之一：系統只讀這個欄位，不會從 `operation_advice` 文字推斷動作（例如「不建議現在買入」要填 `watch` 或 `avoid`）。
 - 若 score >= 60 但最终 `action` 是 `hold/watch`，或 score < 40 但最终 `action` 是 `hold/watch`，必须在 `guardrail_reason` 或 `dashboard.decision_stability.reason` 中说明降级原因。"""
 
 
@@ -52,6 +53,7 @@ CANONICAL_DECISION_SCALE_PROMPT_EN = """## Canonical Score and Action Scale
 - 20-39: Reduce, `action=reduce`, `decision_type=sell`.
 - 0-19: Sell, `action=sell`, `decision_type=sell`.
 - `decision_type` only keeps `buy|hold|sell` for statistics compatibility; finer-grained advice must go into `action`.
+- `action` is required and must be exactly one of `buy|add|hold|reduce|sell|watch|avoid|alert`: the system reads the action only from this field and never infers it from `operation_advice` text (e.g. "do not buy yet" needs `action=watch` or `action=avoid`).
 - If score >= 60 but the final `action` is `hold/watch`, or score < 40 but the final `action` is `hold/watch`, explain the downgrade in `guardrail_reason` or `dashboard.decision_stability.reason`."""
 
 

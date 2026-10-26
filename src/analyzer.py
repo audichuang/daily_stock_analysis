@@ -1912,10 +1912,14 @@ def _set_structural_hold_wording(
         },
     }
     reason = reason_templates.get(language, reason_templates["en"]).get(reason_key, "")
+    # 洗盤觀察沿用「持有」語意（與 _OPERATION_ADVICE_CANONICAL_MAP 一致），震盪觀望才是觀望。
+    final_action = "watch" if advice_key == "range" else "hold"
     if calibrate_score:
-        final_action = "watch" if advice_key in {"range", "shakeout"} else "hold"
         _bound_hold_watch_sentiment_score(result, reason=reason, final_action=final_action)
     result.operation_advice = advice
+    # 建議改寫成「震盪觀望」這類句子後，動作由這裡以結構化欄位給出，下游不再從文字推斷。
+    result.action = final_action
+    result.action_label = None
     if advice_key == "range":
         if language == "zh" and "震荡" not in str(result.trend_prediction):
             result.trend_prediction = "震荡"

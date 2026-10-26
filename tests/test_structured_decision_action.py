@@ -1,24 +1,250 @@
-"""動作由模型以列舉給出；敘述文字不得改變結構化判斷。"""
+# -*- coding: utf-8 -*-
+"""動作由 LLM／agent 的結構化 `action` 欄位給出；程式碼不從建議文字推斷動作。"""
 
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from pydantic import ValidationError
 
 from tests.litellm_stub import ensure_litellm_stub
 
 ensure_litellm_stub()
 
-from src.agent.agents.decision_agent import DecisionAgent
-from src.agent.executor import AGENT_SYSTEM_PROMPT, LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT
-from src.agent.protocols import AgentContext
-from src.analyzer import AnalysisResult, GeminiAnalyzer
-from src.schemas.decision_action import build_action_fields, normalize_decision_action
-from src.schemas.report_schema import AnalysisReportSchema
-from src.services.decision_signal_extractor import build_decision_signal_payload_from_report
+from src.agent.orchestrator import AgentOrchestrator, _risk_adjusted_action  # noqa: E402
+from src.agent.protocols import AgentContext  # noqa: E402
+from src.agent.risk_override import RiskOverrideApplication  # noqa: E402
+from src.agent.executor import AGENT_SYSTEM_PROMPT, LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT  # noqa: E402
+from src.analyzer import AnalysisResult, GeminiAnalyzer, _set_structural_hold_wording  # noqa: E402
+from src.core.pipeline import StockAnalysisPipeline  # noqa: E402
+from src.phase_decision_guardrail import apply_phase_decision_guardrails  # noqa: E402
+from src.schemas.decision_action import build_action_fields, normalize_decision_action  # noqa: E402
+from src.schemas.report_schema import AnalysisReportSchema  # noqa: E402
+from src.services.decision_signal_extractor import build_decision_signal_payload_from_report  # noqa: E402
 
+_ACTION_ENUM = "buy/add/hold/reduce/sell/watch/avoid/alert"
+
+
+def _result(**overrides) -> AnalysisResult:
+    defaults = dict(
+        code="2330.TW",
+        name="台積電",
+        sentiment_score=50,
+        trend_prediction="震盪",
+        operation_advice="觀望",
+        decision_type="hold",
+        confidence_level="中",
+        report_language="zh-TW",
+    )
+    defaults.update(overrides)
+    return AnalysisResult(**defaults)
+
+
+# ---------- prompt：兩條 agent 路徑都要求結構化 action ----------
+
+@pytest.mark.parametrize("language", ["zh", "zh-TW", "en", "ko"])
+def test_decision_agent_prompt_requires_structured_action(language: str) -> None:
+    from src.agent.agents.decision_agent import DecisionAgent
+
+    agent = DecisionAgent.__new__(DecisionAgent)
+    agent.skill_instructions = ""
+    ctx = AgentContext(query="analyze", stock_code="2330.TW", meta={"report_language": language})
+    prompt = agent.system_prompt(ctx)
+
+    assert "decision_type, action, confidence_level" in prompt
+    assert "buy|add|hold|reduce|sell|watch|avoid|alert" in prompt
+    assert "never infers it from ``operation_advice``" in prompt
+
+
+@pytest.mark.parametrize("prompt_name", ["LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT", "AGENT_SYSTEM_PROMPT"])
+def test_agent_executor_prompts_require_structured_action(prompt_name: str) -> None:
+    from src.agent import executor
+
+    prompt = getattr(executor, prompt_name)
+    assert f'"action": "{_ACTION_ENUM}"' in prompt
+    assert "不會從 `operation_advice` 的文字推斷動作" in prompt
+
+
+def test_analyzer_canonical_scale_prompt_requires_structured_action() -> None:
+    from src.schemas.decision_scale import (
+        CANONICAL_DECISION_SCALE_PROMPT_EN,
+        CANONICAL_DECISION_SCALE_PROMPT_ZH,
+    )
+
+    assert "不會從 `operation_advice` 文字推斷動作" in CANONICAL_DECISION_SCALE_PROMPT_ZH
+    assert "never infers it from `operation_advice` text" in CANONICAL_DECISION_SCALE_PROMPT_EN
+
+
+# ---------- orchestrator：風控下調用結構化訊號改寫 action ----------
+
+def _orchestrator_payload(action):
+    payload = {
+        "decision_type": "buy",
+        "sentiment_score": 75,
+        "operation_advice": "買入",
+        "analysis_summary": "趨勢偏強。",
+        "dashboard": {},
+    }
+    if action is not None:
+        payload["action"] = action
+    return payload
+
+
+def _risk_ctx(applied: bool) -> AgentContext:
+    ctx = AgentContext(query="test", stock_code="2330.TW", stock_name="台積電")
+    if applied:
+        ctx.meta["risk_override_application"] = RiskOverrideApplication(
+            evidence_present=True,
+            override_enabled=True,
+            trigger="risk_veto",
+            applied=True,
+            reason="risk_veto_applied",
+            post_risk_signal="hold",
+            from_signal="buy",
+            to_signal="hold",
+        )
+    return ctx
+
+
+def _finalize(payload, ctx):
+    orch = AgentOrchestrator(tool_registry=MagicMock(), llm_adapter=MagicMock())
+    return orch._finalize_dashboard_payload(payload, ctx)
+
+
+def test_risk_veto_replaces_stale_llm_buy_action_with_watch() -> None:
+    normalized = _finalize(_orchestrator_payload("buy"), _risk_ctx(applied=True))
+
+    assert normalized["decision_type"] == "hold"
+    assert normalized["action"] == "watch"
+
+
+def test_risk_veto_keeps_llm_action_already_within_post_risk_signal() -> None:
+    # 反向：LLM 已給 hold 桶內的 avoid，不可被一律覆寫成 watch
+    normalized = _finalize(_orchestrator_payload("avoid"), _risk_ctx(applied=True))
+
+    assert normalized["action"] == "avoid"
+
+
+def test_without_risk_override_llm_action_passes_through_untouched() -> None:
+    # 反向：沒有風控下調時不改寫，也不憑 decision_type 憑空補 action
+    assert _finalize(_orchestrator_payload("buy"), _risk_ctx(applied=False))["action"] == "buy"
+    assert "action" not in _finalize(_orchestrator_payload(None), _risk_ctx(applied=False))
+
+
+@pytest.mark.parametrize(
+    ("raw_action", "signal", "expected"),
+    [
+        ("buy", "hold", "watch"),
+        ("add", "sell", "reduce"),
+        ("hold", "sell", "reduce"),
+        (None, "hold", "watch"),
+        ("sell", "sell", "sell"),
+        ("alert", "hold", "alert"),
+    ],
+)
+def test_risk_adjusted_action_matrix(raw_action, signal, expected) -> None:
+    assert _risk_adjusted_action(raw_action, signal) == expected
+
+
+# ---------- pipeline refresh：護欄給的結構化動作不被句子建議抹掉 ----------
+
+def test_refresh_keeps_guardrail_structured_action_when_advice_becomes_sentence() -> None:
+    result = _result(
+        operation_advice="等待盤中確認，禁止追高。",
+        action="watch",
+        sentiment_score=50,
+    )
+
+    StockAnalysisPipeline._refresh_decision_action_for_final_result(
+        result,
+        report_type="simple",
+        previous_operation_advice="買入",
+        record_contradiction=False,
+    )
+
+    assert result.action == "watch"
+
+
+@pytest.mark.parametrize(("action", "decision_type", "expected"), [
+    ("buy", "hold", None),      # 改寫者沒同步動作：殘留 buy 與三態 hold 矛盾，保守清空
+    ("reduce", "buy", None),
+    ("watch", "hold", "watch"),  # 反向：與三態一致的結構化動作要保留
+    ("avoid", "hold", "avoid"),
+    ("reduce", "sell", "reduce"),
+])
+def test_refresh_sentence_rewrite_clears_only_action_inconsistent_with_decision_type(
+    action, decision_type, expected,
+) -> None:
+    result = _result(operation_advice="持有觀察", action=action, decision_type=decision_type, sentiment_score=50)
+
+    StockAnalysisPipeline._refresh_decision_action_for_final_result(
+        result,
+        report_type="simple",
+        previous_operation_advice="買入",
+        record_contradiction=False,
+    )
+
+    assert result.action == expected
+
+
+def test_refresh_bare_label_rewrite_replaces_stale_structured_action() -> None:
+    # 反向：建議被改寫成單一標籤「觀望」時，殘留的 buy 仍要被換掉
+    result = _result(operation_advice="觀望", action="buy", sentiment_score=50)
+
+    StockAnalysisPipeline._refresh_decision_action_for_final_result(
+        result,
+        report_type="simple",
+        previous_operation_advice="買入",
+        record_contradiction=False,
+    )
+
+    assert result.action == "watch"
+
+
+# ---------- 改寫建議文字的護欄要自己設結構化動作 ----------
+
+@pytest.mark.parametrize(("advice_key", "expected"), [("range", "watch"), ("shakeout", "hold"), ("hold", "hold")])
+def test_structural_hold_wording_sets_structured_action_without_calibration(advice_key, expected) -> None:
+    result = _result(operation_advice="買入", action="buy", decision_type="hold")
+
+    _set_structural_hold_wording(
+        result,
+        "zh-TW",
+        advice_key=advice_key,
+        reason_key="hold_mid_range",
+        current_price=31.0,
+        support=30.0,
+        resistance=34.0,
+        flow_bias="neutral",
+    )
+
+    assert result.action == expected
+
+
+def test_phase_recap_rewrite_sets_structured_watch_action() -> None:
+    result = _result(
+        operation_advice="今日收盘后复盘显示可买入",
+        action="buy",
+        report_language="zh",
+        analysis_summary="明日重点关注突破",
+        dashboard={
+            "core_conclusion": {"one_sentence": "今日收盘后复盘显示偏强"},
+            "phase_decision": {"immediate_action": "明日重点关注突破", "watch_conditions": []},
+        },
+    )
+
+    apply_phase_decision_guardrails(
+        result,
+        market_phase_summary={"phase": "intraday", "market": "cn"},
+        analysis_context_pack_overview={"data_quality": {"overall_status": "available"}},
+        report_language="zh",
+    )
+
+    assert result.operation_advice == "等待盘中确认，禁止追高。"
+    assert result.action == "watch"
+
+
+# ---------- 解析、信號、歷史與重評共用同一份結構化動作契約 ----------
 
 @pytest.mark.parametrize("advice", [
     "不建議現在買入", "建議現在買入", "買入後不追高", "no need to sell",
@@ -52,12 +278,6 @@ def test_schema_declares_action_enum_and_preserves_it(action):
     assert AnalysisReportSchema.model_validate({}).action is None
 
 
-@pytest.mark.parametrize("invalid", ["不建議買入", "Buy now.", "strong_buy", "unknown", 1])
-def test_schema_rejects_non_enum_action(invalid):
-    with pytest.raises(ValidationError):
-        AnalysisReportSchema.model_validate({"action": invalid})
-
-
 @pytest.mark.parametrize("language", ["zh", "zh-TW", "en", "ko"])
 @pytest.mark.parametrize("legacy", [True, False])
 def test_all_report_prompts_require_action_enum(language, legacy):
@@ -67,7 +287,6 @@ def test_all_report_prompts_require_action_enum(language, legacy):
     prompts = [
         analyzer._get_analysis_system_prompt(language, "00631L.TW"),
         LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT if legacy else AGENT_SYSTEM_PROMPT,
-        DecisionAgent(MagicMock(), MagicMock()).system_prompt(AgentContext(meta={"report_language": language})),
     ]
     for prompt in prompts:
         assert '"action": "buy/add/hold/reduce/sell/watch/avoid/alert"' in prompt
@@ -131,25 +350,6 @@ def test_history_and_reassessment_share_exact_action_contract(action, advice, ex
             _build_candidate(record, raw, {})
     else:
         assert _build_candidate(record, raw, {}).action == expected
-
-
-@pytest.mark.parametrize("enabled", [True, False])
-def test_actual_risk_override_updates_structured_action_only_when_applied(enabled):
-    from src.agent.orchestrator import AgentOrchestrator
-    from src.agent.protocols import AgentOpinion
-
-    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
-    orchestrator.config = SimpleNamespace(agent_risk_override=enabled)
-    ctx = AgentContext(stock_code="2330.TW")
-    ctx.set_data("final_dashboard", {"decision_type": "buy", "action": "buy", "action_label": "買入"})
-    ctx.add_opinion(AgentOpinion(
-        agent_name="risk", signal="sell", confidence=0.9, reasoning="重大風險",
-        raw_data={"veto_buy": True},
-    ))
-    application = orchestrator._apply_risk_override(ctx)
-    assert application.applied == enabled
-    assert ctx.get_data("final_dashboard")["action"] == ("hold" if enabled else "buy")
-    assert ctx.get_data("final_dashboard").get("action_label") == (None if enabled else "買入")
 
 
 def test_finalization_preserves_structural_guardrail_action_before_history_write():

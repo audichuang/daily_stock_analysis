@@ -364,6 +364,9 @@ def _replace_postmarket_recap_fields(
         core["one_sentence"] = safe_action
     if _contains_any(getattr(result, "operation_advice", ""), _patterns(language)):
         result.operation_advice = safe_action
+        # 「等待盤中確認」是句子不是動作標籤，結構化動作由護欄直接給觀望。
+        result.action = "watch"
+        result.action_label = None
     if _contains_any(getattr(result, "analysis_summary", ""), _patterns(language)):
         result.analysis_summary = safe_summary
     if _contains_any(phase_decision.get("immediate_action"), _patterns(language)):

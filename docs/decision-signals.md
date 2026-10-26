@@ -36,9 +36,11 @@ Web 展示必须把这些 wire value 映射为当前 UI 语言的用户可读标
 
 ### 結構化動作與未知建議
 
-分析器、單 agent executor 與多 agent 的 DecisionAgent 都要求模型輸出頂層 `action`，值只能是 `buy|add|hold|reduce|sell|watch|avoid|alert`；`AnalysisReportSchema.action` 使用同一個列舉型別，為舊資料相容保留可選。`decision_type` 仍是三態統計欄位，不足以區分觀望與持有、減倉與賣出。三態缺漏時可由八態投影：buy/add → buy、reduce/sell → sell、其餘 → hold；沒有合法動作時沿用既有預設。實際風控改變三態時會同步八態 action，沒有套用風控就保留模型判斷。
+八態動作由 LLM／agent 在報告 JSON 的頂層 `action` 欄位給出（`buy|add|hold|reduce|sell|watch|avoid|alert`）。分析器（JSON 範例與 `CANONICAL_DECISION_SCALE_PROMPT_*`）、單 agent（`src/agent/executor.py` 兩份系統提示與語言段）與多 agent 的 DecisionAgent（`src/agent/agents/decision_agent.py`）都要求這個欄位；`report_schema.AnalysisReportSchema.action` 為選填字串（schema 驗證失敗只記 warning，不擋報告）。`decision_type` 仍是三態統計欄位，不足以區分觀望與持有、減倉與賣出；三態缺漏時由 `decision_action.decision_type_for_action` 從八態投影（buy/add → buy、reduce/sell → sell、其餘 → hold），不再用 `infer_decision_type_from_advice` 讀建議句子（分析器解析與 agent 結果轉換兩處）。
 
-`operation_advice` 僅供顯示。`normalize_decision_action` 只做完整列舉／單一動作標籤查表，去除首尾空白、英文大小寫及繁簡折疊以相容舊資料，不做子字串、正則、否定詞或英文金融複合詞判讀。支援八態的繁簡英韓顯示標籤（含「買入」「賣出」「減倉」「加倉／加碼」「持有」「觀望」），並保留既有英文列舉別名 `strong buy/strong_buy`、`strong sell/strong_sell`、`accumulate`、`trim`、`wait`。例如 `action=watch` 搭配「不建議現在買入」仍是 watch；沒有 action 的「建議現在買入」「不建議現在買入」「持有觀察」「no need to sell」都回傳 `None`；裸標籤「減倉」仍為 reduce。分數對齊與買入區 hold/reduce 護欄維持既有規則，不以這次修改取消風控。
+`operation_advice` 僅供顯示。`src/schemas/decision_action.py::normalize_decision_action` 只接受兩種輸入：八態 enum 值與既有英文別名（`strong buy/strong_buy`、`strong sell/strong_sell`、`accumulate`、`trim`、`wait`）；或去掉頭尾空白後**整段就是一個動作標籤**的建議（`_EXACT_LABEL_ACTIONS`：`_ACTION_LABELS` 各語系標籤、強烈買入／強烈賣出、台灣用語加碼／減碼；繁體先逐字折成簡體再查表）。除此之外的句子一律回 `None`，例如「不建議現在買入」「建議買入」「洗盤觀察」「觀望（原建議已被風控下調）」「no need to sell」。`action=watch` 搭配「不建議現在買入」仍是 watch；裸標籤「減倉」仍為 reduce。舊版的片語表、中英文否定判讀與財經複合詞遮罩已移除，不要再加回片語清單；模型該給的判斷沒給時，修 prompt 或結構化欄位，不要在程式碼裡讀文字。分數對齊與買入區 hold/reduce 護欄維持既有規則。
+
+會把建議改寫成句子的護欄要自己設好結構化 `result.action`：結構護欄 `_set_structural_hold_wording`（震盪觀望→`watch`，洗盤觀察／持有觀察→`hold`）、市場階段護欄改寫盤後復盤口徑（→`watch`）、大盤脈絡與交易成本護欄（→`watch`）。agent 風控下調時，`orchestrator._risk_adjusted_action` 依下調後的 `decision_type` 改寫 `action`：原 action 已落在同一桶就保留，否則 hold→`watch`、sell→`reduce`。
 
 已逐一核對呼叫端；沒有可用動作時的 fallback 如下：
 
@@ -49,7 +51,7 @@ Web 展示必须把这些 wire value 映射为当前 UI 语言的用户可读标
 | `notification.NotificationService`、`services.history_service` 報告訊號列 | action 空時沿用顯示建議與分數色階；不生成新的八態 action。 |
 | `analyzer.populate_decision_action_fields`、`GeminiAnalyzer._parse_response` | 保留空 action；解析時三態缺漏且沒有完整動作標籤則 hold。無效 JSON 仍標記失敗，不寫入歷史。 |
 | `core.pipeline._agent_result_to_analysis_result` | 保留空 action；三態缺漏時沿用趨勢 fallback，否則 hold；非法三態先試結構化 action／完整標籤，否則 hold。 |
-| `core.pipeline._refresh_decision_action_for_final_result` | 沿用共享 resolver；既有 sell 決策與買入區分數矛盾護欄仍可回退 watch，hold/reduce 規則不變。護欄已改寫結構化 action 時保留它；只改文字時清除過期 action。 |
+| `core.pipeline._refresh_decision_action_for_final_result` | 建議被改寫成單一標籤時以標籤取代舊動作；改寫成句子時保留護欄設好的結構化 action，但 action 與三態 `decision_type` 對不上（如護欄降為 hold、action 仍是 buy）就清成未知。之後沿用共享 resolver；sell 決策與買入區分數矛盾護欄先看單一標籤、再看結構化 action，買入類仍回退 watch，hold/reduce 規則不變。 |
 | `core.pipeline._finalize_and_persist_result`（含 `_capture`） | 未知起始／最終 action 使轉換鏈失效，跳過動作轉換記錄與最終解釋。 |
 | `agent.final_explanation` 的調整建構、capture 與 final explanation | 未知值拋出 ValueError；Pipeline 先檢查空值才呼叫。 |
 | `services.history_comparison_service._record_to_signal`、`history_service._decision_action_fields_for_record`、`backtest_service` | 歷史／比較／回測回傳空 action 與 action_label，原始建議保留；不以三態或分數補出八態。 |

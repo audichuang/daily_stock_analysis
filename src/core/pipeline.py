@@ -2383,21 +2383,32 @@ class StockAnalysisPipeline:
         previous_operation_advice: Any,
         record_contradiction: bool = True,
     ) -> AnalysisResult:
-        # A guardrail may rewrite the advice after the Agent action was parsed;
-        # discard that stale action before using the same resolver as the
-        # downstream DecisionSignal builder.
+        # 護欄可能在解析 Agent action 之後改寫建議：改成單一標籤時以標籤取代舊動作，
+        # 改成句子時保留護欄設好的結構化動作，再交給與 DecisionSignal 相同的 resolver。
         previous_advice = str(previous_operation_advice or "").strip()
         current_advice = str(getattr(result, "operation_advice", None) or "").strip()
-        if previous_advice != current_advice:
-            result.action = None
+        advice_action = normalize_decision_action(current_advice)
+        if previous_advice != current_advice and advice_action is not None:
+            # 護欄把建議改寫成單一動作標籤（「觀望」）時以標籤為準；改寫成句子時，
+            # 改寫的護欄必須自己設好結構化 result.action，這裡不從句子推斷動作。
+            result.action = advice_action
             result.action_label = None
-        advice_action = normalize_decision_action(getattr(result, "action", None)) or normalize_decision_action(current_advice)
+        elif previous_advice != current_advice:
+            # 改寫成句子但結構化動作與三態 decision_type 對不上（如護欄已降為 hold，
+            # action 還是解析時的 buy），代表改寫者沒同步動作：清掉殘留值、保守回未知。
+            decision_type = str(getattr(result, "decision_type", None) or "").strip().lower()
+            action_bucket = decision_type_for_action(getattr(result, "action", None), default="")
+            if action_bucket and decision_type in {"buy", "hold", "sell"} and action_bucket != decision_type:
+                result.action = None
+                result.action_label = None
         score = getattr(result, "sentiment_score", None)
         if action_for_score(score) == "buy" and (
             str(getattr(result, "decision_type", None) or "").strip().lower() == "sell"
         ):
             # 僅結構化賣出決策阻擋買入區分數升級，沿用非買入建議動作，否則退回觀望。
-            result.action = advice_action if advice_action and advice_action not in {"buy", "add"} else "watch"
+            # 建議文字不是單一標籤時改看結構化 action（如 LLM 給的 reduce），不從句子推斷。
+            kept_action = advice_action or normalize_decision_action(getattr(result, "action", None))
+            result.action = kept_action if kept_action and kept_action not in {"buy", "add"} else "watch"
             result.action_label = None
             if not record_contradiction:
                 # 中途只刷新動作，等真正護欄執行完才記錄尚未解決的矛盾。
@@ -3197,11 +3208,7 @@ class StockAnalysisPipeline:
             self._refresh_decision_action_for_final_result(
                 result,
                 report_type=report_type,
-                # 護欄已寫入結構化動作時保留它，只有純文字改寫才清除舊動作。
-                previous_operation_advice=(
-                    getattr(result, "operation_advice", None)
-                    if getattr(result, "action", None) != action_before else advice_before
-                ),
+                previous_operation_advice=advice_before,
                 record_contradiction=False,
             )
             action_after = normalize_decision_action(getattr(result, "action", None))
