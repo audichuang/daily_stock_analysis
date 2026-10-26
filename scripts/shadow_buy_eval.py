@@ -21,7 +21,8 @@
     `src.core.backtest_engine.resolve_bar_exit`），開盤在兩者之間、同日兩者都碰算停損，未碰則同 (1)。觸發與損益都在**還原**價空間（價位乘報告日因子：報告日非交易日時取之前最後一個交易日）
     （報告價位是報告日的名目價，報告日到出場之間的除權息／分割因此不會誤觸），損益用前復權價。價位缺值或不滿足 stop < 進場開盤 < take 時不套價位。
   - 成本：`src/utils/tw_trade_costs.round_trip_return`（含雙邊滑價、手續費、賣方證交稅；
-    00 開頭用 ETF 稅率），固定名目本金。
+    稅率依實際出場日，含一般債券 ETF 的法定免稅期間），固定名目本金。
+  - 期末缺價：未曾觸發停損／停利且第 h 日無法成交，標為 incomplete 並另計數，不提前結算。
   - 區間：以 code 群聚的 bootstrap 95% CI（同檔相鄰視窗重疊一起重抽）；
     **未處理跨檔同日的相關性，區間可能仍偏窄**。區間跨零或不足兩檔一律標 inconclusive。
 
@@ -53,6 +54,7 @@ from src.utils.tw_trade_costs import (  # noqa: E402
     ETF_TRANSACTION_TAX_RATE,
     STOCK_TRANSACTION_TAX_RATE,
     round_trip_return,
+    tw_transaction_tax_rate,
 )
 
 BENCHMARK = "0050"
@@ -86,15 +88,20 @@ def is_raw_buy(raw_score, raw_type, threshold=60) -> bool:
 
 
 def trade_return(o, h, lo, c, adj, *, stop=None, take=None, level_adj=None, tax_rate=STOCK_TRANSACTION_TAX_RATE,
-                 notional=DEFAULT_NOTIONAL, fee_discount=1.0):
+                 notional=DEFAULT_NOTIONAL, fee_discount=1.0, stock_id=None, dates=None):
     """一筆影子交易的淨報酬。
 
     o/h/lo/c/adj 是從進場日（第 1 天）起、長度 = 持有天數的序列；o/h/lo/c 為未還原價，adj 為前復權因子。
     level_adj 是報告價位所屬那天（報告日）的前復權因子；未給時視為進場日（adj[0]）。
-    回傳 (淨報酬, 出場類型) ；進場日沒開盤價（停牌）回傳 None。
+    回傳 (淨報酬, 出場類型)；進場日沒有效價格回傳 None，期末缺價回傳 (NaN, incomplete)。
+    stock_id 與 dates 同時提供時，依真正成交日決定稅率；否則沿用明確傳入的 tax_rate。
     """
-    if not np.isfinite(o[0]):
+    if not len(o) or not np.isfinite(o[0]) or o[0] <= 0 or not np.isfinite(adj[0]) or adj[0] <= 0:
         return None
+    if (stock_id is None) != (dates is None):
+        raise ValueError("stock_id and dates must be provided together")
+    if dates is not None and len(dates) != len(o):
+        raise ValueError("dates must cover the complete window")
     entry = o[0]
     # 報告價位是報告日的名目價：一律換到還原價空間再比，報告日到出場之間除權息／分割才不會誤觸或失效
     f_level = adj[0] if level_adj is None or not np.isfinite(level_adj) else level_adj
@@ -103,9 +110,13 @@ def trade_return(o, h, lo, c, adj, *, stop=None, take=None, level_adj=None, tax_
                   and stop * f_level < entry_adj < take * f_level)
     stop_adj = stop * f_level if use_levels else None
     take_adj = take * f_level if use_levels else None
-    last = None
+
+    def net(exit_adj, k):
+        tax = tw_transaction_tax_rate(stock_id, dates[k]) if stock_id is not None else tax_rate
+        return _net(entry_adj, exit_adj, tax, notional, fee_discount)
+
     for k in range(len(o)):
-        if not np.isfinite(o[k]):
+        if not np.isfinite(o[k]) or not np.isfinite(adj[k]) or adj[k] <= 0:
             continue
         if use_levels:
             decision = resolve_bar_exit(bar_open=o[k] * adj[k], high=h[k] * adj[k], low=lo[k] * adj[k],
@@ -113,12 +124,10 @@ def trade_return(o, h, lo, c, adj, *, stop=None, take=None, level_adj=None, tax_
             if decision is not None:
                 first_hit, exit_adj = decision
                 kind = "take" if first_hit == "take_profit" else "stop"  # ambiguous 保守算停損
-                return _net(entry * adj[0], exit_adj, tax_rate, notional, fee_discount), kind
-        if np.isfinite(c[k]):
-            last = k
-    if last is None:
-        return None
-    return _net(entry * adj[0], c[last] * adj[last], tax_rate, notional, fee_discount), "time"
+                return net(exit_adj, k), kind
+    if not all(np.isfinite(x) and x > 0 for x in (o[-1], c[-1], adj[-1])):
+        return np.nan, "incomplete"
+    return net(c[-1] * adj[-1], len(o) - 1), "time"
 
 
 def _net(entry_adj, exit_adj, tax_rate, notional, fee_discount):
@@ -242,7 +251,6 @@ def build_events(reports, panels, horizons, *, threshold, fee_discount):
         adj_col = panels["adj"][r.stock_id].to_numpy()
         level_adj = adj_col[i0 - 1] if i0 >= 1 else np.nan  # 報告日（或之前最後一個交易日）的因子
         group = "raw_buy" if is_raw_buy(r.raw_score, r.raw_type, threshold) else "others"
-        tax = ETF_TRANSACTION_TAX_RATE if r.stock_id.startswith("00") else STOCK_TRANSACTION_TAX_RATE
         for hz in horizons:
             if i0 + hz > len(cal):
                 continue  # 視窗還沒走完
@@ -255,7 +263,7 @@ def build_events(reports, panels, horizons, *, threshold, fee_discount):
                                  tax_rate=ETF_TRANSACTION_TAX_RATE, fee_discount=fee_discount)
             for mode, stop, take in (("time", None, None), ("levels", r.stop_loss, r.take_profit)):
                 res = trade_return(*(seq(r.stock_id, k) for k in ("open", "high", "low", "close", "adj")),
-                                   stop=stop, take=take, level_adj=level_adj, tax_rate=tax,
+                                   stop=stop, take=take, level_adj=level_adj, stock_id=r.code, dates=cal[win],
                                    fee_discount=fee_discount)
                 if res is None:
                     continue
@@ -298,9 +306,12 @@ def _blocks(ev, args, level="") -> list:
         out += [f"{level}## {titles[mode]}", ""]
         for hz in sorted(ev["h"].unique()):
             e = ev[(ev["mode"] == mode) & (ev["h"] == hz)]
+            incomplete = int((e["exit"] == "incomplete").sum())
+            e = e[np.isfinite(e["ret"])]
             buy, oth = e[e["group"] == "raw_buy"], e[e["group"] == "others"]
             paired = buy.dropna(subset=["bench"])
-            out += [f"{level}### h = {hz}", "", "| 組別 | n | 均值 | 中位數 | 勝率 | 95% CI | 判定 |",
+            out += [f"{level}### h = {hz}", "", f"未完成交易：{incomplete} 筆（期末缺價，不計入報酬統計）。", "",
+                    "| 組別 | n | 均值 | 中位數 | 勝率 | 95% CI | 判定 |",
                     "|---|---|---|---|---|---|---|",
                     stats_row("raw-buy", buy["ret"], buy["code"], args.bootstrap, args.seed),
                     stats_row("raw-buy（僅被護欄降級者）", buy.loc[buy["downgraded"], "ret"],

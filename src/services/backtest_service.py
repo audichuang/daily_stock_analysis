@@ -34,12 +34,11 @@ from src.services.stock_code_utils import (
 )
 from src.services.stock_list_parser import AnalysisTarget
 from src.services.backtest_price_basis import (
-    INTRADAY_ENTRY_GUARD_PHASES,
     PRICE_BASIS_RAW,
     FactorLoader,
-    is_valid_entry_open,
+    is_usable_entry_window,
+    resolve_backtest_entry_window,
     resolve_entry_basis,
-    resolve_entry_cutoff,
 )
 from src.services.stock_daily_start_resolver import resolve_stock_daily_start
 from src.services.stock_daily_window_resolver import resolve_stock_daily_window
@@ -205,11 +204,7 @@ class BacktestService:
                         context_snapshot=analysis.context_snapshot,
                     )
 
-                if (
-                    daily_window is None
-                    or len(entry_bars) < int(eval_window_days)
-                    or not is_valid_entry_open(getattr(entry_bars[0], "open", None))
-                ):
+                if daily_window is None or not is_usable_entry_window(entry_bars, int(eval_window_days)):
                     insufficient += 1
                     results_to_save.append(
                         BacktestResult(
@@ -980,36 +975,10 @@ class BacktestService:
         其他 phase 維持錨點；沒有持久化 phase 的舊紀錄維持預設。
         執行截止日與名目價格錨點分開，即時報價失敗時不改動原本的還原基準。
         """
-        anchor = daily_window.start_bar.date
-        execution_cutoff = resolve_entry_cutoff(
-            phase=phase,
-            anchor_date=anchor,
-            session_date=self._persisted_session_date(context_snapshot),
-            analysis_date=analysis_date,
-            minutes_to_open=(extract_market_phase_summary(context_snapshot) or {}).get("minutes_to_open"),
+        return resolve_backtest_entry_window(
+            stock_repo=self.stock_repo, daily_window=daily_window, analysis_date=analysis_date,
+            phase=phase, eval_window_days=eval_window_days, context_snapshot=context_snapshot,
         )
-        if execution_cutoff == anchor:
-            return anchor, list(daily_window.forward_bars)
-        bars = self.stock_repo.get_forward_bars(
-            code=daily_window.code,
-            analysis_date=execution_cutoff,
-            eval_window_days=eval_window_days,
-        )
-        level_anchor = max(anchor, analysis_date) if phase in INTRADAY_ENTRY_GUARD_PHASES else anchor
-        return level_anchor, list(bars)
-
-    @staticmethod
-    def _persisted_session_date(context_snapshot: Any) -> Optional[date]:
-        """持久化的市場場次日：先看 ``session_date``，壞掉再退回 ``market_local_time``。"""
-        summary = extract_market_phase_summary(context_snapshot)
-        if not summary:
-            return None
-        for key in ("session_date", "market_local_time"):
-            try:
-                return datetime.fromisoformat(str(summary.get(key) or "")).date()
-            except ValueError:
-                continue
-        return None
 
     def _has_usable_entry_window(
         self,
@@ -1025,7 +994,7 @@ class BacktestService:
         _anchor, bars = self._entry_window(
             daily_window, analysis_date, phase, eval_window_days, context_snapshot=context_snapshot
         )
-        return len(bars) >= eval_window_days and is_valid_entry_open(getattr(bars[0], "open", None))
+        return is_usable_entry_window(bars, eval_window_days)
 
     def _try_fill_daily_data(self, *, code: str, analysis_date: date, eval_window_days: int) -> None:
         refill_code = str(code or "").strip()

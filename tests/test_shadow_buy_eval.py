@@ -11,6 +11,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -125,6 +129,52 @@ def test_split_between_report_and_entry_keeps_levels():
 
 def test_suspended_entry_day_returns_none():
     assert trade_return(*_bars([np.nan, 100], [np.nan, 101], [np.nan, 99], [np.nan, 100])) is None
+
+
+def test_missing_final_close_is_incomplete_but_real_early_exit_survives():
+    bars = _bars([100, 105, np.nan], [101, 112, np.nan],
+                 [99, 104, np.nan], [100, 110, np.nan])
+    ret, kind = trade_return(*bars)
+    assert kind == "incomplete" and np.isnan(ret)
+    ret, kind = trade_return(*bars, stop=95, take=110)
+    assert kind == "take" and ret == pytest.approx(_rt(100, 110))
+
+
+def test_internal_missing_session_does_not_block_a_valid_final_exit():
+    bars = _bars([100, np.nan, 105], [101, np.nan, 106],
+                 [99, np.nan, 104], [100, np.nan, 110])
+    ret, kind = trade_return(*bars)
+    assert kind == "time" and ret == pytest.approx(_rt(100, 110))
+
+
+@pytest.mark.parametrize("missing", [0, 3, 4])
+def test_missing_final_execution_price_or_factor_is_incomplete(missing):
+    bars = _bars([100, 105], [101, 106], [99, 104], [100, 110])
+    bars[missing][-1] = np.nan
+    ret, kind = trade_return(*bars)
+    assert kind == "incomplete" and np.isnan(ret)
+
+
+@pytest.mark.parametrize("early,tax", [(False, 0.001), (True, 0.0)])
+def test_shadow_bond_etf_uses_actual_sale_date(early, tax):
+    from shadow_buy_eval import build_events
+
+    bars = _bars([100, 105], [112, 112], [99, 104], [110, 110])
+    ret, kind = trade_return(*bars, stop=95, take=110 if early else 120,
+                             stock_id="00679B.TWO", dates=pd.to_datetime(["2026-12-31", "2027-01-04"]))
+    assert kind == ("take" if early else "time")
+    assert ret == pytest.approx(round_trip_return(100, 110, entry_notional=DEFAULT_NOTIONAL, tax_rate=tax))
+    days = pd.to_datetime(["2026-12-30", "2026-12-31", "2027-01-04"])
+    panels = {k: pd.DataFrame({"00679B": np.r_[100.0, values], "0050": [50.0] * 3}, index=days)
+              for k, values in zip(("open", "high", "low", "close", "adj"), bars)}
+    panels["adj"] = pd.DataFrame({"00679B": [1.0] * 3, "0050": [1.0] * 3}, index=days)
+    reports = pd.DataFrame([{"code": "00679B.TWO", "stock_id": "00679B", "day": days[0],
+                             "raw_score": 70, "raw_type": "buy", "stop_loss": 95,
+                             "take_profit": 110 if early else 120, "downgraded": True, "variant": "baseline"}])
+    ev = build_events(reports, panels, [2], threshold=60, fee_discount=1.0).set_index("mode")
+    assert ev.loc["levels", "ret"] == pytest.approx(ret)
+    assert ev.loc["time", "ret"] == pytest.approx(
+        round_trip_return(100, 110, entry_notional=DEFAULT_NOTIONAL, tax_rate=0.001))
 
 
 def test_latest_per_code_day_keeps_whole_last_row():
@@ -244,3 +294,31 @@ def test_build_events_uses_report_day_factor_for_levels():
     ev = build_events(reports, panels, [3], threshold=60, fee_discount=1.0)
     lv = ev[ev["mode"] == "levels"].iloc[0]
     assert lv["exit"] == "take" and lv["ret"] == pytest.approx(_rt(25, 30))
+
+
+@pytest.mark.parametrize("missing_code", ["2330", "0050"])
+def test_build_events_keeps_incomplete_trades_out_of_statistics(missing_code):
+    from types import SimpleNamespace
+    from shadow_buy_eval import build_events
+
+    days = pd.to_datetime(["2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06"])
+    panels = {k: pd.DataFrame({"2330": [100.0] * 4, "0050": [50.0] * 4}, index=days)
+              for k in ("open", "high", "low", "close")}
+    panels["adj"] = pd.DataFrame({"2330": [1.0] * 4, "0050": [1.0] * 4}, index=days)
+    panels["close"].loc[days[-1], missing_code] = np.nan
+    reports = pd.DataFrame([{
+        "code": "2330.TW", "stock_id": "2330", "created_at": days[0] + pd.Timedelta(hours=18),
+        "day": days[0], "raw_score": 70, "raw_type": "buy", "stop_loss": None, "take_profit": None,
+        "downgraded": True, "variant": "baseline",
+    }])
+    ev = build_events(reports, panels, [3], threshold=60, fee_discount=1.0)
+    assert len(ev) == 2
+    text = render(ev, reports, SimpleNamespace(buy_threshold=60, bootstrap=50, seed=1))
+    if missing_code == "2330":
+        assert set(ev["exit"]) == {"incomplete"} and ev["ret"].isna().all()
+        assert "未完成交易：1 筆" in text and "| raw-buy | 0 |" in text
+    else:
+        assert set(ev["exit"]) == {"time"} and ev["ret"].notna().all()
+        assert ev["bench"].isna().all()
+        assert "未完成交易：0 筆" in text and "| raw-buy | 1（1 檔）" in text
+    assert "| raw-buy − 0050（成對） | 0 |" in text

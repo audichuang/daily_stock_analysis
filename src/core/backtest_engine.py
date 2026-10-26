@@ -471,10 +471,10 @@ class BacktestEngine:
             simulated_net_return_pct = None
         else:
             simulated_return_pct = (exit_adj - start_value) / start_value * 100
-            simulated_net_return_pct = compute_tw_net_return_pct(
-                simulated_return_pct, basis.cost_multipliers
-            )
             exit_day = first_hit_date if first_hit_date is not None else end_bar.date
+            simulated_net_return_pct = compute_tw_net_return_pct(
+                simulated_return_pct, basis.costs_on(exit_day)
+            )
             # 存檔用原始價：還原價除回該日的相對乘數。
             simulated_exit_price = exit_adj / basis.rel(exit_day)
 

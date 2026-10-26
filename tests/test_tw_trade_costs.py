@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
@@ -94,6 +98,30 @@ def test_etf_sell_tax_is_a_third_of_the_stock_rate():
 
 def test_sell_cashflow_has_no_nhi_parameter_or_deduction():
     assert sell_cash_inflow(1_000, 100.0, minimum_fee=0.0) == pytest.approx(99_557.5)
+
+
+@pytest.mark.parametrize("early,tax", [(False, 0.001), (True, 0.0)])
+def test_daily_report_levels_share_bond_etf_tax_by_actual_exit_date(early, tax):
+    import pandas as pd
+    from backtest_daily_report_levels import buy_and_hold, simulate
+
+    days = pd.to_datetime(["2026-12-31", "2027-01-04"])
+    bars = pd.DataFrame({"date": days, "open": [100.0, 105.0], "high": [112.0, 112.0],
+                         "low": [99.0, 104.0], "close": [110.0, 110.0]})
+    adj = pd.DataFrame({"00679B": [1.0, 1.0]}, index=days)
+    reports = pd.DataFrame([{"day": pd.Timestamp("2026-12-30"), "ideal_buy": 100.0,
+                             "stop_loss": 90.0, "take_profit": 110.0, "operation_advice": "買進"}])
+    trades = simulate("00679B", reports, bars, adj, 200_000, False,
+                      same_day_tp=True, no_tp=not early, hold_days=1)
+    assert len(trades) == 1
+    assert trades[0]["exit_type"] == ("take_profit" if early else "time")
+    shares = affordable_shares(200_000, buy_fill_price(100.0))
+    cost = buy_cash_outflow(shares, buy_fill_price(100.0))
+    expected = sell_cash_inflow(shares, sell_fill_price(110.0), tax_rate=tax) / cost - 1
+    assert trades[0]["ret"] == pytest.approx(expected)
+    held = bars.iloc[:1] if early else bars
+    expected_hold = sell_cash_inflow(shares, 110.0, tax_rate=tax) / cost - 1
+    assert buy_and_hold("00679B", held, adj, 200_000) == pytest.approx(expected_hold)
 
 
 def test_invalid_cost_parameters_are_rejected_even_for_zero_amounts():

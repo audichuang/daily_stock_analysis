@@ -298,6 +298,12 @@ Agent 工具还会独立调用 `get_realtime_quote`、`get_daily_history`、`get
 
 ### 回测
 
+同一引擎版本與視窗已記為 `insufficient_data` 的分析，只有本地日線已湊齊完整進場視窗、
+且第一根開盤有效時才重新入列；候選檢查與執行共用 `resolve_backtest_entry_window()`，
+保留盤前／盤中的截止日與代碼別名規則。永久缺價、下市或缺進場開盤的紀錄不再反覆連網回補，
+也不占用候選額度與分頁。資料匯入／修復後會自動重試；若要在資料尚未修復時再次連網回補，
+須明確指定 `force`。狀態欄與資料庫結構不變，不同視窗／引擎版本仍各自評估。
+
 回测服务在 `src/services/backtest_service.py` 和 `src/repositories/backtest_repo.py` 中消费历史分析记录与日线数据。现有 `parse_analysis_date_from_snapshot()` 依赖 `analysis_history.context_snapshot.enhanced_context.date` 解析分析日期。
 
 `enhanced_context.date` 走即時覆蓋時標的是**報價所屬場次**，不是掛鐘日（本 fork 2026-10 起）：交易日開盤前（台北 07:30 的台股、紐約盤前的美股）的分析，報價是上一場收盤，日期因此是 T-1 而不是 T。回測與 skill outcome（`skill_opinion_outcome_service._resolve_analysis_date`）都以它為起點：起始 K 棒是 T-1 收盤、前向窗口從 T 這一場算起。在此之前的盤前紀錄標的是 T（起點 T 收盤、少算 T 這一場），兩段紀錄的命中率與報酬口徑不能直接比較；盤中與盤後的分析不受影響。

@@ -11,7 +11,7 @@
   （`media-picks-review.jsonl`）沿用 `media_picks_summary._apply_reviews`：`correct` 改掛、`not_stock` 排除；`unclear` 也排除。
 
 持有 h 個交易日（進場日算第 1 天，出場 = 進場後第 h-1 個交易日收盤，與 `verify_swing_decisions.window` 同義）；
-前復權價；報酬走 `round_trip_return`（雙邊滑價、手續費、賣出證交稅；00 開頭按 ETF 稅率）；
+前復權價；報酬走 `round_trip_return`（雙邊滑價、手續費、賣出證交稅；依出場日套用一般債券 ETF 免稅）；
 超額 = 個股淨報酬 − 0050 同一段淨報酬（0050 也扣同一套成本）。**未走完視窗（右設限）、查不到價格、不在 market.price 的代號一律
 排除並計數，絕不補值**（用最後收盤補會把還沒發生的事當成已實現）。
 
@@ -45,7 +45,7 @@ from shadow_buy_eval import (  # noqa: E402
     BENCHMARK, DEFAULT_NOTIONAL, _pct, cluster_bootstrap_ci, load_bars,
 )
 from src.utils.tw_trade_costs import (  # noqa: E402
-    ETF_TRANSACTION_TAX_RATE, STOCK_TRANSACTION_TAX_RATE, round_trip_return,
+    ETF_TRANSACTION_TAX_RATE, round_trip_return, tw_transaction_tax_rate,
 )
 
 JOURNAL_DIR = REPO / "journal"
@@ -125,8 +125,8 @@ def call_picks(rows: list, reviews: list) -> tuple[list, dict]:
 
 # ---- 價格 → 報酬（純函式，panels 由呼叫端提供）----
 
-def _tax(stock_id: str) -> float:
-    return ETF_TRANSACTION_TAX_RATE if stock_id.startswith("00") else STOCK_TRANSACTION_TAX_RATE
+def _tax(stock_id: str, sell_date: dt.date) -> float:
+    return tw_transaction_tax_rate(stock_id, sell_date)
 
 
 def build_events(picks: list, panels: dict, horizons=HORIZONS, *, fee_discount=1.0,
@@ -161,7 +161,7 @@ def build_events(picks: list, panels: dict, horizons=HORIZONS, *, fee_discount=1
                 rows.append(base | {"status": "no_price", "entry_date": e_d})
                 continue
             kw = {"entry_notional": notional, "fee_discount": fee_discount}
-            ret = round_trip_return(float(e), float(x), tax_rate=_tax(sid), **kw)
+            ret = round_trip_return(float(e), float(x), tax_rate=_tax(code, x_d), **kw)
             bench = round_trip_return(float(be), float(bx), tax_rate=ETF_TRANSACTION_TAX_RATE, **kw)
             rg, bg = float(x) / float(e) - 1.0, float(bx) / float(be) - 1.0   # 不扣成本：命中判定用
             rows.append(base | {"status": "ok", "ret": ret, "bench": bench, "excess": ret - bench,

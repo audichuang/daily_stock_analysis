@@ -15,6 +15,10 @@ calendar — it is a Taiwan market convention, like the fee and tax rates above 
 
 from __future__ import annotations
 
+from datetime import date, datetime
+
+from src.services.market_symbol_utils import is_tw_suffix_symbol, split_suffix_symbol
+
 # 台股年均交易日。**所有腳本的年化都必須用同一個數字**，否則同一條淨值曲線在兩支腳本裡
 # 會印出不同的 CAGR 與 Sharpe，而讀者無從對帳。踩過：`backtest_screen` 用美股慣例 252、
 # `portfolio_walkforward` 用 245，於是同一段 0050 買進持有被報成 +29.37% 與 +28.44%
@@ -30,9 +34,35 @@ STOCK_TRANSACTION_TAX_RATE = 0.003
 ETF_TRANSACTION_TAX_RATE = 0.001
 DEFAULT_SLIPPAGE_RATE = 0.0015
 
+# 證券交易稅條例第 2-1 條（2026-10-26 核對）：延長年限的草案尚未生效。
+# https://law-out.mof.gov.tw/LawContent.aspx?id=FL006079
+BOND_ETF_TAX_EXEMPT_START = date(2017, 1, 1)
+BOND_ETF_TAX_EXEMPT_END = date(2026, 12, 31)
+
 NHI_SUPPLEMENTARY_PREMIUM_RATE = 0.0211
 NHI_DIVIDEND_PAYMENT_THRESHOLD = 20_000.0
 NHI_DIVIDEND_PAYMENT_CAP = 10_000_000.0
+
+
+def tw_transaction_tax_rate(stock_id: str, sell_date: date) -> float:
+    """台股賣方稅率；接受已知台股資料的裸 ID 或合法 .TW／.TWO 代碼。
+
+    免稅只適用一般債券 ETF（00 開頭、B 結尾），L／R 槓桿與反向商品仍課稅。
+    日期必須由成交端傳入，不以執行回測時的牆鐘推斷歷史稅率。
+    """
+    code = str(stock_id).strip().upper()
+    if not is_tw_suffix_symbol(code if "." in code else f"{code}.TW"):
+        raise ValueError("expected a Taiwan stock ID or .TW/.TWO symbol")
+    parts = split_suffix_symbol(code)
+    base = parts[0] if parts else code
+    day = sell_date.date() if isinstance(sell_date, datetime) else sell_date
+    if not isinstance(day, date):
+        raise ValueError("sell_date must be a date")
+    if not base.startswith("00"):
+        return STOCK_TRANSACTION_TAX_RATE
+    if base.endswith("B") and BOND_ETF_TAX_EXEMPT_START <= day <= BOND_ETF_TAX_EXEMPT_END:
+        return 0.0
+    return ETF_TRANSACTION_TAX_RATE
 
 
 def _validate_slippage(price: float, slippage_rate: float) -> tuple[float, float]:
@@ -210,6 +240,7 @@ def per_share_cost_multipliers(
     is_etf: bool,
     fee_discount: float = 1.0,
     slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
+    tax_rate: float | None = None,
 ) -> tuple[float, float]:
     """(買進乘數, 賣出乘數)：掛價 × 乘數 = 每股實際付出／收到的現金。
 
@@ -221,5 +252,7 @@ def per_share_cost_multipliers(
         raise ValueError("fee_discount must be non-negative")
     _validate_slippage(1.0, slippage_rate)
     fee = BROKER_FEE_RATE * fee_discount
-    tax = ETF_TRANSACTION_TAX_RATE if is_etf else STOCK_TRANSACTION_TAX_RATE
+    tax = tax_rate if tax_rate is not None else (ETF_TRANSACTION_TAX_RATE if is_etf else STOCK_TRANSACTION_TAX_RATE)
+    if tax < 0:
+        raise ValueError("tax_rate must be non-negative")
     return (1 + slippage_rate) * (1 + fee), (1 - slippage_rate) * (1 - fee - tax)

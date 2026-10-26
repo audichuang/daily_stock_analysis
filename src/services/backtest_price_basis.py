@@ -21,8 +21,9 @@ import logging
 import math
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
 
+from src.market_phase_summary import extract_market_phase_summary
 from src.services.market_symbol_utils import is_tw_suffix_symbol, split_suffix_symbol
-from src.utils.tw_trade_costs import per_share_cost_multipliers
+from src.utils.tw_trade_costs import per_share_cost_multipliers, tw_transaction_tax_rate
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +110,14 @@ class EntryBasis:
     rel_by_date: Mapping[date, float] = field(default_factory=dict)
     # 停損／停利是錨點日的名目價位，換到進場基準要乘 m_anchor / m_entry。
     level_factor: float = 1.0
-    # 台股 (買進乘數, 賣出乘數)；非台股為 None（不算淨報酬）。
+    # 台股期末 (買進乘數, 賣出乘數)；實際提前出場依 costs_on 查當日稅率。
+    # 非台股為 None（不算淨報酬）。
     cost_multipliers: Optional[Tuple[float, float]] = None
+    cost_multipliers_by_date: Mapping[date, Tuple[float, float]] = field(default_factory=dict)
+
+    def costs_on(self, day: Any) -> Optional[Tuple[float, float]]:
+        """依實際出場日取成本；舊呼叫端仍可只提供固定乘數。"""
+        return self.cost_multipliers_by_date.get(_as_date(day), self.cost_multipliers)
 
     def rel(self, day: Any) -> float:
         key = _as_date(day)
@@ -164,17 +171,25 @@ def resolve_entry_basis(
         return EntryBasis(PRICE_BASIS_AS_STORED, None, entry_date)
 
     cost_multipliers: Optional[Tuple[float, float]]
+    costs_by_date: Dict[date, Tuple[float, float]] = {}
     try:
-        cost_multipliers = per_share_cost_multipliers(
-            is_etf=stock_id.startswith("00"), fee_discount=float(fee_discount)
-        )
+        for bar in window_bars:
+            day = _as_date(getattr(bar, "date", None))
+            if day is not None:
+                costs_by_date[day] = per_share_cost_multipliers(
+                    is_etf=stock_id.startswith("00"), fee_discount=float(fee_discount),
+                    tax_rate=tw_transaction_tax_rate(stock_id, day),
+                )
+        cost_multipliers = costs_by_date.get(_as_date(window_bars[-1].date))
     except Exception as exc:  # 折扣設定異常不該拖垮回測
         logger.warning("[backtest] 台股成本乘數計算失敗，淨報酬留空: %s", exc)
         cost_multipliers = None
+        costs_by_date = {}
 
     def _raw(reason: str) -> EntryBasis:
         return EntryBasis(
-            PRICE_BASIS_RAW, reason, entry_date, cost_multipliers=cost_multipliers
+            PRICE_BASIS_RAW, reason, entry_date, cost_multipliers=cost_multipliers,
+            cost_multipliers_by_date=costs_by_date,
         )
 
     if any(getattr(bar, "data_source", None) != MARKET_DB_SOURCE for bar in window_bars):
@@ -213,6 +228,7 @@ def resolve_entry_basis(
         rel_by_date={d: mult[d] / m_entry for d in window_dates},
         level_factor=mult[anchor_date] / m_entry,
         cost_multipliers=cost_multipliers,
+        cost_multipliers_by_date=costs_by_date,
     )
 
 
@@ -233,6 +249,38 @@ def is_valid_entry_open(value: Any) -> bool:
     except (TypeError, ValueError):
         return False
     return math.isfinite(number) and number > 0
+
+
+def is_usable_entry_window(bars: Sequence[Any], eval_window_days: int) -> bool:
+    """候選重試與正式執行共用的本地視窗門檻。"""
+    return len(bars) >= eval_window_days and is_valid_entry_open(getattr(bars[0], "open", None))
+
+
+def resolve_backtest_entry_window(
+    *, stock_repo: Any, daily_window: Any, analysis_date: date,
+    phase: Optional[str], eval_window_days: int, context_snapshot: Any = None,
+) -> Tuple[date, list[Any]]:
+    """共用本地進場視窗解析；候選檢查不連網，也不能與執行時的盤前／盤中口徑分歧。"""
+    summary = extract_market_phase_summary(context_snapshot) or {}
+    session_date = None
+    for key in ("session_date", "market_local_time"):
+        try:
+            session_date = datetime.fromisoformat(str(summary.get(key) or "")).date()
+            break
+        except ValueError:
+            continue
+    anchor = daily_window.start_bar.date
+    execution_cutoff = resolve_entry_cutoff(
+        phase=phase, anchor_date=anchor, session_date=session_date,
+        analysis_date=analysis_date, minutes_to_open=summary.get("minutes_to_open"),
+    )
+    if execution_cutoff == anchor:
+        return anchor, list(daily_window.forward_bars)
+    bars = stock_repo.get_forward_bars(
+        code=daily_window.code, analysis_date=execution_cutoff, eval_window_days=eval_window_days,
+    )
+    level_anchor = max(anchor, analysis_date) if phase in INTRADAY_ENTRY_GUARD_PHASES else anchor
+    return level_anchor, list(bars)
 
 
 def _as_date(value: Any) -> Optional[date]:

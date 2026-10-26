@@ -197,6 +197,40 @@ def test_compute_tw_net_return_pct_none_inputs():
     assert compute_tw_net_return_pct(5.0, None) is None
 
 
+@pytest.mark.parametrize("code,day,tax", [
+    ("00679B.TWO", date(2017, 1, 1), 0.0),
+    ("00679B.TW", date(2026, 12, 31), 0.0),
+    ("00679B.TWO", date(2016, 12, 31), 0.001),
+    ("00679B.TWO", date(2027, 1, 1), 0.001),
+    ("0050.TW", date(2026, 12, 31), 0.001),
+    ("00631L.TW", date(2026, 12, 31), 0.001),
+    ("00632R.TW", date(2026, 12, 31), 0.001),
+    ("2887A.TW", date(2026, 12, 31), 0.003),
+])
+def test_bond_etf_exemption_is_date_bounded(code, day, tax):
+    bars = [_bar(day, open_=100.0, close=100.0)]
+    basis = resolve_entry_basis(code=code, anchor_date=day, window_bars=bars,
+                                factor_loader=_loader_from({}))
+    result = _eval_single("買進", bars, basis)
+    expected_sell = (1 - 0.0015) * (1 - 0.001425 - tax)
+    assert result["simulated_net_return_pct"] == pytest.approx(
+        (expected_sell / STOCK_BUY_MULT - 1) * 100)
+
+
+@pytest.mark.parametrize("source", [MDB, "YahooFetcher"])
+@pytest.mark.parametrize("early", [False, True])
+def test_bond_etf_tax_uses_actual_exit_when_window_crosses_expiry(source, early):
+    bars = [_bar(date(2026, 12, 31), open_=100.0, high=111.0, close=110.0, source=source),
+            _bar(date(2027, 1, 4), open_=110.0, high=111.0, close=110.0, source=source)]
+    basis = resolve_entry_basis(code="00679B.TWO", anchor_date=date(2026, 12, 30),
+                                window_bars=bars, factor_loader=_loader_from({}))
+    result = _eval_single("買進", bars, basis, stop=90.0, take=110.0 if early else 120.0)
+    tax = 0.0 if early else 0.001
+    assert result["simulated_exit_reason"] == ("take_profit" if early else "window_end")
+    assert result["simulated_net_return_pct"] == pytest.approx(
+        (1.10 * (1 - 0.0015) * (1 - 0.001425 - tax) / STOCK_BUY_MULT - 1) * 100)
+
+
 def test_non_tw_never_loads_factors_and_matches_raw_open_to_close():
     bars = [_bar(D1, open_=105.0, close=104.0), _bar(D2, open_=104.0, close=110.0)]
     basis = resolve_entry_basis(

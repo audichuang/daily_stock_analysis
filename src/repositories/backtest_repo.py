@@ -16,7 +16,12 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.functions import FunctionElement
 
 from src.core.backtest_engine import OVERALL_SENTINEL_CODE
+from src.market_phase_summary import extract_market_phase_summary
+from src.repositories.stock_repo import StockRepository
+from src.services.backtest_price_basis import is_usable_entry_window, resolve_backtest_entry_window
 from src.services.stock_code_utils import resolve_daily_stock_identity
+from src.services.stock_daily_start_resolver import resolve_stock_daily_start
+from src.services.stock_daily_window_resolver import resolve_stock_daily_window
 
 from src.storage import BacktestResult, BacktestSummary, DatabaseManager, AnalysisHistory
 
@@ -83,6 +88,8 @@ class BacktestRepository:
         force: bool,
     ) -> List[AnalysisHistory]:
         """Return AnalysisHistory rows eligible for backtest."""
+        if limit <= 0:
+            return []
         cutoff_dt = datetime.now() - timedelta(days=min_age_days)
 
         with self.db.get_session() as session:
@@ -98,20 +105,63 @@ class BacktestRepository:
 
             query = select(AnalysisHistory).where(and_(*conditions))
 
-            if not force:
-                existing_ids = select(BacktestResult.analysis_history_id).where(
-                    and_(
-                        BacktestResult.eval_window_days == eval_window_days,
-                        BacktestResult.engine_version == engine_version,
-                        # insufficient_data is retried once more bars have arrived
-                        BacktestResult.eval_status != "insufficient_data",
-                    )
-                )
-                query = query.where(AnalysisHistory.id.not_in(existing_ids))
+            if force:
+                return list(session.execute(
+                    query.order_by(desc(AnalysisHistory.created_at), desc(AnalysisHistory.id))
+                    .offset(offset).limit(limit)
+                ).scalars().all())
 
-            query = query.order_by(desc(AnalysisHistory.created_at)).offset(offset).limit(limit)
-            rows = session.execute(query).scalars().all()
-            return list(rows)
+            result_key = and_(
+                BacktestResult.analysis_history_id == AnalysisHistory.id,
+                BacktestResult.eval_window_days == eval_window_days,
+                BacktestResult.engine_version == engine_version,
+            )
+            query = (
+                query.add_columns(BacktestResult.eval_status)
+                .outerjoin(BacktestResult, result_key)
+                .where(or_(BacktestResult.id.is_(None), BacktestResult.eval_status == "insufficient_data"))
+                .order_by(desc(AnalysisHistory.created_at), desc(AnalysisHistory.id))
+            )
+            stock_repo = StockRepository(self.db)
+            eligible = []
+            skipped = 0
+            # 先排除無法重試的本地窗口再套分頁，避免永久缺資料佔滿最新 200 筆額度。
+            for analysis, status in session.execute(query).yield_per(max(limit, 200)):
+                if status == "insufficient_data" and not self._retry_window_ready(
+                    analysis, stock_repo=stock_repo, eval_window_days=eval_window_days,
+                ):
+                    continue
+                if skipped < offset:
+                    skipped += 1
+                    continue
+                eligible.append(analysis)
+                if len(eligible) >= limit:
+                    break
+            return eligible
+
+    def _retry_window_ready(self, analysis, *, stock_repo: StockRepository, eval_window_days: int) -> bool:
+        """只重試已由本地匯入修復的資料；強制執行仍可明確要求重新連網回補。"""
+        analysis_date = self.parse_analysis_date_from_snapshot(analysis.context_snapshot)
+        if analysis_date is None and analysis.created_at is not None:
+            analysis_date = analysis.created_at.date()
+        start = resolve_stock_daily_start(
+            stock_code=analysis.code, context_snapshot=analysis.context_snapshot, analysis_date=analysis_date,
+        )
+        if start.identity is None or start.backtest_start_date is None:
+            return False
+        window = resolve_stock_daily_window(
+            stock_repo=stock_repo, code_candidates=start.identity.code_candidates,
+            expected_start_date=start.backtest_start_date, eval_window_days=eval_window_days,
+        )
+        if window is None:
+            return False
+        summary = extract_market_phase_summary(analysis.context_snapshot) or {}
+        phase = str(summary.get("phase") or "").strip().lower() or None
+        _, bars = resolve_backtest_entry_window(
+            stock_repo=stock_repo, daily_window=window, analysis_date=analysis_date,
+            phase=phase, eval_window_days=eval_window_days, context_snapshot=analysis.context_snapshot,
+        )
+        return is_usable_entry_window(bars, eval_window_days)
 
     def align_existing_result_dates(
         self,
@@ -182,8 +232,7 @@ class BacktestRepository:
 
         with self.db.get_session() as session:
             try:
-                # Stale insufficient_data rows are always superseded by a retry;
-                # other statuses are only replaced when force-rerunning.
+                # 本地窗口恢復可用後，重試結果取代 insufficient_data；其他狀態僅由 force 取代。
                 analysis_ids = sorted({r.analysis_history_id for r in results if r.analysis_history_id is not None})
                 key_pairs = sorted({(r.eval_window_days, r.engine_version) for r in results})
 
