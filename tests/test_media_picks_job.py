@@ -719,6 +719,63 @@ push_journal_cli
     assert _origin_head(repo) == intermediate
 
 
+def _feature_branch_ahead(repo):
+    """develop 有一個待推的 journal commit；feature 分支（同樣只動 journal/）另外領先，模擬別的 session 的分支。"""
+    _journal_commit(repo)
+    develop_sha = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    _journal_commit(repo, '{"feature": 1}\n')
+    feature_sha = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "develop")
+    return develop_sha, feature_sha
+
+
+# 第一次 `git branch --show-current` 回 develop 後立刻切到 feature：模擬分支檢查剛過、主 checkout 就被別的 session 切走。
+_SWITCH_AFTER_BRANCH_CHECK = '''
+git() {
+  if [[ "$1" == branch && "$2" == --show-current && ! -e .git/switched ]]; then
+    : >.git/switched
+    command git branch --show-current
+    command git checkout -q feature >&2
+    return 0
+  fi
+  command git "$@"
+}
+'''
+
+
+@pytest.mark.parametrize("entrypoint, result", [("push_journal_cli", "push ok"), ("commit_journal", "ok")])
+def test_journal_push_publishes_local_develop_not_head_when_branch_switches(repo, entrypoint, result):
+    develop_sha, feature_sha = _feature_branch_ahead(repo)
+    r = _sh(repo, _SWITCH_AFTER_BRANCH_CHECK + entrypoint)
+    assert _git(repo, "branch", "--show-current") == "feature"   # 切換確實發生在檢查之後
+    assert (r.returncode, r.stdout.strip()) == (0, result), r.stderr
+    assert _origin_head(repo) == develop_sha                     # 推的是本地 develop，不是 feature
+    assert _git(repo, "rev-parse", "feature") == feature_sha
+
+
+@pytest.mark.parametrize("entrypoint, result", [("push_journal_cli", "push failed"), ("commit_journal", "fail")])
+def test_journal_push_retry_refuses_rebase_after_branch_switch(repo, tmp_path, entrypoint, result):
+    develop_sha, feature_sha = _feature_branch_ahead(repo)
+    _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", '{"theirs": 1}\n')
+    remote_before = _origin_head(repo)
+    r = _sh(repo, f'''
+git_net() {{
+  command git "$@" >&2
+  local rc=$?
+  if [[ "$1" == push ]]; then command git checkout -q feature >&2; fi
+  if [[ "$1" == pull ]]; then echo rebase-attempted >&2; fi
+  return $rc
+}}
+{entrypoint}
+''')
+    assert r.stdout.strip() == result, r.stderr
+    assert "rebase-attempted" not in r.stderr
+    assert _git(repo, "rev-parse", "feature") == feature_sha      # feature 沒被 rebase
+    assert _git(repo, "rev-parse", "develop") == develop_sha
+    assert _origin_head(repo) == remote_before
+
+
 def test_push_develop_never_rewinds_when_local_head_is_behind(repo, tmp_path):
     _advance_origin(tmp_path, repo, "other.txt", "new remote work\n")
     _git(repo, "fetch", "-q", "origin")

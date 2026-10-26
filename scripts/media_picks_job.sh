@@ -33,7 +33,9 @@ git_net() {
 push_develop() {
   local sha origin_sha attempt
   for attempt in 1 2; do
-    sha=$(git rev-parse --verify HEAD) || return 1
+    # 讀本地 develop 分支而不是 HEAD：呼叫端檢查完分支後，主 checkout 可能被別的 session 切走，
+    # 讀 HEAD 會把別的分支的 commit 推成遠端 develop。
+    sha=$(git rev-parse --verify refs/heads/develop) || return 1
     origin_sha=$(git rev-parse --verify origin/develop) || return 1
     journal_only_ahead "$origin_sha" "$sha" || return 1
     # lease 允許強推，必須另守祖先關係，避免遠端已前進時把它倒退。
@@ -42,7 +44,12 @@ push_develop() {
       return 0
     fi
     (( attempt == 1 )) || return 1
-    journal_only_ahead || return 1
+    # pull --rebase 改寫的是目前分支：重試前再確認仍在 develop，不然會去 rebase 別人的分支。
+    if [[ "$(git branch --show-current)" != "develop" ]]; then
+      echo "重試前發現目前不在 develop，不 rebase" >&2
+      return 1
+    fi
+    journal_only_ahead origin/develop refs/heads/develop || return 1
     if ! git_net pull --rebase -q origin develop; then
       git rebase --abort >&2 2>/dev/null
       return 1
