@@ -349,7 +349,7 @@ def _legacy_audit_marker_specs(
 from src.llm.client import LLMClient, _AllModelsFailedError, _LiteLLMStreamError  # noqa: F401
 
 from src.utils.data_processing import normalize_report_signal_attribution
-from src.utils.sniper_points import SNIPER_PRICES_KEY, parse_sniper_value
+from src.utils.sniper_points import SNIPER_PRICES_KEY, parse_structured_price
 
 
 def check_content_integrity(
@@ -409,7 +409,7 @@ def check_content_integrity(
         structured = battle.get(SNIPER_PRICES_KEY)
         if isinstance(structured, dict):
             # 模型有給結構化價位時，停損缺不缺只看 sniper_prices.stop_loss 是不是正數，不看文字
-            if parse_sniper_value(structured.get("stop_loss")) is None:
+            if parse_structured_price(structured.get("stop_loss")) is None:
                 missing.append("dashboard.battle_plan.sniper_points.stop_loss")
         else:
             sp = battle.get("sniper_points")

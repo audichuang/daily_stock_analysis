@@ -43,7 +43,7 @@ from src.analyzer import (
 from src.notification import NotificationService, NotificationChannel
 from src.notification_sender import OutboundMessage
 from src.schemas.decision_action import normalize_decision_action
-from src.utils.sniper_points import SNIPER_PRICES_KEY, parse_sniper_value
+from src.utils.sniper_points import SNIPER_PRICES_KEY, parse_structured_price
 from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.report_language import (
     get_placeholder_text,
@@ -2688,7 +2688,7 @@ class StockAnalysisPipeline:
             text_missing = self._is_agent_field_missing(sniper_points.get("stop_loss"), scalar=True)
             if isinstance(structured, dict):
                 # 模型有給結構化價位時，停損缺不缺只看 sniper_prices.stop_loss
-                stop_missing = parse_sniper_value(structured.get("stop_loss")) is None
+                stop_missing = parse_structured_price(structured.get("stop_loss")) is None
             else:
                 stop_missing = text_missing
             if text_missing and not stop_missing and isinstance(structured, dict):
@@ -2701,7 +2701,7 @@ class StockAnalysisPipeline:
                     report_language,
                 )
                 sniper_points["stop_loss"] = fallback
-                if isinstance(structured, dict) and parse_sniper_value(fallback) is not None:
+                if isinstance(structured, dict) and parse_structured_price(fallback) is not None:
                     structured["stop_loss"] = fallback
 
     @staticmethod

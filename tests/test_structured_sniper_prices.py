@@ -71,9 +71,9 @@ def test_structured_contract_does_not_coerce_invalid_values_or_fall_back(value):
         AnalysisReportSchema.model_validate(report({"stop_loss": value}))
 
 
-@pytest.mark.parametrize("value", ["110", " 110 ", "110元"])
+@pytest.mark.parametrize("value", ["110", " 110 "])
 def test_structured_numeric_string_is_format_not_meaning(value):
-    # 模型把數字包成字串只是格式問題，照純數字收；不因此回頭讀文字
+    # 模型把數字包成字串只是格式問題，照純數字收；不因此回頭讀文字（帶「元」的見下方拒收測試）
     assert extract_sniper_points(report(dict.fromkeys(SNIPER_KEYS, value))) == dict.fromkeys(SNIPER_KEYS, 110)
 
 
@@ -254,3 +254,42 @@ def test_api_rebuild_reads_raw_structured_contract_before_cached_strategy(value,
         {"strategy": strategy, "details": {"raw_result": result.to_dict()}}, "test", result.code, result.name,
     )
     assert api_report.strategy.sniper_prices.model_dump() == prices
+
+
+# ---- 結構化格子只收純數字；區間與單位只留給舊資料的文字相容 ----
+
+@pytest.mark.parametrize("value", ["95-99", "95~99", "95至99", "99元", " 99 元 ", "1,099", "跌破99"])
+def test_structured_slot_rejects_range_and_unit_strings(value):
+    # 模型違反「不写区间、不带元」時要讓它重給，程式不替它挑右端點
+    assert extract_sniper_points(report(dict.fromkeys(SNIPER_KEYS, value))) == dict.fromkeys(SNIPER_KEYS)
+    prices = {"ideal_buy": 100, "secondary_buy": None, "stop_loss": value, "take_profit": 103}
+    ok, missing = check_content_integrity(result_with(prices))
+    assert not ok and "dashboard.battle_plan.sniper_points.stop_loss" in missing
+
+
+@pytest.mark.parametrize("value, expected", [(99, 99), (99.5, 99.5), ("99", 99), (" 99.5 ", 99.5)])
+def test_structured_slot_still_accepts_plain_numbers(value, expected):
+    prices = {"ideal_buy": 100, "secondary_buy": None, "stop_loss": value, "take_profit": 103}
+    assert extract_sniper_points(report(prices))["stop_loss"] == expected
+    assert check_content_integrity(result_with(prices)) == (True, [])
+
+
+@pytest.mark.parametrize("value, expected", [("95-99", 99), ("99元", 99), ("1,099元", 1099)])
+def test_legacy_text_keeps_range_and_unit_compat(value, expected):
+    from src.utils.sniper_points import resolve_sniper_prices
+    assert resolve_sniper_prices({"battle_plan": {"sniper_points": {"stop_loss": value}}})["stop_loss"] == expected
+
+
+# ---- sniper_prices 不是物件：視為損壞的新契約，不回退文字 ----
+
+@pytest.mark.parametrize("block", ["110", 110, [110], ["110"]])
+def test_malformed_structured_block_does_not_fall_back_to_text(block):
+    from src.utils.sniper_points import resolve_sniper_prices
+    raw = {"dashboard": {"battle_plan": {
+        "sniper_points": dict.fromkeys(SNIPER_KEYS, "99"),
+        "sniper_prices": block,
+    }}}
+    assert resolve_sniper_prices(raw) == dict.fromkeys(SNIPER_KEYS)
+    assert extract_sniper_points(raw) == dict.fromkeys(SNIPER_KEYS)
+    assert extract_sniper_points(SimpleNamespace(dashboard=raw["dashboard"])) == dict.fromkeys(SNIPER_KEYS)
+

@@ -15,6 +15,8 @@ SNIPER_PRICES_KEY = "sniper_prices"
 # 只驗證舊資料的字面數值格式，不解讀自然語言。區間沿用右端點的舊契約。
 _NUMBER = r"(?:[0-9]{1,3}(?:[,，][0-9]{3})+|[0-9]+)(?:\.[0-9]+)?"
 _LEGACY_PRICE = re.compile(rf"({_NUMBER})\s*(?:元)?(?:\s*[-~～至]\s*({_NUMBER})\s*(?:元)?)?")
+# 結構化格子的契約是純數字：字串只容許數字被包成字串，不收區間、單位或千分位。
+_STRUCTURED_PRICE = re.compile(r"[0-9]+(?:\.[0-9]+)?")
 
 
 def _positive_price(value: Any) -> Optional[float]:
@@ -29,7 +31,7 @@ def _positive_price(value: Any) -> Optional[float]:
 
 
 def parse_sniper_value(value: Any, field: Optional[str] = None) -> Optional[float]:
-    """結構化欄位與舊資料共用：只接受純數字、數字加元或純區間；field 保留呼叫相容性。"""
+    """舊資料文字相容：只接受純數字、數字加元或純區間；結構化格子改走 parse_structured_price。field 保留呼叫相容性。"""
     if isinstance(value, (int, float)):
         return _positive_price(value)
     if not isinstance(value, str):
@@ -38,6 +40,18 @@ def parse_sniper_value(value: Any, field: Optional[str] = None) -> Optional[floa
     if match is None:
         return None
     return _positive_price(float((match.group(2) or match.group(1)).replace(",", "").replace("，", "")))
+
+
+def parse_structured_price(value: Any) -> Optional[float]:
+    """sniper_prices 單格：只收正的有限數字（或純數字字串），區間與帶單位的字串一律 None 讓模型重給。"""
+    if isinstance(value, (int, float)):
+        return _positive_price(value)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if _STRUCTURED_PRICE.fullmatch(text) is None:
+        return None
+    return _positive_price(float(text))
 
 
 def _find_block(data: Any, name: str) -> Optional[Mapping[str, Any]]:
@@ -74,7 +88,7 @@ def resolve_sniper_prices(data: Any, stored: Any = None) -> Dict[str, Optional[f
     """新契約優先；舊原文存在時不讓已存的過期數值復活。"""
     prices = find_sniper_prices(data)
     if prices is not None:
-        return {key: parse_sniper_value(prices.get(key)) for key in SNIPER_KEYS}
+        return {key: parse_structured_price(prices.get(key)) for key in SNIPER_KEYS}
     points = find_sniper_points(data) or {}
     resolved = {}
     for key in SNIPER_KEYS:
