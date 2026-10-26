@@ -73,7 +73,7 @@ uv run --frozen --env-file .env python -m market_data.cli backfill index --start
 uv run --frozen --env-file .env python -m market_data.cli health --strict
 ```
 
-先遷移資料庫，再讓寫入端使用新程式（共用寫入會引用新增欄位）。回補每月兩個請求（MI_5MINS_HIST、FMTQIK），每個請求之間依 `--delay` 等待、每月獨立 commit，commit 後才印 `index YYYY-MM n rows (price days k)`；只寫 `--start/--end` 閉區間（`--end` 截到今天），只有當月的 FMTQIK 允許退 openapi。resume 以「該月 `price` 交易日全部六欄（開高低收、漲跌、成交金額）都非 NULL」整月跳過、不發請求，已齊全的日期不重寫，所以舊的 close-only 列與只有 OHLC 的列都會補齊；`price` 該月沒資料時無從判斷，照抓。任一來源拿到的日期少於 `price` 交易日（逐來源比，不是兩表聯集；已六欄齊全的日期不算）印 `**WARN … 缺 price 有的交易日（MI_5MINS_HIST 缺 […]）`——當月 MI_5MINS_HIST 常晚 FMTQIK 一天，那天只寫得到一半欄位，仍算缺日；只拿到一個來源印 `**WARN` 照寫另一個；兩個都抓不到記為失敗月，連續 3 個月就 raise（多半被封，重跑同指令會 resume）。結尾有失敗月、單一來源月或缺日月就 **exit 1**——這是對交易日數的稽核；補班週六 `price` 沒抓而月表有，`n > k` 正常；當月在 FMTQIK 17:00 發布前跑也會 exit 1，屬時序不是缺漏。`--force` 重取並更新指定區間，**不先 DELETE、不刪其他欄位或其他指數**。
+先遷移資料庫，再讓寫入端使用新程式（共用寫入會引用新增欄位）。回補每月兩個請求（MI_5MINS_HIST、FMTQIK），每個請求之間依 `--delay` 等待；省略時沿用函式預設的 2 秒，顯式 `--delay 0` 才不等待（逐日來源省略時仍不等待）。每月獨立 commit，commit 後才印 `index YYYY-MM n rows (price days k)`；只寫 `--start/--end` 閉區間（`--end` 截到今天），只有當月的 FMTQIK 允許退 openapi。resume 以「該月 `price` 交易日全部六欄（開高低收、漲跌、成交金額）都非 NULL」整月跳過、不發請求，已齊全的日期不重寫，所以舊的 close-only 列與只有 OHLC 的列都會補齊；`price` 該月沒資料時無從判斷，照抓。任一來源拿到的日期少於 `price` 交易日（逐來源比，不是兩表聯集；已六欄齊全的日期不算）印 `**WARN … 缺 price 有的交易日（MI_5MINS_HIST 缺 […]）`——當月 MI_5MINS_HIST 常晚 FMTQIK 一天，那天只寫得到一半欄位，仍算缺日；只拿到一個來源印 `**WARN` 照寫另一個；兩個都抓不到記為失敗月，連續 3 個月就 raise（多半被封，重跑同指令會 resume）。結尾有失敗月、單一來源月或缺日月就 **exit 1**——這是對交易日數的稽核；補班週六 `price` 沒抓而月表有，`n > k` 正常；當月在 FMTQIK 17:00 發布前跑也會 exit 1，屬時序不是缺漏。`--force` 重取並更新指定區間，**不先 DELETE、不刪其他欄位或其他指數**。
 
 完成後用唯讀查詢確認整段的起訖、總列數、四欄完整列數及逐年交易日差集；以 `price` 的獨立成交日期作交叉檢查，若 price 本身有缺口，再核對交易日曆與官方月表（`health --strict` 只守近期，無法證明 2010 起全期齊全）：
 
