@@ -1711,6 +1711,24 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertTrue(row.is_stale)
         self.assertAlmostEqual(row.rate, 0.2050)
 
+    def test_fx_refresh_rejected_middle_bar_keeps_stored_row_matching_next_neighbour(self) -> None:
+        """中間K棒須同時偏離前後鄰居才拒收；快取清理不可比它更嚴，只比前一個鄰居。"""
+        d5, d6, d7 = date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)
+        self._seed_twd(d5, 7.0, "yfinance", False)
+        self._seed_twd(d6, 7.2, "yfinance_backfill", False)  # 偏離前鄰 7.0，但符合後鄰 7.2
+        self._refresh_twd_cny([(d6, 5.0), (d7, 7.2)], [], [], d7, date(2026, 1, 8))
+        row = self._twd_row(d6)
+        self.assertIsNotNone(row)
+        self.assertAlmostEqual(row.rate, 7.2)
+        self.assertFalse(bool(row.is_stale))
+
+    def test_fx_refresh_rejected_middle_bar_drops_stored_row_deviating_from_both_neighbours(self) -> None:
+        d5, d6, d7 = date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7)
+        self._seed_twd(d5, 7.0, "yfinance", False)
+        self._seed_twd(d6, 6.0, "yfinance_backfill", False)  # 前後鄰居 7.0／7.2 都偏離
+        self._refresh_twd_cny([(d6, 5.0), (d7, 7.2)], [], [], d7, date(2026, 1, 8))
+        self.assertIsNone(self._twd_row(d6))
+
     def test_fx_refresh_all_bars_rejected_without_any_clean_source_drops_junk_row_and_marks_missing(self) -> None:
         d8 = date(2026, 1, 8)
         self._seed_twd(d8, 0.1963, "yfinance", False)

@@ -1760,7 +1760,7 @@ class PortfolioService:
                     if fetched
                     else {}
                 )
-                rejected_references: Dict[date, float] = {}
+                rejected_references: Dict[date, Tuple[float, ...]] = {}
                 closes = accepted = self._filter_fx_outliers(
                     from_currency=from_currency,
                     to_currency=to_currency,
@@ -1866,18 +1866,21 @@ class PortfolioService:
 
     def _discard_auto_fx_rates(
         self, *, from_currency: str, to_currency: str, dates: Iterable[date],
-        references: Optional[Dict[date, float]] = None,
+        references: Optional[Dict[date, Tuple[float, ...]]] = None,
     ) -> None:
-        """使不可信自動列失效；已符合拒收參考值的實值與手動來源保留。"""
+        """使不可信自動列失效；已符合任一拒收參考值的實值與手動來源保留。
+
+        中間K棒須同時偏離前後鄰居才拒收，因此參考值可有多個；存值只要符合其一就能通過同一判定，不可刪。
+        """
         for rate_date in sorted(set(dates)):
-            reference = (references or {}).get(rate_date)
-            if reference is not None:
+            candidates = (references or {}).get(rate_date) or ()
+            if candidates:
                 existing = self.repo.get_latest_fx_rate(
                     from_currency=from_currency, to_currency=to_currency, as_of=rate_date,
                 )
                 if (
                     existing is not None and existing.rate_date == rate_date and not existing.is_stale
-                    and not _fx_rates_deviate(float(existing.rate), reference)
+                    and any(not _fx_rates_deviate(float(existing.rate), ref) for ref in candidates)
                 ):
                     continue
             removed = self.repo.delete_fx_rate(
@@ -2007,7 +2010,7 @@ class PortfolioService:
         as_of_date: date,
         closes: List[Tuple[date, float]],
         cross_closes: Optional[Dict[date, float]] = None,
-        rejected_references: Optional[Dict[date, float]] = None,
+        rejected_references: Optional[Dict[date, Tuple[float, ...]]] = None,
     ) -> List[Tuple[date, float]]:
         """Drop junk bars (TWDCNY=X once printed 0.1962 against ~0.2047 from the USD cross).
 
@@ -2020,7 +2023,7 @@ class PortfolioService:
         None) is checked against it instead: junk can repeat on consecutive bars, so two bad neighbours would
         vouch for each other under the neighbour rule. Days without a cross rate fall back to the rules above.
 
-        rejected_references 若有提供，帶回拒收時的參考值，讓快取清理沿用同一判定而不再抓價。
+        rejected_references 若有提供，帶回拒收時的全部參考值（中間K棒為前後兩個鄰居），讓快取清理沿用同一判定而不再抓價。
         """
         if cross_closes is None:
             cross_closes = self._fetch_fx_cross_closes(
@@ -2029,9 +2032,11 @@ class PortfolioService:
 
         kept: List[Tuple[date, float]] = []
         for i, (bar_date, value) in enumerate(closes):
+            references: Tuple[float, ...] = ()
             if bar_date in cross_closes:
                 reference = cross_closes[bar_date]
                 bad = _fx_rates_deviate(value, reference)
+                references = (reference,)
             elif i + 1 < len(closes):
                 prev = kept[-1][1] if kept else self._last_real_stored_rate(
                     from_currency=from_currency, to_currency=to_currency, before=bar_date
@@ -2041,6 +2046,8 @@ class PortfolioService:
                 nxt = cross_closes.get(nxt_date, nxt_raw)
                 bad = prev is not None and _fx_rates_deviate(value, prev) and _fx_rates_deviate(value, nxt)
                 reference = prev
+                # 拒收條件是兩個鄰居都偏離，任一鄰居都是可接受值的依據。
+                references = (prev, nxt) if prev is not None else ()
             else:
                 # The cross rate is today's value; it is meaningless for a historical as_of.
                 reference = (
@@ -2053,9 +2060,10 @@ class PortfolioService:
                         from_currency=from_currency, to_currency=to_currency, before=bar_date
                     )
                 bad = reference is not None and _fx_rates_deviate(value, reference)
+                references = (reference,) if reference is not None else ()
             if bad:
                 if rejected_references is not None:
-                    rejected_references[bar_date] = reference
+                    rejected_references[bar_date] = references
                 logger.warning(
                     "匯率離群值拒收 %s/%s %s：%s（參考值 %s，偏離超過 %.0f%%）",
                     from_currency, to_currency, bar_date.isoformat(), value, reference,
