@@ -49,6 +49,8 @@ def main(argv=None):
     b.add_argument("--end", required=True)
     b.add_argument("--force", action="store_true",
                    help="忽略 resume 並整日換血；index 僅更新官方 OHLC，不刪其他欄位")
+    # 預設 None＝不傳給函式、沿用各自的預設(index 每個請求間隔 2 秒,其他來源 0):
+    # 寫成 0.0 會蓋掉 backfill_index 的預設,沒給 --delay 的 index 回補就連打 TWSE。
     b.add_argument("--delay", type=float, default=None,
                    help="抓取間隔秒數；省略時沿用來源預設（index 每次請求間隔 2 秒，逐日來源不等待）。"
                         "長區間回補建議給 3——TWSE 密集請求會封 IP,"
