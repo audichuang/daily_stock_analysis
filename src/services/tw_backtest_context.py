@@ -190,28 +190,22 @@ def load_tw_regime(today: Optional[date] = None) -> Optional[Dict[str, Any]]:
     return _load_regime_cached((today or date.today()).isoformat())
 
 
-def load_tw_revenue_momentum(code: str, anchor_month_iso: Any,
-                             as_of: Optional[date] = None) -> Optional[Dict[str, Any]]:
-    """只用基準日前已過共用法定期限的營收；未指定基準日則採台北今天。"""
+def load_tw_revenue_momentum(code: str, anchor_month_iso: Any) -> Optional[Dict[str, Any]]:
     try:
         from data_provider.market_db_fetcher import _stock_id
         from market_data.db import get_engine
-        from market_data.revenue_deadline import revenue_as_of
 
         if not anchor_month_iso:
             return None
         anchor = pd.Timestamp(str(anchor_month_iso)[:7] + "-01")
-        as_of = as_of or pd.Timestamp.now(tz="Asia/Taipei").date()
         with get_engine(statement_timeout_ms=3000).connect() as conn:
             rows = pd.read_sql(text(
                 "SELECT stock_id, revenue_month, announce_date, revenue, yoy, mom "
                 "FROM market.monthly_revenue WHERE stock_id = :sid AND revenue_month >= :s "
-                "AND revenue_month <= :anchor "
                 "ORDER BY revenue_month"), conn,
-                params={"sid": _stock_id(code), "s": (anchor - pd.DateOffset(months=8)).date(),
-                        "anchor": anchor.date()},
+                params={"sid": _stock_id(code), "s": (anchor - pd.DateOffset(months=8)).date()},
                 parse_dates=["revenue_month", "announce_date"])
-        return latest_revenue_momentum(revenue_as_of(rows, as_of), anchor)
+        return latest_revenue_momentum(rows, anchor)
     except Exception as exc:  # noqa: BLE001 - prompt enrichment is strictly fail-open
         logger.warning("[tw-revenue-momentum] fail-open code=%s: %s", code, exc)
         return None

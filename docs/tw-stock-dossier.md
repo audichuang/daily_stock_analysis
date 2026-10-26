@@ -62,7 +62,7 @@ uv run --env-file .env python scripts/tw_stock_report.py 3324 --data /tmp/3324.j
 
 | 段落 | 來源 | 限制 |
 |---|---|---|
-| 月營收 13 個月、近 12 月累計年增 | `market.monthly_revenue` | 由 `market_data.revenue_deadline.revenue_as_of` 取 DB 公告日與法定期限較晚者，嚴格早於 `--date` 才可見（當日公告保守視為盤後）；累計年增要滿 24 個月才算 |
+| 月營收 13 個月、近 12 月累計年增 | `market.monthly_revenue` | 依公告日過濾（`--date` 之後才公告的月份不會出現）；帶 `--date`（或 API `date`）回放時改用法定公告期限（`market_data/revenue_deadline.py`：保險類 15 日、遇休市順延）判斷當天看不看得到，不帶日期的 live 照 DB 公告日；累計年增要滿 24 個月才算 |
 | 季度毛利率／營益率／淨利率／EPS | `market.financial_statement`（`income_sheet`） | 季度標籤由公告截止日換算（`financial_statement.afterIFRS`）。金融保險業實際截止日晚約 15 天，用 `--date` 看歷史時這類公司可能提前看到財報（見 `afterIFRS` 說明） |
 | 合約負債 | `financial_statement`（`balance_sheet` 的「合約負債－流動／非流動」） | 約 1,900 家有單獨列示；沒列的公司（如 3324）多半併在其他流動負債，報告寫「無法評估」，不拿別的科目代替 |
 | 三大法人 5／20 日 | `market.institutional`（上市＋上櫃） | 單位換成張；窗口內有缺值就不印累計 |

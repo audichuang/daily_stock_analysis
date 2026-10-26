@@ -65,7 +65,7 @@ def load(engine, start, end, include_otc_revenue=False):
             params={"s": hist, "e": end}, parse_dates=["date", "revenue_month"])
         info = pd.read_sql(text("select stock_id, industry, name from market.stock_info"), c)
     # DB 公告日是佔位「次月 10 日」：套共用的法定期限（2020-01 展延、2026 起保險類 15 日），
-    # 下游 pit_revenue_panel 的「公告日之後第一個交易日」語意不變；歷史篩選也套相同期限。
+    # 下游 pit_revenue_panel 的「公告日之後第一個交易日」語意不變；live 篩選不套。
     rv = apply_revenue_deadline(rv)
     if not include_otc_revenue:  # 與 live `screen_tw.load()` 同口徑，理由見 exclude_otc_revenue
         rv = exclude_otc_revenue(rv)

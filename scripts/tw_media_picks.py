@@ -383,7 +383,8 @@ def snapshot(code: str, as_of: date, engine) -> dict | None:
            "vs_ma20_pct": pct(last, ma[20]), "vs_ma60_pct": pct(last, ma[60]),
            "from_60d_high_pct": pct(last, close.tail(60).max()),
            "ret_5d_pct": pct(last, close.iloc[-6]) if len(close) > 5 else None}
-    fund = dossier.fundamentals(engine, sid, d)
+    # 播出日快照是歷史回放：月營收依法定期限判斷當時看不看得到，不拿事後才公告的數字
+    fund = dossier.fundamentals(engine, sid, d, pit=True)
     out["revenue_yoy_3m"] = [m["yoy_pct"] for m in fund["monthly_revenue"][-3:]]
     inst = (dossier.chips(engine, sid, d, [], branch=False) or {}).get("institutional") or {}
     out["foreign_5d_lots"], out["trust_5d_lots"] = inst.get("foreign_5d_lots"), inst.get("trust_5d_lots")

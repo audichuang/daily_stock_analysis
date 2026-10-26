@@ -36,7 +36,7 @@ from market_data.adjust import load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
 from market_data import events, risk_flags  # noqa: E402
 from market_data.health import expected_session, session_before, sessions_after  # noqa: E402
-from market_data.revenue_deadline import revenue_as_of  # noqa: E402
+from market_data.revenue_deadline import MAX_DEADLINE_LAG_DAYS, apply_revenue_deadline  # noqa: E402
 from market_data.tw_official_http import md  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -267,8 +267,10 @@ def tag(r: pd.Series, market_d1: float) -> list:
 
 def load(engine, as_of: pd.Timestamp | None, include_otc_revenue: bool = False):
     """拉基準日前 200 天的資料。**所有查詢都以 as_of 為上界**——指定歷史日期做回顧掃描時，
-    少一個上界就是直接讀到未來資料（月營收與大盤指數都踩過）。
+    少一個上界就是直接讀到未來資料（月營收與大盤指數都踩過）。指定 as_of 時月營收另以
+    法定公告期限（`market_data.revenue_deadline`）判斷可見。
     """
+    replay = as_of is not None   # 指定基準日＝歷史回放（同 `_live_gate` 的 date_given）
     with engine.connect() as c:
         latest = c.execute(text("select max(date) from market.price")).scalar()
         as_of = pd.Timestamp(as_of or latest)
@@ -298,15 +300,21 @@ def load(engine, as_of: pd.Timestamp | None, include_otc_revenue: bool = False):
             mkt = val["market"].fillna("twse") if "market" in val else pd.Series("twse", index=val.index)
             val = val[val["date"] == val.groupby(mkt)["date"].transform("max")]
         val = val.drop(columns=["market"], errors="ignore")
-        # SQL 只取候選範圍；保鮮期必須在法定期限順延後判斷，不能先用佔位日刪掉。
+        # 用 announce_date 設上界:營收在次月才公布,以 revenue_month 篩會提前看到未發布的數字
+        rev_lo = as_of - pd.Timedelta(days=REVENUE_STALE_DAYS)
+        # 指定 --date 回放時，DB 的佔位公告日（次月 10 日）早於法定期限（保險類 15 日、休市順延），
+        # 改用共用的有效公告日（market_data.revenue_deadline，與 measure_signal_forward 同口徑）；
+        # 有效公告日只會更晚，所以 SQL 下界放寬、上界照舊當預篩。live 不套：DB 有的就是已公告。
+        sql_lo = rev_lo - pd.Timedelta(days=MAX_DEADLINE_LAG_DAYS) if replay else rev_lo
         rev = pd.read_sql(text(
             "select stock_id, revenue_month, announce_date, yoy, mom from market.monthly_revenue "
-            "where (revenue_month >= :s OR announce_date >= :s) "
-            "and (announce_date < :e OR announce_date IS NULL)"
-        ), c, params={"s": ((as_of - pd.Timedelta(days=REVENUE_STALE_DAYS)).to_period("M") - 1).start_time.date(),
-                      "e": as_of.date()},
+            "where announce_date >= :s and announce_date < :e"
+        ), c, params={"s": sql_lo.date(), "e": as_of.date()},
             parse_dates=["revenue_month", "announce_date"])
-        rev = revenue_as_of(rev, as_of, stale_days=REVENUE_STALE_DAYS)
+        if replay and len(rev):
+            ann = apply_revenue_deadline(rev, date_col="announce_date")["announce_date"]
+            rev = rev[(ann >= rev_lo) & (ann < as_of)]
+        rev = rev.drop(columns=["announce_date"], errors="ignore")
         if not include_otc_revenue:
             rev = exclude_otc_revenue(rev)
         info = pd.read_sql(text("select stock_id, name, industry from market.stock_info"), c)

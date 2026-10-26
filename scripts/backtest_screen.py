@@ -117,7 +117,7 @@ def load_panel(engine, start, end, include_otc_revenue=False):
             "where announce_date between :s and :e and yoy is not null"
         ), c, params={"s": hist_start, "e": end}, parse_dates=["date", "revenue_month"])
     # DB 公告日是佔位「次月 10 日」，不含展延與 2026 起保險類 15 日期限；回測讀取端
-    # 一律套共用的法定期限（market_data.revenue_deadline），與歷史篩選使用相同規則。
+    # 一律套共用的法定期限（market_data.revenue_deadline），live 篩選不套。
     rev = apply_revenue_deadline(rev)
     if not include_otc_revenue:  # 與 live `screen_tw.load()` 同口徑，理由見 exclude_otc_revenue
         rev = exclude_otc_revenue(rev)
