@@ -26,8 +26,9 @@ exchange_calendars 範圍時只順延週六日並記 warning（週六日一定�
 國定假日則無從得知）。
 
 讀取端：回測（``backtest_screen``、``measure_signal_forward``、``measure_revenue_momentum``）
-一律套；指定歷史基準日的回顧讀取（``screen_tw --date``、``tw_stock_dossier`` 帶 ``as_of``、
-媒體點名的播出日快照）也套。live（基準日就是最新資料日）不套：DB 裡有的列就是已公告，
+一律套；回顧讀取（``screen_tw --date``、``tw_stock_dossier`` 帶 ``as_of``、媒體／PTT
+點名快照）只在明確指定的日期早於全市場 ``market.price`` 最新日期時套。
+不帶日期、等於或晚於最新資料日的 live 不套：DB 裡有的列就是已公告，
 套了反而把已公布的營收藏到期限之後；個股分析的營收動能（``load_tw_revenue_momentum``）錨定
 官方最新月份，同屬 live，不套。
 """
@@ -50,6 +51,19 @@ _INSURANCE_CLASS_EXTRA = frozenset({"5880", "2207", "2905"})
 # 有效公告日最多比 DB 的佔位 10 日晚幾個曆日（15 日期限＋春節連假順延約 9 天，留餘裕）；
 # 讀取端用它放寬 SQL 的公告日下界，再以有效公告日在 Python 端精確篩。
 MAX_DEADLINE_LAG_DAYS = 20
+
+
+def is_historical_replay(as_of, latest) -> bool:
+    """明確指定的日期**嚴格早於**全市場 ``market.price`` 最新日才算歷史回放（要套法定期限）。
+
+    ``as_of`` 為 None／NaT（沒帶日期）、等於或晚於最新日（Web ``?date=`` 帶今天、週末帶今天而最新是週五）
+    都是 live；不以個股落後的 K 棒日期判斷。``latest`` 取不到（None／NaT）時無從判斷，保守當回放
+    （套期限只會讓營收晚看到，不會偷看未來）。比較到日，時分忽略。"""
+    if as_of is None or pd.isna(as_of):
+        return False
+    if latest is None or pd.isna(latest):
+        return True
+    return pd.Timestamp(as_of).date() < pd.Timestamp(latest).date()
 
 
 def _bare(stock_id) -> str:

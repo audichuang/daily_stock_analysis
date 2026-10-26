@@ -11,6 +11,7 @@ from market_data import etl, health, sources
 from market_data.revenue_deadline import (
     apply_revenue_deadline,
     effective_announce_dates,
+    is_historical_replay,
     is_insurance_class,
     publication_deadline,
 )
@@ -146,3 +147,19 @@ def test_company_revenue_page_announce_keeps_tenth_placeholder(sid, roc, year, m
     rec, reason = sources.parse_company_monthly_revenue(html, sid, year, month)
     assert reason == "ok"
     assert str(rec["announce_date"])[:10] == expected
+
+
+@pytest.mark.parametrize("as_of, latest, expected", [
+    (None, "2026-04-13", False),                                       # 沒帶日期＝live
+    (pd.NaT, "2026-04-13", False),
+    ("2026-04-13", "2026-04-13", False),                               # 帶最新日（Web ?date=今天）＝live
+    (pd.Timestamp("2026-04-13 18:00"), dt.date(2026, 4, 13), False),   # 只比到日
+    ("2026-04-13 00:00:00", "2026-04-13 13:30:00", False),
+    ("2026-04-18", "2026-04-17", False),                               # 週末帶今天、最新是週五＝live
+    ("2026-04-12", "2026-04-13", True),                                # 嚴格早於最新日才是回放
+    (dt.date(2026, 4, 10), pd.Timestamp("2026-04-13"), True),
+    ("2026-04-13", None, True),                                        # 最新日取不到：保守當回放
+    ("2026-04-13", pd.NaT, True),
+])
+def test_is_historical_replay(as_of, latest, expected):
+    assert is_historical_replay(as_of, latest) is expected

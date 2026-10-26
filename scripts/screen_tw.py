@@ -36,7 +36,11 @@ from market_data.adjust import is_common_stock, load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
 from market_data import events, risk_flags  # noqa: E402
 from market_data.health import expected_session, session_before, sessions_after  # noqa: E402
-from market_data.revenue_deadline import MAX_DEADLINE_LAG_DAYS, apply_revenue_deadline  # noqa: E402
+from market_data.revenue_deadline import (  # noqa: E402
+    MAX_DEADLINE_LAG_DAYS,
+    apply_revenue_deadline,
+    is_historical_replay,
+)
 from market_data.tw_official_http import md  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -267,12 +271,12 @@ def tag(r: pd.Series, market_d1: float) -> list:
 
 def load(engine, as_of: pd.Timestamp | None, include_otc_revenue: bool = False):
     """拉基準日前 200 天的資料。**所有查詢都以 as_of 為上界**——指定歷史日期做回顧掃描時，
-    少一個上界就是直接讀到未來資料（月營收與大盤指數都踩過）。指定 as_of 時月營收另以
-    法定公告期限（`market_data.revenue_deadline`）判斷可見。
+    少一個上界就是直接讀到未來資料（月營收與大盤指數都踩過）。指定 as_of 早於全市場最新
+    價格日時，月營收另以法定公告期限（`market_data.revenue_deadline`）判斷可見。
     """
-    replay = as_of is not None   # 指定基準日＝歷史回放（同 `_live_gate` 的 date_given）
     with engine.connect() as c:
         latest = c.execute(text("select max(date) from market.price")).scalar()
+        replay = is_historical_replay(as_of, latest)
         as_of = pd.Timestamp(as_of or latest)
         start = (as_of - pd.Timedelta(days=200)).date()
         px = pd.read_sql(text(
@@ -302,7 +306,7 @@ def load(engine, as_of: pd.Timestamp | None, include_otc_revenue: bool = False):
         val = val.drop(columns=["market"], errors="ignore")
         # 用 announce_date 設上界:營收在次月才公布,以 revenue_month 篩會提前看到未發布的數字
         rev_lo = as_of - pd.Timedelta(days=REVENUE_STALE_DAYS)
-        # 指定 --date 回放時，DB 的佔位公告日（次月 10 日）早於法定期限（保險類 15 日、休市順延），
+        # 指定日期早於最新場次時，DB 的佔位公告日（次月 10 日）早於法定期限（保險類 15 日、休市順延），
         # 改用共用的有效公告日（market_data.revenue_deadline，與 measure_signal_forward 同口徑）；
         # 有效公告日只會更晚，所以 SQL 下界放寬、上界照舊當預篩。live 不套：DB 有的就是已公告。
         sql_lo = rev_lo - pd.Timedelta(days=MAX_DEADLINE_LAG_DAYS) if replay else rev_lo

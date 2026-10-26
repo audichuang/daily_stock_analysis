@@ -25,7 +25,7 @@ from data_provider.tw_margin_trend import compute_margin_trend
 from market_data import market_repo
 from market_data.db import get_engine
 from market_data.financial_statement import afterIFRS
-from market_data.revenue_deadline import effective_announce_dates
+from market_data.revenue_deadline import effective_announce_dates, is_historical_replay
 from src.services.market_symbol_utils import split_suffix_symbol
 
 logger = logging.getLogger(__name__)
@@ -235,7 +235,8 @@ def build(code, as_of=None, branch=True, engine=None):
              + (" AND date <= :a" if as_of else ""), s=sid, a=as_of).d.iloc[0]
     if d is None or pd.isna(d):
         raise LookupError(f"{sid}: market.price 查無資料")
-    pit = as_of is not None   # 指定基準日＝歷史回放；Web／看板不帶日期，走 live
+    pit = (is_historical_replay(as_of, market_repo.latest_price_date(engine=engine))
+           if as_of is not None else False)
     as_of = pd.Timestamp(d).date()
     errors = []
 
