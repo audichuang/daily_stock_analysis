@@ -112,3 +112,54 @@ def test_smokes_and_always_cleanup_only_use_the_current_image(tmp_path, failed_s
         assert unrelated.read_text(encoding="utf-8") == "保留其他工作建立的映像"
         for other_image, _, _, other_identity in runs[run_index + 1:]:
             assert (images / other_image).read_text(encoding="utf-8") == other_identity
+
+
+def test_cleanup_tolerates_missing_image_and_keeps_other_runs(tmp_path):
+    # build 失敗時本次映像不存在：清理步驟不能再多報一個紅，也不能動到別的 run 的映像。
+    job = _workflow(".github/workflows/ci.yml")["jobs"]["docker-build"]
+    cleanup = next(step for step in job["steps"] if step.get("if") == "always()")
+    _, env, context = _image_context(job, 201, 1)
+    other_image, _, _ = _image_context(job, 202, 1)
+
+    images = tmp_path / "images"
+    images.mkdir()
+    (images / other_image).write_text("202/1", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        f"#!{sys.executable}\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "import sys\n"
+        "args = sys.argv[1:]\n"
+        "images = Path(os.environ['FAKE_DOCKER_IMAGES'])\n"
+        "if args[:2] == ['image', 'rm'] and len(args) == 3:\n"
+        "    target = images / args[2]\n"
+        "    if not target.exists():\n"
+        "        sys.exit('Error: No such image: ' + args[2])\n"
+        "    target.unlink()\n"
+        "elif args[:2] == ['image', 'prune']:\n"
+        "    for image in images.iterdir():\n"
+        "        image.unlink()\n"
+        "else:\n"
+        "    sys.exit('測試不支援的 Docker 指令')\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", _expand(cleanup["run"], context)],
+        env={
+            **os.environ,
+            **env,
+            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_DOCKER_IMAGES": str(images),
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (images / other_image).read_text(encoding="utf-8") == "202/1"
