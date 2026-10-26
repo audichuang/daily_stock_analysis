@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 總經、Fed 利率預期與重大事件每日入庫 `market` schema 三張新表（migration `f2a7c4d8e913`，表內有資料時拒絕降版）：`macro_series`（yfinance 美債殖利率、美元、台幣、原油、黃金、費半、韓股等日線，加上 FRED 2／10 年期美債）、`rate_expectations`（Kalshi 各場 FOMC 升息／不變／降息的買賣價中點，每天一份快照）、`event_calendar`（Fed 官網＋Kalshi 的 FOMC 決議日、watchlist 財報日）；`MACRO_PERSIST_ENABLED` 預設開，三段各自失敗只報不擋，另有 `python -m market_data.cli macro --period 2y`；`make morning` 新增「大局」段（`scripts/macro_brief.py`／`make macro`，唯讀 DB），skill `tw-morning-call` 新增大局判讀；`scripts/overnight.py` 改用 `market_data/macro.py` 的同一份序列清單（輸出不變）；說明見 `docs/macro-data.md`
 - [改进] LHR（近 20 日淨漲停天數）否決實驗：`measure_signal_forward.py --lhr` 新增量測（預設輸出不變）；否決會砍掉高波動右尾，h60 留下的池子均值 −4.35pp、P(≥30%) −5.84pp（block bootstrap 區間皆為負），列入已研究清單，live 篩選不改
 - [文档] 外資／投信「橫斷面對立極端」構念以 2013–2019 樣本外檢定（新增唯讀量測腳本 `scripts/measure_inst_divergence.py`）：h250 依凍結判準封存為假陽性（雙中間超額 +1.10%、階梯消失），h60 inconclusive；live 篩選規則不變
 - [文档] 外資／投信「橫斷面對立極端」構念以 2013–2019 樣本外檢定（新增唯讀量測腳本 `scripts/measure_inst_divergence.py`）：h250 未通過凍結的晉升判準、依規則封存（雙中間超額 +1.10%、階梯消失；區間全部跨零，統計上 inconclusive、非否證），h60 inconclusive；live 篩選規則不變

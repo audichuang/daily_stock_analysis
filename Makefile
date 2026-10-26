@@ -26,7 +26,7 @@ DOPPLER_RUN = doppler run -p finmind -c dev -- doppler run -p $(DOPPLER_PROJECT)
 
 .DEFAULT_GOAL := help
 .PHONY: help install serve serve-local review review-tw analyze schedule screen \
-        swing morning overnight taifex media-picks measure portfolio portfolio-wf verify-decisions verify-media-picks shadow-buy \
+        swing morning macro overnight taifex media-picks measure portfolio portfolio-wf verify-decisions verify-media-picks shadow-buy \
         test lint lint-fix format refresh-tw refresh-us daily-report daily-report-detached \
         pg-scratch pg-scratch-stop
 
@@ -80,9 +80,12 @@ swing: ## 每日波段流程第 1 步：更新并健检台股资料 → 全市�
 	@echo "把每檔判斷各自追加一行到 journal/swing-decisions.jsonl（進版控，當天 commit——見 journal/README.md）。"
 	@echo "收盘后才有当日资料；台股 13:30 收盘、法人与融资 T+1 才补齐。"
 
-morning: ## 每天早上一键：补资料 → 昨晚国际盘 → 期交所籌碼 → 待触发计划 → 昨晚媒体点名 → 今日候选（之后跑 skill）
+morning: ## 每天早上一键：补资料 → 大局（總經／Fed／事件）→ 昨晚国际盘 → 期交所籌碼 → 待触发计划 → 昨晚媒体点名 → 今日候选（之后跑 skill）
 	@uv run --env-file .env python -m market_data.cli daily
 	@uv run --env-file .env python -m market_data.cli health --strict
+	@echo "\n===== 大局（總經、Fed 利率預期、台股位階與資金、未來 14 天事件）====="
+	@# - 唯讀 DB（daily 已寫入）；某段表不存在或沒資料時只印 WARN，不拖垮 make morning
+	@-uv run --env-file .env python scripts/macro_brief.py
 	@echo "\n===== 昨晚国际盘 ====="
 	@# 任一序列失敗回 1，失敗已逐列印在表裡；用 - 讓後面的期交所／待觸發計畫／候選照跑
 	@-tsmc=$$(uv run --env-file .env python -c "from market_data.db import get_engine;from sqlalchemy import text;print(get_engine().connect().execute(text(\"select close from market.price where stock_id='2330' order by date desc limit 1\")).scalar() or 0)" 2>/dev/null); \
@@ -98,6 +101,9 @@ morning: ## 每天早上一键：补资料 → 昨晚国际盘 → 期交所籌�
 	@echo "\n===== 今日候选 ====="
 	@$(MAKE) --no-print-directory screen
 	@echo "\n下一步：让 agent 跑 skill \`tw-swing-research\`（候选 0 档也要看上面的隔夜盘与待触发计划）"
+
+macro: ## 大局儀表（總經日線、Fed 利率預期、台股位階與資金、未來 14 天事件；唯讀 DB）
+	uv run --env-file .env python scripts/macro_brief.py
 
 overnight: ## 昨晚国际盘数字（道琼/标普/纳指/费半/台积电ADR/油价/汇率，给 skill Step 0a 用）
 	uv run python scripts/overnight.py --tw-close $(TSMC_CLOSE)

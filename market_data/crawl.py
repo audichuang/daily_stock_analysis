@@ -783,6 +783,14 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
             taifex.update(eng, asof=asof)
         except Exception as exc:
             print(f"**WARN taifex_fut_oi: {exc}")
+    # 總經日線／Fed 利率預期／重大事件：預設開（MACRO_PERSIST_ENABLED），三段各自只報不擋，
+    # 國外來源掛掉或正式庫沒跑 migration 都不影響台股資料與之後的復權
+    from market_data import macro
+    if macro.persist_enabled():
+        try:
+            macro.update(eng)
+        except Exception as exc:
+            print(f"**WARN macro: {exc}")
     try:
         adjust.refresh_recent(
             eng, asof - _dt.timedelta(days=adjust.ADJUSTMENT_WINDOW_DAYS),

@@ -14,24 +14,16 @@
 
 import argparse
 import sys
+from pathlib import Path
 
 import yfinance as yf
 
-# 名稱、代碼、為什麼要看它、市場組（日期一致性按組檢查）
-SERIES = [
-    ("道瓊", "^DJI", "分辨全面承壓還是族群輪動", "us"),
-    ("標普500", "^GSPC", "同上", "us"),
-    ("那斯達克", "^IXIC", "科技股整體", "us"),
-    ("費城半導體", "^SOX", "台股是半導體權重市場，解釋力高於大盤三兄弟", "us"),
-    ("台積電ADR", "TSM", "折算台積電開盤；它一檔佔加權指數約三成", "us"),
-    ("美光", "MU", "**記憶體的隔夜代理**：台灣記憶體對它 t−1 相關 0.364，對費半同日只 0.123", "us"),
-    ("SK海力士", "000660.KS", "記憶體的同日代理，r=0.554（籃子 0.577）", "kr"),
-    ("三星電子", "005930.KS", "同上", "kr"),
-    ("KOSPI", "^KS11", "分辨韓國記憶體崩跌是族群現象還是全市場", "kr"),
-    ("VIX恐慌指數", "^VIX", "分辨族群殺盤與系統性 risk-off——費半崩而 VIX 不動，是前者", "cont"),
-    ("西德州原油", "CL=F", "對非電子（航運燃油、傳產、內需）方向常與電子相反", "cont"),
-    ("美元兌台幣", "TWD=X", "ADR 折算與外資匯入匯出", "cont"),
-]
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from market_data.macro import overnight_series  # noqa: E402
+
+# 名稱、代碼、為什麼要看它、市場組（日期一致性按組檢查）。清單只有一份，在 market_data/macro.py 的
+# SERIES（同時決定每日入庫哪些序列）；這裡只取 overnight=True 的那幾列。
+SERIES = overnight_series()
 GROUP_LABEL = {
     "us": "美股（昨晚收盤）",
     "kr": "韓股（同時段市場，見下方說明）",

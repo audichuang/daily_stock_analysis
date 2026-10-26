@@ -10,6 +10,7 @@
     python -m market_data.cli holding               # 集保股權分散最新一週(全市場)
     python -m market_data.cli holding-history 3324 6191  # 個股近一年集保(每檔約 51 個請求)
     python -m market_data.cli taifex-oi             # 期交所法人台指期未平倉(近 14 曆日窗口,不看開關)
+    python -m market_data.cli macro --period 2y     # 總經日線＋Fed 利率預期＋重大事件(不看開關;首次回補用 2y)
 """
 
 import argparse
@@ -62,6 +63,8 @@ def main(argv=None):
     hh.add_argument("stock_id", nargs="+", help="不帶後綴的代號,如 3324")
     hh.add_argument("--weeks", type=int, default=None, help="只補最近 N 週,預設查詢頁提供的全部(約 51 週)")
     hh.add_argument("--delay", type=float, default=1.0, help="每週請求間隔秒數")
+    mc = sub.add_parser("macro", help="總經日線、Fed 利率預期(Kalshi)、FOMC／財報行事曆(手動單跑,不看 MACRO_PERSIST_ENABLED)")
+    mc.add_argument("--period", default="3mo", help="yfinance 日線窗口,首次回補用 2y(MA200 與一年高點要用)")
     tx = sub.add_parser("taifex-oi", help="期交所三大法人臺股期貨未平倉:近 14 曆日窗口 upsert"
                         "(手動單跑,不看 TAIFEX_OI_PERSIST_ENABLED;不回補更早歷史)")
     tx.add_argument("--asof", type=datetime.date.fromisoformat, default=None,
@@ -131,6 +134,9 @@ def main(argv=None):
     elif args.command == "taifex-oi":
         from market_data import taifex
         taifex.update(eng, asof=args.asof)
+    elif args.command == "macro":
+        from market_data import macro
+        macro.update(eng, period=args.period)
     elif args.command == "funds":
         from market_data import funds
         funds.daily_update(eng)
