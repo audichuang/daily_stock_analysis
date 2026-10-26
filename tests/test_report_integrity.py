@@ -43,6 +43,49 @@ class TestCheckContentIntegrity(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(missing, [])
 
+    def _buy_result_with_battle(self, battle_plan):
+        return AnalysisResult(
+            code="600519",
+            name="贵州茅台",
+            trend_prediction="看多",
+            sentiment_score=70,
+            operation_advice="买入",
+            analysis_summary="稳健",
+            decision_type="buy",
+            dashboard={
+                "core_conclusion": {"one_sentence": "可买入"},
+                "intelligence": {"risk_alerts": []},
+                "battle_plan": battle_plan,
+            },
+        )
+
+    def test_structured_stop_loss_null_is_missing_even_with_text(self) -> None:
+        """有 sniper_prices 時停損缺不缺看結構化數字：null 即缺，文字有寫價位也不算。"""
+        result = self._buy_result_with_battle({
+            "sniper_points": {"stop_loss": "118元"},
+            "sniper_prices": {"stop_loss": None},
+        })
+        ok, missing = check_content_integrity(result)
+        self.assertFalse(ok)
+        self.assertIn("dashboard.battle_plan.sniper_points.stop_loss", missing)
+
+    def test_structured_stop_loss_number_passes_even_with_blank_text(self) -> None:
+        """反向：結構化停損有數字，文字空白也不算缺。"""
+        result = self._buy_result_with_battle({
+            "sniper_points": {"stop_loss": ""},
+            "sniper_prices": {"stop_loss": 110},
+        })
+        ok, missing = check_content_integrity(result)
+        self.assertTrue(ok, missing)
+
+    def test_legacy_without_structured_keeps_text_rule(self) -> None:
+        """沒有 sniper_prices 的舊輸出沿用文字非空規則。"""
+        ok, _ = check_content_integrity(self._buy_result_with_battle({"sniper_points": {"stop_loss": "止損位：110元"}}))
+        self.assertTrue(ok)
+        ok, missing = check_content_integrity(self._buy_result_with_battle({"sniper_points": {"stop_loss": " "}}))
+        self.assertFalse(ok)
+        self.assertIn("dashboard.battle_plan.sniper_points.stop_loss", missing)
+
     def test_pass_when_signal_attribution_missing(self) -> None:
         """Signal attribution is optional and does not enter missing_fields."""
         result = AnalysisResult(

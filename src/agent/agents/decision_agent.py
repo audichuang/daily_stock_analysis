@@ -17,7 +17,6 @@ from typing import List, Optional
 from src.agent.agents.base_agent import BaseAgent
 from src.agent.protocols import AgentContext, AgentOpinion, normalize_decision_signal
 from src.report_language import normalize_report_language
-from src.utils.sniper_points import SNIPER_PRICES_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +112,13 @@ Important: ``decision_type`` must stay within the existing enum
 ``sentiment_score``, and the natural-language fields instead of inventing
 new decision_type values.
 
+The nested ``dashboard.battle_plan`` must include ``sniper_points`` (human-readable
+text for ``ideal_buy``, ``secondary_buy``, ``stop_loss``, ``take_profit``) and
+``sniper_prices`` with the same four keys, each a plain number (no currency unit,
+no range; for a range entry give the one price you would actually order at) or
+``null`` when that slot has no actionable price. The two must agree; the system
+reads prices only from ``sniper_prices`` and never infers them from the text.
+
 The nested ``dashboard`` object must include ``phase_decision`` with these
 keys: ``phase_context``, ``action_window``, ``immediate_action``,
 ``watch_conditions``, ``next_check_time``, ``confidence_reason``,
@@ -135,7 +141,6 @@ should sum to 100; all-zero means no effective signal and must not be faked.
 ``strongest_bullish_signal`` is the name of the strongest bullish signal (e.g., MACD golden cross, earnings surprise, low valuation).
 ``strongest_bearish_signal`` is the name of the strongest bearish signal (e.g., MA death cross, earnings warning, high valuation).
 """
-        prompt += SNIPER_PRICES_PROMPT
         if report_language == "en":
             return prompt + """
 

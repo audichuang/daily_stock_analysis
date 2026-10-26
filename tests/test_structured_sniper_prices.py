@@ -61,12 +61,20 @@ def test_legacy_literal_formats_still_work(value, expected):
     assert parse_sniper_value(value) == expected
 
 
-@pytest.mark.parametrize("value", [True, False, 0, -1, float("nan"), float("inf"), "110", "110元", {}, []])
+@pytest.mark.parametrize("value", [True, False, 0, -1, float("nan"), float("inf"), "跌破110元停損", {}, []])
 def test_structured_contract_does_not_coerce_invalid_values_or_fall_back(value):
     assert extract_sniper_points(report(dict.fromkeys(SNIPER_KEYS, value))) == dict.fromkeys(SNIPER_KEYS)
+    if isinstance(value, bool):
+        return
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         AnalysisReportSchema.model_validate(report({"stop_loss": value}))
+
+
+@pytest.mark.parametrize("value", ["110", " 110 ", "110元"])
+def test_structured_numeric_string_is_format_not_meaning(value):
+    # 模型把數字包成字串只是格式問題，照純數字收；不因此回頭讀文字
+    assert extract_sniper_points(report(dict.fromkeys(SNIPER_KEYS, value))) == dict.fromkeys(SNIPER_KEYS, 110)
 
 
 @pytest.mark.parametrize("value", [110, None])
@@ -151,8 +159,13 @@ def test_condensed_displays_do_not_resurrect_text_prices(value, monkeypatch):
              notifier.generate_single_stock_report(result), notifier.generate_wechat_dashboard([result]),
              render("wechat", [result])]
     for text in texts:
-        assert "118" not in text
-        assert ("110" in text) == (value is not None)
+        if value is not None:
+            # 模型給了數字：精簡價位列只顯示數字，不顯示含 118 的原文
+            assert "118" not in text
+            assert "110" in text
+        else:
+            # 模型判斷沒有價位：精簡列沿用原文說明，不轉成數字
+            assert "暫無" in text
     markdown = "### 作战计划\n\n| 点位类型 | 价格 |\n|---|---|\n| 理想买入点 | 118元 |\n| 止损位 | 118元 |"
     assert len(_stock_data(markdown, date(2026, 10, 27)).sniper) == 2
     poster = _stock_data_from_payload(result.to_dict(), markdown, date(2026, 10, 27))
@@ -161,18 +174,27 @@ def test_condensed_displays_do_not_resurrect_text_prices(value, monkeypatch):
 
 
 @pytest.mark.parametrize("value", [110, None])
-def test_integrity_and_agent_backfills_respect_explicit_null(value):
+def test_integrity_and_agent_backfills_follow_structured_stop(value):
     from src.agent.orchestrator import AgentOrchestrator
     from src.agent.protocols import AgentContext
     from src.core.pipeline import StockAnalysisPipeline
     prices = dict.fromkeys(SNIPER_KEYS, value)
     result = result_with(prices)
-    assert check_content_integrity(result) == (True, [])
+    # 買入／持有時停損看結構化欄位：null 要求模型補，文字有 110 也不算
+    expected = (True, []) if value is not None else (False, ["dashboard.battle_plan.sniper_points.stop_loss"])
+    assert check_content_integrity(result) == expected
     result.dashboard["battle_plan"]["sniper_points"] = {}
     pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
     pipeline._backfill_agent_dashboard_fields(result, SimpleNamespace(support_levels=[999]), "zh-TW")
-    assert extract_sniper_points(result) == prices
-    assert "stop_loss" not in result.get_sniper_points()
+    if value is not None:
+        # 有數字時文字沿用模型的數字，不換成趨勢支撐 999
+        assert extract_sniper_points(result) == prices
+        assert result.get_sniper_points()["stop_loss"] == 110
+    else:
+        # 模型文字與數字都沒給停損：沿用既有趨勢支撐補位（只補停損一格）
+        assert extract_sniper_points(result) == {**prices, "stop_loss": 999}
+    result = result_with(prices)
+    result.dashboard["battle_plan"]["sniper_points"] = {}
     orchestrator = AgentOrchestrator(tool_registry=MagicMock(), llm_adapter=MagicMock())
     raw = result.to_dict()
     raw["dashboard"]["key_levels"] = {"support": 999, "stop_loss": 999, "resistance": 999}
@@ -184,12 +206,12 @@ def test_integrity_and_agent_backfills_respect_explicit_null(value):
 def test_missing_structured_stop_triggers_repair_despite_numeric_text():
     result = result_with({})
     result.dashboard["battle_plan"]["sniper_points"]["stop_loss"] = "118元"
-    field = "dashboard.battle_plan.sniper_prices.stop_loss"
+    field = "dashboard.battle_plan.sniper_points.stop_loss"
     assert check_content_integrity(result) == (False, [field])
     analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
-    assert "sniper_prices" in analyzer._build_integrity_complement_prompt([field], "zh-TW")
+    assert "sniper_prices.stop_loss" in analyzer._build_integrity_complement_prompt([field], "zh-TW")
     apply_placeholder_fill(result, [field])
-    assert result.dashboard["battle_plan"]["sniper_prices"]["stop_loss"] is None
+    assert result.dashboard["battle_plan"]["sniper_prices"].get("stop_loss") is None
     assert extract_sniper_points(result)["stop_loss"] is None
 
 
@@ -199,7 +221,6 @@ def test_all_prompt_paths_require_structured_judgment(language, legacy):
     from src.agent.executor import AGENT_SYSTEM_PROMPT, LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT
     from src.agent.agents.decision_agent import DecisionAgent
     from src.agent.protocols import AgentContext
-    from src.utils.sniper_points import SNIPER_PRICES_PROMPT
     analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
     analyzer._get_skill_prompt_sections = lambda: ("", "", legacy)
     analyzer._tw_ma_weighted_active = lambda *args: False
@@ -208,18 +229,18 @@ def test_all_prompt_paths_require_structured_judgment(language, legacy):
                    market_role="", market_guidelines="", default_skill_policy_section="", skills_section="", language_section=""),
                DecisionAgent(MagicMock(), MagicMock()).system_prompt(AgentContext(query="test", meta={"report_language": language}))]
     for prompt in prompts:
-        assert SNIPER_PRICES_PROMPT in prompt
+        assert "sniper_prices" in prompt
+        assert "null" in prompt
         assert all(key in prompt for key in SNIPER_KEYS)
 
 
 def test_chat_synthesis_keeps_natural_language_contract():
     from src.agent.agents.decision_agent import DecisionAgent
     from src.agent.protocols import AgentContext
-    from src.utils.sniper_points import SNIPER_PRICES_PROMPT
     prompt = DecisionAgent(MagicMock(), MagicMock()).system_prompt(
         AgentContext(query="test", meta={"response_mode": "chat", "report_language": "zh-TW"}),
     )
-    assert SNIPER_PRICES_PROMPT not in prompt
+    assert "sniper_prices" not in prompt
     assert "Do NOT output JSON" in prompt
 
 

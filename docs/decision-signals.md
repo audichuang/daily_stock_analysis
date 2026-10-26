@@ -52,11 +52,11 @@ Web 展示必须把这些 wire value 映射为当前 UI 语言的用户可读标
 
 狙擊價格由 LLM／decision agent 在 `dashboard.battle_plan.sniper_prices` 輸出，與原本供完整報告、Web 閱讀的 `sniper_points` 文字並存。四個鍵為 `ideal_buy`、`secondary_buy`、`stop_loss`、`take_profit`，值只能是有限正數或 `null`；`null` 代表模型判斷目前沒有可執行價格，不能用原文或舊 DB 數值補回。區間建議由模型選出實際會執行的單一價格，完整區間與條件留在文字。例：文字「暫無，為避免在118元停損而錯失反彈，改以110元停損」搭配 `stop_loss: 110` 時採用 110；搭配 `stop_loss: null` 時沒有停損價。
 
-`src/utils/sniper_points.py::extract_sniper_points` 與 `resolve_sniper_prices` 是共用讀取入口，涵蓋成本檢核、歷史數值欄位、信號擷取及重評。結構化物件存在時，缺鍵或非法值也不退回原文。買入／持有報告的完整性檢查以結構化停損為準：明確 `null` 是有效判斷，缺鍵或非法值才要求模型補全；補全失敗時只留空值及缺欄位診斷，不把支撐價填成模型停損。agent 的既有舊版補欄流程只適用於沒有新欄位的舊輸出。
+`src/utils/sniper_points.py::extract_sniper_points` 與 `resolve_sniper_prices` 是共用讀取入口，涵蓋成本檢核、歷史數值欄位、信號擷取及重評。結構化物件存在時，缺鍵、`null` 或非法值都不退回原文；值可為 JSON 數字或純數字字串（格式容錯，不解讀語意）。買入／持有報告的完整性檢查以結構化停損為準：`sniper_prices.stop_loss` 不是正數（含 `null`、缺鍵）就列入缺欄位、要求模型補全，原文寫了價位也不算；補全仍失敗時只補文字佔位，不替模型編數字。沒有 `sniper_prices` 的舊輸出沿用「停損文字非空」規則。agent 路徑的趨勢支撐補位只在模型連停損文字與數字都沒給時才啟用（同時補進文字與 `sniper_prices.stop_loss`）；模型給了數字而文字漏寫時，文字沿用該數字；模型給 `null` 但文字有說明時尊重其判斷、不補。多 agent 收尾（orchestrator）在模型已給 `sniper_prices` 時不再用 `key_levels` 補狙擊點文字。
 
 舊資料沒有 `sniper_prices` 時，`parse_sniper_value` 僅接受純數字、數字加「元」或純區間（`118-120`、`118~120`、`118至120`；千分位逗號可用）。純區間維持舊儲存契約採右端點 120；任何額外敘述一律回傳 `None`，不解讀買賣詞、否定或技術指標。重評在原文有內容卻不可解析時也不採用舊數值，只有舊原文缺漏／空白才回退 DB。既有歷史數值不做批次改寫。
 
-API 的 `strategy.sniper_prices` 附上同一組數值；`strategy.ideal_buy/secondary_buy/stop_loss/take_profit` 與 `details.raw_result` 保留原文，Web 維持文字展示。精簡通知、機器人價位列與分享圖只展示可執行數值；結構化 `null` 不得透過 Markdown fallback 復活。
+API 的 `strategy.sniper_prices` 附上同一組數值；`strategy.ideal_buy/secondary_buy/stop_loss/take_profit` 與 `details.raw_result` 保留原文，Web 維持文字展示。精簡通知（含 wechat 模板）與機器人價位列：模型有給數字的格子顯示該數字，其餘格子沿用 `sniper_points` 原文（`null` 不轉成數字）。分享圖只展示可執行數值，結構化 `null` 的格子隱藏，不透過 Markdown fallback 復活。
 
 ## Canonical 评分与 action 口径
 

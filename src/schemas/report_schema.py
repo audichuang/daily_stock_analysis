@@ -98,13 +98,20 @@ class SniperPoints(BaseModel):
     take_profit: Optional[Union[str, int, float]] = None
 
 
-class SniperPrices(BaseModel):
-    """模型可執行價格；缺欄位維持舊報告相容性。"""
+# 正數價位；寬鬆模式接受純數字字串，句子、非正數與 NaN/inf 一律不通過
+_SniperPrice = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 
-    ideal_buy: Optional[Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]] = None
-    secondary_buy: Optional[Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]] = None
-    stop_loss: Optional[Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]] = None
-    take_profit: Optional[Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]] = None
+
+class SniperPrices(BaseModel):
+    """模型判斷的狙擊點位數字；每格是價位或 null（null = 模型判斷沒有可執行價位）。
+
+    與 ``SniperPoints`` 同一組價位，``SniperPoints`` 是給人看的文字，系統只讀這裡的數字。
+    """
+
+    ideal_buy: Optional[_SniperPrice] = None
+    secondary_buy: Optional[_SniperPrice] = None
+    stop_loss: Optional[_SniperPrice] = None
+    take_profit: Optional[_SniperPrice] = None
 
 
 class PositionStrategy(BaseModel):

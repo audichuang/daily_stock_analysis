@@ -181,6 +181,23 @@ class TestApplyGuardrail(unittest.TestCase):
         self.assertEqual(cal["adjusted_score"], r.sentiment_score)
         self.assertLessEqual(cal["adjusted_score"], 59)
 
+    def test_structured_sniper_prices_override_contradicting_text(self):
+        # 文字寫寬價位、模型給的結構化數字是典型窄價位：檢核只看結構化數字
+        r = _result(WIDE)
+        r.dashboard["battle_plan"]["sniper_prices"] = dict(TYPICAL)
+        self.assertEqual(apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW"),
+                         ["trade_cost_buy_softened"])
+        check = r.dashboard["battle_plan"]["cost_check"]
+        self.assertEqual(check["gross_downside_pct"], round((1 - 97.86 / 100.0) * 100, 2))
+
+    def test_structured_null_stop_is_not_recovered_from_text(self):
+        # 結構化停損是 null：不從文字的純數字撈回，檢核缺停損就不算失敗、不降級
+        r = _result(TYPICAL)
+        r.dashboard["battle_plan"]["sniper_prices"] = {**TYPICAL, "stop_loss": None}
+        self.assertEqual(apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW"), [])
+        self.assertIsNot(r.dashboard["battle_plan"]["cost_check"].get("passed"), False)
+        self.assertEqual(r.decision_type, "buy")
+
     def test_passing_buy_is_untouched(self):
         r = _result(WIDE)
         self.assertEqual(apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW"), [])
