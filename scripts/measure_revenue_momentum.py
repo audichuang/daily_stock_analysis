@@ -35,6 +35,7 @@ from sqlalchemy import create_engine, text
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from market_data.adjust import is_common_stock  # noqa: E402
 from market_data.db import database_url  # noqa: E402
 from market_data.revenue_deadline import apply_revenue_deadline  # noqa: E402
 from measure_signal_forward import (  # noqa: E402
@@ -189,8 +190,7 @@ def main(argv=None):
         with eng.connect() as c:
             a.end = str(c.execute(text("select max(date) from market.price")).scalar())
     piv, _, _ = load(eng, a.start, a.end, a.include_otc_revenue)
-    keep = [s for s in piv["close"].columns
-            if len(s) == 4 and s.isdigit() and not s.startswith(("00", "91"))]
+    keep = [s for s in piv["close"].columns if is_common_stock(s)]
     piv = {k: v[keep] for k, v in piv.items()}
     with eng.connect() as c:
         rv = pd.read_sql(text(

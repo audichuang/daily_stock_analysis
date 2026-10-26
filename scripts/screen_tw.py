@@ -32,7 +32,7 @@ from sqlalchemy import text
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from market_data.adjust import load_factors  # noqa: E402
+from market_data.adjust import is_common_stock, load_factors  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
 from market_data import events, risk_flags  # noqa: E402
 from market_data.health import expected_session, session_before, sessions_after  # noqa: E402
@@ -423,8 +423,10 @@ def funnel(df, min_turnover, strategy="breakout"):
     不要當預設。
     """
     steps = {"全市場有報價": len(df)}
-    pool = df[~df["is_etf"] & ~df["is_tib"]].copy()
-    steps["排除 ETF 與創新板"] = len(pool)
+    # 宇宙與 measure_signal_forward 共用 `is_common_stock`（四位數普通股、排除 ETF 00xx／TDR 91xx）：
+    # 只排 ETF 時 TDR（9105、912000 都有月營收）會進 live 候選池，但 20.2% 錨點的母體裡沒有它。
+    pool = df[df["stock_id"].map(is_common_stock).astype(bool) & ~df["is_tib"]].copy()
+    steps["排除 ETF／TDR／非普通股與創新板"] = len(pool)
     pool = pool[pool["turnover20"] >= min_turnover]
     steps[f"日均額≥{min_turnover / 1e8:.1f}億"] = len(pool)
 

@@ -40,6 +40,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from market_data.adjust import is_common_stock  # noqa: E402
 from market_data.db import get_engine  # noqa: E402
 from measure_signal_forward import (  # noqa: E402
     apply_thresholds, factors, forward_returns, load, pit_revenue_panel, to_events,
@@ -335,8 +336,7 @@ def main(argv=None):
     eng = get_engine()
     piv_full, rv, info = load(eng, a.start, a.end, a.include_otc_revenue)
     close_full = piv_full["close"]
-    keep = [s for s in close_full.columns
-            if len(s) == 4 and s.isdigit() and not s.startswith(("00", "91"))]
+    keep = [s for s in close_full.columns if is_common_stock(s)]
     if not a.include_tib:
         # 用**今天**的名稱後綴判定歷史板別是近似（PIT 板別表還沒建），但方向是保守的：
         # 創新板從掛牌就在創新板，且不排除等於讓組合買進 live 不會買的標的。

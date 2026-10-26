@@ -89,6 +89,10 @@ def is_common_stock(stock_id: str) -> bool:
     踩雷：**TDR 也有四位數代號**（9103 美德醫療-DR、9105 泰金寶-DR、9110 越南控-DR、
     9136 巨騰-DR），光靠長度擋不掉；而 9802、9904 寶成、9921 巨大這些 9 開頭的
     卻是正常普通股，所以只能用 `91` 前綴區分。帶字母的特別股（9941A）由 isdigit 擋掉。
+
+    這也是台股波段的**研究宇宙**：live 漏斗 `scripts/screen_tw.py::funnel` 與量測／回測腳本
+    （measure_signal_forward、measure_revenue_momentum、portfolio_walkforward、backtest_screen）
+    共用這一個判斷，live 候選池與錨點母體才會同一口徑；不要在腳本裡另寫一份。
     """
     if len(stock_id) != 4 or not stock_id.isdigit():
         return False            # ETN(020xxx)、6 位 TDR(910322)、權證(5 位) 一併排除

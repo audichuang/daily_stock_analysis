@@ -117,12 +117,12 @@ def test_breakout_funnel_applies_volume_upper_bound():
         "d1": 0.01, "d20": 0.10, "bias20": 0.05, "inst_5": 1.0,
     }
     df = pd.DataFrame([
-        {**base, "stock_id": "AAA", "vol_ratio5": 1.5},   # 在區間內
-        {**base, "stock_id": "BBB", "vol_ratio5": 5.0},   # 爆量,應被剔除
-        {**base, "stock_id": "CCC", "vol_ratio5": 1.0},   # 量能不足,應被剔除
+        {**base, "stock_id": "1101", "vol_ratio5": 1.5},   # 在區間內
+        {**base, "stock_id": "1102", "vol_ratio5": 5.0},   # 爆量,應被剔除
+        {**base, "stock_id": "1103", "vol_ratio5": 1.0},   # 量能不足,應被剔除
     ])
     pool, steps = funnel(df, 2e8, "breakout")
-    assert list(pool["stock_id"]) == ["AAA"]
+    assert list(pool["stock_id"]) == ["1101"]
     assert BREAKOUT["vol_ratio5_max"] == 2.0
 
 
@@ -173,12 +173,77 @@ def test_breakout_funnel_requires_revenue_growth():
         "d1": 0.01, "d20": 0.10, "bias20": 0.05, "inst_5": 1.0,
     }
     df = pd.DataFrame([
-        {**base, "stock_id": "AAA", "yoy": 25.0},
-        {**base, "stock_id": "BBB", "yoy": 5.0},
-        {**base, "stock_id": "CCC", "yoy": float("nan")},   # 上櫃無月營收 → 篩掉
+        {**base, "stock_id": "1101", "yoy": 25.0},
+        {**base, "stock_id": "1102", "yoy": 5.0},
+        {**base, "stock_id": "1103", "yoy": float("nan")},   # 上櫃無月營收 → 篩掉
     ])
     pool, _ = funnel(df, 2e8, "breakout")
-    assert list(pool["stock_id"]) == ["AAA"]
+    assert list(pool["stock_id"]) == ["1101"]
+
+
+# ---- 研究宇宙：live 漏斗與量測腳本共用 `is_common_stock` -------------------------------
+# 量測端（measure_signal_forward）只收四位數普通股、排除 ETF 00xx／TDR 91xx；live 原本只排 00
+# 開頭，TDR（9105、912000 在 monthly_revenue 都有資料）能進候選池，但錨點母體裡沒有它。
+
+
+@pytest.mark.parametrize("sid", ["9105", "912000", "00878", "0050", "00631L", "2887A", "020039", "70001"])
+def test_universe_predicate_rejects_non_common_stock(sid):
+    from market_data.adjust import is_common_stock
+    assert not is_common_stock(sid)
+
+
+@pytest.mark.parametrize("sid", ["2330", "9921", "9904", "9802", "6488", "5305"])
+def test_universe_predicate_keeps_four_digit_common_stock_including_9xxx(sid):
+    """反向檢查：9 開頭的普通股（巨大、寶成）不能被「排除所有 9xxx」的過度修法誤殺。"""
+    from market_data.adjust import is_common_stock
+    assert is_common_stock(sid)
+
+
+def test_funnel_uses_the_same_universe_as_the_forward_measurement():
+    from screen_tw import funnel
+    base = {
+        "is_tib": False, "turnover20": 5e8, "close": 110.0,
+        "hi60_prior": 100.0, "d5": 0.10, "vol_ratio5": 1.5, "yoy": 30.0, "pe_ratio": 15.0,
+        "d1": 0.01, "d20": 0.10, "bias20": 0.05, "inst_5": 1.0,
+    }
+    sids = ["2330", "9105", "912000", "00878", "00631L", "2887A", "9921"]
+    # is_etf 照 build() 的寫法給（只看 00 開頭）：漏斗若退回 `~is_etf`，TDR 與特別股就會漏進來
+    df = pd.DataFrame([{**base, "stock_id": s, "is_etf": s.startswith("00")} for s in sids])
+    for strategy in ("breakout", "momentum"):
+        pool, steps = funnel(df.assign(ma20=105.0, ma60=100.0), 2e8, strategy)
+        assert sorted(pool["stock_id"]) == ["2330", "9921"], strategy
+        assert steps["排除 ETF／TDR／非普通股與創新板"] == 2
+
+
+@pytest.mark.parametrize("strategy", ["breakout", "momentum"])
+def test_funnel_routes_every_code_through_the_shared_predicate(strategy, monkeypatch):
+    """漏斗必須逐檔呼叫 `screen_tw.is_common_stock`（同一個 seam），不能另寫一份前綴規則。"""
+    from market_data.adjust import is_common_stock
+
+    accepted = {"2330", "6488", "5305", "9802", "9904", "9921"}
+    codes = [*sorted(accepted), "9105", "912000", "00878", "0050", "00631L",
+             "2887A", "70001", "7610"]
+    base = {
+        "turnover20": 5e8, "close": 110.0, "ma20": 105.0, "ma60": 100.0,
+        "hi60_prior": 100.0, "d5": 0.1, "vol_ratio5": 1.5, "yoy": 30.0,
+        "inst_5": 1.0, "d20": 0.1, "d1": 0.01, "bias20": 0.05, "pe_ratio": 15.0,
+    }
+    df = pd.DataFrame([
+        {**base, "stock_id": sid, "is_etf": sid.startswith("00"), "is_tib": sid == "7610"}
+        for sid in codes
+    ])
+    seen = []
+
+    def checked(sid):
+        seen.append(sid)
+        return is_common_stock(sid)
+
+    monkeypatch.setattr(screen_tw, "is_common_stock", checked)
+    pool, steps = screen_tw.funnel(df, 2e8, strategy)
+
+    assert set(pool["stock_id"]) == accepted
+    assert seen == codes
+    assert list(steps.values())[:2] == [len(codes), len(accepted)]
 
 
 # ---- 上櫃月營收的口徑閘門 ---------------------------------------------------------------
