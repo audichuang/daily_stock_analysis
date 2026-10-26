@@ -325,6 +325,8 @@ def test_pool_filters_with_the_shared_universe_predicate(monkeypatch):
         captured["columns"] = list(columns)
         raise PoolCaptured
 
+    # 先釘住腳本綁的就是共用謂詞；否則下面的 spy 會蓋掉錯誤的本地綁定，守門形同虛設。
+    assert portfolio.is_common_stock is is_common_stock
     monkeypatch.setattr(portfolio, "is_common_stock", checked)
     monkeypatch.setattr(portfolio, "pit_revenue_panel", capture)
     with pytest.raises(PoolCaptured):
