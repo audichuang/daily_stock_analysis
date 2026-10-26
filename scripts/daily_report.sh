@@ -120,6 +120,7 @@ lock_transition() {
     use strict;
     use warnings;
     use Fcntl qw(:flock);
+    use File::Path qw(remove_tree);
     $SIG{__DIE__} = sub { print STDERR @_; exit 1; };
     my ($action, $lock, $pid, $limit) = @ARGV;
     open my $guard, ">>", "$lock.guard" or die "open guard: $!\n";
@@ -130,9 +131,10 @@ lock_transition() {
       chomp $owner;
       return $owner;
     };
+    # 用 remove_tree：舊版或手動留下的鎖目錄裡若有其他檔，rmdir 會失敗、整輪卡住。
     my $clear = sub {
-      unlink "$lock/pid" or die "unlink pid: $!\n" if -e "$lock/pid";
-      rmdir $lock or die "rmdir lock: $!\n";
+      remove_tree($lock);
+      die "remove lock: $lock\n" if -e $lock;
     };
     if ($action eq "release") {
       $clear->() if -d $lock && $read_owner->() eq $pid;

@@ -1005,3 +1005,102 @@ def test_main_wires_holdings_step_after_commit_and_before_summary():
     body = JOB.read_text(encoding="utf-8")
     assert body.index("commit_journal 2>>") < body.index('capture_holdings "$holdings"') < body.index('summarize_run "$run_start"')
     assert 'capture_holdings "$holdings" || holdings=""' in body       # 失敗只清掉路徑、不進 problems
+
+
+# ---- push 推「驗過的 sha」而不是會變動的 develop ref；rebase 後重新驗證 ----
+
+def _push_with_hook(repo, hook_body, env_extra=None):
+    """把 git_net 換成：遇到 push 先執行 hook_body（第 N 次 push 時 $PUSH_N=N），再照常呼叫真正的 git。"""
+    body = ('PUSH_N=0; git_net() { if [[ "$1" == push ]]; then PUSH_N=$((PUSH_N+1)); '
+            + hook_body + '; fi; command git "$@" >&2; }; push_journal_cli')
+    r = _sh(repo, body, env_extra)
+    return r.returncode, r.stdout.strip(), r.stderr
+
+
+def test_push_sends_validated_sha_not_human_commit_landing_before_push(repo):
+    # 驗證通過之後、push 之前，主 checkout 有人疊上非 journal 的 commit：只能推驗過的那個 journal commit
+    _journal_commit(repo)
+    journal_sha = _git(repo, "rev-parse", "HEAD")
+    hook = ('if (( PUSH_N == 1 )); then echo "human work" > other.txt; '
+            'git commit -q -am "human: race" >/dev/null; fi')
+    rc, out, err = _push_with_hook(repo, hook)
+    assert (rc, out) == (0, "push ok"), err
+    assert _origin_head(repo) == journal_sha
+    assert _git(repo, "log", "-1", "--format=%s") == "human: race"      # 人的 commit 還在本地、沒被推
+
+
+def test_push_does_not_clobber_origin_when_tracking_ref_is_fresh_but_head_diverged(repo, tmp_path):
+    # origin/develop 已 fetch 到別處推的新 commit，本地 journal commit 卻疊在舊 base 上：
+    # lease 會放行非 fast-forward，必須靠祖先檢查改走 rebase，不能把別人的 commit 蓋掉
+    _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", '{"theirs": 1}\n')
+    _git(repo, "fetch", "-q", "origin")
+    _journal_commit(repo)
+    theirs = _git(repo, "rev-parse", "origin/develop")
+
+    assert _push_cli(repo)[:2] == (0, "push ok")
+    _git(repo, "fetch", "-q", "origin")
+    assert _git(repo, "merge-base", "--is-ancestor", theirs, "origin/develop") == ""
+    assert _remote_files(repo) >= {"journal/ptt-picks.jsonl", "journal/media-picks.jsonl"}
+
+
+def test_push_revalidates_after_rebase_and_refuses_human_commit(repo, tmp_path):
+    # 第一次 push 時 origin 被別處推進（lease 擋下），同時本地疊上人的 commit；rebase 後重新驗證必須擋下
+    _journal_commit(repo)
+    remote = _git(repo, "remote", "get-url", "origin")
+    other = tmp_path / "other"
+    _git(tmp_path, "clone", "-q", remote, str(other))
+    _git(other, "config", "user.email", "o@example.com")
+    _git(other, "config", "user.name", "o")
+    hook = (f'if (( PUSH_N == 1 )); then (cd "{other}" && echo x > journal/ptt-picks.jsonl && git add . '
+            '&& git commit -q -m theirs && git push -q origin develop) >/dev/null 2>&1; '
+            'echo "human work" > other.txt; git commit -q -am "human: race" >/dev/null; fi')
+    rc, out, _ = _push_with_hook(repo, hook)
+    assert (rc, out) == (1, "push failed")
+    assert _origin_head(repo) == _git(other, "rev-parse", "HEAD")      # origin 停在別處推的那個 commit
+    assert not (repo / ".git" / "rebase-merge").exists() and not (repo / ".git" / "rebase-apply").exists()
+
+
+# ---- 鎖：取鎖與死鎖接管在 flock 底下原子完成 ----
+
+def test_acquire_lock_concurrent_takeover_has_single_owner(tmp_path):
+    """死鎖留著時三輪同時啟動，只能有一輪拿到鎖。外部 mkdir 換成成功後停 1 秒的版本，
+    放大舊寫法「mkdir 與寫 pid 之間」「rm -rf＋mkdir 接管之間」的空窗（新寫法在 perl 裡做，不受影響）。"""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "mkdir").write_text('#!/bin/sh\n/bin/mkdir "$@" || exit $?\nsleep 1\n', encoding="utf-8")
+    (bindir / "mkdir").chmod(0o755)
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    lock = tmp_path / "logs" / ".job.lock"
+    lock.mkdir(parents=True)
+    (lock / "pid").write_text(str(dead.pid))
+    prelude = (f'source "{JOB}"; LOG=/dev/null; notify_failure() {{ :; }}; ')
+    body = 'acquire_lock logs/.job.lock 媒體點名 10800 1; echo acquired; sleep 6'
+    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
+    procs = [subprocess.Popen(["bash", "-c", prelude + body], cwd=tmp_path, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True, env=env) for _ in range(3)]
+    outs = [p.communicate(timeout=60)[0] for p in procs]
+    assert sum("acquired" in o for o in outs) == 1, outs
+    assert sum("本次不重複跑" in o for o in outs) == 2, outs
+    assert not lock.exists()
+
+
+def test_acquire_lock_treats_eperm_holder_as_alive(tmp_path):
+    # pid 1 一定活著但不是我們的行程（kill -0 回 EPERM）：不能當成死鎖接管
+    r, log, notify, lock = _lock_run(tmp_path, 1, age_s=5, keep_log=1)
+    assert r.returncode == 0 and "acquired" not in r.stdout
+    assert "本次不重複跑" in log.read_text(encoding="utf-8")
+    assert (lock / "pid").read_text().strip() == "1"
+
+
+def test_acquire_lock_reclaims_dead_lock_dir_holding_extra_files(tmp_path):
+    # 死鎖目錄裡除了 pid 還有別的檔（舊版或手動留下）：回收要整個刪掉，不能因 rmdir 失敗而整輪不跑
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    lock = tmp_path / "logs" / ".job.lock"
+    lock.mkdir(parents=True)
+    (lock / "leftover").write_text("x")
+    r, _, notify, lock = _lock_run(tmp_path, dead.pid, age_s=5, keep_log=1)
+    assert r.returncode == 0 and "acquired" in r.stdout, r.stderr
+    assert not notify.exists()
+    assert not lock.exists()
