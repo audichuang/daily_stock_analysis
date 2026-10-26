@@ -98,6 +98,7 @@
 | [台灣財經媒體掃描 2026-10-22](research/2026-10-22-tw-media-sweep.md) | 研究紀錄：五類媒體（技術、籌碼、電視、基本面、報紙券商）的分析方法、年底共識、點名個股事後表現（inconclusive）、DSA 缺的數據 |
 | [點名來源擴充 2026-10-23](research/2026-10-23-media-sources-expansion.md) | 研究紀錄：媒體點名頻道的收錄／拿掉／沒收與理由、PTT `[標的]` 文試跑、審查抓到的資料截止日（look-ahead）與代號錯誤 |
 | [分析師方法對照 2026-10-26](research/2026-10-26-analyst-methods-gap.md) | 研究紀錄：籌碼／技術／基本面／總經／學術五派方法對照本 fork 的資料與策略，經對抗審查後的缺口與待驗實驗清單（TDR 混入 live 漏斗、20.2% 錨點待重測、SUS 營收、處置延後進場等，全部 inconclusive） |
+| [實驗：突破池基準率重測 2026-10-26](research/2026-10-26-exp-rebaseline-anchor.md) | 研究紀錄：SW-F1 休市日復權、月營收期限順延、宇宙統一之後重跑 `measure_signal_forward`，更新 `confidence` 錨點（原 20.2%）的事先登記、判準與結果 |
 
 ### 維運
 

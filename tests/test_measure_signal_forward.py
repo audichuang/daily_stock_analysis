@@ -22,6 +22,7 @@ from measure_signal_forward import (  # noqa: E402
     DEFAULT_POSITION_NOTIONAL,
     block_bootstrap,
     forward_returns,
+    hit_rate_bootstrap,
     paired_block_bootstrap,
     pit_revenue_panel,
     to_events,
@@ -214,6 +215,34 @@ def test_existing_bootstrap_report_uses_ti_when_event_frame_also_has_date():
     result = block_bootstrap(events, range(20), n=200, block=5, seed=7)
 
     assert result is not None
+
+
+def _hit_events(r):
+    return pd.DataFrame({
+        "date": pd.to_datetime(["2026-01-06", "2026-01-06", "2026-01-26", "2026-01-26"]),
+        "ti": [1, 1, 15, 15],
+        "stock_id": ["1111", "2222", "3333", "4444"],
+        "r": [r] * 4,
+    })
+
+
+def test_hit_rate_bootstrap_counts_exactly_thirty_percent_as_a_hit():
+    """錨點是「淨報酬 ≥ +30%」的機率：區間要落在命中率（0~1）上，不是報酬均值。"""
+    assert hit_rate_bootstrap(
+        _hit_events(0.30), range(20), n=200, block=5, seed=7
+    ) == pytest.approx((1.0, 1.0))
+
+
+def test_hit_rate_bootstrap_does_not_count_returns_below_thirty_percent():
+    assert hit_rate_bootstrap(
+        _hit_events(0.2999), range(20), n=200, block=5, seed=7
+    ) == (0.0, 0.0)
+
+
+def test_hit_rate_bootstrap_is_inconclusive_when_blocks_are_insufficient():
+    events = pd.DataFrame({"ti": [2, 4], "r": [0.5, 0.1]})
+
+    assert hit_rate_bootstrap(events, range(20), n=200, block=5, seed=7) is None
 
 
 def test_revenue_announcement_on_non_trading_day_is_visible_next_trading_day():
