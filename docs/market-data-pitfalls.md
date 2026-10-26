@@ -53,6 +53,7 @@
 - `monthly_revenue.revenue` 單位是**千元**（MOPS 原始單位）；`twse_fundamental_adapter` 是 `*1000` 轉元後才用。
 - 自 2026-09 起 `crawl_monthly_revenue` 上市（`/sii/`）＋上櫃（`/otc/`）各抓一份、逐市場各自寫入；之前入庫的歷史只有上市，上櫃歷史要逐月 `revenue --month` 補。表內沒有市場欄——`scripts/screen_tw.exclude_otc_revenue` 用種子檔 `.TWO` 判定上櫃，選股與量測預設排除，**別把上櫃營收直接放進漏斗**，理由見該函式。
 - **彙總報表有靜默的存活偏誤**：`crawler.crawl_monthly_report` 走的 `t21sc03_<民國年>_<月>.html` 看似按月存檔，實際**動態產生**、只列目前仍在申報的公司。實測 2020-06 那份 979 家裡完全沒有 6452 康友、2448 晶電、2456 奇力新、5305 敦南、3698 隆達（當時全部還在交易）。用它回補歷史，後來下市的公司永久缺席，任何「要求營收成長」的條件都會系統性移除負尾。修法是 `cli revenue-pit`（`sources.crawl_company_monthly_revenue`，MOPS 個別公司查詢），但只補得回**仍公開發行**的公司；被吸收合併的回「該公司不繼續公開發行」（如 2448 晶電併入富采）是硬邊界，只能用敏感度分析給上界（`scripts/measure_signal_forward.py --survivorship-bound`）。
+- **月營收更正不留原值**：`monthly_revenue` 以 `(stock_id, revenue_month)` upsert、後寫覆蓋，沒有版本欄；`daily` 只重抓上個月，次月內的更正會蓋進去，之後的更正只有手動回補才進來；回補的彙總報表是抓取當下的數字。所以歷史營收**水準**是更正後的值，而 `yoy` 欄是 MOPS 當月公告時算的（實測同檔 `revenue/revenue(t-12)-1` 與 `yoy` 差 >0.5pp 每年約 1%，2013 是 IFRS 重編）。要 PIT 的季節差就用 `yoy` 反推上年同月，見 `docs/research/2026-10-26-exp-revenue-sus.md` §0.1。
 - **財報季更不在 `daily` 裡**，要手動跑 `financials`；`health` 的 `stale financial quarters` 是漏季唯一會喊的地方（只報不擋）。
 - **`financial_statement` 唯一的洞是 2019Q4（`date` = 2020-03-31）**：庫內涵蓋 2019Q1~2026Q2。沒有殘留的 `data/financial_statement/20194` 下載目錄、git 史也查不到跑過，所以是**當初回補就沒跑**，不是 fail-fast 回滾。前提（同年 Q3 累計）成立，但下載約 1-2 GB、MOPS 密集請求有被擋風險，而 `src/` 目前沒有 `financial_statement` 的讀取端，補不補是取捨不是待辦。
 
