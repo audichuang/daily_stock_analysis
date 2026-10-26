@@ -171,7 +171,7 @@ A 線的投資觀是**趨勢追蹤＋回踩低吸**，規則寫死在 prompt 與
 | --- | --- | --- |
 | 每日報告的訊號有預測力嗎？ | inconclusive：按訊號日分群重抽後，5／10／20 日 CI 全部跨零 | `docs/daily-report-backtest-2026-07.md` |
 | 照報告標籤機械執行？ | −8.38%，同期 0050 +3.46%；但所有類別（含中性）都輸，是股票池本身輸 0050 | 同上 |
-| 波段池子本身是正期望值嗎？ | 事件層均值 +9.93%，block bootstrap +3.14%~+16.69%；中位只有 +0.83%，靠右尾 | `docs/tw-swing-pipeline.md` |
+| 波段池子本身是正期望值嗎？ | 事件層均值 +10.07%，block bootstrap +3.22%~+16.93%；中位只有 +1.13%，靠右尾（2026-10-26 重測，舊 +9.93% 作廢） | `docs/tw-swing-pipeline.md` |
 | 組合層贏 0050 嗎？ | 沒有：5 空位 Sharpe 1.19 對 1.23，回撤 −45.7% 對 −34.0%；走前選參 0.73 | 同上 |
 | 候選的排序有用嗎？ | 沒觀察到：200 次亂序對照落在第 46 百分位 | 同上 |
 | 第 2 層事件研究有加值嗎？ | 待驗：4 筆決策、0 筆到期，照現在的速度要約一年才夠樣本 | `docs/tw-swing-hindsight-2026-08.md` |
@@ -196,7 +196,7 @@ A 線的投資觀是**趨勢追蹤＋回踩低吸**，規則寫死在 prompt 與
      要直接跑：`uv run --env-file .env python scripts/measure_signal_forward.py --include-otc-revenue`，以及
      `uv run --env-file .env python scripts/portfolio_walkforward.py --include-otc-revenue`。
   3. 之後才讓 `screen_tw --include-otc-revenue` 進日常流程。旗標打開時 JSON 不再給 `measured_base_rate`，
-     這是刻意的：舊錨點 20.2% 不適用新池子。
+     這是刻意的：上市口徑的錨點 20.4%（2026-10-26 重測，舊 20.2% 作廢）不適用新池子。
 - **`financial_statement` 有資料、沒有讀取端**：價值線（C 線）目前不讀它。要不要接是設計取捨，還沒做。
 - **`gap_expected` 要對 TWSE 官方加權指數日資料驗**（`MI_5MINS_HIST`），`market.market_index` 沒有開盤價。
 - **資料更新失敗常常是靜默的**：exit code 正常、只印 `**WARN`。判斷有沒有補齊用 `health --strict`，
