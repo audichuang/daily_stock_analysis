@@ -122,6 +122,24 @@ def test_measure_revenue_momentum_readers_apply_deadline():
 
 # ---- 歷史回放讀取端：screen_tw --date、tw_stock_dossier 帶 as_of -------------------------
 
+@pytest.mark.parametrize("as_of, latest, replay", [
+    (None, "2026-04-13", False),
+    ("2026-04-12", "2026-04-13", True),
+    ("2026-04-13", "2026-04-13", False),
+    ("2026-04-14", "2026-04-13", False),
+    (pd.Timestamp("2026-04-13").date(), pd.Timestamp("2026-04-13"), False),
+    (pd.Timestamp("2026-04-12"), pd.Timestamp("2026-04-13").date(), True),
+    ("2026-04-13 00:00:00", "2026-04-13 13:30:00", False),
+    ("2026-04-12", None, False),
+    (pd.NaT, "2026-04-13", False),
+    ("2026-04-12", pd.NaT, False),
+])
+def test_replay_requires_an_explicit_date_before_latest(as_of, latest, replay):
+    from market_data.revenue_deadline import is_historical_replay
+
+    assert is_historical_replay(as_of, latest) is replay
+
+
 class _ScreenConn:
     def __init__(self, latest):
         self.latest = latest
@@ -183,17 +201,18 @@ def _screen_rev(monkeypatch, as_of, latest="2026-05-29"):
     ("2026-05-31", []),
 ])
 def test_screen_tw_replay_applies_deadline(monkeypatch, as_of, visible):
-    assert _screen_rev(monkeypatch, pd.Timestamp(as_of))[0] == visible
+    assert _screen_rev(monkeypatch, pd.Timestamp(as_of), latest="2026-06-01")[0] == visible
 
 
-def test_screen_tw_live_keeps_placeholder(monkeypatch):
-    # 反向：live（不帶 --date）DB 有的就是已公告，不能把已公布的富邦金營收藏到 04-15 之後
-    sids, seen = _screen_rev(monkeypatch, None, latest="2026-04-13")
+@pytest.mark.parametrize("as_of", [None, "2026-04-13", "2026-04-14"])
+def test_screen_tw_live_keeps_placeholder(monkeypatch, as_of):
+    # 不帶日期、等於或晚於最新場次都屬 live，不能把已公布的富邦金營收藏到 04-15 之後
+    sids, seen = _screen_rev(monkeypatch, as_of, latest="2026-04-13")
     assert sids == ["2330", "2881"]
-    assert pd.Timestamp(seen["s"]) == pd.Timestamp("2026-04-13") - pd.Timedelta(days=45)   # live 窗口不放寬
+    assert pd.Timestamp(seen["s"]) == pd.Timestamp(as_of or "2026-04-13") - pd.Timedelta(days=45)
 
 
-def _dossier_months(monkeypatch, sid, as_of, pit):
+def _dossier_revenue(monkeypatch):
     from tests.litellm_stub import ensure_litellm_stub
 
     ensure_litellm_stub()
@@ -204,11 +223,21 @@ def _dossier_months(monkeypatch, sid, as_of, pit):
                         "announce_date": [(m + pd.DateOffset(months=1, days=9)).date() for m in months]})
 
     def fake_sql(engine, sql, **kw):
+        if "market.price" in sql:
+            days = pd.to_datetime(["2026-04-10", "2026-04-13"])
+            if kw.get("a") is not None:
+                days = days[days <= pd.Timestamp(kw["a"])]
+            return pd.DataFrame({"d": [days.max()]})
         if "monthly_revenue" in sql:
             return rev[rev["announce_date"] <= pd.Timestamp(kw["d"]).date()].reset_index(drop=True)
         return pd.DataFrame(columns=["date", "account", "value"])
 
     monkeypatch.setattr(dossier, "_sql", fake_sql)
+    return dossier
+
+
+def _dossier_months(monkeypatch, sid, as_of, pit):
+    dossier = _dossier_revenue(monkeypatch)
     out = dossier.fundamentals(None, sid, as_of, pit=pit)["monthly_revenue"]
     return out[-1]["month"]
 
@@ -224,24 +253,27 @@ def test_dossier_fundamentals_pit_applies_deadline(monkeypatch, sid, as_of, pit,
     assert _dossier_months(monkeypatch, sid, as_of, pit) == latest
 
 
-def test_dossier_build_replays_only_with_explicit_date(monkeypatch):
-    from tests.litellm_stub import ensure_litellm_stub
-
-    ensure_litellm_stub()
-    from src.services import tw_stock_dossier as dossier
-
-    calls = []
+@pytest.mark.parametrize("as_of, latest, month, price_date", [
+    (None, "2026-04-14", "2026-03", "2026-04-13"),
+    ("2026-04-13", "2026-04-13", "2026-03", "2026-04-13"),
+    ("2026-04-14", "2026-04-13", "2026-03", "2026-04-13"),
+    ("2026-04-13", "2026-04-14", "2026-02", "2026-04-13"),
+    ("2026-04-12", "2026-04-13", "2026-02", "2026-04-10"),
+    ("2026-04-14", "2026-04-14", "2026-03", "2026-04-13"),
+])
+def test_dossier_build_replays_only_before_latest_market_date(monkeypatch, as_of, latest, month, price_date):
+    dossier = _dossier_revenue(monkeypatch)
     monkeypatch.setattr(dossier, "_check_suffix", lambda code: None)
-    monkeypatch.setattr(dossier, "_sql", lambda e, sql, **kw: pd.DataFrame({"d": [pd.Timestamp("2026-04-13")]}))
-    monkeypatch.setattr(dossier, "fundamentals", lambda e, sid, as_of, pit=False: calls.append(pit) or {})
+    monkeypatch.setattr(dossier.market_repo, "latest_price_date", lambda engine: pd.Timestamp(latest).date())
     monkeypatch.setattr(dossier, "technicals", lambda *a, **k: (None, []))
     monkeypatch.setattr(dossier, "stock_name", lambda sid, engine=None: None)
     monkeypatch.setattr(dossier, "contract_liabilities", lambda *a: [])
     monkeypatch.setattr(dossier, "chips", lambda *a, **k: {})
     monkeypatch.setattr(dossier, "valuation", lambda *a: None)
-    dossier.build("2881.TW", engine=object())
-    dossier.build("2881.TW", as_of="2026-04-13", engine=object())
-    assert calls == [False, True]   # Web／看板不帶日期＝live；CLI --date 回放才套
+    out = dossier.build("2881.TW", as_of=as_of, engine=object())
+    assert out["errors"] == []
+    assert out["as_of"] == price_date
+    assert out["fundamentals"]["monthly_revenue"][-1]["month"] == month
 
 
 def _dossier_limited(monkeypatch, sid, as_of, pit):

@@ -2,6 +2,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import tw_media_picks as mp  # noqa: E402
@@ -178,6 +180,7 @@ def test_snapshot_skips_null_close_before_adjusting(monkeypatch):
         return pd.Series([1.0] * len(dates))
 
     monkeypatch.setattr(market_repo, "front_adjust_multipliers", mult)
+    monkeypatch.setattr(market_repo, "latest_price_date", lambda engine: days[-1].date())
     monkeypatch.setattr(dossier, "fundamentals", lambda *a, **k: {"monthly_revenue": []})
     monkeypatch.setattr(dossier, "chips", lambda *a, **k: {"institutional": None})
     out = mp.snapshot("2330.TW", days[-1].date(), engine=None)
@@ -187,8 +190,14 @@ def test_snapshot_skips_null_close_before_adjusting(monkeypatch):
     json.dumps(out, allow_nan=False)
 
 
-def test_snapshot_reads_revenue_point_in_time(monkeypatch):
-    # 播出日快照是歷史回放：月營收要依法定期限判斷當時看不看得到（富邦金 15 日、休市順延）
+@pytest.mark.parametrize("as_of, latest, pit", [
+    ("2026-04-13", "2026-04-14", True),
+    ("2026-04-13", "2026-04-13", False),
+    ("2026-04-14", "2026-04-13", False),
+    ("2026-04-14", "2026-04-14", False),
+])
+def test_snapshot_reads_revenue_point_in_time(monkeypatch, as_of, latest, pit):
+    # 用請求日期與全市場最新場次比較；個股最後一根 K 落後時也不能誤判為回放
     import pandas as pd
     from market_data import market_repo
     from src.services import tw_stock_dossier as dossier
@@ -198,12 +207,13 @@ def test_snapshot_reads_revenue_point_in_time(monkeypatch):
                         lambda sid, start, end, engine: pd.DataFrame({"date": days, "close": 100.0}))
     monkeypatch.setattr(market_repo, "front_adjust_multipliers",
                         lambda sid, dates, engine: pd.Series([1.0] * len(dates)))
+    monkeypatch.setattr(market_repo, "latest_price_date", lambda engine: pd.Timestamp(latest).date())
     seen = []
     monkeypatch.setattr(dossier, "fundamentals",
                         lambda engine, sid, d, **k: seen.append(k) or {"monthly_revenue": []})
     monkeypatch.setattr(dossier, "chips", lambda *a, **k: {"institutional": None})
-    mp.snapshot("2881.TW", days[-1].date(), engine=None)
-    assert seen == [{"pit": True}]
+    mp.snapshot("2881.TW", pd.Timestamp(as_of).date(), engine=None)
+    assert seen == [{"pit": pit}]
 
 
 def test_single_run_lock_blocks_overlap():
