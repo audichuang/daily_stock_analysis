@@ -329,7 +329,7 @@ def test_service_defaults_lifecycle_and_preserves_explicit_values(isolated_db) -
 
 def test_list_signals_lazily_backfills_analysis_history_signal(isolated_db) -> None:
     record_id = isolated_db.save_analysis_history(
-        result=_history_result(),
+        result=_history_result(action="hold"),
         query_id="query-lazy-signal",
         report_type="simple",
         news_content="新闻摘要",
@@ -374,7 +374,7 @@ def test_list_signals_lazily_backfills_analysis_history_signal(isolated_db) -> N
 
 def test_list_signals_profile_filter_controls_lazy_backfill(isolated_db) -> None:
     record_id = isolated_db.save_analysis_history(
-        result=_history_result(),
+        result=_history_result(action="hold"),
         query_id="query-lazy-signal-profile-filter",
         report_type="simple",
         news_content="新闻摘要",
@@ -430,7 +430,7 @@ def test_list_signals_backfill_uses_raw_result_market_structure_without_snapshot
         },
     }
     record_id = isolated_db.save_analysis_history(
-        result=_history_result(code="300024", name="机器人", market_structure_context=market_structure),
+        result=_history_result(action="hold", code="300024", name="机器人", market_structure_context=market_structure),
         query_id="query-lazy-signal-market-structure",
         report_type="simple",
         news_content="新闻摘要",
@@ -468,7 +468,7 @@ def test_list_signals_backfill_uses_saved_intraday_ttl_metadata(
 ) -> None:
     report_created_at = utc_naive_now().replace(microsecond=0) - created_offset
     record_id = isolated_db.save_analysis_history(
-        result=_history_result(),
+        result=_history_result(action="hold"),
         query_id=f"query-lazy-signal-ttl-{market_phase_summary['phase']}",
         report_type="simple",
         news_content="新闻摘要",

@@ -34,21 +34,29 @@
 
 Web 展示必须把这些 wire value 映射为当前 UI 语言的用户可读标签；API 响应继续保留原始枚举值。
 
-### 中文否定建議與未知動作
+### 結構化動作與未知建議
 
-`src/schemas/decision_action.py::normalize_decision_action` 先逐字折疊繁體為簡體；同一子句內（逗號、句號、分號、換行為界）動作詞（買／賣／加倉／加碼／增持／減倉／減碼／清倉／建倉／布局／持有／洗盤觀察／觀望／進場／等待／回避／預警／告警／警惕…）前 6 字以內出現否定詞（不／別／勿／莫／未／沒／無／避免／禁止／切勿／停止／暫緩），整段建議回傳 `None`（`_has_zh_negated_action`）。這個保守規則優先於回避、告警與交易片語，不解析雙重否定或分句方向，例如「沒有不買入的理由」「暫不加碼，建議賣出」都保持未知；原本判成回避／持有的中文否定片語（「暫不買入」「不建議加倉」）同樣改為未知。「未來／無論／不論／不管／不斷」不算否定詞。非否定建議與英文規則維持既有行為；「加碼」本身仍不新增 action 別名。
+分析器、單 agent executor 與多 agent 的 DecisionAgent 都要求模型輸出頂層 `action`，值只能是 `buy|add|hold|reduce|sell|watch|avoid|alert`；`AnalysisReportSchema.action` 使用同一個列舉型別，為舊資料相容保留可選。`decision_type` 仍是三態統計欄位，不足以區分觀望與持有、減倉與賣出。三態缺漏時可由八態投影：buy/add → buy、reduce/sell → sell、其餘 → hold；沒有合法動作時沿用既有預設。實際風控改變三態時會同步八態 action，沒有套用風控就保留模型判斷。
 
-所有直接呼叫端沿用既有空值處理：
+`operation_advice` 僅供顯示。`normalize_decision_action` 只做完整列舉／單一動作標籤查表，去除首尾空白、英文大小寫及繁簡折疊以相容舊資料，不做子字串、正則、否定詞或英文金融複合詞判讀。支援八態的繁簡英韓顯示標籤（含「買入」「賣出」「減倉」「加倉／加碼」「持有」「觀望」），並保留既有英文列舉別名 `strong buy/strong_buy`、`strong sell/strong_sell`、`accumulate`、`trim`、`wait`。例如 `action=watch` 搭配「不建議現在買入」仍是 watch；沒有 action 的「建議現在買入」「不建議現在買入」「持有觀察」「no need to sell」都回傳 `None`；裸標籤「減倉」仍為 reduce。分數對齊與買入區 hold/reduce 護欄維持既有規則，不以這次修改取消風控。
 
-| 呼叫端 | `None` 的既有處理 |
+已逐一核對呼叫端；沒有可用動作時的 fallback 如下：
+
+| 呼叫端 | `None` 的處理 |
 | --- | --- |
-| `decision_action.build_action_fields`、`display_action_fields` | 優先使用明確 action，再嘗試標籤／建議，無法辨識就保留空 action；`display_decision_type_for_result` 回退合法 `decision_type`，否則 `hold`。 |
-| `decision_signal_extractor._raw_action_from_report` | 明確 action 不可辨識才試建議；兩者皆未知時，payload builder 略過信號。 |
-| `decision_signal_service.DecisionSignalService._history_action_fields` | 保留空 action，歷史來源檢查不為此回補信號。 |
-| `decision_signal_reassess_service._build_candidate` | 無結構化 action 時回報不支援該快照，不猜交易方向。 |
-| `core.pipeline.StockAnalysisPipeline._refresh_decision_action_for_final_result` | 沿用共享 resolver；既有 sell 決策與買入區分數矛盾護欄仍可回退 `watch`，hold／reduce 規則不變。 |
-| `core.pipeline.StockAnalysisPipeline._finalize_and_persist_result`（含 `_capture`） | 未知起始／最終 action 使轉換鏈失效，跳過動作轉換記錄與最終解釋。 |
-| `agent.final_explanation.PipelineActionAdjustment.__post_init__`、`capture_pipeline_action_adjustment`、`build_pipeline_final_explanation` | 僅接受 canonical action；未知值明確拋出 `ValueError`，Pipeline 先檢查空值才呼叫。 |
+| `decision_action.build_action_fields`、`display_action_fields` | 優先明確 action，再試完整 action_label／operation_advice；仍無值就保留空 action。分數不會替未知句子生成 action。 |
+| `display_operation_advice_for_result`、`display_decision_type_for_result` | 前者保留建議文字供顯示；後者回退合法三態 decision_type，否則 hold。 |
+| `notification.NotificationService`、`services.history_service` 報告訊號列 | action 空時沿用顯示建議與分數色階；不生成新的八態 action。 |
+| `analyzer.populate_decision_action_fields`、`GeminiAnalyzer._parse_response` | 保留空 action；解析時三態缺漏且沒有完整動作標籤則 hold。無效 JSON 仍標記失敗，不寫入歷史。 |
+| `core.pipeline._agent_result_to_analysis_result` | 保留空 action；三態缺漏時沿用趨勢 fallback，否則 hold；非法三態先試結構化 action／完整標籤，否則 hold。 |
+| `core.pipeline._refresh_decision_action_for_final_result` | 沿用共享 resolver；既有 sell 決策與買入區分數矛盾護欄仍可回退 watch，hold/reduce 規則不變。護欄已改寫結構化 action 時保留它；只改文字時清除過期 action。 |
+| `core.pipeline._finalize_and_persist_result`（含 `_capture`） | 未知起始／最終 action 使轉換鏈失效，跳過動作轉換記錄與最終解釋。 |
+| `agent.final_explanation` 的調整建構、capture 與 final explanation | 未知值拋出 ValueError；Pipeline 先檢查空值才呼叫。 |
+| `services.history_comparison_service._record_to_signal`、`history_service._decision_action_fields_for_record`、`backtest_service` | 歷史／比較／回測回傳空 action 與 action_label，原始建議保留；不以三態或分數補出八態。 |
+| `decision_signal_extractor._raw_action_from_report`、`resolve_decision_signal_action_fields` | 先結構化 action，再完整標籤；皆未知時 payload builder 略過信號。 |
+| `decision_signal_service._history_action_fields` | 保留空 action，歷史來源檢查不為此回補信號。 |
+| `decision_signal_reassess_service._build_candidate` | 回報不支援該快照，不呼叫策略政策或寫庫。 |
+| `decision_profile_policy` | 接收上游已解析的 DecisionSignalCandidate.action，不解析 operation_advice；無動作的快照在重評入口即被拒絕。 |
 
 狙擊價格由 LLM／decision agent 在 `dashboard.battle_plan.sniper_prices` 輸出，與原本供完整報告、Web 閱讀的 `sniper_points` 文字並存。四個鍵為 `ideal_buy`、`secondary_buy`、`stop_loss`、`take_profit`，值只能是有限正數或 `null`；`null` 代表模型判斷目前沒有可執行價格，不能用原文或舊 DB 數值補回。區間建議由模型選出實際會執行的單一價格，完整區間與條件留在文字。例：文字「暫無，為避免在118元停損而錯失反彈，改以110元停損」搭配 `stop_loss: 110` 時採用 110；搭配 `stop_loss: null` 時沒有停損價。
 

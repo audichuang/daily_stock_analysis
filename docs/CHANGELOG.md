@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 建議動作統一由模型輸出八態 `action`，補齊 agent prompt 與報告 schema；移除中英文片語及否定語意推斷，缺少結構化動作時僅接受完整列舉標籤（含繁簡「加碼」），其餘沿用呼叫端空值處理，實際風控同步更新 action，買入區 hold/reduce 護欄維持不變。
+
 - [修复] 媒體點名：PTT 標的文只寫「2330.TW」「00631L.TW」「6811.TWO」這種帶台股後綴、沒寫名稱的代號時改能對到（後綴清單取自 `market_symbol_utils`）；搜尋翻頁期間同一篇被擠到下一頁時只收一次；摘要「首次至今 %」改用還原後收盤（`snapshot` 的 `data` 新增 `cum_adj_factor`，舊列沒有時照原始收盤算並標「未還原」）。某輪只判了一部分（逾時、`ok: false`、主 agent 中途被收掉）不再寫死補判規則：`media_picks_summary.py` 索引末段與新的 `--unjudged` 列出前 7 天點名過、判斷檔沒有涵蓋的檔（點名時段、多空人數、上次判斷、`media_picks_judge.py --log <本輪 log>` 記下的判斷成功／失敗紀錄），`--code` 對這些檔附上前幾輪的舊原話，要不要補判、補哪幾檔由排程的 Claude 判斷；判斷列有 `written_at` 時只有不早於那次擷取才算涵蓋（同輪之後手動補跑、或中間一輪 log 不見時不再把新點名藏掉），舊證據的原話帶代號比對狀態（fuzzy／code_mismatch 的說法、LLM 代號、影片、是否覆核過），逐檔判斷提示詞也提醒先核對代號
 - [修复] 狙擊點新增模型輸出的 `sniper_prices`（正數或 null），成本檢核、歷史儲存、決策信號、重評與精簡通知／分享圖共用結構化價格；舊資料只接受純數字或純區間，不再從敘述句猜價，原文字段保留。
 - [修复] 買入／持有報告的 `sniper_prices` 進場或目標格給了解析不了的非 null 值（如 `100元`、區間）時，完整性檢查改要求模型重給 `sniper_prices`，不再變成缺價位而靜默跳過交易成本護欄；明確 `null` 仍視為沒有可執行價位

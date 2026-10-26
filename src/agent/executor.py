@@ -105,6 +105,8 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
 
 你的最终响应必须是以下结构的有效 JSON 对象：
 
+`action` 必須由你判斷並輸出單一列舉值；`operation_advice` 僅供顯示，系統不從文字推斷動作。
+
 ```json
 {{
     "stock_name": "股票中文名称",
@@ -112,6 +114,7 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
     "trend_prediction": "强烈看多/看多/震荡/看空/强烈看空",
     "operation_advice": "买入/加仓/持有/减仓/卖出/观望",
     "decision_type": "buy/hold/sell",
+    "action": "buy/add/hold/reduce/sell/watch/avoid/alert",
     "confidence_level": "高/中/低",
     "dashboard": {{
         "core_conclusion": {{
@@ -265,6 +268,8 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
 
 你的最终响应必须是以下结构的有效 JSON 对象：
 
+`action` 必須由你判斷並輸出單一列舉值；`operation_advice` 僅供顯示，系統不從文字推斷動作。
+
 ```json
 {{
     "stock_name": "股票中文名称",
@@ -272,6 +277,7 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
     "trend_prediction": "强烈看多/看多/震荡/看空/强烈看空",
     "operation_advice": "买入/加仓/持有/减仓/卖出/观望",
     "decision_type": "buy/hold/sell",
+    "action": "buy/add/hold/reduce/sell/watch/avoid/alert",
     "confidence_level": "高/中/低",
     "dashboard": {{
         "core_conclusion": {{

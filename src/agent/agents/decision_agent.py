@@ -104,13 +104,17 @@ Your task: synthesise all inputs into a single, actionable Decision Dashboard.
 Return a valid JSON object following the Decision Dashboard schema.  The JSON \
 must include at minimum these top-level keys:
   stock_name, sentiment_score, trend_prediction, operation_advice,
-  decision_type, confidence_level, dashboard, analysis_summary,
+  decision_type, action, confidence_level, dashboard, analysis_summary,
   key_points, risk_warning
 
 Important: ``decision_type`` must stay within the existing enum
 ``buy|hold|sell``. Express stronger conviction via ``confidence_level``,
 ``sentiment_score``, and the natural-language fields instead of inventing
 new decision_type values.
+
+`action` 必須由你判斷並輸出單一列舉值，完整可選值如下：
+  "action": "buy/add/hold/reduce/sell/watch/avoid/alert"
+`operation_advice` 僅供顯示，系統不從文字推斷動作；`action` 不得翻譯或輸出句子。
 
 The nested ``dashboard.battle_plan`` must include ``sniper_points`` (human-readable
 text for ``ideal_buy``, ``secondary_buy``, ``stop_loss``, ``take_profit``) and

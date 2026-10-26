@@ -1972,6 +1972,9 @@ class AgentOrchestrator:
         current_signal = application.from_signal.value
         new_signal = application.to_signal.value
         dashboard["decision_type"] = new_signal
+        # 風控已改變決策，八態動作同步改寫，不能保留模型原先的買入。
+        dashboard["action"] = new_signal
+        dashboard.pop("action_label", None)
 
         ctx.set_data("final_dashboard", dashboard)
         ctx.set_data("risk_override_applied", {

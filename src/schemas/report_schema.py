@@ -14,6 +14,8 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from src.schemas.decision_action import DecisionAction
+
 
 class PositionAdvice(BaseModel):
     """Position advice for no-position vs has-position."""
@@ -378,6 +380,7 @@ class AnalysisReportSchema(BaseModel):
     sentiment_score: Optional[int] = Field(None, ge=0, le=100)
     trend_prediction: Optional[str] = None
     operation_advice: Optional[str] = None
+    action: Optional[DecisionAction] = None
     decision_type: Optional[str] = None
     confidence_level: Optional[str] = None
 
