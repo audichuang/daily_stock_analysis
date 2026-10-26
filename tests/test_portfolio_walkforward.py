@@ -365,6 +365,23 @@ def test_inverse_vol_weights_give_the_lower_vol_stock_the_larger_position():
     assert cost["1111"] > 3 * cost["2222"]    # 2.0 倍 vs 0.5 倍等權份額
 
 
+def test_weights_can_change_which_trades_execute_not_only_their_size():
+    """倍數 > 1 的部位會先吃掉現金，同日排在後面的候選因 no_cash 被擠掉。
+
+    所以加權臂與等權臂的成交集合可以不同，兩臂的成交統計不是同一組交易的比較。
+    """
+    piv = _piv()
+    sig, f, yoy = _blank(piv)
+    sig.iloc[10] = True                       # 三檔同日觸發、三個空位
+    _, tr_e, sk_e, _ = simulate(piv, sig, f, yoy, 5, 3, "2026-01-05", "2026-02-20")
+    w = {(sig.index[10], s): 2.0 for s in sig.columns}
+    _, tr_w, sk_w, _ = simulate(piv, sig, f, yoy, 5, 3, "2026-01-05", "2026-02-20", weights=w)
+    assert len(tr_e) == 3 and len(sk_e) == 0
+    assert len(tr_w) == 2
+    assert list(sk_w["reason"]) == ["no_cash"]
+    assert set(tr_w["stock_id"]) < set(tr_e["stock_id"])
+
+
 def test_inverse_vol_weights_clip_wait_for_reference_and_default_missing_vol():
     from portfolio_walkforward import invvol_weights
 

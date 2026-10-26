@@ -343,7 +343,11 @@ def daily_returns(eq):
 
 
 def weighted_trade_stats(tr):
-    """依投入成本加權的成交均值與 P(≥30%)——反波動加權不改成交集合，改的是每筆的份量。"""
+    """依投入成本加權的成交均值與 P(≥30%)。
+
+    反波動加權不只改每筆的份量，也可能改成交集合：倍數 > 1 的部位先吃掉現金，同日排在
+    後面的候選會因 no_cash 被擠掉。兩臂比較時要一併看成交筆數 ``n``。
+    """
     if not len(tr):
         return {"n": 0, "mean": np.nan, "hit": np.nan}
     w = tr["cost"].astype(float)
