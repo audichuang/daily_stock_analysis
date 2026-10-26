@@ -29,6 +29,7 @@ from src.services.backtest_price_basis import (
     PRICE_BASIS_RAW,
     compute_tw_net_return_pct,
     resolve_entry_basis,
+    resolve_entry_cutoff,
     tw_stock_id,
 )
 from src.services.backtest_service import BacktestService
@@ -289,6 +290,89 @@ def test_gap_above_take_profit_exits_at_open():
     assert result["simulated_exit_price"] == pytest.approx(112.0)
 
 
+def _gap_bar_result(open_, high, low, *, stop=95.0, take=110.0):
+    bars = [_bar(D1, open_=100.0, high=101.0, low=99.0, close=100.0), _bar(D2, open_=open_, high=high, low=low, close=100.0)]
+    basis = resolve_entry_basis(code="600519", anchor_date=ANCHOR, window_bars=bars)
+    return _eval_single("买入", bars, basis, stop=stop, take=take)
+
+
+def test_gap_above_take_profit_then_below_stop_books_take_at_open():
+    # 開 112 已越過停利 110，部位開盤就出場；之後盤中跌破停損 95 不能改判成停損。
+    result = _gap_bar_result(112.0, 113.0, 94.0)
+    assert result["first_hit"] == "take_profit"
+    assert result["simulated_exit_reason"] == "take_profit"
+    assert result["simulated_exit_price"] == pytest.approx(112.0)
+    assert result["simulated_return_pct"] == pytest.approx(12.0)
+    # 觸發旗標跟著實際出場：停損那一邊沒有生效。
+    assert (result["hit_take_profit"], result["hit_stop_loss"]) == (True, False)
+
+
+def test_gap_below_stop_then_above_take_books_stop_at_open():
+    # 反向：開 94 已跌破停損，之後盤中衝過停利也不能算停利（停損要先於停利判定）。
+    result = _gap_bar_result(94.0, 112.0, 93.0)
+    assert result["first_hit"] == "stop_loss"
+    assert result["simulated_exit_reason"] == "stop_loss"
+    assert result["simulated_exit_price"] == pytest.approx(94.0)
+    assert (result["hit_stop_loss"], result["hit_take_profit"]) == (True, False)
+
+
+@pytest.mark.parametrize("open_", [100.0, 95.5, 109.5])
+def test_open_between_levels_touching_both_stays_ambiguous_stop(open_):
+    # 開盤在停損與停利之間、同根兩邊都碰：日線分不出先後，仍記 ambiguous 並以停損價出場。
+    result = _gap_bar_result(open_, 112.0, 94.0)
+    assert result["first_hit"] == "ambiguous"
+    assert result["simulated_exit_reason"] == "ambiguous_stop_loss"
+    assert result["simulated_exit_price"] == pytest.approx(95.0)
+    assert (result["hit_stop_loss"], result["hit_take_profit"]) == (True, True)
+
+
+def test_legacy_engine_without_gap_awareness_keeps_ambiguous_on_gap_bar():
+    # 沒有 price_context 的舊口徑不看開盤：同根兩邊都碰一律 ambiguous 停損，行為不變。
+    bars = [_bar(D1, open_=112.0, high=113.0, low=94.0, close=100.0)]
+    result = BacktestEngine.evaluate_single(
+        operation_advice="买入",
+        analysis_date=ANCHOR,
+        start_price=100.0,
+        forward_bars=bars,
+        stop_loss=95.0,
+        take_profit=110.0,
+        config=EvaluationConfig(eval_window_days=1),
+    )
+    assert result["first_hit"] == "ambiguous"
+    assert result["simulated_exit_price"] == pytest.approx(95.0)
+
+
+@pytest.mark.parametrize("scale", [1.0, 0.5])
+@pytest.mark.parametrize("open_,exit_,first_hit,reason", [
+    (112.0, 112.0, "take_profit", "take_profit"),
+    (110.0, 110.0, "take_profit", "take_profit"),
+    (93.0, 93.0, "stop_loss", "stop_loss"),
+    (95.0, 95.0, "stop_loss", "stop_loss"),
+    (100.0, 95.0, "ambiguous", "ambiguous_stop_loss"),
+    (109.0, 95.0, "ambiguous", "ambiguous_stop_loss"),
+])
+def test_gap_fill_precedes_intrabar_ambiguity(scale, open_, exit_, first_hit, reason):
+    bars = [
+        _bar(D1, open_=100.0, high=101.0, low=99.0, close=100.0),
+        _bar(D2, open_=open_ * scale, high=113.0 * scale, low=92.0 * scale, close=100.0 * scale),
+    ]
+    basis = resolve_entry_basis(
+        code="2330.TW", anchor_date=ANCHOR, window_bars=bars,
+        factor_loader=_loader_from({ANCHOR: scale, D1: scale, D2: 1.0}),
+    )
+    result = _eval_single("買入", bars, basis, stop=95.0, take=110.0)
+
+    assert result["first_hit"] == first_hit
+    assert result["simulated_exit_reason"] == reason
+    assert result["first_hit_date"] == D2
+    assert result["first_hit_trading_days"] == 2
+    # 觸發旗標跟著實際出場：跳空開盤已出場時，同根另一邊不算觸發。
+    assert result["hit_stop_loss"] is (first_hit != "take_profit")
+    assert result["hit_take_profit"] is (first_hit != "stop_loss")
+    assert result["simulated_exit_price"] == pytest.approx(exit_ * scale)
+    assert result["simulated_return_pct"] == pytest.approx(exit_ - 100.0)
+
+
 def test_stop_level_is_rescaled_when_entry_day_is_ex_date():
     # 錨點日訂的停損 97 是除息前的名目價；T+1 除息 3.5% 後等價停損約 93.6，低點 95 不該觸發。
     bars = [_bar(D1, open_=96.5, high=97.0, low=95.0, close=96.0)]
@@ -365,17 +449,19 @@ def isolated_db(tmp_path, monkeypatch):
     Config._instance = None
 
 
-def _snapshot(analysis_date, *, phase, market, effective_date=None):
+def _snapshot(analysis_date, *, phase, market, effective_date=None, minutes_to_open=None):
     summary = {"phase": phase, "market": market}
     if effective_date is not None:
         summary["effective_daily_bar_date"] = effective_date.isoformat()
+    if minutes_to_open is not None:
+        summary["minutes_to_open"] = minutes_to_open
     return json.dumps(
         {"enhanced_context": {"date": analysis_date.isoformat()}, "market_phase_summary": summary}
     )
 
 
 def _seed_history(db, *, code, advice="买入", analysis_date=ANCHOR, phase="postmarket", market="tw",
-                  effective_date=ANCHOR, stop_loss=None, take_profit=None):
+                  effective_date=ANCHOR, stop_loss=None, take_profit=None, minutes_to_open=None):
     with db.get_session() as session:
         row = AnalysisHistory(
             query_id=f"q-{code}-{phase}-{analysis_date}",
@@ -389,7 +475,10 @@ def _seed_history(db, *, code, advice="买入", analysis_date=ANCHOR, phase="pos
             stop_loss=stop_loss,
             take_profit=take_profit,
             created_at=datetime.combine(analysis_date, datetime.min.time()),
-            context_snapshot=_snapshot(analysis_date, phase=phase, market=market, effective_date=effective_date),
+            context_snapshot=_snapshot(
+                analysis_date, phase=phase, market=market, effective_date=effective_date,
+                minutes_to_open=minutes_to_open,
+            ),
         )
         session.add(row)
         session.commit()
@@ -570,7 +659,8 @@ def test_service_entry_cutoff_uses_persisted_session_after_quote_failure(isolate
     assert stats["completed"] == 1
     refill.assert_not_called()
     (row,) = _results(isolated_db, "2330.TW")
-    guarded = phase in {"intraday", "lunch_break", "closing_auction"}
+    # 盤前摘要沒有 minutes_to_open（10:00 已開盤）：視同開盤已發生，跟盤中類一樣等到場次日之後。
+    guarded = phase in {"intraday", "lunch_break", "closing_auction", "premarket"}
     assert row.entry_date == (next_day if guarded else session_day)
     assert row.start_price == (110.0 if guarded else 100.0)
     assert row.analysis_date == anchor
@@ -710,7 +800,13 @@ def test_service_keeps_legacy_v1_rows_and_writes_new_version(isolated_db):
 # ---------------------------------------------------------------------------
 
 
-def _add_signal(db, *, code="2330.TW", action="buy", horizon="3d", session_date=ANCHOR, market="tw"):
+def _add_signal(db, *, code="2330.TW", action="buy", horizon="3d", session_date=ANCHOR, market="tw",
+                phase=None, market_phase="postmarket", minutes_to_open=None):
+    summary = {"session_date": session_date.isoformat()}
+    if phase is not None:
+        summary["phase"] = phase
+    if minutes_to_open is not None:
+        summary["minutes_to_open"] = minutes_to_open
     with db.session_scope() as session:
         signal = DecisionSignalRecord(
             source_type="analysis",
@@ -718,13 +814,13 @@ def _add_signal(db, *, code="2330.TW", action="buy", horizon="3d", session_date=
             stock_code=code,
             stock_name="test",
             market=market,
-            market_phase="postmarket",
+            market_phase=market_phase,
             trigger_source="manual",
             action=action,
             action_label=action,
             horizon=horizon,
             reason="h2",
-            metadata_json=json.dumps({"market_phase_summary": {"session_date": session_date.isoformat()}}),
+            metadata_json=json.dumps({"market_phase_summary": summary}),
             plan_quality="complete",
             status="active",
         )
@@ -792,6 +888,70 @@ def test_signal_enters_at_t_plus_1_open(isolated_db):
     assert item["price_basis"] == "as_stored"
 
 
+@pytest.mark.parametrize("phase", [
+    "premarket", "intraday", "lunch_break", "closing_auction", "postmarket", "unknown",
+])
+@pytest.mark.parametrize("phase_source", ["metadata", "signal"])
+def test_signal_entry_session_matches_backtest(isolated_db, phase, phase_source):
+    effective_date = ANCHOR if phase in {"premarket", "intraday", "lunch_break", "closing_auction"} else D1
+    # 真正的盤前分析在兩邊的持久化摘要都帶 minutes_to_open（開盤前證據）。
+    minutes_to_open = 30 if phase == "premarket" else None
+    _seed_history(isolated_db, code="2330.TW", analysis_date=D1, phase=phase, effective_date=effective_date,
+                  minutes_to_open=minutes_to_open)
+    signal_id = _add_signal(isolated_db, horizon="1d", session_date=D1, minutes_to_open=minutes_to_open)
+    with isolated_db.session_scope() as session:
+        signal = session.get(DecisionSignalRecord, signal_id)
+        signal.created_at = datetime(2024, 7, 2, 7, 30)
+        signal.market_phase = phase if phase_source == "signal" else "postmarket"
+        metadata = json.loads(signal.metadata_json)
+        if phase_source == "metadata":
+            metadata["market_phase_summary"]["phase"] = phase
+        signal.metadata_json = json.dumps(metadata)
+    _seed_daily(isolated_db, "2330.TW", [
+        (ANCHOR, 90.0, 91.0, 89.0, 90.0),
+        (D1, 100.0, 111.0, 99.0, 110.0),
+        (D2, 200.0, 201.0, 199.0, 200.0),
+    ])
+    loader = _loader_from({})
+    backtest = BacktestService(isolated_db, factor_loader=loader)
+    with patch.object(backtest, "_try_fill_daily_data") as refill:
+        stats = _run(backtest, "2330.TW", window=1)
+    assert stats["completed"] == 1
+    refill.assert_not_called()
+    (row,) = _results(isolated_db, "2330.TW")
+    service = DecisionSignalOutcomeService(db_manager=isolated_db, factor_loader=loader)
+    item = service.run_outcomes(signal_id=signal_id)["items"][0]
+
+    expected_entry = D1 if phase == "premarket" else D2
+    assert item["eval_status"] == "completed"
+    assert item["entry_date"] == row.entry_date.isoformat() == expected_entry.isoformat()
+    assert item["start_price"] == row.start_price == (100.0 if phase == "premarket" else 200.0)
+    assert item["end_close"] == row.end_close == (110.0 if phase == "premarket" else 200.0)
+    assert item["stock_return_pct"] == pytest.approx(row.stock_return_pct)
+    assert item["stock_return_pct"] == pytest.approx(10.0 if phase == "premarket" else 0.0)
+    assert item["anchor_date"] == D1.isoformat()
+
+
+@pytest.mark.parametrize("entry_open,expected_reason", [(100.0, None), (None, "missing_entry_open")])
+def test_premarket_signal_uses_completed_session_without_waiting_for_next(isolated_db, entry_open, expected_reason):
+    signal_id = _add_signal(isolated_db, horizon="1d", session_date=D1, minutes_to_open=30)
+    with isolated_db.session_scope() as session:
+        signal = session.get(DecisionSignalRecord, signal_id)
+        signal.market_phase = "premarket"
+    _seed_daily(isolated_db, "2330.TW", [
+        (ANCHOR, 90.0, 91.0, 89.0, 90.0),
+        (D1, entry_open, 111.0, 99.0, 110.0),
+    ])
+    service = DecisionSignalOutcomeService(db_manager=isolated_db, factor_loader=_loader_from({}))
+    item = service.run_outcomes(signal_id=signal_id)["items"][0]
+
+    assert item["unable_reason"] == expected_reason
+    assert item["eval_status"] == ("completed" if expected_reason is None else "unable")
+    if expected_reason is None:
+        assert item["entry_date"] == D1.isoformat()
+        assert item["stock_return_pct"] == pytest.approx(10.0)
+
+
 def test_mae_prefers_stored_column_and_falls_back_for_legacy_rows():
     stored = DecisionSignalOutcomeRecord(
         action="buy", start_price=100.0, min_low=90.0, max_high=101.0, max_adverse_excursion_pct=0.5
@@ -840,3 +1000,173 @@ def test_default_factor_loader_reuses_market_repo_helper_with_three_second_timeo
     assert default_factor_loader("00631L", days) == {days[0]: 1.25, days[1]: 1.0}
     assert calls["get_engine"] == ((), {"statement_timeout_ms": 3000})
     assert calls["helper"] == ("00631L", days, engine)
+
+
+# ---------------------------------------------------------------------------
+# 盤前／盤中進場截止日（回測與 DecisionSignal 共用 resolve_entry_cutoff）
+# ---------------------------------------------------------------------------
+
+# 7/2 一根 O100/C110：盤前信號應吃到這根的 +10%，盤中／盤後信號從 7/3 開盤（110）起算。
+PHASE_DAILY = [
+    (ANCHOR, 99.0, 100.0, 98.0, 100.0),
+    (D1, 100.0, 111.0, 99.0, 110.0),
+    (D2, 110.0, 111.0, 109.0, 110.0),
+    (D3, 110.0, 111.0, 109.0, 110.0),
+]
+
+
+@pytest.mark.parametrize(
+    "summary_phase, column_phase, expected_entry, expected_start",
+    [
+        ("premarket", "postmarket", D1, 100.0),  # metadata 的 phase 優先
+        (None, "premarket", D1, 100.0),  # metadata 沒有 phase 時退回 market_phase 欄位
+        ("intraday", "intraday", D2, 110.0),  # 盤中已看到當天開盤，不可提前到當天進場
+        ("lunch_break", "lunch_break", D2, 110.0),
+        ("postmarket", "postmarket", D2, 110.0),
+        (None, None, D2, 110.0),  # 舊信號沒有 phase：維持隔日開盤
+    ],
+)
+def test_signal_entry_session_follows_phase(isolated_db, summary_phase, column_phase, expected_entry, expected_start):
+    signal_id = _add_signal(
+        isolated_db, code="600519", market="cn", horizon="1d", session_date=D1,
+        phase=summary_phase, market_phase=column_phase,
+        minutes_to_open=30 if "premarket" in (summary_phase, column_phase) else None,
+    )
+    _seed_daily(isolated_db, "600519", PHASE_DAILY)
+    service = DecisionSignalOutcomeService(db_manager=isolated_db, factor_loader=_never_loader)
+
+    item = service.run_outcomes(signal_id=signal_id)["items"][0]
+
+    assert item["eval_status"] == "completed"
+    assert item["entry_date"] == expected_entry.isoformat()
+    assert item["start_price"] == expected_start
+    assert item["anchor_date"] == D1.isoformat()
+
+
+def test_premarket_signal_and_backtest_enter_on_same_session(isolated_db):
+    # 同一份 7/2 盤前分析：回測（錨點 7/1）與信號後驗（場次 7/2）都要在 7/2 開盤進場。
+    _seed_history(isolated_db, code="600519", market="cn", analysis_date=D1, phase="premarket",
+                  effective_date=ANCHOR, minutes_to_open=30)
+    signal_id = _add_signal(isolated_db, code="600519", market="cn", horizon="1d", session_date=D1,
+                            phase="premarket", market_phase="premarket", minutes_to_open=30)
+    _seed_daily(isolated_db, "600519", PHASE_DAILY)
+
+    _run(BacktestService(isolated_db, factor_loader=_never_loader), "600519", window=1)
+    item = DecisionSignalOutcomeService(
+        db_manager=isolated_db, factor_loader=_never_loader
+    ).run_outcomes(signal_id=signal_id)["items"][0]
+
+    (row,) = _results(isolated_db, "600519")
+    assert row.entry_date == D1
+    assert item["entry_date"] == D1.isoformat()
+    assert row.stock_return_pct == pytest.approx(item["stock_return_pct"]) == pytest.approx(10.0)
+
+
+def test_premarket_backtest_with_same_day_anchor_still_enters_on_session(isolated_db):
+    # 行事曆失效時有效日線日會退回自然日（錨點＝場次日）；盤前分析仍要在場次日開盤進場。
+    history_id = _seed_history(isolated_db, code="600519", market="cn", analysis_date=D1, phase="premarket",
+                               effective_date=D1, minutes_to_open=30)
+    with isolated_db.session_scope() as session:
+        history = session.get(AnalysisHistory, history_id)
+        snapshot = json.loads(history.context_snapshot)
+        snapshot["market_phase_summary"]["session_date"] = D1.isoformat()
+        history.context_snapshot = json.dumps(snapshot)
+    _seed_daily(isolated_db, "600519", PHASE_DAILY)
+
+    stats = _run(BacktestService(isolated_db, factor_loader=_never_loader), "600519", window=1)
+
+    assert stats["completed"] == 1
+    (row,) = _results(isolated_db, "600519")
+    assert row.entry_date == D1
+
+
+@pytest.mark.parametrize(
+    "phase, anchor, session, analysis, expected",
+    [
+        ("premarket", ANCHOR, D1, None, ANCHOR),  # 正常盤前：錨點已是前一交易日
+        ("premarket", D1, D1, None, ANCHOR),  # 錨點＝場次日：退到場次日前一天
+        ("premarket", ANCHOR, D3, None, D2),  # 錨點落後場次日：不得在場次日之前進場
+        ("premarket", ANCHOR, None, D3, ANCHOR),  # 沒存場次日不拿分析日頂替
+        (" PreMarket ", D1, D1, None, ANCHOR),
+        ("intraday", ANCHOR, D1, None, D1),
+        ("closing_auction", ANCHOR, None, D1, D1),  # 舊盤中紀錄退回分析日
+        ("intraday", D2, D1, D1, D2),  # 永不早於錨點
+        ("postmarket", D1, D2, D3, D1),
+        ("non_trading", D1, D2, None, D1),
+        (None, D1, D2, D3, D1),
+    ],
+)
+def test_resolve_entry_cutoff(phase, anchor, session, analysis, expected):
+    # 這組是開盤前寫好的分析（帶 minutes_to_open）；沒有證據的情形見下方專屬測試。
+    assert resolve_entry_cutoff(
+        phase=phase, anchor_date=anchor, session_date=session, analysis_date=analysis, minutes_to_open=30
+    ) == expected
+
+
+# ---------------------------------------------------------------------------
+# 收盤後手動指定 analysis_phase='premarket'：場次日開盤早已發生，不可回溯到當天開盤進場
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("anchor", [ANCHOR, D1])  # 盤中覆寫（錨點＝前一交易日）、收盤後覆寫（錨點＝場次日）
+@pytest.mark.parametrize(
+    "minutes_to_open, pre_open",
+    [
+        (None, False),  # 沒有開盤前證據：手動覆寫 phase 的情形
+        (0, True),  # 開盤前一分鐘內也算開盤前
+        (45, True),
+        ("30", True),  # 持久化後可能變字串
+        ("bad", False),
+        (-5, False),
+        (True, False),  # bool 不是分鐘數
+    ],
+)
+def test_resolve_entry_cutoff_premarket_requires_pre_open_evidence(anchor, minutes_to_open, pre_open):
+    expected = ANCHOR if pre_open else D1
+    assert resolve_entry_cutoff(
+        phase="premarket", anchor_date=anchor, session_date=D1, minutes_to_open=minutes_to_open
+    ) == expected
+
+
+def test_resolve_entry_cutoff_premarket_without_session_keeps_anchor():
+    assert resolve_entry_cutoff(phase="premarket", anchor_date=ANCHOR, session_date=None) == ANCHOR
+
+
+@pytest.mark.parametrize(
+    "local_time, effective_date",
+    [
+        ("18:00", D1),  # 收盤後覆寫：當天日線已完整，錨點＝場次日
+        ("10:00", ANCHOR),  # 盤中覆寫：錨點是前一交易日，但當天開盤已發生
+    ],
+)
+def test_post_open_premarket_override_does_not_backdate_entry(isolated_db, local_time, effective_date):
+    # 7/2 開盤後以 analysis_phase='premarket' 手動分析：phase 被覆寫，minutes_to_open 為 None；
+    # 兩條後驗都必須在 7/3 開盤進場，不得吃到 7/2 的 +10%。
+    history_id = _seed_history(isolated_db, code="600519", market="cn", analysis_date=D1, phase="premarket",
+                               effective_date=effective_date)
+    with isolated_db.session_scope() as session:
+        history = session.get(AnalysisHistory, history_id)
+        snapshot = json.loads(history.context_snapshot)
+        snapshot["market_phase_summary"].update({
+            "session_date": D1.isoformat(),
+            "market_local_time": f"{D1.isoformat()}T{local_time}:00+08:00",
+            "analysis_intent": "premarket",
+            "minutes_to_open": None,
+        })
+        history.context_snapshot = json.dumps(snapshot)
+    signal_id = _add_signal(isolated_db, code="600519", market="cn", horizon="1d", session_date=D1,
+                            phase="premarket", market_phase="premarket")
+    _seed_daily(isolated_db, "600519", PHASE_DAILY)
+
+    stats = _run(BacktestService(isolated_db, factor_loader=_never_loader), "600519", window=1)
+    item = DecisionSignalOutcomeService(
+        db_manager=isolated_db, factor_loader=_never_loader
+    ).run_outcomes(signal_id=signal_id)["items"][0]
+
+    assert stats["completed"] == 1
+    (row,) = _results(isolated_db, "600519")
+    assert row.entry_date == D2
+    assert row.start_price == 110.0
+    assert item["eval_status"] == "completed"
+    assert item["entry_date"] == D2.isoformat()
+    assert item["start_price"] == 110.0

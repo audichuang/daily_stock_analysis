@@ -224,7 +224,7 @@ P5 通过 sidecar 表保存用户反馈和后验结果，不扩展 `decision_sig
 - `decision_signal_feedback` 保存每个信号最新的 `useful|not_useful` 反馈、可选原因/备注和来源。
 - `decision_signal_outcomes` 按 `(signal_id, horizon, engine_version)` 幂等保存后验评估结果。
 - 当前 `engine_version=decision-signal-v2`（`decision-signal-v1` 舊列保留不刪，統計只讀當前版本）。
-- v2 口徑：信號在錨點日（`session_date`）收盤後才有，進場取錨點之後第一根 K 棒的**開盤**；窗口第 N 根收盤出場。進場 K 棒缺開盤或非正值記 `unable`（`missing_entry_open`／`invalid_entry_open`，可重試），窗口不足先報 `insufficient_forward_bars`。
+- v2 口徑：進場取錨點日（`session_date`）之後第一根 K 棒的**開盤**；盤前信號（metadata `market_phase_summary.phase`，缺值退回 `market_phase` 欄位）要有開盤前證據（`market_phase_summary.minutes_to_open` 為非負整數）才在場次日當天開盤進場，缺證據（例如開盤後以 `analysis_phase=premarket` 手動覆寫）延到場次日之後第一根開盤，不回溯吃已發生的開盤；截止日規則與 Web 回測共用 `resolve_entry_cutoff`；窗口第 N 根收盤出場。進場 K 棒缺開盤或非正值記 `unable`（`missing_entry_open`／`invalid_entry_open`，可重試），窗口不足先報 `insufficient_forward_bars`。修正前已完成的 v2 盤前結果須以 `run_outcomes(force=True)` 重新評估才會更新。
 - 台股（`.TW`／`.TWO`）的報酬用 `market.price_adjustment` 換到進場日還原基準（`price_basis=adjusted`），除息不再被當成下跌；讀不到因子、或窗口內有非 MarketDB 來源的 K 棒時整窗用原始價（`price_basis=raw`，`adjustment_reason` 記原因）；其他市場維持原樣（`as_stored`）。`start_price`／`end_close`／`max_high`／`min_low` 仍存原始價。
 - `not_up` 在中性帶內（含平盤）仍算 hit，v2 未改分類規則。
 - 后验评估只支持日线可验证的 `1d/3d/5d/10d`；`intraday/swing/long`、非方向动作、缺价和 forward bars 不足会写入 `eval_status=unable` 与明确 `unable_reason`。

@@ -1658,8 +1658,8 @@ P5 在 Web `/decision-signals` 页面筛选区下方展示当前 outcome engine 
 ### 进场与收益口径
 
 - 1 日視窗只計算下一個可進場交易日的開盤至收盤報酬，不含錨點收盤至進場開盤的隔夜跳空。
-- 进场价是锚点 K 棒之后下一个交易日的**开盘价**（报告约 18:00 才产出，当日收盘价买不到）；盘中／午休／收盘集合竞价时段的分析改在分析日與持久化場次日（`market_phase_summary.session_date`）較晚者之後才进场（即時報價失敗時分析日會停在前一交易日，仍以場次日為準）。进场 K 棒缺开盘时记 `insufficient_data`（会先尝试补一次日线）。
-- 台股（`.TW`／`.TWO`）收益以 `market.price_adjustment` 还原除权息与分割（`price_basis=adjusted`）；读不到因子或窗口含非本地行情来源时整窗退回原始价（`price_basis=raw`，`adjustment_reason` 说明原因）；其他市场不调整（`as_stored`）。止损／止盈遇跳空以开盘价成交。
+- 进场价是锚点 K 棒之后下一个交易日的**开盘价**（报告约 18:00 才产出，当日收盘价买不到）；盘中／午休／收盘集合竞价时段的分析改在分析日與持久化場次日（`market_phase_summary.session_date`）較晚者之後才进场（即時報價失敗時分析日會停在前一交易日，仍以場次日為準）；盤前分析只有持久化摘要帶開盤前證據（`minutes_to_open`）時才在場次日當天開盤進場，開盤後以 `analysis_phase=premarket` 手動覆寫的分析延到場次日之後（與 DecisionSignal 後驗共用同一條截止日規則）。进场 K 棒缺开盘时记 `insufficient_data`（会先尝试补一次日线）。
+- 台股（`.TW`／`.TWO`）收益以 `market.price_adjustment` 还原除权息与分割（`price_basis=adjusted`）；读不到因子或窗口含非本地行情来源时整窗退回原始价（`price_basis=raw`，`adjustment_reason` 说明原因）；其他市场不调整（`as_stored`）。止损／止盈遇跳空以开盘价成交：開盤已越過停利（或跌破停損）即以開盤價出場，同根之後再碰另一邊不改判；開盤落在兩者之間、同根兩邊都碰才記 `ambiguous` 並以停損價出場。
 - 方向判定只看还原后的毛收益；台股做多另给比例式净收益 `simulated_net_return_pct`（含手续费折扣、证交税、双边滑价，不含最低手续费与二代健保）。价位栏（`start_price`、`end_close` 等）仍是原始价。
 
 ### 自动运行

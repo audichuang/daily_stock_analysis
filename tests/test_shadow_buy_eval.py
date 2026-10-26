@@ -60,6 +60,34 @@ def test_take_hit_and_same_day_both_counts_as_stop():
     assert kind == "stop" and r == pytest.approx(_rt(100, 95))
 
 
+def test_gap_open_beyond_a_level_fills_at_open_before_intraday_other_side():
+    # 開 112 已越過停利 110：開盤就停利出場，之後盤中跌破停損 95 不能改判成停損。
+    r, kind = trade_return(*_bars([100, 112], [101, 113], [99, 94], [100, 100]), stop=95, take=110)
+    assert kind == "take" and r == pytest.approx(_rt(100, 112))
+    # 反向：開 94 已跌破停損，之後盤中衝過停利也仍是開盤停損。
+    r, kind = trade_return(*_bars([100, 94], [101, 112], [99, 93], [100, 100]), stop=95, take=110)
+    assert kind == "stop" and r == pytest.approx(_rt(100, 94))
+
+
+@pytest.mark.parametrize("scale", [1.0, 0.5])
+@pytest.mark.parametrize("open_,exit_,expected_kind", [
+    (112.0, 112.0, "take"),
+    (110.0, 110.0, "take"),
+    (93.0, 93.0, "stop"),
+    (95.0, 95.0, "stop"),
+    (100.0, 95.0, "stop"),
+    (109.0, 95.0, "stop"),
+])
+def test_gap_fill_precedes_intrabar_ambiguity(scale, open_, exit_, expected_kind):
+    bars = _bars(
+        [100, open_ * scale], [101, 113 * scale], [99, 92 * scale], [100, 100 * scale],
+        adj=[scale, 1.0],
+    )
+    r, kind = trade_return(*bars, stop=95, take=110)
+    assert kind == expected_kind
+    assert r == pytest.approx(_rt(100 * scale, exit_ * scale))
+
+
 def test_levels_not_straddling_entry_are_ignored():
     # 開盤已跌破停損：價位失效，不該開盤就當場停損
     r, kind = trade_return(*_bars([94, 96], [97, 99], [93, 95], [96, 98]), stop=95, take=110)
