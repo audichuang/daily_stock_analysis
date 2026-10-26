@@ -242,3 +242,43 @@ def test_dossier_build_replays_only_with_explicit_date(monkeypatch):
     dossier.build("2881.TW", engine=object())
     dossier.build("2881.TW", as_of="2026-04-13", engine=object())
     assert calls == [False, True]   # Web／看板不帶日期＝live；CLI --date 回放才套
+
+
+def _dossier_limited(monkeypatch, sid, as_of, pit):
+    """假 _sql 照 SQL 的 LIMIT 截列（先套公告日篩選再截），才量得到列數上限夠不夠 pit 篩掉最新月份後用。"""
+    import re
+
+    from tests.litellm_stub import ensure_litellm_stub
+
+    ensure_litellm_stub()
+    from src.services import tw_stock_dossier as dossier
+
+    months = pd.period_range("2023-01", "2026-03", freq="M").to_timestamp()[::-1]
+    # 營收逐月遞增、庫存 yoy 留空：表格最舊一列的 yoy 只能靠去年同月營收自己算，退回值是 None
+    rev = pd.DataFrame({"revenue_month": months,
+                        "revenue": [1000 + i for i in range(len(months))][::-1],
+                        "yoy": None,
+                        "announce_date": [(m + pd.DateOffset(months=1, days=9)).date() for m in months]})
+
+    def fake_sql(engine, sql, **kw):
+        if "monthly_revenue" in sql:
+            limit = int(re.search(r"LIMIT (\d+)", sql).group(1))
+            return rev[rev["announce_date"] <= pd.Timestamp(kw["d"]).date()].head(limit).reset_index(drop=True)
+        return pd.DataFrame(columns=["date", "account", "value"])
+
+    monkeypatch.setattr(dossier, "_sql", fake_sql)
+    return dossier.fundamentals(None, sid, as_of, pit=pit)
+
+
+@pytest.mark.parametrize("sid, as_of, pit, latest", [
+    ("2881", "2026-04-13", True, "2026-02"),    # 回放：保險類最新月份被 pit 篩掉，仍要湊滿表格與 TTM
+    ("2881", "2026-04-13", False, "2026-03"),   # 反向：live 不篩，同一份資料照樣完整
+    ("2330", "2026-04-13", True, "2026-03"),    # 反向：一般公司 pit 不篩
+])
+def test_dossier_row_cap_survives_pit_drop(monkeypatch, sid, as_of, pit, latest):
+    out = _dossier_limited(monkeypatch, sid, as_of, pit)
+    table = out["monthly_revenue"]
+    assert len(table) == 13 and table[-1]["month"] == latest
+    # 13 列都要有自己算的年增率（最舊一列靠第 25 列的去年同月），TTM 要有連續 24 個月
+    assert all(m["yoy_pct"] is not None for m in table)
+    assert out["ttm_revenue_yoy_pct"] is not None

@@ -73,7 +73,8 @@ def _quarter_label(d):
 def fundamentals(engine, sid, as_of, *, pit=False):
     """``pit=True``（歷史基準日回放）時，月營收改以法定公告期限（`market_data.revenue_deadline`，
     含保險類 15 日與休市順延）判斷 as_of 當天看不看得到；live 照 DB 佔位公告日（有就是已公告）。"""
-    # 多抓 2 列：pit 篩掉的最多是最新一個月（有效公告日最多晚約兩週），篩完仍要有 36 列給 24 個月 TTM 與 13 個月明細
+    # 實際用到的只有 25 列（13 個月明細＋最舊一列的去年同月；TTM 要 24 列）。pit 最多篩掉最新一個月
+    # （有效公告日最多晚約兩週），所以下限是 26 列；38 是留餘裕，邊界由 test_dossier_row_cap_survives_pit_drop 守
     rev = _sql(engine, "SELECT revenue_month, revenue, yoy, announce_date FROM market.monthly_revenue "
                        "WHERE stock_id = :s AND (announce_date IS NULL OR announce_date <= :d) "
                        "ORDER BY revenue_month DESC LIMIT 38", s=sid, d=as_of)
