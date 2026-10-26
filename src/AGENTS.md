@@ -10,7 +10,7 @@
 
 - `notification_sender/`:各通知渠道;新增渠道實作 `base.py` 的 `Sender` protocol,並在 `notification.py` 的 `NotificationService._senders` 註冊(另見下方 `detect_configured_channels`)。
 - `llm/`:生成後端、usage／provider 快取與 transport 編排(`client.py::LLMClient`:backend fallback／脫敏／串流);與 `GeminiAnalyzer` 的邊界見該檔模組 docstring。
-- `agent/`:tool-calling agent(多輪對話、分歧偵測、事件流),`AGENT_MODE=true` 啟用;策略定義在根目錄 `strategies/*.yaml`(見 `strategies/README.md`);問股後端由 `AGENT_BACKEND` 選(`auto`／`litellm` 走 LiteLLM,`codex_app_server` 走本機 Codex)。這裡的缺陷幾乎都是同一種形狀:**報告照常產出、測試照常通過、只有數字或語言是錯的**,而 LLM 會在錯的數字上疊出通順的敘事。
+- `agent/`:tool-calling agent(多輪對話、分歧偵測、事件流),`AGENT_MODE=true` 啟用;策略定義在根目錄 `strategies/*.yaml`(見 `strategies/README.md`);問股後端由 `AGENT_BACKEND` 選(`auto`／`litellm` 走 LiteLLM;上游已移除 `codex_app_server`,舊值會被設定驗證擋下)。這裡的缺陷幾乎都是同一種形狀:**報告照常產出、測試照常通過、只有數字或語言是錯的**,而 LLM 會在錯的數字上疊出通順的敘事。
 
 ## 進來改要遵守
 
