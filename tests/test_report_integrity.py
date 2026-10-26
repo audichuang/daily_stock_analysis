@@ -78,6 +78,32 @@ class TestCheckContentIntegrity(unittest.TestCase):
         ok, missing = check_content_integrity(result)
         self.assertTrue(ok, missing)
 
+    def test_structured_malformed_non_stop_slot_requests_repair(self) -> None:
+        """停損有效、但進場或目標格給了解析不了的非 null 值（如「100元」）時，要模型重給 sniper_prices。"""
+        for slot in ("ideal_buy", "secondary_buy", "take_profit"):
+            prices = {"ideal_buy": 100, "secondary_buy": None, "stop_loss": 99, "take_profit": 101}
+            prices[slot] = f"{prices[slot] or 98}元"
+            with self.subTest(slot=slot):
+                ok, missing = check_content_integrity(self._buy_result_with_battle({
+                    "sniper_points": {"stop_loss": "99元"},
+                    "sniper_prices": prices,
+                }))
+                self.assertFalse(ok)
+                self.assertEqual(missing, ["dashboard.battle_plan.sniper_prices"])
+
+    def test_structured_explicit_null_slot_is_not_malformed(self) -> None:
+        """反向：非停損格明確填 null 代表沒有可執行價位，不要求重給；數字字串照常接受。"""
+        for prices in (
+            {"ideal_buy": None, "secondary_buy": None, "stop_loss": 99, "take_profit": None},
+            {"ideal_buy": "100", "secondary_buy": 98.5, "stop_loss": 99, "take_profit": 101},
+        ):
+            with self.subTest(prices=prices):
+                ok, missing = check_content_integrity(self._buy_result_with_battle({
+                    "sniper_points": {"stop_loss": "99元"},
+                    "sniper_prices": prices,
+                }))
+                self.assertTrue(ok, missing)
+
     def test_legacy_without_structured_keeps_text_rule(self) -> None:
         """沒有 sniper_prices 時要模型補給數字區塊；停損文字的非空規則照舊另外檢查。"""
         ok, missing = check_content_integrity(self._buy_result_with_battle({"sniper_points": {"stop_loss": "止損位：110元"}}))

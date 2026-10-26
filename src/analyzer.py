@@ -349,7 +349,7 @@ def _legacy_audit_marker_specs(
 from src.llm.client import LLMClient, _AllModelsFailedError, _LiteLLMStreamError  # noqa: F401
 
 from src.utils.data_processing import normalize_report_signal_attribution
-from src.utils.sniper_points import SNIPER_PRICES_KEY, parse_structured_price
+from src.utils.sniper_points import SNIPER_KEYS, SNIPER_PRICES_KEY, parse_structured_price
 
 
 def check_content_integrity(
@@ -411,6 +411,14 @@ def check_content_integrity(
             # 模型有給結構化價位時，停損缺不缺只看 sniper_prices.stop_loss 是不是正數，不看文字
             if parse_structured_price(structured.get("stop_loss")) is None:
                 missing.append("dashboard.battle_plan.sniper_points.stop_loss")
+            # 其他格明確 null 代表沒有可執行價位；非 null 卻解析不了（如「100元」、區間）就要模型重給，
+            # 否則會變成缺價位、靜默跳過交易成本護欄
+            if any(
+                structured.get(key) is not None and parse_structured_price(structured.get(key)) is None
+                for key in SNIPER_KEYS
+                if key != "stop_loss"
+            ):
+                missing.append("dashboard.battle_plan.sniper_prices")
         else:
             # 沒給或給壞了 sniper_prices：系統只讀這裡的數字、不從文字猜價，要模型補給
             missing.append("dashboard.battle_plan.sniper_prices")
