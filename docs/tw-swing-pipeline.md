@@ -754,7 +754,7 @@ CXMT 产能扩张疑虑；苹果 Tim Cook 称 DRAM 价格为「百年一遇的�
 `scripts/fetch_twse_disposal_history.py` 把 TWSE 處置公告（2013 起）抓到 `data/twse_punish_history.csv`（不入庫），
 `measure_signal_forward.py --disposal-cache` 對凍結的突破池量「訊號日收盤已公告、處置期涵蓋 D+1」的事件
 （與 live 旗標同語意）。h60：34 個事件；延後 3／4 日（持有長度不變）的成對均值差 −0.90pp／−0.76pp、區間跨零，
-P(≥30%) 點估計反而低 6pp → inconclusive；剔除讓池均值 −0.74pp（95% −1.36~−0.12）、P(≥30%) −0.8pp → 依事先判準較差
+P(≥30%) 點估計反而低 6pp → inconclusive（實際被延後的只有 17／23 個，其餘處置已進行中、延後等於正常進場）；剔除讓池均值 −0.74pp（95% −1.36~−0.12）、P(≥30%) −0.8pp → 依事先判準較差
 （受影響組均值 +30.4%，右尾較肥；n 小、集中在少數大漲）。**第 1 層維持「只標記、不剔除」**。樣本全在 10 日處置舊制，
 2026-08-10 起的 5 日新制沒有資料。完整事先登記與對抗檢查見 `docs/research/2026-10-26-exp-disposal-delay.md`。
 
