@@ -137,6 +137,35 @@ def test_net_panel_applies_shared_costs_only_to_universe_cells():
     assert np.isnan(out.iloc[0, 1])
 
 
+def test_net_panel_keeps_total_loss_cells_like_arm_events():
+    """`--delisting zero` 讓下市格 r=-1.0；基準必須和臂事件（to_events）一樣算進去。"""
+    from measure_signal_forward import to_events
+
+    ret = _panel([[-1.0, 0.10], [-1.0, -1.0]])
+    uni = pd.DataFrame(True, index=ret.index, columns=ret.columns)
+    out = mid.net_panel(ret, uni)
+    for d in ret.index:  # 逐日跑 to_events，避開同檔 h 日內去重
+        _, ev = to_events(uni.loc[[d]], ret.loc[[d]], 1, {})
+        by_stock = ev.set_index("stock_id")["r"]
+        for s in ret.columns:
+            assert out.at[d, s] == pytest.approx(by_stock[s])
+    day_mean = out.mean(axis=1)
+    # 混合日：全損 + 漲 10% 的基準是負的，不是只剩 +10% 那格
+    assert day_mean.iloc[0] < -0.4
+    # 全損日：基準是有值的大額虧損，不是 NaN（否則當日事件被整批丟掉）
+    assert not np.isnan(day_mean.iloc[1])
+    assert day_mean.iloc[1] < -0.99
+
+
+def test_net_panel_leaves_missing_returns_unmeasured():
+    """反向檢查：宇宙內但報酬缺值的格維持 NaN，不能被補成 0 或全損。"""
+    ret = _panel([[np.nan, 0.10]])
+    uni = pd.DataFrame(True, index=ret.index, columns=ret.columns)
+    out = mid.net_panel(ret, uni)
+    assert np.isnan(out.iloc[0, 0])
+    assert out.mean(axis=1).iloc[0] == pytest.approx(out.iloc[0, 1])
+
+
 def _row(n, excess, mean, p30, ci):
     return {"事件": n, "超額%": excess, "均值%": mean, "P(≥30%)": p30, "_ci": ci}
 

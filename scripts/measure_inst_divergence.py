@@ -118,7 +118,9 @@ def window_mask(sig, start, signal_end=None):
 def net_panel(ret, universe, entry_notional=DEFAULT_POSITION_NOTIONAL):
     """宇宙格的扣成本淨報酬（其餘 NaN），成本走共用 ``round_trip_return``。"""
     cells = ret.where(universe).stack()
-    cells = cells[cells > -1.0]  # 下市以 0 結算時 exit=0 仍合法；<-1 不可能出現
+    # 只丟缺值：下市以 0 結算的 r=-1.0（exit=0）要和臂事件（to_events）一樣算進基準；
+    # <-1 不可能出現，出現就讓 round_trip_return 報錯，與 to_events 一致。
+    cells = cells.dropna()
     net = cells.map(lambda r: round_trip_return(1.0, 1.0 + float(r), entry_notional=entry_notional))
     out = net.unstack()
     return out.reindex(index=ret.index, columns=ret.columns)
