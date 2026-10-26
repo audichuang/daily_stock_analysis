@@ -31,6 +31,9 @@
 
 ## 每日報告的卡住防護與診斷
 
+- 每日報告與媒體點名的鎖目錄旁各有固定的 `.guard` 檔，以 Perl 內建 `flock` 序列化建鎖、死鎖回收與釋放；此檔會保留，請勿在排程執行期間刪除。新鎖尚無 PID 時先視為忙碌，超過該排程的鎖齡門檻才回收；釋放時只清除 PID 仍屬於本輪的鎖。
+- 媒體點名的兩條 journal push 入口都只推該輪驗證過的 commit SHA，並以 `--force-with-lease=develop:<已驗證的 origin SHA>` 綁定遠端狀態；另檢查祖先關係防止倒退遠端。被拒後最多 rebase 重試一次，重新擷取 SHA 並驗證，其他 session 後加的非 journal commit 不會被順帶推送。
+
 - `scripts/daily_report.sh` 每一步（含 `llm_preflight`、`require_stock_success` 這類 bash 函式步驟）都在獨立 process group 跑，預設超過 90 分鐘（`DAILY_REPORT_STEP_TIMEOUT_SECONDS`，預設 5400）整組先 TERM、10 秒後 KILL。
 - 另開 session 的本機 CLI 由 Python 登記 PGID 到每步獨立的暫存檔（內部 `_DSA_LOCAL_CLI_REGISTRY`，非使用者設定、不進 `.env.example`），啟動與登記共用 flock；逾時先封閉登記、一併終止已登記的 CLI 群組，再釋放報告鎖。
 - log 印 `TIMEOUT: <step>` 並推 Bark。上一輪的鎖（`logs/.daily_report.lock`）持有者仍活著且鎖齡超過 3 小時（`DAILY_REPORT_STALE_LOCK_SECONDS`，預設 10800），下一輪會推 Bark 並以 1 退出、保留本輪 log，不再靜默跳過。

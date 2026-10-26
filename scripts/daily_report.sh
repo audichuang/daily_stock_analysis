@@ -112,31 +112,83 @@ lock_is_stale() {
   [[ "$age" =~ ^[0-9]+$ ]] && (( age > limit ))
 }
 
-# acquire_lock LOCK LABEL STALE_SECONDS [KEEP_LOG_ON_SKIP=0] [FAIL_TITLE]：每日报告与媒体点名共用的 mkdir 锁。
-# 持有者活着且锁龄超过 STALE_SECONDS → 记 FAILED、推 Bark、exit 1（不静默跳过）；
-# 持有者活着且没过期 → 记「本次不重複跑」、exit 0（KEEP_LOG_ON_SKIP=1 保留 $LOG，排程的 Claude 要 grep 它；否则删掉）；
-# 持有者已死 → 清掉旧锁重取。成功则写 pid、设 EXIT trap 清锁，LOCK 留在全域供 trap 用。
+# lock_transition ACTION LOCK PID STALE_SECONDS：在固定的 .guard 檔上 flock，序列化建鎖、回收與釋放。
+# .guard 永不刪除，避免不同 inode 上的 flock 同時放行；鎖目錄仍供鎖齡告警與舊排程診斷使用。
+# acquire 回 0＝取得、2＝忙碌（stdout 為持有者）、3＝活著但逾時、其餘＝錯誤；release 只清自己的鎖。
+lock_transition() {
+  perl -e '
+    use strict;
+    use warnings;
+    use Fcntl qw(:flock);
+    $SIG{__DIE__} = sub { print STDERR @_; exit 1; };
+    my ($action, $lock, $pid, $limit) = @ARGV;
+    open my $guard, ">>", "$lock.guard" or die "open guard: $!\n";
+    flock($guard, LOCK_EX) or die "flock: $!\n";
+    my $read_owner = sub {
+      open my $fh, "<", "$lock/pid" or return "";
+      my $owner = <$fh> // "";
+      chomp $owner;
+      return $owner;
+    };
+    my $clear = sub {
+      unlink "$lock/pid" or die "unlink pid: $!\n" if -e "$lock/pid";
+      rmdir $lock or die "rmdir lock: $!\n";
+    };
+    if ($action eq "release") {
+      $clear->() if -d $lock && $read_owner->() eq $pid;
+      exit 0;
+    }
+    if (-d $lock) {
+      my $owner = $read_owner->();
+      my $age = time - (stat $lock)[9];
+      if ($owner =~ /^\d+$/ && $owner > 0 && (kill(0, $owner) || $!{EPERM})) {
+        print $owner;
+        exit($age > $limit ? 3 : 2);
+      }
+      # 新建目錄尚未寫 PID 時先視為持有中；超過原有鎖齡門檻才回收無主鎖。
+      exit 2 if $owner eq "" && $age <= $limit;
+      $clear->();
+    }
+    mkdir $lock or die "mkdir lock: $!\n";
+    open my $fh, ">", "$lock/pid" or die "open pid: $!\n";
+    print $fh "$pid\n" or die "write pid: $!\n";
+    close $fh or die "close pid: $!\n";
+  ' "$@"
+}
+
+release_lock() {
+  lock_transition release "$LOCK" "$$" 0
+}
+
+# acquire_lock LOCK LABEL STALE_SECONDS [KEEP_LOG_ON_SKIP=0] [FAIL_TITLE]：每日報告與媒體點名共用的 mkdir 鎖。
+# 活著且逾時 → FAILED＋Bark、exit 1；仍在跑或剛建鎖尚無 PID → 跳過、exit 0。
+# 死鎖／過期的無 PID 鎖在同一個 flock 交易內回收重建，成功後才設 EXIT trap。
 acquire_lock() {
   LOCK="$1"
-  local label="$2" stale_secs="$3" keep_log="${4:-0}" title="${5:-}"
-  if ! mkdir "$LOCK" 2>/dev/null; then
-    if kill -0 "$(cat "$LOCK/pid" 2>/dev/null)" 2>/dev/null; then
-      if lock_is_stale "$LOCK" "$stale_secs"; then
-        # 持有者活着但锁龄过久：上一轮卡死了。留下本轮 log、推播，不要像以前那样静默退出。
-        local hours
-        hours=$(( $(lock_age_seconds "$LOCK") / 3600 ))
-        log "FAILED: 前一輪${label}（pid $(cat "$LOCK/pid")）已卡住約 ${hours} 小時，本輪未執行"
-        notify_failure "前一輪${label}（pid $(cat "$LOCK/pid")）已卡住約 ${hours} 小時仍未結束，本輪未執行。log: $LOG" ${title:+"$title"}
-        exit 1
-      fi
-      log "另一輪${label}仍在執行（pid $(cat "$LOCK/pid")），本次不重複跑"
+  local label="$2" stale_secs="$3" keep_log="${4:-0}" title="${5:-}" owner rc hours
+  if owner=$(lock_transition acquire "$LOCK" "$$" "$stale_secs"); then
+    trap release_lock EXIT
+    return 0
+  else
+    rc=$?
+  fi
+  case "$rc" in
+    2)
+      log "另一輪${label}仍在執行（pid ${owner:-尚未寫入}），本次不重複跑"
       [[ "$keep_log" == "1" ]] || rm -f "$LOG"
       exit 0
-    fi
-    rm -rf "$LOCK" && mkdir "$LOCK"   # 前一輪被砍掉留下的鎖
-  fi
-  echo $$ >"$LOCK/pid"
-  trap 'rm -rf "$LOCK"' EXIT
+      ;;
+    3)
+      hours=$(( $(lock_age_seconds "$LOCK") / 3600 ))
+      log "FAILED: 前一輪${label}（pid ${owner}）已卡住約 ${hours} 小時，本輪未執行"
+      notify_failure "前一輪${label}（pid ${owner}）已卡住約 ${hours} 小時仍未結束，本輪未執行。log: $LOG" ${title:+"$title"}
+      ;;
+    *)
+      log "FAILED: 無法取得${label}鎖，本輪未執行"
+      notify_failure "無法取得${label}鎖，本輪未執行。log: $LOG" ${title:+"$title"}
+      ;;
+  esac
+  exit 1
 }
 
 # spawn_detached SCRIPT LAUNCHER_LOG：新 session 里跑 bash SCRIPT（不带参数），pid 放 DETACHED_PID。

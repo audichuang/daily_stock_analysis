@@ -5,7 +5,9 @@ job 腳本只 source、不直接執行（直接執行會同步 develop、跑真�
 """
 import importlib.util
 import json
+import os
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -360,6 +362,130 @@ def test_acquire_lock_dead_holder_is_reacquired(tmp_path):
     assert not lock.exists()      # EXIT trap 清掉了本輪的鎖
 
 
+@pytest.mark.parametrize("age_s, acquired", [(0, False), (5000, True)])
+def test_acquire_lock_without_pid_waits_for_initialization_but_recovers_old_lock(tmp_path, age_s, acquired):
+    r, log, notify, lock = _lock_run(tmp_path, None, age_s=age_s, keep_log=1)
+    assert r.returncode == 0, r.stderr
+    assert ("acquired" in r.stdout) is acquired
+    assert lock.exists() is not acquired
+    assert not notify.exists()
+    if not acquired:
+        assert "本次不重複跑" in log.read_text(encoding="utf-8")
+
+
+def _wait_until(predicate):
+    deadline = time.monotonic() + 30
+    while not predicate():
+        assert time.monotonic() < deadline, "等待鎖競態測試的同步點逾時"
+        time.sleep(0.01)
+
+
+def test_acquire_lock_serializes_two_dead_owner_recoveries(tmp_path):
+    lock = tmp_path / "lock"
+    lock.mkdir()
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    (lock / "pid").write_text(str(dead.pid), encoding="utf-8")
+    children = []
+
+    def start(name):
+        # 舊實作會在刪鎖前停住；依序放行兩個已讀到死 PID 的行程，穩定重現後來者刪掉新鎖。
+        body = f'''
+source "{JOB}"
+LOG=/dev/null
+notify_failure() {{ echo unexpected-notification >&2; }}
+rm() {{
+  if [[ "$*" == "-rf $PWD/lock" && ! -e "$PWD/{name}.remove" ]]; then
+    : >"$PWD/{name}.recovering"
+    while [[ ! -e "$PWD/{name}.remove" ]]; do sleep 0.01; done
+  fi
+  command rm "$@"
+}}
+acquire_lock "$PWD/lock" 測試 100 1
+echo $$ >"$PWD/{name}.acquired"
+while [[ ! -e "$PWD/release" ]]; do sleep 0.01; done
+'''
+        child = subprocess.Popen(["bash", "-c", body], cwd=tmp_path, env={**os.environ, "BASH_ENV": ""},
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        children.append(child)
+        return child
+
+    try:
+        start("a")
+        _wait_until(lambda: (tmp_path / "a.recovering").exists() or (tmp_path / "a.acquired").exists())
+        second = start("b")
+        if (tmp_path / "a.recovering").exists():
+            _wait_until(lambda: (tmp_path / "b.recovering").exists())
+            (tmp_path / "a.remove").touch()
+            _wait_until(lambda: (tmp_path / "a.acquired").exists())
+            (tmp_path / "b.remove").touch()
+        _wait_until(lambda: second.poll() is not None or (tmp_path / "b.acquired").exists())
+        owners = list(tmp_path.glob("*.acquired"))
+        assert len(owners) == 1, f"同一把鎖被兩個行程取得：{owners}"
+        assert (lock / "pid").read_text().strip() == owners[0].read_text().strip()
+    finally:
+        for name in ("a.remove", "b.remove", "release"):
+            (tmp_path / name).touch()
+        for child in children:
+            child.communicate(timeout=30)
+    assert not lock.exists()
+
+
+def test_acquire_lock_exit_does_not_remove_another_owner(tmp_path, live_holder):
+    lock = tmp_path / "lock"
+    r = _sh(tmp_path, f'acquire_lock "$PWD/lock" 測試 100 1; echo {live_holder} >"$PWD/lock/pid"')
+    assert r.returncode == 0, r.stderr
+    assert (lock / "pid").read_text().strip() == str(live_holder)
+
+
+def test_acquire_lock_creation_failure_never_runs_protected_work(tmp_path):
+    r = _sh(tmp_path, 'acquire_lock "$PWD/missing/lock" 測試 100 1; echo acquired')
+    assert r.returncode == 1
+    assert "acquired" not in r.stdout
+
+
+@pytest.mark.parametrize("action", ["acquire", "release"])
+def test_lock_transitions_check_owner_under_persistent_guard(tmp_path, action):
+    import fcntl
+
+    lock = tmp_path / "lock"
+    lock.mkdir()
+    (lock / "pid").write_text("99999999\n", encoding="utf-8")
+    guard = tmp_path / "lock.guard"
+    with guard.open("a") as handle:
+        inode = guard.stat().st_ino
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        body = f'''
+source "{JOB}"
+LOG=/dev/null
+LOCK="$PWD/lock"
+notify_failure() {{ echo unexpected-notification >&2; }}
+[[ "{action}" != release ]] || echo $$ >"$LOCK/pid"
+: >"$PWD/ready"
+if [[ "{action}" == acquire ]]; then
+  acquire_lock "$LOCK" 測試 100 1
+else
+  release_lock
+fi
+echo transitioned
+'''
+        child = subprocess.Popen(["bash", "-c", body], cwd=tmp_path, env={**os.environ, "BASH_ENV": ""},
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            _wait_until(lambda: (tmp_path / "ready").exists())
+            # 只有守門檔解鎖後才能讀 PID；期間換持有者，放行後必須保留新持有者的鎖。
+            with pytest.raises(subprocess.TimeoutExpired):
+                child.wait(timeout=0.1)
+            (lock / "pid").write_text(str(os.getpid()), encoding="utf-8")
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            out, err = child.communicate(timeout=30)
+    assert child.returncode == 0, err
+    assert ("transitioned" in out) is (action == "release")
+    assert (lock / "pid").read_text().strip() == str(os.getpid())
+    assert guard.stat().st_ino == inode
+
+
 def test_pick_run_id_honours_env_and_detach_prints_exact_log_path(tmp_path):
     r = _sh(tmp_path, 'pick_run_id', {"MEDIA_PICKS_RUN_ID": "20261101_230000"})
     assert r.stdout.strip() == "20261101_230000"
@@ -503,6 +629,104 @@ def _journal_commit(repo, line='{"mine": 1}\n'):
     with (repo / "journal" / "media-picks.jsonl").open("a", encoding="utf-8") as f:
         f.write(line)
     _git(repo, "commit", "-q", "-am", "journal: mine")
+
+
+@pytest.mark.parametrize("entrypoint, result", [("push_journal_cli", "push ok"), ("commit_journal", "ok")])
+def test_journal_push_pins_validated_sha_when_local_develop_moves(repo, entrypoint, result):
+    _journal_commit(repo)
+    validated = _git(repo, "rev-parse", "HEAD")
+    r = _sh(repo, f'''
+git_net() {{
+  if [[ "$1" == push ]]; then
+    printf 'human work\\n' >other.txt
+    command git commit -q -am 'human: raced validation'
+  fi
+  command git "$@" >&2
+}}
+{entrypoint}
+''')
+    assert (r.returncode, r.stdout.strip()) == (0, result), r.stderr
+    assert _origin_head(repo) == validated
+    assert _git(repo, "rev-parse", "HEAD") != validated
+    assert _git(repo, "show", "origin/develop:other.txt") == "a"
+
+
+@pytest.mark.parametrize("entrypoint, result", [("push_journal_cli", "push ok"), ("commit_journal", "ok")])
+def test_journal_push_validates_captured_range_when_head_moves_during_check(repo, entrypoint, result):
+    _journal_commit(repo)
+    validated = _git(repo, "rev-parse", "HEAD")
+    r = _sh(repo, f'''
+checks=0
+git() {{
+  if [[ "$1" == rev-list ]]; then
+    # git rev-list 在 command substitution 的子 shell，計數寫檔以跨越兩次驗證。
+    checks=$(cat .git/check-count 2>/dev/null || echo 0)
+    echo $((checks + 1)) >.git/check-count
+    if (( checks == 1 )); then
+      printf 'human work\\n' >other.txt
+      command git commit -q -am 'human: raced range check'
+    fi
+  fi
+  command git "$@"
+}}
+{entrypoint}
+''')
+    assert (r.returncode, r.stdout.strip()) == (0, result), r.stderr
+    assert _git(repo, "rev-parse", "HEAD") != validated
+    assert _origin_head(repo) == validated
+
+
+@pytest.mark.parametrize("entrypoint, result", [("push_journal_cli", "push failed"), ("commit_journal", "fail")])
+def test_journal_push_revalidates_after_rebase(repo, tmp_path, entrypoint, result):
+    _journal_commit(repo)
+    _advance_origin(tmp_path, repo, "journal/ptt-picks.jsonl", '{}\n')
+    remote_before = _origin_head(repo)
+    r = _sh(repo, f'''
+git_net() {{
+  command git "$@" >&2 || return $?
+  if [[ "$1" == pull ]]; then
+    printf 'human work\\n' >other.txt
+    command git commit -q -am 'human: raced rebase' >&2
+  fi
+}}
+{entrypoint}
+''')
+    assert r.stdout.strip() == result, r.stderr
+    assert r.returncode == (1 if entrypoint == "push_journal_cli" else 0)
+    assert _origin_head(repo) == remote_before
+    assert "other.txt" in r.stderr
+
+
+def test_journal_push_lease_uses_validated_origin_even_if_tracking_ref_moves(repo):
+    _journal_commit(repo)
+    intermediate = _git(repo, "rev-parse", "HEAD")
+    _journal_commit(repo, '{"second": 2}\n')
+    r = _sh(repo, f'''
+git_net() {{
+  if [[ "$1" == push ]]; then
+    command git push -q origin "{intermediate}:refs/heads/develop" >&2
+    command git fetch -q origin >&2
+  elif [[ "$1" == pull ]]; then
+    echo rebase-attempted >&2
+    return 1
+  fi
+  command git "$@" >&2
+}}
+push_journal_cli
+''')
+    assert (r.returncode, r.stdout.strip()) == (1, "push failed"), r.stderr
+    assert "rebase-attempted" in r.stderr
+    assert _origin_head(repo) == intermediate
+
+
+def test_push_develop_never_rewinds_when_local_head_is_behind(repo, tmp_path):
+    _advance_origin(tmp_path, repo, "other.txt", "new remote work\n")
+    _git(repo, "fetch", "-q", "origin")
+    remote_before = _origin_head(repo)
+    r = _sh(repo, "push_develop")
+    assert r.returncode == 0, r.stderr
+    assert _origin_head(repo) == remote_before
+    assert _git(repo, "rev-parse", "HEAD") == remote_before
 
 
 def test_push_journal_cli_pushes_journal_only_commit(repo):
