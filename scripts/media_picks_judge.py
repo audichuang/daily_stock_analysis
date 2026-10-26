@@ -9,11 +9,14 @@
 ``tw_stock_dossier.py --no-branch`` 的資料包。``claude -p`` 不給工具、不載 MCP、關掉所有 hook，並拿掉 ``ORCA_*``
 環境變數（子程序結束時若觸發 Orca 的 Stop hook，會把排程的 terminal 收掉，見 ``docs/daily-report-ops.md``）。
 
-挑哪幾檔、檢查回來的 JSON、research 上限、寫 journal 仍由主 agent 做；本腳本只負責「備證據＋問＋收」，不寫任何檔。
-逐檔失敗另在 stderr 印結構化事件；主 agent 可將 stderr 追加到該輪既有 log，讓摘要取得錯誤證據。
+挑哪幾檔、檢查回來的 JSON、research 上限、寫 journal 仍由主 agent 做；本腳本只負責「備證據＋問＋收」，不寫 journal。
 輸出（stdout）是 JSON 陣列，順序同輸入代號：``{"code", "ok", "result"}`` 或 ``{"code", "ok": false, "error", "raw"}``。
+帶 ``--log <本輪 log>`` 時，全部回來後每檔在那份 log 追加一行判斷紀錄 ``<時刻> | JUDGE {"at", "since", "code", "ok", "error"}``：
+下一輪 ``media_picks_summary.py`` 的「前幾輪還沒判斷」段落會列出「判斷過卻沒寫進判斷檔」的檔（逾時、格式不合、主 agent
+寫到一半中斷），要不要補判由主 agent 決定。寫不進去只在 stderr 記一行，不影響輸出。
 
     uv run --no-project python scripts/media_picks_judge.py --since 2026-10-26T23:00:12+0800 3037.TW 2330.TW
+    uv run --no-project python scripts/media_picks_judge.py --since ... --log logs/media_picks_job_<id>.log 3037.TW
 """
 import argparse
 import importlib.util
@@ -166,8 +169,8 @@ def run(since: datetime, codes: list, jobs: int = MAX_CODES, model=None, timeout
 
     def voices(code):
         st = next((x for x in s.get("stocks", []) if x.get("code") == code), None)
-        pending = next((x for x in s.get("unjudged", []) if x.get("code") == code), None)
-        prior = (pending or {}).get("stock") or {}
+        pending = next((c for c in s.get("unjudged", {}).get("codes", []) if c.get("code") == code), None)
+        prior = (pending or {}).get("stock") or {}  # 補判前幾輪的檔時，舊講者的過去紀錄也要附上
         return [(v.get("speaker") or "").strip() or f"[{v.get('show')}]"
                 for v in (st or {}).get("voices", []) + prior.get("voices", [])]
 
@@ -183,14 +186,24 @@ def run(since: datetime, codes: list, jobs: int = MAX_CODES, model=None, timeout
         def one(code):
             dossier_text = dossier_fn(code, DOSSIER_TIMEOUT)
             media_text = mod.stock_detail(s, code) + records_section(records.result(), voices(code))
-            result = judge_one(code, media_text, dossier_text, model, timeout)
-            if result.get("ok") is False:
-                sys.stderr.write(json.dumps({"event": "media_picks_judge_error", "since": since.isoformat(),
-                                             "code": code, "ok": False, "error": result["error"]},
-                                            ensure_ascii=False) + "\n")
-            return result
+            return judge_one(code, media_text, dossier_text, model, timeout)
 
         return list(ex.map(one, codes))
+
+
+def append_log(path: Path, since: datetime, results: list, now=None) -> None:
+    """每檔追加一行 ``<時刻> | JUDGE <JSON>`` 到本輪 log（格式同 media_picks_job.sh 的 log()）；寫不進去只記 stderr。"""
+    now = (now or datetime.now()).astimezone()
+    lines = "".join(
+        f"{now:%Y-%m-%d %H:%M:%S} | JUDGE "
+        + json.dumps({"at": now.isoformat(), "since": since.isoformat(), "code": r.get("code"),
+                      "ok": bool(r.get("ok")), "error": None if r.get("ok") else r.get("error")}, ensure_ascii=False)
+        + "\n" for r in results)
+    try:
+        with Path(path).open("a", encoding="utf-8") as f:
+            f.write(lines)
+    except OSError as e:
+        print(f"判斷紀錄寫不進 {path}：{e}", file=sys.stderr)
 
 
 def main(argv=None) -> int:
@@ -200,13 +213,18 @@ def main(argv=None) -> int:
     ap.add_argument("--model", default=os.environ.get("MEDIA_PICKS_JUDGE_MODEL") or None,
                     help="claude -p 的模型；不給就用 CLI 預設（也可設 MEDIA_PICKS_JUDGE_MODEL）")
     ap.add_argument("--timeout", type=int, default=JUDGE_TIMEOUT, help="每檔 claude -p 的逾時秒數（加上資料包的時間要低於 Bash 的 600 秒上限）")
+    ap.add_argument("--log", type=Path,
+                    help="本輪 log（第 1 步的 logs/media_picks_job_<id>.log）；給了就追加每檔的判斷紀錄，下一輪摘要看得到")
     args = ap.parse_args(argv)
     if len(args.codes) > MAX_CODES:
         ap.error(f"最多 {MAX_CODES} 檔")
     since = datetime.fromisoformat(args.since)
     if since.tzinfo is None:
         since = since.astimezone()
-    print(json.dumps(run(since, args.codes, model=args.model, timeout=args.timeout), ensure_ascii=False, indent=1))
+    results = run(since, args.codes, model=args.model, timeout=args.timeout)
+    if args.log:
+        append_log(args.log, since, results)
+    print(json.dumps(results, ensure_ascii=False, indent=1))
     return 0
 
 
