@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- [修复] 測試守門合併最近 `.env` 與經 Git common dir 找到的主 checkout `.env`，同時拒絕兩份檔案的 `STORAGE_DATABASE_URL`／`DATABASE_URL`（含 SQLAlchemy URL 物件），避免工作樹自訂 URL 遮住正式庫；同步所有 Copilot 指令鏡像的 `gh-wait` 等待規則。
+- [修复] 測試守門在 worktree 自帶不同 URL 的 `.env` 時，同時拒絕最近 `.env` 與主 checkout（經 Git common dir 找到）的 `STORAGE_DATABASE_URL`，並擋主 checkout 的 `DATABASE_URL`（主 checkout 本身與 worktree 自己宣告同一條時不擋，保留 `market_data/tests` 的 rollback 連線）；以 SQLAlchemy `URL` 物件傳入的正式庫也擋；所有 Copilot 指令鏡像補回 `gh-wait` 等 CI 的規則
 - [修复] `screen_tw --date`、個股資料包帶基準日（Web `GET /api/v1/stocks/{code}/dossier?date=`、`stock-report --date`）與媒體／PTT 快照共用 `market_data.revenue_deadline.is_historical_replay`：只有明確指定日期嚴格早於全市場 `market.price` 最新日期才套月營收法定公告期限，帶今天／最新或未來日期改走 live、保留期限前已公告的營收（如 28xx 保險類 11~15 日），個股價格落後不再誤觸 PIT；最新日期取不到時保守當回放
 - [修复] 測試的正式庫守門在樹外 worktree（如 dsa-upstream-sync 的 `~/.cache/dsa-upstream-sync/<date>`）往上找不到 `.env`、或最近的 `.env` 沒設 `STORAGE_DATABASE_URL` 時，改經 `git rev-parse --git-common-dir` 讀主 checkout 的 `.env`；AGENTS.md §9 等 CI 改用 `gh-wait`
 - [新功能] 每日行情更新可用預設關閉的 `TAIFEX_OI_ACCUMULATE_ENABLED` 累積期交所外資大台 TXF 淨未平倉至 market schema，與盤前腳本共用解析及回應日期護欄、按官方近 14 天原日期冪等寫入；單一來源失敗只報警告，新增 migration 非空表拒絕降版。
