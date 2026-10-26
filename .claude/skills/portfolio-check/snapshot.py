@@ -70,15 +70,18 @@ def _position_row(position, fetcher, rates, base_currency):
     stored_price = _positive_number(position["last_price"]) if position["price_available"] else None
     price = live_price if live_price is not None else stored_price
     value = position["quantity"] * price if price is not None else None
+    # 帳本缺幣別時才退回帳戶本位幣，否則一律以部位自己的幣別換算
+    currency = (position.get("currency") or base_currency).strip().upper()
     return {
         **position,
+        "currency": currency,
         "name": position.get("name") or "",
         "price": price,
         "change_pct": quote.change_pct if live_price is not None else None,
         "source": (str(quote.source).split(".")[-1] if live_price is not None
                    else f"{position['price_source']}@{position['price_date']}"),
-        "value_base": rates.convert(value, position["currency"], base_currency),
-        "value_twd": rates.convert(value, position["currency"]),
+        "value_base": rates.convert(value, currency, base_currency),
+        "value_twd": rates.convert(value, currency),
     }
 
 

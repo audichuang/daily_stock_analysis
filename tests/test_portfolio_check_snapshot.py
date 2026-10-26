@@ -263,3 +263,18 @@ def test_valid_realtime_price_preserves_quantity_pnl_and_combined_weights(run_sn
     assert fields[-3:] == ["100.0%", "+50.0%", "SHIOAJI"]
     combined = section(result.output, "== 全部帳戶合併")
     assert row(combined, "AAPL")[-2:] == ["7,680", "100.0%"]
+
+
+@pytest.mark.parametrize("missing", [None, ""])
+def test_missing_position_currency_falls_back_to_account_base(run_snapshot, missing):
+    result = run_snapshot(account(position("AAPL", missing), currency="USD"))
+    stocks = section(result.output, "== 帳戶")
+    assert "總市值 100" in stocks and "不完整" not in stocks
+    assert row(stocks, "AAPL")[2] == "USD"
+    assert "3,200" in row(section(result.output, "== 全部帳戶合併"), "AAPL")
+
+
+def test_lowercase_position_currency_is_normalised_before_conversion(run_snapshot):
+    result = run_snapshot(account(position("AAPL", "usd")))
+    stocks = section(result.output, "== 帳戶")
+    assert "總市值 3,200" in stocks and "不完整" not in stocks
