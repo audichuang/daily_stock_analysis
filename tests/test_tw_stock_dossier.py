@@ -211,6 +211,10 @@ def test_monthly_yoy_nan_revenue_does_not_crash(monkeypatch, cur, prev, stored, 
                "chips": {"institutional": None, "margin": None, "holding": None, "branch": None},
                "valuation": None, "smc": None}
     dossier.render(payload)
+    # HTML 報告（Web 端點）吃同一份資料包，也不能炸
+    from src.services import tw_stock_report
+
+    tw_stock_report.render(payload)
 
 
 def test_monthly_yoy_computed_from_revenue_over_stored(monkeypatch):

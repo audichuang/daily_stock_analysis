@@ -63,9 +63,10 @@ def _changes(p):
                         "text": f"{ann_d:%m/%d} {month} 月營收 YoY {yoy:+.1f}%"})
     inst = (p.get("chips") or {}).get("institutional") or {}
     f5, f20 = inst.get("foreign_5d_lots"), inst.get("foreign_20d_lots")
-    if f5 and f20 and (f5 > 0) != (f20 > 0):
+    # 法人資料日要跟上資料包 as_of：法人爬蟲停更（官方端點凍結照回 200）時，舊的 5／20 日累計不能當成最近一日的變化
+    if as_of and inst.get("as_of") == as_of and f5 and f20 and (f5 > 0) != (f20 > 0):
         out.append({"kind": "foreign", "tone": "pos" if f5 > 0 else "neg",
-                    "text": f"外資 5 日轉{'買' if f5 > 0 else '賣'} {f5:+,} 張（20 日 {f20:+,}）"})
+                    "text": f"{as_of[5:]} 外資 5 日轉{'買' if f5 > 0 else '賣'} {f5:+,} 張（20 日 {f20:+,}）"})
     h = (p.get("chips") or {}).get("holding") or {}
     wow = h.get("big_holder_pct_wow")
     if wow is not None and abs(wow) >= _HOLDER_WOW_PP:

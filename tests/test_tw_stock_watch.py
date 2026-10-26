@@ -20,7 +20,7 @@ SMC = {"price": 100.0, "bsl": [140.0, 112.0], "ssl": [90.0],
 def payload(**over):
     p = {"stock_id": "3324", "as_of": "2026-10-21", "smc": SMC, "errors": [],
          "fundamentals": {"monthly_revenue": [{"month": "2026-09", "yoy_pct": 23.22, "announced": "2026-10-10"}]},
-         "chips": {"institutional": {"foreign_5d_lots": 587, "foreign_20d_lots": -3840},
+         "chips": {"institutional": {"as_of": "2026-10-21", "foreign_5d_lots": 587, "foreign_20d_lots": -3840},
                    "holding": {"big_holder_pct_wow": -0.3, "as_of": "2026-10-16"}}}
     p.update(over)
     return p
@@ -52,7 +52,28 @@ def test_revenue_change_text_uses_slash_date_and_plain_month():
 
 def test_changes_dated_by_last_session():
     texts = [c["text"] for c in watch._changes(payload())]
-    assert texts == ["10-21 ChoCH 轉空（99.5）", "外資 5 日轉買 +587 張（20 日 -3,840）"]
+    assert texts == ["10-21 ChoCH 轉空（99.5）", "10-21 外資 5 日轉買 +587 張（20 日 -3,840）"]
+
+
+@pytest.mark.parametrize("metadata, current", [
+    ({"as_of": "2026-10-21"}, True),
+    ({"as_of": "2026-10-20"}, False),
+    ({"as_of": "2026-10-22"}, False),
+    ({"as_of": None}, False),
+    ({"as_of": ""}, False),
+    ({}, False),
+])
+@pytest.mark.parametrize("f5, f20, tone, text", [
+    (587, -3840, "pos", "10-21 外資 5 日轉買 +587 張（20 日 -3,840）"),
+    (-5, 10, "neg", "10-21 外資 5 日轉賣 -5 張（20 日 +10）"),
+])
+def test_summary_foreign_flip_requires_matching_data_date(metadata, current, f5, f20, tone, text):
+    p = payload(chips={"institutional": {**metadata, "foreign_5d_lots": f5, "foreign_20d_lots": f20}})
+    changes = watch.summarize(p)["changes"]
+    assert [c for c in changes if c["kind"] == "foreign"] == (
+        [{"kind": "foreign", "tone": tone, "text": text}] if current else [])
+    # 法人落後時只省略外資提示，同日的結構變化照常保留。
+    assert [c["text"] for c in changes if c["kind"] == "structure"] == ["10-21 ChoCH 轉空（99.5）"]
 
 
 @pytest.mark.parametrize("over, kind, expected", [
@@ -62,8 +83,8 @@ def test_changes_dated_by_last_session():
     ({"as_of": "2026-10-17"}, "revenue", True),
     ({"as_of": "2026-10-18"}, "revenue", False),
     # 外資 5 日與 20 日同向 -> 不算轉向
-    ({"chips": {"institutional": {"foreign_5d_lots": 587, "foreign_20d_lots": 3840}}}, "foreign", False),
-    ({"chips": {"institutional": {"foreign_5d_lots": -5, "foreign_20d_lots": 10}}}, "foreign", True),
+    ({"chips": {"institutional": {"as_of": "2026-10-21", "foreign_5d_lots": 587, "foreign_20d_lots": 3840}}}, "foreign", False),
+    ({"chips": {"institutional": {"as_of": "2026-10-21", "foreign_5d_lots": -5, "foreign_20d_lots": 10}}}, "foreign", True),
     # 千張大戶週變化 ±0.5pp 才提示
     ({"chips": {"holding": {"big_holder_pct_wow": 0.5, "as_of": "2026-10-16"}}}, "holder", True),
     ({"chips": {"holding": {"big_holder_pct_wow": -0.49, "as_of": "2026-10-16"}}}, "holder", False),
