@@ -20,7 +20,7 @@ def test_upgrade_adds_only_nullable_ohlc_with_model_precision():
     with Operations.context(context):
         migration.upgrade()
     sql = output.getvalue()
-    assert migration.down_revision == "d3a8b6e15c27"
+    assert migration.down_revision == "e4f7a2c9b1d3"
     assert "SET lock_timeout = '10s'" in sql
     assert sql.count("ALTER TABLE market.market_index ADD COLUMN") == 3
     assert "DROP" not in sql and "UPDATE" not in sql and "NOT NULL" not in sql
