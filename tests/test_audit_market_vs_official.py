@@ -89,25 +89,30 @@ def _cli(monkeypatch, tmp_path, sources, dates):
                         {"2330": [Decimal(1)] * (4 if "institutional" in sql else 6 if "margin" in sql else 7)})
 
 
+def _latest(tmp_path):
+    return {(r["date"], r["source"]): r for r in map(json.loads, (tmp_path / "result.jsonl").read_text().splitlines())}
+
+
 @pytest.mark.parametrize("source", _SOURCES)
-def test_main_worker_exception_fails_and_reports_incomplete_coverage(monkeypatch, tmp_path, capsys, source):
+def test_malformed_row_is_recorded_as_crash_and_later_days_still_run(monkeypatch, tmp_path, capsys, source):
     dates = ["2026-10-23", "2026-10-22", "2026-10-21"]
     _cli(monkeypatch, tmp_path, {source}, dates)
     get = audit_script.Audit.get
 
     def malformed(self, url, name):
         payload = get(self, url, name)
-        if "20261022" in name:
+        if "20261022" in name:  # 短列：r[i] IndexError／row["收盤價"] KeyError
             payload["tables"][0]["data"][0][:] = ["2330"]
         return payload
 
     monkeypatch.setattr(audit_script.Audit, "get", malformed)
     assert audit_script.main() == 1
     output = capsys.readouterr()
-    assert "worker failed" in output.err
-    assert "missing 2" in output.out and "2026-10-21" in output.out and "2026-10-22" in output.out
-    assert "checked 3 trading days" not in output.out
-    # 失敗後離線彙總也必須保留未完成範圍，不能重新宣稱乾淨。
+    assert "unreadable 1, missing 0" in output.out and "checked 3 trading days" not in output.out
+    latest = _latest(tmp_path)
+    assert latest[("2026-10-22", source)]["err"].startswith("crash ")
+    # 壞的那天之後照跑，不能讓一格例外殺掉整條執行緒（之後每次重跑都卡在同一天的快取）
+    assert latest[("2026-10-21", source)]["err"] is None
     assert summarize(tmp_path, {source}) == 1
 
 
@@ -153,16 +158,16 @@ def test_worker_failure_still_fails_when_all_results_were_recorded(monkeypatch, 
     ("get", ValueError("invalid cached JSON")),
     ("db", RuntimeError("connection failed")),
 ])
-def test_cache_and_database_exceptions_fail_before_the_first_result(monkeypatch, tmp_path, capsys, site, error):
+def test_cache_and_database_exceptions_are_recorded_as_crash(monkeypatch, tmp_path, capsys, site, error):
     _cli(monkeypatch, tmp_path, {"price"}, ["2026-10-22"])
     monkeypatch.setattr(audit_script.Audit, site, MagicMock(side_effect=error))
     assert audit_script.main() == 1
     out = capsys.readouterr()
-    assert f"{type(error).__name__}: {error}" in out.err and "missing 1" in out.out
+    assert f"crash {type(error).__name__}: {error}" in out.out and "unreadable 1" in out.out
     assert summarize(tmp_path) == 1
 
 
-def test_other_market_finishes_after_one_worker_fails(monkeypatch, tmp_path, capsys):
+def test_other_market_finishes_after_one_market_crashes(monkeypatch, tmp_path, capsys):
     _cli(monkeypatch, tmp_path, set(_SOURCES), ["2026-10-23", "2026-10-22"])
     get = audit_script.Audit.get
 
@@ -174,7 +179,7 @@ def test_other_market_finishes_after_one_worker_fails(monkeypatch, tmp_path, cap
 
     monkeypatch.setattr(audit_script.Audit, "get", malformed)
     assert audit_script.main() == 1
-    assert "worker failed" in capsys.readouterr().err
+    assert "crash KeyError" in capsys.readouterr().out
     assert summarize(tmp_path, set(audit_script.TPEX_SOURCES)) == 0
     assert summarize(tmp_path, set(audit_script.TWSE_SOURCES)) == 1
 
@@ -212,6 +217,8 @@ def test_summary_cli_checks_saved_coverage_without_opening_database(monkeypatch,
 
 def test_summary_empty_directory_does_not_certify_a_clean_audit(tmp_path):
     assert summarize(tmp_path) == 1
+    _write(tmp_path, [{"date": "2026-10-23", "source": "price", "err": None, "miss": 0, "extra": 0, "bad": 0}])
+    assert summarize(tmp_path, {"t86"}) == 1  # 有檔但沒有要看的來源
 
 
 @pytest.mark.parametrize("source,before,first", [
@@ -270,7 +277,8 @@ def test_tpex_audit_rejects_unverifiable_tables_but_accepts_matching_dates(
     monkeypatch.setattr(audit, "db", db)
     audit.tpex([day])
     row = json.loads(audit.result.read_text().splitlines()[-1])
-    assert row["err"] and "miss" not in row
+    # 溢位民國年等也要走日期護欄拒收，不是靠單格例外兜底記成 crash
+    assert row["err"] and not row["err"].startswith("crash") and "miss" not in row
     db.assert_not_called()
     assert summarize(tmp_path) == 1
     # 反向：相同數值、有效且相符的表內日期仍須照常比對。
@@ -280,3 +288,18 @@ def test_tpex_audit_rejects_unverifiable_tables_but_accepts_matching_dates(
     assert row["err"] is None and row["off"] == row["db"] == 1
     assert row["miss"] == row["extra"] == row["bad"] == 0
     assert summarize(tmp_path) == 0
+
+
+_TPEX_PRICE_ROW = ["6488", "環球晶", "500.00", "+5.00", "495.00", "505.00", "490.00", "1,000", "500,000", "100"]
+_TPEX_PRICE_DB = {"6488": [Decimal(v) for v in ("495.00", "505.00", "490.00", "500.00", "1000", "500000", "100")]}
+
+
+def test_tpex_frozen_table_is_err_even_when_db_matches(tmp_path, monkeypatch):
+    # 外層照填請求日、表卻是 08/28 的舊表；DB 也是同一份舊資料，只看外層會判成乾淨
+    audit = audit_script.Audit(None, tmp_path, {"tpex_price"})
+    monkeypatch.setattr(audit, "get", lambda *args: {
+        "stat": "ok", "date": "20261022", "tables": [{"date": "115/08/28", "data": [_TPEX_PRICE_ROW]}]})
+    monkeypatch.setattr(audit, "db", lambda *args, **kw: dict(_TPEX_PRICE_DB))
+    audit.tpex(["2026-10-22"])
+    (row,) = _latest(tmp_path).values()
+    assert row["err"] and "115/08/28" in row["err"]

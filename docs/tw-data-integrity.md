@@ -121,7 +121,8 @@ uv run --env-file .env python scripts/audit_market_vs_official.py --out data/aud
 開始請求前，工具把預期的「日期 × 來源」寫入同目錄的 `expected.json`，同目錄重跑時累積範圍；
 來源尚未開放的日期（T86 早於 2012-05-02、上櫃法人早於 2018-01-15）不計入預期範圍。
 彙總的 `days` 是實際有結果的日數，`missing` 列出預期卻沒有結果的日期；全無結果也以結束碼 1 回報。
-工作執行緒因格式、快取或 DB 例外中斷時，主流程印出 `worker failed` 並以結束碼 1 結束，
+單一 (日期, 來源) 解析、讀快取或查 DB 出例外時記成 `err`＝`crash <例外>` 並繼續下一天；
+這格之外的 worker 例外（例如寫不進 `result.jsonl`）主流程印出 `worker failed` 並以結束碼 1 結束，
 另一市場仍會等到完成；之後離線 `--summary` 也會根據 `expected.json` 回報缺漏。
 舊目錄若沒有 `expected.json`，只彙總已記錄結果並印出 `coverage unverified`，不能用它證明範圍完整。
 舊版已標成功的 TPEx 結果不會因升級而自動重驗；要重新驗證表內日期，請改用新的 `--out` 目錄完整重跑。
@@ -135,7 +136,7 @@ uv run --env-file .env python scripts/audit_market_vs_official.py --out data/aud
 - `miss`：官方有、DB 沒有。
 - `extra`：DB 有、官方沒有。
 - `bad`：兩邊都有但數值不同的列數。`ex` 附前幾個例子，列出代碼和不同的欄位序號。
-- `err`：官方回應日期不符，或表頭認不得。這**不是資料錯**，要人工看原始回應 `raw/`。
+- `err`：官方回應日期不符（上櫃另比對資料表自帶的民國日期，凍結舊表也算）、表頭認不得，或 `crash <例外>`。這**不是資料錯**，要人工看原始回應 `raw/`。
 
 **看到差異時怎麼判斷：**
 
