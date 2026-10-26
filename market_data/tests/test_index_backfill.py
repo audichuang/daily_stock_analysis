@@ -468,7 +468,7 @@ _CLEAN = {"written": 1, "months": 1, "skipped": 0, "failed": [], "partial": [], 
 
 
 @pytest.mark.parametrize("delay_args,pauses", [([], [2.0] * 3), (["--delay", "0"], []),
-                                            (["--delay", "3"], [3.0] * 3)])
+                                               (["--delay", "3"], [3.0] * 3)])
 def test_cli_backfill_index_delay_defaults_and_overrides(net, monkeypatch, delay_args, pauses):
     """跑實際月回補：省略參數沿用函式預設，顯式 0 不被改回預設，跨來源與跨月都等待。"""
     days = {date(2010, 1, 4), date(2010, 1, 5), date(2010, 2, 1)}
@@ -485,7 +485,7 @@ def test_cli_backfill_index_delay_defaults_and_overrides(net, monkeypatch, delay
 
 @pytest.mark.parametrize("source", list(crawl.DAILY))
 @pytest.mark.parametrize("delay_args,pauses", [([], []), (["--delay", "0"], []),
-                                            (["--delay", "3"], [3.0, 3.0])])
+                                               (["--delay", "3"], [3.0, 3.0])])
 def test_cli_backfill_daily_delay_defaults_and_overrides(net, monkeypatch, source, delay_args, pauses):
     """共享 --delay 不應替逐日來源新增等待；明確指定的間隔仍逐日生效。"""
     days = [date(2010, 1, 4), date(2010, 1, 5)]
