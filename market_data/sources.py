@@ -43,6 +43,17 @@ def _roc_to_date(s):
     return datetime.date(int(y) + 1911, int(m), int(d))
 
 
+def _roc_to_date_or_none(s):
+    """同 `_roc_to_date`，但無效日月、超出範圍或溢位的民國年份回 None 而不是 raise。
+
+    官方回應自帶的日期欄只拿來比對請求日，認不得就等同「無法證明新鮮」、由呼叫端拒收；
+    `OverflowError` 不是 `ValueError` 的子類，呼叫端只接 `ValueError` 的話會整段中斷。"""
+    try:
+        return _roc_to_date(s)
+    except (ValueError, OverflowError):
+        return None
+
+
 def _csv_from(text, header_startswith):
     """Slice a TWSE csv blob to the table whose header row starts with the
     given prefix, returning a clean csv string (header + data)."""
@@ -232,10 +243,7 @@ def _title_date_matches(raw, date, name):
     text = raw if isinstance(raw, str) else raw.decode("big5", errors="replace")
     head = text.lstrip("\ufeff \r\n").split("\n", 1)[0]
     m = re.search(r"\d+年\d+月\d+日", head)
-    try:
-        got = _roc_to_date(m.group(0)) if m else None
-    except (ValueError, OverflowError):
-        got = None
+    got = _roc_to_date_or_none(m.group(0)) if m else None
     if got == date:
         return True
     print(f"**WARN: {name} 回應日期 {got or '(無)'} ≠ 請求日 {date},拒收"
@@ -973,9 +981,10 @@ def parse_tdcc_query(html, stock_id, want):
         # 「查無此資料」頁：代號打錯、該週查無資料、帶作廢 token 三種回的頁面逐字相同（實測），
         # 這裡分不出原因，拒收但不印；由 crawl_tdcc_history 彙總成一條 WARN。
         return None
-    got = _roc_to_date(m.group(1))
-    if got.strftime("%Y%m%d") != want:
-        print(f"**WARN: 集保查詢 {stock_id} 資料日期 {got} ≠ 請求 {want},拒收")
+    got = _roc_to_date_or_none(m.group(1))
+    if got is None or got.strftime("%Y%m%d") != want:
+        # 日期認不得（無效日月、溢位年份）同樣只拒收這一週，不讓整檔的歷史查詢中斷
+        print(f"**WARN: 集保查詢 {stock_id} 資料日期 {got or m.group(1)} ≠ 請求 {want},拒收")
         return None
     table = next((t for t in pd.read_html(StringIO(html))
                   if "持股/單位數分級" in [str(c) for c in t.columns]), None)
