@@ -56,6 +56,8 @@ def test_measurement_filters_every_panel_with_the_shared_universe(monkeypatch):
         captured["yoy"] = yoy
         raise PanelsCaptured
 
+    # 先釘住腳本綁的就是共用謂詞；否則下面的 spy 會蓋掉錯誤的本地綁定，守門形同虛設。
+    assert msf.is_common_stock is is_common_stock
     monkeypatch.setattr(msf, "is_common_stock", checked)
     monkeypatch.setattr(msf, "build_signals", capture)
     with pytest.raises(PanelsCaptured):

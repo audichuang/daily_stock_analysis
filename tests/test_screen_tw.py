@@ -238,6 +238,8 @@ def test_funnel_routes_every_code_through_the_shared_predicate(strategy, monkeyp
         seen.append(sid)
         return is_common_stock(sid)
 
+    # 先釘住腳本綁的就是共用謂詞；否則下面的 spy 會蓋掉錯誤的本地綁定，守門形同虛設。
+    assert screen_tw.is_common_stock is is_common_stock
     monkeypatch.setattr(screen_tw, "is_common_stock", checked)
     pool, steps = screen_tw.funnel(df, 2e8, strategy)
 

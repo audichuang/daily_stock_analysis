@@ -13,6 +13,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -70,6 +74,88 @@ def test_indicators_align_to_price_columns():
     assert list(ind["inst5"].columns) == ["1234", "5678"]
     assert list(ind["pe"].columns) == ["1234", "5678"]
     assert ind["inst5"]["5678"].iloc[-1] == pytest.approx(0.0)  # 無資料補 0，不是 NaN
+
+
+@pytest.mark.parametrize("mode", ["single", "all-factors", "null-trials"])
+@pytest.mark.parametrize("shared_exclusion", [None, "2330"])
+def test_main_uses_shared_universe_for_signals_and_trades(mode, shared_exclusion, monkeypatch):
+    """真實入口排除非普通股、保留 9xxx 普通股，且共用判斷的回傳值必須影響選股。"""
+    import backtest_screen as b
+    from market_data.adjust import is_common_stock
+
+    accepted = {"2330", "6488", "5305", "9802", "9904", "9921"}
+    codes = [*sorted(accepted), "0050", "00878", "00631L", "9105", "912000",
+             "2887A", "020039", "70001"]
+    days = pd.bdate_range("2020-01-02", periods=70)
+    close = pd.DataFrame({
+        sid: [100.0 + i + j * 0.01 * (i % 2) for i in range(len(days))]
+        for j, sid in enumerate(codes)
+    }, index=days)
+    piv = {k: close.copy() for k in ("close", "open", "high", "low")}
+    piv.update(turnover=close * 0 + 5e8, pe_ratio=close * 0 + 15.0)
+    inst = pd.DataFrame([
+        {"date": d, "stock_id": sid, "foreign_net": 100.0, "trust_net": 0.0, "dealer_net": 0.0}
+        for d in days for sid in codes
+    ])
+    val = pd.DataFrame([
+        {"date": days[-5], "stock_id": sid, "pb_ratio": 1.0, "dividend_yield": 3.0}
+        for sid in codes
+    ])
+    rev = pd.DataFrame([{"date": days[-5], "stock_id": sid, "yoy": 30.0} for sid in codes])
+    # 只替換資料庫邊界；指標、排名、宇宙遮罩、基準與交易迴圈全部跑真實實作。
+    engine = object()
+    monkeypatch.setattr(b, "get_engine", lambda: engine)
+
+    def load_panel(actual_engine, *args):
+        assert actual_engine is engine
+        return piv, inst, val, rev
+
+    monkeypatch.setattr(b, "load_panel", load_panel)
+    assert b.is_common_stock is is_common_stock
+    seen = []
+
+    def checked(sid):
+        seen.append(sid)
+        return is_common_stock(sid) and sid != shared_exclusion
+
+    monkeypatch.setattr(b, "is_common_stock", checked)
+    # 隨機對照會新增 _null 因子、重設全域亂數；兩者都要在測試後還原。
+    monkeypatch.setattr(b, "FACTORS", dict(b.FACTORS))
+    rng_state = b.np.random.get_state()
+    runs = []
+    real_run = b.run
+
+    def record_run(ind, open_, run_days, sig, *args, **kwargs):
+        trades, ledger = real_run(ind, open_, run_days, sig, *args, **kwargs)
+        runs.append((sig, trades))
+        return trades, ledger
+
+    monkeypatch.setattr(b, "run", record_run)
+    argv = ["--start", str(days[-3].date()), "--end", str(days[-1].date()),
+            "--top", str(len(codes)), "--slots", str(len(codes)), "--exit", "none",
+            "--include-tib"]
+    if mode == "all-factors":
+        argv.append("--all-factors")
+    elif mode == "null-trials":
+        argv.extend(["--null-trials", "2"])
+    expected_runs = {"single": 1, "all-factors": len(b.FACTORS), "null-trials": 3}[mode]
+    try:
+        assert b.main(argv) == 0
+    finally:
+        b.np.random.set_state(rng_state)
+
+    expected = accepted - {shared_exclusion}
+    assert len(runs) == expected_runs
+    for sig, trades in runs:
+        picked = {sid for picks in sig.values() for sid in picks}
+        assert picked and picked <= expected
+        assert not trades.empty
+        assert set(trades["stock_id"]) <= expected
+    # 第一輪所有合格普通股都能選入並成交，不能只驗「全部擋掉」。
+    assert {sid for picks in runs[0][0].values() for sid in picks} == expected
+    assert set(runs[0][1]["stock_id"]) == expected
+    assert seen == codes
+    assert list(piv["close"].columns) == codes  # 0050 仍保留在價格面板供基準使用。
 
 
 # --- 交易成本：這段是 money path，之前的 bug 正是成本只記在報酬欄、沒從現金扣 ---
@@ -358,3 +444,21 @@ def test_run_unfilled_sell_order_is_retried_not_dropped():
     assert len(trades) == 1
     assert trades["exit_day"].iloc[0] == days[3]          # 順延一天成交，不是消失
     assert trades["reason"].iloc[0] == "跌破MA60"
+
+
+# ---- 研究宇宙：遮罩後候選仍要補滿 top_n（入口宇宙見 test_main_uses_shared_universe_*） -----
+UNIVERSE_COMMON = {"2330", "6488", "5305", "9802", "9904", "9921"}
+
+
+def test_precompute_signals_drops_masked_picks_and_refills_top_n(monkeypatch):
+    """遮罩掉的代碼不能只留空位：取 top_n*3 名再過濾，候選數仍補滿 top_n。"""
+    import backtest_screen as bs
+
+    day = pd.Timestamp("2026-01-05")
+    ranked = ["9105", "2887A", "0050", "2330", "9802", "6488"]
+    monkeypatch.setattr(bs, "signals_on", lambda ind, d, mt, n, factor: ranked[:n])
+    mask = {s: s not in UNIVERSE_COMMON for s in ranked}
+
+    out = bs.precompute_signals({}, [day], 0, 2, mask)
+
+    assert out[day] == ["2330", "9802"]
