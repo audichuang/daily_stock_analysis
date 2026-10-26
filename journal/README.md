@@ -118,7 +118,7 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   `scripts/media_picks_summary.py` 的證據、對挑出來的個股跑 `scripts/tw_stock_dossier.py` 後追加。腳本只整理證據，好壞由 Claude
   判斷；這個檔讓那些判斷可以回驗（例如 `research` 與 `avoid` 之後的報酬差）。研究名單，不是買進訊號。
 
-  選檔前也讀摘要的「前幾輪點名過、判斷檔沒有涵蓋的檔」（JSON `unjudged`，索引末段只放每輪統計與判斷過卻沒寫進判斷檔的檔，完整清單用 `--unjudged`）：回看 7 天、早於本輪擷取、且此檔沒有涵蓋那次點名的判斷列（有 `written_at` 的列只看它是否不早於那次擷取；沒有 `written_at` 的舊列才看 `since`）（已套用代號覆核；更早的舊判斷不算涵蓋，列在 `last_verdict`）。附點名時段、多空人數、`media_picks_judge.py --log` 記下的判斷紀錄；沒有判斷紀錄不代表判過。要不要補判、補哪幾檔由主 agent 決定，新舊候選共用 8 檔上限；補判的檔 `--code`（也就是逐檔判斷拿到的原話）會附上前幾輪的舊證據。腳本不自動補判、不推定投資建議；`since` 與 `--judge-since` 保留原語義。
+  選檔前也讀摘要的「前幾輪點名過、判斷檔沒有涵蓋的檔」（JSON `unjudged`，索引末段只放每輪統計與判斷過卻沒寫進判斷檔的檔，完整清單用 `--unjudged`）：回看 7 天、早於本輪擷取、且此檔沒有涵蓋那次點名的判斷列（有 `written_at` 的列只看它是否不早於那次擷取；沒有 `written_at` 的舊列才看 `since`）（已套用代號覆核；更早的舊判斷不算涵蓋，列在 `last_verdict`）。附點名時段、多空人數、`media_picks_judge.py --log` 記下的判斷紀錄；沒有判斷紀錄不代表判過。要不要補判、補哪幾檔由主 agent 決定，新舊候選共用 8 檔上限；補判的檔 `--code`（也就是逐檔判斷拿到的原話）會附上前幾輪的舊證據。舊證據的原話帶代號比對狀態（`resolve`、說的名稱、LLM 代號、影片 id、覆核結果）：前幾輪代號沒把握的點名不在本輪 review 清單，`--unjudged` 會標「代號沒把握且未覆核 N 筆」，要不要先覆核（逐字稿在 `data/media_picks/<video_id>.txt`）由主 agent 決定。腳本不自動補判、不推定投資建議；`since` 與 `--judge-since` 保留原語義。
 
   | 欄位 | 意思 |
   | --- | --- |

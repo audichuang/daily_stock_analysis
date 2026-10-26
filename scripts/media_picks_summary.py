@@ -47,7 +47,10 @@ RECENT_DAYS = 7
 INDEX_FULL_VOICES = 2  # 講者數達到這個值的檔在索引裡給完整一行；只有一位講者的壓成短行
 # media_picks_judge.py --log 追加到該輪 log 的判斷紀錄：「<時刻> | JUDGE <JSON>」，JSON 是腳本自己寫的 {at, since, code, ok, error}
 JUDGE_TAG = "| JUDGE "
-VOICE_FIELDS = ("speaker", "show", "kind", "stance", "theme", "reason", "condition", "quote", "corrected_from")
+# resolve／name_said／code_llm／video_id／review_verdict 是代號比對狀態：前幾輪沒把握的點名不在本輪 review 清單，
+# 舊證據要自己帶著，判斷的人才看得出這段原話可能講的是別檔
+VOICE_FIELDS = ("speaker", "show", "kind", "stance", "theme", "reason", "condition", "quote", "corrected_from",
+                "resolve", "name_said", "code_llm", "video_id", "review_verdict")
 
 
 def _side(stance) -> str:
@@ -108,7 +111,8 @@ def _apply_reviews(rows: list, verdicts: list, stock_index: Path) -> list:
     """把覆核結論套到每一列（本輪與歷史都套，歷史才看得到更正後的代號）；回傳拷貝，不動輸入。
 
     比對鍵用原始 stock_code；同鍵多筆以最後一筆為準（檔案是 append-only）。
-    只有 correct 且 corrected_code 非空才改代號，not_stock 清掉代號，confirm／unclear 不動。"""
+    只有 correct 且 corrected_code 非空才改代號，not_stock 清掉代號，confirm／unclear 不動代號；
+    有覆核的列都記下 review_verdict（顯示用，讓前幾輪的舊證據看得出這筆覆核過沒有）。"""
     latest = {review_key(v): v for v in verdicts}
     if not any(review_key(r) in latest for r in rows):
         return rows
@@ -117,6 +121,8 @@ def _apply_reviews(rows: list, verdicts: list, stock_index: Path) -> list:
     for r in rows:
         v = latest.get(review_key(r))
         verdict = v and v.get("verdict")
+        if verdict:
+            r = dict(r, review_verdict=verdict)
         fixed = ((v.get("corrected_code") or "").strip() or None) if verdict == "correct" else None
         if verdict == "not_stock" or fixed:
             r = dict(r, stock_code=fixed, corrected_from=r.get("stock_code") or UNRESOLVED)
@@ -284,6 +290,10 @@ def unjudged_block(rows: list, ptt_rows: list, verdict_rows: list, rounds: list,
             "bull_voices": len(bull), "bear_voices": len(bear),
             "neutral_voices": len({_voice(r) for r in media} - bull - bear),
             "ptt_articles": len({r.get("article_id") for r in ptt}),
+            # 代號沒把握（code_mismatch／fuzzy／unresolved）又沒有覆核紀錄的點名與 PTT 文數：只是計數，要不要先覆核由主 agent 決定
+            "unreviewed_uncertain_rows": (
+                sum(1 for r in media if r.get("resolve") in REVIEW_RESOLVES and not r.get("review_verdict"))
+                + sum(1 for r in ptt if r.get("resolve") in REVIEW_RESOLVES)),
             "last_verdict": last and {k: last.get(k) for k in ("date", "since", "verdict")},
             "judge_attempts": [{"at": at.isoformat(), "ok": bool(j.get("ok")), "error": j.get("error")}
                                for at, j in sorted(attempts.get(code, []), key=lambda x: x[0]) if at >= first_at],
@@ -471,6 +481,10 @@ def _stock_block(st: dict) -> list:
         who = f"{v['speaker'] or '（無講者）'}／{v['show']}／{v['kind'] or 'tv'}"
         if v["corrected_from"]:
             who += "（原未對到代號，覆核更正）" if v["corrected_from"] == UNRESOLVED else f"（原對到 {v['corrected_from']}，覆核更正）"
+        elif v.get("resolve") in REVIEW_RESOLVES:
+            review = f"覆核 {v['review_verdict']}" if v.get("review_verdict") else "未覆核"
+            who += (f"（代號比對 {v['resolve']}：說「{v.get('name_said') or '—'}」、LLM 代號 {v.get('code_llm') or '—'}、"
+                    f"影片 {v.get('video_id') or '—'}、{review}）")
         parts = [f"題材：{v['theme']}" if v["theme"] else "", f"理由：{v['reason']}" if v["reason"] else "",
                  f"條件：{v['condition']}" if v["condition"] else "", f"「{v['quote']}」" if v["quote"] else ""]
         lines.append(f"- [{_label(v['stance'])}] {who}｜" + "｜".join(p for p in parts if p))
@@ -545,6 +559,8 @@ def _unjudged_line(c: dict) -> str:
     tries = "；".join(_attempt_text(a) for a in c["judge_attempts"]) or "沒有判斷紀錄"
     this = "｜本輪也有點名" if c["named_this_round"] else ""
     ptt = f" PTT {c['ptt_articles']}" if c["ptt_articles"] else ""
+    if c.get("unreviewed_uncertain_rows"):
+        ptt += f"｜代號沒把握且未覆核 {c['unreviewed_uncertain_rows']} 筆"
     held = "（持股）" if c.get("held") else ""
     return (f"- {c['name'] or '?'} {c['code']}{held}｜點名 {_hm(c['first_extracted_at'])}～{_hm(c['last_extracted_at'])}"
             f"（播出 {','.join(d[5:] for d in c['named_dates']) or '—'}）｜多 {c['bull_voices']} 空 {c['bear_voices']}"

@@ -514,3 +514,44 @@ def test_unjudged_round_counts_verdict_rows_per_round(tmp_path, index_path):
     s, _ = _unjudged(tmp_path, index_path, [_pick()], verdicts)
     r24, r25 = s["unjudged"]["rounds"]
     assert (r24["verdict_rows"], r25["verdict_rows"]) == (2, 1)
+
+
+def test_prior_fuzzy_pick_keeps_identity_status_in_unjudged_evidence(tmp_path, index_path):
+    # 前幾輪的 fuzzy 點名不在本輪 review 清單：舊證據要帶出代號比對狀態、說的名稱、LLM 代號與影片，
+    # 主 agent／逐檔判斷才看得出「原油正二」被對到黃金 ETF 的代號，自己決定要不要判
+    fuzzy = _prior("00708L.TW", name="期元大S&P黃金正2", name_said="油價正二", code_llm="00672L",
+                   resolve="fuzzy", video_id="vid9", quote="油價正二可以留意")
+    _logs(tmp_path)
+    _write(tmp_path / "media-picks.jsonl", [fuzzy, _prior(), _pick()])
+    _write(tmp_path / "ptt-picks.jsonl", [])
+    _write(tmp_path / "media-picks-review.jsonl", [])
+    s = mod.summarize(SINCE, journal_dir=tmp_path, transcript_dir=tmp_path / "tr", stock_index=index_path,
+                      logs_dir=tmp_path / "logs")
+    c = {x["code"]: x for x in s["unjudged"]["codes"]}
+    v = c["00708L.TW"]["stock"]["voices"][0]
+    assert (v["resolve"], v["name_said"], v["code_llm"], v["video_id"]) == ("fuzzy", "油價正二", "00672L", "vid9")
+    assert c["00708L.TW"]["unreviewed_uncertain_rows"] == 1
+    text = mod.stock_detail(s, "00708L.TW")
+    assert "代號比對 fuzzy" in text and "說「油價正二」" in text and "LLM 代號 00672L" in text and "未覆核" in text
+    assert "代號沒把握且未覆核 1 筆" in mod.unjudged_detail(s)
+    # 反向：exact 的點名不加標記；覆核 confirm 過的列照實寫出覆核結果、不算未覆核
+    assert c["3037.TW"]["unreviewed_uncertain_rows"] == 0
+    assert "代號比對" not in mod.stock_detail(s, "3037.TW")
+    _write(tmp_path / "media-picks-review.jsonl", [_verdict(fuzzy, "confirm")])
+    s2 = mod.summarize(SINCE, journal_dir=tmp_path, transcript_dir=tmp_path / "tr", stock_index=index_path,
+                       logs_dir=tmp_path / "logs")
+    c2 = {x["code"]: x for x in s2["unjudged"]["codes"]}
+    assert c2["00708L.TW"]["unreviewed_uncertain_rows"] == 0
+    assert "覆核 confirm" in mod.stock_detail(s2, "00708L.TW")
+    assert "代號沒把握且未覆核" not in mod.unjudged_detail(s2)
+
+
+def test_prior_fuzzy_ptt_article_counts_as_unreviewed_uncertain(tmp_path, index_path):
+    ptt = [{"article_id": "M.3", "title": "[標的] 正二 多", "stock_code": "00708L.TW", "target": "正二",
+            "resolve": "fuzzy", "stance": "bullish", "extracted_at": "2026-10-25T23:30:00+08:00"},
+           {"article_id": "M.4", "title": "[標的] 欣興 多", "stock_code": "3037.TW", "target": "欣興",
+            "resolve": "exact", "stance": "bullish", "extracted_at": "2026-10-25T23:30:00+08:00"}]
+    s, codes = _unjudged(tmp_path, index_path, [_pick()], ptt=ptt)
+    assert codes["00708L.TW"]["unreviewed_uncertain_rows"] == 1
+    assert codes["3037.TW"]["unreviewed_uncertain_rows"] == 0
+    assert "代號待確認" in mod.stock_detail(s, "00708L.TW")
