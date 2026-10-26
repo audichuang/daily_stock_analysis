@@ -15,6 +15,10 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 from fastapi.testclient import TestClient
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 try:
     import litellm  # noqa: F401
 except ModuleNotFoundError:
@@ -1118,6 +1122,47 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self.assertAlmostEqual(out[date(2026, 1, 5)], 7.1)  # next bar's Open
         self.assertAlmostEqual(out[date(2026, 1, 6)], 7.2)  # no successor: daily Close (warned)
 
+    def test_fx_daily_successor_skips_weekends_but_keeps_next_weekday_open(self) -> None:
+        for next_weekday in (False, True):
+            with self.subTest(next_weekday=next_weekday):
+                rows = [
+                    ("2026-10-22", 0.2040, 0.2041),
+                    ("2026-10-23", 0.2041, 0.2042),
+                    ("2026-10-24", 0.1963, 0.1963),
+                    ("2026-10-25", 0.1963, 0.1963),
+                ]
+                if next_weekday:
+                    rows.append(("2026-10-26", 0.2043, 0.2044))
+                closes = self._fetch_with(None, self._ohlc(rows), as_of=date(2026, 10, 23))
+                self.assertEqual(closes, [
+                    (date(2026, 10, 22), 0.2041),
+                    (date(2026, 10, 23), 0.2043 if next_weekday else 0.2042),
+                ])
+
+    def test_fx_refresh_uses_bar_age_including_weekend_allowance(self) -> None:
+        bar_date = date(2026, 1, 6)
+        account = self.service.create_account(name="US", broker="Demo", market="us", base_currency="USD")
+        self.service.record_cash_ledger(
+            account_id=account["id"], event_date=bar_date, direction="in", amount=1000.0, currency="USD"
+        )
+        for age in (0, 1, 2, 3, 4, 6, 7):
+            with self.subTest(age=age):
+                as_of = bar_date + timedelta(days=age)
+                with patch.object(PortfolioService, "_fetch_fx_closes_from_yfinance", return_value=[(bar_date, 7.05)]), patch.object(
+                    PortfolioService, "_london_today", return_value=as_of
+                ):
+                    summary = self.service.refresh_fx_rates(account_id=account["id"], as_of=as_of)
+                row = self._fx_row(as_of)
+                self.assertAlmostEqual(row.rate, 7.05)
+                self.assertEqual(bool(row.is_stale), age > 3)
+                self.assertEqual(summary["updated_count"], int(age <= 3))
+                self.assertEqual(summary["stale_count"], int(age > 3))
+                snapshot = self.service.get_portfolio_snapshot(
+                    account_id=account["id"], as_of=as_of, include_realtime=False
+                )
+                self.assertEqual(snapshot["fx_stale"], age > 3)
+        self.assertFalse(self._fx_row(bar_date).is_stale)
+
     def test_fx_fetch_hourly_beats_daily_for_same_day(self) -> None:
         hourly = self._ohlc([("2026-01-05 22:00", 7.0, 7.33)])
         daily = self._ohlc([("2026-01-05", 7.0, 6.90), ("2026-01-06", 7.1, 7.2)])
@@ -1681,6 +1726,46 @@ class PortfolioPr2TestCase(unittest.TestCase):
         self._refresh_twd_cny([(d8, 0.1963)], [(d8, 32.6)], [(d8, 6.665)], d8, d8)
         self.assertAlmostEqual(self._twd_row(d8).rate, 0.1963)
         self.assertEqual(self._twd_row(d8).source, "manual")
+
+    def _refresh_rejected_friday(self):
+        friday, saturday = date(2026, 10, 23), date(2026, 10, 24)
+        with patch.object(PortfolioService, "_fetch_fx_cross_closes", return_value={}), patch.object(
+            PortfolioService, "_fetch_fx_cross_rate", return_value=0.2045
+        ):
+            self._refresh_twd_cny([(friday, 0.1963)], [], [], saturday, saturday)
+        return friday, saturday
+
+    def test_fx_all_rejected_skips_stored_junk_before_as_of_and_keeps_earlier_real_rate(self) -> None:
+        for safe_source in ("manual", "yfinance_backfill"):
+            with self.subTest(safe_source=safe_source):
+                self._seed_twd(date(2026, 10, 22), 0.2045, safe_source, False)
+                self._seed_twd(date(2026, 10, 23), 0.1963, "yfinance_backfill", False)
+                friday, saturday = self._refresh_rejected_friday()
+                self.assertIsNone(self._twd_row(friday))
+                row = self._twd_row(saturday)
+                self.assertAlmostEqual(row.rate, 0.2045)
+                self.assertTrue(row.is_stale)
+                self.assertEqual(self._twd_row(date(2026, 10, 22)).source, safe_source)
+
+    def test_fx_all_rejected_without_clean_rate_cannot_reuse_prior_junk_in_snapshot(self) -> None:
+        self._seed_twd(date(2026, 10, 23), 0.1963, "yfinance_backfill", False)
+        self._seed_twd(date(2026, 10, 24), 0.1963, "yfinance", False)
+        friday, saturday = self._refresh_rejected_friday()
+        self.assertIsNone(self._twd_row(friday))
+        self.assertIsNone(self._twd_row(saturday))
+        snapshot = self.service.get_portfolio_snapshot(as_of=saturday, include_realtime=False)
+        self.assertTrue(snapshot["fx_missing"])
+        self.assertEqual(snapshot["fx_missing_pairs"], ["TWD/CNY"])
+
+    def test_fx_all_rejected_preserves_manual_and_valid_auto_rates_on_rejected_prior_date(self) -> None:
+        for source, rate in (("manual", 0.1900), ("yfinance_backfill", 0.2030)):
+            with self.subTest(source=source):
+                self._seed_twd(date(2026, 10, 23), rate, source, False)
+                friday, saturday = self._refresh_rejected_friday()
+                self.assertEqual(self._twd_row(friday).source, source)
+                self.assertAlmostEqual(self._twd_row(friday).rate, rate)
+                self.assertAlmostEqual(self._twd_row(saturday).rate, rate)
+                self.assertTrue(self._twd_row(saturday).is_stale)
 
     def test_fx_refresh_empty_main_series_skips_cross_legs(self) -> None:
         account = self.service.create_account(name="TW", broker="Demo", market="tw", base_currency="TWD")

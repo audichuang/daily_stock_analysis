@@ -54,6 +54,9 @@ FX_FALLBACK_SOURCE = "fallback_1_to_1"
 FX_AUTO_SOURCES = ("yfinance", "yfinance_backfill", "yfinance_cross")
 FX_REFRESH_BUDGET_SECONDS = 20.0  # whole-refresh network budget; the web client gives up at 30s
 FX_REQUEST_TIMEOUT_SECONDS = 10.0  # per yfinance request, capped by the remaining budget
+# 逾時的 daemon 無法強制中止；所有刷新共用名額，直到工作真正結束才歸還。
+FX_MAX_IN_FLIGHT_REQUESTS = 4
+_FX_IN_FLIGHT = threading.BoundedSemaphore(FX_MAX_IN_FLIGHT_REQUESTS)
 _FX_DEADLINE: ContextVar[Optional[float]] = ContextVar("fx_refresh_deadline", default=None)
 FX_OUTLIER_MAX_DEVIATION = 0.02  # a bar this far (relative) from its reference counts as deviating
 
@@ -77,6 +80,10 @@ def _fx_call(fn: Any, /, *args: Any, **kwargs: Any) -> Any:
     timeout = _fx_request_timeout()
     if timeout is None:
         return None
+    limiter = _FX_IN_FLIGHT
+    if not limiter.acquire(blocking=False):
+        logger.warning("匯率請求已達程序併發上限，沿用快取")
+        return None
     box: Dict[str, Any] = {}
 
     def run() -> None:
@@ -84,9 +91,15 @@ def _fx_call(fn: Any, /, *args: Any, **kwargs: Any) -> Any:
             box["value"] = fn(*args, timeout=timeout, **kwargs)
         except BaseException as exc:  # re-raised in the caller below
             box["error"] = exc
+        finally:
+            limiter.release()
 
-    worker = threading.Thread(target=run, daemon=True)
-    worker.start()
+    try:
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+    except BaseException:
+        limiter.release()
+        raise
     worker.join(timeout)
     if worker.is_alive():
         logger.warning("yfinance 請求超過剩餘時限 %.1fs，放棄此次結果", timeout)
@@ -117,6 +130,11 @@ def _london_date(ts: Any) -> date:
 
 def _format_fx_pair(pair: Tuple[str, str]) -> str:
     return f"{pair[0]}/{pair[1]}"
+
+
+def _fx_rates_deviate(value: float, reference: float) -> bool:
+    """抓價、快取失效與交叉修補共用同一個偏離門檻。"""
+    return abs(value / reference - 1.0) > FX_OUTLIER_MAX_DEVIATION
 
 
 def _portfolio_limitations_for_market(market: str) -> List[str]:
@@ -1738,19 +1756,33 @@ class PortfolioService:
                     if fetched
                     else {}
                 )
+                rejected_references: Dict[date, float] = {}
                 closes = accepted = self._filter_fx_outliers(
                     from_currency=from_currency,
                     to_currency=to_currency,
                     as_of_date=as_of_date,
                     closes=fetched,
                     cross_closes=cross_closes,
+                    rejected_references=rejected_references,
                 )
                 all_rejected = bool(fetched) and not closes
                 kept_dates = {d for d, _ in closes}
                 # Bars the cross check rejected: their stored auto rows may hold the same junk (see backfill).
                 repairs = {d: cross_closes[d] for d, _ in fetched if d not in kept_dates and d in cross_closes}
+                # 拒收日期的自動列也不可信；先清除，避免回退或下一次快照重新選中舊垃圾列。
+                self._discard_auto_fx_rates(
+                    from_currency=from_currency,
+                    to_currency=to_currency,
+                    dates={d for d, _ in fetched} - kept_dates,
+                    references=rejected_references,
+                )
                 # If the newest bar was rejected, today's rate must not silently become an older bar.
-                rate = closes[-1][1] if closes and closes[-1] == fetched_last else None
+                rate = None
+                if closes and closes[-1] == fetched_last:
+                    bar_date, last_rate = closes[-1]
+                    # 以資料本身的日期判斷年齡；刷新日期不能讓凍結來源重新變新鮮。
+                    if not self._is_fx_rate_aged(SimpleNamespace(rate_date=bar_date), as_of_date):
+                        rate = last_rate
                 # Backfill the bars that passed the filter even when the newest one was rejected, so the
                 # stale carry below starts from the latest accepted value instead of an older stored one.
                 self._backfill_fx_history(
@@ -1790,8 +1822,7 @@ class PortfolioService:
                 # Carry from the newest accepted/repaired bar, not from an older same-day carry row.
                 fallback = SimpleNamespace(rate=carry[1], source="yfinance")
             elif all_rejected:
-                # Every downloaded bar failed the cross check, so a stored automated row for today may be the
-                # same junk. Only a real (non-stale) row from before today is safe; otherwise carry nothing.
+                # 已清掉拒收日期的自動列；只從其餘非 stale 實值回退，保留手動來源。
                 last_real = self._last_real_stored_rate(
                     from_currency=from_currency, to_currency=to_currency, before=as_of_date
                 )
@@ -1799,12 +1830,10 @@ class PortfolioService:
                 if fallback is None:
                     # No clean value to carry: drop today's automated (junk) row so conversion reports the
                     # pair as missing instead of using it. Manual rows are never touched.
-                    removed = self.repo.delete_fx_rate(
+                    self._discard_auto_fx_rates(
                         from_currency=from_currency, to_currency=to_currency,
-                        rate_date=as_of_date, only_sources=FX_AUTO_SOURCES,
+                        dates={as_of_date},
                     )
-                    if removed:
-                        logger.warning("匯率 %s/%s %s 全數被拒收且無乾淨替代值，已刪除當日自動來源列", from_currency, to_currency, as_of_date.isoformat())
             else:
                 fallback = self.repo.get_latest_fx_rate(
                     from_currency=from_currency,
@@ -1824,6 +1853,32 @@ class PortfolioService:
             else:
                 summary["error_count"] += 1
         return summary
+
+    def _discard_auto_fx_rates(
+        self, *, from_currency: str, to_currency: str, dates: Iterable[date],
+        references: Optional[Dict[date, float]] = None,
+    ) -> None:
+        """使不可信自動列失效；已符合拒收參考值的實值與手動來源保留。"""
+        for rate_date in sorted(set(dates)):
+            reference = (references or {}).get(rate_date)
+            if reference is not None:
+                existing = self.repo.get_latest_fx_rate(
+                    from_currency=from_currency, to_currency=to_currency, as_of=rate_date,
+                )
+                if (
+                    existing is not None and existing.rate_date == rate_date and not existing.is_stale
+                    and not _fx_rates_deviate(float(existing.rate), reference)
+                ):
+                    continue
+            removed = self.repo.delete_fx_rate(
+                from_currency=from_currency, to_currency=to_currency,
+                rate_date=rate_date, only_sources=FX_AUTO_SOURCES,
+            )
+            if removed:
+                logger.warning(
+                    "匯率 %s/%s %s 無可信自動值，已刪除自動來源列",
+                    from_currency, to_currency, rate_date.isoformat(),
+                )
 
     @staticmethod
     def _fetch_fx_closes_from_yfinance(
@@ -1866,7 +1921,8 @@ class PortfolioService:
                 start=start, end=(as_of_date + timedelta(days=4)).isoformat(), interval="1d", auto_adjust=False,
             )
             if daily is not None and not daily.empty and "Close" in daily:
-                rows = [(_london_date(ts), row) for ts, row in daily.iterrows()]
+                # 主匯率與 USD 交叉腿共用此處：目標與後繼日 K 都只能來自平日。
+                rows = [(_london_date(ts), row) for ts, row in daily.iterrows() if _london_date(ts).weekday() < 5]
                 for i, (bar_date, row) in enumerate(rows):
                     # No daily close on London weekends; Yahoo's Saturday bar repeats stale junk (10-24: 0.1963)
                     if bar_date > as_of_date or bar_date in closes or bar_date.weekday() >= 5:
@@ -1941,6 +1997,7 @@ class PortfolioService:
         as_of_date: date,
         closes: List[Tuple[date, float]],
         cross_closes: Optional[Dict[date, float]] = None,
+        rejected_references: Optional[Dict[date, float]] = None,
     ) -> List[Tuple[date, float]]:
         """Drop junk bars (TWDCNY=X once printed 0.1962 against ~0.2047 from the USD cross).
 
@@ -1952,20 +2009,19 @@ class PortfolioService:
         For a pair with no USD side, every bar whose London day has a cross rate (`cross_closes`, fetched when
         None) is checked against it instead: junk can repeat on consecutive bars, so two bad neighbours would
         vouch for each other under the neighbour rule. Days without a cross rate fall back to the rules above.
+
+        rejected_references 若有提供，帶回拒收時的參考值，讓快取清理沿用同一判定而不再抓價。
         """
         if cross_closes is None:
             cross_closes = self._fetch_fx_cross_closes(
                 from_currency=from_currency, to_currency=to_currency, as_of_date=as_of_date
             )
 
-        def deviates(a: float, b: float) -> bool:
-            return abs(a / b - 1.0) > FX_OUTLIER_MAX_DEVIATION
-
         kept: List[Tuple[date, float]] = []
         for i, (bar_date, value) in enumerate(closes):
             if bar_date in cross_closes:
                 reference = cross_closes[bar_date]
-                bad = deviates(value, reference)
+                bad = _fx_rates_deviate(value, reference)
             elif i + 1 < len(closes):
                 prev = kept[-1][1] if kept else self._last_real_stored_rate(
                     from_currency=from_currency, to_currency=to_currency, before=bar_date
@@ -1973,7 +2029,7 @@ class PortfolioService:
                 # Prefer the next bar's cross rate: its raw value may itself be rejected below.
                 nxt_date, nxt_raw = closes[i + 1]
                 nxt = cross_closes.get(nxt_date, nxt_raw)
-                bad = prev is not None and deviates(value, prev) and deviates(value, nxt)
+                bad = prev is not None and _fx_rates_deviate(value, prev) and _fx_rates_deviate(value, nxt)
                 reference = prev
             else:
                 # The cross rate is today's value; it is meaningless for a historical as_of.
@@ -1986,8 +2042,10 @@ class PortfolioService:
                     reference = kept[-1][1] if kept else self._last_real_stored_rate(
                         from_currency=from_currency, to_currency=to_currency, before=bar_date
                     )
-                bad = reference is not None and deviates(value, reference)
+                bad = reference is not None and _fx_rates_deviate(value, reference)
             if bad:
+                if rejected_references is not None:
+                    rejected_references[bar_date] = reference
                 logger.warning(
                     "匯率離群值拒收 %s/%s %s：%s（參考值 %s，偏離超過 %.0f%%）",
                     from_currency, to_currency, bar_date.isoformat(), value, reference,
@@ -2033,7 +2091,7 @@ class PortfolioService:
                     manual = not existing.is_stale and existing.source not in FX_AUTO_SOURCES
                     # A stale carry is never a real close for this day, however close it is to the cross rate
                     if manual or (
-                        not existing.is_stale and abs(float(existing.rate) / cross - 1.0) <= FX_OUTLIER_MAX_DEVIATION
+                        not existing.is_stale and not _fx_rates_deviate(float(existing.rate), cross)
                     ):
                         continue
                 self.repo.save_fx_rate(

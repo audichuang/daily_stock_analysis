@@ -1997,6 +1997,7 @@ worker 会把 `triggered`、`skipped`、`degraded`、`failed` 写入 `alert_trig
 - 本 fork：查無匯率走 1:1 回退時，快照另帶 `fx_missing=true` 與 `fx_missing_pairs`（如 `USD/CNY`），該帳戶的 `total_market_value_aggregate` 給 `null`；Web 頂部三張總額卡顯示「不可用」並提示要刷新哪一對，Agent 工具拿到的跨幣別合計也是 `null`。`total_*` 數值欄位仍保留（契約是 float），消費端要看 `fx_missing`。刷新只在按「刷新匯率」時發生（沒有排程），新建外幣帳戶後要刷新一次。
 - 本 fork：匯率快取的日期比快照日早超過 3 天就算 `fx_stale`（常數 `portfolio_service.PORTFOLIO_FX_MAX_AGE_DAYS`，涵蓋週末），不再只看寫入當下的 `is_stale`。年齡只對快照估值日判定，不寫進 daily snapshot 的 `fx_stale`；風險頁回撤的逐日換算仍只看 `is_stale`（歷史日期查到的永遠是當時之前最後一次刷新的匯率）。超過 3 天沒刷新時，快照頂部與集中度／產業卡會標過期或降級，只看單一台幣帳戶也一樣（彙總固定換成 CNY）。
 - 汇率刷新会先尝试在线源；若在线获取失败，则回退到最近一次缓存并标记 `is_stale=true`，避免快照和风险页整体不可用。
+- 本 fork：刷新以 Yahoo bar 本身的倫敦日期檢查三天年齡，超齡資料仍可回補歷史，但估值日只存為 `is_stale=true` 的沿用值，重按刷新不會讓凍結資料變新鮮；三天內仍涵蓋週末寬限。日 K 備援只取下一根平日日 K 的 Open，沒有可用值才退回該日 Close，週末日 K 不參與後繼選擇（週日晚間真實小時 K 仍保留）。離群值拒收時，也用相同參考值檢查該日已存的自動列並清除不可信列；仍符合門檻的實值與手動列保留，沒有乾淨回退值就揭露缺匯率。整輪刷新維持 20 秒網路預算，單次請求最多 10 秒且受剩餘預算限制；程序內最多四個抓價工作同時存活，逾時工作真正結束才歸還名額，滿額時直接走快取回退。
 - 当 `PORTFOLIO_FX_UPDATE_ENABLED=false` 时，手动刷新接口会明确返回“在线刷新已禁用”，页面不会误导为“当前没有可刷新的汇率对”。
 - 风险摘要包含集中度、回撤、止损接近度等信息；`sector_concentration` 会优先尝试按板块归类，失败时降级到 `UNCLASSIFIED`，不会阻断风险结果返回。
 
