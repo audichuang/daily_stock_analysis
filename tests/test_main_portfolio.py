@@ -826,6 +826,27 @@ class MergePortfolioHoldingsTest(unittest.TestCase):
                 main.run_full_analysis(config, args, stock_codes)
             self.assertEqual(seen, [expected])
 
+    def test_startup_gate_expected_codes_mirror_the_run_holdings_merge(self):
+        # 啟動去重閘門的預期清單必須跟 run_full_analysis 一樣併入持股；
+        # 少了它，當天新增的持股會被「當日全量已覆蓋」誤判而略過。
+        args = SimpleNamespace(portfolio=None)
+
+        def _passthrough(_config, _args, codes):
+            return list(codes), None, False
+
+        for stock_codes, expected in ((None, ["2330.TW", "5469.TW"]), (["2317.TW"], ["2317.TW"])):
+            config = SimpleNamespace(
+                stock_list=["2330.TW"],
+                analyze_portfolio_holdings=True,
+                refresh_stock_list=MagicMock(),
+            )
+            with self._ledger([("tw", "5469.TW")]), patch.object(
+                main, "_compute_trading_day_filter", side_effect=_passthrough
+            ):
+                codes, reason = main._resolve_gate_expected_stock_codes(config, args, stock_codes=stock_codes)
+            self.assertIsNone(reason)
+            self.assertEqual(codes, expected)
+
 
 class MainMarketReviewFailureTest(unittest.TestCase):
     """T25：大盤複盤失敗不能被個股結果掩蓋（個股照推、報告照存，僅回 False）。"""

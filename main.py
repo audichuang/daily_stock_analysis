@@ -749,6 +749,10 @@ def _resolve_gate_expected_stock_codes(
             if stock_codes is not None
             else getattr(config, "stock_list", None) or []
         )
+        if stock_codes is None:
+            # 本 fork：run_full_analysis 對設定清單會併入持股帳本（ANALYZE_PORTFOLIO_HOLDINGS），
+            # 閘門的預期清單也要併，否則當天新增的持股會被「已覆蓋」誤判而跳過。
+            effective_codes = _merge_portfolio_holdings(config, effective_codes)
         filtered_codes, _, _ = _compute_trading_day_filter(
             config, args, effective_codes
         )
