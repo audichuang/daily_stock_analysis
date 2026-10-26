@@ -474,3 +474,43 @@ def test_code_detail_carries_prior_evidence_for_unjudged_code_and_marks_holding(
     both = mod.stock_detail(s, "2330.TW")
     assert both.startswith("### 台積電 2330.TW")
     assert both.index("前幾輪點名過、判斷檔沒有涵蓋") < both.index("舊台積電原話")
+
+
+def test_unjudged_verdict_written_before_a_later_naming_does_not_cover_it(tmp_path, index_path):
+    # 25 號 23:50 判完欣興，隔天 01:00 手動跑 ptt-picks 又被點名（下一輪 log 還沒出現，_round_of 歸到 25 號那輪）：
+    # 判斷寫下時還沒有這次點名，since 落在同一輪也不能算涵蓋
+    verdict = _v("3037.TW", R25, "2026-10-25T23:50:00+08:00")
+    late = [{"article_id": "M.2", "stock_code": "3037.TW", "target": "欣興", "resolve": "exact", "stance": "bullish",
+             "extracted_at": "2026-10-26T01:00:00+08:00"}]
+    _, codes = _unjudged(tmp_path, index_path, [_pick()], [verdict], ptt=late)
+    assert codes["3037.TW"]["ptt_articles"] == 1
+    # 反向：判斷前就擷取的同輪點名仍算判過
+    _, codes = _unjudged(tmp_path, index_path, [_prior(), _pick()], [verdict])
+    assert "3037.TW" not in codes
+
+
+def test_unjudged_missing_intermediate_log_does_not_let_older_verdict_cover(tmp_path, index_path):
+    # 25 號那輪的 log 不見了：25 號的點名被歸到 24 號那輪，24 號的判斷不能把它蓋掉
+    old = _v("3037.TW", R24, "2026-10-24T23:40:00+08:00", "avoid")
+    _, codes = _unjudged(tmp_path, index_path, [_prior(), _pick()], [old], rounds=(R24,))
+    assert codes["3037.TW"]["rounds"] == [R24]
+    assert codes["3037.TW"]["last_verdict"]["verdict"] == "avoid"
+
+
+def test_unjudged_legacy_verdict_without_written_at_still_uses_since(tmp_path, index_path):
+    # 沒有 written_at 的舊判斷列才退回「since 不早於點名所屬那一輪」
+    legacy = {"date": "2026-10-25", "since": R25, "code": "3037.TW", "verdict": "watch"}
+    _, codes = _unjudged(tmp_path, index_path, [_prior(), _pick()], [legacy])
+    assert "3037.TW" not in codes
+    # 反向：舊列的 since 早於點名那一輪就不算
+    legacy24 = dict(legacy, since=R24, date="2026-10-24")
+    _, codes = _unjudged(tmp_path, index_path, [_prior(), _pick()], [legacy24])
+    assert "3037.TW" in codes
+
+
+def test_unjudged_round_counts_verdict_rows_per_round(tmp_path, index_path):
+    verdicts = [_v("3037.TW", R24, "2026-10-24T23:40:00+08:00"), _v("2383.TW", R24, "2026-10-24T23:41:00+08:00"),
+                _v("2330.TW", R25, "2026-10-25T23:50:00+08:00")]
+    s, _ = _unjudged(tmp_path, index_path, [_pick()], verdicts)
+    r24, r25 = s["unjudged"]["rounds"]
+    assert (r24["verdict_rows"], r25["verdict_rows"]) == (2, 1)

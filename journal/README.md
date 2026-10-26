@@ -118,7 +118,7 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   `scripts/media_picks_summary.py` 的證據、對挑出來的個股跑 `scripts/tw_stock_dossier.py` 後追加。腳本只整理證據，好壞由 Claude
   判斷；這個檔讓那些判斷可以回驗（例如 `research` 與 `avoid` 之後的報酬差）。研究名單，不是買進訊號。
 
-  選檔前也讀摘要的「前幾輪點名過、判斷檔沒有涵蓋的檔」（JSON `unjudged`，索引末段只放每輪統計與判斷過卻沒寫進判斷檔的檔，完整清單用 `--unjudged`）：回看 7 天、早於本輪擷取、且此檔沒有 `since`／`written_at` 涵蓋那次點名的判斷列（已套用代號覆核；更早的舊判斷不算涵蓋，列在 `last_verdict`）。附點名時段、多空人數、`media_picks_judge.py --log` 記下的判斷紀錄；沒有判斷紀錄不代表判過。要不要補判、補哪幾檔由主 agent 決定，新舊候選共用 8 檔上限；補判的檔 `--code`（也就是逐檔判斷拿到的原話）會附上前幾輪的舊證據。腳本不自動補判、不推定投資建議；`since` 與 `--judge-since` 保留原語義。
+  選檔前也讀摘要的「前幾輪點名過、判斷檔沒有涵蓋的檔」（JSON `unjudged`，索引末段只放每輪統計與判斷過卻沒寫進判斷檔的檔，完整清單用 `--unjudged`）：回看 7 天、早於本輪擷取、且此檔沒有涵蓋那次點名的判斷列（有 `written_at` 的列只看它是否不早於那次擷取；沒有 `written_at` 的舊列才看 `since`）（已套用代號覆核；更早的舊判斷不算涵蓋，列在 `last_verdict`）。附點名時段、多空人數、`media_picks_judge.py --log` 記下的判斷紀錄；沒有判斷紀錄不代表判過。要不要補判、補哪幾檔由主 agent 決定，新舊候選共用 8 檔上限；補判的檔 `--code`（也就是逐檔判斷拿到的原話）會附上前幾輪的舊證據。腳本不自動補判、不推定投資建議；`since` 與 `--judge-since` 保留原語義。
 
   | 欄位 | 意思 |
   | --- | --- |
@@ -131,7 +131,7 @@ Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更
   | `flip` | 什麼變化會改變看法 |
   | `bull_voices` / `bear_voices` | 本輪看多／看空的講者數（依講者去重） |
   | `data_as_of` | 資料包的基準日 |
-  | `since` | 本輪的 since（log 的 `RESULT since=`，帶時區），表示判到這一輪為止；下一輪的 `media_picks_summary.py --judge-since` 用它找出還沒判過的輪次。補判時判讀範圍會往前涵蓋，但這裡仍記本輪的 since。`media_picks_summary.py` 的「前幾輪點名過、判斷檔沒有涵蓋的檔」也用它：同代號 `since` 不早於那次點名所屬那一輪（或 `written_at` 不早於那次擷取）才算涵蓋 |
+  | `since` | 本輪的 since（log 的 `RESULT since=`，帶時區），表示判到這一輪為止；下一輪的 `media_picks_summary.py --judge-since` 用它找出還沒判過的輪次。補判時判讀範圍會往前涵蓋，但這裡仍記本輪的 since。`media_picks_summary.py` 的「前幾輪點名過、判斷檔沒有涵蓋的檔」也用它：同代號 `written_at` 不早於那次擷取才算涵蓋；沒有 `written_at` 的舊列才退回 `since` 不早於那次點名所屬那一輪 |
   | `written_at` | 寫入時點（帶時區） |
 
   **回驗**：`scripts/verify_media_picks.py`（`make verify-media-picks`）把每筆 verdict（進場＝`written_at` 台北日期之後第一個交易日的開盤）與每個講者點名（進場＝播出日之後第一個交易日的開盤，播出當天的價格一律不用）接上 5／10／20 個交易日後相對 0050 的超額報酬（扣成本），依 verdict、講者（看多與看空分開，看空命中＝超額<0）分表。**命中一律用毛超額（兩邊都不扣成本）**：個股賣出稅 0.3% 對 0050 的 0.1%，淨超額會讓一檔沒動的股票被算成看空命中；均值超額看多用淨（可交易）、看空用毛，報告表頭有註明。**n<20、進場日不足 5 個不同交易日（research−avoid 差兩組各自要 ≥5 天）或 bootstrap 95% CI 跨零一律標 inconclusive**；視窗未走完的事件排除並計數、不補值。逐檔判斷（`media_picks_judge.py`）會把講者的 10 日紀錄附進提示詞，n<20 或進場日<5 天時明寫「樣本不足」要求忽略。

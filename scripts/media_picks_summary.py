@@ -230,8 +230,8 @@ def unjudged_block(rows: list, ptt_rows: list, verdict_rows: list, rounds: list,
     """前幾輪（[since - max_days, since)）被點名、判斷檔裡沒有涵蓋那次點名的判斷列的檔，附上查得到的事實。
 
     只整理事實、不決定要不要補判：要不要放進今晚的 media_picks_judge.py 由主 agent 看完自己決定。
-    一次點名算「有判斷」：判斷檔有同代號、`since` 不早於那次點名所屬那一輪的 since（補判寫的是補判那一輪的 since，
-    一樣晚於被補的那輪），或 `written_at` 不早於那次點名的 extracted_at；比它早的舊判斷不算，記成 last_verdict。
+    一次點名算「有判斷」：判斷檔有同代號、`written_at` 不早於那次點名的 extracted_at；沒有 `written_at` 的舊列才退回
+    `since` 不早於那次點名所屬那一輪的 since。比它早的舊判斷不算，記成 last_verdict。
     judge_attempts 是 media_picks_judge.py --log 記下、在那次點名之後的判斷紀錄（ok／error）；沒帶 --log 的輪就是空的。
     rounds 的每輪統計依判斷紀錄的 `at`（實際開判時刻）歸到它落在的那一輪，不是依呼叫時傳的 since（補判會傳較早的 since）。"""
     tz = since.tzinfo
@@ -248,8 +248,9 @@ def unjudged_block(rows: list, ptt_rows: list, verdict_rows: list, rounds: list,
             attempts.setdefault(j["code"], []).append((at, j))
 
     def covered(code, at, rnd):
-        return any((v_since is not None and rnd is not None and v_since >= rnd)
-                   or (v_written is not None and v_written >= at)
+        # 有 written_at 就只看它：寫下判斷時還沒擷取到的點名不算判過（同一輪 log 之後手動補跑、或中間一輪 log 不見、
+        # 點名被歸到更早那輪時，since 都會誤判成涵蓋）；沒有 written_at 的舊列才退回比 since 與那次點名所屬那一輪
+        return any(v_written >= at if v_written is not None else (v_since is not None and rnd is not None and v_since >= rnd)
                    for (v_since, v_written), _ in marks.get(code, []))
 
     named: dict[str, list] = {}
