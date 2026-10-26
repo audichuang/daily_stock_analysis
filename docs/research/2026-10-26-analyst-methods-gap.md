@@ -49,7 +49,7 @@
   - SUS 和創新高比率都沒有測過。`measure_revenue_momentum.py` 只有 decel、mom_neg、streak、yoy_turn_neg 這些變體（`docs/tw-signal-research-2026-10.md:44`）。
   - YoY 是 U 型、判為噪音，寫在 `screen_tw.py:398-399`。但 YoY≥20 仍是唯一的硬性基本面閘門（`:428`）。
 - **陷阱：**
-  - 「營收更正後存的是原值還是更正值」：在 `market_data/` 裡找不到處理邏輯，**仍是未解問題**，要先查。
+  - 「營收更正後存的是原值還是更正值」：在 `market_data/` 裡找不到處理邏輯，**仍是未解問題**，要先查。（2026-10-26 已查明：後寫覆蓋、不留原值，見 `2026-10-26-exp-revenue-sus.md` §0.1 與 `docs/market-data-pitfalls.md`；實驗 3 的 4 個主檢定全部 inconclusive。）
   - 公告日用佔位值（次月 10 日），已知偏保守。
 
 ### 5. 【實驗 4，改寫】處置公告：從「剔除」改測「延後進場」
