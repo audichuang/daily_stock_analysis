@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
-- [修复] 月營收出場研究只採持股自己的公告日，按事件與可見交易日去重並保留真正的多次公布；空結果仍可摘要，舊研究數字標記作廢並以唯讀重跑結果更正。
+- [修复] `scripts/measure_revenue_momentum.py` 候選池持有中（3b）的剩餘報酬只在該檔自己的營收公告後取樣（同一可見交易日只算一次），不再把全市場每個公告日套到每一檔持股而重複計數同一旗標狀態（同資料下觀察值 3,793 → 3,237）；無觀測時仍回傳帶欄位的空表；`docs/tw-signal-research-2026-10.md` 該列舊數字標作廢並換成重跑值，結論不變
 - [修复] 回測與 DecisionSignal 後驗的盤前同場次進場改為須有開盤前證據（持久化 `market_phase_summary.minutes_to_open`）：開盤後或收盤後以 `analysis_phase=premarket` 手動覆寫的分析不再回溯到場次日當天開盤進場（前視偏誤），改在場次日之後第一根開盤；缺此欄的舊盤前紀錄同樣保守延後一天
 - [修复] Web 回測與 `make shadow-buy` 的停損停利改共用 `backtest_engine.resolve_bar_exit`：開盤已越過停利（或跌破停損）以開盤價出場，不再因同根盤中碰到另一邊記成 `ambiguous_stop_loss`（O112／停利 110／低點 94 原記停損 −5%，實為開盤 +12%），觸發旗標只記實際出場那一邊；DecisionSignal 後驗與回測共用 `backtest_price_basis.resolve_entry_cutoff`，盤前信號改在場次日當天開盤進場（原延到隔日），盤中／盤後口徑不變。既有回測列與 `decision-signal-v2` 盤前列需強制重跑才會更新
 - [修复] 基金 migration `c7d2e9f41a08` 降版前統一檢查 `fund_info` 與 `fund_nav`，任一表有資料就保留全部索引與資料表並拒絕降版，避免公會歷史淨值永久遺失；兩表皆空時仍可正常降版。

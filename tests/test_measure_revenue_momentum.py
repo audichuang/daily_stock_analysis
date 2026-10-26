@@ -265,3 +265,25 @@ def test_main_retains_stock_identity_for_exit_release_dates(monkeypatch):
     ]) == 0
     assert len(observed) == 1
     assert observed[0]["stock_id"].value_counts().to_dict() == {"2330": 2, "2454": 2}
+
+
+def test_pool_exit_rows_reads_flag_at_own_visible_day_not_other_stocks():
+    """旗標面板值＝列號，可追出每列讀的是哪個可見日；別檔公告日不能替持股多生一列。"""
+    idx = pd.bdate_range("2020-03-02", periods=30)
+    cols = pd.Index(["2330.TW", "2454.TW"])
+    rown = np.arange(len(idx), dtype=float)[:, None].repeat(len(cols), axis=1)
+    piv = {"open": pd.DataFrame(rown + 10, index=idx, columns=cols),
+           "close": pd.DataFrame(rown + 20, index=idx, columns=cols)}
+    panels = {f: pd.DataFrame(rown, index=idx, columns=cols) for f in FLAGS}
+    # 2330：第 5、12 列公告；2454 在第 8 列公告；2330 第 25 列公告已超過出場日
+    panels["_ann"] = pd.Series([idx[5], idx[12], idx[8], idx[25]],
+                               index=["2330.TW", "2330.TW", "2454.TW", "2330.TW"])
+    ev = pd.DataFrame({"ti": [2], "stock_id": ["2330.TW"]})
+
+    out = pool_exit_rows(ev, panels, piv, 20, SimpleNamespace())  # 出場列 22
+
+    assert (out["stock_id"] == "2330.TW").all()
+    for f in FLAGS:
+        assert out[f].tolist() == [6.0, 13.0]
+    # 進場＝可見日隔日開盤（列 7／14），出場＝第 22 列收盤
+    assert out["r"].tolist() == pytest.approx([42 / 17 - 1, 42 / 24 - 1])
