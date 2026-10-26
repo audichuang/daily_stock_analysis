@@ -52,6 +52,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # market schema 是唯一資料源、沒有備份；公會淨值檔每檔只留最新一筆，入庫累積的每日淨值抓不回來
+    # （鉅亨只補得到有對照的基金），fund_info.cnyes_id 的 ISIN 對照也要逐檔重查。
+    # 兩表都先檢查，任一表有資料就在移除任何索引或資料表前拒絕（同 d3a8b6e15c27 的護欄）。
+    bind = op.get_bind()
+    row_counts = {
+        table: bind.execute(sa.text(f"SELECT count(*) FROM market.{table}")).scalar_one()
+        for table in ('fund_info', 'fund_nav')
+    }
+    if any(row_counts.values()):
+        counts = '、'.join(f"{table} {count:,} 列" for table, count in row_counts.items())
+        raise RuntimeError(
+            f"拒絕降版：{counts}仍在。market schema 無備份，公會歷史淨值無法重抓；"
+            "請先匯出兩表並確認備份，再自行清空兩表後重跑 downgrade")
     op.drop_index('ix_fund_nav_date', table_name='fund_nav', schema='market')
     op.drop_table('fund_nav', schema='market')
     op.drop_index('ix_fund_info_isin', table_name='fund_info', schema='market')
