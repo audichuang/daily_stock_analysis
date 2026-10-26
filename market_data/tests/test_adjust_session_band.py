@@ -156,6 +156,34 @@ def test_falls_back_to_observed_dates_when_calendar_raises(monkeypatch):
     assert rows[rows["stock_id"] == "6110"].empty
 
 
+def test_session_index_unions_observed_dates_without_inventing_sessions():
+    observed = pd.to_datetime(["2016-06-06", "2016-06-04", "2016-06-02", "2016-06-04"])
+    sessions = adjust._session_index("2016-06-02", "2016-06-06", observed, _weekdays())
+    # 週五即使全市場缺列仍保留；週六補班有成交才納入，週日不得憑空放寬門檻。
+    expected = pd.to_datetime(["2016-06-02", "2016-06-03", "2016-06-04", "2016-06-06"])
+    pd.testing.assert_index_equal(sessions, expected)
+    assert adjust._sessions_between(["2016-06-02"], ["2016-06-04"], sessions).tolist() == [2]
+
+
+@pytest.mark.parametrize("previous_day, event_day, makeup_day, stock_id, previous, opened", [
+    ("2016-06-02", "2016-06-04", "2016-06-04", "5348", 7.84, 6.37),
+    ("2016-01-29", "2016-02-01", "2016-01-30", "5455", 100.0, 85.69),
+    ("2016-01-29", "2016-02-01", "2016-01-30", "4131", 100.0, 111.65),
+])
+def test_observed_makeup_sessions_prevent_false_adjustments(
+        monkeypatch, previous_day, event_day, makeup_day, stock_id, previous, opened):
+    bars = _history(previous_day, price=previous) + [
+        _bar(previous_day, previous, previous, previous, previous, 0.0),
+        _bar(event_day, opened, opened, opened, opened, 0.0),
+    ]
+    # 他檔即使只有一根 K，也能證明該日全市場有交易；不可在 shift 後才收集日期。
+    px = pd.DataFrame([{**b, "stock_id": stock_id} for b in bars] + [
+        {**_bar(makeup_day, 10.0, 10.0, 10.0, 10.0, 0.0), "stock_id": "9998"},
+    ])
+    monkeypatch.setattr(adjust.pd, "read_sql", lambda *a, **k: px.copy())
+    assert adjust.infer_rows(None, set(), event_day, is_session=_weekdays()).empty
+
+
 # --- M5：change 不可用時，分割首日鎖漲跌停 ---
 
 @pytest.mark.parametrize("change", [0.0, None])
@@ -263,9 +291,9 @@ def test_bar_range_outside_every_band_is_not_snapped(monkeypatch):
 def test_usable_change_is_not_overridden_by_band_snap(monkeypatch):
     # 反向：change 可用時以官方參考價為準。前收 20、官方參考價 10.6（close 11 - change 0.4，
     # 因子 0.53 的減資），當日區間 [10.5, 11] 碰巧也塞得進 prev/2 = 10 的漲跌停帶——不可改吸附成 0.5
-    bars = _history("2025-07-18", price=20.0) + [
-        _bar("2025-07-18", 20.0, 20.0, 20.0, 20.0, 0.0),
-        _bar("2025-07-21", 10.8, 11.0, 10.5, 11.0, 0.4),
+    bars = _history("2026-09-18", price=20.0) + [
+        _bar("2026-09-18", 20.0, 20.0, 20.0, 20.0, 0.0),
+        _bar("2026-09-21", 10.8, 11.0, 10.5, 11.0, 0.4),
     ]
     hit = _run(monkeypatch, "6922", bars)
     assert len(hit) == 1

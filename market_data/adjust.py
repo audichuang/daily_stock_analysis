@@ -13,7 +13,7 @@
 | reduction | tpex_revivt     | 上櫃減資          | 官方公告值 |
 | split     | verified_manual | 人工核對的 ETF    | 比對公告後寫死 |
 | split     | inferred_price  | 普通股分割(≈1/N)  | 吸附到精確 1/N |
-| inferred  | inferred_price  | 官方沒涵蓋的剩餘事件 | 優先以 close-change 回推,退而用開盤價 |
+| inferred  | inferred_price  | 官方沒涵蓋的剩餘事件 | 正負號可信時以 close-change 回推，否則用開盤價 |
 
 推導的理論依據：台股普通股有漲跌幅限制（``PRICE_LIMIT_CHANGE`` 之前 ±7%、之後 ±10%），
 所以單日跳空超過當時限制 × 1.1（約 7.7%／11%）必為公司行動。兩根 K 之間隔了 n 個
@@ -31,7 +31,7 @@
 
 **已知限制**：
   - 上櫃減資走 TPEx ``bulletin/revivt``（``tpex_revivt``）。剩餘推導值只是官方沒涵蓋的事件，
-    參考價優先用 ``close - change``（官方漲跌是對恢復後參考價算的），缺值才退回開盤價，
+    僅 ``SIGNED_SINCE`` 起的非零可信漲跌用 ``close - change`` 回推參考價，其餘退回開盤價，
     無法證明精確；正式用途應逐筆與官方公告對表。
   - 同一檔同一天只能存一筆事件（PK 為 ``(stock_id, date)``）。三個官方來源實測**零交集**
     （上市除權息 14,908 × 上市減資 347 × 上櫃除權息 10,892，兩兩交集皆 0 筆），故此限制
@@ -59,6 +59,9 @@ from market_data.writer import upsert
 
 # 台股漲跌幅限制在 2015-06-01 由 ±7% 放寬為 ±10%；門檻依當時制度取 1.1 倍緩衝。
 PRICE_LIMIT_CHANGE = "2015-06-01"
+# 爬取端自此日保留官方漲跌正負號；更早的回補可能翻錯上櫃列，不能拿來推導參考價。
+# 回補腳本共用此截止日，避免重跑污染已帶正確號的新列。
+SIGNED_SINCE = datetime.date(2026, 8, 23)
 SPLIT_RATIOS = (2, 2.5, 3, 4, 5, 6, 7, 8, 10, 20, 25, 50, 100)   # 2.5：6548 的 1:2.5
 MIN_BARS_BEFORE = 6     # 上市初期不推導（前 5 日無漲跌幅限制）
 STALE_GAP_DAYS = 14     # 距前一筆交易超過此天數視為停牌後恢復，不推導
@@ -148,10 +151,11 @@ def _limit_band_split(prev, low, high, lim):
 def _session_index(lo, hi, observed, is_session=None):
     """``lo``~``hi`` 之間的交易日（DatetimeIndex）。
 
-    優先用 ``health`` 的 XTAI 日曆與既有本機臨時休市清單，不連網偵測或寫入清單；
-    日曆取不到或拋例外（例如日期超出 exchange_calendars 的範圍）時退回 ``observed``——price 表裡全市場出現過的日期本身
-    就是交易日清單。不退回週一~五：國定假日會被算成交易日，把複利門檻放寬。
+    合併 ``health`` 的 XTAI 日曆（含既有本機臨時休市清單）與 ``observed``，補上日曆
+    漏列的補班交易日；全市場缺列的交易日仍由日曆保留。不連網偵測或寫入清單。
+    日曆取不到或拋例外時僅用價格裡出現過的日期，不退回週一~五，以免把國定假日算進去。
     """
+    observed = pd.DatetimeIndex(pd.to_datetime(observed)).dropna().normalize().unique().sort_values()
     if is_session is None:
         from market_data import health   # 延遲 import：health 在模組層 import 本模組
         is_session = health._xtai_session_checker(autodetect=False)
@@ -159,10 +163,10 @@ def _session_index(lo, hi, observed, is_session=None):
         try:
             days = pd.date_range(pd.Timestamp(lo).normalize(), pd.Timestamp(hi).normalize(),
                                  freq="D")
-            return pd.DatetimeIndex([d for d in days if is_session(d.date())])
+            return observed.union(pd.DatetimeIndex([d for d in days if is_session(d.date())]))
         except Exception:   # noqa: BLE001 - 日曆範圍外：退回資料本身的日期
             pass
-    return pd.DatetimeIndex(sorted(pd.unique(pd.to_datetime(observed))))
+    return observed
 
 
 def _sessions_between(prev_dates, dates, sessions):
@@ -273,8 +277,10 @@ def fetch_tpex_dividends(start, end, chunk_days=365):
 def infer_rows(conn, known, start, is_session=None):
     """從價格跳空回推未被官方資料解釋的公司行動。``known`` 是已解釋的 (stock_id, date)。
 
-    **用開盤價當參考價的代理**，不是收盤價。台股除權息／恢復買賣當日的開盤競價基準
-    就是官方參考價，開盤價偏離它的幅度遠小於收盤價。用收盤價會讓 factor 定義成
+    正負號可信且通過合理性檢查時用 ``close - change`` 回推參考價；否則仍用開盤價代理。
+    ``SIGNED_SINCE`` 之前的歷史回補可能錯號，即使落在合理價格帶也不採用。
+    台股除權息／恢復買賣當日的開盤競價基準就是官方參考價，開盤價偏離它的幅度遠小於收盤價。
+    用收盤價會讓 factor 定義成
     `close/prev_close`，數學上強制把事件日報酬變成 0，等於把公司行動與當日市場報酬
     一起抹掉（獨立審查指出，每筆可錯 ±10%）。改用開盤價後，事件日的盤中漲跌得以保留。
 
@@ -300,6 +306,8 @@ def infer_rows(conn, known, start, is_session=None):
     px = px.reindex(columns=[*px.columns, *({"high", "low"} - set(px.columns))])
     for col in ("open", "high", "low", "close", "change"):
         px[col] = px[col].astype(float)
+    # 在移除每檔首根 K 前保留全市場日期，首筆成交也能證明補班日有交易。
+    observed = px["date"].drop_duplicates()
     px = px.sort_values(["stock_id", "date"])
     g = px.groupby("stock_id")
     px["prev"] = g["close"].shift(1)
@@ -309,11 +317,12 @@ def infer_rows(conn, known, start, is_session=None):
     px = px[px["prev"].notna()]
     px["factor"] = px["open"] / px["prev"]
     # 偵測仍看開盤跳空；但事件日的官方漲跌是對恢復後參考價算的，close - change 就是參考價，
-    # 比開盤價準（實測開盤代理與官方差約 9%）。只在 change 有值、參考價為正、且開盤落在
-    # 參考價 ±11% 內才採用——change 為 0 常是缺值佔位（歷史 MI_INDEX 的「X」存成 0），
+    # 比開盤價準（實測開盤代理與官方差約 9%）。只在日期已知帶正確號、change 有值、
+    # 參考價為正且開盤落在參考價 ±11% 內才採用——change 為 0 常是缺值佔位（歷史 MI_INDEX 的「X」存成 0），
     # 此時 close - change 退化成收盤價，會抹掉事件日報酬，所以排除，退回開盤價。
     ref = px["close"] - px["change"]
-    ok = (ref.notna() & (px["change"] != 0) & (ref > 0)
+    ok = ((px["date"] >= pd.Timestamp(SIGNED_SINCE))
+          & ref.notna() & (px["change"] != 0) & (ref > 0)
           & ((px["open"] / ref - 1).abs() <= 0.11))
     px["ref"] = ref.where(ok, px["open"])
 
@@ -341,13 +350,13 @@ def infer_rows(conn, known, start, is_session=None):
     jump["factor"] = snapped.map(lambda s: s[0])
     jump["is_split"] = snapped.map(lambda s: s[1])
     if len(jump):
-        sessions = _session_index(px["date"].min(), px["date"].max(), px["date"], is_session)
+        sessions = _session_index(observed.min(), observed.max(), observed, is_session)
         n_sess = pd.Series(_sessions_between(jump["prev_date"], jump["date"], sessions), index=jump.index)
         # 複利門檻：非比例跳空要超過 n 個交易日累積的漲跌停才算公司行動。
         lim_n = jump["lim"].to_numpy() * 1.1
         move = jump["open"] / jump["prev"]
         beyond = (move > (1 + lim_n) ** n_sess) | (move < (1 - lim_n) ** n_sess)
-        # change 不可用（缺值或 0 佔位）而退回開盤價時，鎖漲跌停的分割首日開盤價本身就離參考價
+        # change 不可用（日期不可信、缺值或 0 佔位）而退回開盤價時，鎖漲跌停的分割首日開盤價本身就離參考價
         # 達一個漲跌幅，吸附不到 1/N；改看當日 [low, high] 是否落在某個 prev/N 的漲跌停帶內。
         # 分割停牌可跨多個交易日，但複利範圍內的累積漲跌不能當成精確分割的證據。
         for i in jump.index[~jump["is_split"] & ~jump["ref_ok"] & beyond]:
