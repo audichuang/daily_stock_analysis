@@ -7,10 +7,21 @@
 | 表 | 一列是什麼 | 來源 | 鍵 |
 | --- | --- | --- | --- |
 | `macro_series` | 一個序列一個交易日的收盤值 | yfinance 日線；2／10 年期美債另抓 FRED `fredgraph.csv`（免金鑰） | `(series_id, date)` |
-| `rate_expectations` | 某天快照裡、某場 FOMC、某個結果（升 >25bp／升 25bp／不變／降 25bp／降 >25bp）的機率 | Kalshi `KXFEDDECISION` 公開 API（免金鑰） | `(snapshot_date, meeting_date, outcome)` |
+| `rate_expectations` | 某天快照裡、某場 FOMC、某個結果（升 >25bp／升 25bp／不變／降 25bp／降 >25bp）的機率 | Kalshi `KXFEDDECISION` 公開 API（免金鑰） | `(snapshot_date, snapshot_slot, meeting_date, outcome)`（`snapshot_slot` 見下） |
 | `event_calendar` | 一個事件（FOMC 決議日、watchlist 財報日、美國經濟數據、ISM、央行理監事會） | Fed 官網 `fomccalendars.htm` ＋ Kalshi；財報走 yfinance `Ticker.calendar`；經濟數據走 FRED 行事曆（BEA、Census 備援），首發值走 ALFRED；ISM 規則推估；央行是 repo 內常數表 | `(event_type, symbol, label)` |
 
 序列清單只有一份：`market_data/macro.py` 的 `SERIES`。`scripts/overnight.py` 取其中 `overnight=True` 的那幾列，不另外維護。要加序列改那裡，下一次 daily 就開始累積；要補歷史跑 `cli macro`（`--period` 只影響 yfinance 序列；`FRED:` 序列固定只抓近 800 天，`FRED_LOOKBACK_DAYS`）。
+
+## 07:30 快照與首次可見時間（2026-10-27 起）
+
+回測「當時手上有什麼」要靠這幾張表（migration `b8d2f4a6c0e1`，上線順序：先跑 migration、再部署新程式；舊程式的 `store_rates` 用舊主鍵，新表結構下會失敗，daily 只印 `**WARN`）：
+
+- **`rate_expectations.snapshot_slot`**：主鍵加 `snapshot_slot`，值由台北時間推得——`premarket`（<09:00）、`intraday`、`postclose`（≥13:30）；同 slot 重跑冪等、不同 slot 各自保留，另有 `captured_at`。migration 前的 110 列補成 `legacy`（已無法知道當時是哪個 slot）。**同一天會有多組快照**：讀取端必須先選定一個 slot，否則同一合約機率會被重複加總；`macro_brief.print_rates` 取最新 `(snapshot_date, captured_at)` 的那個 slot，一週前的對照優先同 slot、其次 `premarket`、再其次該日最後抓的。Kalshi 一個 slot 只能抓一次，漏了補不回來。降版時只要有 `snapshot_slot != 'legacy'` 或 `captured_at` 非空的列、或 `(snapshot_date, meeting_date, outcome)` 跨 slot 重複，就會拒絕。
+- **`macro_series_snapshot`**（新，append-only 精神）：`macro.update()` 在同一個交易裡為每次抓取寫一份近期列——只存 `date >= snapshot_date - 7`（約 22 序列 × 5 列；全存每天約 1.1 萬列），欄位 `snapshot_date`／`snapshot_slot`／`series_id`／`date`／`value`／`source`／`received_at`（抓到的時刻）／`as_of_cutoff`（這次抓取開始的時刻）／`staleness_days`（`snapshot_date - date`）。主鍵 `(snapshot_date, snapshot_slot, series_id, date)`，同 slot 重跑 upsert、不同 slot 各自保留；所有 slot 都寫，07:30 的 `make morning` 自然有 `premarket` 那份。與 `macro_series` 同一個交易：`macro_series` 的寫入失敗或快照寫入失敗會一起回滾。
+- **`institutional_initial`**（新）：法人**初版**，欄位同 `institutional` 加 `captured_at`，主鍵 `(stock_id, date)`，`ON CONFLICT DO NOTHING`。只由 `daily_update` 的補缺路徑（`crawl_range(..., record_initial=True)`，來源在 `crawl.REVISED_SOURCES`、非 replace）寫；`cli backfill` 不傳、`refresh_range`（replace，隔日換成定版）不寫，歷史回補不會冒充初版。上線前的日期沒有初版。**初版＝第一次抓到的值，不保證是當晚 18:00 抓的**：daily 是補缺，前一晚失敗或 T86 還沒出時，隔天補抓（07:30 `make morning` 也跑 daily）到的可能已是定版；研究要讀初版時，篩 `captured_at` 落在該交易日當晚的列。初版表只收主表實際接受的鍵（跨市場撞號被 `market_guard` 略過的列不寫）。驗證：隔天 refresh 後兩表應有差異（對 `**REVISED` log）。
+- **`monthly_revenue_first_seen`**（新）：月營收**首次看到的值**，欄位同 `monthly_revenue` 加 `captured_at`，主鍵 `(stock_id, revenue_month)`，DO NOTHING。只由 `daily_update` 呼叫的 `crawl_monthly_revenue(..., record_first_seen=True)` 寫；手動 `cli revenue` 與 `backfill_pit_revenue` 不寫。**上線第一天抓到的「上月」值可能已被公司更正過，那天 `captured_at` 的列不能當首次值。**
+- **`taifex_fut_oi.first_seen_at`／`captured_at`**：`first_seen_at` 設過就不覆蓋（`taifex.store` 自己寫 `ON CONFLICT DO UPDATE`，`writer.upsert` 的 coalesce 做不到），`captured_at` 每次重抓更新；表上線時 0 列，所以零回補成本。
+- **賣方共識不另建表**：共識已隨每份報告落在 `dsa.analysis_history.context_snapshot` 的 `fundamental_context.consensus`（`n_analysts`、`target_median` 等），`as_of` ＝報告時間；第 4 項研究直接從那裡讀。缺的只有「沒被分析的股票」與「固定時點」——要的話另開子票（新表 `market.analyst_consensus_snapshot` ＋每日腳本，不要放進 `data_provider/base.py` 的每檔分析熱路徑，NAS Web 也會走）。
 
 ## 語意與坑
 
@@ -18,7 +29,7 @@
 - **存的是不做除息還原的收盤**（`auto_adjust=False`），代價是 ETF（HYG、EWT）除息日會有一個小缺口。Yahoo 的 `Close` 本身已做分割調整：股票分割後，Yahoo 會把整段歷史換成新尺度。所以 daily 每次**整段重抓近 2 年**（儀表的一年高點與 MA200 都落在這段裡），不能只抓近期，否則分割後新舊列會是兩種尺度（例：一檔 1 拆 2，舊列沒更新，就會算出假的 −50% 回撤）。2 年以前的列可能停在舊尺度，儀表不讀那段。
 - **殖利率類（`kind=yield`）單位是百分比**（4.99 = 4.99%），儀表的變化用 bp 表示。
 - **機率用買賣價中點，不用 `last_price`**：最後成交可能是很久以前的。實測 2026-10-26 的 2027 年 3 月「降 25bp」最後成交 0.35，買賣價卻是 0.06／0.13。沒有賣單（ask 為 0）的結果記 `prob_mid = NULL`，儀表會標「無報價」，不當成 0。各結果是獨立合約，中點加總不一定是 100%。
-- **利率預期沒有歷史快照可補**：Kalshi 只給「現在」的報價，所以 `rate_expectations` 只從開始入庫那天起累積。漏跑一天就永遠少一天，降版 migration 在表內有資料時會拒絕。
+- **利率預期沒有歷史快照可補**：Kalshi 只給「現在」的報價，所以 `rate_expectations` 只從開始入庫那天起累積。漏跑一個 slot 就永遠少一個 slot，降版 migration 在表內有資料時會拒絕。
 - **FOMC 決議日以 Fed 官網為準**：取每場會議的最後一天，跨月會議（`April/May` + `30-1`）取後一個月，非例會（unscheduled、notation vote）略過。Kalshi 合約收盤時間換成美東日期當交叉對照；官網抓不到的那天只剩 Kalshi：不刪任何 FOMC 列，`estimated` 也不覆蓋已經 `confirmed` 的同一場會議；`source` 欄是 `fed+kalshi`（一致）、`fed(kalshi不符)`、`fed`、`kalshi`（官網還沒列，`status=estimated`）。
 - **財報日一律 `estimated`**：yfinance 不給確認狀態，而且實測 MSFT 2026-10-28 盤後的財報，yfinance 給的是 10-29。看到財報日要知道可能差一天。財報的 `label` 是財報日所在季度（`2026Q4`），同季改期會更新同一列；跨季改期時，同一檔未來日期、但這次沒抓到的那筆會被刪掉，已經過去的事件不刪。
 - watchlist 預設 `MSFT GOOGL AMZN META AAPL NVDA TSM MU AVGO AMD ORCL TSLA`，用 `.env` 的 `MACRO_EARNINGS_WATCHLIST`（逗號分隔）覆蓋。
@@ -49,7 +60,7 @@
 腳本只列數字、不下結論，判讀規則在 skill `tw-morning-call` 的「大局」步驟。
 
 - 序列：最新值、1週／1月／3月變化、距一年高點，以及在 MA60／MA200 之上還是之下；最新一列早於今天 5 個曆日以上標「過期」。
-- Fed：最新快照裡未來 6 場會議的升息／不變／降息合計，以及一週前快照的升息機率（有一週前快照時才印）。
+- Fed：最新一個 slot 的快照裡未來 6 場會議的升息／不變／降息合計，以及一週前同 slot 快照的升息機率（有一週前快照時才印；標頭印出快照日與 slot）。
 - 台股：加權對 MA20／60／120／240 的位置與距一年高點；外資、投信近 5／20 日的買賣超。金額是股數 × 當日收盤估算，只看方向與相對大小。
 - **隔夜已公布／今日待公布**（`print_release_columns`，用 `released_at`）：分界是前一台股場次 13:30 台北，到「今天之後的下一場次」13:30 台北（交易日早上就是明天 13:30，今晚的美國數據、ISM、央行才會進待公布欄）。已公布列印名稱、公布時間（台北／美東）、首發實際值（參考期）、前值、vintage、固定字樣「無共識」；ALFRED 還沒收到就印「首發值尚未入庫」；沒有 `series_id` 的列（央行、ISM）印「首發值不適用」，有 `time_note` 就一起印（央行 16:00 是佔位，會標「時間待確認」）。待公布列印時間與事件，「部位暴露」留給判讀的人寫。沒有 `released_at` 的舊列（FOMC、財報）只在下面的 14 天清單。週一早上看得到上週五晚上的 NFP。已發生的夜盤反應不算進來，只提示看『期交所籌碼』段，避免把已反應的漲跌當成可拿到的報酬。
 - 未來 14 天的事件（`--days` 可改）；ISM 是規則推估日。

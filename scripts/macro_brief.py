@@ -106,27 +106,58 @@ def print_series(conn, today, out=print):
         out(f"⚠ DB 沒有這些序列：{missing}（跑 `python -m market_data.cli macro --period 2y` 回補）")
 
 
+_EPOCH = datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
+
+
+def latest_rate_slot(slots):
+    """``[(snapshot_date, slot, captured_at)]`` → 最新的 ``(snapshot_date, slot)``；沒有回 None。
+
+    依 ``(snapshot_date, captured_at)`` 取最大：同一天有多個 slot 時只取最後抓的那一個——
+    把整天所有列一起加總會把同一合約的機率重複計入。``captured_at`` 為 NULL（``legacy`` 舊列）排在最前。"""
+    if not slots:
+        return None
+    best = max(slots, key=lambda r: (r[0], r[2] is not None, r[2] or _EPOCH, r[1]))
+    return best[0], best[1]
+
+
+def prior_rate_slot(slots, snapshot_date, slot, days=7):
+    """一週前的對照：``snapshot_date - days`` 當天或之前最近的一天，同一天內優先同 slot、其次 ``premarket``、
+    再其次該日最後抓的。沒有回 None。"""
+    older = [r for r in slots if r[0] <= snapshot_date - datetime.timedelta(days=days)]
+    if not older:
+        return None
+    day = max(r[0] for r in older)
+    same_day = [r for r in older if r[0] == day]
+    for want in (slot, "premarket"):
+        if any(r[1] == want for r in same_day):
+            return day, want
+    return latest_rate_slot(same_day)
+
+
 def print_rates(conn, out=print):
     from sqlalchemy import text
 
-    snap = conn.execute(text("SELECT max(snapshot_date) FROM market.rate_expectations")).scalar()
+    slots = [tuple(r) for r in conn.execute(text(
+        "SELECT snapshot_date, snapshot_slot, max(captured_at) FROM market.rate_expectations "
+        "GROUP BY snapshot_date, snapshot_slot"))]
     out("\n── Fed 利率預期（Kalshi 買賣價中點；各結果是獨立合約，加總不一定是 100%）──")
-    if snap is None:
+    current = latest_rate_slot(slots)
+    if current is None:
         out("沒有快照（跑 `python -m market_data.cli macro`）")
         return
+    snap, slot = current
     rows = conn.execute(text(
         "SELECT meeting_date, outcome, prob_mid FROM market.rate_expectations "
-        "WHERE snapshot_date = :s AND meeting_date >= :s ORDER BY meeting_date"), {"s": snap}).all()
-    prev = conn.execute(text(
-        "SELECT max(snapshot_date) FROM market.rate_expectations WHERE snapshot_date <= :s - 7"),
-        {"s": snap}).scalar()
+        "WHERE snapshot_date = :s AND snapshot_slot = :k AND meeting_date >= :s ORDER BY meeting_date"),
+        {"s": snap, "k": slot}).all()
+    prev = prior_rate_slot(slots, snap, slot)
     prev_path = {}
     if prev is not None:
         prev_rows = conn.execute(text(
-            "SELECT meeting_date, outcome, prob_mid FROM market.rate_expectations WHERE snapshot_date = :s"),
-            {"s": prev}).all()
+            "SELECT meeting_date, outcome, prob_mid FROM market.rate_expectations "
+            "WHERE snapshot_date = :s AND snapshot_slot = :k"), {"s": prev[0], "k": prev[1]}).all()
         prev_path = {r["meeting"]: r for r in rate_path(prev_rows)}
-    out(f"快照日 {snap}" + (f"（對照 {prev}）" if prev else "（還沒有一週前的快照可對照）"))
+    out(f"快照日 {snap} {slot}" + (f"（對照 {prev[0]} {prev[1]}）" if prev else "（還沒有一週前的快照可對照）"))
     out(f"{'會議':<12}{'升息':>8}{'不變':>8}{'降息':>8}  一週前升息")
     for rec in rate_path(rows)[:6]:
         before = prev_path.get(rec["meeting"])
