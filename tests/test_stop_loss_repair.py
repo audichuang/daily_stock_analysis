@@ -171,6 +171,35 @@ def test_legacy_text_contract_partial_reply_writes_stop_text_only():
     }
 
 
+@pytest.mark.parametrize("text_levels", [("100", "120"), ("", "")], ids=["text-has-levels", "text-empty"])
+def test_legacy_text_contract_partial_reply_writes_every_returned_level(text_levels):
+    # 舊契約、模型回了買點／停損／目標但漏 secondary_buy：模型給的格子都要寫進文字，
+    # 不能只留停損而沿用舊文字價位（混成 100/105/120），也不能把模型給的值丟掉
+    pipeline = _pipeline(_reply({"ideal_buy": 110, "stop_loss": 105, "take_profit": 125}))
+    result = _result("2330.TW", prices=None)
+    points = result.dashboard["battle_plan"]["sniper_points"]
+    points["ideal_buy"], points["take_profit"] = text_levels
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is True
+    assert "sniper_prices" not in result.dashboard["battle_plan"]
+    assert extract_sniper_points(result) == {
+        "ideal_buy": 110, "secondary_buy": None, "stop_loss": 105, "take_profit": 125,
+    }
+    final = _finalize(pipeline, result, "2330.TW")
+    assert (final.decision_type, final.action) == ("buy", "buy")
+    assert final.dashboard["battle_plan"]["cost_check"]["status"] == "ok"
+
+
+def test_legacy_text_contract_null_levels_in_reply_keep_original_text():
+    # 反向：模型回 null 的格子不得蓋掉原文字價位（null 不是模型給的值）
+    pipeline = _pipeline(_reply({"ideal_buy": None, "stop_loss": 95, "take_profit": None}))
+    result = _result(prices=None, text_stop="跌破季線停損")
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is True
+    assert result.dashboard["battle_plan"]["sniper_points"]["ideal_buy"] == "100"
+    assert extract_sniper_points(result) == {
+        "ideal_buy": 100, "secondary_buy": None, "stop_loss": 95, "take_profit": 120,
+    }
+
+
 @pytest.mark.parametrize("decision_type, action, score", [
     ("sell", "reduce", 72),   # 結構化賣出：買入區也不升買入
     ("hold", "hold", 55),     # 買入區外的持有

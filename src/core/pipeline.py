@@ -2818,10 +2818,13 @@ class StockAnalysisPipeline:
             battle["sniper_points"] = sniper_points
         existing = find_sniper_prices(result.dashboard)
         if existing is None and set(returned) != set(SNIPER_KEYS):
-            # 舊版文字契約（沒有 sniper_prices）且模型只回部分格子：停損以純數字寫進文字，
-            # 不另建缺格的 sniper_prices，否則其他格會從「讀文字」變成「模型給 null」
-            if stop is not None:
-                sniper_points["stop_loss"] = returned["stop_loss"]
+            # 舊版文字契約（沒有 sniper_prices）且模型只回部分格子：模型給了數字的每一格都以
+            # 純數字寫進文字（不只停損，否則會混用舊文字價位、丟掉模型剛給的買點／目標），
+            # 不另建缺格的 sniper_prices，否則沒回的格會從「讀文字」變成「模型給 null」；
+            # 模型回 null 的格子不動原文字
+            for key, value in returned.items():
+                if parse_structured_price(value) is not None:
+                    sniper_points[key] = value
         else:
             # 損壞區塊讀取端本來就全讀成 None，換成模型回的格子不會改變其他格的語意
             owner = result.dashboard if result.dashboard.get(SNIPER_PRICES_KEY) is not None else battle
