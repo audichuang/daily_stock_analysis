@@ -38,6 +38,7 @@ cd $WT && git merge upstream/main --no-ff --no-edit -m "chore: merge upstream ma
 - fork 的台股／繁中／Postgres／Claude Code CLI 相關行為一律保留；上游的新能力盡量收進來，兩者都要時手工合併
 - fork 沒有立場的段落（推廣連結、贊助、上游專屬文件）取上游
 - **fork 刻意分歧（衝突時保留 fork、上游再改也別收回來）**：
+  - `claude_code_cli` 的模型選擇鍵 `CLAUDE_CODE_CLI_MODEL`（`src/config.py`、`config_registry.py`、`local_cli_backend.py` 在 `--output-format` 前插入 `--model`，`usage["cli_model"]` 取自 envelope `modelUsage`）是 fork 新增；上游若改 claude preset 的 argv 或 `_replace_runtime_placeholders`，合併時保留這條分支，留空必須完全不帶 `--model`
   - 買賣判讀只讀 LLM 的結構化 `decision_type`／`action`，不從建議句子猜意圖：`report_language.infer_decision_type_from_advice` 只做完整標籤比對（上游 #1289 的子字串／否定掃描已刪），`analyzer.stabilize_decision_with_structure`（含三大法人校準）與 `daily_market_context_guardrail` 都不讀 `operation_advice` 句子；上游若新增呼叫端或把掃描加回來，改成結構化值（`decision_type_for_action`）
 - `docs/CHANGELOG.md`：上游條目進它自己的段，fork 的 `[Unreleased]` 條目全數留在原段
 - 拿不準的塊：選對 fork 現有行為影響最小的解法，在同步紀錄的「衝突裁決」表標 **⚠ 需人工確認**，Bark 裡也點名

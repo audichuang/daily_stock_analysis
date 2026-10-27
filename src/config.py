@@ -45,6 +45,7 @@ from src.llm.backend_registry import (
     LOCAL_CLI_GENERATION_BACKEND_IDS,
     LITELLM_BACKEND_ID,
     OPENCODE_CLI_BACKEND_ID,
+    CLAUDE_CODE_CLI_BACKEND_ID,
     SUPPORTED_AGENT_GENERATION_BACKENDS,
     SUPPORTED_AGENT_UI_BACKENDS,
     SUPPORTED_GENERATION_BACKENDS,
@@ -1018,6 +1019,8 @@ class Config:
     generation_backend_max_concurrency: int = DEFAULT_GENERATION_BACKEND_MAX_CONCURRENCY
     local_cli_backend_max_concurrency: int = DEFAULT_LOCAL_CLI_BACKEND_MAX_CONCURRENCY
     opencode_cli_model: str = ""
+    # 台版新增：claude_code_cli 的 --model 覆蓋值，留空則不帶 --model
+    claude_code_cli_model: str = ""
     # LiteLLM unified model config (provider/model format, e.g. gemini/gemini-3.1-pro-preview)
     litellm_model: str = ""  # Primary model; must include provider prefix when set explicitly
     litellm_fallback_models: List[str] = field(default_factory=list)  # Cross-model fallback list
@@ -1801,6 +1804,7 @@ class Config:
             maximum=MAX_LOCAL_CLI_BACKEND_MAX_CONCURRENCY,
         )
         opencode_cli_model = (os.getenv('OPENCODE_CLI_MODEL', '') or '').strip()
+        claude_code_cli_model = (os.getenv('CLAUDE_CODE_CLI_MODEL', '') or '').strip()
 
         agent_litellm_model = normalize_agent_litellm_model(
             os.getenv('AGENT_LITELLM_MODEL', ''),
@@ -1974,6 +1978,7 @@ class Config:
             generation_backend_max_concurrency=generation_backend_max_concurrency,
             local_cli_backend_max_concurrency=local_cli_backend_max_concurrency,
             opencode_cli_model=opencode_cli_model,
+            claude_code_cli_model=claude_code_cli_model,
             litellm_model=litellm_model,
             litellm_fallback_models=litellm_fallback_models,
             llm_temperature=resolve_unified_llm_temperature(litellm_model),
@@ -3449,6 +3454,25 @@ class Config:
                         "不配置时 DSA 将使用 OpenCode 自身默认模型。"
                     ),
                     field="OPENCODE_CLI_MODEL",
+                ))
+        if generation_backend == CLAUDE_CODE_CLI_BACKEND_ID:
+            claude_model = (self.claude_code_cli_model or "").strip()
+            unsafe_claude_model = bool(claude_model) and (
+                any(ch.isspace() for ch in claude_model)
+                or any(
+                    marker in claude_model
+                    for marker in ("|", ">", "<", ";", "`", "&&", "||", "$")
+                )
+            )
+            if unsafe_claude_model:
+                issues.append(ConfigIssue(
+                    severity="error",
+                    message=(
+                        "CLAUDE_CODE_CLI_MODEL 是可选的 Claude Code 模型覆盖值。"
+                        "配置时会作为单个 --model 参数传给 claude，不能包含空白或 shell 元字符；"
+                        "不配置时 DSA 不传 --model，由本机 Claude Code 使用默认模型。"
+                    ),
+                    field="CLAUDE_CODE_CLI_MODEL",
                 ))
 
         # --- LLM availability ---

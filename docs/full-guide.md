@@ -246,6 +246,7 @@ daily_stock_analysis/
 |--------|------|--------|:----:|
 | `GENERATION_BACKEND` | 普通分析生成后端；支持 `litellm` 或显式 opt-in 的 `codex_cli` / `claude_code_cli` / `opencode_cli`（experimental/limited） | `litellm` | 否 |
 | `OPENCODE_CLI_MODEL` | `GENERATION_BACKEND=opencode_cli` 时可选传给 OpenCode `--model` 的模型覆盖；留空则使用本机 OpenCode 默认模型，认证和模型可用性由本机 OpenCode 配置负责 | 空 | 否 |
+| `CLAUDE_CODE_CLI_MODEL` | `GENERATION_BACKEND=claude_code_cli` 时可选传给 `claude --model` 的模型覆盖；留空则完全不带 `--model`，使用本机 Claude Code 默认模型。含空白或 shell 元字符会被配置校验拒绝；实际使用的模型名会记在生成结果 `usage.cli_model`（取自 CLI JSON envelope 的 `modelUsage` 键） | 空 | 否 |
 | `GENERATION_FALLBACK_BACKEND` | backend 级 fallback；未配置默认 `litellm`，空值禁用，self fallback 解析为 no-op | `litellm` | 否 |
 | `GENERATION_BACKEND_TIMEOUT_SECONDS` | 单次 generation backend 调用超时秒数，主要用于本地 CLI backend；范围 `1-3600` | `300` | 否 |
 | `GENERATION_BACKEND_MAX_OUTPUT_BYTES` | 单次本地 CLI backend 诊断 stdout/stderr 与最终响应捕获总上限；`--output-last-message` 重复打印到 stdout 的最终响应不重复计入；范围 `1-33554432` | `1048576` | 否 |

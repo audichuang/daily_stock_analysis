@@ -3225,3 +3225,84 @@ print(json.dumps({{"sentiment_score": 60}}))
     assert len(intervals) == 2
     intervals.sort(key=lambda item: item["start"])
     assert intervals[1]["start"] >= intervals[0]["end"]
+
+
+def _claude_backend(tmp_path: Path, argv_path: Path, envelope_extra: str = "", **config_overrides):
+    script = _script(
+        tmp_path,
+        f"""
+import json, pathlib, sys
+pathlib.Path({str(argv_path)!r}).write_text(json.dumps(sys.argv[1:]), encoding="utf-8")
+envelope = {{"type": "result", "subtype": "success", "result": "ok"}}
+envelope.update({envelope_extra or '{}'})
+print(json.dumps(envelope))
+""",
+    )
+    preset = LocalCliPreset(
+        preset_id="claude_code_cli",
+        executable=sys.executable,
+        argv=(script, *CLAUDE_CODE_CLI_PRESET.argv),
+        display_name="Mock Claude Code CLI",
+        extractor=CLAUDE_CODE_CLI_PRESET.extractor,
+        contract_args=CLAUDE_CODE_CLI_PRESET.contract_args,
+    )
+    return LocalCliGenerationBackend(
+        _config(generation_backend="claude_code_cli", **config_overrides),
+        preset=preset,
+    )
+
+
+def test_claude_code_cli_model_inserted_before_output_format(tmp_path: Path) -> None:
+    argv_path = tmp_path / "argv.json"
+    backend = _claude_backend(tmp_path, argv_path, claude_code_cli_model="some-model")
+
+    backend.generate("prompt", {})
+    argv = json.loads(argv_path.read_text(encoding="utf-8"))
+
+    assert argv.count("--model") == 1
+    assert argv[argv.index("--model") + 1] == "some-model"
+    assert argv.index("--model") + 2 == argv.index("--output-format")
+
+
+@pytest.mark.parametrize("value", ["", "   ", None])
+def test_claude_code_cli_model_unset_omits_model_flag(tmp_path: Path, value) -> None:
+    argv_path = tmp_path / "argv.json"
+    backend = _claude_backend(tmp_path, argv_path, claude_code_cli_model=value)
+
+    backend.generate("prompt", {})
+    argv = json.loads(argv_path.read_text(encoding="utf-8"))
+
+    assert "--model" not in argv
+
+
+@pytest.mark.parametrize("value", ["a;b", "a b", "provider/$MODEL", "a|b"])
+def test_claude_code_cli_model_unsafe_is_rejected(tmp_path: Path, value: str) -> None:
+    backend = _claude_backend(tmp_path, tmp_path / "argv.json", claude_code_cli_model=value)
+
+    with pytest.raises(GenerationError) as exc_info:
+        backend.generate("prompt", {})
+
+    assert exc_info.value.error_code is GenerationErrorCode.UNSAFE_CONFIG
+    assert exc_info.value.details["reason"] == "unsafe_claude_code_cli_model"
+
+
+def test_claude_code_cli_model_usage_key_lands_in_usage_not_model(tmp_path: Path) -> None:
+    backend = _claude_backend(
+        tmp_path,
+        tmp_path / "argv.json",
+        envelope_extra='{"modelUsage": {"real-model-x": {"inputTokens": 1}}}',
+    )
+
+    result = backend.generate("prompt", {})
+
+    assert result.usage["cli_model"] == "real-model-x"
+    assert result.model == "claude_code_cli"
+    assert "_cli_model" not in (result.diagnostics or {})
+
+
+def test_claude_code_cli_without_model_usage_has_no_cli_model(tmp_path: Path) -> None:
+    backend = _claude_backend(tmp_path, tmp_path / "argv.json")
+
+    result = backend.generate("prompt", {})
+
+    assert "cli_model" not in result.usage
