@@ -558,7 +558,7 @@ def test_crawl_range_streak_threshold_is_looser_without_calendar():
 
     seen = []
 
-    def fake_day(conn, source, d, replace=False):
+    def fake_day(conn, source, d, replace=False, **kw):
         seen.append(d)
         return 0
 
