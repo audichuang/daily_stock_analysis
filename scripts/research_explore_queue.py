@@ -10,7 +10,9 @@
 判準（三項全勝才算支持）、規格、偏誤寫在 ``docs/research/2026-10-28-explore-reversal-ma25.md``
 第 0 節，跑之前就已 commit。敏感度只描述，不從中挑最好的一組改寫結論。
 
-資料唯讀：連線一律 ``default_transaction_read_only=on``（本腳本另掛 connect 事件，不靠呼叫端）。
+資料唯讀：本腳本自建 engine，以連線參數 ``options=-c default_transaction_read_only=on`` 設定，
+不靠呼叫端的 ``PGOPTIONS``。不用 connect 事件裡 ``SET``：那會落在隱式交易內，第一個交易不受保護，
+連線還池 rollback 後設定也一起被撤銷。
 
 用法（``DATABASE_URL`` 由主 checkout 的 ``.env`` 匯出；``STORAGE_DATABASE_URL=''``）：
     uv run --frozen python scripts/research_explore_queue.py reversal
@@ -23,13 +25,13 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import event
+from sqlalchemy import create_engine
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from market_data.adjust import is_common_stock  # noqa: E402
-from market_data.db import get_engine  # noqa: E402
+from market_data.db import database_url  # noqa: E402
 from measure_signal_forward import (  # noqa: E402
     apply_thresholds, factors, forward_returns, load, paired_block_bootstrap,
     pit_revenue_panel,
@@ -111,21 +113,29 @@ def curve_stats(eq):
 def verdict(mean_diff, ci, strat, bench):
     """事先寫定的三項全勝判準（docs 第 0.2 節）。
 
-    任一點估計輸（超額 ≤ 0、Sharpe 不高於、回撤不淺於 0050）→ 不支持；三項點估計都贏但
-    成對超額區間下界 ≤ 0 或算不出區間 → inconclusive；全部成立 → 探索性支持。
+    判定順序先看成對超額區間（AGENTS §1.2：區間跨零或樣本不足一律 inconclusive）：
+    算不出區間或區間跨零 → inconclusive；區間整段 ≤ 0 → 不支持；區間整段 > 0 時，Sharpe 高於
+    且回撤淺於 0050 才是探索性支持，否則不支持。事前判準原本先看點估計（任一輸即不支持），
+    這是往保守方向的事後偏離，見 docs 第 1 節開頭。
     """
-    if not (mean_diff > 0 and strat["sharpe"] > bench["sharpe"] and strat["mdd"] > bench["mdd"]):
-        return "不支持"
-    if ci is None or not ci[0] > 0:
+    if ci is None or ci[0] <= 0 < ci[1]:
         return "inconclusive"
-    return "探索性支持"
+    if ci[1] <= 0:
+        return "不支持"
+    if mean_diff > 0 and strat["sharpe"] > bench["sharpe"] and strat["mdd"] > bench["mdd"]:
+        return "探索性支持"
+    return "不支持"
 
 
 # ---------------------------------------------------------------- reversal
 
 def reversal_periods(piv, industry, *, start, lookback, hold, q, min_turnover,
                      offset=0, min_group=5, entry_notional=ENTRY_NOTIONAL):
-    """逐期的策略淨報酬、0050 同窗報酬、選股數、合格覆蓋率與管制旗標。"""
+    """逐期的策略淨報酬、0050 同窗報酬、選股數、合格覆蓋率與管制旗標。
+
+    T+h 停牌但之後復牌（非下市）的選股，用 T+h 之後第一個收盤結算（``n_deferred`` 計數），
+    不剔除：是否復牌是訊號日之後的資訊，剔除再重新等權就是前視。T+1 無開盤價仍不買（事前規格）。
+    """
     close = piv["close"]
     idx = close.index
     common = [s for s in close.columns if is_common_stock(s)]
@@ -133,6 +143,11 @@ def reversal_periods(piv, industry, *, start, lookback, hold, q, min_turnover,
     f = factors(sub, min_turnover)
     r = sub["close"].pct_change(lookback, fill_method=None)
     ret, _ = forward_returns(sub, hold, "last")
+    # forward_returns 對「T+h 停牌、之後復牌」回 NaN；改用 T+h 起第一個收盤（下市與右端截斷不受影響：
+    # 前者已結算、後者整期在下面跳過）
+    late = sub["close"].bfill().shift(-hold) / sub["open"].shift(-1) - 1
+    deferred = ret.isna() & late.notna()
+    ret = ret.where(~deferred, late)
     bret, _ = forward_returns({k: v[[BENCH]] for k, v in piv.items()}, hold, "last")
     has_ind = industry.reindex(common).notna()
     rows = []
@@ -149,6 +164,7 @@ def reversal_periods(piv, industry, *, start, lookback, hold, q, min_turnover,
         rows.append({"date": t, "strat": float(np.mean(net)) if net else 0.0,
                      "gross": float(np.mean(gross)) if gross else 0.0,
                      "bench": float(bret.at[t, BENCH]), "n_pick": len(net),
+                     "n_deferred": int(sum(bool(deferred.at[t, s]) for s in picks)),
                      "coverage": float(len(rel) / live.sum()) if live.sum() else np.nan,
                      "restricted": overlaps_restricted(idx, t, hold)})
     df = pd.DataFrame(rows)
@@ -168,6 +184,7 @@ def evaluate_periods(df, hold, n_boot=2000, block=4, seed=42):
             "mean_diff_ex_restricted": float(df.loc[~df["restricted"], "diff"].mean()),
             "n_restricted": int(df["restricted"].sum()),
             "median_picks": float(df["n_pick"].median()),
+            "n_deferred": int(df["n_deferred"].sum()),
             "median_coverage": float(df["coverage"].median())}
 
 
@@ -179,7 +196,7 @@ def _fmt(label, e):
             f"MDD {e['strat']['mdd'] * 100:.1f}% vs {e['bench']['mdd'] * 100:.1f}%  "
             f"總報酬 {e['strat']['total'] * 100:+.0f}% vs {e['bench']['total'] * 100:+.0f}%  "
             f"→ {e['verdict']}  （未扣成本超額 {e['mean_gross_diff'] * 100:+.2f}%/期；不含管制期超額 {e['mean_diff_ex_restricted'] * 100:+.2f}%，"
-            f"管制期 {e['n_restricted']} 期；中位選股 {e['median_picks']:.0f}、覆蓋 "
+            f"管制期 {e['n_restricted']} 期；延後結算 {e['n_deferred']} 筆；中位選股 {e['median_picks']:.0f}、覆蓋 "
             f"{e['median_coverage'] * 100:.0f}%）")
 
 
@@ -292,14 +309,11 @@ def run_ma_exit(a):
 # ---------------------------------------------------------------- CLI
 
 def _readonly_engine():
-    eng = get_engine()
-
-    @event.listens_for(eng, "connect")
-    def _ro(dbapi_conn, _rec):  # pragma: no cover - 需要真實連線
-        cur = dbapi_conn.cursor()
-        cur.execute("SET default_transaction_read_only = on")
-        cur.close()
-    return eng
+    # 自建 engine，不改 market_data.db 共用快取的那個；唯讀放在連線參數，每條連線從第一個交易起生效
+    return create_engine(
+        database_url(), pool_pre_ping=True, future=True,
+        connect_args={"connect_timeout": 5, "options": "-c default_transaction_read_only=on"},
+    )
 
 
 def build_parser():

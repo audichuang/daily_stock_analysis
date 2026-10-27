@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-- [文档] 探索性回測：五日產業相對輸家反轉（每週換手、對 0050 成對超額 −1.12%／期，區間整段為負）與跌破 25MA 出場＋sustain 3（Sharpe 1.13、回撤 −55.6%，輸 0050 也沒贏固定 60 日）兩項皆不支持，見 `docs/research/2026-10-28-explore-reversal-ma25.md`；新增 `scripts/research_explore_queue.py`（`reversal`／`ma-exit`，唯讀）與 `portfolio_walkforward.py --exit-ma/--exit-sustain/--no-time-cap` 研究旗標（預設關、預設結果逐位不變），實驗登記表追加結果列
+- [文档] 探索性回測：五日產業相對輸家反轉（每週換手、對 0050 成對超額 −1.12%／期，區間整段為負）不支持；跌破 25MA 出場＋sustain 3（Sharpe 1.13、回撤 −55.6%，點估計輸 0050 也沒贏固定 60 日，但對 0050 超額區間跨零）inconclusive，見 `docs/research/2026-10-28-explore-reversal-ma25.md`；新增 `scripts/research_explore_queue.py`（`reversal`／`ma-exit`，唯讀以連線參數 `default_transaction_read_only=on` 設定；判定先看超額區間，跨零一律 inconclusive；到期日停牌、之後復牌的選股改用其後第一個收盤結算，不再剔除）與 `portfolio_walkforward.py --exit-ma/--exit-sustain/--no-time-cap` 研究旗標（預設關、預設結果逐位不變），實驗登記表追加結果列
 - [新功能] 新增實驗登記表 `journal/experiment-registry.jsonl`（append-only、進版控，欄位見 `journal/README.md`），先登記盤前機率 pilot、總經模型階梯主比較（F 對 N、OC、756 日、2017-05 起）與四條事件規則、事件前延後進場、Fable 五臂、個股 5 日有無總經 A/B，以及五日產業反轉與 25MA 出場（探索性）
 - [改進] 波段日誌 `swing-decisions.jsonl` 新增 `model_confidence_raw`、`override`、`override_reason` 分欄（模型原判與人工覆寫分開），skill `tw-swing-research` Step 4 與 `journal/README.md` 同步，並明定 2026-10-27 起的決策為前瞻封存期、不得拿來回頭調突破池門檻
 - [修复] 回驗 `verify_swing_decisions.BASE_RATE` 與 `screen_tw` 的 `measured_base_rate.p_close60_up_30pct` 由作廢的 0.202 改為 2026-10-26 重測的 0.204，並加測試鎖住兩處一致；skill 錨點文字去掉「尚未跟改」

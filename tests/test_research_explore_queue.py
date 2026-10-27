@@ -21,6 +21,7 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from measure_signal_forward import factors  # noqa: E402
 from portfolio_walkforward import ma_line, simulate, update_break_streak  # noqa: E402
+import research_explore_queue as req  # noqa: E402
 from research_explore_queue import (  # noqa: E402
     bottom_quantile, build_parser, industry_relative, overlaps_restricted, period_stats,
     rebalance_dates, reversal_periods, verdict,
@@ -109,6 +110,70 @@ def test_reversal_period_buys_the_loser_at_next_open_and_charges_round_trip():
     assert row["diff"] == pytest.approx(row["strat"] - 0.01)
 
 
+def _suspend_at_exit_panel(resumes):
+    """兩檔同產業輸家都被選中；1101 只在 T+h 那天停牌，``resumes`` 決定之後是否復牌。"""
+    days = pd.bdate_range("2026-01-01", periods=40)
+    cols = [f"110{i}" for i in range(6)] + ["0050"]
+    close = pd.DataFrame(100.0, index=days, columns=cols)
+    close.loc[days[21]:, ["1100", "1101"]] = 90.0       # 訊號日 days[25] 兩檔都是 −10%
+    close.loc[days[26]:, ["1100", "1101"]] = 99.0
+    close.loc[days[30], "1101"] = np.nan                # T+h（h=5）停牌
+    if resumes:
+        close.loc[days[31]:, "1101"] = 105.0            # 復牌第一個收盤與停牌前不同
+    else:
+        close.loc[days[30]:, "1101"] = np.nan           # 從此沒有成交價＝下市
+    open_ = close.copy()
+    open_.loc[days[26], ["1100", "1101"]] = 91.0
+    close.loc[days[26]:, "0050"] = 101.0
+    open_.loc[days[26], "0050"] = 100.0
+    piv = {"close": close, "open": open_, "high": close.copy(), "volume": close * 0 + 1e4,
+           "turnover": close * 0 + 3e8}
+    return piv, days
+
+
+@pytest.mark.parametrize("resumes", [True, False])
+def test_reversal_pick_is_not_dropped_by_whether_it_resumes_after_exit_day(resumes):
+    """訊號日選中的股票不能因「到期後有沒有復牌」這種未來資訊被剔除、改變當期權重。"""
+    piv, days = _suspend_at_exit_panel(resumes)
+    ind = pd.Series({f"110{i}": "01" for i in range(6)})
+    df = reversal_periods(piv, ind, start=days[25], lookback=5, hold=5, q=0.34,
+                          min_turnover=1e8, min_group=5)
+    row = df.iloc[0]
+    assert row["n_pick"] == 2
+    # 復牌：用 T+h 之後第一個收盤（105）結算，不是停牌前的 99；下市：用最後收盤（99）結算
+    exit_1101 = 105.0 if resumes else 99.0
+    legs = [round_trip_return(1.0, x / 91.0, entry_notional=200_000.0) for x in (99.0, exit_1101)]
+    assert row["strat"] == pytest.approx(np.mean(legs))
+    assert row["n_deferred"] == (1 if resumes else 0)
+
+
+def test_reversal_still_skips_a_pick_without_next_open():
+    """T+1 沒有開盤價買不到，照事前規格不買（不能連進場價也往後補）。"""
+    piv, days = _suspend_at_exit_panel(True)
+    piv["open"].loc[days[26], "1101"] = np.nan
+    ind = pd.Series({f"110{i}": "01" for i in range(6)})
+    df = reversal_periods(piv, ind, start=days[25], lookback=5, hold=5, q=0.34,
+                          min_turnover=1e8, min_group=5)
+    assert df.iloc[0]["n_pick"] == 1
+
+
+def test_readonly_engine_sets_read_only_as_a_connection_option(monkeypatch):
+    """唯讀要在連線參數生效：connect 事件裡 SET 會落在隱式交易內，還池 rollback 就撤銷。"""
+    seen = {}
+
+    def fake_create_engine(url, **kw):
+        seen["url"], seen["kw"] = url, kw
+        return object()
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg2://u:p@127.0.0.1:1/x")
+    monkeypatch.setattr(req, "create_engine", fake_create_engine)
+    req._readonly_engine()
+    assert seen["url"] == "postgresql+psycopg2://u:p@127.0.0.1:1/x"
+    opts = seen["kw"]["connect_args"]["options"].split()
+    assert "default_transaction_read_only=on" in opts
+    assert opts[opts.index("default_transaction_read_only=on") - 1] == "-c"
+
+
 # ---------------------------------------------------------------- 判準與統計
 
 def test_period_stats_drawdown_and_sharpe():
@@ -126,6 +191,10 @@ def test_period_stats_drawdown_and_sharpe():
     (0.01, (0.001, 0.02), {"sharpe": 1.5, "mdd": -0.4}, "不支持"),     # 回撤較深
     (0.01, (0.001, 0.02), {"sharpe": 1.2, "mdd": -0.2}, "不支持"),     # Sharpe 平手不算贏
     (-0.01, (-0.02, -0.001), {"sharpe": 1.5, "mdd": -0.2}, "不支持"),
+    # 區間跨零一律 inconclusive（AGENTS §1.2），不因 Sharpe／MDD 點估計輸就判不支持：B 主規格的數字
+    (0.000469, (-0.000429, 0.001407), {"sharpe": 1.13, "mdd": -0.556}, "inconclusive"),
+    (-0.0001, (-0.001, 0.0008), {"sharpe": 1.0, "mdd": -0.4}, "inconclusive"),
+    (0.01, None, {"sharpe": 1.0, "mdd": -0.4}, "inconclusive"),           # 算不出區間
 ])
 def test_verdict_requires_all_three_wins(mean, ci, s, expected):
     assert verdict(mean, ci, s, {"sharpe": 1.2, "mdd": -0.3}) == expected
