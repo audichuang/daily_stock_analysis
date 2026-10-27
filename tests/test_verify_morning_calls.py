@@ -727,7 +727,9 @@ def test_equal_weight_needs_both_arms_to_have_a_value():
     arm = _arm("2099-01-01", 0.8, p_oc_up=None)
     rep = vmc.arm_report([_oc("2099-01-01", 1, 0.6)], [_call("2099-01-01")], [arm])
     assert rep["targets"]["oc_up"]["n"] == 0 and "equal_weight" not in rep["targets"]["oc_up"]["arms"]
-    assert rep["targets"]["close_up"]["n"] == 1   # 其他目標不受影響
+    assert rep["targets"]["close_up"]["n"] == 1   # fable 臂其他目標不受影響
+    # 六個 p 沒有全部有效的日子，整天不進等權臂（三個目標都不算），不是只缺那一個目標
+    assert all("equal_weight" not in t["arms"] for t in rep["targets"].values())
     oc = _oc("2099-01-01", 1, 0.6)
     oc["p_gap_up"] = None                         # claude 缺值：等權與 fable 都不進該目標
     rep = vmc.arm_report([oc], [_call("2099-01-01")], [_arm("2099-01-01", 0.8)])
@@ -784,3 +786,13 @@ def test_arms_section_brief_is_one_line_and_silent_without_arms(tmp_path):
     calls.write_text(json.dumps(_call("2099-01-01")) + "\n", encoding="utf-8")
     vmc.arms_section([_oc("2099-01-01", 1, 0.6)], calls, arms, lines.append, full=False)
     assert len(lines) == 1 and "n=1" in lines[0] and "描述性" in lines[0]
+
+
+def test_equal_weight_uses_only_days_with_all_six_probabilities():
+    full_day, partial_day = "2099-01-01", "2099-01-02"
+    outcomes = [_oc(full_day, 1, 0.6), _oc(partial_day, 0, 0.6)]
+    arms = [_arm(full_day, 0.8), _arm(partial_day, 0.2, p_oc_up=None)]
+    rep = vmc.arm_report(outcomes, [_call(full_day), _call(partial_day)], arms)
+    eq, fb = rep["targets"]["close_up"]["arms"]["equal_weight"], rep["targets"]["close_up"]["arms"]["fable"]
+    assert fb["n"] == 2 and eq["n"] == 1          # fable 臂保留部分有效的那天，等權臂不收
+    assert eq["brier"] == pytest.approx(0.09) and eq["brier_claude"] == pytest.approx(0.16)   # 只算 full_day

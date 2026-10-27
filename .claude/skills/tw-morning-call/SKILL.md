@@ -64,16 +64,18 @@ Fed 各場會議的升息／不變／降息機率（Kalshi 買賣價中點），
 期交所兩項（外資台指期淨未平倉＋日變化、P/C 未平倉比；不可用就寫不可用）、
 待觸發計畫清單、`breakout` 檔數與 screen 報告 §0 的處置／注意股名單狀態、`momentum` 的族群分布。
 
-**凍結與 Fable 臂**：`make morning` 的完整 stdout 會自動另存 `reports/morning-packs/<日期>.txt`（同日重跑另存 `<日期>.<HHMM>.txt`，臂腳本取最早那份）。
-跑完立刻在**前景**接著跑（不用背景 agent、不用 `&`：Orca 排程的 session 結束回合會殺背景程序）：
+**凍結與 Fable 臂**：`make morning` **成功（結束碼 0）**時，完整 stdout 會另存 `reports/morning-packs/<日期>.txt`（同日已有則另存 `<日期>.<HHMMSS>.txt`，臂腳本取最早那份；失敗不留 pack）。
+跑完立刻在**前景**接著跑（不用背景 agent、不用 `&`：Orca 排程的 session 結束回合會殺背景程序；要帶 `--env-file .env`，`MORNING_FABLE_MODEL` 在那裡）：
 
 ```bash
-uv run python scripts/morning_fable_arms.py   # 只看凍結的 pack、寫 journal/morning-arms.jsonl；MORNING_FABLE_MODEL 沒設會印「跳過」
-uv run python scripts/morning_fable_arms.py --print-hash   # 印 pack 的 sha256，Step 4 抄進 input_snapshot_hash
+uv run --env-file .env python scripts/morning_fable_arms.py              # 只看過濾後的 pack、寫 journal/morning-arms.jsonl；沒設模型會印「跳過」
+uv run --env-file .env python scripts/morning_fable_arms.py --print-hash # 印 Fable 實際輸入（過濾後）的 sha256，Step 4 抄進 input_snapshot_hash
 ```
 
-跳過或失敗（腳本一律 exit 0，失敗會自己留一列 error）都照常往下，**不重試**。Fable 臂只看凍結的 `make morning` 輸出，不讀你的判讀；
+跳過或失敗（腳本一律 exit 0，失敗會自己留一列 error）都照常往下，**不重試**。Fable 臂只看**過濾後**的取數段（大局、國際盤、期交所、今日候选）：
+「近期判讀校正」「待触发计划」與媒體點名判斷含 journal 判讀，腳本會整段丟掉，所以它不會看到你或歷史的判讀。
 你另有 Step 2 的即時補數（夜盤、期貨），**兩臂輸入不完全相同**，配對比較的是「整條流程」而不是單純模型。
+`--print-hash` 找不到 pack 時 stdout 為空（說明在 stderr、結束碼非 0）：這時 `input_snapshot_hash` 寫 `null`。
 
 ## Step 2：補「現在」
 
@@ -211,7 +213,7 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
 
 另寫 `model_version`（枚舉 `claude`／`fable`／`fable_synth`／`equal_weight`；現行流程填 `claude`）與
 `skill_version`（本檔的 git blob sha，`git hash-object .claude/skills/tw-morning-call/SKILL.md` 的輸出，原樣複製）與
-`input_snapshot_hash`（Step 1 之後 `uv run python scripts/morning_fable_arms.py --print-hash` 的輸出，原樣複製；找不到 pack 時略過這欄，配對時該天會被排除）。
+`input_snapshot_hash`（Step 1 之後 `uv run --env-file .env python scripts/morning_fable_arms.py --print-hash` 的 stdout，原樣複製；stdout 為空就寫 `null`，配對時該天會被排除）。
 
 **機率要先列基準率再調整**，順序固定：外部基準率（例如近一年該目標的上漲頻率，回驗腳本或 DB 查得）→ 初始機率（等於基準率）
 → 上調／下調的證據（每條寫方向與大約幅度）→ 最終機率。把這個流程寫進 `reason`；沒有證據支持就停在基準率附近，
@@ -223,7 +225,7 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
 {"date":"2026-07-30","regime":"broad_selloff","action":"wait",
  "gap_expected":-0.0098,"gap_basis":"tx_settle",
  "p_close_up":0.38,"p_oc_up":0.45,"p_gap_up":0.30,
- "model_version":"claude","skill_version":"<git hash-object 的輸出>","input_snapshot_hash":"<--print-hash 的輸出>","sox_pct":-0.0533,"vix":20.66,"breadth_ma20":0.153,
+ "model_version":"claude","skill_version":"<git hash-object 的輸出>","input_snapshot_hash":"<--print-hash 的 stdout，空則 null>","sox_pct":-0.0533,"vix":20.66,"breadth_ma20":0.153,
  "breakout_count":0,"reason":"隔夜全黑且輪動避風港消失，breadth 15.3% 已在超賣但 VIX 未到宣洩",
  "flip_condition":"費半一日內不再跌逾 2% 且加權指數站回 40,000",
  "exclude_from_scoring":false,"decided_at":"2026-07-30T07:10+08:00"}

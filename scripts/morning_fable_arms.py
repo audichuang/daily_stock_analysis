@@ -21,6 +21,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,10 @@ TAIPEI = dt.timezone(dt.timedelta(hours=8))
 CUTOFF_HOUR = 9           # 台北時間過 09:00 才寫入的判讀不計分
 REASON_MAX = 1500
 TARGETS = ("p_close_up", "p_oc_up", "p_gap_up")
+# 含 journal 判讀的段落標題（`make morning` 的 `===== ` 段）：近期判讀校正（含臂 brief 行）、待触发计划
+# （其後沒有標題的媒體點名「沒有／已過期」行也在這一段）、有資料時的媒體點名段。
+JOURNAL_SECTIONS = ("近期判讀校正", "待触发计划", "最近一輪媒體點名")
+PACK_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(\.\d{6})?\.txt$")
 
 SYSTEM_PROMPT = (
     "你是台股盤前機率預測員。你沒有任何工具、檔案或網路，只能依使用者提供的證據包推論。"
@@ -60,8 +65,9 @@ USER_TEMPLATE = """以下是今天 07:30 凍結的盤前證據包（`make mornin
 
 沒有證據支持就停在基準率附近，不要為了顯得有觀點而離開基準率。三個機率各自獨立估，不必互相加總。
 
-最後輸出一個 JSON 物件（放在回答最後，之後不要再寫任何文字），格式：
-{{"p_close_up": 0.0, "p_oc_up": 0.0, "p_gap_up": 0.0, "reason": "基準率→調整的簡述"}}
+最後輸出一個 JSON 物件（放在回答最後），格式：
+{{"p_close_up": <0~1 的小數>, "p_oc_up": <0~1 的小數>, "p_gap_up": <0~1 的小數>, "reason": "<基準率→調整的簡述>"}}
+（上面的尖括號是佔位，不是合法 JSON；請換成你的數字。JSON 之後不要再寫任何字元，也不要用 code fence。）
 
 ===== 證據包開始 =====
 {pack}
@@ -74,8 +80,18 @@ def prompt_hash():
     return hashlib.sha256((SYSTEM_PROMPT + "\n\x00\n" + USER_TEMPLATE).encode("utf-8")).hexdigest()
 
 
-def pack_hash(pack_bytes):
-    return hashlib.sha256(pack_bytes).hexdigest()
+def pack_hash(pack_text):
+    """過濾後文字的 sha256（Fable 實際看到的那份）。"""
+    return hashlib.sha256(pack_text.encode("utf-8")).hexdigest()
+
+
+def filter_pack(text):
+    """丟掉含 journal 判讀的段落（`^===== ` 開頭的標題切段）；標題前的前言與其他段原樣保留。"""
+    starts = [m.start() for m in re.finditer(r"(?m)^===== ", text)]
+    if not starts:
+        return text
+    segs = [text[:starts[0]]] + [text[a:b] for a, b in zip(starts, starts[1:] + [len(text)])]
+    return "".join(g for g in segs if not g.startswith("===== ") or not g[6:].startswith(JOURNAL_SECTIONS))
 
 
 def build_user_prompt(pack_text):
@@ -88,15 +104,16 @@ def taipei_now():
 
 def find_pack(day, pack_dir=PACK_DIR):
     """該日最早一份 pack：`<date>.txt` 先於 `<date>.<HHMM>.txt`（07:30 那份才是凍結的）。"""
+    """只認正式檔名（`<date>.txt`、`<date>.<HHMMSS>.txt`），`.partial` 之類的暫存檔永不選。"""
     first = Path(pack_dir) / f"{day}.txt"
     if first.exists():
         return first
-    later = sorted(Path(pack_dir).glob(f"{day}.*.txt"))
+    later = sorted(p for p in Path(pack_dir).glob(f"{day}.*.txt") if PACK_NAME_RE.match(p.name))
     return later[0] if later else None
 
 
 def _last_json_object(text):
-    """文字裡最後一個頂層 JSON 物件（dict）；沒有回 None。"""
+    """文字裡最後一個頂層 JSON 物件（dict）：回 (物件, 它之前的文字, 它結束的位置)；沒有回 None。"""
     dec, i, last, end = json.JSONDecoder(), 0, None, 0
     while True:
         i = text.find("{", max(i, end))
@@ -108,7 +125,7 @@ def _last_json_object(text):
             i += 1
             continue
         if isinstance(obj, dict):
-            last, end = (obj, text[:i]), stop
+            last, end = (obj, text[:i], stop), stop
         else:
             end = stop
 
@@ -119,7 +136,9 @@ def parse_result(text):
     ps = {k: None for k in TARGETS}
     if found is None:
         return ps, (text or "").strip()[:REASON_MAX], "回答裡找不到 JSON 物件"
-    obj, before = found
+    obj, before, stop = found
+    if (text or "")[stop:].strip():
+        return ps, (text or "").strip()[:REASON_MAX], "最後一個 JSON 物件之後還有文字（格式不合法或不是最終答案）"
     bad = []
     for k in TARGETS:
         v = obj.get(k)
@@ -131,14 +150,21 @@ def parse_result(text):
     return ps, reason.strip()[:REASON_MAX], ("機率欄不合法（要 0~1 小數）：" + "、".join(bad)) if bad else None
 
 
+def child_env(env=None):
+    """拿掉 ORCA_*（Stop hook 會讓 Orca 收 terminal）與 CLAUDE_CODE_*／CLAUDECODE（外層 session 的狀態不能漏進隔離子程序）。"""
+    return {k: v for k, v in (os.environ if env is None else env).items()
+            if not (k.startswith(("ORCA_", "CLAUDE_CODE_")) or k == "CLAUDECODE")}
+
+
 def call_claude(model, pack_text, timeout):
     """跑一次隔離的 claude -p；回 (cli_json dict | None, error | None)。"""
     exe = shutil.which("claude")
     if not exe:
         return None, "找不到 claude 可執行檔"
-    argv = [exe, "-p", "--model", model, "--output-format", "json", "--tools", "", "--strict-mcp-config",
+    argv = [exe, "-p", "--model", model, "--output-format", "json", "--settings", '{"disableAllHooks":true}',
+            "--tools", "", "--strict-mcp-config",
             "--no-session-persistence", "--setting-sources", "", "--system-prompt", SYSTEM_PROMPT]
-    env = {k: v for k, v in os.environ.items() if not k.startswith("ORCA_")}
+    env = child_env()
     with tempfile.TemporaryDirectory(prefix="morning-fable-") as cwd:
         try:
             proc = subprocess.run(argv, input=build_user_prompt(pack_text), capture_output=True, text=True,
@@ -160,10 +186,10 @@ def call_claude(model, pack_text, timeout):
     return data, None
 
 
-def build_row(day, pack_bytes, *, ps, reason, error, cli_model, latency_s, cost_usd, now):
+def build_row(day, pack_text, *, ps, reason, error, cli_model, latency_s, cost_usd, now):
     cutoff = dt.datetime.combine(dt.date.fromisoformat(day), dt.time(CUTOFF_HOUR), tzinfo=TAIPEI)
     return {"date": day, "model_version": MODEL_VERSION, "cli_model": cli_model, **ps, "reason": reason,
-            "input_snapshot_hash": pack_hash(pack_bytes), "prompt_hash": prompt_hash(),
+            "input_snapshot_hash": pack_hash(pack_text), "prompt_hash": prompt_hash(),
             "latency_s": latency_s, "cost_usd": cost_usd,
             "decided_at": now.isoformat(timespec="seconds"),
             "exclude_from_scoring": now > cutoff, "error": error}
@@ -215,16 +241,19 @@ def main(argv=None):
         return 0
     pack = Path(a.pack) if a.pack else find_pack(day)
     if pack is None or not pack.exists():
-        print(f"找不到 {day} 的 evidence_pack（reports/morning-packs/），跳過 Fable 臂")
-        return 1 if a.print_hash else 0
-    pack_bytes = pack.read_bytes()
-    if a.print_hash:
-        print(pack_hash(pack_bytes))
+        msg = f"找不到 {day} 的 evidence_pack（reports/morning-packs/），跳過 Fable 臂"
+        if a.print_hash:   # stdout 必須是空的：呼叫端會把它原樣抄進 journal
+            print(msg, file=sys.stderr)
+            return 1
+        print(msg)
         return 0
-    pack_text = pack_bytes.decode("utf-8", errors="replace")
+    pack_text = filter_pack(pack.read_bytes().decode("utf-8", errors="replace"))
+    if a.print_hash:
+        print(pack_hash(pack_text))
+        return 0
     if a.dry_run:
         print(f"# system\n{SYSTEM_PROMPT}\n\n# user\n{build_user_prompt(pack_text)}")
-        print(f"pack={pack} input_snapshot_hash={pack_hash(pack_bytes)} prompt_hash={prompt_hash()}")
+        print(f"pack={pack} input_snapshot_hash={pack_hash(pack_text)} prompt_hash={prompt_hash()}")
         return 0
     if has_row(a.journal, day):
         print(f"{day} 已有 {MODEL_VERSION} 臂紀錄，不重寫")
@@ -239,7 +268,7 @@ def main(argv=None):
         usage = data.get("modelUsage")
         cli_model = next(iter(usage), None) if isinstance(usage, dict) and usage else None
         cost = data.get("total_cost_usd")
-    row = build_row(day, pack_bytes, ps=ps, reason=reason, error=error, cli_model=cli_model,
+    row = build_row(day, pack_text, ps=ps, reason=reason, error=error, cli_model=cli_model,
                     latency_s=latency, cost_usd=cost, now=taipei_now())
     wrote = append_row(a.journal, row)
     print(f"Fable 臂 {day}：{'已寫入' if wrote else '已有同鍵紀錄，不重寫'}"

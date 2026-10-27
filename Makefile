@@ -81,12 +81,9 @@ swing: ## 每日波段流程第 1 步：更新并健检台股资料 → 全市�
 	@echo "收盘后才有当日资料；台股 13:30 收盘、法人与融资 T+1 才补齐。"
 
 morning: ## 每天早上一键：补资料 → 大局（總經／Fed／事件）→ 昨晚国际盘 → 期交所籌碼 → 待触发计划 → 昨晚媒体点名 → 今日候选（之后跑 skill）
-	@# 完整 stdout 另存凍結 evidence_pack 給 Fable 臂（reports/morning-packs/<日期>.txt；同日重跑另存 <日期>.<HHMM>.txt，臂腳本取最早那份）。
-	@# pipefail 讓結束碼仍是 morning-run 的；stderr 不進檔、終端輸出不變。
-	@mkdir -p reports/morning-packs
-	@f=reports/morning-packs/$$(TZ=Asia/Taipei date +%F).txt; \
-		if [ -e "$$f" ]; then f=reports/morning-packs/$$(TZ=Asia/Taipei date +%F.%H%M).txt; fi; \
-		bash -o pipefail -c '$(MAKE) --no-print-directory morning-run | tee "$$1"' _ "$$f"
+	@# 完整 stdout 另存凍結 evidence_pack 給 Fable 臂（scripts/morning_pack.sh）：morning-run 成功才發布成 reports/morning-packs/<日期>.txt
+	@# （同日已有則 <日期>.<HHMMSS>.txt，臂腳本取最早那份）；失敗不留 pack。結束碼一律是 morning-run 的；stdout 改經 pipe（tee）。
+	@bash scripts/morning_pack.sh reports/morning-packs $(MAKE) --no-print-directory morning-run
 
 morning-run: # morning 的實際內容（由 morning 包一層 tee；不要單獨呼叫，單獨呼叫不會存 pack）
 	@uv run --env-file .env python -m market_data.cli daily

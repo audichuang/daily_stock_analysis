@@ -42,7 +42,7 @@ action 欄只標「觀望／續抱當天大漲大跌」這類事後描述，**�
     uv run python scripts/verify_morning_calls.py --brief                    # 只讀 outcomes 檔（make morning）
 
 多臂配對（`journal/morning-arms.jsonl`，由 scripts/morning_fable_arms.py 寫；半年內只出描述性報表）：
-`fable` 臂與事後等權臂（claude、fable 三個 p 都有值時取算術平均，不另呼叫、不寫檔）對 claude 臂做配對 Brier 差
+`fable` 臂與事後等權臂（同日 claude 與 fable 六個 p 全部有效才納入、取算術平均，不另呼叫、不寫檔）對 claude 臂做配對 Brier 差
 （claude Brier − 該臂 Brier，正＝該臂較好），沿用同一個 10 日 circular block bootstrap 與 n<20／跨零 inconclusive。
 兩臂 `input_snapshot_hash` 不一致（或任一邊缺 hash）、`exclude_from_scoring=true`、`error` 非空、
 沒有對應 outcome（休市日或尚未回驗）的列都不進配對，各自印排除筆數。
@@ -513,22 +513,32 @@ def arm_report(outcomes, calls, arms):
                 skipped["hash_mismatch"] += 1
             else:
                 dates.append(day)
+    # 等權臂：同日 claude 與 fable 六個 p 全部有效才納入（三個目標都算），否則該日整個不進等權臂
+    full = {d for d in dates
+            if all(_prob(oc[d].get(f"p_{t}")) is not None and _prob(fb[d].get(f"p_{t}")) is not None
+                   for t in PROB_TARGETS)}
+    picks = {"fable": lambda pc, pf: pf, "equal_weight": lambda pc, pf: (pc + pf) / 2}
     targets = {}
     for t in PROB_TARGETS:
-        trip = []
-        for day in dates:
-            y, pc, pf = oc[day].get(f"y_{t}"), _prob(oc[day].get(f"p_{t}")), _prob(fb[day].get(f"p_{t}"))
-            if y is not None and pc is not None and pf is not None:
-                trip.append((y, pc, pf))
-        res = {"n": len(trip), "arms": {}}
-        if trip:
-            res["brier_claude"] = sum((pc - y) ** 2 for y, pc, _ in trip) / len(trip)
-            for name, pick in (("fable", lambda pc, pf: pf), ("equal_weight", lambda pc, pf: (pc + pf) / 2)):
-                d = [(pc - y) ** 2 - (pick(pc, pf) - y) ** 2 for y, pc, pf in trip]
-                res["arms"][name] = {
-                    "brier": sum((pick(pc, pf) - y) ** 2 for y, pc, pf in trip) / len(trip),
-                    "d_mean": sum(d) / len(d), "d_ci": _cbb_ci(d),
-                    "verdict": ARM_VERDICT.get(_verdict(len(d), _cbb_ci(d)), "inconclusive")}
+        res = {"n": 0, "arms": {}}
+        for name, pick in picks.items():
+            trip = []
+            for day in dates:
+                if name == "equal_weight" and day not in full:
+                    continue
+                y, pc, pf = oc[day].get(f"y_{t}"), _prob(oc[day].get(f"p_{t}")), _prob(fb[day].get(f"p_{t}"))
+                if y is not None and pc is not None and pf is not None:
+                    trip.append((y, pc, pf))
+            if not trip:
+                continue
+            d = [(pc - y) ** 2 - (pick(pc, pf) - y) ** 2 for y, pc, pf in trip]
+            ci = _cbb_ci(d)
+            res["arms"][name] = {"n": len(trip), "brier_claude": sum((pc - y) ** 2 for y, pc, _ in trip) / len(trip),
+                                 "brier": sum((pick(pc, pf) - y) ** 2 for y, pc, pf in trip) / len(trip),
+                                 "d_mean": sum(d) / len(d), "d_ci": ci,
+                                 "verdict": ARM_VERDICT.get(_verdict(len(d), ci), "inconclusive")}
+        if "fable" in res["arms"]:
+            res["n"], res["brier_claude"] = res["arms"]["fable"]["n"], res["arms"]["fable"]["brier_claude"]
         targets[t] = res
     return {"skipped": skipped, "n_dates": len(dates), "targets": targets}
 
@@ -546,8 +556,8 @@ def render_arm_report(rep, out=print):
             continue
         out(f"  {TARGET_LABEL[t]:10s} n={r['n']} claude Brier {r['brier_claude']:.4f}")
         for name, b in r["arms"].items():
-            verdict = b["verdict"] if r["n"] >= MIN_N else f"inconclusive（n<{MIN_N}）"
-            out(f"    {ARM_LABEL[name]}：Brier {b['brier']:.4f} d̄ {b['d_mean']:+.4f} "
+            verdict = b["verdict"] if b["n"] >= MIN_N else f"inconclusive（n<{MIN_N}）"
+            out(f"    {ARM_LABEL[name]}（n={b['n']}，同一子集 claude Brier {b['brier_claude']:.4f}）：Brier {b['brier']:.4f} d̄ {b['d_mean']:+.4f} "
                 f"{_ci(b['d_ci'], 1, '{:+.4f}')} → {verdict}")
 
 
@@ -559,8 +569,9 @@ def arm_brief_line(rep):
     for t in ("close_up", "oc_up"):
         r = rep["targets"][t]
         if r["n"]:
+            eq = r["arms"].get("equal_weight")
             parts.append(f"{t} Brier claude {r['brier_claude']:.3f}／fable {r['arms']['fable']['brier']:.3f}"
-                         f"／等權 {r['arms']['equal_weight']['brier']:.3f}（n={r['n']}）")
+                         f"（n={r['n']}）／等權 " + (f"{eq['brier']:.3f}（n={eq['n']}）" if eq else "—"))
     return (f"多臂（描述性，半年內不下結論）：fable 臂 {rep['skipped']['arm_rows']} 列、進配對 {rep['n_dates']} 天"
             + ("；" + "；".join(parts) if parts else ""))
 

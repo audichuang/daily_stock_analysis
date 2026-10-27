@@ -81,7 +81,7 @@ def test_success_row_fields_and_isolation_argv(env, monkeypatch):
     assert (r["date"], r["model_version"], r["cli_model"]) == (DAY, "fable", "claude-fable-x")
     assert (r["p_close_up"], r["p_oc_up"], r["p_gap_up"]) == (0.55, 0.5, 0.6)
     assert r["error"] is None and r["cost_usd"] == 0.02 and r["reason"] == "基準率→微幅上調"
-    assert r["input_snapshot_hash"] == mfa.pack_hash(PACK_TEXT.encode()) and r["prompt_hash"] == mfa.prompt_hash()
+    assert r["input_snapshot_hash"] == mfa.pack_hash(PACK_TEXT) and r["prompt_hash"] == mfa.prompt_hash()
     assert r["decided_at"] == "2099-03-04T07:40:00+08:00" and r["exclude_from_scoring"] is False
 
 
@@ -139,12 +139,12 @@ def test_dry_run_prints_prompt_and_hashes_without_call_or_write(env, monkeypatch
     rc, rows = run(env, monkeypatch, fake, "--dry-run")
     out = capsys.readouterr().out
     assert rc == 0 and rows == [] and fake.calls == []
-    assert "PACK-BODY-MARKER" in out and mfa.prompt_hash() in out and mfa.pack_hash(PACK_TEXT.encode()) in out
+    assert "PACK-BODY-MARKER" in out and mfa.prompt_hash() in out and mfa.pack_hash(PACK_TEXT) in out
 
 
 def test_print_hash_outputs_pack_sha256_only(env, monkeypatch, capsys):
     rc, _ = run(env, monkeypatch, FakeRun(), "--print-hash")
-    assert rc == 0 and capsys.readouterr().out.strip() == mfa.pack_hash(PACK_TEXT.encode())
+    assert rc == 0 and capsys.readouterr().out.strip() == mfa.pack_hash(PACK_TEXT)
 
 
 def test_target_definitions_are_verbatim_from_skill_step4():
@@ -165,9 +165,9 @@ def test_parse_result_takes_last_object_and_rejects_bad_p():
 
 
 def test_find_pack_prefers_earliest_of_the_day(tmp_path):
-    for n in ("2099-03-04.0815.txt", "2099-03-04.0731.txt", "2099-03-05.txt"):
+    for n in ("2099-03-04.081500.txt", "2099-03-04.073100.txt", "2099-03-05.txt"):
         (tmp_path / n).write_text("x")
-    assert mfa.find_pack(DAY, tmp_path).name == "2099-03-04.0731.txt"
+    assert mfa.find_pack(DAY, tmp_path).name == "2099-03-04.073100.txt"
     (tmp_path / "2099-03-04.txt").write_text("x")
     assert mfa.find_pack(DAY, tmp_path).name == "2099-03-04.txt"
     assert mfa.find_pack("2099-03-09", tmp_path) is None
@@ -178,3 +178,96 @@ def test_append_row_refuses_same_key_directly(tmp_path):
     assert mfa.append_row(out, {"date": DAY, "model_version": "fable", "n": 1}) is True
     assert mfa.append_row(out, {"date": DAY, "model_version": "fable", "n": 2}) is False
     assert len(out.read_text().splitlines()) == 1
+
+
+# ---------- 第 1 輪審查修正 ----------
+
+def make_pack(marker="JOURNAL-MARKER"):
+    return (f"預備資料 OK\n\n===== 大局（總經）=====\nMACRO-KEEP\n"
+            f"\n===== 近期判讀校正（盤前預估 vs 實際）=====\nCALIB {marker}\n多臂（描述性）：fable {marker}\n"
+            f"\n===== 昨晚国际盘 =====\nINTL-KEEP\n"
+            f"\n===== 期交所籌碼（前一交易日）=====\nTAIFEX-KEEP\n"
+            f"\n===== 待触发计划（已留档、未到期）=====\nPLAN {marker}\n\n"
+            f"===== 最近一輪媒體點名（2099-03-03，僅供參考，不是買進訊號）=====\nMEDIA {marker}\n"
+            f"\n===== 今日候选 =====\nCAND-KEEP\n下一步：…\n")
+
+
+def test_filter_pack_drops_journal_sections_keeps_data_sections():
+    out = mfa.filter_pack(make_pack())
+    assert "JOURNAL-MARKER" not in out
+    for keep in ("預備資料 OK", "MACRO-KEEP", "INTL-KEEP", "TAIFEX-KEEP", "CAND-KEEP"):
+        assert keep in out
+
+
+def test_filter_pack_drops_headerless_media_lines_inside_plan_section():
+    pack = "===== 昨晚国际盘 =====\nINTL\n===== 待触发计划（x）=====\nP\n\n沒有媒體點名判斷 MARK\n===== 今日候选 =====\nC\n"
+    out = mfa.filter_pack(pack)
+    assert "MARK" not in out and "INTL" in out and "C\n" in out
+
+
+def test_prompt_and_hash_use_filtered_pack(tmp_path, monkeypatch, capsys):
+    pack = tmp_path / "p.txt"
+    pack.write_text(make_pack(), encoding="utf-8")
+    out = tmp_path / "arms.jsonl"
+    monkeypatch.setenv("MORNING_FABLE_MODEL", "m")
+    monkeypatch.setattr(mfa.shutil, "which", lambda n: "/usr/bin/claude")
+    fake = FakeRun()
+    monkeypatch.setattr(mfa.subprocess, "run", fake)
+    assert mfa.main(["--date", DAY, "--pack", str(pack), "--journal", str(out)]) == 0
+    sent = fake.calls[0][1]["input"]
+    assert "JOURNAL-MARKER" not in sent and "MACRO-KEEP" in sent and "CAND-KEEP" in sent
+    row = json.loads(out.read_text())
+    filtered_hash = mfa.pack_hash(mfa.filter_pack(make_pack()))
+    assert row["input_snapshot_hash"] == filtered_hash != mfa.pack_hash(make_pack())
+    capsys.readouterr()
+    assert mfa.main(["--date", DAY, "--pack", str(pack), "--print-hash"]) == 0
+    assert capsys.readouterr().out.strip() == filtered_hash
+
+
+def test_child_env_strips_orca_and_claude_code_vars():
+    env = mfa.child_env({"ORCA_X": "1", "CLAUDE_CODE_OAUTH_TOKEN": "t", "CLAUDE_CODE_ENTRYPOINT": "cli",
+                         "CLAUDECODE": "1", "PATH": "/bin", "USER": "u", "CLAUDE_OTHER": "keep"})
+    assert env == {"PATH": "/bin", "USER": "u", "CLAUDE_OTHER": "keep"}
+
+
+def test_subprocess_gets_clean_env_and_hooks_disabled(env, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("ORCA_TERMINAL", "x")
+    fake = FakeRun()
+    run(env, monkeypatch, fake)
+    argv, kw, _ = fake.calls[0]
+    assert not any(k.startswith(("CLAUDE_CODE_", "ORCA_")) or k == "CLAUDECODE" for k in kw["env"])
+    assert argv[argv.index("--settings") + 1] == '{"disableAllHooks":true}'
+
+
+def test_template_example_is_not_parseable_as_an_answer():
+    example = next(ln for ln in mfa.USER_TEMPLATE.splitlines() if ln.startswith('{{"p_close_up"'))
+    ps, _, err = mfa.parse_result(example.replace("{{", "{").replace("}}", "}"))
+    assert err and all(v is None for v in ps.values())
+
+
+def test_text_after_last_json_object_is_an_error():
+    valid = '{"p_close_up": 0.6, "p_oc_up": 0.5, "p_gap_up": 0.5}'
+    ps, _, err = mfa.parse_result(f'格式 {valid}\n最終 {{"p_close_up": 0.6, "p_oc_up": 0.5, "p_gap_up": 0.5,}}')
+    assert err and all(v is None for v in ps.values())
+    ps, _, err = mfa.parse_result(f"{valid}\n補充說明")
+    assert err and all(v is None for v in ps.values())
+    ps, _, err = mfa.parse_result(f"分析…\n{valid}\n  \n")
+    assert err is None and ps["p_close_up"] == 0.6
+
+
+def test_print_hash_without_pack_prints_nothing_on_stdout(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(mfa, "PACK_DIR", tmp_path)
+    assert mfa.main(["--date", DAY, "--print-hash"]) == 1
+    cap = capsys.readouterr()
+    assert cap.out == "" and "找不到" in cap.err
+
+
+def test_find_pack_never_picks_partial_or_malformed_names(tmp_path):
+    for n in ("2099-03-04.123.partial", "2099-03-04.0001.txt", "2099-03-04.abc.txt", "2099-03-04.090000.txt"):
+        (tmp_path / n).write_text("x")
+    assert mfa.find_pack(DAY, tmp_path).name == "2099-03-04.090000.txt"
+    for n in ("2099-03-04.090000.txt",):
+        (tmp_path / n).unlink()
+    assert mfa.find_pack(DAY, tmp_path) is None
