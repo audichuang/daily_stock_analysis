@@ -83,7 +83,6 @@ from src.report_language import (
     get_placeholder_text,
     get_unknown_text,
     get_chip_unavailable_text,
-    infer_decision_type_from_advice,
     is_chip_placeholder_value,
     localize_chip_health,
     localize_confidence_level,
@@ -1207,6 +1206,21 @@ def fill_price_position_if_needed(
         logger.warning("[price_position] Fill failed, skipping: %s", e)
 
 
+def _structured_decision_type(result: Any) -> str:
+    """從結構化 decision_type（或完整標籤）取三態，壞掉才看結構化 action，都沒有回 hold。
+
+    action 只在三態欄位缺漏或壞掉時才看：分數對齊可能已把 hold 升成 buy，不能蓋過有效的三態。
+    """
+    raw = str(getattr(result, "decision_type", "") or "").strip().lower()
+    if raw in {"buy", "hold", "sell"}:
+        return raw
+    return (
+        decision_type_for_action(raw, default="")
+        or decision_type_for_action(getattr(result, "action", None), default="")
+        or "hold"
+    )
+
+
 def stabilize_decision_with_structure(
     result: "AnalysisResult",
     trend_result: Any = None,
@@ -1247,15 +1261,9 @@ def stabilize_decision_with_structure(
             price_position.get("resistance_level"),
             _first_list_value(trend_dict.get("resistance_levels")),
         )
-        decision_type = infer_decision_type_from_advice(
-            getattr(result, "decision_type", ""),
-            default="",
-        ) or decision_type_for_action(
-            getattr(result, "action", None), default="",
-        ) or infer_decision_type_from_advice(
-            getattr(result, "operation_advice", ""), default="hold",
-        )
-        # 結構化決策優先，缺值時才接受完整標籤；顯示句子不能另闢買入校準路徑。
+        # 三態只讀 LLM 給的結構化 decision_type（或完整標籤），三態壞掉才看結構化 action；
+        # 不解讀 operation_advice 建議句（本 fork 刻意與上游 #1289 分歧）。
+        decision_type = _structured_decision_type(result)
         # 買入分數稍後會把持有／觀望對齊成買入，須先接受同一套資金流與結構護欄；
         # sell 不走這條：對齊不會把賣出升成買入，套買入校準反而會跳過賣出校準。
         is_buy_decision = decision_type == "buy" or (

@@ -45,9 +45,3 @@
 ## 回滾
 
 `git revert -m 1 <merge commit>`。無 schema 變更。
-
-## fork 刻意分歧（2026-10-27 補記）
-
-本次修復基線：本地 HEAD 與 fetch 後的 `origin/develop` 皆為 `7093f4b7`，工作樹已在相同基線，無須更新。
-
-- 上游 `e22cf8e1`（#1289）的建議意圖推測不再保留：`infer_decision_type_from_advice` 只保留 `_canonicalize_lookup_value` 的完整標籤查表，移除子字串／否定掃描與專用詞表。結構／三大法人校準及大盤脈絡護欄優先使用模型的結構化 `decision_type`，缺漏時投影 `action`，再試完整標籤；皆未知則沿用各自預設，不讀建議句子補判買賣。`hold` 配買入區分數的既有護欄仍保留。未來同步不得重新加入片語推測或以程式計算值代替模型判斷；契約見 [`decision-signals.md`](decision-signals.md#結構化動作與未知建議)，守門為 `test_report_language.py`、`test_decision_stability.py`、`test_daily_market_context_guardrail.py`。

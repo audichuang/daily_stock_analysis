@@ -529,25 +529,38 @@ def test_skips_downgrade_when_only_generic_risk_warning_and_sell_near_support() 
     assert "价格贴近支撑且未见资金持续流出" in result.risk_warning
 
 
-def test_stability_uses_structured_action_when_decision_type_is_free_text() -> None:
-    result = _result(
-        decision_type="建议卖出",
-        operation_advice="建议卖出",
-        score=30,
-        current_price=30.4,
-        change_pct=1.0,
-    )
+@pytest.mark.parametrize("decision_type", ["建议卖出", "unknown", ""])
+def test_malformed_decision_type_uses_structured_sell_action(decision_type) -> None:
+    # 三態壞掉時改讀 LLM 的結構化 action：賣出＋近支撐＋資金流入 → 洗盤觀察
+    result = _result(decision_type=decision_type, operation_advice="建议卖出", score=30, current_price=30.4, change_pct=1.0)
     result.action = "sell"
 
-    stabilize_decision_with_structure(
-        result,
-        SimpleNamespace(support_levels=[30.0], resistance_levels=[34.0]),
-        _fund_flow(main=500_000, five_day=300_000),
-    )
+    stabilize_decision_with_structure(result, _LEVELS, _fund_flow(main=500_000, five_day=300_000))
 
     assert result.decision_type == "hold"
     assert result.operation_advice == "洗盘观察"
     assert result.dashboard["decision_stability"]["applied"] is True
+
+
+def test_malformed_decision_type_exact_label_is_still_honoured() -> None:
+    # 反向：完整標籤（「卖出」）不是自由文字，沒有 action 也要走賣出校準
+    result = _result(decision_type="卖出", operation_advice="随便写的文字", score=30, current_price=30.4, change_pct=1.0)
+
+    stabilize_decision_with_structure(result, _LEVELS, _fund_flow(main=500_000, five_day=300_000))
+
+    assert result.decision_type == "hold"
+    assert result.dashboard["decision_stability"]["applied"] is True
+
+
+def test_free_text_decision_type_without_structured_action_is_not_read_as_sell() -> None:
+    # 本 fork 刻意與上游分歧：「建议卖出」這類句子不推成賣出，沒有結構化值就照預設 hold 處理
+    result = _result(decision_type="建议卖出", operation_advice="建议卖出", score=30, current_price=30.4, change_pct=1.0)
+
+    stabilize_decision_with_structure(result, _LEVELS, _fund_flow(main=500_000, five_day=300_000))
+
+    assert result.decision_type == "建议卖出"
+    assert result.operation_advice == "建议卖出"
+    assert not result.dashboard.get("decision_stability", {}).get("applied")
 
 
 def test_downgrades_sell_near_support_without_sustained_outflow() -> None:
@@ -628,63 +641,31 @@ def test_tw_sell_near_support_unchanged_when_capital_flow_not_supported() -> Non
 
 
 @pytest.mark.usefixtures("tw_institution_path")
-@pytest.mark.parametrize("advice", ["建议买入", "建議現在買入", "Buy now", "买入"])
-def test_tw_hold_with_buy_advice_does_not_use_institution_bias(advice) -> None:
-    # 結構化持有優先於顯示文字，不能因句子或舊標籤而啟用法人買入校準。
+@pytest.mark.parametrize("advice", ["建议现在买入", "建议买入", "建議現在買入"])
+def test_tw_hold_with_buy_advice_text_is_not_treated_as_buy(advice) -> None:
+    # 本 fork 刻意與上游分歧：decision_type=hold 時建議句寫買入不算買入結論，不套三大法人校準
     result = _result(decision_type="hold", operation_advice=advice, score=58, current_price=32.0)
     result.code = "6488.TWO"
-    result.action = "hold"
 
     stabilize_decision_with_structure(result, _LEVELS, _tw_context(1_000_000, -200_000))
 
     assert result.dashboard["decision_stability"]["capital_flow_bias"] == "unavailable"
     assert result.dashboard["decision_stability"]["applied"] is False
-    assert result.decision_type == "hold"
-    assert result.action == "hold"
     assert result.operation_advice == advice
-    assert result.sentiment_score == 58
+    assert result.decision_type == "hold"
 
 
 @pytest.mark.usefixtures("tw_institution_path")
-@pytest.mark.parametrize("decision_type,action", [("buy", "buy"), ("", "buy"), ("unknown", "add")])
-def test_tw_structured_buy_still_uses_institution_bias(decision_type, action) -> None:
-    # 反向：移除文字推測後，模型的買入／加碼仍須套用法人與結構校準。
-    result = _result(decision_type=decision_type, operation_advice="暫不加倉", score=58, current_price=32.0)
-    result.code = "2330.TW"
-    result.action = action
+def test_tw_structured_buy_uses_institution_bias_whatever_the_advice_text() -> None:
+    # 反向：結構化 decision_type=buy 才是買入結論；建議句寫持有也要走三大法人＋區間中段校準
+    result = _result(decision_type="buy", operation_advice="持有观察", score=58, current_price=32.0)
+    result.code = "6488.TWO"
 
-    stabilize_decision_with_structure(result, _LEVELS, _tw_context(-1_000_000, -200_000))
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(1_000_000, -200_000))
 
-    assert result.dashboard["decision_stability"]["capital_flow_bias"] == "outflow"
+    assert result.dashboard["decision_stability"]["capital_flow_bias"] == "neutral"
     assert result.dashboard["decision_stability"]["applied"] is True
     assert result.decision_type == "hold"
-    assert result.action == "watch"
-
-
-@pytest.mark.parametrize("decision_type", ["", "建议卖出"])
-def test_stability_unknown_decision_does_not_scan_advice(decision_type) -> None:
-    result = _result(
-        decision_type=decision_type, operation_advice="建议卖出", score=30, current_price=30.4,
-    )
-
-    stabilize_decision_with_structure(result, _LEVELS, _fund_flow(main=500_000))
-
-    assert result.decision_type == decision_type
-    assert result.operation_advice == "建议卖出"
-    assert not result.dashboard.get("decision_stability", {}).get("applied")
-
-
-def test_stability_missing_structured_decision_still_accepts_exact_advice_label() -> None:
-    result = _result(
-        decision_type="", operation_advice="卖出", score=30, current_price=30.4,
-    )
-
-    stabilize_decision_with_structure(result, _LEVELS, _fund_flow(main=500_000))
-
-    assert result.decision_type == "hold"
-    assert result.action == "hold"
-    assert result.operation_advice == "洗盘观察"
-    assert result.dashboard["decision_stability"]["applied"] is True
 
 
 @pytest.mark.usefixtures("tw_institution_path")
@@ -766,3 +747,48 @@ def test_accepted_sessions_are_last_two_completed_sessions(monkeypatch) -> None:
     assert analyzer_module._tw_institution_accepted_sessions() is None
     monkeypatch.setattr(cal, "get_trading_dates", lambda market, s, e: pd.DatetimeIndex(["2026-10-17", "2026-10-20"]))
     assert analyzer_module._tw_institution_accepted_sessions() is None
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+@pytest.mark.parametrize("advice", ["Buy now", "买入"])
+def test_tw_structured_hold_beats_buy_advice_and_label(advice) -> None:
+    # 結構化持有優先於顯示文字：連整段就是「买入」標籤也不啟用法人買入校準。
+    result = _result(decision_type="hold", operation_advice=advice, score=58, current_price=32.0)
+    result.code = "6488.TWO"
+    result.action = "hold"
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(1_000_000, -200_000))
+
+    assert result.dashboard["decision_stability"]["capital_flow_bias"] == "unavailable"
+    assert result.dashboard["decision_stability"]["applied"] is False
+    assert result.decision_type == "hold"
+    assert result.action == "hold"
+    assert result.sentiment_score == 58
+
+
+@pytest.mark.usefixtures("tw_institution_path")
+@pytest.mark.parametrize("decision_type,action", [("", "buy"), ("unknown", "add")])
+def test_tw_malformed_decision_type_structured_buy_action_uses_institution_bias(decision_type, action) -> None:
+    # 反向：三態壞掉時，模型的結構化買入／加碼仍須套用法人與結構校準。
+    result = _result(decision_type=decision_type, operation_advice="暫不加倉", score=58, current_price=32.0)
+    result.code = "2330.TW"
+    result.action = action
+
+    stabilize_decision_with_structure(result, _LEVELS, _tw_context(-1_000_000, -200_000))
+
+    assert result.dashboard["decision_stability"]["capital_flow_bias"] == "outflow"
+    assert result.dashboard["decision_stability"]["applied"] is True
+    assert result.decision_type == "hold"
+    assert result.action == "watch"
+
+
+@pytest.mark.parametrize("advice", ["建议卖出", "卖出"])
+def test_missing_structured_decision_does_not_read_advice(advice) -> None:
+    # 分析器路徑完全不讀 operation_advice：缺三態與 action 時照預設 hold，不走賣出校準。
+    result = _result(decision_type="", operation_advice=advice, score=30, current_price=30.4)
+
+    stabilize_decision_with_structure(result, _LEVELS, _fund_flow(main=500_000))
+
+    assert result.decision_type == ""
+    assert result.operation_advice == advice
+    assert not result.dashboard.get("decision_stability", {}).get("applied")

@@ -529,3 +529,26 @@ def test_malformed_decision_type_not_inferred_hold_ignores_buy_band_score(advice
     ) == []
     assert result.operation_advice == advice
     assert result.sentiment_score == 82
+
+
+def test_malformed_decision_type_structured_sell_action_beats_advice_label() -> None:
+    # 反向：結構化 action 說賣出時，建議欄的「买入」標籤不能把它改判成買入
+    result = _typed("", "买入", "zh")
+    result.action = "sell"
+
+    assert apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh"
+    ) == []
+    assert result.operation_advice == "买入"
+
+
+@pytest.mark.parametrize("advice", ["建议现在买入", "不宜追高但可分批买入", "建议买入"])
+def test_malformed_decision_type_does_not_scan_advice_sentence(advice) -> None:
+    # 本 fork 刻意與上游分歧：建議句子不是完整標籤就不推買賣，沒有結構化值時不觸發
+    result = _typed("", advice, "zh")
+    result.action = None
+
+    assert apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh"
+    ) == []
+    assert result.operation_advice == advice
