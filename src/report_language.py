@@ -1295,8 +1295,12 @@ def get_bias_status_emoji(value: Any) -> str:
 
 
 def infer_decision_type_from_advice(value: Any, default: str = "hold") -> str:
-    """只將既有完整動作標籤映射為三態；不從建議句子推測買賣意圖。"""
-    canonical = _canonicalize_lookup_value(value, _OPERATION_ADVICE_CANONICAL_MAP)
+    """只將既有完整動作標籤映射為三態；不從建議句子推測買賣意圖。
+
+    整段查一次表，不走 ``_canonicalize_lookup_value`` 的 /|,，、 拆段：
+    「不建议买入、加仓」拆段後會被讀成買入。
+    """
+    canonical = _OPERATION_ADVICE_CANONICAL_MAP.get(_normalize_lookup_key(value))
     if canonical in {"strong_buy", "buy"}:
         return "buy"
     if canonical in {"reduce", "sell", "strong_sell"}:

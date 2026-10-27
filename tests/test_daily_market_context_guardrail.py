@@ -552,3 +552,17 @@ def test_malformed_decision_type_does_not_scan_advice_sentence(advice) -> None:
         result, daily_market_context=_RISKY_CONTEXT, report_language="zh"
     ) == []
     assert result.operation_advice == advice
+
+
+@pytest.mark.parametrize("advice", ["不建议买入、加仓", "不宜追高/买入"])
+def test_malformed_decision_type_does_not_split_negated_advice_into_buy(advice) -> None:
+    # 頓號／斜線分隔的否定建議不是完整標籤，不能拆段後讀成買入而觸發軟化
+    result = _typed("unknown", advice, "zh")
+    result.action = None
+    result.sentiment_score = 55
+
+    assert apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh"
+    ) == []
+    assert result.operation_advice == advice
+    assert result.sentiment_score == 55

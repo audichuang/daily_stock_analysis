@@ -80,11 +80,19 @@ class ReportLanguageTestCase(unittest.TestCase):
             "持有": "hold", "洗盘观察": "hold", "观察": "hold", "观望": "hold",
             "减仓": "sell", "卖出": "sell", "强烈卖出": "sell",
             " Buy ": "buy", "strong_buy": "buy", "Hold": "hold", "Sell": "sell",
-            "Buy / Watch": "buy", "卖出/观望": "sell",
         }
         for label, expected in cases.items():
             with self.subTest(label=label):
                 self.assertEqual(infer_decision_type_from_advice(label, default=""), expected)
+
+    def test_infer_decision_type_from_advice_does_not_split_separated_text(self) -> None:
+        # 整段才算標籤：不可依 /|,，、 拆段後逐段查表，否則否定句會被讀成買入
+        for advice in (
+            "不建议买入、加仓", "不宜追高/买入", "Buy / Watch", "卖出/观望", "观望，买入",
+        ):
+            for default in ("", "hold"):
+                with self.subTest(advice=advice, default=default):
+                    self.assertEqual(infer_decision_type_from_advice(advice, default=default), default)
 
     def test_infer_decision_type_from_advice_free_text_uses_caller_default(self) -> None:
         for advice in (
