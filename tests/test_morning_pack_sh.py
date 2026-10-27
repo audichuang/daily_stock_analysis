@@ -87,3 +87,27 @@ def test_tee_failure_midway_never_publishes_truncated_pack(tmp_path, rc_cmd, exp
     assert p.returncode == expected_rc
     assert "WARN" in p.stderr and len(p.stdout) == 65536     # 終端那份是完整的
     assert list(d.iterdir()) == []
+
+
+def pack_env(directory, makeflags, *cmd):
+    env = {**os.environ, "MAKEFLAGS": makeflags}
+    p = subprocess.run(["bash", str(SCRIPT), str(directory), *cmd], capture_output=True, text=True, env=env)
+    return p.returncode, p.stdout, p.stderr
+
+
+# GNU make 3.81／4.x 實測的 MAKEFLAGS 形態
+@pytest.mark.parametrize("flags", ["n", "nk", "wn", "-n", " --no-print-directory -n", "n -- VAR=x", "n --jobserver-fds=3,4 -j"])
+def test_make_dry_run_does_not_publish_but_still_runs_command(tmp_path, flags):
+    d = tmp_path / "packs"
+    rc, out, err = pack_env(d, flags, "sh", "-c", "echo recipe-text; exit 0")
+    assert rc == 0 and out == "recipe-text\n" and "dry-run" in err
+    assert not d.exists() or list(d.iterdir()) == []
+    assert pack_env(d, flags, "sh", "-c", "exit 6")[0] == 6
+
+
+@pytest.mark.parametrize("flags", ["", "k", "s", " --no-print-directory", "VAR=nnn", " --no-print-directory -s -- VAR=nn", "--no-print-directory -k"])
+def test_non_dry_run_makeflags_still_publish(tmp_path, flags):
+    d = tmp_path / "packs"
+    rc, out, _ = pack_env(d, flags, "sh", "-c", "echo real")
+    assert rc == 0 and out == "real\n"
+    assert [p.name for p in d.iterdir()] == [f"{today()}.txt"]
