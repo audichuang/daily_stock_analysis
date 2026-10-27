@@ -2783,7 +2783,6 @@ class TestAnalyzerGenerateText:
             trend_prediction="看多",
             operation_advice="持有",
             analysis_summary="分析结果",
-            dashboard={"battle_plan": {"sniper_prices": {"stop_loss": 110}}},
         )
 
         def stream_response():
@@ -2850,7 +2849,6 @@ class TestAnalyzerGenerateText:
             trend_prediction="看多",
             operation_advice="持有",
             analysis_summary="分析结果",
-            dashboard={"battle_plan": {"sniper_prices": {"stop_loss": 110}}},
         )
 
         def stream_response():

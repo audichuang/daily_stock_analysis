@@ -1,7 +1,10 @@
-"""停損補問與成本護欄：模型價位不能由技術支撐代填。"""
+# -*- coding: utf-8 -*-
+"""買入結論缺模型停損價：程式只給證據請模型補一次，補不到由台股成本護欄降為觀望。
+
+程式不拿技術面支撐價頂替模型的停損（舊行為：support_levels[0] 寫進 sniper_prices.stop_loss）。
+"""
 
 import json
-from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -11,284 +14,435 @@ from tests.litellm_stub import ensure_litellm_stub
 
 ensure_litellm_stub()
 
-from src.analyzer import AnalysisResult, GeminiAnalyzer, _AllModelsFailedError
-from src.core.pipeline import StockAnalysisPipeline
-from src.enums import ReportType
-from src.schemas.decision_scale import extract_decision_guardrail_reason
-from src.services.analysis_context_builder import PipelineAnalysisArtifacts
-from src.utils.sniper_points import extract_sniper_points
+from src.analyzer import (  # noqa: E402
+    AnalysisResult,
+    GeminiAnalyzer,
+    format_stop_loss_evidence,
+    parse_sniper_repair_reply,
+)
+from src.core.pipeline import StockAnalysisPipeline  # noqa: E402
+from src.trade_cost_guardrail import apply_trade_cost_guardrail  # noqa: E402
+from src.utils.sniper_points import SNIPER_KEYS, extract_sniper_points  # noqa: E402
+
+TREND = SimpleNamespace(support_levels=[96.0, 92.5], atr14_pct=2.4)
+MALFORMED_BLOCKS = [[], "N/A", {}]
 
 
-PRICES = {"ideal_buy": 120, "stop_loss": 110, "take_profit": 150}
-ABSENT = object()
-TREND = SimpleNamespace(support_levels=[96], atr14_pct=3.5)
-
-
-def result_with(prices=ABSENT, *, code="00631L.TW", action="buy", score=78, decision="buy"):
-    battle = {"sniper_points": {"stop_loss": ""}}
-    if prices is not ABSENT:
-        battle["sniper_prices"] = deepcopy(prices)
+def _result(code="AAPL", *, prices=None, decision_type="buy", action="buy", score=72,
+            advice="买入", text_stop="", error_message=None):
+    battle = {"sniper_points": {"ideal_buy": "100", "stop_loss": text_stop, "take_profit": "120"}}
+    if prices is not None:
+        battle["sniper_prices"] = prices
     return AnalysisResult(
         code=code, name="測試", sentiment_score=score, trend_prediction="看多",
-        operation_advice="買入" if decision == "buy" else "持有", decision_type=decision,
-        action=action, analysis_summary="分析完成", report_language="zh-TW",
-        dashboard={"core_conclusion": {"one_sentence": "分析完成"},
-                   "intelligence": {"risk_alerts": []}, "battle_plan": battle},
+        operation_advice=advice, decision_type=decision_type, action=action,
+        analysis_summary="摘要", report_language="zh", current_price=100,
+        error_message=error_message,
+        dashboard={
+            "core_conclusion": {"one_sentence": "一句話"},
+            "intelligence": {"risk_alerts": []},
+            "battle_plan": battle,
+        },
     )
 
 
-def pipeline_with(reply="{}"):
+class _FakeAnalyzer:
+    """記錄補全提示詞；提示詞沿用真的 GeminiAnalyzer 組法。"""
+
+    def __init__(self, reply):
+        self.reply = reply
+        self.prompts = []
+        self._real = GeminiAnalyzer.__new__(GeminiAnalyzer)
+
+    def build_sniper_repair_prompt(self, *args, **kwargs):
+        return self._real.build_sniper_repair_prompt(*args, **kwargs)
+
+    def generate_text(self, prompt, **kwargs):
+        self.prompts.append(prompt)
+        return self.reply
+
+
+def _pipeline(reply, *, enabled=True, retry=1):
     pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
     pipeline.config = SimpleNamespace(
-        report_language="zh-TW", report_integrity_enabled=False, report_integrity_retry=0,
+        report_language="zh", report_integrity_enabled=enabled, report_integrity_retry=retry,
     )
-    pipeline.analyzer = MagicMock(spec=GeminiAnalyzer)
-    pipeline.analyzer.generate_text.return_value = reply
-    pipeline.db = MagicMock()
-    pipeline.db.save_analysis_history.return_value = 1
-    pipeline.save_context_snapshot = False
-    pipeline.query_source = "test"
-    pipeline.analysis_skills = None
-    pipeline._extract_decision_signal_after_history_save = MagicMock()
+    pipeline.analyzer = _FakeAnalyzer(reply)
     return pipeline
 
 
-def finalize(pipeline, result, *, trend=None):
-    saved = []
-    pipeline.db.save_analysis_history.side_effect = lambda **kw: saved.append(deepcopy(kw["result"])) or 1
+def _reply(prices, points=None):
+    body = {"sniper_prices": prices}
+    if points is not None:
+        body["sniper_points"] = points
+    return json.dumps(body, ensure_ascii=False)
+
+
+def _finalize(pipeline, result, code):
+    from src.services.analysis_context_builder import PipelineAnalysisArtifacts
+
+    pipeline.save_context_snapshot = False
+    pipeline._build_context_snapshot = MagicMock(return_value={})
+    pipeline.db = MagicMock()
+    pipeline.db.save_analysis_history.return_value = None
     artifacts = PipelineAnalysisArtifacts(
-        code=result.code, stock_name=result.name, market="tw", phase=None,
-        base_context={}, enhanced_context={}, realtime_quote=None, trend_result=trend,
-        chip_data=None, fundamental_context=None, news_context=None, news_result_count=None,
-        metadata={"query_id": "stop-repair"}, portfolio_context=None,
+        code=code, stock_name="測試", market="tw" if code.endswith(".TW") else "us", phase=None,
+        base_context={}, enhanced_context={}, realtime_quote=None, trend_result=None, chip_data=None,
+        fundamental_context={}, news_context=None, news_result_count=0, metadata={},
     )
-    pipeline._finalize_and_persist_result(
+    return pipeline._finalize_and_persist_result(
         result, artifacts, market_phase_summary=None, analysis_context_pack_overview=None,
         report_type="simple", snapshot_context={}, news_content_for_save=None,
     )
-    return saved[0]
 
 
-def test_backfill_keeps_model_null_instead_of_support_price():
-    result = result_with({**PRICES, "stop_loss": None})
-    pipeline = pipeline_with()
-    pipeline._backfill_agent_dashboard_fields(result, TREND, "zh-TW")
+# ---------- 規則 1：缺停損就請模型補一次，只寫模型回的值 ----------
+
+
+def test_null_model_stop_is_not_filled_with_support_and_prompt_carries_support_fact():
+    pipeline = _pipeline(_reply({"stop_loss": None}))
+    result = _result(prices={"ideal_buy": 100, "secondary_buy": None, "stop_loss": None, "take_profit": 120})
+    # 轉換時的回填不得拿支撐價 96 寫進模型專屬欄位
+    pipeline._backfill_agent_dashboard_fields(result, TREND, "zh")
+    assert result.dashboard["battle_plan"]["sniper_prices"]["stop_loss"] is None
+
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is False
+    assert len(pipeline.analyzer.prompts) == 1
+    prompt = pipeline.analyzer.prompts[0]
+    assert "支撑位：96、92.5" in prompt and "ATR14：2.4%" in prompt
+    # 模型仍回 null：維持 null，不由程式代填
     assert result.dashboard["battle_plan"]["sniper_prices"]["stop_loss"] is None
     assert extract_sniper_points(result)["stop_loss"] is None
 
 
-@pytest.mark.parametrize("code", ["AAPL", "2330.TW", "00679B.TWO"])
-@pytest.mark.parametrize("prices", [ABSENT, [], "N/A", {}, {**PRICES, "stop_loss": None}])
-def test_agent_repairs_every_missing_block_shape_and_keeps_only_model_fields(code, prices):
-    result = result_with(prices, code=code)
-    pipeline = pipeline_with('{"sniper_prices":{"stop_loss":110}}')
-    pipeline._backfill_agent_dashboard_fields(result, TREND, "zh-TW")
-    assert pipeline._repair_agent_stop_loss(result, TREND, "zh-TW")
-    pipeline.analyzer.generate_text.assert_called_once()
-    prompt = pipeline.analyzer.generate_text.call_args.args[0]
-    assert "sniper_prices.stop_loss" in prompt
-    assert "96" in prompt and "ATR14" in prompt and "3.5" in prompt
-    assert extract_sniper_points(result)["stop_loss"] == 110
-    expected = PRICES if isinstance(prices, dict) and prices else {"stop_loss": 110}
-    assert result.dashboard["battle_plan"]["sniper_prices"] == expected
+def test_model_stop_from_repair_is_kept_as_is():
+    pipeline = _pipeline(_reply({"stop_loss": 110}, {"stop_loss": "跌破 110 出場"}))
+    result = _result(prices={"ideal_buy": 100, "secondary_buy": None, "stop_loss": None, "take_profit": 120})
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is True
+    assert extract_sniper_points(result) == {
+        "ideal_buy": 100, "secondary_buy": None, "stop_loss": 110, "take_profit": 120,
+    }
+    assert result.dashboard["battle_plan"]["sniper_points"]["stop_loss"] == "跌破 110 出場"
 
 
-@pytest.mark.parametrize("prices", [ABSENT, [], "N/A", {}, {**PRICES, "stop_loss": None}])
-@pytest.mark.parametrize("reply", ["{}", '{"sniper_prices":{"stop_loss":null}}', "暫不設定", "broken"])
-@pytest.mark.parametrize("code, expected_action", [("2330.TW", "watch"), ("AAPL", "buy")])
-def test_no_model_price_after_one_repair_preserves_block_and_market_scope(prices, reply, code, expected_action):
-    result = result_with(prices, code=code)
-    pipeline = pipeline_with(reply)
-    before = deepcopy(result.dashboard["battle_plan"])
-    assert not pipeline._repair_agent_stop_loss(result, TREND, "zh-TW")
-    pipeline.analyzer.generate_text.assert_called_once()
-    assert result.dashboard["battle_plan"] == before
-    saved = finalize(pipeline, result)
-    assert result.action == saved.action == expected_action
-    assert extract_sniper_points(saved)["stop_loss"] is None
-    if expected_action == "watch":
-        assert "缺停損價" in result.risk_warning
-        assert "無法檢查報酬風險比" in result.risk_warning
-        assert result.risk_warning in extract_decision_guardrail_reason({"dashboard": saved.dashboard})
-    else:
-        assert "cost_check" not in saved.dashboard["battle_plan"]
-        assert not result.risk_warning
+def test_model_stop_already_present_skips_repair():
+    pipeline = _pipeline(_reply({"stop_loss": 90}))
+    result = _result(prices={"ideal_buy": 100, "secondary_buy": None, "stop_loss": 95, "take_profit": 120})
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is False
+    assert pipeline.analyzer.prompts == []
+    assert extract_sniper_points(result)["stop_loss"] == 95
 
 
-@pytest.mark.parametrize("action, decision, score, repair", [
-    ("buy", "buy", 78, True), ("add", "buy", 78, True),
-    ("hold", "hold", 68, True), ("watch", "hold", 68, True),
-    ("hold", "hold", 55, False), ("watch", "hold", 55, False),
-    ("reduce", "sell", 68, False), ("sell", "sell", 78, False),
-    ("reduce", "hold", 68, False),
-])
-def test_agent_repair_matches_real_score_alignment_without_changing_sell_guardrail(action, decision, score, repair):
-    result = result_with({**PRICES, "stop_loss": None}, action=action, decision=decision, score=score)
-    pipeline = pipeline_with('{"sniper_prices":{"stop_loss":110}}')
-    assert pipeline._repair_agent_stop_loss(result, TREND, "zh-TW") is repair
-    assert pipeline.analyzer.generate_text.call_count == int(repair)
-
-
-@pytest.mark.parametrize("field, label", [
-    ("ideal_buy", "缺進場價"), ("stop_loss", "缺停損價"), ("take_profit", "缺目標價"),
-])
-def test_any_missing_tw_model_level_downgrades_before_history_and_signal(field, label):
-    from src.services.decision_signal_extractor import build_decision_signal_payload_from_report
-
-    result = result_with({**PRICES, field: None})
-    saved = finalize(pipeline_with(), result)
-    assert result.action == saved.action == "watch"
-    check = saved.dashboard["battle_plan"]["cost_check"]
-    assert check["status"] == "levels_missing" and check["passed"] is False
-    assert check["missing_fields"] == [field]
-    assert label in saved.risk_warning
-    assert "無法檢查報酬風險比" in saved.risk_warning
-    signal = build_decision_signal_payload_from_report(
-        saved, trace_id="stop-repair", query_source="test", report_type="simple", profile_source="legacy_unknown",
-    )
-    assert signal["action"] == "watch"
-    assert label in signal["metadata"]["guardrail_reason"]
-
-
-def test_model_prices_are_kept_and_cost_checked_normally():
-    result = result_with(PRICES)
-    pipeline = pipeline_with()
-    pipeline._backfill_agent_dashboard_fields(result, TREND, "zh-TW")
-    assert not pipeline._repair_agent_stop_loss(result, TREND, "zh-TW")
-    pipeline.analyzer.generate_text.assert_not_called()
-    saved = finalize(pipeline, result)
-    assert saved.action == "buy"
-    assert saved.dashboard["battle_plan"]["sniper_prices"] == PRICES
-    assert saved.dashboard["battle_plan"]["cost_check"]["passed"] is True
-
-
-@pytest.mark.parametrize("prices", [[], {**PRICES, "stop_loss": None}])
-def test_agent_model_supplies_complete_levels_and_normal_cost_evaluation(prices):
-    result = result_with(prices)
-    pipeline = pipeline_with(json.dumps({"sniper_prices": PRICES}))
-    assert pipeline._repair_agent_stop_loss(result, TREND, "zh-TW")
-    saved = finalize(pipeline, result)
-    assert saved.action == "buy"
-    assert saved.dashboard["battle_plan"]["sniper_prices"] == PRICES
-    assert saved.dashboard["battle_plan"]["cost_check"]["status"] == "ok"
-    assert saved.dashboard["battle_plan"]["cost_check"]["passed"] is True
-
-
-def test_agent_partial_repair_does_not_hide_missing_entry_and_target():
-    result = result_with([])
-    pipeline = pipeline_with('{"sniper_prices":{"stop_loss":110}}')
-    assert pipeline._repair_agent_stop_loss(result, TREND, "zh-TW")
-    saved = finalize(pipeline, result)
-    assert saved.action == "watch"
-    assert saved.dashboard["battle_plan"]["sniper_prices"] == {"stop_loss": 110}
-    assert saved.dashboard["battle_plan"]["cost_check"]["missing_fields"] == ["ideal_buy", "take_profit"]
-    assert "缺進場價" in saved.risk_warning and "缺目標價" in saved.risk_warning
-
-
-def run_analyzer(prices, *, code="2330.TW", reply_prices=PRICES, integrity=False, retries=0,
-                 action="buy", decision="buy", score=78, repair_failure=None, responses=None):
-    analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
-    analyzer._config_override = SimpleNamespace(
-        generation_backend="codex_cli", generation_fallback_backend="", litellm_model="",
-        gemini_request_delay=0, report_language="zh-TW", llm_temperature=0.2,
-        report_integrity_enabled=integrity, report_integrity_retry=retries,
-    )
-    initial = result_with(prices, code=code, action=action, decision=decision, score=score)
-    repaired = result_with(reply_prices, code=code, action=action, decision=decision, score=score)
-    client = MagicMock()
-    client.generate.side_effect = responses or [
-        (json.dumps(initial.to_dict(), ensure_ascii=False), "fake", None),
-        repair_failure or (json.dumps(repaired.to_dict(), ensure_ascii=False), "fake", None),
-    ]
-    analyzer._llm = client
-    with patch.object(analyzer, "is_available", return_value=True), \
-            patch.object(analyzer, "get_generation_backend_config_error", return_value=None), \
-            patch.object(analyzer, "_get_analysis_system_prompt", return_value="system"), \
-            patch.object(analyzer, "_get_skill_prompt_sections", return_value=(None, None, True)), \
-            patch.object(analyzer, "_format_prompt", return_value="base"), \
-            patch.object(analyzer, "_build_market_snapshot", return_value={}):
-        result = analyzer.analyze({"code": code, "stock_name": "測試",
-                                   "trend_analysis": {"support_levels": [96], "atr14_pct": 3.5}})
-    assert result.success, result.error_message
-    return result, client
-
-
-@pytest.mark.parametrize("prices", [ABSENT, [], "N/A", {}, {**PRICES, "stop_loss": None}])
 @pytest.mark.parametrize("code", ["AAPL", "2330.TW"])
-@pytest.mark.parametrize("integrity, retries", [(False, 0), (True, 0), (True, 3)])
-def test_single_model_repairs_once_with_support_and_atr_even_when_integrity_disabled(prices, code, integrity, retries):
-    result, client = run_analyzer(prices, code=code, integrity=integrity, retries=retries)
-    assert client.generate.call_count == 2
-    prompt = client.generate.call_args.args[0]
-    assert "sniper_prices.stop_loss" in prompt
-    assert "96" in prompt and "ATR14" in prompt and "3.5" in prompt
-    assert extract_sniper_points(result) == {**PRICES, "secondary_buy": None}
+@pytest.mark.parametrize("block", MALFORMED_BLOCKS, ids=["list", "na", "empty"])
+def test_malformed_block_is_repaired_like_any_missing_stop(code, block):
+    # 損壞區塊＝模型沒給：一樣請模型補，提示詞要整組四格；只寫模型回的格子
+    pipeline = _pipeline(_reply({"ideal_buy": 100, "stop_loss": 94, "take_profit": 118}))
+    result = _result(code, prices=block)
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is True
+    assert len(pipeline.analyzer.prompts) == 1
+    assert "dashboard.battle_plan.sniper_prices" in pipeline.analyzer.prompts[0]
+    written = result.dashboard["battle_plan"]["sniper_prices"]
+    assert written == {"ideal_buy": 100, "stop_loss": 94, "take_profit": 118}
+    # 模型沒回的 secondary_buy 不由程式補成任何值
+    assert "secondary_buy" not in written
+    assert extract_sniper_points(result) == {
+        "ideal_buy": 100, "secondary_buy": None, "stop_loss": 94, "take_profit": 118,
+    }
 
 
-@pytest.mark.parametrize("code, action", [("2330.TW", "watch"), ("AAPL", "buy")])
-def test_single_model_still_null_after_retry_uses_same_cost_scope(code, action):
-    prices = {**PRICES, "stop_loss": None}
-    result, client = run_analyzer(prices, code=code, reply_prices=prices, integrity=True, retries=3)
-    assert client.generate.call_count == 2
+def test_model_levels_are_kept_even_when_stop_is_still_missing():
+    # 損壞區塊、模型補了買點與目標但停損仍 null：模型回的格子照寫，回報沒補到停損
+    pipeline = _pipeline(_reply({"ideal_buy": 100, "stop_loss": None, "take_profit": 120}))
+    result = _result(prices="N/A")
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is False
+    assert result.dashboard["battle_plan"]["sniper_prices"] == {
+        "ideal_buy": 100, "stop_loss": None, "take_profit": 120}
+
+
+def test_legacy_text_contract_partial_reply_writes_stop_text_only():
+    # 沒有 sniper_prices 的舊契約：模型只回停損時寫進文字，不另建缺格的 sniper_prices
+    pipeline = _pipeline(_reply({"stop_loss": 95}))
+    result = _result(prices=None, text_stop="跌破季線停損")
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is True
+    assert "sniper_prices" not in result.dashboard["battle_plan"]
+    assert extract_sniper_points(result) == {
+        "ideal_buy": 100, "secondary_buy": None, "stop_loss": 95, "take_profit": 120,
+    }
+
+
+@pytest.mark.parametrize("decision_type, action, score", [
+    ("sell", "reduce", 72),   # 結構化賣出：買入區也不升買入
+    ("hold", "hold", 55),     # 買入區外的持有
+    ("hold", "reduce", 72),   # 買入區的減碼不會被對齊成買入
+])
+def test_non_long_decisions_are_not_repaired(decision_type, action, score):
+    pipeline = _pipeline(_reply({"stop_loss": 90}))
+    result = _result(prices={"ideal_buy": 100, "secondary_buy": None, "stop_loss": None, "take_profit": 120},
+                     decision_type=decision_type, action=action, score=score, advice="持有")
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is False
+    assert pipeline.analyzer.prompts == []
+
+
+def test_buy_band_hold_is_repaired_because_it_will_be_lifted():
+    pipeline = _pipeline(_reply({"stop_loss": 93}))
+    result = _result(prices={"ideal_buy": 100, "secondary_buy": None, "stop_loss": None, "take_profit": 120},
+                     decision_type="hold", action="hold", score=72, advice="持有")
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is True
+    assert extract_sniper_points(result)["stop_loss"] == 93
+
+
+@pytest.mark.parametrize("enabled, retry", [(False, 1), (True, 0)])
+def test_repair_follows_integrity_retry_switches(enabled, retry):
+    pipeline = _pipeline(_reply({"stop_loss": 90}), enabled=enabled, retry=retry)
+    result = _result(prices={"ideal_buy": 100, "secondary_buy": None, "stop_loss": None, "take_profit": 120})
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is False
+    assert pipeline.analyzer.prompts == []
+
+
+def test_trend_fallback_buy_is_not_sent_to_model():
+    # Agent 失敗、整份走趨勢退路：買入不是模型判的，不請模型替它補停損
+    pipeline = _pipeline(_reply({"stop_loss": 90}))
+    result = _result(prices=None, error_message="Agent 未能生成有效的决策仪表盘")
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is False
+    assert pipeline.analyzer.prompts == []
+
+
+def test_repair_call_failure_keeps_stop_missing():
+    pipeline = _pipeline(None)
+    pipeline.analyzer.generate_text = MagicMock(side_effect=RuntimeError("boom"))
+    result = _result(prices={"ideal_buy": 100, "secondary_buy": None, "stop_loss": None, "take_profit": 120})
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is False
     assert extract_sniper_points(result)["stop_loss"] is None
-    saved = finalize(pipeline_with(), result)
-    assert saved.action == action
 
 
-def test_stop_first_missing_during_general_completion_still_gets_one_stop_repair():
-    initial = result_with(PRICES, code="2330.TW")
-    initial.analysis_summary = ""
-    missing_stop = result_with({**PRICES, "stop_loss": None}, code="2330.TW")
-    repaired = result_with(PRICES, code="2330.TW")
-    responses = [(json.dumps(item.to_dict(), ensure_ascii=False), "fake", None)
-                 for item in (initial, missing_stop, repaired)]
-    result, client = run_analyzer(PRICES, integrity=True, retries=1, responses=responses)
-    assert client.generate.call_count == 3
-    assert extract_sniper_points(result)["stop_loss"] == 110
-    assert "96" in client.generate.call_args.args[0]
+def test_parse_repair_reply_only_reads_structured_values():
+    assert parse_sniper_repair_reply('說明：停損 95\n{"sniper_prices": {"stop_loss": 95}}') == (
+        {"stop_loss": 95}, None)
+    # 只有說明文字、沒有 sniper_prices：不從文字猜價
+    assert parse_sniper_repair_reply('{"sniper_points": {"stop_loss": "95"}}')[0] is None
+    assert parse_sniper_repair_reply('{"sniper_prices": "N/A"}')[0] is None
+    assert parse_sniper_repair_reply(None) == (None, None)
 
 
-@pytest.mark.parametrize("code, action", [("2330.TW", "watch"), ("AAPL", "buy")])
-@pytest.mark.parametrize("repair_failure", [
-    RuntimeError("repair failed"), _AllModelsFailedError("repair failed"), ("not JSON", "fake", None),
+# ---------- 規則 2：台股買入缺任一格就無法檢查風報比，降為觀望 ----------
+
+
+def _tw_buy(prices):
+    return _result("2330.TW", prices=prices)
+
+
+@pytest.mark.parametrize("missing, label", [
+    ("stop_loss", "缺止损价"),
+    ("take_profit", "缺目标价"),
+    ("ideal_buy", "缺买点"),
 ])
-def test_single_model_repair_failure_keeps_original_for_cost_check(code, action, repair_failure):
-    prices = {**PRICES, "stop_loss": None}
-    result, client = run_analyzer(prices, code=code, repair_failure=repair_failure)
-    assert client.generate.call_count == 2
-    assert result.dashboard["battle_plan"]["sniper_prices"] == prices
-    assert finalize(pipeline_with(), result).action == action
+def test_tw_buy_missing_any_level_is_softened_with_named_reason(missing, label):
+    prices = {"ideal_buy": 100, "secondary_buy": None, "stop_loss": 95, "take_profit": 115, missing: None}
+    result = _tw_buy(prices)
+    assert apply_trade_cost_guardrail(result, code=result.code, report_language="zh") == [
+        "trade_cost_levels_missing"]
+    assert (result.decision_type, result.action) == ("hold", "watch")
+    assert result.sentiment_score <= 59
+    reason = result.dashboard["decision_score_calibration"]["guardrail_reason"]
+    assert reason.startswith(label) and "无法检查风险收益比" in reason
+    assert result.dashboard["battle_plan"]["cost_check"]["missing_levels"] == [missing]
 
 
-@pytest.mark.parametrize("decision, action, score", [
-    ("buy", "buy", 78), ("hold", "hold", 55), ("sell", "reduce", 78),
+def test_tw_reason_names_every_missing_level_and_never_blames_the_model():
+    result = _tw_buy({"ideal_buy": 100, "secondary_buy": None, "stop_loss": None, "take_profit": None})
+    apply_trade_cost_guardrail(result, code=result.code, report_language="zh-TW")
+    reason = result.dashboard["decision_score_calibration"]["guardrail_reason"]
+    assert reason.startswith("缺停損價／缺目標價，無法檢查報酬風險比")
+    # 買入也可能來自程式趨勢退路，原因不能說是模型漏給
+    assert "模型" not in reason
+
+
+def test_tw_buy_with_all_three_levels_is_evaluated_normally():
+    passing = _tw_buy({"ideal_buy": 100, "secondary_buy": None, "stop_loss": 95, "take_profit": 115})
+    assert apply_trade_cost_guardrail(passing, code=passing.code, report_language="zh") == []
+    assert (passing.decision_type, passing.action) == ("buy", "buy")
+    assert passing.dashboard["battle_plan"]["cost_check"]["status"] == "ok"
+    assert "missing_levels" not in passing.dashboard["battle_plan"]["cost_check"]
+
+    thin = _tw_buy({"ideal_buy": 100, "secondary_buy": None, "stop_loss": 98, "take_profit": 101})
+    assert apply_trade_cost_guardrail(thin, code=thin.code, report_language="zh") == ["trade_cost_buy_softened"]
+
+
+@pytest.mark.parametrize("decision_type, action, score", [
+    ("hold", "hold", 55), ("hold", "watch", 55), ("sell", "sell", 30), ("hold", "reduce", 72),
 ])
-def test_single_model_preserves_valid_stop_and_non_actionable_decisions(decision, action, score):
-    prices = PRICES if decision == "buy" else {**PRICES, "stop_loss": None}
-    result, client = run_analyzer(prices, decision=decision, action=action, score=score)
-    assert client.generate.call_count == 1
-    assert result.action == action
+def test_tw_non_buy_missing_levels_is_untouched(decision_type, action, score):
+    result = _result("2330.TW", prices=dict.fromkeys(SNIPER_KEYS), decision_type=decision_type,
+                     action=action, score=score, advice="持有")
+    assert apply_trade_cost_guardrail(result, code=result.code, report_language="zh") == []
+    assert (result.decision_type, result.action, result.sentiment_score) == (decision_type, action, score)
 
 
-@pytest.mark.parametrize("multi_agent", [False, True])
+def test_non_tw_buy_missing_levels_keeps_guardrail_scope():
+    result = _result("AAPL", prices=dict.fromkeys(SNIPER_KEYS))
+    assert apply_trade_cost_guardrail(result, code="AAPL", report_language="zh") == []
+    assert (result.decision_type, result.action) == ("buy", "buy")
+
+
+# ---------- 端到端：補全 → 定稿護欄 ----------
+
+
+@pytest.mark.parametrize("block", MALFORMED_BLOCKS + [{"ideal_buy": 100, "stop_loss": None, "take_profit": 120}],
+                         ids=["list", "na", "empty", "null-stop"])
+def test_tw_still_missing_after_repair_ends_as_watch(block):
+    pipeline = _pipeline(_reply({"stop_loss": None}))
+    result = _result("2330.TW", prices=block)
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is False
+    assert len(pipeline.analyzer.prompts) == 1
+    final = _finalize(pipeline, result, "2330.TW")
+    assert final.action == "watch" and final.decision_type == "hold"
+    assert "无法检查风险收益比" in final.dashboard["decision_score_calibration"]["guardrail_reason"]
+
+
+def test_tw_model_stop_after_repair_is_evaluated_normally():
+    pipeline = _pipeline(_reply({"stop_loss": 95}))
+    result = _result("2330.TW", prices={"ideal_buy": 100, "secondary_buy": None, "stop_loss": None,
+                                        "take_profit": 115})
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is True
+    final = _finalize(pipeline, result, "2330.TW")
+    assert final.action == "buy"
+    assert final.dashboard["battle_plan"]["cost_check"]["status"] == "ok"
+    assert final.dashboard["battle_plan"]["cost_check"]["passed"] is True
+
+
+def test_non_tw_still_missing_after_repair_stays_buy_but_repair_was_attempted():
+    pipeline = _pipeline(_reply({"stop_loss": None}))
+    result = _result("AAPL", prices="N/A")
+    assert pipeline._repair_agent_stop_loss(result, TREND, "zh") is False
+    assert len(pipeline.analyzer.prompts) == 1
+    final = _finalize(pipeline, result, "AAPL")
+    assert final.action == "buy"
+
+
+def test_tw_buy_band_hold_without_stop_is_lifted_then_downgraded():
+    pipeline = _pipeline(_reply({"stop_loss": None}))
+    result = _result("2330.TW", prices={"ideal_buy": 100, "secondary_buy": None, "stop_loss": None,
+                                        "take_profit": 115}, decision_type="hold", action="hold",
+                     score=72, advice="持有")
+    pipeline._repair_agent_stop_loss(result, TREND, "zh")
+    assert len(pipeline.analyzer.prompts) == 1
+    final = _finalize(pipeline, result, "2330.TW")
+    assert final.action == "watch"
+    assert final.dashboard["decision_score_calibration"]["guardrail_reason"].startswith("缺止损价")
+
+
+# ---------- 分析器（單模型）路徑：完整性重試附上支撐／ATR 證據 ----------
+
+
+def _analyzer():
+    analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
+    analyzer._router = None
+    analyzer._llm = None
+    analyzer._litellm_available = True
+    analyzer._skill_instructions_override = ""
+    analyzer._default_skill_policy_override = ""
+    analyzer._use_legacy_default_prompt_override = True
+    analyzer._config_override = SimpleNamespace(
+        generation_backend="litellm", generation_fallback_backend="litellm",
+        litellm_model="openai/test", litellm_fallback_models=[], llm_model_list=[],
+        report_language="zh", gemini_request_delay=0, llm_temperature=0.7,
+        report_integrity_enabled=True, report_integrity_retry=1,
+        news_max_age_days=3, news_strategy_profile="short",
+    )
+    return analyzer
+
+
+def _dashboard_json(stop):
+    return json.dumps({
+        "stock_name": "Apple", "sentiment_score": 72, "trend_prediction": "看多",
+        "operation_advice": "买入", "decision_type": "buy", "action": "buy",
+        "confidence_level": "中", "analysis_summary": "摘要",
+        "dashboard": {
+            "core_conclusion": {"one_sentence": "一句话"},
+            "intelligence": {"risk_alerts": []},
+            "battle_plan": {
+                "sniper_points": {"ideal_buy": "100", "secondary_buy": "", "stop_loss": "", "take_profit": "120"},
+                "sniper_prices": {"ideal_buy": 100, "secondary_buy": None, "stop_loss": stop, "take_profit": 120},
+            },
+        },
+    }, ensure_ascii=False)
+
+
+def _analyze(responses):
+    from tests.test_analyzer_prompt_language import _rich_context
+
+    analyzer = _analyzer()
+    context = _rich_context()
+    context["trend_analysis"] = {**context["trend_analysis"], "support_levels": [96.0], "atr14_pct": 2.4}
+    prompts = []
+    queue = list(responses)
+
+    def _fake(prompt, generation_config, **kwargs):
+        prompts.append(prompt)
+        return queue.pop(0), "openai/test", {}
+
+    with patch.object(analyzer, "_call_litellm", side_effect=_fake):
+        result = analyzer.analyze(context, news_context="headline")
+    return result, prompts
+
+
+def test_analyzer_retry_prompt_carries_support_fact_and_keeps_model_stop():
+    result, prompts = _analyze([_dashboard_json(None), _dashboard_json(97)])
+    assert len(prompts) == 2
+    assert "支撑位：96" not in prompts[0]
+    assert "支撑位：96" in prompts[1] and "ATR14：2.4%" in prompts[1]
+    assert extract_sniper_points(result)["stop_loss"] == 97
+
+
+def test_analyzer_retry_still_null_stays_null():
+    result, prompts = _analyze([_dashboard_json(None), _dashboard_json(None)])
+    assert len(prompts) == 2
+    assert extract_sniper_points(result)["stop_loss"] is None
+
+
+def test_analyzer_complete_report_needs_no_evidence_retry():
+    result, prompts = _analyze([_dashboard_json(95)])
+    assert len(prompts) == 1
+    assert extract_sniper_points(result)["stop_loss"] == 95
+
+
+def test_evidence_is_empty_without_support_or_atr():
+    assert format_stop_loss_evidence(None) == ""
+    assert format_stop_loss_evidence(SimpleNamespace(support_levels=[], atr14_pct=None)) == ""
+    assert "Support levels: 96" in format_stop_loss_evidence({"support_levels": [96]}, "en")
+
+
+# ---------- 真實 Agent 入口：單 agent 與多 agent 都在落庫前補問（移植自 A 實作） ----------
+
+
+@pytest.mark.parametrize("multi_agent", [False, True], ids=["single", "multi"])
 @pytest.mark.parametrize("code, expected", [("00631L.TW", "watch"), ("AAPL", "buy")])
 def test_real_agent_path_repairs_before_persist_for_both_executor_modes(multi_agent, code, expected):
-    from src.agent.executor import AgentResult
+    from copy import deepcopy
 
-    pipeline = pipeline_with()
+    from src.agent.executor import AgentResult
+    from src.enums import ReportType
+
+    pipeline = _pipeline(_reply({"stop_loss": None}))
     pipeline.config.agent_arch = "multi" if multi_agent else "single"
     pipeline.search_service = None
     pipeline.social_sentiment_service = None
+    pipeline.save_context_snapshot = False
+    pipeline.query_source = "test"
+    pipeline.analysis_skills = None
+    pipeline._extract_decision_signal_after_history_save = MagicMock()
     pipeline._ensure_agent_history = MagicMock()
     pipeline._load_agent_analysis_context = MagicMock(return_value={})
     pipeline._load_persisted_intelligence_context = MagicMock(return_value=None)
     pipeline._build_analysis_context_pack_outputs = MagicMock(return_value=(None, None))
-    payload = result_with([], code=code, action="watch", decision="hold", score=68).to_dict()
-    agent = AgentResult(success=True, content="{}", dashboard=payload, provider="fake")
-    executor = MagicMock()
-    executor.run.return_value = agent
     saved = []
+    pipeline.db = MagicMock()
     pipeline.db.save_analysis_history.side_effect = lambda **kw: saved.append(deepcopy(kw["result"])) or 1
+    # 買入區分數的持有＋損壞區塊：定稿會被對齊成買入，必須先補問
+    payload = _result(code, prices=[], decision_type="hold", action="watch", score=72, advice="持有").to_dict()
+    executor = MagicMock()
+    executor.run.return_value = AgentResult(success=True, content="{}", dashboard=payload, provider="fake")
     prompt_state = SimpleNamespace(
         skill_manager=MagicMock(), skills_to_activate=[], explicit_skill_selection=False,
         use_legacy_default_prompt=True, technical_skill_policy="", skill_instructions="", default_skill_policy="",
@@ -298,81 +452,21 @@ def test_real_agent_path_repairs_before_persist_for_both_executor_modes(multi_ag
             patch("src.agent.llm_adapter.LLMToolAdapter"), \
             patch("src.agent.factory._build_orchestrator", return_value=executor) as orchestrator, \
             patch("src.agent.executor.AgentExecutor", return_value=executor) as single:
-        result = pipeline._analyze_with_agent(
-            code, ReportType.SIMPLE, "repair-test", "測試", None, None,
-        )
+        result = pipeline._analyze_with_agent(code, ReportType.SIMPLE, "repair-test", "測試", None, None)
     assert orchestrator.call_count == int(multi_agent)
     assert single.call_count == int(not multi_agent)
     assert result is not None
-    pipeline.analyzer.generate_text.assert_called_once()
-    assert saved[0].action == result.action == expected
+    assert len(pipeline.analyzer.prompts) == 1
+    assert saved and saved[0].action == result.action == expected
 
 
-@pytest.mark.parametrize("supports", [[96], []])
+@pytest.mark.parametrize("supports", [[96.0], []])
 def test_enhanced_context_carries_real_support_only_as_evidence(supports):
     from src.stock_analyzer import TrendAnalysisResult
 
-    pipeline = pipeline_with()
+    pipeline = _pipeline("{}")
     pipeline.search_service = None
     trend = TrendAnalysisResult(code="2330.TW", support_levels=supports, atr14_pct=3.5)
     context = pipeline._enhance_context({"code": trend.code}, None, None, trend, fundamental_context={})
     assert context["trend_analysis"]["support_levels"] == supports
     assert "sniper_prices" not in context
-
-
-@pytest.mark.parametrize("code", ["2330.TW", "AAPL"])
-def test_agent_repair_exception_keeps_original_prices_for_cost_guardrail(code):
-    prices = {**PRICES, "stop_loss": None}
-    result = result_with(prices, code=code)
-    pipeline = pipeline_with()
-    pipeline.analyzer.generate_text.side_effect = RuntimeError("repair failed")
-    assert not pipeline._repair_agent_stop_loss(result, TREND, "zh-TW")
-    pipeline.analyzer.generate_text.assert_called_once()
-    assert result.dashboard["battle_plan"]["sniper_prices"] == prices
-    assert finalize(pipeline, result).action == ("watch" if code == "2330.TW" else "buy")
-
-
-def test_agent_legacy_model_numbers_survive_partial_stop_repair():
-    result = result_with()
-    result.dashboard["battle_plan"]["sniper_points"] = {"ideal_buy": "120元", "take_profit": "150元"}
-    pipeline = pipeline_with('{"sniper_prices":{"stop_loss":110}}')
-    assert pipeline._repair_agent_stop_loss(result, TREND, "zh-TW")
-    assert result.dashboard["battle_plan"]["sniper_prices"] == PRICES
-    assert finalize(pipeline, result).action == "buy"
-
-
-def test_legacy_model_stop_needs_no_repair_but_sentences_do():
-    pipeline = pipeline_with('{"sniper_prices":{"stop_loss":110}}')
-    result = result_with()
-    result.dashboard["battle_plan"]["sniper_points"]["stop_loss"] = "110元"
-    assert not pipeline._repair_agent_stop_loss(result, TREND, "zh-TW")
-    pipeline.analyzer.generate_text.assert_not_called()
-    result.dashboard["battle_plan"]["sniper_points"]["stop_loss"] = "跌破110元才評估停損"
-    assert pipeline._repair_agent_stop_loss(result, TREND, "zh-TW")
-    pipeline.analyzer.generate_text.assert_called_once()
-
-
-@pytest.mark.parametrize("language, label", [
-    ("zh-TW", "缺目標價"), ("zh", "缺目标价"), ("en", "missing target price"), ("ko", "목표가 누락"),
-])
-def test_missing_level_reason_localizes_and_never_blames_trend_fallback_on_model(language, label):
-    from src.trade_cost_guardrail import apply_trade_cost_guardrail
-
-    result = result_with({**PRICES, "take_profit": None})
-    result.data_sources = "agent:fake,trend:fallback"
-    apply_trade_cost_guardrail(result, code=result.code, report_language=language)
-    assert result.action == "watch"
-    assert label in result.risk_warning
-    assert "模型" not in result.risk_warning and "model" not in result.risk_warning.lower()
-
-
-@pytest.mark.parametrize("action, decision, score", [
-    ("hold", "hold", 55), ("watch", "hold", 55),
-    ("reduce", "hold", 68), ("reduce", "sell", 78), ("sell", "sell", 78),
-])
-def test_missing_levels_do_not_change_final_non_buy_actions(action, decision, score):
-    result = result_with({}, action=action, decision=decision, score=score)
-    saved = finalize(pipeline_with(), result)
-    assert saved.action == action
-    assert saved.sentiment_score == score
-    assert not saved.risk_warning

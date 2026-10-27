@@ -35,10 +35,9 @@ from data_provider.realtime_types import ChipDistribution, RealtimeSource
 from src.analyzer import (
     GeminiAnalyzer,
     AnalysisResult,
-    build_stop_loss_repair_prompt,
     fill_price_position_if_needed,
-    needs_stop_loss_repair,
-    parse_stop_loss_repair_reply,
+    format_stop_loss_evidence,
+    parse_sniper_repair_reply,
     normalize_chip_structure_availability,
     populate_decision_action_fields,
     stabilize_decision_with_structure,
@@ -46,7 +45,13 @@ from src.analyzer import (
 from src.notification import NotificationService, NotificationChannel
 from src.notification_sender import OutboundMessage
 from src.schemas.decision_action import decision_type_for_action, normalize_decision_action
-from src.utils.sniper_points import SNIPER_PRICES_KEY, extract_sniper_points, find_sniper_prices, parse_structured_price
+from src.utils.sniper_points import (
+    SNIPER_KEYS,
+    SNIPER_PRICES_KEY,
+    extract_sniper_points,
+    find_sniper_prices,
+    parse_structured_price,
+)
 from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.report_language import (
     get_placeholder_text,
@@ -1209,7 +1214,7 @@ class StockAnalysisPipeline:
                 'bias_ma5': trend_result.bias_ma5,
                 'bias_ma10': trend_result.bias_ma10,
                 'atr14_pct': getattr(trend_result, 'atr14_pct', None),
-                # 支撐只當補問停損的證據，不代填模型價位。
+                # 只當補問停損時給模型的證據；程式不拿它頂替模型的停損
                 'support_levels': list(getattr(trend_result, 'support_levels', None) or []),
                 'volume_status': trend_result.volume_status.value,
                 'volume_trend': trend_result.volume_trend,
@@ -1880,8 +1885,9 @@ class StockAnalysisPipeline:
             )
             if result:
                 result.query_id = query_id
+                # 買入／加碼結論缺模型停損價：帶技術面證據請模型補一次，不由程式代填
                 self._repair_agent_stop_loss(result, trend_result, report_language)
-            # 停損已獨立補問；其餘 Agent 完整性欄位維持弱模式占位。
+            # Agent weak integrity: 除上面的停損補全外不重試，其餘缺欄位只補占位
             if result and getattr(self.config, "report_integrity_enabled", False):
                 from src.analyzer import check_content_integrity, apply_placeholder_fill
 
@@ -2719,9 +2725,32 @@ class StockAnalysisPipeline:
             if text_missing and not stop_missing and isinstance(structured, dict):
                 # 文字漏寫但數字有給：顯示用文字直接沿用模型給的停損數字
                 sniper_points["stop_loss"] = structured.get("stop_loss")
-            # 缺漏只補顯示用占位文字，不把程式計算的支撐寫成模型判斷。
+            # 模型連文字都沒給停損：只放占位文字，不拿趨勢支撐價頂替——那是程式算的，
+            # 寫進去會被落庫與成本護欄當成模型判斷。缺停損的買入由 _repair_agent_stop_loss
+            # 請模型補一次，補不到由 trade_cost_guardrail 降為觀望（台股）。
             if stop_missing and text_missing:
                 sniper_points["stop_loss"] = get_placeholder_text(report_language)
+
+    @staticmethod
+    def _needs_model_stop_loss(result: AnalysisResult) -> bool:
+        """這份結論定稿時會不會是買入／加碼，而且沒有模型給的停損價。
+
+        持有／觀望但分數落在買入區、又不是結構化賣出時，定稿前的動作刷新會把它對齊成
+        買入（見 _refresh_decision_action_for_final_result），所以一併算進來。
+        """
+        decision_type = str(getattr(result, "decision_type", "") or "").strip().lower()
+        if decision_type == "sell":
+            return False
+        action = normalize_decision_action(getattr(result, "action", None))
+        long_entry = (
+            action in ("buy", "add")
+            or decision_type == "buy"
+            or (
+                action in (None, "hold", "watch")
+                and action_for_score(getattr(result, "sentiment_score", None)) == "buy"
+            )
+        )
+        return long_entry and extract_sniper_points(result).get("stop_loss") is None
 
     def _repair_agent_stop_loss(
         self,
@@ -2729,40 +2758,94 @@ class StockAnalysisPipeline:
         trend_result: Optional[TrendAnalysisResult],
         report_language: str,
     ) -> bool:
-        """各市場的買入缺停損都補問一次，僅合併模型實際回傳的格子。"""
-        if not needs_stop_loss_repair(result):
+        """Agent 給了買入結論卻沒有停損價時，帶支撐位／ATR 證據請模型補一次。回傳是否補到。
+
+        沿用完整性重試的開關（REPORT_INTEGRITY_ENABLED／REPORT_INTEGRITY_RETRY>0）與
+        補全欄位說明；sniper_prices 缺漏、損壞（[]、'N/A'、{}）或只缺停損都走同一條：
+        缺什麼由 check_content_integrity 決定，回覆裡模型給了哪幾格就只寫哪幾格。
+        補全失敗不拖垮分析，維持缺停損交給成本護欄。
+        """
+        if not getattr(self.config, "report_integrity_enabled", False):
             return False
         try:
-            reply = self.analyzer.generate_text(
-                build_stop_loss_repair_prompt(result, trend_result, report_language),
-                max_tokens=1024, temperature=0.2, call_type="agent",
+            retries = int(getattr(self.config, "report_integrity_retry", 0) or 0)
+        except (TypeError, ValueError):
+            retries = 0
+        if retries <= 0:
+            return False
+        if not getattr(result, "success", True) or not isinstance(result.dashboard, dict):
+            return False
+        if getattr(result, "error_message", None):
+            # Agent 沒產出有效儀表板、整份走趨勢退路：買入不是模型判的，不請模型替它補停損
+            return False
+        if not self._needs_model_stop_loss(result):
+            return False
+        analyzer = getattr(self, "analyzer", None)
+        if analyzer is None or not hasattr(analyzer, "build_sniper_repair_prompt"):
+            return False
+
+        from src.analyzer import STOP_LOSS_REPAIR_FIELDS, check_content_integrity
+
+        _, missing = check_content_integrity(result)
+        fields = [field for field in missing if field in STOP_LOSS_REPAIR_FIELDS]
+        if not fields:
+            fields = ["dashboard.battle_plan.sniper_points.stop_loss"]
+        try:
+            prompt = analyzer.build_sniper_repair_prompt(
+                result.dashboard,
+                fields,
+                format_stop_loss_evidence(trend_result, report_language),
+                report_language,
             )
-            prices, note = parse_stop_loss_repair_reply(reply)
-        except Exception as exc:
-            logger.warning("[%s] 停損補問失敗，保留原價位: %s", result.code, exc)
+            reply = analyzer.generate_text(prompt, max_tokens=1024, temperature=0.2, call_type="agent")
+        except Exception as exc:  # noqa: BLE001 - 補全失敗只維持缺停損
+            logger.warning("[%s] 停損補全呼叫失敗，維持缺停損: %s", result.code, exc)
             return False
+        prices, points = parse_sniper_repair_reply(reply)
         if not prices:
+            logger.info("[%s] 停損補全回覆沒有 sniper_prices，交給交易成本護欄處理", result.code)
             return False
-        # 舊版的純數值本來就是模型價位；只保留已有數字，不憑空補 null。
-        existing = find_sniper_prices(result.dashboard)
-        if existing is None:
-            existing = find_sniper_prices(getattr(result, "raw_response", None))
-        merged = dict(existing) if existing is not None else {
-            key: price for key, price in extract_sniper_points(result).items() if price is not None
-        }
-        merged.update(prices)
-        if not isinstance(result.dashboard, dict):
-            result.dashboard = {}
+        returned = {key: prices[key] for key in SNIPER_KEYS if key in prices}
+        stop = parse_structured_price(returned.get("stop_loss"))
+
         battle = result.dashboard.get("battle_plan")
         if not isinstance(battle, dict):
             battle = {}
             result.dashboard["battle_plan"] = battle
-        battle[SNIPER_PRICES_KEY] = merged
-        points = battle.get("sniper_points")
-        if not isinstance(points, dict):
-            points = {}
-            battle["sniper_points"] = points
-        points["stop_loss"] = note or prices["stop_loss"]
+        sniper_points = battle.get("sniper_points")
+        if not isinstance(sniper_points, dict):
+            sniper_points = {}
+            battle["sniper_points"] = sniper_points
+        existing = find_sniper_prices(result.dashboard)
+        if existing is None and set(returned) != set(SNIPER_KEYS):
+            # 舊版文字契約（沒有 sniper_prices）且模型只回部分格子：停損以純數字寫進文字，
+            # 不另建缺格的 sniper_prices，否則其他格會從「讀文字」變成「模型給 null」
+            if stop is not None:
+                sniper_points["stop_loss"] = returned["stop_loss"]
+        else:
+            # 損壞區塊讀取端本來就全讀成 None，換成模型回的格子不會改變其他格的語意
+            owner = result.dashboard if result.dashboard.get(SNIPER_PRICES_KEY) is not None else battle
+            merged = dict(existing or {})
+            merged.update(returned)
+            owner[SNIPER_PRICES_KEY] = merged
+            notes = points or {}
+            for key in returned:
+                note = notes.get(key)
+                if isinstance(note, str) and note.strip():
+                    sniper_points[key] = note.strip()
+                elif self._is_agent_field_missing(sniper_points.get(key), scalar=True) or (
+                    sniper_points.get(key) == get_placeholder_text(report_language)
+                ):
+                    sniper_points[key] = returned[key]
+        if stop is None:
+            # 其他格照寫模型回的值；停損仍缺就交給交易成本護欄
+            logger.info("[%s] 模型補全後仍未給停損價，交給交易成本護欄處理", result.code)
+            return False
+        if extract_sniper_points(result).get("stop_loss") != stop:
+            # 寫入位置被別處的區塊蓋過、讀取端看不到：照實回報沒補到，交給成本護欄
+            logger.warning("[%s] 模型補的停損價 %s 未被讀取端採用，維持缺停損", result.code, stop)
+            return False
+        logger.info("[%s] 模型補全停損價 %s", result.code, stop)
         return True
 
     @staticmethod

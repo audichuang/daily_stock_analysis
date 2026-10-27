@@ -191,14 +191,15 @@ class TestApplyGuardrail(unittest.TestCase):
         self.assertEqual(check["gross_downside_pct"], round((1 - 97.86 / 100.0) * 100, 2))
 
     def test_structured_null_stop_is_not_recovered_from_text(self):
-        # 結構化停損是 null：不從文字撈回，成本護欄揭露缺停損並降為觀望。
+        # 結構化停損是 null：不從文字的純數字撈回；買入缺停損無法檢核風報比，降為觀望
         r = _result(TYPICAL)
         r.dashboard["battle_plan"]["sniper_prices"] = {**TYPICAL, "stop_loss": None}
         self.assertEqual(apply_trade_cost_guardrail(r, code=r.code, report_language="zh-TW"),
-                         ["trade_cost_buy_softened"])
-        self.assertFalse(r.dashboard["battle_plan"]["cost_check"]["passed"])
-        self.assertEqual(r.action, "watch")
-        self.assertIn("缺停損價", r.risk_warning)
+                         ["trade_cost_levels_missing"])
+        check = r.dashboard["battle_plan"]["cost_check"]
+        self.assertIsNone(check.get("passed"))
+        self.assertEqual(check["missing_levels"], ["stop_loss"])
+        self.assertEqual((r.decision_type, r.action), ("hold", "watch"))
 
     def test_passing_buy_is_untouched(self):
         r = _result(WIDE)

@@ -349,88 +349,7 @@ def _legacy_audit_marker_specs(
 from src.llm.client import LLMClient, _AllModelsFailedError, _LiteLLMStreamError  # noqa: F401
 
 from src.utils.data_processing import normalize_report_signal_attribution
-from src.utils.sniper_points import (
-    SNIPER_KEYS, SNIPER_PRICES_KEY, extract_sniper_points, find_sniper_prices, parse_structured_price,
-)
-
-
-STOP_LOSS_REPAIR_FIELD = "dashboard.battle_plan.sniper_prices.stop_loss"
-
-
-def needs_stop_loss_repair(result: "AnalysisResult") -> bool:
-    """依定稿的分數對齊口徑判定買入，停損只讀模型數值；賣出矛盾留給原護欄。"""
-    decision_type = str(getattr(result, "decision_type", "") or "").strip().lower()
-    if decision_type == "sell":
-        return False
-    from src.services.decision_signal_extractor import resolve_decision_signal_action_fields
-
-    fields = resolve_decision_signal_action_fields(result, report_type="")
-    actionable = fields.get("action") in {"buy", "add"} or decision_type == "buy"
-    return actionable and extract_sniper_points(result).get("stop_loss") is None
-
-
-def format_stop_loss_evidence(trend: Any, report_language: str = "zh") -> str:
-    """支撐與 ATR 只供模型判斷，不直接填入模型價位。"""
-    def value(key: str) -> Any:
-        return trend.get(key) if isinstance(trend, dict) else getattr(trend, key, None)
-
-    levels = value("support_levels")
-    supports = [price for item in levels if (price := parse_structured_price(item)) is not None] \
-        if isinstance(levels, (list, tuple)) else []
-    atr = parse_structured_price(value("atr14_pct"))
-    facts = json.dumps({"support_levels": supports, "atr14_pct": atr}, ensure_ascii=False)
-    return _localized_text(
-        report_language,
-        zh_tw=f"停損參考證據（程式計算，只供參考）：{facts}；ATR14 單位為 %。停損由你判斷，"
-              "請明確輸出 sniper_prices.stop_loss 純數字或 null，不得直接把支撐視為停損。",
-        zh=f"止损参考证据（程序计算，仅供参考）：{facts}；ATR14 单位为 %。止损由你判断，"
-           "请明确输出 sniper_prices.stop_loss 纯数字或 null，不得直接把支撑视为止损。",
-        en=f"Stop-loss evidence (computed, reference only): {facts}; ATR14 is in %. Decide the stop yourself; "
-           "return sniper_prices.stop_loss as a plain number or null. Support is not automatically the stop.",
-        ko=f"손절 참고 근거(계산값, 참고용): {facts}; ATR14 단위는 %입니다. 손절은 직접 판단하여 "
-           "sniper_prices.stop_loss에 숫자 또는 null로 출력하세요. 지지선을 자동으로 손절로 사용하지 마세요.",
-    )
-
-
-def build_stop_loss_repair_prompt(result: "AnalysisResult", trend: Any, report_language: str) -> str:
-    """目前買入可能來自模型或趨勢退路，不把缺價原因歸咎於模型。"""
-    instruction = _localized_text(
-        report_language,
-        zh_tw="目前決策將採買入／加碼，但缺可讀取的停損價。請依證據自行判斷，僅回傳 JSON："
-              '{"sniper_prices":{"stop_loss":數字或null},"sniper_points":{"stop_loss":"停損說明"}}。'
-              "可同時補齊 ideal_buy、secondary_buy、take_profit，但只輸出你判斷的欄位與數值。",
-        zh="当前决策将采用买入／加仓，但缺可读取的止损价。请根据证据自行判断，仅返回 JSON："
-           '{"sniper_prices":{"stop_loss":数字或null},"sniper_points":{"stop_loss":"止损说明"}}。'
-           "可同时补齐 ideal_buy、secondary_buy、take_profit，但只输出你判断的字段与数值。",
-        en="The current decision will be buy/add but lacks a readable stop. Decide from the evidence and return JSON: "
-           '{"sniper_prices":{"stop_loss":number or null},"sniper_points":{"stop_loss":"stop note"}}. '
-           "You may also supply ideal_buy, secondary_buy and take_profit; output only your own judgments.",
-        ko="현재 결정은 매수/추가 매수이지만 읽을 수 있는 손절가가 없습니다. 근거로 판단하고 JSON만 반환하세요: "
-           '{"sniper_prices":{"stop_loss":숫자 또는 null},"sniper_points":{"stop_loss":"손절 설명"}}. '
-           "ideal_buy, secondary_buy, take_profit도 직접 판단한 필드만 추가할 수 있습니다.",
-    )
-    return "\n\n".join((
-        instruction, json.dumps(result.dashboard, ensure_ascii=False, default=str),
-        format_stop_loss_evidence(trend, report_language),
-    ))
-
-
-def parse_stop_loss_repair_reply(reply: Any) -> Tuple[Dict[str, Any], Optional[str]]:
-    """只收模型明確回傳的價位，不從說明猜價，也不替省略的格子補 null。"""
-    if not isinstance(reply, str):
-        return {}, None
-    try:
-        data = json.loads(repair_json(reply))
-    except (TypeError, ValueError):
-        return {}, None
-    prices = find_sniper_prices(data)
-    if prices is None or parse_structured_price(prices.get("stop_loss")) is None:
-        return {}, None
-    supplied = {key: prices[key] for key in SNIPER_KEYS if key in prices
-                and (prices[key] is None or parse_structured_price(prices[key]) is not None)}
-    points = data.get("sniper_points") if isinstance(data, dict) else None
-    note = points.get("stop_loss") if isinstance(points, dict) else None
-    return supplied, note if isinstance(note, str) and note.strip() else None
+from src.utils.sniper_points import SNIPER_KEYS, SNIPER_PRICES_KEY, find_sniper_prices, parse_structured_price
 
 
 def check_content_integrity(
@@ -646,6 +565,115 @@ def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) 
             elif field in phase_decision_placeholders:
                 if _is_blank_text(phase_decision.get(field.rsplit(".", 1)[-1])):
                     phase_decision[field.rsplit(".", 1)[-1]] = phase_decision_placeholders[field]
+
+
+# ---------- 停損價補全：程式只給證據，價位由模型決定 ----------
+
+# 完整性檢查列出這兩格之一，代表停損價可能沒給；命中才在補全提示詞附上技術面證據
+STOP_LOSS_REPAIR_FIELDS = (
+    "dashboard.battle_plan.sniper_points.stop_loss",
+    "dashboard.battle_plan.sniper_prices",
+)
+
+
+def _format_evidence_price(value: Any) -> Optional[str]:
+    price = parse_structured_price(value)
+    if price is None:
+        return None
+    return f"{round(price, 2):.2f}".rstrip("0").rstrip(".")
+
+
+def format_stop_loss_evidence(trend: Any, report_language: str = "zh") -> str:
+    """把技術面支撐位與 ATR14 寫成補全提示詞裡的證據。
+
+    這些數字是程式算的，只供模型參考；停損價由模型自己判斷後寫進
+    sniper_prices.stop_loss，程式不拿它們頂替模型的停損。trend 可為
+    TrendAnalysisResult 或它的 dict 形式（pipeline 的 trend_analysis 上下文）。
+    """
+    if trend is None:
+        return ""
+
+    def _get(key: str) -> Any:
+        return trend.get(key) if isinstance(trend, dict) else getattr(trend, key, None)
+
+    raw_levels = _get("support_levels")
+    supports: List[str] = []
+    for value in raw_levels if isinstance(raw_levels, (list, tuple)) else []:
+        text = _format_evidence_price(value)
+        if text is not None and text not in supports:
+            supports.append(text)
+        if len(supports) >= 3:
+            break
+    atr_text = _format_evidence_price(_get("atr14_pct"))
+    if not supports and atr_text is None:
+        return ""
+
+    lang = normalize_report_language(report_language)
+    if lang in ("en", "ko"):
+        lines = ["### Stop-loss reference data (computed from technicals; evidence only, never used as your stop automatically):"]
+        if supports:
+            lines.append(f"- Support levels: {', '.join(supports)}")
+        if atr_text is not None:
+            lines.append(f"- ATR14: {atr_text}%")
+        lines.append(
+            "The stop-loss is your call: if you set one, write it as a plain number in "
+            "dashboard.battle_plan.sniper_prices.stop_loss; if you decide not to set one, use null and explain why in "
+            "sniper_points.stop_loss. For Taiwan stocks a buy/add call without a stop-loss price is downgraded to "
+            "watch because its reward/risk cannot be checked."
+        )
+        return "\n".join(lines)
+    tw = lang == "zh-TW"
+    lines = ["### 停損參考數據（程式依技術面算出，只是證據，不會自動當成你的停損）：" if tw
+             else "### 止损参考数据（程序依技术面算出，只是证据，不会自动当成你的止损）："]
+    if supports:
+        lines.append(f"- {'支撐位' if tw else '支撑位'}：{'、'.join(supports)}")
+    if atr_text is not None:
+        lines.append(f"- ATR14：{atr_text}%")
+    lines.append(
+        "停損價由你判斷：要設停損就以純數字寫進 dashboard.battle_plan.sniper_prices.stop_loss；"
+        "判斷不設停損就填 null，並在 sniper_points.stop_loss 說明理由。台股的買入／加碼結論缺停損價時，"
+        "系統會因無法檢查報酬風險比而降為觀望。" if tw else
+        "止损价由你判断：要设止损就以纯数字写进 dashboard.battle_plan.sniper_prices.stop_loss；"
+        "判断不设止损就填 null，并在 sniper_points.stop_loss 说明理由。台股的买入／加仓结论缺止损价时，"
+        "系统会因无法检查风险收益比而降为观望。"
+    )
+    return "\n".join(lines)
+
+
+def parse_sniper_repair_reply(text: Any) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """解析價位補全回覆，回傳 (sniper_prices, sniper_points)：只取模型回的原值，不從文字猜價。
+
+    回覆可以只有這兩塊，也可以是整份儀表板（巢狀 dashboard／battle_plan 都找得到）。
+    sniper_prices 不是物件時視為沒給。
+    """
+    if not isinstance(text, str) or "{" not in text or "}" not in text:
+        return None, None
+    snippet = text[text.index("{"): text.rindex("}") + 1]
+    try:
+        data = json.loads(snippet)
+    except (TypeError, ValueError):
+        try:
+            data = json.loads(repair_json(snippet))
+        except (TypeError, ValueError):
+            return None, None
+    if not isinstance(data, dict):
+        return None, None
+    prices = find_sniper_prices(data)
+    prices = dict(prices) if prices else None
+
+    def _points(node: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(node, dict):
+            return None
+        value = node.get("sniper_points")
+        if isinstance(value, dict):
+            return dict(value)
+        for key in ("battle_plan", "dashboard"):
+            found = _points(node.get(key))
+            if found is not None:
+                return found
+        return None
+
+    return prices, _points(data)
 
 
 # ---------- chip_structure fallback (Issue #589) ----------
@@ -4223,8 +4251,6 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             retry_count = 0
             max_retries = config.report_integrity_retry if config.report_integrity_enabled else 0
             llm_client = self._resolve_llm_client()
-            stop_repair_baseline = None
-            stop_repair_attempted = False
 
             while True:
                 start_time = time.time()
@@ -4239,11 +4265,6 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                         audit_context=legacy_audit_context,
                     )
                 except _AllModelsFailedError as exc:
-                    if stop_repair_baseline is not None:
-                        # 補問失敗仍保留原報告，交由成本護欄檢核缺價。
-                        result = stop_repair_baseline
-                        logger.warning("[%s] 停損補問失敗，保留原報告", code)
-                        break
                     if exc.last_response_text is not None:
                         logger.warning(
                             "[LLM JSON] %s(%s): all models returned invalid JSON, using text fallback",
@@ -4255,12 +4276,6 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                         llm_usage = exc.last_usage
                     else:
                         raise
-                except Exception:
-                    if stop_repair_baseline is None:
-                        raise
-                    result = stop_repair_baseline
-                    logger.warning("[%s] 停損補問失敗，保留原報告", code)
-                    break
                 elapsed = time.time() - start_time
 
                 # 记录响应信息
@@ -4282,9 +4297,6 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
                 # 解析响应
                 result = self._parse_response(response_text, code, name)
-                if not result.success and stop_repair_baseline is not None:
-                    result = stop_repair_baseline
-                    break
                 result.raw_response = response_text
                 result.search_performed = bool(news_context)
                 result.market_snapshot = self._build_market_snapshot(context)
@@ -4292,30 +4304,29 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 result.report_language = report_language
                 normalize_chip_structure_availability(result, context.get("chip"))
 
-                # 買入缺停損必須補問一次，不受一般報告完整性開關影響。
-                stop_missing = needs_stop_loss_repair(result)
-                missing_fields = []
-                if config.report_integrity_enabled:
-                    _, missing_fields = self._check_content_integrity(
-                        result,
-                        require_phase_decision=isinstance(context.get("market_phase_context"), dict),
-                    )
-                if stop_missing:
-                    missing_fields.append(STOP_LOSS_REPAIR_FIELD)
-                if not missing_fields:
+                # 内容完整性校验（可选）
+                if not config.report_integrity_enabled:
                     break
-                retry_allowed = not stop_repair_attempted if stop_missing else retry_count < max_retries
-                if retry_allowed:
-                    stop_repair_baseline = result if stop_missing else None
-                    if stop_missing:
-                        stop_repair_attempted = True
+                require_phase_decision = isinstance(context.get("market_phase_context"), dict)
+                pass_integrity, missing_fields = self._check_content_integrity(
+                    result,
+                    require_phase_decision=require_phase_decision,
+                )
+                if pass_integrity:
+                    break
+                if retry_count < max_retries:
+                    # 停損可能缺漏時附上技術面支撐／ATR 當證據，停損價仍由模型決定
+                    stop_evidence = (
+                        format_stop_loss_evidence(context.get("trend_analysis"), report_language)
+                        if any(field in STOP_LOSS_REPAIR_FIELDS for field in missing_fields)
+                        else ""
+                    )
                     current_prompt = self._build_integrity_retry_prompt(
                         prompt,
                         response_text,
                         missing_fields,
                         report_language=report_language,
-                        evidence=format_stop_loss_evidence(context.get("trend_analysis"), report_language)
-                        if stop_missing else "",
+                        evidence=stop_evidence,
                     )
                     retry_count += 1
                     logger.info(
@@ -4326,7 +4337,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                     retry_progress = min(99, 92 + retry_count * 2)
                     _emit_progress(
                         retry_progress,
-                        f"{name}：报告字段不完整，正在补全重试（{retry_count}/{max(max_retries, 1)}）",
+                        f"{name}：报告字段不完整，正在补全重试（{retry_count}/{max_retries}）",
                     )
                 else:
                     self._apply_placeholder_fill(result, missing_fields)
@@ -5801,8 +5812,6 @@ Output the complete Decision Dashboard in JSON format."""
                     lines.append("- dashboard.intelligence.risk_alerts: risk alert list (can be empty)")
                 elif f == "dashboard.battle_plan.sniper_points.stop_loss":
                     lines.append("- dashboard.battle_plan.sniper_points.stop_loss: stop-loss level; also write it as a plain number in dashboard.battle_plan.sniper_prices.stop_loss")
-                elif f == STOP_LOSS_REPAIR_FIELD:
-                    lines.append("- dashboard.battle_plan.sniper_prices.stop_loss: decide the stop-loss explicitly; return a plain number or null")
                 elif f == "dashboard.battle_plan.sniper_prices":
                     lines.append("- dashboard.battle_plan.sniper_prices: object with ideal_buy, secondary_buy, stop_loss, take_profit as plain numbers (no unit, no range), matching sniper_points; use null for a slot with no executable price")
                 elif f == "dashboard.phase_decision.phase_context":
@@ -5841,8 +5850,6 @@ Output the complete Decision Dashboard in JSON format."""
                 lines.append(L("- dashboard.intelligence.risk_alerts: 風險警報列表（可為空陣列）", "- dashboard.intelligence.risk_alerts: 风险警报列表（可为空数组）"))
             elif f == "dashboard.battle_plan.sniper_points.stop_loss":
                 lines.append(L("- dashboard.battle_plan.sniper_points.stop_loss: 止損價；同時以純數字寫進 dashboard.battle_plan.sniper_prices.stop_loss", "- dashboard.battle_plan.sniper_points.stop_loss: 止损价；同时以纯数字写进 dashboard.battle_plan.sniper_prices.stop_loss"))
-            elif f == STOP_LOSS_REPAIR_FIELD:
-                lines.append(L("- dashboard.battle_plan.sniper_prices.stop_loss: 請明確判斷停損價，回傳純數字或 null", "- dashboard.battle_plan.sniper_prices.stop_loss: 请明确判断止损价，返回纯数字或 null"))
             elif f == "dashboard.battle_plan.sniper_prices":
                 lines.append(L("- dashboard.battle_plan.sniper_prices: 物件，含 ideal_buy、secondary_buy、stop_loss、take_profit 四格純數字（不帶「元」、不寫區間），與 sniper_points 同一組價位；某格沒有可執行價位填 null", "- dashboard.battle_plan.sniper_prices: 对象，含 ideal_buy、secondary_buy、stop_loss、take_profit 四格纯数字（不带“元”、不写区间），与 sniper_points 同一组价位；某格没有可执行价位填 null"))
             elif f == "dashboard.phase_decision.phase_context":
@@ -5879,13 +5886,53 @@ Output the complete Decision Dashboard in JSON format."""
             prefix = "### 上一次輸出如下，請在該輸出基礎上補齊缺失欄位，並重新輸出完整 JSON。不要省略已有欄位："
         else:
             prefix = "### 上一次输出如下，请在该输出基础上补齐缺失字段，并重新输出完整 JSON。不要省略已有字段："
-        return "\n\n".join([
-            base_prompt,
-            prefix,
-            previous_output,
-            complement,
-            evidence,
-        ])
+        parts = [base_prompt, prefix, previous_output, complement]
+        if evidence:
+            parts.append(evidence)
+        return "\n\n".join(parts)
+
+    def build_sniper_repair_prompt(
+        self,
+        dashboard: Any,
+        missing_fields: List[str],
+        evidence: str = "",
+        report_language: str = "zh",
+    ) -> str:
+        """Agent 路徑的一次性價位補全：沿用完整性補全的欄位說明，只要模型回價位兩塊。
+
+        missing_fields 來自 check_content_integrity：結構化區塊完好只缺停損時只要停損一格，
+        區塊缺漏或損壞時要整組四格——程式不替任何一格編值。
+        """
+        complement = self._build_integrity_complement_prompt(missing_fields, report_language=report_language)
+        previous = json.dumps(dashboard if isinstance(dashboard, dict) else {}, ensure_ascii=False, default=str)
+        lang = normalize_report_language(report_language)
+        if lang in ("en", "ko"):
+            head = (
+                "### Price-level completion: below is the decision dashboard you just produced. Its call is buy/add, "
+                "but it has no usable stop-loss price. Based on your own analysis, fill the fields listed below. "
+                "Output exactly one JSON object and nothing else, shaped as "
+                '{"sniper_prices": {...plain numbers or null...}, "sniper_points": {...human-readable notes...}}; '
+                "include only the slots you are asked for."
+            )
+            prev_title = "### Previous output:"
+        elif lang == "zh-TW":
+            head = (
+                "### 價位補全：以下是你剛才輸出的決策儀表板，結論是買入／加碼，但沒有可用的停損價。"
+                "請依你自己的分析補上下列欄位，只輸出一個 JSON 物件、不要其他文字，格式為 "
+                '{"sniper_prices": {…純數字或 null…}, "sniper_points": {…給人看的說明…}}；只放被要求的格子。'
+            )
+            prev_title = "### 上一次輸出："
+        else:
+            head = (
+                "### 价位补全：以下是你刚才输出的决策仪表盘，结论是买入／加仓，但没有可用的止损价。"
+                "请依你自己的分析补上下列字段，只输出一个 JSON 对象、不要其他文字，格式为 "
+                '{"sniper_prices": {…纯数字或 null…}, "sniper_points": {…给人看的说明…}}；只放被要求的格子。'
+            )
+            prev_title = "### 上一次输出："
+        parts = [head, prev_title, previous, complement]
+        if evidence:
+            parts.append(evidence)
+        return "\n\n".join(parts)
 
     def _apply_placeholder_fill(self, result: AnalysisResult, missing_fields: List[str]) -> None:
         """Delegate to module-level apply_placeholder_fill."""

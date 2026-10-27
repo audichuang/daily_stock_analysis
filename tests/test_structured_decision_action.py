@@ -548,7 +548,10 @@ def test_unguarded_watch_still_aligns_with_buy_band_score() -> None:
         code="2330.TW", name="台積電", sentiment_score=68, trend_prediction="看多",
         operation_advice="观望", action="watch", decision_type="hold",
         report_language="zh", current_price=100,
-        dashboard={"battle_plan": {"sniper_prices": {"ideal_buy": 100, "stop_loss": 96, "take_profit": 110}}},
+        # 模型給齊買點／停損／目標且扣成本划算：成本護欄放行，才看得到分數對齊本身
+        dashboard={"battle_plan": {"sniper_prices": {
+            "ideal_buy": 100, "secondary_buy": None, "stop_loss": 95, "take_profit": 115,
+        }}},
     )
     pipeline._finalize_and_persist_result(
         result, _finalize_artifacts(), market_phase_summary={"phase": "intraday", "market": "tw"},
@@ -558,6 +561,31 @@ def test_unguarded_watch_still_aligns_with_buy_band_score() -> None:
 
     assert not (result.dashboard.get("decision_score_calibration") or {}).get("guardrail_reason")
     assert display_action_fields_for_result(result, report_type="simple")["action"] == "buy"
+
+
+def test_unguarded_buy_band_watch_without_model_stop_is_downgraded_with_reason() -> None:
+    # 同上但模型沒給停損：對齊成買入後由成本護欄以「缺停損價」降為觀望，原因記進護欄原因
+    from src.schemas.decision_action import display_action_fields_for_result
+
+    saved: list = []
+    pipeline = _finalize_pipeline(saved)
+    result = AnalysisResult(
+        code="2330.TW", name="台積電", sentiment_score=68, trend_prediction="看多",
+        operation_advice="观望", action="watch", decision_type="hold",
+        report_language="zh", current_price=100,
+        dashboard={"battle_plan": {"sniper_prices": {
+            "ideal_buy": 100, "secondary_buy": None, "stop_loss": None, "take_profit": 115,
+        }}},
+    )
+    pipeline._finalize_and_persist_result(
+        result, _finalize_artifacts(), market_phase_summary={"phase": "intraday", "market": "tw"},
+        analysis_context_pack_overview={"data_quality": {"overall_status": "available"}},
+        report_type="simple", snapshot_context={}, news_content_for_save=None,
+    )
+
+    reason = (result.dashboard.get("decision_score_calibration") or {}).get("guardrail_reason")
+    assert reason and reason.startswith("缺止损价")
+    assert display_action_fields_for_result(result, report_type="simple")["action"] == "watch"
 
 
 def test_phase_guardrail_records_reason_only_when_it_assigns_watch() -> None:
