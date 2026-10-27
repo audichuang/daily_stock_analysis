@@ -24,6 +24,7 @@ from research_pre_event_delay import (  # noqa: E402
     pre_event_context,
     pre_event_sessions,
     pre_event_verdict,
+    set_session_read_only,
     tightening_flags,
     trade_max_drawdown,
 )
@@ -192,6 +193,25 @@ def test_tightening_missing_series_is_false():
     assert not tightening_flags(two, pd.DatetimeIndex([us[25]])).any()
 
 
+def test_tightening_flat_twenty_day_change_is_false():
+    # DGS10 只到小數兩位，20 日持平常見；持平不是緊縮
+    us = pd.bdate_range("2026-01-01", periods=30)
+    flat = _macro({"FRED:DGS10": 0, "BZ=F": 1, "DX-Y.NYB": 1}, us)
+    assert not tightening_flags(flat, pd.DatetimeIndex([us[25]])).any()
+    # 反向：小數兩位的最小上升（20 日 +0.01）仍算緊縮
+    tiny_up = _macro({"FRED:DGS10": 0.0005, "BZ=F": 1, "DX-Y.NYB": 1}, us)
+    assert tightening_flags(tiny_up, pd.DatetimeIndex([us[25]])).all()
+
+
+def test_tightening_handles_mixed_datetime_resolutions():
+    # 實跑踩過：面板交易日是 [us]、CSV 讀進來的日期是 [s]，merge_asof 直接 MergeError
+    us = pd.bdate_range("2026-01-01", periods=30)
+    macro = _macro({"FRED:DGS10": 1, "BZ=F": 1, "DX-Y.NYB": 1}, us)
+    macro["date"] = pd.to_datetime(macro["date"]).astype("datetime64[s]")
+    sessions = pd.DatetimeIndex([us[20], us[21]]).astype("datetime64[us]")
+    assert tightening_flags(macro, sessions).tolist() == [False, True]
+
+
 # ── 判準與回撤 ────────────────────────────────────────────────────────
 
 
@@ -215,3 +235,59 @@ def test_trade_max_drawdown_from_entry_open():
     c = pd.DataFrame({"1111": [9, 12, 9, 13, 50, 50]}, index=idx, dtype=float)
     # 訊號日 0、h=3：第 1 列開盤 10 進場，收盤路徑 12、9、13 → 最大回撤 9/12−1
     assert trade_max_drawdown(o, c, 0, "1111", 3) == pytest.approx(9 / 12 - 1)
+
+
+# ── 唯讀護欄 ──────────────────────────────────────────────────────────
+
+
+class _FakePgConn:
+    """模擬 Postgres 非 autocommit 連線：SET 跟著交易走，rollback 會撤銷；
+    交易的唯讀與否在交易開始時由 session 預設決定。"""
+
+    def __init__(self):
+        self.default_ro = False  # 已生效（committed）的 session 預設
+        self._pending_ro = None
+        self.in_tx = False
+        self.tx_read_only = None
+
+    def _begin_if_needed(self):
+        if not self.in_tx:
+            self.in_tx = True
+            self.tx_read_only = self.default_ro
+
+    def cursor(self):
+        conn = self
+
+        class _Cur:
+            def execute(self, sql):
+                conn._begin_if_needed()
+                if sql.strip().lower() == "set default_transaction_read_only = on":
+                    conn._pending_ro = True
+
+            def close(self):
+                pass
+
+        return _Cur()
+
+    def commit(self):
+        if self._pending_ro is not None:
+            self.default_ro = self._pending_ro
+        self._pending_ro = None
+        self.in_tx = False
+
+    def rollback(self):
+        self._pending_ro = None
+        self.in_tx = False
+
+
+def test_read_only_listener_covers_first_and_reused_transactions():
+    conn = _FakePgConn()
+    set_session_read_only(conn, None)
+    # 首次連線的第一筆交易
+    conn.cursor().execute("SELECT 1")
+    assert conn.tx_read_only is True
+    # 歸還 pool 時的 rollback 不能撤銷唯讀預設；重用後的交易也要唯讀
+    conn.rollback()
+    conn.cursor().execute("SELECT 1")
+    assert conn.tx_read_only is True
+    assert conn.default_ro is True

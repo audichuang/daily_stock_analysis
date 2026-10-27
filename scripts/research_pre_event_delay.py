@@ -337,6 +337,17 @@ def load_releases(cache, start, end):
 # ── 主程式 ─────────────────────────────────────────────────────────────
 
 
+def set_session_read_only(dbapi_conn, _rec=None):  # noqa: ARG001
+    """``connect`` 監聽器：把這條連線的 session 預設設成唯讀交易（market schema 是唯一資料源、無備份）。
+
+    驅動是非 autocommit，SET 會落在已隱式開啟的交易裡：不 commit 的話，這筆交易本身不唯讀，
+    連線歸還 pool 時的 rollback 也會把 SET 一起撤銷，重用的連線就不再唯讀。"""
+    cur = dbapi_conn.cursor()
+    cur.execute("SET default_transaction_read_only = on")
+    cur.close()
+    dbapi_conn.commit()
+
+
 def build_pool(a):
     """與 `measure_signal_forward.main` 相同的突破池（同一組函式與預設門檻）；連線唯讀。"""
     from sqlalchemy import event
@@ -346,13 +357,7 @@ def build_pool(a):
     from measure_signal_forward import build_signals, forward_returns, load, pit_revenue_panel, to_events
 
     eng = get_engine()
-
-    @event.listens_for(eng, "connect")
-    def _read_only(dbapi_conn, _rec):  # noqa: ARG001 — 每條新連線都設成唯讀交易
-        cur = dbapi_conn.cursor()
-        cur.execute("SET default_transaction_read_only = on")
-        cur.close()
-
+    event.listen(eng, "connect", set_session_read_only)
     eng.dispose()  # 丟掉監聽器掛上前可能已建立的連線
     piv, rv, _ = load(eng, a.start, a.end)
     keep = [s for s in piv["close"].columns if is_common_stock(s)]
