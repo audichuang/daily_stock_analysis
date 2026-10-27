@@ -531,25 +531,31 @@ def arm_report(outcomes, calls, arms, today=None):
     # (臂名, 該臂的列, 可配對日, 取該臂 p 的函式)
     specs = [("fable", fb, dates, lambda pc, pf: pf), ("fable_synth", sy, sdates, lambda pc, pf: pf),
              ("equal_weight", fb, sorted(full), lambda pc, pf: (pc + pf) / 2)]
-    first = {name: (min(ds) if ds else None) for name, _, ds, _ in specs}
+    scorable = {name: set() for name, _, _, _ in specs}   # 至少一個目標同時有有效 y、claude p、該臂 p 的配對日
 
     def stage(name):
-        f = first[name]
+        f = min(scorable[name]) if scorable[name] else None
         if f is None:
             return {"first_date": None, "judge_from": None, "descriptive": True}
         start = dt.date.fromisoformat(f)
         return {"first_date": f, "judge_from": (start + dt.timedelta(days=DESCRIBE_DAYS)).isoformat(),
                 "descriptive": (today - start).days < DESCRIBE_DAYS}
 
-    targets = {}
+    trips = {}
     for t in PROB_TARGETS:
-        res = {"n": 0, "arms": {}}
         for name, rows, ds, pick in specs:
             trip = []
             for day in ds:
                 y, pc, pf = oc[day].get(f"y_{t}"), _prob(oc[day].get(f"p_{t}")), _prob(rows[day].get(f"p_{t}"))
                 if y is not None and pc is not None and pf is not None:
                     trip.append((y, pc, pf))
+                    scorable[name].add(day)
+            trips[t, name] = trip
+    targets = {}
+    for t in PROB_TARGETS:
+        res = {"n": 0, "arms": {}}
+        for name, rows, ds, pick in specs:
+            trip = trips[t, name]
             if not trip:
                 continue
             d = [(pc - y) ** 2 - (pick(pc, pf) - y) ** 2 for y, pc, pf in trip]
@@ -562,7 +568,7 @@ def arm_report(outcomes, calls, arms, today=None):
             res["n"], res["brier_claude"] = res["arms"]["fable"]["n"], res["arms"]["fable"]["brier_claude"]
         targets[t] = res
     return {"skipped": skipped, "n_dates": len(dates), "targets": targets,
-            "synth": {"skipped": sskipped, "n_dates": len(sdates)}, "stages": {n: stage(n) for n in first}}
+            "synth": {"skipped": sskipped, "n_dates": len(sdates)}, "stages": {n: stage(n) for n in scorable}}
 
 
 def _arm_verdict_text(b):

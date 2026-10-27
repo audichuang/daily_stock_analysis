@@ -302,6 +302,8 @@ def synth_members(day, pack_text, calls_path, arms_path):
         return None, f"{day} 沒有 fable 獨立臂的列"
     if fable.get("error"):
         return None, "fable 列 error 非空"
+    if fable.get("input_snapshot_hash") != pack_hash(pack_text):
+        return None, "fable 列的 input_snapshot_hash 缺漏或與當天 pack 不一致"
     if not all(valid_p(fable.get(k)) for k in TARGETS):
         return None, "fable 列的三個機率不全是有效小數"
     return {"claude": {k: float(claude[k]) for k in TARGETS}, "fable": {k: float(fable[k]) for k in TARGETS}}, None

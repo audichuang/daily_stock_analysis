@@ -900,3 +900,40 @@ def test_brief_line_with_both_arms_shows_fable_synth_and_equal_weight_cells(tmp_
     lines = []
     vmc.arms_section([_oc("2099-01-01", 1, 0.6)], calls, arms, lines.append, full=False)
     assert "claude 0.160／fable 0.040（n=1）／synth 0.010（n=1）／等權 0.090（n=1）" in lines[0]
+
+
+def test_half_year_clock_starts_at_first_actually_scorable_day_not_first_paired_day():
+    days, outcomes, calls = _winning_month()
+    bad = _oc(days[0], 1, 0.5)
+    bad.update({f"p_{t}": None for t in vmc.PROB_TARGETS})      # claude p 全空：該日三個目標都無法計分（排除規則看不出來）
+    outcomes[0] = bad
+    arms = [_synth(d, 0.9) for d in days]
+    rep = vmc.arm_report(outcomes, calls, arms, today=dt.date(2100, 1, 1))
+    a = rep["targets"]["close_up"]["arms"]["fable_synth"]
+    assert rep["synth"]["n_dates"] == 30 and a["n"] == 29
+    assert a["first_date"] == days[1]
+    assert rep["stages"]["fable_synth"]["first_date"] == days[1]
+    # 起算日是 days[1]：+181 描述、+182 判定；用首個無效日起算（days[0]+182）會在 +181 就判定
+    first = dt.date.fromisoformat(days[1])
+    assert vmc.arm_report(outcomes, calls, arms, today=first + dt.timedelta(days=181))["stages"]["fable_synth"]["descriptive"]
+    assert not vmc.arm_report(outcomes, calls, arms, today=first + dt.timedelta(days=182))["stages"]["fable_synth"]["descriptive"]
+
+
+def test_early_unscorable_day_far_before_does_not_bring_the_verdict_forward():
+    days, outcomes, calls = _winning_month()
+    early = (dt.date.fromisoformat(days[0]) - dt.timedelta(days=60)).isoformat()
+    bad = _oc(early, 1, 0.5)
+    bad.update({f"p_{t}": None for t in vmc.PROB_TARGETS})
+    rep = vmc.arm_report([bad] + outcomes, [_call(early)] + calls, [_synth(early, 0.9)] + [_synth(d, 0.9) for d in days],
+                         today=dt.date.fromisoformat(days[0]) + dt.timedelta(days=121))   # 早日起算已過 182 天、實際起算日只過 121 天
+    assert rep["stages"]["fable_synth"]["first_date"] == days[0] and rep["stages"]["fable_synth"]["descriptive"] is True
+    assert "描述性（前半年" in _lines(rep) and "優於 claude" not in _lines(rep)
+
+
+def test_equal_weight_clock_uses_its_own_scorable_days():
+    days, outcomes, calls = _winning_month()
+    arms = [_arm(d, 0.9) for d in days]
+    arms[0]["p_oc_up"] = None            # fable 首日少一個 p：fable 臂首日仍可計分，等權臂整天不進
+    rep = vmc.arm_report(outcomes, calls, arms, today=dt.date(2100, 1, 1))
+    assert rep["stages"]["fable"]["first_date"] == days[0]
+    assert rep["stages"]["equal_weight"]["first_date"] == days[1]

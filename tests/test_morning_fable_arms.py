@@ -422,3 +422,12 @@ def test_synth_accepts_boundary_probabilities_zero_and_one(env, monkeypatch):
     fake = FakeRun(stdout=json.dumps(SYNTH_GOOD))
     rc, rows = run_synth(env, monkeypatch, fake, claude_row(p_close_up=1.0, p_gap_up=0), fable_row(p_oc_up=0.0, p_gap_up=1))
     assert len(fake.calls) == 1 and rows[1]["model_version"] == "fable_synth"
+
+
+@pytest.mark.parametrize("fable", [fable_row(input_snapshot_hash=None), fable_row(input_snapshot_hash="OTHER")],
+                         ids=["fable-hash-missing", "fable-hash-mismatch"])
+def test_synth_requires_fable_row_hash_to_match_the_pack(env, monkeypatch, capsys, fable):
+    fake = FakeRun(stdout=json.dumps(SYNTH_GOOD))
+    rc, rows = run_synth(env, monkeypatch, fake, claude_row(), fable)
+    assert rc == 0 and fake.calls == [] and all(r["model_version"] != "fable_synth" for r in rows)
+    assert "前置條件不成立" in capsys.readouterr().out
