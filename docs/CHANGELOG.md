@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 市場階段護欄把盤後復盤口吻改寫成觀望時同步寫入 `decision_score_calibration.guardrail_reason`；原本三態降為 `hold` 後跳過了買入區矛盾護欄、沒有護欄原因，分數 68 的賣出決策在顯示與 DecisionSignal 被分數對齊升成 buy（分數 30 則降成 reduce）
 - [修复] sell 決策落在買入區分數時，矛盾護欄改先沿用模型的結構化 `action`（如 `reduce`），是買入類或缺漏才看單一非買入標籤；原本模型只給 `action=reduce`、沒給建議時會被解析器預設的「持有」蓋成 hold
 - [修复] 盤中報告含盤後復盤口吻、被市場階段護欄改寫成「等待盤中確認」並給觀望時，三態 `decision_type` 同步降為 `hold`；原本 buy／sell 決策會在最終刷新時因觀望與三態對不上被清成未知，動作鏈失效、DecisionSignal 不寫入
 - [修复] 建議動作改由模型給結構化 `action`：分析器、單 agent 與決策 agent 的 prompt 都要求 `action` 八態欄位（`report_schema` 同步），`normalize_decision_action` 刪除中英文片語表與否定判讀，只收 enum 或整段就是動作標籤的建議（如「減倉」「加碼」），其餘句子（「不建議現在買入」）一律未知、由呼叫端退回既有預設；三態 `decision_type` 缺漏時改由結構化 action 投影、不讀建議句子；改寫建議文字的結構／市場階段護欄與 agent 風控下調改為直接設結構化動作，改寫後動作與三態矛盾時清成未知（見 `docs/decision-signals.md`）

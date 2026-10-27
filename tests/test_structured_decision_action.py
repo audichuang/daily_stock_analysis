@@ -487,3 +487,87 @@ def test_buy_band_sell_guardrail_never_keeps_buy_class_action(action, advice, ex
         result, report_type="simple", previous_operation_advice=advice, record_contradiction=False,
     )
     assert result.action == expected
+
+
+_PHASE_RECAP_CASES = [
+    ("zh", "买入（盘后复盘）", "等待盘中确认，禁止追高。"),
+    ("zh", "卖出（盘后复盘）", "等待盘中确认，禁止追高。"),
+    ("ko", "매수 장 마감 후 리뷰", "장중 확인을 기다리고 추격 매수하지 마세요."),
+    ("ko", "매도 장 마감 후 리뷰", "장중 확인을 기다리고 추격 매수하지 마세요."),
+    ("en", "Buy (post-market recap)", "Wait for intraday confirmation; do not chase."),
+    ("en", "Sell (post-market recap)", "Wait for intraday confirmation; do not chase."),
+]
+
+
+def _finalize_phase_recap(language: str, advice: str, decision_type: str, score: int, saved: list) -> AnalysisResult:
+    pipeline = _finalize_pipeline(saved)
+    pipeline.config = SimpleNamespace(report_language=language)
+    result = AnalysisResult(
+        code="2330.TW", name="台積電", sentiment_score=score, trend_prediction="看多",
+        operation_advice=advice, action=decision_type, decision_type=decision_type,
+        report_language=language, current_price=100, dashboard={},
+    )
+    pipeline._finalize_and_persist_result(
+        result, _finalize_artifacts(), market_phase_summary={"phase": "intraday", "market": "tw"},
+        analysis_context_pack_overview={"data_quality": {"overall_status": "available"}},
+        report_type="simple", snapshot_context={}, news_content_for_save=None,
+    )
+    return result
+
+
+@pytest.mark.parametrize("score", [68, 30])
+@pytest.mark.parametrize("language,advice,safe_advice", _PHASE_RECAP_CASES)
+def test_phase_guardrail_watch_is_not_realigned_to_score(language: str, advice: str, safe_advice: str,
+                                                         score: int) -> None:
+    # 盤中盤後口吻護欄給的觀望是護欄決定，必須留下 guardrail_reason：
+    # 否則買入區（68）會被分數對齊升成 buy、賣出區（30）降成 reduce，賣出決策反而寫出買入訊號。
+    from src.schemas.decision_action import display_action_fields_for_result
+    from src.services.decision_signal_extractor import resolve_decision_signal_action_fields
+
+    saved: list = []
+    decision_type = "buy" if advice.lower().startswith(("买", "매수", "buy")) else "sell"
+    result = _finalize_phase_recap(language, advice, decision_type, score, saved)
+
+    assert result.operation_advice == safe_advice
+    assert result.action == "watch"
+    assert saved and saved[-1][:2] == ("watch", "hold")
+    assert display_action_fields_for_result(result, report_type="simple")["action"] == "watch"
+    assert resolve_decision_signal_action_fields(result, report_type="simple")["action"] == "watch"
+    calibration = result.dashboard.get("decision_score_calibration") or {}
+    assert calibration.get("guardrail_reason")
+    assert calibration.get("final_action") == "watch"
+
+
+def test_unguarded_watch_still_aligns_with_buy_band_score() -> None:
+    # 反向：沒有任何護欄觸發的觀望（無盤後口吻）在買入區照舊對齊分數，修法不能把分數對齊整個關掉。
+    from src.schemas.decision_action import display_action_fields_for_result
+
+    saved: list = []
+    pipeline = _finalize_pipeline(saved)
+    result = AnalysisResult(
+        code="2330.TW", name="台積電", sentiment_score=68, trend_prediction="看多",
+        operation_advice="观望", action="watch", decision_type="hold",
+        report_language="zh", current_price=100, dashboard={},
+    )
+    pipeline._finalize_and_persist_result(
+        result, _finalize_artifacts(), market_phase_summary={"phase": "intraday", "market": "tw"},
+        analysis_context_pack_overview={"data_quality": {"overall_status": "available"}},
+        report_type="simple", snapshot_context={}, news_content_for_save=None,
+    )
+
+    assert not (result.dashboard.get("decision_score_calibration") or {}).get("guardrail_reason")
+    assert display_action_fields_for_result(result, report_type="simple")["action"] == "buy"
+
+
+def test_phase_guardrail_records_reason_only_when_it_assigns_watch() -> None:
+    # 反向：只改寫一句話結論、沒動建議與結構化動作時，不該寫 guardrail_reason 擋掉分數對齊。
+    result = _result(
+        operation_advice="买入", action="buy", decision_type="buy", sentiment_score=68, report_language="zh",
+        dashboard={"core_conclusion": {"one_sentence": "收盘后复盘再看"}},
+    )
+    apply_phase_decision_guardrails(
+        result, market_phase_summary={"phase": "intraday", "market": "tw"},
+        analysis_context_pack_overview=None, report_language="zh",
+    )
+    assert result.action == "buy"
+    assert "decision_score_calibration" not in result.dashboard

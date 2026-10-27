@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from src.analysis_context_pack_prompt import CORE_DEGRADED_STATUSES
 from src.market_phase_summary import render_market_phase_summary
 from src.report_language import localize_confidence_level, normalize_report_language
+from src.schemas.decision_scale import record_guardrail_score_adjustment
 
 if TYPE_CHECKING:
     from src.analyzer import AnalysisResult
@@ -192,7 +193,7 @@ def apply_phase_decision_guardrails(
             zh="盘中输出包含盘后复盘口吻，已替换为阶段安全动作表述。",
             ko="장중 출력에 장 마감 후 리뷰 표현이 있어 단계에 맞는 안전한 표현으로 교체했습니다.",
         )
-        _replace_postmarket_recap_fields(result, phase_decision, language=language)
+        _replace_postmarket_recap_fields(result, phase_decision, language=language, reason=reason)
         _append_reason(phase_decision, reason)
         adjustments.append("postmarket_recap_wording_adjusted")
 
@@ -343,6 +344,7 @@ def _replace_postmarket_recap_fields(
     phase_decision: Dict[str, Any],
     *,
     language: str,
+    reason: str,
 ) -> None:
     dashboard_value = getattr(result, "dashboard", None)
     dashboard = dashboard_value if isinstance(dashboard_value, dict) else {}
@@ -369,6 +371,15 @@ def _replace_postmarket_recap_fields(
         result.action = "watch"
         result.action_label = None
         result.decision_type = "hold"
+        # 觀望是護欄決定的：記下 guardrail_reason，顯示與 DecisionSignal 的分數對齊才不會把它
+        # 升回買入區的 buy 或降成賣出區的 reduce（與其他護欄同一個結構化欄位，不比對文字）。
+        record_guardrail_score_adjustment(
+            dashboard,
+            raw_score=None,
+            adjusted_score=None,
+            final_action="watch",
+            reason=reason,
+        )
     if _contains_any(getattr(result, "analysis_summary", ""), _patterns(language)):
         result.analysis_summary = safe_summary
     if _contains_any(phase_decision.get("immediate_action"), _patterns(language)):
