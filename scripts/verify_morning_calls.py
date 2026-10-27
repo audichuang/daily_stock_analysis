@@ -476,29 +476,24 @@ def regime_summary(rows):
             "unscorable_labels": sum(1 for r in rows if r.get("regime") not in REGIMES)}
 
 
-# ---------- 多臂配對（fable 臂與事後等權臂對 claude 臂）----------
+# ---------- 多臂配對（fable／fable_synth 臂與事後等權臂對 claude 臂）----------
 
-ARM_LABEL = {"fable": "Fable 獨立臂", "equal_weight": "等權臂（claude+fable 平均）"}
+ARM_LABEL = {"fable": "Fable 獨立臂", "fable_synth": "Fable 綜合臂", "equal_weight": "等權臂（claude+fable 平均）"}
 ARM_VERDICT = {"模型優於基準": "該臂優於 claude", "模型劣於基準": "該臂劣於 claude"}
+DESCRIBE_DAYS = 182   # 每臂從第一筆可計分配對日起算，未滿這麼多日曆日只出描述、不印判定字樣
 
 
-def arm_report(outcomes, calls, arms):
-    """claude 臂（outcomes 的 p_*／y_*）對 fable 臂與等權臂的配對 Brier 差；純函式。
-
-    只用同一天、同一份 07:30 輸出（`input_snapshot_hash` 相同）的配對；差＝claude Brier − 該臂 Brier。"""
-    oc = {r["date"]: r for r in outcomes if r.get("scorable")}
-    cl = {}
-    for c in calls:
-        cl.setdefault(c["date"], c)
-    fb = {}
+def _pair_dates(model_version, oc, cl, arms):
+    """某臂的配對：回 (該臂每日一列 dict, 可配對日期 list, 排除計數)；排除規則各臂相同。"""
+    rows = {}
     for a in arms:
-        if a.get("model_version") == "fable":
-            fb.setdefault(a["date"], a)
-    skipped = {"arm_rows": len(fb), "excluded": 0, "error": 0, "no_outcome": 0,
+        if a.get("model_version") == model_version:
+            rows.setdefault(a["date"], a)
+    skipped = {"arm_rows": len(rows), "excluded": 0, "error": 0, "no_outcome": 0,
                "hash_missing": 0, "hash_mismatch": 0}
     dates = []
-    for day in sorted(fb):
-        a = fb[day]
+    for day in sorted(rows):
+        a = rows[day]
         if a.get("exclude_from_scoring") is not False:
             skipped["excluded"] += 1
         elif a.get("error"):
@@ -513,22 +508,54 @@ def arm_report(outcomes, calls, arms):
                 skipped["hash_mismatch"] += 1
             else:
                 dates.append(day)
+    return rows, dates, skipped
+
+
+def arm_report(outcomes, calls, arms, today=None):
+    """claude 臂（outcomes 的 p_*／y_*）對 fable、fable_synth 與等權臂的配對 Brier 差；純函式。
+
+    只用同一天、同一份 07:30 輸出（`input_snapshot_hash` 相同）的配對；差＝claude Brier − 該臂 Brier。
+    每臂從自己第一筆可計分配對日起算，未滿 DESCRIBE_DAYS 個日曆日 `descriptive=True`（只出描述、不印判定）；
+    `today` 預設今天（台北日期不重要，只差一天的邊界由呼叫端傳入）。"""
+    today = today or dt.date.today()
+    oc = {r["date"]: r for r in outcomes if r.get("scorable")}
+    cl = {}
+    for c in calls:
+        cl.setdefault(c["date"], c)
+    fb, dates, skipped = _pair_dates("fable", oc, cl, arms)
+    sy, sdates, sskipped = _pair_dates("fable_synth", oc, cl, arms)
     # 等權臂：同日 claude 與 fable 六個 p 全部有效才納入（三個目標都算），否則該日整個不進等權臂
     full = {d for d in dates
             if all(_prob(oc[d].get(f"p_{t}")) is not None and _prob(fb[d].get(f"p_{t}")) is not None
                    for t in PROB_TARGETS)}
-    picks = {"fable": lambda pc, pf: pf, "equal_weight": lambda pc, pf: (pc + pf) / 2}
+    # (臂名, 該臂的列, 可配對日, 取該臂 p 的函式)
+    specs = [("fable", fb, dates, lambda pc, pf: pf), ("fable_synth", sy, sdates, lambda pc, pf: pf),
+             ("equal_weight", fb, sorted(full), lambda pc, pf: (pc + pf) / 2)]
+    scorable = {name: set() for name, _, _, _ in specs}   # 至少一個目標同時有有效 y、claude p、該臂 p 的配對日
+
+    def stage(name):
+        f = min(scorable[name]) if scorable[name] else None
+        if f is None:
+            return {"first_date": None, "judge_from": None, "descriptive": True}
+        start = dt.date.fromisoformat(f)
+        return {"first_date": f, "judge_from": (start + dt.timedelta(days=DESCRIBE_DAYS)).isoformat(),
+                "descriptive": (today - start).days < DESCRIBE_DAYS}
+
+    trips = {}
+    for t in PROB_TARGETS:
+        for name, rows, ds, pick in specs:
+            trip = []
+            for day in ds:
+                y, pc, pf = oc[day].get(f"y_{t}"), _prob(oc[day].get(f"p_{t}")), _prob(rows[day].get(f"p_{t}"))
+                if y is not None and pc is not None and pf is not None:
+                    trip.append((y, pc, pf))
+                    scorable[name].add(day)
+            trips[t, name] = trip
     targets = {}
     for t in PROB_TARGETS:
         res = {"n": 0, "arms": {}}
-        for name, pick in picks.items():
-            trip = []
-            for day in dates:
-                if name == "equal_weight" and day not in full:
-                    continue
-                y, pc, pf = oc[day].get(f"y_{t}"), _prob(oc[day].get(f"p_{t}")), _prob(fb[day].get(f"p_{t}"))
-                if y is not None and pc is not None and pf is not None:
-                    trip.append((y, pc, pf))
+        for name, rows, ds, pick in specs:
+            trip = trips[t, name]
             if not trip:
                 continue
             d = [(pc - y) ** 2 - (pick(pc, pf) - y) ** 2 for y, pc, pf in trip]
@@ -536,51 +563,65 @@ def arm_report(outcomes, calls, arms):
             res["arms"][name] = {"n": len(trip), "brier_claude": sum((pc - y) ** 2 for y, pc, _ in trip) / len(trip),
                                  "brier": sum((pick(pc, pf) - y) ** 2 for y, pc, pf in trip) / len(trip),
                                  "d_mean": sum(d) / len(d), "d_ci": ci,
-                                 "verdict": ARM_VERDICT.get(_verdict(len(d), ci), "inconclusive")}
+                                 "verdict": ARM_VERDICT.get(_verdict(len(d), ci), "inconclusive"), **stage(name)}
         if "fable" in res["arms"]:
             res["n"], res["brier_claude"] = res["arms"]["fable"]["n"], res["arms"]["fable"]["brier_claude"]
         targets[t] = res
-    return {"skipped": skipped, "n_dates": len(dates), "targets": targets}
+    return {"skipped": skipped, "n_dates": len(dates), "targets": targets,
+            "synth": {"skipped": sskipped, "n_dates": len(sdates)}, "stages": {n: stage(n) for n in scorable}}
+
+
+def _arm_verdict_text(b):
+    """前半年（descriptive）只印描述字樣；之後才用 _verdict 的判定。"""
+    if b["descriptive"]:
+        return f"描述性（前半年不下判定，滿 {b['judge_from']} 起才判定）"
+    return b["verdict"] if b["n"] >= MIN_N else f"inconclusive（n<{MIN_N}）"
 
 
 def render_arm_report(rep, out=print):
-    sk = rep["skipped"]
-    out("\n── 多臂配對（描述性；半年內不下升級結論；d＝claude Brier − 該臂 Brier，正＝該臂較好）──")
+    sk, ssk = rep["skipped"], rep["synth"]["skipped"]
+    out("\n── 多臂配對（描述性；前半年不下判定；d＝claude Brier − 該臂 Brier，正＝該臂較好）──")
     out(f"fable 臂 {sk['arm_rows']} 列；進配對 {rep['n_dates']} 天；排除：不計分 {sk['excluded']}、error {sk['error']}、"
         f"無對應 outcome（休市或尚未回驗）{sk['no_outcome']}、兩臂 hash 缺 {sk['hash_missing']}、"
         f"hash 不一致 {sk['hash_mismatch']}")
+    if ssk["arm_rows"]:
+        out(f"fable_synth 臂 {ssk['arm_rows']} 列；進配對 {rep['synth']['n_dates']} 天；排除：不計分 {ssk['excluded']}、"
+            f"error {ssk['error']}、無對應 outcome {ssk['no_outcome']}、兩臂 hash 缺 {ssk['hash_missing']}、"
+            f"hash 不一致 {ssk['hash_mismatch']}")
     for t in PROB_TARGETS:
         r = rep["targets"][t]
-        if not r["n"]:
+        if not r["arms"]:
             out(f"  {TARGET_LABEL[t]:10s} 沒有可配對的天")
             continue
-        out(f"  {TARGET_LABEL[t]:10s} n={r['n']} claude Brier {r['brier_claude']:.4f}")
+        out(f"  {TARGET_LABEL[t]:10s}" + (f" n={r['n']} claude Brier {r['brier_claude']:.4f}" if r["n"] else ""))
         for name, b in r["arms"].items():
-            verdict = b["verdict"] if b["n"] >= MIN_N else f"inconclusive（n<{MIN_N}）"
             out(f"    {ARM_LABEL[name]}（n={b['n']}，同一子集 claude Brier {b['brier_claude']:.4f}）：Brier {b['brier']:.4f} d̄ {b['d_mean']:+.4f} "
-                f"{_ci(b['d_ci'], 1, '{:+.4f}')} → {verdict}")
+                f"{_ci(b['d_ci'], 1, '{:+.4f}')} → {_arm_verdict_text(b)}")
 
 
 def arm_brief_line(rep):
-    """--brief 的一行描述性摘要；沒有 fable 臂列就回 None。"""
-    if not rep["skipped"]["arm_rows"]:
+    """--brief 的一行描述性摘要；沒有 fable／fable_synth 臂列就回 None。"""
+    n_fable, n_synth = rep["skipped"]["arm_rows"], rep["synth"]["skipped"]["arm_rows"]
+    if not n_fable and not n_synth:
         return None
     parts = []
     for t in ("close_up", "oc_up"):
         r = rep["targets"][t]
-        if r["n"]:
-            eq = r["arms"].get("equal_weight")
-            parts.append(f"{t} Brier claude {r['brier_claude']:.3f}／fable {r['arms']['fable']['brier']:.3f}"
-                         f"（n={r['n']}）／等權 " + (f"{eq['brier']:.3f}（n={eq['n']}）" if eq else "—"))
-    return (f"多臂（描述性，半年內不下結論）：fable 臂 {rep['skipped']['arm_rows']} 列、進配對 {rep['n_dates']} 天"
+        if r["arms"]:
+            fb, sy, eq = (r["arms"].get(k) for k in ("fable", "fable_synth", "equal_weight"))
+            cell = lambda b: f"{b['brier']:.3f}（n={b['n']}）" if b else "—"  # noqa: E731
+            parts.append(f"{t} Brier claude {r['brier_claude']:.3f}／fable {cell(fb)}／synth {cell(sy)}／等權 {cell(eq)}"
+                         if r["n"] else f"{t} Brier fable —／synth {cell(sy)}")
+    return (f"多臂（描述性，前半年不下判定）：fable 臂 {n_fable} 列、進配對 {rep['n_dates']} 天；"
+            f"fable_synth 臂 {n_synth} 列、進配對 {rep['synth']['n_dates']} 天"
             + ("；" + "；".join(parts) if parts else ""))
 
 
-def arms_section(outcomes, calls_path, arms_path, out=print, full=True):
+def arms_section(outcomes, calls_path, arms_path, out=print, full=True, today=None):
     arms = read_outcomes(arms_path)
     if not arms:
         return
-    rep = arm_report(outcomes, read_outcomes(calls_path), arms)
+    rep = arm_report(outcomes, read_outcomes(calls_path), arms, today)
     if full:
         render_arm_report(rep, out)
     else:

@@ -89,7 +89,7 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
   `swing-decisions.jsonl` 已由 `scripts/verify_swing_decisions.py` 的 `read_log` 做掉；日後寫 morning-calls 回驗要沿用同一個判斷
   （`read_log` 的聯集邏輯），不要另寫；新增臨時休市日要追加到 `journal/closed-dates.txt`。
 
-- `morning-arms.jsonl` — 盤前判讀的**其他模型臂**（2026-10-28 起；final-decision 第 7 項第一步），目前只有 `model_version="fable"`（Fable 獨立臂），
+- `morning-arms.jsonl` — 盤前判讀的**其他模型臂**（2026-10-28 起；final-decision 第 7 項第一步），有 `model_version="fable"`（Fable 獨立臂）與 `"fable_synth"`（Fable 綜合臂，final-decision 第 7 項第二步），
   由 `scripts/morning_fable_arms.py` 在 `make morning` 之後前景跑一次寫入。append-only、進版控，**一臂一列、鍵＝(`date`, `model_version`)**，同鍵已存在就不再寫（不覆寫）。
   `make morning` **成功**時完整 stdout 另存 `reports/morning-packs/<日期>.txt`（同日已有則 `<日期>.<HHMMSS>.txt`，臂腳本取**最早**那份；失敗不留 pack）。
   臂**只看過濾後的取數段**（大局、國際盤、期交所、今日候选）：「近期判讀校正」「待触发计划」與媒體點名判斷含 journal 判讀，整段丟掉；
@@ -100,10 +100,14 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
   `cost_usd`（CLI 回的 `total_cost_usd`，**名目值**，訂閱登入下不是實際帳單）、`decided_at`（ISO8601 +08:00）、
   `exclude_from_scoring`（寫入時台北時間已過 09:00 → `true`）、`error`（空＝成功）。
   **失敗也寫一列**（CLI 非 0、逾時、`is_error`、解析失敗、機率不合法）：`error` 非空、p 為 `null`，才看得到失敗率；單臂失敗不讓盤前流程失敗。
+  **綜合臂 `fable_synth`**（`morning_fable_arms.py --synth`，在 Claude 那一行寫好之後前景跑）：輸入只有三樣——同一份過濾後 pack（同一個 `input_snapshot_hash`）、同日 `morning-calls.jsonl` 的 Claude 列三個 p、同日 `fable` 列三個 p；
+  **只放數字**，不放任何一方的 `reason`／`action`／`regime`（防錨定），兩方用中性標籤成員 A＝claude、B＝fable。欄位同上，另加 `member_p`（`{"claude": {三個 p}, "fable": {三個 p}}`，送進去的數字，供稽核）；`prompt_hash` 是綜合臂模板的 sha256。
+  前置條件不成立就不呼叫、不寫列（沒有可綜合的輸入不算綜合臂失敗）：Claude 列缺、三個 p 非有效小數、`exclude_from_scoring` 非 `false`、`input_snapshot_hash` 與當天 pack 不一致；fable 列缺、`error` 非空、三個 p 非有效小數。呼叫了才失敗則照樣寫 error 列。
   **等權臂不落檔**：`verify_morning_calls.py` 事後算——同日 claude 與 fable 六個 p 全部有效時（三個目標都算）取算術平均，否則該日不進等權臂。
   回驗（`verify_morning_calls.py`）依 `date` 與 outcomes join，只算兩臂 `input_snapshot_hash` 一致的天，排除 `exclude_from_scoring=true`、`error` 非空、
   無對應 outcome（休市日或尚未回驗）與 hash 缺／不一致的列並印筆數；每臂印對 claude 的配對 Brier 差（claude − 該臂，正＝該臂較好）與 10 日 block bootstrap CI。
-  **半年內只出描述性報表**，不下升級結論。登記見 `experiment-registry.jsonl` 的 `morning-arms-fable-indep`；期間不改 prompt（改了要重登記）。
+  **前半年只出描述性報表**，不下升級結論：每臂（fable、fable_synth、等權）從**該臂第一筆可計分配對日**起算，未滿 182 個日曆日時彙總只印 Brier、差值與 CI，判定處改印「描述性（前半年不下判定，滿 YYYY-MM-DD 起才判定）」；
+  滿 182 天才用既有的 n<20／CI 跨零 `inconclusive` 判準。只影響臂對 claude 的比較，claude 對四條樸素基準的判定不變。登記見 `experiment-registry.jsonl` 的 `morning-arms-fable-indep`、`morning-arms-fable-synth`；期間不改 prompt（改了要重登記）。
 - `morning-calls-outcomes.jsonl` — 上一檔的**事後結果**，一個判讀日一行、以 `date` 為鍵，append-only、同一天不重寫
   （18:00 由 `daily_report.sh` 另開 commit，和預測分開）。休市日不寫；當日官方日資料或 DB 收盤還沒到的那天跳過、隔天補。欄位：
   - `scorable`：判讀列 `exclude_from_scoring` 明寫 `false` 才是 `true`；`note` 記不計分或無法驗的原因。

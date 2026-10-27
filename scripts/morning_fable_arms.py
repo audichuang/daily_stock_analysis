@@ -13,6 +13,11 @@
     uv run python scripts/morning_fable_arms.py              # 讀今天最早一份 pack，呼叫並寫一列
     uv run python scripts/morning_fable_arms.py --dry-run    # 印 prompt 與 hash，不呼叫、不寫檔
     uv run python scripts/morning_fable_arms.py --print-hash # 只印 pack 的 sha256（給 Claude 臂抄進 morning-calls）
+    uv run python scripts/morning_fable_arms.py --synth      # 綜合臂（fable_synth）：Claude 列與 fable 列的三個機率＋過濾後 pack
+
+綜合臂（final-decision 第 7 項第 4 臂）：輸入只有三樣——過濾後 pack、同日 morning-calls 的 Claude 列機率、同日 morning-arms 的
+fable 列機率；只放數字，不放任何一方的 reason／action／regime。前置條件不成立（缺列、p 無效、不計分、hash 不一致、fable 列 error）
+就不呼叫、不寫列、exit 0。
 """
 
 import argparse
@@ -32,8 +37,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PACK_DIR = ROOT / "reports" / "morning-packs"
 ARMS = ROOT / "journal" / "morning-arms.jsonl"
+CALLS = ROOT / "journal" / "morning-calls.jsonl"
 MODEL_ENV = "MORNING_FABLE_MODEL"
 MODEL_VERSION = "fable"
+SYNTH_VERSION = "fable_synth"
 TAIPEI = dt.timezone(dt.timedelta(hours=8))
 CUTOFF_HOUR = 9           # 台北時間過 09:00 才寫入的判讀不計分
 REASON_MAX = 1500
@@ -74,10 +81,35 @@ USER_TEMPLATE = """以下是今天 07:30 凍結的盤前證據包（`make mornin
 ===== 證據包結束 =====
 """
 
+# 綜合臂模板：三個目標的定義與上面逐字相同（測試比對）；成員固定 A＝claude、B＝fable，但 prompt 裡不透露模型身分。
+# 只放兩成員的機率數字，不放任何一方的理由、動作或 regime（防錨定）。
+SYNTH_TEMPLATE = """以下是今天 07:30 凍結的盤前證據包（`make morning` 的完整輸出），以及兩位獨立成員各自對三個目標給出的機率。請綜合後預測三個目標的最終機率。
 
-def prompt_hash():
-    """模板（system＋user，不含 pack）的 sha256。"""
-    return hashlib.sha256((SYSTEM_PROMPT + "\n\x00\n" + USER_TEMPLATE).encode("utf-8")).hexdigest()
+三個 0~1 小數（不是百分數）的機率：
+
+- `p_close_up`：收盤高於前一日收盤（**主目標**）
+- `p_oc_up`：收盤高於當日官方開盤（**主目標**）
+- `p_gap_up`：09:05 加權指數高於前一日收盤（次要）
+
+兩位成員的機率（你只拿到數字，看不到他們的理由）：
+
+{members}
+
+先看兩位成員的機率與證據包，再給你自己的最終機率：兩人一致或接近時不必硬找分歧；分歧大時要從證據包找出支持哪一邊的結構化證據，沒有證據就停在兩者之間。三個機率各自獨立估，不必互相加總。
+
+最後輸出一個 JSON 物件（放在回答最後），格式：
+{{"p_close_up": <0~1 的小數>, "p_oc_up": <0~1 的小數>, "p_gap_up": <0~1 的小數>, "reason": "<綜合兩位成員與證據的簡述>"}}
+（上面的尖括號是佔位，不是合法 JSON；請換成你的數字。JSON 之後不要再寫任何字元，也不要用 code fence。）
+
+===== 證據包開始 =====
+{pack}
+===== 證據包結束 =====
+"""
+
+
+def prompt_hash(template=USER_TEMPLATE):
+    """模板（system＋user，不含 pack）的 sha256；預設是獨立臂模板，綜合臂傳 SYNTH_TEMPLATE。"""
+    return hashlib.sha256((SYSTEM_PROMPT + "\n\x00\n" + template).encode("utf-8")).hexdigest()
 
 
 def pack_hash(pack_text):
@@ -96,6 +128,17 @@ def filter_pack(text):
 
 def build_user_prompt(pack_text):
     return USER_TEMPLATE.format(pack=pack_text)
+
+
+def members_table(p_a, p_b):
+    """兩成員機率表（中性標籤，A＝claude、B＝fable）；只有數字。"""
+    lines = ["| 目標 | 成員 A | 成員 B |", "|---|---|---|"]
+    lines += [f"| `{k}` | {p_a[k]} | {p_b[k]} |" for k in TARGETS]
+    return "\n".join(lines)
+
+
+def build_synth_prompt(pack_text, p_a, p_b):
+    return SYNTH_TEMPLATE.format(members=members_table(p_a, p_b), pack=pack_text)
 
 
 def taipei_now():
@@ -156,8 +199,8 @@ def child_env(env=None):
             if not (k.startswith(("ORCA_", "CLAUDE_CODE_")) or k == "CLAUDECODE")}
 
 
-def call_claude(model, pack_text, timeout):
-    """跑一次隔離的 claude -p；回 (cli_json dict | None, error | None)。"""
+def call_claude(model, pack_text, timeout, user_prompt=None):
+    """跑一次隔離的 claude -p；回 (cli_json dict | None, error | None)。user_prompt 預設是獨立臂的 prompt。"""
     exe = shutil.which("claude")
     if not exe:
         return None, "找不到 claude 可執行檔"
@@ -167,7 +210,8 @@ def call_claude(model, pack_text, timeout):
     env = child_env()
     with tempfile.TemporaryDirectory(prefix="morning-fable-") as cwd:
         try:
-            proc = subprocess.run(argv, input=build_user_prompt(pack_text), capture_output=True, text=True,
+            proc = subprocess.run(argv, input=user_prompt if user_prompt is not None else build_user_prompt(pack_text),
+                                  capture_output=True, text=True,
                                   cwd=cwd, timeout=timeout, env=env)
         except subprocess.TimeoutExpired:
             return None, f"逾時（{timeout}s）"
@@ -186,16 +230,17 @@ def call_claude(model, pack_text, timeout):
     return data, None
 
 
-def build_row(day, pack_text, *, ps, reason, error, cli_model, latency_s, cost_usd, now):
+def build_row(day, pack_text, *, ps, reason, error, cli_model, latency_s, cost_usd, now,
+              model_version=MODEL_VERSION, template=USER_TEMPLATE, extra=None):
     cutoff = dt.datetime.combine(dt.date.fromisoformat(day), dt.time(CUTOFF_HOUR), tzinfo=TAIPEI)
-    return {"date": day, "model_version": MODEL_VERSION, "cli_model": cli_model, **ps, "reason": reason,
-            "input_snapshot_hash": pack_hash(pack_text), "prompt_hash": prompt_hash(),
+    return {"date": day, "model_version": model_version, "cli_model": cli_model, **ps, "reason": reason,
+            "input_snapshot_hash": pack_hash(pack_text), "prompt_hash": prompt_hash(template),
             "latency_s": latency_s, "cost_usd": cost_usd,
             "decided_at": now.isoformat(timespec="seconds"),
-            "exclude_from_scoring": now > cutoff, "error": error}
+            "exclude_from_scoring": now > cutoff, "error": error, **(extra or {})}
 
 
-def has_row(path, day):
+def has_row(path, day, model_version=MODEL_VERSION):
     path = Path(path)
     if not path.exists():
         return False
@@ -204,7 +249,7 @@ def has_row(path, day):
             r = json.loads(line)
         except ValueError:
             continue
-        if isinstance(r, dict) and r.get("date") == day and r.get("model_version") == MODEL_VERSION:
+        if isinstance(r, dict) and r.get("date") == day and r.get("model_version") == model_version:
             return True
     return False
 
@@ -215,7 +260,7 @@ def append_row(path, row):
     with path.open("a+", encoding="utf-8") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
-            if has_row(path, row["date"]):
+            if has_row(path, row["date"], row["model_version"]):
                 return False
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
             fh.flush()
@@ -224,11 +269,53 @@ def append_row(path, row):
     return True
 
 
+def valid_p(v):
+    return not isinstance(v, bool) and isinstance(v, (int, float)) and 0 <= v <= 1
+
+
+def _rows(path, day):
+    path = Path(path)
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and r.get("date") == day:
+            yield r
+
+
+def synth_members(day, pack_text, calls_path, arms_path):
+    """綜合臂的前置條件：回 (member_p | None, 不成立的原因)。member_p＝{"claude": {...}, "fable": {...}}，只取三個 p。"""
+    claude = next((r for r in _rows(calls_path, day) if r.get("model_version", "claude") == "claude"), None)
+    if claude is None:
+        return None, f"{day} 沒有 Claude 臂的判讀列"
+    if not all(valid_p(claude.get(k)) for k in TARGETS):
+        return None, "Claude 列的三個機率不全是有效小數"
+    if claude.get("exclude_from_scoring") is not False:
+        return None, "Claude 列 exclude_from_scoring 不是 false（不計分）"
+    if claude.get("input_snapshot_hash") != pack_hash(pack_text):
+        return None, "Claude 列的 input_snapshot_hash 與當天 pack 不一致"
+    fable = next((r for r in _rows(arms_path, day) if r.get("model_version") == MODEL_VERSION), None)
+    if fable is None:
+        return None, f"{day} 沒有 fable 獨立臂的列"
+    if fable.get("error"):
+        return None, "fable 列 error 非空"
+    if fable.get("input_snapshot_hash") != pack_hash(pack_text):
+        return None, "fable 列的 input_snapshot_hash 缺漏或與當天 pack 不一致"
+    if not all(valid_p(fable.get(k)) for k in TARGETS):
+        return None, "fable 列的三個機率不全是有效小數"
+    return {"claude": {k: float(claude[k]) for k in TARGETS}, "fable": {k: float(fable[k]) for k in TARGETS}}, None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="盤前判讀的 Fable 獨立臂（只看凍結的 make morning 輸出）")
     ap.add_argument("--date", default=None, help="判讀日 YYYY-MM-DD（預設台北今天）")
     ap.add_argument("--pack", default=None, help="evidence_pack 路徑（預設 reports/morning-packs 那天最早一份）")
     ap.add_argument("--dry-run", action="store_true", help="印 prompt 與 hash，不呼叫、不寫檔")
+    ap.add_argument("--synth", action="store_true", help="綜合臂 fable_synth：看兩成員機率數字與過濾後 pack")
+    ap.add_argument("--calls", default=str(CALLS), help="Claude 臂判讀檔（--synth 用，預設 journal/morning-calls.jsonl）")
     ap.add_argument("--print-hash", action="store_true", help="只印 pack bytes 的 sha256")
     ap.add_argument("--timeout", type=int, default=300, help="claude 呼叫逾時秒數（預設 300）")
     ap.add_argument("--journal", default=str(ARMS), help="輸出 jsonl（預設 journal/morning-arms.jsonl）")
@@ -251,16 +338,26 @@ def main(argv=None):
     if a.print_hash:
         print(pack_hash(pack_text))
         return 0
-    if a.dry_run:
-        print(f"# system\n{SYSTEM_PROMPT}\n\n# user\n{build_user_prompt(pack_text)}")
-        print(f"pack={pack} input_snapshot_hash={pack_hash(pack_text)} prompt_hash={prompt_hash()}")
+    version, template = (SYNTH_VERSION, SYNTH_TEMPLATE) if a.synth else (MODEL_VERSION, USER_TEMPLATE)
+    label = "Fable 綜合臂" if a.synth else "Fable 臂"
+    if not a.dry_run and has_row(a.journal, day, version):
+        print(f"{day} 已有 {version} 臂紀錄，不重寫")
         return 0
-    if has_row(a.journal, day):
-        print(f"{day} 已有 {MODEL_VERSION} 臂紀錄，不重寫")
+    user_prompt, extra = None, None
+    if a.synth:
+        members, why = synth_members(day, pack_text, a.calls, a.journal)
+        if members is None:
+            print(f"{label} {day} 前置條件不成立，不呼叫、不寫列：{why}")
+            return 0
+        user_prompt = build_synth_prompt(pack_text, members["claude"], members["fable"])
+        extra = {"member_p": members}
+    if a.dry_run:
+        print(f"# system\n{SYSTEM_PROMPT}\n\n# user\n{user_prompt or build_user_prompt(pack_text)}")
+        print(f"pack={pack} input_snapshot_hash={pack_hash(pack_text)} prompt_hash={prompt_hash(template)}")
         return 0
 
     t0 = time.monotonic()
-    data, error = call_claude(model, pack_text, a.timeout)
+    data, error = call_claude(model, pack_text, a.timeout, user_prompt)
     latency = round(time.monotonic() - t0, 1)
     ps, reason, cli_model, cost = {k: None for k in TARGETS}, "", None, None
     if data is not None:
@@ -269,9 +366,10 @@ def main(argv=None):
         cli_model = next(iter(usage), None) if isinstance(usage, dict) and usage else None
         cost = data.get("total_cost_usd")
     row = build_row(day, pack_text, ps=ps, reason=reason, error=error, cli_model=cli_model,
-                    latency_s=latency, cost_usd=cost, now=taipei_now())
+                    latency_s=latency, cost_usd=cost, now=taipei_now(), model_version=version,
+                    template=template, extra=extra)
     wrote = append_row(a.journal, row)
-    print(f"Fable 臂 {day}：{'已寫入' if wrote else '已有同鍵紀錄，不重寫'}"
+    print(f"{label} {day}：{'已寫入' if wrote else '已有同鍵紀錄，不重寫'}"
           + (f"；error：{error}" if error else f"；p_close_up={ps['p_close_up']} p_oc_up={ps['p_oc_up']} "
                                              f"p_gap_up={ps['p_gap_up']}")
           + f"（{latency}s、名目 ${cost}）")

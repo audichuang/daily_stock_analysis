@@ -271,3 +271,163 @@ def test_find_pack_never_picks_partial_or_malformed_names(tmp_path):
     for n in ("2099-03-04.090000.txt",):
         (tmp_path / n).unlink()
     assert mfa.find_pack(DAY, tmp_path) is None
+
+
+# ---------- 綜合臂（--synth）----------
+
+FROZEN_INDEP_PROMPT_HASH = "ec661c2fe319706a47b6d83784d8a3453ea2a9069df40398c09371656067d6ec"  # develop 49263158 的值
+SYNTH_GOOD = {**GOOD, "result": "綜合…\n{\"p_close_up\": 0.58, \"p_oc_up\": 0.52, \"p_gap_up\": 0.61, \"reason\": \"兩成員接近\"}"}
+CLAUDE_P = {"p_close_up": 0.6, "p_oc_up": 0.45, "p_gap_up": 0.7}
+FABLE_P = {"p_close_up": 0.55, "p_oc_up": 0.5, "p_gap_up": 0.6}
+
+
+def claude_row(**kw):
+    return {"date": DAY, "model_version": "claude", **CLAUDE_P, "exclude_from_scoring": False,
+            "input_snapshot_hash": mfa.pack_hash(PACK_TEXT), "reason": "CLAUDE-REASON-MARKER",
+            "action": "CLAUDE-ACTION-MARKER", "regime": "CLAUDE-REGIME-MARKER", **kw}
+
+
+def fable_row(**kw):
+    return {"date": DAY, "model_version": "fable", **FABLE_P, "error": None,
+            "input_snapshot_hash": mfa.pack_hash(PACK_TEXT), "reason": "FABLE-REASON-MARKER", **kw}
+
+
+def write_jsonl(path, rows):
+    path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+
+
+def run_synth(env, monkeypatch, fake, claude=None, fable=None, extra_arms=()):
+    pack, out = env
+    calls = out.parent / "calls.jsonl"
+    write_jsonl(calls, [claude] if claude is not None else [])
+    write_jsonl(out, [fable] if fable is not None else [])
+    if extra_arms:
+        write_jsonl(out, [*([fable] if fable is not None else []), *extra_arms])
+    monkeypatch.setattr(mfa.subprocess, "run", fake)
+    rc = mfa.main(["--date", DAY, "--pack", str(pack), "--journal", str(out), "--calls", str(calls), "--synth"])
+    rows = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
+    return rc, rows
+
+
+def test_synth_prompt_has_only_numbers_never_reason_action_or_regime(env, monkeypatch):
+    fake = FakeRun(stdout=json.dumps(SYNTH_GOOD))
+    rc, rows = run_synth(env, monkeypatch, fake, claude_row(), fable_row())
+    sent = fake.calls[0][1]["input"]
+    assert not any(m in " ".join(fake.calls[0][0]) for m in ("MARKER", "0.58"))
+    for marker in ("CLAUDE-REASON-MARKER", "CLAUDE-ACTION-MARKER", "CLAUDE-REGIME-MARKER", "FABLE-REASON-MARKER"):
+        assert marker not in sent
+        assert "成員 A" in sent and "成員 B" in sent and "claude" not in sent.lower() and "fable" not in sent.lower()
+    assert PACK_TEXT.strip() in sent
+    # A＝claude、B＝fable：A 欄在前
+    assert "| `p_close_up` | 0.6 | 0.55 |" in sent and "| `p_oc_up` | 0.45 | 0.5 |" in sent
+
+
+def test_synth_row_fields_member_p_and_hashes(env, monkeypatch):
+    rc, rows = run_synth(env, monkeypatch, FakeRun(stdout=json.dumps(SYNTH_GOOD)), claude_row(), fable_row())
+    assert rc == 0 and len(rows) == 2
+    r = rows[1]
+    assert (r["date"], r["model_version"], r["error"]) == (DAY, "fable_synth", None)
+    assert (r["p_close_up"], r["p_oc_up"], r["p_gap_up"]) == (0.58, 0.52, 0.61)
+    assert r["member_p"] == {"claude": CLAUDE_P, "fable": FABLE_P}
+    assert r["input_snapshot_hash"] == mfa.pack_hash(PACK_TEXT)    # 與獨立臂同一份
+    assert r["prompt_hash"] == mfa.prompt_hash(mfa.SYNTH_TEMPLATE) != mfa.prompt_hash()
+    assert r["exclude_from_scoring"] is False
+
+
+def test_synth_decided_after_0900_is_excluded(env, monkeypatch):
+    monkeypatch.setattr(mfa, "taipei_now", lambda: LATE)
+    rows = run_synth(env, monkeypatch, FakeRun(stdout=json.dumps(SYNTH_GOOD)), claude_row(), fable_row())[1]
+    assert rows[1]["exclude_from_scoring"] is True
+
+
+@pytest.mark.parametrize("claude,fable", [
+    (None, fable_row()),
+    (claude_row(p_oc_up=None), fable_row()),
+    (claude_row(p_gap_up=1.2), fable_row()),
+    (claude_row(exclude_from_scoring=True), fable_row()),
+    (claude_row(exclude_from_scoring=None), fable_row()),
+    (claude_row(input_snapshot_hash="OTHER"), fable_row()),
+    (claude_row(input_snapshot_hash=None), fable_row()),
+    (claude_row(), None),
+    (claude_row(), fable_row(error="逾時")),
+    (claude_row(), fable_row(p_close_up=None)),
+    (claude_row(), fable_row(p_gap_up=True)),
+], ids=["no-claude", "claude-p-null", "claude-p-range", "claude-excluded", "claude-excl-missing", "hash-mismatch",
+        "hash-missing", "no-fable", "fable-error", "fable-p-null", "fable-p-bool"])
+def test_synth_missing_precondition_means_no_call_no_row_exit_0(env, monkeypatch, capsys, claude, fable):
+    fake = FakeRun(stdout=json.dumps(SYNTH_GOOD))
+    rc, rows = run_synth(env, monkeypatch, fake, claude, fable)
+    assert rc == 0 and fake.calls == []
+    assert all(r["model_version"] != "fable_synth" for r in rows)
+    assert "前置條件不成立" in capsys.readouterr().out
+
+
+def test_synth_ignores_other_dates_and_other_models_rows(env, monkeypatch):
+    other = [{**fable_row(), "date": "2099-03-03"}, {**fable_row(), "model_version": "equal_weight"}]
+    fake = FakeRun(stdout=json.dumps(SYNTH_GOOD))
+    rc, rows = run_synth(env, monkeypatch, fake, claude_row(model_version="claude"), None, extra_arms=other)
+    assert fake.calls == [] and all(r["model_version"] != "fable_synth" for r in rows)
+
+
+def test_synth_same_key_is_not_rewritten_nor_called_again(env, monkeypatch, capsys):
+    pack, out = env
+    run_synth(env, monkeypatch, FakeRun(stdout=json.dumps(SYNTH_GOOD)), claude_row(), fable_row())
+    capsys.readouterr()
+    fake = FakeRun(stdout=json.dumps({**GOOD, "result": '{"p_close_up": 0.1, "p_oc_up": 0.1, "p_gap_up": 0.1}'}))
+    monkeypatch.setattr(mfa.subprocess, "run", fake)
+    rc = mfa.main(["--date", DAY, "--pack", str(pack), "--journal", str(out), "--calls", str(out.parent / "calls.jsonl"),
+                   "--synth"])
+    rows = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
+    assert rc == 0 and fake.calls == [] and len(rows) == 2 and rows[1]["p_close_up"] == 0.58
+    assert "不重寫" in capsys.readouterr().out
+
+
+def test_synth_failure_still_writes_error_row_with_member_p(env, monkeypatch):
+    rc, rows = run_synth(env, monkeypatch, FakeRun(returncode=1), claude_row(), fable_row())
+    assert rc == 0 and rows[1]["model_version"] == "fable_synth" and rows[1]["error"]
+    assert rows[1]["p_close_up"] is None and rows[1]["member_p"]["claude"] == CLAUDE_P
+
+
+def test_synth_does_not_block_independent_arm_key_and_vice_versa(tmp_path):
+    out = tmp_path / "a.jsonl"
+    assert mfa.append_row(out, {"date": DAY, "model_version": "fable"}) is True
+    assert mfa.append_row(out, {"date": DAY, "model_version": "fable_synth"}) is True
+    assert mfa.append_row(out, {"date": DAY, "model_version": "fable_synth"}) is False
+
+
+def test_synth_template_shares_target_definitions_and_independent_prompt_is_frozen():
+    for line in ("- `p_close_up`：收盤高於前一日收盤（**主目標**）",
+                 "- `p_oc_up`：收盤高於當日官方開盤（**主目標**）",
+                 "- `p_gap_up`：09:05 加權指數高於前一日收盤（次要）"):
+        assert line in mfa.SYNTH_TEMPLATE and line in mfa.USER_TEMPLATE
+    # 獨立臂 prompt_hash 已登記實驗，改了就作廢：釘死目前的值
+    assert mfa.prompt_hash() == FROZEN_INDEP_PROMPT_HASH
+
+
+def test_synth_dry_run_prints_prompt_without_call_or_write(env, monkeypatch, capsys):
+    pack, out = env
+    write_jsonl(out.parent / "calls.jsonl", [claude_row()])
+    write_jsonl(out, [fable_row()])
+    fake = FakeRun()
+    monkeypatch.setattr(mfa.subprocess, "run", fake)
+    before = out.read_text(encoding="utf-8")
+    rc = mfa.main(["--date", DAY, "--pack", str(pack), "--journal", str(out), "--calls", str(out.parent / "calls.jsonl"),
+                   "--synth", "--dry-run"])
+    text = capsys.readouterr().out
+    assert rc == 0 and fake.calls == [] and out.read_text(encoding="utf-8") == before
+    assert "成員 A" in text and mfa.prompt_hash(mfa.SYNTH_TEMPLATE) in text
+
+
+def test_synth_accepts_boundary_probabilities_zero_and_one(env, monkeypatch):
+    fake = FakeRun(stdout=json.dumps(SYNTH_GOOD))
+    rc, rows = run_synth(env, monkeypatch, fake, claude_row(p_close_up=1.0, p_gap_up=0), fable_row(p_oc_up=0.0, p_gap_up=1))
+    assert len(fake.calls) == 1 and rows[1]["model_version"] == "fable_synth"
+
+
+@pytest.mark.parametrize("fable", [fable_row(input_snapshot_hash=None), fable_row(input_snapshot_hash="OTHER")],
+                         ids=["fable-hash-missing", "fable-hash-mismatch"])
+def test_synth_requires_fable_row_hash_to_match_the_pack(env, monkeypatch, capsys, fable):
+    fake = FakeRun(stdout=json.dumps(SYNTH_GOOD))
+    rc, rows = run_synth(env, monkeypatch, fake, claude_row(), fable)
+    assert rc == 0 and fake.calls == [] and all(r["model_version"] != "fable_synth" for r in rows)
+    assert "前置條件不成立" in capsys.readouterr().out
