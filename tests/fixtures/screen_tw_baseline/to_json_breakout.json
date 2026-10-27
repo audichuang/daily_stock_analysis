@@ -18,28 +18,28 @@
  "pool_size": 6,
  "measured_base_rate": {
   "sample": "2020-01 ~ 2026-04（結果資料至 2026-07-24）、974 個事件（同股相隔 >60 交易日才算新事件）。事件仍非獨立——不同個股集中在相同行情與產業循環。",
-  "win_rate": 0.513,
-  "breakeven_win_rate": 0.312,
+  "win_rate": 0.516,
+  "breakeven_win_rate": 0.313,
   "payoff_ratio": 2.2,
-  "mean_60d_net_of_cost": 0.0993,
-  "median_60d_net_of_cost": 0.0083,
+  "mean_60d_net_of_cost": 0.1007,
+  "median_60d_net_of_cost": 0.0113,
   "mean_ci95_block_bootstrap": [
-   0.0314,
-   0.1669
+   0.0322,
+   0.1693
   ],
-  "mean_excl_28_events_over_100pct": 0.0569,
-  "top12pct_events_share_of_total_pnl": 1.08,
-  "p_close60_up_30pct": 0.202,
-  "p_close60_down_20pct": 0.148,
+  "mean_excl_28_events_over_100pct": 0.0584,
+  "top12pct_events_share_of_total_pnl": 1.07,
+  "p_close60_up_30pct": 0.204,
+  "p_close60_down_20pct": 0.149,
   "worst_single": -0.54,
   "matched_baseline_same_pool_with_revenue": {
-   "mean": 0.0467,
-   "win_rate": 0.485,
+   "mean": 0.0469,
+   "win_rate": 0.486,
    "p_close60_up_30pct": 0.12
   },
-  "positive_years": "6/7（僅 2022 為 -3.3%；2024 +0.8%）",
+  "positive_years": "6/7（僅 2022 為 -3.3%；2024 +0.9%）",
   "survivorship_bias_bound": -0.0032,
-  "note": "勝率 51.3% 高於損益兩平 31.2%，**池子本身即正期望值**——agent 的目標不是讓候選及格，而是挑右尾、避左尾、避主題集中。存活偏誤已量化:補不回月營收的 82 檔下市公司只產生 15 個符合價格條件的事件、均值 -7.23%,最差 11 筆併入讓均值由 +9.93% 變 +9.60%。排序尚未觀察到優勢。"
+  "note": "勝率 51.6% 高於損益兩平 31.3%，**池子本身即正期望值**——agent 的目標不是讓候選及格，而是挑右尾、避左尾、避主題集中。存活偏誤已量化:補不回月營收的 82 檔下市公司只產生 15 個符合價格條件的事件、均值 -7.23%,最差 11 筆併入讓均值由 +9.93% 變 +9.60%（此段與 survivorship_bias_bound 為重測前的數字，--survivorship-bound 未重跑）。排序尚未觀察到優勢。"
  },
  "candidates": [
   {

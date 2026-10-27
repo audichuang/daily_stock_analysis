@@ -333,13 +333,29 @@ def test_every_revenue_loader_defaults_to_listed_only(loader, tmp_path, monkeypa
     assert set(_run_loader(loader, monkeypatch, True)["stock_id"]) == {"1101", "6488"}
 
 
+def test_measured_base_rate_is_wholly_the_2026_10_26_rebaseline():
+    # 整組錨點要同一次重測的數字，不能只改 p_close60_up_30pct 留下新舊混合
+    pool = pd.DataFrame(columns=["stock_id", "industry"])
+    m = screen_tw.to_json(pd.Timestamp("2026-08-03"), pool, {}, 0.0, "breakout", 5)["measured_base_rate"]
+    assert m["win_rate"] == 0.516
+    assert m["breakeven_win_rate"] == 0.313
+    assert m["mean_60d_net_of_cost"] == 0.1007
+    assert m["median_60d_net_of_cost"] == 0.0113
+    assert m["mean_ci95_block_bootstrap"] == [0.0322, 0.1693]
+    assert m["mean_excl_28_events_over_100pct"] == 0.0584
+    assert m["p_close60_down_20pct"] == 0.149
+
+
 def test_json_withholds_the_listed_base_rate_when_otc_revenue_is_included():
     pool = pd.DataFrame(columns=["stock_id", "industry"])
     listed = screen_tw.to_json(pd.Timestamp("2026-08-03"), pool, {}, 0.0, "breakout", 5)
     mixed = screen_tw.to_json(pd.Timestamp("2026-08-03"), pool, {}, 0.0, "breakout", 5,
                               include_otc_revenue=True)
-    assert listed["measured_base_rate"]["p_close60_up_30pct"] == 0.202
-    # 20.2% 是上市口徑量的錨點；池子換了還交給 agent，等於讓 confidence 錨在別的分布上
+    assert listed["measured_base_rate"]["p_close60_up_30pct"] == 0.204
+    # 回驗的 Brier 基準與 live 篩選給 agent 的錨點必須是同一個數字（2026-10-26 重測為 20.4%）
+    from verify_swing_decisions import BASE_RATE
+    assert listed["measured_base_rate"]["p_close60_up_30pct"] == BASE_RATE
+    # 20.4% 是上市口徑量的錨點；池子換了還交給 agent，等於讓 confidence 錨在別的分布上
     assert mixed["measured_base_rate"] is None
     assert "measure_signal_forward.py" in " ".join(mixed["blind_spots"])
 
