@@ -349,8 +349,9 @@ def test_fred_calendar_without_a_time_column_uses_the_default_time_in_eastern():
 
 def test_bea_ics_times_are_utc_and_agree_with_fred_pce_convention():
     pce = macro.parse_bea_ics(_fx("macro_bea_calendar.bin"))
-    assert [t for _, t in pce] == [datetime.datetime(2026, 10, 29, 12, 30, tzinfo=macro.UTC),
-                                   datetime.datetime(2026, 11, 25, 13, 30, tzinfo=macro.UTC)]
+    assert [t for _, t in pce][:2] == [datetime.datetime(2026, 10, 29, 12, 30, tzinfo=macro.UTC),
+                                       datetime.datetime(2026, 11, 25, 13, 30, tzinfo=macro.UTC)]
+    assert len(pce) == 3
     assert all(t.astimezone(macro.NEW_YORK).strftime("%H:%M") == "08:30" for _, t in pce)
     assert pce[0][0].endswith("September 2026")
 
@@ -385,9 +386,10 @@ def test_ism_is_first_us_business_day_and_estimated():
     assert rows[0]["released_at"].astimezone(macro.NEW_YORK).strftime("%H:%M") == "10:00"
 
 
-def test_cbc_table_only_has_confirmed_past_meetings():
-    today = D(2026, 10, 27)
-    assert all(d < today for d in macro.CBC_BOARD_MEETINGS), "未來場次沒有央行公告就不能推算著放"
+def test_cbc_table_has_only_officially_announced_dates():
+    announced = {D(2025, 9, 18), D(2025, 12, 18), D(2026, 3, 19), D(2026, 6, 18), D(2026, 9, 17), D(2026, 12, 17)}
+    assert set(macro.CBC_BOARD_MEETINGS) == announced, "只放央行公告過的日期；116 年沒有公告就不能推算著放"
+    assert max(macro.CBC_BOARD_MEETINGS).year == 2026
     rows = macro.cbc_events(now=NOW)
     assert len(rows) == len(macro.CBC_BOARD_MEETINGS)
     assert {r["status"] for r in rows} == {"confirmed"} and "待確認" in rows[0]["time_note"]
@@ -411,7 +413,9 @@ def test_collect_release_events_falls_back_only_when_fred_has_no_next_pce_and_re
     assert {r["source"] for r in rows if r["event_type"] == "retail" and r["source"] != "fred"} == {"census"}
     census = [r for r in rows if r["source"] == "census"]
     assert [r["event_date"] for r in census] == [D(2027, 1, 15), D(2027, 2, 17), D(2027, 3, 16)]
-    assert not [r for r in rows if r["source"] == "bea"], "BEA 的 PCE 全在今天之前，沒有可補的未來場次"
+    bea = [r for r in rows if r["source"] == "bea"]
+    assert [(r["event_type"], r["event_date"]) for r in bea] == [("pce", D(2027, 1, 28))], \
+        "BEA 備援只補今天以後、且晚於 FRED 最後一筆的 PCE；2026 年的舊場次不補"
     assert {"ism", "cbc"} <= {r["event_type"] for r in rows}
 
 
