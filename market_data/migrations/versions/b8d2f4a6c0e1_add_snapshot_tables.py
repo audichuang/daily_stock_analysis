@@ -106,6 +106,13 @@ def downgrade() -> None:
         raise RuntimeError(
             f"拒絕降版：taifex_fut_oi 有 {rows:,} 列帶 first_seen_at／captured_at。market schema 無備份；"
             "請先匯出並確認備份，再清掉這兩欄的值（UPDATE … SET first_seen_at = NULL, captured_at = NULL）後重跑 downgrade")
+    rows = bind.execute(sa.text(
+        "SELECT count(*) FROM market.rate_expectations "
+        "WHERE snapshot_slot != 'legacy' OR captured_at IS NOT NULL")).scalar_one()
+    if rows:
+        raise RuntimeError(
+            f"拒絕降版：rate_expectations 有 {rows:,} 列帶 snapshot_slot／captured_at（Kalshi 漏抓補不回來）。"
+            "market schema 無備份；請先匯出並確認備份，再 UPDATE … SET snapshot_slot = 'legacy', captured_at = NULL 後重跑 downgrade")
     # rate_expectations 換回舊 PK 會把不同 slot 的同一合約擠成重複鍵：有重複就拒絕
     dupes = bind.execute(sa.text(
         "SELECT count(*) FROM (SELECT 1 FROM market.rate_expectations "

@@ -260,8 +260,15 @@ def crawl_day(conn, source, d, replace=False, min_ratio=0.5, record_initial=Fals
     n = upsert(conn, model.__table__, recs, pk, coalesce=coalesce,
                market_guard=model.__tablename__ in MARKET_SPLIT_TABLES)
     if record_initial and not replace and source in REVISED_SOURCES:
-        _insert_first_seen(conn, models.InstitutionalInitial.__table__, recs, pk)
+        # 初版表只收主表「實際接受」的鍵：market_guard 略過的跨市場撞號列不能進來（DO NOTHING 之後修不掉）
+        kept = {_pk_key(r, pk) for r in _stored_rows(conn, model.__table__, d, market)}
+        _insert_first_seen(conn, models.InstitutionalInitial.__table__,
+                           [r for r in recs if _pk_key(r, pk) in kept], pk)
     return n
+
+
+def _pk_key(r, pk):
+    return tuple(str(r[k])[:10] if k == "date" else str(r[k]) for k in pk)
 
 
 def _stored_rows(conn, table, d, market=None):

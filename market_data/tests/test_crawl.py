@@ -380,6 +380,31 @@ def test_institutional_initial_is_skipped_by_backfill_and_by_replace(pg_conn, mo
     assert _initial(pg_conn, d1) == {} and _initial(pg_conn, d2) == {}
 
 
+def _offline_initial_run(monkeypatch, stored_ids, fetched):
+    """離線跑 crawl_day(record_initial=True)：主表「實際接受」的鍵由 stored_ids 決定（模擬 market_guard 略過撞號列）。"""
+    written = []
+    d = date(2099, 1, 9)
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", _t86(fetched))
+    monkeypatch.setattr(crawl, "upsert", lambda conn, table, recs, pk, **kw: len(recs))
+    monkeypatch.setattr(crawl, "_stored_rows", lambda conn, table, day, market=None:
+                        [{"stock_id": i, "date": day} for i in stored_ids])
+    monkeypatch.setattr(crawl, "_insert_first_seen", lambda conn, table, recs, pk:
+                        written.append(sorted(r["stock_id"] for r in recs)) or len(recs))
+    crawl.crawl_day(None, "institutional", d, record_initial=True)
+    return written
+
+
+def test_institutional_initial_only_records_keys_the_main_table_accepted(monkeypatch):
+    # 6201 被 market_guard 擋下（主表留著別的市場那列）、6488 被接受：初版表只能收 6488（部分撞號）
+    written = _offline_initial_run(monkeypatch, {"6488"}, [("6201", 0, 999), ("6488", 0, 7)])
+    assert written == [["6488"]]
+
+
+def test_institutional_initial_records_everything_when_nothing_collides(monkeypatch):
+    written = _offline_initial_run(monkeypatch, {"6201", "6488"}, [("6201", 0, 999), ("6488", 0, 7)])
+    assert written == [["6201", "6488"]]
+
+
 def test_crawl_range_passes_record_initial_to_each_day(monkeypatch):
     seen = []
     monkeypatch.setattr(crawl, "crawl_day", lambda conn, source, d, replace=False, **kw:

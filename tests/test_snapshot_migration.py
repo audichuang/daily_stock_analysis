@@ -111,6 +111,25 @@ def test_downgrade_refuses_stamped_taifex_rows_before_any_ddl(schema):
     assert _snapshot_of_ddl(schema) == before
 
 
+def test_downgrade_refuses_single_slot_rate_snapshot_before_any_ddl(schema):
+    """只有一個 slot（無跨 slot 重複鍵）也不能降版：snapshot_slot／captured_at 丟了補不回來。"""
+    b8d2.upgrade()
+    schema.exec_driver_sql(
+        "INSERT INTO market.rate_expectations (snapshot_date, snapshot_slot, meeting_date, outcome, captured_at) "
+        "VALUES ('2026-10-27', 'premarket', '2026-12-09', 'hold', '2026-10-27 07:30:00')")
+    before = _snapshot_of_ddl(schema)
+    with pytest.raises(RuntimeError, match="拒絕降版：rate_expectations"):
+        b8d2.downgrade()
+    assert _snapshot_of_ddl(schema) == before
+
+
+def test_downgrade_allows_legacy_only_rate_rows(schema):
+    """只剩 legacy／NULL 的舊列（migration 前就有的）沒有可丟的資訊，仍可降版。"""
+    b8d2.upgrade()
+    b8d2.downgrade()
+    assert "snapshot_slot" not in _cols(schema, "rate_expectations")
+
+
 def test_empty_downgrade_restores_the_previous_schema(schema):
     before = _snapshot_of_ddl(schema)
     b8d2.upgrade()

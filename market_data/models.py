@@ -96,12 +96,14 @@ class Institutional(Base):
 
 
 class InstitutionalInitial(Base):
-    """三大法人「初版」快照（append-only）：``daily_update`` 18:00 首次抓到的 T86／TPEx 值。
+    """三大法人「初版」快照（append-only）：``daily_update`` 首次抓到的 T86／TPEx 值。
 
     ``institutional`` 隔日會被 ``crawl.REVISED_SOURCES`` 的 refresh 整日換血成定版，初版就消失；
     這張表只在 daily 路徑以 ``ON CONFLICT DO NOTHING`` 寫入，``backfill``／``refresh`` 都不寫，
     所以歷史回補不會冒充初版。欄位與 ``institutional`` 相同，另加 ``captured_at``（抓到的時刻）。
-    上線前的日期沒有初版；上線第一天若補抓到較早日期，那列也可能已是定版，看 ``captured_at``。
+    「初版」＝daily 補缺路徑**第一次抓到**的值，不保證是 18:00 當晚抓的：前一晚失敗或 T86 還沒出，
+    隔天（07:30 ``make morning`` 也跑 daily）補抓到的可能已是定版。研究要讀初版時，篩 ``captured_at``
+    落在該交易日當晚的列；上線前的日期沒有初版。
     """
 
     __tablename__ = "institutional_initial"

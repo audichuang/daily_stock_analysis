@@ -476,7 +476,7 @@ def test_crawl_range_only_requests_known_trading_days(monkeypatch):
     cal = {date(2024, 2, 5), date(2024, 2, 15)}
     monkeypatch.setattr(crawl, "_trading_dates", lambda conn, s, e: cal)
     monkeypatch.setattr(crawl, "crawl_day",
-                        lambda conn, source, d, replace=False: seen.append(d) or 1)
+                        lambda conn, source, d, replace=False, **kw: seen.append(d) or 1)
     dates = [date(2024, 2, 5) + __import__("datetime").timedelta(days=i)
              for i in range(11)]
     crawl.crawl_range(_FakeEngine(), "valuation", dates, resume=False)
@@ -489,7 +489,7 @@ def test_crawl_range_crawls_saturday_in_calendar(monkeypatch, source):
     seen = []
     monkeypatch.setattr(crawl, "_trading_dates", lambda conn, s, e: {saturday})
     monkeypatch.setattr(crawl, "crawl_day",
-                        lambda conn, src, d, replace=False: seen.append(d) or 1)
+                        lambda conn, src, d, replace=False, **kw: seen.append(d) or 1)
 
     assert crawl.crawl_range(_FakeEngine(), source, [saturday], resume=False) == 1
     assert seen == [saturday]
@@ -501,7 +501,7 @@ def test_crawl_range_skips_saturday_outside_calendar(monkeypatch, source):
     seen = []
     monkeypatch.setattr(crawl, "_trading_dates", lambda conn, s, e: {friday})
     monkeypatch.setattr(crawl, "crawl_day",
-                        lambda conn, src, d, replace=False: seen.append(d) or 1)
+                        lambda conn, src, d, replace=False, **kw: seen.append(d) or 1)
 
     assert crawl.crawl_range(
         _FakeEngine(), source, [friday, saturday], resume=False) == 1
@@ -513,7 +513,7 @@ def test_crawl_range_empty_calendar_crawls_no_dates(monkeypatch, source):
     seen = []
     monkeypatch.setattr(crawl, "_trading_dates", lambda conn, s, e: set())
     monkeypatch.setattr(crawl, "crawl_day",
-                        lambda conn, src, d, replace=False: seen.append(d) or 1)
+                        lambda conn, src, d, replace=False, **kw: seen.append(d) or 1)
 
     assert crawl.crawl_range(
         _FakeEngine(), source, [date(1900, 1, 5), date(1900, 1, 6)], resume=False) == 0
@@ -529,7 +529,7 @@ def test_crawl_range_price_without_calendar_skips_weekends(monkeypatch):
 
     monkeypatch.setattr(crawl, "_trading_dates", unexpected_calendar)
     monkeypatch.setattr(crawl, "crawl_day",
-                        lambda conn, src, d, replace=False: seen.append(d) or 1)
+                        lambda conn, src, d, replace=False, **kw: seen.append(d) or 1)
 
     assert crawl.crawl_range(
         _FakeEngine(), "price", [friday + timedelta(days=i) for i in range(3)],
