@@ -1,6 +1,6 @@
 # market_data — 台股行情與總經數據爬取,統一 Postgres(market schema)
 
-爬 TWSE/TPEx/MOPS 歷史寫進 Postgres `market` schema——台股歷史的**唯一資料源**(無備份,丟了只能重爬)。`macro.py` 另把台股以外的大局數據寫進同一個 schema:`macro_series`(yfinance／FRED 日線,序列清單唯一一份在 `macro.SERIES`,`scripts/overnight.py` 也用它)、`rate_expectations`(Kalshi Fed 利率預期快照,**無歷史可補**)、`event_calendar`(FOMC／財報,鍵不含日期、日期可變);`daily` 經 `MACRO_PERSIST_ENABLED`(預設開)呼叫,三段各自只報不擋,語意見 `docs/macro-data.md`。連線只認 `.env` 的 `DATABASE_URL`,模組不自載 `.env`,指令一律 `uv run --env-file .env …`。面板經 `data_provider/market_db_fetcher.py` 讀取。
+爬 TWSE/TPEx/MOPS 歷史寫進 Postgres `market` schema——台股歷史的**唯一資料源**(無備份,丟了只能重爬)。`macro.py` 另把台股以外的大局數據寫進同一個 schema:`macro_series`(yfinance／FRED 日線,序列清單唯一一份在 `macro.SERIES`,`scripts/overnight.py` 也用它)、`rate_expectations`(Kalshi Fed 利率預期快照,**無歷史可補**)、`event_calendar`(FOMC／財報／美國經濟數據／ISM／央行,鍵不含日期、日期可變;經濟數據的實際值是 ALFRED 首發 vintage、first-write-wins,不寫高於／低於預期;央行日期是 `macro.CBC_BOARD_MEETINGS` 人工常數表、只放已確認、不推算);`daily` 經 `MACRO_PERSIST_ENABLED`(預設開)呼叫,三段各自只報不擋,語意見 `docs/macro-data.md`。連線只認 `.env` 的 `DATABASE_URL`,模組不自載 `.env`,指令一律 `uv run --env-file .env …`。面板經 `data_provider/market_db_fetcher.py` 讀取。
 `taifex.py` 是期交所法人台指期未平倉的入庫(`taifex_fut_oi`,`daily` 經 `TAIFEX_OI_PERSIST_ENABLED` 開關、預設關;只累積不回補,以回應每列自帶日期寫入),`scripts/taifex_positions.py` 共用它的抓取與解析。`risk_flags.py`/`events.py` 只抓不入庫(不寫 DB、不建表),HTTP 一律走 `tw_official_http.py`(不走 `crawler.requests_get`),它**不判新鮮度**,呼叫端自己比對回應日期。`sources.py`/`crawler.py`/`financial_statement.py` 是移植來的,盡量少動。
 
 ## 寫入與 schema

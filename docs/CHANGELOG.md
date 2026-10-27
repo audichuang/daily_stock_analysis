@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 總經事件日程與首發值：`SERIES` 加 `FRED:ICSA`（週頻，`Series` 新增 `freq` 欄、預設 `daily`，週頻序列不進儀表日線表）；`event_calendar` 追加可空欄位 `released_at`／`series_id`／`observation_date`／`actual_value`／`prior_value`／`actual_vintage`／`actual_source`（migration `a6c1e3f5b7d9`，**正式庫要使用者確認後自己跑**，有帶 `released_at` 的列時拒絕降版）；新增 CPI、非農＋失業率、零售 advance、PCE、初領事件（FRED 行事曆為主、時間是美中；BEA ICS／Census 備援）、ISM 製造業規則推估日（`estimated`）、央行理監事會常數表（只放央行公告過的日期：已開過的場次與 115-12-17 預定日，116 年待公告後人工補，不推算）；公布後由 ALFRED 以公布日當 vintage 取首發實際值與前值（`vintage_date` 單數參數，first-write-wins；PAYEMS／UNRATE 只存這裡，不進 `macro_series`）
+- [改進] `scripts/macro_brief.py` 事件段拆成「隔夜已公布」（首發實際值、前值、vintage、固定標「無共識」）與「今日待公布」兩欄，保留 14 天清單；不寫高於／低於預期（沒有 PIT 共識）；skill `tw-morning-call` Step 2.5 加兩欄讀法；`docs/macro-data.md`、`market_data/AGENTS.md` 同步
+- [修复] 總經事件兩欄與行事曆修正：「今日待公布」上界改取今天之後的下一場次 13:30 台北（原本交易日早上只到今天 13:30，今晚的美國數據、ISM、央行永遠不出現）；央行列印出 `time_note`「時間待確認」、無 `series_id` 的列（央行、ISM）印「首發值不適用」而不是承諾 ALFRED 補值；FRED 改期刪除加 `source = 'fred'`，備援（BEA／Census）失敗時不再誤刪既有備援事件；補 `print_release_columns` 窗口、`update()` 接線、首發補值順序、央行時區的測試；文件更正 `FRED:ICSA` 只抓近 800 天
+- [修复] FRED 改期清理放寬：FRED 斷線期間備援（BEA／Census）會把同一天的 `source` 改掉，FRED 恢復並改期後舊日期刪不掉；刪除條件改為 `source=fred`，或 bea／census 且落在該年度 FRED 最早～最晚日期之間，範圍外的備援列照舊保留；補 FRED→BEA→FRED 改期測試
 - [新功能] 新增實驗登記表 `journal/experiment-registry.jsonl`（append-only、進版控，欄位見 `journal/README.md`），先登記盤前機率 pilot、總經模型階梯主比較（F 對 N、OC、756 日、2017-05 起）與四條事件規則、事件前延後進場、Fable 五臂、個股 5 日有無總經 A/B，以及五日產業反轉與 25MA 出場（探索性）
 - [改進] 波段日誌 `swing-decisions.jsonl` 新增 `model_confidence_raw`、`override`、`override_reason` 分欄（模型原判與人工覆寫分開），skill `tw-swing-research` Step 4 與 `journal/README.md` 同步，並明定 2026-10-27 起的決策為前瞻封存期、不得拿來回頭調突破池門檻
 - [修复] 回驗 `verify_swing_decisions.BASE_RATE` 與 `screen_tw` 的 `measured_base_rate.p_close60_up_30pct` 由作廢的 0.202 改為 2026-10-26 重測的 0.204，並加測試鎖住兩處一致；skill 錨點文字去掉「尚未跟改」

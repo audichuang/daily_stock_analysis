@@ -17,9 +17,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from market_data.macro import SERIES  # noqa: E402
+from market_data.macro import NEW_YORK, SERIES  # noqa: E402
 
 TAIPEI = ZoneInfo("Asia/Taipei")
+SESSION_CLOSE = datetime.time(13, 30)   # 台股收盤（台北）；兩欄事件的分界
 STALE_DAYS = 5          # 最新一列早於今天這麼多曆日就標「過期」
 HORIZONS = (("1週", 5), ("1月", 21), ("3月", 63))
 OUTCOME_SIDE = {"hike_gt25": "hike", "hike_25": "hike", "hold": "hold", "cut_25": "cut", "cut_gt25": "cut"}
@@ -90,6 +91,8 @@ def print_series(conn, today, out=print):
     out(f"{'名稱':<14}{'日期':<12}{'最新':>12}{'1週':>9}{'1月':>9}{'3月':>9}{'距1年高':>9}  MA60 MA200")
     missing = []
     for s in SERIES:
+        if s.freq != "daily":   # 週頻序列的 1週／1月／3月是列數 5／21／63，套上去會變 5 週，不進日線表
+            continue
         st = series_stats(by_id.get(s.id, []), s.kind)
         if st is None:
             missing.append(s.id)
@@ -162,6 +165,81 @@ def print_taiex(conn, out=print):
             "（股數×當日收盤估算，只看方向與相對大小）")
 
 
+def split_events(rows, now, cutoff, until=None):
+    """有 ``released_at`` 的事件拆成 ``(隔夜已公布, 今日待公布)``，都依公布時間排序。
+
+    已公布：``cutoff < released_at <= now``；待公布：``now < released_at <= until``（``until`` 為 None 不設上界）。
+    ``now``、``cutoff``、``until`` 都由呼叫端傳入（aware datetime），函式不讀時鐘。``rows`` 是帶
+    ``released_at`` 屬性的列（或 dict）；沒有 ``released_at`` 的舊列（FOMC、財報）不在這兩欄。"""
+    def at(r):
+        return r["released_at"] if isinstance(r, dict) else r.released_at
+
+    stamped = sorted((r for r in rows if at(r) is not None), key=at)
+    published = [r for r in stamped if cutoff < at(r) <= now]
+    upcoming = [r for r in stamped if now < at(r) and (until is None or at(r) <= until)]
+    return published, upcoming
+
+
+def _num(v):
+    return f"{float(v):,.3f}".rstrip("0").rstrip(".")
+
+
+def _when(released_at):
+    return f"{released_at.astimezone(TAIPEI):%m-%d %H:%M}台北／{released_at.astimezone(NEW_YORK):%m-%d %H:%M}美東"
+
+
+def format_published(r):
+    """一筆已公布事件的一行文字：名稱、時間、首發實際值、前值、vintage。**不寫高於／低於預期**——沒有 PIT 共識。"""
+    head = f"{r.title}　{_when(r.released_at)}" + (f"（{r.time_note}）" if r.time_note else "")
+    if r.series_id is None:
+        return head + "　首發值不適用（無對應序列）"
+    if r.actual_value is None:
+        return head + "　首發值尚未入庫（ALFRED 還沒收到，下次 daily 補）　無共識"
+    return (head + f"　首發 {_num(r.actual_value)}（參考期 {r.observation_date}）"
+            + (f"　前值 {_num(r.prior_value)}" if r.prior_value is not None else "　前值 —")
+            + f"　vintage {r.actual_vintage}　無共識")
+
+
+def format_upcoming(r):
+    note = f"（{r.time_note}）" if r.time_note else ""
+    return f"{r.title}　{_when(r.released_at)}{note}　[{r.status}/{r.source}]　部位暴露：（判讀者填）"
+
+
+def print_release_columns(conn, now, out=print):
+    """「隔夜已公布」與「今日待公布」兩欄。分界是前一台股場次 13:30 台北，到「今天之後的下一場次」13:30 台北。
+
+    上界取今天之後而不是今天本身：交易日早上算出來若是今天 13:30，今晚的美國數據、ISM、央行
+    （都在 13:30 之後）就永遠進不了「今日待公布」。"""
+    from sqlalchemy import text
+
+    from market_data import health
+
+    today = now.astimezone(TAIPEI).date()
+    prev, nxt = health.session_before(today), health.sessions_after(today, 1)
+    out("\n── 隔夜已公布（首發實際值與前值；只列事實，沒有 PIT 共識所以不寫高於／低於）──")
+    if prev is None or nxt is None:
+        out("交易日曆不可用，兩欄略過（見下方 14 天清單）")
+        return
+    cutoff = datetime.datetime.combine(prev, SESSION_CLOSE, tzinfo=TAIPEI)
+    until = datetime.datetime.combine(nxt, SESSION_CLOSE, tzinfo=TAIPEI)
+    rows = conn.execute(text(
+        "SELECT event_type, symbol, title, status, source, released_at, actual_value, prior_value, "
+        "observation_date, actual_vintage, time_note, series_id FROM market.event_calendar "
+        "WHERE released_at > :a AND released_at <= :b ORDER BY released_at"),
+        {"a": cutoff, "b": until}).all()
+    published, upcoming = split_events(rows, now, cutoff, until)
+    for r in published:
+        out(format_published(r))
+    if not published:
+        out(f"沒有（{prev} 13:30 台北之後無已公布事件）")
+    out("夜盤反應見『期交所籌碼』段（已反應的漲跌不是現在拿得到的報酬）")
+    out(f"\n── 今日待公布（到下一場次 {nxt} 13:30 台北為止；含今晚美國數據、ISM、央行）──")
+    for r in upcoming:
+        out(format_upcoming(r))
+    if not upcoming:
+        out("沒有")
+
+
 def print_events(conn, today, days, out=print):
     from sqlalchemy import text
 
@@ -169,7 +247,8 @@ def print_events(conn, today, days, out=print):
         "SELECT event_date, event_type, symbol, title, status, time_note, source FROM market.event_calendar "
         "WHERE event_date BETWEEN :a AND :b ORDER BY event_date, event_type, symbol"),
         {"a": today, "b": today + datetime.timedelta(days=days)}).all()
-    out(f"\n── 未來 {days} 天重大事件（日期為美東；財報日來自 yfinance、一律 estimated，可能差一天）──")
+    out(f"\n── 未來 {days} 天重大事件（日期為美東；財報日來自 yfinance、一律 estimated，可能差一天；"
+        "ISM 是規則推估日）──")
     if not rows:
         out("沒有事件（或還沒入庫）")
     for date, etype, symbol, title, status, note, source in rows:
@@ -183,11 +262,13 @@ def main(argv=None):
     a = p.parse_args(argv)
     from market_data.db import get_engine
 
-    today = datetime.datetime.now(TAIPEI).date()
+    now = datetime.datetime.now(TAIPEI)
+    today = now.date()
     failed = 0
     with get_engine().connect() as conn:
         for section in (lambda: print_series(conn, today), lambda: print_rates(conn),
-                        lambda: print_taiex(conn), lambda: print_events(conn, today, a.days)):
+                        lambda: print_taiex(conn),
+                        lambda: print_release_columns(conn, now), lambda: print_events(conn, today, a.days)):
             try:
                 section()
             except Exception as exc:  # noqa: BLE001 — 一段失敗（例如表還沒建）不擋其他段

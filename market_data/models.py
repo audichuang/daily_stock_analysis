@@ -305,17 +305,23 @@ class RateExpectation(Base):
 
 
 class EventCalendar(Base):
-    """重大事件行事曆：FOMC 決議日、美股巨頭財報日。
+    """重大事件行事曆：FOMC 決議日、美股巨頭財報日、美國經濟數據、ISM、央行理監事會。
 
     鍵是 ``(event_type, symbol, label)``，``event_date`` 是可變欄位——財報日常改期，鍵含日期的話
     改期會多出一列而不是更新。``label`` 對 FOMC 是會議月份（``2026-10``），對財報是財報日所在
     季度（``2026Q4``）。``status``：``confirmed``（官方來源或兩來源一致）／``estimated``
     （單一非官方來源，例如 yfinance 財報日）。寫入見 ``market_data/macro.py``。
+
+    經濟數據（``cpi``／``nfp``／``unrate``／``retail``／``pce``／``claims``，``symbol='US'``，``label`` 是
+    公布日 ISO）另有 ``released_at``（公布時刻，aware）與 ``series_id``（對應 FRED 序列）；公布後
+    ``actual_value``／``prior_value``／``observation_date`` 存 ALFRED **首發 vintage**（``actual_vintage``）
+    的值，不是 ``macro_series`` 裡會被修訂的值。``ism`` 是規則推估（``estimated``）、``cbc`` 是央行常數表。
+    **不寫「高於／低於預期」：沒有 PIT 共識，只存首發實際值與前值。** 這幾欄都可空，舊列（FOMC、財報）為 NULL。
     """
 
     __tablename__ = "event_calendar"
 
-    event_type: Mapped[str] = mapped_column(String(16), primary_key=True)  # fomc | earnings
+    event_type: Mapped[str] = mapped_column(String(16), primary_key=True)  # fomc|earnings|cpi|nfp|unrate|retail|pce|claims|ism|cbc
     symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
     label: Mapped[str] = mapped_column(String(16), primary_key=True)
     event_date: Mapped[_date] = mapped_column(Date)
@@ -324,3 +330,10 @@ class EventCalendar(Base):
     time_note: Mapped[str | None] = mapped_column(String(64))
     source: Mapped[str | None] = mapped_column(String(24))
     updated_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
+    released_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
+    series_id: Mapped[str | None] = mapped_column(String(24))  # FRED:PAYEMS
+    observation_date: Mapped[_date | None] = mapped_column(Date)
+    actual_value: Mapped[float | None] = mapped_column(Numeric(18, 6))
+    prior_value: Mapped[float | None] = mapped_column(Numeric(18, 6))
+    actual_vintage: Mapped[_date | None] = mapped_column(Date)
+    actual_source: Mapped[str | None] = mapped_column(String(16))  # alfred

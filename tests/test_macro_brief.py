@@ -55,3 +55,152 @@ def test_rate_path_groups_sides_and_reports_missing_quotes():
     assert path[0]["hold"] == pytest.approx(0.9)
     assert path[0]["cut"] == 0 and path[0]["missing"] == ["cut_25"]
     assert path[1]["hike"] == pytest.approx(0.6) and path[1]["missing"] == []
+
+
+# ---------- 隔夜已公布／今日待公布 ----------
+
+from datetime import datetime  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from zoneinfo import ZoneInfo  # noqa: E402
+
+from macro_brief import format_published, format_upcoming, split_events  # noqa: E402
+
+TPE = ZoneInfo("Asia/Taipei")
+NY = ZoneInfo("America/New_York")
+CUTOFF = datetime(2099, 1, 2, 13, 30, tzinfo=TPE)    # 前一場次（週五）13:30 台北
+NOW = datetime(2099, 1, 5, 7, 30, tzinfo=TPE)        # 週一 07:30 台北
+UNTIL = datetime(2099, 1, 5, 13, 30, tzinfo=TPE)
+
+
+def _ev(name, at, **kw):
+    base = dict(title=name, released_at=at, actual_value=None, prior_value=None, observation_date=None,
+                actual_vintage=None, status="confirmed", source="fred", series_id="FRED:X", time_note=None)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def _names(rows):
+    return [r.title for r in rows]
+
+
+def test_split_events_boundaries_cutoff_excluded_now_included():
+    rows = [_ev("at_cutoff", CUTOFF), _ev("just_after_cutoff", CUTOFF.replace(minute=31)),
+            _ev("at_now", NOW), _ev("just_after_now", NOW.replace(minute=31)),
+            _ev("at_until", UNTIL), _ev("after_until", UNTIL.replace(minute=31)),
+            _ev("legacy_no_time", None)]
+    published, upcoming = split_events(rows, NOW, CUTOFF, UNTIL)
+    assert _names(published) == ["just_after_cutoff", "at_now"]
+    assert _names(upcoming) == ["just_after_now", "at_until"]
+
+
+def test_monday_morning_sees_fridays_nfp_but_not_thursdays_claims():
+    nfp = datetime(2099, 1, 2, 8, 30, tzinfo=NY)          # 週五 08:30 美東 ＝ 週五 21:30 台北
+    claims = datetime(2099, 1, 1, 8, 30, tzinfo=NY)       # 週四，早於前一場次收盤
+    cpi_tonight = datetime(2099, 1, 5, 8, 30, tzinfo=NY)  # 週一美東 08:30 ＝ 台北 21:30，場次之後
+    published, upcoming = split_events([_ev("nfp", nfp), _ev("claims", claims), _ev("cpi", cpi_tonight)],
+                                       NOW, CUTOFF, UNTIL)
+    assert _names(published) == ["nfp"]
+    assert _names(upcoming) == [], "手填的 UNTIL 是今天 13:30：今晚的數據在它之後（實際窗口見 print_release_columns 的測試）"
+
+
+def test_format_published_shows_first_release_prior_vintage_and_no_consensus():
+    r = _ev("美國非農就業(NFP)", datetime(2099, 1, 2, 8, 30, tzinfo=NY), actual_value=159350, prior_value=159200.5,
+            observation_date=date(2098, 12, 1), actual_vintage=date(2099, 1, 2))
+    line = format_published(r)
+    assert "159,350" in line and "159,200.5" in line and "vintage 2099-01-02" in line and "無共識" in line
+    assert "01-02 21:30台北" in line and "01-02 08:30美東" in line
+    pending = format_published(_ev("x", datetime(2099, 1, 2, 8, 30, tzinfo=NY)))
+    assert "尚未入庫" in pending and "無共識" in pending
+
+
+def test_event_lines_never_say_above_or_below_expectation():
+    r = _ev("美國 CPI", datetime(2099, 1, 2, 8, 30, tzinfo=NY), actual_value=330.1, prior_value=329.9,
+            observation_date=date(2098, 12, 1), actual_vintage=date(2099, 1, 2))
+    text_ = "\n".join([format_published(r), format_published(_ev("y", NOW)), format_upcoming(r)])
+    for banned in ("預期", "高於", "低於", "beat", "miss"):
+        assert banned not in text_
+
+
+def test_print_series_skips_weekly_series_in_the_daily_table():
+    """週頻序列的 1週／1月／3月是列數 5／21／63（＝5 週／5 個月／1 年）；不能混進日線表。"""
+    from macro_brief import print_series
+
+    class _Conn:
+        def execute(self, *a, **k):
+            start = date(2099, 1, 1)
+            rows = [("FRED:ICSA", start + timedelta(days=i), 200000.0 + i) for i in range(70)]
+            rows += [("^GSPC", start + timedelta(days=i), 5000.0 + i) for i in range(70)]
+            return SimpleNamespace(all=lambda: rows)
+
+    lines = []
+    print_series(_Conn(), date(2099, 3, 12), out=lines.append)
+    text_ = "\n".join(lines)
+    assert "標普500" in text_ and "初領失業金" not in text_
+    assert "FRED:ICSA" not in text_, "週頻序列有資料就不該被列進『DB 沒有這些序列』"
+
+
+# ---------- print_release_columns 的實際窗口（接 health 場次）與央行／ISM 列 ----------
+
+import macro_brief  # noqa: E402
+from market_data import health  # noqa: E402
+
+
+class _FakeConn:
+    """依 SQL 參數 a < released_at <= b 過濾列，模擬 print_release_columns 的查詢。"""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.params = None
+
+    def execute(self, _sql, params):
+        self.params = params
+        hit = [r for r in self.rows if params["a"] < r.released_at <= params["b"]]
+        return SimpleNamespace(all=lambda: sorted(hit, key=lambda r: r.released_at))
+
+
+def _weekday(d):
+    return d.weekday() < 5
+
+
+def _columns(monkeypatch, rows, now):
+    monkeypatch.setattr(health, "session_before", lambda day, is_session=None: health._walk_sessions(
+        day, -1, 1, 10, _weekday))
+    monkeypatch.setattr(health, "sessions_after", lambda day, n, is_session=None: health._walk_sessions(
+        day, 1, n, 10, _weekday))
+    lines = []
+    macro_brief.print_release_columns(_FakeConn(rows), now, out=lines.append)
+    return "\n".join(lines)
+
+
+def test_weekday_morning_lists_tonights_us_data_and_cbc_as_upcoming(monkeypatch):
+    # 2099-01-06 週二 07:30 台北：今晚 21:30 的 CPI、22:00 台北的 ISM、16:00 的央行都該在「今日待公布」
+    now = datetime(2099, 1, 6, 7, 30, tzinfo=TPE)
+    rows = [_ev("美國 CPI", datetime(2099, 1, 6, 21, 30, tzinfo=TPE)),
+            _ev("ISM", datetime(2099, 1, 6, 22, 0, tzinfo=TPE), status="estimated", source="rule"),
+            _ev("央行理監事會", datetime(2099, 1, 6, 16, 0, tzinfo=TPE), source="cbc"),
+            _ev("明晚數據", datetime(2099, 1, 7, 21, 30, tzinfo=TPE))]
+    text_ = _columns(monkeypatch, rows, now)
+    upcoming = text_.split("今日待公布", 1)[1]
+    assert "美國 CPI" in upcoming and "ISM" in upcoming and "央行理監事會" in upcoming
+    assert "明晚數據" not in upcoming
+    assert "2099-01-07 13:30" in upcoming
+
+
+def test_monday_morning_window_sees_fridays_nfp_and_tonights_cpi(monkeypatch):
+    rows = [_ev("週五NFP", datetime(2099, 1, 2, 21, 30, tzinfo=TPE)),
+            _ev("週五早盤前", datetime(2099, 1, 2, 9, 0, tzinfo=TPE)),
+            _ev("今晚CPI", datetime(2099, 1, 5, 21, 30, tzinfo=TPE))]
+    text_ = _columns(monkeypatch, rows, NOW)
+    published, upcoming = text_.split("今日待公布", 1)
+    assert "週五NFP" in published and "週五早盤前" not in published
+    assert "今晚CPI" in upcoming
+
+
+def test_cbc_row_shows_time_note_and_no_alfred_promise():
+    cbc = _ev("央行理監事會", datetime(2099, 1, 5, 16, 0, tzinfo=TPE), source="cbc",
+              time_note="會後記者會（台北下午，時間待確認）", series_id=None)
+    for line in (format_published(cbc), format_upcoming(cbc)):
+        assert "時間待確認" in line
+    assert "ALFRED" not in format_published(cbc) and "不適用" in format_published(cbc)
+    # 有 series_id 但 ALFRED 還沒收到：仍然是「下次 daily 補」
+    assert "下次 daily 補" in format_published(_ev("x", NOW, series_id="FRED:PAYEMS", time_note=None))

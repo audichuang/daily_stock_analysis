@@ -2,6 +2,8 @@
 
 import datetime
 import math
+import pathlib
+import types
 
 import pandas as pd
 import pytest
@@ -261,3 +263,387 @@ def test_daily_refetches_the_whole_window_the_brief_reads():
     years = {"1y": 1, "2y": 2, "5y": 5, "10y": 10, "max": 99}
     assert years.get(macro.YF_PERIOD, 0) >= 2
     assert macro.FRED_LOOKBACK_DAYS >= 400
+
+
+# ---------- 經濟數據：ALFRED 首發值、FRED／BEA／Census 行事曆、ISM、央行 ----------
+
+FIXTURES = pathlib.Path(__file__).resolve().parents[2] / "tests" / "fixtures"
+
+
+def _fx(name):
+    return (FIXTURES / name).read_bytes().decode("utf-8")
+
+
+def test_series_freq_has_a_default_and_icsa_is_weekly():
+    assert macro.Series("ZZ", "zz", "macro", "index", False, "").freq == "daily"
+    by = {s.id: s for s in macro.SERIES}
+    assert by["FRED:ICSA"].freq == "weekly" and by["FRED:ICSA"].overnight is False
+    assert not {"FRED:PAYEMS", "FRED:UNRATE"} & set(by), "月頻、會修訂的序列不進日線表"
+    assert all(s.freq == "daily" for s in macro.SERIES if s.id != "FRED:ICSA")
+
+
+def test_parse_alfred_csv_reads_the_vintage_from_the_header():
+    vintage, points = macro.parse_alfred_csv("ICSA", _fx("macro_alfred_icsa_20261010.bin"))
+    assert vintage == D(2026, 10, 10)
+    assert points[-1] == (D(2026, 10, 3), 197000.0), "首發 vintage 的值，不是現值 198000"
+    vintage, points = macro.parse_alfred_csv("PAYEMS", _fx("macro_alfred_payems_20260905.bin"))
+    assert vintage == D(2026, 9, 5) and points[-1] == (D(2026, 8, 1), 159075.0)
+
+
+def test_parse_alfred_csv_rejects_headers_without_a_vintage_suffix():
+    # 參數被靜默忽略時，ALFRED 回的是最新值、表頭沒有後綴：不能當首發值收
+    with pytest.raises(ValueError):
+        macro.parse_alfred_csv("ICSA", "observation_date,ICSA\n2026-10-03,198000\n")
+    with pytest.raises(ValueError):
+        macro.parse_alfred_csv("ICSA", "observation_date,PAYEMS_20261010\n2026-10-03,1\n")
+
+
+def _alfred(code, vintage, rows):
+    body = "".join(f"{d},{v}\n" for d, v in rows)
+    return f"observation_date,{code}_{vintage:%Y%m%d}\n{body}"
+
+
+def test_fetch_first_release_uses_vintage_param_and_returns_prior_in_same_vintage(monkeypatch):
+    urls = []
+
+    def fake_get(url, **k):
+        urls.append(url)
+        if "vintage_date=2026-11-06" in url:
+            text_ = _alfred("PAYEMS", D(2026, 11, 6), [("2026-08-01", 159015), ("2026-09-01", 159200),
+                                                      ("2026-10-01", 159350)])
+        else:
+            text_ = _alfred("PAYEMS", D(2026, 11, 5), [("2026-08-01", 159015), ("2026-09-01", 159180)])
+        return types.SimpleNamespace(text=text_)
+
+    monkeypatch.setattr(macro, "http_get", fake_get)
+    got = macro.fetch_first_release("PAYEMS", D(2026, 11, 6))
+    assert got == {"obs_date": D(2026, 10, 1), "actual": 159350.0, "prior": 159200.0, "vintage": D(2026, 11, 6)}
+    assert all("vintage_date=" in u and "vintage_dates" not in u for u in urls)
+
+
+def test_fetch_first_release_returns_none_until_alfred_has_the_new_observation(monkeypatch):
+    # 公布日的 vintage 最後一筆沒有比前一天新＝ALFRED 還沒收進來；現在寫會把舊月份的值當首發值
+    monkeypatch.setattr(macro, "http_get", lambda url, **k: types.SimpleNamespace(
+        text=_alfred("PAYEMS", D(2026, 11, 6), [("2026-09-01", 159200)])))
+    assert macro.fetch_first_release("PAYEMS", D(2026, 11, 6)) is None
+
+
+def test_fred_calendar_is_central_time_cpi_0730_ct_is_1330z():
+    times = macro.parse_fred_release_calendar(_fx("macro_fred_calendar_cpi_2026.bin"))
+    assert len(times) == 12
+    oct14 = next(t for t in times if t.astimezone(macro.NEW_YORK).date() == D(2026, 10, 14))
+    assert oct14.astimezone(macro.UTC) == datetime.datetime(2026, 10, 14, 12, 30, tzinfo=macro.UTC)  # EDT：08:30 ET
+    # 冬令（CST，UTC−6）：7:30 CT ＝ 13:30Z，與 BEA 對過的 PCE 11-25 同一個結構
+    winter = macro.parse_fred_release_calendar(_fx("macro_fred_calendar_nfp_2026.bin"))
+    nov6 = next(t for t in winter if t.date() == D(2026, 11, 6) or t.astimezone(macro.NEW_YORK).date() == D(2026, 11, 6))
+    assert nov6.astimezone(macro.UTC) == datetime.datetime(2026, 11, 6, 13, 30, tzinfo=macro.UTC)
+    assert nov6.astimezone(macro.NEW_YORK).strftime("%H:%M") == "08:30"
+
+
+def test_fred_calendar_without_a_time_column_uses_the_default_time_in_eastern():
+    html = '<span style="font-weight: bold;">Friday November 06, 2026</span><td>no time here</td>'
+    (t,) = macro.parse_fred_release_calendar(html)
+    assert t.astimezone(macro.UTC) == datetime.datetime(2026, 11, 6, 13, 30, tzinfo=macro.UTC)
+    assert macro.parse_fred_release_calendar("<html>改版了</html>") == []
+
+
+def test_bea_ics_times_are_utc_and_agree_with_fred_pce_convention():
+    pce = macro.parse_bea_ics(_fx("macro_bea_calendar.bin"))
+    assert [t for _, t in pce][:2] == [datetime.datetime(2026, 10, 29, 12, 30, tzinfo=macro.UTC),
+                                       datetime.datetime(2026, 11, 25, 13, 30, tzinfo=macro.UTC)]
+    assert len(pce) == 3
+    assert all(t.astimezone(macro.NEW_YORK).strftime("%H:%M") == "08:30" for _, t in pce)
+    assert pce[0][0].endswith("September 2026")
+
+
+def test_census_retail_times_are_eastern():
+    times = macro.parse_census_retail(_fx("macro_census_calendar.bin"))
+    assert [t.astimezone(macro.NEW_YORK).strftime("%Y-%m-%d %H:%M") for t in times] == [
+        "2027-01-15 08:30", "2027-02-17 08:30", "2027-03-16 08:30"]
+
+
+def test_release_events_nfp_also_yields_unrate_and_sets_series_ids():
+    times = macro.parse_fred_release_calendar(_fx("macro_fred_calendar_nfp_2026.bin"))
+    rows = macro.release_events("nfp", times, "fred", now=NOW)
+    by = {(r["event_type"], r["label"]): r for r in rows}
+    nfp, unrate = by[("nfp", "2026-11-06")], by[("unrate", "2026-11-06")]
+    assert nfp["series_id"] == "FRED:PAYEMS" and unrate["series_id"] == "FRED:UNRATE"
+    assert nfp["event_date"] == D(2026, 11, 6) and nfp["symbol"] == "US" and nfp["status"] == "confirmed"
+    assert nfp["released_at"].tzinfo is not None
+    assert macro.release_events("cpi", times[:1], "fred", now=NOW)[0]["series_id"] == "FRED:CPIAUCSL"
+    assert [r["event_type"] for r in macro.release_events("claims", times[:1], "fred", now=NOW)] == ["claims"]
+
+
+def test_ism_is_first_us_business_day_and_estimated():
+    ev = {r["event_date"]: r for r in macro.ism_events(2025, now=NOW)}
+    assert D(2025, 9, 2) in ev and D(2025, 9, 1) not in ev, "勞動節（9/1 週一）順延到 9/2"
+    ev27 = {r["event_date"] for r in macro.ism_events(2027, now=NOW)}
+    assert D(2027, 1, 4) in ev27 and D(2027, 1, 1) not in ev27 and D(2027, 1, 2) not in ev27, \
+        "元旦（週五）之後的週末也要跳過，順延到 1/4"
+    rows = macro.ism_events(2026, now=NOW)
+    assert len(rows) == 12
+    assert {r["status"] for r in rows} == {"estimated"} and {r["source"] for r in rows} == {"rule"}
+    assert rows[0]["released_at"].astimezone(macro.NEW_YORK).strftime("%H:%M") == "10:00"
+
+
+def test_cbc_table_has_only_officially_announced_dates():
+    announced = {D(2025, 9, 18), D(2025, 12, 18), D(2026, 3, 19), D(2026, 6, 18), D(2026, 9, 17), D(2026, 12, 17)}
+    assert set(macro.CBC_BOARD_MEETINGS) == announced, "只放央行公告過的日期；116 年沒有公告就不能推算著放"
+    assert max(macro.CBC_BOARD_MEETINGS).year == 2026
+    rows = macro.cbc_events(now=NOW)
+    assert len(rows) == len(macro.CBC_BOARD_MEETINGS)
+    assert {r["status"] for r in rows} == {"confirmed"} and "待確認" in rows[0]["time_note"]
+    assert rows[0]["released_at"].tzinfo is not None
+
+
+def test_collect_release_events_falls_back_only_when_fred_has_no_next_pce_and_retail(monkeypatch):
+    today = D(2026, 12, 28)   # 12 月下旬：FRED 當年已經沒有下一筆
+
+    def fake_get(url, **k):
+        if "fred.stlouisfed.org/releases/calendar" in url:
+            return types.SimpleNamespace(text=_fx("macro_fred_calendar_nfp_2026.bin"))  # 全是過去（12-04 之前）
+        if "bea.gov" in url:
+            return types.SimpleNamespace(text=_fx("macro_bea_calendar.bin"))
+        if "census.gov" in url:
+            return types.SimpleNamespace(text=_fx("macro_census_calendar.bin"))
+        raise AssertionError(url)
+
+    monkeypatch.setattr(macro, "http_get", fake_get)
+    rows = macro.collect_release_events(today, now=NOW, out=lambda *_: None)
+    assert {r["source"] for r in rows if r["event_type"] == "retail" and r["source"] != "fred"} == {"census"}
+    census = [r for r in rows if r["source"] == "census"]
+    assert [r["event_date"] for r in census] == [D(2027, 1, 15), D(2027, 2, 17), D(2027, 3, 16)]
+    bea = [r for r in rows if r["source"] == "bea"]
+    assert [(r["event_type"], r["event_date"]) for r in bea] == [("pce", D(2027, 1, 28))], \
+        "BEA 備援只補今天以後、且晚於 FRED 最後一筆的 PCE；2026 年的舊場次不補"
+    assert {"ism", "cbc"} <= {r["event_type"] for r in rows}
+
+
+def test_collect_release_events_source_failures_only_warn(monkeypatch):
+    warns = []
+
+    def boom(url, **k):
+        raise ConnectionError("down")
+
+    monkeypatch.setattr(macro, "http_get", boom)
+    rows = macro.collect_release_events(D(2026, 10, 27), now=NOW, out=warns.append)
+    assert {r["event_type"] for r in rows} == {"ism", "cbc"}, "外部來源全掛，規則日與常數表仍要在"
+    assert sum("**WARN" in w for w in warns) == len(macro.RELEASES) + 2
+
+
+class _ConnEngine:
+    """把 pg_conn（外層會 rollback）包成有 ``begin()`` 的 engine，``fill_first_releases`` 才不會真的 commit。"""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def begin(self):
+        import contextlib
+
+        return contextlib.nullcontext(self.conn)
+
+
+def _release(etype, label, released_at, series="FRED:PAYEMS", source="fred"):
+    return {"event_type": etype, "symbol": "US", "label": label, "event_date": released_at.date(),
+            "status": "confirmed", "title": f"{etype} test", "time_note": None, "source": source,
+            "updated_at": NOW, "released_at": released_at, "series_id": series}
+
+
+def test_fill_first_releases_is_first_write_wins_and_survives_calendar_refresh(pg_conn):
+    """首發值只寫一次；行事曆每天重抓、upsert 也不能把它洗回 NULL。"""
+    past = datetime.datetime(1900, 11, 6, 13, 30, tzinfo=datetime.timezone.utc)
+    macro.store_events(pg_conn, [_release("nfp", "1900-11-06", past)], D(1900, 11, 1))
+    calls = []
+
+    def fetch(code, day):
+        calls.append((code, day))
+        return {"obs_date": D(1900, 10, 1), "actual": 159350.0, "prior": 159200.0, "vintage": day}
+
+    now = datetime.datetime(1900, 11, 7, tzinfo=datetime.timezone.utc)
+    assert macro.fill_first_releases(_ConnEngine(pg_conn), now=now, fetch=fetch, out=lambda *_: None) == 1
+    assert calls == [("PAYEMS", D(1900, 11, 6))]
+    macro.store_events(pg_conn, [_release("nfp", "1900-11-06", past)], D(1900, 11, 1))   # 行事曆重抓
+    # 之後 ALFRED 給了不同的值：已有首發值就不能再改，也不該再去抓
+    assert macro.fill_first_releases(_ConnEngine(pg_conn), now=now, out=lambda *_: None,
+                                     fetch=lambda c, d: {"obs_date": D(1900, 10, 1), "actual": 1.0,
+                                                         "prior": 1.0, "vintage": d}) == 0
+    row = pg_conn.execute(text(
+        "SELECT actual_value::float, prior_value::float, observation_date, actual_vintage, actual_source "
+        "FROM market.event_calendar WHERE symbol = 'US' AND label = '1900-11-06' AND event_type = 'nfp'")).one()
+    assert tuple(row) == (159350.0, 159200.0, D(1900, 10, 1), D(1900, 11, 6), "alfred")
+
+
+def test_fill_first_releases_leaves_null_when_alfred_has_nothing_yet(pg_conn):
+    past = datetime.datetime(1900, 11, 6, 13, 30, tzinfo=datetime.timezone.utc)
+    future = datetime.datetime(1900, 12, 4, 13, 30, tzinfo=datetime.timezone.utc)
+    macro.store_events(pg_conn, [_release("nfp", "1900-11-06", past), _release("nfp", "1900-12-04", future)],
+                       D(1900, 11, 1))
+    now = datetime.datetime(1900, 11, 7, tzinfo=datetime.timezone.utc)
+    seen = []
+    assert macro.fill_first_releases(_ConnEngine(pg_conn), now=now, out=lambda *_: None,
+                                     fetch=lambda c, d: seen.append(d)) == 0
+    assert seen == [D(1900, 11, 6)], "還沒公布的列不抓"
+
+
+def test_store_events_reschedule_deletes_old_label_only_for_same_type_and_year(pg_conn):
+    today = D(2099, 1, 1)
+    t = lambda m, d: datetime.datetime(2099, m, d, 13, 30, tzinfo=datetime.timezone.utc)  # noqa: E731
+    macro.store_events(pg_conn, [_release("cpi", "2099-03-10", t(3, 10), "FRED:CPIAUCSL"),
+                                 _release("cpi", "2099-04-14", t(4, 14), "FRED:CPIAUCSL"),
+                                 _release("cpi", "2100-01-13", datetime.datetime(2100, 1, 13, 13, 30,
+                                          tzinfo=datetime.timezone.utc), "FRED:CPIAUCSL"),
+                                 _release("pce", "2099-03-27", t(3, 27), "FRED:PCEPI")], today)
+    # 4/14 改期到 4/15；這次抓取成功（source=fred）→ 同類型同年度未來的舊 label 刪掉，別類型與別年度不動
+    macro.store_events(pg_conn, [_release("cpi", "2099-03-10", t(3, 10), "FRED:CPIAUCSL"),
+                                 _release("cpi", "2099-04-15", t(4, 15), "FRED:CPIAUCSL")], today)
+    rows = pg_conn.execute(text(
+        "SELECT event_type, label FROM market.event_calendar WHERE symbol = 'US' AND event_date > '2098-12-31' "
+        "ORDER BY 1, 2")).all()
+    assert [tuple(r) for r in rows] == [("cpi", "2099-03-10"), ("cpi", "2099-04-15"), ("cpi", "2100-01-13"),
+                                        ("pce", "2099-03-27")]
+
+
+def test_store_events_new_types_never_delete_when_the_fetch_was_not_from_fred(pg_conn):
+    """備援（BEA／Census）或規則來源的批次不是權威清單：不能刪任何列。"""
+    today = D(2099, 1, 1)
+    t = lambda m, d: datetime.datetime(2099, m, d, 13, 30, tzinfo=datetime.timezone.utc)  # noqa: E731
+    macro.store_events(pg_conn, [_release("pce", "2099-03-27", t(3, 27), "FRED:PCEPI")], today)
+    macro.store_events(pg_conn, [_release("pce", "2099-04-30", t(4, 30), "FRED:PCEPI", source="bea")], today)
+    labels = pg_conn.execute(text(
+        "SELECT label FROM market.event_calendar WHERE event_type = 'pce' AND symbol = 'US' "
+        "AND event_date > '2098-12-31' ORDER BY 1")).scalars().all()
+    assert labels == ["2099-03-27", "2099-04-30"]
+    # estimated 的規則日不能蓋掉 confirmed
+    macro.store_events(pg_conn, [{**_release("pce", "2099-03-27", t(3, 27)), "status": "estimated",
+                                  "title": "rule"}], today)
+    assert pg_conn.execute(text(
+        "SELECT status FROM market.event_calendar WHERE event_type = 'pce' AND label = '2099-03-27'")).scalar() \
+        == "confirmed"
+
+
+def test_fill_first_releases_does_not_overwrite_a_value_written_concurrently(pg_conn):
+    """兩個 daily 同時跑：A 讀到 NULL、抓值的空檔 B 已經寫進去；A 的 UPDATE 必須因 IS NULL 條件落空。"""
+    past = datetime.datetime(1900, 11, 6, 13, 30, tzinfo=datetime.timezone.utc)
+    macro.store_events(pg_conn, [_release("nfp", "1900-11-06", past)], D(1900, 11, 1))
+
+    def racing_fetch(code, day):
+        pg_conn.execute(text("UPDATE market.event_calendar SET actual_value = 111 WHERE label = '1900-11-06'"))
+        return {"obs_date": D(1900, 10, 1), "actual": 999.0, "prior": 998.0, "vintage": day}
+
+    now = datetime.datetime(1900, 11, 7, tzinfo=datetime.timezone.utc)
+    macro.fill_first_releases(_ConnEngine(pg_conn), now=now, fetch=racing_fetch, out=lambda *_: None)
+    assert pg_conn.execute(text(
+        "SELECT actual_value::float FROM market.event_calendar WHERE label = '1900-11-06'")).scalar() == 111.0
+
+
+def test_store_events_fred_reschedule_never_deletes_backup_source_rows(pg_conn):
+    """FRED 當年清單只剩過去日期、備援（BEA）又抓不到時，既有的 bea 未來事件不能被改期刪除誤刪。"""
+    today = D(2099, 11, 20)
+
+    def t(m, d):
+        return datetime.datetime(2099, m, d, 13, 30, tzinfo=datetime.timezone.utc)
+
+    macro.store_events(pg_conn, [_release("pce", "2099-09-26", t(9, 26), "FRED:PCEPI"),
+                                 _release("pce", "2099-10-30", t(10, 30), "FRED:PCEPI"),
+                                 _release("pce", "2099-11-25", t(11, 25), "FRED:PCEPI", source="bea")], today)
+    macro.store_events(pg_conn, [_release("pce", "2099-09-26", t(9, 26), "FRED:PCEPI"),
+                                 _release("pce", "2099-10-30", t(10, 30), "FRED:PCEPI")], today)
+    labels = [r[0] for r in pg_conn.execute(text(
+        "SELECT label FROM market.event_calendar WHERE event_type = 'pce' AND symbol = 'US' "
+        "AND label LIKE '2099-%' ORDER BY label"))]
+    assert labels == ["2099-09-26", "2099-10-30", "2099-11-25"]
+
+
+def test_store_events_fred_reschedule_still_deletes_stale_fred_rows(pg_conn):
+    """反向守門：限 source=fred 不能讓真正的 FRED 改期殘留幽靈列。"""
+    today = D(2099, 3, 1)
+
+    def t(m, d):
+        return datetime.datetime(2099, m, d, 13, 30, tzinfo=datetime.timezone.utc)
+
+    macro.store_events(pg_conn, [_release("cpi", "2099-03-10", t(3, 10), "FRED:CPIAUCSL")], today)
+    macro.store_events(pg_conn, [_release("cpi", "2099-03-12", t(3, 12), "FRED:CPIAUCSL")], today)
+    labels = [r[0] for r in pg_conn.execute(text(
+        "SELECT label FROM market.event_calendar WHERE event_type = 'cpi' AND label LIKE '2099-%'"))]
+    assert labels == ["2099-03-12"]
+
+
+def test_store_events_fred_to_bea_to_fred_reschedule_deletes_the_stale_date(pg_conn):
+    """FRED 斷線期間 BEA 備援把 03-27 的 source 改成 bea；FRED 恢復後改排 03-28，舊日期不能殘留，
+    但 FRED 範圍（02-27～03-28）以外的備援列要留。"""
+    today = D(2099, 1, 5)
+
+    def t(m, d):
+        return datetime.datetime(2099, m, d, 13, 30, tzinfo=datetime.timezone.utc)
+
+    fred = [_release("pce", "2099-02-27", t(2, 27), "FRED:PCEPI"),
+            _release("pce", "2099-03-27", t(3, 27), "FRED:PCEPI")]
+    macro.store_events(pg_conn, fred, today)
+    # FRED 斷線：BEA 備援把同兩天（含 03-27）蓋成 source=bea，另有 12 月一筆在 FRED 範圍外
+    macro.store_events(pg_conn, [_release("pce", "2099-02-27", t(2, 27), "FRED:PCEPI", source="bea"),
+                                 _release("pce", "2099-03-27", t(3, 27), "FRED:PCEPI", source="bea"),
+                                 _release("pce", "2099-12-23", t(12, 23), "FRED:PCEPI", source="bea")], today)
+    # FRED 恢復並把 03-27 改排 03-28
+    macro.store_events(pg_conn, [_release("pce", "2099-02-27", t(2, 27), "FRED:PCEPI"),
+                                 _release("pce", "2099-03-28", t(3, 28), "FRED:PCEPI")], today)
+    labels = [r[0] for r in pg_conn.execute(text(
+        "SELECT label FROM market.event_calendar WHERE event_type = 'pce' AND label LIKE '2099-%' "
+        "ORDER BY label"))]
+    assert labels == ["2099-02-27", "2099-03-28", "2099-12-23"]
+
+
+def test_fill_first_releases_picks_newest_first_when_over_the_cap(pg_conn, monkeypatch):
+    monkeypatch.setattr(macro, "FIRST_RELEASE_PER_RUN", 1)
+    old = datetime.datetime(1900, 11, 6, 13, 30, tzinfo=datetime.timezone.utc)
+    new = datetime.datetime(1900, 12, 4, 13, 30, tzinfo=datetime.timezone.utc)
+    macro.store_events(pg_conn, [_release("nfp", "1900-11-06", old), _release("nfp", "1900-12-04", new)],
+                       D(1900, 11, 1))
+    calls = []
+
+    def fetch(code, day):
+        calls.append(day)
+        return None
+
+    now = datetime.datetime(1900, 12, 5, tzinfo=datetime.timezone.utc)
+    macro.fill_first_releases(_ConnEngine(pg_conn), now=now, fetch=fetch, out=lambda *_: None)
+    assert calls == [D(1900, 12, 4)]
+
+
+def test_cbc_events_are_1600_taipei():
+    row = macro.cbc_events(meetings=[D(2099, 12, 17)])[0]
+    assert row["released_at"].utcoffset() == datetime.timedelta(hours=8)
+    assert (row["released_at"].hour, row["released_at"].minute) == (16, 0)
+    assert row["released_at"].astimezone(datetime.timezone.utc).hour == 8
+
+
+def test_update_collects_release_events_and_fills_first_releases(monkeypatch):
+    """update() 要把行事曆收集結果交給 store_events，並在入庫後呼叫首發值補值。"""
+    seen = {}
+    monkeypatch.setattr(macro, "fetch_series", lambda **k: ([], []))
+    monkeypatch.setattr(macro, "store_series", lambda conn, rows: 0)
+    monkeypatch.setattr(macro, "watchlist", lambda: [])
+    monkeypatch.setattr(macro, "http_get", lambda url, **k: (_ for _ in ()).throw(ConnectionError("down")))
+    sentinel = {"event_type": "cbc", "symbol": "TW", "label": "x", "event_date": D(2099, 12, 17)}
+    monkeypatch.setattr(macro, "collect_release_events", lambda today, now=None, out=print: [sentinel])
+
+    def store(conn, rows, today):
+        seen["stored"] = rows
+        seen.setdefault("order", []).append("store")
+        return len(rows)
+
+    monkeypatch.setattr(macro, "store_events", store)
+    monkeypatch.setattr(macro, "fill_first_releases",
+                        lambda engine, **k: seen.setdefault("order", []).append("fill") or 7)
+
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class _Eng:
+        def begin(self): return _Conn()
+
+    lines = []
+    macro.update(_Eng(), out=lines.append)
+    assert sentinel in seen["stored"]
+    assert seen["order"] == ["store", "fill"]
+    assert any("首發值補 7 筆" in line for line in lines)
