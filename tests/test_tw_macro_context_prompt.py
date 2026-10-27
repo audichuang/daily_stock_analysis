@@ -290,9 +290,29 @@ def test_non_tw_response_ignores_p():
 
 
 def test_forecast_value_untouched_by_guardrails():
-    # 護欄壓分／改動作不會碰機率：p 是模型對「5 日勝過 0050」的獨立讀數
+    # 護欄壓分／降級動作不會碰機率：p 是模型對「5 日勝過 0050」的獨立讀數。
+    # 護欄在 pipeline 呼叫、不在 analyze() 裡，所以這裡直接對 result 呼叫兩個護欄，並斷言它們真的動了手。
+    from src.daily_market_context_guardrail import apply_daily_market_context_guardrail
+    from src.trade_cost_guardrail import apply_trade_cost_guardrail
+
     result, _ = _analyze([_response(p_5d_beat_0050=0.31, sentiment_score=85)])
     assert result.p_5d_beat_0050 == 0.31 and result.dashboard["forecast"]["p"] == 0.31
+    forecast_before = copy.deepcopy(result.dashboard["forecast"])
+
+    # 兩個護欄各跑在自己的副本上（市場護欄降級後成本護欄就沒有買入可降）
+    market_result, cost_result = copy.deepcopy(result), copy.deepcopy(result)
+    market = apply_daily_market_context_guardrail(
+        market_result, daily_market_context={"risk_tags": ["high_risk"]}, report_language="zh-TW")
+    assert "daily_market_context_buy_softened" in market
+    assert market_result.sentiment_score < 85 and market_result.decision_type == "hold"   # 護欄確實壓分／降級
+
+    cost = apply_trade_cost_guardrail(cost_result, code="2330.TW", report_language="zh-TW")
+    assert cost   # 成本護欄確實動作（買入缺價位 → 降級）
+
+    for guarded in (market_result, cost_result):
+        assert guarded.p_5d_beat_0050 == 0.31
+        assert guarded.dashboard["forecast"] == forecast_before
+        assert guarded.to_dict()["p_5d_beat_0050"] == 0.31
 
 
 # ---------------------------------------------------------------- 版本／雜湊／重試原文

@@ -27,6 +27,7 @@ from shadow_buy_eval import (  # noqa: E402
     macro_ctx_label,
     rank_ic,
     render_forecast,
+    select_forecast_reports,
     is_raw_buy,
     latest_per_code_day,
     raw_decision,
@@ -488,3 +489,59 @@ def test_build_forecast_events_uses_etf_tax_for_the_0050_leg():
     reports = pd.DataFrame({"code": ["2330.TW"], "stock_id": ["2330"], "day": [cal[0]], "p": [0.6], "ctx": ["on"]})
     ev = build_forecast_events(reports, panels)
     assert ev.iloc[0]["y"] == 0 and ev.iloc[0]["net_stock"] > 0
+
+
+def test_date_block_ci_none_when_one_arm_has_too_few_dates():
+    # on 組全擠在同一天、off 組 30 天：聯集日期數夠，但 on 組自己的變異幾乎沒進 CI，不能判顯著
+    rng = np.random.default_rng(0)
+    off_dates = pd.to_datetime(pd.date_range("2026-01-01", periods=30).repeat(5))
+    off = rng.normal(0.0, 0.05, len(off_dates))
+    on_dates = pd.to_datetime(["2026-01-10"] * 40)
+    on = rng.normal(0.4, 0.05, 40)
+    for blk in (5, 10):
+        assert date_block_ci(on, on_dates, block=blk, n=500, seed=1, other=(off, off_dates)) is None
+        assert date_block_ci(off, off_dates, block=blk, n=500, seed=1, other=(on, on_dates)) is None
+    # 兩組日期都夠 → 仍有 CI（反向：守門不能過頭）
+    on_ok_dates = pd.to_datetime(pd.date_range("2026-01-01", periods=30).repeat(5))
+    assert date_block_ci(rng.normal(0.4, 0.05, 150), on_ok_dates, block=5, n=500, seed=1,
+                         other=(off, off_dates)) is not None
+
+
+def test_select_forecast_reports_takes_latest_per_day_then_drops_null_p():
+    # 同股同日最後一份 p 為空：該日整個丟掉，不能改拿較早那份有 p 的（選擇偏誤）
+    df = pd.DataFrame({
+        "code": ["2330.TW", "2330.TW", "2330.TW", "2317.TW"],
+        "created_at": pd.to_datetime(["2026-10-01 10:00", "2026-10-01 18:00",
+                                      "2026-10-02 18:00", "2026-10-01 18:00"]),
+        "p": [0.6, np.nan, 0.4, 0.7],
+        "raw_result": ["early", "late", "next", "other"],
+    })
+    out = select_forecast_reports(df)
+    assert sorted(out["raw_result"]) == ["next", "other"]
+
+
+def test_render_forecast_baseline_computed_per_kind():
+    # ETF 的 252 日基率只能由 ETF 事件決定，不能被個股事件拉走
+    days = pd.to_datetime(pd.bdate_range("2026-03-02", periods=12))
+    rows = [{"code": f"s{i}", "day": days[i], "resolved_at": days[i], "p": 0.6, "y": 1,
+             "net_stock": 0.01, "net_bench": 0.0, "ctx": "off", "kind": "stock"} for i in range(10)]
+    rows += [{"code": f"e{i}", "day": days[10 + i], "resolved_at": days[10 + i], "p": 0.6, "y": 0,
+              "net_stock": -0.01, "net_bench": 0.0, "ctx": "off", "kind": "etf"} for i in range(2)]
+    from shadow_buy_eval import forecast_scores_by_kind
+    sc = forecast_scores_by_kind(pd.DataFrame(rows))
+    etf = sc[sc["kind"] == "etf"]
+    assert etf["hist_n"].max() <= 1   # 只看得到 ETF 自己的前一筆
+    assert etf["base"].iloc[0] == pytest.approx(0.5)
+
+
+def test_render_forecast_etf_section_not_fed_by_stock_baseline():
+    # 30 筆個股事件撐起歷史；ETF 自己只有 20 筆（每筆最多看到前面 19 筆 ETF）→ 分 kind 後 ETF 沒有可比較事件
+    days = pd.bdate_range("2026-03-02", periods=50)
+    rows = [{"code": f"s{i}", "day": days[i], "resolved_at": days[i], "p": 0.6, "y": 1,
+             "net_stock": 0.01, "net_bench": 0.0, "ctx": "off", "kind": "stock"} for i in range(30)]
+    rows += [{"code": f"e{i}", "day": days[30 + i], "resolved_at": days[30 + i], "p": 0.6, "y": 0,
+              "net_stock": -0.01, "net_bench": 0.0, "ctx": "off", "kind": "etf"} for i in range(20)]
+    args = type("A", (), {"bootstrap": 50, "seed": 1})()
+    text = render_forecast(pd.DataFrame(rows), args)
+    etf_section = text.split("## ETF")[1]
+    assert "者 0 筆" in etf_section

@@ -418,11 +418,15 @@ def date_block_ci(values, dates, *, block, n=2000, seed=42, other=None):
 
     5 日標籤彼此重疊、同日各檔又共用市場衝擊，所以重抽單位是日期區塊而不是個別事件或 code。
     ``other=(values, dates)`` 時回傳兩組均值差的 CI（兩組共用同一條日期軸與同一批區塊）。
-    日期數不足 2×block 回 None（由呼叫端標 inconclusive）。"""
+    **每一組**自己的有效日期數都要 ≥ 2×block（不是兩組聯集），否則回 None（由呼叫端標 inconclusive）：
+    單組日期太少時，沒抽到該組的重抽會變 NaN 被濾掉，剩下的 CI 假窄。"""
     axis = _date_axis(dates, other[1] if other is not None else None)
     d = len(axis)
     if d < 2 * block or not len(values):
         return None
+    for ds in (dates, other[1] if other is not None else None):
+        if ds is not None and pd.to_datetime(pd.Series(list(ds))).nunique() < 2 * block:
+            return None
     rng = np.random.default_rng(seed)
     n_blocks = -(-d // block)
     starts = rng.integers(0, d, size=(n, n_blocks))
@@ -465,17 +469,28 @@ def forecast_scores(ev) -> pd.DataFrame:
     return ev
 
 
+def select_forecast_reports(df) -> pd.DataFrame:
+    """先取同股同日最後一份，再丟 p 為空的：最後一份沒作答就整天不計，不改拿較早那份（避免選擇偏誤）。"""
+    return latest_per_code_day(df).dropna(subset=["p"]).reset_index(drop=True)
+
+
+def forecast_scores_by_kind(ev) -> pd.DataFrame:
+    """個股與 ETF 各自算 252 日基率基準（ETF 的基準不能被個股事件決定）。"""
+    parts = [forecast_scores(g) for _, g in ev.groupby("kind", sort=False)]
+    return pd.concat(parts, ignore_index=True) if parts else ev
+
+
 def load_forecast_reports(url) -> pd.DataFrame:
     from sqlalchemy import create_engine, text
     with create_engine(url).connect() as c:
         _read_only(c)
         df = pd.read_sql(text(
             "select code, created_at, p_5d_beat_0050 as p, raw_result "
-            "from analysis_history where report_type = 'simple' and p_5d_beat_0050 is not null "
+            "from analysis_history where report_type = 'simple' "
             "and (code like '%.TW' or code like '%.TWO')"), c, parse_dates=["created_at"])
     if df.empty:
         return df
-    df = latest_per_code_day(df)
+    df = select_forecast_reports(df)
     df["ctx"] = [macro_ctx_label(r) for r in df["raw_result"]]
     df["stock_id"] = df["code"].str.split(".").str[0]
     return df.drop(columns="raw_result")
@@ -555,7 +570,7 @@ def render_forecast(ev, args) -> str:
            "- 0050 本身排除；ETF 與個股分開列。**樣本內、只讀**：結論必須過對抗審查才可寫進 docs。", ""]
     if ev.empty:
         return "\n".join(out + ["沒有已走完 5 日視窗、帶 p_5d_beat_0050 的事件：inconclusive。", ""])
-    sc = forecast_scores(ev)
+    sc = forecast_scores_by_kind(ev)
     for kind, title in (("stock", "個股"), ("etf", "ETF")):
         g = sc[sc["kind"] == kind]
         if g.empty:
