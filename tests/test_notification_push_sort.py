@@ -69,6 +69,44 @@ class PushSortTest(unittest.TestCase):
             EXPECTED_CODES,
         )
 
+    def test_hold_and_watch_order_ignores_score(self):
+        # hold/watch 不得經分數校準改寫成 buy/sell：分數 10/90/50 順序不變
+        for advice, dtype in (("观望", "hold"), ("持有", "hold")):
+            with self.subTest(advice=advice):
+                scores = {"600001": 10, "600002": 90, "600003": 50}
+                results = [_result(c, advice, dtype, s) for c, s in scores.items()]
+                self.assertEqual(
+                    [r.code for r in sort_results_for_push(results)],
+                    ["600001", "600002", "600003"],
+                )
+                for r in results:
+                    r.sentiment_score = None
+                self.assertEqual(
+                    [r.code for r in sort_results_for_push(results)],
+                    ["600001", "600002", "600003"],
+                )
+
+    def test_watch_vs_buy_not_flipped_by_score(self):
+        for watch_score in (50, 95):
+            with self.subTest(watch_score=watch_score):
+                results = [
+                    _result("600001", "观望", "hold", watch_score),
+                    _result("600002", "买入", "buy", 70),
+                ]
+                self.assertEqual(
+                    [r.code for r in sort_results_for_push(results)],
+                    ["600002", "600001"],
+                )
+
+    def test_decision_type_fallback_when_advice_is_free_text(self):
+        results = [
+            _result("600001", "整體偏弱，建議保守看待", "sell", 90),
+            _result("600002", "整體偏強，建議積極看待", "buy", 10),
+        ]
+        self.assertEqual(
+            [r.code for r in sort_results_for_push(results)], ["600002", "600001"]
+        )
+
     def test_every_renderer_uses_action_then_code_order(self):
         cfg = Config(stock_list=[], report_renderer_enabled=False)
         with mock.patch("src.notification.get_config", return_value=cfg):
@@ -95,6 +133,22 @@ class PushSortTest(unittest.TestCase):
         self.assertIn("未验证，不代表胜率", daily)
         self.assertNotIn("均分", daily)
         self.assertNotIn("均分", wechat)
+
+    def test_single_stock_quote_line_note_is_separated(self):
+        cfg = Config(stock_list=[], report_renderer_enabled=False)
+        for language, note in (
+            ("en", "unverified, not a win rate"),
+            ("ko", "미검증, 승률 아님"),
+        ):
+            with self.subTest(language=language):
+                with mock.patch("src.notification.get_config", return_value=cfg):
+                    text = NotificationService().generate_single_stock_report(
+                        _result("600000", "买入", "buy", 80, language=language)
+                    )
+                quote = next(l for l in text.splitlines() if l.startswith("> "))
+                self.assertIn(f"（{note}）", quote)
+                self.assertNotIn(f"Score{note}", quote)
+                self.assertNotIn(f"점수{note}", quote)
 
     def test_score_note_is_localized(self):
         for language, note in (

@@ -58,6 +58,7 @@ from src.report_language import (
     strategy_invalid_opinion_count,
 )
 from src.schemas.decision_action import (
+    normalize_decision_action,
     display_action_fields_for_result,
     display_decision_type_for_result,
     display_operation_advice_for_result,
@@ -271,8 +272,12 @@ def sort_results_for_push(results: Sequence[AnalysisResult]) -> List[AnalysisRes
     不可作為使用者每天看到的排名依據（策略決議 2026-10-27 第 2 項）。
     """
     def _key(result: AnalysisResult) -> tuple:
-        language = normalize_report_language(getattr(result, "report_language", None))
-        action = display_action_fields_for_result(result, report_language=language)["action"]
+        # 不經 sentiment_score 校準：直接取結構化動作，缺值退回 decision_type
+        action = (
+            normalize_decision_action(getattr(result, "action", None))
+            or normalize_decision_action(getattr(result, "operation_advice", None))
+            or normalize_decision_action(getattr(result, "decision_type", None))
+        )
         return (
             _PUSH_ACTION_RANK.get(action, len(_PUSH_ACTION_RANK)),
             str(getattr(result, "code", "") or ""),
@@ -2148,7 +2153,7 @@ class NotificationService:
         lines = [
             f"## {signal_emoji} {stock_name} ({result.code})",
             "",
-            f"> {report_date} | {score_text(labels, result.sentiment_score, ': ', bold=True, note=False)} | {localize_trend_prediction(result.trend_prediction, report_language)} | {labels['score_label']}{labels.get('score_unverified_note', '')}",
+            f"> {report_date} | {score_text(labels, result.sentiment_score, ': ', bold=True, note=False)} | {localize_trend_prediction(result.trend_prediction, report_language)} | （{labels.get('score_unverified_note', '')}）",
             "",
         ]
 
