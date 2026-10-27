@@ -76,7 +76,7 @@ def exclude_otc_revenue(rev: pd.DataFrame) -> pd.DataFrame:
     """拿掉**目前上櫃**公司的月營收列，讓營收條件維持上市口徑。
 
     `market.monthly_revenue` 自 2026-09 起也收上櫃（`crawl_monthly_revenue` 抓 sii+otc），
-    但 `docs/tw-swing-pipeline.md` 的每一個基準數字（974 個事件、`confidence` 錨點 20.2%、
+    但 `docs/tw-swing-pipeline.md` 的每一個基準數字（974 個事件、`confidence` 錨點 20.4%、
     組合 Sharpe）都是在「上櫃 yoy 全為 null」的池子上量的。讓上櫃直接流進 live 漏斗等於
     換了池子卻沿用舊池子的錨點——所以預設排除，要放進來得帶 `--include-otc-revenue`，
     而且要先帶同一旗標重跑 `scripts/measure_signal_forward.py`（`make measure` 不帶旗標，量的還是舊池子）
@@ -207,7 +207,7 @@ def compute_factors(g: pd.DataFrame) -> dict:
     vol20 = float(g["volume"].tail(20).mean())
     # 「剛起漲」要用**不含最近 5 天**的 60 日高當突破基準——含最近 5 天的話今天必然
     # 就是自己的高點，比不出「突破」。實測（前瞻報酬分布）以此定義的候選池 60 日內
-    # 漲逾 30% 的機率是 20.2%，同池有月營收的基準率只有 12.0%。
+    # 漲逾 30% 的機率是 20.4%（2026-10-26 重測），同池有月營收的基準率只有 12.0%。
     # 視窗是 61 根、t-65…t-5。**改這裡要同步 `measure_signal_forward.factors()` 的
     # `high.shift(5).rolling(61)`**：差一根就是量了一個不會下單的訊號（見 §REVENUE_STALE_DAYS
     # 上方的同步規則）。
@@ -428,7 +428,7 @@ def funnel(df, min_turnover, strategy="breakout"):
     """
     steps = {"全市場有報價": len(df)}
     # 宇宙與 measure_signal_forward 共用 `is_common_stock`（四位數普通股、排除 ETF 00xx／TDR 91xx）：
-    # 只排 ETF 時 TDR（9105、912000 都有月營收）會進 live 候選池，但 20.2% 錨點的母體裡沒有它。
+    # 只排 ETF 時 TDR（9105、912000 都有月營收）會進 live 候選池，但 20.4% 錨點的母體裡沒有它。
     pool = df[df["stock_id"].map(is_common_stock).astype(bool) & ~df["is_tib"]].copy()
     steps["排除 ETF／TDR／非普通股與創新板"] = len(pool)
     pool = pool[pool["turnover20"] >= min_turnover]
@@ -897,7 +897,8 @@ def to_json(as_of, pool, steps, market_d1, strategy, top, include_otc_revenue=Fa
             "mean_ci95_block_bootstrap": [0.0314, 0.1669],
             "mean_excl_28_events_over_100pct": 0.0569,
             "top12pct_events_share_of_total_pnl": 1.08,
-            "p_close60_up_30pct": 0.202, "p_close60_down_20pct": 0.148,
+            # p_close60_up_30pct 2026-10-26 重測為 0.204，要與 verify_swing_decisions.BASE_RATE 同步
+            "p_close60_up_30pct": 0.204, "p_close60_down_20pct": 0.148,
             "worst_single": -0.54,
             "matched_baseline_same_pool_with_revenue": {
                 "mean": 0.0467, "win_rate": 0.485, "p_close60_up_30pct": 0.120},

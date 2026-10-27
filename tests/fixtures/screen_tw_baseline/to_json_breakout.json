@@ -29,7 +29,7 @@
   ],
   "mean_excl_28_events_over_100pct": 0.0569,
   "top12pct_events_share_of_total_pnl": 1.08,
-  "p_close60_up_30pct": 0.202,
+  "p_close60_up_30pct": 0.204,
   "p_close60_down_20pct": 0.148,
   "worst_single": -0.54,
   "matched_baseline_same_pool_with_revenue": {

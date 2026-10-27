@@ -338,8 +338,11 @@ def test_json_withholds_the_listed_base_rate_when_otc_revenue_is_included():
     listed = screen_tw.to_json(pd.Timestamp("2026-08-03"), pool, {}, 0.0, "breakout", 5)
     mixed = screen_tw.to_json(pd.Timestamp("2026-08-03"), pool, {}, 0.0, "breakout", 5,
                               include_otc_revenue=True)
-    assert listed["measured_base_rate"]["p_close60_up_30pct"] == 0.202
-    # 20.2% 是上市口徑量的錨點；池子換了還交給 agent，等於讓 confidence 錨在別的分布上
+    assert listed["measured_base_rate"]["p_close60_up_30pct"] == 0.204
+    # 回驗的 Brier 基準與 live 篩選給 agent 的錨點必須是同一個數字（2026-10-26 重測為 20.4%）
+    from verify_swing_decisions import BASE_RATE
+    assert listed["measured_base_rate"]["p_close60_up_30pct"] == BASE_RATE
+    # 20.4% 是上市口徑量的錨點；池子換了還交給 agent，等於讓 confidence 錨在別的分布上
     assert mixed["measured_base_rate"] is None
     assert "measure_signal_forward.py" in " ".join(mixed["blind_spots"])
 
