@@ -566,3 +566,20 @@ def test_malformed_decision_type_does_not_split_negated_advice_into_buy(advice) 
     ) == []
     assert result.operation_advice == advice
     assert result.sentiment_score == 55
+
+
+@pytest.mark.parametrize("decision_type,expected_softening", [
+    ("买入", True), ("加仓", True), ("持有", False), ("卖出", False),
+])
+def test_malformed_decision_type_exact_label_is_first_fallback(decision_type, expected_softening) -> None:
+    # 三態欄位寫成完整中文標籤時，先用它判斷；action 缺值、建議不是標籤也照樣生效
+    result = _typed(decision_type, "隨便寫的文字", "zh")
+    result.action = None
+    result.sentiment_score = 55
+
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh"
+    )
+
+    assert ("daily_market_context_buy_softened" in adjustments) is expected_softening
+    assert result.sentiment_score == (52 if expected_softening else 55)
