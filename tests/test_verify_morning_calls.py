@@ -208,6 +208,9 @@ class FakeFetcher:
     def tx(self, day, prev):
         return (0.009, 1009.0, 0.004, "209904")
 
+    def history(self, day):
+        return []
+
 
 def test_compute_skips_unclosed_days_and_days_missing_from_db(monkeypatch):
     calls = [{"date": "2099-03-04", "regime": "rotation", "action": "wait", "gap_expected": 0.005,
@@ -339,3 +342,187 @@ def test_temporarily_missing_measures_defer_then_write_after_the_window(monkeypa
     assert len(late) == 1 and "仍缺 gap_0905" in late[0]["note"]
     ok = vmc.compute(calls, fetcher=FakeFetcher(sessions), engine=object(), today=D, out=lambda *_: None)
     assert len(ok) == 1 and "note" not in ok[0]
+
+
+# ---------- 機率計分：基準、Brier、bootstrap ----------
+
+def mk_hist(ys, start=dt.date(2098, 1, 1)):
+    """ys: 逐日 close_up 序列；oc_up／gap_up 取同值，方便手算。回 (hist, 下一個日期)。"""
+    hist = [{"date": start + dt.timedelta(days=i), "close_up": y, "oc_up": y, "gap_up": y} for i, y in enumerate(ys)]
+    return hist, start + dt.timedelta(days=len(ys))
+
+
+def test_hist_targets_derives_three_directions_from_ohlc():
+    merged = {dt.date(2099, 3, 3): (0, 0, 0, 100.0), dt.date(2099, 3, 4): (101.0, 0, 0, 100.5),
+              dt.date(2099, 3, 5): (99.0, 0, 0, 100.5)}
+    got = vmc.hist_targets(merged)
+    assert [(h["date"].day, h["close_up"], h["oc_up"], h["gap_up"]) for h in got] == [
+        (4, 1, 0, 1),     # 收 100.5>100；收 100.5<開 101；開 101>100
+        (5, 0, 1, 0),     # 收平前收（不算上漲）；收 100.5>開 99；開 99<100.5
+    ]
+
+
+def test_baseline_a_and_b_use_laplace_rolling_frequencies():
+    # 歷史 1,1,0,1,1,0（最近一天＝0）；forecast 日是下一天
+    hist, day = mk_hist([1, 1, 0, 1, 1, 0])
+    b = vmc.baseline_fields(day, hist, None)
+    assert b["base_a_dir_close_up"] == 1
+    assert b["base_a_p_close_up"] == pytest.approx((4 + 1) / (6 + 2))
+    # 昨日＝0；歷史上昨日為 0 的下一天：0→1（idx2→3）一次；idx5 是最後一天沒有下一天 → 1 次上、n=1... 
+    # 配對 (a,b)：a=0 的有 idx2(→1)；所以 n=1, ups=1
+    assert b["base_b_dir_close_up"] == 0
+    assert b["base_b_p_close_up"] == pytest.approx((1 + 1) / (1 + 2))
+    assert b["base_c_p_close_up"] is None and b["base_c_dir_close_up"] is None   # sp 不可用：留空不當 0
+    assert b["base_n_close_up"] == 6
+
+
+def test_baseline_c_conditions_on_sp_direction_before_forecast_day():
+    hist, day = mk_hist([1, 0, 1, 1])
+    d0 = hist[0]["date"]
+    one = dt.timedelta(days=1)
+    # 台股日 d0..d3 看到的 S&P（date < 台股日的最近一筆）依序是 1,0,1,1；forecast 日 d4 看到 d3 的 0
+    sp = [(d0 - one, 1), (d0, 0), (d0 + one, 1), (d0 + 2 * one, 1), (d0 + 3 * one, 0)]
+    b = vmc.baseline_fields(day, hist, sp)
+    assert b["base_c_dir_close_up"] == 0
+    assert b["base_c_p_close_up"] == pytest.approx((0 + 1) / (1 + 2))   # 歷史上 S&P=0 只有 d1（當天收跌）
+
+
+def test_baseline_never_uses_forecast_day_or_later_data():
+    hist, day = mk_hist([1, 0, 1, 0])
+    base = vmc.baseline_fields(day, hist, None)
+    # forecast 當日與之後的資料即使存在於 hist（Fetcher 會抓到當月整月）也不得影響基準
+    leak = hist + [{"date": day, "close_up": 1, "oc_up": 1, "gap_up": 1},
+                   {"date": day + dt.timedelta(days=1), "close_up": 1, "oc_up": 1, "gap_up": 1}]
+    assert vmc.baseline_fields(day, leak, None) == base
+    assert base["base_a_p_close_up"] == pytest.approx(3 / 6)
+    assert base["base_n_close_up"] == 4
+
+
+def test_baseline_window_keeps_only_the_latest_252_prior_days():
+    hist, day = mk_hist([0] * 10 + [1] * vmc.ROLL_WINDOW)
+    b = vmc.baseline_fields(day, hist, None)
+    assert b["base_n_close_up"] == vmc.ROLL_WINDOW
+    assert b["base_a_p_close_up"] == pytest.approx((vmc.ROLL_WINDOW + 1) / (vmc.ROLL_WINDOW + 2))
+
+
+def test_baseline_empty_history_is_none_not_zero():
+    b = vmc.baseline_fields(D, [], None)
+    assert b["base_a_p_close_up"] is None and b["base_n_close_up"] == 0
+
+
+def test_sp_directions_and_lookup_is_strictly_before_the_day():
+    d = dt.date(2099, 3, 2)
+    sp = vmc.sp_directions([(d, 100.0), (d + dt.timedelta(days=1), 101.0), (d + dt.timedelta(days=2), 99.0)])
+    assert sp == [(d + dt.timedelta(days=1), 1), (d + dt.timedelta(days=2), 0)]
+    assert vmc._sp_dir_before(sp, d + dt.timedelta(days=2)) == 1      # 當天的 S&P 收盤還沒發生
+    assert vmc._sp_dir_before(sp, d + dt.timedelta(days=1)) is None
+    # 收平不算上漲（與 hist_targets 的 `>` 同一口徑）
+    assert vmc.sp_directions([(d, 100.0), (d + dt.timedelta(days=1), 100.0)]) == [(d + dt.timedelta(days=1), 0)]
+
+
+def prob_rows(spec):
+    """spec: [(p, y, base_a_p, base_a_dir)]，其餘基準留空。"""
+    rows = []
+    for i, (p, y, bp, bd) in enumerate(spec):
+        rows.append({"date": f"2099-04-{i + 1:02d}", "p_close_up": p, "y_close_up": y,
+                     "base_a_p_close_up": bp, "base_a_dir_close_up": bd})
+    return rows
+
+
+def test_brier_and_paired_differences_on_fixed_data():
+    rows = prob_rows([(0.8, 1, 0.5, 1), (0.2, 0, 0.5, 1), (0.6, 0, 0.5, 1), (0.4, 1, 0.5, 1)])
+    s = vmc.prob_summary(rows, "close_up")
+    assert s["n"] == 4
+    assert s["brier"] == pytest.approx((0.04 + 0.04 + 0.36 + 0.36) / 4)
+    a = s["baselines"]["a"]
+    assert a["brier"] == pytest.approx(0.25)
+    assert a["d_mean"] == pytest.approx(0.25 - 0.20)
+    # 模型方向 p>0.5：命中 1,1,0,0；基準恆看漲（y=1,0,0,1）命中 1,0,0,1 → a_i = 0,1,0,-1
+    assert a["a_mean"] == pytest.approx(0.0)
+    assert s["bias"] == pytest.approx(0.5 - 0.5)
+    assert s["baselines"]["b"]["n_brier"] == 0 and "無機率基準" in s["baselines"]["b"]["verdict"]
+
+
+def test_small_sample_reports_bias_and_stays_inconclusive():
+    rows = prob_rows([(0.7, 1, 0.5, 1)] * 19)
+    s = vmc.prob_summary(rows, "close_up")
+    assert s["bias"] == pytest.approx(-0.3) and s["baselines"]["a"]["verdict"] == "inconclusive"
+    logs = []
+    vmc.render_prob_summary(rows, logs.append)
+    text = "\n".join(logs)
+    assert "只報整體偏差" in text and "d̄" not in text
+
+
+def test_clear_skill_with_enough_samples_beats_baseline_and_flat_difference_does_not():
+    rng = np.random.default_rng(5)
+    y = rng.integers(0, 2, 60)
+    good = [(0.85 if v else 0.15, int(v), 0.5, 1) for v in y]
+    assert vmc.prob_summary(prob_rows(good), "close_up")["baselines"]["a"]["verdict"] == "模型優於基準"
+    # 與基準同分：d_i 全為 0，CI 跨零（含端點）
+    same = [(0.5, int(v), 0.5, 1) for v in y]
+    assert vmc.prob_summary(prob_rows(same), "close_up")["baselines"]["a"]["verdict"] == "inconclusive"
+    worse = [(0.15 if v else 0.85, int(v), 0.5, 1) for v in y]
+    assert vmc.prob_summary(prob_rows(worse), "close_up")["baselines"]["a"]["verdict"] == "模型劣於基準"
+
+
+def test_old_rows_without_p_fields_are_skipped_not_crashing():
+    rows = prob_rows([(0.6, 1, 0.5, 1)] * 3) + [{"date": "2099-03-01", "gap_0905": 0.01},
+                                              {"date": "2099-03-02", "p_close_up": None, "y_close_up": 1}]
+    s = vmc.prob_summary(rows, "close_up")
+    assert s["n"] == 3 and s["n_skipped"] == 2
+    empty = vmc.prob_summary([{"date": "2099-03-01"}], "oc_up")
+    assert empty["n"] == 0
+    logs = []
+    vmc.render_summary([{"date": "2099-03-01", "scorable": True, "gap_expected": 0.0, "gap_0905": 0.0,
+                         "night_spot_gap": 0.0, "gap_open_official": 0.0, "gap_tx_open": 0.0}], logs.append)
+    assert any("沒有帶 p_close_up" in x for x in logs)
+
+
+def test_circular_block_bootstrap_wraps_around_and_is_deterministic():
+    vals = [1.0] * 30
+    assert vmc._cbb_ci(vals) == (1.0, 1.0)
+    assert vmc._cbb_ci(vals[:1]) is None
+    v = list(np.random.default_rng(0).normal(0, 1, 40))
+    assert vmc._cbb_ci(v) == vmc._cbb_ci(v)
+
+
+def test_build_outcome_carries_probs_actuals_and_rejects_percentages():
+    call = {"date": "2099-03-04", "regime": "rotation", "action": "wait", "gap_expected": 0.005,
+            "exclude_from_scoring": False, "p_close_up": 0.4, "p_oc_up": 62, "p_gap_up": 0.7,
+            "model_version": "claude", "skill_version": "abc"}
+    row = outcome(call)
+    assert (row["p_close_up"], row["p_gap_up"]) == (0.4, 0.7)
+    assert row["p_oc_up"] is None and "p_oc_up=62" in row["note"]    # 百分數不是機率：當缺、記原因
+    # 收 1020>前收 1000；收 1020>開 1002；09:05 1008>1000
+    assert (row["y_close_up"], row["y_oc_up"], row["y_gap_up"]) == (1, 1, 1)
+    assert row["model_version"] == "claude" and row["skill_version"] == "abc"
+    assert row["night_dir_up"] == 1 and row["base_d_dir_close_up"] == 1 and row["base_d_p_close_up"] is None
+    legacy = outcome({"date": "2099-03-04", "gap_expected": 0.0, "exclude_from_scoring": False})
+    assert legacy["p_close_up"] is None and legacy["y_close_up"] == 1
+
+
+def test_gap_basis_tx_settle_measures_input_error_against_futures_basis():
+    call = {"date": "2099-03-04", "gap_expected": 0.005, "exclude_from_scoring": False, "gap_basis": "tx_settle"}
+    assert outcome(call)["input_err"] == pytest.approx(0.005 - 0.004)    # 對 night_tx_chg
+    old = {k: v for k, v in call.items() if k != "gap_basis"}
+    assert outcome(old)["input_err"] == pytest.approx(0.005 - 0.009)     # 舊口徑對 night_spot_gap
+
+
+def test_compute_prints_unavailable_when_sp_or_history_fails(monkeypatch):
+    calls = [{"date": "2099-03-04", "gap_expected": 0.0, "exclude_from_scoring": False}]
+    monkeypatch.setattr(vmc, "breadth_at", lambda engine, day: 0.3)
+    monkeypatch.setattr(vmc, "vix_prior", lambda engine, day: 18.0)
+
+    def boom(engine):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(vmc, "sp_series", boom)
+
+    class NoHist(FakeFetcher):
+        def history(self, day):
+            return None
+    logs = []
+    rows = vmc.compute(calls, fetcher=NoHist({D: (P, 1000.0, 1002.0, 1015.0)}), engine=object(),
+                       today=D, out=logs.append)
+    text = "\n".join(logs)
+    assert "S&P 基準不可用" in text and "基準歷史不可用" in text
+    assert rows[0].get("base_a_p_close_up") is None       # 留空，不是 0
