@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 07:30 快照與首次可見時間（migration `b8d2f4a6c0e1`，需使用者確認後才在正式庫跑）：`rate_expectations` 主鍵加 `snapshot_slot`（台北 premarket／intraday／postclose，既有列補 `legacy`）與 `captured_at`；新增 `macro_series_snapshot`（每次抓取只存近 7 天、同交易寫入）、`institutional_initial`（法人初版，只在 daily 補缺路徑寫、DO NOTHING）、`monthly_revenue_first_seen`（月營收首次值，只在 daily 寫）；`taifex_fut_oi` 加 `first_seen_at`（設過不覆蓋）與 `captured_at`；賣方共識不另建表，文件寫明已落在 `analysis_history.context_snapshot` 的 `fundamental_context.consensus`
+- [修复] `scripts/macro_brief.py` `print_rates` 改只讀最新一個 slot（一週前對照同 slot），避免多 slot 之後同一天的機率被重複加總
 - [新功能] 總經事件日程與首發值：`SERIES` 加 `FRED:ICSA`（週頻，`Series` 新增 `freq` 欄、預設 `daily`，週頻序列不進儀表日線表）；`event_calendar` 追加可空欄位 `released_at`／`series_id`／`observation_date`／`actual_value`／`prior_value`／`actual_vintage`／`actual_source`（migration `a6c1e3f5b7d9`，**正式庫要使用者確認後自己跑**，有帶 `released_at` 的列時拒絕降版）；新增 CPI、非農＋失業率、零售 advance、PCE、初領事件（FRED 行事曆為主、時間是美中；BEA ICS／Census 備援）、ISM 製造業規則推估日（`estimated`）、央行理監事會常數表（只放央行公告過的日期：已開過的場次與 115-12-17 預定日，116 年待公告後人工補，不推算）；公布後由 ALFRED 以公布日當 vintage 取首發實際值與前值（`vintage_date` 單數參數，first-write-wins；PAYEMS／UNRATE 只存這裡，不進 `macro_series`）
 - [改進] `scripts/macro_brief.py` 事件段拆成「隔夜已公布」（首發實際值、前值、vintage、固定標「無共識」）與「今日待公布」兩欄，保留 14 天清單；不寫高於／低於預期（沒有 PIT 共識）；skill `tw-morning-call` Step 2.5 加兩欄讀法；`docs/macro-data.md`、`market_data/AGENTS.md` 同步
 - [修复] 總經事件兩欄與行事曆修正：「今日待公布」上界改取今天之後的下一場次 13:30 台北（原本交易日早上只到今天 13:30，今晚的美國數據、ISM、央行永遠不出現）；央行列印出 `time_note`「時間待確認」、無 `series_id` 的列（央行、ISM）印「首發值不適用」而不是承諾 ALFRED 補值；FRED 改期刪除加 `source = 'fred'`，備援（BEA／Census）失敗時不再誤刪既有備援事件；補 `print_release_columns` 窗口、`update()` 接線、首發補值順序、央行時區的測試；文件更正 `FRED:ICSA` 只抓近 800 天
