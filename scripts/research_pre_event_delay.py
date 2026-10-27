@@ -170,11 +170,13 @@ def tightening_flags(macro, sessions, lookback=MACRO_LOOKBACK):
 
     ``macro``：欄位 ``series_id``／``date``／``value``。台股 S 日盤前只看得到美國日期 < S 的資料
     （嚴格小於：美國 S 日的收盤在台北 S+1 凌晨）。三個序列任一缺值就是 False（不猜）。"""
-    sessions = pd.DatetimeIndex(sessions)
+    # merge_asof 要求兩邊時間解析度相同（面板是 [us]、CSV 讀進來可能是 [s]），統一成 [ns]
+    sessions = pd.DatetimeIndex(sessions).astype("datetime64[ns]")
     flag = pd.Series(True, index=sessions)
     for sid in MACRO_IDS:
-        s = (macro[macro["series_id"] == sid].sort_values("date")
-             .assign(date=lambda x: pd.to_datetime(x["date"])))
+        s = (macro[macro["series_id"] == sid]
+             .assign(date=lambda x: pd.to_datetime(x["date"]).astype("datetime64[ns]"))
+             .sort_values("date"))
         if not len(s):
             return pd.Series(False, index=sessions)
         s = s.assign(chg=s["value"] - s["value"].shift(lookback))[["date", "chg"]]
@@ -397,6 +399,15 @@ def main(argv=None):
     print(f"大局緊縮日（盤前可見 DGS10、Brent、DXY 20 日變化同為正）：樣本窗 {int(in_win.sum())} 個交易日中 "
           f"{int(tight[in_win].sum())} 個（{tight[in_win].mean() * 100:.1f}%）")
     report(ev, ctx, arm, piv, a.horizon, tight=tight, n_boot=a.bootstrap, seed=a.bootstrap_seed)
+    # 對抗檢查（事後加、只描述）：未受影響事件也晚一天進場，看差距是不是「晚一天」本身而非事件
+    unaff = ~ctx["affected"]
+    pctx = pd.DataFrame({"affected": unaff, "t_idx": (ev["ti"] + 1).astype(float)}, index=ev.index)
+    p_arm = delayed_arm_returns(ev, pctx, ret)
+    p_pair = pd.DataFrame({"date": ev.loc[unaff, "ti"], "arm": p_arm,
+                           "base": ev.loc[unaff, "r"]}).dropna(subset=["arm", "base"])
+    s = paired_summary(p_pair, np.arange(len(index)), a.horizon, a.bootstrap, a.bootstrap_seed)
+    print(f"\n安慰劑（未受影響事件同樣晚一天進場，事後加、只描述）: n={s['n']}  均值差 {s['d_mean'] * 100:+.2f}pp"
+          f"（95% {_fmt_ci(s['ci_mean'])}）  P(≥30%) 差 {s['d_hit'] * 100:+.1f}pp（95% {_fmt_ci(s['ci_hit'])}）")
     return 0
 
 
