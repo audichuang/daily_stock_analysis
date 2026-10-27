@@ -388,3 +388,64 @@ def test_finalization_preserves_structural_guardrail_action_before_history_write
     assert result.operation_advice == "持有觀察"
     assert result.dashboard["decision_stability"]["applied"] is True
     assert saved == [("hold", "持有觀察")]
+
+
+def _finalize_pipeline(saved: list):
+    from src.core.pipeline import StockAnalysisPipeline
+
+    pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+    pipeline.config = SimpleNamespace(report_language="zh")
+    pipeline.save_context_snapshot = False
+    pipeline._build_context_snapshot = MagicMock(return_value={})
+    pipeline.db = MagicMock()
+
+    def capture_save(*, result, **kwargs):
+        saved.append((result.action, result.decision_type, result.operation_advice))
+        return None
+
+    pipeline.db.save_analysis_history.side_effect = capture_save
+    return pipeline
+
+
+def _finalize_artifacts(code: str = "2330.TW"):
+    from src.services.analysis_context_builder import PipelineAnalysisArtifacts
+
+    return PipelineAnalysisArtifacts(
+        code=code, stock_name="台積電", market="tw", phase=None,
+        base_context={}, enhanced_context={}, realtime_quote=None, trend_result=None, chip_data=None,
+        fundamental_context={}, news_context=None, news_result_count=0, metadata={},
+    )
+
+
+@pytest.mark.parametrize("decision_type", ["buy", "sell"])
+def test_finalization_keeps_phase_guardrail_watch_for_buy_or_sell_decision(decision_type: str) -> None:
+    # 盤中盤後口吻護欄改寫成「等待盤中確認」句子並給觀望：decision_type 若仍是 buy／sell，
+    # 刷新時的三態對不上檢查會把觀望清成未知，整條動作鏈失效、DecisionSignal 不寫入。
+    saved: list = []
+    pipeline = _finalize_pipeline(saved)
+    advice = "买入（盘后复盘）" if decision_type == "buy" else "卖出（盘后复盘）"
+    result = AnalysisResult(
+        code="2330.TW", name="台積電", sentiment_score=68, trend_prediction="看多",
+        operation_advice=advice, action=decision_type, decision_type=decision_type,
+        report_language="zh", current_price=100, dashboard={},
+    )
+    pipeline._finalize_and_persist_result(
+        result, _finalize_artifacts(), market_phase_summary={"phase": "intraday", "market": "tw"},
+        analysis_context_pack_overview={"data_quality": {"overall_status": "available"}},
+        report_type="simple", snapshot_context={}, news_content_for_save=None,
+    )
+
+    assert result.operation_advice == "等待盘中确认，禁止追高。"
+    assert result.action == "watch"
+    assert result.decision_type == "hold"
+    assert saved and saved[-1][:2] == ("watch", "hold")
+
+
+def test_finalization_still_clears_unsynced_action_after_sentence_rewrite() -> None:
+    # 反向：護欄改寫成句子卻沒同步動作（action 仍是 buy、decision_type 已降 hold）時照樣清掉殘留值。
+    result = _result(operation_advice="持有觀察，等待量能確認", action="buy", decision_type="hold",
+                     sentiment_score=55)
+    StockAnalysisPipeline._refresh_decision_action_for_final_result(
+        result, report_type="simple", previous_operation_advice="買入", record_contradiction=False,
+    )
+    assert result.action is None

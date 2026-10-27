@@ -40,7 +40,7 @@ Web 展示必须把这些 wire value 映射为当前 UI 语言的用户可读标
 
 `operation_advice` 僅供顯示。`src/schemas/decision_action.py::normalize_decision_action` 只接受兩種輸入：八態 enum 值與既有英文別名（`strong buy/strong_buy`、`strong sell/strong_sell`、`accumulate`、`trim`、`wait`）；或去掉頭尾空白後**整段就是一個動作標籤**的建議（`_EXACT_LABEL_ACTIONS`：`_ACTION_LABELS` 各語系標籤、強烈買入／強烈賣出、台灣用語加碼／減碼；繁體先逐字折成簡體再查表）。除此之外的句子一律回 `None`，例如「不建議現在買入」「建議買入」「洗盤觀察」「觀望（原建議已被風控下調）」「no need to sell」。`action=watch` 搭配「不建議現在買入」仍是 watch；裸標籤「減倉」仍為 reduce。舊版的片語表、中英文否定判讀與財經複合詞遮罩已移除，不要再加回片語清單；模型該給的判斷沒給時，修 prompt 或結構化欄位，不要在程式碼裡讀文字。分數對齊與買入區 hold/reduce 護欄維持既有規則。
 
-會把建議改寫成句子的護欄要自己設好結構化 `result.action`：結構護欄 `_set_structural_hold_wording`（震盪觀望→`watch`，洗盤觀察／持有觀察→`hold`）、市場階段護欄改寫盤後復盤口徑（→`watch`）、大盤脈絡與交易成本護欄（→`watch`）。agent 風控下調時，`orchestrator._risk_adjusted_action` 依下調後的 `decision_type` 改寫 `action`：原 action 已落在同一桶就保留，否則 hold→`watch`、sell→`reduce`。
+會把建議改寫成句子的護欄要自己設好結構化 `result.action`：結構護欄 `_set_structural_hold_wording`（震盪觀望→`watch`，洗盤觀察／持有觀察→`hold`）、市場階段護欄改寫盤後復盤口徑（→`watch`）、大盤脈絡與交易成本護欄（→`watch`）；給 `watch` 的護欄同時把三態 `decision_type` 降為 `hold`，否則刷新時 watch 與殘留的 buy／sell 對不上會被清成未知。agent 風控下調時，`orchestrator._risk_adjusted_action` 依下調後的 `decision_type` 改寫 `action`：原 action 已落在同一桶就保留，否則 hold→`watch`、sell→`reduce`。
 
 已逐一核對呼叫端；沒有可用動作時的 fallback 如下：
 
