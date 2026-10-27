@@ -209,7 +209,8 @@ class FakeFetcher:
         return (0.009, 1009.0, 0.004, "209904")
 
     def history(self, day):
-        return []
+        hist, _ = mk_hist([1, 0] * 25, start=dt.date(2099, 1, 1))   # 都早於 D
+        return hist
 
 
 def test_compute_skips_unclosed_days_and_days_missing_from_db(monkeypatch):
@@ -357,8 +358,8 @@ def test_hist_targets_derives_three_directions_from_ohlc():
               dt.date(2099, 3, 5): (99.0, 0, 0, 100.5)}
     got = vmc.hist_targets(merged)
     assert [(h["date"].day, h["close_up"], h["oc_up"], h["gap_up"]) for h in got] == [
-        (4, 1, 0, 1),     # 收 100.5>100；收 100.5<開 101；開 101>100
-        (5, 0, 1, 0),     # 收平前收（不算上漲）；收 100.5>開 99；開 99<100.5
+        (4, 1, 0, None),     # 收 100.5>100；收 100.5<開 101；gap_up 沒有 09:05 歷史、不拿官方開盤頂替
+        (5, 0, 1, None),     # 收平前收（不算上漲）；收 100.5>開 99
     ]
 
 
@@ -368,7 +369,7 @@ def test_baseline_a_and_b_use_laplace_rolling_frequencies():
     b = vmc.baseline_fields(day, hist, None)
     assert b["base_a_dir_close_up"] == 1
     assert b["base_a_p_close_up"] == pytest.approx((4 + 1) / (6 + 2))
-    # 昨日＝0；歷史上昨日為 0 的下一天：0→1（idx2→3）一次；idx5 是最後一天沒有下一天 → 1 次上、n=1... 
+    # 昨日＝0；歷史上昨日為 0 的下一天只有 idx2→3 一次（idx5 是最後一天沒有下一天）
     # 配對 (a,b)：a=0 的有 idx2(→1)；所以 n=1, ups=1
     assert b["base_b_dir_close_up"] == 0
     assert b["base_b_p_close_up"] == pytest.approx((1 + 1) / (1 + 2))
@@ -526,3 +527,158 @@ def test_compute_prints_unavailable_when_sp_or_history_fails(monkeypatch):
     text = "\n".join(logs)
     assert "S&P 基準不可用" in text and "基準歷史不可用" in text
     assert rows[0].get("base_a_p_close_up") is None       # 留空，不是 0
+
+
+# ---------- 守門：compute 寫入基準、Fetcher.history、口徑分組、block 長度、gap_up 基準 ----------
+
+def test_compute_writes_baseline_fields_into_the_row(monkeypatch):
+    calls = [{"date": "2099-03-04", "gap_expected": 0.0, "exclude_from_scoring": False}]
+    monkeypatch.setattr(vmc, "breadth_at", lambda engine, day: 0.3)
+    monkeypatch.setattr(vmc, "vix_prior", lambda engine, day: 18.0)
+    monkeypatch.setattr(vmc, "sp_series", lambda engine: [])
+    rows = vmc.compute(calls, fetcher=FakeFetcher({D: (P, 1000.0, 1002.0, 1015.0)}), engine=object(),
+                       today=D, out=lambda *_: None)
+    assert rows[0]["base_n_close_up"] == 50 and rows[0]["base_a_p_close_up"] == pytest.approx(26 / 52)
+    assert rows[0]["base_a_p_gap_up"] is None and rows[0]["base_n_gap_up"] == 0   # gap_up 基準不可用
+
+
+def test_compute_warns_when_history_is_empty_not_only_none(monkeypatch):
+    calls = [{"date": "2099-03-04", "gap_expected": 0.0, "exclude_from_scoring": False}]
+    monkeypatch.setattr(vmc, "breadth_at", lambda engine, day: 0.3)
+    monkeypatch.setattr(vmc, "vix_prior", lambda engine, day: 18.0)
+    monkeypatch.setattr(vmc, "sp_series", lambda engine: [])
+
+    class EmptyHist(FakeFetcher):
+        def history(self, day):
+            return []
+    logs = []
+    vmc.compute(calls, fetcher=EmptyHist({D: (P, 1000.0, 1002.0, 1015.0)}), engine=object(), today=D,
+                out=logs.append)
+    assert any("基準歷史不可用" in x for x in logs)
+
+
+def bare_fetcher(monkeypatch, data, months=3):
+    f = vmc.Fetcher.__new__(vmc.Fetcher)
+    f.hist, f.tx_cache, f.notes, f.asked = {}, {}, [], []
+
+    def month(day):
+        f.asked.append((day.year, day.month))
+        return data.get((day.year, day.month), {})
+    f.month = month
+    monkeypatch.setattr(vmc, "HIST_MONTHS", months)
+    return f
+
+
+def test_fetcher_history_walks_back_month_by_month_across_the_year_boundary(monkeypatch):
+    data = {(2026, 2): {dt.date(2026, 2, 2): (1, 1, 1, 103.0)}, (2026, 1): {dt.date(2026, 1, 30): (1, 1, 1, 102.0)},
+            (2025, 12): {dt.date(2025, 12, 31): (1, 1, 1, 100.0)}}
+    f = bare_fetcher(monkeypatch, data)
+    got = f.history(dt.date(2026, 2, 15))
+    assert f.asked == [(2026, 2), (2026, 1), (2025, 12)]
+    assert [(h["date"], h["close_up"]) for h in got] == [(dt.date(2026, 1, 30), 1), (dt.date(2026, 2, 2), 1)]
+
+
+def test_fetcher_history_with_a_missing_month_is_unavailable_not_bridged(monkeypatch):
+    # 二月沒資料（含 stat 非 OK 回空 dict）：不能把 1/30 與 3/2 當相鄰交易日
+    data = {(2026, 3): {dt.date(2026, 3, 2): (1, 1, 1, 102.0)}, (2026, 1): {dt.date(2026, 1, 30): (1, 1, 1, 100.0)}}
+    f = bare_fetcher(monkeypatch, data)
+    assert f.history(dt.date(2026, 3, 15)) is None
+    assert any("2026-02" in n for n in f.notes)
+
+
+def block_series():
+    return np.repeat([1.0, -1.0, 1.0, -1.0], 10)      # 平均 0、強自相關
+
+
+def test_block_bootstrap_uses_contiguous_blocks_of_the_requested_length():
+    v = block_series()
+    w1, w10 = (lambda c: c[1] - c[0])(vmc._cbb_ci(v, block=1)), (lambda c: c[1] - c[0])(vmc._cbb_ci(v, block=10))
+    assert w10 > 1.5 * w1 > 0           # block=1 退化成 iid、區間窄；10 日區塊保留自相關、區間寬
+    assert vmc._cbb_ci(v, block=40) == (0.0, 0.0)   # 區塊＝整段：只是旋轉，平均不變
+    assert vmc._cbb_ci(v[:5], block=10) == vmc._cbb_ci(v[:5], block=5)   # 區塊長度不超過樣本數
+
+
+def gap_row(day, basis, spot, tx, actual):
+    r = outcome({"date": day, "regime": "rotation", "action": "wait", "gap_expected": tx,
+                 "exclude_from_scoring": False, "gap_basis": basis})
+    r.update(night_spot_gap=spot, night_tx_chg=tx, gap_0905=actual, gap_tx_open=actual, gap_open_official=actual,
+             gap_expected=tx)
+    return r
+
+
+def new_basis_rows(n=20):
+    # 新口徑：實際＝0.5×夜盤÷結算；night_spot_gap 是無關的另一個序列（實際的 4 倍）
+    xs = [0.002 * (1 + i % 4) * (1 if i % 2 else -1) for i in range(n)]
+    return [gap_row(f"2099-05-{i + 1:02d}", "tx_settle", 4 * x * 0.5, x, 0.5 * x) for i, x in enumerate(xs)]
+
+
+def old_basis_rows(n=20):
+    xs = [0.003 * (1 + i % 3) * (1 if i % 2 else -1) for i in range(n)]
+    return [gap_row(f"2099-04-{i + 1:02d}", None, x, 0.0, 0.2 * x) for i, x in enumerate(xs)]
+
+
+def test_brief_scaling_ratio_equals_the_grouped_new_basis_value(tmp_path):
+    path = tmp_path / "o.jsonl"
+    vmc.append_outcomes(path, new_basis_rows())
+    logs = []
+    vmc.brief(path, out=logs.append)
+    text = "\n".join(logs)
+    want = vmc.summarize(new_basis_rows(), "gap_0905", raw_key="night_tx_chg")["slope"]
+    assert want == pytest.approx(0.5)
+    advice = [x for x in logs if x.startswith("→")]
+    assert len(advice) == 1 and f"縮放比 {want:.2f} 已有統計支持" in advice[0]
+    assert "0.12" not in text           # 舊口徑 raw（night_spot_gap）算出的 0.125 不能出現
+
+
+def test_brief_never_recommends_scaling_from_old_basis_only(tmp_path):
+    path = tmp_path / "o.jsonl"
+    vmc.append_outcomes(path, old_basis_rows())
+    assert vmc.summarize(old_basis_rows(), "gap_0905")["apply_scaling"]      # 舊口徑自己達標
+    logs = []
+    vmc.brief(path, out=logs.append)
+    advice = [x for x in logs if x.startswith("→")]
+    assert len(advice) == 1 and "inconclusive" in advice[0] and "已有統計支持" not in advice[0]
+
+
+def test_brief_with_mixed_bases_uses_only_the_new_basis_group(tmp_path):
+    path = tmp_path / "o.jsonl"
+    vmc.append_outcomes(path, old_basis_rows() + new_basis_rows())
+    logs = []
+    vmc.brief(path, out=logs.append)
+    advice = [x for x in logs if x.startswith("→")]
+    assert len(advice) == 1 and "縮放比 0.50 已有統計支持" in advice[0]
+
+
+def test_bark_line_reports_scale_only_for_new_basis_group():
+    rows = old_basis_rows() + new_basis_rows()
+    text = vmc.bark_line(rows, rows[-1:])
+    new_part = [x for x in text.split("\n") if "新口徑" in x][0]
+    old_part = [x for x in text.split("\n") if "舊口徑" in x][0]
+    assert "縮放比 0.50" in new_part and "縮放比" not in old_part.replace("不給縮放比", "")
+    only_new = vmc.bark_line(new_basis_rows(), [])
+    assert "縮放比 0.50" in only_new and "0.12" not in only_new
+
+
+def test_render_summary_keeps_the_two_gap_bases_in_separate_groups():
+    logs = []
+    vmc.render_summary(old_basis_rows(20) + new_basis_rows(12), logs.append)
+    heads = [x for x in logs if x.startswith("[缺口口徑")]
+    assert len(heads) == 2 and "舊口徑），20 筆" in heads[0] and "新口徑），12 筆" in heads[1]
+    only_old = []
+    vmc.render_summary(old_basis_rows(20), only_old.append)
+    assert [x for x in only_old if x.startswith("[缺口口徑")] and not any("新口徑）" in x for x in only_old)
+
+
+def test_gap_up_has_no_baseline_and_is_skipped_in_summary():
+    hist, day = mk_hist([1, 0, 1, 1, 0, 1])
+    b = vmc.baseline_fields(day, hist, [(day - dt.timedelta(days=9), 1), (day - dt.timedelta(days=8), 2)])
+    assert b["base_n_gap_up"] == 0
+    assert all(b[f"base_{k}_{x}_gap_up"] is None for k in "abc" for x in ("dir", "p"))
+    assert b["base_a_p_close_up"] is not None and b["base_n_oc_up"] == 6    # 其他目標不受影響
+    # 舊列即使寫了 gap_up 基準也不採用；其他目標照算
+    rows = [{"date": f"2099-04-{i + 1:02d}", "p_gap_up": 0.6, "y_gap_up": 1, "base_a_p_gap_up": 0.5,
+             "base_a_dir_gap_up": 1} for i in range(25)]
+    assert vmc.prob_summary(rows, "gap_up")["baselines"]["a"]["n_brier"] == 0
+    logs = []
+    vmc.render_prob_summary(rows, logs.append)
+    assert any("gap_up 基準不可用（缺 09:05 歷史）" in x for x in logs)

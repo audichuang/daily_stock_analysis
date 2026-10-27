@@ -73,8 +73,8 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
     `gap_tx_open`＝台指期近月（當日日盤量最大的月份，`tx_contract`）日盤開盤 ÷ 同契約前一日結算價（期交所 `futDataDown`）。
     `err_<量測>`＝實際 − 預估。
   - `night_spot_gap`＝夜盤收盤 ÷ 前一日現貨收盤（skill 公式用對數字時的值；期交所把夜盤記在它**結束**的那天）、
-    `night_tx_chg`＝夜盤收盤 ÷ 前一日結算價、`input_err`＝`gap_expected` − `night_spot_gap`（抄錯或用了 21:30 前報價）。
-    彙總的縮放比是「實際 ÷ `night_spot_gap`」：`gap_expected` 可能已照建議乘過縮放比，拿它估會把修正再修一次。
+    `night_tx_chg`＝夜盤收盤 ÷ 前一日結算價、`input_err`＝`gap_expected` − 對應口徑的夜盤值（`gap_basis=tx_settle` 對 `night_tx_chg`，舊列對 `night_spot_gap`；抄錯或用了 21:30 前報價）。
+    彙總依 `gap_basis` 分組、縮放比是「實際 ÷ 該組 raw」（新口徑 `night_tx_chg`、舊口徑 `night_spot_gap`；`--brief`／Bark 的縮放建議只看新口徑組，樣本不足就 inconclusive）：`gap_expected` 可能已照建議乘過縮放比，拿它估會把修正再修一次。
   - 09:05 或期貨量測暫時抓不到時，7 個曆日內延後不寫（寫了就不會重算）；超過 7 天仍缺才寫入並在 `note` 記缺哪項。
   - `day_return`／`intraday_return`：收盤 ÷ 前收、收盤 ÷ 官方開盤。`gap_dir_hit`（預估方向對 `gap_0905`）、
     `day_dir_hit`（預估缺口方向對全日方向，描述性，盤前判讀不預測收盤）。
@@ -88,7 +88,7 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
     (a) 永遠看漲（方向恆 1，機率＝252 日滾動上漲頻率）；(b) 昨日方向（機率＝P(漲｜昨日同向) 的 252 日滾動頻率）；
     (c) 07:30 前最近一個美股交易日的 S&P 方向（`market.macro_series` 的 `^GSPC`；機率＝P(漲｜S&P 同向) 的滾動頻率）；
     (d) `night_spot_gap` 符號（方向＝`night_dir_up`，**機率先留 `null`**，等夜盤歷史回補）。機率一律 Laplace 加一 `(k+1)/(n+2)`，
-    只用 `date` 早於判讀日的資料；`base_n_<目標>` 是用到的歷史筆數。`gap_up` 的歷史沒有逐日 09:05 指數，基準頻率用官方開盤缺口當代理。
+    只用 `date` 早於判讀日的資料；`base_n_<目標>` 是用到的歷史筆數。`gap_up` 的 (a)(b)(c) 一律 `null`（歷史沒有逐日 09:05 指數，官方開盤與 09:05 不是同一事件），彙總印「gap_up 基準不可用（缺 09:05 歷史）」並跳過比較；基準歷史任一月份抓不到時整組留 `null` 並印不可用。
     資料源抓不到時該基準欄是 `null`，輸出明印「不可用」，不補 0。
   - 彙總（`render_prob_summary`）：模型 Brier、對各基準的配對差 d_i（基準 Brier − 模型 Brier，正＝模型較好）與命中差 a_i（模型方向＝p>0.5），
     10 日 circular block bootstrap 95% CI；n<20 或 CI 跨零印 inconclusive，n<20 只報整體偏差 p̄−ȳ。缺 `p_*` 的舊列跳過。

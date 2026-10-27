@@ -225,7 +225,7 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
   不可用或沒有日變化時那一欄已是 `null`，原因在輸出的 `reasons`，可抄進 `reason`。語意見 `journal/README.md`。
 - `p_close_up`／`p_oc_up`／`p_gap_up`／`model_version`／`skill_version`：回驗算三個目標的實際方向與 Brier，缺這些欄位的舊列跳過該指標；語意見 `journal/README.md`。
 - `gap_expected`：回驗同時量官方開盤（`MI_5MINS_HIST`，偏向 0）、09:05 指數（`MI_5MINS_INDEX`）與台指期日盤開盤
-  ÷ 前一日結算價，另記「夜盤收盤 ÷ 前一日現貨收盤」來分開輸入錯誤與公式誤差；語意見 `journal/README.md`。
+  ÷ 前一日結算價，另記 `night_spot_gap`（夜盤 ÷ 前一日現貨收盤）與 `night_tx_chg`（夜盤 ÷ 前一日結算價）；輸入錯誤 `input_err` 依 `gap_basis` 分流（`tx_settle` 對 `night_tx_chg`、舊列對 `night_spot_gap`），縮放比建議只看新口徑組；語意見 `journal/README.md`。
 
 休市日（臨時休市清單／非交易日）那天寫下的判讀不計分，回驗讀取端要排除並印出排除筆數（見 `journal/README.md`；`swing-decisions.jsonl` 已內建）。
 可計分樣本不到 20 筆、或偏差區間跨零時，回驗一律印 inconclusive；在那之前**不要聲稱 regime 判讀有經驗證的優勢**。
