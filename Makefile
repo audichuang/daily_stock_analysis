@@ -26,7 +26,7 @@ DOPPLER_RUN = doppler run -p finmind -c dev -- doppler run -p $(DOPPLER_PROJECT)
 
 .DEFAULT_GOAL := help
 .PHONY: help install serve serve-local review review-tw analyze schedule screen \
-        swing morning macro overnight taifex media-picks measure portfolio portfolio-wf verify-decisions verify-media-picks shadow-buy \
+        swing morning macro overnight taifex media-picks measure portfolio portfolio-wf verify-decisions verify-morning verify-media-picks shadow-buy \
         test lint lint-fix format refresh-tw refresh-us daily-report daily-report-detached \
         pg-scratch pg-scratch-stop
 
@@ -86,6 +86,9 @@ morning: ## 每天早上一键：补资料 → 大局（總經／Fed／事件）
 	@echo "\n===== 大局（總經、Fed 利率預期、台股位階與資金、未來 14 天事件）====="
 	@# - 唯讀 DB（daily 已寫入）；某段表不存在或沒資料時只印 WARN，不拖垮 make morning
 	@-uv run --env-file .env python scripts/macro_brief.py
+	@echo "\n===== 近期判讀校正（盤前預估 vs 實際；只讀 journal/morning-calls-outcomes.jsonl）====="
+	@# - 唯讀 outcomes 檔、不連網；檔不存在或壞掉都不拖垮 make morning
+	@-uv run python scripts/verify_morning_calls.py --brief
 	@echo "\n===== 昨晚国际盘 ====="
 	@# 任一序列失敗回 1，失敗已逐列印在表裡；用 - 讓後面的期交所／待觸發計畫／候選照跑
 	@-tsmc=$$(uv run --env-file .env python -c "from market_data.db import get_engine;from sqlalchemy import text;print(get_engine().connect().execute(text(\"select close from market.price where stock_id='2330' order by date desc limit 1\")).scalar() or 0)" 2>/dev/null); \
@@ -133,6 +136,9 @@ portfolio-wf: ## 同上但走擴張窗选参，只计样本外（回答选参偏
 
 verify-decisions: ## 回验 tw-swing-research 的判断（Brier + E[R|enter]−E[R|全收]）
 	uv run --env-file .env python scripts/verify_swing_decisions.py
+
+verify-morning: ## 回驗盤前判讀：預估缺口 vs 官方開盤／09:05／台指期開盤、regime 對定義、動作事後描述（唯讀，不寫檔；18:00 排程才 --append）
+	uv run --env-file .env python scripts/verify_morning_calls.py --all
 
 verify-media-picks: ## 回驗媒體點名：講者看多／看空與排程 Claude 的 research／watch／avoid 之後相對 0050 的超額（唯讀，n<20 或 CI 跨零標 inconclusive）
 	uv run --env-file .env python scripts/verify_media_picks.py

@@ -291,6 +291,38 @@ require_stock_success() {
   (( ok > 0 ))
 }
 
+# 盤前判讀回驗（scripts/verify_morning_calls.py）：非致命，失敗只記 WARN 並推一則 Bark，不擋每日報告。
+# 只 commit outcomes 檔（預測檔 morning-calls.jsonl 由 07:30 排程另外 commit，兩者分開才有防竄改保證）；
+# push 走 media_picks_job.sh --push-journal 的守門：只在 develop、領先的 commit 全是 journal/ 才推。
+OUTCOMES_FILE="journal/morning-calls-outcomes.jsonl"
+morning_call_outcomes() {
+  local out rc=0 line branch push
+  out=$(run_with_timeout "${MORNING_VERIFY_TIMEOUT_SECONDS:-900}" \
+    uv run --env-file .env python scripts/verify_morning_calls.py --append --bark 2>&1) || rc=$?
+  printf '%s\n' "$out" >>"$LOG"
+  if (( rc != 0 )); then
+    log "WARN: 盤前判讀回驗失敗（rc=${rc}），不影響每日報告"
+    notify_failure "盤前判讀回驗失敗（rc=${rc}），每日報告照常。log: $LOG" "盤前判讀回驗失敗" || true
+    return 0
+  fi
+  line=$(printf '%s\n' "$out" | sed -n 's/^BARK: //p' | tail -1)
+  if [[ -z "$line" ]]; then
+    log "盤前判讀回驗：沒有新結果"
+    return 0
+  fi
+  branch=$(git branch --show-current)
+  if [[ "$branch" != "develop" ]]; then
+    push="未 commit（主 checkout 在 ${branch:-detached HEAD}）"
+  elif ! { git add -- "$OUTCOMES_FILE" \
+      && git commit -q -m "journal: morning call outcomes $(date +%F)" -- "$OUTCOMES_FILE"; } >>"$LOG" 2>&1; then
+    push="commit 失敗"
+  else
+    push=$(bash scripts/media_picks_job.sh --push-journal 2>>"$LOG" | tail -1)
+  fi
+  log "盤前判讀回驗：${push}"
+  notify_failure "${line}（journal：${push}）" "盤前判讀回驗 $(date +%F)" || true
+}
+
 main() {
   set -uo pipefail
 
@@ -325,6 +357,8 @@ main() {
   log "daily report start (log: $LOG)"
   run_step "台股資料更新 (market_data daily)" uv run --env-file .env python -m market_data.cli daily
   run_step "台股資料健檢 (health --strict)" uv run --env-file .env python -m market_data.cli health --strict
+  log "==> 盤前判讀回驗 (verify_morning_calls --append)"
+  morning_call_outcomes
   run_step "LLM 連線預檢" llm_preflight
   # 外層疊 Doppler `finmind` 專案：注入 FINMIND_TOKEN_*，台股個股新聞先查 FinMind。
   run_step "自選股分析 + 大盤復盤" doppler run -p finmind -c dev -- "${DOPPLER_RUN[@]}" bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py'

@@ -90,6 +90,13 @@ doppler run -p shioaji -c dev -- uv run --env-file .env python scripts/kr_tw_mem
 
 **開盤預期缺口 = 台指期夜盤收盤 ÷ 前一交易日加權指數收盤 − 1**，所有價位照這個比例修正。
 
+算完先看 `make morning` 的「近期判讀校正」段（`scripts/verify_morning_calls.py --brief`，讀 18:00 寫的回驗結果）：
+它印出過去預估對實際的偏差與縮放比。**只有印出「已有統計支持」才乘上縮放比**並在 `reason` 註明；
+inconclusive 時只當提醒（例如近期偏高估就不要把缺口講滿），`gap_expected` 照公式寫。
+比對實際值看 09:05 指數或台指期開盤，**不要看官方開盤**：09:00 那筆把還沒成交的個股以昨收計，天生偏向 0。
+**夜盤收盤（05:00）之前的預估不算數**：2026-10-26 21:25 先估開低 −0.5%～−1.5%，當晚美股費半 +2.82%，
+實際開高 +0.37%；07:30 用夜盤收盤算的 +0.3% 才對。
+
 ### 每個族群配自己的代理
 
 **費半是邏輯／代工／IC 設計的代理，對記憶體無效。** `make morning` 的輸出已按市場分三組
@@ -186,21 +193,19 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
  "exclude_from_scoring":false,"decided_at":"2026-07-30T07:10+08:00"}
 ```
 
-**這份判讀目前沒有回驗程式**（`make verify-decisions` 只讀 `swing-decisions.jsonl`），所以欄位都選事後
-能驗對錯的觀測值：
+每個交易日 18:00 由 `scripts/verify_morning_calls.py --append` 回驗（`make verify-morning` 手動看），結果寫進
+`journal/morning-calls-outcomes.jsonl`，所以欄位都選事後能驗對錯的觀測值：
 
 - `regime`：拿當日收盤的 breadth 與 VIX 對定義驗。
 - `foreign_fut_oi`／`foreign_fut_oi_chg`／`pc_oi_ratio`（選填，2026-10-20 起）：**不要手抄或換算**，跑
   `uv run python scripts/taifex_positions.py --json`（`make taifex` 的同一支腳本加 `--json`），把輸出的這三個欄位原樣複製，
   例如 `"foreign_fut_oi":-89748,"foreign_fut_oi_chg":1397,"pc_oi_ratio":0.6617`（`pc_oi_ratio` 已是小數）。
   不可用或沒有日變化時那一欄已是 `null`，原因在輸出的 `reasons`，可抄進 `reason`。語意見 `journal/README.md`。
-- `gap_expected`：**不能用 `market.market_index` 驗**，那張表沒有開盤價。要對 TWSE 官方的
-  「發行量加權股價指數歷史資料」`https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST?date=YYYYMM01&response=json`
-  （一次回一整月的開／高／低／收），算當日開盤 ÷ 前一交易日收盤 − 1。實測 2026-07-31 開盤 41,610.41，
-  與日誌記載的數字一致。
+- `gap_expected`：回驗同時量官方開盤（`MI_5MINS_HIST`，偏向 0）、09:05 指數（`MI_5MINS_INDEX`）與台指期日盤開盤
+  ÷ 前一日結算價，另記「夜盤收盤 ÷ 前一日現貨收盤」來分開輸入錯誤與公式誤差；語意見 `journal/README.md`。
 
 休市日（臨時休市清單／非交易日）那天寫下的判讀不計分，回驗讀取端要排除並印出排除筆數（見 `journal/README.md`；`swing-decisions.jsonl` 已內建）。
-累積到 20 筆**可計分**的判讀再寫回驗程式。在那之前，**不要聲稱 regime 判讀有經驗證的優勢**。
+可計分樣本不到 20 筆、或偏差區間跨零時，回驗一律印 inconclusive；在那之前**不要聲稱 regime 判讀有經驗證的優勢**。
 
 **每一行都要明寫 `exclude_from_scoring`**（`true` 或 `false`），不能省略：欄位缺席時沒辦法分辨
 「可計分」還是「忘了標」，2026-08-04 那筆就是這樣。只要判讀寫進版控之前結果已經出來，就填 `true`，

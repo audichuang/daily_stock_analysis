@@ -81,6 +81,8 @@ verify_*.py
 !scripts/verify_swing_decisions.py
 # 例外：媒體點名的常駐回驗（make verify-media-picks），同上
 !scripts/verify_media_picks.py
+# 例外：盤前判讀的常駐回驗（18:00 daily_report.sh 與 make verify-morning），同上
+!scripts/verify_morning_calls.py
 
 # CodeGraph 索引:每台機器自己建（`codegraph init`），內容全是本機產物。
 # 上面的 `*.db` 已擋掉 codegraph.db，但 codegraph 自己放的 `.codegraph/.gitignore`
