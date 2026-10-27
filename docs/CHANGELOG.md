@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 多 agent 風控把買入下調成觀望時，存檔裡巢狀的 `dashboard.action`／`dashboard.decision_type`（模型有給才改）同步成風控後的值；原本同步寫在 `payload["dashboard"]` 後又被未同步的 dashboard 區塊蓋回，巢狀仍是 `buy`（頂層動作原本就正確）
 - [修复] 市場階段護欄把盤後復盤口吻改寫成觀望時同步寫入 `decision_score_calibration.guardrail_reason`；原本三態降為 `hold` 後跳過了買入區矛盾護欄、沒有護欄原因，分數 68 的賣出決策在顯示與 DecisionSignal 被分數對齊升成 buy（分數 30 則降成 reduce）
 - [修复] sell 決策落在買入區分數時，矛盾護欄改先沿用模型的結構化 `action`（如 `reduce`），是買入類或缺漏才看單一非買入標籤；原本模型只給 `action=reduce`、沒給建議時會被解析器預設的「持有」蓋成 hold
 - [修复] 盤中報告含盤後復盤口吻、被市場階段護欄改寫成「等待盤中確認」並給觀望時，三態 `decision_type` 同步降為 `hold`；原本 buy／sell 決策會在最終刷新時因觀望與三態對不上被清成未知，動作鏈失效、DecisionSignal 不寫入

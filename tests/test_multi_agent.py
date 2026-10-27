@@ -2714,6 +2714,68 @@ class TestRiskOverride(unittest.TestCase):
         self.assertEqual(dashboard["decision_type"], "buy")
         self.assertIsNone(ctx.get_data("risk_override_applied"))
 
+    def _veto_ctx(self, dashboard, *, override=True):
+        from src.agent.orchestrator import AgentOrchestrator
+
+        orch = AgentOrchestrator(
+            tool_registry=MagicMock(),
+            llm_adapter=MagicMock(),
+            config=SimpleNamespace(agent_risk_override=override),
+        )
+        ctx = AgentContext(query="test", stock_code="600519")
+        ctx.set_data("final_dashboard", dashboard)
+        ctx.add_opinion(AgentOpinion(agent_name="decision", signal="buy", confidence=0.8, reasoning="原始结论"))
+        ctx.add_opinion(AgentOpinion(
+            agent_name="risk",
+            signal="strong_sell",
+            confidence=0.9,
+            raw_data={"veto_buy": True, "reasoning": "存在重大减持风险"},
+        ))
+        ctx.add_risk_flag("insider", "大股东减持", severity="high")
+        return orch, ctx
+
+    def test_risk_override_syncs_nested_dashboard_action(self):
+        # 風控把 buy 改成觀望後，存檔裡巢狀的 dashboard.action／decision_type 也要跟著改。
+        dashboard = self._make_dashboard()
+        dashboard["action"] = "buy"
+        dashboard["dashboard"]["action"] = "buy"
+        dashboard["dashboard"]["decision_type"] = "buy"
+        orch, ctx = self._veto_ctx(dashboard)
+
+        result = orch._resolve_dashboard_payload(ctx, dashboard, None)
+
+        self.assertEqual(result["decision_type"], "hold")
+        self.assertEqual(result["action"], "watch")
+        self.assertEqual(result["dashboard"]["action"], "watch")
+        self.assertEqual(result["dashboard"]["decision_type"], "hold")
+        # 決策 agent 的 raw_data 就是存檔 payload，也要是同步後的版本
+        self.assertEqual(ctx.opinions[0].raw_data["dashboard"]["action"], "watch")
+
+    def test_risk_override_does_not_add_missing_nested_action_keys(self):
+        dashboard = self._make_dashboard()
+        dashboard["action"] = "buy"
+        orch, ctx = self._veto_ctx(dashboard)
+
+        result = orch._resolve_dashboard_payload(ctx, dashboard, None)
+
+        self.assertEqual(result["action"], "watch")
+        self.assertNotIn("action", result["dashboard"])
+        self.assertNotIn("decision_type", result["dashboard"])
+
+    def test_nested_dashboard_action_untouched_without_risk_override(self):
+        dashboard = self._make_dashboard()
+        dashboard["action"] = "buy"
+        dashboard["dashboard"]["action"] = "buy"
+        # 沒有風控接管時巢狀欄位保留 LLM 原值（含未正規化的 strong_buy），不被改寫
+        dashboard["dashboard"]["decision_type"] = "strong_buy"
+        orch, ctx = self._veto_ctx(dashboard, override=False)
+
+        result = orch._resolve_dashboard_payload(ctx, dashboard, None)
+
+        self.assertEqual(result["action"], "buy")
+        self.assertEqual(result["dashboard"]["action"], "buy")
+        self.assertEqual(result["dashboard"]["decision_type"], "strong_buy")
+
     def test_risk_level_high_alone_does_not_override_buy_signal(self):
         from src.agent.orchestrator import AgentOrchestrator
 
