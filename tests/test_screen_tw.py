@@ -333,6 +333,19 @@ def test_every_revenue_loader_defaults_to_listed_only(loader, tmp_path, monkeypa
     assert set(_run_loader(loader, monkeypatch, True)["stock_id"]) == {"1101", "6488"}
 
 
+def test_measured_base_rate_is_wholly_the_2026_10_26_rebaseline():
+    # 整組錨點要同一次重測的數字，不能只改 p_close60_up_30pct 留下新舊混合
+    pool = pd.DataFrame(columns=["stock_id", "industry"])
+    m = screen_tw.to_json(pd.Timestamp("2026-08-03"), pool, {}, 0.0, "breakout", 5)["measured_base_rate"]
+    assert m["win_rate"] == 0.516
+    assert m["breakeven_win_rate"] == 0.313
+    assert m["mean_60d_net_of_cost"] == 0.1007
+    assert m["median_60d_net_of_cost"] == 0.0113
+    assert m["mean_ci95_block_bootstrap"] == [0.0322, 0.1693]
+    assert m["mean_excl_28_events_over_100pct"] == 0.0584
+    assert m["p_close60_down_20pct"] == 0.149
+
+
 def test_json_withholds_the_listed_base_rate_when_otc_revenue_is_included():
     pool = pd.DataFrame(columns=["stock_id", "industry"])
     listed = screen_tw.to_json(pd.Timestamp("2026-08-03"), pool, {}, 0.0, "breakout", 5)
