@@ -3306,3 +3306,34 @@ def test_claude_code_cli_without_model_usage_has_no_cli_model(tmp_path: Path) ->
     result = backend.generate("prompt", {})
 
     assert "cli_model" not in result.usage
+
+
+def test_claude_model_usage_is_carried_to_usage_cli_model_without_changing_model(tmp_path: Path) -> None:
+    """envelope 的 modelUsage 鍵 → GenerationResult.usage["cli_model"]；GenerationResult.model 仍是 preset id。"""
+    payload = {
+        "type": "result", "subtype": "success", "result": '{"sentiment_score": 90}',
+        "modelUsage": {"claude-fable-5-1": {"inputTokens": 1}},
+    }
+    script = _script(tmp_path, f"print({json.dumps(payload)!r})\n")
+    preset = LocalCliPreset(
+        "claude_code_cli", sys.executable, (script,), "Mock Claude Code CLI",
+        extractor=CLAUDE_CODE_CLI_PRESET.extractor,
+    )
+    backend = LocalCliGenerationBackend(_config(generation_backend="claude_code_cli"), preset=preset)
+
+    result = backend.generate("prompt", {})
+
+    assert result.usage["cli_model"] == "claude-fable-5-1"
+    assert result.model == "claude_code_cli"
+
+
+def test_claude_without_model_usage_has_no_cli_model(tmp_path: Path) -> None:
+    payload = {"type": "result", "subtype": "success", "result": '{"sentiment_score": 90}'}
+    script = _script(tmp_path, f"print({json.dumps(payload)!r})\n")
+    preset = LocalCliPreset(
+        "claude_code_cli", sys.executable, (script,), "Mock Claude Code CLI",
+        extractor=CLAUDE_CODE_CLI_PRESET.extractor,
+    )
+    backend = LocalCliGenerationBackend(_config(generation_backend="claude_code_cli"), preset=preset)
+
+    assert "cli_model" not in backend.generate("prompt", {}).usage

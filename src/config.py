@@ -1122,6 +1122,8 @@ class Config:
     tw_ma_alignment_weighted: bool = False
     # 開啟上項時有多少比例的台股報告分到加權組（依代號＋台北日期雜湊），其餘標 tw-ma-control 當同期對照；1＝全部套用
     tw_ma_alignment_ab_ratio: float = 1.0
+    # 台股個股 prompt 追加「總經背景」資訊區塊的 A/B 比例（依 salt＋代號＋台北日期雜湊，與均線實驗分組不相關）；0＝關閉、不寫任何實驗標籤
+    tw_macro_context_ab_ratio: float = 0.0
     # 台股個股 prompt 接處置／注意股與法說、除權息即時名單（官方端點，每個基準日只抓一次、fail-open）
     tw_live_events_enabled: bool = True
     # 盯盤看板「建立價位警報」（SMC 支撐／壓力 -> price_cross 規則，寫正式應用庫）；設計見 docs/tw-level-alerts.md，預設關
@@ -2087,6 +2089,9 @@ class Config:
             tw_ma_alignment_weighted=parse_env_bool(os.getenv('TW_MA_ALIGNMENT_WEIGHTED'), default=False),
             tw_ma_alignment_ab_ratio=parse_env_float(
                 os.getenv('TW_MA_ALIGNMENT_AB_RATIO'), 1.0, field_name='TW_MA_ALIGNMENT_AB_RATIO',
+                minimum=0.0, maximum=1.0),
+            tw_macro_context_ab_ratio=parse_env_float(
+                os.getenv('TW_MACRO_CONTEXT_AB_RATIO'), 0.0, field_name='TW_MACRO_CONTEXT_AB_RATIO',
                 minimum=0.0, maximum=1.0),
             tw_live_events_enabled=parse_env_bool(os.getenv('TW_LIVE_EVENTS_ENABLED'), default=True),
             tw_level_alerts_enabled=parse_env_bool(os.getenv('TW_LEVEL_ALERTS_ENABLED'), default=False),

@@ -39,6 +39,7 @@ cd $WT && git merge upstream/main --no-ff --no-edit -m "chore: merge upstream ma
 - fork 沒有立場的段落（推廣連結、贊助、上游專屬文件）取上游
 - **fork 刻意分歧（衝突時保留 fork、上游再改也別收回來）**：
   - `claude_code_cli` 的模型選擇鍵 `CLAUDE_CODE_CLI_MODEL`（`src/config.py`、`config_registry.py`、`local_cli_backend.py` 在 `--output-format` 前插入 `--model`，`usage["cli_model"]` 取自 envelope `modelUsage`）是 fork 新增；上游若改 claude preset 的 argv 或 `_replace_runtime_placeholders`，合併時保留這條分支，留空必須完全不帶 `--model`
+  - 台股固定預測題與版本落庫（T-report）：`analyzer.py` 的 `_tw_forecast_question`／`_parse_forecast_probability`／`_ab_treated`／`_tw_macro_ab_treated`、`AnalysisResult` 的 `prompt_hash`／`input_snapshot_hash`／`model_version`／`p_5d_beat_0050`／`llm_attempts` 欄位、`analyze()` 迴圈裡的 `llm_attempts` 記錄與 `macro_ctx` 標籤、`_format_prompt` 在 `format_regime_block` 之後的總經區塊與結尾的固定題；`storage.py` 的 `AnalysisHistory` 五個可空欄位、`_ensure_analysis_history_forecast_columns`、`save_analysis_history` 的寫入；`config.py` 的 `tw_macro_context_ab_ratio`。`_tw_ma_ab_treated` 的雜湊字串 `"{code}|{day}"` 不可改（進行中的均線實驗會換組）。上游若動這幾處，保留 fork 並確認 `tests/test_tw_macro_context_prompt.py` 仍綠
   - 買賣判讀只讀 LLM 的結構化 `decision_type`／`action`，不從建議句子猜意圖：`report_language.infer_decision_type_from_advice` 只做完整標籤比對（上游 #1289 的子字串／否定掃描已刪），`analyzer.stabilize_decision_with_structure`（含三大法人校準）與 `daily_market_context_guardrail` 都不讀 `operation_advice` 句子；上游若新增呼叫端或把掃描加回來，改成結構化值（`decision_type_for_action`）
 - `docs/CHANGELOG.md`：上游條目進它自己的段，fork 的 `[Unreleased]` 條目全數留在原段
 - 拿不準的塊：選對 fork 現有行為影響最小的解法，在同步紀錄的「衝突裁決」表標 **⚠ 需人工確認**，Bark 裡也點名

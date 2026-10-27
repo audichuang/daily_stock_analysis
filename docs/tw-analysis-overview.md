@@ -91,6 +91,7 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
 | `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE` | `true` | 未設（`true`） | `false`＝台股資金流改看三大法人、`not_supported` 不降級 | 等影子數據 2～3 個月 |
 | `TW_MA_ALIGNMENT_WEIGHTED` | `false` | `true` | 台股多頭排列改加分項 | 可開，但同時設 `TW_MA_ALIGNMENT_AB_RATIO=0.5`：一半標 `tw-ma-weighted`、一半標 `tw-ma-control` 當同期對照；只開這項（比例預設 1）就沒有對照組 |
 | `TW_MA_ALIGNMENT_AB_RATIO` | `1` | `0.5` | 上項的加權組比例 | 實驗期間 `0.5` |
+| `TW_MACRO_CONTEXT_AB_RATIO` | `0` | 未設（`0`） | 台股 prompt 追加「總經背景」資訊區塊（`market.macro_series` 日線，固定句「只當資訊，不得據此調整分數或動作；未經回測」）的比例；分組與均線實驗不相關，標 `dashboard.experiments.macro_ctx=on/off` | 先設 `0.5` 跑同期對照，用 `shadow_buy_eval.py --forecast` 看 Brier 有沒有差；`0` 時不寫任何標籤 |
 | `ANALYST_CONSENSUS_ENABLED` | `false` | `true` | 賣方共識資訊區塊 | 可開 |
 | `TW_LIVE_EVENTS_ENABLED` | `true` | 未設（`true`） | 處置／注意與事件日曆 | 保持開 |
 | `TW_BROKER_INDEX_TARGETS` | 空 | 未設 | 人工維護一行券商年底指數目標，30 天未更新就不顯示 | 選用 |
