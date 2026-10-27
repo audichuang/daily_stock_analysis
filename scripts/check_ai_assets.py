@@ -47,13 +47,14 @@ def ensure_file_exists(path: Path, description: str) -> None:
 def ensure_claude_import() -> None:
     ensure_file_exists(AGENTS, "canonical AGENTS.md")
     result = subprocess.run(
-        ["git", "ls-files", "--", "CLAUDE.md", "**/CLAUDE.md"],
+        ["git", "ls-files", "-z", "--", "CLAUDE.md", "**/CLAUDE.md"],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=True,
     )
-    tracked = sorted({line.strip() for line in result.stdout.splitlines() if line.strip()})
+    # -z：NUL 分隔、不做 C quoting，非 ASCII 或含空白的路徑原樣保留
+    tracked = sorted({p for p in result.stdout.split("\0") if p})
     if "CLAUDE.md" not in tracked:
         fail("CLAUDE.md is missing")
     for rel in tracked:
