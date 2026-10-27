@@ -24,7 +24,10 @@
 | `date` | **訊號日**（候選 JSON 的 `as_of`），決定回驗的持有窗口起點 |
 | `decided_at` | 你**實際做完判斷**的時點（帶時區）。進場日取「`date` 與它兩者較晚者」的次一交易日 |
 | `verdict` | `enter` / `pass`，只有這兩種 |
-| `confidence` | 「進場後**第 60 個交易日收盤**淨報酬 ≥ +30%」的主觀機率。池子基準率 **20.2%** |
+| `confidence` | 「進場後**第 60 個交易日收盤**淨報酬 ≥ +30%」的主觀機率。池子基準率 **20.4%**（2026-10-26 重測，舊 20.2% 作廢） |
+| `model_confidence_raw` | 2026-10-27 起。模型照錨點與研究結論寫下的**原始機率**，事後不調。`confidence` 是最終採用值，沒覆寫時兩者相同 |
+| `override` | 2026-10-27 起。`true`＝人工改了原判（`confidence` 與 `model_confidence_raw` 不同，或 `verdict` 被改）；沒改就 `false` |
+| `override_reason` | 2026-10-27 起。`override` 為 `true` 時的一句理由；否則 `null` |
 | `exp_upside` / `exp_downside` | 命中／沒命中時的**條件均值**報酬。`exp_downside` 填負數 |
 | `entry_range` | 建議進場區間。開盤跳空高於上界 → 回驗判定**未成交**，不計入統計 |
 | `invalidation_legs` | 把 `invalidation` 拆成逐腿的陣列，每腿 `{"leg", "source", "true_at_write"}`。`source` 寫**去哪裡查得到**（DB 欄位如 `market.price.close`，或具名的外部來源如「SCFI 週報」）；`true_at_write` 是寫入當下這腿**是否已經成立**。規則與理由見 skill `tw-swing-research` Step 4 |
@@ -34,6 +37,11 @@
 | `theme` | 主題（貨櫃運價、AI 伺服器…）。同主題第二檔起要降部位 |
 | `sources` | 每個具名事實的來源連結 |
 
+**前瞻封存期**：2026-10-27 起寫入的 `swing-decisions.jsonl` 決策視為前瞻封存，**不得拿來回頭調整突破池門檻**
+（門檻與 20.4% 錨點都在同一段歷史上定的，含 2026 年已到期事件，屬樣本內）。到期 ≥20 筆後，用
+`model_confidence_raw` 對 `confidence` 做原判與覆寫的配對 Brier 比較；第一批 h60 約 2027 年 1 月到期。
+2026-10-27 之前的列沒有這三個欄位；`verify_swing_decisions.py` 目前不讀它們，之後做原判對覆寫的比較時，缺欄位的舊列視為「原判＝最終、未覆寫」。
+
 期望報酬（`pass` 的第三個條件）：
 
 ```
@@ -41,6 +49,22 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
 ```
 
 ## 檔案
+
+- `experiment-registry.jsonl` — **實驗登記表**（2026-10-27 起，append-only，進版控）。每個確認性或探索性實驗在**看到結果之前**先登記一行；
+  改規格、改 prompt 或改 skill 版本就**另追加一行新的 `trial_id`**（同 `family_id`），不改舊行，狀態變化也用追加（同 `trial_id` 後一行為準）。
+  試過幾種規格要全部揭露，多重比較才算得出來。
+
+  | 欄位 | 意思 |
+  | --- | --- |
+  | `family_id` | 同一組假說／同一條 pipeline（例：`macro-ladder`），多重比較校正以 family 為單位 |
+  | `trial_id` | 這一次具體規格的唯一 ID；改規格就換新的 |
+  | `hypothesis` | 要檢定的假說，一句話，事前寫定 |
+  | `primary_metric` | 主指標與判準（含 CI 與門檻），事前寫定；其餘指標一律探索性 |
+  | `formal_n` | 正式樣本數；pilot 還沒估出 σ_d 之前是 `null` |
+  | `status` | `preregistered`（確認性，已預登記）／`exploratory`（探索性）／`running`／`concluded`／`abandoned` |
+  | `prompt_or_skill_version` | 受測的 prompt 或 skill 版本（skill 用 `SKILL.md` 的 git blob sha 當代理）；尚未上線是 `null` |
+  | `registered_at` | 登記日（`YYYY-MM-DD`） |
+  | `notes` | 出處（`.claude/reviews/` 不進版控，這裡寫決策項編號與預期）、先驗、旗標與限制 |
 
 - `swing-decisions.jsonl` — 正式日誌，回驗只讀這個
 - `swing-decisions-v0-superseded.jsonl` — 2026-07-26 那一輪，在 skill 修正前做的（期望值公式
@@ -93,7 +117,7 @@ make verify-morning     # 盤前判讀回驗：預估缺口 vs 實際、regime �
 ```
 E[R|enter] − E[R|全收]        選出來的比全收好多少
 E[R|pass]                     放棄掉的後來漲了多少（機會成本）
-Brier(conf) vs Brier(20.2%)   confidence 有沒有比「一律報基準率」更準
+Brier(conf) vs Brier(20.4%)   confidence 有沒有比「一律報基準率」更準
 可成交口徑                    同 5 個空位下「全收 vs 只收 enter」兩本帳
 ```
 

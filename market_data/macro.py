@@ -42,7 +42,7 @@ SERIES = (
     Series("^GSPC", "標普500", "us", "index", True, "同上"),
     Series("^IXIC", "那斯達克", "us", "index", True, "科技股整體"),
     Series("^SOX", "費城半導體", "us", "index", True, "台股是半導體權重市場，解釋力高於大盤三兄弟"),
-    Series("TSM", "台積電ADR", "us", "index", True, "折算台積電開盤；它一檔佔加權指數約三成"),
+    Series("TSM", "台積電ADR", "us", "index", True, "折算台積電開盤；它一檔佔加權指數的比重以期交所當期權重為準（2026-09 約 41%）"),
     Series("MU", "美光", "us", "index", True,
            "**記憶體的隔夜代理**：台灣記憶體對它 t−1 相關 0.364，對費半同日只 0.123"),
     Series("000660.KS", "SK海力士", "kr", "index", True, "記憶體的同日代理，r=0.554（籃子 0.577）"),
