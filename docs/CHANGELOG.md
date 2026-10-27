@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [文档] 探索性回測：五日產業相對輸家反轉（每週換手、對 0050 成對超額 −1.12%／期，區間整段為負）不支持；跌破 25MA 出場＋sustain 3（Sharpe 1.13、回撤 −55.6%，點估計輸 0050 也沒贏固定 60 日，但對 0050 超額區間跨零）inconclusive，見 `docs/research/2026-10-28-explore-reversal-ma25.md`；新增 `scripts/research_explore_queue.py`（`reversal`／`ma-exit`，唯讀以連線參數 `default_transaction_read_only=on` 設定；判定先看超額區間，跨零一律 inconclusive；到期日停牌、之後復牌的選股改用其後第一個收盤結算，不再剔除）與 `portfolio_walkforward.py --exit-ma/--exit-sustain/--no-time-cap` 研究旗標（預設關、預設結果逐位不變），實驗登記表追加結果列
 - [新功能] 台股報告追加固定預測題 `p_5d_beat_0050`（T+1 開盤進、第 5 個交易日收盤出，扣成本後淨報酬高於同視窗 0050 的機率）：prompt 尾端追加一段題目，解析嚴格（只收 [0,1] 有限數，缺值／`"73%"`／NaN／超界為 `None`，不預設 0.5、不進完整性檢查），寫進 `AnalysisResult.p_5d_beat_0050` 與 `dashboard.forecast`。**所有台股報告的 prompt 自上線日起改變（含進行中的均線 A/B），前後比較請依 `created_at` 切開**；實驗登記：`journal/experiment-registry.jsonl` 尚未存在，待第一波另一張票新增後補登記（未登記）
 - [新功能] `dsa.analysis_history` 追加可空欄位 `prompt_hash`、`input_snapshot_hash`、`model_version`、`p_5d_beat_0050`、`llm_attempts`（完整性重試每一輪原文），啟動時走既有補欄機制 `ADD COLUMN IF NOT EXISTS`（只追加、可空，新舊程式可共存；本機與 NAS 新程式第一次啟動即改正式應用庫 schema）；`model_version` 取 CLI 回報的 `usage["cli_model"]`，否則 `model_used`
 - [新功能] 新增 `TW_MACRO_CONTEXT_AB_RATIO`（0~1，預設 0＝關）：台股＋中文報告依 `macro-ctx|代號|台北日期` 雜湊（與均線實驗分組不相關）在 prompt 追加「總經背景」資訊區塊（新 `src/services/tw_macro_context.py` 讀 `market.macro_series` 日線，fail-open；固定句「只當資訊，不得據此調整分數或動作；未經回測」），不經 `daily_market_context`；標籤 `dashboard.experiments.macro_ctx=on/off`，比例為 0 時不寫任何標籤
