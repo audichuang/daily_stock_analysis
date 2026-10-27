@@ -534,3 +534,92 @@ def test_fill_first_releases_does_not_overwrite_a_value_written_concurrently(pg_
     macro.fill_first_releases(_ConnEngine(pg_conn), now=now, fetch=racing_fetch, out=lambda *_: None)
     assert pg_conn.execute(text(
         "SELECT actual_value::float FROM market.event_calendar WHERE label = '1900-11-06'")).scalar() == 111.0
+
+
+def test_store_events_fred_reschedule_never_deletes_backup_source_rows(pg_conn):
+    """FRED 當年清單只剩過去日期、備援（BEA）又抓不到時，既有的 bea 未來事件不能被改期刪除誤刪。"""
+    today = D(2099, 11, 20)
+
+    def t(m, d):
+        return datetime.datetime(2099, m, d, 13, 30, tzinfo=datetime.timezone.utc)
+
+    macro.store_events(pg_conn, [_release("pce", "2099-09-26", t(9, 26), "FRED:PCEPI"),
+                                 _release("pce", "2099-10-30", t(10, 30), "FRED:PCEPI"),
+                                 _release("pce", "2099-11-25", t(11, 25), "FRED:PCEPI", source="bea")], today)
+    macro.store_events(pg_conn, [_release("pce", "2099-09-26", t(9, 26), "FRED:PCEPI"),
+                                 _release("pce", "2099-10-30", t(10, 30), "FRED:PCEPI")], today)
+    labels = [r[0] for r in pg_conn.execute(text(
+        "SELECT label FROM market.event_calendar WHERE event_type = 'pce' AND symbol = 'US' "
+        "AND label LIKE '2099-%' ORDER BY label"))]
+    assert labels == ["2099-09-26", "2099-10-30", "2099-11-25"]
+
+
+def test_store_events_fred_reschedule_still_deletes_stale_fred_rows(pg_conn):
+    """反向守門：限 source=fred 不能讓真正的 FRED 改期殘留幽靈列。"""
+    today = D(2099, 3, 1)
+
+    def t(m, d):
+        return datetime.datetime(2099, m, d, 13, 30, tzinfo=datetime.timezone.utc)
+
+    macro.store_events(pg_conn, [_release("cpi", "2099-03-10", t(3, 10), "FRED:CPIAUCSL")], today)
+    macro.store_events(pg_conn, [_release("cpi", "2099-03-12", t(3, 12), "FRED:CPIAUCSL")], today)
+    labels = [r[0] for r in pg_conn.execute(text(
+        "SELECT label FROM market.event_calendar WHERE event_type = 'cpi' AND label LIKE '2099-%'"))]
+    assert labels == ["2099-03-12"]
+
+
+def test_fill_first_releases_picks_newest_first_when_over_the_cap(pg_conn, monkeypatch):
+    monkeypatch.setattr(macro, "FIRST_RELEASE_PER_RUN", 1)
+    old = datetime.datetime(1900, 11, 6, 13, 30, tzinfo=datetime.timezone.utc)
+    new = datetime.datetime(1900, 12, 4, 13, 30, tzinfo=datetime.timezone.utc)
+    macro.store_events(pg_conn, [_release("nfp", "1900-11-06", old), _release("nfp", "1900-12-04", new)],
+                       D(1900, 11, 1))
+    calls = []
+
+    def fetch(code, day):
+        calls.append(day)
+        return None
+
+    now = datetime.datetime(1900, 12, 5, tzinfo=datetime.timezone.utc)
+    macro.fill_first_releases(_ConnEngine(pg_conn), now=now, fetch=fetch, out=lambda *_: None)
+    assert calls == [D(1900, 12, 4)]
+
+
+def test_cbc_events_are_1600_taipei():
+    row = macro.cbc_events(meetings=[D(2099, 12, 17)])[0]
+    assert row["released_at"].utcoffset() == datetime.timedelta(hours=8)
+    assert (row["released_at"].hour, row["released_at"].minute) == (16, 0)
+    assert row["released_at"].astimezone(datetime.timezone.utc).hour == 8
+
+
+def test_update_collects_release_events_and_fills_first_releases(monkeypatch):
+    """update() 要把行事曆收集結果交給 store_events，並在入庫後呼叫首發值補值。"""
+    seen = {}
+    monkeypatch.setattr(macro, "fetch_series", lambda **k: ([], []))
+    monkeypatch.setattr(macro, "store_series", lambda conn, rows: 0)
+    monkeypatch.setattr(macro, "watchlist", lambda: [])
+    monkeypatch.setattr(macro, "http_get", lambda url, **k: (_ for _ in ()).throw(ConnectionError("down")))
+    sentinel = {"event_type": "cbc", "symbol": "TW", "label": "x", "event_date": D(2099, 12, 17)}
+    monkeypatch.setattr(macro, "collect_release_events", lambda today, now=None, out=print: [sentinel])
+
+    def store(conn, rows, today):
+        seen["stored"] = rows
+        seen.setdefault("order", []).append("store")
+        return len(rows)
+
+    monkeypatch.setattr(macro, "store_events", store)
+    monkeypatch.setattr(macro, "fill_first_releases",
+                        lambda engine, **k: seen.setdefault("order", []).append("fill") or 7)
+
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class _Eng:
+        def begin(self): return _Conn()
+
+    lines = []
+    macro.update(_Eng(), out=lines.append)
+    assert sentinel in seen["stored"]
+    assert seen["order"] == ["store", "fill"]
+    assert any("首發值補 7 筆" in line for line in lines)

@@ -74,7 +74,7 @@ UNTIL = datetime(2099, 1, 5, 13, 30, tzinfo=TPE)
 
 def _ev(name, at, **kw):
     base = dict(title=name, released_at=at, actual_value=None, prior_value=None, observation_date=None,
-                actual_vintage=None, status="confirmed", source="fred")
+                actual_vintage=None, status="confirmed", source="fred", series_id="FRED:X", time_note=None)
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -100,7 +100,7 @@ def test_monday_morning_sees_fridays_nfp_but_not_thursdays_claims():
     published, upcoming = split_events([_ev("nfp", nfp), _ev("claims", claims), _ev("cpi", cpi_tonight)],
                                        NOW, CUTOFF, UNTIL)
     assert _names(published) == ["nfp"]
-    assert _names(upcoming) == [], "今晚的數據在次一場次 13:30 之後，不屬於『今日待公布』"
+    assert _names(upcoming) == [], "手填的 UNTIL 是今天 13:30：今晚的數據在它之後（實際窗口見 print_release_columns 的測試）"
 
 
 def test_format_published_shows_first_release_prior_vintage_and_no_consensus():
@@ -137,3 +137,70 @@ def test_print_series_skips_weekly_series_in_the_daily_table():
     text_ = "\n".join(lines)
     assert "標普500" in text_ and "初領失業金" not in text_
     assert "FRED:ICSA" not in text_, "週頻序列有資料就不該被列進『DB 沒有這些序列』"
+
+
+# ---------- print_release_columns 的實際窗口（接 health 場次）與央行／ISM 列 ----------
+
+import macro_brief  # noqa: E402
+from market_data import health  # noqa: E402
+
+
+class _FakeConn:
+    """依 SQL 參數 a < released_at <= b 過濾列，模擬 print_release_columns 的查詢。"""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.params = None
+
+    def execute(self, _sql, params):
+        self.params = params
+        hit = [r for r in self.rows if params["a"] < r.released_at <= params["b"]]
+        return SimpleNamespace(all=lambda: sorted(hit, key=lambda r: r.released_at))
+
+
+def _weekday(d):
+    return d.weekday() < 5
+
+
+def _columns(monkeypatch, rows, now):
+    monkeypatch.setattr(health, "session_before", lambda day, is_session=None: health._walk_sessions(
+        day, -1, 1, 10, _weekday))
+    monkeypatch.setattr(health, "sessions_after", lambda day, n, is_session=None: health._walk_sessions(
+        day, 1, n, 10, _weekday))
+    lines = []
+    macro_brief.print_release_columns(_FakeConn(rows), now, out=lines.append)
+    return "\n".join(lines)
+
+
+def test_weekday_morning_lists_tonights_us_data_and_cbc_as_upcoming(monkeypatch):
+    # 2099-01-06 週二 07:30 台北：今晚 21:30 的 CPI、22:00 台北的 ISM、16:00 的央行都該在「今日待公布」
+    now = datetime(2099, 1, 6, 7, 30, tzinfo=TPE)
+    rows = [_ev("美國 CPI", datetime(2099, 1, 6, 21, 30, tzinfo=TPE)),
+            _ev("ISM", datetime(2099, 1, 6, 22, 0, tzinfo=TPE), status="estimated", source="rule"),
+            _ev("央行理監事會", datetime(2099, 1, 6, 16, 0, tzinfo=TPE), source="cbc"),
+            _ev("明晚數據", datetime(2099, 1, 7, 21, 30, tzinfo=TPE))]
+    text_ = _columns(monkeypatch, rows, now)
+    upcoming = text_.split("今日待公布", 1)[1]
+    assert "美國 CPI" in upcoming and "ISM" in upcoming and "央行理監事會" in upcoming
+    assert "明晚數據" not in upcoming
+    assert "2099-01-07 13:30" in upcoming
+
+
+def test_monday_morning_window_sees_fridays_nfp_and_tonights_cpi(monkeypatch):
+    rows = [_ev("週五NFP", datetime(2099, 1, 2, 21, 30, tzinfo=TPE)),
+            _ev("週五早盤前", datetime(2099, 1, 2, 9, 0, tzinfo=TPE)),
+            _ev("今晚CPI", datetime(2099, 1, 5, 21, 30, tzinfo=TPE))]
+    text_ = _columns(monkeypatch, rows, NOW)
+    published, upcoming = text_.split("今日待公布", 1)
+    assert "週五NFP" in published and "週五早盤前" not in published
+    assert "今晚CPI" in upcoming
+
+
+def test_cbc_row_shows_time_note_and_no_alfred_promise():
+    cbc = _ev("央行理監事會", datetime(2099, 1, 5, 16, 0, tzinfo=TPE), source="cbc",
+              time_note="會後記者會（台北下午，時間待確認）", series_id=None)
+    for line in (format_published(cbc), format_upcoming(cbc)):
+        assert "時間待確認" in line
+    assert "ALFRED" not in format_published(cbc) and "不適用" in format_published(cbc)
+    # 有 series_id 但 ALFRED 還沒收到：仍然是「下次 daily 補」
+    assert "下次 daily 補" in format_published(_ev("x", NOW, series_id="FRED:PAYEMS", time_note=None))

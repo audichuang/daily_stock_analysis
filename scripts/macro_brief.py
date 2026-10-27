@@ -190,7 +190,9 @@ def _when(released_at):
 
 def format_published(r):
     """一筆已公布事件的一行文字：名稱、時間、首發實際值、前值、vintage。**不寫高於／低於預期**——沒有 PIT 共識。"""
-    head = f"{r.title}　{_when(r.released_at)}"
+    head = f"{r.title}　{_when(r.released_at)}" + (f"（{r.time_note}）" if r.time_note else "")
+    if r.series_id is None:
+        return head + "　首發值不適用（無對應序列）"
     if r.actual_value is None:
         return head + "　首發值尚未入庫（ALFRED 還沒收到，下次 daily 補）　無共識"
     return (head + f"　首發 {_num(r.actual_value)}（參考期 {r.observation_date}）"
@@ -199,17 +201,21 @@ def format_published(r):
 
 
 def format_upcoming(r):
-    return f"{r.title}　{_when(r.released_at)}　[{r.status}/{r.source}]　部位暴露：（判讀者填）"
+    note = f"（{r.time_note}）" if r.time_note else ""
+    return f"{r.title}　{_when(r.released_at)}{note}　[{r.status}/{r.source}]　部位暴露：（判讀者填）"
 
 
 def print_release_columns(conn, now, out=print):
-    """「隔夜已公布」與「今日待公布」兩欄。分界是前一台股場次 13:30 台北到次一場次 13:30 台北。"""
+    """「隔夜已公布」與「今日待公布」兩欄。分界是前一台股場次 13:30 台北，到「今天之後的下一場次」13:30 台北。
+
+    上界取今天之後而不是今天本身：交易日早上算出來若是今天 13:30，今晚的美國數據、ISM、央行
+    （都在 13:30 之後）就永遠進不了「今日待公布」。"""
     from sqlalchemy import text
 
     from market_data import health
 
     today = now.astimezone(TAIPEI).date()
-    prev, nxt = health.session_before(today), health.sessions_after(today - datetime.timedelta(days=1), 1)
+    prev, nxt = health.session_before(today), health.sessions_after(today, 1)
     out("\n── 隔夜已公布（首發實際值與前值；只列事實，沒有 PIT 共識所以不寫高於／低於）──")
     if prev is None or nxt is None:
         out("交易日曆不可用，兩欄略過（見下方 14 天清單）")
@@ -218,7 +224,7 @@ def print_release_columns(conn, now, out=print):
     until = datetime.datetime.combine(nxt, SESSION_CLOSE, tzinfo=TAIPEI)
     rows = conn.execute(text(
         "SELECT event_type, symbol, title, status, source, released_at, actual_value, prior_value, "
-        "observation_date, actual_vintage FROM market.event_calendar "
+        "observation_date, actual_vintage, time_note, series_id FROM market.event_calendar "
         "WHERE released_at > :a AND released_at <= :b ORDER BY released_at"),
         {"a": cutoff, "b": until}).all()
     published, upcoming = split_events(rows, now, cutoff, until)
@@ -227,7 +233,7 @@ def print_release_columns(conn, now, out=print):
     if not published:
         out(f"沒有（{prev} 13:30 台北之後無已公布事件）")
     out("夜盤反應見『期交所籌碼』段（已反應的漲跌不是現在拿得到的報酬）")
-    out(f"\n── 今日待公布（到 {nxt} 13:30 台北為止）──")
+    out(f"\n── 今日待公布（到下一場次 {nxt} 13:30 台北為止；含今晚美國數據、ISM、央行）──")
     for r in upcoming:
         out(format_upcoming(r))
     if not upcoming:
