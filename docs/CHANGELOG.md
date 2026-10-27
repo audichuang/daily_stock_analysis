@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [文档] 新增總經模型階梯研究 `docs/research/2026-10-28-macro-ladder.md` 與唯讀腳本 `scripts/research_macro_ladder.py`：07:30 資訊集下加總經（10Y、2Y、DXY、台幣、Brent、HYG、VIX、ICSA）相對只看美股＋台指期夜盤沒有樣本外增量（確認性比較 inconclusive、交易 0050 扣成本為負），四條預登記事件規則全部 inconclusive；`docs/tw-analysis-overview.md` §4／§7 與實驗登記表同步
 - [新功能] 新增實驗登記表 `journal/experiment-registry.jsonl`（append-only、進版控，欄位見 `journal/README.md`），先登記盤前機率 pilot、總經模型階梯主比較（F 對 N、OC、756 日、2017-05 起）與四條事件規則、事件前延後進場、Fable 五臂、個股 5 日有無總經 A/B，以及五日產業反轉與 25MA 出場（探索性）
 - [改進] 波段日誌 `swing-decisions.jsonl` 新增 `model_confidence_raw`、`override`、`override_reason` 分欄（模型原判與人工覆寫分開），skill `tw-swing-research` Step 4 與 `journal/README.md` 同步，並明定 2026-10-27 起的決策為前瞻封存期、不得拿來回頭調突破池門檻
 - [修复] 回驗 `verify_swing_decisions.BASE_RATE` 與 `screen_tw` 的 `measured_base_rate.p_close60_up_30pct` 由作廢的 0.202 改為 2026-10-26 重測的 0.204，並加測試鎖住兩處一致；skill 錨點文字去掉「尚未跟改」
