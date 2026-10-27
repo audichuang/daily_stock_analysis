@@ -294,9 +294,10 @@ require_stock_success() {
 # 盤前判讀回驗（scripts/verify_morning_calls.py）：非致命，失敗只記 WARN 並推一則 Bark，不擋每日報告。
 # 只 commit outcomes 檔（預測檔 morning-calls.jsonl 由 07:30 排程另外 commit，兩者分開才有防竄改保證）；
 # push 走 media_picks_job.sh --push-journal 的守門：只在 develop、領先的 commit 全是 journal/ 才推。
+# 要不要 commit 看 outcomes 檔的 git 狀態、不看這輪有沒有新結果：上一輪 commit 失敗留下的列，這一輪要補 commit／push。
 OUTCOMES_FILE="journal/morning-calls-outcomes.jsonl"
 morning_call_outcomes() {
-  local out rc=0 line branch push
+  local out rc=0 line branch push="" pending
   out=$(run_with_timeout "${MORNING_VERIFY_TIMEOUT_SECONDS:-900}" \
     uv run --env-file .env python scripts/verify_morning_calls.py --append --bark 2>&1) || rc=$?
   printf '%s\n' "$out" >>"$LOG"
@@ -306,7 +307,8 @@ morning_call_outcomes() {
     return 0
   fi
   line=$(printf '%s\n' "$out" | sed -n 's/^BARK: //p' | tail -1)
-  if [[ -z "$line" ]]; then
+  pending=$(git status --porcelain -- "$OUTCOMES_FILE" 2>/dev/null)
+  if [[ -z "$line" && -z "$pending" ]]; then
     log "盤前判讀回驗：沒有新結果"
     return 0
   fi
@@ -315,12 +317,16 @@ morning_call_outcomes() {
     push="未 commit（主 checkout 在 ${branch:-detached HEAD}）"
   elif ! { git add -- "$OUTCOMES_FILE" \
       && git commit -q -m "journal: morning call outcomes $(date +%F)" -- "$OUTCOMES_FILE"; } >>"$LOG" 2>&1; then
-    push="commit 失敗"
+    push="commit 失敗（下一輪重試）"
   else
     push=$(bash scripts/media_picks_job.sh --push-journal 2>>"$LOG" | tail -1)
   fi
   log "盤前判讀回驗：${push}"
-  notify_failure "${line}（journal：${push}）" "盤前判讀回驗 $(date +%F)" || true
+  if [[ -n "$line" ]]; then
+    notify_failure "${line}（journal：${push}）" "盤前判讀回驗 $(date +%F)" || true
+  elif [[ "$push" != "push ok" ]]; then
+    notify_failure "補 commit 上一輪的回驗結果：${push}。log: $LOG" "盤前判讀回驗失敗" || true
+  fi
 }
 
 main() {

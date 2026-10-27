@@ -141,7 +141,8 @@ def test_custom_regime_label_is_unscorable_not_inconsistent():
 # ---------- 彙總 ----------
 
 def rows_from(pairs, measure="gap_0905"):
-    return [{"gap_expected": e, measure: a, "scorable": True} for e, a in pairs]
+    """預估沒被修正過：寫下的 gap_expected 就是夜盤公式的原始值。"""
+    return [{"gap_expected": e, "night_spot_gap": e, measure: a, "scorable": True} for e, a in pairs]
 
 
 def test_small_sample_is_inconclusive_even_with_obvious_bias():
@@ -195,14 +196,14 @@ def test_append_outcomes_never_rewrites_a_date(tmp_path):
 
 
 class FakeFetcher:
-    def __init__(self, sessions):
-        self.sessions, self.notes = sessions, []
+    def __init__(self, sessions, idx_0905=1008.0):
+        self.sessions, self.notes, self.idx_0905 = sessions, [], idx_0905
 
     def session(self, day):
         return self.sessions.get(day)
 
     def index_0905(self, day):
-        return 1008.0
+        return self.idx_0905
 
     def tx(self, day, prev):
         return (0.009, 1009.0, 0.004, "209904")
@@ -265,3 +266,76 @@ def test_load_calls_drops_closed_days_via_swing_read_log(tmp_path, monkeypatch):
                              for d in ("2099-03-03", "2099-03-04")) + "\n", encoding="utf-8")
     calls, excluded = vmc.load_calls(log)
     assert [c["date"] for c in calls] == ["2099-03-03"] and excluded == 1
+
+
+def test_scaling_is_estimated_on_the_raw_formula_not_on_corrected_forecasts():
+    # 實際一律是夜盤公式值的一半；後 20 天的人已照建議把預估乘 0.5 寫進 gap_expected
+    rng = np.random.default_rng(3)
+    raw = rng.uniform(0.005, 0.02, 40)
+    rows = [{"gap_expected": r if i < 20 else 0.5 * r, "night_spot_gap": r, "gap_0905": 0.5 * r, "scorable": True}
+            for i, r in enumerate(raw)]
+    s = vmc.summarize(rows, "gap_0905")
+    assert s["slope"] == pytest.approx(0.5, abs=1e-9)   # 拿 gap_expected 回歸會得到約 0.6，下一次修過頭
+    assert s["apply_scaling"] is True
+
+
+def test_sparse_informative_predictors_never_certify_scaling():
+    rows = [{"gap_expected": 0.0, "night_spot_gap": 0.0, "gap_0905": 0.0, "scorable": True}] * 19
+    rows = rows + [{"gap_expected": 0.02, "night_spot_gap": 0.02, "gap_0905": 0.01, "scorable": True}]
+    s = vmc.summarize(rows, "gap_0905")
+    assert s["n_scale"] == 1
+    assert s["slope_ci"] is None          # 約三成重抽算不出斜率：區間不存在，不能剩下的湊出 (0.5, 0.5)
+    assert s["apply_scaling"] is False
+
+
+def test_bootstrap_tolerates_a_few_undefined_resamples():
+    vals = np.arange(50)
+    ci = vmc._boot(vals, lambda a: float("nan") if a.sum() % 97 == 0 else float(a.mean()), n=400)
+    assert ci is not None
+
+
+def test_append_dedupes_within_one_batch(tmp_path):
+    path = tmp_path / "out.jsonl"
+    new = vmc.append_outcomes(path, [{"date": "2099-03-04", "v": 1}, {"date": "2099-03-04", "v": 2}])
+    assert [r["v"] for r in new] == [1]
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_append_waits_for_another_writer_holding_the_lock(tmp_path):
+    """另一個行程持有鎖期間寫進同一天：等鎖的這邊放行後要看得到它、寫 0 筆。
+    沒有鎖的話，子行程會先讀到空檔、照寫一筆，檔裡就有兩個 2099-03-04。"""
+    import fcntl
+    import subprocess
+    import time
+    path = tmp_path / "out.jsonl"
+    code = ("import importlib.util,sys;"
+            f"s=importlib.util.spec_from_file_location('v', {str(ROOT / 'scripts' / 'verify_morning_calls.py')!r});"
+            "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+            "print(len(m.append_outcomes(sys.argv[1], [{'date': '2099-03-04'}])))")
+    with path.open("a+", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        child = subprocess.Popen([sys.executable, "-c", code, str(path)], stdout=subprocess.PIPE, text=True)
+        time.sleep(2)
+        fh.write(json.dumps({"date": "2099-03-04"}) + "\n")
+        fh.flush()
+        fcntl.flock(fh, fcntl.LOCK_UN)
+    out, _ = child.communicate(timeout=60)
+    assert out.strip() == "0"
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_temporarily_missing_measures_defer_then_write_after_the_window(monkeypatch):
+    calls = [{"date": "2099-03-04", "regime": "rotation", "action": "wait", "gap_expected": 0.005,
+              "exclude_from_scoring": False}]
+    sessions = {D: (P, 1000.0, 1002.0, 1015.0)}
+    monkeypatch.setattr(vmc, "breadth_at", lambda engine, day: 0.3)
+    monkeypatch.setattr(vmc, "vix_prior", lambda engine, day: 18.0)
+    logs = []
+    soon = vmc.compute(calls, fetcher=FakeFetcher(sessions, idx_0905=None), engine=object(),
+                       today=D + dt.timedelta(days=vmc.DEFER_DAYS), out=logs.append)
+    assert soon == [] and any("延後寫入" in x for x in logs)
+    late = vmc.compute(calls, fetcher=FakeFetcher(sessions, idx_0905=None), engine=object(),
+                       today=D + dt.timedelta(days=vmc.DEFER_DAYS + 1), out=lambda *_: None)
+    assert len(late) == 1 and "仍缺 gap_0905" in late[0]["note"]
+    ok = vmc.compute(calls, fetcher=FakeFetcher(sessions), engine=object(), today=D, out=lambda *_: None)
+    assert len(ok) == 1 and "note" not in ok[0]

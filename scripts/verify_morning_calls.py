@@ -53,7 +53,9 @@ MEASURE_LABEL = {"gap_open_official": "官方開盤", "gap_0905": "09:05 指數"
 REGIMES = ("tailwind", "rotation", "broad_selloff", "capitulation")
 MIN_N = 20          # 低於這個樣本數的結論一律 inconclusive（與 verify_swing_decisions 同門檻）
 BIG_MOVE = 0.015    # action 事後描述用的「大漲大跌」門檻，描述性、不是績效判準
-RATIO_FLOOR = 0.001  # 預估缺口絕對值低於 0.1% 時不算比值（分母太小）
+RATIO_FLOOR = 0.001  # 預估缺口絕對值低於 0.1% 時不算比值（分母太小），也不算「有資訊」的樣本
+MAX_UNDEFINED = 0.05  # bootstrap 重抽有超過 5% 算不出統計量（例如全是 0 預估）就當區間不存在
+DEFER_DAYS = 7      # 09:05／期貨量測暫時抓不到時，7 個曆日內延後寫入（outcome 寫了就不會再補）
 
 
 # ---------- 純函式：解析 ----------
@@ -224,14 +226,16 @@ def _r(x, nd=5):
 # ---------- 純函式：彙總 ----------
 
 def _boot(values, stat, n=2000, seed=42):
+    """iid bootstrap 95% 區間。重抽裡算不出統計量的比例超過 ``MAX_UNDEFINED`` 就回 None：
+    默默丟掉那些重抽，剩下的會只由少數有資訊的樣本決定，區間窄得假。"""
     import numpy as np
     arr = np.asarray(values)
     if len(arr) < 2:
         return None
     rng = np.random.default_rng(seed)
-    stats = [stat(arr[rng.integers(0, len(arr), len(arr))]) for _ in range(n)]
-    stats = [s for s in stats if s is not None and not math.isnan(s)]
-    if not stats:
+    raw = [stat(arr[rng.integers(0, len(arr), len(arr))]) for _ in range(n)]
+    stats = [s for s in raw if s is not None and not math.isnan(s)]
+    if not stats or (n - len(stats)) / n > MAX_UNDEFINED:
         return None
     lo, hi = np.percentile(stats, [2.5, 97.5])
     return float(lo), float(hi)
@@ -244,6 +248,8 @@ def _slope(pairs):
 
 
 def summarize(rows, measure, n_boot=2000, seed=42):
+    """誤差、偏差、方向命中對 ``gap_expected``（實際寫下的預估）算；縮放比對 ``night_spot_gap``
+    （夜盤公式的原始值）算——``gap_expected`` 可能已經乘過縮放比，拿它估縮放比會把修正再修一次。"""
     import numpy as np
     pts = [(r["gap_expected"], r[measure]) for r in rows
            if r.get("gap_expected") is not None and r.get(measure) is not None]
@@ -257,10 +263,13 @@ def summarize(rows, measure, n_boot=2000, seed=42):
     out["mae"] = float(np.abs(err).mean())
     out["bias"] = float(err.mean())
     out["bias_ci"] = _boot(err, lambda a: float(a.mean()), n_boot, seed)
-    out["slope"] = _slope(arr)
-    idx = np.arange(n)
-    out["slope_ci"] = _boot(idx, lambda i: _slope(arr[i]), n_boot, seed)
-    big = arr[np.abs(arr[:, 0]) >= RATIO_FLOOR]
+    raw = np.asarray([(r["night_spot_gap"], r[measure]) for r in rows
+                      if r.get("night_spot_gap") is not None and r.get(measure) is not None], dtype=float)
+    raw = raw.reshape(-1, 2)
+    out["n_scale"] = int((np.abs(raw[:, 0]) >= RATIO_FLOOR).sum())
+    out["slope"] = _slope(raw) if len(raw) else float("nan")
+    out["slope_ci"] = _boot(np.arange(len(raw)), lambda i: _slope(raw[i]), n_boot, seed) if len(raw) else None
+    big = raw[np.abs(raw[:, 0]) >= RATIO_FLOOR]
     out["ratio_median"] = float(np.median(big[:, 1] / big[:, 0])) if len(big) else None
     hits = [_sign(e) == _sign(a) for e, a in pts]
     out["dir_hit"] = float(np.mean(hits))
@@ -268,7 +277,7 @@ def summarize(rows, measure, n_boot=2000, seed=42):
     crosses = ci is None or ci[0] <= 0 <= ci[1]
     out["verdict"] = "inconclusive" if n < MIN_N or crosses else "偏差顯著"
     sci = out["slope_ci"]
-    out["apply_scaling"] = bool(n >= MIN_N and sci is not None and not (sci[0] <= 1 <= sci[1]))
+    out["apply_scaling"] = bool(out["n_scale"] >= MIN_N and sci is not None and not (sci[0] <= 1 <= sci[1]))
     return out
 
 
@@ -309,7 +318,7 @@ def render_summary(rows, out=print, label="可計分"):
             continue
         ratio = "—" if s["ratio_median"] is None else f"{s['ratio_median']:.2f}"
         out(f"{MEASURE_LABEL[m]:8s} n={s['n']:<3d} MAE {s['mae'] * 100:.2f}pp  偏差 {s['bias'] * 100:+.2f}pp "
-            f"{_ci(s['bias_ci'])}  縮放比(斜率) {s['slope']:.2f} {_ci(s['slope_ci'], 1, '{:.2f}')}  "
+            f"{_ci(s['bias_ci'])}  縮放比(實際÷夜盤公式，n={s['n_scale']}) {s['slope']:.2f} {_ci(s['slope_ci'], 1, '{:.2f}')}  "
             f"比值中位 {ratio}  方向命中 {s['dir_hit'] * 100:.0f}%  → {s['verdict']}"
             f"{'' if s['apply_scaling'] else '，縮放比不套用'}")
     day = [r["day_dir_hit"] for r in rows if r.get("day_dir_hit") is not None]
@@ -354,14 +363,25 @@ def read_outcomes(path=OUTCOMES):
 
 
 def append_outcomes(path, rows):
-    """只追加檔案裡還沒有的 date；回傳實際寫入的列。"""
+    """只追加檔案裡還沒有的 date（同一批裡重複的也只留第一筆）；回傳實際寫入的列。
+
+    讀檔、比對、寫入在同一把 flock 底下做，兩個行程同時 --append 也不會寫出重複日期。"""
+    import fcntl
     path = Path(path)
-    have = {r["date"] for r in read_outcomes(path)}
-    new = [r for r in rows if r["date"] not in have]
-    if new:
-        with path.open("a", encoding="utf-8") as fh:
+    with path.open("a+", encoding="utf-8") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            have = {r["date"] for r in read_outcomes(path)}
+            new = []
+            for r in rows:
+                if r["date"] not in have:
+                    have.add(r["date"])
+                    new.append(r)
             for r in new:
                 fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+            fh.flush()
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
     return new
 
 
@@ -472,9 +492,17 @@ def compute(calls, *, skip_dates=(), fetcher=None, engine=None, today=None, out=
             out(f"  {c['date']}：DB 還沒有這天的收盤行情，跳過")
             continue
         vix = vix_prior(engine, day)
-        rows.append(build_outcome(c, prev=prev, prev_close=prev_close, open_=open_, close=close,
-                                  idx_0905=fetcher.index_0905(day), tx=fetcher.tx(day, prev),
-                                  breadth=breadth, vix=None if vix is None else float(vix)))
+        row = build_outcome(c, prev=prev, prev_close=prev_close, open_=open_, close=close,
+                            idx_0905=fetcher.index_0905(day), tx=fetcher.tx(day, prev),
+                            breadth=breadth, vix=None if vix is None else float(vix))
+        missing = [k for k in ("gap_0905", "gap_tx_open", "night_spot_gap") if row[k] is None]
+        if missing and (today - day).days <= DEFER_DAYS:
+            # outcome 一寫就不再重算：來源暫時失敗時先不寫，下一輪再抓
+            out(f"  {c['date']}：{'、'.join(missing)} 暫時取不到，延後寫入（{DEFER_DAYS} 天內每輪重試）")
+            continue
+        if missing:
+            row["note"] = "；".join(x for x in (row.get("note"), f"超過 {DEFER_DAYS} 天仍缺 {'、'.join(missing)}") if x)
+        rows.append(row)
     for n in fetcher.notes:
         out(f"  ⚠ {n}")
     return rows
@@ -491,7 +519,7 @@ def brief(path=OUTCOMES, last=5, out=print):
     if s.get("n") and not s.get("apply_scaling"):
         out("→ 今天算開盤缺口時：縮放比沒有統計支持，只當提醒，不要拿來修正預估。")
     elif s.get("apply_scaling"):
-        out(f"→ 縮放比 {s['slope']:.2f} 已有統計支持（n≥{MIN_N}、區間不含 1）：預估缺口可乘上它再寫進 gap_expected，並在 reason 註明。")
+        out(f"→ 縮放比 {s['slope']:.2f} 已有統計支持（n≥{MIN_N}、區間不含 1）：把**夜盤公式算出的原始缺口**乘上它再寫進 gap_expected，並在 reason 註明（不要乘在已修正過的數字上）。")
 
 
 def main(argv=None):

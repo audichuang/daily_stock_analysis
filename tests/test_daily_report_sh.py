@@ -566,3 +566,20 @@ def test_morning_outcomes_off_develop_does_not_commit(tmp_path):
     assert "rc=0" in r.stdout
     assert _last_commit_files(repo)[0] == "init"
     assert "未 commit（主 checkout 在 feat/x）" in log
+
+
+def test_morning_outcomes_retries_a_failed_commit_on_the_next_run(tmp_path):
+    repo, bindir = _outcomes_repo(
+        tmp_path, 'echo \'{"date": "2099-03-04"}\' >> journal/morning-calls-outcomes.jsonl; echo "BARK: x"')
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    _, log = _run_outcomes(repo, bindir)
+    assert "commit 失敗" in log and _last_commit_files(repo)[0] == "init"
+    hook.unlink()
+    (bindir / "uv").write_text('#!/usr/bin/env bash\necho "寫入 0 筆"\n', encoding="utf-8")   # 這一輪沒有新結果
+    r, log = _run_outcomes(repo, bindir)
+    assert "rc=0" in r.stdout
+    subject, files = _last_commit_files(repo)
+    assert subject.startswith("journal: morning call outcomes") and files == ["journal/morning-calls-outcomes.jsonl"]
+    assert "push ok" in log
