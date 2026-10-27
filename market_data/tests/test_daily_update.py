@@ -39,7 +39,7 @@ class _Eng:
 def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(crawl, "crawl_range",
-                        lambda eng, src, dates, resume=True: calls.append(("range", src)))
+                        lambda eng, src, dates, resume=True, **kw: calls.append(("range", src)))
     # `or 0`:真實 crawler 都回傳 upsert 列數,而 daily_update 會把它印出來
     # (`crawl_snapshots` 與月營收/除權息兩行),回 None 的 fake 會在格式化時炸掉
     monkeypatch.setattr(crawl, "crawl_valuation",
@@ -49,7 +49,7 @@ def test_daily_update_crawls_daily_sources_and_snapshots(monkeypatch, capsys):
     monkeypatch.setattr(crawl, "crawl_stock_info",
                         lambda conn: calls.append(("info",)) or 0)
     monkeypatch.setattr(crawl, "crawl_monthly_revenue",
-                        lambda conn, month: calls.append(("rev", month)) or 0)
+                        lambda conn, month, **kw: calls.append(("rev", month)) or 0)
     monkeypatch.setattr(crawl, "crawl_ex_dividend",
                         lambda conn, start, end, require=False: calls.append(("exd", start, end, require)) or 0)
     monkeypatch.setattr(adjust, "refresh_recent",
@@ -109,11 +109,11 @@ def test_daily_update_refreshes_recent_stored_days_but_not_asof(monkeypatch):
     """T86 當晚先出初版、之後才修正:每輪 daily 要把近期的日子重抓成定版。asof 當天剛抓
     的就是初版,重抓它只是多打一次 TWSE;它留給隔天那一輪。"""
     refreshed = []
-    monkeypatch.setattr(crawl, "crawl_range", lambda eng, src, dates, resume=True: None)
+    monkeypatch.setattr(crawl, "crawl_range", lambda eng, src, dates, resume=True, **kw: None)
     monkeypatch.setattr(crawl, "refresh_range",
                         lambda eng, src, dates: refreshed.append((src, list(dates))))
     monkeypatch.setattr(crawl, "crawl_snapshots", lambda eng, dates=None: {})
-    monkeypatch.setattr(crawl, "crawl_monthly_revenue", lambda conn, month: 0)
+    monkeypatch.setattr(crawl, "crawl_monthly_revenue", lambda conn, month, **kw: 0)
     monkeypatch.setattr(crawl, "crawl_ex_dividend",
                         lambda conn, start, end, require=False: 0)
     monkeypatch.setattr(adjust, "refresh_recent", lambda engine, start, end: None)
@@ -131,11 +131,11 @@ def _wire_ex_dividend(monkeypatch, returns, events):
 
     seq = iter(returns)
     monkeypatch.setattr(crawl, "_EX_DIVIDEND_RETRY_SECONDS", 0)
-    monkeypatch.setattr(crawl, "crawl_range", lambda eng, src, dates, resume=True: None)
+    monkeypatch.setattr(crawl, "crawl_range", lambda eng, src, dates, resume=True, **kw: None)
     monkeypatch.setattr(crawl, "refresh_range", lambda eng, src, dates: None)
     monkeypatch.setattr(crawl, "crawl_snapshots", lambda eng, dates=None: {})
     monkeypatch.setattr(crawl, "crawl_monthly_revenue",
-                        lambda conn, month: events.append("rev") or 0)
+                        lambda conn, month, **kw: events.append("rev") or 0)
 
     def fake_source(start, end):
         events.append("fetch")
@@ -245,10 +245,10 @@ def test_fund_source_failure_does_not_fail_stock_daily(monkeypatch, capsys):
 
 
 def _stub_stock_steps(monkeypatch, adjusted=None):
-    monkeypatch.setattr(crawl, "crawl_range", lambda eng, src, dates, resume=True: None)
+    monkeypatch.setattr(crawl, "crawl_range", lambda eng, src, dates, resume=True, **kw: None)
     monkeypatch.setattr(crawl, "refresh_range", lambda eng, src, dates: None)
     monkeypatch.setattr(crawl, "crawl_snapshots", lambda eng, dates=None: {})
-    monkeypatch.setattr(crawl, "crawl_monthly_revenue", lambda conn, month: 0)
+    monkeypatch.setattr(crawl, "crawl_monthly_revenue", lambda conn, month, **kw: 0)
     monkeypatch.setattr(crawl, "crawl_ex_dividend", lambda conn, s, e, require=False: 0)
     monkeypatch.setattr(adjust, "refresh_recent",
                         lambda engine, start, end: (adjusted if adjusted is not None else []).append(1))
@@ -258,7 +258,7 @@ def _stub_daily(monkeypatch, failing):
     """子步驟換成記錄器；``failing`` 內的來源在 crawl_range 丟 RuntimeError（連續空日那種）。"""
     calls = []
 
-    def fake_range(eng, src, dates, resume=True):
+    def fake_range(eng, src, dates, resume=True, **kw):
         calls.append(("range", src))
         if src in failing:
             raise RuntimeError(f"{src}: 4 consecutive trading days returned 0 rows")
@@ -266,7 +266,7 @@ def _stub_daily(monkeypatch, failing):
     monkeypatch.setattr(crawl, "crawl_range", fake_range)
     monkeypatch.setattr(crawl, "refresh_range", lambda eng, src, dates: calls.append(("refresh", src)))
     monkeypatch.setattr(crawl, "crawl_snapshots", lambda eng, dates=None: calls.append(("snapshots",)) or {})
-    monkeypatch.setattr(crawl, "crawl_monthly_revenue", lambda conn, month: calls.append(("rev",)) or 0)
+    monkeypatch.setattr(crawl, "crawl_monthly_revenue", lambda conn, month, **kw: calls.append(("rev",)) or 0)
     monkeypatch.setattr(crawl, "crawl_ex_dividend", lambda conn, s, e, require=False: 0)
     monkeypatch.setattr(adjust, "refresh_recent", lambda engine, start, end: calls.append(("adjust",)))
     return calls
@@ -350,3 +350,16 @@ def test_macro_failure_is_reported_and_daily_continues(monkeypatch, capsys):
     crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
     assert ("adjust",) in calls, "總經段失敗不能讓復權刷新與後續報告陪葬"
     assert "**WARN macro: relation market.macro_series does not exist" in capsys.readouterr().out
+
+
+def test_daily_update_records_initial_and_first_seen_only_on_the_daily_path(monkeypatch):
+    """法人初版只在 REVISED_SOURCES 的補缺呼叫傳 record_initial；月營收首次值只在 daily 傳 record_first_seen。"""
+    _stub_stock_steps(monkeypatch)
+    ranged, revenue = {}, []
+    monkeypatch.setattr(crawl, "crawl_range",
+                        lambda eng, src, dates, resume=True, **kw: ranged.__setitem__(src, kw))
+    monkeypatch.setattr(crawl, "crawl_monthly_revenue",
+                        lambda conn, month, **kw: revenue.append(kw) or 0)
+    crawl.daily_update(engine=_Eng(), asof=date(2024, 6, 5), days=3)
+    assert {s for s, kw in ranged.items() if kw.get("record_initial")} == set(crawl.REVISED_SOURCES)
+    assert revenue == [{"record_first_seen": True}]
