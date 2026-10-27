@@ -39,6 +39,7 @@ cd $WT && git merge upstream/main --no-ff --no-edit -m "chore: merge upstream ma
 - fork 沒有立場的段落（推廣連結、贊助、上游專屬文件）取上游
 - **fork 刻意分歧（衝突時保留 fork、上游再改也別收回來）**：
   - 買賣判讀只讀 LLM 的結構化 `decision_type`／`action`，不從建議句子猜意圖：`report_language.infer_decision_type_from_advice` 只做完整標籤比對（上游 #1289 的子字串／否定掃描已刪），`analyzer.stabilize_decision_with_structure`（含三大法人校準）與 `daily_market_context_guardrail` 都不讀 `operation_advice` 句子；上游若新增呼叫端或把掃描加回來，改成結構化值（`decision_type_for_action`）
+  - 推播不依 `sentiment_score` 排序、不算平均分：`src/notification.py` 原有 6 處 `sorted(..., key=sentiment_score)`（日報、dashboard、wechat dashboard、wechat summary、brief、`NotificationBuilder.build_stock_summary`）全改呼叫共用的 `sort_results_for_push`（動作類別再代號），分數處經 `score_text` 加註「未驗證，不代表勝率」（`report_language` 的 `score_unverified_note`），均分行移除；上游若在這些位置新增依分數排序或均分，改呼叫共用函式。註：模板路徑 `src/services/report_renderer.py:144` 另有一處依分數排序，尚未改（範圍外，待另票）
 - `docs/CHANGELOG.md`：上游條目進它自己的段，fork 的 `[Unreleased]` 條目全數留在原段
 - 拿不準的塊：選對 fork 現有行為影響最小的解法，在同步紀錄的「衝突裁決」表標 **⚠ 需人工確認**，Bark 裡也點名
 
