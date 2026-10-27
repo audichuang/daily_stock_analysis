@@ -264,6 +264,17 @@ P5 通过 sidecar 表保存用户反馈和后验结果，不扩展 `decision_sig
 - 后验评估只支持日线可验证的 `1d/3d/5d/10d`；`intraday/swing/long`、非方向动作、缺价和 forward bars 不足会写入 `eval_status=unable` 与明确 `unable_reason`。
 - 评估时冻结 action、market、market_phase、source_type、source_agent、plan_quality、data_quality_level、holding_state 等统计维度，历史统计不依赖后续 live join。
 
+## 固定預測題後驗計分（本 fork，`shadow_buy_eval.py --forecast`）
+
+台股報告固定追加預測題 `p_5d_beat_0050`（見 `docs/analysis-context-pack.md`「固定預測題與版本落庫」），事後用 `uv run --env-file .env python scripts/shadow_buy_eval.py --forecast` 計分（唯讀；不動 `decision_signal_outcomes` 那套引擎）。
+
+- **標籤 y**＝1(個股淨報酬 − 0050 淨報酬 > 0)：報告日之後第一個交易日開盤進場、第 5 個交易日收盤出場。**兩腿成本分開**：個股腿走 `tw_sell_tax_rate(個股)`（一般股 0.3% 證交稅，來回約 0.882%），0050 腿走 `tw_sell_tax_rate("0050")`（ETF 0.1%，來回約 0.685%）；兩腿都用個股稅率會低估 0050 淨報酬、高估 y 的基率。出場價未知（停牌、下市）的事件排除，不拿較早收盤頂替。
+- **與 v2 口徑的差異**：v2 的盤前信號只要有開盤前證據就在場次日當天開盤進場；這裡**一律延到 T+1**（報告日之後第一個交易日），較保守、會低估當日訊號。兩套數字不可直接比較。
+- **計分**：Brier；樸素基準＝近 252 日的實現勝率（Laplace 平滑 (w+1)/(n+2)，只用 `resolved_at` 早於預測日的事件）；配對差 d＝基準 Brier − 模型 Brier（正＝模型較好）；rank-IC（p 對實現超額報酬的 Spearman）。基率歷史不足 20 筆的預測日不進比較。
+- **區間**：**日期** block bootstrap（moving block，block 5 與 10 都報）：5 日標籤彼此重疊、同日各檔共用市場衝擊，所以重抽單位是日期區塊，不是 `--by-variant` 用的 code 群聚。
+- **分組**：0050 本身排除；個股與 ETF 分開列；依 `dashboard.experiments.macro_ctx`（on／off）分組做 d 的 on − off 配對比較，沒有標籤（實驗前或比例為 0）歸 `none`、不進比較。
+- **inconclusive**：n < 30、日期數 < 2×block 或 95% CI 跨零一律標 inconclusive。樣本內、只讀，結論要過對抗審查才可寫進文件。
+
 ## 单票复盘摘要（ReviewMemory）
 
 #1903 在 P5 后验数据之上增加只读、低敏的单票复盘摘要，把"已计算但从未被消费"的 outcome/feedback 聚合回 Agent 记忆，形成结果层反馈闭环：

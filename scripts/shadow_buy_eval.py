@@ -33,6 +33,16 @@
     uv run --env-file .env python scripts/shadow_buy_eval.py
     uv run --env-file .env python scripts/shadow_buy_eval.py --out reports/shadow.md --horizons 1,3,5
     uv run --env-file .env python scripts/shadow_buy_eval.py --by-variant
+    uv run --env-file .env python scripts/shadow_buy_eval.py --forecast   # 固定預測題 p_5d_beat_0050 計分
+
+--forecast 模式（口徑見 docs/decision-signals.md「固定預測題後驗計分」）：
+  - y＝1(個股淨報酬 − 0050 淨報酬 > 0)：T+1 開盤進、第 5 個交易日收盤出；兩腿成本**分開**
+    （個股腿走 tw_sell_tax_rate(個股)，0050 腿走 tw_sell_tax_rate("0050")，ETF 稅率較低）。
+  - 與 v2 口徑不同：v2 依盤前證據可以當天進場，這裡一律延到 T+1。
+  - Brier 對樸素基準（252 日滾動基率、Laplace 平滑，只用 resolved_at 早於預測日的事件）；配對差
+    d_i＝基準 Brier − 模型 Brier（正＝模型較好）；另報 rank-IC。
+  - 區間用**日期** block bootstrap（5 日標籤重疊：block≥5，同時報 10），不是 code 群聚。
+  - 0050 本身排除；ETF 與個股分開列；n 不足或 CI 跨零一律 inconclusive。
 """
 
 from __future__ import annotations
@@ -56,6 +66,7 @@ from src.core.backtest_engine import resolve_bar_exit  # noqa: E402
 from src.utils.tw_trade_costs import (  # noqa: E402
     ETF_TRANSACTION_TAX_RATE,
     STOCK_TRANSACTION_TAX_RATE,
+    is_tw_etf,
     round_trip_return,
     tw_sell_tax_rate,
 )
@@ -335,6 +346,224 @@ def _blocks(ev, args, level="") -> list:
     return out
 
 
+# ---- --forecast：固定預測題 p_5d_beat_0050 的後驗計分（純函式；DB 只在 main 讀）----
+
+FORECAST_H = 5            # 固定題的持有交易日數（T+1 開盤進、第 5 個交易日收盤出）
+FORECAST_MIN_N = 30       # 配對樣本下限；不足一律 inconclusive
+FORECAST_MIN_HIST = 20    # 基率歷史下限；不足的預測日不進 Brier 比較（Laplace 後的 0.5 不是有意義的基準）
+BASE_RATE_WINDOW_DAYS = 252
+FORECAST_BLOCKS = (5, 10)
+
+
+def forecast_outcome(stock_bars, bench_bars, *, stock_tax, bench_tax, fee_discount=1.0):
+    """一則預測的實現值：(個股淨報酬, 0050 淨報酬, y)；任一腿沒進場／出場價未知回 None。
+
+    兩腿各用自己的稅率：個股約 0.3%、0050 是 ETF 的 0.1%。兩腿都用個股稅率會低估 0050 淨報酬、
+    高估 y 的基率。bars＝(o, h, lo, c, adj)，長度 = FORECAST_H，進場日為第 1 天；不套停損停利。"""
+    s = trade_return(*stock_bars, tax_rate=stock_tax, fee_discount=fee_discount)
+    b = trade_return(*bench_bars, tax_rate=bench_tax, fee_discount=fee_discount)
+    if s is None or b is None:
+        return None
+    if s[1] == INCOMPLETE or b[1] == INCOMPLETE or not (np.isfinite(s[0]) and np.isfinite(b[0])):
+        return None
+    return float(s[0]), float(b[0]), int(s[0] - b[0] > 0)
+
+
+def macro_ctx_label(raw_result) -> str:
+    """dashboard.experiments.macro_ctx（on/off）；沒有標籤（實驗前或比例為 0）歸 none。"""
+    try:
+        d = json.loads(raw_result) if isinstance(raw_result, str) else (raw_result or {})
+    except ValueError:
+        return "none"
+    dash = d.get("dashboard") if isinstance(d.get("dashboard"), dict) else {}
+    exp = dash.get("experiments") if isinstance(dash.get("experiments"), dict) else {}
+    label = str(exp.get("macro_ctx") or "").strip()
+    return label or "none"
+
+
+def baseline_probs(day, resolved, y, window_days=BASE_RATE_WINDOW_DAYS):
+    """樸素基準：預測日當天可知的、近 window_days 日已實現事件的勝率（Laplace 平滑 (w+1)/(n+2)）。
+
+    只用 resolved_at **早於**預測日的事件（日期層級，保守：不用預測日當天才收盤的事件）。
+    回傳 (機率陣列, 歷史筆數陣列)。"""
+    day = pd.to_datetime(pd.Series(list(day))).to_numpy()
+    resolved = pd.to_datetime(pd.Series(list(resolved))).to_numpy()
+    y = np.asarray(y, dtype=float)
+    lo_off = np.timedelta64(int(window_days), "D")
+    probs, counts = [], []
+    for d in day:
+        m = (resolved < d) & (resolved >= d - lo_off)
+        n = int(m.sum())
+        probs.append((y[m].sum() + 1.0) / (n + 2.0))
+        counts.append(n)
+    return np.asarray(probs, dtype=float), np.asarray(counts, dtype=int)
+
+
+def _date_axis(dates, extra=None):
+    ts = pd.to_datetime(pd.Series(list(dates)))
+    if extra is not None:
+        ts = pd.concat([ts, pd.to_datetime(pd.Series(list(extra)))])
+    return np.sort(ts.unique())
+
+
+def _per_date(values, dates, axis):
+    ts = pd.to_datetime(pd.Series(list(dates))).to_numpy()
+    pos = np.searchsorted(axis, ts)
+    v = np.asarray(values, dtype=float)
+    return np.bincount(pos, weights=v, minlength=len(axis)), np.bincount(pos, minlength=len(axis)).astype(float)
+
+
+def date_block_ci(values, dates, *, block, n=2000, seed=42, other=None):
+    """以**日期**為單位的 moving-block bootstrap 均值 95% CI（環狀區塊，長度 block 個相鄰日曆項）。
+
+    5 日標籤彼此重疊、同日各檔又共用市場衝擊，所以重抽單位是日期區塊而不是個別事件或 code。
+    ``other=(values, dates)`` 時回傳兩組均值差的 CI（兩組共用同一條日期軸與同一批區塊）。
+    日期數不足 2×block 回 None（由呼叫端標 inconclusive）。"""
+    axis = _date_axis(dates, other[1] if other is not None else None)
+    d = len(axis)
+    if d < 2 * block or not len(values):
+        return None
+    rng = np.random.default_rng(seed)
+    n_blocks = -(-d // block)
+    starts = rng.integers(0, d, size=(n, n_blocks))
+    idx = ((starts[:, :, None] + np.arange(block)[None, None, :]) % d).reshape(n, -1)[:, :d]
+    sa, ca = _per_date(values, dates, axis)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        stat = sa[idx].sum(axis=1) / ca[idx].sum(axis=1)
+        if other is not None:
+            sb, cb = _per_date(other[0], other[1], axis)
+            stat = stat - sb[idx].sum(axis=1) / cb[idx].sum(axis=1)
+    stat = stat[np.isfinite(stat)]
+    if not len(stat):
+        return None
+    lo, hi = np.percentile(stat, [2.5, 97.5])
+    return float(lo), float(hi)
+
+
+def forecast_verdict(ci, n) -> str:
+    if n < FORECAST_MIN_N:
+        return "inconclusive（n 不足）"
+    return verdict(ci)
+
+
+def rank_ic(p, realized_excess) -> float:
+    """p 與實現超額報酬（個股淨 − 0050 淨）的 Spearman（秩的皮爾森；常數序列回 nan）。"""
+    a, b = pd.Series(np.asarray(p, dtype=float)), pd.Series(np.asarray(realized_excess, dtype=float))
+    if len(a) < 3 or a.nunique() < 2 or b.nunique() < 2:
+        return float("nan")
+    return float(a.rank().corr(b.rank()))
+
+
+def forecast_scores(ev) -> pd.DataFrame:
+    """事件表 → 加上 base（樸素基準機率）、hist_n、brier、brier_base、d（基準 − 模型，正＝模型較好）。"""
+    ev = ev.sort_values("day", kind="stable").reset_index(drop=True)
+    base, hist = baseline_probs(ev["day"], ev["resolved_at"], ev["y"])
+    ev = ev.assign(base=base, hist_n=hist)
+    ev["brier"] = (ev["p"] - ev["y"]) ** 2
+    ev["brier_base"] = (ev["base"] - ev["y"]) ** 2
+    ev["d"] = ev["brier_base"] - ev["brier"]
+    return ev
+
+
+def load_forecast_reports(url) -> pd.DataFrame:
+    from sqlalchemy import create_engine, text
+    with create_engine(url).connect() as c:
+        _read_only(c)
+        df = pd.read_sql(text(
+            "select code, created_at, p_5d_beat_0050 as p, raw_result "
+            "from analysis_history where report_type = 'simple' and p_5d_beat_0050 is not null "
+            "and (code like '%.TW' or code like '%.TWO')"), c, parse_dates=["created_at"])
+    if df.empty:
+        return df
+    df = latest_per_code_day(df)
+    df["ctx"] = [macro_ctx_label(r) for r in df["raw_result"]]
+    df["stock_id"] = df["code"].str.split(".").str[0]
+    return df.drop(columns="raw_result")
+
+
+def build_forecast_events(reports, panels, *, fee_discount=1.0, h=FORECAST_H):
+    cal = panels["close"].index
+    if BENCHMARK not in panels["close"].columns:
+        return pd.DataFrame()
+    rows = []
+    for r in reports.itertuples(index=False):
+        if r.stock_id == BENCHMARK or r.stock_id not in panels["close"].columns:
+            continue  # 0050 本身不評（對自己的超額恆為 0）
+        i0 = cal.searchsorted(r.day, side="right")  # 報告日之後第一個交易日（T+1）
+        if i0 + h > len(cal):
+            continue  # 視窗還沒走完
+        win = slice(i0, i0 + h)
+        exit_day = cal[i0 + h - 1]
+
+        def seq(sid):
+            return tuple(panels[k][sid].to_numpy()[win] for k in ("open", "high", "low", "close", "adj"))
+
+        res = forecast_outcome(seq(r.stock_id), seq(BENCHMARK),
+                               stock_tax=tw_sell_tax_rate(r.stock_id, exit_day),
+                               bench_tax=tw_sell_tax_rate(BENCHMARK, exit_day), fee_discount=fee_discount)
+        if res is None:
+            continue
+        rows.append({"code": r.code, "day": r.day, "resolved_at": exit_day, "p": float(r.p), "y": res[2],
+                     "net_stock": res[0], "net_bench": res[1], "ctx": r.ctx,
+                     "kind": "etf" if is_tw_etf(r.stock_id) else "stock"})
+    return pd.DataFrame(rows)
+
+
+def _fmt_ci(ci):
+    return f"[{ci[0]:+.4f}, {ci[1]:+.4f}]" if ci else "—"
+
+
+def _forecast_table(sc, args) -> list:
+    """一組事件的計分表：Brier、基準 Brier、配對差 d 的日期 block bootstrap（block 5／10）、rank-IC。"""
+    n_all = len(sc)
+    sc = sc[sc["hist_n"] >= FORECAST_MIN_HIST]
+    out = [f"- 事件 {n_all} 筆，其中基率歷史 ≥ {FORECAST_MIN_HIST} 筆者 {len(sc)} 筆進比較（其餘基準不可靠、排除）"]
+    if sc.empty:
+        return out + ["- 沒有可比較的事件：inconclusive", ""]
+    ic = rank_ic(sc["p"], sc["net_stock"] - sc["net_bench"])
+    out += [f"- 實現勝率 {sc['y'].mean() * 100:.1f}%、平均 p {sc['p'].mean():.3f}、{sc['day'].nunique()} 個預測日、"
+            f"rank-IC {'—' if math.isnan(ic) else f'{ic:+.3f}'}",
+            f"- Brier：模型 {sc['brier'].mean():.4f}、252 日基率基準 {sc['brier_base'].mean():.4f}",
+            "", "| 比較 | block | n | 均值 | 95% CI | 判定 |", "|---|---|---|---|---|---|"]
+    for blk in FORECAST_BLOCKS:
+        ci = date_block_ci(sc["d"], sc["day"], block=blk, n=args.bootstrap, seed=args.seed)
+        out.append(f"| d＝基準 Brier − 模型 Brier（正＝模型較好） | {blk} | {len(sc)} | {sc['d'].mean():+.4f} | "
+                   f"{_fmt_ci(ci)} | {forecast_verdict(ci, len(sc))} |")
+    on, off = sc[sc["ctx"] == "on"], sc[sc["ctx"] == "off"]
+    if len(on) and len(off):
+        out += ["", "依 `experiments.macro_ctx` 分組（總經背景區塊 on／off，同期對照）：", "",
+                "| 組別／比較 | block | n | d 均值 | 95% CI | 判定 |", "|---|---|---|---|---|---|"]
+        for label, g in (("on", on), ("off", off)):
+            out.append(f"| {label} | — | {len(g)} | {g['d'].mean():+.4f} | — | — |")
+        for blk in FORECAST_BLOCKS:
+            ci = date_block_ci(on["d"], on["day"], block=blk, n=args.bootstrap, seed=args.seed,
+                               other=(off["d"], off["day"]))
+            out.append(f"| on − off（d 的差） | {blk} | {len(on)}／{len(off)} | "
+                       f"{on['d'].mean() - off['d'].mean():+.4f} | {_fmt_ci(ci)} | "
+                       f"{forecast_verdict(ci, min(len(on), len(off)))} |")
+    return out + [""]
+
+
+def render_forecast(ev, args) -> str:
+    out = [f"# 固定預測題 p_5d_beat_0050 後驗計分（{dt.date.today()}）", "",
+           "- y＝1(個股淨報酬 > 0050 淨報酬)：報告日之後第一個交易日開盤進、第 5 個交易日收盤出；"
+           "兩腿成本分開（個股腿 tw_sell_tax_rate(個股)、0050 腿 tw_sell_tax_rate(\"0050\")）",
+           "- 與 v2 口徑不同：v2 依盤前證據可以當天進場，這裡一律延到 T+1",
+           "- 基準：252 日滾動基率（Laplace 平滑），只用 resolved_at 早於預測日的事件",
+           f"- 日期 block bootstrap：block {FORECAST_BLOCKS[0]}／{FORECAST_BLOCKS[1]}、{args.bootstrap} 次、seed={args.seed}；"
+           f"n < {FORECAST_MIN_N}、日期數 < 2×block 或 CI 跨零一律 inconclusive",
+           "- 0050 本身排除；ETF 與個股分開列。**樣本內、只讀**：結論必須過對抗審查才可寫進 docs。", ""]
+    if ev.empty:
+        return "\n".join(out + ["沒有已走完 5 日視窗、帶 p_5d_beat_0050 的事件：inconclusive。", ""])
+    sc = forecast_scores(ev)
+    for kind, title in (("stock", "個股"), ("etf", "ETF")):
+        g = sc[sc["kind"] == kind]
+        if g.empty:
+            continue
+        out += [f"## {title}", ""] + _forecast_table(g, args)
+    return "\n".join(out)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--db", default=os.environ.get("STORAGE_DATABASE_URL"),
@@ -348,12 +577,28 @@ def main(argv=None):
     p.add_argument("--seed", type=int, default=42, help="bootstrap 隨機種子（預設 42）")
     p.add_argument("--by-variant", action="store_true",
                    help="依 dashboard.prompt_variant 分組各出一份表（未標記的舊報告歸 untagged）")
+    p.add_argument("--forecast", action="store_true",
+                   help="固定預測題 p_5d_beat_0050 的後驗計分（Brier、基率基準、日期 block bootstrap），不跑 raw-buy 影子評估")
     a = p.parse_args(argv)
     if not a.db:
         raise SystemExit("STORAGE_DATABASE_URL 未設定：用 `uv run --env-file .env` 執行或帶 --db")
     horizons = sorted({int(x) for x in a.horizons.split(",") if x.strip()})
 
     from market_data.db import get_engine
+    if a.forecast:
+        freports = load_forecast_reports(a.db)
+        if freports.empty:
+            raise SystemExit("analysis_history 沒有帶 p_5d_beat_0050 的台股報告")
+        ids = sorted(set(freports["stock_id"]) | {BENCHMARK})
+        start = (freports["day"].min() - pd.Timedelta(days=5)).date()
+        end = (freports["day"].max() + pd.Timedelta(days=FORECAST_H * 2 + 10)).date()
+        panels = load_bars(get_engine(), ids, start, end)
+        fev = build_forecast_events(freports, panels, fee_discount=a.fee_discount)
+        out = Path(a.out) if a.out else REPO / "reports" / f"shadow_forecast_{dt.date.today():%Y%m%d}.md"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(render_forecast(fev, a), encoding="utf-8")
+        print(f"已寫入 {out}")
+        return
     reports = load_reports(a.db)
     if reports.empty:
         raise SystemExit("analysis_history 沒有台股報告")

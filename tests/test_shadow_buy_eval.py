@@ -17,7 +17,16 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from shadow_buy_eval import (  # noqa: E402
     DEFAULT_NOTIONAL,
+    FORECAST_H,
+    baseline_probs,
+    build_forecast_events,
     cluster_bootstrap_ci,
+    date_block_ci,
+    forecast_outcome,
+    forecast_scores,
+    macro_ctx_label,
+    rank_ic,
+    render_forecast,
     is_raw_buy,
     latest_per_code_day,
     raw_decision,
@@ -25,7 +34,7 @@ from shadow_buy_eval import (  # noqa: E402
     trade_return,
     verdict,
 )
-from tw_trade_costs import STOCK_TRANSACTION_TAX_RATE, round_trip_return  # noqa: E402
+from tw_trade_costs import ETF_TRANSACTION_TAX_RATE, STOCK_TRANSACTION_TAX_RATE, round_trip_return  # noqa: E402
 
 
 def _rt(entry, exit_):
@@ -331,3 +340,151 @@ def test_render_excludes_and_counts_incomplete_trades():
     md = render(ev, reports, args)
     assert "未完成" in md and "raw-buy 1 筆" in md
     assert "| raw-buy | 0 |" in md  # 沒有混進報酬統計
+
+
+# ---------------------------------------------------------------- --forecast（固定預測題 p_5d_beat_0050）
+
+def _flat(entry, exit_, n=FORECAST_H):
+    o = [entry] + [entry] * (n - 1)
+    c = [entry] * (n - 1) + [exit_]
+    return _bars(o, o, c, c)
+
+
+def test_forecast_outcome_costs_are_per_leg():
+    """兩腿成本分開：個股 0.3% 稅、0050 0.1% 稅。兩腿報酬相同時，0050 因為稅低而淨報酬較高。"""
+    net_s, net_b, y = forecast_outcome(
+        _flat(100, 110), _flat(100, 110),
+        stock_tax=STOCK_TRANSACTION_TAX_RATE, bench_tax=ETF_TRANSACTION_TAX_RATE)
+    assert net_s == pytest.approx(round_trip_return(100, 110, entry_notional=DEFAULT_NOTIONAL,
+                                                    tax_rate=STOCK_TRANSACTION_TAX_RATE))
+    assert net_b == pytest.approx(round_trip_return(100, 110, entry_notional=DEFAULT_NOTIONAL,
+                                                    tax_rate=ETF_TRANSACTION_TAX_RATE))
+    assert net_b > net_s and y == 0   # 同樣漲 10%：稅率差讓個股贏不了 0050
+
+
+def test_forecast_outcome_edge_where_only_split_costs_flip_y():
+    # 個股比 0050 多漲 0.15%：總成本差 0.2%（稅 0.3% vs 0.1%）→ 扣成本後個股輸；兩腿都用個股稅會誤判成贏
+    s_bars, b_bars = _flat(100, 110.15), _flat(100, 110)
+    _, _, y_split = forecast_outcome(s_bars, b_bars, stock_tax=STOCK_TRANSACTION_TAX_RATE,
+                                     bench_tax=ETF_TRANSACTION_TAX_RATE)
+    _, _, y_same = forecast_outcome(s_bars, b_bars, stock_tax=STOCK_TRANSACTION_TAX_RATE,
+                                    bench_tax=STOCK_TRANSACTION_TAX_RATE)
+    assert (y_split, y_same) == (0, 1)
+
+
+def test_forecast_outcome_none_when_a_leg_is_missing_or_incomplete():
+    ok = _flat(100, 105)
+    no_open = _bars([float("nan")] + [100] * 4, [100] * 5, [100] * 5, [100] * 5)
+    no_close = _bars([100] * 5, [100] * 5, [100] * 5, [100] * 4 + [float("nan")])
+    for bad in (no_open, no_close):
+        assert forecast_outcome(bad, ok, stock_tax=0.003, bench_tax=0.001) is None
+        assert forecast_outcome(ok, bad, stock_tax=0.003, bench_tax=0.001) is None
+
+
+def test_baseline_uses_only_events_resolved_before_forecast_day_and_laplace():
+    day = pd.to_datetime(["2026-01-05", "2026-01-12", "2026-01-12"])
+    resolved = pd.to_datetime(["2026-01-09", "2026-01-12", "2026-01-16"])
+    y = [1, 0, 1]
+    probs, n = baseline_probs(day, resolved, y)
+    # 第 1 筆：沒有歷史 → (0+1)/(0+2)；第 2、3 筆：只看得到 01-09 那筆（y=1；01-12 當天才收盤的不算）
+    assert list(n) == [0, 1, 1]
+    assert probs.tolist() == pytest.approx([0.5, 2 / 3, 2 / 3])
+
+
+def test_baseline_window_is_252_days():
+    day = pd.to_datetime(["2027-01-04"])
+    old = baseline_probs(day.repeat(1), pd.to_datetime(["2026-01-02"]).repeat(1), [1])   # 367 天前：窗外
+    assert old[1].tolist() == [0]
+    inside = baseline_probs(day, pd.to_datetime(["2026-06-01"]), [1])
+    assert inside[1].tolist() == [1]
+
+
+def test_date_block_ci_resamples_dates_not_events():
+    rng = np.random.default_rng(0)
+    dates = pd.to_datetime(pd.date_range("2026-01-01", periods=60).repeat(5))
+    vals = np.repeat(rng.normal(0.5, 0.1, 60), 5)   # 同日 5 檔完全相關
+    ci5 = date_block_ci(vals, dates, block=5, n=500, seed=1)
+    ci10 = date_block_ci(vals, dates, block=10, n=500, seed=1)
+    assert ci5[0] > 0 and ci10[0] > 0 and ci5[0] < vals.mean() < ci5[1]
+    # 日期數不足 2×block → None（呼叫端標 inconclusive）
+    assert date_block_ci(vals[:25], dates[:25], block=5, n=100) is None
+    # 兩組差：同分布 → CI 跨零
+    other = np.repeat(rng.normal(0.5, 0.1, 60), 5)
+    diff = date_block_ci(vals, dates, block=5, n=500, seed=1, other=(other, dates))
+    assert diff[0] < 0 < diff[1]
+
+
+def test_date_block_ci_block_length_widens_ci_for_serially_correlated_series():
+    """5 日標籤重疊 → 相鄰日期相關；block 越長區間越寬。把 block 忽略（逐日重抽）兩個寬度會一樣。"""
+    n_days = 120
+    dates = pd.to_datetime(pd.date_range("2026-01-01", periods=n_days))
+    vals = np.sin(np.arange(n_days) / 8.0) + np.random.default_rng(3).normal(0, 0.05, n_days)
+    w1 = np.subtract(*date_block_ci(vals, dates, block=1, n=1000, seed=7)[::-1])
+    w10 = np.subtract(*date_block_ci(vals, dates, block=10, n=1000, seed=7)[::-1])
+    assert w10 > 1.5 * w1
+
+
+def test_rank_ic_signs():
+    assert rank_ic([0.1, 0.5, 0.9, 0.7], [-1, 0, 2, 1]) == pytest.approx(1.0)
+    assert rank_ic([0.1, 0.5, 0.9, 0.7], [2, 1, -1, 0]) == pytest.approx(-1.0)
+    assert np.isnan(rank_ic([0.5, 0.5, 0.5], [1, 2, 3]))
+
+
+def test_macro_ctx_label_reads_experiments_and_defaults_to_none():
+    assert macro_ctx_label(json.dumps({"dashboard": {"experiments": {"macro_ctx": "on"}}})) == "on"
+    assert macro_ctx_label(json.dumps({"dashboard": {}})) == "none"
+    assert macro_ctx_label("not json") == "none"
+
+
+def _forecast_panels(n_days=40):
+    cal = pd.bdate_range("2026-01-05", periods=n_days)
+    px = {k: pd.DataFrame({"2330": 100.0, "0050": 100.0}, index=cal) for k in ("open", "high", "low", "close")}
+    px["adj"] = pd.DataFrame({"2330": 1.0, "0050": 1.0}, index=cal)
+    return px, cal
+
+
+def test_build_forecast_events_window_exclusions_and_kind():
+    panels, cal = _forecast_panels()
+    panels["close"].loc[cal[6], "2330"] = 110.0   # 報告日 cal[0] 之後 T+1=cal[1]，第 5 日＝cal[5]；cal[6] 不在窗內
+    panels["close"].loc[cal[5], "2330"] = 108.0
+    reports = pd.DataFrame({
+        "code": ["2330.TW", "0050.TW", "2330.TW"], "stock_id": ["2330", "0050", "2330"],
+        "day": [cal[0], cal[0], cal[-2]], "p": [0.6, 0.6, 0.6], "ctx": ["on", "on", "on"]})
+    ev = build_forecast_events(reports, panels)
+    assert len(ev) == 1   # 0050 本身排除；視窗沒走完的排除
+    row = ev.iloc[0]
+    assert row["resolved_at"] == cal[5] and row["y"] == 1 and row["kind"] == "stock"
+
+
+def test_render_forecast_inconclusive_when_sample_small_and_reports_arms():
+    panels, cal = _forecast_panels(30)
+    rows = []
+    for i in range(3):
+        rows.append({"code": "2330.TW", "stock_id": "2330", "day": cal[i], "p": 0.6, "ctx": "on"})
+    ev = build_forecast_events(pd.DataFrame(rows), panels)
+    args = type("A", (), {"bootstrap": 200, "seed": 1})()
+    text = render_forecast(ev, args)
+    assert "inconclusive" in text and "固定預測題" in text
+    assert "沒有已走完" in render_forecast(pd.DataFrame(), args)
+
+
+def test_forecast_scores_brier_and_d_sign():
+    ev = pd.DataFrame({
+        "day": pd.to_datetime(["2026-03-02"] * 2), "resolved_at": pd.to_datetime(["2026-03-02"] * 2),
+        "p": [0.9, 0.1], "y": [1, 1], "net_stock": [0.01, 0.01], "net_bench": [0.0, 0.0],
+        "ctx": ["on", "on"], "kind": ["stock", "stock"], "code": ["a", "b"]})
+    sc = forecast_scores(ev)
+    assert sc["brier"].tolist() == pytest.approx([0.01, 0.81])
+    assert (sc["d"] > 0).tolist() == [True, False]   # 預測準的 d>0（比基準好），預測反的 d<0
+
+
+def test_build_forecast_events_uses_etf_tax_for_the_0050_leg():
+    """端到端：個股比 0050 多漲 0.15%，成本差 0.2%（稅 0.3% vs 0.1%）→ 個股輸。兩腿都用個股稅會誤判成贏。"""
+    panels, cal = _forecast_panels()
+    for k in ("open", "high", "low", "close"):
+        panels[k].loc[cal[1]:, "0050"] = 100.0
+    panels["close"].loc[cal[5], "2330"] = 110.15
+    panels["close"].loc[cal[5], "0050"] = 110.0
+    reports = pd.DataFrame({"code": ["2330.TW"], "stock_id": ["2330"], "day": [cal[0]], "p": [0.6], "ctx": ["on"]})
+    ev = build_forecast_events(reports, panels)
+    assert ev.iloc[0]["y"] == 0 and ev.iloc[0]["net_stock"] > 0
