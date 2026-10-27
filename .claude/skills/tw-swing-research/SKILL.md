@@ -196,13 +196,22 @@ down=-0.18` 算出 +0.234 而放行，正確答案是 **-0.054、應該 pass**�
  "invalidation_legs":[{"leg":"SCFI 連兩週回落","source":"SCFI 週報","true_at_write":false},
                       {"leg":"收盤跌破 MA20 (82.1)","source":"market.price.close","true_at_write":false}],
  "peer_confirm":true,"peer_recent_12m":"航運近 12 個月 2 個事件、均值 -12%",
- "confidence":0.32,"exp_upside":0.45,"exp_downside":-0.18,"theme":"貨櫃運價",
+ "confidence":0.32,"model_confidence_raw":0.32,"override":false,"override_reason":null,
+ "exp_upside":0.45,"exp_downside":-0.18,"theme":"貨櫃運價",
  "decided_at":"2026-07-26T21:40+08:00",
  "reasons":["同業陽明/長榮同步走強","法人連買 6 天","PB 0.85 低於同業"],
  "sources":["https://..."]}
 ```
 
 `verdict` 只有 `enter` 與 `pass` 兩種。另外補 `decided_at`（你做判斷的時點）讓資訊集可稽核。
+
+**模型原判與人工覆寫分欄（2026-10-27 起）**：`model_confidence_raw` 是你照本步驟錨點與研究結論寫下的
+原始機率（未經任何事後調整）；`confidence` 是最終採用值。兩者不同、或 `verdict` 被人工改過，就把
+`override` 設 `true`、並在 `override_reason` 寫一句理由；沒覆寫時 `override: false`、`override_reason: null`、
+`model_confidence_raw` 與 `confidence` 相同。到期 ≥20 筆後，用原判與覆寫的配對 Brier 比較哪個準。
+
+**前瞻封存期**：2026-10-27 起寫入的決策視為前瞻封存，**不得拿來回頭調整突破池的門檻**（門檻與 20.4%
+錨點都是在同一段歷史上定的，已含 2026 年到期事件、屬樣本內）。想改門檻要另開新的研究，用新資料驗。
 
 **`invalidation` 的兩條硬約束**（`enter` 與 `pass` 都適用，`pass` 的失效條件一樣會被回驗）：
 
@@ -223,7 +232,7 @@ down=-0.18` 算出 +0.234 而放行，正確答案是 **-0.054、應該 pass**�
 ```
 
 回驗由 `make verify-decisions` 讀這個檔做：它算 `E[R|enter] − E[R|全收]`（這一層有沒有加值）、
-`E[R|pass]`（放棄機會的成本）、`Brier(confidence)` 對照「一律報基準率」（文件錨點已重測為 20.4%；回驗腳本的 `BASE_RATE` 仍是作廢的 0.202、尚未跟改），以及**可成交
+`E[R|pass]`（放棄機會的成本）、`Brier(confidence)` 對照「一律報基準率」（錨點 20.4%，2026-10-26 重測；回驗腳本 `BASE_RATE` 已同步為 0.204），以及**可成交
 口徑**（同樣 5 個空位下「全收 vs 只收 enter」兩本帳）。**單看命中率證明不了任何事——全收
 也會賺**；而事件均值可以被同日同題材的一堆訊號撐高，真實帳戶只拿得到 5 檔。
 

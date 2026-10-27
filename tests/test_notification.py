@@ -866,9 +866,19 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
                 alpha_start = out.index("Alpha (AAA)")
                 empty_start = out.index("NoSource (NONE)")
                 beta_start = out.index("Beta (BBB)")
-                alpha_block = out[alpha_start:empty_start]
-                empty_block = out[empty_start:beta_start]
-                beta_block = out[beta_start:]
+                # 推播改依動作類別再代號排序；模板路徑（report_renderer）仍依分數，
+                # 所以不假設區塊先後，依各自出現位置切塊
+                starts = sorted(
+                    [("alpha", alpha_start), ("empty", empty_start), ("beta", beta_start)],
+                    key=lambda item: item[1],
+                )
+                blocks = {}
+                for i, (name, start) in enumerate(starts):
+                    end = starts[i + 1][1] if i + 1 < len(starts) else len(out)
+                    blocks[name] = out[start:end]
+                alpha_block, empty_block, beta_block = (
+                    blocks["alpha"], blocks["empty"], blocks["beta"]
+                )
 
                 self.assertIn("agent:a,daily:AlphaFetcher", alpha_block)
                 self.assertNotIn("daily:BetaFetcher", alpha_block)
@@ -904,9 +914,19 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
                 alpha_start = out.index("**Alpha(AAA)**")
                 empty_start = out.index("**NoSource(NONE)**")
                 beta_start = out.index("**Beta(BBB)**")
-                alpha_block = out[alpha_start:empty_start]
-                empty_block = out[empty_start:beta_start]
-                beta_block = out[beta_start:]
+                # 推播改依動作類別再代號排序；模板路徑（report_renderer）仍依分數，
+                # 所以不假設區塊先後，依各自出現位置切塊
+                starts = sorted(
+                    [("alpha", alpha_start), ("empty", empty_start), ("beta", beta_start)],
+                    key=lambda item: item[1],
+                )
+                blocks = {}
+                for i, (name, start) in enumerate(starts):
+                    end = starts[i + 1][1] if i + 1 < len(starts) else len(out)
+                    blocks[name] = out[start:end]
+                alpha_block, empty_block, beta_block = (
+                    blocks["alpha"], blocks["empty"], blocks["beta"]
+                )
 
                 self.assertIn("daily:AlphaFetcher", alpha_block)
                 self.assertNotIn("daily:BetaFetcher", alpha_block)
