@@ -139,7 +139,7 @@ def test_cost_guardrail_uses_model_prices_and_keeps_buy_band_hold_behavior(stop)
     assert check["status"] == ("ok" if stop is not None else "levels_missing")
     if stop is not None:
         assert check["gross_rr"] == 2.5
-    assert result.sentiment_score == 78
+    assert result.sentiment_score == (78 if stop is not None else 59)
 
 
 @pytest.mark.parametrize("value", [110, None])
@@ -191,8 +191,8 @@ def test_integrity_and_agent_backfills_follow_structured_stop(value):
         assert extract_sniper_points(result) == prices
         assert result.get_sniper_points()["stop_loss"] == 110
     else:
-        # 模型文字與數字都沒給停損：沿用既有趨勢支撐補位（只補停損一格）
-        assert extract_sniper_points(result) == {**prices, "stop_loss": 999}
+        # 模型文字與數字都沒給停損：不得把支撐補進模型欄位。
+        assert extract_sniper_points(result) == prices
     result = result_with(prices)
     result.dashboard["battle_plan"]["sniper_points"] = {}
     orchestrator = AgentOrchestrator(tool_registry=MagicMock(), llm_adapter=MagicMock())

@@ -35,7 +35,10 @@ from data_provider.realtime_types import ChipDistribution, RealtimeSource
 from src.analyzer import (
     GeminiAnalyzer,
     AnalysisResult,
+    build_stop_loss_repair_prompt,
     fill_price_position_if_needed,
+    needs_stop_loss_repair,
+    parse_stop_loss_repair_reply,
     normalize_chip_structure_availability,
     populate_decision_action_fields,
     stabilize_decision_with_structure,
@@ -43,7 +46,7 @@ from src.analyzer import (
 from src.notification import NotificationService, NotificationChannel
 from src.notification_sender import OutboundMessage
 from src.schemas.decision_action import decision_type_for_action, normalize_decision_action
-from src.utils.sniper_points import SNIPER_PRICES_KEY, parse_structured_price
+from src.utils.sniper_points import SNIPER_PRICES_KEY, extract_sniper_points, find_sniper_prices, parse_structured_price
 from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.report_language import (
     get_placeholder_text,
@@ -1206,6 +1209,8 @@ class StockAnalysisPipeline:
                 'bias_ma5': trend_result.bias_ma5,
                 'bias_ma10': trend_result.bias_ma10,
                 'atr14_pct': getattr(trend_result, 'atr14_pct', None),
+                # 支撐只當補問停損的證據，不代填模型價位。
+                'support_levels': list(getattr(trend_result, 'support_levels', None) or []),
                 'volume_status': trend_result.volume_status.value,
                 'volume_trend': trend_result.volume_trend,
                 'buy_signal': trend_result.buy_signal.value,
@@ -1875,7 +1880,8 @@ class StockAnalysisPipeline:
             )
             if result:
                 result.query_id = query_id
-            # Agent weak integrity: placeholder fill only, no LLM retry
+                self._repair_agent_stop_loss(result, trend_result, report_language)
+            # 停損已獨立補問；其餘 Agent 完整性欄位維持弱模式占位。
             if result and getattr(self.config, "report_integrity_enabled", False):
                 from src.analyzer import check_content_integrity, apply_placeholder_fill
 
@@ -2713,25 +2719,51 @@ class StockAnalysisPipeline:
             if text_missing and not stop_missing and isinstance(structured, dict):
                 # 文字漏寫但數字有給：顯示用文字直接沿用模型給的停損數字
                 sniper_points["stop_loss"] = structured.get("stop_loss")
-            # 只有模型連文字都沒給停損時才用趨勢支撐補；模型有寫文字（例如說明不設停損）就尊重它的判斷
+            # 缺漏只補顯示用占位文字，不把程式計算的支撐寫成模型判斷。
             if stop_missing and text_missing:
-                fallback = self._stop_loss_fallback_from_trend(
-                    trend_result,
-                    report_language,
-                )
-                sniper_points["stop_loss"] = fallback
-                if isinstance(structured, dict) and parse_structured_price(fallback) is not None:
-                    structured["stop_loss"] = fallback
+                sniper_points["stop_loss"] = get_placeholder_text(report_language)
 
-    @staticmethod
-    def _stop_loss_fallback_from_trend(
+    def _repair_agent_stop_loss(
+        self,
+        result: AnalysisResult,
         trend_result: Optional[TrendAnalysisResult],
         report_language: str,
-    ) -> Any:
-        levels = getattr(trend_result, "support_levels", None) if trend_result else None
-        if levels:
-            return levels[0]
-        return get_placeholder_text(report_language)
+    ) -> bool:
+        """各市場的買入缺停損都補問一次，僅合併模型實際回傳的格子。"""
+        if not needs_stop_loss_repair(result):
+            return False
+        try:
+            reply = self.analyzer.generate_text(
+                build_stop_loss_repair_prompt(result, trend_result, report_language),
+                max_tokens=1024, temperature=0.2, call_type="agent",
+            )
+            prices, note = parse_stop_loss_repair_reply(reply)
+        except Exception as exc:
+            logger.warning("[%s] 停損補問失敗，保留原價位: %s", result.code, exc)
+            return False
+        if not prices:
+            return False
+        # 舊版的純數值本來就是模型價位；只保留已有數字，不憑空補 null。
+        existing = find_sniper_prices(result.dashboard)
+        if existing is None:
+            existing = find_sniper_prices(getattr(result, "raw_response", None))
+        merged = dict(existing) if existing is not None else {
+            key: price for key, price in extract_sniper_points(result).items() if price is not None
+        }
+        merged.update(prices)
+        if not isinstance(result.dashboard, dict):
+            result.dashboard = {}
+        battle = result.dashboard.get("battle_plan")
+        if not isinstance(battle, dict):
+            battle = {}
+            result.dashboard["battle_plan"] = battle
+        battle[SNIPER_PRICES_KEY] = merged
+        points = battle.get("sniper_points")
+        if not isinstance(points, dict):
+            points = {}
+            battle["sniper_points"] = points
+        points["stop_loss"] = note or prices["stop_loss"]
+        return True
 
     @staticmethod
     def _apply_trend_fallback(

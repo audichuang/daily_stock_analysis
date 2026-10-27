@@ -11,8 +11,7 @@
 
 1. 每份台股報告都在 ``dashboard.battle_plan.cost_check`` 寫一份檢核結果（買點掛單的人
    也看得到，不只是「買入」評級）。
-2. 淨風報比低於門檻、而結論又是買入時，降級為觀望——扣完成本後賺的比賠的少，
-   等於要靠勝率過半才打平，這不該是「買入」。
+2. 買入結論缺任一必要價位、價位順序無效或淨風報比低於門檻時，降級為觀望並揭露原因。
 
 成本費率唯一真源是 ``src/utils/tw_trade_costs.py``（研究腳本共用同一份）。
 """
@@ -24,7 +23,10 @@ from datetime import date
 from typing import Any, Dict, List, Optional
 
 from src.report_language import localize_operation_advice, normalize_report_language
-from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
+from src.schemas.decision_action import build_action_fields
+from src.schemas.decision_scale import (
+    action_for_score, extract_decision_guardrail_reason, record_guardrail_score_adjustment,
+)
 from src.services.market_symbol_utils import get_suffix_market
 from src.utils.sniper_points import extract_sniper_points
 from src.utils.tw_trade_costs import (
@@ -64,9 +66,10 @@ def evaluate_levels(
     base: Dict[str, Any] = {"min_net_rr": min_net_rr}
     if not is_tw_code(code):
         return {**base, "status": "unsupported_market", "passed": None}
-    levels = (ideal_buy, stop_loss, take_profit)
-    if any(v is None or v <= 0 for v in levels) or not (stop_loss < ideal_buy < take_profit):
-        return {**base, "status": "levels_missing", "passed": None}
+    levels = {"ideal_buy": ideal_buy, "stop_loss": stop_loss, "take_profit": take_profit}
+    missing = [key for key, value in levels.items() if value is None or value <= 0]
+    if missing or not (stop_loss < ideal_buy < take_profit):
+        return {**base, "status": "levels_missing", "passed": False, "missing_fields": missing}
 
     stock_id = str(code).split(".")[0]
     buy_mult, sell_mult = per_share_cost_multipliers(
@@ -107,6 +110,25 @@ def _is_buy(result: Any) -> bool:
 
 
 def _wording(language: str, check: Dict[str, Any]) -> Dict[str, str]:
+    if check.get("status") == "levels_missing":
+        labels, invalid, suffix, no_position, has_position = {
+            "zh-TW": ({"ideal_buy": "缺進場價", "stop_loss": "缺停損價", "take_profit": "缺目標價"},
+                      "進場、停損與目標價順序無效", "無法檢查報酬風險比",
+                      "空手先不進場；待價位補齊並通過檢核後再評估。", "持有者依既有風控計畫處理，不因這份報告加碼。"),
+            "zh": ({"ideal_buy": "缺进场价", "stop_loss": "缺止损价", "take_profit": "缺目标价"},
+                   "进场、止损与目标价顺序无效", "无法检查风险收益比",
+                   "空仓先不进场；待价位补齐并通过检查后再评估。", "持仓者按既有风控计划处理，不因这份报告加仓。"),
+            "en": ({"ideal_buy": "missing entry price", "stop_loss": "missing stop-loss price",
+                    "take_profit": "missing target price"}, "invalid entry, stop and target order",
+                   "cannot check reward/risk", "Do not enter until the levels are complete and checked.",
+                   "Follow the existing risk plan; do not add on this report."),
+            "ko": ({"ideal_buy": "진입가 누락", "stop_loss": "손절가 누락", "take_profit": "목표가 누락"},
+                   "진입가, 손절가, 목표가 순서 오류", "손익비를 확인할 수 없습니다",
+                   "가격이 완성되고 검증될 때까지 진입하지 마세요.", "기존 위험 관리 계획을 따르고 추가 매수하지 마세요."),
+        }[language]
+        missing = "／".join(labels[key] for key in check.get("missing_fields", []))
+        return {"reason": f"{missing or invalid}，{suffix}",
+                "no_position": no_position, "has_position": has_position}
     rr = check.get("net_rr")
     up, down = check.get("net_upside_pct"), check.get("net_downside_pct")
     cost = check.get("round_trip_cost_pct")
@@ -145,7 +167,7 @@ def apply_trade_cost_guardrail(
     slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     atr_pct: Optional[float] = None,
 ) -> List[str]:
-    """寫入 cost_check，並在買入結論扣成本後不划算時降級為觀望。回傳調整代碼。"""
+    """寫入 cost_check，買入缺必要價位或扣成本後不划算都降為觀望。回傳調整代碼。"""
     if result is None or not is_tw_code(code):
         return []
     dashboard = getattr(result, "dashboard", None)
@@ -173,6 +195,17 @@ def apply_trade_cost_guardrail(
     battle_plan["cost_check"] = check
     if check.get("passed") is not False or not _is_buy(result):
         return []
+    if check.get("status") == "levels_missing":
+        fields = build_action_fields(
+            operation_advice=getattr(result, "operation_advice", None),
+            explicit_action=getattr(result, "action", None),
+            sentiment_score=getattr(result, "sentiment_score", None),
+            guardrail_reason=extract_decision_guardrail_reason({"dashboard": dashboard}),
+            align_with_score=True,
+        )
+        if fields.get("action") not in _BUY_ACTIONS and getattr(result, "decision_type", None) != "buy":
+            # 前面的護欄已保留觀望，或結構化動作是減碼，不因缺價覆寫非買入決策。
+            return []
 
     language = normalize_report_language(report_language or getattr(result, "report_language", "zh"))
     words = _wording(language, check)

@@ -999,7 +999,7 @@ class TestAgentResultConversion(unittest.TestCase):
         self.assertEqual(result.dashboard["sentiment_score"], 68)
         self.assertEqual(result.dashboard["core_conclusion"]["one_sentence"], result.analysis_summary)
         self.assertEqual(result.dashboard["intelligence"]["risk_alerts"], ["跌破 MA20 需止损"])
-        self.assertEqual(result.dashboard["battle_plan"]["sniper_points"]["stop_loss"], 112.3)
+        self.assertEqual(result.dashboard["battle_plan"]["sniper_points"]["stop_loss"], "待补充")
 
     def test_convert_dict_operation_advice_missing_decision_type_preserves_buy_signal(self):
         """When operation_advice is dict without decision_type, preserve dict-derived buy/sell hint."""
@@ -1377,7 +1377,7 @@ class TestAgentResultConversion(unittest.TestCase):
         self.assertEqual(result.dashboard["operation_advice"], "买入")
         self.assertEqual(result.dashboard["core_conclusion"]["one_sentence"], "AI 已给出的核心结论")
         self.assertEqual(result.dashboard["intelligence"]["risk_alerts"], ["AI 风险"])
-        self.assertEqual(result.dashboard["battle_plan"]["sniper_points"]["stop_loss"], 108.5)
+        self.assertEqual(result.dashboard["battle_plan"]["sniper_points"]["stop_loss"], "待补充")
         self.assertIn("trend:fallback", result.data_sources)
 
     def _convert_with_battle_plan(self, battle_plan):
@@ -1436,15 +1436,15 @@ class TestAgentResultConversion(unittest.TestCase):
         self.assertIsNone(battle["sniper_prices"]["stop_loss"])
         self.assertTrue(battle["sniper_points"]["stop_loss"].startswith("暫無"))
 
-    def test_convert_structured_null_stop_without_text_uses_trend_fallback_in_both(self):
-        """反向：模型文字與數字都沒給停損，趨勢支撐同時補進文字與結構化欄位。"""
+    def test_convert_structured_null_stop_without_text_keeps_model_null(self):
+        """模型文字與數字都沒給停損，支撐不得代填；等補問模型。"""
         result = self._convert_with_battle_plan({
             "sniper_points": {"stop_loss": ""},
             "sniper_prices": {"stop_loss": None},
         })
         battle = result.dashboard["battle_plan"]
-        self.assertEqual(battle["sniper_prices"]["stop_loss"], 108.5)
-        self.assertEqual(battle["sniper_points"]["stop_loss"], 108.5)
+        self.assertIsNone(battle["sniper_prices"]["stop_loss"])
+        self.assertEqual(battle["sniper_points"]["stop_loss"], "待补充")
 
     def test_convert_risk_alerts_string_placeholder_uses_local_risk_factors(self):
         """String-like placeholder risk alerts should be replaced with local trend risk factors."""

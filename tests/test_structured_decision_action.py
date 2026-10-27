@@ -547,7 +547,8 @@ def test_unguarded_watch_still_aligns_with_buy_band_score() -> None:
     result = AnalysisResult(
         code="2330.TW", name="台積電", sentiment_score=68, trend_prediction="看多",
         operation_advice="观望", action="watch", decision_type="hold",
-        report_language="zh", current_price=100, dashboard={},
+        report_language="zh", current_price=100,
+        dashboard={"battle_plan": {"sniper_prices": {"ideal_buy": 100, "stop_loss": 96, "take_profit": 110}}},
     )
     pipeline._finalize_and_persist_result(
         result, _finalize_artifacts(), market_phase_summary={"phase": "intraday", "market": "tw"},

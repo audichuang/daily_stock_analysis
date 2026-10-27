@@ -161,6 +161,7 @@ class TestAnalyzerInjectedLLMClient:
             trend_prediction="看多",
             operation_advice="持有",
             analysis_summary="fake llm client result",
+            dashboard={"battle_plan": {"sniper_prices": {"stop_loss": 110}}},
         )
 
         fake_llm_client = MagicMock(spec=LLMClient)
