@@ -1822,6 +1822,9 @@ def _has_sensitive_url_params(params_text: str) -> bool:
     return False
 
 
+_CLI_MODEL_DIAGNOSTIC_KEY = "_cli_model"
+
+
 def _extract_claude_code_json(result: LocalCliExecutionResult, *, schema_mode: bool) -> str:
     raw = (result.stdout or "").strip()
     if not raw:
@@ -1892,6 +1895,13 @@ def _extract_claude_code_json(result: LocalCliExecutionResult, *, schema_mode: b
         raise LocalCliExtractionError(
             GenerationErrorCode.EMPTY_OUTPUT,
             "empty_result",
+        )
+    # 台版新增：envelope 的 modelUsage 鍵是 CLI 實際用的模型，放進 diagnostics 暫存，
+    # 由 backend 搬到 GenerationResult.usage["cli_model"]（不改 GenerationResult.model）。
+    model_usage = envelope.get("modelUsage")
+    if isinstance(model_usage, dict) and model_usage and isinstance(result.diagnostics, dict):
+        result.diagnostics[_CLI_MODEL_DIAGNOSTIC_KEY] = ",".join(
+            str(key) for key in model_usage
         )
     return text
 
@@ -2518,16 +2528,20 @@ class LocalCliGenerationBackend(GenerationBackend):
                     },
                 ) from exc
 
+        cli_model = diagnostics.pop(_CLI_MODEL_DIAGNOSTIC_KEY, None)
+        usage: Dict[str, Any] = {
+            "usage_available": False,
+            "usage_source": "unavailable",
+            "backend": self._preset.preset_id,
+        }
+        if cli_model:
+            usage["cli_model"] = cli_model
         return GenerationResult(
             text=text,
             model=self._preset.preset_id,
             provider=self._preset.preset_id,
             backend=self.backend_id,
-            usage={
-                "usage_available": False,
-                "usage_source": "unavailable",
-                "backend": self._preset.preset_id,
-            },
+            usage=usage,
             raw=None,
             diagnostics=diagnostics,
         )
@@ -2611,6 +2625,15 @@ class LocalCliGenerationBackend(GenerationBackend):
         argv: list[str],
         prompt_path: Optional[Path],
     ) -> list[str]:
+        if self._preset.preset_id == CLAUDE_CODE_CLI_BACKEND_ID:
+            model = self._get_claude_code_cli_model()
+            if not model:
+                return argv
+            try:
+                insert_at = argv.index("--output-format")
+            except ValueError:
+                insert_at = 0
+            return [*argv[:insert_at], "--model", model, *argv[insert_at:]]
         if self._preset.preset_id != OPENCODE_CLI_BACKEND_ID:
             return argv
         model = self._get_opencode_cli_model()
@@ -2639,6 +2662,25 @@ class LocalCliGenerationBackend(GenerationBackend):
                 *runtime_argv[insert_at:],
             ]
         return runtime_argv
+
+    def _get_claude_code_cli_model(self) -> str:
+        model = str(getattr(self._config, "claude_code_cli_model", "") or "").strip()
+        if not model:
+            return ""
+        unsafe = _first_unsafe_token([model])
+        if unsafe or any(ch.isspace() for ch in model) or "$" in model:
+            raise self._error(
+                GenerationErrorCode.UNSAFE_CONFIG,
+                stage="configuration",
+                retryable=False,
+                fallbackable=False,
+                details={
+                    "reason": "unsafe_claude_code_cli_model",
+                    "field": "CLAUDE_CODE_CLI_MODEL",
+                    "token_preview": unsafe or redact_diagnostic_text(model, limit=120),
+                },
+            )
+        return model
 
     def _get_opencode_cli_model(self) -> str:
         model = str(getattr(self._config, "opencode_cli_model", "") or "").strip()

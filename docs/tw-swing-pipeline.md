@@ -268,7 +268,7 @@ strict 会让盘后跑的 `make morning` 每天先红一次。代价是**当天 
 ```
 E[R|enter] − E[R|全收]        选出来的比全收好多少（<0 就是这层在扣分）
 E[R|pass]                     放弃掉的后来涨了多少（机会成本）
-Brier(conf) vs Brier(20.4%)   confidence 有没有比现行基准率更准（2026-10-26 重测；`verify_swing_decisions.BASE_RATE` 仍是作废的 0.202，未跟改）
+Brier(conf) vs Brier(20.4%)   confidence 有没有比现行基准率更准（2026-10-26 重测；`verify_swing_decisions.BASE_RATE` 已同步为 0.204）
 可成交口径                    同样 5 个空位下「全收 vs 只收 enter」两本帐
 ```
 

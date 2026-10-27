@@ -493,7 +493,7 @@ def test_cli_backfill_daily_delay_defaults_and_overrides(net, monkeypatch, sourc
     seen = []
     monkeypatch.setattr(cli, "get_engine", lambda: engine)
     monkeypatch.setattr(crawl, "crawl_day",
-                        lambda conn, src, day, replace=False: seen.append((src, day, replace)) or 1)
+                        lambda conn, src, day, replace=False, **kw: seen.append((src, day, replace)) or 1)
 
     cli.main(["backfill", source, "--start", "2010-01-04", "--end", "2010-01-05", *delay_args])
 

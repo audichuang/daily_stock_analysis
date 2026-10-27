@@ -21,14 +21,14 @@
 |---|---|---|---|
 | 日線 OHLCV、均線、乖離、MACD、RSI、ATR14 | 本地 `market.price`（前復權算指標）→ yfinance | 是 | 顯示價是未還原；指標用還原價（`docs/realtime-board.md`）；盤中（含午休、收盤集合競價）僅在趨勢輸入最後一根是今日部分 K（即時疊上或 DB 已有）時，量能狀態標「盤中不判讀」並給中性 10 分，日期不明時也保守不判讀；最後一根仍是昨日完整 K 或已收盤則照常判縮放量，量比標籤不變 |
 | 即時報價、漲跌停 | Shioaji → yfinance | 是 | `source` 變 `fallback` 代表 Shioaji 金鑰沒注入、已降級 |
-| 三大法人（當日＋5／20 日累計） | 當日 TWSE T86／TPEx；趨勢讀本地 `market.institutional` | 是 | 單位是**股**；18:00 拿到的是初版，prompt 標「初版，投信常於隔夜修正」（約 1/4 份報告與定版不同，多在投信欄）；隔日 `daily` 由 `REVISED_SOURCES` 換成定版；上櫃歷史自 2018-01-15（#39） |
+| 三大法人（當日＋5／20 日累計） | 當日 TWSE T86／TPEx；趨勢讀本地 `market.institutional` | 是 | 單位是**股**；18:00 拿到的是初版，prompt 標「初版，投信常於隔夜修正」（約 1/4 份報告與定版不同，多在投信欄）；隔日 `daily` 由 `REVISED_SOURCES` 換成定版（初版另存 `market.institutional_initial`，只由 daily 補缺路徑寫、DO NOTHING，2026-10-27 起）；上櫃歷史自 2018-01-15（#39） |
 | 融資融券（餘額、5／20 場變化、券資比） | 本地 `market.margin` | 是 | 單位是**張**，T+1；上櫃同表 `market='tpex'`（#39） |
 | 估值（近四季本益比、淨值比、殖利率） | 上市優先讀本地 `market.valuation` 當日值，退回 `TwseFundamentalAdapter`（BWIBBU 只有 T-1）；上櫃走 TPEx OpenAPI | 是，附 `as_of` 日期 | 整包 `as_of` 落後 10 曆日就拒收 |
 | 月營收（單月、月增、年增、累計年增） | 官方 OpenAPI | 是 | 不讀本地 DB 的 16 年 PIT 資料 |
-| 月營收動能（前 3 月均年增 vs 本月、強勢股大幅降速） | 本地 `market.monthly_revenue` | 是，資訊列 | `src/services/tw_backtest_context.py`；只當資訊 |
+| 月營收動能（前 3 月均年增 vs 本月、強勢股大幅降速） | 本地 `market.monthly_revenue` | 是，資訊列 | `src/services/tw_backtest_context.py`；只當資訊；首次看到的值另存 `market.monthly_revenue_first_seen`（2026-10-27 起，只由 daily 寫） |
 | 大盤狀態（0050 季線與斜率、站上月線／季線家數比例） | 本地 `market.price` 自算 | 是，資訊區塊 | 每日快取一次；附回測可信度文案 |
 | 處置／注意股、未來 10 交易日法說會與除權息 | `market_data/risk_flags.py`、`events.py` 即時抓官方 | 是（`TW_LIVE_EVENTS_ENABLED`） | 回應日期不新鮮就寫「未確認」，不寫「否」 |
-| 賣方共識（EPS 修正方向、分歧、評級、目標價） | yfinance（`data_provider/analyst_consensus.py`） | 是（`ANALYST_CONSENSUS_ENABLED`，預設關） | 目標價系統性偏多；明寫不得據此提高信心或放寬門檻 |
+| 賣方共識（EPS 修正方向、分歧、評級、目標價） | yfinance（`data_provider/analyst_consensus.py`） | 是（`ANALYST_CONSENSUS_ENABLED`，預設關） | 目標價系統性偏多；明寫不得據此提高信心或放寬門檻；共識隨每份報告落在 `context_snapshot.fundamental_context.consensus`（as_of＝報告時間），研究直接從那裡讀 |
 | 每日大盤脈絡（紅綠燈、複盤摘要、風險標籤） | 當日大盤複盤 | 是 | 黃燈不再自動標 conservative（§3） |
 | 新聞 | FinMind 台股新聞（Doppler 注入）→ 通用搜尋 | 是 | 18:00 每日報告的情報搜尋在台股也先走 FinMind；任一維度的來源失敗會換下一個來源；`make analyze` 不含 Doppler，會退回通用搜尋 |
 | 財報（營收、淨利、現金流、ROE） | yfinance 季報 | 是 | 逐欄標 `quarter`／`ttm` 口徑 |
@@ -75,10 +75,12 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
   - 對突破候選進場全部跨零。
   - 強勢股大幅降速只在 20 日相對落後 1.08pp，但絕對報酬仍正。
   - 「斷創高就出場」不成立。
-- **突破候選池的 `confidence` 錨點還能用嗎？** 2026-10-26 在休市日復權修正、月營收期限順延、宇宙統一之後重測：h60 扣成本 974 個事件，均值 +10.07%（block bootstrap 95% +3.22%~+16.93%），P(≥30%) **20.4%**（14.5%~26.5%），高於對等基準的 +4.69%／12.0%（點估計，未做成對區間，超額本身未檢定）。舊 20.2% 作廢；`screen_tw` 的 `measured_base_rate` 與回驗的 `BASE_RATE` 尚未跟改。見 [`docs/research/2026-10-26-exp-rebaseline-anchor.md`](research/2026-10-26-exp-rebaseline-anchor.md)。
+- **突破候選池的 `confidence` 錨點還能用嗎？** 2026-10-26 在休市日復權修正、月營收期限順延、宇宙統一之後重測：h60 扣成本 974 個事件，均值 +10.07%（block bootstrap 95% +3.22%~+16.93%），P(≥30%) **20.4%**（14.5%~26.5%），高於對等基準的 +4.69%／12.0%（點估計，未做成對區間，超額本身未檢定）。舊 20.2% 作廢；`screen_tw` 的 `measured_base_rate.p_close60_up_30pct` 與回驗的 `BASE_RATE` 已同步為 0.204（`measured_base_rate` 其餘欄位也已跟改；僅 `survivorship_bias_bound` 與 note 內 9.93%→9.60% 因 `--survivorship-bound` 未重跑，仍是舊值）。見 [`docs/research/2026-10-26-exp-rebaseline-anchor.md`](research/2026-10-26-exp-rebaseline-anchor.md)。
 - **近期漲停多（LHR 高）的突破候選要擋掉嗎？** 不要。2026-10-26 實驗：近 20 日淨漲停天數 ≥ 1 就否決，h60 留下的池子均值 −4.35pp、P(≥30%) −5.84pp，兩個 block bootstrap 區間都整段為負；LHR 與 20 日波動相關 +0.78，否決就是砍掉高波動右尾。見 [`docs/research/2026-10-26-exp-lhr-veto.md`](research/2026-10-26-exp-lhr-veto.md)。
-- **處置股要剔除或延後進場嗎？** 延後進場沒有證據支持、剔除較差，維持只標記。2026-10-26 用 TWSE 處置公告歷史回測突破池（只上市、2020 ~ 2026-07、舊制 10 日處置）：訊號日已公告、處置期涵蓋進場日的 h60 事件只有 34 個，延後 3／4 日進場對正常進場的成對均值差跨零、P(≥30%) 點估計反而較低（inconclusive；處置中的事件延後等於沒延後，進入配對且實際延後的只有 16／21 個）；剔除則讓池均值 −0.74pp（−1.36~−0.12）、P(≥30%) 也下降（較差，受影響組右尾較肥，但樣本小、靠少數大漲）。2026-08-10 新制（5 日處置）沒有樣本。見 [`docs/research/2026-10-26-exp-disposal-delay.md`](research/2026-10-26-exp-disposal-delay.md)。
+- **處置股要剔除或延後進場嗎？** 延後進場沒有證據支持、剔除較差，維持只標記。2026-10-26 用 TWSE 處置公告歷史回測突破池（只上市、2020 ~ 2026-07、舊制 10 日處置）：訊號日已公告、處置期涵蓋進場日的 h60 事件只有 34 個，延後 3／4 日進場對正常進場的成對均值差跨零、P(≥30%) 點估計反而較低（inconclusive；處置中的事件延後等於沒延後，進入配對且實際延後的只有 16／21 個）；剔除則讓池均值 −0.74pp（−1.36~−0.12）、P(≥30%) 也下降（較差，受影響組右尾較肥，但樣本小、靠少數大漲）。2026-08-10 新制（5 日處置）沒有樣本：新制事件自 2026-11 起陸續到期，已到期受影響事件 ≥30 才重跑。見 [`docs/research/2026-10-26-exp-disposal-delay.md`](research/2026-10-26-exp-disposal-delay.md)。
+- **FOMC／CPI／NFP 前一天要不要避開新進場？** 沒有證據支持，也沒有證據反對（inconclusive），skill `tw-morning-call` Step 2.5 那條維持只寫 `reason`。2026-10-28 突破池 h60（2020 ~ 2026-07）：正常進場日恰為事件前最後一個台股交易日的事件 114 個（池的 11.7%），延後到事件後第一個交易日進場、配對 112 個，成對均值差 +1.08pp（−0.12~+2.08）、P(≥30%) 差 +0.9pp（−2.04~+4.27），兩個都跨零；持有期最大回撤兩臂幾乎相同。未受影響事件同樣晚一天的安慰劑約 0（−0.13pp）。「大局緊縮日」（DGS10、Brent、DXY 20 日變化同為正）子組只有 21 個，inconclusive。照字面「不進場」會漏掉 11.7% 的池事件。見 [`docs/research/2026-10-28-pre-event-delay.md`](research/2026-10-28-pre-event-delay.md)。
 - **部位要不要依波動調整（低波動多買、高波動少買）？PB≥2 要不要擋？** 部位不要依波動調整（已檢定、有害）；PB≥2 否決在突破池不可用（未檢定）。2026-10-26 實驗：反波動加權讓組合年化 45.6% → 32.8%、Sharpe 1.19 → 1.00，逐日報酬差區間整段為負，20 個亂序 seed 全部較差——砍的是高波動右尾。突破池內 76% 事件 PB≥2，否決後池子只剩四分之一，未檢定。見 [`docs/research/2026-10-26-exp-invvol-pb.md`](research/2026-10-26-exp-invvol-pb.md)。
+- **五日產業相對輸家反轉、跌破 25MA 出場能用嗎？** 都不採用：產業反轉不支持、25MA 出場 inconclusive（2026-10-28 探索性回測，事前寫定「對 0050 成對超額、Sharpe、MDD 三項全勝」；超額區間跨零一律 inconclusive）。產業反轉每週換手扣 0.882% 後對 0050 −1.12%／期（95% −1.39%~−0.85%），未扣成本也是負，11 組參數敏感度加 2016～2019 子期（共 12 組）全負；breakout 組合改成 25MA 連 3 日跌破隔日賣出，Sharpe 1.19 → 1.13、回撤 −45.7% → −55.6%，對 0050 超額 +4.69bp／日但區間 [−4.29, +14.07] 跨零，對固定 60 日的差也跨零且點估計為負。維持固定持有 60 日。見 [`docs/research/2026-10-28-explore-reversal-ma25.md`](research/2026-10-28-explore-reversal-ma25.md)。
 - **常見短線進場法有用嗎？** 這段期間（約 4 個月）都虧：均線交叉放量、突破 20 日高、外資連 3 買、多頭回踩，3 日淨報酬 −1.2%～−2.5%。現有突破訊號縮到 2～3 日也顯著為負，要 20 日才轉正（2020～2026）。
 - **投行預估比較準嗎？** 目標價系統性偏多：31 檔自選中 26 檔有覆蓋，全部高於現價，中位 +34.8%。有用的是 EPS 修正方向與分歧，台股尚未驗證。媒體點名個股的事後表現 inconclusive，主要由進場時點決定。
 - **還有哪些財經頻道、PTT 值不值得收？** 2026-10-23 篩過約 20 個頻道，收 4 個、試跑後拿掉 2 個（戰績宣傳、幾乎不點名台股），其餘的不收理由與 PTT `[標的]` 文的試跑見 [`docs/research/2026-10-23-media-sources-expansion.md`](research/2026-10-23-media-sources-expansion.md)。兩者都只是候選來源。
@@ -91,6 +93,7 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
 | `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE` | `true` | 未設（`true`） | `false`＝台股資金流改看三大法人、`not_supported` 不降級 | 等影子數據 2～3 個月 |
 | `TW_MA_ALIGNMENT_WEIGHTED` | `false` | `true` | 台股多頭排列改加分項 | 可開，但同時設 `TW_MA_ALIGNMENT_AB_RATIO=0.5`：一半標 `tw-ma-weighted`、一半標 `tw-ma-control` 當同期對照；只開這項（比例預設 1）就沒有對照組 |
 | `TW_MA_ALIGNMENT_AB_RATIO` | `1` | `0.5` | 上項的加權組比例 | 實驗期間 `0.5` |
+| `TW_MACRO_CONTEXT_AB_RATIO` | `0` | 未設（`0`） | 台股 prompt 追加「總經背景」資訊區塊（`market.macro_series` 日線，固定句「只當資訊，不得據此調整分數或動作；未經回測」）的比例；分組與均線實驗不相關，標 `dashboard.experiments.macro_ctx=on/off` | 先設 `0.5` 跑同期對照，用 `shadow_buy_eval.py --forecast` 看 Brier 有沒有差；`0` 時不寫任何標籤 |
 | `ANALYST_CONSENSUS_ENABLED` | `false` | `true` | 賣方共識資訊區塊 | 可開 |
 | `TW_LIVE_EVENTS_ENABLED` | `true` | 未設（`true`） | 處置／注意與事件日曆 | 保持開 |
 | `TW_BROKER_INDEX_TARGETS` | 空 | 未設 | 人工維護一行券商年底指數目標，30 天未更新就不顯示 | 選用 |
@@ -114,9 +117,9 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
 - **2～5 天短波段專用契約與新訊號**：不要把現有突破訊號直接縮短持有期，已證實為負。
 - 影子評估累積 2～3 個月後，再決定 `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE` 與 `TW_MA_ALIGNMENT_WEIGHTED`。
 - 把 #39 的上櫃籌碼、集保、分點接進個股 prompt（目前只在 dossier）。
-- 資料：當沖比與借券（FinMind 免費）、加權／櫃買指數歷史（`market_index` 只從 2026-07 開始）。
+- 資料：當沖比與借券（FinMind 免費）、櫃買指數歷史。加權指數（TAIEX）`market_index` 已有 2010-01-04 起的日資料（含 `open`，共 4,119 列），不再只有 2026-07 起。
 - 總經日線、Fed 利率預期（Kalshi）與 FOMC／財報行事曆每天入庫 `market` schema（2026-10-26 起，`MACRO_PERSIST_ENABLED` 預設開），`make morning` 的「大局」段讀它；目前只給盤前判讀用，還沒進個股 prompt，也還沒有回測（見 `docs/macro-data.md`）。
-- 期交所法人台指期未平倉已可入庫（`market.taifex_fut_oi`，`TAIFEX_OI_PERSIST_ENABLED` 預設關，2026-10-26 起；只累積不回補，還沒有任何讀取端或回測），P/C 比仍只抓不存。
+- 期交所法人台指期未平倉已可入庫（`market.taifex_fut_oi`，`TAIFEX_OI_PERSIST_ENABLED` 預設關，2026-10-26 起；只累積不回補，還沒有任何讀取端或回測；列帶 `first_seen_at`／`captured_at`），P/C 比仍只抓不存。
 - 強勢股營收降速改用 `decel_lt0`（兩個期距都穩），目前用的是 `decel_le20`。
 - `dsa` 正式庫裡有 5 筆測試資料待清（id 3／6／398 等，需使用者確認）。
 - 波段日誌 08-14～10-19 停擺：同期 33 個交易日有 27 天有候選，是流程沒跑，不是市場沒機會。

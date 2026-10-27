@@ -64,6 +64,18 @@ const settingsHelpZhCN: SettingsHelpMap = {
     ],
     examples: [],
   },
+  'settings.ai_model.CLAUDE_CODE_CLI_MODEL': {
+    title: 'Claude Code CLI 模型',
+    showFieldKey: true,
+    summary: '可选：指定 DSA 调用 claude 时传给 --model 的模型名。',
+    usage: '仅在“分析生成方式”选择 Claude Code CLI 时生效。留空时 DSA 不传 --model，使用你本机 Claude Code 的默认模型。',
+    valueNotes: [
+      '模型是否可用、如何认证由你本机的 Claude Code 配置负责。',
+      '配置时该值会作为单个 argv 参数传给 claude，不能包含空白或 shell 元字符。',
+    ],
+    impact: ['影响通过 Claude Code CLI 生成的普通分析、大盘复盘和文本生成，不影响问股助手。'],
+    examples: ['CLAUDE_CODE_CLI_MODEL=your-model-name'],
+  },
   'settings.ai_model.OPENCODE_CLI_MODEL': {
     title: 'OpenCode CLI 模型',
     showFieldKey: true,
@@ -1332,6 +1344,18 @@ const settingsHelpEnUS: SettingsHelpMap = {
       'Choose Disabled when you want local CLI failures to be visible immediately, or Default model settings when cloud model recovery is acceptable.',
     ],
     examples: [],
+  },
+  'settings.ai_model.CLAUDE_CODE_CLI_MODEL': {
+    title: 'Claude Code CLI Model',
+    showFieldKey: true,
+    summary: 'Optional model name passed to claude through --model.',
+    usage: 'Only applies when Analysis Generation Method is Claude Code CLI. Leave it empty and DSA will not pass --model, so Claude Code uses its local default model.',
+    valueNotes: [
+      'Model availability and authentication are handled by your local Claude Code setup.',
+      'When set, the value is passed as one argv token and must not contain whitespace or shell metacharacters.',
+    ],
+    impact: ['Affects regular analysis, market review, and text generation through Claude Code CLI. It does not affect the ask-stock assistant.'],
+    examples: ['CLAUDE_CODE_CLI_MODEL=your-model-name'],
   },
   'settings.ai_model.OPENCODE_CLI_MODEL': {
     title: 'OpenCode CLI Model',
