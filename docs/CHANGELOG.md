@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 盤前判讀 Fable 獨立臂：`make morning` 的完整輸出另存 `reports/morning-packs/<日期>.txt`（同日重跑另存 `<日期>.<HHMM>.txt`，結束碼與終端輸出不變）；新 `scripts/morning_fable_arms.py`（`MORNING_FABLE_MODEL` 沒設就跳過）以隔離的 `claude -p`（無工具、無全域設定、空 cwd、prompt 走 stdin）只看凍結的 pack 預測三個機率，一臂一列追加 `journal/morning-arms.jsonl`（失敗也留 error 列、不讓盤前失敗）；`verify_morning_calls.py` 對 fable 臂與事後等權臂算對 claude 的配對 Brier 差（hash 不一致的日子排除，`--brief` 一行描述性摘要，半年內不下結論）；`morning-calls.jsonl` 新增 `input_snapshot_hash`，實驗登記 `morning-arms-fable-indep`，同步 `.env.example`、`journal/README.md` 與 `tw-morning-call` skill。
 - [修复] 總經模型階梯 `scripts/research_macro_ladder.py`：FRED DGS10／DGS2 的可用日改為跳過美國聯邦假日（原本只跳週末，假日前一天的值早一天被用到），`new_events` 第一個研究日改用真正的上一個台股日 2009-12-31（原本近似成休市的 2010-01-01，漏掉 2009-12-31 的 WTI 突破）；完整重跑後確認性比較 −2.27% → −2.11%（仍 inconclusive），事件規則表與實驗登記表追加第二次訂正列，結論不變
 - [修复] 總經模型階梯 `scripts/research_macro_ladder.py`：`new_events` 不再把暖機期（2009-06 起）的累計觸發算成第一個研究日的假事件，重跑後事件規則表與實驗登記表追加訂正列（四條仍全部 inconclusive）；ADR 溢價抽成 `adr_premium` 純函式，`STORAGE_DATABASE_URL` 改為直接清成空字串，補 `AVAILABLE_RULE`／特徵對齊／ADR 溢價的防前視測試；研究文件與 `docs/tw-analysis-overview.md` 的結論措辭收斂為「本次規格未發現增量證據、確認性比較 inconclusive、待對抗審查」，G2-10 門檻改註明未寫進預登記列，並補 `SKILL.md` 總經仍決定部位大小的待辦
 - [文档] 新增總經模型階梯研究 `docs/research/2026-10-28-macro-ladder.md` 與唯讀腳本 `scripts/research_macro_ladder.py`：07:30 資訊集下加總經（10Y、2Y、DXY、台幣、Brent、HYG、VIX、ICSA）相對只看美股＋台指期夜盤沒有樣本外增量（確認性比較 inconclusive、交易 0050 扣成本為負），四條預登記事件規則全部 inconclusive；`docs/tw-analysis-overview.md` §4／§7 與實驗登記表同步
