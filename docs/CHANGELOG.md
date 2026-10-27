@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 總經模型階梯 `scripts/research_macro_ladder.py`：FRED DGS10／DGS2 的可用日改為跳過美國聯邦假日（原本只跳週末，假日前一天的值早一天被用到），`new_events` 第一個研究日改用真正的上一個台股日 2009-12-31（原本近似成休市的 2010-01-01，漏掉 2009-12-31 的 WTI 突破）；完整重跑後確認性比較 −2.27% → −2.11%（仍 inconclusive），事件規則表與實驗登記表追加第二次訂正列，結論不變
 - [修复] 總經模型階梯 `scripts/research_macro_ladder.py`：`new_events` 不再把暖機期（2009-06 起）的累計觸發算成第一個研究日的假事件，重跑後事件規則表與實驗登記表追加訂正列（四條仍全部 inconclusive）；ADR 溢價抽成 `adr_premium` 純函式，`STORAGE_DATABASE_URL` 改為直接清成空字串，補 `AVAILABLE_RULE`／特徵對齊／ADR 溢價的防前視測試；研究文件與 `docs/tw-analysis-overview.md` 的結論措辭收斂為「本次規格未發現增量證據、確認性比較 inconclusive、待對抗審查」，G2-10 門檻改註明未寫進預登記列，並補 `SKILL.md` 總經仍決定部位大小的待辦
 - [文档] 新增總經模型階梯研究 `docs/research/2026-10-28-macro-ladder.md` 與唯讀腳本 `scripts/research_macro_ladder.py`：07:30 資訊集下加總經（10Y、2Y、DXY、台幣、Brent、HYG、VIX、ICSA）相對只看美股＋台指期夜盤沒有樣本外增量（確認性比較 inconclusive、交易 0050 扣成本為負），四條預登記事件規則全部 inconclusive；`docs/tw-analysis-overview.md` §4／§7 與實驗登記表同步
 - [新功能] 新增實驗登記表 `journal/experiment-registry.jsonl`（append-only、進版控，欄位見 `journal/README.md`），先登記盤前機率 pilot、總經模型階梯主比較（F 對 N、OC、756 日、2017-05 起）與四條事件規則、事件前延後進場、Fable 五臂、個股 5 日有無總經 A/B，以及五日產業反轉與 25MA 出場（探索性）
