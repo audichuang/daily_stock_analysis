@@ -21,14 +21,14 @@
 |---|---|---|---|
 | 日線 OHLCV、均線、乖離、MACD、RSI、ATR14 | 本地 `market.price`（前復權算指標）→ yfinance | 是 | 顯示價是未還原；指標用還原價（`docs/realtime-board.md`）；盤中（含午休、收盤集合競價）僅在趨勢輸入最後一根是今日部分 K（即時疊上或 DB 已有）時，量能狀態標「盤中不判讀」並給中性 10 分，日期不明時也保守不判讀；最後一根仍是昨日完整 K 或已收盤則照常判縮放量，量比標籤不變 |
 | 即時報價、漲跌停 | Shioaji → yfinance | 是 | `source` 變 `fallback` 代表 Shioaji 金鑰沒注入、已降級 |
-| 三大法人（當日＋5／20 日累計） | 當日 TWSE T86／TPEx；趨勢讀本地 `market.institutional` | 是 | 單位是**股**；18:00 拿到的是初版，prompt 標「初版，投信常於隔夜修正」（約 1/4 份報告與定版不同，多在投信欄）；隔日 `daily` 由 `REVISED_SOURCES` 換成定版；上櫃歷史自 2018-01-15（#39） |
+| 三大法人（當日＋5／20 日累計） | 當日 TWSE T86／TPEx；趨勢讀本地 `market.institutional` | 是 | 單位是**股**；18:00 拿到的是初版，prompt 標「初版，投信常於隔夜修正」（約 1/4 份報告與定版不同，多在投信欄）；隔日 `daily` 由 `REVISED_SOURCES` 換成定版（初版另存 `market.institutional_initial`，只由 daily 補缺路徑寫、DO NOTHING，2026-10-27 起）；上櫃歷史自 2018-01-15（#39） |
 | 融資融券（餘額、5／20 場變化、券資比） | 本地 `market.margin` | 是 | 單位是**張**，T+1；上櫃同表 `market='tpex'`（#39） |
 | 估值（近四季本益比、淨值比、殖利率） | 上市優先讀本地 `market.valuation` 當日值，退回 `TwseFundamentalAdapter`（BWIBBU 只有 T-1）；上櫃走 TPEx OpenAPI | 是，附 `as_of` 日期 | 整包 `as_of` 落後 10 曆日就拒收 |
 | 月營收（單月、月增、年增、累計年增） | 官方 OpenAPI | 是 | 不讀本地 DB 的 16 年 PIT 資料 |
-| 月營收動能（前 3 月均年增 vs 本月、強勢股大幅降速） | 本地 `market.monthly_revenue` | 是，資訊列 | `src/services/tw_backtest_context.py`；只當資訊 |
+| 月營收動能（前 3 月均年增 vs 本月、強勢股大幅降速） | 本地 `market.monthly_revenue` | 是，資訊列 | `src/services/tw_backtest_context.py`；只當資訊；首次看到的值另存 `market.monthly_revenue_first_seen`（2026-10-27 起，只由 daily 寫） |
 | 大盤狀態（0050 季線與斜率、站上月線／季線家數比例） | 本地 `market.price` 自算 | 是，資訊區塊 | 每日快取一次；附回測可信度文案 |
 | 處置／注意股、未來 10 交易日法說會與除權息 | `market_data/risk_flags.py`、`events.py` 即時抓官方 | 是（`TW_LIVE_EVENTS_ENABLED`） | 回應日期不新鮮就寫「未確認」，不寫「否」 |
-| 賣方共識（EPS 修正方向、分歧、評級、目標價） | yfinance（`data_provider/analyst_consensus.py`） | 是（`ANALYST_CONSENSUS_ENABLED`，預設關） | 目標價系統性偏多；明寫不得據此提高信心或放寬門檻 |
+| 賣方共識（EPS 修正方向、分歧、評級、目標價） | yfinance（`data_provider/analyst_consensus.py`） | 是（`ANALYST_CONSENSUS_ENABLED`，預設關） | 目標價系統性偏多；明寫不得據此提高信心或放寬門檻；共識隨每份報告落在 `context_snapshot.fundamental_context.consensus`（as_of＝報告時間），研究直接從那裡讀 |
 | 每日大盤脈絡（紅綠燈、複盤摘要、風險標籤） | 當日大盤複盤 | 是 | 黃燈不再自動標 conservative（§3） |
 | 新聞 | FinMind 台股新聞（Doppler 注入）→ 通用搜尋 | 是 | 18:00 每日報告的情報搜尋在台股也先走 FinMind；任一維度的來源失敗會換下一個來源；`make analyze` 不含 Doppler，會退回通用搜尋 |
 | 財報（營收、淨利、現金流、ROE） | yfinance 季報 | 是 | 逐欄標 `quarter`／`ttm` 口徑 |
@@ -92,6 +92,7 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
 | `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE` | `true` | 未設（`true`） | `false`＝台股資金流改看三大法人、`not_supported` 不降級 | 等影子數據 2～3 個月 |
 | `TW_MA_ALIGNMENT_WEIGHTED` | `false` | `true` | 台股多頭排列改加分項 | 可開，但同時設 `TW_MA_ALIGNMENT_AB_RATIO=0.5`：一半標 `tw-ma-weighted`、一半標 `tw-ma-control` 當同期對照；只開這項（比例預設 1）就沒有對照組 |
 | `TW_MA_ALIGNMENT_AB_RATIO` | `1` | `0.5` | 上項的加權組比例 | 實驗期間 `0.5` |
+| `TW_MACRO_CONTEXT_AB_RATIO` | `0` | 未設（`0`） | 台股 prompt 追加「總經背景」資訊區塊（`market.macro_series` 日線，固定句「只當資訊，不得據此調整分數或動作；未經回測」）的比例；分組與均線實驗不相關，標 `dashboard.experiments.macro_ctx=on/off` | 先設 `0.5` 跑同期對照，用 `shadow_buy_eval.py --forecast` 看 Brier 有沒有差；`0` 時不寫任何標籤 |
 | `ANALYST_CONSENSUS_ENABLED` | `false` | `true` | 賣方共識資訊區塊 | 可開 |
 | `TW_LIVE_EVENTS_ENABLED` | `true` | 未設（`true`） | 處置／注意與事件日曆 | 保持開 |
 | `TW_BROKER_INDEX_TARGETS` | 空 | 未設 | 人工維護一行券商年底指數目標，30 天未更新就不顯示 | 選用 |
@@ -117,7 +118,7 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
 - 把 #39 的上櫃籌碼、集保、分點接進個股 prompt（目前只在 dossier）。
 - 資料：當沖比與借券（FinMind 免費）、櫃買指數歷史。加權指數（TAIEX）`market_index` 已有 2010-01-04 起的日資料（含 `open`，共 4,119 列），不再只有 2026-07 起。
 - 總經日線、Fed 利率預期（Kalshi）與 FOMC／財報行事曆每天入庫 `market` schema（2026-10-26 起，`MACRO_PERSIST_ENABLED` 預設開），`make morning` 的「大局」段讀它；目前只給盤前判讀用，還沒進個股 prompt，也還沒有回測（見 `docs/macro-data.md`）。
-- 期交所法人台指期未平倉已可入庫（`market.taifex_fut_oi`，`TAIFEX_OI_PERSIST_ENABLED` 預設關，2026-10-26 起；只累積不回補，還沒有任何讀取端或回測），P/C 比仍只抓不存。
+- 期交所法人台指期未平倉已可入庫（`market.taifex_fut_oi`，`TAIFEX_OI_PERSIST_ENABLED` 預設關，2026-10-26 起；只累積不回補，還沒有任何讀取端或回測；列帶 `first_seen_at`／`captured_at`），P/C 比仍只抓不存。
 - 強勢股營收降速改用 `decel_lt0`（兩個期距都穩），目前用的是 `decel_le20`。
 - `dsa` 正式庫裡有 5 筆測試資料待清（id 3／6／398 等，需使用者確認）。
 - 波段日誌 08-14～10-19 停擺：同期 33 個交易日有 27 天有候選，是流程沒跑，不是市場沒機會。

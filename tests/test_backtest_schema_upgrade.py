@@ -10,7 +10,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.dialects import postgresql
 
 from src.config import Config
-from src.storage import BacktestResult, DatabaseManager, DecisionSignalOutcomeRecord
+from src.storage import AnalysisHistory, BacktestResult, DatabaseManager, DecisionSignalOutcomeRecord
 
 BACKTEST_NEW = ("entry_date", "price_basis", "adjustment_reason", "simulated_net_return_pct")
 OUTCOME_NEW = ("entry_date", "price_basis", "adjustment_reason", "max_adverse_excursion_pct")
@@ -84,3 +84,60 @@ def test_postgres_add_column_ddl_from_orm_model():
     )
     all_columns = {c.name for c in BacktestResult.__table__.columns}
     assert DatabaseManager._postgres_add_column_ddl(BacktestResult.__table__, all_columns, postgresql.dialect()) is None
+
+
+FORECAST_NEW = ("prompt_hash", "input_snapshot_hash", "model_version", "p_5d_beat_0050", "llm_attempts")
+
+
+def test_existing_analysis_history_gains_forecast_columns_and_keeps_rows(db_env):
+    db = DatabaseManager.get_instance()
+    with db._engine.begin() as conn:
+        for name in FORECAST_NEW:
+            conn.exec_driver_sql(f"ALTER TABLE analysis_history DROP COLUMN {name}")
+        conn.execute(text(
+            "INSERT INTO analysis_history (query_id, code, name, sentiment_score) VALUES ('q', '2330.TW', 'x', 61)"
+        ))
+    assert not set(FORECAST_NEW) & _columns(db, "analysis_history")
+
+    db = _reopen()
+    assert set(FORECAST_NEW) <= _columns(db, "analysis_history")
+    db = _reopen()  # 冪等
+    with db.get_session() as session:
+        row = session.query(AnalysisHistory).one()
+        assert (row.code, row.sentiment_score) == ("2330.TW", 61)
+        assert all(getattr(row, name) is None for name in FORECAST_NEW)
+
+
+def test_postgres_add_column_ddl_for_analysis_history_forecast_columns():
+    old = {c.name for c in AnalysisHistory.__table__.columns} - set(FORECAST_NEW)
+    ddl = DatabaseManager._postgres_add_column_ddl(AnalysisHistory.__table__, old, postgresql.dialect())
+    assert ddl == (
+        "ALTER TABLE analysis_history "
+        "ADD COLUMN IF NOT EXISTS prompt_hash VARCHAR(64), "
+        "ADD COLUMN IF NOT EXISTS input_snapshot_hash VARCHAR(64), "
+        "ADD COLUMN IF NOT EXISTS model_version VARCHAR(96), "
+        "ADD COLUMN IF NOT EXISTS p_5d_beat_0050 FLOAT, "
+        "ADD COLUMN IF NOT EXISTS llm_attempts TEXT"
+    )
+
+
+def test_save_analysis_history_persists_forecast_fields_and_nulls_when_absent(db_env):
+    from types import SimpleNamespace
+
+    db = DatabaseManager.get_instance()
+    base = dict(code="2330.TW", name="x", sentiment_score=60, operation_advice="買入", trend_prediction="看多",
+                analysis_summary="s", dashboard=None, raw_response="r")
+    full = SimpleNamespace(**base, prompt_hash="a" * 64, input_snapshot_hash="b" * 64, model_version="m" * 200,
+                           p_5d_beat_0050=0.7, llm_attempts=[{"attempt": 1, "model": "m", "response_text": "r"}])
+    bare = SimpleNamespace(**base)  # market_review 等其他呼叫端：沒有這些屬性
+    nan_p = SimpleNamespace(**base, p_5d_beat_0050=float("nan"))
+    big_p = SimpleNamespace(**base, p_5d_beat_0050=1.7)
+    for r in (full, bare, nan_p, big_p):
+        assert db.save_analysis_history(r, "q", "simple", None) > 0
+    with db.get_session() as session:
+        rows = session.query(AnalysisHistory).order_by(AnalysisHistory.id).all()
+    assert rows[0].p_5d_beat_0050 == 0.7 and rows[0].prompt_hash == "a" * 64
+    assert rows[0].model_version == "m" * 96  # 截到欄位長度
+    assert '"response_text"' in rows[0].llm_attempts
+    assert all(getattr(rows[1], n) is None for n in FORECAST_NEW)
+    assert rows[2].p_5d_beat_0050 is None and rows[3].p_5d_beat_0050 is None  # 非有限值／超界不落庫

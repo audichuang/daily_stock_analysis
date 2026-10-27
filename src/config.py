@@ -45,6 +45,7 @@ from src.llm.backend_registry import (
     LOCAL_CLI_GENERATION_BACKEND_IDS,
     LITELLM_BACKEND_ID,
     OPENCODE_CLI_BACKEND_ID,
+    CLAUDE_CODE_CLI_BACKEND_ID,
     SUPPORTED_AGENT_GENERATION_BACKENDS,
     SUPPORTED_AGENT_UI_BACKENDS,
     SUPPORTED_GENERATION_BACKENDS,
@@ -1018,6 +1019,8 @@ class Config:
     generation_backend_max_concurrency: int = DEFAULT_GENERATION_BACKEND_MAX_CONCURRENCY
     local_cli_backend_max_concurrency: int = DEFAULT_LOCAL_CLI_BACKEND_MAX_CONCURRENCY
     opencode_cli_model: str = ""
+    # 台版新增：claude_code_cli 的 --model 覆蓋值，留空則不帶 --model
+    claude_code_cli_model: str = ""
     # LiteLLM unified model config (provider/model format, e.g. gemini/gemini-3.1-pro-preview)
     litellm_model: str = ""  # Primary model; must include provider prefix when set explicitly
     litellm_fallback_models: List[str] = field(default_factory=list)  # Cross-model fallback list
@@ -1119,6 +1122,8 @@ class Config:
     tw_ma_alignment_weighted: bool = False
     # 開啟上項時有多少比例的台股報告分到加權組（依代號＋台北日期雜湊），其餘標 tw-ma-control 當同期對照；1＝全部套用
     tw_ma_alignment_ab_ratio: float = 1.0
+    # 台股個股 prompt 追加「總經背景」資訊區塊的 A/B 比例（依 salt＋代號＋台北日期雜湊，與均線實驗分組不相關）；0＝關閉、不寫任何實驗標籤
+    tw_macro_context_ab_ratio: float = 0.0
     # 台股個股 prompt 接處置／注意股與法說、除權息即時名單（官方端點，每個基準日只抓一次、fail-open）
     tw_live_events_enabled: bool = True
     # 盯盤看板「建立價位警報」（SMC 支撐／壓力 -> price_cross 規則，寫正式應用庫）；設計見 docs/tw-level-alerts.md，預設關
@@ -1801,6 +1806,7 @@ class Config:
             maximum=MAX_LOCAL_CLI_BACKEND_MAX_CONCURRENCY,
         )
         opencode_cli_model = (os.getenv('OPENCODE_CLI_MODEL', '') or '').strip()
+        claude_code_cli_model = (os.getenv('CLAUDE_CODE_CLI_MODEL', '') or '').strip()
 
         agent_litellm_model = normalize_agent_litellm_model(
             os.getenv('AGENT_LITELLM_MODEL', ''),
@@ -1974,6 +1980,7 @@ class Config:
             generation_backend_max_concurrency=generation_backend_max_concurrency,
             local_cli_backend_max_concurrency=local_cli_backend_max_concurrency,
             opencode_cli_model=opencode_cli_model,
+            claude_code_cli_model=claude_code_cli_model,
             litellm_model=litellm_model,
             litellm_fallback_models=litellm_fallback_models,
             llm_temperature=resolve_unified_llm_temperature(litellm_model),
@@ -2082,6 +2089,9 @@ class Config:
             tw_ma_alignment_weighted=parse_env_bool(os.getenv('TW_MA_ALIGNMENT_WEIGHTED'), default=False),
             tw_ma_alignment_ab_ratio=parse_env_float(
                 os.getenv('TW_MA_ALIGNMENT_AB_RATIO'), 1.0, field_name='TW_MA_ALIGNMENT_AB_RATIO',
+                minimum=0.0, maximum=1.0),
+            tw_macro_context_ab_ratio=parse_env_float(
+                os.getenv('TW_MACRO_CONTEXT_AB_RATIO'), 0.0, field_name='TW_MACRO_CONTEXT_AB_RATIO',
                 minimum=0.0, maximum=1.0),
             tw_live_events_enabled=parse_env_bool(os.getenv('TW_LIVE_EVENTS_ENABLED'), default=True),
             tw_level_alerts_enabled=parse_env_bool(os.getenv('TW_LEVEL_ALERTS_ENABLED'), default=False),
@@ -3449,6 +3459,25 @@ class Config:
                         "不配置时 DSA 将使用 OpenCode 自身默认模型。"
                     ),
                     field="OPENCODE_CLI_MODEL",
+                ))
+        if generation_backend == CLAUDE_CODE_CLI_BACKEND_ID:
+            claude_model = (self.claude_code_cli_model or "").strip()
+            unsafe_claude_model = bool(claude_model) and (
+                any(ch.isspace() for ch in claude_model)
+                or any(
+                    marker in claude_model
+                    for marker in ("|", ">", "<", ";", "`", "&&", "||", "$")
+                )
+            )
+            if unsafe_claude_model:
+                issues.append(ConfigIssue(
+                    severity="error",
+                    message=(
+                        "CLAUDE_CODE_CLI_MODEL 是可选的 Claude Code 模型覆盖值。"
+                        "配置时会作为单个 --model 参数传给 claude，不能包含空白或 shell 元字符；"
+                        "不配置时 DSA 不传 --model，由本机 Claude Code 使用默认模型。"
+                    ),
+                    field="CLAUDE_CODE_CLI_MODEL",
                 ))
 
         # --- LLM availability ---

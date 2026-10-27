@@ -261,6 +261,38 @@ class TestValidateStructuredLLM:
             error = next(i for i in issues if i.field == "OPENCODE_CLI_MODEL")
             assert error.severity == "error"
 
+    def test_claude_code_cli_accepts_safe_model_and_empty(self):
+        for model in ("some-model", ""):
+            cfg = _make_config(
+                generation_backend="claude_code_cli",
+                claude_code_cli_model=model,
+                llm_model_list=[],
+                litellm_model="",
+            )
+
+            issues = cfg.validate_structured()
+
+            assert not [i for i in issues if i.field == "CLAUDE_CODE_CLI_MODEL"]
+
+    def test_claude_code_cli_rejects_unsafe_model_token(self):
+        for model in ("model;rm", "provider/$MODEL", "a b"):
+            cfg = _make_config(
+                generation_backend="claude_code_cli",
+                claude_code_cli_model=model,
+            )
+
+            issues = cfg.validate_structured()
+
+            error = next(i for i in issues if i.field == "CLAUDE_CODE_CLI_MODEL")
+            assert error.severity == "error"
+
+    def test_claude_code_cli_model_ignored_for_other_backends(self):
+        cfg = _make_config(generation_backend="litellm", claude_code_cli_model="a;b")
+
+        issues = cfg.validate_structured()
+
+        assert not [i for i in issues if i.field == "CLAUDE_CODE_CLI_MODEL"]
+
     def test_unknown_generation_fallback_backend_is_structured_config_error(self):
         cfg = _make_config(generation_fallback_backend="claude_code")
 
