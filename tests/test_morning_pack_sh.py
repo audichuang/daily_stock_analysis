@@ -74,3 +74,16 @@ def test_failed_rerun_does_not_touch_existing_pack(tmp_path):
     pack(d, "sh", "-c", "echo broken; exit 1")
     assert [p.name for p in d.iterdir()] == [f"{today()}.txt"]
     assert (d / f"{today()}.txt").read_text() == "first\n"
+
+
+@pytest.mark.parametrize("rc_cmd, expected_rc", [("", 0), ("; exit 7", 7)])
+def test_tee_failure_midway_never_publishes_truncated_pack(tmp_path, rc_cmd, expected_rc):
+    """tee 寫到一半失敗（檔案大小上限＝磁碟滿的替身）：不發布截斷檔、印 WARN，結束碼仍是指令自己的。"""
+    d = tmp_path / "packs"
+    producer = f"head -c 65536 /dev/zero | tr '\\0' a{rc_cmd}"
+    # ulimit -f 單位依 shell 模式是 512 或 1024 bytes，4 個單位至多 4KB，遠小於 64KB
+    script = f"ulimit -f 4; trap '' XFSZ; exec bash {SCRIPT} {d} sh -c \"{producer}\""
+    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert p.returncode == expected_rc
+    assert "WARN" in p.stderr and len(p.stdout) == 65536     # 終端那份是完整的
+    assert list(d.iterdir()) == []
