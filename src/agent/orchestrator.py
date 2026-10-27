@@ -1698,9 +1698,12 @@ class AgentOrchestrator:
             # 風控下調後 LLM 原本的 action 可能仍是 buy；以下調後的結構化訊號改寫，不靠建議文字推斷。
             risk_action = _risk_adjusted_action(payload.get("action"), decision_type)
             payload["action"] = risk_action
-            nested_dashboard = payload.get("dashboard")
-            if isinstance(nested_dashboard, dict) and "action" in nested_dashboard:
-                payload["dashboard"] = {**nested_dashboard, "action": risk_action}
+            # 巢狀 dashboard 若也帶 action／decision_type，同步成風控後的值；
+            # 必須寫在 dashboard_block 上，下面會以它覆蓋 payload["dashboard"]。只改已存在的鍵。
+            if "action" in dashboard_block:
+                dashboard_block["action"] = risk_action
+            if "decision_type" in dashboard_block:
+                dashboard_block["decision_type"] = decision_type
         payload["confidence_level"] = _confidence_label(confidence)
         payload["analysis_summary"] = analysis_summary
         payload["key_points"] = key_points
