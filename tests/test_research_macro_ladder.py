@@ -12,6 +12,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from research_macro_ladder import (  # noqa: E402
+    FX_MAX_DEV,
     align_available,
     build_features,
     build_targets,
@@ -101,6 +102,18 @@ def test_night_contract_is_chosen_from_previous_day_volume():
     assert got.iloc[1] == 101 / 100 - 1
 
 
+def test_night_skips_contract_that_expired_without_night_session():
+    # 結算日 d0：量最大的是當天到期的 202610，它沒有 d1 的夜盤；要改用有夜盤的 202611，不能整天 NaN
+    d0, d1 = dt.date(2026, 10, 21), dt.date(2026, 10, 22)
+    rows = [
+        _tx(d0, "202610", "一般", 9000, close=100, settle=100),
+        _tx(d0, "202611", "一般", 5000, close=200, settle=200),
+        _tx(d1, "202611", "盤後", 3000, close=210),
+    ]
+    got = night_returns(rows, pd.DatetimeIndex([d0, d1]))
+    assert got.iloc[1] == 210 / 200 - 1
+
+
 def test_train_bounds_excludes_unresolved_targets():
     # R3（h=3）的第 s 列要到 s+2 收盤才知道：預測第 10 列只能用 s ≤ 7
     assert train_bounds(10, 3, 756) == (0, 8)
@@ -140,9 +153,12 @@ def test_targets_and_lagged_features_have_no_same_day_close():
 def test_drop_bad_ticks_uses_past_only():
     s = pd.Series([31.0, 31.1, 31.2, 1.8, 31.3, 31.2],
                   index=pd.bdate_range("2011-10-20", periods=6))
-    clean, dropped = drop_bad_ticks(s, 0.05)
+    clean, dropped = drop_bad_ticks(s, FX_MAX_DEV)
     assert dropped == [dt.date(2011, 10, 25)]
     assert len(clean) == 5
+    # 反向：2025-05 台幣兩天升值約 8% 是真實行情，不能被當壞價丟掉
+    real = pd.Series([32.5, 32.4, 32.3, 31.0, 29.9, 30.1], index=pd.bdate_range("2025-04-28", periods=6))
+    assert drop_bad_ticks(real, FX_MAX_DEV)[1] == []
 
 
 def test_onsets_and_incremental_r2():

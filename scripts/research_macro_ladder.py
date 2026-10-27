@@ -140,7 +140,7 @@ ELECTRONIC_INDUSTRIES = {"24", "25", "26", "27", "28", "29", "30", "31"}  # 半�
 # ---------- 純函式：對齊（07:30 資訊集） ----------
 
 FX_SERIES = ("TWD", "DXY")
-FX_MAX_DEV = 0.05   # 匯率單日偏離前 5 筆中位數 >5% 視為壞價（yfinance TWD=X 有 1.80、3.9 這種錯值）
+FX_MAX_DEV = 0.5    # 匯率偏離前 5 筆中位數 >50% 才算壞價（TWD=X 有 1.80、3.9 這種錯值；2025-05 台幣真實急升約 8%，不能丟）
 
 
 def drop_bad_ticks(s, max_dev, lookback=5):
@@ -192,7 +192,8 @@ def night_returns(rows, tw_days):
     """期交所 TX 列（`verify_morning_calls.parse_tx` 格式）→ 台股日 t 的夜盤報酬。
 
     盤後列日期 d 已在 d 的 07:30 收盤；契約用 d 前一個台股日的日盤成交量最大者（07:30 可得），
-    報酬＝該契約夜盤收盤 ÷ 同契約前一台股日日盤結算價 − 1。缺任一值回 NaN。"""
+    但只在 d 有夜盤成交的契約裡挑（結算日當天量最大的是到期契約，它沒有 d 的夜盤；夜盤 05:00 已收，
+    哪些契約有成交在 07:30 可得）。報酬＝該契約夜盤收盤 ÷ 同契約前一台股日日盤結算價 − 1。缺任一值回 NaN。"""
     days = [pd.Timestamp(x).date() for x in tw_days]
     day_session = {}
     night = {}
@@ -203,7 +204,8 @@ def night_returns(rows, tw_days):
             night[(r["date"], r["contract"])] = r["close"]
     out = np.full(len(days), np.nan)
     for i in range(1, len(days)):
-        prev_rows = [r for r in day_session.get(days[i - 1], []) if r["volume"] > 0]
+        prev_rows = [r for r in day_session.get(days[i - 1], [])
+                     if r["volume"] > 0 and (days[i], r["contract"]) in night]
         if not prev_rows:
             continue
         top = max(prev_rows, key=lambda r: r["volume"])
@@ -272,6 +274,11 @@ def fit_predict(Xtr, ytr, x, lam):
     A = Z.T @ Z + lam * n * np.eye(k)
     beta = np.linalg.lstsq(A, Z.T @ (ytr - ym), rcond=None)[0]
     return float(ym + z @ beta), float(ym)
+
+
+def min_train_for(window):
+    """窗內至少要有幾列完整資料才預測：756 窗要 252 列；252 窗要 80%（夜盤有零星缺日，要求全滿會整段沒預測）。"""
+    return min(MIN_TRAIN, int(0.8 * window))
 
 
 def rolling_oos(X, y, horizon, window, lam=0.0, min_train=MIN_TRAIN):
@@ -628,7 +635,7 @@ def main(argv=None):
             for est, lam in lams.items():
                 for mname, cols in MODELS.items():
                     X = feats[cols].to_numpy()
-                    preds[(tgt, w, est, mname)] = rolling_oos(X, y, h, w, lam)
+                    preds[(tgt, w, est, mname)] = rolling_oos(X, y, h, w, lam, min_train=min_train_for(w))
     print(f"rolling fits: {len(preds)} 組，{time.time() - t0:.0f}s", file=sys.stderr)
 
     # 0050 交易腿：open_t 進、close_{t+h−1} 出，`round_trip_return` ETF 稅率
@@ -658,8 +665,8 @@ def main(argv=None):
     w_(f"- 0050 來回成本（`round_trip_return`，名目 {NOTIONAL:,.0f}、ETF 稅 0.1%、滑價每邊 0.15%）："
        f"{etf_cost * 100:.3f}%")
     w_(f"- 滾動擬合：{len(TARGETS)} 目標 × {len(windows)} 窗 × {len(lams)} 估計式 × {len(MODELS)} 模型 "
-       f"＝ **{n_specs} 條樣本外預測序列**；ridge λ={RIDGE_LAMBDA}（固定、未調）；最少訓練 {MIN_TRAIN} 列")
-    w_("- 匯率壞價（偏離前 5 筆中位數 >5%）已丟：" + "；".join(
+       f"＝ **{n_specs} 條樣本外預測序列**；ridge λ={RIDGE_LAMBDA}（固定、未調）；最少訓練列數 756 窗 {min_train_for(756)}、252 窗 {min_train_for(252)}")
+    w_("- 匯率壞價（偏離前 5 筆中位數 >50%）已丟：" + "；".join(
         f"{k} {', '.join(map(str, v)) or '無'}" for k, v in bad_ticks.items()))
     w_(f"- bootstrap：circular block，主 block={BLOCK} 日、{a.bootstrap} 次、seed={a.seed}；"
        "事件規則 block=60\n")
@@ -747,11 +754,11 @@ def main(argv=None):
     # ---- 探索性：階梯 ----
     ladder = [("S0", None, "對基準（訓練均值）"), ("B0", None, "對基準"), ("S", "B0", "S 對 B0"),
               ("U", "S", "U 對 S"), ("F-N", "U", "F去夜盤 對 U"), ("N", "U", "N 對 U"),
-              ("F", "N", "F 對 N")] + [(f"F−{g}", "F", f"刪{g}（F 對 F−組）") for g in MACRO_GROUPS]
+              ("F", "N", "F 對 N")] + [("F", f"F−{g}", f"{g}（F 對 F−該組）") for g in MACRO_GROUPS]
     n_cmp = 0
     w_("\n## 探索性：模型階梯全表（樣本外 R² 與增量 R²，單位 %）\n")
     w_("「對基準」列是該模型自身的樣本外 R²（基準＝訓練窗均值）；其餘是同日配對增量（正＝大模型較好）。"
-       "「刪X」列＝F 相對刪掉該組的增量，即該組的邊際貢獻。N、F 相關比較限 2017-05 起。\n")
+       "「X（F 對 F−該組）」列＝F 相對刪掉該組的增量，正＝該組有邊際貢獻。N、F 相關比較限 2017-05 起。\n")
     for tgt in TARGETS:
         for w in windows:
             for est in lams:
