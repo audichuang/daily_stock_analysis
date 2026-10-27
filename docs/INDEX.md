@@ -107,6 +107,7 @@
 | [實驗：SUS／營收÷歷史最高 取代或補充 YoY≥20 2026-10-26](research/2026-10-26-exp-revenue-sus.md) | 研究紀錄：月營收更正的入庫語意（後寫覆蓋、不留原值）、SUS 與營收÷歷史最高在突破池當補充或取代 YoY≥20 閘門的事先登記、判準與結果 |
 | [實驗：SUS／營收÷歷史最高 取代或補充 YoY≥20 2026-10-26](research/2026-10-26-exp-revenue-sus.md) | 研究紀錄：月營收更正的入庫語意（後寫覆蓋、不留原值）、SUS 與營收÷歷史最高在突破池當補充或取代 YoY≥20 閘門的事先登記、判準與結果（4 個主檢定全部 inconclusive） |
 | [實驗：SUS／營收÷歷史最高 取代或補充 YoY≥20 2026-10-26](research/2026-10-26-exp-revenue-sus.md) | 研究紀錄：月營收更正的入庫語意（後寫覆蓋、不留原值）、SUS 與營收÷歷史最高在突破池當補充或取代 YoY≥20 閘門的事先登記、判準與結果（2 個主檢定通過但未過 Bonferroni、2 個 inconclusive，無一存活，整體 inconclusive） |
+| [總經模型階梯 2026-10-28](research/2026-10-28-macro-ladder.md) | 研究紀錄：07:30 資訊集下只看美股＋台指期夜盤 vs 加總經（10Y、2Y、DXY、台幣、Brent、HYG、VIX、ICSA）的樣本外增量 R² 與 0050 交易腿（確認性比較 inconclusive、待對抗審查），四條預登記事件規則（全部 inconclusive），對齊規則與 mutation 清單 |
 
 ### 維運
 
