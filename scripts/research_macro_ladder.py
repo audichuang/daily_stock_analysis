@@ -181,10 +181,17 @@ def align_available(tw_days, obs, rule):
 def new_events(tw_days, flags, rule):
     """觀測層的 0/1 旗標 → 台股日 t 是否有「上一個台股日之後新變得可用」的觸發。
 
-    用累計觸發數對齊後取差分，台股連假期間累積的多筆觀測也只算進第一個可用日。"""
+    用累計觸發數對齊後取差分，台股連假期間累積的多筆觀測也只算進第一個可用日。
+    第一個台股日的「上一個台股日」不在 tw_days 裡，用前一個營業日近似（研究起點 2010-01-04 前是
+    2010-01-01，台股實際上是 2009-12-31）；不能把 prev 補 0，否則暖機期的累計觸發全被算成起點那天的新事件。
+    近似的代價：恰好在近似日與真正上一個台股日之間可得的觸發會被當成已見過，最多差一筆觀測。"""
     cum = flags.fillna(False).astype(int).cumsum()
-    c = align_available(tw_days, cum, rule)
-    prev = c.shift(1)
+    days = pd.DatetimeIndex(tw_days)
+    ref = pd.DatetimeIndex([days[0].normalize() - pd.offsets.BDay(1)])
+    c_ext = align_available(ref.append(days), cum, rule)
+    c = pd.Series(c_ext.to_numpy()[1:], index=days)
+    prev = pd.Series(c_ext.to_numpy()[:-1], index=days)
+    # prev 是 NaN＝上一個台股日什麼都還不可得，此時 c 的累計全是新的
     return ((c - prev.fillna(0)) > 0) & c.notna()
 
 
@@ -213,6 +220,13 @@ def night_returns(rows, tw_days):
         if close and top["settle"]:
             out[i] = close / top["settle"] - 1
     return pd.Series(out, index=pd.DatetimeIndex(tw_days))
+
+
+def adr_premium(tsm, twd, raw_2330):
+    """ADR 溢價：TSM（美元，07:30 可得的最近收盤）× 可得的 USDTWD ÷（5 × 2330 **前一台股日**未還原收盤）− 1。
+
+    tsm／twd 已對齊到台股日；2330 當日收盤 13:30 才有，07:30 只能用 t−1。"""
+    return tsm * twd / (5 * raw_2330.shift(1)) - 1
 
 
 # ---------- 純函式：目標與特徵 ----------
@@ -592,9 +606,10 @@ def main(argv=None):
     today = dt.date.today()
     if a.refresh_cache:
         refresh_cache(cache, today, log=lambda m: print(m, file=sys.stderr))
+    # 直接賦值而非 setdefault：shell 已 export 正式應用庫 URL 時也要清掉（本腳本只讀 market schema）
+    os.environ["STORAGE_DATABASE_URL"] = ""
     if a.cache_only:
         return 0
-    os.environ.setdefault("STORAGE_DATABASE_URL", "")
 
     ext = load_cache(cache)
     tx_rows, tx_months = load_taifex(cache)
@@ -618,7 +633,7 @@ def main(argv=None):
     night = night_returns(tx_rows, days) if tx_rows else pd.Series(np.nan, index=days)
     # ADR 溢價：TSM（美元，最近可得收盤）× 可得的 USDTWD ÷（5 × 2330 前一台股日未還原收盤）− 1。
     # TSM 是 yfinance 還原價（含息），溢價水準會隨累積股利緩慢漂移；滾動窗回歸吸收大部分。
-    adr_prem = aligned["TSM"] * aligned["TWD"] / (5 * raw_2330.shift(1)) - 1
+    adr_prem = adr_premium(aligned["TSM"], aligned["TWD"], raw_2330)
     feats = build_features(tw, aligned, night, adr_prem)
     targets = build_targets(tw)
     night_ok = night.notna()

@@ -11,8 +11,12 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import research_macro_ladder  # noqa: E402
 from research_macro_ladder import (  # noqa: E402
+    AVAILABLE_RULE,
     FX_MAX_DEV,
+    YF_SERIES,
+    adr_premium,
     align_available,
     build_features,
     build_targets,
@@ -77,8 +81,25 @@ def test_new_events_counts_each_trigger_once_on_first_visible_day():
     flags = pd.Series([False, True, True, False],
                       index=pd.to_datetime(["2026-10-15", "2026-10-16", "2026-10-17", "2026-10-19"]))
     ev = new_events(TW, flags, "us_close")
-    # 10-16、10-17 的觸發都在台股 10-19（週一）第一次可見，只算一次；10-19 的美股日不觸發
+    # 10-16、10-17 的觸發在上一個台股日（10-16）之後才可得，都在台股 10-19（週一）第一次可見，只算一次；
+    # 10-19 的美股日不觸發
     assert ev.tolist() == [True, False, False, False, False]
+
+
+def test_new_events_ignores_warmup_triggers_on_first_research_day():
+    # 暖機期（研究起點前半年）有觸發、之後全部沒有：第一個台股日不能把暖機累計當成新事件
+    flags = pd.Series([True] + [False] * 5,
+                      index=pd.to_datetime(["2009-07-01", "2009-12-28", "2009-12-29",
+                                            "2009-12-30", "2009-12-31", "2010-01-04"]))
+    ev = new_events(pd.bdate_range("2010-01-04", "2010-01-08"), flags, "us_close")
+    assert ev.tolist() == [False] * 5
+
+
+def test_new_events_counts_trigger_after_series_starts_late():
+    # 反向：外部序列晚於研究起點才開始（前幾天整列不可得），第一筆可得的觸發仍要算
+    flags = pd.Series([True, False], index=pd.to_datetime(["2026-10-19", "2026-10-20"]))
+    ev = new_events(TW, flags, "us_close")
+    assert ev.tolist() == [False, True, False, False, False]
 
 
 def _tx(date, contract, session, volume, close=None, settle=None):
@@ -142,12 +163,50 @@ def test_targets_and_lagged_features_have_no_same_day_close():
     assert t["CO"].iloc[1] == 101 / 101 - 1
     assert t["OC"].iloc[2] == 102 / 103 - 1
     assert t["R3"].iloc[2] == 104 / 103 - 1     # open_t → close_{t+2}
-    aligned = pd.DataFrame(1.0, index=tw.index, columns=[
-        "SOX", "NDX", "SPX", "TSM", "DXY", "TWD", "BRENT", "HYG", "VIX", "DGS10", "DGS2", "ICSA_CHG"])
+    cols = ["SOX", "NDX", "SPX", "TSM", "DXY", "TWD", "BRENT", "HYG", "VIX", "DGS10", "DGS2", "ICSA_CHG"]
+    # 每欄逐日不同的值，才分辨得出對齊後是否又被往前／往後挪
+    aligned = pd.DataFrame({c: [10.0 + k + j * 0.5 * (j + 1) for j in range(7)] for k, c in enumerate(cols)},
+                           index=tw.index)
     f = build_features(tw, aligned, pd.Series(0.0, index=tw.index), pd.Series(0.0, index=tw.index))
     # 07:30 時台股最新收盤是 t−1
     assert f["tw_cc1"].iloc[3] == 102 / 102 - 1
     assert f["tw_oc1"].iloc[3] == 102 / 103 - 1
+    # 外部特徵＝「t 可得水準 ÷ t−1 台股日可得水準 − 1」，不能挪到 t+1（前視）或 t−2（過度落後）
+    for col, name in (("sox", "SOX"), ("twd", "TWD"), ("brent", "BRENT")):
+        lv = aligned[name]
+        assert f[col].iloc[3] == lv.iloc[3] / lv.iloc[2] - 1
+    assert f["dgs10"].iloc[3] == aligned["DGS10"].iloc[3] - aligned["DGS10"].iloc[2]
+    assert f["icsa"].iloc[3] == aligned["ICSA_CHG"].iloc[3]
+
+
+def test_available_rule_matches_0730_release_times():
+    # TWD=X 日線收盤時點錯置要晚一天；FRED 日資料隔一個美國營業日才上；ICSA 週四晚上公布
+    assert AVAILABLE_RULE["TWD"] == "next_day"
+    assert AVAILABLE_RULE["DGS10"] == "next_us_bday"
+    assert AVAILABLE_RULE["DGS2"] == "next_us_bday"
+    assert AVAILABLE_RULE["ICSA"] == "icsa_thursday"
+    # 反向：其餘 yfinance 序列不能被過度延後
+    assert {k: v for k, v in AVAILABLE_RULE.items() if k in YF_SERIES and k != "TWD"} == {
+        k: "us_close" for k in YF_SERIES if k != "TWD"}
+
+
+def test_adr_premium_uses_previous_tw_close():
+    days = pd.bdate_range("2026-10-19", periods=3)
+    tsm = pd.Series([200.0, 210.0, 220.0], index=days)
+    twd = pd.Series([30.0, 31.0, 32.0], index=days)
+    raw_2330 = pd.Series([1000.0, 1100.0, 1200.0], index=days)
+    prem = adr_premium(tsm, twd, raw_2330)
+    # 07:30 時 2330 最新收盤是前一台股日；同日收盤要 13:30 才有
+    assert np.isnan(prem.iloc[0])
+    assert prem.iloc[1] == 210 * 31 / (5 * 1000) - 1
+    assert prem.iloc[2] == 220 * 32 / (5 * 1100) - 1
+
+
+def test_main_blanks_storage_database_url_even_when_exported(monkeypatch, tmp_path):
+    # shell 已 export 正式應用庫 URL 時也要清成空字串（setdefault 不會覆寫）
+    monkeypatch.setenv("STORAGE_DATABASE_URL", "postgresql://prod/dsa")
+    assert research_macro_ladder.main(["--cache-only", "--cache-dir", str(tmp_path)]) == 0
+    assert research_macro_ladder.os.environ["STORAGE_DATABASE_URL"] == ""
 
 
 def test_drop_bad_ticks_uses_past_only():
