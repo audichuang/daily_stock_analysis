@@ -1,6 +1,6 @@
 # market_data — 台股行情與總經數據爬取,統一 Postgres(market schema)
 
-爬 TWSE/TPEx/MOPS 歷史寫進 Postgres `market` schema——台股歷史的**唯一資料源**(無備份,丟了只能重爬)。`macro.py` 另把台股以外的大局數據寫進同一個 schema:`macro_series`(yfinance／FRED 日線,序列清單唯一一份在 `macro.SERIES`,`scripts/overnight.py` 也用它)、`rate_expectations`(Kalshi Fed 利率預期快照,**無歷史可補**;主鍵含 `snapshot_slot`——同一天有多個 slot,讀取端必須選定一個 slot 才能加總)、`macro_series_snapshot`(每次抓取近 7 天的時點快照)、`event_calendar`(FOMC／財報／美國經濟數據／ISM／央行,鍵不含日期、日期可變;經濟數據的實際值是 ALFRED 首發 vintage、first-write-wins,不寫高於／低於預期;央行日期是 `macro.CBC_BOARD_MEETINGS` 人工常數表、只放已確認、不推算);`daily` 經 `MACRO_PERSIST_ENABLED`(預設開)呼叫,三段各自只報不擋,語意見 `docs/macro-data.md`。連線只認 `.env` 的 `DATABASE_URL`,模組不自載 `.env`,指令一律 `uv run --env-file .env …`。面板經 `data_provider/market_db_fetcher.py` 讀取。
+爬 TWSE/TPEx/MOPS 歷史寫進 Postgres `market` schema。`macro.py` 另把台股以外的大局數據寫進同一個 schema(`macro_series`、`rate_expectations`、`macro_series_snapshot`、`event_calendar`;表的語意、`macro.SERIES` 與 `MACRO_PERSIST_ENABLED` 見 `docs/macro-data.md`)。兩個讀取的坑:讀 `rate_expectations`／`macro_series_snapshot` 必須先選定一個 `snapshot_slot`,否則同一天多組快照會重複加總;`macro_series` 每天被 FRED 的修訂後值覆蓋,做時點(PIT)研究要讀 `macro_series_snapshot` 或 `event_calendar` 的首發值(`actual_value`)。連線只認 `.env` 的 `DATABASE_URL`,模組不自載 `.env`,指令一律 `uv run --env-file .env …`。面板經 `data_provider/market_db_fetcher.py` 讀取。
 `taifex.py` 是期交所法人台指期未平倉的入庫(`taifex_fut_oi`,列帶 `first_seen_at`(設過不覆蓋)與 `captured_at`;`daily` 經 `TAIFEX_OI_PERSIST_ENABLED` 開關、預設關;只累積不回補,以回應每列自帶日期寫入),`scripts/taifex_positions.py` 共用它的抓取與解析。`risk_flags.py`/`events.py` 只抓不入庫(不寫 DB、不建表),HTTP 一律走 `tw_official_http.py`(不走 `crawler.requests_get`),它**不判新鮮度**,呼叫端自己比對回應日期。`sources.py`/`crawler.py`/`financial_statement.py` 是移植來的,盡量少動。
 
 ## 寫入與 schema
@@ -8,7 +8,7 @@
 - schema 只走 Alembic(`migrations/`,只管 `market` schema),不手改線上 DB。
 - price 一天 TWSE+TPEx **兩市場都到才寫**——單邊寫入會讓 resume 標記該日完成、另一邊永久缺。別「順手優化」。
 - price 的**截斷防護**(低於近 5 日中位數九成 → STOCK_DAY_ALL 備援 → 仍不足整天跳過)不要移除:TWSE 回過截斷但非空的回應。
-- 會被官方事後修正的來源要加進 `crawl.REVISED_SOURCES`(目前是 institutional 與 institutional_tpex,T86 18:00 是初版、上櫃比照);沒列進去的會凍結在初版。初版另存 `institutional_initial`、月營收首次值存 `monthly_revenue_first_seen`:兩張都 append-only(DO NOTHING),**只由 `daily_update` 路徑寫**(`record_initial`／`record_first_seen`),`cli backfill`、`refresh_range`、`backfill_pit_revenue` 絕不能寫,否則歷史回補會冒充初版。
+- 會被官方事後修正的來源要加進 `crawl.REVISED_SOURCES`(目前是 institutional 與 institutional_tpex,T86 18:00 是初版、上櫃比照);沒列進去的會凍結在初版。初版另存 `institutional_initial`、月營收首次值存 `monthly_revenue_first_seen`:兩張都 append-only(DO NOTHING),**只由 `daily_update` 路徑寫**(它傳給 `crawl_day`／`crawl_monthly_revenue` 的 `record_initial`／`record_first_seen` 參數),`cli backfill`、`refresh_range`、`backfill_pit_revenue` 絕不能寫,否則歷史回補會冒充初版。
 - 快照段(valuation/index/stock_info)只經 `crawl.crawl_snapshots()`;直接呼叫會丟掉列數與 `latest <date>`,那是唯一的可觀測訊號。加權指數長區間回補是例外,走 `cli backfill index`(逐月一個交易、兩個來源合併,見 `docs/market-data-pitfalls.md`)。
 - `sources` 取得層失敗只印 `**WARN`、回 `None`,exit code 不反映失敗;新來源照這個契約,自動化判成敗看 stdout。
 - psycopg 多列 INSERT 的 `rowcount` 不可靠(要數就 `RETURNING`);單一 INSERT 綁定參數上限 65,535,寬表要分批(`funds._chunks`)。
@@ -22,7 +22,7 @@
 - `institutional`/`margin`/`valuation` 上市與上櫃共表,以 `market` 欄區分(**NULL = 上市**、`'tpex'` = 上櫃;上櫃法人自 2018-01-15 起)。寫入、resume、replace 的刪除與 `health` 稽核都要分市場——不分的話,上市法人每晚整日換血會連同日上櫃列一起刪(`crawl.SOURCE_MARKET`、`crawl.market_filter`;`daily` 對上櫃來源只報不擋)。**上線順序**:migration → 新程式部署到所有寫入端 → 才開始抓上櫃;舊程式看不到 `market` 欄,上櫃資料先進來的話,它的 resume／整日換血會把兩市場當同一天處理。降版在有上櫃列或集保資料時會拒絕(只有一份、無備份),回滾要先停排程、用新程式清掉上櫃列再降版、最後才退程式(`docs/tw-stock-dossier.md`);`price.market` 全為 NULL;判定下市用 `price` 最後交易日,不是「不在 `stock_info`」(它只有上市)。
 - `monthly_revenue.revenue` 單位是**千元**;`crawler.crawl_monthly_report` 有存活偏誤(只列仍申報的公司),補歷史走 `cli revenue-pit`。
 - `MarketDBFetcher` 只服務 `.TW`/`.TWO`;查無資料 raise `DataSourceUnavailableError` 讓 chain fallback,不回空 DataFrame。
-- `market_data` 內要交易日曆一律用 `health.expected_session`/`sessions_after`/`session_before`,不 import `src.core.trading_calendar`;`health` 的函式名與簽名是 `scripts/daily_report.sh` 的契約。
+- `market_data` 內要交易日曆一律用 `health.expected_session`/`sessions_after`/`session_before`,不 import `src.core.trading_calendar`;`health.expected_session` 是 `scripts/daily_report.sh` 的契約(完成標記的鍵)。
 
 ## 測試
 
@@ -33,4 +33,3 @@
 
 - 資料對不對、怎麼逐日對官方、怎麼整日重抓:`docs/tw-data-integrity.md`(工具 `scripts/audit_market_vs_official.py`)。
 - 踩雷案例、實測數字與資料語意全文:`docs/market-data-pitfalls.md`;境內基金(`funds.py`):`docs/tw-funds.md`。
-- 怎麼更新/回補/稽核/跑模組測試:skill `update-market-data`。
