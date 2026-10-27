@@ -254,7 +254,16 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
 防竄改保證只來自「預測比結果先進版控」。2026-08-05 那次 commit 一口氣補進 4 筆，5 筆裡最後只有 1 筆可計分。
 
 **完成條件**：一個動作、一句理由、一個可觀察的翻轉條件、`exclude_from_scoring` 已明寫、一行已追加。
-最後**現在就**把這一行 commit＋push 到 `develop`（只 add `journal/morning-calls.jsonl`，Fable 臂這次有寫新列時再加 `journal/morning-arms.jsonl`，AGENTS §1）。
+最後，commit 之前先在**前景**跑 Fable 綜合臂（Claude 那一行已寫進 `journal/morning-calls.jsonl` 才跑；不重試，跳過或失敗照常 commit）：
+
+```bash
+uv run --env-file .env python scripts/morning_fable_arms.py --synth   # 寫 journal/morning-arms.jsonl 的 fable_synth 列；前置條件不成立只印原因、不寫列
+```
+
+綜合臂只看**兩組機率數字**（你這行的三個 p、fable 列的三個 p，中性標籤成員 A／B）與過濾後 pack，不會看到任何一方的 `reason`、`action`、`regime`。
+前置條件：你這一行三個 p 有效、`exclude_from_scoring` 為 `false`、`input_snapshot_hash` 與當天 pack 一致，且 fable 列存在、無 `error`、三個 p 有效。
+
+然後**現在就**把這一行 commit＋push 到 `develop`（只 add `journal/morning-calls.jsonl`，Fable 獨立臂或綜合臂這次有寫新列時再加 `journal/morning-arms.jsonl`，AGENTS §1）。
 
 ## 邊界
 

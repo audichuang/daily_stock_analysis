@@ -8,7 +8,7 @@
 | 線 | 入口 | 週期 | 產出 |
 |---|---|---|---|
 | AI 每日個股報告 | 平日 18:00 `make daily-report-detached`（Mac 排程）；NAS Web 臨時分析 | 隔日～數日的操作建議 | `dsa.analysis_history`、`dsa.decision_signals`、推播 |
-| 台股波段 | skill `tw-swing-research` / `tw-morning-call`；`scripts/screen_tw.py` 預篩 | 60 個交易日、目標 ≥+30% | `journal/swing-decisions.jsonl`、`morning-calls.jsonl`、`morning-arms.jsonl`（Fable 獨立臂，2026-10-28 起、半年內只出描述性報表，見 `journal/README.md`） |
+| 台股波段 | skill `tw-swing-research` / `tw-morning-call`；`scripts/screen_tw.py` 預篩 | 60 個交易日、目標 ≥+30% | `journal/swing-decisions.jsonl`、`morning-calls.jsonl`、`morning-arms.jsonl`（Fable 獨立臂與綜合臂 `fable_synth`，2026-10-28 起、前半年只出描述性報表，見 `journal/README.md`） |
 | 價值研究 | skill `value-research`、`earnings-review` | 季、年 | 研究筆記 |
 
 排程與維運見 `docs/daily-report-ops.md`；怎麼讀報告見 `docs/tw-operating-guide.md`。**目前沒有 2～5 天短波段專用的契約與訊號**（待辦，見 §7）。

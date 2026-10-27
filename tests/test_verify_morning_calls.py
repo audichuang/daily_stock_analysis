@@ -755,7 +755,7 @@ def test_arm_report_excludes_and_counts_each_reason():
 
 
 def test_arm_report_ignores_unscorable_outcomes_and_other_models():
-    arm_other = {**_arm("2099-01-01", 0.8), "model_version": "fable_synth"}
+    arm_other = {**_arm("2099-01-01", 0.8), "model_version": "someone_else"}
     rep = vmc.arm_report([_oc("2099-01-01", 1, 0.6, scorable=False)], [_call("2099-01-01")], [_arm("2099-01-01", 0.8)])
     assert rep["n_dates"] == 0 and rep["skipped"]["no_outcome"] == 1
     assert vmc.arm_report([_oc("2099-01-01", 1, 0.6)], [_call("2099-01-01")], [arm_other])["skipped"]["arm_rows"] == 0
@@ -765,15 +765,16 @@ def test_arm_verdict_inconclusive_below_min_n_and_when_ci_crosses_zero():
     days = [f"2099-02-{i:02d}" for i in range(1, 31)]
     outcomes = [_oc(d, 1, 0.5) for d in days]
     calls = [_call(d) for d in days]
-    rep = vmc.arm_report(outcomes[:5], calls, [_arm(d, 0.9) for d in days[:5]])
+    judged = dt.date(2100, 1, 1)    # 遠超第一筆配對日 + 182 天：走判定字樣
+    rep = vmc.arm_report(outcomes[:5], calls, [_arm(d, 0.9) for d in days[:5]], today=judged)
     lines = []
     vmc.render_arm_report(rep, lines.append)
     assert any("inconclusive（n<20）" in x for x in lines)
-    rep = vmc.arm_report(outcomes, calls, [_arm(d, 0.9) for d in days])   # 全部都贏 → CI 下界 >0
+    rep = vmc.arm_report(outcomes, calls, [_arm(d, 0.9) for d in days], today=judged)   # 全部都贏 → CI 下界 >0
     assert rep["targets"]["close_up"]["arms"]["fable"]["verdict"] == "該臂優於 claude"
     rnd = np.random.default_rng(3)
     mixed = [_arm(d, 0.9 if rnd.random() < 0.5 else 0.3) for d in days]  # 隨機贏輸、幅度對稱 → 跨零
-    out = vmc.arm_report([_oc(d, 1, 0.5) for d in days], calls, mixed)
+    out = vmc.arm_report([_oc(d, 1, 0.5) for d in days], calls, mixed, today=judged)
     assert out["targets"]["close_up"]["arms"]["fable"]["verdict"] == "inconclusive"
 
 
@@ -796,3 +797,106 @@ def test_equal_weight_uses_only_days_with_all_six_probabilities():
     eq, fb = rep["targets"]["close_up"]["arms"]["equal_weight"], rep["targets"]["close_up"]["arms"]["fable"]
     assert fb["n"] == 2 and eq["n"] == 1          # fable 臂保留部分有效的那天，等權臂不收
     assert eq["brier"] == pytest.approx(0.09) and eq["brier_claude"] == pytest.approx(0.16)   # 只算 full_day
+
+
+# ---------- fable_synth 臂與前半年只出描述 ----------
+
+def _synth(day, p, h="H", **kw):
+    return _arm(day, p, h, model_version="fable_synth", **kw)
+
+
+def _lines(rep):
+    out = []
+    vmc.render_arm_report(rep, out.append)
+    return "\n".join(out)
+
+
+def _winning_month():
+    days = [f"2099-02-{i:02d}" for i in range(1, 31)]
+    return days, [_oc(d, 1, 0.5) for d in days], [_call(d) for d in days]
+
+
+def test_synth_arm_is_paired_against_claude_independently_of_fable():
+    # y=1：claude 0.6、synth 0.9 → d = 0.16-0.01 = +0.15；fable 臂完全沒有列也照算
+    rep = vmc.arm_report([_oc("2099-01-01", 1, 0.6)], [_call("2099-01-01")], [_synth("2099-01-01", 0.9)])
+    a = rep["targets"]["close_up"]["arms"]
+    assert set(a) == {"fable_synth"} and a["fable_synth"]["n"] == 1
+    assert a["fable_synth"]["brier"] == pytest.approx(0.01) and a["fable_synth"]["d_mean"] == pytest.approx(0.15)
+    assert rep["synth"]["n_dates"] == 1 and rep["n_dates"] == 0 and rep["skipped"]["arm_rows"] == 0
+    # fable 與 synth 同日並存：各算各的、不互相污染
+    rep = vmc.arm_report([_oc("2099-01-01", 1, 0.6)], [_call("2099-01-01")],
+                         [_arm("2099-01-01", 0.8), _synth("2099-01-01", 0.9)])
+    a = rep["targets"]["close_up"]["arms"]
+    assert a["fable"]["brier"] == pytest.approx(0.04) and a["fable_synth"]["brier"] == pytest.approx(0.01)
+    assert a["equal_weight"]["brier"] == pytest.approx(0.09)    # 等權仍只用 fable
+
+
+def test_synth_arm_uses_the_same_exclusion_rules_with_its_own_counts():
+    days = [f"2099-01-0{i}" for i in range(1, 6)]
+    rep = vmc.arm_report([_oc(d, 1, 0.6) for d in days[:4]], [_call(d) for d in days],
+                         [_synth(days[0], 0.8), _synth(days[1], 0.8, h="OTHER"),
+                          _synth(days[2], 0.8, exclude_from_scoring=True), _synth(days[3], 0.8, error="x"),
+                          _synth(days[4], 0.8)])
+    assert rep["synth"]["n_dates"] == 1
+    assert rep["synth"]["skipped"] == {"arm_rows": 5, "excluded": 1, "error": 1, "no_outcome": 1,
+                                       "hash_missing": 0, "hash_mismatch": 1}
+    assert "fable_synth 臂 5 列；進配對 1 天；排除：不計分 1、error 1、無對應 outcome 1" in _lines(rep)
+
+
+def test_first_half_year_boundary_day_181_is_descriptive_day_182_is_judged():
+    days, outcomes, calls = _winning_month()
+    arms = [_synth(d, 0.9) for d in days]
+    first = dt.date.fromisoformat(days[0])
+    judge_from = (first + dt.timedelta(days=182)).isoformat()
+    early = vmc.arm_report(outcomes, calls, arms, today=first + dt.timedelta(days=181))
+    text = _lines(early)
+    assert early["targets"]["close_up"]["arms"]["fable_synth"]["descriptive"] is True
+    assert f"描述性（前半年不下判定，滿 {judge_from} 起才判定）" in text
+    assert "優於 claude" not in text and "inconclusive" not in text and "Brier" in text and "d̄" in text
+    late = vmc.arm_report(outcomes, calls, arms, today=first + dt.timedelta(days=182))
+    text = _lines(late)
+    assert late["targets"]["close_up"]["arms"]["fable_synth"]["descriptive"] is False
+    assert "該臂優於 claude" in text and "描述性（前半年" not in text
+
+
+def test_half_year_clock_is_per_arm_from_its_own_first_paired_day():
+    days, outcomes, calls = _winning_month()
+    # fable 從第 1 天起算；synth 晚 10 天才有第一筆可計分配對（前面的列被排除）
+    arms = [_arm(d, 0.9) for d in days] + [_synth(d, 0.9, **({"exclude_from_scoring": True} if i < 10 else {}))
+                                          for i, d in enumerate(days)]
+    today = dt.date.fromisoformat(days[0]) + dt.timedelta(days=182)
+    rep = vmc.arm_report(outcomes, calls, arms, today=today)
+    a = rep["targets"]["close_up"]["arms"]
+    assert a["fable"]["descriptive"] is False and a["fable_synth"]["descriptive"] is True
+    assert a["fable_synth"]["first_date"] == days[10]
+    text = _lines(rep)
+    assert "該臂優於 claude" in text and "描述性（前半年不下判定，滿 " + a["fable_synth"]["judge_from"] in text
+
+
+def test_claude_vs_baselines_verdict_is_not_gated_by_the_half_year_rule():
+    rng = np.random.default_rng(5)
+    y = rng.integers(0, 2, 60)
+    rows = prob_rows([(0.85 if v else 0.15, int(v), 0.5, 1) for v in y])   # 日期是 2099-04，距今遠不到 182 天
+    assert vmc.prob_summary(rows, "close_up")["baselines"]["a"]["verdict"] == "模型優於基準"
+    out = []
+    vmc.render_prob_summary(rows, out.append)
+    assert "模型優於基準" in "\n".join(out) and "描述性（前半年" not in "\n".join(out)
+
+
+def test_brief_line_carries_synth_n_and_brier(tmp_path):
+    arms, calls = tmp_path / "arms.jsonl", tmp_path / "calls.jsonl"
+    arms.write_text(json.dumps(_synth("2099-01-01", 0.9)) + "\n", encoding="utf-8")
+    calls.write_text(json.dumps(_call("2099-01-01")) + "\n", encoding="utf-8")
+    lines = []
+    vmc.arms_section([_oc("2099-01-01", 1, 0.6)], calls, arms, lines.append, full=False)
+    assert len(lines) == 1 and "fable_synth 臂 1 列" in lines[0] and "synth 0.010（n=1）" in lines[0]
+
+
+def test_brief_line_with_both_arms_shows_fable_synth_and_equal_weight_cells(tmp_path):
+    arms, calls = tmp_path / "arms.jsonl", tmp_path / "calls.jsonl"
+    arms.write_text(json.dumps(_arm("2099-01-01", 0.8)) + "\n" + json.dumps(_synth("2099-01-01", 0.9)) + "\n",
+                    encoding="utf-8")
+    calls.write_text(json.dumps(_call("2099-01-01")) + "\n", encoding="utf-8")
+    lines = []
+    vmc.arms_section([_oc("2099-01-01", 1, 0.6)], calls, arms, lines.append, full=False)
+    assert "claude 0.160／fable 0.040（n=1）／synth 0.010（n=1）／等權 0.090（n=1）" in lines[0]
