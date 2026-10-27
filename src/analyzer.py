@@ -106,6 +106,11 @@ from src.services.tw_backtest_context import (
     load_tw_regime,
     load_tw_revenue_momentum,
 )
+from src.services.tw_macro_context import (
+    format_macro_context_block,
+    has_macro_block,
+    load_macro_context,
+)
 from src.services.tw_live_events import format_tw_live_block, load_tw_live_events
 from src.market_phase_prompt import format_market_phase_prompt_section
 from src.market_structure_prompt import format_market_structure_prompt_section
@@ -1644,14 +1649,67 @@ def _taipei_today():
     return _dt.now(ZoneInfo("Asia/Taipei")).date()
 
 
-def _tw_ma_ab_treated(stock_code: Any, ratio: float, day: Any) -> bool:
-    """A/B 分組：同一檔同一天固定在同一組（重跑不換組），不同天重新抽，避免某幾檔永遠在同一組。"""
+def _ab_treated(key: str, ratio: float) -> bool:
     if ratio >= 1:
         return True
     if ratio <= 0:
         return False
-    digest = hashlib.sha256(f"{str(stock_code).strip().upper()}|{day}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
     return int(digest[:8], 16) / 0x100000000 < ratio
+
+
+def _tw_ma_ab_treated(stock_code: Any, ratio: float, day: Any) -> bool:
+    """A/B 分組：同一檔同一天固定在同一組（重跑不換組），不同天重新抽，避免某幾檔永遠在同一組。
+
+    雜湊字串不可改：改了進行中的均線實驗會整批換組。"""
+    return _ab_treated(f"{str(stock_code).strip().upper()}|{day}", ratio)
+
+
+def _tw_macro_ab_treated(stock_code: Any, ratio: float, day: Any) -> bool:
+    """總經背景實驗的分組。必須加 salt：沿用均線實驗的字串會讓兩個實驗每天分到完全相同的股票，效果混在一起。"""
+    return _ab_treated(f"macro-ctx|{str(stock_code).strip().upper()}|{day}", ratio)
+
+
+def _tw_forecast_question(report_language: str) -> str:
+    """台股固定預測題（每份台股報告都問，事後用 scripts/shadow_buy_eval.py --forecast 計分）。"""
+    if report_language in ("en", "ko"):
+        return (
+            "\n\n### Fixed forecast question (Taiwan stocks)\n"
+            "Question: if entered at the next session's open (T+1) and exited at the close of the 5th trading day, "
+            "what is the probability (0 to 1) that the net return after costs beats the 0050 ETF over the same window?\n"
+            "Add a top-level JSON key `\"p_5d_beat_0050\"` with a number between 0 and 1. "
+            "If you cannot estimate it, omit the key; do not guess 0.5.\n"
+        )
+    if report_language == "zh-TW":
+        return (
+            "\n\n### 固定預測題（台股）\n"
+            "題目：若在下一個交易日（T+1）開盤進場、第 5 個交易日收盤出場，扣除交易成本後的淨報酬，"
+            "高於同一視窗 0050 的機率是多少（0 到 1）？\n"
+            "請在 JSON 頂層加上 `\"p_5d_beat_0050\"`，值為 0 到 1 的數字；無法估計就省略這個鍵，不要猜 0.5。\n"
+        )
+    return (
+        "\n\n### 固定预测题（台股）\n"
+        "题目：若在下一个交易日（T+1）开盘进场、第 5 个交易日收盘出场，扣除交易成本后的净报酬，"
+        "高于同一窗口 0050 的概率是多少（0 到 1）？\n"
+        "请在 JSON 顶层加上 `\"p_5d_beat_0050\"`，值为 0 到 1 的数字；无法估计就省略这个键，不要猜 0.5。\n"
+    )
+
+
+def _model_version(usage: Any, model_used: Optional[str]) -> Optional[str]:
+    """落庫的模型版本：CLI 回報的實際模型（usage["cli_model"]）優先，否則用 model_used（LiteLLM 是完整模型名）。"""
+    cli_model = usage.get("cli_model") if isinstance(usage, dict) else None
+    return cli_model or model_used
+
+
+def _parse_forecast_probability(value: Any) -> Optional[float]:
+    """嚴格解析：只收 [0,1] 內的有限數；缺值、字串百分比、NaN、超界一律 None（沒有讀數不是 0.5）。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        p = float(value)
+    except (TypeError, ValueError):
+        return None
+    return p if math.isfinite(p) and 0.0 <= p <= 1.0 else None
 
 
 def _tw_ma_weighted_bounds(bias_threshold: Any) -> tuple[str, str]:
@@ -2223,6 +2281,13 @@ class AnalysisResult:
     fundamental_context: Optional[Dict[str, Any]] = None
     market_structure_context: Optional[Dict[str, Any]] = None
 
+    # ========== 版本與固定預測題（台版新增，落庫到 analysis_history 的可空欄位）==========
+    prompt_hash: Optional[str] = None  # sha256(system prompt)
+    input_snapshot_hash: Optional[str] = None  # sha256(第一次送出的 user prompt)
+    model_version: Optional[str] = None  # usage.cli_model 或 model_used
+    p_5d_beat_0050: Optional[float] = None  # 固定預測題；缺值為 None，不預設 0.5
+    llm_attempts: Optional[List[Dict[str, Any]]] = None  # 完整性重試每一輪的原文
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -2265,6 +2330,7 @@ class AnalysisResult:
             'change_pct': self.change_pct,
             'model_used': self.model_used,
             'market_structure_context': self.market_structure_context,
+            'p_5d_beat_0050': self.p_5d_beat_0050,
         }
 
     def get_core_conclusion(self) -> str:
@@ -3136,6 +3202,26 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
             bool(getattr(self._get_runtime_config(), "tw_ma_alignment_weighted", False))
             and is_tw_code(stock_code)
             and normalize_report_language(report_language) not in ("en", "ko")
+        )
+
+    def _tw_macro_ab_ratio(self) -> float:
+        try:
+            ratio = float(getattr(self._get_runtime_config(), "tw_macro_context_ab_ratio", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+        return ratio if math.isfinite(ratio) else 0.0     # 壞值當關閉：不加區塊也不打標
+
+    def _tw_macro_ab_eligible(self, stock_code: Any, report_language: str) -> bool:
+        """台股＋中文模板＋TW_MACRO_CONTEXT_AB_RATIO>0：進入總經背景實驗（資格與均線實驗相同）。"""
+        return (
+            self._tw_macro_ab_ratio() > 0
+            and is_tw_code(stock_code)
+            and normalize_report_language(report_language) not in ("en", "ko")
+        )
+
+    def _tw_macro_ab_active(self, stock_code: Any, report_language: str) -> bool:
+        return self._tw_macro_ab_eligible(stock_code, report_language) and _tw_macro_ab_treated(
+            stock_code, self._tw_macro_ab_ratio(), _taipei_today()
         )
 
     def _tw_ma_ab_ratio(self) -> float:
@@ -4256,6 +4342,7 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
             # 使用 litellm 调用（支持完整性校验重试）
             current_prompt = prompt
+            llm_attempts: List[Dict[str, Any]] = []
             retry_count = 0
             max_retries = config.report_integrity_retry if config.report_integrity_enabled else 0
             llm_client = self._resolve_llm_client()
@@ -4306,6 +4393,11 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 # 解析响应
                 result = self._parse_response(response_text, code, name)
                 result.raw_response = response_text
+                llm_attempts.append({
+                    "attempt": len(llm_attempts) + 1,
+                    "model": _model_version(llm_usage, model_used),
+                    "response_text": response_text,
+                })
                 result.search_performed = bool(news_context)
                 result.market_snapshot = self._build_market_snapshot(context)
                 result.model_used = model_used
@@ -4357,6 +4449,18 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
             if should_persist_usage_telemetry(llm_usage):
                 persist_llm_usage(llm_usage, model_used, call_type="analysis", stock_code=code)
+
+            result.prompt_hash = hashlib.sha256((system_prompt or "").encode("utf-8")).hexdigest()
+            result.input_snapshot_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+            result.model_version = _model_version(llm_usage, model_used)
+            result.llm_attempts = llm_attempts
+
+            if self._tw_macro_ab_eligible(code, report_language) and isinstance(result.dashboard, dict):
+                # 依實際送出的 prompt 有沒有總經區塊標組別；ratio=0 不進這裡，沒設定的執行不會被誤當實驗資料。
+                # 不動 prompt_variant（串接字串會讓 shadow_buy_eval --by-variant 拆成太多組）
+                result.dashboard.setdefault("experiments", {})["macro_ctx"] = (
+                    "on" if has_macro_block(prompt) else "off"
+                )
 
             if self._tw_ma_ab_eligible(code, report_language) and isinstance(result.dashboard, dict):
                 # 依實際送出的系統提示詞標組別（分組看日期，跨午夜重算可能換組，以送出的為準）；
@@ -4760,6 +4864,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         if prompt_market == "tw":
             # 台股大盤狀態（本地行情、每天算一次）：只當資訊，用字依回測 CI 是否排除零
             prompt += format_regime_block(load_tw_regime(), normalize_report_language(report_language))
+            if self._tw_macro_ab_active(code, report_language):
+                # 只進 user prompt：不經 context["daily_market_context"]，大盤環境護欄的文字比對看不到
+                prompt += format_macro_context_block(load_macro_context(), normalize_report_language(report_language))
         market_structure_section = format_market_structure_prompt_section(
             context.get("market_structure_context"),
             report_language=report_language,
@@ -5659,6 +5766,8 @@ Output the complete Decision Dashboard in JSON format."""
                 getattr(self._get_runtime_config(), "bias_threshold", 5.0),
                 trend_ctx.get("bias_ma5") if isinstance(trend_ctx := context.get("trend_analysis"), dict) else None,
             )
+        if prompt_market == "tw":
+            prompt += _tw_forecast_question(report_language)
         return prompt
 
     def _format_volume(self, volume: Optional[float], report_language: str = "zh") -> str:
@@ -6170,6 +6279,16 @@ Output the complete Decision Dashboard in JSON format."""
                     report_language, en='Technical data', zh='技术面数据', zh_tw='技術面資料', ko='기술적 데이터')),
                 success=True,
             )
+            if is_tw_code(code):
+                p_forecast = _parse_forecast_probability(data.get("p_5d_beat_0050"))
+                result.p_5d_beat_0050 = p_forecast
+                if p_forecast is not None and isinstance(result.dashboard, dict):
+                    result.dashboard["forecast"] = {
+                        "question": "p_5d_beat_0050",
+                        "p": p_forecast,
+                        "horizon_sessions": 5,
+                        "benchmark": "0050",
+                    }
             return populate_decision_action_fields(
                 result,
                 explicit_action=explicit_action,

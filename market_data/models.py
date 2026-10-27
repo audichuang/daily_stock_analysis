@@ -95,6 +95,29 @@ class Institutional(Base):
     market: Mapped[str | None] = mapped_column(String(8))
 
 
+class InstitutionalInitial(Base):
+    """三大法人「初版」快照（append-only）：``daily_update`` 首次抓到的 T86／TPEx 值。
+
+    ``institutional`` 隔日會被 ``crawl.REVISED_SOURCES`` 的 refresh 整日換血成定版，初版就消失；
+    這張表只在 daily 路徑以 ``ON CONFLICT DO NOTHING`` 寫入，``backfill``／``refresh`` 都不寫，
+    所以歷史回補不會冒充初版。欄位與 ``institutional`` 相同，另加 ``captured_at``（抓到的時刻）。
+    「初版」＝daily 補缺路徑**第一次抓到**的值，不保證是 18:00 當晚抓的：前一晚失敗或 T86 還沒出，
+    隔天（07:30 ``make morning`` 也跑 daily）補抓到的可能已是定版。研究要讀初版時，篩 ``captured_at``
+    落在該交易日當晚的列；上線前的日期沒有初版。
+    """
+
+    __tablename__ = "institutional_initial"
+
+    stock_id: Mapped[str] = mapped_column(String(12), primary_key=True)
+    date: Mapped[_date] = mapped_column(Date, primary_key=True)
+    foreign_net: Mapped[int | None] = mapped_column(BigInteger)
+    trust_net: Mapped[int | None] = mapped_column(BigInteger)
+    dealer_net: Mapped[int | None] = mapped_column(BigInteger)
+    total_net: Mapped[int | None] = mapped_column(BigInteger)
+    market: Mapped[str | None] = mapped_column(String(8))
+    captured_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Margin(Base):
     """融資融券 (每日,每股),單位:交易單位/張。"""
 
@@ -163,6 +186,26 @@ class MonthlyRevenue(Base):
     yoy: Mapped[float | None] = mapped_column(Numeric(12, 2))  # 去年同月增減%
     mom: Mapped[float | None] = mapped_column(Numeric(12, 2))  # 上月比較增減%
     announce_date: Mapped[_date | None] = mapped_column(Date)  # 公告日(point-in-time)
+
+
+class MonthlyRevenueFirstSeen(Base):
+    """月營收「首次看到的值」快照（append-only）：更正後 ``monthly_revenue`` 不留原值。
+
+    只由 ``daily_update`` 的 ``crawl_monthly_revenue(record_first_seen=True)`` 以
+    ``ON CONFLICT DO NOTHING`` 寫入；手動 ``cli`` 與 ``backfill_pit_revenue`` 都不寫。
+    欄位同 ``monthly_revenue`` 加 ``captured_at``。上線第一天抓到的「上月」值可能已修正過，
+    那天 ``captured_at`` 的列不能當首次值。
+    """
+
+    __tablename__ = "monthly_revenue_first_seen"
+
+    stock_id: Mapped[str] = mapped_column(String(12), primary_key=True)
+    revenue_month: Mapped[_date] = mapped_column(Date, primary_key=True)
+    revenue: Mapped[int | None] = mapped_column(BigInteger)
+    yoy: Mapped[float | None] = mapped_column(Numeric(12, 2))
+    mom: Mapped[float | None] = mapped_column(Numeric(12, 2))
+    announce_date: Mapped[_date | None] = mapped_column(Date)
+    captured_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class FinancialStatement(Base):
@@ -260,6 +303,10 @@ class TaifexFutOI(Base):
     long_oi_amount: Mapped[int | None] = mapped_column(BigInteger)
     short_oi_amount: Mapped[int | None] = mapped_column(BigInteger)
     net_oi_amount: Mapped[int | None] = mapped_column(BigInteger)
+    # 首次入庫時刻（設過不覆蓋）與最後一次抓取時刻（每次重抓更新）；期交所事後更正會覆蓋數值，
+    # 靠這兩欄才分得出「第一次看到」與「最後一次確認」
+    first_seen_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
+    captured_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class MacroSeries(Base):
@@ -280,6 +327,29 @@ class MacroSeries(Base):
     updated_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class MacroSeriesSnapshot(Base):
+    """``macro_series`` 的時點快照（append-only 精神）：每次抓取各 slot 留一份最近的列。
+
+    ``macro_series`` 每天整段重抓覆蓋，看不出「當時手上有什麼」。這張表只存
+    ``date >= snapshot_date - 7`` 的列（約 22 序列 × 5 列；全存會每天約 1.1 萬列），
+    ``snapshot_slot`` 同 ``rate_expectations``（台北時間 premarket／intraday／postclose）。
+    ``received_at`` 是抓到的時刻、``as_of_cutoff`` 是這次抓取開始的時刻、``staleness_days`` 是
+    ``snapshot_date - date``。同 slot 重跑以 upsert 覆蓋、不同 slot 各自保留。
+    """
+
+    __tablename__ = "macro_series_snapshot"
+
+    snapshot_date: Mapped[_date] = mapped_column(Date, primary_key=True)
+    snapshot_slot: Mapped[str] = mapped_column(String(10), primary_key=True)
+    series_id: Mapped[str] = mapped_column(String(24), primary_key=True)
+    date: Mapped[_date] = mapped_column(Date, primary_key=True)
+    value: Mapped[float | None] = mapped_column(Numeric(18, 6))
+    source: Mapped[str | None] = mapped_column(String(16))
+    received_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
+    as_of_cutoff: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
+    staleness_days: Mapped[int | None] = mapped_column(Integer)
+
+
 class RateExpectation(Base):
     """Fed 每場會議各結果的市場隱含機率快照（Kalshi ``KXFEDDECISION``），每天一份。
 
@@ -292,6 +362,7 @@ class RateExpectation(Base):
     __tablename__ = "rate_expectations"
 
     snapshot_date: Mapped[_date] = mapped_column(Date, primary_key=True)
+    snapshot_slot: Mapped[str] = mapped_column(String(10), primary_key=True)  # premarket|intraday|postclose|legacy
     meeting_date: Mapped[_date] = mapped_column(Date, primary_key=True)
     outcome: Mapped[str] = mapped_column(String(12), primary_key=True)
     prob_mid: Mapped[float | None] = mapped_column(Numeric(6, 4))
@@ -302,20 +373,27 @@ class RateExpectation(Base):
     open_interest: Mapped[float | None] = mapped_column(Numeric(18, 2))
     source_updated_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
     source: Mapped[str | None] = mapped_column(String(16))  # kalshi
+    captured_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class EventCalendar(Base):
-    """重大事件行事曆：FOMC 決議日、美股巨頭財報日。
+    """重大事件行事曆：FOMC 決議日、美股巨頭財報日、美國經濟數據、ISM、央行理監事會。
 
     鍵是 ``(event_type, symbol, label)``，``event_date`` 是可變欄位——財報日常改期，鍵含日期的話
     改期會多出一列而不是更新。``label`` 對 FOMC 是會議月份（``2026-10``），對財報是財報日所在
     季度（``2026Q4``）。``status``：``confirmed``（官方來源或兩來源一致）／``estimated``
     （單一非官方來源，例如 yfinance 財報日）。寫入見 ``market_data/macro.py``。
+
+    經濟數據（``cpi``／``nfp``／``unrate``／``retail``／``pce``／``claims``，``symbol='US'``，``label`` 是
+    公布日 ISO）另有 ``released_at``（公布時刻，aware）與 ``series_id``（對應 FRED 序列）；公布後
+    ``actual_value``／``prior_value``／``observation_date`` 存 ALFRED **首發 vintage**（``actual_vintage``）
+    的值，不是 ``macro_series`` 裡會被修訂的值。``ism`` 是規則推估（``estimated``）、``cbc`` 是央行常數表。
+    **不寫「高於／低於預期」：沒有 PIT 共識，只存首發實際值與前值。** 這幾欄都可空，舊列（FOMC、財報）為 NULL。
     """
 
     __tablename__ = "event_calendar"
 
-    event_type: Mapped[str] = mapped_column(String(16), primary_key=True)  # fomc | earnings
+    event_type: Mapped[str] = mapped_column(String(16), primary_key=True)  # fomc|earnings|cpi|nfp|unrate|retail|pce|claims|ism|cbc
     symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
     label: Mapped[str] = mapped_column(String(16), primary_key=True)
     event_date: Mapped[_date] = mapped_column(Date)
@@ -324,3 +402,10 @@ class EventCalendar(Base):
     time_note: Mapped[str | None] = mapped_column(String(64))
     source: Mapped[str | None] = mapped_column(String(24))
     updated_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
+    released_at: Mapped[_datetime | None] = mapped_column(DateTime(timezone=True))
+    series_id: Mapped[str | None] = mapped_column(String(24))  # FRED:PAYEMS
+    observation_date: Mapped[_date | None] = mapped_column(Date)
+    actual_value: Mapped[float | None] = mapped_column(Numeric(18, 6))
+    prior_value: Mapped[float | None] = mapped_column(Numeric(18, 6))
+    actual_vintage: Mapped[_date | None] = mapped_column(Date)
+    actual_source: Mapped[str | None] = mapped_column(String(16))  # alfred
