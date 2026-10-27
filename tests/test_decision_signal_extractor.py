@@ -291,7 +291,7 @@ def test_build_payload_keeps_high_neutral_action_with_guardrail_reason() -> None
         sentiment_score=72,
         operation_advice="持有/观望待回踩",
         decision_type="hold",
-        action=None,
+        action="watch",
     )
 
     payload = build_decision_signal_payload_from_report(

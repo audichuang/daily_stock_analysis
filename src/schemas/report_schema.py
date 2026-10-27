@@ -379,6 +379,8 @@ class AnalysisReportSchema(BaseModel):
     trend_prediction: Optional[str] = None
     operation_advice: Optional[str] = None
     decision_type: Optional[str] = None
+    # 八態結構化動作（buy/add/hold/reduce/sell/watch/avoid/alert），系統只讀這裡，不從 operation_advice 推斷
+    action: Optional[str] = None
     confidence_level: Optional[str] = None
 
     dashboard: Optional[Dashboard] = None

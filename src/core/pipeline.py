@@ -42,13 +42,12 @@ from src.analyzer import (
 )
 from src.notification import NotificationService, NotificationChannel
 from src.notification_sender import OutboundMessage
-from src.schemas.decision_action import normalize_decision_action
+from src.schemas.decision_action import decision_type_for_action, normalize_decision_action
 from src.utils.sniper_points import SNIPER_PRICES_KEY, parse_structured_price
 from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.report_language import (
     get_placeholder_text,
     get_unknown_text,
-    infer_decision_type_from_advice,
     localize_confidence_level,
     localize_operation_advice,
     localize_trend_prediction,
@@ -2291,6 +2290,10 @@ class StockAnalysisPipeline:
                     self._mark_trend_fallback_source(result)
             from src.agent.protocols import normalize_decision_signal
 
+            explicit_action = self._agent_dashboard_value(dash, nested_dashboard, "action", scalar=True)
+            advice_decision = decision_type_for_action(explicit_action, default="") or decision_type_for_action(
+                result.operation_advice, default="",
+            )
             raw_decision = self._agent_dashboard_value(
                 dash,
                 nested_dashboard,
@@ -2300,10 +2303,7 @@ class StockAnalysisPipeline:
             )
             if self._is_agent_field_missing(raw_decision, scalar=True, expect_text=True):
                 trend_decision = self._trend_decision_fallback(trend_result)
-                decision_from_advice = infer_decision_type_from_advice(
-                    result.operation_advice,
-                    default="",
-                )
+                decision_from_advice = advice_decision
                 if decision_from_advice:
                     result.decision_type = decision_from_advice
                     if (
@@ -2325,7 +2325,7 @@ class StockAnalysisPipeline:
                 # Unknown labels ("add", "accumulate") must not become an explicit hold that skips buy guardrails
                 result.decision_type = (
                     normalize_decision_signal(raw_decision, default="")
-                    or infer_decision_type_from_advice(result.operation_advice, default="")
+                    or advice_decision
                     or "hold"
                 )
             result.confidence_level = localize_confidence_level(
@@ -2383,21 +2383,40 @@ class StockAnalysisPipeline:
         previous_operation_advice: Any,
         record_contradiction: bool = True,
     ) -> AnalysisResult:
-        # A guardrail may rewrite the advice after the Agent action was parsed;
-        # discard that stale action before using the same resolver as the
-        # downstream DecisionSignal builder.
+        # 護欄可能在解析 Agent action 之後改寫建議：改成單一標籤時以標籤取代舊動作，
+        # 改成句子時保留護欄設好的結構化動作，再交給與 DecisionSignal 相同的 resolver。
         previous_advice = str(previous_operation_advice or "").strip()
         current_advice = str(getattr(result, "operation_advice", None) or "").strip()
-        if previous_advice != current_advice:
-            result.action = None
-            result.action_label = None
         advice_action = normalize_decision_action(current_advice)
+        if previous_advice != current_advice and advice_action is not None:
+            # 護欄把建議改寫成單一動作標籤（「觀望」）時以標籤為準；改寫成句子時，
+            # 改寫的護欄必須自己設好結構化 result.action，這裡不從句子推斷動作。
+            result.action = advice_action
+            result.action_label = None
+        elif previous_advice != current_advice:
+            # 改寫成句子但結構化動作與三態 decision_type 對不上（如護欄已降為 hold，
+            # action 還是解析時的 buy），代表改寫者沒同步動作：清掉殘留值、保守回未知。
+            decision_type = str(getattr(result, "decision_type", None) or "").strip().lower()
+            action_bucket = decision_type_for_action(getattr(result, "action", None), default="")
+            if action_bucket and decision_type in {"buy", "hold", "sell"} and action_bucket != decision_type:
+                result.action = None
+                result.action_label = None
         score = getattr(result, "sentiment_score", None)
         if action_for_score(score) == "buy" and (
             str(getattr(result, "decision_type", None) or "").strip().lower() == "sell"
         ):
-            # 僅結構化賣出決策阻擋買入區分數升級，沿用非買入建議動作，否則退回觀望。
-            result.action = advice_action if advice_action and advice_action not in {"buy", "add"} else "watch"
+            # 僅結構化賣出決策阻擋買入區分數升級：先沿用 LLM 的結構化 action（如 reduce），
+            # 它是買入類或缺漏時才看建議是否為單一非買入標籤，都沒有就退回觀望；不從句子推斷。
+            # 護欄改寫成單一標籤時上面已把標籤寫進 result.action，這裡先看 action 不會漏掉它。
+            kept_action = next(
+                (
+                    candidate
+                    for candidate in (normalize_decision_action(getattr(result, "action", None)), advice_action)
+                    if candidate and candidate not in {"buy", "add"}
+                ),
+                "watch",
+            )
+            result.action = kept_action
             result.action_label = None
             if not record_contradiction:
                 # 中途只刷新動作，等真正護欄執行完才記錄尚未解決的矛盾。

@@ -91,7 +91,7 @@ from src.report_language import (
     localize_trend_prediction,
     normalize_report_language,
 )
-from src.schemas.decision_action import build_action_fields
+from src.schemas.decision_action import build_action_fields, decision_type_for_action
 from src.schemas.decision_scale import (
     CANONICAL_DECISION_SCALE_PROMPT_EN,
     CANONICAL_DECISION_SCALE_PROMPT_ZH,
@@ -1912,10 +1912,14 @@ def _set_structural_hold_wording(
         },
     }
     reason = reason_templates.get(language, reason_templates["en"]).get(reason_key, "")
+    # 洗盤觀察沿用「持有」語意（與 _OPERATION_ADVICE_CANONICAL_MAP 一致），震盪觀望才是觀望。
+    final_action = "watch" if advice_key == "range" else "hold"
     if calibrate_score:
-        final_action = "watch" if advice_key in {"range", "shakeout"} else "hold"
         _bound_hold_watch_sentiment_score(result, reason=reason, final_action=final_action)
     result.operation_advice = advice
+    # 建議改寫成「震盪觀望」這類句子後，動作由這裡以結構化欄位給出，下游不再從文字推斷。
+    result.action = final_action
+    result.action_label = None
     if advice_key == "range":
         if language == "zh" and "震荡" not in str(result.trend_prediction):
             result.trend_prediction = "震荡"
@@ -5948,15 +5952,13 @@ Output the complete Decision Dashboard in JSON format."""
                 name = ai_stock_name
 
             # 解析所有字段，使用默认值防止缺失
-            # 解析 decision_type，如果没有则根据 operation_advice 推断
-            decision_type = data.get('decision_type', '')
-            if not decision_type:
-                op = data.get('operation_advice', localize_operation_advice('持有', report_language))
-                decision_type = infer_decision_type_from_advice(op, default='hold')
-
             explicit_action = data.get("action")
             if explicit_action is None and isinstance(dashboard, dict):
                 explicit_action = dashboard.get("action")
+            # 三態缺漏時只採用結構化動作或完整標籤，不解讀建議句子。
+            decision_type = data.get("decision_type") or decision_type_for_action(
+                explicit_action, default="",
+            ) or decision_type_for_action(data.get("operation_advice"))
 
             result = AnalysisResult(
                 code=code,

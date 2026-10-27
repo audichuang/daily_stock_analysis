@@ -1694,6 +1694,13 @@ class AgentOrchestrator:
         payload["trend_prediction"] = trend_prediction
         payload["operation_advice"] = operation_advice
         payload["decision_type"] = decision_type
+        if risk_applied:
+            # 風控下調後 LLM 原本的 action 可能仍是 buy；以下調後的結構化訊號改寫，不靠建議文字推斷。
+            risk_action = _risk_adjusted_action(payload.get("action"), decision_type)
+            payload["action"] = risk_action
+            nested_dashboard = payload.get("dashboard")
+            if isinstance(nested_dashboard, dict) and "action" in nested_dashboard:
+                payload["dashboard"] = {**nested_dashboard, "action": risk_action}
         payload["confidence_level"] = _confidence_label(confidence)
         payload["analysis_summary"] = analysis_summary
         payload["key_points"] = key_points
@@ -2118,6 +2125,23 @@ def _adjust_operation_advice(advice: str, signal: str) -> str:
     if advice == mapping[signal]:
         return advice
     return f"{mapping[signal]}（原建议已被风控下调）"
+
+
+# 風控下調後的預設動作：hold 走觀望、sell 走減倉，與 _adjust_operation_advice 的建議文字一致。
+_RISK_SIGNAL_DEFAULT_ACTION = {"buy": "buy", "hold": "watch", "sell": "reduce"}
+_ACTION_SIGNAL_BUCKET = {
+    "buy": "buy", "add": "buy",
+    "hold": "hold", "watch": "hold", "avoid": "hold", "alert": "hold",
+    "reduce": "sell", "sell": "sell",
+}
+
+
+def _risk_adjusted_action(raw_action: Any, signal: str) -> Optional[str]:
+    """Keep the LLM action only when it already matches the post-risk signal."""
+    action = str(raw_action or "").strip().lower()
+    if _ACTION_SIGNAL_BUCKET.get(action) == signal:
+        return action
+    return _RISK_SIGNAL_DEFAULT_ACTION.get(signal)
 
 
 def _signal_to_operation(signal: str) -> str:

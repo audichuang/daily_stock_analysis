@@ -567,6 +567,25 @@ class TestAgentFactorySkillBaseline(unittest.TestCase):
 class TestAgentResultConversion(unittest.TestCase):
     """Test _agent_result_to_analysis_result without spinning up the full pipeline."""
 
+    def test_structured_action_supplies_missing_or_unknown_decision_type(self):
+        from src.agent.executor import AgentResult
+        from src.enums import ReportType
+
+        pipeline = self._make_pipeline()
+        for action, decision in [("watch", "hold"), ("add", "buy"), ("reduce", "sell"), (None, "hold")]:
+            for raw_decision in (None, "unknown"):
+                with self.subTest(action=action, raw_decision=raw_decision):
+                    result = pipeline._agent_result_to_analysis_result(
+                        AgentResult(success=True, dashboard={
+                            "sentiment_score": 50, "operation_advice": "建議現在買入",
+                            "action": action, "decision_type": raw_decision,
+                        }),
+                        "2887A.TW", "台新特", ReportType.SIMPLE, "structured-action",
+                    )
+                    self.assertEqual(result.decision_type, decision)
+                    self.assertEqual(result.action, action)
+                    self.assertEqual(result.code, "2887A.TW")
+
     def _make_pipeline(self):
         """Create a minimal StockAnalysisPipeline with mocked dependencies."""
         # We need to import and mock carefully to avoid touching real services
@@ -763,7 +782,7 @@ class TestAgentResultConversion(unittest.TestCase):
         from src.agent.executor import AgentResult
         from src.enums import ReportType
 
-        cases = [("add", "Buy now.", "buy"), ("accumulate", "买入", "buy"),
+        cases = [("add", "Buy now.", "hold"), ("accumulate", "买入", "buy"),
                  ("add", "减仓", "sell"), ("neutral", "隨便寫的文字", "hold"),
                  ("hold", "Buy now.", "hold")]
         for raw, advice, expected in cases:
@@ -853,8 +872,8 @@ class TestAgentResultConversion(unittest.TestCase):
             previous_operation_advice=previous_operation_advice,
         )
 
-        self.assertEqual(result.action, "hold")
-        self.assertEqual(result.action_label, "持有")
+        self.assertIsNone(result.action)
+        self.assertIsNone(result.action_label)
 
     def test_final_action_refresh_keeps_ambiguous_action_fail_closed(self):
         """Pipeline refresh must not invent an action outside the shared resolver."""
@@ -1026,6 +1045,7 @@ class TestAgentResultConversion(unittest.TestCase):
             success=True,
             content="{}",
             dashboard={
+                "action": "hold",
                 "operation_advice": "不跌破支撑位继续持有",
                 "sentiment_score": 72,
             },
@@ -2379,6 +2399,7 @@ class TestAnalyzeWithAgentStockName(unittest.TestCase):
                     "sentiment_score": 82,
                     "trend_prediction": "bullish",
                     "operation_advice": "Buy now.",
+                    "action": "buy",
                     "decision_type": "buy",
                     "confidence_level": "high",
                     "analysis_summary": "Strong stock signal.",

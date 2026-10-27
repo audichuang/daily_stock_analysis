@@ -104,13 +104,19 @@ Your task: synthesise all inputs into a single, actionable Decision Dashboard.
 Return a valid JSON object following the Decision Dashboard schema.  The JSON \
 must include at minimum these top-level keys:
   stock_name, sentiment_score, trend_prediction, operation_advice,
-  decision_type, confidence_level, dashboard, analysis_summary,
+  decision_type, action, confidence_level, dashboard, analysis_summary,
   key_points, risk_warning
 
 Important: ``decision_type`` must stay within the existing enum
 ``buy|hold|sell``. Express stronger conviction via ``confidence_level``,
 ``sentiment_score``, and the natural-language fields instead of inventing
 new decision_type values.
+
+``action`` is your final trading judgment and must be exactly one of
+``buy|add|hold|reduce|sell|watch|avoid|alert``. The system reads the action
+only from this field and never infers it from ``operation_advice`` text
+(for example, advice like "do not buy yet" must come with ``action`` set to
+``watch`` or ``avoid``).
 
 The nested ``dashboard.battle_plan`` must include ``sniper_points`` (human-readable
 text for ``ideal_buy``, ``secondary_buy``, ``stop_loss``, ``take_profit``) and
@@ -147,6 +153,7 @@ should sum to 100; all-zero means no effective signal and must not be faked.
 ## Output Language
 - Keep every JSON key unchanged.
 - `decision_type` must remain `buy|hold|sell`.
+- `action` must remain one of `buy|add|hold|reduce|sell|watch|avoid|alert`.
 - Write all human-readable JSON values in English.
 """
         if report_language == "zh-TW":
@@ -155,6 +162,7 @@ should sum to 100; all-zero means no effective signal and must not be faked.
 ## 輸出語言
 - 所有 JSON 鍵名保持不變。
 - `decision_type` 必須保持為 `buy|hold|sell`。
+- `action` 必須保持為 `buy|add|hold|reduce|sell|watch|avoid|alert` 其中之一。
 - 所有面向使用者的人類可讀文字值必須使用繁體中文（台灣用語），不得使用簡體字或中國大陸用語。
 """
         if report_language == "ko":
@@ -163,6 +171,7 @@ should sum to 100; all-zero means no effective signal and must not be faked.
 ## Output Language
 - Keep every JSON key unchanged.
 - `decision_type` must remain `buy|hold|sell`.
+- `action` must remain one of `buy|add|hold|reduce|sell|watch|avoid|alert`.
 - Write all human-readable JSON values in Korean (한국어).
 """
         return prompt + """
@@ -170,6 +179,7 @@ should sum to 100; all-zero means no effective signal and must not be faked.
 ## 输出语言
 - 所有 JSON 键名保持不变。
 - `decision_type` 必须保持为 `buy|hold|sell`。
+- `action` 必須保持為 `buy|add|hold|reduce|sell|watch|avoid|alert` 其中之一。
 - 所有面向用户的人类可读文本值必须使用中文。
 """
 

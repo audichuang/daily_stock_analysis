@@ -89,6 +89,8 @@ def _history_result(**overrides):
         trend_prediction="震荡偏强",
         operation_advice="持有观察",
         decision_type="hold",
+        # 歷史報告落庫時已帶結構化動作；「持有观察」是句子，不再被解析成動作
+        action="hold",
         confidence_level="中",
         analysis_summary="趋势仍在，但等待量能确认。",
         report_language="zh",

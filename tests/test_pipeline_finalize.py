@@ -69,6 +69,8 @@ def _result(**overrides) -> AnalysisResult:
         trend_prediction="强烈看多",
         operation_advice="建议买入",
         decision_type="buy",
+        # 動作由 LLM 以結構化欄位給出；「建议买入」只供顯示，不會被解析成動作
+        action="buy",
         confidence_level="高",
     )
     defaults.update(overrides)
@@ -220,7 +222,7 @@ def test_finalize_real_guardrail_reason_takes_precedence_over_contradiction(guar
 
 def test_finalize_consistent_low_score_sell_is_untouched():
     # 反向：分數不在買入區的一致賣出照舊發布賣出，也不留矛盾原因
-    result = _result(decision_type="sell", operation_advice="卖出", sentiment_score=15, dashboard={})
+    result = _result(decision_type="sell", operation_advice="卖出", action="sell", sentiment_score=15, dashboard={})
 
     saved, signal = _finalize_public_action(result)
 
@@ -229,7 +231,21 @@ def test_finalize_consistent_low_score_sell_is_untouched():
     assert "decision_score_calibration" not in (saved.dashboard or {})
 
 
-@pytest.mark.parametrize("initial_action", [None, "buy", "add"])
+@pytest.mark.parametrize(("structured_action", "expected"), [("reduce", "reduce"), ("sell", "sell"), ("buy", "watch")])
+def test_finalize_buy_band_sell_keeps_structured_non_buy_action_with_sentence_advice(structured_action, expected):
+    # 建議是句子（非單一標籤）時，賣出決策＋買入區分數要保留 LLM 結構化的非買入動作；
+    # 反向：結構化 buy 仍要被擋成 watch
+    result = _result(
+        decision_type="sell", action=structured_action, operation_advice="減倉，跌破月線出清",
+        sentiment_score=68, dashboard={},
+    )
+
+    saved, signal = _finalize_public_action(result)
+
+    assert result.action == saved.action == signal["action"] == expected
+
+
+@pytest.mark.parametrize("initial_action", ["hold", "buy", "add"])
 @pytest.mark.parametrize("change_pct", [-1.6, 1.0], ids=["shakeout", "no_shakeout"])
 def test_finalize_buy_band_hold_resets_action_only_for_shakeout(initial_action, change_pct):
     result = _result(
@@ -245,7 +261,8 @@ def test_finalize_buy_band_hold_resets_action_only_for_shakeout(initial_action, 
 
     saved, signal = _finalize_public_action(result, artifacts=artifacts)
 
-    expected = "hold" if change_pct < 0 else initial_action or "buy"
+    # 非洗盤時 LLM 的 hold 會被買入區分數對齊成 buy；buy/add 原樣保留
+    expected = "hold" if change_pct < 0 else ("buy" if initial_action == "hold" else initial_action)
     assert result.action == saved.action == signal["action"] == expected
     assert display_action_fields_for_result(result)["action"] == expected
     assert result.operation_advice == "洗盘观察"

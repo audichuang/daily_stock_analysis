@@ -112,6 +112,7 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
     "trend_prediction": "强烈看多/看多/震荡/看空/强烈看空",
     "operation_advice": "买入/加仓/持有/减仓/卖出/观望",
     "decision_type": "buy/hold/sell",
+    "action": "buy/add/hold/reduce/sell/watch/avoid/alert",
     "confidence_level": "高/中/低",
     "dashboard": {{
         "core_conclusion": {{
@@ -219,6 +220,7 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
 - 不得仅因为单日涨跌或评分跨线就在“买入/卖出”之间剧烈切换。
 - 操作建议必须同时参考价格位置（支撑/压力位）、量能/筹码、主力资金流向和风险事件。
 - 股价位于支撑与压力之间、资金流不明确时，优先输出“持有/震荡/观望/洗盘观察”等可执行的中性建议；`decision_type` 仍保持 `hold`。
+- `action` 必須從 `buy/add/hold/reduce/sell/watch/avoid/alert` 擇一填寫，代表你最終的操作判斷；系統只讀這個欄位，不會從 `operation_advice` 的文字推斷動作（例如「不建議現在買入」要填 `watch` 或 `avoid`）。
 - 只有在接近支撑确认或有效突破压力，且资金流/量价配合时，才能给出买入；接近压力且资金流出时不得追买。
 - 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。
 - 必须输出 `dashboard.phase_decision` 七字段；盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点。
@@ -272,6 +274,7 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
     "trend_prediction": "强烈看多/看多/震荡/看空/强烈看空",
     "operation_advice": "买入/加仓/持有/减仓/卖出/观望",
     "decision_type": "buy/hold/sell",
+    "action": "buy/add/hold/reduce/sell/watch/avoid/alert",
     "confidence_level": "高/中/低",
     "dashboard": {{
         "core_conclusion": {{
@@ -376,6 +379,7 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
 - 不得仅因为单日涨跌或评分跨线就在“买入/卖出”之间剧烈切换。
 - 操作建议必须同时参考价格位置（支撑/压力位）、量能/筹码、主力资金流向和风险事件。
 - 股价位于支撑与压力之间、资金流不明确时，优先输出“持有/震荡/观望/洗盘观察”等可执行的中性建议；`decision_type` 仍保持 `hold`。
+- `action` 必須從 `buy/add/hold/reduce/sell/watch/avoid/alert` 擇一填寫，代表你最終的操作判斷；系統只讀這個欄位，不會從 `operation_advice` 的文字推斷動作（例如「不建議現在買入」要填 `watch` 或 `avoid`）。
 - 只有在接近支撑确认或有效突破压力，且资金流/量价配合时，才能给出买入；接近压力且资金流出时不得追买。
 - 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。
 - 必须输出 `dashboard.phase_decision` 七字段；盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点。
@@ -517,6 +521,7 @@ def _build_language_section(report_language: str, *, chat_mode: bool = False) ->
 
 - Keep every JSON key unchanged.
 - `decision_type` must remain `buy|hold|sell`.
+- `action` must remain one of `buy|add|hold|reduce|sell|watch|avoid|alert`.
 - All human-readable JSON values must be written in English.
 - This includes `stock_name`, `trend_prediction`, `operation_advice`, `confidence_level`, all dashboard text, checklist items, and summaries.
 """
@@ -527,6 +532,7 @@ def _build_language_section(report_language: str, *, chat_mode: bool = False) ->
 
 - 所有 JSON 鍵名保持不變。
 - `decision_type` 必須保持為 `buy|hold|sell`。
+- `action` 必須保持為 `buy|add|hold|reduce|sell|watch|avoid|alert` 其中之一。
 - 所有面向使用者的人類可讀文字值必須使用繁體中文（台灣用語），不得使用簡體字或中國大陸用語。
 - 包含 `stock_name`、`trend_prediction`、`operation_advice`、`confidence_level`、所有儀表板文字、檢查清單項目與摘要。
 """
@@ -536,6 +542,7 @@ def _build_language_section(report_language: str, *, chat_mode: bool = False) ->
 
 - 所有 JSON 键名保持不变。
 - `decision_type` 必须保持为 `buy|hold|sell`。
+- `action` 必須保持為 `buy|add|hold|reduce|sell|watch|avoid|alert` 其中之一。
 - 所有面向用户的人类可读文本值必须使用中文。
 """
 

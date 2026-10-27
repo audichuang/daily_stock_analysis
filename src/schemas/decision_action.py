@@ -8,7 +8,6 @@ This module is deliberately separate from ``src.agent.protocols``:
 
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, Literal, Optional, TypedDict, get_args
 
 from src.report_language import localize_operation_advice, normalize_report_language
@@ -49,288 +48,38 @@ _EXPLICIT_ALIASES: Dict[str, DecisionAction] = {
     "wait": "watch",
 }
 
-_ACTION_PHRASES: Dict[DecisionAction, tuple[str, ...]] = {
-    "avoid": (
-        "不建议买入",
-        "避免买入",
-        "do not buy",
-        "don't buy",
-        "dont buy",
-        "回避",
-        "规避",
-        "avoid",
-    ),
-    "alert": (
-        "风险预警",
-        "触发告警",
-        "risk alert",
-        "警惕",
-        "alert",
-    ),
-    "buy": (
-        "强烈买入",
-        "strong_buy",
-        "strong buy",
-        "买入",
-        "布局",
-        "建仓",
-        "buy",
-    ),
-    "add": (
-        "加仓",
-        "增持",
-        "accumulate",
-        "add",
-    ),
-    "hold": (
-        "持有观察",
-        "洗盘观察",
-        "持有",
-        "hold",
-    ),
-    "watch": (
-        "观望",
-        "等待",
-        "wait",
-        "watch",
-    ),
-    "reduce": (
-        "减仓",
-        "trim",
-        "reduce",
-    ),
-    "sell": (
-        "强烈卖出",
-        "strong_sell",
-        "strong sell",
-        "卖出",
-        "清仓",
-        "sell",
-    ),
+# 自由文字的 operation_advice 只供顯示：動作必須由 LLM／agent 在結構化 `action` 欄位給出。
+# 結構化欄位缺席時，只接受「整段就是一個動作標籤」的建議（去頭尾空白後完全相等），
+# 不做片語、否定或子字串判讀——「不建議現在買入」這類句子一律回 None，交給呼叫端既有預設。
+# 標籤來源只有既有列舉：八態動作的各語系顯示標籤，與 operation_advice 列舉的強烈買入／賣出。
+_EXTRA_EXACT_LABELS: Dict[str, DecisionAction] = {
+    "强烈买入": "buy",
+    "적극 매수": "buy",
+    "强烈卖出": "sell",
+    "적극 매도": "sell",
+    # 台灣用語的加碼／減碼是加倉／減倉的同義標籤
+    "加码": "add",
+    "减码": "reduce",
 }
-
-# 中文否定已由 _has_zh_negated_action 先一步回 None，表內中文條目已不會命中，只有英文條目仍在作用。
-_NEGATED_ACTION_PHRASES: Dict[DecisionAction, tuple[str, ...]] = {
-    "avoid": (
-        "暂不买入",
-        "不要买入",
-        "不宜买入",
-        "先不买入",
-        "不建议建仓",
-        "暂不建仓",
-        "不要建仓",
-        "不宜建仓",
-        "先不建仓",
-        "无需建仓",
-        "无须建仓",
-        "不建议布局",
-        "暂不布局",
-        "不要布局",
-        "不宜布局",
-        "先不布局",
-        "无需布局",
-        "无须布局",
-        "无需买入",
-        "无须买入",
-        "not buy",
-        "do not buy",
-        "don't buy",
-        "dont buy",
-        "no buy",
-        "no need to buy",
-        "need not buy",
-        "cannot buy",
-        "can't buy",
-        "cant buy",
-    ),
-    "hold": (
-        "不建议加仓",
-        "无需加仓",
-        "不要加仓",
-        "不宜加仓",
-        "暂不加仓",
-        "无须加仓",
-        "不建议增持",
-        "无需增持",
-        "不要增持",
-        "不宜增持",
-        "暂不增持",
-        "无须增持",
-        "不建议卖出",
-        "无需卖出",
-        "不要卖出",
-        "不宜卖出",
-        "暂不卖出",
-        "无须卖出",
-        "不建议减仓",
-        "无需减仓",
-        "不要减仓",
-        "不宜减仓",
-        "暂不减仓",
-        "无须减仓",
-        "不建议清仓",
-        "无需清仓",
-        "不要清仓",
-        "不宜清仓",
-        "暂不清仓",
-        "无须清仓",
-        "not add",
-        "do not add",
-        "don't add",
-        "dont add",
-        "no add",
-        "no need to add",
-        "need not add",
-        "cannot add",
-        "can't add",
-        "cant add",
-        "not accumulate",
-        "do not accumulate",
-        "don't accumulate",
-        "dont accumulate",
-        "no accumulate",
-        "no need to accumulate",
-        "need not accumulate",
-        "cannot accumulate",
-        "can't accumulate",
-        "cant accumulate",
-        "not sell",
-        "do not sell",
-        "don't sell",
-        "dont sell",
-        "no sell",
-        "no need to sell",
-        "need not sell",
-        "cannot sell",
-        "can't sell",
-        "cant sell",
-        "not reduce",
-        "do not reduce",
-        "don't reduce",
-        "dont reduce",
-        "no reduce",
-        "no need to reduce",
-        "need not reduce",
-        "cannot reduce",
-        "can't reduce",
-        "cant reduce",
-        "not trim",
-        "do not trim",
-        "don't trim",
-        "dont trim",
-        "no trim",
-        "no need to trim",
-        "need not trim",
-        "cannot trim",
-        "can't trim",
-        "cant trim",
-    ),
-}
-
-_GUARD_ACTIONS: tuple[DecisionAction, ...] = ("avoid", "alert")
-_ENGLISH_NEGATED_ACTION_TERMS: Dict[DecisionAction, tuple[str, ...]] = {
-    "avoid": ("buy",),
-    "hold": ("add", "accumulate", "sell", "reduce", "trim"),
-}
-_ENGLISH_AVOIDED_HOLD_ACTION_TERMS = ("adding", "accumulating", "selling", "reducing", "trimming")
-_ENGLISH_DEFERRED_ACTION_TERMS = ("buy", "add", "accumulate", "sell", "reduce", "trim")
-_FINANCIAL_COMPOUND_SENTINEL = "financialcompound"
-
-# 中文否定一律保守處理：不解析否定文法（「不建議現在買入」「沒有不買入的理由」「暫不加碼，建議賣出」
-# 這類句子先前被片語表判成相反方向），只要同一子句內、動作詞前 6 字以內出現否定詞就回 None，
-# 由呼叫端退回結構化 decision_type 或既有預設。比對的是繁轉簡後的文字，折疊表有的字只列簡體。
-_ZH_NEGATION_TOKENS = (
-    "避免", "禁止", "切勿", "停止", "暂缓", "暂緩",
-    "不", "别", "勿", "莫", "未", "没", "无",
-)
-# 「未來」「無論／不論／不管」「不斷」不是否定，排除以免把一般敘述也判成未知
-_ZH_NEGATION_EXCLUDED_COMPOUNDS = (
-    "未来", "无论", "不论", "不管", "不断",
-    # 「來／論／斷」不在共用折疊表，繁體寫法另列
-    "未來", "无論", "不論", "不斷",
-)
-_ZH_ACTION_WORDS = (
-    "买", "卖", "加仓", "加码", "增持", "减仓", "减码", "减持",
-    "清仓", "建仓", "布局", "持有", "观望",
-    # 片語表其他中文動作（洗盘观察→hold、等待→watch、回避／规避→avoid、预警／告警／警惕→alert）被否定時同樣回未知
-    "洗盘观察", "等待", "回避", "规避", "预警", "告警", "警惕",
-    # 「場」不在共用折疊表，兩種寫法都列
-    "进场", "进場", "出场", "出場",
-)
-_ZH_NEGATION_WINDOW = 6
-_ZH_NEGATED_ACTION_RE = re.compile(
-    "(?:" + "|".join(re.escape(token) for token in _ZH_NEGATION_TOKENS) + ")"
-    + rf"[^，。；;,.!?！？\n]{{0,{_ZH_NEGATION_WINDOW}}}?"
-    + "(?:" + "|".join(re.escape(word) for word in _ZH_ACTION_WORDS) + ")"
-)
-_ZH_NEGATION_EXCLUDED_RE = re.compile("|".join(re.escape(word) for word in _ZH_NEGATION_EXCLUDED_COMPOUNDS))
-
-
-def _has_zh_negated_action(text: str) -> bool:
-    masked = _ZH_NEGATION_EXCLUDED_RE.sub(lambda m: "_" * len(m.group(0)), text)
-    return bool(_ZH_NEGATED_ACTION_RE.search(masked))
 
 
 def _normalize_key(value: Any) -> str:
-    # 片語表都是簡體；zh-TW 建議（「觀望」「不建議買入」）先逐字折成簡體再比對，
-    # 否則整段落空回 None，護欄改寫後的結果就寫不出 DecisionSignal。
+    # 繁體標籤（「觀望」「減倉」）先逐字折成簡體再查表，否則 zh-TW 報告的標籤會落空。
     text = str(value or "").strip().lower().replace("_", " ").replace("-", " ")
-    return fold_traditional(text)
+    return fold_traditional(" ".join(text.split()))
 
 
-def _mask_english_financial_compounds(text: str) -> str:
-    text = re.sub(
-        r"(?<![a-z0-9_])buy\s*back(?![a-z0-9_])",
-        _FINANCIAL_COMPOUND_SENTINEL,
-        text,
-    )
-    return re.sub(
-        r"(?<![a-z0-9_])sell\s*off(?![a-z0-9_])",
-        _FINANCIAL_COMPOUND_SENTINEL,
-        text,
-    )
+def _build_exact_label_table() -> Dict[str, DecisionAction]:
+    table: Dict[str, DecisionAction] = {}
+    for action, labels in _ACTION_LABELS.items():
+        for label in labels.values():
+            table[_normalize_key(label)] = action  # type: ignore[assignment]
+    for label, action in _EXTRA_EXACT_LABELS.items():
+        table[_normalize_key(label)] = action
+    return table
 
 
-def _word_or_substring_match(text: str, phrase: str) -> bool:
-    if not text or not phrase:
-        return False
-    normalized_phrase = _normalize_key(phrase)
-    if re.search(r"[a-z]", normalized_phrase):
-        return bool(re.search(rf"(?<![a-z0-9_]){re.escape(normalized_phrase)}(?![a-z0-9_])", text))
-    return normalized_phrase in text
-
-
-def _english_negated_action_matches(text: str) -> set[DecisionAction]:
-    matches: set[DecisionAction] = set()
-    negation_prefix = (
-        r"(?:not\s+(?:a\s+|an\s+|to\s+)?|"
-        r"no\s+(?:need\s+to\s+)?|"
-        r"need\s+not\s+|"
-        r"cannot\s+|can't\s+|cant\s+|"
-        r"do\s+not\s+|don't\s+|dont\s+)"
-    )
-    for action, terms in _ENGLISH_NEGATED_ACTION_TERMS.items():
-        for term in terms:
-            if re.search(rf"(?<![a-z0-9_]){negation_prefix}{re.escape(term)}(?![a-z0-9_])", text):
-                matches.add(action)
-    return matches
-
-
-def _has_english_avoided_hold_action(text: str) -> bool:
-    terms = "|".join(re.escape(term) for term in _ENGLISH_AVOIDED_HOLD_ACTION_TERMS)
-    return bool(re.search(rf"(?<![a-z0-9_])avoid\s+(?:{terms})(?![a-z0-9_])", text))
-
-
-def _has_english_deferred_action(text: str) -> bool:
-    terms = "|".join(re.escape(term) for term in _ENGLISH_DEFERRED_ACTION_TERMS)
-    if re.search(rf"(?<![a-z0-9_])wait(?:ing)?\s+to\s+(?:{terms})(?![a-z0-9_])", text):
-        return True
-    return bool(
-        re.search(
-            rf"(?<![a-z0-9_])waiting\s+(?:for|until)\b.*?(?<![a-z0-9_])(?:{terms})(?![a-z0-9_])",
-            text,
-        )
-    )
+_EXACT_LABEL_ACTIONS: Dict[str, DecisionAction] = _build_exact_label_table()
 
 
 def _explicit_action(value: Any) -> Optional[DecisionAction]:
@@ -343,58 +92,26 @@ def _explicit_action(value: Any) -> Optional[DecisionAction]:
 
 
 def normalize_decision_action(value: Any) -> Optional[DecisionAction]:
-    """Return a unique eight-state action for explicit values or clear text.
+    """Return the eight-state action for an enum value or an exact action label.
 
-    Unknown or ambiguous human-readable advice returns ``None`` rather than
-    defaulting to a neutral action.
+    Free-text advice (sentences, negations, mixed wording) is display-only and
+    returns ``None``; callers fall back to their existing defaults.
     """
 
     explicit = _explicit_action(value)
     if explicit:
         return explicit
+    return _EXACT_LABEL_ACTIONS.get(_normalize_key(value))
 
-    text = _mask_english_financial_compounds(_normalize_key(value))
-    if not text:
-        return None
 
-    if _has_english_deferred_action(text):
-        return None
-    if _has_zh_negated_action(text):
-        return None
-
-    negated_matches: set[DecisionAction] = set()
-    if _has_english_avoided_hold_action(text):
-        negated_matches.add("hold")
-    negated_matches.update(_english_negated_action_matches(text))
-    for action, phrases in _NEGATED_ACTION_PHRASES.items():
-        if any(_word_or_substring_match(text, phrase) for phrase in phrases):
-            negated_matches.add(action)
-    if len(negated_matches) == 1:
-        return next(iter(negated_matches))
-    if len(negated_matches) > 1:
-        return None
-
-    guard_matches: set[DecisionAction] = set()
-    for action in _GUARD_ACTIONS:
-        if any(_word_or_substring_match(text, phrase) for phrase in _ACTION_PHRASES[action]):
-            guard_matches.add(action)
-    if len(guard_matches) == 1:
-        return next(iter(guard_matches))
-    if len(guard_matches) > 1:
-        return None
-
-    matches: set[DecisionAction] = set()
-    for action, phrases in _ACTION_PHRASES.items():
-        if action in _GUARD_ACTIONS:
-            continue
-        if any(_word_or_substring_match(text, phrase) for phrase in phrases):
-            matches.add(action)
-
-    if len(matches) == 1:
-        return next(iter(matches))
-    if matches and matches <= {"hold", "watch"}:
-        return "watch" if "watch" in matches else "hold"
-    return None
+def decision_type_for_action(value: Any, default: str = "hold") -> str:
+    """將結構化八態動作（或完整標籤）投影到三態 decision_type；未知時回 default。"""
+    action = normalize_decision_action(value)
+    if action in {"buy", "add"}:
+        return "buy"
+    if action in {"reduce", "sell"}:
+        return "sell"
+    return "hold" if action is not None else default
 
 
 def localize_action_label(action: Any, language: Optional[str] = "zh") -> Optional[str]:
