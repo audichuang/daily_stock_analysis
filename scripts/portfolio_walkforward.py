@@ -137,13 +137,34 @@ def invvol_weights(sig, vol, ref="expanding", liquid=None, clip=WEIGHT_CLIP,
     return out
 
 
+def ma_line(close, window):
+    """出場用的收盤均線。面板不 ffill：缺價日讓視窗內出現 NaN → 均線 NaN → 當天不判定。"""
+    return close.rolling(window).mean()
+
+
+def update_break_streak(streak, close_px, ma_px):
+    """均線跌破的連續計數（單一部位、單一交易日）。
+
+    收盤或均線缺值（停牌、視窗不足）**不計數也不歸零**；收盤 < 均線加一；收盤 ≥ 均線歸零。
+    """
+    if pd.isna(close_px) or pd.isna(ma_px):
+        return streak
+    return streak + 1 if close_px < ma_px else 0
+
+
 def simulate(piv, sig, f, yoy, h, slots, start, end, rank="score", seed=42,
              delisting="last", skip_limit_gap=False, scores=None,
-             capital=DEFAULT_CAPITAL, fee_discount=1.0, weights=None):
+             capital=DEFAULT_CAPITAL, fee_discount=1.0, weights=None,
+             exit_ma=None, time_cap=True):
     """T+1 開盤買、持有 h 個交易日後收盤賣，同時最多 `slots` 檔、等權。
 
     ``weights``（``invvol_weights`` 的輸出）給定時，每筆的預算改成「等權份額 × 倍數」，
     仍受當下現金限制；``None`` 即原本的等權，結果逐位不變。
+
+    ``exit_ma=(均線面板, sustain)`` 時另加均線出場（G3-25 探索，見
+    docs/research/2026-10-28-explore-reversal-ma25.md）：收盤連續 ``sustain`` 個有效交易日
+    低於均線 → **隔日開盤**賣（不用同一根收盤決策又成交）；隔日無開盤價就順延。
+    ``time_cap=False`` 拿掉 h 日到期，只剩均線出場。``exit_ma=None`` 時結果逐位不變。
 
     現金流時序刻意保守：**今天開盤的買進只能用昨天收盤前就有的現金**（今天賣出的錢要到
     明天開盤才能用），否則就是用未實現的賣出款買進。
@@ -203,23 +224,38 @@ def simulate(piv, sig, f, yoy, h, slots, start, end, rank="score", seed=42,
                     continue
                 cash -= cost
                 counts["entries"] += 1
-                pos[s] = {"qty": qty, "exit_i": i + h - 1,
-                          "entry": px, "entry_date": d, "cost": cost, "stale": 0}
-        # 2) 出場：到期且當日可成交；停牌則順延，連續 DEAD_DAYS 無報價才判下市
+                pos[s] = {"qty": qty,
+                          "exit_i": i + h - 1 if (time_cap or exit_ma is None) else np.inf,
+                          "entry": px, "entry_date": d, "cost": cost, "stale": 0,
+                          "streak": 0, "ma_exit": False}
+        # 2) 出場：到期且當日可成交；停牌則順延，連續 DEAD_DAYS 無報價才判下市。
+        #    均線出場是前一天收盤決定的，今天開盤成交（賣出款同樣要明天開盤才能用）。
         for s, p in list(pos.items()):
             quoted = pd.notna(close.at[d, s])
             p["stale"] = 0 if quoted else p["stale"] + 1
             dead = p["stale"] >= DEAD_DAYS
-            if not dead and (p["exit_i"] > i or not quoted):
+            op = open_.at[d, s]
+            ma_fill = p["ma_exit"] and pd.notna(op) and op > 0
+            if not dead and not ma_fill and (p["exit_i"] > i or not quoted):
+                if exit_ma is not None and not p["ma_exit"]:
+                    p["streak"] = update_break_streak(p["streak"], close.at[d, s],
+                                                      exit_ma[0].at[d, s])
+                    p["ma_exit"] = p["streak"] >= exit_ma[1]
                 continue
             pos.pop(s)
-            px = 0.0 if (dead and delisting == "zero") else float(lastc.at[d, s])
+            if ma_fill and not dead:
+                px = float(op)
+            else:
+                px = 0.0 if (dead and delisting == "zero") else float(lastc.at[d, s])
             fill = sell_fill_price(px)
             proceeds = sell_cash_inflow(p["qty"], fill, fee_discount=fee_discount)
             cash += proceeds
             trades.append({"stock_id": s, "entry_date": p["entry_date"], "exit_date": d,
                            "entry": p["entry"], "exit": fill, "delisted": dead,
-                           "deferred": d != dates[min(p["exit_i"], len(dates) - 1)],
+                           "deferred": (not ma_fill and np.isfinite(p["exit_i"])
+                                        and d != dates[min(int(p["exit_i"]), len(dates) - 1)]),
+                           "exit_reason": ("delisted" if dead else
+                                           "ma" if ma_fill else "time"),
                            "cost": p["cost"], "r": proceeds / p["cost"] - 1})
         # 3) 收盤標記
         prev_equity = cash + sum(p["qty"] * float(lastc.at[d, s]) for s, p in pos.items())
@@ -356,6 +392,14 @@ def weighted_trade_stats(tr):
             "hit": float((w * (r >= HIT_THRESHOLD)).sum() / w.sum())}
 
 
+def daily_diff_ci(eq_a, eq_b, block, n_boot, seed):
+    """兩條權益曲線的逐日報酬差（a − b）與交易日區塊 circular bootstrap 95% 區間。"""
+    diff = (daily_returns(eq_a) - daily_returns(eq_b)).dropna()
+    ci = paired_block_bootstrap(pd.DataFrame({"date": np.arange(len(diff)), "diff": diff.to_numpy()}),
+                                np.arange(len(diff)), n=n_boot, block=block, seed=seed)
+    return diff, ci
+
+
 def compare_weighting(eq_w, tr_w, cn_w, eq_e, tr_e, cn_e, label, block, n_boot, seed):
     """反波動加權 vs 等權（同訊號、同排序）。逐日報酬差以交易日區塊做 circular bootstrap。"""
     print(f"\n=== 部位加權比較：{label} − 等權（同訊號、同排序）===")
@@ -366,11 +410,9 @@ def compare_weighting(eq_w, tr_w, cn_w, eq_e, tr_e, cn_e, label, block, n_boot, 
         st = weighted_trade_stats(tr)
         print(f"{name}：成交 {st['n']} 筆　成本加權均值 {st['mean'] * 100:+.2f}%　"
               f"成本加權 P(≥30%) {st['hit'] * 100:.1f}%")
-    diff = (daily_returns(eq_w) - daily_returns(eq_e)).dropna()
+    diff, ci = daily_diff_ci(eq_w, eq_e, block, n_boot, seed)
     print(f"逐日報酬差均值 {diff.mean() * 1e4:+.2f}bp／日（年化約 "
           f"{diff.mean() * TRADING_DAYS * 100:+.2f}pp）")
-    ci = paired_block_bootstrap(pd.DataFrame({"date": np.arange(len(diff)), "diff": diff.to_numpy()}),
-                                np.arange(len(diff)), n=n_boot, block=block, seed=seed)
     if ci is None:
         print("逐日報酬差的區塊 bootstrap：inconclusive（資料不足）")
     else:
@@ -379,7 +421,19 @@ def compare_weighting(eq_w, tr_w, cn_w, eq_e, tr_e, cn_e, label, block, n_boot, 
     return diff, ci
 
 
-def main(argv=None):
+def pool_codes(columns, info, include_tib=False):
+    """組合池：四位數普通股，預設排除創新板（理由見模組說明與 `--include-tib`）。"""
+    keep = [s for s in columns if is_common_stock(s)]
+    if not include_tib:
+        # 用**今天**的名稱後綴判定歷史板別是近似（PIT 板別表還沒建），但方向是保守的：
+        # 創新板從掛牌就在創新板，且不排除等於讓組合買進 live 不會買的標的。
+        tib = {s for s, n in zip(info["stock_id"], info["name"])
+               if str(n).endswith("-創")}
+        keep = [s for s in keep if s not in tib]
+    return keep
+
+
+def build_parser():
     p = argparse.ArgumentParser(description="訊號的組合層驗證（資金競爭 + 走前驗證）")
     p.add_argument("--start", default="2020-01-01")
     p.add_argument("--capital", type=float, default=DEFAULT_CAPITAL,
@@ -421,8 +475,20 @@ def main(argv=None):
                    help="部位加權：equal＝等權（預設）；invvol＝以訊號格擴張窗中位 vol20 為參考的"
                         "反波動倍數（含隱性擇時）；invvol-xs＝以當日流動池中位 vol20 為參考。"
                         "非等權時另跑一次等權並印比較")
+    p.add_argument("--exit-ma", type=int, default=0, metavar="N",
+                   help="另加均線出場（探索性，G3-25）：收盤連續 --exit-sustain 日低於 N 日均線就"
+                        "隔日開盤賣；0＝關（預設，只有固定持有）")
+    p.add_argument("--exit-sustain", type=int, default=3,
+                   help="均線出場要連續幾個有效交易日收在均線下")
+    p.add_argument("--no-time-cap", action="store_true",
+                   help="搭配 --exit-ma：拿掉 --horizon 到期，只剩均線出場")
     p.add_argument("--bootstrap", type=int, default=2000,
                    help="加權比較的逐日報酬差區塊 bootstrap 次數（block = 持有期）")
+    return p
+
+
+def main(argv=None):
+    p = build_parser()
     a = p.parse_args(argv)
 
     if a.capital <= 0:
@@ -431,17 +497,15 @@ def main(argv=None):
         p.error("--fee-discount must be non-negative")
     if a.slots < 1:
         p.error("--slots must be positive")
+    if a.exit_ma < 0 or a.exit_sustain < 1:
+        p.error("--exit-ma must be >= 0 and --exit-sustain >= 1")
+    if a.no_time_cap and not a.exit_ma:
+        p.error("--no-time-cap requires --exit-ma")
 
     eng = get_engine()
     piv_full, rv, info = load(eng, a.start, a.end, a.include_otc_revenue)
     close_full = piv_full["close"]
-    keep = [s for s in close_full.columns if is_common_stock(s)]
-    if not a.include_tib:
-        # 用**今天**的名稱後綴判定歷史板別是近似（PIT 板別表還沒建），但方向是保守的：
-        # 創新板從掛牌就在創新板，且不排除等於讓組合買進 live 不會買的標的。
-        tib = {s for s, n in zip(info["stock_id"], info["name"])
-               if str(n).endswith("-創")}
-        keep = [s for s in keep if s not in tib]
+    keep = pool_codes(close_full.columns, info, a.include_tib)
     piv = {k: v[keep] for k, v in piv_full.items()}
     close = piv["close"]
     yoy = pit_revenue_panel(rv, close.index, close.columns)
@@ -467,16 +531,21 @@ def main(argv=None):
         weights = invvol_weights(sig, volatility20(close),
                                  ref="expanding" if a.weighting == "invvol" else "xs",
                                  liquid=f["liquid"])
+    exit_ma = (ma_line(close, a.exit_ma), a.exit_sustain) if a.exit_ma else None
     run = dict(rank=a.rank, seed=a.seed, delisting=a.delisting,
                skip_limit_gap=a.skip_limit_gap, scores=scores,
-               capital=a.capital, fee_discount=a.fee_discount, weights=weights)
+               capital=a.capital, fee_discount=a.fee_discount, weights=weights,
+               exit_ma=exit_ma, time_cap=not a.no_time_cap)
     eq, tr, sk, cn = simulate(piv, sig, f, yoy, a.horizon, a.slots, start, a.end, **run)
     n_sig = int(sig.loc[eq.index[0]:eq.index[-1]].sum().sum())
     flat_cost = -round_trip_return(1.0, 1.0, entry_notional=a.capital / a.slots,
                                    fee_discount=a.fee_discount)
     print(f"樣本 {eq.index[0].date()} ~ {eq.index[-1].date()}　池 {len(keep)} 檔"
           f"{'（含創新板）' if a.include_tib else '（排除創新板）'}　"
-          f"持有 {a.horizon} 交易日　空位 {a.slots}　排序={a.rank}　加權={a.weighting}　"
+          f"持有 {a.horizon} 交易日"
+          + (f"（另加 {a.exit_ma}MA 跌破 sustain {a.exit_sustain} 隔日開盤出場"
+             + ("、無到期上限" if a.no_time_cap else "") + "）" if a.exit_ma else "")
+          + f"　空位 {a.slots}　排序={a.rank}　加權={a.weighting}　"
           f"本金 {a.capital:,.0f} 元　平盤來回成本約 {flat_cost * 100:.3f}%")
     print(f"名目訊號 {n_sig:,} 筆 → 進場 {cn['entries']} 次（已平倉 {cn['closed']}、"
           f"期末仍持有 {cn['open_at_end']}）；訊號落在已持股 {cn['already_held']} 筆、"
@@ -495,7 +564,8 @@ def main(argv=None):
                                     delisting=a.delisting,
                                     skip_limit_gap=a.skip_limit_gap, scores=scores,
                                     capital=a.capital, fee_discount=a.fee_discount,
-                                    weights=weights)
+                                    weights=weights, exit_ma=exit_ma,
+                                    time_cap=not a.no_time_cap)
             rs.append(float(e2.iloc[-1]))
         rs = np.array(rs)
         pct = float((rs < base).mean() * 100)
@@ -514,7 +584,8 @@ def main(argv=None):
                                     delisting=a.delisting,
                                     skip_limit_gap=a.skip_limit_gap, scores=scores,
                                     capital=a.capital, fee_discount=a.fee_discount,
-                                    weights=weights)
+                                    weights=weights, exit_ma=exit_ma,
+                                    time_cap=not a.no_time_cap)
             rs.append({"seed": a.seed + k, **metrics(e2),
                        "成交": len(t2), "均值": f"{t2['r'].mean() * 100:+.2f}%"})
         print(f"\n=== {a.rank} 排序的 {a.seeds} 個 seed ===")
