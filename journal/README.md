@@ -88,7 +88,7 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
     (a) 永遠看漲（方向恆 1，機率＝252 日滾動上漲頻率）；(b) 昨日方向（機率＝P(漲｜昨日同向) 的 252 日滾動頻率）；
     (c) 07:30 前最近一個美股交易日的 S&P 方向（`market.macro_series` 的 `^GSPC`；機率＝P(漲｜S&P 同向) 的滾動頻率）；
     (d) `night_spot_gap` 符號（方向＝`night_dir_up`，**機率先留 `null`**，等夜盤歷史回補）。機率一律 Laplace 加一 `(k+1)/(n+2)`，
-    只用 `date` 早於判讀日的資料；`base_n_<目標>` 是用到的歷史筆數。`gap_up` 的 (a)(b)(c) 一律 `null`（歷史沒有逐日 09:05 指數，官方開盤與 09:05 不是同一事件），彙總印「gap_up 基準不可用（缺 09:05 歷史）」並跳過比較；基準歷史任一月份抓不到時整組留 `null` 並印不可用。
+    只用 `date` 早於判讀日的資料；`base_n_<目標>` 是用到的歷史筆數。`gap_up` 的 (a)(b)(c) 機率與 (b) 方向一律 `null`（歷史沒有逐日 09:05 指數，官方開盤與 09:05 不是同一事件）；(a) 恆看漲、(c) S&P 方向不需要 09:05 歷史，方向值照寫、照算命中差 a_i，彙總對 gap_up 只印「Brier 不可用（缺 09:05 歷史）」；基準歷史任一月份抓不到時整組留 `null` 並印不可用。
     資料源抓不到時該基準欄是 `null`，輸出明印「不可用」，不補 0。
   - 彙總（`render_prob_summary`）：模型 Brier、對各基準的配對差 d_i（基準 Brier − 模型 Brier，正＝模型較好）與命中差 a_i（模型方向＝p>0.5），
     10 日 circular block bootstrap 95% CI；n<20 或 CI 跨零印 inconclusive，n<20 只報整體偏差 p̄−ȳ。缺 `p_*` 的舊列跳過。
