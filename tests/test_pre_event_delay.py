@@ -198,8 +198,14 @@ def test_tightening_flat_twenty_day_change_is_false():
     us = pd.bdate_range("2026-01-01", periods=30)
     flat = _macro({"FRED:DGS10": 0, "BZ=F": 1, "DX-Y.NYB": 1}, us)
     assert not tightening_flags(flat, pd.DatetimeIndex([us[25]])).any()
-    # 反向：小數兩位的最小上升（20 日 +0.01）仍算緊縮
-    tiny_up = _macro({"FRED:DGS10": 0.0005, "BZ=F": 1, "DX-Y.NYB": 1}, us)
+    # 反向：小數兩位的最小上升（4.00→4.01）仍算緊縮。用實際 DGS10 量級，
+    # 4.01 - 4.00 在浮點上略小於 0.01，門檻誤寫成 > 0.01 時這裡才會紅
+    dgs10 = pd.DataFrame({
+        "series_id": "FRED:DGS10",
+        "date": us,
+        "value": [4.00] * 20 + [4.01] * (len(us) - 20),
+    })
+    tiny_up = pd.concat([dgs10, _macro({"BZ=F": 1, "DX-Y.NYB": 1}, us)], ignore_index=True)
     assert tightening_flags(tiny_up, pd.DatetimeIndex([us[25]])).all()
 
 
