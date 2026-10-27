@@ -26,7 +26,7 @@ DOPPLER_RUN = doppler run -p finmind -c dev -- doppler run -p $(DOPPLER_PROJECT)
 
 .DEFAULT_GOAL := help
 .PHONY: help install serve serve-local review review-tw analyze schedule screen \
-        swing morning macro overnight taifex media-picks measure portfolio portfolio-wf verify-decisions verify-morning verify-media-picks shadow-buy \
+        swing morning morning-run macro overnight taifex media-picks measure portfolio portfolio-wf verify-decisions verify-morning verify-media-picks shadow-buy \
         test lint lint-fix format refresh-tw refresh-us daily-report daily-report-detached \
         pg-scratch pg-scratch-stop
 
@@ -81,6 +81,11 @@ swing: ## 每日波段流程第 1 步：更新并健检台股资料 → 全市�
 	@echo "收盘后才有当日资料；台股 13:30 收盘、法人与融资 T+1 才补齐。"
 
 morning: ## 每天早上一键：补资料 → 大局（總經／Fed／事件）→ 昨晚国际盘 → 期交所籌碼 → 待触发计划 → 昨晚媒体点名 → 今日候选（之后跑 skill）
+	@# 完整 stdout 另存凍結 evidence_pack 給 Fable 臂（scripts/morning_pack.sh）：morning-run 成功才發布成 reports/morning-packs/<日期>.txt
+	@# （同日已有則 <日期>.<HHMMSS>.txt，臂腳本取最早那份）；失敗不留 pack。結束碼一律是 morning-run 的；stdout 改經 pipe（tee）。
+	@bash scripts/morning_pack.sh reports/morning-packs $(MAKE) --no-print-directory morning-run
+
+morning-run: # morning 的實際內容（由 morning 包一層 tee；不要單獨呼叫，單獨呼叫不會存 pack）
 	@uv run --env-file .env python -m market_data.cli daily
 	@uv run --env-file .env python -m market_data.cli health --strict
 	@echo "\n===== 大局（總經、Fed 利率預期、台股位階與資金、未來 14 天事件）====="

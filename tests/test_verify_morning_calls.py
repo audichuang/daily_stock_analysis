@@ -693,3 +693,106 @@ def test_gap_up_keeps_direction_baselines_a_c_but_no_probability_and_no_b():
     gl = [x for x in logs if "gap_up" in x or "09:05" in x]
     assert any("Brier 不可用（缺 09:05 歷史）" in x and "命中差 ā" in x for x in gl)
     assert any("(b)" in x and "命中差不可用" in x for x in logs[-3:])
+
+
+# ---------- 多臂配對（fable 臂、等權臂對 claude 臂）----------
+
+def _oc(day, y, p, scorable=True):
+    return {"date": day, "scorable": scorable, **{f"y_{t}": y for t in vmc.PROB_TARGETS},
+            **{f"p_{t}": p for t in vmc.PROB_TARGETS}}
+
+
+def _arm(day, p, h="H", **kw):
+    return {"date": day, "model_version": "fable", "p_close_up": p, "p_oc_up": p, "p_gap_up": p,
+            "input_snapshot_hash": h, "exclude_from_scoring": False, "error": None, **kw}
+
+
+def _call(day, h="H"):
+    return {"date": day, "model_version": "claude", "input_snapshot_hash": h}
+
+
+def test_arm_report_pairing_equal_weight_and_sign():
+    # y=1：claude p=0.6、fable p=0.8、等權 0.7 → d_fable = 0.16-0.04 = +0.12（正＝fable 較好）
+    rep = vmc.arm_report([_oc("2099-01-01", 1, 0.6)], [_call("2099-01-01")], [_arm("2099-01-01", 0.8)])
+    t = rep["targets"]["close_up"]
+    assert t["n"] == 1 and rep["n_dates"] == 1
+    assert t["brier_claude"] == pytest.approx(0.16)
+    assert t["arms"]["fable"]["brier"] == pytest.approx(0.04)
+    assert t["arms"]["fable"]["d_mean"] == pytest.approx(0.12)
+    assert t["arms"]["equal_weight"]["brier"] == pytest.approx(0.09)
+    assert t["arms"]["equal_weight"]["d_mean"] == pytest.approx(0.07)
+
+
+def test_equal_weight_needs_both_arms_to_have_a_value():
+    arm = _arm("2099-01-01", 0.8, p_oc_up=None)
+    rep = vmc.arm_report([_oc("2099-01-01", 1, 0.6)], [_call("2099-01-01")], [arm])
+    assert rep["targets"]["oc_up"]["n"] == 0 and "equal_weight" not in rep["targets"]["oc_up"]["arms"]
+    assert rep["targets"]["close_up"]["n"] == 1   # fable 臂其他目標不受影響
+    # 六個 p 沒有全部有效的日子，整天不進等權臂（三個目標都不算），不是只缺那一個目標
+    assert all("equal_weight" not in t["arms"] for t in rep["targets"].values())
+    oc = _oc("2099-01-01", 1, 0.6)
+    oc["p_gap_up"] = None                         # claude 缺值：等權與 fable 都不進該目標
+    rep = vmc.arm_report([oc], [_call("2099-01-01")], [_arm("2099-01-01", 0.8)])
+    assert rep["targets"]["gap_up"]["n"] == 0
+
+
+def test_arm_report_excludes_and_counts_each_reason():
+    days = [f"2099-01-0{i}" for i in range(1, 8)]
+    outcomes = [_oc(d, 1, 0.6) for d in days[:6]]          # 第 7 天沒有 outcome
+    calls = [_call(d) for d in days]
+    calls[3] = _call(days[3], h=None)                      # claude 列缺 hash
+    arms = [_arm(days[0], 0.8),
+            _arm(days[1], 0.8, h="OTHER"),                 # hash 不一致
+            _arm(days[2], 0.8, exclude_from_scoring=True),
+            _arm(days[3], 0.8),
+            _arm(days[4], 0.8, error="逾時"),
+            _arm(days[5], 0.8, exclude_from_scoring=None),  # 未標記不計分
+            _arm(days[6], 0.8)]
+    rep = vmc.arm_report(outcomes, calls, arms)
+    assert rep["n_dates"] == 1
+    assert rep["skipped"] == {"arm_rows": 7, "excluded": 2, "error": 1, "no_outcome": 1,
+                              "hash_missing": 1, "hash_mismatch": 1}
+
+
+def test_arm_report_ignores_unscorable_outcomes_and_other_models():
+    arm_other = {**_arm("2099-01-01", 0.8), "model_version": "fable_synth"}
+    rep = vmc.arm_report([_oc("2099-01-01", 1, 0.6, scorable=False)], [_call("2099-01-01")], [_arm("2099-01-01", 0.8)])
+    assert rep["n_dates"] == 0 and rep["skipped"]["no_outcome"] == 1
+    assert vmc.arm_report([_oc("2099-01-01", 1, 0.6)], [_call("2099-01-01")], [arm_other])["skipped"]["arm_rows"] == 0
+
+
+def test_arm_verdict_inconclusive_below_min_n_and_when_ci_crosses_zero():
+    days = [f"2099-02-{i:02d}" for i in range(1, 31)]
+    outcomes = [_oc(d, 1, 0.5) for d in days]
+    calls = [_call(d) for d in days]
+    rep = vmc.arm_report(outcomes[:5], calls, [_arm(d, 0.9) for d in days[:5]])
+    lines = []
+    vmc.render_arm_report(rep, lines.append)
+    assert any("inconclusive（n<20）" in x for x in lines)
+    rep = vmc.arm_report(outcomes, calls, [_arm(d, 0.9) for d in days])   # 全部都贏 → CI 下界 >0
+    assert rep["targets"]["close_up"]["arms"]["fable"]["verdict"] == "該臂優於 claude"
+    rnd = np.random.default_rng(3)
+    mixed = [_arm(d, 0.9 if rnd.random() < 0.5 else 0.3) for d in days]  # 隨機贏輸、幅度對稱 → 跨零
+    out = vmc.arm_report([_oc(d, 1, 0.5) for d in days], calls, mixed)
+    assert out["targets"]["close_up"]["arms"]["fable"]["verdict"] == "inconclusive"
+
+
+def test_arms_section_brief_is_one_line_and_silent_without_arms(tmp_path):
+    arms, calls = tmp_path / "arms.jsonl", tmp_path / "calls.jsonl"
+    lines = []
+    vmc.arms_section([_oc("2099-01-01", 1, 0.6)], calls, arms, lines.append, full=False)
+    assert lines == []                                     # 沒檔：不印
+    arms.write_text(json.dumps(_arm("2099-01-01", 0.8)) + "\n", encoding="utf-8")
+    calls.write_text(json.dumps(_call("2099-01-01")) + "\n", encoding="utf-8")
+    vmc.arms_section([_oc("2099-01-01", 1, 0.6)], calls, arms, lines.append, full=False)
+    assert len(lines) == 1 and "n=1" in lines[0] and "描述性" in lines[0]
+
+
+def test_equal_weight_uses_only_days_with_all_six_probabilities():
+    full_day, partial_day = "2099-01-01", "2099-01-02"
+    outcomes = [_oc(full_day, 1, 0.6), _oc(partial_day, 0, 0.6)]
+    arms = [_arm(full_day, 0.8), _arm(partial_day, 0.2, p_oc_up=None)]
+    rep = vmc.arm_report(outcomes, [_call(full_day), _call(partial_day)], arms)
+    eq, fb = rep["targets"]["close_up"]["arms"]["equal_weight"], rep["targets"]["close_up"]["arms"]["fable"]
+    assert fb["n"] == 2 and eq["n"] == 1          # fable 臂保留部分有效的那天，等權臂不收
+    assert eq["brier"] == pytest.approx(0.09) and eq["brier_claude"] == pytest.approx(0.16)   # 只算 full_day

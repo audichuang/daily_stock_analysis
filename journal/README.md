@@ -83,12 +83,27 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
   選填的機率欄位（2026-10-27 起；之前的行沒有，回驗跳過該指標）。07:30 凍結、都是 **0~1 小數**，超出範圍當缺：
   `p_close_up`（收盤高於前收，主目標）、`p_oc_up`（收盤高於官方開盤，主目標）、`p_gap_up`（09:05 指數高於前收，次要）、
   `model_version`（`claude`／`fable`／`fable_synth`／`equal_weight`，現行填 `claude`）、`skill_version`（`tw-morning-call/SKILL.md`
-  的 git blob sha，`git hash-object` 取得）、`gap_basis`（`tx_settle`＝`gap_expected` 是夜盤收盤 ÷ 同合約前一日結算價；缺＝舊口徑，夜盤收盤 ÷ 前一日現貨收盤）。
+  的 git blob sha，`git hash-object` 取得）、`input_snapshot_hash`（07:30 凍結 pack 的 sha256，`uv run --env-file .env python scripts/morning_fable_arms.py --print-hash` 的 stdout，也就是 Fable 實際輸入（過濾後）的 sha256；stdout 為空寫 `null`；供與 Fable 臂配對時確認兩臂看同一份；舊列沒有）、`gap_basis`（`tx_settle`＝`gap_expected` 是夜盤收盤 ÷ 同合約前一日結算價；缺＝舊口徑，夜盤收盤 ÷ 前一日現貨收盤）。
   **休市日的列不計分**：臨時休市（颱風假等；進版控的清單是 `journal/closed-dates.txt`，append-only，與 `market_data.closures.adhoc_closed_dates()`、交易日曆取聯集）或非交易日那天盤前判讀照跑也會留一行
   （例如 2026-10-23），journal 不改原行，所以回驗一律在讀取端排除 `date` 落在休市日的列，並在輸出標明排除幾筆。
   `swing-decisions.jsonl` 已由 `scripts/verify_swing_decisions.py` 的 `read_log` 做掉；日後寫 morning-calls 回驗要沿用同一個判斷
   （`read_log` 的聯集邏輯），不要另寫；新增臨時休市日要追加到 `journal/closed-dates.txt`。
 
+- `morning-arms.jsonl` — 盤前判讀的**其他模型臂**（2026-10-28 起；final-decision 第 7 項第一步），目前只有 `model_version="fable"`（Fable 獨立臂），
+  由 `scripts/morning_fable_arms.py` 在 `make morning` 之後前景跑一次寫入。append-only、進版控，**一臂一列、鍵＝(`date`, `model_version`)**，同鍵已存在就不再寫（不覆寫）。
+  `make morning` **成功**時完整 stdout 另存 `reports/morning-packs/<日期>.txt`（同日已有則 `<日期>.<HHMMSS>.txt`，臂腳本取**最早**那份；失敗不留 pack）。
+  臂**只看過濾後的取數段**（大局、國際盤、期交所、今日候选）：「近期判讀校正」「待触发计划」與媒體點名判斷含 journal 判讀，整段丟掉；
+  不讀 Claude 臂的判讀、journal 或任何其他模型的結論。`input_snapshot_hash`＝過濾後文字的 sha256。
+  Claude 臂另有 Step 2 的即時補數（夜盤、期貨），**兩臂輸入不完全相同**，配對比較的是整條流程而不是單純模型。
+  欄位：`date`、`model_version`、`cli_model`（CLI `modelUsage` 的鍵，實際跑的模型）、`p_close_up`／`p_oc_up`／`p_gap_up`（定義與 `morning-calls.jsonl` 相同；非 0~1 有限小數寫 `null`）、
+  `reason`（基準率→調整的文字，截斷）、`input_snapshot_hash`（過濾後 pack 文字的 sha256）、`prompt_hash`（system＋user 模板的 sha256，不含 pack）、`latency_s`、
+  `cost_usd`（CLI 回的 `total_cost_usd`，**名目值**，訂閱登入下不是實際帳單）、`decided_at`（ISO8601 +08:00）、
+  `exclude_from_scoring`（寫入時台北時間已過 09:00 → `true`）、`error`（空＝成功）。
+  **失敗也寫一列**（CLI 非 0、逾時、`is_error`、解析失敗、機率不合法）：`error` 非空、p 為 `null`，才看得到失敗率；單臂失敗不讓盤前流程失敗。
+  **等權臂不落檔**：`verify_morning_calls.py` 事後算——同日 claude 與 fable 六個 p 全部有效時（三個目標都算）取算術平均，否則該日不進等權臂。
+  回驗（`verify_morning_calls.py`）依 `date` 與 outcomes join，只算兩臂 `input_snapshot_hash` 一致的天，排除 `exclude_from_scoring=true`、`error` 非空、
+  無對應 outcome（休市日或尚未回驗）與 hash 缺／不一致的列並印筆數；每臂印對 claude 的配對 Brier 差（claude − 該臂，正＝該臂較好）與 10 日 block bootstrap CI。
+  **半年內只出描述性報表**，不下升級結論。登記見 `experiment-registry.jsonl` 的 `morning-arms-fable-indep`；期間不改 prompt（改了要重登記）。
 - `morning-calls-outcomes.jsonl` — 上一檔的**事後結果**，一個判讀日一行、以 `date` 為鍵，append-only、同一天不重寫
   （18:00 由 `daily_report.sh` 另開 commit，和預測分開）。休市日不寫；當日官方日資料或 DB 收盤還沒到的那天跳過、隔天補。欄位：
   - `scorable`：判讀列 `exclude_from_scoring` 明寫 `false` 才是 `true`；`note` 記不計分或無法驗的原因。
