@@ -30,9 +30,10 @@ action 欄只標「觀望／續抱當天大漲大跌」這類事後描述，**�
 機率計分（判讀列有 `p_close_up`／`p_oc_up`／`p_gap_up`，07:30 凍結）：目標＝收盤高於前收、收盤高於官方開盤、
 09:05 指數高於前收。四條基準各寫方向值與機率值（機率 Laplace 加一、252 日滾動、只用 forecast 日之前的資料）：
 (a) 永遠看漲 (b) 昨日方向 (c) 07:30 前最近一個 S&P 交易日方向（`market.macro_series` 的 ^GSPC）
-(d) `night_spot_gap` 符號（機率先留 null，等夜盤歷史回補）。gap_up 的 (a)(b)(c) 一律留 null：
-歷史沒有逐日 09:05 指數，官方開盤與 09:05 不是同一個事件（符號會相反），拿來當基準是錯配；彙總印
-「gap_up 基準不可用（缺 09:05 歷史）」、跳過 gap_up 的基準比較，close_up／oc_up 不受影響。彙總算 Brier、配對差 d_i（基準 Brier − 模型 Brier，正＝模型較好）
+(d) `night_spot_gap` 符號（機率先留 null，等夜盤歷史回補）。gap_up 的 (a)(b)(c) 機率與 (b) 方向
+一律留 null：歷史沒有逐日 09:05 指數，官方開盤與 09:05 不是同一個事件（符號會相反），拿來當基準是錯配；
+(a) 恆看漲、(c) S&P 方向不需要 09:05 歷史，方向值照寫、照算命中差 a_i；彙總對 gap_up 印
+「Brier 不可用（缺 09:05 歷史）」，close_up／oc_up 不受影響。彙總算 Brier、配對差 d_i（基準 Brier − 模型 Brier，正＝模型較好）
 與 a_i（命中差），10 日 circular block bootstrap 95% 區間；n<20 或區間跨零印 inconclusive。
 
 用法：
@@ -69,7 +70,8 @@ MAX_UNDEFINED = 0.05  # bootstrap 重抽有超過 5% 算不出統計量（例如
 PROB_TARGETS = ("close_up", "oc_up", "gap_up")
 TARGET_LABEL = {"close_up": "收盤>前收", "oc_up": "收盤>開盤", "gap_up": "09:05>前收"}
 BASELINES = ("a", "b", "c", "d")
-NO_BASELINE = {("gap_up", k) for k in "abc"}  # 缺逐日 09:05 歷史：這幾格基準不可用
+NO_BASELINE = {("gap_up", k) for k in "abc"}  # 缺逐日 09:05 歷史：這幾格「機率」不可用
+NO_DIR = {("gap_up", "b")}  # (b) 昨日方向也要 09:05 歷史；(a) 恆看漲、(c) 看 S&P 方向，方向值不需要
 BASELINE_LABEL = {"a": "永遠看漲", "b": "昨日方向", "c": "S&P 方向", "d": "夜盤符號"}
 ROLL_WINDOW = 252   # 基準機率的滾動交易日數
 BLOCK = 10          # circular block bootstrap 的區塊長度（交易日）
@@ -378,7 +380,10 @@ def baseline_fields(day, hist, sp, window=ROLL_WINDOW):
         for k in "abc":
             out[f"base_{k}_dir_{t}"] = out[f"base_{k}_p_{t}"] = None
         out[f"base_n_{t}"] = 0
-        if (t, "a") in NO_BASELINE:
+        if (t, "a") in NO_BASELINE:   # 只有方向可算：(a) 恆為 1、(c) 只依 S&P 前一交易日
+            out[f"base_a_dir_{t}"] = 1
+            if sp_today is not None:
+                out[f"base_c_dir_{t}"] = sp_today
             continue
         ys = [h[t] for h in prior if h[t] is not None]
         if not ys:
@@ -435,10 +440,11 @@ def prob_summary(rows, target, n_boot=2000, seed=42):
                brier=float(((p - y) ** 2).mean()))
     hit_m = ((p > 0.5).astype(float) == y).astype(float)
     for k in BASELINES:
-        na = (target, k) in NO_BASELINE   # 舊列即使有值也不採用
+        na = (target, k) in NO_BASELINE   # 機率不可用：舊列即使有值也不採用
+        nd = (target, k) in NO_DIR        # 方向不可用
         bp = [] if na else [(i, r[f"base_{k}_p_{target}"]) for i, r in enumerate(elig)
                             if r.get(f"base_{k}_p_{target}") is not None]
-        bd = [] if na else [(i, r[f"base_{k}_dir_{target}"]) for i, r in enumerate(elig)
+        bd = [] if nd else [(i, r[f"base_{k}_dir_{target}"]) for i, r in enumerate(elig)
                             if r.get(f"base_{k}_dir_{target}") is not None]
         b = {"n_brier": len(bp), "n_hit": len(bd), "brier": None, "d_mean": None, "d_ci": None,
              "a_mean": None, "a_ci": None}
@@ -501,11 +507,10 @@ def render_prob_summary(rows, out=print):
         out(f"{base}；模型 Brier {ps['brier']:.4f}")
         for k in BASELINES:
             b = ps["baselines"][k]
-            if (t, k) in NO_BASELINE:
-                out(f"    vs ({k}) {BASELINE_LABEL[k]}：gap_up 基準不可用（缺 09:05 歷史）→ 不比較")
-                continue
             if b["n_brier"]:
                 d = f"基準 Brier {b['brier']:.4f} d̄ {b['d_mean']:+.4f} {_ci(b['d_ci'], 1, '{:+.4f}')}（n={b['n_brier']}）"
+            elif (t, k) in NO_BASELINE:
+                d = "Brier 不可用（缺 09:05 歷史）"
             else:
                 d = "Brier 不可用（無機率基準）"
             a = "命中差不可用" if b["a_mean"] is None else (

@@ -669,16 +669,27 @@ def test_render_summary_keeps_the_two_gap_bases_in_separate_groups():
     assert [x for x in only_old if x.startswith("[缺口口徑")] and not any("新口徑）" in x for x in only_old)
 
 
-def test_gap_up_has_no_baseline_and_is_skipped_in_summary():
+def test_gap_up_keeps_direction_baselines_a_c_but_no_probability_and_no_b():
     hist, day = mk_hist([1, 0, 1, 1, 0, 1])
-    b = vmc.baseline_fields(day, hist, [(day - dt.timedelta(days=9), 1), (day - dt.timedelta(days=8), 2)])
+    sp = [(day - dt.timedelta(days=9), 0), (day - dt.timedelta(days=8), 1)]   # (日期, 方向)：前一個 S&P 交易日收漲
+    b = vmc.baseline_fields(day, hist, sp)
     assert b["base_n_gap_up"] == 0
-    assert all(b[f"base_{k}_{x}_gap_up"] is None for k in "abc" for x in ("dir", "p"))
+    assert all(b[f"base_{k}_p_gap_up"] is None for k in "abc")        # 機率需要 09:05 歷史：不可用
+    assert b["base_b_dir_gap_up"] is None                             # (b) 昨日方向需要 09:05 歷史
+    assert b["base_a_dir_gap_up"] == 1 and b["base_c_dir_gap_up"] == 1   # (a)(c) 方向不依賴 09:05 歷史
     assert b["base_a_p_close_up"] is not None and b["base_n_oc_up"] == 6    # 其他目標不受影響
-    # 舊列即使寫了 gap_up 基準也不採用；其他目標照算
-    rows = [{"date": f"2099-04-{i + 1:02d}", "p_gap_up": 0.6, "y_gap_up": 1, "base_a_p_gap_up": 0.5,
-             "base_a_dir_gap_up": 1} for i in range(25)]
-    assert vmc.prob_summary(rows, "gap_up")["baselines"]["a"]["n_brier"] == 0
+    # 空歷史時 (a)(c) 方向照寫
+    e = vmc.baseline_fields(day, [], sp)
+    assert e["base_a_dir_gap_up"] == 1 and e["base_c_dir_gap_up"] == 1
+    # 彙總：機率不採用、(b) 方向不採用（舊列有值也一樣）；(a)(c) 算命中差
+    rows = [{"date": f"2099-04-{i + 1:02d}", "p_gap_up": 0.6, "y_gap_up": i % 2, "base_a_p_gap_up": 0.5,
+             "base_a_dir_gap_up": 1, "base_b_dir_gap_up": 1, "base_c_dir_gap_up": 0} for i in range(25)]
+    s = vmc.prob_summary(rows, "gap_up")["baselines"]
+    assert s["a"]["n_brier"] == 0 and s["b"]["n_hit"] == 0 and s["b"]["a_mean"] is None
+    assert s["a"]["n_hit"] == 25 and s["a"]["a_mean"] == pytest.approx(0.0)    # 模型恆看漲＝基準 (a)
+    assert s["c"]["n_hit"] == 25 and s["c"]["a_mean"] is not None
     logs = []
     vmc.render_prob_summary(rows, logs.append)
-    assert any("gap_up 基準不可用（缺 09:05 歷史）" in x for x in logs)
+    gl = [x for x in logs if "gap_up" in x or "09:05" in x]
+    assert any("Brier 不可用（缺 09:05 歷史）" in x and "命中差 ā" in x for x in gl)
+    assert any("(b)" in x and "命中差不可用" in x for x in logs[-3:])
