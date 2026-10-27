@@ -449,3 +449,41 @@ def test_finalization_still_clears_unsynced_action_after_sentence_rewrite() -> N
         result, report_type="simple", previous_operation_advice="買入", record_contradiction=False,
     )
     assert result.action is None
+
+
+def test_parsed_reduce_without_advice_survives_buy_band_sell_guardrail() -> None:
+    # LLM 只給 action=reduce、沒給 operation_advice／decision_type：解析器補預設「持有」並投影 sell，
+    # 買入區分數的 sell 矛盾護欄要沿用結構化 reduce，不能被預設的裸標籤「持有」蓋掉。
+    response = json.dumps({
+        "stock_name": "台積電", "sentiment_score": 68, "action": "reduce",
+        "analysis_summary": "量能轉弱", "dashboard": {"core_conclusion": {"one_sentence": "量能轉弱"}},
+    })
+    analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
+    result = analyzer._parse_response(response, "2330.TW", "台積電")
+    assert (result.action, result.decision_type) == ("reduce", "sell")
+
+    saved: list = []
+    pipeline = _finalize_pipeline(saved)
+    result.current_price = 100
+    pipeline._finalize_and_persist_result(
+        result, _finalize_artifacts(), market_phase_summary=None, analysis_context_pack_overview=None,
+        report_type="simple", snapshot_context={}, news_content_for_save=None,
+    )
+
+    assert result.action == "reduce"
+    assert saved and saved[-1][0] == "reduce"
+
+
+@pytest.mark.parametrize(("action", "advice", "expected"), [
+    # 反向：結構化動作是買入類時仍不可升級，有裸標籤就退回標籤、否則退回觀望。
+    ("buy", "持有", "hold"),
+    ("add", "觀望，等待回踩", "watch"),
+    ("buy", "減倉", "reduce"),
+    (None, "持有", "hold"),
+])
+def test_buy_band_sell_guardrail_never_keeps_buy_class_action(action, advice, expected) -> None:
+    result = _result(sentiment_score=68, decision_type="sell", action=action, operation_advice=advice)
+    StockAnalysisPipeline._refresh_decision_action_for_final_result(
+        result, report_type="simple", previous_operation_advice=advice, record_contradiction=False,
+    )
+    assert result.action == expected

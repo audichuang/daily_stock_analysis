@@ -51,7 +51,7 @@ Web 展示必须把这些 wire value 映射为当前 UI 语言的用户可读标
 | `notification.NotificationService`、`services.history_service` 報告訊號列 | action 空時沿用顯示建議與分數色階；不生成新的八態 action。 |
 | `analyzer.populate_decision_action_fields`、`GeminiAnalyzer._parse_response` | 保留空 action；解析時三態缺漏且沒有完整動作標籤則 hold。無效 JSON 仍標記失敗，不寫入歷史。 |
 | `core.pipeline._agent_result_to_analysis_result` | 保留空 action；三態缺漏時沿用趨勢 fallback，否則 hold；非法三態先試結構化 action／完整標籤，否則 hold。 |
-| `core.pipeline._refresh_decision_action_for_final_result` | 建議被改寫成單一標籤時以標籤取代舊動作；改寫成句子時保留護欄設好的結構化 action，但 action 與三態 `decision_type` 對不上（如護欄降為 hold、action 仍是 buy）就清成未知。之後沿用共享 resolver；sell 決策與買入區分數矛盾護欄先看單一標籤、再看結構化 action，買入類仍回退 watch，hold/reduce 規則不變。 |
+| `core.pipeline._refresh_decision_action_for_final_result` | 建議被改寫成單一標籤時以標籤取代舊動作；改寫成句子時保留護欄設好的結構化 action，但 action 與三態 `decision_type` 對不上（如護欄降為 hold、action 仍是 buy）就清成未知。之後沿用共享 resolver；sell 決策與買入區分數矛盾護欄先看結構化 action、它是買入類或缺漏時再看單一非買入標籤（LLM 只給 reduce 時不被解析器預設的「持有」蓋掉），都沒有才回退 watch，hold/reduce 規則不變。 |
 | `core.pipeline._finalize_and_persist_result`（含 `_capture`） | 未知起始／最終 action 使轉換鏈失效，跳過動作轉換記錄與最終解釋。 |
 | `agent.final_explanation` 的調整建構、capture 與 final explanation | 未知值拋出 ValueError；Pipeline 先檢查空值才呼叫。 |
 | `services.history_comparison_service._record_to_signal`、`history_service._decision_action_fields_for_record`、`backtest_service` | 歷史／比較／回測回傳空 action 與 action_label，原始建議保留；不以三態或分數補出八態。 |

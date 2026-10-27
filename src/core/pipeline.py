@@ -2405,10 +2405,18 @@ class StockAnalysisPipeline:
         if action_for_score(score) == "buy" and (
             str(getattr(result, "decision_type", None) or "").strip().lower() == "sell"
         ):
-            # 僅結構化賣出決策阻擋買入區分數升級，沿用非買入建議動作，否則退回觀望。
-            # 建議文字不是單一標籤時改看結構化 action（如 LLM 給的 reduce），不從句子推斷。
-            kept_action = advice_action or normalize_decision_action(getattr(result, "action", None))
-            result.action = kept_action if kept_action and kept_action not in {"buy", "add"} else "watch"
+            # 僅結構化賣出決策阻擋買入區分數升級：先沿用 LLM 的結構化 action（如 reduce），
+            # 它是買入類或缺漏時才看建議是否為單一非買入標籤，都沒有就退回觀望；不從句子推斷。
+            # 護欄改寫成單一標籤時上面已把標籤寫進 result.action，這裡先看 action 不會漏掉它。
+            kept_action = next(
+                (
+                    candidate
+                    for candidate in (normalize_decision_action(getattr(result, "action", None)), advice_action)
+                    if candidate and candidate not in {"buy", "add"}
+                ),
+                "watch",
+            )
+            result.action = kept_action
             result.action_label = None
             if not record_contradiction:
                 # 中途只刷新動作，等真正護欄執行完才記錄尚未解決的矛盾。
