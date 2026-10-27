@@ -24,6 +24,18 @@ action 欄只標「觀望／續抱當天大漲大跌」這類事後描述，**�
 彙總：缺口 MAE、偏差（平均誤差）、預估對實際的縮放比（過原點迴歸斜率）、方向命中率，附 bootstrap
 95% 區間與 n。n < 20 或偏差區間跨零一律 inconclusive；縮放比要 n ≥ 20 且區間不含 1 才建議套用。
 
+缺口主口徑（2026-10-27 起，判讀列 `gap_basis="tx_settle"`）：`gap_expected`＝夜盤收盤 ÷ 同合約前一日日盤結算價 − 1，
+對應量測 `gap_tx_open`；舊列（沒有 `gap_basis`）是「夜盤收盤 ÷ 前一日現貨收盤」，彙總時兩種口徑分開統計、不混。
+
+機率計分（判讀列有 `p_close_up`／`p_oc_up`／`p_gap_up`，07:30 凍結）：目標＝收盤高於前收、收盤高於官方開盤、
+09:05 指數高於前收。四條基準各寫方向值與機率值（機率 Laplace 加一、252 日滾動、只用 forecast 日之前的資料）：
+(a) 永遠看漲 (b) 昨日方向 (c) 07:30 前最近一個 S&P 交易日方向（`market.macro_series` 的 ^GSPC）
+(d) `night_spot_gap` 符號（機率先留 null，等夜盤歷史回補）。gap_up 的 (a)(b)(c) 機率與 (b) 方向
+一律留 null：歷史沒有逐日 09:05 指數，官方開盤與 09:05 不是同一個事件（符號會相反），拿來當基準是錯配；
+(a) 恆看漲、(c) S&P 方向不需要 09:05 歷史，方向值照寫、照算命中差 a_i；彙總對 gap_up 印
+「Brier 不可用（缺 09:05 歷史）」，close_up／oc_up 不受影響。彙總算 Brier、配對差 d_i（基準 Brier − 模型 Brier，正＝模型較好）
+與 a_i（命中差），10 日 circular block bootstrap 95% 區間；n<20 或區間跨零印 inconclusive。
+
 用法：
     uv run --env-file .env python scripts/verify_morning_calls.py            # 算、印，不寫檔
     uv run --env-file .env python scripts/verify_morning_calls.py --append   # 追加新結果（18:00 排程）
@@ -55,6 +67,15 @@ MIN_N = 20          # 低於這個樣本數的結論一律 inconclusive（與 ve
 BIG_MOVE = 0.015    # action 事後描述用的「大漲大跌」門檻，描述性、不是績效判準
 RATIO_FLOOR = 0.001  # 預估缺口絕對值低於 0.1% 時不算比值（分母太小），也不算「有資訊」的樣本
 MAX_UNDEFINED = 0.05  # bootstrap 重抽有超過 5% 算不出統計量（例如全是 0 預估）就當區間不存在
+PROB_TARGETS = ("close_up", "oc_up", "gap_up")
+TARGET_LABEL = {"close_up": "收盤>前收", "oc_up": "收盤>開盤", "gap_up": "09:05>前收"}
+BASELINES = ("a", "b", "c", "d")
+NO_BASELINE = {("gap_up", k) for k in "abc"}  # 缺逐日 09:05 歷史：這幾格「機率」不可用
+NO_DIR = {("gap_up", "b")}  # (b) 昨日方向也要 09:05 歷史；(a) 恆看漲、(c) 看 S&P 方向，方向值不需要
+BASELINE_LABEL = {"a": "永遠看漲", "b": "昨日方向", "c": "S&P 方向", "d": "夜盤符號"}
+ROLL_WINDOW = 252   # 基準機率的滾動交易日數
+BLOCK = 10          # circular block bootstrap 的區塊長度（交易日）
+HIST_MONTHS = 14    # 基準歷史往前抓的月數（涵蓋 252 個交易日）
 DEFER_DAYS = 7      # 09:05／期貨量測暫時抓不到時，7 個曆日內延後寫入（outcome 寫了就不會再補）
 
 
@@ -173,8 +194,22 @@ def _sign(x):
     return 0 if x is None or x == 0 else (1 if x > 0 else -1)
 
 
-def build_outcome(call, *, prev, prev_close, open_, close, idx_0905, tx, breadth, vix, now=None):
-    """一筆判讀 → outcome 列（純函式）。``tx`` 是 `tx_measures` 的回傳值。"""
+def _prob(x):
+    """機率欄位必須是 [0, 1] 的小數；其他（缺、字串、百分數 62）一律當缺，由呼叫端記 note。"""
+    if isinstance(x, bool) or not isinstance(x, (int, float)) or math.isnan(x):
+        return None
+    return float(x) if 0 <= x <= 1 else None
+
+
+def _up(x):
+    """大於 0 → 1、否則 0；缺值回 None。"""
+    return None if x is None else int(x > 0)
+
+
+def build_outcome(call, *, prev, prev_close, open_, close, idx_0905, tx, breadth, vix, now=None,
+                  baselines=None):
+    """一筆判讀 → outcome 列（純函式）。``tx`` 是 `tx_measures` 的回傳值；``baselines`` 是
+    `baseline_fields` 的回傳（缺就不寫基準欄）。"""
     day = call["date"]
     exp = call.get("gap_expected")
     gap_tx, night_close, night_chg, contract = tx
@@ -197,7 +232,9 @@ def build_outcome(call, *, prev, prev_close, open_, close, idx_0905, tx, breadth
         **{f"err_{k}": _r(v - exp) if v is not None and exp is not None else None for k, v in actual.items()},
         "night_spot_gap": _r(night_spot),
         "night_tx_chg": _r(night_chg),
-        "input_err": _r(exp - night_spot) if exp is not None and night_spot is not None else None,
+        "input_err": _r(exp - (night_chg if call.get("gap_basis") == "tx_settle" else night_spot))
+        if exp is not None and (night_chg if call.get("gap_basis") == "tx_settle" else night_spot) is not None else None,
+        "gap_basis": call.get("gap_basis"),
         "tx_contract": contract,
         "day_return": _r(day_ret),
         "intraday_return": _r(close / open_ - 1) if close and open_ else None,
@@ -212,10 +249,31 @@ def build_outcome(call, *, prev, prev_close, open_, close, idx_0905, tx, breadth
         "action_flag": action_flag(call.get("action"), day_ret),
         "computed_at": (now or dt.datetime.now()).strftime("%Y-%m-%dT%H:%M+08:00"),
     }
+    ys = {"close_up": _up(day_ret), "oc_up": _up(close / open_ - 1) if close and open_ else None,
+          "gap_up": _up(actual["gap_0905"])}
+    bad = []
+    for t in PROB_TARGETS:
+        raw = call.get(f"p_{t}")
+        p = _prob(raw)
+        if raw is not None and p is None:
+            bad.append(f"p_{t}={raw!r}")
+        row[f"p_{t}"] = p
+        row[f"y_{t}"] = ys[t]
+    row["model_version"] = call.get("model_version")
+    row["skill_version"] = call.get("skill_version")
+    row["night_dir_up"] = _up(night_spot)
+    if baselines:
+        row.update(baselines)
+    # (d) 方向值＝夜盤符號；機率欄先留 null（夜盤歷史回補前估不出）
+    for t in PROB_TARGETS:
+        row[f"base_d_dir_{t}"] = row["night_dir_up"]
+        row.setdefault(f"base_d_p_{t}", None)
     if regime not in REGIMES:
         row["note"] = f"自創標籤 {regime!r} 無定義可驗"
     elif excl is None:
         row["note"] = "exclude_from_scoring 未標記，不計分"
+    if bad:
+        row["note"] = "；".join(x for x in (row.get("note"), "機率欄不合法（要 0~1 小數）已當缺：" + "、".join(bad)) if x)
     return row
 
 
@@ -247,7 +305,7 @@ def _slope(pairs):
     return float((pairs[:, 0] * pairs[:, 1]).sum()) / sxx if sxx > 0 else float("nan")
 
 
-def summarize(rows, measure, n_boot=2000, seed=42):
+def summarize(rows, measure, n_boot=2000, seed=42, raw_key="night_spot_gap"):
     """誤差、偏差、方向命中對 ``gap_expected``（實際寫下的預估）算；縮放比對 ``night_spot_gap``
     （夜盤公式的原始值）算——``gap_expected`` 可能已經乘過縮放比，拿它估縮放比會把修正再修一次。"""
     import numpy as np
@@ -263,8 +321,8 @@ def summarize(rows, measure, n_boot=2000, seed=42):
     out["mae"] = float(np.abs(err).mean())
     out["bias"] = float(err.mean())
     out["bias_ci"] = _boot(err, lambda a: float(a.mean()), n_boot, seed)
-    raw = np.asarray([(r["night_spot_gap"], r[measure]) for r in rows
-                      if r.get("night_spot_gap") is not None and r.get(measure) is not None], dtype=float)
+    raw = np.asarray([(r[raw_key], r[measure]) for r in rows
+                      if r.get(raw_key) is not None and r.get(measure) is not None], dtype=float)
     raw = raw.reshape(-1, 2)
     out["n_scale"] = int((np.abs(raw[:, 0]) >= RATIO_FLOOR).sum())
     out["slope"] = _slope(raw) if len(raw) else float("nan")
@@ -278,6 +336,130 @@ def summarize(rows, measure, n_boot=2000, seed=42):
     out["verdict"] = "inconclusive" if n < MIN_N or crosses else "偏差顯著"
     sci = out["slope_ci"]
     out["apply_scaling"] = bool(out["n_scale"] >= MIN_N and sci is not None and not (sci[0] <= 1 <= sci[1]))
+    return out
+
+
+# ---------- 純函式：基準與機率計分 ----------
+
+def hist_targets(merged):
+    """{date: (open, high, low, close)} → 逐日三個目標的實際方向（依日期排序、第一天無前收不列）。
+    gap_up 沒有逐日 09:05 指數可用，官方開盤缺口不是同一個事件，所以固定 None（基準不比 gap_up）。"""
+    days = sorted(merged)
+    out = []
+    for prev, day in zip(days, days[1:]):
+        o, c, pc = merged[day][0], merged[day][3], merged[prev][3]
+        out.append({"date": day, "close_up": _up(c - pc), "oc_up": _up(c - o), "gap_up": None})
+    return out
+
+
+def sp_directions(series):
+    """[(date, close)] → [(date, 當日是否收漲)]（依日期排序；第一筆沒有前值不列）。"""
+    ser = sorted(series)
+    return [(d, int(v > pv)) for (_, pv), (d, v) in zip(ser, ser[1:])]
+
+
+def _sp_dir_before(sp, day):
+    """``day`` 之前（嚴格小於）最近一個 S&P 交易日的方向；沒有就 None。"""
+    import bisect
+    i = bisect.bisect_left([d for d, _ in sp], day)
+    return sp[i - 1][1] if i else None
+
+
+def _laplace(ups, n):
+    return (ups + 1) / (n + 2)
+
+
+def baseline_fields(day, hist, sp, window=ROLL_WINDOW):
+    """forecast 日 ``day`` 的基準欄位：每個目標 × (a)(b)(c) 各一組方向值（`base_<k>_dir_<t>`）與機率值
+    （`base_<k>_p_<t>`）。**只用 date < day 的歷史**（`hist` 的 date 是 date 物件）；歷史是空的整組回 None，
+    ``sp`` 是 None（資料不可用）時 (c) 回 None。機率＝(頻率分子 + 1) / (樣本 + 2)。"""
+    prior = [h for h in sorted(hist, key=lambda h: h["date"]) if h["date"] < day][-window:]
+    sp_today = _sp_dir_before(sp, day) if sp else None
+    out = {}
+    for t in PROB_TARGETS:
+        for k in "abc":
+            out[f"base_{k}_dir_{t}"] = out[f"base_{k}_p_{t}"] = None
+        out[f"base_n_{t}"] = 0
+        if (t, "a") in NO_BASELINE:   # 只有方向可算：(a) 恆為 1、(c) 只依 S&P 前一交易日
+            out[f"base_a_dir_{t}"] = 1
+            if sp_today is not None:
+                out[f"base_c_dir_{t}"] = sp_today
+            continue
+        ys = [h[t] for h in prior if h[t] is not None]
+        if not ys:
+            continue
+        out[f"base_n_{t}"] = len(ys)
+        out[f"base_a_dir_{t}"] = 1
+        out[f"base_a_p_{t}"] = _r(_laplace(sum(ys), len(ys)), 6)
+        yday = prior[-1][t]
+        if yday is not None:
+            nxt = [b[t] for a, b in zip(prior, prior[1:]) if a[t] == yday and b[t] is not None]
+            out[f"base_b_dir_{t}"] = yday
+            out[f"base_b_p_{t}"] = _r(_laplace(sum(nxt), len(nxt)), 6)
+        if sp_today is not None:
+            same = [h[t] for h in prior if h[t] is not None and _sp_dir_before(sp, h["date"]) == sp_today]
+            out[f"base_c_dir_{t}"] = sp_today
+            out[f"base_c_p_{t}"] = _r(_laplace(sum(same), len(same)), 6)
+    return out
+
+
+def _cbb_ci(values, block=BLOCK, n=2000, seed=42):
+    """circular block bootstrap 的 95% 區間（對平均）；少於 2 筆回 None。values 要依時間排序。"""
+    import numpy as np
+    arr = np.asarray(values, dtype=float)
+    size = len(arr)
+    if size < 2:
+        return None
+    block = min(block, size)
+    nb = -(-size // block)
+    rng = np.random.default_rng(seed)
+    starts = rng.integers(0, size, (n, nb))
+    idx = ((starts[:, :, None] + np.arange(block)[None, None, :]) % size).reshape(n, -1)[:, :size]
+    lo, hi = np.percentile(arr[idx].mean(axis=1), [2.5, 97.5])
+    return float(lo), float(hi)
+
+
+def _verdict(n, ci):
+    if n < MIN_N or ci is None or ci[0] <= 0 <= ci[1]:
+        return "inconclusive"
+    return "模型優於基準" if ci[0] > 0 else "模型劣於基準"
+
+
+def prob_summary(rows, target, n_boot=2000, seed=42):
+    """單一目標的機率計分。缺 `p_<target>`／`y_<target>` 的列（舊列）跳過、計入 ``n_skipped``。
+    d_i＝基準 Brier − 模型 Brier（正＝模型較好）；a_i＝模型命中 − 基準命中（模型方向＝p>0.5）。"""
+    import numpy as np
+    rows = sorted(rows, key=lambda r: r["date"])
+    elig = [r for r in rows if r.get(f"p_{target}") is not None and r.get(f"y_{target}") is not None]
+    out = {"target": target, "n": len(elig), "n_skipped": len(rows) - len(elig), "baselines": {}}
+    if not elig:
+        return out
+    p = np.asarray([r[f"p_{target}"] for r in elig], dtype=float)
+    y = np.asarray([r[f"y_{target}"] for r in elig], dtype=float)
+    out.update(p_bar=float(p.mean()), y_bar=float(y.mean()), bias=float(p.mean() - y.mean()),
+               brier=float(((p - y) ** 2).mean()))
+    hit_m = ((p > 0.5).astype(float) == y).astype(float)
+    for k in BASELINES:
+        na = (target, k) in NO_BASELINE   # 機率不可用：舊列即使有值也不採用
+        nd = (target, k) in NO_DIR        # 方向不可用
+        bp = [] if na else [(i, r[f"base_{k}_p_{target}"]) for i, r in enumerate(elig)
+                            if r.get(f"base_{k}_p_{target}") is not None]
+        bd = [] if nd else [(i, r[f"base_{k}_dir_{target}"]) for i, r in enumerate(elig)
+                            if r.get(f"base_{k}_dir_{target}") is not None]
+        b = {"n_brier": len(bp), "n_hit": len(bd), "brier": None, "d_mean": None, "d_ci": None,
+             "a_mean": None, "a_ci": None}
+        if bp:
+            ii = np.asarray([i for i, _ in bp])
+            base_brier = (np.asarray([v for _, v in bp], dtype=float) - y[ii]) ** 2
+            d = base_brier - (p[ii] - y[ii]) ** 2
+            b.update(brier=float(base_brier.mean()), d_mean=float(d.mean()), d_ci=_cbb_ci(d, BLOCK, n_boot, seed))
+        if bd:
+            ii = np.asarray([i for i, _ in bd])
+            hit_b = (np.asarray([v for _, v in bd], dtype=float) == y[ii]).astype(float)
+            a = hit_m[ii] - hit_b
+            b.update(a_mean=float(a.mean()), a_ci=_cbb_ci(a, BLOCK, n_boot, seed))
+        b["verdict"] = _verdict(len(bp), b["d_ci"]) if bp else "inconclusive（無機率基準）"
+        out["baselines"][k] = b
     return out
 
 
@@ -309,18 +491,56 @@ def render_rows(rows, out=print):
             f"{cons}{mark}{'  ⚑' + r['action_flag'] if r.get('action_flag') else ''}")
 
 
+def render_prob_summary(rows, out=print):
+    out("機率計分（Brier 越小越好；d＝基準−模型，正＝模型較好；10 日 block bootstrap 95% CI）：")
+    for t in PROB_TARGETS:
+        ps = prob_summary(rows, t)
+        head = f"  {TARGET_LABEL[t]:10s}"
+        if not ps["n"]:
+            out(f"{head} 沒有帶 p_{t} 的可計分列（舊列跳過 {ps['n_skipped']} 筆）")
+            continue
+        base = (f"{head} n={ps['n']}（跳過無 p 的舊列 {ps['n_skipped']}） p̄ {ps['p_bar']:.3f} − ȳ {ps['y_bar']:.3f} "
+                f"= 整體偏差 {ps['bias']:+.3f}")
+        if ps["n"] < MIN_N:
+            out(f"{base}；n<{MIN_N} 只報整體偏差 → inconclusive")
+            continue
+        out(f"{base}；模型 Brier {ps['brier']:.4f}")
+        for k in BASELINES:
+            b = ps["baselines"][k]
+            if b["n_brier"]:
+                d = f"基準 Brier {b['brier']:.4f} d̄ {b['d_mean']:+.4f} {_ci(b['d_ci'], 1, '{:+.4f}')}（n={b['n_brier']}）"
+            elif (t, k) in NO_BASELINE:
+                d = "Brier 不可用（缺 09:05 歷史）"
+            else:
+                d = "Brier 不可用（無機率基準）"
+            a = "命中差不可用" if b["a_mean"] is None else (
+                f"命中差 ā {b['a_mean']:+.3f} {_ci(b['a_ci'], 1, '{:+.3f}')}（n={b['n_hit']}）")
+            out(f"    vs ({k}) {BASELINE_LABEL[k]}：{d}；{a} → {b['verdict']}")
+
+
+def gap_groups(rows):
+    """[(標籤, 縮放比的 raw 欄, 該口徑的列)]：依 gap_basis 分組，render_summary／brief／bark_line 共用。"""
+    return [("夜盤÷前日現貨收盤（舊口徑）", "night_spot_gap", [r for r in rows if r.get("gap_basis") != "tx_settle"]),
+            ("夜盤÷同合約前日結算（新口徑）", "night_tx_chg", [r for r in rows if r.get("gap_basis") == "tx_settle"])]
+
+
 def render_summary(rows, out=print, label="可計分"):
     out(f"\n── 彙總（{label} {len(rows)} 筆；誤差＝實際 − 預估）──")
-    for m in MEASURES:
-        s = summarize(rows, m)
-        if not s["n"]:
-            out(f"{MEASURE_LABEL[m]:8s} 沒有樣本")
+    groups = gap_groups(rows)
+    for glabel, raw_key, grows in groups:
+        if not grows:
             continue
-        ratio = "—" if s["ratio_median"] is None else f"{s['ratio_median']:.2f}"
-        out(f"{MEASURE_LABEL[m]:8s} n={s['n']:<3d} MAE {s['mae'] * 100:.2f}pp  偏差 {s['bias'] * 100:+.2f}pp "
-            f"{_ci(s['bias_ci'])}  縮放比(實際÷夜盤公式，n={s['n_scale']}) {s['slope']:.2f} {_ci(s['slope_ci'], 1, '{:.2f}')}  "
-            f"比值中位 {ratio}  方向命中 {s['dir_hit'] * 100:.0f}%  → {s['verdict']}"
-            f"{'' if s['apply_scaling'] else '，縮放比不套用'}")
+        out(f"[缺口口徑：{glabel}，{len(grows)} 筆；兩種口徑不混算]")
+        for m in MEASURES:
+            s = summarize(grows, m, raw_key=raw_key)
+            if not s["n"]:
+                out(f"{MEASURE_LABEL[m]:8s} 沒有樣本")
+                continue
+            ratio = "—" if s["ratio_median"] is None else f"{s['ratio_median']:.2f}"
+            out(f"{MEASURE_LABEL[m]:8s} n={s['n']:<3d} MAE {s['mae'] * 100:.2f}pp  偏差 {s['bias'] * 100:+.2f}pp "
+                f"{_ci(s['bias_ci'])}  縮放比(實際÷夜盤公式，n={s['n_scale']}) {s['slope']:.2f} {_ci(s['slope_ci'], 1, '{:.2f}')}  "
+                f"比值中位 {ratio}  方向命中 {s['dir_hit'] * 100:.0f}%  → {s['verdict']}"
+                f"{'' if s['apply_scaling'] else '，縮放比不套用'}")
     day = [r["day_dir_hit"] for r in rows if r.get("day_dir_hit") is not None]
     if day:
         out(f"缺口方向 vs 全日方向：{sum(day)}/{len(day)} 同向（描述性，盤前判讀不預測收盤）")
@@ -328,6 +548,7 @@ def render_summary(rows, out=print, label="可計分"):
     out(f"regime（只驗 breadth＋VIX）：{rs['consistent']}/{rs['n']} 符合；自創標籤無法計分 {rs['unscorable_labels']} 筆")
     flags = [f"{r['date']} {r['action']}→{r['action_flag']}" for r in rows if r.get("action_flag")]
     out("動作事後描述（不是績效）：" + ("；".join(flags) if flags else "沒有大漲大跌日的觀望／逆向動作"))
+    render_prob_summary(rows, out)
     if len(rows) < MIN_N:
         out(f"⚠ 樣本 {len(rows)} 筆 < {MIN_N}：所有結論 inconclusive，不能聲稱判讀有經驗證的優勢。")
 
@@ -339,9 +560,14 @@ def bark_line(rows, new_rows):
         parts.append(f"{r['date']} 預估 {_pct(r['gap_expected'])}，實際 09:05 {_pct(r['gap_0905'])}"
                      f"／期貨 {_pct(r['gap_tx_open'])}，全日 {_pct(r['day_return'])}；"
                      f"regime {r['regime']}{'（符合）' if r.get('regime_consistent') else '（不符或無法驗）'}")
-    s = summarize([r for r in rows if r["scorable"]], "gap_0905")
-    if s["n"]:
-        parts.append(f"累計 n={s['n']} 偏差 {s['bias'] * 100:+.2f}pp、縮放比 {s['slope']:.2f}，{s['verdict']}")
+    for glabel, raw_key, grows in gap_groups([r for r in rows if r["scorable"]]):
+        s = summarize(grows, "gap_0905", raw_key=raw_key)
+        if not s["n"]:
+            continue
+        if raw_key == "night_tx_chg":
+            parts.append(f"累計（{glabel}）n={s['n']} 偏差 {s['bias'] * 100:+.2f}pp、縮放比 {s['slope']:.2f}，{s['verdict']}")
+        else:
+            parts.append(f"累計（{glabel}）n={s['n']} 偏差 {s['bias'] * 100:+.2f}pp，{s['verdict']}（舊口徑不給縮放比）")
     return "\n".join(parts)
 
 
@@ -425,6 +651,20 @@ class Fetcher:
         merged = {**self.month(prev_month), **cur}
         return prev, merged[prev][3], merged[day][0], merged[day][3]
 
+    def history(self, day):
+        """``day`` 之前約 252 個交易日的逐日目標方向（`hist_targets`）；任何一個月抓不到（含 stat 非 OK）就回 None 並記進 ``notes``（輸出會印），不會被當成 0。"""
+        merged, cur, gaps = {}, day.replace(day=1), []
+        for _ in range(HIST_MONTHS):
+            m = self.month(cur)
+            if not m:   # 往回抓的都是已收盤月份，必有交易日：空代表抓取失敗（含 stat 非 OK），不能跨缺口併成相鄰日
+                gaps.append(f"{cur:%Y-%m}")
+            merged.update(m)
+            cur = cur.replace(day=1) - dt.timedelta(days=1)
+        if gaps:
+            self.notes.append(f"MI_5MINS_HIST 缺 {'、'.join(gaps)}：基準歷史不完整，整組不用")
+            return None
+        return hist_targets(merged)
+
     def index_0905(self, day):
         resp, reason = self.http.get(INDEX_URL, params={"response": "json", "date": f"{day:%Y%m%d}"},
                                      expect="json")
@@ -468,6 +708,15 @@ def vix_prior(engine, day):
                                  "and date < :d order by date desc limit 1"), {"d": day}).scalar()
 
 
+def sp_series(engine):
+    """^GSPC 日收盤 [(date, close)]（date 是美股交易日）。"""
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        rows = conn.execute(text("select date, value from market.macro_series where series_id='^GSPC' "
+                                 "and value is not null order by date")).fetchall()
+    return [(r[0], float(r[1])) for r in rows]
+
+
 def compute(calls, *, skip_dates=(), fetcher=None, engine=None, today=None, out=print):
     """對每筆還沒算過、當日已收盤的判讀算 outcome。"""
     today = today or dt.date.today()
@@ -479,6 +728,13 @@ def compute(calls, *, skip_dates=(), fetcher=None, engine=None, today=None, out=
     if engine is None:
         from market_data.db import get_engine
         engine = get_engine()
+    try:
+        sp = sp_directions(sp_series(engine))
+        if not sp:
+            raise ValueError("market.macro_series 沒有 ^GSPC 資料")
+    except Exception as exc:  # noqa: BLE001  資料源失敗要明講不可用，(c) 基準留 null，不當 0
+        out(f"  ⚠ S&P 基準不可用（{type(exc).__name__}: {exc}）：基準 (c) 留空")
+        sp = None
     rows = []
     for c in todo:
         day = dt.date.fromisoformat(c["date"])
@@ -492,9 +748,13 @@ def compute(calls, *, skip_dates=(), fetcher=None, engine=None, today=None, out=
             out(f"  {c['date']}：DB 還沒有這天的收盤行情，跳過")
             continue
         vix = vix_prior(engine, day)
+        hist = fetcher.history(day)
+        if not hist:
+            out(f"  ⚠ {c['date']}：基準歷史不可用（官方日資料缺月或抓不到），基準 (a)(b)(c) 留空")
+        baselines = baseline_fields(day, hist, sp) if hist else None
         row = build_outcome(c, prev=prev, prev_close=prev_close, open_=open_, close=close,
                             idx_0905=fetcher.index_0905(day), tx=fetcher.tx(day, prev),
-                            breadth=breadth, vix=None if vix is None else float(vix))
+                            breadth=breadth, vix=None if vix is None else float(vix), baselines=baselines)
         missing = [k for k in ("gap_0905", "gap_tx_open", "night_spot_gap") if row[k] is None]
         if missing and (today - day).days <= DEFER_DAYS:
             # outcome 一寫就不再重算：來源暫時失敗時先不寫，下一輪再抓
@@ -515,10 +775,13 @@ def brief(path=OUTCOMES, last=5, out=print):
         return
     render_rows(rows[-last:], out)
     render_summary([r for r in rows if r["scorable"]], out)
-    s = summarize([r for r in rows if r["scorable"]], "gap_0905")
-    if s.get("n") and not s.get("apply_scaling"):
-        out("→ 今天算開盤缺口時：縮放比沒有統計支持，只當提醒，不要拿來修正預估。")
-    elif s.get("apply_scaling"):
+    # 縮放建議只看新口徑（tx_settle）：skill 把比例乘在「夜盤收盤÷結算價」上，舊口徑的比例不能頂替
+    new = gap_groups([r for r in rows if r["scorable"]])[1]
+    s = summarize(new[2], "gap_0905", raw_key=new[1])
+    if not s.get("apply_scaling"):
+        out(f"→ 今天算開盤缺口時：新口徑樣本 n={s.get('n_scale', 0)}（需 ≥{MIN_N} 且區間不含 1），"
+            "inconclusive，縮放比只當提醒，不要拿來修正預估，也不要拿舊口徑的比例頂替。")
+    else:
         out(f"→ 縮放比 {s['slope']:.2f} 已有統計支持（n≥{MIN_N}、區間不含 1）：把**夜盤公式算出的原始缺口**乘上它再寫進 gap_expected，並在 reason 註明（不要乘在已修正過的數字上）。")
 
 

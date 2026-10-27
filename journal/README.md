@@ -80,6 +80,10 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
   `foreign_fut_oi`（外資台指期大台淨未平倉口數，整數，負＝淨空）、`foreign_fut_oi_chg`（較前一交易日的
   口數變化，整數）、`pc_oi_ratio`（臺指選擇權 P/C 未平倉比，**小數**：文字輸出的 66.17% 在 JSON 已是 0.6617）。
   不可用或沒有日變化時 JSON 裡已是 `null`（原因在 `reasons`），照填 `null`，不要去搜尋補數字。它們只是 `reason` 的佐證，不是 regime 門檻。
+  選填的機率欄位（2026-10-27 起；之前的行沒有，回驗跳過該指標）。07:30 凍結、都是 **0~1 小數**，超出範圍當缺：
+  `p_close_up`（收盤高於前收，主目標）、`p_oc_up`（收盤高於官方開盤，主目標）、`p_gap_up`（09:05 指數高於前收，次要）、
+  `model_version`（`claude`／`fable`／`fable_synth`／`equal_weight`，現行填 `claude`）、`skill_version`（`tw-morning-call/SKILL.md`
+  的 git blob sha，`git hash-object` 取得）、`gap_basis`（`tx_settle`＝`gap_expected` 是夜盤收盤 ÷ 同合約前一日結算價；缺＝舊口徑，夜盤收盤 ÷ 前一日現貨收盤）。
   **休市日的列不計分**：臨時休市（颱風假等；進版控的清單是 `journal/closed-dates.txt`，append-only，與 `market_data.closures.adhoc_closed_dates()`、交易日曆取聯集）或非交易日那天盤前判讀照跑也會留一行
   （例如 2026-10-23），journal 不改原行，所以回驗一律在讀取端排除 `date` 落在休市日的列，並在輸出標明排除幾筆。
   `swing-decisions.jsonl` 已由 `scripts/verify_swing_decisions.py` 的 `read_log` 做掉；日後寫 morning-calls 回驗要沿用同一個判斷
@@ -93,14 +97,25 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
     `gap_tx_open`＝台指期近月（當日日盤量最大的月份，`tx_contract`）日盤開盤 ÷ 同契約前一日結算價（期交所 `futDataDown`）。
     `err_<量測>`＝實際 − 預估。
   - `night_spot_gap`＝夜盤收盤 ÷ 前一日現貨收盤（skill 公式用對數字時的值；期交所把夜盤記在它**結束**的那天）、
-    `night_tx_chg`＝夜盤收盤 ÷ 前一日結算價、`input_err`＝`gap_expected` − `night_spot_gap`（抄錯或用了 21:30 前報價）。
-    彙總的縮放比是「實際 ÷ `night_spot_gap`」：`gap_expected` 可能已照建議乘過縮放比，拿它估會把修正再修一次。
+    `night_tx_chg`＝夜盤收盤 ÷ 前一日結算價、`input_err`＝`gap_expected` − 對應口徑的夜盤值（`gap_basis=tx_settle` 對 `night_tx_chg`，舊列對 `night_spot_gap`；抄錯或用了 21:30 前報價）。
+    彙總依 `gap_basis` 分組、縮放比是「實際 ÷ 該組 raw」（新口徑 `night_tx_chg`、舊口徑 `night_spot_gap`；`--brief`／Bark 的縮放建議只看新口徑組，樣本不足就 inconclusive）：`gap_expected` 可能已照建議乘過縮放比，拿它估會把修正再修一次。
   - 09:05 或期貨量測暫時抓不到時，7 個曆日內延後不寫（寫了就不會重算）；超過 7 天仍缺才寫入並在 `note` 記缺哪項。
   - `day_return`／`intraday_return`：收盤 ÷ 前收、收盤 ÷ 官方開盤。`gap_dir_hit`（預估方向對 `gap_0905`）、
     `day_dir_hit`（預估缺口方向對全日方向，描述性，盤前判讀不預測收盤）。
   - `breadth_ma20_close`：當日收盤站上 MA20 比例（與 `screen_tw` 報告 §1 同一份程式碼）；`vix_prior`：台股收盤時已知的
     最近一筆 VIX（前一個美股交易日，`market.macro_series`）。`regime_by_close` 只用這兩項判（VIX>30 宣洩、breadth<25% 全面承壓、
     breadth>50% 且 VIX<20 順風、其餘輪動；族群分化與爆量不在檢查內），`regime_consistent` 是它與判讀標籤是否相同，自創標籤為 `null`。
+  - 機率計分欄（判讀列有 `p_*` 才有意義）：`p_close_up`／`p_oc_up`／`p_gap_up` 與 `model_version`／`skill_version`／`gap_basis` 照抄判讀列
+    （非 0~1 小數的 `p_*` 寫 `null` 並在 `note` 記原因）；`y_close_up`／`y_oc_up`／`y_gap_up`＝實際結果（1＝高於、0＝不高於；
+    收盤對前收、收盤對官方開盤、`gap_0905` 對前收）；`night_dir_up`＝`night_spot_gap` 是否為正。
+  - 四條基準，每條各一組方向值與機率值，三個目標各一份：`base_<k>_dir_<目標>`（0／1）與 `base_<k>_p_<目標>`，目標＝`close_up`／`oc_up`／`gap_up`。
+    (a) 永遠看漲（方向恆 1，機率＝252 日滾動上漲頻率）；(b) 昨日方向（機率＝P(漲｜昨日同向) 的 252 日滾動頻率）；
+    (c) 07:30 前最近一個美股交易日的 S&P 方向（`market.macro_series` 的 `^GSPC`；機率＝P(漲｜S&P 同向) 的滾動頻率）；
+    (d) `night_spot_gap` 符號（方向＝`night_dir_up`，**機率先留 `null`**，等夜盤歷史回補）。機率一律 Laplace 加一 `(k+1)/(n+2)`，
+    只用 `date` 早於判讀日的資料；`base_n_<目標>` 是用到的歷史筆數。`gap_up` 的 (a)(b)(c) 機率與 (b) 方向一律 `null`（歷史沒有逐日 09:05 指數，官方開盤與 09:05 不是同一事件）；(a) 恆看漲、(c) S&P 方向不需要 09:05 歷史，方向值照寫、照算命中差 a_i，彙總對 gap_up 只印「Brier 不可用（缺 09:05 歷史）」；基準歷史任一月份抓不到時整組留 `null` 並印不可用。
+    資料源抓不到時該基準欄是 `null`，輸出明印「不可用」，不補 0。
+  - 彙總（`render_prob_summary`）：模型 Brier、對各基準的配對差 d_i（基準 Brier − 模型 Brier，正＝模型較好）與命中差 a_i（模型方向＝p>0.5），
+    10 日 circular block bootstrap 95% CI；n<20 或 CI 跨零印 inconclusive，n<20 只報整體偏差 p̄−ȳ。缺 `p_*` 的舊列跳過。
   - `action_flag`：觀望／續抱遇到全日 ±1.5% 以上、買進遇到 −1.5% 以下、減碼遇到 +1.5% 以上時標出，**描述，不是績效**。
 
 ## 怎麼用
