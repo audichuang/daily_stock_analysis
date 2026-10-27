@@ -570,3 +570,26 @@ def test_public_effective_config_builder_preserves_smoke_overrides() -> None:
     assert config.generation_backend == "codex_cli"
     assert config.generation_backend_timeout_seconds == 17
     assert config.litellm_model == "openai/gpt-4o-mini"
+
+
+def test_effective_config_carries_claude_code_cli_model() -> None:
+    # Web 的 JSON 測試必須用跟正式分析相同的模型，否則 argv 不帶 --model
+    service = GenerationBackendStatusService(
+        effective_map={
+            "GENERATION_BACKEND": "claude_code_cli",
+            "CLAUDE_CODE_CLI_MODEL": " model-x ",
+        }
+    )
+    assert service.build_effective_config().claude_code_cli_model == "model-x"
+    assert GenerationBackendStatusService(
+        effective_map={"GENERATION_BACKEND": "claude_code_cli"}
+    ).build_effective_config().claude_code_cli_model == ""
+
+
+def test_claude_model_key_is_status_relevant_and_registry_has_no_hardcoded_model_example() -> None:
+    from src.core.config_registry import get_field_definition
+    from src.services.system_config_service import SystemConfigService
+
+    assert "CLAUDE_CODE_CLI_MODEL" in SystemConfigService._GENERATION_BACKEND_STATUS_EXACT_KEYS
+    examples = get_field_definition("CLAUDE_CODE_CLI_MODEL").get("examples", [])
+    assert "CLAUDE_CODE_CLI_MODEL=sonnet" not in examples

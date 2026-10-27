@@ -69,7 +69,7 @@ COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 # fork：也 import market_data 與台股服務——ghcr-main.yml 依 tag 建映像時沒有其他 smoke，惰性 import 漏 COPY 只會在容器裡靜默退回
 RUN mkdir -p /tmp/futu-sdk-smoke-home && \
     HOME=/tmp/futu-sdk-smoke-home python -c "import src.services.screening.pipeline; import futu" && \
-    HOME=/tmp/futu-sdk-smoke-home python -c "import market_data.db, market_data.closures, market_data.market_repo, market_data.adjust, market_data.events, market_data.funds, market_data.health, market_data.taifex, market_data.risk_flags, market_data.sources, market_data.financial_statement, market_data.revenue_deadline, src.services.tw_stock_report, src.services.tw_stock_watch, src.services.tw_live_events" && \
+    HOME=/tmp/futu-sdk-smoke-home python -c "import market_data.db, market_data.closures, market_data.market_repo, market_data.adjust, market_data.events, market_data.funds, market_data.health, market_data.taifex, market_data.risk_flags, market_data.sources, market_data.financial_statement, market_data.revenue_deadline, market_data.macro, src.services.tw_stock_report, src.services.tw_stock_watch, src.services.tw_live_events" && \
     rm -rf /tmp/futu-sdk-smoke-home
 
 # 确保数据目录存在并授权给 non-root 用户

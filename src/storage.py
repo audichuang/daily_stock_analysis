@@ -16,6 +16,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import logging
+import math
 import threading
 import time
 import uuid
@@ -373,6 +374,13 @@ class AnalysisHistory(Base):
     secondary_buy = Column(Float)
     stop_loss = Column(Float)
     take_profit = Column(Float)
+
+    # 台版新增（可空、僅追加）：版本與固定預測題，供事後計分與重現
+    prompt_hash = Column(String(64))           # sha256(system prompt)：規則／模板版本
+    input_snapshot_hash = Column(String(64))   # sha256(第一次送出的 user prompt)：模型看到的資料
+    model_version = Column(String(96))         # CLI 實際模型（usage.cli_model）或 model_used
+    p_5d_beat_0050 = Column(Float)             # 固定預測題的機率（0~1），缺值為 NULL
+    llm_attempts = Column(Text)                # JSON 陣列：完整性重試每一輪的原文
 
     created_at = Column(DateTime, default=datetime.now, index=True)
 
@@ -1446,6 +1454,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             # 创建所有表
             Base.metadata.create_all(self._engine)
             self._ensure_backtest_basis_columns()
+            self._ensure_analysis_history_forecast_columns()
             self._ensure_llm_usage_telemetry_columns()
             self._ensure_decision_signal_profile_schema()
             self._ensure_stock_daily_canonical_id()
@@ -1659,6 +1668,20 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     self._ensure_postgres_orm_columns(table)
             except Exception as exc:
                 logger.error("回測欄位補齊失敗（%s）: %s", table.name, exc)
+
+    def _ensure_analysis_history_forecast_columns(self) -> None:
+        """台版：analysis_history 追加的可空欄位（prompt_hash、p_5d_beat_0050…）補到既有表。
+
+        只追加、可空；失敗只記錯不拋，與 _ensure_backtest_basis_columns 同一做法。
+        """
+        table = AnalysisHistory.__table__
+        try:
+            if self._is_sqlite_engine:
+                self._ensure_sqlite_nullable_orm_columns(table)
+            elif self._engine.dialect.name == "postgresql":
+                self._ensure_postgres_orm_columns(table)
+        except Exception as exc:
+            logger.error("分析歷史欄位補齊失敗（%s）: %s", table.name, exc)
 
     def _ensure_decision_signal_profile_schema(self) -> None:
         """Add and backfill nullable decision_profile for existing SQLite DBs."""
@@ -3060,6 +3083,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
 
         sniper_points = self._extract_sniper_points(result)
         raw_result = self._build_raw_result(result)
+        attempts = getattr(result, "llm_attempts", None)
         context_text = None
         if save_snapshot and context_snapshot is not None:
             context_text = self._safe_json_dumps(context_snapshot)
@@ -3082,6 +3106,11 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     secondary_buy=sniper_points.get("secondary_buy"),
                     stop_loss=sniper_points.get("stop_loss"),
                     take_profit=sniper_points.get("take_profit"),
+                    prompt_hash=getattr(result, "prompt_hash", None),
+                    input_snapshot_hash=getattr(result, "input_snapshot_hash", None),
+                    model_version=self._fit_model_version(getattr(result, "model_version", None)),
+                    p_5d_beat_0050=self._finite_probability(getattr(result, "p_5d_beat_0050", None)),
+                    llm_attempts=self._safe_json_dumps(attempts) if attempts else None,
                     created_at=datetime.now(),
                 )
                 session.add(history)
@@ -3094,6 +3123,19 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         except Exception as e:
             logger.error(f"保存分析历史失败: {e}")
             return 0
+
+    @staticmethod
+    def _fit_model_version(value: Any) -> Optional[str]:
+        # 欄位 String(96)：Postgres 不截斷、超長會讓整個寫入回滾
+        return str(value)[:96] if value else None
+
+    @staticmethod
+    def _finite_probability(value: Any) -> Optional[float]:
+        try:
+            p = float(value)
+        except (TypeError, ValueError):
+            return None
+        return p if math.isfinite(p) and 0.0 <= p <= 1.0 else None
 
     def update_analysis_history_diagnostics(
         self,
