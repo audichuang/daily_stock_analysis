@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -78,6 +79,18 @@ def test_fred_daily_skips_us_federal_holiday():
     tw = pd.DatetimeIndex(["2024-11-28", "2024-11-29", "2024-12-02"])
     got = align_available(tw, fred, "next_us_bday")
     assert got.tolist() == [4.30, 4.30, 4.25]
+
+
+@pytest.mark.parametrize("obs,closed,usable", [
+    # 國喪日聯邦政府臨時停班、H.15 不發布：前一天的值延到停班日隔天才上 FRED
+    ("2018-12-04", "2018-12-06", "2018-12-07"),
+    ("2025-01-08", "2025-01-10", "2025-01-13"),
+])
+def test_fred_daily_skips_ad_hoc_federal_closure(obs, closed, usable):
+    # 只用 USFederalHolidayCalendar 會在停班日隔天的台股前視；反向：usable 那天必須拿得到
+    fred = _us({"2018-12-03": 1.0, "2025-01-07": 1.0, obs: 2.0})
+    got = align_available(pd.DatetimeIndex([closed, usable]), fred, "next_us_bday")
+    assert got.tolist() == [1.0, 2.0]
 
 
 def test_icsa_saturday_week_released_thursday_usable_friday():

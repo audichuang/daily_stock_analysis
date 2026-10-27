@@ -99,6 +99,10 @@ AVAILABLE_RULE = {k: "us_close" for k in YF_SERIES}
 AVAILABLE_RULE.update({"TWD": "next_day", "DGS10": "next_us_bday", "DGS2": "next_us_bday",
                        "ICSA": "icsa_thursday"})
 
+# H.15 不發布的日子：聯邦假日＋臨時停班（國喪日，USFederalHolidayCalendar 不含）
+US_FED_AD_HOC_CLOSED = pd.DatetimeIndex(["2018-12-05", "2025-01-09"])
+US_FED_CLOSED = USFederalHolidayCalendar().holidays("1990-01-01", "2035-12-31").union(US_FED_AD_HOC_CLOSED)
+
 # 特徵組（F 的逐組刪除以這裡為單位）
 B0_COLS = ["tw_cc1", "tw_oc1", "tw_cc5"]
 SOX_COLS = ["sox"]
@@ -164,7 +168,7 @@ def available_at(dates, rule):
         return d + pd.Timedelta(days=1)
     if rule == "next_us_bday":
         # H.15 在聯邦假日不發布（例：感恩節前一天的值隔天才上 FRED），只跳週末會前視
-        return d + pd.offsets.CustomBusinessDay(1, calendar=USFederalHolidayCalendar())
+        return d + pd.offsets.CustomBusinessDay(1, holidays=US_FED_CLOSED)
     if rule == "icsa_thursday":
         return d + pd.Timedelta(days=5)
     raise ValueError(f"unknown available_at rule: {rule}")
