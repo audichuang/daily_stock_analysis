@@ -58,6 +58,7 @@ from src.report_language import (
     strategy_invalid_opinion_count,
 )
 from src.schemas.decision_action import (
+    normalize_decision_action,
     display_action_fields_for_result,
     display_decision_type_for_result,
     display_operation_advice_for_result,
@@ -255,6 +256,52 @@ class ChannelDetector:
             NotificationChannel.UNKNOWN: "未知渠道",
         }
         return names.get(channel, "未知渠道")
+
+
+# 推播排序的動作類別：買進類在前、賣出類在後；未知動作排最後
+_PUSH_ACTION_RANK = {
+    "buy": 0, "add": 1, "hold": 2, "watch": 3,
+    "avoid": 4, "reduce": 5, "sell": 6, "alert": 7,
+}
+
+
+def sort_results_for_push(results: Sequence[AnalysisResult]) -> List[AnalysisResult]:
+    """推播排序：依操作建議的動作類別，再依代號。
+
+    穩定且與 sentiment_score 無關：該分數沒有對應可驗證的預測問題，
+    不可作為使用者每天看到的排名依據（策略決議 2026-10-27 第 2 項）。
+    """
+    def _key(result: AnalysisResult) -> tuple:
+        # 不經 sentiment_score 校準：直接取結構化動作，缺值退回 decision_type
+        action = (
+            normalize_decision_action(getattr(result, "action", None))
+            or normalize_decision_action(getattr(result, "operation_advice", None))
+            or normalize_decision_action(getattr(result, "decision_type", None))
+        )
+        return (
+            _PUSH_ACTION_RANK.get(action, len(_PUSH_ACTION_RANK)),
+            str(getattr(result, "code", "") or ""),
+        )
+
+    return sorted(results, key=_key)
+
+
+def score_text(
+    labels: Dict[str, str],
+    score: Any,
+    sep: str = " ",
+    bold: bool = False,
+    note: bool = True,
+) -> str:
+    """評分顯示並加註「未驗證，不代表勝率」；bold 只包評分本體，註記放外面。
+
+    note=False 只給評分本體（呼叫端自己另放註記，例如分享圖會解析單股報告的引言行）。
+    """
+    core = f"{labels['score_label']}{sep}{score}"
+    if bold:
+        core = f"**{core}**"
+    text = labels.get("score_unverified_note", "")
+    return f"{core}（{text}）" if note and text else core
 
 
 class NotificationService:
@@ -1053,15 +1100,10 @@ class NotificationService:
         self._append_market_status_line(report_lines, results, report_language)
         report_lines.extend(["---", ""])
 
-        # 按评分排序（高分在前）
-        sorted_results = sorted(
-            results,
-            key=lambda x: x.sentiment_score,
-            reverse=True
-        )
+        # 依操作建議的動作類別再依代號排序（不依 sentiment_score，該分數未經驗證）
+        sorted_results = sort_results_for_push(results)
 
         buy_count, sell_count, hold_count = self._count_display_decisions(results, report_language)
-        avg_score = sum(r.sentiment_score for r in results) / len(results) if results else 0
 
         report_lines.extend([
             f"## 📊 {labels['summary_heading']}",
@@ -1071,7 +1113,6 @@ class NotificationService:
             f"| 🟢 {labels['buy_label']} | **{buy_count}** {labels['stock_unit_compact']} |",
             f"| 🟡 {labels['watch_label']} | **{hold_count}** {labels['stock_unit_compact']} |",
             f"| 🔴 {labels['sell_label']} | **{sell_count}** {labels['stock_unit_compact']} |",
-            f"| 📈 {labels['avg_score_label']} | **{avg_score:.1f}** |",
             "",
             "---",
             "",
@@ -1085,7 +1126,7 @@ class NotificationService:
                 report_lines.append(
                     f"{emoji} **{self._get_display_name(r, report_language)}({r.code})**: "
                     f"{signal_text} | "
-                    f"{labels['score_label']} {r.sentiment_score} | "
+                    f"{score_text(labels, r.sentiment_score)} | "
                     f"{localize_trend_prediction(r.trend_prediction, report_language)}"
                 )
                 news_disclosure = self._empty_news_disclosure(r, report_language)
@@ -1102,7 +1143,7 @@ class NotificationService:
                     f"### {emoji} {self._get_display_name(result, report_language)} ({result.code})",
                     "",
                     f"**{labels['action_advice_label']}：{signal_text}** | "
-                    f"**{labels['score_label']}：{result.sentiment_score}** | "
+                    f"{score_text(labels, result.sentiment_score, '：', bold=True)} | "
                     f"**{labels['trend_label']}：{localize_trend_prediction(result.trend_prediction, report_language)}** | "
                     f"**Confidence：{confidence_stars}**",
                     "",
@@ -1429,8 +1470,8 @@ class NotificationService:
         if report_date is None:
             report_date = datetime.now().strftime('%Y-%m-%d')
 
-        # 按评分排序（高分在前）
-        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        # 依操作建議的動作類別再依代號排序（不依 sentiment_score）
+        sorted_results = sort_results_for_push(results)
 
         buy_count, sell_count, hold_count = self._count_display_decisions(results, report_language)
 
@@ -1455,7 +1496,7 @@ class NotificationService:
                 report_lines.append(
                     f"{signal_emoji} **{display_name}({r.code})**: "
                     f"{signal_text} | "
-                    f"{labels['score_label']} {r.sentiment_score} | "
+                    f"{score_text(labels, r.sentiment_score)} | "
                     f"{localize_trend_prediction(r.trend_prediction, report_language)}"
                 )
                 if self._report_summary_only:
@@ -1779,8 +1820,8 @@ class NotificationService:
 
         report_date = datetime.now().strftime('%Y-%m-%d')
 
-        # 按评分排序
-        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        # 依操作建議的動作類別再依代號排序（不依 sentiment_score）
+        sorted_results = sort_results_for_push(results)
 
         buy_count, sell_count, hold_count = self._count_display_decisions(results, report_language)
 
@@ -1802,7 +1843,7 @@ class NotificationService:
                 lines.append(
                     f"{signal_emoji} **{stock_name}({r.code})**: "
                     f"{signal_text} | "
-                    f"{labels['score_label']} {r.sentiment_score} | "
+                    f"{score_text(labels, r.sentiment_score)} | "
                     f"{localize_trend_prediction(r.trend_prediction, report_language)}"
                 )
                 news_disclosure = self._empty_news_disclosure(r, report_language)
@@ -1959,18 +2000,16 @@ class NotificationService:
         report_language = self._get_report_language(results)
         labels = get_report_labels(report_language)
 
-        # 按评分排序
-        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        # 依操作建議的動作類別再依代號排序（不依 sentiment_score）
+        sorted_results = sort_results_for_push(results)
 
         buy_count, sell_count, hold_count = self._count_display_decisions(results, report_language)
-        avg_score = sum(r.sentiment_score for r in results) / len(results) if results else 0
 
         lines = [
             f"## 📅 {report_date} {labels['report_title']}",
             "",
             f"> {labels['analyzed_prefix']} **{len(results)}** {labels['stock_unit_compact']} | "
-            f"🟢{labels['buy_label']}:{buy_count} 🟡{labels['watch_label']}:{hold_count} 🔴{labels['sell_label']}:{sell_count} | "
-            f"{labels['avg_score_label']}:{avg_score:.0f}",
+            f"🟢{labels['buy_label']}:{buy_count} 🟡{labels['watch_label']}:{hold_count} 🔴{labels['sell_label']}:{sell_count}",
         ]
         self._append_market_status_line(lines, results, report_language)
 
@@ -1982,7 +2021,7 @@ class NotificationService:
             lines.append(f"### {emoji} {self._get_display_name(result, report_language)}({result.code})")
             lines.append(
                 f"**{signal_text}** | "
-                f"{labels['score_label']}:{result.sentiment_score} | "
+                f"{score_text(labels, result.sentiment_score, ':')} | "
                 f"{localize_trend_prediction(result.trend_prediction, report_language)}"
             )
             news_disclosure = self._empty_news_disclosure(result, report_language)
@@ -2055,7 +2094,7 @@ class NotificationService:
         # Fallback: brief summary from dashboard report
         if not results:
             return f"# {report_date} {labels['brief_title']}\n\n{labels['no_results']}"
-        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        sorted_results = sort_results_for_push(results)
         buy_count, sell_count, hold_count = self._count_display_decisions(results, report_language)
         lines = [
             f"# {report_date} {labels['brief_title']}",
@@ -2073,7 +2112,7 @@ class NotificationService:
             lines.append(
                 f"**{name}({r.code})** {emoji} "
                 f"{signal_text} | "
-                f"{labels['score_label']} {r.sentiment_score} | {one}"
+                f"{score_text(labels, r.sentiment_score)} | {one}"
             )
             news_disclosure = self._empty_news_disclosure(r, report_language)
             if news_disclosure:
@@ -2114,7 +2153,7 @@ class NotificationService:
         lines = [
             f"## {signal_emoji} {stock_name} ({result.code})",
             "",
-            f"> {report_date} | {labels['score_label']}: **{result.sentiment_score}** | {localize_trend_prediction(result.trend_prediction, report_language)}",
+            f"> {report_date} | {score_text(labels, result.sentiment_score, ': ', bold=True, note=False)} | {localize_trend_prediction(result.trend_prediction, report_language)} | （{labels.get('score_unverified_note', '')}）",
             "",
         ]
 
@@ -3108,7 +3147,7 @@ class NotificationBuilder:
         labels = get_report_labels(report_language)
         lines = [f"📊 **{labels['summary_heading']}**", ""]
 
-        for r in sorted(results, key=lambda x: x.sentiment_score, reverse=True):
+        for r in sort_results_for_push(results):
             display_action = display_action_fields_for_result(
                 r,
                 report_language=report_language,
@@ -3135,7 +3174,7 @@ class NotificationBuilder:
             name = get_localized_stock_name(r.name, r.code, report_language)
             lines.append(
                 f"{emoji} {name}({r.code}): {display_advice} | "
-                f"{labels['score_label']} {r.sentiment_score}"
+                f"{score_text(labels, r.sentiment_score)}"
             )
 
         return "\n".join(lines)

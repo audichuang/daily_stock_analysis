@@ -6,7 +6,7 @@
 
     E[R|enter] − E[R|全收]   選出來的比全收好多少（<0 就是這層在扣分）
     E[R|pass]               放棄掉的後來漲了多少（機會成本）
-    Brier(conf) vs Brier(基準率)   `confidence` 有沒有比「一律報 20.2%」更準
+    Brier(conf) vs Brier(基準率)   `confidence` 有沒有比「一律報 20.4%」更準
     可成交口徑               同樣 slots 個空位下「全收 vs 只收 enter」兩本帳
 
 最後一項不可省：事件均值可以被同日同題材的一堆訊號撐高，但真實帳戶只拿得到 slots 檔。
@@ -47,7 +47,9 @@ from tw_trade_costs import round_trip_return  # noqa: E402
 LOG = Path("journal/swing-decisions.jsonl")   # 進版控：見 journal/README.md
 # Version-controlled closure list (the data/ one is gitignored and XTAI misses ad-hoc closures).
 CLOSED_DATES = Path(__file__).resolve().parent.parent / "journal" / "closed-dates.txt"
-BASE_RATE = 0.202        # 現行成本口徑 P(第 60 日收盤淨報酬 ≥ +30%)
+# 現行成本口徑 P(第 60 日收盤淨報酬 ≥ +30%)。2026-10-26 重測為 20.4%（舊 0.202 作廢），
+# 見 docs/research/2026-10-26-exp-rebaseline-anchor.md；screen_tw 的 measured_base_rate 要同步。
+BASE_RATE = 0.204
 MIN_MATURED = 20         # 低於這個數量的結論一律標為雜訊
 
 

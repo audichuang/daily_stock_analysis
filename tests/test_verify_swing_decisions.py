@@ -19,8 +19,8 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from verify_swing_decisions import (  # noqa: E402
-    _ma_check, _portfolio_signals, fill_ok, read_log, realized_return, selection_lift_ci, summarize,
-    window,
+    BASE_RATE, _ma_check, _portfolio_signals, fill_ok, read_log, realized_return, selection_lift_ci,
+    summarize, window,
 )
 
 CAL = pd.bdate_range("2026-01-05", periods=30)      # 週一起算的營業日
@@ -118,6 +118,12 @@ def test_selection_lift_does_not_treat_missing_as_zero():
         "r": [float("nan"), 0.2],
     })
     assert selection_lift_ci(events, CAL, n=100, block=5, seed=7) is None
+
+
+def test_brier_base_rate_is_the_rebaselined_anchor():
+    # 2026-10-26 重測 P(h60 淨報酬 ≥ +30%) = 20.4%（舊 0.202 作廢）；見
+    # docs/research/2026-10-26-exp-rebaseline-anchor.md。
+    assert BASE_RATE == 0.204
 
 
 def test_summarize_counts_the_tails():
