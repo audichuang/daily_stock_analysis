@@ -194,7 +194,6 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "help_key": "settings.ai_model.CLAUDE_CODE_CLI_MODEL",
         "examples": [
             "CLAUDE_CODE_CLI_MODEL=your-model-name",
-            "CLAUDE_CODE_CLI_MODEL=sonnet",
         ],
         "docs": [
             {
