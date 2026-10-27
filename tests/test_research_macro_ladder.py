@@ -70,6 +70,16 @@ def test_fred_daily_waits_one_us_business_day():
     assert got.tolist()[1:] == [4.0, 4.1, 4.1, 4.1]
 
 
+def test_fred_daily_skips_us_federal_holiday():
+    # 2024-11-28 感恩節 H.15 不發布：11-27（週三）的值美東 11-29 才上 FRED（台北 11-30 清晨），
+    # 台股 11-29（週五）07:30 還不可用、12-02（週一）才可用。只跳週末的 BDay 會在 11-29 前視拿到 4.25；
+    # 反向：延後兩個營業日會讓 12-02 也拿不到
+    fred = _us({"2024-11-26": 4.30, "2024-11-27": 4.25})
+    tw = pd.DatetimeIndex(["2024-11-28", "2024-11-29", "2024-12-02"])
+    got = align_available(tw, fred, "next_us_bday")
+    assert got.tolist() == [4.30, 4.30, 4.25]
+
+
 def test_icsa_saturday_week_released_thursday_usable_friday():
     icsa = _us({"2026-10-10": 200_000, "2026-10-17": 250_000})
     got = align_available(TW, icsa, "icsa_thursday")
@@ -80,7 +90,7 @@ def test_icsa_saturday_week_released_thursday_usable_friday():
 def test_new_events_counts_each_trigger_once_on_first_visible_day():
     flags = pd.Series([False, True, True, False],
                       index=pd.to_datetime(["2026-10-15", "2026-10-16", "2026-10-17", "2026-10-19"]))
-    ev = new_events(TW, flags, "us_close")
+    ev = new_events(TW, flags, "us_close", "2026-10-16")
     # 10-16、10-17 的觸發在上一個台股日（10-16）之後才可得，都在台股 10-19（週一）第一次可見，只算一次；
     # 10-19 的美股日不觸發
     assert ev.tolist() == [True, False, False, False, False]
@@ -91,14 +101,33 @@ def test_new_events_ignores_warmup_triggers_on_first_research_day():
     flags = pd.Series([True] + [False] * 5,
                       index=pd.to_datetime(["2009-07-01", "2009-12-28", "2009-12-29",
                                             "2009-12-30", "2009-12-31", "2010-01-04"]))
-    ev = new_events(pd.bdate_range("2010-01-04", "2010-01-08"), flags, "us_close")
+    ev = new_events(pd.bdate_range("2010-01-04", "2010-01-08"), flags, "us_close", "2009-12-31")
+    assert ev.tolist() == [False] * 5
+
+
+def test_new_events_first_day_counts_trigger_from_real_previous_tw_day():
+    # 2010-01-01 台股休市，真正的上一個台股日是 2009-12-31。12-31 的美股收盤觸發在台北 01-01 清晨才收，
+    # 01-04 第一次可見，必須算新事件（用「前一個營業日」01-01 當參考會把它當成已見過）
+    flags = pd.Series([True, False, False, False, True, False],
+                      index=pd.to_datetime(["2009-07-01", "2009-12-28", "2009-12-29",
+                                            "2009-12-30", "2009-12-31", "2010-01-04"]))
+    ev = new_events(pd.bdate_range("2010-01-04", "2010-01-08"), flags, "us_close", "2009-12-31")
+    assert ev.tolist() == [True, False, False, False, False]
+
+
+def test_new_events_first_day_ignores_trigger_visible_on_previous_tw_day():
+    # 反向：12-30 的觸發在 12-31 07:30 已可得、不是 01-04 的新事件；參考日退到 12-30 會誤算成新事件
+    flags = pd.Series([True, False, False, True, False, False],
+                      index=pd.to_datetime(["2009-07-01", "2009-12-28", "2009-12-29",
+                                            "2009-12-30", "2009-12-31", "2010-01-04"]))
+    ev = new_events(pd.bdate_range("2010-01-04", "2010-01-08"), flags, "us_close", "2009-12-31")
     assert ev.tolist() == [False] * 5
 
 
 def test_new_events_counts_trigger_after_series_starts_late():
     # 反向：外部序列晚於研究起點才開始（前幾天整列不可得），第一筆可得的觸發仍要算
     flags = pd.Series([True, False], index=pd.to_datetime(["2026-10-19", "2026-10-20"]))
-    ev = new_events(TW, flags, "us_close")
+    ev = new_events(TW, flags, "us_close", "2026-10-16")
     assert ev.tolist() == [False, True, False, False, False]
 
 

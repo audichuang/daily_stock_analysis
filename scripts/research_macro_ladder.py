@@ -65,6 +65,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from pandas.tseries.holiday import USFederalHolidayCalendar
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -73,6 +74,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 DEFAULT_CACHE = Path.home() / ".cache" / "dsa" / "research"
 HIST_START = "2009-06-01"            # 外部序列多抓半年，給 20 日新高與滾動特徵暖機
 TW_START = "2010-01-01"
+# 研究第一個台股日（2010-01-04）的上一個台股日；market schema 從 2010-01-04 起，查不到它，只能寫死。
+# new_events 用它判斷第一天哪些觸發是新的（2010-01-01 休市，不能用「前一個營業日」近似）
+TW_PREV_DAY = "2009-12-31"
 NIGHT_START = dt.date(2017, 5, 1)    # 期交所盤後交易 2017-05-15 開始
 NOTIONAL = 200_000.0
 RIDGE_LAMBDA = 0.1                   # 標準化特徵上的 (1/n)·SSE + λ·Σβ²；事前固定、不調
@@ -159,7 +163,8 @@ def available_at(dates, rule):
     if rule == "next_day":
         return d + pd.Timedelta(days=1)
     if rule == "next_us_bday":
-        return d + pd.offsets.BDay(1)
+        # H.15 在聯邦假日不發布（例：感恩節前一天的值隔天才上 FRED），只跳週末會前視
+        return d + pd.offsets.CustomBusinessDay(1, calendar=USFederalHolidayCalendar())
     if rule == "icsa_thursday":
         return d + pd.Timedelta(days=5)
     raise ValueError(f"unknown available_at rule: {rule}")
@@ -178,16 +183,18 @@ def align_available(tw_days, obs, rule):
     return pd.Series(out["v"].to_numpy(), index=pd.DatetimeIndex(tw_days))
 
 
-def new_events(tw_days, flags, rule):
+def new_events(tw_days, flags, rule, prev_day):
     """觀測層的 0/1 旗標 → 台股日 t 是否有「上一個台股日之後新變得可用」的觸發。
 
     用累計觸發數對齊後取差分，台股連假期間累積的多筆觀測也只算進第一個可用日。
-    第一個台股日的「上一個台股日」不在 tw_days 裡，用前一個營業日近似（研究起點 2010-01-04 前是
-    2010-01-01，台股實際上是 2009-12-31）；不能把 prev 補 0，否則暖機期的累計觸發全被算成起點那天的新事件。
-    近似的代價：恰好在近似日與真正上一個台股日之間可得的觸發會被當成已見過，最多差一筆觀測。"""
+    `prev_day` 是 tw_days[0] 的上一個**台股**交易日（不在 tw_days 裡）：第一天的新觸發＝第一天可得累計
+    減去 prev_day 可得累計。不能把 prev 補 0（暖機期累計觸發會全算成起點那天的新事件），也不能用
+    「前一個營業日」近似（2010-01-01 休市，2009-12-31 美股收盤的觸發會被當成已見過）。"""
     cum = flags.fillna(False).astype(int).cumsum()
     days = pd.DatetimeIndex(tw_days)
-    ref = pd.DatetimeIndex([days[0].normalize() - pd.offsets.BDay(1)])
+    ref = pd.DatetimeIndex([pd.Timestamp(prev_day).normalize()])
+    if ref[0] >= days[0].normalize():
+        raise ValueError(f"prev_day {prev_day} must be before first tw day {days[0].date()}")
     c_ext = align_available(ref.append(days), cum, rule)
     c = pd.Series(c_ext.to_numpy()[1:], index=days)
     prev = pd.Series(c_ext.to_numpy()[:-1], index=days)
@@ -831,14 +838,14 @@ def main(argv=None):
     # G1-14：WTI 收盤突破前 20 日最高
     wti = ext["WTI"]
     wti_break = wti > wti.shift(1).rolling(20).max()
-    trig14 = new_events(days, wti_break, AVAILABLE_RULE["WTI"]).to_numpy()
+    trig14 = new_events(days, wti_break, AVAILABLE_RULE["WTI"], TW_PREV_DAY).to_numpy()
     for h in (5, 20):
         ev_row("G1-14 WTI 突破 20 日高", "全部", h, trig14)
 
     # G1-12：US10Y（FRED DGS10）創 20 日新高，依 SOX 是否在月線（20 日均）下分組
     d10 = ext["DGS10"].dropna()
     d10_high = d10 > d10.shift(1).rolling(20).max()
-    trig12 = new_events(days, d10_high, AVAILABLE_RULE["DGS10"]).to_numpy()
+    trig12 = new_events(days, d10_high, AVAILABLE_RULE["DGS10"], TW_PREV_DAY).to_numpy()
     sox = ext["SOX"]
     sox_below = align_available(days, (sox < sox.rolling(20).mean()).astype(float), "us_close").to_numpy()
     for h in (5, 20):
@@ -848,7 +855,7 @@ def main(argv=None):
     # G1-15：USDTWD 5 日貶 >1%（TWD=X 上升 >1%）→ T+20，控制 TAIEX 前 20 日報酬
     twd = ext["TWD"]
     twd_dep = twd / twd.shift(5) - 1 > 0.01
-    trig15 = new_events(days, twd_dep, AVAILABLE_RULE["TWD"]).to_numpy()
+    trig15 = new_events(days, twd_dep, AVAILABLE_RULE["TWD"], TW_PREV_DAY).to_numpy()
     st15 = onsets(trig15, 20)
     past20 = (c.shift(1) / c.shift(21) - 1).to_numpy()
     r15 = event_regression_ci(fwd[20], st15, past20, n_boot=a.bootstrap, seed=a.seed, alpha=alpha_b)
@@ -862,7 +869,7 @@ def main(argv=None):
     # G2-10：Brent 5 日漲 >10% → 電子相對非電子 5 日（等權、還原價）
     brent = ext["BRENT"]
     brent_jump = brent / brent.shift(5) - 1 > 0.10
-    trig10 = new_events(days, brent_jump, AVAILABLE_RULE["BRENT"]).to_numpy()
+    trig10 = new_events(days, brent_jump, AVAILABLE_RULE["BRENT"], TW_PREV_DAY).to_numpy()
     elec_ids = [s for s in info.loc[info["industry"].isin(ELECTRONIC_INDUSTRIES), "stock_id"] if s in cls]
     non_ids = [s for s in info.loc[~info["industry"].isin(ELECTRONIC_INDUSTRIES), "stock_id"] if s in cls]
     r5 = cls.shift(-4) / opn - 1
