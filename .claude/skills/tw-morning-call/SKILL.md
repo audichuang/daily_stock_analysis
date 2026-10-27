@@ -134,6 +134,7 @@ regime 是「今天」，大局是「這幾週」。先用一兩句話寫出大�
 
 大局**不改 regime 的定義門檻**（沒有回測支持），只寫進 `reason`、決定部位大小：大局偏緊縮時，`buy` 降一級部位；
 重大事件前一天不新建部位，除非 `breakout` 的論點與事件無關。
+（2026-10-28 回測 FOMC／CPI／NFP 前一日延後一天進場：突破池 h60 配對 112 個，均值 +1.08pp、P(≥30%) +0.9pp，兩個區間都跨零，inconclusive——維持只寫 `reason`；要照做就延後到事件後第一個交易日，不要直接放棄這筆。見 [`docs/research/2026-10-28-pre-event-delay.md`](../../../docs/research/2026-10-28-pre-event-delay.md)。）
 
 ## Step 3：判 regime
 
