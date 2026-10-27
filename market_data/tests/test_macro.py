@@ -568,6 +568,30 @@ def test_store_events_fred_reschedule_still_deletes_stale_fred_rows(pg_conn):
     assert labels == ["2099-03-12"]
 
 
+def test_store_events_fred_to_bea_to_fred_reschedule_deletes_the_stale_date(pg_conn):
+    """FRED 斷線期間 BEA 備援把 03-27 的 source 改成 bea；FRED 恢復後改排 03-28，舊日期不能殘留，
+    但 FRED 範圍（02-27～03-28）以外的備援列要留。"""
+    today = D(2099, 1, 5)
+
+    def t(m, d):
+        return datetime.datetime(2099, m, d, 13, 30, tzinfo=datetime.timezone.utc)
+
+    fred = [_release("pce", "2099-02-27", t(2, 27), "FRED:PCEPI"),
+            _release("pce", "2099-03-27", t(3, 27), "FRED:PCEPI")]
+    macro.store_events(pg_conn, fred, today)
+    # FRED 斷線：BEA 備援把同兩天（含 03-27）蓋成 source=bea，另有 12 月一筆在 FRED 範圍外
+    macro.store_events(pg_conn, [_release("pce", "2099-02-27", t(2, 27), "FRED:PCEPI", source="bea"),
+                                 _release("pce", "2099-03-27", t(3, 27), "FRED:PCEPI", source="bea"),
+                                 _release("pce", "2099-12-23", t(12, 23), "FRED:PCEPI", source="bea")], today)
+    # FRED 恢復並把 03-27 改排 03-28
+    macro.store_events(pg_conn, [_release("pce", "2099-02-27", t(2, 27), "FRED:PCEPI"),
+                                 _release("pce", "2099-03-28", t(3, 28), "FRED:PCEPI")], today)
+    labels = [r[0] for r in pg_conn.execute(text(
+        "SELECT label FROM market.event_calendar WHERE event_type = 'pce' AND label LIKE '2099-%' "
+        "ORDER BY label"))]
+    assert labels == ["2099-02-27", "2099-03-28", "2099-12-23"]
+
+
 def test_fill_first_releases_picks_newest_first_when_over_the_cap(pg_conn, monkeypatch):
     monkeypatch.setattr(macro, "FIRST_RELEASE_PER_RUN", 1)
     old = datetime.datetime(1900, 11, 6, 13, 30, tzinfo=datetime.timezone.utc)

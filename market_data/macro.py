@@ -578,8 +578,9 @@ def store_events(conn, rows, today):
     - FOMC、ISM、央行：不刪任何列（官網掛掉時只剩 Kalshi，那不是完整行事曆）；``estimated`` 不覆蓋
       已經是 ``confirmed`` 的同一場——條件寫在 ON CONFLICT 的 WHERE 裡，兩個更新同時跑也不會降級。
     - 經濟數據（``_FRED_TYPES``）：只有某 ``(event_type, 年)`` 這次由 FRED 行事曆抓成功時，才刪掉
-      該類型、該年度、今天以後、`source='fred'`、這次沒抓到的 label（改期）；備援來源（bea／census）的列
-      不碰，FRED 掛掉或只剩備援時什麼都不刪。
+      該類型、該年度、今天以後、這次沒抓到的 label（改期）；`source='fred'` 的列，以及落在這次 FRED
+      最早～最晚日期之間、被備援改過 source 的 bea／census 列，都會刪；FRED 範圍以外的備援列不碰，
+      FRED 掛掉或只剩備援時什麼都不刪。
     - 首發值欄位（``_ACTUAL_COLS``）不在 upsert 的更新欄位內，每天重抓行事曆不會洗掉它們。"""
     from sqlalchemy import or_, text
     from sqlalchemy.dialects.postgresql import insert
@@ -601,13 +602,18 @@ def store_events(conn, rows, today):
     fred = {}
     for r in rows:
         if r["event_type"] in _FRED_TYPES and r["source"] == "fred":
-            fred.setdefault((r["event_type"], r["event_date"].year), []).append(r["label"])
-    for (etype, year), labels in fred.items():
+            fred.setdefault((r["event_type"], r["event_date"].year), []).append((r["label"], r["event_date"]))
+    for (etype, year), items in fred.items():
+        labels = [label for label, _ in items]
+        dates = [d for _, d in items]
+        # 備援列只在 FRED 這次給出的最早～最晚日期之間才算「FRED 覆蓋範圍內」：FRED 斷線期間備援會把
+        # 同一天的 source 改成 bea／census，改期後舊日期要刪得掉；範圍外（例如 12 月下旬）的備援列保留
         conn.execute(text(
-            "DELETE FROM market.event_calendar WHERE event_type = :t AND symbol = 'US' AND source = 'fred' "
+            "DELETE FROM market.event_calendar WHERE event_type = :t AND symbol = 'US' "
+            "AND (source = 'fred' OR (source = ANY(:backup) AND event_date BETWEEN :lo AND :hi)) "
             "AND event_date >= :today AND event_date >= :a AND event_date < :b AND NOT (label = ANY(:labels))"),
             {"t": etype, "today": today, "a": datetime.date(year, 1, 1), "b": datetime.date(year + 1, 1, 1),
-             "labels": labels})
+             "labels": labels, "backup": ["bea", "census"], "lo": min(dates), "hi": max(dates)})
     table = models.EventCalendar.__table__
     pk = ["event_type", "symbol", "label"]
     rows = dedupe(rows, pk)
