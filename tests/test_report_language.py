@@ -74,23 +74,27 @@ class ReportLanguageTestCase(unittest.TestCase):
         self.assertEqual(get_bias_status_emoji("Safe"), "✅")
         self.assertEqual(get_bias_status_emoji("Caution"), "⚠️")
 
-    def test_infer_decision_type_from_advice_matches_chinese_phrases(self) -> None:
-        self.assertEqual(infer_decision_type_from_advice("建议买入"), "buy")
-        self.assertEqual(infer_decision_type_from_advice("建议持有"), "hold")
-        self.assertEqual(infer_decision_type_from_advice("建议减仓"), "sell")
-        self.assertEqual(infer_decision_type_from_advice("继续持有"), "hold")
-        self.assertEqual(infer_decision_type_from_advice("建议洗盘观察"), "hold")
-        self.assertEqual(infer_decision_type_from_advice("洗盘观察", default=""), "hold")
-        self.assertEqual(infer_decision_type_from_advice("观察", default=""), "hold")
-        self.assertEqual(infer_decision_type_from_advice("不建议买入"), "hold")
-        self.assertEqual(
-            infer_decision_type_from_advice("当前不跌破支撑位继续持有"),
-            "hold",
-        )
-        self.assertEqual(
-            infer_decision_type_from_advice("不破支撑后仍可持有"),
-            "hold",
-        )
+    def test_infer_decision_type_from_advice_accepts_canonical_labels(self) -> None:
+        cases = {
+            "强烈买入": "buy", "买入": "buy", "加仓": "buy",
+            "持有": "hold", "洗盘观察": "hold", "观察": "hold", "观望": "hold",
+            "减仓": "sell", "卖出": "sell", "强烈卖出": "sell",
+            " Buy ": "buy", "strong_buy": "buy", "Hold": "hold", "Sell": "sell",
+            "Buy / Watch": "buy", "卖出/观望": "sell",
+        }
+        for label, expected in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(infer_decision_type_from_advice(label, default=""), expected)
+
+    def test_infer_decision_type_from_advice_free_text_uses_caller_default(self) -> None:
+        for advice in (
+            "建议买入", "建議現在買入", "建议持有", "建议减仓", "继续持有",
+            "建议洗盘观察", "不建议买入", "当前不跌破支撑位继续持有",
+            "不破支撑后仍可持有", "Buy now", "Do not sell", "즉시 매수", None, "",
+        ):
+            for default in ("", "hold", "sell"):
+                with self.subTest(advice=advice, default=default):
+                    self.assertEqual(infer_decision_type_from_advice(advice, default=default), default)
 
 
 class ZhTWLanguageNormalizationTestCase(unittest.TestCase):

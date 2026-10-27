@@ -1249,13 +1249,13 @@ def stabilize_decision_with_structure(
         )
         decision_type = infer_decision_type_from_advice(
             getattr(result, "decision_type", ""),
-            default=getattr(result, "decision_type", "hold") or "hold",
-        )
-        decision_type = decision_type if decision_type in {"buy", "hold", "sell"} else "hold"
-        advice_decision_type = infer_decision_type_from_advice(
-            getattr(result, "operation_advice", ""),
             default="",
+        ) or decision_type_for_action(
+            getattr(result, "action", None), default="",
+        ) or infer_decision_type_from_advice(
+            getattr(result, "operation_advice", ""), default="hold",
         )
+        # 結構化決策優先，缺值時才接受完整標籤；顯示句子不能另闢買入校準路徑。
         # 買入分數稍後會把持有／觀望對齊成買入，須先接受同一套資金流與結構護欄；
         # sell 不走這條：對齊不會把賣出升成買入，套買入校準反而會跳過賣出校準。
         is_buy_decision = decision_type == "buy" or (
@@ -1277,7 +1277,7 @@ def stabilize_decision_with_structure(
             institution_bias = (
                 _tw_institution_flow_bias(fundamental_context)
                 if is_tw_code(getattr(result, "code", ""))
-                and (is_buy_decision or advice_decision_type == "buy")
+                and is_buy_decision
                 else None
             )
             if institution_bias is None:
@@ -1293,7 +1293,7 @@ def stabilize_decision_with_structure(
             flow_bias = institution_bias
         if flow_bias == "unavailable":
             if isinstance(fundamental_context, dict) and "capital_flow" in fundamental_context:
-                if is_buy_decision or advice_decision_type == "buy":
+                if is_buy_decision:
                     _downgrade_buy_without_capital_flow(
                         result,
                         language,

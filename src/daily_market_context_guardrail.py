@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, List
 
+from src.schemas.decision_action import decision_type_for_action
 from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.report_language import (
     infer_decision_type_from_advice,
@@ -212,14 +213,13 @@ def _is_conservative_context(context: Any) -> bool:
 
 
 def _is_buy_decision(result: Any) -> bool:
-    """Trigger on the LLM's structured decision_type or a buy-band score, not on advice wording.
-
-    Not result.action: score alignment upstream can lift hold/watch to buy.
-    """
+    """優先使用結構化三態，缺漏時讀 action／完整標籤，並保留既有分數護欄。"""
     decision_type = str(getattr(result, "decision_type", "") or "").strip().lower()
     if decision_type not in {"buy", "hold", "sell"}:
-        # Malformed result only: reuse the shared advice map, no local lexicon
-        decision_type = infer_decision_type_from_advice(getattr(result, "operation_advice", ""), default="")
+        # 合法三態優先於 action，避免先前的分數對齊把明確持有當成買入。
+        decision_type = decision_type_for_action(
+            getattr(result, "action", None), default="",
+        ) or infer_decision_type_from_advice(getattr(result, "operation_advice", ""), default="")
     if decision_type == "buy":
         return True
     # hold＋買入區分數（≥60）：不壓分、不留 guardrail_reason 的話，下游 build_action_fields

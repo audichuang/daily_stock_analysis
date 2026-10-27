@@ -5,6 +5,10 @@ from __future__ import annotations
 
 import pytest
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 from src.analyzer import AnalysisResult
 from src.daily_market_context_guardrail import apply_daily_market_context_guardrail
 from src.schemas.decision_action import build_action_fields
@@ -445,6 +449,47 @@ def test_fallback_to_shared_advice_map_when_decision_type_invalid(decision_type,
     )
 
     assert "daily_market_context_buy_softened" in adjustments
+
+
+@pytest.mark.parametrize("decision_type", ["", "unknown", "建議買入"])
+@pytest.mark.parametrize("action,expected_buy", [
+    ("buy", True), ("add", True), ("hold", False), ("watch", False),
+    ("reduce", False), ("sell", False), ("avoid", False), ("alert", False),
+    (None, False), ("unknown", False),
+])
+def test_malformed_decision_type_uses_structured_action(decision_type, action, expected_buy) -> None:
+    result = _typed(decision_type, "建議現在買入", "zh-TW")
+    result.action = action
+    result.sentiment_score = 55
+
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh-TW"
+    )
+
+    assert ("daily_market_context_buy_softened" in adjustments) is expected_buy
+    assert result.operation_advice == ("觀望" if expected_buy else "建議現在買入")
+    assert result.action == ("watch" if expected_buy else action)
+    assert result.sentiment_score == (52 if expected_buy else 55)
+
+
+@pytest.mark.parametrize("action,advice,score,expected_softening", [
+    ("buy", "持有", 55, True), ("watch", "买入", 55, False),
+    ("hold", "卖出", 82, True), ("reduce", "买入", 82, False), ("sell", "买入", 82, False),
+])
+def test_structured_action_precedes_exact_advice_when_decision_type_invalid(
+    action, advice, score, expected_softening,
+) -> None:
+    result = _typed("unknown", advice)
+    result.action = action
+    result.sentiment_score = score
+
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh-TW"
+    )
+
+    # hold 投影仍會套用既有買入區分數護欄；sell 不得被高分改成觀望。
+    assert ("daily_market_context_buy_softened" in adjustments) is expected_softening
+    assert result.action == ("watch" if expected_softening else action)
 
 
 @pytest.mark.parametrize("advice", ["減碼，跌破500再進場", "觀望", "隨便寫的文字"])
