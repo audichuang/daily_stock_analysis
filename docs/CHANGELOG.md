@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 模型沒給停損價時不再拿技術面支撐價（`support_levels[0]`）頂替寫進 `sniper_prices.stop_loss`／`sniper_points.stop_loss`：買入／加碼（含買入區會被對齊成買入的持有／觀望）缺模型停損時，分析器完整性重試與 Agent／多 Agent 路徑（新增一次補全呼叫，受 `REPORT_INTEGRITY_ENABLED`／`REPORT_INTEGRITY_RETRY` 控制）把支撐位、ATR14 當證據請模型補一次，`sniper_prices` 缺漏或損壞（`[]`、`'N/A'`、`{}`）一律同路處理、只寫模型回的格子；台股買入最後仍缺買點、停損價或目標價任一格時，交易成本護欄降為觀望，原因如「缺停損價／缺目標價，無法檢查報酬風險比」記進護欄原因（代碼 `trade_cost_levels_missing`），持有、減碼、賣出、觀望與非台股不受影響
 - [新功能] 盤前判讀每日回驗：`scripts/verify_morning_calls.py` 對照 `journal/morning-calls.jsonl` 與當日實際結果（官方開盤、09:05 指數、台指期開盤三種缺口量測，收盤 breadth＋VIX 驗 regime 標籤，觀望日大漲大跌標出），18:00 每日報告追加到 `journal/morning-calls-outcomes.jsonl` 並另開 commit、推 Bark；`make morning` 多一段「近期判讀校正」，`make verify-morning` 手動看
 - [改進] skill `tw-morning-call` 算開盤缺口時參考回驗校正（縮放比有統計支持才套用，inconclusive 只當提醒），並寫明夜盤收盤前的預估不算數、比對實際不看偏向 0 的官方開盤
 - [修复] 多 agent 風控把買入下調成觀望時，存檔裡巢狀的 `dashboard.action`／`dashboard.decision_type`（模型有給才改）同步成風控後的值；原本同步寫在 `payload["dashboard"]` 後又被未同步的 dashboard 區塊蓋回，巢狀仍是 `buy`（頂層動作原本就正確）

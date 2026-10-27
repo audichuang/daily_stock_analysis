@@ -49,6 +49,8 @@
 2. **市場階段護欄** `apply_phase_decision_guardrails`：盤前、盤中等階段的措辭與動作限制。
 3. **大盤脈絡護欄** `apply_daily_market_context_guardrail`：大盤脈絡出現以下任一項時，把積極買進軟化成觀望、分數 ≤52：`high_risk`、`market_cooling`、`low_position_cap` 標籤；明確倉位上限（`position_cap`）；或大盤摘要（`summary`）文字含退潮／高風險／風險偏高／輕倉／倉位上限／倉位不超過（簡繁皆比對）、英文 high risk／elevated risk／risk-off／cooling／position cap／position limit、韓文 고위험／비중 상한 等詞（清單見 `src/daily_market_context_guardrail.py` 的 `_CONSERVATIVE_TEXT_MARKERS_*`）。判斷個股是不是「積極買進」只看 LLM 的 `decision_type=buy`（缺值或非法時才用共用 advice 對照表；`hold` 但分數落在買入區也算），不再比對個股報告文字。黃燈單獨出現、「謹慎／觀望」字樣都**不再**觸發（2026-10-22 修）。這個護欄沒有回測支持（五種大盤狀態對突破候選 h3／h5 全部跨零，見 `docs/tw-signal-research-2026-10.md`），與波段線拒絕 regime 濾網的立場不同，是政策選擇。**已知缺口（待辦）**：LLM 漏給 `decision_type` 時，傳統解析會用共用對照表 `_OPERATION_ADVICE_CANONICAL_MAP` 推斷，但它沒有繁中詞，zh-TW 報告會被補成 hold、不受此護欄（正式庫 921/921 都有 `decision_type`，目前碰不到）。不要直接加繁中別名：「不建議買進、加碼」會被頓號拆段後讀成買入（2026-10-24 Codex 實測），要先做帶否定的拆段比對。
 4. **交易成本護欄** `apply_trade_cost_guardrail`：扣完來回成本（`TW_BROKER_FEE_DISCOUNT`）後報酬風險比不足就不給買進。
+   - 最終動作是買入／加碼，卻缺模型給的買點（`ideal_buy`）、停損價或目標價任一格 → 降為觀望、分數 ≤59，原因點名缺的格子（例「缺停損價／缺目標價，無法檢查報酬風險比」）記進 `guardrail_reason`，代碼 `trade_cost_levels_missing`。持有／觀望但分數落在買入區、又不是結構化賣出時，定稿前會先被分數對齊成買入，因此**也會被檢查**；持有、減碼、賣出、觀望不受影響。價位齊全但順序不合（停損 ≥ 買點等）仍照舊記 `levels_missing`、不降級。
+   - 程式**不拿**技術面支撐價頂替模型停損（2026-10-27 移除 Agent 路徑的 `support_levels[0]` 補位）：分析器完整性重試與 Agent 路徑的 `_repair_agent_stop_loss`（同受 `REPORT_INTEGRITY_ENABLED`／`REPORT_INTEGRITY_RETRY` 控制）把支撐位／ATR14 當證據請模型補一次，補不到才由這裡降級。Agent 整份失敗、改走趨勢退路的買入不送模型補。
 
 Web 回測與 DecisionSignal 後驗（也是 Agent 記憶的命中率來源）以 T+1 開盤進場、台股報酬還原除權息，回測另給台股比例式淨報酬；口徑見 `docs/full-guide.md`「回测功能」與 `docs/decision-signals.md`「后验评估与反馈」。
 

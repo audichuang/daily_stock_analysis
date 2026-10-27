@@ -13,6 +13,9 @@
    也看得到，不只是「買入」評級）。
 2. 淨風報比低於門檻、而結論又是買入時，降級為觀望——扣完成本後賺的比賠的少，
    等於要靠勝率過半才打平，這不該是「買入」。
+3. 最終動作是買入／加碼，卻缺模型給的買點、停損價或目標價任一格時，同樣降級為觀望：
+   少了任一格就無法檢查報酬風險比，這個買入沒有被檢核過。程式不拿技術面算出的價位
+   頂替模型的判斷（缺停損的買入會先請模型補一次，補不到才到這裡）。
 
 成本費率唯一真源是 ``src/utils/tw_trade_costs.py``（研究腳本共用同一份）。
 """
@@ -24,6 +27,7 @@ from datetime import date
 from typing import Any, Dict, List, Optional
 
 from src.report_language import localize_operation_advice, normalize_report_language
+from src.schemas.decision_action import normalize_decision_action
 from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.services.market_symbol_utils import get_suffix_market
 from src.utils.sniper_points import extract_sniper_points
@@ -106,6 +110,50 @@ def _is_buy(result: Any) -> bool:
                 and action_for_score(getattr(result, "sentiment_score", None)) == "buy"))
 
 
+# 報酬風險比要用到的三格；缺任一格就沒辦法檢核
+_REQUIRED_LEVELS = ("ideal_buy", "stop_loss", "take_profit")
+_LEVEL_NAMES = {
+    "zh-TW": {"ideal_buy": "缺買點", "stop_loss": "缺停損價", "take_profit": "缺目標價"},
+    "zh": {"ideal_buy": "缺买点", "stop_loss": "缺止损价", "take_profit": "缺目标价"},
+    "ko": {"ideal_buy": "매수가 없음", "stop_loss": "손절가 없음", "take_profit": "목표가 없음"},
+    "en": {"ideal_buy": "no entry price", "stop_loss": "no stop-loss price", "take_profit": "no target price"},
+}
+
+
+def _is_actionable_long(result: Any) -> bool:
+    """缺價位檢查只看最終會被當成買入／加碼的結論。
+
+    管線在成本護欄前已把「持有／觀望但分數落在買入區」對齊成 buy，所以這裡看結構化
+    action；action 是持有、減碼、觀望等非買入時不動它（不改買入區的持有／減碼護欄）。
+    沒有結構化 action 時才退回 ``_is_buy``。
+    """
+    action = normalize_decision_action(getattr(result, "action", None))
+    if action is not None:
+        return action in _BUY_ACTIONS
+    return _is_buy(result)
+
+
+def _missing_levels_wording(language: str, missing: List[str]) -> Dict[str, str]:
+    # 原因只陳述缺哪一格，不說是誰漏給：買入也可能來自程式趨勢退路，不一定是模型判的
+    names = _LEVEL_NAMES.get(language, _LEVEL_NAMES["en"])
+    if language == "zh-TW":
+        return {"reason": f"{'／'.join(names[k] for k in missing)}，無法檢查報酬風險比，這個買入結論沒有經過扣成本後的風報比檢核",
+                "no_position": "空手先不進場；等買點、停損價與目標價都明確、能算出風報比後再評估。",
+                "has_position": "持有者自行設好停損，不因這份報告加碼。"}
+    if language == "zh":
+        return {"reason": f"{'／'.join(names[k] for k in missing)}，无法检查风险收益比，这个买入结论没有经过扣成本后的风报比检核",
+                "no_position": "空仓先不进场；等买点、止损价与目标价都明确、能算出风报比后再评估。",
+                "has_position": "持仓者自行设好止损，不因这份报告加仓。"}
+    if language == "ko":
+        return {"reason": f"{', '.join(names[k] for k in missing)}: 손익비를 점검할 수 없어 이 매수 결론은 비용 차감 손익비 점검을 거치지 않았습니다",
+                "no_position": "신규 진입하지 말고 매수가·손절가·목표가가 모두 명확해 손익비를 계산할 수 있을 때 다시 평가하세요.",
+                "has_position": "직접 손절선을 정하고 이 리포트를 근거로 비중을 늘리지 마세요."}
+    return {"reason": f"{', '.join(names[k] for k in missing)}: reward/risk cannot be checked, "
+                      "so this buy call was never checked against trading costs",
+            "no_position": "Do not enter until entry, stop-loss and target are all explicit and the reward/risk can be computed.",
+            "has_position": "Set your own stop; do not add on this report."}
+
+
 def _wording(language: str, check: Dict[str, Any]) -> Dict[str, str]:
     rr = check.get("net_rr")
     up, down = check.get("net_upside_pct"), check.get("net_downside_pct")
@@ -145,7 +193,7 @@ def apply_trade_cost_guardrail(
     slippage_rate: float = DEFAULT_SLIPPAGE_RATE,
     atr_pct: Optional[float] = None,
 ) -> List[str]:
-    """寫入 cost_check，並在買入結論扣成本後不划算時降級為觀望。回傳調整代碼。"""
+    """寫入 cost_check；買入結論缺價位或扣成本後不划算時降級為觀望。回傳調整代碼。"""
     if result is None or not is_tw_code(code):
         return []
     dashboard = getattr(result, "dashboard", None)
@@ -171,11 +219,24 @@ def apply_trade_cost_guardrail(
         atr_pct=atr_pct,
     )
     battle_plan["cost_check"] = check
+    language = normalize_report_language(report_language or getattr(result, "report_language", "zh"))
+    missing = [key for key in _REQUIRED_LEVELS if points.get(key) is None]
+    if missing and _is_actionable_long(result):
+        # 缺價位不是「檢核沒過」也不是「通過」，而是沒檢核——買入不能就這樣放行
+        check["missing_levels"] = missing
+        _soften_buy_to_watch(result, dashboard, language, _missing_levels_wording(language, missing))
+        logger.info("[trade_cost_guardrail] buy downgraded for %s: missing %s", code, missing)
+        return ["trade_cost_levels_missing"]
     if check.get("passed") is not False or not _is_buy(result):
         return []
 
-    language = normalize_report_language(report_language or getattr(result, "report_language", "zh"))
-    words = _wording(language, check)
+    _soften_buy_to_watch(result, dashboard, language, _wording(language, check))
+    logger.info("[trade_cost_guardrail] buy downgraded for %s: net_rr=%s", code, check.get("net_rr"))
+    return ["trade_cost_buy_softened"]
+
+
+def _soften_buy_to_watch(result: Any, dashboard: Dict[str, Any], language: str, words: Dict[str, str]) -> None:
+    """把買入結論降為觀望，原因記成護欄原因（兩種成本護欄共用同一套落庫欄位）。"""
     raw_score = getattr(result, "sentiment_score", None)
     raw_decision_type = str(getattr(result, "decision_type", "") or "").lower() or None
     result.decision_type = "hold"
@@ -209,8 +270,6 @@ def apply_trade_cost_guardrail(
     warning = str(getattr(result, "risk_warning", "") or "")
     if words["reason"] not in warning:
         result.risk_warning = f"{warning}{sep}{words['reason']}" if warning else words["reason"]
-    logger.info("[trade_cost_guardrail] buy downgraded for %s: net_rr=%s", code, check.get("net_rr"))
-    return ["trade_cost_buy_softened"]
 
 
 def format_cost_check(check: Any, language: Any = "zh") -> Optional[str]:

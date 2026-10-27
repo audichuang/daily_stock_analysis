@@ -139,7 +139,12 @@ def test_cost_guardrail_uses_model_prices_and_keeps_buy_band_hold_behavior(stop)
     assert check["status"] == ("ok" if stop is not None else "levels_missing")
     if stop is not None:
         assert check["gross_rr"] == 2.5
-    assert result.sentiment_score == 78
+        assert result.sentiment_score == 78
+    else:
+        # 買入區的持有定稿會被對齊成買入；缺模型停損就無法檢核，降為觀望、不拿文字或支撐價補
+        assert check["missing_levels"] == ["stop_loss"]
+        assert (result.decision_type, result.action) == ("hold", "watch")
+        assert result.sentiment_score <= 59
 
 
 @pytest.mark.parametrize("value", [110, None])
@@ -186,13 +191,12 @@ def test_integrity_and_agent_backfills_follow_structured_stop(value):
     result.dashboard["battle_plan"]["sniper_points"] = {}
     pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
     pipeline._backfill_agent_dashboard_fields(result, SimpleNamespace(support_levels=[999]), "zh-TW")
+    # 有數字時文字沿用模型的數字；沒給時維持 null——程式不拿趨勢支撐 999 頂替模型停損
+    assert extract_sniper_points(result) == prices
     if value is not None:
-        # 有數字時文字沿用模型的數字，不換成趨勢支撐 999
-        assert extract_sniper_points(result) == prices
         assert result.get_sniper_points()["stop_loss"] == 110
     else:
-        # 模型文字與數字都沒給停損：沿用既有趨勢支撐補位（只補停損一格）
-        assert extract_sniper_points(result) == {**prices, "stop_loss": 999}
+        assert result.get_sniper_points()["stop_loss"] == "待補充"
     result = result_with(prices)
     result.dashboard["battle_plan"]["sniper_points"] = {}
     orchestrator = AgentOrchestrator(tool_registry=MagicMock(), llm_adapter=MagicMock())

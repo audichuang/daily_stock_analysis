@@ -27,6 +27,8 @@ ensure_litellm_stub()
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from src.utils.sniper_points import extract_sniper_points  # noqa: E402
+
 
 def _builtin_strategy_names() -> set[str]:
     strategies_dir = Path(__file__).resolve().parent.parent / "strategies"
@@ -999,7 +1001,9 @@ class TestAgentResultConversion(unittest.TestCase):
         self.assertEqual(result.dashboard["sentiment_score"], 68)
         self.assertEqual(result.dashboard["core_conclusion"]["one_sentence"], result.analysis_summary)
         self.assertEqual(result.dashboard["intelligence"]["risk_alerts"], ["跌破 MA20 需止损"])
-        self.assertEqual(result.dashboard["battle_plan"]["sniper_points"]["stop_loss"], 112.3)
+        # 程式不拿趨勢支撐 112.3 頂替模型停損：文字只放占位，數值讀不到停損
+        self.assertEqual(result.dashboard["battle_plan"]["sniper_points"]["stop_loss"], "待补充")
+        self.assertIsNone(extract_sniper_points(result)["stop_loss"])
 
     def test_convert_dict_operation_advice_missing_decision_type_preserves_buy_signal(self):
         """When operation_advice is dict without decision_type, preserve dict-derived buy/sell hint."""
@@ -1377,7 +1381,9 @@ class TestAgentResultConversion(unittest.TestCase):
         self.assertEqual(result.dashboard["operation_advice"], "买入")
         self.assertEqual(result.dashboard["core_conclusion"]["one_sentence"], "AI 已给出的核心结论")
         self.assertEqual(result.dashboard["intelligence"]["risk_alerts"], ["AI 风险"])
-        self.assertEqual(result.dashboard["battle_plan"]["sniper_points"]["stop_loss"], 108.5)
+        # 程式不拿趨勢支撐 108.5 頂替模型停損
+        self.assertEqual(result.dashboard["battle_plan"]["sniper_points"]["stop_loss"], "待补充")
+        self.assertIsNone(extract_sniper_points(result)["stop_loss"])
         self.assertIn("trend:fallback", result.data_sources)
 
     def _convert_with_battle_plan(self, battle_plan):
@@ -1436,15 +1442,16 @@ class TestAgentResultConversion(unittest.TestCase):
         self.assertIsNone(battle["sniper_prices"]["stop_loss"])
         self.assertTrue(battle["sniper_points"]["stop_loss"].startswith("暫無"))
 
-    def test_convert_structured_null_stop_without_text_uses_trend_fallback_in_both(self):
-        """反向：模型文字與數字都沒給停損，趨勢支撐同時補進文字與結構化欄位。"""
+    def test_convert_structured_null_stop_without_text_keeps_model_null(self):
+        """模型文字與數字都沒給停損：結構化停損維持 null、文字只放占位，不拿趨勢支撐 108.5 頂替。"""
         result = self._convert_with_battle_plan({
             "sniper_points": {"stop_loss": ""},
             "sniper_prices": {"stop_loss": None},
         })
         battle = result.dashboard["battle_plan"]
-        self.assertEqual(battle["sniper_prices"]["stop_loss"], 108.5)
-        self.assertEqual(battle["sniper_points"]["stop_loss"], 108.5)
+        self.assertIsNone(battle["sniper_prices"]["stop_loss"])
+        self.assertEqual(battle["sniper_points"]["stop_loss"], "待补充")
+        self.assertIsNone(extract_sniper_points(result)["stop_loss"])
 
     def test_convert_risk_alerts_string_placeholder_uses_local_risk_factors(self):
         """String-like placeholder risk alerts should be replaced with local trend risk factors."""
@@ -2094,6 +2101,96 @@ class TestAnalyzeWithAgentStockName(unittest.TestCase):
             pipeline.db.save_news_intel.assert_called_once()
             saved_kwargs = pipeline.db.save_news_intel.call_args.kwargs
             self.assertEqual(saved_kwargs["name"], "科创芯片ETF")
+
+    def test_analyze_with_agent_asks_model_for_missing_stop_before_finalize(self):
+        """Agent 買入缺停損：定稿與落庫前請模型補一次，落庫的是模型補的 29，不是支撐 30。"""
+        with patch('src.core.pipeline.get_config') as mock_config, \
+             patch('src.core.pipeline.get_db'), \
+             patch('src.core.pipeline.DataFetcherManager'), \
+             patch('src.core.pipeline.GeminiAnalyzer'), \
+             patch('src.core.pipeline.NotificationService'), \
+             patch('src.core.pipeline.SearchService'), \
+             patch('src.agent.factory.build_agent_executor') as mock_build_executor:
+
+            mock_cfg = MagicMock()
+            mock_cfg.max_workers = 2
+            mock_cfg.agent_mode = True
+            mock_cfg.agent_max_steps = 10
+            mock_cfg.agent_skills = []
+            mock_cfg.bocha_api_keys = []
+            mock_cfg.tavily_api_keys = []
+            mock_cfg.brave_api_keys = []
+            mock_cfg.serpapi_keys = []
+            mock_cfg.searxng_base_urls = []
+            mock_cfg.searxng_public_instances_enabled = False
+            mock_cfg.news_max_age_days = 7
+            mock_cfg.enable_realtime_quote = True
+            mock_cfg.enable_chip_distribution = True
+            mock_cfg.realtime_source_priority = []
+            mock_cfg.save_context_snapshot = False
+            mock_cfg.report_language = "zh"
+            mock_cfg.agent_orchestrator_timeout_s = 600
+            mock_cfg.report_integrity_enabled = True
+            mock_cfg.report_integrity_retry = 1
+            mock_config.return_value = mock_cfg
+
+            from src.core.pipeline import StockAnalysisPipeline
+            from src.agent.executor import AgentResult
+            from src.enums import ReportType
+            from src.stock_analyzer import TrendAnalysisResult, TrendStatus, BuySignal
+            pipeline = StockAnalysisPipeline(config=mock_cfg)
+            pipeline.analyzer.build_sniper_repair_prompt.return_value = "REPAIR"
+            pipeline.analyzer.generate_text.return_value = '{"sniper_prices": {"stop_loss": 29}}'
+
+            mock_executor = MagicMock()
+            mock_executor.run.return_value = AgentResult(
+                success=True,
+                content="{}",
+                dashboard={
+                    "sentiment_score": 72,
+                    "trend_prediction": "看多",
+                    "operation_advice": "买入",
+                    "decision_type": "buy",
+                    "action": "buy",
+                    "analysis_summary": "原始建议",
+                    "dashboard": {
+                        "core_conclusion": {"one_sentence": "初始结论"},
+                        "intelligence": {"risk_alerts": []},
+                        "battle_plan": {
+                            "sniper_points": {"stop_loss": ""},
+                            "sniper_prices": {"ideal_buy": 31, "secondary_buy": None,
+                                              "stop_loss": None, "take_profit": 36},
+                        },
+                    },
+                },
+                provider="gemini",
+            )
+            mock_build_executor.return_value = mock_executor
+            saved_stops = []
+            pipeline.db.save_analysis_history.side_effect = (
+                lambda **kwargs: saved_stops.append(extract_sniper_points(kwargs["result"])["stop_loss"]) or 1
+            )
+            pipeline._extract_decision_signal_after_history_save = MagicMock()
+
+            result = pipeline._analyze_with_agent(
+                code="002812",
+                report_type=ReportType.SIMPLE,
+                query_id="q-agent-stop-repair",
+                stock_name="恩捷股份",
+                realtime_quote={"price": 31.0, "change_pct": 1.0},
+                chip_data=None,
+                fundamental_context={},
+                trend_result=TrendAnalysisResult(
+                    code="002812", trend_status=TrendStatus.BULL, buy_signal=BuySignal.BUY,
+                    signal_score=72, support_levels=[30.0], resistance_levels=[34.0],
+                ),
+            )
+
+            self.assertIsNotNone(result)
+            pipeline.analyzer.generate_text.assert_called_once()
+            evidence = pipeline.analyzer.build_sniper_repair_prompt.call_args.args[2]
+            self.assertIn("30", evidence)
+            self.assertEqual(saved_stops, [29])
 
     def test_analyze_with_agent_keeps_dashboard_top_level_fields_after_stability(self):
         """Decision stability downgrade in agent flow should sync dashboard and top-level decision fields."""
