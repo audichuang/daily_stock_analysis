@@ -61,18 +61,33 @@ def test_print_rates_on_real_sql_does_not_sum_slots(pg_conn):
 
 
 @scratch_only
-def test_downgrade_refuses_cross_slot_duplicates_then_restores_old_pk_and_upgrade_backfills_legacy(pg_conn):
+def test_downgrade_refuses_non_legacy_rows_then_restores_old_pk_and_upgrade_backfills_legacy(pg_conn):
+    pk_new = ["snapshot_date", "snapshot_slot", "meeting_date", "outcome"]
+    count = "SELECT count(*) FROM market.rate_expectations"
     pg_conn.execute(text("DELETE FROM market.rate_expectations"))
     with Operations.context(MigrationContext.configure(pg_conn)):
+        # 多 slot：拒絕降版、資料原封不動
         macro.store_rates(pg_conn, _rate("premarket", 0.1, 0.9, 0) + _rate("postclose", 0.3, 0.7, 10))
-        with pytest.raises(RuntimeError, match="跨 slot 重複"):
+        with pytest.raises(RuntimeError, match="snapshot_slot／captured_at"):
             head.downgrade()
-        assert _pk(pg_conn, "rate_expectations") == ["snapshot_date", "snapshot_slot", "meeting_date", "outcome"]
+        assert _pk(pg_conn, "rate_expectations") == pk_new
+        assert pg_conn.execute(text(count)).scalar_one() == 4
+
+        # 只剩單一非 legacy slot：照樣拒絕（Kalshi 漏抓補不回來）
         pg_conn.execute(text("DELETE FROM market.rate_expectations WHERE snapshot_slot = 'postclose'"))
+        with pytest.raises(RuntimeError, match="snapshot_slot／captured_at"):
+            head.downgrade()
+        assert _pk(pg_conn, "rate_expectations") == pk_new
+        assert pg_conn.execute(text(count)).scalar_one() == 2
+
+        # 成功路徑：捨棄多餘 slot 後改成 legacy、清掉 captured_at 才能降版
+        pg_conn.execute(text(
+            "UPDATE market.rate_expectations SET snapshot_slot = 'legacy', captured_at = NULL"))
         head.downgrade()
         assert _pk(pg_conn, "rate_expectations") == ["snapshot_date", "meeting_date", "outcome"]
+        assert pg_conn.execute(text(count)).scalar_one() == 2
         head.upgrade()
-        assert _pk(pg_conn, "rate_expectations") == ["snapshot_date", "snapshot_slot", "meeting_date", "outcome"]
+        assert _pk(pg_conn, "rate_expectations") == pk_new
         assert pg_conn.execute(text(
             "SELECT DISTINCT snapshot_slot FROM market.rate_expectations")).scalars().all() == ["legacy"]
 

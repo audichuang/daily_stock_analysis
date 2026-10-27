@@ -113,6 +113,7 @@ def downgrade() -> None:
         raise RuntimeError(
             f"拒絕降版：rate_expectations 有 {rows:,} 列帶 snapshot_slot／captured_at（Kalshi 漏抓補不回來）。"
             "market schema 無備份；請先匯出並確認備份，再 UPDATE … SET snapshot_slot = 'legacy', captured_at = NULL 後重跑 downgrade")
+    # 上面的護欄通過後所有列都是 legacy，這裡實際不會觸發；留作換 PK 前的雙重保險。
     # rate_expectations 換回舊 PK 會把不同 slot 的同一合約擠成重複鍵：有重複就拒絕
     dupes = bind.execute(sa.text(
         "SELECT count(*) FROM (SELECT 1 FROM market.rate_expectations "
