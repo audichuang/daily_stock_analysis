@@ -344,3 +344,73 @@ def test_institutional_force_replace_repairs_partial_day_with_legacy_foreign_fie
 
     assert crawl.crawl_day(pg_conn, "institutional", d, replace=True) == 1
     assert _stored(pg_conn, d) == {"2330": (100, 20, 120)}
+
+
+# ---------- 法人初版／月營收首次值（append-only 快照，見 models.InstitutionalInitial） ----------
+
+def _initial(conn, d):
+    return {r[0]: (r[1], r[2]) for r in conn.execute(text(
+        "SELECT stock_id, trust_net, captured_at IS NOT NULL FROM market.institutional_initial "
+        "WHERE date = :d"), {"d": d})}
+
+
+def test_institutional_initial_is_written_only_by_the_daily_path_and_never_overwritten(pg_conn, monkeypatch):
+    d = date(2099, 1, 6)
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", _t86([("2330", -100, 3222)]))
+    # daily 補缺路徑（record_initial=True、非 replace）：同一個交易寫進初版表
+    assert crawl.crawl_day(pg_conn, "institutional", d, record_initial=True) == 1
+    assert _initial(pg_conn, d) == {"2330": (3222, True)}
+    # 隔天 refresh（replace）換成定版：主表更新、初版不動也不新增列
+    monkeypatch.setattr(crawl.sources, "crawl_institutional",
+                        _t86([("2330", -100, 3235), ("00636K", 0, 0)]))
+    assert crawl.refresh_range(_TxEngine(pg_conn), "institutional", [d], delay=0) == 1
+    assert _stored(pg_conn, d)["2330"] == (-100, 3235, 3135)
+    assert _initial(pg_conn, d) == {"2330": (3222, True)}
+    # 即使 daily 路徑之後又抓到不同的值，DO NOTHING 也不能蓋掉初版
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", _t86([("2330", -100, 9999)]))
+    crawl.crawl_day(pg_conn, "institutional", d, record_initial=True)
+    assert _initial(pg_conn, d) == {"2330": (3222, True)}
+
+
+def test_institutional_initial_is_skipped_by_backfill_and_by_replace(pg_conn, monkeypatch):
+    d1, d2 = date(2099, 1, 7), date(2099, 1, 8)
+    monkeypatch.setattr(crawl.sources, "crawl_institutional", _t86([("2330", -100, 1)]))
+    crawl.crawl_day(pg_conn, "institutional", d1)                        # cli backfill 路徑：預設不傳
+    crawl.crawl_day(pg_conn, "institutional", d2, replace=True, record_initial=True)   # replace 不寫
+    assert _initial(pg_conn, d1) == {} and _initial(pg_conn, d2) == {}
+
+
+def test_crawl_range_passes_record_initial_to_each_day(monkeypatch):
+    seen = []
+    monkeypatch.setattr(crawl, "crawl_day", lambda conn, source, d, replace=False, **kw:
+                        seen.append((source, d, kw.get("record_initial"))) or 1)
+    monkeypatch.setattr(crawl, "_existing_dates", lambda *a, **k: set())
+    d = date(2099, 1, 5)
+    monkeypatch.setattr(crawl, "_trading_dates", lambda conn, s, e: {d})
+    crawl.crawl_range(_TxEngine(None), "institutional", [d], record_initial=True)
+    crawl.crawl_range(_TxEngine(None), "institutional", [d])
+    assert seen == [("institutional", d, True), ("institutional", d, False)]
+
+
+def test_monthly_revenue_first_seen_keeps_first_value_and_is_opt_in(pg_conn, monkeypatch):
+    month = date(1900, 4, 1)
+    value = {"v": 111}
+    monkeypatch.setattr(crawl.crawler, "crawl_monthly_report",
+                        lambda m, market: _revenue_frame("1101", value["v"], announce="1900-05-10")
+                        if market == "sii" else None)
+
+    def first_seen():
+        return pg_conn.execute(text(
+            "SELECT revenue, captured_at IS NOT NULL FROM market.monthly_revenue_first_seen "
+            "WHERE stock_id='1101' AND revenue_month='1900-04-01'")).all()
+
+    crawl.crawl_monthly_revenue(pg_conn, month)                           # 手動／backfill：不寫
+    assert first_seen() == []
+    crawl.crawl_monthly_revenue(pg_conn, month, record_first_seen=True)   # daily：寫首次值
+    assert first_seen() == [(111, True)]
+    value["v"] = 222                                                      # 公司更正
+    crawl.crawl_monthly_revenue(pg_conn, month, record_first_seen=True)
+    assert first_seen() == [(111, True)], "首次值不能被更正後的值蓋掉"
+    assert pg_conn.execute(text(
+        "SELECT revenue FROM market.monthly_revenue WHERE stock_id='1101' AND revenue_month='1900-04-01'"
+    )).scalar() == 222

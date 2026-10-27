@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -17,7 +17,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-from macro_brief import rate_path, series_stats  # noqa: E402
+from macro_brief import latest_rate_slot, prior_rate_slot, print_rates, rate_path, series_stats  # noqa: E402
 
 
 def _points(values):
@@ -204,3 +204,78 @@ def test_cbc_row_shows_time_note_and_no_alfred_promise():
     assert "ALFRED" not in format_published(cbc) and "不適用" in format_published(cbc)
     # 有 series_id 但 ALFRED 還沒收到：仍然是「下次 daily 補」
     assert "下次 daily 補" in format_published(_ev("x", NOW, series_id="FRED:PAYEMS", time_note=None))
+
+
+# ---------- rate_expectations 多 slot：只取一個 slot，不重複加總 ----------
+
+def _at(day, hour):
+    return datetime(day.year, day.month, day.day, hour, tzinfo=timezone.utc)
+
+
+def test_latest_rate_slot_takes_newest_captured_slot_of_the_newest_day():
+    d0, d1 = date(2099, 1, 5), date(2099, 1, 12)
+    slots = [(d0, "postclose", _at(d0, 10)), (d1, "premarket", _at(d1, 0)), (d1, "postclose", _at(d1, 10)),
+             (d1, "legacy", None)]
+    assert latest_rate_slot(slots) == (d1, "postclose")
+    assert latest_rate_slot([(d1, "legacy", None), (d0, "premarket", _at(d0, 0))]) == (d1, "legacy")
+    assert latest_rate_slot([]) is None
+
+
+def test_prior_rate_slot_prefers_same_slot_then_premarket_and_is_at_least_a_week_old():
+    cur = date(2099, 1, 12)
+    old = date(2099, 1, 5)
+    slots = [(old, "premarket", _at(old, 0)), (old, "postclose", _at(old, 10)),
+             (date(2099, 1, 8), "premarket", _at(date(2099, 1, 8), 0))]      # 只有 4 天前：不夠一週
+    assert prior_rate_slot(slots, cur, "postclose") == (old, "postclose")
+    assert prior_rate_slot(slots, cur, "premarket") == (old, "premarket")
+    assert prior_rate_slot(slots, cur, "intraday") == (old, "premarket")      # 沒有同 slot → 盤前
+    assert prior_rate_slot([(old, "legacy", None)], cur, "postclose") == (old, "legacy")
+    assert prior_rate_slot([(date(2099, 1, 8), "premarket", None)], cur, "premarket") is None
+
+
+class _RateRows(list):
+    def all(self):
+        return list(self)
+
+
+class _RateConn:
+    """依 SQL 形狀回記憶體資料：查列的 SQL 一定要帶 snapshot_slot 條件，否則視為整天加總而失敗。"""
+
+    def __init__(self, rows):
+        self.rows = rows   # (snapshot_date, slot, captured_at, meeting_date, outcome, prob_mid)
+
+    def execute(self, stmt, params=None):
+        sql, params = str(stmt), params or {}
+        if "GROUP BY" in sql:
+            grouped = {}
+            for sd, slot, cap, *_ in self.rows:
+                key = (sd, slot)
+                grouped[key] = max(filter(None, [grouped.get(key), cap]), default=None)
+            return _RateRows((sd, slot, cap) for (sd, slot), cap in grouped.items())
+        assert "snapshot_slot = :k" in sql, f"讀利率列必須限定 slot：{sql}"
+        floor = params["s"] if "meeting_date >= :s" in sql else None
+        return _RateRows((m, o, p) for sd, slot, _c, m, o, p in self.rows
+                     if sd == params["s"] and slot == params["k"] and (floor is None or m >= floor))
+
+
+def test_print_rates_reads_one_slot_so_probabilities_are_not_double_counted():
+    cur, old, meeting = date(2099, 1, 12), date(2099, 1, 5), date(2099, 2, 1)
+    rows = []
+    for sd, slot, hike, hold, hour in [
+            (cur, "premarket", 0.10, 0.88, 0), (cur, "postclose", 0.30, 0.68, 10),
+            (old, "premarket", 0.05, 0.93, 0), (old, "postclose", 0.07, 0.91, 10)]:
+        rows += [(sd, slot, _at(sd, hour), meeting, "hike_25", hike), (sd, slot, _at(sd, hour), meeting, "hold", hold)]
+    lines = []
+    print_rates(_RateConn(rows), out=lines.append)
+    text_out = "\n".join(lines)
+    assert "快照日 2099-01-12 postclose（對照 2099-01-05 postclose）" in text_out
+    row = next(line for line in lines if line.startswith("2099-02-01"))
+    # 只有 postclose 的 30%（兩個 slot 加起來會是 40%）；一週前同 slot 是 7%（不是盤前 5%、也不是 12%）
+    assert "     30%" in row and "     68%" in row and "      7%" in row
+    assert "40%" not in row and "156%" not in text_out
+
+
+def test_print_rates_without_snapshots_says_so():
+    lines = []
+    print_rates(_RateConn([]), out=lines.append)
+    assert any("沒有快照" in line for line in lines)

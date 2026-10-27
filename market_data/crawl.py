@@ -183,11 +183,36 @@ def _store(conn, raw, transform, model, pk, coalesce=()):
     return upsert(conn, model.__table__, recs, pk, coalesce=coalesce)
 
 
-def crawl_day(conn, source, d, replace=False, min_ratio=0.5):
+def _utcnow():
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc)
+
+
+def _insert_first_seen(conn, table, recs, pk):
+    """append-only 首次值快照：``recs`` 加上 ``captured_at`` 後 ``ON CONFLICT DO NOTHING``，
+    已有的鍵絕不覆蓋（所以只有第一次看到的值留得住）。``table`` 欄位須是來源表欄位加 ``captured_at``。
+    回嘗試寫入的列數（已存在而被略過的也算）。"""
+    from sqlalchemy.dialects.postgresql import insert
+
+    if not recs:
+        return 0
+    now = _utcnow()
+    cols = [c.name for c in table.columns if c.name != "captured_at"]
+    rows = [{**{c: r.get(c) for c in cols}, "captured_at": now} for r in recs]
+    conn.execute(insert(table).values(rows).on_conflict_do_nothing(index_elements=pk))
+    return len(rows)
+
+
+def crawl_day(conn, source, d, replace=False, min_ratio=0.5, record_initial=False):
     """抓一天並 upsert。``replace``:整日換血(同交易先刪該日既有列再寫)——修
     partial/髒日用;upsert 蓋不掉鍵已錯位的殘留列,必須刪。刪除的前置條件是
     「轉換+有效列過濾後真的有可寫資料,且不少於既有列數的一半」——來源回
-    非空垃圾(全 footer/壞 stock_id)或嚴重縮水時絕不能先刪好資料。"""
+    非空垃圾(全 footer/壞 stock_id)或嚴重縮水時絕不能先刪好資料。
+
+    ``record_initial``:只有 ``daily_update`` 的補缺路徑傳 True——來源在 ``REVISED_SOURCES``
+    （法人）、而且不是 replace 時，upsert 之後同一個交易再把這批列寫進 ``institutional_initial``
+    （DO NOTHING，只留第一次看到的初版）。``cli backfill`` 與 ``refresh_range``（replace）不寫，
+    歷史回補與定版換血不會冒充初版。"""
     fetch, transform, model, pk = DAILY[source]
     market = SOURCE_MARKET.get(source)
     if source == "price":
@@ -232,8 +257,11 @@ def crawl_day(conn, source, d, replace=False, min_ratio=0.5):
         conn.execute(text(
             f"DELETE FROM market.{model.__tablename__} WHERE date = :d"
             + market_filter(model.__tablename__, market)), {"d": d, "market": market})
-    return upsert(conn, model.__table__, recs, pk, coalesce=coalesce,
-                  market_guard=model.__tablename__ in MARKET_SPLIT_TABLES)
+    n = upsert(conn, model.__table__, recs, pk, coalesce=coalesce,
+               market_guard=model.__tablename__ in MARKET_SPLIT_TABLES)
+    if record_initial and not replace and source in REVISED_SOURCES:
+        _insert_first_seen(conn, models.InstitutionalInitial.__table__, recs, pk)
+    return n
 
 
 def _stored_rows(conn, table, d, market=None):
@@ -267,15 +295,23 @@ def _count_revised(old, recs, pk):
     return changed
 
 
-def crawl_monthly_revenue(conn, month_date, markets=crawler.MONTHLY_REPORT_MARKETS):
+def crawl_monthly_revenue(conn, month_date, markets=crawler.MONTHLY_REPORT_MARKETS,
+                          record_first_seen=False):
     """上市與上櫃各抓一份彙總報表,**逐市場各自寫入**:一邊抓不到(回 None,crawler 已印
     WARN)只少那一邊,不拖累另一邊。與 price 的「兩市場齊全才寫」相反,因為月營收沒有
-    resume 標記——單邊寫入不會讓缺的那邊被當成已完成,下次 daily 會照常重抓。"""
+    resume 標記——單邊寫入不會讓缺的那邊被當成已完成,下次 daily 會照常重抓。
+
+    ``record_first_seen``:只有 ``daily_update`` 傳 True——upsert 之後同一個交易再把這批列寫進
+    ``monthly_revenue_first_seen``（DO NOTHING，只留第一次看到的值）。手動 ``cli`` 與
+    ``backfill_pit_revenue`` 不傳，補抓的歷史月份不會冒充首次值。"""
     n = 0
+    pk = ["stock_id", "revenue_month"]
     for market in markets:
-        n += _store(conn, crawler.crawl_monthly_report(month_date, market),
-                    etl.transform_monthly_revenue, models.MonthlyRevenue,
-                    ["stock_id", "revenue_month"])
+        recs = _prepare(crawler.crawl_monthly_report(month_date, market),
+                        etl.transform_monthly_revenue, models.MonthlyRevenue.__table__, pk)
+        n += upsert(conn, models.MonthlyRevenue.__table__, recs, pk)
+        if record_first_seen:
+            _insert_first_seen(conn, models.MonthlyRevenueFirstSeen.__table__, recs, pk)
     return n
 
 
@@ -728,16 +764,20 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
     # valuation 不進 REVISED_SOURCES:它沒有「初版→定版」的修正語意。
     # 上櫃來源只報不擋：TPEx 掛掉（含連續空日的 RuntimeError）不能讓後面的快照、月營收、
     # 復權與每日報告陪葬；上市來源維持 fail-fast。cli backfill 不經這裡，照舊會中止。
-    def _run(fn, source, *args):
+    def _run(fn, source, *args, **kwargs):
         if source not in SOURCE_MARKET:
-            return fn(eng, source, *args)
+            return fn(eng, source, *args, **kwargs)
         try:
-            return fn(eng, source, *args)
+            return fn(eng, source, *args, **kwargs)
         except Exception as exc:
             print(f"**WARN {source}: {exc}", flush=True)
 
     for source in DAILY:
-        _run(crawl_range, source, dates)
+        # 法人初版：只有這條 daily 補缺路徑記錄（隔天 refresh 會換成定版）；backfill／refresh 不記
+        if source in REVISED_SOURCES:
+            _run(crawl_range, source, dates, record_initial=True)
+        else:
+            _run(crawl_range, source, dates)
     # asof 當天剛抓的就是初版,重抓它沒有意義;隔天這一輪才會把它換成定版
     for source in REVISED_SOURCES:
         _run(refresh_range, source, [d for d in dates if d < asof])
@@ -746,7 +786,7 @@ def daily_update(engine=None, asof=None, days=RECENT_SESSIONS):
     prev_month = (asof.replace(day=1) - _dt.timedelta(days=1)).replace(day=1)
     # 月營收單獨一個交易並先 commit+印:除權息失敗 raise 時不連帶回滾已抓好的月營收
     with eng.begin() as conn:
-        rev = crawl_monthly_revenue(conn, prev_month)
+        rev = crawl_monthly_revenue(conn, prev_month, record_first_seen=True)
     # commit 之後才印——在交易內印,後面一 raise 就會回滾,log 卻已宣稱寫入
     print(f"monthly_revenue {prev_month:%Y-%m} {rev:,} rows")
     ex_start = asof - _dt.timedelta(days=30)
@@ -919,7 +959,7 @@ def _trading_dates(conn, start, end):
     return {r[0] for r in rows}
 
 
-def crawl_range(engine, source, dates, resume=True, replace=False, delay=0.0):
+def crawl_range(engine, source, dates, resume=True, replace=False, delay=0.0, record_initial=False):
     """Crawl a list of dates for a daily source, upserting each; skips dates
     already present when resume=True (any row counts as done — partial days
     need ``resume=False, replace=True`` to be repaired). Returns rows written.
@@ -931,6 +971,8 @@ def crawl_range(engine, source, dates, resume=True, replace=False, delay=0.0):
     兩道省請求/止血機制:非交易日不發請求(見 ``_trading_dates``);連續 N 個**已知交易日**
     回零列就 raise——過濾掉假日之後零列不再有正常解釋,不該安靜跳完剩下幾百天。門檻依
     有沒有日曆而不同(見 ``_MAX_EMPTY_STREAK_NO_CALENDAR``)。
+
+    ``record_initial`` 原樣傳給 ``crawl_day``（只有 ``daily_update`` 傳 True）。
     """
     import time as _time
 
@@ -955,7 +997,7 @@ def crawl_range(engine, source, dates, resume=True, replace=False, delay=0.0):
         if resume and d.isoformat() in have:
             continue
         with engine.begin() as conn:
-            n = crawl_day(conn, source, d, replace=replace)
+            n = crawl_day(conn, source, d, replace=replace, record_initial=record_initial)
         total += n
         print(f"{source} {d} {n:,} rows", flush=True)
         empty_streak = 0 if n else empty_streak + 1

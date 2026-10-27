@@ -221,20 +221,120 @@ def test_store_series_and_rates_are_idempotent_upserts(pg_conn):
     macro.store_series(pg_conn, [{**rows[0], "value": 2.0}])
     assert pg_conn.execute(text(
         "SELECT value::float FROM market.macro_series WHERE series_id = 'ZZ:TEST'")).scalars().all() == [2.0]
-    rate = {"snapshot_date": D(1900, 1, 2), "meeting_date": D(1900, 1, 30), "outcome": "hold", "prob_mid": 0.5,
-            "yes_bid": 0.49, "yes_ask": 0.51, "last_price": None, "volume": None, "open_interest": None,
-            "source_updated_at": None, "source": "test"}
+    rate = {"snapshot_date": D(1900, 1, 2), "snapshot_slot": "premarket", "meeting_date": D(1900, 1, 30),
+            "outcome": "hold", "prob_mid": 0.5, "yes_bid": 0.49, "yes_ask": 0.51, "last_price": None,
+            "volume": None, "open_interest": None, "source_updated_at": None, "source": "test",
+            "captured_at": NOW}
     macro.store_rates(pg_conn, [rate])
     macro.store_rates(pg_conn, [{**rate, "prob_mid": 0.6}])
     assert pg_conn.execute(text(
         "SELECT prob_mid::float FROM market.rate_expectations WHERE snapshot_date = '1900-01-02'")).scalars().all() == [0.6]
 
 
+# ---------- 快照：slot、macro_series_snapshot、rate_expectations 多 slot ----------
+
+TPE = datetime.timezone(datetime.timedelta(hours=8))
+
+
+@pytest.mark.parametrize("hour,minute,slot", [
+    (0, 0, "premarket"), (7, 30, "premarket"), (8, 59, "premarket"),
+    (9, 0, "intraday"), (13, 29, "intraday"),
+    (13, 30, "postclose"), (18, 0, "postclose"), (23, 59, "postclose")])
+def test_snapshot_slot_follows_taipei_clock(hour, minute, slot):
+    assert macro.snapshot_slot(datetime.datetime(2099, 1, 2, hour, minute, tzinfo=TPE)) == slot
+
+
+def test_snapshot_slot_converts_other_timezones_to_taipei():
+    # 2099-01-01 23:30 UTC = 台北 01-02 07:30（盤前）；同一個 UTC 時刻若誤當台北時間會是 postclose
+    assert macro.snapshot_slot(datetime.datetime(2099, 1, 1, 23, 30, tzinfo=datetime.timezone.utc)) == "premarket"
+
+
+def test_snapshot_rows_keep_only_the_last_seven_days_and_record_staleness():
+    snap = D(2099, 1, 10)
+    rows = [{"series_id": "ZZ", "date": D(2099, 1, d), "value": float(d), "source": "t"} for d in range(1, 11)]
+    got = macro.snapshot_rows(rows, snap, "premarket", NOW, NOW)
+    assert [r["date"] for r in got] == [D(2099, 1, d) for d in range(3, 11)]   # date >= snapshot_date - 7
+    assert {r["date"].day: r["staleness_days"] for r in got} == {d: 10 - d for d in range(3, 11)}
+    assert all(r["snapshot_slot"] == "premarket" and r["received_at"] == NOW for r in got)
+
+
+def test_store_series_snapshot_reruns_idempotently_per_slot_and_keeps_other_slots(pg_conn):
+    rows = [{"series_id": "ZZ:SNAP", "date": D(2099, 1, d), "value": float(d), "source": "test"}
+            for d in (1, 3, 8, 9)]
+    snap = D(2099, 1, 10)
+    assert macro.store_series_snapshot(pg_conn, rows, snap, "premarket", NOW, NOW) == 3   # 1/1 超過 7 天不存，1/3（恰好 7 天）要存
+    macro.store_series_snapshot(pg_conn, [{**rows[-1], "value": 99.0}], snap, "premarket", NOW, NOW)
+    macro.store_series_snapshot(pg_conn, rows, snap, "postclose", NOW, NOW)
+    got = pg_conn.execute(text(
+        "SELECT snapshot_slot, date, value::float, staleness_days FROM market.macro_series_snapshot "
+        "WHERE series_id = 'ZZ:SNAP' ORDER BY snapshot_slot, date")).all()
+    assert [(g[0], g[1].day, g[2]) for g in got] == [
+        ("postclose", 3, 3.0), ("postclose", 8, 8.0), ("postclose", 9, 9.0),
+        ("premarket", 3, 3.0), ("premarket", 8, 8.0), ("premarket", 9, 99.0)]
+    assert [g[3] for g in got[:3]] == [7, 2, 1]
+
+
+def test_store_rates_keeps_each_slot_of_the_same_day_and_snapshot_row_is_per_slot(pg_conn):
+    base = {"snapshot_date": D(2099, 1, 2), "meeting_date": D(2099, 1, 28), "outcome": "hold", "prob_mid": 0.9,
+            "yes_bid": None, "yes_ask": None, "last_price": None, "volume": None, "open_interest": None,
+            "source_updated_at": None, "source": "test", "captured_at": NOW}
+    macro.store_rates(pg_conn, [{**base, "snapshot_slot": "premarket"}])
+    macro.store_rates(pg_conn, [{**base, "snapshot_slot": "postclose", "prob_mid": 0.7}])
+    macro.store_rates(pg_conn, [{**base, "snapshot_slot": "postclose", "prob_mid": 0.6}])   # 同 slot 重跑覆蓋
+    got = pg_conn.execute(text(
+        "SELECT snapshot_slot, prob_mid::float FROM market.rate_expectations "
+        "WHERE snapshot_date = '2099-01-02' ORDER BY snapshot_slot")).all()
+    assert got == [("postclose", 0.6), ("premarket", 0.9)]
+
+
+def _kalshi_payload():
+    return {"markets": [{"ticker": "KXFEDDECISION-99JAN-H0", "close_time": "2099-01-28T17:59:00Z",
+                         "yes_bid_dollars": "0.90", "yes_ask_dollars": "0.92"}]}
+
+
+@pytest.mark.parametrize("hour,slot", [(7, "premarket"), (14, "postclose")])
+def test_update_stamps_both_sections_with_the_same_injected_slot(monkeypatch, hour, slot):
+    seen = {}
+    monkeypatch.setattr(macro, "fetch_series", lambda **k: ([{"series_id": "ZZ", "date": D(2099, 1, 2),
+                                                               "value": 1.0}], []))
+    monkeypatch.setattr(macro, "store_series", lambda conn, rows: len(rows))
+    monkeypatch.setattr(macro, "store_series_snapshot",
+                        lambda conn, rows, snap, sl, received, cutoff: seen.update(
+                            snap=(snap, sl, received, cutoff)) or 1)
+    monkeypatch.setattr(macro, "store_rates", lambda conn, rows: seen.update(rates=rows) or len(rows))
+    monkeypatch.setattr(macro, "store_events", lambda conn, rows, today: 0)
+    monkeypatch.setattr(macro, "watchlist", lambda: [])
+    monkeypatch.setattr(macro, "collect_release_events", lambda *a, **k: [])
+    monkeypatch.setattr(macro, "fill_first_releases", lambda *a, **k: 0)
+
+    def fake_get(url, **k):
+        if url == macro.KALSHI_URL:
+            return types.SimpleNamespace(json=_kalshi_payload)
+        raise ConnectionError("offline")
+
+    monkeypatch.setattr(macro, "http_get", fake_get)
+
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    class _Eng:
+        def begin(self): return _Conn()
+
+    macro.update(_Eng(), out=lambda *_: None, now=datetime.datetime(2099, 1, 2, hour, 0, tzinfo=TPE))
+    assert seen["snap"][:2] == (D(2099, 1, 2), slot)
+    assert seen["snap"][2] is not None and seen["snap"][3] is not None and seen["snap"][3] <= seen["snap"][2]
+    assert [(r["snapshot_date"], r["snapshot_slot"]) for r in seen["rates"]] == [(D(2099, 1, 2), slot)]
+    assert seen["rates"][0]["captured_at"] is not None
+
+
 def test_update_sections_fail_independently(monkeypatch, capsys):
     """Kalshi 掛掉不能讓 macro_series 與 event_calendar 跟著不寫。"""
     stored = []
-    monkeypatch.setattr(macro, "fetch_series", lambda **k: ([{"date": D(2099, 1, 2)}], []))
+    monkeypatch.setattr(macro, "fetch_series", lambda **k: ([{"series_id": "ZZ", "date": D(2099, 1, 2),
+                                                               "value": 1.0}], []))
     monkeypatch.setattr(macro, "store_series", lambda conn, rows: stored.append("series") or len(rows))
+    monkeypatch.setattr(macro, "store_series_snapshot", lambda *a: stored.append("snapshot") or 1)
     monkeypatch.setattr(macro, "store_events", lambda conn, rows, today: stored.append("events") or len(rows))
     monkeypatch.setattr(macro, "watchlist", lambda: [])
 
@@ -252,7 +352,7 @@ def test_update_sections_fail_independently(monkeypatch, capsys):
 
     result = macro.update(_Eng())
     out = capsys.readouterr().out
-    assert stored == ["series", "events"]
+    assert stored == ["series", "snapshot", "events"]
     assert result["macro_series"] == 1 and result["rate_expectations"] == 0
     assert "**WARN rate_expectations" in out and "**WARN event_calendar fomc" in out
 

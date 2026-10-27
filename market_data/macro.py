@@ -226,6 +226,50 @@ def store_series(conn, rows):
     return upsert(conn, models.MacroSeries.__table__, rows, ["series_id", "date"])
 
 
+SNAPSHOT_KEEP_DAYS = 7   # macro_series_snapshot 只留 date >= snapshot_date - 7 的列（全存每天約 1.1 萬列）
+SLOT_PREMARKET_BEFORE = datetime.time(9, 0)
+SLOT_POSTCLOSE_FROM = datetime.time(13, 30)
+
+
+def snapshot_slot(now=None):
+    """台北時間 → 抓取時段：<09:00 ``premarket``、≥13:30 ``postclose``、其餘 ``intraday``。
+
+    ``now`` 可注入（aware datetime；naive 視為台北時間），沒給用現在。"""
+    now = now or _now()
+    local = now.astimezone(TAIPEI) if now.tzinfo else now
+    t = local.time()
+    if t < SLOT_PREMARKET_BEFORE:
+        return "premarket"
+    if t >= SLOT_POSTCLOSE_FROM:
+        return "postclose"
+    return "intraday"
+
+
+def snapshot_rows(rows, snapshot_date, slot, received_at, as_of_cutoff):
+    """``macro_series`` 列 → ``macro_series_snapshot`` 列：只留近 ``SNAPSHOT_KEEP_DAYS`` 天。"""
+    floor = snapshot_date - datetime.timedelta(days=SNAPSHOT_KEEP_DAYS)
+    return [{
+        "snapshot_date": snapshot_date,
+        "snapshot_slot": slot,
+        "series_id": r["series_id"],
+        "date": r["date"],
+        "value": r["value"],
+        "source": r.get("source"),
+        "received_at": received_at,
+        "as_of_cutoff": as_of_cutoff,
+        "staleness_days": (snapshot_date - r["date"]).days,
+    } for r in rows if r["date"] >= floor]
+
+
+def store_series_snapshot(conn, rows, snapshot_date, slot, received_at, as_of_cutoff):
+    """寫近 7 天的時點快照；同 slot 重跑 upsert 覆蓋，不同 slot 各自保留。回寫入列數。"""
+    from market_data.writer import upsert
+
+    recs = snapshot_rows(rows, snapshot_date, slot, received_at, as_of_cutoff)
+    return upsert(conn, models.MacroSeriesSnapshot.__table__, recs,
+                  ["snapshot_date", "snapshot_slot", "series_id", "date"])
+
+
 # ---------- rate_expectations ----------
 
 def _num(value):
@@ -252,8 +296,11 @@ def prob_mid(bid, ask):
     return round((bid + ask) / 2, 4)
 
 
-def parse_kalshi(payload, snapshot_date):
-    """Kalshi markets 回應 → ``rate_expectations`` 列。不認得的合約後綴略過。"""
+def parse_kalshi(payload, snapshot_date, slot=None, captured_at=None):
+    """Kalshi markets 回應 → ``rate_expectations`` 列。不認得的合約後綴略過。
+
+    ``slot``（見 ``snapshot_slot``）與 ``captured_at`` 寫進每列；``slot`` 是主鍵欄，
+    入庫時必須有值（沒給只在純解析測試用）。"""
     rows = []
     for m in payload.get("markets") or []:
         outcome = outcome_of(m.get("ticker", ""))
@@ -263,6 +310,7 @@ def parse_kalshi(payload, snapshot_date):
         updated = m.get("updated_time")
         rows.append({
             "snapshot_date": snapshot_date,
+            "snapshot_slot": slot,
             "meeting_date": meeting_date_of(m["close_time"]),
             "outcome": outcome,
             "prob_mid": prob_mid(bid, ask),
@@ -274,6 +322,7 @@ def parse_kalshi(payload, snapshot_date):
             "source_updated_at": (datetime.datetime.fromisoformat(updated.replace("Z", "+00:00"))
                                   if updated else None),
             "source": "kalshi",
+            "captured_at": captured_at,
         })
     return rows
 
@@ -281,7 +330,8 @@ def parse_kalshi(payload, snapshot_date):
 def store_rates(conn, rows):
     from market_data.writer import upsert
 
-    return upsert(conn, models.RateExpectation.__table__, rows, ["snapshot_date", "meeting_date", "outcome"])
+    return upsert(conn, models.RateExpectation.__table__, rows,
+                  ["snapshot_date", "snapshot_slot", "meeting_date", "outcome"])
 
 
 # ---------- event_calendar ----------
@@ -628,30 +678,39 @@ def store_events(conn, rows, today):
 
 # ---------- 入口 ----------
 
-def update(engine, period=YF_PERIOD, out=print):
-    """三段各自抓、各自一個交易寫入；任何一段失敗只印 ``**WARN``、不 raise。回各段寫入列數。"""
-    today = datetime.datetime.now(TAIPEI).date()
+def update(engine, period=YF_PERIOD, out=print, now=None):
+    """三段各自抓、各自一個交易寫入；任何一段失敗只印 ``**WARN``、不 raise。回各段寫入列數。
+
+    ``now`` 可注入（aware datetime）：決定 ``snapshot_date``（台北日期）與 ``snapshot_slot``，
+    macro_series 與 rate_expectations 兩段共用同一個 slot。"""
+    now = now or _now()
+    today = now.astimezone(TAIPEI).date()
+    slot = snapshot_slot(now)
     result = {"macro_series": 0, "rate_expectations": 0, "event_calendar": 0}
 
     try:
+        as_of_cutoff = _now()
         rows, failed = fetch_series(period=period, today=today, out=out)
+        received_at = _now()
         with engine.begin() as conn:
             result["macro_series"] = store_series(conn, rows)
+            # 同一個交易寫時點快照：macro_series 被覆蓋後仍留得下「這個 slot 當時看到什麼」
+            store_series_snapshot(conn, rows, today, slot, received_at, as_of_cutoff)
         latest = max((r["date"] for r in rows), default=None)
-        out(f"macro_series {result['macro_series']:,} rows, latest {latest}"
+        out(f"macro_series {result['macro_series']:,} rows, latest {latest}, slot {slot}"
             + (f"，失敗 {failed}" if failed else ""))
     except Exception as exc:  # noqa: BLE001
         out(f"**WARN macro_series: {type(exc).__name__} {exc}")
 
     kalshi_dates = []
     try:
-        rates = parse_kalshi(http_get(KALSHI_URL).json(), today)
+        rates = parse_kalshi(http_get(KALSHI_URL).json(), today, slot=slot, captured_at=_now())
         if not rates:
             raise ValueError("Kalshi 回應沒有可辨識的 Fed 合約（端點可能改版）")
         kalshi_dates = sorted({r["meeting_date"] for r in rates})
         with engine.begin() as conn:
             result["rate_expectations"] = store_rates(conn, rates)
-        out(f"rate_expectations {result['rate_expectations']:,} rows, snapshot {today}, "
+        out(f"rate_expectations {result['rate_expectations']:,} rows, snapshot {today} {slot}, "
             f"meetings {kalshi_dates[0]}~{kalshi_dates[-1]}")
     except Exception as exc:  # noqa: BLE001
         out(f"**WARN rate_expectations: {type(exc).__name__} {exc}")
