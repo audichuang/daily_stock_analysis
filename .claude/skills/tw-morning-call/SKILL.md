@@ -209,7 +209,7 @@ r=0.577 的兩個市場走出 19pp 反向，這個形狀（韓跌>5% 同日台�
 {"date":"2026-07-30","regime":"broad_selloff","action":"wait",
  "gap_expected":-0.0098,"gap_basis":"tx_settle",
  "p_close_up":0.38,"p_oc_up":0.45,"p_gap_up":0.30,
- "model_version":"claude","skill_version":"<git hash-object 的輸出>","sox_pct":-0.0533:-0.0533,"vix":20.66,"breadth_ma20":0.153,
+ "model_version":"claude","skill_version":"<git hash-object 的輸出>","sox_pct":-0.0533,"vix":20.66,"breadth_ma20":0.153,
  "breakout_count":0,"reason":"隔夜全黑且輪動避風港消失，breadth 15.3% 已在超賣但 VIX 未到宣洩",
  "flip_condition":"費半一日內不再跌逾 2% 且加權指數站回 40,000",
  "exclude_from_scoring":false,"decided_at":"2026-07-30T07:10+08:00"}
