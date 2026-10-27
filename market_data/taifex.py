@@ -132,11 +132,28 @@ def guard_rows(rows, start, end):
     return sorted(kept, key=lambda r: (r["date"], r["identity"])), incomplete
 
 
-def store(conn, records):
-    """upsert 進 ``market.taifex_fut_oi``，回寫入列數（期交所事後更正會覆蓋舊值）。"""
-    from market_data.writer import upsert
+def store(conn, records, now=None):
+    """upsert 進 ``market.taifex_fut_oi``，回寫入列數（期交所事後更正會覆蓋舊值）。
 
-    return upsert(conn, models.TaifexFutOI.__table__, records, _PK)
+    ``first_seen_at`` 設過就不覆蓋、``captured_at`` 每次重抓更新。``writer.upsert`` 的 coalesce 只保護
+    「新值為 NULL」，做不到「設過不覆蓋」，所以這裡自己寫 ``ON CONFLICT DO UPDATE``：
+    ``first_seen_at`` 取 ``coalesce(既有值, 新值)``（既有為 NULL 才補）。``now`` 可注入（測試用）。"""
+    from sqlalchemy import func
+    from sqlalchemy.dialects.postgresql import insert
+
+    from market_data.writer import dedupe
+
+    if not records:
+        return 0
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    table = models.TaifexFutOI.__table__
+    rows = [{**r, "first_seen_at": now, "captured_at": now} for r in dedupe(records, _PK)]
+    stmt = insert(table).values(rows)
+    update = {c.name: stmt.excluded[c.name] for c in table.columns
+              if c.name not in _PK and c.name != "first_seen_at"}
+    update["first_seen_at"] = func.coalesce(table.c.first_seen_at, stmt.excluded.first_seen_at)
+    conn.execute(stmt.on_conflict_do_update(index_elements=_PK, set_=update))
+    return len(rows)
 
 
 def target_session(asof=None, now=None, is_session=None):

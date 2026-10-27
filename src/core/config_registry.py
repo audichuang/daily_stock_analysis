@@ -178,6 +178,31 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         ],
         "warning_codes": [],
     },
+    "CLAUDE_CODE_CLI_MODEL": {
+        "title": "Claude Code CLI Model",
+        "description": "Optional model override passed to Claude Code CLI (--model) when GENERATION_BACKEND=claude_code_cli. Leave empty to omit --model and use the local Claude Code default.",
+        "category": "ai_model",
+        "data_type": "string",
+        "ui_control": "text",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "",
+        "placeholder": "optional model name override",
+        "validation": {"pattern": r"^$|^[^\s|<>;`$]+$"},
+        "display_order": 2,
+        "help_key": "settings.ai_model.CLAUDE_CODE_CLI_MODEL",
+        "examples": [
+            "CLAUDE_CODE_CLI_MODEL=your-model-name",
+        ],
+        "docs": [
+            {
+                "label": "LLM 配置指南",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/LLM_CONFIG_GUIDE.md",
+            },
+        ],
+        "warning_codes": [],
+    },
     "GENERATION_FALLBACK_BACKEND": {
         "title": "Fallback Generation Method",
         "description": "Backend-level fallback method. Empty disables backend fallback; litellm can be used as fallback for local CLI generation backends.",

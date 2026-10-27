@@ -120,6 +120,12 @@ P3 当时不持久化完整 pack，不新增 API/Web/Bot/Desktop 字段，不改
 
 大盤環境護欄與交易成本護欄（`src/trade_cost_guardrail.py`）真的壓分時，會經 `src/schemas/decision_scale.py::record_guardrail_score_adjustment` 把護欄前的 `raw_score`、`raw_decision_type`、`score_band_metadata` 與 `guardrail_reason` 寫進 `dashboard.decision_score_calibration`：原分只在還沒有這個 key 時寫（前面結構校準記下的 LLM 原分不被覆蓋），`adjusted_score` 與 `final_action` 每次都更新成最後一個護欄的值，`guardrail_reason` 只補不蓋。所有護欄跑完後 `src/core/pipeline.py::_finalize_and_persist_result` 以 `setdefault` 寫入 `dashboard.prompt_variant`（`PROMPT_VARIANT`，預設 `baseline`；`TW_MA_ALIGNMENT_WEIGHTED` 開著時 analyzer 先依實際送出的系統提示詞標 `tw-ma-weighted`，`TW_MA_ALIGNMENT_AB_RATIO` < 1 而沒分到加權組的標 `tw-ma-control`；組別在 `analyze()` 開頭釘住，system 與 user prompt 同組）。兩者都只是 dashboard JSON 的追加欄位，不新增表或 API 字段；`dashboard` 為 None 時不寫。
 
+### 本 fork：固定預測題與版本落庫（台股）
+
+- **固定預測題**：每份台股報告的 user prompt 尾端追加一段固定題「T+1 開盤進場、第 5 個交易日收盤出場，扣成本後淨報酬高於同視窗 0050 的機率（0~1）」，要求 JSON 頂層輸出 `p_5d_beat_0050`（不改三份 JSON 模板）。解析嚴格：只收 [0,1] 內的有限數，缺值、`"73%"`、NaN、超界一律 `None`，**不預設 0.5**，也不進 `_check_content_integrity`（缺值不觸發重試、不會被占位補出機率）。寫進 `AnalysisResult.p_5d_beat_0050`、`dashboard.forecast`（`{question, p, horizon_sessions: 5, benchmark: "0050"}`，缺值不寫）。**這段讓所有台股報告的 prompt 在上線日切換，比較前後要依 `created_at` 切開（進行中的均線 A/B 也受影響）。**
+- **`dsa.analysis_history` 追加可空欄位**（走 `DatabaseManager._ensure_analysis_history_forecast_columns`，啟動時 `ADD COLUMN IF NOT EXISTS`，新舊程式可共存）：`prompt_hash`（system prompt 的 sha256，代表規則／模板版本）、`input_snapshot_hash`（第一次送出的 user prompt 的 sha256，代表模型看到的資料）、`model_version`（`usage["cli_model"]`〔CLI 回報的實際模型〕，否則 `model_used`）、`p_5d_beat_0050`、`llm_attempts`（JSON 陣列，完整性重試每一輪 `{attempt, model, response_text}`；`raw_result.raw_response` 仍只留最後一輪）。其他寫歷史的呼叫端讀不到這些屬性就是 NULL。失敗路徑（`success=False`）不寫歷史，這些欄位也就沒有。
+- **總經背景實驗**（`TW_MACRO_CONTEXT_AB_RATIO`，預設 0）：見下表「總經背景」列；標籤 `dashboard.experiments.macro_ctx`（`on`／`off`，依實際送出的 prompt 有沒有區塊），比例為 0 時不寫任何標籤。後驗計分用 `scripts/shadow_buy_eval.py --forecast`，口徑見 `docs/decision-signals.md`。
+
 ### 本 fork：台股個股 Prompt 的資訊區塊
 
 以下區塊都只限台股（`is_tw_code`，走 `market_symbol_utils`）、任何失敗都直接略過（fail-open）、**不進買進分數或任何護欄**；回測依據見 `docs/tw-signal-research-2026-10.md`。
@@ -129,6 +135,7 @@ P3 当时不持久化完整 pack，不新增 API/Web/Bot/Desktop 字段，不改
 | 大盤狀態（0050 季線與季線上彎、寬度20／60） | 每日大盤環境段之後；只在 prompt，不寫進 `daily_market_context` payload | 本地 `market.price`／`market.price_adjustment`（唯讀，依日期 `lru_cache`，失敗也快取 None）；行情最後一天早於「今天之前最後一個台股交易日」就只印一句停更，交易日曆取不到時整段不出 | 只有 95% CI 排除零的格子（寬度20<20%、寬度60>50%）附數字並註明不得據此否決或放大買進；季線兩格寫「3～5 日回測未證實」；結尾固定「大盤偏保守本身不是否決個股買進或扣分的理由」 |
 | 月營收動能（前 3 月平均 YoY 與本月差） | 財報表中月營收列的下一列 | 本地 `market.monthly_revenue`，錨定 `fundamental_context.growth` 的官方最新月份；本地沒有那個月份或前 3 個月缺月就不出 | 強勢股（前 3 月平均 YoY ≥20%）大幅降速 ≥20pp 才附 CI，寫「持有中可下修信心，不得當作賣出理由；對買進篩選未證實」；其餘「僅供參考，回測未證實」 |
 | 處置／注意股與事件日曆（`TW_LIVE_EVENTS_ENABLED`，預設開） | 交易成本／ATR 段之後、籌碼分布之前 | `src/services/tw_live_events.py` 呼叫 `market_data.risk_flags`／`events` 的官方即時名單，新鮮度判準沿用它們；只在分析日 ≥ `expected_session()` 時抓，每個基準日一次（加鎖）；抓取失敗或有任一份名單／事件來源不可用時只沿用 30 分鐘，之後重抓 | 處置命中寫「是（處置中…）」；本市場名單都可用且新鮮才寫「否（已查）」，否則「未確認（名單不可用：…）」；除權息查過才寫「無（已查：除權息）」，法說會永遠附「未列不代表沒有」 |
+| 總經背景（`TW_MACRO_CONTEXT_AB_RATIO`，預設 0＝關；台股＋中文報告） | 大盤狀態區塊之後；只在 prompt，**不經** `context["daily_market_context"]`，所以大盤環境護欄的文字比對看不到 | `src/services/tw_macro_context.py` 讀本地 `market.macro_series`（`market_data.macro.SERIES` 的日線序列，唯讀，依日期 `lru_cache`，失敗也快取 None）；每列最新值、資料日、5／20 日變化（殖利率用 bp）、資料日早於今天 5 個曆日標過期 | 固定句「只當資訊，不得據此調整分數或動作；未經回測」；各報告語言都有文案 |
 | 賣方共識（`ANALYST_CONSENSUS_ENABLED`，預設關；台股＋美股） | 財報段之後 | `data_provider/analyst_consensus.py`（yfinance，只在基本面階段抓、經 `_run_with_retry` 受 stage 預算限制），寫進 `fundamental_context['consensus']`（不計入 coverage／status，隨 `context_snapshot` 落庫）；n<3 為 thin、價格日期超過 4 個曆日或與即時價差 >3% 為 stale（yfinance 原始資料同一天只抓一次，stale 與上檔空間每次用當下參考價重算） | 順序為 EPS 修正方向、分歧、評級，目標價只當背景；固定警語「目標價系統性偏多…不得據此提高 confidence、改變 action 或放寬進場門檻」。Agent 路徑的 `_compact_fundamental_context` 不帶這段 |
 | 法人年底指數目標（`TW_BROKER_INDEX_TARGETS`） | 台股大盤背景段一行 | 人工維護字串「YYYY-MM-DD 內容」，以 `date.today()` 算新鮮度，超過 30 天、空值或日期解析不了不顯示 | 標「情緒/beta 背景，不是選股訊號」 |
 
