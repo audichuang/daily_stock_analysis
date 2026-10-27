@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """TwInstitutionalFetcher — Taiwan 三大法人 (institutional-investor) daily net buy/sell.
 
-Data-layer only, ``tw``-only, strictly additive. This module is a self-contained
-data-access building block: it fetches, parses, caches and fail-opens. It is NOT
-wired into the analysis report / Web / scoring path — that is a deliberate
-follow-up (per #1777). It does not touch the existing A-share / HK / US / JP / KR
-flows in ``data_provider/base.py``.
+``tw``-only, strictly additive. This module fetches, parses, caches and fail-opens.
+The per-stock fundamental assembly in ``data_provider/base.py`` calls it for the
+same-day figures in the analysis report; it does not touch the A-share / HK / US /
+JP / KR flows.
 
 Sources (政府開放資料, 政府資料開放授權條款第 1 版 / OGDL v1, commercial-safe, no key):
   - 上市 TWSE T86 「三大法人買賣超日報」 (per-stock), legacy RWD JSON endpoint

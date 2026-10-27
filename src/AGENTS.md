@@ -1,6 +1,6 @@
 # src — 分析主流程、大盤複盤、報告與通知
 
-> 本檔只寫本模組增量。`src/agent/` 的契約正本在 `docs/multi-strategy-contract.md`,不在此重述。
+> `src/agent/` 的契約正本在 `docs/multi-strategy-contract.md`。
 
 ## 模組定位
 
@@ -14,6 +14,7 @@
 
 ## 進來改要遵守
 
+- **動作、停損、買點一律讀 LLM 給的結構化欄位**(`decision_type`／`action`／`sniper_prices` 等,以 code 為準),消費端不從建議文字推、不做子字串或否定詞掃描;細節見 `docs/tw-analysis-overview.md`。
 - **複盤日期跟著盤勢走,不是伺服器掛鐘。**開盤後(含盤後)標該市場當地的當天,開盤前與非交易日才標最近一場已收盤。改成一律掛鐘,美股複盤永遠早一天;改成一律日曆,台北週一盤中會把當天價格存成上週五。
 - **市場時鐘只讀一次、往下傳。**`infer_market_phase`、`get_effective_trading_date` 都收 `current_time`;各自讀鐘會讓跨午夜／跨收盤邊界的同一批判定自相矛盾,測試也釘不住。
 - **「同一場次」沒有單一函式把關。**台股表頭加權指數釘本地 DB 該場次的官方收盤(只管那一檔、查無該列就保留即時值);家數、成交額、法人則對齊 TWSE 回報的最新交易日,並以 `trade_date` 帶出;`_get_market_statistics` 拿它與 `overview.date` 比對,**不同日(含缺 `trade_date`)就整批不採用**並記 `status=session_mismatch`,prompt 與報告加「不得推論」一行——所以盤中與 13:30 後官方發布前的複盤沒有家數／法人是正確的,不是壞掉。法人在複盤日為台北今天時標「盤後初版」(官方事後會修正)。
@@ -24,7 +25,6 @@
 - **個股結果的後處理掛在 `_finalize_and_persist_result`**,傳統與 agent 兩條路徑都經過它。必須在歷史寫入前就存在的欄位,要在呼叫它**之前**、兩條路徑都寫。
 - **新增通知渠道除了註冊 sender,還要同步 `detect_configured_channels`**——診斷路徑只讀設定、不會去建 sender,兩邊不一致時診斷說的與實際發的不同。
 - **寫外部來源的字串欄位(標題、URL、查詢)要先截到欄位長度。**上游預設 SQLite、不檢查 `VARCHAR` 長度;應用庫搬到 Postgres 後,一筆超長字串會讓整個寫入 transaction 回滾(踩過:`news_intel.title`,修法見 `storage.py` 的 `DatabaseManager._fit_news_intel_column`)。
-- **改 `services/image_stock_extractor.py` 的 `EXTRACT_PROMPT` 時,交付說明(或 PR 描述)附完整最新 prompt。**
 - **彙總報告的失敗揭露從唯一分派點 `generate_aggregate_report` 往下傳。**表頭檔數是成功數,失敗另起一行;分組信不帶(清單是整輪的,會點名組外代碼)。`REPORT_RENDERER_ENABLED` 打開時模板路徑會提早返回,那一行不會出現。
 
 ## 語言

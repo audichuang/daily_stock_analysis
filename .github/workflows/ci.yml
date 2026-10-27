@@ -3,8 +3,8 @@ name: CI
 on:
   # fork 增量：只用 push 觸發。工作分支的 push run 會掛在 PR head commit 上當 checks，
   # 再加 pull_request 等於同一個改動跑兩次（concurrency group 不同、互不取消），
-  # 白佔 runner。另外不收 pull_request 也是安全邊界：job 跑在 ttnas 自架 runner
-  # （掛 docker.sock），fork PR 不能觸發它。paths-filter 在 push 事件下，工作分支比對
+  # 白佔 runner。另外不收 pull_request：fork PR 不能觸發 ttnas 自架 runner 上的 job，
+  # 這條不要加回去。paths-filter 在 push 事件下，工作分支比對
   # default branch（develop）、develop 比對上一個 commit。main 只收發版 fast-forward，
   # 同一個 SHA 已在 develop 驗過，不重跑。
   push:

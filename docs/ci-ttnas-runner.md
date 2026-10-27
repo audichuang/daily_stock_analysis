@@ -21,7 +21,7 @@
 - **4 片 shard**：3、6、4 片都跑過。3 片時 runner 不夠，加上 docker-build 要排隊；6 片把 NAS 跑滿，每片反而變慢、出假紅；4 片整輪約 7 分半，和 GitHub 託管的約 6 分鐘相當。片數是**每個 run** 的：同時推好幾個工作分支（或分支 push 撞上 develop 合併後的 run）等於 8～16 片一起跑，一樣滿載出假紅（2026-10-25 四次，都是 Codex process-group 類測試逾時，單獨重跑即綠）。多張 PR 依序推、一次一條 CI。
 - **docker-build 用 `driver: docker`**：直接用 ttnas daemon 的層快取。原本的 `type=gha` 快取每次要經家用網路下載整份映像層，實測 456 秒，改完 7 秒。代價是每次映像內容變了，會在主機留下約 1.7 GB 的 dangling image，清理方式見 manifest。
 - **不用 `setup-python`／`setup-node` 的 `cache:`**：那是從 GitHub 下載。runner 的 uv／pip／npm／Playwright 快取放在 6 台共用的 volume；Python 本體與裝好的套件放在每台自己的 volume（第一次跑約 1.5 分鐘，之後幾秒）。
-- **安全邊界**：runner 掛 `docker.sock`，等於 NAS root。repo 公開期間靠兩件事擋外人：`ci.yml` 只收 push、不收 `pull_request`；fork PR 的 workflow 核准設成 `all_external_contributors`。要暫停就在 Komodo 對 `gh-runners` 執行 StopStack。
+- **公開期間的限制**：`ci.yml` 只收 push、不收 `pull_request`；fork PR 的 workflow 核准設成 `all_external_contributors`；兩條都不要放寬。要暫停就在 Komodo 對 `gh-runners` 執行 StopStack。
 
 ## 排障常用指令
 

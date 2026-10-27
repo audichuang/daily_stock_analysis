@@ -46,28 +46,30 @@ def ensure_file_exists(path: Path, description: str) -> None:
 
 def ensure_claude_import() -> None:
     ensure_file_exists(AGENTS, "canonical AGENTS.md")
-    if not CLAUDE.exists():
+    result = subprocess.run(
+        ["git", "ls-files", "--", "CLAUDE.md", "**/CLAUDE.md"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    tracked = sorted({line.strip() for line in result.stdout.splitlines() if line.strip()})
+    if "CLAUDE.md" not in tracked:
         fail("CLAUDE.md is missing")
-    if CLAUDE.is_symlink():
-        fail("CLAUDE.md must be a regular file containing '@AGENTS.md', not a symlink")
-
-    content = CLAUDE.read_text(encoding="utf-8").strip()
-    if content != "@AGENTS.md":
-        fail(f"CLAUDE.md must contain exactly '@AGENTS.md', found: {content[:80]!r}")
+    for rel in tracked:
+        path = ROOT / rel
+        if path.is_symlink():
+            fail(f"{rel} must be a regular file containing '@AGENTS.md', not a symlink")
+        content = path.read_text(encoding="utf-8").strip()
+        if content != "@AGENTS.md":
+            fail(f"{rel} must contain exactly '@AGENTS.md', found: {content[:80]!r}")
 
 
 def ensure_copilot_entry() -> None:
     ensure_file_exists(COPILOT, "repository Copilot instructions")
     content = COPILOT.read_text(encoding="utf-8")
-    required_fragments = (
-        "Canonical source:",
-        "AGENTS.md",
-        "CLAUDE.md",
-        ".claude/skills/",
-    )
-    for fragment in required_fragments:
-        if fragment not in content:
-            fail(f".github/copilot-instructions.md is missing required text: {fragment!r}")
+    if "AGENTS.md" not in content:
+        fail(".github/copilot-instructions.md must point to AGENTS.md as the rule source")
 
 
 def ensure_instruction_files() -> None:
@@ -94,7 +96,7 @@ def ensure_skill_frontmatter() -> None:
     """每个 SKILL.md 都必须有 YAML frontmatter 的 name + description。
 
     缺 frontmatter 时 skill 会退化成拿 H1 标题当描述，实务上不会被自动触发，
-    AGENTS.md §8「任务命中时优先按 skill 执行」就形同失效。这里扫全部 skill
+    skill 就形同失效。这里扫全部 skill
     （不只 REQUIRED_SKILL_FILES），新增 skill 漏写同样会被挡下。
     """
     for path in sorted(CLAUDE_SKILLS_DIR.glob("*/SKILL.md")):

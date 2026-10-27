@@ -1,7 +1,5 @@
 # dsa-web — 面板 Web 前端
 
-> 本檔只寫本模組增量。
-
 ## 模組定位
 
 面板的 Web 前端:React 19 + Vite + TypeScript + Tailwind 4 + zustand。打後端 FastAPI(repo 根 `api/`),認證走 cookie session(axios `withCredentials`)。Electron 桌面端(`apps/dsa-desktop/`)包的就是這份建置產物。
@@ -19,7 +17,6 @@
 - API 呼叫一律走 `src/api/*`(共用 `api/index.ts` 的 axios 實例,自帶 `attachParsedApiError` 統一錯誤解析);**不要在元件裡直接 fetch/axios**。
 - 全域狀態:zustand(`src/stores/`);auth 與 UI 語言用 context(`src/contexts/`)。
 - UI 文案是 TS 常數表(`src/locales/*.ts`、`src/i18n/`),**每組文案 zh / en / zh-TW 三語都要補**。`i18n/uiText.ts`(`UI_TEXT: Record<UiLanguage, Record<UiTextKey, string>>`,`UiTextKey = keyof typeof zh`)與 `locales/*.ts` 多為嚴格 `Record` 型別——**漏一語會 tsc build 失敗**(合併上游最常踩:上游只加 zh/en,zh-TW 缺鍵即編譯錯,本 repo 已多次實踩);少數鬆散表才只是畫面缺字。
-- 型別集中在 `src/types/`,與後端 schema 對齊;改後端 API 欄位時記得同步這裡。
 
 ## 驗證
 
@@ -28,5 +25,5 @@
 
 ## 踩雷
 
-- 看板行情異常(延遲、漲跌停欄位變空)通常不是前端問題——是後端缺 Shioaji 金鑰時**靜默降級 yfinance**,先查後端再動前端。判別看回應的 `source` 是不是 `shioaji`;名稱不會因此變英文,別拿名稱語言判斷。
-- **時間相關的測試用相對日期**(`Date.now() - 1 day`)。寫死日曆日的 fixture 會在超出頁面的時間視窗後開始必紅,與程式碼改動無關(踩過:90 天時間軸)。
+- 看板行情異常先查後端,見 `docs/realtime-board.md`。
+- **時間相關的測試用相對日期**,web 特例:90 天時間軸的 fixture 超出視窗就必紅。
