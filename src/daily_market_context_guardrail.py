@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, List
 
+from src.schemas.decision_action import decision_type_for_action
 from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
 from src.report_language import (
     infer_decision_type_from_advice,
@@ -218,8 +219,13 @@ def _is_buy_decision(result: Any) -> bool:
     """
     decision_type = str(getattr(result, "decision_type", "") or "").strip().lower()
     if decision_type not in {"buy", "hold", "sell"}:
-        # Malformed result only: reuse the shared advice map, no local lexicon
-        decision_type = infer_decision_type_from_advice(getattr(result, "operation_advice", ""), default="")
+        # 三態欄位壞掉時改讀結構化值：decision_type 的完整標籤 → LLM 的 action 欄位 →
+        # 建議欄「整段就是標籤」才算；不從建議句子猜意圖（本 fork 刻意與上游分歧）。
+        decision_type = (
+            decision_type_for_action(decision_type, default="")
+            or decision_type_for_action(getattr(result, "action", None), default="")
+            or infer_decision_type_from_advice(getattr(result, "operation_advice", ""), default="")
+        )
     if decision_type == "buy":
         return True
     # hold＋買入區分數（≥60）：不壓分、不留 guardrail_reason 的話，下游 build_action_fields

@@ -5,6 +5,10 @@ from __future__ import annotations
 
 import pytest
 
+from tests.litellm_stub import ensure_litellm_stub
+
+ensure_litellm_stub()
+
 from src.analyzer import AnalysisResult
 from src.daily_market_context_guardrail import apply_daily_market_context_guardrail
 from src.schemas.decision_action import build_action_fields
@@ -447,6 +451,47 @@ def test_fallback_to_shared_advice_map_when_decision_type_invalid(decision_type,
     assert "daily_market_context_buy_softened" in adjustments
 
 
+@pytest.mark.parametrize("decision_type", ["", "unknown", "建議買入"])
+@pytest.mark.parametrize("action,expected_buy", [
+    ("buy", True), ("add", True), ("hold", False), ("watch", False),
+    ("reduce", False), ("sell", False), ("avoid", False), ("alert", False),
+    (None, False), ("unknown", False),
+])
+def test_malformed_decision_type_uses_structured_action(decision_type, action, expected_buy) -> None:
+    result = _typed(decision_type, "建議現在買入", "zh-TW")
+    result.action = action
+    result.sentiment_score = 55
+
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh-TW"
+    )
+
+    assert ("daily_market_context_buy_softened" in adjustments) is expected_buy
+    assert result.operation_advice == ("觀望" if expected_buy else "建議現在買入")
+    assert result.action == ("watch" if expected_buy else action)
+    assert result.sentiment_score == (52 if expected_buy else 55)
+
+
+@pytest.mark.parametrize("action,advice,score,expected_softening", [
+    ("buy", "持有", 55, True), ("watch", "买入", 55, False),
+    ("hold", "卖出", 82, True), ("reduce", "买入", 82, False), ("sell", "买入", 82, False),
+])
+def test_structured_action_precedes_exact_advice_when_decision_type_invalid(
+    action, advice, score, expected_softening,
+) -> None:
+    result = _typed("unknown", advice)
+    result.action = action
+    result.sentiment_score = score
+
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh-TW"
+    )
+
+    # hold 投影仍會套用既有買入區分數護欄；sell 不得被高分改成觀望。
+    assert ("daily_market_context_buy_softened" in adjustments) is expected_softening
+    assert result.action == ("watch" if expected_softening else action)
+
+
 @pytest.mark.parametrize("advice", ["減碼，跌破500再進場", "觀望", "隨便寫的文字"])
 def test_fallback_does_not_treat_unrecognised_text_as_buy(advice) -> None:
     result = _typed("", advice, "zh-TW")
@@ -484,3 +529,57 @@ def test_malformed_decision_type_not_inferred_hold_ignores_buy_band_score(advice
     ) == []
     assert result.operation_advice == advice
     assert result.sentiment_score == 82
+
+
+def test_malformed_decision_type_structured_sell_action_beats_advice_label() -> None:
+    # 反向：結構化 action 說賣出時，建議欄的「买入」標籤不能把它改判成買入
+    result = _typed("", "买入", "zh")
+    result.action = "sell"
+
+    assert apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh"
+    ) == []
+    assert result.operation_advice == "买入"
+
+
+@pytest.mark.parametrize("advice", ["建议现在买入", "不宜追高但可分批买入", "建议买入"])
+def test_malformed_decision_type_does_not_scan_advice_sentence(advice) -> None:
+    # 本 fork 刻意與上游分歧：建議句子不是完整標籤就不推買賣，沒有結構化值時不觸發
+    result = _typed("", advice, "zh")
+    result.action = None
+
+    assert apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh"
+    ) == []
+    assert result.operation_advice == advice
+
+
+@pytest.mark.parametrize("advice", ["不建议买入、加仓", "不宜追高/买入"])
+def test_malformed_decision_type_does_not_split_negated_advice_into_buy(advice) -> None:
+    # 頓號／斜線分隔的否定建議不是完整標籤，不能拆段後讀成買入而觸發軟化
+    result = _typed("unknown", advice, "zh")
+    result.action = None
+    result.sentiment_score = 55
+
+    assert apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh"
+    ) == []
+    assert result.operation_advice == advice
+    assert result.sentiment_score == 55
+
+
+@pytest.mark.parametrize("decision_type,expected_softening", [
+    ("买入", True), ("加仓", True), ("持有", False), ("卖出", False),
+])
+def test_malformed_decision_type_exact_label_is_first_fallback(decision_type, expected_softening) -> None:
+    # 三態欄位寫成完整中文標籤時，先用它判斷；action 缺值、建議不是標籤也照樣生效
+    result = _typed(decision_type, "隨便寫的文字", "zh")
+    result.action = None
+    result.sentiment_score = 55
+
+    adjustments = apply_daily_market_context_guardrail(
+        result, daily_market_context=_RISKY_CONTEXT, report_language="zh"
+    )
+
+    assert ("daily_market_context_buy_softened" in adjustments) is expected_softening
+    assert result.sentiment_score == (52 if expected_softening else 55)
