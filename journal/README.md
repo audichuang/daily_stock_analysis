@@ -47,10 +47,9 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
   符號寫錯、缺 `decided_at` 等必填欄位），只留稽核軌跡，**不進回驗**
 - `morning-calls.jsonl` — 每日盤前的 **regime 判讀與動作**（skill `tw-morning-call`），一天一行。
   跟上面兩個檔的層級不同：那是**逐檔**的 60 日進場預測，這是**當日大盤**的方向與動作。
-  **回驗程式還沒寫**（`make verify-decisions` 只讀 `swing-decisions.jsonl`），所以欄位刻意都是
-  事後能驗對錯的觀測值。`gap_expected` **不能對 `market.market_index` 驗**，那張表沒有開盤價；
-  要改對 TWSE 官方加權指數日資料（`MI_5MINS_HIST`，驗法見 skill `tw-morning-call` Step 4）。
-  每行都要明寫 `exclude_from_scoring`，累積到 20 筆**可計分**的判讀再寫回驗；在那之前，
+  回驗由 `scripts/verify_morning_calls.py` 做（18:00 `daily_report.sh` 帶 `--append`，手動 `make verify-morning`），
+  結果寫進下面的 `morning-calls-outcomes.jsonl`，本檔不改。每行都要明寫 `exclude_from_scoring`：
+  **只有明寫 `false` 才計分**，缺欄位當成不計分。可計分不到 20 筆或區間跨零一律 inconclusive，
   不要聲稱 regime 判讀有經驗證的優勢。
   選填的期交所欄位（2026-10-20 起；之前的行沒有）。**從 `uv run python scripts/taifex_positions.py --json` 原樣複製**
   （`make taifex` 的同一支腳本加 `--json`；欄位名、單位都已對好，不要從文字輸出手抄換算）：
@@ -62,12 +61,31 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
   `swing-decisions.jsonl` 已由 `scripts/verify_swing_decisions.py` 的 `read_log` 做掉；日後寫 morning-calls 回驗要沿用同一個判斷
   （`read_log` 的聯集邏輯），不要另寫；新增臨時休市日要追加到 `journal/closed-dates.txt`。
 
+- `morning-calls-outcomes.jsonl` — 上一檔的**事後結果**，一個判讀日一行、以 `date` 為鍵，append-only、同一天不重寫
+  （18:00 由 `daily_report.sh` 另開 commit，和預測分開）。休市日不寫；當日官方日資料或 DB 收盤還沒到的那天跳過、隔天補。欄位：
+  - `scorable`：判讀列 `exclude_from_scoring` 明寫 `false` 才是 `true`；`note` 記不計分或無法驗的原因。
+  - 實際缺口三種，都是相對前一交易日（`prev_session`）：`gap_open_official`＝TWSE 官方開盤（`MI_5MINS_HIST`，09:00:00 第一筆，
+    未成交個股以昨收計所以**偏向 0**）、`gap_0905`＝09:05:00 加權指數（`MI_5MINS_INDEX`，含開盤後 5 分鐘走勢）、
+    `gap_tx_open`＝台指期近月（當日日盤量最大的月份，`tx_contract`）日盤開盤 ÷ 同契約前一日結算價（期交所 `futDataDown`）。
+    `err_<量測>`＝實際 − 預估。
+  - `night_spot_gap`＝夜盤收盤 ÷ 前一日現貨收盤（skill 公式用對數字時的值；期交所把夜盤記在它**結束**的那天）、
+    `night_tx_chg`＝夜盤收盤 ÷ 前一日結算價、`input_err`＝`gap_expected` − `night_spot_gap`（抄錯或用了 21:30 前報價）。
+    彙總的縮放比是「實際 ÷ `night_spot_gap`」：`gap_expected` 可能已照建議乘過縮放比，拿它估會把修正再修一次。
+  - 09:05 或期貨量測暫時抓不到時，7 個曆日內延後不寫（寫了就不會重算）；超過 7 天仍缺才寫入並在 `note` 記缺哪項。
+  - `day_return`／`intraday_return`：收盤 ÷ 前收、收盤 ÷ 官方開盤。`gap_dir_hit`（預估方向對 `gap_0905`）、
+    `day_dir_hit`（預估缺口方向對全日方向，描述性，盤前判讀不預測收盤）。
+  - `breadth_ma20_close`：當日收盤站上 MA20 比例（與 `screen_tw` 報告 §1 同一份程式碼）；`vix_prior`：台股收盤時已知的
+    最近一筆 VIX（前一個美股交易日，`market.macro_series`）。`regime_by_close` 只用這兩項判（VIX>30 宣洩、breadth<25% 全面承壓、
+    breadth>50% 且 VIX<20 順風、其餘輪動；族群分化與爆量不在檢查內），`regime_consistent` 是它與判讀標籤是否相同，自創標籤為 `null`。
+  - `action_flag`：觀望／續抱遇到全日 ±1.5% 以上、買進遇到 −1.5% 以下、減碼遇到 +1.5% 以上時標出，**描述，不是績效**。
+
 ## 怎麼用
 
 ```bash
 make morning            # 每天早上：補資料 → 昨晚國際盤 → 期交所籌碼 → 待觸發計畫 → 候選，接著跑 tw-morning-call
 make swing              # 更新資料 → 全市場篩選 → 產出候選 JSON，接著跑 tw-swing-research
 make verify-decisions   # 60 交易日後回驗（未到期的會列出剩餘天數）
+make verify-morning     # 盤前判讀回驗：預估缺口 vs 實際、regime 對定義（唯讀；18:00 排程才寫 outcomes）
 ```
 
 回驗看的是四個量，**不是命中率**——候選池本來就是正期望值，「進場的那些賺錢」證明不了任何事：

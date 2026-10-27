@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 盤前判讀每日回驗：`scripts/verify_morning_calls.py` 對照 `journal/morning-calls.jsonl` 與當日實際結果（官方開盤、09:05 指數、台指期開盤三種缺口量測，收盤 breadth＋VIX 驗 regime 標籤，觀望日大漲大跌標出），18:00 每日報告追加到 `journal/morning-calls-outcomes.jsonl` 並另開 commit、推 Bark；`make morning` 多一段「近期判讀校正」，`make verify-morning` 手動看
+- [改進] skill `tw-morning-call` 算開盤缺口時參考回驗校正（縮放比有統計支持才套用，inconclusive 只當提醒），並寫明夜盤收盤前的預估不算數、比對實際不看偏向 0 的官方開盤
 - [修复] 多 agent 風控把買入下調成觀望時，存檔裡巢狀的 `dashboard.action`／`dashboard.decision_type`（模型有給才改）同步成風控後的值；原本同步寫在 `payload["dashboard"]` 後又被未同步的 dashboard 區塊蓋回，巢狀仍是 `buy`（頂層動作原本就正確）
 - [修复] 市場階段護欄把盤後復盤口吻改寫成觀望時同步寫入 `decision_score_calibration.guardrail_reason`；原本三態降為 `hold` 後跳過了買入區矛盾護欄、沒有護欄原因，分數 68 的賣出決策在顯示與 DecisionSignal 被分數對齊升成 buy（分數 30 則降成 reduce）
 - [修复] sell 決策落在買入區分數時，矛盾護欄改先沿用模型的結構化 `action`（如 `reduce`），是買入類或缺漏才看單一非買入標籤；原本模型只給 `action=reduce`、沒給建議時會被解析器預設的「持有」蓋成 hold

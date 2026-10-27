@@ -490,3 +490,96 @@ def test_main_partial_failure_pushes_titled_notice_through_run_step(tmp_path, mo
     sent = (tmp_path / "notify_args").read_text(encoding="utf-8")
     assert "每日報告部分失敗" in sent and "5469.TW" in sent
     assert (logs / ".daily_report_last_session").exists()
+
+
+# ---------- 盤前判讀回驗（morning_call_outcomes）：非致命、只 commit outcomes 檔 ----------
+
+def _outcomes_repo(tmp_path, uv_body, branch="develop"):
+    """暫存 git repo＋假 uv（印回驗輸出）＋假 media_picks_job.sh（印 push 結果）。"""
+    repo = tmp_path / "repo"
+    (repo / "journal").mkdir(parents=True)
+    (repo / "scripts").mkdir()
+    (repo / "journal" / "morning-calls-outcomes.jsonl").write_text('{"date": "2099-03-03"}\n', encoding="utf-8")
+    (repo / "other.txt").write_text("x\n", encoding="utf-8")
+    (repo / "scripts" / "media_picks_job.sh").write_text('echo "push ok"\n', encoding="utf-8")
+    git = ["git", "-C", str(repo)]
+    subprocess.run(git + ["init", "-q", "-b", branch], check=True)
+    subprocess.run(git + ["-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], check=True)
+    subprocess.run(git + ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], check=True)
+    (repo / "other.txt").write_text("staged change\n", encoding="utf-8")
+    subprocess.run(git + ["add", "other.txt"], check=True)   # index 裡有別的暫存：不能被帶進 commit
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "uv").write_text(f"#!/usr/bin/env bash\n{uv_body}\n", encoding="utf-8")
+    (bindir / "uv").chmod(0o755)
+    return repo, bindir
+
+
+def _run_outcomes(repo, bindir):
+    log = repo / "run.log"
+    body = (f'cd "{repo}"; LOG="{log}"\n'
+            'notify_failure() { printf "NOTIFY %s|%s\\n" "$2" "$1" >>"$LOG"; }\n'
+            'morning_call_outcomes; echo "rc=$?"')
+    env = {"PATH": f"{bindir}:{os.environ['PATH']}", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    r = _run_bash(body, env_extra=env)
+    return r, log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+def _last_commit_files(repo):
+    out = subprocess.run(["git", "-C", str(repo), "show", "--name-only", "--format=%s", "HEAD"],
+                         capture_output=True, text=True, check=True).stdout.split("\n")
+    return out[0], [f for f in out[1:] if f]
+
+
+def test_morning_outcomes_commits_only_outcomes_file_and_notifies(tmp_path):
+    repo, bindir = _outcomes_repo(
+        tmp_path, 'echo \'{"date": "2099-03-04"}\' >> journal/morning-calls-outcomes.jsonl; echo "BARK: 2099-03-04 摘要"')
+    r, log = _run_outcomes(repo, bindir)
+    assert "rc=0" in r.stdout
+    subject, files = _last_commit_files(repo)
+    assert subject.startswith("journal: morning call outcomes")
+    assert files == ["journal/morning-calls-outcomes.jsonl"]
+    assert "NOTIFY 盤前判讀回驗" in log and "2099-03-04 摘要" in log and "push ok" in log
+
+
+def test_morning_outcomes_failure_is_not_fatal_and_commits_nothing(tmp_path):
+    repo, bindir = _outcomes_repo(tmp_path, 'echo boom; exit 3')
+    r, log = _run_outcomes(repo, bindir)
+    assert "rc=0" in r.stdout                       # 回驗壞掉不能讓每日報告 exit
+    assert _last_commit_files(repo)[0] == "init"
+    assert "WARN: 盤前判讀回驗失敗（rc=3）" in log and "NOTIFY 盤前判讀回驗失敗" in log
+
+
+def test_morning_outcomes_without_new_rows_is_silent(tmp_path):
+    repo, bindir = _outcomes_repo(tmp_path, 'echo "寫入 0 筆"')
+    r, log = _run_outcomes(repo, bindir)
+    assert "rc=0" in r.stdout and "NOTIFY" not in log
+    assert _last_commit_files(repo)[0] == "init"
+
+
+def test_morning_outcomes_off_develop_does_not_commit(tmp_path):
+    repo, bindir = _outcomes_repo(
+        tmp_path, 'echo \'{"date": "2099-03-04"}\' >> journal/morning-calls-outcomes.jsonl; echo "BARK: x"',
+        branch="feat/x")
+    r, log = _run_outcomes(repo, bindir)
+    assert "rc=0" in r.stdout
+    assert _last_commit_files(repo)[0] == "init"
+    assert "未 commit（主 checkout 在 feat/x）" in log
+
+
+def test_morning_outcomes_retries_a_failed_commit_on_the_next_run(tmp_path):
+    repo, bindir = _outcomes_repo(
+        tmp_path, 'echo \'{"date": "2099-03-04"}\' >> journal/morning-calls-outcomes.jsonl; echo "BARK: x"')
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    _, log = _run_outcomes(repo, bindir)
+    assert "commit 失敗" in log and _last_commit_files(repo)[0] == "init"
+    hook.unlink()
+    (bindir / "uv").write_text('#!/usr/bin/env bash\necho "寫入 0 筆"\n', encoding="utf-8")   # 這一輪沒有新結果
+    r, log = _run_outcomes(repo, bindir)
+    assert "rc=0" in r.stdout
+    subject, files = _last_commit_files(repo)
+    assert subject.startswith("journal: morning call outcomes") and files == ["journal/morning-calls-outcomes.jsonl"]
+    assert "push ok" in log
