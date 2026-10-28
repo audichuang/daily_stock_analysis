@@ -103,7 +103,7 @@ A 線的投資觀是**趨勢追蹤＋回踩低吸**，規則寫死在 prompt 與
 
   ```bash
   doppler run -p finmind -c dev -- doppler run -p shioaji -c dev -- \
-    bash -c 'TELEGRAM_MESSAGE_THREAD_ID="$TELEGRAM_TOPIC_REPORT" uv run python main.py --stocks 2330.TW'
+    bash -c 'uv run python scripts/notify.py --check --topic report && TELEGRAM_MESSAGE_THREAD_ID="$TELEGRAM_TOPIC_REPORT" uv run python main.py --stocks 2330.TW'
   ```
 - 代碼一定要帶 `.TW`／`.TWO`，裸 `2330` 不會進台股語義。
 - `.env` 的 `SCHEDULE_ENABLED` 是服務內建排程，與上面的 Orca 排程無關（本機為 `false`，避免同一天跑兩份）。GitHub Actions 的每日任務
