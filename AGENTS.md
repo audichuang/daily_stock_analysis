@@ -41,6 +41,8 @@
 
 ## 6. 验证矩阵
 
+使用者路徑驗收用專案 skill `.claude/skills/verify/SKILL.md`（功能地圖與證據規格）；畫面以 ego-browser 操作，真實服務、fixture 與單測分開回報，實跑紀錄見 `docs/verification.md`。
+
 ### CI
 
 - CI 只由 push 触发（`ci.yml` 的 `on:`），PR 上的 checks 就是工作分支那次 push run：**工作分支前缀不在 `on:` 清单内就没有 CI**。

@@ -1,5 +1,7 @@
 # Repository Claude Skills
 
+- [verify](verify/SKILL.md)：真實 Web/API/CLI 使用者路徑驗收，ego-browser 畫面證據、隔離資料與功能地圖；紀錄見 `docs/verification.md`。
+
 仓库级协作 skill，属版本库资产（`.gitignore` 只放行 `.claude/skills/`；`.claude/reviews/` 是本地分析产物）。
 
 规则真源是仓库根目录 `AGENTS.md`，本目录的 skill 与它保持一致；治理关系（`CLAUDE.md` 的 `@AGENTS.md` import 写法、镜像文件、frontmatter、gitignore allowlist）由 `scripts/check_ai_assets.py` 确定性强制，细节见 `AGENTS.md` §2。

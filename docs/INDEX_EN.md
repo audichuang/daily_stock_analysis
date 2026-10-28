@@ -73,6 +73,7 @@ This is the entry point for project documentation. The README covers the project
 | --- | --- |
 | [API Spec](architecture/api_spec.json) | FastAPI OpenAPI artifact |
 | [Contributing Guide (EN)](CONTRIBUTING_EN.md) | Issues, pull requests, tests, documentation sync, and collaboration expectations |
+| [Real user verification (Traditional Chinese)](verification.md) | Project verify skill, ego-browser journeys, isolated runtime, and execution evidence |
 
 ## Languages
 
