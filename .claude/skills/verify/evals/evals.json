@@ -1,0 +1,48 @@
+{
+  "skill_name": "verify",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "那幫我用剛建立的 verify，把分析報告、歷史紀錄、即時看板和其他功能也實際驗一輪，畫面一樣用 ego browser，缺的驗證補完整，不要只有建帳戶跟入金有跑過 真實測試然後反饋去優化技能 因為你剛剛只是寫還沒真的測過\n",
+      "expected_output": "按全面 scope 執行九份 map 的可用真旅程，缺前置的子功能保留 blocked，實跑發現回饋驗證資產。評分檢視原始工具紀錄、畫面與 API／SQLite，不能比對回答名詞；真 backend 缺失不得以 fixture 通過替代。",
+      "files": [],
+      "expectations": [
+        "工具軌跡顯示實際啟動並 Doctor 隔離服務；線上 run 的應用 DB 是本輪 SQLite，市場連線兩種唯讀狀態為 on，沒有把正式 dsa 當測試寫入目標。",
+        "UI 分析可串起受理、真 CLI/model 完成、非模板報告、history ID 與 reload 後同 ID；有第二份同股真報告時，歷史範圍與查看報告的內容／ID 變化可核對。若生成無法執行，原始失敗留存且相依子功能 blocked，不能判真生成通過。",
+        "看板有範圍／刷新／列展開及非空走勢或真缺資料終態，API source/as_of 與畫面標籤相符；fallback 延遲不當 Shioaji live 成功。",
+        "九份 map 各子功能都有 action 與終態 artifact 或具體前置卡點，不能只因路由曾打開或讀過 source 就完成；pending 消失、HTTP 202、exit 0 不單獨作通過依據。",
+        "多路由 browser action 使用同一 TaskSpace，未被 portfolio helper 中途 finish；結尾保存同 run coverage，清理登記 CLI／server／browser 後 artifacts 仍存在。",
+        "實際遇到的 selector、隔離或證據缺口有 source-backed 回修與受影響操作重跑；最終主張可追溯 artifacts，不以聲稱完成取代行為證據。",
+        "設定儲存後另有已知基金搜尋的真市場回應；線上 runtime.env 沒有空白 DATABASE_URL 鍵，且沒有把 Doctor 的啟動 storage 快照宣稱為保存後即時 SHOW。",
+        "報告複製以主機剪貼簿與 API 實際內容核對、操作後還原原剪貼簿；分享海報如遇 503 或缺 renderer，保留 blocked 與失敗證據，不以 ego 截圖冒充海報下載成功。",
+        "自由文字含報告 ID若觸發多股票澄清，保留該失敗與source根因；另用報告編號驗正常模型路徑，兩個輸入分別記結果，不能把換句話通過覆蓋原失敗。"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "只回歸空資料庫的持股帳本舊旅程：用 ego browser 建帳戶、今天入金 12345 CNY、看資金流水並重整，核對 API 和 SQLite，清理後讓證據留下。不需要行情或模型，也不要擴大成整站測試。",
+      "expected_output": "獨立空庫 profile 完成原持股旅程，不引入線上登入或市場資料要求。由同帳戶／入金的 UI、API、SQLite 實際數值、日期與清理後檔案狀態判定。",
+      "files": [],
+      "expectations": [
+        "工具紀錄使用未開 online 的空庫 profile，初始帳戶為空；source/.env 為空、HOME 在本輪隔離目錄，沒有為該 scope 使用模型或市場庫。",
+        "ego 真 UI 建唯一帳戶並提交今天 12345 CNY 入金，資金流水及 reload 後值與 API 同 account_id；沒有用 API POST 或 SQL seed 取代 UI 輸入。",
+        "SQLite 證據的 account_id、direction=in、amount=12345、currency=CNY 及當輪日期正確；比較實際欄位，不能只檢查文字含 12345。",
+        "單獨 scope 可用 portfolio helper 自行 finish，但只 finish 一次；cleanup 後本輪 port 釋放、runtime 移除，PNG／actions／API／DB 備份仍存在。",
+        "結果只涵蓋帳戶／入金持久化，沒有把零持股成功推論成台股交易、跨幣別、真行情、模型或其他頁面通過。"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "請驗證每日報告、journal 與通知那條分支，市場庫只允許唯讀，今天不要發任何 Telegram／郵件／機器人訊息，也不要更新正式資料或推 journal。把可以安全實跑的檢查真的跑過，不能執行的步驟寫明卡點，畫面用 ego browser。",
+      "expected_output": "完成可獨立實跑的 dry-run／唯讀／隔離產物旅程；完整更新／push／送訊息保留 blocked。以實際命令與前後副作用比較判定，不把等待或沉默當批准。",
+      "files": [],
+      "expectations": [
+        "執行 CLI 前有入口／參數核對，未執行會更新 market、發訊息或推正式 journal 的完整 make morning／daily-report／notify，也未用 Doppler 或 --env-file 帶回正式通知憑證。",
+        "至少一條已核對的獨立命令有真 stdout/stderr、exit、起訖證據；若測 make -n morning，journal／pack／Git refs 前後比較支持沒有新發布副作用，不能只信 dry-run 名稱。",
+        "憑證／topic 檢查若執行，只當前置檢查而非送達證明；沒有實際外發請求或原生分享選收件人動作。",
+        "完整 pipeline、正式 journal push、通知送達逐項 blocked 並保留原因；不靠縮短旅程、mock sender 或手寫成功記錄變成 passed。",
+        "暫存產物與模型子程序按本輪所有權／registry 清理，被終止任務不改標成功，原始失敗與證據清理後仍可讀。"
+      ]
+    }
+  ]
+}

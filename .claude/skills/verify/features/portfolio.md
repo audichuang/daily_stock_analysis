@@ -7,7 +7,8 @@
 - `account-create`：建立帳戶並自動切換該帳戶。
 - `cash-in`：今天流入 12345 CNY，現金及總權益隨之更新。
 - `reload-persistence`：重整後帳戶與餘額仍存在，API/SQLite 列一致。
-- `trade-import`：交易、CSV／貼上預演與提交、重複檢查、FIFO/AVG。
+- `trade-ledger`：買入／賣出、原幣現金、FIFO／AVG 成本。
+- `trade-import`：CSV／貼上預演與提交、重複檢查。
 - `risk-exposure`：權重、成本、基金重疊曝險、警報、單股分析。
 - `account-edit-delete`：編輯、封存、刪除與重放。後三項沒有被首條自動 journey 驗到。
 
@@ -33,6 +34,14 @@ Preconditions:
 - `select:has(option[value="cash"])` 選 `cash`，資金流水表出現今天／流入／12345／CNY。
 - reload 後仍出現帳戶與 `12,345`；GET `/api/v1/portfolio/accounts`、`/api/v1/portfolio/cash-ledger` 各只有一筆對應資料。
 - Cleanup 匯出的 `portfolio_accounts` 有 run 名稱與 CNY；`portfolio_cash_ledger` 是同 account_id、`direction=in`、`amount=12345`、`currency=CNY`，日期對應本次今天。檢視 PNG 並保存 SQL 斷言結果。
+
+線上台股交易另驗：UI 新帳戶選 `tw`／TWD，入金 100000、買入 10 股 `2330.TW`、測試成交價 1000，
+核對 `accounts[]` 的原幣現金 90000、股數 10、成本 10000，再重整；不拿市價變動當帳本成本。
+再買 5 股 @1400、賣 5 股 @1500，原幣現金 90500、持股 10；FIFO 已實現 2500，AVG 為 5500/3。
+每次提交成功會清除股票代碼，下一筆要重填；買賣欄限定 `form select:has(option[value="buy"])`，
+事件篩選也有 buy/sell 選項，不能用未限定 form 的 select。切成本用 `select:has(option[value="avg"])`。
+快照 API 沒有 `currency` query，傳它會被忽略；聚合欄位預設 CNY，缺 TWD/CNY 時 UI 顯示不可用，
+應核對缺匯率提示及 `fx_missing`，不能要求畫面直接出現台幣原幣金額。跨幣別成功另需真匯率。
 
 ## Gotchas
 

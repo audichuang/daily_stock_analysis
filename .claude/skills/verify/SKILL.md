@@ -5,26 +5,33 @@ description: 驗證 Daily Stock Analysis 的真實 Web、API 與 CLI 使用者�
 
 # Daily Stock Analysis 驗證
 
-規則真源是根目錄 [AGENTS.md](../../../AGENTS.md)。先讀 [功能索引](features/README.md)，按改動選 journey；每個入口分別記錄 `passed`、`failed`、`blocked`、`not-run`。完成＝選定 journey 的動作、畫面、真實副作用、清理都有證據；一條通過只證明該條。
+規則真源是根 [AGENTS.md](../../../AGENTS.md)。先讀 [功能索引](features/README.md)，把 scope 對應到全部相關入口與子功能；全面驗證涵蓋九份 map，不以帳戶／入金或逐頁開空畫面代替。每條各記 `passed`、`failed`、`blocked`、`not-run`；缺前置仍保留該條及原因。
+
+完成＝scope 每條都有真實動作、可核對終態或具體卡點、證據與清理。`observed` 只是待核對觀察，不能當通過。修正工具／map 後重跑受影響旅程；產品缺陷如實記錄，不改產品行為來湊通過。長期結論寫 [docs/verification.md](../../../docs/verification.md)。
 
 ## Launch
 
-主要介面是 Web/API；CLI、台股資料與每日排程依功能檔另驗。使用已有 `.venv`、`uv`、Node/npm、`apps/dsa-web/node_modules`；缺相依按 AGENTS 的安裝邊界處理。不要用正式 NAS、`make serve` 或裸 `serve-local` 做寫入 smoke：本機 `.env` 指向正式 `dsa`，讀取快照也可能寫入。
+使用既有 `.venv`、uv、Node/npm、Web node_modules 與 ego-browser；launcher 使用 POSIX ps／lsof／fcntl，本輪 macOS 已測。缺相依依 AGENTS 處理。寫入只對本輪 SQLite／設定／cache；正式 NAS、裸 `make serve-local` 或 `make serve` 會碰既有環境，不能替代隔離服務。
 
-從 repo 根目錄執行（每輪用新目錄）：
+整個目標只用一個 ego TaskSpace。先依已安裝 `ego-browser` skill 執行 `ego-browser skill`，建立或沿用本次空間，把回傳數字 id 設為 `DSA_VERIFY_SPACE`。每輪使用新證據目錄：
 
 ```bash
 export DSA_VERIFY_RUN="$PWD/.claude/reviews/verification/$(date +%Y%m%d-%H%M%S)"
-uv run python .claude/skills/verify/scripts/instance.py launch --run-dir "$DSA_VERIFY_RUN"
+uv run python .claude/skills/verify/scripts/instance.py launch \
+  --run-dir "$DSA_VERIFY_RUN" --space-id "$DSA_VERIFY_SPACE"
 ```
 
-已有本次目標的 ego TaskSpace 時加 `--space-id <已取得的數字 id>`，整個目標沿用同一空間。
+上式是空庫 profile：空 HOME、無市場庫與模型憑證，適合獨立帳戶／入金。分析、看板、四維度與研究需要線上 profile，改用同一 launch 命令加 `--online --symbols 2330.TW,2317.TW`；依 scope 選真代碼，不在已啟動的 run 上重複 launch。
 
-Launcher 將當前已追蹤後端原始碼及股票索引複製至 `runtime/source`，記每檔 SHA256（含未提交修改；新增程式先 `git add` 才會被複製）。使用既有 npm build，但 `--outDir` 指到本次 `runtime/web`、明確設 `VITE_API_URL=''` 保持同源 API，避免 shell 或 Vite dotenv 指到正式站；不安裝相依、不覆蓋 repo `static/`。後端空環境檔、空 HOME、環境變數 allowlist 排除正式憑證；新 SQLite 自動建立 schema，空帳戶即為此 journey 的種子。透過真實 `create_app` 與 uvicorn 啟動，動態 loopback socket 不共用 port。
+兩種 profile 都複製當前已追蹤來源（含未提交修改）、scripts／journal／Makefile 與股票索引；新增程式先確認進 `git ls-files`。`source-hashes.json` 記身分；`runtime/source/.env` 刻意為空，阻止裸 dotenv 向上搜尋正式憑證。Vite 建置用本輪 outDir、`VITE_API_URL=''` 與同源 API，不覆蓋原 static，不自動安裝依賴。新 SQLite 由真實 DatabaseManager 初始化，uvicorn 用動態 loopback socket；預設關排程、event monitor、遠端索引與匯率更新。
 
-就緒需 `server.log` 的 `Application startup complete`、`initial-accounts.json` 是空陣列，且下一步 Doctor 通過；只有 health 200 不足。`instance.json` 保存 URL、PID、HEAD、遠端基線、dirty 狀態、build revision/fingerprint。Web 與程式都取本次 checkout，不代表 NAS 發版。
+線上 profile 沿用真 HOME／USER／LOGNAME 及 repo 已設定的 CLI backend 非秘密設定，fallback 留空。它使用既有 CLI 登入，CLI 自身仍可能在真 HOME 寫快取／log；不是完整 HOME 沙箱。市場 URL 只注入 child environment，不寫 env／JSON 證據，不注入 Telegram／Shioaji 憑證；日誌另作去敏核對。
 
-此路徑關閉排程、索引遠端更新、認證及匯率更新。AkShare 啟動暖機仍可能連公開網路，快取只落來源副本；這不是離線測試。行情／模型／Telegram／market 資料能力尚未驗證，不可替換 mock 宣稱通過。
+線上 `runtime/verification.env` 連空白 `DATABASE_URL` 鍵也不寫：設定儲存會 `setup_env(override=True)`，空鍵會清掉程序內的市場連線。保存設定後用本輪已查得基金 ID 的 `GET /api/v1/funds/search?q=…` 真資料回應核對市場仍可讀。
+
+市場連線有 `PGOPTIONS` 與 SQLAlchemy Engine connect guard 兩層，啟動時核對 `default_transaction_read_only`、`transaction_read_only` 都為 `on`。這保護本 profile 的預期連線，不授權任意 CLI：執行前核對 source／參數／產物位置，尤其 `--env-file`、更新、Doppler、通知、Git 寫入或自行覆寫連線設定的入口。
+
+就緒需 `server.log` 的 `Application startup complete`、`initial-accounts.json` 為空及 Doctor 通過；health 200 不是使用者功能完成。`instance.json` 保存本輪 URL／PID／build／基線，不代表 NAS 版本。
 
 ## Doctor
 
@@ -32,44 +39,71 @@ Launcher 將當前已追蹤後端原始碼及股票索引複製至 `runtime/sour
 uv run python .claude/skills/verify/scripts/instance.py doctor --run-dir "$DSA_VERIFY_RUN"
 ```
 
-這是唯讀檢查：核對本次 bootstrap PID、該 PID 持有的 listen port、實際 SQLite URL、排程停用、health、認證停用與 build-info 完全一致，輸出 `doctor.json`。Launch 已初始化資料庫；Doctor 不靠首次存取來建 schema。異常先跑此命令，失敗就停止 drive，查看 `server.log`，每次失敗也執行 Cleanup。
+核對 bootstrap 所有權與 listen port、health、build；storage／排程／市場唯讀值來自啟動時的 `effective-storage.json`，不是設定保存後即時重做 SHOW。認證期望取自本輪 `runtime/verification.env` 的 `ADMIN_AUTH_ENABLED`，不是永遠要求 false；啟用認證後重新 Doctor 應與新設定相符。異常先保存 `doctor.json`／log，停止依賴該實例的動作並調查；失敗輪也做 Cleanup。
 
 ## Drive
 
-畫面一律使用 ego-browser。先讀已安裝的 `ego-browser` skill，再執行 `ego-browser skill`，以當版 API 為準。已有已知 selectors 的 journey 使用原生 ego API；未知多步控制依 ego-jev 規則處理。首次只驗證安全且可從空資料完成的 [持股帳本](features/portfolio.md)：
+按索引選定的 map 逐條做真使用者操作。已知 selectors 用原生 ego API；未知多步控制依 ego-jev 規則處理。先 snapshot 核對目標，用 click／fill／select／submit；API、SQL 只作第二視角，不能以 store setter、插入報告或 mock 回應取代 UI 真生成。關閉通知 checkbox，未授權發訊息的入口保留 blocked；既有授權範圍內繼續，不重問。
+
+報告保存／切換見 [分析與歷史](features/analysis-history.md)；看板連入的摘要／解讀見 [研究資料](features/research-cli.md)，各入口分別留證。
+
+實際翻譯以 snapshot 為準，例如資料中心按鈕是「重新整理」。複製報告時比對主機剪貼簿與 API 內容、操作後還原原剪貼簿，不把原私人內容收進證據。分享海報 API 失敗／缺渲染器就記 blocked，不能以 ego 截圖冒充下載海報。
+
+跨功能在 ego runtime 匯入 [browser.mjs](scripts/browser.mjs)，以本輪絕對路徑 `openRun(directory)` 取得同一 `task`／`page`：
+
+- `act(description, operation)` 保存動作／receipt／錯誤至 `actions.jsonl`。
+- `snapshot()` 回安全語意快照；密碼值遮蔽，Save login 等已知密碼管理器提示仍開啟時拒絕保存／回傳。
+- `capture(name)` 保存 snapshot 與 PNG；截圖要實際檢視。
+- `api(name, route, format)` 保存原始 GET 回應；JSON 是預設，dossier HTML 用 `format="text"`。
+- `mark(feature, status, detail)` 追加 `coverage.jsonl`，寫入口、終態與對應 artifact 名稱。
+
+每輪 browser 程式另存本輪目錄的新 `.mjs` 檔，再用 `ego-browser nodejs < 該檔` 執行。跨功能全部共用 TaskSpace，最後才 `task.finish({keep: []})` 一次；[portfolio.mjs](scripts/portfolio.mjs) 內建 finish，只供**單獨空庫 portfolio** scope，不能插進跨功能過程。
+
+登入可能觸發擴充套件 iframe；禁止直接列印原始 `page.snapshot()`。提示仍開啟時先安全關閉，不儲存／更新私人密碼庫，再取得應用證據；受污染的自建證據去敏或移除，乾淨狀態另重拍。
+
+CLI 使用相同 profile，先核對命令再執行；`exec` 本身不審查命令，也不是通用防寫沙箱：
 
 ```bash
-ego-browser nodejs < "$DSA_VERIFY_RUN/drive-portfolio.mjs"
+DSA_VERIFY_PYTHON="$(uv run python -c 'import sys; print(sys.executable)')"
+uv run python .claude/skills/verify/scripts/instance.py exec --run-dir "$DSA_VERIFY_RUN" \
+  --record dossier-cli -- "$DSA_VERIFY_PYTHON" scripts/tw_stock_dossier.py 2330.TW --no-branch --json
 ```
 
-它呼叫 [portfolio.mjs](scripts/portfolio.mjs)：空帳本 → UI 建帳戶 → UI 入金 12345 CNY → 切資金流水 → 重整 → GET 核對。所有寫入經真實 UI，API 僅作第二視角。selectors 源自 `PortfolioPage.tsx`；變更時先 snapshot 核對，不以 DOM setter、store 操作或注入 SQL 取代旅程。查看產出的 PNG，確認畫面可讀及數字正確。
+`exec` 在來源副本執行，保存命令／起訖／exit 與合併 stdout-stderr；需要分流的命令另留各 stream。不得以 exit 0、202、pending 消失、模板報告或空態判定真生成成功；history ID、模型結果、重整持久化、來源日期及必要副作用依 map 核對。
 
-其餘依改動選：[分析與歷史](features/analysis-history.md)、[即時看板](features/realtime.md)、[台股資料與研究](features/research-cli.md)、[每日作業](features/daily-ops.md)。前置資料不足就保留失敗與原因，不把完整旅程降級成只驗空畫面。
+`exec` 結束後會遮蔽本機市場 URL 與其密碼；檢視其他命令的原始錯誤前仍先去敏，不能假設第三方錯誤安全。
 
 ## Evidence
 
-證據在 `$DSA_VERIFY_RUN`（`.claude/reviews/verification/` 已 gitignore），Cleanup 後保留；長期摘要寫進 `docs/verification.md`，不把私人帳本、憑證或正式報告提交版控。
+證據留在 `$DSA_VERIFY_RUN`，runtime 清理後仍保留；私人帳本、原始環境、密碼／hash／cookie／token 不提交版控。`RUN_NOTES` 可作交接索引，通過主張必須回到該 run 的 `coverage.jsonl`、原始 artifacts 與斷言；手寫筆記或過去 run 不當本次通過證據。
 
-- 身分：HEAD、來源檔 hash、dirty 狀態、環境隔離摘要、build-info、Doctor、PID/URL、起訖時間。
-- 操作：每次動作的時間與 receipt（`actions.json`）、輸入前後 PNG 與 full-page snapshot；截圖需實際檢視。單一最終截圖無法證明怎麼到達。
-- 結果：真實 API response、重新整理後畫面；寫入另核對 SQLite `portfolio-rows.json` 與保留的 `application-evidence.sqlite3`。帳戶名稱／ID、現金列、日期／金額／幣別需一致。
-- 測試：命令、stdout/stderr、exit code、起訖時間、collected/passed/failed/skipped 數與 JUnit。全 skip、只 collect、HTTP 202、模板報告或程序 exit 0 均不能當功能成功。
-- 層級：單測、API fixture、真實本機服務、正式環境分開回報。CI 的 `web-ui-evidence-*` 目前含 API fixture；依該 run 原始輸出判定，不能推論真模型、行情或訊息送達。Mock 只用於產品已有的外部邊界，並揭露替身。
+- 身分：來源 hash、HEAD／dirty／遠端基線、build、隔離摘要、Doctor、PID／URL、起訖時間。
+- 動作：輸入／click receipt、前後 PNG／snapshot；寫入核對 UI、API、SQLite 同一實體 ID／值，重整後再讀。
+- 終態：真模型 task／history／session ID、資料 source／as_of、檔案或 DB 列。模型回覆與 provider usage 各自核對，不能造 token seed。
+- 測試：命令、log、exit、collected／passed／failed／skipped、JUnit；全 skip／只 collect 不算已測。
+- 層級：單測、API fixture、真本機服務、正式環境分開回報；CI fixture 綠不推論模型／行情／通知送達。dry-run 另比對檔案、網路、DB、Git refs 前後狀態。
 
-語法/lint、targeted tests 與使用者操作各自保存，完整離線套件依 AGENTS 確認後才跑；修復型 guard 測試需正反 mutation。若驗 dry-run，另比對檔案、網路、DB、git refs 的前後差異，不能信名稱。
+語法／lint／定向測試與真操作各自留證；全量離線套件依 AGENTS 確認後才跑。守修法的測試做正反 mutation。缺前置記 blocked 並完成不依賴它的 scope；不把 journey 改短以消除失敗。
 
 ## Cleanup
 
-成功的 browser driver 會 `task.finish({keep: []})` 一次；失敗保留同一 TaskSpace 調查，不另開空間。放棄失敗輪次時，在同一空間完成清理並留下原因；使用者接管時遵循 ego handoff，不能強制奪回。
+全部 browser 工作完成才 finish 同一 TaskSpace；失敗時留在同一空間調查，使用者接管依 ego handoff。保存跨功能 coverage 後執行：
 
 ```bash
 uv run python .claude/skills/verify/scripts/instance.py cleanup --run-dir "$DSA_VERIFY_RUN"
 ```
 
-只對驗證 bootstrap 所有的 process group 發 SIGTERM，禁止依程序名稱 kill。停止後備份本次 SQLite、匯出證據列、記 AkShare 快取是否生成，刪自己的 `runtime/`。若 PID 身分或 port 有異常就保留現場調查。執行後確認 `cleanup.json`、PNG、actions、API/DB 證據仍存在；`browser-result.json`、`browser-cleanup.json` 與 DB 斷言都通過才回報 journey 完成。
+私有 0600 `local-cli.registry` 登記本輪 CLI PGID；Cleanup 先封閉登記、清理登記群組，再停本輪 bootstrap。TERM 未退出才對仍屬本輪的群組 KILL；絕不按程序名稱 kill。PID／registry／port 異常保留 runtime，不能跳過檢查刪現場。登記格式見 [process_registry.py](scripts/process_registry.py)。
+
+停止後 SQLite 備份為 `application-evidence.sqlite3`，帳戶／入金列匯出 `portfolio-rows.json`；其他功能所需列／cache 在刪 runtime 前另保存。最後核對 `cli-cleanup.json`、`cleanup.json`、port 釋放及全部畫面／API／DB／coverage 證據仍可讀。被殺的未完成任務標失敗／中止，不能因清理成功改標功能通過。
 
 ## Helpers
 
-[instance.py](scripts/instance.py) 提供上述 `launch|doctor|cleanup --run-dir`；`launch --space-id` 可重用本次 TaskSpace。[portfolio.mjs](scripts/portfolio.mjs) 只在 ego runtime 執行，入口由 launch 產生。兩者皆可執行，無額外安裝需求。helper 輸出失敗時保留 log，修正具體原因再用新 run-dir 重跑；審查／修復第三輪仍失敗依 AGENTS 收斂。
+[instance.py](scripts/instance.py)：上述 `launch|doctor|cleanup|exec --run-dir`；launch 支援 `--space-id`、`--online`、`--symbols`。單獨空庫 portfolio 可用 launch 產生的 `drive-portfolio.mjs`；其他 scope 使用 `browser.mjs` 共用記錄與 TaskSpace。helper 皆可執行，錯誤先留 log，修具體原因再驗受影響路徑。
 
-後續功能變動用 `/maintain-verification-skill` 同步 feature map；本輪覆蓋與限制見 [驗證紀錄](../../../docs/verification.md)。
+改動 helper 後執行 `uv run python .claude/skills/verify/scripts/check_helpers.py --output-dir "$DSA_VERIFY_RUN/helper-tests"`。
+[check_helpers.py](scripts/check_helpers.py) 使用合成憑證／自有暫存檔，驗環境邊界與去敏；不替代真服務 journey。
+瀏覽器 helper 改動另跑 `node .claude/skills/verify/scripts/check_browser.mjs --output-dir "$DSA_VERIFY_RUN/browser-helper-tests"`；
+[check_browser.mjs](scripts/check_browser.mjs) 用合成 Page SDK 與自有暫存檔驗保存、遮蔽及阻擋提示，含正反 mutation。
+
+行為回歸案例見 [evals.json](evals/evals.json)，依操作與 artifacts 評分，不比對回答措辭。後續用 `/maintain-verification-skill` 保持 map 與 source 一致；審查／修復第三輪仍有 finding 依 AGENTS 收斂。

@@ -6,7 +6,7 @@
 - `make daily-report-detached`：背景執行、鎖、完成標記、分析／複盤與失敗結果。
 - journal 追加、限定檔案 commit／push，Telegram topic 路由。
 - `make verify-morning` 唯讀回驗及 dry-run 不發布 pack。
-- 初始狀態：均尚未實測；產生報告、發通知、push 必須各有證據。
+- 產生報告、發通知、push 必須各有本輪證據。
 
 ## How to get to it (user POV)
 
@@ -46,3 +46,10 @@ Web 結果由首頁歷史查看，另依 [analysis-history.md](analysis-history.
 - 主題缺失應拒送而不是落群組預設；sender 印 `[notify] <主題>: 已送出` 且 exit 0 才是發送端成功。
 - 日誌／候選為真不代表研究有預測力；回驗樣本不足仍寫 inconclusive。
 - 本項無外部網路的 stand-in 或 mock sender 僅證明對應邊界，不代表正式資料或 Telegram 已驗證。
+- Launch 的隔離環境只給其 child process；在 repo 根目錄執行 Makefile 不會自動沿用，
+  且多個 target 明寫 `uv run --env-file .env`。隔離 CLI 需顯式核對 ENV_FILE、SQLite、唯讀 market 與產物路徑。
+- 只允許唯讀 market 時，完整 `make morning`／daily-report 記 blocked：它們會執行 market_data daily 更新。
+  不為取得完整排程證據而寫正式庫、正式 journal／Git refs 或發通知；已有明確相應授權才執行那些入口。
+- 可獨立驗 `verify_morning_calls.py --brief --calls <副本> --outcomes <副本> --arms <副本>` 的純讀輸出，
+  以及 `morning_fable_arms.py --pack <凍結 pack> --journal <本輪檔>` 的真 CLI 判讀與本輪追加／同日去重。
+  後者 `--dry-run` 不呼叫模型；這些隔離 CLI 結果不等於資料更新、正式排程、journal push 或 Telegram 送達。

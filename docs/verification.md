@@ -1,54 +1,101 @@
 # 真實使用者流程驗證
 
-專案驗證入口是 [verify skill](../.claude/skills/verify/SKILL.md)，功能範圍見 [feature map](../.claude/skills/verify/features/README.md)。它補足 lint／單測與使用者實際操作之間的證據，不把所有測試稱為端到端。
+入口是 [verify skill](../.claude/skills/verify/SKILL.md)，[九份功能地圖](../.claude/skills/verify/features/README.md) 定義使用者入口、操作、前置資料與終態。實跑與單測／fixture 各自回報；一個主要旅程通過不代表該頁全部分支已通過。
 
-## 執行與證據
+## 執行方式
 
-從 repo 根目錄執行；需要既有 Python `.venv`、uv、Node/npm、Web node_modules 及 ego-browser。缺相依依 `AGENTS.md` 處理，不由 helper 自動安裝。
+使用既有 `.venv`、uv、Node/npm、Web node_modules 與 ego-browser；不自動安裝相依。先依 `ego-browser skill` 建立本次 TaskSpace，整輪只用同一個空間。
 
 ```bash
 export DSA_VERIFY_RUN="$PWD/.claude/reviews/verification/$(date +%Y%m%d-%H%M%S)"
-uv run python .claude/skills/verify/scripts/instance.py launch --run-dir "$DSA_VERIFY_RUN"
+uv run python .claude/skills/verify/scripts/instance.py launch \
+  --run-dir "$DSA_VERIFY_RUN" --space-id "$DSA_VERIFY_SPACE" \
+  --online --symbols 2330.TW,2317.TW
 uv run python .claude/skills/verify/scripts/instance.py doctor --run-dir "$DSA_VERIFY_RUN"
-ego-browser skill
+```
+
+線上 profile 用真實 CLI 登入與唯讀市場資料、獨立 SQLite／設定／cache；不帶 Telegram／Shioaji 憑證。空庫帳戶旅程移除 `--online --symbols`，使用空 HOME、不需模型與市場庫。跨功能透過 `scripts/browser.mjs` 的 `openRun()`、`act()`、安全 `snapshot()`、`capture()`、`api()`、`mark()` 留證；最後才 finish TaskSpace。
+
+單獨空庫回歸可執行 launch 產生的 `drive-portfolio.mjs`，它自行 finish，不可插在跨功能中途。
+
+```bash
 ego-browser nodejs < "$DSA_VERIFY_RUN/drive-portfolio.mjs"
 uv run python .claude/skills/verify/scripts/instance.py cleanup --run-dir "$DSA_VERIFY_RUN"
 ```
 
-已有本次目標的 TaskSpace 時，launch 加 `--space-id` 沿用它。driver 成功後結束該空間；失敗保留同一空間調查，重跑用新的 run-dir。每輪失敗也清理自己的 server/runtime，證據留下。
+CLI 用同一隔離環境，先讀入口與參數確認副作用：
 
-每個 run 保存來源 hash、HEAD／dirty／遠端基線、build 身分、隔離設定、完整 log、操作 receipt、輸入與結果 PNG／snapshot、API 回應、SQLite 備份及清理結果。PNG 要實際檢視；寫入要串起 UI、API、DB 的同一 account ID。證據在 `.claude/reviews/verification/`，不進版控；長期結論留在本文件。需要分享時先確認不含私人資料。
+```bash
+DSA_VERIFY_PYTHON="$(uv run python -c 'import sys; print(sys.executable)')"
+uv run python .claude/skills/verify/scripts/instance.py exec --run-dir "$DSA_VERIFY_RUN" \
+  --record dossier-cli -- "$DSA_VERIFY_PYTHON" scripts/tw_stock_dossier.py 2330.TW --no-branch --json
+```
 
-Launcher 複製當前已追蹤程式與股票索引到暫存來源，使用真實 `create_app`、uvicorn、空 SQLite。後端使用空 HOME／獨立 env／變數 allowlist，停用排程、通知憑證與遠端索引；前端建置明確清空 `VITE_API_URL`，指向同源 API。AkShare 暖機仍可連公開網路，寫入只落來源副本。這不是正式 NAS 或零網路環境，也不驗模型／Shioaji 登入。
+## 2026-10-28 跨功能實跑
 
-## 首輪範圍與來源
+本輪程式基線為 `3470e15e044096c17ec672ea285c1c203129b12a`，前一份技能 PR #145 已合入；產品原始碼未修改。工作樹有既有未追蹤 `codex-his.txt`、`journal/morning-arms.jsonl`，fetch 後沒有 pull／stash／覆蓋它們，另建驗證工作分支。
 
-整理依據是 `AGENTS.md`、`docs/tw-operating-guide.md`、`docs/daily-report-ops.md`、看板／四維度／資料中心文件、目前 routes／Makefile／測試，以及可取得對話「研究持股趨勢與年底停利策略」（thread `01a180d4-5306-7da2-820b-12335e53b66d`）。該對話要求分清帳本與自選、盤中價與昨收籌碼、資料日期與來源，已轉為證據要求；研究結論不算本輪測試。`codex-his.txt` 為空，更早對話未取得。
+本機證據根為 `.claude/reviews/verify-live-20261028/`，不進版控。`baseline-run/` 是原技能失敗輪，`live/` 是跨功能真服務，`regression/` 是最後空庫回歸。目錄內有動作起訖、receipt、PNG／語意快照、原始去敏 API、來源 hash、模型與 task/history/session/run ID、SQLite 備份和清理紀錄。
 
-產生器附帶的 `../poteto-mode/references/codex-tools.md` 在本機缺少；本輪使用當前 Codex 工具與實際 `ego-browser skill` v2.1.0 指南完成操作。新 skill 本身不依賴該缺失檔案。
+| 功能 | 實際執行與結果 | 主要證據 |
+|---|---|---|
+| 個股分析 | 真 UI 提交及重新分析 `2330.TW`，兩次 Claude CLI 完成，history 2／3；模型與歷史保存診斷成功，行情／新聞缺漏照原樣顯示 | `analysis-tasks-start.json`、`history-two.json`、`15-first-report.png` |
+| 人工大盤複盤 | 關閉通知、手動提交台股複盤，task `7556d270…` 完成，history 4，六段報告與 Markdown；保存的 diagnostics 為 `provider=claude_code_cli, success=true`，通知 skipped | `83-market-review-report.png`、`market-review-generation-proof.json` |
+| 歷史與複製 | 30d／90d／all 各兩筆；點「查看報告」切回較早的價格／ID。UI 複製 Markdown 與 API 逐位元組一致（4995 bytes），純文字正常，原剪貼簿已恢復 | `31-history-two.png`、`33-history-old-report.png`、`clipboard-markdown-proof.json` |
+| 即時看板 | 全部／自選／持股、刷新、同股合併、10 股持倉、日／月／年真圖；點數為 52／37／484。來源 `fallback`、`is_stale=true`，畫面標延遲；基金卡片也經真持倉驗證 | `11-board-expanded.png`、`chart-points-proof.json`、`24-board-fund-card.png` |
+| 四維度／資料中心 | 首頁與看板兩入口、真數字與真 Claude 解讀；資料日 2026-10-27。資料中心點「重新整理」，核對 provider／quality／routing，保留 unknown／unconfigured | `14-dossier-current.png`、`38-home-dossier.png`、`17-data-center.png` |
+| 持股帳本 | TWD 帳戶入金 100000、買 10 股 @1000、再買 5 股 @1400、賣 5 股 @1500；原幣現金 90500、持股 10；FIFO 已實現 2500、AVG 5500/3，符合獨立算式 | `ledger-fifo.json`、`ledger-avg.json`、`82-ledger-cost-checked.png` |
+| 基金 | 真基金 18480065，1／3／5 年 NAV 為 242／726／1211 點；新增 10 單位、重整、編輯 12 單位、看板整合、確認刪除，API 空列 | `21-fund-holding-saved.png`、`23-fund-edited.png`、`fund-holdings-deleted.json` |
+| 告警／訊號 | 告警建立停用→啟用→停用→重整篩選→真行情 dry test 未觸發→刪除，無通知嘗試。真報告訊號 2：篩選、詳情、有用回饋、關閉、重整查 closed | `29-alert-tested.png`、`alerts-deleted.json`、`41-signal-closed-reloaded.png` |
+| 設定／生成檢查 | 真 UI 保存 Codex 問股設定及有限預算，重整與 ENV_FILE 一致；保存後仍查得到真 market 基金。AI 模型分類的 JSON 冒煙測試通過 | `settings-agent-persisted.json`、`fund-search-after-settings.json`、`69-generation-smoke-result.png` |
+| 問股／對話 | 正常措辭真 Codex 呼叫 1 個工具並回答；追問正確沿用前文。新對話、切回、重整、完整 Markdown 下載成功；保留 8 則訊息 | `58-chat-real-answer.png`、`59-chat-followup.png`、`chat-real-export.md` |
+| 用量 | 今日／本月／全部與刷新；兩筆真 Codex 呼叫，共 34610 tokens（33920 prompt、690 completion），UI／API／SQLite 一致。Claude generation 本身沒有被灌入假 token | `65-usage-all.png`、`usage-crosscheck.json` |
+| 選股 | UI 啟用、藍籌策略，5217 筆快照→119→3 候選；真來源 em_datacenter，展開、重返頁面恢復與歷史 run 一致。資料源降級及 LLM 排序未配置有明示 | `77-screening-clean-restored.png`、`79-screening-history-selected.png`、`screening-task-second-check.json` |
+| 回測 | UI 一日驗證、force，處理／保存兩筆今天真報告，兩筆 `insufficient_data`，重整後仍在；沒有後續交易日，完成數為 0，未宣稱驗到績效 | `54-backtest-result.png`、`backtest-results-correct-filter.json` |
+| 登入保護 | UI 設暫時密碼／啟用→登出→保護頁 redirect→錯密碼拒絕→正確登入返回→重整 Session／保護 API 成功；最後登出 | `72-auth-protected-redirect.png`、`73-auth-wrong-password.png`、`80-auth-clean-session.png`、`auth-final-logged-out.json` |
+| CLI／每日作業安全段 | dossier CLI、`verify_morning_calls.py --brief`、`market_data.cli health --strict` 真跑且 exit 0；`make -n morning` 的 journal／pack／Git refs 前後相同 | `dossier-cli.json`、`local-market-health.json`、`morning-dry-run-boundary.json` |
 
-基線：本地 HEAD 與 `origin/develop` 均為 `96df37621ffb52340579e065c435c36b5d62fbb8`。fetch 後因既有未追蹤 `codex-his.txt`、`journal/morning-arms.jsonl`，未 pull、stash 或改動它們；另建工作分支。
+空庫舊旅程也用新 helper 再實跑一次：建 CNY 帳戶、入金 12345、切流水、重整、API／SQLite 核對通過。前一輪只有此旅程的證據在 `.claude/reviews/verification/20261028-verify-03/`，不能推論當時其他功能已驗證。
 
-## 實跑紀錄（2026-10-28）
+## 兩個已確認產品問題
 
-最終完整自證在 `.claude/reviews/verification/20261028-verify-03/` 通過；保留 5 張 PNG，已檢視保存後與重整畫面。browser TaskSpace 37 已結束，PID 61465 與 port 62598 已釋放，runtime 已移除。`proof-check.json` 核對備份 SQLite 的帳戶與入金列；清理後證據仍存在。下列覆蓋不代表其他 journey 通過：
+1. **問股把「報告 ID」當第二個美股代號。** 兩個包含明確 `2330.TW` 的真 UI 問句都提前澄清、未跑模型。真函式 `extract_stock_code_spans` 得到 `2330.TW` 與 `ID`，`decide_chat_object` 因多標的回 clarify；改用「報告編號」後正常模型路徑通過。來源是 `src/agent/stock_scope.py:238`、`src/agent/chat_object_decision.py`、`src/services/agent_chat_session_service.py:209`。原輸入維持 failed，沒有被改句後的成功覆蓋；純函式隔離重現記在 `chat-id-parser-proof.json`。
+2. **選股歷史時間少八小時。** 實際 run 於台北 14:06 建立，API 回 `06:06:39` 無 offset，UI 顯示 06:06。`ScreeningRun.created_at` 使用 UTC-naive 預設（`src/storage.py:81,335`），序列化只 `isoformat()`（:3009），`StockScreeningPage.tsx:84` 直接 `new Date(value)`。實際擷取前端函式在 Asia/Taipei 重現：原字串 06:06，明確 UTC 後 14:06。證據為 `screening-timezone-finding.json`；未推論其他欄位或排序也錯。
 
-- 真實服務 journey：空帳本 → 建帳戶 `VERIFY-20261028-verify-03`（ID 1）→ 今天入金 12345 CNY → 資金流水 → reload → API/SQLite 核對 → 清理，通過。實際畫面顯示總權益／總現金 `CNY 12,345.00`；UI 呼叫本機 API 的 POST/GET 在 `server.log` 可核對。
-- 隔離反向案例：父環境故意設 `VITE_API_URL=https://example.invalid`，最終 browser 仍成功操作本機 API／SQLite；`build-isolation.json` 記明實際 build 使用空值。
-- 定向測試：`tests/test_analysis_history.py`、`test_notify.py`、`test_local_cli_backend.py`、`test_structured_decision_action.py`、`test_decision_signal_api.py`，**659 passed、0 skipped、8 warnings、exit 0**（pytest 33.46 秒）；命令、exit code、JUnit 與 log 在 `targeted-20261028/`。通知 transport／LLM CLI 在這些測試中有替身，不證明外部服務送達或真生成。
-- 快速門檻：`scripts/check_ai_assets.py`、`ci_gate.sh syntax`、`ci_gate.sh flake8`、helper Python 編譯與 Node 語法檢查均通過；skillgenie lint 為 `0 FAIL, 0 WARN, 0 NOTE`。
-- 建置失敗 cleanup：`20261028-build-failure/` 以 npm 邊界替身故意 exit 7；launcher 非零退出、沒有啟動程序、自動移除 runtime、保留 build log，再執行 cleanup 仍成功。正反 mutation（原始碼只在記憶體變異）驗證：移除失敗清理會被抓到，過度刪掉整個 run 連證據也刪掉同樣會紅，結果在 `mutation.json`。這項只驗 helper 的失敗路徑，沒有冒稱 app 測試。
+本次維護的是驗證資產，以上產品問題保存為失敗案例，產品邏輯仍保持原狀。
 
-建立技能時的冷讀比較涵蓋三情境：空庫 Web、缺模型／歷史前置資料、每日報告通知。未有技能時能推導大部分隔離步驟，但沒有已實跑 launcher、證據串接或共同 cleanup；新 skill 將這些步驟做成可執行 helper。這是設計審查與一條真實 journey 的自證，尚未量測跨模型觸發率。
+## 實跑回饋到技能的修正
 
-已捕捉的失敗保留原始 log：`20261028-verify-01` 的 macOS multiprocessing 入口重入，修正 bootstrap main guard；`20261028-verify-02` 入金確實成功但 driver 等錯 `tr`，修正為實際資金流水元素。未將它們算成完整通過。
+- 原 profile 的真分析實測失敗 `LLM API Key 未配置`；新增線上 profile，保留真 HOME／USER／LOGNAME 的既有 CLI 登入。其使用者級快取不在完整檔案沙箱內，不能宣稱全部檔案均隔離。
+- dsa 固定本輪 SQLite；market URL 僅在 process environment。SQLAlchemy connect listener 必須 commit 唯讀 SET，另以 PGOPTIONS 涵蓋直接 psycopg；兩路真連線均 SHOW on。空 source `.env` 阻止裸 dotenv 向上回填。
+- UI 保存設定會 override 重載，所以線上 env 檔不能出現空的 DATABASE_URL 鍵。保存後以真基金搜尋再核對市場讀取。Doctor 明標 storage 是啟動快照，不假冒設定保存後的新 SHOW。
+- 修正實際 selectors／終態：設定保存按鈕帶異動數量、登入用 submit form、資料中心「重新整理」、dossier 回 HTML、歷史 tr 只選摘要而「查看報告」才切主內容、海報原生分享兩階段、交易成功會清代碼且買賣 select 需限定 form。
+- 同一 TaskSpace 跨功能，最後才 finish；原 portfolio driver 保留單獨 scope。新增共用 browser helper、安全 snapshot、機械回歸案例與九份 map 索引。
+- 分析後 server SIGTERM 曾逾時：只對已驗所有權的程序群組升級 KILL。新增私有 CLI registry，沿用 producer 的 open／closed／PGID／flock 格式，處理獨立 CLI session。
 
-## 未驗證與後續
+## 驗證資產自己的驗證
 
-- 正式 NAS 的部署、容器 COPY、Doppler、認證與資料遷移沒有被本機路徑驗到。
-- 台股交易、跨幣別、曝險、報告生成與歷史匯出、即時行情來源、四維度敘事、盤前／每日排程及 Telegram 送達尚未實跑。缺必要資料記 `blocked`，未選到記 `not-run`；不以 mock/空頁取代。
-- feature map 索引另列未種完整 journey 的其他頁面；改到時先補 map 再跑。完整離線套件未跑，本輪只跑定向測試。
-- CI `.github/workflows/ci.yml` 的 Web fixture 會攔截 API；預設 smoke 沒有密碼時真後端案例會 skip。綠燈的含義依該 run 原始輸出，不等於真報告生成／訊息送達。
-- 現有後端相依、前端相依由本機提供；空機安裝、Python 3.11、正式市場資料與外部模型仍待對應環境驗證。
+`check_helpers.py`：6 passed、0 skipped；合成 dotenv 邊界驗 online／offline 環境與去敏，未去敏及過度刪 log 的正反 mutation 都會紅。
 
-本次只加驗證資產與文件，回滾可 revert 此次 commit；runtime 已清理而 evidence 留在本機。沒有變更 `.env`、正式庫、排程、infra 或依賴。中英文文件索引同步加入入口；驗證細節使用本 fork 的繁體中文，沒有新增英文副本。後續用 `/maintain-verification-skill` 維護 map；新增產品行為時把旅程及證據要求一起更新。
+`check_browser.mjs`：5 passed、0 skipped；合成 Page SDK 邊界驗正常畫面、密碼遮蔽、密碼管理器提示拒絕且不寫圖文，移除 guard／過度阻擋正常頁兩種 mutation 都會紅。
+
+`process_registry.py`：使用真正 producer 啟動自有測試程序，實測 TERM、拒 TERM 後 KILL、未登記同名程序存活、closed 拒新 spawn；漏殺與誤殺兩種 mutation 都被抓到。所有測試程序已回收。
+
+這些是 helper 測試，與上表真服務／模型／瀏覽器驗收分開計算。本輪未跑本機全量離線套件；前一份 PR #145 的 CI 全綠也不當本輪操作證據。
+
+## 限制與未覆蓋分支
+
+- 分享海報真 UI 顯示「重試」，API 503 `share_image_unavailable`；主機找不到 wkhtmltoimage。未安裝相依，海報成功／原生分享送出保持 blocked，沒有用截圖冒充海報。
+- Shioaji 真即時未另登入 NAS 的券商 session；本輪實測的是公開延遲報價。缺新聞／搜尋渠道、跨幣別匯率或同日市場資料的提示原樣保留。
+- 今天報告尚未成熟，完整回測報酬與勝率未驗證；只有兩份同股報告，歷史載入更多／分頁沒有樣本覆蓋。
+- CSV／貼上匯入及去重、帳戶刪除、所有告警型別／通知送達、其他策略與多 Agent、長對話壓縮、改密碼／設定備份、桌面封裝等條件分支沒有被主要旅程推論為通過，map 保留待驗 recipe。
+- 完整 `make morning`／daily-report 會更新 market、推 journal／Git、送訊息，本輪只跑安全段。正式 NAS／Doppler／部署／遷移／排程送達沒有被本機代替驗證。
+- 本輪依賴已安裝的 Python 3.12／Node；空機安裝與 Python 3.11 仍需對應環境檢查。
+
+## 證據保全與回滾
+
+Cleanup 後 `live/` 與 `regression/` 的程序、port、runtime 均移除；`application-evidence.sqlite3`、去敏 API／動作／畫面／coverage、解讀 cache 與清理 proof 仍存在。主 run 在 registry 加入前已起，記錄如實為 `registered:false`；最後空庫 run 已使用 registry 並成功封閉。`cleanup-proof.json` 另核對全部備份。
+
+證據收集會遇到第三方錯誤含連線字串，以及密碼管理器的私人 iframe；本輪已去敏本機文字、移除三張不適合保留的擴充套件畫面並重拍乾淨證據。原始對話工具輸出不應分享。新 helper 阻擋已實測的 Save login 提示、遮蔽密碼欄、命令 log 遮 URL／密碼；仍需在保存及分享前核對邊界。原剪貼簿已還原，暫時密碼與原剪貼簿備份隨 runtime 移除。
+
+只需 revert 這次驗證資產 commit 即可回滾，不涉及產品 schema 或正式資料回滾。後續以 `/maintain-verification-skill` 更新 map；缺相依或產品失敗保持獨立狀態，不為了全綠縮短旅程。
