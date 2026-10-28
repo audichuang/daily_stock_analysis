@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改進] `verify` 經真實 ego-browser 跨功能巡檢擴為九組地圖，補線上 CLI／唯讀市場 profile、設定重載、登入、問股、用量與清理回歸，並加入證據去敏及正反 mutation；實測結果、兩項產品問題與缺渲染器等限制見 `docs/verification.md`。
+
 - [新功能] 新增專案 `verify` 技能與五組功能地圖：用隔離 Web/API、空 SQLite 及 ego-browser 操作保存畫面、動作、API／資料列和清理證據，區分單測、fixture 與真實服務驗證；操作與實跑紀錄見 `docs/verification.md`。
 
 - [改进] 本 fork 的推播從 Bark 全面改走 Telegram 群組主題：新增 `scripts/notify.py`／`make notify TOPIC=…`（盤前判讀、盤中提醒、每日報告、持股計畫、媒體點名、系統通知六個主題）；`daily_report.sh`、`media_picks_job.sh`、`kr_tw_memory_watch.py`、Makefile 的 `serve`／`review-tw`、相關 skill 與排程改用它；`verify_morning_calls.py --bark` 改名 `--push`（輸出前綴 `PUSH:`）

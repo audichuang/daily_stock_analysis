@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 // 只經 ego-browser nodejs 執行；TaskSpace 與 Page 由其 runtime 提供。
+import { applicationSnapshot } from "./browser.mjs";
+
 export async function verifyPortfolio(runDirectory) {
   const fs = await import("node:fs/promises");
   const assert = (await import("node:assert/strict")).default;
@@ -13,7 +15,7 @@ export async function verifyPortfolio(runDirectory) {
     await fs.writeFile(`${runDirectory}/actions.json`, JSON.stringify(actions, null, 2));
   };
   const capture = async (name) => {
-    await fs.writeFile(`${runDirectory}/${name}.txt`, await page.snapshot({ scope: "full_page" }));
+    await fs.writeFile(`${runDirectory}/${name}.txt`, await applicationSnapshot(page));
     await page.screenshot({ path: `${runDirectory}/${name}.png`, fullPage: true });
   };
   await fs.writeFile(`${runDirectory}/browser-space.json`, JSON.stringify({ spaceId: task.spaceId, page: page.label }));
@@ -61,7 +63,7 @@ export async function verifyPortfolio(runDirectory) {
     feature: "portfolio", entries: ["/portfolio"], passed: ["account-create", "cash-in", "reload-persistence"],
     accountId: accounts.accounts[0].id, spaceId: task.spaceId, at: new Date().toISOString(),
   }, null, 2));
-  console.log(await page.snapshot());
+  console.log(await applicationSnapshot(page));
   await task.finish({ keep: [] });
   await fs.writeFile(`${runDirectory}/browser-cleanup.json`, JSON.stringify({ finished: true, spaceId: task.spaceId }));
   console.log({ passed: true, evidence: runDirectory });
