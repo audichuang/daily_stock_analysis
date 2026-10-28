@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# 每日本机报告：更新台股资料 → 健检 → 自选股分析 + 大盘复盘 → Bark。
+# 每日本机报告：更新台股资料 → 健检 → 自选股分析 + 大盘复盘 → Telegram（每日報告主題）。
 #
 # 由 `make daily-report` 调用（Orca automation 每天触发）。任何一步失败都会推一则
-# Bark 失败通知再以非零退出——资料没更新就不出报告：无法证明新鲜的数字不如没有数字。
+# 失败通知（Telegram 系統通知主題）再以非零退出——资料没更新就不出报告：无法证明新鲜的数字不如没有数字。
 # 非交易日由 main.py 自己的交易日检查跳过（不带 --force-run）。
 #
 # 每步有 process-group 逾时（DAILY_REPORT_STEP_TIMEOUT_SECONDS，预设 5400）；前一轮的锁
-# 持有者还活着且锁龄超过 DAILY_REPORT_STALE_LOCK_SECONDS（预设 10800）会推 Bark 并以 1 退出。
+# 持有者还活着且锁龄超过 DAILY_REPORT_STALE_LOCK_SECONDS（预设 10800）会推失败通知并以 1 退出。
 # 两个变数只供手动覆写（本脚本不读 .env）。脚本可被 source 以载入函式（测试用），只有直接执行才跑 main。
 #
 # 完成标记 logs/.daily_report_last_session 记「<曆日>|<expected_session>」：同一天且同一交易场次才跳过。
@@ -23,17 +23,13 @@ DOPPLER_RUN=(doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" --)
 say() { printf '%s | %s\n' "$(date '+%F %T')" "$*"; }
 log() { printf '%s | %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
 
-# notify_failure BODY [TITLE]：TITLE 预设「每日報告失敗」；非致命通知（如个股部分失败）传自己的标题。
+# notify_failure BODY [TITLE] [TOPIC]：TITLE 预设「每日報告失敗」；非致命通知（如个股部分失败）传自己的标题。
+# TOPIC 是 Telegram 群組的主題（scripts/notify.py 的 --topic），預設 system。
 notify_failure() {
-  local body="$1" title="${2:-每日報告失敗}"
-  local payload
+  local body="$1" title="${2:-每日報告失敗}" topic="${3:-system}"
   local -a runner=(doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" --)
-  payload=$(uv run --no-project python -c \
-    'import json,sys; print(json.dumps({"title": sys.argv[2], "body": sys.argv[1], "group": "dsa"}, ensure_ascii=False))' \
-    "$body" "$title" 2>/dev/null)
-  "${runner[@]}" bash -c \
-    'curl -sS -m 15 -X POST "$BARK_URL" -H "Content-Type: application/json; charset=utf-8" -d "$1" >/dev/null' \
-    _ "$payload" || log "WARN: Bark 失败通知也没送出去"
+  printf '%s' "$body" | "${runner[@]}" uv run python scripts/notify.py --topic "$topic" --title "$title" >/dev/null \
+    || log "WARN: Telegram 通知也没送出去"
 }
 
 # 以 perl 在独立 process group 里执行命令并计时：逾时对整个 group 先 TERM、等最多 10 秒
@@ -163,7 +159,7 @@ release_lock() {
 }
 
 # acquire_lock LOCK LABEL STALE_SECONDS [KEEP_LOG_ON_SKIP=0] [FAIL_TITLE]：每日報告與媒體點名共用的 mkdir 鎖。
-# 活著且逾時 → FAILED＋Bark、exit 1；仍在跑或剛建鎖尚無 PID → 跳過、exit 0。
+# 活著且逾時 → FAILED＋通知、exit 1；仍在跑或剛建鎖尚無 PID → 跳過、exit 0。
 # 死鎖／過期的無 PID 鎖在同一個 flock 交易內回收重建，成功後才設 EXIT trap。
 acquire_lock() {
   LOCK="$1"
@@ -291,7 +287,7 @@ require_stock_success() {
   (( ok > 0 ))
 }
 
-# 盤前判讀回驗（scripts/verify_morning_calls.py）：非致命，失敗只記 WARN 並推一則 Bark，不擋每日報告。
+# 盤前判讀回驗（scripts/verify_morning_calls.py）：非致命，失敗只記 WARN 並推一則通知，不擋每日報告。
 # 只 commit outcomes 檔（預測檔 morning-calls.jsonl 由 07:30 排程另外 commit，兩者分開才有防竄改保證）；
 # push 走 media_picks_job.sh --push-journal 的守門：只在 develop、領先的 commit 全是 journal/ 才推。
 # 要不要 commit 看 outcomes 檔的 git 狀態、不看這輪有沒有新結果：上一輪 commit 失敗留下的列，這一輪要補 commit／push。
@@ -299,14 +295,14 @@ OUTCOMES_FILE="journal/morning-calls-outcomes.jsonl"
 morning_call_outcomes() {
   local out rc=0 line branch push="" pending
   out=$(run_with_timeout "${MORNING_VERIFY_TIMEOUT_SECONDS:-900}" \
-    uv run --env-file .env python scripts/verify_morning_calls.py --append --bark 2>&1) || rc=$?
+    uv run --env-file .env python scripts/verify_morning_calls.py --append --push 2>&1) || rc=$?
   printf '%s\n' "$out" >>"$LOG"
   if (( rc != 0 )); then
     log "WARN: 盤前判讀回驗失敗（rc=${rc}），不影響每日報告"
     notify_failure "盤前判讀回驗失敗（rc=${rc}），每日報告照常。log: $LOG" "盤前判讀回驗失敗" || true
     return 0
   fi
-  line=$(printf '%s\n' "$out" | sed -n 's/^BARK: //p' | tail -1)
+  line=$(printf '%s\n' "$out" | sed -n 's/^PUSH: //p' | tail -1)
   pending=$(git status --porcelain -- "$OUTCOMES_FILE" 2>/dev/null)
   if [[ -z "$line" && -z "$pending" ]]; then
     log "盤前判讀回驗：沒有新結果"
@@ -323,7 +319,7 @@ morning_call_outcomes() {
   fi
   log "盤前判讀回驗：${push}"
   if [[ -n "$line" ]]; then
-    notify_failure "${line}（journal：${push}）" "盤前判讀回驗 $(date +%F)" || true
+    notify_failure "${line}（journal：${push}）" "盤前判讀回驗 $(date +%F)" morning || true
   elif [[ "$push" != "push ok" ]]; then
     notify_failure "補 commit 上一輪的回驗結果：${push}。log: $LOG" "盤前判讀回驗失敗" || true
   fi
@@ -367,7 +363,7 @@ main() {
   morning_call_outcomes
   run_step "LLM 連線預檢" llm_preflight
   # 外層疊 Doppler `finmind` 專案：注入 FINMIND_TOKEN_*，台股個股新聞先查 FinMind。
-  run_step "自選股分析 + 大盤復盤" doppler run -p finmind -c dev -- "${DOPPLER_RUN[@]}" bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py'
+  run_step "自選股分析 + 大盤復盤" doppler run -p finmind -c dev -- "${DOPPLER_RUN[@]}" bash -c 'TELEGRAM_MESSAGE_THREAD_ID="$TELEGRAM_TOPIC_REPORT" uv run python main.py'
   run_step "個股分析至少一檔成功" require_stock_success
   if [[ -n "$SESSION_KEY" ]]; then
     printf '%s\n' "$SESSION_KEY" >"$DONE_MARK"

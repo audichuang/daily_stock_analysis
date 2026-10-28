@@ -92,18 +92,18 @@ A 線的投資觀是**趨勢追蹤＋回踩低吸**，規則寫死在 prompt 與
 
 - **平日 18:00 自動**：Orca automation「每日台股報告」跑 `make daily-report-detached`（脫離呼叫它的 agent session，
   agent 被收掉也照樣跑完；同一時間只會有一輪）——更新並健檢台股資料 →
-  `STOCK_LIST` 自選股分析 + 大盤複盤（`MARKET_REVIEW_REGION`）→ 推 Bark。資料更新、健檢或 LLM 預檢沒過就
-  **不出報告**，改推一則「每日報告失敗」；個股一檔都沒成功也推失敗（LLM 失效時 `main.py` 仍以 0 退出、
+  `STOCK_LIST` 自選股分析 + 大盤複盤（`MARKET_REVIEW_REGION`）→ 推到 Telegram「每日報告」主題。資料更新、健檢或 LLM 預檢沒過就
+  **不出報告**，改推一則「每日報告失敗」到「系統通知」主題；個股一檔都沒成功也推失敗（LLM 失效時 `main.py` 仍以 0 退出、
   照推一份只有模板的複盤，別把那則當成報告）。分析內容由本機已登入的 Claude Code CLI 產生（`GENERATION_BACKEND=claude_code_cli`），不需 API key。非交易日由 `main.py` 自己跳過。手動補跑同一條指令即可。
-- `make review-tw`：台股大盤複盤，推 Bark。13:30 收盤後跑；法人與融資 T+1 才補齊，盤後當天的籌碼數字
+- `make review-tw`：台股大盤複盤，推到「每日報告」主題。13:30 收盤後跑；法人與融資 T+1 才補齊，盤後當天的籌碼數字
   不完整。
-- `make analyze STOCKS=2330.TW,2317.TW`：個股分析。**這個 target 不經 Doppler**——少了它不報錯，只會沒 Bark、
-  台股新聞退回通用搜尋。要推播就手動包兩層（外層 `finmind` 注入 `FINMIND_TOKEN_*`，內層 `shioaji` 的 `BARK_URL`
-  映射成 `CUSTOM_WEBHOOK_URLS`）；非交易日加 `--force-run`：
+- `make analyze STOCKS=2330.TW,2317.TW`：個股分析。**這個 target 不經 Doppler**——少了它不報錯，只會沒通知、
+  台股新聞退回通用搜尋。要推播就手動包兩層（外層 `finmind` 注入 `FINMIND_TOKEN_*`，內層 `shioaji` 注入 Telegram 憑證，
+  主題用 `TELEGRAM_MESSAGE_THREAD_ID` 指定）；非交易日加 `--force-run`：
 
   ```bash
   doppler run -p finmind -c dev -- doppler run -p shioaji -c dev -- \
-    bash -c 'CUSTOM_WEBHOOK_URLS="$BARK_URL" uv run python main.py --stocks 2330.TW'
+    bash -c 'TELEGRAM_MESSAGE_THREAD_ID="$TELEGRAM_TOPIC_REPORT" uv run python main.py --stocks 2330.TW'
   ```
 - 代碼一定要帶 `.TW`／`.TWO`，裸 `2330` 不會進台股語義。
 - `.env` 的 `SCHEDULE_ENABLED` 是服務內建排程，與上面的 Orca 排程無關（本機為 `false`，避免同一天跑兩份）。GitHub Actions 的每日任務

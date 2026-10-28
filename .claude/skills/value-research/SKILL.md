@@ -80,7 +80,7 @@ uv run python scripts/financial_rigor.py benford --values '[...]'
 
 ### Step 5: 接回監控（研究 → 監控閉環）
 
-若結論是「值得買」或「觀察」，把結論結構化成論題 JSON，用 `scripts/value_thesis_to_monitoring.py` 一鍵建立 **DecisionSignal**（存 `invalidation` 論題逆轉條件、`watch_conditions`、`target_price`、`stop_loss`、`reason`）+ **價格告警規則**（達標價向上 info、停損/逆轉價向下 warning），接上 repo 既有 DecisionSignal 追蹤與 alert 推播（Bark）：
+若結論是「值得買」或「觀察」，把結論結構化成論題 JSON，用 `scripts/value_thesis_to_monitoring.py` 一鍵建立 **DecisionSignal**（存 `invalidation` 論題逆轉條件、`watch_conditions`、`target_price`、`stop_loss`、`reason`）+ **價格告警規則**（達標價向上 info、停損/逆轉價向下 warning），接上 repo 既有 DecisionSignal 追蹤與 alert 推播（Telegram；NAS Web 的 alert worker 送到「盤中提醒」主題）：
 
 ```bash
 # 先 dry-run 看 payload，確認無誤再加 --apply 落庫

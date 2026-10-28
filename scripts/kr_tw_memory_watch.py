@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""盤中監看台韓記憶體同日背離，只在門檻觸發時推 Bark。
+"""盤中監看台韓記憶體同日背離，只在門檻觸發時推 Telegram（盤中提醒主題）。
 
 skill `tw-morning-call` Step 2 有一格是人工的：韓股與台股**同時段**（韓 09:00-15:30 KST
 ＝台 08:00-14:30），`scripts/overnight.py` 只給到韓股前一交易日收盤。台灣記憶體對韓國記憶體
@@ -29,8 +29,6 @@ import sys
 import time
 from datetime import datetime, time as dtime
 from pathlib import Path
-
-import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -79,19 +77,10 @@ def alerts(sample: dict, peak: dict) -> list[str]:
 
 
 def push(body: str, title: str) -> bool:
-    """推 Bark。URL 從環境變數來（Doppler 注入），不落地。"""
-    url = os.environ.get("BARK_URL") or os.environ.get("CUSTOM_WEBHOOK_URLS", "").split(",")[0]
-    if not url.strip():
-        print("  [bark] 未注入 BARK_URL／CUSTOM_WEBHOOK_URLS，略過推播", flush=True)
-        return False
-    try:
-        r = requests.post(
-            url.strip(), json={"title": title, "body": body, "group": "kr-tw-mem"}, timeout=10
-        )
-        return r.ok
-    except requests.RequestException as e:
-        print(f"  [bark] 推播失敗 {e}", flush=True)
-        return False
+    """推到 Telegram 盤中提醒主題。token／chat id／主題 id 由 Doppler 注入，不落地；沒注入就略過。"""
+    from scripts.notify import send
+
+    return bool(send(body, "intraday", title))
 
 
 def kr_last(tickers):
@@ -218,7 +207,7 @@ def main():
         if msgs:
             ok = push("\n".join(msgs) + f"\n（{s['ts'][11:16]}　0050 {s['tw'].get('0050', 0):+.2f}%）",
                       "台韓記憶體監看")
-            print(f"  [bark] {'已推' if ok else '未送出'}：{msgs}", flush=True)
+            print(f"  [notify] {'已推' if ok else '未送出'}：{msgs}", flush=True)
         if a.once or datetime.now() >= stop:
             break
         time.sleep(a.interval * 60)

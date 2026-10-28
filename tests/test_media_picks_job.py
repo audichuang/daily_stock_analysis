@@ -213,7 +213,7 @@ def test_commit_journal_reports_none_when_unchanged(repo):
     assert _git(repo, "rev-parse", "HEAD") == head
 
 
-# ---- push／sync／鎖／detach／summary 的失敗路徑（stub 掉 notify_failure，絕不送 Bark） ----
+# ---- push／sync／鎖／detach／summary 的失敗路徑（stub 掉 notify_failure，絕不送通知） ----
 
 def _sh(cwd, body, env_extra=None):
     """source job 腳本後跑 body；notify_failure 換成寫檔，LOG 預設丟掉。"""
@@ -906,8 +906,9 @@ def test_push_journal_flag_runs_end_to_end_without_lock_or_log(repo):
         shutil.copy(ROOT / "scripts" / name, repo / "scripts" / name)
     bin_dir = repo / "bin"
     bin_dir.mkdir()
-    (bin_dir / "curl").write_text(f'#!/bin/sh\necho curl >>"{repo}/curl.called"\n', encoding="utf-8")
-    (bin_dir / "curl").chmod(0o755)
+    # 通知一律經 doppler 注入 token 再跑 scripts/notify.py：攔 doppler 就能確認沒有送通知
+    (bin_dir / "doppler").write_text(f'#!/bin/sh\necho doppler >>"{repo}/notify.called"\n', encoding="utf-8")
+    (bin_dir / "doppler").chmod(0o755)
 
     def run():
         import os
@@ -923,7 +924,7 @@ def test_push_journal_flag_runs_end_to_end_without_lock_or_log(repo):
     _human_commit(repo)
     r = run()
     assert r.returncode == 1 and r.stdout.startswith("push refused: ") and len(r.stdout.splitlines()) == 1
-    assert not (repo / "logs").exists() and not (repo / "curl.called").exists()
+    assert not (repo / "logs").exists() and not (repo / "notify.called").exists()
 
 
 def test_main_logs_since_right_after_lock_before_extraction():

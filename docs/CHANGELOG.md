@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] 本 fork 的推播從 Bark 全面改走 Telegram 群組主題：新增 `scripts/notify.py`／`make notify TOPIC=…`（盤前判讀、盤中提醒、每日報告、持股計畫、媒體點名、系統通知六個主題）；`daily_report.sh`、`media_picks_job.sh`、`kr_tw_memory_watch.py`、Makefile 的 `serve`／`review-tw`、相關 skill 與排程改用它；`verify_morning_calls.py --bark` 改名 `--push`（輸出前綴 `PUSH:`）
 - [文档] 精簡 AGENTS.md 與各模組 context 檔（去重、降層、補 `claude -p` 隔離與 scripts 分類表）、`.github` Copilot 鏡像縮成指向 `AGENTS.md`、CI runner 敘述去敏；`scripts/check_ai_assets.py` 改成檢查所有入庫 `CLAUDE.md` 只含 `@AGENTS.md`、copilot 檔指向 `AGENTS.md`
 - [修复] `make -n morning` 不再發布 pack：`morning` 那行含 `$(MAKE)`，dry-run 下照樣執行 `morning_pack.sh`，內層只印 recipe 文字、結束碼 0，原本會被存成當天 `reports/morning-packs/<日期>.txt` 餵給 Fable 臂；`morning_pack.sh` 現在偵測 MAKEFLAGS 的 dry-run 旗標（`--no-print-directory`、變數值裡的 n 不算），照常執行指令但不發布、不建暫存檔，stderr 印一行說明
 - [新功能] 盤前判讀 Fable 綜合臂（`fable_synth`）：`morning_fable_arms.py --synth` 只看 Claude 列與 fable 列的三個機率數字（不含任何理由）加過濾後 pack，寫 `journal/morning-arms.jsonl`（含 `member_p`），前置條件不成立不呼叫不寫列；回驗納入配對 Brier，每臂從第一筆可計分配對日起前 182 天只出描述、不印判定；SKILL Step 4 commit 前前景跑一次，登記 `morning-arms-fable-synth`
