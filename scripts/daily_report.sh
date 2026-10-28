@@ -321,10 +321,12 @@ morning_call_outcomes() {
     push=$(bash scripts/media_picks_job.sh --push-journal 2>>"$LOG" | tail -1)
   fi
   log "盤前判讀回驗：${push}"
+  # 摘要送盤前判讀主題；留檔（commit／push）出錯另送系統通知——盤前主題可能被靜音，故障不能只藏在摘要裡。
   if [[ -n "$line" ]]; then
     notify_failure "${line}（journal：${push}）" "盤前判讀回驗 $(date +%F)" morning || true
-  elif [[ "$push" != "push ok" ]]; then
-    notify_failure "補 commit 上一輪的回驗結果：${push}。log: $LOG" "盤前判讀回驗失敗" || true
+  fi
+  if [[ "$push" != "push ok" ]]; then
+    notify_failure "盤前判讀回驗結果未推上 develop：${push}。log: $LOG" "盤前判讀回驗留檔失敗" || true
   fi
 }
 
@@ -366,7 +368,7 @@ main() {
   morning_call_outcomes
   run_step "LLM 連線預檢" llm_preflight
   # 外層疊 Doppler `finmind` 專案：注入 FINMIND_TOKEN_*，台股個股新聞先查 FinMind。
-  run_step "自選股分析 + 大盤復盤" doppler run -p finmind -c dev -- "${DOPPLER_RUN[@]}" bash -c 'TELEGRAM_MESSAGE_THREAD_ID="$TELEGRAM_TOPIC_REPORT" uv run python main.py'
+  run_step "自選股分析 + 大盤復盤" doppler run -p finmind -c dev -- "${DOPPLER_RUN[@]}" bash -c 'uv run python scripts/notify.py --check --topic report && TELEGRAM_MESSAGE_THREAD_ID="$TELEGRAM_TOPIC_REPORT" uv run python main.py'
   run_step "個股分析至少一檔成功" require_stock_success
   if [[ -n "$SESSION_KEY" ]]; then
     printf '%s\n' "$SESSION_KEY" >"$DONE_MARK"

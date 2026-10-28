@@ -40,7 +40,7 @@ install: ## 安装后端依赖（uv）
 
 # ---- 运行服务 ----
 serve: ## 启动 Web/API 服务（Doppler 注入 Telegram；價格警報等推到盤中提醒主題）
-	$(DOPPLER_RUN) bash -c 'TELEGRAM_MESSAGE_THREAD_ID="$$TELEGRAM_TOPIC_INTRADAY" uv run python main.py --serve-only --host $(HOST) --port $(PORT)'
+	$(DOPPLER_RUN) bash -c 'uv run python scripts/notify.py --check --topic intraday && TELEGRAM_MESSAGE_THREAD_ID="$$TELEGRAM_TOPIC_INTRADAY" uv run python main.py --serve-only --host $(HOST) --port $(PORT)'
 
 serve-local: ## 启动 Web/API 服务（不推通知；纯本机调试）
 	uv run python main.py --serve-only --host $(HOST) --port $(PORT)
@@ -54,10 +54,12 @@ daily-report-detached: ## 同上，但脱离当前 session 在背景跑完即返
 
 # ---- 大盘复盘 ----
 review-tw: ## 生成台股大盘复盘（推到 Telegram 每日報告主題）
-	$(DOPPLER_RUN) bash -c 'TELEGRAM_MESSAGE_THREAD_ID="$$TELEGRAM_TOPIC_REPORT" MARKET_REVIEW_REGION=$(REGION) uv run python main.py --market-review'
+	$(DOPPLER_RUN) bash -c 'uv run python scripts/notify.py --check --topic report && TELEGRAM_MESSAGE_THREAD_ID="$$TELEGRAM_TOPIC_REPORT" MARKET_REVIEW_REGION=$(REGION) uv run python main.py --market-review'
 
 # ---- 通知 ----
 # TOPIC／TITLE 以原文經環境變數交給 recipe：直接寫 "$(TITLE)" 會讓標題裡的引號、$、反引號變成 make／shell 語法。
+# 命令列變數預設會被 make 展開後匯出（`$(shell …)` 會被執行），所以原名不匯出、只匯出 $(value) 取的原文。
+unexport TITLE TOPIC
 notify: export NOTIFY_TOPIC = $(value TOPIC)
 notify: export NOTIFY_TITLE = $(value TITLE)
 notify: ## 推一則 Telegram 通知：內文走 stdin，TOPIC=morning|intraday|report|plan|media|system，TITLE 選填

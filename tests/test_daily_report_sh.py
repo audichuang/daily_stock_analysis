@@ -273,7 +273,7 @@ def _sandbox(tmp_path):
     )
     (bindir / "doppler").write_text(
         f'#!/bin/sh\necho "$@" >> "{calls}"\n'
-        'case "$*" in *notify.py*) while [ "$1" != "--" ]; do shift; done; shift; exec "$@";; esac\n'
+        'case "$*" in *"notify.py --topic"*) while [ "$1" != "--" ]; do shift; done; shift; exec "$@";; esac\n'
         'case "$*" in *finmind*) if [ -n "$FAKE_FAIL" ]; then '
         'echo "[5469.TW] 分析未成功: x"; echo "成功: 2, 失败: 1"; else echo "成功: 1, 失败: 0"; fi;; esac\n'
     )
@@ -577,6 +577,7 @@ def test_morning_outcomes_commits_only_outcomes_file_and_notifies(tmp_path):
     assert files == ["journal/morning-calls-outcomes.jsonl"]
     assert "NOTIFY 盤前判讀回驗" in log and "2099-03-04 摘要" in log and "push ok" in log
     assert "push ok）|topic=morning" in log
+    assert "topic=system" not in log                # 留檔成功就不吵系統通知
 
 
 def test_morning_outcomes_failure_is_not_fatal_and_commits_nothing(tmp_path):
@@ -602,6 +603,10 @@ def test_morning_outcomes_off_develop_does_not_commit(tmp_path):
     assert "rc=0" in r.stdout
     assert _last_commit_files(repo)[0] == "init"
     assert "未 commit（主 checkout 在 feat/x）" in log
+    # 摘要照送盤前主題，留檔失敗另送系統通知（盤前主題可能被靜音）
+    assert "NOTIFY 盤前判讀回驗 " in log and "|topic=morning" in log
+    assert "NOTIFY 盤前判讀回驗留檔失敗|" in log and "未 commit（主 checkout 在 feat/x）。log:" in log
+    assert log.count("topic=system") == 1
 
 
 def test_morning_outcomes_retries_a_failed_commit_on_the_next_run(tmp_path):

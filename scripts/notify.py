@@ -25,16 +25,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 TOPICS = ("morning", "intraday", "report", "plan", "media", "system")
 
 
+def missing_config(topic: str) -> list[str]:
+    """送到這個主題還缺哪些環境變數（空串列＝齊全）。"""
+    keys = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", f"TELEGRAM_TOPIC_{topic.upper()}")
+    return [k for k in keys if not os.environ.get(k, "").strip()]
+
+
 def send(body: str, topic: str, title: str = "") -> bool:
     """送到指定主題才回 True；缺設定或送出失敗回 False，原因印在 stderr。"""
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    thread_id = os.environ.get(f"TELEGRAM_TOPIC_{topic.upper()}", "").strip()
-    missing = [k for k, v in (("TELEGRAM_BOT_TOKEN", token), ("TELEGRAM_CHAT_ID", chat_id),
-                              (f"TELEGRAM_TOPIC_{topic.upper()}", thread_id)) if not v]
+    missing = missing_config(topic)
     if missing:
         print(f"[notify] 未注入 {'、'.join(missing)}，不送", file=sys.stderr, flush=True)
         return False
+    token = os.environ["TELEGRAM_BOT_TOKEN"].strip()
+    chat_id = os.environ["TELEGRAM_CHAT_ID"].strip()
+    thread_id = os.environ[f"TELEGRAM_TOPIC_{topic.upper()}"].strip()
     text = f"**{title}**\n{body}" if title else body
 
     from src.notification_sender.telegram_sender import TelegramSender
@@ -49,7 +54,15 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="推一則通知到 Telegram 群組的指定主題（內文從 stdin 讀）")
     ap.add_argument("--topic", required=True, choices=TOPICS)
     ap.add_argument("--title", default="")
+    ap.add_argument("--check", action="store_true",
+                    help="只檢查該主題的憑證與 id 是否齊全（不讀 stdin、不送）；main.py 入口在啟動前用它擋掉會落到預設主題的情況")
     a = ap.parse_args(argv)
+    if a.check:
+        missing = missing_config(a.topic)
+        if missing:
+            print(f"[notify] 未注入 {'、'.join(missing)}：{a.topic} 主題的推播會失效，停止", file=sys.stderr, flush=True)
+            return 1
+        return 0
     body = sys.stdin.read().strip()
     if not body:
         # 排程的 Claude 分兩次 Bash 組內容時變數會消失，送出去只剩標題（2026-10-21 Bark 收到空訊息）
