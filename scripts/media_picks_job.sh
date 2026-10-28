@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # 平日 23:00 媒體點名的機械部分：同步 develop → media-picks → ptt-picks → 只 commit＋push 兩個 journal → 產摘要 JSON。
 #
-# 判讀（語音誤字的代號覆核、看多名單的建議）與 Bark 摘要由 Orca 排程的 Claude 讀摘要後做，見 docs/daily-report-ops.md。
+# 判讀（語音誤字的代號覆核、看多名單的建議）與 Telegram 摘要由 Orca 排程的 Claude 讀摘要後做，見 docs/daily-report-ops.md。
 # 跟 daily_report.sh 一樣用 --detach 脫離呼叫者：Orca 收掉 agent 的 terminal 時擷取照樣跑完（2026-10-23 23:01
 # Hindsight 的 repo 調查子程序繼承了 ORCA_* 環境變數，它結束時觸發 Orca 的 Stop hook，排程的 terminal 被收掉、
-# 前景的 make media-picks 跟著被 SIGTERM）。也因為那時 agent 可能已經不在，任何一步失敗都由本腳本自己推 Bark。
+# 前景的 make media-picks 跟著被 SIGTERM）。也因為那時 agent 可能已經不在，任何一步失敗都由本腳本自己推通知（Telegram 系統通知主題）。
 #
 # log：logs/media_picks_job_<時刻>.log（--detach 會印出 `log: <路徑>`），最後一行 `media picks done` 或 `FAILED: …`；摘要：同名 .summary.json／.summary.index.md；持股清單 .holdings.json（`RESULT holdings=`，取不到記 none）。
-# 可被 source 載入函式（測試用），只有直接執行才跑 main。逾時與 Bark 共用 daily_report.sh 的函式。
+# 可被 source 載入函式（測試用），只有直接執行才跑 main。逾時與通知共用 daily_report.sh 的函式。
 
 # shellcheck source=scripts/daily_report.sh
 . "$(dirname "${BASH_SOURCE[0]}")/daily_report.sh"
@@ -29,7 +29,7 @@ git_net() {
 # push_develop：每次只推已驗證的 SHA，lease 綁定同一輪驗證的 origin/develop；被拒就 fetch＋rebase、重新驗證再推一次。
 # rebase 失敗要 abort，
 # 不然主 checkout 卡在 rebase 中途，之後每晚都同步失敗。不加 --autostash：工作樹有未 commit 的改動時 rebase 會拒絕、
-# 我們就照 fail 處理（Bark），不要偷偷替人 stash（stash 堆疊跨 worktree 共用）。
+# 我們就照 fail 處理（推通知），不要偷偷替人 stash（stash 堆疊跨 worktree 共用）。
 push_develop() {
   local sha origin_sha attempt
   for attempt in 1 2; do
@@ -242,7 +242,7 @@ main() {
 
   # 先寫第一行 log：--detach 印出的 log 路徑從這一刻起就存在（含下面「本次不重複跑」的情況）
   log "media picks start (pid $$, log: $LOG)"
-  # 卡死的前一輪：FAILED＋Bark；正常在跑：跳過但保留 log（排程的 Claude 靠它判斷）
+  # 卡死的前一輪：FAILED＋通知；正常在跑：跳過但保留 log（排程的 Claude 靠它判斷）
   acquire_lock "logs/.media_picks_job.lock" 媒體點名 "${MEDIA_PICKS_STALE_LOCK_SECONDS:-10800}" 1 "媒體點名失敗 $(date +%F)"
   # 拿到鎖就先記 since：擷取中途掛掉的一輪也要讓 media_picks_summary.py --judge-since 看得到，它寫下的列才會被補判
   log "RESULT since=$run_start"
@@ -269,7 +269,7 @@ main() {
   log "RESULT journal push=$push"
   [[ "$push" == "fail" ]] && problems+=("journal commit／push 失敗")
 
-  # 持股清單（唯讀）：取不到只少一段，不算本輪失敗、不推 Bark
+  # 持股清單（唯讀）：取不到只少一段，不算本輪失敗、不推通知
   local holdings="logs/media_picks_job_${run_id}.holdings.json"
   capture_holdings "$holdings" || holdings=""
 

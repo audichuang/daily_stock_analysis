@@ -258,7 +258,7 @@ def test_lock_staleness_threshold(tmp_path):
 
 
 def _sandbox(tmp_path):
-    """在 tmp 里放一份脚本副本 + 假的 uv／doppler，直接执行 main（不碰真实仓库与 Bark）。"""
+    """在 tmp 里放一份脚本副本 + 假的 uv／doppler，直接执行 main（不碰真实仓库与 Telegram）。"""
     (tmp_path / "scripts").mkdir()
     script = tmp_path / "scripts" / "daily_report.sh"
     script.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
@@ -269,10 +269,11 @@ def _sandbox(tmp_path):
     # 假 doppler：主分析步骤（带 finmind）印出个股汇总行，其余只记呼叫。
     (bindir / "uv").write_text(
         f"#!/bin/sh\ncase \"$*\" in *expected_session*) echo \"${{FAKE_EXPECTED:-}}\";; "
-        f"*--no-project*) printf '%s\\n' \"$*\" >> \"{tmp_path}/notify_args\"; echo '{{}}';; *) echo '{{}}';; esac\n"
+        f"*notify.py*) {{ printf '%s\\n' \"$*\"; cat; echo; }} >> \"{tmp_path}/notify_args\";; *) echo '{{}}';; esac\n"
     )
     (bindir / "doppler").write_text(
         f'#!/bin/sh\necho "$@" >> "{calls}"\n'
+        'case "$*" in *"notify.py --topic"*) while [ "$1" != "--" ]; do shift; done; shift; exec "$@";; esac\n'
         'case "$*" in *finmind*) if [ -n "$FAKE_FAIL" ]; then '
         'echo "[5469.TW] 分析未成功: x"; echo "成功: 2, 失败: 1"; else echo "成功: 1, 失败: 0"; fi;; esac\n'
     )
@@ -303,7 +304,7 @@ def _run_main_with_lock(tmp_path, lock_age):
 def test_main_alerts_when_live_lock_holder_is_stuck(tmp_path):
     r, logs, calls = _run_main_with_lock(tmp_path, 4 * 3600)
     assert r.returncode == 1
-    assert calls.exists(), "卡住的锁必须推 Bark"
+    assert calls.exists(), "卡住的锁必须推通知"
     assert list(logs.glob("daily_report_*.log")), "要保留本轮 log"
     assert "已卡住" in r.stdout
 
@@ -408,19 +409,53 @@ def test_require_stock_success_all_failed_is_fatal_without_duplicate_notice(tmp_
     assert not (tmp_path / "notified").exists()
 
 
-def test_notify_failure_title_defaults_and_overrides(tmp_path):
-    # 假 uv 把 argv 记下来：第 2 个参数（-c 之后）是 body、第 3 个是 title
+def test_notify_failure_title_topic_defaults_and_overrides(tmp_path):
+    # 假 doppler 執行 `--` 之後的命令；假 uv 記下 argv 與 stdin（內文走 stdin，不進 argv）
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    (bindir / "uv").write_text(f'#!/bin/sh\nprintf "%s|" "$@" >> "{tmp_path}/uv_args"\necho "{{}}"\n')
-    (bindir / "doppler").write_text("#!/bin/sh\nexit 0\n")
+    (bindir / "uv").write_text(f'#!/bin/sh\n{{ printf "%s|" "$@"; printf "STDIN=%s" "$(cat)"; echo; }} >> "{tmp_path}/uv_args"\n')
+    (bindir / "doppler").write_text('#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n')
     for f in bindir.iterdir():
         f.chmod(0o755)
     env = {"PATH": f"{bindir}:{os.environ['PATH']}"}
-    _run_bash('notify_failure "內文"; echo >> "' + str(tmp_path) + '/uv_args"; notify_failure "內文2" "自訂標題"', env_extra=env)
+    _run_bash('notify_failure "內文"; notify_failure "內文2" "自訂標題"; notify_failure "內文3" "回驗" morning',
+              env_extra=env)
     lines = (tmp_path / "uv_args").read_text(encoding="utf-8").strip().split("\n")
-    assert lines[0].endswith("|內文|每日報告失敗|")
-    assert lines[1].endswith("|內文2|自訂標題|")
+    assert lines[0] == "run|python|scripts/notify.py|--topic|system|--title|每日報告失敗|STDIN=內文"
+    assert lines[1] == "run|python|scripts/notify.py|--topic|system|--title|自訂標題|STDIN=內文2"
+    assert lines[2] == "run|python|scripts/notify.py|--topic|morning|--title|回驗|STDIN=內文3"
+
+
+def _notify_bin(tmp_path, uv_body):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "uv").write_text(f"#!/bin/sh\n{uv_body}\n")
+    (bindir / "doppler").write_text('#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n')
+    for f in bindir.iterdir():
+        f.chmod(0o755)
+    return {"PATH": f"{bindir}:{os.environ['PATH']}"}
+
+
+def test_notify_failure_output_and_reason_go_to_log(tmp_path):
+    # notify.py 未送出的原因（stderr）要留在 log，失敗要記 WARN；不能被丟進 /dev/null
+    env = _notify_bin(tmp_path, 'echo "[notify] 未注入 TELEGRAM_TOPIC_SYSTEM，不送" >&2; exit 1')
+    log = tmp_path / "run.log"
+    _run_bash(f'LOG="{log}"; notify_failure "內文"', env_extra=env)
+    text = log.read_text(encoding="utf-8")
+    assert "未注入 TELEGRAM_TOPIC_SYSTEM" in text and "WARN: Telegram 通知也没送出去" in text
+
+
+def test_notify_failure_is_bounded_by_timeout(tmp_path):
+    # 通知卡住（HTTP 一直不結束）不能拖住腳本與鎖：整次呼叫有上限、逾時記 WARN
+    marker = _unique_sleep()
+    env = _notify_bin(tmp_path, f"cat >/dev/null; exec sleep {marker}")
+    env["NOTIFY_TIMEOUT_SECONDS"] = "1"
+    log = tmp_path / "run.log"
+    start = time.monotonic()
+    _run_bash(f'LOG="{log}"; notify_failure "內文"', env_extra=env, timeout=30)
+    assert time.monotonic() - start < 15
+    assert "WARN: Telegram 通知也没送出去" in log.read_text(encoding="utf-8")
+    assert subprocess.run(["pgrep", "-f", f"sleep {marker}"], capture_output=True).returncode != 0
 
 
 def _run_main_sandbox(tmp_path, *, mark, expected, force=False):
@@ -518,7 +553,7 @@ def _outcomes_repo(tmp_path, uv_body, branch="develop"):
 def _run_outcomes(repo, bindir):
     log = repo / "run.log"
     body = (f'cd "{repo}"; LOG="{log}"\n'
-            'notify_failure() { printf "NOTIFY %s|%s\\n" "$2" "$1" >>"$LOG"; }\n'
+            'notify_failure() { printf "NOTIFY %s|%s|topic=%s\\n" "$2" "$1" "${3:-system}" >>"$LOG"; }\n'
             'morning_call_outcomes; echo "rc=$?"')
     env = {"PATH": f"{bindir}:{os.environ['PATH']}", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
@@ -534,13 +569,15 @@ def _last_commit_files(repo):
 
 def test_morning_outcomes_commits_only_outcomes_file_and_notifies(tmp_path):
     repo, bindir = _outcomes_repo(
-        tmp_path, 'echo \'{"date": "2099-03-04"}\' >> journal/morning-calls-outcomes.jsonl; echo "BARK: 2099-03-04 摘要"')
+        tmp_path, 'echo \'{"date": "2099-03-04"}\' >> journal/morning-calls-outcomes.jsonl; echo "PUSH: 2099-03-04 摘要"')
     r, log = _run_outcomes(repo, bindir)
     assert "rc=0" in r.stdout
     subject, files = _last_commit_files(repo)
     assert subject.startswith("journal: morning call outcomes")
     assert files == ["journal/morning-calls-outcomes.jsonl"]
     assert "NOTIFY 盤前判讀回驗" in log and "2099-03-04 摘要" in log and "push ok" in log
+    assert "push ok）|topic=morning" in log
+    assert "topic=system" not in log                # 留檔成功就不吵系統通知
 
 
 def test_morning_outcomes_failure_is_not_fatal_and_commits_nothing(tmp_path):
@@ -560,17 +597,21 @@ def test_morning_outcomes_without_new_rows_is_silent(tmp_path):
 
 def test_morning_outcomes_off_develop_does_not_commit(tmp_path):
     repo, bindir = _outcomes_repo(
-        tmp_path, 'echo \'{"date": "2099-03-04"}\' >> journal/morning-calls-outcomes.jsonl; echo "BARK: x"',
+        tmp_path, 'echo \'{"date": "2099-03-04"}\' >> journal/morning-calls-outcomes.jsonl; echo "PUSH: x"',
         branch="feat/x")
     r, log = _run_outcomes(repo, bindir)
     assert "rc=0" in r.stdout
     assert _last_commit_files(repo)[0] == "init"
     assert "未 commit（主 checkout 在 feat/x）" in log
+    # 摘要照送盤前主題，留檔失敗另送系統通知（盤前主題可能被靜音）
+    assert "NOTIFY 盤前判讀回驗 " in log and "|topic=morning" in log
+    assert "NOTIFY 盤前判讀回驗留檔失敗|" in log and "未 commit（主 checkout 在 feat/x）。log:" in log
+    assert log.count("topic=system") == 1
 
 
 def test_morning_outcomes_retries_a_failed_commit_on_the_next_run(tmp_path):
     repo, bindir = _outcomes_repo(
-        tmp_path, 'echo \'{"date": "2099-03-04"}\' >> journal/morning-calls-outcomes.jsonl; echo "BARK: x"')
+        tmp_path, 'echo \'{"date": "2099-03-04"}\' >> journal/morning-calls-outcomes.jsonl; echo "PUSH: x"')
     hook = repo / ".git" / "hooks" / "pre-commit"
     hook.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
     hook.chmod(0o755)

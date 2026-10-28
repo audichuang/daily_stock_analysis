@@ -117,7 +117,7 @@ E[R] = exp_upside × confidence + exp_downside × (1 − confidence)     # 加�
     `err_<量測>`＝實際 − 預估。
   - `night_spot_gap`＝夜盤收盤 ÷ 前一日現貨收盤（skill 公式用對數字時的值；期交所把夜盤記在它**結束**的那天）、
     `night_tx_chg`＝夜盤收盤 ÷ 前一日結算價、`input_err`＝`gap_expected` − 對應口徑的夜盤值（`gap_basis=tx_settle` 對 `night_tx_chg`，舊列對 `night_spot_gap`；抄錯或用了 21:30 前報價）。
-    彙總依 `gap_basis` 分組、縮放比是「實際 ÷ 該組 raw」（新口徑 `night_tx_chg`、舊口徑 `night_spot_gap`；`--brief`／Bark 的縮放建議只看新口徑組，樣本不足就 inconclusive）：`gap_expected` 可能已照建議乘過縮放比，拿它估會把修正再修一次。
+    彙總依 `gap_basis` 分組、縮放比是「實際 ÷ 該組 raw」（新口徑 `night_tx_chg`、舊口徑 `night_spot_gap`；`--brief`／推播的縮放建議只看新口徑組，樣本不足就 inconclusive）：`gap_expected` 可能已照建議乘過縮放比，拿它估會把修正再修一次。
   - 09:05 或期貨量測暫時抓不到時，7 個曆日內延後不寫（寫了就不會重算）；超過 7 天仍缺才寫入並在 `note` 記缺哪項。
   - `day_return`／`intraday_return`：收盤 ÷ 前收、收盤 ÷ 官方開盤。`gap_dir_hit`（預估方向對 `gap_0905`）、
     `day_dir_hit`（預估缺口方向對全日方向，描述性，盤前判讀不預測收盤）。

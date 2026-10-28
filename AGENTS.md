@@ -84,7 +84,7 @@
 - **TWSE/TPEx 官方端点会停止更新却照样回 200**（实测冻结 79 天）：消费端一律比对回应自带的日期，拿不到参照就拒收。
 - **`.env` 的 `STOCK_INDEX_REMOTE_UPDATE_ENABLED` 必须保持 `false`**，否则运行时会从上游拉索引、覆盖本地台股／美股增量（`.env.example` 是上游的 `true`，勿照抄）。台股索引用 `make refresh-tw` 重建。
 - **个股分析与大盘复盘走本机 Claude Code CLI**（`GENERATION_BACKEND=claude_code_cli`、`GENERATION_FALLBACK_BACKEND=` 留空），不需 API key；LiteLLM 那条在本机没有可用 key。要改回 LiteLLM 时 `.env` 须显式设 `LITELLM_MODEL`：否则 shell 导出了 `GEMINI_API_KEY` 时 `load_dotenv` 不覆盖既有变量，自动推断会选 Gemini。推理模型回空时的槓桿也是换 `LITELLM_MODEL`，不是加 token 预算（见 `src/AGENTS.md`）。
-- **Bark 与台股新闻 token 走 Doppler 注入**，secret 不落地 `.env`：`make serve`／`make review-tw`／`make daily-report` 已包好；**`make analyze` 不含**——少了它不报错，只会没 Bark、台股新闻退回通用搜寻（手动包法见 `docs/tw-operating-guide.md` §2.3）。Shioaji 金钥同走 Doppler，缺了即时报价静默降级 yfinance（讯号是 `source` 变 `fallback`）。
+- **通知走 Telegram 群組的主題，憑證、主題 id 与台股新闻 token 走 Doppler 注入**，secret 不落地 `.env`：腳本與排程一律經 `make notify TOPIC=…`／`scripts/notify.py` 指定主題（主題對照見 `docs/daily-report-ops.md`），不要再直接打 Bark；`make serve`／`make review-tw`／`make daily-report` 已包好；**`make analyze` 不含**——少了它不报错，只会没通知、台股新闻退回通用搜寻（手动包法见 `docs/tw-operating-guide.md` §2.3）。Shioaji 金钥同走 Doppler，缺了即时报价静默降级 yfinance（讯号是 `source` 变 `fallback`）。
 - **应用库（分析历史、回测、决策信号、LLM 用量）是 Postgres `dsa` schema（`.env` 的 `STORAGE_DATABASE_URL`），本机报告与 NAS 正式 Web 共用**——写进去就是写正式资料。`data/stock_analysis.db` 已冻结，读它只会静默拿到旧数据。临时脚本要隔离正式库就把 `STORAGE_DATABASE_URL` 设成空字串（pytest 由 `tests/conftest.py` 守；LiteLLM import 时补回 `.env` 的坑由 `src/__init__.py` 的 `LITELLM_MODE=PRODUCTION` 守，只在经 `src` import 时生效）。
 - **台股历史数据（行情／筹码／财报）在 Postgres `market` schema（`.env` 的 `DATABASE_URL`），是唯一数据源、无备份**。
 - **Web 服务正式跑在 NAS**：本机 launchd `com.audichuang.dsa` 已 disable，不要重新启用（两边会同时登入 Shioaji、共用应用库）。排程时间与每日报告的逾时／锁／完成标记见 `docs/daily-report-ops.md`。

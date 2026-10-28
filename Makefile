@@ -3,8 +3,9 @@
 #
 # 说明：
 # - 所有 Python 入口统一走 `uv run`，无需手动 activate venv。
-# - 通知（Bark）走 Doppler 注入：Doppler 中的 BARK_URL 在运行时映射为
-#   CUSTOM_WEBHOOK_URLS（daily_stock_analysis 读取的通知变量），secret 不落地 .env。
+# - 通知走 Telegram 群組的主題（topic），憑證由 Doppler 注入（TELEGRAM_BOT_TOKEN／TELEGRAM_CHAT_ID／
+#   TELEGRAM_TOPIC_<主題>），secret 不落地 .env。main.py 一個行程只發到一個主題（TELEGRAM_MESSAGE_THREAD_ID）；
+#   腳本與排程用 `make notify` 或 scripts/notify.py 指定主題。
 
 # ---- 可覆盖变量 ----
 DOPPLER_PROJECT ?= shioaji
@@ -21,12 +22,12 @@ TSMC_CLOSE      ?= 0
 # notebooklm-py CLI（media-picks 用）；不在 PATH 時指向它的 venv，例如 ~/research/notebooklm-py/.venv/bin/notebooklm
 NOTEBOOKLM_BIN  ?= notebooklm
 
-# Doppler 包裹：注入 BARK_URL 并映射为 CUSTOM_WEBHOOK_URLS；外層再疊 `finmind` 專案注入 FINMIND_TOKEN_*（台股新聞）
+# Doppler 包裹：注入 Telegram 憑證與主題 id；外層再疊 `finmind` 專案注入 FINMIND_TOKEN_*（台股新聞）
 DOPPLER_RUN = doppler run -p finmind -c dev -- doppler run -p $(DOPPLER_PROJECT) -c $(DOPPLER_CONFIG) --
 
 .DEFAULT_GOAL := help
 .PHONY: help install serve serve-local review review-tw analyze schedule screen \
-        swing morning morning-run macro overnight taifex media-picks measure portfolio portfolio-wf verify-decisions verify-morning verify-media-picks shadow-buy \
+        notify swing morning morning-run macro overnight taifex media-picks measure portfolio portfolio-wf verify-decisions verify-morning verify-media-picks shadow-buy \
         test lint lint-fix format refresh-tw refresh-us daily-report daily-report-detached \
         pg-scratch pg-scratch-stop
 
@@ -38,22 +39,31 @@ install: ## 安装后端依赖（uv）
 	uv pip install -r requirements.txt
 
 # ---- 运行服务 ----
-serve: ## 启动 Web/API 服务（Doppler 注入 Bark 推播）
-	$(DOPPLER_RUN) bash -c 'CUSTOM_WEBHOOK_URLS="$$BARK_URL" uv run python main.py --serve-only --host $(HOST) --port $(PORT)'
+serve: ## 启动 Web/API 服务（Doppler 注入 Telegram；價格警報等推到盤中提醒主題）
+	$(DOPPLER_RUN) bash -c 'uv run python scripts/notify.py --check --topic intraday && TELEGRAM_MESSAGE_THREAD_ID="$$TELEGRAM_TOPIC_INTRADAY" uv run python main.py --serve-only --host $(HOST) --port $(PORT)'
 
-serve-local: ## 启动 Web/API 服务（不含 Bark；纯本机调试）
+serve-local: ## 启动 Web/API 服务（不推通知；纯本机调试）
 	uv run python main.py --serve-only --host $(HOST) --port $(PORT)
 
 # ---- 每日报告 ----
-daily-report: ## 每日本机报告：更新并健检台股资料 → 自选股分析 + 大盘复盘 → Bark（任一步失败也推 Bark）
+daily-report: ## 每日本机报告：更新并健检台股资料 → 自选股分析 + 大盘复盘 → Telegram 每日報告主題（任一步失败推系統通知主題）
 	DOPPLER_PROJECT=$(DOPPLER_PROJECT) DOPPLER_CONFIG=$(DOPPLER_CONFIG) bash scripts/daily_report.sh
 
 daily-report-detached: ## 同上，但脱离当前 session 在背景跑完即返回（排程用；呼叫者被收掉也不中断）
 	DOPPLER_PROJECT=$(DOPPLER_PROJECT) DOPPLER_CONFIG=$(DOPPLER_CONFIG) bash scripts/daily_report.sh --detach
 
 # ---- 大盘复盘 ----
-review-tw: ## 生成台股大盘复盘（Doppler 注入 Bark 推播）
-	$(DOPPLER_RUN) bash -c 'CUSTOM_WEBHOOK_URLS="$$BARK_URL" MARKET_REVIEW_REGION=$(REGION) uv run python main.py --market-review'
+review-tw: ## 生成台股大盘复盘（推到 Telegram 每日報告主題）
+	$(DOPPLER_RUN) bash -c 'uv run python scripts/notify.py --check --topic report && TELEGRAM_MESSAGE_THREAD_ID="$$TELEGRAM_TOPIC_REPORT" MARKET_REVIEW_REGION=$(REGION) uv run python main.py --market-review'
+
+# ---- 通知 ----
+# TOPIC／TITLE 以原文經環境變數交給 recipe：直接寫 "$(TITLE)" 會讓標題裡的引號、$、反引號變成 make／shell 語法。
+# 命令列變數預設會被 make 展開後匯出（`$(shell …)` 會被執行），所以原名不匯出、只匯出 $(value) 取的原文。
+unexport TITLE TOPIC
+notify: export NOTIFY_TOPIC = $(value TOPIC)
+notify: export NOTIFY_TITLE = $(value TITLE)
+notify: ## 推一則 Telegram 通知：內文走 stdin，TOPIC=morning|intraday|report|plan|media|system，TITLE 選填
+	@doppler run -p $(DOPPLER_PROJECT) -c $(DOPPLER_CONFIG) -- uv run python scripts/notify.py --topic "$$NOTIFY_TOPIC" --title "$$NOTIFY_TITLE"
 
 review: ## 生成大盘复盘（默认 region，按 .env 的 MARKET_REVIEW_REGION）
 	uv run python main.py --market-review

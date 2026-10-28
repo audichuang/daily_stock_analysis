@@ -678,7 +678,7 @@ def render_prob_summary(rows, out=print):
 
 
 def gap_groups(rows):
-    """[(標籤, 縮放比的 raw 欄, 該口徑的列)]：依 gap_basis 分組，render_summary／brief／bark_line 共用。"""
+    """[(標籤, 縮放比的 raw 欄, 該口徑的列)]：依 gap_basis 分組，render_summary／brief／push_line 共用。"""
     return [("夜盤÷前日現貨收盤（舊口徑）", "night_spot_gap", [r for r in rows if r.get("gap_basis") != "tx_settle"]),
             ("夜盤÷同合約前日結算（新口徑）", "night_tx_chg", [r for r in rows if r.get("gap_basis") == "tx_settle"])]
 
@@ -712,7 +712,7 @@ def render_summary(rows, out=print, label="可計分"):
         out(f"⚠ 樣本 {len(rows)} 筆 < {MIN_N}：所有結論 inconclusive，不能聲稱判讀有經驗證的優勢。")
 
 
-def bark_line(rows, new_rows):
+def push_line(rows, new_rows):
     """給 18:00 推播的一段文字：今天新增的結果＋累計偏差。"""
     parts = []
     for r in new_rows:
@@ -953,7 +953,7 @@ def main(argv=None):
     ap.add_argument("--append", action="store_true", help="把新算出的結果追加進 outcomes 檔（同一天不重寫）")
     ap.add_argument("--brief", action="store_true", help="只讀 outcomes 檔印近期校正（不連網、不碰 DB）")
     ap.add_argument("--all", action="store_true", help="彙總也納入不計分的列（描述用）")
-    ap.add_argument("--bark", action="store_true", help="--append 後最後印一段推播文字（以 BARK: 開頭）")
+    ap.add_argument("--push", action="store_true", help="--append 後最後印一段推播文字（以 PUSH: 開頭）")
     ap.add_argument("--last", type=int, default=5, help="--brief 列出最近幾筆（預設 5）")
     a = ap.parse_args(argv)
 
@@ -976,8 +976,8 @@ def main(argv=None):
         arms_section(shown, a.calls, a.arms)
     if a.append:
         print(f"\n寫入 {len(new)} 筆到 {a.outcomes}")
-        if a.bark and new:
-            print("BARK: " + bark_line(shown, new).replace("\n", " ｜ "))
+        if a.push and new:
+            print("PUSH: " + push_line(shown, new).replace("\n", " ｜ "))
     return 0
 
 

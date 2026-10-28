@@ -649,13 +649,13 @@ def test_brief_with_mixed_bases_uses_only_the_new_basis_group(tmp_path):
     assert len(advice) == 1 and "縮放比 0.50 已有統計支持" in advice[0]
 
 
-def test_bark_line_reports_scale_only_for_new_basis_group():
+def test_push_line_reports_scale_only_for_new_basis_group():
     rows = old_basis_rows() + new_basis_rows()
-    text = vmc.bark_line(rows, rows[-1:])
+    text = vmc.push_line(rows, rows[-1:])
     new_part = [x for x in text.split("\n") if "新口徑" in x][0]
     old_part = [x for x in text.split("\n") if "舊口徑" in x][0]
     assert "縮放比 0.50" in new_part and "縮放比" not in old_part.replace("不給縮放比", "")
-    only_new = vmc.bark_line(new_basis_rows(), [])
+    only_new = vmc.push_line(new_basis_rows(), [])
     assert "縮放比 0.50" in only_new and "0.12" not in only_new
 
 
