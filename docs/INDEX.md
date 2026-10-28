@@ -134,6 +134,7 @@
 | --- | --- |
 | [API 规格](architecture/api_spec.json) | FastAPI OpenAPI 规格产物 |
 | [贡献指南](CONTRIBUTING.md) | Issue、PR、测试、文档同步和协作要求 |
+| [真實使用者流程驗證](verification.md) | verify skill、ego-browser、隔離啟動、功能地圖與實跑證據 |
 
 ## 多语言
 

@@ -96,6 +96,9 @@ verify_*.py
 .claude/*
 !.claude/skills/
 !.claude/skills/**
+# 技能白名單會蓋過前面的 Python 忽略規則，重新排除編譯快取。
+/.claude/skills/**/__pycache__/
+/.claude/skills/**/*.py[cod]
 
 # ignore static files
 static/
