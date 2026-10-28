@@ -57,8 +57,11 @@ review-tw: ## 生成台股大盘复盘（推到 Telegram 每日報告主題）
 	$(DOPPLER_RUN) bash -c 'TELEGRAM_MESSAGE_THREAD_ID="$$TELEGRAM_TOPIC_REPORT" MARKET_REVIEW_REGION=$(REGION) uv run python main.py --market-review'
 
 # ---- 通知 ----
+# TOPIC／TITLE 以原文經環境變數交給 recipe：直接寫 "$(TITLE)" 會讓標題裡的引號、$、反引號變成 make／shell 語法。
+notify: export NOTIFY_TOPIC = $(value TOPIC)
+notify: export NOTIFY_TITLE = $(value TITLE)
 notify: ## 推一則 Telegram 通知：內文走 stdin，TOPIC=morning|intraday|report|plan|media|system，TITLE 選填
-	@doppler run -p $(DOPPLER_PROJECT) -c $(DOPPLER_CONFIG) -- uv run python scripts/notify.py --topic "$(TOPIC)" --title "$(TITLE)"
+	@doppler run -p $(DOPPLER_PROJECT) -c $(DOPPLER_CONFIG) -- uv run python scripts/notify.py --topic "$$NOTIFY_TOPIC" --title "$$NOTIFY_TITLE"
 
 review: ## 生成大盘复盘（默认 region，按 .env 的 MARKET_REVIEW_REGION）
 	uv run python main.py --market-review

@@ -426,6 +426,38 @@ def test_notify_failure_title_topic_defaults_and_overrides(tmp_path):
     assert lines[2] == "run|python|scripts/notify.py|--topic|morning|--title|回驗|STDIN=內文3"
 
 
+def _notify_bin(tmp_path, uv_body):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "uv").write_text(f"#!/bin/sh\n{uv_body}\n")
+    (bindir / "doppler").write_text('#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n')
+    for f in bindir.iterdir():
+        f.chmod(0o755)
+    return {"PATH": f"{bindir}:{os.environ['PATH']}"}
+
+
+def test_notify_failure_output_and_reason_go_to_log(tmp_path):
+    # notify.py 未送出的原因（stderr）要留在 log，失敗要記 WARN；不能被丟進 /dev/null
+    env = _notify_bin(tmp_path, 'echo "[notify] 未注入 TELEGRAM_TOPIC_SYSTEM，不送" >&2; exit 1')
+    log = tmp_path / "run.log"
+    _run_bash(f'LOG="{log}"; notify_failure "內文"', env_extra=env)
+    text = log.read_text(encoding="utf-8")
+    assert "未注入 TELEGRAM_TOPIC_SYSTEM" in text and "WARN: Telegram 通知也没送出去" in text
+
+
+def test_notify_failure_is_bounded_by_timeout(tmp_path):
+    # 通知卡住（HTTP 一直不結束）不能拖住腳本與鎖：整次呼叫有上限、逾時記 WARN
+    marker = _unique_sleep()
+    env = _notify_bin(tmp_path, f"cat >/dev/null; exec sleep {marker}")
+    env["NOTIFY_TIMEOUT_SECONDS"] = "1"
+    log = tmp_path / "run.log"
+    start = time.monotonic()
+    _run_bash(f'LOG="{log}"; notify_failure "內文"', env_extra=env, timeout=30)
+    assert time.monotonic() - start < 15
+    assert "WARN: Telegram 通知也没送出去" in log.read_text(encoding="utf-8")
+    assert subprocess.run(["pgrep", "-f", f"sleep {marker}"], capture_output=True).returncode != 0
+
+
 def _run_main_sandbox(tmp_path, *, mark, expected, force=False):
     script, bindir, calls = _sandbox(tmp_path)
     logs = tmp_path / "logs"

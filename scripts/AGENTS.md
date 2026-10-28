@@ -16,7 +16,7 @@
 | 股票索引 | `fetch_tw_stock_list`、`merge_tw_into_index`、`refresh_us_stock_index`、`refresh_stock_index`、`generate_index_from_csv` | **改寫進版控的索引檔與種子 CSV** |
 | 資料稽核 | `audit_market_vs_official` | 唯讀 Postgres＋連 TWSE／TPEx(每請求 ≥4 秒),結果與原始回應寫到 `--out` 目錄;判準與修法見 `docs/tw-data-integrity.md` |
 | 資料庫維運 | `migrate_sqlite_to_pg`、`backfill_price_change_sign`、`migrate_storage_to_postgres` | **寫入 Postgres**;最後一支只碰 `--schema` 指定的應用庫表(分析歷史等),有 `--dry-run`,目標非空需 `--replace` |
-| 通知 | `notify` | 推一則 Telegram 到指定主題(內文走 stdin);排程、`daily_report.sh`、`kr_tw_memory_watch` 都經它,`make notify` 是包好 Doppler 的入口。缺憑證印一行略過、回 0;空內文拒送回 1 |
+| 通知 | `notify` | 推一則 Telegram 到指定主題(內文走 stdin);排程、`daily_report.sh`、`kr_tw_memory_watch` 都經它,`make notify` 是包好 Doppler 的入口。只有送到指定主題才印 `[notify] <主題>: 已送出` 回 0;缺憑證、缺該主題 id(否則掉進群組預設主題)、空內文、送出失敗都回 1,原因在 stderr |
 | 門檻／治理／打包 | `ci_gate.sh`、`ci_test_shard`、`ci_durations_from_junit`(從 CI 的 junit artifact 重算 shard 時長表,改寫進版控的 `.github/ci-test-durations.json`)、`check_ai_assets`、`test.sh`、`build-*`、`pyinstaller_runtime_compat` | CI 與發版流程直接呼叫,檔名被測試用字串釘住 |
 
 ## 進來改要遵守

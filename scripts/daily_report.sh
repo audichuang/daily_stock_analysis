@@ -25,10 +25,13 @@ log() { printf '%s | %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
 
 # notify_failure BODY [TITLE] [TOPIC]：TITLE 预设「每日報告失敗」；非致命通知（如个股部分失败）传自己的标题。
 # TOPIC 是 Telegram 群組的主題（scripts/notify.py 的 --topic），預設 system。
+# 整次呼叫（doppler＋uv＋HTTP 重試）以 NOTIFY_TIMEOUT_SECONDS（預設 60）為上限：逾時與鎖齡告警在步驟計時之外呼叫，
+# 通知卡住會讓腳本不退出、鎖也放不掉。notify.py 的輸出（含未送出的原因）寫進 $LOG。
 notify_failure() {
   local body="$1" title="${2:-每日報告失敗}" topic="${3:-system}"
   local -a runner=(doppler run -p "$DOPPLER_PROJECT" -c "$DOPPLER_CONFIG" --)
-  printf '%s' "$body" | "${runner[@]}" uv run python scripts/notify.py --topic "$topic" --title "$title" >/dev/null \
+  printf '%s' "$body" | run_with_timeout "${NOTIFY_TIMEOUT_SECONDS:-60}" \
+    "${runner[@]}" uv run python scripts/notify.py --topic "$topic" --title "$title" >>"${LOG:-/dev/stderr}" 2>&1 \
     || log "WARN: Telegram 通知也没送出去"
 }
 
@@ -204,7 +207,7 @@ run_step() {
   log "==> $name"
   if declare -F "$1" >/dev/null; then
     # bash 函式 perl exec 不了：export -f 后交给子 bash 跑；函式内用到的 say／$LOG 也要带过去。
-    export -f "$1" say log notify_failure failed_codes
+    export -f "$1" say log notify_failure run_with_timeout failed_codes
     export LOG
     run_with_timeout "$secs" bash -c '"$@"' _ "$@" >>"$LOG" 2>&1 || rc=$?
   else

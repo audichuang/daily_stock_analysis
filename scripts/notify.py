@@ -4,9 +4,10 @@
 用法（內文走 stdin，避免多行中文經 argv 被 shell 拆壞，也不讓內容出現在 ps）：
     printf '%s' "$BODY" | doppler run -p shioaji -c dev -- uv run python scripts/notify.py --topic system --title "標題"
 
-TELEGRAM_BOT_TOKEN、TELEGRAM_CHAT_ID、TELEGRAM_TOPIC_<主題> 由 Doppler 注入。缺 token／chat id 時印一行略過、
-回 0（與舊 Bark 路徑相同：沒注入就不推）；送出失敗回 1。內文是標準 Markdown，TelegramSender 負責轉格式、
-分段（4096 UTF-16）、重試與 Markdown 被拒時退回純文字。
+TELEGRAM_BOT_TOKEN、TELEGRAM_CHAT_ID、TELEGRAM_TOPIC_<主題> 由 Doppler 注入。只有送到指定主題才印
+`[notify] <主題>: 已送出` 並回 0；缺憑證、缺該主題的 id（否則會掉進群組預設主題，分流就失效）、空內文或送出失敗
+一律回 1，原因印在 stderr。內文是標準 Markdown，TelegramSender 負責轉格式、分段（4096 UTF-16）、重試與
+Markdown 被拒時退回純文字。
 
 主題 → 用途（在群組裡各自可靜音）：
     morning  盤前判讀與回驗      intraday 盤中提醒（持股觸發、價格警報、記憶體背離）
@@ -24,16 +25,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 TOPICS = ("morning", "intraday", "report", "plan", "media", "system")
 
 
-def send(body: str, topic: str, title: str = "") -> bool | None:
-    """送出成功 True、失敗 False；沒設定 token／chat id 回 None（略過）。"""
+def send(body: str, topic: str, title: str = "") -> bool:
+    """送到指定主題才回 True；缺設定或送出失敗回 False，原因印在 stderr。"""
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if not (token and chat_id):
-        print("[notify] 未注入 TELEGRAM_BOT_TOKEN／TELEGRAM_CHAT_ID，略過推播", flush=True)
-        return None
-    thread_id = os.environ.get(f"TELEGRAM_TOPIC_{topic.upper()}", "").strip() or None
-    if thread_id is None:
-        print(f"[notify] 未設定 TELEGRAM_TOPIC_{topic.upper()}，改發到群組預設主題", flush=True)
+    thread_id = os.environ.get(f"TELEGRAM_TOPIC_{topic.upper()}", "").strip()
+    missing = [k for k, v in (("TELEGRAM_BOT_TOKEN", token), ("TELEGRAM_CHAT_ID", chat_id),
+                              (f"TELEGRAM_TOPIC_{topic.upper()}", thread_id)) if not v]
+    if missing:
+        print(f"[notify] 未注入 {'、'.join(missing)}，不送", file=sys.stderr, flush=True)
+        return False
     text = f"**{title}**\n{body}" if title else body
 
     from src.notification_sender.telegram_sender import TelegramSender
@@ -54,10 +55,11 @@ def main(argv=None) -> int:
         # 排程的 Claude 分兩次 Bash 組內容時變數會消失，送出去只剩標題（2026-10-21 Bark 收到空訊息）
         print("[notify] 內文是空的，不送", file=sys.stderr)
         return 1
-    ok = send(body, a.topic, a.title)
-    if ok is not None:
-        print(f"[notify] {a.topic}: {'已送出' if ok else '送出失敗'}", flush=True)
-    return 1 if ok is False else 0
+    if send(body, a.topic, a.title):
+        print(f"[notify] {a.topic}: 已送出", flush=True)
+        return 0
+    print(f"[notify] {a.topic}: 送出失敗", file=sys.stderr, flush=True)
+    return 1
 
 
 if __name__ == "__main__":

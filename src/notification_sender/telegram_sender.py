@@ -103,7 +103,8 @@ class TelegramSender:
 
             telegram_content = self._convert_to_telegram_markdown(sanitized_content)
 
-            if utf16_len(telegram_content) <= max_length:
+            # Markdown 被拒时会退回原文纯文本；原文与转换后都不超限才走单条，否则按转换后内容分段
+            if utf16_len(telegram_content) <= max_length and utf16_len(sanitized_content) <= max_length:
                 # 单条消息发送
                 return self._send_telegram_message(
                     api_url,

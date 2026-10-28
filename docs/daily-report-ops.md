@@ -15,9 +15,10 @@
 | 📺 媒體點名（`media`） | 23:00 媒體點名摘要 |
 | 🔧 系統通知（`system`） | 所有失敗、逾時、卡鎖、部分失敗；上游同步待審 |
 
-- 腳本與排程一律經 `make notify TOPIC=<主題> TITLE=<標題>`（內文走 stdin）或 `scripts/notify.py`；`daily_report.sh` 的 `notify_failure BODY [TITLE] [TOPIC]` 預設 `system`。
+- 腳本與排程一律經 `make notify TOPIC=<主題> TITLE=<標題>`（內文走 stdin）或 `scripts/notify.py`；`daily_report.sh` 的 `notify_failure BODY [TITLE] [TOPIC]` 預設 `system`，整次呼叫上限 `NOTIFY_TIMEOUT_SECONDS`（預設 60，只供手動覆寫），未送出的原因與 WARN 寫進該輪 log。
 - `main.py` 走上游的通知系統，一個行程只發到一個主題（`TELEGRAM_MESSAGE_THREAD_ID`），由 Makefile／`daily_report.sh` 從 `TELEGRAM_TOPIC_*` 帶入。
-- 成功判準是印出 `[notify] <主題>: 已送出` 且結束碼 0。Doppler 的 `BARK_URL` 保留作回退，程式已不再讀它。
+- 重建群組或主題時，bot 要是**管理員**且有「管理主題」權限才能用 API 建主題；成員權限裡的「Create Topics」不夠（`createForumTopic` 會被拒）。
+- 成功判準是印出 `[notify] <主題>: 已送出` 且結束碼 0；缺憑證或缺該主題的 id 一律拒送回 1（不會退到群組預設主題）。Doppler 的 `BARK_URL` 保留作回退，程式已不再讀它。
 
 ## 排程一覽
 

@@ -1937,6 +1937,24 @@ class TestTelegramSender(unittest.TestCase):
         self.assertEqual(second_payload["text"], content)
 
     @mock.patch("src.notification_sender.telegram_sender.requests.post")
+    def test_markdown_rejected_long_original_still_fits_every_send(self, mock_post):
+        # 原文超過 4096、轉換後（** → *）沒超過：Markdown 被拒後的純文字退回也不能超限
+        markdown_error = _response(400)
+        markdown_error.text = (
+            '{"ok":false,"error_code":400,"description":"Bad Request: can\'t parse entities"}'
+        )
+        mock_post.side_effect = [markdown_error, _response(200, {"ok": True})]
+
+        sender = TelegramSender(_config(telegram_bot_token="BOT", telegram_chat_id="CHAT"))
+        content = "**2330**\n" * 20 + "log: logs/daily_report_20261028_180000.log\n" + "x" * 3900
+        self.assertGreater(len(content), 4096)
+        self.assertLessEqual(len(sender._convert_to_telegram_markdown(content)), 4096)
+
+        self.assertTrue(sender.send_to_telegram(content))
+        for call in mock_post.call_args_list:
+            self.assertLessEqual(len(call.kwargs["json"]["text"]), 4096)
+
+    @mock.patch("src.notification_sender.telegram_sender.requests.post")
     def test_send_uses_legacy_telegram_report_formatter(self, mock_post):
         mock_post.return_value = _response(200, {"ok": True})
         cfg = _config(telegram_bot_token="BOT", telegram_chat_id="CHAT")

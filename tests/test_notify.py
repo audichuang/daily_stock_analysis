@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""scripts/notify.py：主題對應 message_thread_id、缺憑證略過、空內文拒送。"""
+"""scripts/notify.py：主題對應 message_thread_id；缺憑證、缺主題 id、空內文都拒送並回非零。"""
 import io
 import sys
 
@@ -37,16 +37,21 @@ def test_each_topic_goes_to_its_own_thread(sent, monkeypatch):
     assert sent[0] == ("-100", "id-morning", "**標題**\n內文")
 
 
-def test_missing_topic_id_falls_back_to_group_default(sent, monkeypatch):
+def test_missing_topic_id_is_refused_not_sent_to_general(sent, monkeypatch, capsys):
+    # 掉進群組預設主題等於分流失效，還會印成功騙過排程的判準
     monkeypatch.delenv("TELEGRAM_TOPIC_PLAN")
-    assert _main(monkeypatch, "x", "--topic", "plan") == 0
-    assert sent == [("-100", None, "x")]
-
-
-def test_missing_credentials_skips_without_failing(sent, monkeypatch):
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN")
-    assert _main(monkeypatch, "x", "--topic", "system") == 0
+    assert _main(monkeypatch, "x", "--topic", "plan") == 1
     assert sent == []
+    out = capsys.readouterr()
+    assert "已送出" not in out.out and "TELEGRAM_TOPIC_PLAN" in out.err
+
+
+@pytest.mark.parametrize("key", ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"])
+def test_missing_credentials_fail_loudly(sent, monkeypatch, capsys, key):
+    monkeypatch.delenv(key)
+    assert _main(monkeypatch, "x", "--topic", "system") == 1
+    assert sent == []
+    assert key in capsys.readouterr().err
 
 
 def test_empty_body_is_refused_even_with_title(sent, monkeypatch):
@@ -54,6 +59,40 @@ def test_empty_body_is_refused_even_with_title(sent, monkeypatch):
     assert sent == []
 
 
-def test_send_failure_returns_nonzero(sent, monkeypatch):
+def test_send_failure_returns_nonzero_without_success_marker(sent, monkeypatch, capsys):
     monkeypatch.setattr(TelegramSender, "send_to_telegram", lambda self, content, **kw: False)
     assert _main(monkeypatch, "x", "--topic", "system") == 1
+    assert "已送出" not in capsys.readouterr().out
+
+
+def test_success_marker_only_after_delivery(sent, monkeypatch, capsys):
+    assert _main(monkeypatch, "x", "--topic", "media") == 0
+    assert capsys.readouterr().out.strip() == "[notify] media: 已送出"
+
+
+def test_make_notify_passes_title_and_body_verbatim(tmp_path):
+    # 走真的 Makefile：標題裡的引號、空白、$、反引號、% 都要原樣到 notify.py（不能變成 make／shell 語法）
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    if shutil.which("make") is None:
+        pytest.skip("make not available")
+    root = Path(__file__).resolve().parent.parent
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "doppler").write_text('#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n')
+    (bindir / "uv").write_text(
+        f'#!/bin/sh\n{{ printf "%s|" "$@"; printf "STDIN=%s" "$(cat)"; }} > "{tmp_path}/uv_args"\n')
+    for f in bindir.iterdir():
+        f.chmod(0o755)
+    title = '持股 "轉強 續抱" $NVDA $(shell echo hi) `id` 50%'
+    r = subprocess.run(
+        ["make", "-s", "-C", str(root), "notify", "TOPIC=plan", f"TITLE={title}"],
+        input="內文 $HOME `x`", capture_output=True, text=True, timeout=30,
+        env={**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"},
+    )
+    assert r.returncode == 0, r.stderr
+    args = (tmp_path / "uv_args").read_text(encoding="utf-8")
+    assert args == f"run|python|scripts/notify.py|--topic|plan|--title|{title}|STDIN=內文 $HOME `x`"
