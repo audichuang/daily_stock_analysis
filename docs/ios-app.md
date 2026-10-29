@@ -37,6 +37,15 @@ AI 直接讀取 `structured_report` 的論點、證據與失效條件，沒有�
 
 Core 單測、合成 HTTP UI 測試、隔離真服務及正式環境四個層級分開記錄。流程見 [iOS 驗證地圖](../.claude/skills/verify/features/ios.md)，實跑狀態見 [驗證紀錄](verification.md)。
 
-TestFlight 完成需同時具備簽章封存、上傳、Apple 有效 build 與自己的內部測試群組；archive／upload exit0 本身不代表可安裝。新 App 記錄需要 Apple 網頁登入。此交付不推 `main`、不打 Git tag、不部署後端。回滾可停用新 build／改用前一內部 build；移除 App 不影響既有 Web 與資料庫。
+TestFlight 完成需同時具備簽章封存、上傳、Apple 有效 build 與自己的內部測試群組；archive／upload exit0 本身不代表可安裝。新 App 記錄可由 Xcode 發佈／驗證精靈沿用既有 Apple 登入建立，也可使用 App Store Connect 網頁。若精靈建立後顯示錯誤，先依 bundle ID 查 API 確認是否已建立，避免重複操作。此交付不推 `main`、不打 Git tag。回滾可停用新 build／改用前一內部 build；移除 App 不影響既有 Web 與資料庫。
+
+### 首次內部發送（2026-10-29）
+
+- App Store Connect App ID：`6828303016`；Bundle ID：`com.audichuang.dsa`。
+- 版本 `0.1.0`、build `202610291412` 已上傳並成為 `VALID`，受眾為 `INTERNAL_ONLY`。
+- 內部群組「自己」可存取此 build，本人測試者狀態為 `INVITED`；沒有公開測試連結。TestFlight 測試說明已附繁中連線步驟。
+- 正式入口沿用 Komodo 的 `ingress-ttnas` 私有 Caddy 反代與既有 wildcard 憑證，手機仍需 Tailscale。此項部署經使用者另外確認；DSA 容器與資料庫未重啟。
+- TestFlight tester ID 依 App 分別建立；把同一人的舊 App tester UUID 直接加入新群組會遭拒。使用本人既有 email 與新群組建立關係，不需更動 ASC user 權限。
+- 實體手機安裝、首次登入及正式帳本操作仍需與模擬器／隔離服務驗證分開記錄。
 
 首版介面與本文件為繁體中文，英文索引同步新增入口，未宣稱完整英文在地化。
