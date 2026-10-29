@@ -7,22 +7,34 @@ struct WatchlistView: View {
     @State private var query = ""
 
     var body: some View {
-        PageScroll {
-            MarketPicker()
-            if let error = store.errors["watchlist"] { ErrorStateView(message: error) }
-            if visible.isEmpty {
-                EmptyStateView(title: query.isEmpty ? "這個市場還沒有自選股" : "沒有符合的自選股",
-                               message: "點右上角加入股票，隨時查看行情與 AI 觀點。")
-            } else {
-                Text("\(visible.count) 檔關注 · 與分析服務同步")
-                    .font(.caption).foregroundStyle(Theme.secondary)
-                ForEach(visible, id: \.self) { code in
-                    NavigationLink { StockDetailView(code: code) } label: { StockRow(code: code) }
-                        .buttonStyle(.plain)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                MarketPicker()
+                if let error = store.errors["watchlist"] { ErrorStateView(message: error) }
+                if visible.isEmpty {
+                    EmptyStateView(title: query.isEmpty ? "這個市場還沒有自選股" : "沒有符合的自選股",
+                                   message: "點右上角加入股票，隨時查看行情與 AI 觀點。")
+                } else {
+                    HStack {
+                        Text("\(visible.count) 檔自選")
+                        Spacer()
+                        Text("現價 / 漲跌")
+                    }.font(.caption).foregroundStyle(Theme.secondary)
+                    LazyVStack(spacing: 0) {
+                        ForEach(visible, id: \.self) { code in
+                            NavigationLink { StockDetailView(code: code) } label: { StockRow(code: code) }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("stock-row.\(code)")
+                        }
+                    }
                 }
             }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .frame(maxWidth: 900, alignment: .leading)
+            .frame(maxWidth: .infinity)
         }
-        .navigationTitle("自選股")
+        .background(Theme.background)
+        .navigationTitle("自選股").navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, prompt: "篩選代碼或名稱")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
