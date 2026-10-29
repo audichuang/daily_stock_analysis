@@ -63,9 +63,11 @@ build `202610292218` 已在同一個內部群組開放更新，Apple狀態為 `V
 
 本次Xcode直傳曾停在取得上傳指示；先用 `asc builds uploads list` 與 `asc builds list` 確認未送達，再停止本輪exporter、改將同一archive匯出為IPA，透過既有 `asc builds upload --app <App-ID> --ipa <IPA-path>` 上傳成功。不要在上傳結果不明時盲目重送，仍須讀回Apple的有效build與群組關係才算可更新。
 
-### 0.1.2 更新（build 202610300059；Apple 待處理）
+### 0.1.2 更新（2026-10-30）
 
-本版包含公網預設網址移轉、時間／空委買語意、日 K 日期與實體、量價對齊及大字級修正。簽章封存成功，IPA 已由 `asc` 完成 uploaded／committed；Apple 回讀仍為 `PROCESSING`，尚待有效 build 與內部群組核對，不能宣稱已可由 TestFlight 安裝。
+本版包含公網預設網址移轉、時間／空委買語意、日 K 日期與實體、量價對齊及大字級修正。簽章封存／IPA 上傳完成，build `202610300059` 已由 Apple 標為 `VALID`／`INTERNAL_ONLY`／`IN_BETA_TESTING`，內部群組「自己」已包含此版，繁中測試說明已寫入。封存的 35 份來源檔案雜湊與提交 `3ab595cc` 一致。
+
+程式已由 [PR #153](https://github.com/audichuang/daily_stock_analysis/pull/153) 在 [CI 40917582436](https://github.com/audichuang/daily_stock_analysis/actions/runs/40917582436) 通過後合進 develop（`5cc6e097`）；未推 main 或 tag。
 
 Cloudflare Tunnel 已部署；原生 URLSession 已取得公網 200 JSON，受保護 API 未登入回 401。使用者成功公網登入、登入後 cookie 與正式 App/API 流程仍待驗證。
 

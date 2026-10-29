@@ -15,7 +15,9 @@
 | K 線與量柱 | `final-short/chart`：1M 真繪圖截圖與像素核對，最後 K 線／量柱中心差從 24.5 px 降為 0 px；各 32 根，實體寬 20 px、影線列中位寬 3–4 px。UI test exit 0、正常 xcresult |
 | 正式資料唯讀核對 | 獨立 Decimal FIFO 重建與帳本事件 147/147 一致；2026-10-29 官方 2,354 列 OHLC、成交股數、金額、筆數與市場庫一致，代碼聯集無差異；36 個台股 Shioaji 快照價格／OHLC與同日官方一致；42 個快照漲跌額／百分比重算一致。細節留在私有 `data/report.md`，沒有修改正式帳本 |
 | 公網入口 | `https://dsa.audichuang.app` 的 Cloudflare Tunnel 已部署，舊私有入口保留。正常 URLSession 取得 200 JSON、無 HTML challenge；受保護 API 未登入與假 cookie 均回 401。設定與操作紀錄 commit 為 `60c6a849`、`1ae4af1d`，詳見 nas-ops 的 `operator/cloudflare/dsa-public-2026-10-29.md` |
-| 交付 | `0.1.2 (202610300059)` 已簽章封存，Info.plist 的新舊預設 URL 已核對；IPA 經 `asc` uploaded／committed，Apple 回讀仍為 `PROCESSING`，尚待有效 build／內部群組核對，未確認可供 TestFlight 安裝 |
+| 交付 | `0.1.2 (202610300059)` 已簽章封存，Info.plist 的新舊預設 URL 已核對；IPA 經 `asc` uploaded／committed，Apple 已為 `VALID`／`INTERNAL_ONLY`／`IN_BETA_TESTING`，內部群組「自己」含此版，繁中測試說明已寫入；實體手機安裝仍未在本輪驗證 |
+
+[PR #153](https://github.com/audichuang/daily_stock_analysis/pull/153) 已在 [CI run 40917582436](https://github.com/audichuang/daily_stock_analysis/actions/runs/40917582436) 通過後合入 develop（`5cc6e097`）；4 片 backend-tests、backend-gate、ai-governance 成功，Web／Docker 依改動範圍 skip。封存來源與提交 `3ab595cc` 的 35 個記錄檔案雜湊相符。
 
 資料驗證的限制：34/36 個 Shioaji 快照成交量不同於官方全天量，來源涵蓋尚未釐清，UI只標示「來源成交量（股）」；6 個美股快照僅確認落在當日原始高低範圍，同時點即時價驗證仍為 0。歷史 API 尚未明示還原價／分割調整基準，未逐日核對全歷史；沒有券商對帳單，所以 FIFO 一致不等於券商庫存對帳。策略 `sniper_prices` 的數值欄位仍未由 Swift 解碼，現有樣本未證實文字矛盾，列 Consider 並保持未改；不將 AI 評分當勝率。
 
