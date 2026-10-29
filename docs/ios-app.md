@@ -69,6 +69,10 @@ build `202610292218` 已在同一個內部群組開放更新，Apple狀態為 `V
 
 程式已由 [PR #153](https://github.com/audichuang/daily_stock_analysis/pull/153) 在 [CI 40917582436](https://github.com/audichuang/daily_stock_analysis/actions/runs/40917582436) 通過後合進 develop（`5cc6e097`）；未推 main 或 tag。
 
+### 0.1.2 修正版（build 202610300656；2026-10-30）
+
+修正自選頁下拉更新一直顯示「暫時無法取得資料／已取消」、報價不更新：`.refreshable` 的 task 在 store 發布中途結果時被 SwiftUI 取消，最慢的報價請求因此中斷（NAS access log 該輪沒有 quotes 紀錄）。`AppStore.refresh()` 改由 store 自己的 Task 執行；fixture 報價加 `--quote-delay 2` 的 UI test 修前紅、修後綠。程式由 [PR #155](https://github.com/audichuang/daily_stock_analysis/pull/155) 在 CI 40968619038 通過後合進 develop（`656d4a5d`）。從該提交封存（預設 `https://dsa.audichuang.app`，舊入口 `https://dsa.ttnas.audichuang.app`），以 `asc builds upload` 上傳，Apple 回讀為 `VALID`，內部群組「自己」已包含此版，繁中測試說明已寫入；實體手機安裝未在本輪驗證。
+
 Cloudflare Tunnel 已部署；原生 URLSession 已取得公網 200 JSON，受保護 API 未登入回 401。使用者成功公網登入、登入後 cookie 與正式 App/API 流程仍待驗證。
 
 驗收結果及金融資料限制見 [驗證紀錄](verification.md)。回滾可改用前一有效 build，或於登入頁改回私有入口並啟用 Tailscale；本次沒有遷移帳本資料。入口部署回滾依 nas-ops 的 `operator/cloudflare/dsa-public-2026-10-29.md`，只撤回本次 hostname 的設定。
