@@ -50,4 +50,10 @@ TestFlight 完成需同時具備簽章封存、上傳、Apple 有效 build 與�
 - TestFlight tester ID 依 App 分別建立；把同一人的舊 App tester UUID 直接加入新群組會遭拒。使用本人既有 email 與新群組建立關係，不需更動 ASC user 權限。
 - 實體手機安裝、首次登入及正式帳本操作仍需與模擬器／隔離服務驗證分開記錄。
 
+### 0.1.1 更新（2026-10-29）
+
+build `202610292218` 已在同一個內部群組開放更新，Apple狀態為 `VALID`／`IN_BETA_TESTING`，不需另建tester。修正資產分幣及列表密度，畫面與測試證據見驗證紀錄；帳本原始金額與後端計算保持原樣。
+
+本次Xcode直傳曾停在取得上傳指示；先用 `asc builds uploads list` 與 `asc builds list` 確認未送達，再停止本輪exporter、改將同一archive匯出為IPA，透過既有 `asc builds upload --app <App-ID> --ipa <IPA-path>` 上傳成功。不要在上傳結果不明時盲目重送，仍須讀回Apple的有效build與群組關係才算可更新。
+
 首版介面與本文件為繁體中文，英文索引同步新增入口，未宣稱完整英文在地化。
