@@ -89,8 +89,11 @@ struct StockDetailView: View {
                 Text(DisplayFormat.source(profile.quote.data?.source)).font(.caption)
                 if profile.quote.data?.isStale == true { StatusBadge("已過期", tone: .warning) }
             }.foregroundStyle(Theme.secondary)
-            Text("報價時間 · \(DisplayFormat.time(profile.quote.data?.asOf ?? profile.quote.data?.updateTime))")
+            Text("資料參考時間 · \(DisplayFormat.time(profile.quote.data?.asOf ?? profile.quote.data?.updateTime))")
                 .font(.caption2).foregroundStyle(Theme.secondary)
+            Text(MarketDataPresentation.referenceTimeExplanation)
+                .font(.caption2).foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             if !profile.quote.limitations.isEmpty { limitation(profile.quote.limitations) }
             if let actionError { ErrorStateView(message: actionError) }
         }
@@ -103,11 +106,11 @@ struct StockDetailView: View {
                 MetricView("最高", value: DisplayFormat.number(quote.high))
                 MetricView("最低", value: DisplayFormat.number(quote.low))
                 MetricView("昨收", value: DisplayFormat.number(quote.prevClose))
-                MetricView("成交量（股）", value: DisplayFormat.number(quote.volume, digits: 0))
+                MetricView("來源成交量（股）", value: DisplayFormat.number(quote.volume, digits: 0))
                 MetricView("量比", value: DisplayFormat.number(quote.volumeRatio))
                 if quote.bestBid != nil || quote.bestAsk != nil {
-                    MetricView("最佳買價", value: DisplayFormat.number(quote.bestBid))
-                    MetricView("最佳賣價", value: DisplayFormat.number(quote.bestAsk))
+                    MetricView("最佳買價", value: MarketDataPresentation.orderBookPrice(quote.bestBid, volume: quote.bestBidVolume))
+                    MetricView("最佳賣價", value: MarketDataPresentation.orderBookPrice(quote.bestAsk, volume: quote.bestAskVolume))
                     MetricView("均價", value: DisplayFormat.number(quote.averagePrice))
                 }
             }

@@ -53,7 +53,7 @@ struct ToolsView: View {
                     VStack(alignment: .leading, spacing: 7) {
                         Label("外出連線", systemImage: "lock.shield")
                             .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                        Text("使用私有 Tailscale 網址時，請先在 iPhone 或 iPad 開啟 Tailscale，連上與服務相同的網路。服務仍需原本的登入密碼。")
+                        Text("使用公開 HTTPS 網址時，可直接由行動網路連線。若使用私有網址，請確認網路可達；服務仍需原本的登入密碼。")
                             .font(.caption).foregroundStyle(Theme.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }

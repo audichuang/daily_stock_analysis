@@ -64,10 +64,17 @@ final class DSAMarketUITests: XCTestCase {
         let taiwanStock = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "2330.TW")).firstMatch
         tap(taiwanStock)
         XCTAssertTrue(app.buttons["watchlist-toggle"].waitForExistence(timeout: 15))
+        XCTAssertTrue(text(containing: "資料參考時間").waitForExistence(timeout: 10))
+        XCTAssertFalse(text(containing: "報價時間 ·").exists)
         let priceChart = app.descendants(matching: .any)["chart.price"].firstMatch
         scrollTo(priceChart)
         XCTAssertTrue(priceChart.exists, "個股必須有實際繪製的測試 K 線")
         capture("03-個股報價與日K")
+
+        let emptyBid = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "最佳買價", "無報價")).firstMatch
+        scrollTo(emptyBid)
+        XCTAssertTrue(emptyBid.exists, "空委買應為無報價，不是零元可買")
+        capture("03b-空委買與來源成交量")
 
         let reportLink = app.buttons["stock-report-link"]
         tap(reportLink)

@@ -39,8 +39,8 @@ def quote(code):
         "prev_close": previous, "volume": 12345678, "amount": 7410000000,
         "volume_ratio": 1.2, "average_price": price - 1,
         "limit_up": round(previous * 1.1, 2), "limit_down": round(previous * 0.9, 2),
-        "best_bid": price - 1, "best_ask": price + 1,
-        "best_bid_volume": 30, "best_ask_volume": 25,
+        "best_bid": 0 if code == "2330.TW" else price - 1, "best_ask": price + 1,
+        "best_bid_volume": 0 if code == "2330.TW" else 30, "best_ask_volume": 25,
         "source": "fixture（合成資料）", "as_of": AS_OF, "update_time": AS_OF,
         "is_stale": True,
     }
@@ -49,14 +49,20 @@ def quote(code):
 def bars(code):
     anchor = STOCKS[code][1]
     result = []
-    for offset in range(30):
-        close = round(anchor - 20 + offset * 0.6 + (offset % 5 - 2) * 2, 2)
+    count = 190
+    for offset in range(count):
+        close = round(anchor - (count - 1 - offset) * 0.1 + ((offset % 5) - 4) * 0.5, 2)
+        if offset == count - 2:
+            close = quote(code)["prev_close"]
         result.append({
-            "date": (date(2024, 1, 2) + timedelta(days=offset)).isoformat(),
+            "date": (date(2024, 1, 31) - timedelta(days=count - 1 - offset)).isoformat(),
             "open": close - 1 if offset % 2 else close + 1,
             "high": close + 3, "low": close - 3, "close": close,
             "volume": 1000000 + offset * 30000, "amount": close * 1000000,
         })
+    latest = quote(code)
+    result[-1].update(open=latest["open"], high=latest["high"], low=latest["low"],
+                      close=latest["current_price"], volume=latest["volume"], amount=latest["amount"])
     return result
 
 
@@ -244,7 +250,7 @@ class Handler(BaseHTTPRequestHandler):
                                        "result": result, "error": None, "stock_name": STOCKS[task["code"]][0]})
             if route == ["api", "v1", "portfolio", "snapshot"]:
                 return self.reply(200, portfolio())
-            if route and route[0] in ["chat", "screening", "alerts", "funds", "decision-signals", "backtest", "data", "settings", "usage"]:
+            if route == [""] or (route and route[0] in ["chat", "screening", "portfolio", "alerts", "funds", "decision-signals", "backtest", "data", "settings", "usage"]):
                 return self.reply(200, tool_html(), content_type="text/html; charset=utf-8")
             if route == ["api", "v1", "fixture", "export"]:
                 return self.reply(200, {"fixture": True, "kind": "http-download", "as_of": AS_OF},

@@ -3,6 +3,7 @@ import DSACore
 
 struct PortfolioView: View {
     @EnvironmentObject private var store: AppStore
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var snapshot: PortfolioSnapshot?
     @State private var loading = false
     @State private var error: String?
@@ -112,7 +113,8 @@ struct PortfolioView: View {
             Text(DisplayFormat.number(value.totalEquity))
                 .font(.title.weight(.bold).monospacedDigit())
                 .foregroundStyle(Theme.text)
-                .minimumScaleFactor(0.75).lineLimit(1)
+                .minimumScaleFactor(0.75).lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                .fixedSize(horizontal: false, vertical: true)
                 .accessibilityLabel("\(currencyName(value.currency))資產 \(money(value.totalEquity, currency: value.currency))")
                 .accessibilityIdentifier("portfolio.summary.totalEquity")
             LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
@@ -141,22 +143,7 @@ struct PortfolioView: View {
             Button {
                 toggle(account.accountId, in: &expandedAccounts)
             } label: {
-                HStack(alignment: .center, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(account.accountName).font(.headline).foregroundStyle(Theme.text)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text("\(marketName(account.market)) · \(currencyName(account.baseCurrency)) \(account.baseCurrency)")
-                            .font(.caption2).foregroundStyle(Theme.secondary)
-                    }
-                    Spacer(minLength: 8)
-                    VStack(alignment: .trailing, spacing: 3) {
-                        Text("帳戶資產").font(.caption2).foregroundStyle(Theme.secondary)
-                        Text(money(missingFX ? nil : account.totalEquity, currency: account.baseCurrency))
-                            .font(.subheadline.weight(.semibold).monospacedDigit()).foregroundStyle(Theme.text)
-                    }
-                    Image(systemName: expandedAccounts.contains(account.accountId) ? "chevron.up" : "chevron.down")
-                        .font(.caption2.weight(.semibold)).foregroundStyle(Theme.secondary)
-                }
+                accountHeader(account, missingFX: missingFX)
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
                 .padding(.vertical, 10)
@@ -197,60 +184,128 @@ struct PortfolioView: View {
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border, lineWidth: 1))
     }
 
+    private func accountHeader(_ account: PortfolioAccount, missingFX: Bool) -> some View {
+        let identity = VStack(alignment: .leading, spacing: 4) {
+            Text(account.accountName).font(.headline).foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("\(marketName(account.market)) · \(currencyName(account.baseCurrency)) \(account.baseCurrency)")
+                .font(.caption2).foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        let amount = VStack(alignment: dynamicTypeSize.isAccessibilitySize ? .leading : .trailing, spacing: 3) {
+            Text("帳戶資產").font(.caption2).foregroundStyle(Theme.secondary)
+            Text(money(missingFX ? nil : account.totalEquity, currency: account.baseCurrency))
+                .font(.subheadline.weight(.semibold).monospacedDigit()).foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        let indicator = Image(systemName: expandedAccounts.contains(account.accountId) ? "chevron.up" : "chevron.down")
+            .font(.caption2.weight(.semibold)).foregroundStyle(Theme.secondary)
+        return Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 8) {
+                        identity
+                        Spacer(minLength: 8)
+                        indicator
+                    }
+                    amount.frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                HStack(alignment: .center, spacing: 8) {
+                    identity
+                    Spacer(minLength: 8)
+                    amount
+                    indicator
+                }
+            }
+        }
+    }
+
     private func positionGroup(_ position: PortfolioPosition, account: PortfolioAccount) -> some View {
         let key = "\(account.accountId):\(position.id)"
         let expanded = expandedPositions.contains(key)
         let missingFX = account.fxMissing == true
         let pnl = missingFX || !position.priceAvailable ? nil : position.unrealizedPnlBase
         let valuationCurrency = position.valuationCurrency ?? account.baseCurrency
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 0) {
-                NavigationLink { StockDetailView(code: position.symbol) } label: {
-                    HStack(alignment: .center, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(position.name ?? position.symbol)
-                                .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text("\(position.symbol) · \(DisplayFormat.number(position.quantity, digits: 4)) 股")
-                                .font(.caption2).foregroundStyle(Theme.secondary)
-                            if let warning = PresentationText.quoteWarning(available: position.priceAvailable,
-                                                                           stale: position.priceStale,
-                                                                           source: position.priceProvider ?? position.priceSource) {
-                                priceStatus(warning, icon: position.priceAvailable ? "clock" : "exclamationmark.circle")
-                            }
-                        }
-                        .frame(minWidth: 95, alignment: .leading)
-                        Spacer(minLength: 0)
-                        VStack(alignment: .trailing, spacing: 5) {
-                            Text(money(position.priceAvailable ? position.lastPrice : nil, currency: position.currency))
-                                .font(.system(size: priceSize, weight: .semibold, design: .rounded).monospacedDigit())
-                                .foregroundStyle(Theme.text).lineLimit(1).minimumScaleFactor(0.75)
-                            Text(pnl.map { "損益 " + signedMoney($0, currency: valuationCurrency) } ?? "損益暫不可用")
-                                .font(.caption.weight(.semibold).monospacedDigit())
-                                .foregroundStyle(Theme.changeColor(pnl, convention: store.colorConvention))
-                            if pnl != nil, let percentage = position.unrealizedPnlPct {
-                                Text(DisplayFormat.percent(percentage))
-                                    .font(.caption2.monospacedDigit())
-                                    .foregroundStyle(Theme.changeColor(percentage, convention: store.colorConvention))
-                            }
-                        }
+        let identity = VStack(alignment: .leading, spacing: 5) {
+            Text(position.name ?? position.symbol)
+                .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("\(position.symbol) · \(DisplayFormat.number(position.quantity, digits: 4)) 股")
+                .font(.caption2).foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let warning = PresentationText.quoteWarning(available: position.priceAvailable,
+                                                           stale: position.priceStale,
+                                                           source: position.priceProvider ?? position.priceSource) {
+                priceStatus(warning, icon: position.priceAvailable ? "clock" : "exclamationmark.circle")
+            }
+        }
+        let values = VStack(alignment: dynamicTypeSize.isAccessibilitySize ? .leading : .trailing, spacing: 5) {
+            Text(money(position.priceAvailable ? position.lastPrice : nil, currency: position.currency))
+                .font(.system(size: priceSize, weight: .semibold, design: .rounded).monospacedDigit())
+                .foregroundStyle(Theme.text)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1).minimumScaleFactor(0.75)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(pnl.map { "損益 " + signedMoney($0, currency: valuationCurrency) } ?? "損益暫不可用")
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .foregroundStyle(Theme.changeColor(pnl, convention: store.colorConvention))
+                .fixedSize(horizontal: false, vertical: true)
+            if pnl != nil, let percentage = position.unrealizedPnlPct {
+                Text(DisplayFormat.percent(percentage))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(Theme.changeColor(percentage, convention: store.colorConvention))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        let stockLink = NavigationLink { StockDetailView(code: position.symbol) } label: {
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(alignment: .leading, spacing: 12) {
+                        identity
+                        values.frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(.vertical, 11)
-                    .frame(minHeight: 76)
-                    .contentShape(Rectangle())
+                } else {
+                    HStack(alignment: .center, spacing: 10) {
+                        identity.frame(minWidth: 95, alignment: .leading)
+                        Spacer(minLength: 0)
+                        values
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("portfolio.position.\(account.accountId).\(position.symbol)")
-                Button { toggle(key, in: &expandedPositions) } label: {
-                    Image(systemName: expanded ? "chevron.up" : "ellipsis")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.secondary)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
+            }
+            .padding(.vertical, 11)
+            .frame(minHeight: 76)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("portfolio.position.\(account.accountId).\(position.symbol)")
+        let detailsButton = Button { toggle(key, in: &expandedPositions) } label: {
+            HStack(spacing: 8) {
+                if dynamicTypeSize.isAccessibilitySize {
+                    Text(expanded ? "收起持股明細" : "持股明細")
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(position.name ?? position.symbol)持股明細")
-                .accessibilityIdentifier("portfolio.positionDetails.\(account.accountId).\(position.symbol)")
+                Image(systemName: expanded ? "chevron.up" : "ellipsis")
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(Theme.secondary)
+            .frame(width: dynamicTypeSize.isAccessibilitySize ? nil : 44)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(position.name ?? position.symbol)持股明細")
+        .accessibilityIdentifier("portfolio.positionDetails.\(account.accountId).\(position.symbol)")
+        return VStack(alignment: .leading, spacing: 0) {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 0) {
+                    stockLink
+                    detailsButton
+                }
+            } else {
+                HStack(spacing: 0) {
+                    stockLink
+                    detailsButton
+                }
             }
             if expanded {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
@@ -298,7 +353,8 @@ struct PortfolioView: View {
             Text(isChange ? value.map { signedMoney($0, currency: currency) } ?? "—" : money(value, currency: currency))
                 .font(.callout.weight(.semibold).monospacedDigit())
                 .foregroundStyle(isChange ? Theme.changeColor(value, convention: store.colorConvention) : Theme.text)
-                .lineLimit(1).minimumScaleFactor(0.75)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1).minimumScaleFactor(0.75)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
@@ -316,7 +372,8 @@ struct PortfolioView: View {
     }
 
     private var columns: [GridItem] {
-        [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)]
+        Array(repeating: GridItem(.flexible(), alignment: .leading),
+              count: dynamicTypeSize.isAccessibilitySize ? 1 : 2)
     }
 
     private func currencyName(_ currency: String) -> String {

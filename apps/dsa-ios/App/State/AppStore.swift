@@ -32,8 +32,21 @@ final class AppStore: ObservableObject {
     init(configurationFactory: @escaping () -> URLSessionConfiguration = { .ephemeral }) {
         self.configurationFactory = configurationFactory
         colorConvention = MarketColorConvention(rawValue: UserDefaults.standard.string(forKey: "marketColors") ?? "") ?? .taiwan
-        serverAddress = UserDefaults.standard.string(forKey: "serverAddress")
-            ?? (Bundle.main.object(forInfoDictionaryKey: "DSAServerURL") as? String ?? "")
+        let preferences = UserDefaults.standard
+        let savedAddress = preferences.string(forKey: "serverAddress")
+        let currentDefault = Bundle.main.object(forInfoDictionaryKey: "DSAServerURL") as? String ?? ""
+        serverAddress = ServerAddressSelection.initial(
+            saved: savedAddress, currentDefault: currentDefault,
+            previousDefault: Bundle.main.object(forInfoDictionaryKey: "DSAPreviousServerURL") as? String,
+            lastSeenDefault: preferences.string(forKey: "lastDefaultServerURL")
+        )
+        // 同一預設入口只移轉一次；之後使用者明確改回舊網址仍須尊重。
+        if !currentDefault.isEmpty {
+            if let savedAddress, serverAddress != savedAddress {
+                preferences.set(serverAddress, forKey: "serverAddress")
+            }
+            preferences.set(currentDefault, forKey: "lastDefaultServerURL")
+        }
         #if DEBUG
         if let fixtureURL = ProcessInfo.processInfo.environment["DSA_TEST_SERVER"] {
             serverAddress = fixtureURL
@@ -224,10 +237,6 @@ enum DisplayFormat {
         return value.replacingOccurrences(of: "T", with: " ")
     }
     static func date(_ value: String) -> Date? {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: String(value.prefix(10)))
+        TradingDay.parse(value)
     }
 }
