@@ -22,6 +22,7 @@ struct MarketChart: View {
     @State private var interval: ChartInterval = .threeMonths
     @State private var style: ChartStyle = .candlestick
     @State private var selectedDate: Date?
+    @ScaledMetric(relativeTo: .caption2) private var axisLabelWidth: CGFloat = 46
 
     init(
         candles: [ChartCandle],
@@ -86,16 +87,17 @@ struct MarketChart: View {
                 }
             }
 
-            if visibleCandles.isEmpty {
-                EmptyStateView(title: "尚無日線資料", message: "目前沒有可顯示的行情，取得資料後才會繪製走勢。")
-            } else {
+            if let first = visibleCandles.first, let last = visibleCandles.last {
+                let domain = TradingDay.candleBody(around: first.date).lowerBound...TradingDay.candleBody(around: last.date).upperBound
                 intervalPicker
                 if let candle = inspectedCandle {
                     candleReadout(candle)
                 }
                 priceChart
+                    .chartXScale(domain: domain)
                     .frame(height: 210)
                 volumeChart
+                    .chartXScale(domain: domain)
                     .frame(height: 66)
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "hand.draw")
@@ -103,6 +105,8 @@ struct MarketChart: View {
                 }
                 .font(.caption2)
                 .foregroundStyle(Theme.secondary)
+            } else {
+                EmptyStateView(title: "尚無日線資料", message: "目前沒有可顯示的行情，取得資料後才會繪製走勢。")
             }
 
             if source != nil || asOf != nil {
@@ -226,9 +230,13 @@ struct MarketChart: View {
             }
         }
         .chartYAxis {
-            AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { _ in
+            AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3])).foregroundStyle(Theme.border)
-                AxisValueLabel().foregroundStyle(Theme.secondary)
+                AxisValueLabel {
+                    if let number = value.as(Double.self) {
+                        axisLabel(number.formatted(.number.precision(.fractionLength(0...2))))
+                    }
+                }
             }
         }
         .accessibilityLabel(style == .candlestick ? "每日 K 線圖" : "每日收盤價走勢圖")
@@ -250,8 +258,12 @@ struct MarketChart: View {
         }
         .chartXAxis(.hidden)
         .chartYAxis {
-            AxisMarks(position: .trailing, values: .automatic(desiredCount: 2)) { _ in
-                AxisValueLabel().foregroundStyle(Theme.secondary)
+            AxisMarks(position: .trailing, values: .automatic(desiredCount: 2)) { value in
+                AxisValueLabel {
+                    if let number = value.as(Double.self) {
+                        axisLabel(number.formatted(.number.notation(.compactName)))
+                    }
+                }
             }
         }
         .overlay(alignment: .topLeading) {
@@ -269,5 +281,11 @@ struct MarketChart: View {
 
     private func price(_ value: Double) -> String {
         value.formatted(.number.precision(.fractionLength(0...2)))
+    }
+
+    private func axisLabel(_ text: String) -> some View {
+        Text(text).font(.caption2).foregroundStyle(Theme.secondary)
+            .lineLimit(1).minimumScaleFactor(0.6)
+            .frame(width: axisLabelWidth, alignment: .leading)
     }
 }

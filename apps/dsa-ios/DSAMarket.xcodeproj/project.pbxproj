@@ -29,8 +29,10 @@
 		ACD3A9EDF0E11342AB9B8D25 /* MarketHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38B140A8C9397DC14F900292 /* MarketHomeView.swift */; };
 		AD0B65CAA365C3E0E788C757 /* ConnectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A6621197BBA76CEAA9D3C2D /* ConnectionView.swift */; };
 		B5A8D44F111CBCDF7641C5DC /* DSACore in Frameworks */ = {isa = PBXBuildFile; productRef = D6D98554A51680E72AD67227 /* DSACore */; };
+		C4838C0697BFFEE4A4700837 /* MarketDataPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B87C2EC4C05E0C55BED4614A /* MarketDataPresentation.swift */; };
 		D7E5F6284141315FCEB56408 /* SessionVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7BD24F91BF09858789EF66F /* SessionVault.swift */; };
 		E0E1A8DD336B4C5D0BC6C188 /* SessionStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE77BD8988C593A4B2890BDD /* SessionStateTests.swift */; };
+		EDA41396FC0D5E96406D2B9F /* MarketDataPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3FBA665C8D01DE1C9433DBC /* MarketDataPresentationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,9 +72,11 @@
 		8E3CECAE43DBF1D3E886297C /* DSAMarketTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = DSAMarketTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8F241A34DEBEED7B543B2CA0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B3A12209C085640B76671514 /* ResearchReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchReportView.swift; sourceTree = "<group>"; };
+		B87C2EC4C05E0C55BED4614A /* MarketDataPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketDataPresentation.swift; sourceTree = "<group>"; };
 		BE77BD8988C593A4B2890BDD /* SessionStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStateTests.swift; sourceTree = "<group>"; };
 		CEE47EB2373AB886EB218538 /* PortfolioPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioPresentationTests.swift; sourceTree = "<group>"; };
 		CF1DB8DFF481B78126C3E72E /* ToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolsView.swift; sourceTree = "<group>"; };
+		D3FBA665C8D01DE1C9433DBC /* MarketDataPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketDataPresentationTests.swift; sourceTree = "<group>"; };
 		DA7E88F5BDA202571B017CFE /* DSAMarketUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = DSAMarketUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DED375596DDB58BFD995964B /* AppStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStore.swift; sourceTree = "<group>"; };
 		F7BD24F91BF09858789EF66F /* SessionVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionVault.swift; sourceTree = "<group>"; };
@@ -107,6 +111,7 @@
 		178B8392D7499BF5F427BA86 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				D3FBA665C8D01DE1C9433DBC /* MarketDataPresentationTests.swift */,
 				CEE47EB2373AB886EB218538 /* PortfolioPresentationTests.swift */,
 				BE77BD8988C593A4B2890BDD /* SessionStateTests.swift */,
 				1A90420C0C660A69F667DBD8 /* WebNavigationPolicyTests.swift */,
@@ -119,6 +124,7 @@
 			children = (
 				6EC4C5B3D1B3BAE2B371AEA5 /* BrandMark.swift */,
 				41F77F1E6281EAAD05ECA914 /* DesignSystem.swift */,
+				B87C2EC4C05E0C55BED4614A /* MarketDataPresentation.swift */,
 				898E74B4A88AB8F16170069C /* PresentationText.swift */,
 			);
 			path = Design;
@@ -318,6 +324,7 @@
 				985D2B579ACA3D469A76A882 /* DSAMarketApp.swift in Sources */,
 				2503549958E32E6AFE0311E4 /* DesignSystem.swift in Sources */,
 				573C48E1399E2809BFED2E40 /* MarketChart.swift in Sources */,
+				C4838C0697BFFEE4A4700837 /* MarketDataPresentation.swift in Sources */,
 				ACD3A9EDF0E11342AB9B8D25 /* MarketHomeView.swift in Sources */,
 				2CDDAA6900BC849B274FCC40 /* PortfolioView.swift in Sources */,
 				045C0C7F57F42F2403CE7E8D /* PresentationText.swift in Sources */,
@@ -344,6 +351,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EDA41396FC0D5E96406D2B9F /* MarketDataPresentationTests.swift in Sources */,
 				414E63836AC4AD477AFE048E /* PortfolioPresentationTests.swift in Sources */,
 				E0E1A8DD336B4C5D0BC6C188 /* SessionStateTests.swift in Sources */,
 				1047BE207CEE3B45F93A0566 /* WebNavigationPolicyTests.swift in Sources */,
@@ -438,6 +446,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DSA_BUNDLE_ID = com.audichuang.dsa;
+				DSA_PREVIOUS_SERVER_URL = "";
 				DSA_SERVER_URL = "";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -450,7 +459,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 0.1.1;
+				MARKETING_VERSION = 0.1.2;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -534,6 +543,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DSA_BUNDLE_ID = com.audichuang.dsa;
+				DSA_PREVIOUS_SERVER_URL = "";
 				DSA_SERVER_URL = "";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -552,7 +562,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 0.1.1;
+				MARKETING_VERSION = 0.1.2;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

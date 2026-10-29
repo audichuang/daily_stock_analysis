@@ -4,6 +4,7 @@ import DSACore
 struct StockDetailView: View {
     let code: String
     @EnvironmentObject private var store: AppStore
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var profile: StockProfile?
     @State private var loading = false
     @State private var error: String?
@@ -101,7 +102,7 @@ struct StockDetailView: View {
 
     private func tradingMetrics(_ quote: StockQuote) -> some View {
         DSACard {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 20) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: dynamicTypeSize.isAccessibilitySize ? 1 : 3), alignment: .leading, spacing: 20) {
                 MetricView("開盤", value: DisplayFormat.number(quote.open))
                 MetricView("最高", value: DisplayFormat.number(quote.high))
                 MetricView("最低", value: DisplayFormat.number(quote.low))

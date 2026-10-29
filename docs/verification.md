@@ -2,6 +2,27 @@
 
 入口是 [verify skill](../.claude/skills/verify/SKILL.md)，[功能地圖](../.claude/skills/verify/features/README.md) 定義使用者入口、操作、前置資料與終態。實跑與單測／fixture 各自回報；一個主要旅程通過不代表該頁全部分支已通過。
 
+## 2026-10-30：iOS 0.1.2 公網入口與頁面／資料審查
+
+基線 `34b7d76c`，三輪審查已收斂。本輪修正預設網址一次性移轉、資料參考時間、空買賣盤、交易日期、K 線實體與量價對齊，以及大字級數值可讀性。證據根目錄為本機 `apps/dsa-ios/QA/public-audit/`；私人快照與報告不入庫，以下只記去敏結論。
+
+| 層級 | 結果與證據（相對證據根目錄） |
+| --- | --- |
+| Core／App | `core-tests-final.log`：Core 27/27；`final-all-tools/test.log`：App 20/20，均無失敗 |
+| 合成 HTTP／原生 UI | `final-all-tools`：iOS 27.0、iPhone 17 Simulator，完整旅程 1/1、202.001 秒、exit 0、xcresult 正常封存。含台美切換、六列密度、研究／自選／資產、空委買、資料參考時間、分享與本機登出；全部 11 個工具入口的 route 斷言通過。工具頁是合成 fixture，只證明路由、登入橋接與匯出，不代表真實網頁功能全部通過 |
+| 認證與修法守門 | `security/auth-tests.log`：58 passed。`migration-mutations/results.json` 的 4 個錯誤版本、`orderbook-mutations/results.json` 的 2 個錯誤版本均失敗；`chart-fix/mutation-results.json` 的 8 個錯誤日期／範圍／實體版本均失敗，現行版本在台北與洛杉磯時區通過。涵蓋舊行為與修得過頭的反向案例 |
+| 最大輔助字級 | `a11y-current/xxxl` 與 `final-short/xxxl`：指數、資產、帳戶、持股完整金額已實看並以 PNG OCR 核對；最後補驗 `590.03`、`12,345,678`、`無報價` 均完整，逐項捲入可見區。`final-short/xxxl` exit 0、正常 xcresult；不以 AX 的完整字串代替畫面 |
+| K 線與量柱 | `final-short/chart`：1M 真繪圖截圖與像素核對，最後 K 線／量柱中心差從 24.5 px 降為 0 px；各 32 根，實體寬 20 px、影線列中位寬 3–4 px。UI test exit 0、正常 xcresult |
+| 正式資料唯讀核對 | 獨立 Decimal FIFO 重建與帳本事件 147/147 一致；2026-10-29 官方 2,354 列 OHLC、成交股數、金額、筆數與市場庫一致，代碼聯集無差異；36 個台股 Shioaji 快照價格／OHLC與同日官方一致；42 個快照漲跌額／百分比重算一致。細節留在私有 `data/report.md`，沒有修改正式帳本 |
+| 公網入口 | `https://dsa.audichuang.app` 的 Cloudflare Tunnel 已部署，舊私有入口保留。正常 URLSession 取得 200 JSON、無 HTML challenge；受保護 API 未登入與假 cookie 均回 401。設定與操作紀錄 commit 為 `60c6a849`、`1ae4af1d`，詳見 nas-ops 的 `operator/cloudflare/dsa-public-2026-10-29.md` |
+| 交付 | `0.1.2 (202610300059)` 已簽章封存，Info.plist 的新舊預設 URL 已核對；IPA 經 `asc` uploaded／committed，Apple 回讀仍為 `PROCESSING`，尚待有效 build／內部群組核對，未確認可供 TestFlight 安裝 |
+
+資料驗證的限制：34/36 個 Shioaji 快照成交量不同於官方全天量，來源涵蓋尚未釐清，UI只標示「來源成交量（股）」；6 個美股快照僅確認落在當日原始高低範圍，同時點即時價驗證仍為 0。歷史 API 尚未明示還原價／分割調整基準，未逐日核對全歷史；沒有券商對帳單，所以 FIFO 一致不等於券商庫存對帳。策略 `sniper_prices` 的數值欄位仍未由 Swift 解碼，現有樣本未證實文字矛盾，列 Consider 並保持未改；不將 AI 評分當勝率。
+
+使用者公網互動登入仍待完成；未驗證成功登入後實際 Set-Cookie、正式 App→API 同時點數值、實體手機 0.1.2 安裝、VoiceOver、橫向與 iPad。早期補拍 probe 失敗／結果封裝逾時保留於 `a11y-current/xxxl-detail`，不算通過；修後只引用上述 `final-short` 與 `final-all-tools` 成功結果。字級已還原 large，專用 fixture 已停止。
+
+回滾可改用先前有效 TestFlight build，或手動改回私有入口並啟用 Tailscale；沒有帳本 migration。公網路由回滾依 ops 紀錄，只撤回本次 hostname 設定。此次未跑全量 Python 離線測試；完整真實 Web 工具操作與使用者公網登入也未以 fixture 替代。
+
 ## 2026-10-29：Daily Stock AI iOS
 
 ### 0.1.1：實機回報後的資產幣別與緊湊版面修正

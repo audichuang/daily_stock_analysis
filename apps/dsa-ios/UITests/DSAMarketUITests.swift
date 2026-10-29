@@ -169,6 +169,15 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(app.webViews.buttons["匯出合成設定 JSON"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.webViews.buttons["匯出合成設定 JSON"].isHittable, "原生分享視窗必須已關閉")
         goBack(from: "AI 問股", to: "工具與設定")
+        for (route, title) in [("screening", "條件選股"), ("decision-signals", "決策訊號"),
+                               ("", "分析工作台"), ("backtest", "歷史回測"), ("portfolio", "帳本管理"),
+                               ("funds", "基金"), ("alerts", "價位警報"), ("data", "資料中心"),
+                               ("usage", "AI 用量"), ("settings", "服務設定")] {
+            tap(app.buttons["tools.route.\(route)"])
+            XCTAssertTrue(app.webViews.staticTexts["頁面路徑：/\(route)"].waitForExistence(timeout: 15), "工具必須載入對應路徑")
+            capture("tool-\(route.isEmpty ? "analysis" : route)")
+            goBack(from: title, to: "工具與設定")
+        }
         tap(app.buttons["tools.logout"])
         XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15), "本機登出後應回到連線畫面")
         capture("12-本機登出")

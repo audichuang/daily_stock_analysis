@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import date, timedelta
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from html import escape
 import json
 from pathlib import Path
 import threading
@@ -251,7 +252,7 @@ class Handler(BaseHTTPRequestHandler):
             if route == ["api", "v1", "portfolio", "snapshot"]:
                 return self.reply(200, portfolio())
             if route == [""] or (route and route[0] in ["chat", "screening", "portfolio", "alerts", "funds", "decision-signals", "backtest", "data", "settings", "usage"]):
-                return self.reply(200, tool_html(), content_type="text/html; charset=utf-8")
+                return self.reply(200, tool_html("/" + "/".join(route)), content_type="text/html; charset=utf-8")
             if route == ["api", "v1", "fixture", "export"]:
                 return self.reply(200, {"fixture": True, "kind": "http-download", "as_of": AS_OF},
                                   headers={"Content-Disposition": 'attachment; filename="fixture-http-export.json"'})
@@ -292,10 +293,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"detail": {"error": "fixture_route_missing", "message": "此路徑尚未加入 fixture"}})
 
 
-def tool_html():
+def tool_html(route_path="/chat"):
     return """<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width">
 <body style="background:#101824;color:#fff;font:18px system-ui;padding:24px">
-<h1>進階工具（合成驗收頁）</h1>
+<h1>進階工具（合成驗收頁）</h1><p>頁面路徑：{{ROUTE}}</p>
 <p>此處只驗證登入 cookie、內嵌瀏覽器與本機匯出，不代表真實工具功能通過。</p>
 <button id="fixture-blob-export" style="padding:16px;font:18px system-ui">匯出合成設定 JSON</button>
 <p><a href="/api/v1/fixture/export" download="fixture-http-export.json" style="color:#80efcf">下載 HTTP 合成檔案</a></p>
@@ -309,7 +310,7 @@ document.getElementById('fixture-blob-export').addEventListener('click', () => {
   link.click();
   link.remove();
 });
-</script></body></html>"""
+</script></body></html>""".replace("{{ROUTE}}", escape(route_path))
 
 
 def portfolio():
