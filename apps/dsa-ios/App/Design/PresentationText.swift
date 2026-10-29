@@ -2,11 +2,21 @@ import Foundation
 
 /// 只翻譯後端已定義的顯示代碼；自由文字與未知值保留原文。
 enum PresentationText {
+    static func quoteWarning(available: Bool, stale: Bool, source: String?) -> String? {
+        if !available { return "尚無報價" }
+        if stale { return "價格過期" }
+        if ["fallback", "yfinance"].contains(source?.lowercased() ?? "") { return "可能延遲" }
+        return nil
+    }
+
     static func limitation(_ value: String) -> String {
         switch value {
         case "no_reports": return "尚無這檔股票的分析報告"
         case "no_symbol_intelligence": return "尚無這檔股票的相關情報"
         case "cached_positions_only": return "持股關聯僅依快取資料判斷"
+        case "realtime_quote_best_effort": return "報價依可用來源更新，部分可能延遲"
+        case "fx_and_cost_basis_partial": return "損益估算受匯率與成本計算方式影響"
+        case "sector_and_risk_metrics_limited": return "產業分類與風險指標尚未完整提供"
         default: break
         }
 

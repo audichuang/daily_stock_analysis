@@ -48,6 +48,19 @@ final class DSAMarketUITests: XCTestCase {
         tap(marketPicker.buttons["台股 TAIWAN"])
 
         tap(app.tabBars.buttons["自選"])
+        let rowCodes = ["2330.TW", "2317.TW", "00631L.TW", "2303.TW", "2603.TW", "0050.TW", "00878.TW"]
+        XCTAssertTrue(app.buttons["stock-row.2330.TW"].waitForExistence(timeout: 10))
+        let top = app.navigationBars["自選股"].frame.maxY
+        let bottom = app.tabBars.firstMatch.frame.minY
+        let visibleRows = rowCodes.map { app.buttons["stock-row.\($0)"] }.filter {
+            $0.exists && $0.frame.minY >= top && $0.frame.maxY <= bottom
+        }
+        XCTAssertGreaterThanOrEqual(visibleRows.count, 6, "標準字級應同屏完整顯示至少六筆自選")
+        for row in visibleRows {
+            XCTAssertLessThanOrEqual(row.frame.height, 104, "自選列不應恢復成大卡片")
+            XCTAssertGreaterThanOrEqual(row.frame.height, 64, "縮小版面仍需保留可讀文字與點擊空間")
+        }
+        capture("02b-緊湊自選列表")
         let taiwanStock = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "2330.TW")).firstMatch
         tap(taiwanStock)
         XCTAssertTrue(app.buttons["watchlist-toggle"].waitForExistence(timeout: 15))
@@ -109,8 +122,33 @@ final class DSAMarketUITests: XCTestCase {
 
         tap(app.tabBars.buttons["資產"])
         XCTAssertTrue(text(containing: "合成測試帳戶").waitForExistence(timeout: 15))
-        scrollTo(text(containing: "合成測試帳戶"))
+        let total = app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "portfolio.summary", "資產 ")).firstMatch
+        XCTAssertTrue(total.waitForExistence(timeout: 10))
+        XCTAssertTrue(total.label.contains("1,200,000"), "台幣總額必須加總兩個TWD帳戶，不使用頂層CNY合計")
+        XCTAssertTrue(total.label.contains("新臺幣"))
+        XCTAssertFalse(text(containing: "282,345.67").exists, "不能重標原本的CNY數字")
+        XCTAssertFalse(text(containing: "realtime_quote_best_effort").exists)
+        let position = app.buttons["portfolio.position.1.2330.TW"]
+        XCTAssertTrue(position.exists)
+        XCTAssertLessThanOrEqual(position.frame.height, 104)
+        XCTAssertFalse(position.label.contains("可能延遲"), "Shioaji非過期報價不能被一律標成延遲")
         capture("10-資產帳本")
+        tap(app.segmentedControls["portfolio.currency-picker"].buttons["美元"])
+        XCTAssertTrue(total.label.contains("12,500"), "美元須顯示USD帳戶的原幣金額")
+        XCTAssertTrue(total.label.contains("美元"))
+        XCTAssertTrue(app.buttons["portfolio.position.3.AAPL"].exists)
+        XCTAssertTrue(app.buttons["portfolio.position.3.AAPL"].label.contains("可能延遲"))
+        XCTAssertTrue(app.buttons["portfolio.position.3.MSFT"].label.contains("可能延遲"))
+        XCTAssertFalse(app.buttons["portfolio.account.1"].exists)
+        capture("10b-美元原幣資產")
+        tap(app.segmentedControls["portfolio.currency-picker"].buttons["新臺幣"])
+        tap(app.buttons["portfolio.positionDetails.1.2330.TW"])
+        XCTAssertTrue(text(containing: "平均成本").exists)
+        capture("10c-持股展開明細")
+        tap(app.buttons["portfolio.data-notes"])
+        XCTAssertTrue(text(containing: "報價依可用來源更新").exists)
+        XCTAssertFalse(text(containing: "fx_and_cost_basis_partial").exists)
+        capture("10d-中文資料說明")
 
         tap(app.tabBars.buttons["工具"])
         tap(app.buttons["tools.route.chat"])

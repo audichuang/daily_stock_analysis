@@ -49,8 +49,8 @@ struct PageScroll<Content: View>: View {
     @ViewBuilder let content: Content
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) { content }
-                .padding(20)
+            VStack(alignment: .leading, spacing: 16) { content }
+                .padding(16)
                 .frame(maxWidth: 900, alignment: .leading)
                 .frame(maxWidth: .infinity)
         }

@@ -38,13 +38,13 @@ struct DSACard<Content: View>: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(18)
+            .padding(14)
             .background {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(Theme.surface.gradient)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Theme.surface)
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(Theme.border, lineWidth: 1)
             }
     }

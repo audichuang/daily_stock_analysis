@@ -20,6 +20,10 @@ STOCKS = {
     "2317.TW": ("鴻海（測試）", 100.0, -0.99, "tw"),
     "00631L.TW": ("台灣50正2（測試）", 120.0, 2.0, "tw"),
     "6488.TWO": ("環球晶（測試）", 500.0, -1.0, "tw"),
+    "2303.TW": ("聯電（測試）", 45.6, -1.72, "tw"),
+    "2603.TW": ("長榮（測試）", 180.0, 0.84, "tw"),
+    "0050.TW": ("台灣50（測試）", 100.25, 0.25, "tw"),
+    "00878.TW": ("高股息（測試）", 25.3, -0.4, "tw"),
     "AAPL": ("Apple（測試）", 190.0, 0.53, "us"),
     "MSFT": ("Microsoft（測試）", 400.0, -0.5, "us"),
 }
@@ -104,10 +108,12 @@ def history_item(record_id, code, report_type="detailed", region=None):
 class State:
     def __init__(self):
         self.lock = threading.RLock()
-        self.watchlist = ["2330.TW", "2317.TW", "00631L.TW", "AAPL"]
+        self.watchlist = ["2330.TW", "2317.TW", "00631L.TW", "2303.TW", "2603.TW", "0050.TW", "00878.TW", "AAPL"]
         self.records = [history_item(101, "2330.TW"), history_item(102, "AAPL"),
                         history_item(201, "TWII", "market_review", "tw"),
                         history_item(202, "SPX", "market_review", "us")]
+        self.records += [history_item(110 + index, code) for index, code in enumerate(self.watchlist)
+                         if code not in ("2330.TW", "AAPL")]
         self.tasks = {}
         self.analysis_starts = 0
         self.next_record_id = 301
@@ -301,20 +307,41 @@ document.getElementById('fixture-blob-export').addEventListener('click', () => {
 
 
 def portfolio():
+    limitations = ["realtime_quote_best_effort", "fx_and_cost_basis_partial", "sector_and_risk_metrics_limited"]
     position = {"symbol": "2330.TW", "name": STOCKS["2330.TW"][0], "market": "tw", "currency": "TWD",
                 "quantity": 1000.0, "avg_cost": 580.0, "total_cost": 580000.0, "last_price": 600.0,
                 "market_value_base": 600000.0, "unrealized_pnl_base": 20000.0, "unrealized_pnl_pct": 3.45,
-                "valuation_currency": "TWD", "price_source": "fixture", "price_provider": "fixture",
-                "price_date": "2024-01-31", "price_stale": True, "price_available": True,
-                "data_quality": "partial", "limitations": ["合成測試持股，並非真實資產"]}
+                "valuation_currency": "TWD", "price_source": "realtime_quote", "price_provider": "shioaji",
+                "price_date": "2024-01-31", "price_stale": False, "price_available": True,
+                "data_quality": "partial", "limitations": limitations}
     account = {"account_id": 1, "account_name": "合成測試帳戶", "market": "tw", "base_currency": "TWD",
                "total_cash": 400000.0, "total_market_value": 600000.0, "total_equity": 1000000.0,
                "realized_pnl": 0.0, "unrealized_pnl": 20000.0, "data_quality": "partial",
-               "fx_stale": False, "fx_missing": False, "limitations": ["合成測試資產"], "positions": [position]}
-    return {"as_of": "2024-01-31", "cost_method": "fifo", "currency": "TWD", "account_count": 1,
-            "total_cash": 400000.0, "total_market_value": 600000.0, "total_equity": 1000000.0,
-            "realized_pnl": 0.0, "unrealized_pnl": 20000.0, "fx_stale": False, "fx_missing": False,
-            "data_quality": "partial", "limitations": ["合成測試資料，不能視為實際帳戶餘額"], "accounts": [account]}
+               "fx_stale": False, "fx_missing": False, "limitations": limitations, "positions": [position]}
+    second = deepcopy(account)
+    second.update(account_id=2, account_name="第二台幣帳戶（測試）", total_cash=80000.0,
+                  total_market_value=120000.0, total_equity=200000.0, unrealized_pnl=20000.0)
+    second["positions"][0].update(symbol="00631L.TW", name=STOCKS["00631L.TW"][0],
+                                  avg_cost=100.0, total_cost=100000.0, last_price=120.0,
+                                  market_value_base=120000.0, unrealized_pnl_pct=20.0, price_stale=True)
+    dollar = deepcopy(account)
+    dollar.update(account_id=3, account_name="美元帳戶（測試）", market="us", base_currency="USD",
+                  total_cash=4700.0, total_market_value=7800.0, total_equity=12500.0, unrealized_pnl=300.0)
+    dollar["positions"][0].update(symbol="AAPL", name=STOCKS["AAPL"][0], market="us", currency="USD",
+                                  quantity=20.0, avg_cost=180.0, total_cost=3600.0, last_price=190.0,
+                                  market_value_base=3800.0, unrealized_pnl_base=200.0,
+                                  unrealized_pnl_pct=5.56, valuation_currency="USD", price_provider="yfinance")
+    microsoft = deepcopy(dollar["positions"][0])
+    microsoft.update(symbol="MSFT", name=STOCKS["MSFT"][0], quantity=10.0, avg_cost=390.0,
+                     total_cost=3900.0, last_price=400.0, market_value_base=4000.0,
+                     unrealized_pnl_base=100.0, unrealized_pnl_pct=2.56, price_provider="fallback")
+    dollar["positions"].append(microsoft)
+    # 重現正式契約：頂層是跨幣別 CNY，原幣帳戶完整；CNY 換算缺漏不應污染台幣／美元分組。
+    return {"as_of": "2024-01-31", "cost_method": "fifo", "currency": "CNY", "account_count": 3,
+            "total_cash": 82345.67, "total_market_value": 200000.0, "total_equity": 282345.67,
+            "realized_pnl": 0.0, "unrealized_pnl": 10000.0, "fx_stale": True, "fx_missing": True,
+            "data_quality": "partial", "limitations": ["合成測試資料，不能視為實際帳戶餘額"] + limitations,
+            "accounts": [account, second, dollar]}
 
 
 def main():
