@@ -36,7 +36,7 @@
 
 ## 5. 交付
 
-- 命中高风险区域（配置语义、API／Schema、数据源 fallback、报告结构、认证、调度、发布流程、桌面端启动链路）时按 §7 逐项确认。
+- 命中高风险区域（配置语义、API／Schema、数据源 fallback、报告结构、认证、调度、发布流程）时按 §7 逐项确认。
 - 交付六项：改了什么 / 为什么这么改 / 验证情况 / 未验证项 / 风险点 / 回滚方式。`docs` 任务可写 `Docs only, tests not run`，但要说明是否核对了命令和文件名。
 
 ## 6. 验证矩阵
@@ -56,8 +56,8 @@
   - **本机必须带 `uv run`**：脚本内部调用裸 `python`，全域 python 没有项目相依，不带 `uv run` 会跑错环境或缺套件。
   - 交付前完整门槛：`uv run ./scripts/ci_gate.sh`（＝`all`，含 `pytest -m "not network"` 全量，§1 要先确认）；最低要求 `uv run python -m py_compile <changed_files>`。
 - Web（`apps/dsa-web/`）：`cd apps/dsa-web && npm ci && npm run lint && npm run build`。
-- iOS（`apps/dsa-ios/`）：**CI 不建置也不測試 iOS**，交付前在本機跑 `swift test --package-path apps/dsa-ios/Core` 與 `bash apps/dsa-ios/scripts/test-ui.sh <專用模擬器 UDID>`。
-- 桌面端：先构建 Web 再构建桌面端。API／Schema／认证联动：后端验证 + 受影响客户端构建，并写明兼容性影响。
+- iOS（`apps/dsa-ios/`）：**CI 不建置也不測試 iOS**，交付前在本機跑 `swift test --package-path apps/dsa-ios/Core` 與 `bash apps/dsa-ios/scripts/test-ui.sh`（不帶參數時用固定模擬器）。
+- API／Schema／认证联动：后端验证 + 受影响客户端构建，并写明兼容性影响。
 - 文档与治理文件：不强制代码测试，但要核对命令、文件名、工作流名称与仓库一致。工作流／脚本／Docker：跑最接近的本地验证，说明影响哪条流水线或部署路径。
 - 没跑到的（平台限制、在线验证、Docker／Actions）在交付说明写原因。
 
@@ -65,7 +65,7 @@
 
 - 新配置要做到"不配置也可运行"（预设关闭或沿用旧行为）。
 - 单一数据源或通知渠道失败不拖垮整个分析流程（除非需求要求 fail-fast）。
-- 改 API／报告载荷优先追加字段、保留旧字段（Web、桌面端、iOS 都是手動同步，見 `api/AGENTS.md`）。
+- 改 API／报告载荷优先追加字段、保留旧字段（Web、iOS 都是手動同步，見 `api/AGENTS.md`）。
 
 ## 8. Skill 工作流
 

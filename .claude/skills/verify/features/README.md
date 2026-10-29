@@ -1,6 +1,6 @@
 # 功能驗證地圖
 
-先讀上層 `SKILL.md`，按 scope 選全部入口與子功能；全面驗證涵蓋下列九份 map。
+先讀上層 `SKILL.md`，按 scope 選全部入口與子功能；全面驗證涵蓋下列十份 map。
 map 是 recipe，沒有預設通過項；結果取自本輪 `coverage.jsonl`、原始 action／畫面／API／DB 與清理證據。
 `passed` 需達到該子功能終態；`observed` 只是觀察，缺前置記 `blocked`、未執行記 `not-run`、執行未達終態記 `failed`。
 
@@ -21,7 +21,7 @@ map 是 recipe，沒有預設通過項；結果取自本輪 `coverage.jsonl`、�
 `portfolio.mjs` 會自行 finish，僅供單獨空庫 scope，不插入跨功能 run。
 設定／認證變更後 Doctor 以 runtime ENV_FILE 核對；正式庫或正式設定不能作可刪種子。
 Doctor 的 storage 是啟動快照；保存設定後另以已知基金搜尋的真列核對市場連線。報告分享缺渲染器保留 blocked，截圖不能替代海報匯出。
-未被這九份 map 定義的新入口先依 source 補 journey，再驗；桌面端封裝目前另缺專屬 map。
+未被這十份 map 定義的新入口先依 source 補 journey，再驗。
 路由來源是 `apps/dsa-web/src/App.tsx`、`api/v1/router.py`；CLI 真入口是 Makefile 與各 script 的 argparse／main。
 
 來源與紀錄：

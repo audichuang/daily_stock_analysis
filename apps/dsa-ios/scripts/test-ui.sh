@@ -2,12 +2,15 @@
 # 真啟動 iOS App 操作合成 HTTP fixture；保留建置、測試、截圖與伺服器日誌。
 set -euo pipefail
 
-if [[ $# -lt 1 ]]; then
-  echo "用法：bash scripts/test-ui.sh <simulator-udid> [證據目錄]" >&2
+if [[ $# -gt 2 ]]; then
+  echo "用法：bash scripts/test-ui.sh [udid] [evidence-dir]（省略或留空 udid 時使用 DSA Fixture iPhone 17）" >&2
   exit 2
 fi
-DSA_SIMULATOR_ID="$1"
 DSA_IOS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DSA_SIMULATOR_ID="${1:-}"
+if [[ -z "$DSA_SIMULATOR_ID" ]]; then
+  DSA_SIMULATOR_ID="$("$DSA_IOS_ROOT/../../.claude/skills/verify/scripts/ios_sim.sh" udid fixture)"
+fi
 DSA_EVIDENCE_DIR="${2:-$(mktemp -d /tmp/dsa-ios-ui.XXXXXX)}"
 mkdir -p "$DSA_EVIDENCE_DIR"
 DSA_EVIDENCE_DIR="$(cd "$DSA_EVIDENCE_DIR" && pwd)"

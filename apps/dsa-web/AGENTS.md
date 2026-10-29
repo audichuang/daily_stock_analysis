@@ -2,7 +2,7 @@
 
 ## 模組定位
 
-面板的 Web 前端:React 19 + Vite + TypeScript + Tailwind 4 + zustand。打後端 FastAPI(repo 根 `api/`),認證走 cookie session(axios `withCredentials`)。Electron 桌面端(`apps/dsa-desktop/`)包的就是這份建置產物。
+面板的 Web 前端:React 19 + Vite + TypeScript + Tailwind 4 + zustand。打後端 FastAPI(repo 根 `api/`),認證走 cookie session(axios `withCredentials`)。
 
 ## 頁面業務地圖(`src/pages/`)
 
