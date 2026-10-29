@@ -4,6 +4,32 @@ import XCTest
 final class WebNavigationPolicyTests: XCTestCase {
     private let server = URL(string: "https://market.example.test")!
 
+    func testEmptyInitialFrameOriginIsUntrustedWithoutCrashing() {
+        let opaqueOrigin = WebNavigationPolicy.sourceOrigin(protocolValue: "", host: "", port: 0)
+        XCTAssertNil(opaqueOrigin)
+        let blob = URL(string: "blob:https://market.example.test/id")!
+        XCTAssertEqual(WebNavigationPolicy.action(url: blob, baseURL: server, sourceOrigin: opaqueOrigin,
+                                                  shouldDownload: true, userLink: true), .cancel)
+    }
+
+    func testValidInitialFrameOriginStillSupportsOwnBlobButNotForeignFrame() throws {
+        let source = try XCTUnwrap(WebNavigationPolicy.sourceOrigin(protocolValue: "https", host: "market.example.test", port: 443))
+        let blob = URL(string: "blob:https://market.example.test/id")!
+        XCTAssertEqual(WebNavigationPolicy.action(url: blob, baseURL: server, sourceOrigin: source,
+                                                  shouldDownload: true, userLink: false), .download)
+        let foreign = try XCTUnwrap(WebNavigationPolicy.sourceOrigin(protocolValue: "https", host: "foreign.example.test", port: 443))
+        XCTAssertEqual(WebNavigationPolicy.action(url: blob, baseURL: server, sourceOrigin: foreign,
+                                                  shouldDownload: true, userLink: true), .cancel)
+    }
+
+    func testDefaultSecurityOriginPortZeroMatchesHTTPS443() throws {
+        let source = try XCTUnwrap(WebNavigationPolicy.sourceOrigin(protocolValue: "https", host: "market.example.test", port: 0))
+        XCTAssertNil(source.port)
+        XCTAssertTrue(WebNavigationPolicy.sameOrigin(source, URL(string: "https://market.example.test:443")!))
+        XCTAssertEqual(WebNavigationPolicy.action(url: URL(string: "blob:https://market.example.test/id")!,
+                                                  baseURL: server, sourceOrigin: source, shouldDownload: true, userLink: false), .download)
+    }
+
     func testOwnBlobDownloadKeepsCreatorAndInitiatingFrameOrigin() {
         let blob = URL(string: "blob:https://market.example.test/export-uuid")!
         XCTAssertEqual(WebNavigationPolicy.action(url: blob, baseURL: server, sourceOrigin: server, shouldDownload: true, userLink: false), .download)

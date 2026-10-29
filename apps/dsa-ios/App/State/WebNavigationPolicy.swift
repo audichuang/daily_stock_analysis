@@ -3,6 +3,16 @@ import Foundation
 enum WebNavigationPolicy {
     enum Action: Equatable { case allow, download, external, cancel }
 
+    static func sourceOrigin(protocolValue: String, host: String, port: Int) -> URL? {
+        guard ["http", "https"].contains(protocolValue.lowercased()), !host.isEmpty else { return nil }
+        var source = URLComponents()
+        source.scheme = protocolValue
+        source.host = host
+        // WKSecurityOrigin 將缺省／協定預設 port 表成 0；保留 nil 才能與 HTTPS 443 同源。
+        if port != 0 { source.port = port }
+        return source.url
+    }
+
     static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {
         guard ["http", "https"].contains(lhs.scheme?.lowercased() ?? ""),
               lhs.user == nil, lhs.password == nil, rhs.user == nil, rhs.password == nil else { return false }

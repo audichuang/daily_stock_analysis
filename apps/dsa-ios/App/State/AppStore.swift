@@ -134,8 +134,8 @@ final class AppStore: ObservableObject {
     func latestReport(for code: String) -> HistoryItem? { reports.first { $0.stockCode == code } }
     func isInMarket(_ code: String) -> Bool {
         switch selectedMarket {
-        case "tw": return code.range(of: #"^[0-9]{4,6}[A-Z]?\.TW(O)?$"#, options: .regularExpression) != nil
-        case "us": return code.range(of: #"^[A-Z]{1,5}(?:[.-](?:US|[A-Z]))?$"#, options: .regularExpression) != nil
+        case "tw": return code.range(of: #"^[0-9]{4,6}[A-Za-z]?\.[Tt][Ww](?:[Oo])?$"#, options: .regularExpression) != nil
+        case "us": return code.range(of: #"^[A-Za-z]{1,5}(?:[.-](?:[Uu][Ss]|[A-Za-z]))?$"#, options: .regularExpression) != nil
         default: return false
         }
     }

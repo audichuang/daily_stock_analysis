@@ -30,9 +30,11 @@ else:
 PY
 
 xcodegen generate --spec "$DSA_IOS_ROOT/project.yml" --project "$DSA_IOS_ROOT" --quiet
+DSA_SIGNING_ARGS=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-)
+if [[ -n "${DSA_TEAM_ID:-}" ]]; then DSA_SIGNING_ARGS+=("DEVELOPMENT_TEAM=$DSA_TEAM_ID"); fi
 xcodebuild build-for-testing -project "$DSA_IOS_ROOT/DSAMarket.xcodeproj" -scheme DSAMarket \
   -configuration Debug -destination "platform=iOS Simulator,id=$DSA_SIMULATOR_ID" \
-  -derivedDataPath "$DSA_EVIDENCE_DIR/DerivedData" CODE_SIGNING_ALLOWED=NO \
+  -derivedDataPath "$DSA_EVIDENCE_DIR/DerivedData" "${DSA_SIGNING_ARGS[@]}" \
   > "$DSA_EVIDENCE_DIR/build.log" 2>&1
 
 DSA_TEST_RUN="$(python3 - "$DSA_EVIDENCE_DIR" <<'PY'

@@ -114,9 +114,9 @@ final class SessionStateTests: XCTestCase {
 
     func testMarketClassificationSeparatesTaiwanUSAndOtherMarkets() {
         let store = AppStore()
-        let taiwan = ["2330.TW", "6488.TWO", "00631L.TW", "2887A.TW", "123456.TWO"]
-        let unitedStates = ["AAPL", "TSLA", "BRK-B", "BRK.B", "AAPL.US"]
-        let others = ["600519", "600519.SH", "000001.SZ", "00700.HK", "HK00700", "SH600519", "2330", "AAPL.TW", "123.TW", "1234567.TW"]
+        let taiwan = ["2330.TW", "6488.TWO", "00631L.TW", "2887A.TW", "123456.TWO", "2330.tw", "00631l.two"]
+        let unitedStates = ["AAPL", "TSLA", "BRK-B", "BRK.B", "AAPL.US", "aapl", "brk.b", "aapl.us"]
+        let others = ["600519", "600519.SH", "000001.SZ", "00700.HK", "HK00700", "SH600519", "2330", "AAPL.TW", "123.TW", "1234567.TW", "ſ", "K", "２３３０.tw", "7203.T"]
 
         store.selectedMarket = "tw"
         for code in taiwan { XCTAssertTrue(store.isInMarket(code), code) }

@@ -100,11 +100,8 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
             let origin = navigationAction.sourceFrame.securityOrigin
-            var source = URLComponents()
-            source.scheme = origin.protocol
-            source.host = origin.host
-            if origin.port != 0 { source.port = origin.port }
-            switch WebNavigationPolicy.action(url: url, baseURL: parent.baseURL, sourceOrigin: source.url,
+            let source = WebNavigationPolicy.sourceOrigin(protocolValue: origin.protocol, host: origin.host, port: origin.port)
+            switch WebNavigationPolicy.action(url: url, baseURL: parent.baseURL, sourceOrigin: source,
                                                shouldDownload: navigationAction.shouldPerformDownload,
                                                userLink: navigationAction.navigationType == .linkActivated) {
             case .allow: decisionHandler(.allow)
