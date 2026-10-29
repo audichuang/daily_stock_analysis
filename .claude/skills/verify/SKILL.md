@@ -1,6 +1,6 @@
 ---
 name: verify
-description: 驗證 Daily Stock Analysis 的真實 Web、API 與 CLI 使用者流程；在功能完成、修復驗收或需要證明測試確實執行時使用，以 ego-browser 操作畫面並保存可追溯證據。
+description: 驗證 Daily Stock Analysis 的真實 Web、API、CLI 與 iOS App（模擬器）使用者流程；在功能完成、修復驗收或需要證明測試確實執行時使用，以 ego-browser 操作畫面並保存可追溯證據。
 ---
 
 # Daily Stock Analysis 驗證
@@ -98,6 +98,8 @@ uv run python .claude/skills/verify/scripts/instance.py cleanup --run-dir "$DSA_
 停止後 SQLite 備份為 `application-evidence.sqlite3`，帳戶／入金列匯出 `portfolio-rows.json`；其他功能所需列／cache 在刪 runtime 前另保存。最後核對 `cli-cleanup.json`、`cleanup.json`、port 釋放及全部畫面／API／DB／coverage 證據仍可讀。被殺的未完成任務標失敗／中止，不能因清理成功改標功能通過。
 
 ## Helpers
+
+[ios_sim.sh](scripts/ios_sim.sh)：依名稱解析與啟停 fixture／manual 專用模擬器。
 
 [instance.py](scripts/instance.py)：上述 `launch|doctor|cleanup|exec --run-dir`；launch 支援 `--space-id`、`--online`、`--symbols`。單獨空庫 portfolio 可用 launch 產生的 `drive-portfolio.mjs`；其他 scope 使用 `browser.mjs` 共用記錄與 TaskSpace。helper 皆可執行，錯誤先留 log，修具體原因再驗受影響路徑。
 

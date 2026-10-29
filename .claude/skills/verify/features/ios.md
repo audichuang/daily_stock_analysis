@@ -4,9 +4,9 @@
 
 ## Launch
 
-使用本輪專用 Simulator，保留其他裝置。依 `apps/dsa-ios/README.md` 建置後，以 `xcrun simctl install <UDID> <DSAMarket.app>` 安裝。原生操作用桌面控制或 XCTest；Xcode 新版可能在 Device Hub 呈現模擬器。
+合成流程：`bash apps/dsa-ios/scripts/test-ui.sh` 固定使用 `DSA Fixture iPhone 17`，會開獨立 HTTP fixture 並真啟動 App，保存 log／xcresult；缺網址的 skip 不算驗收。
 
-合成流程：`bash apps/dsa-ios/scripts/test-ui.sh <UDID> <證據目錄>`，會開獨立 HTTP fixture 並真啟動 App，保存 log／xcresult；缺網址的 skip 不算驗收。
+手動／真服務：先執行 `.claude/skills/verify/scripts/ios_sim.sh up manual`，取得 `DSA iPhone 17` 的 UDID。依 `apps/dsa-ios/README.md` 建置後，以 `xcrun simctl install <UDID> <DSAMarket.app>` 安裝。原生操作用桌面控制或 XCTest；Xcode 新版可能在 Device Hub 呈現模擬器。
 
 真服務採主 skill 的隔離 `--online` profile，確認唯讀市場庫與獨立 SQLite。Debug 用 `SIMCTL_CHILD_DSA_TEST_SERVER=<本輪 URL> xcrun simctl launch <UDID> com.audichuang.dsa`。原生畫面是使用者入口，API／SQLite 是第二視角。
 
@@ -32,3 +32,5 @@ fixture 允許注入資料與故障且明標合成。真模型由原生按鈕發
 保存commit、build、UDID／OS、profile、操作前後截圖、API／SQLite核對與exit。xcresult需可讀才稱完整測試結果；Xcode測試結束後卡住時保留log並標結果封裝未完成，不算全綠。單測、合成 UI、正式資料唯讀核對、成功公網登入及 Apple build 狀態分開記錄；帳本 FIFO 一致不替代券商對帳單，美股當日高低範圍不替代同時點即時價核對。歷史還原價基準與未解碼策略數值等限制也須保留。
 
 只停本輪fixture PID，依主skill清理隔離後端並保留application-evidence.sqlite3。私人報告、cookie、密碼與Keychain內容不入庫。
+
+手動／真服務驗證結束後執行 `.claude/skills/verify/scripts/ios_sim.sh down manual`，關閉 `DSA iPhone 17`。
