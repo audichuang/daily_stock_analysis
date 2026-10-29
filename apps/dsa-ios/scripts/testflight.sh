@@ -35,6 +35,7 @@ if ! xcodebuild -project "$DSA_IOS_ROOT/DSAMarket.xcodeproj" -scheme DSAMarket \
   -configuration Release -destination 'generic/platform=iOS' \
   -archivePath "$DSA_OUTPUT/DSAMarket.xcarchive" \
   DEVELOPMENT_TEAM="$DSA_TEAM_ID" DSA_SERVER_URL="$DSA_SERVER_URL" \
+  DSA_PREVIOUS_SERVER_URL="${DSA_PREVIOUS_SERVER_URL:-}" \
   CURRENT_PROJECT_VERSION="$DSA_BUILD_NUMBER" "${DSA_AUTH[@]}" archive \
   > "$DSA_OUTPUT/archive.log" 2>&1; then
   tail -35 "$DSA_OUTPUT/archive.log" >&2

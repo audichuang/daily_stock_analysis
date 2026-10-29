@@ -17,8 +17,9 @@ Daily Stock AI 是本專案的原生 iOS 客戶端，支援台股與美股。核
 ## 連線與帳號
 
 - 正式建置只接受 HTTPS；Debug 另接受 loopback HTTP 供隔離驗證。
-- 登入頁可設定服務網址。`DSA_SERVER_URL` 可在建置時預填，範例在 `apps/dsa-ios/signing.env.example`，不是後端 `.env` 新欄位；未設定的開發建置仍可開啟連線頁。
-- 私有 Tailscale 網址需手機登入同一 tailnet 並啟用 VPN，路由與 ACL 決定可達性。安裝 App 不會配置 NAS。
+- 公網入口為 `https://dsa.audichuang.app`，已透過 Cloudflare Tunnel 部署，仍保留 DSA 密碼認證。舊入口 `https://dsa.ttnas.audichuang.app` 保留，使用它時手機仍需同一 tailnet 與 Tailscale VPN。
+- 登入頁可設定服務網址。建置時以 `DSA_SERVER_URL` 預填、`DSA_PREVIOUS_SERVER_URL` 指定舊預設；範例在 `apps/dsa-ios/signing.env.example`，兩者都不是後端 `.env` 欄位。未設定的開發建置仍可開啟連線頁。
+- 0.1.2 對同一個新預設只移轉一次：裝置儲存的網址符合舊預設時改用新預設，自訂網址保留；移轉後手動改回私有入口也會保留。Cookie 不跨網域搬移，首次使用公網入口需重新登入。
 - 沿用現有單一管理員，沒有新增多人帳號隔離；自選與工具操作會同步到網頁。
 - 密碼僅用於當次登入；session cookie 存裝置 Keychain，保留安全屬性。原生 HTTP 使用獨立記憶體 cookie jar，WebKit 使用非持久 store。
 - 「登出這部裝置」只清本機登入，不呼叫會輪替全域 session secret 的後端 logout。
@@ -27,11 +28,17 @@ Daily Stock AI 是本專案的原生 iOS 客戶端，支援台股與美股。核
 
 報價、日 K、研究是不同時點的資料。缺價顯示 `—`，不補0；備援、官方收盤與過期分別標示。台股保留 `.TW/.TWO` 與槓桿字母，美股頁不把 A/H 股當美股。圖表使用 daily OHLCV，範圍以最後資料日為準，不提供週／月 K 聚合或 tick 串流。
 
+0.1.2 將報價欄改稱「資料參考時間」，因 API 可能回傳供應商時間或資料取得時間，不能僅憑它判斷即時性。空買賣盤顯示「無報價」，一般成交量或損益的有效零值仍保留。行情數量標為「來源成交量（股）」，不宣稱等同交易所全天總量。歷史 API 尚未完整標示還原價／分割調整口徑，不宜假設所有來源同一基準。
+
+日 K 的交易日期、月份範圍與標籤採一致的 date-only 規則，避免裝置時區把日期移到前一天；真實 timestamp 仍依原時間語意顯示。蠟燭實體與成交量柱使用明確日寬，兩圖共用日期範圍與 Y 軸標籤寬度。
+
 AI 直接讀取 `structured_report` 的論點、證據與失效條件，沒有時顯示既有摘要。模型評分不是勝率；App 不推導交易建議。非同步分析明確送 `notify:false`，可離頁後接續查詢；後端回任務不存在時允許重新發起。
 
 0.1.1 起，資產按各帳戶 `base_currency` 分組：新臺幣、美元分開顯示，其他實際存在的幣別也保留。沒有跨幣別總額；不使用後端固定 CNY 的頂層合計，也不自行改標或換算。帳戶內缺匯率時只隱藏該幣別的不可靠合計，不讓換成 CNY 的缺漏影響其他完整原幣組。真實負現金仍保留，帳本編輯沿用工具頁。
 
 看盤首頁與自選使用緊湊分隔列，現價與漲跌固定靠右，AI 日期仍保留。持股列預設呈現價格、損益與股數，成本／來源由明細展開；通用限制集中到中文「資料說明」，缺價／過期／延遲仍就地標示。台股回應中的三條一般限制來自後端固定能力聲明，不再逐筆顯示成一整塊資料錯誤。
+
+輔助使用大字級下，指數改為滿寬縱排，資產、帳戶與個股行情數值改為單欄，持股名稱與金額縱排；可分段捲動閱讀完整金額，不限制系統字級。一般字級仍維持緊湊列表。
 
 ## 建置、驗證與交付
 
@@ -55,5 +62,13 @@ TestFlight 完成需同時具備簽章封存、上傳、Apple 有效 build 與�
 build `202610292218` 已在同一個內部群組開放更新，Apple狀態為 `VALID`／`IN_BETA_TESTING`，不需另建tester。修正資產分幣及列表密度，畫面與測試證據見驗證紀錄；帳本原始金額與後端計算保持原樣。
 
 本次Xcode直傳曾停在取得上傳指示；先用 `asc builds uploads list` 與 `asc builds list` 確認未送達，再停止本輪exporter、改將同一archive匯出為IPA，透過既有 `asc builds upload --app <App-ID> --ipa <IPA-path>` 上傳成功。不要在上傳結果不明時盲目重送，仍須讀回Apple的有效build與群組關係才算可更新。
+
+### 0.1.2 更新（build 202610300059；Apple 待處理）
+
+本版包含公網預設網址移轉、時間／空委買語意、日 K 日期與實體、量價對齊及大字級修正。簽章封存成功，IPA 已由 `asc` 完成 uploaded／committed；Apple 回讀仍為 `PROCESSING`，尚待有效 build 與內部群組核對，不能宣稱已可由 TestFlight 安裝。
+
+Cloudflare Tunnel 已部署；原生 URLSession 已取得公網 200 JSON，受保護 API 未登入回 401。使用者成功公網登入、登入後 cookie 與正式 App/API 流程仍待驗證。
+
+驗收結果及金融資料限制見 [驗證紀錄](verification.md)。回滾可改用前一有效 build，或於登入頁改回私有入口並啟用 Tailscale；本次沒有遷移帳本資料。入口部署回滾依 nas-ops 的 `operator/cloudflare/dsa-public-2026-10-29.md`，只撤回本次 hostname 的設定。
 
 首版介面與本文件為繁體中文，英文索引同步新增入口，未宣稱完整英文在地化。

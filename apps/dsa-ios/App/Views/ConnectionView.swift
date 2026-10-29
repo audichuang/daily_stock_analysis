@@ -62,9 +62,9 @@ struct ConnectionView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     feature("chart.xyaxis.line", "行情與研究，同一個畫面", "日 K、報價與最新 AI 判斷相互對照。")
                     feature("list.bullet.clipboard", "每個觀點，都能追溯", "查看理由、資料來源與判斷失效條件。")
-                    feature("lock.shield", "連接你的私人服務", "登入狀態保存在裝置 Keychain，不保存密碼。")
+                    feature("lock.shield", "安全連接分析服務", "登入狀態保存在裝置 Keychain，不保存密碼。")
                 }
-                Text("私有 tailnet 網址需先連接 Tailscale。AI 分析供研究參考，評分不代表勝率；報價與報告以各自標示的時間為準。")
+                Text("更換服務網址後，請使用原本的管理員密碼重新登入。AI 分析供研究參考，評分不代表勝率；報價與報告以各自標示的時間為準。")
                     .font(.caption).foregroundStyle(Theme.secondary).padding(.bottom, 20)
             }
         }

@@ -64,10 +64,17 @@ final class DSAMarketUITests: XCTestCase {
         let taiwanStock = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "2330.TW")).firstMatch
         tap(taiwanStock)
         XCTAssertTrue(app.buttons["watchlist-toggle"].waitForExistence(timeout: 15))
+        XCTAssertTrue(text(containing: "資料參考時間").waitForExistence(timeout: 10))
+        XCTAssertFalse(text(containing: "報價時間 ·").exists)
         let priceChart = app.descendants(matching: .any)["chart.price"].firstMatch
         scrollTo(priceChart)
         XCTAssertTrue(priceChart.exists, "個股必須有實際繪製的測試 K 線")
         capture("03-個股報價與日K")
+
+        let emptyBid = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "最佳買價", "無報價")).firstMatch
+        scrollTo(emptyBid)
+        XCTAssertTrue(emptyBid.exists, "空委買應為無報價，不是零元可買")
+        capture("03b-空委買與來源成交量")
 
         let reportLink = app.buttons["stock-report-link"]
         tap(reportLink)
@@ -162,6 +169,15 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(app.webViews.buttons["匯出合成設定 JSON"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.webViews.buttons["匯出合成設定 JSON"].isHittable, "原生分享視窗必須已關閉")
         goBack(from: "AI 問股", to: "工具與設定")
+        for (route, title) in [("screening", "條件選股"), ("decision-signals", "決策訊號"),
+                               ("", "分析工作台"), ("backtest", "歷史回測"), ("portfolio", "帳本管理"),
+                               ("funds", "基金"), ("alerts", "價位警報"), ("data", "資料中心"),
+                               ("usage", "AI 用量"), ("settings", "服務設定")] {
+            tap(app.buttons["tools.route.\(route)"])
+            XCTAssertTrue(app.webViews.staticTexts["頁面路徑：/\(route)"].waitForExistence(timeout: 15), "工具必須載入對應路徑")
+            capture("tool-\(route.isEmpty ? "analysis" : route)")
+            goBack(from: title, to: "工具與設定")
+        }
         tap(app.buttons["tools.logout"])
         XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15), "本機登出後應回到連線畫面")
         capture("12-本機登出")

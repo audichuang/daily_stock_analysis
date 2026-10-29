@@ -127,6 +127,24 @@ final class SessionStateTests: XCTestCase {
         for code in taiwan + others { XCTAssertFalse(store.isInMarket(code), code) }
     }
 
+    func testNewPublicEndpointDoesNotInheritPrivateEndpointCookie() throws {
+        let suffix = UUID().uuidString.lowercased()
+        let oldURL = URL(string: "https://private-\(suffix).example.test")!
+        let newURL = URL(string: "https://public-\(suffix).example.test")!
+        defer { SessionVault.clear(for: oldURL); SessionVault.clear(for: newURL) }
+        let original = try XCTUnwrap(URLSessionConfiguration.ephemeral.httpCookieStorage)
+        let destination = try XCTUnwrap(URLSessionConfiguration.ephemeral.httpCookieStorage)
+        let cookie = try XCTUnwrap(HTTPCookie.cookies(withResponseHeaderFields: [
+            "Set-Cookie": "dsa_session=test-private-token; Path=/; HttpOnly; Secure; SameSite=Lax"
+        ], for: oldURL).first)
+        original.setCookie(cookie)
+        try SessionVault.save(original, for: oldURL)
+        SessionVault.restore(into: destination, for: newURL)
+        XCTAssertTrue((destination.cookies ?? []).isEmpty)
+        SessionVault.restore(into: destination, for: oldURL)
+        XCTAssertEqual(destination.cookies(for: oldURL)?.first?.value, "test-private-token")
+    }
+
     func testVaultRoundTripPreservesHTTPOnlyAndSameSite() throws {
         for sameSite in ["Lax", "Strict", "None"] {
             let url = URL(string: "https://vault-\(UUID().uuidString.lowercased()).example.test")!

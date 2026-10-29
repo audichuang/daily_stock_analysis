@@ -3,6 +3,7 @@ import DSACore
 
 struct MarketHomeView: View {
     @EnvironmentObject private var store: AppStore
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var searching = false
 
     var body: some View {
@@ -96,7 +97,14 @@ struct MarketHomeView: View {
     }
 
     @ViewBuilder private var indexStrip: some View {
-        if store.indices.count == 1, let index = store.indices.first {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing: 10) {
+                ForEach(store.indices) { index in
+                    IndexCard(index: index, expanded: true)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        } else if store.indices.count == 1, let index = store.indices.first {
             IndexCard(index: index, expanded: true)
         } else if !store.indices.isEmpty {
             ScrollView(.horizontal) {
@@ -176,14 +184,14 @@ struct IndexCard: View {
         Text(DisplayFormat.number(index.current))
             .font(.title3.weight(.bold).monospacedDigit())
             .foregroundStyle(Theme.text)
-            .fixedSize(horizontal: true, vertical: false)
+            .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: true)
     }
 
     private var indexChange: some View {
         Text(DisplayFormat.percent(index.changePct))
             .font(.subheadline.weight(.semibold).monospacedDigit())
             .foregroundStyle(Theme.changeColor(index.changePct, convention: store.colorConvention))
-            .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: false)
+            .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: true)
     }
 }
 
