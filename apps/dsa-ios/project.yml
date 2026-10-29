@@ -1,0 +1,69 @@
+name: DSAMarket
+options:
+  deploymentTarget:
+    iOS: '17.0'
+  developmentLanguage: zh-Hant
+  createIntermediateGroups: true
+packages:
+  DSACore:
+    path: Core
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    MARKETING_VERSION: '0.1.0'
+    CURRENT_PROJECT_VERSION: '1'
+    CODE_SIGN_STYLE: Automatic
+    DSA_BUNDLE_ID: com.audichuang.dsa
+    DSA_SERVER_URL: ''
+targets:
+  DSAMarket:
+    type: application
+    platform: iOS
+    sources:
+      - App
+    dependencies:
+      - package: DSACore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DSA_BUNDLE_ID)
+        PRODUCT_NAME: DSAMarket
+        INFOPLIST_FILE: App/Info.plist
+        TARGETED_DEVICE_FAMILY: '1,2'
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_PREVIEWS: YES
+  DSAMarketUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    dependencies:
+      - target: DSAMarket
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DSA_BUNDLE_ID).uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: DSAMarket
+  DSAMarketTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: DSAMarket
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DSA_BUNDLE_ID).tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  DSAMarket:
+    build:
+      targets:
+        DSAMarket: all
+    test:
+      targets:
+        - DSAMarketTests
+        - DSAMarketUITests
+    run:
+      config: Debug
+    archive:
+      config: Release

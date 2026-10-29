@@ -6,6 +6,7 @@ map 是 recipe，沒有預設通過項；結果取自本輪 `coverage.jsonl`、�
 
 | 功能 | 真實入口與地圖 | 關鍵前置／終態 |
 |---|---|---|
+| iOS App | Daily Stock AI：[ios.md](ios.md) | 原生行情／研究／資產、同源工具、真模型與 TestFlight 各自取證 |
 | 持股帳本 | `/portfolio`：[portfolio.md](portfolio.md) | 空庫帳戶／入金可獨立驗；交易、匯率、曝險、匯入另驗 |
 | 分析與歷史 | `/`：[analysis-history.md](analysis-history.md) | 線上真生成、task→history、同股切換、Markdown／海報 |
 | 即時看板 | `/board`：[realtime.md](realtime.md) | 真行情 source／日期、範圍／合併、走勢與摘要 |

@@ -1,0 +1,6 @@
+build/
+Core/.build/
+*.xcuserstate
+xcuserdata/
+Signing.xcconfig
+QA/
