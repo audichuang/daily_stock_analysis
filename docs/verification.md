@@ -2,7 +2,7 @@
 
 入口是 [verify skill](../.claude/skills/verify/SKILL.md)，[功能地圖](../.claude/skills/verify/features/README.md) 定義使用者入口、操作、前置資料與終態。實跑與單測／fixture 各自回報；一個主要旅程通過不代表該頁全部分支已通過。
 
-## 2026-10-29：Daily Stock AI iOS 首版
+## 2026-10-29：Daily Stock AI iOS
 
 ### 0.1.1：實機回報後的資產幣別與緊湊版面修正
 
@@ -14,6 +14,10 @@
 - 審查第1輪2項finding經獨立驗證修正，第2輪最後diff無新Act on；後續只補持股金額前的「損益」文案。iOS版本升為0.1.1。
 
 上述是合成多帳戶HTTP與原生Simulator驗收，不是真實帳本對帳；未取得正式帳本憑證，所以不宣稱正式金融數值已重新稽核。最大字級、實體iPhone／iPad仍未逐項驗收。風險是仍依後端的帳戶成本／匯率計算；回滾只需改回前一個TestFlight build，沒有資料遷移。
+
+交付：`0.1.1 (202610292218)` 已由Apple標為 `VALID`／`INTERNAL_ONLY`／`IN_BETA_TESTING`，內部群組「自己」包含新版，本人tester狀態為 `INSTALLED`。[PR #151](https://github.com/audichuang/daily_stock_analysis/pull/151) 已於 [CI run 40889823814](https://github.com/audichuang/daily_stock_analysis/actions/runs/40889823814) 通過後合進develop（`f48a09a4`）。Xcode直傳停在取得上傳指示、Apple記為 `AWAITING_UPLOAD`；停止該次程序後，以相同簽章archive匯出IPA，再經既有 `asc builds upload` 成功送達，未重建帳本或部署後端。
+
+### 0.1.0：首版交付
 
 程式與邊界見 [iOS App](ios-app.md)，操作地圖見 [ios.md](../.claude/skills/verify/features/ios.md)。工作起點與隔離後端基線均為 `79025c3b`；iOS 功能修正收斂於 `6f013930`，之後只調整 XCTest 的原生關閉按鈕定位與封存腳本輸出。
 
