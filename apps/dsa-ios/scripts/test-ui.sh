@@ -13,7 +13,7 @@ mkdir -p "$DSA_EVIDENCE_DIR"
 DSA_EVIDENCE_DIR="$(cd "$DSA_EVIDENCE_DIR" && pwd)"
 echo "驗收證據：$DSA_EVIDENCE_DIR"
 
-python3 "$DSA_IOS_ROOT/scripts/fixture-server.py" --ready-file "$DSA_EVIDENCE_DIR/fixture-ready.json" > "$DSA_EVIDENCE_DIR/fixture.log" 2>&1 &
+python3 "$DSA_IOS_ROOT/scripts/fixture-server.py" --quote-delay 2 --ready-file "$DSA_EVIDENCE_DIR/fixture-ready.json" > "$DSA_EVIDENCE_DIR/fixture.log" 2>&1 &
 DSA_FIXTURE_PID=$!
 trap 'kill "$DSA_FIXTURE_PID" 2>/dev/null || true' EXIT
 

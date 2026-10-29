@@ -98,7 +98,13 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// `.refreshable` 的 task 由 SwiftUI 擁有：refresh 途中 store 先發布的結果會讓它被取消，
+    /// 還在等的報價請求就以「已取消」失敗。改由 store 自己的 Task 執行，呼叫端只等它完成。
     func refresh() async {
+        await Task { await performRefresh() }.value
+    }
+
+    private func performRefresh() async {
         guard let client, connected, !refreshing else { return }
         refreshing = true
         let currentGeneration = generation

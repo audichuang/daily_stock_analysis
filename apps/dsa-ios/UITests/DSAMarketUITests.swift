@@ -183,6 +183,29 @@ final class DSAMarketUITests: XCTestCase {
         capture("12-本機登出")
     }
 
+    /// fixture 的報價延遲 2 秒；下拉更新途中 store 先發布其他結果，報價請求不能因此被取消成「已取消」。
+    func testPullToRefreshWithSlowQuotesShowsNoError() throws {
+        let password = app.secureTextFields["server-password"]
+        XCTAssertTrue(password.waitForExistence(timeout: 15), "應顯示測試伺服器的登入畫面")
+        password.tap()
+        password.typeText("fixture-password")
+        tap(app.buttons["connect-button"])
+        XCTAssertTrue(app.tabBars.buttons["自選"].waitForExistence(timeout: 20))
+        tap(app.tabBars.buttons["自選"])
+        let firstRow = app.buttons["stock-row.2330.TW"]
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 15))
+        let errorTitle = text(containing: "暫時無法取得資料")
+        // 先等連線後的首輪 refresh 跑完，避免下拉被 refreshing guard 直接略過。
+        sleep(4)
+        XCTAssertFalse(errorTitle.exists)
+        for round in 1...2 {
+            firstRow.press(forDuration: 0.1, thenDragTo: app.tabBars.firstMatch)
+            sleep(6)
+            capture("13-下拉更新第\(round)次")
+            XCTAssertFalse(errorTitle.exists, "下拉更新第 \(round) 次後不應出現錯誤框")
+        }
+    }
+
     private func text(containing value: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", value)).firstMatch
     }

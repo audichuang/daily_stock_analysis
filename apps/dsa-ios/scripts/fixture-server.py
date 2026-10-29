@@ -10,12 +10,14 @@ from html import escape
 import json
 from pathlib import Path
 import threading
+import time
 from urllib.parse import parse_qs, unquote, urlsplit
 
 
 AS_OF = "2024-01-31T13:30:00+08:00"
 FIXTURE_PASSWORD = "fixture-password"
 FIXTURE_COOKIE = "fixture-session-only"
+QUOTE_DELAY = 0.0
 STOCKS = {
     "2330.TW": ("台積電（測試）", 600.0, 1.69, "tw"),
     "2317.TW": ("鴻海（測試）", 100.0, -0.99, "tw"),
@@ -171,6 +173,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         route, query = self.route()
+        if route == ["api", "v1", "stocks", "quotes"] and QUOTE_DELAY:
+            # 正式站報價常是 refresh 裡最慢的一支；延遲放在鎖外，重現下拉更新途中的取消。
+            time.sleep(QUOTE_DELAY)
         with STATE.lock:
             if route == ["health"]:
                 return self.reply(200, {"status": "fixture", "synthetic": True})
@@ -354,8 +359,11 @@ def portfolio():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=0, help="0 由作業系統分配可用 port")
+    parser.add_argument("--quote-delay", type=float, default=0, help="報價端點延遲秒數，重現慢報價")
     parser.add_argument("--ready-file", type=Path, help="寫出 URL、port 與 PID，供驗收腳本傳入 UITest")
     args = parser.parse_args()
+    global QUOTE_DELAY
+    QUOTE_DELAY = args.quote_delay
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     port = server.server_address[1]
     import os
