@@ -49,4 +49,4 @@ bash scripts/testflight.sh --upload   # 封存並上傳內部 TestFlight
 
 上傳成功仍須核對 Apple processing 狀態，並將有效 build 加入自己的內部測試群組。此流程不推 `main`、不打 Git tag、不發布 App Store，也不部署後端。
 
-0.1.2（build `202610300059`）已封存並送交 Apple，仍待處理與有效 build／群組核對；實際 TestFlight 狀態以 [交付紀錄](../../docs/ios-app.md) 為準。
+0.1.2（build `202610300059`）已由 Apple 標為 `VALID`／`IN_BETA_TESTING`，內部群組「自己」可更新；首次使用公網網址需重新登入。詳見 [交付紀錄](../../docs/ios-app.md)。
