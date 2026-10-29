@@ -43,6 +43,17 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(DSA_BUNDLE_ID).uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: DSAMarket
+  DSAMarketTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: DSAMarket
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(DSA_BUNDLE_ID).tests
+        GENERATE_INFOPLIST_FILE: YES
 schemes:
   DSAMarket:
     build:
@@ -50,6 +61,7 @@ schemes:
         DSAMarket: all
     test:
       targets:
+        - DSAMarketTests
         - DSAMarketUITests
     run:
       config: Debug

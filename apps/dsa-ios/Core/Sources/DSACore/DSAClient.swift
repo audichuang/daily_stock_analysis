@@ -22,6 +22,11 @@ public enum DSAError: Error, LocalizedError, Sendable {
         if case .http(status: 401, _, _) = self { return true }
         return false
     }
+
+    public var isNotFound: Bool {
+        if case .http(status: 404, _, _) = self { return true }
+        return false
+    }
 }
 
 /// Session 由 App 注入；cookie 的隔離與 Keychain 持久化由 App 管理。

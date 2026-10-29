@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 新增 Daily Stock AI 原生 iOS App：台美行情、自選、日 K、AI 論點／依據／失效條件、研究歷史與資產；以同源登入保留完整 Web 工具，附隔離 HTTP 操作驗收、Keychain session 與內部 TestFlight 封存腳本。範圍與限制見 `docs/ios-app.md`。
+
 - [改進] `verify` 經真實 ego-browser 跨功能巡檢擴為九組地圖，補線上 CLI／唯讀市場 profile、設定重載、登入、問股、用量與清理回歸，並加入證據去敏及正反 mutation；實測結果、兩項產品問題與缺渲染器等限制見 `docs/verification.md`。
 
 - [新功能] 新增專案 `verify` 技能與五組功能地圖：用隔離 Web/API、空 SQLite 及 ego-browser 操作保存畫面、動作、API／資料列和清理證據，區分單測、fixture 與真實服務驗證；操作與實跑紀錄見 `docs/verification.md`。

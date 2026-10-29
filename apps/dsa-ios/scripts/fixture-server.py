@@ -109,6 +109,7 @@ class State:
                         history_item(201, "TWII", "market_review", "tw"),
                         history_item(202, "SPX", "market_review", "us")]
         self.tasks = {}
+        self.analysis_starts = 0
         self.next_record_id = 301
 
     def report(self, item):
@@ -195,6 +196,11 @@ class Handler(BaseHTTPRequestHandler):
                     "evidence_quality": {"status": "partial", "blocks": {"quote": "partial", "research": "partial"},
                                          "limitations": ["全部是固定過去日期的 fixture，不能用於交易。"]},
                 })
+            if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "dossier":
+                code = route[3]
+                if code not in STOCKS:
+                    return self.reply(404, {"detail": {"error": "not_found", "message": "查無測試股票"}})
+                return self.reply(200, f"<!doctype html><html lang='zh-Hant'><meta name='viewport' content='width=device-width'><body style='background:#101824;color:#fff;font:18px system-ui;padding:24px'><h1>四維度合成檔案 {code}</h1><p>受登入保護的 {code} 測試研究檔案，不能視為真實研究。</p></body></html>", content_type="text/html; charset=utf-8")
             if route == ["api", "v1", "history"]:
                 records = STATE.records
                 for key in ["stock_code", "report_type"]:
@@ -233,7 +239,10 @@ class Handler(BaseHTTPRequestHandler):
             if route == ["api", "v1", "portfolio", "snapshot"]:
                 return self.reply(200, portfolio())
             if route and route[0] in ["chat", "screening", "alerts", "funds", "decision-signals", "backtest", "data", "settings", "usage"]:
-                return self.reply(200, "<!doctype html><html lang='zh-Hant'><meta name='viewport' content='width=device-width'><body style='background:#101824;color:#fff;font:18px system-ui;padding:24px'><h1>進階工具（合成驗收頁）</h1><p>此處只驗證登入 cookie 與內嵌瀏覽器，不代表真實工具功能通過。</p></body></html>", content_type="text/html; charset=utf-8")
+                return self.reply(200, tool_html(), content_type="text/html; charset=utf-8")
+            if route == ["api", "v1", "fixture", "export"]:
+                return self.reply(200, {"fixture": True, "kind": "http-download", "as_of": AS_OF},
+                                  headers={"Content-Disposition": 'attachment; filename="fixture-http-export.json"'})
             return self.reply(404, {"detail": {"error": "fixture_route_missing", "message": "此路徑尚未加入 fixture"}})
 
     def do_POST(self):
@@ -262,10 +271,33 @@ class Handler(BaseHTTPRequestHandler):
                 code = body.get("stock_code")
                 if code not in STOCKS or body.get("async_mode") is not True or body.get("notify") is not False:
                     return self.reply(422, {"detail": {"error": "invalid_fixture_request", "message": "分析需使用有效測試代碼、async_mode=true、notify=false"}})
+                STATE.analysis_starts += 1
+                if STATE.analysis_starts == 1:
+                    return self.reply(202, {"task_id": "expired-fixture-task", "status": "pending", "message": "模擬服務重啟後任務遺失", "analysis_phase": "auto"})
                 task_id = f"fixture-task-{len(STATE.tasks) + 1}"
                 STATE.tasks[task_id] = {"code": code, "polls": 0}
                 return self.reply(202, {"task_id": task_id, "status": "pending", "message": "合成測試任務已排入", "analysis_phase": "auto"})
             return self.reply(404, {"detail": {"error": "fixture_route_missing", "message": "此路徑尚未加入 fixture"}})
+
+
+def tool_html():
+    return """<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width">
+<body style="background:#101824;color:#fff;font:18px system-ui;padding:24px">
+<h1>進階工具（合成驗收頁）</h1>
+<p>此處只驗證登入 cookie、內嵌瀏覽器與本機匯出，不代表真實工具功能通過。</p>
+<button id="fixture-blob-export" style="padding:16px;font:18px system-ui">匯出合成設定 JSON</button>
+<p><a href="/api/v1/fixture/export" download="fixture-http-export.json" style="color:#80efcf">下載 HTTP 合成檔案</a></p>
+<script>
+document.getElementById('fixture-blob-export').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify({fixture:true, kind:'blob-download', marker:'DSA-IOS-EXPORT-FIXTURE'})], {type:'application/json'});
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'fixture-settings.json';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+});
+</script></body></html>"""
 
 
 def portfolio():

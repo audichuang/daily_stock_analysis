@@ -252,21 +252,21 @@ struct ResearchArtifactView: View {
                 }
                 ForEach(artifact.evidence) { evidence in
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(evidence.title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                        Text(PresentationText.evidenceTitle(evidence.title)).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                         if let summary = evidence.summary, !summary.isEmpty {
                             NativeMarkdownText(text: summary)
                         }
                         ViewThatFits(in: .horizontal) {
                             HStack(spacing: 8) {
                                 freshnessBadge(evidence.freshness)
-                                Text("品質：\(qualityLabel(evidence.qualityLevel))").font(.caption).foregroundStyle(Theme.secondary)
+                                Text("品質：\(PresentationText.quality(evidence.qualityLevel))").font(.caption).foregroundStyle(Theme.secondary)
                             }
                             VStack(alignment: .leading, spacing: 8) {
                                 freshnessBadge(evidence.freshness)
-                                Text("品質：\(qualityLabel(evidence.qualityLevel))").font(.caption).foregroundStyle(Theme.secondary)
+                                Text("品質：\(PresentationText.quality(evidence.qualityLevel))").font(.caption).foregroundStyle(Theme.secondary)
                             }
                         }
-                        Text("來源：\(evidence.source ?? "未提供")")
+                        Text("來源：\(PresentationText.source(evidence.source))")
                             .font(.caption).foregroundStyle(Theme.secondary)
                         Text("資料時間：\(DisplayFormat.time(evidence.asOf))")
                             .font(.caption).foregroundStyle(Theme.secondary)
@@ -301,7 +301,7 @@ struct ResearchArtifactView: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(Theme.text)
                         if let trigger = condition.trigger, !trigger.isEmpty {
-                            Text("觸發：\(trigger)")
+                            Text("觸發：\(PresentationText.limitation(trigger))")
                                 .font(.subheadline).foregroundStyle(Theme.warning)
                         }
                         if let threshold = condition.threshold, !threshold.isEmpty {
@@ -361,11 +361,11 @@ struct ResearchArtifactView: View {
                     VStack(alignment: .leading, spacing: 8) { qualityBadges }
                 }
                 if !artifact.dataQuality.missingBlocks.isEmpty {
-                    Text("缺少資料：\(artifact.dataQuality.missingBlocks.joined(separator: "、"))")
+                    Text("缺少資料：\(artifact.dataQuality.missingBlocks.map(PresentationText.evidenceTitle).joined(separator: "、"))")
                         .font(.subheadline).foregroundStyle(Theme.warning)
                 }
                 if !artifact.dataQuality.limitations.isEmpty {
-                    researchList(title: "解讀限制", items: artifact.dataQuality.limitations, symbol: "info.circle", color: Theme.secondary)
+                    researchList(title: "解讀限制", items: artifact.dataQuality.limitations.map(PresentationText.limitation), symbol: "info.circle", color: Theme.secondary)
                 }
                 Text("研究產生時間：\(DisplayFormat.time(artifact.createdAt))")
                     .font(.caption).foregroundStyle(Theme.secondary)
@@ -375,7 +375,7 @@ struct ResearchArtifactView: View {
 
     @ViewBuilder
     private var qualityBadges: some View {
-        StatusBadge(qualityLabel(artifact.dataQuality.level), tone: .information)
+        StatusBadge(PresentationText.quality(artifact.dataQuality.level), tone: .information)
         StatusBadge("\(artifact.dataQuality.sourceCount) 個來源")
         if artifact.dataQuality.staleCount > 0 {
             StatusBadge("\(artifact.dataQuality.staleCount) 項過期", tone: .warning)
@@ -410,18 +410,6 @@ struct ResearchArtifactView: View {
         return StatusBadge(label, tone: tone, systemImage: "clock")
     }
 
-    private func qualityLabel(_ value: String) -> String {
-        switch value {
-        case "high": return "高"
-        case "medium": return "中"
-        case "low": return "低"
-        case "complete": return "完整"
-        case "partial": return "部分資料"
-        case "insufficient": return "資料不足"
-        case "unknown": return "未確認"
-        default: return value
-        }
-    }
 }
 
 /// 逐行呈現完整文字，保留表格、程式區塊和換行，不把長報告截成摘要。

@@ -23,8 +23,12 @@ struct MarketHomeView: View {
             else if store.indices.isEmpty && store.errors["indices"] == nil {
                 EmptyStateView(title: "尚無指數行情", message: "資料源尚未回傳此市場的指數。")
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], spacing: 12) {
-                ForEach(store.indices) { index in IndexCard(index: index) }
+            if store.indices.count == 1, let index = store.indices.first {
+                IndexCard(index: index, expanded: true)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), alignment: .leading)], spacing: 12) {
+                    ForEach(store.indices) { index in IndexCard(index: index) }
+                }
             }
             if let review = matchingReview, let id = review.id {
                 NavigationLink { ResearchReportView(reportID: id) } label: {
@@ -98,18 +102,51 @@ struct MarketPicker: View {
 
 struct IndexCard: View {
     let index: MarketIndex
+    var expanded = false
     @EnvironmentObject private var store: AppStore
     var body: some View {
         DSACard {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(index.name).font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
-                Text(DisplayFormat.number(index.current)).font(.title3.bold().monospacedDigit()).foregroundStyle(Theme.text)
-                Text(DisplayFormat.percent(index.changePct)).font(.subheadline.bold().monospacedDigit())
-                    .foregroundStyle(Theme.changeColor(index.changePct, convention: store.colorConvention))
-                Text(DisplayFormat.source(index.source)).font(.system(size: 10)).foregroundStyle(Theme.secondary)
-                Text(DisplayFormat.time(index.asOf)).font(.system(size: 10)).foregroundStyle(Theme.secondary)
+            VStack(alignment: .leading, spacing: expanded ? 16 : 10) {
+                if expanded {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .center, spacing: 20) {
+                            indexValue
+                            Spacer(minLength: 12)
+                            indexChange
+                        }
+                        VStack(alignment: .leading, spacing: 12) {
+                            indexValue
+                            indexChange
+                        }
+                    }
+                } else {
+                    indexValue
+                    indexChange
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(PresentationText.source(index.source))
+                    Text(DisplayFormat.time(index.asOf))
+                }
+                .font(.caption2).foregroundStyle(Theme.secondary)
             }
         }.accessibilityElement(children: .combine)
+    }
+
+    private var indexValue: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(index.name).font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+            Text(DisplayFormat.number(index.current))
+                .font((expanded ? Font.title2 : Font.title3).bold().monospacedDigit())
+                .foregroundStyle(Theme.text)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    private var indexChange: some View {
+        Text(DisplayFormat.percent(index.changePct))
+            .font((expanded ? Font.title3 : Font.subheadline).bold().monospacedDigit())
+            .foregroundStyle(Theme.changeColor(index.changePct, convention: store.colorConvention))
+            .fixedSize(horizontal: true, vertical: false)
     }
 }
 

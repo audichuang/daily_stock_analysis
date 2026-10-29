@@ -27,8 +27,10 @@ final class AppStore: ObservableObject {
     private(set) var session: URLSession?
     private(set) var baseURL: URL?
     private var generation = UUID()
+    private let configurationFactory: () -> URLSessionConfiguration
 
-    init() {
+    init(configurationFactory: @escaping () -> URLSessionConfiguration = { .ephemeral }) {
+        self.configurationFactory = configurationFactory
         colorConvention = MarketColorConvention(rawValue: UserDefaults.standard.string(forKey: "marketColors") ?? "") ?? .taiwan
         serverAddress = UserDefaults.standard.string(forKey: "serverAddress")
             ?? (Bundle.main.object(forInfoDictionaryKey: "DSAServerURL") as? String ?? "")
@@ -49,13 +51,15 @@ final class AppStore: ObservableObject {
                 throw LocalError("請輸入完整的 HTTPS 服務網址。")
             }
             if baseURL != url || client == nil {
-                session?.invalidateAndCancel()
-                let config = URLSessionConfiguration.ephemeral
+                let config = configurationFactory()
                 config.timeoutIntervalForRequest = 60
                 config.timeoutIntervalForResource = 180
                 config.requestCachePolicy = .reloadIgnoringLocalCacheData
                 let candidateSession = URLSession(configuration: config)
-                let candidateClient = try DSAClient(baseURL: url, session: candidateSession)
+                let candidateClient: DSAClient
+                do { candidateClient = try DSAClient(baseURL: url, session: candidateSession) }
+                catch { candidateSession.invalidateAndCancel(); throw error }
+                session?.invalidateAndCancel()
                 generation = UUID()
                 clearData()
                 session = candidateSession
@@ -66,11 +70,11 @@ final class AppStore: ObservableObject {
             guard let client else { return }
             if let password { try await client.login(password: password) }
             let status = try await client.authStatus()
-            needsPassword = status.authEnabled && !status.loggedIn
-            if needsPassword { return }
+            needsPassword = status.authEnabled && status.passwordSet && !status.loggedIn
             if status.authEnabled && !status.passwordSet {
                 throw LocalError("請先在網頁完成管理員密碼設定，再連接 App。")
             }
+            if needsPassword { return }
             connected = true
             UserDefaults.standard.set(url.absoluteString, forKey: "serverAddress")
             do { try SessionVault.save(session?.configuration.httpCookieStorage, for: url) }
@@ -129,8 +133,11 @@ final class AppStore: ObservableObject {
     func quote(for code: String) -> StockQuote? { quotes.first { $0.stockCode == code }?.quote }
     func latestReport(for code: String) -> HistoryItem? { reports.first { $0.stockCode == code } }
     func isInMarket(_ code: String) -> Bool {
-        let taiwan = code.hasSuffix(".TW") || code.hasSuffix(".TWO")
-        return selectedMarket == "tw" ? taiwan : !taiwan
+        switch selectedMarket {
+        case "tw": return code.range(of: #"^[0-9]{4,6}[A-Z]?\.TW(O)?$"#, options: .regularExpression) != nil
+        case "us": return code.range(of: #"^[A-Z]{1,5}(?:[.-](?:US|[A-Z]))?$"#, options: .regularExpression) != nil
+        default: return false
+        }
     }
 
     private func loadWatchlist(_ client: DSAClient, generation expected: UUID) async {
@@ -201,8 +208,18 @@ enum DisplayFormat {
         case nil: return "來源未提供"
         }
     }
-    static func time(_ value: String?) -> String {
+    static func time(_ value: String?, timeZone: TimeZone = .current) -> String {
         guard let value, !value.isEmpty else { return "時間未提供" }
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime]
+        if value.contains(".") { parser.formatOptions.insert(.withFractionalSeconds) }
+        if let date = parser.date(from: value) {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = timeZone
+            formatter.dateFormat = "yyyy/MM/dd HH:mm zzz"
+            return formatter.string(from: date)
+        }
         // 無時區的後端歷史字串保留原值，避免擅自換算成手機時區。
         return value.replacingOccurrences(of: "T", with: " ")
     }

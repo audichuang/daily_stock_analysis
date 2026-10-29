@@ -37,9 +37,13 @@ struct StockDetailView: View {
                         }
                     }
                 }
-                NavigationLink { ToolWebView(path: "/stocks?code=\(code)", title: "個股研究工具") } label: {
-                    Label("開啟完整研究工作台", systemImage: "arrow.up.right.square").frame(maxWidth: .infinity)
-                }.buttonStyle(SecondaryButtonStyle())
+                if profile.market == "tw" {
+                    NavigationLink {
+                        ToolWebView(path: "/api/v1/stocks/\(code)/dossier?theme=dark", title: "四維度個股檔案")
+                    } label: {
+                        Label("四維度個股檔案", systemImage: "arrow.up.right.square").frame(maxWidth: .infinity)
+                    }.buttonStyle(SecondaryButtonStyle()).accessibilityIdentifier("stock-dossier-link")
+                }
             }
         }
         .navigationTitle(profile?.quote.data?.stockName ?? code).navigationBarTitleDisplayMode(.inline)
@@ -116,7 +120,18 @@ struct StockDetailView: View {
             Spacer()
         }
         if let artifact = profile.research.data.structuredReport {
-            ResearchArtifactView(artifact: artifact)
+            DSACard {
+                VStack(alignment: .leading, spacing: 12) {
+                    StatusBadge(artifact.thesis.actionLabel ?? "AI 觀點", tone: .ai)
+                    Text(artifact.thesis.summary).font(.body).foregroundStyle(Theme.text)
+                    Text("分析 · \(DisplayFormat.time(artifact.createdAt))").font(.caption).foregroundStyle(Theme.secondary)
+                    Text("\(artifact.evidence.count) 項依據 · \(artifact.invalidationConditions.count) 項失效條件")
+                        .font(.caption).foregroundStyle(Theme.accent)
+                }
+            }
+            DisclosureGroup("展開依據、風險與失效條件") {
+                ResearchArtifactView(artifact: artifact).padding(.top, 12)
+            }.foregroundStyle(Theme.accent)
         } else if let latest = profile.research.data.latestReport {
             DSACard {
                 VStack(alignment: .leading, spacing: 12) {
@@ -162,7 +177,7 @@ struct StockDetailView: View {
     private func limitation(_ values: [String]) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             ForEach(Array(values.enumerated()), id: \.offset) { _, text in
-                Label(text, systemImage: "info.circle").font(.caption).foregroundStyle(Theme.warning)
+                Label(PresentationText.limitation(text), systemImage: "info.circle").font(.caption).foregroundStyle(Theme.warning)
             }
         }
     }
@@ -217,6 +232,17 @@ struct StockDetailView: View {
                 try await Task.sleep(for: .seconds(3))
             }
         } catch is CancellationError { }
-        catch { actionError = error.localizedDescription; taskMessage = "連線中斷；點選查看進度可接續原任務。" }
+        catch {
+            if let apiError = error as? DSAError, apiError.isNotFound {
+                UserDefaults.standard.removeObject(forKey: taskKey)
+                progress = nil
+                taskID = nil
+                actionError = nil
+                taskMessage = "原分析任務已不存在，請重新產生分析。"
+            } else {
+                actionError = error.localizedDescription
+                taskMessage = "連線中斷；點選查看進度可接續原任務。"
+            }
+        }
     }
 }

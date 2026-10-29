@@ -59,9 +59,49 @@ print(path)
 PY
 )"
 
-xcodebuild test-without-building -xctestrun "$DSA_TEST_RUN" \
-  -destination "platform=iOS Simulator,id=$DSA_SIMULATOR_ID" \
-  -resultBundlePath "$DSA_EVIDENCE_DIR/UITests.xcresult" \
-  -parallel-testing-enabled NO \
-  > "$DSA_EVIDENCE_DIR/test.log" 2>&1
+python3 - "$DSA_TEST_RUN" "$DSA_SIMULATOR_ID" "$DSA_EVIDENCE_DIR" <<'PY'
+from pathlib import Path
+import json, re, shutil, signal, subprocess, sys, time
+test_run, simulator, directory = sys.argv[1:]
+root = Path(directory)
+log_path = root / "test.log"
+command = ["xcodebuild", "test-without-building", "-xctestrun", test_run,
+           "-destination", f"platform=iOS Simulator,id={simulator}",
+           "-resultBundlePath", str(root / "UITests.xcresult"), "-parallel-testing-enabled", "NO"]
+finished_at = None
+timed_out = False
+with log_path.open("w") as log:
+    process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+    while process.poll() is None:
+        # 已觀察到的 SDK/runtime finalize 卡住；只在 UI suite 已結束後啟動 60 秒上限。
+        output = log_path.read_text(errors="replace")
+        if finished_at is None and re.search(r"Test Suite 'DSAMarketUITests.xctest' (passed|failed)", output):
+            finished_at = time.monotonic()
+        if finished_at is not None and time.monotonic() - finished_at > 60:
+            timed_out = True
+            process.send_signal(signal.SIGINT)
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            break
+        time.sleep(1)
+output = log_path.read_text(errors="replace")
+for index, path in enumerate(dict.fromkeys(re.findall(r"DSA_UI_EVIDENCE_DIR=(.+)", output))):
+    source = Path(path.strip())
+    if source.is_dir() and source.parent.name == "DSA-UI-Evidence":
+        shutil.copytree(source, root / f"screenshots-{index + 1}", dirs_exist_ok=True)
+status = {"exit_code": process.returncode, "finalization_timeout": timed_out,
+          "ui_suite_passed": bool(re.search(r"Test Suite 'DSAMarketUITests.xctest' passed", output))}
+(root / "test-status.json").write_text(json.dumps(status, indent=2) + "\n")
+if timed_out:
+    print("UI suite 已結束，但 Xcode 結果封存超時；保留 test.log 與獨立 PNG，不視為整體驗收通過。", file=sys.stderr)
+    raise SystemExit(124)
+raise SystemExit(process.returncode)
+PY
 echo "UI fixture 驗收完成；結果：$DSA_EVIDENCE_DIR/UITests.xcresult"

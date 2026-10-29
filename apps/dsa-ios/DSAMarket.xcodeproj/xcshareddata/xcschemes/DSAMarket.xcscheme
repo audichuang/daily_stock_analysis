@@ -44,6 +44,17 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "773A128C7E0C2C2FA3A6FA85"
+               BuildableName = "DSAMarketTests.xctest"
+               BlueprintName = "DSAMarketTests"
+               ReferencedContainer = "container:DSAMarket.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "DBE5DBD77E3378E04CE62EBD"
                BuildableName = "DSAMarketUITests.xctest"
                BlueprintName = "DSAMarketUITests"

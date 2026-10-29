@@ -83,7 +83,7 @@ struct StockSearchView: View {
         .navigationTitle("搜尋股票").navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "名稱或代號，例如 台積電、AAPL")
         .accessibilityIdentifier("stock-search")
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
+        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() }.accessibilityIdentifier("search-dismiss") } }
         .task { await load() }
     }
 

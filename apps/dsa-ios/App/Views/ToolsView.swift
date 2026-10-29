@@ -12,7 +12,7 @@ struct ToolsView: View {
                 ToolLink(path: "/chat", title: "AI 問股", detail: "帶著你的問題，深入追問投資依據", icon: "bubble.left.and.text.bubble.right"),
                 ToolLink(path: "/screening", title: "條件選股", detail: "從條件篩選到候選清單", icon: "line.3.horizontal.decrease.circle"),
                 ToolLink(path: "/decision-signals", title: "決策訊號", detail: "追蹤分析後的訊號與結果", icon: "waveform.path.ecg"),
-                ToolLink(path: "/stocks", title: "個股檔案", detail: "查看公司資料與研究脈絡", icon: "doc.text.magnifyingglass"),
+                ToolLink(path: "/", title: "分析工作台", detail: "開啟完整分析、自選與個股檔案", icon: "doc.text.magnifyingglass"),
                 ToolLink(path: "/backtest", title: "歷史回測", detail: "核對歷史分析的事後表現", icon: "clock.arrow.circlepath")
             ])
             toolGroup("帳本與追蹤", items: [
