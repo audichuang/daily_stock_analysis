@@ -13,11 +13,15 @@
 | 合成 HTTP／原生 UI | `QA/ui-fixture-06`：Xcode 27.1、iOS 27.0、iPhone 17 Simulator；1 條完整旅程通過、exit0、xcresult 正常封存、16 張 PNG。涵蓋登入、台美切換、日K呈現、AI報告／失效條件、404任務恢復、新分析、自選增減、歷史、資產、指定dossier、Web cookie、blob下載分享與本機登出 |
 | 真服務 | 主 checkout 的 `.claude/reviews/verification/ios-live-20261029`：Doctor 證實獨立SQLite、排程停用、market兩層唯讀；原生App讀取台股及美股指數／報價、台股日K，並由按鈕發起真 `claude_code_cli` 分析 |
 | 真模型與持久化 | task `5266d956f8d541009d43e32a11d72688` completed；API／SQLite均為個股history ID2、2330.TW，同時保存大盤ID1。個股profile回10項依據、4項失效條件；未注入新聞／券商憑證的限制如實顯示 |
-| 打包 | 0.1.0 build `202610291347` 完成Release archive、自動簽章、App Store Connect格式IPA匯出與codesign驗證；此封裝尚未上傳TestFlight，連線入口仍待最終部署確認 |
+| 打包／TestFlight | 準備版 `202610291347` 完成archive／IPA匯出；正式版 `0.1.0 (202610291412)` 改用Komodo入口，成功上傳，Apple回`VALID`／`INTERNAL_ONLY`。內部群組「自己」含該build，本人tester狀態`INVITED` |
+| 正式連線 | 經使用者確認，沿用Komodo `ingress-ttnas` 的私有Caddy反代；TLS／health200、auth enabled、未登入history401，原Komodo／Artifacts網址仍200。85個容器比對僅Caddy重啟，DSA未變；ops設定commit `857e6ad`、部署紀錄`0b70d7a` |
+| GitHub CI | [run 40826974873](https://github.com/audichuang/daily_stock_analysis/actions/runs/40826974873) 成功：4片backend-tests、backend-gate與ai-governance皆綠；Web／Docker依變更範圍skip。[PR #149](https://github.com/audichuang/daily_stock_analysis/pull/149) 已合進develop（`7b47a5bd`） |
 
 本機 `apps/dsa-ios/QA/` 保存建置／測試日誌、xcresult、PNG與真服務核對；因含環境資訊與研究結果不入庫。早期輪次的Xcode結果封裝卡住、未簽Simulator的Keychain錯誤、搜尋及分享關閉定位失敗均保留；只以上述第06次完整通過作最終UI證據。
 
-未實測：實體iPhone／iPad、iOS17 runtime、VoiceOver／最大字級、正式HTTPS登入、所有Web進階工具的真後端寫入及TestFlight安裝。圖表切換／拖曳與研究分頁的所有邊界分支未逐項操作；不以既有Web能力或合成頁面推論這些均通過。此次沒有改後端契約，未跑本機全量Python離線套件。
+另以真資料操作1／6個月範圍與日K／收盤線切換。未實測：實體iPhone／iPad、iOS17 runtime、VoiceOver／最大字級、正式HTTPS登入、所有Web進階工具的真後端寫入及TestFlight安裝。拖曳讀值與研究分頁的所有邊界分支未逐項操作；不以既有Web能力或合成頁面推論這些均通過。此次沒有改後端契約，未跑本機全量Python離線套件。
+
+隔離真服務已經由標準Cleanup停止，runtime移除，application-evidence.sqlite3與原始證據保留；fixture的本輪進程已停止。正式環境只做HTTPS與認證邊界檢查，沒有為驗收改動正式帳本。
 
 三輪獨立審查收斂：第1輪6項修正、第2輪2項修正，第3輪最後diff無新Act on；其後封存腳本的shell變數邊界以實際archive／export驗證。回滾範圍為iOS客戶端；不需要資料庫migration。
 
