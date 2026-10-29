@@ -122,7 +122,7 @@ final class DSAMarketUITests: XCTestCase {
 
         tap(app.tabBars.buttons["資產"])
         XCTAssertTrue(text(containing: "合成測試帳戶").waitForExistence(timeout: 15))
-        let total = app.staticTexts["portfolio.summary.totalEquity"]
+        let total = app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "portfolio.summary", "資產 ")).firstMatch
         XCTAssertTrue(total.waitForExistence(timeout: 10))
         XCTAssertTrue(total.label.contains("1,200,000"), "台幣總額必須加總兩個TWD帳戶，不使用頂層CNY合計")
         XCTAssertTrue(total.label.contains("新臺幣"))
@@ -131,11 +131,14 @@ final class DSAMarketUITests: XCTestCase {
         let position = app.buttons["portfolio.position.1.2330.TW"]
         XCTAssertTrue(position.exists)
         XCTAssertLessThanOrEqual(position.frame.height, 104)
+        XCTAssertFalse(position.label.contains("可能延遲"), "Shioaji非過期報價不能被一律標成延遲")
         capture("10-資產帳本")
         tap(app.segmentedControls["portfolio.currency-picker"].buttons["美元"])
         XCTAssertTrue(total.label.contains("12,500"), "美元須顯示USD帳戶的原幣金額")
         XCTAssertTrue(total.label.contains("美元"))
         XCTAssertTrue(app.buttons["portfolio.position.3.AAPL"].exists)
+        XCTAssertTrue(app.buttons["portfolio.position.3.AAPL"].label.contains("可能延遲"))
+        XCTAssertTrue(app.buttons["portfolio.position.3.MSFT"].label.contains("可能延遲"))
         XCTAssertFalse(app.buttons["portfolio.account.1"].exists)
         capture("10b-美元原幣資產")
         tap(app.segmentedControls["portfolio.currency-picker"].buttons["新臺幣"])

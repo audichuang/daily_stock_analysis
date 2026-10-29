@@ -159,9 +159,12 @@ struct IndexCard: View {
                 indexValue
                 indexChange
             }
-            Text("\(PresentationText.source(index.source)) · \(DisplayFormat.time(index.asOf))")
+            Text(PresentationText.source(index.source))
                 .font(.caption2).foregroundStyle(Theme.secondary)
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+            Text(DisplayFormat.time(index.asOf))
+                .font(.caption2).foregroundStyle(Theme.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12).padding(.vertical, 10)
@@ -238,13 +241,9 @@ struct StockRow: View {
                     }
                 }
             }
-            if quote == nil {
-                Text("報價暫不可用").font(.caption2).foregroundStyle(Theme.warning)
-            } else if quote?.isStale == true {
-                Label("報價已過期", systemImage: "clock")
-                    .font(.caption2).foregroundStyle(Theme.warning)
-            } else if ["fallback", "yfinance"].contains(quote?.source?.lowercased() ?? "") {
-                Label("可能延遲", systemImage: "clock")
+            if let warning = PresentationText.quoteWarning(available: quote != nil,
+                                                           stale: quote?.isStale == true, source: quote?.source) {
+                Label(warning, systemImage: quote == nil ? "exclamationmark.circle" : "clock")
                     .font(.caption2).foregroundStyle(Theme.warning)
             }
         }

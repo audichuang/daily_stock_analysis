@@ -213,10 +213,10 @@ struct PortfolioView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                             Text("\(position.symbol) · \(DisplayFormat.number(position.quantity, digits: 4)) 股")
                                 .font(.caption2).foregroundStyle(Theme.secondary)
-                            if !position.priceAvailable {
-                                priceStatus("尚無報價", icon: "exclamationmark.circle")
-                            } else if position.priceStale {
-                                priceStatus("價格過期", icon: "clock")
+                            if let warning = PresentationText.quoteWarning(available: position.priceAvailable,
+                                                                           stale: position.priceStale,
+                                                                           source: position.priceProvider ?? position.priceSource) {
+                                priceStatus(warning, icon: position.priceAvailable ? "clock" : "exclamationmark.circle")
                             }
                         }
                         .frame(minWidth: 95, alignment: .leading)
@@ -225,7 +225,7 @@ struct PortfolioView: View {
                             Text(money(position.priceAvailable ? position.lastPrice : nil, currency: position.currency))
                                 .font(.system(size: priceSize, weight: .semibold, design: .rounded).monospacedDigit())
                                 .foregroundStyle(Theme.text).lineLimit(1).minimumScaleFactor(0.75)
-                            Text(pnl.map { signedMoney($0, currency: valuationCurrency) } ?? "損益暫不可用")
+                            Text(pnl.map { "損益 " + signedMoney($0, currency: valuationCurrency) } ?? "損益暫不可用")
                                 .font(.caption.weight(.semibold).monospacedDigit())
                                 .foregroundStyle(Theme.changeColor(pnl, convention: store.colorConvention))
                             if pnl != nil, let percentage = position.unrealizedPnlPct {

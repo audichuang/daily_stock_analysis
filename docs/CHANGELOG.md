@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修復] iOS 資產總覽改按帳戶原幣分組，分開呈現新臺幣／美元，不再直接採用後端固定 CNY 的跨帳戶合計；帳戶缺匯率與頂層換算缺漏分開處理，保留真實負現金。
+- [改進] iOS 看盤與持股改為緊湊列表，強化現價與漲跌對比、移除大漸層與標語，成本／來源及通用資料限制改為展開內容；保留 AI 日期、完整指數時間及缺價／過期／延遲提示。
+
 - [新功能] 新增 Daily Stock AI 原生 iOS App：台美行情、自選、日 K、AI 論點／依據／失效條件、研究歷史與資產；以同源登入保留完整 Web 工具，附隔離 HTTP 操作驗收、Keychain session 與內部 TestFlight 封存腳本。範圍與限制見 `docs/ios-app.md`。
 
 - [改進] `verify` 經真實 ego-browser 跨功能巡檢擴為九組地圖，補線上 CLI／唯讀市場 profile、設定重載、登入、問股、用量與清理回歸，並加入證據去敏及正反 mutation；實測結果、兩項產品問題與缺渲染器等限制見 `docs/verification.md`。

@@ -4,6 +4,17 @@
 
 ## 2026-10-29：Daily Stock AI iOS 首版
 
+### 0.1.1：實機回報後的資產幣別與緊湊版面修正
+
+基線 `77b9ff94`。使用者實機截圖顯示CNY合計、重複英文限制碼及巨大股票卡；核對後端 `PORTFOLIO_AGGREGATE_CURRENCY` 確實固定CNY，snapshot端點沒有可切換顯示幣別的query。本次只修改iOS投影與UI，不更動正式帳本、後端或部署設定。
+
+- Core 19/19 通過：原幣分組、真CNY帳戶、負現金、帳戶／全域FX隔離；5個正反mutation攔下舊CNY投影、跨幣混算及錯誤遮蔽。
+- App單測17/17、完整UI旅程1/1通過，證據在 `apps/dsa-ios/QA/compact-portfolio/ui-02`，xcresult正常封存。驗到標準字級同屏至少6列、列高64–104pt、兩個TWD帳戶合計1,200,000與USD帳戶12,500正確分開、CNY頂層282,345.67不出現在總覽、成本／中文說明展開、兩種延遲來源提示與Shioaji反向案例。
+- 中文限制及報價警告另有正反mutation；指數時間完整換行已看圖核對。第一輪UI測試因父層identifier覆蓋子層而定位失敗，依實際AX修正定位，沒有放寬金額或密度斷言。
+- 審查第1輪2項finding經獨立驗證修正，第2輪最後diff無新Act on；後續只補持股金額前的「損益」文案。iOS版本升為0.1.1。
+
+上述是合成多帳戶HTTP與原生Simulator驗收，不是真實帳本對帳；未取得正式帳本憑證，所以不宣稱正式金融數值已重新稽核。最大字級、實體iPhone／iPad仍未逐項驗收。風險是仍依後端的帳戶成本／匯率計算；回滾只需改回前一個TestFlight build，沒有資料遷移。
+
 程式與邊界見 [iOS App](ios-app.md)，操作地圖見 [ios.md](../.claude/skills/verify/features/ios.md)。工作起點與隔離後端基線均為 `79025c3b`；iOS 功能修正收斂於 `6f013930`，之後只調整 XCTest 的原生關閉按鈕定位與封存腳本輸出。
 
 | 層級 | 本輪實跑結果與證據 |

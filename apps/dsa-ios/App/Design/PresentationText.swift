@@ -2,6 +2,13 @@ import Foundation
 
 /// 只翻譯後端已定義的顯示代碼；自由文字與未知值保留原文。
 enum PresentationText {
+    static func quoteWarning(available: Bool, stale: Bool, source: String?) -> String? {
+        if !available { return "尚無報價" }
+        if stale { return "價格過期" }
+        if ["fallback", "yfinance"].contains(source?.lowercased() ?? "") { return "可能延遲" }
+        return nil
+    }
+
     static func limitation(_ value: String) -> String {
         switch value {
         case "no_reports": return "尚無這檔股票的分析報告"
