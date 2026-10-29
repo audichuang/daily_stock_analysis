@@ -1,6 +1,25 @@
 # 真實使用者流程驗證
 
-入口是 [verify skill](../.claude/skills/verify/SKILL.md)，[九份功能地圖](../.claude/skills/verify/features/README.md) 定義使用者入口、操作、前置資料與終態。實跑與單測／fixture 各自回報；一個主要旅程通過不代表該頁全部分支已通過。
+入口是 [verify skill](../.claude/skills/verify/SKILL.md)，[功能地圖](../.claude/skills/verify/features/README.md) 定義使用者入口、操作、前置資料與終態。實跑與單測／fixture 各自回報；一個主要旅程通過不代表該頁全部分支已通過。
+
+## 2026-10-29：Daily Stock AI iOS 首版
+
+程式與邊界見 [iOS App](ios-app.md)，操作地圖見 [ios.md](../.claude/skills/verify/features/ios.md)。工作起點與隔離後端基線均為 `79025c3b`；iOS 功能修正收斂於 `6f013930`，之後只調整 XCTest 的原生關閉按鈕定位與封存腳本輸出。
+
+| 層級 | 本輪實跑結果與證據 |
+| --- | --- |
+| Core | `swift test --package-path apps/dsa-ios/Core`：13/13 通過；Release Package 編譯通過 |
+| App 單測 | 14/14 通過，含真 Keychain cookie 安全屬性、錯網址恢復、大小寫市場代碼、時區、空 WebKit origin、同源下載策略；守修法另做正反 mutation |
+| 合成 HTTP／原生 UI | `QA/ui-fixture-06`：Xcode 27.1、iOS 27.0、iPhone 17 Simulator；1 條完整旅程通過、exit0、xcresult 正常封存、16 張 PNG。涵蓋登入、台美切換、日K呈現、AI報告／失效條件、404任務恢復、新分析、自選增減、歷史、資產、指定dossier、Web cookie、blob下載分享與本機登出 |
+| 真服務 | 主 checkout 的 `.claude/reviews/verification/ios-live-20261029`：Doctor 證實獨立SQLite、排程停用、market兩層唯讀；原生App讀取台股及美股指數／報價、台股日K，並由按鈕發起真 `claude_code_cli` 分析 |
+| 真模型與持久化 | task `5266d956f8d541009d43e32a11d72688` completed；API／SQLite均為個股history ID2、2330.TW，同時保存大盤ID1。個股profile回10項依據、4項失效條件；未注入新聞／券商憑證的限制如實顯示 |
+| 打包 | 0.1.0 build `202610291347` 完成Release archive、自動簽章、App Store Connect格式IPA匯出與codesign驗證；此封裝尚未上傳TestFlight，連線入口仍待最終部署確認 |
+
+本機 `apps/dsa-ios/QA/` 保存建置／測試日誌、xcresult、PNG與真服務核對；因含環境資訊與研究結果不入庫。早期輪次的Xcode結果封裝卡住、未簽Simulator的Keychain錯誤、搜尋及分享關閉定位失敗均保留；只以上述第06次完整通過作最終UI證據。
+
+未實測：實體iPhone／iPad、iOS17 runtime、VoiceOver／最大字級、正式HTTPS登入、所有Web進階工具的真後端寫入及TestFlight安裝。圖表切換／拖曳與研究分頁的所有邊界分支未逐項操作；不以既有Web能力或合成頁面推論這些均通過。此次沒有改後端契約，未跑本機全量Python離線套件。
+
+三輪獨立審查收斂：第1輪6項修正、第2輪2項修正，第3輪最後diff無新Act on；其後封存腳本的shell變數邊界以實際archive／export驗證。回滾範圍為iOS客戶端；不需要資料庫migration。
 
 ## 執行方式
 

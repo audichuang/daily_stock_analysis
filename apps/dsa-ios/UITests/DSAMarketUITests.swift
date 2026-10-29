@@ -97,6 +97,8 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "watchlist-toggle", "加入自選股")).firstMatch.waitForExistence(timeout: 10))
         capture("08-移除美股自選")
         goBack(from: "Microsoft（測試）", to: "搜尋股票")
+        // 模擬器 AX 的原生搜尋控制項是「關閉」；退出搜尋模式後才會顯示 App 的「完成」。
+        tap(app.buttons["關閉"])
         tap(app.buttons["search-dismiss"])
 
         tap(app.tabBars.buttons["AI 研究"])
@@ -118,8 +120,9 @@ final class DSAMarketUITests: XCTestCase {
         tap(app.webViews.buttons["匯出合成設定 JSON"])
         XCTAssertTrue(text(containing: "fixture-settings").waitForExistence(timeout: 15), "blob 匯出完成後必須以原生分享介面呈現檔案")
         capture("11b-Blob檔案原生分享")
-        app.swipeDown()
+        tap(app.buttons["header.closeButton"])
         XCTAssertTrue(app.webViews.buttons["匯出合成設定 JSON"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.webViews.buttons["匯出合成設定 JSON"].isHittable, "原生分享視窗必須已關閉")
         goBack(from: "AI 問股", to: "工具與設定")
         tap(app.buttons["tools.logout"])
         XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15), "本機登出後應回到連線畫面")
@@ -150,6 +153,7 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(navigation.waitForExistence(timeout: 5), "應位於 \(title)", file: file, line: line)
         let back = navigation.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@", "BackButton", previousTitle)).firstMatch
         XCTAssertTrue(back.waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(back.isHittable, "返回按鈕不可被其他 sheet 遮住", file: file, line: line)
         back.tap()
     }
 

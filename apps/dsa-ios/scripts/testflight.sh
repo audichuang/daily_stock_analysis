@@ -30,7 +30,7 @@ if [[ -n "${ASC_KEY_PATH:-}" || -n "${ASC_KEY_ID:-}" || -n "${ASC_ISSUER_ID:-}" 
   DSA_AUTH+=(-authenticationKeyPath "$ASC_KEY_PATH" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
 fi
 xcodegen generate --spec "$DSA_IOS_ROOT/project.yml" --project "$DSA_IOS_ROOT" --quiet
-echo "正在封存 build $DSA_BUILD_NUMBER；日誌：$DSA_OUTPUT/archive.log"
+echo "正在封存 build ${DSA_BUILD_NUMBER}；日誌：${DSA_OUTPUT}/archive.log"
 if ! xcodebuild -project "$DSA_IOS_ROOT/DSAMarket.xcodeproj" -scheme DSAMarket \
   -configuration Release -destination 'generic/platform=iOS' \
   -archivePath "$DSA_OUTPUT/DSAMarket.xcarchive" \
@@ -58,4 +58,4 @@ if ! xcodebuild -exportArchive -archivePath "$DSA_OUTPUT/DSAMarket.xcarchive" \
   tail -35 "$DSA_OUTPUT/export.log" >&2
   exit 1
 fi
-echo "上傳完成，build $DSA_BUILD_NUMBER；仍需核對 Apple 處理成功並加入內部測試群組。"
+echo "上傳完成，build ${DSA_BUILD_NUMBER}；仍需核對 Apple 處理成功並加入內部測試群組。"
