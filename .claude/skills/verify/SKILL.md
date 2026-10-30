@@ -5,7 +5,7 @@ description: 驗證 Daily Stock Analysis 的真實 Web、API、CLI 與 iOS App�
 
 # Daily Stock Analysis 驗證
 
-規則真源是根 [AGENTS.md](../../../AGENTS.md)。先讀 [功能索引](features/README.md)，把 scope 對應到全部相關入口與子功能；全面驗證涵蓋九份 map，不以帳戶／入金或逐頁開空畫面代替。每條各記 `passed`、`failed`、`blocked`、`not-run`；缺前置仍保留該條及原因。
+規則真源是根 [AGENTS.md](../../../AGENTS.md)。先讀 [功能索引](features/README.md)，把 scope 對應到全部相關入口與子功能；全面驗證涵蓋十份 map，不以帳戶／入金或逐頁開空畫面代替。每條各記 `passed`、`failed`、`blocked`、`not-run`；缺前置仍保留該條及原因。
 
 完成＝scope 每條都有真實動作、可核對終態或具體卡點、證據與清理。`observed` 只是待核對觀察，不能當通過。修正工具／map 後重跑受影響旅程；產品缺陷如實記錄，不改產品行為來湊通過。長期結論寫 [docs/verification.md](../../../docs/verification.md)。
 

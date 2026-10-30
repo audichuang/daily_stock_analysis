@@ -1,5 +1,7 @@
 # 桌面端打包说明 (Electron + React UI)
 
+> 本 fork 不使用、也不發布桌面版；程式碼與本文件沿用上游，留作參考。
+
 本项目可打包为桌面应用，使用 Electron 作为桌面壳，`apps/dsa-web` 的 React UI 作为界面。
 
 ## 架构说明

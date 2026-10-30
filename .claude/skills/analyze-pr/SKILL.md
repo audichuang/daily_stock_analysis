@@ -82,14 +82,14 @@ gh run view <run_id> --log-failed
 
 - 后端：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（秒级快速门槛；本机必须带 `uv run`，否则 `python: command not found`）或 `uv run python -m py_compile <changed_python_files>`；**不要**在 review 场景跑不带参数的 `ci_gate.sh`，它等于 `all`、含全量离线测试（耗时见 `tests/AGENTS.md`）
 - 前端：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
-- 桌面端：先构建 Web，再构建 Electron
+- iOS（`apps/dsa-ios/`）：CI 不覆盖，按根 `AGENTS.md` §6 在本机跑 Core 单测与 `test-ui.sh`
 
 ### Step 5: 评估正确性与风险
 
 重点检查：
 
 - 是否解决了明确问题，且没有夹带无关改动
-- 是否破坏 API / Schema / Web / Desktop 兼容性
+- 是否破坏 API / Schema / Web / iOS 兼容性
 - 是否破坏 fallback、降级路径、通知链路或发布流程
 - 是否存在明显逻辑错误、异常吞没、安全问题、配置语义变化未同步文档
 
@@ -141,7 +141,7 @@ gh run view <run_id> --log-failed
 
 ## Compatibility And Risk
 
-- API / Web / Desktop：
+- API / Web / iOS：
 - 配置 / Docker / GitHub Actions：
 - fallback / 通知 / 报告结构：
 - 第三方依赖 / 官方约束来源：

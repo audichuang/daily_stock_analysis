@@ -45,7 +45,7 @@
 - 頁面連不上或改版 → 只依交易日曆（fail-open，照常跑）。其他原因的臨時休市手動在清單加一行 `YYYY-MM-DD  # 原因`。
 - 2026-10-23（薔琵颱風）時還沒有這個機制，是手動暫停盤中與持股計畫排程。
 
-`portfolio-check` 讀的個人持股計畫在 gitignore 的 `.memory/`（由 `.claude/settings.local.json` 的 `autoMemoryDirectory` 指定，兩個 Claude 帳號共用）；換機器或重建 checkout 時要一起搬。
+`portfolio-check` 讀的個人持股計畫在 gitignore 的 `.memory/`（由 `.claude/settings.local.json` 的 `autoMemoryDirectory` 指定，各 Claude 帳號共用）；換機器或重建 checkout 時要一起搬。
 
 ## 每日報告的卡住防護與診斷
 
