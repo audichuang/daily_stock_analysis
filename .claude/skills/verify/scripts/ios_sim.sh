@@ -1,20 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 
+# DSA 只用一台模擬器：fixture 測試與手動驗證共用，兩者靠不同 bundle ID 分開（見 test-ui.sh）。
+DSA_SIMULATOR_NAME="DSA iPhone 18 Pro Max"
+
 usage() {
-  echo "用法：$0 <udid|up|down> <fixture|manual>" >&2
+  echo "用法：$0 <udid|up|down>" >&2
   exit 2
 }
 
-[[ $# -eq 2 ]] || usage
+[[ $# -eq 1 ]] || usage
 DSA_COMMAND="$1"
 case "$DSA_COMMAND" in
   udid|up|down) ;;
-  *) usage ;;
-esac
-case "$2" in
-  fixture) DSA_SIMULATOR_NAME="DSA Fixture iPhone 17" ;;
-  manual) DSA_SIMULATOR_NAME="DSA iPhone 17" ;;
   *) usage ;;
 esac
 
@@ -30,14 +28,6 @@ if not matches:
 if len(matches) > 1:
     raise SystemExit(f"錯誤：模擬器「{name}」有 {len(matches)} 台同名裝置，請確認名稱唯一。")
 target = matches[0]
-if command == "up":
-    conflicts = [device for device in devices
-                 if device["name"].startswith("DSA ")
-                 and device["udid"] != target["udid"]
-                 and device["state"] == "Booted"]
-    if conflicts:
-        details = "、".join("{} ({})".format(device["name"], device["udid"]) for device in conflicts)
-        raise SystemExit(f"錯誤：其他 DSA 模擬器已開機：{details}")
 print(target["udid"], target["state"])
 ' "$DSA_COMMAND" "$DSA_SIMULATOR_NAME")"
 read -r DSA_SIMULATOR_ID DSA_SIMULATOR_STATE <<< "$DSA_DEVICE"

@@ -21,15 +21,11 @@ SwiftUI App（Daily Stock AI），打 repo 根 `api/` 的同一套 `/api/v1`，�
 
 ## 模擬器
 
-這台 Mac 還有其他專案的模擬器（`MO …`、`CB …`、`OKI …`）；本 App 只用自己的兩台：
+這台 Mac 還有其他專案的模擬器（`MO …`、`CB …`、`OKI …`），磁碟有限；本 App 只用一台 `DSA iPhone 18 Pro Max`，fixture UI 測試與手動驗證共用。
 
-| 裝置（依名稱找） | 用途 |
-| --- | --- |
-| `DSA Fixture iPhone 17` | fixture UI 測試（`scripts/test-ui.sh` 固定用它） |
-| `DSA iPhone 17` | 手動操作與連真實服務的檢查 |
-
+- 兩者靠 bundle ID 分開：`scripts/test-ui.sh` 建置時把 `DSA_BUNDLE_ID` 設成 `com.audichuang.dsa.fixture`，手動驗證裝的是預設的 `com.audichuang.dsa`，安裝、登入 cookie 與 Keychain 互不覆蓋。改 bundle 設定時別讓兩者變回同一個。
 - 一律依名稱在執行時解析 UDID，不把 UDID 寫進檔案；找不到或同名不只一台時停下問使用者。
-- 不新增、不刪除、不 erase 模擬器；不碰 `MO …`、`CB …`、`OKI …` 與實機。
+- 不新增、不刪除、不 erase 模擬器（要換機型先問使用者）；不碰 `MO …`、`CB …`、`OKI …` 與實機。
 - 不用 `booted` 別名，不用 `killall` 收 CoreSimulatorService。
 - 自己跑 `xcodebuild` 時用 `-destination id=<解析出的 UDID>` 並加 `-parallel-testing-enabled NO`，免得 Xcode 另外 clone 模擬器。
 - 一次只跑一個模擬器建置。
