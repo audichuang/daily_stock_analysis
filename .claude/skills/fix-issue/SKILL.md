@@ -47,7 +47,7 @@ description: 按 issue 分析结论实现修复，并补齐验证、风险与回
 - 后端完整门槛：`uv run ./scripts/ci_gate.sh`（= `all`，含全量离线测试；仅在交付前跑，耗时与判定基准见 `tests/AGENTS.md`）
 - 最低后端要求：`uv run python -m py_compile <changed_python_files>`
 - 前端：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
-- 桌面端：先构建 Web，再构建桌面端
+- iOS（`apps/dsa-ios/`）：CI 不覆盖，按根 `AGENTS.md` §6 在本机跑 Core 单测与 `test-ui.sh`
 
 如无法完成完整验证，必须记录缺口、原因与潜在风险。
 

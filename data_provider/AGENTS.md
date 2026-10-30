@@ -20,7 +20,7 @@
 
 ## 進來改要遵守
 
-- **台股的 yfinance 報價 `source` 必須維持 `fallback`**(us/jp/kr 才標 `yfinance`):Shioaji 降級時 `limit_up`/`limit_down` 變 `None`,這是降級的可辨識訊號(缺金鑰見根 `AGENTS.md` §10)。索引裡有的台股名稱**不會**變英文,別拿名稱語言判斷。
+- **台股的 yfinance 報價 `source` 必須維持 `fallback`**(us/jp/kr 才標 `yfinance`):Shioaji 降級時 `limit_up`/`limit_down` 變 `None`,這是降級的可辨識訊號。索引裡有的台股名稱**不會**變英文,別拿名稱語言判斷。
 - **上市+上櫃合計的欄位(成交額、三大法人)任一邊缺就整組作廢**,不拿活著的那一邊當合計——兩邊可能反向。家數、成交額、法人三組各自獨立降級;缺值維持 0/`None`,下游用 truthiness 判成「沒有資料」,所以不要補近似值(`tw_breadth` 因此不合成漲跌停家數)。
 - **新增會回大盤統計的 fetcher,必須登記進 `base.py` 的 `_STATS_MARKET_FETCHER_SUPPORT`。**不在表中 = 每個市場都參與,而第一個回非空的來源就勝出。日線那張支援表是另一張,補了一張擋不住另一張。
 - **大盤統計的新鮮度參照(「最新交易日」)取 OpenAPI／rwd 兩版 FMTQIK 較新的一份,不可退回只看 OpenAPI。**OpenAPI 版盤後會落後一天以上,拿它當參照不會報錯,而是把當日新鮮的法人、上櫃、本地寬度全當過期拒收,成交額還印成前一交易日的。
