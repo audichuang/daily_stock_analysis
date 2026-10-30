@@ -24,7 +24,7 @@ NAS 一直跑的是釘住的舊 digest，直到走完上面三步。**不要在 
 
 部署現況以 ops repo 的 `hosts/<NAS>/dsa/manifest.md`（設計）與 `deployments.md`（每次發版的 image、驗收、回滾點）為準；要看 live 狀態用 skill `nas-container`（DSM 連線設定在本機 `~/.config/synology-container.env`），只做看的動作：
 
-- 容器：`dsa-server-1`，compose project `dsa`，working dir 在 Komodo Periphery 的 stacks 目錄底下；`docker ps`／`inspect` 對照 image tag（`git-<sha7>`）與 `RestartCount`，`logs --tail` 看最近請求。
+- 容器：`dsa-server-1`，compose project `dsa`，working dir 在 Komodo Periphery 的 stacks 目錄底下；`docker ps`／`inspect` 對照 image tag（`git-<sha7>`）與 `RestartCount`，`logs --tail` 看最近請求。容器在 audinas（不在 ttnas），SSH 上要用 `sudo -n /usr/local/bin/docker` 才看得到。uvicorn 的 access log 只記已送出回應的請求：某支請求在 log 裡缺席，代表客戶端在回應前就斷線（踩過：iOS 下拉更新時報價請求被 App 自己取消）。
 - 健康檢查：`curl http://<NAS>:7777/api/health` 回 200。
 - 秘密不在 NAS 的 `.env`：DB 密碼與各金鑰是 Periphery `[secrets]` 插進 stack environment；Web 可改的非秘密設定在主機 `config/.env`。看 env 只比對 key，不印值。
 - 改任何東西（重啟、換 image、改 env）都走 Komodo，不用 SSH 跑 compose。
