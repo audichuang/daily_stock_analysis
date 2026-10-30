@@ -33,7 +33,7 @@ swift test --package-path Core
 
 ```sh
 xcrun simctl list devices available
-bash scripts/test-ui.sh  # 固定使用 DSA Fixture iPhone 17
+bash scripts/test-ui.sh  # 固定使用 DSA iPhone 18 Pro Max
 ```
 
 腳本建立動態 port 的合成 HTTP 服務、真啟動 App 操作，保存 `.xcresult` 截圖及日誌；不是市場／模型驗收。11 個工具入口的 fixture 只驗證路由、同源登入與 WebKit 橋接，不代表真實網頁功能全部驗收。大字級金額與 K 線實體／量柱對齊需檢視實際 PNG，不能只看 accessibility 文字。真後端驗收依 [iOS 功能地圖](../../.claude/skills/verify/features/ios.md)。

@@ -3,13 +3,13 @@
 set -euo pipefail
 
 if [[ $# -gt 2 ]]; then
-  echo "用法：bash scripts/test-ui.sh [udid] [evidence-dir]（省略或留空 udid 時使用 DSA Fixture iPhone 17）" >&2
+  echo "用法：bash scripts/test-ui.sh [udid] [evidence-dir]（省略或留空 udid 時使用 DSA iPhone 18 Pro Max）" >&2
   exit 2
 fi
 DSA_IOS_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DSA_SIMULATOR_ID="${1:-}"
 if [[ -z "$DSA_SIMULATOR_ID" ]]; then
-  DSA_SIMULATOR_ID="$("$DSA_IOS_ROOT/../../.claude/skills/verify/scripts/ios_sim.sh" udid fixture)"
+  DSA_SIMULATOR_ID="$("$DSA_IOS_ROOT/../../.claude/skills/verify/scripts/ios_sim.sh" udid)"
 fi
 DSA_EVIDENCE_DIR="${2:-$(mktemp -d /tmp/dsa-ios-ui.XXXXXX)}"
 mkdir -p "$DSA_EVIDENCE_DIR"
@@ -33,7 +33,8 @@ else:
 PY
 
 xcodegen generate --spec "$DSA_IOS_ROOT/project.yml" --project "$DSA_IOS_ROOT" --quiet
-DSA_SIGNING_ARGS=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=-)
+# fixture 版用獨立 bundle ID：與手動驗證的正式 bundle 共用同一台模擬器時，安裝與登入資料互不覆蓋。
+DSA_SIGNING_ARGS=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DSA_BUNDLE_ID=com.audichuang.dsa.fixture)
 if [[ -n "${DSA_TEAM_ID:-}" ]]; then DSA_SIGNING_ARGS+=("DEVELOPMENT_TEAM=$DSA_TEAM_ID"); fi
 xcodebuild build-for-testing -project "$DSA_IOS_ROOT/DSAMarket.xcodeproj" -scheme DSAMarket \
   -configuration Debug -destination "platform=iOS Simulator,id=$DSA_SIMULATOR_ID" \

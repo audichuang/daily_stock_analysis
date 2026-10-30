@@ -4,9 +4,9 @@
 
 ## Launch
 
-合成流程：`bash apps/dsa-ios/scripts/test-ui.sh` 固定使用 `DSA Fixture iPhone 17`，會開獨立 HTTP fixture 並真啟動 App，保存 log／xcresult；缺網址的 skip 不算驗收。
+合成流程：`bash apps/dsa-ios/scripts/test-ui.sh` 固定使用 `DSA iPhone 18 Pro Max`、以 fixture bundle ID 建置，會開獨立 HTTP fixture 並真啟動 App，保存 log／xcresult；缺網址的 skip 不算驗收。
 
-手動／真服務：先執行 `.claude/skills/verify/scripts/ios_sim.sh up manual`，取得 `DSA iPhone 17` 的 UDID。依 `apps/dsa-ios/README.md` 建置後，以 `xcrun simctl install <UDID> <DSAMarket.app>` 安裝。原生操作用桌面控制或 XCTest；Xcode 新版可能在 Device Hub 呈現模擬器。
+手動／真服務：先執行 `.claude/skills/verify/scripts/ios_sim.sh up`，取得同一台 `DSA iPhone 18 Pro Max` 的 UDID；手動裝的是正式 bundle ID，不會覆蓋 fixture 版。依 `apps/dsa-ios/README.md` 建置後，以 `xcrun simctl install <UDID> <DSAMarket.app>` 安裝。原生操作用桌面控制或 XCTest；Xcode 新版可能在 Device Hub 呈現模擬器。
 
 真服務採主 skill 的隔離 `--online` profile，確認唯讀市場庫與獨立 SQLite。Debug 用 `SIMCTL_CHILD_DSA_TEST_SERVER=<本輪 URL> xcrun simctl launch <UDID> com.audichuang.dsa`。原生畫面是使用者入口，API／SQLite 是第二視角。
 
@@ -33,4 +33,4 @@ fixture 允許注入資料與故障且明標合成。真模型由原生按鈕發
 
 只停本輪fixture PID，依主skill清理隔離後端並保留application-evidence.sqlite3。私人報告、cookie、密碼與Keychain內容不入庫。
 
-手動／真服務驗證結束後執行 `.claude/skills/verify/scripts/ios_sim.sh down manual`，關閉 `DSA iPhone 17`。
+手動／真服務驗證結束後執行 `.claude/skills/verify/scripts/ios_sim.sh down` 關機。

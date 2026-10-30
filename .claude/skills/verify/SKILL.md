@@ -99,7 +99,7 @@ uv run python .claude/skills/verify/scripts/instance.py cleanup --run-dir "$DSA_
 
 ## Helpers
 
-[ios_sim.sh](scripts/ios_sim.sh)：依名稱解析與啟停 fixture／manual 專用模擬器。
+[ios_sim.sh](scripts/ios_sim.sh)：依名稱解析與啟停 DSA 唯一的模擬器（fixture 與手動共用）。
 
 [instance.py](scripts/instance.py)：上述 `launch|doctor|cleanup|exec --run-dir`；launch 支援 `--space-id`、`--online`、`--symbols`。單獨空庫 portfolio 可用 launch 產生的 `drive-portfolio.mjs`；其他 scope 使用 `browser.mjs` 共用記錄與 TaskSpace。helper 皆可執行，錯誤先留 log，修具體原因再驗受影響路徑。
 
