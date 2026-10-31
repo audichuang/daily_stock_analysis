@@ -48,6 +48,33 @@ describe('AlertTriggerHistory', () => {
     expect(container.textContent).toContain('跳过');
   });
 
+  it('shows the rule name and the issue reason separately for named issues', () => {
+    const { container } = renderIn('zh-TW', [
+      { ...trigger, id: 21, status: 'failed', ruleName: 'named-failed', reason: 'quote fetch failed', diagnostics: 'trace-failed' },
+      { ...trigger, id: 22, status: 'degraded', ruleName: 'named-degraded', reason: 'snapshot unavailable', diagnostics: 'trace-degraded' },
+    ]);
+    for (const value of ['named-failed', 'quote fetch failed', 'named-degraded', 'snapshot unavailable']) {
+      expect(screen.getByText(value)).toBeInTheDocument();
+    }
+    expect(screen.getAllByText('查看診斷')).toHaveLength(2);
+    expect(container.querySelectorAll('details pre')[0].textContent).toBe('trace-failed');
+    expect(container.querySelectorAll('details pre')[1].textContent).toBe('trace-degraded');
+  });
+
+  it('keeps diagnostics reachable when a failed row has no reason', () => {
+    const { container } = renderIn('zh-TW', [
+      { ...trigger, id: 23, status: 'failed', ruleName: 'named', reason: null, diagnostics: 'only-diagnostics' },
+    ]);
+    expect(container.querySelector('details pre')?.textContent).toBe('only-diagnostics');
+  });
+
+  it('does not repeat the machine reason on named triggered rows', () => {
+    renderIn('zh-TW', [{ ...trigger, id: 24, status: 'triggered', ruleName: 'named', reason: '2330.TW price above 1000', diagnostics: null }]);
+    expect(screen.getByText('named')).toBeInTheDocument();
+    expect(screen.queryByText('2330.TW price above 1000')).not.toBeInTheDocument();
+    expect(screen.queryByText('查看診斷')).not.toBeInTheDocument();
+  });
+
   it('colours triggered rows by severity and shows the real quote source', () => {
     const base = { ...trigger, status: 'triggered', quoteSource: 'yfinance' };
     const { container, unmount } = renderIn('zh-TW', [{ ...base, severity: 'critical' }]);

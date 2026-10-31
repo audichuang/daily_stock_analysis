@@ -364,8 +364,15 @@ class AlertService:
         """把實際報價來源放進 diagnostics；data_source 維持 realtime_quote，舊客戶端不受影響。"""
         raw = getattr(quote, "source", None)
         source = str(getattr(raw, "value", raw) or "").strip()
+        diagnostics: Dict[str, Any] = {}
         if source:
-            result["diagnostics"] = {"quote_source": source}
+            diagnostics["quote_source"] = source
+        provider_time = getattr(quote, "provider_timestamp", None)
+        if provider_time:
+            # 監控執行緒用它確認報價屬於今天這一場
+            diagnostics["quote_timestamp"] = str(provider_time)
+        if diagnostics:
+            result["diagnostics"] = diagnostics
         return result
 
     async def _evaluate_price(self, rule: PriceAlert, monitor: EventMonitor) -> Dict[str, Any]:

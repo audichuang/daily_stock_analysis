@@ -104,9 +104,19 @@ export const AlertTriggerHistory: React.FC<AlertTriggerHistoryProps> = ({
                   {' · '}
                   {statusLabel(trigger.status, text)}
                 </p>
-                <p className="text-xs text-secondary-text">{trigger.ruleName || trigger.reason || trigger.diagnostics || '--'}</p>
+                {trigger.ruleName ? <p className="break-words text-xs text-secondary-text">{trigger.ruleName}</p> : null}
+                {/* 異常的原因不能被規則名稱蓋掉；已觸發有名稱時原因只是機器字串，收進診斷。 */}
+                {trigger.reason && (trigger.status !== 'triggered' || !trigger.ruleName) ? (
+                  <p className="break-words text-xs text-secondary-text">{trigger.reason}</p>
+                ) : null}
                 {facts.length ? <p className="text-xs text-secondary-text">{facts.join(' · ')}</p> : null}
                 <p className="text-xs text-muted-text">{formatDateTime(trigger.triggeredAt ?? trigger.dataTimestamp)}</p>
+                {trigger.diagnostics ? (
+                  <details className="mt-1 text-xs text-secondary-text">
+                    <summary className="cursor-pointer">{text.viewDiagnostics}</summary>
+                    <pre className="mt-1 whitespace-pre-wrap break-all font-mono text-muted-text">{trigger.diagnostics}</pre>
+                  </details>
+                ) : null}
               </div>
             </li>
           );

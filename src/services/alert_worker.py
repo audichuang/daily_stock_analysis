@@ -31,6 +31,7 @@ from src.core.trading_calendar import (
     build_market_phase_context,
     get_market_for_stock,
     is_market_polling_window,
+    quote_in_current_session,
 )
 from src.market_phase_summary import (
     format_public_phase_pack_excerpt,
@@ -172,7 +173,10 @@ class AlertWorker:
         return get_config()
 
     def _is_outside_quote_session(self, rule: Any, open_cache: Dict[Any, bool], now: datetime) -> bool:
-        """即時價規則的市場不在開盤時段時回 True；判定沿用 is_market_polling_window（行事曆失效時視為開盤）。"""
+        """即時價規則的市場不在開盤時段時回 True。
+
+        看板的輪詢窗口會提前 5 分鐘放行，警報不能：盤前報價是昨收，觸發會誤報並寫入冷卻、壓掉盤中真正的通知。
+        """
         if isinstance(rule, MarketLightAlert):
             # 非交易日每輪都會寫一筆 skipped，全天輪詢下一條規則一天近 300 筆，淹掉動態時間流
             metadata = rule.metadata
@@ -181,8 +185,21 @@ class AlertWorker:
             return False
         market = get_market_for_stock(normalize_stock_code(rule.stock_code))
         if market not in open_cache:
-            open_cache[market] = is_market_polling_window(market, current_time=now)
+            open_cache[market] = is_market_polling_window(market, current_time=now, before=timedelta(0))
         return not open_cache[market]
+
+    def _quote_is_current(self, rule: Any, result: Dict[str, Any], now: datetime) -> bool:
+        diagnostics = self._diagnostics_payload(result.get("diagnostics"))
+        quote_time: Optional[datetime] = None
+        raw_time = diagnostics.get("quote_timestamp")
+        if raw_time:
+            try:
+                quote_time = datetime.fromisoformat(str(raw_time))
+            except ValueError:
+                # 有給時間卻解析不了，當成場次不明，不退回「沒帶時間」的寬限規則
+                return False
+        market = get_market_for_stock(normalize_stock_code(rule.stock_code))
+        return quote_in_current_session(market, quote_time, current_time=now)
 
     def run_once(self) -> Dict[str, int]:
         """Run one alert worker cycle.
@@ -248,6 +265,15 @@ class AlertWorker:
                 }
 
             record_status = result.get("record_status")
+            if (
+                record_status == "triggered"
+                and self.realtime_session_gate
+                and isinstance(runtime_rule.rule, (PriceAlert, PriceChangeAlert))
+                and not self._quote_is_current(runtime_rule.rule, result, cycle_now)
+            ):
+                # 不寫紀錄也不進冷卻：下一輪拿到當日報價時要能正常通知
+                stats["stale_quote"] = stats.get("stale_quote", 0) + 1
+                continue
             if record_status == "triggered":
                 self._attach_decision_signal_summary_safely(runtime_rule, result)
             if record_status in WRITABLE_TRIGGER_STATUSES:

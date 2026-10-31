@@ -530,6 +530,35 @@ def is_market_polling_window(
     return False
 
 
+def quote_in_current_session(
+    market: Optional[str],
+    quote_time: Optional[datetime],
+    current_time: Optional[datetime] = None,
+    unverified_grace: timedelta = timedelta(minutes=30),
+) -> bool:
+    """報價是否屬於今天這一場。警報用：前一場的收盤價不能當成今天的即時價觸發。
+
+    有報價時間就比開盤時刻。沒有時間（yfinance 不帶）無從驗證，開盤後過了 ``unverified_grace``
+    才採信，因為 Yahoo 的台股延遲約 20 分鐘，開盤初段拿到的多半還是昨收。
+    今天沒開市或行事曆不可用一律 False：誤報並寫入冷卻的代價高於少報一輪。
+    """
+    tz_name = MARKET_TIMEZONE.get(market or "")
+    if not tz_name:
+        return False
+    try:
+        market_now = get_market_now(market, current_time)
+        session_open, _ = _session_open_close_for_today(market, market_now)
+    except Exception as e:
+        logger.warning("trading_calendar.quote_in_current_session fail-closed: %s", e)
+        return False
+    if session_open is None or market_now < session_open:
+        return False
+    if quote_time is None:
+        return market_now >= session_open + unverified_grace
+    quote_at = _as_market_datetime(quote_time, tz_name)
+    return quote_at is not None and quote_at >= session_open
+
+
 def _add_warning_code(warnings: List[str], code: str) -> None:
     if code not in warnings:
         warnings.append(code)

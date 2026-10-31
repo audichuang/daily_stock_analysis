@@ -7,7 +7,7 @@ import os
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -32,6 +32,9 @@ from src.services.data_capability_service import DataCapabilityService
 from src.services.market_light_alerts import MarketLightAlert
 from src.services.runtime_scheduler import RuntimeSchedulerService
 from src.services.tw_level_alerts import format_level_alert_markdown
+
+
+TAIPEI = timezone(timedelta(hours=8))
 
 
 def _config(**overrides) -> SimpleNamespace:
@@ -176,10 +179,12 @@ class SessionGateTests(unittest.TestCase):
 
     def test_open_market_evaluates(self) -> None:
         worker, service = self._worker(PriceAlert(stock_code="2330.TW", direction="above", price=1), gate=True)
-        with patch.object(alert_worker_module, "is_market_polling_window", return_value=True):
+        with patch.object(alert_worker_module, "is_market_polling_window", return_value=True) as window:
             stats = worker.run_once()
         service._evaluate_rule.assert_awaited_once()
         self.assertEqual(stats["evaluated"], 1)
+        # 警報不沿用看板提前 5 分鐘的放行
+        self.assertEqual(window.call_args.kwargs["before"], timedelta(0))
 
     def test_scheduler_path_without_gate_is_unchanged(self) -> None:
         worker, service = self._worker(PriceAlert(stock_code="2330.TW", direction="above", price=1), gate=False)
@@ -426,7 +431,9 @@ class MonitorThreadEndToEndTests(unittest.TestCase):
         handle = AlertMonitorThread(config_provider=lambda: config, worker=worker)
         with patch(
             "src.agent.events.EventMonitor._get_realtime_quote", new=AsyncMock(return_value=quote),
-        ), patch.object(alert_worker_module, "is_market_polling_window", return_value=True):
+        ), patch.object(alert_worker_module, "is_market_polling_window", return_value=True), patch.object(
+            alert_worker_module, "quote_in_current_session", return_value=True,
+        ):
             handle.start()
             self.assertTrue(sent.wait(30))
             handle.stop()
@@ -439,6 +446,110 @@ class MonitorThreadEndToEndTests(unittest.TestCase):
         triggers = service.list_triggers(rule_id=rule["id"])
         self.assertEqual(triggers["summary"]["triggered"], 1)
         self.assertEqual(triggers["items"][0]["quote_source"], "yfinance")
+
+
+class PremarketRegressionTests(unittest.TestCase):
+    """盤前昨收不得通知、不得寫冷卻；開盤後當日報價仍要通知（真日曆＋真規則＋暫存庫）。"""
+
+    def setUp(self) -> None:
+        from src.config import Config
+        from src.core.trading_calendar import get_next_trading_date
+        from src.storage import DatabaseManager
+
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        db_path = Path(self.temp_dir.name) / "premarket.db"
+        env_path = Path(self.temp_dir.name) / ".env"
+        env_path.write_text(f"DATABASE_PATH={db_path}\n", encoding="utf-8")
+        env = patch.dict(os.environ, {"ENV_FILE": str(env_path), "DATABASE_PATH": str(db_path)}, clear=False)
+        env.start()
+        self.addCleanup(env.stop)
+        Config.reset_instance()
+        DatabaseManager.reset_instance()
+        self.addCleanup(Config.reset_instance)
+        self.addCleanup(DatabaseManager.reset_instance)
+        self.session = get_next_trading_date("tw", datetime.now(TAIPEI).date())
+        self.assertIsNotNone(self.session)
+
+    def _at(self, hour: int, minute: int) -> datetime:
+        return datetime(self.session.year, self.session.month, self.session.day, hour, minute, tzinfo=TAIPEI)
+
+    def _harness(self):
+        from src.notification import ChannelAttemptResult
+        from src.services.alert_service import AlertService
+
+        service = AlertService()
+        rule = service.create_rule({
+            "name": "台積電站上", "target_scope": "single_symbol", "target": "2330.TW",
+            "alert_type": "price_cross", "parameters": {"direction": "above", "price": 1000},
+            "severity": "warning", "enabled": True,
+        })
+        notifier = MagicMock()
+        notifier.send_with_results.return_value = NotificationDispatchResult(
+            dispatched=True, success=True, status="ok", message="",
+            channel_results=[ChannelAttemptResult(channel="telegram", success=True)],
+        )
+        self.clock = self._at(8, 56)
+        config = _config(trading_day_check_enabled=False)
+        worker = AlertWorker(
+            config_provider=lambda: config, service=service, decision_signal_service=MagicMock(),
+            notifier=notifier, now_provider=lambda: self.clock.timestamp(), realtime_session_gate=True,
+        )
+        return worker, service, notifier, rule
+
+    def _run(self, worker, when: datetime, quote_time):
+        self.clock = when
+        quote = SimpleNamespace(
+            price=1010.0, source=SimpleNamespace(value="shioaji"),
+            provider_timestamp=quote_time.isoformat() if quote_time else None,
+        )
+        fetch = AsyncMock(return_value=quote)
+        with patch("src.agent.events.EventMonitor._get_realtime_quote", new=fetch):
+            return worker.run_once(), fetch
+
+    def test_premarket_close_price_does_not_notify_and_open_quote_still_does(self) -> None:
+        worker, service, notifier, rule = self._harness()
+        yesterday_close = self._at(13, 30) - timedelta(days=1)
+
+        stats, fetch = self._run(worker, self._at(8, 56), yesterday_close)
+        fetch.assert_not_awaited()
+        self.assertEqual(stats["off_session"], 1)
+        notifier.send_with_results.assert_not_called()
+
+        # 開盤了但還沒有今日成交：報價仍是昨收，不通知、不寫紀錄、不進冷卻
+        stats, fetch = self._run(worker, self._at(9, 1), yesterday_close)
+        fetch.assert_awaited()
+        self.assertEqual(stats["stale_quote"], 1)
+        notifier.send_with_results.assert_not_called()
+        self.assertEqual(service.list_triggers(rule_id=rule["id"])["summary"]["triggered"], 0)
+
+        stats, _ = self._run(worker, self._at(9, 6), self._at(9, 5))
+        self.assertEqual(stats["notified"], 1)
+        self.assertEqual(stats["cooldown_suppressed"], 0)
+        notifier.send_with_results.assert_called_once()
+
+    def test_quote_without_time_waits_out_the_delay_window(self) -> None:
+        worker, _, notifier, _ = self._harness()
+        stats, _ = self._run(worker, self._at(9, 6), None)
+        self.assertEqual(stats["stale_quote"], 1)
+        notifier.send_with_results.assert_not_called()
+        stats, _ = self._run(worker, self._at(9, 31), None)
+        self.assertEqual(stats["notified"], 1)
+
+    def test_unparseable_quote_time_is_not_treated_as_missing(self) -> None:
+        worker, _, notifier, _ = self._harness()
+        self.clock = self._at(10, 0)
+        quote = SimpleNamespace(price=1010.0, source=None, provider_timestamp="not-a-time")
+        with patch("src.agent.events.EventMonitor._get_realtime_quote", new=AsyncMock(return_value=quote)):
+            stats = worker.run_once()
+        self.assertEqual(stats["stale_quote"], 1)
+        notifier.send_with_results.assert_not_called()
+
+    def test_quote_after_close_of_same_session_still_counts(self) -> None:
+        worker, _, notifier, _ = self._harness()
+        stats, _ = self._run(worker, self._at(13, 35), self._at(13, 30))
+        self.assertEqual(stats["notified"], 1)
+        notifier.send_with_results.assert_called_once()
 
 
 class ChannelTests(unittest.TestCase):
