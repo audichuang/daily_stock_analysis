@@ -997,6 +997,7 @@ class Config:
     tickflow_batch_size: int = 100
     futu_opend_host: Optional[str] = None
     futu_opend_port: int = 11111
+    sec_edgar_user_agent: str = ""
     futu_hk_realtime_source_priority: str = "futu,longbridge,akshare,yfinance"
     mx_apikey: Optional[str] = None
     mx_priority: int = 6
@@ -1963,6 +1964,7 @@ class Config:
             tickflow_batch_daily_enabled=parse_env_bool(os.getenv('TICKFLOW_BATCH_DAILY_ENABLED'), default=True),
             tickflow_batch_size=parse_env_int(os.getenv('TICKFLOW_BATCH_SIZE'), 100, field_name='TICKFLOW_BATCH_SIZE', minimum=1),
             futu_opend_host=os.getenv('FUTU_OPEND_HOST') or None,
+            sec_edgar_user_agent=os.getenv('SEC_EDGAR_USER_AGENT', '').strip(),
             futu_opend_port=parse_env_int(os.getenv('FUTU_OPEND_PORT'), 11111, field_name='FUTU_OPEND_PORT', minimum=1, maximum=65535),
             futu_hk_realtime_source_priority=os.getenv('FUTU_HK_REALTIME_SOURCE_PRIORITY', 'futu,longbridge,akshare,yfinance'),
             mx_apikey=os.getenv('MX_APIKEY') or None,

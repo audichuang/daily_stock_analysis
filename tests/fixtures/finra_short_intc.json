@@ -1,0 +1,50 @@
+[
+  {
+    "stockSplitFlag": null,
+    "previousShortPositionQuantity": 167199908,
+    "averageDailyVolumeQuantity": 96644158,
+    "issueName": "Intel Corporation Common Stock",
+    "currentShortPositionQuantity": 148504504,
+    "changePreviousNumber": -18695404,
+    "accountingYearMonthNumber": 20261015,
+    "settlementDate": "2026-10-15",
+    "marketClassCode": "NNM",
+    "symbolCode": "INTC",
+    "daysToCoverQuantity": 1.54,
+    "issuerServicesGroupExchangeCode": "R",
+    "revisionFlag": null,
+    "changePercent": -11.18
+  },
+  {
+    "stockSplitFlag": null,
+    "previousShortPositionQuantity": 158808750,
+    "averageDailyVolumeQuantity": 120610361,
+    "issueName": "Intel Corporation Common Stock",
+    "currentShortPositionQuantity": 167199908,
+    "changePreviousNumber": 8391158,
+    "accountingYearMonthNumber": 20260930,
+    "settlementDate": "2026-09-30",
+    "marketClassCode": "NNM",
+    "symbolCode": "INTC",
+    "daysToCoverQuantity": 1.39,
+    "issuerServicesGroupExchangeCode": "R",
+    "revisionFlag": null,
+    "changePercent": 5.28
+  },
+  {
+    "stockSplitFlag": null,
+    "previousShortPositionQuantity": 152248752,
+    "averageDailyVolumeQuantity": 90284162,
+    "issueName": "Intel Corporation Common Stock",
+    "currentShortPositionQuantity": 158808750,
+    "changePreviousNumber": 6559998,
+    "accountingYearMonthNumber": 20260915,
+    "settlementDate": "2026-09-15",
+    "marketClassCode": "NNM",
+    "symbolCode": "INTC",
+    "daysToCoverQuantity": 1.76,
+    "issuerServicesGroupExchangeCode": "R",
+    "revisionFlag": null,
+    "changePercent": 4.31
+  }
+]

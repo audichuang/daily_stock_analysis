@@ -4235,6 +4235,10 @@ class DataFetcherManager:
         cache_ttl = int(config.fundamental_cache_ttl_seconds)
         cache_max_entries = max(0, int(getattr(config, "fundamental_cache_max_entries", 256)))
         cache_key = self._get_fundamental_cache_key(stock_code, stage_timeout)
+        if market == "us" and getattr(config, "sec_edgar_user_agent", ""):
+            # 開關切換不能讀到另一種設定的證據快取；不在 key 留聯絡資料。
+            from hashlib import sha256
+            cache_key += ":sec:" + sha256(config.sec_edgar_user_agent.encode()).hexdigest()[:16]
         if cache_ttl > 0:
             self._prune_fundamental_cache(cache_ttl, cache_max_entries)
             with self._fundamental_cache_lock:
@@ -4353,6 +4357,20 @@ class DataFetcherManager:
         # 補充證據與核心區塊分離；每次請求都扣剩餘預算，失敗不丟棄其他讀數。
         if market == "us":
             evidence = dict(bundle_payload.get("us_evidence") or {})
+            user_agent = getattr(config, "sec_edgar_user_agent", "")
+            timeout = max(stage_timeout - (time.time() - start_ts), 0.0)
+            if user_agent and timeout > 0:
+                from .sec_edgar import SecEdgarClient
+                deadline = time.monotonic() + timeout
+                payload, error, _ = self._run_with_timeout(
+                    lambda: SecEdgarClient(user_agent, request_timeout=fetch_timeout).get_evidence(
+                        stock_code, deadline=deadline - min(.1, timeout / 10)),
+                    timeout, "us_evidence_sec_finra", quarantine_key=("sec_finra", "us_evidence"),
+                )
+                if payload:
+                    evidence.update(payload)
+                if error:
+                    result_ctx["errors"].append(error)
             for kind, key in (("insider", "insider_90d"), ("ratings", "ratings_30d")):
                 timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
                 if timeout <= 0:

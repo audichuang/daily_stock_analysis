@@ -29,6 +29,29 @@
 
 缺值與非有限值省略，來源明確回傳的 0 保留。證據不計入 coverage／基本面總狀態或規則評分。Yahoo 的預估盈餘、評等及持股可能延遲，事件後不可假設已更新。
 
+## SEC EDGAR 與 FINRA
+
+設定 `SEC_EDGAR_USER_AGENT` 為應用／組織名稱及實際可聯絡的 email，即在美股基本面 bundle 之後、Yahoo 活動摘要之前取得官方證據。不提供內建聯絡人；空白時 **SEC 與 FINRA 整包停用**，不發新請求、不追加欄位或提示詞。關閉時的傳統四種報告語言 prompt、agent messages 與結構化結果，對照 `b3306e7` 的 `tests/fixtures/sec_disabled_baseline.json` 逐字驗證。設定切換使用不同基本面快取鍵，避免讀到另一種開關狀態的證據。
+
+`data_provider/sec_edgar.py` 以 [SEC ticker 清單](https://www.sec.gov/files/company_tickers.json) 找 CIK；清單在程序內快取 24 小時，同一 CIK 可對應 GOOG／GOOGL 等多個 ticker。申報來源為 [SEC submissions API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)，必要時讀取官方歷史分頁。所有 SEC 請求跨執行緒共享最少 0.11 秒的起始間隔，符合 [SEC 10 req/s 與 User-Agent 規範](https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data)。這是單一程序的限速，多程序部署仍須自行分配總額度。
+
+| 上下文 | 來源與口徑 |
+| --- | --- |
+| `us_evidence.sec_filings.recent_8k` | 近 14 天（含邊界、排除未來）的 8-K；`date`、`accepted_at`（來源 UTC 時間）、`items`、`url`。Item 2.02 時掃描 accession 目錄 `index.json` 的 HTML 附件，以內容辨識財報新聞稿，不依賴 `ex99` 檔名；取得時附 `excerpt`、`excerpt_url`。摘錄去除 HTML、最多 6000 字元，財測／指引／重點優先，保留原文，非全文或模型摘要 |
+| `us_evidence.sec_filings.latest_10q_date` | 最近一份 10-Q 的申報日期；不下載整份季報、不取代既有財報數值 |
+| `us_evidence.insider_form4` | 近 90 天送件的 Form 4 原始 XML，僅合計交易日也在 90 天內的普通股 `P` 買進／`S` 賣出；含 `buy_shares`、`sell_shares`、`net_shares`、`classified_count`、`excluded_count`。A／M／F／G 等非市場代碼與衍生證券交易排除；無效股數不計入。XML 的 `xslF345X06/` 瀏覽轉換前綴不帶入原始 XML URL |
+| `us_evidence.finra_short` | [FINRA consolidatedShortInterest](https://developer.finra.org/docs#consolidated-short-interest) 的 `currentShortPositionQuantity` → `shares_short`（股）、`daysToCoverQuantity` → `days_to_cover`、`settlementDate` → `as_of`；以 `symbolCode EQUAL` 匿名 POST，不帶 `sortFields`，本機選最大且非未來的結算日 |
+
+Form 4 的 `filings_read`／`filings_available` 揭露讀取進度，`complete=false` 表示歷史分頁或 XML 未讀完；不得將部分合計當完整 90 天淨交易。完全沒讀到 XML 時不產生 Form 4 合計，保留 Yahoo；官方索引確認窗口內沒有申報時可回傳 0。合計是 **同一 CIK 的各股別普通股**，GOOG／GOOGL 不拆開；不合計衍生證券，也不對 `4/A` 修訂申報重算歷史。`complete` 只表示本輪原始 Form 4 清單讀取完整，不保證申報無漏報或無修訂。
+
+prompt 有 `insider_form4` 時只印官方交易合計，不再印 `insider_90d`。FINRA 股數／回補天數逐欄優先，官方缺的欄位才印 Yahoo；Yahoo 的流通股放空比例仍保留自身來源與日期，不能冒充 FINRA 同期數字。FINRA 的資料名稱雖位於 `otcMarket` 群組，實測亦回傳 INTC／GOOG 的 NNM 記錄；它是結算部位，非每日放空成交量。官方文件的一般授權契約要求 OAuth，本次匿名唯讀可用，不保證持續開放，401／403／400／逾時均省略該來源。
+
+FINRA 先查一次，再讀 SEC 索引、財報附件與 Form 4，兩來源各自失敗不互相丟棄結果。每個 HTTP 請求有明確 connect／read timeout，單項上限沿用 `FUNDAMENTAL_FETCH_TIMEOUT_SECONDS`，並扣剩餘期限；整包由既有有界工作池限制於 `FUNDAMENTAL_STAGE_TIMEOUT_SECONDS` 剩餘預算，略留回傳時間。預算不足就停止取得新資料，不延長階段、不重試。逾時工作可能稍後結束，但結果不再併入本次報告。這條路徑不碰資料庫、通知或 `capital_flow`，不改 coverage／評分。
+
+提示詞明列「SEC 官方申報，來源一手；新聞稿內容為公司自述」，以外部資料而非指令輸入。14 天內的 8-K 只有 Item 2.02 或已取得實質摘錄才加入 `news_evidence_present`；一般標頭、單獨 10-Q、Form 4、FINRA 均不算新聞證據。傳統與 agent 都在 finalize 前登記，`news_result_count` 仍只計搜尋結果，可能為 `None`／`0` 而同時有 SEC 新聞證據；旗標不保證申報與價格波動是同一事件。
+
+清空 `SEC_EDGAR_USER_AGENT` 即停用本功能；完整回滾為 revert 本次 commit。實測、fixture 來源與 mutation 詳見[SEC 驗證紀錄](research/2026-10-31-us-sec-evidence-verification.md)。
+
 ## 富途 OpenD：啟用與部署
 
 只有明確設定 `FUTU_OPEND_HOST` 才抓美股補充證據，使用現有 `FutuFetcher` 與既有 `futu-api`，沒有新增依賴。沿用 `FUTU_OPEND_PORT`（既有預設 11111）。設定 `FUTU_OPEND_HOST` 也會同時啟用既有港股富途報價／基本面路徑，並非只開美股證據。
@@ -67,7 +90,7 @@ EVENT_GAP_LOOKBACK_SESSIONS=5
 
 日線優先採用 `pct_chg`，缺值時才由相鄰收盤價計算。傳統與 agent 分流前共用已載入的日線，最多帶回看場次加一筆作前收比較，不新增行情網路請求；日線不足以判定時，保留原有僅看當日 `change_pct`／`today.pct_chg` 的處理，不用收盤價冒充缺失低點。`event_date`、`change_pct`、`event_low`、`sessions_since_event` 記錄所選事件日、該日幅度、低點與距今場次。傳統 system／user 與 agent 的 system prompt 都明列日期、幅度和已知低點；低點未知時省略該行。
 
-事件視窗與新聞時效分開：在目前 3 天新聞設定下，搜尋仍只保留今日與前 2 個日曆日，本地情報池沿用最近 3 天（滾動 72 小時）的查詢。週五事件到週一僅隔 1 個交易場次，仍在事件視窗內，但發布日標為週五的文章已超出搜尋的 3 日視窗。若本地情報、近期追蹤新聞與社交證據也都沒有，`news_evidence_present=false`，程式仍會觀望，即使歷史上確實發生財報事件。反之，任一現有來源有近期證據即可為 true，旗標不保證是同一事件。此輪不把事件日帶入搜尋，也不放寬新聞視窗。
+事件視窗與新聞時效分開：在目前 3 天新聞設定下，搜尋仍只保留今日與前 2 個日曆日，本地情報池沿用最近 3 天（滾動 72 小時）的查詢。週五事件到週一僅隔 1 個交易場次，仍在事件視窗內，但發布日標為週五的文章已超出搜尋的 3 日視窗。若本地情報、近期追蹤新聞與社交證據也都沒有，且未取得前節的 SEC 實質 8-K，`news_evidence_present=false`，程式仍會觀望，即使歷史上確實發生財報事件。啟用 SEC 後，近 14 天財報申報可在搜尋過期時補足證據；旗標仍不保證是同一事件。不把事件日帶入搜尋，也不放寬搜尋新聞視窗。
 
 觸發時，傳統分析與單 agent／多策略各 stage 的 system prompt 追加繁中優先規則：先判事件與投資論題，再判事件後下修估值，最後觀察幾個交易日不破事件低點與量縮。可分批試單，但必須交代失效條件；重新評估不得使用含事件前價格的均線。提示詞不保證模型遵守，沒有新增對模型文字的掃描或自動解讀。
 

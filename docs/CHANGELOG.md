@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 美股設定 SEC_EDGAR_USER_AGENT 後，基本面證據追加 SEC 近 14 天 8-K、財報新聞稿摘錄、最近 10-Q、近 90 天 Form 4 P／S 普通股交易，以及 FINRA 最新結算放空部位；共用剩餘預算、來源失敗省略，不計入評分。
+- [修復] 傳統與 agent 的新聞證據納入近 14 天具有 Item 2.02 或實質摘錄的 SEC 8-K，避免財報超過搜尋窗口後誤觸無新聞觀望；搜尋計數維持原意，官方內部人／放空讀數優先，未設定 User-Agent 時維持原輸出。
+- [測試] 新增 SEC／FINRA 實際回應縮本、關閉功能的逐字快照與正反 mutation，記錄 INTC／GOOG 唯讀取證結果。
+
 - [修復] 事件判讀改為最近 5 個交易場次（含當日）有效，可用 EVENT_GAP_LOOKBACK_SESSIONS 調整；傳統與 agent 共用已載入日線，以最近符合門檻的收盤事件套用提示詞與無新聞護欄。
 - [改進] 事件提示詞明列事件日期、漲跌幅及可用的事件日低點，避免模型把收盤價當低點；補齊所有支援語言的無新聞護欄參數化測試。
 - [文件] 將首輪美股證據驗證快照移至 research，補上 audinas OpenD 的正式位址、10.9.6918 版本與升版登入限制，以及事件／新聞視窗不同步的實際行為。

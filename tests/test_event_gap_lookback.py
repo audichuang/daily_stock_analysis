@@ -163,7 +163,7 @@ def test_loaded_daily_history_reaches_both_pipeline_paths_without_extra_fetch(mo
         return pipeline
     monkeypatch.setattr(fixtures, "_analysis_pipeline", build)
     monkeypatch.setattr(original, "_context", lambda: context)
-    original.test_actual_pipeline_paths_use_market_availability_and_event_rules(monkeypatch, caplog, agent, True, 0)
+    original.test_actual_pipeline_paths_use_market_availability_and_event_rules(monkeypatch, caplog, agent, True, 0, "disabled")
     pipeline = pipelines[0]
     pipeline.db.get_data_range.assert_called_once()
     pipeline.fetcher_manager.get_daily_data.assert_not_called()

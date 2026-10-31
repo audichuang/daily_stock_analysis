@@ -78,6 +78,7 @@ from src.agent.news_evidence import (
     reset_news_evidence_scope,
 )
 from src.services.empty_news import news_evidence_present
+from data_provider.us_evidence import sec_news_evidence_present
 from src.formatters import strip_hidden_markdown_metadata
 from src.phase_decision_guardrail import apply_phase_decision_guardrails
 from src.services.daily_market_context import (
@@ -1045,6 +1046,7 @@ class StockAnalysisPipeline:
                         news_result_count,
                         social_evidence_context,
                         persisted_intelligence_context,
+                        sec_news_evidence_present(fundamental_context),
                     )
                 record_llm_run(
                     success=bool(result and getattr(result, "success", True)),
@@ -1893,6 +1895,7 @@ class StockAnalysisPipeline:
                     result.news_result_count,
                     social_evidence_context,
                     persisted_intelligence_context,
+                    sec_news_evidence_present(fundamental_context),
                 )
             record_llm_run(
                 success=bool(result and getattr(result, "success", True)),
