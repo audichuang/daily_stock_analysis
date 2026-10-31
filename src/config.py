@@ -1095,6 +1095,7 @@ class Config:
     bocha_api_keys: List[str] = field(default_factory=list)  # Bocha API Keys
     minimax_api_keys: List[str] = field(default_factory=list)  # MiniMax API Keys
     tavily_api_keys: List[str] = field(default_factory=list)  # Tavily API Keys
+    deepseek_search_api_keys: List[str] = field(default_factory=list)  # 獨立搜尋金鑰，不用於模型路由
     finmind_tokens: List[str] = field(default_factory=list)  # fork: FINMIND_TOKEN_1..N，台股個股新聞（FinMind）
     brave_api_keys: List[str] = field(default_factory=list)  # Brave Search API Keys
     serpapi_keys: List[str] = field(default_factory=list)  # SerpAPI Keys
@@ -1847,6 +1848,7 @@ class Config:
 
         tavily_keys_str = os.getenv('TAVILY_API_KEYS', '')
         tavily_api_keys = [k.strip() for k in tavily_keys_str.split(',') if k.strip()]
+        deepseek_search_api_keys = [k.strip() for k in os.getenv('DEEPSEEK_SEARCH_API_KEYS', '').split(',') if k.strip()]
         # fork: 沿用 Doppler `finmind` 專案的命名 FINMIND_TOKEN_1..N（多組輪流使用）
         finmind_tokens = [
             os.environ[name].strip()
@@ -2046,6 +2048,7 @@ class Config:
             bocha_api_keys=bocha_api_keys,
             minimax_api_keys=minimax_api_keys,
             tavily_api_keys=tavily_api_keys,
+            deepseek_search_api_keys=deepseek_search_api_keys,
             finmind_tokens=finmind_tokens,
             brave_api_keys=brave_api_keys,
             serpapi_keys=serpapi_keys,
@@ -3242,6 +3245,7 @@ class Config:
             or self.bocha_api_keys
             or self.minimax_api_keys
             or self.tavily_api_keys
+            or self.deepseek_search_api_keys
             or self.finmind_tokens
             or self.brave_api_keys
             or self.serpapi_keys

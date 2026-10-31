@@ -10,6 +10,35 @@
 
 `TAVILY_API_KEYS` 支援逗號分隔的多把金鑰。每個 provider 建立時隨機選輪替起點；同一次搜尋遇到認證／額度錯誤立即切到下一把，每把最多一次（重複金鑰先去重）。一般搜尋與 `topic=news` 共用邏輯。其他錯誤與成功的零命中不切換金鑰，也不加延遲重試。
 
+## DeepSeek 媒體與網頁搜尋
+
+以 `DEEPSEEK_SEARCH_API_KEYS`（逗號分隔、空白省略）啟用，預設空白，僅環境設定、不增加 Web 介面。**不讀取模型用的 `DEEPSEEK_API_KEY`／`DEEPSEEK_API_KEYS`，搜尋金鑰也不注入 LiteLLM**，避免改變模型推斷與路由。未設定時，保留原 provider 順序、搜尋結果、傳統四語 prompt、agent 使用者訊息與決策結果，對照修改前 `96761715` 的快照測試；下節新增的事件事實是獨立能力，不受搜尋開關控制。
+
+啟用時通用 provider 順序為 DeepSeek → Tavily → 其餘原有來源（其餘相對順序保留）。台股 `search_stock_news` 為 FinMind → DeepSeek → Tavily；其他市場不經 FinMind。任一來源失敗、零結果，或經日期／關聯過濾後沒有可用結果，會真正呼叫下一來源。
+
+`search_comprehensive_intel` **保留原本按面向輪流選起點的邏輯**，不是每個面向都先問 DeepSeek。只設定 DeepSeek 與 Tavily 且各面向首選皆成功時：
+
+| 市場 | 最新消息 | 機構分析 | 風險排查 | 第四面向 | 第五面向 |
+| --- | --- | --- | --- | --- | --- |
+| 美股 | DeepSeek | Tavily | DeepSeek | 財報：Tavily | 產業：DeepSeek |
+| 台股 | 有 token 時 FinMind，否則 DeepSeek | Tavily | DeepSeek | 公告：Tavily | 財報：DeepSeek |
+
+FinMind 只插入台股「最新消息」最前面，不影響其他面向輪替；失敗後沿該面向的候選順序嘗試，沒有可用來源才保留失敗。設定其他 provider 時仍依可用來源數輪流，不改演算法。預設 `max_searches=3` 只跑前三個面向；本次真實驗收用 5 以涵蓋第四、第五面向。中文／英文名稱沿既有別名解析與查詢組裝，DeepSeek 保留 Unicode 字元，不限定英文。
+
+依 [DeepSeek 官方文件](https://api-docs.deepseek.com/guides/search/)，使用 `POST https://api.deepseek.com/v1/tools/search`、Bearer 與 JSON 的 `query`／`count`。查詢含 `after:`／`before:` 日界；原查詢已有同名運算子則不重複加入，`site:`／`lang:` 可沿用。先為日界保留長度，再截查詢，總長不超過 128 Unicode 字元，空白查詢不發請求；`count` 介於 1～50，每次 HTTP 最多等 10 秒。來源 `summary` 進 `SearchResult.snippet`，無 summary 才取 snippet；**每則含日期提醒最多 500 字元**，比照本專案 Tavily 既有的 500 字元，避免 2000～5000 字元的原始摘要放大 prompt。沿用每面向最多 3 則的最終限制。
+
+DeepSeek 與 Tavily 的金鑰輪替抽至 `RotatingKeySearchProvider`：隨機起點、重複 key 去重、同一呼叫每把最多一次，401／402／429 換下一把；Tavily 另保留 SDK 類別與 432／433 的辨識。其他錯誤不換 key，200 零結果不換 key，而由 SearchService 改試下一 provider；不新增同一把 key 的重試。日誌不含金鑰前綴或例外本文，失敗結果僅留例外類別。官方說明只對 200 且有結果計費，價格與權限仍以官方當時契約為準。
+
+### 日期精度與三天窗口
+
+官方宣稱 `date` 為 UTC RFC 3339；本次財報查詢 12／12、四檔多面向 DeepSeek 原始結果 72／72 均固定為 `16:00:00+00:00`。INTC 官方新聞稿原文為 **2026-10-29 16:01 EDT**，搜尋卻標 `2026-10-28T16:00:00+00:00`；Alphabet 逐字稿原文日期 **10/28**，搜尋標 `10/27T16:00:00+00:00`。這些值不是精確發布時刻。
+
+根據樣本，推論來源以 **UTC+8 日曆日的午夜**包裝日期，轉成 UTC 後落在前一天 16:00。本 provider 只對這個已觀察型態還原 UTC+8 日曆日，其他帶時區的時間保留其 UTC 日，不一律加一天，也不依部署機器的本地時區決定此換日。輸出明標「DeepSeek 搜尋日期未經原文核實；日級日期非精確發布時間」。此推論不是 DeepSeek 對內部實作的確認，不保證全站的日期正確。
+
+`latest_news`、個股 `risk_check`、台股 `announcements` 仍做既有三天窗口過濾，日期未知則換下一來源；不以擷取時間冒充發布時間，不放寬全域窗口。測試同時確認前 2 天的邊界可保留、前 3 天及更舊資料仍剔除。機構分析與財報面向沿原有 180 天、可保留未知日期的政策，不應誤讀成每個面向都只含三天新聞。原始值、原文發布日期、四檔各面向的來源／筆數／標題／日期見[本輪驗證紀錄](research/2026-10-31-deepseek-search-event-verification.md)。
+
+DeepSeek 搜尋的是媒體與網頁，包含搜尋引擎排序、摘要與日期推定；SEC 是下節的一手申報，保留 accession、官方時間與公司新聞稿原文。搜尋結果不取代 SEC 申報事實，SEC 新聞稿內容仍是公司自述，兩者都不代表獨立核實投資論題。
+
 實際 Tavily SDK 將 401 映射為 `InvalidAPIKeyError`，429 為 `UsageLimitExceededError`，403／432／433 為 `ForbiddenError`。因此這三類 SDK 例外會切換；仍保有 HTTP response 的例外則精確檢查 401／429／432／433。SDK 的 `ForbiddenError` 已失去原始狀態碼，無法再區別 403 和 432／433。錯誤分類不靠文字比對。來源：[官方 HTTP 錯誤說明](https://help.tavily.com/articles/8645538886-understanding-http-errors)、[官方 Python SDK](https://github.com/tavily-ai/tavily-python/blob/master/tavily/tavily.py)。
 
 ## yfinance 證據
@@ -93,6 +122,8 @@ EVENT_GAP_LOOKBACK_SESSIONS=5
 事件視窗與新聞時效分開：在目前 3 天新聞設定下，搜尋仍只保留今日與前 2 個日曆日，本地情報池沿用最近 3 天（滾動 72 小時）的查詢。週五事件到週一僅隔 1 個交易場次，仍在事件視窗內，但發布日標為週五的文章已超出搜尋的 3 日視窗。若本地情報、近期追蹤新聞與社交證據也都沒有，且未取得前節的 SEC 實質 8-K，`news_evidence_present=false`，程式仍會觀望，即使歷史上確實發生財報事件。啟用 SEC 後，近 14 天財報申報可在搜尋過期時補足證據；旗標仍不保證是同一事件。不把事件日帶入搜尋，也不放寬搜尋新聞視窗。
 
 觸發時，傳統分析與單 agent／多策略各 stage 的 system prompt 追加繁中優先規則：先判事件與投資論題，再判事件後下修估值，最後觀察幾個交易日不破事件低點與量縮。可分批試單，但必須交代失效條件；重新評估不得使用含事件前價格的均線。提示詞不保證模型遵守，沒有新增對模型文字的掃描或自動解讀。
+
+事件事實另提供 `post_event_min_close`（事件日之後、已知日線的最低收盤）、`latest_close`（最新場次已知收盤）、`event_low_broken`（已知事件後最低收盤嚴格低於事件日低點）。事件當日不混入事件後統計，觸及而未低於不算跌破；反彈不會抹掉先前收盤已跌破的事實。缺少相應資料就省略欄位與提示行，不把即時價當收盤，也不由未知日線推論「守住」。提示詞明講已跌破時，止跌條件須改用事件後新低重新計算，不得假設事件日低點仍守住；這是收盤觀察，不保證盤中沒有跌破。此增補不改評分或無新聞護欄。
 
 如果結構化 `news_evidence_present=false`，共用 `_finalize_and_persist_result` 在其他護欄完成後、歷史與決策訊號寫入前，強制 `decision_type=hold`、`action=watch`、低信心，清除可執行交易計畫，揭露「重大波動但沒有新聞，不下買賣結論」。結果在 `dashboard.event_gap` 追加同一事件的日期、幅度、低點、距今場次、門檻、證據狀態與護欄原因。這項決策調整與富途純資訊無關。
 

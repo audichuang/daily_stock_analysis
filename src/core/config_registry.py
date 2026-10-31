@@ -71,6 +71,8 @@ _CATEGORY_DEFINITIONS: List[Dict[str, Any]] = [
 ]
 
 WEB_SETTINGS_HIDDEN_FROM_UI = {
+    # DeepSeek 搜尋金鑰僅由環境設定，與模型用的 DEEPSEEK_API_KEY 分開。
+    "DEEPSEEK_SEARCH_API_KEYS",
     # SEC 聯絡資訊僅由環境設定，不新增 Web 編輯介面。
     "SEC_EDGAR_USER_AGENT",
     # 事件判讀僅由環境設定，不新增 Web 編輯介面。

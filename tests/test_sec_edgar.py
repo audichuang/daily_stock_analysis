@@ -247,6 +247,8 @@ def test_unset_config_and_baseline_byte_for_byte(monkeypatch):
     for language, expected in baseline["prompts"].items():
         assert sha256(_analyzer()._format_prompt(context, "Test", report_language=language).encode()).hexdigest() == expected
     _, saved, _ = _finish(SimpleNamespace(report_language="zh-TW", event_gap_decision_enabled=True, event_gap_threshold_pct=12), context)
+    # 本輪獨立新增事件收盤事實；舊 SEC 快照保留，先逐值驗證新增欄再比對其餘內容。
+    assert saved["dashboard"]["event_gap"].pop("latest_close") == context["today"]["close"]
     assert saved == baseline["result"]
     from src.agent.executor import AgentExecutor
     executor = AgentExecutor.__new__(AgentExecutor)
