@@ -103,6 +103,12 @@ def test_same_url_from_later_analysis_does_not_rewrite_older_report(tmp_path, mo
         _save(manager, "AAPL", "first", "AAPL 那輪的摘要")
         _save(manager, "MSFT", "second", "MSFT 那輪的摘要")
         assert [r.snippet for r in manager.get_news_intel_by_query_id("first", limit=5)] == ["AAPL 那輪的摘要"]
+        # 第二次分析搜到同網址也要查得到，不能因為去重變成「沒有新聞」。
+        assert [r.snippet for r in manager.get_news_intel_by_query_id("second", limit=5)] == ["AAPL 那輪的摘要"]
+        assert [r.url for r in manager.get_news_intel_by_query_id("second", limit=5, code="MSFT")] == [
+            "https://example.test/same"]
+        assert manager.get_news_intel_by_query_id("second", limit=5, code="AAPL") == []
+        assert manager.get_news_intel_by_query_id("first", limit=5, code="AAPL")[0].code == "AAPL"
         # 同一次分析重存仍要能更新。
         _save(manager, "AAPL", "first", "補完整的摘要")
         assert [r.snippet for r in manager.get_news_intel_by_query_id("first", limit=5)] == ["補完整的摘要"]

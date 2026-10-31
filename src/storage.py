@@ -199,6 +199,15 @@ class StockDaily(Base):
         }
 
 
+class NewsIntelLink(Base):
+    """一次分析讀到哪些新聞。news_intel 依網址去重只存一筆，同網址可屬於多次分析。"""
+
+    __tablename__ = 'news_intel_links'
+    query_id = Column(String(64), primary_key=True)
+    news_id = Column(Integer, primary_key=True)
+    code = Column(String(32), nullable=False, index=True)
+
+
 class NewsIntel(Base):
     """
     新闻情报数据模型
@@ -1480,6 +1489,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             self._ensure_intelligence_items_unique_index()
             self._ensure_chat_session_schema()
             self._ensure_calendar_event_schema()
+            self._ensure_news_intel_link_schema()
 
             self._initialized = True
             logger.info("数据库初始化完成: %s", self._engine.url.render_as_string(hide_password=True))
@@ -1527,6 +1537,14 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             raise
         finally:
             session.close()
+
+    def _ensure_news_intel_link_schema(self) -> None:
+        """可重入的追加 migration；舊報告仍靠 news_intel.query_id 查得到。"""
+        NewsIntelLink.__table__.create(self._engine, checkfirst=True)
+        self._ensure_schema_migration_record(
+            version="2026-11-01-news-intel-links",
+            description="Link one news row to every analysis that read it",
+        )
 
     def _ensure_calendar_event_schema(self) -> None:
         """可重入的追加 migration；既有應用庫只建新表，不改舊欄位。"""
@@ -2713,6 +2731,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     select(NewsIntel).where(NewsIntel.url == url_key)
                 ).scalar_one_or_none()
 
+                if existing and current_query_id:
+                    session.merge(NewsIntelLink(query_id=current_query_id, news_id=existing.id, code=code))
                 # 同網址只存一筆：已屬於另一次分析時不覆寫內容，舊報告才不會顯示後來才取得的摘要與分類。
                 if existing and existing.query_id and current_query_id and existing.query_id != current_query_id:
                     continue
@@ -2778,6 +2798,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                         )
                         session.add(record)
                         session.flush()
+                        if current_query_id:
+                            session.merge(NewsIntelLink(query_id=current_query_id, news_id=record.id, code=code))
                     local_saved_count += 1
                 except IntegrityError:
                     logger.debug("新闻情报重复（已跳过）: %s %s", code, url_key)
@@ -3083,12 +3105,14 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         from sqlalchemy import func
 
         with self.get_session() as session:
-            conditions = [NewsIntel.query_id == query_id]
+            owned = [NewsIntel.query_id == query_id]
+            links = select(NewsIntelLink.news_id).where(NewsIntelLink.query_id == query_id)
             if code is not None:
-                conditions.append(NewsIntel.code == code)
+                owned.append(NewsIntel.code == code)
+                links = links.where(NewsIntelLink.code == code)
             results = session.execute(
                 select(NewsIntel)
-                .where(*conditions)
+                .where(or_(and_(*owned), NewsIntel.id.in_(links)))
                 .order_by(
                     desc(func.coalesce(NewsIntel.published_date, NewsIntel.fetched_at)),
                     desc(NewsIntel.fetched_at)
