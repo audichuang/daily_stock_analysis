@@ -816,6 +816,7 @@ class StockAnalysisPipeline:
 
             # Step 3: 趋势分析（基于交易理念）— 在 Agent 分支之前执行，供两条路径共用
             trend_result: Optional[TrendAnalysisResult] = None
+            event_gap_daily_bars = None
             try:
                 from src.services.history_loader import get_frozen_target_date
                 _mkt = get_market_for_stock(normalize_stock_code(code))
@@ -825,6 +826,9 @@ class StockAnalysisPipeline:
                 historical_bars = self.db.get_data_range(code, start_date, end_date)
                 if historical_bars:
                     df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
+                    if getattr(self.config, "event_gap_decision_enabled", False) is True:
+                        lookback = getattr(self.config, "event_gap_lookback_sessions", 5)
+                        event_gap_daily_bars = df.tail(lookback + 1).to_dict(orient="records")
                     df = self._build_trend_input_frame(df, realtime_quote, code, market)
                     trend_result = self._run_trend_analysis(df, code, market_phase_context_dict)
                     logger.info(f"{stock_name}({code}) 趋势分析: {trend_result.trend_status.value}, "
@@ -850,6 +854,7 @@ class StockAnalysisPipeline:
                     portfolio_context=portfolio_context,
                     market_structure_context=market_structure_context,
                     analysis_target=analysis_target,
+                    **({"event_gap_daily_bars": event_gap_daily_bars} if event_gap_daily_bars is not None else {}),
                 )
 
             # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
@@ -959,6 +964,8 @@ class StockAnalysisPipeline:
                 market_phase_context=market_phase_context_dict,
                 portfolio_context=portfolio_context,
             )
+            if event_gap_daily_bars is not None:
+                enhanced_context["event_gap_daily_bars"] = event_gap_daily_bars
             from src.services.event_gap import event_gap_context
             event = event_gap_context(code, enhanced_context, self.config)
             if event:
@@ -1693,6 +1700,7 @@ class StockAnalysisPipeline:
         portfolio_context: Optional[Dict[str, Any]] = None,
         market_structure_context: Optional[Dict[str, Any]] = None,
         analysis_target: Optional[AnalysisTarget] = None,
+        event_gap_daily_bars: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[AnalysisResult]:
         """
         使用 Agent 模式分析单只股票。
@@ -1795,6 +1803,8 @@ class StockAnalysisPipeline:
             analysis_context = self._load_agent_analysis_context(
                 code, stock_name, analysis_target=analysis_target
             )
+            if event_gap_daily_bars is not None:
+                initial_context["event_gap_daily_bars"] = event_gap_daily_bars
             event = event_gap_context(code, {**analysis_context, **initial_context}, self.config)
             if event:
                 initial_context["event_gap"] = event

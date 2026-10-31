@@ -31,15 +31,17 @@
 
 ## 富途 OpenD：啟用與部署
 
-只有明確設定 `FUTU_OPEND_HOST` 才抓美股補充證據，使用現有 `FutuFetcher` 與既有 `futu-api`，沒有新增依賴。沿用 `FUTU_OPEND_PORT`（既有預設 11111）。
+只有明確設定 `FUTU_OPEND_HOST` 才抓美股補充證據，使用現有 `FutuFetcher` 與既有 `futu-api`，沒有新增依賴。沿用 `FUTU_OPEND_PORT`（既有預設 11111）。設定 `FUTU_OPEND_HOST` 也會同時啟用既有港股富途報價／基本面路徑，並非只開美股證據。
 
 ```dotenv
 # 填 DSA 執行環境能到達的 OpenD 主機／服務名稱
-FUTU_OPEND_HOST=opend
+FUTU_OPEND_HOST=192.168.31.105
 FUTU_OPEND_PORT=11111
 ```
 
-部署者先在可登入富途帳號的主機執行 OpenD，完成登入及美股行情權限配置，再讓 DSA 容器與 OpenD 位於可互通的網路。若兩者在相同 Docker network，可使用 OpenD 的 service name；OpenD 在另一台主機時填可達的內網位址。容器內 `127.0.0.1` 指容器本身，只有 OpenD 與 DSA 共用 network namespace 才適用。限制監聽範圍與防火牆，不把 OpenD 端口直接公開到網際網路。本次不改 Compose、不部署 NAS。
+部署者先在可登入富途帳號的主機執行 OpenD，完成登入及美股行情權限配置，再讓 DSA 容器與 OpenD 位於可互通的網路。若兩者在相同 Docker network，可使用 OpenD 的 service name；OpenD 在另一台主機時填可達的內網位址。容器內 `127.0.0.1` 指容器本身，只有 OpenD 與 DSA 共用 network namespace 才適用。限制監聽範圍與防火牆，不把 OpenD 端口直接公開到網際網路。
+
+目前正式 OpenD 跑在 **audinas**，ops repo 的 `hosts/audinas/futu-opend` 管理部署，DSA 使用 `FUTU_OPEND_HOST=192.168.31.105`。版本釘在 **10.9.6918**：10.10 起設定檔自動登入被移除，10.12 命令列互動登入已實測回 `Account credentials incomplete`，因此不能直接假設升版後仍可沿用目前登入方式。這些為本次使用者提供的真實驗收紀錄。
 
 此路徑只讀行情，不呼叫交易 API、不依賴期權權限，也不採用富途 PE（快照與 K 線口徑已有矛盾實例）。未開戶帳號能否取到資料仍以實際行情權限為準，沒有資料不補 0。
 
@@ -58,16 +60,23 @@ FUTU_OPEND_PORT=11111
 ```dotenv
 EVENT_GAP_DECISION_ENABLED=false
 EVENT_GAP_THRESHOLD_PCT=12
+EVENT_GAP_LOOKBACK_SESSIONS=5
 ```
 
-預設關閉。開啟後，僅美股個股與合法台股代碼，在當日漲跌幅絕對值大於或等於門檻時觸發。這裡的「gap」是設定名稱，計算使用當日漲跌幅，並非開盤跳空幅度。優先讀即時報價的 `change_pct`，缺少才讀日線 `today.pct_chg`；沒有有效值不觸發。
+預設關閉。開啟後，僅美股個股與合法台股代碼，在最近 `EVENT_GAP_LOOKBACK_SESSIONS` 個交易場次（預設 5，含當日）中，任一日收盤漲跌幅絕對值大於或等於門檻就觸發；多日符合時取最近一場。5 場表示事件距今 0～4 場有效，距事件日達 5 場即失效，週末與假日不額外計數。這裡的「gap」是設定名稱，並非開盤跳空幅度。
+
+日線優先採用 `pct_chg`，缺值時才由相鄰收盤價計算。傳統與 agent 分流前共用已載入的日線，最多帶回看場次加一筆作前收比較，不新增行情網路請求；日線不足以判定時，保留原有僅看當日 `change_pct`／`today.pct_chg` 的處理，不用收盤價冒充缺失低點。`event_date`、`change_pct`、`event_low`、`sessions_since_event` 記錄所選事件日、該日幅度、低點與距今場次。傳統 system／user 與 agent 的 system prompt 都明列日期、幅度和已知低點；低點未知時省略該行。
+
+事件視窗與新聞時效分開：在目前 3 天新聞設定下，搜尋仍只保留今日與前 2 個日曆日，本地情報池沿用最近 3 天（滾動 72 小時）的查詢。週五事件到週一僅隔 1 個交易場次，仍在事件視窗內，但發布日標為週五的文章已超出搜尋的 3 日視窗。若本地情報、近期追蹤新聞與社交證據也都沒有，`news_evidence_present=false`，程式仍會觀望，即使歷史上確實發生財報事件。反之，任一現有來源有近期證據即可為 true，旗標不保證是同一事件。此輪不把事件日帶入搜尋，也不放寬新聞視窗。
 
 觸發時，傳統分析與單 agent／多策略各 stage 的 system prompt 追加繁中優先規則：先判事件與投資論題，再判事件後下修估值，最後觀察幾個交易日不破事件低點與量縮。可分批試單，但必須交代失效條件；重新評估不得使用含事件前價格的均線。提示詞不保證模型遵守，沒有新增對模型文字的掃描或自動解讀。
 
-如果結構化 `news_evidence_present=false`，共用 `_finalize_and_persist_result` 在其他護欄完成後、歷史與決策訊號寫入前，強制 `decision_type=hold`、`action=watch`、低信心，清除可執行交易計畫，揭露「重大波動但沒有新聞，不下買賣結論」。結果在 `dashboard.event_gap` 追加觸發幅度、門檻、證據狀態與護欄原因。這項決策調整與富途純資訊無關。
+如果結構化 `news_evidence_present=false`，共用 `_finalize_and_persist_result` 在其他護欄完成後、歷史與決策訊號寫入前，強制 `decision_type=hold`、`action=watch`、低信心，清除可執行交易計畫，揭露「重大波動但沒有新聞，不下買賣結論」。結果在 `dashboard.event_gap` 追加同一事件的日期、幅度、低點、距今場次、門檻、證據狀態與護欄原因。這項決策調整與富途純資訊無關。
 
 未開啟或未達門檻時，事件功能不追加 prompt／結果欄位。`tests/fixtures/event_gap_baseline.json` 保存修改前 commit 的 16 組完整 prompt 雜湊與結果序列化快照；新證據出現時的 prompt 增補則屬前述獨立資料能力。
 
 關閉事件功能可設 `EVENT_GAP_DECISION_ENABLED=false`；停用富途證據可清空 `FUTU_OPEND_HOST`。完整回滾使用本次 commit 的 revert，不改舊歷史紀錄。本文沒有對應的英文版；README 中英雙語首頁均未改動，細節集中於此專題文件。
 
-本次離線驗收與逐項 mutation 結果見[驗證紀錄](us-data-evidence-verification.md)。
+首輪離線驗收與逐項 mutation 結果見[驗證紀錄](research/2026-10-31-us-data-evidence-verification.md)。
+
+事件交易日視窗、新聞時效與本輪 mutation 見[修正驗證紀錄](research/2026-10-31-us-event-gap-lookback-verification.md)。

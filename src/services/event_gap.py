@@ -1,4 +1,5 @@
 """重大波動的事件判讀與無新聞護欄；開關關閉時完全不改原結果。"""
+from datetime import date
 from math import isfinite
 
 from data_provider.us_index_mapping import is_us_stock_code
@@ -18,34 +19,102 @@ EVENT_GAP_RULES = """
 """
 
 
+def _finite(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if isfinite(value) else None
+
+
+def _session_date(value):
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
 def event_gap_context(code, context, config):
     if getattr(config, "event_gap_decision_enabled", False) is not True:
         return None
     if not (is_us_stock_code(code) or get_suffix_market(code) == "tw"):
         return None
-    realtime = context.get("realtime") or context.get("realtime_quote") or {}
-    change = realtime.get("change_pct")
-    if change is None:
-        change = context.get("today", {}).get("pct_chg")
-    try:
-        change = float(change)
-    except (TypeError, ValueError):
-        return None
     threshold = getattr(config, "event_gap_threshold_pct", 12.0)
-    if not isfinite(change) or abs(change) < threshold:
+    lookback = getattr(config, "event_gap_lookback_sessions", 5)
+    today = context.get("today") or {}
+    current_date = _session_date(today.get("date")) or _session_date(context.get("date"))
+    sessions = {}
+    # 上下文先提供缺值補充；共用的原始日線最後寫入，同日實際收盤資料優先。
+    sources = [(False, context.get("yesterday") or {}), (False, {**today, "date": current_date})]
+    sources.extend((True, row) for row in (context.get("event_gap_daily_bars") or []))
+    for actual, row in sources:
+        if not isinstance(row, dict):
+            continue
+        session_date = _session_date(row.get("date"))
+        if session_date is None or (current_date is not None and session_date > current_date):
+            continue
+        values = sessions.setdefault(session_date, {"date": session_date.isoformat()})
+        if actual and _finite(row.get("close")) is not None and _finite(row.get("pct_chg")) is None:
+            # 原始收盤已有值時，缺失幅度由相鄰收盤計算，不沿用同日估算列的幅度。
+            values.pop("pct_chg", None)
+        for field in ("close", "pct_chg", "low"):
+            value = _finite(row.get(field))
+            if value is not None:
+                values[field] = value
+    ordered = [sessions[key] for key in sorted(sessions)]
+    current_change = None
+    for index in range(len(ordered) - 1, max(-1, len(ordered) - lookback - 1), -1):
+        row = ordered[index]
+        change = row.get("pct_chg")
+        if change is None and index > 0:
+            previous = ordered[index - 1].get("close")
+            close = row.get("close")
+            if previous is not None and previous > 0 and close is not None:
+                change = (close / previous - 1) * 100
+        if change is not None and abs(change) >= threshold:
+            return {"triggered": True, "event_date": row["date"], "change_pct": change,
+                    "event_low": row.get("low"), "sessions_since_event": len(ordered) - 1 - index,
+                    "threshold_pct": threshold}
+        if index == len(ordered) - 1:
+            current_change = change
+    # 有當日日線可判定時不拿即時價推翻收盤；歷史不足才沿用原有當日判定。
+    if ordered and current_change is not None:
         return None
-    return {"triggered": True, "change_pct": change, "threshold_pct": threshold}
+    realtime = context.get("realtime") or context.get("realtime_quote") or {}
+    change = _finite(realtime.get("change_pct"))
+    if change is None:
+        change = _finite(today.get("pct_chg"))
+    if change is None or abs(change) < threshold:
+        return None
+    low = _finite(today.get("low"))
+    if low is None:
+        low = _finite(realtime.get("low"))
+    return {"triggered": True, "event_date": current_date.isoformat() if current_date else None,
+            "change_pct": change, "event_low": low, "sessions_since_event": 0, "threshold_pct": threshold}
 
 
 def event_gap_prompt(event):
-    return EVENT_GAP_RULES if event and event.get("triggered") else ""
+    if not event or not event.get("triggered"):
+        return ""
+    facts = ["事件日期：" + str(event.get("event_date") or "未提供")]
+    change = _finite(event.get("change_pct"))
+    if change is not None:
+        facts.append(f"事件日漲跌幅：{change:g}%")
+    low = _finite(event.get("event_low"))
+    if low is not None:
+        facts.append(f"事件日低點：{low:g}")
+    if event.get("sessions_since_event") is not None:
+        facts.append(f"距事件日交易場次：{event['sessions_since_event']}")
+    return EVENT_GAP_RULES + "\n事件事實（來源：日線；不足時僅當日報價）：\n" + "\n".join(facts) + "\n"
 
 
 def apply_event_gap_guard(result, event, report_language):
     """只讀結構化新聞證據，最後覆蓋買賣動作並隨結果保存。"""
     if not event:
         return
-    from src.report_language import localize_confidence_level, localize_operation_advice
+    from src.report_language import localize_confidence_level, localize_operation_advice, normalize_report_language
+
+    report_language = normalize_report_language(report_language)
 
     event = dict(event)
     event["news_evidence_present"] = result.news_evidence_present

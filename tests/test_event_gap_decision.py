@@ -142,6 +142,7 @@ def test_actual_pipeline_paths_use_market_availability_and_event_rules(monkeypat
     pipeline.config.agent_mode = agent
     pipeline.config.event_gap_decision_enabled = True
     pipeline.config.event_gap_threshold_pct = 12
+    pipeline.config.event_gap_lookback_sessions = 5
     pipeline.config.report_language = "zh-TW"
     pipeline.config.enable_chip_distribution = False
     pipeline.config.enable_realtime_quote = False
@@ -263,7 +264,7 @@ def test_traditional_generation_receives_event_system_and_user_rules(enabled, ch
     assert client.generate.call_count == 1
     call = client.generate.call_args
     assert ("重大波動事件判讀" in call.args[0]) is triggered
-    assert call.kwargs["system_prompt"] == baseline_system + event_gap_prompt({"triggered": triggered})
+    assert call.kwargs["system_prompt"] == baseline_system + event_gap_prompt(event_gap_context("INTC", context, cfg))
 
 
 @pytest.mark.parametrize("score", [22, 80])
@@ -292,3 +293,4 @@ def test_event_config_reads_environment_with_safe_defaults(env, enabled, thresho
         config = Config._load_from_env()
     assert config.event_gap_decision_enabled is enabled
     assert config.event_gap_threshold_pct == threshold
+    assert config.event_gap_lookback_sessions == 5
