@@ -113,7 +113,9 @@ struct EventCalendarView: View {
                     Link("查看來源", destination: url).font(.caption)
                 }
             }
-        }.accessibilityIdentifier("calendar.event.\(event.id)")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("calendar.event.\(event.id)")
     }
 
     private func move(_ value: Int) {

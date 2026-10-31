@@ -12,7 +12,7 @@ Web 入口 `/calendar`；iOS「工具 → 事件行事曆」為原生月曆、�
 - `undated[]`：`code/name/detail`，沒有可靠未來日期、尚未更新或財報快取逾 3 天。日期在查詢範圍外但仍有新鮮快取的公司，不誤標未定。
 - `cache_updated_at`：查詢範圍內快取的最近更新時間；人工表的查核日另見事件 detail／updated_at。空庫可讀人工表並顯示公司未定。
 
-美股先取 Nasdaq `analyst/{symbol}/earnings-date`，有日期再取 `calendar/earnings?date=`，只有回應 `asOf` 同日且同代號列出才標已確認，附盤前／盤後、EPS（若有）。未在日曆核對的 Zacks 日期一律推估。Nasdaq 無日期／失敗才用既有 yfinance calendar，永遠標推估。兩者都沒有日期就未定，不以去年日期或季節推算。Nasdaq 明確沒有日期會清掉舊未來日期；兩來源皆故障保留舊快取，但逾 3 天不再當新事件。單一公司失敗不阻斷其他公司、總經或分析。
+美股先取 Nasdaq `analyst/{symbol}/earnings-date`，有日期再取 `calendar/earnings?date=`，回應 `asOf` 同日且同代號列出時附盤前／盤後、EPS（若有）。Nasdaq 說明其日期由歷史申報日演算法推導，所以一律標推估；只有 Yahoo `isEarningsDateEstimate=false` 才標已確認，且以該日期為準。Nasdaq 無日期／失敗才用既有 yfinance calendar，永遠標推估。兩者都沒有日期就未定，不以去年日期或季節推算。Nasdaq 明確沒有日期會清掉舊未來日期；兩來源皆故障保留舊快取，但逾 3 天不再當新事件。單一公司失敗不阻斷其他公司、總經或分析。
 
 總經重用本 repo `market_data/macro.py` 的 FOMC、FRED/BEA/Census、ISM 與央行日程抓取／解析；不讀寫 `market` schema。FOMC 人工表覆蓋 2026–2027、查核日 **2026-11-01**，來源 [Fed 官網](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm)（頁面 Last Update 2026-10-28）；2027 遠期場次標推估／官方暫定，不推算超出表的年份。ISM 沿用規則推估。官網日期抓取成功後寫應用庫快取。
 

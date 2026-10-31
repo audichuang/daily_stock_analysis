@@ -24,9 +24,12 @@ class CalendarRepository:
 
     def replace_macro_type(self, kind, rows):
         # 同一類型成功抓完才替換；失敗時不呼叫，保留仍在有效期內的快取。
+        # 新資料只涵蓋到最後一天：更遠的日期（例如跨年備援暫時失敗）不刪，交給快取效期淘汰。
+        last_day = max(r["date"] for r in rows)
         with self.db.get_session() as session:
             session.execute(delete(CalendarEventRecord).where(
                 CalendarEventRecord.code.is_(None), CalendarEventRecord.type == kind,
+                CalendarEventRecord.date <= last_day,
             ))
             session.add_all([CalendarEventRecord(**r) for r in rows])
             session.commit()

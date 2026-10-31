@@ -78,8 +78,7 @@ struct StockDetailView: View {
     }
 
     private var nextEarnings: CalendarEvent? {
-        earningsCalendar?.events.filter { $0.isCompanyEvent && $0.dateKind == "release" }
-            .sorted { $0.date < $1.date }.first
+        earningsCalendar?.events.nextCompanyEvent()
     }
 
     private var nextEarningsSection: some View {
@@ -106,6 +105,7 @@ struct StockDetailView: View {
                 NavigationLink("查看事件行事曆") { EventCalendarView() }
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("stock.nextEarnings")
     }
 

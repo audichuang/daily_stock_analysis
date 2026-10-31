@@ -8,6 +8,21 @@ final class EventCalendarTests: XCTestCase {
         return try JSONDecoder().decode(CalendarEvent.self, from: JSONSerialization.data(withJSONObject: value))
     }
 
+    func testNextCompanyEventUsesEventTimezoneForPastDates() throws {
+        // 台北 11/2 09:00＝美東 11/1 20:00。
+        var parts = DateComponents(year: 2026, month: 11, day: 2, hour: 1)
+        parts.timeZone = TimeZone(secondsFromGMT: 0)
+        let now = try XCTUnwrap(Calendar(identifier: .gregorian).date(from: parts))
+        let yesterdayTaipei = try event(day: "2026-11-01", timezone: "Asia/Taipei")
+        let nextTaipei = try event(day: "2026-11-03", timezone: "Asia/Taipei")
+        XCTAssertEqual([yesterdayTaipei, nextTaipei].nextCompanyEvent(now: now)?.date, "2026-11-03")
+        // 同一天的 11/1 對美東仍是今天，不可被排除。
+        let todayEastern = try event(day: "2026-11-01")
+        XCTAssertEqual([todayEastern, nextTaipei].nextCompanyEvent(now: now)?.date, "2026-11-01")
+        let deadline = try event(day: "2026-11-02", timezone: "Asia/Taipei", kind: "statutory_deadline")
+        XCTAssertEqual([deadline, nextTaipei].nextCompanyEvent(now: now)?.date, "2026-11-03")
+    }
+
     func testCalendarKeepsSourceDateAcrossDeviceTimezones() throws {
         let now = Date()
         let calendar = EventCalendarDate.calendar

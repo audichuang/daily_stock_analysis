@@ -74,7 +74,7 @@ def test_nasdaq_no_date_and_estimate(clock):
 def test_calendar_only_confirms_matching_day_and_class_symbol(clock):
     day = clock.date()
     got = sources.parse_earnings_calendar('BRK-B', day, calendar(day, 'BRK.B'))
-    assert got['status'] == 'confirmed' and '盤後' in got['detail'] and '$1.5' in got['detail']
+    assert got['status'] == 'estimated' and '盤後' in got['detail'] and '$1.5' in got['detail']
     assert sources.parse_earnings_calendar('AAPL', day, calendar(day, 'GOOGL')) is None
     with pytest.raises(ValueError, match='日期不符'):
         sources.parse_earnings_calendar('AAPL', day, calendar(day - timedelta(days=79)))
@@ -91,7 +91,7 @@ def test_fetch_nasdaq_primary_and_calendar_failure_is_estimate(clock, monkeypatc
         return announcement(day) if 'earnings-date' in path else calendar(day, 'BRK.B')
     monkeypatch.setattr(sources, 'nasdaq_json', fetch)
     got = sources.fetch_earnings('BRK.B', clock.date())
-    assert got['status'] == 'confirmed' and 'analyst/BRK.B/' in calls[0]
+    assert got['status'] == 'estimated' and 'analyst/BRK.B/' in calls[0]
     monkeypatch.setattr(sources, 'nasdaq_json', Mock(side_effect=[announcement(day), ValueError('frozen')]))
     assert sources.fetch_earnings('AAPL', clock.date())['status'] == 'estimated'
 
@@ -117,6 +117,41 @@ def test_past_nasdaq_date_not_used(clock, monkeypatch):
     monkeypatch.setattr(sources, 'nasdaq_json', lambda p: announcement(clock.date() - timedelta(days=1)))
     monkeypatch.setattr(sources, 'yahoo_earnings', lambda c, d: None)
     assert sources.fetch_earnings('AAPL', clock.date()) is None
+
+
+def test_only_yahoo_flag_confirms_and_its_failure_keeps_estimate(clock, monkeypatch):
+    day = clock.date() + timedelta(days=4)
+    monkeypatch.setattr(sources, 'nasdaq_json', Mock(side_effect=lambda p: (
+        announcement(day) if 'analyst' in p else calendar(day))))
+    moved = day + timedelta(days=1)
+    monkeypatch.setattr(sources, 'yahoo_earnings', lambda c, d: {'date': moved, 'status': 'estimated'})
+    got = sources.fetch_earnings('AAPL', clock.date())
+    assert got['status'] == 'estimated' and got['date'] == day
+    monkeypatch.setattr(sources, 'yahoo_earnings', lambda c, d: {'date': moved, 'status': 'confirmed'})
+    got = sources.fetch_earnings('AAPL', clock.date())
+    assert got['status'] == 'confirmed' and got['date'] == moved
+    monkeypatch.setattr(sources, 'yahoo_earnings', Mock(side_effect=ValueError('empty')))
+    got = sources.fetch_earnings('AAPL', clock.date())
+    assert got['status'] == 'estimated' and got['date'] == day
+
+
+def test_yahoo_estimate_flag_sets_status(clock, monkeypatch):
+    import yfinance
+    stamp = int((clock + timedelta(days=4)).timestamp())
+    for flag, status in ((False, 'confirmed'), (True, 'estimated'), (None, 'estimated')):
+        monkeypatch.setattr(yfinance, 'Ticker', lambda code, f=flag: SimpleNamespace(
+            info={'symbol': 'AAPL', 'earningsTimestamp': stamp, 'isEarningsDateEstimate': f}, calendar={}))
+        assert _raw_yahoo()('AAPL', clock.date())['status'] == status
+
+
+def test_macro_refresh_keeps_later_cached_dates(repo, clock):
+    def macro(days):
+        day = (clock + timedelta(days=days)).date()
+        return {**row(clock, days=days), 'id': f'pce:{day}', 'type': 'pce', 'code': None, 'date': day}
+    repo.replace_macro_type('pce', [macro(-5), macro(90)])
+    repo.replace_macro_type('pce', [macro(-5), macro(10)])
+    days = sorted(r['date'] for r in repo.read([], clock.date() - timedelta(days=9), date.max) if r['type'] == 'pce')
+    assert days == [(clock + timedelta(days=d)).date() for d in (-5, 10, 90)]
 
 
 def _raw_yahoo():

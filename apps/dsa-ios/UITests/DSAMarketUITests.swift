@@ -386,9 +386,15 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["stock.nextEarnings"].waitForExistence(timeout: 15))
         let soon = app.descendants(matching: .any)["stock.earnings.soon"].firstMatch
         XCTAssertTrue(soon.waitForExistence(timeout: 15))
-        scrollTo(soon)
+        XCTAssertTrue(app.frame.contains(soon.frame), "七天內提示要在首屏看得到")
         XCTAssertTrue(text(containing: "美東 ET").exists)
         capture("18-個股七天內財報警示")
+        // Keychain 跨案例保留；登出才不會讓下一個案例看不到登入畫面。
+        app.terminate()
+        app.launch()
+        tap(app.tabBars.buttons["工具"])
+        tap(app.buttons["tools.logout"])
+        XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
     }
 
     func testPullToRefreshWithSlowQuotesShowsNoError() throws {

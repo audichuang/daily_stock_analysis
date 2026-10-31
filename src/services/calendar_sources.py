@@ -47,7 +47,7 @@ def parse_earnings_date(code, data):
         return None
     text = re.sub(r"\s+", " ", data.get("reportText") or "")
     eps = re.search(r"consensus EPS forecast for the quarter is \$?(-?\d+(?:\.\d+)?)", text, re.I)
-    # earnings-date 是 Zacks 推估；只有日曆同日同代號的列才能升級 confirmed。
+    # earnings-date 是 Zacks 推估；confirmed 只來自 Yahoo 的 isEarningsDateEstimate。
     return {"date": day, "status": "estimated",
             "detail": "Nasdaq / Zacks 推估" + (f"，市場預估 EPS ${eps[1]}" if eps else ""),
             "source_url": f"https://www.nasdaq.com/market-activity/stocks/{quote(code.replace('-', '.').lower())}/earnings"}
@@ -66,7 +66,8 @@ def parse_earnings_calendar(code, day, data):
             parts.append(f"財季 {row['fiscalQuarterEnding']}")
         if row.get("epsForecast"):
             parts.append(f"市場預估 EPS {row['epsForecast']}")
-        return {"date": day, "status": "confirmed", "detail": "，".join(parts),
+        # Nasdaq 官方說明日期由歷史申報日演算法推導：有列在日曆上仍只是推估。
+        return {"date": day, "status": "estimated", "detail": "，".join(parts),
                 "source_url": f"https://www.nasdaq.com/market-activity/earnings?date={day.isoformat()}"}
     return None
 
@@ -90,11 +91,22 @@ def yahoo_earnings(code, today):
     if not dates:
         return None
     eps = (ticker.calendar or {}).get("Earnings Average")
-    detail = "Yahoo 備援推估（非公司確認日）"
+    confirmed = info.get("isEarningsDateEstimate") is False
+    detail = "Yahoo 標示公司已確認" if confirmed else "Yahoo 備援推估（非公司確認日）"
     if isinstance(eps, (int, float)) and math.isfinite(eps):
         detail += f"，市場預估 EPS ${eps:g}"
-    return {"date": min(dates), "status": "estimated", "detail": detail,
+    return {"date": min(dates), "status": "confirmed" if confirmed else "estimated", "detail": detail,
             "source_url": f"https://finance.yahoo.com/quote/{quote(code.replace('.', '-'))}/calendar/"}
+
+
+def _prefer_company_confirmed(code, today, candidate):
+    """Yahoo 明確標示非推估時採用它；查不到不影響 Nasdaq 的推估結果。"""
+    try:
+        yahoo = yahoo_earnings(code, today)
+    except Exception as exc:
+        logger.warning("Yahoo 確認狀態查詢失敗 %s: %s", code, type(exc).__name__)
+        return candidate
+    return yahoo if yahoo and yahoo["status"] == "confirmed" else candidate
 
 
 def fetch_earnings(code, today):
@@ -104,12 +116,12 @@ def fetch_earnings(code, today):
             f"analyst/{quote(code.replace('-', '.'))}/earnings-date"))
         if candidate and candidate["date"] >= today:
             try:
-                confirmed = parse_earnings_calendar(code, candidate["date"], nasdaq_json(
+                listed = parse_earnings_calendar(code, candidate["date"], nasdaq_json(
                     f"calendar/earnings?date={candidate['date'].isoformat()}"))
-                return confirmed or candidate
+                return _prefer_company_confirmed(code, today, listed or candidate)
             except Exception as exc:
                 logger.warning("財報日曆核對失敗 %s: %s", code, type(exc).__name__)
-                return candidate
+                return _prefer_company_confirmed(code, today, candidate)
     except Exception as exc:
         nasdaq_failed = True
         logger.warning("Nasdaq 財報來源失敗 %s: %s", code, type(exc).__name__)
