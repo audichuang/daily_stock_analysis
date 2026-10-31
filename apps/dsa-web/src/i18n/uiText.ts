@@ -2853,7 +2853,7 @@ const zhTW: Record<UiTextKey, string> = {
   'board.indices.liveHint': '指數取自永豐 Shioaji 快照：盤中即時，收盤後為該場正式收盤',
   'board.indices.close': '官方收盤 {date}',
   'board.indices.closeHint': 'Shioaji 快照取不到，改用本地官方收盤（最近一場，非盤中）',
-  'alertsPage.title': '警報中心',
+  'alertsPage.title': '價格警報',
   'alertsPage.description': '管理事件警報、日線技術指標、自選股、持股／帳戶聯動與大盤紅綠燈規則，執行一次性測試，並查看背景評估任務記錄的觸發歷史。',
   'alertsPage.notifications.title': '通知嘗試紀錄',
   'alertsPage.notifications.subtitle': '通知結果',

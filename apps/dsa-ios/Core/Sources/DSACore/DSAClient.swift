@@ -110,6 +110,10 @@ public struct DSAClient: Sendable {
         return response.items
     }
 
+    public func alertMonitorStatus() async throws -> AlertMonitorStatus {
+        try await get(["alerts", "monitor", "status"])
+    }
+
     /// 事件頁與個股頁只讀伺服器快取，不觸發外部來源更新。
     public func calendarEvents(from: String, to: String, code: String? = nil) async throws -> EventCalendarResponse {
         var query = [URLQueryItem(name: "from", value: from), URLQueryItem(name: "to", value: to)]

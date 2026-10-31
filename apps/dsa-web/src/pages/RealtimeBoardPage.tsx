@@ -1,3 +1,4 @@
+import { AlertBellLink } from '../components/alerts/AlertBellLink';
 import type React from 'react';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, LineChart as LineChartIcon, RefreshCw } from 'lucide-react';
@@ -683,6 +684,7 @@ const RealtimeBoardPage: React.FC = () => {
                         </td>
                         <td className="whitespace-nowrap px-3 py-2 font-mono">
                           {code}
+                          <AlertBellLink code={code} className="ml-1 align-middle" />
                           {holdings[stockCodeMatchKey(code)] ? (
                             <span className="ml-1.5 inline-flex rounded border border-[hsl(var(--primary))]/30 px-1 py-0.5 align-middle font-sans text-[10px] text-[hsl(var(--primary))]">
                               {t('board.tag.holding')}

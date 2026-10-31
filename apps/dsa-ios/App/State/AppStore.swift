@@ -22,6 +22,9 @@ final class AppStore: ObservableObject {
     @Published var selectedMarket = "tw"
     @Published var selectedTab = 0
     @Published var stockIndex: [StockIndexItem] = []
+    @Published var alertMonitor: AlertMonitorStatus?
+    @Published var upcomingEventCount: Int?
+    @Published var toolsStatusFailed = false
     @Published var colorConvention: MarketColorConvention {
         didSet { UserDefaults.standard.set(colorConvention.rawValue, forKey: "marketColors") }
     }
@@ -135,6 +138,25 @@ final class AppStore: ObservableObject {
         client = nil
         needsPassword = false
         connectionError = nil
+    }
+
+    /// 工具頁捷徑的狀態值。由 store 自己的 Task 執行：`.onAppear` 離頁時不該把還在等的請求取消成「已取消」。
+    func refreshToolsStatus() {
+        guard let client, connected else { return }
+        Task { [weak self] in
+            async let monitor = client.alertMonitorStatus()
+            let today = Date()
+            let end = today.addingTimeInterval(7 * 86_400)
+            async let events = client.calendarEvents(from: EventCalendarDate.key(today), to: EventCalendarDate.key(end))
+            do {
+                let (status, calendar) = try await (monitor, events)
+                self?.alertMonitor = status
+                self?.upcomingEventCount = calendar.events.count
+                self?.toolsStatusFailed = false
+            } catch {
+                self?.toolsStatusFailed = true
+            }
+        }
     }
 
     func showConnectionSettings() {

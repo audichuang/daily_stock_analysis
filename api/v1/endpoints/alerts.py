@@ -239,7 +239,7 @@ def test_rule(rule_id: int) -> AlertRuleTestResponse:
 def list_triggers(
     rule_id: Optional[int] = Query(None, description="Optional rule id filter"),
     target: Optional[str] = Query(None, description="Optional target filter"),
-    status: Optional[str] = Query(None, description="Optional status filter"),
+    status: Optional[str] = Query(None, max_length=64, description="Optional status filter; comma-separated for several"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> AlertTriggerListResponse:

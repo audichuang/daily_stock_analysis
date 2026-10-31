@@ -1,429 +1,289 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AlertsPage from '../AlertsPage';
+import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
+import { UI_LANGUAGE_STORAGE_KEY } from '../../utils/uiLanguage';
 
-const {
-  listRules,
-  createRule,
-  deleteRule,
-  enableRule,
-  disableRule,
-  testRule,
-  listTriggers,
-  listNotifications,
-} = vi.hoisted(() => ({
+const api = vi.hoisted(() => ({
   listRules: vi.fn(),
   createRule: vi.fn(),
+  updateRule: vi.fn(),
   deleteRule: vi.fn(),
   enableRule: vi.fn(),
   disableRule: vi.fn(),
   testRule: vi.fn(),
   listTriggers: vi.fn(),
   listNotifications: vi.fn(),
+  getMonitorStatus: vi.fn(),
+  getQuotes: vi.fn(),
 }));
 
-vi.mock('../../api/alerts', () => ({
-  alertsApi: {
-    listRules,
-    createRule,
-    deleteRule,
-    enableRule,
-    disableRule,
-    testRule,
-    listTriggers,
-    listNotifications,
-  },
-}));
-
+vi.mock('../../api/alerts', () => ({ alertsApi: api }));
+vi.mock('../../api/stocks', () => ({ stocksApi: { getQuotes: api.getQuotes } }));
 vi.mock('../../api/portfolio', () => ({
-  portfolioApi: {
-    getAccounts: vi.fn().mockResolvedValue({ accounts: [] }),
-  },
+  portfolioApi: { getAccounts: vi.fn().mockResolvedValue({ accounts: [] }) },
 }));
 
 const parsedError = {
-  title: '加载失败',
-  message: '告警 API 不可用',
-  rawMessage: '告警 API 不可用',
+  title: '載入失敗',
+  message: '警報 API 不可用',
+  rawMessage: '警報 API 不可用',
   category: 'http_error' as const,
   status: 500,
 };
 
 const rule = {
   id: 1,
-  name: '茅台价格突破',
+  name: 'rule-one',
   targetScope: 'single_symbol' as const,
-  target: '600519',
+  target: '2330.TW',
   alertType: 'price_cross' as const,
-  parameters: { direction: 'above' as const, price: 1800 },
+  parameters: { direction: 'above' as const, price: 1100 },
   severity: 'warning' as const,
   enabled: true,
   source: 'api',
-  createdAt: '2026-05-18T09:00:00',
-  updatedAt: '2026-05-18T09:30:00',
 };
 
-function createDeferred<T>() {
+const runningMonitor = {
+  enabled: true,
+  withoutSchedule: true,
+  running: true,
+  mode: 'monitor_only',
+  reason: null,
+  intervalSeconds: 300,
+  lastRunAt: new Date().toISOString(),
+  channels: ['telegram'],
+  enabledRules: 3,
+};
+
+function renderPage(path = '/alerts') {
+  return render(
+    <UiLanguageProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <AlertsPage />
+      </MemoryRouter>
+    </UiLanguageProvider>,
+  );
+}
+
+function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((promiseResolve) => {
-    resolve = promiseResolve;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
   });
   return { promise, resolve };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  listRules.mockResolvedValue({ items: [rule], total: 1, page: 1, pageSize: 20 });
-  listTriggers.mockResolvedValue({
-    items: [
-      {
-        id: 10,
-        ruleId: 1,
-        target: '600519',
-        observedValue: 1801,
-        threshold: 1800,
-        reason: '600519 price above 1800',
-        dataSource: 'realtime_quote',
-        dataTimestamp: '2026-05-18T09:30:00',
-        triggeredAt: '2026-05-18T09:30:01',
-        status: 'triggered',
-      },
-    ],
-    total: 1,
-    page: 1,
-    pageSize: 20,
+  window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+  api.getMonitorStatus.mockResolvedValue(runningMonitor);
+  api.getQuotes.mockResolvedValue([{ stockCode: '2330.TW', quote: { currentPrice: 1000, stockName: '台積電' } }]);
+  api.listRules.mockResolvedValue({ items: [rule], total: 1, page: 1, pageSize: 20 });
+  api.listTriggers.mockResolvedValue({
+    items: [{
+      id: 10, ruleId: 1, target: '2330.TW', observedValue: 1101, threshold: 1100, status: 'triggered',
+      triggeredAt: new Date().toISOString(), ruleName: 'rule-one', stockName: '台積電', severity: 'critical', quoteSource: 'yfinance',
+    }],
+    total: 1, page: 1, pageSize: 20,
+    summary: { triggered: 1, skipped: 2, degraded: 3, failed: 4 },
   });
-  listNotifications.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
-  testRule.mockResolvedValue({
-    ruleId: 1,
-    status: 'triggered',
-    triggered: true,
-    observedValue: 1801,
-    message: '600519 price above 1800',
-  });
-  createRule.mockResolvedValue(rule);
-  disableRule.mockResolvedValue({ ...rule, enabled: false });
-  enableRule.mockResolvedValue(rule);
-  deleteRule.mockResolvedValue({ deleted: 1 });
+  api.listNotifications.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+  api.testRule.mockResolvedValue({ ruleId: 1, status: 'not_triggered', triggered: false, observedValue: 1000, message: 'raw' });
+  api.createRule.mockResolvedValue(rule);
+  api.updateRule.mockResolvedValue(rule);
+  api.disableRule.mockResolvedValue({ ...rule, enabled: false });
+  api.deleteRule.mockResolvedValue({ deleted: 1 });
+});
+
+afterEach(() => {
+  cleanup();
+  window.localStorage.clear();
 });
 
 describe('AlertsPage', () => {
-  it('discloses environment rules even when the database rule list is empty', async () => {
-    listRules.mockResolvedValue({
-      items: [], total: 0, page: 1, pageSize: 20,
-      ruleSources: { legacyConfigured: 2, legacyEffective: 1 },
-    });
-    render(<AlertsPage />);
-    expect(await screen.findByText('存在环境变量告警规则')).toBeInTheDocument();
-    expect(screen.getByText(/配置了 2 条有效规则.*去重后有 1 条/)).toBeInTheDocument();
-    expect(screen.getByText(/删除或禁用页面规则不会停用环境规则/)).toBeInTheDocument();
+  it('shows a red banner when the monitor is not running', async () => {
+    api.getMonitorStatus.mockResolvedValue({ ...runningMonitor, running: false, mode: 'off', reason: 'schedule_not_running' });
+    renderPage();
+    expect(await screen.findByText('監控未啟動，規則不會被檢查')).toBeInTheDocument();
+    expect(screen.queryByTestId('alert-monitor-bar')).not.toBeInTheDocument();
   });
 
-  it('keeps the warning when enabled database rules currently cover all environment rules', async () => {
-    listRules.mockResolvedValue({
-      items: [rule], total: 1, page: 1, pageSize: 20,
-      ruleSources: { legacyConfigured: 1, legacyEffective: 0 },
-    });
-    render(<AlertsPage />);
-    expect(await screen.findByText('存在环境变量告警规则')).toBeInTheDocument();
-    expect(screen.getByText(/去重后有 0 条/)).toBeInTheDocument();
+  it('shows last run and channels while running, and warns about missing channels', async () => {
+    renderPage();
+    expect(await screen.findByTestId('alert-monitor-bar')).toHaveTextContent('每 5 分鐘檢查');
+    expect(screen.getByTestId('alert-monitor-bar')).toHaveTextContent('上次執行');
+    expect(screen.getByTestId('alert-monitor-bar')).toHaveTextContent('通知：telegram');
+    expect(screen.queryByText('監控未啟動，規則不會被檢查')).not.toBeInTheDocument();
+    cleanup();
+    api.getMonitorStatus.mockResolvedValue({ ...runningMonitor, channels: [] });
+    renderPage();
+    expect(await screen.findByText(/尚未設定通知管道/)).toBeInTheDocument();
   });
 
-  it('does not warn when no valid environment rules are configured', async () => {
-    listRules.mockResolvedValue({
-      items: [rule], total: 1, page: 1, pageSize: 20,
-      ruleSources: { legacyConfigured: 0, legacyEffective: 0 },
-    });
-    render(<AlertsPage />);
-    expect(await screen.findByText('茅台价格突破')).toBeInTheDocument();
-    expect(screen.queryByText('存在环境变量告警规则')).not.toBeInTheDocument();
+  it('does not claim the monitor is down when the status request fails', async () => {
+    api.getMonitorStatus.mockRejectedValue(new Error('offline'));
+    renderPage();
+    expect(await screen.findByText('無法取得監控狀態')).toBeInTheDocument();
+    expect(screen.queryByText('監控未啟動，規則不會被檢查')).not.toBeInTheDocument();
   });
 
-  it('loads rules, trigger history, and notification empty state', async () => {
-    render(<AlertsPage />);
-
-    expect(screen.getByText('管理事件告警、日线技术指标、自选股、持仓/账户联动和大盘红绿灯规则，执行一次性测试，并查看后台评估任务记录的触发历史。')).toBeInTheDocument();
-    expect(await screen.findByText('茅台价格突破')).toBeInTheDocument();
-    expect(await screen.findByText('600519 price above 1800')).toBeInTheDocument();
-    expect(await screen.findByText('暂无通知尝试记录')).toBeInTheDocument();
-    expect(listRules).toHaveBeenCalledWith({
-      enabled: undefined,
-      alertType: undefined,
-      page: 1,
-      pageSize: 20,
-    });
-    expect(listTriggers).toHaveBeenCalledWith({ page: 1, pageSize: 20 });
-    expect(listNotifications).toHaveBeenCalledWith({ page: 1, pageSize: 20 });
+  it('renders counts, sentence cards and the activity stream', async () => {
+    renderPage();
+    expect(await screen.findByText('當 台積電 2330.TW 站上 1,100 時提醒')).toBeInTheDocument();
+    expect(await screen.findByTestId('alert-trigger-10')).toHaveTextContent('台積電');
+    expect(screen.getByTestId('alert-trigger-10')).toHaveTextContent('來源 yfinance（可能延遲）');
+    expect(screen.getByTestId('alert-trigger-10').querySelector('.bg-danger')).not.toBeNull();
+    expect(screen.getByText('啟用規則').previousSibling).toHaveTextContent('3');
+    expect(screen.getByText('異常').previousSibling).toHaveTextContent('7');
+    expect(api.listTriggers).toHaveBeenCalledWith({ status: 'triggered', page: 1, pageSize: 20 });
   });
 
-  it('runs a dry-run test and renders only declared response fields', async () => {
-    listTriggers.mockResolvedValueOnce({ items: [], total: 0, page: 1, pageSize: 20 });
-    render(<AlertsPage />);
-
-    fireEvent.click(await screen.findByRole('button', { name: '测试' }));
-
-    await waitFor(() => expect(testRule).toHaveBeenCalledWith(1));
-    expect(await screen.findByText('测试结果')).toBeInTheDocument();
-    expect(screen.getByText(/600519 price above 1800/)).toBeInTheDocument();
-    expect(screen.getByText(/观察值：1801/)).toBeInTheDocument();
-    expect(screen.queryByText(/realtime_quote/)).not.toBeInTheDocument();
+  it('switches activity to issues using the combined status filter', async () => {
+    renderPage();
+    await screen.findByTestId('alert-trigger-10');
+    fireEvent.click(screen.getByRole('tab', { name: /^異常/ }));
+    await waitFor(() => expect(api.listTriggers).toHaveBeenLastCalledWith({
+      status: 'degraded,failed,skipped', page: 1, pageSize: 20,
+    }));
   });
 
-  it('renders batch dry-run summary and target results', async () => {
-    testRule.mockResolvedValueOnce({
-      ruleId: 1,
-      targetScope: 'watchlist',
-      status: 'triggered',
-      triggered: true,
-      observedValue: 11,
-      message: 'Evaluated 2 targets',
-      evaluatedCount: 2,
-      triggeredCount: 1,
-      degradedCount: 1,
-      skippedCount: 0,
-      targetResults: [
-        {
-          target: '600519',
-          displayTarget: '自选股 - 600519',
-          status: 'triggered',
-          recordStatus: 'triggered',
-          triggered: true,
-          observedValue: 11,
-          message: 'triggered',
-        },
-        {
-          target: '000001',
-          displayTarget: '自选股 - 000001',
-          status: 'not_triggered',
-          recordStatus: 'degraded',
-          triggered: false,
-          observedValue: null,
-          message: 'degraded',
-        },
-      ],
-    });
-    render(<AlertsPage />);
-
-    fireEvent.click(await screen.findByRole('button', { name: '测试' }));
-
-    expect(await screen.findByText(/评估 2 · 触发 1 · 降级 1 · 跳过 0/)).toBeInTheDocument();
-    expect(screen.getByText('自选股 - 600519')).toBeInTheDocument();
-    expect(screen.getByText(/not_triggered \/ degraded/)).toBeInTheDocument();
+  it('guides an empty account through templates into the shared drawer', async () => {
+    api.listRules.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: '台股大盤轉紅燈' }));
+    expect(await screen.findByLabelText('市場區域')).toHaveValue('tw');
+    expect(screen.getByText('1. 監控誰')).toBeInTheDocument();
+    expect(screen.getByText('2. 何時提醒')).toBeInTheDocument();
+    expect(screen.getByText('3. 怎麼提醒')).toBeInTheDocument();
   });
 
-  it('creates a rule through the page form and reloads rules', async () => {
-    render(<AlertsPage />);
-
-    await screen.findByText('茅台价格突破');
-    fireEvent.change(screen.getByLabelText('标的代码'), { target: { value: 'aapl' } });
-    fireEvent.change(screen.getByLabelText('价格阈值'), { target: { value: '200' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建规则' }));
-
-    await waitFor(() => {
-      expect(createRule).toHaveBeenCalledWith(expect.objectContaining({
-        target: 'AAPL',
-        alertType: 'price_cross',
-        parameters: { direction: 'above', price: 200 },
-      }));
-    });
-    expect(await screen.findByText(/已创建告警规则/)).toBeInTheDocument();
+  it('opens the create drawer from ?new=1&target= and creates the rule', async () => {
+    renderPage('/alerts?new=1&target=2330.TW');
+    expect(await screen.findByLabelText('標的代碼')).toHaveValue('2330.TW');
+    fireEvent.change(screen.getByLabelText('價格閾值'), { target: { value: '1100' } });
+    fireEvent.click(screen.getByRole('button', { name: '建立規則' }));
+    await waitFor(() => expect(api.createRule).toHaveBeenCalledWith(expect.objectContaining({
+      target: '2330.TW',
+      alertType: 'price_cross',
+      parameters: { direction: 'above', price: 1100 },
+      name: '2330.TW 站上 1,100',
+    })));
+    expect(await screen.findByText(/已建立規則/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('標的代碼')).not.toBeInTheDocument();
   });
 
-  it('keeps create form values when create API fails', async () => {
-    createRule.mockRejectedValueOnce({ parsedError });
-    render(<AlertsPage />);
-
-    await screen.findByText('茅台价格突破');
-    fireEvent.change(screen.getByLabelText('标的代码'), { target: { value: 'aapl' } });
-    fireEvent.change(screen.getByLabelText('价格阈值'), { target: { value: '200' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建规则' }));
-
-    expect(await screen.findByText('加载失败')).toBeInTheDocument();
-    expect(screen.getByLabelText('标的代码')).toHaveValue('aapl');
-    expect(screen.getByLabelText('价格阈值')).toHaveValue(200);
+  it('applies ?target= as a filter when not creating', async () => {
+    renderPage('/alerts?target=2330.TW');
+    await waitFor(() => expect(api.listRules).toHaveBeenCalledWith(expect.objectContaining({ target: '2330.TW' })));
+    expect(screen.queryByText('1. 監控誰')).not.toBeInTheDocument();
   });
 
-  it('clamps rules pagination when a mutation leaves the current page empty', async () => {
-    const page2Rule = { ...rule, id: 2, name: '第二页规则', target: 'AAPL' };
-    listRules
-      .mockResolvedValueOnce({ items: [rule], total: 21, page: 1, pageSize: 20 })
-      .mockResolvedValueOnce({ items: [page2Rule], total: 21, page: 2, pageSize: 20 })
-      .mockResolvedValueOnce({ items: [], total: 20, page: 2, pageSize: 20 })
-      .mockResolvedValue({ items: [rule], total: 20, page: 1, pageSize: 20 });
+  it('edits through the same drawer with PATCH', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'rule-one 的更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '編輯' }));
+    expect(await screen.findByLabelText('價格閾值')).toHaveValue(1100);
+    fireEvent.change(screen.getByLabelText('價格閾值'), { target: { value: '1200' } });
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }));
+    await waitFor(() => expect(api.updateRule).toHaveBeenCalledWith(1, expect.objectContaining({
+      parameters: { direction: 'above', price: 1200 },
+      cooldownSeconds: 86400,
+    })));
+    expect(api.createRule).not.toHaveBeenCalled();
+  });
 
-    render(<AlertsPage />);
+  it('never sends target or price when editing a board level rule', async () => {
+    api.listRules.mockResolvedValue({ items: [{ ...rule, source: 'tw_levels' }], total: 1, page: 1, pageSize: 20 });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'rule-one 的更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '編輯' }));
+    expect(await screen.findByLabelText('價格閾值')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '儲存' }));
+    await waitFor(() => expect(api.updateRule).toHaveBeenCalled());
+    const payload = api.updateRule.mock.calls[0][1];
+    expect(payload).not.toHaveProperty('parameters');
+    expect(payload).not.toHaveProperty('target');
+    expect(payload.cooldownSeconds).toBe(86400);
+  });
 
-    expect(await screen.findByText('茅台价格突破')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '2' }));
-    expect(await screen.findByText('第二页规则')).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('删除 第二页规则'));
-    fireEvent.click(await screen.findByRole('button', { name: '删除' }));
+  it('keeps form values and shows the error when saving fails', async () => {
+    api.createRule.mockRejectedValueOnce({ parsedError });
+    renderPage('/alerts?new=1&target=2330.TW');
+    fireEvent.change(await screen.findByLabelText('價格閾值'), { target: { value: '1100' } });
+    fireEvent.click(screen.getByRole('button', { name: '建立規則' }));
+    expect(await screen.findByText('載入失敗')).toBeInTheDocument();
+    expect(screen.getByLabelText('價格閾值')).toHaveValue(1100);
+  });
 
-    await waitFor(() => expect(deleteRule).toHaveBeenCalledWith(2));
-    await waitFor(() => {
-      expect(listRules).toHaveBeenCalledWith({
-        enabled: undefined,
-        alertType: undefined,
-        page: 1,
-        pageSize: 20,
-      });
-    });
-    expect(await screen.findByText('茅台价格突破')).toBeInTheDocument();
+  it('runs a dry run in place', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'rule-one 的更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '試算目前條件' }));
+    await waitFor(() => expect(api.testRule).toHaveBeenCalledWith(1));
+    expect(await screen.findByText('目前條件未達成')).toBeInTheDocument();
+    expect(screen.getByText(/只試算，不會送出通知/)).toBeInTheDocument();
+  });
+
+  it('appends on load more and resets to page one after a mutation', async () => {
+    const second = { ...rule, id: 2, name: 'rule-two', target: 'AAPL' };
+    api.listRules.mockImplementation(async (query: { page: number }) => (
+      query.page === 2
+        ? { items: [second], total: 2, page: 2, pageSize: 20 }
+        : { items: [rule], total: 2, page: 1, pageSize: 20 }
+    ));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: '載入更多' }));
+    expect(await screen.findByTestId('alert-rule-2')).toBeInTheDocument();
+    expect(screen.getByTestId('alert-rule-1')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'rule-two 的更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '刪除' }));
+    fireEvent.click(await screen.findByRole('button', { name: '刪除' }));
+    await waitFor(() => expect(api.deleteRule).toHaveBeenCalledWith(2));
+    await waitFor(() => expect(screen.queryByTestId('alert-rule-2')).not.toBeInTheDocument());
+    expect(api.listRules).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1 }));
   });
 
   it('keeps the latest rules response when filter requests resolve out of order', async () => {
-    const initialRequest = createDeferred<{ items: Array<typeof rule>; total: number; page: number; pageSize: number }>();
-    const filteredRequest = createDeferred<{ items: Array<typeof rule>; total: number; page: number; pageSize: number }>();
-    const staleRule = { ...rule, id: 3, name: '旧筛选规则', enabled: true };
-    const filteredRule = { ...rule, id: 4, name: '停用规则', enabled: false };
-    listRules
-      .mockReset()
-      .mockReturnValueOnce(initialRequest.promise)
-      .mockReturnValueOnce(filteredRequest.promise);
-
-    render(<AlertsPage />);
-
-    fireEvent.change(screen.getByLabelText('启停状态'), { target: { value: 'disabled' } });
-    await waitFor(() => expect(listRules).toHaveBeenCalledTimes(2));
-
-    filteredRequest.resolve({ items: [filteredRule], total: 1, page: 1, pageSize: 20 });
-    expect(await screen.findByText('停用规则')).toBeInTheDocument();
-
-    initialRequest.resolve({ items: [staleRule], total: 1, page: 1, pageSize: 20 });
-    await waitFor(() => expect(screen.queryByText('旧筛选规则')).not.toBeInTheDocument());
-    expect(screen.getByText('停用规则')).toBeInTheDocument();
-  });
-
-  it('refreshes toggle results with the latest enabled filter after a pending mutation', async () => {
-    const enabledRule = { ...rule, name: '可停用规则', enabled: true };
-    const disabledRule = { ...rule, id: 2, name: '已停用规则', enabled: false };
-    const otherEnabledRule = { ...rule, id: 3, name: '其他启用规则', enabled: true };
-    const disableRequest = createDeferred<typeof disabledRule>();
-    let mutationApplied = false;
-
-    disableRule.mockReturnValueOnce(disableRequest.promise);
-    listRules.mockImplementation(async (query: { enabled?: boolean }) => {
-      if (query.enabled === false) {
-        return {
-          items: mutationApplied ? [disabledRule, { ...enabledRule, enabled: false }] : [disabledRule],
-          total: mutationApplied ? 2 : 1,
-          page: 1,
-          pageSize: 20,
-        };
-      }
-      return {
-        items: [mutationApplied ? { ...enabledRule, enabled: false } : enabledRule, disabledRule, otherEnabledRule],
-        total: 3,
-        page: 1,
-        pageSize: 20,
-      };
-    });
-
-    render(<AlertsPage />);
-
-    expect(await screen.findByText('其他启用规则')).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: '停用' })[0]);
-    fireEvent.change(screen.getByLabelText('启停状态'), { target: { value: 'disabled' } });
-
-    await waitFor(() => expect(screen.queryByText('其他启用规则')).not.toBeInTheDocument());
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    api.listRules.mockReset().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    renderPage();
+    fireEvent.change(screen.getByLabelText('狀態'), { target: { value: 'disabled' } });
+    await waitFor(() => expect(api.listRules).toHaveBeenCalledTimes(2));
     await act(async () => {
-      mutationApplied = true;
-      disableRequest.resolve({ ...enabledRule, enabled: false });
+      second.resolve({ items: [{ ...rule, id: 4, name: 'filtered' }], total: 1, page: 1, pageSize: 20 });
     });
-
-    await waitFor(() => expect(listRules).toHaveBeenLastCalledWith({
-      enabled: false,
-      alertType: undefined,
-      page: 1,
-      pageSize: 20,
-    }));
-    expect(screen.getByLabelText('启停状态')).toHaveValue('disabled');
-    expect(screen.getByText('可停用规则')).toBeInTheDocument();
-    expect(screen.queryByText('其他启用规则')).not.toBeInTheDocument();
-  });
-
-  it('refreshes create results with the latest type filter after a pending mutation', async () => {
-    const priceRule = { ...rule, name: '价格规则', alertType: 'price_cross' as const };
-    const volumeRule = { ...rule, id: 2, name: '成交量规则', alertType: 'volume_spike' as const };
-    const createRequest = createDeferred<typeof priceRule>();
-
-    createRule.mockReturnValueOnce(createRequest.promise);
-    listRules.mockImplementation(async (query: { alertType?: string }) => {
-      if (query.alertType === 'volume_spike') {
-        return { items: [volumeRule], total: 1, page: 1, pageSize: 20 };
-      }
-      if (query.alertType === 'price_cross') {
-        return { items: [priceRule], total: 1, page: 1, pageSize: 20 };
-      }
-      return { items: [priceRule, volumeRule], total: 2, page: 1, pageSize: 20 };
-    });
-
-    render(<AlertsPage />);
-
-    expect(await screen.findByText('价格规则')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('标的代码'), { target: { value: 'aapl' } });
-    fireEvent.change(screen.getByLabelText('价格阈值'), { target: { value: '200' } });
-    fireEvent.click(screen.getByRole('button', { name: '创建规则' }));
-    fireEvent.change(screen.getAllByLabelText('规则类型')[1], { target: { value: 'volume_spike' } });
-
-    await waitFor(() => expect(screen.queryByText('价格规则')).not.toBeInTheDocument());
+    expect(await screen.findByTestId('alert-rule-4')).toBeInTheDocument();
     await act(async () => {
-      createRequest.resolve(priceRule);
+      first.resolve({ items: [{ ...rule, id: 3, name: 'stale' }], total: 1, page: 1, pageSize: 20 });
     });
-
-    await waitFor(() => expect(listRules).toHaveBeenLastCalledWith({
-      enabled: undefined,
-      alertType: 'volume_spike',
-      page: 1,
-      pageSize: 20,
-    }));
-    expect(screen.getAllByLabelText('规则类型')[1]).toHaveValue('volume_spike');
-    expect(screen.getByText('成交量规则')).toBeInTheDocument();
-    expect(screen.queryByText('价格规则')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('alert-rule-3')).not.toBeInTheDocument();
+    expect(screen.getByTestId('alert-rule-4')).toBeInTheDocument();
   });
 
-  it('refreshes delete results with the latest page after a pending mutation', async () => {
-    const page2Rule = { ...rule, id: 2, name: '第二页待删规则', target: 'AAPL' };
-    const deleteRequest = createDeferred<{ deleted: number }>();
-
-    deleteRule.mockReturnValueOnce(deleteRequest.promise);
-    listRules.mockImplementation(async (query: { page?: number }) => {
-      if (query.page === 2) {
-        return { items: [page2Rule], total: 21, page: 2, pageSize: 20 };
-      }
-      return { items: [rule], total: 21, page: 1, pageSize: 20 };
+  it('renders API errors and legacy rule disclosure without simplified text', async () => {
+    api.listRules.mockResolvedValueOnce({
+      items: [], total: 0, page: 1, pageSize: 20, ruleSources: { legacyConfigured: 2, legacyEffective: 1 },
     });
-
-    render(<AlertsPage />);
-
-    expect(await screen.findByText('茅台价格突破')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '2' }));
-    expect(await screen.findByText('第二页待删规则')).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('删除 第二页待删规则'));
-    fireEvent.click(await screen.findByRole('button', { name: '删除' }));
-    fireEvent.click(screen.getByRole('button', { name: '1' }));
-
-    expect(await screen.findByText('茅台价格突破')).toBeInTheDocument();
-    await act(async () => {
-      deleteRequest.resolve({ deleted: 1 });
-    });
-
-    await waitFor(() => expect(listRules).toHaveBeenLastCalledWith({
-      enabled: undefined,
-      alertType: undefined,
-      page: 1,
-      pageSize: 20,
-    }));
-    expect(screen.getByText('茅台价格突破')).toBeInTheDocument();
-    expect(screen.queryByText('第二页待删规则')).not.toBeInTheDocument();
+    const { container } = renderPage();
+    expect(await screen.findByText('另有環境變數規則')).toBeInTheDocument();
+    expect(screen.getByText(/環境變數設定了 2 條規則，其中 1 條/)).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/告警|规则|触发|监控|环境变量/);
+    cleanup();
+    api.listRules.mockRejectedValueOnce({ parsedError });
+    renderPage();
+    expect(await screen.findByText('警報 API 不可用')).toBeInTheDocument();
   });
 
-  it('renders API errors through ApiErrorAlert', async () => {
-    listRules.mockRejectedValueOnce({ parsedError });
-
-    render(<AlertsPage />);
-
-    expect(await screen.findByText('加载失败')).toBeInTheDocument();
-    expect(screen.getByText('告警 API 不可用')).toBeInTheDocument();
+  it('provides the three mobile tabs', async () => {
+    renderPage();
+    await screen.findByTestId('alert-rule-1');
+    expect(screen.getByRole('tab', { name: '規則' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('tab', { name: '通知診斷' }));
+    expect(screen.getByRole('tab', { name: '通知診斷' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('alert-rule-1').closest('.hidden')).not.toBeNull();
   });
 });

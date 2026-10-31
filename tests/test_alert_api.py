@@ -122,6 +122,9 @@ class AlertApiTestCase(unittest.TestCase):
         # 彙總不受 status 篩選影響，頁面分頁的數字才不會跟著變
         self.assertEqual(body["summary"], {"triggered": 1, "skipped": 1, "degraded": 0, "failed": 1})
 
+        issues = self.client.get("/api/v1/alerts/triggers", params={"status": "skipped,failed"}).json()
+        self.assertEqual(sorted(item["status"] for item in issues["items"]), ["failed", "skipped"])
+
         orphan = self.client.get("/api/v1/alerts/triggers", params={"target": "NOPE"}).json()["items"][0]
         self.assertIsNone(orphan["rule_name"])
         self.assertIsNone(orphan["stock_name"])

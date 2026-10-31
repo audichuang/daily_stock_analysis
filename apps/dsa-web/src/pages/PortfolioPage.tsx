@@ -1,3 +1,4 @@
+import { AlertBellLink } from '../components/alerts/AlertBellLink';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Layers3, ShieldCheck } from 'lucide-react';
@@ -1851,7 +1852,10 @@ const PortfolioPage: React.FC = () => {
                     <tr key={rowKey} className="border-b border-white/5">
                       <td className="py-2 pr-2 text-secondary">{row.accountName}</td>
                       <td className="py-2 pr-2">
-                        <div className="font-mono text-foreground">{row.symbol}</div>
+                        <div className="font-mono text-foreground">
+                          {row.symbol}
+                          <AlertBellLink code={row.symbol} className="ml-1 align-middle" />
+                        </div>
                         {row.name ? <div className="text-[11px] text-secondary">{row.name}</div> : null}
                       </td>
                       <td className="py-2 pr-2 text-right">{row.quantity.toFixed(2)}</td>

@@ -10,12 +10,12 @@
 ## How to get to it (user POV)
 
 由導覽列進 `/alerts` 或 `/decision-signals`。
-告警左側是 AlertRuleForm，右側列表有測試、啟停與刪除；刪除需要確認。
+警報頁頂是監控狀態列（未啟動為紅色橫幅）與數字條；「新增規則」與報告、盯盤、持股的鈴鐺開同一個抽屜（`?new=1&target=`）。規則卡有開關，⋯ 內有編輯、試算（不發通知）與刪除；刪除需要確認。手機分規則、動態、通知診斷三分頁。
 訊號頁頂選股票，下方有篩選、時間線與訊號卡片；點卡片詳情後才有回饋與狀態動作。
 
 ## Driving it with ego-browser
 
-1. 依上層 Launch／Doctor，確認所有寫入落本輪 SQLite；排程與 event monitor 保持停用。
+1. 依上層 Launch／Doctor，確認所有寫入落本輪 SQLite；排程與 event monitor 保持停用；要驗監控在跑的狀態時，隔離環境另設 `AGENT_EVENT_MONITOR_ENABLED=true` 與 `AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE=true`，核對 `GET /api/v1/alerts/monitor/status`。
    告警 CRUD 可從空庫開始；訊號須先由本輪真分析取得 history／signal ID。
    沒有訊號種子就記 blocked，不以直接 POST 建訊號或 SQL 注入取代分析來源。
 2. 在 `/alerts` 依 snapshot 填唯一規則名稱；目標欄為

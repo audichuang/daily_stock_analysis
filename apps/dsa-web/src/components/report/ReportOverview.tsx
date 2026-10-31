@@ -1,3 +1,4 @@
+import { AlertBellLink } from '../alerts/AlertBellLink';
 import type React from 'react';
 import type {
   ReportDetails as ReportDetailsType,
@@ -274,6 +275,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                   <span className="home-accent-chip px-2 py-0.5 font-mono text-xs">
                     {meta.stockCode}
                   </span>
+                  <AlertBellLink code={meta.stockCode} />
                   {marketPhaseLabel ? (
                     <Badge variant="info" className="shrink-0 gap-1.5 shadow-none" aria-label={marketPhaseLabel}>
                       {marketPhaseLabel}

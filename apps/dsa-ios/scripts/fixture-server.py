@@ -297,6 +297,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(401, {"error": "unauthorized", "message": "請登入測試服務"})
             if route == ["api", "v1", "calendar", "events"]:
                 return self.reply(200, calendar_events(query))
+            if route == ["api", "v1", "alerts", "monitor", "status"]:
+                return self.reply(200, {
+                    "enabled": True, "without_schedule": True, "running": True, "mode": "monitor_only",
+                    "reason": None, "interval_seconds": 300, "last_run_at": "2026-11-01T09:00:00",
+                    "last_finished_at": "2026-11-01T09:00:01", "next_run_at": None, "last_error": None,
+                    "last_stats": {"evaluated": 2}, "channels": ["telegram"], "enabled_rules": 2,
+                })
             if route == ["api", "v1", "stocks", "watchlist"]:
                 return self.reply(200, {"stock_codes": STATE.watchlist, "message": "合成測試自選股"})
             if route == ["api", "v1", "stocks", "quotes"]:

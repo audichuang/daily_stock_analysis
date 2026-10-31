@@ -356,7 +356,9 @@ class AlertRepository:
         if target:
             conditions.append(AlertTriggerRecord.target == target)
         if status:
-            conditions.append(AlertTriggerRecord.status == status)
+            # 逗號分隔可一次查多個狀態（異常分頁要 degraded、failed、skipped）
+            statuses = [item.strip() for item in status.split(",") if item.strip()]
+            conditions.append(AlertTriggerRecord.status.in_(statuses))
 
         where_clause = and_(*conditions) if conditions else True
         offset = (page - 1) * page_size

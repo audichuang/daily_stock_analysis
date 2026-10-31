@@ -2,6 +2,7 @@ import apiClient from './index';
 import { toCamelCase } from './utils';
 import type {
   AlertDeleteResponse,
+  AlertMonitorStatus,
   AlertNotificationListQuery,
   AlertNotificationListResponse,
   AlertRuleCreateRequest,
@@ -9,6 +10,7 @@ import type {
   AlertRuleListQuery,
   AlertRuleListResponse,
   AlertRuleTestResponse,
+  AlertRuleUpdateRequest,
   AlertTriggerListQuery,
   AlertTriggerListResponse,
 } from '../types/alerts';
@@ -19,7 +21,7 @@ function omitUndefined(input: Record<string, unknown>): Record<string, unknown> 
   );
 }
 
-function toSnakeRulePayload(payload: AlertRuleCreateRequest): Record<string, unknown> {
+function toSnakeRulePayload(payload: AlertRuleUpdateRequest): Record<string, unknown> {
   const request: Record<string, unknown> = {};
   if (payload.name !== undefined) request.name = payload.name;
   if (payload.targetScope !== undefined) request.target_scope = payload.targetScope;
@@ -27,6 +29,7 @@ function toSnakeRulePayload(payload: AlertRuleCreateRequest): Record<string, unk
   if (payload.alertType !== undefined) request.alert_type = payload.alertType;
   if (payload.severity !== undefined) request.severity = payload.severity;
   if (payload.enabled !== undefined) request.enabled = payload.enabled;
+  if (payload.cooldownSeconds !== undefined) request.cooldown_policy = { cooldown_seconds: payload.cooldownSeconds };
   if (payload.parameters !== undefined) {
     request.parameters = omitUndefined({
       direction: payload.parameters.direction,
@@ -95,6 +98,19 @@ export const alertsApi = {
       toSnakeRulePayload(payload),
     );
     return toCamelCase<AlertRuleItem>(response.data);
+  },
+
+  async updateRule(ruleId: number, payload: AlertRuleUpdateRequest): Promise<AlertRuleItem> {
+    const response = await apiClient.patch<Record<string, unknown>>(
+      `/api/v1/alerts/rules/${ruleId}`,
+      toSnakeRulePayload(payload),
+    );
+    return toCamelCase<AlertRuleItem>(response.data);
+  },
+
+  async getMonitorStatus(): Promise<AlertMonitorStatus> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/alerts/monitor/status');
+    return toCamelCase<AlertMonitorStatus>(response.data);
   },
 
   async deleteRule(ruleId: number): Promise<AlertDeleteResponse> {

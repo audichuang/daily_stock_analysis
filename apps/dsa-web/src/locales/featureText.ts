@@ -33,7 +33,7 @@ export const ALERT_TYPE_LABELS: Record<UiLanguage, Record<AlertType, string>> = 
 };
 export const ALERT_SEVERITY_LABELS: Record<UiLanguage, Record<string, string>> = { zh: { info: '提示', warning: '警告', critical: '严重' }, en: { info: 'Info', warning: 'Warning', critical: 'Critical' }, 'zh-TW': { info: '提示', warning: '警告', critical: '嚴重' } };
 export const ALERT_SCOPE_LABELS: Record<UiLanguage, Record<AlertTargetScope, string>> = { zh: { single_symbol: '单标的', watchlist: '自选股', portfolio_holdings: '持仓标的', portfolio_account: '持仓账户', market: '大盘市场' }, en: { single_symbol: 'Single symbol', watchlist: 'Watchlist', portfolio_holdings: 'Portfolio holdings', portfolio_account: 'Portfolio account', market: 'Market' }, 'zh-TW': { single_symbol: '單標的', watchlist: '自選股', portfolio_holdings: '持股標的', portfolio_account: '持股帳戶', market: '大盤市場' } };
-export const ALERT_MARKET_REGION_LABELS: Record<UiLanguage, Record<MarketRegion, string>> = { zh: { cn: 'A 股', hk: '港股', us: '美股' }, en: { cn: 'A-shares', hk: 'Hong Kong', us: 'US' }, 'zh-TW': { cn: 'A 股', hk: '港股', us: '美股' } };
+export const ALERT_MARKET_REGION_LABELS: Record<UiLanguage, Record<MarketRegion, string>> = { zh: { cn: 'A 股', hk: '港股', us: '美股', tw: '台股' }, en: { cn: 'A-shares', hk: 'Hong Kong', us: 'US', tw: 'Taiwan' }, 'zh-TW': { cn: 'A 股', hk: '港股', us: '美股', tw: '台股' } };
 export const ALERT_MARKET_LIGHT_STATUS_LABELS: Record<UiLanguage, Record<MarketLightStatus, string>> = { zh: { yellow: '黄灯', red: '红灯' }, en: { yellow: 'Yellow', red: 'Red' }, 'zh-TW': { yellow: '黃燈', red: '紅燈' } };
 export const ALERT_DIRECTION_LABELS = {
   zh: { abovePrice: '上破', belowPrice: '下破', upChange: '上涨', downChange: '下跌', aboveThreshold: '上穿', belowThreshold: '下穿', bullishCross: '金叉', bearishCross: '死叉', stopLossNear: '接近止损', stopLossBreach: '已触发止损' },
@@ -62,7 +62,7 @@ export const ALERT_CHANGE_DIRECTION_OPTIONS: Record<UiLanguage, Array<Option<'up
 export const ALERT_THRESHOLD_DIRECTION_OPTIONS: Record<UiLanguage, Array<Option<'above' | 'below'>>> = { zh: [{ value: 'above', label: '上穿' }, { value: 'below', label: '下穿' }], en: [{ value: 'above', label: 'Crosses above' }, { value: 'below', label: 'Crosses below' }], 'zh-TW': [{ value: 'above', label: '上穿' }, { value: 'below', label: '下穿' }] };
 export const ALERT_CROSS_DIRECTION_OPTIONS: Record<UiLanguage, Array<Option<'bullish_cross' | 'bearish_cross'>>> = { zh: [{ value: 'bullish_cross', label: '金叉' }, { value: 'bearish_cross', label: '死叉' }], en: [{ value: 'bullish_cross', label: 'Bullish cross' }, { value: 'bearish_cross', label: 'Bearish cross' }], 'zh-TW': [{ value: 'bullish_cross', label: '金叉' }, { value: 'bearish_cross', label: '死叉' }] };
 export const ALERT_STOP_LOSS_MODE_OPTIONS: Record<UiLanguage, Array<Option<PortfolioStopLossMode>>> = { zh: [{ value: 'near', label: '接近止损' }, { value: 'breach', label: '已触发止损' }], en: [{ value: 'near', label: 'Near stop loss' }, { value: 'breach', label: 'Stop loss breached' }], 'zh-TW': [{ value: 'near', label: '接近停損' }, { value: 'breach', label: '已觸發停損' }] };
-export const ALERT_MARKET_REGION_OPTIONS: Record<UiLanguage, Array<Option<MarketRegion>>> = { zh: [{ value: 'cn', label: 'A 股（cn）' }, { value: 'hk', label: '港股（hk）' }, { value: 'us', label: '美股（us）' }], en: [{ value: 'cn', label: 'A-shares (cn)' }, { value: 'hk', label: 'Hong Kong (hk)' }, { value: 'us', label: 'US (us)' }], 'zh-TW': [{ value: 'cn', label: 'A 股（cn）' }, { value: 'hk', label: '港股（hk）' }, { value: 'us', label: '美股（us）' }] };
+export const ALERT_MARKET_REGION_OPTIONS: Record<UiLanguage, Array<Option<MarketRegion>>> = { zh: [{ value: 'tw', label: '台股' }, { value: 'cn', label: 'A 股' }, { value: 'hk', label: '港股' }, { value: 'us', label: '美股' }], en: [{ value: 'tw', label: 'Taiwan' }, { value: 'cn', label: 'A-shares' }, { value: 'hk', label: 'Hong Kong' }, { value: 'us', label: 'US' }], 'zh-TW': [{ value: 'tw', label: '台股' }, { value: 'cn', label: 'A 股' }, { value: 'hk', label: '港股' }, { value: 'us', label: '美股' }] };
 export const ALERT_MARKET_LIGHT_STATUS_OPTIONS: Record<UiLanguage, Array<Option<MarketLightStatus>>> = { zh: [{ value: 'red', label: '红灯' }, { value: 'yellow', label: '黄灯' }], en: [{ value: 'red', label: 'Red' }, { value: 'yellow', label: 'Yellow' }], 'zh-TW': [{ value: 'red', label: '紅燈' }, { value: 'yellow', label: '黃燈' }] };
 
 export const PORTFOLIO_TEXT = {
@@ -73,3 +73,118 @@ export const PORTFOLIO_TEXT = {
 export const PORTFOLIO_SIDE_LABELS: Record<UiLanguage, Record<PortfolioSide, string>> = { zh: { buy: '买入', sell: '卖出' }, en: { buy: 'Buy', sell: 'Sell' }, 'zh-TW': { buy: '買進', sell: '賣出' } };
 export const PORTFOLIO_CASH_DIRECTION_LABELS: Record<UiLanguage, Record<PortfolioCashDirection, string>> = { zh: { in: '流入', out: '流出' }, en: { in: 'Inflow', out: 'Outflow' }, 'zh-TW': { in: '流入', out: '流出' } };
 export const PORTFOLIO_CORPORATE_ACTION_LABELS: Record<UiLanguage, Record<PortfolioCorporateActionType, string>> = { zh: { cash_dividend: '现金分红', split_adjustment: '拆并股调整' }, en: { cash_dividend: 'Cash dividend', split_adjustment: 'Split adjustment' }, 'zh-TW': { cash_dividend: '現金股利', split_adjustment: '股票分拆調整' } };
+
+// 警報頁改版的文案；句子模板的 {target}、{value} 由元件帶入。
+export const ALERT_PAGE_TEXT = {
+  'zh-TW': {
+    title: '價格警報', newRule: '新增規則', editRule: '編輯規則',
+    monitorRunning: '監控中', monitorEvery: '每 {minutes} 分鐘檢查', monitorLastRun: '上次執行 {time}', monitorNotYet: '尚未執行',
+    monitorChannels: '通知：{channels}', monitorNoChannel: '尚未設定通知管道，觸發後不會送出',
+    monitorDownTitle: '監控未啟動，規則不會被檢查', monitorUnknown: '無法取得監控狀態',
+    reasonDisabled: '服務沒有開啟警報監控（AGENT_EVENT_MONITOR_ENABLED）。', reasonThread: '監控執行緒沒有在跑，請重啟服務。', reasonSchedule: '服務沒有開啟排程，也沒有開啟只跑監控（AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE）。',
+    monitorError: '上一輪失敗：{error}',
+    statRules: '啟用規則', statTriggered: '已觸發', statIssues: '異常', statSkipped: '略過',
+    search: '搜尋股票', searchPlaceholder: '輸入代號，例如 2330.TW', group: '群組', allGroups: '全部群組', status: '狀態', type: '類型',
+    tabRules: '規則', tabActivity: '動態', tabDiagnostics: '通知診斷',
+    guideTitle: '還沒有警報規則', guideBody: '選一個範本開始，條件達成時會推播通知。',
+    tplPrice: '股價站上或跌破某個價位', tplChange: '單日跌幅達 3%', tplMarket: '台股大盤轉紅燈',
+    noMatch: '沒有符合篩選條件的規則', loadMore: '載入更多',
+    whenPrefix: '當', remind: '時提醒',
+    above: '站上', below: '跌破', up: '單日漲幅達', down: '單日跌幅達', volume: '成交量達均量', times: '倍',
+    closeAboveMa: '收盤站上', closeBelowMa: '收盤跌破', crossUp: '向上突破', crossDown: '向下跌破',
+    bullish: '黃金交叉', bearish: '死亡交叉',
+    stopNear: '持股接近停損', stopBreach: '持股跌破停損', concentration: '持股集中度超過上限', drawdown: '帳戶回撤超過上限', stale: '持股價格過期或缺價',
+    marketStatus: '大盤信號轉為', scoreDrop: '大盤分數下降達 {value} 分',
+    watchlist: '自選股任一檔', holdings: '持股任一檔', allAccounts: '全部帳戶', account: '帳戶 {target}',
+    current: '現價 {price}', distance: '距離 {pct}', noQuote: '暫無報價',
+    lastTriggered: '上次觸發 {time}', neverTriggered: '尚未觸發', cooling: '提醒冷卻到 {time}', childCooldown: '各檔冷卻見動態',
+    daily: '每天最多一次', hourly: '每小時最多一次', everyCustom: '每 {minutes} 分鐘最多一次', levelSource: '盯盤看板建立',
+    switchOn: '啟用 {name}', menu: '{name} 的更多操作', edit: '編輯', dryRun: '試算目前條件', dryRunning: '試算中', delete: '刪除',
+    dryRunNote: '只試算，不會送出通知', dryRunHit: '目前條件已達成', dryRunMiss: '目前條件未達成', dryRunError: '無法試算', dryRunObserved: '目前數值 {value}', dryRunSummary: '檢查 {evaluated} 檔，達成 {triggered} 檔', dryRunClose: '收起',
+    activityTitle: '動態', tabTriggered: '已觸發', tabIssues: '異常', noTriggered: '還沒有觸發紀錄', noIssues: '沒有異常紀錄',
+    observed: '當時 {value}', threshold: '條件 {value}', source: '來源 {source}',
+    sourceShioaji: '永豐即時', sourceYfinance: 'yfinance（可能延遲）', sourceFallback: '備援來源（可能延遲）',
+    statusSkipped: '略過', statusDegraded: '資料不完整', statusFailed: '失敗', statusTriggered: '已觸發',
+    deleteTitle: '刪除警報規則', deleteMessage: '確定刪除「{name}」？已有的觸發紀錄會保留。', cancel: '取消',
+    created: '已建立規則「{name}」', updated: '已更新規則「{name}」', close: '關閉',
+    legacyTitle: '另有環境變數規則', legacyMessage: '環境變數設定了 {configured} 條規則，其中 {effective} 條會被輪詢；這裡只管理頁面建立的規則，要停用請改部署設定。',
+    diagnostics: '通知診斷', diagnosticsHint: '最近的通知嘗試紀錄', noNotifications: '還沒有通知紀錄', channelCooldown: '提醒冷卻', channelCooldownFail: '冷卻讀取失敗', channelNoise: '通知降噪', channelNone: '沒有可用管道', channelDispatch: '通知派送', channelContext: '對話管道',
+    resultOk: '成功', resultCooldown: '冷卻中略過', resultNoise: '降噪略過', resultNoChannel: '沒有管道', resultFail: '失敗',
+    stepWho: '監控誰', stepWhen: '何時提醒', stepHow: '怎麼提醒', frequency: '提醒頻率', levelLocked: '這條由盯盤看板建立，價位要回看板重建，不能在這裡改。', currentPrice: '現價 {price}，距離條件 {pct}', save: '儲存', stockPlaceholder: '輸入代號或名稱，例如 台積電',
+    bell: '設定 {code} 的價格警報',
+  },
+  zh: {
+    title: '价格警报', newRule: '新增规则', editRule: '编辑规则',
+    monitorRunning: '监控中', monitorEvery: '每 {minutes} 分钟检查', monitorLastRun: '上次执行 {time}', monitorNotYet: '尚未执行',
+    monitorChannels: '通知：{channels}', monitorNoChannel: '尚未设置通知渠道，触发后不会发送',
+    monitorDownTitle: '监控未启动，规则不会被检查', monitorUnknown: '无法获取监控状态',
+    reasonDisabled: '服务没有开启警报监控（AGENT_EVENT_MONITOR_ENABLED）。', reasonThread: '监控线程没有在运行，请重启服务。', reasonSchedule: '服务没有开启调度，也没有开启仅运行监控（AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE）。',
+    monitorError: '上一轮失败：{error}',
+    statRules: '启用规则', statTriggered: '已触发', statIssues: '异常', statSkipped: '跳过',
+    search: '搜索股票', searchPlaceholder: '输入代码，例如 2330.TW', group: '分组', allGroups: '全部分组', status: '状态', type: '类型',
+    tabRules: '规则', tabActivity: '动态', tabDiagnostics: '通知诊断',
+    guideTitle: '还没有警报规则', guideBody: '选一个模板开始，条件达成时会推送通知。',
+    tplPrice: '股价站上或跌破某个价位', tplChange: '单日跌幅达 3%', tplMarket: '台股大盘转红灯',
+    noMatch: '没有符合筛选条件的规则', loadMore: '加载更多',
+    whenPrefix: '当', remind: '时提醒',
+    above: '站上', below: '跌破', up: '单日涨幅达', down: '单日跌幅达', volume: '成交量达均量', times: '倍',
+    closeAboveMa: '收盘站上', closeBelowMa: '收盘跌破', crossUp: '向上突破', crossDown: '向下跌破',
+    bullish: '金叉', bearish: '死叉',
+    stopNear: '持仓接近止损', stopBreach: '持仓跌破止损', concentration: '持仓集中度超过上限', drawdown: '账户回撤超过上限', stale: '持仓价格过期或缺价',
+    marketStatus: '大盘信号转为', scoreDrop: '大盘分数下降达 {value} 分',
+    watchlist: '自选股任一只', holdings: '持仓任一只', allAccounts: '全部账户', account: '账户 {target}',
+    current: '现价 {price}', distance: '距离 {pct}', noQuote: '暂无报价',
+    lastTriggered: '上次触发 {time}', neverTriggered: '尚未触发', cooling: '提醒冷却到 {time}', childCooldown: '各只冷却见动态',
+    daily: '每天最多一次', hourly: '每小时最多一次', everyCustom: '每 {minutes} 分钟最多一次', levelSource: '盯盘看板创建',
+    switchOn: '启用 {name}', menu: '{name} 的更多操作', edit: '编辑', dryRun: '试算当前条件', dryRunning: '试算中', delete: '删除',
+    dryRunNote: '只试算，不会发送通知', dryRunHit: '当前条件已达成', dryRunMiss: '当前条件未达成', dryRunError: '无法试算', dryRunObserved: '当前数值 {value}', dryRunSummary: '检查 {evaluated} 只，达成 {triggered} 只', dryRunClose: '收起',
+    activityTitle: '动态', tabTriggered: '已触发', tabIssues: '异常', noTriggered: '还没有触发记录', noIssues: '没有异常记录',
+    observed: '当时 {value}', threshold: '条件 {value}', source: '来源 {source}',
+    sourceShioaji: '永丰实时', sourceYfinance: 'yfinance（可能延迟）', sourceFallback: '备用来源（可能延迟）',
+    statusSkipped: '跳过', statusDegraded: '数据不完整', statusFailed: '失败', statusTriggered: '已触发',
+    deleteTitle: '删除警报规则', deleteMessage: '确定删除「{name}」？已有的触发记录会保留。', cancel: '取消',
+    created: '已创建规则「{name}」', updated: '已更新规则「{name}」', close: '关闭',
+    legacyTitle: '另有环境变量规则', legacyMessage: '环境变量配置了 {configured} 条规则，其中 {effective} 条会被轮询；这里只管理页面创建的规则，要停用请改部署配置。',
+    diagnostics: '通知诊断', diagnosticsHint: '最近的通知尝试记录', noNotifications: '还没有通知记录', channelCooldown: '提醒冷却', channelCooldownFail: '冷却读取失败', channelNoise: '通知降噪', channelNone: '没有可用渠道', channelDispatch: '通知发送', channelContext: '会话渠道',
+    resultOk: '成功', resultCooldown: '冷却中跳过', resultNoise: '降噪跳过', resultNoChannel: '没有渠道', resultFail: '失败',
+    stepWho: '监控谁', stepWhen: '何时提醒', stepHow: '怎么提醒', frequency: '提醒频率', levelLocked: '这条由盯盘看板创建，价位要回看板重建，不能在这里改。', currentPrice: '现价 {price}，距离条件 {pct}', save: '保存', stockPlaceholder: '输入代码或名称，例如 台积电',
+    bell: '设置 {code} 的价格警报',
+  },
+  en: {
+    title: 'Price alerts', newRule: 'New rule', editRule: 'Edit rule',
+    monitorRunning: 'Monitoring', monitorEvery: 'checks every {minutes} min', monitorLastRun: 'last run {time}', monitorNotYet: 'not run yet',
+    monitorChannels: 'Channels: {channels}', monitorNoChannel: 'No notification channel; triggers will not be sent',
+    monitorDownTitle: 'Monitor is not running; rules are not being checked', monitorUnknown: 'Monitor status unavailable',
+    reasonDisabled: 'Alert monitoring is off (AGENT_EVENT_MONITOR_ENABLED).', reasonThread: 'The monitor thread is not running; restart the service.', reasonSchedule: 'Neither the schedule nor monitor-only mode (AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE) is on.',
+    monitorError: 'Last cycle failed: {error}',
+    statRules: 'Active rules', statTriggered: 'Triggered', statIssues: 'Issues', statSkipped: 'Skipped',
+    search: 'Search stock', searchPlaceholder: 'Enter a code, e.g. 2330.TW', group: 'Group', allGroups: 'All groups', status: 'Status', type: 'Type',
+    tabRules: 'Rules', tabActivity: 'Activity', tabDiagnostics: 'Diagnostics',
+    guideTitle: 'No alert rules yet', guideBody: 'Start from a template; you get a notification when the condition is met.',
+    tplPrice: 'Price rises above or falls below a level', tplChange: 'Daily drop reaches 3%', tplMarket: 'Taiwan market light turns red',
+    noMatch: 'No rules match these filters', loadMore: 'Load more',
+    whenPrefix: 'When', remind: '',
+    above: 'rises above', below: 'falls below', up: 'daily gain reaches', down: 'daily drop reaches', volume: 'volume reaches average x', times: '',
+    closeAboveMa: 'closes above', closeBelowMa: 'closes below', crossUp: 'crosses above', crossDown: 'crosses below',
+    bullish: 'bullish cross', bearish: 'bearish cross',
+    stopNear: 'holding nears stop loss', stopBreach: 'holding breaches stop loss', concentration: 'concentration exceeds the limit', drawdown: 'drawdown exceeds the limit', stale: 'holding price is stale or missing',
+    marketStatus: 'market light turns', scoreDrop: 'market score drops by {value}',
+    watchlist: 'any watchlist stock', holdings: 'any holding', allAccounts: 'all accounts', account: 'account {target}',
+    current: 'Price {price}', distance: '{pct} away', noQuote: 'No quote',
+    lastTriggered: 'Last triggered {time}', neverTriggered: 'Never triggered', cooling: 'Cooling down until {time}', childCooldown: 'Per-stock cooldowns are in activity',
+    daily: 'At most once a day', hourly: 'At most once an hour', everyCustom: 'At most every {minutes} min', levelSource: 'Created from the board',
+    switchOn: 'Enable {name}', menu: 'More actions for {name}', edit: 'Edit', dryRun: 'Evaluate now', dryRunning: 'Evaluating', delete: 'Delete',
+    dryRunNote: 'Evaluation only; no notification is sent', dryRunHit: 'Condition is met now', dryRunMiss: 'Condition is not met now', dryRunError: 'Could not evaluate', dryRunObserved: 'Current value {value}', dryRunSummary: 'Checked {evaluated}, met {triggered}', dryRunClose: 'Dismiss',
+    activityTitle: 'Activity', tabTriggered: 'Triggered', tabIssues: 'Issues', noTriggered: 'No triggers yet', noIssues: 'No issues',
+    observed: 'Value {value}', threshold: 'Condition {value}', source: 'Source {source}',
+    sourceShioaji: 'Sinopac realtime', sourceYfinance: 'yfinance (may be delayed)', sourceFallback: 'Fallback (may be delayed)',
+    statusSkipped: 'Skipped', statusDegraded: 'Incomplete data', statusFailed: 'Failed', statusTriggered: 'Triggered',
+    deleteTitle: 'Delete alert rule', deleteMessage: 'Delete "{name}"? Existing trigger history is kept.', cancel: 'Cancel',
+    created: 'Created "{name}"', updated: 'Updated "{name}"', close: 'Dismiss',
+    legacyTitle: 'Environment rules exist', legacyMessage: '{configured} rules come from environment config and {effective} are polled. This page only manages rules created here; change the deployment config to stop them.',
+    diagnostics: 'Diagnostics', diagnosticsHint: 'Recent notification attempts', noNotifications: 'No notification attempts yet', channelCooldown: 'Cooldown', channelCooldownFail: 'Cooldown read failed', channelNoise: 'Noise control', channelNone: 'No channel', channelDispatch: 'Dispatch', channelContext: 'Chat channel',
+    resultOk: 'Sent', resultCooldown: 'Skipped by cooldown', resultNoise: 'Skipped by noise control', resultNoChannel: 'No channel', resultFail: 'Failed',
+    stepWho: 'What to watch', stepWhen: 'When to alert', stepHow: 'How to alert', frequency: 'Frequency', levelLocked: 'Created from the board; rebuild it there to change the level.', currentPrice: 'Price {price}, {pct} from the condition', save: 'Save', stockPlaceholder: 'Enter a code or name',
+    bell: 'Set a price alert for {code}',
+  },
+} as const;
