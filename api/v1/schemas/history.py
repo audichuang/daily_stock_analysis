@@ -109,6 +109,9 @@ class NewsIntelItem(BaseModel):
     title: str = Field(..., description="新闻标题")
     snippet: str = Field("", description="新闻摘要（最多200字）")
     url: str = Field(..., description="新闻链接")
+    source: Optional[str] = Field(None, description="原始來源名稱")
+    published_date: Optional[str] = Field(None, description="來源提供的發布日期；未知為 null")
+    dimension: Optional[str] = Field(None, description="搜尋面向；用於區分新聞、公告與參考資料")
 
     model_config = ConfigDict(json_schema_extra={
         "example": {

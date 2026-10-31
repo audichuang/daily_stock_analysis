@@ -2,6 +2,27 @@
 
 入口是 [verify skill](../.claude/skills/verify/SKILL.md)，[功能地圖](../.claude/skills/verify/features/README.md) 定義使用者入口、操作、前置資料與終態。實跑與單測／fixture 各自回報；一個主要旅程通過不代表該頁全部分支已通過。
 
+## 2026-11-01：iOS 本次分析參考新聞
+
+本地 HEAD 與 fetch 後的 `origin/develop` 均為 `c6c4cfe6`，已完成 fast-forward 基線核對；本節驗證工作分支的新聞變更，沒有推送。Python 使用此 worktree 獨立 `.venv`、沿用既有套件並以 `uv run --frozen` 執行；Web 沿用既有 `node_modules`，沒有安裝或升級相依。
+
+| 層級 | 結果與證據 |
+| --- | --- |
+| 後端受影響測試 | 50 passed：`test_history_news_contract.py`、`test_history_news_fallback.py`、`test_news_intel.py`、`test_stock_profile_api.py`；`/tmp/dsa-news-backend-final.log`。另以更新後的 HTTP 契約重跑 4 passed，涵蓋新舊 query、來源為空及內部標記清除 |
+| Python 門檻 | `uv run --frozen ./scripts/ci_gate.sh syntax`、`flake8` 通過；`/tmp/dsa-news-syntax-final.log`、`/tmp/dsa-news-flake8-confirmed.log`。未跑全量離線測試 |
+| Swift Core | `swift test --package-path apps/dsa-ios/Core`：60 passed、0 failed；`/tmp/dsa-news-core-final.log` |
+| Web 相容性 | ReportNews 4 passed；lint 通過（StockScreeningPage 的既有 Hook 警告 1 項），build 通過；`/tmp/dsa-news-web-test-final.log`、`/tmp/dsa-news-web-lint.log`、`/tmp/dsa-news-web-build.log` |
+| iOS 完整合成驗收 | 原版 `test-ui.sh` 使用指定的 DSA News Test（iPhone 18 Pro Max／iOS 27.0）重跑：App 25＋UI 5＝30 passed、0 failed、1 skipped（未設定真實 Access 憑證的 opt-in 案例）。`/tmp/dsa-news-evidence/complete/UITests.xcresult` 可由 xcresulttool 讀取，`summary.json` 為 Passed；`test-status.json` 為 exit 0、finalization_timeout=false。UI suite 602.688 秒 |
+| 新聞使用者路徑 | 完整輪次實際操作台積電 #101、重新分析後的 #301、固定新聞的鴻海 #111 與 Apple #102；核對日期排序（含無時區微秒格式）、無日期不補值、Markdown／程式碼區塊／SEC 原始摘要不外露、參考資料收合及展開、Safari 的 example.test 網址與返回，以及個股／完整報告的空狀態 |
+
+最終 PNG 已實看：`/tmp/dsa-news-evidence/complete/screenshots-6/` 的 `新聞-個股頁預設分類.png`、`新聞-完整報告新聞與公告.png`、`新聞-展開其他參考資料.png`、`新聞-個股頁空狀態.png`、`新聞-完整報告空狀態.png`、`新聞-外部瀏覽器.png`；`screenshots-3/新聞-新分析個股空狀態.png` 同時看得到修正後的訂閱情報源用詞。全部為合成 fixture，並非真新聞、真行情或真模型生成；Safari 外站內容未驗證，僅核對系統瀏覽器與目的網域。一般測試與 mutation 已彙整到 `/tmp/dsa-news-evidence/checks/`、`mutations/`，來源身分在 `source-hashes.json`。
+
+正反 mutation 共 20 個錯誤版本全被抓到：後端 6 個（內部標記、分析範圍補齊、同股過濾各含舊版／過度過濾），Core 12 個（dimension 分類、原始摘要、URL 白名單、排序、SEC 標題、程式碼區塊與微秒日期），訂閱情報用詞 2 個。證據在 `/tmp/dsa-news-mutations/*-results.json` 與同名 log；用詞 mutation 以 App 的同一份純 Foundation source／XCTest 建立暫存 macOS package，只替換測試模組 import，baseline 綠、舊用詞與套用到所有限制的版本均紅。其餘 mutation 直接改工作樹後還原，再重跑原版 Core／後端測試。追加的程式碼區塊與無時區微秒日期先以 `/tmp/dsa-news-fenced-red.log` 證明舊版紅，再修正並補正反 mutation；前者不再把 JSON 原文當摘要，後者保留 API 的合法 ISO 日期。
+
+前幾輪完整 UI 啟動曾卡住：首輪 App 25 passed、Access 2 passed 後，產品程序仍在 `libMainThreadChecker.dylib` 的 dyld 初始化（`/tmp/dsa-news-evidence/launch-hang.sample.txt`、`native-launch.png`）；依連續兩次無輸出規則停止，保留 `test-status.json`（exit -15，非通過）。移除本輪診斷注入的重跑仍卡 runner；只重啟使用者指定的 DSA News Test 後，以正常手動啟動及專項 XCTest 驗證成功。其他模擬器未操作，未 erase 裝置；失敗／setup 路徑的 xcresult 不算通過。其後完整輪次 `/tmp/dsa-news-evidence/final` 的主要旅程與下拉更新均通過，新聞專項因前一案例已更新台積電最新報告而失敗；改以未被更新的鴻海 #111 驗證有新聞的報告，避免案例順序依賴。
+
+本輪所有寫入僅對 fixture 記憶體、測試暫存 SQLite 與本機證據，未寫正式庫，也未發起真分析／通知。真實 NAS／手機與 GitHub CI 未驗證（此任務不 push）。日期仍為來源提供、未逐篇核實；URL 去重造成的舊分析關聯缺漏不回填，API／App 的追溯限制見 [iOS 契約](ios-app.md)。回滾可 revert 本次提交，不需資料庫遷移。本文無對應英文版，README 與英文首頁入口沒有功能契約變動，未改動。
+
 
 ## 2026-11-01：iOS Cloudflare Access（真實服務）
 

@@ -534,7 +534,9 @@ class HistoryService:
             logger.error(f"resolve_and_get_detail failed for {record_id}: {e}", exc_info=True)
             return None
 
-    def resolve_and_get_news(self, record_id: str, limit: int = 20) -> List[Dict[str, str]]:
+    def resolve_and_get_news(
+        self, record_id: str, limit: int = 20, *, analysis_only: bool = False,
+    ) -> List[Dict[str, Any]]:
         """
         Resolve record_id (int PK or query_id string) and return associated news.
 
@@ -550,6 +552,13 @@ class HistoryService:
             if not record:
                 logger.warning(f"resolve_and_get_news: record not found for {record_id}")
                 return []
+            if analysis_only:
+                if not record.query_id:
+                    return []
+                return self.get_news_intel(
+                    query_id=record.query_id, limit=limit,
+                    analysis_code=record.code, allow_context_fallback=False,
+                )
             return self.get_news_intel(query_id=record.query_id, limit=limit)
         except Exception as e:
             logger.error(f"resolve_and_get_news failed for {record_id}: {e}", exc_info=True)
@@ -832,7 +841,10 @@ class HistoryService:
         """
         return self.db.delete_analysis_history_records(record_ids)
 
-    def get_news_intel(self, query_id: str, limit: int = 20) -> List[Dict[str, str]]:
+    def get_news_intel(
+        self, query_id: str, limit: int = 20, *, analysis_code: Optional[str] = None,
+        allow_context_fallback: bool = True,
+    ) -> List[Dict[str, Any]]:
         """
         Get news intelligence associated with a specified query_id.
 
@@ -841,23 +853,31 @@ class HistoryService:
             limit: Result limit
 
         Returns:
-            List of news intelligence (containing title, snippet, and url)
+            新聞列表，含標題、摘要、網址、來源、發布日期與搜尋面向。
         """
         try:
-            records = self.db.get_news_intel_by_query_id(query_id=query_id, limit=limit)
+            if analysis_code is None:
+                records = self.db.get_news_intel_by_query_id(query_id=query_id, limit=limit)
+            else:
+                # 批次分析共用 query_id，必須在套用筆數上限前限定同檔股票。
+                records = self.db.get_news_intel_by_query_id(query_id=query_id, limit=limit, code=analysis_code)
 
-            if not records:
+            if not records and allow_context_fallback:
                 records = self._fallback_news_by_analysis_context(query_id=query_id, limit=limit)
 
-            items: List[Dict[str, str]] = []
+            items: List[Dict[str, Any]] = []
+            internal_note = "【DeepSeek 搜尋日期未經原文核實；日級日期非精確發布時間】"
             for record in records:
-                snippet = (record.snippet or "").strip()
+                snippet = (record.snippet or "").replace(internal_note, "").strip()
                 if len(snippet) > 200:
                     snippet = f"{snippet[:197]}..."
                 items.append({
-                    "title": record.title,
+                    "title": (record.title or "").replace(internal_note, "").strip(),
                     "snippet": snippet,
                     "url": record.url,
+                    "source": (record.source or "").replace(internal_note, "").strip() or None,
+                    "published_date": record.published_date.isoformat() if record.published_date else None,
+                    "dimension": record.dimension,
                 })
 
             return items
@@ -866,7 +886,7 @@ class HistoryService:
             logger.error(f"查询新闻情报失败: {e}", exc_info=True)
             return []
 
-    def get_news_intel_by_record_id(self, record_id: int, limit: int = 20) -> List[Dict[str, str]]:
+    def get_news_intel_by_record_id(self, record_id: int, limit: int = 20) -> List[Dict[str, Any]]:
         """
         Get associated news intelligence based on analysis history record ID.
 
@@ -877,7 +897,7 @@ class HistoryService:
             limit: Result limit
 
         Returns:
-            List of news intelligence (containing title, snippet, and url)
+            新聞列表，含標題、摘要、網址、來源、發布日期與搜尋面向。
         """
         try:
             # Look up the corresponding AnalysisHistory record by record_id

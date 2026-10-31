@@ -22,6 +22,9 @@ describe('ReportNews', () => {
           title: '茅台发布最新经营数据',
           snippet: '公司披露季度经营情况，市场关注度提升。',
           url: 'https://example.com/news',
+          source: '公司官網',
+          publishedDate: null,
+          dimension: 'announcements',
         },
       ],
     });

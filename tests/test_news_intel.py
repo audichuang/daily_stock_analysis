@@ -27,6 +27,21 @@ from src.search_service import SearchResponse, SearchResult
 class NewsIntelStorageTestCase(unittest.TestCase):
     """新闻情报存储测试"""
 
+    def test_query_news_symbol_filter_applies_before_limit_and_preserves_default(self):
+        """批次 query_id 不得把其他股票帶進報告；舊呼叫仍取整批。"""
+        with self.db.get_session() as session:
+            session.add_all([
+                NewsIntel(query_id="batch", code="AAPL", title="Apple", url="https://example.test/a",
+                          fetched_at=datetime.now()),
+                NewsIntel(query_id="batch", code="MSFT", title="Microsoft", url="https://example.test/m",
+                          fetched_at=datetime.now()),
+            ])
+            session.commit()
+        rows = self.db.get_news_intel_by_query_id("batch", limit=1, code="AAPL")
+        self.assertEqual([row.title for row in rows], ["Apple"])
+        self.assertEqual(len(self.db.get_news_intel_by_query_id("batch")), 2)
+        self.assertEqual(self.db.get_news_intel_by_query_id("batch", code="NVDA"), [])
+
     def setUp(self) -> None:
         """为每个用例初始化独立数据库"""
         self._temp_dir = tempfile.TemporaryDirectory()

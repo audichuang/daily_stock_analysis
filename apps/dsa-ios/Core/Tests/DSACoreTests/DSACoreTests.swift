@@ -9,6 +9,21 @@ final class DSACoreTests: XCTestCase {
     private var session: URLSession!
     private var client: DSAClient!
 
+    func testReportNewsUsesExactAnalysisAndDecodesAdditiveFields() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/v1/history/101/news")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertTrue(query.contains(URLQueryItem(name: "analysis_only", value: "true")))
+            XCTAssertTrue(query.contains(URLQueryItem(name: "limit", value: "100")))
+            return (200, #"{"total":1,"items":[{"title":"新聞","snippet":"摘要","url":"https://example.test","source":"官方","published_date":null,"dimension":"announcements"}]}"#)
+        }
+        let response = try await client.reportNews(101)
+        XCTAssertEqual(response.total, 1)
+        XCTAssertEqual(response.items.first?.sourceLabel, "官方")
+        XCTAssertNil(response.items.first?.dateLabel)
+        XCTAssertTrue(response.items.first?.isNews == true)
+    }
+
     override func setUpWithError() throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]

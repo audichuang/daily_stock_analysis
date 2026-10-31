@@ -232,9 +232,27 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(emptyBid.exists, "空委買應為無報價，不是零元可買")
         capture("03b-空委買與來源成交量")
 
+        scrollTo(text(containing: "相關新聞"))
+        capture("新聞-個股頁預設分類")
+        XCTAssertFalse(text(containing: "產業資料頁（合成）").exists)
+        XCTAssertFalse(text(containing: "EX-99.1").exists)
+
         let reportLink = app.buttons["stock-report-link"]
         tap(reportLink)
         XCTAssertTrue(app.descendants(matching: .any)["report.screen"].firstMatch.waitForExistence(timeout: 15))
+        scrollTo(text(containing: "相關新聞"))
+        scrollTo(text(containing: "SEC 8-K 公告"))
+        capture("新聞-完整報告新聞與公告")
+        XCTAssertTrue(text(containing: "合成通訊社 · 2024-01-31").exists)
+        XCTAssertTrue(text(containing: "合成公告").exists)
+        XCTAssertFalse(text(containing: "EX-99.1").exists)
+        let latestNews = app.links["report.news.link.0"]
+        XCTAssertTrue(latestNews.label.contains("最新新聞（合成）"), "應依日期排序")
+        tap(app.descendants(matching: .any)["report.news.references"].firstMatch)
+        scrollTo(text(containing: "產業資料頁（合成）"))
+        capture("新聞-展開其他參考資料")
+        XCTAssertTrue(text(containing: "財報資料頁（合成）").exists)
+        XCTAssertTrue(text(containing: "市場資料頁（合成）").exists)
         scrollTo(text(containing: "判斷依據"))
         XCTAssertTrue(text(containing: "月營收（測試）").exists)
         capture("04-AI研究依據")
@@ -249,6 +267,12 @@ final class DSAMarketUITests: XCTestCase {
         tap(app.buttons["analysis-start"])
         XCTAssertTrue(text(containing: "分析已完成，報告已更新。").waitForExistence(timeout: 25), "fixture 需經兩次 processing 再 completed")
         capture("06-新分析完成")
+        scrollTo(text(containing: "這次分析沒有可顯示的新聞或官方公告。"))
+        capture("新聞-新分析個股空狀態")
+        tap(app.buttons["stock-report-link"])
+        scrollTo(text(containing: "這次分析沒有可顯示的新聞或官方公告。"))
+        capture("新聞-完整報告空狀態")
+        goBack(from: "AI 研究", to: "台積電（測試）")
         tap(app.buttons["stock-dossier-link"])
         XCTAssertTrue(text(containing: "四維度合成檔案 2330.TW").waitForExistence(timeout: 15))
         XCTAssertFalse(text(containing: "四維度合成檔案 AAPL").exists)
@@ -417,6 +441,57 @@ final class DSAMarketUITests: XCTestCase {
             capture("13-下拉更新第\(round)次")
             XCTAssertFalse(errorTitle.exists, "下拉更新第 \(round) 次後不應出現錯誤框")
         }
+    }
+
+    func testReportNewsOpensInSystemBrowser() throws {
+        let password = app.secureTextFields["server-password"]
+        if password.waitForExistence(timeout: 5) {
+            password.tap()
+            password.typeText("fixture-password")
+            tap(app.buttons["connect-button"])
+        }
+        XCTAssertTrue(app.tabBars.buttons["AI 研究"].waitForExistence(timeout: 20))
+        tap(app.tabBars.buttons["今日"])
+        // 主要旅程會更新台積電報告；鴻海保留固定有新聞的 #111，不依賴案例順序。
+        tap(app.buttons["stock-row.2317.TW"])
+        let references = app.descendants(matching: .any)["report.news.references"].firstMatch
+        scrollTo(references)
+        XCTAssertTrue(text(containing: "SEC 8-K 公告").exists)
+        XCTAssertFalse(text(containing: "產業資料頁（合成）").exists)
+        capture("新聞-個股頁預設分類")
+        tap(app.buttons["stock-report-link"])
+        scrollTo(references)
+        XCTAssertTrue(app.links["report.news.link.0"].label.contains("最新新聞（合成）"))
+        XCTAssertFalse(text(containing: "EX-99.1").exists)
+        XCTAssertFalse(text(containing: "raw_fixture_document").exists)
+        capture("新聞-完整報告新聞與公告")
+        tap(references)
+        scrollTo(text(containing: "市場資料頁（合成）"))
+        capture("新聞-展開其他參考資料")
+        tap(references)
+        let newsLink = app.links["report.news.link.0"]
+        tap(newsLink)
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        XCTAssertTrue(safari.wait(for: .runningForeground, timeout: 15), "新聞連結應交給系統瀏覽器")
+        let screenshot = XCTAttachment(screenshot: safari.screenshot())
+        screenshot.name = "新聞-外部瀏覽器"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        try safari.screenshot().pngRepresentation.write(to: screenshotDirectory.appendingPathComponent("新聞-外部瀏覽器.png"))
+        app.activate()
+        XCTAssertTrue(app.descendants(matching: .any)["report.screen"].firstMatch.waitForExistence(timeout: 10))
+        capture("新聞-由外部瀏覽器返回報告")
+        tap(app.tabBars.buttons["AI 研究"])
+        tap(app.buttons["research.report.102"])
+        scrollTo(text(containing: "這次分析沒有可顯示的新聞或官方公告。"))
+        capture("新聞-完整報告空狀態")
+        tap(app.tabBars.buttons["今日"])
+        goBack(from: "AI 研究", to: "鴻海（測試）")
+        goBack(from: "鴻海（測試）", to: "Daily Stock AI")
+        tap(app.segmentedControls["market-picker"].buttons["美股 US"])
+        tap(app.buttons["stock-row.AAPL"])
+        scrollTo(text(containing: "這次分析沒有可顯示的新聞或官方公告。"))
+        capture("新聞-個股頁空狀態")
     }
 
     private func text(containing value: String) -> XCUIElement {

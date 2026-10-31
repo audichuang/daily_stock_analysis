@@ -789,6 +789,7 @@ def get_history_run_flow(
 def get_history_news(
     record_id: str,
     limit: int = Query(20, ge=1, le=100, description="返回数量限制"),
+    analysis_only: bool = Query(False, description="只取相同分析編號與股票的保存資料，不用時間窗口補齊"),
     db_manager: DatabaseManager = Depends(get_database_manager)
 ) -> NewsIntelResponse:
     """
@@ -807,13 +808,16 @@ def get_history_news(
     """
     try:
         service = HistoryService(db_manager)
-        items = service.resolve_and_get_news(record_id=record_id, limit=limit)
+        items = service.resolve_and_get_news(record_id=record_id, limit=limit, analysis_only=analysis_only)
 
         response_items = [
             NewsIntelItem(
                 title=item.get("title", ""),
                 snippet=item.get("snippet"),
-                url=item.get("url", "")
+                url=item.get("url", ""),
+                source=item.get("source"),
+                published_date=item.get("published_date"),
+                dimension=item.get("dimension"),
             )
             for item in items
         ]

@@ -12,7 +12,7 @@ enum PresentationText {
     static func limitation(_ value: String) -> String {
         switch value {
         case "no_reports": return "尚無這檔股票的分析報告"
-        case "no_symbol_intelligence": return "尚無這檔股票的相關情報"
+        case "no_symbol_intelligence": return "訂閱情報源（RSS／Atom／NewsNow）尚無這檔股票的資料；不代表分析未參考新聞。"
         case "cached_positions_only": return "持股關聯僅依快取資料判斷"
         case "realtime_quote_best_effort": return "報價依可用來源更新，部分可能延遲"
         case "fx_and_cost_basis_partial": return "損益估算受匯率與成本計算方式影響"

@@ -2713,6 +2713,10 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     select(NewsIntel).where(NewsIntel.url == url_key)
                 ).scalar_one_or_none()
 
+                # 同網址只存一筆：已屬於另一次分析時不覆寫內容，舊報告才不會顯示後來才取得的摘要與分類。
+                if existing and existing.query_id and current_query_id and existing.query_id != current_query_id:
+                    continue
+
                 if existing:
                     existing.name = name or existing.name
                     existing.dimension = dimension or existing.dimension
@@ -3063,7 +3067,9 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
 
             return list(results)
 
-    def get_news_intel_by_query_id(self, query_id: str, limit: int = 20) -> List[NewsIntel]:
+    def get_news_intel_by_query_id(
+        self, query_id: str, limit: int = 20, *, code: Optional[str] = None,
+    ) -> List[NewsIntel]:
         """
         根据 query_id 获取新闻情报列表
 
@@ -3077,9 +3083,12 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         from sqlalchemy import func
 
         with self.get_session() as session:
+            conditions = [NewsIntel.query_id == query_id]
+            if code is not None:
+                conditions.append(NewsIntel.code == code)
             results = session.execute(
                 select(NewsIntel)
-                .where(NewsIntel.query_id == query_id)
+                .where(*conditions)
                 .order_by(
                     desc(func.coalesce(NewsIntel.published_date, NewsIntel.fetched_at)),
                     desc(NewsIntel.fetched_at)

@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 新增持股與自選事件行事曆 API、Web 月份清單與 iOS 原生月曆／個股七日財報提示；Nasdaq 主來源、Yahoo 推估備援，無日期維持未定，總經與台股一般法定期限分開標示。
 - [改進] 下次財報快取加入傳統與 agent 分析證據，不改評分；新增應用庫追加 migration 與預設關閉的排程刷新設定。
 
+- [新功能] iOS 個股 AI 研究與完整報告顯示本次分析保存的新聞及官方公告，按發布日期排序，提供來源、一行摘要與安全外部連結；資料頁收進可展開的「其他參考資料」，無新聞時明示空狀態。
+- [改進] 歷史新聞 API 追加 source、published_date、dimension，移除內部搜尋標記；新增 analysis_only 查詢，限定分析編號與股票且不使用時間窗口補齊，保留 Web 預設查詢相容性。
+- [修復] iOS 清理新聞 Markdown 表格與原始附件摘要，將 SEC 的 Document 顯示為可讀文件標題；資料狀態明確標示訂閱情報源，不再暗示分析沒有參考新聞。
+- [測試] 補齊新聞 API／Web 相容性、iOS 分類與文字／日期清理測試，20 個正反 mutation 均被抓到；專用模擬器完整驗收 30 passed、0 failed、1 skipped，保存雙入口新聞、展開參考、外部連結與空狀態截圖。
 - [修復] iOS 工具頁保留 Cloudflare Access 專用驗證錯誤，避免取消轉址後的 WebKit 102 覆蓋訊息；一般網路失敗仍照常顯示。
 - [測試] 修正 Access UITest 的密碼預填時機、案例共用 Keychain 與收合區塊操作，保留原有斷言並新增按鈕啟用檢查；專用模擬器 28 passed、0 failed、1 skipped，錯誤處理正反 mutation 均被抓到。
 - [新功能] iOS 支援依服務 origin 保存 Cloudflare Access Service Token 至裝置 Keychain，更新與登出保留，連線頁及工具設定可更換／移除；啟動自動帶同源 Header 並還原 DSA 登入。

@@ -137,6 +137,13 @@ public struct DSAClient: Sendable {
         try await get(["history", String(id)])
     }
 
+    public func reportNews(_ id: Int) async throws -> ReportNewsResponse {
+        try await get(["history", String(id), "news"], query: [
+            URLQueryItem(name: "analysis_only", value: "true"),
+            URLQueryItem(name: "limit", value: "100")
+        ])
+    }
+
     public func reportMarkdown(_ id: Int) async throws -> String {
         let response: Markdown = try await get(["history", String(id), "markdown"])
         return response.content
