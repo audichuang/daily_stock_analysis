@@ -25,7 +25,7 @@
 
 FinMind 只插入台股「最新消息」最前面，不影響其他面向輪替；失敗後沿該面向的候選順序嘗試，沒有可用來源才保留失敗。設定其他 provider 時仍依可用來源數輪流，不改演算法。預設 `max_searches=3` 只跑前三個面向；本次真實驗收用 5 以涵蓋第四、第五面向。中文／英文名稱沿既有別名解析與查詢組裝，DeepSeek 保留 Unicode 字元，不限定英文。
 
-依 [DeepSeek 官方文件](https://api-docs.deepseek.com/guides/search/)，使用 `POST https://api.deepseek.com/v1/tools/search`、Bearer 與 JSON 的 `query`／`count`。查詢含 `after:`／`before:` 日界；原查詢已有同名運算子則不重複加入，`site:`／`lang:` 可沿用。先為日界保留長度，再截查詢，總長不超過 128 Unicode 字元，空白查詢不發請求；`count` 介於 1～50，每次 HTTP 最多等 10 秒。來源 `summary` 進 `SearchResult.snippet`，無 summary 才取 snippet；**每則含日期提醒最多 1500 字元**，比照本專案 Tavily 既有的 1500 字元，避免 2000～5000 字元的原始摘要放大 prompt。沿用每面向最多 3 則的最終限制。
+依 [DeepSeek 官方文件](https://api-docs.deepseek.com/guides/search/)，使用 `POST https://api.deepseek.com/v1/tools/search`、Bearer 與 JSON 的 `query`／`count`。查詢含 `after:`／`before:` 日界；原查詢已有同名運算子則不重複加入，`site:`／`lang:` 可沿用。先為日界保留長度，再截查詢，總長不超過 128 Unicode 字元，空白查詢不發請求；`count` 介於 1～50，每次 HTTP 最多等 10 秒。來源 `summary` 進 `SearchResult.snippet`，無 summary 才取 snippet；**每則含日期提醒最多 1500 字元**，Tavily 仍是 500 字元；實測財測與資本支出常在 300～700 字之後才出現，500 字會截掉，又不放完整 2000～5000 字元以免放大 prompt。沿用每面向最多 3 則的最終限制。
 
 DeepSeek 與 Tavily 的金鑰輪替抽至 `RotatingKeySearchProvider`：隨機起點、重複 key 去重、同一呼叫每把最多一次，401／402／429 換下一把；Tavily 另保留 SDK 類別與 432／433 的辨識。其他錯誤不換 key，200 零結果不換 key，而由 SearchService 改試下一 provider；不新增同一把 key 的重試。日誌不含金鑰前綴或例外本文，失敗結果僅留例外類別。官方說明只對 200 且有結果計費，價格與權限仍以官方當時契約為準。
 
