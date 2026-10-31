@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 - [新功能] 新增 DeepSeek 媒體／網頁搜尋，以獨立 DEEPSEEK_SEARCH_API_KEYS 啟用；優先於 Tavily、保留台股 FinMind 最新消息優先與既有面向輪流邏輯，失敗或零結果改試下一來源。
-- [改進] DeepSeek／Tavily 共用多金鑰輪替，401／402／429 可換下一把且不記錄金鑰或例外本文；DeepSeek 查詢限制 128 Unicode 字元、每則摘要含日期提醒最多 500 字元，修正實測日級 UTC 日期編碼的前一日偏差。
+- [改進] DeepSeek／Tavily 共用多金鑰輪替，401／402／429 可換下一把且不記錄金鑰或例外本文；DeepSeek 查詢限制 128 Unicode 字元、每則摘要含日期提醒最多 1500 字元，修正實測日級 UTC 日期編碼的前一日偏差。
 - [修復] 事件上下文與提示詞補入事件後最低收盤、最新收盤及是否曾收盤跌破事件低點；已跌破時要求改以事件後新低重算止跌條件，缺值省略。
 - [測試] 新增搜尋停用逐字快照、DeepSeek 日期縮本與正反 mutation；記錄四檔股票的真實多面向搜尋、日期原文對照及限制。
 

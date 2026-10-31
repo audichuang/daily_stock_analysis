@@ -467,7 +467,7 @@ class RotatingKeySearchProvider(BaseSearchProvider):
 class DeepSeekSearchProvider(RotatingKeySearchProvider):
     """DeepSeek 媒體／網頁搜尋，獨立搜尋金鑰，不參與模型路由。"""
 
-    SUMMARY_LIMIT = 500
+    SUMMARY_LIMIT = 1500
     API_URL = "https://api.deepseek.com/v1/tools/search"
 
     def __init__(self, api_keys: List[str]):

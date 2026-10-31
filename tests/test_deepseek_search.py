@@ -91,7 +91,7 @@ def test_query_unicode_limit_bounds_summary_and_count(monkeypatch, query):
     assert f"after:{date.today()-timedelta(days=3)}" in wire
     assert f"before:{date.today()+timedelta(days=1)}" in wire
     assert request.call_args.args[2] == 50
-    assert len(response.results[0].snippet) == 500
+    assert len(response.results[0].snippet) == 1500
     assert "SUMMARY" in response.results[0].snippet
     assert "wrong-snippet" not in response.results[0].snippet
     assert "未經原文核實" in response.results[0].snippet
