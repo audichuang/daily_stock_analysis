@@ -506,6 +506,9 @@ class _StubSearchService:
     def is_available(self):
         return self._available
 
+    def is_available_for_stock(self, stock_code):
+        return self._available
+
     def search_comprehensive_intel(self, stock_code, stock_name, max_searches=6):
         return {
             dimension: _StubSearchResponse(count)

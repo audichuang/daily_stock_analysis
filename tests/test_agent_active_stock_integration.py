@@ -337,7 +337,7 @@ def test_convergence_real_news_handler_ignores_model_subject_name(db, chat_stock
         return SimpleNamespace(success=True, results=[], query=f"{code} {name}", provider="fixture")
 
     monkeypatch.setattr(search_tools, "_get_search_service", lambda: SimpleNamespace(
-        is_available=True, search_stock_news=search,
+        is_available=True, is_available_for_stock=lambda code: True, search_stock_news=search,
     ))
     result = execution.execute_runner_tool_call(
         tool_call=SimpleNamespace(name="search_stock_news", arguments={"stock_code": "600519", "stock_name": "宁德时代"}),

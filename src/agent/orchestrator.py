@@ -1278,6 +1278,10 @@ class AgentOrchestrator:
             if isinstance(analysis_context_pack_summary, str) and analysis_context_pack_summary:
                 ctx.meta["analysis_context_pack_summary"] = analysis_context_pack_summary
 
+            for key in ("event_gap", "us_evidence_prompt"):
+                if context.get(key):
+                    ctx.meta[key] = context[key]
+
             # Pre-populate data fields that the caller already has
             for data_key in ("realtime_quote", "daily_history", "chip_distribution",
                              "trend_result", "news_context"):

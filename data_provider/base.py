@@ -1623,6 +1623,11 @@ class DataFetcherManager:
                 except Exception as exc:
                     logger.debug("[FutuFetcher] 关闭管理器资源失败: %s", exc)
 
+        us_futu_fetcher = getattr(self, "_us_futu_fetcher", None)
+        if us_futu_fetcher is not None:
+            self._us_futu_fetcher = None
+            us_futu_fetcher.close()
+
         for fetcher in self._get_fetchers_snapshot():
             close = getattr(fetcher, "close", None)
             if callable(close):
@@ -4345,6 +4350,38 @@ class DataFetcherManager:
         if not isinstance(bundle_payload, dict):
             bundle_payload = {}
 
+        # 補充證據與核心區塊分離；每次請求都扣剩餘預算，失敗不丟棄其他讀數。
+        if market == "us":
+            evidence = dict(bundle_payload.get("us_evidence") or {})
+            for kind, key in (("insider", "insider_90d"), ("ratings", "ratings_30d")):
+                timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
+                if timeout <= 0:
+                    break
+                payload, error, _ = self._run_with_timeout(
+                    lambda kind=kind: self._yfinance_fundamental_adapter.get_us_activity_evidence(stock_code, kind),
+                    timeout, "us_evidence_" + kind, quarantine_key=("yfinance", "us_evidence_" + kind),
+                )
+                if payload:
+                    evidence[key] = payload
+                if error:
+                    result_ctx["errors"].append(error)
+            from .futu_fetcher import FutuFetcher
+            timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
+            if FutuFetcher.has_configured_endpoint() and timeout > 0:
+                if getattr(self, "_us_futu_fetcher", None) is None:
+                    self._us_futu_fetcher = FutuFetcher()
+                deadline = time.monotonic() + timeout
+                payload, error, _ = self._run_with_timeout(
+                    lambda: self._us_futu_fetcher.get_us_evidence(stock_code, deadline=deadline),
+                    timeout, "us_evidence_futu", quarantine_key=("futu", "us_evidence"),
+                )
+                if payload:
+                    evidence["futu"] = payload
+                if error:
+                    result_ctx["errors"].append(error)
+            if evidence:
+                result_ctx["us_evidence"] = evidence
+
         bundle_chain = self._normalize_source_chain(
             bundle_payload.get("source_chain", []),
             bundle_provider,
@@ -4370,7 +4407,7 @@ class DataFetcherManager:
             else {}
         )
         valuation_filled_from_bundle = False
-        for field in ("pe_ratio", "pb_ratio"):
+        for field in ("pe_ratio", "pb_ratio", "forward_pe"):
             if valuation_payload.get(field) is None and bundle_valuation.get(field) is not None:
                 valuation_payload[field] = bundle_valuation[field]
                 valuation_filled_from_bundle = True

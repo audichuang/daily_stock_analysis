@@ -1,0 +1,70 @@
+{
+  "baseline_commit": "dbf8f519ec65c8bcaad56b82cb9be811adfb5315",
+  "prompts": {
+    "INTC/zh/-28.58": {
+      "user": "a6092bd7f32539675300b80c9d4be096f4b0b00904a01ba6af483f78d80e507d",
+      "system": "339bc016323420dd13497210c68464fc0fb94c966a09dfce1e082a3cf75fcf8b"
+    },
+    "INTC/zh/-11.99": {
+      "user": "fbcbae95e0013107fb12d40dfecad15f1c784a47f05e66f4ecbc6ecae420d697",
+      "system": "339bc016323420dd13497210c68464fc0fb94c966a09dfce1e082a3cf75fcf8b"
+    },
+    "INTC/zh-TW/-28.58": {
+      "user": "71af4804279f99fe15fe20f4e79794396468717f1a4b5b784e5e8d3a0456e48a",
+      "system": "fa4d0b206743b90e3dbeb29035b102aaf69248a004840171f4b998255253841d"
+    },
+    "INTC/zh-TW/-11.99": {
+      "user": "3dbbbd86cfcdd753dec314bf3d2fb908b28b19ce8f20675c40b1fd0b730e067e",
+      "system": "fa4d0b206743b90e3dbeb29035b102aaf69248a004840171f4b998255253841d"
+    },
+    "INTC/en/-28.58": {
+      "user": "2a8f09b12801013a52261b61d0cd5b149c1d393f09a7215aaf45de7c6d955eca",
+      "system": "e3513e09b58689bc50ead764094367963aebdda1e9e45838043483580117294c"
+    },
+    "INTC/en/-11.99": {
+      "user": "fcdb15630eb33c7cfd9d22d117818e6f8326be9b92046596920e676d60dbeb87",
+      "system": "e3513e09b58689bc50ead764094367963aebdda1e9e45838043483580117294c"
+    },
+    "INTC/ko/-28.58": {
+      "user": "c83ed32de527cd7d52ec30ce8a8e0b1d8bb3b39bfc379ed947f214d7dcce2be0",
+      "system": "772438b9ba504bbf40099faa72b3772ce3df09a95ac830eb42ccd9443a9474bf"
+    },
+    "INTC/ko/-11.99": {
+      "user": "2b7264b31f63fefe85a4c4a025a8675762d47311001ccf43333fc030d71669b6",
+      "system": "772438b9ba504bbf40099faa72b3772ce3df09a95ac830eb42ccd9443a9474bf"
+    },
+    "2330.TW/zh/-28.58": {
+      "user": "080d8c6471b6a43748c5cff1ce0d6e62c5e2321ca560f75ccc1db597f2b46c40",
+      "system": "16c7bff9cbfc10ee222670b6110f93c2e5ed7ea441786ad95b98955125625f2e"
+    },
+    "2330.TW/zh/-11.99": {
+      "user": "cdb41a87b3b33210ea180e4427e66ef5acf92cc2d72985d97d08af6a44e8a597",
+      "system": "16c7bff9cbfc10ee222670b6110f93c2e5ed7ea441786ad95b98955125625f2e"
+    },
+    "2330.TW/zh-TW/-28.58": {
+      "user": "3a6c2237627257855bf656a4bb9a84d2f009174fd4b710ea7c339518298cd20b",
+      "system": "05a951521379655e5325641c5197454959fa2e6fa85e81b41e401db561328cae"
+    },
+    "2330.TW/zh-TW/-11.99": {
+      "user": "11004767920fb1e2f1b5a857fc9aa3ab28afd0c69876b20279305f21c5148b48",
+      "system": "05a951521379655e5325641c5197454959fa2e6fa85e81b41e401db561328cae"
+    },
+    "2330.TW/en/-28.58": {
+      "user": "b15cec18670f2bc437e54a5b2455af1342d9ad261969909e95f4125979702aae",
+      "system": "0aa6faa37e04c93e498cb89d4cb1f888e5e0946185cf2141d5dd532fe9482e44"
+    },
+    "2330.TW/en/-11.99": {
+      "user": "10cff6500398b13bac1fa6b3372ba205a1f8f772be3cc2f1eeb9516cc58337ec",
+      "system": "0aa6faa37e04c93e498cb89d4cb1f888e5e0946185cf2141d5dd532fe9482e44"
+    },
+    "2330.TW/ko/-28.58": {
+      "user": "063504a2c08d879b981c89aa4fa78e121345c3f1b8e333de56dadb24c80b37c2",
+      "system": "b0682a4fdb1b6cdcbbebab2a5eccbfed31880d0c5627423386a105c00b422949"
+    },
+    "2330.TW/ko/-11.99": {
+      "user": "41443e223004d7c4f9462128598e8e1e2467947be2d8abf917d2a1251473aa2a",
+      "system": "b0682a4fdb1b6cdcbbebab2a5eccbfed31880d0c5627423386a105c00b422949"
+    }
+  },
+  "result": "{\"action\": \"sell\", \"action_label\": \"賣出\", \"analysis_summary\": \"\", \"buy_reason\": \"\", \"change_pct\": null, \"code\": \"INTC\", \"company_highlights\": \"\", \"confidence_level\": \"高\", \"current_price\": null, \"dashboard\": {\"data_perspective\": {}, \"decision_score_calibration\": {\"final_action\": \"sell\", \"guardrail_reason\": \"賣出決策與買入區分數矛盾，保留非買入動作，禁止升為買入或加倉。\"}, \"phase_decision\": {\"action_window\": null, \"confidence_reason\": null, \"data_limitations\": [], \"immediate_action\": null, \"next_check_time\": null, \"phase_context\": null, \"watch_conditions\": []}, \"prompt_variant\": \"baseline\"}, \"decision_type\": \"sell\", \"error_message\": null, \"fundamental_analysis\": \"\", \"hot_topics\": \"\", \"key_points\": \"\", \"ma_analysis\": \"\", \"market_sentiment\": \"\", \"market_snapshot\": null, \"market_structure_context\": null, \"medium_term_outlook\": \"\", \"model_used\": null, \"name\": \"贵州茅台\", \"news_evidence_present\": false, \"news_result_count\": null, \"news_result_count_known\": true, \"news_summary\": \"\", \"operation_advice\": \"建议买入\", \"p_5d_beat_0050\": null, \"pattern_analysis\": \"\", \"report_language\": \"zh-TW\", \"risk_warning\": \"\", \"search_performed\": false, \"sector_position\": \"\", \"sentiment_score\": 80, \"short_term_outlook\": \"\", \"success\": true, \"technical_analysis\": \"\", \"trend_analysis\": \"\", \"trend_prediction\": \"强烈看多\", \"volume_analysis\": \"\"}"
+}

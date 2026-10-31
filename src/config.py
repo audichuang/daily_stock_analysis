@@ -1130,6 +1130,10 @@ class Config:
     tw_level_alerts_enabled: bool = False
     # 個股 prompt 附賣方共識（yfinance：目標價、EPS 修正、評級；台股＋美股）；純資訊、預設關
     analyst_consensus_enabled: bool = False
+    # 重大波動事件判讀；預設維持原有決策流程。
+    event_gap_decision_enabled: bool = False
+    event_gap_threshold_pct: float = 12.0
+    event_gap_lookback_sessions: int = 5
     # 台股大盤背景附一行法人年底指數目標，格式「YYYY-MM-DD 內容」；空＝不顯示，超過 30 天沒更新也不顯示
     tw_broker_index_targets: str = ""
 
@@ -2096,6 +2100,13 @@ class Config:
             tw_live_events_enabled=parse_env_bool(os.getenv('TW_LIVE_EVENTS_ENABLED'), default=True),
             tw_level_alerts_enabled=parse_env_bool(os.getenv('TW_LEVEL_ALERTS_ENABLED'), default=False),
             analyst_consensus_enabled=parse_env_bool(os.getenv('ANALYST_CONSENSUS_ENABLED'), default=False),
+            event_gap_decision_enabled=parse_env_bool(os.getenv('EVENT_GAP_DECISION_ENABLED'), default=False),
+            event_gap_threshold_pct=parse_env_float(
+                os.getenv('EVENT_GAP_THRESHOLD_PCT'), 12.0, field_name='EVENT_GAP_THRESHOLD_PCT', minimum=0.01,
+            ),
+            event_gap_lookback_sessions=parse_env_int(
+                os.getenv('EVENT_GAP_LOOKBACK_SESSIONS'), 5, field_name='EVENT_GAP_LOOKBACK_SESSIONS', minimum=1,
+            ),
             tw_broker_index_targets=(os.getenv('TW_BROKER_INDEX_TARGETS') or '').strip(),
             agent_backend=(os.getenv('AGENT_BACKEND', 'auto') or 'auto').strip().lower(),
             agent_generation_backend=agent_generation_backend,

@@ -13,6 +13,28 @@ from data_provider.fundamental_adapter import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_requests(monkeypatch):
+    class UnexpectedNetwork(BaseException):
+        pass
+
+    def blocked(*args, **kwargs):
+        raise UnexpectedNetwork("AkShare 契約測試未攔截到 HTTP 接縫")
+
+    monkeypatch.setattr("requests.sessions.Session.request", blocked)
+
+
+def _patch_installed_akshare_get(monkeypatch, handler):
+    import requests
+    import importlib.util
+
+    monkeypatch.setattr(requests, "get", handler)
+    # AkShare 2026-10-30 起改走 utils.http；舊版仍直接用 requests。
+    if importlib.util.find_spec("akshare.utils.http") is not None:
+        from akshare.utils import http
+        monkeypatch.setattr(http, "get", handler)
+
+
 @pytest.mark.parametrize("code, market", [("600519", "sh"), ("000001", "sz"), ("bj920001", "bj")])
 def test_capital_flow_uses_market_and_latest_amount(monkeypatch, code, market):
     calls = []
@@ -135,7 +157,7 @@ def test_capital_flow_real_akshare_request_uses_shenzhen_security(monkeypatch):
             "2026-09-30,-20,0,0,0,0,-2,0,0,0,0,12,0,0,0",
         ]}})
 
-    monkeypatch.setattr(requests, "get", get)
+    _patch_installed_akshare_get(monkeypatch, get)
     monkeypatch.setattr(ak, "stock_sector_fund_flow_rank", lambda: pd.DataFrame())
     result = AkshareFundamentalAdapter().get_capital_flow("000001")
     assert calls == ["0.000001"]
@@ -171,7 +193,7 @@ def test_capital_flow_real_akshare_missing_sector_amounts_reach_manager_and_agen
 
     # Keep both AkShare implementations and the adapter/manager execution real;
     # replace only their HTTP boundary and runtime configuration.
-    monkeypatch.setattr(requests, "get", get)
+    _patch_installed_akshare_get(monkeypatch, get)
     sector_df = ak.stock_sector_fund_flow_rank()
     assert sector_df["今日主力净流入-净额"].isna().all()
     calls.clear()
@@ -300,7 +322,7 @@ def test_installed_akshare_receives_valid_parameters_at_http_boundary(monkeypatc
         calls.append((url, dict(kwargs.get("params", {}))))
         raise RuntimeError("offline transport boundary")
 
-    monkeypatch.setattr(requests, "get", stop_at_http)
+    _patch_installed_akshare_get(monkeypatch, stop_at_http)
     for name in (
         "stock_financial_abstract", "stock_financial_analysis_indicator",
         "stock_fhps_detail_em", "stock_history_dividend_detail", "stock_dividend_cninfo",

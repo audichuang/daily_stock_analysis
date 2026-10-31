@@ -113,7 +113,8 @@ def _handle_search_stock_news(stock_code: str, stock_name: str) -> dict:
     service = _get_search_service()
     query_code, query_name = _resolve_search_subject(stock_code, stock_name)
 
-    if not service.is_available:
+    if not service.is_available_for_stock(stock_code):
+        logger.warning("[%s] 未配置此市場的新聞搜尋來源", stock_code)
         return {"error": "No search engine available (no API keys configured)"}
 
     response = service.search_stock_news(query_code, query_name, max_results=5)
@@ -187,7 +188,8 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
     service = _get_search_service()
     query_code, query_name = _resolve_search_subject(stock_code, stock_name)
 
-    if not service.is_available:
+    if not service.is_available_for_stock(stock_code):
+        logger.warning("[%s] 未配置此市場的新聞搜尋來源", stock_code)
         return {"error": "No search engine available (no API keys configured)"}
 
     intel_results = service.search_comprehensive_intel(

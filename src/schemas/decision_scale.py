@@ -161,9 +161,16 @@ def extract_decision_guardrail_reason(payload: Any) -> Optional[str]:
     )
     metadata = data.get("metadata") if isinstance(data.get("metadata"), Mapping) else {}
 
+    event_gap = dashboard.get("event_gap")
+    event_reason = (
+        event_gap.get("reason")
+        if isinstance(event_gap, Mapping) and event_gap.get("blocked_without_news") is True
+        else None
+    )
     stability_applied = stability.get("applied")
     include_stability_reason = stability_applied not in (False, 0, "0", "false", "False")
     candidates = [
+        event_reason,
         data.get("guardrail_reason"),
         data.get("downgrade_reason"),
         data.get("decision_score_guardrail_reason"),

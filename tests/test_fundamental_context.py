@@ -763,3 +763,15 @@ class TestFundamentalContext(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# 既有基本面測試只驗核心 bundle，新增的遠端活動來源在本檔保持離線。
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _isolate_us_activity(monkeypatch):
+    monkeypatch.setattr(
+        "data_provider.yfinance_fundamental_adapter.YfinanceFundamentalAdapter.get_us_activity_evidence",
+        lambda *args, **kwargs: {},
+    )

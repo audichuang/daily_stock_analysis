@@ -167,6 +167,17 @@ class YfinanceFundamentalAdapter:
     market-agnostic.
     """
 
+    def get_us_activity_evidence(self, stock_code: str, kind: str) -> Dict[str, Any]:
+        """每個遠端屬性各受 manager 的剩餘基本面預算限制。"""
+        if not is_us_stock_code(stock_code):
+            return {}
+        import yfinance as yf
+        from .us_evidence import summarize_activity
+
+        ticker = yf.Ticker(_convert_to_yf_symbol(stock_code))
+        frame = ticker.insider_transactions if kind == "insider" else ticker.upgrades_downgrades
+        return summarize_activity(frame, kind)
+
     def get_fundamental_bundle(self, stock_code: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "status": "not_supported",
@@ -219,6 +230,14 @@ class YfinanceFundamentalAdapter:
             "pe_ratio": _safe_float(info.get("trailingPE")),
             "pb_ratio": _safe_float(info.get("priceToBook")),
         }
+        if is_us_stock_code(stock_code):
+            forward_pe = _safe_float(info.get("forwardPE"))
+            if forward_pe is not None:
+                valuation_payload["forward_pe"] = forward_pe
+            from .us_evidence import info_evidence
+            evidence = info_evidence(info)
+            if evidence:
+                result["us_evidence"] = evidence
         if any(v is not None for v in valuation_payload.values()):
             result["valuation"] = valuation_payload
             result["source_chain"].append("valuation:yfinance.info")

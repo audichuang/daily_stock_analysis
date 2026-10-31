@@ -745,6 +745,9 @@ class AgentExecutor:
             language_section=_build_language_section(report_language),
         )
 
+        from src.services.event_gap import event_gap_prompt
+        system_prompt += event_gap_prompt((context or {}).get("event_gap"))
+
         # Build tool declarations in OpenAI format (litellm handles all providers)
         tool_decls = self.tool_registry.to_openai_tools()
 
@@ -957,6 +960,9 @@ class AgentExecutor:
             analysis_context_pack_summary = context.get("analysis_context_pack_summary")
             if isinstance(analysis_context_pack_summary, str) and analysis_context_pack_summary:
                 parts.append(analysis_context_pack_summary)
+
+            if context.get("us_evidence_prompt"):
+                parts.append(context["us_evidence_prompt"])
 
             # Inject pre-fetched context data to avoid redundant fetches
             if context.get("realtime_quote"):
