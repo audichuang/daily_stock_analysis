@@ -7,9 +7,15 @@ import { CALENDAR_TEXT } from '../locales/calendar';
 import type { CalendarEventsResponse } from '../types/calendar';
 import { formatDateTime } from '../utils/format';
 
+// 使用者所在地的今天：決定預設月份與「已過去」；事件日期本身不換算時區。
+function localToday(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
 function currentMonth(): string {
-  const parts = new Intl.DateTimeFormat('en', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit' }).formatToParts(new Date());
-  return `${parts.find((part) => part.type === 'year')!.value}-${parts.find((part) => part.type === 'month')!.value}`;
+  return localToday().slice(0, 7);
 }
 
 function monthRange(month: string): { from: string; to: string } {
@@ -27,6 +33,7 @@ export default function CalendarPage() {
   const { language, t } = useUiLanguage();
   const text = CALENDAR_TEXT[language];
   const [month, setMonth] = useState(currentMonth);
+  const [showPast, setShowPast] = useState(false);
   const [result, setResult] = useState<{ key: string; response: CalendarEventsResponse | null; failed: boolean } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const requestKey = `${month}/${attempt}`;
@@ -56,6 +63,9 @@ export default function CalendarPage() {
     }
     return [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [response]);
+  const today = localToday();
+  const pastCount = days.filter(([date]) => date < today).length;
+  const visibleDays = showPast ? days : days.filter(([date]) => date >= today);
 
   return (
     <AppPage className="space-y-5">
@@ -80,7 +90,12 @@ export default function CalendarPage() {
         <InlineAlert variant="danger" message={text.loadError} action={<Button variant="secondary" onClick={() => setAttempt((value) => value + 1)}>{t('common.retry')}</Button>} />
       ) : (
         <>
-          {days.length === 0 ? <EmptyState icon={<CalendarDays className="h-6 w-6" />} title={text.empty} description={text.emptyDescription} /> : days.map(([date, events]) => (
+          {pastCount > 0 ? (
+            <Button variant="secondary" onClick={() => setShowPast((value) => !value)}>
+              {showPast ? text.hidePast : `${text.showPast} (${pastCount})`}
+            </Button>
+          ) : null}
+          {visibleDays.length === 0 ? <EmptyState icon={<CalendarDays className="h-6 w-6" />} title={text.empty} description={text.emptyDescription} /> : visibleDays.map(([date, events]) => (
             <section key={date} aria-label={date} className="space-y-2">
               <h2 className="text-base font-semibold tabular-nums text-foreground"><time dateTime={date}>{date}</time></h2>
               {events.map((event) => (
@@ -99,10 +114,13 @@ export default function CalendarPage() {
             </section>
           ))}
           {response && response.undated.length > 0 ? (
-            <Card title={text.undated}>
-              <ul className="divide-y divide-border/50">
+            <Card>
+              <details>
+                <summary className="cursor-pointer font-semibold text-foreground">{text.undated} ({response.undated.length})</summary>
+                <ul className="divide-y divide-border/50">
                 {response.undated.map((item) => <li key={item.code} className="py-3"><span className="font-semibold text-foreground">{item.name} <span className="font-mono text-sm">{item.code}</span></span><p className="mt-1 text-sm text-secondary-text">{item.detail}</p></li>)}
               </ul>
+              </details>
             </Card>
           ) : null}
         </>

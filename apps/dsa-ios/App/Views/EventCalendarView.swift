@@ -4,11 +4,12 @@ import DSACore
 /// 以來源市場的日期畫月曆；事件清單不做裝置時區換算。
 struct EventCalendarView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var month = EventCalendarDate.monthStart(Date())
-    @State private var selected = EventCalendarDate.key(Date())
+    @State private var month = EventCalendarDate.monthStart(EventCalendarDate.parse(EventCalendarDate.deviceToday())!)
+    @State private var selected = EventCalendarDate.deviceToday()
     @State private var response: EventCalendarResponse?
     @State private var loading = false
     @State private var error: String?
+    @State private var undatedExpanded = false
 
     private var monthKey: String { String(EventCalendarDate.key(month).prefix(7)) }
     private var selectedEvents: [CalendarEvent] { response?.events.filter { $0.date == selected } ?? [] }
@@ -53,17 +54,33 @@ struct EventCalendarView: View {
                     .accessibilityIdentifier("calendar.empty")
             }
             ForEach(selectedEvents) { event in eventRow(event) }
+            let upcoming = (response?.events ?? []).filter { $0.date != selected }.upcomingCompanyEvents(limit: 6)
+            if !upcoming.isEmpty {
+                SectionHeading("接下來", subtitle: "持股與自選的財報、法說會")
+                ForEach(upcoming) { event in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(event.date).font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+                        eventRow(event)
+                    }
+                }
+            }
             if let response, !response.undated.isEmpty {
                 DSACard {
-                    VStack(alignment: .leading, spacing: 10) {
-                        SectionHeading("下次財報未定")
-                        ForEach(response.undated) { stock in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("\(stock.code) · \(stock.name)").font(.subheadline.weight(.semibold))
-                                Text(stock.detail).font(.caption).foregroundStyle(Theme.secondary)
+                    DisclosureGroup(isExpanded: $undatedExpanded) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(response.undated) { stock in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("\(stock.code) · \(stock.name)").font(.subheadline.weight(.semibold))
+                                    Text(stock.detail).font(.caption).foregroundStyle(Theme.secondary)
+                                }
                             }
-                        }
+                        }.padding(.top, 10)
+                    } label: {
+                        Text("尚未排定日期（\(response.undated.count) 檔）")
+                            .font(.subheadline.weight(.semibold)).frame(minHeight: 44)
                     }
+                    .tint(Theme.accent)
+                    .accessibilityIdentifier("calendar.undated")
                 }
             }
             if let updated = response?.cacheUpdatedAt {

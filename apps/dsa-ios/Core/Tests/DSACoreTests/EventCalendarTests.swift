@@ -8,6 +8,23 @@ final class EventCalendarTests: XCTestCase {
         return try JSONDecoder().decode(CalendarEvent.self, from: JSONSerialization.data(withJSONObject: value))
     }
 
+    func testDeviceTodayFollowsDeviceTimezoneNotEastern() throws {
+        // 台北 11/1 06:00＝UTC／美東仍是 10/31，月曆要開 11 月。
+        var parts = DateComponents(year: 2026, month: 10, day: 31, hour: 22)
+        parts.timeZone = TimeZone(secondsFromGMT: 0)
+        let now = try XCTUnwrap(Calendar(identifier: .gregorian).date(from: parts))
+        XCTAssertEqual(EventCalendarDate.deviceToday(now: now, timeZone: try XCTUnwrap(TimeZone(identifier: "Asia/Taipei"))), "2026-11-01")
+        XCTAssertEqual(EventCalendarDate.deviceToday(now: now, timeZone: try XCTUnwrap(TimeZone(identifier: "America/New_York"))), "2026-10-31")
+    }
+
+    func testUpcomingCompanyEventsSkipsPastAndLimits() throws {
+        var parts = DateComponents(year: 2026, month: 11, day: 2, hour: 1)
+        parts.timeZone = TimeZone(secondsFromGMT: 0)
+        let now = try XCTUnwrap(Calendar(identifier: .gregorian).date(from: parts))
+        let events = try ["2026-11-01", "2026-11-05", "2026-11-03", "2026-11-09"].map { try event(day: $0, timezone: "Asia/Taipei") }
+        XCTAssertEqual(events.upcomingCompanyEvents(limit: 2, now: now).map(\.date), ["2026-11-03", "2026-11-05"])
+    }
+
     func testNextCompanyEventUsesEventTimezoneForPastDates() throws {
         // 台北 11/2 09:00＝美東 11/1 20:00。
         var parts = DateComponents(year: 2026, month: 11, day: 2, hour: 1)

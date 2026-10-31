@@ -165,7 +165,8 @@ def history_item(record_id, code, report_type="detailed", region=None):
 
 def calendar_events(query):
     """行事曆獨立使用相對日期，讓 7 天警示與換月驗收不會過期。"""
-    today = datetime.now(timezone.utc).date()
+    # App 預設開裝置當天；fixture 與模擬器同機，用本機日期才不會在跨日時段對不上。
+    today = datetime.now().date()
     eastern_day = datetime.now(ZoneInfo("America/New_York")).date()
     next_month = (today.replace(day=28) + timedelta(days=4)).replace(day=1)
     def event(identifier, kind, code, name, day, status, detail, zone="America/New_York", date_kind="release"):

@@ -6,11 +6,11 @@ import CalendarPage from '../CalendarPage';
 const { getEvents } = vi.hoisted(() => ({ getEvents: vi.fn() }));
 vi.mock('../../api/calendar', () => ({ calendarApi: { getEvents } }));
 
-const month = (() => {
-  const parts = new Intl.DateTimeFormat('en', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit' }).formatToParts(new Date());
-  return `${parts.find((part) => part.type === 'year')!.value}-${parts.find((part) => part.type === 'month')!.value}`;
-})();
-const date = `${month}-05`;
+const pad = (value: number) => String(value).padStart(2, '0');
+const now = new Date();
+const month = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
+const date = `${month}-${pad(now.getDate())}`;
+const pastDate = '2000-01-01';
 const response = {
   events: [
     { id: 'confirmed', type: 'earnings', code: 'BRK.B', name: 'Berkshire Hathaway', date, status: 'confirmed', detail: 'Before market open · EPS 7.5', sourceUrl: 'https://www.nasdaq.com/market-activity/stocks/brk.b/earnings', timezone: 'America/New_York', dateKind: 'release', updatedAt: null },
@@ -39,10 +39,25 @@ describe('CalendarPage', () => {
     expect(screen.getByText('Estimated')).toBeInTheDocument();
     expect(screen.getByText('Statutory deadline')).toBeInTheDocument();
     expect(screen.getAllByText(/US Eastern date/)).toHaveLength(2);
-    expect(screen.getByRole('heading', { name: 'Next earnings date undetermined' })).toBeInTheDocument();
+    expect(screen.getByText('No date scheduled yet (1)').closest('details')).not.toHaveAttribute('open');
     expect(screen.getByText('Not announced')).toBeInTheDocument();
     expect(getEvents).toHaveBeenCalledWith(`${month}-01`, expect.stringMatching(new RegExp(`^${month}-[0-9]{2}$`)));
     expect(screen.getAllByRole('link', { name: 'Source' })[0]).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('opens on the device month and hides past dates until asked', async () => {
+    getEvents.mockResolvedValue({ ...response, events: [
+      ...response.events,
+      { ...response.events[0], id: 'past', name: 'Past Company', date: pastDate },
+    ] });
+    renderPage();
+    expect(await screen.findByText('Berkshire Hathaway')).toBeInTheDocument();
+    expect(getEvents).toHaveBeenCalledWith(`${month}-01`, expect.any(String));
+    expect(screen.queryByText('Past Company')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show past dates (1)' }));
+    expect(screen.getByText('Past Company')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide past dates' }));
+    expect(screen.queryByText('Past Company')).not.toBeInTheDocument();
   });
 
   it('loads the next month from the month control', async () => {

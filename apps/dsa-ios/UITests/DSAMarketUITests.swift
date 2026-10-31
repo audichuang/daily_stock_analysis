@@ -377,7 +377,7 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["事件行事曆"].waitForExistence(timeout: 10))
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd"
         let today = formatter.string(from: Date())
         let day = app.buttons["calendar.day.\(today)"]
@@ -400,8 +400,11 @@ final class DSAMarketUITests: XCTestCase {
         scrollTo(estimated)
         XCTAssertTrue(app.staticTexts["推估"].exists)
         capture("16-換月與推估")
-        scrollTo(text(containing: "下次財報未定"))
-        XCTAssertTrue(text(containing: "Microsoft（測試）").exists)
+        let undated = text(containing: "尚未排定日期")
+        scrollTo(undated)
+        XCTAssertFalse(text(containing: "Microsoft（測試）").exists, "未定清單預設要收合")
+        tap(undated)
+        XCTAssertTrue(text(containing: "Microsoft（測試）").waitForExistence(timeout: 5))
         capture("17-下次財報未定")
         goBack(from: "事件行事曆", to: "工具與設定")
         tap(app.tabBars.buttons["自選"])

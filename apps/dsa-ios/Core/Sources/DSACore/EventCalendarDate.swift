@@ -27,6 +27,11 @@ public enum EventCalendarDate {
         return formatter.date(from: key)
     }
 
+    /// 使用者所在地的「今天」：決定月曆預設開哪一天；事件本身仍以來源市場日期顯示。
+    public static func deviceToday(now: Date = Date(), timeZone: TimeZone = .current) -> String {
+        key(now, timezone: timeZone.identifier)
+    }
+
     public static func monthStart(_ date: Date) -> Date {
         calendar.date(from: calendar.dateComponents([.year, .month], from: date))!
     }
