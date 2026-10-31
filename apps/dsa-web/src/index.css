@@ -1981,6 +1981,7 @@ textarea {
   color: var(--text-secondary-text);
 }
 
+/* .btn-* 轉接到 Button md 的尺寸與圓角；不換行才不會把「新建帳戶」斷成兩行 */
 .btn-primary,
 .btn-secondary {
   display: inline-flex;
@@ -1988,9 +1989,12 @@ textarea {
   justify-content: center;
   cursor: pointer;
   gap: 0.5rem;
-  border-radius: 0.9rem;
-  padding: 0.7rem 1.1rem;
-  font-weight: 600;
+  min-height: 36px;
+  white-space: nowrap;
+  border-radius: var(--radius-control);
+  padding: 0 0.875rem;
+  font-size: var(--text-body);
+  font-weight: 500;
   transition:
     transform 0.2s ease,
     box-shadow 0.2s ease,
@@ -2007,13 +2011,10 @@ textarea {
     rgba(0, 168, 204, 0.96)
   );
   color: #041118;
-  box-shadow: 0 12px 28px rgba(0, 212, 255, 0.2);
 }
 
 .btn-primary:hover {
-  transform: translateY(-1px);
   filter: brightness(1.04);
-  box-shadow: 0 18px 34px rgba(0, 212, 255, 0.22);
 }
 
 .btn-secondary {
@@ -2023,7 +2024,6 @@ textarea {
 }
 
 .btn-secondary:hover {
-  transform: translateY(-1px);
   border-color: var(--border-accent);
   background: var(--bg-subtle-hover);
   color: var(--text-primary);
