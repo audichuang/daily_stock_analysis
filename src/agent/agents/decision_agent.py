@@ -269,6 +269,8 @@ should sum to 100; all-zero means no effective signal and must not be faked.
                 "Do not output JSON unless the user explicitly requests structured data."
             )
         else:
+            if ctx.meta.get("event_outlook_prompt"):
+                parts.append(ctx.meta["event_outlook_prompt"])
             parts.append("Synthesise the above into the Decision Dashboard JSON.")
         return "\n".join(parts)
 

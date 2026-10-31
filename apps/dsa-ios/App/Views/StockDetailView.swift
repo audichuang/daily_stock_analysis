@@ -172,6 +172,9 @@ struct StockDetailView: View {
             SectionHeading("AI 研究", subtitle: "觀點、依據與失效條件")
             Spacer()
         }
+        if let outlook = profile.research.data.eventOutlook {
+            EventOutlookCard(outlook: outlook)
+        }
         if let artifact = profile.research.data.structuredReport {
             DSACard {
                 VStack(alignment: .leading, spacing: 12) {

@@ -17,7 +17,7 @@ from api.v1.schemas.market_phase import MarketPhaseSummary
 from api.v1.schemas.research_artifact import ResearchArtifact
 from src.report_language import SUPPORTED_REPORT_LANGUAGES
 from src.schemas.decision_action import DecisionAction
-from src.schemas.report_schema import SniperPrices
+from src.schemas.report_schema import EventOutlook, SniperPrices
 
 
 class HistoryItem(BaseModel):
@@ -329,6 +329,7 @@ class AnalysisReport(BaseModel):
         None,
         description="结构化研究产物，供看板、个股研究页、监控和 Copilot 复用",
     )
+    event_outlook: Optional[EventOutlook] = Field(None, description="事件展望；附近沒有事件或舊報告時為 null")
 
     model_config = ConfigDict(json_schema_extra={
         "example": {

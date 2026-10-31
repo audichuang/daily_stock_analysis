@@ -5783,6 +5783,9 @@ Output the complete Decision Dashboard in JSON format."""
         prompt += event_gap_prompt(context.get("event_gap"))
         from src.services.calendar_service import earnings_prompt
         prompt += earnings_prompt(context.get("next_earnings"), report_language)
+        if getattr(self._get_runtime_config(), "event_outlook_enabled", False) is True:
+            from src.services.event_outlook import event_outlook_prompt
+            prompt += event_outlook_prompt(context.get("fundamental_context"), report_language)
         return prompt
 
     def _format_volume(self, volume: Optional[float], report_language: str = "zh") -> str:

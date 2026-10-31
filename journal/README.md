@@ -156,6 +156,13 @@ Brier(conf) vs Brier(20.4%)   confidence 有沒有比「一律報基準率」更
 ```
 
 結論一律要求 **bootstrap 區間不跨零且已到期 ≥20 筆**，否則標為 inconclusive。
+- `event-outlook-outcomes.jsonl` — **事件展望的事後結果**（`scripts/verify_event_outlook.py --append` 追加，`make verify-event-outlook` 唯讀；目前未接排程，要手動跑）。
+  預測在應用庫 `analysis_history.raw_result.dashboard.event_outlook`，寫入時間是報告的 `created_at`；這裡一個 `(code, event_date)` 一行、不重寫。
+  同一事件只取事件日**之前**最後一份報告（事件當天的報告可能已看到結果，不算）；只計 `event_type=earnings` 且 `expectation` 為 `beat`／`inline`／`miss`，`insufficient_data` 記 `scorable=false`。
+  實際結果取 yfinance `earnings_history` 中季底早於事件日且相距 ≤95 天的最新一列（索引是季底不是公告日；上一季距事件超過一季，不會被誤用）；列還沒出現就不寫、下次再試。yfinance 只留近四季，超過一年沒跑會補不回來。
+  欄位：`code`、`event_date`、`report_id`、`predicted_at`、`expectation`、`confidence`、`evaluated_at`、`scorable`、`note`；可計分時另有 `quarter`、`surprise_pct`（百分比）、`eps_actual`、`eps_estimate`、`actual`（`|surprise|≤2%` 算 `inline`）、`hit`、`always_beat_hit`。
+  **命中率本身不是結論**（美股多數超預期）：一律對照「永遠猜 beat」，依股票 bootstrap 差值 95% CI；n<20 或區間跨零標 inconclusive。
+
 - `media-picks.jsonl` — **財經電視節目點名**（`make media-picks`，`scripts/tw_media_picks.py`），一筆點名一行。
   來源是固定頻道的完整版，清單與篩選規則在腳本的 `CHANNELS`（電視財經節目 10 個、投顧分析師每日解盤 12 個、獨立 YouTuber 1 個、研究型 2 個）：NotebookLM 產生逐字稿並逐集列出點名，
   股名對照 `apps/dsa-web/public/stocks.index.json` 轉代號，再附播出當時已知的本地數據。

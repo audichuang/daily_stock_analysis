@@ -139,6 +139,18 @@ def _service(**overrides: object) -> tuple[StockProfileService, dict[str, MagicM
     return StockProfileService(**dependencies), dependencies
 
 
+def test_profile_research_carries_event_outlook_and_null_for_old_reports() -> None:
+    service, dependencies = _service()
+    assert service.get_profile("aapl", history_days=45)["research"]["data"]["event_outlook"] is None
+
+    detail = _report_detail()
+    detail["raw_result"] = {**(detail.get("raw_result") or {}),
+                            "dashboard": {"event_outlook": {"event": "財報", "expectation": "miss"}}}
+    dependencies["history_service"].get_history_detail_by_id.return_value = detail
+    outlook = service.get_profile("aapl", history_days=45)["research"]["data"]["event_outlook"]
+    assert outlook["expectation"] == "miss"
+
+
 def test_profile_uses_one_canonical_code_and_returns_structured_research() -> None:
     service, dependencies = _service()
 

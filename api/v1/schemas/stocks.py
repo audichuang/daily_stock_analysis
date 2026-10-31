@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from api.v1.schemas.history import HistoryItem
 from api.v1.schemas.intelligence import IntelligenceItem
 from api.v1.schemas.research_artifact import ResearchArtifact
+from src.schemas.report_schema import EventOutlook
 
 StockProfileStatus = Literal["fresh", "partial", "unavailable"]
 
@@ -220,6 +221,7 @@ class StockProfileResearchData(BaseModel):
     latest_report: Optional[HistoryItem] = None
     recent_reports: List[HistoryItem] = Field(default_factory=list)
     structured_report: Optional[ResearchArtifact] = None
+    event_outlook: Optional[EventOutlook] = None
 
 
 class StockProfileResearchBlock(BaseModel):

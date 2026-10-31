@@ -27,7 +27,7 @@ DOPPLER_RUN = doppler run -p finmind -c dev -- doppler run -p $(DOPPLER_PROJECT)
 
 .DEFAULT_GOAL := help
 .PHONY: help install serve serve-local review review-tw analyze schedule screen \
-        notify swing morning morning-run macro overnight taifex media-picks measure portfolio portfolio-wf verify-decisions verify-morning verify-media-picks shadow-buy \
+        notify swing morning morning-run macro overnight taifex media-picks measure portfolio portfolio-wf verify-decisions verify-morning verify-media-picks verify-event-outlook shadow-buy \
         test lint lint-fix format refresh-tw refresh-us daily-report daily-report-detached \
         pg-scratch pg-scratch-stop
 
@@ -157,6 +157,9 @@ verify-morning: ## 回驗盤前判讀：預估缺口 vs 官方開盤／09:05／�
 
 verify-media-picks: ## 回驗媒體點名：講者看多／看空與排程 Claude 的 research／watch／avoid 之後相對 0050 的超額（唯讀，n<20 或 CI 跨零標 inconclusive）
 	uv run --env-file .env python scripts/verify_media_picks.py
+
+verify-event-outlook: ## 回驗事件展望：財報 expectation 對實際 surprise，對照永遠猜 beat（連 yfinance；唯讀，n<20 或 CI 跨零標 inconclusive；要寫 journal 直接跑腳本帶 --append）
+	uv run --env-file .env python scripts/verify_event_outlook.py
 
 shadow-buy: ## 影子評估：被護欄壓掉的 LLM 原判買進照做的 1/2/3/5 日淨報酬 vs 0050（唯讀，輸出到 reports/）
 	uv run --env-file .env python scripts/shadow_buy_eval.py

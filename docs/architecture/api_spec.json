@@ -3603,6 +3603,17 @@
               }
             ],
             "description": "结构化研究产物，供看板、个股研究页、监控和 Copilot 复用"
+          },
+          "event_outlook": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EventOutlook"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "事件展望；附近沒有事件或舊報告時為 null"
           }
         },
         "required": [
@@ -8673,6 +8684,16 @@
                 "type": "null"
               }
             ]
+          },
+          "event_outlook": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EventOutlook"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -9334,6 +9355,259 @@
         ],
         "title": "DecisionSignalReviewMemory",
         "description": "Read-only, low-sensitivity review summary of DecisionSignal outcomes for one stock.\n\nAggregated server-side from signal-level outcomes/feedback.  Raw evidence,\nprompt text, diagnostics, and holdings are intentionally excluded; the\npayload is observational context only and must not be used as a trading\nsignal."
+      },
+      "EventConsensus": {
+        "properties": {
+          "eps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eps"
+          },
+          "revenue": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revenue"
+          },
+          "analysts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysts"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          }
+        },
+        "type": "object",
+        "title": "EventConsensus",
+        "description": "下一季法人預估；只來自抓到的證據，模型的回聲不採用。"
+      },
+      "EventScenario": {
+        "properties": {
+          "case": {
+            "type": "string",
+            "enum": [
+              "beat",
+              "inline",
+              "miss"
+            ],
+            "title": "Case"
+          },
+          "expected_reaction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Reaction"
+          },
+          "action_if_holding": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action If Holding"
+          },
+          "action_if_flat": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action If Flat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "case"
+        ],
+        "title": "EventScenario",
+        "description": "單一情境下的預期反應與動作。"
+      },
+      "EventOutlook": {
+        "properties": {
+          "event": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event"
+          },
+          "event_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "earnings",
+                  "investor_conference",
+                  "other"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Type"
+          },
+          "event_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Date"
+          },
+          "consensus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EventConsensus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "track_record": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Track Record"
+          },
+          "revision_trend": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Trend"
+          },
+          "expectation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "beat",
+                  "inline",
+                  "miss",
+                  "insufficient_data"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectation"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "reasoning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning"
+          },
+          "scenarios": {
+            "items": {
+              "$ref": "#/components/schemas/EventScenario"
+            },
+            "type": "array",
+            "title": "Scenarios"
+          },
+          "news_impact": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "News Impact"
+          },
+          "verify_after": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verify After"
+          }
+        },
+        "type": "object",
+        "title": "EventOutlook",
+        "description": "事件展望；純證據，不參與評分。"
       }
     },
     "securitySchemes": {

@@ -1743,6 +1743,9 @@ class StockAnalysisPipeline:
             from src.services.calendar_service import earnings_evidence, earnings_prompt
             initial_context["next_earnings"] = earnings_evidence(code)
             initial_context["earnings_prompt"] = earnings_prompt(initial_context["next_earnings"], report_language)
+            if getattr(self.config, "event_outlook_enabled", False) is True:
+                from src.services.event_outlook import event_outlook_prompt
+                initial_context["event_outlook_prompt"] = event_outlook_prompt(fundamental_context, report_language)
             if isinstance(portfolio_context, dict):
                 initial_context["portfolio_context"] = dict(portfolio_context)
             if self.analysis_skills is not None:
@@ -3450,6 +3453,13 @@ class StockAnalysisPipeline:
         from src.services.event_gap import event_gap_context, apply_event_gap_guard
         event = event_gap_context(artifacts.code, {**artifacts.base_context, **snapshot_context}, self.config)
         apply_event_gap_guard(result, event, report_language)
+        from src.services.event_outlook import apply_event_outlook_guard
+        apply_event_outlook_guard(
+            result,
+            artifacts.fundamental_context,
+            snapshot_context.get("next_earnings"),
+            enabled=getattr(self.config, "event_outlook_enabled", False) is True,
+        )
         final_action = normalize_decision_action(getattr(result, "action", None))
         if isinstance(result.dashboard, dict):
             result.dashboard.pop("agent_disagreement_explanation", None)
@@ -3814,6 +3824,7 @@ class StockAnalysisPipeline:
         sanitized.pop("analysis_context_pack", None)
         sanitized.pop("analysis_context_pack_summary", None)
         sanitized.pop("daily_market_context_summary", None)
+        sanitized.pop("event_outlook_prompt", None)
         enhanced_context = sanitized.get("enhanced_context")
         if isinstance(enhanced_context, dict):
             enhanced_context = dict(enhanced_context)

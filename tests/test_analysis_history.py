@@ -1291,6 +1291,31 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual(from_plain["total"], 3)
         self.assertEqual({item["stock_code"] for item in from_plain["items"]}, expected)
 
+    def test_history_detail_returns_event_outlook_saved_in_raw_result(self) -> None:
+        if get_history_detail is None:
+            self.skipTest("fastapi is not installed in this test environment")
+        result = self._build_result()
+        result.dashboard = {"event_outlook": {
+            "event": "Q3 財報", "event_type": "earnings", "expectation": "beat", "confidence": "medium",
+            "consensus": {"eps": 2.47, "revenue": 1.09e11, "analysts": 44, "currency": "USD"},
+            "scenarios": [{"case": "miss", "action_if_holding": "減碼"}],
+        }}
+        record_id = self.db.save_analysis_history(
+            result=result, query_id="query_outlook", report_type="simple", news_content="news",
+            context_snapshot={}, save_snapshot=True,
+        )
+        report = get_history_detail(str(record_id), db_manager=self.db)
+        self.assertEqual(report.event_outlook.expectation, "beat")
+        self.assertEqual(report.event_outlook.consensus.analysts, 44)
+        self.assertEqual(report.event_outlook.scenarios[0].action_if_holding, "減碼")
+
+        result = self._build_result()
+        record_id = self.db.save_analysis_history(
+            result=result, query_id="query_no_outlook", report_type="simple", news_content="news",
+            context_snapshot={}, save_snapshot=True,
+        )
+        self.assertIsNone(get_history_detail(str(record_id), db_manager=self.db).event_outlook)
+
     def test_history_detail_preserves_zero_change_pct(self) -> None:
         """change_pct=0.0（平盘）应原样返回，而不是被当成缺失值丢失。
 
