@@ -76,17 +76,16 @@ public enum DisplayNumber {
         return (isPositive ? "+" : "") + text + "%"
     }
 
-    // 台股高價股可省略多餘的 0，但最多保留兩位：ETF 的升降單位更細（00631L 443.15），不能捨入。
-    // 其他市場一元以下留四位給低價股。
+    // max 是上限：報價的有效小數一律保留到四位，不依價位捨入（00631L 443.15、滬市 ETF 1.231）。
+    // min 只決定補幾個 0：台股高價股不補，其他市場一元以下固定四位。
     private static func priceDigits(_ value: Double, currency: String?) -> (min: Int, max: Int) {
         let magnitude = abs(value)
         if currency == "TWD" {
-            if magnitude >= 1000 { return (0, 2) }
-            if magnitude >= 100 { return (1, 2) }
-            return (2, 2)
+            if magnitude >= 1000 { return (0, 4) }
+            if magnitude >= 100 { return (1, 4) }
+            return (2, 4)
         }
-        let digits = magnitude > 0 && magnitude < 1 ? 4 : 2
-        return (digits, digits)
+        return (magnitude > 0 && magnitude < 1 ? 4 : 2, 4)
     }
 
     public static func price(_ value: Double?, currency: String? = nil) -> String {

@@ -66,6 +66,8 @@ final class DisplayTermsTests: XCTestCase {
         XCTAssertEqual(DisplayNumber.price(512.5, currency: "TWD"), "512.5")
         XCTAssertEqual(DisplayNumber.price(45.35, currency: "TWD"), "45.35")
         XCTAssertEqual(DisplayNumber.price(443.15, currency: "TWD"), "443.15")
+        XCTAssertEqual(DisplayNumber.price(1.231, currency: "CNY"), "1.231")
+        XCTAssertEqual(DisplayNumber.price(3.875, currency: "USD"), "3.875")
         XCTAssertEqual(DisplayNumber.price(1040.5, currency: "TWD"), "1,040.5")
         XCTAssertEqual(DisplayNumber.price(1234.5, currency: "USD"), "1,234.50")
         XCTAssertEqual(DisplayNumber.price(0.1234, currency: "USD"), "0.1234")

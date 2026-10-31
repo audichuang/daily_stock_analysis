@@ -29,17 +29,17 @@ export const formatPercent = (value?: number | null, digits = 2): string => {
   return value > 0 && /[1-9]/.test(text) ? `+${text}%` : `${text}%`;
 };
 
-// 台股高價股可省略多餘的 0，但最多保留兩位：ETF 的升降單位更細（00631L 443.15），不能捨入。
-// 其他市場一元以下留四位給低價股。
+// 第二個值是上限：報價的有效小數一律保留到四位，不依價位捨入（00631L 443.15、滬市 ETF 1.231）。
+// 第一個值只決定補幾個 0：台股高價股不補，其他市場一元以下固定四位。
+const PRICE_MAX_DIGITS = 4;
 const priceDigits = (value: number, currency?: string): [number, number] => {
   const abs = Math.abs(value);
   if (currency === 'TWD') {
-    if (abs >= 1000) return [0, 2];
-    if (abs >= 100) return [1, 2];
-    return [2, 2];
+    if (abs >= 1000) return [0, PRICE_MAX_DIGITS];
+    if (abs >= 100) return [1, PRICE_MAX_DIGITS];
+    return [2, PRICE_MAX_DIGITS];
   }
-  const digits = abs > 0 && abs < 1 ? 4 : 2;
-  return [digits, digits];
+  return [abs > 0 && abs < 1 ? PRICE_MAX_DIGITS : 2, PRICE_MAX_DIGITS];
 };
 
 export const formatPrice = (value?: number | null, currency?: string): string => {

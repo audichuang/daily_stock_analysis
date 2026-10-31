@@ -40,7 +40,7 @@ describe('portfolioFormat', () => {
   });
 
   it('formats position price fields based on price availability', () => {
-    expect(formatPositionPrice(pricedPosition)).toBe('321.12');
+    expect(formatPositionPrice(pricedPosition)).toBe('321.1235');
     expect(formatPositionMoney(123, pricedPosition)).toBe('CNY 123.00');
     expect(getPositionPriceLabel(pricedPosition)).toBe('实时价 · longbridge');
 

@@ -31,6 +31,9 @@ describe('數字格式', () => {
     expect(formatPrice(512.5, 'TWD')).toBe('512.5');
     expect(formatPrice(45.35, 'TWD')).toBe('45.35');
     expect(formatPrice(443.15, 'TWD')).toBe('443.15');
+    expect(formatPrice(1.231, 'CNY')).toBe('1.231');
+    expect(formatPrice(1.234, 'CNY')).toBe('1.234');
+    expect(formatPrice(3.875, 'CNY')).toBe('3.875');
     expect(formatPrice(1040.5, 'TWD')).toBe('1,040.5');
     expect(formatPrice(1234.5, 'USD')).toBe('1,234.50');
     expect(formatPrice(0.1234, 'USD')).toBe('0.1234');
