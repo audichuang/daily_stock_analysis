@@ -51,6 +51,15 @@ public struct IntradaySeries: Sendable {
         sessionDay = String(format: "%04d-%02d-%02d", day.year ?? 0, day.month ?? 0, day.day ?? 0)
     }
 
+    /// 分時那一天的昨收：近一月日線裡、日期早於 `sessionDay` 的最後一根收盤。
+    /// 用日期對齊而不是拿個股頁載入時的報價昨收——頁面開過夜後那個昨收屬於前一天，漲跌方向會算反。
+    public func previousClose(from daily: [TrendPoint]) -> Double? {
+        daily
+            .filter { String($0.t.prefix(10)) < sessionDay && $0.price.isFinite && $0.price > 0 }
+            .max { $0.t.prefix(10) < $1.t.prefix(10) }?
+            .price
+    }
+
     public static func parse(_ value: String) -> Date? {
         let plain = ISO8601DateFormatter()
         plain.formatOptions = [.withInternetDateTime]

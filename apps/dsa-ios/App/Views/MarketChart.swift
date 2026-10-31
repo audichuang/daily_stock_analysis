@@ -6,12 +6,9 @@ import SwiftUI
 /// 三張圖共用同一個捲動位置與可見寬度，拖曳選取也共用。
 struct MarketChart: View {
     let candles: [ChartCandle]
-    let source: String?
-    let asOf: String?
     let convention: MarketColorConvention
     let market: String
-    let previousClose: Double?
-    let loadIntraday: (() async throws -> StockTrend)?
+    let loadIntraday: (() async throws -> IntradayPayload)?
 
     @State private var showsIntraday = false
     @State private var interval: ChartInterval = .threeMonths
@@ -32,19 +29,13 @@ struct MarketChart: View {
 
     init(
         candles: [ChartCandle],
-        source: String? = nil,
-        asOf: String? = nil,
         convention: MarketColorConvention = .taiwan,
         market: String = "tw",
-        previousClose: Double? = nil,
-        loadIntraday: (() async throws -> StockTrend)? = nil
+        loadIntraday: (() async throws -> IntradayPayload)? = nil
     ) {
         self.candles = candles
-        self.source = source
-        self.asOf = asOf
         self.convention = convention
         self.market = market
-        self.previousClose = previousClose
         self.loadIntraday = loadIntraday
     }
 
@@ -280,11 +271,10 @@ struct MarketChart: View {
     var body: some View {
         let data = visibleSlice(prepared.full)
         VStack(alignment: .leading, spacing: 10) {
-            SectionHeading("價格走勢", eyebrow: "MARKET STRUCTURE")
             tabRow
 
             if showsIntraday, let loadIntraday {
-                IntradayChart(market: market, previousClose: previousClose, convention: convention, load: loadIntraday)
+                IntradayChart(market: market, convention: convention, load: loadIntraday)
             } else if let domain = fullDomain, !prepared.full.isEmpty {
                 if let candle = inspected(in: data) {
                     infoHeader(candle)
@@ -319,13 +309,6 @@ struct MarketChart: View {
                 }
             } else {
                 EmptyStateView(title: "尚無日線資料", message: "目前沒有可顯示的行情，取得資料後才會繪製走勢。")
-            }
-
-            if !showsIntraday, source != nil || asOf != nil {
-                Text([source.map { "行情資訊：\($0)" }, asOf.map { "資料時間：\($0)" }].compactMap { $0 }.joined(separator: "　"))
-                    .font(.caption2)
-                    .foregroundStyle(Theme.secondary)
-                    .textSelection(.enabled)
             }
         }
         .onAppear {
@@ -364,9 +347,17 @@ struct MarketChart: View {
             Spacer(minLength: 4)
             if !showsIntraday {
                 Menu {
-                    Picker("顯示區間", selection: $interval) {
-                        ForEach(ChartInterval.allCases) { option in
-                            Text(option.label).tag(option)
+                    // 用按鈕而不是 Picker：重選目前的區間也要回到該寬度並貼齊最新，Picker 值沒變不會觸發。
+                    ForEach(ChartInterval.allCases) { option in
+                        Button {
+                            interval = option
+                            resetViewport()
+                        } label: {
+                            if option == interval {
+                                Label(option.label, systemImage: "checkmark")
+                            } else {
+                                Text(option.label)
+                            }
                         }
                     }
                 } label: {
@@ -476,9 +467,9 @@ struct MarketChart: View {
             HStack(spacing: 6) {
                 Group {
                     if candle.periodStart == candle.date {
-                        Text("\(period.label)・\(candle.date.formatted(TradingDay.readoutStyle()))")
+                        Text(candle.date, format: TradingDay.readoutStyle())
                     } else {
-                        Text("\(period.label)・\(candle.periodStart.formatted(TradingDay.axisStyle()))–\(candle.date.formatted(TradingDay.axisStyle()))")
+                        Text("\(candle.periodStart.formatted(TradingDay.readoutStyle()))–\(candle.date.formatted(TradingDay.axisStyle()))")
                     }
                 }
                 .foregroundStyle(Theme.text)

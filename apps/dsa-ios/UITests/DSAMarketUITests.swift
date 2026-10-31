@@ -72,7 +72,7 @@ final class DSAMarketUITests: XCTestCase {
         capture("03-個股報價與日K")
 
         tap(app.buttons["chart.tab.month"])
-        XCTAssertTrue(text(containing: "月 K・").waitForExistence(timeout: 5), "切到月 K")
+        XCTAssertTrue(app.buttons["chart.tab.month"].isSelected, "切到月 K")
         XCTAssertTrue(app.buttons["chart.range"].label.contains("5 年"), "月 K 預設視窗是 5Y")
         XCTAssertTrue(app.buttons["chart.ma.2"].exists, "月 K 應有第三條均線可切換")
         XCTAssertFalse(text(containing: "已顯示全部").exists, "fixture 有六年資料，5Y 不應提示資料不足")
@@ -95,9 +95,10 @@ final class DSAMarketUITests: XCTestCase {
         tap(app.buttons["chart.guide.done"])
         tap(app.buttons["chart.tab.intraday"])
         XCTAssertTrue(text(containing: "分時來源：fixture（合成分時）").waitForExistence(timeout: 10), "分時要打 /trend 並標來源")
+        XCTAssertTrue(text(containing: "昨收 590.03").exists, "分時昨收要取分時那天之前的日線收盤")
         capture("03f-分時")
         tap(app.buttons["chart.tab.day"])
-        XCTAssertTrue(text(containing: "日 K・").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["chart.tab.day"].isSelected)
 
         let emptyBid = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "最佳買價", "無報價")).firstMatch
         scrollTo(emptyBid)

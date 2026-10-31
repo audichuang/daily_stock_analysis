@@ -229,6 +229,9 @@ class Handler(BaseHTTPRequestHandler):
                 code = route[3]
                 if code not in STOCKS:
                     return self.reply(200, {"stock_code": code, "range": "day", "source": None, "points": []})
+                if query.get("range", ["month"])[0] == "month":
+                    daily = [{"t": bar["date"], "price": bar["close"]} for bar in bars(code)[-30:]]
+                    return self.reply(200, {"stock_code": code, "range": "month", "source": "fixture（合成日線）", "points": daily})
                 return self.reply(200, {"stock_code": code, "range": "day", "source": intraday_source(code),
                                         "points": intraday(code)})
             if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "profile":

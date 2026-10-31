@@ -15,6 +15,7 @@ struct StockDetailView: View {
     @State private var progress: Int?
     @State private var taskMessage: String?
     @State private var polling = false
+    @State private var showsTimeNote = false
 
     var body: some View {
         PageScroll {
@@ -25,10 +26,8 @@ struct StockDetailView: View {
                 MarketChart(candles: profile.history.data.compactMap { bar in
                     guard let date = DisplayFormat.date(bar.date) else { return nil }
                     return ChartCandle(date: date, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume, isProvisional: bar.provisional == true)
-                }, source: "日 K · \(profile.history.status == "fresh" ? "資料可用" : "資料不完整")",
-                            asOf: profile.history.data.last?.date, convention: store.colorConvention,
-                            market: profile.market, previousClose: profile.quote.data?.prevClose,
-                            loadIntraday: store.client.map { client in { try await client.stockTrend(code) } })
+                }, convention: store.colorConvention, market: profile.market,
+                            loadIntraday: store.client.map { client in { try await Self.intraday(code, client: client) } })
                 if !profile.history.limitations.isEmpty { limitation(profile.history.limitations) }
                 if let quote = profile.quote.data { tradingMetrics(quote) }
                 analysisSection(profile)
@@ -74,32 +73,49 @@ struct StockDetailView: View {
 
     private var taskKey: String { "analysisTask.\(store.baseURL?.absoluteString ?? "").\(code)" }
 
+    /// 價格、漲跌與一行來源時間；「資料參考時間」的說明收在 ⓘ 裡，需要時再展開。
     private func quoteHeader(_ profile: StockProfile) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text(code).font(.subheadline.monospaced()).foregroundStyle(Theme.secondary)
-                Spacer()
-                StatusBadge(profile.market.uppercased(), tone: .information)
-            }
-            HStack(alignment: .firstTextBaseline, spacing: 14) {
-                Text(DisplayFormat.number(profile.quote.data?.currentPrice))
+        let quote = profile.quote.data
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(DisplayFormat.number(quote?.currentPrice))
                     .font(.system(.largeTitle, design: .rounded, weight: .bold).monospacedDigit()).foregroundStyle(Theme.text)
-                Text(DisplayFormat.percent(profile.quote.data?.changePercent))
-                    .font(.headline.monospacedDigit()).foregroundStyle(Theme.changeColor(profile.quote.data?.changePercent, convention: store.colorConvention))
+                Text(DisplayFormat.percent(quote?.changePercent))
+                    .font(.headline.monospacedDigit()).foregroundStyle(Theme.changeColor(quote?.changePercent, convention: store.colorConvention))
+                Spacer(minLength: 0)
+                Text("\(code) · \(profile.market.uppercased())")
+                    .font(.caption.monospaced()).foregroundStyle(Theme.secondary)
+            }
+            HStack(spacing: 6) {
+                Text("\(DisplayFormat.source(quote?.source)) · 資料參考時間 \(DisplayFormat.time(quote?.asOf ?? quote?.updateTime))")
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                if quote?.isStale == true { StatusBadge("已過期", tone: .warning) }
+                Button {
+                    withAnimation(.easeOut(duration: 0.15)) { showsTimeNote.toggle() }
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("資料參考時間說明")
                 Spacer(minLength: 0)
             }
-            HStack {
-                Text(DisplayFormat.source(profile.quote.data?.source)).font(.caption)
-                if profile.quote.data?.isStale == true { StatusBadge("已過期", tone: .warning) }
-            }.foregroundStyle(Theme.secondary)
-            Text("資料參考時間 · \(DisplayFormat.time(profile.quote.data?.asOf ?? profile.quote.data?.updateTime))")
-                .font(.caption2).foregroundStyle(Theme.secondary)
-            Text(MarketDataPresentation.referenceTimeExplanation)
-                .font(.caption2).foregroundStyle(Theme.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .font(.caption).foregroundStyle(Theme.secondary)
+            if showsTimeNote {
+                Text(MarketDataPresentation.referenceTimeExplanation)
+                    .font(.caption2).foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if !profile.quote.limitations.isEmpty { limitation(profile.quote.limitations) }
             if let actionError { ErrorStateView(message: actionError) }
         }
+    }
+
+    /// 分時與近一月日線一起抓：昨收要依分時那天對齊，不能拿頁面載入時的報價昨收（開過夜會錯）。
+    private static func intraday(_ code: String, client: DSAClient) async throws -> IntradayPayload {
+        async let day = client.stockTrend(code, range: "day")
+        async let month = client.stockTrend(code, range: "month")
+        let daily = try? await month
+        return IntradayPayload(day: try await day, daily: daily)
     }
 
     private func tradingMetrics(_ quote: StockQuote) -> some View {

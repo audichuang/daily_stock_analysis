@@ -2,14 +2,20 @@ import Charts
 import DSACore
 import SwiftUI
 
+/// 分時與同一時點抓的近一月日線（用來對齊昨收）；日線抓不到時為 nil，畫面就不顯示昨收與漲跌。
+struct IntradayPayload {
+    let day: StockTrend
+    let daily: StockTrend?
+}
+
 /// 分時圖：當日價格線，以昨收為基準線，x 軸固定是整個交易時段。只在切到「分時」時才打 `/trend`。
 struct IntradayChart: View {
     let market: String
-    let previousClose: Double?
     let convention: MarketColorConvention
-    let load: () async throws -> StockTrend
+    let load: () async throws -> IntradayPayload
 
     @State private var series: IntradaySeries?
+    @State private var previousClose: Double?
     @State private var source: String?
     @State private var loading = false
     @State private var failure: String?
@@ -43,9 +49,11 @@ struct IntradayChart: View {
         loading = true
         defer { loading = false }
         do {
-            let trend = try await load()
-            series = IntradaySeries(points: trend.points, market: market)
-            source = trend.source
+            let payload = try await load()
+            let parsed = IntradaySeries(points: payload.day.points, market: market)
+            series = parsed
+            previousClose = payload.daily.flatMap { parsed?.previousClose(from: $0.points) }
+            source = payload.day.source
             failure = nil
         } catch is CancellationError {
         } catch {

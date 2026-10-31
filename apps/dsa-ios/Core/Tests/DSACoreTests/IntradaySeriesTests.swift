@@ -38,4 +38,16 @@ final class IntradaySeriesTests: XCTestCase {
         XCTAssertEqual(trend.stockCode, "INTC")
         XCTAssertEqual(trend.points.first?.price, 65.3)
     }
+
+    func testPreviousCloseIsTheLastDailyCloseBeforeTheSessionDay() throws {
+        let series = try XCTUnwrap(IntradaySeries(points: [TrendPoint(t: "2026-10-30T15:55:00-04:00", price: 65.88)], market: "us"))
+        let daily = [
+            TrendPoint(t: "2026-10-28", price: 95.53),
+            TrendPoint(t: "2026-10-30", price: 65.76),
+            TrendPoint(t: "2026-10-29", price: 92.07),
+            TrendPoint(t: "2026-10-31T00:00:00+08:00", price: 1)
+        ]
+        XCTAssertEqual(series.previousClose(from: daily), 92.07, "取 10/30 之前最後一根，不是當天、也不是陣列最後一筆")
+        XCTAssertNil(series.previousClose(from: [TrendPoint(t: "2026-10-30", price: 65.76)]), "沒有更早的日線就不給昨收，不拿別天湊")
+    }
 }
