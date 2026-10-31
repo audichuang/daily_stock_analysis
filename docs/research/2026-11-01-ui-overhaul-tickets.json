@@ -1,0 +1,1832 @@
+{
+ "tickets": [
+  {
+   "id": "S01",
+   "title": "設定檢查不再回傳連線字串，改回 code＋參數",
+   "platform": "backend",
+   "scope": "system_config_service 的資料庫檢查不再回 render_as_string（帳號、內網 IP、URL 編碼，現況在 :3910）。後端直接輸出 message_code＋message_params，並保留固定句 message（「應用資料庫連線正常（PostgreSQL）」）當舊客戶端的 fallback；排錯資訊只放遮罩後的獨立欄位。前端組句由 E01 做，這張不動前端。測試要做 §1.2 mutation：改回 render_as_string 必紅、把 message 拿掉也必紅。信任邊界修正，最先做。",
+   "files": [
+    "src/services/system_config_service.py",
+    "api/v1/schemas/system_config.py",
+    "tests/test_system_config_service.py"
+   ],
+   "dependsOn": [],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_system_config_service.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 1
+  },
+  {
+   "id": "G01",
+   "title": "共用詞彙表與 zh-TW 文案基礎",
+   "platform": "docs+web",
+   "scope": "新增 docs/glossary-zh-tw.md 當 Web 與 iOS 手動同步的正本（用語決議見 notes）。uiText 的 zh-TW 表依詞彙表統一：告警→警報、持倉→持股（導覽「資產」）、刷新→重新整理、配置→設定、渠道→管道、股票代碼→股票代號；範例改 2330.TW、台積電、AAPL；移除英文眉標文案。新增 vitest 掃描 tsx 內非 zh/en 表的簡體常見字，先以現存檔案為白名單，各頁票逐步清空。 這 24 個測試檔含「告警、持倉、刷新、配置、渠道」等詞（字串命中，斷言語系要逐一確認），會壞的跟著改。 新增檔：docs/glossary-zh-tw.md、apps/dsa-web/src/i18n/__tests__/simplifiedGuard.test.ts。",
+   "files": [
+    "docs/glossary-zh-tw.md",
+    "apps/dsa-web/src/i18n/uiText.ts",
+    "apps/dsa-web/src/locales/featureText.ts",
+    "apps/dsa-web/src/i18n/__tests__/simplifiedGuard.test.ts",
+    "apps/dsa-web/src/stores/__tests__/agentChatStore.test.ts",
+    "apps/dsa-web/src/components/settings/__tests__/NotificationTestPanel.test.tsx",
+    "apps/dsa-web/src/components/settings/__tests__/LLMChannelEditor.test.tsx",
+    "apps/dsa-web/src/components/settings/__tests__/AgentBackendStatusPanel.test.tsx",
+    "apps/dsa-web/src/components/settings/__tests__/GenerationBackendStatusPanel.test.tsx",
+    "apps/dsa-web/src/components/settings/__tests__/IntelligentImport.test.tsx",
+    "apps/dsa-web/src/components/settings/__tests__/SettingsField.test.tsx",
+    "apps/dsa-web/src/components/layout/__tests__/SidebarNav.test.tsx",
+    "apps/dsa-web/src/components/alerts/__tests__/AlertRuleList.test.tsx",
+    "apps/dsa-web/src/components/report/__tests__/ReportDiagnostics.test.tsx",
+    "apps/dsa-web/src/components/report/__tests__/ReportNews.test.tsx",
+    "apps/dsa-web/src/components/report/__tests__/ReportOverview.test.tsx",
+    "apps/dsa-web/src/components/report/__tests__/AnalysisContextSummary.test.tsx",
+    "apps/dsa-web/src/api/__tests__/index.test.ts",
+    "apps/dsa-web/src/api/__tests__/systemConfig.test.ts",
+    "apps/dsa-web/src/api/__tests__/agent.test.ts",
+    "apps/dsa-web/src/pages/__tests__/DecisionSignalsPage.test.tsx",
+    "apps/dsa-web/src/pages/__tests__/StockScreeningPage.test.tsx",
+    "apps/dsa-web/src/pages/__tests__/ChatPage.test.tsx",
+    "apps/dsa-web/src/pages/__tests__/AlertsPage.test.tsx",
+    "apps/dsa-web/src/pages/__tests__/RealtimeBoardPage.test.tsx",
+    "apps/dsa-web/src/pages/__tests__/SettingsPage.test.tsx",
+    "apps/dsa-web/src/pages/__tests__/HomePage.test.tsx",
+    "apps/dsa-web/src/pages/__tests__/PortfolioPage.test.tsx"
+   ],
+   "dependsOn": [],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run；真實畫面：用 repo verify skill（.claude/skills/verify/features/settings-auth.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：側欄與各頁標題用詞符合詞彙表，無「告警／持倉／刷新／配置／渠道」",
+   "compiles": true,
+   "impact": "high",
+   "batch": 1
+  },
+  {
+   "id": "D01",
+   "title": "Web 漲跌與動作語意色統一入口",
+   "platform": "web",
+   "scope": "新增 --market-up/--market-down（取代 --home-price-*）、utils/marketTone.ts、common/Change.tsx、actionTone 對照。替換持股、回測、基金、看板、報告、歷史趨勢的手寫判斷；損益一律紅賺綠賠，success／danger 只留系統狀態。動作色：買進類品牌色、觀望灰、減碼賣出琥珀，不用紅綠。加 grep 測試禁止損益欄用 text-success，並做 mutation。 新增檔：apps/dsa-web/src/utils/marketTone.ts、apps/dsa-web/src/components/common/Change.tsx。",
+   "files": [
+    "apps/dsa-web/src/index.css",
+    "apps/dsa-web/src/utils/marketTone.ts",
+    "apps/dsa-web/src/components/common/Change.tsx",
+    "apps/dsa-web/src/components/common/Badge.tsx",
+    "apps/dsa-web/src/utils/decisionAction.ts",
+    "apps/dsa-web/src/pages/PortfolioPage.tsx",
+    "apps/dsa-web/src/pages/BacktestPage.tsx",
+    "apps/dsa-web/src/pages/FundsPage.tsx",
+    "apps/dsa-web/src/pages/RealtimeBoardPage.tsx",
+    "apps/dsa-web/src/components/report/ReportOverview.tsx",
+    "apps/dsa-web/src/components/history/StockHistoryTrendDrawer.tsx"
+   ],
+   "dependsOn": [
+    "G01"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/PortfolioPage.test.tsx src/pages/__tests__/BacktestPage.test.tsx src/pages/__tests__/FundsPage.test.tsx src/pages/__tests__/RealtimeBoardPage.test.tsx src/components/report/__tests__/ReportOverview.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/portfolio.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：持股、回測、基金、看板的損益一律紅賺綠賠；動作標籤不用紅綠",
+   "compiles": true,
+   "impact": "high",
+   "batch": 1
+  },
+  {
+   "id": "D02",
+   "title": "Web 數字與金額格式統一",
+   "platform": "web",
+   "scope": "擴充既有 utils/format.ts，新增 Num、Money；價格依幣別與價位決定小數並加千分位，百分比帶正負號，負號統一，預設 zh-TW，數字預設 tabular-nums。portfolioFormat 移除 CNY 與 zh-CN fallback。各頁私有 formatter 由頁面票遷移。 新增檔：apps/dsa-web/src/components/common/Num.tsx。",
+   "files": [
+    "apps/dsa-web/src/utils/format.ts",
+    "apps/dsa-web/src/utils/portfolioFormat.ts",
+    "apps/dsa-web/src/components/common/Num.tsx",
+    "apps/dsa-web/src/components/common/index.ts"
+   ],
+   "dependsOn": [
+    "D01"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/utils；真實畫面：用 repo verify skill（.claude/skills/verify/features/portfolio.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：價格千分位與小數一致、百分比帶正負號、數字欄 tabular 對齊",
+   "compiles": true,
+   "impact": "high",
+   "batch": 1
+  },
+  {
+   "id": "D03",
+   "title": "Web Card 層級、字級、圓角、標籤",
+   "platform": "web",
+   "scope": "Card 分 surface／inset／highlight，terminal-card 漸層只留 highlight；padding 12／16／20；圓角 control 8、card 12、pill；字級 token 28／20／16／14／12／11；.label-uppercase 改 .label（字距 0、不轉大寫）。新增 vitest 計數測試：text-[Npx] 以現存 118 處（25 個 tsx）為基線、.home-／.backtest-／.settings- 全域 class 以現存 133 條為基線，超過就失敗；開工時重數一次再寫進測試。 新增檔：apps/dsa-web/src/__tests__/designTokenBudget.test.ts。",
+   "files": [
+    "apps/dsa-web/src/index.css",
+    "apps/dsa-web/src/components/common/Card.tsx",
+    "apps/dsa-web/src/components/common/SectionCard.tsx",
+    "apps/dsa-web/src/components/common/StatCard.tsx",
+    "apps/dsa-web/src/__tests__/designTokenBudget.test.ts"
+   ],
+   "dependsOn": [
+    "D02"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/common src/__tests__；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：首頁與 /portfolio 的卡片層級、字級、圓角一致，無文字截斷或破版",
+   "compiles": true,
+   "impact": "high",
+   "batch": 1
+  },
+  {
+   "id": "D04",
+   "title": "Web Button 收斂",
+   "platform": "web",
+   "scope": "variant 收成 primary／secondary／ghost／danger，高度 32／36／44，nowrap，新增 IconButton；.btn-* 轉接到 Button 樣式，解決「新建帳／戶」斷字。頁面的呼叫點以相容別名保留，由頁面票逐步換。",
+   "files": [
+    "apps/dsa-web/src/components/common/Button.tsx",
+    "apps/dsa-web/src/index.css"
+   ],
+   "dependsOn": [
+    "D03"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/common；真實畫面：用 repo verify skill（.claude/skills/verify/features/portfolio.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：「新建帳戶」不斷字，按鈕同列等高（32／36／44）",
+   "compiles": true,
+   "impact": "medium",
+   "batch": 1
+  },
+  {
+   "id": "D05",
+   "title": "Web PageHeader、AppPage、MetricGroup",
+   "platform": "web",
+   "scope": "PageHeader 改無外框單列（標題＋可選說明＋actions）；新增 Metric、MetricGroup（手機 2 欄、桌機 4～6 欄、支援 hero 與 unavailable）。StatCard 轉接 Metric。頁面遷移由頁面票做。 新增檔：apps/dsa-web/src/components/common/Metric.tsx。",
+   "files": [
+    "apps/dsa-web/src/components/common/PageHeader.tsx",
+    "apps/dsa-web/src/components/common/AppPage.tsx",
+    "apps/dsa-web/src/components/common/Metric.tsx",
+    "apps/dsa-web/src/components/common/StatCard.tsx",
+    "apps/dsa-web/src/components/common/index.ts"
+   ],
+   "dependsOn": [
+    "D04"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/common；真實畫面：用 repo verify skill（.claude/skills/verify/features/portfolio.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：既有 PageHeader 與 StatCard 頁面未破版；MetricGroup 手機 2 欄、桌機 4～6 欄",
+   "compiles": true,
+   "impact": "high",
+   "batch": 1
+  },
+  {
+   "id": "D06",
+   "title": "Web DataTable",
+   "platform": "web",
+   "scope": "新增 common/DataTable：columns 含 align、numeric、priority、minWidth、sticky；density compact 36px／comfortable 48px；可排序表頭；手機只顯示 primary 欄，其餘收進點開的列內詳情，支援自訂卡片列；整列 unavailable；表頭 sticky。 新增檔：apps/dsa-web/src/components/common/DataTable.tsx。",
+   "files": [
+    "apps/dsa-web/src/components/common/DataTable.tsx",
+    "apps/dsa-web/src/components/common/index.ts"
+   ],
+   "dependsOn": [
+    "D05"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/common；真實畫面：本票無頁面採用，元件層只跑單測；第一次畫面驗收在 Q01（1440×900、390×844），Q01 不過要回頭修本票",
+   "compiles": true,
+   "impact": "high",
+   "batch": 1
+  },
+  {
+   "id": "D07",
+   "title": "Web Segmented、FilterBar、狀態對照",
+   "platform": "web",
+   "scope": "新增 Segmented；Toolbar 重做為 FilterBar（手機次要條件進 Drawer，顯示已套用數）；Input、Select、Button md 同高 36px。新增 utils/statusLabels.ts（對應 iOS PresentationText），狀態碼集中轉繁中與 tone，unknown 用中性灰。 新增檔：apps/dsa-web/src/components/common/Segmented.tsx、apps/dsa-web/src/utils/statusLabels.ts。",
+   "files": [
+    "apps/dsa-web/src/components/common/Segmented.tsx",
+    "apps/dsa-web/src/components/common/Toolbar.tsx",
+    "apps/dsa-web/src/components/common/Select.tsx",
+    "apps/dsa-web/src/components/common/Input.tsx",
+    "apps/dsa-web/src/components/common/index.ts",
+    "apps/dsa-web/src/utils/statusLabels.ts"
+   ],
+   "dependsOn": [
+    "D06"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/common；真實畫面：用 repo verify skill（.claude/skills/verify/features/alerts-signals.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：現有用到 Toolbar 的頁面未破版；Input、Select、Button md 同高 36px",
+   "compiles": true,
+   "impact": "medium",
+   "batch": 1
+  },
+  {
+   "id": "I01a",
+   "title": "iOS 設計 token、動作語意色、負號與底部內距",
+   "platform": "ios",
+   "scope": "基於 PR #166 合併後的 iOS。新增 DSARadius、DSASpacing、DSAType；Theme.accent 維持現色（使用者決定，不開改色票）。ActionTone 依結構化 action 枚舉對應（同 Web 表）；PresentationText 加減倉→減碼別名與詞彙表，顯示動作一律走 action 枚舉；PressableButtonStyle 停用態；統一負號；新增 DisplayFormat.price、moneyWhole；全 App 英文眉標移除。新增全域底部內距規則，解決分頁列蓋住內容（今日第 6 列、資產第 5 列的 %、個股、工具都中），列入 UI 測試截圖檢查。",
+   "files": [
+    "apps/dsa-ios/App/Design/DesignSystem.swift",
+    "apps/dsa-ios/App/Design/PresentationText.swift",
+    "apps/dsa-ios/App/State/AppStore.swift",
+    "apps/dsa-ios/App/Views/ToolsView.swift",
+    "apps/dsa-ios/App/Views/ResearchLibraryView.swift",
+    "apps/dsa-ios/App/Views/ResearchReportView.swift",
+    "apps/dsa-ios/App/Views/StockDetailView.swift",
+    "apps/dsa-ios/App/DSAMarketApp.swift",
+    "apps/dsa-ios/UITests/DSAMarketUITests.swift"
+   ],
+   "dependsOn": [
+    "G01"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：今日、資產、個股、工具捲到底，最後一列完整露出不被分頁列蓋住；accent 色與改版前相同；無英文眉標",
+   "compiles": true,
+   "impact": "high",
+   "batch": 1
+  },
+  {
+   "id": "W01a",
+   "title": "Web 內嵌模式",
+   "platform": "web",
+   "scope": "Web 支援 ?embed=ios：隱藏標頭、側欄與底部分頁。判斷集中在新檔 utils/embedMode.ts，並把旗標存進 sessionStorage，否則站內換頁會遺失。之後 N02（底部分頁）、N03（狀態列、⌘K）、N04（rail）都必須走這個判斷，三張票各加一條測試。僅帶參數時生效，對現有 TestFlight 無影響。 新增檔：apps/dsa-web/src/utils/embedMode.ts。",
+   "files": [
+    "apps/dsa-web/src/utils/embedMode.ts",
+    "apps/dsa-web/src/components/layout/Shell.tsx",
+    "apps/dsa-web/src/components/layout/ShellHeader.tsx"
+   ],
+   "dependsOn": [
+    "D07"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/layout；真實畫面：用 repo verify skill（.claude/skills/verify/features/settings-auth.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 390×844、1440×900 截圖並實際檢視，判準：帶 ?embed=ios 開 /portfolio 再站內換到 /alerts，標頭與側欄全程隱藏；不帶參數時外框不變",
+   "compiles": true,
+   "impact": "high",
+   "batch": 2
+  },
+  {
+   "id": "W01b",
+   "title": "iOS 內嵌工具頁外框收斂",
+   "platform": "ios",
+   "scope": "基於 PR #166 的 ToolWebView（nonPersistent store、Access 重導處理不動）。載入網址加 ?embed=ios，確認 WebNavigationPolicy 與 Access 錯誤分流不受參數影響；刪說明橫條、隱藏 tabBar、細進度條、整頁錯誤狀態與繁中文案；AppStore 持有單一記憶體 data store，登出清空。放 iOS 鏈最前面：N02 部署前，這版必須已在 TestFlight 上且 Apple 狀態 VALID。",
+   "files": [
+    "apps/dsa-ios/App/Views/ToolWebView.swift",
+    "apps/dsa-ios/App/State/AppStore.swift",
+    "apps/dsa-ios/UITests/DSAMarketUITests.swift"
+   ],
+   "dependsOn": [
+    "I01a"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：工具頁開內嵌 /alerts、/settings：無第二層標頭與分頁，載入中只有細進度條，斷線時整頁錯誤且不留 WebView；登出再登入不殘留舊 session",
+   "compiles": true,
+   "impact": "high",
+   "batch": 2
+  },
+  {
+   "id": "B01",
+   "title": "/history/{id} 回傳 structured_report",
+   "platform": "backend",
+   "scope": "把 stock_profile_service._artifact_input 抽成共用，/history/{id} 填既有 structured_report 欄位；舊報告建構失敗時維持 null。iOS 報告頁的假空狀態由此消失。英文模板語言表一併在本票做（原在 B03）：research_artifact_service.py:176 的 \"Price breaks the report stop-loss area\" 這類句子會被舊版 iOS 原樣顯示（ResearchReportView.swift:300），本票一部署就會露出。",
+   "files": [
+    "api/v1/endpoints/history.py",
+    "src/services/stock_profile_service.py",
+    "src/services/research_artifact_service.py",
+    "tests/test_research_artifact_service.py",
+    "tests/test_stock_profile_api.py",
+    "src/report_language.py"
+   ],
+   "dependsOn": [],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_research_artifact_service.py tests/test_stock_profile_api.py tests/test_analysis_history.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 2
+  },
+  {
+   "id": "B02",
+   "title": "報告決策欄位 append",
+   "platform": "backend",
+   "scope": "ReportSummary 追加 one_sentence、time_sensitivity、position_advice、confidence_level、confidence_reason、guardrail_applied、guardrail_reason、strongest_bullish_signal、strongest_bearish_signal、watch_conditions、next_check_time。meta 追加 price_date、currency、change_amount、previous_report 摘要（action 枚舉、評分、時間、停損，不存標籤文字）、held。來源不全是 raw_result：currency 在 raw_result 是 0/645，由代號後綴推導（market_symbol_utils）；現價走 dashboard.data_perspective.price_position.current_price（645/645，不是 dashboard.price_position 0/645）；change_amount 由現價與漲跌幅推算；price_date 來源未查，開工先確認，查不到就不給。held 重用 _portfolio_block，無法判定時回 null，前端兩欄都不置頂。strategy 不動 sniper_prices（schemas/history.py:187 已存在），只追加 sniper_prices_source（structured／legacy）。不用正則解析句子。B 票只動後端，型別與 fixture 由消費票負責。",
+   "files": [
+    "api/v1/endpoints/history.py",
+    "api/v1/schemas/history.py",
+    "src/services/history_service.py",
+    "tests/test_analysis_history.py",
+    "src/services/market_symbol_utils.py"
+   ],
+   "dependsOn": [
+    "B01"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_analysis_history.py tests/test_history_comparison_service.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 2
+  },
+  {
+   "id": "B03",
+   "title": "ResearchArtifact 投影事件與證據",
+   "platform": "backend",
+   "scope": "artifact 追加 event_gap；thesis 追加決策欄位；evidence item 追加 group、observed_at、fetched_at、window_days、complete、counts_toward_score、facts、excerpt、series；追加 source_status；invalidation 追加 direction、status（只由事實設定，否則 pending／review）。SEC 連結只放行 https＋sec.gov。投影鍵避開 insider_90d 被 camelcase 轉壞。每來源記錄 ok／no_data／fetch_failed／timeout／not_configured／not_supported。",
+   "files": [
+    "api/v1/schemas/research_artifact.py",
+    "src/services/research_artifact_service.py",
+    "data_provider/base.py",
+    "data_provider/us_evidence.py",
+    "src/services/event_gap.py",
+    "src/services/analysis_context_builder.py",
+    "tests/test_research_artifact_service.py"
+   ],
+   "dependsOn": [
+    "B02"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_research_artifact_service.py tests/test_stock_profile_api.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 2
+  },
+  {
+   "id": "B04",
+   "title": "報告提示詞與模板修正",
+   "platform": "backend",
+   "scope": "analysis_summary 職責收斂（只寫發生什麼、為何、與前次差異），禁「依規則」「判定為」；watch_conditions 拆 entry_conditions、exit_triggers、pending_events（舊欄位保留）；prompt 帶 zh-TW 詞彙表。標籤：reduce→減碼、buy→買進、add→加碼、hold→續抱，舊詞全留解析別名。護欄同步：phase_decision_guardrail.py:58-67 的 marker 全是簡體，補「立即減碼／馬上減碼」「立即買進／馬上買進」「立即加碼／馬上加碼」與「立即減倉／立即賣出」等繁體；report_language.py:45-70 反向表補減碼、買進、加碼（→buy）、續抱（→hold）；decision_action.py:36 標籤表、decision_scale.py、share_image.py（:659、:999、:1768-1770）一併改。backtest_engine.py 已含這兩個詞，不動。表頭改「項目｜數值」「點位｜價格」；None／NaN 省略；亿→億；FTNN 硬寫 snippet 移除。語言二分法：現況 zh-TW 被當成「非英文＝簡體」，模板與提示詞本體輸出簡體；預期 zh-TW 輸入一律得到繁體模板，zh 維持簡體，en、ko 不變，測試逐語言斷言輸入輸出。英文版同步。上線前抽樣：固定 10 檔（5 台股、5 美股，名單寫進 PR），比較新舊 analysis_summary 的「持股者／空手者」出現率與「判定為／依規則」出現率，門檻：新版後者 0 檔、前者不超過 2 檔，過了才合併。抽樣必須設 STORAGE_DATABASE_URL=\"\" 隔離正式庫，並關閉通知。mutation：「立即減碼」必須被護欄攔下，移除新 marker 要紅；舊報告的「減倉」仍解析為 reduce，移除別名要紅。",
+   "files": [
+    "src/analyzer.py",
+    "src/agent/executor.py",
+    "src/report_language.py",
+    "src/notification.py",
+    "src/search_service.py",
+    "src/services/history_service.py",
+    "tests/test_report_language.py",
+    "src/phase_decision_guardrail.py",
+    "src/schemas/decision_action.py",
+    "src/schemas/decision_scale.py",
+    "src/share_image.py"
+   ],
+   "dependsOn": [
+    "B03",
+    "G01",
+    "D01",
+    "I01a"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_report_language.py tests/test_analysis_history.py tests/test_phase_decision_guardrail.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 2
+  },
+  {
+   "id": "B05",
+   "title": "報告新聞與個股清單欄位",
+   "platform": "backend",
+   "scope": "新聞回 published_at、清掉免責與行情樣板摘要、繁中一句重點；stock-bar 追加 analysis_price（分析當時的價格，不叫 current_price，避免被當現價）、change_pct、action、score、last_analyzed_at，舊欄位保留。",
+   "files": [
+    "api/v1/endpoints/history.py",
+    "api/v1/schemas/history.py",
+    "src/search_service.py",
+    "src/services/history_service.py"
+   ],
+   "dependsOn": [
+    "B04"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_history_news_fallback.py tests/test_analysis_history.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 2
+  },
+  {
+   "id": "B06",
+   "title": "研究庫查詢參數",
+   "platform": "backend",
+   "scope": "/history 追加 q（名稱與代碼）、market、action 參數與個股／大盤分開的 total；HistoryItem 追加 one_sentence（個股覆蓋 645/645，大盤複盤未驗證，開工先查，沒有就回 null）；查明 INTC #1302 摘要 24 與欄位 22 的不一致並修正來源；美股中文短名由 display_stock_name 提供。",
+   "files": [
+    "api/v1/endpoints/history.py",
+    "api/v1/schemas/history.py",
+    "src/data/us_stock_name.py",
+    "tests/test_analysis_history.py",
+    "src/services/history_service.py"
+   ],
+   "dependsOn": [
+    "B05"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_analysis_history.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 2
+  },
+  {
+   "id": "R01",
+   "title": "Web 報告結論列與分持股建議",
+   "platform": "web",
+   "scope": "股名下新增結論列：大字動作、一句話、時效、信心、模型評分刻度條、與前份比較；雙欄「手上沒有／手上有」，已持有置頂；標題價格三層（大字現價、漲跌額與％、「10/30 收盤」）；移除恐懼貪婪圓環與自選卡，星號進標題列；右欄取消，改單欄全寬；趨勢、類股降為小標籤；護欄報告顯示「系統護欄調整」。標籤走 getMarketPhaseShortLabel，修掉「市場階段:」前綴 bug。1440×900 首屏完整可見。 動作一律依 action 枚舉對應詞彙表顯示，不用存檔的 actionLabel（舊報告存的是「減倉」）。meta.held 為 null 時兩欄都不置頂。B02 新欄位的 TS 型別在本票同步。",
+   "files": [
+    "apps/dsa-web/src/components/report/ReportOverview.tsx",
+    "apps/dsa-web/src/components/report/ReportSummary.tsx",
+    "apps/dsa-web/src/components/common/ScoreGauge.tsx",
+    "apps/dsa-web/src/utils/reportLanguage.ts",
+    "apps/dsa-web/src/utils/marketPhase.ts",
+    "apps/dsa-web/src/types/analysis.ts",
+    "apps/dsa-web/src/components/history/StockBarItem.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "D07",
+    "B02"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/report/__tests__/ReportOverview.test.tsx src/utils；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：1440×900 首屏完整看到動作、一句話、時效、信心、評分條與持股雙欄；舊報告（「減倉」）顯示「減碼」；無「市場階段:」前綴。N03 上線後重測一次",
+   "compiles": true,
+   "impact": "high",
+   "batch": 3
+  },
+  {
+   "id": "R02",
+   "title": "Web 關鍵價位",
+   "platform": "web",
+   "scope": "ReportStrategy 依結構化 action 切換：減碼／觀望顯示風控線與反彈減碼價，買進才顯示進場；每格大數字＋距現價％＋理由小字；空值灰字併一行；橫向價位階梯（停損、現價、目標）；中性底不用紅綠；標題改「關鍵價位」，手機一欄。 sniper_prices 與 sniper_prices_source 的 TS 型別在本票同步（後端已有 sniper_prices）。legacy 長句（如「40.2元（今日收盤 42.55 減…）」）不做解析，顯示原文、不算距現價％與階梯；structured 才算。需抽樣核對：明確 sniper_prices 只有 174/645。",
+   "files": [
+    "apps/dsa-web/src/components/report/ReportStrategy.tsx",
+    "apps/dsa-web/src/utils/reportLanguage.ts",
+    "apps/dsa-web/src/types/analysis.ts"
+   ],
+   "dependsOn": [
+    "R01"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/report/__tests__/ReportOverview.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：減碼／觀望報告不出現進場格；structured 報告有距現價％與階梯，legacy 報告顯示原文；手機一欄",
+   "compiles": true,
+   "impact": "high",
+   "batch": 3
+  },
+  {
+   "id": "R03",
+   "title": "Web 報告 K 線與關鍵數字",
+   "platform": "web",
+   "scope": "新增 StockPriceChart：用既有 recharts 與 GET /stocks/{code}/history 畫日 K、MA20／60、成交量，疊停損目標線，1月／3月／1年；台股外資投信欄位來自 contextSnapshot。旁邊數字格（開高低量額、量比、本益比、法人）；無資料時摺疊。不新增相依。 只能畫日 K：/stocks/{code}/history 的週、月會拋 ValueError。days 上限 365，實測 2330.TW 回 484 列、AAPL 回 500 列（回溯約 days×2 日曆日），所以用 days=365 全段計算 MA60、顯示最近 1 年，MA 全區有值。實作時若某來源列數不足，起始段留白，不補值。 新增檔：apps/dsa-web/src/components/report/StockPriceChart.tsx。",
+   "files": [
+    "apps/dsa-web/src/components/report/StockPriceChart.tsx",
+    "apps/dsa-web/src/components/report/ReportSummary.tsx",
+    "apps/dsa-web/src/api/stocks.ts"
+   ],
+   "dependsOn": [
+    "R02"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/report/__tests__/ReportOverview.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：「1年」區間 MA60 從最左端就有線；停損目標線可見；手機圖不溢出；無資料時整區摺疊",
+   "compiles": true,
+   "impact": "high",
+   "batch": 3
+  },
+  {
+   "id": "R04",
+   "title": "Web 事件卡、改判條件、證據與缺資料",
+   "platform": "web",
+   "scope": "條件式事件卡（triggered 才出現，事件當日不寫 0 交易日；blocked_without_news 改警告並隱藏價位）；「什麼時候改變看法」三組與下次檢查；證據依來源分組可展開（SEC 摘錄純文字、評等加總、放空日期語意、資金流標未計分）；「這份報告缺什麼」一行摘要，缺項影響判斷時在結論下顯示黃色提示。全部有資料才顯示。 新增 EventGapCard.tsx、EvidenceSection.tsx。 新增檔：apps/dsa-web/src/components/report/EventGapCard.tsx、apps/dsa-web/src/components/report/EvidenceSection.tsx。",
+   "files": [
+    "apps/dsa-web/src/components/report/EventGapCard.tsx",
+    "apps/dsa-web/src/components/report/EvidenceSection.tsx",
+    "apps/dsa-web/src/components/report/ReportSummary.tsx",
+    "apps/dsa-web/src/components/report/AnalysisContextSummary.tsx",
+    "apps/dsa-web/src/types/analysis.ts"
+   ],
+   "dependsOn": [
+    "B03",
+    "R03"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/report/__tests__/AnalysisContextSummary.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：事件卡只在 triggered 出現；blocked_without_news 隱藏價位；美股報告證據依來源分組可展開（SEC、評等、放空）",
+   "compiles": true,
+   "impact": "high",
+   "batch": 3
+  },
+  {
+   "id": "R05",
+   "title": "Web 新聞與診斷收合",
+   "platform": "web",
+   "scope": "新聞改單行列表（預設 3 則、來源與日期、整列可點、清 Markdown）；輸入資料、執行診斷、資料追溯合併為預設收合的「資料品質與來源」；手機標題不再被擠；claude_code_cli 顯示 Claude Code。",
+   "files": [
+    "apps/dsa-web/src/components/report/ReportNews.tsx",
+    "apps/dsa-web/src/components/report/AnalysisContextSummary.tsx",
+    "apps/dsa-web/src/components/report/ReportDiagnostics.tsx",
+    "apps/dsa-web/src/components/report/ReportDetails.tsx",
+    "apps/dsa-web/src/components/report/ReportSummary.tsx"
+   ],
+   "dependsOn": [
+    "B05",
+    "R04"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/report/__tests__/ReportNews.test.tsx src/components/report/__tests__/ReportDiagnostics.test.tsx src/components/report/__tests__/ReportDetails.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：新聞預設 3 則單行含來源日期；診斷預設收合；手機標題不被擠",
+   "compiles": true,
+   "impact": "medium",
+   "batch": 3
+  },
+  {
+   "id": "R06",
+   "title": "Web 完整報告抽屜",
+   "platform": "web",
+   "scope": "表格 auto layout 可換行、超寬才橫捲；標題 emoji 改 icon；頂部固定結論列與錨點目錄；去除結尾重複時間與底部關閉；錯誤狀態可重試、骨架載入；複製鈕併下拉。",
+   "files": [
+    "apps/dsa-web/src/components/report/ReportMarkdownBody.tsx",
+    "apps/dsa-web/src/components/report/ReportMarkdownPanel.tsx",
+    "apps/dsa-web/src/components/report/ReportMarkdownDrawer.tsx"
+   ],
+   "dependsOn": [
+    "R05"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/report/__tests__/ReportMarkdownDrawer.test.tsx src/components/report/__tests__/ReportMarkdown.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：抽屜表格不橫捲（超寬才捲）；頂部結論列固定；錨點可跳；無重複時間",
+   "compiles": true,
+   "impact": "high",
+   "batch": 3
+  },
+  {
+   "id": "B18",
+   "title": "大盤複盤回傳實際預設市場",
+   "platform": "backend",
+   "scope": "從 H01 拆出：分裂按鈕要顯示「複盤：台股＋美股」，但前端目前只知道「伺服器預設」。分析 API 追加唯讀的預設市場欄位（沿用 normalize_market_review_region_lenient 的結果），舊欄位不動。",
+   "files": [
+    "api/v1/endpoints/analysis.py",
+    "api/v1/schemas/analysis.py",
+    "tests/test_analysis_api_contract.py"
+   ],
+   "dependsOn": [],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_analysis_api_contract.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 4
+  },
+  {
+   "id": "H01",
+   "title": "Web 首頁工具列與報告動作",
+   "platform": "web",
+   "scope": "工具列只留搜尋、策略、分析；大盤複盤改分裂按鈕（地區與完成通知進面板，顯示實際範圍）；報告動作併入標題列：完整報告、追問 AI，其餘進「⋯」，重新分析加確認，「歷史趨勢」改「歷次分析」；手機首屏 200px 內見股名、價格、動作，底部固定操作列；第二顆漢堡改「清單 46」。 預設地區的實際值來自 B18，送出後通知把 result.region 轉成「台股＋美股」。",
+   "files": [
+    "apps/dsa-web/src/pages/HomePage.tsx",
+    "apps/dsa-web/src/components/market-review/MarketReviewRegionSelector.tsx",
+    "apps/dsa-web/src/utils/marketReviewRegion.ts",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "R06",
+    "B18"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/HomePage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：390×844 首屏前 200px 內看到股名、價格、動作；桌機工具列只有搜尋、策略、分析。N03 上線後重測一次",
+   "compiles": true,
+   "impact": "high",
+   "batch": 4
+  },
+  {
+   "id": "H02",
+   "title": "Web 自選清單重做",
+   "platform": "web",
+   "scope": "StockBarItem 改 52px 兩行列（股名、現價／代號、漲跌％、動作分數小標）；核取框進編輯模式；頁籤自選／今日／全部，預設自選；市場篩選與排序；大盤複盤釘頂並顯示燈號；美股 ticker 優先；刪除加確認與失敗提示。 現價走批次行情（/stocks 批次端點），MAX_BATCH_CODES=50，超過要分批；B05 的 analysis_price 只用來標「分析時價」，不得當現價。動作標籤依 action 枚舉。",
+   "files": [
+    "apps/dsa-web/src/components/history/StockBarItem.tsx",
+    "apps/dsa-web/src/components/history/StockBar.tsx",
+    "apps/dsa-web/src/components/watchlist/HomeStockWorkspace.tsx",
+    "apps/dsa-web/src/utils/stockName.ts",
+    "apps/dsa-web/src/pages/HomePage.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts",
+    "apps/dsa-web/src/api/stocks.ts"
+   ],
+   "dependsOn": [
+    "H01",
+    "B05"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/HomePage.test.tsx src/components/history；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：現價與批次行情一致（超過 50 檔仍全部有價）；52px 兩行列；核取框只在編輯模式",
+   "compiles": true,
+   "impact": "high",
+   "batch": 4
+  },
+  {
+   "id": "B08",
+   "title": "AI 建議 API append",
+   "platform": "backend",
+   "scope": "列表支援每檔最新一筆（group_latest）與較舊筆數、held 篩選、sort=priority；新增摘要聚合（各動作數、已觸停損）；追加訊號當時價；統計回 neutral。 新增檔：tests/test_decision_signals_api.py。",
+   "files": [
+    "api/v1/endpoints/decision_signals.py",
+    "api/v1/schemas/decision_signals.py",
+    "src/repositories/decision_signal_repo.py",
+    "tests/test_decision_signals_api.py"
+   ],
+   "dependsOn": [],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_decision_signals_api.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 4
+  },
+  {
+   "id": "B10",
+   "title": "持股 API append",
+   "platform": "backend",
+   "scope": "持股追加 prev_close、day_change_pct、day_pnl_base，彙總追加 day_pnl；新增 display_currency 參數與 consolidated_equity_base、fx_rate_used（不改 CNY 常數語意與既有快照）；過期判定改比對市場最近交易日；price_date 維持日期語意（portfolio_service.py:1286），報價實際時間追加 quote_at；可選含基金分項；帳戶補 broker。/portfolio/risk 同步：portfolio_risk_service.py 寫死 to_currency=\"CNY\"（:295），端點 portfolio.py:720 沒有幣別參數，一樣追加 display_currency 與換算欄位，否則 F01 會變成總資產 TWD、風險卡 CNY。",
+   "files": [
+    "api/v1/endpoints/portfolio.py",
+    "api/v1/schemas/portfolio.py",
+    "src/services/portfolio_service.py",
+    "tests/test_portfolio_api.py",
+    "src/services/portfolio_risk_service.py"
+   ],
+   "dependsOn": [],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_portfolio_api.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 4
+  },
+  {
+   "id": "H03",
+   "title": "Web 首頁今日總覽（未選股時）",
+   "platform": "web",
+   "scope": "維持 /。未選股時顯示總覽（大盤指數、持股今日損益與總市值、待處理數：減碼、觸及停損，點擊到 /portfolio、/decision-signals）與自選最新；一選股就換成報告，不佔首屏。不再自動開最新一份：把 stockPoolStore.loadInitialHistory 的 autoSelectFirst 預設翻掉。深連結現況：/ 沒有 URL 參數，只有 location.state（HomePage.tsx:927-938，來源 RealtimeBoardPage.tsx:730、StockScreeningPage.tsx:1164、:1182）與清單 recordId。回歸測試涵蓋盯盤→首頁、選股→首頁、清單選報告、分析完成後選最新。A02、Q03 要連到特定報告，所以本票新增 /?report=<id>、/?stock=<code>，選中報告就寫回 URL，帶參數時不顯示總覽。新增 stores/marketIndexStore.ts，H03 先用（只在掛載時載入，60 秒內不重抓），Q02、N03 共用，不各做一份。持股損益以 B10 的 day_pnl 為唯一來源。 新增檔：apps/dsa-web/src/components/dashboard/TodayOverview.tsx、apps/dsa-web/src/stores/marketIndexStore.ts。",
+   "files": [
+    "apps/dsa-web/src/pages/HomePage.tsx",
+    "apps/dsa-web/src/components/dashboard/TodayOverview.tsx",
+    "apps/dsa-web/src/api/portfolio.ts",
+    "apps/dsa-web/src/api/decisionSignals.ts",
+    "apps/dsa-web/src/stores/marketIndexStore.ts",
+    "apps/dsa-web/src/stores/stockPoolStore.ts",
+    "apps/dsa-web/src/api/stocks.ts"
+   ],
+   "dependsOn": [
+    "H02",
+    "B08",
+    "B10"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/HomePage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：開 / 不自動開報告、顯示總覽；開 /?report=<id> 直接顯示該報告；從 /board 點「分析」帶入代號；選股後總覽消失",
+   "compiles": true,
+   "impact": "high",
+   "batch": 4
+  },
+  {
+   "id": "B07",
+   "title": "大盤複盤 payload append",
+   "platform": "backend",
+   "scope": "_summarize_market_review 優先取引用行（現況取第一行，market_review.py:1111）；reasons 補 zh-TW；追加 next_day_plan 結構化欄位（LLM 輸出）；指數近 20 場序列與距 MA20／60；台股類股（market schema 彙總）與美股 GICS ETF 排行。MARKET_LIGHT_ALERT_REGIONS 加 tw 已拆到 B07a。COPY market_data/*.py 是平面 glob，新檔放 market_data/ 頂層，不開子資料夾。 新增檔：market_data/sector_rank.py。",
+   "files": [
+    "src/core/market_review.py",
+    "src/market_analyzer.py",
+    "market_data/sector_rank.py",
+    "tests/test_market_review.py"
+   ],
+   "dependsOn": [],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_market_review.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 4
+  },
+  {
+   "id": "M01",
+   "title": "Web 大盤複盤版面",
+   "platform": "web",
+   "scope": "一次看一個市場（台股 10/30｜美股 10/29）；標題帶場次日期；指數卡列（千分位、點數、紅綠、VIX 中性）；今日結論卡取代四等寬卡；每市場燈號區塊與維度；漲跌分布條；三大法人四格；明日計畫卡（舊報告依 section key 提前）；類股熱力或榜（無資料一行說明）；長文手風琴；sparkline；動作收進「⋯」；隱藏 MARKET 代碼；即時路徑併歷史檢視；骨架與重試。先補拍真實畫面再實作。 三大法人讀 breadth.institutional_net，MarketReviewBreadth 型別在本票補。",
+   "files": [
+    "apps/dsa-web/src/components/report/MarketReviewReportView.tsx",
+    "apps/dsa-web/src/types/analysis.ts",
+    "apps/dsa-web/src/index.css",
+    "apps/dsa-web/src/pages/HomePage.tsx"
+   ],
+   "dependsOn": [
+    "H03",
+    "B07"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/report/__tests__/MarketReviewReportView.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：台股、美股分開看且標場次日期；法人四格與 API 數字相同；長文預設收合；無 MARKET 代碼",
+   "compiles": true,
+   "impact": "high",
+   "batch": 4
+  },
+  {
+   "id": "B17a",
+   "title": "行情 API：指數名稱、來源代碼、快取",
+   "platform": "backend",
+   "scope": "美股指數繁中名與 as_of、source；追加 source_code，舊 source 字串不動（iOS PresentationText.swift:8 靠它判斷可能延遲）；市場狀態欄位。/stocks/indices 目前沒有快取，加伺服器端 TTL（60 秒），N03 全站輪詢依賴它。",
+   "files": [
+    "data_provider/us_index_mapping.py",
+    "api/v1/endpoints/stocks.py",
+    "api/v1/schemas/stocks.py",
+    "src/services/stock_service.py",
+    "tests/test_stock_profile_api.py"
+   ],
+   "dependsOn": [
+    "B01"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_stock_profile_api.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 5
+  },
+  {
+   "id": "B17b",
+   "title": "分時 API：查降級原因、補量與均價",
+   "platform": "backend",
+   "scope": "「優先 Shioaji」已是現行邏輯（stock_service.py:183-191），截圖卻顯示 yfinance、分時停在 13:20：先查為何降級（debug log 目前吃掉例外），把原因寫進 PR 再修。shioaji_trend 目前只回 t、price，改 fetcher 補成交量與均價。成交量 3662 萬對 29,595,000 的矛盾：查明差額來源，同頁只顯示一個口徑，不是加說明。",
+   "files": [
+    "data_provider/shioaji_fetcher.py",
+    "src/services/stock_service.py",
+    "api/v1/endpoints/stocks.py",
+    "api/v1/schemas/stocks.py",
+    "tests/test_stock_profile_api.py"
+   ],
+   "dependsOn": [
+    "B17a"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_stock_profile_api.py -q；另附 NAS 盤中一次 /stocks/{code}/trend 的 source 與最後時間",
+   "compiles": true,
+   "impact": "high",
+   "batch": 5
+  },
+  {
+   "id": "B17c",
+   "title": "個股 profile API 追加區塊",
+   "platform": "backend",
+   "scope": "profile 追加 position（數量、成本、損益、權重）、chips、financials、news 區塊，舊欄位不動，美股缺資料回 null。",
+   "files": [
+    "src/services/stock_profile_service.py",
+    "api/v1/schemas/stocks.py",
+    "tests/test_stock_profile_api.py"
+   ],
+   "dependsOn": [
+    "B01",
+    "B17b"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_stock_profile_api.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 5
+  },
+  {
+   "id": "Q01",
+   "title": "Web 盯盤列表重做",
+   "platform": "web",
+   "scope": "用 DataTable：名稱代號併欄、現價、漲跌、漲跌幅（實心或粗體）、均價（中性＋偏離小字）、成交量張、持股數、未實現損益、技術結構中文；刪「狀態」「時間」欄；手機三段式列；排序存 localStorage；分持股（台股）、持股（美股）、自選三段；sticky 表頭；篩選框；載入、無報價、資料較舊三態；名稱不依賴報價。",
+   "files": [
+    "apps/dsa-web/src/pages/RealtimeBoardPage.tsx"
+   ],
+   "dependsOn": [
+    "D07",
+    "H03"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/RealtimeBoardPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/realtime.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：DataTable 首次實際採用：sticky 表頭、數字靠右、手機三段式列；無「狀態」「時間」欄；無報價時名稱仍在；這裡同時驗 D06",
+   "compiles": true,
+   "impact": "high",
+   "batch": 5
+  },
+  {
+   "id": "Q02",
+   "title": "Web 盯盤總覽與市場狀態",
+   "platform": "web",
+   "scope": "頁首市場狀態（盤中、已收盤）取自 getMarketStatus，第一次載入即查；收盤後不再顯示「即時」；指數條含美股，讀 marketIndexStore；帳戶總覽（今日損益 NT$、US$、未實現、漲跌家數）今日損益以 B10 的 day_pnl 為唯一來源，不自算；需注意膠囊列；更新時間與閃爍；刪開發者副標；基金移到最後一組。",
+   "files": [
+    "apps/dsa-web/src/pages/RealtimeBoardPage.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts",
+    "apps/dsa-web/src/stores/marketIndexStore.ts",
+    "apps/dsa-web/src/api/portfolio.ts"
+   ],
+   "dependsOn": [
+    "H03",
+    "Q01",
+    "B10",
+    "B17a"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/RealtimeBoardPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/realtime.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：收盤後不顯示「即時」；今日損益與 /portfolio、首頁總覽數字相同",
+   "compiles": true,
+   "impact": "high",
+   "batch": 5
+  },
+  {
+   "id": "Q03",
+   "title": "Web 盯盤展開列與跳轉",
+   "platform": "web",
+   "scope": "展開區兩欄：當日走勢＋昨收線、數值格；委買委賣色統一；動作按鈕「建立警報」「完整分析」；window.confirm 換 ConfirmDialog；列尾改「分析」文字鈕，導首頁時有報告就開報告，不自動觸發分析；手機單欄。 有報告就導 /?report=<id>（H03）。",
+   "files": [
+    "apps/dsa-web/src/pages/RealtimeBoardPage.tsx",
+    "apps/dsa-web/src/components/board/BoardDossier.tsx",
+    "apps/dsa-web/src/pages/HomePage.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "M01",
+    "Q02"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/RealtimeBoardPage.test.tsx src/pages/__tests__/HomePage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/realtime.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：展開區兩欄、手機單欄；「分析」導到報告且不自動觸發分析；刪除用 ConfirmDialog",
+   "compiles": true,
+   "impact": "medium",
+   "batch": 5
+  },
+  {
+   "id": "Q04",
+   "title": "盯盤迷你分時",
+   "platform": "web+backend",
+   "scope": "新增批次當日走勢端點（避免 47 檔逐筆）。每檔一次 api.kbars 且看板 30 秒輪詢，會撞 Shioaji 配額，所以伺服器端快取分時 TTL 1～5 分鐘（實作時定值寫進 PR）、單次上限 MAX_BATCH_CODES；單檔失敗回空，不拖垮整批。桌機「今日走勢」欄 80×28，預設只開持股，可關閉。 新增檔：tests/test_stock_trend_batch.py。",
+   "files": [
+    "api/v1/endpoints/stocks.py",
+    "api/v1/schemas/stocks.py",
+    "src/services/stock_service.py",
+    "tests/test_stock_trend_batch.py",
+    "apps/dsa-web/src/pages/RealtimeBoardPage.tsx",
+    "apps/dsa-web/src/api/stocks.ts",
+    "data_provider/shioaji_fetcher.py"
+   ],
+   "dependsOn": [
+    "B17b",
+    "B17c",
+    "Q03"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_stock_trend_batch.py -q && cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/RealtimeBoardPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/realtime.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900 截圖並實際檢視，判準：走勢欄只在桌機、預設只開持股；連續輪詢 5 分鐘 server log 的 kbars 次數符合 TTL",
+   "compiles": true,
+   "impact": "medium",
+   "batch": 5
+  },
+  {
+   "id": "I02",
+   "title": "iOS StockRow 與今日、自選清單",
+   "platform": "ios",
+   "scope": "共用 StockRow（52～56pt 三欄，primary／secondary slot）；台股名稱優先、美股 ticker 優先；AI 標籤語意色，日期只在過舊時以相對時間顯示；只有例外才警告；代號顯示去後綴（路由保留）；色塊僅近漲跌停實心。 StockRow 放新檔；新 Swift 檔要跑 xcodegen 並提交 project.pbxproj（I05 同）。 新增檔：apps/dsa-ios/App/Views/StockRow.swift。",
+   "files": [
+    "apps/dsa-ios/App/Views/MarketHomeView.swift",
+    "apps/dsa-ios/App/Views/WatchlistView.swift",
+    "apps/dsa-ios/App/Design/MarketDataPresentation.swift",
+    "apps/dsa-ios/App/Views/StockRow.swift",
+    "apps/dsa-ios/DSAMarket.xcodeproj/project.pbxproj"
+   ],
+   "dependsOn": [
+    "W01b"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：今日、自選列高 52～56pt 三欄；台股名稱在上、美股 ticker 在上；只有例外才警告",
+   "compiles": true,
+   "impact": "high",
+   "batch": 6
+  },
+  {
+   "id": "I03",
+   "title": "iOS 今日頁",
+   "platform": "ios",
+   "scope": "等寬指數條（點數＋％，隱藏空來源）；市場狀態列；AI 盤勢結論卡（讀列表的 analysisSummary，MarketHomeView.swift:32，品質由 B07 修 _summarize_market_review；無摘要不顯示標題；不用 one_sentence）；資產摘要卡；排序（異動大／自訂）；查看其餘 N 檔；錯誤與空狀態互斥、骨架；移除「＋」重複入口；標題改「今日」。",
+   "files": [
+    "apps/dsa-ios/App/Views/MarketHomeView.swift",
+    "apps/dsa-ios/App/State/AppStore.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/Models.swift",
+    "apps/dsa-ios/scripts/fixture-server.py"
+   ],
+   "dependsOn": [
+    "B07",
+    "B17a",
+    "B10",
+    "I02"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：指數條等寬不被截；盤勢卡顯示結論不是模板首行；錯誤與空狀態不同時出現",
+   "compiles": true,
+   "impact": "high",
+   "batch": 6
+  },
+  {
+   "id": "I04",
+   "title": "iOS 自選頁",
+   "platform": "ios",
+   "scope": "可點欄頭排序並記住；狀態與摘要列（報價時間、漲跌家數、動作數）；單行指數條；List＋左滑移除、長按選單；持股字標；篩選收合；四態載入錯誤；搜尋面板直接加入；右欄可切換成交值、量比。分組籤先只做全部／持股。",
+   "files": [
+    "apps/dsa-ios/App/Views/WatchlistView.swift",
+    "apps/dsa-ios/App/State/AppStore.swift",
+    "apps/dsa-ios/App/Views/PortfolioView.swift",
+    "apps/dsa-ios/scripts/fixture-server.py"
+   ],
+   "dependsOn": [
+    "I03"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：欄頭排序重開仍記得；左滑移除可用；四種載入錯誤狀態各拍一張",
+   "compiles": true,
+   "impact": "high",
+   "batch": 6
+  },
+  {
+   "id": "I06",
+   "title": "iOS K 線圖修正",
+   "platform": "ios",
+   "scope": "修日期軸未渲染；最新價標籤放軸欄（色用相對昨收）；52 週移出圖內無字虛線；副圖讀數列獨立上色；MACD Y 軸依實際範圍；成交量台股用張；圖內文字 ≥11pt；缺口與交叉預設關、點擊才顯示；提示只首次；指標直按列；3月、1年文案；全螢幕。",
+   "files": [
+    "apps/dsa-ios/App/Views/MarketChart.swift"
+   ],
+   "dependsOn": [
+    "I01a"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：K 線日期軸可見、最新價標籤在軸欄且可見、圖內沒有無字虛線；同時對照 features/ios.md 的蠟燭實體與量柱對齊條件",
+   "compiles": true,
+   "impact": "high",
+   "batch": 6
+  },
+  {
+   "id": "I07",
+   "title": "iOS K 線連續序號軸",
+   "platform": "ios",
+   "scope": "X 軸改 K 棒序號去掉非交易日，所有面板共用，捲動縮放選取以可見根數計算，補 Core 測試。",
+   "files": [
+    "apps/dsa-ios/App/Views/MarketChart.swift",
+    "apps/dsa-ios/App/Views/IntradayChart.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/ChartViewport.swift",
+    "apps/dsa-ios/Core/Tests/DSACoreTests/ChartViewportTests.swift"
+   ],
+   "dependsOn": [
+    "I06"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：週末與假日無空隙；主圖與副圖同日對齊；縮放後選取讀值正確",
+   "compiles": true,
+   "impact": "high",
+   "batch": 6
+  },
+  {
+   "id": "I08",
+   "title": "iOS 分時圖",
+   "platform": "ios",
+   "scope": "均價線、昨收中軸與右側％（大跳空才退回邊緣標記）、62pt 成交量；讀數與頁首對齊並標資料截至；X 軸標籤對齊；總高與 K 線相同。",
+   "files": [
+    "apps/dsa-ios/App/Views/IntradayChart.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/Models.swift",
+    "apps/dsa-ios/Core/Tests/DSACoreTests/IntradaySeriesTests.swift"
+   ],
+   "dependsOn": [
+    "I03",
+    "I07",
+    "B17b"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：分時有均價線與昨收中軸、右側％；X 軸標籤對齊；總高與 K 線相同；資料截至時間可見",
+   "compiles": true,
+   "impact": "high",
+   "batch": 6
+  },
+  {
+   "id": "I09",
+   "title": "iOS 個股頁首與資訊",
+   "platform": "ios",
+   "scope": "三行報價（價、漲跌額、％、已收盤與來源繁中）；標題第二行代號；緊湊兩列 4 欄取代成交資訊大卡；我的持倉條；AI 摘要列；隱藏 tabBar、捲動後標題含現價；資料狀態卡收成頁尾；上下檔切換；骨架與失敗橫幅。",
+   "files": [
+    "apps/dsa-ios/App/Views/StockDetailView.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/Models.swift",
+    "apps/dsa-ios/App/State/AppStore.swift",
+    "apps/dsa-ios/scripts/fixture-server.py"
+   ],
+   "dependsOn": [
+    "I04",
+    "I08",
+    "B17c"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：首屏見三行報價與持倉條；捲動後標題含現價；tabBar 隱藏且內容不被遮",
+   "compiles": true,
+   "impact": "high",
+   "batch": 6
+  },
+  {
+   "id": "I10",
+   "title": "iOS 個股 AI 區與內容分頁",
+   "platform": "ios",
+   "scope": "AI｜籌碼｜財務｜新聞固定分頁（美股缺資料隱藏）；AI 分頁：動作色塊、一句話、持股／空手切換、改判條件、可摺疊依據；「閱讀完整報告」主按鈕，「重新分析」降級；移除內嵌 DisclosureGroup；四維度移到分頁底部；任務 ID 收起。",
+   "files": [
+    "apps/dsa-ios/App/Views/StockDetailView.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/Models.swift",
+    "apps/dsa-ios/scripts/fixture-server.py"
+   ],
+   "dependsOn": [
+    "B03",
+    "I09"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：AI、籌碼、財務、新聞分頁可切；美股缺資料的分頁隱藏；「閱讀完整報告」是主按鈕",
+   "compiles": true,
+   "impact": "high",
+   "batch": 6
+  },
+  {
+   "id": "I11",
+   "title": "iOS 報告頁結論與價位",
+   "platform": "ios",
+   "scope": "結論卡（公司可點至個股、大字價、％、動作、現價與報告後漲跌、三格）；摘要 3 行；分持股建議；價位尺與單欄列；事件卡；改判條件前置；證據收成兩行並依來源分組；缺資料區；評分中性色；報告編號用 verbatim；分享選單；全文失敗可見。 動作一律依 action 枚舉對應詞彙表顯示，不用存檔的 actionLabel（舊報告存的是「減倉」）。sniper_prices 與 sniper_prices_source 的 Swift 型別在本票同步；legacy 顯示原文。",
+   "files": [
+    "apps/dsa-ios/App/Views/ResearchReportView.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/Models.swift",
+    "apps/dsa-ios/App/State/AppStore.swift",
+    "apps/dsa-ios/scripts/fixture-server.py"
+   ],
+   "dependsOn": [
+    "I10",
+    "B02"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：結論卡在首屏；舊報告（「減倉」）顯示「減碼」；無英文模板句；全文載入失敗有可見狀態",
+   "compiles": true,
+   "impact": "high",
+   "batch": 7
+  },
+  {
+   "id": "I12",
+   "title": "iOS Markdown 渲染與分段",
+   "platform": "ios",
+   "scope": "NativeMarkdownText 改區塊解析：表格原生列、列表懸掛、引用色條、分隔線、標題層級；不用斜體；單一長卷拆可收合段落與跳轉膠囊，略過重複內容；檢查清單狀態圖示。不新增套件。",
+   "files": [
+    "apps/dsa-ios/App/Views/ResearchReportView.swift"
+   ],
+   "dependsOn": [
+    "I11"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：表格原生列不溢出；列表懸掛縮排；段落可收合與跳轉；無斜體",
+   "compiles": true,
+   "impact": "high",
+   "batch": 7
+  },
+  {
+   "id": "I13",
+   "title": "iOS 研究庫",
+   "platform": "ios",
+   "scope": "刪標語與已載入文案；緊湊三行列（分析時價與％、動作、評分/100、結論 2 行），列內移除重複時間與「非勝率」；日期分組；同日同檔整併與變化行；常駐搜尋查全庫；篩選膠囊；大盤複盤專屬列；無限捲動；錯誤橫幅；chevron；長按進個股。 結論 2 行讀 B06 追加的 HistoryItem.one_sentence，null 時退回摘要。動作標籤依 action 枚舉。",
+   "files": [
+    "apps/dsa-ios/App/Views/ResearchLibraryView.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/Models.swift",
+    "apps/dsa-ios/App/State/AppStore.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/DSAClient.swift",
+    "apps/dsa-ios/scripts/fixture-server.py"
+   ],
+   "dependsOn": [
+    "B06",
+    "I12"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：緊湊三行列；日期分組；搜尋能查到未載入的舊報告；大盤複盤有專屬列",
+   "compiles": true,
+   "impact": "high",
+   "batch": 7
+  },
+  {
+   "id": "I14",
+   "title": "iOS 資產頁",
+   "platform": "ios",
+   "scope": "總覽（全部資產折合、今日損益、未實現＋％、已實現、淨現金警示）；市場篩選列取代幣別 picker；帳戶真正可收合且標題含現金；排序與佔比；合併持股分段；四欄 56pt 列損益最粗；移除「…」改左滑；洞察小卡（集中度、最大虧損、產業接 /portfolio/risk）；報價狀態；「＋」選單；載入與錯誤；頁尾收斂。",
+   "files": [
+    "apps/dsa-ios/App/Views/PortfolioView.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/Models.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/DSAClient.swift",
+    "apps/dsa-ios/scripts/fixture-server.py",
+    "apps/dsa-ios/App/State/AppStore.swift"
+   ],
+   "dependsOn": [
+    "B10",
+    "I13"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：總覽金額與 API 一致且幣別為台幣折合；帳戶可收合；四欄 56pt 列損益最粗；最後一列不被分頁列蓋",
+   "compiles": true,
+   "impact": "high",
+   "batch": 7
+  },
+  {
+   "id": "I15",
+   "title": "iOS 連線頁",
+   "platform": "ios",
+   "scope": "狀態分流：冷啟動只顯示連接中（慢速提示）、登入表單、改網址；品牌壓一列、刪功能介紹與徽章；錯誤依類型與欄位貼近，後端訊息映射繁中；submitLabel、FocusState、scrollDismissesKeyboard；密碼錯不清空、顯示切換；網址正規化；服務列與取消；頁尾一行。ErrorStateView 加 title 參數。基於 PR #166 的 ConnectionView：保留 AccessSettingsView 入口與 Access 錯誤分流，密碼登入維持現狀，不加隱藏 username 欄，不做 AASA。",
+   "files": [
+    "apps/dsa-ios/App/Views/ConnectionView.swift",
+    "apps/dsa-ios/App/DSAMarketApp.swift",
+    "apps/dsa-ios/App/State/AppStore.swift",
+    "apps/dsa-ios/App/Design/DesignSystem.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/DSAClient.swift"
+   ],
+   "dependsOn": [
+    "I14"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：冷啟動只顯示連接中；Access 設定入口可達；密碼錯誤不清空且貼近欄位；鍵盤可收",
+   "compiles": true,
+   "impact": "high",
+   "batch": 7
+  },
+  {
+   "id": "I17",
+   "title": "iOS 看懂 K 線",
+   "platform": "ios",
+   "scope": "示意圖標開高低收與十字線；橫向段落籤（K 棒、週期、均線、成交量、副圖、標記）與 initialSection，MarketChart.swift:325 入口帶段落；實樣式小圖例。術語改寫：「1Y」→「1 年（1Y）」；布林通道→「中間線是 20 根均線；上下兩條是股價通常的波動範圍，約 95% 的時間落在其中」；MACD→「先看柱子：由負翻正代表上漲動能轉強。黃線 DIF 是短、長期均線的差距，藍線 DEA 是它的平均」；KD 首句加粗「80 以上偏熱、20 以下偏冷」。Sheet：.presentationDetents([.large])，背景完全不透明，下緣不再露出底層碎片。",
+   "files": [
+    "apps/dsa-ios/App/Views/KLineGuideView.swift",
+    "apps/dsa-ios/App/Views/MarketChart.swift"
+   ],
+   "dependsOn": [
+    "I08"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：段落籤可跳轉；從圖表入口直接開到對應段落；Sheet 下緣無底層殘影",
+   "compiles": true,
+   "impact": "medium",
+   "batch": 7
+  },
+  {
+   "id": "B09",
+   "title": "問股 API append",
+   "platform": "backend",
+   "scope": "sessions 回傳 stock_code、stock_name；策略回 display_name_zh_tw 與分組（strategies/*.yaml 追加欄位）；查證並提供預設後端的取消（無法取消就回能力旗標）；回答結構化欄位 conclusion、resistance、support、invalidation、follow_ups。 新增檔：tests/test_agent_api.py。",
+   "files": [
+    "api/v1/endpoints/agent.py",
+    "strategies/",
+    "src/agent/executor.py",
+    "tests/test_agent_api.py"
+   ],
+   "dependsOn": [
+    "B04"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_agent_api.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 8
+  },
+  {
+   "id": "C01",
+   "title": "Web 問股輸入區與頁首",
+   "platform": "web",
+   "scope": "輸入區收成輸入卡（標的膠囊、textarea、策略膠囊＋傳送／停止），策略面板 popover／底部抽屜、分組、繁中名稱、單選「不指定」；上下文壓縮移到設定；手機單列頁首；placeholder 短、16px、Enter 換行；100dvh；推送與匯出進「⋯」並確認；狀態提示移出輸入區。",
+   "files": [
+    "apps/dsa-web/src/pages/ChatPage.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts",
+    "apps/dsa-web/src/stores/agentChatStore.ts"
+   ],
+   "dependsOn": [
+    "Q04",
+    "B09"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/ChatPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/chat-usage.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：手機輸入區不被鍵盤與底部遮；策略面板手機為底部抽屜；placeholder 不截斷；16px 不觸發縮放",
+   "compiles": true,
+   "impact": "high",
+   "batch": 8
+  },
+  {
+   "id": "C02",
+   "title": "Web 問股訊息流",
+   "platform": "web",
+   "scope": "Message 帶 created_at，顯示時間與跨日分隔；舊對話過期提示與「以最新資料重新分析」；開頁只接當日對話；「＋ 新對話」主按鈕；AI 回答無框、手機滿版、移除 pr-20；訊息欄最大 760px；回到最新浮鈕；步驟清單與 i18n 後備字串。",
+   "files": [
+    "apps/dsa-web/src/pages/ChatPage.tsx",
+    "apps/dsa-web/src/stores/agentChatStore.ts",
+    "apps/dsa-web/src/index.css",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "C01"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/ChatPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/chat-usage.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：時間與跨日分隔可見；訊息欄最大 760px；AI 回答手機滿版",
+   "compiles": true,
+   "impact": "high",
+   "batch": 8
+  },
+  {
+   "id": "C03",
+   "title": "Web 問股個股卡、追問、空狀態",
+   "platform": "web",
+   "scope": "回答上方個股摘要卡（現價、漲跌、結論、壓力支撐）；回答後追問與動作列；空狀態改持股、自選、大盤三組，按下只填入；股票聯想（useStockIndex）；歷史清單股票膠囊、分組、搜尋、可收合；移除「預設模型」常駐。",
+   "files": [
+    "apps/dsa-web/src/pages/ChatPage.tsx",
+    "apps/dsa-web/src/hooks/useStockIndex.ts",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "C02"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/ChatPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/chat-usage.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：個股摘要卡數字與行情一致；空狀態三組按下只填入不送出",
+   "compiles": true,
+   "impact": "high",
+   "batch": 8
+  },
+  {
+   "id": "B11",
+   "title": "選股支援台股與美股",
+   "platform": "backend",
+   "scope": "pipeline.py:115 只收 cn、us，加 tw 分支；不能接 scripts/screen_tw.py：Dockerfile 沒 COPY scripts/，NAS import 會失敗。預篩邏輯搬到 market_data/tw_prescreen.py（頂層，COPY market_data/*.py 是平面 glob），腳本只留薄殼。10 支策略都是 market_scope:[cn]，門檻是人民幣語意，不能只補 scope。首批開 momentum_quality、quality_value、volume_breakout、shrink_pullback 給 tw、us，門檻依幣別另設（exclude_st 對台股無意義）；其餘 6 支留 cn，API 不回給 tw、us。開工時用 market schema 實跑，每支至少篩出 1 檔才算數。美股母體已查到：snapshot_us.py 依序走 S&P 500（Wikipedia）→ SCREENING_US_TICKERS → 內建前 50 檔，auto 會靜默退回，所以回應要帶實際母體來源，X02 顯示。熱點來源無台股時回空而非 akshare；策略 API 回繁中名稱與條件清單；提供 afterFilterCount 漏斗。 新增檔：market_data/tw_prescreen.py。",
+   "files": [
+    "src/services/screening/pipeline.py",
+    "src/services/screening/strategies/",
+    "src/services/screening/strategy.py",
+    "src/services/screening_service.py",
+    "scripts/screen_tw.py",
+    "api/v1/endpoints/screening.py",
+    "tests/test_screening_api.py",
+    "market_data/tw_prescreen.py",
+    "src/services/screening/snapshot.py",
+    "src/services/screening/snapshot_us.py"
+   ],
+   "dependsOn": [],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_screening_api.py tests/test_builtin_screening_engine.py -q；另核對 market_data/tw_prescreen.py 在 Dockerfile COPY 範圍內、scripts/screen_tw.py 輸出與搬移前相同",
+   "compiles": true,
+   "impact": "high",
+   "batch": 8
+  },
+  {
+   "id": "X01",
+   "title": "Web 選股清理與引導",
+   "platform": "web",
+   "scope": "所有寫死簡體進 uiText；未開啟只顯示引導卡；移除假 sparkline、「強勢領先」index 判定、題材圖示、「观察中%」、預設「观察」；機器值改人話；表單排版單列，「顯示檔數」分段；改條件不清空結果；執行中進度條；開啟後載入熱點與歷史。",
+   "files": [
+    "apps/dsa-web/src/pages/StockScreeningPage.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "C03"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/StockScreeningPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/screening-backtest-funds.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：無簡體；無假 sparkline 與「观察中%」；未開啟只見引導卡",
+   "compiles": true,
+   "impact": "high",
+   "batch": 8
+  },
+  {
+   "id": "X02",
+   "title": "Web 選股市場切換與結果表",
+   "platform": "web",
+   "scope": "頁首「台股｜美股」，移除 A 股預設；策略範本卡＋條件 chip；DataTable 可排序、數字靠右、紅漲綠跌；手機卡片；每列「分析」與星號，批次列；詳情改右側抽屜且分三層去重；順序改條件→結果→熱點→歷史，歷史改「最近結果」下拉。 顯示美股母體實際來源。",
+   "files": [
+    "apps/dsa-web/src/pages/StockScreeningPage.tsx",
+    "apps/dsa-web/src/api/screening.ts",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "B11",
+    "X01"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/StockScreeningPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/screening-backtest-funds.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：台股、美股各實跑一次出結果；數字靠右；手機卡片；詳情右側抽屜",
+   "compiles": true,
+   "impact": "high",
+   "batch": 8
+  },
+  {
+   "id": "A01",
+   "title": "Web AI 建議列表優先",
+   "platform": "web",
+   "scope": "順序改精簡標題→動作摘要→單列搜尋與 chips→列表，統計預設收合到後方；未選股不 render 兩張空卡；只留一個股票搜尋並同時篩列表；報告 ID 只留 URL；統計句「63.7%（130／204 筆可判定）｜934 筆中 705 筆無法評估」，補中性 25，用中性色。文案改寫 zh-TW。",
+   "files": [
+    "apps/dsa-web/src/pages/DecisionSignalsPage.tsx",
+    "apps/dsa-web/src/components/decision-signals/DecisionSignalProfileCalibration.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "X02",
+    "B08"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/DecisionSignalsPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/alerts-signals.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：列表在首屏；未選股無空卡；統計句數字與 API 相符",
+   "compiles": true,
+   "impact": "high",
+   "batch": 9
+  },
+  {
+   "id": "A02",
+   "title": "Web AI 建議高密度列",
+   "platform": "web",
+   "scope": "DataTable：動作實心標籤、股票與持股標記、現價與漲跌、評分／信心、停損與距離、目標與距離、週期與剩餘時效、一行理由；已觸停損標記排最前；同檔收成「另有 N 筆」並顯示動作變化；手機 88px 兩行列；24 小時制；來源報告可連結；頂底分頁、手機載入更多；骨架。 現價與距停損％要接批次行情（B08 只補訊號當時價），MAX_BATCH_CODES=50 要分批。來源報告連到 /?report=<id>。動作依 action 枚舉。",
+   "files": [
+    "apps/dsa-web/src/components/decision-signals/DecisionSignalDisplay.tsx",
+    "apps/dsa-web/src/pages/DecisionSignalsPage.tsx",
+    "apps/dsa-web/src/api/decisionSignals.ts",
+    "apps/dsa-web/src/types/decisionSignals.ts",
+    "apps/dsa-web/src/api/stocks.ts"
+   ],
+   "dependsOn": [
+    "A01"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/DecisionSignalsPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/alerts-signals.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：現價與批次行情一致且不是訊號當時價；已觸停損排最前；手機 88px 兩行列；來源報告連結打得開",
+   "compiles": true,
+   "impact": "high",
+   "batch": 9
+  },
+  {
+   "id": "A03",
+   "title": "Web AI 建議抽屜與時間線",
+   "platform": "web",
+   "scope": "抽屜順序改現價→價位尺→理由→催化風險→條件→事後結果→回饋→收合技術資料；重評估與狀態操作進「⋯」；時間線 Y 軸中文、X 軸短日期、手機清單；buy -> hold 改中文。",
+   "files": [
+    "apps/dsa-web/src/components/decision-signals/DecisionSignalDisplay.tsx",
+    "apps/dsa-web/src/components/decision-signals/DecisionSignalTimeline.tsx",
+    "apps/dsa-web/src/pages/DecisionSignalsPage.tsx"
+   ],
+   "dependsOn": [
+    "A02"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/DecisionSignalsPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/alerts-signals.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：抽屜順序符合票面；時間線軸為中文與短日期；手機為清單",
+   "compiles": true,
+   "impact": "medium",
+   "batch": 9
+  },
+  {
+   "id": "B12",
+   "title": "回測未到期分流與序列",
+   "platform": "backend",
+   "scope": "區分未到期與資料不足；list 支援 status、sort、market、advice 參數，預設已完成優先；新增累計報酬與月勝率彙總端點（圖名標「逐筆累計（非資金曲線）」）。 新增檔：tests/test_backtest_api.py。",
+   "files": [
+    "api/v1/endpoints/backtest.py",
+    "api/v1/schemas/backtest.py",
+    "src/services/backtest_service.py",
+    "src/repositories/backtest_repo.py",
+    "tests/test_backtest_api.py"
+   ],
+   "dependsOn": [],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_backtest_api.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 9
+  },
+  {
+   "id": "K01",
+   "title": "Web 回測版面",
+   "platform": "web",
+   "scope": "拿掉左窄欄，頂部頁首與次要「重新計算」對話框（強制重跑在內）；篩選列改動即查，已套用條件與輸入值分開；結論句（樣本不足明說）；MetricGroup 四大數字；adviceBreakdown 拆解表；明細已完成／未到期／全部；列高 44～48、手機雙行卡；報酬紅綠帶正負；對錯用中性 ✓✕；列展開進出場；文案改名；init 錯誤處理與三種空狀態。",
+   "files": [
+    "apps/dsa-web/src/pages/BacktestPage.tsx",
+    "apps/dsa-web/src/api/backtest.ts",
+    "apps/dsa-web/src/types/backtest.ts",
+    "apps/dsa-web/src/locales/featureText.ts",
+    "apps/dsa-web/src/index.css"
+   ],
+   "dependsOn": [
+    "A03",
+    "B12"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/BacktestPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/screening-backtest-funds.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：無左窄欄；未到期與已完成分開；手機雙行卡；列高 44～48px",
+   "compiles": true,
+   "impact": "high",
+   "batch": 9
+  },
+  {
+   "id": "K02",
+   "title": "Web 回測趨勢圖",
+   "platform": "web",
+   "scope": "累計模擬報酬對同期個股平均折線與月勝率小圖，資料更新時間標註；無資料隱藏。",
+   "files": [
+    "apps/dsa-web/src/pages/BacktestPage.tsx",
+    "apps/dsa-web/src/api/backtest.ts"
+   ],
+   "dependsOn": [
+    "K01"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/BacktestPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/screening-backtest-funds.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：圖名標「逐筆累計（非資金曲線）」；更新時間可見；無資料隱藏",
+   "compiles": true,
+   "impact": "medium",
+   "batch": 9
+  },
+  {
+   "id": "F01",
+   "title": "Web 持股摘要與待處理",
+   "platform": "web",
+   "scope": "標題列帳戶分段；資產卡：TWD 總資產、今日、未實現、已實現、市值現金、基金分項；待處理區只列異常（停損逐檔），點擊跳列；移除常駐琥珀框與四張重複卡；負現金提示與補記；風險區載入骨架與單一失敗列；刪頁首說明。",
+   "files": [
+    "apps/dsa-web/src/pages/PortfolioPage.tsx",
+    "apps/dsa-web/src/api/portfolio.ts",
+    "apps/dsa-web/src/types/portfolio.ts",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "K02",
+    "B10"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/PortfolioPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/portfolio.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：總資產與風險卡同為 TWD；無常駐琥珀框；待處理只列異常且點擊跳列",
+   "compiles": true,
+   "impact": "high",
+   "batch": 10
+  },
+  {
+   "id": "F02",
+   "title": "Web 持股表",
+   "platform": "web",
+   "scope": "全寬 DataTable：名稱代碼（帳戶小字）、市值、佔比、現價成本、損益額與％、AI 短標籤、「⋯」；46px 列；排序；台股美股分組與小計；合併同檔；帳戶欄直排修掉；手機雙行清單＋排序 chips；數字格式與報價日表頭；用語替換。",
+   "files": [
+    "apps/dsa-web/src/pages/PortfolioPage.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "F01"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/PortfolioPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/portfolio.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：桌機列高實測 46px；帳戶欄不直排；手機雙行清單＋排序 chips；台美股分組小計正確",
+   "compiles": true,
+   "impact": "high",
+   "batch": 10
+  },
+  {
+   "id": "F03",
+   "title": "Web 持股配置與寫入抽屜",
+   "platform": "web",
+   "scope": "條形排行取代誤導的 Top 6 圓餅；市場與帳戶比例條（重複曝險合併）；「記一筆」「匯入」抽屜取代常駐表單；寫死簡體全部進語系；預設台股、TWD、範例 2330；交易紀錄改表格，單一捲動；新建與刪除帳戶進「⋯」。",
+   "files": [
+    "apps/dsa-web/src/pages/PortfolioPage.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts",
+    "apps/dsa-web/src/utils/portfolioFormat.ts"
+   ],
+   "dependsOn": [
+    "F02"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/PortfolioPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/portfolio.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：條形排行取代圓餅；「記一筆」抽屜預設台股 TWD 範例 2330；無簡體；單一捲動",
+   "compiles": true,
+   "impact": "high",
+   "batch": 10
+  },
+  {
+   "id": "B13",
+   "title": "基金 API append",
+   "platform": "backend",
+   "scope": "持有追加 nav_change_pct、day_pnl，合計 day_pnl；持股資料月份；比對帳本的 overlap（比對不到就不標）；TAIEX 比較序列。 新增檔：tests/test_funds_api.py。",
+   "files": [
+    "api/v1/endpoints/funds.py",
+    "api/v1/schemas/funds.py",
+    "src/services/fund_service.py",
+    "tests/test_funds_api.py"
+   ],
+   "dependsOn": [],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_funds_api.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 10
+  },
+  {
+   "id": "U01",
+   "title": "Web 基金頁",
+   "platform": "web",
+   "scope": "單行頁首含搜尋下拉（已持有標記、名稱不截尾）；總覽列（總市值、累計損益、最新淨值日損益、成本）；可排序表與佔比；金額帶正負號、市值不染色；手機列表＋全螢幕詳情層；預設選第一檔；選中反白並捲動；切換 skeleton；Modal 表單與欄位錯誤；詳情四段、成本線、Y 軸小數、區間列；未含配息提示；重疊標記；各區塊獨立錯誤。",
+   "files": [
+    "apps/dsa-web/src/pages/FundsPage.tsx",
+    "apps/dsa-web/src/types/funds.ts",
+    "apps/dsa-web/src/api/funds.ts",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "F03",
+    "B13"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/FundsPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/screening-backtest-funds.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：單行頁首；手機列表＋全螢幕詳情；Y 軸小數合理；市值不染色",
+   "compiles": true,
+   "impact": "high",
+   "batch": 10
+  },
+  {
+   "id": "N01",
+   "title": "導覽分組、命名、語言鈕、抽屜與 404",
+   "platform": "web",
+   "scope": "側欄分看盤／研究／系統三組，盯盤排第一；語言鈕移除常駐 active，改明確選單；主題、語言、登出併底部工具列；Drawer 刪寫死的 DETAIL VIEW；導覽名稱走詞彙表；NotFoundPage 接 notFound.* 並去 min-h-screen；index.html 標題改 DSA；RouteBoundary 骨架延遲顯示。",
+   "files": [
+    "apps/dsa-web/src/components/layout/SidebarNav.tsx",
+    "apps/dsa-web/src/components/i18n/UiLanguageToggle.tsx",
+    "apps/dsa-web/src/components/common/Drawer.tsx",
+    "apps/dsa-web/src/pages/NotFoundPage.tsx",
+    "apps/dsa-web/src/components/layout/RouteBoundary.tsx",
+    "apps/dsa-web/index.html",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "U01",
+    "W01a"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/LoginPage.test.tsx src/components/layout；真實畫面：用 repo verify skill（.claude/skills/verify/features/settings-auth.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：側欄三組、盯盤第一；語言鈕無常駐 active；404 頁無 min-h-screen 破版",
+   "compiles": true,
+   "impact": "high",
+   "batch": 11
+  },
+  {
+   "id": "N02",
+   "title": "手機底部分頁與標題列",
+   "platform": "web",
+   "scope": "<1024px 接上 ShellHeader 成 48px 不透明標題列，新增固定底部分頁（盯盤、分析、問股、資產、更多）含 safe area；移除頂部漢堡；補 /decision-signals 標題；viewport-fit=cover。各頁固定底部元素與 100vh 高度由此票一次修正（HomePage、ChatPage 僅調高度計算）。 部署閘門：W01b 必須已在內部 TestFlight（Apple VALID＋群組）且實機已更新，否則舊 App 內嵌頁會多出第二條底部分頁。embed 模式不顯示底部分頁。",
+   "files": [
+    "apps/dsa-web/src/components/layout/Shell.tsx",
+    "apps/dsa-web/src/components/layout/ShellHeader.tsx",
+    "apps/dsa-web/src/components/layout/SidebarNav.tsx",
+    "apps/dsa-web/index.html",
+    "apps/dsa-web/src/pages/HomePage.tsx",
+    "apps/dsa-web/src/pages/ChatPage.tsx"
+   ],
+   "dependsOn": [
+    "N01",
+    "W01a",
+    "W01b"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/HomePage.test.tsx src/pages/__tests__/ChatPage.test.tsx src/components/layout；真實畫面：用 repo verify skill（.claude/skills/verify/features/settings-auth.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 390×844、1023×768、1024×768 截圖並實際檢視，判準：390×844 底部分頁不蓋內容、1023 寬有底部分頁、1024 寬回側欄；帶 ?embed=ios 不顯示；首頁與問股高度正確",
+   "compiles": true,
+   "impact": "high",
+   "batch": 11
+  },
+  {
+   "id": "N03",
+   "title": "全站大盤狀態列與 ⌘K 搜尋",
+   "platform": "web",
+   "scope": "Shell 新增細長狀態列：加權、櫃買、S&P 500、那斯達克點位與漲跌、交易狀態、更新時間；讀 H03 建的 marketIndexStore，不重做。輪詢 60 秒、分頁不可見時暫停，後端快取由 B17a 提供 60 秒 TTL，美股拿不到就只放台股。桌機右側全站搜尋（⌘K），選中導向 /?stock=<code>。embed 模式下狀態列與 ⌘K 都隱藏（W01a）。上線後重測 R01、H01 的首屏條件。 新增檔：apps/dsa-web/src/components/layout/GlobalStockSearch.tsx。",
+   "files": [
+    "apps/dsa-web/src/components/layout/Shell.tsx",
+    "apps/dsa-web/src/stores/marketIndexStore.ts",
+    "apps/dsa-web/src/components/layout/GlobalStockSearch.tsx"
+   ],
+   "dependsOn": [
+    "N02",
+    "Q04",
+    "B17a",
+    "H03"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/layout；真實畫面：用 repo verify skill（.claude/skills/verify/features/settings-auth.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：狀態列可見且更新；R01 1440×900 首屏與 H01 390×844 前 200px 條件仍成立；embed 模式無狀態列；分頁隱藏時無輪詢",
+   "compiles": true,
+   "impact": "high",
+   "batch": 11
+  },
+  {
+   "id": "N04",
+   "title": "桌機可收合導覽 rail",
+   "platform": "web",
+   "scope": "Shell 的 collapsed 改 state：72px 雙行 rail（圖示＋短標籤）可展開到 172px，記 localStorage；≥1680px 預設展開。",
+   "files": [
+    "apps/dsa-web/src/components/layout/Shell.tsx",
+    "apps/dsa-web/src/components/layout/SidebarNav.tsx"
+   ],
+   "dependsOn": [
+    "N03"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/components/layout；真實畫面：用 repo verify skill（.claude/skills/verify/features/settings-auth.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、1680×1050 截圖並實際檢視，判準：1440 預設 72px rail、可展開到 172px 並記住；1680 預設展開；embed 不顯示",
+   "compiles": true,
+   "impact": "medium",
+   "batch": 11
+  },
+  {
+   "id": "N05",
+   "title": "登入頁重做",
+   "platform": "web",
+   "scope": "單卡置中、最寬 400px；刪 V3.X、ANALYSIS ENGINE 與不實的 DSA-V3-TLS 宣告；移除粒子、球體、視差（不刪元件檔）；文案單人化，密碼錯誤與連線錯誤分開；常駐密碼規則、空值停用、預留錯誤高度、role=alert、100dvh。",
+   "files": [
+    "apps/dsa-web/src/pages/LoginPage.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "N04"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/LoginPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/settings-auth.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：單卡置中最寬 400px；無 V3.X 與 TLS 宣告；密碼錯誤與連線錯誤文案不同；錯誤出現時版面不跳",
+   "compiles": true,
+   "impact": "high",
+   "batch": 11
+  },
+  {
+   "id": "B07a",
+   "title": "警報支援台股盤面信號",
+   "platform": "backend",
+   "scope": "MARKET_LIGHT_ALERT_REGIONS 加 tw，normalize_market_alert_region 的錯誤訊息同步，並更新 schemas/market_light.py:25 那段「維持窄集合」註解（台股已有家數與成交額可評分）。測試斷言 tw 規則真的能產生 trigger，jp、kr 仍被拒。§1.2 mutation：拿掉 tw 要紅、放寬到 jp 也要紅。NAS 實證在 L03。",
+   "files": [
+    "src/services/market_light_service.py",
+    "src/schemas/market_light.py",
+    "tests/test_market_light_alerts.py"
+   ],
+   "dependsOn": [
+    "B07"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_market_light_alerts.py tests/test_market_light_service.py -q",
+   "compiles": true,
+   "impact": "medium",
+   "batch": 12
+  },
+  {
+   "id": "B14",
+   "title": "警報 API append",
+   "platform": "backend",
+   "scope": "新增唯讀 monitor status（worker 是否實際註冊、間隔、上次執行、通知管道）。要看 RuntimeSchedulerService 的實際狀態，不能只讀 AGENT_EVENT_MONITOR_ENABLED：serve-only 下開了旗標也可能沒在跑。trigger 項追加 rule_name、stock_name、direction、severity；彙總計數。L01 用到的 cooldown 欄位是 cooldown_policy、last_triggered_at、cooldown_until、cooldown_active，schemas/alerts.py:54-58 都已存在，不新增。",
+   "files": [
+    "api/v1/endpoints/alerts.py",
+    "api/v1/schemas/alerts.py",
+    "src/services/alert_worker.py",
+    "tests/test_alert_api.py",
+    "src/services/runtime_scheduler.py"
+   ],
+   "dependsOn": [
+    "B07a"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_alert_api.py tests/test_alert_worker.py tests/test_runtime_scheduler_service.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 12
+  },
+  {
+   "id": "L03",
+   "title": "NAS 開啟警報監控",
+   "platform": "backend+infra",
+   "scope": "現況：AGENT_EVENT_MONITOR_ENABLED 在 NAS 為 false、dsa.alert_rules 0 列，目前沒有漏警報，不急，但警報 UI 宣告完成前監控必須在 NAS 跑。只開這個旗標不夠：worker 掛在 RuntimeSchedulerService，start() 在 SCHEDULE_ENABLED 為 false 時直接返回（runtime_scheduler.py:698-705），NAS 跑 --serve-only，且不會有錯誤訊息。開 SCHEDULE_ENABLED 又會讓 NAS 18:00 跑每日分析，與 Mac 重複（docs/tw-level-alerts.md:107）。預設做法（待使用者確認）：新增設定 AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE，預設 false 不改行為；true 時只註冊 agent_event_monitor 背景工作，不 set_daily_task。同步 config_registry、.env.example、docs/tw-level-alerts.md。§1.2 mutation：開關為 true 時不得註冊每日分析，為 false 時行為不變。NAS compose 加兩個 env（已授權），部署後確認。TW_LEVEL_ALERTS_ENABLED 不在本票範圍。",
+   "files": [
+    "src/services/runtime_scheduler.py",
+    "src/config.py",
+    "src/core/config_registry.py",
+    ".env.example",
+    "docs/tw-level-alerts.md",
+    "tests/test_runtime_scheduler_service.py",
+    "/Users/audichuang/Project/nas-ops/hosts/audinas/dsa/compose.yaml",
+    "/Users/audichuang/Project/nas-ops/hosts/audinas/dsa/deployments.md"
+   ],
+   "dependsOn": [
+    "B14"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_runtime_scheduler_service.py tests/test_config_registry.py -q；NAS 實證：monitor status 顯示 worker 在跑、上次執行在間隔內；18:00 後 log 無每日分析；建一條 tw 市場規則與一條價位規則確認產生 trigger 並收到 Telegram，再刪除測試規則",
+   "compiles": true,
+   "impact": "high",
+   "batch": 12
+  },
+  {
+   "id": "L01",
+   "title": "Web 警報頁主結構",
+   "platform": "web",
+   "scope": "單行頁首＋監控狀態列（未啟動紅色橫幅）；數字條；規則改句子式卡片（開關、條件、現價與距離、上次觸發、⋯）；動態時間流分已觸發／異常，顏色依嚴重度；通知診斷收頁尾；0 規則引導與三範本；手機三分頁；寫死簡體與機器值全部改寫；工具列含股票搜尋與群組下拉；載入更多。",
+   "files": [
+    "apps/dsa-web/src/pages/AlertsPage.tsx",
+    "apps/dsa-web/src/components/alerts/AlertRuleList.tsx",
+    "apps/dsa-web/src/components/alerts/AlertTriggerHistory.tsx",
+    "apps/dsa-web/src/locales/featureText.ts",
+    "apps/dsa-web/src/i18n/uiText.ts",
+    "apps/dsa-web/src/utils/validation.ts"
+   ],
+   "dependsOn": [
+    "N05",
+    "B14"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/AlertsPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/alerts-signals.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：監控未跑時紅色橫幅、跑時顯示上次執行；規則為句子式卡片無橫捲；0 規則有引導；無簡體與機器值。完成條件：L03 通過，NAS 監控實際在跑",
+   "compiles": true,
+   "impact": "high",
+   "batch": 12
+  },
+  {
+   "id": "L02",
+   "title": "Web 警報表單抽屜與入口",
+   "platform": "web",
+   "scope": "新增與編輯共用抽屜，三步（監控誰、何時提醒、怎麼提醒）；股票自動完成、現價與距離、預設台股、提醒頻率；api 補 updateRule；「測試」改「試算目前條件」就地展開；URL ?target= ?new=1；報告、盯盤、持股加鈴鐺。tw_levels 規則不開放改價。",
+   "files": [
+    "apps/dsa-web/src/components/alerts/AlertRuleForm.tsx",
+    "apps/dsa-web/src/api/alerts.ts",
+    "apps/dsa-web/src/types/alerts.ts",
+    "apps/dsa-web/src/components/alerts/AlertRuleList.tsx",
+    "apps/dsa-web/src/pages/AlertsPage.tsx",
+    "apps/dsa-web/src/pages/RealtimeBoardPage.tsx",
+    "apps/dsa-web/src/pages/PortfolioPage.tsx",
+    "apps/dsa-web/src/components/report/ReportOverview.tsx"
+   ],
+   "dependsOn": [
+    "L01"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/AlertsPage.test.tsx src/pages/__tests__/RealtimeBoardPage.test.tsx src/pages/__tests__/PortfolioPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/alerts-signals.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：新增與編輯共用抽屜；「試算」註明不發通知；從報告、盯盤、持股的鈴鐺帶入代號",
+   "compiles": true,
+   "impact": "high",
+   "batch": 12
+  },
+  {
+   "id": "I16",
+   "title": "iOS 工具頁",
+   "platform": "ios",
+   "scope": "刪口號；2×2 捷徑卡帶狀態值，其餘單行列；重分組；「分析工作台」改名；漲跌色標準設定列；連線詳情頁；登出最後一列加確認；看懂 K 線入口。 基於 PR #166 的 ToolsView：Access 設定留在連線詳情頁。監控狀態值讀 B14。",
+   "files": [
+    "apps/dsa-ios/App/Views/ToolsView.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/Models.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/DSAClient.swift",
+    "apps/dsa-ios/scripts/fixture-server.py"
+   ],
+   "dependsOn": [
+    "B14",
+    "W01b",
+    "I15"
+   ],
+   "verify": "swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：2×2 捷徑帶真實狀態值；登出是最後一列且要確認；連線詳情看得到 Access 設定；看懂 K 線入口可開",
+   "compiles": true,
+   "impact": "high",
+   "batch": 12
+  },
+  {
+   "id": "B15",
+   "title": "資料中心 API append",
+   "platform": "backend",
+   "scope": "補真實 last_success／資料日期（market schema MAX(date)、即時來源記憶體狀態），比對最新交易日；disabled 分支回 reason；fallback 狀態；舊 status 保留。",
+   "files": [
+    "src/services/data_capability_service.py",
+    "api/v1/schemas/data_capability.py",
+    "tests/test_data_capability_service.py"
+   ],
+   "dependsOn": [],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_data_capability_service.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 13
+  },
+  {
+   "id": "Z01",
+   "title": "Web 資料中心",
+   "platform": "web",
+   "scope": "一行頁首；結論橫幅；市場資料狀態表（台股、美股置頂）含來源與資料日期、備援提示；計數分正常／尚未檢查／未啟用／異常；狀態與資料集中文；warning 翻譯合併，原文進技術細節；手機列表；路由卡換行修破版；來源明細與備援順序收合，分組。測試改斷言中文。",
+   "files": [
+    "apps/dsa-web/src/pages/DataCenterPage.tsx",
+    "apps/dsa-web/src/api/dataCapability.ts",
+    "apps/dsa-web/src/types/dataCapability.ts",
+    "apps/dsa-web/src/i18n/uiText.ts",
+    "apps/dsa-web/src/pages/__tests__/DataCenterPage.test.tsx"
+   ],
+   "dependsOn": [
+    "L02",
+    "B15"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/DataCenterPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/research-cli.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：結論橫幅與真實資料日期相符；台股美股置頂；手機為列表；路由卡不破版",
+   "compiles": true,
+   "impact": "high",
+   "batch": 13
+  },
+  {
+   "id": "B16",
+   "title": "用量 API append",
+   "platform": "backend",
+   "scope": "追加 by_day、前期比較、估算費用（單價進設定、缺單價回 null、訂閱路徑標不計費）、快取命中、channel；list 支援 offset、call_type、sort。新設定同步 .env.example，不設也可運行。",
+   "files": [
+    "api/v1/endpoints/usage.py",
+    "api/v1/schemas/usage.py",
+    "src/storage.py",
+    "tests/test_llm_usage.py",
+    ".env.example"
+   ],
+   "dependsOn": [],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_llm_usage.py -q",
+   "compiles": true,
+   "impact": "high",
+   "batch": 13
+  },
+  {
+   "id": "O01",
+   "title": "Web 用量頁",
+   "platform": "web",
+   "scope": "單列頁首；摘要帶（主數字、費用、較上月、結論句、三小指標）；每日堆疊長條可點篩選；用途佔比用真實％；模型緊湊表合併顯示名；明細日分組、多輪摺疊、股票連結、篩選排序、載入更多；手機雙行且合計永遠可見；Prompt／Completion 改輸入／輸出；空與失敗狀態。",
+   "files": [
+    "apps/dsa-web/src/pages/TokenUsagePage.tsx",
+    "apps/dsa-web/src/api/usage.ts",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "Z01",
+    "B16"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/TokenUsagePage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/chat-usage.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：每日長條可點篩選；手機合計永遠可見；用途佔比加總 100%",
+   "compiles": true,
+   "impact": "high",
+   "batch": 13
+  },
+  {
+   "id": "E01",
+   "title": "Web 設定 zh-TW 補齊與檢查訊息組句",
+   "platform": "web",
+   "scope": "補齊 systemConfigI18n 約 166 欄 zh-TW，LLMChannelEditor 寫死字串進 uiText，新增缺鍵與含簡體即失敗的測試（新檔 systemConfigI18n.test.ts）。檢查訊息由 S01 的 message_code＋message_params 組句，查無 code 時顯示後端 message。後端本票不動。 新增檔：apps/dsa-web/src/utils/__tests__/systemConfigI18n.test.ts。",
+   "files": [
+    "apps/dsa-web/src/utils/systemConfigI18n.ts",
+    "apps/dsa-web/src/components/settings/LLMChannelEditor.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts",
+    "apps/dsa-web/src/utils/__tests__/systemConfigI18n.test.ts"
+   ],
+   "dependsOn": [
+    "S01",
+    "O01"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/utils；真實畫面：用 repo verify skill（.claude/skills/verify/features/settings-auth.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：/settings 全部分類無英文欄名與簡體；資料庫檢查訊息為繁中且無連線字串",
+   "compiles": true,
+   "impact": "high",
+   "batch": 13
+  },
+  {
+   "id": "E02",
+   "title": "Web 設定版面",
+   "platform": "web",
+   "scope": "首次設定卡收成系統狀態列，缺項才展開；底部常駐未儲存列（捨棄、儲存）；長字串斷行；手機先分類清單再全螢幕內容；分類改單行、右側狀態值；卡中卡收為一層；試跑改次要並確認；選股文案修正與單列開關；分類重排；搜尋設定框。",
+   "files": [
+    "apps/dsa-web/src/pages/SettingsPage.tsx",
+    "apps/dsa-web/src/components/settings/SettingsCategoryNav.tsx",
+    "apps/dsa-web/src/components/settings/SettingsSectionCard.tsx",
+    "apps/dsa-web/src/components/settings/SettingsField.tsx",
+    "apps/dsa-web/src/components/layout/SidebarNav.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "E01"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/SettingsPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/settings-auth.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：未儲存列常駐底部；手機先分類再全螢幕內容；長字串斷行不破版",
+   "compiles": true,
+   "impact": "high",
+   "batch": 14
+  },
+  {
+   "id": "E03",
+   "title": "Web 自選編輯器與通知管道",
+   "platform": "web",
+   "scope": "STOCK_LIST 專屬編輯器（搜尋新增、一列一檔、拖曳、刪除、檔數），原文收合，儲存格式不變（仍是逗號分隔的 STOCK_LIST），順序可變；智慧匯入改按鈕；通知分類改管道卡片，Telegram 優先，測試併入各管道，進階用 details。拖曳不新增相依，無現成函式庫就改上下移按鈕。",
+   "files": [
+    "apps/dsa-web/src/pages/SettingsPage.tsx",
+    "apps/dsa-web/src/components/settings/SettingsField.tsx",
+    "apps/dsa-web/src/components/settings/IntelligentImport.tsx",
+    "apps/dsa-web/src/components/settings/NotificationTestPanel.tsx",
+    "apps/dsa-web/src/i18n/uiText.ts"
+   ],
+   "dependsOn": [
+    "E02"
+   ],
+   "verify": "cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/SettingsPage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/settings-auth.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：編輯器新增、排序、刪除後 STOCK_LIST 格式相同只差順序；Telegram 排第一；測試併入各管道",
+   "compiles": true,
+   "impact": "high",
+   "batch": 14
+  },
+  {
+   "id": "I05",
+   "title": "自選分組",
+   "platform": "ios+web+backend",
+   "scope": "自選不是資料表，是 STOCK_LIST 設定字串（stocks.py:74-85）。分組存新設定鍵 WATCHLIST_GROUPS（JSON：組名→代號陣列、含順序），STOCK_LIST 維持扁平且是成員真源，不開新表、不動 schema；不設也可運行（全部一組）。後端 watchlist 分組與排序 API（舊 /watchlist 相容）；iOS 分組籤與編輯頁；Web 手動同步到 HomeStockWorkspace。代號從 STOCK_LIST 移除時要連帶清分組。新 Swift 檔要跑 xcodegen。",
+   "files": [
+    "api/v1/endpoints/stocks.py",
+    "api/v1/schemas/stocks.py",
+    "src/services/stock_service.py",
+    "apps/dsa-ios/App/Views/WatchlistView.swift",
+    "apps/dsa-ios/App/State/AppStore.swift",
+    "apps/dsa-ios/Core/Sources/DSACore/Models.swift",
+    "apps/dsa-web/src/components/watchlist/HomeStockWorkspace.tsx",
+    "src/core/config_registry.py",
+    ".env.example",
+    "apps/dsa-ios/DSAMarket.xcodeproj/project.pbxproj",
+    "apps/dsa-ios/scripts/fixture-server.py",
+    "apps/dsa-web/src/stores/stockPoolStore.ts"
+   ],
+   "dependsOn": [
+    "I16",
+    "E03"
+   ],
+   "verify": "uv run ./scripts/ci_gate.sh syntax && uv run ./scripts/ci_gate.sh flake8 && uv run python -m pytest tests/test_stock_profile_api.py -q && swift test --package-path apps/dsa-ios/Core && bash apps/dsa-ios/scripts/test-ui.sh && cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src/pages/__tests__/HomePage.test.tsx；真實畫面：用 repo verify skill（.claude/skills/verify/features/ios.md）在 DSA iPhone 18 Pro Max 直向模擬器截圖並實際檢視，判準：分組籤可切、編輯頁可增刪移；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：首頁清單分組與 iOS 一致；舊 /watchlist 回應不變",
+   "compiles": true,
+   "impact": "high",
+   "batch": 14
+  },
+  {
+   "id": "Y01",
+   "title": "CSS 與文件收尾",
+   "platform": "web+docs",
+   "scope": "刪除已遷移的 home-*、backtest-*、settings-* 全域 class 與 Card、Button 相容別名；簡體白名單清空；更新 docs/INDEX.md、docs/verification.md、.claude/skills/verify 的功能地圖。刪類別不刪檔。",
+   "files": [
+    "apps/dsa-web/src/index.css",
+    "apps/dsa-web/src/components/common/Button.tsx",
+    "apps/dsa-web/src/i18n/__tests__/simplifiedGuard.test.ts",
+    "docs/INDEX.md",
+    "docs/verification.md",
+    ".claude/skills/verify/SKILL.md"
+   ],
+   "dependsOn": [
+    "L02",
+    "L03",
+    "E03",
+    "I05"
+   ],
+   "verify": "uv run python scripts/check_ai_assets.py && cd apps/dsa-web && npm ci && npm run lint && npm run build && npx vitest run src；真實畫面：用 repo verify skill（.claude/skills/verify/features/analysis-history.md），launch --online --symbols 2330.TW,AAPL，ego-browser 於 1440×900、390×844 截圖並實際檢視，判準：刪類別後 /、/board、/portfolio、/backtest、/settings、/chat、/alerts 無跑版；簡體白名單為空",
+   "compiles": true,
+   "impact": "medium",
+   "batch": 14
+  }
+ ]
+}
