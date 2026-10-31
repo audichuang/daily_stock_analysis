@@ -3676,7 +3676,7 @@ const zhTW: Record<UiTextKey, string> = {
   'chat.objectUnconfirmed': '目前討論對象未確認',
   'chat.objectUnconfirmedLegacy': '目前討論對象未確認（舊版服務）',
   'chat.refreshSession': '重新整理會話（保留輸入後重試）',
-  'chat.quick.chanMoutai': '用纏論分析台積電',
+  'chat.quick.chanMoutai': '用纏論分析茅台',
   'chat.quick.waveCatl': '波浪理論看寧德時代',
   'chat.quick.trendByd': '分析比亞迪趨勢',
   'chat.quick.boxSmic': '用箱型震盪分析 A 股中芯國際 688981',

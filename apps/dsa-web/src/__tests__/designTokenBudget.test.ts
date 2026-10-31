@@ -39,6 +39,14 @@ describe('設計 token 預算', () => {
     }
   });
 
+  it('卡片裁切溢出，長字串不會把手機頁面撐寬', () => {
+    const css = readIndexCss();
+    for (const selector of ['.card-surface', '.card-inset']) {
+      const rule = new RegExp(`\\${selector} \\{[^}]*\\}`).exec(css)?.[0] ?? '';
+      expect(rule).toContain('overflow: hidden;');
+    }
+  });
+
   it('.label 字距 0、不轉大寫', () => {
     const rule = /\.label,\s*\.label-uppercase \{[^}]*\}/.exec(readIndexCss())?.[0] ?? '';
     expect(rule).toContain('letter-spacing: 0;');

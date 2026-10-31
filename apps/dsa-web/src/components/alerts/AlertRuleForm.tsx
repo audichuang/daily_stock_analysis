@@ -428,7 +428,7 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
           label={text.targetCode}
           value={target}
           onChange={(event) => setTarget(event.target.value)}
-          placeholder="600519 / AAPL / hk00700"
+          placeholder="2330.TW / AAPL"
           disabled={isSubmitting}
         />
       );

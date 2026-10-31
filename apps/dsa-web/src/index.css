@@ -2945,12 +2945,17 @@ textarea {
 
 /* 卡片層級：surface 一般、inset 次層；漸層只留給 highlight（.terminal-card） */
 .card-surface {
+  /* 與 .terminal-card 相同：長字串不撐破卡片，也不把手機頁面撐寬 */
+  position: relative;
+  overflow: hidden;
   border: 1px solid var(--border-default);
   background: hsl(var(--card) / 0.96);
   box-shadow: var(--shadow-soft-card);
 }
 
 .card-inset {
+  position: relative;
+  overflow: hidden;
   border: 1px solid var(--border-subtle);
   background: var(--bg-subtle);
 }
