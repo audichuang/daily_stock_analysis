@@ -36,6 +36,7 @@ from tenacity import (
 
 from data_provider.us_index_mapping import is_us_index_code
 from src.data.stock_index_loader import get_us_asset_type
+from src.services.market_symbol_utils import is_tw_suffix_symbol
 from src.config import (
     NEWS_STRATEGY_WINDOWS,
     normalize_news_strategy_profile,
@@ -2463,6 +2464,13 @@ class SearchService:
     FUTURE_TOLERANCE_DAYS = 1
     ANALYTICAL_INTEL_LOOKBACK_DAYS = 180
     ANALYTICAL_INTEL_DIMENSIONS = {"market_analysis", "earnings"}
+    # 這些面向本來就在找分析與產業資料，資料頁可留作參考；其餘面向要的是事件報導。
+    REFERENCE_INTEL_DIMENSIONS = {"market_analysis", "industry"}
+    # 實測近 3 天入庫的樣本：這些網域回的是個股資料頁或影片，沒有發布日期，也不是事件報導。
+    DATA_PAGE_DOMAINS = (
+        "simplywall.st", "tipranks.com", "marketscreener.com", "ibisworld.com", "csimarket.com",
+        "macrotrends.net", "stockanalysis.com", "tradingview.com", "youtube.com",
+    )
     _CHINESE_TEXT_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
     # 类别股的点与连字号都要认（`BRK.B` / `BRK-B`）。只认一种会让另一种判不出美股，
     # 於是新闻检索整组走中文／境内路径去查一档美股。
@@ -2731,6 +2739,29 @@ class SearchService:
             self.news_window_days,
         )
     
+    @staticmethod
+    def _tw_search_dimensions(stock_code: str, stock_name: str, is_index_etf: bool) -> List[Dict[str, Any]]:
+        def dimension(name, query, desc, topic, strict):
+            return {'name': name, 'query': query, 'desc': desc, 'tavily_topic': topic, 'strict_freshness': strict}
+
+        if is_index_etf:
+            return [
+                dimension('latest_news', f"{stock_name} {stock_code} 最新 新聞", '最新消息', 'news', True),
+                dimension('market_analysis', f"{stock_name} ETF 分析 配息 溢價", '机构分析', None, False),
+                dimension('risk_check', f"{stock_name} 追蹤誤差 淨值 折溢價", '风险排查', None, False),
+                dimension('announcements', f"{stock_name} {stock_code} 公告 成分股調整", '公司公告', 'news', True),
+                dimension('earnings', f"{stock_name} 淨值 績效 配息", '业绩预期', None, False),
+                dimension('industry', f"{stock_name} 成分股 產業配置 權重", '行业分析', None, False),
+            ]
+        return [
+            dimension('latest_news', f"{stock_name} {stock_code} 最新 新聞 重大事件", '最新消息', 'news', True),
+            dimension('market_analysis', f"{stock_name} 法人 目標價 評等 分析", '机构分析', None, False),
+            dimension('risk_check', f"{stock_name} 處分 違約 訴訟 減資 利空", '风险排查', 'news', True),
+            dimension('announcements', f"{stock_name} {stock_code} 重大訊息 公告 公開資訊觀測站", '公司公告', 'news', True),
+            dimension('earnings', f"{stock_name} 法說會 財報 營收 EPS 展望", '业绩预期', 'news', False),
+            dimension('industry', f"{stock_name} 產業 競爭對手 市占 展望", '行业分析', None, False),
+        ]
+
     @staticmethod
     def _is_foreign_stock(stock_code: str) -> bool:
         """判断是否为港股或美股。
@@ -3666,11 +3697,17 @@ class SearchService:
         )
 
     @classmethod
+    def _is_data_page_domain(cls, url: Optional[str]) -> bool:
+        host = (urlparse(url or "").hostname or "").lower()
+        return any(host == domain or host.endswith("." + domain) for domain in cls.DATA_PAGE_DOMAINS)
+
+    @classmethod
     def _filter_ranked_news_for_context(
         cls,
         response: SearchResponse,
         *,
         log_scope: str,
+        allow_data_pages: bool = True,
     ) -> SearchResponse:
         """Drop obvious non-news pages and zero-relevance fillers from ranked results."""
         if not response.success or not response.results:
@@ -3683,6 +3720,9 @@ class SearchService:
 
         for item in response.results:
             is_official_source = cls._is_trusted_official_news_source(item)
+            if not allow_data_pages and cls._is_data_page_domain(item.url):
+                dropped_low_quality += 1
+                continue
             if (
                 not is_official_source
                 and cls._has_low_quality_news_page_signal(item)
@@ -4690,10 +4730,11 @@ class SearchService:
                     'name': 'earnings',
                     'query': (
                         f"{effective_name} {stock_code} index performance composition outlook"
-                        if is_index_etf else f"{effective_name} earnings revenue profit growth forecast"
+                        if is_index_etf else f"{effective_name} quarterly earnings results guidance analyst reaction"
                     ),
                     'desc': '业绩预期',
-                    'tavily_topic': None,
+                    # 不走新聞模式時多半回無日期的資料頁（Simply Wall St 等），看不出市場反應。
+                    'tavily_topic': None if is_index_etf else 'news',
                     'strict_freshness': False,
                 },
                 {
@@ -4707,6 +4748,9 @@ class SearchService:
                     'strict_freshness': False,
                 },
             ]
+        elif is_tw_suffix_symbol(stock_code):
+            # 台股用繁中與在地來源；共用的 A 股查詢會帶簡體與「上交所 深交所 cninfo」，搜不到公開資訊觀測站。
+            search_dimensions = self._tw_search_dimensions(stock_code, stock_name, is_index_etf)
         else:
             search_dimensions = [
                 {
@@ -4839,6 +4883,7 @@ class SearchService:
             filtered = self._filter_ranked_news_for_context(
                 filtered,
                 log_scope=f"{stock_code}:{provider.name}:{dim['name']}:admission",
+                allow_data_pages=dim['name'] in self.REFERENCE_INTEL_DIMENSIONS,
             )
             filtered = self._limit_search_response(
                 filtered,

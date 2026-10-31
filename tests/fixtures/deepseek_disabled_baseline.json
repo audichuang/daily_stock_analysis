@@ -76,7 +76,7 @@
           "search_time": 0
         },
         "earnings": {
-          "query": "Intel earnings revenue profit growth forecast",
+          "query": "Intel quarterly earnings results guidance analyst reaction",
           "results": [
             {
               "title": "Intel INTC earnings revenue outlook",
@@ -194,7 +194,7 @@
     "2330.TW": {
       "results": {
         "latest_news": {
-          "query": "台積電 2330.TW 最新 新闻 重大 事件",
+          "query": "台積電 2330.TW 最新 新聞 重大事件",
           "results": [
             {
               "title": "台積電 2330 營收 財報 目標價",
@@ -217,7 +217,7 @@
           "search_time": 0
         },
         "market_analysis": {
-          "query": "台積電 研报 目标价 评级 深度分析",
+          "query": "台積電 法人 目標價 評等 分析",
           "results": [
             {
               "title": "台積電 2330 營收 財報 目標價",
@@ -240,7 +240,7 @@
           "search_time": 0
         },
         "risk_check": {
-          "query": "台積電 减持 处罚 违规 诉讼 利空 风险",
+          "query": "台積電 處分 違約 訴訟 減資 利空",
           "results": [
             {
               "title": "台積電 2330 營收 財報 目標價",
@@ -263,7 +263,7 @@
           "search_time": 0
         },
         "announcements": {
-          "query": "台積電 2330.TW 公司公告 重要公告 上交所 深交所 cninfo",
+          "query": "台積電 2330.TW 重大訊息 公告 公開資訊觀測站",
           "results": [
             {
               "title": "台積電 2330 營收 財報 目標價",
@@ -286,7 +286,7 @@
           "search_time": 0
         },
         "earnings": {
-          "query": "台積電 业绩预告 财报 营收 净利润 同比增长",
+          "query": "台積電 法說會 財報 營收 EPS 展望",
           "results": [
             {
               "title": "台積電 2330 營收 財報 目標價",

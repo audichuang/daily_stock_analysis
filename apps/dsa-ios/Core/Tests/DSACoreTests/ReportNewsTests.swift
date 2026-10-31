@@ -66,4 +66,14 @@ final class ReportNewsTests: XCTestCase {
             XCTAssertEqual(try item(["url": url]).externalURL?.absoluteString, url)
         }
     }
+
+    func testEarningsCountsAsNewsOnlyWithPublishedDate() throws {
+        func item(_ date: String?) throws -> ReportNewsItem {
+            var value: [String: Any] = ["title": "t", "snippet": "s", "url": "https://a.test/1", "dimension": "earnings"]
+            if let date { value["publishedDate"] = date }
+            return try JSONDecoder().decode(ReportNewsItem.self, from: JSONSerialization.data(withJSONObject: value))
+        }
+        XCTAssertTrue(try item("2026-10-30").isNews)
+        XCTAssertFalse(try item(nil).isNews)
+    }
 }

@@ -14,8 +14,10 @@ public struct ReportNewsItem: Decodable, Sendable {
     public let dimension: String?
 
     /// 分類只看搜尋面向；未知面向保留在參考資料，不猜測標題或網域。
+    /// 財報面向有發布日期才是報導，沒有日期的多半是資料頁。
     public var isNews: Bool {
-        ["latest_news", "announcements", "risk_check"].contains(dimension ?? "")
+        if dimension == "earnings" { return publishedDate != nil }
+        return ["latest_news", "announcements", "risk_check"].contains(dimension ?? "")
     }
 
     public var externalURL: URL? {
