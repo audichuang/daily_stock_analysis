@@ -351,7 +351,7 @@ class BaseSearchProvider(ABC):
         with self._state_lock:
             self._key_errors[key] = self._key_errors.get(key, 0) + 1
             error_count = self._key_errors[key]
-        logger.warning(f"[{self._name}] API Key {key[:8]}... 错误计数: {error_count}")
+        logger.warning(f"[{self._name}] API Key 錯誤計數: {error_count}")
     
     @abstractmethod
     def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
@@ -420,7 +420,110 @@ class BaseSearchProvider(ABC):
         return self._execute_search(query, max_results=max_results, days=days)
 
 
-class TavilySearchProvider(BaseSearchProvider):
+class RotatingKeySearchProvider(BaseSearchProvider):
+    """認證／額度失敗才換金鑰；同一次搜尋每把最多嘗試一次。"""
+
+    def __init__(self, api_keys: List[str], name: str):
+        keys = list(dict.fromkeys(api_keys))
+        if keys:
+            start = random.randrange(len(keys))
+            keys = keys[start:] + keys[:start]
+        super().__init__(keys, name)
+
+    @staticmethod
+    def _is_key_failure(exc: Exception) -> bool:
+        return getattr(getattr(exc, "response", None), "status_code", None) in {401, 402, 429}
+
+    def search(self, query: str, max_results: int = 5, days: int = 7, **search_kwargs) -> SearchResponse:
+        start_time = time.monotonic()
+        with self._state_lock:
+            keys = [next(self._key_cycle) for _ in self._api_keys] if self._key_cycle else []
+            if self._key_cycle:
+                next(self._key_cycle)
+        response = SearchResponse(query=query, results=[], provider=self.name,
+                                  success=False, error_message=f"{self.name} 未配置 API Key")
+        for key in keys:
+            try:
+                response = self._do_search(query, key, max_results, days=days, **search_kwargs)
+            except Exception as exc:
+                retryable = self._is_key_failure(exc)
+                # 例外本文可能包含憑證；回傳與日誌只留例外類別。
+                response = SearchResponse(query=query, results=[], provider=self.name,
+                                          success=False, error_message=type(exc).__name__)
+                self._record_error(key)
+                if retryable:
+                    continue
+                break
+            if response.success:
+                response.mark_retrieved()
+                self._record_success(key)
+            else:
+                self._record_error(key)
+            break
+        response.search_time = time.monotonic() - start_time
+        return response
+
+
+class DeepSeekSearchProvider(RotatingKeySearchProvider):
+    """DeepSeek 媒體／網頁搜尋，獨立搜尋金鑰，不參與模型路由。"""
+
+    SUMMARY_LIMIT = 1500
+    API_URL = "https://api.deepseek.com/v1/tools/search"
+
+    def __init__(self, api_keys: List[str]):
+        super().__init__(api_keys, "DeepSeek")
+
+    @staticmethod
+    def _publication_day(value):
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
+        if parsed.tzinfo is not None:
+            utc = parsed.astimezone(timezone.utc)
+            # 實測日級日期包成 UTC+8 午夜（UTC 前日 16:00），不是精確發布時間。
+            if (utc.hour, utc.minute, utc.second, utc.microsecond) == (16, 0, 0, 0):
+                return utc.astimezone(timezone(timedelta(hours=8))).date().isoformat()
+            return utc.date().isoformat()
+        return parsed.date().isoformat()
+
+    def _request_search(self, query, api_key, count):
+        response = requests.post(self.API_URL, headers={"Authorization": f"Bearer {api_key}"},
+                                 json={"query": query, "count": count}, timeout=10)
+        response.raise_for_status()
+        return response.json()
+
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+        query = query.strip()
+        if not query:
+            return SearchResponse(query=query, results=[], provider=self.name, success=False,
+                                  error_message="搜尋字串不可空白")
+        today = datetime.now().date()
+        # after 為開區間，亦涵蓋已觀察到的前日 16:00 UTC 日級編碼；本機仍嚴格過濾。
+        bounds = ""
+        if not re.search(r"\bafter:", query):
+            bounds += f" after:{today - timedelta(days=max(1, days))}"
+        if not re.search(r"\bbefore:", query):
+            bounds += f" before:{today + timedelta(days=1)}"
+        wire_query = query[:128 - len(bounds)] + bounds
+        count = max(1, min(50, max_results))
+        payload = self._request_search(wire_query, api_key, count)
+        results = []
+        for item in payload.get("results", [])[:count]:
+            summary = item.get("summary") or item.get("snippet") or ""
+            note = "【DeepSeek 搜尋日期未經原文核實；日級日期非精確發布時間】"
+            results.append(SearchResult(
+                title=item.get("title", ""), url=item.get("url", ""),
+                source=item.get("site_name") or urlparse(item.get("url", "")).netloc,
+                snippet=(note + summary)[:self.SUMMARY_LIMIT],
+                published_date=self._publication_day(item.get("date")),
+            ))
+        return SearchResponse(query=query, results=results, provider=self.name)
+
+
+class TavilySearchProvider(RotatingKeySearchProvider):
     """
     Tavily 搜索引擎
     
@@ -433,11 +536,7 @@ class TavilySearchProvider(BaseSearchProvider):
     """
     
     def __init__(self, api_keys: List[str]):
-        keys = list(dict.fromkeys(api_keys))
-        if keys:
-            start = random.randrange(len(keys))
-            keys = keys[start:] + keys[:start]
-        super().__init__(keys, "Tavily")
+        super().__init__(api_keys, "Tavily")
     
     def _do_search(
         self,
@@ -480,7 +579,6 @@ class TavilySearchProvider(BaseSearchProvider):
             
             # 记录原始响应到日志
             logger.info(f"[Tavily] 搜索完成，query='{query}', 返回 {len(response.get('results', []))} 条结果")
-            logger.debug(f"[Tavily] 原始响应: {response}")
             
             # 解析结果
             results = []
@@ -512,42 +610,15 @@ class TavilySearchProvider(BaseSearchProvider):
         from tavily.errors import ForbiddenError, InvalidAPIKeyError, UsageLimitExceededError
 
         status = getattr(getattr(exc, "response", None), "status_code", None)
-        return isinstance(exc, (ForbiddenError, InvalidAPIKeyError, UsageLimitExceededError)) or status in {401, 429, 432, 433}
+        return (isinstance(exc, (ForbiddenError, InvalidAPIKeyError, UsageLimitExceededError))
+                or RotatingKeySearchProvider._is_key_failure(exc) or status in {432, 433})
 
     def search(
         self, query: str, max_results: int = 5, days: int = 7,
         topic: Optional[str] = None,
     ) -> SearchResponse:
-        """同一次搜尋逐把嘗試，僅認證／額度錯誤切換金鑰。"""
-        start_time = time.monotonic()
-        with self._state_lock:
-            keys = [next(self._key_cycle) for _ in self._api_keys] if self._key_cycle else []
-            # 每次呼叫仍輪替起點，重建服務時則由隨機起點開始。
-            if self._key_cycle:
-                next(self._key_cycle)
-        response = SearchResponse(query=query, results=[], provider=self.name,
-                                  success=False, error_message="Tavily 未配置 API Key")
-        for key in keys:
-            try:
-                kwargs = {"topic": topic} if topic is not None else {}
-                response = self._do_search(query, key, max_results, days=days, **kwargs)
-            except Exception as exc:
-                retryable = self._is_key_failure(exc)
-                # 不記錄例外本文，SDK 的訊息可能含金鑰。
-                response = SearchResponse(query=query, results=[], provider=self.name,
-                                          success=False, error_message=type(exc).__name__)
-                self._record_error(key)
-                if retryable:
-                    continue
-                break
-            if response.success:
-                response.mark_retrieved()
-                self._record_success(key)
-            else:
-                self._record_error(key)
-            break
-        response.search_time = time.monotonic() - start_time
-        return response
+        kwargs = {"topic": topic} if topic is not None else {}
+        return super().search(query, max_results=max_results, days=days, **kwargs)
 
     @staticmethod
     def _extract_domain(url: str) -> str:
@@ -2534,6 +2605,7 @@ class SearchService:
         news_max_age_days: int = 3,
         news_strategy_profile: str = "short",
         finmind_tokens: Optional[List[str]] = None,
+        deepseek_keys: Optional[List[str]] = None,
     ):
         """
         初始化搜索服务
@@ -2565,6 +2637,8 @@ class SearchService:
             "finmind_tokens": list(finmind_tokens or []),
         }
         self._providers: List[BaseSearchProvider] = []
+        if deepseek_keys:
+            self._constructor_kwargs["deepseek_keys"] = list(deepseek_keys)
         # fork: 台股個股新聞優先走 FinMind；只在設定了 FINMIND_TOKEN_* 時啟用（離線測試不會連外）。
         finmind_token_list = [t for t in (finmind_tokens or []) if t]
         self._finmind_provider: Optional[FinMindNewsProvider] = (
@@ -2630,6 +2704,12 @@ class SearchService:
         if anspire_keys:
             self._providers.insert(0, AnspireSearchProvider(anspire_keys))
             logger.info(f"已配置 Anspire Search 搜索，共 {len(anspire_keys)} 个 API Key")
+
+        if deepseek_keys:
+            # 關閉時完整保留原順序；啟用時先 DeepSeek、再 Tavily，其餘沿用原相對順序。
+            tavily = [p for p in self._providers if isinstance(p, TavilySearchProvider)]
+            others = [p for p in self._providers if not isinstance(p, TavilySearchProvider)]
+            self._providers = [DeepSeekSearchProvider(deepseek_keys), *tavily, *others]
             
         if self._finmind_provider is not None:
             logger.info("已配置 FinMind 台股新闻，共 %s 个 token", len(finmind_token_list))
@@ -5122,6 +5202,7 @@ def get_search_service() -> SearchService:
                 _search_service = SearchService(
                     bocha_keys=config.bocha_api_keys,
                     tavily_keys=config.tavily_api_keys,
+                    deepseek_keys=getattr(config, "deepseek_search_api_keys", None),
                     anspire_keys=config.anspire_api_keys,
                     brave_keys=config.brave_api_keys,
                     serpapi_keys=config.serpapi_keys,

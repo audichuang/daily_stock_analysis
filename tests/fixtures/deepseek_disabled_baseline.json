@@ -1,0 +1,387 @@
+{
+  "base_commit": "96761715f980384b0016d213093a726f28d09759",
+  "stocks": {
+    "INTC": {
+      "results": {
+        "latest_news": {
+          "query": "Intel INTC latest news events",
+          "results": [
+            {
+              "title": "Intel INTC earnings revenue outlook",
+              "snippet": "financial results revenue forecast 台積電 營收 財報",
+              "url": "https://example.com/news",
+              "source": "fixture",
+              "published_date": "<today>",
+              "relevance_score": 100,
+              "relevance_category": "direct_company_news",
+              "relevance_reasons": [
+                "标题命中股票代码 INTC",
+                "标题命中公司名 Intel",
+                "命中公告/财报/交易等公司事件词"
+              ],
+              "retrieved_at": "fixture-retrieval"
+            }
+          ],
+          "provider": "Tavily",
+          "success": true,
+          "error_message": null,
+          "search_time": 0
+        },
+        "market_analysis": {
+          "query": "Intel analyst rating target price report",
+          "results": [
+            {
+              "title": "Intel INTC earnings revenue outlook",
+              "snippet": "financial results revenue forecast 台積電 營收 財報",
+              "url": "https://example.com/news",
+              "source": "fixture",
+              "published_date": "<today>",
+              "relevance_score": 100,
+              "relevance_category": "direct_company_news",
+              "relevance_reasons": [
+                "标题命中股票代码 INTC",
+                "标题命中公司名 Intel",
+                "命中公告/财报/交易等公司事件词"
+              ],
+              "retrieved_at": "fixture-retrieval"
+            }
+          ],
+          "provider": "Tavily",
+          "success": true,
+          "error_message": null,
+          "search_time": 0
+        },
+        "risk_check": {
+          "query": "Intel risk insider selling lawsuit litigation",
+          "results": [
+            {
+              "title": "Intel INTC earnings revenue outlook",
+              "snippet": "financial results revenue forecast 台積電 營收 財報",
+              "url": "https://example.com/news",
+              "source": "fixture",
+              "published_date": "<today>",
+              "relevance_score": 100,
+              "relevance_category": "direct_company_news",
+              "relevance_reasons": [
+                "标题命中股票代码 INTC",
+                "标题命中公司名 Intel",
+                "命中公告/财报/交易等公司事件词"
+              ],
+              "retrieved_at": "fixture-retrieval"
+            }
+          ],
+          "provider": "Tavily",
+          "success": true,
+          "error_message": null,
+          "search_time": 0
+        },
+        "earnings": {
+          "query": "Intel earnings revenue profit growth forecast",
+          "results": [
+            {
+              "title": "Intel INTC earnings revenue outlook",
+              "snippet": "financial results revenue forecast 台積電 營收 財報",
+              "url": "https://example.com/news",
+              "source": "fixture",
+              "published_date": "<today>",
+              "relevance_score": 100,
+              "relevance_category": "direct_company_news",
+              "relevance_reasons": [
+                "标题命中股票代码 INTC",
+                "标题命中公司名 Intel",
+                "命中公告/财报/交易等公司事件词"
+              ],
+              "retrieved_at": "fixture-retrieval"
+            }
+          ],
+          "provider": "Tavily",
+          "success": true,
+          "error_message": null,
+          "search_time": 0
+        },
+        "industry": {
+          "query": "Intel industry competitors market share outlook",
+          "results": [
+            {
+              "title": "Intel INTC earnings revenue outlook",
+              "snippet": "financial results revenue forecast 台積電 營收 財報",
+              "url": "https://example.com/news",
+              "source": "fixture",
+              "published_date": "<today>",
+              "relevance_score": 100,
+              "relevance_category": "direct_company_news",
+              "relevance_reasons": [
+                "标题命中股票代码 INTC",
+                "标题命中公司名 Intel",
+                "命中公告/财报/交易等公司事件词"
+              ],
+              "retrieved_at": "fixture-retrieval"
+            }
+          ],
+          "provider": "Tavily",
+          "success": true,
+          "error_message": null,
+          "search_time": 0
+        }
+      },
+      "text": "【Intel 情报搜索结果】\n\n📰 最新消息 (来源: Tavily):\n  1. Intel INTC earnings revenue outlook [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=100; 依据: 标题命中股票代码 INTC；标题命中公司名 Intel；命中公告/财报/交易等公司事件词\n\n📈 机构分析 (来源: Tavily):\n  1. Intel INTC earnings revenue outlook [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=100; 依据: 标题命中股票代码 INTC；标题命中公司名 Intel；命中公告/财报/交易等公司事件词\n\n⚠️ 风险排查 (来源: Tavily):\n  1. Intel INTC earnings revenue outlook [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=100; 依据: 标题命中股票代码 INTC；标题命中公司名 Intel；命中公告/财报/交易等公司事件词\n\n📊 业绩预期 (来源: Tavily):\n  1. Intel INTC earnings revenue outlook [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=100; 依据: 标题命中股票代码 INTC；标题命中公司名 Intel；命中公告/财报/交易等公司事件词\n\n🏭 行业分析 (来源: Tavily):\n  1. Intel INTC earnings revenue outlook [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=100; 依据: 标题命中股票代码 INTC；标题命中公司名 Intel；命中公告/财报/交易等公司事件词",
+      "prompts": {
+        "zh": "45bc69fe8b062be7d24e819cf8e207119fb82a97c4eba17cc0c98063b9e7b63a",
+        "zh-TW": "334a450744445e5dc1003ed24f5bb55cbf6477639a3e059abc1bf45a6d569932",
+        "en": "883ad24a6a385617cf6bbe84a7239d631cd9c7d6db908c1fd8020a20dd361576",
+        "ko": "a226813d7950f5ec102062d6b0c937ccfca6b7760bbd4732b8d79177fe33b0a6"
+      },
+      "result": {
+        "code": "INTC",
+        "name": "贵州茅台",
+        "sentiment_score": 80,
+        "trend_prediction": "强烈看多",
+        "operation_advice": "建议买入",
+        "decision_type": "sell",
+        "confidence_level": "高",
+        "report_language": "zh-TW",
+        "action": "sell",
+        "action_label": "賣出",
+        "dashboard": {
+          "data_perspective": {},
+          "phase_decision": {
+            "phase_context": null,
+            "action_window": null,
+            "immediate_action": null,
+            "watch_conditions": [],
+            "next_check_time": null,
+            "confidence_reason": null,
+            "data_limitations": []
+          },
+          "decision_score_calibration": {
+            "final_action": "sell",
+            "guardrail_reason": "賣出決策與買入區分數矛盾，保留非買入動作，禁止升為買入或加倉。"
+          },
+          "prompt_variant": "baseline"
+        },
+        "trend_analysis": "",
+        "short_term_outlook": "",
+        "medium_term_outlook": "",
+        "technical_analysis": "",
+        "ma_analysis": "",
+        "volume_analysis": "",
+        "pattern_analysis": "",
+        "fundamental_analysis": "",
+        "sector_position": "",
+        "company_highlights": "",
+        "news_summary": "",
+        "market_sentiment": "",
+        "hot_topics": "",
+        "analysis_summary": "",
+        "key_points": "",
+        "risk_warning": "",
+        "buy_reason": "",
+        "market_snapshot": null,
+        "search_performed": false,
+        "news_result_count": null,
+        "news_result_count_known": true,
+        "news_evidence_present": false,
+        "success": true,
+        "error_message": null,
+        "current_price": null,
+        "change_pct": null,
+        "model_used": null,
+        "market_structure_context": null,
+        "p_5d_beat_0050": null
+      },
+      "agent_prompt": "Analyze\n\n股票代码: INTC\n輸出語言：繁體中文（台灣用語）（所有 JSON 鍵名保持不變，所有面向使用者的文字值使用繁體中文，不得使用簡體字）\n\n[系统已获取的新闻与舆情情报]\n【Intel 情报搜索结果】\n\n📰 最新消息 (来源: Tavily):\n  1. Intel INTC earnings revenue outlook [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=100; 依据: 标题命中股票代码 INTC；标题命中公司名 Intel；命中公告/财报/交易等公司事件词\n\n📈 机构分析 (来源: Tavily):\n  1. Intel INTC earnings revenue outlook [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=100; 依据: 标题命中股票代码 INTC；标题命中公司名 Intel；命中公告/财报/交易等公司事件词\n\n⚠️ 风险排查 (来源: Tavily):\n  1. Intel INTC earnings revenue outlook [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=100; 依据: 标题命中股票代码 INTC；标题命中公司名 Intel；命中公告/财报/交易等公司事件词\n\n📊 业绩预期 (来源: Tavily):\n  1. Intel INTC earnings revenue outlook [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=100; 依据: 标题命中股票代码 INTC；标题命中公司名 Intel；命中公告/财报/交易等公司事件词\n\n🏭 行业分析 (来源: Tavily):\n  1. Intel INTC earnings revenue outlook [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=100; 依据: 标题命中股票代码 INTC；标题命中公司名 Intel；命中公告/财报/交易等公司事件词\n\n请使用可用工具获取缺失的数据（如历史K线、新闻等），然后以决策仪表盘 JSON 格式输出分析结果。"
+    },
+    "2330.TW": {
+      "results": {
+        "latest_news": {
+          "query": "台積電 2330.TW 最新 新闻 重大 事件",
+          "results": [
+            {
+              "title": "台積電 2330 營收 財報 目標價",
+              "snippet": "financial results revenue forecast 台積電 營收 財報",
+              "url": "https://example.com/news",
+              "source": "fixture",
+              "published_date": "<today>",
+              "relevance_score": 57,
+              "relevance_category": "direct_company_news",
+              "relevance_reasons": [
+                "标题命中公司名 台積電",
+                "命中公告/财报/交易等公司事件词"
+              ],
+              "retrieved_at": "fixture-retrieval"
+            }
+          ],
+          "provider": "Tavily",
+          "success": true,
+          "error_message": null,
+          "search_time": 0
+        },
+        "market_analysis": {
+          "query": "台積電 研报 目标价 评级 深度分析",
+          "results": [
+            {
+              "title": "台積電 2330 營收 財報 目標價",
+              "snippet": "financial results revenue forecast 台積電 營收 財報",
+              "url": "https://example.com/news",
+              "source": "fixture",
+              "published_date": "<today>",
+              "relevance_score": 57,
+              "relevance_category": "direct_company_news",
+              "relevance_reasons": [
+                "标题命中公司名 台積電",
+                "命中公告/财报/交易等公司事件词"
+              ],
+              "retrieved_at": "fixture-retrieval"
+            }
+          ],
+          "provider": "Tavily",
+          "success": true,
+          "error_message": null,
+          "search_time": 0
+        },
+        "risk_check": {
+          "query": "台積電 减持 处罚 违规 诉讼 利空 风险",
+          "results": [
+            {
+              "title": "台積電 2330 營收 財報 目標價",
+              "snippet": "financial results revenue forecast 台積電 營收 財報",
+              "url": "https://example.com/news",
+              "source": "fixture",
+              "published_date": "<today>",
+              "relevance_score": 57,
+              "relevance_category": "direct_company_news",
+              "relevance_reasons": [
+                "标题命中公司名 台積電",
+                "命中公告/财报/交易等公司事件词"
+              ],
+              "retrieved_at": "fixture-retrieval"
+            }
+          ],
+          "provider": "Tavily",
+          "success": true,
+          "error_message": null,
+          "search_time": 0
+        },
+        "announcements": {
+          "query": "台積電 2330.TW 公司公告 重要公告 上交所 深交所 cninfo",
+          "results": [
+            {
+              "title": "台積電 2330 營收 財報 目標價",
+              "snippet": "financial results revenue forecast 台積電 營收 財報",
+              "url": "https://example.com/news",
+              "source": "fixture",
+              "published_date": "<today>",
+              "relevance_score": 57,
+              "relevance_category": "direct_company_news",
+              "relevance_reasons": [
+                "标题命中公司名 台積電",
+                "命中公告/财报/交易等公司事件词"
+              ],
+              "retrieved_at": "fixture-retrieval"
+            }
+          ],
+          "provider": "Tavily",
+          "success": true,
+          "error_message": null,
+          "search_time": 0
+        },
+        "earnings": {
+          "query": "台積電 业绩预告 财报 营收 净利润 同比增长",
+          "results": [
+            {
+              "title": "台積電 2330 營收 財報 目標價",
+              "snippet": "financial results revenue forecast 台積電 營收 財報",
+              "url": "https://example.com/news",
+              "source": "fixture",
+              "published_date": "<today>",
+              "relevance_score": 57,
+              "relevance_category": "direct_company_news",
+              "relevance_reasons": [
+                "标题命中公司名 台積電",
+                "命中公告/财报/交易等公司事件词"
+              ],
+              "retrieved_at": "fixture-retrieval"
+            }
+          ],
+          "provider": "Tavily",
+          "success": true,
+          "error_message": null,
+          "search_time": 0
+        }
+      },
+      "text": "【台積電 情报搜索结果】\n\n📰 最新消息 (来源: Tavily):\n  1. 台積電 2330 營收 財報 目標價 [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=57; 依据: 标题命中公司名 台積電；命中公告/财报/交易等公司事件词\n\n📋 公司公告 (来源: Tavily):\n  1. 台積電 2330 營收 財報 目標價 [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=57; 依据: 标题命中公司名 台積電；命中公告/财报/交易等公司事件词\n\n📈 机构分析 (来源: Tavily):\n  1. 台積電 2330 營收 財報 目標價 [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=57; 依据: 标题命中公司名 台積電；命中公告/财报/交易等公司事件词\n\n⚠️ 风险排查 (来源: Tavily):\n  1. 台積電 2330 營收 財報 目標價 [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=57; 依据: 标题命中公司名 台積電；命中公告/财报/交易等公司事件词\n\n📊 业绩预期 (来源: Tavily):\n  1. 台積電 2330 營收 財報 目標價 [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=57; 依据: 标题命中公司名 台積電；命中公告/财报/交易等公司事件词",
+      "prompts": {
+        "zh": "3a8fb8113c91cd1964005284a40bcc19f75918b8880bea8e388392ef9e1fef07",
+        "zh-TW": "726c0017b15fe439dc3530c536576f84fae063a667c694c2702618b4a085f25e",
+        "en": "fd83763a25507de0d603cfa57a03e828d31b8e62781d43a97f1201b82b3b0f26",
+        "ko": "bf8a45e57a96429f3b61966bac9fd7e9fc4206df584116131c9184f20798ce5c"
+      },
+      "result": {
+        "code": "2330.TW",
+        "name": "贵州茅台",
+        "sentiment_score": 80,
+        "trend_prediction": "强烈看多",
+        "operation_advice": "建议买入",
+        "decision_type": "sell",
+        "confidence_level": "高",
+        "report_language": "zh-TW",
+        "action": "sell",
+        "action_label": "賣出",
+        "dashboard": {
+          "data_perspective": {},
+          "phase_decision": {
+            "phase_context": null,
+            "action_window": null,
+            "immediate_action": null,
+            "watch_conditions": [],
+            "next_check_time": null,
+            "confidence_reason": null,
+            "data_limitations": []
+          },
+          "battle_plan": {
+            "cost_check": {
+              "min_net_rr": 1.0,
+              "status": "levels_missing",
+              "passed": null
+            }
+          },
+          "decision_score_calibration": {
+            "final_action": "sell",
+            "guardrail_reason": "賣出決策與買入區分數矛盾，保留非買入動作，禁止升為買入或加倉。"
+          },
+          "prompt_variant": "baseline"
+        },
+        "trend_analysis": "",
+        "short_term_outlook": "",
+        "medium_term_outlook": "",
+        "technical_analysis": "",
+        "ma_analysis": "",
+        "volume_analysis": "",
+        "pattern_analysis": "",
+        "fundamental_analysis": "",
+        "sector_position": "",
+        "company_highlights": "",
+        "news_summary": "",
+        "market_sentiment": "",
+        "hot_topics": "",
+        "analysis_summary": "",
+        "key_points": "",
+        "risk_warning": "",
+        "buy_reason": "",
+        "market_snapshot": null,
+        "search_performed": false,
+        "news_result_count": null,
+        "news_result_count_known": true,
+        "news_evidence_present": false,
+        "success": true,
+        "error_message": null,
+        "current_price": null,
+        "change_pct": null,
+        "model_used": null,
+        "market_structure_context": null,
+        "p_5d_beat_0050": null
+      },
+      "agent_prompt": "Analyze\n\n股票代码: 2330.TW\n輸出語言：繁體中文（台灣用語）（所有 JSON 鍵名保持不變，所有面向使用者的文字值使用繁體中文，不得使用簡體字）\n\n[系统已获取的新闻与舆情情报]\n【台積電 情报搜索结果】\n\n📰 最新消息 (来源: Tavily):\n  1. 台積電 2330 營收 財報 目標價 [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=57; 依据: 标题命中公司名 台積電；命中公告/财报/交易等公司事件词\n\n📋 公司公告 (来源: Tavily):\n  1. 台積電 2330 營收 財報 目標價 [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=57; 依据: 标题命中公司名 台積電；命中公告/财报/交易等公司事件词\n\n📈 机构分析 (来源: Tavily):\n  1. 台積電 2330 營收 財報 目標價 [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=57; 依据: 标题命中公司名 台積電；命中公告/财报/交易等公司事件词\n\n⚠️ 风险排查 (来源: Tavily):\n  1. 台積電 2330 營收 財報 目標價 [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=57; 依据: 标题命中公司名 台積電；命中公告/财报/交易等公司事件词\n\n📊 业绩预期 (来源: Tavily):\n  1. 台積電 2330 營收 財報 目標價 [<today>]\n     financial results revenue forecast 台積電 營收 財報...\n     关联度: direct_company_news; score=57; 依据: 标题命中公司名 台積電；命中公告/财报/交易等公司事件词\n\n请使用可用工具获取缺失的数据（如历史K线、新闻等），然后以决策仪表盘 JSON 格式输出分析结果。"
+    }
+  }
+}

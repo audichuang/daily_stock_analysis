@@ -130,7 +130,8 @@ def test_untriggered_result_byte_for_byte(enabled, change):
 
 @pytest.mark.parametrize("agent", [False, True])
 @pytest.mark.parametrize("available,count", [(False, None), (True, 0), (True, 1)])
-def test_actual_pipeline_paths_use_market_availability_and_event_rules(monkeypatch, caplog, agent, available, count):
+@pytest.mark.parametrize("sec_kind", ["disabled", "earnings", "excerpt", "header", "expired"])
+def test_actual_pipeline_paths_use_market_availability_and_event_rules(monkeypatch, caplog, agent, available, count, sec_kind):
     from datetime import datetime, timezone
     from src.agent.executor import AgentResult
     from src.agent.news_evidence import record_news_evidence
@@ -149,7 +150,17 @@ def test_actual_pipeline_paths_use_market_availability_and_event_rules(monkeypat
     pipeline.save_context_snapshot = True
     pipeline._build_legacy_analysis_artifacts = StockAnalysisPipeline._build_legacy_analysis_artifacts.__get__(pipeline)
     pipeline._refresh_decision_action_for_final_result = StockAnalysisPipeline._refresh_decision_action_for_final_result
-    pipeline.fetcher_manager.get_fundamental_context.return_value = {}
+    from datetime import timedelta
+    from data_provider.us_evidence import format_us_evidence
+    fundamental = {}
+    sec_present = sec_kind in {"earnings", "excerpt"}
+    if sec_kind != "disabled":
+        filing = {"date": (datetime.now(timezone.utc).date() - timedelta(days=15 if sec_kind == "expired" else 5)).isoformat(),
+                  "items": "2.02,9.01" if sec_kind in {"earnings", "expired"} else "9.01"}
+        if sec_kind == "excerpt":
+            filing["excerpt"] = "Company earnings release"
+        fundamental = {"us_evidence": {"sec_filings": {"recent_8k": [filing]}}}
+    pipeline.fetcher_manager.get_fundamental_context.return_value = fundamental
     pipeline.fetcher_manager.get_stock_name.return_value = "Intel"
     pipeline.fetcher_manager.get_chip_distribution.return_value = None
     service = SearchService.__new__(SearchService)
@@ -162,6 +173,8 @@ def test_actual_pipeline_paths_use_market_availability_and_event_rules(monkeypat
     service.format_intel_report = Mock(return_value="fixture news placeholder")
     pipeline.search_service = service
     context = _context()
+    if fundamental:
+        context["fundamental_context"] = fundamental
     pipeline._get_analysis_context_with_market_fallback.return_value = context
     pipeline._enhance_context.return_value = deepcopy(context)
     result = _result(code="INTC", decision_type="sell", action="sell", report_language="zh-TW")
@@ -189,15 +202,18 @@ def test_actual_pipeline_paths_use_market_availability_and_event_rules(monkeypat
     returned = pipeline.analyze_stock("INTC", ReportType.SIMPLE, "fixture-query", current_time=datetime.now(timezone.utc))
     assert returned is not None
     assert returned.news_result_count == count
-    assert returned.news_evidence_present is bool(count)
+    assert returned.news_evidence_present is (bool(count) or sec_present)
     assert saved and saved[0]["news_result_count"] == count
-    if not count:
+    assert saved[0]["news_evidence_present"] is (bool(count) or sec_present)
+    if not count and not sec_present:
         assert returned.decision_type == "hold"
         assert returned.confidence_level == "低"
     else:
         assert returned.decision_type == "sell"
     if agent:
         assert sent[0]["event_gap"]["triggered"]
+        if fundamental:
+            assert sent[0]["us_evidence_prompt"] == format_us_evidence(fundamental)
     else:
         assert pipeline.analyzer.analyze.call_args.args[0]["event_gap"]["triggered"]
     if not available:

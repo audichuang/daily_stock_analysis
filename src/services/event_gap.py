@@ -13,6 +13,7 @@ EVENT_GAP_RULES = """
 1. 先依新聞證據判斷事件性質，說明它是否打壞投資論題；沒有證據不得猜測原因。
 2. 再看事件後下修的獲利預估與估值；預期本益比若尚未反映事件，明確揭露限制。
 3. 再看止跌：明確列出需幾個交易日不破事件日低點、成交量是否縮減；尚未觀察到就列為待確認。
+若已知事件後收盤已跌破事件日低點，止跌條件必須改用事件後新低重新計算，不得假設事件日低點仍守住。
 買進可表達為「分批試單」，但必須列明失效條件（事件日低點、投資論題或估值假設失效）。
 重新評估條件不得使用含事件日之前價格的均線；可改用事件後低點、量縮與論題確認。
 本規則不預設買進或賣出，也不因技術面空頭排列而跳過事件與估值判讀。
@@ -32,6 +33,21 @@ def _session_date(value):
         return date.fromisoformat(str(value)[:10])
     except ValueError:
         return None
+
+
+def _post_event_facts(ordered, index):
+    """只使用已知收盤；事件當日不算事件後，缺值不由即時價冒充。"""
+    facts = {}
+    latest = ordered[-1].get("close")
+    if latest is not None:
+        facts["latest_close"] = latest
+    closes = [row["close"] for row in ordered[index + 1:] if "close" in row]
+    if closes:
+        facts["post_event_min_close"] = min(closes)
+        low = ordered[index].get("low")
+        if low is not None:
+            facts["event_low_broken"] = min(closes) < low
+    return facts
 
 
 def event_gap_context(code, context, config):
@@ -74,7 +90,7 @@ def event_gap_context(code, context, config):
         if change is not None and abs(change) >= threshold:
             return {"triggered": True, "event_date": row["date"], "change_pct": change,
                     "event_low": row.get("low"), "sessions_since_event": len(ordered) - 1 - index,
-                    "threshold_pct": threshold}
+                    "threshold_pct": threshold, **_post_event_facts(ordered, index)}
         if index == len(ordered) - 1:
             current_change = change
     # 有當日日線可判定時不拿即時價推翻收盤；歷史不足才沿用原有當日判定。
@@ -89,8 +105,12 @@ def event_gap_context(code, context, config):
     low = _finite(today.get("low"))
     if low is None:
         low = _finite(realtime.get("low"))
-    return {"triggered": True, "event_date": current_date.isoformat() if current_date else None,
-            "change_pct": change, "event_low": low, "sessions_since_event": 0, "threshold_pct": threshold}
+    event = {"triggered": True, "event_date": current_date.isoformat() if current_date else None,
+             "change_pct": change, "event_low": low, "sessions_since_event": 0, "threshold_pct": threshold}
+    close = _finite(today.get("close"))
+    if close is not None:
+        event["latest_close"] = close
+    return event
 
 
 def event_gap_prompt(event):
@@ -105,6 +125,13 @@ def event_gap_prompt(event):
         facts.append(f"事件日低點：{low:g}")
     if event.get("sessions_since_event") is not None:
         facts.append(f"距事件日交易場次：{event['sessions_since_event']}")
+    for field, label in (("post_event_min_close", "事件後最低收盤"), ("latest_close", "最新收盤")):
+        value = _finite(event.get(field))
+        if value is not None:
+            facts.append(f"{label}：{value:g}")
+    if low is not None and isinstance(event.get("event_low_broken"), bool):
+        value = "是" if event["event_low_broken"] else "否"
+        facts.append(f"已跌破事件日低點：{value}（以已知事件後收盤判定）")
     return EVENT_GAP_RULES + "\n事件事實（來源：日線；不足時僅當日報價）：\n" + "\n".join(facts) + "\n"
 
 
