@@ -146,3 +146,5 @@
 | [英文文档索引](INDEX_EN.md) | English documentation index |
 | [英文 README](README_EN.md) | English project overview and quick start |
 | [繁中 README](README_CHT.md) | 繁體中文項目概覽與快速開始 |
+
+- [事件行事曆](event-calendar.md)：持股／自選財報日、總經、台股法定節點與快取操作。

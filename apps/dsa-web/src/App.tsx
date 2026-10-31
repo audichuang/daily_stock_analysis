@@ -32,6 +32,7 @@ const StockScreeningPage = lazy(() => import('./pages/StockScreeningPage'));
 const DataCenterPage = lazy(() => import('./pages/DataCenterPage'));
 const RealtimeBoardPage = lazy(() => import('./pages/RealtimeBoardPage'));
 const FundsPage = lazy(() => import('./pages/FundsPage'));
+const CalendarPage = lazy(() => import('./pages/CalendarPage'));
 
 const AppContent: React.FC = () => {
   const location = useLocation();
@@ -95,6 +96,7 @@ const routeChildren = [
   { path: '/portfolio', element: <PortfolioPage /> },
   { path: '/funds', element: <FundsPage /> },
   { path: '/board', element: <RealtimeBoardPage /> },
+  { path: '/calendar', element: <CalendarPage /> },
   { path: '/decision-signals', element: <DecisionSignalsPage /> },
   { path: '/screening', element: <StockScreeningPage /> },
   { path: '/data', element: <DataCenterPage /> },

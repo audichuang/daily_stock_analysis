@@ -289,6 +289,10 @@ async def app_lifespan(app: FastAPI):
         runtime_scheduler=app.state.runtime_scheduler_service,
     )
     _schedule_stock_index_background_refresh(app, "startup")
+    from src.config import get_config
+    from src.services.calendar_service import start_calendar_refresh_worker
+
+    calendar_refresh_stop = start_calendar_refresh_worker(get_config())
     # 名称解析器的 AkShare 缓存预热：命中磁盘缓存则零网络加载，否则发起
     # 后台单飞拉取。把冷启动等待从首个用户请求挪到进程启动窗口。
     from src.services.name_to_code_resolver import warmup_akshare_cache
@@ -297,6 +301,8 @@ async def app_lifespan(app: FastAPI):
     try:
         yield
     finally:
+        if calendar_refresh_stop is not None:
+            calendar_refresh_stop.set()
         refresh_task = getattr(app.state, "stock_index_refresh_task", None)
         if refresh_task is not None and not refresh_task.done():
             refresh_task.cancel()

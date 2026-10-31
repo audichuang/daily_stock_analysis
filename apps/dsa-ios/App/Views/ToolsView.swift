@@ -8,6 +8,13 @@ struct ToolsView: View {
         PageScroll {
             SectionHeading("把研究，做得更完整。", subtitle: "進階工具連接既有服務，沿用目前的共用帳號；操作與資料會同步到網頁。", eyebrow: "WORKSPACE")
 
+            NavigationLink { EventCalendarView() } label: {
+                Label("事件行事曆", systemImage: "calendar.badge.clock")
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .accessibilityIdentifier("tools.calendar")
+
             toolGroup("研究與判斷", items: [
                 ToolLink(path: "/chat", title: "AI 問股", detail: "帶著你的問題，深入追問投資依據", icon: "bubble.left.and.text.bubble.right"),
                 ToolLink(path: "/screening", title: "條件選股", detail: "從條件篩選到候選清單", icon: "line.3.horizontal.decrease.circle"),

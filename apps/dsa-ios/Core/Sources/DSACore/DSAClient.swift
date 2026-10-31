@@ -110,6 +110,13 @@ public struct DSAClient: Sendable {
         return response.items
     }
 
+    /// 事件頁與個股頁只讀伺服器快取，不觸發外部來源更新。
+    public func calendarEvents(from: String, to: String, code: String? = nil) async throws -> EventCalendarResponse {
+        var query = [URLQueryItem(name: "from", value: from), URLQueryItem(name: "to", value: to)]
+        if let code { query.append(URLQueryItem(name: "code", value: code)) }
+        return try await get(["calendar", "events"], query: query)
+    }
+
     public func stockProfile(_ code: String, historyDays: Int = 90) async throws -> StockProfile {
         try await get(["stocks", code, "profile"], query: [URLQueryItem(name: "history_days", value: String(historyDays))])
     }

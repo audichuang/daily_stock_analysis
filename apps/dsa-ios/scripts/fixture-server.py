@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""僅供 iOS 驗收的 loopback HTTP fixture；所有資料都是過去日期的合成測試資料。"""
+"""僅供 iOS 驗收的 loopback HTTP fixture；行情為固定過去日期，行事曆使用相對日期，均為合成資料。"""
 
 import argparse
 from copy import deepcopy
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html import escape
@@ -140,6 +141,35 @@ def history_item(record_id, code, report_type="detailed", region=None):
     }
 
 
+def calendar_events(query):
+    """行事曆獨立使用相對日期，讓 7 天警示與換月驗收不會過期。"""
+    today = datetime.now(timezone.utc).date()
+    eastern_day = datetime.now(ZoneInfo("America/New_York")).date()
+    next_month = (today.replace(day=28) + timedelta(days=4)).replace(day=1)
+    def event(identifier, kind, code, name, day, status, detail, zone="America/New_York", date_kind="release"):
+        return {"id": identifier, "type": kind, "code": code, "name": name, "date": day.isoformat(),
+                "status": status, "detail": detail, "source_url": "https://example.test/calendar-fixture",
+                "timezone": zone, "date_kind": date_kind, "updated_at": datetime.now(timezone.utc).isoformat()}
+    events = [
+        event("fixture-aapl", "earnings", "AAPL", "Apple（測試）", today, "confirmed", "合成盤後財報 · EPS 預估 1.20"),
+        event("fixture-aapl-next", "earnings", "AAPL", "Apple（測試）", next_month, "estimated", "合成推估財報，日期可能調整"),
+        event("fixture-fomc", "fomc", None, "FOMC（合成測試）", today, "confirmed", "合成總經事件"),
+        event("fixture-deadline", "financial_deadline", None, "台股財報法定期限（測試）", today, "confirmed",
+              "合成財報法定期限；不代表實際發布日", "Asia/Taipei", "statutory_deadline"),
+    ]
+    # 個股頁查詢起點是美東今日；當 UTC 已隔日但美東仍前一天時，仍保留來源日期。
+    if eastern_day != today:
+        events.append(event("fixture-aapl-eastern", "earnings", "AAPL", "Apple（測試）", eastern_day,
+                            "confirmed", "合成美東盤後財報"))
+    start, end = query.get("from", [today.isoformat()])[0], query.get("to", [today.isoformat()])[0]
+    code = query.get("code", [None])[0]
+    events = [item for item in events if start <= item["date"] <= end and (code is None or item["code"] == code)]
+    undated = [{"code": "MSFT", "name": "Microsoft（測試）", "detail": "來源尚未提供下次財報日期"}]
+    if code is not None:
+        undated = [item for item in undated if item["code"] == code]
+    return {"events": events, "undated": undated, "cache_updated_at": datetime.now(timezone.utc).isoformat()}
+
+
 class State:
     def __init__(self):
         self.lock = threading.RLock()
@@ -242,6 +272,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, items)
             if not self.authenticated():
                 return self.reply(401, {"error": "unauthorized", "message": "請登入測試服務"})
+            if route == ["api", "v1", "calendar", "events"]:
+                return self.reply(200, calendar_events(query))
             if route == ["api", "v1", "stocks", "watchlist"]:
                 return self.reply(200, {"stock_codes": STATE.watchlist, "message": "合成測試自選股"})
             if route == ["api", "v1", "stocks", "quotes"]:

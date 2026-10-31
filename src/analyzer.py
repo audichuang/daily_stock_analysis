@@ -5781,6 +5781,8 @@ Output the complete Decision Dashboard in JSON format."""
             prompt += _tw_forecast_question(report_language)
         from src.services.event_gap import event_gap_prompt
         prompt += event_gap_prompt(context.get("event_gap"))
+        from src.services.calendar_service import earnings_prompt
+        prompt += earnings_prompt(context.get("next_earnings"), report_language)
         return prompt
 
     def _format_volume(self, volume: Optional[float], report_language: str = "zh") -> str:

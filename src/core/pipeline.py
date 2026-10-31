@@ -972,6 +972,8 @@ class StockAnalysisPipeline:
             event = event_gap_context(code, enhanced_context, self.config)
             if event:
                 enhanced_context["event_gap"] = event
+            from src.services.calendar_service import earnings_evidence
+            enhanced_context["next_earnings"] = earnings_evidence(code)
             enhanced_context["market_phase_context"] = market_phase_context_dict
             self._attach_daily_market_context(
                 enhanced_context,
@@ -1738,6 +1740,9 @@ class StockAnalysisPipeline:
                 "report_language": report_language,
                 "fundamental_context": fundamental_context,
             }
+            from src.services.calendar_service import earnings_evidence, earnings_prompt
+            initial_context["next_earnings"] = earnings_evidence(code)
+            initial_context["earnings_prompt"] = earnings_prompt(initial_context["next_earnings"], report_language)
             if isinstance(portfolio_context, dict):
                 initial_context["portfolio_context"] = dict(portfolio_context)
             if self.analysis_skills is not None:

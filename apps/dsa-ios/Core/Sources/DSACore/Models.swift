@@ -370,3 +370,56 @@ public struct StockIndexItem: Codable, Sendable, Identifiable {
         }
     }
 }
+
+
+public struct CalendarEvent: Codable, Sendable, Identifiable {
+    public let id: String
+    public let type: String
+    public let code: String?
+    public let name: String
+    /// 來源市場的日期字串；不得先轉成裝置當地 timestamp。
+    public let date: String
+    public let status: String
+    public let detail: String
+    public let sourceUrl: String
+    public let timezone: String
+    public let dateKind: String
+    public let updatedAt: String?
+
+    public var isStatutoryDeadline: Bool { dateKind == "statutory_deadline" }
+    public var isCompanyEvent: Bool { type == "earnings" || type == "investor_conference" }
+    public var statusLabel: String { isStatutoryDeadline ? "法定期限" : status == "estimated" ? "推估" : "已確認" }
+    public var timezoneLabel: String { timezone == "America/New_York" ? "美東 ET" : "台北" }
+
+    public func daysAway(now: Date = Date()) -> Int? {
+        guard let day = EventCalendarDate.parse(date),
+              let today = EventCalendarDate.parse(EventCalendarDate.key(now, timezone: timezone)) else { return nil }
+        return EventCalendarDate.calendar.dateComponents([.day], from: today, to: day).day
+    }
+
+    public func isWithinSevenDays(now: Date = Date()) -> Bool {
+        guard let days = daysAway(now: now) else { return false }
+        return (0...7).contains(days)
+    }
+}
+
+public extension Array where Element == CalendarEvent {
+    /// 下一場公司事件；已過去的日期依事件自己的時區排除（台北上午時美東還是昨天）。
+    func nextCompanyEvent(now: Date = Date()) -> CalendarEvent? {
+        filter { $0.isCompanyEvent && $0.dateKind == "release" && ($0.daysAway(now: now) ?? -1) >= 0 }
+            .sorted { $0.date < $1.date }.first
+    }
+}
+
+public struct UndatedCalendarStock: Codable, Sendable, Identifiable {
+    public var id: String { code }
+    public let code: String
+    public let name: String
+    public let detail: String
+}
+
+public struct EventCalendarResponse: Codable, Sendable {
+    public let events: [CalendarEvent]
+    public let undated: [UndatedCalendarStock]
+    public let cacheUpdatedAt: String?
+}

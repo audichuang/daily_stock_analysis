@@ -961,6 +961,9 @@ class AgentExecutor:
             if isinstance(analysis_context_pack_summary, str) and analysis_context_pack_summary:
                 parts.append(analysis_context_pack_summary)
 
+            if context.get("earnings_prompt"):
+                parts.append(context["earnings_prompt"])
+
             if context.get("us_evidence_prompt"):
                 parts.append(context["us_evidence_prompt"])
 

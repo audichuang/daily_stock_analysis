@@ -102,6 +102,23 @@ class DatabaseSchemaMigration(Base):
     applied_at = Column(DateTime, default=datetime.now, nullable=False, index=True)
 
 
+class CalendarEventRecord(Base):
+    """應用庫的行事曆快取；空日期代表來源目前未提供日期。"""
+
+    __tablename__ = 'calendar_events'
+    id = Column(String(160), primary_key=True)
+    type = Column(String(40), nullable=False, index=True)
+    code = Column(String(32), nullable=True, index=True)
+    name = Column(String(128), nullable=False)
+    date = Column(Date, nullable=True, index=True)
+    status = Column(String(16), nullable=False)
+    detail = Column(Text, nullable=False, default="")
+    source_url = Column(String(1024), nullable=False, default="")
+    timezone = Column(String(40), nullable=False)
+    date_kind = Column(String(32), nullable=False, default="release")
+    updated_at = Column(DateTime, nullable=False, default=utc_naive_now)
+
+
 class StockDaily(Base):
     """
     股票日线数据模型
@@ -1462,6 +1479,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             self._ensure_schema_migration_record()
             self._ensure_intelligence_items_unique_index()
             self._ensure_chat_session_schema()
+            self._ensure_calendar_event_schema()
 
             self._initialized = True
             logger.info("数据库初始化完成: %s", self._engine.url.render_as_string(hide_password=True))
@@ -1509,6 +1527,14 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             raise
         finally:
             session.close()
+
+    def _ensure_calendar_event_schema(self) -> None:
+        """可重入的追加 migration；既有應用庫只建新表，不改舊欄位。"""
+        CalendarEventRecord.__table__.create(self._engine, checkfirst=True)
+        self._ensure_schema_migration_record(
+            version="2026-11-01-calendar-events",
+            description="Add application calendar cache (including undated earnings)",
+        )
 
     def _ensure_chat_session_schema(self) -> None:
         """Additive Chat state migration; old writers may omit every new column."""
