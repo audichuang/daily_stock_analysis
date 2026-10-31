@@ -1184,7 +1184,6 @@ const DecisionSignalsPage: React.FC = () => {
     <AppPage>
       <div className="space-y-5">
         <PageHeader
-          eyebrow={t('decisionSignals.activeOnly')}
           title={t('decisionSignals.title')}
           description={t('decisionSignals.description')}
           actions={(

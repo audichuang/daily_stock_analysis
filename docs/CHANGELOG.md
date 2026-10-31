@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 - [改進] 新聞品質：台股查詢改用繁中與公開資訊觀測站（原本帶簡體與上交所、cninfo）；財報面向走新聞模式；事件面向濾掉無日期的資料頁與影片。
+- [改進] Web `PageHeader` 改無外框單列（移除眉標），新增 `Metric`、`MetricGroup`（手機 2 欄、桌機 4～6 欄，支援 hero 與無讀數），`StatCard` 轉接 `Metric`。
 - [改進] Web `Button` 收斂為 primary／secondary／ghost／danger、高度 32／36／44 且不換行，新增 `IconButton`；`.btn-*` 對齊同樣規格，修正「新建帳戶」斷字。
 - [改進] Web `Card` 分 surface／inset／highlight（漸層只留 highlight），統一 padding、圓角與字級 token，`.label` 取代會轉大寫的 `.label-uppercase`，並新增 `text-[Npx]` 與全域 class 預算測試。
 - [改進] Web 新增統一數字格式（`Num`、`Money`、`formatPrice`、`formatPercent`）：千分位、依幣別與價位的小數、U+2212 負號、預設 zh-TW 與 tabular 數字；持股金額不再預設 CNY。

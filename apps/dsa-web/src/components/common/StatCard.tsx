@@ -1,5 +1,5 @@
 import type React from 'react';
-import { cn } from '../../utils/cn';
+import { Metric } from './Metric';
 
 interface StatCardProps {
   /** Metric label, such as "Total Return". */
@@ -16,32 +16,5 @@ interface StatCardProps {
   className?: string;
 }
 
-const toneStyles = {
-  default: 'border-subtle',
-  primary: 'border-cyan/18',
-  success: 'border-success/18',
-  warning: 'border-warning/18',
-  danger: 'border-danger/18',
-};
-
-export const StatCard: React.FC<StatCardProps> = ({
-  label,
-  value,
-  hint,
-  icon,
-  tone = 'default',
-  className = '',
-}) => {
-  return (
-    <div className={cn('rounded-[var(--radius-card)] border bg-card/75 p-4 shadow-soft-card', toneStyles[tone], className)}>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="label text-secondary-text">{label}</p>
-          <div className="mt-2 text-2xl font-semibold text-foreground">{value}</div>
-          {hint ? <div className="mt-2 text-sm text-secondary-text">{hint}</div> : null}
-        </div>
-        {icon ? <div className="text-cyan">{icon}</div> : null}
-      </div>
-    </div>
-  );
-};
+/** 轉接 Metric 的相容入口，新程式碼直接用 Metric／MetricGroup。 */
+export const StatCard: React.FC<StatCardProps> = (props) => <Metric {...props} />;

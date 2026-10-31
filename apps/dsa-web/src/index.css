@@ -2955,32 +2955,32 @@ textarea {
   background: var(--bg-subtle);
 }
 
-.text-token-display {
+.type-display {
   font-size: var(--text-display);
   line-height: 1.25;
 }
 
-.text-token-title {
+.type-title {
   font-size: var(--text-title);
   line-height: 1.35;
 }
 
-.text-token-section {
+.type-section {
   font-size: var(--text-section);
   line-height: 1.45;
 }
 
-.text-token-body {
+.type-body {
   font-size: var(--text-body);
   line-height: 1.5;
 }
 
-.text-token-caption {
+.type-caption {
   font-size: var(--text-caption);
   line-height: 1.4;
 }
 
-.text-token-micro {
+.type-micro {
   font-size: var(--text-micro);
   line-height: 1.35;
 }
