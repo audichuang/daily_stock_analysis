@@ -405,6 +405,11 @@ public struct CalendarEvent: Codable, Sendable, Identifiable {
 
 public extension Array where Element == CalendarEvent {
     /// 下一場公司事件；已過去的日期依事件自己的時區排除（台北上午時美東還是昨天）。
+    func upcomingCompanyEvents(limit: Int, now: Date = Date()) -> [CalendarEvent] {
+        Array(filter { $0.isCompanyEvent && $0.dateKind == "release" && ($0.daysAway(now: now) ?? -1) >= 0 }
+            .sorted { $0.date < $1.date }.prefix(limit))
+    }
+
     func nextCompanyEvent(now: Date = Date()) -> CalendarEvent? {
         filter { $0.isCompanyEvent && $0.dateKind == "release" && ($0.daysAway(now: now) ?? -1) >= 0 }
             .sorted { $0.date < $1.date }.first

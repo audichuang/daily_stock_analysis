@@ -141,8 +141,9 @@ class CalendarService:
                        and naive_now - r["updated_at"] <= CACHE_MAX_AGE}
         for symbol, name in members.items():
             if symbol not in dated_codes:
-                undated.append({"code": symbol, "name": name,
-                                "detail": "下次財報日期未定（來源未提供、尚未更新或快取已過期）"})
+                detail = ("公司尚未申報法說會；官方不預告財報發布日" if is_tw_suffix_symbol(symbol)
+                          else "來源尚未提供下次財報日期")
+                undated.append({"code": symbol, "name": name, "detail": detail})
         events = sorted(selected.values(), key=lambda r: (r["date"], r["id"]))
         return {"events": events, "undated": undated,
                 "cache_updated_at": max(updated).isoformat() + "Z" if updated else None}
