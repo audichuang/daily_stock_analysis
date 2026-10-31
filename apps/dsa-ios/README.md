@@ -61,6 +61,8 @@ bash scripts/test-ui.sh
 
 前三個變數未完整設定，`testRealCloudflareAccessOptIn` 會 skip；其餘合成測試仍會執行。測試透過環境預填欄位，按儲存及登入後終止 App，再以不含憑證的環境啟動並開啟工具頁。不用 `typeText` 輸入秘密，避免 XCTest 動作日誌記錄它。憑證預填程式只在腳本額外指定 `DSA_ACCESS_UITEST` 且為 `DEBUG` 時編譯；一般 Debug 與 Release 都沒有這條路徑。測試 runner 透過 `TEST_RUNNER_` 傳遞環境，不把秘密寫入 `.xctestrun`；真實驗收產物仍請留在私人位置。真實測試使用 fixture bundle ID，會保留該 origin 的 Keychain 憑證，可於測試版的設定明確移除；不影響正式 App。
 
+UITest 的管理員密碼於密碼欄位出現時才預填，避免先檢查 Access 的連線動作清掉它。合成 Access 案例會先經由真 UI 清除該 fixture 的既有登入及憑證，彼此不依賴前一案例是否成功清理；真實 Access 的選用測試保留既有 Keychain，不套用這項清理。
+
 ## TestFlight
 
 先在 App Store Connect 建立 App 記錄，bundle ID 與 `project.yml` 一致。將 [signing.env.example](signing.env.example) 的必要值匯出到 shell；金鑰留在既有秘密管理位置：

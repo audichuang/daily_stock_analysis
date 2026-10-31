@@ -101,12 +101,14 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         var parent: AuthenticatedWebContent
         private var downloads: [ObjectIdentifier: WKDownload] = [:]
         private var destinations: [ObjectIdentifier: URL] = [:]
+        private var blockedAccessRedirect = false
         init(_ parent: AuthenticatedWebContent) { self.parent = parent }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
             if CloudflareAccess.isLoginURL(url) {
+                blockedAccessRedirect = true
                 parent.error = DSAError.cloudflareAccess.localizedDescription
                 parent.loading = false
                 decisionHandler(.cancel)
@@ -117,7 +119,9 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
             switch WebNavigationPolicy.action(url: url, baseURL: parent.baseURL, sourceOrigin: source,
                                                shouldDownload: navigationAction.shouldPerformDownload,
                                                userLink: navigationAction.navigationType == .linkActivated) {
-            case .allow: decisionHandler(.allow)
+            case .allow:
+                blockedAccessRedirect = false
+                decisionHandler(.allow)
             case .download:
                 parent.error = nil
                 decisionHandler(.download)
@@ -220,6 +224,7 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { fail(error) }
 
         private func fail(_ error: Error) {
+            if WebNavigationPolicy.preservesAccessError(error, blockedAccessRedirect: blockedAccessRedirect) { return }
             if (error as NSError).code == NSURLErrorCancelled { return }
             parent.loading = false
             parent.error = error.localizedDescription

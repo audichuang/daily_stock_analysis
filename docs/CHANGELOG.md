@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修復] iOS 工具頁保留 Cloudflare Access 專用驗證錯誤，避免取消轉址後的 WebKit 102 覆蓋訊息；一般網路失敗仍照常顯示。
+- [測試] 修正 Access UITest 的密碼預填時機、案例共用 Keychain 與收合區塊操作，保留原有斷言並新增按鈕啟用檢查；專用模擬器 28 passed、0 failed、1 skipped，錯誤處理正反 mutation 均被抓到。
 - [新功能] iOS 支援依服務 origin 保存 Cloudflare Access Service Token 至裝置 Keychain，更新與登出保留，連線頁及工具設定可更換／移除；啟動自動帶同源 Header 並還原 DSA 登入。
 - [修復] iOS 原生及工具頁明確辨識 Access 登入轉址，驗證失敗展開憑證設定；工具 WebKit 共用 CF_Authorization cookie，支援受保護的子資源。
 - [測試] 新增 Access Header 同源限制與轉址辨識正反 mutation、重啟自動登入及 WebKit cookie 合成 UITest，另提供環境變數啟用的真實 Access 驗收，憑證預填不納入 Release。

@@ -4,6 +4,17 @@ import XCTest
 final class WebNavigationPolicyTests: XCTestCase {
     private let server = URL(string: "https://market.example.test")!
 
+    func testAccessPolicyCancellationPreservesSpecificErrorWithoutHidingRealFailures() {
+        let interrupted = NSError(domain: "WebKitErrorDomain", code: 102)
+        XCTAssertTrue(WebNavigationPolicy.preservesAccessError(interrupted, blockedAccessRedirect: true))
+        XCTAssertFalse(WebNavigationPolicy.preservesAccessError(interrupted, blockedAccessRedirect: false))
+        for error in [NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet),
+                      NSError(domain: "WebKitErrorDomain", code: 101),
+                      NSError(domain: NSURLErrorDomain, code: 102)] {
+            XCTAssertFalse(WebNavigationPolicy.preservesAccessError(error, blockedAccessRedirect: true))
+        }
+    }
+
     func testEmptyInitialFrameOriginIsUntrustedWithoutCrashing() {
         let opaqueOrigin = WebNavigationPolicy.sourceOrigin(protocolValue: "", host: "", port: 0)
         XCTAssertNil(opaqueOrigin)

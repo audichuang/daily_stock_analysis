@@ -40,6 +40,9 @@ struct ConnectionView: View {
                                 .textContentType(.password)
                                 .padding(14).background(Theme.background, in: RoundedRectangle(cornerRadius: 12))
                                 .accessibilityIdentifier("server-password")
+                                #if DEBUG && DSA_ACCESS_UITEST
+                                .onAppear { password = ProcessInfo.processInfo.environment["DSA_ACCESS_TEST_PASSWORD"] ?? "" }
+                                #endif
                         }
                         if let error = store.connectionError { ErrorStateView(message: error) }
                         Button {
@@ -69,9 +72,6 @@ struct ConnectionView: View {
                     .font(.caption).foregroundStyle(Theme.secondary).padding(.bottom, 20)
             }
         }
-        #if DEBUG && DSA_ACCESS_UITEST
-        .onAppear { password = ProcessInfo.processInfo.environment["DSA_ACCESS_TEST_PASSWORD"] ?? "" }
-        #endif
     }
 
     private func feature(_ icon: String, _ title: String, _ detail: String) -> some View {
