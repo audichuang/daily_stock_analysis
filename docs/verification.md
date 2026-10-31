@@ -2,6 +2,22 @@
 
 入口是 [verify skill](../.claude/skills/verify/SKILL.md)，[功能地圖](../.claude/skills/verify/features/README.md) 定義使用者入口、操作、前置資料與終態。實跑與單測／fixture 各自回報；一個主要旅程通過不代表該頁全部分支已通過。
 
+
+## 2026-11-01：行事曆與相關新聞（正式站）
+
+NAS 映像 `git-240480f`，iOS 模擬器連 `https://dsa.audichuang.app`（經 Cloudflare Access），Web 用 ego-browser 連正式站。這輪不是隔離 profile，讀取以外只新增一筆真實分析 #1306，沒有發通知。截圖報告：`https://artifacts.ttnas.audichuang.app/a/HqY7p47xBntU`。
+
+| 層級 | 操作與結果 |
+| --- | --- |
+| iOS 行事曆 | 開啟即裝置當天、「接下來」列財報與法說會、未定 35 檔收合、換月 |
+| iOS 個股 | GOOGL 未定顯示原因；2308 顯示下次法說會 11/03 與 7 天內提示 |
+| 真模型 | 原生按鈕發起 GOOGL，寫入 #1306，連結 11 則新聞（真正新聞 2 則、資料頁 9 則） |
+| Web | 桌機與 390px，月份 2026-11、未定收合、無橫向溢出；報告顯示相關資訊 |
+| API | 追加 `source`／`published_date`／`dimension`，內部日期標記 0 筆外洩 |
+| fixture | iOS UI 31 passed、1 skipped（真實 Access，另跑） |
+
+途中抓到兩個缺陷並修復：重新分析時新聞被網址去重、報告顯示沒有新聞（`news_intel_links`，舊報告不回補）；行事曆預設月份用美東或 UTC，台北 11/1 仍開 10 月。未驗證：其餘 10 個內嵌工具入口、分析結論準確度、Yahoo「已確認」對照公司公告。
+
 ## 2026-11-01：iOS 本次分析參考新聞
 
 本地 HEAD 與 fetch 後的 `origin/develop` 均為 `c6c4cfe6`，已完成 fast-forward 基線核對；本節驗證工作分支的新聞變更，沒有推送。Python 使用此 worktree 獨立 `.venv`、沿用既有套件並以 `uv run --frozen` 執行；Web 沿用既有 `node_modules`，沒有安裝或升級相依。
