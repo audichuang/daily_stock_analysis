@@ -7,7 +7,7 @@ import type {
   PortfolioPositionItem,
   PortfolioSide,
 } from '../types/portfolio';
-import { toDateInputValue } from './format';
+import { formatMoneyValue, formatPrice, MINUS_SIGN, toDateInputValue } from './format';
 
 export type FxRefreshFeedback = {
   tone: 'neutral' | 'success' | 'warning';
@@ -20,23 +20,22 @@ export function getTodayIso(): string {
   return toDateInputValue(new Date());
 }
 
-export function formatMoney(value: number | undefined | null, currency = 'CNY', locale = 'zh-CN'): string {
-  if (value == null || Number.isNaN(value)) return '--';
-  return `${currency} ${Number(value).toLocaleString(locale, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
+// 缺值維持 '--'：持股頁其他欄位也是，F01 遷移到 Num／Money 時一起換。
+export function formatMoney(value: number | undefined | null, currency?: string): string {
+  if (value == null || !Number.isFinite(value)) return '--';
+  return formatMoneyValue(value, currency);
 }
 
 export function formatPct(value: number | undefined | null): string {
   if (value == null || Number.isNaN(value)) return '--';
-  return `${value.toFixed(2)}%`;
+  return `${value < 0 ? MINUS_SIGN : ''}${Math.abs(value).toFixed(2)}%`;
 }
 
 export function formatSignedPct(value: number | undefined | null): string {
   if (value == null || Number.isNaN(value)) return '--';
-  const sign = value > 0 ? '+' : '';
-  return `${sign}${value.toFixed(2)}%`;
+  const text = Math.abs(value).toFixed(2);
+  if (value < 0 && /[1-9]/.test(text)) return `${MINUS_SIGN}${text}%`;
+  return value > 0 && /[1-9]/.test(text) ? `+${text}%` : `${text}%`;
 }
 
 export function hasPositionPrice(row: PortfolioPositionItem): boolean {
@@ -45,7 +44,7 @@ export function hasPositionPrice(row: PortfolioPositionItem): boolean {
 
 export function formatPositionPrice(row: PortfolioPositionItem): string {
   if (!hasPositionPrice(row)) return '--';
-  return row.lastPrice.toFixed(4);
+  return formatPrice(row.lastPrice, row.valuationCurrency);
 }
 
 export function formatPositionMoney(value: number, row: PortfolioPositionItem): string {

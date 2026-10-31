@@ -10,7 +10,6 @@ import { ApiErrorAlert, Card, Badge, ConfirmDialog, EmptyState, InlineAlert, Sta
 import { PortfolioSignalSummary } from '../components/decision-signals/DecisionSignalDisplay';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText } from '../i18n/uiText';
-import { getIntlLocale } from '../i18n/intlLocale';
 import { PORTFOLIO_TEXT } from '../locales/featureText';
 import type { FxRefreshFeedback } from '../utils/portfolioFormat';
 import {
@@ -1707,15 +1706,15 @@ const PortfolioPage: React.FC = () => {
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
         <Card variant="gradient" padding="md">
           <p className="text-xs text-secondary">{text.totalEquity}</p>
-          <p className="mt-1 text-xl font-semibold text-foreground">{fxMissing ? text.fxMissingTotal : formatMoney(snapshot?.totalEquity, snapshot?.currency || 'CNY', getIntlLocale(language))}</p>
+          <p className="mt-1 text-xl font-semibold text-foreground">{fxMissing ? text.fxMissingTotal : formatMoney(snapshot?.totalEquity, snapshot?.currency)}</p>
         </Card>
         <Card variant="gradient" padding="md">
           <p className="text-xs text-secondary">{text.totalMarketValue}</p>
-          <p className="mt-1 text-xl font-semibold text-foreground">{fxMissing ? text.fxMissingTotal : formatMoney(snapshot?.totalMarketValue, snapshot?.currency || 'CNY', getIntlLocale(language))}</p>
+          <p className="mt-1 text-xl font-semibold text-foreground">{fxMissing ? text.fxMissingTotal : formatMoney(snapshot?.totalMarketValue, snapshot?.currency)}</p>
         </Card>
         <Card variant="gradient" padding="md">
           <p className="text-xs text-secondary">{text.totalCash}</p>
-          <p className="mt-1 text-xl font-semibold text-foreground">{fxMissing ? text.fxMissingTotal : formatMoney(snapshot?.totalCash, snapshot?.currency || 'CNY', getIntlLocale(language))}</p>
+          <p className="mt-1 text-xl font-semibold text-foreground">{fxMissing ? text.fxMissingTotal : formatMoney(snapshot?.totalCash, snapshot?.currency)}</p>
         </Card>
         <Card variant="gradient" padding="md">
           <div className="flex items-start justify-between gap-3">
@@ -1761,7 +1760,7 @@ const PortfolioPage: React.FC = () => {
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-secondary">
               <span>{riskDashboardText.positions}: {positionCount}</span>
-              <span>{text.totalMarketValue}: {formatMoney(exposureTotal, snapshot?.currency || 'CNY')}</span>
+              <span>{text.totalMarketValue}: {formatMoney(exposureTotal, snapshot?.currency)}</span>
             </div>
           </div>
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.75fr)]">

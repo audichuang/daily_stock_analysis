@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 - [改進] 新聞品質：台股查詢改用繁中與公開資訊觀測站（原本帶簡體與上交所、cninfo）；財報面向走新聞模式；事件面向濾掉無日期的資料頁與影片。
+- [改進] Web 新增統一數字格式（`Num`、`Money`、`formatPrice`、`formatPercent`）：千分位、依幣別與價位的小數、U+2212 負號、預設 zh-TW 與 tabular 數字；持股金額不再預設 CNY。
 - [改進] Web 損益與漲跌統一紅賺綠賠（新增 `--market-up`／`--market-down`、`marketTone`、`Change`），動作標籤改品牌色、灰、琥珀不再用紅綠；舊標籤「減倉」等一律顯示詞彙表用語。
 - [改進] 繁中介面依新詞彙表 `docs/glossary-zh-tw.md` 統一：告警→警報、持倉→持股（導覽「資產」）、刷新→重新整理、配置→設定、渠道→管道、動作改買進／加碼／續抱／減碼；範例改台股，移除英文眉標，並新增簡體字守門測試。
 - [修復] 設定檢查的應用資料庫項不再回傳連線字串（帳號、內網位址、資料庫名）：`message` 改固定句，新增 `message_code`／`message_params` 與只含 backend、錯誤類別的 `diagnostic`。

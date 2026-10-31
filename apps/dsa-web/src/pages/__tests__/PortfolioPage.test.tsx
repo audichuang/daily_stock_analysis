@@ -1931,7 +1931,7 @@ describe('PortfolioPage FX refresh', () => {
     await waitForInitialLoad();
 
     expect(await screen.findByText('HK00700')).toBeInTheDocument();
-    expect(screen.getByText('420.0000')).toBeInTheDocument();
+    expect(screen.getByText('420.00')).toBeInTheDocument();
     expect(screen.getByText('HKD 4,200.00')).toBeInTheDocument();
     expect(screen.getByText('+5.00%')).toBeInTheDocument();
     expect(screen.getByText('收盘价 · 2026-03-18')).toBeInTheDocument();

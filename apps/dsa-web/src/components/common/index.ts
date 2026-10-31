@@ -32,3 +32,4 @@ export * from '../theme/ThemeProvider';
 export * from '../theme/ThemeToggle';
 export * from './ParticleBackground';
 export { Change } from './Change';
+export { Money, Num } from './Num';
