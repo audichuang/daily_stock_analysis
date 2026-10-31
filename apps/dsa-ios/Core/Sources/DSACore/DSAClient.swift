@@ -106,6 +106,11 @@ public struct DSAClient: Sendable {
         try await get(["stocks", code, "profile"], query: [URLQueryItem(name: "history_days", value: String(historyDays))])
     }
 
+    /// 分時走勢（`range=day`）：台股走 Shioaji 分鐘線、其他市場走 yfinance 5 分鐘線；只有價沒有量。
+    public func stockTrend(_ code: String, range: String = "day") async throws -> StockTrend {
+        try await get(["stocks", code, "trend"], query: [URLQueryItem(name: "range", value: range)])
+    }
+
     public func historyList(stockCode: String? = nil, reportType: String? = nil, page: Int = 1, limit: Int = 20) async throws -> HistoryPage {
         var query = [URLQueryItem(name: "page", value: String(page)), URLQueryItem(name: "limit", value: String(limit))]
         if let stockCode { query.append(URLQueryItem(name: "stock_code", value: stockCode)) }

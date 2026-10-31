@@ -9,7 +9,11 @@ struct MarketChart: View {
     let source: String?
     let asOf: String?
     let convention: MarketColorConvention
+    let market: String
+    let previousClose: Double?
+    let loadIntraday: (() async throws -> StockTrend)?
 
+    @State private var showsIntraday = false
     @State private var interval: ChartInterval = .threeMonths
     @State private var period: CandlePeriod = .day
     @State private var style: ChartStyle = .candlestick
@@ -30,27 +34,34 @@ struct MarketChart: View {
         candles: [ChartCandle],
         source: String? = nil,
         asOf: String? = nil,
-        convention: MarketColorConvention = .taiwan
+        convention: MarketColorConvention = .taiwan,
+        market: String = "tw",
+        previousClose: Double? = nil,
+        loadIntraday: (() async throws -> StockTrend)? = nil
     ) {
         self.candles = candles
         self.source = source
         self.asOf = asOf
         self.convention = convention
+        self.market = market
+        self.previousClose = previousClose
+        self.loadIntraday = loadIntraday
     }
 
+    /// 預設視窗寬度。捲動與縮放之後就不再對應某個區間，選單只是「回到這個寬度並貼齊最新」。
     private enum ChartInterval: Int, CaseIterable, Identifiable {
-        case oneMonth = 1, threeMonths = 3, sixMonths = 6, oneYear = 12, threeYears = 36, fiveYears = 60
+        case oneMonth = 1, threeMonths = 3, sixMonths = 6, oneYear = 12, threeYears = 36, fiveYears = 60, all = 1_200
         var id: Int { rawValue }
-        var label: String { rawValue < 12 ? "\(rawValue)M" : "\(rawValue / 12)Y" }
-        var accessibilityLabel: String { rawValue < 12 ? "\(rawValue) 個月" : "\(rawValue / 12) 年" }
+        var label: String { self == .all ? "全部" : rawValue < 12 ? "\(rawValue)M" : "\(rawValue / 12)Y" }
+        var accessibilityLabel: String { self == .all ? "全部資料" : rawValue < 12 ? "\(rawValue) 個月" : "\(rawValue / 12) 年" }
         var seconds: TimeInterval { Double(rawValue) * 30.44 * 86_400 }
 
-        /// 切換區間時順手換成看得清楚的 K 棒週期：一年塞兩百多根日 K 會擠成細線。
-        var suggestedPeriod: CandlePeriod {
-            switch self {
-            case .oneMonth, .threeMonths, .sixMonths: .day
-            case .oneYear, .threeYears: .week
-            case .fiveYears: .month
+        /// 每種 K 棒的預設視窗：一年塞兩百多根日 K 會擠成細線。
+        static func preset(for period: CandlePeriod) -> ChartInterval {
+            switch period {
+            case .day: .threeMonths
+            case .week: .oneYear
+            case .month: .fiveYears
             }
         }
     }
@@ -268,35 +279,24 @@ struct MarketChart: View {
 
     var body: some View {
         let data = visibleSlice(prepared.full)
-        VStack(alignment: .leading, spacing: 14) {
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    SectionHeading("價格走勢", eyebrow: "MARKET STRUCTURE")
-                    Spacer(minLength: 12)
-                    stylePicker
-                }
-                VStack(alignment: .leading, spacing: 12) {
-                    SectionHeading("價格走勢", eyebrow: "MARKET STRUCTURE")
-                    stylePicker
-                }
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            SectionHeading("價格走勢", eyebrow: "MARKET STRUCTURE")
+            tabRow
 
-            if let domain = fullDomain, !data.isEmpty || !prepared.full.isEmpty {
-                intervalPicker
-                periodRow
-                indicatorRow
+            if showsIntraday, let loadIntraday {
+                IntradayChart(market: market, previousClose: previousClose, convention: convention, load: loadIntraday)
+            } else if let domain = fullDomain, !prepared.full.isEmpty {
                 if let candle = inspected(in: data) {
-                    candleReadout(candle)
+                    infoHeader(candle)
                 }
                 Group {
                     priceChart(data)
                         .frame(height: 250)
-                    lineLegend
                     volumeChart(data)
-                        .frame(height: 66)
+                        .frame(height: 62)
                     if oscillator != .none {
-                        oscillatorChart
-                            .frame(height: 96)
+                        oscillatorChart(selected: inspected(in: data))
+                            .frame(height: 92)
                     }
                 }
                 .chartXScale(domain: domain)
@@ -304,13 +304,14 @@ struct MarketChart: View {
                 .chartXVisibleDomain(length: visibleLength)
                 .chartScrollPosition(x: $scrollStart)
                 .simultaneousGesture(pinch)
+                indicatorRow
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "hand.draw")
-                    Text("左右滑動看更早的走勢、雙指縮放調整區間；按住後拖曳查看每根 K 棒的數值。")
+                    Text("左右滑動看更早、雙指縮放；按住後拖曳查看每根 K 棒。")
                 }
                 .font(.caption2)
                 .foregroundStyle(Theme.secondary)
-                if prepared.historyMonths < interval.rawValue - 1 {
+                if interval != .all, prepared.historyMonths < interval.rawValue - 1 {
                     let months = prepared.historyMonths
                     Text("這檔目前只有約 \(months >= 12 ? "\(months / 12) 年 \(months % 12) 個月" : "\(months) 個月")的資料，已顯示全部。")
                         .font(.caption2)
@@ -320,14 +321,11 @@ struct MarketChart: View {
                 EmptyStateView(title: "尚無日線資料", message: "目前沒有可顯示的行情，取得資料後才會繪製走勢。")
             }
 
-            if source != nil || asOf != nil {
-                VStack(alignment: .leading, spacing: 4) {
-                    if let source { Text("行情資訊：\(source)") }
-                    if let asOf { Text("資料時間：\(asOf)") }
-                }
-                .font(.caption2)
-                .foregroundStyle(Theme.secondary)
-                .textSelection(.enabled)
+            if !showsIntraday, source != nil || asOf != nil {
+                Text([source.map { "行情資訊：\($0)" }, asOf.map { "資料時間：\($0)" }].compactMap { $0 }.joined(separator: "　"))
+                    .font(.caption2)
+                    .foregroundStyle(Theme.secondary)
+                    .textSelection(.enabled)
             }
         }
         .onAppear {
@@ -339,13 +337,7 @@ struct MarketChart: View {
             // 只換指標時保持目前捲動位置；資料或週期變了才回到最新。
             if old.period != new.period || old.count != new.count || old.lastDate != new.lastDate { resetViewport() }
         }
-        .onChange(of: interval) { _, newValue in
-            if period != newValue.suggestedPeriod {
-                period = newValue.suggestedPeriod
-            } else {
-                resetViewport()
-            }
-        }
+        .onChange(of: interval) { _, _ in resetViewport() }
         .sheet(isPresented: $showingGuide) {
             KLineGuideView(convention: convention)
         }
@@ -355,58 +347,81 @@ struct MarketChart: View {
 
     // MARK: - 控制項
 
-    private var stylePicker: some View {
-        Picker("圖表樣式", selection: $style) {
-            ForEach(ChartStyle.allCases) { style in
-                Text(style.rawValue).tag(style)
+    /// 富途式的週期分頁：分時｜日 K｜週 K｜月 K，右側是區間下拉與「⋯」。
+    private var tabRow: some View {
+        HStack(spacing: 4) {
+            if loadIntraday != nil {
+                tab("分時", selected: showsIntraday, id: "chart.tab.intraday") { showsIntraday = true }
             }
-        }
-        .pickerStyle(.segmented)
-        .frame(minWidth: 130, maxWidth: 180, minHeight: 44)
-        .accessibilityIdentifier("chart.style")
-    }
-
-    private var intervalPicker: some View {
-        HStack(spacing: 6) {
-            ForEach(ChartInterval.allCases) { option in
-                Button {
-                    if interval == option { resetViewport() } else { interval = option }
+            ForEach(CandlePeriod.allCases) { option in
+                tab(option.label, selected: !showsIntraday && period == option, id: "chart.tab.\(option.rawValue)") {
+                    showsIntraday = false
+                    guard period != option else { return }
+                    interval = ChartInterval.preset(for: option)
+                    period = option
+                }
+            }
+            Spacer(minLength: 4)
+            if !showsIntraday {
+                Menu {
+                    Picker("顯示區間", selection: $interval) {
+                        ForEach(ChartInterval.allCases) { option in
+                            Text(option.label).tag(option)
+                        }
+                    }
                 } label: {
-                    Text(option.label)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(interval == option ? Theme.background : Theme.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .background(interval == option ? Theme.accent : Theme.elevated, in: RoundedRectangle(cornerRadius: 12))
+                    HStack(spacing: 3) {
+                        Text(interval.label)
+                        Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.text)
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 32)
+                    .background(Theme.elevated, in: Capsule())
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(option.accessibilityLabel)
-                .accessibilityAddTraits(interval == option ? .isSelected : [])
-                .accessibilityIdentifier("chart.range.\(option.rawValue)")
+                .accessibilityLabel("顯示區間 \(interval.accessibilityLabel)")
+                .accessibilityIdentifier("chart.range")
             }
+            Menu {
+                if !showsIntraday {
+                    Picker("圖表樣式", selection: $style) {
+                        ForEach(ChartStyle.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                }
+                Button {
+                    showingGuide = true
+                } label: {
+                    Label("看懂 K 線", systemImage: "questionmark.circle")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.body)
+                    .foregroundStyle(Theme.secondary)
+                    .frame(width: 36, height: 32)
+            }
+            .accessibilityLabel("更多圖表設定")
+            .accessibilityIdentifier("chart.more")
         }
     }
 
-    private var periodRow: some View {
-        HStack(spacing: 10) {
-            Picker("K 棒週期", selection: $period) {
-                ForEach(CandlePeriod.allCases) { option in
-                    Text(option.label).tag(option)
-                }
+    private func tab(_ title: String, selected: Bool, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Text(title)
+                    .font(.subheadline.weight(selected ? .bold : .medium))
+                    .foregroundStyle(selected ? Theme.text : Theme.secondary)
+                Capsule()
+                    .fill(selected ? Theme.accent : .clear)
+                    .frame(width: 18, height: 3)
             }
-            .pickerStyle(.segmented)
-            .frame(minHeight: 44)
-            .accessibilityIdentifier("chart.period")
-            Button {
-                showingGuide = true
-            } label: {
-                Label("看懂 K 線", systemImage: "questionmark.circle")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Theme.accent)
-                    .frame(minHeight: 44)
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("chart.guide")
+            .padding(.horizontal, 6)
+            .frame(minHeight: 40)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier(id)
     }
 
     private var indicatorRow: some View {
@@ -446,65 +461,58 @@ struct MarketChart: View {
             .lineLimit(1)
             .foregroundStyle(active ? Theme.text : Theme.secondary)
             .padding(.horizontal, 10)
-            .frame(minHeight: 36)
+            .frame(minHeight: 34)
             .background(active ? Theme.elevated : Theme.elevated.opacity(0.4), in: Capsule())
     }
 
     // MARK: - 讀數
 
-    private func candleReadout(_ candle: ChartCandle) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
+    /// 圖上方兩行小字（富途／TradingView 的寫法）：日期與開高低收、漲跌；下一行是可點的指標線數值。
+    private func infoHeader(_ candle: ChartCandle) -> some View {
+        let previous = prepared.full.last { $0.date < candle.periodStart }?.close
+        let change = previous.map { (candle.close / $0 - 1) * 100 }
+        let tint = Theme.changeColor(change ?? (candle.close - candle.open), convention: convention)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
                 Group {
                     if candle.periodStart == candle.date {
-                        Text(candle.date, format: TradingDay.readoutStyle())
+                        Text("\(period.label)・\(candle.date.formatted(TradingDay.readoutStyle()))")
                     } else {
-                        Text("\(candle.periodStart.formatted(TradingDay.readoutStyle())) – \(candle.date.formatted(TradingDay.axisStyle()))")
+                        Text("\(period.label)・\(candle.periodStart.formatted(TradingDay.axisStyle()))–\(candle.date.formatted(TradingDay.axisStyle()))")
                     }
                 }
-                .font(.caption.weight(.medium))
                 .foregroundStyle(Theme.text)
-                Spacer()
                 if candle.isProvisional {
                     StatusBadge("暫定・即時報價", tone: .warning)
                 }
-                Text(selectedDate != nil ? "選取\(period.label)" : candle.date == prepared.full.last?.date ? "最新\(period.label)" : "畫面最右\(period.label)")
-                    .font(.caption2)
+                Spacer(minLength: 0)
+                Text(selectedDate != nil ? "選取" : candle.date == prepared.full.last?.date ? "最新" : "畫面最右")
                     .foregroundStyle(Theme.secondary)
             }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), alignment: .leading, spacing: 8) {
-                compactMetric("開", price(candle.open))
-                compactMetric("高", price(candle.high))
-                compactMetric("低", price(candle.low))
-                compactMetric("收", price(candle.close), tint: Theme.changeColor(candle.close - candle.open, convention: convention))
-            }
-            if !prepared.lines.isEmpty {
-                HStack(spacing: 12) {
-                    ForEach(prepared.lines) { line in
-                        let value = line.points.first { $0.date == candle.date }?.value
-                        Text("\(line.name) \(value.map(price) ?? "—")")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(line.color)
-                    }
+            .font(.caption.weight(.medium))
+            HStack(spacing: 8) {
+                readout("開", candle.open)
+                readout("高", candle.high)
+                readout("低", candle.low)
+                readout("收", candle.close, tint: tint)
+                if let change {
+                    Text("\(change >= 0 ? "+" : "")\(change.formatted(.number.precision(.fractionLength(2))))%")
+                        .foregroundStyle(tint)
                 }
             }
-            if let point = prepared.oscillator.first(where: { $0.date == candle.date }) {
-                Text(oscillatorReadout(point))
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(Theme.secondary)
-            }
+            .font(.caption.monospacedDigit())
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            lineLegend(at: candle)
         }
-        .padding(12)
-        .background(Theme.background.opacity(0.5), in: RoundedRectangle(cornerRadius: 14))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chart.readout")
     }
 
-    private func compactMetric(_ label: String, _ value: String, tint: Color? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.caption2).foregroundStyle(Theme.secondary)
-            Text(value).font(.subheadline.monospacedDigit().weight(.semibold)).foregroundStyle(tint ?? Theme.text)
-                .lineLimit(1).minimumScaleFactor(0.7)
+    private func readout(_ label: String, _ value: Double, tint: Color = Theme.text) -> some View {
+        HStack(spacing: 2) {
+            Text(label).foregroundStyle(Theme.secondary)
+            Text(price(value)).foregroundStyle(tint).fontWeight(.semibold)
         }
     }
 
@@ -515,27 +523,26 @@ struct MarketChart: View {
         case .kd:
             "K \(price(point.first))　D \(point.second.map(price) ?? "—")"
         case .rsi:
-            "RSI(14) \(price(point.first))"
+            price(point.first)
         case .none:
             ""
         }
     }
 
-    private var lineLegend: some View {
-        HStack(spacing: 8) {
+    /// 指標線名稱與當根數值，點一下隱藏／顯示該線。
+    private func lineLegend(at candle: ChartCandle) -> some View {
+        HStack(spacing: 10) {
             ForEach(prepared.lines) { line in
                 let hidden = hiddenLines.contains(line.slot)
+                let value = line.points.first { $0.date == candle.date }?.value
                 Button {
                     if hidden { hiddenLines.remove(line.slot) } else { hiddenLines.insert(line.slot) }
                 } label: {
-                    HStack(spacing: 5) {
-                        Capsule().fill(line.color).frame(width: 14, height: 3)
-                        Text(line.name).font(.caption2.weight(.semibold))
-                    }
-                    .foregroundStyle(hidden ? Theme.secondary.opacity(0.5) : Theme.text)
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: 32)
-                    .background(Theme.elevated.opacity(hidden ? 0.4 : 1), in: Capsule())
+                    Text("\(line.name) \(value.map(price) ?? "—")")
+                        .font(.caption2.monospacedDigit().weight(.medium))
+                        .foregroundStyle(hidden ? Theme.secondary.opacity(0.45) : line.color)
+                        .strikethrough(hidden, color: Theme.secondary.opacity(0.45))
+                        .frame(minHeight: 28)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(line.name) 指標線")
@@ -544,6 +551,8 @@ struct MarketChart: View {
             }
             Spacer(minLength: 0)
         }
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
     }
 
     // MARK: - 圖表
@@ -664,12 +673,12 @@ struct MarketChart: View {
         if let extremes {
             PointMark(x: .value("區間高", extremes.high.anchor), y: .value("高", extremes.high.high))
                 .symbolSize(0)
-                .annotation(position: .top, spacing: 2, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                .annotation(position: .top, alignment: labelAlignment(extremes.high.anchor), spacing: 2) {
                     markerLabel("高 \(price(extremes.high.high))")
                 }
             PointMark(x: .value("區間低", extremes.low.anchor), y: .value("低", extremes.low.low))
                 .symbolSize(0)
-                .annotation(position: .bottom, spacing: 2, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
+                .annotation(position: .bottom, alignment: labelAlignment(extremes.low.anchor), spacing: 2) {
                     markerLabel("低 \(price(extremes.low.low))")
                 }
         }
@@ -701,6 +710,12 @@ struct MarketChart: View {
                     }
                 }
         }
+    }
+
+    /// 標籤靠近視窗左右邊緣時往內側對齊，避免被軸線或畫面邊緣切掉。
+    private func labelAlignment(_ anchor: Date) -> Alignment {
+        let position = anchor.timeIntervalSince(scrollStart) / max(visibleLength, 1)
+        return position > 0.8 ? .trailing : position < 0.2 ? .leading : .center
     }
 
     private func markerLabel(_ text: String) -> some View {
@@ -754,7 +769,7 @@ struct MarketChart: View {
         .accessibilityIdentifier("chart.volume")
     }
 
-    private var oscillatorChart: some View {
+    private func oscillatorChart(selected candle: ChartCandle?) -> some View {
         let range = visibleRange
         let visible = prepared.oscillator.filter { range.contains($0.anchor) }
         let values = visible.flatMap { [$0.first, $0.second, $0.histogram].compactMap { $0 } }
@@ -805,9 +820,12 @@ struct MarketChart: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            Text(oscillatorTitle)
-                .font(.caption2.weight(.semibold))
+            let point = candle.flatMap { candle in prepared.oscillator.first { $0.date == candle.date } }
+            Text([oscillatorTitle, point.map(oscillatorReadout)].compactMap { $0 }.joined(separator: "　"))
+                .font(.caption2.monospacedDigit().weight(.semibold))
                 .foregroundStyle(Theme.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
                 .background(Theme.surface.opacity(0.85))
         }
         .accessibilityLabel("\(oscillator.rawValue) 指標")
@@ -816,8 +834,8 @@ struct MarketChart: View {
 
     private var oscillatorTitle: String {
         switch oscillator {
-        case .macd: "MACD(12,26,9)　黃 DIF・藍 DEA"
-        case .kd: "KD(9,3,3)　黃 K・藍 D"
+        case .macd: "MACD(12,26,9)"
+        case .kd: "KD(9,3,3)"
         case .rsi: "RSI(14)"
         case .none: ""
         }

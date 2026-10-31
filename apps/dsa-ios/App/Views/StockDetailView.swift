@@ -26,7 +26,9 @@ struct StockDetailView: View {
                     guard let date = DisplayFormat.date(bar.date) else { return nil }
                     return ChartCandle(date: date, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume, isProvisional: bar.provisional == true)
                 }, source: "日 K · \(profile.history.status == "fresh" ? "資料可用" : "資料不完整")",
-                            asOf: profile.history.data.last?.date, convention: store.colorConvention)
+                            asOf: profile.history.data.last?.date, convention: store.colorConvention,
+                            market: profile.market, previousClose: profile.quote.data?.prevClose,
+                            loadIntraday: store.client.map { client in { try await client.stockTrend(code) } })
                 if !profile.history.limitations.isEmpty { limitation(profile.history.limitations) }
                 if let quote = profile.quote.data { tradingMetrics(quote) }
                 analysisSection(profile)

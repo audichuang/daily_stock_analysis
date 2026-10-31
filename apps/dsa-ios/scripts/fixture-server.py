@@ -75,6 +75,25 @@ def bars(code):
     return result
 
 
+def intraday_source(code):
+    return "fixture（合成分時）"
+
+
+def intraday(code):
+    """合成分時：台股 09:00～13:30（+08:00）、美股 09:30～16:00（-05:00），每 5 分鐘一點，收在報價現價。"""
+    price, market = STOCKS[code][1], STOCKS[code][3]
+    tz, start, minutes = ("+08:00", 9 * 60, 270) if market == "tw" else ("-05:00", 9 * 60 + 30, 390)
+    day = "2024-01-31" if market == "tw" else "2024-01-30"
+    count = minutes // 5 + 1
+    points = []
+    for index in range(count):
+        minute = start + index * 5
+        wave = math.sin(index / 9) * price * 0.006 + (index - count) * price * 0.00005
+        points.append({"t": f"{day}T{minute // 60:02d}:{minute % 60:02d}:00{tz}",
+                       "price": round(price + wave if index < count - 1 else price, 2)})
+    return points
+
+
 def artifact(code, record_id=101):
     return {
         "schema_version": "research-artifact-v1", "artifact_id": f"fixture-{record_id}-{code}",
@@ -206,6 +225,12 @@ class Handler(BaseHTTPRequestHandler):
                 data = [("TWII", "加權指數（測試）", 18000, 100, 0.56), ("TPEX", "櫃買指數（測試）", 230, -1, -0.43)] if region == "tw" else [
                     ("SPX", "S&P 500（測試）", 4800, 20, 0.42), ("IXIC", "NASDAQ（測試）", 15000, -50, -0.33)]
                 return self.reply(200, {"region": region, "items": [dict(zip(["code", "name", "current", "change", "change_pct"], row), source="fixture（合成資料）", as_of=AS_OF) for row in data]})
+            if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "trend":
+                code = route[3]
+                if code not in STOCKS:
+                    return self.reply(200, {"stock_code": code, "range": "day", "source": None, "points": []})
+                return self.reply(200, {"stock_code": code, "range": "day", "source": intraday_source(code),
+                                        "points": intraday(code)})
             if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "profile":
                 code = route[3]
                 if code not in STOCKS:
