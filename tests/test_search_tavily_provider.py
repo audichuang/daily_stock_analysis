@@ -273,3 +273,35 @@ class TestTavilySearchProvider(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIntelQueryQuality:
+    def test_tw_dimensions_use_local_terms_not_a_share_ones(self):
+        from src.search_service import SearchService
+
+        dims = SearchService._tw_search_dimensions("2330.TW", "台積電", False)
+        joined = " ".join(d["query"] for d in dims)
+        assert "公開資訊觀測站" in joined and "法說會" in joined
+        for banned in ("上交所", "深交所", "cninfo", "研报", "业绩", "新闻"):
+            assert banned not in joined
+        assert {d["name"]: d["tavily_topic"] for d in dims}["earnings"] == "news"
+        etf = SearchService._tw_search_dimensions("0050.TW", "元大台灣50", True)
+        assert "法說會" not in " ".join(d["query"] for d in etf)
+
+    def test_data_pages_dropped_only_from_event_dimensions(self):
+        from src.search_service import SearchResponse, SearchResult, SearchService
+
+        page = SearchResult(title="Alphabet earnings", snippet="x", url="https://simplywall.st/stocks/x",
+                            source="simplywall.st", published_date=None)
+        video = SearchResult(title="Alphabet earnings", snippet="x", url="https://www.youtube.com/watch?v=1",
+                             source="youtube.com", published_date=None)
+        story = SearchResult(title="Alphabet earnings", snippet="x", url="https://www.bbc.com/news/1",
+                             source="bbc.com", published_date=None)
+        lookalike = SearchResult(title="Alphabet earnings", snippet="x", url="https://notyoutube.com/a",
+                                 source="notyoutube.com", published_date=None)
+        response = SearchResponse(query="q", results=[page, video, story, lookalike], provider="t", success=True)
+        kept = SearchService._filter_ranked_news_for_context(response, log_scope="t", allow_data_pages=False)
+        assert [r.url for r in kept.results] == [story.url, lookalike.url]
+        kept = SearchService._filter_ranked_news_for_context(response, log_scope="t", allow_data_pages=True)
+        assert len(kept.results) == 4
+
