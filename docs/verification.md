@@ -2,6 +2,22 @@
 
 入口是 [verify skill](../.claude/skills/verify/SKILL.md)，[功能地圖](../.claude/skills/verify/features/README.md) 定義使用者入口、操作、前置資料與終態。實跑與單測／fixture 各自回報；一個主要旅程通過不代表該頁全部分支已通過。
 
+
+## 2026-11-01：iOS Cloudflare Access（真實服務）
+
+正式入口 `https://dsa.audichuang.app` 已由 Cloudflare Access 保護整站，iOS build `202611010020`（PR #166）驗收。
+
+| 層級 | 操作與結果 |
+| --- | --- |
+| HTTP | 無 Header 與錯誤 Secret 都回 302 到 Cloudflare Access；正確 Service Token 對 `/` 與 `/api/v1/auth/status` 回 200 |
+| 模擬器真實服務 | `DSA_REAL_ACCESS_URL`、`DSA_REAL_ACCESS_CLIENT_ID`、`DSA_REAL_ACCESS_CLIENT_SECRET`、`DSA_REAL_DSA_PASSWORD` 全部設定後跑 `bash apps/dsa-ios/scripts/test-ui.sh <模擬器>`：29/29 通過，`testRealCloudflareAccessOptIn` 為 Passed。少了密碼時它會在 Access 通過後 skip，看到 28 passed、1 skipped 不算完成 |
+| 真機（TestFlight） | 使用者實測：開 Access 後重開 App 被擋、輸入 Client ID／Secret 後恢復、再重開不用重填、工具內嵌頁可開。Cloudflare 紀錄可見非本機 IP 的 token 請求依序取得 `auth/status`、自選、指數、歷史與報價 |
+| 登入效期 | NAS `ADMIN_SESSION_MAX_AGE_HOURS=8760`，容器內讀回 8760，`/api/health` 200，公網無 Header 仍 302 |
+
+憑證在 1Password `Agent` vault「DSA Cloudflare Access Service Token」，`username` 是 Client ID、`credential` 是 Secret；DSA 密碼在同 vault「daily stock analysis」。秘密只經環境變數傳入，不進指令文字或紀錄。
+
+回歸流程：先開 Access，再測舊登入狀態被擋，最後輸入憑證；不要先填再開，那樣測不到被擋的畫面。
+
 ## 2026-10-30：iOS 0.1.2 公網入口與頁面／資料審查
 
 基線 `34b7d76c`，三輪審查已收斂。本輪修正預設網址一次性移轉、資料參考時間、空買賣盤、交易日期、K 線實體與量價對齊，以及大字級數值可讀性。證據根目錄為本機 `apps/dsa-ios/QA/public-audit/`；私人快照與報告不入庫，以下只記去敏結論。

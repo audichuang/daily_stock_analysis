@@ -34,3 +34,16 @@ fixture 允許注入資料與故障且明標合成。真模型由原生按鈕發
 只停本輪fixture PID，依主skill清理隔離後端並保留application-evidence.sqlite3。私人報告、cookie、密碼與Keychain內容不入庫。
 
 手動／真服務驗證結束後執行 `.claude/skills/verify/scripts/ios_sim.sh down` 關機。
+
+## Cloudflare Access（真實服務）
+
+入口：工具分頁「Cloudflare Access 憑證」；連線驗證失敗時連線頁會自動展開同一區塊。
+
+```bash
+set -a; . ~/.config/op/agent-sa.env; set +a
+# 從 1Password Agent vault 匯出，不寫進指令文字：
+#   DSA_REAL_ACCESS_URL、DSA_REAL_ACCESS_CLIENT_ID、DSA_REAL_ACCESS_CLIENT_SECRET、DSA_REAL_DSA_PASSWORD
+bash apps/dsa-ios/scripts/test-ui.sh <專用模擬器 UDID> <證據目錄>
+```
+
+終態：`testRealCloudflareAccessOptIn` 是 Passed。缺 `DSA_REAL_DSA_PASSWORD` 時它會在 Access 通過後 skip，28 passed、1 skipped 不算驗收。真機依序確認：重開被擋、輸入憑證後恢復、再重開不用重填、工具內嵌頁可開。實跑紀錄見 `docs/verification.md`。
