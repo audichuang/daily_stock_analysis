@@ -113,6 +113,13 @@ class SetupStatusCheck(BaseModel):
     status: Literal["configured", "inherited", "optional", "needs_action"]
     message: str
     next_step: Optional[str] = None
+    message_code: Optional[str] = Field(
+        default=None, description="Stable code for client-side wording; null when only message is available"
+    )
+    message_params: Dict[str, str] = Field(default_factory=dict, description="Parameters for message_code")
+    diagnostic: Dict[str, str] = Field(
+        default_factory=dict, description="Masked troubleshooting fields; never contains connection strings"
+    )
 
 
 class SetupStatusResponse(BaseModel):
