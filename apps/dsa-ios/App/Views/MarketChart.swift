@@ -23,7 +23,7 @@ struct MarketChart: View {
     /// 可見區間的左緣與寬度（秒）；區間按鈕只是設定這兩個值，之後可自由捲動、縮放。
     @State private var scrollStart = Date()
     @State private var visibleLength: TimeInterval = 90 * 86_400
-    @State private var pinchBase: TimeInterval?
+    @State private var pinchBase: ChartViewport?
     @ScaledMetric(relativeTo: .caption2) private var axisLabelWidth: CGFloat = 46
 
     init(
@@ -224,33 +224,28 @@ struct MarketChart: View {
 
     private var fullDomain: ClosedRange<Date>? {
         guard let first = prepared.full.first, let last = prepared.full.last else { return nil }
-        let start = TradingDay.candleBody(around: first.anchor, spanDays: period.spanDays).lowerBound
-        // 右側留一點空白，最新一根不會貼在軸線上。
-        let end = TradingDay.candleBody(around: last.anchor, spanDays: period.spanDays).upperBound
-            .addingTimeInterval(86_400 * period.spanDays * 2)
-        return start...end
+        return ChartViewport.domain(firstAnchor: first.anchor, lastAnchor: last.anchor, spanDays: period.spanDays)
     }
 
     private func resetViewport() {
         guard let domain = fullDomain else { return }
-        let total = domain.upperBound.timeIntervalSince(domain.lowerBound)
-        visibleLength = min(interval.seconds, total)
-        scrollStart = domain.upperBound.addingTimeInterval(-visibleLength)
+        apply(ChartViewport.initial(domain: domain, preferred: interval.seconds, spanDays: period.spanDays))
         selectedDate = nil
     }
 
-    /// 雙指縮放：右緣固定，最少看 12 根、最多看全部。
+    private func apply(_ viewport: ChartViewport) {
+        visibleLength = viewport.length
+        scrollStart = viewport.start
+    }
+
+    /// 雙指縮放：右緣固定，規則見 `ChartViewport.pinched`。
     private var pinch: some Gesture {
         MagnifyGesture()
             .onChanged { value in
                 guard let domain = fullDomain else { return }
-                let base = pinchBase ?? visibleLength
+                let base = pinchBase ?? ChartViewport(start: scrollStart, length: visibleLength)
                 if pinchBase == nil { pinchBase = base }
-                let minimum = 86_400 * period.spanDays * 12
-                let maximum = domain.upperBound.timeIntervalSince(domain.lowerBound)
-                let right = scrollStart.addingTimeInterval(visibleLength)
-                visibleLength = min(max(base / value.magnification, minimum), maximum)
-                scrollStart = max(domain.lowerBound, right.addingTimeInterval(-visibleLength))
+                apply(ChartViewport.pinched(from: base, magnification: value.magnification, domain: domain, spanDays: period.spanDays))
             }
             .onEnded { _ in pinchBase = nil }
     }
@@ -561,7 +556,7 @@ struct MarketChart: View {
         return Chart {
             if !prepared.band.isEmpty, !hiddenLines.contains(0) || !hiddenLines.contains(2) {
                 ForEach(prepared.band, id: \.anchor) { point in
-                    AreaMark(x: .value("日期", point.anchor), yStart: .value("下軌", point.lower), yEnd: .value("上軌", point.upper))
+                    AreaMark(x: .value("日期", point.anchor), yStart: .value("下軌", point.lower), yEnd: .value("上軌", point.upper), series: .value("區域", "布林"))
                         .foregroundStyle(Theme.information.opacity(0.08))
                 }
             }
@@ -601,7 +596,7 @@ struct MarketChart: View {
                     )
                     .foregroundStyle(candle.open == candle.close ? Theme.secondary : color)
                 } else {
-                    AreaMark(x: .value("日期", candle.anchor), yStart: .value("基準", yDomain.lowerBound), yEnd: .value("收盤", candle.close))
+                    AreaMark(x: .value("日期", candle.anchor), yStart: .value("基準", yDomain.lowerBound), yEnd: .value("收盤", candle.close), series: .value("區域", "收盤"))
                         .foregroundStyle(LinearGradient(colors: [Theme.accent.opacity(0.25), Theme.accent.opacity(0)], startPoint: .top, endPoint: .bottom))
                     LineMark(x: .value("日期", candle.anchor), y: .value("收盤", candle.close), series: .value("線", "收盤"))
                         .foregroundStyle(Theme.accent)
