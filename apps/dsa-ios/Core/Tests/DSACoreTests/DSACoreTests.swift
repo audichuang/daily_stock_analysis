@@ -116,6 +116,36 @@ final class DSACoreTests: XCTestCase {
         XCTAssertEqual(sizes, [50, 1])
     }
 
+    func testCalendarDecodesSourceURLTimezoneAndDeadlineContract() async throws {
+        let today = EventCalendarDate.key(Date())
+        StubURLProtocol.handler = { _ in
+            (200, #"{"events":[{"id":"earnings-BRK.B","type":"earnings","code":"BRK.B","name":"Berkshire","date":"\#(today)","status":"confirmed","detail":"盤前","source_url":"https://example.test/source","timezone":"America/New_York","date_kind":"release","updated_at":null},{"id":"tw-deadline","type":"financial_deadline","code":null,"name":"台股財報期限","date":"\#(today)","status":"confirmed","detail":"不代表實際發布日","source_url":"https://example.test/law","timezone":"Asia/Taipei","date_kind":"statutory_deadline","updated_at":null}],"undated":[],"cache_updated_at":null}"#)
+        }
+        let result = try await client.calendarEvents(from: today, to: today)
+        XCTAssertEqual(result.events.first?.sourceUrl, "https://example.test/source")
+        XCTAssertEqual(result.events.first?.date, today)
+        XCTAssertEqual(result.events.first?.timezoneLabel, "美東 ET")
+        XCTAssertEqual(result.events.last?.statusLabel, "法定期限")
+        XCTAssertNil(result.events.last?.code)
+    }
+
+    func testCalendarReadsCacheRangeAndDecodesUndatedWithoutInventingDate() async throws {
+        let start = EventCalendarDate.key(Date())
+        let end = EventCalendarDate.key(Date().addingTimeInterval(7 * 86400))
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/v1/calendar/events")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            XCTAssertEqual(query.first { $0.name == "from" }?.value, start)
+            XCTAssertEqual(query.first { $0.name == "to" }?.value, end)
+            XCTAssertEqual(query.first { $0.name == "code" }?.value, "BRK.B")
+            return (200, #"{"events":[],"undated":[{"code":"BRK.B","name":"Berkshire","detail":"未提供日期"}],"cache_updated_at":null}"#)
+        }
+        let value = try await client.calendarEvents(from: start, to: end, code: "BRK.B")
+        XCTAssertTrue(value.events.isEmpty)
+        XCTAssertEqual(value.undated.first?.code, "BRK.B")
+        XCTAssertNil(value.cacheUpdatedAt)
+    }
+
     func testProfilePreservesEvidenceRiskAndInvalidation() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/api/v1/stocks/2330.TW/profile")

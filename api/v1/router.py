@@ -18,6 +18,7 @@ from api.v1.endpoints import (
     analysis,
     auth,
     backtest,
+    calendar,
     data,
     decision_signals,
     funds,
@@ -128,3 +129,5 @@ router.include_router(
     health.router,
     tags=["Health"]
 )
+
+router.include_router(calendar.router, prefix="/calendar", tags=["Calendar"])

@@ -1930,7 +1930,8 @@ def main() -> int:
                         f"scheduled analysis reported failure: {reason}"
                     )
 
-            background_tasks = []
+            from src.services.calendar_service import build_calendar_background_tasks
+            background_tasks = build_calendar_background_tasks(config)
             if getattr(config, 'agent_event_monitor_enabled', False):
                 from src.services.alert_worker import AlertWorker
 

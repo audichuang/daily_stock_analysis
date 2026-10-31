@@ -645,7 +645,9 @@ class RuntimeSchedulerService:
     def _current_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         if self._background_tasks_provider is not None:
             return self._background_tasks_provider(config)
-        return self._current_agent_event_monitor_background_tasks(config)
+        from src.services.calendar_service import build_calendar_background_tasks
+
+        return self._current_agent_event_monitor_background_tasks(config) + build_calendar_background_tasks(config)
 
     def _current_agent_event_monitor_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         name = "agent_event_monitor"

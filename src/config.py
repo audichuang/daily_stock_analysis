@@ -977,6 +977,8 @@ class Config:
 
     # === 自选股配置 ===
     stock_list: List[str] = field(default_factory=list)
+    # 外部行事曆只由排程更新，預設停用。
+    calendar_refresh_enabled: bool = False
     # 每日分析时把本地持仓账本（Web 持仓页）的持股并进 STOCK_LIST；仅作用于未指定 --stocks/--portfolio 的运行
     analyze_portfolio_holdings: bool = False
     # 預設 true＝舊行為：資金流 not_supported（市場無此資料源）照舊把買入降級為持有觀察；
@@ -1952,6 +1954,7 @@ class Config:
 
         return cls(
             stock_list=stock_list,
+            calendar_refresh_enabled=os.getenv("CALENDAR_REFRESH_ENABLED", "false").lower() == "true",
             analyze_portfolio_holdings=parse_env_bool(os.getenv('ANALYZE_PORTFOLIO_HOLDINGS'), default=False),
             capital_flow_not_supported_downgrade=parse_env_bool(
                 os.getenv('CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE'), default=True

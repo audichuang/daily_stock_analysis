@@ -204,3 +204,18 @@ Cleanup 後 `live/` 與 `regression/` 的程序、port、runtime 均移除；`ap
 新增的 WebKit policy 錯誤測試做正反 mutation：還原成不保留錯誤、過度忽略所有錯誤，皆實跑該 Xcode 單測並 exit 65；結果 `/tmp/dsa-access-policy-mutations/results.json`，來源已還原。完整 suite 中該測試通過。Core 再跑 54 tests、0 failures（`/tmp/dsa-access-core-followup.log`）。Release 刻意帶 UITest 編譯旗標仍建置成功，4 個預填／Debug server 標記均不在執行檔（`/tmp/dsa-access-release-followup.log`）；build、test、fixture log 亦核對沒有合成 Access Secret 值。
 
 真實 Access、實體裝置及真機覆蓋更新仍未驗證。未 push／上傳 TestFlight，沒有後端或資料庫異動；回滾可 revert 本次修正提交。
+
+## 2026-11-01：事件行事曆（本機隔離驗證）
+
+工作樹 `feat/event-calendar`，起點與遠端基線均為 `c6c4cfe6c848823d3eda228309dca6812a488581`；開工時乾淨、無上游追蹤分支，未 pull/rebase。只 commit、不 push。未讀寫正式應用／市場庫，沒有新增依賴或部署變更。
+
+- 後端：`uv run --frozen pytest tests/test_event_calendar.py tests/test_runtime_scheduler_service.py tests/test_stock_watchlist_api.py tests/test_storage_database_url.py tests/test_analyzer_prompt_zh_tw.py tests/test_python_version_compat.py -q`，受影響既有 111 個通過；行事曆最終重跑 21 個通過（最後增補 Yahoo EPS 1.5／0／None／NaN、上櫃範圍與美東跨日）。共 132 個不同測試案例；兩份結果有重疊，不相加 run 的總列數。JUnit `/tmp/dsa-cal-backend.xml`、`/tmp/dsa-cal-calendar-final.xml`。`ci_gate.sh syntax/flake8`（均帶 `uv run --frozen`）通過；另對新 Python 檔執行 py_compile 與完整 flake8。
+- 守門：後端 12 個正反 mutation 均被測試攔下，包含 Nasdaq `asOf`、同代號、快取三日、`.TWO`／指數範圍、過去／當日財報、EPS 缺值；記錄 `/tmp/dsa-cal-{mutations,past-mutations,eps-mutations}.json`。iOS 來源時區及 7 日上下界 3 個 mutation 均攔下。
+- Web：3 個定向測試檔、18 passed，lint／build 通過；只有既有 `StockScreeningPage.tsx:1389` exhaustive-deps warning。`ego-browser` 操作真實 API/Web，名單為隔離設定，手動刷新真 Nasdaq／Yahoo／總經進 SQLite：`updated=2, undated=1, failed=0`。實見 AAPL Nasdaq 確認、BRK.B Yahoo 推估、GOOGL 未定、上櫃未定及台股法定期限；切到12月可見 FOMC／CPI／非農／PCE／央行。證據 `/tmp/dsa-cal-web-evidence-final/` 的 `coverage.jsonl`、API JSON、`web-calendar-live-final.png`、`web-calendar-fomc.png`，圖片已檢視。首次 launcher 因冷啟動超過45秒中止；僅以 /tmp 包裝延長至180秒後重啟，未改 repo helper。Doctor 通過，結束已關閉 TaskSpace、停止程序、釋放 port，保存 SQLite 備份。
+- 最後後端改動的真 API fixture：`/tmp/dsa-cal-final-api/`，真 FastAPI／repository／隔離帳本交易與自選重播，HTTP200，名單為 AAPL＋8299.TWO＋持股BRK.B；過去財報仍顯示但 AAPL 回未定，BRK-B 查詢可取今日 BRK.B，程序已停止。原始回應與 stdout `/tmp/dsa-cal-final-api.log` 保留；不是正式資料驗證。
+- iOS：`swift test --package-path apps/dsa-ios/Core` 為 59 passed、0 failures，指定裝置 build-for-testing 通過。已執行使用者指定 `bash apps/dsa-ios/scripts/test-ui.sh E753AB76-564C-45A8-B3A5-2F67B6FF06CE /tmp/dsa-cal-evidence`；全套兩次卡在 XCTest 執行器排程，exit75，最終定向重跑亦卡住而停止，**不能宣稱全套 UI 綠燈**。曾跑定向完成月曆／換月／推估／未定，末步因測試未切 US 失敗，測試已修；該輪圖在 `/tmp/dsa-cal-evidence-restarted/screenshots-1/`。
+- iOS 人工補驗：同一指定裝置，透過 Device Hub 實際登入隔離 fixture、工具開月曆，實見日期標記、美東日期與確認財報；今日切 US → AAPL，實見「下次財報／已確認／7 天內發布財報」。證據 `/tmp/dsa-cal-manual-evidence/01-calendar.png`、`02-next-earnings-seven-day.png`（已檢視）、`coverage.json`。未精確補拍法定期限卡片（AX 有列出、Web 已驗），不以頁首說明冒充卡片證據。只重啟指定模擬器、未 erase，未操作其他專案裝置。
+- 未驗證：正式 NAS／正式 Postgres migration、真 LLM 評分一致性、iOS 全套 XCTest、iOS 法定期限卡片精確視覺證據。全量離線測試未跑（依要求）。
+- 已知風險：人工 FOMC 表需維護；假設未來官方同場改期，快取與人工舊日期可能並列（本次官網與表一致，未加推測性分支）。台股只有市場一般法定節點，未偽裝個股實際發布日。
+
+台股官方來源的 HTTP／自帶日期／法定例外查證與回滾步驟見 [事件行事曆](event-calendar.md)；只有新增表與追加 API，舊客戶端不受影響。開啟刷新前仍需明確設定 `CALENDAR_REFRESH_ENABLED=true` 與既有排程。

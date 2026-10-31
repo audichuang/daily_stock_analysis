@@ -341,6 +341,56 @@ final class DSAMarketUITests: XCTestCase {
     }
 
     /// fixture 的報價延遲 2 秒；下拉更新途中 store 先發布其他結果，報價請求不能因此被取消成「已取消」。
+    func testCalendarMonthSelectionStatusesAndNextEarningsWarning() throws {
+        let password = app.secureTextFields["server-password"]
+        XCTAssertTrue(password.waitForExistence(timeout: 15))
+        password.tap()
+        password.typeText("fixture-password")
+        tap(app.buttons["connect-button"])
+        XCTAssertTrue(app.tabBars.buttons["工具"].waitForExistence(timeout: 20))
+        tap(app.tabBars.buttons["工具"])
+        tap(app.buttons["tools.calendar"])
+        XCTAssertTrue(app.navigationBars["事件行事曆"].waitForExistence(timeout: 10))
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        let today = formatter.string(from: Date())
+        let day = app.buttons["calendar.day.\(today)"]
+        XCTAssertTrue(day.waitForExistence(timeout: 10))
+        let marked = NSPredicate(format: "label CONTAINS %@", "有事件")
+        expectation(for: marked, evaluatedWith: day)
+        waitForExpectations(timeout: 15)
+        tap(day)
+        XCTAssertTrue(text(containing: "美東 ET").waitForExistence(timeout: 10))
+        capture("14-行事曆月曆與財報")
+        let deadline = app.descendants(matching: .any)["calendar.event.fixture-deadline"].firstMatch
+        scrollTo(deadline)
+        XCTAssertTrue(deadline.staticTexts["法定期限"].exists)
+        XCTAssertTrue(deadline.staticTexts["合成財報法定期限；不代表實際發布日"].exists)
+        capture("15-行事曆法定期限")
+        scrollTo(app.buttons["calendar.next"])
+        tap(app.buttons["calendar.next"])
+        let estimated = text(containing: "合成推估財報")
+        XCTAssertTrue(estimated.waitForExistence(timeout: 15))
+        scrollTo(estimated)
+        XCTAssertTrue(app.staticTexts["推估"].exists)
+        capture("16-換月與推估")
+        scrollTo(text(containing: "下次財報未定"))
+        XCTAssertTrue(text(containing: "Microsoft（測試）").exists)
+        capture("17-下次財報未定")
+        goBack(from: "事件行事曆", to: "工具與設定")
+        tap(app.tabBars.buttons["自選"])
+        tap(app.segmentedControls["market-picker"].buttons["美股 US"])
+        tap(app.buttons["stock-row.AAPL"])
+        XCTAssertTrue(app.descendants(matching: .any)["stock.nextEarnings"].waitForExistence(timeout: 15))
+        let soon = app.descendants(matching: .any)["stock.earnings.soon"].firstMatch
+        XCTAssertTrue(soon.waitForExistence(timeout: 15))
+        scrollTo(soon)
+        XCTAssertTrue(text(containing: "美東 ET").exists)
+        capture("18-個股七天內財報警示")
+    }
+
     func testPullToRefreshWithSlowQuotesShowsNoError() throws {
         let password = app.secureTextFields["server-password"]
         XCTAssertTrue(password.waitForExistence(timeout: 15), "應顯示測試伺服器的登入畫面")

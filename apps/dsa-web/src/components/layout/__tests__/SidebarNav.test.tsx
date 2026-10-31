@@ -106,6 +106,13 @@ describe('SidebarNav', () => {
     expect(link).toHaveClass('font-medium');
   });
 
+  it('renders the calendar navigation item and marks it active', () => {
+    render(<MemoryRouter initialEntries={['/calendar']}><SidebarNav /></MemoryRouter>);
+    const link = screen.getByRole('link', { name: '事件日历' });
+    expect(link).toHaveAttribute('href', '/calendar');
+    expect(link).toHaveClass('font-medium');
+  });
+
   it('keeps rail controls outside the scrollable navigation links', () => {
     render(<MemoryRouter><SidebarNav variant="rail" /></MemoryRouter>);
 

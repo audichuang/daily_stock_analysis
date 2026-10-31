@@ -16,6 +16,8 @@ struct StockDetailView: View {
     @State private var taskMessage: String?
     @State private var polling = false
     @State private var showsTimeNote = false
+    @State private var earningsCalendar: EventCalendarResponse?
+    @State private var calendarError: String?
 
     var body: some View {
         PageScroll {
@@ -23,6 +25,7 @@ struct StockDetailView: View {
             if let error { ErrorStateView(message: error, retry: { Task { await load() } }) }
             if let profile {
                 quoteHeader(profile)
+                nextEarningsSection
                 MarketChart(candles: profile.history.data.compactMap { bar in
                     guard let date = DisplayFormat.date(bar.date) else { return nil }
                     return ChartCandle(date: date, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume, isProvisional: bar.provisional == true)
@@ -72,6 +75,38 @@ struct StockDetailView: View {
             await load()
         }
         .task(id: taskID) { if let taskID { await followTask(taskID) } }
+    }
+
+    private var nextEarnings: CalendarEvent? {
+        earningsCalendar?.events.filter { $0.type == "earnings" && $0.dateKind == "release" }
+            .sorted { $0.date < $1.date }.first
+    }
+
+    private var nextEarningsSection: some View {
+        DSACard {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionHeading("下次財報", systemImage: "calendar")
+                if let event = nextEarnings {
+                    HStack {
+                        Text("\(event.date) · \(event.timezoneLabel)").font(.headline.monospacedDigit())
+                        StatusBadge(event.statusLabel, tone: event.status == "estimated" ? .warning : .neutral)
+                    }
+                    if event.isWithinSevenDays() {
+                        Label("7 天內發布財報", systemImage: "exclamationmark.circle.fill")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.warning)
+                            .accessibilityIdentifier("stock.earnings.soon")
+                    }
+                    Text(event.detail).font(.caption).foregroundStyle(Theme.secondary)
+                } else {
+                    Text(calendarError == nil ? "未定" : "暫時無法讀取財報快取")
+                        .font(.headline).foregroundStyle(Theme.secondary)
+                    Text(calendarError ?? earningsCalendar?.undated.first?.detail ?? "尚無已排定財報日；法定期限不等於實際發布日。")
+                        .font(.caption).foregroundStyle(Theme.secondary)
+                }
+                NavigationLink("查看事件行事曆") { EventCalendarView() }
+            }
+        }
+        .accessibilityIdentifier("stock.nextEarnings")
     }
 
     private var taskKey: String { "analysisTask.\(store.baseURL?.absoluteString ?? "").\(code)" }
@@ -207,6 +242,15 @@ struct StockDetailView: View {
         do { profile = try await client.stockProfile(code, historyDays: 1100); error = nil }
         catch is CancellationError { }
         catch { self.error = error.localizedDescription }
+        // 財報快取失敗不遮住已取得的行情與研究。
+        let today = EventCalendarDate.parse(EventCalendarDate.key(Date(), timezone: "America/New_York"))!
+        let until = EventCalendarDate.calendar.date(byAdding: .day, value: 365, to: today)!
+        do {
+            earningsCalendar = try await client.calendarEvents(from: EventCalendarDate.key(today), to: EventCalendarDate.key(until), code: code)
+            calendarError = nil
+        } catch is CancellationError { }
+        catch let error as URLError where error.code == .cancelled { }
+        catch { calendarError = error.localizedDescription }
     }
 
     private func startAnalysis() async {

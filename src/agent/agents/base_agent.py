@@ -185,6 +185,8 @@ class BaseAgent(ABC):
         ]
         from src.services.event_gap import event_gap_prompt
         messages[0]["content"] += event_gap_prompt(ctx.meta.get("event_gap"))
+        if ctx.meta.get("earnings_prompt"):
+            messages.append({"role": "user", "content": ctx.meta["earnings_prompt"]})
         if ctx.meta.get("us_evidence_prompt"):
             messages.append({"role": "user", "content": ctx.meta["us_evidence_prompt"]})
         scope = ctx.meta.get("stock_scope")
