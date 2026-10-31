@@ -8,7 +8,7 @@ struct MarketChart: View {
     let candles: [ChartCandle]
     let convention: MarketColorConvention
     let market: String
-    let loadIntraday: (() async throws -> IntradayPayload)?
+    let loadIntraday: IntradayLoaders?
 
     @State private var showsIntraday = false
     @State private var interval: ChartInterval = .threeMonths
@@ -31,7 +31,7 @@ struct MarketChart: View {
         candles: [ChartCandle],
         convention: MarketColorConvention = .taiwan,
         market: String = "tw",
-        loadIntraday: (() async throws -> IntradayPayload)? = nil
+        loadIntraday: IntradayLoaders? = nil
     ) {
         self.candles = candles
         self.convention = convention

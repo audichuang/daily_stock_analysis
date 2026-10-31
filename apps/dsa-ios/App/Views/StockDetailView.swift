@@ -27,7 +27,10 @@ struct StockDetailView: View {
                     guard let date = DisplayFormat.date(bar.date) else { return nil }
                     return ChartCandle(date: date, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume, isProvisional: bar.provisional == true)
                 }, convention: store.colorConvention, market: profile.market,
-                            loadIntraday: store.client.map { client in { try await Self.intraday(code, client: client) } })
+                            loadIntraday: store.client.map { client in
+                                IntradayLoaders(day: { try await client.stockTrend(code, range: "day") },
+                                                daily: { try await client.stockTrend(code, range: "month") })
+                            })
                 if !profile.history.limitations.isEmpty { limitation(profile.history.limitations) }
                 if let quote = profile.quote.data { tradingMetrics(quote) }
                 analysisSection(profile)
@@ -110,13 +113,6 @@ struct StockDetailView: View {
         }
     }
 
-    /// 分時與近一月日線一起抓：昨收要依分時那天對齊，不能拿頁面載入時的報價昨收（開過夜會錯）。
-    private static func intraday(_ code: String, client: DSAClient) async throws -> IntradayPayload {
-        async let day = client.stockTrend(code, range: "day")
-        async let month = client.stockTrend(code, range: "month")
-        let daily = try? await month
-        return IntradayPayload(day: try await day, daily: daily)
-    }
 
     private func tradingMetrics(_ quote: StockQuote) -> some View {
         DSACard {

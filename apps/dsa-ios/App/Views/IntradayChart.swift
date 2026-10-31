@@ -2,17 +2,17 @@ import Charts
 import DSACore
 import SwiftUI
 
-/// 分時與同一時點抓的近一月日線（用來對齊昨收）；日線抓不到時為 nil，畫面就不顯示昨收與漲跌。
-struct IntradayPayload {
-    let day: StockTrend
-    let daily: StockTrend?
+/// 分時與近一月日線（用來對齊昨收）分開載入：分時一到就出圖，日線慢或失敗只影響昨收與漲跌。
+struct IntradayLoaders {
+    let day: () async throws -> StockTrend
+    let daily: () async throws -> StockTrend
 }
 
 /// 分時圖：當日價格線，以昨收為基準線，x 軸固定是整個交易時段。只在切到「分時」時才打 `/trend`。
 struct IntradayChart: View {
     let market: String
     let convention: MarketColorConvention
-    let load: () async throws -> IntradayPayload
+    let load: IntradayLoaders
 
     @State private var series: IntradaySeries?
     @State private var previousClose: Double?
@@ -48,16 +48,23 @@ struct IntradayChart: View {
     private func refresh() async {
         loading = true
         defer { loading = false }
+        let parsed: IntradaySeries?
         do {
-            let payload = try await load()
-            let parsed = IntradaySeries(points: payload.day.points, market: market)
+            let day = try await load.day()
+            parsed = IntradaySeries(points: day.points, market: market)
             series = parsed
-            previousClose = payload.daily.flatMap { parsed?.previousClose(from: $0.points) }
-            source = payload.day.source
+            source = day.source
             failure = nil
         } catch is CancellationError {
+            return
         } catch {
             failure = error.localizedDescription
+            return
+        }
+        loading = false
+        // 日線抓不到就不顯示昨收與漲跌，不拿頁面載入時的報價昨收湊（開過夜會錯日）。
+        if let parsed, let daily = try? await load.daily() {
+            previousClose = parsed.previousClose(from: daily.points)
         }
     }
 

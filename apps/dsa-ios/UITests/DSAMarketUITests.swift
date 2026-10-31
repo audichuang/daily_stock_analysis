@@ -94,8 +94,9 @@ final class DSAMarketUITests: XCTestCase {
         capture("03d-看懂K線說明")
         tap(app.buttons["chart.guide.done"])
         tap(app.buttons["chart.tab.intraday"])
-        XCTAssertTrue(text(containing: "分時來源：fixture（合成分時）").waitForExistence(timeout: 10), "分時要打 /trend 並標來源")
-        XCTAssertTrue(text(containing: "昨收 590.03").exists, "分時昨收要取分時那天之前的日線收盤")
+        // fixture 的日線晚 6 秒才回（test-ui.sh --daily-trend-delay 6）：分時要先出圖，昨收之後補上。
+        XCTAssertTrue(text(containing: "分時來源：fixture（合成分時）").waitForExistence(timeout: 4), "分時不能被較慢的日線請求拖住")
+        XCTAssertTrue(text(containing: "昨收 590.03").waitForExistence(timeout: 15), "分時昨收要取分時那天之前的日線收盤")
         capture("03f-分時")
         tap(app.buttons["chart.tab.day"])
         XCTAssertTrue(app.buttons["chart.tab.day"].isSelected)

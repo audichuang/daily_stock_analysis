@@ -19,6 +19,7 @@ AS_OF = "2024-01-31T13:30:00+08:00"
 FIXTURE_PASSWORD = "fixture-password"
 FIXTURE_COOKIE = "fixture-session-only"
 QUOTE_DELAY = 0.0
+DAILY_TREND_DELAY = 0.0
 STOCKS = {
     "2330.TW": ("台積電（測試）", 600.0, 1.69, "tw"),
     "2317.TW": ("鴻海（測試）", 100.0, -0.99, "tw"),
@@ -230,6 +231,7 @@ class Handler(BaseHTTPRequestHandler):
                 if code not in STOCKS:
                     return self.reply(200, {"stock_code": code, "range": "day", "source": None, "points": []})
                 if query.get("range", ["month"])[0] == "month":
+                    time.sleep(DAILY_TREND_DELAY)
                     daily = [{"t": bar["date"], "price": bar["close"]} for bar in bars(code)[-30:]]
                     return self.reply(200, {"stock_code": code, "range": "month", "source": "fixture（合成日線）", "points": daily})
                 return self.reply(200, {"stock_code": code, "range": "day", "source": intraday_source(code),
@@ -394,10 +396,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=0, help="0 由作業系統分配可用 port")
     parser.add_argument("--quote-delay", type=float, default=0, help="報價端點延遲秒數，重現慢報價")
+    parser.add_argument("--daily-trend-delay", type=float, default=0,
+                        help="/trend?range=month 延遲秒數，驗證分時不被日線拖住")
     parser.add_argument("--ready-file", type=Path, help="寫出 URL、port 與 PID，供驗收腳本傳入 UITest")
     args = parser.parse_args()
-    global QUOTE_DELAY
+    global QUOTE_DELAY, DAILY_TREND_DELAY
     QUOTE_DELAY = args.quote_delay
+    DAILY_TREND_DELAY = args.daily_trend_delay
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     port = server.server_address[1]
     import os
