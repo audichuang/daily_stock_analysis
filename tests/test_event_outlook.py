@@ -368,52 +368,110 @@ def _history(quarter_end, surprise):
                         index=pd.to_datetime([quarter_end]))
 
 
-def _row(code="NVDA", days_ago=5, created_days_before=3, expectation="beat", event_type="earnings", report_id=1):
-    event_date = TODAY - timedelta(days=days_ago)
-    return {"report_id": report_id, "code": code, "created_at": str(event_date - timedelta(days=created_days_before)),
-            "outlook": {"event_type": event_type, "event_date": event_date.isoformat(), "expectation": expectation,
-                        "confidence": "medium"}}
+def _row(code="NVDA", event_days_ago=5, created_days_ago=8, expectation="beat", event_type="earnings", report_id=1):
+    return {"report_id": report_id, "code": code, "created_at": str(TODAY - timedelta(days=created_days_ago)),
+            "outlook": {"event_type": event_type, "event_date": (TODAY - timedelta(days=event_days_ago)).isoformat(),
+                        "expectation": expectation, "confidence": "medium"}}
 
 
-def test_select_keeps_last_report_before_event_only():
-    early, late = _row(created_days_before=9, report_id=1), _row(created_days_before=1, report_id=2)
-    same_day = _row(created_days_before=0, report_id=3)
-    assert [r["report_id"] for r in verify.select_predictions([early, late, same_day], TODAY)] == [2]
+def _evidence(announced_days_ago=5, surprise=0.05, quarter_days_ago=40, reported=1.1):
+    stamp = pd.Timestamp(TODAY - timedelta(days=announced_days_ago)).tz_localize("America/New_York") + pd.Timedelta(hours=16)
+    dates = pd.DataFrame({"Reported EPS": [reported, float("nan")]},
+                         index=pd.DatetimeIndex([stamp, stamp + pd.Timedelta(days=90)]))
+    return {"history": _history(TODAY - timedelta(days=quarter_days_ago), surprise), "dates": dates}
 
 
-def test_select_skips_future_events_and_non_earnings():
-    assert verify.select_predictions([_row(days_ago=-3)], TODAY) == []
-    assert verify.select_predictions([_row(days_ago=0)], TODAY) == []
-    assert verify.select_predictions([_row(event_type="other")], TODAY) == []
+def _build(rows, evidence=None, done=()):
+    return verify.build_outcomes(rows, lambda code: evidence if evidence is not None else _evidence(), done)
 
 
-@pytest.mark.parametrize("surprise,label", [(0.05, "beat"), (-0.05, "miss"), (0.02, "inline"), (-0.02, "inline"),
-                                            (0.0201, "beat"), (-0.0201, "miss")])
-def test_classify_uses_ratio_from_source(surprise, label):
-    event = TODAY
-    actual = verify.actual_for_event(_history(event - timedelta(days=30), surprise), event)
-    assert verify.classify(actual["surprise_pct"]) == label
+def test_corrected_event_date_still_counts_one_quarter_once():
+    """推估日從 10/28 改成 10/30：同一季只留最後一份事前報告。"""
+    first = _row(event_days_ago=7, created_days_ago=12, report_id=1)
+    corrected = _row(event_days_ago=5, created_days_ago=9, expectation="miss", report_id=2)
+    result = _build([first, corrected])
+    assert [o["report_id"] for o in result["outcomes"]] == [2]
+    assert result["outcomes"][0]["expectation"] == "miss" and result["outcomes"][0]["hit"] is False
 
 
-def test_actual_ignores_previous_quarter_and_future_rows():
-    event = TODAY
-    # 本季還沒出現、只有上一季（季底距事件超過一季）：不可拿來計分
-    assert verify.actual_for_event(_history(event - timedelta(days=110), 0.05), event) is None
-    assert verify.actual_for_event(_history(event + timedelta(days=1), 0.05), event) is None
-    assert verify.actual_for_event(_history(event - timedelta(days=95), 0.05), event) is not None
-    assert verify.actual_for_event(None, event) is None
+def test_quarter_already_in_journal_is_not_written_again():
+    quarter = (TODAY - timedelta(days=40)).isoformat()
+    corrected = _row(event_days_ago=3)
+    assert _build([corrected], done={("NVDA", quarter)})["outcomes"] == []
+    assert len(_build([corrected], done={("AAPL", quarter)})["outcomes"]) == 1
 
 
-def test_build_outcome_scores_hit_defers_and_excludes_insufficient():
-    row = _row(expectation="miss")
-    event = date.fromisoformat(row["outlook"]["event_date"])
-    outcome = verify.build_outcome(row, lambda code: _history(event - timedelta(days=30), 0.05))
-    assert outcome["actual"] == "beat" and outcome["hit"] is False and outcome["always_beat_hit"] is True
-    assert verify.build_outcome(row, lambda code: None) is None
+def test_report_after_actual_announcement_is_not_scored_even_if_estimate_is_later():
+    """推估 3 天前、實際 6 天前就公告：4 天前的報告已看到結果。"""
+    late = _row(event_days_ago=3, created_days_ago=4)
+    outcome = _build([late], _evidence(announced_days_ago=6))["outcomes"][0]
+    assert outcome["scorable"] is False and outcome["note"] == "post_announcement"
+    assert "hit" not in outcome
+
+
+def test_last_ex_ante_report_wins_over_post_announcement_one():
+    before = _row(event_days_ago=3, created_days_ago=8, report_id=1)
+    after = _row(event_days_ago=3, created_days_ago=4, expectation="miss", report_id=2)
+    outcome = _build([before, after], _evidence(announced_days_ago=6))["outcomes"][0]
+    assert outcome["report_id"] == 1 and outcome["scorable"] is True and outcome["hit"] is True
+
+
+def test_report_on_announcement_day_is_not_ex_ante():
+    same_day = _row(event_days_ago=5, created_days_ago=5)
+    same_day["created_at"] += " 12:00:00"
+    assert _build([same_day], _evidence(announced_days_ago=5))["outcomes"][0]["scorable"] is False
+    day_before = _row(event_days_ago=5, created_days_ago=6)
+    assert _build([day_before], _evidence(announced_days_ago=5))["outcomes"][0]["scorable"] is True
+
+
+def test_unconfirmed_announcement_stays_pending_not_scored():
+    row = _row()
+    for evidence in (_evidence(reported=9.9), {**_evidence(), "dates": None}, {"history": _evidence()["history"]}):
+        result = _build([row], evidence)
+        assert result["outcomes"] == [] and result["pending"] == 1
+
+
+def test_ambiguous_announcement_is_not_guessed():
+    evidence = _evidence()
+    stamp = evidence["dates"].index[0]
+    evidence["dates"] = pd.DataFrame({"Reported EPS": [1.1, 1.1]},
+                                     index=pd.DatetimeIndex([stamp, stamp + pd.Timedelta(days=1)]))
+    assert _build([_row()], evidence)["pending"] == 1
+
+
+def test_missing_quarter_row_stays_pending():
+    assert _build([_row()], _evidence(quarter_days_ago=110)) == {"outcomes": [], "pending": 1}
+
+
+def test_non_earnings_and_all_insufficient_do_not_touch_network():
     fetch = Mock()
-    excluded = verify.build_outcome(_row(expectation="insufficient_data"), fetch)
-    assert excluded["scorable"] is False
+    rows = [_row(event_type="other"), _row(code="2330.TW", expectation="insufficient_data")]
+    assert verify.build_outcomes(rows, fetch) == {"outcomes": [], "pending": 0}
     fetch.assert_not_called()
+
+
+def test_latest_ex_ante_insufficient_is_recorded_unscored():
+    early = _row(created_days_ago=20, report_id=1)
+    latest = _row(created_days_ago=8, expectation="insufficient_data", report_id=2)
+    outcome = _build([early, latest])["outcomes"][0]
+    assert outcome["report_id"] == 2 and outcome["scorable"] is False and outcome["note"] == "insufficient_data"
+
+
+def test_scored_outcome_compares_against_actual_and_baseline():
+    outcome = _build([_row(expectation="miss")])["outcomes"][0]
+    assert outcome["actual"] == "beat" and outcome["hit"] is False and outcome["always_beat_hit"] is True
+    assert outcome["quarter"] == (TODAY - timedelta(days=40)).isoformat() and outcome["announced_at"]
+
+
+def test_naive_created_at_is_read_conservatively_as_utc():
+    # 公告當地 00:00（紐約）前幾小時，當 UTC 讀已跨過 cutoff：不算事前
+    stamp = pd.Timestamp(TODAY - timedelta(days=5)).tz_localize("America/New_York") + pd.Timedelta(hours=16)
+    cutoff = stamp.normalize().tz_convert("UTC").tz_localize(None)
+    row = _row()
+    row["created_at"] = str(cutoff + pd.Timedelta(minutes=1))
+    assert _build([row])["outcomes"][0]["scorable"] is False
+    row["created_at"] = str(cutoff - pd.Timedelta(minutes=1))
+    assert _build([row])["outcomes"][0]["scorable"] is True
 
 
 def _outcome(code, hit, beat=False):

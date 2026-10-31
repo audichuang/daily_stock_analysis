@@ -2,13 +2,17 @@
 """事件展望回驗：財報日過後，比對報告當時的 expectation 與實際 surprise。
 
 預測來自應用庫 analysis_history（唯讀），事後結果 append-only 寫 journal/event-outlook-outcomes.jsonl，
-一個 (code, event_date) 一行、不重寫。預設唯讀，帶 --append 才寫檔。
+一個 (code, quarter) 一行、不重寫。預設唯讀，帶 --append 才寫檔。
 
 口徑（事前定好，改了要在 journal/README.md 記）：
-- 同一事件只取事件日之前最後一份報告，避免同事件多份報告灌大樣本。
-- 只計 event_type=earnings 且 expectation 為 beat／inline／miss；insufficient_data 記錄但不計分。
-- 實際結果取 earnings_history 中「季底早於事件日、相距不超過 MAX_REPORT_LAG_DAYS」最新一列。
+- event_date 只是推估、會被更正，只拿來對到財季；去重鍵是股票＋財季，同一季只計一次。
+- 財季取 earnings_history 中「季底早於 event_date、相距不超過 MAX_REPORT_LAG_DAYS」最新一列；
   列還沒出現就先不寫（財報延期或來源未更新），下次再試。
+- 實際公告時間取 earnings_dates 中季底之後、Reported EPS 與該季 epsActual 相符的唯一一列；對不上就不計分、下次再試。
+- 事前性比的是實際公告日：來源的時刻只是約略值（實測 TSM 有 02:00、20:00），報告須早於公告日當地 00:00。
+  created_at 沒帶時區，一律當 UTC（比台北讀法晚 8 小時，只會少算不會把事後報告算進來）。
+- 同一季只取最後一份事前報告；全部都在公告後就記 scorable=false。
+- 只計 event_type=earnings 且 expectation 為 beat／inline／miss；insufficient_data 記錄但不計分。
 - |surprise| 不超過 INLINE_BAND_PCT 算 inline。
 - 命中率本身沒有意義（美股多數超預期），一律對照「永遠猜 beat」；n<MIN_SCORED 或區間跨零標 inconclusive。
 """
@@ -26,6 +30,8 @@ sys.path.insert(0, str(ROOT))
 OUTCOMES_PATH = ROOT / "journal" / "event-outlook-outcomes.jsonl"
 INLINE_BAND_PCT = 2.0
 MAX_REPORT_LAG_DAYS = 95
+# Reported EPS 四捨五入到分，epsActual 同；容許一分內的進位差
+EPS_MATCH_TOLERANCE = 0.011
 MIN_SCORED = 20
 SCORED = ("beat", "inline", "miss")
 
@@ -35,24 +41,6 @@ def _iso_date(value: Any) -> Optional[date]:
         return date.fromisoformat(str(value)[:10])
     except ValueError:
         return None
-
-
-def select_predictions(rows: Iterable[Dict[str, Any]], today: date) -> List[Dict[str, Any]]:
-    """rows 需含 report_id、code、created_at、outlook；回傳每事件最後一份事前報告，且事件日已過。"""
-    latest: Dict[tuple, Dict[str, Any]] = {}
-    for row in rows:
-        outlook = row.get("outlook") or {}
-        event_date = _iso_date(outlook.get("event_date"))
-        created = _iso_date(row.get("created_at"))
-        if outlook.get("event_type") != "earnings" or event_date is None or created is None:
-            continue
-        # 日期比到日：事件當天才產出的報告可能已看到結果，一律不算事前
-        if created >= event_date or event_date >= today:
-            continue
-        key = (row["code"], event_date.isoformat())
-        if key not in latest or str(row["created_at"]) > str(latest[key]["created_at"]):
-            latest[key] = row
-    return list(latest.values())
 
 
 def actual_for_event(history: Any, event_date: date) -> Optional[Dict[str, Any]]:
@@ -85,24 +73,95 @@ def classify(surprise_pct: float) -> str:
     return "beat" if surprise_pct > 0 else "miss"
 
 
-def build_outcome(row: Dict[str, Any], fetch_history: Callable[[str], Any],
-                  now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
-    """回傳一行 outcome；實際結果還抓不到回 None（下次重試）。"""
-    outlook = row["outlook"]
-    expectation = outlook.get("expectation")
-    base = {
-        "code": row["code"], "event_date": outlook["event_date"], "report_id": row.get("report_id"),
-        "predicted_at": str(row["created_at"]), "expectation": expectation, "confidence": outlook.get("confidence"),
-        "evaluated_at": (now or datetime.now().astimezone()).isoformat(timespec="seconds"),
-    }
-    if expectation not in SCORED:
-        return {**base, "scorable": False, "note": "insufficient_data"}
-    actual = actual_for_event(fetch_history(row["code"]), date.fromisoformat(outlook["event_date"]))
-    if actual is None:
+def announcement_for_quarter(dates: Any, quarter: str, eps_actual: float) -> Any:
+    """回傳該季實際公告時間；無法唯一確認回 None，不猜。"""
+    import pandas as pd
+
+    from data_provider.yfinance_fundamental_adapter import _safe_float
+
+    if not isinstance(dates, pd.DataFrame) or dates.empty:
         return None
-    label = classify(actual["surprise_pct"])
-    return {**base, **actual, "scorable": True, "actual": label, "hit": expectation == label,
-            "always_beat_hit": label == "beat"}
+    start = date.fromisoformat(quarter)
+    matches = []
+    for stamp, row in dates.iterrows():
+        reported = _safe_float(row.get("Reported EPS"))
+        day = pd.Timestamp(stamp).date()
+        if (reported is not None and timedelta(0) < day - start <= timedelta(days=MAX_REPORT_LAG_DAYS)
+                and abs(reported - eps_actual) <= EPS_MATCH_TOLERANCE):
+            matches.append(pd.Timestamp(stamp))
+    return matches[0] if len(matches) == 1 else None
+
+
+def _created_utc(value: Any) -> Any:
+    import pandas as pd
+
+    stamp = pd.Timestamp(value)
+    return stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp
+
+
+def _outcome_row(row: Dict[str, Any], quarter: str, announced: Any, now: datetime) -> Dict[str, Any]:
+    outlook = row["outlook"]
+    return {
+        "code": row["code"], "quarter": quarter, "event_date": outlook.get("event_date"),
+        "announced_at": announced.isoformat(), "report_id": row.get("report_id"),
+        "predicted_at": str(row["created_at"]), "expectation": outlook.get("expectation"),
+        "confidence": outlook.get("confidence"), "evaluated_at": now.isoformat(timespec="seconds"),
+    }
+
+
+def build_outcomes(rows: Iterable[Dict[str, Any]], fetch: Callable[[str], Dict[str, Any]],
+                   done: Iterable[tuple] = (), now: Optional[datetime] = None) -> Dict[str, Any]:
+    """rows 需含 report_id、code、created_at、outlook；fetch(code) 回 {history, dates}。
+
+    回傳 {"outcomes": 新結果, "pending": 還不能結算的報告數}。全是 insufficient_data 的股票不連網。
+    """
+    now = now or datetime.now().astimezone()
+    done = set(done)
+    by_code: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        outlook = row.get("outlook") or {}
+        if outlook.get("event_type") == "earnings" and _iso_date(outlook.get("event_date")) and row.get("created_at"):
+            by_code.setdefault(row["code"], []).append(row)
+
+    outcomes: List[Dict[str, Any]] = []
+    pending = 0
+    for code, code_rows in by_code.items():
+        if not any(r["outlook"].get("expectation") in SCORED for r in code_rows):
+            continue
+        evidence = fetch(code) or {}
+        groups: Dict[str, List[Dict[str, Any]]] = {}
+        actuals: Dict[str, Dict[str, Any]] = {}
+        for row in code_rows:
+            actual = actual_for_event(evidence.get("history"), _iso_date(row["outlook"]["event_date"]))
+            if actual is None:
+                pending += 1
+                continue
+            groups.setdefault(actual["quarter"], []).append(row)
+            actuals[actual["quarter"]] = actual
+        for quarter, group in groups.items():
+            if (code, quarter) in done:
+                continue
+            actual = actuals[quarter]
+            announced = announcement_for_quarter(evidence.get("dates"), quarter, actual["eps_actual"])
+            if announced is None:
+                pending += len(group)
+                continue
+            cutoff = announced.normalize()
+            ex_ante = [r for r in group if _created_utc(r["created_at"]) < cutoff]
+            if not ex_ante:
+                last = max(group, key=lambda r: _created_utc(r["created_at"]))
+                outcomes.append({**_outcome_row(last, quarter, announced, now), "scorable": False,
+                                 "note": "post_announcement"})
+                continue
+            last = max(ex_ante, key=lambda r: _created_utc(r["created_at"]))
+            base = _outcome_row(last, quarter, announced, now)
+            if base["expectation"] not in SCORED:
+                outcomes.append({**base, "scorable": False, "note": "insufficient_data"})
+                continue
+            label = classify(actual["surprise_pct"])
+            outcomes.append({**base, **actual, "scorable": True, "actual": label,
+                             "hit": base["expectation"] == label, "always_beat_hit": label == "beat"})
+    return {"outcomes": outcomes, "pending": pending}
 
 
 def _percentile_ci(values: List[float]) -> tuple:
@@ -176,16 +235,17 @@ def load_prediction_rows() -> List[Dict[str, Any]]:
     return rows
 
 
-def fetch_earnings_history(code: str) -> Any:
+def fetch_evidence(code: str) -> Dict[str, Any]:
     import yfinance as yf
 
     from data_provider.yfinance_fundamental_adapter import _convert_to_yf_symbol
 
     try:
-        return yf.Ticker(_convert_to_yf_symbol(code)).earnings_history
+        ticker = yf.Ticker(_convert_to_yf_symbol(code))
+        return {"history": ticker.earnings_history, "dates": ticker.get_earnings_dates(limit=12)}
     except Exception as exc:
-        print(f"[warn] {code} earnings_history 讀取失敗: {type(exc).__name__}", file=sys.stderr)
-        return None
+        print(f"[warn] {code} 財報實績讀取失敗: {type(exc).__name__}", file=sys.stderr)
+        return {}
 
 
 def render(summary: Dict[str, Any], pending: int) -> None:
@@ -205,20 +265,11 @@ def main() -> int:
     args = parser.parse_args()
 
     existing = read_outcomes()
-    done = {(o["code"], o["event_date"]) for o in existing}
-    predictions = [p for p in select_predictions(load_prediction_rows(), date.today())
-                   if (p["code"], p["outlook"]["event_date"]) not in done]
-    cache: Dict[str, Any] = {}
-
-    def fetch(code: str) -> Any:
-        if code not in cache:
-            cache[code] = fetch_earnings_history(code)
-        return cache[code]
-
-    new_rows = [o for o in (build_outcome(p, fetch) for p in predictions) if o is not None]
-    if args.append and new_rows:
-        append_outcomes(new_rows)
-    render(summarize(existing + new_rows), len(predictions) - len(new_rows))
+    done = {(o["code"], o.get("quarter")) for o in existing}
+    result = build_outcomes(load_prediction_rows(), fetch_evidence, done)
+    if args.append and result["outcomes"]:
+        append_outcomes(result["outcomes"])
+    render(summarize(existing + result["outcomes"]), result["pending"])
     return 0
 
 

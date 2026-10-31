@@ -157,10 +157,12 @@ Brier(conf) vs Brier(20.4%)   confidence 有沒有比「一律報基準率」更
 
 結論一律要求 **bootstrap 區間不跨零且已到期 ≥20 筆**，否則標為 inconclusive。
 - `event-outlook-outcomes.jsonl` — **事件展望的事後結果**（18:00 `daily_report.sh` 跑 `scripts/verify_event_outlook.py --append` 追加並另開 commit，`make verify-event-outlook` 唯讀）。
-  預測在應用庫 `analysis_history.raw_result.dashboard.event_outlook`，寫入時間是報告的 `created_at`；這裡一個 `(code, event_date)` 一行、不重寫。
-  同一事件只取事件日**之前**最後一份報告（事件當天的報告可能已看到結果，不算）；只計 `event_type=earnings` 且 `expectation` 為 `beat`／`inline`／`miss`，`insufficient_data` 記 `scorable=false`。
-  實際結果取 yfinance `earnings_history` 中季底早於事件日且相距 ≤95 天的最新一列（索引是季底不是公告日；上一季距事件超過一季，不會被誤用）；列還沒出現就不寫、下次再試。yfinance 只留近四季，超過一年沒跑會補不回來。
-  欄位：`code`、`event_date`、`report_id`、`predicted_at`、`expectation`、`confidence`、`evaluated_at`、`scorable`、`note`；可計分時另有 `quarter`、`surprise_pct`（百分比）、`eps_actual`、`eps_estimate`、`actual`（`|surprise|≤2%` 算 `inline`）、`hit`、`always_beat_hit`。
+  預測在應用庫 `analysis_history.raw_result.dashboard.event_outlook`，寫入時間是報告的 `created_at`；這裡一個 `(code, quarter)` 一行、不重寫。
+  `event_date` 是推估、會被更正，只拿來對到財季：yfinance `earnings_history` 中季底早於它且相距 ≤95 天的最新一列（索引是季底不是公告日；上一季距事件超過一季，不會被誤用）。
+  實際公告時間取 `earnings_dates` 中季底之後、`Reported EPS` 與 `epsActual` 相符（容差 0.011）的唯一一列；列還沒出現或無法唯一確認就不寫、下次再試。yfinance 只留近四季，超過一年沒跑會補不回來。
+  事前性比實際公告日：報告要早於公告日當地 00:00（來源時刻只是約略值，實測 TSM 有 02:00、20:00）；`created_at` 沒帶時區，一律當 UTC 讀，只會少算。同一季取最後一份事前報告；全在公告後記 `scorable=false`、`note=post_announcement`。
+  只計 `event_type=earnings` 且 `expectation` 為 `beat`／`inline`／`miss`；該季最後一份事前報告是 `insufficient_data` 時記 `scorable=false`。全部都是 `insufficient_data` 的股票不連網、不留列（台股目前都是）。
+  欄位：`code`、`quarter`、`event_date`、`announced_at`、`report_id`、`predicted_at`、`expectation`、`confidence`、`evaluated_at`、`scorable`、`note`；可計分時另有 `surprise_pct`（百分比）、`eps_actual`、`eps_estimate`、`actual`（`|surprise|≤2%` 算 `inline`）、`hit`、`always_beat_hit`。
   **命中率本身不是結論**（美股多數超預期）：一律對照「永遠猜 beat」，依股票 bootstrap 差值 95% CI；n<20 或區間跨零標 inconclusive。
 
 - `media-picks.jsonl` — **財經電視節目點名**（`make media-picks`，`scripts/tw_media_picks.py`），一筆點名一行。
