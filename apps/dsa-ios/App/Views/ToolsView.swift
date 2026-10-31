@@ -105,13 +105,13 @@ struct ToolsView: View {
     }
 
     private var alertValue: String {
-        if let monitor = store.alertMonitor { return monitor.summaryLabel }
-        return store.toolsStatusFailed ? "無法取得" : "讀取中"
+        if store.alertMonitorFailed { return "無法取得" }
+        return store.alertMonitor?.summaryLabel ?? "讀取中"
     }
 
     private var calendarValue: String {
-        if let count = store.upcomingEventCount { return "7 天內 \(count) 件" }
-        return store.toolsStatusFailed ? "無法取得" : "讀取中"
+        if store.calendarStatusFailed { return "無法取得" }
+        return store.upcomingEventCount.map { "7 天內 \($0) 件" } ?? "讀取中"
     }
 
     private func shortcut(_ title: String, value: String, icon: String) -> some View {

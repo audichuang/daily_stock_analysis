@@ -2754,7 +2754,7 @@ const zhTW: Record<UiTextKey, string> = {
   'layout.navMenu': '導覽選單',
   'layout.newChatMessage': '問股有新訊息',
   'layout.openNav': '開啟導覽選單',
-  'layout.route.alerts.description': '規則、觸發記錄與通知嘗試',
+  'layout.route.alerts.description': '規則、觸發紀錄與通知診斷',
   'layout.route.alerts.title': '警報',
   'layout.route.backtest.description': '回測任務與結果瀏覽',
   'layout.route.backtest.title': '回測',

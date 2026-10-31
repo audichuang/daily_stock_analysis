@@ -18,7 +18,6 @@ export const AlertBellLink: React.FC<AlertBellLinkProps> = ({ code, className })
     <a
       href={`/alerts?new=1&target=${encodeURIComponent(code)}`}
       aria-label={label}
-      title={label}
       onClick={(event) => event.stopPropagation()}
       className={cn('inline-flex h-6 w-6 items-center justify-center rounded text-muted-text hover:bg-hover hover:text-foreground', className)}
     >
