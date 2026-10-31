@@ -2857,7 +2857,7 @@
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 365,
+              "maximum": 1825,
               "minimum": 1,
               "description": "日线历史天数",
               "default": 60,

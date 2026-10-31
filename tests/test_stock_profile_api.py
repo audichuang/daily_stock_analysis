@@ -691,6 +691,34 @@ def test_profile_endpoint_validates_code_and_exposes_contract() -> None:
             _reset_auth_globals()
 
 
+def test_profile_endpoint_accepts_five_year_history_window() -> None:
+    """iOS 個股圖表的 5Y 區間會送 history_days=1100；上限回退成 365 會讓整份 profile 422。"""
+    _reset_auth_globals()
+    with tempfile.TemporaryDirectory() as temp_dir:
+        try:
+            os.environ["DATABASE_PATH"] = str(Path(temp_dir) / "profile.db")
+            os.environ["ADMIN_AUTH_ENABLED"] = "false"
+            Config.reset_instance()
+            DatabaseManager.reset_instance()
+            client = TestClient(create_app(static_dir=Path(temp_dir) / "empty-static"))
+            with patch(
+                "api.v1.endpoints.stocks.StockProfileService.get_profile",
+                return_value=_endpoint_payload(),
+            ) as get_profile:
+                accepted = client.get("/api/v1/stocks/AAPL/profile", params={"history_days": 1100})
+                too_long = client.get("/api/v1/stocks/AAPL/profile", params={"history_days": 1826})
+
+            assert accepted.status_code == 200, accepted.text
+            assert get_profile.call_args.kwargs == {"history_days": 1100}
+            assert too_long.status_code == 422
+        finally:
+            DatabaseManager.reset_instance()
+            Config.reset_instance()
+            os.environ.pop("DATABASE_PATH", None)
+            os.environ.pop("ADMIN_AUTH_ENABLED", None)
+            _reset_auth_globals()
+
+
 def test_static_openapi_matches_stock_profile_runtime_contract() -> None:
     static_spec = json.loads(
         (Path(__file__).resolve().parents[1] / "docs" / "architecture" / "api_spec.json").read_text(

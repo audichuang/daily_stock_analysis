@@ -190,7 +190,7 @@ struct StockDetailView: View {
         guard let client = store.client else { return }
         loading = true
         defer { loading = false }
-        do { profile = try await client.stockProfile(code, historyDays: 180); error = nil }
+        do { profile = try await client.stockProfile(code, historyDays: 1100); error = nil }
         catch is CancellationError { }
         catch { self.error = error.localizedDescription }
     }

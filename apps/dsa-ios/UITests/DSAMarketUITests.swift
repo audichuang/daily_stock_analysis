@@ -71,6 +71,18 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(priceChart.exists, "個股必須有實際繪製的測試 K 線")
         capture("03-個股報價與日K")
 
+        tap(app.buttons["chart.range.60"])
+        XCTAssertTrue(text(containing: "最新月 K").waitForExistence(timeout: 5), "5Y 區間應自動換成月 K")
+        XCTAssertTrue(app.buttons["chart.ma.2"].exists, "月 K 應有第三條均線可切換")
+        XCTAssertFalse(text(containing: "已顯示全部").exists, "fixture 有六年資料，5Y 不應提示資料不足")
+        capture("03c-5Y月K與均線")
+        tap(app.buttons["chart.guide"])
+        XCTAssertTrue(text(containing: "上方細線（上影線）").waitForExistence(timeout: 5))
+        capture("03d-看懂K線說明")
+        tap(app.buttons["chart.guide.done"])
+        tap(app.buttons["chart.range.3"])
+        XCTAssertTrue(text(containing: "最新日 K").waitForExistence(timeout: 5))
+
         let emptyBid = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", "最佳買價", "無報價")).firstMatch
         scrollTo(emptyBid)
         XCTAssertTrue(emptyBid.exists, "空委買應為無報價，不是零元可買")

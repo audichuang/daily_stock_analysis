@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] iOS 個股圖表加入 1Y／3Y／5Y 區間、日／週／月 K 切換、三條可個別隱藏的均線與「看懂 K 線」說明；`/api/v1/stocks/{code}/profile` 的 `history_days` 上限由 365 放寬到 1825（預設不變，Web 不受影響）。
 - [改進] iOS 支援 Cloudflare Tunnel 公網入口；只將既有舊預設網址一次性移轉到新預設，保留自訂網址與私有入口，登入 Cookie 不跨域搬移。
 - [修復] iOS 日 K 日期與月份範圍不再受裝置時區偏移；蠟燭實體、成交量柱使用明確日寬，價格與成交量圖對齊日期及軸寬。
 - [修復] iOS 輔助使用大字級下的指數、資產、持股與個股行情改為可完整閱讀的縱向配置；一般字級仍保留緊湊列表。
