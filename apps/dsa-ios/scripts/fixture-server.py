@@ -69,6 +69,9 @@ def bars(code):
     latest = quote(code)
     result[-1].update(open=latest["open"], high=latest["high"], low=latest["low"],
                       close=latest["current_price"], volume=latest["volume"], amount=latest["amount"])
+    if code == "MSFT":
+        # 模擬日 K 來源缺當天、由報價補上的暫定 K（後端 `_with_provisional_bar`）。
+        result[-1]["provisional"] = True
     return result
 
 

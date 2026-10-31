@@ -58,4 +58,30 @@ final class CandleSeriesTests: XCTestCase {
         XCTAssertEqual(week.upperBound.timeIntervalSince(week.lowerBound), 86_400 * 7 * 0.65, accuracy: 0.001)
         XCTAssertEqual(center.timeIntervalSince(week.lowerBound), week.upperBound.timeIntervalSince(center), accuracy: 0.001)
     }
+
+    func testMonthlySelectionAndAnchorStayInsideTheirOwnMonth() throws {
+        let daily = [
+            try candle("2025-12-01", open: 1, high: 1, low: 1, close: 1),
+            try candle("2025-12-31", open: 2, high: 2, low: 2, close: 2),
+            try candle("2026-01-02", open: 3, high: 3, low: 3, close: 3),
+            try candle("2026-01-30", open: 4, high: 4, low: 4, close: 4)
+        ]
+        let months = CandleSeries.aggregate(daily, period: .month)
+        let january = try XCTUnwrap(months.last)
+        XCTAssertEqual(january.anchor, TradingDay.parse("2026-01-16"), "月 K 畫在當月中間，不以月底為中心")
+        let tenth = try XCTUnwrap(TradingDay.parse("2026-01-10"))
+        XCTAssertEqual(CandleSeries.nearest(to: tenth, in: months)?.close, 4, "1/10 要選到一月，不是離月底較近的十二月")
+        let ma = CandleSeries.movingAverage(months, window: 1)
+        XCTAssertEqual(ma.last?.anchor, january.anchor)
+        XCTAssertEqual(try candle("2026-01-02", open: 1, high: 1, low: 1, close: 1).anchor, TradingDay.parse("2026-01-02"))
+    }
+
+    func testProvisionalDayMarksItsWholeWeek() throws {
+        let daily = [
+            try candle("2026-10-26", open: 90, high: 92, low: 88, close: 90.5),
+            ChartCandle(date: try XCTUnwrap(TradingDay.parse("2026-10-30")), open: 68, high: 69, low: 63, close: 65.76, volume: 1, isProvisional: true)
+        ]
+        XCTAssertEqual(CandleSeries.aggregate(daily, period: .week).map(\.isProvisional), [true])
+        XCTAssertEqual(CandleSeries.aggregate(daily, period: .day).map(\.isProvisional), [false, true])
+    }
 }

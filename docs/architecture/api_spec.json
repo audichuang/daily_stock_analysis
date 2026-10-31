@@ -8778,6 +8778,18 @@
             ],
             "title": "Change Percent",
             "description": "涨跌幅 (%)"
+          },
+          "provisional": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provisional",
+            "description": "由即時報價補上的當日暫定 K（日 K 來源尚未收錄）"
           }
         },
         "type": "object",

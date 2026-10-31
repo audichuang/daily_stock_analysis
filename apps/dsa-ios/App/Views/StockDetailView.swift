@@ -24,7 +24,7 @@ struct StockDetailView: View {
                 quoteHeader(profile)
                 MarketChart(candles: profile.history.data.compactMap { bar in
                     guard let date = DisplayFormat.date(bar.date) else { return nil }
-                    return ChartCandle(date: date, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume)
+                    return ChartCandle(date: date, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume, isProvisional: bar.provisional == true)
                 }, source: "日 K · \(profile.history.status == "fresh" ? "資料可用" : "資料不完整")",
                             asOf: profile.history.data.last?.date, convention: store.colorConvention)
                 if !profile.history.limitations.isEmpty { limitation(profile.history.limitations) }

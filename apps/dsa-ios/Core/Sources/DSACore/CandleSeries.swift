@@ -10,10 +10,18 @@ public struct ChartCandle: Identifiable, Hashable, Sendable {
     public let low: Double
     public let close: Double
     public let volume: Double?
+    /// 由即時報價補上的暫定 K；併成週 K、月 K 時只要含暫定日就整根視為暫定。
+    public let isProvisional: Bool
 
     public var id: Date { date }
 
-    public init(date: Date, periodStart: Date? = nil, open: Double, high: Double, low: Double, close: Double, volume: Double?) {
+    /// 圖上的 x 位置：日 K 是當天，週 K、月 K 是區間首末交易日的中點，
+    /// 實體才不會以月底為中心跨進下個月。
+    public var anchor: Date {
+        periodStart.addingTimeInterval(date.timeIntervalSince(periodStart) / 2)
+    }
+
+    public init(date: Date, periodStart: Date? = nil, open: Double, high: Double, low: Double, close: Double, volume: Double?, isProvisional: Bool = false) {
         self.date = date
         self.periodStart = periodStart ?? date
         self.open = open
@@ -21,6 +29,7 @@ public struct ChartCandle: Identifiable, Hashable, Sendable {
         self.low = low
         self.close = close
         self.volume = volume
+        self.isProvisional = isProvisional
     }
 }
 
@@ -59,6 +68,8 @@ public enum CandlePeriod: String, CaseIterable, Identifiable, Sendable {
 public struct MovingAveragePoint: Hashable, Sendable {
     public let window: Int
     public let date: Date
+    /// 與所屬 K 棒同一個 x 位置（見 `ChartCandle.anchor`）。
+    public let anchor: Date
     public let value: Double
 }
 
@@ -90,7 +101,8 @@ public enum CandleSeries {
                 high: bucket.map(\.high).max() ?? last.high,
                 low: bucket.map(\.low).min() ?? last.low,
                 close: last.close,
-                volume: volumes.isEmpty ? nil : volumes.reduce(0, +)
+                volume: volumes.isEmpty ? nil : volumes.reduce(0, +),
+                isProvisional: bucket.contains(where: \.isProvisional)
             ))
         }
         for candle in sorted {
@@ -114,9 +126,14 @@ public enum CandleSeries {
         points.reserveCapacity(candles.count - window + 1)
         for index in (window - 1)..<candles.count {
             sum += candles[index].close
-            points.append(MovingAveragePoint(window: window, date: candles[index].date, value: sum / Double(window)))
+            points.append(MovingAveragePoint(window: window, date: candles[index].date, anchor: candles[index].anchor, value: sum / Double(window)))
             sum -= candles[index - window + 1].close
         }
         return points
+    }
+
+    /// 拖曳選取：取 x 位置（anchor）最近的 K 棒。用區間末日找會在月初選到上一個月。
+    public static func nearest(to selected: Date, in candles: [ChartCandle]) -> ChartCandle? {
+        candles.min { abs($0.anchor.timeIntervalSince(selected)) < abs($1.anchor.timeIntervalSince(selected)) }
     }
 }

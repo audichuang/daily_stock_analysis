@@ -754,3 +754,50 @@ def test_profile_research_preserves_persisted_evidence_times() -> None:
     assert evidence["as_of"] == "2026-08-28T16:00:00-04:00"
     assert evidence["metadata"]["fetched_at"] == "2026-08-29T10:00:00+08:00"
     assert evidence["freshness"] == "unknown"
+
+
+def _session_bar(day: str, close: float = 92.07) -> dict:
+    return {"date": day, "open": close, "high": close, "low": close, "close": close, "volume": 1.0}
+
+
+def _session_quote(as_of: str, *, price: float = 65.76, is_stale=None) -> dict:
+    return {"status": "fresh", "data": {
+        "current_price": price, "open": 68.35, "high": 68.77, "low": 63.2, "volume": 450884426,
+        "as_of": as_of, "is_stale": is_stale,
+    }}
+
+
+@pytest.mark.parametrize(
+    ("market", "last_day", "as_of", "expected_day"),
+    [
+        # 美股收盤後 UTC 已跨到 10/31，K 棒仍屬紐約 10/30（INTC 實際踩到的情境）。
+        ("us", "2026-10-29", "2026-10-31T00:53:44+00:00", "2026-10-30"),
+        # 美股 10/30 盤前 08:00 ET：今天還沒開盤，報價屬 10/29。
+        ("us", "2026-10-28", "2026-10-30T12:00:00+00:00", "2026-10-29"),
+        # 台股週六：報價屬週五 10/30。
+        ("tw", "2026-10-29", "2026-10-31T00:53:45+00:00", "2026-10-30"),
+    ],
+)
+def test_profile_appends_provisional_bar_for_the_quote_session(market, last_day, as_of, expected_day) -> None:
+    history = {"status": "fresh", "period": "daily", "data": [_session_bar(last_day)], "limitations": []}
+    result = StockProfileService._with_provisional_bar(history, _session_quote(as_of), market=market)
+    bar = result["data"][-1]
+    assert bar["date"] == expected_day
+    assert bar["provisional"] is True
+    assert (bar["open"], bar["high"], bar["low"], bar["close"]) == (68.35, 68.77, 63.2, 65.76)
+    assert round(bar["change_percent"], 2) == -28.58
+    assert history["data"] == [_session_bar(last_day)], "不改動原本的 history"
+
+
+@pytest.mark.parametrize(
+    ("market", "last_day", "quote"),
+    [
+        ("us", "2026-10-30", _session_quote("2026-10-31T00:53:44+00:00")),
+        ("us", "2026-10-29", _session_quote("2026-10-30T12:00:00+00:00")),
+        ("us", "2026-10-29", _session_quote("2026-10-31T00:53:44+00:00", is_stale=True)),
+        ("tw", "2026-10-30", _session_quote("2026-10-31T00:53:45+00:00")),
+    ],
+)
+def test_profile_keeps_history_when_quote_is_not_newer_or_stale(market, last_day, quote) -> None:
+    history = {"status": "fresh", "period": "daily", "data": [_session_bar(last_day)], "limitations": []}
+    assert StockProfileService._with_provisional_bar(history, quote, market=market) == history

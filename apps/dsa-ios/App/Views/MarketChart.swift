@@ -13,6 +13,7 @@ struct MarketChart: View {
     @State private var style: ChartStyle = .candlestick
     @State private var hiddenAverages: Set<Int> = []
     @State private var selectedDate: Date?
+    @State private var prepared = PreparedSeries.empty
     @State private var showingGuide = false
     @ScaledMetric(relativeTo: .caption2) private var axisLabelWidth: CGFloat = 46
 
@@ -62,32 +63,50 @@ struct MarketChart: View {
     // 避開漲跌用的紅綠，免得均線被看成某一根 K 棒的顏色。
     static let averageColors: [Color] = [Theme.warning, Theme.information, Color(red: 0.78, green: 0.56, blue: 1.0)]
 
-    private var periodCandles: [ChartCandle] {
-        CandleSeries.aggregate(candles, period: period)
+    /// 聚合、裁切與均線只在資料、週期或區間變動時算一次；拖曳選取每一格都會重繪 body，
+    /// 在 body 裡重算一千多根日 K 會讓拖曳卡頓。
+    private struct PreparedSeries {
+        var visible: [ChartCandle]
+        var lines: [AverageLine]
+        var historyMonths: Int
+
+        static let empty = PreparedSeries(visible: [], lines: [], historyMonths: 0)
     }
 
-    private func visible(_ series: [ChartCandle]) -> [ChartCandle] {
-        guard let latest = series.last?.date,
-              let cutoff = TradingDay.start(months: interval.rawValue, before: latest) else {
-            return series
+    private struct SeriesKey: Equatable {
+        let count: Int
+        let lastDate: Date?
+        let lastClose: Double?
+        let period: CandlePeriod
+        let interval: ChartInterval
+    }
+
+    private var seriesKey: SeriesKey {
+        SeriesKey(count: candles.count, lastDate: candles.last?.date, lastClose: candles.last?.close, period: period, interval: interval)
+    }
+
+    private func prepare() {
+        let full = CandleSeries.aggregate(candles, period: period)
+        var visible = full
+        if let latest = full.last?.date, let cutoff = TradingDay.start(months: interval.rawValue, before: latest) {
+            visible = full.filter { $0.date >= cutoff }
         }
-        return series.filter { $0.date >= cutoff }
-    }
-
-    /// 均線在完整序列上算，再裁到可見區間，左緣才不會因為少了前段資料而缺線或偏移。
-    private func averages(full: [ChartCandle], visible: [ChartCandle]) -> [AverageLine] {
-        guard let start = visible.first?.date else { return [] }
-        return period.movingAverageWindows.enumerated().map { slot, window in
+        // 均線在完整序列上算，再裁到可見區間，左緣才不會因為少了前段資料而缺線或偏移。
+        let start = visible.first?.date ?? .distantFuture
+        let lines = period.movingAverageWindows.enumerated().map { slot, window in
             AverageLine(slot: slot, window: window,
                         points: CandleSeries.movingAverage(full, window: window).filter { $0.date >= start })
         }
+        var months = 0
+        if let first = full.first?.periodStart, let last = full.last?.date {
+            months = TradingDay.calendar.dateComponents([.month], from: first, to: last).month ?? 0
+        }
+        prepared = PreparedSeries(visible: visible, lines: lines, historyMonths: months)
     }
 
     private func inspected(in data: [ChartCandle]) -> ChartCandle? {
         guard let selectedDate else { return data.last }
-        return data.min {
-            abs($0.date.timeIntervalSince(selectedDate)) < abs($1.date.timeIntervalSince(selectedDate))
-        }
+        return CandleSeries.nearest(to: selectedDate, in: data)
     }
 
     private func priceDomain(_ data: [ChartCandle], lines: [AverageLine]) -> ClosedRange<Double> {
@@ -99,9 +118,8 @@ struct MarketChart: View {
     }
 
     var body: some View {
-        let full = periodCandles
-        let data = visible(full)
-        let lines = averages(full: full, visible: data)
+        let data = prepared.visible
+        let lines = prepared.lines
         VStack(alignment: .leading, spacing: 16) {
             ViewThatFits(in: .horizontal) {
                 HStack {
@@ -116,8 +134,8 @@ struct MarketChart: View {
             }
 
             if let first = data.first, let last = data.last {
-                let start = TradingDay.candleBody(around: first.date, spanDays: period.spanDays).lowerBound
-                let end = TradingDay.candleBody(around: last.date, spanDays: period.spanDays).upperBound
+                let start = TradingDay.candleBody(around: first.anchor, spanDays: period.spanDays).lowerBound
+                let end = TradingDay.candleBody(around: last.anchor, spanDays: period.spanDays).upperBound
                 let domain = start...end
                 intervalPicker
                 periodRow
@@ -137,7 +155,7 @@ struct MarketChart: View {
                 }
                 .font(.caption2)
                 .foregroundStyle(Theme.secondary)
-                let months = historyMonths(full)
+                let months = prepared.historyMonths
                 if months < interval.rawValue - 1 {
                     Text("這檔目前只有約 \(months >= 12 ? "\(months / 12) 年 \(months % 12) 個月" : "\(months) 個月")的資料，已顯示全部。")
                         .font(.caption2)
@@ -162,16 +180,13 @@ struct MarketChart: View {
             period = newValue.suggestedPeriod
         }
         .onChange(of: period) { _, _ in selectedDate = nil }
+        .onAppear(perform: prepare)
+        .onChange(of: seriesKey) { _, _ in prepare() }
         .sheet(isPresented: $showingGuide) {
             KLineGuideView(convention: convention)
         }
         .environment(\.calendar, TradingDay.calendar)
         .environment(\.timeZone, TradingDay.timeZone)
-    }
-
-    private func historyMonths(_ series: [ChartCandle]) -> Int {
-        guard let first = series.first?.periodStart, let last = series.last?.date else { return 0 }
-        return TradingDay.calendar.dateComponents([.month], from: first, to: last).month ?? 0
     }
 
     private var stylePicker: some View {
@@ -241,6 +256,9 @@ struct MarketChart: View {
                 .font(.caption.weight(.medium))
                 .foregroundStyle(Theme.text)
                 Spacer()
+                if candle.isProvisional {
+                    StatusBadge("暫定・即時報價", tone: .warning)
+                }
                 Text("\(selectedDate == nil ? "最新" : "選取")\(period.label)")
                     .font(.caption2)
                     .foregroundStyle(Theme.secondary)
@@ -295,13 +313,13 @@ struct MarketChart: View {
         return Chart {
             ForEach(data) { candle in
                 if style == .candlestick {
-                    let body = TradingDay.candleBody(around: candle.date, spanDays: period.spanDays)
+                    let body = TradingDay.candleBody(around: candle.anchor, spanDays: period.spanDays)
                     RuleMark(
-                        x: .value("日期", candle.date),
+                        x: .value("日期", candle.anchor),
                         yStart: .value("最低", candle.low),
                         yEnd: .value("最高", candle.high)
                     )
-                    .foregroundStyle(Theme.changeColor(candle.close - candle.open, convention: convention))
+                    .foregroundStyle(Theme.changeColor(candle.close - candle.open, convention: convention).opacity(candle.isProvisional ? 0.45 : 1))
                     .lineStyle(StrokeStyle(lineWidth: 1))
 
                     if candle.open == candle.close {
@@ -318,26 +336,26 @@ struct MarketChart: View {
                             yStart: .value("開盤", min(candle.open, candle.close)),
                             yEnd: .value("收盤", max(candle.open, candle.close))
                         )
-                        .foregroundStyle(Theme.changeColor(candle.close - candle.open, convention: convention))
+                        .foregroundStyle(Theme.changeColor(candle.close - candle.open, convention: convention).opacity(candle.isProvisional ? 0.45 : 1))
                     }
                 } else {
-                    LineMark(x: .value("日期", candle.date), y: .value("收盤", candle.close), series: .value("線", "收盤"))
+                    LineMark(x: .value("日期", candle.anchor), y: .value("收盤", candle.close), series: .value("線", "收盤"))
                         .foregroundStyle(Theme.accent)
                         .lineStyle(StrokeStyle(lineWidth: 2))
                 }
             }
             ForEach(lines.filter { !hiddenAverages.contains($0.slot) }) { line in
                 ForEach(line.points, id: \.date) { point in
-                    LineMark(x: .value("日期", point.date), y: .value("均線", point.value), series: .value("線", line.name))
+                    LineMark(x: .value("日期", point.anchor), y: .value("均線", point.value), series: .value("線", line.name))
                         .foregroundStyle(line.color)
                         .lineStyle(StrokeStyle(lineWidth: 1.2))
                 }
             }
             if selectedDate != nil, let inspectedCandle {
-                RuleMark(x: .value("選取日期", inspectedCandle.date))
+                RuleMark(x: .value("選取日期", inspectedCandle.anchor))
                     .foregroundStyle(Theme.text.opacity(0.6))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                PointMark(x: .value("選取日期", inspectedCandle.date), y: .value("收盤", inspectedCandle.close))
+                PointMark(x: .value("選取日期", inspectedCandle.anchor), y: .value("收盤", inspectedCandle.close))
                     .foregroundStyle(Theme.accent)
                     .symbolSize(32)
             }
@@ -369,7 +387,7 @@ struct MarketChart: View {
         let inspectedCandle = inspected(in: data)
         return Chart(data) { candle in
             if let volume = candle.volume {
-                let body = TradingDay.candleBody(around: candle.date, spanDays: period.spanDays)
+                let body = TradingDay.candleBody(around: candle.anchor, spanDays: period.spanDays)
                 RectangleMark(
                     xStart: .value("起點", body.lowerBound),
                     xEnd: .value("終點", body.upperBound),

@@ -122,6 +122,7 @@ final class DSAMarketUITests: XCTestCase {
         let watchlistToggle = app.buttons["watchlist-toggle"]
         XCTAssertTrue(watchlistToggle.waitForExistence(timeout: 15))
         XCTAssertEqual(watchlistToggle.label, "加入自選股")
+        XCTAssertTrue(text(containing: "暫定・即時報價").waitForExistence(timeout: 10), "日 K 缺當天時，報價補上的暫定 K 要標示出來")
         watchlistToggle.tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "watchlist-toggle", "移除自選股")).firstMatch.waitForExistence(timeout: 10))
         capture("07-新增美股自選")

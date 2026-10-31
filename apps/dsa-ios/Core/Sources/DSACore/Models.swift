@@ -63,6 +63,8 @@ public struct KLineBar: Codable, Sendable, Identifiable {
     public let volume: Double?
     public let amount: Double?
     public let changePercent: Double?
+    /// 日 K 來源還沒收錄、由即時報價補上的當日暫定 K；舊後端不送此欄。
+    public let provisional: Bool?
 }
 
 public struct StockProfile: Codable, Sendable {
