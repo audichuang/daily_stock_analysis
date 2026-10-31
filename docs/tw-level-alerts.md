@@ -22,6 +22,8 @@
 - 下一個支撐：FVG 未回補 1,155~1,300（+0.0%）
 - 10-21 外資 5 日轉買 +587 張（20 日 -3,840）
 
+- 報價來源：永豐即時（Shioaji）
+
 _SMC 價位是結構參考，不是買賣訊號；完整分析在盯盤看板的「四維度分析」。_
 ```
 
@@ -46,6 +48,7 @@ _SMC 價位是結構參考，不是買賣訊號；完整分析在盯盤看板的
 | 結構、下一個價位、變化提示 | 觸發當下重新抓的看板摘要（`tw_stock_watch._one`）。抓不到時只送價位本身，不會不送 |
 | 下一個價位 | 和看板的 `nearestLevels` 同一套規則：區間完全在現價之下是支撐、之上是壓力；現價在區間裡時多頭區算支撐、空頭區算壓力（距離 0）；距離量到近端邊；剛觸發的那個價位本身排除 |
 | 除權息提醒 | 規則存的資料基準日之後有股價調整事件時才出現 |
+| 報價來源 | 這次評估實際用的報價來源（`quote.source`）。Shioaji 缺金鑰會靜默退回 yfinance，看這行才分得出來 |
 
 規則裡存的 `notification_policy.tw_level` 欄位不合法（缺欄位、價位非正數、代碼不是台股）時，`alert_worker` 改送通用格式的警報，不會整則吞掉。
 
@@ -104,8 +107,11 @@ _SMC 價位是結構參考，不是買賣訊號；完整分析在盯盤看板的
 1. **通知格式改版定案**：確認上面的訊息版型是要的。要改的話只需改 `format_level_alert_markdown()`，通用警報的格式不受影響。
 2. **設定 Telegram**：`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID` 都要有（兩個只設一個會被設定檢查擋下）。
 3. **路由**：`NOTIFICATION_ALERT_CHANNELS` 留空時，警報送到所有已設定的渠道；只想送 Telegram 就設成 `telegram`。
-4. **警報輪詢要開著**：`AGENT_EVENT_MONITOR_ENABLED=true`（`AGENT_EVENT_MONITOR_INTERVAL_MINUTES` 預設 5 分鐘）**而且**排程器要在跑——`SCHEDULE_ENABLED=true`，或啟動時帶 `--schedule`。警報 worker 只掛在 `RuntimeSchedulerService` 的背景任務上，排程器沒啟動就不會註冊（`runtime_scheduler.py` 的 `reconcile_from_config`／`start` 先檢查 `_is_schedule_enabled`）。NAS 的 compose 跑 `main.py --serve-only`，所以那邊只開 `AGENT_EVENT_MONITOR_ENABLED` 不夠，規則建了也不會被檢查，而且不會有任何錯誤訊息。`SCHEDULE_ENABLED` 可寫進 `.env`，也可在 Web 設定頁切換（存檔後立即重新套用排程器）。
-   - **取捨**：打開 `SCHEDULE_ENABLED` 也會讓 NAS 在 `SCHEDULE_TIME`／`SCHEDULE_TIMES`（預設 18:00）跑每日分析，和 Mac 18:00 的每日報告重複（同一個應用庫、走 NAS 的 Anthropic key）。程式目前**沒有「只開警報輪詢、不跑每日分析」的開關**；要不要接受重複、或另外加開關，需要先決定再啟用。
+4. **警報輪詢要開著**：`AGENT_EVENT_MONITOR_ENABLED=true`（`AGENT_EVENT_MONITOR_INTERVAL_MINUTES` 預設 5 分鐘），再選一條路跑：
+   - **只跑監控（NAS 用這條）**：加上 `AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE=true`。API 程序啟動獨立執行緒（`alert_worker.start_alert_monitor_worker`），不依賴 `SCHEDULE_ENABLED`、不註冊每日分析，所以不會和 Mac 18:00 的每日報告重複。即時價規則只在該市場開盤時段評估（`is_market_polling_window`），收盤後與假日不抓報價、不寫紀錄。程序啟動時決定，改值要重啟。
+   - **跟著排程器跑**：`SCHEDULE_ENABLED=true` 或 `--schedule`，代價是連帶跑每日分析。這條路維持全天評估。
+   - 兩者同時開時由獨立執行緒負責，排程器不註冊監控，不會重複推播。
+   - 確認有在跑：`GET /api/v1/alerts/monitor/status` 的 `running`（看實際執行緒或排程器，不是開關值）、`last_run_at`、`channels`；只開 `AGENT_EVENT_MONITOR_ENABLED` 而兩條路都沒開時，`reason` 是 `schedule_not_running`。
 5. **開功能**：`TW_LEVEL_ALERTS_ENABLED=true`，部署到 NAS。先用 `dry_run` 確認一檔，再在看板對一檔持股真的建立。
 6. **實測一次真的送出**：警報中心的「測試」按鈕只是試算（`POST /api/v1/alerts/rules/{id}/test` → `AlertService.test_rule`），**不會送任何訊息**，驗不到版型。要讓 worker 真的推一次：
    - 把剛建的一條價位規則的觸發價改到現價外面一點（支撐規則改成略高於現價、壓力規則改成略低於現價）。警報中心沒有編輯畫面，用 API：`PATCH /api/v1/alerts/rules/{id}`，body `{"parameters": {"direction": "below", "price": <略高於現價>}}`。只改 `parameters`，`notification_policy.tw_level` 不動，訊息版型照舊。

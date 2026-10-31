@@ -268,7 +268,7 @@ VALID_META = la.plan_rules("3324.TWO", {"support": SUP}, SUMMARY, name="雙鴻")
 
 def test_worker_uses_markdown_only_for_level_rules(monkeypatch):
     aw, worker, stub_rule, sent = _worker(monkeypatch)
-    monkeypatch.setattr(la, "build_level_alert_message", lambda meta, result: f"MD:{meta['code']}:{result['observed_value']}")
+    monkeypatch.setattr(la, "build_level_alert_message", lambda meta, result, quote_source=None: f"MD:{meta['code']}:{result['observed_value']}")
     rule = aw.RuntimeAlertRule(key="k", rule=stub_rule, source="db", notification_policy={"tw_level": VALID_META})
     assert worker._send_notification(rule, {"observed_value": 1236.0}) == "ok"
     assert sent == [("MD:3324.TWO:1236.0", "alert")]
@@ -284,7 +284,7 @@ def test_worker_uses_markdown_only_for_level_rules(monkeypatch):
 def test_worker_falls_back_to_generic_for_invalid_meta(monkeypatch, bad):
     aw, worker, stub_rule, sent = _worker(monkeypatch)
 
-    def boom(meta, result):
+    def boom(meta, result, quote_source=None):
         raise AssertionError("Markdown 版型不該收到不合法的 meta")
 
     monkeypatch.setattr(la, "build_level_alert_message", boom)

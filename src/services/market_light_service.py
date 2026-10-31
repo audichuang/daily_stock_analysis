@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # 从 MARKET_REVIEW_REGION_ORDER 推导而不是手写，否则新增市场时这里会静默落后
 # ——上游 v3.29 合并时就是这样漏掉 tw 的。
 MARKET_LIGHT_REGIONS = frozenset(MARKET_REVIEW_REGION_ORDER)
-MARKET_LIGHT_ALERT_REGIONS = frozenset({"cn", "hk", "us"})
+MARKET_LIGHT_ALERT_REGIONS = frozenset({"cn", "hk", "us", "tw"})
 MARKET_LIGHT_HISTORY_BATCH_SIZE = 100
 
 
@@ -40,7 +40,7 @@ def normalize_market_region(region: str) -> str:
 def normalize_market_alert_region(region: str) -> str:
     value = str(region or "").strip().lower()
     if value not in MARKET_LIGHT_ALERT_REGIONS:
-        raise ValueError(f"market alert target must be one of cn, hk, us: {region}")
+        raise ValueError(f"market alert target must be one of cn, hk, us, tw: {region}")
     return value
 
 

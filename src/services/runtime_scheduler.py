@@ -220,7 +220,7 @@ def build_agent_event_monitor_background_tasks(
     if not getattr(config, "agent_event_monitor_enabled", False):
         return []
 
-    from src.services.alert_worker import AlertWorker
+    from src.services.alert_worker import AlertWorker, run_recorded_cycle
 
     interval_seconds = _agent_event_monitor_interval_seconds(config)
     try:
@@ -230,7 +230,7 @@ def build_agent_event_monitor_background_tasks(
         return []
 
     def event_monitor_task() -> None:
-        stats = alert_worker.run_once()
+        stats = run_recorded_cycle(alert_worker)
         triggered_count = stats.get("triggered", 0)
         if triggered_count:
             logger.info("[EventMonitor] triggered %d alert(s)", triggered_count)
@@ -649,7 +649,11 @@ class RuntimeSchedulerService:
 
     def _current_agent_event_monitor_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         name = "agent_event_monitor"
-        if not getattr(config, "agent_event_monitor_enabled", False):
+        # 開了只跑監控的開關時由 API 程序的獨立執行緒負責；這裡再註冊一份會重複評估、重複推播。
+        if (
+            not getattr(config, "agent_event_monitor_enabled", False)
+            or getattr(config, "agent_event_monitor_without_schedule", False)
+        ):
             self._background_task_cache.pop(name, None)
             self._background_task_registered_names.discard(name)
             return []

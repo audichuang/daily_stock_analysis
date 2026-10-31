@@ -99,6 +99,63 @@ class AlertApiTestCase(unittest.TestCase):
         self.assertEqual(resp.status_code, 200, resp.text)
         return resp.json()
 
+    def test_triggers_append_rule_fields_and_summary(self) -> None:
+        rule = self._create_rule({
+            "name": "台積電站上 1000", "target": "2330.TW",
+            "parameters": {"direction": "above", "price": 1000}, "severity": "critical",
+        })
+        repo = AlertRepository(self.db)
+        repo.create_trigger({
+            "rule_id": rule["id"], "target": "2330.TW", "status": "triggered",
+            "diagnostics": json.dumps({"quote_source": "yfinance"}),
+        })
+        repo.create_trigger({"rule_id": rule["id"], "target": "2330.TW", "status": "skipped"})
+        repo.create_trigger({"rule_id": None, "target": "NOPE", "status": "failed", "diagnostics": "legacy text"})
+
+        body = self.client.get("/api/v1/alerts/triggers", params={"status": "triggered"}).json()
+        item = body["items"][0]
+        self.assertEqual(item["rule_name"], "台積電站上 1000")
+        self.assertEqual(item["stock_name"], "台積電")
+        self.assertEqual(item["direction"], "above")
+        self.assertEqual(item["severity"], "critical")
+        self.assertEqual(item["quote_source"], "yfinance")
+        # 彙總不受 status 篩選影響，頁面分頁的數字才不會跟著變
+        self.assertEqual(body["summary"], {"triggered": 1, "skipped": 1, "degraded": 0, "failed": 1})
+
+        orphan = self.client.get("/api/v1/alerts/triggers", params={"target": "NOPE"}).json()["items"][0]
+        self.assertIsNone(orphan["rule_name"])
+        self.assertIsNone(orphan["stock_name"])
+        self.assertIsNone(orphan["quote_source"])
+
+    def test_monitor_status_endpoint_reports_not_running_with_flag_only(self) -> None:
+        self._create_rule()
+        config = SimpleNamespace(
+            agent_event_monitor_enabled=True,
+            agent_event_monitor_without_schedule=False,
+            agent_event_monitor_interval_minutes=5,
+            notification_alert_channels=[],
+        )
+        with patch("api.v1.endpoints.alerts.get_config", return_value=config):
+            body = self.client.get("/api/v1/alerts/monitor/status").json()
+        self.assertFalse(body["running"])
+        self.assertEqual(body["mode"], "off")
+        self.assertEqual(body["reason"], "schedule_not_running")
+        self.assertEqual(body["interval_seconds"], 300)
+        self.assertEqual(body["enabled_rules"], 1)
+        self.assertEqual(body["channels"], [])
+
+    def test_market_alert_accepts_tw_and_rejects_jp(self) -> None:
+        created = self._create_rule({
+            "target_scope": "market", "target": "tw", "alert_type": "market_light_status",
+            "parameters": {"statuses": ["red"]},
+        })
+        self.assertEqual(created["target"], "tw")
+        rejected = self.client.post("/api/v1/alerts/rules", json={
+            "target_scope": "market", "target": "jp", "alert_type": "market_light_status",
+            "parameters": {"statuses": ["red"]},
+        })
+        self.assertEqual(rejected.status_code, 400)
+
     def test_legacy_source_counts_follow_worker_dedup_and_db_deletion(self) -> None:
         legacy = {"stock_code": "000001", "alert_type": "price_cross", "direction": "above", "price": 10}
         config = SimpleNamespace(agent_event_alert_rules_json=json.dumps([legacy]))

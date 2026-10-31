@@ -13,6 +13,8 @@ import threading
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
+from src.services.alert_messages import quote_source_line
+
 logger = logging.getLogger(__name__)
 
 # 同一檔的重建要排隊：兩個 POST 交錯會互刪對方剛建的規則
@@ -76,7 +78,8 @@ def _fmt(v: float) -> str:
 
 
 def format_level_alert_markdown(meta: Dict[str, Any], price: Optional[float],
-                                summary: Optional[Dict[str, Any]] = None, adjusted: bool = False) -> str:
+                                summary: Optional[Dict[str, Any]] = None, adjusted: bool = False,
+                                quote_source: Optional[str] = None) -> str:
     """觸發訊息（標準 Markdown；Telegram 由 TelegramSender 轉成它的格式，其他渠道照樣可讀）。"""
     side, edge = meta["side"], meta["low"] if meta["side"] == "support" else meta["high"]
     verb, arrow = ("跌破", "🔻") if side == "support" else ("站上", "🔺")
@@ -97,6 +100,8 @@ def format_level_alert_markdown(meta: Dict[str, Any], price: Optional[float],
                      f"{_fmt(nxt['low'])}~{_fmt(nxt['high'])}（{nxt['dist']:+.1f}%）")
     for c in (summary or {}).get("changes") or []:
         lines.append(f"- {c['text']}")
+    if quote_source:
+        lines.append(f"- {quote_source_line(quote_source)}")
     lines += ["", "_SMC 價位是結構參考，不是買賣訊號；完整分析在盯盤看板的「四維度分析」。_"]
     return "\n".join(lines)
 
@@ -153,7 +158,8 @@ def _adjusted_after(code: str, as_of: str) -> bool:
         return False
 
 
-def build_level_alert_message(meta: Dict[str, Any], result: Dict[str, Any]) -> str:
+def build_level_alert_message(meta: Dict[str, Any], result: Dict[str, Any],
+                              quote_source: Optional[str] = None) -> str:
     """alert_worker 的掛鉤：補上最新的結構與下一個價位；摘要讀不到時只送價位本身。"""
     summary = None
     try:
@@ -164,4 +170,5 @@ def build_level_alert_message(meta: Dict[str, Any], result: Dict[str, Any]) -> s
         logger.warning("[tw_level_alerts] summary unavailable for %s: %s", meta.get("code"), exc)
     observed = result.get("observed_value")
     adjusted = bool(meta.get("as_of")) and _adjusted_after(meta["code"], meta["as_of"])
-    return format_level_alert_markdown(meta, float(observed) if observed else None, summary, adjusted=adjusted)
+    return format_level_alert_markdown(meta, float(observed) if observed else None, summary, adjusted=adjusted,
+                                       quote_source=quote_source)

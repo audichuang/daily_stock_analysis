@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -26,11 +27,17 @@ from src.analysis_context_pack_overview import (
     ANALYSIS_CONTEXT_PACK_OVERVIEW_KEY,
     extract_analysis_context_pack_overview,
 )
-from src.core.trading_calendar import build_market_phase_context, get_market_for_stock
+from src.core.trading_calendar import (
+    build_market_phase_context,
+    get_market_for_stock,
+    is_market_polling_window,
+)
 from src.market_phase_summary import (
     format_public_phase_pack_excerpt,
     render_market_phase_summary,
 )
+from src.data.stock_index_loader import get_stock_name_index_map
+from src.services.alert_messages import format_generic_alert_markdown, quote_source_from_result
 from src.services.alert_service import AlertService
 from src.services.decision_signal_service import DecisionSignalService
 from src.services.decision_signal_summary import (
@@ -38,6 +45,7 @@ from src.services.decision_signal_summary import (
     summarize_decision_signal,
 )
 from src.services.history_service import HistoryService
+from src.services.market_light_alerts import MarketLightAlert
 from src.services.market_light_service import normalize_market_alert_region
 
 logger = logging.getLogger(__name__)
@@ -49,6 +57,61 @@ ALERT_WORKER_FINGERPRINT_TTL_SECONDS = 24 * 60 * 60
 DEFAULT_DB_ALERT_COOLDOWN_SECONDS = 24 * 60 * 60
 ALERT_WORKER_RULE_LIMIT = 1000
 WRITABLE_TRIGGER_STATUSES = frozenset({"triggered", "skipped", "degraded", "failed"})
+ALERT_MONITOR_TASK_NAME = "agent_event_monitor"
+
+
+class AlertMonitorRunState:
+    """程序內最近一輪監控的紀錄；排程器與獨立執行緒兩條路徑共用，給狀態端點讀。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._values: Dict[str, Any] = {}
+        self.reset()
+
+    def reset(self) -> None:
+        with self._lock:
+            self._values = {
+                "last_run_at": None,
+                "last_finished_at": None,
+                "last_error": None,
+                "last_stats": None,
+            }
+
+    def record_start(self, now: datetime) -> None:
+        with self._lock:
+            self._values["last_run_at"] = now.isoformat()
+
+    def record_finish(self, now: datetime, *, stats: Optional[Dict[str, int]], error: Optional[str]) -> None:
+        with self._lock:
+            self._values["last_finished_at"] = now.isoformat()
+            self._values["last_error"] = error
+            if stats is not None:
+                self._values["last_stats"] = dict(stats)
+
+    def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            return dict(self._values)
+
+
+ALERT_MONITOR_RUN_STATE = AlertMonitorRunState()
+
+
+def run_recorded_cycle(worker: Any) -> Dict[str, int]:
+    """跑一輪並記下時間與結果，狀態端點才答得出「上次執行」；例外照常往上丟。"""
+    ALERT_MONITOR_RUN_STATE.record_start(datetime.now())
+    try:
+        stats = worker.run_once()
+    except Exception as exc:
+        ALERT_MONITOR_RUN_STATE.record_finish(datetime.now(), stats=None, error=type(exc).__name__)
+        raise
+    ALERT_MONITOR_RUN_STATE.record_finish(datetime.now(), stats=stats, error=None)
+    return stats
+
+
+def _reload_monitor_config() -> Any:
+    from main import _reload_runtime_config
+
+    return _reload_runtime_config()
 
 
 @dataclass
@@ -88,6 +151,7 @@ class AlertWorker:
         notifier: Optional[Any] = None,
         now_provider: Optional[Callable[[], float]] = None,
         fingerprint_ttl_seconds: int = ALERT_WORKER_FINGERPRINT_TTL_SECONDS,
+        realtime_session_gate: bool = False,
     ) -> None:
         self.config_provider = config_provider or self._default_config_provider
         self.service = service or AlertService()
@@ -98,12 +162,27 @@ class AlertWorker:
         self._trigger_fingerprints: Dict[str, float] = {}
         self._trigger_fingerprint_ttls: Dict[str, int] = {}
         self._analysis_visibility_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+        # 獨立監控執行緒全天輪詢：收盤後的「即時價」其實是收盤價，週末也會照樣觸發並推播。
+        self.realtime_session_gate = realtime_session_gate
 
     @staticmethod
     def _default_config_provider():
         from src.config import get_config
 
         return get_config()
+
+    def _is_outside_quote_session(self, rule: Any, open_cache: Dict[Any, bool], now: datetime) -> bool:
+        """即時價規則的市場不在開盤時段時回 True；判定沿用 is_market_polling_window（行事曆失效時視為開盤）。"""
+        if isinstance(rule, MarketLightAlert):
+            # 非交易日每輪都會寫一筆 skipped，全天輪詢下一條規則一天近 300 筆，淹掉動態時間流
+            metadata = rule.metadata
+            return bool(metadata.get("trading_day_check_enabled")) and not metadata.get("market_is_open", True)
+        if not isinstance(rule, (PriceAlert, PriceChangeAlert)):
+            return False
+        market = get_market_for_stock(normalize_stock_code(rule.stock_code))
+        if market not in open_cache:
+            open_cache[market] = is_market_polling_window(market, current_time=now)
+        return not open_cache[market]
 
     def run_once(self) -> Dict[str, int]:
         """Run one alert worker cycle.
@@ -144,7 +223,14 @@ class AlertWorker:
         monitor = EventMonitor()
         daily_cache: Dict[Any, Any] = {}
         self._analysis_visibility_cache = {}
+        session_open_cache: Dict[Any, bool] = {}
+        cycle_now = self._now_datetime().astimezone()
         for runtime_rule in runtime_rules:
+            if self.realtime_session_gate and self._is_outside_quote_session(
+                runtime_rule.rule, session_open_cache, cycle_now,
+            ):
+                stats["off_session"] = stats.get("off_session", 0) + 1
+                continue
             stats["evaluated"] += 1
             try:
                 result = asyncio.run(self.service._evaluate_rule(runtime_rule.rule, monitor, daily_cache=daily_cache))
@@ -658,10 +744,11 @@ class AlertWorker:
         return f"db_cooldown:{rule_key}"
 
     def _send_notification(self, runtime_rule: RuntimeAlertRule, result: Dict[str, Any]) -> "NotificationDispatchResult":
-        from src.notification import NotificationBuilder, NotificationService
+        from src.notification import NotificationService
 
         notification_service = self.notifier or NotificationService()
         policy = runtime_rule.notification_policy if isinstance(runtime_rule.notification_policy, dict) else {}
+        quote_source = quote_source_from_result(result)
         if isinstance(policy.get("tw_level"), dict):
             # 台股 SMC 價位警報自帶 Markdown 版型（docs/tw-level-alerts.md）；其他規則維持通用格式。
             # 規則裡存的 meta 欄位不合法時退回通用格式，不讓一筆壞資料吞掉整則通知。
@@ -669,26 +756,32 @@ class AlertWorker:
 
             if valid_level_meta(policy["tw_level"]):
                 return notification_service.send_with_results(
-                    build_level_alert_message(policy["tw_level"], result), route_type="alert")
+                    build_level_alert_message(policy["tw_level"], result, quote_source=quote_source),
+                    route_type="alert",
+                )
             logger.warning("[AlertWorker] invalid tw_level meta for %s, using generic message",
                            self._display_target(runtime_rule))
-        title = f"Event Alert | {self._display_target(runtime_rule)}"
-        content = result.get("reason") or result.get("message") or runtime_rule.rule.description or "Alert triggered"
         diagnostics = self._diagnostics_payload(result.get("diagnostics"))
         visibility = diagnostics.get("analysis_visibility") if isinstance(diagnostics.get("analysis_visibility"), dict) else None
         if visibility is None:
             visibility = self._build_analysis_visibility(runtime_rule, result)
-        excerpt = format_public_phase_pack_excerpt(
-            visibility.get("market_phase_summary"),
-            visibility.get("analysis_context_pack_overview"),
-            source=visibility.get("source"),
+        excerpts = [
+            format_public_phase_pack_excerpt(
+                visibility.get("market_phase_summary"),
+                visibility.get("analysis_context_pack_overview"),
+                source=visibility.get("source"),
+            ),
+            format_decision_signal_excerpt(diagnostics.get("decision_signal_summary")),
+        ]
+        display_target = self._display_target(runtime_rule)
+        stock_name = get_stock_name_index_map().get(self._effective_target(runtime_rule))
+        alert_text = format_generic_alert_markdown(
+            target=f"{stock_name} {display_target}" if stock_name else display_target,
+            rule=runtime_rule.rule,
+            result=result,
+            quote_source=quote_source,
+            excerpts=excerpts,
         )
-        if excerpt:
-            content = f"{content}\n\n{excerpt}"
-        signal_excerpt = format_decision_signal_excerpt(diagnostics.get("decision_signal_summary"))
-        if signal_excerpt:
-            content = f"{content}\n\n{signal_excerpt}"
-        alert_text = NotificationBuilder.build_simple_alert(title=title, content=content, alert_type="warning")
 
         return notification_service.send_with_results(alert_text, route_type="alert")
 
@@ -928,3 +1021,121 @@ class AlertWorker:
 
     def _now_datetime(self) -> datetime:
         return datetime.fromtimestamp(self.now_provider())
+
+
+def _alert_monitor_interval_seconds(config: Any) -> int:
+    from src.services.runtime_scheduler import _agent_event_monitor_interval_seconds
+
+    return _agent_event_monitor_interval_seconds(config)
+
+
+class AlertMonitorThread:
+    """API 程序內只跑警報監控的執行緒，不碰每日分析排程。"""
+
+    def __init__(self, *, config_provider: Callable[[], Any], worker: Optional[AlertWorker] = None) -> None:
+        self.config_provider = config_provider
+        self._worker = worker
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name="alert-monitor", daemon=True)
+        self._next_run_at: Optional[str] = None
+
+    def start(self) -> "AlertMonitorThread":
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def is_active(self) -> bool:
+        return self._thread.is_alive() and not self._stop.is_set()
+
+    @property
+    def next_run_at(self) -> Optional[str]:
+        return self._next_run_at
+
+    def _run_cycle(self) -> None:
+        if self._worker is None:
+            self._worker = AlertWorker(config_provider=self.config_provider, realtime_session_gate=True)
+        stats = run_recorded_cycle(self._worker)
+        if stats.get("triggered"):
+            logger.info("[AlertMonitor] triggered %d alert(s)", stats["triggered"])
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._run_cycle()
+            except Exception as exc:  # 單輪失敗（例如資料庫暫時連不上）不能讓監控停掉
+                logger.warning("[AlertMonitor] cycle failed: %s", type(exc).__name__)
+            try:
+                interval = _alert_monitor_interval_seconds(self.config_provider())
+            except Exception as exc:
+                logger.warning("[AlertMonitor] config reload failed: %s", type(exc).__name__)
+                interval = 300
+            self._next_run_at = (datetime.now() + timedelta(seconds=interval)).isoformat()
+            self._stop.wait(interval)
+
+
+def start_alert_monitor_worker(config: Any):
+    """兩個開關都開才啟動監控執行緒並回傳 handle；否則回 None。
+
+    不掛在 SCHEDULE_ENABLED 底下：NAS 開排程會在 18:00 重跑每日分析，與 Mac 重複。
+    """
+    if not getattr(config, "agent_event_monitor_without_schedule", False):
+        return None
+    if not getattr(config, "agent_event_monitor_enabled", False):
+        logger.warning(
+            "AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE=true 但 AGENT_EVENT_MONITOR_ENABLED 未開啟，不啟動警報監控",
+        )
+        return None
+    return AlertMonitorThread(config_provider=_reload_monitor_config).start()
+
+
+def alert_monitor_channels(config: Any) -> List[str]:
+    """警報路由實際會送到的渠道（只讀設定，與 NotificationService.get_channels_for_route 同規則）。"""
+    from src.notification import NotificationService
+    from src.notification_routing import parse_notification_route_channels
+
+    configured = [channel.value for channel in NotificationService.detect_configured_channels(config)]
+    routed = parse_notification_route_channels(getattr(config, "notification_alert_channels", None))
+    if not routed:
+        return configured
+    return [channel for channel in configured if channel in routed]
+
+
+def build_alert_monitor_status(
+    config: Any,
+    *,
+    runtime_scheduler: Any = None,
+    monitor_thread: Optional[AlertMonitorThread] = None,
+) -> Dict[str, Any]:
+    """回報監控實際狀態：看執行緒與排程器是否真的在跑，不是只讀開關。"""
+    enabled = bool(getattr(config, "agent_event_monitor_enabled", False))
+    without_schedule = bool(getattr(config, "agent_event_monitor_without_schedule", False))
+    thread_active = monitor_thread is not None and monitor_thread.is_active()
+    checker = getattr(runtime_scheduler, "is_background_task_active", None)
+    scheduler_active = bool(checker(ALERT_MONITOR_TASK_NAME)) if callable(checker) else False
+
+    running = enabled and (thread_active if without_schedule else scheduler_active)
+    if running:
+        mode, reason = ("monitor_only" if without_schedule else "scheduler"), None
+    else:
+        mode = "off"
+        if not enabled:
+            reason = "monitor_disabled"
+        elif without_schedule:
+            reason = "monitor_thread_not_running"
+        else:
+            reason = "schedule_not_running"
+
+    next_run_at = monitor_thread.next_run_at if (running and without_schedule) else None
+    return {
+        "enabled": enabled,
+        "without_schedule": without_schedule,
+        "running": running,
+        "mode": mode,
+        "reason": reason,
+        "interval_seconds": _alert_monitor_interval_seconds(config),
+        "next_run_at": next_run_at,
+        "channels": alert_monitor_channels(config),
+        **ALERT_MONITOR_RUN_STATE.snapshot(),
+    }

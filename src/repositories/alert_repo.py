@@ -7,7 +7,7 @@ Provides DB access helpers for alert-center P1 API tables.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import and_, delete, desc, func, select
 
@@ -63,6 +63,33 @@ class AlertRepository:
             return session.execute(
                 select(AlertRuleRecord).where(AlertRuleRecord.id == rule_id).limit(1)
             ).scalar_one_or_none()
+
+    def get_rules_by_ids(self, rule_ids: Iterable[int]) -> Dict[int, AlertRuleRecord]:
+        ids = list(rule_ids)
+        if not ids:
+            return {}
+        with self.db.get_session() as session:
+            rows = session.execute(select(AlertRuleRecord).where(AlertRuleRecord.id.in_(ids))).scalars().all()
+            return {row.id: row for row in rows}
+
+    def count_triggers_by_status(self, *, rule_id: Optional[int] = None, target: Optional[str] = None) -> Dict[str, int]:
+        conditions = []
+        if rule_id is not None:
+            conditions.append(AlertTriggerRecord.rule_id == rule_id)
+        if target:
+            conditions.append(AlertTriggerRecord.target == target)
+        where_clause = and_(*conditions) if conditions else True
+        counts = {"triggered": 0, "skipped": 0, "degraded": 0, "failed": 0}
+        with self.db.get_session() as session:
+            rows = session.execute(
+                select(AlertTriggerRecord.status, func.count(AlertTriggerRecord.id))
+                .where(where_clause)
+                .group_by(AlertTriggerRecord.status)
+            ).all()
+        for status, count in rows:
+            if status in counts:
+                counts[status] = int(count)
+        return counts
 
     def update_rule(self, rule_id: int, fields: Dict[str, Any]) -> Optional[AlertRuleRecord]:
         with self.db.get_session() as session:

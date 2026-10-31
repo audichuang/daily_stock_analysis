@@ -991,9 +991,10 @@ def test_data_capability_api_paths_return_valid_contract() -> None:
     }
 
     class _Service:
-        def __init__(self, *, config, runtime_scheduler=None) -> None:
+        def __init__(self, *, config, runtime_scheduler=None, alert_monitor_thread=None) -> None:
             self.config = config
             self.runtime_scheduler = runtime_scheduler
+            self.alert_monitor_thread = alert_monitor_thread
 
         def get_overview(self):
             return overview_payload

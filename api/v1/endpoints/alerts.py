@@ -6,10 +6,11 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from api.v1.schemas.alerts import (
     AlertDeleteResponse,
+    AlertMonitorStatusResponse,
     AlertNotificationListResponse,
     AlertRuleCreateRequest,
     AlertRuleItem,
@@ -20,7 +21,7 @@ from api.v1.schemas.alerts import (
 )
 from api.v1.schemas.common import ErrorResponse
 from src.config import get_config
-from src.services.alert_worker import AlertWorker
+from src.services.alert_worker import AlertWorker, build_alert_monitor_status
 from src.services.alert_service import (
     AlertNotFoundError,
     AlertService,
@@ -53,6 +54,26 @@ def _internal_error(message: str, exc: Exception) -> HTTPException:
         status_code=500,
         detail={"error": "internal_error", "message": f"{message}: {str(exc)}"},
     )
+
+
+@router.get(
+    "/monitor/status",
+    response_model=AlertMonitorStatusResponse,
+    responses={500: {"model": ErrorResponse}},
+    summary="Get alert monitor runtime status",
+)
+def get_monitor_status(request: Request) -> AlertMonitorStatusResponse:
+    try:
+        return AlertMonitorStatusResponse(
+            enabled_rules=AlertService().count_enabled_rules(),
+            **build_alert_monitor_status(
+                get_config(),
+                runtime_scheduler=getattr(request.app.state, "runtime_scheduler_service", None),
+                monitor_thread=getattr(request.app.state, "alert_monitor_thread", None),
+            ),
+        )
+    except Exception as exc:
+        raise _internal_error("Get alert monitor status failed", exc)
 
 
 @router.post(

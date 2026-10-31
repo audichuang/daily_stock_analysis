@@ -56,6 +56,7 @@ from src.services.market_light_alerts import (
     make_market_light_payload,
     normalize_market_alert_parameters,
 )
+from src.data.stock_index_loader import get_stock_name_index_map
 from src.services.market_light_service import normalize_market_alert_region
 from src.services.decision_signal_summary import summarize_decision_signal
 from src.analysis_context_pack_overview import (
@@ -358,6 +359,15 @@ class AlertService:
         }
         return response
 
+    @staticmethod
+    def _with_quote_source(result: Dict[str, Any], quote: Any) -> Dict[str, Any]:
+        """把實際報價來源放進 diagnostics；data_source 維持 realtime_quote，舊客戶端不受影響。"""
+        raw = getattr(quote, "source", None)
+        source = str(getattr(raw, "value", raw) or "").strip()
+        if source:
+            result["diagnostics"] = {"quote_source": source}
+        return result
+
     async def _evaluate_price(self, rule: PriceAlert, monitor: EventMonitor) -> Dict[str, Any]:
         threshold = float(rule.price)
         try:
@@ -405,14 +415,14 @@ class AlertService:
             or (rule.direction == "below" and current_price <= rule.price)
         )
         if triggered:
-            return self._triggered(
+            return self._with_quote_source(self._triggered(
                 rule,
                 current_price,
                 f"{rule.stock_code} price {rule.direction} {rule.price}: current = {current_price}",
                 threshold=threshold,
                 data_source="realtime_quote",
                 data_timestamp=self._extract_quote_datetime(quote),
-            )
+            ), quote)
         return self._not_triggered(
             rule,
             current_price,
@@ -467,14 +477,14 @@ class AlertService:
             or (direction == "down" and current_change_pct <= -threshold)
         )
         if triggered:
-            return self._triggered(
+            return self._with_quote_source(self._triggered(
                 rule,
                 current_change_pct,
                 f"{rule.stock_code} change {direction} {threshold:.2f}%: current = {current_change_pct:+.2f}%",
                 threshold=threshold,
                 data_source="realtime_quote",
                 data_timestamp=self._extract_quote_datetime(quote),
-            )
+            ), quote)
         return self._not_triggered(
             rule,
             current_change_pct,
@@ -887,12 +897,22 @@ class AlertService:
             page=page,
             page_size=page_size,
         )
+        rule_ids = {row.rule_id for row in rows if row.rule_id is not None}
+        rules_by_id = self.repo.get_rules_by_ids(rule_ids)
         return {
-            "items": [self._serialize_trigger(row) for row in rows],
+            "items": [
+                self._serialize_trigger(row, rule=rules_by_id.get(row.rule_id))
+                for row in rows
+            ],
             "total": total,
             "page": page,
             "page_size": page_size,
+            "summary": self.repo.count_triggers_by_status(rule_id=rule_id, target=target),
         }
+
+    def count_enabled_rules(self) -> int:
+        _, total = self.repo.list_rules(enabled=True, page=1, page_size=1)
+        return int(total)
 
     def list_notifications(
         self,
@@ -1295,8 +1315,10 @@ class AlertService:
             "cooldown_active": cooldown_active,
         }
 
-    def _serialize_trigger(self, row: AlertTriggerRecord) -> Dict[str, Any]:
+    def _serialize_trigger(self, row: AlertTriggerRecord, rule: Optional[AlertRuleRecord] = None) -> Dict[str, Any]:
         visibility = self._parse_analysis_visibility(row.diagnostics)
+        parameters = self._load_json(rule.parameters, default={}) if rule is not None else {}
+        direction = parameters.get("direction") if isinstance(parameters, dict) else None
         return {
             "id": row.id,
             "rule_id": row.rule_id,
@@ -1313,7 +1335,21 @@ class AlertService:
             "analysis_context_pack_overview": visibility.get("analysis_context_pack_overview"),
             "analysis_visibility_source": visibility.get("analysis_visibility_source"),
             "decision_signal_summary": visibility.get("decision_signal_summary"),
+            "rule_name": rule.name if rule is not None else None,
+            "stock_name": get_stock_name_index_map().get(row.target) or None,
+            "direction": str(direction) if direction else None,
+            "severity": rule.severity if rule is not None else None,
+            "quote_source": self._quote_source_from_diagnostics(row.diagnostics),
         }
+
+    @staticmethod
+    def _quote_source_from_diagnostics(diagnostics: Optional[str]) -> Optional[str]:
+        try:
+            parsed = json.loads(diagnostics) if diagnostics else None
+        except (TypeError, ValueError):
+            return None
+        source = parsed.get("quote_source") if isinstance(parsed, dict) else None
+        return str(source) if source else None
 
     @staticmethod
     def _parse_analysis_visibility(diagnostics: Optional[str]) -> Dict[str, Any]:
