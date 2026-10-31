@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] iOS 個股圖表可左右捲動、雙指縮放（區間按鈕改為預設視窗），主圖可切 MA／EMA／布林，成交量下新增 MACD／KD／RSI 副圖，並自動標出區間高低、52 週高低、未補缺口、均線交叉、爆量與最新價；指標與標記皆為 DSACore 純函式，「看懂 K 線」補上對應說明。
 - [修復] 個股 profile 的日 K 來源缺當天（例：yfinance 在 INTC 2026-10-30 回 OHLC 全空）時，改用即時報價補一根 `provisional: true` 的暫定 K，交易日依市場當地時間判定；iOS 以半透明實體與「暫定・即時報價」標示，週／月 K 改以區間中點定位與選取。
 - [新功能] iOS 個股圖表加入 1Y／3Y／5Y 區間、日／週／月 K 切換、三條可個別隱藏的均線與「看懂 K 線」說明；`/api/v1/stocks/{code}/profile` 的 `history_days` 上限由 365 放寬到 1825（預設不變，Web 不受影響）。
 - [改進] iOS 支援 Cloudflare Tunnel 公網入口；只將既有舊預設網址一次性移轉到新預設，保留自訂網址與私有入口，登入 Cookie 不跨域搬移。
