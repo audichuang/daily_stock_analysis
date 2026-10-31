@@ -290,18 +290,6 @@ require_stock_success() {
   (( ok > 0 ))
 }
 
-# 行事曆快取（scripts/refresh_calendar.py）：非致命，寫進與 NAS 共用的應用庫；NAS 沒開排程，靠這裡更新。
-calendar_refresh() {
-  local rc=0
-  run_with_timeout "${CALENDAR_REFRESH_TIMEOUT_SECONDS:-600}" \
-    uv run --env-file .env python scripts/refresh_calendar.py >>"$LOG" 2>&1 || rc=$?
-  if (( rc != 0 )); then
-    log "WARN: 行事曆更新失敗（rc=${rc}），不影響每日報告"
-    notify_failure "行事曆更新失敗（rc=${rc}），每日報告照常。log: $LOG" "行事曆更新失敗" || true
-  fi
-  return 0
-}
-
 # 盤前判讀回驗（scripts/verify_morning_calls.py）：非致命，失敗只記 WARN 並推一則通知，不擋每日報告。
 # 只 commit outcomes 檔（預測檔 morning-calls.jsonl 由 07:30 排程另外 commit，兩者分開才有防竄改保證）；
 # push 走 media_picks_job.sh --push-journal 的守門：只在 develop、領先的 commit 全是 journal/ 才推。
@@ -378,7 +366,6 @@ main() {
   run_step "台股資料健檢 (health --strict)" uv run --env-file .env python -m market_data.cli health --strict
   log "==> 盤前判讀回驗 (verify_morning_calls --append)"
   morning_call_outcomes
-  calendar_refresh
   run_step "LLM 連線預檢" llm_preflight
   # 外層疊 Doppler `finmind` 專案：注入 FINMIND_TOKEN_*，台股個股新聞先查 FinMind。
   run_step "自選股分析 + 大盤復盤" doppler run -p finmind -c dev -- "${DOPPLER_RUN[@]}" bash -c 'uv run python scripts/notify.py --check --topic report && TELEGRAM_MESSAGE_THREAD_ID="$TELEGRAM_TOPIC_REPORT" uv run python main.py'

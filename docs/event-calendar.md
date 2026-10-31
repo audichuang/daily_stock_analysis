@@ -33,7 +33,7 @@ Web 入口 `/calendar`；iOS「工具 → 事件行事曆」為原生月曆、�
 
 新表 `calendar_events` 在應用庫（`STORAGE_DATABASE_URL`，未設則 SQLite）保存事件與無日期狀態。`DatabaseManager._ensure_calendar_event_schema` 是可重入追加 migration，建立表並記 `schema_migrations.version=2026-11-01-calendar-events`；不動既有 API 欄位與 `market` 庫。更新財報用公司固定 id 覆寫，改期不留下另一個未來事件；總經按成功取得的類型原子替換。
 
-`CALENDAR_REFRESH_ENABLED=false` 預設停用外部刷新。排程路徑：Mac 每日報告（`scripts/daily_report.sh`）每天跑一次 `scripts/refresh_calendar.py`，寫進與 NAS 共用的應用庫，NAS 不必開排程。開啟且 `SCHEDULE_ENABLED=true`，既有 API runtime 或 `main.py --schedule` 的背景工作每 6 小時更新，啟動時跑一次；不新增部署或排程 infra。只開行事曆／分析不發外部請求。也可手動 `uv run --frozen python scripts/refresh_calendar.py`（會寫設定中的應用庫；正式操作前先確認目標）。本次開發未對正式庫執行。
+`CALENDAR_REFRESH_ENABLED=false` 預設停用外部刷新。開啟後 API 服務（`api/app.py` lifespan）以背景執行緒啟動時跑一次、之後每 6 小時更新，不依賴 `SCHEDULE_ENABLED`：NAS 不開每日排程，而自選名單存在執行機自己的設定檔，Mac 代跑讀不到手機新增的自選。只開行事曆／分析不發外部請求。也可手動 `uv run --frozen python scripts/refresh_calendar.py`（會寫設定中的應用庫；正式操作前先確認目標）。本次開發未對正式庫執行。
 
 隔離 smoke 範例（需在隔離 env 內提供 `STOCK_LIST`，不可複製正式秘密）：
 

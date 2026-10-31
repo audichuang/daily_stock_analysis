@@ -126,13 +126,17 @@ struct EventCalendarView: View {
 
     private func load() async {
         guard let client = store.client else { return }
+        let requested = month
         loading = true
-        defer { loading = false }
+        defer { if requested == month { loading = false } }
         do {
-            response = try await client.calendarEvents(from: EventCalendarDate.key(month), to: EventCalendarDate.key(EventCalendarDate.monthEnd(month)))
+            let loaded = try await client.calendarEvents(from: EventCalendarDate.key(requested), to: EventCalendarDate.key(EventCalendarDate.monthEnd(requested)))
+            // 下拉刷新不受 .task(id:) 取消；期間換了月份就丟棄這份舊回應。
+            guard requested == month else { return }
+            response = loaded
             error = nil
         } catch is CancellationError { }
         catch let error as URLError where error.code == .cancelled { }
-        catch { self.error = error.localizedDescription }
+        catch { if requested == month { self.error = error.localizedDescription } }
     }
 }

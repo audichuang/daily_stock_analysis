@@ -1,4 +1,5 @@
 """行事曆來源、隔離快取、API 與分析證據的定向測試。"""
+import threading
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -363,14 +364,25 @@ def test_api_boundaries_and_date_serialization(repo, clock):
     assert client.get('/api/v1/calendar/events', params=params).status_code == 422
 
 
-def test_scheduler_defaults_and_both_paths(monkeypatch):
-    assert service.build_calendar_background_tasks(SimpleNamespace()) == []
-    jobs = service.build_calendar_background_tasks(SimpleNamespace(calendar_refresh_enabled=True))
-    assert jobs[0]['interval_seconds'] == 21600 and jobs[0]['name'] == 'calendar_refresh'
-    from src.services.runtime_scheduler import RuntimeSchedulerService
-    scheduler = RuntimeSchedulerService()
-    monkeypatch.setattr(scheduler, '_current_agent_event_monitor_background_tasks', lambda c: [])
-    assert len(scheduler._current_background_tasks(SimpleNamespace(calendar_refresh_enabled=True))) == 1
+def test_refresh_worker_is_opt_in_and_independent_of_schedule(monkeypatch):
+    assert service.start_calendar_refresh_worker(SimpleNamespace()) is None
+    called = threading.Event()
+    monkeypatch.setattr(service, 'CalendarService', lambda: SimpleNamespace(refresh=called.set))
+    stop = service.start_calendar_refresh_worker(SimpleNamespace(calendar_refresh_enabled=True, schedule_enabled=False))
+    try:
+        assert called.wait(5)
+    finally:
+        stop.set()
+
+
+def test_nasdaq_down_and_yahoo_empty_keeps_cache(repo, clock, monkeypatch):
+    repo.save_earnings(row(clock))
+    monkeypatch.setattr(sources, 'nasdaq_json', Mock(side_effect=RuntimeError('503')))
+    monkeypatch.setattr(sources, 'yahoo_earnings', lambda c, d: None)
+    svc = service.CalendarService(repo, members_provider=lambda: {'AAPL': 'Apple'})
+    monkeypatch.setattr(svc, '_refresh_macro', lambda now: None)
+    assert svc.refresh(now=clock)['failed'] == 1
+    assert repo.read(['AAPL'], clock.date(), date.max)[0]['date'] is not None
 
 
 def test_analysis_cache_failure_does_not_block_and_all_languages(monkeypatch):

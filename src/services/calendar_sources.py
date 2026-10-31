@@ -126,7 +126,11 @@ def fetch_earnings(code, today):
         nasdaq_failed = True
         logger.warning("Nasdaq 財報來源失敗 %s: %s", code, type(exc).__name__)
     try:
-        return yahoo_earnings(code, today)
+        fallback = yahoo_earnings(code, today)
+        # Nasdaq 故障時 Yahoo 回空，無法區分「沒有日期」與「財報請求部分失敗」：不可清掉快取。
+        if fallback is None and nasdaq_failed:
+            raise ValueError("Nasdaq 故障且 Yahoo 沒有日期")
+        return fallback
     except Exception:
         if nasdaq_failed:
             raise

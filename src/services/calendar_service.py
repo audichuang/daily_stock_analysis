@@ -1,5 +1,6 @@
 """持股＋自選行事曆：開頁／分析唯讀，排程才向外部刷新。"""
 import logging
+import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -27,6 +28,7 @@ CACHE_MAX_AGE = timedelta(days=3)
 TAIPEI = ZoneInfo("Asia/Taipei")
 CONFERENCE_TYPE = "investor_conference"
 CONFERENCE_MONTHS = 3
+CALENDAR_REFRESH_INTERVAL_SECONDS = 6 * 60 * 60
 # MOPS 連續請求會回安全頁面（此時解析會拋錯）；間隔放慢一點。
 CONFERENCE_REQUEST_GAP_SECONDS = 1
 
@@ -246,18 +248,25 @@ class CalendarService:
             logger.warning("總經快取更新失敗: %s", type(exc).__name__)
 
 
-def build_calendar_background_tasks(config):
+def start_calendar_refresh_worker(config):
+    """API 程序內的刷新執行緒，回傳停止用的 Event；未開啟回 None。
+
+    不掛在 SCHEDULE_ENABLED 底下：NAS 不開每日排程（會重跑分析），而自選名單只有 NAS 自己讀得到。
+    """
     if not getattr(config, "calendar_refresh_enabled", False):
-        return []
+        return None
+    stop = threading.Event()
 
-    def refresh():
-        try:
-            logger.info("行事曆快取更新: %s", CalendarService().refresh())
-        except Exception as exc:
-            logger.warning("行事曆更新失敗: %s", type(exc).__name__)
+    def loop():
+        while not stop.is_set():
+            try:
+                logger.info("行事曆快取更新: %s", CalendarService().refresh())
+            except Exception as exc:
+                logger.warning("行事曆更新失敗: %s", type(exc).__name__)
+            stop.wait(CALENDAR_REFRESH_INTERVAL_SECONDS)
 
-    return [{"name": "calendar_refresh", "task": refresh, "interval_seconds": 6 * 60 * 60,
-             "run_immediately": True}]
+    threading.Thread(target=loop, name="calendar-refresh", daemon=True).start()
+    return stop
 
 
 def earnings_evidence(code, now=None):
