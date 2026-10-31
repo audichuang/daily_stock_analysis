@@ -19,6 +19,7 @@ AS_OF = "2024-01-31T13:30:00+08:00"
 FIXTURE_PASSWORD = "fixture-password"
 FIXTURE_COOKIE = "fixture-session-only"
 QUOTE_DELAY = 0.0
+DAILY_TREND_DELAY = 0.0
 STOCKS = {
     "2330.TW": ("台積電（測試）", 600.0, 1.69, "tw"),
     "2317.TW": ("鴻海（測試）", 100.0, -0.99, "tw"),
@@ -73,6 +74,25 @@ def bars(code):
         # 模擬日 K 來源缺當天、由報價補上的暫定 K（後端 `_with_provisional_bar`）。
         result[-1]["provisional"] = True
     return result
+
+
+def intraday_source(code):
+    return "fixture（合成分時）"
+
+
+def intraday(code):
+    """合成分時：台股 09:00～13:30（+08:00）、美股 09:30～16:00（-05:00），每 5 分鐘一點，收在報價現價。"""
+    price, market = STOCKS[code][1], STOCKS[code][3]
+    tz, start, minutes = ("+08:00", 9 * 60, 270) if market == "tw" else ("-05:00", 9 * 60 + 30, 390)
+    day = "2024-01-31" if market == "tw" else "2024-01-30"
+    count = minutes // 5 + 1
+    points = []
+    for index in range(count):
+        minute = start + index * 5
+        wave = math.sin(index / 9) * price * 0.006 + (index - count) * price * 0.00005
+        points.append({"t": f"{day}T{minute // 60:02d}:{minute % 60:02d}:00{tz}",
+                       "price": round(price + wave if index < count - 1 else price, 2)})
+    return points
 
 
 def artifact(code, record_id=101):
@@ -206,6 +226,16 @@ class Handler(BaseHTTPRequestHandler):
                 data = [("TWII", "加權指數（測試）", 18000, 100, 0.56), ("TPEX", "櫃買指數（測試）", 230, -1, -0.43)] if region == "tw" else [
                     ("SPX", "S&P 500（測試）", 4800, 20, 0.42), ("IXIC", "NASDAQ（測試）", 15000, -50, -0.33)]
                 return self.reply(200, {"region": region, "items": [dict(zip(["code", "name", "current", "change", "change_pct"], row), source="fixture（合成資料）", as_of=AS_OF) for row in data]})
+            if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "trend":
+                code = route[3]
+                if code not in STOCKS:
+                    return self.reply(200, {"stock_code": code, "range": "day", "source": None, "points": []})
+                if query.get("range", ["month"])[0] == "month":
+                    time.sleep(DAILY_TREND_DELAY)
+                    daily = [{"t": bar["date"], "price": bar["close"]} for bar in bars(code)[-30:]]
+                    return self.reply(200, {"stock_code": code, "range": "month", "source": "fixture（合成日線）", "points": daily})
+                return self.reply(200, {"stock_code": code, "range": "day", "source": intraday_source(code),
+                                        "points": intraday(code)})
             if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "profile":
                 code = route[3]
                 if code not in STOCKS:
@@ -366,10 +396,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=0, help="0 由作業系統分配可用 port")
     parser.add_argument("--quote-delay", type=float, default=0, help="報價端點延遲秒數，重現慢報價")
+    parser.add_argument("--daily-trend-delay", type=float, default=0,
+                        help="/trend?range=month 延遲秒數，驗證分時不被日線拖住")
     parser.add_argument("--ready-file", type=Path, help="寫出 URL、port 與 PID，供驗收腳本傳入 UITest")
     args = parser.parse_args()
-    global QUOTE_DELAY
+    global QUOTE_DELAY, DAILY_TREND_DELAY
     QUOTE_DELAY = args.quote_delay
+    DAILY_TREND_DELAY = args.daily_trend_delay
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     port = server.server_address[1]
     import os

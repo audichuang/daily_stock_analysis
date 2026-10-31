@@ -20,6 +20,7 @@
 		545FFD1B5F0CAD3C0FA1955A /* ToolWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC3E68F2FDA242DCAA280AE4 /* ToolWebView.swift */; };
 		55CB349AF78DEA22867570F5 /* DSAMarketUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C4D20BE4334F45E129A00E4 /* DSAMarketUITests.swift */; };
 		573C48E1399E2809BFED2E40 /* MarketChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CC7B9A49220885578C8A580 /* MarketChart.swift */; };
+		6FB91CA6810A5A28A88F2EBE /* IntradayChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAECFB4E29DF95942691D916 /* IntradayChart.swift */; };
 		854E9008679E193DEE730F6C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8F241A34DEBEED7B543B2CA0 /* Assets.xcassets */; };
 		8CB6976D65A1E878486BFF35 /* KLineGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A33ADED79F42BE8BD3CCD8F /* KLineGuideView.swift */; };
 		9662B37EB5E21BDCA57983E5 /* BrandMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EC4C5B3D1B3BAE2B371AEA5 /* BrandMark.swift */; };
@@ -75,6 +76,7 @@
 		8F241A34DEBEED7B543B2CA0 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B3A12209C085640B76671514 /* ResearchReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResearchReportView.swift; sourceTree = "<group>"; };
 		B87C2EC4C05E0C55BED4614A /* MarketDataPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketDataPresentation.swift; sourceTree = "<group>"; };
+		BAECFB4E29DF95942691D916 /* IntradayChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntradayChart.swift; sourceTree = "<group>"; };
 		BE77BD8988C593A4B2890BDD /* SessionStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStateTests.swift; sourceTree = "<group>"; };
 		CEE47EB2373AB886EB218538 /* PortfolioPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioPresentationTests.swift; sourceTree = "<group>"; };
 		CF1DB8DFF481B78126C3E72E /* ToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolsView.swift; sourceTree = "<group>"; };
@@ -136,6 +138,7 @@
 			isa = PBXGroup;
 			children = (
 				4A6621197BBA76CEAA9D3C2D /* ConnectionView.swift */,
+				BAECFB4E29DF95942691D916 /* IntradayChart.swift */,
 				5A33ADED79F42BE8BD3CCD8F /* KLineGuideView.swift */,
 				0CC7B9A49220885578C8A580 /* MarketChart.swift */,
 				38B140A8C9397DC14F900292 /* MarketHomeView.swift */,
@@ -326,6 +329,7 @@
 				AD0B65CAA365C3E0E788C757 /* ConnectionView.swift in Sources */,
 				985D2B579ACA3D469A76A882 /* DSAMarketApp.swift in Sources */,
 				2503549958E32E6AFE0311E4 /* DesignSystem.swift in Sources */,
+				6FB91CA6810A5A28A88F2EBE /* IntradayChart.swift in Sources */,
 				8CB6976D65A1E878486BFF35 /* KLineGuideView.swift in Sources */,
 				573C48E1399E2809BFED2E40 /* MarketChart.swift in Sources */,
 				C4838C0697BFFEE4A4700837 /* MarketDataPresentation.swift in Sources */,
