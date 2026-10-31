@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from data_provider.base import canonical_stock_code
 from src.analysis_context_pack_overview import extract_analysis_context_pack_overview
 from src.repositories.portfolio_repo import PortfolioRepository
+from src.core.trading_calendar import latest_opened_session
 from src.services.alert_service import AlertService
 from src.services.history_service import HistoryService
 from src.services.intelligence_service import IntelligenceService
@@ -57,6 +58,7 @@ class StockProfileService:
             "portfolio": self._portfolio_block(canonical_code, market=market),
             "monitors": self._monitor_block(canonical_code, market=market),
         }
+        blocks["history"] = self._with_provisional_bar(blocks["history"], blocks["quote"], market=market)
         return {
             "requested_code": str(requested_code).strip(),
             "canonical_code": canonical_code,
@@ -111,6 +113,39 @@ class StockProfileService:
                 "limitations": ["history_unavailable"],
             }
         return {"status": "fresh", "period": "daily", "data": rows, "limitations": []}
+
+    @staticmethod
+    def _with_provisional_bar(history: Dict[str, Any], quote: Dict[str, Any], *, market: str) -> Dict[str, Any]:
+        """報價屬於比日 K 最後一根更新的交易日時，用報價補一根暫定 K（provisional=True）。
+
+        踩過：yfinance 在 INTC 2026-10-30 大跌當天回 OHLC 全 NaN 的日 K，被丟掉後圖表停在前一天，
+        和報價差了 28%。交易日由市場當地時間判斷（美股收盤後的 UTC 已是隔天），過期報價不補。
+        """
+        rows = history.get("data") or []
+        data = quote.get("data") or {}
+        price = data.get("current_price")
+        if not rows or not price or data.get("is_stale") or not data.get("as_of"):
+            return history
+        try:
+            as_of = datetime.fromisoformat(str(data["as_of"]))
+        except ValueError:
+            return history
+        session = latest_opened_session(market, as_of)
+        if session is None or session.isoformat() <= str(rows[-1].get("date")):
+            return history
+        prev_close = rows[-1].get("close")
+        bar = {
+            "date": session.isoformat(),
+            "open": data.get("open") or price,
+            "high": max(v for v in (data.get("high"), price) if v),
+            "low": min(v for v in (data.get("low"), price) if v),
+            "close": price,
+            "volume": data.get("volume"),
+            "amount": data.get("amount"),
+            "change_percent": (price / prev_close - 1) * 100 if prev_close else None,
+            "provisional": True,
+        }
+        return {**history, "data": [*rows, bar]}
 
     def _research_block(self, code: str, *, market: str) -> Dict[str, Any]:
         empty_data = {"latest_report": None, "recent_reports": [], "structured_report": None}

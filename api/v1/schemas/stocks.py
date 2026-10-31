@@ -153,6 +153,7 @@ class KLineData(BaseModel):
     volume: Optional[float] = Field(None, description="成交量")
     amount: Optional[float] = Field(None, description="成交额")
     change_percent: Optional[float] = Field(None, description="涨跌幅 (%)")
+    provisional: Optional[bool] = Field(None, description="由即時報價補上的當日暫定 K（日 K 來源尚未收錄）")
     
     model_config = ConfigDict(json_schema_extra={
         "example": {

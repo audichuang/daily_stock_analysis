@@ -24,7 +24,7 @@ struct StockDetailView: View {
                 quoteHeader(profile)
                 MarketChart(candles: profile.history.data.compactMap { bar in
                     guard let date = DisplayFormat.date(bar.date) else { return nil }
-                    return ChartCandle(date: date, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume)
+                    return ChartCandle(date: date, open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume, isProvisional: bar.provisional == true)
                 }, source: "日 K · \(profile.history.status == "fresh" ? "資料可用" : "資料不完整")",
                             asOf: profile.history.data.last?.date, convention: store.colorConvention)
                 if !profile.history.limitations.isEmpty { limitation(profile.history.limitations) }
@@ -190,7 +190,7 @@ struct StockDetailView: View {
         guard let client = store.client else { return }
         loading = true
         defer { loading = false }
-        do { profile = try await client.stockProfile(code, historyDays: 180); error = nil }
+        do { profile = try await client.stockProfile(code, historyDays: 1100); error = nil }
         catch is CancellationError { }
         catch { self.error = error.localizedDescription }
     }

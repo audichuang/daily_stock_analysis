@@ -615,7 +615,8 @@ def create_level_alerts(stock_code: str, body: LevelAlertRequest) -> LevelAlertR
 )
 def get_stock_profile(
     stock_code: str,
-    history_days: int = Query(60, ge=1, le=365, description="日线历史天数"),
+    # 上限放到 1825：iOS 個股圖表要 5Y 區間；實際回溯約 days*2 個日曆日（见 BaseFetcher.get_daily_data）。
+    history_days: int = Query(60, ge=1, le=1825, description="日线历史天数"),
 ) -> StockProfileResponse:
     """Return partial profile data without failing on one optional block."""
     _validate_and_normalize_stock_code(stock_code)

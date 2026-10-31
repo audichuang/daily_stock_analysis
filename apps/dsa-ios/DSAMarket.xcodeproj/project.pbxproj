@@ -21,6 +21,7 @@
 		55CB349AF78DEA22867570F5 /* DSAMarketUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C4D20BE4334F45E129A00E4 /* DSAMarketUITests.swift */; };
 		573C48E1399E2809BFED2E40 /* MarketChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CC7B9A49220885578C8A580 /* MarketChart.swift */; };
 		854E9008679E193DEE730F6C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8F241A34DEBEED7B543B2CA0 /* Assets.xcassets */; };
+		8CB6976D65A1E878486BFF35 /* KLineGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A33ADED79F42BE8BD3CCD8F /* KLineGuideView.swift */; };
 		9662B37EB5E21BDCA57983E5 /* BrandMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EC4C5B3D1B3BAE2B371AEA5 /* BrandMark.swift */; };
 		97B12146F06F13EC9AC63EC8 /* WebNavigationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C0027484906CB1EC8496ABD /* WebNavigationPolicy.swift */; };
 		985D2B579ACA3D469A76A882 /* DSAMarketApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC747C706A0176F34F4A7FCC /* DSAMarketApp.swift */; };
@@ -64,6 +65,7 @@
 		4A6621197BBA76CEAA9D3C2D /* ConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionView.swift; sourceTree = "<group>"; };
 		53023E587011259DF46F3CF4 /* WatchlistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistView.swift; sourceTree = "<group>"; };
 		5A1FF3FFBA58CDA8AAE6BC7A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		5A33ADED79F42BE8BD3CCD8F /* KLineGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KLineGuideView.swift; sourceTree = "<group>"; };
 		5C4D20BE4334F45E129A00E4 /* DSAMarketUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DSAMarketUITests.swift; sourceTree = "<group>"; };
 		6EC4C5B3D1B3BAE2B371AEA5 /* BrandMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandMark.swift; sourceTree = "<group>"; };
 		7C0027484906CB1EC8496ABD /* WebNavigationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebNavigationPolicy.swift; sourceTree = "<group>"; };
@@ -134,6 +136,7 @@
 			isa = PBXGroup;
 			children = (
 				4A6621197BBA76CEAA9D3C2D /* ConnectionView.swift */,
+				5A33ADED79F42BE8BD3CCD8F /* KLineGuideView.swift */,
 				0CC7B9A49220885578C8A580 /* MarketChart.swift */,
 				38B140A8C9397DC14F900292 /* MarketHomeView.swift */,
 				FA2F732D2D6F5033EC4EDD48 /* PortfolioView.swift */,
@@ -323,6 +326,7 @@
 				AD0B65CAA365C3E0E788C757 /* ConnectionView.swift in Sources */,
 				985D2B579ACA3D469A76A882 /* DSAMarketApp.swift in Sources */,
 				2503549958E32E6AFE0311E4 /* DesignSystem.swift in Sources */,
+				8CB6976D65A1E878486BFF35 /* KLineGuideView.swift in Sources */,
 				573C48E1399E2809BFED2E40 /* MarketChart.swift in Sources */,
 				C4838C0697BFFEE4A4700837 /* MarketDataPresentation.swift in Sources */,
 				ACD3A9EDF0E11342AB9B8D25 /* MarketHomeView.swift in Sources */,

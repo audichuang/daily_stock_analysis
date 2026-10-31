@@ -22,9 +22,10 @@ public enum TradingDay {
         calendar.date(byAdding: .month, value: -months, to: latest)
     }
 
-    /// 以影線的日期為中心，實體佔一日的 65%，避免連續時間軸把比例寬度壓成細線。
-    public static func candleBody(around date: Date) -> ClosedRange<Date> {
-        let halfWidth: TimeInterval = 86_400 * 0.65 / 2
+    /// 以影線的日期為中心，實體佔一個 K 棒間距的 65%，避免連續時間軸把比例寬度壓成細線。
+    /// 日 K 的間距是一日，週 K、月 K 依 `spanDays` 放寬。
+    public static func candleBody(around date: Date, spanDays: Double = 1) -> ClosedRange<Date> {
+        let halfWidth: TimeInterval = 86_400 * spanDays * 0.65 / 2
         return date.addingTimeInterval(-halfWidth)...date.addingTimeInterval(halfWidth)
     }
 
@@ -34,5 +35,10 @@ public enum TradingDay {
 
     public static func axisStyle(locale: Locale = .current) -> Date.FormatStyle {
         Date.FormatStyle(locale: locale, calendar: calendar, timeZone: timeZone).month(.defaultDigits).day()
+    }
+
+    /// 跨年的區間（1Y 以上）軸標改成年／月，只寫月日會看不出是哪一年。
+    public static func yearMonthAxisStyle(locale: Locale = .current) -> Date.FormatStyle {
+        Date.FormatStyle(locale: locale, calendar: calendar, timeZone: timeZone).year(.twoDigits).month(.defaultDigits)
     }
 }

@@ -8,6 +8,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html import escape
 import json
+import math
 from pathlib import Path
 import threading
 import time
@@ -52,9 +53,11 @@ def quote(code):
 def bars(code):
     anchor = STOCKS[code][1]
     result = []
-    count = 190
+    # 約六年日線，讓 5Y 區間、月 K 與 MA60 都有東西可畫；價格從 anchor 的 55% 起漲並帶波動，維持正值。
+    count = 2200
     for offset in range(count):
-        close = round(anchor - (count - 1 - offset) * 0.1 + ((offset % 5) - 4) * 0.5, 2)
+        trend = anchor * (0.55 + 0.45 * offset / (count - 1)) + anchor * 0.05 * math.sin(offset / 23)
+        close = round(trend + ((offset % 5) - 4) * 0.5, 2)
         if offset == count - 2:
             close = quote(code)["prev_close"]
         result.append({
@@ -66,6 +69,9 @@ def bars(code):
     latest = quote(code)
     result[-1].update(open=latest["open"], high=latest["high"], low=latest["low"],
                       close=latest["current_price"], volume=latest["volume"], amount=latest["amount"])
+    if code == "MSFT":
+        # 模擬日 K 來源缺當天、由報價補上的暫定 K（後端 `_with_provisional_bar`）。
+        result[-1]["provisional"] = True
     return result
 
 

@@ -554,6 +554,29 @@ def _phase_booleans(
     return is_trading_day, is_market_open_now, is_partial_bar
 
 
+def latest_opened_session(
+    market: Optional[str], current_time: Optional[datetime] = None
+) -> Optional[date]:
+    """最近一個「已經開盤」的交易日（盤中回今天、盤前與假日回前一個交易日）。
+
+    與 ``get_effective_trading_date`` 不同：盤中也算今天，因為呼叫端要的是報價屬於哪一根日 K。
+    日曆不可用或市場未知時回 None，不退回自然日猜。
+    """
+    if not _XCALS_AVAILABLE or market not in MARKET_EXCHANGE or market not in MARKET_TIMEZONE:
+        return None
+    try:
+        tz_name = MARKET_TIMEZONE[market]
+        cal = _get_calendar(MARKET_EXCHANGE[market])
+        market_now = get_market_now(market, current_time)
+        session = cal.date_to_session(market_now.date(), direction="previous")
+        if market_now < _as_market_datetime(cal.session_open(session), tz_name):
+            session = cal.previous_session(session)
+        return session.date()
+    except Exception as e:
+        logger.warning("trading_calendar.latest_opened_session fail-closed: %s", e)
+        return None
+
+
 def last_closed_session_open(
     market: Optional[str], current_time: Optional[datetime] = None
 ) -> Optional[datetime]:
