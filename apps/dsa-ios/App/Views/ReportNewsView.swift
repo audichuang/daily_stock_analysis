@@ -12,7 +12,7 @@ struct ReportNewsView: View {
     var body: some View {
         DSACard {
             VStack(alignment: .leading, spacing: 14) {
-                SectionHeading("本次分析參考新聞", subtitle: "報告 #\(reportID) · 新聞與官方公告", systemImage: "newspaper")
+                SectionHeading("相關新聞", subtitle: "報告 #\(reportID) · 新聞與官方公告", systemImage: "newspaper")
                 if loading {
                     LoadingStateView("正在讀取本次分析的新聞…")
                 } else if let error {
@@ -36,7 +36,7 @@ struct ReportNewsView: View {
                         .accessibilityIdentifier("report.news.references")
                         .tint(Theme.accent)
                     }
-                    Text("依分析編號保存的搜尋資料；舊報告可能未完整保留。日期為來源提供，未逐篇核實。")
+                    Text("依分析編號保存的搜尋資料，可能包含分析完成後補查、模型未讀過的內容；舊報告可能未完整保留。日期為來源提供，未逐篇核實。")
                         .font(.caption2).foregroundStyle(Theme.secondary)
                 }
             }

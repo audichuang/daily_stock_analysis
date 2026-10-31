@@ -2713,6 +2713,10 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     select(NewsIntel).where(NewsIntel.url == url_key)
                 ).scalar_one_or_none()
 
+                # 同網址只存一筆：已屬於另一次分析時不覆寫內容，舊報告才不會顯示後來才取得的摘要與分類。
+                if existing and existing.query_id and current_query_id and existing.query_id != current_query_id:
+                    continue
+
                 if existing:
                     existing.name = name or existing.name
                     existing.dimension = dimension or existing.dimension

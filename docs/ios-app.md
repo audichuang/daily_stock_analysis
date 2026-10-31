@@ -48,7 +48,7 @@ Client ID／Secret 使用獨立 Keychain service，以小寫 scheme／host／有
 
 AI 直接讀取 `structured_report` 的論點、證據與失效條件，沒有時顯示既有摘要。模型評分不是勝率；App 不推導交易建議。非同步分析明確送 `notify:false`，可離頁後接續查詢；後端回任務不存在時允許重新發起。
 
-個股頁的 AI 研究及歷史中的個股完整報告共用「本次分析參考新聞」區塊，以該頁的 history ID 呼叫 `GET /api/v1/history/{id}/news?analysis_only=true&limit=100`。`latest_news`、`announcements`、`risk_check` 預設顯示為新聞／官方公告；`earnings`、`market_analysis`、`industry` 與未知／缺少面向的舊資料收在「其他參考資料」，不從標題或摘要猜分類。各組依 `published_date` 新到舊、未知日期排最後且不顯示日期，不使用抓取日補日期；支援含微秒的 ISO 日期時間。每則顯示標題、來源與一行純文字摘要；表格、程式碼區塊（含摘要截斷後沒有結尾的區塊）及已知原始 SEC／HTML 文件摘要省略。SEC 的 `Document` 依官方 URL 中可辨識的表單改為公告／季報／年報；不能辨識就只稱「SEC 官方文件」，不推測是財報。
+個股頁的 AI 研究及歷史中的個股完整報告共用「相關新聞」區塊，以該頁的 history ID 呼叫 `GET /api/v1/history/{id}/news?analysis_only=true&limit=100`。`latest_news`、`announcements`、`risk_check` 預設顯示為新聞／官方公告；`earnings`、`market_analysis`、`industry` 與未知／缺少面向的舊資料收在「其他參考資料」，不從標題或摘要猜分類。各組依 `published_date` 新到舊、未知日期排最後且不顯示日期，不使用抓取日補日期；支援含微秒的 ISO 日期時間。每則顯示標題、來源與一行純文字摘要；表格、程式碼區塊（含摘要截斷後沒有結尾的區塊）及已知原始 SEC／HTML 文件摘要省略。SEC 的 `Document` 依官方 URL 中可辨識的表單改為公告／季報／年報；不能辨識就只稱「SEC 官方文件」，不推測是財報。
 
 新聞與參考資料的連結以原生 `Link` 開啟外部瀏覽器，只接受具有主機且不含帳密的 HTTP(S) URL，其他協定僅保留文字。載入失敗顯示獨立錯誤與重試，不阻擋報告；新聞／公告為空時明講「這次分析沒有可顯示的新聞或官方公告」，仍可展開其他參考資料。資料狀態中的 `no_symbol_intelligence` 是另一套訂閱情報庫（RSS／Atom／NewsNow），明確註明不代表分析未參考新聞。
 

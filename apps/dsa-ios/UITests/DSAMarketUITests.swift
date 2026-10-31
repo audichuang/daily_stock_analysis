@@ -232,7 +232,7 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(emptyBid.exists, "空委買應為無報價，不是零元可買")
         capture("03b-空委買與來源成交量")
 
-        scrollTo(text(containing: "本次分析參考新聞"))
+        scrollTo(text(containing: "相關新聞"))
         capture("新聞-個股頁預設分類")
         XCTAssertFalse(text(containing: "產業資料頁（合成）").exists)
         XCTAssertFalse(text(containing: "EX-99.1").exists)
@@ -240,7 +240,7 @@ final class DSAMarketUITests: XCTestCase {
         let reportLink = app.buttons["stock-report-link"]
         tap(reportLink)
         XCTAssertTrue(app.descendants(matching: .any)["report.screen"].firstMatch.waitForExistence(timeout: 15))
-        scrollTo(text(containing: "本次分析參考新聞"))
+        scrollTo(text(containing: "相關新聞"))
         scrollTo(text(containing: "SEC 8-K 公告"))
         capture("新聞-完整報告新聞與公告")
         XCTAssertTrue(text(containing: "合成通訊社 · 2024-01-31").exists)

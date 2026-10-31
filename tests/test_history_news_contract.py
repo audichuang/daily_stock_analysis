@@ -77,3 +77,36 @@ def test_news_http_contract_is_additive_and_forwards_analysis_only():
         db.reset_mock()
         assert client.get("/api/v1/history/7/news").status_code == 200
         db.get_news_intel_by_query_id.assert_called_once_with(query_id="analysis-7", limit=20)
+
+
+def _save(manager, code, query_id, snippet):
+    from src.search_service import SearchResponse, SearchResult
+
+    response = SearchResponse(query="q", results=[SearchResult(
+        title="同一篇", snippet=snippet, url="https://example.test/same", source="來源",
+        published_date=None)], provider="test", success=True)
+    manager.save_news_intel(code=code, name=code, dimension="latest_news", query="q",
+                            response=response, query_context={"query_id": query_id})
+
+
+def test_same_url_from_later_analysis_does_not_rewrite_older_report(tmp_path, monkeypatch):
+    from src.config import Config
+    from src.storage import DatabaseManager
+
+    monkeypatch.setenv("STORAGE_DATABASE_URL", "")
+    monkeypatch.setenv("DATABASE_URL", "")
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "news.db"))
+    Config.reset_instance()
+    DatabaseManager.reset_instance()
+    try:
+        manager = DatabaseManager.get_instance()
+        _save(manager, "AAPL", "first", "AAPL 那輪的摘要")
+        _save(manager, "MSFT", "second", "MSFT 那輪的摘要")
+        assert [r.snippet for r in manager.get_news_intel_by_query_id("first", limit=5)] == ["AAPL 那輪的摘要"]
+        # 同一次分析重存仍要能更新。
+        _save(manager, "AAPL", "first", "補完整的摘要")
+        assert [r.snippet for r in manager.get_news_intel_by_query_id("first", limit=5)] == ["補完整的摘要"]
+    finally:
+        DatabaseManager.reset_instance()
+        Config.reset_instance()
+
