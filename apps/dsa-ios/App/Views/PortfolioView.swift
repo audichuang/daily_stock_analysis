@@ -47,11 +47,13 @@ struct PortfolioView: View {
                     LoadingStateView("正在讀取資產與持股…")
                 }
             }
+            .overlay(alignment: .bottom) { PageBottomAnchor() }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .frame(maxWidth: 900, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+        .dsaPageBottomInset()
         .background(Theme.background)
         .navigationTitle("我的資產")
         .navigationBarTitleDisplayMode(.inline)

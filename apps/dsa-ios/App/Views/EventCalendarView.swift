@@ -16,7 +16,7 @@ struct EventCalendarView: View {
 
     var body: some View {
         PageScroll {
-            SectionHeading("持股與自選的重要日期", subtitle: "美股以美東 ET 日期、台股以台北日期顯示；法定期限不代表實際發布日。", eyebrow: "EVENT CALENDAR")
+            SectionHeading("持股與自選的重要日期", subtitle: "美股以美東 ET 日期、台股以台北日期顯示；法定期限不代表實際發布日。")
             DSACard {
                 VStack(spacing: 15) {
                     HStack {

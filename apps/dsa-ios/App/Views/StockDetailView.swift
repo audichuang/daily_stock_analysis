@@ -169,13 +169,16 @@ struct StockDetailView: View {
 
     @ViewBuilder private func analysisSection(_ profile: StockProfile) -> some View {
         HStack(alignment: .top) {
-            SectionHeading("AI 研究", subtitle: "觀點、依據與失效條件", eyebrow: "RESEARCH, WITH EVIDENCE")
+            SectionHeading("AI 研究", subtitle: "觀點、依據與失效條件")
             Spacer()
         }
         if let artifact = profile.research.data.structuredReport {
             DSACard {
                 VStack(alignment: .leading, spacing: 12) {
-                    StatusBadge(artifact.thesis.actionLabel ?? "AI 觀點", tone: .ai)
+                    StatusBadge(
+                        PresentationText.action(artifact.thesis.action, label: artifact.thesis.actionLabel) ?? "AI 觀點",
+                        tone: ActionTone.of(action: artifact.thesis.action, label: artifact.thesis.actionLabel).statusTone
+                    )
                     Text(artifact.thesis.summary).font(.body).foregroundStyle(Theme.text)
                     Text("分析 · \(DisplayFormat.time(artifact.createdAt))").font(.caption).foregroundStyle(Theme.secondary)
                     Text("\(artifact.evidence.count) 項依據 · \(artifact.invalidationConditions.count) 項失效條件")
@@ -188,7 +191,10 @@ struct StockDetailView: View {
         } else if let latest = profile.research.data.latestReport {
             DSACard {
                 VStack(alignment: .leading, spacing: 12) {
-                    StatusBadge(latest.actionLabel ?? latest.operationAdvice ?? "研究報告", tone: .ai)
+                    StatusBadge(
+                        PresentationText.action(latest.action, label: latest.actionLabel, advice: latest.operationAdvice) ?? "研究報告",
+                        tone: ActionTone.of(action: latest.action, label: latest.actionLabel ?? latest.operationAdvice).statusTone
+                    )
                     Text(latest.analysisSummary ?? "完整分析已保存，點下方閱讀報告。")
                         .font(.body).foregroundStyle(Theme.text)
                     Text("分析 · \(DisplayFormat.time(latest.createdAt))").font(.caption).foregroundStyle(Theme.secondary)

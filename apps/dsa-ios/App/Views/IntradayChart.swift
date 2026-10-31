@@ -88,7 +88,7 @@ struct IntradayChart: View {
                     .foregroundStyle(color(for: point.price))
                 if let previousClose, previousClose > 0 {
                     let change = (point.price / previousClose - 1) * 100
-                    Text("\(change >= 0 ? "+" : "")\(change.formatted(.number.precision(.fractionLength(2))))%")
+                    Text(DisplayFormat.percent(change))
                         .foregroundStyle(color(for: point.price))
                     Text("昨收 \(price(previousClose))").foregroundStyle(Theme.secondary)
                 }
