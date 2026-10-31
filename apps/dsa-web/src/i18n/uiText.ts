@@ -1,6 +1,7 @@
 export type UiLanguage = 'zh' | 'en' | 'zh-TW';
 
 const zh = {
+  'common.filters': '筛选',
   'common.cancel': '取消',
   'common.close': '关闭',
   'common.closeDrawer': '关闭抽屉',
@@ -1311,6 +1312,7 @@ const zh = {
 export type UiTextKey = keyof typeof zh;
 
 const en: Record<UiTextKey, string> = {
+  'common.filters': 'Filters',
   'common.cancel': 'Cancel',
   'common.close': 'Close',
   'common.closeDrawer': 'Close drawer',
@@ -2619,6 +2621,7 @@ const en: Record<UiTextKey, string> = {
 };
 
 const zhTW: Record<UiTextKey, string> = {
+  'common.filters': '篩選',
   'home.marketReviewSubmittedWithRegion': '{message}；實際市場：{region}',
   'home.marketRegionAll': '全部市場',
   'home.marketRegionCn': 'A 股',
