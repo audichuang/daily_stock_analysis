@@ -375,7 +375,8 @@ class EventConsensus(BaseModel):
     eps: Optional[float] = None
     revenue: Optional[float] = None
     analysts: Optional[int] = None
-    currency: Optional[str] = None
+    eps_currency: Optional[str] = None
+    revenue_currency: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -387,7 +388,8 @@ class EventConsensus(BaseModel):
             "eps": _finite_or_none(data.get("eps")),
             "revenue": _finite_or_none(data.get("revenue")),
             "analysts": int(analysts) if analysts is not None else None,
-            "currency": _text_or_none(data.get("currency")),
+            "eps_currency": _text_or_none(data.get("eps_currency")),
+            "revenue_currency": _text_or_none(data.get("revenue_currency")),
         }
 
 

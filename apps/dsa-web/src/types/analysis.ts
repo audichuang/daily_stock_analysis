@@ -405,7 +405,8 @@ export interface EventOutlook {
     eps?: number | null;
     revenue?: number | null;
     analysts?: number | null;
-    currency?: string | null;
+    epsCurrency?: string | null;
+    revenueCurrency?: string | null;
   } | null;
   trackRecord?: string | null;
   revisionTrend?: string | null;

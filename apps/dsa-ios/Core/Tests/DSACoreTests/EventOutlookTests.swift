@@ -11,7 +11,7 @@ final class EventOutlookTests: XCTestCase {
     func testDecodesApiPayloadAndSummarizesConsensus() throws {
         let outlook = try decode("""
         {"event": "Q3 財報", "event_type": "earnings", "event_date": "2030-11-18",
-         "consensus": {"eps": 2.47, "revenue": 109000000000.0, "analysts": 44, "currency": "USD"},
+         "consensus": {"eps": 2.47, "revenue": 109000000000.0, "analysts": 44, "eps_currency": "USD", "revenue_currency": "TWD"},
          "track_record": "近四季皆超預期", "revision_trend": null, "expectation": "beat", "confidence": "medium",
          "reasoning": "理由", "scenarios": [{"case": "miss", "expected_reaction": "下跌",
          "action_if_holding": "減碼", "action_if_flat": "觀望"}], "news_impact": "影響", "verify_after": "毛利率"}
@@ -19,7 +19,7 @@ final class EventOutlookTests: XCTestCase {
         XCTAssertEqual(outlook.expectationLabel, "判斷：超預期")
         XCTAssertEqual(outlook.confidenceLabel, "把握度中")
         XCTAssertEqual(outlook.scenarios?.first?.actionIfHolding, "減碼")
-        XCTAssertEqual(outlook.consensusSummary, "EPS 2.47 USD · 營收 1090 億 USD · 44 位分析師")
+        XCTAssertEqual(outlook.consensusSummary, "EPS 2.47 USD · 營收 1090 億 TWD · 44 位分析師")
     }
 
     func testMissingAndUnknownValuesFallBackToInsufficient() throws {

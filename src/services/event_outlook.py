@@ -25,13 +25,14 @@ _TEXT = {
             "- 財報與法說的 `event_date` 只能用上方「下次財報／法說日」的日期，日期未定就填 null，不可推算。\n"
             "- `expectation` 判斷這次實際 EPS 相對法人預估：beat 超預期、inline 符合（差距約 ±2% 內）、miss 不及；"
             "要依預估、近四季實績、修正方向與新聞自己下判斷，並在 `reasoning` 寫出理由。別把歷史上常超預期直接當結論。\n"
-            "- 沒有法人預估時，`expectation` 必須是 insufficient_data、`consensus` 填 null，不可猜數字；財報以外的事件同樣如此。\n"
+            "- 沒有 EPS 預估時，`expectation` 必須是 insufficient_data，不可猜數字；財報以外的事件同樣如此。營收預估可以引用，但不能當成 EPS 判斷的依據。\n"
             "- `scenarios` 列出 beat、inline、miss 三種情境各自的預期反應、持有者與空手者怎麼做；沒有預估時仍要寫。\n"
             "- `news_impact` 回答「近期這些新聞對接下來有什麼影響」，不要只重述新聞；沒有相關新聞就直接說沒有。\n"
             "- `verify_after` 寫事件後要看什麼來驗證這次判斷。\n"
             "- 這些內容只當證據，不得據此調整 sentiment_score、action 或 decision_type。"
         ),
         "have": "資料狀態：上方美股補充證據有法人預估（estimates）。",
+        "revenue_only": "資料狀態：EPS 預估缺資料，只有營收預估；expectation 必須是 insufficient_data。",
         "missing": "資料狀態：這檔沒有可靠的法人預估，缺資料（台股目前沒有這項來源）；expectation 必須是 insufficient_data。",
     },
     "zh": {
@@ -43,13 +44,14 @@ _TEXT = {
             "- 财报与法说的 `event_date` 只能用上方“下次财报日”的日期，日期未定就填 null，不可推算。\n"
             "- `expectation` 判断这次实际 EPS 相对机构预估：beat 超预期、inline 符合（差距约 ±2% 内）、miss 不及；"
             "要依预估、近四季实绩、修正方向与新闻自己下判断，并在 `reasoning` 写出理由。别把历史上常超预期直接当结论。\n"
-            "- 没有机构预估时，`expectation` 必须是 insufficient_data、`consensus` 填 null，不可猜数字；财报以外的事件同样如此。\n"
+            "- 没有 EPS 预估时，`expectation` 必须是 insufficient_data，不可猜数字；财报以外的事件同样如此。营收预估可以引用，但不能当成 EPS 判断的依据。\n"
             "- `scenarios` 列出 beat、inline、miss 三种情境各自的预期反应、持有者与空仓者怎么做；没有预估时仍要写。\n"
             "- `news_impact` 回答“近期这些新闻对接下来有什么影响”，不要只复述新闻；没有相关新闻就直接说没有。\n"
             "- `verify_after` 写事件后要看什么来验证这次判断。\n"
             "- 这些内容只当证据，不得据此调整 sentiment_score、action 或 decision_type。"
         ),
         "have": "数据状态：上方美股补充证据有机构预估（estimates）。",
+        "revenue_only": "数据状态：EPS 预估缺数据，只有营收预估；expectation 必须是 insufficient_data。",
         "missing": "数据状态：这只股票没有可靠的机构预估，缺数据；expectation 必须是 insufficient_data。",
     },
     "en": {
@@ -61,13 +63,14 @@ _TEXT = {
             "- For earnings and conferences, `event_date` must come from the next-earnings evidence above; if undetermined use null, never infer it.\n"
             "- `expectation` is your call on actual EPS versus the analyst estimate: beat, inline (within roughly +/-2%), or miss. "
             "Judge from estimates, the last four quarters, revision direction and news, and explain in `reasoning`. A history of beats alone is not a conclusion.\n"
-            "- Without analyst estimates, `expectation` must be insufficient_data and `consensus` null; never guess numbers. The same applies to non-earnings events.\n"
+            "- Without an EPS estimate, `expectation` must be insufficient_data; never guess numbers. The same applies to non-earnings events. A revenue estimate may be cited but cannot support an EPS call.\n"
             "- `scenarios`: for beat, inline and miss, give the expected reaction and what holders and non-holders should do, even without estimates.\n"
             "- `news_impact` answers what recent news means for what comes next, not a recap; say so plainly if nothing is relevant.\n"
             "- `verify_after`: what to check after the event to test this call.\n"
             "- This is evidence only; do not change sentiment_score, action or decision_type because of it."
         ),
         "have": "Data status: analyst estimates (estimates) are present in the US evidence above.",
+        "revenue_only": "Data status: the EPS estimate is missing, only a revenue estimate exists; expectation must be insufficient_data.",
         "missing": "Data status: no reliable analyst estimates for this stock; expectation must be insufficient_data.",
     },
     "ko": {
@@ -79,13 +82,14 @@ _TEXT = {
             "- 실적과 설명회의 `event_date`는 위의 다음 실적 발표일 근거만 사용하고, 미정이면 null로 두며 추정하지 마세요.\n"
             "- `expectation`은 실제 EPS와 애널리스트 추정치 비교 판단입니다: beat, inline(약 ±2% 이내), miss. "
             "추정치, 최근 4개 분기 실적, 수정 방향, 뉴스로 직접 판단하고 `reasoning`에 이유를 쓰세요. 과거에 자주 상회했다는 사실만으로 결론 내리지 마세요.\n"
-            "- 애널리스트 추정치가 없으면 `expectation`은 반드시 insufficient_data, `consensus`는 null이며 숫자를 추측하지 마세요. 실적 외 이벤트도 동일합니다.\n"
+            "- EPS 추정치가 없으면 `expectation`은 반드시 insufficient_data이며 숫자를 추측하지 마세요. 실적 외 이벤트도 동일합니다. 매출 추정치는 인용할 수 있지만 EPS 판단 근거로 쓸 수 없습니다.\n"
             "- `scenarios`: beat, inline, miss 각각의 예상 반응과 보유자, 미보유자의 대응을 쓰세요. 추정치가 없어도 작성합니다.\n"
             "- `news_impact`: 최근 뉴스가 앞으로 미칠 영향을 답하세요. 단순 요약은 안 되며 관련 뉴스가 없으면 없다고 쓰세요.\n"
             "- `verify_after`: 이벤트 후 이 판단을 검증할 항목을 쓰세요.\n"
             "- 근거로만 사용하며 sentiment_score, action, decision_type을 변경하지 마세요."
         ),
         "have": "데이터 상태: 위 미국 주식 보충 근거에 애널리스트 추정치(estimates)가 있습니다.",
+        "revenue_only": "데이터 상태: EPS 추정치가 없고 매출 추정치만 있습니다. expectation은 반드시 insufficient_data입니다.",
         "missing": "데이터 상태: 이 종목은 신뢰할 수 있는 애널리스트 추정치가 없습니다. expectation은 반드시 insufficient_data입니다.",
     },
 }
@@ -104,13 +108,15 @@ def _evidence_consensus(estimates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if eps.get("avg") is None and revenue.get("avg") is None:
         return None
     return {"eps": eps.get("avg"), "revenue": revenue.get("avg"),
-            "analysts": eps.get("analysts", revenue.get("analysts")), "currency": estimates.get("currency")}
+            "analysts": eps.get("analysts", revenue.get("analysts")),
+            "eps_currency": eps.get("currency"), "revenue_currency": revenue.get("currency")}
 
 
 def event_outlook_prompt(fundamental_context: Any, report_language: str = "zh-TW") -> str:
     language = normalize_report_language(report_language)
     text = _TEXT.get(language, _TEXT["zh"])
-    status = text["have"] if _evidence_consensus(_estimates(fundamental_context)) else text["missing"]
+    consensus = _evidence_consensus(_estimates(fundamental_context))
+    status = text["missing"] if consensus is None else text["have"] if consensus["eps"] is not None else text["revenue_only"]
     return f"\n### {text['title']}\n{status}\n{text['body'].replace('{skeleton}', _SKELETON)}\n"
 
 
@@ -134,7 +140,8 @@ def normalize_event_outlook(value: Any, fundamental_context: Any, next_earnings:
     outlook["event_type"] = event_type
     consensus = _evidence_consensus(_estimates(fundamental_context)) if event_type == "earnings" else None
     outlook["consensus"] = consensus
-    if consensus is None or outlook["expectation"] is None:
+    # expectation 比的是 EPS：只有營收預估時營收照留，但不能下判斷
+    if consensus is None or consensus["eps"] is None or outlook["expectation"] is None:
         outlook["expectation"] = "insufficient_data"
     if outlook["expectation"] == "insufficient_data":
         outlook["confidence"] = "low"

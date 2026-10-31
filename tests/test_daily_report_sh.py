@@ -624,3 +624,70 @@ def test_morning_outcomes_retries_a_failed_commit_on_the_next_run(tmp_path):
     subject, files = _last_commit_files(repo)
     assert subject.startswith("journal: morning call outcomes") and files == ["journal/morning-calls-outcomes.jsonl"]
     assert "push ok" in log
+
+
+# ---------- 事件展望回驗（event_outlook_outcomes）：非致命、只 commit outcomes 檔 ----------
+
+EVENT_FILE = "journal/event-outlook-outcomes.jsonl"
+EVENT_APPEND = f"echo '{{\"code\": \"NVDA\"}}' >> {EVENT_FILE}"
+
+
+def _run_event_outcomes(repo, bindir):
+    log = repo / "run.log"
+    body = (f'cd "{repo}"; LOG="{log}"\n'
+            'notify_failure() { printf "NOTIFY %s|%s\\n" "$2" "$1" >>"$LOG"; }\n'
+            'event_outlook_outcomes; echo "rc=$?"')
+    env = {"PATH": f"{bindir}:{os.environ['PATH']}", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    r = _run_bash(body, env_extra=env)
+    return r, log.read_text(encoding="utf-8") if log.exists() else ""
+
+
+def test_event_outcomes_commits_only_new_file_and_pushes(tmp_path):
+    repo, bindir = _outcomes_repo(tmp_path, EVENT_APPEND)
+    r, log = _run_event_outcomes(repo, bindir)
+    assert "rc=0" in r.stdout
+    subject, files = _last_commit_files(repo)
+    assert subject.startswith("journal: event outlook outcomes") and files == [EVENT_FILE]
+    assert "事件展望回驗：push ok" in log and "NOTIFY" not in log
+
+
+def test_event_outcomes_failure_is_not_fatal_and_commits_nothing(tmp_path):
+    repo, bindir = _outcomes_repo(tmp_path, "echo boom; exit 3")
+    r, log = _run_event_outcomes(repo, bindir)
+    assert "rc=0" in r.stdout
+    assert _last_commit_files(repo)[0] == "init"
+    assert "WARN: 事件展望回驗失敗（rc=3）" in log and "NOTIFY 事件展望回驗失敗" in log
+
+
+def test_event_outcomes_without_new_rows_is_silent(tmp_path):
+    repo, bindir = _outcomes_repo(tmp_path, "echo 可計分 0 筆")
+    r, log = _run_event_outcomes(repo, bindir)
+    assert "rc=0" in r.stdout and "NOTIFY" not in log
+    assert _last_commit_files(repo)[0] == "init"
+
+
+def test_event_outcomes_off_develop_does_not_commit(tmp_path):
+    repo, bindir = _outcomes_repo(tmp_path, EVENT_APPEND, branch="feat/x")
+    r, log = _run_event_outcomes(repo, bindir)
+    assert "rc=0" in r.stdout and _last_commit_files(repo)[0] == "init"
+    assert "NOTIFY 事件展望回驗留檔失敗|" in log and "未 commit（主 checkout 在 feat/x）" in log
+
+
+def test_event_outcomes_retries_a_failed_commit_on_the_next_run(tmp_path):
+    repo, bindir = _outcomes_repo(tmp_path, EVENT_APPEND)
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    _, log = _run_event_outcomes(repo, bindir)
+    assert "commit 失敗" in log and _last_commit_files(repo)[0] == "init"
+    hook.unlink()
+    (bindir / "uv").write_text("#!/usr/bin/env bash\necho 可計分 0 筆\n", encoding="utf-8")
+    _, log = _run_event_outcomes(repo, bindir)
+    assert _last_commit_files(repo)[1] == [EVENT_FILE] and "push ok" in log
+
+
+def test_main_runs_event_outcomes_after_morning_outcomes():
+    source = (Path(__file__).resolve().parent.parent / "scripts" / "daily_report.sh").read_text(encoding="utf-8")
+    main_body = source[source.index("main() {"):]
+    assert main_body.index("morning_call_outcomes") < main_body.index("event_outlook_outcomes") < main_body.index("LLM 連線預檢")

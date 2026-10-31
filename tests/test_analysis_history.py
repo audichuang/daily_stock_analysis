@@ -1297,7 +1297,7 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         result = self._build_result()
         result.dashboard = {"event_outlook": {
             "event": "Q3 財報", "event_type": "earnings", "expectation": "beat", "confidence": "medium",
-            "consensus": {"eps": 2.47, "revenue": 1.09e11, "analysts": 44, "currency": "USD"},
+            "consensus": {"eps": 2.47, "revenue": 1.09e11, "analysts": 44, "eps_currency": "USD", "revenue_currency": "USD"},
             "scenarios": [{"case": "miss", "action_if_holding": "減碼"}],
         }}
         record_id = self.db.save_analysis_history(

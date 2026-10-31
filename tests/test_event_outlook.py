@@ -40,7 +40,8 @@ _spec.loader.exec_module(verify)
 
 TODAY = date.today()
 EVENT = (TODAY + timedelta(days=10)).isoformat()
-ESTIMATES = {"eps": {"avg": 2.47, "analysts": 44}, "revenue": {"avg": 1.09e11, "analysts": 45}, "currency": "USD"}
+ESTIMATES = {"eps": {"avg": 2.47, "analysts": 44, "currency": "USD"},
+             "revenue": {"avg": 1.09e11, "analysts": 45, "currency": "USD"}}
 US_CONTEXT = {"us_evidence": {"estimates": ESTIMATES}}
 NEXT = {"type": "earnings", "date": EVENT}
 
@@ -77,7 +78,8 @@ def test_summarize_takes_next_quarter_and_converts_surprise_ratio():
     earnings, revenue, history, revisions = _frames()
     result = summarize_estimates(earnings, revenue, history, revisions)
     assert result["eps"]["avg"] == 2.47325 and result["eps"]["analysts"] == 44
-    assert result["revenue"]["avg"] == 108976833310 and result["currency"] == "USD"
+    assert result["revenue"]["avg"] == 108976833310
+    assert result["eps"]["currency"] == result["revenue"]["currency"] == "USD"
     assert [row["quarter"] for row in result["track_record"]] == ["2025-10-31", "2026-01-31", "2026-04-30", "2026-07-31"]
     assert result["track_record"][0]["surprise_pct"] == 3.46
     assert result["revisions"] == {"up_7d": 0, "up_30d": 2, "down_7d": 1, "down_30d": 1}
@@ -195,20 +197,67 @@ def test_finalize_flag_off_never_persists_outlook():
 
 def test_guard_uses_evidence_numbers_and_date_over_llm_echo():
     outlook = normalize_event_outlook(_llm(), US_CONTEXT, NEXT)
-    assert outlook["consensus"] == {"eps": 2.47, "revenue": 1.09e11, "analysts": 44, "currency": "USD"}
+    assert outlook["consensus"] == {"eps": 2.47, "revenue": 1.09e11, "analysts": 44,
+                                    "eps_currency": "USD", "revenue_currency": "USD"}
     assert outlook["event_date"] == EVENT
     assert outlook["expectation"] == "beat" and outlook["confidence"] == "high"
     assert [s["case"] for s in outlook["scenarios"]] == ["beat"]
     assert outlook["news_impact"] == "新產品提高下季預期"
 
 
-@pytest.mark.parametrize("context", [{}, {"us_evidence": {}}, None, {"us_evidence": {"estimates": {"currency": "USD"}}}])
+@pytest.mark.parametrize("context", [{}, {"us_evidence": {}}, None, {"us_evidence": {"estimates": {"revisions": {"up_7d": 1}}}}])
 def test_guard_forces_insufficient_data_without_estimates(context):
     outlook = normalize_event_outlook(_llm(), context, NEXT)
     assert outlook["expectation"] == "insufficient_data"
     assert outlook["confidence"] == "low"
     assert outlook["consensus"] is None
     assert outlook["scenarios"], "沒有預估仍保留情境"
+
+
+def test_adr_keeps_separate_eps_and_revenue_currency_through_api_model():
+    """實測 TSM：EPS 5.1641 USD、營收 1705011253270 TWD。"""
+    estimates = summarize_estimates(
+        pd.DataFrame({"avg": [5.1641], "numberOfAnalysts": [20], "currency": ["USD"]}, index=["0q"]),
+        pd.DataFrame({"avg": [1705011253270], "numberOfAnalysts": [18], "currency": ["TWD"]}, index=["0q"]))
+    assert estimates["eps"]["currency"] == "USD" and estimates["revenue"]["currency"] == "TWD"
+    context = {"us_evidence": {"estimates": estimates}}
+    assert '"currency": "TWD"' in format_us_evidence(context)
+    stored = normalize_event_outlook(_llm(), context, NEXT)
+    assert stored["consensus"]["eps_currency"] == "USD" and stored["consensus"]["revenue_currency"] == "TWD"
+    outlook = extract_event_outlook(json.loads(json.dumps({"dashboard": {"event_outlook": stored}})))
+    report = AnalysisReport(meta=ReportMeta(query_id="q", stock_code="TSM"), summary=ReportSummary(), event_outlook=outlook)
+    assert report.event_outlook.consensus.revenue_currency == "TWD"
+    assert report.event_outlook.consensus.eps_currency == "USD"
+
+
+def test_revenue_only_forces_insufficient_and_keeps_revenue():
+    """earnings_estimate 失敗、只剩營收時，模型的 beat／high 不能留下。"""
+    frames = _frames()
+    context = {"us_evidence": {"estimates": summarize_estimates(None, frames[1], frames[2], frames[3])}}
+    outlook = normalize_event_outlook(_llm(), context, NEXT)
+    assert outlook["expectation"] == "insufficient_data" and outlook["confidence"] == "low"
+    assert outlook["consensus"]["eps"] is None and outlook["consensus"]["revenue"] == 108976833310
+    assert outlook["consensus"]["analysts"] == 45
+
+
+def test_eps_only_still_allows_a_call():
+    frames = _frames()
+    context = {"us_evidence": {"estimates": summarize_estimates(frames[0])}}
+    outlook = normalize_event_outlook(_llm(), context, NEXT)
+    assert outlook["expectation"] == "beat" and outlook["confidence"] == "high"
+    assert outlook["consensus"]["revenue"] is None
+
+
+@pytest.mark.parametrize("language", SUPPORTED_REPORT_LANGUAGES)
+def test_prompt_discloses_missing_eps_separately(language):
+    from src.services.event_outlook import _TEXT
+    from src.report_language import normalize_report_language
+
+    text = _TEXT[normalize_report_language(language)]
+    only = event_outlook_prompt({"us_evidence": {"estimates": {"revenue": {"avg": 1.0}}}}, language)
+    assert text["revenue_only"] in only and text["have"] not in only and text["missing"] not in only
+    assert text["have"] in event_outlook_prompt(US_CONTEXT, language)
+    assert text["missing"] in event_outlook_prompt({}, language)
 
 
 def test_guard_keeps_llm_miss_call_when_estimates_exist():

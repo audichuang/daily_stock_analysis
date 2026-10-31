@@ -221,7 +221,8 @@ public struct EventConsensus: Codable, Sendable {
     public let eps: Double?
     public let revenue: Double?
     public let analysts: Int?
-    public let currency: String?
+    public let epsCurrency: String?
+    public let revenueCurrency: String?
 }
 
 public struct EventScenario: Codable, Sendable {
@@ -278,9 +279,9 @@ public struct EventOutlook: Codable, Sendable {
     public var consensusSummary: String? {
         guard let consensus else { return nil }
         var parts: [String] = []
-        let currency = consensus.currency.map { " \($0)" } ?? ""
-        if let eps = consensus.eps { parts.append("EPS \(String(format: "%.2f", eps))\(currency)") }
-        if let revenue = consensus.revenue { parts.append("營收 \(String(format: "%.0f", revenue / 100_000_000)) 億\(currency)") }
+        let unit: (String?) -> String = { $0.map { " \($0)" } ?? "" }
+        if let eps = consensus.eps { parts.append("EPS \(String(format: "%.2f", eps))\(unit(consensus.epsCurrency))") }
+        if let revenue = consensus.revenue { parts.append("營收 \(String(format: "%.0f", revenue / 100_000_000)) 億\(unit(consensus.revenueCurrency))") }
         if let analysts = consensus.analysts { parts.append("\(analysts) 位分析師") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }

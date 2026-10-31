@@ -35,10 +35,10 @@ export const ReportEventOutlook: React.FC<ReportEventOutlookProps> = ({ outlook,
     : null;
   const caseLabels = { beat: text.eventCaseBeat, inline: text.eventCaseInline, miss: text.eventCaseMiss };
   const consensus = outlook.consensus;
-  const currency = consensus?.currency ? ` ${consensus.currency}` : '';
+  const withCurrency = (value: string, currency?: string | null) => (currency ? `${value} ${currency}` : value);
   const consensusParts = [
-    consensus?.eps != null ? `${text.eventConsensusEps} ${consensus.eps.toFixed(2)}${currency}` : null,
-    consensus?.revenue != null ? `${text.eventConsensusRevenue} ${formatRevenue(consensus.revenue)}${currency}` : null,
+    consensus?.eps != null ? `${text.eventConsensusEps} ${withCurrency(consensus.eps.toFixed(2), consensus.epsCurrency)}` : null,
+    consensus?.revenue != null ? `${text.eventConsensusRevenue} ${withCurrency(formatRevenue(consensus.revenue), consensus.revenueCurrency)}` : null,
     consensus?.analysts != null ? `${consensus.analysts} ${text.eventConsensusAnalysts}` : null,
   ].filter(Boolean);
   const notes: Array<[string, string | null | undefined]> = [

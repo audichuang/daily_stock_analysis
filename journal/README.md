@@ -156,7 +156,7 @@ Brier(conf) vs Brier(20.4%)   confidence 有沒有比「一律報基準率」更
 ```
 
 結論一律要求 **bootstrap 區間不跨零且已到期 ≥20 筆**，否則標為 inconclusive。
-- `event-outlook-outcomes.jsonl` — **事件展望的事後結果**（`scripts/verify_event_outlook.py --append` 追加，`make verify-event-outlook` 唯讀；目前未接排程，要手動跑）。
+- `event-outlook-outcomes.jsonl` — **事件展望的事後結果**（18:00 `daily_report.sh` 跑 `scripts/verify_event_outlook.py --append` 追加並另開 commit，`make verify-event-outlook` 唯讀）。
   預測在應用庫 `analysis_history.raw_result.dashboard.event_outlook`，寫入時間是報告的 `created_at`；這裡一個 `(code, event_date)` 一行、不重寫。
   同一事件只取事件日**之前**最後一份報告（事件當天的報告可能已看到結果，不算）；只計 `event_type=earnings` 且 `expectation` 為 `beat`／`inline`／`miss`，`insufficient_data` 記 `scorable=false`。
   實際結果取 yfinance `earnings_history` 中季底早於事件日且相距 ≤95 天的最新一列（索引是季底不是公告日；上一季距事件超過一季，不會被誤用）；列還沒出現就不寫、下次再試。yfinance 只留近四季，超過一年沒跑會補不回來。

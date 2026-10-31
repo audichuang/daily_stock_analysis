@@ -18,7 +18,7 @@ describe('ReportEventOutlook', () => {
           expectation: 'beat',
           confidence: 'medium',
           reasoning: 'Four straight beats',
-          consensus: { eps: 2.47, revenue: 109000000000, analysts: 44, currency: 'USD' },
+          consensus: { eps: 2.47, revenue: 109000000000, analysts: 44, epsCurrency: 'USD', revenueCurrency: 'TWD' },
           scenarios: [{ case: 'miss', expectedReaction: 'Falls', actionIfHolding: 'Trim', actionIfFlat: 'Wait' }],
         }}
       />,
@@ -26,7 +26,7 @@ describe('ReportEventOutlook', () => {
     expect(screen.getByText('Expect a beat')).toBeInTheDocument();
     expect(screen.getByText('Four straight beats')).toBeInTheDocument();
     expect(screen.getByText('If it misses')).toBeInTheDocument();
-    expect(screen.getByText(/EPS estimate 2\.47 USD/)).toHaveTextContent('109.0B USD');
+    expect(screen.getByText(/EPS estimate 2\.47 USD/)).toHaveTextContent('109.0B TWD');
     expect(screen.getByText('Trim')).toBeInTheDocument();
   });
 
