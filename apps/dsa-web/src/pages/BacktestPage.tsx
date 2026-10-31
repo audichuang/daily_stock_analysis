@@ -24,6 +24,7 @@ import type {
 } from '../types/backtest';
 import { buildDecisionActionLabelMap, getDecisionActionLabel } from '../utils/decisionAction';
 import { getMarketPhaseSummaryLabel } from '../utils/marketPhase';
+import { marketToneClass } from '../utils/marketTone';
 
 const BACKTEST_INPUT_CLASS =
   'input-surface input-focus-glow h-11 w-full rounded-xl border bg-transparent px-4 text-sm transition-all focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
@@ -205,9 +206,9 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics; title: string; la
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-text">{text.outcomeSummary}</span>
         <span className="text-xs font-mono">
-          <span className="text-success">{metrics.winCount}</span>
+          <span className="text-market-up">{metrics.winCount}</span>
           {' / '}
-          <span className="text-danger">{metrics.lossCount}</span>
+          <span className="text-market-down">{metrics.lossCount}</span>
           {' / '}
           <span className="text-warning">{metrics.neutralCount}</span>
         </span>
@@ -679,11 +680,7 @@ const BacktestPage: React.FC = () => {
                           <td className="backtest-table-cell">
                             <div className="flex items-center gap-2">
                               {actualMovementBadge(row.actualMovement, language)}
-                              <span className={
-                                row.actualReturnPct != null
-                                  ? row.actualReturnPct > 0 ? 'text-success' : row.actualReturnPct < 0 ? 'text-danger' : 'text-secondary-text'
-                                  : 'text-muted-text'
-                              }>
+                              <span className={marketToneClass(row.actualReturnPct, 'text-muted-text')}>
                                 {pct(row.actualReturnPct)}
                               </span>
                             </div>

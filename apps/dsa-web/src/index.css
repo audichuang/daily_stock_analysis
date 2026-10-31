@@ -155,8 +155,8 @@
   --home-accent-text: hsl(var(--primary));
   --home-secondary-accent-text: hsl(247 84% 66%);
   --home-title-accent: hsl(247 84% 66%);
-  --home-price-up: hsl(0 88% 62%);
-  --home-price-down: hsl(149 100% 42%);
+  --market-up: hsl(0 88% 62%);
+  --market-down: hsl(149 100% 42%);
   --home-strategy-buy: hsl(149 100% 42%);
   --home-strategy-secondary: hsl(var(--primary));
   --home-strategy-stop: hsl(346 100% 63%);
@@ -430,8 +430,8 @@
   --home-accent-text: hsl(var(--primary));
   --home-secondary-accent-text: hsl(247 84% 72%);
   --home-title-accent: hsl(247 84% 72%);
-  --home-price-up: hsl(0 88% 64%);
-  --home-price-down: hsl(149 100% 44%);
+  --market-up: hsl(0 88% 64%);
+  --market-down: hsl(149 100% 44%);
   --home-strategy-buy: hsl(149 100% 44%);
   --home-strategy-secondary: hsl(var(--primary));
   --home-strategy-stop: hsl(346 100% 66%);
@@ -2921,4 +2921,13 @@ textarea {
   .backtest-table-scroll-hint {
     text-align: left;
   }
+}
+
+/* 行情方向與損益（紅漲綠跌）的唯一著色 class，由 utils/marketTone.ts 使用 */
+.text-market-up {
+  color: var(--market-up);
+}
+
+.text-market-down {
+  color: var(--market-down);
 }

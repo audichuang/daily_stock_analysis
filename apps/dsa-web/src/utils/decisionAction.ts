@@ -1,6 +1,7 @@
 import type { DecisionAction } from '../types/analysis';
+import { actionTone, type ActionTone } from './marketTone';
 
-export type DecisionActionTone = 'success' | 'warning' | 'danger' | 'default';
+export type DecisionActionTone = ActionTone | 'default';
 export type DecisionActionLabelMap = Record<DecisionAction, string>;
 export type DecisionActionLabelTextKey =
   | 'history.actionBuy'
@@ -42,11 +43,20 @@ export const buildDecisionActionLabelMap = (
   alert: t('history.actionAlert'),
 });
 
-const toneForAction = (action: DecisionAction): DecisionActionTone => {
-  if (action === 'buy' || action === 'add' || action === 'hold') return 'success';
-  if (action === 'sell' || action === 'reduce') return 'danger';
-  return 'warning';
+// 各時期存檔的動作標籤（含詞彙表新詞）。只比對整個標籤，不做子字串掃描，避免誤判「不建議買進」。
+const ACTION_LABEL_ALIASES: Record<string, DecisionAction> = {
+  買進: 'buy', 買入: 'buy', 买入: 'buy',
+  加碼: 'add', 加倉: 'add', 加仓: 'add',
+  續抱: 'hold', 持有: 'hold',
+  減碼: 'reduce', 減倉: 'reduce', 减仓: 'reduce',
+  賣出: 'sell', 卖出: 'sell',
+  觀望: 'watch', 观望: 'watch',
+  迴避: 'avoid', 回避: 'avoid',
+  警報: 'alert', 預警: 'alert', 预警: 'alert',
 };
+
+const actionFromLabel = (label?: string | null): DecisionAction | null =>
+  ACTION_LABEL_ALIASES[label?.trim() ?? ''] ?? null;
 
 const includesAny = (value: string, phrases: readonly string[]): boolean =>
   phrases.some((phrase) => value.includes(phrase));
@@ -94,6 +104,8 @@ export const getLegacyDecisionActionLabel = (
 export const getLegacyDecisionAction = (advice?: string | null): DecisionAction | null => {
   const normalized = advice?.trim();
   if (!normalized) return null;
+  const aliased = actionFromLabel(normalized);
+  if (aliased) return aliased;
   const lower = maskEnglishFinancialCompounds(normalizeEnglishAdvice(normalized));
 
   if (hasEnglishDeferredAction(lower)) {
@@ -226,6 +238,8 @@ export const getDecisionActionLabel = (
 ): string | null => {
   const actionLabels = resolveActionLabels(labels);
   if (action) return actionLabels[action];
+  const aliasedAction = actionFromLabel(actionLabel);
+  if (aliasedAction) return actionLabels[aliasedAction];
   const explicitLabel = actionLabel?.trim();
   if (explicitLabel) return explicitLabel;
   return getLegacyDecisionActionLabel(legacyAdvice, actionLabels) || emptyLabel;
@@ -236,24 +250,26 @@ export const getDecisionActionTone = (
   actionLabel?: string | null,
   legacyAdvice?: string | null,
 ): DecisionActionTone => {
-  if (action) return toneForAction(action);
+  if (action) return actionTone(action);
 
   const label = actionLabel?.trim() || '';
   if (label) {
+    const aliasedAction = actionFromLabel(label);
+    if (aliasedAction) return actionTone(aliasedAction);
     const lowerLabel = normalizeEnglishAdvice(label);
-    if (label.includes('买') || label.includes('加仓') || label.includes('持有')) return 'success';
-    if (label.includes('卖') || label.includes('减仓') || label.includes('清仓')) return 'danger';
-    if (label.includes('观望') || label.includes('等待') || label.includes('回避') || label.includes('预警')) {
-      return 'warning';
+    if (label.includes('买') || label.includes('買') || label.includes('加仓') || label.includes('加碼')) return 'brand';
+    if (label.includes('持有') || label.includes('續抱') || label.includes('观望') || label.includes('觀望') || label.includes('等待')) return 'neutral';
+    if (label.includes('卖') || label.includes('賣') || label.includes('减仓') || label.includes('減碼') || label.includes('清仓') || label.includes('回避') || label.includes('迴避') || label.includes('预警') || label.includes('警報')) {
+      return 'caution';
     }
-    if (matchesEnglishTerm(lowerLabel, ['buy', 'add', 'hold'])) return 'success';
-    if (matchesEnglishTerm(lowerLabel, ['sell', 'reduce', 'trim'])) return 'danger';
-    if (matchesEnglishTerm(lowerLabel, ['watch', 'wait', 'avoid', 'alert'])) return 'warning';
+    if (matchesEnglishTerm(lowerLabel, ['buy', 'add'])) return 'brand';
+    if (matchesEnglishTerm(lowerLabel, ['hold', 'watch', 'wait'])) return 'neutral';
+    if (matchesEnglishTerm(lowerLabel, ['sell', 'reduce', 'trim', 'avoid', 'alert'])) return 'caution';
     return 'default';
   }
 
   const legacyAction = getLegacyDecisionAction(legacyAdvice);
-  if (legacyAction) return toneForAction(legacyAction);
+  if (legacyAction) return actionTone(legacyAction);
 
   return 'default';
 };

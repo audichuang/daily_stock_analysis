@@ -1,7 +1,7 @@
 import React from 'react';
 import { cn } from '../../utils/cn';
 
-type BadgeVariant = 'default' | 'success' | 'warning' | 'danger' | 'info' | 'history';
+type BadgeVariant = 'default' | 'success' | 'warning' | 'danger' | 'info' | 'history' | 'brand' | 'neutral' | 'caution';
 
 interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   children: React.ReactNode;
@@ -19,6 +19,10 @@ const variantStyles: Record<BadgeVariant, string> = {
   danger: 'border-danger/20 bg-danger/10 text-danger',
   info: 'border-cyan/30 bg-cyan/12 text-cyan',
   history: 'border-purple/20 bg-purple/10 text-purple',
+  // 動作語意色：不用紅綠，見 utils/marketTone.ts
+  brand: 'border-cyan/30 bg-cyan/12 text-cyan',
+  neutral: 'border-border/55 bg-elevated/75 text-secondary-text',
+  caution: 'border-warning/20 bg-warning/10 text-warning',
 };
 
 const glowStyles: Record<BadgeVariant, string> = {
@@ -28,6 +32,9 @@ const glowStyles: Record<BadgeVariant, string> = {
   danger: 'shadow-danger/20',
   info: 'shadow-cyan/20',
   history: 'shadow-purple/20',
+  brand: 'shadow-cyan/20',
+  neutral: '',
+  caution: 'shadow-warning/20',
 };
 
 /**

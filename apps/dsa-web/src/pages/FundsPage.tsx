@@ -33,12 +33,9 @@ import type {
 } from '../types/funds';
 import { formatSignedPct, getTodayIso } from '../utils/portfolioFormat';
 import { cn } from '../utils/cn';
+import { marketToneClass } from '../utils/marketTone';
 
-// 台股慣例：紅漲綠跌
-function changeClass(value?: number | null): string {
-  if (value == null || Number.isNaN(value) || value === 0) return 'text-secondary-text';
-  return value > 0 ? 'text-red-500' : 'text-emerald-500';
-}
+const changeClass = (value?: number | null): string => marketToneClass(value);
 
 type RangeKey = 'm1' | 'm3' | 'm6' | 'y1' | 'y3' | 'y5' | 'all';
 // 區間走勢交給後端用報酬卡同一個基準點切（period），首尾相除才會等於同頁的「近N」報酬；all 不切

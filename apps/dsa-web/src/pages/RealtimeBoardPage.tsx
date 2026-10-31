@@ -25,6 +25,7 @@ import { formatDateTime } from '../utils/format';
 import { cn } from '../utils/cn';
 import { isTwStockCode, stockCodeMatchKey } from '../utils/stockCode';
 import { BoardDossierCell, BoardDossierPanel } from '../components/board/BoardDossier';
+import { marketToneClass } from '../utils/marketTone';
 
 const POLL_INTERVAL_MS = 30_000;
 // 看板代碼分市場：只有明確的台股／美股格式才參與閘門，其餘（.T、.HK、.KS、A 股…）歸 other 照常輪詢
@@ -60,18 +61,12 @@ function writeScope(scope: Scope) {
 }
 const CHUNK = 8; // 每批并发请求的代码数：分批并发刷新，慢的股票不挡快的
 
-// 台股/A股涨跌色：红涨绿跌
-function changeClass(value?: number | null): string {
-  if (value == null || Number.isNaN(value) || value === 0) return 'text-secondary-text';
-  return value > 0 ? 'text-red-500' : 'text-emerald-500';
-}
+const changeClass = (value?: number | null): string => marketToneClass(value);
 
 // 均价多空分界：站上均价偏多(红)、跌破偏空(绿)。台股当沖盘中第一条纪律。
 function avgClass(price?: number | null, avg?: number | null): string {
   if (price == null || avg == null || avg === 0) return 'text-secondary-text';
-  if (price > avg) return 'text-red-500';
-  if (price < avg) return 'text-emerald-500';
-  return 'text-secondary-text';
+  return marketToneClass(price - avg);
 }
 
 type Freshness = 'live' | 'delayed' | 'unavailable';
@@ -425,15 +420,15 @@ const RealtimeBoardPage: React.FC = () => {
   const limitInfo = (q?: StockQuote | null): { text: string; cls: string } | null => {
     if (!q || q.limitUp == null || q.limitDown == null || !q.currentPrice) return null;
     const price = q.currentPrice;
-    if (price >= q.limitUp) return { text: t('board.limit.hitUp'), cls: 'text-red-500 font-medium' };
-    if (price <= q.limitDown) return { text: t('board.limit.hitDown'), cls: 'text-emerald-500 font-medium' };
+    if (price >= q.limitUp) return { text: t('board.limit.hitUp'), cls: 'text-market-up font-medium' };
+    if (price <= q.limitDown) return { text: t('board.limit.hitDown'), cls: 'text-market-down font-medium' };
     const toUp = ((q.limitUp - price) / price) * 100;
     const toDown = ((price - q.limitDown) / price) * 100;
     // 离板远（两侧都 >3%）时不显示——对当冲只有接近板才有意义，常态显示是噪音。
     if (toUp > LIMIT_NEAR_PCT && toDown > LIMIT_NEAR_PCT) return null;
     return toUp <= toDown
-      ? { text: `${t('board.limit.toUp')} ${toUp.toFixed(1)}%`, cls: 'text-red-400' }
-      : { text: `${t('board.limit.toDown')} ${toDown.toFixed(1)}%`, cls: 'text-emerald-400' };
+      ? { text: `${t('board.limit.toUp')} ${toUp.toFixed(1)}%`, cls: 'text-market-up' }
+      : { text: `${t('board.limit.toDown')} ${toDown.toFixed(1)}%`, cls: 'text-market-down' };
   };
 
   // 现股当沖资格：仅在「非可双向当沖」时示警（Yes 为常态不显示，避免噪音）
@@ -459,9 +454,9 @@ const RealtimeBoardPage: React.FC = () => {
     if (!q) return null;
     const tick =
       q.lastTickType === 1
-        ? { text: t('board.detail.tickBuy'), cls: 'text-red-500' }
+        ? { text: t('board.detail.tickBuy'), cls: 'text-market-up' }
         : q.lastTickType === 2
-          ? { text: t('board.detail.tickSell'), cls: 'text-emerald-500' }
+          ? { text: t('board.detail.tickSell'), cls: 'text-market-down' }
           : { text: t('board.detail.tickNeutral'), cls: 'text-secondary-text' };
     const fmt = (v?: number | null) => (v != null ? v.toFixed(2) : '—');
     const lot = (v?: number | null) => (v != null ? v.toLocaleString() : '—');
@@ -470,7 +465,7 @@ const RealtimeBoardPage: React.FC = () => {
         ? {
             label: t('board.detail.bid'),
             value: (
-              <span className="text-emerald-500">
+              <span className="text-market-down">
                 {fmt(q.bestBid)}
                 <span className="ml-1 text-secondary-text">{lot(q.bestBidVolume)}</span>
               </span>
@@ -481,7 +476,7 @@ const RealtimeBoardPage: React.FC = () => {
         ? {
             label: t('board.detail.ask'),
             value: (
-              <span className="text-red-500">
+              <span className="text-market-up">
                 {fmt(q.bestAsk)}
                 <span className="ml-1 text-secondary-text">{lot(q.bestAskVolume)}</span>
               </span>
@@ -492,8 +487,8 @@ const RealtimeBoardPage: React.FC = () => {
       q.averagePrice != null
         ? { label: t('board.detail.avg'), value: <span className={avgClass(q.currentPrice, q.averagePrice)}>{fmt(q.averagePrice)}</span> }
         : null,
-      q.limitUp != null ? { label: t('board.detail.limitUp'), value: <span className="text-red-500">{fmt(q.limitUp)}</span> } : null,
-      q.limitDown != null ? { label: t('board.detail.limitDown'), value: <span className="text-emerald-500">{fmt(q.limitDown)}</span> } : null,
+      q.limitUp != null ? { label: t('board.detail.limitUp'), value: <span className="text-market-up">{fmt(q.limitUp)}</span> } : null,
+      q.limitDown != null ? { label: t('board.detail.limitDown'), value: <span className="text-market-down">{fmt(q.limitDown)}</span> } : null,
       q.volumeRatio != null ? { label: t('board.detail.volumeRatio'), value: q.volumeRatio.toFixed(2) } : null,
       q.amplitude != null ? { label: t('board.detail.amplitude'), value: `${q.amplitude.toFixed(2)}%` } : null,
     ];

@@ -28,7 +28,7 @@ import {
   getDecisionSignalPlanQualityLabel,
 } from '../../utils/decisionSignalLabels';
 
-type BadgeVariant = 'default' | 'success' | 'warning' | 'danger' | 'info' | 'history';
+type BadgeVariant = 'default' | 'success' | 'warning' | 'danger' | 'info' | 'history' | 'brand' | 'neutral' | 'caution';
 
 const STATUS_LABEL_KEYS: Record<DecisionSignalStatus, UiTextKey> = {
   active: 'decisionSignals.active',
@@ -47,9 +47,9 @@ const STATUS_VARIANTS: Record<DecisionSignalStatus, BadgeVariant> = {
 };
 
 const ACTION_VARIANTS: Record<DecisionActionTone, BadgeVariant> = {
-  success: 'success',
-  warning: 'warning',
-  danger: 'danger',
+  brand: 'brand',
+  neutral: 'neutral',
+  caution: 'caution',
   default: 'default',
 };
 

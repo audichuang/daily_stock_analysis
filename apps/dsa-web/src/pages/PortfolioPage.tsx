@@ -54,6 +54,7 @@ import type {
 import { areStockCodesEquivalent, normalizeStockCode } from '../utils/stockCode';
 import { parseDecisionSignalDate } from '../utils/decisionSignalTime';
 import { buildDecisionActionLabelMap, getDecisionActionLabel } from '../utils/decisionAction';
+import { marketToneClass } from '../utils/marketTone';
 
 const PIE_COLORS = ['#00d4ff', '#00ff88', '#ffaa00', '#ff7a45', '#7f8cff', '#ff4466'];
 const UNCLASSIFIED_SECTOR = 'UNCLASSIFIED';
@@ -1866,9 +1867,7 @@ const PortfolioPage: React.FC = () => {
                       <td
                         className={`py-2 pr-3 text-right ${
                           hasPositionPrice(row)
-                            ? row.unrealizedPnlBase >= 0
-                              ? 'text-success'
-                              : 'text-danger'
+                            ? marketToneClass(row.unrealizedPnlBase)
                             : 'text-secondary'
                         }`}
                       >
@@ -1876,10 +1875,8 @@ const PortfolioPage: React.FC = () => {
                       </td>
                       <td
                         className={`py-2 pr-3 text-right ${
-                          hasPositionPrice(row) && row.unrealizedPnlPct !== null && row.unrealizedPnlPct !== undefined
-                            ? row.unrealizedPnlPct >= 0
-                              ? 'text-success'
-                              : 'text-danger'
+                          hasPositionPrice(row)
+                            ? marketToneClass(row.unrealizedPnlPct, 'text-secondary')
                             : 'text-secondary'
                         }`}
                       >
