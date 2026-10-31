@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 行事曆接上 MOPS 台股法說會（上市／上櫃，另標「法說會」不當財報日），由每日報告刷新；修正 Yahoo 備援在台北主機把美東盤後財報算晚一天，以及雙來源都失敗時清掉有效快取。
 - [新功能] 新增持股與自選事件行事曆 API、Web 月份清單與 iOS 原生月曆／個股七日財報提示；Nasdaq 主來源、Yahoo 推估備援，無日期維持未定，總經與台股一般法定期限分開標示。
 - [改進] 下次財報快取加入傳統與 agent 分析證據，不改評分；新增應用庫追加 migration 與預設關閉的排程刷新設定。
 

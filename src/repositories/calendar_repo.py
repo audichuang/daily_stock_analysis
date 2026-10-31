@@ -30,3 +30,10 @@ class CalendarRepository:
             ))
             session.add_all([CalendarEventRecord(**r) for r in rows])
             session.commit()
+
+    def replace_type(self, kind, rows):
+        # 法說會一次抓完所有月份才替換，失敗時不呼叫。
+        with self.db.get_session() as session:
+            session.execute(delete(CalendarEventRecord).where(CalendarEventRecord.type == kind))
+            session.add_all([CalendarEventRecord(**r) for r in rows])
+            session.commit()

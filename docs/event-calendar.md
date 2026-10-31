@@ -24,16 +24,16 @@ Web 入口 `/calendar`；iOS「工具 → 事件行事曆」為原生月曆、�
 | --- | --- | --- |
 | TWSE `/v1/opendata/t187ap05_L`、TPEx `/openapi/v1/mopsfin_t187ap05_O` | 均 200，出表日期 1151017、資料年月 11509 | 已發生月營收，不能推成未來發布日 |
 | TWSE `t187ap31_L`、TPEx `mopsfin_t187ap31_O` | 均 200，自帶日期 1151030／1151031 | 監察人承認資料，沒有未來財報發布日 |
-| MOPS 舊站 `https://mopsov.twse.com.tw/mops/web/ajax_t100sb02_1` | POST `TYPEK=sii/otc&year=115&month=11&step=1&firstin=1&off=1` 有未來法說；無出表／更新日期。主站相同 GET 轉錯誤頁仍 200 | 無法核對 feed 鮮度，而且法說可能回顧已發布財報，不接為下次財報日 |
+| MOPS 舊站 `https://mopsov.twse.com.tw/mops/web/ajax_t100sb02_1` | POST `TYPEK=sii/otc&year=115&month=11&step=1&firstin=1&off=1` 回未來法說（2026-11 實測上市 71、上櫃 22 筆）；沒有出表日期。主站相同 GET 轉錯誤頁仍 200 | 接成 `investor_conference` 事件；法說可能回顧已發布財報，不當成財報日。以「列日期落在查詢月份」與表頭判斷回應有效，失敗保留舊快取 |
 | TWSE／TPEx OpenAPI Swagger | 200，未列直接法說會預告 API | 不臆造介接 |
 
-因此本輪台股個股實際財報日維持「未定」，只有名單含台股時顯示 **市場一般法定節點**，`code=null`、標「法定期限」；不把 ETF 或未分類發行人逐股套用期限。[證交法第36條](https://twse-regulation.twse.com.tw/TW/law/DOC01.aspx?FLCODE=FL007009&FLNO=36)的一般曆年制節點為月營收次月10日、前三季終了45日、年度終了3個月。[特殊適用範圍辦法](https://twse-regulation.twse.com.tw/TW/law/DAT0201.aspx?FLCODE=FL067432)有百億元資本額上市櫃年度75日、第一上市櫃Q2兩個月、2026起保險業及具保險子公司月營收得延至15日等例外；金融業、假日及核准展延亦須依公司規定，不自動算出個股到期日。
+因此台股個股的財報實際發布日維持「未定」，法說會另列日期；公司只在開會前一段時間才申報，所以持股本月查無法說會是常態，不代表沒有財報。名單含台股時另顯示 **市場一般法定節點**，`code=null`、標「法定期限」；不把 ETF 或未分類發行人逐股套用期限。[證交法第36條](https://twse-regulation.twse.com.tw/TW/law/DOC01.aspx?FLCODE=FL007009&FLNO=36)的一般曆年制節點為月營收次月10日、前三季終了45日、年度終了3個月。[特殊適用範圍辦法](https://twse-regulation.twse.com.tw/TW/law/DAT0201.aspx?FLCODE=FL067432)有百億元資本額上市櫃年度75日、第一上市櫃Q2兩個月、2026起保險業及具保險子公司月營收得延至15日等例外；金融業、假日及核准展延亦須依公司規定，不自動算出個股到期日。
 
 ## 快取與操作
 
 新表 `calendar_events` 在應用庫（`STORAGE_DATABASE_URL`，未設則 SQLite）保存事件與無日期狀態。`DatabaseManager._ensure_calendar_event_schema` 是可重入追加 migration，建立表並記 `schema_migrations.version=2026-11-01-calendar-events`；不動既有 API 欄位與 `market` 庫。更新財報用公司固定 id 覆寫，改期不留下另一個未來事件；總經按成功取得的類型原子替換。
 
-`CALENDAR_REFRESH_ENABLED=false` 預設停用外部刷新。開啟且 `SCHEDULE_ENABLED=true`，既有 API runtime 或 `main.py --schedule` 的背景工作每 6 小時更新，啟動時跑一次；不新增部署或排程 infra。只開行事曆／分析不發外部請求。也可手動 `uv run --frozen python scripts/refresh_calendar.py`（會寫設定中的應用庫；正式操作前先確認目標）。本次開發未對正式庫執行。
+`CALENDAR_REFRESH_ENABLED=false` 預設停用外部刷新。排程路徑：Mac 每日報告（`scripts/daily_report.sh`）每天跑一次 `scripts/refresh_calendar.py`，寫進與 NAS 共用的應用庫，NAS 不必開排程。開啟且 `SCHEDULE_ENABLED=true`，既有 API runtime 或 `main.py --schedule` 的背景工作每 6 小時更新，啟動時跑一次；不新增部署或排程 infra。只開行事曆／分析不發外部請求。也可手動 `uv run --frozen python scripts/refresh_calendar.py`（會寫設定中的應用庫；正式操作前先確認目標）。本次開發未對正式庫執行。
 
 隔離 smoke 範例（需在隔離 env 內提供 `STOCK_LIST`，不可複製正式秘密）：
 

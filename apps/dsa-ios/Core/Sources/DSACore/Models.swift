@@ -387,6 +387,7 @@ public struct CalendarEvent: Codable, Sendable, Identifiable {
     public let updatedAt: String?
 
     public var isStatutoryDeadline: Bool { dateKind == "statutory_deadline" }
+    public var isCompanyEvent: Bool { type == "earnings" || type == "investor_conference" }
     public var statusLabel: String { isStatutoryDeadline ? "法定期限" : status == "estimated" ? "推估" : "已確認" }
     public var timezoneLabel: String { timezone == "America/New_York" ? "美東 ET" : "台北" }
 

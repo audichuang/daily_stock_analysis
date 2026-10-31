@@ -78,21 +78,21 @@ struct StockDetailView: View {
     }
 
     private var nextEarnings: CalendarEvent? {
-        earningsCalendar?.events.filter { $0.type == "earnings" && $0.dateKind == "release" }
+        earningsCalendar?.events.filter { $0.isCompanyEvent && $0.dateKind == "release" }
             .sorted { $0.date < $1.date }.first
     }
 
     private var nextEarningsSection: some View {
         DSACard {
             VStack(alignment: .leading, spacing: 10) {
-                SectionHeading("下次財報", systemImage: "calendar")
+                SectionHeading(nextEarnings?.type == "investor_conference" ? "下次法說會" : "下次財報", systemImage: "calendar")
                 if let event = nextEarnings {
                     HStack {
                         Text("\(event.date) · \(event.timezoneLabel)").font(.headline.monospacedDigit())
                         StatusBadge(event.statusLabel, tone: event.status == "estimated" ? .warning : .neutral)
                     }
                     if event.isWithinSevenDays() {
-                        Label("7 天內發布財報", systemImage: "exclamationmark.circle.fill")
+                        Label(nextEarnings?.type == "investor_conference" ? "7 天內召開法說會" : "7 天內發布財報", systemImage: "exclamationmark.circle.fill")
                             .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.warning)
                             .accessibilityIdentifier("stock.earnings.soon")
                     }

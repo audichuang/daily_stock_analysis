@@ -1,4 +1,5 @@
 """獨立移植 Nasdaq 財報邏輯；Yahoo 只作備援，沒有日期就回空值。"""
+import html
 import logging
 import math
 import re
@@ -17,6 +18,10 @@ NASDAQ_HEADERS = {
 }
 MONTHS = {m: i for i, m in enumerate(
     ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), 1)}
+NEW_YORK = ZoneInfo("America/New_York")
+MOPS_URL = "https://mopsov.twse.com.tw/mops/web/ajax_t100sb02_1"
+MOPS_PAGE_URL = "https://mopsov.twse.com.tw/mops/web/t100sb02_1"
+ROC_DATE = re.compile(r"(\d{2,3})/(\d{1,2})/(\d{1,2})")
 TIME_LABELS = {"time-pre-market": "盤前", "time-after-hours": "盤後", "time-not-supplied": "時段未定"}
 
 
@@ -69,16 +74,22 @@ def parse_earnings_calendar(code, day, data):
 def yahoo_earnings(code, today):
     import yfinance as yf
 
-    data = yf.Ticker(code.replace(".", "-")).calendar or {}
+    ticker = yf.Ticker(code.replace(".", "-"))
+    info = ticker.info or {}
+    # 503 時 yfinance 可能回空資料；沒有基本識別欄位就是查詢失敗，不是「沒有財報日」。
+    if not info.get("symbol") and not info.get("quoteType"):
+        raise ValueError("Yahoo 未回傳報價資料")
+    # 不用 .calendar 的日期：它先以主機時區轉成 date，台北主機上美東盤後財報會晚一天。
     dates = []
-    for value in data.get("Earnings Date") or []:
-        if isinstance(value, datetime):
-            value = value.astimezone(ZoneInfo("America/New_York")).date() if value.tzinfo else value.date()
-        if isinstance(value, date) and value >= today:
-            dates.append(value)
+    for key in ("earningsTimestampStart", "earningsTimestamp", "earningsTimestampEnd"):
+        stamp = info.get(key)
+        if isinstance(stamp, (int, float)) and math.isfinite(stamp):
+            day = datetime.fromtimestamp(stamp, tz=NEW_YORK).date()
+            if day >= today:
+                dates.append(day)
     if not dates:
         return None
-    eps = data.get("Earnings Average")
+    eps = (ticker.calendar or {}).get("Earnings Average")
     detail = "Yahoo 備援推估（非公司確認日）"
     if isinstance(eps, (int, float)) and math.isfinite(eps):
         detail += f"，市場預估 EPS ${eps:g}"
@@ -109,3 +120,40 @@ def fetch_earnings(code, today):
             raise
         # Nasdaq 明確沒有日期、Yahoo 又限流：不可保留先前的未來日期。
         return None
+
+
+def _cell_text(raw):
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", raw))).strip()
+
+
+def parse_mops_conferences(body, year, month):
+    """解析 MOPS 法說會彙總表；無法辨識或月份不符就拋錯，呼叫端保留舊快取。"""
+    if "查無資料" in body:
+        return []
+    if "公司代號" not in body:
+        raise ValueError("MOPS 回應不是法說會彙總表")
+    rows = []
+    for raw_row in re.findall(r"<tr[^>]*>(.*?)</tr>", body, re.S):
+        cells = [_cell_text(c) for c in re.findall(r"<td[^>]*>(.*?)</td>", raw_row, re.S)]
+        if len(cells) < 6 or not re.fullmatch(r"\w{4,6}", cells[0]):
+            continue
+        days = []
+        for roc_year, roc_month, roc_day in ROC_DATE.findall(cells[2]):
+            days.append(date(int(roc_year) + 1911, int(roc_month), int(roc_day)))
+        # MOPS 沒有回應日期欄位，用「列日期落在查詢月份」判斷有沒有停更或串錯月。
+        if not any(d.year == year and d.month == month for d in days):
+            raise ValueError("MOPS 法說會日期與查詢月份不符")
+        rows.append({"code": cells[0], "name": cells[1], "date": days[0], "date_text": cells[2],
+                     "time": cells[3], "place": cells[4], "summary": cells[5]})
+    return rows
+
+
+def fetch_tw_conferences(year, month, market):
+    """market：sii＝上市、otc＝上櫃。"""
+    response = requests.post(MOPS_URL, data={
+        "encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "TYPEK": market,
+        "year": year - 1911, "month": month, "co_id": "",
+    }, headers={"User-Agent": NASDAQ_HEADERS["User-Agent"]}, timeout=30)
+    response.raise_for_status()
+    response.encoding = "utf-8"
+    return parse_mops_conferences(response.text, year, month)

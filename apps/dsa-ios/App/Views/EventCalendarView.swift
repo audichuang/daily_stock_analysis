@@ -77,8 +77,8 @@ struct EventCalendarView: View {
 
     private func dayCell(_ day: String) -> some View {
         let events = response?.events.filter { $0.date == day } ?? []
-        let company = events.contains { $0.type == "earnings" || $0.isStatutoryDeadline }
-        let macro = events.contains { $0.type != "earnings" && !$0.isStatutoryDeadline }
+        let company = events.contains { $0.isCompanyEvent || $0.isStatutoryDeadline }
+        let macro = events.contains { !$0.isCompanyEvent && !$0.isStatutoryDeadline }
         return Button { selected = day } label: {
             VStack(spacing: 3) {
                 Text(String(Int(day.suffix(2))!))

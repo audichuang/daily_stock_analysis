@@ -88,7 +88,7 @@ export default function CalendarPage() {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <h3 className="font-semibold text-foreground">{event.name}{event.code ? <span className="ml-2 font-mono text-sm text-secondary-text">{event.code}</span> : null}</h3>
-                      <p className="mt-1 text-xs text-secondary-text">{event.type === 'earnings' || event.type === 'fomc' || event.type === 'revenue_deadline' || event.type === 'financial_deadline' ? text[event.type] : text.macro} · {event.timezone === 'America/New_York' ? text.eastern : text.taipei}</p>
+                      <p className="mt-1 text-xs text-secondary-text">{event.type === 'earnings' || event.type === 'investor_conference' || event.type === 'fomc' || event.type === 'revenue_deadline' || event.type === 'financial_deadline' ? text[event.type] : text.macro} · {event.timezone === 'America/New_York' ? text.eastern : text.taipei}</p>
                     </div>
                     <Badge variant={event.dateKind === 'statutory_deadline' || event.status === 'estimated' ? 'warning' : 'success'}>{event.dateKind === 'statutory_deadline' ? text.deadline : text[event.status]}</Badge>
                   </div>

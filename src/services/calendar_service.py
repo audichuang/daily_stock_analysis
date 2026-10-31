@@ -1,11 +1,12 @@
 """持股＋自選行事曆：開頁／分析唯讀，排程才向外部刷新。"""
 import logging
+import time
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from src.config import get_config
 from src.repositories.calendar_repo import CalendarRepository
-from src.services.calendar_sources import fetch_earnings
+from src.services.calendar_sources import MOPS_PAGE_URL, fetch_earnings, fetch_tw_conferences
 from src.services.market_symbol_utils import is_tw_suffix_symbol
 from src.services.stock_list_parser import ParseStatus, parse_analysis_target
 
@@ -23,6 +24,11 @@ FOMC_DATES = {
                                 "2027-07-28", "2027-09-15", "2027-10-27", "2027-12-08")},
 }
 CACHE_MAX_AGE = timedelta(days=3)
+TAIPEI = ZoneInfo("Asia/Taipei")
+CONFERENCE_TYPE = "investor_conference"
+CONFERENCE_MONTHS = 3
+# MOPS 連續請求會回安全頁面（此時解析會拋錯）；間隔放慢一點。
+CONFERENCE_REQUEST_GAP_SECONDS = 1
 
 
 def canonical_code(raw):
@@ -146,7 +152,7 @@ class CalendarService:
             return None
         day = now.astimezone(ZoneInfo("Asia/Taipei") if is_tw_suffix_symbol(code) else ET).date()
         rows = self.repo.read([code], day, date.max)
-        fresh = [r for r in rows if r["code"] == code and r["type"] == "earnings" and r["date"]
+        fresh = [r for r in rows if r["code"] == code and r["type"] in ("earnings", CONFERENCE_TYPE) and r["date"]
                  and now.astimezone(timezone.utc).replace(tzinfo=None) - r["updated_at"] <= CACHE_MAX_AGE]
         return min(fresh, key=lambda r: r["date"]) if fresh else None
 
@@ -171,8 +177,41 @@ class CalendarService:
             except Exception as exc:
                 stats["failed"] += 1
                 logger.warning("財報快取更新失敗 %s: %s", code, type(exc).__name__)
+        stats["conferences"] = self._refresh_conferences(now, members)
         self._refresh_macro(now)
         return stats
+
+    def _refresh_conferences(self, now, members):
+        """回傳寫入筆數；任一頁失敗回 None 並保留舊快取。"""
+        wanted = {code.split(".")[0]: code for code in members if is_tw_suffix_symbol(code)}
+        if not wanted:
+            return 0
+        today = now.astimezone(TAIPEI).date()
+        stamp = now.astimezone(timezone.utc).replace(tzinfo=None)
+        rows = {}
+        try:
+            for offset in range(CONFERENCE_MONTHS):
+                index = today.year * 12 + today.month - 1 + offset
+                for market in ("sii", "otc"):
+                    time.sleep(CONFERENCE_REQUEST_GAP_SECONDS)
+                    for item in fetch_tw_conferences(index // 12, index % 12 + 1, market):
+                        code = wanted.get(item["code"])
+                        if not code or item["date"] < today:
+                            continue
+                        event_id = f"{CONFERENCE_TYPE}:{code}:{item['date'].isoformat()}"
+                        parts = [p for p in (item["date_text"] if "至" in item["date_text"] else "",
+                                             item["time"], item["place"], item["summary"]) if p]
+                        rows[event_id] = {
+                            "id": event_id, "type": CONFERENCE_TYPE, "code": code,
+                            "name": f"{members[code]} 法說會"[:128], "date": item["date"], "status": "confirmed",
+                            "detail": "，".join(parts), "source_url": MOPS_PAGE_URL,
+                            "timezone": "Asia/Taipei", "date_kind": "release", "updated_at": stamp,
+                        }
+            self.repo.replace_type(CONFERENCE_TYPE, list(rows.values()))
+            return len(rows)
+        except Exception as exc:
+            logger.warning("法說會快取更新失敗: %s", type(exc).__name__)
+            return None
 
     def _refresh_macro(self, now):
         from market_data import macro
@@ -238,7 +277,7 @@ def earnings_prompt(evidence, report_language="zh-TW"):
     import json
 
     label, rule = {
-        "zh-TW": ("下次財報日（證據）", "只作日期風險證據，不改評分；未定不可推算，推估不可當確認。日期依來源時區。"),
+        "zh-TW": ("下次財報／法說日（證據）", "只作日期風險證據，不改評分；未定不可推算，推估不可當確認。日期依來源時區。"),
         "zh": ("下次财报日（证据）", "仅作日期风险证据，不改评分；未定不可推算，推估不可当确认。日期依来源时区。"),
         "en": ("Next earnings (evidence)", "Date risk evidence only; do not change scores. Do not invent unknown dates or treat estimates as confirmed. Use the source timezone."),
         "ko": ("다음 실적 발표일 (근거)", "날짜 위험 근거로만 사용하며 점수를 변경하지 마세요. 미정 날짜를 추정하거나 예상일을 확정일로 취급하지 마세요. 출처 시간대를 사용하세요."),
