@@ -299,9 +299,14 @@ class TestIntelQueryQuality:
                              source="bbc.com", published_date=None)
         lookalike = SearchResult(title="Alphabet earnings", snippet="x", url="https://notyoutube.com/a",
                                  source="notyoutube.com", published_date=None)
-        response = SearchResponse(query="q", results=[page, video, story, lookalike], provider="t", success=True)
+        dated = SearchResult(title="Alphabet earnings", snippet="x", url="https://www.tradingview.com/news/a",
+                             source="tradingview.com", published_date=date.today().isoformat())
+        dated_video = SearchResult(title="Alphabet earnings", snippet="x", url="https://youtube.com/watch?v=2",
+                                   source="youtube.com", published_date=date.today().isoformat())
+        response = SearchResponse(query="q", results=[page, video, story, lookalike, dated, dated_video],
+                                  provider="t", success=True)
         kept = SearchService._filter_ranked_news_for_context(response, log_scope="t", allow_data_pages=False)
-        assert [r.url for r in kept.results] == [story.url, lookalike.url]
+        assert [r.url for r in kept.results] == [story.url, lookalike.url, dated.url]
         kept = SearchService._filter_ranked_news_for_context(response, log_scope="t", allow_data_pages=True)
-        assert len(kept.results) == 4
+        assert len(kept.results) == 6
 
