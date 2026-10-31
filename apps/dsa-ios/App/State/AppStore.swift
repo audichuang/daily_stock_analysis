@@ -6,7 +6,9 @@ import DSACore
 final class AppStore: ObservableObject {
     @Published var connected = false
     @Published var connecting = false
+    @Published var startingUp = true
     @Published var needsPassword = false
+    @Published var accessExpanded = false
     @Published var connectionError: String?
     @Published var serverAddress: String
     @Published var watchlist: [String] = []
@@ -70,7 +72,10 @@ final class AppStore: ObservableObject {
                 config.requestCachePolicy = .reloadIgnoringLocalCacheData
                 let candidateSession = URLSession(configuration: config)
                 let candidateClient: DSAClient
-                do { candidateClient = try DSAClient(baseURL: url, session: candidateSession) }
+                do {
+                    let access = try AccessVault.load(for: url).map { CloudflareAccess(origin: url, credentials: $0) }
+                    candidateClient = try DSAClient(baseURL: url, session: candidateSession, access: access)
+                }
                 catch { candidateSession.invalidateAndCancel(); throw error }
                 session?.invalidateAndCancel()
                 generation = UUID()
@@ -95,7 +100,74 @@ final class AppStore: ObservableObject {
             await refresh()
         } catch {
             connectionError = error.localizedDescription
+            handleAuthenticationError(error)
         }
+    }
+
+    func hasAccessCredentials() -> Bool {
+        guard let url = URL(string: serverAddress) else { return false }
+        return (try? AccessVault.load(for: url)) != nil
+    }
+
+    func saveAccessCredentials(clientID: String, secret: String) throws {
+        guard let url = URL(string: serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw DSAError.invalidServerURL
+        }
+        // 沿用 client 的網址驗證，避免把憑證存進含帳密或 query 的網址。
+        try DSAClient.validateServerURL(url)
+        let id = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = secret.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, !value.isEmpty,
+              !id.contains(where: { $0.isNewline }), !value.contains(where: { $0.isNewline }) else {
+            throw LocalError("請完整填寫 Client ID 與 Secret。")
+        }
+        try AccessVault.save(AccessCredentials(clientID: id, clientSecret: value), for: url)
+        client = nil
+        needsPassword = false
+        connectionError = nil
+    }
+
+    func removeAccessCredentials() throws {
+        guard let url = URL(string: serverAddress) else { throw DSAError.invalidServerURL }
+        try AccessVault.remove(for: url)
+        session?.configuration.httpCookieStorage?.cookies?.filter { $0.name == "CF_Authorization" }
+            .forEach { session?.configuration.httpCookieStorage?.deleteCookie($0) }
+        client = nil
+        needsPassword = false
+        connectionError = nil
+    }
+
+    func showConnectionSettings() {
+        connected = false
+        needsPassword = false
+        accessExpanded = true
+    }
+
+    func toolCookies() async throws -> [HTTPCookie] {
+        guard let baseURL, let session, let client else { throw DSAError.invalidResponse }
+        let storage = session.configuration.httpCookieStorage
+        if !(storage?.cookies(for: baseURL) ?? []).contains(where: { $0.name == "CF_Authorization" }) {
+            do { _ = try await client.authStatus() }
+            catch { handleAuthenticationError(error); throw error }
+            if try AccessVault.load(for: baseURL) != nil,
+               !(storage?.cookies(for: baseURL) ?? []).contains(where: { $0.name == "CF_Authorization" }) {
+                throw LocalError("Cloudflare Access 未提供工具網頁需要的授權 Cookie，請檢查服務設定。")
+            }
+        }
+        return (storage?.cookies(for: baseURL) ?? []).filter {
+            ["dsa_session", "CF_Authorization"].contains($0.name) && ($0.expiresDate.map { $0 > Date() } ?? true)
+        }
+    }
+
+    private func handleAuthenticationError(_ error: Error) {
+        guard let error = error as? DSAError else { return }
+        if case .cloudflareAccess = error {
+            accessExpanded = true
+            needsPassword = false
+        } else if error.requiresLogin { needsPassword = true }
+        else { return }
+        connectionError = error.localizedDescription
+        connected = false
     }
 
     /// `.refreshable` 的 task 由 SwiftUI 擁有：refresh 途中 store 先發布的結果會讓它被取消，
@@ -137,7 +209,8 @@ final class AppStore: ObservableObject {
 
     func logout() async {
         if let baseURL { SessionVault.clear(for: baseURL) }
-        session?.configuration.httpCookieStorage?.cookies?.forEach { session?.configuration.httpCookieStorage?.deleteCookie($0) }
+        session?.configuration.httpCookieStorage?.cookies?.filter { $0.name == "dsa_session" }
+            .forEach { session?.configuration.httpCookieStorage?.deleteCookie($0) }
         session?.invalidateAndCancel()
         generation = UUID()
         client = nil
@@ -170,7 +243,7 @@ final class AppStore: ObservableObject {
             watchlist = codes
             quotes = results
             errors["watchlist"] = nil
-        } catch { if generation == expected { errors["watchlist"] = error.localizedDescription } }
+        } catch { if generation == expected { errors["watchlist"] = error.localizedDescription; handleAuthenticationError(error) } }
     }
 
     private func loadIndices(_ client: DSAClient, generation expected: UUID) async {
@@ -180,7 +253,7 @@ final class AppStore: ObservableObject {
             guard generation == expected, region == selectedMarket else { return }
             indices = values
             errors["indices"] = nil
-        } catch { if generation == expected, region == selectedMarket { errors["indices"] = error.localizedDescription } }
+        } catch { if generation == expected, region == selectedMarket { errors["indices"] = error.localizedDescription; handleAuthenticationError(error) } }
     }
 
     private func loadReports(_ client: DSAClient, generation expected: UUID) async {
@@ -192,7 +265,7 @@ final class AppStore: ObservableObject {
             reports = stockPage.items.filter { $0.reportType != "market_review" }
             marketReviews = marketPage.items
             errors["reports"] = nil
-        } catch { if generation == expected { errors["reports"] = error.localizedDescription } }
+        } catch { if generation == expected { errors["reports"] = error.localizedDescription; handleAuthenticationError(error) } }
     }
 
     private func clearData() {

@@ -58,6 +58,8 @@ struct ToolsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Divider().overlay(Theme.border)
+                    Button("Cloudflare Access 憑證") { store.showConnectionSettings() }
+                        .accessibilityIdentifier("tools.access")
                     HStack(alignment: .firstTextBaseline) {
                         Text("Daily Stock AI").font(.subheadline).foregroundStyle(Theme.text)
                         Spacer()
@@ -76,7 +78,7 @@ struct ToolsView: View {
             .buttonStyle(SecondaryButtonStyle())
             .disabled(loggingOut)
             .accessibilityIdentifier("tools.logout")
-            Text("清除這部裝置的登入狀態；伺服器上的帳本、報告與其他裝置不受影響。")
+            Text("清除這部裝置的 DSA 登入狀態，保留 Cloudflare Access 憑證；伺服器上的帳本、報告與其他裝置不受影響。")
                 .font(.caption2).foregroundStyle(Theme.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

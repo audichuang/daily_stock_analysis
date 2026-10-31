@@ -34,6 +34,7 @@ struct ConnectionView: View {
                             Text(store.serverAddress).font(.caption).foregroundStyle(Theme.secondary)
                             Button("變更服務網址") { showAddress = true; store.needsPassword = false }
                         }
+                        AccessSettingsView()
                         if store.needsPassword {
                             SecureField("管理員密碼", text: $password)
                                 .textContentType(.password)
@@ -68,6 +69,9 @@ struct ConnectionView: View {
                     .font(.caption).foregroundStyle(Theme.secondary).padding(.bottom, 20)
             }
         }
+        #if DEBUG && DSA_ACCESS_UITEST
+        .onAppear { password = ProcessInfo.processInfo.environment["DSA_ACCESS_TEST_PASSWORD"] ?? "" }
+        #endif
     }
 
     private func feature(_ icon: String, _ title: String, _ detail: String) -> some View {

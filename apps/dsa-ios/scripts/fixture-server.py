@@ -170,6 +170,22 @@ STATE = State()
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "DSAIOSFixture/1"
+    access_required = False
+
+    def access_headers_valid(self):
+        return (self.headers.get("CF-Access-Client-Id") == "fixture-access-id"
+                and self.headers.get("CF-Access-Client-Secret") == "fixture-access-secret")
+
+    def access_cookie_valid(self):
+        cookies = SimpleCookie()
+        cookies.load(self.headers.get("Cookie", ""))
+        return cookies.get("CF_Authorization") is not None and cookies["CF_Authorization"].value == "fixture-access-cookie"
+
+    def check_access(self):
+        if not self.access_required or self.access_headers_valid() or self.access_cookie_valid():
+            return True
+        self.reply(302, headers={"Location": "https://fixture.cloudflareaccess.com/cdn-cgi/access/login"})
+        return False
 
     def log_message(self, format, *args):
         # 日誌只記方法、路徑與 HTTP 狀態，不記密碼、cookie 或請求內容。
@@ -182,6 +198,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-DSA-Fixture", "synthetic-data-only")
+        if self.access_required and self.access_headers_valid():
+            # loopback HTTP fixture 無 Secure；正式 HTTPS 回應的 Secure 屬性由原生 cookie jar 保留。
+            self.send_header("Set-Cookie", "CF_Authorization=fixture-access-cookie; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax")
         for key, value in (headers or {}).items():
             self.send_header(key, value)
         self.end_headers()
@@ -198,7 +217,15 @@ class Handler(BaseHTTPRequestHandler):
         return [unquote(part) for part in parsed.path.strip("/").split("/")], parse_qs(parsed.query)
 
     def do_GET(self):
+        if not self.check_access():
+            return
         route, query = self.route()
+        if self.access_required and route == ["access-cookie-proof.js"]:
+            if not self.access_cookie_valid() or self.access_headers_valid():
+                return self.reply(403, "", content_type="text/javascript")
+            return self.reply(200, "document.getElementById('access-proof').textContent='Access 子資源 Cookie 已驗證';", content_type="text/javascript")
+        if self.access_required and route == ["access-redirect"]:
+            return self.reply(302, headers={"Location": "https://fixture.cloudflareaccess.com/cdn-cgi/access/login"})
         if route == ["api", "v1", "stocks", "quotes"] and QUOTE_DELAY:
             # 正式站報價常是 refresh 裡最慢的一支；延遲放在鎖外，重現下拉更新途中的取消。
             time.sleep(QUOTE_DELAY)
@@ -293,13 +320,18 @@ class Handler(BaseHTTPRequestHandler):
             if route == ["api", "v1", "portfolio", "snapshot"]:
                 return self.reply(200, portfolio())
             if route == [""] or (route and route[0] in ["chat", "screening", "portfolio", "alerts", "funds", "decision-signals", "backtest", "data", "settings", "usage"]):
-                return self.reply(200, tool_html("/" + "/".join(route)), content_type="text/html; charset=utf-8")
+                html = tool_html("/" + "/".join(route))
+                if self.access_required:
+                    html = html.replace("</body>", "<p id='access-proof'>驗證 Access 子資源中</p><script src='/access-cookie-proof.js'></script><a href='/access-redirect'>測試 Access 失效轉址</a></body>")
+                return self.reply(200, html, content_type="text/html; charset=utf-8")
             if route == ["api", "v1", "fixture", "export"]:
                 return self.reply(200, {"fixture": True, "kind": "http-download", "as_of": AS_OF},
                                   headers={"Content-Disposition": 'attachment; filename="fixture-http-export.json"'})
             return self.reply(404, {"detail": {"error": "fixture_route_missing", "message": "此路徑尚未加入 fixture"}})
 
     def do_POST(self):
+        if not self.check_access():
+            return
         route, _ = self.route()
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length) or b"{}")
@@ -404,9 +436,14 @@ def main():
     QUOTE_DELAY = args.quote_delay
     DAILY_TREND_DELAY = args.daily_trend_delay
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    class AccessHandler(Handler):
+        access_required = True
+    access_server = ThreadingHTTPServer(("127.0.0.1", 0), AccessHandler)
+    threading.Thread(target=access_server.serve_forever, daemon=True).start()
     port = server.server_address[1]
     import os
-    ready = {"url": f"http://127.0.0.1:{port}", "port": port, "pid": os.getpid(), "fixture": True}
+    ready = {"url": f"http://127.0.0.1:{port}", "access_url": f"http://127.0.0.1:{access_server.server_address[1]}",
+             "port": port, "pid": os.getpid(), "fixture": True}
     if args.ready_file:
         args.ready_file.parent.mkdir(parents=True, exist_ok=True)
         args.ready_file.write_text(json.dumps(ready) + "\n", encoding="utf-8")
@@ -417,6 +454,8 @@ def main():
         pass
     finally:
         server.server_close()
+        access_server.shutdown()
+        access_server.server_close()
 
 
 if __name__ == "__main__":

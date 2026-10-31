@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] iOS 支援依服務 origin 保存 Cloudflare Access Service Token 至裝置 Keychain，更新與登出保留，連線頁及工具設定可更換／移除；啟動自動帶同源 Header 並還原 DSA 登入。
+- [修復] iOS 原生及工具頁明確辨識 Access 登入轉址，驗證失敗展開憑證設定；工具 WebKit 共用 CF_Authorization cookie，支援受保護的子資源。
+- [測試] 新增 Access Header 同源限制與轉址辨識正反 mutation、重啟自動登入及 WebKit cookie 合成 UITest，另提供環境變數啟用的真實 Access 驗收，憑證預填不納入 Release。
+
 - [新功能] 新增 DeepSeek 媒體／網頁搜尋，以獨立 DEEPSEEK_SEARCH_API_KEYS 啟用；優先於 Tavily、保留台股 FinMind 最新消息優先與既有面向輪流邏輯，失敗或零結果改試下一來源。
 - [改進] DeepSeek／Tavily 共用多金鑰輪替，401／402／429 可換下一把且不記錄金鑰或例外本文；DeepSeek 查詢限制 128 Unicode 字元、每則摘要含日期提醒最多 1500 字元，修正實測日級 UTC 日期編碼的前一日偏差。
 - [修復] 事件上下文與提示詞補入事件後最低收盤、最新收盤及是否曾收盤跌破事件低點；已跌破時要求改以事件後新低重算止跌條件，缺值省略。

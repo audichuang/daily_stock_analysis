@@ -1,9 +1,94 @@
 import Foundation
 import XCTest
+import DSACore
+import Security
 @testable import DSAMarket
 
 @MainActor
 final class SessionStateTests: XCTestCase {
+    func testEphemeralCookieStorageAndToolBootstrapAgainstAccessFixture() async throws {
+        guard let address = ProcessInfo.processInfo.environment["DSA_ACCESS_FIXTURE_SERVER"], let url = URL(string: address) else {
+            throw XCTSkip("此整合測試需由 test-ui.sh 啟動 Access fixture。")
+        }
+        let previous = UserDefaults.standard.object(forKey: "serverAddress")
+        defer {
+            try? AccessVault.remove(for: url)
+            SessionVault.clear(for: url)
+            UserDefaults.standard.set(previous, forKey: "serverAddress")
+        }
+        let store = AppStore()
+        store.serverAddress = address
+        SessionVault.clear(for: url)
+        try store.saveAccessCredentials(clientID: "fixture-access-id", secret: "fixture-access-secret")
+        await store.connect()
+        XCTAssertTrue(store.needsPassword)
+        await store.connect(password: "fixture-password")
+        XCTAssertTrue(store.connected)
+        let storage = try XCTUnwrap(store.session?.configuration.httpCookieStorage)
+        let accessCookie = try XCTUnwrap(storage.cookies(for: url)?.first { $0.name == "CF_Authorization" })
+        XCTAssertTrue(accessCookie.isHTTPOnly)
+        storage.deleteCookie(accessCookie)
+        XCTAssertFalse((storage.cookies(for: url) ?? []).contains { $0.name == "CF_Authorization" })
+        let cookies = try await store.toolCookies()
+        XCTAssertEqual(Set(cookies.map(\.name)), Set(["dsa_session", "CF_Authorization"]))
+        XCTAssertTrue((storage.cookies(for: url) ?? []).contains { $0.name == "CF_Authorization" })
+        await store.logout()
+    }
+
+    func testAccessVaultUsesCanonicalOriginAndDeviceOnlyAccessibility() throws {
+        let url = URL(string: "https://access-\(UUID().uuidString.lowercased()).example.test/path")!
+        let equivalent = URL(string: "https://\(url.host!.uppercased()):443/other")!
+        defer { try? AccessVault.remove(for: url) }
+        let credentials = AccessCredentials(clientID: "fixture-id", clientSecret: "synthetic")
+        try AccessVault.save(credentials, for: url)
+        XCTAssertTrue(try AccessVault.load(for: equivalent) == credentials)
+        XCTAssertNil(try AccessVault.load(for: URL(string: "http://\(url.host!)")!))
+        XCTAssertNil(try AccessVault.load(for: URL(string: "https://\(url.host!):8443")!))
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                  kSecAttrService as String: Bundle.main.bundleIdentifier! + ".cloudflare-access",
+                                  kSecAttrAccount as String: ServiceOrigin.key(url),
+                                  kSecReturnAttributes as String: true]
+        var result: CFTypeRef?
+        XCTAssertEqual(SecItemCopyMatching(query as CFDictionary, &result), errSecSuccess)
+        let attributes = try XCTUnwrap(result as? [String: Any])
+        XCTAssertEqual(attributes[kSecAttrAccessible as String] as? String, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
+        try AccessVault.save(AccessCredentials(clientID: "new-id", clientSecret: "replacement"), for: equivalent)
+        XCTAssertTrue(try AccessVault.load(for: url)?.clientID == "new-id")
+    }
+
+    func testLogoutAndOfflineKeepAccessCredentialsButChangedServerDoesNotReceiveThem() async throws {
+        let url = URL(string: "https://access-\(UUID().uuidString.lowercased()).example.test")!
+        let other = URL(string: "https://other-\(UUID().uuidString.lowercased()).example.test")!
+        let previous = UserDefaults.standard.object(forKey: "serverAddress")
+        defer {
+            try? AccessVault.remove(for: url)
+            SessionVault.clear(for: url); SessionVault.clear(for: other)
+            SessionStateURLProtocol.handler = nil
+            UserDefaults.standard.set(previous, forKey: "serverAddress")
+        }
+        let store = AppStore(configurationFactory: stubConfiguration)
+        store.serverAddress = url.absoluteString
+        try store.saveAccessCredentials(clientID: "fixture-id", secret: "synthetic")
+        SessionStateURLProtocol.handler = { request in
+            XCTAssertTrue(request.value(forHTTPHeaderField: "CF-Access-Client-Secret") == "synthetic")
+            throw URLError(.notConnectedToInternet)
+        }
+        await store.connect()
+        XCTAssertFalse(store.needsPassword)
+        XCTAssertNotNil(store.connectionError)
+        await store.logout()
+        XCTAssertNotNil(try AccessVault.load(for: url))
+        store.serverAddress = other.absoluteString
+        SessionStateURLProtocol.handler = { request in
+            XCTAssertNil(request.value(forHTTPHeaderField: "CF-Access-Client-Id"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "CF-Access-Client-Secret"))
+            return (200, #"{"authEnabled":true,"loggedIn":false,"passwordSet":true}"#)
+        }
+        await store.connect()
+        XCTAssertTrue(store.needsPassword)
+        await store.logout()
+    }
+
     func testTimestampWithExplicitZoneUsesDeviceTimeForBothISOFormats() {
         let taipei = TimeZone(secondsFromGMT: 8 * 3600)!
         let utc = TimeZone(secondsFromGMT: 0)!

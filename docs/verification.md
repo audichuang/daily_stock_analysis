@@ -160,3 +160,14 @@ Cleanup 後 `live/` 與 `regression/` 的程序、port、runtime 均移除；`ap
 證據收集會遇到第三方錯誤含連線字串，以及密碼管理器的私人 iframe；本輪已去敏本機文字、移除三張不適合保留的擴充套件畫面並重拍乾淨證據。原始對話工具輸出不應分享。新 helper 阻擋已實測的 Save login 提示、遮蔽密碼欄、命令 log 遮 URL／密碼；仍需在保存及分享前核對邊界。原剪貼簿已還原，暫時密碼與原剪貼簿備份隨 runtime 移除。
 
 只需 revert 這次驗證資產 commit 即可回滾，不涉及產品 schema 或正式資料回滾。後續以 `/maintain-verification-skill` 更新 map；缺相依或產品失敗保持獨立狀態，不為了全綠縮短旅程。
+
+## iOS Cloudflare Access（2026-10-31）
+
+基線：本地 HEAD 與 fetch 後的 `origin/develop` 均為 `435bd4dd`；工作分支 `feat/ios-cloudflare-access` 從同一提交開始，不需 rebase。未 push、未打 tag、未上傳 TestFlight、未變更 NAS／後端 session 年限。
+
+- Core：`swift test --package-path apps/dsa-ios/Core`，54 tests、0 failures；還原 mutation 後同樣全綠，完整輸出 `/tmp/dsa-access-mutations/restored.log`。
+- 正反 mutation：移除 Header、對所有 origin 帶 Header、漏判 Access 轉址、把一般轉址也判成 Access，四項均 exit 1 且執行完整 4 個 Access 測試；結果 `/tmp/dsa-access-mutations/results.json`，修改均已還原。
+- 建置：Debug `build-for-testing` 與 Release simulator build 成功；刻意在 Release 帶 `DSA_ACCESS_UITEST`，執行檔仍沒有憑證／密碼預填及 Debug server override 的 4 個環境變數標記。log：`/tmp/dsa-access-debug-compile.log`、`/tmp/dsa-access-release-final.log`。
+- HTTP fixture 契約：缺 Header 302、正確 Header 200 並簽發 cookie、錯誤 Secret 302、僅 cookie 200、工具子資源僅 cookie 200、子資源有 Header 但無 cookie 403；只驗合成伺服器行為，不代替原生或 WebKit 實測。
+- UI：首輪 `bash apps/dsa-ios/scripts/test-ui.sh` 的 App unit tests 為 22 tests、0 failures；UI 執行時另一個 `testCapture` 同時操作唯一 DSA 模擬器，截圖顯示其正式服務頁，故主動中止本輪（exit 75），不列為 UI 通過。證據 `/tmp/dsa-ios-ui.t78QUr/`；新增的重啟、WebKit cookie 與原生缺 cookie bootstrap 仍需獨占模擬器重跑。
+- 真實 Access 與真機：未驗證，由使用者另以 README 的環境變數入口執行。App 更新保留由同一 Keychain 身分實作，尚未做真機覆蓋安裝。回滾為 revert 本次功能提交，無資料庫異動；不會自動刪除已保存的 Access 憑證。

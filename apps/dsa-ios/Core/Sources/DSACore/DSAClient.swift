@@ -8,11 +8,13 @@ public enum DSAError: Error, LocalizedError, Sendable {
     case invalidResponse
     case http(status: Int, code: String?, message: String)
     case decoding(String)
+    case cloudflareAccess
 
     public var errorDescription: String? {
         switch self {
         case .invalidServerURL: return "請輸入有效的 HTTPS 伺服器網址。"
         case .invalidResponse: return "伺服器未傳回有效的 HTTP 回應。"
+        case .cloudflareAccess: return "Cloudflare Access 驗證失敗，請檢查 Client ID／Secret"
         case let .http(_, _, message): return message
         case .decoding: return "伺服器資料格式與 App 不相容，請更新 App 或伺服器。"
         }
@@ -33,8 +35,16 @@ public enum DSAError: Error, LocalizedError, Sendable {
 public struct DSAClient: Sendable {
     public let baseURL: URL
     private let session: URLSession
+    private let access: CloudflareAccess?
 
-    public init(baseURL: URL, session: URLSession) throws {
+    public init(baseURL: URL, session: URLSession, access: CloudflareAccess? = nil) throws {
+        try Self.validateServerURL(baseURL)
+        self.baseURL = baseURL
+        self.session = session
+        self.access = access
+    }
+
+    public static func validateServerURL(_ baseURL: URL) throws {
         guard let components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
               let scheme = components.scheme?.lowercased(),
               let host = components.host, !host.isEmpty,
@@ -43,8 +53,6 @@ public struct DSAClient: Sendable {
               Self.isAllowed(scheme: scheme, host: host) else {
             throw DSAError.invalidServerURL
         }
-        self.baseURL = baseURL
-        self.session = session
     }
 
     private static func isAllowed(scheme: String, host: String) -> Bool {
@@ -195,9 +203,16 @@ public struct DSAClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.cachePolicy = .reloadIgnoringLocalCacheData
         // 阻止 307/308 把登入密碼或寫入內容轉送到不同伺服器。
-        let delegate = OriginRedirectDelegate(origin: baseURL)
+        request = access?.authorizing(request) ?? request
+        let delegate = OriginRedirectDelegate(origin: baseURL, access: access)
         let (data, response) = try await session.data(for: request, delegate: delegate)
         guard let http = response as? HTTPURLResponse else { throw DSAError.invalidResponse }
+        if (300..<400).contains(http.statusCode),
+           let location = http.value(forHTTPHeaderField: "Location"),
+           let destination = URL(string: location, relativeTo: http.url),
+           CloudflareAccess.isLoginURL(destination) {
+            throw DSAError.cloudflareAccess
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw Self.apiError(data: data, status: http.statusCode)
         }
@@ -221,20 +236,19 @@ public struct DSAClient: Sendable {
     }
 }
 
-private final class OriginRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+final class OriginRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let origin: URL
-    init(origin: URL) { self.origin = origin }
+    private let access: CloudflareAccess?
+    init(origin: URL, access: CloudflareAccess? = nil) { self.origin = origin; self.access = access }
+
+    func redirectedRequest(_ request: URLRequest) -> URLRequest? {
+        guard let destination = request.url, ServiceOrigin.same(destination, origin) else { return nil }
+        return access?.authorizing(request) ?? request
+    }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        guard let destination = request.url,
-              destination.scheme?.lowercased() == origin.scheme?.lowercased(),
-              destination.host?.lowercased() == origin.host?.lowercased(),
-              (destination.port ?? 443) == (origin.port ?? 443) else {
-            completionHandler(nil)
-            return
-        }
-        completionHandler(request)
+        completionHandler(redirectedRequest(request))
     }
 }
 

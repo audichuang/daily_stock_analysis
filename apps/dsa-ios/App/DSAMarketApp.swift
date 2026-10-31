@@ -8,7 +8,8 @@ struct DSAMarketApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if store.connected { MainTabView() }
+                if store.startingUp { ProgressView("正在連接分析服務…") }
+                else if store.connected { MainTabView() }
                 else { ConnectionView() }
             }
             .environmentObject(store)
@@ -16,6 +17,7 @@ struct DSAMarketApp: App {
             .preferredColorScheme(.dark)
             .task {
                 if !store.serverAddress.isEmpty { await store.connect() }
+                store.startingUp = false
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active, store.connected { Task { await store.refresh() } }
