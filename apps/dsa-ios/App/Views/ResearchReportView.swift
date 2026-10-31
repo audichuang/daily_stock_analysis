@@ -23,6 +23,9 @@ struct ResearchReportView: View {
                 if let report {
                     reportHeader(report)
                     summaryCard(report)
+                    if report.meta.reportType != "market_review" {
+                        ReportNewsView(reportID: reportID).id(reportID)
+                    }
                     if let strategy = report.strategy {
                         strategyCard(strategy)
                     }

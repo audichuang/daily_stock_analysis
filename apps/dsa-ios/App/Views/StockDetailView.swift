@@ -198,6 +198,7 @@ struct StockDetailView: View {
             EmptyStateView(title: "這檔股票還沒有 AI 研究", message: "產生分析後，這裡會顯示核心論點、證據與需要持續追蹤的風險。", systemImage: "text.magnifyingglass")
         }
         if let id = profile.research.data.latestReport?.id {
+            ReportNewsView(reportID: id).id(id)
             NavigationLink { ResearchReportView(reportID: id) } label: {
                 Label("閱讀完整報告", systemImage: "doc.text").frame(maxWidth: .infinity)
             }.buttonStyle(SecondaryButtonStyle()).accessibilityIdentifier("stock-report-link")

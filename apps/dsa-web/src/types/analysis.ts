@@ -584,6 +584,9 @@ export interface NewsIntelItem {
   title: string;
   snippet: string;
   url: string;
+  source?: string | null;
+  publishedDate?: string | null;
+  dimension?: string | null;
 }
 
 /** News response */

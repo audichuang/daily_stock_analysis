@@ -3063,7 +3063,9 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
 
             return list(results)
 
-    def get_news_intel_by_query_id(self, query_id: str, limit: int = 20) -> List[NewsIntel]:
+    def get_news_intel_by_query_id(
+        self, query_id: str, limit: int = 20, *, code: Optional[str] = None,
+    ) -> List[NewsIntel]:
         """
         根据 query_id 获取新闻情报列表
 
@@ -3077,9 +3079,12 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         from sqlalchemy import func
 
         with self.get_session() as session:
+            conditions = [NewsIntel.query_id == query_id]
+            if code is not None:
+                conditions.append(NewsIntel.code == code)
             results = session.execute(
                 select(NewsIntel)
-                .where(NewsIntel.query_id == query_id)
+                .where(*conditions)
                 .order_by(
                     desc(func.coalesce(NewsIntel.published_date, NewsIntel.fetched_at)),
                     desc(NewsIntel.fetched_at)

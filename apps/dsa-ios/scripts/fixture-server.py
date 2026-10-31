@@ -127,6 +127,28 @@ def artifact(code, record_id=101):
     }
 
 
+def report_news(record_id):
+    """#101 台積電與 #111 鴻海有混合資料；其餘報告模擬無新聞。"""
+    if record_id not in (101, 111):
+        return []
+    return [
+        {"title": "較早新聞（合成）", "snippet": "測試舊消息摘要", "url": "https://example.test/older",
+         "source": "合成媒體", "published_date": "2024-01-29T08:00:00", "dimension": "latest_news"},
+        {"title": "產業資料頁（合成）", "snippet": "| 欄位 | 數值 |\n| --- | --- |",
+         "url": "https://example.test/industry", "source": "合成產業資料庫", "published_date": None, "dimension": "industry"},
+        {"title": "最新新聞（合成）", "snippet": "**營收改善**，需求仍待確認。\n```json\n{\"raw_fixture_document\":true}\n```", "url": "https://example.test/latest",
+         "source": "合成通訊社", "published_date": "2024-01-31T08:00:00.123456", "dimension": "latest_news"},
+        {"title": "Document", "snippet": "EX-99.1 2 原始附件全文", "url": "https://www.sec.gov/Archives/fixture-8k.htm",
+         "source": "SEC", "published_date": "2024-01-30T08:00:00", "dimension": "announcements"},
+        {"title": "風險公告（無日期合成）", "snippet": "一般風險摘要", "url": "javascript:alert(1)",
+         "source": "合成公告", "published_date": None, "dimension": "risk_check"},
+        {"title": "財報資料頁（合成）", "snippet": "資料頁摘要", "url": "https://example.test/earnings",
+         "source": "合成財報資料庫", "published_date": None, "dimension": "earnings"},
+        {"title": "市場資料頁（合成）", "snippet": "資料頁摘要", "url": "https://example.test/market",
+         "source": "合成市場資料庫", "published_date": None, "dimension": "market_analysis"},
+    ]
+
+
 def history_item(record_id, code, report_type="detailed", region=None):
     is_market = report_type == "market_review"
     return {
@@ -307,7 +329,7 @@ class Handler(BaseHTTPRequestHandler):
                     "research": {"status": "partial", "data": {"latest_report": records[0] if records else None,
                                    "recent_reports": records, "structured_report": artifact(code, records[0]["id"] if records else 101)}, "limitations": ["合成測試分析"]},
                     "evidence_quality": {"status": "partial", "blocks": {"quote": "partial", "research": "partial"},
-                                         "limitations": ["全部是固定過去日期的 fixture，不能用於交易。"]},
+                                         "limitations": ["全部是固定過去日期的 fixture，不能用於交易。", "no_symbol_intelligence"]},
                 })
             if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "dossier":
                 code = route[3]
@@ -327,6 +349,11 @@ class Handler(BaseHTTPRequestHandler):
                 record = next((item for item in STATE.records if str(item["id"]) == route[3]), None)
                 if not record:
                     return self.reply(404, {"detail": {"error": "not_found", "message": "查無測試報告"}})
+                if len(route) == 5 and route[4] == "news":
+                    if query.get("analysis_only") != ["true"]:
+                        return self.reply(400, {"detail": {"error": "analysis_only_required", "message": "必須指定本次分析"}})
+                    items = report_news(record["id"])[:int(query.get("limit", ["20"])[0])]
+                    return self.reply(200, {"total": len(items), "items": items})
                 if len(route) == 5 and route[4] == "markdown":
                     return self.reply(200, {"content": "# 合成測試完整報告\n\n這不是即時行情，也不是模型實際生成結果。\n\n## 觀察重點\n\n- 驗證完整文字可閱讀。\n- 驗證來源與失效條件可追溯。\n\n## 風險\n\n固定過去日期的測試資料，不能用於投資決策。"})
                 if len(route) == 4:
