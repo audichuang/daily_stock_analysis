@@ -24,6 +24,20 @@ Daily Stock AI 是本專案的原生 iOS 客戶端，支援台股與美股。核
 - 密碼僅用於當次登入；session cookie 存裝置 Keychain，保留安全屬性。原生 HTTP 使用獨立記憶體 cookie jar，WebKit 使用非持久 store。
 - 「登出這部裝置」只清本機登入，不呼叫會輪替全域 session secret 的後端 logout。
 
+### Cloudflare Access Service Token
+
+連線頁提供收合的「Cloudflare Access（選填）」，工具分頁的裝置設定亦有入口。憑證失效時回到連線頁、自動展開該區塊並顯示「Cloudflare Access 驗證失敗，請檢查 Client ID／Secret」；不把 Access 的 302 當作 DSA 密碼失效。已設定的 Secret 不回顯，更換需重新輸入兩個欄位，亦可明確「移除憑證」。離線錯誤保留憑證及原本網路錯誤。
+
+Client ID／Secret 使用獨立 Keychain service，以小寫 scheme／host／有效 port 的 origin 為 key，存取屬性為 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`，不寫 UserDefaults 或 log。同一 App 身分更新不需重填；登出僅清 `dsa_session`，不刪 Access 憑證。跨裝置還原不保留這組憑證，換服務 origin 則讀另一組，不搬移舊憑證。
+
+原生 HTTP 僅由 `AppStore` 建立獨立 `.ephemeral` URLSession；`DSAClient.responseData` 集中附加 `CF-Access-Client-Id`／`CF-Access-Client-Secret`，每次依 scheme／host／port 核對。跨 origin 轉址全部拒絕，同源轉址重新附加 Header。只有 3xx 且 Location 的 HTTPS host 為 `cloudflareaccess.com` 或其子網域才判為 Access 驗證失敗，一般 403／網路錯誤不誤判。
+
+`.ephemeral` 的私有 `httpCookieStorage` 仍會接收 `Set-Cookie`，只在記憶體保存（[Apple 文件](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/httpcookiestorage)）。工具頁開啟前若缺 `CF_Authorization`，先用原生 `authStatus` 取得；有設定 Token 卻沒有 cookie 時顯示設定錯誤。隨後將 `dsa_session` 與 `CF_Authorization` 注入非持久 WKWebView，再載入頁面；子資源使用 cookie，網頁不接收 Service Token Header。WebKit 導往 Access 登入網域時停止並顯示相同的明確錯誤。取消轉址後收到的 `WebKitErrorDomain` 102 不覆蓋已辨識的 Access 訊息；未擋下 Access 的頁框中斷及一般網路錯誤仍照常顯示。
+
+實際自動登入路徑：`DSAMarketApp.task` → `AppStore.connect()` → 依儲存網址 origin 讀 Access Keychain → 建立 ephemeral session／DSAClient → `SessionVault.restore` 還原 DSA cookie → 原生 `authStatus`（帶 Access Header，同時取得新的 Access cookie）→ DSA session 有效則直接首頁與 refresh。啟動期間顯示連線進度，不要求操作連線頁。後端 401，或 `authStatus` 明確表示尚未登入，才顯示管理員密碼欄位；App 沿用 cookie 的伺服器到期日，不延長後端 session。本次未修改後端 session 年限。
+
+合成 UITest 分開驗證有效／錯誤 Token、終止 process 再啟動、登出保留與明確移除，以及 WebKit 子資源以 cookie 通過。真實 Access 的環境變數與純 UITest 編譯入口見 [iOS README](../apps/dsa-ios/README.md#選用的真實-access-uitest)；未提供憑證就 skip，真機與正式 Access 由使用者另外驗證。
+
 ## 行情與研究語意
 
 報價、日 K、研究是不同時點的資料。缺價顯示 `—`，不補0；備援、官方收盤與過期分別標示。台股保留 `.TW/.TWO` 與槓桿字母，美股頁不把 A/H 股當美股。圖表使用 daily OHLCV（profile 以 `history_days=1100` 取約六年），範圍以最後資料日為準；週／月 K 由 App 依交易日聚合（週一起算，開＝首根開、收＝末根收、高低取極值、量相加），均線在完整序列上算完再裁到可見區間（日 K 5／20／60、週 K 5／13／26、月 K 3／6／12）。切到 1Y／3Y 自動換週 K、5Y 換月 K，使用者可再切回。日 K 來源缺當天時，後端用報價補一根 `provisional` 暫定 K（交易日以 `latest_opened_session` 依市場當地時間判定，過期報價不補），App 畫成半透明並標「暫定・即時報價」。週／月 K 的 x 位置與拖曳選取用區間首末交易日的中點。指標（`Indicators.swift`）與重點標記（`KeyPoints.swift`）都在 DSACore：KD 為台股常用 (9,3,3)、起始 50；MACD 柱不乘 2；RSI 為 Wilder 平滑；52 週高低資料不足一年不畫；缺口最多標最近三個未回補者，部分回補時縮成剩下的區間。價格 Y 軸只依可見 K 棒高低決定，超出的指標線被裁掉。分時只在切到該分頁時打 `/api/v1/stocks/{code}/trend?range=day`（台股 Shioaji 分鐘線、其他市場 yfinance 5 分鐘線，只有價沒有量），以市場當地交易時段為 x 軸、24 小時制；昨收取同時抓的 `range=month` 日線中早於分時交易日的最後一根收盤（不用頁面載入時的報價昨收，開過夜會錯日），抓不到就不顯示漲跌；分時與日線分開載入，分時一到就出圖，日線之後補上昨收（fixture `--daily-trend-delay` 守這條）；昨收不納入 Y 軸（大跳空會把走勢壓扁），非交易日顯示最近一個交易日並註明。視窗算術在 `ChartViewport`（右側留白 0.6 根、預設至少 12 根、雙指張開不會變寬）。AI 報告的進場／停損／目標價目前是自由文字，尚未畫上圖（需先改成結構化數值）。不提供 tick 串流。後端 `history_days` 上限為 1825；App 送超過舊上限 365 的值，所以要先部署後端再發 App，否則整份 profile 會 422。

@@ -160,3 +160,31 @@ Cleanup 後 `live/` 與 `regression/` 的程序、port、runtime 均移除；`ap
 證據收集會遇到第三方錯誤含連線字串，以及密碼管理器的私人 iframe；本輪已去敏本機文字、移除三張不適合保留的擴充套件畫面並重拍乾淨證據。原始對話工具輸出不應分享。新 helper 阻擋已實測的 Save login 提示、遮蔽密碼欄、命令 log 遮 URL／密碼；仍需在保存及分享前核對邊界。原剪貼簿已還原，暫時密碼與原剪貼簿備份隨 runtime 移除。
 
 只需 revert 這次驗證資產 commit 即可回滾，不涉及產品 schema 或正式資料回滾。後續以 `/maintain-verification-skill` 更新 map；缺相依或產品失敗保持獨立狀態，不為了全綠縮短旅程。
+
+## iOS Cloudflare Access（2026-10-31）
+
+基線：本地 HEAD 與 fetch 後的 `origin/develop` 均為 `435bd4dd`；工作分支 `feat/ios-cloudflare-access` 從同一提交開始，不需 rebase。未 push、未打 tag、未上傳 TestFlight、未變更 NAS／後端 session 年限。
+
+- Core：`swift test --package-path apps/dsa-ios/Core`，54 tests、0 failures；還原 mutation 後同樣全綠，完整輸出 `/tmp/dsa-access-mutations/restored.log`。
+- 正反 mutation：移除 Header、對所有 origin 帶 Header、漏判 Access 轉址、把一般轉址也判成 Access，四項均 exit 1 且執行完整 4 個 Access 測試；結果 `/tmp/dsa-access-mutations/results.json`，修改均已還原。
+- 建置：Debug `build-for-testing` 與 Release simulator build 成功；刻意在 Release 帶 `DSA_ACCESS_UITEST`，執行檔仍沒有憑證／密碼預填及 Debug server override 的 4 個環境變數標記。log：`/tmp/dsa-access-debug-compile.log`、`/tmp/dsa-access-release-final.log`。
+- HTTP fixture 契約：缺 Header 302、正確 Header 200 並簽發 cookie、錯誤 Secret 302、僅 cookie 200、工具子資源僅 cookie 200、子資源有 Header 但無 cookie 403；只驗合成伺服器行為，不代替原生或 WebKit 實測。
+- UI：首輪 `bash apps/dsa-ios/scripts/test-ui.sh` 的 App unit tests 為 22 tests、0 failures；UI 執行時另一個 `testCapture` 同時操作唯一 DSA 模擬器，截圖顯示其正式服務頁，故主動中止本輪（exit 75），不列為 UI 通過。證據 `/tmp/dsa-ios-ui.t78QUr/`；後續專用模擬器的失敗根因及通過結果見下節。
+- 真實 Access 與真機：未驗證，由使用者另以 README 的環境變數入口執行。App 更新保留由同一 Keychain 身分實作，尚未做真機覆蓋安裝。回滾為 revert 本次功能提交，無資料庫異動；不會自動刪除已保存的 Access 憑證。
+
+### 專用模擬器失敗追查與修正（2026-10-31）
+
+修正前 HEAD `6b82d60a`，fetch 後 `origin/develop` 為 `f98368ae`；分支已分歧，保留本地功能提交，未 rebase／merge。遠端新增兩個提交只涉及美股分析文件。
+
+原結果 `/tmp/dsa-access-evidence/UITests.xcresult`：25 passed、2 failed、1 skipped。以 `xcresulttool` 讀回失敗行、匯出 PNG 與 AX tree，再僅跑兩項原案例，重現 2 tests、2 failures（`/tmp/dsa-access-repro-baseline/`）。
+
+- 持久化案例原第 44 行：測試在整個連線頁出現時預填密碼，第一次無密碼的 `connect()` 結束後清空它；截圖是空的管理員密碼欄位及 Disabled 登入按鈕，fixture 沒收到登入 POST。將純 UITest 預填移到密碼欄位出現時，未改正式 App 清除密碼的行為。
+- 錯誤 Secret 案例原第 74 行：前一項失敗後留下有效 Token，下一項自動讀 Keychain；新的錯誤 Secret 只在輸入框預填，還沒有儲存，因此不應先期待 Access 失敗。兩個合成案例先透過真 UI 登出及移除該 fixture 的既有憑證，再建立各自前置條件；原有失敗、換憑證、重啟及 cookie 斷言均保留。
+- 往後走到真正 App 缺陷：WebKit 先被 Access policy 取消，隨後 `didFailProvisionalNavigation` 收到 `WebKitErrorDomain` code 102，把專用訊息覆蓋成「頁框載入中斷」。臨時去敏探針確認 `Access redirect cancelled` → `code=102 accessMessage=true`；探針已移除。App 僅在已擋下 Access 時保留專用訊息；下一次同源導覽會重設狀態，一般網路錯誤不隱藏。
+- 登出後的收合區塊：App 已重啟，區塊預設收合；測試先展開再核對「已設定」及 Secret 不回顯，並加強共用 tap helper 的 `isEnabled` 斷言。
+
+完整重跑使用呼叫者指定的 `DSA Access Test`（iPhone 18 Pro Max、iOS 27.0），沒有操作共用的 `DSA iPhone 18 Pro Max`。`test-ui.sh` 結果 exit 0、無封存逾時；`/tmp/dsa-access-evidence2/UITests.xcresult` 與 `summary.json` 回讀為 **29 total、28 passed、0 failed、1 skipped**（24 App 單測＋4 UI 通過；真實 Access 缺環境變數而 skip）。已檢視終止後首頁、WebKit 子資源 cookie 驗證及 Access 明確錯誤的 PNG；證據在同目錄 `screenshots-1/`。
+
+新增的 WebKit policy 錯誤測試做正反 mutation：還原成不保留錯誤、過度忽略所有錯誤，皆實跑該 Xcode 單測並 exit 65；結果 `/tmp/dsa-access-policy-mutations/results.json`，來源已還原。完整 suite 中該測試通過。Core 再跑 54 tests、0 failures（`/tmp/dsa-access-core-followup.log`）。Release 刻意帶 UITest 編譯旗標仍建置成功，4 個預填／Debug server 標記均不在執行檔（`/tmp/dsa-access-release-followup.log`）；build、test、fixture log 亦核對沒有合成 Access Secret 值。
+
+真實 Access、實體裝置及真機覆蓋更新仍未驗證。未 push／上傳 TestFlight，沒有後端或資料庫異動；回滾可 revert 本次修正提交。

@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import DSACore
 
 struct ToolWebView: View {
     let path: String
@@ -18,12 +19,13 @@ struct ToolWebView: View {
                 Spacer()
             }
             .font(.caption2).foregroundStyle(Theme.secondary).padding(12).background(Theme.surface)
-            if loading { ProgressView().tint(Theme.accent).padding(10) }
+            if loading { ProgressView().tint(Theme.accent).padding(10).accessibilityIdentifier("tool-loading") }
             if let error {
-                ErrorStateView(message: error, retry: { self.error = nil; loading = true; reloadID = UUID() }).padding()
+                ErrorStateView(message: error, retry: { self.error = nil; loading = true; reloadID = UUID() })
+                    .padding().accessibilityIdentifier("tool-error")
             }
-            if let baseURL = store.baseURL, let session = store.session {
-                AuthenticatedWebContent(baseURL: baseURL, path: path, session: session,
+            if let baseURL = store.baseURL, store.session != nil {
+                AuthenticatedWebContent(baseURL: baseURL, path: path, prepareCookies: { try await store.toolCookies() },
                                         loading: $loading, error: $error, exportedFile: $exportedFile)
                     .id(reloadID)
             }
@@ -46,7 +48,7 @@ struct ToolWebView: View {
 private struct AuthenticatedWebContent: UIViewRepresentable {
     let baseURL: URL
     let path: String
-    let session: URLSession
+    let prepareCookies: () async throws -> [HTTPCookie]
     @Binding var loading: Bool
     @Binding var error: String?
     @Binding var exportedFile: WebExportFile?
@@ -73,10 +75,15 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
             return web
         }
         Task { @MainActor in
-            for cookie in session.configuration.httpCookieStorage?.cookies(for: baseURL) ?? [] where cookie.name == "dsa_session" {
-                await config.websiteDataStore.httpCookieStore.setCookie(cookie)
+            do {
+                for cookie in try await prepareCookies() {
+                    await config.websiteDataStore.httpCookieStore.setCookie(cookie)
+                }
+                web.load(URLRequest(url: url))
+            } catch {
+                self.error = error.localizedDescription
+                loading = false
             }
-            web.load(URLRequest(url: url))
         }
         return web
     }
@@ -94,17 +101,27 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         var parent: AuthenticatedWebContent
         private var downloads: [ObjectIdentifier: WKDownload] = [:]
         private var destinations: [ObjectIdentifier: URL] = [:]
+        private var blockedAccessRedirect = false
         init(_ parent: AuthenticatedWebContent) { self.parent = parent }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
+            if CloudflareAccess.isLoginURL(url) {
+                blockedAccessRedirect = true
+                parent.error = DSAError.cloudflareAccess.localizedDescription
+                parent.loading = false
+                decisionHandler(.cancel)
+                return
+            }
             let origin = navigationAction.sourceFrame.securityOrigin
             let source = WebNavigationPolicy.sourceOrigin(protocolValue: origin.protocol, host: origin.host, port: origin.port)
             switch WebNavigationPolicy.action(url: url, baseURL: parent.baseURL, sourceOrigin: source,
                                                shouldDownload: navigationAction.shouldPerformDownload,
                                                userLink: navigationAction.navigationType == .linkActivated) {
-            case .allow: decisionHandler(.allow)
+            case .allow:
+                blockedAccessRedirect = false
+                decisionHandler(.allow)
             case .download:
                 parent.error = nil
                 decisionHandler(.download)
@@ -167,7 +184,9 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         func download(_ download: WKDownload, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                       decisionHandler: @escaping (WKDownload.RedirectPolicy) -> Void) {
             guard let url = request.url, WebNavigationPolicy.sameOrigin(url, parent.baseURL) else {
-                parent.error = "下載嘗試轉送到其他服務，已取消。"
+                parent.error = request.url.map(CloudflareAccess.isLoginURL) == true
+                    ? DSAError.cloudflareAccess.localizedDescription : "下載嘗試轉送到其他服務，已取消。"
+                parent.loading = false
                 decisionHandler(.cancel)
                 return
             }
@@ -205,6 +224,7 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { fail(error) }
 
         private func fail(_ error: Error) {
+            if WebNavigationPolicy.preservesAccessError(error, blockedAccessRedirect: blockedAccessRedirect) { return }
             if (error as NSError).code == NSURLErrorCancelled { return }
             parent.loading = false
             parent.error = error.localizedDescription

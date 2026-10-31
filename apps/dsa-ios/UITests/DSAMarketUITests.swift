@@ -31,6 +31,132 @@ final class DSAMarketUITests: XCTestCase {
         }
     }
 
+    func testCloudflareAccessPersistsAcrossTerminationAndBridgesCookieToSubresources() throws {
+        let server = try XCTUnwrap(ProcessInfo.processInfo.environment["DSA_ACCESS_FIXTURE_SERVER"])
+        launchFreshAccessFixture(server: server, secret: "fixture-access-secret")
+        XCTAssertTrue(text(containing: "Cloudflare Access 驗證失敗").waitForExistence(timeout: 15))
+        XCTAssertTrue(app.secureTextFields["access-client-secret"].exists, "驗證失敗要自動展開憑證設定")
+        XCTAssertFalse(app.secureTextFields["server-password"].exists)
+        tap(app.buttons["access-save"])
+        tap(app.buttons["connect-button"])
+        XCTAssertTrue(app.secureTextFields["server-password"].waitForExistence(timeout: 15))
+        tap(app.buttons["connect-button"])
+        XCTAssertTrue(app.tabBars.buttons["今日"].waitForExistence(timeout: 20))
+        capture("Access-首次登入")
+
+        // 真正終止 process；第二次 launch 不帶任何憑證或密碼預填。
+        app.terminate()
+        app.launchEnvironment = ["DSA_TEST_SERVER": server]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["今日"].waitForExistence(timeout: 20))
+        XCTAssertFalse(app.secureTextFields["server-password"].exists)
+        capture("Access-終止後自動登入")
+        tap(app.tabBars.buttons["工具"])
+        tap(app.buttons["tools.route.chat"])
+        XCTAssertTrue(text(containing: "Access 子資源 Cookie 已驗證").waitForExistence(timeout: 20))
+        capture("Access-WebKit子資源Cookie")
+        tap(app.links["測試 Access 失效轉址"])
+        XCTAssertTrue(text(containing: "Cloudflare Access 驗證失敗").waitForExistence(timeout: 10))
+        capture("Access-WebKit轉址錯誤")
+        goBack(from: "AI 問股", to: "工具與設定")
+        tap(app.buttons["tools.logout"])
+        expandAccessSettings()
+        XCTAssertTrue(app.staticTexts["access-configured"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.secureTextFields["access-client-secret"].exists, "儲存的 Secret 不回顯")
+        tap(app.buttons["access-remove"])
+        tap(app.buttons["connect-button"])
+        XCTAssertTrue(text(containing: "Cloudflare Access 驗證失敗").waitForExistence(timeout: 15))
+        XCTAssertFalse(app.secureTextFields["server-password"].exists)
+    }
+
+    func testCloudflareAccessRejectsWrongSecretAndCanReplaceWithoutBackendPasswordPrompt() throws {
+        let server = try XCTUnwrap(ProcessInfo.processInfo.environment["DSA_ACCESS_FIXTURE_SERVER"])
+        launchFreshAccessFixture(server: server, secret: "invalid-synthetic")
+        XCTAssertTrue(text(containing: "Cloudflare Access 驗證失敗").waitForExistence(timeout: 15))
+        tap(app.buttons["access-save"])
+        tap(app.buttons["connect-button"])
+        XCTAssertTrue(text(containing: "Cloudflare Access 驗證失敗").waitForExistence(timeout: 15))
+        XCTAssertFalse(app.secureTextFields["server-password"].exists)
+        capture("Access-錯誤憑證可更換")
+        launchAccess(server: server, clientID: "fixture-access-id", secret: "fixture-access-secret", password: "fixture-password")
+        XCTAssertTrue(text(containing: "Cloudflare Access 驗證失敗").waitForExistence(timeout: 15))
+        tap(app.buttons["access-replace"])
+        tap(app.buttons["access-save"])
+        tap(app.buttons["connect-button"])
+        XCTAssertTrue(app.secureTextFields["server-password"].waitForExistence(timeout: 15))
+        XCTAssertFalse(text(containing: "Cloudflare Access 驗證失敗").exists)
+        tap(app.buttons["access-remove"])
+    }
+
+    func testRealCloudflareAccessOptIn() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let server = environment["DSA_REAL_ACCESS_URL"],
+              let clientID = environment["DSA_REAL_ACCESS_CLIENT_ID"], !clientID.isEmpty,
+              let secret = environment["DSA_REAL_ACCESS_CLIENT_SECRET"], !secret.isEmpty else {
+            throw XCTSkip("未設定真實 Access UITest 環境變數；跳過正式環境驗證。")
+        }
+        launchAccess(server: server, clientID: clientID, secret: secret, password: environment["DSA_REAL_DSA_PASSWORD"])
+        // 即使該 origin 之前已儲存憑證，也以這次明確提供的值更換。
+        if app.tabBars.buttons["今日"].waitForExistence(timeout: 5) {
+            tap(app.tabBars.buttons["工具"])
+            tap(app.buttons["tools.access"])
+        } else if !app.buttons["access-save"].exists { tap(app.descendants(matching: .any)["access-section"].firstMatch) }
+        if app.buttons["access-replace"].exists { tap(app.buttons["access-replace"]) }
+        tap(app.buttons["access-save"])
+        tap(app.buttons["connect-button"])
+        if app.secureTextFields["server-password"].waitForExistence(timeout: 5) {
+            guard environment["DSA_REAL_DSA_PASSWORD"]?.isEmpty == false else {
+                throw XCTSkip("Access 已儲存；首次 DSA 登入還需要 DSA_REAL_DSA_PASSWORD。")
+            }
+            tap(app.buttons["connect-button"])
+        }
+        XCTAssertTrue(app.tabBars.buttons["今日"].waitForExistence(timeout: 30))
+        app.terminate()
+        app.launchEnvironment = ["DSA_TEST_SERVER": server]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["今日"].waitForExistence(timeout: 30))
+        tap(app.tabBars.buttons["工具"])
+        tap(app.buttons["tools.route.chat"])
+        XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 20))
+        let loaded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.progressIndicators["tool-loading"])
+        XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 30), .completed)
+        XCTAssertFalse(app.descendants(matching: .any)["tool-error"].firstMatch.exists)
+        capture("真實Access-重啟與工具頁")
+    }
+
+    private func launchAccess(server: String, clientID: String, secret: String, password: String?) {
+        app.terminate()
+        app.launchEnvironment = ["DSA_TEST_SERVER": server, "DSA_ACCESS_TEST_PREFILL": "1",
+                                 "DSA_ACCESS_TEST_CLIENT_ID": clientID, "DSA_ACCESS_TEST_CLIENT_SECRET": secret]
+        app.launchEnvironment["DSA_ACCESS_TEST_PASSWORD"] = password
+        app.launch()
+    }
+
+    private func launchFreshAccessFixture(server: String, secret: String) {
+        launchAccess(server: server, clientID: "fixture-access-id", secret: secret, password: "fixture-password")
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.app.tabBars.buttons["今日"].exists || self.app.buttons["connect-button"].exists
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 20), .completed)
+        // Keychain 刻意跨 process 保留；每個案例先以真 UI 清掉該 fixture 的既有登入與 Token。
+        if app.tabBars.buttons["今日"].exists {
+            tap(app.tabBars.buttons["工具"])
+            tap(app.buttons["tools.logout"])
+        }
+        expandAccessSettings()
+        if app.staticTexts["access-configured"].exists {
+            tap(app.buttons["access-remove"])
+            XCTAssertTrue(app.secureTextFields["access-client-secret"].exists)
+            launchAccess(server: server, clientID: "fixture-access-id", secret: secret, password: "fixture-password")
+        }
+    }
+
+    private func expandAccessSettings() {
+        if !app.textFields["access-client-id"].exists && !app.staticTexts["access-configured"].exists {
+            tap(app.descendants(matching: .any)["access-section"].firstMatch)
+        }
+    }
+
     func testMarketResearchWatchlistPortfolioAndLocalLogout() throws {
         let password = app.secureTextFields["server-password"]
         XCTAssertTrue(password.waitForExistence(timeout: 15), "應顯示測試伺服器的登入畫面")
@@ -244,6 +370,7 @@ final class DSAMarketUITests: XCTestCase {
     private func tap(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         scrollTo(element, file: file, line: line)
         XCTAssertTrue(element.isHittable, "控制項無法點擊：\(element)", file: file, line: line)
+        XCTAssertTrue(element.isEnabled, "控制項尚未啟用：\(element)", file: file, line: line)
         element.tap()
     }
 

@@ -16,7 +16,8 @@ mkdir -p "$DSA_EVIDENCE_DIR"
 DSA_EVIDENCE_DIR="$(cd "$DSA_EVIDENCE_DIR" && pwd)"
 echo "驗收證據：$DSA_EVIDENCE_DIR"
 
-python3 "$DSA_IOS_ROOT/scripts/fixture-server.py" --quote-delay 2 --daily-trend-delay 6 --ready-file "$DSA_EVIDENCE_DIR/fixture-ready.json" > "$DSA_EVIDENCE_DIR/fixture.log" 2>&1 &
+env -u DSA_REAL_ACCESS_URL -u DSA_REAL_ACCESS_CLIENT_ID -u DSA_REAL_ACCESS_CLIENT_SECRET -u DSA_REAL_DSA_PASSWORD \
+  python3 "$DSA_IOS_ROOT/scripts/fixture-server.py" --quote-delay 2 --daily-trend-delay 6 --ready-file "$DSA_EVIDENCE_DIR/fixture-ready.json" > "$DSA_EVIDENCE_DIR/fixture.log" 2>&1 &
 DSA_FIXTURE_PID=$!
 trap 'kill "$DSA_FIXTURE_PID" 2>/dev/null || true' EXIT
 
@@ -34,10 +35,12 @@ PY
 
 xcodegen generate --spec "$DSA_IOS_ROOT/project.yml" --project "$DSA_IOS_ROOT" --quiet
 # fixture 版用獨立 bundle ID：與手動驗證的正式 bundle 共用同一台模擬器時，安裝與登入資料互不覆蓋。
-DSA_SIGNING_ARGS=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DSA_BUNDLE_ID=com.audichuang.dsa.fixture)
+DSA_SIGNING_ARGS=(CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- DSA_BUNDLE_ID=com.audichuang.dsa.fixture 'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) DEBUG DSA_ACCESS_UITEST')
 if [[ -n "${DSA_TEAM_ID:-}" ]]; then DSA_SIGNING_ARGS+=("DEVELOPMENT_TEAM=$DSA_TEAM_ID"); fi
-xcodebuild build-for-testing -project "$DSA_IOS_ROOT/DSAMarket.xcodeproj" -scheme DSAMarket \
+env -u DSA_REAL_ACCESS_URL -u DSA_REAL_ACCESS_CLIENT_ID -u DSA_REAL_ACCESS_CLIENT_SECRET -u DSA_REAL_DSA_PASSWORD \
+  xcodebuild build-for-testing -project "$DSA_IOS_ROOT/DSAMarket.xcodeproj" -scheme DSAMarket \
   -configuration Debug -destination "platform=iOS Simulator,id=$DSA_SIMULATOR_ID" \
+  -parallel-testing-enabled NO \
   -derivedDataPath "$DSA_EVIDENCE_DIR/DerivedData" "${DSA_SIGNING_ARGS[@]}" \
   > "$DSA_EVIDENCE_DIR/build.log" 2>&1
 
@@ -59,6 +62,7 @@ else:
 for target in targets:
     target.setdefault("EnvironmentVariables", {})["DSA_TEST_SERVER"] = ready["url"]
     target.setdefault("UITargetAppEnvironmentVariables", {})["DSA_TEST_SERVER"] = ready["url"]
+    target["EnvironmentVariables"]["DSA_ACCESS_FIXTURE_SERVER"] = ready["access_url"]
 with path.open("wb") as stream:
     plistlib.dump(config, stream)
 print(path)
@@ -67,7 +71,7 @@ PY
 
 python3 - "$DSA_TEST_RUN" "$DSA_SIMULATOR_ID" "$DSA_EVIDENCE_DIR" <<'PY'
 from pathlib import Path
-import json, re, shutil, signal, subprocess, sys, time
+import json, os, re, shutil, signal, subprocess, sys, time
 test_run, simulator, directory = sys.argv[1:]
 root = Path(directory)
 log_path = root / "test.log"
@@ -77,7 +81,12 @@ command = ["xcodebuild", "test-without-building", "-xctestrun", test_run,
 finished_at = None
 timed_out = False
 with log_path.open("w") as log:
-    process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+    environment = os.environ.copy()
+    # xcodebuild 將 TEST_RUNNER_ 環境變數轉交測試 runner；不把秘密寫進 xctestrun。
+    for key in ["DSA_REAL_ACCESS_URL", "DSA_REAL_ACCESS_CLIENT_ID", "DSA_REAL_ACCESS_CLIENT_SECRET", "DSA_REAL_DSA_PASSWORD"]:
+        if key in environment:
+            environment["TEST_RUNNER_" + key] = environment[key]
+    process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, env=environment)
     while process.poll() is None:
         # 已觀察到的 SDK/runtime finalize 卡住；只在 UI suite 已結束後啟動 60 秒上限。
         output = log_path.read_text(errors="replace")

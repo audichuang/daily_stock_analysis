@@ -3,6 +3,12 @@ import Foundation
 enum WebNavigationPolicy {
     enum Action: Equatable { case allow, download, external, cancel }
 
+    static func preservesAccessError(_ error: Error, blockedAccessRedirect: Bool) -> Bool {
+        let failure = error as NSError
+        // iOS 沒有匯出這個舊 WebKit 常數；102 是取消 policy 後實測收到的頁框中斷。
+        return blockedAccessRedirect && failure.domain == "WebKitErrorDomain" && failure.code == 102
+    }
+
     static func sourceOrigin(protocolValue: String, host: String, port: Int) -> URL? {
         guard ["http", "https"].contains(protocolValue.lowercased()), !host.isEmpty else { return nil }
         var source = URLComponents()

@@ -34,11 +34,15 @@ struct ConnectionView: View {
                             Text(store.serverAddress).font(.caption).foregroundStyle(Theme.secondary)
                             Button("變更服務網址") { showAddress = true; store.needsPassword = false }
                         }
+                        AccessSettingsView()
                         if store.needsPassword {
                             SecureField("管理員密碼", text: $password)
                                 .textContentType(.password)
                                 .padding(14).background(Theme.background, in: RoundedRectangle(cornerRadius: 12))
                                 .accessibilityIdentifier("server-password")
+                                #if DEBUG && DSA_ACCESS_UITEST
+                                .onAppear { password = ProcessInfo.processInfo.environment["DSA_ACCESS_TEST_PASSWORD"] ?? "" }
+                                #endif
                         }
                         if let error = store.connectionError { ErrorStateView(message: error) }
                         Button {
