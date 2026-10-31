@@ -44,6 +44,10 @@ describe('portfolioFormat', () => {
     expect(formatPositionMoney(123, pricedPosition)).toBe('CNY 123.00');
     expect(getPositionPriceLabel(pricedPosition)).toBe('实时价 · longbridge');
 
+    // 報價幣別決定精度，帳戶基準幣別不影響。
+    const usdInTwdAccount = { ...pricedPosition, currency: 'USD', lastPrice: 1264.58, valuationCurrency: 'TWD' };
+    expect(formatPositionPrice(usdInTwdAccount)).toBe('1,264.58');
+
     const missingPosition = { ...pricedPosition, priceAvailable: false, priceSource: 'missing' };
     expect(formatPositionPrice(missingPosition)).toBe('--');
     expect(formatPositionMoney(123, missingPosition)).toBe('--');

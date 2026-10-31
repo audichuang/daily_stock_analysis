@@ -76,21 +76,23 @@ public enum DisplayNumber {
         return (isPositive ? "+" : "") + text + "%"
     }
 
-    // 台股依升降單位：千元以上無小數、百元以上一位；其他市場一元以下留四位給低價股。
-    private static func priceDigits(_ value: Double, currency: String?) -> Int {
+    // 台股高價股可省略多餘的 0，但最多保留兩位：ETF 的升降單位更細（00631L 443.15），不能捨入。
+    // 其他市場一元以下留四位給低價股。
+    private static func priceDigits(_ value: Double, currency: String?) -> (min: Int, max: Int) {
         let magnitude = abs(value)
         if currency == "TWD" {
-            if magnitude >= 1000 { return 0 }
-            if magnitude >= 100 { return 1 }
-            return 2
+            if magnitude >= 1000 { return (0, 2) }
+            if magnitude >= 100 { return (1, 2) }
+            return (2, 2)
         }
-        return magnitude > 0 && magnitude < 1 ? 4 : 2
+        let digits = magnitude > 0 && magnitude < 1 ? 4 : 2
+        return (digits, digits)
     }
 
     public static func price(_ value: Double?, currency: String? = nil) -> String {
         guard let value, value.isFinite else { return noValue }
         let digits = priceDigits(value, currency: currency)
-        return grouped(value, minDigits: digits, maxDigits: digits)
+        return grouped(value, minDigits: digits.min, maxDigits: digits.max)
     }
 
     /// 不帶小數的金額，給總資產這類大數字用；幣別碼放前面。

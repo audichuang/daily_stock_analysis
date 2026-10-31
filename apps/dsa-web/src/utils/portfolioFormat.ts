@@ -44,7 +44,8 @@ export function hasPositionPrice(row: PortfolioPositionItem): boolean {
 
 export function formatPositionPrice(row: PortfolioPositionItem): string {
   if (!hasPositionPrice(row)) return '--';
-  return formatPrice(row.lastPrice, row.valuationCurrency);
+  // lastPrice 是原幣報價；valuationCurrency 是帳戶基準幣別，不能拿來決定精度。
+  return formatPrice(row.lastPrice, row.currency);
 }
 
 export function formatPositionMoney(value: number, row: PortfolioPositionItem): string {

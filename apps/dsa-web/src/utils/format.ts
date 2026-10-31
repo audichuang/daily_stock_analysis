@@ -29,21 +29,23 @@ export const formatPercent = (value?: number | null, digits = 2): string => {
   return value > 0 && /[1-9]/.test(text) ? `+${text}%` : `${text}%`;
 };
 
-// 台股依升降單位：千元以上無小數、百元以上一位；其他市場一元以下留四位給低價股。
-const priceDigits = (value: number, currency?: string): number => {
+// 台股高價股可省略多餘的 0，但最多保留兩位：ETF 的升降單位更細（00631L 443.15），不能捨入。
+// 其他市場一元以下留四位給低價股。
+const priceDigits = (value: number, currency?: string): [number, number] => {
   const abs = Math.abs(value);
   if (currency === 'TWD') {
-    if (abs >= 1000) return 0;
-    if (abs >= 100) return 1;
-    return 2;
+    if (abs >= 1000) return [0, 2];
+    if (abs >= 100) return [1, 2];
+    return [2, 2];
   }
-  return abs > 0 && abs < 1 ? 4 : 2;
+  const digits = abs > 0 && abs < 1 ? 4 : 2;
+  return [digits, digits];
 };
 
 export const formatPrice = (value?: number | null, currency?: string): string => {
   if (!isReading(value)) return NO_VALUE;
-  const digits = priceDigits(value, currency);
-  return groupDigits(value, digits, digits);
+  const [minDigits, maxDigits] = priceDigits(value, currency);
+  return groupDigits(value, minDigits, maxDigits);
 };
 
 export const formatMoneyValue = (value?: number | null, currency?: string, digits = 2): string => {
