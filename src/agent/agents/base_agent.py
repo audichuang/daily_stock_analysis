@@ -183,6 +183,10 @@ class BaseAgent(ABC):
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": self.system_prompt(ctx)},
         ]
+        from src.services.event_gap import event_gap_prompt
+        messages[0]["content"] += event_gap_prompt(ctx.meta.get("event_gap"))
+        if ctx.meta.get("us_evidence_prompt"):
+            messages.append({"role": "user", "content": ctx.meta["us_evidence_prompt"]})
         scope = ctx.meta.get("stock_scope")
         strict_chat = scope is not None and scope.strict
         if strict_chat:

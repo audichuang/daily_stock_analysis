@@ -71,6 +71,9 @@ _CATEGORY_DEFINITIONS: List[Dict[str, Any]] = [
 ]
 
 WEB_SETTINGS_HIDDEN_FROM_UI = {
+    # 事件判讀僅由環境設定，不新增 Web 編輯介面。
+    "EVENT_GAP_DECISION_ENABLED",
+    "EVENT_GAP_THRESHOLD_PCT",
     # Optional FXMacroData authorization is read from the process environment
     # when a tool runs; it is not a Web settings or model-input field.
     "FXMACRODATA_API_KEY",

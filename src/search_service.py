@@ -12,6 +12,7 @@ A股自选股智能分析系统 - 搜索服务模块
 """
 
 import logging
+import random
 import multiprocessing
 import re
 import threading
@@ -432,7 +433,11 @@ class TavilySearchProvider(BaseSearchProvider):
     """
     
     def __init__(self, api_keys: List[str]):
-        super().__init__(api_keys, "Tavily")
+        keys = list(dict.fromkeys(api_keys))
+        if keys:
+            start = random.randrange(len(keys))
+            keys = keys[start:] + keys[:start]
+        super().__init__(keys, "Tavily")
     
     def _do_search(
         self,
@@ -495,68 +500,55 @@ class TavilySearchProvider(BaseSearchProvider):
                 success=True,
             )
             
-        except Exception as e:
-            error_msg = str(e)
-            # 检查是否是配额问题
-            if 'rate limit' in error_msg.lower() or 'quota' in error_msg.lower():
-                error_msg = f"API 配额已用尽: {error_msg}"
-            
-            return SearchResponse(
-                query=query,
-                results=[],
-                provider=self.name,
-                success=False,
-                error_message=error_msg
-            )
+        except Exception as exc:
+            # SDK 將 432/433（以及 403）收斂為 ForbiddenError，不能靠錯誤文字判斷。
+            if self._is_key_failure(exc):
+                raise
+            return SearchResponse(query=query, results=[], provider=self.name,
+                                  success=False, error_message=type(exc).__name__)
+
+    @staticmethod
+    def _is_key_failure(exc: Exception) -> bool:
+        from tavily.errors import ForbiddenError, InvalidAPIKeyError, UsageLimitExceededError
+
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        return isinstance(exc, (ForbiddenError, InvalidAPIKeyError, UsageLimitExceededError)) or status in {401, 429, 432, 433}
 
     def search(
-        self,
-        query: str,
-        max_results: int = 5,
-        days: int = 7,
+        self, query: str, max_results: int = 5, days: int = 7,
         topic: Optional[str] = None,
     ) -> SearchResponse:
-        """执行 Tavily 搜索，可按调用方选择是否启用新闻 topic。"""
-        if topic is None:
-            return super().search(query, max_results=max_results, days=days)
-
-        api_key = self._get_next_key()
-        if not api_key:
-            return SearchResponse(
-                query=query,
-                results=[],
-                provider=self._name,
-                success=False,
-                error_message=f"{self._name} 未配置 API Key"
-            )
-
-        start_time = time.time()
-        try:
-            response = self._do_search(query, api_key, max_results, days=days, topic=topic)
-            response.search_time = time.time() - start_time
-
+        """同一次搜尋逐把嘗試，僅認證／額度錯誤切換金鑰。"""
+        start_time = time.monotonic()
+        with self._state_lock:
+            keys = [next(self._key_cycle) for _ in self._api_keys] if self._key_cycle else []
+            # 每次呼叫仍輪替起點，重建服務時則由隨機起點開始。
+            if self._key_cycle:
+                next(self._key_cycle)
+        response = SearchResponse(query=query, results=[], provider=self.name,
+                                  success=False, error_message="Tavily 未配置 API Key")
+        for key in keys:
+            try:
+                kwargs = {"topic": topic} if topic is not None else {}
+                response = self._do_search(query, key, max_results, days=days, **kwargs)
+            except Exception as exc:
+                retryable = self._is_key_failure(exc)
+                # 不記錄例外本文，SDK 的訊息可能含金鑰。
+                response = SearchResponse(query=query, results=[], provider=self.name,
+                                          success=False, error_message=type(exc).__name__)
+                self._record_error(key)
+                if retryable:
+                    continue
+                break
             if response.success:
                 response.mark_retrieved()
-                self._record_success(api_key)
-                logger.info(f"[{self._name}] 搜索 '{query}' 成功，返回 {len(response.results)} 条结果，耗时 {response.search_time:.2f}s")
+                self._record_success(key)
             else:
-                self._record_error(api_key)
+                self._record_error(key)
+            break
+        response.search_time = time.monotonic() - start_time
+        return response
 
-            return response
-
-        except Exception as e:
-            self._record_error(api_key)
-            elapsed = time.time() - start_time
-            logger.error(f"[{self._name}] 搜索 '{query}' 失败: {e}")
-            return SearchResponse(
-                query=query,
-                results=[],
-                provider=self._name,
-                success=False,
-                error_message=str(e),
-                search_time=elapsed
-            )
-    
     @staticmethod
     def _extract_domain(url: str) -> str:
         """从 URL 提取域名作为来源"""
@@ -2844,6 +2836,14 @@ class SearchService:
             name_upper = (stock_name or '').upper()
             return bool(SearchService._ETF_NAME_PATTERN.search(name_upper))
         return False
+
+    def is_available_for_stock(self, stock_code: str) -> bool:
+        """FinMind 僅供台股；其他市場必須有通用搜尋來源。"""
+        from src.services.market_symbol_utils import get_suffix_market
+
+        return any(p.is_available for p in self._providers) or (
+            get_suffix_market(stock_code) == "tw" and self._finmind_provider is not None
+        )
 
     @property
     def is_available(self) -> bool:

@@ -8,6 +8,8 @@ intentionally not imported or exposed here.
 import logging
 import os
 import threading
+import time
+import socket
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -235,6 +237,78 @@ class FutuFetcher(BaseFetcher):
         except Exception as exc:
             logger.warning("[Futu] stock splits failed(%s): %s", symbol, exc)
             return None
+
+    def get_us_evidence(self, stock_code: str, *, deadline: float) -> dict:
+        """美股唯讀證據；外層 manager 限制總耗時，連線探測最多一秒。"""
+        from .us_index_mapping import is_us_stock_code
+        from .yfinance_fundamental_adapter import _safe_float
+
+        if not is_us_stock_code(stock_code) or not self.has_configured_endpoint():
+            return {}
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {}
+        if self._ctx is None:
+            # OpenD 不在線是已知失敗形狀；先擋 SDK 預設的長時間重連。
+            try:
+                with socket.create_connection((self._host, self._port), timeout=min(1.0, remaining)):
+                    pass
+            except OSError:
+                logger.warning("[Futu] 美股證據無法連線 OpenD")
+                return {}
+        ctx = self._get_ctx()
+        if ctx is None:
+            return {}
+        import futu as ft
+        symbol = "US." + stock_code.strip().upper().replace("-", ".")
+        evidence = {}
+
+        def request(method, *args, **kwargs):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            ctx.set_sync_query_connect_timeout(min(1.0, remaining))
+            try:
+                ret, rows = method(*args, **kwargs)
+                return rows if ret == ft.RET_OK and isinstance(rows, pd.DataFrame) and not rows.empty else None
+            except Exception as exc:
+                logger.warning("[Futu] 美股證據請求失敗: %s", type(exc).__name__)
+                return None
+
+        rows = request(ctx.get_capital_flow, symbol, period_type=ft.PeriodType.DAY)
+        if rows is not None:
+            daily = {}
+            for _, row in rows.iterrows():
+                date = pd.to_datetime(row.get("capital_flow_item_time"), errors="coerce")
+                if pd.isna(date):
+                    continue
+                values = {field: value for field in ("in_flow", "main_in_flow")
+                          if (value := _safe_float(row.get(field))) is not None}
+                if values:
+                    key = date.date().isoformat()
+                    daily[key] = {"date": key, **values}
+            if daily:
+                evidence["daily_flow"] = [daily[key] for key in sorted(daily)[-5:]]
+        rows = request(ctx.get_capital_distribution, symbol)
+        if rows is not None:
+            row = rows.iloc[0]
+            values = {field: value for field in (
+                "capital_in_super", "capital_in_big", "capital_in_mid", "capital_in_small",
+                "capital_out_super", "capital_out_big", "capital_out_mid", "capital_out_small",
+            ) if (value := _safe_float(row.get(field))) is not None}
+            if values and pd.notna(row.get("update_time")):
+                evidence["distribution"] = {"as_of": str(row["update_time"]), **values}
+        rows = request(ctx.get_market_snapshot, [symbol])
+        if rows is not None:
+            row = rows.iloc[0]
+            # 不採用富途本益比；快照與 K 線的口徑已有矛盾實例。
+            values = {field: value for field in ("volume_ratio", "turnover_rate")
+                      if (value := _safe_float(row.get(field))) is not None}
+            if values:
+                evidence["snapshot"] = values
+                if pd.notna(row.get("update_time")):
+                    evidence["snapshot"]["as_of"] = str(row["update_time"])
+        return evidence
 
     def get_capital_flow(self, stock_code: str, **kwargs):
         symbol = _hk_symbol(stock_code)

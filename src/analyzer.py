@@ -24,6 +24,8 @@ import litellm
 from json_repair import repair_json
 from litellm import Router
 
+from data_provider.us_index_mapping import is_us_stock_code
+
 from src.agent.llm_adapter import (
     get_thinking_extra_body,
     resolve_fallback_litellm_wire_models,
@@ -4169,6 +4171,11 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
         report_language = normalize_report_language(getattr(config, "report_language", "zh"))
         self._pin_tw_ma_arm(code, report_language)
         system_prompt = self._get_analysis_system_prompt(report_language, stock_code=code)
+        from src.services.event_gap import event_gap_context, event_gap_prompt
+        event = event_gap_context(code, context, config)
+        if event:
+            context = {**context, "event_gap": event}
+            system_prompt += event_gap_prompt(event)
         skill_instructions, default_skill_policy, use_legacy_default_prompt = self._get_skill_prompt_sections()
 
         # 请求前增加延时（防止连续请求触发限流）
@@ -5111,6 +5118,10 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 > {L("若上述欄位為 N/A 或缺失，請明確寫「資料缺失，無法判斷」，禁止編造。", "若上述字段为 N/A 或缺失，请明确写“数据缺失，无法判断”，禁止编造。")}
 """
 
+        if is_us_stock_code(code):
+            from data_provider.us_evidence import format_us_evidence
+            prompt += format_us_evidence(fundamental_context)
+
         # 賣方共識（台股＋美股，ANALYST_CONSENSUS_ENABLED 開才會有）：純資訊，不參與任何規則
         if isinstance(fundamental_context, dict) and fundamental_context.get("consensus"):
             from data_provider.analyst_consensus import format_analyst_consensus_block
@@ -5768,6 +5779,8 @@ Output the complete Decision Dashboard in JSON format."""
             )
         if prompt_market == "tw":
             prompt += _tw_forecast_question(report_language)
+        from src.services.event_gap import event_gap_prompt
+        prompt += event_gap_prompt(context.get("event_gap"))
         return prompt
 
     def _format_volume(self, volume: Optional[float], report_language: str = "zh") -> str:

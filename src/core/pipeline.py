@@ -861,7 +861,7 @@ class StockAnalysisPipeline:
             )
             news_result_count: Optional[int] = None
             self._emit_progress(46, f"{stock_name}：正在检索新闻与舆情")
-            if self.search_service is not None and self.search_service.is_available:
+            if self.search_service is not None and self.search_service.is_available_for_stock(code):
                 logger.info(f"{stock_name}({code}) 开始多维度情报搜索...")
 
                 # 检索已发起：此后即使一条都没拿到，也是「执行了但零命中」而非
@@ -904,7 +904,7 @@ class StockAnalysisPipeline:
                     except Exception as e:
                         logger.warning(f"{stock_name}({code}) 保存新闻情报失败: {e}")
             else:
-                logger.info(f"{stock_name}({code}) 搜索服务不可用，跳过情报搜索")
+                logger.warning(f"{stock_name}({code}) 未配置此市場的新聞搜尋來源，跳過情報搜尋")
 
             # Step 4.5: Social sentiment intelligence (US stocks only)
             social_evidence_context: Optional[str] = None
@@ -959,6 +959,10 @@ class StockAnalysisPipeline:
                 market_phase_context=market_phase_context_dict,
                 portfolio_context=portfolio_context,
             )
+            from src.services.event_gap import event_gap_context
+            event = event_gap_context(code, enhanced_context, self.config)
+            if event:
+                enhanced_context["event_gap"] = event
             enhanced_context["market_phase_context"] = market_phase_context_dict
             self._attach_daily_market_context(
                 enhanced_context,
@@ -1425,6 +1429,8 @@ class StockAnalysisPipeline:
             )
         )
 
+        from data_provider.us_evidence import supplement_realtime
+        supplement_realtime(enhanced)
         return enhanced
 
     def _attach_belong_boards_to_fundamental_context(
@@ -1737,6 +1743,12 @@ class StockAnalysisPipeline:
             
             if realtime_quote:
                 initial_context["realtime_quote"] = self._safe_to_dict(realtime_quote)
+            from data_provider.us_evidence import supplement_realtime
+            from src.services.event_gap import event_gap_context
+            supplement_realtime(initial_context)
+            search_available = bool(self.search_service is not None and self.search_service.is_available_for_stock(code))
+            if not search_available:
+                logger.warning("[%s] 未配置此市場的新聞搜尋來源", code)
             if chip_data:
                 initial_context["chip_distribution"] = self._safe_to_dict(chip_data)
             if trend_result:
@@ -1783,6 +1795,9 @@ class StockAnalysisPipeline:
             analysis_context = self._load_agent_analysis_context(
                 code, stock_name, analysis_target=analysis_target
             )
+            event = event_gap_context(code, {**analysis_context, **initial_context}, self.config)
+            if event:
+                initial_context["event_gap"] = event
             market = "cn" if is_index else get_market_for_stock(normalize_stock_code(code))
             artifacts = self._build_agent_analysis_artifacts(
                 code=code,
@@ -1815,6 +1830,11 @@ class StockAnalysisPipeline:
                 message = f"Analyze stock {code} ({stock_name}) and return the full decision dashboard JSON."
             else:
                 message = f"请分析股票 {code} ({stock_name})，并生成决策仪表盘报告。"
+            from data_provider.us_evidence import format_us_evidence
+            if is_us_stock_code(code):
+                evidence_prompt = format_us_evidence(fundamental_context)
+                if evidence_prompt:
+                    initial_context["us_evidence_prompt"] = evidence_prompt
             llm_started_at = time.monotonic()
             # Agent 自己调用搜索工具取证，所以披露计数只能来自这些工具的真实返回；
             # 分析结束后补打的 search_stock_news() 与 Agent 消费的证据无关。
@@ -1854,10 +1874,7 @@ class StockAnalysisPipeline:
             # 检索），渠道可用则从 0 起步、拿到多少算多少。
             if result is not None and news_evidence is not None:
                 result.news_result_count = news_evidence.resolve(
-                    search_available=bool(
-                        self.search_service is not None
-                        and self.search_service.is_available
-                    ),
+                    search_available=search_available,
                 )
                 # 与普通路径同样按来源逐个登记：Agent 运行期自己搜到的条数、注入的
                 # 社交情绪、注入的本地资讯池。这条路径不经过 format_intel_report()，
@@ -1926,7 +1943,7 @@ class StockAnalysisPipeline:
 
             # 保存新闻情报到数据库（Agent 工具结果仅用于 LLM 上下文，未持久化，Fixes #396）
             # 使用 search_stock_news（与 Agent 工具调用逻辑一致），仅 1 次 API 调用，无额外延迟
-            if self.search_service is not None and self.search_service.is_available:
+            if self.search_service is not None and self.search_service.is_available_for_stock(code):
                 try:
                     news_response = self.search_service.search_stock_news(
                         stock_code=("" if is_index else code),
@@ -3411,6 +3428,9 @@ class StockAnalysisPipeline:
             result.market_structure_context = market_structure_context
         result.market_phase_summary = market_phase_summary
         result.analysis_context_pack_overview = analysis_context_pack_overview
+        from src.services.event_gap import event_gap_context, apply_event_gap_guard
+        event = event_gap_context(artifacts.code, {**artifacts.base_context, **snapshot_context}, self.config)
+        apply_event_gap_guard(result, event, report_language)
         final_action = normalize_decision_action(getattr(result, "action", None))
         if isinstance(result.dashboard, dict):
             result.dashboard.pop("agent_disagreement_explanation", None)
