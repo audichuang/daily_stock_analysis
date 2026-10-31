@@ -289,6 +289,8 @@ class TestIntelQueryQuality:
         assert "法說會" not in " ".join(d["query"] for d in etf)
 
     def test_data_pages_dropped_only_from_event_dimensions(self):
+        from datetime import date
+
         from src.search_service import SearchResponse, SearchResult, SearchService
 
         page = SearchResult(title="Alphabet earnings", snippet="x", url="https://simplywall.st/stocks/x",
