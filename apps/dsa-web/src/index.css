@@ -43,6 +43,15 @@
   --input: 217 28% 84%;
   --ring: 193 100% 43%;
   --radius: 1rem;
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-pill: 999px;
+  --text-display: 28px;
+  --text-title: 20px;
+  --text-section: 16px;
+  --text-body: 14px;
+  --text-caption: 12px;
+  --text-micro: 11px;
   --elevated: 0 0% 100%;
   --hover: 214 29% 90%;
   --secondary-text: 224 18% 28%;
@@ -1958,6 +1967,8 @@ textarea {
   padding: 0.5rem 1rem;
   color: var(--text-secondary-text);
 }
+/* .label-uppercase 是舊 class 的相容別名，Y01 刪除 */
+.label,
 .label-uppercase {
   display: inline-flex;
   align-items: center;
@@ -1965,8 +1976,8 @@ textarea {
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--text-secondary-text);
 }
 
@@ -2641,7 +2652,7 @@ textarea {
 .backtest-metric-row:last-child {
   border-bottom: none;
 }
-.backtest-metric-row .label {
+.backtest-metric-row .backtest-label {
   font-size: 0.75rem;
   color: var(--text-secondary-text);
 }
@@ -2676,10 +2687,10 @@ textarea {
   font-size: 0.75rem;
   font-family: monospace;
 }
-.backtest-summary .label {
+.backtest-summary .backtest-label {
   color: var(--text-secondary-text);
 }
-.backtest-summary .label.message {
+.backtest-summary .backtest-label.message {
   flex-basis: 100%;
   line-height: 1.4;
   white-space: normal;
@@ -2930,4 +2941,46 @@ textarea {
 
 .text-market-down {
   color: var(--market-down);
+}
+
+/* 卡片層級：surface 一般、inset 次層；漸層只留給 highlight（.terminal-card） */
+.card-surface {
+  border: 1px solid var(--border-default);
+  background: hsl(var(--card) / 0.96);
+  box-shadow: var(--shadow-soft-card);
+}
+
+.card-inset {
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+}
+
+.text-token-display {
+  font-size: var(--text-display);
+  line-height: 1.25;
+}
+
+.text-token-title {
+  font-size: var(--text-title);
+  line-height: 1.35;
+}
+
+.text-token-section {
+  font-size: var(--text-section);
+  line-height: 1.45;
+}
+
+.text-token-body {
+  font-size: var(--text-body);
+  line-height: 1.5;
+}
+
+.text-token-caption {
+  font-size: var(--text-caption);
+  line-height: 1.4;
+}
+
+.text-token-micro {
+  font-size: var(--text-micro);
+  line-height: 1.35;
 }

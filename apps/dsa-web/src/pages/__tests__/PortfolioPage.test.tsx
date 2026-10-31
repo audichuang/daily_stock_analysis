@@ -877,27 +877,27 @@ describe('PortfolioPage FX refresh', () => {
     const dashboardScope = within(dashboard as HTMLElement);
     expect(dashboardScope.getAllByText('不可用').length).toBeGreaterThanOrEqual(5);
 
-    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('div.rounded-2xl');
+    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('[data-card-level]');
     expect(concentrationCard).not.toBeNull();
     const concentrationScope = within(concentrationCard as HTMLElement);
     expect(concentrationScope.getByText('板块集中度告警: 不可用')).toBeInTheDocument();
     expect(concentrationScope.getByText('Top1 权重: --')).toBeInTheDocument();
 
-    const drawdownCard = screen.getByText('回撤监控').closest('div.rounded-2xl');
+    const drawdownCard = screen.getByText('回撤监控').closest('[data-card-level]');
     expect(drawdownCard).not.toBeNull();
     const drawdownScope = within(drawdownCard as HTMLElement);
     expect(drawdownScope.getByText('最大回撤: --')).toBeInTheDocument();
     expect(drawdownScope.getByText('当前回撤: --')).toBeInTheDocument();
     expect(drawdownScope.getByText('告警: 不可用')).toBeInTheDocument();
 
-    const stopLossCard = screen.getByText('止损接近预警').closest('div.rounded-2xl');
+    const stopLossCard = screen.getByText('止损接近预警').closest('[data-card-level]');
     expect(stopLossCard).not.toBeNull();
     const stopLossScope = within(stopLossCard as HTMLElement);
     expect(stopLossScope.getByText('触发数: --')).toBeInTheDocument();
     expect(stopLossScope.getByText('接近数: --')).toBeInTheDocument();
     expect(stopLossScope.getByText('告警: 不可用')).toBeInTheDocument();
 
-    const aiRiskCard = screen.getByText('AI 风险信号').closest('div.rounded-2xl');
+    const aiRiskCard = screen.getByText('AI 风险信号').closest('[data-card-level]');
     expect(aiRiskCard).not.toBeNull();
     expect(within(aiRiskCard as HTMLElement).getByText('信号风险暂不可用')).toBeInTheDocument();
   });
@@ -1104,7 +1104,7 @@ describe('PortfolioPage FX refresh', () => {
     expect(screen.getAllByText('暴露不可用')).toHaveLength(2);
     expect(screen.queryByText('US')).not.toBeInTheDocument();
     expect(screen.queryByText('100.00%')).not.toBeInTheDocument();
-    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('div.rounded-2xl');
+    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('[data-card-level]');
     expect(concentrationCard).not.toBeNull();
     const concentrationScope = within(concentrationCard as HTMLElement);
     expect(concentrationScope.getByText('暂无集中度数据')).toBeInTheDocument();
@@ -1117,7 +1117,7 @@ describe('PortfolioPage FX refresh', () => {
     const stopLossFlag = screen.getByText('止损', { exact: true }).closest('div.rounded-xl');
     expect(stopLossFlag).not.toBeNull();
     expect(within(stopLossFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
-    const stopLossCard = screen.getByText('止损接近预警').closest('div.rounded-2xl');
+    const stopLossCard = screen.getByText('止损接近预警').closest('[data-card-level]');
     expect(stopLossCard).not.toBeNull();
     const stopLossScope = within(stopLossCard as HTMLElement);
     expect(stopLossScope.getByText('触发数: --')).toBeInTheDocument();
@@ -1249,28 +1249,28 @@ describe('PortfolioPage FX refresh', () => {
       expect(cardScope.getByText('--')).toBeInTheDocument();
     }
 
-    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('div.rounded-2xl');
+    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('[data-card-level]');
     expect(concentrationCard).not.toBeNull();
     const concentrationScope = within(concentrationCard as HTMLElement);
     expect(concentrationScope.getByText('板块集中度告警: 不可用')).toBeInTheDocument();
     expect(concentrationScope.getByText('Top1 权重: --')).toBeInTheDocument();
     expect(concentrationScope.queryByText('600519')).not.toBeInTheDocument();
 
-    const drawdownCard = screen.getByText('回撤监控').closest('div.rounded-2xl');
+    const drawdownCard = screen.getByText('回撤监控').closest('[data-card-level]');
     expect(drawdownCard).not.toBeNull();
     const drawdownScope = within(drawdownCard as HTMLElement);
     expect(drawdownScope.getByText('最大回撤: --')).toBeInTheDocument();
     expect(drawdownScope.getByText('当前回撤: --')).toBeInTheDocument();
     expect(drawdownScope.getByText('告警: 不可用')).toBeInTheDocument();
 
-    const stopLossCard = screen.getByText('止损接近预警').closest('div.rounded-2xl');
+    const stopLossCard = screen.getByText('止损接近预警').closest('[data-card-level]');
     expect(stopLossCard).not.toBeNull();
     const stopLossScope = within(stopLossCard as HTMLElement);
     expect(stopLossScope.getByText('触发数: --')).toBeInTheDocument();
     expect(stopLossScope.getByText('接近数: --')).toBeInTheDocument();
     expect(stopLossScope.getByText('告警: 不可用')).toBeInTheDocument();
 
-    const aiRiskCard = screen.getByText('AI 风险信号').closest('div.rounded-2xl');
+    const aiRiskCard = screen.getByText('AI 风险信号').closest('[data-card-level]');
     expect(aiRiskCard).not.toBeNull();
     expect(within(aiRiskCard as HTMLElement).getByText('信号风险暂不可用')).toBeInTheDocument();
   });
@@ -1309,7 +1309,7 @@ describe('PortfolioPage FX refresh', () => {
     expect(within(sectorFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
     expect(within(sectorFlag as HTMLElement).getByText('--')).toBeInTheDocument();
 
-    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('div.rounded-2xl');
+    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('[data-card-level]');
     expect(concentrationCard).not.toBeNull();
     const concentrationScope = within(concentrationCard as HTMLElement);
     expect(concentrationScope.getByText('板块集中度告警: 不可用')).toBeInTheDocument();
@@ -1351,7 +1351,7 @@ describe('PortfolioPage FX refresh', () => {
 
     expect(screen.queryByText('Top1: Technology')).not.toBeInTheDocument();
     expect(screen.queryByText('40.00%')).not.toBeInTheDocument();
-    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('div.rounded-2xl');
+    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('[data-card-level]');
     expect(concentrationCard).not.toBeNull();
     const concentrationScope = within(concentrationCard as HTMLElement);
     expect(concentrationScope.getByText('板块集中度告警: 不可用')).toBeInTheDocument();
@@ -1639,7 +1639,7 @@ describe('PortfolioPage FX refresh', () => {
     expect(stopLossFlag).not.toBeNull();
     expect(within(stopLossFlag as HTMLElement).getByText('--')).toBeInTheDocument();
     expect(within(stopLossFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
-    const stopLossCard = screen.getByText('止损接近预警').closest('div.rounded-2xl');
+    const stopLossCard = screen.getByText('止损接近预警').closest('[data-card-level]');
     expect(stopLossCard).not.toBeNull();
     expect(within(stopLossCard as HTMLElement).getByText('告警: 不可用')).toBeInTheDocument();
   });

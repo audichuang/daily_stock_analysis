@@ -159,7 +159,7 @@ function boolIcon(value: boolean | null | undefined, text: BacktestText) {
 
 const MetricRow: React.FC<{ label: string; value: string; accent?: boolean }> = ({ label, value, accent }) => (
   <div className="backtest-metric-row">
-    <span className="label">{label}</span>
+    <span className="backtest-label">{label}</span>
     <span className={`value ${accent ? 'accent' : ''}`}>{value}</span>
   </div>
 );
@@ -228,15 +228,15 @@ const RunSummary: React.FC<{ data: BacktestRunResponse; language: UiLanguage }> 
   const text = BACKTEST_TEXT[language];
   return (
   <div className="backtest-summary animate-fade-in">
-    <span className="label">{text.processed} <span className="value">{data.processed}</span></span>
-    <span className="label">{text.saved} <span className="value primary">{data.saved}</span></span>
-    <span className="label">{text.completed} <span className="value success">{data.completed}</span></span>
-    <span className="label">{text.insufficient} <span className="value warning">{data.insufficient}</span></span>
+    <span className="backtest-label">{text.processed} <span className="value">{data.processed}</span></span>
+    <span className="backtest-label">{text.saved} <span className="value primary">{data.saved}</span></span>
+    <span className="backtest-label">{text.completed} <span className="value success">{data.completed}</span></span>
+    <span className="backtest-label">{text.insufficient} <span className="value warning">{data.insufficient}</span></span>
     {data.errors > 0 && (
-      <span className="label">{text.errors} <span className="value danger">{data.errors}</span></span>
+      <span className="backtest-label">{text.errors} <span className="value danger">{data.errors}</span></span>
     )}
     {data.message && (
-      <span className="label message">{data.message}</span>
+      <span className="backtest-label message">{data.message}</span>
     )}
   </div>
   );

@@ -147,7 +147,7 @@ export const ScoreGauge: React.FC<ScoreGaugeProps> = ({
   return (
     <div className={cn('flex flex-col items-center', className)}>
       {showLabel && (
-        <span className="label-uppercase mb-3 text-secondary-text">
+        <span className="label mb-3 text-secondary-text">
           {text.fearGreedIndex}
         </span>
       )}
