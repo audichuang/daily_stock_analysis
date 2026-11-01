@@ -160,6 +160,7 @@ def history_item(record_id, code, report_type="detailed", region=None):
         "action": "watch", "action_label": "觀望（測試）",
         "current_price": None if is_market else STOCKS[code][1], "change_pct": None if is_market else STOCKS[code][2],
         "model_used": "fixture-only", "created_at": AS_OF, "asset_type": "index" if is_market else "stock",
+        "one_sentence": None if is_market else "【合成】一句話結論：等待量能確認。",
     }
 
 
@@ -386,9 +387,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, f"<!doctype html><html lang='zh-Hant'><meta name='viewport' content='width=device-width'><body style='background:#101824;color:#fff;font:18px system-ui;padding:24px'><h1>四維度合成檔案 {code}</h1><p>受登入保護的 {code} 測試研究檔案，不能視為真實研究。</p></body></html>", content_type="text/html; charset=utf-8")
             if route == ["api", "v1", "history"]:
                 records = STATE.records
-                for key in ["stock_code", "report_type"]:
+                for key in ["stock_code", "report_type", "action"]:
                     if key in query:
                         records = [item for item in records if item.get(key) == query[key][0]]
+                if "market" in query:
+                    # 與真後端一致：大盤複盤不屬於任何市場。
+                    records = [item for item in records if item["report_type"] != "market_review"
+                               and STOCKS[item["stock_code"]][3].lower() == query["market"][0]]
+                if "q" in query:
+                    term = query["q"][0].lower()
+                    records = [item for item in records
+                               if term in item["stock_code"].lower() or term in (item["stock_name"] or "").lower()]
                 page = int(query.get("page", ["1"])[0])
                 limit = int(query.get("limit", ["20"])[0])
                 return self.reply(200, {"total": len(records), "page": page, "limit": limit,
@@ -416,6 +425,8 @@ class Handler(BaseHTTPRequestHandler):
                 if complete:
                     if not task.get("record"):
                         task["record"] = history_item(STATE.next_record_id, task["code"])
+                        # 與前一份不同，研究庫才有同日變化行可驗。
+                        task["record"].update(action="buy", action_label="買進", sentiment_score=72)
                         STATE.next_record_id += 1
                         STATE.records.insert(0, task["record"])
                     report = STATE.report(task["record"])
@@ -425,7 +436,10 @@ class Handler(BaseHTTPRequestHandler):
                                        "progress": 100 if complete else task["polls"] * 30,
                                        "result": result, "error": None, "stock_name": STOCKS[task["code"]][0]})
             if route == ["api", "v1", "portfolio", "snapshot"]:
-                return self.reply(200, portfolio())
+                return self.reply(200, portfolio(query.get("display_currency", [None])[0],
+                                                 query.get("include_funds") == ["true"]))
+            if route == ["api", "v1", "portfolio", "risk"]:
+                return self.reply(200, portfolio_risk())
             if route == [""] or (route and route[0] in ["chat", "screening", "portfolio", "alerts", "funds", "decision-signals", "backtest", "data", "settings", "usage"]):
                 html = tool_html("/" + "/".join(route), query.get("embed", ["無"])[0])
                 if self.access_required:
@@ -493,42 +507,68 @@ document.getElementById('fixture-blob-export').addEventListener('click', () => {
 </script></body></html>""".replace("{{ROUTE}}", escape(route_path)).replace("{{EMBED}}", escape(embed))
 
 
-def portfolio():
+def portfolio_risk():
+    """形狀照 PortfolioRiskService；權重是合成值。"""
+    return {"as_of": "2024-01-31", "cost_method": "fifo", "currency": "CNY", "thresholds": {},
+            "concentration": {"total_market_value": 216000.0, "top_weight_pct": 61.9, "alert": True,
+                              "top_positions": [{"symbol": "2330.TW", "market_value_base": 133000.0, "market_value_display": 600000.0,
+                                                 "weight_pct": 61.9, "is_alert": True}]},
+            "sector_concentration": {"total_market_value": 216000.0, "top_weight_pct": 70.0, "alert": False,
+                                     "top_sectors": [{"sector": "半導體（測試）", "market_value_base": 151000.0, "market_value_display": 680000.0,
+                                                      "weight_pct": 70.0, "symbol_count": 2, "is_alert": False}],
+                                     "coverage": {}, "errors": []},
+            "drawdown": {}, "stop_loss": {}, "display_currency": "TWD", "display_fx_rate": 4.5,
+            "display_fx_stale": False, "display_fx_missing": False, "fx_rate_used": []}
+
+
+def portfolio(display_currency=None, include_funds=False):
     limitations = ["realtime_quote_best_effort", "fx_and_cost_basis_partial", "sector_and_risk_metrics_limited"]
     position = {"symbol": "2330.TW", "name": STOCKS["2330.TW"][0], "market": "tw", "currency": "TWD",
                 "quantity": 1000.0, "avg_cost": 580.0, "total_cost": 580000.0, "last_price": 600.0,
                 "market_value_base": 600000.0, "unrealized_pnl_base": 20000.0, "unrealized_pnl_pct": 3.45,
                 "valuation_currency": "TWD", "price_source": "realtime_quote", "price_provider": "shioaji",
                 "price_date": "2024-01-31", "price_stale": False, "price_available": True,
+                "day_change_pct": 1.5, "day_pnl_base": 6000.0, "prev_close": 591.1,
                 "data_quality": "partial", "limitations": limitations}
     account = {"account_id": 1, "account_name": "合成測試帳戶", "market": "tw", "base_currency": "TWD",
                "total_cash": 400000.0, "total_market_value": 600000.0, "total_equity": 1000000.0,
-               "realized_pnl": 0.0, "unrealized_pnl": 20000.0, "data_quality": "partial",
+               "realized_pnl": 0.0, "unrealized_pnl": 20000.0, "day_pnl": 6000.0, "data_quality": "partial",
                "fx_stale": False, "fx_missing": False, "limitations": limitations, "positions": [position]}
     second = deepcopy(account)
     second.update(account_id=2, account_name="第二台幣帳戶（測試）", total_cash=80000.0,
-                  total_market_value=120000.0, total_equity=200000.0, unrealized_pnl=20000.0)
+                  total_market_value=120000.0, total_equity=200000.0, unrealized_pnl=20000.0, day_pnl=1200.0)
     second["positions"][0].update(symbol="00631L.TW", name=STOCKS["00631L.TW"][0],
                                   avg_cost=100.0, total_cost=100000.0, last_price=120.0,
                                   market_value_base=120000.0, unrealized_pnl_pct=20.0, price_stale=True)
     dollar = deepcopy(account)
     dollar.update(account_id=3, account_name="美元帳戶（測試）", market="us", base_currency="USD",
-                  total_cash=4700.0, total_market_value=7800.0, total_equity=12500.0, unrealized_pnl=300.0)
+                  total_cash=4700.0, total_market_value=7800.0, total_equity=12500.0, unrealized_pnl=300.0, day_pnl=50.0)
     dollar["positions"][0].update(symbol="AAPL", name=STOCKS["AAPL"][0], market="us", currency="USD",
                                   quantity=20.0, avg_cost=180.0, total_cost=3600.0, last_price=190.0,
                                   market_value_base=3800.0, unrealized_pnl_base=200.0,
-                                  unrealized_pnl_pct=5.56, valuation_currency="USD", price_provider="yfinance")
+                                  unrealized_pnl_pct=5.56, valuation_currency="USD", price_provider="yfinance",
+                                  day_change_pct=-0.5, day_pnl_base=-19.0)
     microsoft = deepcopy(dollar["positions"][0])
     microsoft.update(symbol="MSFT", name=STOCKS["MSFT"][0], quantity=10.0, avg_cost=390.0,
                      total_cost=3900.0, last_price=400.0, market_value_base=4000.0,
-                     unrealized_pnl_base=100.0, unrealized_pnl_pct=2.56, price_provider="fallback")
+                     unrealized_pnl_base=-100.0, unrealized_pnl_pct=-2.56, price_provider="fallback")
     dollar["positions"].append(microsoft)
     # 重現正式契約：頂層是跨幣別 CNY，原幣帳戶完整；CNY 換算缺漏不應污染台幣／美元分組。
-    return {"as_of": "2024-01-31", "cost_method": "fifo", "currency": "CNY", "account_count": 3,
-            "total_cash": 82345.67, "total_market_value": 200000.0, "total_equity": 282345.67,
-            "realized_pnl": 0.0, "unrealized_pnl": 10000.0, "fx_stale": True, "fx_missing": True,
-            "data_quality": "partial", "limitations": ["合成測試資料，不能視為實際帳戶餘額"] + limitations,
-            "accounts": [account, second, dollar]}
+    result = {"as_of": "2024-01-31", "cost_method": "fifo", "currency": "CNY", "account_count": 3,
+              "total_cash": 82345.67, "total_market_value": 200000.0, "total_equity": 282345.67,
+              "realized_pnl": 0.0, "unrealized_pnl": 10000.0, "fx_stale": True, "fx_missing": True,
+              "data_quality": "partial", "limitations": ["合成測試資料，不能視為實際帳戶餘額"] + limitations,
+              "accounts": [account, second, dollar]}
+    if display_currency:
+        # 台幣兩帳戶＋美元帳戶 × 32；頂層 CNY 換算缺漏不影響這組。
+        result.update(display_currency=display_currency, consolidated_equity_base=1600000.0,
+                      consolidated_market_value_base=969600.0, consolidated_cash_base=630400.0,
+                      consolidated_unrealized_pnl_base=49600.0, consolidated_realized_pnl_base=0.0,
+                      consolidated_day_pnl_base=8800.0, consolidated_fx_stale=False,
+                      consolidated_fx_missing=False, consolidated_fx_missing_pairs=[], fx_rate_used=[])
+        if include_funds:
+            result.update(consolidated_fund_value_base=200000.0, consolidated_fund_day_pnl_base=1000.0)
+    return result
 
 
 def main():

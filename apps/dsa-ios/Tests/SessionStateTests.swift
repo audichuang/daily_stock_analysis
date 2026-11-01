@@ -147,6 +147,57 @@ final class SessionStateTests: XCTestCase {
         await store.logout()
     }
 
+    func testWrongPasswordMapsToPasswordFieldAndAddressIsNormalized() async throws {
+        let host = "session-n-\(UUID().uuidString.lowercased()).example.test"
+        let url = URL(string: "https://\(host)")!
+        let previousAddress = UserDefaults.standard.object(forKey: "serverAddress")
+        defer {
+            SessionStateURLProtocol.handler = nil
+            SessionVault.clear(for: url)
+            UserDefaults.standard.set(previousAddress, forKey: "serverAddress")
+        }
+        SessionStateURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/api/v1/auth/status": return (200, #"{"authEnabled":true,"loggedIn":false,"passwordSet":true}"#)
+            case "/api/v1/auth/login": return (401, #"{"error":"invalid_password","message":"密码错误"}"#)
+            default: throw URLError(.unsupportedURL)
+            }
+        }
+        let store = AppStore(configurationFactory: stubConfiguration)
+        store.serverAddress = "  \(host)/ "
+        await store.connect()
+        XCTAssertEqual(store.baseURL, url)
+        XCTAssertEqual(store.serverAddress, url.absoluteString)
+        XCTAssertTrue(store.needsPassword)
+
+        await store.connect(password: "wrong")
+        XCTAssertEqual(store.connectionIssue?.field, .password)
+        XCTAssertEqual(store.connectionError, "密碼不正確，請再試一次。")
+        XCTAssertTrue(store.needsPassword, "打錯留在登入表單，不退回改網址")
+        await store.logout()
+    }
+
+    func testCancelledConnectionShowsNoErrorAndLeavesStartup() async throws {
+        let url = URL(string: "https://session-c-\(UUID().uuidString.lowercased()).example.test")!
+        defer { SessionStateURLProtocol.handler = nil }
+        SessionStateURLProtocol.handler = { _ in
+            Thread.sleep(forTimeInterval: 1)
+            return (200, #"{"authEnabled":true,"loggedIn":false,"passwordSet":true}"#)
+        }
+        let store = AppStore(configurationFactory: stubConfiguration)
+        store.serverAddress = url.absoluteString
+        store.startingUp = true
+        let pending = Task { await store.submitConnection() }
+        try await Task.sleep(for: .milliseconds(100))
+        store.cancelConnecting()
+        await pending.value
+        XCTAssertFalse(store.startingUp)
+        XCTAssertNil(store.connectionIssue, "取消不是連線失敗")
+        XCTAssertFalse(store.connecting)
+        XCTAssertFalse(store.connected)
+        await store.logout()
+    }
+
     func testInvalidReplacementCanReturnToOriginalServerAndThenConnectToAnotherServer() async throws {
         let serverA = URL(string: "https://session-a-\(UUID().uuidString.lowercased()).example.test")!
         let serverB = URL(string: "https://session-b-\(UUID().uuidString.lowercased()).example.test")!

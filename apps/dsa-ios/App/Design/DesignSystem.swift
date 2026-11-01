@@ -287,17 +287,19 @@ struct LoadingStateView: View {
 }
 
 struct ErrorStateView: View {
+    let title: String
     let message: String
     let retry: (() -> Void)?
 
-    init(message: String, retry: (() -> Void)? = nil) {
+    init(title: String = "暫時無法取得資料", message: String, retry: (() -> Void)? = nil) {
+        self.title = title
         self.message = message
         self.retry = retry
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("暫時無法取得資料", systemImage: "exclamationmark.circle")
+            Label(title, systemImage: "exclamationmark.circle")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Theme.warning)
             Text(message)

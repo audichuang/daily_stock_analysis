@@ -1,86 +1,212 @@
+import DSACore
 import SwiftUI
+
+/// 冷啟動只顯示連接中；太久才給慢速提示與取消，不先閃登入表單。
+struct StartupConnectingView: View {
+    @EnvironmentObject private var store: AppStore
+    @State private var slow = false
+
+    private var host: String {
+        ServerAddress.normalized(store.serverAddress)?.host ?? store.serverAddress
+    }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            BrandMark().frame(width: 48, height: 48)
+            ProgressView("正在連接分析服務…")
+                .foregroundStyle(Theme.secondary)
+                .accessibilityIdentifier("startup-connecting")
+            Text(host).font(.caption).foregroundStyle(Theme.secondary)
+            if slow {
+                Text("連線比平常久，服務可能正在啟動或網路不穩。")
+                    .font(.caption).foregroundStyle(Theme.secondary)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("startup-slow")
+                Button("取消") { store.cancelConnecting() }
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("startup-cancel")
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.background)
+        .task {
+            try? await Task.sleep(for: .seconds(6))
+            if !Task.isCancelled { slow = true }
+        }
+    }
+}
 
 struct ConnectionView: View {
     @EnvironmentObject private var store: AppStore
     @State private var password = ""
-    @State private var showAddress = false
+    @State private var showPassword = false
+    @FocusState private var focus: Field?
+
+    private enum Field: Hashable { case address, password }
+
+    private var canSubmit: Bool {
+        !store.connecting && !store.serverAddress.isEmpty && (!store.needsPassword || !password.isEmpty)
+    }
+
+    /// 該貼在欄位旁的錯誤；欄位不在目前畫面時才落到共用錯誤框。
+    private func inlineError(_ field: ConnectionField) -> String? {
+        guard let issue = store.connectionIssue, issue.field == field else { return nil }
+        return issue.message
+    }
+
+    private var generalError: String? {
+        guard let issue = store.connectionIssue else { return nil }
+        switch issue.field {
+        case .general: return issue.message
+        case .address: return store.needsPassword ? issue.message : nil
+        case .password: return store.needsPassword ? nil : issue.message
+        case .access: return nil
+        }
+    }
 
     var body: some View {
         NavigationStack {
             PageScroll {
-                VStack(alignment: .leading, spacing: 20) {
-                    BrandMark().frame(width: 74, height: 74).padding(.top, 24)
-                    Text("Daily\nStock AI")
-                        .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                HStack(spacing: 12) {
+                    BrandMark().frame(width: 40, height: 40)
+                    Text("Daily Stock AI")
+                        .font(.title3.weight(.bold))
                         .foregroundStyle(Theme.text)
-                    Text("看見行情，\n也看懂背後的判斷。")
-                        .font(.title2.weight(.medium)).foregroundStyle(Theme.secondary)
-                    HStack(spacing: 8) {
-                        StatusBadge("台股 + 美股", tone: .information)
-                        StatusBadge("你的 AI 研究室", tone: .ai)
-                    }
                 }
+                .padding(.top, 12)
                 DSACard {
-                    VStack(alignment: .leading, spacing: 16) {
-                        SectionHeading(store.needsPassword ? "登入分析服務" : "連接你的分析服務",
-                                       subtitle: "沿用你的行情、自選股與 AI 報告。")
-                        if store.serverAddress.isEmpty || showAddress || !store.needsPassword {
-                            TextField("https://你的服務網址", text: $store.serverAddress)
-                                .keyboardType(.URL).textContentType(.URL)
-                                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                                .padding(14).background(Theme.background, in: RoundedRectangle(cornerRadius: 12))
-                                .accessibilityIdentifier("server-address")
-                        } else {
-                            Text(store.serverAddress).font(.caption).foregroundStyle(Theme.secondary)
-                            Button("變更服務網址") { showAddress = true; store.needsPassword = false }
-                        }
-                        AccessSettingsView()
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text(store.needsPassword ? "登入分析服務" : "連接分析服務")
+                            .font(.headline).foregroundStyle(Theme.text)
                         if store.needsPassword {
-                            SecureField("管理員密碼", text: $password)
-                                .textContentType(.password)
-                                .padding(14).background(Theme.background, in: RoundedRectangle(cornerRadius: 12))
-                                .accessibilityIdentifier("server-password")
-                                #if DEBUG && DSA_ACCESS_UITEST
-                                .onAppear { password = ProcessInfo.processInfo.environment["DSA_ACCESS_TEST_PASSWORD"] ?? "" }
-                                #endif
+                            serviceRow
+                            passwordField
+                            if let message = inlineError(.password) { fieldError(message, id: "connection.error.password") }
+                        } else {
+                            addressField
+                            if let message = inlineError(.address) { fieldError(message, id: "connection.error.address") }
                         }
-                        if let error = store.connectionError { ErrorStateView(message: error) }
-                        Button {
-                            Task {
-                                await store.connect(password: store.needsPassword ? password : nil)
-                                password = ""
-                            }
-                        } label: {
-                            HStack {
-                                if store.connecting { ProgressView().tint(Theme.background) }
-                                Text(store.connecting ? "連接中…" : store.needsPassword ? "登入" : "連接服務")
-                                Spacer()
-                                Image(systemName: "arrow.right")
-                            }
+                        if let message = generalError {
+                            ErrorStateView(title: "無法連線", message: message)
                         }
-                        .buttonStyle(PressableButtonStyle())
-                        .disabled(store.connecting || store.serverAddress.isEmpty || (store.needsPassword && password.isEmpty))
-                        .accessibilityIdentifier("connect-button")
+                        submitButton
+                        if store.connecting {
+                            Button("取消") { store.cancelConnecting() }
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .accessibilityIdentifier("connect-cancel")
+                        }
+                        Divider().overlay(Theme.border)
+                        if let message = inlineError(.access) { fieldError(message, id: "connection.error.access") }
+                        AccessSettingsView()
                     }
                 }
-                VStack(alignment: .leading, spacing: 16) {
-                    feature("chart.xyaxis.line", "行情與研究，同一個畫面", "日 K、報價與最新 AI 判斷相互對照。")
-                    feature("list.bullet.clipboard", "每個觀點，都能追溯", "查看理由、資料來源與判斷失效條件。")
-                    feature("lock.shield", "安全連接分析服務", "登入狀態保存在裝置 Keychain，不保存密碼。")
-                }
-                Text("更換服務網址後，請使用原本的管理員密碼重新登入。AI 分析供研究參考，評分不代表勝率；報價與報告以各自標示的時間為準。")
-                    .font(.caption).foregroundStyle(Theme.secondary).padding(.bottom, 20)
+                Text("AI 分析供研究參考，評分不代表勝率。")
+                    .font(.caption).foregroundStyle(Theme.secondary)
             }
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .onChange(of: store.needsPassword) { _, needsPassword in
+            // 回到改網址就是換服務，舊密碼不留在記憶體。
+            if !needsPassword { password = ""; showPassword = false }
+        }
+        #if DEBUG && DSA_ACCESS_UITEST
+        .onAppear {
+            if let value = ProcessInfo.processInfo.environment["DSA_ACCESS_TEST_PASSWORD"] { password = value }
+        }
+        #endif
+    }
+
+    private var serviceRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "network").foregroundStyle(Theme.secondary).accessibilityHidden(true)
+            Text(ServerAddress.normalized(store.serverAddress)?.host ?? store.serverAddress)
+                .font(.caption).foregroundStyle(Theme.secondary)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 8)
+            Button("變更") {
+                store.needsPassword = false
+                store.connectionIssue = nil
+                focus = .address
+            }
+            .font(.caption.weight(.semibold))
+            .frame(minHeight: 44)
+            .accessibilityLabel("變更服務網址")
+            .accessibilityIdentifier("change-server-address")
         }
     }
 
-    private func feature(_ icon: String, _ title: String, _ detail: String) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: icon).frame(width: 24).foregroundStyle(Theme.accent)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                Text(detail).font(.caption).foregroundStyle(Theme.secondary)
+    private var addressField: some View {
+        TextField("https://你的服務網址", text: $store.serverAddress)
+            .keyboardType(.URL).textContentType(.URL)
+            .textInputAutocapitalization(.never).autocorrectionDisabled()
+            .submitLabel(.go)
+            .focused($focus, equals: .address)
+            .onSubmit { submit() }
+            .padding(14).background(Theme.background, in: RoundedRectangle(cornerRadius: 12))
+            .accessibilityIdentifier("server-address")
+    }
+
+    private var passwordField: some View {
+        HStack(spacing: 8) {
+            Group {
+                if showPassword {
+                    TextField("管理員密碼", text: $password)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                } else {
+                    SecureField("管理員密碼", text: $password)
+                }
+            }
+            .textContentType(.password)
+            .submitLabel(.go)
+            .focused($focus, equals: .password)
+            .onSubmit { submit() }
+            .accessibilityIdentifier("server-password")
+            Button {
+                showPassword.toggle()
+                focus = .password
+            } label: {
+                Image(systemName: showPassword ? "eye.slash" : "eye")
+                    .foregroundStyle(Theme.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(showPassword ? "隱藏密碼" : "顯示密碼")
+            .accessibilityIdentifier("server-password-toggle")
+        }
+        .padding(.leading, 14)
+        .frame(minHeight: 48)
+        .background(Theme.background, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var submitButton: some View {
+        Button { submit() } label: {
+            HStack {
+                if store.connecting { ProgressView().tint(Theme.background) }
+                Text(store.connecting ? "連接中…" : store.needsPassword ? "登入" : "連接服務")
+                Spacer()
+                Image(systemName: "arrow.right")
             }
         }
+        .buttonStyle(PressableButtonStyle())
+        .disabled(!canSubmit)
+        .accessibilityIdentifier("connect-button")
+    }
+
+    private func fieldError(_ message: String, id: String) -> some View {
+        Label(message, systemImage: "exclamationmark.circle")
+            .font(.caption)
+            .foregroundStyle(Theme.warning)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier(id)
+    }
+
+    private func submit() {
+        guard canSubmit else { return }
+        focus = nil
+        let value = store.needsPassword ? password : nil
+        // 密碼只在登入成功、換服務時才清（上面的 onChange 與離開此畫面），打錯不用重打。
+        Task { await store.submitConnection(password: value) }
     }
 }

@@ -315,6 +315,10 @@ final class DSAMarketUITests: XCTestCase {
         tap(app.buttons["search-dismiss"])
 
         tap(app.tabBars.buttons["AI 研究"])
+        // 上面分析過台積電：同日兩份併成一列，新的在上、舊的收在「同日另 1 份」。
+        tap(app.buttons["research.versions.2330.TW"])
+        XCTAssertTrue(text(containing: "觀望 → 買進").exists, "同日動作改變要有變化行")
+        capture("09a-研究庫同日整併")
         let savedReport = app.buttons["research.report.101"]
         tap(savedReport)
         XCTAssertTrue(app.descendants(matching: .any)["report.screen"].firstMatch.waitForExistence(timeout: 15))
@@ -322,29 +326,46 @@ final class DSAMarketUITests: XCTestCase {
 
         tap(app.tabBars.buttons["資產"])
         XCTAssertTrue(text(containing: "合成測試帳戶").waitForExistence(timeout: 15))
-        let total = app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label CONTAINS %@", "portfolio.summary", "資產 ")).firstMatch
+        let total = app.descendants(matching: .any)["portfolio.summary.totalEquity"].firstMatch
         XCTAssertTrue(total.waitForExistence(timeout: 10))
-        XCTAssertTrue(total.label.contains("1,200,000"), "台幣總額必須加總兩個TWD帳戶，不使用頂層CNY合計")
-        XCTAssertTrue(total.label.contains("新臺幣"))
+        XCTAssertTrue(total.label.contains("1,800,000"), "總覽讀 consolidated_* 加基金，不用頂層CNY合計，也不自己換匯")
         XCTAssertFalse(text(containing: "282,345.67").exists, "不能重標原本的CNY數字")
         XCTAssertFalse(text(containing: "realtime_quote_best_effort").exists)
+        XCTAssertTrue(text(containing: "含基金").exists)
         let position = app.buttons["portfolio.position.1.2330.TW"]
         XCTAssertTrue(position.exists)
-        XCTAssertLessThanOrEqual(position.frame.height, 104)
+        XCTAssertGreaterThanOrEqual(position.frame.height, 44)
+        XCTAssertLessThanOrEqual(position.frame.height, 76, "四欄列要維持緊湊")
         XCTAssertFalse(position.label.contains("可能延遲"), "Shioaji非過期報價不能被一律標成延遲")
+        XCTAssertTrue(app.descendants(matching: .any)["portfolio.insight.concentration"].firstMatch.waitForExistence(timeout: 10), "集中度要接 /portfolio/risk")
+        XCTAssertFalse(app.buttons["portfolio.positionDetails.1.2330.TW"].exists, "「…」已改成左滑")
         capture("10-資產帳本")
-        tap(app.segmentedControls["portfolio.currency-picker"].buttons["美元"])
-        XCTAssertTrue(total.label.contains("12,500"), "美元須顯示USD帳戶的原幣金額")
-        XCTAssertTrue(total.label.contains("美元"))
-        XCTAssertTrue(app.buttons["portfolio.position.3.AAPL"].exists)
+
+        tap(app.segmentedControls["portfolio.market-picker"].buttons["美股"])
+        XCTAssertTrue(app.buttons["portfolio.position.3.AAPL"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["portfolio.position.3.AAPL"].label.contains("可能延遲"))
         XCTAssertTrue(app.buttons["portfolio.position.3.MSFT"].label.contains("可能延遲"))
         XCTAssertFalse(app.buttons["portfolio.account.1"].exists)
-        capture("10b-美元原幣資產")
-        tap(app.segmentedControls["portfolio.currency-picker"].buttons["新臺幣"])
-        tap(app.buttons["portfolio.positionDetails.1.2330.TW"])
-        XCTAssertTrue(text(containing: "平均成本").exists)
-        capture("10c-持股展開明細")
+        XCTAssertTrue(total.label.contains("1,800,000"), "市場篩選只影響列表，總覽仍是全部資產")
+        capture("10b-美股篩選")
+        tap(app.segmentedControls["portfolio.market-picker"].buttons["全部"])
+
+        tap(app.buttons["portfolio.account.1"])
+        XCTAssertFalse(app.buttons["portfolio.position.1.2330.TW"].exists, "帳戶收合要連持股一起收")
+        tap(app.buttons["portfolio.account.1"])
+        XCTAssertTrue(position.waitForExistence(timeout: 5))
+        position.swipeLeft()
+        tap(app.buttons["明細"])
+        XCTAssertTrue(text(containing: "平均成本").waitForExistence(timeout: 5))
+        capture("10c-左滑持股明細")
+
+        tap(app.segmentedControls["portfolio.view-mode"].buttons["合併持股"])
+        XCTAssertTrue(text(containing: "新臺幣持股").waitForExistence(timeout: 5))
+        XCTAssertTrue(text(containing: "美元持股").exists, "不同幣別分組，不混算")
+        XCTAssertTrue(app.buttons["portfolio.merged.2330.TW"].exists)
+        capture("10e-合併持股")
+        tap(app.segmentedControls["portfolio.view-mode"].buttons["依帳戶"])
+
         tap(app.buttons["portfolio.data-notes"])
         XCTAssertTrue(text(containing: "報價依可用來源更新").exists)
         XCTAssertFalse(text(containing: "fx_and_cost_basis_partial").exists)
@@ -450,6 +471,61 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
     }
 
+    func testWrongPasswordKeepsInputAndShowsMappedErrorNearField() throws {
+        let password = app.secureTextFields["server-password"]
+        XCTAssertTrue(password.waitForExistence(timeout: 15))
+        XCTAssertFalse(text(containing: "看見行情").exists, "品牌標語與功能介紹已移除")
+        password.tap()
+        password.typeText("wrong-password")
+        tap(app.buttons["connect-button"])
+        let error = app.descendants(matching: .any)["connection.error.password"].firstMatch
+        XCTAssertTrue(error.waitForExistence(timeout: 15))
+        XCTAssertTrue(error.label.contains("密碼不正確"), "後端訊息要映射成繁中，不直接顯示原文")
+        XCTAssertFalse(text(containing: "測試密碼錯誤").exists)
+        XCTAssertGreaterThanOrEqual(error.frame.minY, password.frame.maxY, "錯誤要在密碼欄下方")
+        XCTAssertLessThan(error.frame.minY - password.frame.maxY, 60, "錯誤要貼近密碼欄")
+        XCTAssertTrue(app.buttons["connect-button"].isEnabled, "密碼沒被清空，按鈕才會是可按的")
+        tap(app.buttons["server-password-toggle"])
+        XCTAssertEqual(app.textFields["server-password"].value as? String, "wrong-password", "打錯不清空，可切換顯示")
+        capture("連線-密碼錯誤")
+    }
+
+    func testResearchLibrarySearchesServerAndHasMarketReviewRow() throws {
+        let password = app.secureTextFields["server-password"]
+        XCTAssertTrue(password.waitForExistence(timeout: 15))
+        password.tap()
+        password.typeText("fixture-password")
+        tap(app.buttons["connect-button"])
+        XCTAssertTrue(app.tabBars.buttons["AI 研究"].waitForExistence(timeout: 20))
+        tap(app.tabBars.buttons["AI 研究"])
+        XCTAssertTrue(app.buttons["research.report.102"].waitForExistence(timeout: 15))
+        XCTAssertFalse(text(containing: "已載入").exists, "已載入文案已移除")
+        XCTAssertFalse(text(containing: "非勝率").exists)
+        XCTAssertTrue(text(containing: "一句話結論").exists, "結論讀 one_sentence")
+
+        tap(app.buttons["research.scope.market"])
+        XCTAssertTrue(app.buttons["research.report.201"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["research.report.201"].label.contains("大盤複盤"))
+        XCTAssertFalse(app.buttons["research.report.102"].exists)
+        capture("研究庫-大盤複盤")
+        tap(app.buttons["research.scope.all"])
+
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("Apple")
+        let onlyApple = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.app.buttons["research.report.102"].exists && !self.app.buttons["research.report.201"].exists
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [onlyApple], timeout: 10), .completed, "搜尋由伺服器篩選")
+        capture("研究庫-搜尋")
+        tap(app.buttons["關閉"])
+
+        tap(app.tabBars.buttons["工具"])
+        logoutFromTools()
+        XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
+    }
+
     func testLastRowIsNotCoveredByTabBar() throws {
         let password = app.secureTextFields["server-password"]
         XCTAssertTrue(password.waitForExistence(timeout: 15), "應顯示測試伺服器的登入畫面")
@@ -461,10 +537,12 @@ final class DSAMarketUITests: XCTestCase {
         for tab in ["今日", "自選", "AI 研究", "資產", "工具"] {
             tap(app.tabBars.buttons[tab])
             let anchor = app.otherElements["page-bottom-anchor"].firstMatch
-            XCTAssertTrue(anchor.waitForExistence(timeout: 15), "\(tab) 應有頁面底部標記")
-            for _ in 0..<6 where anchor.frame.maxY > app.tabBars.firstMatch.frame.minY {
+            // 資產與研究是惰性列表，底部標記要捲到才存在；先等資料載入再開始捲。
+            _ = anchor.waitForExistence(timeout: 5)
+            for _ in 0..<8 where !anchor.exists || anchor.frame.maxY > app.tabBars.firstMatch.frame.minY {
                 app.swipeUp()
             }
+            XCTAssertTrue(anchor.exists, "\(tab) 應有頁面底部標記")
             XCTAssertLessThanOrEqual(
                 anchor.frame.maxY,
                 app.tabBars.firstMatch.frame.minY,

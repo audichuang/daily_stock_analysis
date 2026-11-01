@@ -16,8 +16,12 @@ public struct PortfolioCurrencyTotal: Identifiable, Equatable, Sendable {
 }
 
 public extension PortfolioSnapshot {
+    var currencyTotals: [PortfolioCurrencyTotal] { accounts.currencyTotals }
+}
+
+public extension Array where Element == PortfolioAccount {
     var currencyTotals: [PortfolioCurrencyTotal] {
-        Dictionary(grouping: accounts, by: \.baseCurrency)
+        Dictionary(grouping: self, by: \.baseCurrency)
             .map { currency, members in
                 // 帳戶內缺匯率的金額已包含未換算值，不能和同幣其他帳戶繼續加總。
                 let missing = members.contains { $0.fxMissing == true }

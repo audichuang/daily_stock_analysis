@@ -140,10 +140,14 @@ public struct DSAClient: Sendable {
         try await get(["stocks", code, "trend"], query: [URLQueryItem(name: "range", value: range)])
     }
 
-    public func historyList(stockCode: String? = nil, reportType: String? = nil, page: Int = 1, limit: Int = 20) async throws -> HistoryPage {
+    /// `q`、`market`、`action` 由伺服器篩選，查的是全部報告，不只已載入的分頁。
+    public func historyList(stockCode: String? = nil, reportType: String? = nil, q: String? = nil, market: String? = nil, action: String? = nil, page: Int = 1, limit: Int = 20) async throws -> HistoryPage {
         var query = [URLQueryItem(name: "page", value: String(page)), URLQueryItem(name: "limit", value: String(limit))]
         if let stockCode { query.append(URLQueryItem(name: "stock_code", value: stockCode)) }
         if let reportType { query.append(URLQueryItem(name: "report_type", value: reportType)) }
+        if let q { query.append(URLQueryItem(name: "q", value: q)) }
+        if let market { query.append(URLQueryItem(name: "market", value: market)) }
+        if let action { query.append(URLQueryItem(name: "action", value: action)) }
         return try await get(["history"], query: query)
     }
 
@@ -176,8 +180,17 @@ public struct DSAClient: Sendable {
         return try await perform(URLRequest(url: url))
     }
 
-    public func portfolioSnapshot() async throws -> PortfolioSnapshot {
-        try await get(["portfolio", "snapshot"], query: [URLQueryItem(name: "include_realtime", value: "true")])
+    /// 帶顯示幣別才有 consolidated_* 折合欄位；基金算進總資產，與 Web 持股頁同一個口徑。
+    public func portfolioSnapshot(displayCurrency: String = "TWD") async throws -> PortfolioSnapshot {
+        try await get(["portfolio", "snapshot"], query: [
+            URLQueryItem(name: "include_realtime", value: "true"),
+            URLQueryItem(name: "display_currency", value: displayCurrency),
+            URLQueryItem(name: "include_funds", value: "true")
+        ])
+    }
+
+    public func portfolioRisk(displayCurrency: String = "TWD") async throws -> PortfolioRiskReport {
+        try await get(["portfolio", "risk"], query: [URLQueryItem(name: "display_currency", value: displayCurrency)])
     }
 
     private func get<T: Decodable>(_ path: [String], query: [URLQueryItem] = []) async throws -> T {
