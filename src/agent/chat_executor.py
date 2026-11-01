@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 from src.agent.agent_backend import AgentBackend, AgentRunRequest
 from src.agent.conversation import conversation_manager
-from src.agent.executor import AgentResult, PreparedAgentChat, prepare_agent_chat
+from src.agent.executor import AgentResult, PreparedAgentChat, prepare_agent_chat, split_structured_answer
 from src.agent.provider_trace import persist_provider_trace_turns
 from src.agent.stock_scope import StockScopeResolution
 from src.storage import DatabaseManager
@@ -117,6 +117,7 @@ class AgentChatExecutor:
             use_codex_prompt=self.backend.backend_id == "codex_app_server",
             include_provider_trace=not self.backend.runtime_owns_loop,
             strict_initial_stock_scope=self.backend.runtime_owns_loop,
+            request_structured_answer=True,
             **resolved_kwargs,
         )
         baseline_len = len(prepared.history_messages) + 2
@@ -180,6 +181,8 @@ class AgentChatExecutor:
         )
 
         if result.success:
+            # 落庫與回傳的都是切掉摘要段的本文，舊客戶端、匯出與通知看不到標記。
+            result.content, result.structured_answer = split_structured_answer(result.content)
             if turn.accepted_snapshot is not None:
                 assistant_message_id = conversation_manager.add_message(
                     turn.session_id, "assistant", result.content, accepted_turn=turn.accepted_snapshot,

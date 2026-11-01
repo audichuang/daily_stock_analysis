@@ -3,6 +3,9 @@
 
 name: volume_breakout
 display_name: 放量突破
+display_name_zh_tw: 放量突破
+group: trend
+group_name_zh_tw: 趨勢
 description: 检测放量突破阻力位信号。适用于股价接近已知阻力位时。
 category: trend
 core_rules: [1, 2, 3]

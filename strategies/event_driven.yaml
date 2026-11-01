@@ -2,6 +2,9 @@
 
 name: event_driven
 display_name: 事件驱动
+display_name_zh_tw: 事件驅動
+group: catalyst
+group_name_zh_tw: 事件與題材
 description: 围绕业绩、政策、并购、订单、产品发布等事件，评估催化强度、兑现概率和风险边界。
 category: framework
 core_rules: [3, 5]

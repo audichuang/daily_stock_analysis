@@ -7,8 +7,10 @@ import json
 import logging
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple, get_args
+
+from sqlalchemy import select
 
 from data_provider.base import canonical_stock_code, normalize_stock_code
 from src.services.stock_list_parser import ParseStatus, parse_analysis_target
@@ -61,6 +63,13 @@ INTRADAY_PHASES = frozenset({
     MarketPhase.LUNCH_BREAK.value,
     MarketPhase.CLOSING_AUCTION.value,
 })
+SIGNAL_LIST_SORTS = frozenset({"created_at", "priority"})
+# sort=priority 的動作順位：要動手的在前。其餘動作排在這張表之後。
+PRIORITY_ACTION_RANK = {
+    action: rank
+    for rank, action in enumerate(("sell", "reduce", "alert", "avoid", "buy", "add", "hold", "watch"))
+}
+SUMMARY_STOP_ITEMS_LIMIT = 20
 DEFAULT_INTRADAY_TTL_HOURS = {
     "cn": 4.0,
     "hk": 5.5,
@@ -193,7 +202,7 @@ class DecisionSignalService:
         row = self.repo.get(signal_id)
         if row is None:
             raise DecisionSignalNotFoundError(f"Decision signal not found: {signal_id}")
-        return self._serialize(row)
+        return self._with_signal_prices([self._serialize(row)])[0]
 
     def list_signals(
         self,
@@ -215,9 +224,15 @@ class DecisionSignalService:
         holding_only: bool = False,
         account_id: Optional[int] = None,
         stock_identities: Optional[List[Tuple[str, str]]] = None,
+        group_latest: bool = False,
+        sort: str = "created_at",
         page: int = 1,
         page_size: int = 20,
     ) -> Dict[str, Any]:
+        if sort not in SIGNAL_LIST_SORTS:
+            raise ValueError(f"invalid sort: {sort}")
+        if sort == "priority" and not group_latest:
+            raise ValueError("sort=priority requires group_latest=true")
         safe_page = max(1, int(page))
         safe_page_size = max(1, min(int(page_size), 100))
         market_norm = self._normalize_optional_market(market)
@@ -269,6 +284,31 @@ class DecisionSignalService:
             stock_codes = None
             if not stock_identity_filters:
                 return {"items": [], "total": 0, "page": safe_page, "page_size": safe_page_size}
+
+        if group_latest:
+            return self._list_latest_per_stock(
+                filters={
+                    "stock_codes": stock_codes,
+                    "stock_identities": stock_identity_filters,
+                    "market": market_norm,
+                    "action": action_norm,
+                    "market_phase": market_phase_norm,
+                    "decision_profile_filter": decision_profile_filter,
+                    "source_type": source_type_norm,
+                    "source_report_id": source_report_id_norm,
+                    "trace_id": trace_id_norm,
+                    "trigger_source": trigger_source_norm,
+                    "status": status_norm,
+                    "created_from": created_from_dt,
+                    "created_to": created_to_dt,
+                    "expires_from": expires_from_dt,
+                    "expires_to": expires_to_dt,
+                },
+                sort=sort,
+                account_id=account_id,
+                page=safe_page,
+                page_size=safe_page_size,
+            )
 
         rows, total = self.repo.list(
             stock_codes=stock_codes,
@@ -328,11 +368,173 @@ class DecisionSignalService:
                 page_size=safe_page_size,
             )
         return {
-            "items": [self._serialize(row) for row in rows],
+            "items": self._with_signal_prices([self._serialize(row) for row in rows]),
             "total": total,
             "page": safe_page,
             "page_size": safe_page_size,
         }
+
+    def _list_latest_per_stock(
+        self,
+        *,
+        filters: Dict[str, Any],
+        sort: str,
+        account_id: Optional[int],
+        page: int,
+        page_size: int,
+    ) -> Dict[str, Any]:
+        held = self._cached_holding_identities(account_id=account_id)
+        closes: Dict[str, Optional[Tuple[float, date]]] = {}
+        if sort == "priority":
+            # 已觸停損要比對收盤價，SQL 排不了，整批取回排序後才分頁。
+            rows, total, older_counts = self.repo.list_latest_per_stock(**filters, page=None)
+            rows = sorted(rows, key=lambda row: self._priority_key(row, held, closes))
+            start = (page - 1) * page_size
+            rows = rows[start:start + page_size]
+        else:
+            rows, total, older_counts = self.repo.list_latest_per_stock(**filters, page=page, page_size=page_size)
+        items = []
+        for row in rows:
+            item = self._serialize(row)
+            item["older_count"] = older_counts.get(row.id, 0)
+            item["is_held"] = (row.market, row.stock_code) in held
+            item.update(self._stop_state(row, closes))
+            items.append(item)
+        return {
+            "items": self._with_signal_prices(items),
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+
+    def _priority_key(
+        self,
+        row: DecisionSignalRecord,
+        held: set[Tuple[str, str]],
+        closes: Dict[str, Optional[Tuple[float, date]]],
+    ) -> Tuple[Any, ...]:
+        """已觸停損 → 持股 → 動作順位 → 新到舊。"""
+        created = row.created_at.timestamp() if row.created_at else 0.0
+        return (
+            0 if self._stop_state(row, closes)["stop_triggered"] else 1,
+            0 if (row.market, row.stock_code) in held else 1,
+            PRIORITY_ACTION_RANK.get(row.action, len(PRIORITY_ACTION_RANK)),
+            -created,
+            -row.id,
+        )
+
+    def _stop_state(
+        self,
+        row: DecisionSignalRecord,
+        closes: Dict[str, Optional[Tuple[float, date]]],
+    ) -> Dict[str, Any]:
+        """最新收盤與停損比較。只看 active 且有停損價的訊號；沒有讀數時 stop_triggered 是 null，不是 false。"""
+        empty = {"stop_triggered": None, "last_close": None, "last_close_date": None}
+        if row.status != "active" or row.stop_loss is None:
+            return empty
+        if row.stock_code not in closes:
+            closes[row.stock_code] = self._latest_close(row.stock_code)
+        close = closes[row.stock_code]
+        if close is None:
+            return empty
+        return {
+            "stop_triggered": close[0] <= float(row.stop_loss),
+            "last_close": close[0],
+            "last_close_date": close[1].isoformat(),
+        }
+
+    def _latest_close(self, stock_code: str) -> Optional[Tuple[float, date]]:
+        try:
+            close = self.portfolio_repo.get_latest_close_with_date(symbol=stock_code, as_of=date.today())
+        except Exception as exc:  # noqa: BLE001 - 單檔查價失敗不拖垮清單，該檔標成無讀數
+            logger.warning("Decision signal latest close failed for %s: %s", stock_code, exc)
+            return None
+        return close if close is not None and close[0] > 0 else None
+
+    def summarize_latest(
+        self,
+        *,
+        market: Optional[str] = None,
+        status: Optional[str] = "active",
+        holding_only: bool = False,
+        account_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """每檔最新一筆的動作分布與已觸停損，與 group_latest 清單同一個母體。"""
+        market_norm = self._normalize_optional_market(market)
+        status_norm = self._normalize_optional_enum(status, SIGNAL_STATUSES, "status")
+        held = self._cached_holding_identities(account_id=account_id)
+        identities: Optional[List[Tuple[str, str]]] = None
+        if holding_only:
+            identities = sorted(i for i in held if market_norm is None or i[0] == market_norm)
+        rows: List[DecisionSignalRecord] = []
+        if not holding_only or identities:
+            rows, _, _ = self.repo.list_latest_per_stock(
+                stock_identities=identities,
+                market=market_norm,
+                status=status_norm,
+                page=None,
+            )
+        actions: Dict[str, int] = {}
+        triggered: List[Dict[str, Any]] = []
+        unavailable = 0
+        closes: Dict[str, Optional[Tuple[float, date]]] = {}
+        for row in rows:
+            actions[row.action] = actions.get(row.action, 0) + 1
+            state = self._stop_state(row, closes)
+            if state["stop_triggered"]:
+                triggered.append({
+                    "id": row.id,
+                    "stock_code": row.stock_code,
+                    "stock_name": row.stock_name,
+                    "market": row.market,
+                    "action": row.action,
+                    "stop_loss": row.stop_loss,
+                    "last_close": state["last_close"],
+                    "last_close_date": state["last_close_date"],
+                    "is_held": (row.market, row.stock_code) in held,
+                })
+            elif row.status == "active" and row.stop_loss is not None and state["last_close"] is None:
+                unavailable += 1
+        triggered.sort(key=lambda item: (not item["is_held"], item["stock_code"]))
+        return {
+            "total": len(rows),
+            "held_count": sum(1 for row in rows if (row.market, row.stock_code) in held),
+            "actions": actions,
+            "stop_triggered_count": len(triggered),
+            "stop_triggered": triggered[:SUMMARY_STOP_ITEMS_LIMIT],
+            "stop_price_unavailable_count": unavailable,
+        }
+
+    def _with_signal_prices(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """追加 signal_price：來源報告產出當下的現價（報告 raw_result 的 current_price）。
+
+        不寫回訊號表，舊訊號也查得到；沒有來源報告（手動、agent）就是 null。"""
+        report_ids = {
+            item["source_report_id"]
+            for item in items
+            if item.get("source_type") == "analysis" and item.get("source_report_id") is not None
+        }
+        prices: Dict[int, float] = {}
+        if report_ids:
+            try:
+                with self.db.get_session() as session:
+                    rows = session.execute(
+                        select(AnalysisHistory.id, AnalysisHistory.raw_result)
+                        .where(AnalysisHistory.id.in_(report_ids))
+                    ).all()
+                for report_id, raw_result in rows:
+                    raw = parse_json_field(raw_result)
+                    price = self._history_float(raw.get("current_price")) if isinstance(raw, dict) else None
+                    if price is not None and price > 0:
+                        prices[report_id] = price
+            except Exception as exc:  # noqa: BLE001 - 顯示用的追加欄位，查不到不影響清單
+                logger.warning("Decision signal price lookup failed: %s", exc)
+        for item in items:
+            if item.get("source_type") == "analysis":
+                item["signal_price"] = prices.get(item.get("source_report_id"))
+            else:
+                item["signal_price"] = None
+        return items
 
     def get_latest_active(
         self,
@@ -350,7 +552,7 @@ class DecisionSignalService:
             limit=limit,
         )
         return {
-            "items": [self._serialize(row) for row in rows],
+            "items": self._with_signal_prices([self._serialize(row) for row in rows]),
             "total": len(rows),
             "page": 1,
             "page_size": max(1, min(int(limit), 100)),

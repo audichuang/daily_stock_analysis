@@ -3,6 +3,9 @@
 
 name: shrink_pullback
 display_name: 缩量回踩
+display_name_zh_tw: 量縮回檔
+group: trend
+group_name_zh_tw: 趨勢
 description: 检测缩量回踩均线支撑信号，趋势延续的理想入场点。
 category: trend
 core_rules: [1, 2, 4]

@@ -2,6 +2,9 @@
 
 name: hot_theme
 display_name: 热点题材
+display_name_zh_tw: 熱門題材
+group: catalyst
+group_name_zh_tw: 事件與題材
 description: 跟踪政策、产业和市场热点，判断题材强度、板块扩散和个股相对强弱。
 category: framework
 core_rules: [2, 3, 5, 7]

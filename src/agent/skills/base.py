@@ -77,6 +77,9 @@ class Skill:
     execution_context: str = "inline"
     subagent_type: str = ""
     preferred_model: str = ""
+    display_name_zh_tw: str = ""
+    group: str = ""
+    group_name_zh_tw: str = ""
 
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?(.*)$", re.DOTALL)
@@ -199,6 +202,9 @@ def load_skill_from_yaml(filepath: Union[str, Path]) -> Skill:
         execution_context=str(data.get("context", "inline")).strip() or "inline",
         subagent_type=str(data.get("agent", "")).strip(),
         preferred_model=str(data.get("model", "")).strip(),
+        display_name_zh_tw=str(data.get("display_name_zh_tw", "") or "").strip(),
+        group=str(data.get("group", "") or "").strip(),
+        group_name_zh_tw=str(data.get("group_name_zh_tw", "") or "").strip(),
     )
 
 

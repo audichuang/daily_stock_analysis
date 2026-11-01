@@ -16,9 +16,10 @@ same implementation.
 
 import json
 import logging
+import math
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.config import get_config
 from src.agent.chat_context import build_agent_chat_context_bundle, build_visible_chat_history
@@ -59,6 +60,8 @@ class AgentResult:
     backend: str = ""
     error_code: Optional[str] = None
     usage: Optional[Dict[str, Any]] = None
+    # 問股回答的結構化摘要（conclusion／resistance／support／invalidation／follow_ups）；模型沒給就是 None。
+    structured_answer: Optional[Dict[str, Any]] = None
     # Optional whitelisted snapshots for multi-agent trajectory evaluation.
     # Single-agent callers continue to receive the historical empty list.
     stage_trajectories: List[Dict[str, Any]] = field(default_factory=list)
@@ -430,6 +433,73 @@ CODEX_CHAT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，负�
 """
 
 
+STRUCTURED_ANSWER_OPEN = "<dsa_answer_meta>"
+STRUCTURED_ANSWER_CLOSE = "</dsa_answer_meta>"
+STRUCTURED_ANSWER_SECTION = f"""
+## 回答摘要
+
+回答本文照常用自然語言寫完。本文結束後，在最後另起一行輸出一段摘要供介面顯示，不要放進程式碼區塊，也不要在本文提到它：
+
+{STRUCTURED_ANSWER_OPEN}{{"conclusion": "一句話結論", "resistance": 壓力價或 null, "support": 支撐價或 null, "invalidation": "什麼情況下這個判斷失效，或 null", "follow_ups": ["使用者接著可能問的問題，最多 3 個"]}}{STRUCTURED_ANSWER_CLOSE}
+
+- `resistance`、`support` 只填工具資料或你在本文明確引用的單一價位（數字，不帶單位）；沒有就填 null，不得猜。
+- 問題與個股無關時，價位與 `invalidation` 填 null。
+"""
+_STRUCTURED_TEXT_MAX = 500
+_STRUCTURED_FOLLOW_UP_MAX = 120
+_STRUCTURED_FOLLOW_UPS = 3
+
+
+def _structured_price(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) and value > 0 else None
+
+
+def _structured_text(value: Any, limit: int) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    return value.strip()[:limit] or None
+
+
+def split_structured_answer(content: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """把回答尾端的摘要段切出來：(給使用者看的本文, 校驗後的摘要)。
+
+    摘要段一律從本文移除，含被截斷（沒有結尾標記）或 JSON 不合法的情況，使用者不該看到標記。
+    內容來自 LLM，逐欄校驗；不合法的欄位回 None，全部沒有值就回 None，前端退回顯示本文。
+    """
+    start = (content or "").rfind(STRUCTURED_ANSWER_OPEN)
+    if start < 0:
+        return content, None
+    body = content[:start].rstrip()
+    tail = content[start + len(STRUCTURED_ANSWER_OPEN):]
+    raw, closed, after = tail.partition(STRUCTURED_ANSWER_CLOSE)
+    if closed and after.strip():
+        body = f"{body}\n\n{after.strip()}".strip()
+    try:
+        data = json.loads(raw) if closed else None
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        return body, None
+    follow_ups = data.get("follow_ups")
+    structured = {
+        "conclusion": _structured_text(data.get("conclusion"), _STRUCTURED_TEXT_MAX),
+        "resistance": _structured_price(data.get("resistance")),
+        "support": _structured_price(data.get("support")),
+        "invalidation": _structured_text(data.get("invalidation"), _STRUCTURED_TEXT_MAX),
+        "follow_ups": [
+            text
+            for text in (
+                _structured_text(item, _STRUCTURED_FOLLOW_UP_MAX)
+                for item in (follow_ups if isinstance(follow_ups, list) else [])
+            )
+            if text
+        ][:_STRUCTURED_FOLLOW_UPS],
+    }
+    return body, structured if any(structured.values()) else None
+
+
 def _build_language_section(report_language: str, *, chat_mode: bool = False) -> str:
     """Build output-language guidance for the agent prompt."""
     normalized = normalize_report_language(report_language)
@@ -517,6 +587,7 @@ def prepare_agent_chat(
     scope_resolution: Optional[StockScopeResolution] = None,
     db_manager=None,
     source_snapshot: Optional[Dict[str, Any]] = None,
+    request_structured_answer: bool = False,
 ) -> PreparedAgentChat:
     """Build the existing Chat prompt order without choosing an Agent backend."""
     if scope_resolution is None:
@@ -548,6 +619,9 @@ def prepare_agent_chat(
         skills_section=skills_section,
         language_section=_build_language_section(report_language, chat_mode=True),
     )
+    # 只有會切出摘要段的呼叫端才要求輸出，否則標記會原樣留在回答裡。
+    if request_structured_answer:
+        system_prompt += STRUCTURED_ANSWER_SECTION
 
     if include_provider_trace:
         history_messages = list(

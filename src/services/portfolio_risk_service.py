@@ -44,6 +44,7 @@ class PortfolioRiskService:
         as_of: Optional[date] = None,
         cost_method: str = "fifo",
         include_realtime: bool = True,
+        display_currency: Optional[str] = None,
     ) -> Dict[str, Any]:
         as_of_date = as_of or date.today()
         snapshot = self.portfolio_service.get_portfolio_snapshot(
@@ -88,7 +89,7 @@ class PortfolioRiskService:
         stop_loss = self._build_stop_loss(snapshot, thresholds)
         decision_signal_risk = self._build_decision_signal_risk(snapshot)
 
-        return {
+        report = {
             "as_of": as_of_date.isoformat(),
             "account_id": account_id,
             "cost_method": cost_method,
@@ -100,6 +101,44 @@ class PortfolioRiskService:
             "stop_loss": stop_loss,
             "decision_signal_risk": decision_signal_risk,
         }
+        if display_currency:
+            self._append_display_currency(report, display_currency, as_of_date)
+        return report
+
+    def _append_display_currency(self, report: Dict[str, Any], display_currency: str, as_of_date: date) -> None:
+        """追加顯示幣別金額；既有 CNY 欄位不動。權重與回撤是比率，不受幣別影響。
+
+        風險區塊的金額是 CNY 彙總（快照缺匯率時已給 fx_missing），那種情況換算值一律 null。"""
+        code = self.portfolio_service._normalize_currency(display_currency)
+        from_currency = str(report["currency"])
+        rate, stale, source = self.portfolio_service.display_rate(
+            from_currency=from_currency, to_currency=code, as_of_date=as_of_date
+        )
+
+        def converted(block: Dict[str, Any], amount: Any) -> Optional[float]:
+            if rate is None or block.get("fx_missing") or amount is None:
+                return None
+            return round(float(amount) * rate, 6)
+
+        for key, rows_key in (("concentration", "top_positions"), ("sector_concentration", "top_sectors")):
+            block = report[key]
+            block["total_market_value_display"] = converted(block, block.get("total_market_value"))
+            for row in block.get(rows_key) or []:
+                row["market_value_display"] = converted(block, row.get("market_value_base"))
+
+        report.update({
+            "display_currency": code,
+            "display_fx_rate": rate,
+            "display_fx_stale": stale,
+            "display_fx_missing": rate is None,
+            "fx_rate_used": [{
+                "from_currency": from_currency,
+                "to_currency": code,
+                "rate": rate,
+                "stale": stale,
+                "source": source,
+            }],
+        })
 
     def _build_decision_signal_risk(
         self,

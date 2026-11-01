@@ -311,6 +311,13 @@ class DecisionSignalItem(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     metadata: Optional[Any] = None
+    # 追加欄位。signal_price 是來源報告產出當下的現價；其餘只有 group_latest=true 才填。
+    signal_price: Optional[float] = None
+    older_count: Optional[int] = None
+    is_held: Optional[bool] = None
+    stop_triggered: Optional[bool] = Field(None, description="最新收盤是否已觸停損；無停損價或無讀數為 null")
+    last_close: Optional[float] = None
+    last_close_date: Optional[str] = None
 
 
 class DecisionSignalMutationResponse(BaseModel):
@@ -343,3 +350,24 @@ class DecisionSignalListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class DecisionSignalStopTriggeredItem(BaseModel):
+    id: int
+    stock_code: str
+    stock_name: Optional[str] = None
+    market: str
+    action: str
+    stop_loss: float
+    last_close: float
+    last_close_date: str
+    is_held: bool = False
+
+
+class DecisionSignalSummaryResponse(BaseModel):
+    total: int = 0
+    held_count: int = 0
+    actions: Dict[str, int] = Field(default_factory=dict)
+    stop_triggered_count: int = 0
+    stop_triggered: List[DecisionSignalStopTriggeredItem] = Field(default_factory=list)
+    stop_price_unavailable_count: int = Field(0, description="有停損價但查不到收盤、無法判定的檔數")

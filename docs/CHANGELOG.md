@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改進] AI 建議 API 追加 `group_latest`（每檔最新一筆與 `older_count`）、`sort=priority`（已觸停損→持股→動作）、`signal_price`、`GET /decision-signals/summary`（各動作檔數與已觸停損）；舊欄位與預設排序不變。
+- [改進] 持股 API 追加今日損益（`prev_close`、`day_change_pct`、`day_pnl_base`、彙總 `day_pnl`）、報價時間 `quote_at`、`display_currency` 換算欄位（`consolidated_*`、`fx_rate_used`，CNY 彙總與快照不變）與 `include_funds` 基金分項；`/portfolio/risk` 同步支援 `display_currency`。
+- [修復] 持股報價過期改比對該市場最近交易日，週末與假日的最近收盤不再標成過期。
+- [改進] 問股 API 追加會話 `stock_code`／`stock_name`、策略繁中名稱與分組、回答摘要 `structured`（結論、壓力、支撐、失效條件、追問）與 `cancel_supported` 旗標（預設 LiteLLM 後端不支援取消）。
+- [改進] 基金 API 追加 `nav_change_pct`、`day_pnl`、持股資料月份 `as_of_month`、與帳本比對的 `overlap`，淨值歷史可帶 `benchmark=taiex` 取加權指數比較序列。
 - [改進] iOS 今日頁新增近期事件總覽，行事曆從工具頁移到這裡；工具頁只留警報與連線捷徑、常用四項，其餘收進「進階」，移除與原生畫面重複的完整分析入口。
 - [新功能] 新增 `AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE`（預設關閉）：API 程序以獨立執行緒只跑警報監控，不需開 `SCHEDULE_ENABLED`、不跑每日分析；即時價規則只在開盤時段評估且報價須屬於今天這一場（確認不了就不通知、不進冷卻；報價不帶時間時，將要觸發才另查最後一筆成交，並用該筆價格重新評估與通知），排程器同時開啟時不重複註冊。
 - [新功能] 新增 `GET /api/v1/alerts/monitor/status` 回報監控實際狀態、上次執行與通知管道；資料中心的 `alert.monitor` 同步認得獨立執行緒。

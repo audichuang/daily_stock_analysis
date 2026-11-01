@@ -1144,6 +1144,34 @@
             "description": "Optional active portfolio account id for holding_only"
           },
           {
+            "name": "group_latest",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "每檔只回最新一筆，並附 older_count、is_held、停損狀態",
+              "default": false,
+              "title": "Group Latest"
+            },
+            "description": "每檔只回最新一筆，並附 older_count、is_held、停損狀態"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "created_at",
+                "priority"
+              ],
+              "type": "string",
+              "description": "priority：已觸停損→持股→動作順位→新到舊；需搭配 group_latest=true",
+              "default": "created_at",
+              "title": "Sort"
+            },
+            "description": "priority：已觸停損→持股→動作順位→新到舊；需搭配 group_latest=true"
+          },
+          {
             "name": "page",
             "in": "query",
             "required": false,
@@ -2637,6 +2665,27 @@
               "title": "Include Realtime"
             },
             "description": "Whether today's risk snapshot should try realtime quotes before historical close fallback"
+          },
+          {
+            "name": "display_currency",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 8,
+                  "minLength": 3,
+                  "pattern": "^[A-Za-z]+$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Display Currency",
+              "description": "追加 *_display 換算金額的幣別（如 TWD）；權重與回撤不變"
+            },
+            "description": "追加 *_display 換算金額的幣別（如 TWD）；權重與回撤不變"
           }
         ],
         "responses": {
@@ -3658,6 +3707,142 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/decision-signals/summary": {
+      "get": {
+        "tags": [
+          "DecisionSignals"
+        ],
+        "summary": "決策訊號摘要",
+        "description": "每檔最新一筆的各動作檔數與已觸停損（以最新收盤比對），預設只看 active。",
+        "operationId": "getDecisionSignalSummary",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Market",
+              "description": "Optional market filter: cn/hk/us/jp/kr/tw"
+            },
+            "description": "Optional market filter: cn/hk/us/jp/kr/tw"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status",
+              "description": "Status filter, default active",
+              "default": "active"
+            },
+            "description": "Status filter, default active"
+          },
+          {
+            "name": "holding_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Filter to active cached portfolio holdings only",
+              "default": false,
+              "title": "Holding Only"
+            },
+            "description": "Filter to active cached portfolio holdings only"
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id",
+              "description": "Optional active portfolio account id"
+            },
+            "description": "Optional active portfolio account id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionSignalSummaryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录或管理员会话无效（ADMIN_AUTH_ENABLED=true 时）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "查询参数非法",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "查询参数校验失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "查询失败",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -6174,6 +6359,73 @@
               }
             ],
             "title": "Metadata"
+          },
+          "signal_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signal Price"
+          },
+          "older_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Older Count"
+          },
+          "is_held": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Held"
+          },
+          "stop_triggered": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Triggered",
+            "description": "最新收盤是否已觸停損；無停損價或無讀數為 null"
+          },
+          "last_close": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Close"
+          },
+          "last_close_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Close Date"
           }
         },
         "type": "object",
@@ -8278,6 +8530,45 @@
           },
           "decision_signal_risk": {
             "$ref": "#/components/schemas/PortfolioDecisionSignalRiskBlock"
+          },
+          "display_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Currency"
+          },
+          "display_fx_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Fx Rate"
+          },
+          "display_fx_stale": {
+            "type": "boolean",
+            "title": "Display Fx Stale",
+            "default": false
+          },
+          "display_fx_missing": {
+            "type": "boolean",
+            "title": "Display Fx Missing",
+            "default": false
+          },
+          "fx_rate_used": {
+            "items": {
+              "$ref": "#/components/schemas/PortfolioFxRateUsed"
+            },
+            "type": "array",
+            "title": "Fx Rate Used"
           }
         },
         "type": "object",
@@ -11298,6 +11589,145 @@
         },
         "type": "object",
         "title": "AlertTriggerSummary"
+      },
+      "DecisionSignalStopTriggeredItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Name"
+          },
+          "market": {
+            "type": "string",
+            "title": "Market"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "stop_loss": {
+            "type": "number",
+            "title": "Stop Loss"
+          },
+          "last_close": {
+            "type": "number",
+            "title": "Last Close"
+          },
+          "last_close_date": {
+            "type": "string",
+            "title": "Last Close Date"
+          },
+          "is_held": {
+            "type": "boolean",
+            "title": "Is Held",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "stock_code",
+          "market",
+          "action",
+          "stop_loss",
+          "last_close",
+          "last_close_date"
+        ],
+        "title": "DecisionSignalStopTriggeredItem"
+      },
+      "DecisionSignalSummaryResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          },
+          "held_count": {
+            "type": "integer",
+            "title": "Held Count",
+            "default": 0
+          },
+          "actions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Actions"
+          },
+          "stop_triggered_count": {
+            "type": "integer",
+            "title": "Stop Triggered Count",
+            "default": 0
+          },
+          "stop_triggered": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionSignalStopTriggeredItem"
+            },
+            "type": "array",
+            "title": "Stop Triggered"
+          },
+          "stop_price_unavailable_count": {
+            "type": "integer",
+            "title": "Stop Price Unavailable Count",
+            "description": "有停損價但查不到收盤、無法判定的檔數",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "DecisionSignalSummaryResponse"
+      },
+      "PortfolioFxRateUsed": {
+        "properties": {
+          "from_currency": {
+            "type": "string",
+            "title": "From Currency"
+          },
+          "to_currency": {
+            "type": "string",
+            "title": "To Currency"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale",
+            "default": false
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from_currency",
+          "to_currency",
+          "source"
+        ],
+        "title": "PortfolioFxRateUsed"
       }
     },
     "securitySchemes": {

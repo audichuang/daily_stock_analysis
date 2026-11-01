@@ -3,6 +3,9 @@
 
 name: ma_golden_cross
 display_name: 均线金叉
+display_name_zh_tw: 均線黃金交叉
+group: trend
+group_name_zh_tw: 趨勢
 description: 检测均线金叉配合量能确认信号，经典的趋势反转/延续信号。
 category: trend
 core_rules: [1, 2, 3]
