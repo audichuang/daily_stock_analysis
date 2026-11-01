@@ -28,8 +28,9 @@ type SnapshotQuery = {
   asOf?: string;
   costMethod?: PortfolioCostMethod;
   includeRealtime?: boolean;
-  /** 追加 consolidated_* 換算欄位的幣別；不影響既有 CNY 彙總。 */
+  /** 追加 consolidated* 換算欄位的幣別；不給就只有 CNY 彙總。 */
   displayCurrency?: string;
+  includeFunds?: boolean;
 };
 
 type FxRefreshQuery = {
@@ -75,6 +76,9 @@ function buildSnapshotParams(query: SnapshotQuery): Record<string, string | numb
   }
   if (query.displayCurrency) {
     params.display_currency = query.displayCurrency;
+  }
+  if (query.includeFunds) {
+    params.include_funds = 'true';
   }
   return params;
 }

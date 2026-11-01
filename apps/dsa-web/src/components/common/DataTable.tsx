@@ -25,11 +25,23 @@ export interface DataTableColumn<T> {
   sortable?: boolean;
 }
 
+/** 一組列與它的小計；小計依欄位 key 對齊，手機顯示 mobileSummary。 */
+export interface DataTableRowGroup<T> {
+  key: string;
+  rows: T[];
+  summaryCells: Record<string, React.ReactNode>;
+  mobileSummary: React.ReactNode;
+}
+
 interface DataTableProps<T> {
   columns: DataTableColumn<T>[];
   rows: T[];
   rowKey: (row: T) => string;
-  density?: 'compact' | 'comfortable';
+  density?: 'compact' | 'regular' | 'comfortable';
+  /** 有給就依組渲染（每組一段小計），rows 仍要是全部列。 */
+  rowGroups?: DataTableRowGroup<T>[];
+  /** 反白目前選中的列。 */
+  isRowHighlighted?: (row: T) => boolean;
   sort?: SortState | null;
   onSortChange?: (sort: SortState) => void;
   /** 整列沒有資料（例如報價失敗）：淡化並停用點擊。 */
@@ -47,7 +59,7 @@ interface DataTableProps<T> {
   'aria-label'?: string;
 }
 
-const ROW_HEIGHT = { compact: 'h-9', comfortable: 'h-12' } as const;
+const ROW_HEIGHT = { compact: 'h-9', regular: 'h-[46px]', comfortable: 'h-12' } as const;
 
 const alignClass = <T,>(column: DataTableColumn<T>): string => {
   if (column.align === 'center') return 'text-center';
@@ -75,6 +87,8 @@ export function DataTable<T>({
   rows,
   rowKey,
   density = 'comfortable',
+  rowGroups,
+  isRowHighlighted,
   sort,
   onSortChange,
   isRowUnavailable,
@@ -100,6 +114,10 @@ export function DataTable<T>({
     const isActive = sort?.key === column.key;
     onSortChange?.({ key: column.key, direction: isActive && sort?.direction === 'desc' ? 'asc' : 'desc' });
   };
+
+  const sections: Array<{ key: string; rows: T[]; group?: DataTableRowGroup<T> }> = rowGroups
+    ? rowGroups.map((group) => ({ key: group.key, rows: group.rows, group }))
+    : [{ key: 'all', rows }];
 
   return (
     <div className={className}>
@@ -143,66 +161,88 @@ export function DataTable<T>({
               })}
             </tr>
           </thead>
-          <tbody>
-            {rows.map((row) => {
-              const unavailable = isRowUnavailable?.(row) ?? false;
-              const clickable = Boolean(onRowClick) && !unavailable;
-              const key = rowKey(row);
-              const expandedContent = renderExpandedRow && expandedRowKey === key ? renderExpandedRow(row) : null;
-              return (
-                <React.Fragment key={key}>
-                <tr
-                  data-row-state={unavailable ? 'unavailable' : 'available'}
-                  onClick={clickable ? () => onRowClick?.(row) : undefined}
-                  className={cn(
-                    ROW_HEIGHT[density],
-                    'border-b border-border/40',
-                    clickable && 'cursor-pointer hover:bg-hover',
-                    unavailable && 'opacity-50',
-                  )}
-                >
+          {sections.map((section) => (
+            <tbody key={section.key}>
+              {section.group ? (
+                <tr data-row-group={section.key} className={cn(ROW_HEIGHT[density], 'border-b border-border/60 bg-elevated/40 font-medium')}>
                   {columns.map((column) => (
-                    <td
-                      key={column.key}
-                      className={cn(
-                        'px-3',
-                        alignClass(column),
-                        column.numeric && 'tabular-nums',
-                        column.sticky && 'sticky left-0 bg-card',
-                      )}
-                    >
-                      {cellContent(column, row)}
+                    <td key={column.key} className={cn('px-3', alignClass(column), column.numeric && 'tabular-nums')}>
+                      {section.group?.summaryCells[column.key] ?? null}
                     </td>
                   ))}
                 </tr>
-                {expandedContent ? (
-                  <tr data-row-state="expanded" data-testid="data-table-expanded-row" className="border-b border-border/40">
-                    <td colSpan={columns.length} className="p-0">
-                      {expandedContent}
-                    </td>
+              ) : null}
+              {section.rows.map((row) => {
+                const unavailable = isRowUnavailable?.(row) ?? false;
+                const clickable = Boolean(onRowClick) && !unavailable;
+                const highlighted = isRowHighlighted?.(row) ?? false;
+                const key = rowKey(row);
+                const expandedContent = renderExpandedRow && expandedRowKey === key ? renderExpandedRow(row) : null;
+                return (
+                  <React.Fragment key={key}>
+                  <tr
+                    data-row-key={key}
+                    data-row-state={unavailable ? 'unavailable' : 'available'}
+                    data-row-highlighted={highlighted || undefined}
+                    onClick={clickable ? () => onRowClick?.(row) : undefined}
+                    className={cn(
+                      ROW_HEIGHT[density],
+                      'border-b border-border/40',
+                      clickable && 'cursor-pointer hover:bg-hover',
+                      unavailable && 'opacity-50',
+                      highlighted && 'bg-cyan/10',
+                    )}
+                  >
+                    {columns.map((column) => (
+                      <td
+                        key={column.key}
+                        className={cn(
+                          'px-3',
+                          alignClass(column),
+                          column.numeric && 'tabular-nums',
+                          column.sticky && 'sticky left-0 bg-card',
+                        )}
+                      >
+                        {cellContent(column, row)}
+                      </td>
+                    ))}
                   </tr>
-                ) : null}
-                </React.Fragment>
-              );
-            })}
-          </tbody>
+                  {expandedContent ? (
+                    <tr data-row-state="expanded" data-testid="data-table-expanded-row" className="border-b border-border/40">
+                      <td colSpan={columns.length} className="p-0">
+                        {expandedContent}
+                      </td>
+                    </tr>
+                  ) : null}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          ))}
         </table>
       </div>
 
       <ul data-testid="data-table-mobile" className="divide-y divide-border/40 md:hidden">
-        {rows.map((row) => {
+        {sections.flatMap((section) => [
+          ...(section.group ? [
+            <li key={`group-${section.key}`} data-row-group={section.key} className="bg-elevated/40 px-3 py-2 text-xs font-medium">
+              {section.group.mobileSummary}
+            </li>,
+          ] : []),
+          ...section.rows.map((row) => {
           const key = rowKey(row);
           const unavailable = isRowUnavailable?.(row) ?? false;
+          const highlighted = isRowHighlighted?.(row) ?? false;
           if (renderMobileCard) {
             return (
-              <li key={key} data-row-state={unavailable ? 'unavailable' : 'available'} className={cn(unavailable && 'opacity-50')}>
+              <li key={key} data-row-key={key} data-row-highlighted={highlighted || undefined} data-row-state={unavailable ? 'unavailable' : 'available'} className={cn(unavailable && 'opacity-50', highlighted && 'bg-cyan/10')}>
                 {renderMobileCard(row)}
               </li>
             );
           }
           const expanded = expandedKey === key;
           return (
-            <li key={key} data-row-state={unavailable ? 'unavailable' : 'available'} className={cn(unavailable && 'opacity-50')}>
+            <li key={key} data-row-key={key} data-row-highlighted={highlighted || undefined} data-row-state={unavailable ? 'unavailable' : 'available'} className={cn(unavailable && 'opacity-50', highlighted && 'bg-cyan/10')}>
               <button
                 type="button"
                 aria-expanded={secondaryColumns.length > 0 ? expanded : undefined}
@@ -228,7 +268,8 @@ export function DataTable<T>({
               ) : null}
             </li>
           );
-        })}
+          }),
+        ])}
       </ul>
     </div>
   );
