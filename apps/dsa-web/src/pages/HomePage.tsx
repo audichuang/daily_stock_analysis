@@ -922,16 +922,16 @@ const HomePage: React.FC = () => {
     }
   }, [isDeletingStock, refreshMarketReviewHistory, refreshStockBar, refreshHistory]);
 
-  // store 層產生的幾句固定訊息是簡體寫死的（store 拿不到介面語言），顯示時換成目前語言
+  // store 層產生的幾句固定訊息是簡體寫死的（store 拿不到介面語言），顯示時換成目前語言；比對字串用跳脫保留原文
   const localizeHomeMessage = useCallback((message: string) => {
-    const duplicate = /^股票 (.+) 正在分析中，请等待完成$/.exec(message);
+    const duplicate = /^股票 (.+) 正在分析中，\u8bf7等待完成$/.exec(message);
     if (duplicate) {
       return t('home.duplicateTaskMessage', { code: duplicate[1] });
     }
-    if (message === '请输入股票代码') {
+    if (message === '\u8bf7输入股票代码') {
       return t('home.inputEmpty');
     }
-    if (message === '请输入有效的股票代码或股票名称') {
+    if (message === '\u8bf7输入有效的股票代码或股票名称') {
       return t('home.inputUnrecognized');
     }
     return message;
@@ -1695,6 +1695,8 @@ const HomePage: React.FC = () => {
           quotes={quotes}
           marketReviewItem={marketReviewItem}
           marketLightLabel={marketLightLabel}
+          watchlistGroups={watchlistState.watchlistGroups}
+          onSaveWatchlistGroups={watchlistState.saveWatchlistGroups}
         />
       </div>
     ),
@@ -1730,6 +1732,8 @@ const HomePage: React.FC = () => {
       watchlistState.isActioning,
       watchlistState.isLoading,
       watchlistState.removeFromWatchlist,
+      watchlistState.saveWatchlistGroups,
+      watchlistState.watchlistGroups,
     ],
   );
 
@@ -1774,7 +1778,7 @@ const HomePage: React.FC = () => {
   const primaryReportActions = selectedReport ? (
     <>
       <Button
-        variant="home-action-ai"
+        variant="primary"
         size="sm"
         disabled={selectedReport.meta.id === undefined}
         onClick={openMarkdownDrawer}
@@ -1787,7 +1791,7 @@ const HomePage: React.FC = () => {
       </Button>
       {isMarketReviewHistoryReport ? null : (
         <Button
-          variant="home-action-ai"
+          variant="primary"
           size="sm"
           disabled={selectedReport.meta.id === undefined}
           onClick={handleAskFollowUp}

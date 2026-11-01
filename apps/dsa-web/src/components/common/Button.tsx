@@ -2,14 +2,12 @@ import React from 'react';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { cn } from '../../utils/cn';
 
-// primary／secondary／ghost／danger 是正式 variant；其餘是舊呼叫點的相容別名，由頁面票逐步換掉（Y01 刪除）。
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
-type LegacyButtonVariant = 'outline' | 'gradient' | 'danger-subtle' | 'settings-primary' | 'settings-secondary' | 'action-primary' | 'action-secondary' | 'home-action-ai' | 'home-action-report';
-// 正式尺寸 sm 32／md 36／lg 44；xsm、xl 是相容別名。
-type ButtonSize = 'sm' | 'md' | 'lg' | 'xsm' | 'xl';
+// sm 32／md 36／lg 44。
+type ButtonSize = 'sm' | 'md' | 'lg';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: ButtonVariant | LegacyButtonVariant;
+  variant?: ButtonVariant;
   size?: ButtonSize;
   isLoading?: boolean;
   /** Custom loading text. */
@@ -18,30 +16,16 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const BUTTON_SIZE_STYLES: Record<ButtonSize, string> = {
-  xsm: 'h-8 rounded-[var(--radius-control)] px-2.5 text-sm',
   sm: 'h-8 rounded-[var(--radius-control)] px-2.5 text-sm',
   md: 'h-9 rounded-[var(--radius-control)] px-3.5 text-sm',
   lg: 'h-11 rounded-[var(--radius-control)] px-5 text-sm',
-  xl: 'h-11 rounded-[var(--radius-control)] px-5 text-sm',
 };
-
-const ACTION_AI_STYLES = 'bg-[var(--home-action-ai-bg)] border border-[var(--home-action-ai-border)] text-[var(--home-action-ai-text)] hover:bg-[var(--home-action-ai-hover-bg)]';
-const ACTION_REPORT_STYLES = 'bg-[var(--home-action-report-bg)] border border-[var(--home-action-report-border)] text-[var(--home-action-report-text)] hover:bg-[var(--home-action-report-hover-bg)]';
 
 const BUTTON_VARIANT_STYLES = {
   primary: 'border border-cyan/30 bg-primary-gradient text-primary-foreground hover:brightness-105',
   secondary: 'border border-border/70 bg-card text-foreground shadow-soft-card hover:bg-hover',
-  'settings-primary': 'border settings-button-primary hover:brightness-105 hover:shadow-xl',
-  'settings-secondary': 'border settings-button-secondary hover:translate-y-[-1px]',
-  outline: 'border border-cyan/25 bg-transparent text-cyan hover:bg-cyan/10',
   ghost: 'border border-transparent bg-transparent text-secondary-text hover:bg-hover hover:text-foreground',
-  gradient: 'border border-cyan/20 bg-gradient-to-r from-cyan to-purple text-primary-foreground shadow-lg shadow-cyan/20 hover:brightness-105',
   danger: 'border border-danger/40 bg-danger text-destructive-foreground hover:brightness-105',
-  'danger-subtle': 'border border-danger/60 bg-danger/10 text-danger hover:bg-danger/15',
-  'action-primary': ACTION_AI_STYLES,
-  'action-secondary': ACTION_REPORT_STYLES,
-  'home-action-ai': ACTION_AI_STYLES,
-  'home-action-report': ACTION_REPORT_STYLES,
 } as const;
 
 /**

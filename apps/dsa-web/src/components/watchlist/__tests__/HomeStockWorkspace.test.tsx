@@ -673,3 +673,73 @@ describe('HomeStockWorkspace', () => {
     expect(onHistoryItemClick).not.toHaveBeenCalled();
   });
 });
+
+describe('HomeStockWorkspace watchlist groups', () => {
+  const rows: HomeWatchlistRow[] = ['2330.TW', '2317.TW', 'AAPL'].map((code) => ({ code, analyzedToday: false }));
+
+  function renderGroups(watchlistGroups: Array<{ name: string; codes: string[] }>) {
+    const onSaveWatchlistGroups = vi.fn().mockResolvedValue(undefined);
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    render(
+      <UiLanguageProvider>
+        <HomeStockWorkspace
+          activeTab="watchlist"
+          onTabChange={vi.fn()}
+          watchlistRows={rows}
+          watchlistLoading={false}
+          watchlistActioning={false}
+          watchlistMessage={null}
+          onAddToWatchlist={vi.fn().mockResolvedValue(undefined)}
+          onRemoveFromWatchlist={vi.fn().mockResolvedValue(undefined)}
+          onRefreshWatchlist={vi.fn().mockResolvedValue(undefined)}
+          onAnalyzeWatchlist={vi.fn().mockResolvedValue(undefined)}
+          isBatchAnalyzing={false}
+          batchStatus={null}
+          todayItems={[]}
+          isLoadingTodayItems={false}
+          todayLoadError={false}
+          watchlistAnalyzedTodayCount={0}
+          historyItems={[]}
+          isLoadingHistory={false}
+          onHistoryItemClick={vi.fn()}
+          watchlistGroups={watchlistGroups}
+          onSaveWatchlistGroups={onSaveWatchlistGroups}
+        />
+      </UiLanguageProvider>,
+    );
+    return { onSaveWatchlistGroups };
+  }
+
+  it('shows no group filter when there are no groups', () => {
+    renderGroups([]);
+    expect(screen.queryByTestId('watchlist-group-filter')).not.toBeInTheDocument();
+    expect(screen.getByTestId('watchlist-row-AAPL')).toBeInTheDocument();
+  });
+
+  it('filters rows by the selected group and by ungrouped', () => {
+    renderGroups([{ name: 'Tech', codes: ['2330.TW'] }]);
+
+    fireEvent.change(screen.getByTestId('watchlist-group-filter'), { target: { value: 'group:Tech' } });
+    expect(screen.getByTestId('watchlist-row-2330.TW')).toBeInTheDocument();
+    expect(screen.queryByTestId('watchlist-row-AAPL')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('watchlist-group-filter'), { target: { value: 'ungrouped' } });
+    expect(screen.queryByTestId('watchlist-row-2330.TW')).not.toBeInTheDocument();
+    expect(screen.getByTestId('watchlist-row-AAPL')).toBeInTheDocument();
+  });
+
+  it('creates a group from edit mode and moves a code into it', () => {
+    const { onSaveWatchlistGroups } = renderGroups([{ name: 'Tech', codes: [] }]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('New group name'), { target: { value: ' Cash ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add group' }));
+    expect(onSaveWatchlistGroups).toHaveBeenLastCalledWith([
+      { name: 'Tech', codes: [] },
+      { name: 'Cash', codes: [] },
+    ]);
+
+    fireEvent.change(screen.getByLabelText('Move AAPL to a group'), { target: { value: 'Tech' } });
+    expect(onSaveWatchlistGroups).toHaveBeenLastCalledWith([{ name: 'Tech', codes: ['AAPL'] }]);
+  });
+});

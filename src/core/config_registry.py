@@ -130,6 +130,21 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         ],
         "warning_codes": [],
     },
+    "WATCHLIST_GROUPS": {
+        "title": "Watchlist Groups",
+        "description": "Watchlist groups as JSON (group name to ordered codes). STOCK_LIST stays the source of truth for membership. Managed from the watchlist UI.",
+        "category": "base",
+        "data_type": "string",
+        "ui_control": "textarea",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "",
+        "options": [],
+        "validation": {},
+        "display_order": 11,
+        "warning_codes": [],
+    },
     # ------------------------------------------------------------------
     # AI Model – LiteLLM unified config
     # ------------------------------------------------------------------

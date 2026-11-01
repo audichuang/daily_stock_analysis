@@ -6,7 +6,8 @@ private enum WatchlistRoute: Hashable {
     case report(Int)
 }
 
-private enum WatchlistGroup: String, CaseIterable, Identifiable {
+/// 全部／持股；與 DSACore 的自選分組（`WatchlistGroup`）是兩個維度，條件取交集。
+private enum WatchlistScope: String, CaseIterable, Identifiable {
     case all = "全部"
     case held = "持股"
     var id: String { rawValue }
@@ -18,7 +19,9 @@ struct WatchlistView: View {
     @State private var searching = false
     @State private var query = ""
     @State private var filterExpanded = false
-    @State private var group = WatchlistGroup.all
+    @State private var group = WatchlistScope.all
+    @State private var groupFilter = WatchlistGroupFilter.all
+    @State private var editingGroups = false
     @State private var route: WatchlistRoute?
     @State private var actionError: String?
     @AppStorage("watchlist.sort") private var sortStorage = StockSort.custom.storage
@@ -38,6 +41,11 @@ struct WatchlistView: View {
         .background(Theme.background)
         .navigationTitle("自選股").navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { editingGroups = true } label: { Image(systemName: "folder") }
+                    .accessibilityLabel("編輯自選分組")
+                    .accessibilityIdentifier("watchlist-edit-groups")
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button {
                     // 收起時一併清空，隱藏的條件不能繼續篩掉清單。
@@ -54,6 +62,7 @@ struct WatchlistView: View {
         }
         .refreshable { await store.refresh() }
         .sheet(isPresented: $searching) { NavigationStack { StockSearchView() } }
+        .sheet(isPresented: $editingGroups) { NavigationStack { WatchlistGroupsEditView() } }
         .navigationDestination(item: $route) { route in
             switch route {
             case let .stock(code): StockDetailView(code: code)
@@ -97,8 +106,10 @@ struct WatchlistView: View {
                 .accessibilityIdentifier("watchlist.action-error")
                 .plainRow()
         }
-        Picker("分組", selection: $group) {
-            ForEach(WatchlistGroup.allCases) { Text($0.rawValue).tag($0) }
+        // 沒有分組時整列不出現，畫面與未分組前相同。
+        if !store.watchlistGroups.isEmpty { groupTabs.plainRow() }
+        Picker("持股範圍", selection: $group) {
+            ForEach(WatchlistScope.allCases) { Text($0.rawValue).tag($0) }
         }
         .pickerStyle(.segmented)
         .accessibilityIdentifier("watchlist.group")
@@ -145,7 +156,8 @@ struct WatchlistView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 24)
         } else {
-            EmptyStateView(title: query.isEmpty ? "這個市場的自選沒有持股" : "沒有符合的自選股",
+            EmptyStateView(title: !query.isEmpty ? "沒有符合的自選股"
+                                : group == .held ? "這個範圍的自選沒有持股" : "這個分組在此市場沒有自選股",
                            message: query.isEmpty ? "切回「全部」可查看所有自選。" : "換個代號或名稱再試。")
         }
     }
@@ -268,8 +280,41 @@ struct WatchlistView: View {
                         missingQuotes: codes.filter { store.quote(for: $0) == nil }.count)
     }
 
+    private var groupTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                groupTab("全部", filter: .all)
+                ForEach(store.watchlistGroups) { group in
+                    groupTab(group.name, filter: .group(group.name))
+                }
+                groupTab("未分組", filter: .ungrouped)
+            }
+        }
+    }
+
+    private func groupTab(_ title: String, filter: WatchlistGroupFilter) -> some View {
+        let selected = activeFilter == filter
+        return Button { groupFilter = filter } label: {
+            Text(title)
+                .font(.subheadline.weight(selected ? .semibold : .regular))
+                .foregroundStyle(selected ? Theme.accent : Theme.secondary)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(selected ? Theme.accent.opacity(0.12) : Color.clear, in: Capsule())
+                .overlay(Capsule().stroke(selected ? Theme.accent.opacity(0.4) : Theme.secondary.opacity(0.25)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("watchlist-group-tab.\(title)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// 選中的分組被刪掉（別台改的也算）時退回「全部」，不留空畫面。
+    private var activeFilter: WatchlistGroupFilter {
+        groupFilter.resolved(in: store.watchlistGroups)
+    }
+
     private var visible: [String] {
-        let entries = marketCodes.map { store.listEntry(for: $0) }.filter { entry in
+        let codes = activeFilter.codes(from: marketCodes, groups: store.watchlistGroups)
+        let entries = codes.map { store.listEntry(for: $0) }.filter { entry in
             (group == .all || store.isHeld(entry.code))
                 && (query.isEmpty || entry.code.localizedCaseInsensitiveContains(query)
                     || (entry.name ?? "").localizedCaseInsensitiveContains(query))

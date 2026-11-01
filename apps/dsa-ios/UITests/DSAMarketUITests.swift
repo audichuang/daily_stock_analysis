@@ -572,6 +572,41 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
     }
 
+    func testWatchlistGroupsCreateMoveAndSwitch() throws {
+        let password = app.secureTextFields["server-password"]
+        XCTAssertTrue(password.waitForExistence(timeout: 15))
+        password.tap()
+        password.typeText("fixture-password")
+        tap(app.buttons["connect-button"])
+        XCTAssertTrue(app.tabBars.buttons["今日"].waitForExistence(timeout: 20))
+        tap(app.tabBars.buttons["自選"])
+        XCTAssertTrue(app.buttons["stock-row.2330.TW"].waitForExistence(timeout: 10))
+        // 還沒有分組時不出現分組籤。
+        XCTAssertFalse(app.buttons["watchlist-group-tab.全部"].exists)
+
+        tap(app.buttons["watchlist-edit-groups"])
+        let name = app.textFields["watchlist-group-name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap()
+        name.typeText("半導體")
+        tap(app.buttons["watchlist-group-add"])
+        tap(app.buttons["watchlist-group-move.2330.TW"])
+        tap(app.buttons["移到 半導體"])
+        tap(app.buttons["watchlist-groups-save"])
+
+        tap(app.buttons["watchlist-group-tab.半導體"])
+        XCTAssertTrue(app.buttons["stock-row.2330.TW"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["stock-row.2317.TW"].exists)
+
+        tap(app.buttons["watchlist-group-tab.未分組"])
+        XCTAssertTrue(app.buttons["stock-row.2317.TW"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["stock-row.2330.TW"].exists)
+
+        tap(app.buttons["watchlist-group-tab.全部"])
+        XCTAssertTrue(app.buttons["stock-row.2330.TW"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["stock-row.2317.TW"].exists)
+    }
+
     func testLastRowIsNotCoveredByTabBar() throws {
         let password = app.secureTextFields["server-password"]
         XCTAssertTrue(password.waitForExistence(timeout: 15), "應顯示測試伺服器的登入畫面")

@@ -99,7 +99,7 @@ const UsageSummaryBand: React.FC<{ dashboard: UsageDashboard; period: UsagePerio
   ];
 
   return (
-    <Card variant="bordered" padding="md">
+    <Card variant="surface" padding="md">
       <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]" data-testid="usage-summary">
         <div className="min-w-0">
           <p className="text-xs text-secondary-text">{text.totalLabel}</p>
@@ -136,7 +136,7 @@ const DailyBars: React.FC<{ days: UsageDayBreakdown[]; selected: string | null; 
   const shown = days.slice(-MAX_DAY_BARS);
   const max = Math.max(...shown.map((day) => day.totalTokens), 1);
   return (
-    <Card title={text.dailyTitle} subtitle={text.dailyHint} variant="bordered" padding="md">
+    <Card title={text.dailyTitle} subtitle={text.dailyHint} variant="surface" padding="md">
       <div className="mb-2 flex items-center gap-3 text-xs text-secondary-text">
         <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-cyan" aria-hidden="true" />{text.input}</span>
         <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-cyan/40" aria-hidden="true" />{text.output}</span>
@@ -184,7 +184,7 @@ const DailyBars: React.FC<{ days: UsageDayBreakdown[]; selected: string | null; 
 const CallTypeShare: React.FC<{ dashboard: UsageDashboard; text: UsageText; t: Translate }> = ({ dashboard, text, t }) => {
   const shares = sharePercents(dashboard.byCallType.map((item) => item.totalTokens));
   return (
-    <Card title={text.shareTitle} variant="bordered" padding="md">
+    <Card title={text.shareTitle} variant="surface" padding="md">
       <ul className="space-y-3">
         {dashboard.byCallType.map((item, index) => (
           <li key={item.callType} data-testid={`usage-share-${item.callType}`}>
@@ -224,7 +224,7 @@ const ModelTable: React.FC<{ dashboard: UsageDashboard; text: UsageText }> = ({ 
     { key: 'cost', header: text.cost, numeric: true, render: costCell },
   ];
   return (
-    <Card title={text.modelTitle} variant="bordered" padding="md">
+    <Card title={text.modelTitle} variant="surface" padding="md">
       <DataTable aria-label={text.modelTitle} columns={columns} rows={rows} rowKey={(row) => row.name} density="compact" />
     </Card>
   );
@@ -482,7 +482,7 @@ const TokenUsagePage: React.FC = () => {
 
             <ModelTable dashboard={dashboard} text={text} />
 
-            <Card title={text.recordsTitle} subtitle={formatUiText(text.recordsCount, { count: formatNumber(dashboard.recentTotal) })} variant="bordered" padding="md">
+            <Card title={text.recordsTitle} subtitle={formatUiText(text.recordsCount, { count: formatNumber(dashboard.recentTotal) })} variant="surface" padding="md">
               <div className="mb-3 grid grid-cols-2 gap-3 md:max-w-md">
                 <Select label={text.filterType} value={callType} options={typeOptions} onChange={setCallType} />
                 <Select label={text.filterSort} value={sort} options={sortOptions} onChange={(value) => setSort(value as UsageSort)} />

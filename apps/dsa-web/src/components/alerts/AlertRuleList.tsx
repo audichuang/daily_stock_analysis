@@ -263,7 +263,7 @@ export const AlertRuleList: React.FC<AlertRuleListProps> = ({
   ];
 
   return (
-    <Card variant="bordered" padding="md" className={className}>
+    <Card variant="surface" padding="md" className={className}>
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Input
           label={text.search}

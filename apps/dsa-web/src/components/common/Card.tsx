@@ -1,9 +1,7 @@
 import type React from 'react';
 import { cn } from '../../utils/cn';
 
-// 三層語意；default／bordered／gradient 是舊呼叫點的相容別名，由頁面票逐步換掉（Y01 刪除）。
 type CardLevel = 'surface' | 'inset' | 'highlight';
-type CardVariant = CardLevel | 'default' | 'bordered' | 'gradient';
 
 interface CardProps {
   title?: string;
@@ -11,19 +9,10 @@ interface CardProps {
   children: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
-  variant?: CardVariant;
+  variant?: CardLevel;
   hoverable?: boolean;
   padding?: 'none' | 'sm' | 'md' | 'lg';
 }
-
-const LEVEL_BY_VARIANT: Record<CardVariant, CardLevel> = {
-  surface: 'surface',
-  inset: 'inset',
-  highlight: 'highlight',
-  default: 'surface',
-  bordered: 'surface',
-  gradient: 'highlight',
-};
 
 const PADDING_STYLES = {
   none: '',
@@ -47,11 +36,10 @@ export const Card: React.FC<CardProps> = ({
   children,
   className = '',
   style,
-  variant = 'surface',
+  variant: level = 'surface',
   hoverable = false,
   padding = 'md',
 }) => {
-  const level = LEVEL_BY_VARIANT[variant];
   const hoverStyles = hoverable ? 'terminal-card-hover cursor-pointer' : '';
 
   return (

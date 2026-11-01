@@ -14,11 +14,12 @@
 7. POST /api/v1/stocks/{code}/level-alerts 台股 SMC 價位警報（預設關閉，dry_run 可試算）
 """
 
+import json
 import logging
 import math
 import threading
 import time
-from typing import Optional
+from typing import Dict, List, Optional, Set, Tuple
 import re
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, Depends
@@ -47,6 +48,7 @@ from api.v1.schemas.stocks import (
     TrendPoint,
 )
 from api.v1.schemas.history import WatchlistRequest, WatchlistResponse
+from api.v1.schemas.stocks import WatchlistGroup, WatchlistGroupsRequest, WatchlistGroupsResponse
 from api.v1.schemas.common import ErrorResponse
 from api.v1.errors import api_error
 from src.services.image_stock_extractor import (
@@ -64,7 +66,7 @@ from src.services.stock_profile_service import InvalidStockProfileCode, StockPro
 from src.services.stock_list_parser import ParseStatus, parse_analysis_target
 from src.services.run_diagnostics import sanitize_diagnostic_text
 from src.services.stock_list_parser import split_stock_list
-from src.services.system_config_service import SystemConfigService
+from src.services.system_config_service import ConfigConflictError, SystemConfigService
 from data_provider.base import normalize_stock_code
 from data_provider.us_index_mapping import us_index_zh_tw_name
 
@@ -90,16 +92,86 @@ def _read_watchlist_codes(service: SystemConfigService) -> list:
     return split_stock_list(stock_list_str)
 
 
-def _write_watchlist_codes(service: SystemConfigService, codes: list) -> None:
-    """Persist stock codes to STOCK_LIST as-is (no normalization)."""
+def _write_watchlist_codes(
+    service: SystemConfigService,
+    codes: list,
+    groups: Optional[List[WatchlistGroup]] = None,
+) -> None:
+    """Persist stock codes to STOCK_LIST as-is (no normalization).
+
+    帶 groups 時同一次寫入 WATCHLIST_GROUPS：成員與分組不能分兩次存，
+    否則第二次會因 config_version 已變而失敗，留下半套狀態。
+    """
     config_data = service.get_config(include_schema=False)
     config_version = config_data.get("config_version", "")
+    items = [{"key": "STOCK_LIST", "value": ",".join(codes)}]
+    if groups is not None:
+        items.append({"key": "WATCHLIST_GROUPS", "value": _serialize_watchlist_groups(groups)})
     service.update(
         config_version=config_version,
-        items=[{"key": "STOCK_LIST", "value": ",".join(codes)}],
+        items=items,
         mask_token="******",
         reload_now=True,
     )
+
+
+def _read_watchlist_groups(service: SystemConfigService) -> List[WatchlistGroup]:
+    """Read WATCHLIST_GROUPS; unset or malformed means no groups, never an error."""
+    config_data = service.get_config(include_schema=False)
+    raw = ""
+    for item in config_data.get("items", []):
+        if item.get("key") == "WATCHLIST_GROUPS":
+            raw = str(item.get("value", ""))
+            break
+    try:
+        parsed = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        logger.warning("WATCHLIST_GROUPS is not valid JSON; treating as no groups")
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    return [
+        WatchlistGroup(name=name, codes=[code for code in codes if isinstance(code, str)])
+        for name, codes in parsed.items()
+        if name.strip() and isinstance(codes, list)
+    ]
+
+
+def _serialize_watchlist_groups(groups: List[WatchlistGroup]) -> str:
+    """Serialize groups into a single .env-safe line (name -> codes, order kept).
+
+    .env 不加引號：python-dotenv 會把「空白加 #」當註解、把 ${...} 當插值，
+    組名含這些字元時讀回來就成了壞 JSON、整份分組消失，所以這兩個字元也跳脫。
+    """
+    payload = {group.name: group.codes for group in groups}
+    text = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+    return text.replace("#", "\\u0023").replace("$", "\\u0024")
+
+
+def _resolve_watchlist_groups(
+    groups: List[WatchlistGroup],
+    codes: List[str],
+) -> Tuple[List[WatchlistGroup], List[str]]:
+    """Project groups onto STOCK_LIST, the source of truth for membership.
+
+    設定頁可直接改 STOCK_LIST（不經 /watchlist/remove），所以讀取也要過濾。
+    回傳的代號一律是 STOCK_LIST 存的原字串；一檔只屬於一組，重複時留第一組。
+    """
+    code_by_key: Dict[str, str] = {}
+    for code in codes:
+        code_by_key.setdefault(_watchlist_match_key(code), code)
+    assigned: Set[str] = set()
+    resolved: List[WatchlistGroup] = []
+    for group in groups:
+        members: List[str] = []
+        for code in group.codes:
+            key = _watchlist_match_key(code)
+            if key in code_by_key and key not in assigned:
+                assigned.add(key)
+                members.append(code_by_key[key])
+        resolved.append(WatchlistGroup(name=group.name, codes=members))
+    ungrouped = [code for code in codes if _watchlist_match_key(code) not in assigned]
+    return resolved, ungrouped
 
 
 # Stock code validation patterns (aligned with frontend validateStockCode)
@@ -450,7 +522,10 @@ def remove_from_watchlist(
         if requested_key in existing_keys:
             idx = existing_keys.index(requested_key)
             codes.pop(idx)
-            _write_watchlist_codes(service, codes)
+            groups = _read_watchlist_groups(service)
+            # 沒設分組就不寫這個鍵，.env 不多一行空值。
+            pruned = _resolve_watchlist_groups(groups, codes)[0] if groups else None
+            _write_watchlist_codes(service, codes, pruned)
         return WatchlistResponse(stock_codes=codes, message=f"已移除 {request.stock_code.strip()}")
     except HTTPException:
         raise
@@ -460,6 +535,72 @@ def remove_from_watchlist(
             status_code=500,
             detail={"error": "internal_error", "message": f"从自选删除失败: {str(e)}"},
         )
+
+
+@router.get(
+    "/watchlist/groups",
+    response_model=WatchlistGroupsResponse,
+    responses={
+        200: {"description": "自選分組"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="取得自選分組",
+    description="回傳 WATCHLIST_GROUPS 投影到 STOCK_LIST 後的分組與未分組代號；未設定時 groups 為空。",
+)
+def get_watchlist_groups(
+    service: SystemConfigService = Depends(get_system_config_service),
+) -> WatchlistGroupsResponse:
+    try:
+        groups, ungrouped = _resolve_watchlist_groups(
+            _read_watchlist_groups(service),
+            _read_watchlist_codes(service),
+        )
+        return WatchlistGroupsResponse(groups=groups, ungrouped=ungrouped)
+    except Exception as e:
+        logger.error(f"取得自選分組失敗: {e}", exc_info=True)
+        raise api_error(500, "internal_error", "取得自選分組失敗")
+
+
+@router.post(
+    "/watchlist/groups",
+    response_model=WatchlistGroupsResponse,
+    responses={
+        200: {"description": "已儲存自選分組"},
+        400: {"description": "组名错误", "model": ErrorResponse},
+        409: {"description": "設定已被其他操作更新", "model": ErrorResponse},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="儲存自選分組",
+    description="整份覆寫分組與組內順序。STOCK_LIST 不變：不在其中的代號會被丟棄，未列入的代號歸未分組。",
+)
+def save_watchlist_groups(
+    request: WatchlistGroupsRequest,
+    service: SystemConfigService = Depends(get_system_config_service),
+) -> WatchlistGroupsResponse:
+    names = [group.name.strip() for group in request.groups]
+    if not all(names):
+        raise api_error(400, "invalid_group_name", "組名不能空白")
+    if len(set(names)) != len(names):
+        raise api_error(400, "duplicate_group_name", "組名不能重複")
+    try:
+        codes = _read_watchlist_codes(service)
+        groups, ungrouped = _resolve_watchlist_groups(
+            [WatchlistGroup(name=name, codes=group.codes) for name, group in zip(names, request.groups)],
+            codes,
+        )
+        config_data = service.get_config(include_schema=False)
+        service.update(
+            config_version=config_data.get("config_version", ""),
+            items=[{"key": "WATCHLIST_GROUPS", "value": _serialize_watchlist_groups(groups)}],
+            mask_token="******",
+            reload_now=True,
+        )
+        return WatchlistGroupsResponse(groups=groups, ungrouped=ungrouped)
+    except ConfigConflictError:
+        raise api_error(409, "config_conflict", "設定已被其他操作更新，請重新載入後再試")
+    except Exception as e:
+        logger.error(f"儲存自選分組失敗: {e}", exc_info=True)
+        raise api_error(500, "internal_error", "儲存自選分組失敗")
 
 
 @router.get(

@@ -13,6 +13,7 @@ final class AppStore: ObservableObject {
     @Published var connectionIssue: ConnectionIssue?
     @Published var serverAddress: String
     @Published var watchlist: [String] = []
+    @Published var watchlistGroups: [WatchlistGroup] = []
     @Published var quotes: [QuoteItem] = []
     @Published var indices: [MarketIndex] = []
     @Published var reports: [HistoryItem] = []
@@ -285,6 +286,11 @@ final class AppStore: ObservableObject {
         Task { await loadPortfolioSummary(client, generation: current) }
     }
 
+    func saveWatchlistGroups(_ groups: [WatchlistGroup]) async throws {
+        guard let client else { return }
+        watchlistGroups = try await client.saveWatchlistGroups(groups).groups
+    }
+
     func logout() async {
         if let baseURL { SessionVault.clear(for: baseURL) }
         session?.configuration.httpCookieStorage?.cookies?.filter { $0.name == "dsa_session" }
@@ -321,6 +327,8 @@ final class AppStore: ObservableObject {
     private func loadWatchlist(_ client: DSAClient, generation expected: UUID) async {
         do {
             let codes = try await client.watchlist()
+            // 分組是附加資訊：讀不到（舊伺服器 404、暫時失敗）時保留現有分組，不算自選載入失敗。
+            let groups = try? await client.watchlistGroups()
             // 報價失敗不能連名單一起丟：名單照常更新，舊報價保留，畫面另外標示。
             var results: [QuoteItem]?
             var quoteError: Error?
@@ -333,6 +341,7 @@ final class AppStore: ObservableObject {
             } catch { quoteError = error }
             guard generation == expected else { return }
             watchlist = codes
+            if let groups { watchlistGroups = groups.groups }
             if let results { quotes = results }
             errors["watchlist"] = nil
             errors["quotes"] = quoteError?.localizedDescription
@@ -387,7 +396,7 @@ final class AppStore: ObservableObject {
     }
 
     private func clearData() {
-        watchlist = []; quotes = []; indices = []; reports = []; marketReviews = []
+        watchlist = []; watchlistGroups = []; quotes = []; indices = []; reports = []; marketReviews = []
         stockIndex = []; errors = [:]; refreshedAt = nil
         marketPhase = nil; marketOpen = nil; indicesLoading = false
         portfolioSummary = nil; portfolioSummaryFailed = false

@@ -82,7 +82,8 @@ const stripTopHeading = (markdown: string, title?: string): string => {
 
 const getSectionIcon = (title: string): typeof FileText => {
   const normalized = normalizeHeading(title);
-  if (/指数|指數|index|overview|大盘|大盤/.test(normalized)) {
+  // 比對 LLM 標題，舊報告可能是簡體，用跳脫保留比對能力。
+  if (/指\u6570|指數|index|overview|大盘|大盤/.test(normalized)) {
     return BarChart3;
   }
   if (/情绪|情緒|赚钱|賺錢|sentiment|breadth|temperature/.test(normalized)) {
@@ -91,7 +92,7 @@ const getSectionIcon = (title: string): typeof FileText => {
   if (/行业|行業|板块|板塊|主题|主題|轮动|輪動|sector|theme|rotation/.test(normalized)) {
     return TrendingUp;
   }
-  if (/资金|資金|成交|量能|flow|turnover|volume|capital/.test(normalized)) {
+  if (/\u8d44金|資金|成交|量能|flow|turnover|volume|capital/.test(normalized)) {
     return WalletCards;
   }
   if (/风险|風險|机会|機會|观察|觀察|risk|watch|next/.test(normalized)) {

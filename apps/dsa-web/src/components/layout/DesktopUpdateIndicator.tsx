@@ -135,7 +135,7 @@ export const DesktopUpdateIndicator: React.FC = () => {
             {showRecheck ? (
               <Button
                 type="button"
-                variant="settings-secondary"
+                variant="secondary"
                 size="sm"
                 onClick={() => void checkForUpdates()}
                 disabled={busy && status !== 'error'}
@@ -148,7 +148,7 @@ export const DesktopUpdateIndicator: React.FC = () => {
             {canOpenRelease || notice?.actionKind === 'release' ? (
               <Button
                 type="button"
-                variant="settings-primary"
+                variant="primary"
                 size="sm"
                 onClick={() => void openReleasePage()}
               >
@@ -158,7 +158,7 @@ export const DesktopUpdateIndicator: React.FC = () => {
             {canInstall ? (
               <Button
                 type="button"
-                variant="settings-primary"
+                variant="primary"
                 size="sm"
                 onClick={() => void installDownloadedUpdate()}
               >

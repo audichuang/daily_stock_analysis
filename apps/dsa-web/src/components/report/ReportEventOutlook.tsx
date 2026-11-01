@@ -48,7 +48,7 @@ export const ReportEventOutlook: React.FC<ReportEventOutlookProps> = ({ outlook,
   ];
 
   return (
-    <Card variant="bordered" padding="md" className="home-panel-card" data-testid="report-event-outlook">
+    <Card variant="surface" padding="md" className="home-panel-card" data-testid="report-event-outlook">
       <DashboardPanelHeader
         eyebrow={text.eventOutlook}
         title={`${outlook.event ?? text.eventOutlook} · ${outlook.eventDate ?? text.eventDateUnknown}`}

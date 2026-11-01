@@ -1,13 +1,25 @@
 # -*- coding: utf-8 -*-
 """Watchlist API regressions for stock-code variant matching."""
 
+import json
+
+import pytest
+from dotenv import dotenv_values
+from fastapi import HTTPException
+from pydantic import ValidationError
+
 from api.v1.endpoints.stocks import (
+    _serialize_watchlist_groups,
     _watchlist_match_key,
     add_to_watchlist,
     get_watchlist,
+    get_watchlist_groups,
     remove_from_watchlist,
+    save_watchlist_groups,
 )
 from api.v1.schemas.history import WatchlistRequest
+from api.v1.schemas.stocks import WatchlistGroup, WatchlistGroupInput, WatchlistGroupsRequest
+from src.services.system_config_service import ConfigConflictError
 
 
 class FakeSystemConfigService:
@@ -224,3 +236,164 @@ def test_stock_only_watchlist_equivalence_is_unchanged() -> None:
     assert _watchlist_match_key("00700") == _watchlist_match_key("00700.HK") == "HK00700"
     assert _watchlist_match_key("aapl") == _watchlist_match_key("AAPL") == "AAPL"
     assert _watchlist_match_key("2330.TW") == "2330.TW"
+
+
+class FakeGroupedConfigService:
+    """Multi-key fake: records whether both keys landed in one update call."""
+
+    def __init__(self, stock_list: str, groups: str = "", conflict: bool = False) -> None:
+        self.values = {"STOCK_LIST": stock_list}
+        if groups:
+            self.values["WATCHLIST_GROUPS"] = groups
+        self.conflict = conflict
+        self.update_calls: list[list[str]] = []
+
+    def get_config(self, include_schema: bool = False) -> dict:
+        return {
+            "config_version": "cfg-v1",
+            "items": [{"key": key, "value": value} for key, value in self.values.items()],
+        }
+
+    def update(self, **kwargs) -> None:
+        if self.conflict:
+            raise ConfigConflictError(current_version="cfg-v2")
+        self.update_calls.append([item["key"] for item in kwargs["items"]])
+        for item in kwargs["items"]:
+            self.values[item["key"]] = item["value"]
+
+
+def _groups_request(**groups) -> WatchlistGroupsRequest:
+    return WatchlistGroupsRequest(
+        groups=[WatchlistGroupInput(name=name, codes=codes) for name, codes in groups.items()]
+    )
+
+
+def test_watchlist_groups_unset_means_everything_ungrouped() -> None:
+    service = FakeGroupedConfigService("2330.TW,AAPL")
+
+    response = get_watchlist_groups(service=service)
+
+    assert response.groups == []
+    assert response.ungrouped == ["2330.TW", "AAPL"]
+
+
+@pytest.mark.parametrize("raw", ["not json", "[1,2]", '"text"'])
+def test_watchlist_groups_malformed_value_is_no_groups_not_an_error(raw: str) -> None:
+    response = get_watchlist_groups(service=FakeGroupedConfigService("2330.TW", raw))
+
+    assert response.groups == []
+    assert response.ungrouped == ["2330.TW"]
+
+
+def test_watchlist_groups_read_filters_codes_removed_outside_the_remove_endpoint() -> None:
+    # 設定頁直接改 STOCK_LIST 時不會經過 remove，讀取必須自己過濾。
+    service = FakeGroupedConfigService("2330.TW,AAPL", json.dumps({"科技": ["2330.TW", "2317.TW"]}))
+
+    response = get_watchlist_groups(service=service)
+
+    assert response.groups == [WatchlistGroup(name="科技", codes=["2330.TW"])]
+    assert response.ungrouped == ["AAPL"]
+
+
+def test_watchlist_remove_prunes_groups_in_the_same_write() -> None:
+    service = FakeGroupedConfigService("2330.TW,AAPL", json.dumps({"科技": ["2330.TW", "AAPL"]}))
+
+    remove_from_watchlist(WatchlistRequest(stock_code="2330.TW"), service=service)
+
+    assert service.update_calls == [["STOCK_LIST", "WATCHLIST_GROUPS"]]
+    assert json.loads(service.values["WATCHLIST_GROUPS"]) == {"科技": ["AAPL"]}
+    # 空組保留：刪掉最後一檔不等於使用者要刪這個組。
+    remove_from_watchlist(WatchlistRequest(stock_code="AAPL"), service=service)
+    assert json.loads(service.values["WATCHLIST_GROUPS"]) == {"科技": []}
+
+
+def test_watchlist_remove_without_groups_does_not_write_the_groups_key() -> None:
+    service = FakeGroupedConfigService("2330.TW,AAPL")
+
+    remove_from_watchlist(WatchlistRequest(stock_code="2330.TW"), service=service)
+
+    assert service.update_calls == [["STOCK_LIST"]]
+
+
+def test_watchlist_groups_save_keeps_order_and_leaves_stock_list_untouched() -> None:
+    service = FakeGroupedConfigService("2330.TW,2317.TW,AAPL")
+
+    response = save_watchlist_groups(
+        _groups_request(美股=["AAPL"], 台股=["2317.TW", "2330.TW"]),
+        service=service,
+    )
+
+    assert [group.name for group in response.groups] == ["美股", "台股"]
+    assert response.groups[1].codes == ["2317.TW", "2330.TW"]
+    assert response.ungrouped == []
+    assert service.update_calls == [["WATCHLIST_GROUPS"]]
+    assert service.values["STOCK_LIST"] == "2330.TW,2317.TW,AAPL"
+
+
+def test_watchlist_groups_save_drops_foreign_codes_and_duplicate_membership() -> None:
+    service = FakeGroupedConfigService("2330.TW,AAPL")
+
+    response = save_watchlist_groups(
+        _groups_request(甲=["2330.TW", "2317.TW"], 乙=["2330.TW", "AAPL"]),
+        service=service,
+    )
+
+    assert response.groups[0].codes == ["2330.TW"]
+    assert response.groups[1].codes == ["AAPL"]
+
+
+def test_watchlist_groups_save_stores_the_raw_stock_list_spelling() -> None:
+    # 指數身分靠原字串；分組存正規化後的值會和 STOCK_LIST 對不起來。
+    service = FakeGroupedConfigService("aapl")
+
+    response = save_watchlist_groups(_groups_request(美股=["AAPL"]), service=service)
+
+    assert response.groups[0].codes == ["aapl"]
+
+
+@pytest.mark.parametrize(
+    ("groups", "error"),
+    [
+        ([("  ", [])], "invalid_group_name"),
+        ([("甲", []), (" 甲 ", [])], "duplicate_group_name"),
+    ],
+)
+def test_watchlist_groups_save_rejects_bad_names(groups: list, error: str) -> None:
+    service = FakeGroupedConfigService("2330.TW")
+    request = WatchlistGroupsRequest(
+        groups=[WatchlistGroupInput(name=name, codes=codes) for name, codes in groups]
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        save_watchlist_groups(request, service=service)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["error"] == error
+    assert service.update_calls == []
+
+
+def test_watchlist_groups_save_reports_config_conflict() -> None:
+    service = FakeGroupedConfigService("2330.TW", conflict=True)
+
+    with pytest.raises(HTTPException) as exc:
+        save_watchlist_groups(_groups_request(甲=["2330.TW"]), service=service)
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["error"] == "config_conflict"
+
+
+def test_watchlist_group_input_limits_lengths() -> None:
+    with pytest.raises(ValidationError):
+        WatchlistGroupInput(name="x" * 33, codes=[])
+    with pytest.raises(ValidationError):
+        WatchlistGroupInput(name="甲", codes=["x" * 33])
+
+
+def test_watchlist_groups_serialization_survives_dotenv_round_trip(tmp_path) -> None:
+    # 真的走 python-dotenv：組名含「 #」或 ${X} 時不跳脫就會被截斷或插值成壞 JSON。
+    name = "半導體 #1 ${HOME} '引號\""
+    env_file = tmp_path / ".env"
+    line = _serialize_watchlist_groups([WatchlistGroup(name=name, codes=["2330.TW"])])
+    env_file.write_text(f"WATCHLIST_GROUPS={line}\n", encoding="utf-8")
+
+    assert json.loads(dotenv_values(env_file)["WATCHLIST_GROUPS"]) == {name: ["2330.TW"]}

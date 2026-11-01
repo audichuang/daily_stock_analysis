@@ -410,3 +410,29 @@ export const PORTFOLIO_PAGE_TEXT: Record<UiLanguage, Record<keyof typeof PORTFOL
     concentrationBars: '持股佔比排行',
   },
 };
+
+export const SETTINGS_PANEL_ERROR_TEXT: Record<UiLanguage, {
+  loadFailedSuffix: string;
+  runtimeErrorMessage: string;
+  defaultDiagnosticHint: string;
+  errorSummaryPrefix: string;
+}> = {
+  zh: {
+    loadFailedSuffix: '加载失败',
+    runtimeErrorMessage: '该设置区域发生前端运行时异常，页面其他设置仍可继续使用。',
+    defaultDiagnosticHint: '请补充 release 版本、运行环境和触发入口，便于定位问题。',
+    errorSummaryPrefix: '错误摘要：',
+  },
+  en: {
+    loadFailedSuffix: ' failed to load',
+    runtimeErrorMessage: 'This settings area hit a frontend runtime error. Other settings remain usable.',
+    defaultDiagnosticHint: 'Provide the release version, runtime environment, and trigger path to help diagnose the issue.',
+    errorSummaryPrefix: 'Error summary: ',
+  },
+  'zh-TW': {
+    loadFailedSuffix: '載入失敗',
+    runtimeErrorMessage: '這個設定區塊發生前端執行錯誤，頁面其他設定仍可繼續使用。',
+    defaultDiagnosticHint: '請補充 release 版本、執行環境與觸發入口，方便定位問題。',
+    errorSummaryPrefix: '錯誤摘要：',
+  },
+};
