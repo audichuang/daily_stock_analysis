@@ -1353,7 +1353,7 @@ const SettingsPage: React.FC = () => {
         <SettingsLoading />
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-          <aside className="lg:sticky lg:top-4 lg:self-start">
+          <aside className="lg:sticky lg:top-[calc(var(--shell-status-height,0px)+1rem)] lg:self-start">
             <SettingsCategoryNav
               categories={categories}
               itemsByCategory={itemsByCategory}
@@ -1697,7 +1697,7 @@ const SettingsPage: React.FC = () => {
       )}
 
       {toast ? (
-        <div className="fixed bottom-5 right-5 z-50 w-[320px] max-w-[calc(100vw-24px)]">
+        <div className="fixed bottom-[calc(1.25rem+var(--shell-bottom-inset,0px))] right-5 z-50 w-[320px] max-w-[calc(100vw-24px)]">
           {toast.type === 'success'
             ? (
                 <SettingsAlert

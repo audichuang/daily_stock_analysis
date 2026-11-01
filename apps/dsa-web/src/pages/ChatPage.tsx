@@ -977,7 +977,7 @@ const ChatPage: React.FC = () => {
   return (
     <div
       data-testid="chat-workspace"
-      className="flex h-[calc(100dvh-5rem)] w-full min-w-0 gap-4 overflow-hidden sm:h-[calc(100dvh-5.5rem)] lg:h-[calc(100dvh-2rem)]"
+      className="flex h-[calc(100dvh-var(--shell-page-offset,2rem))] w-full min-w-0 gap-4 overflow-hidden"
     >
       {/* Desktop sidebar */}
       {historyCollapsed ? null : (

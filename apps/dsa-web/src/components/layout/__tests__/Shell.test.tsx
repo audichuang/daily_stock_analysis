@@ -1,11 +1,23 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Link, MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useMarketIndexStore } from '../../../stores/marketIndexStore';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { Shell } from '../Shell';
 import { ShellHeader } from '../ShellHeader';
 
 const mockLogout = vi.fn().mockResolvedValue(undefined);
+const { getIndicesSnapshot } = vi.hoisted(() => ({ getIndicesSnapshot: vi.fn() }));
+
+vi.mock('../../../api/stocks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../api/stocks')>();
+  return { ...actual, stocksApi: { ...actual.stocksApi, getIndicesSnapshot } };
+});
+
+// 搜尋對話框只驗開關，不載入真的股票索引。
+vi.mock('../../StockAutocomplete', () => ({
+  StockAutocomplete: () => <input aria-label="stock search stub" />,
+}));
 
 vi.mock('../../../contexts/AuthContext', () => ({
   useAuth: () => ({
@@ -19,11 +31,13 @@ vi.mock('../../../stores/agentChatStore', () => ({
     selector({ completionBadge: true }),
 }));
 
+const viewport = { mobile: false };
+
 beforeAll(() => {
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: vi.fn().mockImplementation((query: string) => ({
-      matches: query === '(prefers-color-scheme: dark)',
+      matches: query === '(prefers-color-scheme: dark)' || (viewport.mobile && query.includes('max-width: 1023')),
       media: query,
       onchange: null,
       addListener: vi.fn(),
@@ -35,7 +49,13 @@ beforeAll(() => {
   });
 });
 
-const OPEN_NAV_LABEL = /Open navigation|打开导航菜单|開啟導覽選單/;
+const snapshot = (codes: string[]) => ({
+  items: codes.map((code) => ({
+    code, name: code, current: 100, change: 1, changePct: 1, source: null, asOf: '2026-11-01T05:00:00Z',
+  })),
+  marketPhase: 'intraday',
+  marketOpen: true,
+});
 
 const renderShellAt = (entry: string) =>
   render(
@@ -51,10 +71,17 @@ const renderShellAt = (entry: string) =>
 describe('Shell', () => {
   beforeEach(() => {
     window.sessionStorage.clear();
+    window.localStorage.clear();
+    viewport.mobile = false;
+    useMarketIndexStore.getState().reset();
+    getIndicesSnapshot.mockReset();
+    getIndicesSnapshot.mockImplementation(async (region: string) =>
+      snapshot(region === 'tw' ? ['TWII', 'TPEX'] : ['SPX', 'IXIC', 'DJI', 'VIX']));
   });
 
   afterEach(() => {
     delete (window as { dsaDesktop?: unknown }).dsaDesktop;
+    vi.useRealTimers();
   });
   it.skip('renders navigation, theme toggle and completion badge', () => {
     render(
@@ -127,36 +154,170 @@ describe('Shell', () => {
     expect(await screen.findByRole('button', { name: '桌面端更新' })).toBeInTheDocument();
   });
 
-  it('hides the sidebar and top bar with ?embed=ios and keeps them hidden after in-app navigation', () => {
+  it('hides the whole frame with ?embed=ios and keeps it hidden after in-app navigation', () => {
+    viewport.mobile = true;
     renderShellAt('/portfolio?embed=ios');
 
-    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: OPEN_NAV_LABEL })).not.toBeInTheDocument();
+    const expectNoFrame = () => {
+      expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+      expect(screen.queryByRole('banner')).not.toBeInTheDocument();
+      expect(screen.queryByRole('navigation', { name: '底部分页' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('region', { name: '大盘状态' })).not.toBeInTheDocument();
+    };
+    expectNoFrame();
+    expect(getIndicesSnapshot).not.toHaveBeenCalled();
 
     // 換頁後 query 已不在，只有 sessionStorage 的旗標能維持內嵌。
     fireEvent.click(screen.getByRole('link', { name: 'go to alerts' }));
 
     expect(screen.getByRole('link', { name: 'go to alerts' })).toBeInTheDocument();
-    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: OPEN_NAV_LABEL })).not.toBeInTheDocument();
+    expectNoFrame();
+    expect(getIndicesSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('does not open the global search with the shortcut in embed mode', () => {
+    renderShellAt('/portfolio?embed=ios');
+    fireEvent.keyDown(document, { key: 'k', metaKey: true });
+    expect(screen.queryByRole('dialog', { name: '搜索股票' })).not.toBeInTheDocument();
   });
 
   it('keeps the normal frame without the parameter or with another value', () => {
     const { unmount } = renderShellAt('/portfolio');
     expect(screen.getByRole('complementary')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: OPEN_NAV_LABEL })).toBeInTheDocument();
     unmount();
 
     renderShellAt('/portfolio?embed=web');
     expect(screen.getByRole('complementary')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: OPEN_NAV_LABEL })).toBeInTheDocument();
+  });
+
+  it('uses bottom tabs and a header on mobile, the sidebar on desktop', () => {
+    viewport.mobile = true;
+    const { unmount } = renderShellAt('/decision-signals');
+
+    const tabs = screen.getByRole('navigation', { name: '底部分页' });
+    expect(within(tabs).getAllByRole('link').map((link) => link.getAttribute('href')))
+      .toEqual(['/board', '/', '/chat', '/portfolio']);
+    expect(screen.getByRole('banner')).toHaveTextContent('AI 建议');
+    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+
+    // 「更多」開抽屜，看得到底部分頁放不下的頁面。
+    fireEvent.click(within(tabs).getByRole('button', { name: '更多' }));
+    expect(screen.getByRole('link', { name: '设置' })).toBeInTheDocument();
+    unmount();
+
+    viewport.mobile = false;
+    renderShellAt('/portfolio');
+    expect(screen.queryByRole('navigation', { name: '底部分页' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('banner')).not.toBeInTheDocument();
+    expect(screen.getByRole('complementary')).toBeInTheDocument();
+  });
+
+  it('shows TW and US indices and only the requested US codes', async () => {
+    renderShellAt('/portfolio');
+
+    expect(await screen.findByTestId('status-index-SPX')).toBeInTheDocument();
+    expect(screen.getByTestId('status-index-TWII')).toBeInTheDocument();
+    expect(screen.getByTestId('status-index-TPEX')).toBeInTheDocument();
+    expect(screen.getByTestId('status-index-IXIC')).toBeInTheDocument();
+    expect(screen.queryByTestId('status-index-VIX')).not.toBeInTheDocument();
+    expect(screen.getByText('台股 盘中')).toBeInTheDocument();
+  });
+
+  it('still shows TW indices when the US request fails', async () => {
+    getIndicesSnapshot.mockImplementation(async (region: string) => {
+      if (region === 'us') {
+        throw new Error('us down');
+      }
+      return snapshot(['TWII', 'TPEX']);
+    });
+    renderShellAt('/portfolio');
+
+    expect(await screen.findByTestId('status-index-TWII')).toBeInTheDocument();
+    expect(screen.queryByTestId('status-index-SPX')).not.toBeInTheDocument();
+  });
+
+  it('polls every 60 seconds and pauses while the tab is hidden', async () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    try {
+      renderShellAt('/portfolio');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(getIndicesSnapshot).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(getIndicesSnapshot).toHaveBeenCalledTimes(4);
+
+      visibility.mockReturnValue('hidden');
+      fireEvent(document, new Event('visibilitychange'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(180_000);
+      });
+      expect(getIndicesSnapshot).toHaveBeenCalledTimes(4);
+
+      visibility.mockReturnValue('visible');
+      fireEvent(document, new Event('visibilitychange'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(getIndicesSnapshot).toHaveBeenCalledTimes(6);
+    } finally {
+      visibility.mockRestore();
+    }
+  });
+
+  it('opens the global search with the shortcut only when asked', async () => {
+    renderShellAt('/portfolio');
+    expect(screen.queryByRole('dialog', { name: '搜索股票' })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'k', metaKey: true });
+    expect(await screen.findByRole('dialog', { name: '搜索股票' })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '搜索股票' })).not.toBeInTheDocument());
+  });
+
+  it('starts as a 72px rail below 1680px and remembers the expanded choice', () => {
+    vi.stubGlobal('innerWidth', 1440);
+    try {
+      const { unmount } = renderShellAt('/portfolio');
+      expect(screen.getByRole('complementary')).toHaveClass('w-[72px]');
+
+      fireEvent.click(screen.getByRole('button', { name: '展开侧边栏' }));
+      expect(screen.getByRole('complementary')).toHaveClass('w-[172px]');
+      unmount();
+
+      renderShellAt('/portfolio');
+      expect(screen.getByRole('complementary')).toHaveClass('w-[172px]');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('starts expanded at 1680px but honours a stored collapse', () => {
+    vi.stubGlobal('innerWidth', 1680);
+    try {
+      const { unmount } = renderShellAt('/portfolio');
+      expect(screen.getByRole('complementary')).toHaveClass('w-[172px]');
+
+      fireEvent.click(screen.getByRole('button', { name: '折叠侧边栏' }));
+      unmount();
+
+      renderShellAt('/portfolio');
+      expect(screen.getByRole('complementary')).toHaveClass('w-[72px]');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('renders ShellHeader only outside embed mode', () => {
     const header = (entry: string) => (
       <MemoryRouter initialEntries={[entry]}>
         <ThemeProvider>
-          <ShellHeader collapsed={false} onToggleSidebar={vi.fn()} onOpenMobileNav={vi.fn()} />
+          <ShellHeader />
         </ThemeProvider>
       </MemoryRouter>
     );
