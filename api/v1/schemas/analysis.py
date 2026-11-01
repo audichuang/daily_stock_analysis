@@ -170,6 +170,13 @@ class MarketReviewAccepted(BaseModel):
     )
 
 
+class MarketReviewDefaultRegion(BaseModel):
+    """不帶 region 觸發複盤時實際會跑的市場。"""
+
+    default_region: str = Field(..., description="正規化後的市場範圍，例如 tw,us", examples=["tw,us"])
+    regions: List[str] = Field(default_factory=list, description="拆開的市場清單，順序與設定相同")
+
+
 class AnalysisResultResponse(BaseModel):
     """分析结果响应模型"""
 

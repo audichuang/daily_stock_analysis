@@ -500,6 +500,8 @@ class YfinanceFetcher(BaseFetcher):
             'volume': float(today_row['Volume']),
             'amount': 0.0,  # Yahoo Finance 不提供准确成交额
             'amplitude': amplitude,
+            'as_of': hist.index[-1].isoformat() if hasattr(hist.index[-1], 'isoformat') else str(hist.index[-1]),
+            'source': 'yfinance',
         }
 
     @staticmethod
