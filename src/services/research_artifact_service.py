@@ -61,6 +61,18 @@ _ARTIFACT_TEXT: Dict[str, Dict[str, str]] = {
         "zh-TW": "股價走勢、新聞、基本面或市場階段與論點衝突時，重新評估。",
         "ko": "가격 흐름, 뉴스, 펀더멘털 또는 시장 단계가 논지와 충돌하면 재평가합니다.",
     },
+    "stop_loss_trigger": {
+        "en": "Close below {value}",
+        "zh": "收盘跌破 {value}",
+        "zh-TW": "收盤跌破 {value}",
+        "ko": "종가가 {value} 하회",
+    },
+    "take_profit_trigger": {
+        "en": "Close above {value}",
+        "zh": "收盘站上 {value}",
+        "zh-TW": "收盤站上 {value}",
+        "ko": "종가가 {value} 상회",
+    },
     "monitor_invalidation": {
         "en": "Monitor invalidation",
         "zh": "监控失效条件",
@@ -89,6 +101,8 @@ _ARTIFACT_TEXT: Dict[str, Dict[str, str]] = {
 
 # 前端 camelcase 會把「數字接字母」的鍵轉壞（max_drawdown_1y → maxDrawdown1Y），投影時直接擋掉。
 _UNSAFE_FACT_KEY_RE = re.compile(r"[0-9][a-zA-Z]", re.ASCII)
+# Single trend words carry no reasoning on their own; drop them from thesis.reasons.
+_TREND_ONLY_WORDS = {"看多", "看空", "震盪", "bullish", "bearish"}
 _SOURCE_STATUS_VALUES = {"ok", "no_data", "fetch_failed", "timeout", "not_configured", "not_supported"}
 
 
@@ -239,13 +253,14 @@ def _build_thesis(summary: Any) -> Dict[str, Any]:
     analysis_summary = _as_text(_value(summary, "analysis_summary"))
     trend_prediction = _as_text(_value(summary, "trend_prediction"))
     operation_advice = _as_text(_value(summary, "operation_advice"))
-    reasons = [value for value in [analysis_summary, trend_prediction] if value]
+    thesis_summary = analysis_summary or trend_prediction or operation_advice
+    reasons = _thesis_reasons([analysis_summary, trend_prediction], thesis_summary)
     risks = []
     if action == "alert":
         risks.append(operation_advice or "Report action is alert")
     return {
         "direction": _direction_from_action_or_score(action, score),
-        "summary": analysis_summary or trend_prediction or operation_advice,
+        "summary": thesis_summary,
         "score": score,
         "confidence": _score_to_confidence(score),
         "action": action,
@@ -254,6 +269,22 @@ def _build_thesis(summary: Any) -> Dict[str, Any]:
         "risks": risks,
         **{key: _value(summary, key) for key in DECISION_FIELD_KEYS},
     }
+
+
+def _thesis_reasons(candidates: List[str], summary: str) -> List[str]:
+    """Drop reasons that just repeat the summary or are a bare trend word (exact match after stripping spaces)."""
+    summary_key = _squash(summary)
+    reasons = []
+    for value in candidates:
+        key = _squash(value)
+        if not key or key == summary_key or key.lower() in _TREND_ONLY_WORDS:
+            continue
+        reasons.append(value)
+    return reasons
+
+
+def _squash(value: str) -> str:
+    return re.sub(r"\s+", "", value or "")
 
 
 def _localized_block_label(label: str, language: str) -> str:
@@ -346,31 +377,17 @@ def _build_invalidation_conditions(
     conditions: List[Dict[str, Any]] = []
     stop_loss = _as_text(_value(strategy, "stop_loss"))
     if stop_loss:
-        conditions.append({
-            "id": "price:stop_loss",
-            "category": "price",
-            "description": _text(language, "stop_loss", value=stop_loss),
-            "trigger": stop_loss,
-            "severity": "critical",
-            "metric": "price",
-            "threshold": stop_loss,
-            "direction": "below",
-            "status": _price_condition_status(details, _value(strategy, "stop_loss_price"), "below"),
-        })
+        conditions.append(_price_condition(
+            details, language, "stop_loss", stop_loss, _value(strategy, "stop_loss_price"),
+            condition_id="price:stop_loss", severity="critical", direction="below",
+        ))
 
     take_profit = _as_text(_value(strategy, "take_profit"))
     if take_profit:
-        conditions.append({
-            "id": "price:take_profit_review",
-            "category": "price",
-            "description": _text(language, "take_profit", value=take_profit),
-            "trigger": take_profit,
-            "severity": "watch",
-            "metric": "price",
-            "threshold": take_profit,
-            "direction": "above",
-            "status": _price_condition_status(details, _value(strategy, "take_profit_price"), "above"),
-        })
+        conditions.append(_price_condition(
+            details, language, "take_profit", take_profit, _value(strategy, "take_profit_price"),
+            condition_id="price:take_profit_review", severity="watch", direction="above",
+        ))
 
     event_condition = _event_low_condition(details, language)
     if event_condition:
@@ -402,6 +419,38 @@ def _build_invalidation_conditions(
         conditions.append(_manual_reassessment_condition(language))
 
     return conditions
+
+
+def _price_condition(
+    details: Any,
+    language: str,
+    kind: str,
+    text: str,
+    structured_level: Any,
+    *,
+    condition_id: str,
+    severity: str,
+    direction: str,
+) -> Dict[str, Any]:
+    """Structured sniper price -> numeric threshold and short trigger; legacy text stays verbatim (never parsed)."""
+    level = finite_float(structured_level)
+    condition: Dict[str, Any] = {
+        "id": condition_id,
+        "category": "price",
+        "description": _text(language, kind, value=text),
+        "trigger": text,
+        "severity": severity,
+        "metric": "price",
+        "threshold": text,
+        "direction": direction,
+        "status": _price_condition_status(details, structured_level, direction),
+    }
+    if level is not None:
+        number = f"{level:.2f}"
+        condition["threshold"] = number
+        condition["trigger"] = _text(language, f"{kind}_trigger", value=number)
+        condition["metadata"] = {"rationale": text}
+    return condition
 
 
 def _price_condition_status(details: Any, threshold: Any, direction: str) -> str:
@@ -619,19 +668,9 @@ def _manual_reassessment_condition(language: str = "en") -> Dict[str, Any]:
 def _build_next_actions(summary: Any, invalidations: List[Dict[str, Any]], language: str = "en") -> List[Dict[str, Any]]:
     action = _as_text(_value(summary, "action")) or "watch"
     label = _as_text(_value(summary, "action_label")) or _as_text(_value(summary, "operation_advice")) or action
-    next_actions = [{
-        "action": action,
-        "label": label,
-        "reason": _as_text(_value(summary, "analysis_summary")) or None,
-    }]
-    if invalidations:
-        next_actions.append({
-            "action": "monitor_invalidation",
-            "label": _text(language, "monitor_invalidation"),
-            "reason": invalidations[0]["description"],
-            "metadata": {"condition_id": invalidations[0]["id"]},
-        })
-    return next_actions
+    # Invalidation conditions already have their own section; do not echo them (or the
+    # analysis summary) here as follow-up items.
+    return [{"action": action, "label": label}]
 
 
 def _build_data_quality(context_overview: Any, evidence: List[Dict[str, Any]]) -> Dict[str, Any]:

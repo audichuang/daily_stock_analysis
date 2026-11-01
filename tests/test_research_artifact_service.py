@@ -84,7 +84,7 @@ def test_build_research_artifact_from_report_with_evidence_and_invalidation() ->
     condition_ids = {item.id for item in artifact.invalidation_conditions}
     assert "price:stop_loss" in condition_ids
     assert "data_quality:limitations" in condition_ids
-    assert artifact.next_actions[-1].action == "monitor_invalidation"
+    assert [item.action for item in artifact.next_actions] == ["hold"]
 
 
 def test_build_research_artifact_always_includes_invalidation_conditions() -> None:
@@ -416,3 +416,70 @@ def test_block_titles_follow_report_language() -> None:
     overview = {"blocks": [{"key": "chip", "label": "筹码", "status": "missing"}]}
     assert _build_evidence({}, overview, "zh-TW")[0]["title"] == "籌碼"
     assert _build_evidence({}, overview, "zh")[0]["title"] == "筹码"
+
+
+def _delta_report(sniper_stop=41.0):
+    return {
+        "meta": {"stock_code": "2308.TW", "report_language": "zh-TW"},
+        "summary": {
+            "analysis_summary": "營收動能延續，回檔守住季線可續抱",
+            "trend_prediction": "看多",
+            "action": "hold",
+            "action_label": "續抱",
+        },
+        "strategy": {
+            "stop_loss": "收盤跌破 41 元（季線）且量增，代表波段結構破壞",
+            "stop_loss_price": sniper_stop,
+        },
+        "details": {},
+    }
+
+
+def test_structured_stop_loss_threshold_is_numeric_and_keeps_rationale() -> None:
+    artifact = build_research_artifact(_delta_report())
+    condition = next(item for item in artifact["invalidation_conditions"] if item["id"] == "price:stop_loss")
+    assert condition["threshold"] == "41.00"
+    assert condition["trigger"] == "收盤跌破 41.00"
+    assert condition["metadata"]["rationale"] == "收盤跌破 41 元（季線）且量增，代表波段結構破壞"
+
+
+def test_structured_take_profit_trigger_in_english() -> None:
+    artifact = build_research_artifact({
+        "meta": {"stock_code": "AAPL"},
+        "strategy": {"take_profit": "Near prior high 220 USD", "take_profit_price": 220},
+    })
+    condition = next(item for item in artifact["invalidation_conditions"] if item["id"] == "price:take_profit_review")
+    assert condition["threshold"] == "220.00"
+    assert condition["trigger"] == "Close above 220.00"
+    assert condition["metadata"]["rationale"] == "Near prior high 220 USD"
+
+
+def test_next_actions_do_not_copy_invalidation_or_summary() -> None:
+    artifact = build_research_artifact(_delta_report())
+    assert artifact["invalidation_conditions"]
+    assert all(item["action"] != "monitor_invalidation" for item in artifact["next_actions"])
+    summary = artifact["thesis"]["summary"]
+    assert all(item.get("reason") != summary for item in artifact["next_actions"])
+
+
+def test_thesis_reasons_drop_summary_echo_and_bare_trend_word() -> None:
+    thesis = build_research_artifact(_delta_report())["thesis"]
+    assert thesis["summary"] == "營收動能延續，回檔守住季線可續抱"
+    assert thesis["summary"] not in thesis["reasons"]
+    assert "看多" not in thesis["reasons"]
+
+
+def test_thesis_reasons_keep_distinct_trend_sentence() -> None:
+    report = _delta_report()
+    report["summary"]["trend_prediction"] = "短線震盪後偏多"
+    assert build_research_artifact(report)["thesis"]["reasons"] == ["短線震盪後偏多"]
+
+
+@pytest.mark.parametrize("sniper_stop", [None, float("nan")])
+def test_legacy_stop_loss_threshold_stays_verbatim(sniper_stop) -> None:
+    # 舊報告沒有結構化價位：門檻維持原文，不從長句解析數字。
+    artifact = build_research_artifact(_delta_report(sniper_stop=sniper_stop))
+    condition = next(item for item in artifact["invalidation_conditions"] if item["id"] == "price:stop_loss")
+    assert condition["threshold"] == "收盤跌破 41 元（季線）且量增，代表波段結構破壞"
+    assert condition["trigger"] == "收盤跌破 41 元（季線）且量增，代表波段結構破壞"
+    assert "rationale" not in condition.get("metadata", {})

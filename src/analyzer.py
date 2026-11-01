@@ -105,6 +105,7 @@ from src.schemas.decision_scale import (
 from src.schemas.report_schema import AnalysisReportSchema
 from src.market_context import detect_market, get_market_role, get_market_guidelines
 from src.services.daily_market_context import format_daily_market_context_prompt_section
+from src.services.report_decision_fields import preserve_model_advice
 from src.services.tw_backtest_context import (
     format_regime_block,
     format_revenue_momentum_row,
@@ -1910,6 +1911,7 @@ def _apply_hold_watch_dashboard(
     no_position: str,
     has_position: str,
     capital_flow_status: Optional[str] = None,
+    guardrail_kind: Optional[str] = None,
 ) -> None:
     result.operation_advice = advice
 
@@ -1919,6 +1921,7 @@ def _apply_hold_watch_dashboard(
     if not isinstance(core, dict):
         core = {}
         dashboard["core_conclusion"] = core
+    preserve_model_advice(core, guardrail_kind=guardrail_kind)
     core["signal_type"] = (
         "🟡持有观望" if language == "zh"
         else "🟡持有觀望" if language == "zh-TW"
@@ -2000,6 +2003,7 @@ def _downgrade_buy_without_capital_flow(
         no_position=no_position,
         has_position=has_position,
         capital_flow_status=status_text,
+        guardrail_kind="data_unavailable",
     )
     _sync_stability_dashboard_fields(result)
     logger.info("[decision_stability] Downgraded buy because capital flow is unavailable: %s", flow_status)
@@ -2142,6 +2146,7 @@ def _set_structural_hold_wording(
         flow_bias=flow_bias,
         no_position=no_position,
         has_position=has_position,
+        guardrail_kind="market_logic",
     )
     logger.info("[decision_stability] Applied structural hold calibration: %s", reason_key)
 

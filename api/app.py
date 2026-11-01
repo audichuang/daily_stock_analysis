@@ -43,6 +43,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.gzip import GZipMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -186,9 +187,16 @@ from src.services.stock_index_remote_service import (
 
 
 _STOCK_INDEX_FILENAME = "stocks.index.json"
+# The web client already cache-busts with an hourly `?_t=` query, so an
+# hour of shared caching keeps the same freshness without re-downloading.
 _STOCK_INDEX_HEADERS = {
-    "Cache-Control": "no-cache",
+    "Cache-Control": "public, max-age=3600",
 }
+
+# Vite emits content-hashed filenames (e.g. `index-B3x_kL9a.js`); their
+# content never changes for a given name, so they can be cached forever.
+_HASHED_ASSET_RE = re.compile(r"-[A-Za-z0-9_-]{8,}\.(js|css|woff2?)$")
+_HASHED_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable"
 
 
 def _bundled_stock_index_path() -> Path:
@@ -391,6 +399,11 @@ def create_app(static_dir: Optional[Path] = None) -> FastAPI:
     )
 
     add_auth_middleware(app)
+
+    # Added last so it is the outermost layer. Starlette excludes
+    # text/event-stream by default, so SSE progress/chat streams stay
+    # unbuffered.
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
     
     # ============================================================
     # 注册路由
@@ -541,7 +554,10 @@ def create_app(static_dir: Optional[Path] = None) -> FastAPI:
                 )
             if file_path.is_file():
                 relative_path = file_path.relative_to(assets_root).as_posix()
-                return await assets_static_files.get_response(relative_path, request.scope)
+                response = await assets_static_files.get_response(relative_path, request.scope)
+                if _HASHED_ASSET_RE.search(relative_path):
+                    response.headers["Cache-Control"] = _HASHED_ASSET_CACHE_CONTROL
+                return response
             return Response(
                 content="asset not found",
                 status_code=404,

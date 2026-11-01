@@ -8,6 +8,7 @@ from typing import Any, List
 
 from src.schemas.decision_action import decision_type_for_action
 from src.schemas.decision_scale import action_for_score, record_guardrail_score_adjustment
+from src.services.report_decision_fields import preserve_model_advice
 from src.report_language import (
     infer_decision_type_from_advice,
     localize_confidence_level,
@@ -119,6 +120,7 @@ def _sync_softened_dashboard_fields(
 
     core = dashboard.get("core_conclusion")
     if isinstance(core, dict):
+        preserve_model_advice(core, guardrail_kind="market_logic")
         core["one_sentence"] = softened_advice
         core["position_advice"] = _softened_position_advice(language)
 

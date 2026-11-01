@@ -10,6 +10,7 @@ from src.analysis_context_pack_prompt import CORE_DEGRADED_STATUSES
 from src.market_phase_summary import render_market_phase_summary
 from src.report_language import localize_confidence_level, normalize_report_language
 from src.schemas.decision_scale import record_guardrail_score_adjustment
+from src.services.report_decision_fields import preserve_model_advice
 from src.utils.zh_s2t import to_traditional
 
 if TYPE_CHECKING:
@@ -384,6 +385,8 @@ def _replace_postmarket_recap_fields(
         ko="현재 장중 단계이므로 장 마감 후 리뷰 표현 대신 실시간 상태·관찰 조건·다음 점검 시점을 기준으로 합니다.",
     )
     if _contains_any(core.get("one_sentence"), _patterns(language)):
+        # Only one_sentence is rewritten here; position_advice stays the model's own.
+        preserve_model_advice(core, guardrail_kind="market_logic", include_position_advice=False)
         core["one_sentence"] = safe_action
     if _contains_any(getattr(result, "operation_advice", ""), _patterns(language)):
         result.operation_advice = safe_action
