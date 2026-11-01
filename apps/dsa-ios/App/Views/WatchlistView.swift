@@ -98,32 +98,39 @@ struct WatchlistView: View {
 
     @ViewBuilder private func controls(banner: StockListBanner?) -> some View {
         if let banner {
-            StockListBannerView(banner: banner) { Task { await store.refresh() } }.plainRow()
+            StockListBannerView(banner: banner) { Task { await store.refresh() } }.plainRow(top: 8)
         }
         if let actionError {
             Text(actionError)
                 .font(.caption).foregroundStyle(Theme.warning)
                 .accessibilityIdentifier("watchlist.action-error")
-                .plainRow()
+                .plainRow(top: 8)
         }
         // 沒有分組時整列不出現，畫面與未分組前相同。
-        if !store.watchlistGroups.isEmpty { groupTabs.plainRow() }
-        Picker("持股範圍", selection: $group) {
-            ForEach(WatchlistScope.allCases) { Text($0.rawValue).tag($0) }
+        if !store.watchlistGroups.isEmpty { groupTabs.plainRow(top: 10) }
+        // 與今日頁「我的關注」同一種標題列：小型切換靠右，不再和上方市場切換疊成兩條全寬控制項。
+        HStack(alignment: .center) {
+            Text("自選").font(.headline).foregroundStyle(Theme.text)
+            Text("\(visible.count)").font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+            Spacer()
+            Picker("持股範圍", selection: $group) {
+                ForEach(WatchlistScope.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 150)
+            .accessibilityIdentifier("watchlist.group")
         }
-        .pickerStyle(.segmented)
-        .accessibilityIdentifier("watchlist.group")
-        .plainRow()
+        .plainRow(top: 14)
         if filterExpanded {
             TextField("篩選代號或名稱", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .accessibilityIdentifier("watchlist.filter-field")
-                .plainRow()
+                .plainRow(top: 8)
         }
-        summaryLine.plainRow()
-        columnHeader.plainRow()
+        summaryLine.plainRow(top: 12)
+        columnHeader.plainRow(top: 10, bottom: 4)
     }
 
     private func row(_ code: String) -> some View {
@@ -180,7 +187,7 @@ struct WatchlistView: View {
                 }
             }
             .accessibilityIdentifier("watchlist.indices")
-            .plainRow()
+            .plainRow(top: 10, bottom: 2)
         }
     }
 
@@ -198,7 +205,8 @@ struct WatchlistView: View {
     }
 
     private var summaryLine: some View {
-        let codes = marketCodes
+        // 統計目前顯示的清單：切到「持股」或分組時，漲跌家數要和上面的檔數對得起來。
+        let codes = visible
         let summary = StockListSummary(
             entries: codes.map { store.listEntry(for: $0) },
             actions: codes.map { code in
