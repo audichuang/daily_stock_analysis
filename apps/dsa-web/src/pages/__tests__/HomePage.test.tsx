@@ -439,6 +439,32 @@ describe('HomePage', () => {
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/?report=1', { replace: true }));
   });
 
+  it('drops the previous report when ?stock=<code> has no report of its own', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({ total: 0, page: 1, limit: 1, items: [] });
+    useStockPoolStore.setState({ selectedReport: historyReport });
+
+    render(
+      <MemoryRouter initialEntries={['/?stock=AAPL']}>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(useStockPoolStore.getState().selectedReport).toBeNull());
+  });
+
+  it('drops the previous report when the ?stock=<code> lookup fails', async () => {
+    vi.mocked(historyApi.getList).mockRejectedValue(new Error('down'));
+    useStockPoolStore.setState({ selectedReport: historyReport });
+
+    render(
+      <MemoryRouter initialEntries={['/?stock=AAPL']}>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(useStockPoolStore.getState().selectedReport).toBeNull());
+  });
+
   it('fills the search box from board navigation state without opening a report', async () => {
     vi.mocked(historyApi.getList).mockImplementation((params: { reportType?: string } = {}) => Promise.resolve({
       total: params.reportType === 'market_review' ? 0 : 1,

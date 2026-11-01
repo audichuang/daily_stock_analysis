@@ -1206,6 +1206,30 @@ describe('ChatPage', () => {
     expect(mockGetQuotes).toHaveBeenCalledWith(['2330.TW']);
   });
 
+  it('does not attach the previous stock answer to a newly active stock', async () => {
+    mockStoreState.activeStockContext = { stock_code: 'AAPL', canonical_id: 'AAPL', stock_name: 'Apple', asset_type: 'stock' } as ActiveStockContext;
+    mockStoreState.messages = [
+      { id: 'a-1', role: 'assistant', content: '台积电的回答', stockCode: '2330.TW',
+        structured: { conclusion: '逢回分批', resistance: 1100, support: 980, invalidation: '跌破季线', follow_ups: [] } },
+    ];
+    mockGetQuotes.mockResolvedValue([]);
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    await screen.findByText('台积电的回答');
+    expect(screen.queryByTestId('chat-stock-summary')).not.toBeInTheDocument();
+  });
+
+  it('keeps the summary card when the answer is about the active stock', async () => {
+    mockStoreState.activeStockContext = { stock_code: 'AAPL', canonical_id: 'AAPL', stock_name: 'Apple', asset_type: 'stock' } as ActiveStockContext;
+    mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '苹果的回答', stockCode: 'AAPL' }];
+    mockGetQuotes.mockResolvedValue([]);
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    expect(await screen.findByTestId('chat-stock-summary')).toBeInTheDocument();
+  });
+
   it('keeps the summary card and shows no-value marks when the quote fails', async () => {
     mockStoreState.activeStockContext = { stock_code: '2330.TW', canonical_id: '2330.TW', stock_name: '台积电', asset_type: 'stock' };
     mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '回答' }];

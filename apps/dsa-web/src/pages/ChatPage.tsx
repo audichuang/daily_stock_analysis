@@ -1315,7 +1315,8 @@ const ChatPage: React.FC = () => {
                                 ) : null}
                               </div>
                             )}
-                            {isLastAssistant && activeStockContext ? (
+                            {/* 新問題失敗時，最後一則回答還是上一檔的；不能掛到目前標的上。 */}
+                            {isLastAssistant && activeStockContext && (!msg.stockCode || msg.stockCode === activeStockContext.stock_code) ? (
                               <ChatStockSummaryCard stock={activeStockContext} quote={activeQuote} structured={msg.structured} />
                             ) : null}
                             {renderThinkingBlock(msg)}

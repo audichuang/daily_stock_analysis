@@ -49,6 +49,8 @@ export interface Message {
   /** ISO 時間；舊資料可能沒有，畫面就不顯示時間。 */
   createdAt?: string | null;
   structured?: StructuredAnswer | null;
+  /** 這則回答在講哪一檔；舊資料沒有。 */
+  stockCode?: string | null;
 }
 
 export interface StreamMeta {
@@ -565,6 +567,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
               backend: finalBackend,
               createdAt: new Date().toISOString(),
               structured: finalStructured,
+              stockCode: get().activeStockContext?.stock_code ?? null,
             },
           ],
         }));

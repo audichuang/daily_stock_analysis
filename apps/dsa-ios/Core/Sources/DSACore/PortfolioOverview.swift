@@ -230,7 +230,9 @@ public enum PortfolioInsights {
             result.append(PortfolioInsight(id: "loss", title: "最大虧損", value: DisplayNumber.percent(worst.unrealizedPnlPct, digits: 1),
                                            detail: worst.name ?? worst.symbol, isAlert: false))
         } else if !positions.isEmpty {
-            result.append(PortfolioInsight(id: "loss", title: "最大虧損", value: DisplayNumber.noValue, detail: "目前沒有虧損部位", isAlert: false))
+            // 缺報價、損益未知或缺匯率的部位還沒被判定過，不能說沒有虧損。
+            let allKnown = allPositions.allSatisfy { $0.priceAvailable && $0.unrealizedPnlPct != nil } && positions.count == allPositions.count
+            result.append(PortfolioInsight(id: "loss", title: "最大虧損", value: DisplayNumber.noValue, detail: allKnown ? "目前沒有虧損部位" : "部分部位損益未知", isAlert: false))
         }
         if let sector = risk?.sectorConcentration?.topSectors?.first, let weight = sector.weightPct {
             result.append(PortfolioInsight(id: "sector", title: "最大產業", value: DisplayNumber.number(weight, digits: 1) + "%",

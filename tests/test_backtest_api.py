@@ -152,12 +152,14 @@ class BacktestListApiTestCase(unittest.TestCase):
 
     def test_market_filter_keeps_us_tickers_with_cn_hk_prefixes(self):
         day = date.today() - timedelta(days=90)
-        rows = ["SHOP", "SHEL", "HKD", "SH600519", "HK00700"]
+        rows = ["SHOP", "SHEL", "HKD", "SH600519", "HK00700", "7203.T", "005930.KS", "000660.KQ", "600519"]
         for offset, code in enumerate(rows):
             self._add(900 + offset, code, "completed", day)
         us = {item["code"] for item in self._results(market="us")["items"]}
         self.assertTrue({"SHOP", "SHEL", "HKD"} <= us)
-        self.assertFalse({"SH600519", "HK00700"} & us)
+        self.assertFalse({"SH600519", "HK00700", "7203.T", "005930.KS", "000660.KQ"} & us)
+        self.assertNotIn("7203.T", {item["code"] for item in self._results(market="cn")["items"]})
+        self.assertIn("600519", {item["code"] for item in self._results(market="cn")["items"]})
         self.assertIn("SH600519", {item["code"] for item in self._results(market="cn")["items"]})
         self.assertIn("HK00700", {item["code"] for item in self._results(market="hk")["items"]})
 

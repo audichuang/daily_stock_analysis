@@ -195,6 +195,9 @@ class _AvgState:
     total_cost: float = 0.0
 
 
+_MAX_PREV_CLOSE_GAP_DAYS = 14
+
+
 @dataclass(frozen=True)
 class _ResolvedPositionPrice:
     price: float
@@ -1554,7 +1557,8 @@ class PortfolioService:
         price_info: _ResolvedPositionPrice,
     ) -> Optional[float]:
         """報價所屬場次的前一場收盤；優先用報價自帶的昨收，查無回 None（不用 0 冒充）。"""
-        if not price_info.is_available or price_info.price_date is None:
+        if not price_info.is_available or price_info.price_date is None or price_info.is_stale:
+            # 過期現價不屬於當前場次，兩場收盤的價差不是今日損益。
             return None
         if price_info.pre_close is not None and price_info.pre_close > 0:
             return float(price_info.pre_close)
@@ -1564,6 +1568,9 @@ class PortfolioService:
             anchor = latest_opened_session(market) or anchor
         close = self.repo.get_latest_close_with_date(symbol=symbol, as_of=anchor - timedelta(days=1))
         if close is None or close[0] <= 0:
+            return None
+        # 農曆年最長約 10 天；再久代表中間的場次缺資料，算出來的不是一日價差。
+        if close[1] is not None and (anchor - close[1]).days > _MAX_PREV_CLOSE_GAP_DAYS:
             return None
         return float(close[0])
 

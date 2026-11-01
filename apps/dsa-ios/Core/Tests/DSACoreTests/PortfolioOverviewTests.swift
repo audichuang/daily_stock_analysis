@@ -119,6 +119,13 @@ final class PortfolioOverviewTests: XCTestCase {
         XCTAssertEqual(PortfolioInsights.make(snapshot: value, risk: noWeights).map(\.id), ["loss"], "缺匯率時權重是 null，不顯示")
     }
 
+    func testUnknownPnlIsNotReportedAsNoLoss() throws {
+        let known = try snapshot(accounts: [account(1, market: "tw", currency: "TWD", positions: [position("2330.TW", value: 600, pnl: 10, cost: 590, quantity: 1, pct: 1.7)])])
+        XCTAssertEqual(PortfolioInsights.make(snapshot: known, risk: nil).first?.detail, "目前沒有虧損部位")
+        let unknown = try snapshot(accounts: [account(1, market: "tw", currency: "TWD", positions: [position("2330.TW", value: 600, pnl: 10, cost: 590, quantity: 1, available: false)])])
+        XCTAssertEqual(PortfolioInsights.make(snapshot: unknown, risk: nil).first?.detail, "部分部位損益未知")
+    }
+
     func testNativeTotalsForFilteredAccountsDoNotMixCurrencies() throws {
         let value = try snapshot(accounts: [account(1, market: "tw", currency: "TWD"), account(2, market: "us", currency: "USD")])
         XCTAssertEqual(value.accounts.filter { $0.market == "us" }.currencyTotals.map(\.currency), ["USD"])

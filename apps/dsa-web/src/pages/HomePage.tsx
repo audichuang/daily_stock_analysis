@@ -1010,13 +1010,18 @@ const HomePage: React.FC = () => {
       historyApi.getList({ stockCode: stockParam, limit: 1 })
         .then((response) => {
           const latest = response.items[0];
-          if (active && latest) {
-            clearMarketReviewState();
+          if (!active) return;
+          clearMarketReviewState();
+          if (latest) {
             void selectHistoryItem(latest.id);
+          } else if (selectedReportIdRef.current !== null) {
+            // 這檔沒有報告：留著輸入框的代號讓使用者按分析，不能繼續顯示上一檔的報告。
+            clearSelectedReport();
           }
         })
-        // 查不到就留在輸入框帶好代號的狀態，讓使用者自己按分析。
-        .catch(() => undefined);
+        .catch(() => {
+          if (active && selectedReportIdRef.current !== null) clearSelectedReport();
+        });
       return () => {
         active = false;
       };

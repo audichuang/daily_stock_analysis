@@ -691,7 +691,7 @@ class BacktestRepository:
             code.like("%.SH"),
             code.like("%.SZ"),
             code.like("%.BJ"),
-            and_(func.length(code) == 6, code >= "000000", code <= "999999"),
+            and_(func.length(code) == 6, code >= "000000", code <= "999999", not_(code.like("%.%"))),
         )
         if market == "tw":
             return tw
@@ -700,7 +700,9 @@ class BacktestRepository:
         if market == "cn":
             return cn
         if market == "us":
-            return not_(or_(tw, hk, cn))
+            # 日韓代號也不是美股；這張表沒有市場欄，只能靠後綴排除。
+            other = or_(code.like("%.T"), code.like("%.KS"), code.like("%.KQ"))
+            return not_(or_(tw, hk, cn, other))
         raise ValueError(f"Unsupported backtest market: {market}")
 
     @staticmethod
