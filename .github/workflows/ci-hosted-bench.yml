@@ -7,7 +7,7 @@ on:
     branches: ['ci/hosted-bench']
 
 env:
-  BENCH_SPLITS: '6 8'
+  BENCH_SPLITS: '2 4'
 
 jobs:
   plan:
@@ -56,7 +56,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: .github/requirements-ci.txt
       - name: Install dependencies
-        run: uv pip install --system -r .github/requirements-ci.txt
+        run: uv pip install --system -r .github/requirements-ci.txt pytest-xdist
       - name: Migrate market schema
         run: python -m alembic -c market_data/alembic.ini upgrade head
       - name: Offline tests
@@ -64,9 +64,11 @@ jobs:
           PYTEST_SPLITS: ${{ matrix.splits }}
           PYTEST_GROUP: ${{ matrix.group }}
           PYTEST_FIRST_SHARD_OVERHEAD: '20'
+          PYTEST_ADDOPTS: -n 4
         run: ./scripts/ci_gate.sh offline-tests
 
   web-gate:
+    if: false
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -93,6 +95,7 @@ jobs:
       - run: npx playwright test --config playwright.fixture.config.ts
 
   docker-build:
+    if: false
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
