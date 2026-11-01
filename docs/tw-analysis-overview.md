@@ -97,6 +97,7 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
 | `TW_MACRO_CONTEXT_AB_RATIO` | `0` | 未設（`0`） | 台股 prompt 追加「總經背景」資訊區塊（`market.macro_series` 日線，固定句「只當資訊，不得據此調整分數或動作；未經回測」）的比例；分組與均線實驗不相關，標 `dashboard.experiments.macro_ctx=on/off` | 先設 `0.5` 跑同期對照，用 `shadow_buy_eval.py --forecast` 看 Brier 有沒有差；`0` 時不寫任何標籤 |
 | `ANALYST_CONSENSUS_ENABLED` | `false` | `true` | 賣方共識資訊區塊 | 可開 |
 | `EVENT_OUTLOOK_ENABLED` | `false` | 未設（`false`） | 事件展望 `dashboard.event_outlook`：LLM 判斷財報超預期／符合／不及、各情境動作、新聞影響；只當證據不改評分。美股才抓法人預估，台股一律 `insufficient_data`；數字與日期以證據為準（`src/services/event_outlook.py`）；回驗 `make verify-event-outlook` | 試跑後再開 |
+| `FINANCIAL_COMMENTARY_ENABLED` | `false` | 未設（`false`） | Web／iOS 財報區塊的 AI 導讀；不進個股分析 prompt、不改評分。數字與固定教學不受影響（`docs/stock-financials.md`） | 試跑後再開 |
 | `TW_LIVE_EVENTS_ENABLED` | `true` | 未設（`true`） | 處置／注意與事件日曆 | 保持開 |
 | `TW_BROKER_INDEX_TARGETS` | 空 | 未設 | 人工維護一行券商年底指數目標，30 天未更新就不顯示 | 選用 |
 | `PROMPT_VARIANT` | `baseline` | 未設（`baseline`） | 報告上的提示詞版本標籤 | A/B 時改 |

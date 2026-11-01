@@ -6,6 +6,7 @@ import { formatModelLabel, getReportText, normalizeReportLanguage } from '../../
 import { AnalysisContextSummary } from './AnalysisContextSummary';
 import { EventGapCard, ReportChangeConditions } from './EventGapCard';
 import { EvidenceSection } from './EvidenceSection';
+import { FinancialsPanel } from './FinancialsPanel';
 import { MarketReviewReportView } from './MarketReviewReportView';
 import { ReportDetails } from './ReportDetails';
 import { ReportDiagnostics } from './ReportDiagnostics';
@@ -87,6 +88,8 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
 
       {/* 事件展望：判斷與各情境動作 */}
       <ReportEventOutlook outlook={report.eventOutlook} language={reportLanguage} />
+
+      {meta.stockCode ? <FinancialsPanel stockCode={meta.stockCode} /> : null}
 
       {levelsBlocked ? null : (
         <ReportStrategy

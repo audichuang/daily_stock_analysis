@@ -45,6 +45,7 @@ import { formatDateTime, formatNumber, formatPercent, formatPrice, NO_VALUE } fr
 import { cn } from '../utils/cn';
 import { isTwStockCode, stockCodeMatchKey } from '../utils/stockCode';
 import { BoardDossierCell, BoardDossierPanel } from '../components/board/BoardDossier';
+import { FinancialsPanel } from '../components/report/FinancialsPanel';
 import { marketToneClass } from '../utils/marketTone';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -977,6 +978,9 @@ const RealtimeBoardPage: React.FC = () => {
               </Button>
             </div>
           </div>
+        </div>
+        <div className="px-3 pb-3">
+          <FinancialsPanel stockCode={row.code} />
         </div>
       </div>
     );

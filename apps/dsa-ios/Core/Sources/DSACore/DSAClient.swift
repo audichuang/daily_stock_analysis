@@ -125,6 +125,16 @@ public struct DSAClient: Sendable {
         try await get(["stocks", code, "profile"], query: [URLQueryItem(name: "history_days", value: String(historyDays))])
     }
 
+    /// 個股季度財報；只讀 AI 導讀快取，不會觸發 LLM。
+    public func stockFinancials(_ code: String) async throws -> StockFinancials {
+        try await get(["stocks", code, "financials"])
+    }
+
+    /// 沒有快取時才會打 LLM（約 20~60 秒），所以放寬逾時；同一份財報只生成一次。
+    public func financialCommentary(_ code: String) async throws -> FinancialCommentary {
+        try await post(["stocks", code, "financials", "commentary"], body: EmptyBody(), timeout: 180)
+    }
+
     /// 分時走勢（`range=day`）：台股走 Shioaji 分鐘線、其他市場走 yfinance 5 分鐘線；只有價沒有量。
     public func stockTrend(_ code: String, range: String = "day") async throws -> StockTrend {
         try await get(["stocks", code, "trend"], query: [URLQueryItem(name: "range", value: range)])
@@ -175,9 +185,12 @@ public struct DSAClient: Sendable {
         return try await perform(URLRequest(url: url))
     }
 
-    private func post<T: Decodable, Body: Encodable>(_ path: [String], body: Body) async throws -> T {
+    private struct EmptyBody: Encodable {}
+
+    private func post<T: Decodable, Body: Encodable>(_ path: [String], body: Body, timeout: TimeInterval = 60) async throws -> T {
         let url = try makeURL(path: path)
         var request = URLRequest(url: url)
+        request.timeoutInterval = timeout
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let encoder = JSONEncoder()
@@ -217,7 +230,7 @@ public struct DSAClient: Sendable {
 
     private func responseData(_ original: URLRequest) async throws -> Data {
         var request = original
-        request.timeoutInterval = 60
+        request.timeoutInterval = max(60, original.timeoutInterval)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.cachePolicy = .reloadIgnoringLocalCacheData
         // 阻止 307/308 把登入密碼或寫入內容轉送到不同伺服器。

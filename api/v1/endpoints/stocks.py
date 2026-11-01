@@ -37,6 +37,8 @@ from api.v1.schemas.stocks import (
     IntradayTrendItem,
     KLineData,
     StockHistoryResponse,
+    FinancialCommentary,
+    StockFinancialsResponse,
     StockProfileResponse,
     StockQuote,
     StockQuoteBatchItem,
@@ -926,6 +928,38 @@ def get_stock_trend(
             status_code=500,
             detail={"error": "internal_error", "message": f"获取走势失败: {str(e)}"},
         )
+
+
+@router.get(
+    "/{stock_code}/financials",
+    response_model=StockFinancialsResponse,
+    responses={400: {"description": "股票代號格式不合法", "model": ErrorResponse}},
+    summary="個股季度財報與 AI 導讀快取",
+    description="台股讀本地 market.financial_statement；美股即時讀 SEC companyfacts、備援 yfinance。"
+                "金額一律是 1 元財報幣別。只讀導讀快取，不會呼叫 LLM；缺資料以 status 表示，HTTP 仍是 200。",
+)
+def get_stock_financials(stock_code: str) -> StockFinancialsResponse:
+    from src.services.financial_commentary import cached_view
+    from src.services.stock_financials import build_financials
+
+    payload = build_financials(_validate_and_normalize_stock_code(stock_code))
+    return StockFinancialsResponse(**payload, commentary=cached_view(payload))
+
+
+@router.post(
+    "/{stock_code}/financials/commentary",
+    response_model=FinancialCommentary,
+    responses={400: {"description": "股票代號格式不合法", "model": ErrorResponse}},
+    summary="取得或生成財報 AI 導讀",
+    description="同一檔、同一財報期間、同一份數字只呼叫一次 LLM（約 20~60 秒）；"
+                "開關關閉回 disabled，失敗回 failed，數字不受影響。",
+)
+def ensure_stock_financial_commentary(stock_code: str) -> FinancialCommentary:
+    from src.services.financial_commentary import ensure_commentary
+    from src.services.stock_financials import build_financials
+
+    payload = build_financials(_validate_and_normalize_stock_code(stock_code))
+    return FinancialCommentary(**ensure_commentary(payload))
 
 
 @router.get(

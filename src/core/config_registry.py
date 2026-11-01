@@ -79,6 +79,8 @@ WEB_SETTINGS_HIDDEN_FROM_UI = {
     "DEEPSEEK_SEARCH_API_KEYS",
     # SEC 聯絡資訊僅由環境設定，不新增 Web 編輯介面。
     "SEC_EDGAR_USER_AGENT",
+    # 財報導讀開關僅由環境設定，不新增 Web 編輯介面。
+    "FINANCIAL_COMMENTARY_ENABLED",
     # 事件判讀僅由環境設定，不新增 Web 編輯介面。
     "EVENT_GAP_DECISION_ENABLED",
     "EVENT_GAP_THRESHOLD_PCT",

@@ -120,6 +120,26 @@ class CalendarEventRecord(Base):
     updated_at = Column(DateTime, nullable=False, default=utc_naive_now)
 
 
+class FinancialCommentaryRecord(Base):
+    """財報 AI 導讀快取：同一檔、同一財報期間、同一份數字只生成一次。"""
+
+    __tablename__ = 'financial_commentary'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code = Column(String(32), nullable=False)
+    period_key = Column(String(16), nullable=False)
+    source = Column(String(48), nullable=False)
+    prompt_version = Column(String(16), nullable=False)
+    data_hash = Column(String(64), nullable=False)
+    content = Column(Text, nullable=False)
+    model = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_naive_now)
+
+    __table_args__ = (
+        UniqueConstraint('stock_code', 'period_key', 'source', 'prompt_version', 'data_hash',
+                         name='uix_financial_commentary_identity'),
+    )
+
+
 class StockDaily(Base):
     """
     股票日线数据模型
@@ -1490,6 +1510,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             self._ensure_intelligence_items_unique_index()
             self._ensure_chat_session_schema()
             self._ensure_calendar_event_schema()
+            self._ensure_financial_commentary_schema()
             self._ensure_news_intel_link_schema()
 
             self._initialized = True
@@ -1553,6 +1574,53 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         self._ensure_schema_migration_record(
             version="2026-11-01-calendar-events",
             description="Add application calendar cache (including undated earnings)",
+        )
+
+    def get_financial_commentary(self, *, stock_code: str, period_key: str, source: str,
+                                 prompt_version: str, data_hash: str) -> Optional[Dict[str, Any]]:
+        """財報導讀快取查詢；內容壞掉視為沒有，呼叫端會重新生成。"""
+        with self.session_scope() as session:
+            record = session.execute(select(FinancialCommentaryRecord).where(
+                FinancialCommentaryRecord.stock_code == stock_code,
+                FinancialCommentaryRecord.period_key == period_key,
+                FinancialCommentaryRecord.source == source,
+                FinancialCommentaryRecord.prompt_version == prompt_version,
+                FinancialCommentaryRecord.data_hash == data_hash,
+            )).scalars().first()
+            if record is None:
+                return None
+            try:
+                content = json.loads(record.content)
+            except ValueError:
+                logger.warning("財報導讀快取內容損壞: %s %s", stock_code, period_key)
+                return None
+            return {"content": content, "model": record.model,
+                    "created_at": record.created_at.isoformat() if record.created_at else None}
+
+    def save_financial_commentary(self, *, stock_code: str, period_key: str, source: str, prompt_version: str,
+                                  data_hash: str, content: Dict[str, Any], model: Optional[str]) -> None:
+        """同鍵已有列就覆寫：走到這裡代表舊列已被判定不可用（如引用的月營收已更正），留著會讓每次開頁都重付 LLM。"""
+        body = json.dumps(content, ensure_ascii=False)
+        short_model = (model or "")[:128] or None
+        try:
+            with self.session_scope() as session:
+                session.add(FinancialCommentaryRecord(
+                    stock_code=stock_code, period_key=period_key, source=source, prompt_version=prompt_version,
+                    data_hash=data_hash, content=body, model=short_model,
+                ))
+        except IntegrityError:
+            with self.session_scope() as session:
+                session.query(FinancialCommentaryRecord).filter_by(
+                    stock_code=stock_code, period_key=period_key, source=source,
+                    prompt_version=prompt_version, data_hash=data_hash,
+                ).update({"content": body, "model": short_model, "created_at": utc_naive_now()})
+
+    def _ensure_financial_commentary_schema(self) -> None:
+        """可重入的追加 migration；既有應用庫只建新表。"""
+        FinancialCommentaryRecord.__table__.create(self._engine, checkfirst=True)
+        self._ensure_schema_migration_record(
+            version="2026-11-01-financial-commentary",
+            description="Add financial commentary cache",
         )
 
     def _ensure_chat_session_schema(self) -> None:

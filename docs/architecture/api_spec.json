@@ -4949,6 +4949,112 @@
           }
         }
       }
+    },
+    "/api/v1/stocks/{stock_code}/financials": {
+      "get": {
+        "tags": [
+          "Stocks"
+        ],
+        "summary": "個股季度財報與 AI 導讀快取",
+        "description": "台股讀本地 market.financial_statement；美股即時讀 SEC companyfacts、備援 yfinance。金額一律是 1 元財報幣別。只讀導讀快取，不會呼叫 LLM；缺資料以 status 表示，HTTP 仍是 200。",
+        "operationId": "get_stock_financials_api_v1_stocks__stock_code__financials_get",
+        "parameters": [
+          {
+            "name": "stock_code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Stock Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StockFinancialsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "股票代號格式不合法",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/stocks/{stock_code}/financials/commentary": {
+      "post": {
+        "tags": [
+          "Stocks"
+        ],
+        "summary": "取得或生成財報 AI 導讀",
+        "description": "同一檔、同一財報期間、同一份數字只呼叫一次 LLM（約 20~60 秒）；開關關閉回 disabled，失敗回 failed，數字不受影響。",
+        "operationId": "ensure_stock_financial_commentary_api_v1_stocks__stock_code__financials_commentary_post",
+        "parameters": [
+          {
+            "name": "stock_code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Stock Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancialCommentary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "股票代號格式不合法",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -17916,6 +18022,697 @@
         "type": "object",
         "title": "SniperPrices",
         "description": "模型判斷的狙擊點位數字；每格是價位或 null（null = 模型判斷沒有可執行價位）。\n\n與 ``SniperPoints`` 同一組價位，``SniperPoints`` 是給人看的文字，系統只讀這裡的數字。"
+      },
+      "FinancialCommentary": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "missing",
+              "disabled",
+              "failed",
+              "not_applicable"
+            ],
+            "title": "Status",
+            "description": "missing＝還沒生成（客戶端可 POST commentary）；disabled＝開關未開"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period"
+          },
+          "generated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "highlights": {
+            "items": {
+              "$ref": "#/components/schemas/FinancialHighlight"
+            },
+            "type": "array",
+            "title": "Highlights"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "FinancialCommentary"
+      },
+      "FinancialCrossCheck": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "matched",
+              "mismatch",
+              "unavailable"
+            ],
+            "title": "Status"
+          },
+          "compared": {
+            "type": "integer",
+            "title": "Compared"
+          },
+          "mismatches": {
+            "items": {
+              "$ref": "#/components/schemas/FinancialCrossCheckMismatch"
+            },
+            "type": "array",
+            "title": "Mismatches"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "status",
+          "compared"
+        ],
+        "title": "FinancialCrossCheck"
+      },
+      "FinancialCrossCheckMismatch": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "period": {
+            "type": "string",
+            "title": "Period"
+          },
+          "primary": {
+            "type": "number",
+            "title": "Primary"
+          },
+          "secondary": {
+            "type": "number",
+            "title": "Secondary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "period",
+          "primary",
+          "secondary"
+        ],
+        "title": "FinancialCrossCheckMismatch"
+      },
+      "FinancialHighlight": {
+        "properties": {
+          "metric_key": {
+            "type": "string",
+            "title": "Metric Key",
+            "description": "對應 metrics[].key 或 monthly_revenue"
+          },
+          "period": {
+            "type": "string",
+            "title": "Period",
+            "description": "對應 periods[].key；月營收是 YYYY-MM"
+          },
+          "importance": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Importance"
+          },
+          "what_happened": {
+            "type": "string",
+            "title": "What Happened"
+          },
+          "why_it_matters": {
+            "type": "string",
+            "title": "Why It Matters"
+          },
+          "how_to_read": {
+            "type": "string",
+            "title": "How To Read"
+          }
+        },
+        "type": "object",
+        "required": [
+          "metric_key",
+          "period",
+          "importance",
+          "what_happened",
+          "why_it_matters",
+          "how_to_read"
+        ],
+        "title": "FinancialHighlight"
+      },
+      "FinancialMetric": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "amount",
+              "ratio",
+              "per_share"
+            ],
+            "title": "Kind"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit",
+            "description": "TWD、USD、%、TWD/股、TWD/ADR"
+          },
+          "definition": {
+            "type": "string",
+            "title": "Definition",
+            "description": "這個指標怎麼看（固定教學，與 AI 無關）"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/FinancialMetricPoint"
+            },
+            "type": "array",
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "kind",
+          "unit",
+          "definition",
+          "points"
+        ],
+        "title": "FinancialMetric"
+      },
+      "FinancialMetricPoint": {
+        "properties": {
+          "period": {
+            "type": "string",
+            "title": "Period"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value",
+            "description": "金額是 1 元財報幣別，比率是百分比；沒有讀數是 null"
+          },
+          "yoy_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yoy Pct",
+            "description": "年增率（%）；比率欄或基期 ≤0 時為 null"
+          },
+          "qoq_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qoq Pct",
+            "description": "季增率（%）；比率欄或基期 ≤0 時為 null"
+          },
+          "yoy_pp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yoy Pp",
+            "description": "比率欄的年變化（百分點）"
+          },
+          "qoq_pp": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qoq Pp",
+            "description": "比率欄的季變化（百分點）"
+          },
+          "derived": {
+            "type": "boolean",
+            "title": "Derived",
+            "description": "由累計值差分而來，不是來源直接揭露的單季值",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "period"
+        ],
+        "title": "FinancialMetricPoint"
+      },
+      "FinancialNotApplicable": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "reason"
+        ],
+        "title": "FinancialNotApplicable"
+      },
+      "FinancialPeriod": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key",
+            "description": "期間鍵，如 2026Q2；美股是公司自己的會計年度"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "fiscal_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fiscal Year"
+          },
+          "fiscal_quarter": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fiscal Quarter"
+          },
+          "period_end": {
+            "type": "string",
+            "title": "Period End",
+            "description": "期末日 YYYY-MM-DD"
+          },
+          "announce_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Announce Date",
+            "description": "公告或申報日，語意見 announce_date_kind"
+          },
+          "announce_date_kind": {
+            "type": "string",
+            "enum": [
+              "filed",
+              "statutory_deadline",
+              "unknown"
+            ],
+            "title": "Announce Date Kind",
+            "description": "filed＝實際申報日；statutory_deadline＝法定期限（實際可能更早）；unknown＝來源沒有"
+          },
+          "filing_form": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filing Form"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "period_end",
+          "announce_date_kind"
+        ],
+        "title": "FinancialPeriod"
+      },
+      "FinancialSource": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "source_unit": {
+            "type": "string",
+            "title": "Source Unit",
+            "description": "來源原始單位；回應的金額已統一換算成 1 元"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "source_unit"
+        ],
+        "title": "FinancialSource"
+      },
+      "MonthlyRevenuePoint": {
+        "properties": {
+          "month": {
+            "type": "string",
+            "title": "Month",
+            "description": "YYYY-MM"
+          },
+          "revenue": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revenue",
+            "description": "1 元（來源是千元，已換算）"
+          },
+          "yoy_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yoy Pct"
+          },
+          "mom_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mom Pct"
+          },
+          "announce_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Announce Date"
+          }
+        },
+        "type": "object",
+        "required": [
+          "month"
+        ],
+        "title": "MonthlyRevenuePoint"
+      },
+      "StockFinancialsResponse": {
+        "properties": {
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "market": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "tw",
+                  "us"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "no_data",
+              "not_applicable",
+              "unsupported",
+              "unavailable"
+            ],
+            "title": "Status"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
+          },
+          "stock_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Name"
+          },
+          "template": {
+            "type": "string",
+            "enum": [
+              "general",
+              "financial"
+            ],
+            "title": "Template",
+            "default": "general"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency",
+            "description": "財報幣別；ADR 可能與交易幣別不同（TSM 是 TWD）"
+          },
+          "trading_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trading Currency"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FinancialSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cross_check": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FinancialCrossCheck"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "periods": {
+            "items": {
+              "$ref": "#/components/schemas/FinancialPeriod"
+            },
+            "type": "array",
+            "title": "Periods"
+          },
+          "metrics": {
+            "items": {
+              "$ref": "#/components/schemas/FinancialMetric"
+            },
+            "type": "array",
+            "title": "Metrics"
+          },
+          "not_applicable": {
+            "items": {
+              "$ref": "#/components/schemas/FinancialNotApplicable"
+            },
+            "type": "array",
+            "title": "Not Applicable"
+          },
+          "monthly_revenue": {
+            "items": {
+              "$ref": "#/components/schemas/MonthlyRevenuePoint"
+            },
+            "type": "array",
+            "title": "Monthly Revenue"
+          },
+          "ttm_revenue_yoy_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ttm Revenue Yoy Pct"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Limitations"
+          },
+          "is_stale": {
+            "type": "boolean",
+            "title": "Is Stale",
+            "default": false
+          },
+          "commentary": {
+            "$ref": "#/components/schemas/FinancialCommentary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stock_code",
+          "status",
+          "commentary"
+        ],
+        "title": "StockFinancialsResponse"
       }
     },
     "securitySchemes": {
