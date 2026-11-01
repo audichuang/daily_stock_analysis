@@ -426,6 +426,41 @@ def test_notify_failure_title_topic_defaults_and_overrides(tmp_path):
     assert lines[2] == "run|python|scripts/notify.py|--topic|morning|--title|回驗|STDIN=內文3"
 
 
+def _adjust_alert_run(tmp_path, log_body):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "uv").write_text(f'#!/bin/sh\n{{ printf "%s|" "$@"; printf "STDIN=%s" "$(cat)"; echo; }} >> "{tmp_path}/uv_args"\n')
+    (bindir / "doppler").write_text('#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n')
+    for f in bindir.iterdir():
+        f.chmod(0o755)
+    log = tmp_path / "run.log"
+    log.write_text(log_body, encoding="utf-8")
+    r = _run_bash(f'LOG="{log}"; notify_adjust_alerts; echo rc=$?',
+                  env_extra={"PATH": f"{bindir}:{os.environ['PATH']}"})
+    return r, tmp_path / "uv_args"
+
+
+def test_adjust_alert_in_log_pushes_system_notice(tmp_path):
+    r, sent = _adjust_alert_run(tmp_path, "x\nADJUST_ALERT: twse_twtcau 更新失敗，沿用既有列（boom）\ny\n")
+    assert "rc=0" in r.stdout
+    text = sent.read_text(encoding="utf-8")
+    assert "--topic|system|--title|復權官方來源失敗" in text
+    assert "twse_twtcau 更新失敗" in text
+
+
+def test_no_adjust_alert_no_notice(tmp_path):
+    # 只有 **WARN 不推；這個標記才是通知的契約，否則每個來源的 WARN 都會吵一次
+    r, sent = _adjust_alert_run(tmp_path, "**WARN holding_dist: x\nnot ADJUST_ALERT: y\n")
+    assert "rc=0" in r.stdout
+    assert not sent.exists()
+
+
+def test_main_checks_adjust_alert_right_after_daily():
+    source = SCRIPT.read_text(encoding="utf-8")
+    daily = source.index("python -m market_data.cli daily")
+    assert source.index("notify_adjust_alerts\n", daily) < source.index("market_data.cli health --strict", daily)
+
+
 def _notify_bin(tmp_path, uv_body):
     bindir = tmp_path / "bin"
     bindir.mkdir()

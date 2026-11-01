@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修復] 復權因子接上官方分割與面額變更表（TWSE `TWTCAU`、`TWTB8U`，TPEx `pvChgRslt`、`etfSplitRslt`），比例一律用官方「前收→參考價」；修正 00631L（1/23→1/22）、00685L（1/25→1/24），補上 7 檔 ETF 分割與 6531、5536、8476 的面額變更。官方列優先於人工核對與價格推導；`daily` 時單一來源失敗沿用既有列、不擋其他資料，並由每日報告推系統通知。寫入正式庫要另跑 `cli adjust`，之後 ETF 與這些個股的歷史還原價、報酬會改變。
+- [新功能] `market_data.cli adjust --dry-run`：只印新增／修改／刪除／不變清單與修正前後還原報酬，連線強制唯讀。
+- [修復] `cli adjust` 重建時官方來源抓到未來 90 天，不再刪掉已公告的未來事件（下次 `daily` 才補回）。
+- [修復] `cli adjust --start` 區間重建：事件日無成交、復牌跨越起點時不再多推一筆因子；dry-run 改用全市場交易日計算，並列出推導列與官方事件的重複。
+- [修復] 股票索引的 8908 欣雄改為 `.TW`（2026-10-16 轉上市）。
 - [改進] 新聞品質：台股查詢改用繁中與公開資訊觀測站（原本帶簡體與上交所、cninfo）；財報面向走新聞模式；事件面向濾掉無日期的資料頁與影片。
 - [改進] iOS 新增 `DSARadius`／`DSASpacing`／`DSAType` 與 `ActionTone`，動作依結構化枚舉顯示詞彙表用語（舊報告「減倉」顯示「減碼」）並改用主色、灰、琥珀；統一 U+2212 負號，新增 `DisplayFormat.price`、`moneyWhole`，移除英文眉標，捲動頁加底部內距避免分頁列蓋住最後一列。
 - [改進] Web 新增 `Segmented`、`FilterBar`（取代 Toolbar，手機次要條件進 Drawer 並顯示已套用數）與 `statusLabels` 狀態碼對照（未知碼中性灰）；`Input`、`Select`、`Button` md 統一 36px。

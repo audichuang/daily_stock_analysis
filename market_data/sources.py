@@ -426,7 +426,7 @@ def crawl_reduction(start, end):
     """TWTAUU:上市股票減資(含退還股款/彌補虧損)恢復買賣參考價格。
 
     這是 ``ex_dividend``(TWT49U)沒有的事件類型——減資會讓股價跳升,不還原會被
-    當成真實暴漲。注意本表**不含面額變更(股票分割)**,分割需另行推導。
+    當成真實暴漲。注意本表**不含面額變更(股票分割)**,分割走 ``crawl_twse_par_value_change``。
     """
     r = requests_get(
         "https://www.twse.com.tw/rwd/zh/reducation/TWTAUU",
@@ -651,6 +651,135 @@ def crawl_tpex_revivt(start, end):
     if payload.get("stat") != "ok" or payload.get("date") != f"{start:%Y%m%d}~{end:%Y%m%d}":
         return None
     return parse_tpex_revivt(payload)
+
+
+# ---- 分割／面額變更恢復買賣（官方「前收→參考價」，復權比例的唯一來源）----
+# 回顯的請求日期只證明參數有被讀到，證明不了資料；所以每列日期都要落在請求區間內才收。
+# 這幾張表的空窗口是常態（`stat` 正常、0 列），空結果不算失敗。
+
+
+def _resume_rows(data, idx, label, start, end, *, code, before, ref, parse_day):
+    """把恢復買賣表的列轉成 DataFrame(stock_id, date, close_before, reference_price)。
+
+    任一列日期落在請求區間外 → ``ValueError`` 整包拒收（端點回了別段資料）。
+    個別列無法解析（官方註明前收可能從缺）只跳過該列並印 ``**WARN``；全部無法解析視為改版。
+    """
+    rows, skipped = [], []
+    for r in data:
+        try:
+            day = parse_day(r[idx["恢復買賣日期"]])
+        except (ValueError, TypeError, IndexError):
+            skipped.append(r)
+            continue
+        if not start <= day <= end:
+            raise ValueError(f"{label} 回傳區間外的列 {day}（請求 {start} ~ {end}）")
+        try:
+            close_before = float(str(r[idx[before]]).replace(",", ""))
+            reference = float(str(r[idx[ref]]).replace(",", ""))
+        except (ValueError, TypeError, IndexError):
+            skipped.append(r)
+            continue
+        if close_before <= 0 or reference <= 0:
+            skipped.append(r)
+            continue
+        rows.append({"stock_id": str(r[idx[code]]).strip(), "date": pd.Timestamp(day),
+                     "close_before": close_before, "reference_price": reference})
+    if skipped and not rows:
+        raise ValueError(f"{label} 全部 {len(skipped)} 列都無法解析，格式可能已變更")
+    if skipped:
+        print(f"**WARN: {label} 跳過 {len(skipped)} 列無法解析: {skipped[:3]}", flush=True)
+    return pd.DataFrame(rows, columns=["stock_id", "date", "close_before", "reference_price"])
+
+
+def parse_twse_resume(payload, start, end, *, code, label):
+    """TWSE 恢復買賣表 JSON（TWTCAU／TWTB8U）。日期回顯位置兩表不同：前者在頂層、後者在 ``params``。"""
+    if payload.get("stat") != "OK":
+        raise ValueError(f"{label} stat={payload.get('stat')!r}")
+    echo = payload.get("params") or payload
+    want = (f"{start:%Y%m%d}", f"{end:%Y%m%d}")
+    if (echo.get("startDate"), echo.get("endDate")) != want:
+        raise ValueError(f"{label} 回應日期 {echo.get('startDate')}~{echo.get('endDate')} 與請求 {want} 不符")
+    fields = payload.get("fields") or []
+    idx = {name: i for i, name in enumerate(fields)}
+    need = ("恢復買賣日期", code, "停止買賣前收盤價格", "恢復買賣參考價")
+    if not all(k in idx for k in need):
+        raise ValueError(f"{label} 欄位不符預期: {fields}")
+    return _resume_rows(payload.get("data") or [], idx, label, start, end, code=code,
+                        before="停止買賣前收盤價格", ref="恢復買賣參考價",
+                        parse_day=_roc_slash_to_date)
+
+
+def _compact_roc_to_date(s):
+    """"1151002" -> 2026-10-02（TPEx bulletin 的緊湊民國日期）。"""
+    raw = str(s).strip()
+    return datetime.date(int(raw[:-4]) + 1911, int(raw[-4:-2]), int(raw[-2:]))
+
+
+def parse_tpex_resume(payload, start, end, *, label):
+    """TPEx 恢復買賣表 JSON（pvChgRslt／etfSplitRslt，兩表欄位相同）。"""
+    if payload.get("stat") != "ok":
+        raise ValueError(f"{label} stat={payload.get('stat')!r}")
+    if payload.get("date") != f"{start:%Y%m%d}~{end:%Y%m%d}":
+        raise ValueError(f"{label} 回應日期 {payload.get('date')} 與請求 {start}~{end} 不符")
+    tables = payload.get("tables") or []
+    if not tables:
+        raise ValueError(f"{label} 回應沒有 tables")
+    fields = tables[0].get("fields") or []
+    idx = {name: i for i, name in enumerate(fields)}
+    need = ("恢復買賣日期", "證券代號", "最後交易日之收盤價格", "恢復買賣開始參考價")
+    if not all(k in idx for k in need):
+        raise ValueError(f"{label} 欄位不符預期: {fields}")
+    return _resume_rows(tables[0].get("data") or [], idx, label, start, end, code="證券代號",
+                        before="最後交易日之收盤價格", ref="恢復買賣開始參考價",
+                        parse_day=_compact_roc_to_date)
+
+
+def _crawl_resume(url, params, parse, label):
+    """走 ``tw_official_http``；取得或解析失敗印 ``**WARN`` 回 None，合法的零列回空 DataFrame。"""
+    resp, reason = tw_official_http.get(url, params=params, expect="json")
+    if reason:
+        print(f"**WARN: {label} {reason}", flush=True)
+        return None
+    try:
+        return parse(resp.json())
+    except ValueError as exc:
+        print(f"**WARN: {label} 拒收: {exc}", flush=True)
+        return None
+
+
+def _crawl_twse_resume(path, code, label, start, end):
+    return _crawl_resume(
+        f"https://www.twse.com.tw/rwd/zh/{path}",
+        {"startDate": f"{start:%Y%m%d}", "endDate": f"{end:%Y%m%d}", "response": "json"},
+        lambda p: parse_twse_resume(p, start, end, code=code, label=label), label)
+
+
+def _crawl_tpex_resume(action, label, start, end):
+    """呼叫端要逐年切段：實測 ``2010/01/01~2026/11/01`` 一次查 ``stat ok``、日期回顯吻合卻回 0 列，起點 2011 則有 14 列。"""
+    return _crawl_resume(
+        f"https://www.tpex.org.tw/www/zh-tw/bulletin/{action}",
+        {"startDate": f"{start:%Y/%m/%d}", "endDate": f"{end:%Y/%m/%d}", "response": "json"},
+        lambda p: parse_tpex_resume(p, start, end, label=label), label)
+
+
+def crawl_twse_etf_split(start, end):
+    """上市 ETF 分割／反分割恢復買賣參考價（``split/TWTCAU``）。``分割(反分割)`` 欄可能空白，不靠它判方向。"""
+    return _crawl_twse_resume("split/TWTCAU", "ETF代號", "TWTCAU", start, end)
+
+
+def crawl_twse_par_value_change(start, end):
+    """上市變更股票面額恢復買賣參考價（``change/TWTB8U``）。"""
+    return _crawl_twse_resume("change/TWTB8U", "股票代號", "TWTB8U", start, end)
+
+
+def crawl_tpex_par_value_change(start, end):
+    """上櫃變更股票面額恢復買賣參考價（``bulletin/pvChgRslt``）。"""
+    return _crawl_tpex_resume("pvChgRslt", "pvChgRslt", start, end)
+
+
+def crawl_tpex_etf_split(start, end):
+    """上櫃 ETF 分割恢復買賣參考價（``bulletin/etfSplitRslt``）；2026-11 實測全期 0 列，欄位與 pvChgRslt 相同。"""
+    return _crawl_tpex_resume("etfSplitRslt", "etfSplitRslt", start, end)
 
 
 # BWIBBU_d 的中文欄名 -> valuation 表欄名。欄位順序隨年代變動,一律靠 fields 動態定位。

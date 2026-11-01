@@ -320,6 +320,7 @@ def _window_boundary_run(monkeypatch, start, lookback_event=False, extra_gap=Fal
     monkeypatch.setattr(adjust, "fetch_tpex_dividends", empty)
     monkeypatch.setattr(adjust, "fetch_reductions", empty)
     monkeypatch.setattr(adjust, "fetch_tpex_reductions", empty)
+    monkeypatch.setattr(adjust, "fetch_official_split", empty)
     monkeypatch.setattr(
         adjust, "upsert", lambda conn, tbl, recs, keys: rows.extend(recs) or len(recs))
     adjust.refresh_recent(_Eng(), start, date(2026, 8, 10))
