@@ -13,6 +13,7 @@ final class AppStore: ObservableObject {
     @Published var connectionError: String?
     @Published var serverAddress: String
     @Published var watchlist: [String] = []
+    @Published var watchlistGroups: [WatchlistGroup] = []
     @Published var quotes: [QuoteItem] = []
     @Published var indices: [MarketIndex] = []
     @Published var reports: [HistoryItem] = []
@@ -228,6 +229,11 @@ final class AppStore: ObservableObject {
         await loadWatchlist(client, generation: generation)
     }
 
+    func saveWatchlistGroups(_ groups: [WatchlistGroup]) async throws {
+        guard let client else { return }
+        watchlistGroups = try await client.saveWatchlistGroups(groups).groups
+    }
+
     func logout() async {
         if let baseURL { SessionVault.clear(for: baseURL) }
         session?.configuration.httpCookieStorage?.cookies?.filter { $0.name == "dsa_session" }
@@ -257,12 +263,15 @@ final class AppStore: ObservableObject {
     private func loadWatchlist(_ client: DSAClient, generation expected: UUID) async {
         do {
             let codes = try await client.watchlist()
+            // 分組是附加資訊：讀不到（舊伺服器 404、暫時失敗）時保留現有分組，不算自選載入失敗。
+            let groups = try? await client.watchlistGroups()
             var results: [QuoteItem] = []
             for start in stride(from: 0, to: codes.count, by: 50) {
                 results += try await client.quotes(Array(codes[start..<min(start + 50, codes.count)]))
             }
             guard generation == expected else { return }
             watchlist = codes
+            if let groups { watchlistGroups = groups.groups }
             quotes = results
             errors["watchlist"] = nil
         } catch { if generation == expected { errors["watchlist"] = error.localizedDescription; handleAuthenticationError(error) } }
@@ -291,7 +300,7 @@ final class AppStore: ObservableObject {
     }
 
     private func clearData() {
-        watchlist = []; quotes = []; indices = []; reports = []; marketReviews = []
+        watchlist = []; watchlistGroups = []; quotes = []; indices = []; reports = []; marketReviews = []
         stockIndex = []; errors = [:]; refreshedAt = nil
     }
 }

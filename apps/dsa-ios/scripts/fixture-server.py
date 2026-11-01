@@ -223,10 +223,21 @@ def calendar_events(query):
 
 
 class State:
+    def watchlist_groups_payload(self):
+        # 與真 API 同語意：成員以自選為準、一檔只屬於一組。
+        assigned = set()
+        groups = []
+        for group in self.watchlist_groups:
+            codes = [code for code in group["codes"] if code in self.watchlist and code not in assigned]
+            assigned.update(codes)
+            groups.append({"name": group["name"], "codes": codes})
+        return {"groups": groups, "ungrouped": [code for code in self.watchlist if code not in assigned]}
+
     def __init__(self):
         self.lock = threading.RLock()
         self.calendar_failing = False
         self.watchlist = ["2330.TW", "2317.TW", "00631L.TW", "2303.TW", "2603.TW", "0050.TW", "00878.TW", "AAPL"]
+        self.watchlist_groups = []
         self.records = [history_item(101, "2330.TW"), history_item(102, "AAPL"),
                         history_item(201, "TWII", "market_review", "tw"),
                         history_item(202, "SPX", "market_review", "us")]
@@ -342,6 +353,8 @@ class Handler(BaseHTTPRequestHandler):
                 })
             if route == ["api", "v1", "stocks", "watchlist"]:
                 return self.reply(200, {"stock_codes": STATE.watchlist, "message": "合成測試自選股"})
+            if route == ["api", "v1", "stocks", "watchlist", "groups"]:
+                return self.reply(200, STATE.watchlist_groups_payload())
             if route == ["api", "v1", "stocks", "quotes"]:
                 codes = query.get("codes", [""])[0].split(",")
                 return self.reply(200, {"items": [{"stock_code": code, "quote": quote(code) if code in STOCKS else None,
@@ -451,6 +464,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(401, {"error": "unauthorized", "message": "請登入測試服務"})
             if route == ["api", "v1", "auth", "logout"]:
                 return self.reply(204, headers={"Set-Cookie": "dsa_session=; Max-Age=0; Path=/; HttpOnly"})
+            # 要排在下面 add/remove 的分支之前，否則 groups 會被當成代號操作回 400。
+            if route == ["api", "v1", "stocks", "watchlist", "groups"]:
+                STATE.watchlist_groups = [
+                    {"name": group["name"], "codes": list(group.get("codes", []))}
+                    for group in body.get("groups", [])
+                ]
+                return self.reply(200, STATE.watchlist_groups_payload())
             if len(route) == 5 and route[:4] == ["api", "v1", "stocks", "watchlist"]:
                 code = body.get("stock_code")
                 if code not in STOCKS:

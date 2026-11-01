@@ -9,7 +9,7 @@
 2. 定义历史 K 线数据模型
 """
 
-from typing import Any, Dict, Literal, Optional, List
+from typing import Annotated, Any, Dict, Literal, Optional, List
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -453,3 +453,34 @@ class StockProfileResponse(BaseModel):
     position: Optional[StockProfilePosition] = None
     chips: Optional[StockProfileChips] = None
     news: Optional[List[StockProfileNewsItem]] = Field(None, description="最新一份報告讀過的新聞；沒有報告或查詢失敗為 null")
+
+
+class WatchlistGroup(BaseModel):
+    """自選分組（回應用：.env 可能被手改，這裡不設長度限制以免回應驗證變 500）"""
+
+    name: str = Field(..., description="組名")
+    codes: List[str] = Field(default_factory=list, description="組內代號，順序即顯示順序")
+
+
+class WatchlistGroupInput(BaseModel):
+    """自選分組（請求用）"""
+
+    name: str = Field(..., description="組名", min_length=1, max_length=32)
+    codes: List[Annotated[str, Field(max_length=32)]] = Field(
+        default_factory=list,
+        description="組內代號，順序即顯示順序",
+        max_length=500,
+    )
+
+
+class WatchlistGroupsRequest(BaseModel):
+    """整份覆寫自選分組"""
+
+    groups: List[WatchlistGroupInput] = Field(default_factory=list, description="分組，順序即顯示順序", max_length=30)
+
+
+class WatchlistGroupsResponse(BaseModel):
+    """自選分組與未分組代號"""
+
+    groups: List[WatchlistGroup] = Field(default_factory=list, description="分組；未設定時為空")
+    ungrouped: List[str] = Field(default_factory=list, description="不屬於任何分組的代號，依 STOCK_LIST 順序")

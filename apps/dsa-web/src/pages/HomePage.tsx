@@ -1695,6 +1695,8 @@ const HomePage: React.FC = () => {
           quotes={quotes}
           marketReviewItem={marketReviewItem}
           marketLightLabel={marketLightLabel}
+          watchlistGroups={watchlistState.watchlistGroups}
+          onSaveWatchlistGroups={watchlistState.saveWatchlistGroups}
         />
       </div>
     ),
@@ -1730,6 +1732,8 @@ const HomePage: React.FC = () => {
       watchlistState.isActioning,
       watchlistState.isLoading,
       watchlistState.removeFromWatchlist,
+      watchlistState.saveWatchlistGroups,
+      watchlistState.watchlistGroups,
     ],
   );
 

@@ -177,6 +177,16 @@ function toSnakeAgentBackendPayload(
   };
 }
 
+export interface WatchlistGroup {
+  name: string;
+  codes: string[];
+}
+
+export interface WatchlistGroupsResult {
+  groups: WatchlistGroup[];
+  ungrouped: string[];
+}
+
 export const systemConfigApi = {
   async getConfig(includeSchema = true): Promise<SystemConfigResponse> {
     const response = await apiClient.get<Record<string, unknown>>('/api/v1/system/config', {
@@ -345,6 +355,24 @@ export const systemConfigApi = {
     const response = await apiClient.get<Record<string, unknown>>('/api/v1/stocks/watchlist');
     const data = toCamelCase<{ stockCodes: string[] }>(response.data);
     return data.stockCodes || [];
+  },
+
+  /**
+   * 取得自選分組；未設定時 groups 為空。
+   */
+  getWatchlistGroups: async (): Promise<WatchlistGroupsResult> => {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/stocks/watchlist/groups');
+    const data = toCamelCase<WatchlistGroupsResult>(response.data);
+    return { groups: data.groups || [], ungrouped: data.ungrouped || [] };
+  },
+
+  /**
+   * 整份覆寫自選分組與組內順序。
+   */
+  saveWatchlistGroups: async (groups: WatchlistGroup[]): Promise<WatchlistGroupsResult> => {
+    const response = await apiClient.post<Record<string, unknown>>('/api/v1/stocks/watchlist/groups', { groups });
+    const data = toCamelCase<WatchlistGroupsResult>(response.data);
+    return { groups: data.groups || [], ungrouped: data.ungrouped || [] };
   },
 
   /**

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 自選分組：新增 `WATCHLIST_GROUPS` 設定與 `GET`／`POST /api/v1/stocks/watchlist/groups`，iOS 自選頁有分組籤與編輯頁，Web 首頁清單有分組篩選與編輯；`STOCK_LIST` 仍是成員真源、舊 `/watchlist` 不變，不設時畫面與之前相同。
 - [改進] Web 報告首屏改單欄：股名下直接給動作（依枚舉查詞彙表，舊報告的「減倉」顯示「減碼」）、一句話、時效、信心、模型評分刻度條與前份比較，分「手上沒有／手上有」兩欄，確定持有才置頂；價格分現價、漲跌額與％、「10/30 收盤」三層；移除恐懼貪婪圓環與自選卡，星號進標題列；市場階段標籤不再帶前綴。
 - [新功能] Web 報告新增日 K 圖（MA20／60、成交量、停損目標線，1月／3月／1年）與關鍵數字；重大波動事件卡、「什麼時候改變看法」、依來源分組的證據與「這份報告缺什麼」。
 - [改進] Web 關鍵價位依動作切換：減碼、觀望顯示風控線與反彈減碼價，買進才有進場價；只有結構化數字才算距現價與價位階梯，舊報告顯示原文。

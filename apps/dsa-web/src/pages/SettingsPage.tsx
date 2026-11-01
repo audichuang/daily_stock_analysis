@@ -979,6 +979,8 @@ const SettingsPage: React.FC = () => {
   ]);
   const BASE_HIDDEN_KEYS = new Set([
     'SCREENING_ENABLED',
+    // 由自選清單的分組編輯管理，不讓人手改 JSON。
+    'WATCHLIST_GROUPS',
   ]);
   const AGENT_HIDDEN_KEYS = new Set(['AGENT_GENERATION_BACKEND']);
   // 欄位是否由通用表單編輯；其餘由各自的專屬面板（排程、模型管道、選股）管理。

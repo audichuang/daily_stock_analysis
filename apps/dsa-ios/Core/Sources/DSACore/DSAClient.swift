@@ -88,6 +88,14 @@ public struct DSAClient: Sendable {
         return response.stockCodes
     }
 
+    public func watchlistGroups() async throws -> WatchlistGroupsResponse {
+        try await get(["stocks", "watchlist", "groups"])
+    }
+
+    public func saveWatchlistGroups(_ groups: [WatchlistGroup]) async throws -> WatchlistGroupsResponse {
+        try await post(["stocks", "watchlist", "groups"], body: WatchlistGroupsBody(groups: groups))
+    }
+
     public func removeFromWatchlist(_ code: String) async throws -> [String] {
         let response: Watchlist = try await post(["stocks", "watchlist", "remove"], body: StockBody(stockCode: code))
         return response.stockCodes
@@ -289,6 +297,7 @@ private struct Acknowledgement: Decodable { let ok: Bool }
 private struct Markdown: Decodable { let content: String }
 private struct PasswordBody: Encodable { let password: String }
 private struct StockBody: Encodable { let stockCode: String }
+private struct WatchlistGroupsBody: Encodable { let groups: [WatchlistGroup] }
 private struct AnalysisBody: Encodable {
     let stockCode: String
     let asyncMode = true
