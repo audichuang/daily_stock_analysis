@@ -490,6 +490,9 @@ class LLMClient:
             raise _LiteLLMStreamError(
                 f"{model} stream interrupted: {exc}",
                 partial_received=chars_received > 0,
+                # 已收到截斷訊號後才斷線仍是截斷，帶上去才能入帳、不多打一次非串流
+                finish_reason=finish_reason,
+                usage=usage,
             ) from exc
 
         response_text = strip_leading_think_wrapper("".join(chunks))

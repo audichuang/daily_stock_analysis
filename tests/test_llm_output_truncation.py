@@ -187,6 +187,66 @@ def test_empty_stream_with_length_counts_as_truncation():
     assert persist.call_count == 2
 
 
+def _stream_then_disconnect(text, finish_reason=None, usage=None):
+    """先送出內容（可含結束原因與用量），接著 iterator 拋錯。"""
+    def chunks():
+        yield SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content=text), finish_reason=None)],
+            usage=None,
+        )
+        if finish_reason or usage:
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=""), finish_reason=finish_reason)],
+                usage=SimpleNamespace(**usage) if usage else None,
+            )
+        raise ConnectionError("connection reset")
+    return chunks()
+
+
+def test_disconnect_after_length_is_still_truncation():
+    """收到 length＋usage 後才斷線：不多打非串流、重試上限不被繞過、每次用量都入帳。"""
+    result, sent, persist, text_fallback = _run_analyze(
+        _make_analyzer(),
+        [
+            _stream_then_disconnect(TRUNCATED_FENCED, "length", USAGE),
+            _stream_then_disconnect(TRUNCATED_FENCED, "length", USAGE),
+        ],
+    )
+
+    assert result.success is False
+    assert "超過上限" in result.error_message
+    assert len(sent) == 2
+    assert all(k.get("stream") is True for k in sent)
+    text_fallback.assert_not_called()
+    assert persist.call_count == 2
+    assert all(c.args[0]["completion_tokens"] == 16000 for c in persist.call_args_list)
+
+
+def test_plain_disconnect_keeps_non_stream_fallback():
+    """沒收到結束原因的一般中斷不是截斷：仍走既有 partial_received 路徑改打非串流。"""
+    result, sent, persist, _fallback = _run_analyze(
+        _make_analyzer(),
+        [_stream_then_disconnect(TRUNCATED_FENCED), _non_stream(COMPLETE, "stop")],
+    )
+
+    assert result.success is True
+    assert result.sentiment_score == 61
+    assert sent[0].get("stream") is True
+    assert sent[1].get("stream") is None
+    persist.assert_called_once()
+
+
+def test_disconnect_after_normal_finish_is_not_truncation():
+    """收到 stop 後才斷線同樣不算截斷，維持既有的非串流重試。"""
+    result, sent, _persist, _fallback = _run_analyze(
+        _make_analyzer(),
+        [_stream_then_disconnect(COMPLETE, "stop", USAGE), _non_stream(COMPLETE, "stop")],
+    )
+
+    assert result.success is True
+    assert sent[1].get("stream") is None
+
+
 def test_non_stream_truncation_takes_the_same_path():
     """串流中斷後改走非串流時，同樣要辨識截斷。"""
     result, sent, persist, text_fallback = _run_analyze(
