@@ -351,7 +351,8 @@ final class DSAMarketUITests: XCTestCase {
         tap(app.segmentedControls["portfolio.market-picker"].buttons["全部"])
 
         tap(app.buttons["portfolio.account.1"])
-        XCTAssertFalse(app.buttons["portfolio.position.1.2330.TW"].exists, "帳戶收合要連持股一起收")
+        let collapsed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.buttons["portfolio.position.1.2330.TW"])
+        XCTAssertEqual(XCTWaiter.wait(for: [collapsed], timeout: 5), .completed, "帳戶收合要連持股一起收")
         tap(app.buttons["portfolio.account.1"])
         XCTAssertTrue(position.waitForExistence(timeout: 5))
         position.swipeLeft()
@@ -519,7 +520,6 @@ final class DSAMarketUITests: XCTestCase {
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [onlyApple], timeout: 10), .completed, "搜尋由伺服器篩選")
         capture("研究庫-搜尋")
-        tap(app.buttons["關閉"])
 
         tap(app.tabBars.buttons["工具"])
         logoutFromTools()

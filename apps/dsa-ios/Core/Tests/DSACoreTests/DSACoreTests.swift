@@ -229,7 +229,20 @@ final class DSACoreTests: XCTestCase {
         _ = try await client.historyList()
     }
 
-    func testPortfolioSnapshotAsksForDisplayCurrencyAndRiskIsTolerant() async throws {
+    func testPortfolioSnapshotAsksForConsolidatedTotalsWithFunds() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/v1/portfolio/snapshot")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertTrue(query.contains(URLQueryItem(name: "display_currency", value: "TWD")))
+            XCTAssertTrue(query.contains(URLQueryItem(name: "include_funds", value: "true")))
+            return (200, #"{"as_of":"2000-01-01","cost_method":"fifo","currency":"CNY","account_count":0,"total_cash":1,"total_market_value":1,"total_equity":2,"realized_pnl":0,"unrealized_pnl":0,"fx_stale":false,"data_quality":"ok","limitations":[],"accounts":[],"display_currency":"TWD","consolidated_equity_base":100,"consolidated_fund_value_base":50}"#)
+        }
+        let snapshot = try await client.portfolioSnapshot()
+        XCTAssertEqual(snapshot.displayCurrency, "TWD")
+        XCTAssertEqual(snapshot.overview?.totalAssets, 150)
+    }
+
+    func testPortfolioRiskIsTolerantOfMissingBlocks() async throws {
         StubURLProtocol.handler = { request in
             let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
             XCTAssertTrue(query.contains(URLQueryItem(name: "display_currency", value: "TWD")))
