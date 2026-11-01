@@ -8,6 +8,7 @@ import {
   isParsedApiError,
   type ParsedApiError,
 } from '../api/error';
+import { isFromEarlierDay } from '../utils/chatSessions';
 import { generateUUID } from '../utils/uuid';
 
 const STORAGE_KEY_SESSION = 'dsa_chat_session_id';
@@ -163,14 +164,6 @@ interface AgentChatActions {
   startStream: (payload: ChatStreamRequest, meta?: StreamMeta) => Promise<void>;
 }
 
-/** 上次活動不在今天（裝置時區）就不自動接回；沒有時間的舊資料照舊還原。 */
-export const isSessionFromEarlierDay = (lastActive: string | null | undefined, now = new Date()): boolean => {
-  if (!lastActive) return false;
-  const parsed = new Date(lastActive);
-  if (Number.isNaN(parsed.getTime())) return false;
-  return parsed.toDateString() !== now.toDateString();
-};
-
 const getInitialSessionId = (): string =>
   typeof localStorage !== 'undefined'
     ? localStorage.getItem(STORAGE_KEY_SESSION) || generateUUID()
@@ -318,7 +311,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
         || current.sessionId !== sessionId || current.activeRequestId !== activeRequestId) return;
       if (savedId) {
         const savedSession = sessionList.find((s) => s.session_id === savedId);
-        if (savedSession && !isSessionFromEarlierDay(savedSession.last_active)) {
+        if (savedSession && !isFromEarlierDay(savedSession.last_active)) {
           if (get().sessionId !== savedId) resetSession(savedId);
           await readDetail();
         } else {
