@@ -80,7 +80,10 @@ const withSoftBreaks = (children: React.ReactNode): React.ReactNode[] => {
   return items.flatMap<React.ReactNode>((child, index) => {
     if (typeof child !== 'string') return [child];
     let text = child;
-    if (index > 0 && isBlockChild(items[index - 1])) text = text.replace(/^\n+/, '');
+    const previous = index > 0 ? items[index - 1] : null;
+    if (previous && isBlockChild(previous)) text = text.replace(/^\n+/, '');
+    // A hard break (two trailing spaces or a backslash) already arrives as <br> followed by "\n…"; drop that one newline.
+    else if (isValidElement(previous) && previous.type === 'br') text = text.replace(/^\n/, '');
     if (index === items.length - 1 || isBlockChild(items[index + 1])) text = text.replace(/\n+$/, '');
     return text.split('\n').flatMap((line, lineIndex) => (lineIndex === 0 ? [line] : [<br key={`br-${index}-${lineIndex}`} />, line]));
   });
@@ -92,8 +95,8 @@ const MARKDOWN_COMPONENTS: Components = {
   h3: makeHeading('h3'),
   h4: makeHeading('h4'),
   // 表格自動版面可換行；只有內容真的放不下才在這層橫捲，不撐破抽屜。
-  // className carries GFM's task-list-item; nothing else from the hast node is needed.
-  li: ({ className, children }) => <li className={className}>{withSoftBreaks(children)}</li>,
+  // className carries GFM's task-list-item and id the footnote anchor; nothing else from the hast node is needed.
+  li: ({ id, className, children }) => <li id={id} className={className}>{withSoftBreaks(children)}</li>,
   table: ({ children }) => (
     <div className="max-w-full overflow-x-auto" data-testid="report-table-scroll">
       <table>{children}</table>
