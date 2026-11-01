@@ -8,6 +8,8 @@
 
 - 配置入口：`AGENT_EVENT_MONITOR_ENABLED`、`AGENT_EVENT_MONITOR_INTERVAL_MINUTES`、`AGENT_EVENT_ALERT_RULES_JSON`。
 - 运行入口：`main.py` 在 schedule 模式中注册 `agent_event_monitor` 后台任务；后台 worker 每轮读取持久化 active rules，并继续兼容 legacy `AGENT_EVENT_ALERT_RULES_JSON`。
+- 只跑監控（本 fork）：`AGENT_EVENT_MONITOR_ENABLED=true` 加 `AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE=true`，API 程序以獨立執行緒輪詢，不需 `SCHEDULE_ENABLED`、不跑每日分析；即時價規則只在開盤時段評估。實際狀態看 `GET /api/v1/alerts/monitor/status`。
+- 通知（本 fork）：Markdown 版型在 `src/services/alert_messages.py`，帶實際報價來源（`quote_source`）。`GET /api/v1/alerts/triggers` 追加 `rule_name`、`stock_name`、`direction`、`severity`、`quote_source` 與 `summary`（各狀態筆數，不受 status 篩選影響）。大盤紅綠燈規則可用 `tw`。
 - 通知投递：触发后复用 `NotificationService.send(..., route_type="alert")`，继续遵守通知网关的 alert 路由配置。
 - Web/System 配置校验：`src/services/system_config_service.py` 会对 `AGENT_EVENT_ALERT_RULES_JSON` 做 JSON 与规则语义校验。
 

@@ -10,6 +10,7 @@ from unittest.mock import patch
 from src.services.market_light_alerts import (
     MarketLightAlert,
     evaluate_market_light_alert,
+    make_market_light_payload,
     normalize_market_alert_parameters,
 )
 
@@ -66,6 +67,32 @@ class MarketLightAlertsTestCase(unittest.TestCase):
                         alert_type="market_light_status",
                         parameters={"statuses": ["red"]},
                     )
+
+    def test_tw_market_rule_produces_trigger(self) -> None:
+        rule = MarketLightAlert(
+            target_scope="market",
+            target="tw",
+            alert_type="market_light_status",
+            parameters={"statuses": ["yellow"]},
+            metadata={"persisted_rule_id": 7, "trading_day_check_enabled": False},
+        )
+        result = evaluate_market_light_alert(rule, current_snapshot={**_snapshot(), "region": "tw"})
+        self.assertTrue(result["triggered"])
+        self.assertEqual(result["record_status"], "triggered")
+        self.assertEqual(json.loads(result["diagnostics"])["region"], "tw")
+
+    def test_tw_market_rule_has_chinese_display_label(self) -> None:
+        from types import SimpleNamespace
+
+        payload = make_market_light_payload(
+            parent_key="k",
+            data={
+                "id": 1, "target": "tw", "target_scope": "market",
+                "alert_type": "market_light_status", "parameters": {"statuses": ["red"]},
+            },
+            config=SimpleNamespace(trading_day_check_enabled=False),
+        )
+        self.assertEqual(payload.display_target, "台股大盤")
 
     def test_status_unavailable_is_skipped(self) -> None:
         result = evaluate_market_light_alert(

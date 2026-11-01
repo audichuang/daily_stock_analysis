@@ -253,10 +253,12 @@ class DataCapabilityService:
         config: Any = None,
         fetcher_manager: Any = None,
         runtime_scheduler: Any = None,
+        alert_monitor_thread: Any = None,
     ) -> None:
         self.config = config or get_config()
         self.fetcher_manager = fetcher_manager
         self.runtime_scheduler = runtime_scheduler
+        self.alert_monitor_thread = alert_monitor_thread
 
     def get_overview(self) -> Dict[str, Any]:
         """Return a read-only data capability overview."""
@@ -1165,6 +1167,8 @@ class DataCapabilityService:
                 active = bool(checker("agent_event_monitor"))
             except Exception as exc:  # noqa: BLE001 - diagnostics must fail open.
                 logger.debug("Failed to probe Event Monitor scheduler state: %s", exc)
+        if not active and self.alert_monitor_thread is not None:
+            active = bool(self.alert_monitor_thread.is_active())
         return self._local_dataset(
             "alert.monitor",
             "alerts",

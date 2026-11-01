@@ -1181,6 +1181,7 @@ class Config:
     agent_context_protected_turns: int = 4
     agent_event_monitor_enabled: bool = False  # Enable periodic event-driven alert checks in schedule mode
     agent_event_monitor_interval_minutes: int = 5  # Polling interval for event monitor background checks
+    agent_event_monitor_without_schedule: bool = False  # 由 API 程序的獨立執行緒跑監控，不依賴 SCHEDULE_ENABLED
     agent_event_alert_rules_json: str = ""  # JSON array of serialized EventMonitor rules
 
     # === 通知配置（可同时配置多个，全部推送）===
@@ -2217,6 +2218,9 @@ class Config:
             agent_context_compression_trigger_tokens=agent_context_compression_trigger_tokens,
             agent_context_protected_turns=agent_context_protected_turns,
             agent_event_monitor_enabled=os.getenv('AGENT_EVENT_MONITOR_ENABLED', 'false').lower() == 'true',
+            agent_event_monitor_without_schedule=(
+                os.getenv('AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE', 'false').lower() == 'true'
+            ),
             agent_event_monitor_interval_minutes=parse_env_int(
                 os.getenv('AGENT_EVENT_MONITOR_INTERVAL_MINUTES'),
                 5,

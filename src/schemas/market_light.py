@@ -22,7 +22,8 @@ MarketLightDataQuality = Literal["ok", "partial", "unavailable"]
 # 台股在此 fork 有完整涨跌家数与成交额（TWSE/TPEx OpenAPI），足以评分；上游没有 tw。
 # 上游 v3.29 把 _build_stats_block 的盘面信号改成由 _supports_market_light() 闸住
 # 之后，漏掉 tw 会让台股复盘整组失去盘面信号／信号依据／操作建议，且 tw,us 组合会
-# 误取美股分数当 primary。MARKET_LIGHT_ALERT_REGIONS 维持窄集合，不随此处放宽。
+# 误取美股分数当 primary。
+# MARKET_LIGHT_ALERT_REGIONS（警報可用的市場）也含 tw：台股有家數與成交額可評分；jp、kr 仍不開放。
 MARKET_LIGHT_REGIONS = frozenset(("cn", "hk", "us", "tw"))
 
 

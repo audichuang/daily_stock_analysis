@@ -234,29 +234,31 @@ describe('AlertRuleForm', () => {
     expect(screen.queryByText('组合回撤')).not.toBeInTheDocument();
   });
 
-  it('limits market region options to cn/hk/us in Chinese UI mode (alerts exclude jp/kr)', () => {
+  it('limits market region options to tw/cn/hk/us in Chinese UI mode (alerts exclude jp/kr)', () => {
     render(<AlertRuleForm onSubmit={onSubmit} />);
 
     fireEvent.change(screen.getByLabelText('目标范围'), { target: { value: 'market' } });
 
-    // Alert market regions align with backend MARKET_LIGHT_ALERT_REGIONS = {cn,hk,us};
+    // Alert market regions align with backend MARKET_LIGHT_ALERT_REGIONS = {cn,hk,us,tw};
     // jp/kr market-light snapshots exist but alerts are intentionally scoped narrower.
-    expect(screen.getByRole('option', { name: 'A 股（cn）' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: '港股（hk）' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: '美股（us）' })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: '日股（jp）' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: '韩股（kr）' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '台股' })).toBeInTheDocument();
+    expect(screen.getByLabelText('市场区域')).toHaveValue('tw');
+    expect(screen.getByRole('option', { name: 'A 股' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '港股' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '美股' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '日股' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '韩股' })).not.toBeInTheDocument();
   });
 
   it('submits a market light status rule payload', async () => {
     render(<AlertRuleForm onSubmit={onSubmit} />);
 
     fireEvent.change(screen.getByLabelText('目标范围'), { target: { value: 'market' } });
-    expect(screen.getByRole('option', { name: 'A 股（cn）' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: '港股（hk）' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: '美股（us）' })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: '日股（jp）' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: '韩股（kr）' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'A 股' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '港股' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '美股' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '日股' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '韩股' })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('市场区域'), { target: { value: 'hk' } });
     fireEvent.click(screen.getByRole('button', { name: '创建规则' }));
 
@@ -275,11 +277,11 @@ describe('AlertRuleForm', () => {
 
     fireEvent.change(screen.getByLabelText('Target scope'), { target: { value: 'market' } });
 
-    expect(screen.getByRole('option', { name: 'A-shares (cn)' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Hong Kong (hk)' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'US (us)' })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: 'Japan (jp)' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: 'Korea (kr)' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'A-shares' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Hong Kong' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'US' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Japan' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Korea' })).not.toBeInTheDocument();
   });
 
   it('submits a market light score-drop rule payload', async () => {

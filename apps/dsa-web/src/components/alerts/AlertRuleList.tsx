@@ -1,25 +1,29 @@
 import type React from 'react';
-import { useState } from 'react';
-import { Bell, Trash2 } from 'lucide-react';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, Pagination, Select } from '../common';
+import { useEffect, useRef, useState } from 'react';
+import { MoreHorizontal } from 'lucide-react';
+import { Button, Card, ConfirmDialog, InlineAlert, Input, Select } from '../common';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { formatUiText, type UiLanguage } from '../../i18n/uiText';
 import {
-  ALERT_DIRECTION_LABELS,
   ALERT_ENABLED_FILTER_OPTIONS,
-  ALERT_LIST_TEXT,
-  ALERT_MARKET_LIGHT_STATUS_LABELS,
   ALERT_MARKET_REGION_LABELS,
+  ALERT_PAGE_TEXT,
   ALERT_SCOPE_LABELS,
-  ALERT_SEVERITY_LABELS,
   ALERT_TYPE_FILTER_OPTIONS,
-  ALERT_TYPE_LABELS,
 } from '../../locales/featureText';
-import type { AlertRuleItem, AlertType, MarketRegion } from '../../types/alerts';
+import type {
+  AlertRuleItem,
+  AlertRuleTestResponse,
+  AlertTargetScope,
+  AlertType,
+  MarketRegion,
+} from '../../types/alerts';
 import { formatDateTime } from '../../utils/format';
+import { ruleCondition, summarizeDryRun, type AlertPageText } from './alertRuleText';
 
 export type AlertRuleEnabledFilter = 'all' | 'enabled' | 'disabled';
 export type AlertTypeFilter = 'all' | AlertType;
+export type AlertScopeFilter = 'all' | AlertTargetScope;
 export type AlertRuleBusyAction = 'test' | 'toggle' | 'delete';
 
 export interface AlertRuleBusyState {
@@ -27,242 +31,294 @@ export interface AlertRuleBusyState {
   action: AlertRuleBusyAction;
 }
 
-function formatParameters(rule: AlertRuleItem, language: UiLanguage): string {
-  const directionLabels = ALERT_DIRECTION_LABELS[language];
-  if (rule.alertType === 'market_light_status') {
-    const statuses = rule.parameters.statuses ?? [];
-    return statuses.length > 0
-      ? statuses.map((status) => ALERT_MARKET_LIGHT_STATUS_LABELS[language][status] ?? status).join(' / ')
-      : '--';
-  }
-  if (rule.alertType === 'market_light_score_drop') {
-    return formatUiText(ALERT_LIST_TEXT[language].scoreDropAtLeast, { value: rule.parameters.minDrop ?? '--' });
-  }
-  if (rule.alertType === 'price_cross') {
-    return `${rule.parameters.direction === 'below' ? directionLabels.belowPrice : directionLabels.abovePrice} ${rule.parameters.price ?? '--'}`;
-  }
-  if (rule.alertType === 'price_change_percent') {
-    return `${rule.parameters.direction === 'down' ? directionLabels.downChange : directionLabels.upChange} ${rule.parameters.changePct ?? '--'}%`;
-  }
-  if (rule.alertType === 'volume_spike') {
-    return `${rule.parameters.multiplier ?? '--'}x`;
-  }
-  if (rule.alertType === 'ma_price_cross') {
-    return `${rule.parameters.direction === 'below' ? directionLabels.belowThreshold : directionLabels.aboveThreshold} MA${rule.parameters.window ?? '--'}`;
-  }
-  if (rule.alertType === 'rsi_threshold') {
-    return `RSI${rule.parameters.period ?? '--'} ${rule.parameters.direction === 'below' ? directionLabels.belowThreshold : directionLabels.aboveThreshold} ${rule.parameters.threshold ?? '--'}`;
-  }
-  if (rule.alertType === 'macd_cross' || rule.alertType === 'kdj_cross') {
-    const direction = rule.parameters.direction === 'bearish_cross' ? directionLabels.bearishCross : directionLabels.bullishCross;
-    if (rule.alertType === 'macd_cross') {
-      return `MACD(${rule.parameters.fastPeriod ?? '--'},${rule.parameters.slowPeriod ?? '--'},${rule.parameters.signalPeriod ?? '--'}) ${direction}`;
-    }
-    return `KDJ(${rule.parameters.period ?? '--'},${rule.parameters.kPeriod ?? '--'},${rule.parameters.dPeriod ?? '--'}) ${direction}`;
-  }
-  if (rule.alertType === 'portfolio_stop_loss') {
-    return rule.parameters.mode === 'breach' ? directionLabels.stopLossBreach : directionLabels.stopLossNear;
-  }
-  if (rule.alertType === 'portfolio_concentration') return 'top_weight_pct';
-  if (rule.alertType === 'portfolio_drawdown') return 'max_drawdown_pct';
-  if (rule.alertType === 'portfolio_price_stale') return 'price_stale / price_available';
-  return `CCI${rule.parameters.period ?? '--'} ${rule.parameters.direction === 'below' ? directionLabels.belowThreshold : directionLabels.aboveThreshold} ${rule.parameters.threshold ?? '--'}`;
+export interface AlertQuoteView {
+  price: number;
+  name?: string | null;
 }
 
-function isCoolingDown(rule: AlertRuleItem): boolean {
-  return rule.cooldownActive === true;
-}
+type PageText = AlertPageText;
 
-function formatTarget(rule: AlertRuleItem, language: UiLanguage): string {
+function ruleTarget(rule: AlertRuleItem, language: UiLanguage, text: PageText, quote?: AlertQuoteView): string {
   if (rule.targetScope === 'market') return ALERT_MARKET_REGION_LABELS[language][rule.target as MarketRegion] ?? rule.target;
-  if (rule.targetScope === 'watchlist') return 'default';
-  if (rule.targetScope === 'portfolio_account' || rule.targetScope === 'portfolio_holdings') {
-    const text = ALERT_LIST_TEXT[language];
-    return rule.target === 'all'
-      ? text.allAccounts
-      : formatUiText(text.accountTarget, { target: rule.target });
+  if (rule.targetScope === 'watchlist') return text.watchlist;
+  if (rule.targetScope === 'portfolio_holdings') return text.holdings;
+  if (rule.targetScope === 'portfolio_account') {
+    return rule.target === 'all' ? text.allAccounts : formatUiText(text.account, { target: rule.target });
   }
-  return rule.target;
+  return quote?.name ? `${quote.name} ${rule.target}` : rule.target;
 }
 
-function hasChildTargetCooldown(rule: AlertRuleItem): boolean {
+function frequencyLabel(rule: AlertRuleItem, text: PageText): string {
+  const seconds = (rule.cooldownPolicy as { cooldownSeconds?: unknown } | null | undefined)?.cooldownSeconds;
+  if (typeof seconds !== 'number' || seconds === 86400) return text.daily;
+  if (seconds === 3600) return text.hourly;
+  return formatUiText(text.everyCustom, { minutes: Math.round(seconds / 60) });
+}
+
+function hasChildTargets(rule: AlertRuleItem): boolean {
   return rule.targetScope === 'watchlist' || rule.targetScope === 'portfolio_holdings';
 }
+
+const DryRunResult: React.FC<{ result: AlertRuleTestResponse; text: PageText; onClose: () => void }> = ({ result, text, onClose }) => {
+  const { outcome, unableCount, unableTargets } = summarizeDryRun(result);
+  const headline = {
+    hit: text.dryRunHit,
+    miss: text.dryRunMiss,
+    unable: text.dryRunUnable,
+    partial: text.dryRunPartial,
+    error: text.dryRunError,
+  }[outcome];
+  const variant = { hit: 'success', miss: 'info', unable: 'warning', partial: 'warning', error: 'danger' } as const;
+  const details: string[] = [text.dryRunNote];
+  if (result.observedValue != null) details.push(formatUiText(text.dryRunObserved, { value: String(result.observedValue) }));
+  if ((result.evaluatedCount ?? 0) > 1) {
+    details.push(formatUiText(text.dryRunSummary, { evaluated: result.evaluatedCount ?? 0, triggered: result.triggeredCount ?? 0 }));
+    if (unableCount > 0) details.push(formatUiText(text.dryRunUnableCount, { count: unableCount }));
+  }
+  // 聚合回應的 message 只是筆數摘要，真正原因在各標的。
+  const reasons = unableTargets.length > 0
+    ? unableTargets.map((item) => ((result.evaluatedCount ?? 0) > 1 ? `${item.displayTarget ?? item.target}：${item.message}` : item.message))
+    : (outcome === 'unable' || outcome === 'error') ? [result.message] : [];
+  return (
+    <InlineAlert
+      className="mt-3"
+      title={headline}
+      message={(
+        <>
+          <div>{details.join(' · ')}</div>
+          {reasons.map((reason) => <div key={reason} className="break-words text-xs">{reason}</div>)}
+        </>
+      )}
+      variant={variant[outcome]}
+      action={(
+        <button type="button" className="text-sm underline" onClick={onClose}>
+          {text.dryRunClose}
+        </button>
+      )}
+    />
+  );
+};
+
+interface RuleCardProps {
+  rule: AlertRuleItem;
+  quote?: AlertQuoteView;
+  busy: AlertRuleBusyState | null;
+  testResult?: AlertRuleTestResponse;
+  onToggleEnabled: (rule: AlertRuleItem) => void;
+  onEdit: (rule: AlertRuleItem) => void;
+  onTest: (rule: AlertRuleItem) => void;
+  onDismissTest: (rule: AlertRuleItem) => void;
+  onRequestDelete: (rule: AlertRuleItem) => void;
+}
+
+const RuleCard: React.FC<RuleCardProps> = ({
+  rule, quote, busy, testResult, onToggleEnabled, onEdit, onTest, onDismissTest, onRequestDelete,
+}) => {
+  const { language } = useUiLanguage();
+  const text = ALERT_PAGE_TEXT[language];
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const isBusy = busy?.id === rule.id;
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const close = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [menuOpen]);
+
+  const threshold = rule.alertType === 'price_cross' ? rule.parameters.price : undefined;
+  const distance = quote && quote.price > 0 && threshold
+    ? `${((threshold / quote.price - 1) * 100).toFixed(1)}%`
+    : null;
+  const facts: string[] = [];
+  if (rule.alertType === 'price_cross' && rule.targetScope === 'single_symbol') {
+    facts.push(quote ? formatUiText(text.current, { price: quote.price.toLocaleString() }) : text.noQuote);
+    if (distance) facts.push(formatUiText(text.distance, { pct: distance }));
+  }
+  facts.push(rule.lastTriggeredAt ? formatUiText(text.lastTriggered, { time: formatDateTime(rule.lastTriggeredAt) }) : text.neverTriggered);
+  if (rule.cooldownActive) facts.push(formatUiText(text.cooling, { time: formatDateTime(rule.cooldownUntil) }));
+  if (hasChildTargets(rule)) facts.push(text.childCooldown);
+  facts.push(frequencyLabel(rule, text));
+  if (rule.source === 'tw_levels') facts.push(text.levelSource);
+
+  return (
+    <li className="rounded-xl border border-border/60 p-3 sm:p-4" data-testid={`alert-rule-${rule.id}`}>
+      <div className="flex items-start gap-3">
+        <input
+          type="checkbox"
+          role="switch"
+          className="mt-1 h-4 w-4 shrink-0"
+          aria-label={formatUiText(text.switchOn, { name: rule.name })}
+          checked={rule.enabled}
+          disabled={isBusy}
+          onChange={() => onToggleEnabled(rule)}
+        />
+        <div className="min-w-0 flex-1">
+          <p className={rule.enabled ? 'text-sm font-medium text-foreground' : 'text-sm font-medium text-muted-text'}>
+            {`${text.whenPrefix} ${ruleTarget(rule, language, text, quote)} ${ruleCondition(rule, language, text)} ${text.remind}`.trim()}
+          </p>
+          <p className="mt-1 break-words text-xs text-secondary-text">{facts.join(' · ')}</p>
+          <p className="mt-0.5 truncate text-xs text-muted-text">{rule.name}</p>
+        </div>
+        <div className="relative shrink-0" ref={menuRef}>
+          <button
+            type="button"
+            aria-label={formatUiText(text.menu, { name: rule.name })}
+            aria-expanded={menuOpen}
+            className="rounded p-1 text-secondary-text hover:bg-hover"
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+          </button>
+          {menuOpen ? (
+            <div role="menu" className="absolute right-0 z-20 mt-1 w-44 rounded-lg border border-border/60 bg-card p-1 shadow-lg">
+              {[
+                { label: text.edit, run: () => onEdit(rule) },
+                { label: busy?.id === rule.id && busy.action === 'test' ? text.dryRunning : text.dryRun, run: () => onTest(rule) },
+                { label: text.delete, run: () => onRequestDelete(rule), danger: true },
+              ].map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  role="menuitem"
+                  disabled={isBusy}
+                  className={`block w-full rounded px-3 py-2 text-left text-sm hover:bg-hover ${item.danger ? 'text-danger' : 'text-foreground'}`}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    item.run();
+                  }}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+      {testResult ? <DryRunResult result={testResult} text={text} onClose={() => onDismissTest(rule)} /> : null}
+    </li>
+  );
+};
 
 interface AlertRuleListProps {
   rules: AlertRuleItem[];
   total: number;
-  page: number;
-  pageSize: number;
   className?: string;
   isLoading?: boolean;
+  hasFilters?: boolean;
+  searchTarget: string;
+  scopeFilter: AlertScopeFilter;
   enabledFilter: AlertRuleEnabledFilter;
   alertTypeFilter: AlertTypeFilter;
+  quotes?: Record<string, AlertQuoteView>;
+  testResults?: Record<number, AlertRuleTestResponse>;
+  onSearchTargetChange: (value: string) => void;
+  onScopeFilterChange: (value: AlertScopeFilter) => void;
   onEnabledFilterChange: (value: AlertRuleEnabledFilter) => void;
   onAlertTypeFilterChange: (value: AlertTypeFilter) => void;
-  onPageChange: (page: number) => void;
+  onLoadMore: () => void;
   onToggleEnabled: (rule: AlertRuleItem) => void;
+  onEdit: (rule: AlertRuleItem) => void;
   onDelete: (rule: AlertRuleItem) => void;
   onTest: (rule: AlertRuleItem) => void;
+  onDismissTest: (rule: AlertRuleItem) => void;
+  guide?: React.ReactNode;
   busyRule?: AlertRuleBusyState | null;
 }
 
 export const AlertRuleList: React.FC<AlertRuleListProps> = ({
   rules,
   total,
-  page,
-  pageSize,
   className,
   isLoading = false,
+  hasFilters = false,
+  searchTarget,
+  scopeFilter,
   enabledFilter,
   alertTypeFilter,
+  quotes = {},
+  testResults = {},
+  onSearchTargetChange,
+  onScopeFilterChange,
   onEnabledFilterChange,
   onAlertTypeFilterChange,
-  onPageChange,
+  onLoadMore,
   onToggleEnabled,
+  onEdit,
   onDelete,
   onTest,
+  onDismissTest,
+  guide,
   busyRule = null,
 }) => {
   const { language } = useUiLanguage();
-  const text = ALERT_LIST_TEXT[language];
+  const text = ALERT_PAGE_TEXT[language];
   const [pendingDelete, setPendingDelete] = useState<AlertRuleItem | null>(null);
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const isRuleBusy = (rule: AlertRuleItem) => busyRule?.id === rule.id;
-  const isRuleActionBusy = (rule: AlertRuleItem, action: AlertRuleBusyAction) => (
-    busyRule?.id === rule.id && busyRule.action === action
-  );
+  const scopeOptions = [
+    { value: 'all', label: text.allGroups },
+    ...Object.entries(ALERT_SCOPE_LABELS[language]).map(([value, label]) => ({ value, label })),
+  ];
 
   return (
-    <Card
-      title={text.title}
-      subtitle={formatUiText(text.subtitle, { total })}
-      variant="bordered"
-      padding="md"
-      className={className}
-    >
-      <div className="mb-4 grid gap-3 md:grid-cols-2">
-        <Select
-          label={text.enabledFilter}
-          value={enabledFilter}
-          options={ALERT_ENABLED_FILTER_OPTIONS[language]}
-          onChange={(value) => {
-            onEnabledFilterChange(value as AlertRuleEnabledFilter);
-          }}
+    <Card variant="bordered" padding="md" className={className}>
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Input
+          label={text.search}
+          value={searchTarget}
+          placeholder={text.searchPlaceholder}
+          onChange={(event) => onSearchTargetChange(event.target.value)}
         />
         <Select
-          label={text.alertTypeFilter}
+          label={text.group}
+          value={scopeFilter}
+          options={scopeOptions}
+          onChange={(value) => onScopeFilterChange(value as AlertScopeFilter)}
+        />
+        <Select
+          label={text.status}
+          value={enabledFilter}
+          options={ALERT_ENABLED_FILTER_OPTIONS[language]}
+          onChange={(value) => onEnabledFilterChange(value as AlertRuleEnabledFilter)}
+        />
+        <Select
+          label={text.type}
           value={alertTypeFilter}
           options={ALERT_TYPE_FILTER_OPTIONS[language]}
-          onChange={(value) => {
-            onAlertTypeFilterChange(value as AlertTypeFilter);
-          }}
+          onChange={(value) => onAlertTypeFilterChange(value as AlertTypeFilter)}
         />
       </div>
 
-      {rules.length === 0 ? (
-        <div className="flex min-h-[220px] flex-1 items-center justify-center">
-          <EmptyState
-            icon={<Bell className="h-6 w-6" />}
-            title={isLoading ? text.loadingRules : text.emptyTitle}
-            description={text.emptyDescription}
-          />
-        </div>
+      {rules.length === 0 && !isLoading ? (
+        hasFilters ? <p className="py-8 text-center text-sm text-secondary-text">{text.noMatch}</p> : guide
       ) : (
-        <div className="min-h-0 flex-1 overflow-x-auto">
-          <table className="w-full min-w-[960px] text-left text-sm">
-            <thead className="border-b border-border/60 text-xs uppercase text-muted-text">
-              <tr>
-                <th className="px-3 py-2 font-medium">{text.rule}</th>
-                <th className="px-3 py-2 font-medium">{text.target}</th>
-                <th className="px-3 py-2 font-medium">{text.type}</th>
-                <th className="px-3 py-2 font-medium">{text.parameters}</th>
-                <th className="px-3 py-2 font-medium">{text.status}</th>
-                <th className="px-3 py-2 font-medium">{text.cooldown}</th>
-                <th className="px-3 py-2 font-medium">{text.updatedAt}</th>
-                <th className="px-3 py-2 text-right font-medium">{text.action}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/40">
-              {rules.map((rule) => (
-                <tr key={rule.id} className="align-top">
-                  <td className="px-3 py-3">
-                    <div className="font-medium text-foreground">{rule.name}</div>
-                    <div className="mt-1 text-xs text-muted-text">{formatUiText(text.source, { source: rule.source })}</div>
-                  </td>
-                  <td className="px-3 py-3 text-secondary-text">
-                    <div className="font-mono">{formatTarget(rule, language)}</div>
-                    <div className="mt-1 text-xs">{ALERT_SCOPE_LABELS[language][rule.targetScope] ?? rule.targetScope}</div>
-                  </td>
-                  <td className="px-3 py-3">
-                    <div className="flex flex-col items-start gap-1">
-                      <Badge variant="info">{ALERT_TYPE_LABELS[language][rule.alertType]}</Badge>
-                      <Badge variant={rule.severity === 'critical' ? 'danger' : rule.severity === 'warning' ? 'warning' : 'default'}>
-                        {ALERT_SEVERITY_LABELS[language][rule.severity] ?? rule.severity}
-                      </Badge>
-                    </div>
-                  </td>
-                  <td className="px-3 py-3 text-secondary-text">{formatParameters(rule, language)}</td>
-                  <td className="px-3 py-3">
-                    <Badge variant={rule.enabled ? 'success' : 'default'}>
-                      {rule.enabled ? text.enabled : text.disabled}
-                    </Badge>
-                  </td>
-                  <td className="px-3 py-3 text-xs text-secondary-text">
-                    <div>{isCoolingDown(rule) ? text.coolingDown : text.notCoolingDown}</div>
-                    <div className="mt-1">{formatDateTime(rule.cooldownUntil)}</div>
-                    {hasChildTargetCooldown(rule) ? (
-                      <div className="mt-1 text-muted-text">{text.childTargetCooldown}</div>
-                    ) : null}
-                  </td>
-                  <td className="px-3 py-3 text-xs text-secondary-text">{formatDateTime(rule.updatedAt ?? rule.createdAt)}</td>
-                  <td className="px-3 py-3">
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        size="xsm"
-                        variant="outline"
-                        onClick={() => onTest(rule)}
-                        isLoading={isRuleActionBusy(rule, 'test')}
-                        loadingText={text.testing}
-                        disabled={isRuleBusy(rule) && !isRuleActionBusy(rule, 'test')}
-                      >
-                        {text.test}
-                      </Button>
-                      <Button
-                        size="xsm"
-                        variant={rule.enabled ? 'secondary' : 'primary'}
-                        onClick={() => onToggleEnabled(rule)}
-                        isLoading={isRuleActionBusy(rule, 'toggle')}
-                        loadingText={rule.enabled ? text.disabling : text.enabling}
-                        disabled={isRuleBusy(rule) && !isRuleActionBusy(rule, 'toggle')}
-                      >
-                        {rule.enabled ? text.disable : text.enable}
-                      </Button>
-                      <Button
-                        size="xsm"
-                        variant="danger-subtle"
-                        aria-label={formatUiText(text.deleteAria, { name: rule.name })}
-                        onClick={() => setPendingDelete(rule)}
-                        disabled={isRuleBusy(rule)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        {text.delete}
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ul className="space-y-3">
+          {rules.map((rule) => (
+            <RuleCard
+              key={rule.id}
+              rule={rule}
+              quote={quotes[rule.target]}
+              busy={busyRule}
+              testResult={testResults[rule.id]}
+              onToggleEnabled={onToggleEnabled}
+              onEdit={onEdit}
+              onTest={onTest}
+              onDismissTest={onDismissTest}
+              onRequestDelete={setPendingDelete}
+            />
+          ))}
+        </ul>
       )}
 
-      <Pagination
-        currentPage={page}
-        totalPages={totalPages}
-        onPageChange={onPageChange}
-        className="mt-5"
-      />
+      {rules.length < total ? (
+        <div className="mt-4 flex justify-center">
+          <Button variant="secondary" size="sm" isLoading={isLoading} onClick={onLoadMore}>
+            {text.loadMore}
+          </Button>
+        </div>
+      ) : null}
 
       <ConfirmDialog
         isOpen={pendingDelete != null}
@@ -272,9 +328,7 @@ export const AlertRuleList: React.FC<AlertRuleListProps> = ({
         cancelText={text.cancel}
         isDanger
         onConfirm={() => {
-          if (pendingDelete) {
-            onDelete(pendingDelete);
-          }
+          if (pendingDelete) onDelete(pendingDelete);
           setPendingDelete(null);
         }}
         onCancel={() => setPendingDelete(null)}

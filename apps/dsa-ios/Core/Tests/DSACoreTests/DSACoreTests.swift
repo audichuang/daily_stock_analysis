@@ -131,6 +131,24 @@ final class DSACoreTests: XCTestCase {
         XCTAssertEqual(sizes, [50, 1])
     }
 
+    func testAlertMonitorStatusDecodesRunningAndNotRunning() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/v1/alerts/monitor/status")
+            return (200, #"{"enabled":true,"without_schedule":true,"running":true,"mode":"monitor_only","reason":null,"interval_seconds":300,"last_run_at":"2026-11-01T09:00:00","channels":["telegram"],"enabled_rules":3,"last_stats":{"evaluated":3}}"#)
+        }
+        let running = try await client.alertMonitorStatus()
+        XCTAssertEqual(running.summaryLabel, "監控中 · 3 條規則")
+        XCTAssertEqual(running.channels ?? [], ["telegram"])
+
+        // 開關開著但實際沒在跑時，不能顯示成監控中。
+        StubURLProtocol.handler = { _ in
+            (200, #"{"enabled":true,"without_schedule":false,"running":false,"mode":"off","reason":"schedule_not_running","interval_seconds":300,"channels":[],"enabled_rules":3}"#)
+        }
+        let stopped = try await client.alertMonitorStatus()
+        XCTAssertEqual(stopped.summaryLabel, "監控未啟動")
+        XCTAssertEqual(stopped.reason, "schedule_not_running")
+    }
+
     func testCalendarDecodesSourceURLTimezoneAndDeadlineContract() async throws {
         let today = EventCalendarDate.key(Date())
         StubURLProtocol.handler = { _ in

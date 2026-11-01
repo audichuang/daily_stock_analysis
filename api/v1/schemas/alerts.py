@@ -124,6 +124,18 @@ class AlertTriggerItem(BaseModel):
         ),
     )
     decision_signal_summary: Optional[Dict[str, Any]] = None
+    rule_name: Optional[str] = None
+    stock_name: Optional[str] = None
+    direction: Optional[str] = None
+    severity: Optional[str] = None
+    quote_source: Optional[str] = Field(None, description="實際報價來源，例如 shioaji／yfinance／fallback")
+
+
+class AlertTriggerSummary(BaseModel):
+    triggered: int = 0
+    skipped: int = 0
+    degraded: int = 0
+    failed: int = 0
 
 
 class AlertTriggerListResponse(BaseModel):
@@ -131,6 +143,23 @@ class AlertTriggerListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+    summary: Optional[AlertTriggerSummary] = Field(None, description="各狀態筆數，不受 status 篩選影響")
+
+
+class AlertMonitorStatusResponse(BaseModel):
+    enabled: bool
+    without_schedule: bool
+    running: bool = Field(..., description="監控實際在跑，不是開關值")
+    mode: Literal["scheduler", "monitor_only", "off"]
+    reason: Optional[Literal["monitor_disabled", "monitor_thread_not_running", "schedule_not_running"]] = None
+    interval_seconds: int
+    last_run_at: Optional[str] = None
+    last_finished_at: Optional[str] = None
+    next_run_at: Optional[str] = None
+    last_error: Optional[str] = None
+    last_stats: Optional[Dict[str, int]] = None
+    channels: List[str] = Field(default_factory=list)
+    enabled_rules: int = 0
 
 
 class AlertNotificationItem(BaseModel):

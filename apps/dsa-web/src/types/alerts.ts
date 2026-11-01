@@ -20,7 +20,7 @@ export type AlertSeverity = 'info' | 'warning' | 'critical';
 export type AlertTargetScope = 'single_symbol' | 'watchlist' | 'portfolio_holdings' | 'portfolio_account' | 'market';
 export type AlertDirection = 'above' | 'below' | 'up' | 'down' | 'bullish_cross' | 'bearish_cross';
 export type PortfolioStopLossMode = 'near' | 'breach';
-export type MarketRegion = 'cn' | 'hk' | 'us';
+export type MarketRegion = 'cn' | 'hk' | 'us' | 'tw';
 export type MarketLightStatus = 'yellow' | 'red';
 export type AlertDryRunStatus = 'triggered' | 'not_triggered' | 'evaluation_error';
 export type AlertTriggerStatus = 'triggered' | 'skipped' | 'degraded' | 'failed';
@@ -78,6 +78,32 @@ export interface AlertRuleCreateRequest {
   parameters: AlertRuleParameters;
   severity: AlertSeverity;
   enabled?: boolean;
+  cooldownSeconds?: number;
+}
+
+export type AlertRuleUpdateRequest = Partial<AlertRuleCreateRequest>;
+
+export interface AlertMonitorStatus {
+  enabled: boolean;
+  withoutSchedule: boolean;
+  running: boolean;
+  mode: 'scheduler' | 'monitor_only' | 'off';
+  reason?: 'monitor_disabled' | 'monitor_thread_not_running' | 'schedule_not_running' | null;
+  intervalSeconds: number;
+  lastRunAt?: string | null;
+  lastFinishedAt?: string | null;
+  nextRunAt?: string | null;
+  lastError?: string | null;
+  lastStats?: Record<string, number> | null;
+  channels: string[];
+  enabledRules: number;
+}
+
+export interface AlertTriggerSummary {
+  triggered: number;
+  skipped: number;
+  degraded: number;
+  failed: number;
 }
 
 export interface AlertDeleteResponse {
@@ -125,6 +151,11 @@ export interface AlertTriggerItem {
   analysisContextPackOverview?: AnalysisContextPackOverview | null;
   analysisVisibilitySource?: string | null;
   decisionSignalSummary?: Partial<DecisionSignalItem> | null;
+  ruleName?: string | null;
+  stockName?: string | null;
+  direction?: string | null;
+  severity?: AlertSeverity | string | null;
+  quoteSource?: string | null;
 }
 
 export interface AlertTriggerListResponse {
@@ -132,6 +163,7 @@ export interface AlertTriggerListResponse {
   total: number;
   page: number;
   pageSize: number;
+  summary?: AlertTriggerSummary | null;
 }
 
 export interface AlertNotificationItem {

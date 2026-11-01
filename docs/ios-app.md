@@ -10,7 +10,7 @@ Daily Stock AI 是本專案的原生 iOS 客戶端，支援台股與美股。核
 | 自選／個股 | 同步名單、名稱／代碼搜尋、價格走勢頂端是「分時｜日 K｜週 K｜月 K」分頁、區間下拉（1M～5Y、全部，捲動縮放後選單只是回到該寬度）與「⋯」（K 線／收盤線、看懂 K 線）；K 線可捲動與縮放，主圖 MA／EMA／布林、副圖 MACD／KD／RSI、重點標記；長按拖曳讀值 |
 | AI 研究 | 原生報告、歷史分頁、已載入資料搜尋、策略價位、證據、失效條件、完整報告與分享 |
 | 資產 | 原生現金／市值／損益、分帳戶持股、幣別與報價品質 |
-| 工具 | 內嵌既有問股、分析工作台、選股、決策訊號、帳本、基金、回測、告警、資料中心、用量與設定 |
+| 工具 | 2×2 捷徑帶狀態值（價格警報的監控狀態與規則數讀 `GET /api/v1/alerts/monitor/status`、事件行事曆、完整分析、連線）；其餘內嵌既有問股、選股、決策訊號、帳本、基金、回測、資料中心、用量與設定；警報頁仍是內嵌 Web，沒有原生警報 |
 
 前四項為 SwiftUI／Swift Charts 原生介面。工具使用受認證保護的既有 Web 介面；台股個股頁另開四維度 HTML 檔案。功能是否可執行仍取決於後端設定與資料源。此版沒有券商下單、iOS 推播或行情背景常駐訂閱。
 
@@ -26,7 +26,7 @@ Daily Stock AI 是本專案的原生 iOS 客戶端，支援台股與美股。核
 
 ### Cloudflare Access Service Token
 
-連線頁提供收合的「Cloudflare Access（選填）」，工具分頁的裝置設定亦有入口。憑證失效時回到連線頁、自動展開該區塊並顯示「Cloudflare Access 驗證失敗，請檢查 Client ID／Secret」；不把 Access 的 302 當作 DSA 密碼失效。已設定的 Secret 不回顯，更換需重新輸入兩個欄位，亦可明確「移除憑證」。離線錯誤保留憑證及原本網路錯誤。
+連線頁提供收合的「Cloudflare Access（選填）」，工具分頁的「連線」詳情頁亦有入口。憑證失效時回到連線頁、自動展開該區塊並顯示「Cloudflare Access 驗證失敗，請檢查 Client ID／Secret」；不把 Access 的 302 當作 DSA 密碼失效。已設定的 Secret 不回顯，更換需重新輸入兩個欄位，亦可明確「移除憑證」。離線錯誤保留憑證及原本網路錯誤。
 
 Client ID／Secret 使用獨立 Keychain service，以小寫 scheme／host／有效 port 的 origin 為 key，存取屬性為 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`，不寫 UserDefaults 或 log。同一 App 身分更新不需重填；登出僅清 `dsa_session`，不刪 Access 憑證。跨裝置還原不保留這組憑證，換服務 origin 則讀另一組，不搬移舊憑證。
 

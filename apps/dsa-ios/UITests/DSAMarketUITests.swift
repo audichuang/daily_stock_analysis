@@ -59,7 +59,7 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(text(containing: "Cloudflare Access 驗證失敗").waitForExistence(timeout: 10))
         capture("Access-WebKit轉址錯誤")
         goBack(from: "AI 問股", to: "工具與設定")
-        tap(app.buttons["tools.logout"])
+        logoutFromTools()
         expandAccessSettings()
         XCTAssertTrue(app.staticTexts["access-configured"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.secureTextFields["access-client-secret"].exists, "儲存的 Secret 不回顯")
@@ -99,6 +99,7 @@ final class DSAMarketUITests: XCTestCase {
         // 即使該 origin 之前已儲存憑證，也以這次明確提供的值更換。
         if app.tabBars.buttons["今日"].waitForExistence(timeout: 5) {
             tap(app.tabBars.buttons["工具"])
+            tap(app.buttons["tools.connection"])
             tap(app.buttons["tools.access"])
         } else if !app.buttons["access-save"].exists { tap(app.descendants(matching: .any)["access-section"].firstMatch) }
         if app.buttons["access-replace"].exists { tap(app.buttons["access-replace"]) }
@@ -141,7 +142,7 @@ final class DSAMarketUITests: XCTestCase {
         // Keychain 刻意跨 process 保留；每個案例先以真 UI 清掉該 fixture 的既有登入與 Token。
         if app.tabBars.buttons["今日"].exists {
             tap(app.tabBars.buttons["工具"])
-            tap(app.buttons["tools.logout"])
+            logoutFromTools()
         }
         expandAccessSettings()
         if app.staticTexts["access-configured"].exists {
@@ -351,15 +352,15 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(app.webViews.buttons["匯出合成設定 JSON"].isHittable, "原生分享視窗必須已關閉")
         goBack(from: "AI 問股", to: "工具與設定")
         for (route, title) in [("screening", "條件選股"), ("decision-signals", "決策訊號"),
-                               ("", "分析工作台"), ("backtest", "歷史回測"), ("portfolio", "帳本管理"),
-                               ("funds", "基金"), ("alerts", "價位警報"), ("data", "資料中心"),
+                               ("", "完整分析"), ("backtest", "歷史回測"), ("portfolio", "帳本管理"),
+                               ("funds", "基金"), ("alerts", "價格警報"), ("data", "資料中心"),
                                ("usage", "AI 用量"), ("settings", "服務設定")] {
             tap(app.buttons["tools.route.\(route)"])
             XCTAssertTrue(app.webViews.staticTexts["頁面路徑：/\(route)"].waitForExistence(timeout: 15), "工具必須載入對應路徑")
             capture("tool-\(route.isEmpty ? "analysis" : route)")
             goBack(from: title, to: "工具與設定")
         }
-        tap(app.buttons["tools.logout"])
+        logoutFromTools()
         XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15), "本機登出後應回到連線畫面")
         capture("12-本機登出")
     }
@@ -420,7 +421,7 @@ final class DSAMarketUITests: XCTestCase {
         app.terminate()
         app.launch()
         tap(app.tabBars.buttons["工具"])
-        tap(app.buttons["tools.logout"])
+        logoutFromTools()
         XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
     }
 
@@ -449,7 +450,7 @@ final class DSAMarketUITests: XCTestCase {
 
         // Keychain 跨案例保留；登出才不會讓下一個案例看不到登入畫面。
         tap(app.tabBars.buttons["工具"])
-        tap(app.buttons["tools.logout"])
+        logoutFromTools()
         XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
     }
 
@@ -528,6 +529,14 @@ final class DSAMarketUITests: XCTestCase {
 
     private func text(containing value: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", value)).firstMatch
+    }
+
+    /// 登出是最後一列且要確認。
+    private func logoutFromTools(file: StaticString = #filePath, line: UInt = #line) {
+        tap(app.buttons["tools.logout"], file: file, line: line)
+        let confirm = app.buttons["確認登出"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "登出前必須要求確認", file: file, line: line)
+        confirm.tap()
     }
 
     private func tap(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {

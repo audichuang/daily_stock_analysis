@@ -1,8 +1,11 @@
 import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { portfolioApi } from '../../api/portfolio';
+import { stocksApi } from '../../api/stocks';
+import { StockAutocomplete } from '../StockAutocomplete';
 import type {
   AlertRuleCreateRequest,
+  AlertRuleItem,
   AlertSeverity,
   AlertTargetScope,
   AlertType,
@@ -20,6 +23,7 @@ import {
   ALERT_MARKET_LIGHT_STATUS_OPTIONS,
   ALERT_MARKET_REGION_OPTIONS,
   ALERT_MARKET_TYPE_OPTIONS,
+  ALERT_PAGE_TEXT,
   ALERT_PORTFOLIO_TYPE_OPTIONS,
   ALERT_PRICE_DIRECTION_OPTIONS,
   ALERT_SEVERITY_OPTIONS,
@@ -29,7 +33,7 @@ import {
   ALERT_THRESHOLD_DIRECTION_OPTIONS,
 } from '../../locales/featureText';
 import { validateStockCode } from '../../utils/validation';
-import { Button, Card, Checkbox, Input, Select } from '../common';
+import { Button, Checkbox, Input, Select } from '../common';
 
 const SYMBOL_ALERT_TYPE_OPTIONS = [
   { value: 'price_cross', label: '价格突破' },
@@ -100,10 +104,26 @@ const MARKET_LIGHT_STATUS_OPTIONS: Array<{ value: MarketLightStatus; label: stri
 ];
 
 const MAX_REQUESTED_DAYS = 365;
+const COOLDOWN_DAILY = 86400;
+const COOLDOWN_HOURLY = 3600;
+
+// 新增、編輯、範本共用：有 id 就是編輯。
+export type AlertRuleFormInitial = Partial<AlertRuleItem>;
 
 interface AlertRuleFormProps {
   onSubmit: (payload: AlertRuleCreateRequest) => Promise<boolean | void> | boolean | void;
   isSubmitting?: boolean;
+  initial?: AlertRuleFormInitial | null;
+  onCancel?: () => void;
+}
+
+function initialCooldown(initial?: AlertRuleFormInitial | null): number {
+  const value = (initial?.cooldownPolicy as { cooldownSeconds?: unknown } | null | undefined)?.cooldownSeconds;
+  return typeof value === 'number' ? value : COOLDOWN_DAILY;
+}
+
+function textOf(value: number | undefined | null, fallback = ''): string {
+  return value === undefined || value === null ? fallback : String(value);
 }
 
 function isPortfolioScope(scope: AlertTargetScope): boolean {
@@ -124,37 +144,45 @@ function optionsForScope(scope: AlertTargetScope, language: UiLanguage) {
   return scope === 'portfolio_account' ? ALERT_PORTFOLIO_TYPE_OPTIONS[language] : ALERT_SYMBOL_TYPE_OPTIONS[language];
 }
 
-export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmitting = false }) => {
+export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmitting = false, initial = null, onCancel }) => {
   const { language } = useUiLanguage();
   const text = ALERT_FORM_TEXT[language];
-  const [name, setName] = useState('');
-  const [targetScope, setTargetScope] = useState<AlertTargetScope>('single_symbol');
-  const [target, setTarget] = useState('');
-  const [portfolioTarget, setPortfolioTarget] = useState('all');
-  const [marketRegion, setMarketRegion] = useState<MarketRegion>('cn');
+  const pageText = ALERT_PAGE_TEXT[language];
+  const isEdit = initial?.id != null;
+  // tw_levels 的價位來自看板的 SMC 清單，改價會和訊息裡的區間對不上（docs/tw-level-alerts.md）。
+  const levelLocked = initial?.source === 'tw_levels';
+  const params = initial?.parameters;
+  const initialScope = initial?.targetScope ?? 'single_symbol';
+  const [name, setName] = useState(initial?.name ?? '');
+  const [targetScope, setTargetScope] = useState<AlertTargetScope>(initialScope);
+  const [target, setTarget] = useState(initialScope === 'single_symbol' ? initial?.target ?? '' : '');
+  const [portfolioTarget, setPortfolioTarget] = useState(isPortfolioScope(initialScope) ? initial?.target ?? 'all' : 'all');
+  const [marketRegion, setMarketRegion] = useState<MarketRegion>(initialScope === 'market' ? (initial?.target as MarketRegion) ?? 'tw' : 'tw');
+  const [cooldownSeconds, setCooldownSeconds] = useState(initialCooldown(initial));
+  const [fetchedQuote, setFetchedQuote] = useState<{ code: string; price: number | null } | null>(null);
   const [accounts, setAccounts] = useState<PortfolioAccountItem[]>([]);
   const [accountsError, setAccountsError] = useState<string | null>(null);
-  const [alertType, setAlertType] = useState<AlertType>('price_cross');
-  const [severity, setSeverity] = useState<AlertSeverity>('warning');
-  const [enabled, setEnabled] = useState(true);
-  const [priceDirection, setPriceDirection] = useState<'above' | 'below'>('above');
-  const [changeDirection, setChangeDirection] = useState<'up' | 'down'>('up');
-  const [thresholdDirection, setThresholdDirection] = useState<'above' | 'below'>('above');
-  const [crossDirection, setCrossDirection] = useState<'bullish_cross' | 'bearish_cross'>('bullish_cross');
-  const [stopLossMode, setStopLossMode] = useState<PortfolioStopLossMode>('near');
-  const [price, setPrice] = useState('');
-  const [changePct, setChangePct] = useState('');
-  const [multiplier, setMultiplier] = useState('');
-  const [window, setWindow] = useState('20');
-  const [period, setPeriod] = useState('12');
-  const [threshold, setThreshold] = useState('');
-  const [fastPeriod, setFastPeriod] = useState('12');
-  const [slowPeriod, setSlowPeriod] = useState('26');
-  const [signalPeriod, setSignalPeriod] = useState('9');
-  const [kPeriod, setKPeriod] = useState('3');
-  const [dPeriod, setDPeriod] = useState('3');
-  const [marketLightStatuses, setMarketLightStatuses] = useState<MarketLightStatus[]>(['red', 'yellow']);
-  const [minDrop, setMinDrop] = useState('10');
+  const [alertType, setAlertType] = useState<AlertType>(initial?.alertType ?? 'price_cross');
+  const [severity, setSeverity] = useState<AlertSeverity>(initial?.severity ?? 'warning');
+  const [enabled, setEnabled] = useState(initial?.enabled ?? true);
+  const [priceDirection, setPriceDirection] = useState<'above' | 'below'>(params?.direction === 'below' ? 'below' : 'above');
+  const [changeDirection, setChangeDirection] = useState<'up' | 'down'>(params?.direction === 'down' ? 'down' : 'up');
+  const [thresholdDirection, setThresholdDirection] = useState<'above' | 'below'>(params?.direction === 'below' ? 'below' : 'above');
+  const [crossDirection, setCrossDirection] = useState<'bullish_cross' | 'bearish_cross'>(params?.direction === 'bearish_cross' ? 'bearish_cross' : 'bullish_cross');
+  const [stopLossMode, setStopLossMode] = useState<PortfolioStopLossMode>(params?.mode ?? 'near');
+  const [price, setPrice] = useState(textOf(params?.price));
+  const [changePct, setChangePct] = useState(textOf(params?.changePct));
+  const [multiplier, setMultiplier] = useState(textOf(params?.multiplier));
+  const [window, setWindow] = useState(textOf(params?.window, '20'));
+  const [period, setPeriod] = useState(textOf(params?.period, '12'));
+  const [threshold, setThreshold] = useState(textOf(params?.threshold));
+  const [fastPeriod, setFastPeriod] = useState(textOf(params?.fastPeriod, '12'));
+  const [slowPeriod, setSlowPeriod] = useState(textOf(params?.slowPeriod, '26'));
+  const [signalPeriod, setSignalPeriod] = useState(textOf(params?.signalPeriod, '9'));
+  const [kPeriod, setKPeriod] = useState(textOf(params?.kPeriod, '3'));
+  const [dPeriod, setDPeriod] = useState(textOf(params?.dPeriod, '3'));
+  const [marketLightStatuses, setMarketLightStatuses] = useState<MarketLightStatus[]>(params?.statuses ?? ['red', 'yellow']);
+  const [minDrop, setMinDrop] = useState(textOf(params?.minDrop, '10'));
   const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -175,6 +203,30 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
       cancelled = true;
     };
   }, [targetScope, text.accountLoadFailed]);
+
+  // 現價只在單檔價格規則顯示；抓不到時不顯示距離，不影響送出。
+  const quoteTarget = targetScope === 'single_symbol' && alertType === 'price_cross' ? validateStockCode(target) : null;
+  const quoteCode = quoteTarget?.valid ? quoteTarget.normalized : '';
+  useEffect(() => {
+    if (!quoteCode) return undefined;
+    let cancelled = false;
+    void stocksApi.getQuotes([quoteCode])
+      .then((items) => {
+        if (!cancelled) setFetchedQuote({ code: quoteCode, price: items?.[0]?.quote?.currentPrice ?? null });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [quoteCode]);
+  const currentPrice = fetchedQuote?.code === quoteCode ? fetchedQuote.price : null;
+  const priceTarget = Number(price);
+  const priceHint = currentPrice != null && currentPrice > 0 && price !== '' && Number.isFinite(priceTarget) && priceTarget > 0
+    ? formatUiText(pageText.currentPrice, {
+      price: currentPrice.toLocaleString(),
+      pct: `${((priceTarget / currentPrice - 1) * 100).toFixed(1)}%`,
+    })
+    : null;
 
   const alertTypeOptions = useMemo(() => optionsForScope(targetScope, language), [language, targetScope]);
   const portfolioTargetOptions = useMemo(() => [
@@ -363,7 +415,7 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
     setTargetScope(nextScope);
     setAlertType(nextType);
     setPortfolioTarget('all');
-    setMarketRegion('cn');
+    setMarketRegion('tw');
     resetParameters(nextType);
     setFormError(null);
   };
@@ -398,12 +450,13 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
       parameters,
       severity,
       enabled,
+      ...((isEdit || cooldownSeconds !== COOLDOWN_DAILY) ? { cooldownSeconds } : {}),
     });
     if (submitted === false) return;
     setName('');
     setTarget('');
     setPortfolioTarget('all');
-    setMarketRegion('cn');
+    setMarketRegion('tw');
     setPrice('');
     setChangePct('');
     setMultiplier('');
@@ -424,13 +477,18 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
   const renderTargetControl = () => {
     if (targetScope === 'single_symbol') {
       return (
-        <Input
-          label={text.targetCode}
-          value={target}
-          onChange={(event) => setTarget(event.target.value)}
-          placeholder="2330.TW / AAPL"
-          disabled={isSubmitting}
-        />
+        <div className="space-y-2">
+          <div className="text-sm font-medium text-foreground">{text.targetCode}</div>
+          <StockAutocomplete
+            value={target}
+            onChange={setTarget}
+            onSubmit={(code) => setTarget(code)}
+            onPick={(code) => setTarget(code)}
+            ariaLabel={text.targetCode}
+            placeholder={pageText.stockPlaceholder}
+            disabled={isSubmitting || levelLocked}
+          />
+        </div>
       );
     }
     if (targetScope === 'watchlist') {
@@ -469,43 +527,35 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
   };
 
   return (
-    <Card title={text.cardTitle} subtitle={text.cardSubtitle} variant="bordered" padding="md">
-      <form className="space-y-4" noValidate onSubmit={(event) => void handleSubmit(event)}>
+    <form className="space-y-6" noValidate onSubmit={(event) => void handleSubmit(event)}>
+      <fieldset className="space-y-4">
+        <legend className="mb-3 text-sm font-semibold text-foreground">{`1. ${pageText.stepWho}`}</legend>
         <div className="grid gap-4 md:grid-cols-2">
-          <Input
-            label={text.ruleName}
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder={text.ruleNamePlaceholder}
-            disabled={isSubmitting}
-          />
           <Select
             label={text.targetScope}
             value={targetScope}
             options={language === 'zh' ? TARGET_SCOPE_OPTIONS : ALERT_TARGET_SCOPE_OPTIONS[language]}
-            disabled={isSubmitting}
+            disabled={isSubmitting || levelLocked}
             onChange={handleScopeChange}
           />
           {renderTargetControl()}
-          <Select
-            label={text.ruleType}
-            value={alertType}
-            options={alertTypeOptions}
-            disabled={isSubmitting}
-            onChange={(value) => {
-              const nextType = value as AlertType;
-              setAlertType(nextType);
-              resetParameters(nextType);
-            }}
-          />
-          <Select
-            label={text.severity}
-            value={severity}
-            options={language === 'zh' ? SEVERITY_OPTIONS : ALERT_SEVERITY_OPTIONS[language]}
-            disabled={isSubmitting}
-            onChange={(value) => setSeverity(value as AlertSeverity)}
-          />
         </div>
+      </fieldset>
+
+      <fieldset className="space-y-4">
+        <legend className="mb-3 text-sm font-semibold text-foreground">{`2. ${pageText.stepWhen}`}</legend>
+        {levelLocked ? <p className="text-xs text-warning">{pageText.levelLocked}</p> : null}
+        <Select
+          label={text.ruleType}
+          value={alertType}
+          options={alertTypeOptions}
+          disabled={isSubmitting || levelLocked}
+          onChange={(value) => {
+            const nextType = value as AlertType;
+            setAlertType(nextType);
+            resetParameters(nextType);
+          }}
+        />
 
         {alertType === 'price_cross' ? (
           <div className="grid gap-4 md:grid-cols-2">
@@ -513,7 +563,7 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
               label={text.direction}
               value={priceDirection}
               options={language === 'zh' ? PRICE_DIRECTION_OPTIONS : ALERT_PRICE_DIRECTION_OPTIONS[language]}
-              disabled={isSubmitting}
+              disabled={isSubmitting || levelLocked}
               onChange={(value) => setPriceDirection(value as 'above' | 'below')}
             />
             <Input
@@ -523,8 +573,9 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
               step="0.0001"
               value={price}
               onChange={(event) => setPrice(event.target.value)}
-              disabled={isSubmitting}
+              disabled={isSubmitting || levelLocked}
             />
+            {priceHint ? <p className="text-xs text-secondary-text md:col-span-2">{priceHint}</p> : null}
           </div>
         ) : null}
 
@@ -769,19 +820,60 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
           />
         ) : null}
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      </fieldset>
+
+      <fieldset className="space-y-4">
+        <legend className="mb-3 text-sm font-semibold text-foreground">{`3. ${pageText.stepHow}`}</legend>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Select
+            label={pageText.frequency}
+            value={String(cooldownSeconds)}
+            options={[
+              { value: String(COOLDOWN_DAILY), label: pageText.daily },
+              { value: String(COOLDOWN_HOURLY), label: pageText.hourly },
+              ...(cooldownSeconds !== COOLDOWN_DAILY && cooldownSeconds !== COOLDOWN_HOURLY
+                ? [{ value: String(cooldownSeconds), label: formatUiText(pageText.everyCustom, { minutes: Math.round(cooldownSeconds / 60) }) }]
+                : []),
+            ]}
+            disabled={isSubmitting}
+            onChange={(value) => setCooldownSeconds(Number(value))}
+          />
+          <Select
+            label={text.severity}
+            value={severity}
+            options={language === 'zh' ? SEVERITY_OPTIONS : ALERT_SEVERITY_OPTIONS[language]}
+            disabled={isSubmitting}
+            onChange={(value) => setSeverity(value as AlertSeverity)}
+          />
+          <Input
+            label={text.ruleName}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder={text.ruleNamePlaceholder}
+            disabled={isSubmitting}
+          />
+        </div>
+        {isEdit ? null : (
           <Checkbox
             label={text.enableAfterCreate}
             checked={enabled}
             onChange={(event) => setEnabled(event.target.checked)}
             disabled={isSubmitting}
           />
-          <Button type="submit" isLoading={isSubmitting} loadingText={text.creating}>
-            {text.create}
+        )}
+      </fieldset>
+
+      {formError ? <p role="alert" className="text-sm text-danger">{formError}</p> : null}
+      <div className="flex justify-end gap-2">
+        {onCancel ? (
+          <Button type="button" variant="secondary" onClick={onCancel} disabled={isSubmitting}>
+            {pageText.cancel}
           </Button>
-        </div>
-        {formError ? <p role="alert" className="text-sm text-danger">{formError}</p> : null}
-      </form>
-    </Card>
+        ) : null}
+        <Button type="submit" isLoading={isSubmitting} loadingText={text.creating}>
+          {isEdit ? pageText.save : text.create}
+        </Button>
+      </div>
+    </form>
   );
 };

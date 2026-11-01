@@ -47,7 +47,6 @@ const BASELINE: Record<string, number> = {
   'components/settings/LLMChannelEditor.tsx': 148,
   'components/settings/SettingsPanelErrorBoundary.tsx': 7,
   'contexts/AuthContext.tsx': 3,
-  'pages/AlertsPage.tsx': 16,
   'pages/ChatPage.tsx': 1,
   'pages/HomePage.tsx': 3,
   'pages/NotFoundPage.tsx': 4,

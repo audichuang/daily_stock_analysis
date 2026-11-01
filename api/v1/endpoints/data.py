@@ -18,11 +18,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _overview_response(config: Config, *, runtime_scheduler: object = None) -> DataCapabilityOverviewResponse:
+def _overview_response(
+    config: Config,
+    *,
+    runtime_scheduler: object = None,
+    alert_monitor_thread: object = None,
+) -> DataCapabilityOverviewResponse:
     try:
         payload = DataCapabilityService(
             config=config,
             runtime_scheduler=runtime_scheduler,
+            alert_monitor_thread=alert_monitor_thread,
         ).get_overview()
         return DataCapabilityOverviewResponse.model_validate(payload)
     except Exception as exc:  # noqa: BLE001 - keep diagnostics fail-open at API boundary.
@@ -51,6 +57,7 @@ def get_data_overview(
     return _overview_response(
         config,
         runtime_scheduler=getattr(request.app.state, "runtime_scheduler_service", None),
+        alert_monitor_thread=getattr(request.app.state, "alert_monitor_thread", None),
     )
 
 
@@ -69,4 +76,5 @@ def get_data_capabilities(
     return _overview_response(
         config,
         runtime_scheduler=getattr(request.app.state, "runtime_scheduler_service", None),
+        alert_monitor_thread=getattr(request.app.state, "alert_monitor_thread", None),
     )

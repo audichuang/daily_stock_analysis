@@ -293,6 +293,12 @@ async def app_lifespan(app: FastAPI):
     from src.services.calendar_service import start_calendar_refresh_worker
 
     calendar_refresh_stop = start_calendar_refresh_worker(get_config())
+    # CLI 排程擁有監控時（main.py --schedule）不再起一份，否則會重複評估與推播。
+    app.state.alert_monitor_thread = None
+    if runtime_owns_schedule and not runtime_suppress_start:
+        from src.services.alert_worker import start_alert_monitor_worker
+
+        app.state.alert_monitor_thread = start_alert_monitor_worker(get_config())
     # 名称解析器的 AkShare 缓存预热：命中磁盘缓存则零网络加载，否则发起
     # 后台单飞拉取。把冷启动等待从首个用户请求挪到进程启动窗口。
     from src.services.name_to_code_resolver import warmup_akshare_cache
@@ -303,6 +309,10 @@ async def app_lifespan(app: FastAPI):
     finally:
         if calendar_refresh_stop is not None:
             calendar_refresh_stop.set()
+        alert_monitor_thread = getattr(app.state, "alert_monitor_thread", None)
+        if alert_monitor_thread is not None:
+            alert_monitor_thread.stop()
+            app.state.alert_monitor_thread = None
         refresh_task = getattr(app.state, "stock_index_refresh_task", None)
         if refresh_task is not None and not refresh_task.done():
             refresh_task.cancel()

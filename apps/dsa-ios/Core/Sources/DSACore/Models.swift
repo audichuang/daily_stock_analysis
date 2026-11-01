@@ -495,6 +495,30 @@ public struct UndatedCalendarStock: Codable, Sendable, Identifiable {
     public let detail: String
 }
 
+/// `GET /alerts/monitor/status`：監控實際狀態，舊服務沒有這個端點時由呼叫端當成無法取得。
+public struct AlertMonitorStatus: Codable, Sendable {
+    public let running: Bool
+    public let reason: String?
+    public let intervalSeconds: Int?
+    public let lastRunAt: String?
+    public let channels: [String]?
+    public let enabledRules: Int?
+
+    public init(running: Bool, reason: String? = nil, intervalSeconds: Int? = nil, lastRunAt: String? = nil, channels: [String]? = nil, enabledRules: Int? = nil) {
+        self.running = running
+        self.reason = reason
+        self.intervalSeconds = intervalSeconds
+        self.lastRunAt = lastRunAt
+        self.channels = channels
+        self.enabledRules = enabledRules
+    }
+
+    public var summaryLabel: String {
+        guard running else { return "監控未啟動" }
+        return "監控中 · \(enabledRules ?? 0) 條規則"
+    }
+}
+
 public struct EventCalendarResponse: Codable, Sendable {
     public let events: [CalendarEvent]
     public let undated: [UndatedCalendarStock]

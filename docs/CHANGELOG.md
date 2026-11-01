@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 新增 `AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE`（預設關閉）：API 程序以獨立執行緒只跑警報監控，不需開 `SCHEDULE_ENABLED`、不跑每日分析；即時價規則只在開盤時段評估且報價須屬於今天這一場（確認不了就不通知、不進冷卻；報價不帶時間時，將要觸發才另查最後一筆成交，並用該筆價格重新評估與通知），排程器同時開啟時不重複註冊。
+- [新功能] 新增 `GET /api/v1/alerts/monitor/status` 回報監控實際狀態、上次執行與通知管道；資料中心的 `alert.monitor` 同步認得獨立執行緒。
+- [改進] 警報 API 追加 `rule_name`、`stock_name`、`direction`、`severity`、`quote_source` 與各狀態彙總 `summary`，舊欄位不變；大盤紅綠燈警報支援 `tw`。
+- [改進] 通用警報通知改為 Markdown 版型，並標示實際報價來源（Shioaji 退回 yfinance 時看得出來）；台股 SMC 價位警報同樣帶來源。
+- [改進] Web 警報頁改版：監控狀態列（未啟動紅色橫幅）、數字條、句子式規則卡、依嚴重度著色的動態時間流、手機三分頁、新增與編輯共用抽屜、「試算目前條件」就地展開；報告、盯盤、持股加鈴鐺入口帶入代號。
+- [改進] iOS 工具頁改版：2×2 捷徑卡帶狀態值（含警報監控）、其餘單行列、連線詳情頁放 Access 設定、登出移到最後一列並需確認、加入看懂 K 線入口；警報仍走內嵌 Web。
 
 - [修復] 設定頁工具呼叫探測不再用 Sonnet 5.5／Opus 5.5 會拒絕的強制 `tool_choice`；能力探測、研究 agent 與截圖辨識的 `max_tokens` 放大以容納 thinking；專家 agent 的 JSON 鍵由 `reasoning` 改為 `summary`（舊鍵仍可讀）；問股工具不再強制分階段呼叫。
 - [文件] 根 `AGENTS.md` 拿掉客戶端細節，`scripts/AGENTS.md` 的長表格細節移到 `docs/scripts-side-effects.md`；`check_ai_assets.py` 擋住根目錄再寫入客戶端細節，並驗證 `AGENTS.md` 指向的文件與腳本存在。

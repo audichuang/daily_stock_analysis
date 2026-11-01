@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from enum import Enum
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -539,6 +539,34 @@ def is_market_polling_window(
         if phase == MarketPhase.UNKNOWN or phase in open_phases:
             return True
     return False
+
+
+def quote_in_current_session(
+    market: Optional[str],
+    quote_time: Optional[Union[datetime, date]],
+    current_time: Optional[datetime] = None,
+) -> bool:
+    """報價是否屬於今天這一場。警報用：前一場的收盤價不能當成今天的即時價觸發。
+
+    ``quote_time`` 是 datetime 就比開盤時刻；只有日期（日線列）就比市場當地日。
+    確認不了一律 False（沒有時間、今天沒開市、行事曆不可用）：開盤經過多久都不能代替資料時效，
+    誤報還會寫入冷卻、壓掉真正的警報。
+    """
+    tz_name = MARKET_TIMEZONE.get(market or "")
+    if not tz_name or quote_time is None:
+        return False
+    try:
+        market_now = get_market_now(market, current_time)
+        session_open, _ = _session_open_close_for_today(market, market_now)
+    except Exception as e:
+        logger.warning("trading_calendar.quote_in_current_session fail-closed: %s", e)
+        return False
+    if session_open is None or market_now < session_open:
+        return False
+    if not isinstance(quote_time, datetime):
+        return quote_time == market_now.date()
+    quote_at = _as_market_datetime(quote_time, tz_name)
+    return quote_at is not None and quote_at >= session_open
 
 
 def _add_warning_code(warnings: List[str], code: str) -> None:
