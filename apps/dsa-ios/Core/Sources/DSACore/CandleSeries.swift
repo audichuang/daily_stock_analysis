@@ -132,8 +132,40 @@ public enum CandleSeries {
         return points
     }
 
+    /// 最新一根相對昨收的漲跌（用日 K 算，週 K、月 K 的最新價標籤也是相對昨收）。不足兩根回 nil。
+    public static func latestChange(_ daily: [ChartCandle]) -> Double? {
+        let sorted = daily.sorted { $0.date < $1.date }
+        guard sorted.count >= 2 else { return nil }
+        return sorted[sorted.count - 1].close - sorted[sorted.count - 2].close
+    }
+
     /// 拖曳選取：取 x 位置（anchor）最近的 K 棒。用區間末日找會在月初選到上一個月。
     public static func nearest(to selected: Date, in candles: [ChartCandle]) -> ChartCandle? {
         candles.min { abs($0.anchor.timeIntervalSince(selected)) < abs($1.anchor.timeIntervalSince(selected)) }
+    }
+}
+
+/// 成交量顯示：資料一律是股，台股畫面換算成張（1 張＝1,000 股），其他市場仍是股。
+public enum VolumeDisplay {
+    public static func unit(market: String) -> String {
+        market == "tw" ? "張" : "股"
+    }
+
+    public static func value(_ shares: Double, market: String) -> Double {
+        market == "tw" ? shares / 1_000 : shares
+    }
+
+    /// 軸標用：不帶單位。一萬以上用「萬」「億」縮寫。
+    public static func axisText(_ shares: Double, market: String) -> String {
+        let display = value(shares, market: market)
+        let locale = Locale(identifier: "zh_TW")
+        if display >= 10_000 {
+            return display.formatted(.number.notation(.compactName).precision(.fractionLength(0...1)).locale(locale))
+        }
+        return display.formatted(.number.precision(.fractionLength(0...1)).locale(locale))
+    }
+
+    public static func text(_ shares: Double, market: String) -> String {
+        "\(axisText(shares, market: market)) \(unit(market: market))"
     }
 }
