@@ -73,7 +73,7 @@ python -m pytest -m "not network" <受影響測試檔> -q
 
 受影響測試：上游這輪改到的 `tests/*`，加上 import 了這輪改到之模組的測試檔（`git grep -l` 找）。**不跑全量**（§1 要先確認；交給使用者合併前決定）。
 
-有測試紅：先照 `tests/AGENTS.md` 排除假紅（單檔重跑），再在乾淨對照組跑同一個檔：
+有測試紅：先照 `docs/test-triage.md` 排除假紅（單檔重跑），再在乾淨對照組跑同一個檔：
 
 ```bash
 git -C $REPO worktree add --detach ~/.cache/dsa-upstream-sync/$DATE-fork origin/develop

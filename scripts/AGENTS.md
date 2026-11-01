@@ -22,6 +22,7 @@
 
 ## 進來改要遵守
 
+- **查 `market` schema 的新腳本先讀 `market_data/AGENTS.md` 的「讀取語意」**：未還原價算報酬、快照沒選定都會照常結束但數字是錯的。
 - **台股波段研究的契約正本是 `docs/tw-swing-pipeline.md`,成本口徑是 `docs/tw-trading-costs.md`。**改門檻、視窗、成本之前先讀,改完同步文件裡「凍結的訊號定義」。
 - **訊號定義是各寫各的,沒有共用 import,而且門檻也各存一份。**live 在 `screen_tw.py`(條件逐檔切片、門檻在 `BREAKOUT`);量測在 `measure_signal_forward.py`(整張面板 `shift`/`rolling`、門檻是它自己的 argparse 預設);`portfolio_walkforward.py` import 量測的訊號,但門檻預設與排序公式又各抄一份。**只改 `BREAKOUT` 不會讓 `make measure`／`make portfolio` 跟著變**——它們照常結束,印出來的是另一組訊號。踩過兩次口徑差(60 日高的視窗、月營收保鮮期是曆日不是交易列)。
 - **`backtest_screen.py` 不是 live 策略的回測。**檔名與說明寫著 screen_tw,但它有自己的 `FACTORS`、預設跑 `momentum`,沒有 `breakout`。別拿它當凍結訊號的正本。

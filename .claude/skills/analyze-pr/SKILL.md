@@ -80,9 +80,9 @@ gh run view <run_id> --log-failed
 
 如果必须补本地验证，按改动面选择最接近的检查，例如：
 
-- 后端：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（秒级快速门槛；本机必须带 `uv run`，否则 `python: command not found`）或 `uv run python -m py_compile <changed_python_files>`；**不要**在 review 场景跑不带参数的 `ci_gate.sh`，它等于 `all`、含全量离线测试（耗时见 `tests/AGENTS.md`）
+- 后端：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`（秒级快速门槛；本机必须带 `uv run`，否则 `python: command not found`）或 `uv run python -m py_compile <changed_python_files>`；**不要**在 review 场景跑不带参数的 `ci_gate.sh`，它等于 `all`、含全量离线测试（耗时见 `docs/test-triage.md`）
 - 前端：`cd apps/dsa-web && npm ci && npm run lint && npm run build`
-- iOS（`apps/dsa-ios/`）：CI 不覆盖，按根 `AGENTS.md` §6 在本机跑 Core 单测与 `test-ui.sh`
+- iOS（`apps/dsa-ios/`）：CI 不覆盖，按 `apps/dsa-ios/AGENTS.md` 在本机跑 Core 单测与 `test-ui.sh`
 
 ### Step 5: 评估正确性与风险
 

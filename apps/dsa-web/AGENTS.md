@@ -20,10 +20,10 @@
 
 ## 驗證
 
+- 交付前：`npm ci && npm run lint && npm run build`
 - 單元測試:`npm run test`(vitest)。測試環境預設 UI 語言是英文,斷言文字照 `en` 寫
 - 截圖(UI 改動的交付證據):本機 Playwright 沒下載瀏覽器(裝要先問),用 `chromium.launch({ channel: 'chrome' })` 走系統 Chrome;要指定語言就在 `addInitScript` 寫 localStorage `dsa.uiLanguage`
 
 ## 踩雷
 
-- 看板行情異常先查後端,見 `docs/realtime-board.md`。
-- **時間相關的測試用相對日期**,web 特例:90 天時間軸的 fixture 超出視窗就必紅。
+- 90 天時間軸的 fixture 超出視窗就必紅。

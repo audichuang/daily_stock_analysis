@@ -31,6 +31,6 @@ reviewer 点名的位置是**症状**，不是范围。收到反馈后先重新�
 
 ## 验证与交付
 
-按 `AGENTS.md` §6 验证矩阵选最接近改动面的检查（后端快速门槛：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`）。交付说明按 `AGENTS.md` §5 的交付六项写。
+按 `AGENTS.md` §6 与该目录的 `AGENTS.md`选最接近改动面的检查（后端快速门槛：`uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`）。交付说明按 `AGENTS.md` §5 的交付六项写。
 
 涉及 git 写操作时按 [`../shared/baseline-sync.md`](../shared/baseline-sync.md) 的确认边界执行。

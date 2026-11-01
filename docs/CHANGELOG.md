@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [文件] `AGENTS.md` 階層重整：根目錄只留全 repo 或由動作觸發的規則，Web、iOS、CI、寫測試與文件格式規則下放到各目錄；新增 `docs/AGENTS.md`，全量測試與紅燈判讀移到 `docs/test-triage.md`。
 - [修復] 復權因子接上官方分割與面額變更表（TWSE `TWTCAU`、`TWTB8U`，TPEx `pvChgRslt`、`etfSplitRslt`），比例一律用官方「前收→參考價」；修正 00631L（1/23→1/22）、00685L（1/25→1/24），補上 7 檔 ETF 分割與 6531、5536、8476 的面額變更。官方列優先於人工核對與價格推導；`daily` 時單一來源失敗沿用既有列、不擋其他資料，並由每日報告推系統通知。寫入正式庫要另跑 `cli adjust`，之後 ETF 與這些個股的歷史還原價、報酬會改變。
 - [新功能] `market_data.cli adjust --dry-run`：只印新增／修改／刪除／不變清單與修正前後還原報酬，連線強制唯讀。
 - [修復] `cli adjust` 重建時官方來源抓到未來 90 天，不再刪掉已公告的未來事件（下次 `daily` 才補回）。

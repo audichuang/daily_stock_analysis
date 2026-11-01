@@ -7,7 +7,7 @@
 | 症狀 | 原因 | 判別／處理 |
 |---|---|---|
 | 一大批子程序測試回 `127`，stderr 是 `libpython3.11.so.1.0: cannot open shared object file` | `setup-python` 的 Python 是預先編譯的，libpython 的 rpath 寫死在 `/opt/hostedtoolcache`。工具快取放在別處時，主程序靠 `LD_LIBRARY_PATH` 還能跑，測試用清掉環境變數的子程序就起不來 | runner 的 `RUNNER_TOOL_CACHE`／`AGENT_TOOLSDIRECTORY` 必須是 `/opt/hostedtoolcache`（compose 已設）。換 runner 映像或新開 runner 時檢查這兩個變數 |
-| 個別測試逾時或「資源沒收乾淨」，每次是不同的測試（`test_codex_tool_process`、`test_provider_cache`、`test_local_cli_backend`、Playwright `Test timeout of 30000ms`） | NAS 負載過高。12 執行緒還要分給其他 35 個容器，6 片 shard 同時跑時負載平均衝到 16 | 到 runner 容器裡單跑那個檔，會綠就是負載型假紅（`tests/AGENTS.md` 的判讀表）。別加 shard；跟被測性質無關的 timeout 照 `tests/AGENTS.md` 放寬 |
+| 個別測試逾時或「資源沒收乾淨」，每次是不同的測試（`test_codex_tool_process`、`test_provider_cache`、`test_local_cli_backend`、Playwright `Test timeout of 30000ms`） | NAS 負載過高。12 執行緒還要分給其他 35 個容器，6 片 shard 同時跑時負載平均衝到 16 | 到 runner 容器裡單跑那個檔，會綠就是負載型假紅（`docs/test-triage.md` 的判讀表）。別加 shard；跟被測性質無關的 timeout 照 `tests/AGENTS.md` 放寬 |
 | Playwright fixture 一批逾時 | runner 容器看得到主機全部 12 執行緒，Playwright 預設開 6 個 worker，容器實際只分到 4 核，Vite dev server 首次編譯就逾時 | `playwright.fixture.config.ts` 在 CI 固定 2 個 worker。新加會依 CPU 數開 worker 的工具，一樣要在 CI 固定數量 |
 | Postgres service 起不來 | ttnas 本機的 5432 已被佔用 | service 用隨機 host port（`ports: ['5432']`），連線埠在 step 裡從 `job.services.postgres.ports['5432']` 寫進 `GITHUB_ENV`；job 層 `env` 拿不到 `job` context，寫在那裡整個 workflow 會「workflow file issue」 |
 | 測試偶爾卡 10 秒以上，卡在 SQLite 建表或 commit | ttnas 的系統碟與 `/vol1`（btrfs，和資料庫容器共用）fsync 都會卡數秒 | `_work`、`/tmp` 放 tmpfs（compose 已設），Postgres service 也加 `--tmpfs /var/lib/postgresql/data`。實測同 4 個測試檔：系統碟 127 秒、tmpfs 19 秒 |
