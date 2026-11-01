@@ -292,7 +292,7 @@ export const IntelligentImport: React.FC<IntelligentImportProps> = ({
 
   return (
     <div className="space-y-4">
-      <div className="settings-surface-panel settings-border-strong rounded-xl border p-4 shadow-soft-card">
+      <div>
         <p className="text-sm font-medium text-foreground">{t('settings.intelligentImportSupportedInputs')}</p>
         <p className="mt-1 text-xs leading-5 text-secondary-text">
           {t('settings.intelligentImportHint')}

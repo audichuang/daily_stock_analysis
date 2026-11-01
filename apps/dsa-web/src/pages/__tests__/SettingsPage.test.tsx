@@ -227,8 +227,8 @@ vi.mock('../../components/settings', async () => {
       <button type="button" onClick={onUseSingleAgent}>切换为单 Agent</button>
     </div>
   ),
-  NotificationTestPanel: ({ items }: { items: Array<{ key: string; value: string }> }) => (
-    <div>通知测试面板:{items.map((item) => item.key).join(',')}</div>
+  NotificationChannelList: ({ items }: { items: Array<{ key: string; value: string }> }) => (
+    <div data-testid="notification-channel-list">{items.map((item) => item.key).join(',')}</div>
   ),
   SettingsAlert: ({
     title,
@@ -721,6 +721,9 @@ describe('SettingsPage', () => {
 
     expect(await screen.findByTestId('first-run-setup-card')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '首次启动配置检查' })).toBeInTheDocument();
+    await screen.findByText('基础配置已满足最小可用分析');
+    expect(screen.queryByText('自选股')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '展开检查' }));
     expect(screen.getByText('自选股')).toBeInTheDocument();
     expect(screen.getAllByText('已配置')).toHaveLength(2);
 
@@ -740,6 +743,8 @@ describe('SettingsPage', () => {
     renderSettingsPage();
 
     expect(await screen.findByTestId('first-run-setup-card')).toBeInTheDocument();
+    await screen.findByText('基础配置已满足最小可用分析');
+    fireEvent.click(screen.getByRole('button', { name: '展开检查' }));
     fireEvent.click(screen.getByRole('button', { name: '维护自选股' }));
 
     expect(scrollIntoView).toHaveBeenCalled();
@@ -853,9 +858,12 @@ describe('SettingsPage', () => {
 
     renderSettingsPage();
 
+    await screen.findByText('基础配置已满足最小可用分析');
+    fireEvent.click(screen.getByRole('button', { name: '展开检查' }));
     expect(await screen.findByText('初始状态')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '刷新检查' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开智能导入' }));
     fireEvent.click(screen.getByRole('button', { name: 'merge stock list' }));
 
     await waitFor(() => expect(getSetupStatus).toHaveBeenCalledTimes(3));
@@ -884,7 +892,10 @@ describe('SettingsPage', () => {
     renderSettingsPage();
 
     await screen.findByText('基础配置已满足最小可用分析');
+    fireEvent.click(screen.getByRole('button', { name: '展开检查' }));
     fireEvent.click(screen.getByRole('button', { name: '简短试跑' }));
+    expect(analyzeAsync).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '开始试跑' }));
 
     await waitFor(() => expect(analyzeAsync).toHaveBeenCalledWith({
       stockCode: 'SH600000',
@@ -941,6 +952,7 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('button', { name: '简短试跑' })).toBeEnabled();
 
     fireEvent.click(screen.getByRole('button', { name: '简短试跑' }));
+    fireEvent.click(screen.getByRole('button', { name: '开始试跑' }));
 
     await waitFor(() => expect(analyzeAsync).toHaveBeenCalledWith({
       stockCode: 'SH600000',
@@ -978,11 +990,125 @@ describe('SettingsPage', () => {
     expect(screen.getByText('还缺少 1 项：模型渠道')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '简短试跑' })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: '暂时隐藏' }));
-    expect(screen.getByText('首次启动配置检查已隐藏')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '收起检查' }));
+    expect(screen.queryByText('还没有配置模型渠道。')).not.toBeInTheDocument();
+    expect(screen.getByText('还缺少 1 项：模型渠道')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '展开检查' }));
-    expect(screen.getByText('首次启动配置检查')).toBeInTheDocument();
+    expect(screen.getByText('还没有配置模型渠道。')).toBeInTheDocument();
+  });
+
+  it('composes setup check messages from message_code and never shows the raw backend message', async () => {
+    getSetupStatus.mockResolvedValue({
+      isComplete: false,
+      readyForSmoke: false,
+      requiredMissingKeys: ['storage'],
+      nextStepKey: 'storage',
+      checks: [
+        {
+          key: 'storage',
+          title: '数据库 / 本地存储',
+          category: 'system',
+          required: true,
+          status: 'needs_action',
+          message: 'postgresql://user:secret@db/app',
+          nextStep: null,
+          messageCode: 'storage.app_db.unreachable',
+          messageParams: { errorType: 'OperationalError' },
+        },
+      ],
+    });
+    useSystemConfigMock.mockReturnValue(buildSystemConfigState({ activeCategory: 'base' }));
+
+    renderSettingsPage();
+
+    expect(await screen.findByText('应用数据库连接失败（OperationalError）')).toBeInTheDocument();
+    expect(screen.queryByText(/postgresql:/)).not.toBeInTheDocument();
+  });
+
+  it('keeps save and discard in the bottom bar with the unsaved count', () => {
+    useSystemConfigMock.mockReturnValue(buildSystemConfigState({ hasDirty: true, dirtyCount: 2 }));
+
+    renderSettingsPage();
+
+    expect(screen.getByText('有 2 项未保存的修改')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存配置 (2)' })).toBeEnabled();
+  });
+
+  it('keeps the bottom bar when nothing is dirty, with save disabled', () => {
+    useSystemConfigMock.mockReturnValue(buildSystemConfigState({ hasDirty: false, dirtyCount: 0 }));
+
+    renderSettingsPage();
+
+    expect(screen.getByText('没有未保存的修改')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /保存配置/ })).toBeDisabled();
+  });
+
+  it('shows categories first on mobile and enters content after selecting one', () => {
+    renderSettingsPage();
+
+    const content = screen.getByTestId('settings-content');
+    expect(content).toHaveClass('hidden', 'lg:block');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Base' }));
+    expect(setActiveCategory).toHaveBeenCalledWith('base');
+    expect(content).not.toHaveClass('hidden');
+
+    fireEvent.click(screen.getByRole('button', { name: '返回分类' }));
+    expect(content).toHaveClass('hidden');
+  });
+
+  it('opens content directly on mobile for a category deep link', async () => {
+    renderSettingsPage(['/settings?category=system']);
+
+    await waitFor(() => expect(screen.getByTestId('settings-content')).not.toHaveClass('hidden'));
+  });
+
+  it('searches fields across categories and links managed fields to their panel', () => {
+    const configState = buildSystemConfigState();
+    useSystemConfigMock.mockReturnValue(buildSystemConfigState({
+      activeCategory: 'system',
+      itemsByCategory: {
+        ...configState.itemsByCategory,
+        base: [
+          ...configState.itemsByCategory.base,
+          {
+            key: 'SCREENING_ENABLED',
+            value: 'false',
+            rawValueExists: true,
+            isMasked: false,
+            schema: {
+              key: 'SCREENING_ENABLED',
+              category: 'base',
+              dataType: 'boolean',
+              uiControl: 'switch',
+              isSensitive: false,
+              isRequired: false,
+              isEditable: true,
+              options: [],
+              validation: {},
+              displayOrder: 16,
+            },
+          },
+        ],
+      },
+    }));
+
+    renderSettingsPage();
+
+    const search = screen.getByRole('searchbox', { name: '搜索设置' });
+    fireEvent.change(search, { target: { value: 'wechat' } });
+    const results = screen.getByTestId('settings-search-results');
+    expect(within(results).getByTestId('settings-field-WECHAT_WEBHOOK_URL')).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: 'screening_enabled' } });
+    expect(screen.queryByTestId('settings-field-SCREENING_ENABLED')).not.toBeInTheDocument();
+    fireEvent.click(within(screen.getByTestId('settings-search-results')).getByRole('button'));
+    expect(setActiveCategory).toHaveBeenCalledWith('base');
+    expect(search).toHaveValue('');
+
+    fireEvent.change(search, { target: { value: 'no-such-field' } });
+    expect(screen.getByText('没有符合的设置。')).toBeInTheDocument();
   });
 
   it('renders web build info in system settings', async () => {
@@ -1325,6 +1451,8 @@ describe('SettingsPage', () => {
 
     renderSettingsPage();
 
+    expect(screen.queryByRole('button', { name: 'merge stock list' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '打开智能导入' }));
     fireEvent.click(screen.getByRole('button', { name: 'merge stock list' }));
 
     expect(refreshAfterExternalSave).toHaveBeenCalledWith(['STOCK_LIST']);
@@ -1544,7 +1672,7 @@ describe('SettingsPage', () => {
 
     renderSettingsPage();
 
-    fireEvent.click(screen.getByRole('button', { name: '开启选股' }));
+    fireEvent.click(screen.getByRole('switch', { name: '选股' }));
 
     await waitFor(() => expect(screeningEnable).toHaveBeenCalledTimes(1));
     expect(updateSystemConfig).not.toHaveBeenCalled();
@@ -1583,7 +1711,7 @@ describe('SettingsPage', () => {
 
     renderSettingsPage();
 
-    expect(screen.getByRole('button', { name: '开启选股' })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: '选股' })).not.toBeChecked();
     expect(screen.queryByRole('button', { name: '查看配置项' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('settings-field-SCREENING_ENABLED')).not.toBeInTheDocument();
   });
@@ -2379,7 +2507,7 @@ describe('SettingsPage', () => {
 
     renderSettingsPage();
 
-    fireEvent.click(screen.getByRole('button', { name: '开启选股' }));
+    fireEvent.click(screen.getByRole('switch', { name: '选股' }));
 
     await waitFor(() => expect(screeningEnable).toHaveBeenCalledTimes(1));
     expect(updateSystemConfig).not.toHaveBeenCalled();
@@ -2520,14 +2648,14 @@ describe('SettingsPage', () => {
     expect(screen.queryByTestId('settings-field-LLM_MY_PROXY_MODELS')).not.toBeInTheDocument();
   });
 
-  it('renders notification test panel before notification fields', () => {
+  it('renders notification settings as channel cards with no standalone test panel', () => {
     useSystemConfigMock.mockReturnValue(buildSystemConfigState({ activeCategory: 'notification' }));
 
     renderSettingsPage();
 
-    expect(screen.getByText('通知测试面板:WECHAT_WEBHOOK_URL')).toBeInTheDocument();
-    expect(screen.getByText('WECHAT_WEBHOOK_URL')).toBeInTheDocument();
-    expect(settingsPanelErrorBoundary).toHaveBeenCalledWith('通知测试');
+    expect(screen.getByTestId('notification-channel-list')).toHaveTextContent('WECHAT_WEBHOOK_URL');
+    expect(screen.queryByTestId('settings-field-WECHAT_WEBHOOK_URL')).not.toBeInTheDocument();
+    expect(settingsPanelErrorBoundary).not.toHaveBeenCalledWith('通知测试');
     expect(settingsPanelErrorBoundary).toHaveBeenCalledWith('通知设置');
   });
 
@@ -2536,7 +2664,7 @@ describe('SettingsPage', () => {
 
     renderSettingsPage();
 
-    expect(screen.getAllByText(/浏览器开发者工具控制台与后端日志/)).toHaveLength(2);
+    expect(screen.getAllByText(/浏览器开发者工具控制台与后端日志/)).toHaveLength(1);
     expect(screen.queryByText('desktop.log')).not.toBeInTheDocument();
   });
 
@@ -2546,7 +2674,7 @@ describe('SettingsPage', () => {
 
     renderSettingsPage();
 
-    expect(screen.getAllByText('desktop.log')).toHaveLength(2);
+    expect(screen.getAllByText('desktop.log')).toHaveLength(1);
     expect(screen.queryByText(/浏览器开发者工具控制台与后端日志/)).not.toBeInTheDocument();
   });
 
