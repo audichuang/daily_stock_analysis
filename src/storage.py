@@ -1598,16 +1598,21 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
 
     def save_financial_commentary(self, *, stock_code: str, period_key: str, source: str, prompt_version: str,
                                   data_hash: str, content: Dict[str, Any], model: Optional[str]) -> None:
-        """同鍵已有列（Mac 與 NAS 共用應用庫時可能同時生成）就保留先寫入的那份。"""
+        """同鍵已有列就覆寫：走到這裡代表舊列已被判定不可用（如引用的月營收已更正），留著會讓每次開頁都重付 LLM。"""
+        body = json.dumps(content, ensure_ascii=False)
+        short_model = (model or "")[:128] or None
         try:
             with self.session_scope() as session:
                 session.add(FinancialCommentaryRecord(
                     stock_code=stock_code, period_key=period_key, source=source, prompt_version=prompt_version,
-                    data_hash=data_hash, content=json.dumps(content, ensure_ascii=False),
-                    model=(model or "")[:128] or None,
+                    data_hash=data_hash, content=body, model=short_model,
                 ))
         except IntegrityError:
-            logger.info("財報導讀快取已存在: %s %s", stock_code, period_key)
+            with self.session_scope() as session:
+                session.query(FinancialCommentaryRecord).filter_by(
+                    stock_code=stock_code, period_key=period_key, source=source,
+                    prompt_version=prompt_version, data_hash=data_hash,
+                ).update({"content": body, "model": short_model, "created_at": utc_naive_now()})
 
     def _ensure_financial_commentary_schema(self) -> None:
         """可重入的追加 migration；既有應用庫只建新表。"""

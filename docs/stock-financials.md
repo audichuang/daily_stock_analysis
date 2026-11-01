@@ -43,9 +43,9 @@ ETF（台股代號 00／02 開頭且沒有財報列、美股 `quoteType` 是 ETF
 ## AI 導讀（`FINANCIAL_COMMENTARY_ENABLED`，預設關閉）
 
 - 開頁路徑（GET）絕不呼叫 LLM。`commentary.status=missing` 時客戶端才 POST；同鍵併發只付一次，失敗記 10 分鐘（程序內）免得每次開頁都花錢。
-- 快取在應用庫 `financial_commentary`，鍵是代號、最新期間、來源、提示詞版本、季度數字雜湊。月營收每月更新**不觸發**重生成；財報重編會。改提示詞要升 `PROMPT_VERSION`。表由 `create_all` 與 `_ensure_financial_commentary_schema` 建，舊環境不用動。
+- 快取在應用庫 `financial_commentary`，鍵是代號、最新期間、來源、提示詞版本、季度雜湊（值、年增、季增、幣別、單位、模板）。畫面外基期重編時年增率變了也會重生成，因為敘述可能反轉。新月份的月營收**不觸發**重生成；已引用的月份被更正時，讀取比對 `used_tokens` 發現不符才重生成並覆寫舊列。寫快取失敗時結果留程序內 1 小時，不重付 LLM。改提示詞要升 `PROMPT_VERSION`。表由 `create_all` 與 `_ensure_financial_commentary_schema` 建，舊環境不用動。
 - LLM 回 `metric_key`、`period`、`importance`、`what_happened`、`why_it_matters`、`how_to_read`。欄位或期間不存在、該格沒有值就丟那一條；一條都不剩算失敗。
-- **文字裡的財務數字只能是佔位符** `{{gross_margin@2026Q2:yoy}}`，由程式換成回應裡的值。佔位符對不上，或殘留期間、時間長度以外的阿拉伯數字，丟那一條。程式不判斷文字語意。排名與連續幾季由程式算好放進資料包的 `trend`（模型自己數實測會錯），提示詞要求照抄，但程式不驗文字有沒有照抄。
+- **文字裡的財務數字只能是佔位符** `{{gross_margin@2026Q2:yoy}}`，由程式換成回應裡的值。佔位符對不上，或佔位符外有任何數值表示（NFKC 後的各種數字；中文數字接元、倍、成、億、百分點等財務單位），丟那一條。「連續兩季」「第二季」與「每賣一百元」這類期間敘述、教學比喻不算。程式不判斷文字語意。排名與連續幾季由程式算好放進資料包的 `trend`（模型自己數實測會錯），提示詞要求照抄，但程式不驗文字有沒有照抄。
 - 截斷的 JSON 算失敗，不走 `json_repair`（修得回來但最後一句是斷的）。輸出上限 16384，同 `tw_stock_report`。
 - 欄位的 `definition` 是固定教學，開關關閉也看得到。導讀內容只有繁中。
 

@@ -10,6 +10,7 @@ struct FinancialsSection: View {
     @State private var loadError: String?
     @State private var generating = false
     @State private var selected: FinancialMetric?
+    @State private var loadedCode: String?
 
     var body: some View {
         Group {
@@ -164,8 +165,19 @@ struct FinancialsSection: View {
 
     private func load() async {
         guard let client = store.client else { return }
+        // 換股先清掉舊值：新請求失敗或還沒回來時，不能留著上一檔的數字與導讀。
+        if loadedCode != code {
+            data = nil
+            commentary = nil
+            selected = nil
+            generating = false
+        }
+        loadError = nil
+        let requested = code
         do {
-            let payload = try await client.stockFinancials(code)
+            let payload = try await client.stockFinancials(requested)
+            guard requested == code else { return }
+            loadedCode = requested
             data = payload
             commentary = payload.commentary
             loadError = nil
@@ -183,12 +195,16 @@ struct FinancialsSection: View {
         generating = true
         let stockCode = code
         Task {
-            defer { generating = false }
+            let result: FinancialCommentary
             do {
-                commentary = try await client.financialCommentary(stockCode)
+                result = try await client.financialCommentary(stockCode)
             } catch {
-                commentary = FinancialCommentary(status: "failed")
+                result = FinancialCommentary(status: "failed")
             }
+            // 期間換了股票就丟掉，不把上一檔的導讀蓋到這一檔。
+            guard stockCode == code else { return }
+            commentary = result
+            generating = false
         }
     }
 }

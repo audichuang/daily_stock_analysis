@@ -14,11 +14,12 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 MAX_HIGHLIGHTS = 6
 _FAILURE_TTL_SECONDS = 600
 _MONTHLY_KEY = "monthly_revenue"
@@ -28,12 +29,26 @@ _TEXT_MAX = 400
 _locks: Dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 _failures: Dict[str, float] = {}
+# 寫快取失敗時，已付費的結果先留在程序內；否則下次 GET 又是 missing，客戶端會再付一次 LLM。
+_UNSAVED_TTL_SECONDS = 3600
+_unsaved: Dict[str, tuple] = {}
 
 _TOKEN_RE = re.compile(r"\{\{\s*([a-z_]+)@([0-9A-Za-z-]+)(?::(yoy|qoq|mom))?\s*\}\}", re.ASCII)
 # 文字裡合法的非財務數字：期間標籤、申報表名、時間長度與序數。其餘阿拉伯數字一律視為模型自己寫的財務數字。
 _ALLOWED_DIGITS_RE = re.compile(
     r"\d{4}\s*(?:年\s*)?(?:Q[1-4]|第?[一二三四1-4]季)|\bQ[1-4]\b|\b10-[QK]\b|\b20-F\b|\d{4}\s*年(?:\s*\d{1,2}\s*月)?|"
     r"\d{4}-\d{2}|\d{1,2}\s*月|\d+\s*(?:個月|個季度|季|年|天|日)", re.ASCII)
+# 中文數字接財務單位才算金額或比率；「連續兩季」「第二季」「八季」沒有財務單位，不受影響。
+_CN_NUM = "零〇一二兩三四五六七八九十百千萬億兆壹貳參肆伍陸柒捌玖拾佰仟"
+_CN_FINANCIAL_RE = re.compile(
+    rf"[{_CN_NUM}]+(?:(?:新?台幣|美金|美元|人民幣|日圓|塊錢|元|倍|%)|個?百分點|成(?!不變|長|本|功|為|交|立|員|分|績))"
+    rf"|百分之[{_CN_NUM}]+"
+    rf"|[{_CN_NUM}]+分之[{_CN_NUM}]+"
+    rf"|[{_CN_NUM}]*[{_CN_NUM[:-3]}][萬億兆](?![不別])"
+)
+_EN_FINANCIAL_RE = re.compile(r"\b(?:hundred|thousand|million|billion|trillion|percent)\b", re.IGNORECASE | re.ASCII)
+# 教學比喻不是公司數字：「每賣一百元」「每一塊錢」。「每股」後面的金額不算比喻。
+_TEACHING_UNIT_RE = re.compile(r"每(?!股)[^，。、；]{0,4}?(?:一百|一)(?:元|塊錢)")
 
 RULES = """你是替完全不會看財報的人寫導讀的老師。下面是一家公司的季度財報數字（全部由程式從官方資料算好）。
 請挑出這份財報最值得看的欄位，說清楚哪裡怎麼了、為什麼重要，並順便教讀者怎麼看這個指標。只輸出一個 JSON 物件，不要其他文字。
@@ -46,7 +61,7 @@ RULES = """你是替完全不會看財報的人寫導讀的老師。下面是一
 規則：
 - highlights 挑 3~5 條，依重要度排序。只挑真的有變化或有矛盾的欄位；平穩的不要硬湊。
 - metric_key、period 只能用資料包列出的值；月營收用 metric_key "monthly_revenue"、period 用月份（如 2026-09）。
-- **文字裡不准直接寫阿拉伯數字的財務數值**。要引用數字時寫佔位符，程式會換成正確數字：
+- **文字裡不准自己寫財務數值，阿拉伯數字、全形數字、中文金額（如八百元、三成、兩倍）都不行**，程式會整條丟掉。要引用數字時寫佔位符，程式會換成正確數字：
   {{metric_key@period}} 是該期數值；{{metric_key@period:yoy}} 是年增（比率欄位是年變化幾個百分點）；{{metric_key@period:qoq}} 是季增；
   月營收另有 {{monthly_revenue@月份:mom}} 是月增。例：「毛利率來到 {{gross_margin@2026Q2}}，比去年同季 {{gross_margin@2026Q2:yoy}}」。
   資料包的 tokens 列出每一格可用的佔位符；值是 null 的那一格不能用。
@@ -125,11 +140,22 @@ def _valid_targets(payload: dict) -> set:
     return targets
 
 
-def render_text(text: Any, tokens: Dict[str, Optional[str]]) -> Optional[str]:
-    """換掉佔位符；對不上佔位符或文字裡自己寫了財務數字就回 None。"""
+def has_self_written_number(text: str) -> bool:
+    """佔位符以外的數值表示：先 NFKC 收斂全形，再看任何 Unicode 數字與中文金額、比率。"""
+    normalized = unicodedata.normalize("NFKC", text)
+    without_labels = _ALLOWED_DIGITS_RE.sub("", normalized)
+    if re.search(r"\d", without_labels):
+        return True
+    without_teaching = _TEACHING_UNIT_RE.sub("", without_labels)
+    return bool(_CN_FINANCIAL_RE.search(without_teaching) or _EN_FINANCIAL_RE.search(without_teaching))
+
+
+def render_text(text: Any, tokens: Dict[str, Optional[str]], used: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """換掉佔位符；對不上佔位符或文字裡自己寫了數值就回 None。`used` 收集實際引用的佔位符與當下的值。"""
     if not isinstance(text, str) or not text.strip():
         return None
     missing = False
+    seen: Dict[str, str] = {}
 
     def replace(match: re.Match) -> str:
         nonlocal missing
@@ -140,14 +166,17 @@ def render_text(text: Any, tokens: Dict[str, Optional[str]]) -> Optional[str]:
         if value is None:
             missing = True
             return ""
+        seen[key] = value
         return f"\x00{value}\x00"
 
-    replaced = _TOKEN_RE.sub(replace, text.strip())
-    if missing or "{{" in replaced:
+    replaced = _TOKEN_RE.sub(replace, text.strip().replace("\x00", ""))
+    if missing or "{{" in unicodedata.normalize("NFKC", replaced):
         return None
     outside = "".join(part for index, part in enumerate(replaced.split("\x00")) if index % 2 == 0)
-    if re.search(r"[0-9]", _ALLOWED_DIGITS_RE.sub("", outside)):
+    if has_self_written_number(outside):
         return None
+    if used is not None:
+        used.update(seen)
     return replaced.replace("\x00", "")[:_TEXT_MAX]
 
 
@@ -159,31 +188,46 @@ def normalize_commentary(parsed: Any, payload: dict) -> Optional[dict]:
     targets = _valid_targets(payload)
     highlights: List[dict] = []
     seen = set()
-    for item in parsed.get("highlights") or []:
+    used: Dict[str, str] = {}
+    raw_items = parsed.get("highlights")
+    for item in raw_items if isinstance(raw_items, list) else []:
         if not isinstance(item, dict) or len(highlights) >= MAX_HIGHLIGHTS:
             continue
-        target = (item.get("metric_key"), item.get("period"))
-        importance = item.get("importance")
+        metric_key, period, importance = item.get("metric_key"), item.get("period"), item.get("importance")
+        # 模型可能回陣列或物件；不可雜湊的值不能讓整份導讀變成失敗。
+        if not all(isinstance(value, str) for value in (metric_key, period, importance)):
+            continue
+        target = (metric_key, period)
         if target not in targets or target in seen or importance not in _IMPORTANCE:
             logger.info("[financial_commentary] 丟棄不存在或不合法的欄位: %s", target)
             continue
-        rendered = {field: render_text(item.get(field), tokens)
+        item_used: Dict[str, str] = {}
+        rendered = {field: render_text(item.get(field), tokens, item_used)
                     for field in ("what_happened", "why_it_matters", "how_to_read")}
         if not all(rendered.values()):
             logger.info("[financial_commentary] 丟棄含無法核對數字的條目: %s", target)
             continue
         seen.add(target)
-        highlights.append({"metric_key": target[0], "period": target[1], "importance": importance, **rendered})
+        used.update(item_used)
+        highlights.append({"metric_key": metric_key, "period": period, "importance": importance, **rendered})
     if not highlights:
         return None
-    return {"headline": render_text(parsed.get("headline"), tokens), "highlights": highlights}
+    headline = render_text(parsed.get("headline"), tokens, used)
+    return {"headline": headline, "highlights": highlights, "used_tokens": used}
 
 
-def filter_for_payload(content: dict, payload: dict) -> Optional[dict]:
-    """快取讀回也驗一次：契約改版或欄位消失時不把對不到的標記丟給客戶端。"""
+def filter_for_payload(content: Any, payload: dict) -> Optional[dict]:
+    """快取讀回也驗一次：欄位消失的標記不丟給客戶端；文字引用的數字已變（月營收更正）就當沒有快取。"""
+    if not isinstance(content, dict):
+        return None
+    tokens = _token_table(payload)
+    used = content.get("used_tokens")
+    if not isinstance(used, dict) or any(tokens.get(key) != value for key, value in used.items()):
+        return None
     targets = _valid_targets(payload)
-    highlights = [item for item in content.get("highlights") or []
-                  if (item.get("metric_key"), item.get("period")) in targets]
+    raw_items = content.get("highlights")
+    highlights = [item for item in (raw_items if isinstance(raw_items, list) else [])
+                  if isinstance(item, dict) and (item.get("metric_key"), item.get("period")) in targets]
     if not highlights:
         return None
     return {**content, "highlights": highlights}
@@ -195,9 +239,15 @@ def latest_period(payload: dict) -> Optional[str]:
 
 
 def data_hash(payload: dict) -> str:
-    """只雜湊季度數字：月營收每月更新，不該讓同一季的導讀每月重生成；財報重編則要重生成。"""
-    basis = [(metric["key"], [(point["period"], point["value"]) for point in metric["points"]])
-             for metric in payload.get("metrics") or []]
+    """雜湊佔位符依賴的全部季度欄位：畫面外基期重編時值沒變、年增率卻變了，敘述也可能反轉，所以要重生成。
+
+    月營收不算：每月更新不該讓同一季的導讀重生成；已引用的月份改由 `used_tokens` 在讀取時比對。
+    """
+    basis = [payload.get("currency"), payload.get("template"),
+             [(metric["key"], metric.get("kind"), metric.get("unit"),
+               [(point["period"], point["value"], point.get("yoy_pct"), point.get("qoq_pct"),
+                 point.get("yoy_pp"), point.get("qoq_pp")) for point in metric["points"]])
+              for metric in payload.get("metrics") or []]]
     return hashlib.sha256(json.dumps(basis, sort_keys=True).encode("utf-8")).hexdigest()[:32]
 
 
@@ -311,10 +361,16 @@ def cached_view(payload: dict) -> dict:
         return _view("not_applicable", payload)
     if not is_enabled():
         return _view("disabled", payload)
+    key = _cache_key(payload)
+    unsaved = _unsaved.get("|".join(key.values()))
+    if unsaved and time.monotonic() < unsaved[0]:
+        content = filter_for_payload(unsaved[1], payload)
+        if content is not None:
+            return _view("ready", payload, content=content, model=unsaved[2])
     try:
         from src.storage import get_db
 
-        record = get_db().get_financial_commentary(**_cache_key(payload))
+        record = get_db().get_financial_commentary(**key)
     except Exception as exc:
         logger.warning("[financial_commentary] 讀快取失敗: %s", exc)
         return _view("failed", payload, message="AI 導讀暫時讀不到，數字不受影響。")
@@ -356,7 +412,11 @@ def ensure_commentary(payload: dict, *, generate: Optional[Callable[[str], tuple
             from src.storage import get_db
 
             get_db().save_financial_commentary(**key, content=content, model=model)
+            _unsaved.pop(identity, None)
         except Exception as exc:
-            # 寫入失敗仍回這次的結果；下次開頁會重生成，記 warning 才查得到。
-            logger.warning("[financial_commentary] 寫快取失敗: %s", exc)
+            logger.warning("[financial_commentary] 寫快取失敗，結果暫存程序內: %s", exc)
+            now = time.monotonic()
+            for stale_key in [k for k, v in _unsaved.items() if now >= v[0]]:
+                del _unsaved[stale_key]
+            _unsaved[identity] = (now + _UNSAVED_TTL_SECONDS, content, model)
         return _view("ready", payload, content=content, model=model)

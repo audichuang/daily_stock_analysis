@@ -179,37 +179,39 @@ const MonthlyRevenue: React.FC<{ data: StockFinancials; highlights: FinancialHig
  */
 export const FinancialsPanel: React.FC<{ stockCode: string }> = ({ stockCode }) => {
   const { t } = useUiLanguage();
-  const [data, setData] = useState<StockFinancials | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [commentary, setCommentary] = useState<FinancialCommentary | null>(null);
-  const [generating, setGenerating] = useState(false);
-  const [loadedCode, setLoadedCode] = useState<string | null>(null);
+  // 狀態全部綁請求的代號：切股後不符的舊值一律不顯示，A 的數字不會留在 B 的報告下。
+  const [loaded, setLoaded] = useState<{ code: string; data: StockFinancials | null; error: string | null } | null>(null);
+  const [commentaryState, setCommentaryState] = useState<{ code: string; value: FinancialCommentary } | null>(null);
+  const [generatingCode, setGeneratingCode] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     stocksApi.getFinancials(stockCode).then(
       (payload) => {
         if (cancelled) return;
-        setData(payload);
-        setCommentary(payload.commentary);
-        setError(null);
-        setLoadedCode(stockCode);
+        setLoaded({ code: stockCode, data: payload, error: null });
+        setCommentaryState({ code: stockCode, value: payload.commentary });
         if (payload.status === 'ok' && payload.commentary.status === 'missing') {
-          setGenerating(true);
+          setGeneratingCode(stockCode);
           stocksApi.ensureFinancialCommentary(stockCode).then(
-            (result) => { if (!cancelled) setCommentary(result); },
-            () => { if (!cancelled) setCommentary({ status: 'failed', highlights: [], message: null }); },
-          ).finally(() => { if (!cancelled) setGenerating(false); });
+            (result) => { if (!cancelled) setCommentaryState({ code: stockCode, value: result }); },
+            () => { if (!cancelled) setCommentaryState({ code: stockCode, value: { status: 'failed', highlights: [], message: null } }); },
+          ).finally(() => { if (!cancelled) setGeneratingCode(null); });
         }
       },
       (err) => {
         if (cancelled) return;
-        setError(getParsedApiError(err).message);
-        setLoadedCode(stockCode);
+        setLoaded({ code: stockCode, data: null, error: getParsedApiError(err).message });
       },
     );
     return () => { cancelled = true; };
   }, [stockCode]);
+
+  const stale = loaded?.code !== stockCode;
+  const current = stale ? null : loaded.data;
+  const error = stale ? null : loaded.error;
+  const commentary = commentaryState?.code === stockCode ? commentaryState.value : null;
+  const generating = generatingCode === stockCode;
 
   const highlightsByMetric = useMemo(() => {
     const map = new Map<string, FinancialHighlight[]>();
@@ -219,8 +221,6 @@ export const FinancialsPanel: React.FC<{ stockCode: string }> = ({ stockCode }) 
     return map;
   }, [commentary]);
 
-  const stale = loadedCode !== stockCode;
-  const current = stale ? null : data;
   // 非台美市場不支援：整塊不佔版面。
   if (current?.status === 'unsupported') return null;
   const latest = current?.periods[current.periods.length - 1];
@@ -234,7 +234,7 @@ export const FinancialsPanel: React.FC<{ stockCode: string }> = ({ stockCode }) 
         className="mb-3"
       />
       {stale ? <p className="text-sm text-secondary-text" role="status">{t('financials.loading')}</p> : null}
-      {!stale && error ? <p className="text-sm text-danger" role="alert">{error}</p> : null}
+      {error ? <p className="text-sm text-danger" role="alert">{error}</p> : null}
       {current && current.status !== 'ok' ? (
         <p className="text-sm leading-6 text-secondary-text" data-testid="financials-status">{current.statusReason}</p>
       ) : null}
@@ -261,7 +261,7 @@ export const FinancialsPanel: React.FC<{ stockCode: string }> = ({ stockCode }) 
           <div className="grid min-w-0 gap-2 md:grid-cols-2">
             {current.metrics.map((metric) => (
               <MetricRow
-                key={metric.key}
+                key={`${stockCode}-${metric.key}`}
                 metric={metric}
                 periods={current.periods}
                 currency={current.currency}

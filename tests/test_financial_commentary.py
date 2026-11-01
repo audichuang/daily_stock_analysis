@@ -283,17 +283,122 @@ def test_cached_highlight_for_removed_metric_is_filtered(storage):
     stale_key = fc._cache_key(_payload())
     with storage.session_scope() as session:
         session.query(FinancialCommentaryRecord).update({"content": json.dumps(
-            {"headline": "h", "highlights": [_item(metric_key="gone")]})})
+            {"headline": "h", "highlights": [_item(metric_key="gone")], "used_tokens": {}})})
     with _enable():
         assert fc.cached_view(_payload())["status"] == "missing"
     assert stale_key["period_key"] == "2099Q2"
 
 
-def test_duplicate_save_keeps_first_writer(storage):
+def test_duplicate_save_overwrites_so_a_rejected_row_does_not_repay_forever(storage):
     key = dict(stock_code="X", period_key="P", source="s", prompt_version="v", data_hash="h")
     storage.save_financial_commentary(**key, content={"a": 1}, model="first")
     storage.save_financial_commentary(**key, content={"a": 2}, model="second")
-    assert storage.get_financial_commentary(**key)["model"] == "first"
+    record = storage.get_financial_commentary(**key)
+    assert record["model"] == "second" and record["content"] == {"a": 2}
+
+
+@pytest.mark.parametrize("text", [
+    "毛利率來到８８．８％", "每股盈餘八百元", "賺了三億", "年增超過一成", "營收翻了兩倍", "年增百分之二十",
+    "賺了八百美元", "升了三個百分點", "佔四分之一", "每股一百元", "賺了一億", "٣٥% 的成長", "revenue of three billion", "營收 three billion美元",
+])
+def test_self_written_numbers_in_any_script_are_rejected(text):
+    assert fc.render_text(text, {}) is None
+
+
+@pytest.mark.parametrize("text", [
+    "連續兩季上升", "第二季的毛利率", "這八季最高", "近四季的平均", "看三個月的方向", "每賣一百元留下多少", "每一塊錢賺得更多",
+    "比率的變化要用「百分點」來看", "營收成長很快", "千萬不要只看單季", "這一塊業務", "第１季的數字",
+    "現金流量表的第三季", "變成虧損", "股東每放一百元一年賺多少",
+])
+def test_period_and_teaching_phrases_are_not_rejected(text):
+    assert fc.render_text(text, {}) == text
+
+
+def test_rendered_output_keeps_original_punctuation():
+    assert fc.render_text("毛利率（重點）：{{a@b}}，很好", {"a@b": "1.0%"}) == "毛利率（重點）：1.0%，很好"
+
+
+def test_fullwidth_placeholder_lookalike_is_rejected():
+    assert fc.render_text("毛利率 ｛｛gross_margin@2099Q2｝｝", {}) is None
+
+
+@pytest.mark.parametrize("field", ["metric_key", "period", "importance"])
+def test_unhashable_model_values_drop_only_that_item(field):
+    result = fc.normalize_commentary({"highlights": [_item(**{field: ["x"]}), _item()]}, _payload())
+    assert len(result["highlights"]) == 1
+
+
+def test_non_list_highlights_is_a_failure_not_an_exception():
+    assert fc.normalize_commentary({"highlights": 3}, _payload()) is None
+
+
+@pytest.mark.parametrize("content", [[1], "x", {"highlights": "x"}, {"highlights": [1], "used_tokens": {}}])
+def test_corrupt_cache_content_reads_as_missing(content):
+    assert fc.filter_for_payload(content, _payload()) is None
+
+
+def test_hash_tracks_yoy_when_off_screen_base_is_restated():
+    base, restated = _payload(), _payload()
+    restated["metrics"][0]["points"][1]["yoy_pct"] = 40.0
+    assert fc.data_hash(base) != fc.data_hash(restated)
+
+
+def test_hash_tracks_currency_and_unit():
+    base = _payload()
+    assert fc.data_hash(base) != fc.data_hash(_payload(currency="USD"))
+    changed = _payload()
+    changed["metrics"][0]["unit"] = "TWD/ADR"
+    assert fc.data_hash(base) != fc.data_hash(changed)
+
+
+def _monthly_response():
+    item = _item(metric_key="monthly_revenue", period="2099-09", what_happened="九月 {{monthly_revenue@2099-09:yoy}}")
+    return json.dumps({"highlights": [item]}, ensure_ascii=False)
+
+
+def test_new_month_keeps_cache_but_restated_cited_month_regenerates(storage):
+    calls = []
+
+    def generate(prompt):
+        calls.append(prompt)
+        return _monthly_response(), "m"
+
+    newer = _payload(monthly_revenue=_payload()["monthly_revenue"] + [{"month": "2099-10", "revenue": 6e11, "yoy_pct": 1.0, "mom_pct": 1.0}])
+    restated = _payload(monthly_revenue=[{"month": "2099-09", "revenue": 5e11, "yoy_pct": -3.0, "mom_pct": -0.6}])
+    with _enable():
+        fc.ensure_commentary(_payload(), generate=generate)
+        assert fc.ensure_commentary(newer, generate=generate)["status"] == "ready"
+        assert len(calls) == 1
+        assert fc.ensure_commentary(restated, generate=generate)["highlights"][0]["what_happened"] == "九月 −3.0%"
+        assert len(calls) == 2
+        # 覆寫後同一份數字不再重付
+        assert fc.ensure_commentary(restated, generate=generate)["status"] == "ready"
+        assert len(calls) == 2
+
+
+def test_save_failure_keeps_result_in_process_and_does_not_repay(storage):
+    calls = []
+
+    def generate(prompt):
+        calls.append(prompt)
+        return _response(), "m"
+
+    fc._unsaved.clear()
+    with _enable(), patch.object(DatabaseManager, "save_financial_commentary", side_effect=RuntimeError("write down")):
+        assert fc.ensure_commentary(_payload(), generate=generate)["status"] == "ready"
+        assert fc.cached_view(_payload())["status"] == "ready"
+        assert fc.ensure_commentary(_payload(), generate=generate)["status"] == "ready"
+    assert len(calls) == 1
+    fc._unsaved.clear()
+
+
+def test_unsaved_result_expires(storage):
+    fc._unsaved.clear()
+    with _enable(), patch.object(DatabaseManager, "save_financial_commentary", side_effect=RuntimeError("write down")), \
+            patch.object(fc, "_UNSAVED_TTL_SECONDS", -1):
+        fc.ensure_commentary(_payload(), generate=lambda prompt: (_response(), "m"))
+        assert fc.cached_view(_payload())["status"] == "missing"
+    fc._unsaved.clear()
 
 
 def test_endpoints_expose_status_and_validate_code(storage):

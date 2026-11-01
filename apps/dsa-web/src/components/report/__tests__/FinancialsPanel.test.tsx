@@ -65,6 +65,32 @@ describe('FinancialsPanel', () => {
     expect(screen.getByText('1.27 兆元')).toBeInTheDocument();
   });
 
+  it('never shows the previous stock when switching and the new request fails', async () => {
+    vi.mocked(stocksApi.getFinancials).mockResolvedValueOnce(payload({ commentary: commentary('ready') }));
+    const { rerender } = render(<FinancialsPanel stockCode="2330.TW" />);
+    expect(await screen.findByText('1.27 兆元')).toBeInTheDocument();
+    vi.mocked(stocksApi.getFinancials).mockRejectedValueOnce(new Error('boom'));
+    rerender(<FinancialsPanel stockCode="AAPL" />);
+    expect(screen.queryByText('1.27 兆元')).not.toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.queryByText('1.27 兆元')).not.toBeInTheDocument();
+    expect(screen.queryByText('这季重点')).not.toBeInTheDocument();
+  });
+
+  it('ignores a late commentary from the previous stock', async () => {
+    let resolveFirst: (value: FinancialCommentary) => void = () => undefined;
+    vi.mocked(stocksApi.getFinancials).mockResolvedValueOnce(payload({ commentary: commentary('missing') }));
+    vi.mocked(stocksApi.ensureFinancialCommentary).mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve; }));
+    const { rerender } = render(<FinancialsPanel stockCode="2330.TW" />);
+    await waitFor(() => expect(stocksApi.ensureFinancialCommentary).toHaveBeenCalledTimes(1));
+    vi.mocked(stocksApi.getFinancials).mockResolvedValueOnce(payload({ stockCode: 'AAPL', commentary: commentary('disabled') }));
+    rerender(<FinancialsPanel stockCode="AAPL" />);
+    await screen.findByText('1.27 兆元');
+    resolveFirst(commentary('ready'));
+    await waitFor(() => expect(screen.queryByText('这季重点')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('financials-headline')).not.toBeInTheDocument();
+  });
+
   it('explains ETFs and hides unsupported markets', async () => {
     vi.mocked(stocksApi.getFinancials).mockResolvedValue(payload({ status: 'not_applicable', statusReason: 'ETF 是基金', metrics: [], periods: [] }));
     const { unmount } = render(<FinancialsPanel stockCode="00631L.TW" />);
