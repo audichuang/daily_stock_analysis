@@ -82,6 +82,8 @@ export interface PortfolioAccountSnapshot {
   dataQuality?: 'ok' | 'partial' | string;
   limitations?: string[];
   positions: PortfolioPositionItem[];
+  /** 今日損益（帳戶幣別）；有一檔算不出就是 null。 */
+  dayPnl?: number | null;
 }
 
 export interface PortfolioSnapshotResponse {

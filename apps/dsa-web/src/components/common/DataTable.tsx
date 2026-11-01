@@ -37,6 +37,8 @@ interface DataTableProps<T> {
   onRowClick?: (row: T) => void;
   /** 手機自訂卡片列，給了就取代 primary 欄＋詳情的預設呈現。 */
   renderMobileCard?: (row: T) => React.ReactNode;
+  /** 桌機在該列下方插入一列整寬內容；手機由 renderMobileCard 自行處理。 */
+  renderExpandedRow?: (row: T) => React.ReactNode;
   emptyState?: React.ReactNode;
   /** 桌機表格的高度上限，超過時表格內部捲動、表頭固定。 */
   maxHeight?: number | string;
@@ -77,6 +79,7 @@ export function DataTable<T>({
   isRowUnavailable,
   onRowClick,
   renderMobileCard,
+  renderExpandedRow,
   emptyState,
   maxHeight,
   className = '',
@@ -142,9 +145,10 @@ export function DataTable<T>({
             {rows.map((row) => {
               const unavailable = isRowUnavailable?.(row) ?? false;
               const clickable = Boolean(onRowClick) && !unavailable;
+              const expandedContent = renderExpandedRow?.(row);
               return (
+                <React.Fragment key={rowKey(row)}>
                 <tr
-                  key={rowKey(row)}
                   data-row-state={unavailable ? 'unavailable' : 'available'}
                   onClick={clickable ? () => onRowClick?.(row) : undefined}
                   className={cn(
@@ -168,6 +172,14 @@ export function DataTable<T>({
                     </td>
                   ))}
                 </tr>
+                {expandedContent ? (
+                  <tr data-row-state="expanded" className="border-b border-border/40">
+                    <td colSpan={columns.length} className="p-0">
+                      {expandedContent}
+                    </td>
+                  </tr>
+                ) : null}
+                </React.Fragment>
               );
             })}
           </tbody>

@@ -4,6 +4,7 @@ import { stocksApi, type DossierSummary, type DossierTone } from '../../api/stoc
 import { getParsedApiError } from '../../api/error';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { cn } from '../../utils/cn';
+import { ConfirmDialog } from '../common/ConfirmDialog';
 import { nearestLevels, type NearLevel } from '../../utils/dossierLevels';
 import { StockDossierDrawer } from '../report/StockDossierDrawer';
 
@@ -34,9 +35,21 @@ function nearFor(summary: DossierSummary, price?: number | null) {
   return ref ? nearestLevels(summary.levels, ref) : null;
 }
 
+/** 結構事件的中文名；認不得的種類照原文顯示。 */
+function useStructureKindLabel() {
+  const { t } = useUiLanguage();
+  return (kind: string): string => {
+    const normalized = kind.toUpperCase();
+    if (normalized === 'BOS') return t('board.dossier.kind.bos');
+    if (normalized === 'CHOCH') return t('board.dossier.kind.choch');
+    return kind;
+  };
+}
+
 /** 表格內的精簡欄：最新結構方向＋最近支撐／壓力距離（用即時價算）。 */
 export const BoardDossierCell: React.FC<{ summary?: DossierSummary | null; price?: number | null }> = ({ summary, price }) => {
   const { t } = useUiLanguage();
+  const kindLabel = useStructureKindLabel();
   if (!summary) return <span className="text-secondary-text">—</span>;
   const s = summary.structure;
   const near = nearFor(summary, price);
@@ -44,7 +57,7 @@ export const BoardDossierCell: React.FC<{ summary?: DossierSummary | null; price
     <div className="whitespace-nowrap text-xs leading-5">
       {s ? (
         <span className={s.bias === 'bull' ? 'text-red-500' : 'text-emerald-600'}>
-          {s.bias === 'bull' ? '▲' : '▼'} {s.kind}
+          {s.bias === 'bull' ? '▲' : '▼'} {kindLabel(s.kind)}
         </span>
       ) : null}
       {near?.support ? (
@@ -74,6 +87,8 @@ export const BoardDossierPanel: React.FC<{
   const [open, setOpen] = useState(false);
   const [alertNote, setAlertNote] = useState<string | null>(null);
   const [creatingAlerts, setCreatingAlerts] = useState(false); // 送出中鎖住按鈕，避免連點重複建立
+  const [confirmingAlerts, setConfirmingAlerts] = useState(false);
+  const kindLabel = useStructureKindLabel();
   if (!summary) return null;
   const s = summary.structure;
   const near = nearFor(summary, price);
@@ -86,7 +101,7 @@ export const BoardDossierPanel: React.FC<{
           <span>
             {t('board.dossier.structure')}：
             <span className={s.bias === 'bull' ? 'text-red-500' : 'text-emerald-600'}>
-              {s.date.slice(5)} {s.kind} {s.bias === 'bull' ? '▲' : '▼'}（{fmtPrice(s.level)}）
+              {s.date.slice(5)} {kindLabel(s.kind)} {s.bias === 'bull' ? '▲' : '▼'}（{fmtPrice(s.level)}）
             </span>
           </span>
         ) : null}
@@ -130,15 +145,7 @@ export const BoardDossierPanel: React.FC<{
             type="button"
             className="ml-auto rounded-md border border-border px-2 py-0.5 text-secondary-text hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
             disabled={creatingAlerts}
-            onClick={() => {
-              if (!window.confirm(t('board.dossier.alertConfirm'))) return;
-              setCreatingAlerts(true);
-              stocksApi
-                .createLevelAlerts(code, { support: near?.support?.level, resistance: near?.resistance?.level })
-                .then((n) => setAlertNote(t('board.dossier.alertCreated', { count: String(n) })))
-                .catch((err) => setAlertNote(getParsedApiError(err).message))
-                .finally(() => setCreatingAlerts(false));
-            }}
+            onClick={() => setConfirmingAlerts(true)}
           >
             {t('board.dossier.createAlerts')}
           </button>
@@ -155,6 +162,21 @@ export const BoardDossierPanel: React.FC<{
         </button>
       </div>
       {alertNote ? <p className="text-secondary-text" role="status">{alertNote}</p> : null}
+      <ConfirmDialog
+        isOpen={confirmingAlerts}
+        title={t('board.dossier.createAlerts')}
+        message={t('board.dossier.alertConfirm')}
+        onCancel={() => setConfirmingAlerts(false)}
+        onConfirm={() => {
+          setConfirmingAlerts(false);
+          setCreatingAlerts(true);
+          stocksApi
+            .createLevelAlerts(code, { support: near?.support?.level, resistance: near?.resistance?.level })
+            .then((n) => setAlertNote(t('board.dossier.alertCreated', { count: String(n) })))
+            .catch((err) => setAlertNote(getParsedApiError(err).message))
+            .finally(() => setCreatingAlerts(false));
+        }}
+      />
       {open ? <StockDossierDrawer stockCode={code} stockName={name} onClose={() => setOpen(false)} /> : null}
     </div>
   );

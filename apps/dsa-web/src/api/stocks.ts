@@ -248,6 +248,18 @@ export const stocksApi = {
     }
   },
 
+  /** 盯盤迷你分時：批次當日走勢；伺服器快取 3 分鐘，單檔失敗回空 points。單次上限 50 檔。 */
+  async getIntradayTrends(codes: string[]): Promise<IntradayTrendItem[]> {
+    if (codes.length === 0) return [];
+    const response = await apiClient.get('/api/v1/stocks/intraday-trends', { params: { codes: codes.join(',') } });
+    const data = response.data as { items?: Array<{ stock_code: string; points?: Array<{ t: string; price: number }>; error?: string | null }> };
+    return (data.items ?? []).map((item) => ({
+      stockCode: item.stock_code,
+      points: (item.points ?? []).map((p) => ({ t: p.t, price: p.price })),
+      error: item.error,
+    }));
+  },
+
   async getTrend(code: string, range: TrendRange): Promise<TrendPoint[]> {
     const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/trend`, {
       params: { range },
@@ -259,6 +271,7 @@ export const stocksApi = {
 
 export type TrendRange = 'day' | 'month' | 'year';
 export type TrendPoint = { t: string; price: number };
+export type IntradayTrendItem = { stockCode: string; points: TrendPoint[]; error?: string | null };
 
 export type DossierBias = 'bull' | 'bear' | null;
 export type DossierLevel = {

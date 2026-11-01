@@ -2989,3 +2989,31 @@ textarea {
   font-size: var(--text-micro);
   line-height: 1.35;
 }
+
+/* 盯盤報價變動的短暫底色；key 換掉元素重掛即重播，減少動態時不閃。 */
+@keyframes board-flash-up {
+  from { background-color: color-mix(in srgb, var(--market-up) 28%, transparent); }
+  to { background-color: transparent; }
+}
+
+@keyframes board-flash-down {
+  from { background-color: color-mix(in srgb, var(--market-down) 28%, transparent); }
+  to { background-color: transparent; }
+}
+
+.board-flash-up {
+  border-radius: 4px;
+  animation: board-flash-up 1.2s ease-out;
+}
+
+.board-flash-down {
+  border-radius: 4px;
+  animation: board-flash-down 1.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .board-flash-up,
+  .board-flash-down {
+    animation: none;
+  }
+}

@@ -33,6 +33,8 @@ from api.v1.schemas.stocks import (
     LevelAlertResponse,
     ExtractFromImageResponse,
     ExtractItem,
+    IntradayTrendBatchResponse,
+    IntradayTrendItem,
     KLineData,
     StockHistoryResponse,
     StockProfileResponse,
@@ -519,6 +521,29 @@ def get_stock_quotes(
             status_code=500,
             detail={"error": "internal_error", "message": f"批量获取行情失败: {str(e)}"},
         )
+
+
+@router.get(
+    "/intraday-trends",
+    response_model=IntradayTrendBatchResponse,
+    responses={
+        200: {"description": "批次當日走勢"},
+        400: {"description": "请求参数错误", "model": ErrorResponse},
+    },
+    summary="看板迷你分時：批次當日走勢",
+    description="逗號分隔代碼；伺服器端快取 3 分鐘（輪詢不會逐檔打 kbars），單檔失敗回空 points＋error，整批仍 200。",
+)
+def get_intraday_trends(
+    codes: str = Query(..., description="逗號分隔股票代碼，如 2330.TW,AAPL"),
+) -> IntradayTrendBatchResponse:
+    raw = [c.strip() for c in codes.split(",") if c.strip()]
+    if not raw:
+        raise api_error(400, "empty_codes", "codes 不能为空")
+    if len(raw) > MAX_BATCH_CODES:      # 上限用原始輸入算，重複代碼繞不過
+        raise api_error(400, "too_many_codes", f"最多 {MAX_BATCH_CODES} 个代码")
+    parsed = list(dict.fromkeys(raw))
+    rows = StockService().get_intraday_trends(parsed)
+    return IntradayTrendBatchResponse(items=[IntradayTrendItem(**row) for row in rows])
 
 
 @router.get(

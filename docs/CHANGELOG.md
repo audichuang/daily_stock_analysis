@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 新增 `GET /api/v1/stocks/intraday-trends` 批次當日走勢（伺服器端快取 3 分鐘、單次上限 50 檔、單檔失敗回空），盯盤桌機版持股列顯示 80×28 迷你分時，可關閉。
+- [改進] Web 盯盤列表改用 DataTable：分持股（台股）、持股（美股）、自選三段，名稱代號併欄且不依賴報價，均價附偏離、成交量顯示張、技術結構顯示中文，排序可記憶，可篩選，手機為三段式列；移除「狀態」「時間」欄。
+- [改進] Web 盯盤頁首顯示台股、美股市場狀態（收盤後不再標「即時」），指數條含美股，新增帳戶總覽（今日損益取自持股 API 的 `day_pnl`）、需注意膠囊與更新時間。
+- [改進] Web 盯盤展開區改兩欄（當日走勢附昨收線、數值格），委買委賣同一套顏色，新增「建立警報」「完整分析」；列尾「分析」有報告就開報告、不自動觸發分析；價位警報確認改用 ConfirmDialog。
 - [新功能] `/history/{id}` 回傳 `structured_report`（舊報告建構失敗維持 null），報告追加一句話結論、分持股建議、信心度、護欄、進出場條件、前次報告摘要、幣別、資料日與是否持有；ResearchArtifact 追加事件、各來源狀態與美股證據，失效條件的句子跟著報告語言走。
 - [新功能] `/history` 追加 `q`、`market`、`action` 查詢與 `stock_total`、`market_review_total`；個股清單追加 `analysis_price`、`change_pct`、`last_analyzed_at`（評分沿用既有的 `sentiment_score`）；新聞追加 `published_at` 與繁中 `key_point`，摘要去掉免責與行情樣板句。
 - [改進] zh-TW 動作用語改為買進、加碼、續抱、減碼、迴避、警報（舊報告的買入、減倉等仍可解析），系統提示詞本體改送繁體並帶詞彙表，報告表頭改為「項目｜數值」「點位｜價格」，沒有讀數的列省略，金額單位改「億」。

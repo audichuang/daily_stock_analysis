@@ -151,6 +151,21 @@ class StockTrendResponse(BaseModel):
     points: List[TrendPoint] = Field(default_factory=list, description="按时间升序的走势点")
 
 
+class IntradayTrendItem(BaseModel):
+    """批次分時單項：取不到時 points 為空並帶 error，不拖垮整批。"""
+
+    stock_code: str = Field(..., description="股票代码")
+    points: List[TrendPoint] = Field(default_factory=list, description="今日分時，已抽樣到迷你圖用的點數")
+    source_code: Optional[str] = Field(None, description="穩定的來源代碼（shioaji／yfinance）")
+    error: Optional[str] = Field(None, description="no_data／unavailable；成功時為 null")
+
+
+class IntradayTrendBatchResponse(BaseModel):
+    """批次當日走勢（盯盤迷你分時）"""
+
+    items: List[IntradayTrendItem] = Field(default_factory=list, description="按請求代碼順序（去重後）")
+
+
 class KLineData(BaseModel):
     """K 线数据点"""
     
