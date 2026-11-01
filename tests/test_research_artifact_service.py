@@ -483,3 +483,13 @@ def test_legacy_stop_loss_threshold_stays_verbatim(sniper_stop) -> None:
     assert condition["threshold"] == "收盤跌破 41 元（季線）且量增，代表波段結構破壞"
     assert condition["trigger"] == "收盤跌破 41 元（季線）且量增，代表波段結構破壞"
     assert "rationale" not in condition.get("metadata", {})
+
+
+@pytest.mark.parametrize("level,text", [(3.852, "3.852"), (0.355, "0.355"), (41, "41.00"), (1234.5, "1234.50")])
+def test_structured_price_level_display_keeps_precision(level, text) -> None:
+    report = _delta_report()
+    report["strategy"]["stop_loss_price"] = level
+    artifact = build_research_artifact(report)
+    condition = next(item for item in artifact["invalidation_conditions"] if item["id"] == "price:stop_loss")
+    assert condition["threshold"] == text
+    assert condition["trigger"].endswith(text)

@@ -105,7 +105,7 @@ from src.schemas.decision_scale import (
 from src.schemas.report_schema import AnalysisReportSchema
 from src.market_context import detect_market, get_market_role, get_market_guidelines
 from src.services.daily_market_context import format_daily_market_context_prompt_section
-from src.services.report_decision_fields import preserve_model_advice
+from src.services.report_decision_fields import format_price, preserve_model_advice
 from src.services.tw_backtest_context import (
     format_regime_block,
     format_revenue_momentum_row,
@@ -4890,7 +4890,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
         def _rt_price_text(value: Any) -> str:
             number = _rt_number(value)
-            return f"{number:,.2f}" if number is not None else 'N/A'
+            if number is None or not math.isfinite(number):
+                return 'N/A'
+            return format_price(number, thousands=True)
         # 台股估值（交易所快照）：PE 是近四季口径、各有资料日期，标签明讲，别让模型当成「动态」本益比；
         # 另附交易所公告殖利率一列（其他市场的列与标签维持原样）。
         _tw_val = prompt_market == "tw"

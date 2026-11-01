@@ -158,6 +158,15 @@ def finite_float(value: Any) -> Optional[float]:
     return parsed if isfinite(parsed) else None
 
 
+def format_price(value: float, *, thousands: bool = False) -> str:
+    """至少兩位小數；原值精度更高（ETF 3.852、低價股 0.355）時保留原精度，不四捨五入。"""
+    from decimal import Decimal
+
+    exact = Decimal(repr(float(value)))
+    places = max(2, -exact.as_tuple().exponent)
+    return format(exact, f"{',' if thousands else ''}.{places}f")
+
+
 def derive_change_amount(price: Optional[float], change_pct: Optional[float]) -> Optional[float]:
     """由現價與漲跌幅推算漲跌額；平盤回 0.0，缺一個或無法反推回 None。"""
     if price is None or change_pct is None:

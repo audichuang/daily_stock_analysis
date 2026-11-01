@@ -62,3 +62,12 @@ def test_turnover_numeric_string_and_blank():
 def test_realtime_price_uses_thousands_separator(language, label):
     row = _row(_prompt(language, price=1234.5), label)
     assert "1,234.50" in row
+
+
+@pytest.mark.parametrize("language,label", [("zh-TW", "目前價格"), ("en", "Current Price")])
+@pytest.mark.parametrize(
+    "price,text", [(3.852, "3.852"), (0.355, "0.355"), (0.0123, "0.0123"), (12345.6789, "12,345.6789"), (41, "41.00")]
+)
+def test_realtime_price_keeps_precision_beyond_two_decimals(language, label, price, text):
+    row = _row(_prompt(language, price=price), label)
+    assert f"| {text}" in row

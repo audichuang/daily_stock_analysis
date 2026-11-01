@@ -16,6 +16,7 @@ from src.services.report_decision_fields import (
     DECISION_FIELD_KEYS,
     extract_report_decision_fields,
     finite_float,
+    format_price,
 )
 from src.utils.data_processing import (
     extract_fundamental_detail_fields,
@@ -446,7 +447,7 @@ def _price_condition(
         "status": _price_condition_status(details, structured_level, direction),
     }
     if level is not None:
-        number = f"{level:.2f}"
+        number = format_price(level)
         condition["threshold"] = number
         condition["trigger"] = _text(language, f"{kind}_trigger", value=number)
         condition["metadata"] = {"rationale": text}
