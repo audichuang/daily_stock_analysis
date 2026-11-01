@@ -18,6 +18,7 @@ import logging
 import time
 from threading import RLock
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional, Dict, Any, Union
 from enum import Enum
 
@@ -107,6 +108,15 @@ class RealtimeSource(Enum):
     SHIOAJI = "shioaji"             # 永丰金 Shioaji（台股真即时）
     YFINANCE = "yfinance"           # yfinance（美股/日股/韩股的指定主来源）
     FALLBACK = "fallback"           # 降级兜底
+
+
+@dataclass
+class LastTrade:
+    """同一筆行情的時間與價格；警報驗證場次時兩者不可分開取自不同來源。"""
+    time: datetime
+    price: float
+    previous_close: Optional[float] = None
+    source: str = "fallback"
 
 
 @dataclass

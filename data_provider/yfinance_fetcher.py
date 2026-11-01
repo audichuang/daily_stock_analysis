@@ -34,7 +34,7 @@ from tenacity import (
 )
 
 from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, _is_hk_market, is_bse_code
-from .realtime_types import UnifiedRealtimeQuote, RealtimeSource
+from .realtime_types import LastTrade, UnifiedRealtimeQuote, RealtimeSource
 from .us_index_mapping import get_us_index_yf_symbol, is_us_stock_code
 from .yfinance_fundamental_adapter import _safe_float
 from src.services.market_symbol_utils import get_suffix_market, is_suffix_market_symbol
@@ -839,10 +839,19 @@ class YfinanceFetcher(BaseFetcher):
                 change_pct = (change_amount / prev_close) * 100
                 amplitude = ((high - low) / prev_close) * 100
 
+            # 第二欄是行情日期；看得懂才留，警報用它確認場次
+            quote_trade_date = None
+            if len(normalized_row) >= 7:
+                try:
+                    quote_trade_date = datetime.strptime(normalized_row[1], "%Y-%m-%d").date().isoformat()
+                except ValueError:
+                    quote_trade_date = None
+
             quote = UnifiedRealtimeQuote(
                 code=symbol,
                 name=STOCK_NAME_MAP.get(symbol, ''),
                 source=RealtimeSource.STOOQ,
+                quote_trade_date=quote_trade_date,
                 price=price,
                 change_pct=round(change_pct, 2) if change_pct is not None else None,
                 change_amount=round(change_amount, 4) if change_amount is not None else None,
@@ -972,19 +981,32 @@ class YfinanceFetcher(BaseFetcher):
             logger.warning(f"[Yfinance] 获取美股指数 {user_code} 实时行情失败: {e}")
             return None
 
-    def get_last_trade_time(self, stock_code: str) -> Optional[datetime]:
-        """最後一筆分鐘成交的時間；取不到回 None。
+    def get_last_trade(self, stock_code: str) -> Optional[LastTrade]:
+        """最後一筆分鐘成交的時間與價格，加上前一場收盤；取不到回 None。
 
         fast_info 不帶成交時間。這裡多一次網路呼叫，只給警報在將要觸發時驗證場次用，一般報價路徑不經過。
         """
         import yfinance as yf
 
         try:
-            hist = yf.Ticker(self._convert_stock_code(stock_code)).history(period="1d", interval="1m")
+            symbol = self._convert_stock_code(stock_code)
+            hist = yf.Ticker(symbol).history(period="5d", interval="1m")
             closes = hist["Close"].dropna()
-            return None if closes.empty else closes.index[-1].to_pydatetime()
+            if closes.empty:
+                return None
+            last_at = closes.index[-1]
+            earlier = closes[closes.index.date < last_at.date()]
+            market = get_suffix_market(symbol) or (
+                "hk" if _is_hk_market(stock_code) else "us" if self._is_us_stock(symbol) else None
+            )
+            return LastTrade(
+                time=last_at.to_pydatetime(),
+                price=float(closes.iloc[-1]),
+                previous_close=float(earlier.iloc[-1]) if not earlier.empty else None,
+                source=_source_for_market(market).value,
+            )
         except Exception as exc:
-            logger.warning("[Yfinance] %s 取最後成交時間失敗: %s", stock_code, type(exc).__name__)
+            logger.warning("[Yfinance] %s 取最後成交失敗: %s", stock_code, type(exc).__name__)
             return None
 
     def get_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:

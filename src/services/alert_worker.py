@@ -11,6 +11,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from src.agent.events import (
@@ -52,6 +53,7 @@ from src.services.market_light_service import normalize_market_alert_region
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from data_provider.realtime_types import LastTrade
     from src.notification import ChannelAttemptResult, NotificationDispatchResult
 
 ALERT_WORKER_FINGERPRINT_TTL_SECONDS = 24 * 60 * 60
@@ -109,10 +111,20 @@ def run_recorded_cycle(worker: Any) -> Dict[str, int]:
     return stats
 
 
-def _yfinance_last_trade_time(stock_code: str) -> Optional[datetime]:
+def _yfinance_last_trade(stock_code: str) -> Optional["LastTrade"]:
     from data_provider.yfinance_fetcher import YfinanceFetcher
 
-    return YfinanceFetcher().get_last_trade_time(stock_code)
+    return YfinanceFetcher().get_last_trade(stock_code)
+
+
+class _FixedQuoteMonitor:
+    """讓評估函式用指定的那筆行情，不再自己抓報價。"""
+
+    def __init__(self, quote: Any) -> None:
+        self._quote = quote
+
+    async def _get_realtime_quote(self, stock_code: str) -> Any:
+        return self._quote
 
 
 def _reload_monitor_config() -> Any:
@@ -159,7 +171,7 @@ class AlertWorker:
         now_provider: Optional[Callable[[], float]] = None,
         fingerprint_ttl_seconds: int = ALERT_WORKER_FINGERPRINT_TTL_SECONDS,
         realtime_session_gate: bool = False,
-        last_trade_time_provider: Optional[Callable[[str], Optional[datetime]]] = None,
+        last_trade_provider: Optional[Callable[[str], Optional["LastTrade"]]] = None,
     ) -> None:
         self.config_provider = config_provider or self._default_config_provider
         self.service = service or AlertService()
@@ -172,7 +184,7 @@ class AlertWorker:
         self._analysis_visibility_cache: Dict[str, Optional[Dict[str, Any]]] = {}
         # 獨立監控執行緒全天輪詢：收盤後的「即時價」其實是收盤價，週末也會照樣觸發並推播。
         self.realtime_session_gate = realtime_session_gate
-        self.last_trade_time_provider = last_trade_time_provider or _yfinance_last_trade_time
+        self.last_trade_provider = last_trade_provider or _yfinance_last_trade
 
     @staticmethod
     def _default_config_provider():
@@ -196,20 +208,37 @@ class AlertWorker:
             open_cache[market] = is_market_polling_window(market, current_time=now, before=timedelta(0))
         return not open_cache[market]
 
-    def _quote_is_current(self, rule: Any, result: Dict[str, Any], now: datetime) -> bool:
+    def _result_for_current_session(self, rule: Any, result: Dict[str, Any], now: datetime) -> Optional[Dict[str, Any]]:
+        """回傳可以通知的評估結果；確認不了報價屬於今天這一場就回 None。
+
+        報價自帶時間或日期時直接比對。沒帶時間時另查最後一筆成交，並用那筆價格重新評估：
+        時間和價格必須是同一筆行情，否則別家的當日時間會替舊價背書（踩過：Stooq 舊價配 Yahoo 當日時間）。
+        """
         diagnostics = self._diagnostics_payload(result.get("diagnostics"))
         market = get_market_for_stock(normalize_stock_code(rule.stock_code))
-        quote_time: Any = None
         try:
             if diagnostics.get("quote_timestamp"):
-                quote_time = datetime.fromisoformat(str(diagnostics["quote_timestamp"]))
-            elif diagnostics.get("quote_trade_date"):
+                quote_time: Any = datetime.fromisoformat(str(diagnostics["quote_timestamp"]))
+                return result if quote_in_current_session(market, quote_time, current_time=now) else None
+            if diagnostics.get("quote_trade_date"):
                 quote_time = date.fromisoformat(str(diagnostics["quote_trade_date"]))
-            else:
-                quote_time = self.last_trade_time_provider(rule.stock_code)
+                return result if quote_in_current_session(market, quote_time, current_time=now) else None
         except ValueError:
-            return False
-        return quote_in_current_session(market, quote_time, current_time=now)
+            return None
+
+        trade = self.last_trade_provider(rule.stock_code)
+        if trade is None or not quote_in_current_session(market, trade.time, current_time=now):
+            return None
+        previous = trade.previous_close
+        change_pct = round((trade.price / previous - 1) * 100, 2) if previous else None
+        quote = SimpleNamespace(
+            price=trade.price,
+            change_pct=change_pct,
+            source=trade.source,
+            provider_timestamp=trade.time.isoformat(),
+        )
+        recheck = asyncio.run(self.service._evaluate_rule(rule, _FixedQuoteMonitor(quote)))
+        return recheck if recheck.get("record_status") == "triggered" else None
 
     def run_once(self) -> Dict[str, int]:
         """Run one alert worker cycle.
@@ -279,11 +308,12 @@ class AlertWorker:
                 record_status == "triggered"
                 and self.realtime_session_gate
                 and isinstance(runtime_rule.rule, (PriceAlert, PriceChangeAlert))
-                and not self._quote_is_current(runtime_rule.rule, result, cycle_now)
             ):
-                # 不寫紀錄也不進冷卻：下一輪拿到當日報價時要能正常通知
-                stats["stale_quote"] = stats.get("stale_quote", 0) + 1
-                continue
+                result = self._result_for_current_session(runtime_rule.rule, result, cycle_now)
+                if result is None:
+                    # 不寫紀錄也不進冷卻：下一輪拿到當日報價時要能正常通知
+                    stats["stale_quote"] = stats.get("stale_quote", 0) + 1
+                    continue
             if record_status == "triggered":
                 self._attach_decision_signal_summary_safely(runtime_rule, result)
             if record_status in WRITABLE_TRIGGER_STATUSES:
