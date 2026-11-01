@@ -423,7 +423,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
     (code: string) => marketFilter === 'all' || getStockMarketBucket(code) === marketFilter,
     [marketFilter],
   );
-  const activeGroupFilter = resolveGroupFilter(groupFilter, watchlistGroups);
+  const activeGroupFilter = useMemo(() => resolveGroupFilter(groupFilter, watchlistGroups), [groupFilter, watchlistGroups]);
   const activeGroupName = activeGroupFilter.startsWith('group:') ? activeGroupFilter.slice('group:'.length) : null;
   const newGroupName = normalizeNewGroupName(draftGroupName, watchlistGroups);
   const visibleWatchlistRows = useMemo(() => sortRows(
