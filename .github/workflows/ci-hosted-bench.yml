@@ -1,0 +1,108 @@
+# Temporary experiment: measure the same CI suites on GitHub-hosted runners.
+# Lives only on branch ci/hosted-bench; never merged.
+name: CI hosted bench
+
+on:
+  push:
+    branches: ['ci/hosted-bench']
+
+env:
+  BENCH_SPLITS: '4 8'
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, os
+          inc = [{"splits": s, "group": g} for s in map(int, os.environ["BENCH_SPLITS"].split()) for g in range(1, s + 1)]
+          print("matrix=" + json.dumps({"include": inc}))
+          EOF
+
+  backend-tests:
+    name: backend ${{ matrix.group }}/${{ matrix.splits }}
+    runs-on: ubuntu-latest
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: stock_test
+        ports:
+          - 5432
+        options: >-
+          --tmpfs /var/lib/postgresql/data
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - run: echo "DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/stock_test" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: .github/requirements-ci.txt
+      - name: Install dependencies
+        run: uv pip install --system -r .github/requirements-ci.txt
+      - name: Migrate market schema
+        run: python -m alembic -c market_data/alembic.ini upgrade head
+      - name: Offline tests
+        env:
+          PYTEST_SPLITS: ${{ matrix.splits }}
+          PYTEST_GROUP: ${{ matrix.group }}
+          PYTEST_FIRST_SHARD_OVERHEAD: '20'
+        run: ./scripts/ci_gate.sh offline-tests
+
+  web-gate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/dsa-web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apps/dsa-web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('apps/dsa-web/package-lock.json') }}
+      - run: npx playwright install --with-deps chromium
+      - env:
+          DSA_WEB_SMOKE_PASSWORD: ''
+        run: npm run test:smoke
+      - run: npx playwright test --config playwright.fixture.config.ts
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          tags: stock-analysis:test
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: docker run --rm stock-analysis:test python -c "import futu, market_data.db; from api.app import app; print('ok')"
