@@ -103,6 +103,9 @@ API 的 `strategy.sniper_prices` 附上同一組數值；`strategy.ideal_buy/sec
 
 - `POST /api/v1/decision-signals`：创建或按同源键去重，返回 `{ item, created }`。
 - `GET /api/v1/decision-signals`：分页查询，支持市场、股票、动作、阶段、`decision_profile`、来源、状态、时间范围和持仓过滤。省略或传空 `decision_profile` 不加 profile 条件，返回所有 profile；`decision_profile=unknown` 查询 `NULL` 行；合法 profile 精确匹配。
+- `GET /api/v1/decision-signals?group_latest=true`：每檔只回最新一筆（SQL 去重，跨頁不重複、`total` 是檔數），附 `older_count`、`is_held`、`stop_triggered`、`last_close`；`sort=priority` 依已觸停損 → 持股 → 動作 → 新到舊。已觸停損以最新收盤比對，不是盤中價。持股篩選沿用 `holding_only`。
+- `GET /api/v1/decision-signals/summary`：每檔最新一筆的各動作檔數與已觸停損，預設只看 active；無法查價的檔數放 `stop_price_unavailable_count`，不算未觸發。
+- 所有清單與單條查詢追加 `signal_price`（來源報告產出當下的現價）；沒有來源報告為 `null`。
 - `GET /api/v1/decision-signals/{signal_id}`：查询单条。
 - `PATCH /api/v1/decision-signals/{signal_id}/status`：更新状态和可选 metadata。
 - `GET /api/v1/decision-signals/latest/{stock_code}`：查询股票最新 active 信号。

@@ -79,6 +79,8 @@ WEB_SETTINGS_HIDDEN_FROM_UI = {
     "DEEPSEEK_SEARCH_API_KEYS",
     # SEC 聯絡資訊僅由環境設定，不新增 Web 編輯介面。
     "SEC_EDGAR_USER_AGENT",
+    # 財報導讀開關僅由環境設定，不新增 Web 編輯介面。
+    "FINANCIAL_COMMENTARY_ENABLED",
     # 事件判讀僅由環境設定，不新增 Web 編輯介面。
     "EVENT_GAP_DECISION_ENABLED",
     "EVENT_GAP_THRESHOLD_PCT",
@@ -124,6 +126,31 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             {
                 "label": "Tushare 股票列表指南",
                 "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/TUSHARE_STOCK_LIST_GUIDE.md",
+            },
+        ],
+        "warning_codes": [],
+    },
+    "WATCHLIST_GROUPS": {
+        "title": "Watchlist Groups",
+        "description": "Watchlist groups as JSON (group name to ordered codes). STOCK_LIST stays the source of truth for membership. Managed from the watchlist UI.",
+        "category": "base",
+        "data_type": "string",
+        "ui_control": "textarea",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "",
+        "options": [],
+        "validation": {},
+        "display_order": 11,
+        "help_key": "settings.base.WATCHLIST_GROUPS",
+        "examples": [
+            'WATCHLIST_GROUPS={"半導體":["2330.TW","2303.TW"]}',
+        ],
+        "docs": [
+            {
+                "label": "iOS App：自選分組",
+                "href": "https://github.com/audichuang/daily_stock_analysis/blob/develop/docs/ios-app.md",
             },
         ],
         "warning_codes": [],

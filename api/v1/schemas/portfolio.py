@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from api.v1.schemas.funds import FundHoldingListResponse
+
 
 class PortfolioAccountCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
@@ -167,6 +169,10 @@ class PortfolioPositionItem(BaseModel):
     price_date: Optional[str] = None
     price_stale: bool = False
     price_available: bool = True
+    quote_at: Optional[str] = Field(None, description="報價實際時間（ISO 8601）；price_date 維持日期語意，收盤價回退時為 null")
+    prev_close: Optional[float] = Field(None, description="報價所屬場次的前一場收盤；查無為 null")
+    day_change_pct: Optional[float] = None
+    day_pnl_base: Optional[float] = Field(None, description="今日損益（帳戶幣別）；查無前一場收盤為 null")
     data_quality: str = "ok"
     limitations: List[str] = Field(default_factory=list)
 
@@ -204,6 +210,15 @@ class PortfolioAccountSnapshot(BaseModel):
     data_quality: str = "ok"
     limitations: List[str] = Field(default_factory=list)
     positions: List[PortfolioPositionItem] = Field(default_factory=list)
+    day_pnl: Optional[float] = Field(None, description="今日損益（帳戶幣別）；有一檔算不出就是 null")
+
+
+class PortfolioFxRateUsed(BaseModel):
+    from_currency: str
+    to_currency: str
+    rate: Optional[float] = None
+    stale: bool = False
+    source: str
 
 
 class PortfolioSnapshotResponse(BaseModel):
@@ -226,6 +241,23 @@ class PortfolioSnapshotResponse(BaseModel):
     data_quality: str = "ok"
     limitations: List[str] = Field(default_factory=list)
     accounts: List[PortfolioAccountSnapshot] = Field(default_factory=list)
+    # 以下皆為追加欄位。total_* 仍是 CNY 彙總；帶 display_currency 才有 consolidated_*。
+    day_pnl: Optional[float] = Field(None, description="今日損益（currency 幣別）；有一檔算不出就是 null")
+    display_currency: Optional[str] = None
+    consolidated_equity_base: Optional[float] = None
+    consolidated_market_value_base: Optional[float] = None
+    consolidated_cash_base: Optional[float] = None
+    consolidated_unrealized_pnl_base: Optional[float] = None
+    consolidated_realized_pnl_base: Optional[float] = None
+    consolidated_day_pnl_base: Optional[float] = None
+    consolidated_fund_value_base: Optional[float] = None
+    consolidated_fund_day_pnl_base: Optional[float] = None
+    consolidated_fx_stale: bool = False
+    consolidated_fx_missing: bool = False
+    consolidated_fx_missing_pairs: List[str] = Field(default_factory=list)
+    fx_rate_used: List[PortfolioFxRateUsed] = Field(default_factory=list)
+    funds: Optional[FundHoldingListResponse] = None
+    funds_error: Optional[str] = None
 
 
 class PortfolioImportTradeItem(BaseModel):
@@ -322,3 +354,9 @@ class PortfolioRiskResponse(BaseModel):
     drawdown: Dict[str, Any] = Field(default_factory=dict)
     stop_loss: Dict[str, Any] = Field(default_factory=dict)
     decision_signal_risk: PortfolioDecisionSignalRiskBlock = Field(default_factory=PortfolioDecisionSignalRiskBlock)
+    # 追加欄位：帶 display_currency 時，集中度區塊另有 *_display 金額；既有金額仍是 currency（CNY）。
+    display_currency: Optional[str] = None
+    display_fx_rate: Optional[float] = None
+    display_fx_stale: bool = False
+    display_fx_missing: bool = False
+    fx_rate_used: List[PortfolioFxRateUsed] = Field(default_factory=list)

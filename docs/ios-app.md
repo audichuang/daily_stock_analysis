@@ -6,11 +6,16 @@ Daily Stock AI 是本專案的原生 iOS 客戶端，支援台股與美股。核
 
 | 入口 | 能力 |
 | --- | --- |
+| 自選分組 | 自選頁右上資料夾開編輯頁，可新增、刪除、排序分組與移動個股；有分組才出現「全部／各組／未分組」籤。分組存在服務的 `WATCHLIST_GROUPS`，與 Web 同步，讀不到時不影響自選 |
 | 今日 | 台／美指數、自選報價、大盤研究，各筆資料分別標示來源與時間 |
-| 自選／個股 | 同步名單、名稱／代碼搜尋、價格走勢頂端是「分時｜日 K｜週 K｜月 K」分頁、區間下拉（1M～5Y、全部，捲動縮放後選單只是回到該寬度）與「⋯」（K 線／收盤線、看懂 K 線）；K 線可捲動與縮放，主圖 MA／EMA／布林、副圖 MACD／KD／RSI、重點標記；長按拖曳讀值 |
-| AI 研究 | 原生報告、歷史分頁、已載入資料搜尋、策略價位、證據、失效條件、完整報告與分享 |
-| 資產 | 原生現金／市值／損益、分帳戶持股、幣別與報價品質 |
-| 工具 | 2×2 捷徑帶狀態值（價格警報的監控狀態與規則數讀 `GET /api/v1/alerts/monitor/status`、事件行事曆、完整分析、連線）；其餘內嵌既有問股、選股、決策訊號、帳本、基金、回測、資料中心、用量與設定；警報頁仍是內嵌 Web，沒有原生警報 |
+| 自選／個股 | 同步名單、名稱／代碼搜尋、價格走勢頂端是「分時｜日 K｜週 K｜月 K」分頁、區間下拉（1月～5年、全部，捲動縮放後選單只是回到該寬度）與「⋯」（K 線／收盤線、看懂 K 線）；K 線可捲動與縮放，主圖 MA／EMA／布林、副圖 MACD／KD／RSI 直接按，重點標記預設開、缺口與交叉預設關；可開全螢幕；長按拖曳讀值 |
+| AI 研究 | 原生報告；研究庫依日期分組、同日同檔整併並標變化、捲到底自動載入、常駐搜尋由伺服器查全部報告、市場與動作篩選、大盤複盤專屬列、長按進個股；策略價位、證據、失效條件、完整報告與分享 |
+| 資產 | 總覽（全部資產台幣折合含基金、今日／未實現／已實現損益、負現金提示）、市場篩選、帳戶可收合、依帳戶或合併持股、排序與佔比、四欄持股列（左滑看明細）、集中度／最大虧損／最大產業、報價狀態 |
+| 工具 | 2×2 捷徑帶狀態值（價格警報的監控狀態與規則數讀 `GET /api/v1/alerts/monitor/status`、事件行事曆、完整分析、連線）；其餘內嵌既有問股、選股、決策訊號、帳本、基金、回測、資料中心、用量與設定；警報頁仍是內嵌 Web，沒有原生警報。內嵌頁以 `?embed=ios` 載入，隱藏 Web 外框與 App 底部分頁，載入中只有細進度條，載入失敗整頁顯示錯誤且不留 WebView |
+
+個股頁內容分 AI｜籌碼｜財務｜新聞：籌碼讀 profile 的 `chips`（美股為 null，分頁隱藏），財務只在台美股出現，新聞要有最新報告才出現。頁首的開收盤讀 `GET /api/v1/stocks/indices` 順帶回的 `market_phase`，取不到就不顯示。上下檔切換依目前市場篩過的自選清單順序（`store.watchlist`），不在清單內就沒有箭頭。報告頁的動作依 `action` 枚舉查詞彙表；只有 `sniper_prices_source` 為 `structured` 才畫價位尺並算距現價，`legacy` 顯示原文。
+
+個股頁的「財報」區塊讀 `GET /api/v1/stocks/{code}/financials`，AI 標記的欄位有標示，點開看說明與教學；語意見 `docs/stock-financials.md`。
 
 前四項為 SwiftUI／Swift Charts 原生介面。工具使用受認證保護的既有 Web 介面；台股個股頁另開四維度 HTML 檔案。功能是否可執行仍取決於後端設定與資料源。此版沒有券商下單、iOS 推播或行情背景常駐訂閱。
 
@@ -32,7 +37,7 @@ Client ID／Secret 使用獨立 Keychain service，以小寫 scheme／host／有
 
 原生 HTTP 僅由 `AppStore` 建立獨立 `.ephemeral` URLSession；`DSAClient.responseData` 集中附加 `CF-Access-Client-Id`／`CF-Access-Client-Secret`，每次依 scheme／host／port 核對。跨 origin 轉址全部拒絕，同源轉址重新附加 Header。只有 3xx 且 Location 的 HTTPS host 為 `cloudflareaccess.com` 或其子網域才判為 Access 驗證失敗，一般 403／網路錯誤不誤判。
 
-`.ephemeral` 的私有 `httpCookieStorage` 仍會接收 `Set-Cookie`，只在記憶體保存（[Apple 文件](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/httpcookiestorage)）。工具頁開啟前若缺 `CF_Authorization`，先用原生 `authStatus` 取得；有設定 Token 卻沒有 cookie 時顯示設定錯誤。隨後將 `dsa_session` 與 `CF_Authorization` 注入非持久 WKWebView，再載入頁面；子資源使用 cookie，網頁不接收 Service Token Header。WebKit 導往 Access 登入網域時停止並顯示相同的明確錯誤。取消轉址後收到的 `WebKitErrorDomain` 102 不覆蓋已辨識的 Access 訊息；未擋下 Access 的頁框中斷及一般網路錯誤仍照常顯示。
+`.ephemeral` 的私有 `httpCookieStorage` 仍會接收 `Set-Cookie`，只在記憶體保存（[Apple 文件](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/httpcookiestorage)）。工具頁開啟前若缺 `CF_Authorization`，先用原生 `authStatus` 取得；有設定 Token 卻沒有 cookie 時顯示設定錯誤。隨後將 `dsa_session` 與 `CF_Authorization` 注入 `AppStore` 持有的單一記憶體 data store（登出、換伺服器或更換 Access Token 時整個丟棄），再載入頁面；子資源使用 cookie，網頁不接收 Service Token Header。WebKit 導往 Access 登入網域時停止並顯示相同的明確錯誤。取消轉址後收到的 `WebKitErrorDomain` 102 不覆蓋已辨識的 Access 訊息；未擋下 Access 的頁框中斷及一般網路錯誤仍照常顯示。
 
 實際自動登入路徑：`DSAMarketApp.task` → `AppStore.connect()` → 依儲存網址 origin 讀 Access Keychain → 建立 ephemeral session／DSAClient → `SessionVault.restore` 還原 DSA cookie → 原生 `authStatus`（帶 Access Header，同時取得新的 Access cookie）→ DSA session 有效則直接首頁與 refresh。啟動期間顯示連線進度，不要求操作連線頁。後端 401，或 `authStatus` 明確表示尚未登入，才顯示管理員密碼欄位；App 沿用 cookie 的伺服器到期日，不延長後端 session。本次未修改後端 session 年限。
 
@@ -40,7 +45,7 @@ Client ID／Secret 使用獨立 Keychain service，以小寫 scheme／host／有
 
 ## 行情與研究語意
 
-報價、日 K、研究是不同時點的資料。缺價顯示 `—`，不補0；備援、官方收盤與過期分別標示。台股保留 `.TW/.TWO` 與槓桿字母，美股頁不把 A/H 股當美股。圖表使用 daily OHLCV（profile 以 `history_days=1100` 取約六年），範圍以最後資料日為準；週／月 K 由 App 依交易日聚合（週一起算，開＝首根開、收＝末根收、高低取極值、量相加），均線在完整序列上算完再裁到可見區間（日 K 5／20／60、週 K 5／13／26、月 K 3／6／12）。切到 1Y／3Y 自動換週 K、5Y 換月 K，使用者可再切回。日 K 來源缺當天時，後端用報價補一根 `provisional` 暫定 K（交易日以 `latest_opened_session` 依市場當地時間判定，過期報價不補），App 畫成半透明並標「暫定・即時報價」。週／月 K 的 x 位置與拖曳選取用區間首末交易日的中點。指標（`Indicators.swift`）與重點標記（`KeyPoints.swift`）都在 DSACore：KD 為台股常用 (9,3,3)、起始 50；MACD 柱不乘 2；RSI 為 Wilder 平滑；52 週高低資料不足一年不畫；缺口最多標最近三個未回補者，部分回補時縮成剩下的區間。價格 Y 軸只依可見 K 棒高低決定，超出的指標線被裁掉。分時只在切到該分頁時打 `/api/v1/stocks/{code}/trend?range=day`（台股 Shioaji 分鐘線、其他市場 yfinance 5 分鐘線，只有價沒有量），以市場當地交易時段為 x 軸、24 小時制；昨收取同時抓的 `range=month` 日線中早於分時交易日的最後一根收盤（不用頁面載入時的報價昨收，開過夜會錯日），抓不到就不顯示漲跌；分時與日線分開載入，分時一到就出圖，日線之後補上昨收（fixture `--daily-trend-delay` 守這條）；昨收不納入 Y 軸（大跳空會把走勢壓扁），非交易日顯示最近一個交易日並註明。視窗算術在 `ChartViewport`（右側留白 0.6 根、預設至少 12 根、雙指張開不會變寬）。AI 報告的進場／停損／目標價目前是自由文字，尚未畫上圖（需先改成結構化數值）。不提供 tick 串流。後端 `history_days` 上限為 1825；App 送超過舊上限 365 的值，所以要先部署後端再發 App，否則整份 profile 會 422。
+報價、日 K、研究是不同時點的資料。缺價顯示 `—`，不補0；備援、官方收盤與過期分別標示。台股保留 `.TW/.TWO` 與槓桿字母，美股頁不把 A/H 股當美股。圖表使用 daily OHLCV（profile 以 `history_days=1100` 取約六年），範圍以最後資料日為準；週／月 K 由 App 依交易日聚合（週一起算，開＝首根開、收＝末根收、高低取極值、量相加），均線在完整序列上算完再裁到可見區間（日 K 5／20／60、週 K 5／13／26、月 K 3／6／12）。週 K 預設顯示 1 年、月 K 預設 5 年，使用者可再切換區間。X 軸是 K 棒序號，週末與假日不佔位，主圖、成交量、副圖共用同一序號。日 K 來源缺當天時，後端用報價補一根 `provisional` 暫定 K（交易日以 `latest_opened_session` 依市場當地時間判定，過期報價不補），App 畫成半透明並標「暫定・即時報價」。週／月 K 的 x 位置與拖曳選取用區間首末交易日的中點。指標（`Indicators.swift`）與重點標記（`KeyPoints.swift`）都在 DSACore：KD 為台股常用 (9,3,3)、起始 50；MACD 柱不乘 2；RSI 為 Wilder 平滑；52 週高低移到圖下文字列，資料不足一年不顯示；缺口最多標最近三個未回補者，部分回補時縮成剩下的區間。價格 Y 軸只依可見 K 棒高低決定，超出的指標線被裁掉。分時只在切到該分頁時打 `/api/v1/stocks/{code}/trend?range=day`（台股 Shioaji 分鐘線、其他市場 yfinance 5 分鐘線，含量與均價，缺值時不畫），以市場當地交易時段為 x 軸、24 小時制；昨收取同時抓的 `range=month` 日線中早於分時交易日的最後一根收盤（不用頁面載入時的報價昨收，開過夜會錯日），抓不到就不顯示漲跌；分時與日線分開載入，分時一到就出圖，日線之後補上昨收（fixture `--daily-trend-delay` 守這條）；有昨收時以昨收為 Y 軸中央、右側標％，只有跳空達 3% 且會把走勢壓到四分之一高度以下才退回當日範圍並在邊緣標昨收（`IntradaySeries.priceScale`），非交易日顯示最近一個交易日並註明。視窗算術在 `ChartViewport`（單位是根：右側留白 0.6 根、預設至少 12 根、雙指張開不會變寬）。AI 報告的進場／停損／目標價目前是自由文字，尚未畫上圖（需先改成結構化數值）。不提供 tick 串流。後端 `history_days` 上限為 1825；App 送超過舊上限 365 的值，所以要先部署後端再發 App，否則整份 profile 會 422。
 
 0.1.2 將報價欄改稱「資料參考時間」，因 API 可能回傳供應商時間或資料取得時間，不能僅憑它判斷即時性。空買賣盤顯示「無報價」，一般成交量或損益的有效零值仍保留。行情數量標為「來源成交量（股）」，不宣稱等同交易所全天總量。歷史 API 尚未完整標示還原價／分割調整口徑，不宜假設所有來源同一基準。
 
@@ -56,9 +61,11 @@ API 保留 `title`／`snippet`／`url` 並追加可空的 `source`／`published_
 
 追溯限制：`news_intel` 以 URL 去重，重複分析沿用舊列時不會改成新 `query_id`，所以本區塊是該分析編號留存的搜尋資料，並非逐條模型引用紀錄，也可能不完整。舊分析缺少留存關聯時顯示可見空狀態，不以其他時段新聞填補；本次沒有回填或改寫正式庫。新 App 應搭配已支援 `analysis_only` 的後端使用；未部署該參數的舊後端無法提供此追溯保證。
 
-0.1.1 起，資產按各帳戶 `base_currency` 分組：新臺幣、美元分開顯示，其他實際存在的幣別也保留。沒有跨幣別總額；不使用後端固定 CNY 的頂層合計，也不自行改標或換算。帳戶內缺匯率時只隱藏該幣別的不可靠合計，不讓換成 CNY 的缺漏影響其他完整原幣組。真實負現金仍保留，帳本編輯沿用工具頁。
+總覽讀 `GET /api/v1/portfolio/snapshot?display_currency=TWD&include_funds=true` 的 `consolidated_*`，只顯示後端換算好的值、基金讀不到時標明只算帳本，客戶端不自行換匯，也不讀頂層 CNY；缺匯率或舊服務沒有這些欄位時，改列各幣別原幣合計。合併持股依幣別分組，佔比只在同幣別內比較。洞察卡的權重來自 `GET /api/v1/portfolio/risk`，失敗只少那兩張卡。
 
-看盤首頁與自選使用緊湊分隔列，現價與漲跌固定靠右，AI 日期仍保留。持股列預設呈現價格、損益與股數，成本／來源由明細展開；通用限制集中到中文「資料說明」，缺價／過期／延遲仍就地標示。台股回應中的三條一般限制來自後端固定能力聲明，不再逐筆顯示成一整塊資料錯誤。
+0.1.1 起，帳戶金額按各帳戶 `base_currency` 呈現：新臺幣、美元分開顯示，其他實際存在的幣別也保留。沒有跨幣別總額；不使用後端固定 CNY 的頂層合計，也不自行改標或換算。帳戶內缺匯率時只隱藏該幣別的不可靠合計，不讓換成 CNY 的缺漏影響其他完整原幣組。真實負現金仍保留，帳本編輯沿用工具頁。
+
+今日與自選共用 54pt 三欄列（名稱／現價／右欄）：台股名稱在上、美股 ticker 在上，代號顯示去後綴（路由仍用完整代號）；AI 判斷日期只在超過 5 天時以相對時間顯示；只有無報價、過期、台股降級 yfinance 才警告；實心色塊只給距漲跌停 1% 內。今日頁有等寬指數卡、市場狀態（`/stocks/indices` 的 `market_phase`）、AI 盤勢結論（讀列表 `analysis_summary`，無摘要整張不顯示）、資產卡（與資產頁同口徑：`display_currency=TWD` 的合計含基金，換算不了退回單一原幣，不重標 CNY）與異動大／自訂排序。自選頁可點欄頭排序並記住、右欄切換成交值／量比、左滑移除、長按選單、持股字標、全部／持股分組、可收合的篩選與單行指數；載入分整頁失敗、更新失敗留舊資料、報價整批失敗、部分無報價，搜尋面板可直接加入。持股列預設呈現價格、損益與股數，成本／來源由明細展開；通用限制集中到中文「資料說明」，缺價／過期／延遲仍就地標示。台股回應中的三條一般限制來自後端固定能力聲明，不再逐筆顯示成一整塊資料錯誤。
 
 輔助使用大字級下，指數改為滿寬縱排，資產、帳戶與個股行情數值改為單欄，持股名稱與金額縱排；可分段捲動閱讀完整金額，不限制系統字級。一般字級仍維持緊湊列表。
 

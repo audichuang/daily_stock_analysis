@@ -10,7 +10,9 @@
 3. 使用大模型生成每日大盘复盘报告
 """
 
+import json
 import logging
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -153,6 +155,57 @@ def _breadth_availability(overview: "MarketOverview") -> Dict[str, bool]:
     }
 
 
+_NEXT_DAY_PLAN_FENCE = "dsa-next-day-plan"
+_NEXT_DAY_PLAN_RE = re.compile(
+    # 回應被截斷時沒有收尾的 ```，區塊一樣不能留在報告裡。
+    rf"```{_NEXT_DAY_PLAN_FENCE}\s*(.*?)(?:```\s*|\Z)",
+    flags=re.DOTALL,
+)
+_NEXT_DAY_PLAN_STANCES = {"offensive", "balanced", "defensive"}
+
+
+def _plan_text_list(value: Any, *, limit: int = 5) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip()[:120] for item in value if str(item or "").strip()][:limit]
+
+
+def _normalize_next_day_plan(raw: Any) -> Optional[Dict[str, Any]]:
+    """LLM 給的計畫進結構化契約的入口：型別不對的欄位丟掉，全空就當沒有。"""
+    if not isinstance(raw, dict):
+        return None
+    levels = []
+    for item in raw.get("key_levels") if isinstance(raw.get("key_levels"), list) else []:
+        if not isinstance(item, dict) or isinstance(item.get("price"), bool):
+            continue
+        label = str(item.get("label") or "").strip()[:40]
+        price = item.get("price")
+        if label and isinstance(price, (int, float)) and math.isfinite(price):
+            levels.append({"label": label, "price": price})
+    stance = str(raw.get("stance") or "").strip().lower()
+    plan = {
+        "stance": stance if stance in _NEXT_DAY_PLAN_STANCES else None,
+        "summary": str(raw.get("summary") or "").strip()[:300] or None,
+        "focus": _plan_text_list(raw.get("focus")),
+        "risks": _plan_text_list(raw.get("risks")),
+        "key_levels": levels[:6],
+    }
+    return plan if any(plan.values()) else None
+
+
+def _extract_next_day_plan(report: str) -> tuple[str, Optional[Dict[str, Any]]]:
+    """把報告尾端的計畫區塊抽出來：區塊不留在 Markdown，JSON 壞掉就當沒有計畫。"""
+    match = _NEXT_DAY_PLAN_RE.search(report or "")
+    if match is None:
+        return report, None
+    cleaned = _NEXT_DAY_PLAN_RE.sub("", report).strip()
+    try:
+        return cleaned, _normalize_next_day_plan(json.loads(match.group(1)))
+    except (TypeError, ValueError):
+        logger.warning("[大盘] next_day_plan JSON 解析失敗，略過結構化計畫")
+        return cleaned, None
+
+
 @dataclass
 class MarketIndex:
     """大盘指数数据"""
@@ -209,6 +262,11 @@ class MarketOverview:
     bottom_sectors: List[Dict] = field(default_factory=list)  # 跌幅前5板块
     top_concepts: List[Dict] = field(default_factory=list)    # 涨幅前5概念
     bottom_concepts: List[Dict] = field(default_factory=list) # 跌幅前5概念
+
+    # 追加給結構化 payload 用，沒有讀數就留空，payload 不帶這些鍵。
+    index_trends: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    sector_rank: Optional[Dict[str, Any]] = None
+    next_day_plan: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -1193,7 +1251,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             return self._generate_template_review(overview, news)
 
         # 构建 Prompt
-        prompt = self._build_review_prompt(overview, news)
+        prompt = self._build_review_prompt(overview, news) + self._next_day_plan_instruction()
 
         logger.info("[大盘] %s action=generate_review status=start", self._log_context())
         # Use public analyzer APIs so diagnostics reflect the actual execution backend.
@@ -1273,6 +1331,7 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 self._log_context(),
                 len(review),
             )
+            review, overview.next_day_plan = _extract_next_day_plan(review)
             # Inject structured data tables into LLM prose sections
             return self._inject_data_into_review(review, overview, news)
 
@@ -1282,6 +1341,78 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         )
         self._used_template = True
         return self._generate_template_review(overview, news)
+
+    def _next_day_plan_instruction(self) -> str:
+        """要求 LLM 在報告後附明日計畫 JSON；前端讀這個值，不解析報告文字。"""
+        schema = (
+            '{"stance": "offensive|balanced|defensive", "summary": "...", '
+            '"focus": ["..."], "risks": ["..."], "key_levels": [{"label": "...", "price": 0}]}'
+        )
+        language = self._get_review_language()
+        if language == "zh-TW":
+            note = (
+                "報告正文結束後，另外附一個代碼塊當作明日計畫（前面「不含 JSON 與代碼塊」只限正文）。"
+                "文字欄位用繁體中文；沒有依據的欄位留空，價位只能用上方數據裡有根據的點位，不要編造："
+            )
+        elif language in {"zh", "zh-CN"}:
+            note = (
+                "报告正文结束后，另外附一个代码块作为明日计划（前面“不含 JSON 与代码块”只限正文）。"
+                "没有依据的字段留空，价位只能用上方数据里有依据的点位，不要编造："
+            )
+        else:
+            note = (
+                "After the report body, append one fenced block with the next-session plan "
+                "(the no-JSON rule above applies only to the body). Write text in the report's language; "
+                "leave unsupported fields empty and never invent price levels:"
+            )
+        return f"\n\n{note}\n```{_NEXT_DAY_PLAN_FENCE}\n{schema}\n```\n"
+
+    def _attach_review_trends(self, overview: MarketOverview) -> None:
+        """補指數近 20 場與類股排行。只給台股、美股；任一來源失敗只少那一塊，不影響複盤。"""
+        if self.region not in {"tw", "us"}:
+            return
+        from market_data import sector_rank
+
+        engine = None
+        if self.region == "tw":
+            try:
+                from market_data.db import get_engine
+
+                engine = get_engine(statement_timeout_ms=3000)
+            except Exception as exc:
+                logger.warning("[大盘] %s action=attach_trends status=no_db error=%s", self._log_context(), exc)
+                return
+
+        def daily_rows(code: str, days: int) -> List[Dict[str, Any]]:
+            df, _source = self.data_manager.get_daily_data(code, days=days)
+            if df is None or df.empty:
+                return []
+            return [{"date": row.get("date"), "close": row.get("close")} for _, row in df.iterrows()]
+
+        for index in overview.indices:
+            try:
+                if self.region == "tw":
+                    if index.code not in self._TW_HEADLINE_INDEX_CODES:
+                        continue
+                    rows = sector_rank.load_tw_index_rows("TAIEX", engine=engine)
+                else:
+                    rows = daily_rows(index.code, 90)
+                trend = sector_rank.compute_index_trend(rows)
+                if trend:
+                    overview.index_trends[index.code] = trend
+            except Exception as exc:
+                logger.warning(
+                    "[大盘] %s action=index_trend code=%s status=failed error=%s",
+                    self._log_context(), index.code, exc,
+                )
+        try:
+            overview.sector_rank = (
+                sector_rank.load_tw_sector_rank(overview.date, engine=engine)
+                if self.region == "tw"
+                else sector_rank.rank_us_sector_etfs(overview.date, lambda code: daily_rows(code, 5))
+            )
+        except Exception as exc:
+            logger.warning("[大盘] %s action=sector_rank status=failed error=%s", self._log_context(), exc)
 
     def _get_analyzer_generation_backend_config_error(self) -> Optional[GenerationError]:
         """Return analyzer backend config errors without relying on dynamic mock attributes."""
@@ -1441,6 +1572,12 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
 
         if light is not None:
             payload["market_light"] = light
+        if overview.index_trends:
+            payload["index_trends"] = overview.index_trends
+        if overview.sector_rank:
+            payload["sector_rank"] = overview.sector_rank
+        if overview.next_day_plan:
+            payload["next_day_plan"] = overview.next_day_plan
 
         if has_breadth_data:
             # 缺资料的键直接不给，而不是给 0——0 是读数，会顺着结构化契约
@@ -1836,23 +1973,34 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
         participation = overview.up_count + overview.down_count
         up_ratio = overview.up_count / participation if participation else None
         reasons: List[str] = []
+        zh_tw = self._get_review_language() == "zh-TW"
+
+        def T(traditional: str, simplified: str) -> str:
+            return traditional if zh_tw else simplified
+
+        ratio_label = T("上漲家數占比", "上涨家数占比")
         if up_ratio is not None:
             if up_ratio >= 0.6:
-                reasons.append(f"上涨家数占比 {up_ratio:.0%}，赚钱效应扩散")
+                reasons.append(f"{ratio_label} {up_ratio:.0%}，{T('賺錢效應擴散', '赚钱效应扩散')}")
             elif up_ratio <= 0.4:
-                reasons.append(f"上涨家数占比 {up_ratio:.0%}，亏钱效应较强")
+                reasons.append(f"{ratio_label} {up_ratio:.0%}，{T('虧錢效應較強', '亏钱效应较强')}")
             else:
-                reasons.append(f"上涨家数占比 {up_ratio:.0%}，市场分化")
+                reasons.append(f"{ratio_label} {up_ratio:.0%}，{T('市場分化', '市场分化')}")
         index_changes = _directional_index_changes(overview)
         if index_changes:
             avg_change = sum(index_changes) / len(index_changes)
-            reasons.append(f"主要指数平均涨跌幅 {avg_change:+.2f}%")
+            reasons.append(f"{T('主要指數平均漲跌幅', '主要指数平均涨跌幅')} {avg_change:+.2f}%")
         if overview.limit_up_count or overview.limit_down_count:
-            reasons.append(f"涨跌停差 {overview.limit_up_count - overview.limit_down_count:+d}")
+            reasons.append(
+                f"{T('漲跌停差', '涨跌停差')} {overview.limit_up_count - overview.limit_down_count:+d}"
+            )
         if not reasons and overview.total_amount:
-            reasons.append(f"成交额 {overview.total_amount:.0f} 亿，{self._describe_turnover(overview.total_amount)}")
+            turnover_text = self._describe_turnover(overview.total_amount)
+            if zh_tw:
+                turnover_text = {"高活跃度": "高活躍度", "中等活跃": "中等活躍", "缩量观望": "縮量觀望", "暂无数据": "暫無資料"}[turnover_text]
+            reasons.append(f"{T('成交額', '成交额')} {overview.total_amount:.0f} {T('億', '亿')}，{turnover_text}")
         if not reasons:
-            reasons.append("结构化涨跌数据有限，按可用行情综合判断")
+            reasons.append(T("結構化漲跌資料有限，依可用行情綜合判斷", "结构化涨跌数据有限，按可用行情综合判断"))
         return reasons[:4]
 
     def _build_market_light_reasons_en(self, overview: MarketOverview, score: int) -> List[str]:
@@ -2852,6 +3000,7 @@ Market conditions can change quickly. The data above is for reference only and d
 
         # 1. 获取市场概览
         overview = self.get_market_overview()
+        self._attach_review_trends(overview)
 
         # 2. 搜索市场新闻
         news = self.search_market_news()

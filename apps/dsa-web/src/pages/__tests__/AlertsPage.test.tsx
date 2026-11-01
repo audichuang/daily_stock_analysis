@@ -176,7 +176,7 @@ describe('AlertsPage', () => {
 
   it('applies ?target= as a filter when not creating', async () => {
     renderPage('/alerts?target=2330.TW');
-    await waitFor(() => expect(api.listRules).toHaveBeenCalledWith(expect.objectContaining({ target: '2330.TW' })));
+    await waitFor(() => expect(api.listRules).toHaveBeenCalledWith(expect.objectContaining({ q: '2330.TW' })));
     expect(screen.queryByText('1. 監控誰')).not.toBeInTheDocument();
   });
 
@@ -453,5 +453,14 @@ describe('AlertsPage', () => {
     fireEvent.click(screen.getByRole('tab', { name: '通知診斷' }));
     expect(screen.getByRole('tab', { name: '通知診斷' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByTestId('alert-rule-1').closest('.hidden')).not.toBeNull();
+  });
+
+  it('keeps diagnostics collapsed until the mobile tab opens them', async () => {
+    renderPage();
+    await screen.findByTestId('alert-rule-1');
+    const diagnostics = screen.getByTestId('alert-diagnostics');
+    expect(diagnostics).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByRole('tab', { name: '通知診斷' }));
+    expect(diagnostics).toHaveAttribute('open');
   });
 });

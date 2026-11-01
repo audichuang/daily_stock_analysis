@@ -5,19 +5,21 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 from data_provider.base import canonical_stock_code, normalize_stock_code
 from src.config import get_config
+from src.core.trading_calendar import latest_opened_session
 from src.data.stock_index_loader import get_index_stock_name
 from src.repositories.portfolio_repo import (
     DuplicateTradeDedupHashError,
@@ -193,6 +195,9 @@ class _AvgState:
     total_cost: float = 0.0
 
 
+_MAX_PREV_CLOSE_GAP_DAYS = 14
+
+
 @dataclass(frozen=True)
 class _ResolvedPositionPrice:
     price: float
@@ -201,6 +206,15 @@ class _ResolvedPositionPrice:
     is_stale: bool
     is_available: bool
     provider: Optional[str] = None
+    quote_at: Optional[str] = None
+    pre_close: Optional[float] = None
+
+
+class _RealtimeQuotePrice(tuple):
+    """(price, provider) 兩元組，額外帶報價實際時間與昨收；既有解構寫法不受影響。"""
+
+    quote_at: Optional[str] = None
+    pre_close: Optional[float] = None
 
 
 class PortfolioService:
@@ -579,10 +593,16 @@ class PortfolioService:
         cost_method: str = "fifo",
         include_realtime: bool = True,
         read_only: bool = False,
+        display_currency: Optional[str] = None,
+        include_funds: bool = False,
     ) -> Dict[str, Any]:
-        """Replay holdings; read-only callers skip live quotes and snapshot writes."""
+        """Replay holdings; read-only callers skip live quotes and snapshot writes.
+
+        ``display_currency`` 只追加 ``consolidated_*`` 換算欄位，既有 ``total_*`` 仍是 CNY 彙總，
+        落庫的快照與回撤口徑不受影響。"""
         as_of_date = as_of or date.today()
         method = self._normalize_cost_method(cost_method)
+        display_code = self._normalize_currency(display_currency) if display_currency else None
 
         if account_id is not None:
             account = self._require_active_account(account_id)
@@ -592,13 +612,17 @@ class PortfolioService:
 
         self._fx_view_date = as_of_date
         try:
-            return self._build_portfolio_snapshot(
+            snapshot = self._build_portfolio_snapshot(
                 account_rows=account_rows,
                 as_of_date=as_of_date,
                 method=method,
                 include_realtime=include_realtime,
                 read_only=read_only,
             )
+            funds = self._load_fund_block(snapshot) if include_funds else None
+            if display_code:
+                snapshot.update(self._consolidate_for_display(snapshot, display_code, as_of_date, funds))
+            return snapshot
         finally:
             self._fx_view_date = None
 
@@ -624,6 +648,8 @@ class PortfolioService:
             "fx_stale": False,
             "limitations": [],
         }
+        # 任一帳戶算不出今日損益，彙總就是 null：少算一個帳戶的合計比沒有更誤導。
+        aggregate_day_pnl: Optional[float] = 0.0
 
         aggregate_missing_pairs: Set[Tuple[str, str]] = set()
         for account in account_rows:
@@ -723,6 +749,18 @@ class PortfolioService:
                 as_of_date=as_of_date,
             )
 
+            account_day_pnl = account_snapshot["public"].get("day_pnl")
+            if account_day_pnl is None or aggregate_day_pnl is None:
+                aggregate_day_pnl = None
+            else:
+                day_pnl_cny, _, _ = self._convert_amount(
+                    amount=account_day_pnl,
+                    from_currency=account.base_currency,
+                    to_currency=aggregate_currency,
+                    as_of_date=as_of_date,
+                )
+                aggregate_day_pnl += day_pnl_cny
+
             aggregate["total_cash"] += cash_cny
             aggregate["total_market_value"] += mv_cny
             aggregate["total_equity"] += eq_cny
@@ -753,6 +791,7 @@ class PortfolioService:
             "total_equity": round(aggregate["total_equity"], 6),
             "realized_pnl": round(aggregate["realized_pnl"], 6),
             "unrealized_pnl": round(aggregate["unrealized_pnl"], 6),
+            "day_pnl": round(aggregate_day_pnl, 6) if aggregate_day_pnl is not None else None,
             "fee_total": round(aggregate["fee_total"], 6),
             "tax_total": round(aggregate["tax_total"], 6),
             "fx_stale": aggregate["fx_stale"],
@@ -764,6 +803,141 @@ class PortfolioService:
             "limitations": aggregate["limitations"],
             "accounts": accounts_payload,
         }
+
+    def display_rate(
+        self,
+        *,
+        from_currency: str,
+        to_currency: str,
+        as_of_date: date,
+    ) -> Tuple[Optional[float], bool, str]:
+        """顯示幣別用的匯率：(rate, stale, source)，查無回 (None, True, "missing")，不給 1:1。
+
+        匯率表只存「交易幣別 → 帳戶幣別」與「帳戶幣別 → CNY」，USD 換 TWD 常沒有直接匯率，
+        這裡才經彙總幣別交叉。查詢用的 ``_fx_missing_pairs`` 先隔開，顯示幣別查不到不該污染快照旗標。
+        """
+        from_norm = self._normalize_currency(from_currency)
+        to_norm = self._normalize_currency(to_currency)
+        saved_missing = self._fx_missing_pairs
+        self._fx_missing_pairs = set()
+        try:
+            rate, stale, source = self._convert_amount(
+                amount=1.0, from_currency=from_norm, to_currency=to_norm, as_of_date=as_of_date
+            )
+            if source != FX_FALLBACK_SOURCE:
+                return rate, stale, source
+            if PORTFOLIO_AGGREGATE_CURRENCY in (from_norm, to_norm):
+                return None, True, "missing"
+            first, first_stale, first_source = self._convert_amount(
+                amount=1.0,
+                from_currency=from_norm,
+                to_currency=PORTFOLIO_AGGREGATE_CURRENCY,
+                as_of_date=as_of_date,
+            )
+            second, second_stale, second_source = self._convert_amount(
+                amount=1.0,
+                from_currency=PORTFOLIO_AGGREGATE_CURRENCY,
+                to_currency=to_norm,
+                as_of_date=as_of_date,
+            )
+            if FX_FALLBACK_SOURCE in (first_source, second_source):
+                return None, True, "missing"
+            return first * second, first_stale or second_stale, "cross_rate"
+        finally:
+            self._fx_missing_pairs = saved_missing
+
+    def _load_fund_block(self, snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """基金分項（帳本外）；基金來源失敗不拖垮持股快照，以 funds_error 標示。"""
+        from src.services.fund_service import FundService
+
+        try:
+            funds = FundService().list_holdings()
+        except Exception as exc:  # noqa: BLE001 - 單一資料源失敗不影響快照主體
+            logger.warning("Failed to load fund holdings for snapshot: %s", exc)
+            snapshot["funds_error"] = "fund_data_unavailable"
+            return None
+        snapshot["funds"] = funds
+        return funds
+
+    def _consolidate_for_display(
+        self,
+        snapshot: Dict[str, Any],
+        display_code: str,
+        as_of_date: date,
+        funds: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """把各帳戶（與基金）的原幣金額直接換成顯示幣別，不繞 CNY 彙總值，避免多一次匯差。"""
+        rates: Dict[str, Dict[str, Any]] = {}
+        missing_pairs: Set[str] = set()
+        self._fx_aged_pairs = set()
+
+        def rate_for(currency: str) -> Optional[float]:
+            code = self._normalize_currency(currency)
+            if code not in rates:
+                rate, stale, source = self.display_rate(
+                    from_currency=code, to_currency=display_code, as_of_date=as_of_date
+                )
+                rates[code] = {
+                    "from_currency": code,
+                    "to_currency": display_code,
+                    "rate": rate,
+                    "stale": stale,
+                    "source": source,
+                }
+                if rate is None:
+                    missing_pairs.add(_format_fx_pair((code, display_code)))
+            return rates[code]["rate"]
+
+        fields = {
+            "consolidated_equity_base": "total_equity",
+            "consolidated_market_value_base": "total_market_value",
+            "consolidated_cash_base": "total_cash",
+            "consolidated_unrealized_pnl_base": "unrealized_pnl",
+            "consolidated_realized_pnl_base": "realized_pnl",
+            "consolidated_day_pnl_base": "day_pnl",
+        }
+        totals: Dict[str, Optional[float]] = {key: 0.0 for key in fields}
+        for account in snapshot.get("accounts", []):
+            rate = rate_for(account["base_currency"])
+            # 帳戶內部已經走 1:1 回退時，原幣金額本身就是假數字，換算後也不能用。
+            unusable = rate is None or bool(account.get("fx_missing"))
+            if account.get("fx_missing"):
+                missing_pairs.update(str(pair) for pair in account.get("fx_missing_pairs") or [])
+            for key, source_key in fields.items():
+                value = account.get(source_key)
+                if unusable or value is None or totals[key] is None:
+                    totals[key] = None
+                else:
+                    totals[key] += float(value) * rate
+
+        result: Dict[str, Any] = {
+            key: round(value, 6) if value is not None else None for key, value in totals.items()
+        }
+        if funds is not None:
+            fund_value: Optional[float] = 0.0
+            fund_day_pnl: Optional[float] = 0.0
+            for total in funds.get("totals") or []:
+                rate = rate_for(total["currency"])
+                market_value, day_pnl = total.get("market_value"), total.get("day_pnl")
+                fund_value = (
+                    fund_value + market_value * rate
+                    if None not in (rate, market_value, fund_value) else None
+                )
+                fund_day_pnl = (
+                    fund_day_pnl + day_pnl * rate
+                    if None not in (rate, day_pnl, fund_day_pnl) else None
+                )
+            result["consolidated_fund_value_base"] = round(fund_value, 6) if fund_value is not None else None
+            result["consolidated_fund_day_pnl_base"] = round(fund_day_pnl, 6) if fund_day_pnl is not None else None
+
+        result.update({
+            "display_currency": display_code,
+            "fx_rate_used": [rates[code] for code in sorted(rates)],
+            "consolidated_fx_stale": bool(self._fx_aged_pairs) or any(item["stale"] for item in rates.values()),
+            "consolidated_fx_missing": bool(missing_pairs),
+            "consolidated_fx_missing_pairs": sorted(missing_pairs),
+        })
+        return result
 
     def refresh_fx_rates(
         self,
@@ -1114,6 +1288,9 @@ class PortfolioService:
 
         unrealized_pnl_base = market_value_base - total_cost_base
         total_equity_base = total_cash_base + market_value_base
+        # 有一檔算不出今日損益就整組作廢；沒有持股時 0 是真實讀數。
+        position_day_pnls = [position.get("day_pnl_base") for position in position_rows]
+        account_day_pnl = None if None in position_day_pnls else round(sum(position_day_pnls), 6)
         position_limitations = [
             limitation
             for position in position_rows
@@ -1138,6 +1315,7 @@ class PortfolioService:
             "total_equity": round(total_equity_base, 6),
             "realized_pnl": round(realized_pnl_base, 6),
             "unrealized_pnl": round(unrealized_pnl_base, 6),
+            "day_pnl": account_day_pnl,
             "fee_total": round(fees_total_base, 6),
             "tax_total": round(taxes_total_base, 6),
             "fx_stale": fx_stale,
@@ -1238,6 +1416,7 @@ class PortfolioService:
                 as_of_date=as_of_date,
                 realtime_prices=realtime_prices,
                 include_realtime=include_realtime,
+                market=market,
             )
             last_price = price_info.price
             limitations = _portfolio_limitations_for_market(market)
@@ -1267,6 +1446,19 @@ class PortfolioService:
             if abs(cost_base) > EPS:
                 unrealized_pct = unrealized_base / cost_base * 100.0
 
+            prev_close = self._resolve_prev_close(symbol=symbol, market=market, price_info=price_info)
+            day_change_pct = None
+            day_pnl_base = None
+            if prev_close is not None:
+                day_change_pct = (float(last_price) / prev_close - 1.0) * 100.0
+                day_pnl_base, stale_day, _ = self._convert_amount(
+                    amount=qty * (float(last_price) - prev_close),
+                    from_currency=currency,
+                    to_currency=account.base_currency,
+                    as_of_date=as_of_date,
+                )
+                fx_stale = fx_stale or stale_day
+
             position_rows.append(
                 {
                     "symbol": symbol,
@@ -1286,6 +1478,10 @@ class PortfolioService:
                     "price_date": price_info.price_date.isoformat() if price_info.price_date else None,
                     "price_stale": price_info.is_stale,
                     "price_available": price_info.is_available,
+                    "quote_at": price_info.quote_at,
+                    "prev_close": round(prev_close, 8) if prev_close is not None else None,
+                    "day_change_pct": round(day_change_pct, 8) if day_change_pct is not None else None,
+                    "day_pnl_base": round(day_pnl_base, 8) if day_pnl_base is not None else None,
                     "data_quality": "partial" if limitations else "ok",
                     "limitations": limitations,
                 }
@@ -1303,14 +1499,16 @@ class PortfolioService:
         as_of_date: date,
         realtime_prices: Optional[Dict[str, Tuple[Optional[float], Optional[str]]]] = None,
         include_realtime: bool = True,
+        market: Optional[str] = None,
     ) -> _ResolvedPositionPrice:
         today = date.today()
 
         if include_realtime and as_of_date == today:
             if realtime_prices is None:
-                realtime_price, provider = self._fetch_realtime_position_price(symbol)
+                realtime_result = self._fetch_realtime_position_price(symbol)
             else:
-                realtime_price, provider = realtime_prices.get(symbol, (None, None))
+                realtime_result = realtime_prices.get(symbol, (None, None))
+            realtime_price, provider = realtime_result
             if realtime_price is not None and realtime_price > 0:
                 return _ResolvedPositionPrice(
                     price=float(realtime_price),
@@ -1319,6 +1517,8 @@ class PortfolioService:
                     is_stale=False,
                     is_available=True,
                     provider=provider,
+                    quote_at=getattr(realtime_result, "quote_at", None),
+                    pre_close=getattr(realtime_result, "pre_close", None),
                 )
 
         close = self.repo.get_latest_close_with_date(symbol=symbol, as_of=as_of_date)
@@ -1329,7 +1529,7 @@ class PortfolioService:
                     price=float(close_price),
                     source="history_close",
                     price_date=close_date,
-                    is_stale=close_date < as_of_date,
+                    is_stale=close_date < self._price_reference_date(market, as_of_date),
                     is_available=True,
                 )
 
@@ -1340,6 +1540,39 @@ class PortfolioService:
             is_stale=True,
             is_available=False,
         )
+
+    @staticmethod
+    def _price_reference_date(market: Optional[str], as_of_date: date) -> date:
+        """判斷收盤價是否過期的基準：as_of 當時該市場最近一個已開盤的交易日。
+
+        週末與假日的最近收盤不是過期。日曆不可用時退回 as_of 本身（舊行為）。"""
+        current_time = None if as_of_date == date.today() else datetime.combine(as_of_date, dt_time.max)
+        return latest_opened_session(market, current_time=current_time) or as_of_date
+
+    def _resolve_prev_close(
+        self,
+        *,
+        symbol: str,
+        market: str,
+        price_info: _ResolvedPositionPrice,
+    ) -> Optional[float]:
+        """報價所屬場次的前一場收盤；優先用報價自帶的昨收，查無回 None（不用 0 冒充）。"""
+        if not price_info.is_available or price_info.price_date is None or price_info.is_stale:
+            # 過期現價不屬於當前場次，兩場收盤的價差不是今日損益。
+            return None
+        if price_info.pre_close is not None and price_info.pre_close > 0:
+            return float(price_info.pre_close)
+        anchor = price_info.price_date
+        if price_info.source == "realtime_quote":
+            # 台北早上看美股時掛鐘已是今天，報價屬於紐約上一場：要拿那一場的前一場當基準。
+            anchor = latest_opened_session(market) or anchor
+        close = self.repo.get_latest_close_with_date(symbol=symbol, as_of=anchor - timedelta(days=1))
+        if close is None or close[0] <= 0:
+            return None
+        # 農曆年最長約 10 天；再久代表中間的場次缺資料，算出來的不是一日價差。
+        if close[1] is not None and (anchor - close[1]).days > _MAX_PREV_CLOSE_GAP_DAYS:
+            return None
+        return float(close[0])
 
     def _prefetch_realtime_position_prices(
         self,
@@ -1411,7 +1644,15 @@ class PortfolioService:
 
         source = getattr(quote, "source", None)
         provider = getattr(source, "value", None) or (str(source) if source is not None else None)
-        return numeric_price, provider
+        result = _RealtimeQuotePrice((numeric_price, provider))
+        for stamp in (getattr(quote, "provider_timestamp", None), getattr(quote, "fetched_at", None)):
+            if isinstance(stamp, str) and stamp:
+                result.quote_at = stamp
+                break
+        pre_close = getattr(quote, "pre_close", None)
+        if isinstance(pre_close, (int, float)) and math.isfinite(pre_close) and pre_close > 0:
+            result.pre_close = float(pre_close)
+        return result
 
     @staticmethod
     def _normalize_symbol_for_storage(symbol: str) -> str:

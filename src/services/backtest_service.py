@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -19,11 +20,12 @@ from src.core.backtest_engine import (
     effective_backtest_engine_version,
     forward_window_calendar_days,
 )
+from src.core.trading_calendar import get_market_for_stock
 from src.market_phase_summary import (
     extract_market_phase_summary,
     normalize_analysis_phase_bucket,
 )
-from src.repositories.backtest_repo import BacktestRepository
+from src.repositories.backtest_repo import STATUS_PENDING, BacktestRepository, maturity_status
 from src.repositories.stock_repo import StockRepository
 from src.schemas.decision_action import build_action_fields
 from src.schemas.decision_scale import extract_decision_guardrail_reason
@@ -619,6 +621,11 @@ class BacktestService:
         analysis_date_to: Optional[date] = None,
         analysis_phase: Optional[str] = None,
         analysis_target: Optional[AnalysisTarget] = None,
+        status: Optional[str] = None,
+        market: Optional[str] = None,
+        advice: Optional[str] = None,
+        sort: Optional[str] = None,
+        include_status_counts: bool = False,
     ) -> Dict[str, Any]:
         config = get_config()
         engine_version = self._engine_version(config)
@@ -635,17 +642,35 @@ class BacktestService:
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
             )
-        if phase_bucket is not None:
-            return self._get_recent_evaluations_by_phase(
+        status_counts: Dict[str, Any] = {}
+        if include_status_counts:
+            status_counts = {"status_counts": self.repo.count_by_status(
                 code=code,
                 eval_window_days=eval_window_days,
                 engine_version=engine_version,
-                limit=limit,
-                page=page,
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
-                phase_bucket=phase_bucket,
-            )
+                market=market,
+            )}
+        # 階段在 context_snapshot、動作由結構化欄位推導，兩者都只能逐列判斷。
+        if phase_bucket is not None or advice is not None:
+            return {
+                **self._get_recent_evaluations_by_phase(
+                    code=code,
+                    eval_window_days=eval_window_days,
+                    engine_version=engine_version,
+                    limit=limit,
+                    page=page,
+                    analysis_date_from=analysis_date_from,
+                    analysis_date_to=analysis_date_to,
+                    phase_bucket=phase_bucket,
+                    advice=advice,
+                    status=status,
+                    market=market,
+                    sort=sort,
+                ),
+                **status_counts,
+            }
 
         offset = max(page - 1, 0) * limit
         rows, total = self.repo.get_results_paginated(
@@ -657,6 +682,9 @@ class BacktestService:
             days=None,
             offset=offset,
             limit=limit,
+            status=status,
+            market=market,
+            sort=sort,
             **identity_kwargs,
         )
         items = []
@@ -674,7 +702,101 @@ class BacktestService:
                     analysis_sentiment_score=analysis_sentiment_score,
                 )
             )
-        return {"total": total, "page": page, "limit": limit, "items": items}
+        return {"total": total, "page": page, "limit": limit, "items": items, **status_counts}
+
+    def get_series(
+        self,
+        *,
+        code: Optional[str] = None,
+        eval_window_days: Optional[int] = None,
+        analysis_date_from: Optional[date] = None,
+        analysis_date_to: Optional[date] = None,
+        market: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """已完成回測的逐筆累計報酬與月勝率。
+
+        累計是把每筆模擬報酬相加，不是資金曲線：每筆獨立計算、彼此可能重疊，也沒有部位大小。
+        窗口沒指定時沿用 `_infer_eval_window_for_query`，不同窗口混算會重複計入同一筆分析。
+        """
+        engine_version = self._engine_version(get_config())
+        code = self._normalize_code(code)
+        if eval_window_days is None:
+            eval_window_days = self._infer_eval_window_for_query(
+                code=code,
+                engine_version=engine_version,
+                analysis_date_from=analysis_date_from,
+                analysis_date_to=analysis_date_to,
+            )
+        rows = self.repo.list_results(
+            code=code,
+            eval_window_days=eval_window_days,
+            engine_version=engine_version,
+            analysis_date_from=analysis_date_from,
+            analysis_date_to=analysis_date_to,
+            limit=self.MAX_DYNAMIC_SUMMARY_ROWS + 1,
+            eval_status="completed",
+            market=market,
+        )
+        truncated = len(rows) > self.MAX_DYNAMIC_SUMMARY_ROWS
+        rows = rows[: self.MAX_DYNAMIC_SUMMARY_ROWS]
+        return {
+            "eval_window_days": eval_window_days,
+            "truncated": truncated,
+            **self._build_series(reversed(rows)),
+        }
+
+    @staticmethod
+    def _build_series(rows) -> Dict[str, Any]:
+        """``rows`` 要由舊到新。報酬缺值或非有限值的列不進累計，但月勝率照計 outcome。"""
+        points: List[Dict[str, Any]] = []
+        months: Dict[str, Dict[str, Any]] = {}
+        cumulative = 0.0
+        cumulative_stock = 0.0
+        updated_at = None
+        for row in rows:
+            evaluated_at = getattr(row, "evaluated_at", None)
+            if evaluated_at is not None and (updated_at is None or evaluated_at > updated_at):
+                updated_at = evaluated_at
+            if row.analysis_date is None:
+                continue
+            bucket = months.setdefault(
+                row.analysis_date.strftime("%Y-%m"),
+                {"month": row.analysis_date.strftime("%Y-%m"), "completed": 0, "win": 0, "loss": 0, "neutral": 0},
+            )
+            bucket["completed"] += 1
+            if row.outcome in ("win", "loss", "neutral"):
+                bucket[row.outcome] += 1
+            net = getattr(row, "simulated_net_return_pct", None)
+            value = net if net is not None else row.simulated_return_pct
+            if value is None or not math.isfinite(value):
+                continue
+            cumulative += value
+            stock_value = getattr(row, "stock_return_pct", None)
+            if not isinstance(stock_value, (int, float)) or not math.isfinite(stock_value):
+                stock_value = None
+            else:
+                cumulative_stock += stock_value
+            points.append({
+                "date": row.analysis_date.isoformat(),
+                "analysis_history_id": row.analysis_history_id,
+                "code": row.code,
+                "return_pct": round(value, 4),
+                "cumulative_return_pct": round(cumulative, 4),
+                "stock_return_pct": round(stock_value, 4) if stock_value is not None else None,
+                "cumulative_stock_return_pct": round(cumulative_stock, 4),
+            })
+        monthly = []
+        for key in sorted(months):
+            bucket = months[key]
+            # 分母與引擎的 win_rate_pct 相同：持平不計。
+            denominator = bucket["win"] + bucket["loss"]
+            bucket["win_rate_pct"] = round(bucket["win"] / denominator * 100, 2) if denominator else None
+            monthly.append(bucket)
+        return {
+            "points": points,
+            "monthly": monthly,
+            "updated_at": updated_at.isoformat() if updated_at is not None else None,
+        }
 
     def get_summary(
         self,
@@ -835,7 +957,11 @@ class BacktestService:
         page: int,
         analysis_date_from: Optional[date],
         analysis_date_to: Optional[date],
-        phase_bucket: str,
+        phase_bucket: Optional[str],
+        advice: Optional[str] = None,
+        status: Optional[str] = None,
+        market: Optional[str] = None,
+        sort: Optional[str] = None,
     ) -> Dict[str, Any]:
         page_offset = max(page - 1, 0) * limit
         batch_size = max(100, min(500, limit * 4))
@@ -869,6 +995,9 @@ class BacktestService:
                 days=None,
                 offset=sql_offset,
                 limit=batch_limit,
+                status=status,
+                market=market,
+                sort=sort,
             )
             if not batch:
                 break
@@ -888,7 +1017,14 @@ class BacktestService:
             ) in batch:
                 summary = extract_market_phase_summary(context_snapshot)
                 bucket = self._phase_bucket_from_summary(summary)
-                if bucket != phase_bucket:
+                if phase_bucket is not None and bucket != phase_bucket:
+                    continue
+                if advice is not None and self._result_to_dict(
+                    result,
+                    raw_result=raw_result,
+                    report_type=report_type,
+                    analysis_sentiment_score=analysis_sentiment_score,
+                )["action"] != advice:
                     continue
                 if matched_total >= page_offset and len(page_rows) < limit:
                     page_rows.append((result, stock_name, trend_prediction, summary, bucket, raw_result, report_type, analysis_sentiment_score))
@@ -1153,7 +1289,15 @@ class BacktestService:
             guardrail_reason=extract_decision_guardrail_reason(raw),
             align_with_score=True,
         )
+        maturity = maturity_status(row.eval_status, row.analysis_date, row.eval_window_days)
         return {
+            "maturity_status": maturity,
+            "matures_by": (
+                (row.analysis_date + timedelta(days=forward_window_calendar_days(row.eval_window_days))).isoformat()
+                if maturity == STATUS_PENDING
+                else None
+            ),
+            "market": get_market_for_stock(row.code),
             "analysis_history_id": row.analysis_history_id,
             "code": row.code,
             "stock_name": stock_name,

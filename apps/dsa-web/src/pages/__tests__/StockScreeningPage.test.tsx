@@ -17,6 +17,10 @@ const {
   resetLastScreenResult,
   screenStocks,
   startScreenTask,
+  getWatchlist,
+  addToWatchlist,
+  removeFromWatchlist,
+  analyzeAsync,
 } = vi.hoisted(() => {
   let lastScreenResult: unknown = null;
   const screenStocks = vi.fn();
@@ -58,6 +62,10 @@ const {
     },
     screenStocks,
     startScreenTask,
+    getWatchlist: vi.fn(),
+    addToWatchlist: vi.fn(),
+    removeFromWatchlist: vi.fn(),
+    analyzeAsync: vi.fn(),
   };
 });
 
@@ -84,6 +92,18 @@ vi.mock('../../api/screening', () => ({
   },
 }));
 
+vi.mock('../../api/systemConfig', () => ({
+  systemConfigApi: {
+    getWatchlist: () => getWatchlist(),
+    addToWatchlist: (code: string) => addToWatchlist(code),
+    removeFromWatchlist: (code: string) => removeFromWatchlist(code),
+  },
+}));
+
+vi.mock('../../api/analysis', () => ({
+  analysisApi: { analyzeAsync: (payload: unknown) => analyzeAsync(payload) },
+}));
+
 const mockStrategiesResponse = {
   enabled: true,
   strategies: [
@@ -95,7 +115,7 @@ const mockStrategiesResponse = {
       category: 'value',
       tag: 'value',
       tags: ['value'],
-      marketScope: ['cn'],
+      marketScope: ['tw', 'us'],
     },
   ],
   strategyCount: 1,
@@ -111,8 +131,28 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+const pickHistoryRun = async (text: string) => {
+  const select = await screen.findByLabelText('历史记录') as HTMLSelectElement;
+  const option = await within(select).findByRole('option', { name: new RegExp(text) }) as HTMLOptionElement;
+  fireEvent.change(select, { target: { value: option.value } });
+};
+
+const openCandidate = async (name: string) => {
+  fireEvent.click((await screen.findAllByText(name))[0]);
+};
+
+const runScreening = async () => {
+  expect(await screen.findByText('选股已开启')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
+};
+
 describe('StockScreeningPage', () => {
   beforeEach(() => {
+    getWatchlist.mockReset();
+    addToWatchlist.mockReset();
+    removeFromWatchlist.mockReset();
+    analyzeAsync.mockReset();
+    getWatchlist.mockResolvedValue([]);
     enableScreening.mockReset();
     getHistory.mockReset();
     getRun.mockReset();
@@ -187,8 +227,7 @@ describe('StockScreeningPage', () => {
       );
       expect((await screen.findAllByText('選股未開啟')).length).toBeGreaterThan(0);
       expect(screen.getByRole('button', { name: '開啟選股' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /執行選股/ })).toBeDisabled();
-      expect(screen.getByText('歷史紀錄')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /執行選股/ })).not.toBeInTheDocument();
       expect(container.textContent).not.toMatch(/选股未开启|开启选股|运行选股|历史记录/);
     } finally {
       window.localStorage.clear();
@@ -210,13 +249,13 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
 
     expect((await screen.findAllByText('选股未开启')).length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: /运行选股/ })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /运行选股/ })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '开启选股' }));
 
     await waitFor(() => expect(getScreeningStatus).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText('选股未开启')).not.toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /运行选股/ })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /运行选股/ })).not.toBeInTheDocument();
     expect(screen.getAllByText('选股功能不可用').length).toBeGreaterThan(0);
     expect(screen.getByText('选股功能不可用，请检查后端日志')).toBeInTheDocument();
   });
@@ -229,7 +268,7 @@ describe('StockScreeningPage', () => {
     expect(screen.getByText('正在检查选股状态')).toBeInTheDocument();
     expect(screen.queryByText('选股未开启')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '开启选股' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /运行选股/ })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /运行选股/ })).not.toBeInTheDocument();
     expect(getStrategies).not.toHaveBeenCalled();
     expect(getHotspots).not.toHaveBeenCalled();
 
@@ -247,7 +286,7 @@ describe('StockScreeningPage', () => {
     expect(screen.getByText('选股状态未知')).toBeInTheDocument();
     expect(screen.queryByText('选股未开启')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '开启选股' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /运行选股/ })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /运行选股/ })).not.toBeInTheDocument();
     expect(getHistory).not.toHaveBeenCalled();
     expect(getStrategies).not.toHaveBeenCalled();
     expect(getHotspots).not.toHaveBeenCalled();
@@ -278,7 +317,7 @@ describe('StockScreeningPage', () => {
     expect(await screen.findByText('选股状态加载失败')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '开启选股' })).not.toBeInTheDocument();
     expect(screen.queryByText('选股未开启')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /运行选股/ })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /运行选股/ })).not.toBeInTheDocument();
   });
 
   it('loads Screening hotspot themes on demand', async () => {
@@ -319,16 +358,15 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
 
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
-    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: false }));
+    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: false, market: 'tw' }));
     expect(getHotspotDetail).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /展开热点题材/ }));
     fireEvent.click(screen.getByRole('button', { name: /刷新热点题材/ }));
 
-    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: true }));
+    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: true, market: 'tw' }));
     fireEvent.click(await screen.findByRole('button', { name: /AI算力/ }));
     await waitFor(() => expect(getHotspotDetail).toHaveBeenCalledWith({ topic: 'AI算力', provider: 'akshare', refresh: false }));
     await waitFor(() => expect(screen.getAllByText('AI算力').length).toBeGreaterThan(0));
-    expect(screen.getByText('强势领先')).toBeInTheDocument();
     expect(screen.getAllByText(/中际旭创、工业富联/).length).toBeGreaterThan(0);
     expect(screen.getByText(/覆盖 8 股/)).toBeInTheDocument();
     expect(await screen.findByText('发酵时间线')).toBeInTheDocument();
@@ -628,7 +666,7 @@ describe('StockScreeningPage', () => {
 
     render(<StockScreeningPage />);
 
-    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: false }));
+    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: false, market: 'tw' }));
     fireEvent.click(screen.getByRole('button', { name: /展开热点题材/ }));
     fireEvent.click(await screen.findByRole('button', { name: /AI算力/ }));
 
@@ -665,7 +703,7 @@ describe('StockScreeningPage', () => {
 
     render(<StockScreeningPage />);
 
-    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: false }));
+    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: false, market: 'tw' }));
     fireEvent.click(screen.getByRole('button', { name: /展开热点题材/ }));
     fireEvent.click(await screen.findByRole('button', { name: /Moly/ }));
 
@@ -704,7 +742,7 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
 
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
-    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: false }));
+    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: false, market: 'tw' }));
     expect(getHotspotDetail).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /展开热点题材/ }));
     fireEvent.click(screen.getByRole('button', { name: /AI算力/ }));
@@ -956,7 +994,7 @@ describe('StockScreeningPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /刷新热点题材/ }));
 
-    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: true }));
+    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: true, market: 'tw' }));
     await waitFor(() => expect(getHotspotDetail).toHaveBeenLastCalledWith({
       topic: 'AI算力',
       provider: 'akshare',
@@ -999,100 +1037,276 @@ describe('StockScreeningPage', () => {
 
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /展开热点题材/ }));
-    expect(await screen.findByText('强势领先')).toBeInTheDocument();
+    expect(await screen.findByText('AI算力')).toBeInTheDocument();
     expect(screen.getByText(/中际旭创、工业富联/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /刷新热点题材/ }));
 
-    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: true }));
+    await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: true, market: 'tw' }));
     expect(await screen.findByText(/manual refresh failed/)).toBeInTheDocument();
-    expect(screen.getByText('强势领先')).toBeInTheDocument();
     expect(screen.getByText(/中际旭创、工业富联/)).toBeInTheDocument();
     expect(screen.queryByText(/点击刷新后会拉取热点概念/)).not.toBeInTheDocument();
   });
 
-  it('shows input strategy when strategy is not in preset list', async () => {
-    getScreeningStatus.mockResolvedValueOnce({
-      enabled: true,
-      available: true,
+  it('shows a read-only card for a restored strategy outside the presets and has no free-text input', async () => {
+    getScreeningStatus.mockResolvedValue({ enabled: true, available: true });
+    getRun.mockResolvedValue({
+      runId: 'run-x', strategy: 'custom_strategy_alpha', market: 'tw', candidateCount: 0, enabled: true,
+      result: { enabled: true, candidates: [], candidateCount: 0 },
     });
-    screenStocks.mockResolvedValue({
-      enabled: true,
-      candidates: [],
-      candidateCount: 0,
-    });
+    window.sessionStorage.setItem('dsa.screening.activeScreenTask.v1', JSON.stringify({
+      taskId: 'run-x', runId: 'run-x', strategy: 'custom_strategy_alpha', market: 'tw', maxResults: 3,
+    }));
 
     render(<StockScreeningPage />);
 
-    expect(await screen.findByText('选股已开启')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('策略'), {
-      target: { value: '__custom_strategy__' },
-    });
-    fireEvent.change(screen.getByLabelText('自定义策略 ID'), {
-      target: { value: 'custom_strategy_alpha' },
-    });
-
-    expect(screen.getByDisplayValue('custom_strategy_alpha')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
-    await waitFor(() => expect(screenStocks).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByText(/自定义策略 \(custom_strategy_alpha\)/)).toBeInTheDocument());
+    expect((await screen.findAllByText(/自定义策略 \(custom_strategy_alpha\)/)).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText('自定义策略 ID')).not.toBeInTheDocument();
   });
 
-  it('uses supported Screening strategy ids and cn market', async () => {
+  it('offers only Taiwan and US, defaults to Taiwan and submits the picked template', async () => {
     getStrategies.mockResolvedValueOnce({
       enabled: true,
       strategies: [
-        { id: 'balanced_alpha', name: '平衡选股', description: 'desc', category: '框架' },
-        { id: 'capital_heat', name: '资金热度', description: 'desc', category: '动量' },
-        { id: 'dual_low', name: '双低', description: 'desc', category: '价值' },
-        { id: 'oversold_reversal', name: '超跌', description: 'desc', category: '反转' },
-        { id: 'shrink_pullback', name: '缩量回踩', description: 'desc', category: '趋势' },
+        { id: 'dual_low', name: '双低', description: 'desc', category: 'value', marketScope: ['cn'] },
+        { id: 'momentum_quality', name: '趋势品质', description: 'desc', marketScope: ['cn', 'tw', 'us'],
+          marketConditions: {
+            tw: [{ key: 'amount_min', label: '成交金额下限', value: 200000000, unit: 'TWD' }],
+            us: [{ key: 'amount_min', label: '成交金额下限', value: 50000000, unit: 'USD' }],
+          } },
+        { id: 'tw_only', name: '台股专用', description: 'desc', marketScope: ['tw'] },
       ],
-      strategyCount: 5,
+      strategyCount: 3,
     });
-    getScreeningStatus.mockResolvedValueOnce({
-      enabled: true,
-      available: true,
-    });
-    screenStocks.mockResolvedValue({
-      enabled: true,
-      candidates: [],
-      candidateCount: 0,
-    });
+    getScreeningStatus.mockResolvedValueOnce({ enabled: true, available: true });
+    screenStocks.mockResolvedValue({ enabled: true, candidates: [], candidateCount: 0 });
 
     render(<StockScreeningPage />);
-
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
 
-    const marketSelect = screen.getByLabelText('市场') as HTMLSelectElement;
-    expect(Array.from(marketSelect.options).map((option) => option.value)).toEqual(['cn']);
+    const marketGroup = screen.getByRole('radiogroup', { name: '市场' });
+    expect(within(marketGroup).getAllByRole('radio').map((option) => option.textContent)).toEqual(['台股', '美股']);
+    expect(within(marketGroup).getByRole('radio', { name: '台股' })).toHaveAttribute('aria-checked', 'true');
 
-    const strategySelect = screen.getByLabelText('策略') as HTMLSelectElement;
-    expect(Array.from(strategySelect.options).map((option) => option.textContent)).toEqual([
-      '平衡选股',
-      '资金热度',
-      '双低',
-      '超跌',
-      '缩量回踩',
-      '自定义策略…',
-    ]);
+    expect(await screen.findByRole('radio', { name: /趋势品质/ })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: /台股专用/ })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: /双低/ })).not.toBeInTheDocument();
+    expect(screen.getByText('成交金额下限 200,000,000 TWD')).toBeInTheDocument();
 
-    ['balanced_alpha', 'capital_heat', 'oversold_reversal', 'shrink_pullback'].forEach((id) => {
-      fireEvent.change(strategySelect, { target: { value: id } });
-      expect(strategySelect.value).toBe(id);
-    });
+    fireEvent.click(screen.getByRole('radio', { name: /台股专用/ }));
+    fireEvent.click(within(marketGroup).getByRole('radio', { name: '美股' }));
+    // 台股專用在美股沒開放，要回退到美股有的策略，不能帶著送出。
+    await waitFor(() => expect(screen.getByRole('radio', { name: /趋势品质/ })).toHaveAttribute('aria-checked', 'true'));
+    expect(screen.queryByRole('radio', { name: /台股专用/ })).not.toBeInTheDocument();
+    expect(screen.getByText('成交金额下限 50,000,000 USD')).toBeInTheDocument();
+    await waitFor(() => expect(getHotspots).toHaveBeenLastCalledWith({ provider: 'akshare', top: 12, refresh: false, market: 'us' }));
 
     fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
     await waitFor(() => expect(screenStocks).toHaveBeenCalledTimes(1));
-    expect(screenStocks).toHaveBeenCalledWith({
-      market: 'cn',
-      strategy: 'shrink_pullback',
-      maxResults: 3,
-    });
+    expect(screenStocks).toHaveBeenCalledWith({ market: 'us', strategy: 'momentum_quality', maxResults: 3 });
   });
 
-  it('clears previous screening candidates when strategy changes', async () => {
+  it('shows the actual US universe and funnel from the response', async () => {
+    getScreeningStatus.mockResolvedValueOnce({ enabled: true, available: true });
+    screenStocks.mockResolvedValueOnce({
+      enabled: true, candidates: [], candidateCount: 0, universeSource: 'default', universeSize: 50,
+      snapshotDate: '2026-10-30', warnings: ['US universe fallback: default'],
+      funnel: [{ stage: 'snapshot', label: '母体', count: 50 }, { stage: 'selected', label: '入选', count: 0 }],
+    });
+
+    render(<StockScreeningPage />);
+    await runScreening();
+
+    const provenance = await screen.findByTestId('screening-provenance');
+    expect(provenance).toHaveTextContent('母体来源：内建前 50 档');
+    expect(provenance).toHaveTextContent('资料日 2026-10-30');
+    expect(provenance).toHaveTextContent('母体 50 → 入选 0');
+    expect(await screen.findByText(/美股母体已退回：内建前 50 档/)).toBeInTheDocument();
+    expect(screen.queryByText(/US universe fallback/)).not.toBeInTheDocument();
+  });
+
+  it('shows only the guide card while screening is off and loads everything after enabling', async () => {
+    getScreeningStatus.mockResolvedValueOnce({ enabled: false, available: false })
+      .mockResolvedValueOnce({ enabled: true, available: true });
+    enableScreening.mockResolvedValueOnce(undefined);
+
+    render(<StockScreeningPage />);
+
+    expect(await screen.findByTestId('screening-guide-card')).toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: '市场' })).not.toBeInTheDocument();
+    expect(screen.queryByText('热点题材')).not.toBeInTheDocument();
+    expect(getHotspots).not.toHaveBeenCalled();
+    expect(getHistory).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '开启选股' }));
+
+    await waitFor(() => expect(getStrategies).toHaveBeenCalledTimes(1));
+    expect(getHotspots).toHaveBeenCalledTimes(1);
+    expect(getHistory).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('screening-guide-card')).not.toBeInTheDocument();
+  });
+
+  it('shows the Traditional Chinese screen without simplified leftovers', async () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'zh-TW');
+    getScreeningStatus.mockResolvedValue({ enabled: true, available: true });
+    screenStocks.mockResolvedValueOnce({
+      enabled: true, candidateCount: 1,
+      candidates: [{ rank: 1, code: '2330.TW', name: '台積電', reason: '理由', raw: {}, riskLevel: 'low' }],
+    });
+    try {
+      const { container } = render(<UiLanguageProvider><StockScreeningPage /></UiLanguageProvider>);
+      fireEvent.click(await screen.findByRole('button', { name: /執行選股/ }));
+      expect((await screen.findAllByText('台積電')).length).toBeGreaterThan(0);
+      expect(container.textContent).not.toMatch(/选股|运行|历史|风险|价格|涨跌|条候选|观察/);
+    } finally {
+      window.localStorage.clear();
+    }
+  });
+
+  it('does not invent a signal, fake sparkline or strength label', async () => {
+    getScreeningStatus.mockResolvedValue({ enabled: true, available: true });
+    getHotspots.mockResolvedValue({
+      enabled: true, provider: 'akshare', hotspotCount: 1,
+      hotspots: [{ topic: 'AI', name: 'AI算力', heatScore: 99, rank: 1, changePct: null, leaders: [] }],
+    });
+    screenStocks.mockResolvedValueOnce({
+      enabled: true, candidateCount: 1,
+      candidates: [{ rank: 1, code: '2330.TW', name: '台积电', reason: '理由', raw: {} }],
+    });
+
+    const { container } = render(<StockScreeningPage />);
+    await runScreening();
+    await openCandidate('台积电');
+
+    expect(screen.queryByText('操作信号')).not.toBeInTheDocument();
+    expect(screen.queryByText('观察')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /展开热点题材/ }));
+    expect(await screen.findByText('AI算力')).toBeInTheDocument();
+    expect(screen.queryByText('强势领先')).not.toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/观察中/);
+    expect(container.querySelector('svg[viewBox="0 0 96 40"]')).toBeNull();
+  });
+
+  it('maps a structured candidate action through the glossary', async () => {
+    getScreeningStatus.mockResolvedValue({ enabled: true, available: true });
+    screenStocks.mockResolvedValueOnce({
+      enabled: true, candidateCount: 1,
+      candidates: [{ rank: 1, code: '2330.TW', name: '台积电', reason: '理由', raw: { action: 'buy' } }],
+    });
+
+    render(<StockScreeningPage />);
+    await runScreening();
+    await openCandidate('台积电');
+
+    expect(screen.getByText('操作信号')).toBeInTheDocument();
+    expect(screen.queryByText('buy')).not.toBeInTheDocument();
+  });
+
+  it('sorts client-side with missing values last and renders a mobile card per row', async () => {
+    getScreeningStatus.mockResolvedValue({ enabled: true, available: true });
+    screenStocks.mockResolvedValueOnce({
+      enabled: true, candidateCount: 3,
+      candidates: [
+        { rank: 1, code: 'A', name: '甲', score: 50, changePct: 1, raw: {}, reason: '' },
+        { rank: 2, code: 'B', name: '乙', score: null, changePct: -1, raw: {}, reason: '' },
+        { rank: 3, code: 'C', name: '丙', score: 90, changePct: 2, raw: {}, reason: '' },
+      ],
+    });
+
+    render(<StockScreeningPage />);
+    await runScreening();
+    expect((await screen.findAllByText('甲')).length).toBeGreaterThan(0);
+
+    const desktop = screen.getByTestId('data-table-desktop');
+    const namesInOrder = () => within(desktop).getAllByText(/^[甲乙丙]$/).map((node) => node.textContent);
+    expect(namesInOrder()).toEqual(['甲', '乙', '丙']);
+
+    fireEvent.click(within(desktop).getByRole('button', { name: /评分/ }));
+    expect(namesInOrder()).toEqual(['丙', '甲', '乙']);
+    fireEvent.click(within(desktop).getByRole('button', { name: /评分/ }));
+    expect(namesInOrder()).toEqual(['甲', '丙', '乙']);
+
+    expect(screen.getAllByTestId('screening-mobile-card')).toHaveLength(3);
+  });
+
+  it('opens one analysis from the row without opening the drawer, and toggles the star', async () => {
+    getScreeningStatus.mockResolvedValue({ enabled: true, available: true });
+    addToWatchlist.mockResolvedValue(['2330.TW']);
+    screenStocks.mockResolvedValueOnce({
+      enabled: true, candidateCount: 1,
+      candidates: [{ rank: 1, code: '2330.TW', name: '台积电', reason: '理由', raw: {} }],
+    });
+
+    render(<StockScreeningPage />);
+    await runScreening();
+    expect((await screen.findAllByText('台积电')).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getAllByRole('button', { name: '将 台积电 加入自选' })[0]);
+    await waitFor(() => expect(addToWatchlist).toHaveBeenCalledWith('2330.TW'));
+    expect((await screen.findAllByRole('button', { name: '将 台积电 移出自选' })).length).toBeGreaterThan(0);
+    expect(screen.queryByTestId('screening-candidate-detail')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: '分析 台积电' })[0]);
+    expect(navigate).toHaveBeenCalledWith('/', expect.objectContaining({
+      state: expect.objectContaining({ stockCode: '2330.TW', autoAnalyze: true }),
+    }));
+    expect(screen.queryByTestId('screening-candidate-detail')).not.toBeInTheDocument();
+  });
+
+  it('batches the selected rows into analysis and watchlist and skips ones already watched', async () => {
+    getScreeningStatus.mockResolvedValue({ enabled: true, available: true });
+    getWatchlist.mockResolvedValue(['2330.TW']);
+    analyzeAsync.mockResolvedValue({});
+    addToWatchlist.mockResolvedValue(['2330.TW', 'AAPL']);
+    screenStocks.mockResolvedValueOnce({
+      enabled: true, candidateCount: 2,
+      candidates: [
+        { rank: 1, code: '2330.TW', name: '台积电', reason: '', raw: {} },
+        { rank: 2, code: 'AAPL', name: '苹果', reason: '', raw: {} },
+      ],
+    });
+
+    render(<StockScreeningPage />);
+    await runScreening();
+    expect((await screen.findAllByText('苹果')).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getAllByRole('checkbox', { name: '选取 台积电' })[0]);
+    fireEvent.click(screen.getAllByRole('checkbox', { name: '选取 苹果' })[0]);
+    expect(within(screen.getByTestId('screening-batch-bar')).getByText('已选 2 档')).toBeInTheDocument();
+    expect(screen.queryByTestId('screening-candidate-detail')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '批量分析' }));
+    await waitFor(() => expect(analyzeAsync).toHaveBeenCalledWith(expect.objectContaining({ stockCodes: ['2330.TW', 'AAPL'] })));
+    expect(await screen.findByText(/已送出 2 档分析/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('checkbox', { name: '选取 台积电' })[0]);
+    fireEvent.click(screen.getAllByRole('checkbox', { name: '选取 苹果' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: '加入自选' }));
+    await waitFor(() => expect(addToWatchlist).toHaveBeenCalledTimes(1));
+    expect(addToWatchlist).toHaveBeenCalledWith('AAPL');
+  });
+
+  it('does not repeat the summary or the thesis across detail layers', async () => {
+    getScreeningStatus.mockResolvedValue({ enabled: true, available: true });
+    screenStocks.mockResolvedValueOnce({
+      enabled: true, candidateCount: 1,
+      candidates: [{
+        rank: 1, code: '2330.TW', name: '台积电', reason: '同一句理由', llmThesis: '同一句理由', llmSector: '半导体', raw: {},
+        whySelected: [{ code: 'selection_reason', text: '同一句理由', source: 'llm', quality: 'inferred' }],
+      }],
+    });
+
+    render(<StockScreeningPage />);
+    await runScreening();
+    await openCandidate('台积电');
+
+    const detail = screen.getByTestId('screening-candidate-detail');
+    expect(within(detail).getAllByText('同一句理由')).toHaveLength(1);
+    expect(within(detail).queryByText('摘要')).not.toBeInTheDocument();
+  });
+
+  it('keeps the previous results and flags them when the conditions change', async () => {
     getStrategies.mockResolvedValueOnce({
       enabled: true,
       strategies: [
@@ -1122,16 +1336,19 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
 
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
+    await screen.findByRole('radio', { name: /双低选股/ });
     fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
 
-    expect(await screen.findByText('旧策略股票')).toBeInTheDocument();
+    expect((await screen.findAllByText('旧策略股票')).length).toBeGreaterThan(0);
     expect(screen.getByText('选股完成')).toBeInTheDocument();
+    expect(screen.queryByTestId('screening-conditions-changed')).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('策略'), { target: { value: 'capital_heat' } });
+    fireEvent.click(screen.getByRole('radio', { name: /资金热度/ }));
 
-    expect(screen.queryByText('旧策略股票')).not.toBeInTheDocument();
-    expect(screen.queryByText('选股完成')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('策略')).toHaveValue('capital_heat');
+    expect(screen.getAllByText('旧策略股票').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('screening-conditions-changed')).toBeInTheDocument();
+    expect(screen.getByText(/双低选股 · 台股/)).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /资金热度/ })).toHaveAttribute('aria-checked', 'true');
   });
 
   it('hands a screening candidate to DSA analysis with mapped skills', async () => {
@@ -1170,12 +1387,9 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
 
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
+    await screen.findByRole('radio', { name: /双低选股/ });
     fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
-    expect(await screen.findByText('贵州茅台')).toBeInTheDocument();
-    const expandButton = screen.queryByRole('button', { name: '展开查看' });
-    if (expandButton) {
-      fireEvent.click(expandButton);
-    }
+    await openCandidate('贵州茅台');
     fireEvent.click(screen.getByRole('button', { name: '进一步深度分析' }));
 
     expect(navigate).toHaveBeenCalledWith('/', {
@@ -1250,7 +1464,7 @@ describe('StockScreeningPage', () => {
     firstRender.unmount();
     render(<StockScreeningPage />);
 
-    expect(await screen.findByText('恢复后的候选')).toBeInTheDocument();
+    expect((await screen.findAllByText('恢复后的候选')).length).toBeGreaterThan(0);
     expect(screen.getByText('选股完成')).toBeInTheDocument();
     // 方案A：任务完成后保留 runId（而非清空），刷新后可从 history API 恢复
     expect(window.sessionStorage.getItem('dsa.screening.activeScreenTask.v1')).toContain('screen-task-1');
@@ -1335,19 +1549,19 @@ describe('StockScreeningPage', () => {
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
 
-    expect(await screen.findByText('旧筛选条件下的候选')).toBeInTheDocument();
+    expect((await screen.findAllByText('旧筛选条件下的候选')).length).toBeGreaterThan(0);
     expect(window.sessionStorage.getItem('dsa.screening.activeScreenTask.v1')).toContain('run-1');
 
     // 修改筛选条件（返回数量 3 -> 5）：当前结果视图清空，但持久化恢复状态必须保留
-    fireEvent.change(screen.getByRole('spinbutton', { name: /返回数量/ }), { target: { value: '5' } });
-    expect(screen.queryByText('旧筛选条件下的候选')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: '5' }));
+    expect(screen.getAllByText('旧筛选条件下的候选').length).toBeGreaterThan(0);
     expect(window.sessionStorage.getItem('dsa.screening.activeScreenTask.v1')).toContain('run-1');
 
     // 历史记录区块仍然可见（筛选条件切换不影响历史可获取性）
-    expect(screen.getByText('历史记录')).toBeInTheDocument();
+    expect(screen.getByText('暂无历史选股记录')).toBeInTheDocument();
   });
 
-  it('shows the screening conditions on each history entry', async () => {
+  it('lists recent results in a dropdown with their conditions', async () => {
     getScreeningStatus.mockResolvedValue({
       enabled: true,
       available: true,
@@ -1370,12 +1584,13 @@ describe('StockScreeningPage', () => {
 
     render(<StockScreeningPage />);
 
-    // 历史条目展示筛选条件：策略中文名 + 市场标签 + 返回数量（该次 run 实际候选数）
-    expect(await screen.findByText(/返回 3 只/)).toBeInTheDocument();
-    expect(screen.getAllByText('Dual Low').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('A 股').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/快照 50/)).toBeInTheDocument();
-    expect(screen.getByText(/智能重排/)).toBeInTheDocument();
+    const select = await screen.findByLabelText('历史记录');
+    const option = await within(select).findByRole('option', { name: /返回 3 只/ });
+    await waitFor(() => expect(option.textContent).toContain('Dual Low'));
+    expect(option.textContent).toContain('A 股');
+    expect(option.textContent).toContain('快照 50');
+    expect(option.textContent).toContain('智能重排');
+    expect(screen.queryByRole('radio', { name: 'A 股' })).not.toBeInTheDocument();
   });
 
   it('syncs strategy and market context when opening a history run', async () => {
@@ -1428,7 +1643,7 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
 
     // 点击历史记录中的 run 条目（策略 capital_heat，与当前表单默认 dual_low 不同）
-    fireEvent.click(await screen.findByText('capital_heat'));
+    await pickHistoryRun('capital_heat');
 
     // 结果区上下文同步为该历史 run 的策略与市场
     expect(await screen.findByText(/自定义策略 \(capital_heat\) · A 股/)).toBeInTheDocument();
@@ -1475,8 +1690,8 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
 
     // 先点 run-a（capital_heat，请求挂起），再点 run-b（dual_low）
-    fireEvent.click(await screen.findByText('capital_heat'));
-    fireEvent.click(screen.getByRole('button', { name: /Dual Low/ }));
+    await pickHistoryRun('capital_heat');
+    await pickHistoryRun('Dual Low|dual_low');
     await waitFor(() => expect(getRun).toHaveBeenLastCalledWith('run-b'));
 
     // run-b 先返回：结果区展示 dual_low 上下文
@@ -1508,7 +1723,7 @@ describe('StockScreeningPage', () => {
         },
       });
     });
-    expect(await screen.findByText(/Dual Low · A 股/)).toBeInTheDocument();
+    expect(await screen.findByText(/Dual Low · A 股/, { selector: 'p' })).toBeInTheDocument();
 
     // run-a 迟到返回：不得覆盖 run-b 的结果与上下文
     await act(async () => {
@@ -1539,7 +1754,7 @@ describe('StockScreeningPage', () => {
         },
       });
     });
-    expect(screen.getByText(/Dual Low · A 股/)).toBeInTheDocument();
+    expect(screen.getByText(/Dual Low · A 股/, { selector: 'p' })).toBeInTheDocument();
     expect(screen.queryByText(/自定义策略 \(capital_heat\)/)).not.toBeInTheDocument();
     expect(screen.queryByText('腾讯控股')).not.toBeInTheDocument();
   });
@@ -1607,9 +1822,9 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
 
     // 自动恢复 run-a 还在挂起时，用户手动点开历史里的 run-b（策略 dual_low → 显示 Dual Low）
-    fireEvent.click(await screen.findByText(/返回 1 只/));
-    expect(await screen.findByText(/Dual Low · A 股/)).toBeInTheDocument();
-    expect(screen.getByText('浦发银行')).toBeInTheDocument();
+    await pickHistoryRun('返回 1 只');
+    expect(await screen.findByText(/Dual Low · A 股/, { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getAllByText('浦发银行').length).toBeGreaterThan(0);
 
     // run-a 较晚返回：不得覆盖用户手动选择的 run-b
     await act(async () => {
@@ -1640,8 +1855,8 @@ describe('StockScreeningPage', () => {
         },
       });
     });
-    expect(screen.getByText(/Dual Low · A 股/)).toBeInTheDocument();
-    expect(screen.getByText('浦发银行')).toBeInTheDocument();
+    expect(screen.getByText(/Dual Low · A 股/, { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getAllByText('浦发银行').length).toBeGreaterThan(0);
     expect(screen.queryByText(/自定义策略 \(capital_heat\)/)).not.toBeInTheDocument();
     expect(screen.queryByText('腾讯控股')).not.toBeInTheDocument();
   });
@@ -1728,9 +1943,9 @@ describe('StockScreeningPage', () => {
     await waitFor(() => expect(getScreenTask).toHaveBeenCalled());
 
     // 任务仍在轮询时，点击历史记录 run（策略 capital_heat）
-    fireEvent.click(await screen.findByText('capital_heat'));
+    await pickHistoryRun('capital_heat');
     expect(await screen.findByText(/自定义策略 \(capital_heat\)/)).toBeInTheDocument();
-    expect(screen.getByText('历史候选')).toBeInTheDocument();
+    expect(screen.getAllByText('历史候选').length).toBeGreaterThan(0);
 
     // 后台任务随后完成，也不得把任务候选回写到历史上下文中
     expect(screen.queryByText('任务候选')).not.toBeInTheDocument();
@@ -1779,6 +1994,7 @@ describe('StockScreeningPage', () => {
     expect(screen.queryByText(/Missing gemini_api_key/)).not.toBeInTheDocument();
     expect(screen.getByText(/排序：确定性因子/)).toBeInTheDocument();
     expect(screen.getByText('因子排序')).toBeInTheDocument();
+    await openCandidate('平安银行');
     expect(screen.getByText('本地后置评分: value_quality', { exact: true })).toBeInTheDocument();
     expect(screen.queryByText(/主要优势：流动性 93、估值 87/)).not.toBeInTheDocument();
     expect(screen.queryByText(/LLM 已降级/)).not.toBeInTheDocument();
@@ -1809,9 +2025,7 @@ describe('StockScreeningPage', () => {
 
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
-    expect(await screen.findByText('平安银行')).toBeInTheDocument();
-    const expandButton = screen.queryByRole('button', { name: '展开查看' });
-    if (expandButton) fireEvent.click(expandButton);
+    await openCandidate('平安银行');
 
     expect(screen.getByText('风险摘要')).toBeInTheDocument();
     expect(screen.getByText('资产质量仍需持续观察')).toBeInTheDocument();
@@ -1836,9 +2050,7 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
-    expect(await screen.findByText('平安银行')).toBeInTheDocument();
-    const expandButton = screen.queryByRole('button', { name: '展开查看' });
-    if (expandButton) fireEvent.click(expandButton);
+    await openCandidate('平安银行');
 
     expect(screen.getByText('风险摘要')).toBeInTheDocument();
     expect(screen.getByText('资产质量待观察；息差收窄')).toBeInTheDocument();
@@ -1863,9 +2075,7 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
-    expect(await screen.findByText('平安银行')).toBeInTheDocument();
-    const expandButton = screen.queryByRole('button', { name: '展开查看' });
-    if (expandButton) fireEvent.click(expandButton);
+    await openCandidate('平安银行');
 
     expect(screen.getByText('风险标签')).toBeInTheDocument();
     expect(screen.queryByText('风险摘要')).not.toBeInTheDocument();
@@ -1992,19 +2202,20 @@ describe('StockScreeningPage', () => {
 
     expect(await screen.findByText('深度补充：1 / 1')).toBeInTheDocument();
 
+    await openCandidate('贵州茅台');
     expect(screen.getByText('为什么入选')).toBeInTheDocument();
     expect(screen.getByText('核心因子：liquidity 92.1、value 87.4')).toBeInTheDocument();
-    expect(within(screen.getByText('核心因子：liquidity 92.1、value 87.4').closest('li')!).getByText('来源：screening · 质量：observed')).toBeInTheDocument();
+    expect(within(screen.getByText('核心因子：liquidity 92.1、value 87.4').closest('li')!).getByText('来源：选股引擎 · 质量：实际观测')).toBeInTheDocument();
     expect(screen.getByText('为什么现在')).toBeInTheDocument();
     expect(screen.getByText('消息：贵州茅台最新公告')).toBeInTheDocument();
-    expect(within(screen.getByText('消息：贵州茅台最新公告').closest('li')!).getByText('来源：测试源 · 质量：observed')).toBeInTheDocument();
-    expect(within(screen.getByText('涨跌幅：+1.20%').closest('li')!).getByText('来源：realtime_quote · 质量：observed')).toBeInTheDocument();
+    expect(within(screen.getByText('消息：贵州茅台最新公告').closest('li')!).getByText('来源：测试源 · 质量：实际观测')).toBeInTheDocument();
+    expect(within(screen.getByText('涨跌幅：+1.20%').closest('li')!).getByText('来源：即时行情 · 质量：实际观测')).toBeInTheDocument();
     expect(screen.getByText('增强摘要')).toBeInTheDocument();
     expect(screen.getByText(/行情：现价 1688/)).toBeInTheDocument();
     expect(screen.getByText('相关新闻')).toBeInTheDocument();
     expect(screen.getByText('贵州茅台最新公告')).toBeInTheDocument();
     expect(screen.getByText('数据补充提示')).toBeInTheDocument();
-    expect(screen.getByText('stock_news_unavailable')).toBeInTheDocument();
+    expect(screen.getByText('部分资料未能补齐')).toBeInTheDocument();
   });
   it('keeps the shared loading held when a stale auto-restore finishes while a manual history request is in flight', async () => {
     // 回归 OR-COR-9b1f8c4e：过期的自动恢复请求不得在 finally 中无条件清掉共享 loading，
@@ -2051,7 +2262,7 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
     // 自动恢复 run-a 仍在飞行时，用户点开历史里的 run-b
-    fireEvent.click(await screen.findByRole('button', { name: /Dual Low/ }));
+    await pickHistoryRun('Dual Low|dual_low');
     // 先让过期的自动恢复 run-a 结束（其响应已被 request-id 判定为过期）
     resolveRunA({
       runId: 'run-a',
@@ -2080,8 +2291,8 @@ describe('StockScreeningPage', () => {
     await act(async () => {});
     // 过期 finally 不清共享 loading：表单仍处于禁用态（按钮在 loading 时渲染为 spinner，
     // 故用市场下拉框断言），页面也未切到任何历史结果
-    expect(screen.getByLabelText('市场')).toBeDisabled();
-    expect(screen.queryByText(/Dual Low · A 股/)).not.toBeInTheDocument();
+    within(screen.getByLabelText('市场')).getAllByRole('radio').forEach((radio) => expect(radio).toBeDisabled());
+    expect(screen.queryByText(/Dual Low · A 股/, { selector: 'p' })).not.toBeInTheDocument();
     expect(screen.queryByText(/自定义策略 \(capital_heat\)/)).not.toBeInTheDocument();
     // 随后 run-b 正常返回：结果恢复，loading 由本次请求自己收口
     resolveRunB({
@@ -2108,7 +2319,7 @@ describe('StockScreeningPage', () => {
         llmRanked: true,
       },
     });
-    expect(await screen.findByText(/Dual Low · A 股/)).toBeInTheDocument();
+    expect(await screen.findByText(/Dual Low · A 股/, { selector: 'p' })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText('市场')).toBeEnabled());
   });
   it('polls a newly submitted task immediately while a stale auto-restore request is still pending', async () => {
@@ -2185,12 +2396,12 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
     // 自动恢复挂起时，用户先打开历史 run-b（正常返回并由该请求自身收口 loading）
-    fireEvent.click(await screen.findByRole('button', { name: /Dual Low/ }));
-    expect(await screen.findByText(/Dual Low · A 股/)).toBeInTheDocument();
+    await pickHistoryRun('Dual Low|dual_low');
+    expect(await screen.findByText(/Dual Low · A 股/, { selector: 'p' })).toBeInTheDocument();
     // 随即发起新任务：轮询必须立即启动，不被仍挂起的自动恢复门闩阻塞
     fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
     await waitFor(() => expect(getScreenTask).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText(/新任务候选/)).toBeInTheDocument();
+    expect((await screen.findAllByText(/新任务候选/)).length).toBeGreaterThan(0);
   });
   it('does not rewrite a restored custom strategy when the strategy list arrives late', async () => {
     // 回归：迟到的 /strategies 响应不得把历史/恢复上下文中的自定义策略改写回默认策略。
@@ -2249,9 +2460,8 @@ describe('StockScreeningPage', () => {
       strategyCount: 1,
     });
     await act(async () => {});
-    // 归一化被跳过：表单下拉切到自定义项、输入框保留原始 ID、结果区标题不变
-    expect(screen.getByLabelText('策略')).toHaveValue('__custom_strategy__');
-    expect(screen.getByLabelText('自定义策略 ID')).toHaveValue('capital_heat');
+    // 归一化被跳过：自定义 ID 输入框已移除（X02），结果区标题不变
+    expect(screen.queryByLabelText('自定义策略 ID')).not.toBeInTheDocument();
     expect(screen.getByText(/自定义策略 \(capital_heat\) · A 股/)).toBeInTheDocument();
   });
   it('persists the selected history run so a refresh restores that run instead of the stale task', async () => {
@@ -2315,7 +2525,7 @@ describe('StockScreeningPage', () => {
     const first = render(<StockScreeningPage />);
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
     // 手动选中历史记录 run-b（策略 capital_heat）
-    fireEvent.click(await screen.findByText('capital_heat'));
+    await pickHistoryRun('capital_heat');
     expect(await screen.findByText(/自定义策略 \(capital_heat\) · A 股/)).toBeInTheDocument();
     // 持久化指针已切换到刚选中的历史 run
     const stored = JSON.parse(
@@ -2346,16 +2556,17 @@ describe('StockScreeningPage', () => {
       }],
     } });
     render(<StockScreeningPage />);
-    fireEvent.click(await screen.findByText('quality_value'));
+    await pickHistoryRun('quality_value');
+    await openCandidate('混合证据');
     const selected = (await screen.findByText('为什么入选')).parentElement!;
     expect(within(selected).getAllByRole('listitem')).toHaveLength(4);
-    const expected = [['模型理由', 'llm', 'inferred'], ['加权因子', 'screening', 'observed'],
-      ['同文案', 'post_analyzer:scorecard', 'observed'], ['同文案', 'post_analyzer:external_http', 'inferred']];
+    const expected = [['模型理由', '模型', '推论'], ['加权因子', '选股引擎', '实际观测'],
+      ['同文案', 'post_analyzer:scorecard', '实际观测'], ['同文案', 'post_analyzer:external_http', '推论']];
     for (const [text, source, quality] of expected) {
       const row = within(selected).getByText(`来源：${source} · 质量：${quality}`).closest('li')!;
       expect(within(row).getByText(text, { exact: true })).toBeInTheDocument();
     }
-    expect(within(selected).getByText('综合质量：partial')).toBeInTheDocument();
+    expect(within(selected).getByText('综合质量：部分')).toBeInTheDocument();
   });
 
   it.each(['history', 'restore', 'post-analysis'])('preserves legacy run summaries with unknown provenance on %s', async (entry) => {
@@ -2376,9 +2587,10 @@ describe('StockScreeningPage', () => {
       }));
     }
     render(<StockScreeningPage />);
-    if (entry !== 'restore') fireEvent.click(await screen.findByText('quality_value'));
+    if (entry !== 'restore') await pickHistoryRun('quality_value');
+    await openCandidate('旧版候选');
     expect(await screen.findByText('历史摘要（来源未记录）：旧版保存的估值理由')).toBeInTheDocument();
-    expect(screen.getByText('来源：legacy_result · 质量：unknown')).toBeInTheDocument();
+    expect(screen.getByText('来源：旧纪录 · 质量：未知')).toBeInTheDocument();
     expect(screen.queryByText('暂无可验证的入选解释')).not.toBeInTheDocument();
     expect(screen.getByText('暂无带来源的价格、消息或事件证据')).toBeInTheDocument();
     expect(screen.queryByText('涨跌幅：+0.00%')).not.toBeInTheDocument();
@@ -2423,12 +2635,10 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
-    expect(await screen.findByText('平安银行')).toBeInTheDocument();
-    const expandButton = screen.queryByRole('button', { name: '展开查看' });
-    if (expandButton) fireEvent.click(expandButton);
+    await openCandidate('平安银行');
 
     expect(await screen.findByText('暂无带来源的价格、消息或事件证据')).toBeInTheDocument();
-    expect(screen.getByText(/来源：screening · 质量：unknown/)).toBeInTheDocument();
+    expect(screen.getByText(/来源：选股引擎 · 质量：未知/)).toBeInTheDocument();
     expect(screen.queryByText('涨跌幅：+0.00%')).not.toBeInTheDocument();
   });
 });

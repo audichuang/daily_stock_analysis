@@ -246,3 +246,37 @@ export const ScoreGauge: React.FC<ScoreGaugeProps> = ({
     </div>
   );
 };
+
+interface ScoreBarProps {
+  score: number;
+  label: string;
+  className?: string;
+}
+
+const SCORE_BAR_TICKS = [20, 40, 60, 80];
+
+/** 模型評分刻度條；舊資料可能超出 0~100，標記夾在刻度內、數字照原值。用品牌色不用紅綠。 */
+export const ScoreBar: React.FC<ScoreBarProps> = ({ score, label, className = '' }) => {
+  const position = Math.min(100, Math.max(0, score));
+  return (
+    <div
+      role="img"
+      aria-label={`${label} ${score}`}
+      data-testid="score-bar"
+      className={cn('flex items-center gap-2 text-xs text-secondary-text', className)}
+    >
+      <span className="shrink-0">{label}</span>
+      <span className="relative h-1.5 min-w-20 flex-1 rounded-full bg-border/70">
+        {SCORE_BAR_TICKS.map((tick) => (
+          <span key={tick} className="absolute top-0 h-1.5 w-px bg-card" style={{ left: `${tick}%` }} />
+        ))}
+        <span
+          data-testid="score-bar-marker"
+          className="absolute top-1/2 h-3 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-cyan"
+          style={{ left: `${position}%` }}
+        />
+      </span>
+      <span className="shrink-0 font-semibold tabular-nums text-foreground">{score}</span>
+    </div>
+  );
+};

@@ -124,4 +124,19 @@ describe('DataTable 空資料', () => {
     expect(screen.getByText('沒有資料')).toBeInTheDocument();
     expect(screen.queryByTestId('data-table-desktop')).not.toBeInTheDocument();
   });
+
+  it('renders an expanded row only for the matching key', () => {
+    setup({ expandedRowKey: 'AAPL', renderExpandedRow: (row) => <span>detail {row.code}</span> });
+
+    const expanded = within(screen.getByTestId('data-table-desktop')).getAllByTestId('data-table-expanded-row');
+    expect(expanded).toHaveLength(1);
+    expect(expanded[0]).toHaveTextContent('detail AAPL');
+    expect(expanded[0].querySelector('td')).toHaveAttribute('colspan', String(columns.length));
+  });
+
+  it('renders no expanded row without a key', () => {
+    setup({ renderExpandedRow: (row) => <span>detail {row.code}</span> });
+
+    expect(screen.queryByTestId('data-table-expanded-row')).not.toBeInTheDocument();
+  });
 });

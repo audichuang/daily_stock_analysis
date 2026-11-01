@@ -1108,7 +1108,25 @@ def _build_market_review_context_overview(
     }
 
 
+def _leading_blockquote(review_report: str) -> str:
+    """報告標題下的一句話結論。內文（第一個 ### 小節之後）的引用行是系統註記，不算。"""
+    for line in (review_report or "").splitlines():
+        text = line.strip()
+        if text.startswith("###"):
+            return ""
+        if text.startswith(">"):
+            quote = text.lstrip("> ").replace("**", "").strip()
+            if quote:
+                return quote[:200]
+        elif text and not text.startswith(("#", "---", "[dsa-market-region]")):
+            return ""
+    return ""
+
+
 def _summarize_market_review(review_report: str, report_language: str) -> str:
+    quote = _leading_blockquote(review_report)
+    if quote:
+        return quote
     for line in (review_report or "").splitlines():
         text = line.strip().lstrip("#").strip()
         if text and not text.startswith("---") and not text.startswith(">"):

@@ -9,7 +9,7 @@
 2. 定义历史 K 线数据模型
 """
 
-from typing import Any, Dict, Literal, Optional, List
+from typing import Annotated, Any, Dict, Literal, Optional, List
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -50,6 +50,7 @@ class StockQuote(BaseModel):
     update_time: Optional[str] = Field(None, description="更新时间")
     # 行情来源与时效（additive，旧客户端忽略即可）
     source: Optional[str] = Field(None, description="行情来源 (shioaji/fallback/efinance/akshare...)")
+    source_code: Optional[str] = Field(None, description="穩定的來源代碼（shioaji／yfinance…）；source 字串維持舊值")
     as_of: Optional[str] = Field(None, description="行情对应时间 (provider_timestamp 优先, 否则 fetched_at), ISO8601")
     is_stale: Optional[bool] = Field(None, description="是否延迟/陈旧 (台股 yfinance 约延迟 15-20 分钟)")
 
@@ -132,6 +133,8 @@ class TrendPoint(BaseModel):
 
     t: str = Field(..., description="时间点 (ISO8601)")
     price: float = Field(..., description="价格（日/月/年为收盘价，分时为最新价）")
+    volume: Optional[float] = Field(None, description="該點成交量（股）；沒有讀數為 null")
+    avg_price: Optional[float] = Field(None, description="當日累計均價（Close×量的近似 VWAP），僅分時")
 
 
 class StockTrendResponse(BaseModel):
@@ -140,7 +143,27 @@ class StockTrendResponse(BaseModel):
     stock_code: str = Field(..., description="股票代码")
     range: str = Field(..., description="day / month / year")
     source: Optional[str] = Field(None, description="数据来源说明（如 intraday 来自 yfinance，可能延迟）")
+    source_code: Optional[str] = Field(None, description="穩定的來源代碼（shioaji／yfinance）")
+    degraded_reason: Optional[str] = Field(
+        None,
+        description="台股沒走 Shioaji 的原因：no_session／no_contract／kbars_failed:*／no_bars／range_unsupported／sdk_missing",
+    )
     points: List[TrendPoint] = Field(default_factory=list, description="按时间升序的走势点")
+
+
+class IntradayTrendItem(BaseModel):
+    """批次分時單項：取不到時 points 為空並帶 error，不拖垮整批。"""
+
+    stock_code: str = Field(..., description="股票代码")
+    points: List[TrendPoint] = Field(default_factory=list, description="今日分時，已抽樣到迷你圖用的點數")
+    source_code: Optional[str] = Field(None, description="穩定的來源代碼（shioaji／yfinance）")
+    error: Optional[str] = Field(None, description="no_data／unavailable；成功時為 null")
+
+
+class IntradayTrendBatchResponse(BaseModel):
+    """批次當日走勢（盯盤迷你分時）"""
+
+    items: List[IntradayTrendItem] = Field(default_factory=list, description="按請求代碼順序（去重後）")
 
 
 class KLineData(BaseModel):
@@ -259,10 +282,160 @@ class StockProfileMonitorBlock(BaseModel):
     limitations: List[str] = Field(default_factory=list)
 
 
+class StockProfilePosition(BaseModel):
+    """使用者對這檔的持股（跨帳戶合計）。沒持有時整塊為 null。"""
+
+    quantity: float
+    avg_cost: Optional[float] = Field(None, description="平均成本（currency 計價）；跨幣別持有時為 null")
+    currency: Optional[str] = None
+    last_price: Optional[float] = Field(None, description="算損益用的價格：即時報價優先")
+    market_value: Optional[float] = None
+    unrealized_pnl: Optional[float] = None
+    unrealized_pnl_pct: Optional[float] = None
+    weight_pct: Optional[float] = Field(None, description="占全部持股市值 %；缺匯率時為 null")
+    account_count: int = 1
+
+
+class StockProfileChips(BaseModel):
+    """台股籌碼（本地 DB）。法人單位是股、融資融券單位是張，兩者不可相比。"""
+
+    institutional_date: Optional[str] = None
+    foreign_net: Optional[float] = None
+    trust_net: Optional[float] = None
+    dealer_net: Optional[float] = None
+    total_net: Optional[float] = None
+    margin_date: Optional[str] = None
+    margin_balance: Optional[float] = None
+    margin_chg_5: Optional[float] = None
+    margin_chg_20: Optional[float] = None
+    short_balance: Optional[float] = None
+    short_margin_ratio: Optional[float] = None
+
+
+class StockProfileNewsItem(BaseModel):
+    title: Optional[str] = None
+    url: Optional[str] = None
+    source: Optional[str] = None
+    published_date: Optional[str] = None
+
+
 class StockProfileEvidenceQuality(BaseModel):
     status: StockProfileStatus
     blocks: Dict[str, StockProfileStatus] = Field(default_factory=dict)
     limitations: List[str] = Field(default_factory=list)
+
+
+FinancialsStatus = Literal["ok", "no_data", "not_applicable", "unsupported", "unavailable"]
+CommentaryStatus = Literal["ready", "missing", "disabled", "failed", "not_applicable"]
+
+
+class FinancialPeriod(BaseModel):
+    key: str = Field(..., description="期間鍵，如 2026Q2；美股是公司自己的會計年度")
+    label: str
+    fiscal_year: Optional[int] = None
+    fiscal_quarter: Optional[int] = None
+    period_end: str = Field(..., description="期末日 YYYY-MM-DD")
+    announce_date: Optional[str] = Field(None, description="公告或申報日，語意見 announce_date_kind")
+    announce_date_kind: Literal["filed", "statutory_deadline", "unknown"] = Field(
+        ..., description="filed＝實際申報日；statutory_deadline＝法定期限（實際可能更早）；unknown＝來源沒有"
+    )
+    filing_form: Optional[str] = None
+
+
+class FinancialMetricPoint(BaseModel):
+    period: str
+    value: Optional[float] = Field(None, description="金額是 1 元財報幣別，比率是百分比；沒有讀數是 null")
+    yoy_pct: Optional[float] = Field(None, description="年增率（%）；比率欄或基期 ≤0 時為 null")
+    qoq_pct: Optional[float] = Field(None, description="季增率（%）；比率欄或基期 ≤0 時為 null")
+    yoy_pp: Optional[float] = Field(None, description="比率欄的年變化（百分點）")
+    qoq_pp: Optional[float] = Field(None, description="比率欄的季變化（百分點）")
+    derived: bool = Field(False, description="由累計值差分而來，不是來源直接揭露的單季值")
+
+
+class FinancialMetric(BaseModel):
+    key: str
+    label: str
+    kind: Literal["amount", "ratio", "per_share"]
+    unit: str = Field(..., description="TWD、USD、%、TWD/股、TWD/ADR")
+    definition: str = Field(..., description="這個指標怎麼看（固定教學，與 AI 無關）")
+    points: List[FinancialMetricPoint]
+
+
+class FinancialNotApplicable(BaseModel):
+    key: str
+    label: str
+    reason: str
+
+
+class MonthlyRevenuePoint(BaseModel):
+    month: str = Field(..., description="YYYY-MM")
+    revenue: Optional[float] = Field(None, description="1 元（來源是千元，已換算）")
+    yoy_pct: Optional[float] = None
+    mom_pct: Optional[float] = None
+    announce_date: Optional[str] = None
+
+
+class FinancialSource(BaseModel):
+    id: Optional[str] = None
+    label: str
+    source_unit: str = Field(..., description="來源原始單位；回應的金額已統一換算成 1 元")
+    url: Optional[str] = None
+
+
+class FinancialCrossCheckMismatch(BaseModel):
+    field: str
+    period: str
+    primary: float
+    secondary: float
+
+
+class FinancialCrossCheck(BaseModel):
+    source: str
+    status: Literal["matched", "mismatch", "unavailable"]
+    compared: int
+    mismatches: List[FinancialCrossCheckMismatch] = Field(default_factory=list)
+
+
+class FinancialHighlight(BaseModel):
+    metric_key: str = Field(..., description="對應 metrics[].key 或 monthly_revenue")
+    period: str = Field(..., description="對應 periods[].key；月營收是 YYYY-MM")
+    importance: Literal["high", "medium", "low"]
+    what_happened: str
+    why_it_matters: str
+    how_to_read: str
+
+
+class FinancialCommentary(BaseModel):
+    status: CommentaryStatus = Field(
+        ..., description="missing＝還沒生成（客戶端可 POST commentary）；disabled＝開關未開"
+    )
+    period: Optional[str] = None
+    generated_at: Optional[str] = None
+    model: Optional[str] = None
+    headline: Optional[str] = None
+    highlights: List[FinancialHighlight] = Field(default_factory=list)
+    message: Optional[str] = None
+
+
+class StockFinancialsResponse(BaseModel):
+    stock_code: str
+    market: Optional[Literal["tw", "us"]] = None
+    status: FinancialsStatus
+    status_reason: Optional[str] = None
+    stock_name: Optional[str] = None
+    template: Literal["general", "financial"] = "general"
+    currency: Optional[str] = Field(None, description="財報幣別；ADR 可能與交易幣別不同（TSM 是 TWD）")
+    trading_currency: Optional[str] = None
+    source: Optional[FinancialSource] = None
+    cross_check: Optional[FinancialCrossCheck] = None
+    periods: List[FinancialPeriod] = Field(default_factory=list)
+    metrics: List[FinancialMetric] = Field(default_factory=list)
+    not_applicable: List[FinancialNotApplicable] = Field(default_factory=list)
+    monthly_revenue: List[MonthlyRevenuePoint] = Field(default_factory=list)
+    ttm_revenue_yoy_pct: Optional[float] = None
+    limitations: List[str] = Field(default_factory=list)
+    is_stale: bool = False
+    commentary: FinancialCommentary
 
 
 class StockProfileResponse(BaseModel):
@@ -277,3 +450,37 @@ class StockProfileResponse(BaseModel):
     portfolio: StockProfilePortfolioBlock
     monitors: StockProfileMonitorBlock
     evidence_quality: StockProfileEvidenceQuality
+    position: Optional[StockProfilePosition] = None
+    chips: Optional[StockProfileChips] = None
+    news: Optional[List[StockProfileNewsItem]] = Field(None, description="最新一份報告讀過的新聞；沒有報告或查詢失敗為 null")
+
+
+class WatchlistGroup(BaseModel):
+    """自選分組（回應用：.env 可能被手改，這裡不設長度限制以免回應驗證變 500）"""
+
+    name: str = Field(..., description="組名")
+    codes: List[str] = Field(default_factory=list, description="組內代號，順序即顯示順序")
+
+
+class WatchlistGroupInput(BaseModel):
+    """自選分組（請求用）"""
+
+    name: str = Field(..., description="組名", min_length=1, max_length=32)
+    codes: List[Annotated[str, Field(max_length=32)]] = Field(
+        default_factory=list,
+        description="組內代號，順序即顯示順序",
+        max_length=500,
+    )
+
+
+class WatchlistGroupsRequest(BaseModel):
+    """整份覆寫自選分組"""
+
+    groups: List[WatchlistGroupInput] = Field(default_factory=list, description="分組，順序即顯示順序", max_length=30)
+
+
+class WatchlistGroupsResponse(BaseModel):
+    """自選分組與未分組代號"""
+
+    groups: List[WatchlistGroup] = Field(default_factory=list, description="分組；未設定時為空")
+    ungrouped: List[str] = Field(default_factory=list, description="不屬於任何分組的代號，依 STOCK_LIST 順序")

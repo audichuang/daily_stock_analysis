@@ -7,6 +7,9 @@ import type {
   BacktestResultItem,
   PerformanceMetrics,
   BacktestPhaseFilter,
+  BacktestSeriesResponse,
+  BacktestSort,
+  BacktestStatusFilter,
 } from '../types/backtest';
 
 // ============ API ============
@@ -41,10 +44,12 @@ export const backtestApi = {
     analysisDateFrom?: string;
     analysisDateTo?: string;
     analysisPhase?: BacktestPhaseFilter;
+    status?: BacktestStatusFilter;
+    sort?: BacktestSort;
     page?: number;
     limit?: number;
   } = {}): Promise<BacktestResultsResponse> => {
-    const { code, evalWindowDays, analysisDateFrom, analysisDateTo, analysisPhase, page = 1, limit = 20 } = params;
+    const { code, evalWindowDays, analysisDateFrom, analysisDateTo, analysisPhase, status, sort, page = 1, limit = 20 } = params;
 
     const queryParams: Record<string, string | number> = { page, limit };
     if (code) queryParams.code = code;
@@ -52,6 +57,8 @@ export const backtestApi = {
     if (analysisDateFrom) queryParams.analysis_date_from = analysisDateFrom;
     if (analysisDateTo) queryParams.analysis_date_to = analysisDateTo;
     if (analysisPhase && analysisPhase !== 'all') queryParams.analysis_phase = analysisPhase;
+    if (status) queryParams.status = status;
+    if (sort) queryParams.sort = sort;
 
     const response = await apiClient.get<Record<string, unknown>>(
       '/api/v1/backtest/results',
@@ -64,7 +71,30 @@ export const backtestApi = {
       page: data.page,
       limit: data.limit,
       items: (data.items || []).map(item => toCamelCase<BacktestResultItem>(item)),
+      // 內層 key 是狀態碼（insufficient_data），不能轉 camelCase。
+      statusCounts: (response.data.status_counts as Record<string, number> | undefined) ?? {},
     };
+  },
+
+  /**
+   * 逐筆累計報酬與月勝率（只含已完成）。不是資金曲線。
+   */
+  getSeries: async (params: {
+    code?: string;
+    evalWindowDays?: number;
+    analysisDateFrom?: string;
+    analysisDateTo?: string;
+  } = {}): Promise<BacktestSeriesResponse> => {
+    const queryParams: Record<string, string | number> = {};
+    if (params.code) queryParams.code = params.code;
+    if (params.evalWindowDays) queryParams.eval_window_days = params.evalWindowDays;
+    if (params.analysisDateFrom) queryParams.analysis_date_from = params.analysisDateFrom;
+    if (params.analysisDateTo) queryParams.analysis_date_to = params.analysisDateTo;
+    const response = await apiClient.get<Record<string, unknown>>(
+      '/api/v1/backtest/series',
+      { params: queryParams },
+    );
+    return toCamelCase<BacktestSeriesResponse>(response.data);
   },
 
   /**

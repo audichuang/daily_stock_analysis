@@ -1,35 +1,22 @@
 import type React from 'react';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity,
   Bookmark,
-  Building2,
   CheckCircle2,
   ChevronDown,
   CircleAlert,
   Clock3,
-  Droplet,
-  Factory,
-  Flame,
-  Gem,
-  Landmark,
-  Pickaxe,
-  Plane,
   Play,
-  PlusCircle,
   RefreshCw,
   Search,
-  Shield,
-  SlidersHorizontal,
-  Stethoscope,
-  Trees,
-  Utensils,
-  Wrench,
+  Star,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { analysisApi } from '../api/analysis';
 import {
   screeningApi,
   type ScreeningCandidate,
+  type ScreeningCondition,
   type ScreeningExplanationItem,
   type ScreeningHotspotDetail,
   type ScreeningHotspot,
@@ -39,32 +26,87 @@ import {
   type ScreeningScreenTaskStatus,
   type ScreeningStrategy,
 } from '../api/screening';
-import { formatParsedApiError, getParsedApiError, toApiErrorMessage, type ParsedApiError } from '../api/error';
-import { AppPage, Button, InlineAlert, Select } from '../components/common';
+import { formatParsedApiError, getParsedApiError, SCREENING_TASK_UNRECOVERABLE_TITLE, toApiErrorMessage, type ParsedApiError } from '../api/error';
+import { systemConfigApi } from '../api/systemConfig';
+import {
+  AppPage,
+  Button,
+  Change,
+  DataTable,
+  Drawer,
+  IconButton,
+  InlineAlert,
+  Num,
+  PageHeader,
+  Segmented,
+  Select,
+  type DataTableColumn,
+  type SortState,
+} from '../components/common';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { getIntlLocale } from '../i18n/intlLocale';
+import type { UiLanguage, UiTextKey, UiTextParams } from '../i18n/uiText';
+import { buildDecisionActionLabelMap } from '../utils/decisionAction';
+import { NO_VALUE, formatNumber as formatGroupedNumber } from '../utils/format';
 import { formatSignalText } from '../utils/signalText';
+import { findMatchingStockCode } from '../utils/stockCode';
 
-const MARKETS = [{ id: 'cn', label: 'A 股' }];
+type Translate = (key: UiTextKey, params?: UiTextParams) => string;
+type FormMarket = 'tw' | 'us';
+
+const FORM_MARKETS: FormMarket[] = ['tw', 'us'];
+const DEFAULT_MARKET: FormMarket = 'tw';
+const DEFAULT_STRATEGY = 'momentum_quality';
+const MAX_RESULT_OPTIONS = [3, 5, 10, 20] as const;
+const MARKET_CURRENCY: Record<string, string> = { tw: 'TWD', us: 'USD' };
 const SCREEN_TASK_STORAGE_KEY = 'dsa.screening.activeScreenTask.v1';
 const SCREEN_TASK_POLL_INTERVAL_MS = 2000;
-const CUSTOM_STRATEGY_OPTION_VALUE = '__custom_strategy__';
-const STRATEGY_CATEGORY_LABELS: Record<string, string> = {
-  framework: '综合',
-  income: '收益',
-  momentum: '动量',
-  quality: '质量',
-  reversal: '反转',
-  trend: '趋势',
-  value: '价值',
+
+const isFormMarket = (value: string | undefined | null): value is FormMarket =>
+  value === 'tw' || value === 'us';
+
+const STRATEGY_CATEGORY_KEYS: Record<string, UiTextKey> = {
+  framework: 'screeningPage.category.framework',
+  income: 'screeningPage.category.income',
+  momentum: 'screeningPage.category.momentum',
+  quality: 'screeningPage.category.quality',
+  reversal: 'screeningPage.category.reversal',
+  trend: 'screeningPage.category.trend',
+  value: 'screeningPage.category.value',
 };
 
-const formatStrategyCategory = (value?: string) => {
+const formatStrategyCategory = (value: string | undefined, t: Translate) => {
   const normalized = value?.trim();
   if (!normalized) {
-    return '自定义';
+    return '';
   }
-  return STRATEGY_CATEGORY_LABELS[normalized.toLowerCase()] || normalized;
+  const key = STRATEGY_CATEGORY_KEYS[normalized.toLowerCase()];
+  return key ? t(key) : normalized;
+};
+
+const getStrategyName = (item: ScreeningStrategy, language: UiLanguage) =>
+  (language === 'zh-TW' ? item.nameZhTw : '') || item.name || item.title || item.id;
+
+const getStrategyDescription = (item: ScreeningStrategy, language: UiLanguage) =>
+  (language === 'zh-TW' ? item.descriptionZhTw : '') || item.description || '';
+
+const supportsMarket = (item: ScreeningStrategy, market: string) =>
+  !item.marketScope?.length || item.marketScope.includes(market);
+
+const getStrategyConditions = (item: ScreeningStrategy, market: string): ScreeningCondition[] =>
+  item.marketConditions?.[market] ?? item.conditions ?? [];
+
+const formatConditionValue = (condition: ScreeningCondition, t: Translate): string => {
+  const { value, unit } = condition;
+  if (value === true) {
+    return '';
+  }
+  const text = Array.isArray(value)
+    ? value.map(String).join(t('screeningPage.listSeparator'))
+    : typeof value === 'number'
+      ? formatGroupedNumber(value)
+      : String(value ?? '');
+  return unit ? `${text} ${unit}` : text;
 };
 
 type PersistedScreenTask = {
@@ -75,11 +117,15 @@ type PersistedScreenTask = {
   maxResults: number;
 };
 
-// locale 走参数（预设与本页其余日期 helper 一致），呼叫端传 getIntlLocale(language)：
-// 写死 'zh-CN' 在函式体内的话呼叫端覆写不了，介面切到英文/繁中日期仍是简中格式。
-const formatRunCreatedAt = (value: string | null | undefined, locale = 'zh-CN') => {
+type ResultContext = {
+  market: string;
+  strategy: string;
+  maxResults?: number;
+};
+
+const formatRunCreatedAt = (value: string | null | undefined, locale: string, t: Translate) => {
   if (!value) {
-    return '时间未知';
+    return t('screeningPage.timeUnknown');
   }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
@@ -94,15 +140,12 @@ const formatRunCreatedAt = (value: string | null | undefined, locale = 'zh-CN') 
   });
 };
 
-// 历史条目里展示筛选条件：策略 ID → 中文名（找不到时回退到原始 ID）
-const formatHistoryStrategyName = (strategyId: string, strategies: ScreeningStrategy[]): string => {
-  const matched = strategies.find((item) => item.id === strategyId);
-  return matched?.name || matched?.title || strategyId || '未知策略';
+const formatMarketLabel = (marketId: string | null | undefined, t: Translate): string => {
+  if (marketId === 'tw') return t('screeningPage.market.tw');
+  if (marketId === 'us') return t('screeningPage.market.us');
+  if (marketId === 'cn') return t('screeningPage.market.cn');
+  return marketId || NO_VALUE;
 };
-
-// 历史条目里展示筛选条件：市场 ID → 中文标签
-const formatHistoryMarketLabel = (marketId: string | null | undefined): string =>
-  MARKETS.find((item) => item.id === marketId)?.label || marketId || 'cn';
 
 const readPersistedScreenTask = (): PersistedScreenTask | null => {
   if (typeof window === 'undefined') {
@@ -121,8 +164,8 @@ const readPersistedScreenTask = (): PersistedScreenTask | null => {
     return {
       taskId: parsed.taskId,
       runId: typeof parsed.runId === 'string' && parsed.runId.trim() ? parsed.runId : undefined,
-      market: typeof parsed.market === 'string' && parsed.market.trim() ? parsed.market : 'cn',
-      strategy: typeof parsed.strategy === 'string' && parsed.strategy.trim() ? parsed.strategy : 'dual_low',
+      market: typeof parsed.market === 'string' && parsed.market.trim() ? parsed.market : DEFAULT_MARKET,
+      strategy: typeof parsed.strategy === 'string' && parsed.strategy.trim() ? parsed.strategy : DEFAULT_STRATEGY,
       maxResults: Number.isFinite(restoredMaxResults) ? Math.min(100, Math.max(1, restoredMaxResults)) : 3,
     };
   } catch {
@@ -147,125 +190,146 @@ const clearPersistedScreenTask = () => {
 };
 
 const isUnrecoverableScreenTaskError = (error: ParsedApiError) =>
-  error.title === '选股任务不可恢复';
+  error.title === SCREENING_TASK_UNRECOVERABLE_TITLE;
 
-const formatRecoverableScreenTaskPollingError = (error: ParsedApiError) => {
+const formatRecoverableScreenTaskPollingError = (error: ParsedApiError, t: Translate) => {
   if (error.category === 'upstream_timeout') {
-    return '选股任务仍在后台运行，状态轮询暂时超时，将自动重试。';
+    return t('screeningPage.poll.timeout');
   }
   if (error.category === 'upstream_network' || error.category === 'local_connection_failed') {
-    return '选股任务仍在后台运行，暂时无法连接本地服务获取状态，将自动重试。';
+    return t('screeningPage.poll.network');
   }
-  return formatParsedApiError(error) || '暂时无法获取选股任务状态，稍后将自动重试。';
+  return formatParsedApiError(error) || t('screeningPage.poll.unknown');
 };
 
-const formatScore = (score: ScreeningCandidate['score']) => {
-  if (score == null || Number.isNaN(Number(score))) {
-    return '-';
+const toFiniteNumber = (value: unknown): number | null => {
+  if (value == null || value === '' || Number.isNaN(Number(value))) {
+    return null;
   }
-  return Number(score).toFixed(2);
+  return Number(value);
 };
 
 const formatNumber = (value: unknown, digits = 2) => {
-  if (value == null || value === '' || Number.isNaN(Number(value))) {
-    return '-';
-  }
-  return Number(value).toFixed(digits);
+  const parsed = toFiniteNumber(value);
+  return parsed === null ? NO_VALUE : parsed.toFixed(digits);
 };
 
-const formatAmount = (value: unknown) => {
-  if (value == null || value === '' || Number.isNaN(Number(value))) {
-    return '-';
+const formatAmount = (value: unknown, t: Translate) => {
+  const amount = toFiniteNumber(value);
+  if (amount === null) {
+    return NO_VALUE;
   }
-  const amount = Number(value);
   if (Math.abs(amount) >= 100_000_000) {
-    return `${(amount / 100_000_000).toFixed(2)} 亿`;
+    return `${(amount / 100_000_000).toFixed(2)} ${t('screeningPage.unit.yi')}`;
   }
   if (Math.abs(amount) >= 10_000) {
-    return `${(amount / 10_000).toFixed(2)} 万`;
+    return `${(amount / 10_000).toFixed(2)} ${t('screeningPage.unit.wan')}`;
   }
   return amount.toFixed(2);
 };
 
-const formatPercent = (value: unknown) => {
-  if (value == null || value === '' || Number.isNaN(Number(value))) {
-    return '-';
-  }
-  return `${(Number(value) * 100).toFixed(0)}%`;
+const formatRatioPercent = (value: unknown) => {
+  const parsed = toFiniteNumber(value);
+  return parsed === null ? NO_VALUE : `${(parsed * 100).toFixed(0)}%`;
 };
 
-const FACTOR_LABELS: Record<string, string> = {
-  value: '估值',
-  liquidity: '流动性',
-  momentum: '动量',
-  reversal: '反转',
-  activity: '活跃度',
-  stability: '稳定性',
-  size: '规模',
-  theme_heat: '题材热度',
-  topic_alignment: '题材匹配',
+const FACTOR_KEYS: Record<string, UiTextKey> = {
+  value: 'screeningPage.factor.value',
+  liquidity: 'screeningPage.factor.liquidity',
+  momentum: 'screeningPage.factor.momentum',
+  reversal: 'screeningPage.factor.reversal',
+  activity: 'screeningPage.factor.activity',
+  stability: 'screeningPage.factor.stability',
+  size: 'screeningPage.factor.size',
+  theme_heat: 'screeningPage.factor.themeHeat',
+  topic_alignment: 'screeningPage.factor.topicAlignment',
 };
 
-const HOTSPOT_QUALITY_LABELS: Record<string, string> = {
-  available: '可用',
-  failed: '不可用',
-  partial: '部分可用',
-  stale: '缓存',
+const HOTSPOT_QUALITY_KEYS: Record<string, UiTextKey> = {
+  available: 'screeningPage.hotspot.quality.available',
+  failed: 'screeningPage.hotspot.quality.failed',
+  partial: 'screeningPage.hotspot.quality.partial',
+  stale: 'screeningPage.hotspot.quality.stale',
 };
 
-const HOTSPOT_STAGE_LABELS: Record<string, string> = {
-  accelerating: '加速主升',
-  cooling: '降温退潮',
-  diverging: '分歧放量',
-  initial: '初次异动',
-  persistent_hot: '确认扩散',
-  warming: '确认扩散',
-  weakening: '降温退潮',
+const HOTSPOT_STAGE_KEYS: Record<string, UiTextKey> = {
+  accelerating: 'screeningPage.hotspot.stage.accelerating',
+  cooling: 'screeningPage.hotspot.stage.cooling',
+  diverging: 'screeningPage.hotspot.stage.diverging',
+  initial: 'screeningPage.hotspot.stage.initial',
+  persistent_hot: 'screeningPage.hotspot.stage.spreading',
+  warming: 'screeningPage.hotspot.stage.spreading',
+  weakening: 'screeningPage.hotspot.stage.cooling',
 };
 
-const HOTSPOT_ROLE_LABELS: Record<string, string> = {
-  core_leader: '核心龙头',
-  follower: '助攻',
-  laggard: '掉队',
-  leader: '核心龙头',
-  secondary: '补涨',
+const HOTSPOT_ROLE_KEYS: Record<string, UiTextKey> = {
+  core_leader: 'screeningPage.hotspot.role.leader',
+  follower: 'screeningPage.hotspot.role.follower',
+  laggard: 'screeningPage.hotspot.role.laggard',
+  leader: 'screeningPage.hotspot.role.leader',
+  secondary: 'screeningPage.hotspot.role.secondary',
 };
 
-const HOTSPOT_MISSING_FIELD_LABELS: Record<string, string> = {
-  canonical_topic: '标准题材',
-  hotspot_constituents: '概念股列表',
-  leader_stocks: '核心股',
-  live_stocks: '实时概念股行情',
-  route: '发酵路径',
-  source: '数据来源',
-  stocks: '概念股列表',
-  timeline: '发酵时间线',
+const HOTSPOT_MISSING_FIELD_KEYS: Record<string, UiTextKey> = {
+  canonical_topic: 'screeningPage.hotspot.missing.canonicalTopic',
+  hotspot_constituents: 'screeningPage.hotspot.missing.stocks',
+  leader_stocks: 'screeningPage.hotspot.missing.leaderStocks',
+  live_stocks: 'screeningPage.hotspot.missing.liveStocks',
+  route: 'screeningPage.hotspot.missing.route',
+  source: 'screeningPage.hotspot.missing.source',
+  stocks: 'screeningPage.hotspot.missing.stocks',
+  timeline: 'screeningPage.hotspot.missing.timeline',
 };
 
-const getHotspotStageLabel = (value: unknown) => {
+const EXPLANATION_SOURCE_KEYS: Record<string, UiTextKey> = {
+  screening: 'screeningPage.source.screening',
+  llm: 'screeningPage.source.llm',
+  realtime_quote: 'screeningPage.source.realtimeQuote',
+  legacy_result: 'screeningPage.source.legacy',
+  unknown: 'screeningPage.quality.unknown',
+};
+
+const EXPLANATION_QUALITY_KEYS: Record<string, UiTextKey> = {
+  observed: 'screeningPage.quality.observed',
+  inferred: 'screeningPage.quality.inferred',
+  unknown: 'screeningPage.quality.unknown',
+  ok: 'screeningPage.quality.ok',
+  partial: 'screeningPage.quality.partial',
+};
+
+const UNIVERSE_SOURCE_KEYS: Record<string, UiTextKey> = {
+  sp500: 'screeningPage.universe.sp500',
+  env: 'screeningPage.universe.env',
+  default: 'screeningPage.universe.default',
+};
+
+const lookupLabel = (map: Record<string, UiTextKey>, value: unknown, t: Translate): string | null => {
+  const key = map[String(value ?? '').trim().toLowerCase()];
+  return key ? t(key) : null;
+};
+
+const getHotspotStageLabel = (value: unknown, t: Translate) => {
   const text = String(value || '').trim();
   if (!text) {
     return '';
   }
-  return HOTSPOT_STAGE_LABELS[text.toLowerCase()] || text;
+  return lookupLabel(HOTSPOT_STAGE_KEYS, text, t) || text;
 };
 
-const getHotspotRoleLabel = (value: unknown) => {
+const getHotspotRoleLabel = (value: unknown, t: Translate) => {
   const text = String(value || '').trim();
   if (!text) {
-    return '概念股';
+    return t('screeningPage.hotspot.role.default');
   }
-  return HOTSPOT_ROLE_LABELS[text.toLowerCase()] || text;
+  return lookupLabel(HOTSPOT_ROLE_KEYS, text, t) || text;
 };
 
-const getHotspotQualityLabel = (value: unknown) => {
-  const text = String(value || '').trim();
-  return HOTSPOT_QUALITY_LABELS[text.toLowerCase()] || '待确认';
-};
+const getHotspotQualityLabel = (value: unknown, t: Translate) =>
+  lookupLabel(HOTSPOT_QUALITY_KEYS, value, t) || t('screeningPage.hotspot.quality.pending');
 
-const getCandidateReason = (item: ScreeningCandidate) => {
+const getCandidateReason = (item: ScreeningCandidate, t: Translate) => {
   if (item.llmThesis || item.llmScore != null) {
-    return item.reason || item.llmThesis || 'LLM 已完成相对排序。';
+    return item.reason || item.llmThesis || t('screeningPage.detail.llmRanked');
   }
   if (item.reason) {
     return item.reason;
@@ -275,12 +339,17 @@ const getCandidateReason = (item: ScreeningCandidate) => {
   if (typeof summary === 'string') {
     return summary;
   }
-  return '暂无摘要，请查看因子和风险信息。';
+  return t('screeningPage.detail.noSummary');
 };
 
-const getSignal = (item: ScreeningCandidate) => {
-  const rawSignal = item.raw.action ?? item.raw.signal ?? item.raw.recommendation;
-  return typeof rawSignal === 'string' && rawSignal.trim() ? rawSignal : '观察';
+// 引擎沒給動作就不顯示，不用「觀察」假裝有訊號；動作依枚舉查詞彙表。
+const getSignal = (item: ScreeningCandidate, t: Translate): string | null => {
+  const rawSignal = item.raw?.action ?? item.raw?.signal ?? item.raw?.recommendation;
+  if (typeof rawSignal !== 'string' || !rawSignal.trim()) {
+    return null;
+  }
+  const labels: Record<string, string> = buildDecisionActionLabelMap(t);
+  return labels[rawSignal.trim().toLowerCase()] ?? rawSignal;
 };
 
 const getFactorEntries = (item: ScreeningCandidate) =>
@@ -289,7 +358,7 @@ const getFactorEntries = (item: ScreeningCandidate) =>
     .sort((a, b) => Number(b[1]) - Number(a[1]))
     .slice(0, 6);
 
-const getSelectionExplanations = (item: ScreeningCandidate): ScreeningExplanationItem[] => {
+const getSelectionExplanations = (item: ScreeningCandidate, t: Translate): ScreeningExplanationItem[] => {
   if (item.whySelected?.length) return item.whySelected;
   // Legacy runs lack provenance. Retain every stored summary as unknown rather
   // than re-scoring historical factors or asserting it was observed.
@@ -300,20 +369,23 @@ const getSelectionExplanations = (item: ScreeningCandidate): ScreeningExplanatio
   ));
   return summaries.map((summary) => ({
     code: 'legacy_summary',
-    text: `历史摘要（来源未记录）：${summary}`,
+    text: t('screeningPage.detail.legacySummary', { summary }),
     source: 'legacy_result',
     quality: 'unknown',
   }));
 };
 
-const ExplanationItems = ({ items, emptyText }: { items?: ScreeningExplanationItem[]; emptyText: string }) => (
+const ExplanationItems = ({ items, emptyText, t }: { items?: ScreeningExplanationItem[]; emptyText: string; t: Translate }) => (
   items?.length ? (
     <ul className="mt-2 space-y-2">
       {items.map((item, index) => (
         <li key={`${item.code}-${item.source}-${index}`} className="rounded-lg border border-border/50 bg-background/30 p-2">
           <p className="text-sm leading-6 text-foreground">{item.text}</p>
           <p className="mt-1 text-xs text-secondary-text">
-            来源：{item.source || 'unknown'} · 质量：{item.quality || 'unknown'}
+            {t('screeningPage.detail.provenance', {
+              source: lookupLabel(EXPLANATION_SOURCE_KEYS, item.source, t) || item.source || t('screeningPage.quality.unknown'),
+              quality: lookupLabel(EXPLANATION_QUALITY_KEYS, item.quality, t) || item.quality || t('screeningPage.quality.unknown'),
+            })}
           </p>
         </li>
       ))}
@@ -335,33 +407,33 @@ const truncateMessageDetail = (value: string, maxLength = MAX_MESSAGE_DETAIL_LEN
   return `${text.slice(0, maxLength - 1)}…`;
 };
 
-const summarizeScreeningDiagnostic = (detail: string) => {
+const summarizeScreeningDiagnostic = (detail: string, t: Translate) => {
   if (/no_json_found|invalid_response|coverage below threshold/i.test(detail)) {
-    return '模型未返回可用的结构化排序结果';
+    return t('screeningPage.diag.noStructured');
   }
   if (/call_failed/i.test(detail)) {
-    return '模型调用失败';
+    return t('screeningPage.diag.callFailed');
   }
   if (/trade_cal returned no open trading days/i.test(detail)) {
-    return '交易日历暂无可用开市日';
+    return t('screeningPage.diag.noTradingDay');
   }
   if (/too many requests|rate limit|http\s*429/i.test(detail)) {
-    return '请求过于频繁';
+    return t('screeningPage.diag.rateLimited');
   }
   if (/403 forbidden|forbidden|access denied/i.test(detail)) {
-    return '访问被拒绝';
+    return t('screeningPage.diag.forbidden');
   }
   if (/timeout|timed out/i.test(detail)) {
-    return '请求超时';
+    return t('screeningPage.diag.timeout');
   }
   if (/RemoteDisconnected|Connection aborted|ProtocolError|ConnectionPool|Max retries exceeded|ProxyError|NameResolutionError/i.test(detail)) {
-    return '网络连接中断';
+    return t('screeningPage.diag.network');
   }
   if (/missing .*api key|GEMINI_API_KEY|GOOGLE_API_KEY|gemini_api_key/i.test(detail)) {
-    return '缺少可用 LLM API Key';
+    return t('screeningPage.diag.noApiKey');
   }
   if (/returned no data|empty/i.test(detail)) {
-    return '未返回可用数据';
+    return t('screeningPage.diag.noData');
   }
 
   const withoutUrl = detail
@@ -382,29 +454,32 @@ const parseSourceDiagnostic = (value: string) => {
   };
 };
 
-const normalizeScreenMessageKey = (value: string) => {
-  const formatted = formatScreenMessage(value);
+const normalizeScreenMessageKey = (value: string, t: Translate) => {
+  const formatted = formatScreenMessage(value, t);
   return formatted ? formatted.trim().toLowerCase() : value.trim().toLowerCase();
 };
 
-const formatEnrichmentSummary = (value: string) =>
+const formatEnrichmentSummary = (value: string, t: Translate) =>
   value
-    .replace(/DSA行情\s*[:：]\s*/gi, '行情：')
-    .replace(/DSA新闻\s*[:：]\s*/gi, '新闻：')
-    .replace(/DSA事件\s*[:：]\s*/gi, '事件：');
+    .replace(/DSA行情\s*[:：]\s*/gi, t('screeningPage.enrich.quote'))
+    .replace(/DSA新闻\s*[:：]\s*/gi, t('screeningPage.enrich.news'))
+    .replace(/DSA事件\s*[:：]\s*/gi, t('screeningPage.enrich.events'));
 
-const formatScreenMessage = (value: string) => {
+const formatScreenMessage = (value: string, t: Translate) => {
   if (/^DSA provider context applied \d+ of \d+ candidates/i.test(value)) {
     return '';
   }
+  const universeFallback = value.match(/^US universe fallback:\s*(.*)$/i);
+  if (universeFallback) {
+    return t('screeningPage.universe.fallback', {
+      source: lookupLabel(UNIVERSE_SOURCE_KEYS, universeFallback[1], t) || t('screeningPage.quality.unknown'),
+    });
+  }
   if (/^LLM ranking skipped:\s*no LLM config/i.test(value)) {
-    return '未配置智能重排模型，当前使用确定性因子排序。';
+    return t('screeningPage.msg.noLlmConfig');
   }
-  if (/^LLM ranking failed/i.test(value)) {
-    return `未完成智能重排：${summarizeScreeningDiagnostic(value)}；当前结果继续使用确定性因子评分。`;
-  }
-  if (/no_json_found|invalid_response|coverage below threshold|call_failed/i.test(value)) {
-    return `未完成智能重排：${summarizeScreeningDiagnostic(value)}；当前结果继续使用确定性因子评分。`;
+  if (/^LLM ranking failed/i.test(value) || /no_json_found|invalid_response|coverage below threshold|call_failed/i.test(value)) {
+    return t('screeningPage.msg.llmFailed', { reason: summarizeScreeningDiagnostic(value, t) });
   }
   if (/^(?:LLM ranking prompt|LLM context) truncated:/i.test(value)) {
     return '';
@@ -416,38 +491,38 @@ const formatScreenMessage = (value: string) => {
     return '';
   }
   if (/^Daily K-line enrichment row errors:/i.test(value)) {
-    return '部分候选的日线数据未能补齐，结果已按可用数据生成。';
+    return t('screeningPage.msg.dailyRowErrors');
   }
   if (/^Daily K-line enrichment skipped:/i.test(value)) {
-    return '可选日线数据补充未完成，结果已按快照数据生成。';
+    return t('screeningPage.msg.dailySkipped');
   }
   if (/^Candidate context row errors:/i.test(value)) {
-    return '部分候选的辅助数据未能补齐。';
+    return t('screeningPage.msg.contextErrors');
   }
   if (/^Industry\/concepts enrichment:/i.test(value)) {
-    return '部分行业或题材信息未能补齐。';
+    return t('screeningPage.msg.industryErrors');
   }
   if (/^DSA deep analysis failed for /i.test(value)) {
-    return '部分候选的深度分析未完成。';
+    return t('screeningPage.msg.deepFailed');
   }
 
   const snapshotFallback = value.match(/^Snapshot source fallback:\s*(.+)$/i);
   if (snapshotFallback) {
     const parsed = parseSourceDiagnostic(snapshotFallback[1]);
     if (parsed) {
-      return `数据源降级：${parsed.source}（${summarizeScreeningDiagnostic(parsed.detail)}）`;
+      return t('screeningPage.msg.sourceFallback', { source: parsed.source, reason: summarizeScreeningDiagnostic(parsed.detail, t) });
     }
-    return `数据源降级：${summarizeScreeningDiagnostic(snapshotFallback[1])}`;
+    return t('screeningPage.msg.sourceFallbackPlain', { reason: summarizeScreeningDiagnostic(snapshotFallback[1], t) });
   }
 
   const parsed = parseSourceDiagnostic(value);
   if (parsed && KNOWN_SNAPSHOT_SOURCES.has(parsed.source.toLowerCase())) {
-    return `数据源降级：${parsed.source}（${summarizeScreeningDiagnostic(parsed.detail)}）`;
+    return t('screeningPage.msg.sourceFallback', { source: parsed.source, reason: summarizeScreeningDiagnostic(parsed.detail, t) });
   }
   return truncateMessageDetail(value);
 };
 
-const getScreenMessages = (meta: ScreeningScreenResponse | null) => {
+const getScreenMessages = (meta: ScreeningScreenResponse | null, t: Translate) => {
   if (!meta) {
     return [];
   }
@@ -455,11 +530,11 @@ const getScreenMessages = (meta: ScreeningScreenResponse | null) => {
   const seen = new Set<string>();
   [...toMessageList(meta.warnings), ...toMessageList(meta.sourceErrors), ...toMessageList(meta.llmParseErrors)].forEach(
     (value) => {
-      const key = normalizeScreenMessageKey(value);
+      const key = normalizeScreenMessageKey(value, t);
       if (seen.has(key)) {
         return;
       }
-      const message = formatScreenMessage(value);
+      const message = formatScreenMessage(value, t);
       if (!message) {
         return;
       }
@@ -472,31 +547,32 @@ const getScreenMessages = (meta: ScreeningScreenResponse | null) => {
 
 const isRunningScreenTask = (status: string | undefined | null) => status === 'pending' || status === 'processing';
 
-const formatScreenTaskFailure = (value: string | null | undefined) => {
+const formatScreenTaskFailure = (value: string | null | undefined, t: Translate) => {
   const text = String(value || '').trim();
   if (!text) {
-    return '选股任务失败，请稍后重试。';
+    return t('screeningPage.taskFailed');
   }
-  return `选股任务失败：${summarizeScreeningDiagnostic(text)}`;
+  return t('screeningPage.taskFailedWith', { reason: summarizeScreeningDiagnostic(text, t) });
 };
 
 const SCREENING_HOTSPOT_NO_CACHE_HINT = 'No cached Screening hotspot snapshot. Click refresh to fetch live hotspots.';
 const SCREENING_HOTSPOT_UNAVAILABLE_CODE = 'eastmoney_hotspot_unavailable';
 
-const formatHotspotEmptyMessage = (result: ScreeningHotspotsResponse) => {
+const formatHotspotEmptyMessage = (result: ScreeningHotspotsResponse, market: string, t: Translate) => {
   const message = String(result.message || '').trim();
   const sourceErrors = result.sourceErrors || [];
-  if (message && sourceErrors.includes(SCREENING_HOTSPOT_UNAVAILABLE_CODE)) {
-    return message;
-  }
   if (message === SCREENING_HOTSPOT_NO_CACHE_HINT) {
-    return '暂无热点缓存';
+    return t('screeningPage.hotspot.noCache');
+  }
+  // 台股、美股沒有熱點來源，後端會回固定說明，直接照實顯示。
+  if (message && (market !== 'cn' || sourceErrors.includes(SCREENING_HOTSPOT_UNAVAILABLE_CODE))) {
+    return message;
   }
   const sourceError = sourceErrors[0];
   if (sourceError) {
-    return `热点题材暂未返回数据：${summarizeScreeningDiagnostic(sourceError)}`;
+    return t('screeningPage.hotspot.noDataWith', { reason: summarizeScreeningDiagnostic(sourceError, t) });
   }
-  return '热点题材暂未返回数据';
+  return t('screeningPage.hotspot.noData');
 };
 
 const ScreenAlertMessage: React.FC<{ messages: string[] }> = ({ messages }) => {
@@ -529,23 +605,20 @@ const getRiskClassName = (riskLevel: string | undefined) => {
   if (riskLevel === 'medium') {
     return 'bg-warning/10 text-warning';
   }
-  if (riskLevel === 'low') {
-    return 'bg-success/10 text-success';
-  }
   return 'bg-surface text-secondary-text';
 };
 
-const getRiskLabel = (riskLevel: string | undefined) => {
-  if (riskLevel === 'high') return '高';
-  if (riskLevel === 'medium') return '中';
-  if (riskLevel === 'low') return '低';
-  return '待评估';
+const getRiskLabel = (riskLevel: string | undefined, t: Translate) => {
+  if (riskLevel === 'high') return t('screeningPage.risk.high');
+  if (riskLevel === 'medium') return t('screeningPage.risk.medium');
+  if (riskLevel === 'low') return t('screeningPage.risk.low');
+  return t('screeningPage.risk.pending');
 };
 
-const getRouteTimeLabel = (item: ScreeningHotspotDetail['route'][number], locale = 'zh-CN') => {
+const getRouteTimeLabel = (item: ScreeningHotspotDetail['route'][number], locale: string, t: Translate) => {
   const rawTime = item.publishedAt || item.date || item.time || '';
   if (!rawTime) {
-    return '时间待确认';
+    return t('screeningPage.hotspot.timePending');
   }
   if (/^\d{4}-\d{2}-\d{2}$/.test(rawTime)) {
     return rawTime;
@@ -563,82 +636,83 @@ const getRouteTimeLabel = (item: ScreeningHotspotDetail['route'][number], locale
   return rawTime;
 };
 
-const formatHotspotRouteTitle = (value: string) => {
+const formatHotspotRouteTitle = (value: string, t: Translate) => {
   const text = String(value || '').trim();
   const normalized = text.toLowerCase();
   if (normalized === 'current fermentation') {
-    return '当前发酵';
+    return t('screeningPage.hotspot.currentFermentation');
   }
   if (normalized === 'news catalyst') {
-    return '消息催化';
+    return t('screeningPage.hotspot.newsCatalyst');
   }
-  return text || '热点变化';
+  return text || t('screeningPage.hotspot.change');
 };
 
-const formatHotspotRouteDescription = (value: string) => {
+const formatHotspotRouteDescription = (value: string, t: Translate) => {
   const text = String(value || '').trim();
   if (!text) {
-    return '暂无更多说明。';
+    return t('screeningPage.hotspot.noMoreInfo');
   }
   const parts = text.split(/\s*;\s*/).map((part) => part.trim()).filter(Boolean);
   if (parts.some((part) => /\b(?:heat|stage|leaders?)\b/i.test(part))) {
+    const listSeparator = t('screeningPage.listSeparator');
     const localized = parts.map((part) => {
       const heat = part.match(/^(.*?)\s+heat\s+(-?\d+(?:\.\d+)?)$/i);
       if (heat) {
-        return `${heat[1]}热度 ${formatNumber(heat[2], 1)}`;
+        return t('screeningPage.hotspot.topicHeat', { topic: heat[1], value: formatNumber(heat[2], 1) });
       }
       const stage = part.match(/^stage\s+(.+)$/i);
       if (stage) {
-        return `阶段 ${getHotspotStageLabel(stage[1])}`;
+        return t('screeningPage.hotspot.stageIs', { stage: getHotspotStageLabel(stage[1], t) });
       }
       const leaders = part.match(/^leaders?\s+(.+)$/i);
       if (leaders) {
-        return `核心股 ${leaders[1].split(/\s*,\s*/).filter(Boolean).join('、')}`;
+        return t('screeningPage.hotspot.leadersAre', { leaders: leaders[1].split(/\s*,\s*/).filter(Boolean).join(listSeparator) });
       }
       return part;
     });
-    return `${localized.join('，')}。`;
+    return t('screeningPage.hotspot.sentence', { parts: localized.join(t('screeningPage.clauseSeparator')) });
   }
   if (/Dsa[A-Z]|Provider\b|stock_board_|concept_constituents|leader_stocks|last_good_cache/i.test(text)) {
-    return '热点数据出现新变化。';
+    return t('screeningPage.hotspot.dataChanged');
   }
   return text;
 };
 
-const getHotspotMissingFieldLabels = (values: string[] | undefined) => {
-  const labels = (values || []).map((value) => HOTSPOT_MISSING_FIELD_LABELS[String(value).trim().toLowerCase()] || '部分明细');
+const getHotspotMissingFieldLabels = (values: string[] | undefined, t: Translate) => {
+  const labels = (values || []).map((value) => lookupLabel(HOTSPOT_MISSING_FIELD_KEYS, value, t) || t('screeningPage.hotspot.missing.partial'));
   return [...new Set(labels)];
 };
 
-const formatHotspotDiagnostic = (value: string) => {
+const formatHotspotDiagnostic = (value: string, t: Translate) => {
   const text = String(value || '').trim();
   const timeoutSeconds = text.match(/timed out after\s*(\d+(?:\.\d+)?)s/i);
   if (timeoutSeconds) {
-    return `热点明细请求超时（${timeoutSeconds[1]} 秒）`;
+    return t('screeningPage.hotspot.diag.timeoutSeconds', { seconds: timeoutSeconds[1] });
   }
   if (/timeout|timed out/i.test(text)) {
-    return '热点明细请求超时';
+    return t('screeningPage.hotspot.diag.timeout');
   }
   if (/RemoteDisconnected|Connection aborted|ProtocolError|ConnectionPool|Max retries exceeded|ProxyError|NameResolutionError/i.test(text)) {
-    return '热点数据源连接中断';
+    return t('screeningPage.hotspot.diag.network');
   }
   if (/eastmoney_hotspot_unavailable|returned no data|no live hotspot rows|\bempty\b/i.test(text)) {
-    return '热点数据源暂未返回数据';
+    return t('screeningPage.hotspot.diag.noData');
   }
   if (/rate limit|too many requests|http\s*429/i.test(text)) {
-    return '热点数据请求过于频繁';
+    return t('screeningPage.hotspot.diag.rateLimited');
   }
   if (/Dsa[A-Z]|Provider\b|stock_board_|concept_constituents|leader_stocks|last_good_cache|^[a-z0-9_.:-]+$/i.test(text)) {
-    return '部分热点数据暂不可用';
+    return t('screeningPage.hotspot.diag.partial');
   }
-  if (/[\u0080-\uFFFF]/.test(text)) {
+  if (/[\u0080-￿]/.test(text)) {
     return truncateMessageDetail(text);
   }
-  return '部分热点数据暂不可用';
+  return t('screeningPage.hotspot.diag.partial');
 };
 
-const getHotspotDiagnosticMessages = (values: string[] | undefined) =>
-  [...new Set((values || []).map(formatHotspotDiagnostic).filter(Boolean))].slice(0, 4);
+const getHotspotDiagnosticMessages = (values: string[] | undefined, t: Translate) =>
+  [...new Set((values || []).map((value) => formatHotspotDiagnostic(value, t)).filter(Boolean))].slice(0, 4);
 
 const hasHotspotDetailDegradation = (detail: ScreeningHotspotDetail) => {
   if ((detail.missingFields || []).length > 0) {
@@ -651,16 +725,16 @@ const hasHotspotDetailDegradation = (detail: ScreeningHotspotDetail) => {
   return (detail.sourceErrors || []).length > 0;
 };
 
-const getHotspotFallbackLabel = (detail: ScreeningHotspotDetail) => {
+const getHotspotFallbackLabel = (detail: ScreeningHotspotDetail, t: Translate) => {
   if (detail.stale || detail.cacheUsed) {
     return detail.staleAgeHours != null
-      ? `缓存回退 ${formatNumber(detail.staleAgeHours, 1)}h`
-      : '缓存回退';
+      ? t('screeningPage.hotspot.cacheFallbackAge', { hours: formatNumber(detail.staleAgeHours, 1) })
+      : t('screeningPage.hotspot.cacheFallback');
   }
-  return '备用数据源';
+  return t('screeningPage.hotspot.backupSource');
 };
 
-const getHotspotSummaryText = (detail: ScreeningHotspotDetail, hotspot?: ScreeningHotspot) => {
+const getHotspotSummaryText = (detail: ScreeningHotspotDetail, hotspot: ScreeningHotspot | undefined, t: Translate) => {
   const summaryDetail = detail.summaryDetail || {};
   const heatScore = summaryDetail.heatScore ?? summaryDetail.heat_score ?? hotspot?.heatScore;
   const stage = summaryDetail.stage ?? hotspot?.stage ?? hotspot?.state;
@@ -670,33 +744,36 @@ const getHotspotSummaryText = (detail: ScreeningHotspotDetail, hotspot?: Screeni
     : [];
   const parts: string[] = [];
   if (heatScore != null && !Number.isNaN(Number(heatScore))) {
-    parts.push(`热度 ${formatNumber(heatScore, 1)}`);
+    parts.push(t('screeningPage.hotspot.heatIs', { value: formatNumber(heatScore, 1) }));
   }
   if (stage) {
-    parts.push(`阶段 ${getHotspotStageLabel(stage)}`);
+    parts.push(t('screeningPage.hotspot.stageIs', { stage: getHotspotStageLabel(stage, t) }));
   }
   if (leaders.length > 0) {
-    parts.push(`核心股 ${leaders.join('、')}`);
+    parts.push(t('screeningPage.hotspot.leadersAre', { leaders: leaders.join(t('screeningPage.listSeparator')) }));
   }
   if (parts.length > 0) {
-    return `${detail.name || detail.canonicalTopic || detail.topic}：${parts.join('，')}。`;
+    return t('screeningPage.hotspot.summary', {
+      topic: detail.name || detail.canonicalTopic || detail.topic,
+      parts: parts.join(t('screeningPage.clauseSeparator')),
+    });
   }
   const summary = String(detail.summary || '').trim();
   if (summary && !/\b(?:heat|stage|leaders?|quality status|available|partial|stale|failed)\b|Dsa[A-Z]|Provider\b|stock_board_/i.test(summary)) {
     return summary;
   }
-  return '已加载热点详情。';
+  return t('screeningPage.hotspot.detailLoaded');
 };
 
-const buildHotspotPreviewDetail = (hotspot: ScreeningHotspot): ScreeningHotspotDetail => {
+const buildHotspotPreviewDetail = (hotspot: ScreeningHotspot, t: Translate): ScreeningHotspotDetail => {
   const leaders = (hotspot.leaders || []).map((value) => String(value).trim()).filter(Boolean);
-  const stage = getHotspotStageLabel(hotspot.stage || hotspot.state);
-  const descriptionParts = [`${hotspot.name || hotspot.topic}热度 ${formatHotspotMetric(hotspot.heatScore)}`];
+  const stage = getHotspotStageLabel(hotspot.stage || hotspot.state, t);
+  const descriptionParts = [t('screeningPage.hotspot.topicHeat', { topic: hotspot.name || hotspot.topic, value: formatNumber(hotspot.heatScore, 1) })];
   if (stage) {
-    descriptionParts.push(`阶段 ${stage}`);
+    descriptionParts.push(t('screeningPage.hotspot.stageIs', { stage }));
   }
   if (leaders.length > 0) {
-    descriptionParts.push(`核心股 ${leaders.slice(0, 3).join('、')}`);
+    descriptionParts.push(t('screeningPage.hotspot.leadersAre', { leaders: leaders.slice(0, 3).join(t('screeningPage.listSeparator')) }));
   }
   const stocks = (hotspot.leaderStocks || []).slice(0, 10);
   return {
@@ -710,7 +787,10 @@ const buildHotspotPreviewDetail = (hotspot: ScreeningHotspot): ScreeningHotspotD
       stage: hotspot.stage || hotspot.state,
       leaders,
     },
-    route: [{ title: '当前发酵', description: `${descriptionParts.join('，')}。` }],
+    route: [{
+      title: t('screeningPage.hotspot.currentFermentation'),
+      description: t('screeningPage.hotspot.sentence', { parts: descriptionParts.join(t('screeningPage.clauseSeparator')) }),
+    }],
     stocks,
     stockCount: hotspot.sampleStockCount ?? stocks.length,
     sourceErrors: hotspot.sourceErrors,
@@ -751,34 +831,14 @@ const getHotspotRouteItems = (detail: ScreeningHotspotDetail) => {
   return detail.timeline || [];
 };
 
-const formatHotspotMetric = (value: unknown, digits = 1) => {
-  const formatted = formatNumber(value, digits);
-  return formatted === '-' ? '观察中' : formatted;
-};
-
-const getHotspotLeadersText = (item: ScreeningHotspot) => {
+const getHotspotLeadersText = (item: ScreeningHotspot, t: Translate) => {
   const leaders = (item.leaders || []).map((value) => String(value).trim()).filter(Boolean);
-  if (leaders.length > 0) {
-    return leaders.slice(0, 2).join('、');
-  }
-  return '观察中';
+  return leaders.length > 0 ? leaders.slice(0, 2).join(t('screeningPage.listSeparator')) : NO_VALUE;
 };
 
-const getHotspotSampleText = (item: ScreeningHotspot) => {
-  if (item.sampleStockCount == null || Number.isNaN(Number(item.sampleStockCount))) {
-    return '活跃股观察中';
-  }
-  return `覆盖 ${item.sampleStockCount} 股`;
-};
-
-const formatStockChangeText = (value: unknown) => {
-  const formatted = formatNumber(value);
-  return formatted === '-' ? '暂无行情' : `${formatted}%`;
-};
-
-const formatHotspotUpdatedAt = (value: string | null, locale = 'zh-CN') => {
+const formatHotspotUpdatedAt = (value: string | null, locale: string, t: Translate) => {
   if (!value) {
-    return '待刷新';
+    return t('screeningPage.hotspot.pendingRefresh');
   }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
@@ -795,68 +855,61 @@ const formatHotspotUpdatedAt = (value: string | null, locale = 'zh-CN') => {
   });
 };
 
-const getHotspotStrength = (item: ScreeningHotspot, index: number) => {
-  const heat = Number(item.heatScore ?? 0);
-  const changePct = Number(item.changePct ?? 0);
-  if (index === 0 || heat >= 90 || changePct >= 8) {
-    return { label: '强势领先', className: 'bg-red-500/10 text-red-500' };
-  }
-  if (heat >= 80 || changePct >= 5) {
-    return { label: '强势', className: 'bg-blue-500/10 text-blue-500' };
-  }
-  return { label: '较强', className: 'bg-cyan/10 text-cyan' };
+// 結果表的客戶端排序；缺值一律排最後，不當成 0。
+const SORT_VALUE: Record<string, (item: ScreeningCandidate) => number | null> = {
+  rank: (item) => toFiniteNumber(item.rank),
+  price: (item) => toFiniteNumber(item.price),
+  changePct: (item) => toFiniteNumber(item.changePct),
+  score: (item) => toFiniteNumber(item.score),
+  amount: (item) => toFiniteNumber(item.amount),
 };
 
-const HOTSPOT_ICON_RULES: Array<{
-  pattern: RegExp;
-  icon: React.ComponentType<{ className?: string }>;
-  className: string;
-}> = [
-  { pattern: /金|银|铜|铝|铅|锌|钼|钴|镍|贵金属|矿|有色/, icon: Pickaxe, className: 'bg-orange-500/10 text-orange-500' },
-  { pattern: /黄金|珠宝/, icon: Gem, className: 'bg-amber-500/10 text-amber-500' },
-  { pattern: /油|气|能源|煤/, icon: Droplet, className: 'bg-yellow-700/10 text-yellow-700' },
-  { pattern: /金融|券商|银行|保险|资本/, icon: Landmark, className: 'bg-orange-500/10 text-orange-500' },
-  { pattern: /航空|机场|航天|运输/, icon: Plane, className: 'bg-blue-500/10 text-blue-500' },
-  { pattern: /林业|农业|种植/, icon: Trees, className: 'bg-emerald-500/10 text-emerald-500' },
-  { pattern: /医疗|诊断|卫生|医药/, icon: Stethoscope, className: 'bg-teal-500/10 text-teal-500' },
-  { pattern: /食品|餐饮|酒/, icon: Utensils, className: 'bg-violet-500/10 text-violet-500' },
-  { pattern: /工业|制造|修理|机械|设备/, icon: Wrench, className: 'bg-blue-500/10 text-blue-500' },
-  { pattern: /租赁|地产|建筑/, icon: Building2, className: 'bg-emerald-500/10 text-emerald-500' },
-  { pattern: /电|芯片|算力|AI|机器人/, icon: Factory, className: 'bg-indigo-500/10 text-indigo-500' },
-  { pattern: /保险|安全/, icon: Shield, className: 'bg-blue-500/10 text-blue-500' },
-];
-
-const getHotspotIcon = (topic: string) => {
-  const match = HOTSPOT_ICON_RULES.find((rule) => rule.pattern.test(topic));
-  return match || { icon: Activity, className: 'bg-cyan/10 text-cyan' };
+const sortCandidates = (items: ScreeningCandidate[], sort: SortState): ScreeningCandidate[] => {
+  const read = SORT_VALUE[sort.key] ?? SORT_VALUE.rank;
+  const sign = sort.direction === 'asc' ? 1 : -1;
+  return [...items].sort((a, b) => {
+    const left = read(a);
+    const right = read(b);
+    if (left === null && right === null) return 0;
+    if (left === null) return 1;
+    if (right === null) return -1;
+    return (left - right) * sign;
+  });
 };
 
-const MiniSparkline: React.FC<{ score?: number | null; selected?: boolean }> = ({ score, selected }) => {
-  const normalizedScore = Number.isFinite(Number(score)) ? Math.max(0, Math.min(100, Number(score))) : 65;
-  const lift = Math.max(0, Math.min(16, normalizedScore / 7));
-  const path = `M2 35 C12 ${32 - lift / 4}, 16 ${34 - lift / 2}, 24 ${28 - lift / 3} S38 ${29 - lift}, 46 ${23 - lift / 2} S62 ${24 - lift}, 72 ${16 - lift / 3} S86 ${15 - lift}, 94 ${7}`;
-  return (
-    <svg className="h-8 w-20" viewBox="0 0 96 40" aria-hidden="true">
-      <path d={`${path} L94 40 L2 40 Z`} fill={selected ? 'rgba(249,115,22,0.14)' : 'rgba(59,130,246,0.12)'} />
-      <path d={path} fill="none" stroke={selected ? '#f97316' : '#3b82f6'} strokeLinecap="round" strokeWidth="2" />
-    </svg>
-  );
-};
+const DetailBlock: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+  <div>
+    <p className="text-xs font-semibold text-secondary-text">{title}</p>
+    {children}
+  </div>
+);
 
 const StockScreeningPage: React.FC = () => {
   const { language, t } = useUiLanguage();
   const navigate = useNavigate();
+  const intlLocale = getIntlLocale(language);
   const [restoredTask] = useState<PersistedScreenTask | null>(() => readPersistedScreenTask());
+  const restoredFormMarket = isFormMarket(restoredTask?.market);
   const [statusState, setStatusState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [statusError, setStatusError] = useState('');
   const [statusAttempt, setStatusAttempt] = useState(0);
   const [enabled, setEnabled] = useState(false);
   const [available, setAvailable] = useState(false);
-  const [market, setMarket] = useState(restoredTask?.market || 'cn');
-  const [strategy, setStrategy] = useState(restoredTask?.strategy || 'dual_low');
+  // 表單只開台股與美股；還原到舊的 A 股結果時，結果區另外標，表單仍回預設。
+  const [market, setMarket] = useState<FormMarket>(restoredFormMarket ? (restoredTask?.market as FormMarket) : DEFAULT_MARKET);
+  const [strategy, setStrategy] = useState(restoredFormMarket ? (restoredTask?.strategy || DEFAULT_STRATEGY) : DEFAULT_STRATEGY);
   const [strategies, setStrategies] = useState<ScreeningStrategy[]>([]);
   const [maxResults, setMaxResults] = useState(restoredTask?.maxResults || 3);
+  const [resultContext, setResultContext] = useState<ResultContext | null>(() => (restoredTask
+    ? { market: restoredTask.market, strategy: restoredTask.strategy, maxResults: restoredTask.maxResults }
+    : null));
   const [candidates, setCandidates] = useState<ScreeningCandidate[]>([]);
+  const [sort, setSort] = useState<SortState>({ key: 'rank', direction: 'asc' });
+  const [detailCode, setDetailCode] = useState<string | null>(null);
+  const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
+  const [watchlistCodes, setWatchlistCodes] = useState<string[]>([]);
+  const [batchMessage, setBatchMessage] = useState<{ variant: 'success' | 'danger'; text: string } | null>(null);
+  const [batchBusy, setBatchBusy] = useState(false);
   const [hotspots, setHotspots] = useState<ScreeningHotspot[]>([]);
   const [hotspotsUpdatedAt, setHotspotsUpdatedAt] = useState<string | null>(null);
   const [hotspotsExpanded, setHotspotsExpanded] = useState(false);
@@ -872,10 +925,10 @@ const StockScreeningPage: React.FC = () => {
   const [loadingHotspots, setLoadingHotspots] = useState(false);
   const [hotspotError, setHotspotError] = useState('');
   const [screenMeta, setScreenMeta] = useState<ScreeningScreenResponse | null>(null);
-  const [expandedCode, setExpandedCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(Boolean(restoredTask?.taskId));
   const [enabling, setEnabling] = useState(false);
   const [historyRuns, setHistoryRuns] = useState<ScreeningRunSummary[]>([]);
+  const [selectedHistoryRunId, setSelectedHistoryRunId] = useState('');
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
   const [restoreResolved, setRestoreResolved] = useState(() => !restoredTask?.runId);
@@ -888,15 +941,31 @@ const StockScreeningPage: React.FC = () => {
   const [strategyLoadError, setStrategyLoadError] = useState('');
   const [activeTaskId, setActiveTaskId] = useState<string | null>(restoredTask?.taskId ?? null);
   const [taskProgress, setTaskProgress] = useState(restoredTask?.taskId ? 10 : 0);
-  const [taskMessage, setTaskMessage] = useState(restoredTask?.taskId ? '正在恢复选股任务状态...' : '');
+  const [taskMessage, setTaskMessage] = useState(restoredTask?.taskId ? t('screeningPage.task.restoring') : '');
+  // 自動還原只該跑一次，切語言不能重跑把使用者手上的結果蓋掉，所以文案經 ref 讀。
+  const translateRef = useRef(t);
 
-  const selectedStrategy = useMemo(() => strategies.find((item) => item.id === strategy), [strategies, strategy]);
-  const selectedStrategyTitle = selectedStrategy?.name || selectedStrategy?.title || '自定义策略';
-  const selectedStrategyTag = formatStrategyCategory(
-    selectedStrategy?.category || selectedStrategy?.tag || selectedStrategy?.tags?.[0],
+  useEffect(() => {
+    translateRef.current = t;
+  }, [t]);
+
+  const marketStrategies = useMemo(
+    () => strategies.filter((item) => supportsMarket(item, market)),
+    [market, strategies],
   );
-  const displayedStrategy = selectedStrategy ? selectedStrategyTitle : `自定义策略 (${strategy})`;
-  const screenMessages = useMemo(() => getScreenMessages(screenMeta), [screenMeta]);
+  const selectedStrategy = useMemo(() => marketStrategies.find((item) => item.id === strategy), [marketStrategies, strategy]);
+  const resultStrategyId = resultContext?.strategy ?? strategy;
+  const resultMarket = resultContext?.market ?? market;
+  const resultStrategy = useMemo(() => strategies.find((item) => item.id === resultStrategyId), [resultStrategyId, strategies]);
+  const displayedStrategy = resultStrategy
+    ? getStrategyName(resultStrategy, language)
+    : t('screeningPage.customStrategy', { id: resultStrategyId });
+  const screenMessages = useMemo(() => getScreenMessages(screenMeta, t), [screenMeta, t]);
+  const sortedCandidates = useMemo(() => sortCandidates(candidates, sort), [candidates, sort]);
+  const detailCandidate = useMemo(
+    () => candidates.find((item) => item.code === detailCode) ?? null,
+    [candidates, detailCode],
+  );
   const selectedHotspot = useMemo(
     () => hotspots.find((item) => item.topic === selectedHotspotTopic),
     [hotspots, selectedHotspotTopic],
@@ -906,9 +975,14 @@ const StockScreeningPage: React.FC = () => {
   const alertMessages = llmFailed
     ? screenMessages.length > 0
       ? screenMessages
-      : ['智能重排未完成，当前候选继续使用确定性因子评分。']
+      : [t('screeningPage.llmFallback')]
     : screenMessages;
   const isScreeningEnabled = statusState === 'ready' && enabled && available;
+  const conditionsChanged = Boolean(screenMeta && resultContext && (
+    resultContext.market !== market
+    || resultContext.strategy !== strategy
+    || (resultContext.maxResults !== undefined && resultContext.maxResults !== maxResults)
+  ));
   const statusText = statusState === 'loading'
     ? t('screeningPage.status.loading')
     : statusState === 'error'
@@ -918,10 +992,11 @@ const StockScreeningPage: React.FC = () => {
         : available ? t('screeningPage.status.enabled') : t('screeningPage.status.unavailable');
 
   const applyScreenResult = useCallback((result: ScreeningScreenResponse) => {
-    const nextCandidates = result.candidates || [];
     setScreenMeta(result);
-    setCandidates(nextCandidates);
-    setExpandedCode(nextCandidates[0]?.code ?? null);
+    setCandidates(result.candidates || []);
+    setDetailCode(null);
+    setSelectedCodes([]);
+    setBatchMessage(null);
   }, []);
 
   const loadHistory = useCallback(async () => {
@@ -931,11 +1006,11 @@ const StockScreeningPage: React.FC = () => {
       const result = await screeningApi.getHistory({ limit: 10 });
       setHistoryRuns(result.runs || []);
     } catch (err) {
-      setHistoryError(toApiErrorMessage(err, '历史记录加载失败'));
+      setHistoryError(toApiErrorMessage(err, t('screeningPage.history.loadFailed')));
     } finally {
       setHistoryLoading(false);
     }
-  }, []);
+  }, [t]);
 
   const handleHistoryRunSelect = useCallback(async (runId: string) => {
     // 竞态防护：快速切换历史条目时，只应用最新一次请求的响应
@@ -966,37 +1041,31 @@ const StockScreeningPage: React.FC = () => {
           strategy: detail.strategy || strategy,
           maxResults,
         });
-        // 同步历史 run 的策略与市场上下文，确保结果区文案和后续深度分析
-        // 使用该历史 run 对应的 strategy/market，而不是当前表单的选择
-        if (detail.strategy) {
-          setStrategy(detail.strategy);
-        }
-        if (detail.market) {
+        // 结果区用该 run 的策略与市场；表单只同步开放的市场，舊的 A 股紀錄不改表單。
+        setResultContext({ market: detail.market || market, strategy: detail.strategy || strategy });
+        if (isFormMarket(detail.market)) {
           setMarket(detail.market);
+          if (detail.strategy) {
+            setStrategy(detail.strategy);
+          }
         }
         setError('');
         setTaskProgress(100);
-        setTaskMessage('已加载历史选股结果');
+        setTaskMessage(t('screeningPage.task.historyLoaded'));
       } else {
-        setError('历史记录中未找到该次运行的结果。');
+        setError(t('screeningPage.history.noResult'));
       }
     } catch (err) {
       if (!isCurrentRequest()) {
         return;
       }
-      setError(toApiErrorMessage(err, '历史结果加载失败'));
+      setError(toApiErrorMessage(err, t('screeningPage.history.resultFailed')));
     } finally {
       if (isCurrentRequest()) {
         setLoading(false);
       }
     }
-  }, [applyScreenResult, market, maxResults, strategy]);
-
-  const clearScreeningResults = () => {
-    setCandidates([]);
-    setScreenMeta(null);
-    setExpandedCode(null);
-  };
+  }, [applyScreenResult, market, maxResults, strategy, t]);
 
   const loadHotspotDetail = useCallback(async (
     topic: string,
@@ -1041,9 +1110,9 @@ const StockScreeningPage: React.FC = () => {
       };
       setHotspotDetail(options.includeSearch ? detail : cacheableDetail);
       if (options.includeSearch && detail.newsSearchStatus === 'no_results') {
-        setHotspotDetailError('暂未搜到该题材近期的有效消息。');
+        setHotspotDetailError(t('screeningPage.hotspot.newsNoResults'));
       } else if (options.includeSearch && detail.newsSearchStatus !== 'available') {
-        setHotspotDetailError('消息搜索失败，请稍后重试。');
+        setHotspotDetailError(t('screeningPage.hotspot.newsFailed'));
       }
     } catch (err) {
       if (!canApplyRequest()) {
@@ -1054,7 +1123,7 @@ const StockScreeningPage: React.FC = () => {
       }
       setHotspotDetailError(toApiErrorMessage(
         err,
-        options.includeSearch ? '消息搜索失败，请稍后重试。' : '热点题材详情加载失败，请稍后重试。',
+        options.includeSearch ? t('screeningPage.hotspot.newsFailed') : t('screeningPage.hotspot.detailFailed'),
       ));
     } finally {
       if (isCurrentRequest()) {
@@ -1062,35 +1131,29 @@ const StockScreeningPage: React.FC = () => {
         setSearchingHotspotNews(false);
       }
     }
-  }, []);
+  }, [t]);
 
   const loadStrategies = useCallback(async () => {
     setLoadingStrategies(true);
     try {
       setStrategyLoadError('');
+      // 一次取全部策略再依市場過濾：切市場不用重打 API，歷史紀錄也查得到其他市場的策略名稱。
       const result = await screeningApi.getStrategies();
       const loadedStrategies = result.strategies || [];
       setStrategies(loadedStrategies);
-      // 历史 run 的自定义/下线策略不在当前列表属预期行为，不做“回退第一项”的归一化，
-      // 否则迟到的策略列表会把刚恢复好的上下文改写回默认策略。
-      if (loadedStrategies.length > 0 && !historyContextStrategyRef.current) {
-        setStrategy((currentStrategy) =>
-          loadedStrategies.some((item) => item.id === currentStrategy) ? currentStrategy : loadedStrategies[0].id,
-        );
-      }
     } catch (err) {
       setStrategies([]);
-      setStrategyLoadError(err instanceof Error ? err.message : '策略列表加载失败');
+      setStrategyLoadError(err instanceof Error ? err.message : t('screeningPage.strategyLoadFailed'));
     } finally {
       setLoadingStrategies(false);
     }
-  }, []);
+  }, [t]);
 
-  const loadHotspots = useCallback(async (refresh = false) => {
+  const loadHotspots = useCallback(async (refresh: boolean, hotspotMarket: string) => {
     setLoadingHotspots(true);
     setHotspotError('');
     try {
-      const result = await screeningApi.getHotspots({ provider: 'akshare', top: 12, refresh });
+      const result = await screeningApi.getHotspots({ provider: 'akshare', top: 12, refresh, market: hotspotMarket });
       const nextHotspots = result.hotspots || [];
       const nextDetails = stripHotspotSearchAugmentationByTopic(result.details || {});
       hotspotDetailsByTopicRef.current = {
@@ -1117,14 +1180,14 @@ const StockScreeningPage: React.FC = () => {
         await loadHotspotDetail(nextTopic, { refresh: true });
       }
       if (nextHotspots.length === 0) {
-        setHotspotError(formatHotspotEmptyMessage(result));
+        setHotspotError(formatHotspotEmptyMessage(result, hotspotMarket, t));
       }
     } catch (err) {
-      setHotspotError(toApiErrorMessage(err, '热点题材加载失败，请稍后重试。'));
+      setHotspotError(toApiErrorMessage(err, t('screeningPage.hotspot.loadFailed')));
     } finally {
       setLoadingHotspots(false);
     }
-  }, [loadHotspotDetail]);
+  }, [loadHotspotDetail, t]);
 
   const handleHotspotSelect = useCallback((topic: string) => {
     selectedHotspotTopicRef.current = topic;
@@ -1137,10 +1200,10 @@ const StockScreeningPage: React.FC = () => {
     } else {
       const preview = hotspots.find((item) => item.topic === topic);
       setHotspotDetail((currentDetail) => (
-        currentDetail?.topic === topic ? currentDetail : preview ? buildHotspotPreviewDetail(preview) : null
+        currentDetail?.topic === topic ? currentDetail : preview ? buildHotspotPreviewDetail(preview, t) : null
       ));
     }
-  }, [hotspots]);
+  }, [hotspots, t]);
 
   const toggleHotspotsExpanded = useCallback(() => {
     setHotspotsExpanded((expanded) => {
@@ -1178,7 +1241,7 @@ const StockScreeningPage: React.FC = () => {
       return;
     }
     const stockName = String(candidate.name || stockCode).trim();
-    const analysisSkills = (selectedStrategy?.analysisSkills || []).filter(Boolean);
+    const analysisSkills = (resultStrategy?.analysisSkills || []).filter(Boolean);
     navigate('/', {
       state: {
         stockCode,
@@ -1188,7 +1251,61 @@ const StockScreeningPage: React.FC = () => {
         ...(analysisSkills.length > 0 ? { skills: analysisSkills } : {}),
       },
     });
-  }, [navigate, selectedStrategy]);
+  }, [navigate, resultStrategy]);
+
+  const handleToggleWatch = useCallback(async (code: string) => {
+    try {
+      const existing = findMatchingStockCode(watchlistCodes, code);
+      const next = existing
+        ? await systemConfigApi.removeFromWatchlist(existing)
+        : await systemConfigApi.addToWatchlist(code);
+      setWatchlistCodes(next);
+    } catch (err) {
+      setBatchMessage({ variant: 'danger', text: toApiErrorMessage(err, t('screeningPage.batch.watchFailed')) });
+    }
+  }, [t, watchlistCodes]);
+
+  const toggleSelectedCode = useCallback((code: string) => {
+    setSelectedCodes((current) => (current.includes(code) ? current.filter((item) => item !== code) : [...current, code]));
+  }, []);
+
+  const handleBatchWatch = async () => {
+    setBatchBusy(true);
+    setBatchMessage(null);
+    try {
+      let next = watchlistCodes;
+      for (const code of selectedCodes) {
+        if (!findMatchingStockCode(next, code)) {
+          next = await systemConfigApi.addToWatchlist(code);
+        }
+      }
+      setWatchlistCodes(next);
+      setBatchMessage({ variant: 'success', text: t('screeningPage.batch.watchAdded', { count: selectedCodes.length }) });
+      setSelectedCodes([]);
+    } catch (err) {
+      setBatchMessage({ variant: 'danger', text: toApiErrorMessage(err, t('screeningPage.batch.watchFailed')) });
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
+  const handleBatchAnalyze = async () => {
+    setBatchBusy(true);
+    setBatchMessage(null);
+    try {
+      const analysisSkills = (resultStrategy?.analysisSkills || []).filter(Boolean);
+      await analysisApi.analyzeAsync({
+        stockCodes: selectedCodes,
+        ...(analysisSkills.length > 0 ? { skills: analysisSkills } : {}),
+      });
+      setBatchMessage({ variant: 'success', text: t('screeningPage.batch.analyzeSent', { count: selectedCodes.length }) });
+      setSelectedCodes([]);
+    } catch (err) {
+      setBatchMessage({ variant: 'danger', text: toApiErrorMessage(err, t('screeningPage.batch.analyzeFailed')) });
+    } finally {
+      setBatchBusy(false);
+    }
+  };
 
   useEffect(() => {
     selectedHotspotTopicRef.current = selectedHotspotTopic;
@@ -1200,6 +1317,20 @@ const StockScreeningPage: React.FC = () => {
     }
     void loadHotspotDetail(selectedHotspotTopic);
   }, [loadHotspotDetail, selectedHotspotTopic]);
+
+  const loadEnabledData = useCallback((hotspotMarket: string) => {
+    void loadStrategies();
+    void loadHotspots(false, hotspotMarket);
+    void loadHistory();
+    void systemConfigApi.getWatchlist()
+      .then(setWatchlistCodes)
+      .catch(() => {
+        // 讀不到自選只影響星號的初始狀態，不擋選股。
+      });
+  }, [loadHistory, loadHotspots, loadStrategies]);
+
+  // 初次載入用當下市場；之後切市場由 handleMarketChange 明確重抓，這裡不追 market。
+  const initialMarketRef = useRef(market);
 
   useEffect(() => {
     let active = true;
@@ -1213,21 +1344,19 @@ const StockScreeningPage: React.FC = () => {
         setAvailable(status.available);
         setStatusState('ready');
         if (status.enabled && status.available) {
-          void loadStrategies();
-          void loadHotspots(false);
-          void loadHistory();
+          loadEnabledData(initialMarketRef.current);
         }
       })
       .catch((err) => {
         if (active) {
-          setStatusError(toApiErrorMessage(err, '无法确认选股状态，请重试。'));
+          setStatusError(toApiErrorMessage(err, t('screeningPage.statusReadFailed')));
           setStatusState('error');
         }
       });
     return () => {
       active = false;
     };
-  }, [loadHistory, loadHotspots, loadStrategies, statusAttempt]);
+  }, [loadEnabledData, statusAttempt, t]);
 
   // 刷新后优先从 history API 按 run_id 恢复结果；恢复失败再回退到 task 轮询
   useEffect(() => {
@@ -1251,17 +1380,20 @@ const StockScreeningPage: React.FC = () => {
         if (detail?.result) {
           applyScreenResult(detail.result);
           historyContextStrategyRef.current = true;
-          // 同步恢复该历史 run 的策略与市场上下文，避免结果区展示和
-          // 深度分析沿用当前表单策略（与 handleHistoryRunSelect 一致）
-          if (detail.strategy) {
-            setStrategy(detail.strategy);
-          }
-          if (detail.market) {
+          // 同步恢复该历史 run 的上下文（与 handleHistoryRunSelect 一致）
+          setResultContext({
+            market: detail.market || (restoredTask?.market ?? DEFAULT_MARKET),
+            strategy: detail.strategy || (restoredTask?.strategy ?? DEFAULT_STRATEGY),
+          });
+          if (isFormMarket(detail.market)) {
             setMarket(detail.market);
+            if (detail.strategy) {
+              setStrategy(detail.strategy);
+            }
           }
           setError('');
           setTaskProgress(100);
-          setTaskMessage('已从历史记录恢复上次选股结果');
+          setTaskMessage(translateRef.current('screeningPage.task.restored'));
           setActiveTaskId(null);
         }
       })
@@ -1323,7 +1455,7 @@ const StockScreeningPage: React.FC = () => {
             });
           }
         } else {
-          setError('选股任务已完成，但服务端未返回候选结果。');
+          setError(t('screeningPage.task.noResult'));
           setCandidates([]);
           setScreenMeta(null);
         }
@@ -1334,8 +1466,8 @@ const StockScreeningPage: React.FC = () => {
       if (task.status === 'failed') {
         setCandidates([]);
         setScreenMeta(null);
-        setExpandedCode(null);
-        setError(formatScreenTaskFailure(task.error || task.message));
+        setDetailCode(null);
+        setError(formatScreenTaskFailure(task.error || task.message, t));
         clearPersistedScreenTask();
         finishTask();
         return;
@@ -1347,7 +1479,7 @@ const StockScreeningPage: React.FC = () => {
         return;
       }
 
-      setError(`选股任务返回未知状态：${task.status || 'unknown'}`);
+      setError(t('screeningPage.task.unknownStatus', { status: task.status || t('screeningPage.quality.unknown') }));
       clearPersistedScreenTask();
       finishTask();
     }
@@ -1365,14 +1497,14 @@ const StockScreeningPage: React.FC = () => {
         }
         const parsedError = getParsedApiError(err);
         if (isUnrecoverableScreenTaskError(parsedError)) {
-          setError(formatParsedApiError(parsedError) || '选股任务不可恢复，请重新提交。');
+          setError(formatParsedApiError(parsedError) || t('screeningPage.task.unrecoverable'));
           setCandidates([]);
           setScreenMeta(null);
           clearPersistedScreenTask();
           finishTask();
           return;
         }
-        setError(formatRecoverableScreenTaskPollingError(parsedError));
+        setError(formatRecoverableScreenTaskPollingError(parsedError, t));
         setLoading(true);
         timer = window.setTimeout(pollTask, SCREEN_TASK_POLL_INTERVAL_MS);
       }
@@ -1386,7 +1518,20 @@ const StockScreeningPage: React.FC = () => {
         window.clearTimeout(timer);
       }
     };
+    // 輪詢只跟任務走；表單在執行中是停用的，market/strategy 不會變。
   }, [activeTaskId, applyScreenResult, restoreResolved]);
+
+  // 目前策略不在此市場開放時回退第一項。
+  // 历史 run 的自定义/下线策略不在当前列表属预期行为，不做归一化，
+  // 否则迟到的策略列表会把刚恢复好的上下文改写回默认策略。
+  useEffect(() => {
+    if (historyContextStrategyRef.current || marketStrategies.length === 0) {
+      return;
+    }
+    if (!marketStrategies.some((item) => item.id === strategy)) {
+      setStrategy(marketStrategies[0].id);
+    }
+  }, [marketStrategies, strategy]);
 
   const handleEnable = async () => {
     setEnabling(true);
@@ -1395,7 +1540,7 @@ const StockScreeningPage: React.FC = () => {
       await screeningApi.enable();
       setEnabled(true);
       setAvailable(true);
-      await loadStrategies();
+      loadEnabledData(market);
     } catch (err) {
       try {
         const status = await screeningApi.getStatus();
@@ -1403,34 +1548,23 @@ const StockScreeningPage: React.FC = () => {
         setAvailable(status.available);
         setStatusState('ready');
       } catch (statusErr) {
-        setStatusError(toApiErrorMessage(statusErr, '无法确认选股状态，请重试。'));
+        setStatusError(toApiErrorMessage(statusErr, t('screeningPage.statusReadFailed')));
         setStatusState('error');
       }
-      setError(err instanceof Error ? err.message : '开启选股失败');
+      setError(err instanceof Error ? err.message : t('screeningPage.enableFailed'));
     } finally {
       setEnabling(false);
     }
   };
 
-  const handleStrategyChange = (nextStrategy: string) => {
-    if (nextStrategy !== strategy) {
-      clearScreeningResults();
+  // 改條件不清空結果：舊結果留著比對，靠提示告知要重新執行才會更新。
+  const handleMarketChange = (nextMarket: FormMarket) => {
+    if (nextMarket === market) {
+      return;
     }
-    setStrategy(nextStrategy);
-  };
-
-  const handleMarketChange = (nextMarket: string) => {
-    if (nextMarket !== market) {
-      clearScreeningResults();
-    }
+    historyContextStrategyRef.current = false;
     setMarket(nextMarket);
-  };
-
-  const handleMaxResultsChange = (nextMaxResults: number) => {
-    if (nextMaxResults !== maxResults) {
-      clearScreeningResults();
-    }
-    setMaxResults(nextMaxResults);
+    void loadHotspots(false, nextMarket);
   };
 
   const handleSubmit = async () => {
@@ -1442,8 +1576,11 @@ const StockScreeningPage: React.FC = () => {
     setLoading(true);
     setError('');
     setScreenMeta(null);
+    setDetailCode(null);
+    setSelectedHistoryRunId('');
+    setResultContext({ market, strategy, maxResults });
     setTaskProgress(0);
-    setTaskMessage('正在提交选股任务...');
+    setTaskMessage(t('screeningPage.task.submitting'));
     try {
       const task = await screeningApi.startScreen({ market, strategy, maxResults });
       persistScreenTask({
@@ -1454,38 +1591,332 @@ const StockScreeningPage: React.FC = () => {
       });
       setActiveTaskId(task.taskId);
       setTaskProgress(0);
-      setTaskMessage(task.message || '选股任务已提交');
+      setTaskMessage(task.message || t('screeningPage.task.submitted'));
     } catch (err) {
       setCandidates([]);
       setLoading(false);
-      setError(toApiErrorMessage(err, '选股任务提交失败，请稍后重试。'));
+      setError(toApiErrorMessage(err, t('screeningPage.task.submitFailed')));
     }
+  };
+
+  const currency = MARKET_CURRENCY[resultMarket];
+  const universeLabel = screenMeta?.universeSource
+    ? lookupLabel(UNIVERSE_SOURCE_KEYS, screenMeta.universeSource, t) || screenMeta.universeSource
+    : '';
+
+  const renderRowActions = (item: ScreeningCandidate) => {
+    const watched = Boolean(findMatchingStockCode(watchlistCodes, item.code));
+    return (
+      <span className="inline-flex items-center justify-end gap-1">
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={(event: React.MouseEvent) => {
+            event.stopPropagation();
+            handleAnalyzeCandidate(item);
+          }}
+          aria-label={t('screeningPage.table.analyzeNamed', { name: item.name || item.code })}
+        >
+          {t('screeningPage.table.analyze')}
+        </Button>
+        <IconButton
+          size="sm"
+          aria-label={t(watched ? 'screeningPage.table.unwatch' : 'screeningPage.table.watch', { name: item.name || item.code })}
+          aria-pressed={watched}
+          icon={<Star className={watched ? 'h-4 w-4 fill-current text-warning' : 'h-4 w-4'} aria-hidden="true" />}
+          onClick={(event: React.MouseEvent) => {
+            event.stopPropagation();
+            void handleToggleWatch(item.code);
+          }}
+        />
+      </span>
+    );
+  };
+
+  const renderRowCheckbox = (item: ScreeningCandidate) => (
+    <input
+      type="checkbox"
+      aria-label={t('screeningPage.table.select', { name: item.name || item.code })}
+      checked={selectedCodes.includes(item.code)}
+      onClick={(event) => event.stopPropagation()}
+      onChange={() => toggleSelectedCode(item.code)}
+    />
+  );
+
+  const columns: DataTableColumn<ScreeningCandidate>[] = [
+    { key: 'select', header: t('screeningPage.table.selectHeader'), render: renderRowCheckbox, priority: 'primary' },
+    { key: 'rank', header: '#', numeric: true, sortable: true, render: (item) => item.rank },
+    {
+      key: 'name',
+      header: t('screeningPage.table.name'),
+      priority: 'primary',
+      minWidth: 140,
+      render: (item) => (
+        <span className="block min-w-0">
+          <span className="block truncate font-semibold text-foreground">{item.name || NO_VALUE}</span>
+          <span className="block truncate text-xs text-secondary-text">{item.code}</span>
+        </span>
+      ),
+    },
+    { key: 'industry', header: t('screeningPage.table.industry'), render: (item) => item.industry || NO_VALUE },
+    {
+      key: 'price',
+      header: t('screeningPage.table.price'),
+      numeric: true,
+      sortable: true,
+      render: (item) => <Num kind="price" value={item.price} currency={currency} />,
+    },
+    {
+      key: 'changePct',
+      header: t('screeningPage.table.change'),
+      numeric: true,
+      sortable: true,
+      priority: 'primary',
+      render: (item) => <Change value={item.changePct}><Num kind="percent" value={item.changePct} /></Change>,
+    },
+    {
+      key: 'score',
+      header: t('screeningPage.table.score'),
+      numeric: true,
+      sortable: true,
+      render: (item) => <Num value={item.score} digits={2} />,
+    },
+    {
+      key: 'ranking',
+      header: t('screeningPage.table.ranking'),
+      render: (item) => (factorRanking ? t('screeningPage.table.factorRanking') : formatNumber(item.llmScore)),
+    },
+    {
+      key: 'risk',
+      header: t('screeningPage.table.risk'),
+      render: (item) => (
+        <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${getRiskClassName(item.riskLevel)}`}>
+          {getRiskLabel(item.riskLevel, t)}
+        </span>
+      ),
+    },
+    { key: 'actions', header: t('screeningPage.table.actions'), align: 'right', render: renderRowActions },
+  ];
+
+  const renderMobileCard = (item: ScreeningCandidate) => (
+    <div className="flex flex-col gap-2 px-3 py-3" data-testid="screening-mobile-card">
+      <div className="flex items-start justify-between gap-3">
+        <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setDetailCode(item.code)}>
+          <span className="block truncate text-sm font-semibold text-foreground">{item.name || NO_VALUE}</span>
+          <span className="block truncate text-xs text-secondary-text">{item.code}</span>
+        </button>
+        <span className="shrink-0 text-right">
+          <span className="block text-sm font-semibold text-foreground"><Num kind="price" value={item.price} currency={currency} /></span>
+          <span className="block text-xs"><Change value={item.changePct}><Num kind="percent" value={item.changePct} /></Change></span>
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <label className="inline-flex items-center gap-2 text-xs text-secondary-text">
+          {renderRowCheckbox(item)}
+          {t('screeningPage.table.score')} <Num value={item.score} digits={2} />
+        </label>
+        {renderRowActions(item)}
+      </div>
+    </div>
+  );
+
+  const renderCandidateDetail = (item: ScreeningCandidate) => {
+    const factors = getFactorEntries(item);
+    const selectionExplanations = getSelectionExplanations(item, t);
+    const selectionQuality = item.whySelected?.length
+      ? item.explanationQuality?.whySelected || 'unknown'
+      : 'unknown';
+    const dsaWarnings = [...new Set((item.dsaContext?.warnings || []).map((value) => (
+      // 後端的機器碼不直接給人看
+      /^[a-z0-9_]+$/.test(value) ? t('screeningPage.detail.partialData') : value
+    )))];
+    const dsaNews = item.dsaNews || [];
+    const dsaEvents = item.dsaEvents || [];
+    const signal = getSignal(item, t);
+    const reason = getCandidateReason(item, t);
+    // 分三層去重：摘要已出現在入選理由就不重複，智慧判斷同摘要也不重複。
+    const reasonRepeated = (item.whySelected || []).some((entry) => entry.text.trim() === reason.trim());
+    const thesis = item.llmThesis && item.llmThesis.trim() !== reason.trim() ? item.llmThesis : '';
+    const risks = [...new Set([...(item.riskFlags || []), ...(item.llmRisks || [])])];
+    const riskSummary = formatSignalText(item.riskSummary);
+
+    return (
+      <div className="space-y-5" data-testid="screening-candidate-detail">
+        {/* 第一層：結論與動作 */}
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-lg font-semibold text-foreground"><Num kind="price" value={item.price} currency={currency} /></span>
+            <Change value={item.changePct}><Num kind="percent" value={item.changePct} /></Change>
+            <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${getRiskClassName(item.riskLevel)}`}>
+              {t('screeningPage.detail.riskIs', { level: getRiskLabel(item.riskLevel, t) })}
+            </span>
+          </div>
+          {reasonRepeated ? null : (
+            <DetailBlock title={t('screeningPage.detail.summary')}>
+              <p className="mt-1 text-sm leading-6 text-foreground">{reason}</p>
+            </DetailBlock>
+          )}
+          {signal ? (
+            <DetailBlock title={t('screeningPage.detail.signal')}>
+              <p className="mt-1 text-sm text-foreground">{signal}</p>
+            </DetailBlock>
+          ) : null}
+          <button
+            className="rounded-lg border border-cyan/40 px-3 py-1.5 text-xs font-semibold text-cyan transition-colors hover:bg-cyan/10"
+            type="button"
+            onClick={() => handleAnalyzeCandidate(item)}
+          >
+            {t('screeningPage.detail.deepAnalyze')}
+          </button>
+        </section>
+
+        {/* 第二層：為什麼選它 */}
+        <section className="space-y-3 border-t border-border/60 pt-4">
+          <div data-testid="screening-why-selected" className="rounded-xl border border-border/60 bg-surface/40 px-3 py-2.5">
+            <p className="text-xs font-semibold text-foreground">{t('screeningPage.detail.whySelected')}</p>
+            <ExplanationItems items={selectionExplanations} emptyText={t('screeningPage.detail.noWhySelected')} t={t} />
+            {selectionExplanations.length > 0 ? (
+              <p className="mt-2 text-xs text-secondary-text">
+                {t('screeningPage.detail.overallQuality', { quality: lookupLabel(EXPLANATION_QUALITY_KEYS, selectionQuality, t) || selectionQuality })}
+              </p>
+            ) : null}
+          </div>
+          <div className="rounded-xl border border-border/60 bg-surface/40 px-3 py-2.5">
+            <p className="text-xs font-semibold text-foreground">{t('screeningPage.detail.whyNow')}</p>
+            <ExplanationItems items={item.whyNow} emptyText={t('screeningPage.detail.noWhyNow')} t={t} />
+            {item.whyNow?.length ? (
+              <p className="mt-2 text-xs text-secondary-text">
+                {t('screeningPage.detail.overallQuality', {
+                  quality: lookupLabel(EXPLANATION_QUALITY_KEYS, item.explanationQuality?.whyNow || 'unknown', t) || String(item.explanationQuality?.whyNow),
+                })}
+              </p>
+            ) : null}
+          </div>
+          {hasLlmInsight(item) ? (
+            <DetailBlock title={t('screeningPage.detail.llmInsight')}>
+              {thesis ? <p className="mt-1 text-sm leading-6 text-foreground">{thesis}</p> : null}
+              <p className="mt-1 text-xs text-secondary-text">
+                {t('screeningPage.detail.llmMeta', {
+                  sector: item.llmSector || NO_VALUE,
+                  theme: item.llmTheme || NO_VALUE,
+                  confidence: formatRatioPercent(item.llmConfidence),
+                })}
+              </p>
+            </DetailBlock>
+          ) : null}
+          <DetailBlock title={t('screeningPage.detail.factors')}>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {factors.length > 0 ? (
+                factors.map(([key, value]) => (
+                  <div key={key} className="rounded-lg border border-border bg-card px-3 py-2">
+                    <span className="block text-xs text-secondary-text">{lookupLabel(FACTOR_KEYS, key, t) || key}</span>
+                    <span className="text-sm font-semibold tabular-nums text-foreground">{formatNumber(value)}</span>
+                  </div>
+                ))
+              ) : (
+                <span className="text-sm text-secondary-text">{t('screeningPage.detail.noFactors')}</span>
+              )}
+            </div>
+          </DetailBlock>
+          <DetailBlock title={t('screeningPage.detail.amount')}>
+            <p className="mt-1 text-sm tabular-nums text-foreground">{formatAmount(item.amount, t)}</p>
+          </DetailBlock>
+        </section>
+
+        {/* 第三層：風險與原始證據 */}
+        <section className="space-y-3 border-t border-border/60 pt-4">
+          <DetailBlock title={t('screeningPage.detail.riskTags')}>
+            <p className="mt-1 text-sm text-foreground">
+              {risks.length ? risks.join(t('screeningPage.clauseSeparator')) : t('screeningPage.detail.none')}
+            </p>
+          </DetailBlock>
+          {/* 空陣列 `[]` 格式化後是 null，不顯示空的風險摘要區塊 */}
+          {riskSummary ? (
+            <DetailBlock title={t('screeningPage.detail.riskSummary')}>
+              <p className="mt-1 text-sm text-foreground">{riskSummary}</p>
+            </DetailBlock>
+          ) : null}
+          {item.dsaAnalysisSummary ? (
+            <DetailBlock title={t('screeningPage.detail.enrichSummary')}>
+              <p className="mt-1 text-sm leading-6 text-foreground">{formatEnrichmentSummary(item.dsaAnalysisSummary, t)}</p>
+            </DetailBlock>
+          ) : null}
+          {item.llmWatchItems?.length ? (
+            <DetailBlock title={t('screeningPage.detail.watchItems')}>
+              <p className="mt-1 text-sm text-foreground">{item.llmWatchItems.join(t('screeningPage.clauseSeparator'))}</p>
+            </DetailBlock>
+          ) : null}
+          {item.llmCatalysts?.length ? (
+            <DetailBlock title={t('screeningPage.detail.catalysts')}>
+              <p className="mt-1 text-sm text-foreground">{item.llmCatalysts.join(t('screeningPage.clauseSeparator'))}</p>
+            </DetailBlock>
+          ) : null}
+          <DetailBlock title={t('screeningPage.detail.news')}>
+            {dsaNews.length > 0 ? (
+              <ul className="mt-1 space-y-1 text-sm text-foreground">
+                {dsaNews.slice(0, 3).map((newsItem, newsIndex) => (
+                  <li key={`${item.code}-dsa-news-${newsIndex}`}>{newsItem.title || newsItem.snippet || NO_VALUE}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-1 text-sm text-secondary-text">{t('screeningPage.detail.none')}</p>
+            )}
+          </DetailBlock>
+          <DetailBlock title={t('screeningPage.detail.events')}>
+            {dsaEvents.length > 0 ? (
+              <ul className="mt-1 space-y-1 text-sm text-foreground">
+                {dsaEvents.slice(0, 3).map((eventItem, eventIndex) => (
+                  <li key={`${item.code}-dsa-event-${eventIndex}`}>{eventItem.title || eventItem.snippet || NO_VALUE}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-1 text-sm text-secondary-text">{t('screeningPage.detail.none')}</p>
+            )}
+          </DetailBlock>
+          {dsaWarnings.length > 0 ? (
+            <DetailBlock title={t('screeningPage.detail.dataWarnings')}>
+              <p className="mt-1 text-sm text-secondary-text">{dsaWarnings.join(t('screeningPage.clauseSeparator'))}</p>
+            </DetailBlock>
+          ) : null}
+        </section>
+      </div>
+    );
   };
 
   return (
     <AppPage className="max-w-6xl space-y-6 pb-12 pt-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex items-center gap-3">
-          <span className="grid h-7 w-7 place-items-center rounded-full border-2 border-cyan text-cyan shadow-[0_0_24px_hsl(var(--primary)/0.18)]">
-            <PlusCircle className="h-4 w-4" />
-          </span>
-          <h1 className="text-2xl font-bold tracking-normal text-foreground">选股</h1>
-        </div>
-
-        <div className="inline-flex w-fit items-center gap-2 rounded-2xl border border-border/70 bg-card/80 px-4 py-2 text-sm shadow-soft-card">
-          <span className={`h-2.5 w-2.5 rounded-full ${isScreeningEnabled ? 'bg-success' : 'bg-warning'}`} />
-          <span className="font-medium text-secondary-text">{statusText}</span>
-        </div>
-      </div>
+      <PageHeader
+        title={t('screeningPage.title')}
+        actions={(
+          <>
+            {isScreeningEnabled ? (
+              <Segmented<FormMarket>
+                aria-label={t('screeningPage.market')}
+                value={market}
+                onChange={handleMarketChange}
+                options={FORM_MARKETS.map((value) => ({
+                  value,
+                  label: formatMarketLabel(value, t),
+                  disabled: loading,
+                }))}
+              />
+            ) : null}
+            <span className="inline-flex w-fit items-center gap-2 rounded-2xl border border-border/70 bg-card/80 px-3 py-1.5 text-sm">
+              <span className={`h-2.5 w-2.5 rounded-full ${isScreeningEnabled ? 'bg-success' : 'bg-warning'}`} />
+              <span className="font-medium text-secondary-text">{statusText}</span>
+            </span>
+          </>
+        )}
+      />
 
       {statusState === 'loading' ? (
-        <InlineAlert variant="info" message="正在读取选股配置，请稍候。" />
+        <InlineAlert variant="info" message={t('screeningPage.statusLoadingMessage')} />
       ) : null}
 
       {statusState === 'error' ? (
         <InlineAlert
           variant="warning"
-          title="选股状态加载失败"
+          title={t('screeningPage.statusFailedTitle')}
           message={statusError}
           action={
             <Button size="sm" onClick={() => {
@@ -1493,23 +1924,20 @@ const StockScreeningPage: React.FC = () => {
               setStatusError('');
               setStatusAttempt((attempt) => attempt + 1);
             }}>
-              重试
+              {t('screeningPage.retry')}
             </Button>
           }
         />
       ) : null}
 
       {statusState === 'ready' && !enabled ? (
-        <InlineAlert
-          variant="info"
-          title={t('screeningPage.status.disabled')}
-          message={t('screeningPage.enableHint')}
-          action={
-            <Button size="sm" isLoading={enabling} loadingText={t('screeningPage.enabling')} onClick={() => void handleEnable()}>
-              {t('screeningPage.enable')}
-            </Button>
-          }
-        />
+        <section data-testid="screening-guide-card" className="rounded-2xl border border-border/80 bg-card/95 p-6 text-center shadow-soft-card">
+          <h2 className="text-base font-semibold text-foreground">{t('screeningPage.status.disabled')}</h2>
+          <p className="mx-auto mt-2 max-w-md text-sm text-secondary-text">{t('screeningPage.enableHint')}</p>
+          <Button className="mt-4" isLoading={enabling} loadingText={t('screeningPage.enabling')} onClick={() => void handleEnable()}>
+            {t('screeningPage.enable')}
+          </Button>
+        </section>
       ) : null}
 
       {statusState === 'ready' && enabled && !available ? (
@@ -1520,680 +1948,533 @@ const StockScreeningPage: React.FC = () => {
         />
       ) : null}
 
-      {error ? <InlineAlert variant="danger" title="调用失败" message={error} /> : null}
+      {error ? <InlineAlert variant="danger" title={t('screeningPage.errorTitle')} message={error} /> : null}
 
-      <section className="rounded-2xl border border-border/80 bg-card/95 p-4 shadow-soft-card">
-        <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex items-start gap-3">
-            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-orange-500/10 text-orange-500 shadow-[0_10px_30px_rgba(249,115,22,0.16)]">
-              <Flame className="h-5 w-5" />
-            </span>
-            <h2 className="text-lg font-bold tracking-normal text-foreground">{t('screeningPage.hotspots')}</h2>
-          </div>
-          <div className="flex flex-col items-start gap-2 lg:items-end">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={!isScreeningEnabled}
-                onClick={toggleHotspotsExpanded}
-              >
-                <Bookmark className="h-4 w-4" />
-                {hotspotsExpanded ? '收起热点题材' : `展开热点题材${hotspots.length ? `（${hotspots.length}）` : ''}`}
-                <ChevronDown className={`h-4 w-4 transition-transform ${hotspotsExpanded ? 'rotate-180' : ''}`} />
-              </Button>
-              {hotspotsExpanded ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                isLoading={loadingHotspots}
-                loadingText="刷新中..."
-                disabled={!isScreeningEnabled || loadingHotspots}
-                onClick={() => void loadHotspots(true)}
-              >
-                <RefreshCw className="h-4 w-4" />
-                刷新热点题材
-              </Button>
+      {isScreeningEnabled ? (
+        <>
+          {/* 條件 */}
+          <section className="rounded-2xl border border-border/80 bg-card/95 p-4 shadow-soft-card">
+            <h2 className="mb-3 text-sm font-semibold text-foreground">{t('screeningPage.strategy')}</h2>
+            {strategyLoadError ? (
+              <p className="mb-3 text-xs text-warning">{strategyLoadError}</p>
+            ) : null}
+            <div role="radiogroup" aria-label={t('screeningPage.strategy')} className="grid gap-3 md:grid-cols-2">
+              {marketStrategies.map((item) => {
+                const selected = item.id === strategy;
+                const conditions = getStrategyConditions(item, market);
+                const category = formatStrategyCategory(item.category || item.tag || item.tags?.[0], t);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    disabled={loading}
+                    onClick={() => {
+                      historyContextStrategyRef.current = false;
+                      setStrategy(item.id);
+                    }}
+                    className={`rounded-xl border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                      selected ? 'border-cyan bg-cyan/5' : 'border-border/70 hover:bg-hover/50'
+                    }`}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="truncate text-sm font-semibold text-foreground">{getStrategyName(item, language)}</span>
+                      {category ? <span className="shrink-0 text-xs text-secondary-text">{category}</span> : null}
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-secondary-text">{getStrategyDescription(item, language)}</span>
+                    {conditions.length > 0 ? (
+                      <span data-testid="screening-condition-chips" className="mt-2 flex flex-wrap gap-1.5">
+                        {conditions.map((condition) => {
+                          const valueText = formatConditionValue(condition, t);
+                          return (
+                            <span key={condition.key} className="rounded-full border border-border/60 px-2 py-0.5 text-[11px] text-secondary-text">
+                              {condition.label}{valueText ? ` ${valueText}` : ''}
+                            </span>
+                          );
+                        })}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+              {!selectedStrategy && !loadingStrategies && strategy ? (
+                <div className="rounded-xl border border-cyan bg-cyan/5 p-3 text-sm font-semibold text-foreground">
+                  {t('screeningPage.customStrategy', { id: strategy })}
+                </div>
               ) : null}
             </div>
-            {hotspotsUpdatedAt ? (
-              <p className="text-xs text-secondary-text">
-                更新时间：{formatHotspotUpdatedAt(hotspotsUpdatedAt, getIntlLocale(language))}
-              </p>
-            ) : null}
-          </div>
-        </div>
 
-        {hotspotsExpanded && hotspotError ? (
-          <p className="mb-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-            {hotspotError}
-          </p>
-        ) : null}
-
-        {!hotspotsExpanded ? null : hotspots.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border bg-surface/70 px-4 py-6 text-sm text-secondary-text">
-            暂无热点数据，点击“刷新热点题材”获取。
-          </div>
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {hotspots.map((item, index) => {
-              const selected = selectedHotspotTopic === item.topic;
-              const strength = getHotspotStrength(item, index);
-              const iconMeta = getHotspotIcon(item.name || item.topic);
-              const Icon = iconMeta.icon;
-              return (
-              <button
-                key={`${item.topic}-${item.rank ?? ''}`}
-                className={`group relative min-h-[116px] overflow-hidden rounded-xl border px-3 py-3 text-left transition-all ${
-                  selected
-                    ? 'border-orange-400 bg-gradient-to-br from-orange-500/10 via-card to-card shadow-[0_0_0_1px_rgba(249,115,22,0.16),0_18px_44px_rgba(249,115,22,0.14)]'
-                    : 'border-border/80 bg-card hover:-translate-y-0.5 hover:border-orange-300/70 hover:shadow-soft-card'
-                }`}
-                type="button"
-                onClick={() => handleHotspotSelect(item.topic)}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex min-w-0 items-start gap-3">
-                    <span
-                      className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs font-bold ${
-                        index < 3 ? 'bg-orange-500 text-white shadow-[0_8px_24px_rgba(249,115,22,0.24)]' : 'bg-surface text-secondary-text'
-                      }`}
-                    >
-                      {index + 1}
-                    </span>
-                    <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${iconMeta.className}`}>
-                      <Icon className="h-5 w-5" />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-bold text-foreground">{item.name || item.topic}</p>
-                      <span className={`mt-1 inline-flex rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${strength.className}`}>
-                        {strength.label}
-                      </span>
-                    </div>
-                  </div>
-                  <span className="shrink-0 text-2xl font-black leading-none text-orange-500">
-                    {formatNumber(item.heatScore, 0)}
-                  </span>
-                </div>
-                <div className="mt-4 grid max-w-[72%] gap-1 text-[11px] text-secondary-text">
-                  <span>涨跌幅 <strong className="font-semibold text-foreground">{formatHotspotMetric(item.changePct)}%</strong></span>
-                  <span>趋势 <strong className="font-semibold text-foreground">{formatHotspotMetric(item.trendScore)}</strong> · 持续 <strong className="font-semibold text-foreground">{formatHotspotMetric(item.persistenceScore)}</strong></span>
-                  <span>{getHotspotSampleText(item)} · 龙头 {getHotspotLeadersText(item)}</span>
-                </div>
-                <div className="absolute bottom-3 right-3 opacity-95 transition-transform group-hover:scale-105">
-                  <MiniSparkline score={item.heatScore} selected={selected} />
-                </div>
-              </button>
-              );
-            })}
-          </div>
-        )}
-
-        {hotspotsExpanded && selectedHotspotTopic ? (
-          <div className="mt-4 rounded-xl border border-border/80 bg-surface/80 p-4">
-            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-foreground">
-                  {hotspotDetail?.name || selectedHotspotTopic}
-                </h3>
-                <p className="mt-1 text-xs leading-5 text-secondary-text">
-                  {hotspotDetail
-                    ? getHotspotSummaryText(hotspotDetail, selectedHotspot)
-                    : loadingHotspotDetail
-                      ? '正在读取发酵路线与概念股...'
-                      : '点击题材查看发酵路线与概念股。'}
-                </p>
-                {hotspotDetail?.canonicalTopic && hotspotDetail.canonicalTopic !== selectedHotspotTopic ? (
-                  <p className="mt-1 text-[11px] text-secondary-text">标准题材：{hotspotDetail.canonicalTopic}</p>
-                ) : null}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-secondary-text">
+                <span>{t('screeningPage.maxResults')}</span>
+                <Segmented<string>
                   size="sm"
-                  variant="secondary"
-                  isLoading={searchingHotspotNews}
-                  loadingText="搜索中..."
-                  disabled={loadingHotspotDetail || searchingHotspotNews}
-                  onClick={() => void loadHotspotDetail(selectedHotspotTopic, { includeSearch: true })}
-                >
-                  <Search className="h-3.5 w-3.5" />
-                  搜索最新消息
-                </Button>
-                {loadingHotspotDetail ? (
-                  <span className="w-fit rounded-full bg-cyan/10 px-3 py-1 text-xs font-semibold text-cyan">
-                    正在补充详情
-                  </span>
-                ) : null}
-                {hotspotDetail?.qualityStatus ? (
-                  <span className="w-fit rounded-full bg-warning/10 px-3 py-1 text-xs font-semibold text-warning">
-                    质量 {getHotspotQualityLabel(hotspotDetail.qualityStatus)}
-                  </span>
-                ) : null}
-                {hotspotDetail?.fallbackUsed || hotspotDetail?.stale ? (
-                  <span className="w-fit rounded-full bg-warning/10 px-3 py-1 text-xs font-semibold text-warning">
-                    {getHotspotFallbackLabel(hotspotDetail)}
-                  </span>
-                ) : null}
-                {hotspotDetail?.stockCount != null ? (
-                  <span className="w-fit rounded-full bg-orange-500/10 px-3 py-1 text-xs font-semibold text-orange-500">
-                    概念股 {hotspotDetail.stockCount}
-                  </span>
-                ) : null}
+                  aria-label={t('screeningPage.maxResults')}
+                  value={String(maxResults)}
+                  onChange={(value) => setMaxResults(Number(value))}
+                  options={MAX_RESULT_OPTIONS.map((value) => ({ value: String(value), label: String(value), disabled: loading }))}
+                />
               </div>
+              <Button
+                className="min-w-40"
+                isLoading={loading}
+                loadingText={t('screeningPage.running')}
+                disabled={loading || !strategy.trim()}
+                onClick={() => void handleSubmit()}
+              >
+                <Play className="h-4 w-4" />
+                {t('screeningPage.run')}
+              </Button>
             </div>
+          </section>
 
-            {hotspotDetailError ? (
-              <p className="mb-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-                {hotspotDetailError}
-              </p>
-            ) : null}
+          {/* 執行狀態 */}
+          {loading || screenMeta ? (
+            <section className="rounded-2xl border border-border bg-card/95 p-4 shadow-soft-card">
+              <div className="flex items-center gap-3">
+                <span className={`grid h-7 w-7 place-items-center rounded-full ${loading ? 'text-cyan' : 'text-success'}`}>
+                  {loading ? <CircleAlert className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-sm font-semibold text-foreground">
+                    {loading ? t('screeningPage.runningTitle') : t('screeningPage.doneTitle')}
+                  </h2>
+                  <p className="mt-1 text-xs text-secondary-text">
+                    {loading
+                      ? `${taskMessage || t('screeningPage.runningFallback')} · ${taskProgress}%`
+                      : `${displayedStrategy} · ${formatMarketLabel(resultMarket, t)}`}
+                  </p>
+                </div>
+              </div>
+              {loading ? (
+                <div
+                  role="progressbar"
+                  aria-label={t('screeningPage.runningTitle')}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={taskProgress}
+                  className="mt-3 h-1.5 overflow-hidden rounded-full bg-surface"
+                >
+                  <div className="h-full rounded-full bg-cyan transition-all" style={{ width: `${Math.min(100, Math.max(0, taskProgress))}%` }} />
+                </div>
+              ) : null}
 
-            {hotspotDetail && hasHotspotDetailDegradation(hotspotDetail) ? (
-              <details className="mb-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
-                <summary className="cursor-pointer font-semibold">详情数据已降级，展开查看原因</summary>
-                <div className="mt-2 space-y-1 leading-5">
-                  {(hotspotDetail.missingFields || []).length > 0 ? (
-                    <p>暂缺：{getHotspotMissingFieldLabels(hotspotDetail.missingFields).join('、')}</p>
+              <details className="mt-3 border-t border-border/70 pt-3 text-xs text-secondary-text">
+                <summary className="w-fit cursor-pointer font-medium text-secondary-text">{t('screeningPage.runDetails')}</summary>
+                <div className="mt-2 grid gap-1">
+                  <span>{t('screeningPage.runDetails.task', { id: activeTaskId ? activeTaskId.slice(0, 12) : NO_VALUE })}</span>
+                  <span>{t('screeningPage.runDetails.run', { id: screenMeta?.runId || NO_VALUE })}</span>
+                  <span>
+                    {t('screeningPage.runDetails.counts', {
+                      snapshot: screenMeta?.snapshotCount ?? NO_VALUE,
+                      filtered: screenMeta?.afterFilterCount ?? NO_VALUE,
+                      candidates: screenMeta?.candidateCount ?? candidates.length,
+                    })}
+                  </span>
+                  <span>
+                    {t('screeningPage.runDetails.ranking', {
+                      mode: screenMeta?.llmRanked
+                        ? t('screeningPage.ranking.llm')
+                        : screenMeta ? t('screeningPage.ranking.factor') : NO_VALUE,
+                    })}
+                    {screenMeta?.llmModelUsed ? ` · ${screenMeta.llmModelUsed}` : ''}
+                    {screenMeta?.llmCoverage != null ? ` · ${t('screeningPage.runDetails.coverage', { value: formatRatioPercent(screenMeta.llmCoverage) })}` : ''}
+                  </span>
+                  {screenMeta?.resultVariantPoolSize ? (
+                    <span>
+                      {t('screeningPage.runDetails.variant', { pool: screenMeta.resultVariantPoolSize })}
+                      {' · '}
+                      {screenMeta.resultVariantApplied
+                        ? t('screeningPage.runDetails.variantApplied', { slots: screenMeta.resultVariantRotatedSlots ?? 0 })
+                        : t('screeningPage.runDetails.variantBase')}
+                    </span>
                   ) : null}
-                  {getHotspotDiagnosticMessages(hotspotDetail.sourceErrors).map((message, index) => (
-                    <p key={`${message}-${index}`}>{message}</p>
-                  ))}
+                  <span>
+                    {t('screeningPage.runDetails.enrich', {
+                      done: screenMeta?.dsaEnrichment?.enrichedCount ?? NO_VALUE,
+                      total: screenMeta?.dsaEnrichment?.requestedCount ?? NO_VALUE,
+                    })}
+                  </span>
                 </div>
               </details>
-            ) : null}
-
-            {hotspotDetail ? (
-              <div className="grid gap-4 lg:grid-cols-[1fr_1.3fr]">
-                <div>
-                  <p className="mb-3 flex items-center gap-1.5 text-xs font-semibold text-secondary-text">
-                    <Clock3 className="h-3.5 w-3.5 text-orange-500" />
-                    发酵时间线
-                  </p>
-                  <div className="relative space-y-0 pl-4 before:absolute before:bottom-3 before:left-[5px] before:top-2 before:w-px before:bg-border">
-                    {getHotspotRouteItems(hotspotDetail).map((item, index) => (
-                      <div key={`${item.title}-${index}`} className="relative pb-4 last:pb-0">
-                        <span className="absolute -left-4 top-1 h-2.5 w-2.5 rounded-full border border-orange-400 bg-card" />
-                        <div className="rounded-lg border border-border/70 bg-card/80 p-3">
-                          <p className="text-[11px] font-semibold text-orange-500">{getRouteTimeLabel(item, getIntlLocale(language))}</p>
-                          <p className="mt-1 text-xs font-semibold text-foreground">{formatHotspotRouteTitle(item.title)}</p>
-                          <p className="mt-1 text-xs leading-5 text-secondary-text">{formatHotspotRouteDescription(item.description)}</p>
-                          {item.url ? (
-                            <a
-                              className="mt-2 inline-flex text-[11px] font-semibold text-cyan hover:text-foreground"
-                              href={item.url}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              查看消息
-                            </a>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <p className="mb-2 text-xs font-semibold text-secondary-text">概念股</p>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {(hotspotDetail.stocks || []).slice(0, 10).map((stock) => (
-                      <div key={`${stock.code || stock.name}`} className="rounded-lg border border-border/70 bg-card/80 p-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <p className="truncate text-xs font-semibold text-foreground">{stock.name || stock.code || '-'}</p>
-                            <p className="mt-1 text-[11px] text-secondary-text">{stock.code || '-'}</p>
-                          </div>
-                          <div className="flex shrink-0 items-center gap-1">
-                            <span className="rounded-full bg-cyan/10 px-2 py-1 text-[11px] font-semibold text-cyan">
-                              {getHotspotRoleLabel(stock.role)}
-                            </span>
-                            {stock.code ? (
-                              <button
-                                type="button"
-                                aria-label={`分析 ${stock.name || stock.code}`}
-                                className="inline-flex h-7 items-center gap-1 rounded-full border border-cyan/30 bg-cyan/10 px-2 text-[11px] font-semibold text-cyan transition-colors hover:border-cyan hover:bg-cyan/15 hover:text-foreground"
-                                onClick={() => handleAnalyzeHotspotStock(stock)}
-                              >
-                                <Play className="h-3 w-3" />
-                                分析
-                              </button>
-                            ) : null}
-                          </div>
-                        </div>
-                        <p className="mt-2 text-[11px] text-secondary-text">
-                          涨跌幅 {formatStockChangeText(stock.changePct)} · 热度 {formatNumber(stock.hotStockScore, 0)}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-      </section>
-
-      <section className="rounded-2xl border border-cyan/35 bg-card/95 p-4 shadow-soft-card">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <SlidersHorizontal className="h-4 w-4 text-cyan" />
-            {t('screeningPage.run')}
-          </div>
-          <span className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-xs font-semibold text-cyan">
-            {selectedStrategyTag}
-          </span>
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr_180px_auto] lg:items-end">
-          <label className="space-y-2 text-xs font-medium text-secondary-text">
-            {t('screeningPage.market')}
-            <select
-              className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
-              value={market}
-              disabled={loading}
-              onChange={(event) => handleMarketChange(event.target.value)}
-            >
-              {MARKETS.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div className="space-y-2 text-xs font-medium text-secondary-text">
-            <label htmlFor="screening-strategy">策略</label>
-            <Select
-              id="screening-strategy"
-              value={selectedStrategy ? strategy : CUSTOM_STRATEGY_OPTION_VALUE}
-              disabled={loading || loadingStrategies}
-              placeholder=""
-              options={[
-                ...strategies.map((item) => ({
-                  value: item.id,
-                  label: item.name || item.title || item.id,
-                })),
-                { value: CUSTOM_STRATEGY_OPTION_VALUE, label: '自定义策略…' },
-              ]}
-              onChange={(value) =>
-                handleStrategyChange(
-                  value === CUSTOM_STRATEGY_OPTION_VALUE ? '' : value,
-                )
-              }
-            />
-          </div>
-
-          {!selectedStrategy && !loadingStrategies ? (
-            <label className="space-y-2 text-xs font-medium text-secondary-text lg:col-start-2">
-              自定义策略 ID
-              <input
-                aria-label="自定义策略 ID"
-                className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
-                value={strategy}
-                disabled={loading}
-                placeholder="输入策略 ID"
-                onChange={(event) => handleStrategyChange(event.target.value)}
-              />
-            </label>
+            </section>
           ) : null}
 
-          <label className="space-y-2 text-xs font-medium text-secondary-text">
-            返回数量
-            <input
-              className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
-              type="number"
-              min={1}
-              max={100}
-              value={maxResults}
-              disabled={loading}
-              onChange={(event) => handleMaxResultsChange(Number(event.target.value))}
+          {screenMeta && alertMessages.length > 0 ? (
+            <InlineAlert
+              variant={llmFailed ? 'warning' : 'info'}
+              title={llmFailed ? t('screeningPage.factorAlertTitle') : t('screeningPage.alertTitle')}
+              message={<ScreenAlertMessage messages={alertMessages} />}
             />
-          </label>
+          ) : null}
 
-          <Button
-            className="h-11 min-w-40"
-            isLoading={loading}
-            loadingText="筛选中..."
-            disabled={!isScreeningEnabled || loading || !strategy.trim()}
-            onClick={() => void handleSubmit()}
-          >
-            <Play className="h-4 w-4" />
-            {t('screeningPage.run')}
-          </Button>
-        </div>
+          {/* 結果 */}
+          {screenMeta ? (
+            <section className="rounded-2xl border border-border bg-card/95 p-4 shadow-soft-card">
+              <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <h2 className="text-base font-semibold text-foreground">{t('screeningPage.results')}</h2>
+                <div className="flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 text-xs text-secondary-text">
+                  <Search className="h-4 w-4 text-cyan" />
+                  {t('screeningPage.candidateCount', { count: candidates.length })}
+                </div>
+              </div>
 
-        <div className="mt-3 rounded-xl border border-border/75 bg-surface/55 px-3 py-2 text-xs leading-5 text-secondary-text">
-          {strategyLoadError
-            ? strategyLoadError
-            : selectedStrategy?.description || '策略会先执行硬过滤和因子评分，再进行风险与组合约束。'}
-        </div>
-      </section>
+              {universeLabel || screenMeta.snapshotDate || screenMeta.funnel?.length ? (
+                <div data-testid="screening-provenance" className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-secondary-text">
+                  {universeLabel ? (
+                    <span>
+                      {t('screeningPage.universe.label', { source: universeLabel })}
+                      {screenMeta.universeSize != null ? ` (${formatGroupedNumber(screenMeta.universeSize)})` : ''}
+                    </span>
+                  ) : null}
+                  {screenMeta.snapshotDate ? <span>{t('screeningPage.snapshotDate', { date: screenMeta.snapshotDate })}</span> : null}
+                  {screenMeta.funnel?.length ? (
+                    <span>{screenMeta.funnel.map((stage) => `${stage.label} ${formatGroupedNumber(stage.count)}`).join(' → ')}</span>
+                  ) : null}
+                </div>
+              ) : null}
 
-      {loading || screenMeta ? (
-        <section className="rounded-2xl border border-border bg-card/95 p-4 shadow-soft-card">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-3">
-              <span className={`grid h-7 w-7 place-items-center rounded-full ${loading ? 'text-cyan' : 'text-success'}`}>
-                {loading ? <CircleAlert className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
-              </span>
-              <div>
-                <h2 className="text-sm font-semibold text-foreground">{loading ? '选股运行中' : '选股完成'}</h2>
-                <p className="mt-1 text-xs text-secondary-text">
-                  {loading
-                    ? `${taskMessage || '正在执行选股'} · ${taskProgress}%`
-                    : `${displayedStrategy} · ${MARKETS.find((item) => item.id === market)?.label}`}
+              {conditionsChanged ? (
+                <p data-testid="screening-conditions-changed" className="mb-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                  {t('screeningPage.conditionsChanged')}
                 </p>
+              ) : null}
+
+              {batchMessage ? (
+                <InlineAlert className="mb-3" variant={batchMessage.variant} message={batchMessage.text} />
+              ) : null}
+
+              {selectedCodes.length > 0 ? (
+                <div data-testid="screening-batch-bar" className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-surface/60 px-3 py-2 text-xs text-secondary-text">
+                  <span>{t('screeningPage.batch.selected', { count: selectedCodes.length })}</span>
+                  <Button size="sm" variant="secondary" disabled={batchBusy} onClick={() => void handleBatchAnalyze()}>
+                    {t('screeningPage.batch.analyze')}
+                  </Button>
+                  <Button size="sm" variant="secondary" disabled={batchBusy} onClick={() => void handleBatchWatch()}>
+                    {t('screeningPage.batch.watch')}
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={batchBusy} onClick={() => setSelectedCodes([])}>
+                    {t('screeningPage.batch.clear')}
+                  </Button>
+                </div>
+              ) : null}
+
+              <DataTable<ScreeningCandidate>
+                aria-label={t('screeningPage.results')}
+                columns={columns}
+                rows={sortedCandidates}
+                rowKey={(item) => `${item.rank}-${item.code}`}
+                sort={sort}
+                onSortChange={setSort}
+                onRowClick={(item) => setDetailCode(item.code)}
+                renderMobileCard={renderMobileCard}
+                emptyState={(
+                  <div className="rounded-xl border border-dashed border-border bg-surface/70 px-5 py-10 text-center">
+                    <p className="text-sm font-medium text-foreground">{t('screeningPage.noCandidates')}</p>
+                  </div>
+                )}
+              />
+            </section>
+          ) : null}
+
+          <Drawer
+            isOpen={Boolean(detailCandidate)}
+            onClose={() => setDetailCode(null)}
+            title={detailCandidate ? `${detailCandidate.name || detailCandidate.code} ${detailCandidate.code}` : ''}
+            width="max-w-xl"
+          >
+            {detailCandidate ? renderCandidateDetail(detailCandidate) : null}
+          </Drawer>
+
+          {/* 熱點 */}
+          <section className="rounded-2xl border border-border/80 bg-card/95 p-4 shadow-soft-card">
+            <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <h2 className="text-sm font-semibold text-foreground">{t('screeningPage.hotspots')}</h2>
+              <div className="flex flex-col items-start gap-2 lg:items-end">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" variant="secondary" onClick={toggleHotspotsExpanded}>
+                    <Bookmark className="h-4 w-4" />
+                    {hotspotsExpanded
+                      ? t('screeningPage.hotspot.collapse')
+                      : t('screeningPage.hotspot.expand', { count: hotspots.length ? ` (${hotspots.length})` : '' })}
+                    <ChevronDown className={`h-4 w-4 transition-transform ${hotspotsExpanded ? 'rotate-180' : ''}`} />
+                  </Button>
+                  {hotspotsExpanded ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      isLoading={loadingHotspots}
+                      loadingText={t('screeningPage.hotspot.refreshing')}
+                      disabled={loadingHotspots}
+                      onClick={() => void loadHotspots(true, market)}
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      {t('screeningPage.hotspot.refresh')}
+                    </Button>
+                  ) : null}
+                </div>
+                {hotspotsUpdatedAt ? (
+                  <p className="text-xs text-secondary-text">
+                    {t('screeningPage.hotspot.updatedAt', { time: formatHotspotUpdatedAt(hotspotsUpdatedAt, intlLocale, t) })}
+                  </p>
+                ) : null}
               </div>
             </div>
-          </div>
 
-          <details className="mt-3 border-t border-border/70 pt-3 text-xs text-secondary-text">
-            <summary className="w-fit cursor-pointer font-medium text-secondary-text">运行详情</summary>
-            <div className="mt-2 grid gap-1">
-              <span>任务：{activeTaskId ? activeTaskId.slice(0, 12) : '-'}</span>
-              <span>Run ID：{screenMeta?.runId || '-'}</span>
-              <span>
-                快照 {screenMeta?.snapshotCount ?? '-'} · 过滤后 {screenMeta?.afterFilterCount ?? '-'} · 候选 {screenMeta?.candidateCount ?? candidates.length}
-              </span>
-              <span>
-                排序：{screenMeta?.llmRanked ? '智能重排' : screenMeta ? '确定性因子' : '-'}
-                {screenMeta?.llmModelUsed ? ` · ${screenMeta.llmModelUsed}` : ''}
-                {screenMeta?.llmCoverage != null ? ` · 覆盖 ${formatPercent(screenMeta.llmCoverage)}` : ''}
-              </span>
-              {screenMeta?.resultVariantPoolSize ? (
-                <span>
-                  候选差异：近分池 {screenMeta.resultVariantPoolSize} ·{' '}
-                  {screenMeta.resultVariantApplied
-                    ? `本次替换 ${screenMeta.resultVariantRotatedSlots ?? 0} 位`
-                    : '本次保持基准'}
-                </span>
-              ) : null}
-              <span>
-                深度补充：{screenMeta?.dsaEnrichment?.enrichedCount ?? '-'} / {screenMeta?.dsaEnrichment?.requestedCount ?? '-'}
-              </span>
-            </div>
-          </details>
-        </section>
-      ) : null}
+            {hotspotsExpanded && hotspotError ? (
+              <p className="mb-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                {hotspotError}
+              </p>
+            ) : null}
 
-      {screenMeta && alertMessages.length > 0 ? (
-        <InlineAlert
-          variant={llmFailed ? 'warning' : 'info'}
-          title={llmFailed ? '当前使用因子排序' : '选股提示'}
-          message={<ScreenAlertMessage messages={alertMessages} />}
-        />
-      ) : null}
-
-      {screenMeta ? (
-        <section className="rounded-2xl border border-border bg-card/95 p-4 shadow-soft-card">
-          <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <h2 className="text-base font-semibold text-foreground">选股结果</h2>
-          <div className="flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-2 text-xs text-secondary-text">
-            <Search className="h-4 w-4 text-cyan" />
-            {candidates.length} 条候选
-          </div>
-          </div>
-
-        {candidates.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border bg-surface/70 px-5 py-10 text-center">
-            <p className="text-sm font-medium text-foreground">暂无符合条件的候选</p>
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-xl border border-border">
-            <table className="w-full min-w-[860px] border-collapse text-sm">
-              <thead className="bg-surface text-left text-xs text-secondary-text">
-                <tr>
-                  <th className="w-14 px-4 py-3 font-semibold">#</th>
-                  <th className="px-4 py-3 font-semibold">代码</th>
-                  <th className="px-4 py-3 font-semibold">名称</th>
-                  <th className="px-4 py-3 font-semibold">行业</th>
-                  <th className="px-4 py-3 font-semibold">价格</th>
-                  <th className="px-4 py-3 font-semibold">涨跌幅</th>
-                  <th className="px-4 py-3 font-semibold">评分</th>
-                  <th className="px-4 py-3 font-semibold">排序依据</th>
-                  <th className="px-4 py-3 font-semibold">风险</th>
-                  <th className="px-4 py-3 font-semibold">详情</th>
-                </tr>
-              </thead>
-              <tbody>
-                {candidates.map((item) => {
-                  const expanded = expandedCode === item.code;
-                  const factors = getFactorEntries(item);
-                  const selectionExplanations = getSelectionExplanations(item);
-                  const selectionQuality = item.whySelected?.length
-                    ? item.explanationQuality?.whySelected || 'unknown'
-                    : 'unknown';
-                  const llmInsightAvailable = hasLlmInsight(item);
-                  const dsaWarnings = item.dsaContext?.warnings || [];
-                  const dsaNews = item.dsaNews || [];
-                  const dsaEvents = item.dsaEvents || [];
+            {!hotspotsExpanded ? null : hotspots.length === 0 ? (
+              hotspotError ? null : (
+                <div className="rounded-xl border border-dashed border-border bg-surface/70 px-4 py-6 text-sm text-secondary-text">
+                  {t('screeningPage.hotspot.empty')}
+                </div>
+              )
+            ) : (
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                {hotspots.map((item) => {
+                  const selected = selectedHotspotTopic === item.topic;
+                  const stage = getHotspotStageLabel(item.stage || item.state, t);
                   return (
-                    <Fragment key={`${item.rank}-${item.code}`}>
-                      <tr className="border-t border-border align-top transition-colors hover:bg-hover/50">
-                        <td className="px-4 py-3 text-secondary-text">{item.rank}</td>
-                        <td className="px-4 py-3 font-mono font-semibold text-foreground">{item.code}</td>
-                        <td className="px-4 py-3 font-semibold text-foreground">{item.name || '-'}</td>
-                        <td className="px-4 py-3 text-secondary-text">{item.industry || '-'}</td>
-                        <td className="px-4 py-3 text-secondary-text">{formatNumber(item.price)}</td>
-                        <td className="px-4 py-3 text-secondary-text">{formatNumber(item.changePct)}%</td>
-                        <td className="px-4 py-3 font-bold text-cyan">{formatScore(item.score)}</td>
-                        <td className="px-4 py-3 text-secondary-text">{factorRanking ? '因子排序' : formatScore(item.llmScore)}</td>
-                        <td className="px-4 py-3">
-                          <span className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${getRiskClassName(item.riskLevel)}`}>
-                            {getRiskLabel(item.riskLevel)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <button
-                            className="text-sm font-semibold text-cyan transition-colors hover:text-foreground"
-                            type="button"
-                            onClick={() => setExpandedCode(expanded ? null : item.code)}
-                          >
-                            {expanded ? '收起' : '展开查看'}
-                          </button>
-                        </td>
-                      </tr>
-                      {expanded ? (
-                        <tr className="border-t border-border bg-surface/45">
-                          <td colSpan={10} className="px-4 py-4">
-                            <div className="grid gap-4 lg:grid-cols-[1.1fr_1fr]">
-                              <div className="space-y-3">
-                                <div className="grid gap-3 md:grid-cols-2">
-                                  <div className="rounded-xl border border-cyan/25 bg-cyan/5 px-3 py-2.5">
-                                    <p className="text-xs font-semibold text-cyan">为什么入选</p>
-                                    <ExplanationItems items={selectionExplanations} emptyText="暂无可验证的入选解释" />
-                                    {selectionExplanations.length > 0 ? (
-                                      <p className="mt-2 text-xs text-secondary-text">综合质量：{selectionQuality}</p>
-                                    ) : null}
-                                  </div>
-                                  <div className="rounded-xl border border-orange-400/25 bg-orange-500/5 px-3 py-2.5">
-                                    <p className="text-xs font-semibold text-orange-500">为什么现在</p>
-                                    <ExplanationItems items={item.whyNow} emptyText="暂无带来源的价格、消息或事件证据" />
-                                    {item.whyNow?.length ? (
-                                      <p className="mt-2 text-xs text-secondary-text">综合质量：{item.explanationQuality?.whyNow || 'unknown'}</p>
-                                    ) : null}
-                                  </div>
-                                </div>
-                                <div>
-                                  <p className="text-xs font-semibold text-secondary-text">摘要</p>
-                                  <p className="mt-1 text-sm leading-6 text-foreground">{getCandidateReason(item)}</p>
-                                </div>
-                                <div>
-                                  <p className="text-xs font-semibold text-secondary-text">操作信号</p>
-                                  <p className="mt-1 text-sm text-foreground">{getSignal(item)}</p>
-                                  <button
-                                    className="mt-2 rounded-lg border border-cyan/40 px-3 py-1.5 text-xs font-semibold text-cyan transition-colors hover:bg-cyan/10"
-                                    type="button"
-                                    onClick={() => handleAnalyzeCandidate(item)}
-                                  >
-                                    进一步深度分析
-                                  </button>
-                                </div>
-                                {item.dsaAnalysisSummary ? (
-                                  <div>
-                                    <p className="text-xs font-semibold text-secondary-text">增强摘要</p>
-                                    <p className="mt-1 text-sm leading-6 text-foreground">
-                                      {formatEnrichmentSummary(item.dsaAnalysisSummary)}
-                                    </p>
-                                  </div>
-                                ) : null}
-                                {llmInsightAvailable ? (
-                                  <div>
-                                    <p className="text-xs font-semibold text-secondary-text">智能判断</p>
-                                    <p className="mt-1 text-sm leading-6 text-foreground">{item.llmThesis || item.reason}</p>
-                                    <p className="mt-1 text-xs text-secondary-text">
-                                      板块 {item.llmSector || '-'} · 主题 {item.llmTheme || '-'} · 置信度 {formatPercent(item.llmConfidence)}
-                                    </p>
-                                  </div>
-                                ) : null}
-                                <div>
-                                  <p className="text-xs font-semibold text-secondary-text">风险标签</p>
-                                  <p className="mt-1 text-sm text-foreground">
-                                    {[...(item.riskFlags || []), ...(item.llmRisks || [])].length
-                                      ? [...(item.riskFlags || []), ...(item.llmRisks || [])].join('，')
-                                      : '无'}
-                                  </p>
-                                </div>
-                                {/* 空陣列 `[]` 格式化後是 null，不顯示空的風險摘要區塊 */}
-                                {formatSignalText(item.riskSummary) ? (
-                                  <div>
-                                    <p className="text-xs font-semibold text-secondary-text">风险摘要</p>
-                                    <p className="mt-1 text-sm text-foreground">{formatSignalText(item.riskSummary)}</p>
-                                  </div>
-                                ) : null}
+                    <button
+                      key={`${item.topic}-${item.rank ?? ''}`}
+                      className={`rounded-xl border px-3 py-3 text-left transition-colors ${
+                        selected ? 'border-cyan bg-cyan/5' : 'border-border/80 bg-card hover:bg-hover/50'
+                      }`}
+                      type="button"
+                      onClick={() => handleHotspotSelect(item.topic)}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-foreground">{item.name || item.topic}</p>
+                          {stage ? <p className="mt-1 text-[11px] text-secondary-text">{stage}</p> : null}
+                        </div>
+                        <span className="shrink-0 text-xl font-semibold tabular-nums text-foreground">
+                          {formatNumber(item.heatScore, 0)}
+                        </span>
+                      </div>
+                      <div className="mt-3 grid gap-1 text-[11px] text-secondary-text">
+                        <span>
+                          {t('screeningPage.hotspot.change')}{' '}
+                          <Change value={item.changePct}><Num kind="percent" value={item.changePct} /></Change>
+                        </span>
+                        <span>
+                          {t('screeningPage.hotspot.trendPersistence', {
+                            trend: formatNumber(item.trendScore, 1),
+                            persistence: formatNumber(item.persistenceScore, 1),
+                          })}
+                        </span>
+                        <span>
+                          {item.sampleStockCount != null
+                            ? `${t('screeningPage.hotspot.coverage', { count: item.sampleStockCount })} · `
+                            : ''}
+                          {t('screeningPage.hotspot.leaders', { leaders: getHotspotLeadersText(item, t) })}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {hotspotsExpanded && selectedHotspotTopic ? (
+              <div className="mt-4 rounded-xl border border-border/80 bg-surface/80 p-4">
+                <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-foreground">
+                      {hotspotDetail?.name || selectedHotspotTopic}
+                    </h3>
+                    <p className="mt-1 text-xs leading-5 text-secondary-text">
+                      {hotspotDetail
+                        ? getHotspotSummaryText(hotspotDetail, selectedHotspot, t)
+                        : loadingHotspotDetail
+                          ? t('screeningPage.hotspot.loadingDetail')
+                          : t('screeningPage.hotspot.clickToView')}
+                    </p>
+                    {hotspotDetail?.canonicalTopic && hotspotDetail.canonicalTopic !== selectedHotspotTopic ? (
+                      <p className="mt-1 text-[11px] text-secondary-text">
+                        {t('screeningPage.hotspot.canonicalTopic', { topic: hotspotDetail.canonicalTopic })}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      isLoading={searchingHotspotNews}
+                      loadingText={t('screeningPage.hotspot.searching')}
+                      disabled={loadingHotspotDetail || searchingHotspotNews}
+                      onClick={() => void loadHotspotDetail(selectedHotspotTopic, { includeSearch: true })}
+                    >
+                      <Search className="h-3.5 w-3.5" />
+                      {t('screeningPage.hotspot.searchNews')}
+                    </Button>
+                    {loadingHotspotDetail ? (
+                      <span className="w-fit rounded-full bg-cyan/10 px-3 py-1 text-xs font-semibold text-cyan">
+                        {t('screeningPage.hotspot.enriching')}
+                      </span>
+                    ) : null}
+                    {hotspotDetail?.qualityStatus ? (
+                      <span className="w-fit rounded-full bg-warning/10 px-3 py-1 text-xs font-semibold text-warning">
+                        {t('screeningPage.hotspot.qualityIs', { quality: getHotspotQualityLabel(hotspotDetail.qualityStatus, t) })}
+                      </span>
+                    ) : null}
+                    {hotspotDetail?.fallbackUsed || hotspotDetail?.stale ? (
+                      <span className="w-fit rounded-full bg-warning/10 px-3 py-1 text-xs font-semibold text-warning">
+                        {getHotspotFallbackLabel(hotspotDetail, t)}
+                      </span>
+                    ) : null}
+                    {hotspotDetail?.stockCount != null ? (
+                      <span className="w-fit rounded-full bg-surface px-3 py-1 text-xs font-semibold text-secondary-text">
+                        {t('screeningPage.hotspot.stockCount', { count: hotspotDetail.stockCount })}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+
+                {hotspotDetailError ? (
+                  <p className="mb-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                    {hotspotDetailError}
+                  </p>
+                ) : null}
+
+                {hotspotDetail && hasHotspotDetailDegradation(hotspotDetail) ? (
+                  <details className="mb-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
+                    <summary className="cursor-pointer font-semibold">{t('screeningPage.hotspot.degraded')}</summary>
+                    <div className="mt-2 space-y-1 leading-5">
+                      {(hotspotDetail.missingFields || []).length > 0 ? (
+                        <p>{t('screeningPage.hotspot.missingList', { fields: getHotspotMissingFieldLabels(hotspotDetail.missingFields, t).join(t('screeningPage.listSeparator')) })}</p>
+                      ) : null}
+                      {getHotspotDiagnosticMessages(hotspotDetail.sourceErrors, t).map((message, index) => (
+                        <p key={`${message}-${index}`}>{message}</p>
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
+
+                {hotspotDetail ? (
+                  <div className="grid gap-4 lg:grid-cols-[1fr_1.3fr]">
+                    <div>
+                      <p className="mb-3 flex items-center gap-1.5 text-xs font-semibold text-secondary-text">
+                        <Clock3 className="h-3.5 w-3.5" />
+                        {t('screeningPage.hotspot.timeline')}
+                      </p>
+                      <div className="relative space-y-0 pl-4 before:absolute before:bottom-3 before:left-[5px] before:top-2 before:w-px before:bg-border">
+                        {getHotspotRouteItems(hotspotDetail).map((item, index) => (
+                          <div key={`${item.title}-${index}`} className="relative pb-4 last:pb-0">
+                            <span className="absolute -left-4 top-1 h-2.5 w-2.5 rounded-full border border-border bg-card" />
+                            <div className="rounded-lg border border-border/70 bg-card/80 p-3">
+                              <p className="text-[11px] font-semibold text-secondary-text">{getRouteTimeLabel(item, intlLocale, t)}</p>
+                              <p className="mt-1 text-xs font-semibold text-foreground">{formatHotspotRouteTitle(item.title, t)}</p>
+                              <p className="mt-1 text-xs leading-5 text-secondary-text">{formatHotspotRouteDescription(item.description, t)}</p>
+                              {item.url ? (
+                                <a
+                                  className="mt-2 inline-flex text-[11px] font-semibold text-cyan hover:text-foreground"
+                                  href={item.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {t('screeningPage.hotspot.viewNews')}
+                                </a>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="mb-2 text-xs font-semibold text-secondary-text">{t('screeningPage.hotspot.stocks')}</p>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {(hotspotDetail.stocks || []).slice(0, 10).map((stock) => (
+                          <div key={`${stock.code || stock.name}`} className="rounded-lg border border-border/70 bg-card/80 p-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="truncate text-xs font-semibold text-foreground">{stock.name || stock.code || NO_VALUE}</p>
+                                <p className="mt-1 text-[11px] text-secondary-text">{stock.code || NO_VALUE}</p>
                               </div>
-                              <div className="space-y-3">
-                                <div>
-                                  <p className="text-xs font-semibold text-secondary-text">主要因子</p>
-                                  <div className="mt-2 grid grid-cols-2 gap-2">
-                                    {factors.length > 0 ? (
-                                      factors.map(([key, value]) => (
-                                        <div key={key} className="rounded-lg border border-border bg-card px-3 py-2">
-                                          <span className="block text-xs text-secondary-text">{FACTOR_LABELS[key] || key}</span>
-                                          <span className="text-sm font-semibold text-foreground">{formatNumber(value)}</span>
-                                        </div>
-                                      ))
-                                    ) : (
-                                      <span className="text-sm text-secondary-text">无因子明细</span>
-                                    )}
-                                  </div>
-                                </div>
-                                <div>
-                                  <p className="text-xs font-semibold text-secondary-text">成交额</p>
-                                  <p className="mt-1 text-sm text-foreground">{formatAmount(item.amount)}</p>
-                                </div>
-                                {item.llmWatchItems?.length ? (
-                                  <div>
-                                    <p className="text-xs font-semibold text-secondary-text">智能关注项</p>
-                                    <p className="mt-1 text-sm text-foreground">{item.llmWatchItems.join('，')}</p>
-                                  </div>
-                                ) : null}
-                                {item.llmCatalysts?.length ? (
-                                  <div>
-                                    <p className="text-xs font-semibold text-secondary-text">催化因素</p>
-                                    <p className="mt-1 text-sm text-foreground">{item.llmCatalysts.join('，')}</p>
-                                  </div>
-                                ) : null}
-                                <div>
-                                  <p className="text-xs font-semibold text-secondary-text">相关新闻</p>
-                                  {dsaNews.length > 0 ? (
-                                    <ul className="mt-1 space-y-1 text-sm text-foreground">
-                                      {dsaNews.slice(0, 3).map((newsItem, newsIndex) => (
-                                        <li key={`${item.code}-dsa-news-${newsIndex}`}>
-                                          {newsItem.title || newsItem.snippet || '-'}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  ) : (
-                                    <p className="mt-1 text-sm text-secondary-text">无</p>
-                                  )}
-                                </div>
-                                <div>
-                                  <p className="text-xs font-semibold text-secondary-text">公告与事件</p>
-                                  {dsaEvents.length > 0 ? (
-                                    <ul className="mt-1 space-y-1 text-sm text-foreground">
-                                      {dsaEvents.slice(0, 3).map((eventItem, eventIndex) => (
-                                        <li key={`${item.code}-dsa-event-${eventIndex}`}>
-                                          {eventItem.title || eventItem.snippet || '-'}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  ) : (
-                                    <p className="mt-1 text-sm text-secondary-text">无</p>
-                                  )}
-                                </div>
-                                {dsaWarnings.length > 0 ? (
-                                  <div>
-                                    <p className="text-xs font-semibold text-secondary-text">数据补充提示</p>
-                                    <p className="mt-1 text-sm text-secondary-text">{dsaWarnings.join('，')}</p>
-                                  </div>
+                              <div className="flex shrink-0 items-center gap-1">
+                                <span className="rounded-full bg-cyan/10 px-2 py-1 text-[11px] font-semibold text-cyan">
+                                  {getHotspotRoleLabel(stock.role, t)}
+                                </span>
+                                {stock.code ? (
+                                  <button
+                                    type="button"
+                                    aria-label={t('screeningPage.table.analyzeNamed', { name: stock.name || stock.code })}
+                                    className="inline-flex h-7 items-center gap-1 rounded-full border border-cyan/30 bg-cyan/10 px-2 text-[11px] font-semibold text-cyan transition-colors hover:border-cyan hover:bg-cyan/15 hover:text-foreground"
+                                    onClick={() => handleAnalyzeHotspotStock(stock)}
+                                  >
+                                    <Play className="h-3 w-3" />
+                                    {t('screeningPage.table.analyze')}
+                                  </button>
                                 ) : null}
                               </div>
                             </div>
-                          </td>
-                        </tr>
-                      ) : null}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-        </section>
-      ) : null}
+                            <p className="mt-2 text-[11px] text-secondary-text">
+                              {t('screeningPage.hotspot.stockMeta', {
+                                change: toFiniteNumber(stock.changePct) === null
+                                  ? t('screeningPage.hotspot.noQuote')
+                                  : `${formatNumber(stock.changePct)}%`,
+                                heat: formatNumber(stock.hotStockScore, 0),
+                              })}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
 
-      <section className="rounded-2xl border border-border/80 bg-card/95 p-4 shadow-soft-card">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Clock3 className="h-4 w-4 text-cyan" />
-            {t('screeningPage.history')}
-          </div>
-          <button
-            type="button"
-            className="text-xs font-medium text-cyan transition-colors hover:text-foreground"
-            onClick={() => void loadHistory()}
-            disabled={historyLoading}
-          >
-            {historyLoading ? '加载中...' : '刷新'}
-          </button>
-        </div>
-        {historyError ? (
-          <p className="mb-3 text-xs text-danger">{historyError}</p>
-        ) : null}
-        {historyRuns.length === 0 ? (
-          <p className="py-3 text-center text-xs text-secondary-text">
-            {historyLoading ? t('screeningPage.historyLoading') : t('screeningPage.historyEmpty')}
-          </p>
-        ) : (
-          <div className="divide-y divide-border/70">
-            {historyRuns.map((run) => (
-              <button
-                key={run.runId}
-                type="button"
-                className="flex w-full items-center justify-between gap-3 py-2.5 text-left transition-colors hover:bg-hover/50"
-                onClick={() => void handleHistoryRunSelect(run.runId)}
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-semibold text-foreground">
-                    {formatHistoryStrategyName(run.strategy, strategies)}
-                    <span className="ml-2 text-xs font-normal text-secondary-text">
-                      {formatHistoryMarketLabel(run.market)}
-                    </span>
-                  </span>
-                  <span className="mt-0.5 block text-xs text-secondary-text">
-                    返回 {run.candidateCount ?? 0} 只
-                    {run.snapshotCount != null ? ` · 快照 ${run.snapshotCount}` : ''}
-                    {run.llmRanked ? ' · 智能重排' : ''}
-                  </span>
-                </span>
-                <span className="shrink-0 text-xs text-secondary-text">
-                  {formatRunCreatedAt(run.createdAt, getIntlLocale(language))}
-                </span>
-              </button>
-            ))}
-          </div>
-        )}
-      </section>
+          {/* 最近結果 */}
+          <section className="rounded-2xl border border-border/80 bg-card/95 p-4 shadow-soft-card">
+            {historyError ? (
+              <p className="mb-3 text-xs text-danger">{historyError}</p>
+            ) : null}
+            {historyRuns.length === 0 ? (
+              <p className="py-1 text-xs text-secondary-text">
+                {historyLoading ? t('screeningPage.historyLoading') : t('screeningPage.historyEmpty')}
+              </p>
+            ) : (
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                <Select
+                  id="screening-recent-results"
+                  className="min-w-0 flex-1"
+                  label={t('screeningPage.history')}
+                  value={selectedHistoryRunId}
+                  placeholder={t('screeningPage.historyPlaceholder')}
+                  options={historyRuns.map((run) => {
+                    const runStrategy = strategies.find((item) => item.id === run.strategy);
+                    const parts = [
+                      runStrategy ? getStrategyName(runStrategy, language) : run.strategy,
+                      formatMarketLabel(run.market, t),
+                      t('screeningPage.historyCount', { count: run.candidateCount ?? 0 }),
+                      ...(run.snapshotCount != null ? [t('screeningPage.historySnapshot', { count: run.snapshotCount })] : []),
+                      ...(run.llmRanked ? [t('screeningPage.ranking.llm')] : []),
+                      formatRunCreatedAt(run.createdAt, intlLocale, t),
+                    ];
+                    return { value: run.runId, label: parts.join(' · ') };
+                  })}
+                  onChange={(value) => {
+                    setSelectedHistoryRunId(value);
+                    if (value) {
+                      void handleHistoryRunSelect(value);
+                    }
+                  }}
+                />
+                <Button size="sm" variant="ghost" disabled={historyLoading} onClick={() => void loadHistory()}>
+                  {historyLoading ? t('screeningPage.history.refreshing') : t('screeningPage.history.refresh')}
+                </Button>
+              </div>
+            )}
+          </section>
+        </>
+      ) : null}
     </AppPage>
   );
 };

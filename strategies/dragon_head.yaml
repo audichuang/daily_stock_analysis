@@ -3,6 +3,9 @@
 
 name: dragon_head
 display_name: 龙头策略
+display_name_zh_tw: 龍頭策略
+group: trend
+group_name_zh_tw: 趨勢
 description: 板块轮动中识别龙头股。适用于板块启动或行业催化剂出现时。
 category: trend
 core_rules: [2, 7]

@@ -158,19 +158,22 @@ describe('UiLanguageContext', () => {
       </UiLanguageProvider>
     );
 
-    const toggle = screen.getByRole('button', { name: '切换界面语言' });
-    expect(screen.getByText('界面语言')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '切换界面语言' })).toHaveTextContent('简体中文');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 
-    // 三语循环 zh → zh-TW → en（本 fork 新增繁体）：首点 zh → zh-TW
-    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: '切换界面语言' }));
+    // 開選單本身不換語言，要明確選一項。
+    expect(localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('zh');
+    expect(screen.getByRole('menuitemradio', { name: '简体中文' })).toHaveAttribute('aria-checked', 'true');
+
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '繁體中文' }));
     expect(localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('zh-TW');
-    expect(screen.getByRole('button', { name: '切換介面語言' })).toBeInTheDocument();
-    expect(screen.getByText('繁體中文')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '切換介面語言' })).toHaveTextContent('繁體中文');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 
-    // 再点一次 zh-TW → en
     fireEvent.click(screen.getByRole('button', { name: '切換介面語言' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'English' }));
     expect(localStorage.getItem(UI_LANGUAGE_STORAGE_KEY)).toBe('en');
-    expect(screen.getByRole('button', { name: 'Switch UI language' })).toBeInTheDocument();
-    expect(screen.getByText('English')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Switch UI language' })).toHaveTextContent('English');
   });
 });

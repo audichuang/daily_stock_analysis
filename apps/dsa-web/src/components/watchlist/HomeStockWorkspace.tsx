@@ -1,7 +1,8 @@
 import type React from 'react';
-import { useId, useMemo, useState } from 'react';
+import { useCallback, useId, useMemo, useState } from 'react';
 import {
-  ArrowDownWideNarrow,
+  ArrowDown,
+  ArrowUp,
   CalendarDays,
   CheckCircle2,
   CircleAlert,
@@ -13,21 +14,33 @@ import {
   Star,
   Trash2,
 } from 'lucide-react';
-import { Badge, Button, InlineAlert, Input, ScrollArea, StatusDot } from '../common';
+import { Badge, Button, ConfirmDialog, InlineAlert, Input, ScrollArea, Segmented, StatusDot } from '../common';
 import { DashboardPanelHeader, DashboardStateBlock } from '../dashboard';
 import { StockBar } from '../history';
+import { StockBarItemComponent, StockRowLines } from '../history/StockBarItem';
+import type { StockQuote } from '../../api/stocks';
+import type { WatchlistGroup } from '../../api/systemConfig';
+import { stockQuoteKey } from '../../hooks/useStockQuotes';
 import type { StockBarItem, TaskInfo } from '../../types/analysis';
-import { getSentimentColor } from '../../types/analysis';
-import { buildDecisionActionLabelMap, getDecisionActionLabel } from '../../utils/decisionAction';
-import { formatDateTime } from '../../utils/format';
 import { areAssetAwareCodesEquivalent, toAssetAwareCodeKey, type AssetAwareAssetType } from '../../utils/stockCode';
-import { truncateStockName } from '../../utils/stockName';
+import { getStockMarketBucket } from '../../utils/stockName';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import type { UiTextKey, UiTextParams } from '../../i18n/uiText';
 import { isWatchlistRowPendingAnalysis } from './watchlistRowState';
+import {
+  assignCodeToGroup,
+  filterRowsByGroup,
+  groupFilterValue,
+  moveCodeWithinGroup,
+  normalizeNewGroupName,
+  resolveGroupFilter,
+  type WatchlistGroupFilter,
+} from './watchlistGroups';
 
 export type HomeWorkspaceTab = 'watchlist' | 'today' | 'history';
 export type WatchlistAnalyzeMode = 'all' | 'pending';
+type MarketFilter = 'all' | 'tw' | 'us';
+type ListSort = 'default' | 'change' | 'score' | 'time';
 
 export interface HomeWatchlistRow {
   code: string;
@@ -102,7 +115,17 @@ interface HomeStockWorkspaceProps {
   onDeleteStock?: (stockCode: string) => Promise<void> | void;
   isDeleting?: boolean;
   className?: string;
+  /** 批次行情，鍵為 stockQuoteKey(code)。 */
+  quotes?: Map<string, StockQuote>;
+  /** 大盤複盤列：釘在自選、今日兩個頁籤最上面（全部頁籤由 StockBar 釘頂）。 */
+  marketReviewItem?: StockBarItem;
+  marketLightLabel?: string;
+  /** 自選分組；空陣列時畫面與未分組前相同（編輯模式才看得到新增分組）。 */
+  watchlistGroups?: WatchlistGroup[];
+  onSaveWatchlistGroups?: (groups: WatchlistGroup[]) => Promise<void>;
 }
+
+const NO_WATCHLIST_GROUPS: WatchlistGroup[] = [];
 
 function getTaskStatusLabel(task: TaskInfo | undefined, t: (key: UiTextKey, params?: UiTextParams) => string) {
   if (!task) return '';
@@ -193,65 +216,22 @@ function rowHasSelectedIdentity(
   return areAssetAwareCodesEquivalent(selectedStockCode, selectedAssetType, row.code, row.assetType);
 }
 
-const ScoreBadge: React.FC<{ item?: StockBarItem }> = ({ item }) => {
-  const { t } = useUiLanguage();
-  const score = typeof item?.sentimentScore === 'number' ? item.sentimentScore : null;
-  const color = score !== null ? getSentimentColor(score) : null;
-  if (score === null || !color) {
-    return <span className="text-[11px] text-muted-text">{t('common.noData')}</span>;
-  }
-
-  const actionLabels = buildDecisionActionLabelMap(t);
-  const operationLabel = getDecisionActionLabel(
-    item?.action,
-    item?.actionLabel,
-    item?.operationAdvice,
-    t('history.sentiment'),
-    actionLabels,
-  );
-
-  return (
-    <Badge
-      variant="default"
-      size="sm"
-      className="shrink-0 shadow-none text-[11px] font-semibold leading-none"
-      style={{
-        color,
-        borderColor: `${color}30`,
-        backgroundColor: `${color}10`,
-      }}
-    >
-      {operationLabel} {score}
-    </Badge>
-  );
-};
-
-const WatchlistSignalCell: React.FC<{ signal: WatchlistSignal }> = ({ signal }) => (
-  <span className="min-w-0 rounded-lg border border-subtle bg-base/35 px-2 py-1.5">
-    <span className="block text-[10px] font-medium text-muted-text">
-      {signal.label}
-    </span>
-    <span className="mt-1 flex min-w-0 items-start gap-1.5 text-[11px] font-medium text-secondary-text">
-      <StatusDot tone={signal.tone} pulse={signal.pulse} className="h-1.5 w-1.5" />
-      <span className="min-w-0 whitespace-normal break-words leading-snug">{signal.value}</span>
-    </span>
-  </span>
-);
-
 const WatchlistRowItem: React.FC<{
   row: HomeWatchlistRow;
-  onRemove: (code: string) => Promise<void>;
+  onRequestRemove: (code: string) => void;
   onOpenDetail: (row: HomeWatchlistRow) => void;
   disabled: boolean;
   selected: boolean;
-}> = ({ row, onRemove, onOpenDetail, disabled, selected }) => {
+  editMode: boolean;
+  quote?: StockQuote;
+  groupControls?: React.ReactNode;
+}> = ({ row, onRequestRemove, onOpenDetail, disabled, selected, editMode, quote, groupControls }) => {
   const { t } = useUiLanguage();
   const signalDescriptionId = useId();
   const taskLabel = getTaskStatusLabel(row.activeTask, t);
   const isLatestDetailLoading = Boolean(row.isTodayStatusLoading);
   const isLatestDetailUnavailable = !isLatestDetailLoading && Boolean(row.isTodayStatusUnknown);
   const item = isLatestDetailLoading || isLatestDetailUnavailable ? undefined : row.latestItem;
-  const stockName = row.latestItem?.stockName || row.code;
   const canOpenDetail = typeof item?.id === 'number';
   const signals = buildWatchlistRowSignals({
     row,
@@ -263,13 +243,9 @@ const WatchlistRowItem: React.FC<{
   });
   const signalDescription = buildSignalDescription([signals.change, signals.state, signals.nextAction], t);
 
-  const handleOpenDetail = () => {
-    onOpenDetail(row);
-  };
-
   return (
     <div
-      className={`home-subpanel group grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2 px-3 py-2.5 text-left transition-colors ${
+      className={`home-subpanel group flex min-h-[52px] min-w-0 items-center gap-2 px-2.5 py-1.5 text-left transition-colors ${
         selected
           ? 'border-primary/35 bg-primary/10'
           : 'hover:border-subtle-hover hover:bg-base/65'
@@ -287,103 +263,106 @@ const WatchlistRowItem: React.FC<{
               ? t('watchlist.latestDetailUnavailableAria', { code: row.code })
             : t('watchlist.noLatestDetailAria', { code: row.code })}
         aria-describedby={signalDescriptionId}
-        className="grid min-w-0 cursor-pointer gap-2 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan/30"
-        onClick={handleOpenDetail}
+        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan/30"
+        onClick={() => onOpenDetail(row)}
       >
+        {/* 兩行列放不下三格狀態，文字留給輔助科技，視覺上由左側圖示與任務點表示。 */}
         <span id={signalDescriptionId} className="sr-only">
           {signalDescription}
         </span>
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-sm font-semibold text-foreground">
-              {truncateStockName(stockName)}
-            </span>
-            {row.isTodayStatusLoading ? (
-              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-text" aria-label={t('watchlist.todayStatusLoading')} />
-            ) : row.isTodayStatusUnknown ? (
-              <CircleAlert className="h-3.5 w-3.5 shrink-0 text-warning" aria-label={t('watchlist.todayStatusUnavailable')} />
-            ) : row.analyzedToday ? (
-              <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" aria-label={t('watchlist.analyzedToday')} />
-            ) : (
-              <Clock3 className="h-3.5 w-3.5 shrink-0 text-muted-text" aria-label={t('watchlist.notAnalyzedToday')} />
-            )}
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-2">
-            <span className="font-mono text-[11px] text-secondary-text">{row.code}</span>
-            {item?.lastAnalysisTime ? (
-              <>
-                <span className="h-1 w-1 rounded-full bg-subtle-hover" />
-                <span className="text-[11px] text-muted-text">{formatDateTime(item.lastAnalysisTime)}</span>
-              </>
-            ) : null}
-          </div>
-          <div className="flex min-w-0 items-center justify-between gap-2 text-[11px]">
-            <span className={`truncate ${canOpenDetail ? 'text-primary' : isLatestDetailLoading ? 'text-muted-text' : 'text-warning'}`}>
-              {canOpenDetail
-                ? t('common.details')
-                : isLatestDetailLoading
-                  ? t('watchlist.latestDetailLoadingCta')
-                  : isLatestDetailUnavailable
-                    ? t('watchlist.latestDetailUnavailableCta')
-                  : t('watchlist.noLatestDetailCta')}
-            </span>
-          </div>
-          <div className="mt-2 grid min-w-0 grid-cols-1 gap-1.5">
-            <WatchlistSignalCell signal={signals.change} />
-            <WatchlistSignalCell signal={signals.state} />
-            <WatchlistSignalCell signal={signals.nextAction} />
-          </div>
-          {row.activeTask ? (
-            <div className="flex min-w-0 items-center gap-2 text-[11px] text-muted-text">
-              <StatusDot
-                tone={row.activeTask.status === 'processing' ? 'info' : 'neutral'}
-                pulse={row.activeTask.status === 'processing'}
-                className="h-1.5 w-1.5"
-              />
-              <span className="truncate">{t('watchlist.taskRunning', { status: taskLabel })}</span>
-            </div>
-          ) : null}
-        </div>
+        {row.isTodayStatusLoading ? (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-text" aria-label={t('watchlist.todayStatusLoading')} />
+        ) : row.isTodayStatusUnknown ? (
+          <CircleAlert className="h-3.5 w-3.5 shrink-0 text-warning" aria-label={t('watchlist.todayStatusUnavailable')} />
+        ) : row.analyzedToday ? (
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" aria-label={t('watchlist.analyzedToday')} />
+        ) : (
+          <Clock3 className="h-3.5 w-3.5 shrink-0 text-muted-text" aria-label={t('watchlist.notAnalyzedToday')} />
+        )}
+        {row.activeTask ? (
+          <StatusDot
+            tone={row.activeTask.status === 'processing' ? 'info' : 'neutral'}
+            pulse={row.activeTask.status === 'processing'}
+            className="h-1.5 w-1.5 shrink-0"
+          />
+        ) : null}
+        <StockRowLines
+          code={row.code}
+          name={row.latestItem?.stockName}
+          quote={quote}
+          analysisPrice={item?.analysisPrice}
+          item={item}
+        />
       </button>
-      <div className="flex shrink-0 items-start gap-1.5">
-        <ScoreBadge item={item} />
+      {editMode ? groupControls : null}
+      {editMode ? (
         <Button
           type="button"
           variant="ghost"
-          size="xsm"
-          className="h-7 w-7 px-0"
+          size="sm"
+          className="h-7 w-7 shrink-0 px-0"
           disabled={disabled}
           aria-label={t('watchlist.removeAria', { code: row.code })}
-          onClick={() => void onRemove(row.code)}
+          onClick={() => onRequestRemove(row.code)}
         >
           <Trash2 className="h-3.5 w-3.5 text-danger" aria-hidden="true" />
         </Button>
-      </div>
+      ) : null}
     </div>
   );
 };
 
-const TodayItem: React.FC<{ item: StockBarItem; onClick: (recordId: number) => void }> = ({ item, onClick }) => {
-  const stockName = item.stockName || item.stockCode;
+const TodayItem: React.FC<{
+  item: StockBarItem;
+  onClick: (recordId: number) => void;
+  quote?: StockQuote;
+}> = ({ item, onClick, quote }) => (
+  <button
+    type="button"
+    className="home-subpanel flex min-h-[52px] w-full min-w-0 items-center gap-2 px-2.5 py-1.5 text-left"
+    onClick={() => onClick(item.id)}
+  >
+    <StockRowLines
+      code={item.stockCode}
+      name={item.stockName}
+      quote={quote}
+      analysisPrice={item.analysisPrice}
+      item={item}
+    />
+  </button>
+);
 
-  return (
-    <button
-      type="button"
-      className="home-subpanel grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-3 py-2.5 text-left"
-      onClick={() => onClick(item.id)}
-    >
-      <div className="min-w-0">
-        <span className="block truncate text-sm font-semibold text-foreground">
-          {truncateStockName(stockName)}
-        </span>
-        <span className="mt-1 block truncate font-mono text-[11px] text-secondary-text">
-          {item.stockCode}
-        </span>
-      </div>
-      <ScoreBadge item={item} />
-    </button>
-  );
+const analysisTime = (item?: StockBarItem): number => {
+  const parsed = item?.lastAnalysisTime ? Date.parse(item.lastAnalysisTime) : Number.NaN;
+  return Number.isNaN(parsed) ? 0 : parsed;
 };
+
+/** 缺讀數的一律排最後，不當成 0。default 維持呼叫端給的順序。 */
+function sortRows<T>(
+  rows: T[],
+  sort: ListSort,
+  getCode: (row: T) => string,
+  getItem: (row: T) => StockBarItem | undefined,
+  quotes?: Map<string, StockQuote>,
+): T[] {
+  if (sort === 'default') return rows;
+  const readValue = (row: T): number | null => {
+    if (sort === 'change') {
+      const change = quotes?.get(stockQuoteKey(getCode(row)))?.changePercent;
+      return typeof change === 'number' ? change : null;
+    }
+    const item = getItem(row);
+    if (sort === 'score') return typeof item?.sentimentScore === 'number' ? item.sentimentScore : null;
+    return analysisTime(item) || null;
+  };
+  return [...rows].sort((left, right) => {
+    const leftValue = readValue(left);
+    const rightValue = readValue(right);
+    if (leftValue === null) return rightValue === null ? 0 : 1;
+    if (rightValue === null) return -1;
+    return rightValue - leftValue;
+  });
+}
 
 export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
   activeTab,
@@ -411,9 +390,20 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
   onDeleteStock,
   isDeleting = false,
   className = '',
+  quotes,
+  marketReviewItem,
+  marketLightLabel,
+  watchlistGroups = NO_WATCHLIST_GROUPS,
+  onSaveWatchlistGroups,
 }) => {
   const { t } = useUiLanguage();
   const [draftCode, setDraftCode] = useState('');
+  const [groupFilter, setGroupFilter] = useState<WatchlistGroupFilter>('all');
+  const [draftGroupName, setDraftGroupName] = useState('');
+  const [marketFilter, setMarketFilter] = useState<MarketFilter>('all');
+  const [listSort, setListSort] = useState<ListSort>('default');
+  const [editMode, setEditMode] = useState(false);
+  const [pendingRemoveCode, setPendingRemoveCode] = useState<string | null>(null);
   // PR #2312: the notice carries the *triggering row's own* identity
   // (code + assetType). Reusing the candidate row's assetType for the notice
   // code would let an index row and a same-code stock row cross-match (e.g.
@@ -424,10 +414,181 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
   const isTodayStatusUnavailable = watchlistRows.some((row) => row.isTodayStatusLoading || row.isTodayStatusUnknown);
   const topTodayItem = todayItems[0];
   const tabs: Array<{ key: HomeWorkspaceTab; label: string }> = [
-    { key: 'history', label: t('watchlist.tabHistory') },
     { key: 'watchlist', label: t('watchlist.tabWatchlist') },
     { key: 'today', label: t('watchlist.tabToday') },
+    { key: 'history', label: t('watchlist.tabHistory') },
   ];
+
+  const matchesMarket = useCallback(
+    (code: string) => marketFilter === 'all' || getStockMarketBucket(code) === marketFilter,
+    [marketFilter],
+  );
+  const activeGroupFilter = useMemo(() => resolveGroupFilter(groupFilter, watchlistGroups), [groupFilter, watchlistGroups]);
+  const activeGroupName = activeGroupFilter.startsWith('group:') ? activeGroupFilter.slice('group:'.length) : null;
+  const newGroupName = normalizeNewGroupName(draftGroupName, watchlistGroups);
+  const visibleWatchlistRows = useMemo(() => sortRows(
+    filterRowsByGroup(watchlistRows, (row) => row.code, activeGroupFilter, watchlistGroups)
+      .filter((row) => matchesMarket(row.code)),
+    listSort,
+    (row) => row.code,
+    (row) => row.latestItem,
+    quotes,
+  ), [activeGroupFilter, listSort, matchesMarket, quotes, watchlistGroups, watchlistRows]);
+  const visibleTodayItems = useMemo(() => sortRows(
+    todayItems.filter((item) => matchesMarket(item.stockCode)),
+    listSort,
+    (item) => item.stockCode,
+    (item) => item,
+    quotes,
+  ), [listSort, matchesMarket, quotes, todayItems]);
+  const visibleHistoryItems = useMemo(() => sortRows(
+    historyItems.filter((item) => item.stockCode === 'MARKET' || matchesMarket(item.stockCode)),
+    listSort,
+    (item) => item.stockCode,
+    (item) => item,
+    quotes,
+  ), [historyItems, listSort, matchesMarket, quotes]);
+
+  const listControls = (
+    <div className="flex flex-wrap items-center justify-between gap-1.5" data-testid="home-list-controls">
+      <Segmented<MarketFilter>
+        size="sm"
+        aria-label={t('watchlist.marketFilterAria')}
+        value={marketFilter}
+        onChange={setMarketFilter}
+        options={[
+          { value: 'all', label: t('watchlist.filterAll') },
+          { value: 'tw', label: t('watchlist.filterTw') },
+          { value: 'us', label: t('watchlist.filterUs') },
+        ]}
+      />
+      <select
+        aria-label={t('watchlist.sortAria')}
+        value={listSort}
+        onChange={(event) => setListSort(event.target.value as ListSort)}
+        className="h-7 rounded-lg border border-subtle bg-base/40 px-1.5 text-xs text-secondary-text"
+      >
+        <option value="default">{t('watchlist.sortDefault')}</option>
+        <option value="change">{t('watchlist.sortChange')}</option>
+        <option value="score">{t('watchlist.sortScore')}</option>
+        <option value="time">{t('watchlist.sortTime')}</option>
+      </select>
+    </div>
+  );
+
+  const saveGroups = (next: WatchlistGroup[]) => {
+    // 失敗由 useWatchlist 的 actionMessage（操作失敗）顯示在面板上方。
+    void onSaveWatchlistGroups?.(next);
+  };
+
+  const handleAddGroup = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!newGroupName) return;
+    saveGroups([...watchlistGroups, { name: newGroupName, codes: [] }]);
+    setDraftGroupName('');
+  };
+
+  const groupSelect = watchlistGroups.length > 0 ? (
+    <select
+      aria-label={t('watchlist.groupFilterAria')}
+      data-testid="watchlist-group-filter"
+      value={activeGroupFilter}
+      onChange={(event) => setGroupFilter(event.target.value as WatchlistGroupFilter)}
+      className="h-7 max-w-[10rem] rounded-lg border border-subtle bg-base/40 px-1.5 text-xs text-secondary-text"
+    >
+      <option value="all">{t('watchlist.groupAll')}</option>
+      {watchlistGroups.map((group) => (
+        <option key={group.name} value={groupFilterValue(group.name)}>{group.name}</option>
+      ))}
+      <option value="ungrouped">{t('watchlist.groupUngrouped')}</option>
+    </select>
+  ) : null;
+
+  const groupEditor = editMode && onSaveWatchlistGroups ? (
+    <div className="flex flex-wrap items-center gap-1.5" data-testid="watchlist-group-editor">
+      <form className="flex min-w-0 flex-1 items-center gap-1.5" onSubmit={handleAddGroup}>
+        <Input
+          value={draftGroupName}
+          onChange={(event) => setDraftGroupName(event.target.value)}
+          placeholder={t('watchlist.groupNamePlaceholder')}
+          aria-label={t('watchlist.groupNamePlaceholder')}
+          className="h-8 rounded-lg px-3 text-xs"
+          disabled={watchlistActioning}
+        />
+        <Button type="submit" size="sm" variant="secondary" disabled={!newGroupName || watchlistActioning}>
+          {t('watchlist.groupAdd')}
+        </Button>
+      </form>
+      {activeGroupName ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={watchlistActioning}
+          onClick={() => saveGroups(watchlistGroups.filter((group) => group.name !== activeGroupName))}
+        >
+          {t('watchlist.groupDelete', { name: activeGroupName })}
+        </Button>
+      ) : null}
+    </div>
+  ) : null;
+
+  const renderGroupControls = (code: string) => {
+    if (!onSaveWatchlistGroups || watchlistGroups.length === 0) return null;
+    const currentGroup = watchlistGroups.find((group) => group.codes.includes(code))?.name ?? '';
+    return (
+      <>
+        {activeGroupName ? (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 shrink-0 px-0"
+              disabled={watchlistActioning}
+              aria-label={t('watchlist.groupMoveUpAria', { code })}
+              onClick={() => saveGroups(moveCodeWithinGroup(watchlistGroups, activeGroupName, code, -1))}
+            >
+              <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 shrink-0 px-0"
+              disabled={watchlistActioning}
+              aria-label={t('watchlist.groupMoveDownAria', { code })}
+              onClick={() => saveGroups(moveCodeWithinGroup(watchlistGroups, activeGroupName, code, 1))}
+            >
+              <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+            </Button>
+          </>
+        ) : null}
+        <select
+          aria-label={t('watchlist.groupMoveAria', { code })}
+          value={currentGroup}
+          disabled={watchlistActioning}
+          onChange={(event) => saveGroups(assignCodeToGroup(watchlistGroups, code, event.target.value || null))}
+          className="h-7 max-w-[6rem] shrink-0 rounded-lg border border-subtle bg-base/40 px-1 text-xs text-secondary-text"
+        >
+          <option value="">{t('watchlist.groupUngrouped')}</option>
+          {watchlistGroups.map((group) => (
+            <option key={group.name} value={group.name}>{group.name}</option>
+          ))}
+        </select>
+      </>
+    );
+  };
+
+  const pinnedMarketReview = marketReviewItem ? (
+    <StockBarItemComponent
+      item={marketReviewItem}
+      isViewing={selectedRecordId === marketReviewItem.id}
+      onClick={onHistoryItemClick}
+      isMarketReview
+      marketLightLabel={marketLightLabel}
+    />
+  ) : null;
 
   const statusClassName = useMemo(() => {
     if (!batchStatus) return '';
@@ -506,7 +667,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
       >
         {renderTabs}
         <StockBar
-          items={historyItems}
+          items={visibleHistoryItems}
           isLoading={isLoadingHistory}
           selectedStockCode={selectedStockCode}
           selectedRecordId={selectedRecordId}
@@ -514,6 +675,9 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
           onDeleteStock={onDeleteStock}
           isDeleting={isDeleting}
           className="flex-1"
+          quotes={quotes}
+          marketLightLabel={marketLightLabel}
+          controls={listControls}
         />
       </div>
     );
@@ -537,10 +701,21 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
               actions={(
                 <div className="flex items-center gap-1.5">
                   <span className="text-[11px] text-muted-text">{t('common.itemsCount', { count: watchlistRows.length })}</span>
+                  {watchlistRows.length > 0 ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-pressed={editMode}
+                      onClick={() => setEditMode((current) => !current)}
+                    >
+                      {editMode ? t('watchlist.editDone') : t('watchlist.edit')}
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     variant="ghost"
-                    size="xsm"
+                    size="sm"
                     className="h-7 w-7 px-0"
                     disabled={watchlistLoading}
                     onClick={() => {
@@ -566,7 +741,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
               <Button
                 type="button"
                 size="sm"
-                variant="home-action-ai"
+                variant="primary"
                 className="h-8 flex-1 whitespace-nowrap px-2 text-xs sm:flex-none"
                 disabled={watchlistLoading || watchlistRows.length === 0 || isBatchAnalyzing}
                 isLoading={isBatchAnalyzing}
@@ -579,7 +754,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
               <Button
                 type="button"
                 size="sm"
-                variant="home-action-report"
+                variant="secondary"
                 className="h-8 flex-1 whitespace-nowrap px-2 text-xs sm:flex-none"
                 disabled={watchlistLoading || pendingWatchlistCount === 0 || isTodayStatusUnavailable || isBatchAnalyzing}
                 onClick={() => void onAnalyzeWatchlist('pending')}
@@ -619,6 +794,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
                 {watchlistMessage}
               </div>
             ) : null}
+            {groupEditor}
             {visibleWorkspaceNotice ? (
               <InlineAlert
                 variant="warning"
@@ -646,6 +822,10 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
             </div>
           </>
         )}
+        {activeTab === 'watchlist' && groupSelect ? (
+          <div className="flex items-center gap-1.5">{groupSelect}</div>
+        ) : null}
+        {listControls}
       </div>
 
       <ScrollArea
@@ -653,6 +833,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
         className="min-h-0 flex-1"
         testId="home-stock-workspace-scroll"
       >
+        {pinnedMarketReview ? <div className="mb-1.5">{pinnedMarketReview}</div> : null}
         {activeTab === 'watchlist' ? (
           watchlistLoading ? (
             <DashboardStateBlock loading compact title={t('watchlist.loading')} />
@@ -664,20 +845,19 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
             />
           ) : (
             <div className="space-y-1.5">
-              <div className="flex items-center gap-2 text-[11px] text-muted-text">
-                <ArrowDownWideNarrow className="h-3.5 w-3.5" aria-hidden="true" />
-                {t('watchlist.listHint')}
-              </div>
-              {watchlistRows.map((row) => (
+              {visibleWatchlistRows.map((row) => (
                 <WatchlistRowItem
                   key={row.code}
                   row={row}
-                  onRemove={async (code) => {
+                  onRequestRemove={(code) => {
                     setWorkspaceNotice(null);
-                    await onRemoveFromWatchlist(code);
+                    setPendingRemoveCode(code);
                   }}
                   onOpenDetail={handleWatchlistRowOpen}
                   disabled={watchlistActioning}
+                  editMode={editMode}
+                  groupControls={renderGroupControls(row.code)}
+                  quote={row.assetType === 'index' ? undefined : quotes?.get(stockQuoteKey(row.code))}
                   selected={
                     (typeof selectedRecordId === 'number' && selectedRecordId === row.latestItem?.id)
                     || (
@@ -707,17 +887,32 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
             description={t('watchlist.todayEmptyDescription')}
           />
         ) : (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-[11px] text-muted-text">
-              <ArrowDownWideNarrow className="h-3.5 w-3.5" aria-hidden="true" />
-              {t('watchlist.todaySortHint')}
-            </div>
-            {todayItems.map((item) => (
-              <TodayItem key={`${item.stockCode}-${item.id}`} item={item} onClick={onHistoryItemClick} />
+          <div className="space-y-1.5">
+            {visibleTodayItems.map((item) => (
+              <TodayItem
+                key={`${item.stockCode}-${item.id}`}
+                item={item}
+                onClick={onHistoryItemClick}
+                quote={quotes?.get(stockQuoteKey(item.stockCode))}
+              />
             ))}
           </div>
         )}
       </ScrollArea>
+      <ConfirmDialog
+        isOpen={pendingRemoveCode !== null}
+        title={t('watchlist.removeConfirmTitle')}
+        message={t('watchlist.removeConfirmMessage', { code: pendingRemoveCode ?? '' })}
+        confirmText={t('common.delete')}
+        isDanger
+        onConfirm={() => {
+          const code = pendingRemoveCode;
+          setPendingRemoveCode(null);
+          // 失敗由 useWatchlist 的 actionMessage（操作失敗）顯示在面板上方。
+          if (code) void onRemoveFromWatchlist(code);
+        }}
+        onCancel={() => setPendingRemoveCode(null)}
+      />
     </aside>
   );
 };

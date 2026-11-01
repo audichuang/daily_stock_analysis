@@ -80,9 +80,21 @@ class FundNavPoint(BaseModel):
     nav: float
 
 
+class FundBenchmarkPoint(BaseModel):
+    date: date
+    close: float
+
+
+class FundBenchmark(BaseModel):
+    index_id: str
+    points: List[FundBenchmarkPoint] = Field(default_factory=list)
+
+
 class FundNavHistoryResponse(BaseModel):
     fund_id: str
     points: List[FundNavPoint] = Field(default_factory=list)
+    benchmark: Optional[FundBenchmark] = None  # 帶 benchmark=taiex 才有；同區間的指數收盤，未重設基期
+    benchmark_error: Optional[str] = None  # source_unavailable | no_data
 
 
 class FundTopHolding(BaseModel):
@@ -90,12 +102,21 @@ class FundTopHolding(BaseModel):
     sector: Optional[str] = None
     weight: Optional[float] = None
     country: Optional[str] = None
+    ledger_symbol: Optional[str] = None  # 名稱唯一對到帳本持股才有；對不到就不標
+
+
+class FundOverlapItem(BaseModel):
+    symbol: str
+    name: Optional[str] = None
+    weight: Optional[float] = None
 
 
 class FundTopHoldingsResponse(BaseModel):
     fund_id: str
     items: List[FundTopHolding] = Field(default_factory=list)
     error: Optional[str] = None  # source_unavailable | not_mapped
+    as_of_month: Optional[str] = None  # 持股資料月份 YYYY-MM；來源沒給為 null
+    overlap: List[FundOverlapItem] = Field(default_factory=list)
 
 
 class FundHoldingCreateRequest(BaseModel):
@@ -131,6 +152,8 @@ class FundHoldingItem(BaseModel):
     market_value: Optional[float] = None
     pnl: Optional[float] = None
     pnl_pct: Optional[float] = None
+    nav_change_pct: Optional[float] = None  # 最新淨值相對前一筆；過期或缺前一筆為 null
+    day_pnl: Optional[float] = None
 
 
 class FundHoldingTotal(BaseModel):
@@ -139,6 +162,7 @@ class FundHoldingTotal(BaseModel):
     market_value: Optional[float] = None
     pnl: Optional[float] = None
     pnl_pct: Optional[float] = None
+    day_pnl: Optional[float] = None  # 有一檔算不出就是 null
 
 
 class FundHoldingListResponse(BaseModel):

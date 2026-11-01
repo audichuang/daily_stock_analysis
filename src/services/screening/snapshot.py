@@ -74,6 +74,8 @@ def fetch_snapshot_with_fallback(
     """Try live sources, optionally falling back to the last-good snapshot."""
     if market == "us":
         return _fetch_us_snapshot_with_fallback(required_columns)
+    if market == "tw":
+        return _fetch_tw_snapshot(required_columns)
 
     errors = []
     required = required_columns or []
@@ -145,6 +147,25 @@ def _fetch_us_snapshot_with_fallback(
     missing = _missing_required_columns(df, required_columns or [])
     if missing:
         logger.warning("US snapshot missing columns: %s", ",".join(missing))
+    return df
+
+
+def _fetch_tw_snapshot(required_columns: list[str] | None = None) -> pd.DataFrame:
+    """台股快照讀 market schema（唯一資料源）；讀不到就 raise，不退回 A 股來源。"""
+    from market_data.tw_prescreen import load_tw_snapshot
+    from src.data.stock_index_loader import get_index_stock_name
+
+    df = load_tw_snapshot()
+    attrs = dict(df.attrs)
+    # 映像沒有種子檔，上櫃名稱 stock_info 也沒有，改查股票索引。
+    missing = df["name"] == ""
+    if missing.any():
+        df.loc[missing, "name"] = df.loc[missing, "code"].map(lambda code: get_index_stock_name(code) or code)
+    df.attrs.update(attrs)
+    df.attrs["universe_size"] = len(df)
+    absent = _missing_required_columns(df, required_columns or [])
+    if absent:
+        logger.warning("TW snapshot missing columns: %s", ",".join(absent))
     return df
 
 

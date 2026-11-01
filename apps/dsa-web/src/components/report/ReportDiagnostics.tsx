@@ -331,10 +331,10 @@ export const ReportDiagnostics: React.FC<ReportDiagnosticsProps> = ({
   };
 
   return (
-    <Card variant="bordered" padding="none" className="home-panel-card text-left">
+    <Card variant="surface" padding="none" className="home-panel-card text-left">
       <details data-testid="run-diagnostics" className="group">
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3">
-          <div className="flex min-w-0 items-center gap-3">
+        <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="flex min-w-[10rem] flex-1 items-center gap-3">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-cyan/10 text-cyan">
               <Activity className="h-4 w-4" aria-hidden="true" />
             </span>
@@ -345,7 +345,7 @@ export const ReportDiagnostics: React.FC<ReportDiagnosticsProps> = ({
               </span>
             </span>
           </div>
-          <span className="flex shrink-0 items-center gap-2">
+          <span className="flex min-w-0 flex-wrap items-center justify-end gap-2">
             {isLoading ? (
               <span className="home-spinner h-3.5 w-3.5 animate-spin border-2" aria-hidden="true" />
             ) : null}
@@ -393,7 +393,7 @@ export const ReportDiagnostics: React.FC<ReportDiagnosticsProps> = ({
               {recordId !== undefined && onOpenRunFlow ? (
                 <Button
                   variant="ghost"
-                  size="xsm"
+                  size="sm"
                   onClick={() => onOpenRunFlow(recordId)}
                   aria-label={formatUiText(runFlowText['runFlow.openHistoryAria'], { recordId })}
                 >
@@ -403,7 +403,7 @@ export const ReportDiagnostics: React.FC<ReportDiagnosticsProps> = ({
               ) : null}
               <Button
                 variant="ghost"
-                size="xsm"
+                size="sm"
                 disabled={!hasCopyText}
                 onClick={() => void copyDiagnostics()}
                 aria-label={copied ? text.copied : text.copy}

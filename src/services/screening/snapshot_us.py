@@ -14,13 +14,16 @@ rather than silently screening the US pool.
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from io import StringIO
 import pandas as pd
+import requests
 
 from src.core.trading_calendar import MARKET_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
 _SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+_SP500_USER_AGENT = "daily-stock-analysis/1.0 (+https://github.com/audichuang/daily_stock_analysis)"
 
 _DEFAULT_US_UNIVERSE = [
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B",
@@ -33,7 +36,12 @@ _DEFAULT_US_UNIVERSE = [
 
 
 def fetch_us_universe(source: str = "auto") -> list[str]:
-    """Return a list of US equity tickers.
+    """Return a list of US equity tickers; see ``resolve_us_universe``."""
+    return resolve_us_universe(source)[0]
+
+
+def resolve_us_universe(source: str = "auto") -> tuple[list[str], str]:
+    """Return ``(tickers, 實際來源)``；auto 會靜默退回，畫面要標示實際母體。
 
     Sources:
         sp500   — scrape S&P 500 from Wikipedia
@@ -45,29 +53,32 @@ def fetch_us_universe(source: str = "auto") -> list[str]:
     if src == "auto":
         for s in ("sp500", "env", "default"):
             try:
-                tickers = fetch_us_universe(s)
+                tickers, _ = resolve_us_universe(s)
                 if tickers:
                     logger.info("US universe from %s: %d tickers", s, len(tickers))
-                    return tickers
+                    return tickers, s
             except Exception as e:
                 logger.debug("US universe source %s failed: %s", s, e)
-        return list(_DEFAULT_US_UNIVERSE)
+        return list(_DEFAULT_US_UNIVERSE), "default"
 
     if src == "sp500":
-        return _fetch_sp500_tickers()
+        return _fetch_sp500_tickers(), "sp500"
     elif src == "env":
         raw = os.getenv("SCREENING_US_TICKERS", "").strip()
         if not raw:
             raise ValueError("SCREENING_US_TICKERS not set")
-        return [t.strip() for t in raw.split(",") if t.strip()]
+        return [t.strip() for t in raw.split(",") if t.strip()], "env"
     elif src == "default":
-        return list(_DEFAULT_US_UNIVERSE)
+        return list(_DEFAULT_US_UNIVERSE), "default"
     else:
         raise ValueError(f"Unknown US universe source: {source}")
 
 
 def _fetch_sp500_tickers() -> list[str]:
-    tables = pd.read_html(_SP500_WIKI_URL)
+    # 維基百科會以 403 擋 Python 預設 User-Agent，靜默退回內建清單後母體只剩約 50 檔。
+    response = requests.get(_SP500_WIKI_URL, headers={"User-Agent": _SP500_USER_AGENT}, timeout=20)
+    response.raise_for_status()
+    tables = pd.read_html(StringIO(response.text))
     for tbl in tables:
         if "Symbol" in tbl.columns:
             return sorted(tbl["Symbol"].dropna().str.strip().str.replace(".", "-", regex=False).tolist())
@@ -89,8 +100,9 @@ def fetch_us_snapshot(
     """
     import yfinance as yf
 
+    actual_universe = "explicit"
     if tickers is None:
-        tickers = fetch_us_universe(universe_source)
+        tickers, actual_universe = resolve_us_universe(universe_source)
 
     logger.info("Fetching US snapshot for %d tickers", len(tickers))
 
@@ -184,6 +196,8 @@ def fetch_us_snapshot(
     _enrich_info_fields(df)
 
     df.attrs["snapshot_source"] = "yfinance"
+    df.attrs["universe_source"] = actual_universe
+    df.attrs["universe_size"] = len(tickers)
     logger.info("US snapshot: %d rows from yfinance", len(df))
     return df
 

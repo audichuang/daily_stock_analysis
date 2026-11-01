@@ -2055,3 +2055,16 @@ def test_japanese_market_share_image_uses_korean_report_font_contract():
     assert 'html[lang="ko"] body' in html
     assert '"Noto Sans CJK KR"' in html
     assert "日経平均株価" in html
+
+
+def test_poster_recognizes_zh_tw_action_words():
+    from src.share_image import _compact_position, _tone_for_action
+
+    for word in ("買進", "買入", "加碼", "加仓"):
+        assert _tone_for_action(word) == "positive", word
+    for word in ("賣出", "減碼", "減倉", "迴避", "回避"):
+        assert _tone_for_action(word) == "negative", word
+    for word in ("續抱", "觀望"):
+        assert _tone_for_action(word) == "primary", word
+    assert _compact_position("反彈至 110 附近減碼，跌破 95 停損", holding=True).startswith("反弹至 110 附近减仓")
+    assert _compact_position("不建議買進", holding=False) == "暂不建仓"

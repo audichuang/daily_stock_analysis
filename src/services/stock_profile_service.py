@@ -3,25 +3,23 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import logging
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from data_provider.base import canonical_stock_code
-from src.analysis_context_pack_overview import extract_analysis_context_pack_overview
 from src.repositories.portfolio_repo import PortfolioRepository
-from src.core.trading_calendar import latest_opened_session
+from src.core.trading_calendar import MarketPhase, infer_market_phase, latest_opened_session
 from src.services.alert_service import AlertService
 from src.services.event_outlook import extract_event_outlook
 from src.services.history_service import HistoryService
 from src.services.intelligence_service import IntelligenceService
 from src.services.market_symbol_utils import get_suffix_market
-from src.services.research_artifact_service import build_research_artifact
+from src.services.research_artifact_service import artifact_input_from_detail, build_research_artifact
 from src.services.stock_code_utils import resolve_daily_stock_identity
 from src.services.stock_service import StockService
-from src.utils.data_processing import (
-    extract_fundamental_detail_fields,
-    extract_market_structure_detail_field,
-)
+
+logger = logging.getLogger(__name__)
 
 _BLOCK_NAMES = ("quote", "history", "research", "intelligence", "portfolio", "monitors")
 
@@ -60,6 +58,7 @@ class StockProfileService:
             "monitors": self._monitor_block(canonical_code, market=market),
         }
         blocks["history"] = self._with_provisional_bar(blocks["history"], blocks["quote"], market=market)
+        blocks["quote"] = self._with_official_session_volume(blocks["quote"], blocks["history"], market=market)
         return {
             "requested_code": str(requested_code).strip(),
             "canonical_code": canonical_code,
@@ -67,6 +66,12 @@ class StockProfileService:
             "as_of": datetime.now().astimezone().isoformat(),
             **blocks,
             "evidence_quality": self._evidence_quality(blocks),
+            # 追加區塊不進 _BLOCK_NAMES：缺資料回 null，不改變既有的品質判定。
+            "position": self._position_block(canonical_code, market=market, quote=blocks["quote"])
+            if blocks["portfolio"]["data"].get("held")
+            else None,
+            "chips": self._chips_block(canonical_code) if market == "tw" else None,
+            "news": self._news_block(blocks["research"]),
         }
 
     @staticmethod
@@ -147,6 +152,156 @@ class StockProfileService:
             "provisional": True,
         }
         return {**history, "data": [*rows, bar]}
+
+    @staticmethod
+    def _with_official_session_volume(
+        quote: Dict[str, Any],
+        history: Dict[str, Any],
+        *,
+        market: str,
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """台股收盤後，同一場次的日 K 已入庫時，頁首的量與額改用日 K，同頁只留一個口徑。
+
+        盤中日 K 不是完整一天，維持即時值。只有這條路徑（profile）會對齊，單獨打 /quote 不變。
+        """
+        data = quote.get("data") or {}
+        rows = history.get("data") or []
+        if market != "tw" or not rows or not data.get("as_of") or rows[-1].get("provisional"):
+            return quote
+        try:
+            as_of = datetime.fromisoformat(str(data["as_of"]))
+        except ValueError:
+            return quote
+        session = latest_opened_session(market, as_of)
+        phase = infer_market_phase(market, now or datetime.now().astimezone())
+        if (
+            session is None
+            or session.isoformat() != str(rows[-1].get("date"))
+            or phase not in {MarketPhase.POSTMARKET, MarketPhase.NON_TRADING}
+        ):
+            return quote
+        merged = dict(data)
+        for key in ("volume", "amount"):
+            if rows[-1].get(key):
+                merged[key] = rows[-1][key]
+        return {**quote, "data": merged}
+
+    def _position_block(self, code: str, *, market: str, quote: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """從帳本重放算持股（唯讀、不抓即時價、不寫快照）；損益用頁首同一個即時價。"""
+        try:
+            from src.services.portfolio_service import PortfolioService
+
+            snapshot = PortfolioService(repo=self._portfolio_repository()).get_portfolio_snapshot(
+                include_realtime=False,
+                read_only=True,
+            )
+            profile_identity = resolve_daily_stock_identity(code, market_hint=market)
+            matched = []
+            mv_aggregate = 0.0
+            for account in snapshot.get("accounts") or []:
+                account_mv = float(account.get("total_market_value") or 0.0)
+                account_aggregate = account.get("total_market_value_aggregate")
+                for position in account.get("positions") or []:
+                    pos_market = str(position.get("market") or "").strip().lower()
+                    identity = resolve_daily_stock_identity(position.get("symbol"), market_hint=pos_market)
+                    if (
+                        identity is None
+                        or identity.market != market
+                        or not self._same_profile_identity(identity, profile_identity)
+                    ):
+                        continue
+                    matched.append(position)
+                    if mv_aggregate is not None:
+                        if account_aggregate is None or account_mv <= 0:
+                            mv_aggregate = None
+                        else:
+                            mv_aggregate += float(position.get("market_value_base") or 0.0) * (
+                                float(account_aggregate) / account_mv
+                            )
+            if not matched:
+                return None
+            quantity = sum(float(p.get("quantity") or 0.0) for p in matched)
+            if quantity <= 0:
+                return None
+            currencies = {str(p.get("currency") or "") for p in matched}
+            single_currency = currencies.pop() if len(currencies) == 1 else None
+            avg_cost = (
+                sum(float(p.get("total_cost") or 0.0) for p in matched) / quantity if single_currency else None
+            )
+            quote_price = (quote.get("data") or {}).get("current_price")
+            available = [p for p in matched if p.get("price_available")]
+            last_price = quote_price or (float(available[0]["last_price"]) if available else None)
+            has_pnl = bool(last_price and avg_cost is not None)
+            total_mv = float(snapshot.get("total_market_value") or 0.0)
+            weight = (
+                round(mv_aggregate / total_mv * 100, 2)
+                if mv_aggregate is not None and total_mv > 0 and not snapshot.get("fx_missing") and available
+                else None
+            )
+            return {
+                "quantity": quantity,
+                "avg_cost": round(avg_cost, 4) if avg_cost is not None else None,
+                "currency": single_currency or None,
+                "last_price": last_price,
+                "market_value": round(last_price * quantity, 2) if last_price and single_currency else None,
+                "unrealized_pnl": round((last_price - avg_cost) * quantity, 2) if has_pnl else None,
+                "unrealized_pnl_pct": (
+                    round((last_price / avg_cost - 1) * 100, 2) if has_pnl and avg_cost > 0 else None
+                ),
+                "weight_pct": weight,
+                "account_count": len(matched),
+            }
+        except Exception as exc:
+            logger.warning("個股 profile 持股區塊失敗 %s: %s", code, type(exc).__name__)
+            return None
+
+    @staticmethod
+    def _chips_block(code: str) -> Optional[Dict[str, Any]]:
+        """本地 DB 的法人與融資融券（各自的最新場次，日期分開給）。兩塊都沒有才回 None。"""
+        try:
+            from data_provider.tw_margin_trend import compute_margin_trend
+            from market_data import market_repo
+            from market_data.db import get_engine
+
+            engine = get_engine(statement_timeout_ms=3000)
+            stock_id = code.split(".", 1)[0]
+            start = (datetime.now().astimezone().date() - timedelta(days=60)).isoformat()
+            institutional = market_repo.institutional(stock_id, start=start, engine=engine)
+            margin_rows = market_repo.margin(stock_id, start=start, engine=engine).to_dict("records")
+        except Exception as exc:
+            logger.warning("個股 profile 籌碼區塊失敗 %s: %s", code, type(exc).__name__)
+            return None
+        chips: Dict[str, Any] = {}
+        if not institutional.empty:
+            latest = institutional.iloc[-1]
+            chips["institutional_date"] = str(latest["date"])[:10]
+            for key in ("foreign_net", "trust_net", "dealer_net", "total_net"):
+                value = latest.get(key)
+                chips[key] = None if value is None or value != value else float(value)
+        margin = compute_margin_trend(margin_rows)
+        if margin:
+            chips["margin_date"] = margin.get("as_of")
+            for key in ("margin_balance", "margin_chg_5", "margin_chg_20", "short_balance", "short_margin_ratio"):
+                chips[key] = margin.get(key)
+        return chips or None
+
+    def _news_block(self, research: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+        """最新一份報告讀過的新聞，與報告頁同一條查詢。"""
+        latest = ((research.get("data") or {}).get("latest_report")) or {}
+        record_id = latest.get("id")
+        if record_id is None:
+            return None
+        try:
+            items = self._history_service().resolve_and_get_news(str(record_id), limit=10, analysis_only=True)
+        except Exception:
+            return None
+        if not isinstance(items, list):
+            return None
+        return [
+            {key: item.get(key) for key in ("title", "url", "source", "published_date")}
+            for item in items
+        ]
 
     def _research_block(self, code: str, *, market: str) -> Dict[str, Any]:
         empty_data = {"latest_report": None, "recent_reports": [], "structured_report": None, "event_outlook": None}
@@ -397,17 +552,6 @@ class StockProfileService:
         return aliases
 
     def _artifact_input(self, detail: Dict[str, Any]) -> Dict[str, Any]:
-        context_snapshot = detail.get("context_snapshot")
-        raw_result = detail.get("raw_result")
-        raw_fundamental = (
-            raw_result.get("fundamental_context") or raw_result
-            if isinstance(raw_result, dict)
-            else None
-        )
-        extracted_fundamental = extract_fundamental_detail_fields(
-            context_snapshot,
-            raw_fundamental,
-        )
         try:
             persisted_fundamental = self._history_service().get_latest_fundamental_snapshot(
                 query_id=str(detail.get("query_id") or "").strip(),
@@ -417,50 +561,7 @@ class StockProfileService:
             )
         except Exception:
             persisted_fundamental = None
-        persisted_fields = extract_fundamental_detail_fields(
-            None,
-            persisted_fundamental,
-        )
-        context_overview = extract_analysis_context_pack_overview(context_snapshot)
-        market_structure = extract_market_structure_detail_field(
-            context_snapshot,
-            raw_result,
-        )
-        return {
-            "meta": {
-                "id": detail.get("id"),
-                "query_id": detail.get("query_id"),
-                "stock_code": detail.get("stock_code"),
-                "stock_name": detail.get("stock_name"),
-                "created_at": detail.get("created_at"),
-            },
-            "summary": {
-                "analysis_summary": detail.get("analysis_summary"),
-                "operation_advice": detail.get("operation_advice"),
-                "action": detail.get("action"),
-                "action_label": detail.get("action_label"),
-                "trend_prediction": detail.get("trend_prediction"),
-                "sentiment_score": detail.get("sentiment_score"),
-            },
-            "strategy": {
-                "ideal_buy": detail.get("ideal_buy"),
-                "secondary_buy": detail.get("secondary_buy"),
-                "stop_loss": detail.get("stop_loss"),
-                "take_profit": detail.get("take_profit"),
-            },
-            "details": {
-                "news_content": detail.get("news_content"),
-                "empty_news_disclosure": detail.get("empty_news_disclosure"),
-                "analysis_context_pack_overview": context_overview,
-                "financial_report": detail.get("financial_report")
-                or extracted_fundamental.get("financial_report")
-                or persisted_fields.get("financial_report"),
-                "dividend_metrics": detail.get("dividend_metrics")
-                or extracted_fundamental.get("dividend_metrics")
-                or persisted_fields.get("dividend_metrics"),
-                "market_structure": detail.get("market_structure") or market_structure,
-            },
-        }
+        return artifact_input_from_detail(detail, persisted_fundamental=persisted_fundamental)
 
     def _stock_service(self) -> StockService:
         if self.stock_service is None:

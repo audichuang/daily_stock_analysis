@@ -41,6 +41,7 @@ from sqlalchemy import (
     text,
     select,
     and_,
+    case,
     or_,
     delete,
     desc,
@@ -117,6 +118,26 @@ class CalendarEventRecord(Base):
     timezone = Column(String(40), nullable=False)
     date_kind = Column(String(32), nullable=False, default="release")
     updated_at = Column(DateTime, nullable=False, default=utc_naive_now)
+
+
+class FinancialCommentaryRecord(Base):
+    """財報 AI 導讀快取：同一檔、同一財報期間、同一份數字只生成一次。"""
+
+    __tablename__ = 'financial_commentary'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code = Column(String(32), nullable=False)
+    period_key = Column(String(16), nullable=False)
+    source = Column(String(48), nullable=False)
+    prompt_version = Column(String(16), nullable=False)
+    data_hash = Column(String(64), nullable=False)
+    content = Column(Text, nullable=False)
+    model = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utc_naive_now)
+
+    __table_args__ = (
+        UniqueConstraint('stock_code', 'period_key', 'source', 'prompt_version', 'data_hash',
+                         name='uix_financial_commentary_identity'),
+    )
 
 
 class StockDaily(Base):
@@ -1489,6 +1510,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             self._ensure_intelligence_items_unique_index()
             self._ensure_chat_session_schema()
             self._ensure_calendar_event_schema()
+            self._ensure_financial_commentary_schema()
             self._ensure_news_intel_link_schema()
 
             self._initialized = True
@@ -1552,6 +1574,53 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         self._ensure_schema_migration_record(
             version="2026-11-01-calendar-events",
             description="Add application calendar cache (including undated earnings)",
+        )
+
+    def get_financial_commentary(self, *, stock_code: str, period_key: str, source: str,
+                                 prompt_version: str, data_hash: str) -> Optional[Dict[str, Any]]:
+        """財報導讀快取查詢；內容壞掉視為沒有，呼叫端會重新生成。"""
+        with self.session_scope() as session:
+            record = session.execute(select(FinancialCommentaryRecord).where(
+                FinancialCommentaryRecord.stock_code == stock_code,
+                FinancialCommentaryRecord.period_key == period_key,
+                FinancialCommentaryRecord.source == source,
+                FinancialCommentaryRecord.prompt_version == prompt_version,
+                FinancialCommentaryRecord.data_hash == data_hash,
+            )).scalars().first()
+            if record is None:
+                return None
+            try:
+                content = json.loads(record.content)
+            except ValueError:
+                logger.warning("財報導讀快取內容損壞: %s %s", stock_code, period_key)
+                return None
+            return {"content": content, "model": record.model,
+                    "created_at": record.created_at.isoformat() if record.created_at else None}
+
+    def save_financial_commentary(self, *, stock_code: str, period_key: str, source: str, prompt_version: str,
+                                  data_hash: str, content: Dict[str, Any], model: Optional[str]) -> None:
+        """同鍵已有列就覆寫：走到這裡代表舊列已被判定不可用（如引用的月營收已更正），留著會讓每次開頁都重付 LLM。"""
+        body = json.dumps(content, ensure_ascii=False)
+        short_model = (model or "")[:128] or None
+        try:
+            with self.session_scope() as session:
+                session.add(FinancialCommentaryRecord(
+                    stock_code=stock_code, period_key=period_key, source=source, prompt_version=prompt_version,
+                    data_hash=data_hash, content=body, model=short_model,
+                ))
+        except IntegrityError:
+            with self.session_scope() as session:
+                session.query(FinancialCommentaryRecord).filter_by(
+                    stock_code=stock_code, period_key=period_key, source=source,
+                    prompt_version=prompt_version, data_hash=data_hash,
+                ).update({"content": body, "model": short_model, "created_at": utc_naive_now()})
+
+    def _ensure_financial_commentary_schema(self) -> None:
+        """可重入的追加 migration；既有應用庫只建新表。"""
+        FinancialCommentaryRecord.__table__.create(self._engine, checkfirst=True)
+        self._ensure_schema_migration_record(
+            version="2026-11-01-financial-commentary",
+            description="Add financial commentary cache",
         )
 
     def _ensure_chat_session_schema(self) -> None:
@@ -3352,7 +3421,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         offset: int = 0,
-        limit: int = 20
+        limit: int = 20,
+        name_query: Optional[str] = None,
     ) -> Tuple[List[AnalysisHistory], int]:
         """
         分页查询分析历史记录（带总数）
@@ -3364,6 +3434,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             end_date: 结束日期（含）
             offset: 偏移量（跳过前 N 条）
             limit: 每页数量
+            name_query: 代號或名稱關鍵字（不分大小寫）
             
         Returns:
             Tuple[List[AnalysisHistory], int]: (记录列表, 总数)
@@ -3371,26 +3442,9 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         from sqlalchemy import func
         
         with self.get_session() as session:
-            conditions = []
-            
-            if code:
-                if isinstance(code, list):
-                    codes = [c for c in code if c]
-                    if codes:
-                        conditions.append(AnalysisHistory.code.in_(codes))
-                else:
-                    conditions.append(AnalysisHistory.code == code)
-            if report_type:
-                conditions.append(AnalysisHistory.report_type == report_type)
-            if start_date:
-                # created_at >= start_date 00:00:00
-                conditions.append(AnalysisHistory.created_at >= datetime.combine(start_date, datetime.min.time()))
-            if end_date:
-                # created_at < end_date+1 00:00:00 (即 <= end_date 23:59:59)
-                conditions.append(AnalysisHistory.created_at < datetime.combine(end_date + timedelta(days=1), datetime.min.time()))
-            
-            # 构建 where 子句
-            where_clause = and_(*conditions) if conditions else True
+            where_clause = self._analysis_history_where(
+                code, report_type, start_date, end_date, name_query
+            )
             
             # 查询总数
             total_query = select(func.count(AnalysisHistory.id)).where(where_clause)
@@ -3407,6 +3461,130 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             results = session.execute(data_query).scalars().all()
 
             return list(results), total
+
+    @staticmethod
+    def _analysis_history_where(
+        code: Optional[Union[str, List[str]]] = None,
+        report_type: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        name_query: Optional[str] = None,
+    ) -> Any:
+        conditions = []
+
+        if code:
+            if isinstance(code, list):
+                codes = [c for c in code if c]
+                if codes:
+                    conditions.append(AnalysisHistory.code.in_(codes))
+            else:
+                conditions.append(AnalysisHistory.code == code)
+        if report_type:
+            conditions.append(AnalysisHistory.report_type == report_type)
+        if start_date:
+            # created_at >= start_date 00:00:00
+            conditions.append(AnalysisHistory.created_at >= datetime.combine(start_date, datetime.min.time()))
+        if end_date:
+            # created_at < end_date+1 00:00:00 (即 <= end_date 23:59:59)
+            conditions.append(AnalysisHistory.created_at < datetime.combine(end_date + timedelta(days=1), datetime.min.time()))
+        keyword = (name_query or "").strip()
+        if keyword:
+            # 使用者輸入的 % 與 _ 是字面值，不是萬用字元。
+            escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            conditions.append(or_(
+                AnalysisHistory.code.ilike(pattern, escape="\\"),
+                AnalysisHistory.name.ilike(pattern, escape="\\"),
+            ))
+
+        return and_(*conditions) if conditions else True
+
+    def get_analysis_history_filter_rows(
+        self,
+        *,
+        code: Optional[Union[str, List[str]]] = None,
+        report_type: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        name_query: Optional[str] = None,
+        include_raw_result: bool = False,
+    ) -> List[Any]:
+        """只取篩選需要的欄位（新到舊）。
+
+        動作是由 raw_result 與評分算出來的，SQL 篩不了；這裡不載入 context_snapshot 這種大欄位，
+        比對完再用 get_analysis_history_by_ids 取當頁完整資料。
+        """
+        columns = [
+            AnalysisHistory.id,
+            AnalysisHistory.code,
+            AnalysisHistory.report_type,
+            AnalysisHistory.sentiment_score,
+            AnalysisHistory.operation_advice,
+        ]
+        if include_raw_result:
+            columns.append(AnalysisHistory.raw_result)
+        with self.get_session() as session:
+            query = (
+                select(*columns)
+                .where(self._analysis_history_where(code, report_type, start_date, end_date, name_query))
+                .order_by(desc(AnalysisHistory.created_at), desc(AnalysisHistory.id))
+            )
+            return list(session.execute(query).all())
+
+    def get_analysis_history_by_ids(self, record_ids: List[int]) -> List[AnalysisHistory]:
+        """依傳入順序回傳；查無的 id 略過。"""
+        if not record_ids:
+            return []
+        with self.get_session() as session:
+            rows = session.execute(
+                select(AnalysisHistory).where(AnalysisHistory.id.in_(record_ids))
+            ).scalars().all()
+        by_id = {row.id: row for row in rows}
+        return [by_id[record_id] for record_id in record_ids if record_id in by_id]
+
+    def count_analysis_history_by_kind(
+        self,
+        *,
+        code: Optional[Union[str, List[str]]] = None,
+        report_type: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        name_query: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """相同篩選條件下，個股報告與大盤複盤各幾筆。"""
+        from sqlalchemy import func
+
+        with self.get_session() as session:
+            rows = session.execute(
+                select(AnalysisHistory.report_type, func.count(AnalysisHistory.id))
+                .where(self._analysis_history_where(code, report_type, start_date, end_date, name_query))
+                .group_by(AnalysisHistory.report_type)
+            ).all()
+        market_review = sum(count for kind, count in rows if kind == "market_review")
+        stock = sum(count for kind, count in rows if kind != "market_review")
+        return {"stock": stock, "market_review": market_review}
+
+    def get_previous_analysis_history(
+        self,
+        codes: List[str],
+        *,
+        before_created_at: datetime,
+    ) -> Optional[AnalysisHistory]:
+        """取同一組代號在指定時間之前最新的一筆；沒有回 None。"""
+        codes = [code for code in codes if code]
+        if not codes:
+            return None
+        with self.get_session() as session:
+            query = (
+                select(AnalysisHistory)
+                .where(and_(
+                    AnalysisHistory.code.in_(codes),
+                    AnalysisHistory.created_at < before_created_at,
+                ))
+                .order_by(desc(AnalysisHistory.created_at), desc(AnalysisHistory.id))
+                .limit(1)
+            )
+            return session.execute(query).scalars().first()
 
     def get_analysis_counts_by_code(
         self, codes: Optional[List[str]] = None
@@ -4668,6 +4846,17 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 .limit(limit)
             )
             rows = session.execute(stmt).all()
+            # 會話目前對準的個股；沒有狀態列或還沒對準個股就是 None。
+            active_stocks = {
+                state_row.session_id: state_row
+                for state_row in session.execute(
+                    select(
+                        ConversationSessionState.session_id,
+                        ConversationSessionState.active_stock_code,
+                        ConversationSessionState.active_stock_name,
+                    ).where(ConversationSessionState.session_id.in_([row.session_id for row in rows]))
+                ).all()
+            }
 
             results = []
             for row in rows:
@@ -4692,6 +4881,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     "message_count": row.message_count,
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                     "last_active": row.last_active.isoformat() if row.last_active else None,
+                    "stock_code": active_stocks[sid].active_stock_code if sid in active_stocks else None,
+                    "stock_name": active_stocks[sid].active_stock_name if sid in active_stocks else None,
                 })
             return results
 
@@ -4870,14 +5061,22 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         from_dt: datetime,
         to_dt: datetime,
         limit: int = 50,
+        offset: int = 0,
+        call_type: Optional[str] = None,
+        sort: str = "newest",
     ) -> List[Dict[str, Any]]:
-        """Return recent LLM usage audit rows between from_dt and to_dt.
+        """Return LLM usage audit rows between from_dt and to_dt.
 
         Each row contains id, call_type, model, stock_code, prompt_tokens,
-        completion_tokens, total_tokens, and called_at. Results are ordered by
-        newest call first, and limit is clamped to the public API range.
+        completion_tokens, total_tokens, and called_at, plus provider, transport
+        and cache_read_tokens. Newest call first unless ``sort`` is ``oldest``
+        or ``tokens``; limit is clamped to the public API range.
         """
         normalized_limit = max(1, min(int(limit or 50), 200))
+        order_by = {
+            "oldest": (LLMUsage.called_at, LLMUsage.id),
+            "tokens": (desc(LLMUsage.total_tokens), desc(LLMUsage.called_at), desc(LLMUsage.id)),
+        }.get(sort, (desc(LLMUsage.called_at), desc(LLMUsage.id)))
         with self.session_scope() as session:
             rows = session.execute(
                 select(
@@ -4889,14 +5088,13 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     LLMUsage.completion_tokens,
                     LLMUsage.total_tokens,
                     LLMUsage.called_at,
+                    LLMUsage.provider,
+                    LLMUsage.transport,
+                    LLMUsage.normalized_cache_read_tokens,
                 )
-                .where(
-                    and_(
-                        LLMUsage.called_at >= from_dt,
-                        LLMUsage.called_at <= to_dt,
-                    )
-                )
-                .order_by(desc(LLMUsage.called_at), desc(LLMUsage.id))
+                .where(self._llm_usage_filter(from_dt, to_dt, call_type))
+                .order_by(*order_by)
+                .offset(max(int(offset or 0), 0))
                 .limit(normalized_limit)
             ).all()
 
@@ -4910,6 +5108,70 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 "completion_tokens": r.completion_tokens,
                 "total_tokens": r.total_tokens,
                 "called_at": r.called_at,
+                "provider": r.provider,
+                "transport": r.transport,
+                "cache_read_tokens": r.normalized_cache_read_tokens,
+            }
+            for r in rows
+        ]
+
+    @staticmethod
+    def _llm_usage_filter(from_dt: datetime, to_dt: datetime, call_type: Optional[str] = None):
+        conditions = [LLMUsage.called_at >= from_dt, LLMUsage.called_at <= to_dt]
+        if call_type:
+            conditions.append(LLMUsage.call_type == call_type)
+        return and_(*conditions)
+
+    def count_llm_usage_records(
+        self,
+        from_dt: datetime,
+        to_dt: datetime,
+        call_type: Optional[str] = None,
+    ) -> int:
+        """Return how many audit rows match, for paginating the record list."""
+        with self.session_scope() as session:
+            count = session.execute(
+                select(func.count(LLMUsage.id)).where(self._llm_usage_filter(from_dt, to_dt, call_type))
+            ).scalar()
+        return int(count or 0)
+
+    def get_llm_usage_breakdown(self, from_dt: datetime, to_dt: datetime) -> List[Dict[str, Any]]:
+        """Return token totals grouped by day, model and channel; see llm_usage_analytics."""
+        day = func.date(LLMUsage.called_at)
+        # 只算有回報快取讀數的呼叫：沒回報是不知道，不能算成沒命中而拉低命中率。
+        cache_known_prompt = func.sum(
+            case((LLMUsage.normalized_cache_read_tokens.is_not(None), LLMUsage.prompt_tokens), else_=0)
+        )
+        with self.session_scope() as session:
+            rows = session.execute(
+                select(
+                    day.label("day"),
+                    LLMUsage.model,
+                    LLMUsage.provider,
+                    LLMUsage.transport,
+                    func.count(LLMUsage.id).label("calls"),
+                    func.coalesce(func.sum(LLMUsage.prompt_tokens), 0).label("prompt_tokens"),
+                    func.coalesce(func.sum(LLMUsage.completion_tokens), 0).label("completion_tokens"),
+                    func.coalesce(func.sum(LLMUsage.total_tokens), 0).label("total_tokens"),
+                    func.coalesce(func.sum(LLMUsage.normalized_cache_read_tokens), 0).label("cache_read_tokens"),
+                    func.coalesce(cache_known_prompt, 0).label("cache_known_prompt_tokens"),
+                )
+                .where(self._llm_usage_filter(from_dt, to_dt))
+                .group_by(day, LLMUsage.model, LLMUsage.provider, LLMUsage.transport)
+                .order_by(day)
+            ).all()
+        return [
+            {
+                "day": str(r.day),
+                "model": r.model,
+                "provider": r.provider,
+                "transport": r.transport,
+                "calls": int(r.calls),
+                "prompt_tokens": int(r.prompt_tokens),
+                "completion_tokens": int(r.completion_tokens),
+                "total_tokens": int(r.total_tokens),
+                "cache_read_tokens": int(r.cache_read_tokens),
+                "cache_known_prompt_tokens": int(r.cache_known_prompt_tokens),
             }
             for r in rows
         ]

@@ -24,6 +24,8 @@ except ModuleNotFoundError:
 import src.auth as auth
 from api.app import create_app
 from src.config import Config
+from src.repositories.portfolio_repo import PortfolioRepository
+from src.services.portfolio_risk_service import PortfolioRiskService
 from src.services.portfolio_service import PortfolioBusyError, PortfolioService
 from src.storage import DatabaseManager
 
@@ -990,6 +992,211 @@ class PortfolioApiTestCase(unittest.TestCase):
         self.assertIn("huatai", brokers)
         self.assertIn("citic", brokers)
         self.assertIn("cmb", brokers)
+
+    def _save_fx(self, from_currency: str, to_currency: str, rate: float) -> None:
+        PortfolioRepository(self.db).save_fx_rate(
+            from_currency=from_currency,
+            to_currency=to_currency,
+            rate_date=date(2026, 1, 5),
+            rate=rate,
+        )
+
+    def _snapshot(self, as_of: str = "2026-01-06", **params):
+        response = self.client.get(
+            "/api/v1/portfolio/snapshot",
+            params={"as_of": as_of, "include_realtime": "false", **params},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    def test_snapshot_day_pnl_uses_previous_session_close(self) -> None:
+        self._create_position(symbol="600519", quantity=10.0)
+        self._save_close("600519", date(2026, 1, 5), 100.0)
+        self._save_close("600519", date(2026, 1, 6), 110.0)
+
+        body = self._snapshot()
+        position = body["accounts"][0]["positions"][0]
+        self.assertAlmostEqual(position["prev_close"], 100.0)
+        self.assertAlmostEqual(position["day_change_pct"], 10.0)
+        self.assertAlmostEqual(position["day_pnl_base"], 100.0)
+        self.assertAlmostEqual(body["accounts"][0]["day_pnl"], 100.0)
+        self.assertAlmostEqual(body["day_pnl"], 100.0)
+        self.assertIsNone(position["quote_at"])  # 收盤價回退沒有報價時間
+
+    def test_snapshot_day_pnl_is_null_not_zero_without_previous_close(self) -> None:
+        self._create_position(symbol="600519", quantity=10.0)  # 只存了 1/3 這一筆收盤
+
+        body = self._snapshot(as_of="2026-01-03")
+        position = body["accounts"][0]["positions"][0]
+        self.assertIsNone(position["prev_close"])
+        self.assertIsNone(position["day_pnl_base"])
+        self.assertIsNone(body["accounts"][0]["day_pnl"])
+        self.assertIsNone(body["day_pnl"])
+
+    def test_snapshot_day_pnl_total_is_voided_when_one_position_is_missing(self) -> None:
+        account_id = self._create_position(symbol="600519", quantity=10.0)
+        self.client.post(
+            "/api/v1/portfolio/trades",
+            json={
+                "account_id": account_id, "symbol": "000001", "trade_date": "2026-01-02", "side": "buy",
+                "quantity": 5, "price": 20, "fee": 0, "tax": 0, "market": "cn", "currency": "CNY",
+            },
+        )
+        self._save_close("600519", date(2026, 1, 5), 100.0)
+        self._save_close("600519", date(2026, 1, 6), 110.0)
+
+        body = self._snapshot()
+        positions = {item["symbol"]: item for item in body["accounts"][0]["positions"]}
+        self.assertAlmostEqual(positions["600519"]["day_pnl_base"], 100.0)
+        self.assertIsNone(positions["000001"]["day_pnl_base"])
+        self.assertIsNone(body["accounts"][0]["day_pnl"])
+
+    def test_price_not_stale_when_close_is_latest_session_on_weekend(self) -> None:
+        self._create_position(symbol="600519", quantity=10.0)
+        self._save_close("600519", date(2026, 1, 9), 100.0)  # 週五
+
+        body = self._snapshot(as_of="2026-01-10")  # 週六
+        self.assertFalse(body["accounts"][0]["positions"][0]["price_stale"])
+
+    def test_price_stale_when_close_is_older_than_latest_session(self) -> None:
+        self._create_position(symbol="600519", quantity=10.0)
+        self._save_close("600519", date(2026, 1, 8), 100.0)  # 週四，少了週五那一場
+
+        body = self._snapshot(as_of="2026-01-10")
+        self.assertTrue(body["accounts"][0]["positions"][0]["price_stale"])
+
+    def test_price_date_stays_a_date_and_stale_falls_back_without_calendar(self) -> None:
+        self._create_position(symbol="600519", quantity=10.0)
+        self._save_close("600519", date(2026, 1, 9), 100.0)
+
+        with patch("src.services.portfolio_service.latest_opened_session", return_value=None):
+            body = self._snapshot(as_of="2026-01-10")
+        position = body["accounts"][0]["positions"][0]
+        self.assertEqual(position["price_date"], "2026-01-09")
+        self.assertTrue(position["price_stale"])
+
+    def test_display_currency_crosses_through_aggregate_rate(self) -> None:
+        # 匯率表只有 USD/CNY 與 TWD/CNY，沒有 USD/TWD 直接匯率
+        self._create_position(name="US", symbol="AAPL", market="us", currency="USD")
+        self._save_fx("USD", "CNY", 7.0)
+        self._save_fx("TWD", "CNY", 0.2)
+
+        body = self._snapshot(display_currency="twd")
+        account_equity = body["accounts"][0]["total_equity"]
+        self.assertEqual(body["display_currency"], "TWD")
+        self.assertAlmostEqual(body["consolidated_equity_base"], account_equity * 35.0, places=4)
+        self.assertEqual(body["fx_rate_used"][0]["source"], "cross_rate")
+        self.assertAlmostEqual(body["fx_rate_used"][0]["rate"], 35.0)
+        self.assertFalse(body["consolidated_fx_missing"])
+        # 既有 CNY 彙總不變
+        self.assertEqual(body["currency"], "CNY")
+        self.assertAlmostEqual(body["total_equity"], account_equity * 7.0, places=4)
+
+    def test_display_currency_missing_rate_is_null_and_keeps_snapshot_flags(self) -> None:
+        self._create_position(name="US", symbol="AAPL", market="us", currency="USD")
+        self._save_fx("USD", "CNY", 7.0)
+
+        body = self._snapshot(display_currency="TWD")
+        self.assertIsNone(body["consolidated_equity_base"])
+        self.assertTrue(body["consolidated_fx_missing"])
+        self.assertEqual(body["consolidated_fx_missing_pairs"], ["USD/TWD"])
+        # 顯示幣別查不到不影響原本的 CNY 彙總判定
+        self.assertFalse(body["fx_missing"])
+        self.assertEqual(body["fx_missing_pairs"], [])
+
+    def test_snapshot_without_display_currency_has_no_consolidated_values(self) -> None:
+        self._create_position(symbol="600519")
+
+        body = self._snapshot()
+        self.assertIsNone(body["display_currency"])
+        self.assertIsNone(body["consolidated_equity_base"])
+        self.assertEqual(body["fx_rate_used"], [])
+
+    def test_display_currency_rejects_non_ascii(self) -> None:
+        response = self.client.get("/api/v1/portfolio/snapshot", params={"display_currency": "ＴＷＤ"})
+        self.assertEqual(response.status_code, 422)
+
+    def test_include_funds_adds_block_and_converted_totals(self) -> None:
+        self._create_position(symbol="600519")
+        self._save_fx("USD", "TWD", 30.0)
+        funds = {
+            "items": [],
+            "totals": [{"currency": "USD", "cost_total": 1.0, "market_value": 100.0, "day_pnl": 2.0}],
+            "nav_error": None,
+        }
+        self._save_fx("CNY", "TWD", 5.0)
+
+        with patch("src.services.fund_service.FundService.list_holdings", return_value=funds):
+            body = self._snapshot(display_currency="TWD", include_funds="true")
+        self.assertEqual(body["funds"]["totals"][0]["currency"], "USD")
+        self.assertAlmostEqual(body["consolidated_fund_value_base"], 3000.0)
+        self.assertAlmostEqual(body["consolidated_fund_day_pnl_base"], 60.0)
+
+    def test_include_funds_failure_does_not_break_snapshot(self) -> None:
+        self._create_position(symbol="600519")
+
+        with patch("src.services.fund_service.FundService.list_holdings", side_effect=RuntimeError("boom")):
+            body = self._snapshot(include_funds="true")
+        self.assertIsNone(body["funds"])
+        self.assertEqual(body["funds_error"], "fund_data_unavailable")
+        self.assertEqual(len(body["accounts"]), 1)
+
+    def test_funds_block_is_absent_by_default(self) -> None:
+        self._create_position(symbol="600519")
+
+        with patch("src.services.fund_service.FundService.list_holdings") as list_holdings:
+            body = self._snapshot()
+        list_holdings.assert_not_called()
+        self.assertIsNone(body["funds"])
+
+    def test_risk_display_currency_converts_amounts_and_keeps_cny(self) -> None:
+        self._create_position(name="US", symbol="AAPL", market="us", currency="USD")
+        self._save_fx("USD", "CNY", 7.0)
+        self._save_fx("TWD", "CNY", 0.2)
+
+        with patch.object(PortfolioRiskService, "_resolve_primary_sector", return_value="tech"):
+            response = self.client.get(
+                "/api/v1/portfolio/risk",
+                params={"as_of": "2026-01-06", "include_realtime": "false", "display_currency": "TWD"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["currency"], "CNY")
+        self.assertEqual(body["display_currency"], "TWD")
+        self.assertAlmostEqual(body["display_fx_rate"], 5.0)
+        concentration = body["concentration"]
+        self.assertAlmostEqual(concentration["total_market_value_display"], concentration["total_market_value"] * 5.0)
+        row = concentration["top_positions"][0]
+        self.assertAlmostEqual(row["market_value_display"], row["market_value_base"] * 5.0)
+        sector = body["sector_concentration"]["top_sectors"][0]
+        self.assertAlmostEqual(sector["market_value_display"], sector["market_value_base"] * 5.0)
+
+    def test_risk_display_currency_missing_rate_is_null(self) -> None:
+        self._create_position(symbol="600519")
+
+        with patch.object(PortfolioRiskService, "_resolve_primary_sector", return_value="tech"):
+            response = self.client.get(
+                "/api/v1/portfolio/risk",
+                params={"as_of": "2026-01-06", "include_realtime": "false", "display_currency": "TWD"},
+            )
+        body = response.json()
+        self.assertTrue(body["display_fx_missing"])
+        self.assertIsNone(body["display_fx_rate"])
+        self.assertIsNone(body["concentration"]["total_market_value_display"])
+
+    def test_realtime_fetch_keeps_two_tuple_and_carries_quote_time(self) -> None:
+        quote = SimpleNamespace(
+            price=110.0, source="shioaji", provider_timestamp="2026-01-06T10:00:00+08:00",
+            fetched_at="2026-01-06T10:00:05+08:00", pre_close=100.0,
+        )
+        manager = MagicMock()
+        manager.get_realtime_quote.return_value = quote
+        with patch("data_provider.base.DataFetcherManager", return_value=manager):
+            result = PortfolioService._fetch_realtime_position_price("2330.TW")
+        price, provider = result
+        self.assertEqual((price, provider), (110.0, "shioaji"))
+        self.assertEqual(result.quote_at, "2026-01-06T10:00:00+08:00")
+        self.assertEqual(result.pre_close, 100.0)
 
     def test_event_list_invalid_page_size_returns_422(self) -> None:
         resp = self.client.get("/api/v1/portfolio/trades", params={"page_size": 101})

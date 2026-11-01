@@ -45,6 +45,8 @@ export interface StockAutocompleteProps {
   placeholder?: string;
   /** Accessible label */
   ariaLabel?: string;
+  /** 輸入框 id，讓外部 label 綁定 */
+  id?: string;
   /** Additional CSS class name */
   className?: string;
 }
@@ -56,10 +58,12 @@ function FallbackInput({
   disabled = false,
   placeholder = '输入股票代码或名称',
   ariaLabel,
+  id,
   className,
 }: StockAutocompleteProps) {
   return (
     <input
+      id={id}
       type="text"
       value={value}
       onChange={(e) => onChange(e.target.value)}
@@ -119,6 +123,7 @@ function StockAutocompleteInner({
   disabled = false,
   placeholder = '输入股票代码或名称',
   ariaLabel,
+  id,
   className,
 }: StockAutocompleteProps) {
   const { index, loading, fallback } = useStockIndex();
@@ -262,6 +267,7 @@ function StockAutocompleteInner({
         disabled={disabled}
         placeholder={placeholder}
         ariaLabel={ariaLabel}
+        id={id}
         className={className}
       />
     );
@@ -270,6 +276,7 @@ function StockAutocompleteInner({
   return (
     <div className="relative stock-autocomplete">
       <input
+        id={id}
         ref={inputRef}
         type="text"
         value={value}

@@ -15,6 +15,7 @@ except ModuleNotFoundError:
 
     ensure_litellm_stub()
 
+from src.utils.zh_s2t import to_traditional
 from src.agent.skills.defaults import CORE_TRADING_SKILL_POLICY_ZH
 import datetime as dt
 
@@ -24,6 +25,11 @@ from tests.test_analyzer_prompt_language import _make_analyzer, _rich_context
 _OLD_HARD_LINES = ("**多头排列必须条件**", '乖离率 > 5%：严禁追高！直接判定为"观望"', "坚决不买入")
 _OLD_USER_LINES = ("多頭排列？", "超過5%必須標註", "🚨 超過5%，嚴禁追高！")
 _NEW_MARKER = "台股短波段買入（60-69分，均線加權）"
+
+
+def _in_language(text: str, language: str) -> str:
+    # zh-TW 的系統提示詞在替換完均線規則後整段轉繁體，斷言跟著轉。
+    return to_traditional(text) if language == "zh-TW" else text
 
 
 def _cfg(weighted: bool, **extra):
@@ -59,10 +65,10 @@ def test_off_system_prompt_is_unchanged(legacy, language):
     baseline_analyzer._config_override = SimpleNamespace(bias_threshold=5.0)
     baseline = baseline_analyzer._get_analysis_system_prompt(language, stock_code="2330.TW")
     assert off == baseline
-    assert off.count(CORE_TRADING_SKILL_POLICY_ZH) == 1
+    assert off.count(_in_language(CORE_TRADING_SKILL_POLICY_ZH, language)) == 1
     assert _NEW_MARKER not in off
     for line in _OLD_HARD_LINES:
-        assert line in off
+        assert _in_language(line, language) in off
 
 
 def test_off_user_prompt_is_unchanged():
@@ -79,19 +85,19 @@ def test_on_tw_replaces_hard_rules_with_weighted_rules(legacy):
     prompt = _analyzer(True, legacy)._get_analysis_system_prompt("zh-TW", stock_code="2330.TW")
     assert prompt.count("### " + _NEW_MARKER) == 1
     # 插在觀望段之前，而不是只附在最後
-    assert prompt.index("### " + _NEW_MARKER) < prompt.index("### 观望（40-59分）：")
+    assert prompt.index("### " + _NEW_MARKER) < prompt.index(to_traditional("### 观望（40-59分）："))
     assert "**多頭排列為加權加分項（非必要條件）**" in prompt
     assert "乖離率 5~10%：僅限放量突破" in prompt
     assert "外資與投信同向買超" in prompt and "ATR14" in prompt
     for line in _OLD_HARD_LINES:
-        assert line not in prompt
+        assert to_traditional(line) not in prompt
 
 
 def test_on_legacy_watch_rubric_no_longer_contradicts_breakout_exception():
     off = _analyzer(False)._get_analysis_system_prompt("zh-TW", stock_code="2330.TW")
     on = _analyzer(True)._get_analysis_system_prompt("zh-TW", stock_code="2330.TW")
-    assert "- ⚠️ 乖离率 >5%（追高风险）" in off
-    assert "- ⚠️ 乖离率 >5%（追高风险）" not in on
+    assert to_traditional("- ⚠️ 乖离率 >5%（追高风险）") in off
+    assert to_traditional("- ⚠️ 乖离率 >5%（追高风险）") not in on
     assert "- ⚠️ 乖離率 >5% 且非放量突破，或 >10%（追高風險）" in on
 
 

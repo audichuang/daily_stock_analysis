@@ -54,13 +54,13 @@ for (const state of ['partial', 'empty', 'error'] as const) {
     await page.goto('/data');
     await expect(page.getByRole('heading', { name: '数据中心', exact: true })).toBeVisible();
     if (state === 'partial') {
+      // 改版後來源清單與技術細節收在折疊區，先展開才看得到。
+      await page.locator('details').evaluateAll((items) => items.forEach((item) => { (item as HTMLDetailsElement).open = true; }));
       await expect(page.getByText('AkShare', { exact: true })).toBeVisible();
-      const row = page.getByRole('row').filter({ hasText: 'financial.snapshot' });
-      await expect(row.getByRole('cell', { name: 'cn: akshare', exact: true })).toBeVisible();
-      await expect(row.getByText('partial', { exact: true })).toBeVisible();
-      await expect(page.getByText('cn: tencent / us: yfinance', { exact: true })).toBeVisible();
-      await expect(page.getByRole('row').filter({ hasText: 'screening.snapshot' })).toContainText('unknown');
-      await expect(page.getByText('tencent → akshare', { exact: true })).toBeVisible();
+      const row = page.getByRole('row').filter({ hasText: 'A 股 财务数据' });
+      await expect(row.getByRole('cell', { name: 'akshare', exact: true })).toBeVisible();
+      await expect(page.getByRole('row').filter({ hasText: 'screening.snapshot' })).toContainText('尚未检查');
+      await expect(page.getByText('→ akshare', { exact: true })).toBeVisible();
     } else if (state === 'empty') {
       await expect(page.getByText('暂无能力数据', { exact: true })).toBeVisible();
     } else {
@@ -77,17 +77,11 @@ for (const state of ['partial', 'empty', 'error'] as const) {
     }
     if (state === 'partial') {
       await page.setViewportSize({ width: 390, height: 844 });
-      const scroller = page.getByRole('table').locator('..');
-      await expect.poll(() => scroller.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+      // 手機版改成卡片列，不靠表格橫向捲動；只要整頁不溢出。
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       const mobile = testInfo.outputPath('data-center-partial-390.png');
       await page.screenshot({ path: mobile, fullPage: true, animations: 'disabled' });
       await testInfo.attach('partial-mobile', { path: mobile, contentType: 'image/png' });
-      await scroller.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
-      await expect.poll(() => scroller.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
-      const mobileScrolled = testInfo.outputPath('data-center-partial-390-scrolled.png');
-      await page.screenshot({ path: mobileScrolled, fullPage: true, animations: 'disabled' });
-      await testInfo.attach('partial-mobile-scrolled', { path: mobileScrolled, contentType: 'image/png' });
     }
   });
 }

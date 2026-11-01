@@ -39,9 +39,12 @@ from src.notification_noise import (
     record_notification_noise,
     release_notification_noise,
 )
+from src.utils.zh_s2t import localize_template
 from src.report_language import (
     get_localized_stock_name,
     get_report_labels,
+    is_missing_report_value,
+    report_table_rows,
     get_signal_level,
     get_chip_unavailable_reason,
     is_chip_structure_unavailable,
@@ -1108,7 +1111,7 @@ class NotificationService:
         report_lines.extend([
             f"## 📊 {labels['summary_heading']}",
             "",
-            "| 指标 | 数值 |",
+            f"| {labels['table_item_label']} | {labels['table_value_label']} |",
             "|------|------|",
             f"| 🟢 {labels['buy_label']} | **{buy_count}** {labels['stock_unit_compact']} |",
             f"| 🟡 {labels['watch_label']} | **{hold_count}** {labels['stock_unit_compact']} |",
@@ -1444,7 +1447,7 @@ class NotificationService:
                 return en
             if report_language == "ko":
                 return ko
-            return zh
+            return localize_template(zh, report_language)
 
         reason_label = _nlabel("Rationale", "操作理由", "판단 근거")
         risk_warning_label = _nlabel("Risk Warning", "风险提示", "리스크 경고")
@@ -1612,18 +1615,26 @@ class NotificationService:
                     # 价格位置
                     if price_data:
                         bias_status = price_data.get('bias_status', 'N/A')
-                        report_lines.extend([
-                            f"| {labels['price_metrics_label']} | {labels['current_price_label']} |",
-                            "|---------|------|",
-                            f"| {labels['current_price_label']} | {price_data.get('current_price', 'N/A')} |",
-                            f"| {labels['ma5_label']} | {price_data.get('ma5', 'N/A')} |",
-                            f"| {labels['ma10_label']} | {price_data.get('ma10', 'N/A')} |",
-                            f"| {labels['ma20_label']} | {price_data.get('ma20', 'N/A')} |",
-                            f"| {labels['bias_ma5_label']} | {price_data.get('bias_ma5', 'N/A')}% {bias_status} |",
-                            f"| {labels['support_level_label']} | {price_data.get('support_level', 'N/A')} |",
-                            f"| {labels['resistance_level_label']} | {price_data.get('resistance_level', 'N/A')} |",
-                            "",
+                        bias_ma5 = price_data.get('bias_ma5')
+                        price_rows = report_table_rows([
+                            (labels['current_price_label'], price_data.get('current_price')),
+                            (labels['ma5_label'], price_data.get('ma5')),
+                            (labels['ma10_label'], price_data.get('ma10')),
+                            (labels['ma20_label'], price_data.get('ma20')),
+                            (
+                                labels['bias_ma5_label'],
+                                None if is_missing_report_value(bias_ma5) else f"{bias_ma5}% {bias_status}",
+                            ),
+                            (labels['support_level_label'], price_data.get('support_level')),
+                            (labels['resistance_level_label'], price_data.get('resistance_level')),
                         ])
+                        if price_rows:
+                            report_lines.extend([
+                                f"| {labels['table_item_label']} | {labels['table_value_label']} |",
+                                "|---------|------|",
+                                *price_rows,
+                                "",
+                            ])
                     # 量能分析
                     if vol_data:
                         report_lines.extend([
@@ -1665,16 +1676,19 @@ class NotificationService:
                     ])
                     # 狙击点位
                     sniper = battle.get('sniper_points', {})
-                    if sniper:
+                    sniper_rows = report_table_rows([
+                        (f"🎯 {labels['ideal_buy_label']}", self._clean_sniper_value(sniper.get('ideal_buy'))),
+                        (f"🔵 {labels['secondary_buy_label']}", self._clean_sniper_value(sniper.get('secondary_buy'))),
+                        (f"🛑 {labels['stop_loss_label']}", self._clean_sniper_value(sniper.get('stop_loss'))),
+                        (f"🎊 {labels['take_profit_label']}", self._clean_sniper_value(sniper.get('take_profit'))),
+                    ]) if sniper else []
+                    if sniper_rows:
                         report_lines.extend([
                             f"**📍 {labels['action_points_heading']}**",
                             "",
-                            f"| {labels['action_points_heading']} | {labels['current_price_label']} |",
+                            f"| {labels['table_level_label']} | {labels['table_price_label']} |",
                             "|---------|------|",
-                            f"| 🎯 {labels['ideal_buy_label']} | {self._clean_sniper_value(sniper.get('ideal_buy', 'N/A'))} |",
-                            f"| 🔵 {labels['secondary_buy_label']} | {self._clean_sniper_value(sniper.get('secondary_buy', 'N/A'))} |",
-                            f"| 🛑 {labels['stop_loss_label']} | {self._clean_sniper_value(sniper.get('stop_loss', 'N/A'))} |",
-                            f"| 🎊 {labels['take_profit_label']} | {self._clean_sniper_value(sniper.get('take_profit', 'N/A'))} |",
+                            *sniper_rows,
                             "",
                         ])
                     cost_line = format_cost_check(battle.get('cost_check'), report_language)
@@ -2312,7 +2326,7 @@ class NotificationService:
         # to "zh" so a Traditional-Chinese report doesn't KeyError.
         lang = str(normalize_report_language(language) or "").lower()
         key = "en" if lang.startswith("en") else "zh"
-        return mapping.get(key, raw_source)
+        return localize_template(mapping.get(key, raw_source), normalize_report_language(language))
 
     def _append_market_snapshot(self, lines: List[str], result: AnalysisResult) -> None:
         snapshot = getattr(result, 'market_snapshot', None)
@@ -2492,9 +2506,15 @@ class NotificationService:
         currency = report.get("currency") if isinstance(report.get("currency"), str) else None
         cells = {
             "report_date": self._format_text(report.get("report_date")),
-            "revenue": self._format_amount_cn(report.get("revenue"), currency),
-            "net_profit": self._format_amount_cn(report.get("net_profit_parent"), currency),
-            "operating_cash_flow": self._format_amount_cn(report.get("operating_cash_flow"), currency),
+            "revenue": localize_template(
+                self._format_amount_cn(report.get("revenue"), currency), labels.get("language_code", "")
+            ),
+            "net_profit": localize_template(
+                self._format_amount_cn(report.get("net_profit_parent"), currency), labels.get("language_code", "")
+            ),
+            "operating_cash_flow": localize_template(
+                self._format_amount_cn(report.get("operating_cash_flow"), currency), labels.get("language_code", "")
+            ),
             "roe": self._format_percent(report.get("roe") if report.get("roe") is not None else growth.get("roe")),
             "revenue_yoy": self._format_percent(growth.get("revenue_yoy")),
             "net_profit_yoy": self._format_percent(growth.get("net_profit_yoy")),
@@ -2601,11 +2621,12 @@ class NotificationService:
         if blocks.get("institution_status") != "ok":
             return
         inst = blocks.get("institution") or {}
+        language_code = labels.get("language_code", "")
         cells = {
-            "foreign": self._format_net_shares(inst.get("foreign_net")),
-            "trust": self._format_net_shares(inst.get("trust_net")),
-            "dealer": self._format_net_shares(inst.get("dealer_net")),
-            "total": self._format_net_shares(inst.get("total_net")),
+            "foreign": localize_template(self._format_net_shares(inst.get("foreign_net")), language_code),
+            "trust": localize_template(self._format_net_shares(inst.get("trust_net")), language_code),
+            "dealer": localize_template(self._format_net_shares(inst.get("dealer_net")), language_code),
+            "total": localize_template(self._format_net_shares(inst.get("total_net")), language_code),
         }
         if all(v == "N/A" for v in cells.values()):
             return

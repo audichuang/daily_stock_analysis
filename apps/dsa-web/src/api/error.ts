@@ -221,6 +221,9 @@ export function extractErrorPayloadText(data: unknown): string | null {
   );
 }
 
+// 分類結果也是比對鍵：選股頁靠它判斷要不要停止輪詢。
+export const SCREENING_TASK_UNRECOVERABLE_TITLE = '选股任务不可恢复';
+
 export function createParsedApiError(options: CreateParsedApiErrorOptions): ParsedApiError {
   return {
     title: options.title,
@@ -395,7 +398,7 @@ export function parseApiError(error: unknown): ParsedApiError {
 
   if (errorCode === 'screening_screen_task_not_found') {
     return createParsedApiError({
-      title: '选股任务不可恢复',
+      title: SCREENING_TASK_UNRECOVERABLE_TITLE,
       message: '服务端没有找到这次选股任务，可能后端已重启或任务记录已清理，请重新运行选股。',
       rawMessage,
       status,

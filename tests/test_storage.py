@@ -178,7 +178,7 @@ class TestStorage(unittest.TestCase):
         with db.get_session() as session:
             versions = session.execute(select(DatabaseSchemaMigration.version)).scalars().all()
 
-        self.assertEqual(sorted(versions), sorted([CURRENT_SCHEMA_VERSION, CHAT_STATE_SCHEMA_VERSION, "2026-11-01-calendar-events", "2026-11-01-news-intel-links"]))
+        self.assertEqual(sorted(versions), sorted([CURRENT_SCHEMA_VERSION, CHAT_STATE_SCHEMA_VERSION, "2026-11-01-calendar-events", "2026-11-01-financial-commentary", "2026-11-01-news-intel-links"]))
 
         DatabaseManager.reset_instance()
 

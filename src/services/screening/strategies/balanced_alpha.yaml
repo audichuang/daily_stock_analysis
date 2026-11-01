@@ -4,6 +4,8 @@
 name: balanced_alpha
 display_name: 均衡多因子
 description: 综合估值、资金、动量、稳定性的通用候选发现策略
+display_name_zh_tw: 均衡多因子
+description_zh_tw: 綜合估值、資金、動能、穩定性的通用候選策略
 version: "1.1"
 category: framework
 tags: [multi_factor, balanced, llm_friendly]

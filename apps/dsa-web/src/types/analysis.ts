@@ -42,6 +42,11 @@ export interface MarketReviewAccepted {
   taskId?: string;
 }
 
+export interface MarketReviewDefaultRegion {
+  defaultRegion: string;
+  regions: string[];
+}
+
 // ============ Report Types ============
 
 export type ReportLanguage = 'zh' | 'zh-TW' | 'en' | 'ko';
@@ -85,6 +90,29 @@ export interface ReportMeta {
   modelUsed?: string;  // 历史元数据快照，仅用于展示，不用于运行时模型选择
   marketPhaseSummary?: MarketPhaseSummary | null;
   assetType?: 'stock' | 'index';  // 后端权威资产类型；index 用于隐藏 stock-only 自选操作
+  /** 現價所屬場次（YYYY-MM-DD）；抓取時間不算資料日。 */
+  priceDate?: string | null;
+  priceFetchedAt?: string | null;
+  currency?: string | null;
+  changeAmount?: number | null;
+  previousReport?: ReportPreviousSummary | null;
+  /** 目前是否持有；null 是無法判定，不等於未持有。 */
+  held?: boolean | null;
+}
+
+/** 同一檔的前一份報告摘要 */
+export interface ReportPreviousSummary {
+  id?: number | null;
+  action?: DecisionAction | null;
+  score?: number | null;
+  createdAt?: string | null;
+  stopLoss?: number | null;
+}
+
+/** 分持股狀態的建議 */
+export interface ReportPositionAdvice {
+  noPosition?: string | null;
+  hasPosition?: string | null;
 }
 
 /** Sentiment label */
@@ -120,6 +148,20 @@ export interface ReportSummary {
   trendPrediction: string;
   sentimentScore: number;
   sentimentLabel?: SentimentLabel;
+  oneSentence?: string | null;
+  timeSensitivity?: string | null;
+  positionAdvice?: ReportPositionAdvice | null;
+  confidenceLevel?: string | null;
+  confidenceReason?: string | null;
+  guardrailApplied?: boolean | null;
+  guardrailReason?: string | null;
+  strongestBullishSignal?: string | null;
+  strongestBearishSignal?: string | null;
+  phaseWatchConditions?: string[] | null;
+  entryConditions?: string[] | null;
+  exitTriggers?: string[] | null;
+  pendingEvents?: string[] | null;
+  nextCheckTime?: string | null;
 }
 
 export interface SniperPrices {
@@ -136,6 +178,8 @@ export interface ReportStrategy {
   secondaryBuy?: string;
   stopLoss?: string;
   takeProfit?: string;
+  /** structured＝模型給的數字；legacy＝舊報告由文字解析，不拿來算距現價。 */
+  sniperPricesSource?: 'structured' | 'legacy' | null;
 }
 
 export interface RelatedBoard {
@@ -284,6 +328,51 @@ export interface MarketReviewBreadth {
   limitDownCount?: number;
   totalAmount?: number;
   turnoverUnit?: string;
+  /** 三大法人買賣超（僅台股），單位與成交額相同；任一格缺值時後端整組不給。 */
+  institutionalNet?: {
+    foreignNet?: number;
+    trustNet?: number;
+    dealerNet?: number;
+    totalNet?: number;
+  };
+}
+
+export type MarketLightStatus = 'green' | 'yellow' | 'red' | 'unavailable';
+
+export interface MarketReviewLight {
+  region?: string;
+  tradeDate?: string;
+  status?: MarketLightStatus | string;
+  score?: number;
+  label?: string;
+  temperatureLabel?: string;
+  reasons?: string[];
+  guidance?: string;
+  dimensions?: Partial<Record<'breadth' | 'index' | 'limit', { score?: number; available?: boolean }>>;
+}
+
+export interface MarketReviewIndexTrend {
+  asOf?: string;
+  series?: Array<{ date: string; close: number }>;
+  ma20?: number | null;
+  ma60?: number | null;
+  distanceMa20Pct?: number | null;
+  distanceMa60Pct?: number | null;
+}
+
+export interface MarketReviewSectorRank {
+  sessionDate?: string;
+  source?: string;
+  basis?: string;
+  items?: Array<{ name: string; changePct: number; turnover?: number; stockCount?: number }>;
+}
+
+export interface MarketReviewNextDayPlan {
+  stance?: 'offensive' | 'balanced' | 'defensive' | null;
+  summary?: string | null;
+  focus?: string[];
+  risks?: string[];
+  keyLevels?: Array<{ label: string; price: number }>;
 }
 
 export interface MarketReviewPayload {
@@ -296,7 +385,11 @@ export interface MarketReviewPayload {
   generatedAt?: string;
   date?: string;
   marketScope?: string;
-  marketLight?: Record<string, unknown>;
+  marketLight?: MarketReviewLight;
+  /** 鍵是指數代號，但經 toCamelCase 後大小寫已變（TAIEX → taiex），查表要先正規化。 */
+  indexTrends?: Record<string, MarketReviewIndexTrend>;
+  sectorRank?: MarketReviewSectorRank;
+  nextDayPlan?: MarketReviewNextDayPlan;
   breadth?: MarketReviewBreadth;
   indices?: MarketReviewIndex[];
   sectors?: SectorRankings;
@@ -619,6 +712,8 @@ export interface NewsIntelItem {
   source?: string | null;
   publishedDate?: string | null;
   dimension?: string | null;
+  publishedAt?: string | null;
+  keyPoint?: string | null;
 }
 
 /** News response */
@@ -657,6 +752,10 @@ export interface StockBarItem {
   modelUsed?: string;
   marketPhaseSummary?: MarketPhaseSummary | null;
   assetType?: 'stock' | 'index';
+  /** 分析當時的價格，不是現價；現價一律走批次行情。 */
+  analysisPrice?: number | null;
+  /** 分析當時的漲跌幅(%)。 */
+  changePct?: number | null;
 }
 
 export interface StockBarResponse {

@@ -8,6 +8,7 @@ import { getFieldDescriptionForLocale, getFieldOptionLabel, getFieldTitleForLoca
 import type { UiLanguage, UiTextKey } from '../../i18n/uiText';
 import { cn } from '../../utils/cn';
 import { SettingsHelpButton } from './SettingsHelpButton';
+import { StockListEditor } from './StockListEditor';
 
 function normalizeSelectOptions(key: string, options: SystemConfigFieldSchema['options'] = [], locale: UiLanguage) {
   return options.map((option) => {
@@ -84,6 +85,17 @@ function renderFieldControl(
   const controlType = schema?.uiControl ?? 'text';
   const isMultiValue = isMultiValueField(item);
 
+  if (item.key === 'STOCK_LIST') {
+    return (
+      <StockListEditor
+        id={controlId}
+        value={value}
+        disabled={disabled || !schema?.isEditable}
+        onChange={onChange}
+      />
+    );
+  }
+
   if (controlType === 'textarea') {
     return (
       <textarea
@@ -154,7 +166,7 @@ function renderFieldControl(
               </div>
               <Button
                 type="button"
-                variant="settings-secondary"
+                variant="secondary"
                 size="lg"
                 className="px-3 text-xs text-muted-text shadow-none hover:text-danger"
                 disabled={disabled || !schema?.isEditable || values.length <= 1}
@@ -171,7 +183,7 @@ function renderFieldControl(
           <div className="flex items-center gap-2">
             <Button
               type="button"
-              variant="settings-secondary"
+              variant="secondary"
               size="sm"
               className="text-xs shadow-none"
               disabled={disabled || !schema?.isEditable}
@@ -246,7 +258,7 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
     >
       <div className="min-w-0 space-y-2">
         <div className="flex flex-wrap items-center gap-2">
-          <label className="text-sm font-semibold text-foreground" htmlFor={controlId}>
+          <label className="min-w-0 text-sm font-semibold text-foreground [overflow-wrap:anywhere]" htmlFor={controlId}>
             {title}
           </label>
           <SettingsHelpButton
@@ -268,7 +280,7 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
         </div>
 
         {description ? (
-          <p className="text-xs leading-5 text-muted-text">
+          <p className="text-xs leading-5 text-muted-text [overflow-wrap:anywhere]">
             {description}
           </p>
         ) : null}
@@ -299,7 +311,7 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
             {issues.map((issue, index) => (
               <p
                 key={`${issue.code}-${issue.key}-${index}`}
-                className={issue.severity === 'error' ? 'text-xs text-danger' : 'text-xs text-warning'}
+                className={issue.severity === 'error' ? 'text-xs text-danger [overflow-wrap:anywhere]' : 'text-xs text-warning [overflow-wrap:anywhere]'}
               >
                 {issue.message}
               </p>

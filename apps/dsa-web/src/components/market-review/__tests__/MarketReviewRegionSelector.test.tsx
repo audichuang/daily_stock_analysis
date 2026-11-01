@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
 import { UI_LANGUAGE_STORAGE_KEY } from '../../../utils/uiLanguage';
 import { MarketReviewRegionSelector } from '../MarketReviewRegionSelector';
-import { serializeMarketReviewRegions } from '../../../utils/marketReviewRegion';
+import { formatMarketReviewRegion, serializeMarketReviewRegions } from '../../../utils/marketReviewRegion';
 
 describe('MarketReviewRegionSelector', () => {
   beforeEach(() => {
@@ -34,6 +34,29 @@ describe('MarketReviewRegionSelector', () => {
 
     fireEvent.click(screen.getByRole('checkbox', { name: /日股/ }));
     expect(onChange).toHaveBeenLastCalledWith(['jp']);
+  });
+
+  it('shows the actual default scope once the server reports it', () => {
+    render(
+      <UiLanguageProvider>
+        <MarketReviewRegionSelector defaultRegion="tw,us" onChange={vi.fn()} footer={<span>notify-slot</span>} />
+      </UiLanguageProvider>,
+    );
+
+    const trigger = screen.getByRole('button', { name: '选择大盘复盘市场' });
+    expect(trigger).toHaveTextContent('台股＋美股');
+    expect(trigger).not.toHaveTextContent('服务器默认');
+    expect(screen.queryByText('notify-slot')).not.toBeInTheDocument();
+    fireEvent.click(trigger);
+    expect(screen.getByText('notify-slot')).toBeInTheDocument();
+  });
+
+  it('formats region strings and passes through unknown codes', () => {
+    const labels = { cn: 'A', hk: 'H', us: 'U', tw: 'T', jp: 'J', kr: 'K' };
+    expect(formatMarketReviewRegion('tw,us', labels)).toBe('T＋U');
+    expect(formatMarketReviewRegion('both', labels)).toBe('A＋H＋U＋T＋J＋K');
+    expect(formatMarketReviewRegion('xx', labels)).toBe('xx');
+    expect(formatMarketReviewRegion('', labels)).toBe('');
   });
 
   it('supports all markets and restoring the server default', () => {

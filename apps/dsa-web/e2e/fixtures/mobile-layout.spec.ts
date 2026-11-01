@@ -86,29 +86,24 @@ test('board expanded row fits the visible table box at 390px', async ({ page }) 
           verdicts: { fundamental: { badge: '獲利升、營收年減', tone: 'neu' }, chips: { badge: '法人回補', tone: 'pos' } },
         } })) }
       : path.endsWith('/trend') ? { points: [] }
+      : path.endsWith('/financials') ? { stock_code: '2887.TW', status: 'unsupported', template: 'general', periods: [], metrics: [], not_applicable: [], monthly_revenue: [], limitations: [], is_stale: false }
       : { items: [], total: 0 };
     await route.fulfill({ json });
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/board');
-  await page.getByRole('row').filter({ hasText: '2887.TW' }).first().click();
+  // 手機改成卡片列，不再是表格 row。
+  await page.getByRole('button', { name: /2887\.TW/ }).first().click();
   const expanded = page.getByTestId('board-expanded');
   await expect(expanded).toBeVisible();
-  const box = await expanded.evaluate((el) => {
-    const scroller = el.closest('.overflow-x-auto') as HTMLElement;
-    const r = el.getBoundingClientRect();
-    const s = scroller.getBoundingClientRect();
-    return { left: r.left, right: r.right, boxLeft: s.left, boxRight: s.right };
-  });
-  expect(box.right - box.left).toBeLessThanOrEqual(box.boxRight - box.boxLeft + 1);
-  // 「四維度分析」按鈕不用橫滑就在可視範圍內
+  // 手機卡片不橫向捲動，展開內容與「四維度分析」要直接落在視窗內。
+  const box = await expanded.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390 + 1);
   const button = expanded.getByRole('button', { name: /Four-pillar|四維度|四维度/ }).last();
   const b = await button.boundingBox();
   expect(b).not.toBeNull();
-  expect(b!.x + b!.width).toBeLessThanOrEqual(box.boxRight + 1);
-  // 表格捲到底，展開內容仍黏在可視範圍
-  await expanded.evaluate((el) => { (el.closest('.overflow-x-auto') as HTMLElement).scrollLeft = 10_000; });
-  const after = await expanded.evaluate((el) => el.getBoundingClientRect().left);
-  expect(Math.abs(after - box.boxLeft)).toBeLessThanOrEqual(1);
+  expect(b!.x + b!.width).toBeLessThanOrEqual(390 + 1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

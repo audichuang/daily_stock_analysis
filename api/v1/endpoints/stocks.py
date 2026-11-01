@@ -14,8 +14,12 @@
 7. POST /api/v1/stocks/{code}/level-alerts 台股 SMC 價位警報（預設關閉，dry_run 可試算）
 """
 
+import json
 import logging
-from typing import Optional
+import math
+import threading
+import time
+from typing import Dict, List, Optional, Set, Tuple
 import re
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, Depends
@@ -30,8 +34,12 @@ from api.v1.schemas.stocks import (
     LevelAlertResponse,
     ExtractFromImageResponse,
     ExtractItem,
+    IntradayTrendBatchResponse,
+    IntradayTrendItem,
     KLineData,
     StockHistoryResponse,
+    FinancialCommentary,
+    StockFinancialsResponse,
     StockProfileResponse,
     StockQuote,
     StockQuoteBatchItem,
@@ -40,6 +48,7 @@ from api.v1.schemas.stocks import (
     TrendPoint,
 )
 from api.v1.schemas.history import WatchlistRequest, WatchlistResponse
+from api.v1.schemas.stocks import WatchlistGroup, WatchlistGroupsRequest, WatchlistGroupsResponse
 from api.v1.schemas.common import ErrorResponse
 from api.v1.errors import api_error
 from src.services.image_stock_extractor import (
@@ -52,13 +61,14 @@ from src.services.import_parser import (
     parse_import_from_bytes,
     parse_import_from_text,
 )
-from src.services.stock_service import StockService
+from src.services.stock_service import StockService, normalize_source_code
 from src.services.stock_profile_service import InvalidStockProfileCode, StockProfileService
 from src.services.stock_list_parser import ParseStatus, parse_analysis_target
 from src.services.run_diagnostics import sanitize_diagnostic_text
 from src.services.stock_list_parser import split_stock_list
-from src.services.system_config_service import SystemConfigService
+from src.services.system_config_service import ConfigConflictError, SystemConfigService
 from data_provider.base import normalize_stock_code
+from data_provider.us_index_mapping import us_index_zh_tw_name
 
 logger = logging.getLogger(__name__)
 
@@ -82,16 +92,86 @@ def _read_watchlist_codes(service: SystemConfigService) -> list:
     return split_stock_list(stock_list_str)
 
 
-def _write_watchlist_codes(service: SystemConfigService, codes: list) -> None:
-    """Persist stock codes to STOCK_LIST as-is (no normalization)."""
+def _write_watchlist_codes(
+    service: SystemConfigService,
+    codes: list,
+    groups: Optional[List[WatchlistGroup]] = None,
+) -> None:
+    """Persist stock codes to STOCK_LIST as-is (no normalization).
+
+    帶 groups 時同一次寫入 WATCHLIST_GROUPS：成員與分組不能分兩次存，
+    否則第二次會因 config_version 已變而失敗，留下半套狀態。
+    """
     config_data = service.get_config(include_schema=False)
     config_version = config_data.get("config_version", "")
+    items = [{"key": "STOCK_LIST", "value": ",".join(codes)}]
+    if groups is not None:
+        items.append({"key": "WATCHLIST_GROUPS", "value": _serialize_watchlist_groups(groups)})
     service.update(
         config_version=config_version,
-        items=[{"key": "STOCK_LIST", "value": ",".join(codes)}],
+        items=items,
         mask_token="******",
         reload_now=True,
     )
+
+
+def _read_watchlist_groups(service: SystemConfigService) -> List[WatchlistGroup]:
+    """Read WATCHLIST_GROUPS; unset or malformed means no groups, never an error."""
+    config_data = service.get_config(include_schema=False)
+    raw = ""
+    for item in config_data.get("items", []):
+        if item.get("key") == "WATCHLIST_GROUPS":
+            raw = str(item.get("value", ""))
+            break
+    try:
+        parsed = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        logger.warning("WATCHLIST_GROUPS is not valid JSON; treating as no groups")
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    return [
+        WatchlistGroup(name=name, codes=[code for code in codes if isinstance(code, str)])
+        for name, codes in parsed.items()
+        if name.strip() and isinstance(codes, list)
+    ]
+
+
+def _serialize_watchlist_groups(groups: List[WatchlistGroup]) -> str:
+    """Serialize groups into a single .env-safe line (name -> codes, order kept).
+
+    .env 不加引號：python-dotenv 會把「空白加 #」當註解、把 ${...} 當插值，
+    組名含這些字元時讀回來就成了壞 JSON、整份分組消失，所以這兩個字元也跳脫。
+    """
+    payload = {group.name: group.codes for group in groups}
+    text = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+    return text.replace("#", "\\u0023").replace("$", "\\u0024")
+
+
+def _resolve_watchlist_groups(
+    groups: List[WatchlistGroup],
+    codes: List[str],
+) -> Tuple[List[WatchlistGroup], List[str]]:
+    """Project groups onto STOCK_LIST, the source of truth for membership.
+
+    設定頁可直接改 STOCK_LIST（不經 /watchlist/remove），所以讀取也要過濾。
+    回傳的代號一律是 STOCK_LIST 存的原字串；一檔只屬於一組，重複時留第一組。
+    """
+    code_by_key: Dict[str, str] = {}
+    for code in codes:
+        code_by_key.setdefault(_watchlist_match_key(code), code)
+    assigned: Set[str] = set()
+    resolved: List[WatchlistGroup] = []
+    for group in groups:
+        members: List[str] = []
+        for code in group.codes:
+            key = _watchlist_match_key(code)
+            if key in code_by_key and key not in assigned:
+                assigned.add(key)
+                members.append(code_by_key[key])
+        resolved.append(WatchlistGroup(name=group.name, codes=members))
+    ungrouped = [code for code in codes if _watchlist_match_key(code) not in assigned]
+    return resolved, ungrouped
 
 
 # Stock code validation patterns (aligned with frontend validateStockCode)
@@ -442,7 +522,10 @@ def remove_from_watchlist(
         if requested_key in existing_keys:
             idx = existing_keys.index(requested_key)
             codes.pop(idx)
-            _write_watchlist_codes(service, codes)
+            groups = _read_watchlist_groups(service)
+            # 沒設分組就不寫這個鍵，.env 不多一行空值。
+            pruned = _resolve_watchlist_groups(groups, codes)[0] if groups else None
+            _write_watchlist_codes(service, codes, pruned)
         return WatchlistResponse(stock_codes=codes, message=f"已移除 {request.stock_code.strip()}")
     except HTTPException:
         raise
@@ -452,6 +535,72 @@ def remove_from_watchlist(
             status_code=500,
             detail={"error": "internal_error", "message": f"从自选删除失败: {str(e)}"},
         )
+
+
+@router.get(
+    "/watchlist/groups",
+    response_model=WatchlistGroupsResponse,
+    responses={
+        200: {"description": "自選分組"},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="取得自選分組",
+    description="回傳 WATCHLIST_GROUPS 投影到 STOCK_LIST 後的分組與未分組代號；未設定時 groups 為空。",
+)
+def get_watchlist_groups(
+    service: SystemConfigService = Depends(get_system_config_service),
+) -> WatchlistGroupsResponse:
+    try:
+        groups, ungrouped = _resolve_watchlist_groups(
+            _read_watchlist_groups(service),
+            _read_watchlist_codes(service),
+        )
+        return WatchlistGroupsResponse(groups=groups, ungrouped=ungrouped)
+    except Exception as e:
+        logger.error(f"取得自選分組失敗: {e}", exc_info=True)
+        raise api_error(500, "internal_error", "取得自選分組失敗")
+
+
+@router.post(
+    "/watchlist/groups",
+    response_model=WatchlistGroupsResponse,
+    responses={
+        200: {"description": "已儲存自選分組"},
+        400: {"description": "组名错误", "model": ErrorResponse},
+        409: {"description": "設定已被其他操作更新", "model": ErrorResponse},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="儲存自選分組",
+    description="整份覆寫分組與組內順序。STOCK_LIST 不變：不在其中的代號會被丟棄，未列入的代號歸未分組。",
+)
+def save_watchlist_groups(
+    request: WatchlistGroupsRequest,
+    service: SystemConfigService = Depends(get_system_config_service),
+) -> WatchlistGroupsResponse:
+    names = [group.name.strip() for group in request.groups]
+    if not all(names):
+        raise api_error(400, "invalid_group_name", "組名不能空白")
+    if len(set(names)) != len(names):
+        raise api_error(400, "duplicate_group_name", "組名不能重複")
+    try:
+        codes = _read_watchlist_codes(service)
+        groups, ungrouped = _resolve_watchlist_groups(
+            [WatchlistGroup(name=name, codes=group.codes) for name, group in zip(names, request.groups)],
+            codes,
+        )
+        config_data = service.get_config(include_schema=False)
+        service.update(
+            config_version=config_data.get("config_version", ""),
+            items=[{"key": "WATCHLIST_GROUPS", "value": _serialize_watchlist_groups(groups)}],
+            mask_token="******",
+            reload_now=True,
+        )
+        return WatchlistGroupsResponse(groups=groups, ungrouped=ungrouped)
+    except ConfigConflictError:
+        raise api_error(409, "config_conflict", "設定已被其他操作更新，請重新載入後再試")
+    except Exception as e:
+        logger.error(f"儲存自選分組失敗: {e}", exc_info=True)
+        raise api_error(500, "internal_error", "儲存自選分組失敗")
 
 
 @router.get(
@@ -515,6 +664,29 @@ def get_stock_quotes(
             status_code=500,
             detail={"error": "internal_error", "message": f"批量获取行情失败: {str(e)}"},
         )
+
+
+@router.get(
+    "/intraday-trends",
+    response_model=IntradayTrendBatchResponse,
+    responses={
+        200: {"description": "批次當日走勢"},
+        400: {"description": "请求参数错误", "model": ErrorResponse},
+    },
+    summary="看板迷你分時：批次當日走勢",
+    description="逗號分隔代碼；伺服器端快取 3 分鐘（輪詢不會逐檔打 kbars），單檔失敗回空 points＋error，整批仍 200。",
+)
+def get_intraday_trends(
+    codes: str = Query(..., description="逗號分隔股票代碼，如 2330.TW,AAPL"),
+) -> IntradayTrendBatchResponse:
+    raw = [c.strip() for c in codes.split(",") if c.strip()]
+    if not raw:
+        raise api_error(400, "empty_codes", "codes 不能为空")
+    if len(raw) > MAX_BATCH_CODES:      # 上限用原始輸入算，重複代碼繞不過
+        raise api_error(400, "too_many_codes", f"最多 {MAX_BATCH_CODES} 个代码")
+    parsed = list(dict.fromkeys(raw))
+    rows = StockService().get_intraday_trends(parsed)
+    return IntradayTrendBatchResponse(items=[IntradayTrendItem(**row) for row in rows])
 
 
 @router.get(
@@ -656,6 +828,44 @@ def get_market_status(
     return {"markets": result, "open": any(result.values()) if result else True}
 
 
+_INDICES_CACHE_TTL_S = 60.0
+_INDICES_CACHEABLE_REGIONS = frozenset({"cn", "hk", "us", "tw", "jp", "kr"})
+_INDICES_CACHE: dict = {}
+_INDICES_CACHE_LOCK = threading.Lock()
+
+
+def _decorate_indices(rows: list, region: str) -> list:
+    """追加 source_code、美股繁中名；非有限值改 null（yfinance 缺前一場時漲跌是 NaN，JSON 會 500）。"""
+    items = []
+    for row in rows:
+        item = {
+            key: None if isinstance(value, float) and not math.isfinite(value) else value
+            for key, value in row.items()
+        }
+        item.setdefault("as_of", None)
+        item.setdefault("source", None)
+        item["source_code"] = normalize_source_code(item["source"])
+        if region == "us":
+            item["name"] = us_index_zh_tw_name(str(item.get("code") or "")) or item.get("name")
+        items.append(item)
+    return items
+
+
+def _index_market_status(region: str) -> dict:
+    """市場狀態每次現算，不進快取：開收盤的邊界不該晚 60 秒。"""
+    try:
+        from src.core.trading_calendar import MarketPhase, infer_market_phase
+
+        phase = infer_market_phase(region)
+    except Exception as e:
+        logger.warning(f"判斷市場狀態失敗 region={region}: {e}")
+        return {"market_phase": "unknown", "market_open": None}
+    if phase == MarketPhase.UNKNOWN:
+        return {"market_phase": phase.value, "market_open": None}
+    open_phases = {MarketPhase.INTRADAY, MarketPhase.LUNCH_BREAK, MarketPhase.CLOSING_AUCTION}
+    return {"market_phase": phase.value, "market_open": phase in open_phases}
+
+
 @router.get(
     "/indices",
     responses={200: {"description": "大盘指数列表"}},
@@ -670,11 +880,21 @@ def get_main_indices(
         # 与 StockService.get_realtime_quotes 同款：每请求自建 manager 可接受
         from data_provider.base import DataFetcherManager
 
-        data = DataFetcherManager().get_main_indices(region)
-        return {"items": data or [], "region": region}
+        now = time.monotonic()
+        with _INDICES_CACHE_LOCK:
+            cached = _INDICES_CACHE.get(region)
+        if cached is not None and cached[0] > now:
+            items = cached[1]
+        else:
+            items = _decorate_indices(DataFetcherManager().get_main_indices(region) or [], region)
+            # 空結果不快取：來源恢復後下一次輪詢就要拿得到。只快取已知市場，鍵不會無限長。
+            if items and region in _INDICES_CACHEABLE_REGIONS:
+                with _INDICES_CACHE_LOCK:
+                    _INDICES_CACHE[region] = (now + _INDICES_CACHE_TTL_S, items)
+        return {"items": [dict(item) for item in items], "region": region, **_index_market_status(region)}
     except Exception as e:
         logger.warning(f"获取大盘指数失败 region={region}: {e}")
-        return {"items": [], "region": region}
+        return {"items": [], "region": region, **_index_market_status(region)}
 
 
 @router.get(
@@ -839,6 +1059,8 @@ def get_stock_trend(
             stock_code=stock_code,
             range=range,
             source=source,
+            source_code=normalize_source_code(source),
+            degraded_reason=service.last_trend_degraded_reason,
             points=[TrendPoint(**p) for p in points],
         )
     except Exception as e:
@@ -847,6 +1069,38 @@ def get_stock_trend(
             status_code=500,
             detail={"error": "internal_error", "message": f"获取走势失败: {str(e)}"},
         )
+
+
+@router.get(
+    "/{stock_code}/financials",
+    response_model=StockFinancialsResponse,
+    responses={400: {"description": "股票代號格式不合法", "model": ErrorResponse}},
+    summary="個股季度財報與 AI 導讀快取",
+    description="台股讀本地 market.financial_statement；美股即時讀 SEC companyfacts、備援 yfinance。"
+                "金額一律是 1 元財報幣別。只讀導讀快取，不會呼叫 LLM；缺資料以 status 表示，HTTP 仍是 200。",
+)
+def get_stock_financials(stock_code: str) -> StockFinancialsResponse:
+    from src.services.financial_commentary import cached_view
+    from src.services.stock_financials import build_financials
+
+    payload = build_financials(_validate_and_normalize_stock_code(stock_code))
+    return StockFinancialsResponse(**payload, commentary=cached_view(payload))
+
+
+@router.post(
+    "/{stock_code}/financials/commentary",
+    response_model=FinancialCommentary,
+    responses={400: {"description": "股票代號格式不合法", "model": ErrorResponse}},
+    summary="取得或生成財報 AI 導讀",
+    description="同一檔、同一財報期間、同一份數字只呼叫一次 LLM（約 20~60 秒）；"
+                "開關關閉回 disabled，失敗回 failed，數字不受影響。",
+)
+def ensure_stock_financial_commentary(stock_code: str) -> FinancialCommentary:
+    from src.services.financial_commentary import ensure_commentary
+    from src.services.stock_financials import build_financials
+
+    payload = build_financials(_validate_and_normalize_stock_code(stock_code))
+    return FinancialCommentary(**ensure_commentary(payload))
 
 
 @router.get(

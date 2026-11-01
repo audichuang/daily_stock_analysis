@@ -1,6 +1,7 @@
 import type { DecisionAction } from '../types/analysis';
 import type { DecisionSignalItem, DecisionSignalStatus } from '../types/decisionSignals';
 import { parseDecisionSignalDate } from './decisionSignalTime';
+import { actionTone, type ActionTone } from './marketTone';
 
 const TERMINAL_STATUSES = new Set<DecisionSignalStatus>(['expired', 'invalidated', 'closed', 'archived']);
 const DEFAULT_RADIUS = 6;
@@ -59,11 +60,16 @@ function getActionFamily(action: DecisionAction): ActionFamily {
   return 'neutral';
 }
 
-function getPointColor(family: ActionFamily, terminal: boolean): string {
+// 動作色不用紅綠（紅綠只給行情方向）：買進類品牌色、續抱觀望灰、減碼賣出與警示琥珀，對應 ACTION_TONE。
+export const TIMELINE_TONE_COLOR: Record<ActionTone, string> = {
+  brand: '#0891b2',
+  neutral: '#64748b',
+  caution: '#d97706',
+};
+
+function getPointColor(action: DecisionAction, terminal: boolean): string {
   if (terminal) return '#8a9099';
-  if (family === 'bullish') return '#16a34a';
-  if (family === 'defensive') return '#dc2626';
-  return '#0891b2';
+  return TIMELINE_TONE_COLOR[actionTone(action)];
 }
 
 export function getTimelinePointStyle(item: DecisionSignalItem): TimelinePointStyle {
@@ -73,7 +79,7 @@ export function getTimelinePointStyle(item: DecisionSignalItem): TimelinePointSt
   const normalizedConfidence = confidence === null ? null : clamp(confidence, 0, 1);
   const terminal = TERMINAL_STATUSES.has(item.status);
   const family = getActionFamily(item.action);
-  const color = getPointColor(family, terminal);
+  const color = getPointColor(item.action, terminal);
   return {
     rank: ACTION_RANK[item.action],
     family,

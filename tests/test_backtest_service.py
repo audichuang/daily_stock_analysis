@@ -3368,7 +3368,7 @@ class BacktestResultDashboardGuardrailTestCase(unittest.TestCase):
         cases = [
             ("sell", "觀望", "watch", "觀望",
              {"decision_score_calibration": {"guardrail_reason": "保留非買入原意"}}),
-            ("hold", "洗盤觀察", "hold", "持有",
+            ("hold", "洗盤觀察", "hold", "續抱",
              {"decision_stability": {"applied": True, "reason": "支撐附近洗盤，維持持有"}}),
         ]
         for decision_type, advice, action, label, dashboard in cases:
@@ -3384,7 +3384,7 @@ class BacktestResultDashboardGuardrailTestCase(unittest.TestCase):
             with self.subTest(dashboard=dashboard):
                 self.assertEqual(
                     self._action(decision_type="hold", advice="洗盤觀察", action="hold", dashboard=dashboard),
-                    ("buy", "買入"),
+                    ("buy", "買進"),
                 )
 
 

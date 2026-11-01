@@ -427,6 +427,14 @@ def get_snapshot(
         True,
         description="Whether today's snapshot should try realtime quotes before historical close fallback",
     ),
+    display_currency: Optional[str] = Query(
+        None,
+        min_length=3,
+        max_length=8,
+        pattern=r"^[A-Za-z]+$",
+        description="追加 consolidated_* 換算欄位的幣別（如 TWD）；不影響既有 CNY 彙總",
+    ),
+    include_funds: bool = Query(False, description="是否附帶帳本外的基金分項"),
 ) -> PortfolioSnapshotResponse:
     service = PortfolioService()
     try:
@@ -435,6 +443,8 @@ def get_snapshot(
             as_of=as_of,
             cost_method=cost_method,
             include_realtime=include_realtime,
+            display_currency=display_currency,
+            include_funds=include_funds,
         )
         return PortfolioSnapshotResponse(**data)
     except ValueError as exc:
@@ -724,6 +734,13 @@ def get_risk_report(
         True,
         description="Whether today's risk snapshot should try realtime quotes before historical close fallback",
     ),
+    display_currency: Optional[str] = Query(
+        None,
+        min_length=3,
+        max_length=8,
+        pattern=r"^[A-Za-z]+$",
+        description="追加 *_display 換算金額的幣別（如 TWD）；權重與回撤不變",
+    ),
 ) -> PortfolioRiskResponse:
     service = PortfolioRiskService()
     try:
@@ -732,6 +749,7 @@ def get_risk_report(
             as_of=as_of,
             cost_method=cost_method,
             include_realtime=include_realtime,
+            display_currency=display_currency,
         )
         return PortfolioRiskResponse(**data)
     except ValueError as exc:

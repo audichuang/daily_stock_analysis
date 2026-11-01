@@ -91,6 +91,16 @@ class SessionStateResponse(BaseModel):
     selected_skill_ids: Optional[List[str]]
 
 
+class StructuredAnswerResponse(BaseModel):
+    """LLM 給的回答摘要；舊對話與沒給的回答整個是 null，前端顯示本文。"""
+
+    conclusion: Optional[str] = None
+    resistance: Optional[float] = None
+    support: Optional[float] = None
+    invalidation: Optional[str] = None
+    follow_ups: List[str] = Field(default_factory=list)
+
+
 class ChatResponse(BaseModel):
     success: bool
     content: str
@@ -100,6 +110,7 @@ class ChatResponse(BaseModel):
     session_state_version: int
     session_generation: str
     session_state: SessionStateResponse
+    structured: Optional[StructuredAnswerResponse] = None
 
 
 def _public_chat_state(*, active_stock_context, session_state_version, session_generation, selected_skill_ids):
@@ -156,6 +167,10 @@ class SkillInfo(BaseModel):
     id: str
     name: str
     description: str
+    # 追加欄位：繁中名稱與分組來自 strategies/*.yaml；自訂策略沒填就是 null。
+    display_name_zh_tw: Optional[str] = None
+    group: Optional[str] = None
+    group_name_zh_tw: Optional[str] = None
 
 class SkillsResponse(BaseModel):
     skills: List[SkillInfo]
@@ -235,7 +250,14 @@ def _build_skills_response(config) -> SkillsResponse:
         ),
     )
     skills = [
-        SkillInfo(id=skill.name, name=skill.display_name, description=skill.description)
+        SkillInfo(
+            id=skill.name,
+            name=skill.display_name,
+            description=skill.description,
+            display_name_zh_tw=getattr(skill, "display_name_zh_tw", "") or None,
+            group=getattr(skill, "group", "") or None,
+            group_name_zh_tw=getattr(skill, "group_name_zh_tw", "") or None,
+        )
         for skill in available_skills
     ]
     return SkillsResponse(
@@ -300,6 +322,7 @@ async def agent_chat(
             content=result.content,
             session_id=session_id,
             error=result.error,
+            structured=getattr(result, "structured_answer", None),
             **_accepted_state_payload(accepted),
         )
     except ChatSessionStateConflict as exc:
@@ -318,6 +341,8 @@ class SessionItem(BaseModel):
     message_count: int
     created_at: Optional[str] = None
     last_active: Optional[str] = None
+    stock_code: Optional[str] = None
+    stock_name: Optional[str] = None
 
 class SessionsResponse(BaseModel):
     sessions: List[SessionItem]
@@ -609,6 +634,7 @@ async def agent_chat_stream(
                 "backend": getattr(result, "backend", "") or backend_id,
                 "error_code": getattr(result, "error_code", None),
                 "request_id": request_id,
+                "structured": getattr(result, "structured_answer", None),
             })
             asyncio.run_coroutine_threadsafe(queue.put(event), loop)
         except Exception as exc:
@@ -650,6 +676,8 @@ async def agent_chat_stream(
                 "backend": backend_id,
                 "request_id": request_id,
                 "session_id": session_id,
+                # 只有 Codex 後端註冊得到取消；LiteLLM 迴圈不收 cancel_event，前端要藏停止鈕或改成中斷連線。
+                "cancel_supported": backend_id == "codex_app_server",
                 **_accepted_state_payload(accepted),
             }
             yield "data: " + json.dumps(accepted_event, ensure_ascii=False) + "\n\n"

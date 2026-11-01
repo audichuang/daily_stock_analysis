@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { systemConfigApi } from '../api/systemConfig';
+import { systemConfigApi, type WatchlistGroup } from '../api/systemConfig';
 import { findMatchingStockCode, includesStockCode } from '../utils/stockCode';
 
 export interface UseWatchlistReturn {
   watchlistCodes: string[];
+  watchlistGroups: WatchlistGroup[];
+  saveWatchlistGroups: (groups: WatchlistGroup[]) => Promise<void>;
   isLoading: boolean;
   isActioning: boolean;
   actionMessage: string | null;
@@ -16,6 +18,7 @@ export interface UseWatchlistReturn {
 
 export function useWatchlist(): UseWatchlistReturn {
   const [codes, setCodes] = useState<string[]>([]);
+  const [groups, setGroups] = useState<WatchlistGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isActioning, setIsActioning] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -32,6 +35,17 @@ export function useWatchlist(): UseWatchlistReturn {
     };
   }, []);
 
+  const loadGroups = useCallback(async () => {
+    try {
+      const result = await systemConfigApi.getWatchlistGroups();
+      if (mountedRef.current) {
+        setGroups(result.groups);
+      }
+    } catch {
+      // 分組是附加資訊，讀不到就維持現狀，不影響自選清單。
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
       const result = await systemConfigApi.getWatchlist();
@@ -41,7 +55,8 @@ export function useWatchlist(): UseWatchlistReturn {
     } catch {
       // keep existing codes
     }
-  }, []);
+    await loadGroups();
+  }, [loadGroups]);
 
   useEffect(() => {
     setIsLoading(true);
@@ -93,13 +108,27 @@ export function useWatchlist(): UseWatchlistReturn {
       if (mountedRef.current) {
         setCodes(result);
         showMessage(`已从自选移除 ${stockCode}`);
+        // 後端移除時會連帶清分組。
+        void loadGroups();
       }
     } catch {
       if (mountedRef.current) showMessage('操作失败');
     } finally {
       if (mountedRef.current) setIsActioning(false);
     }
-  }, [isActioning, showMessage]);
+  }, [isActioning, loadGroups, showMessage]);
+
+  const saveWatchlistGroups = useCallback(async (nextGroups: WatchlistGroup[]) => {
+    setIsActioning(true);
+    try {
+      const result = await systemConfigApi.saveWatchlistGroups(nextGroups);
+      if (mountedRef.current) setGroups(result.groups);
+    } catch {
+      if (mountedRef.current) showMessage('操作失败');
+    } finally {
+      if (mountedRef.current) setIsActioning(false);
+    }
+  }, [showMessage]);
 
   const toggleWatchlist = useCallback(async (stockCode: string) => {
     const existingStockCode = findMatchingStockCode(codes, stockCode);
@@ -112,6 +141,8 @@ export function useWatchlist(): UseWatchlistReturn {
 
   return {
     watchlistCodes: codes,
+    watchlistGroups: groups,
+    saveWatchlistGroups,
     isLoading,
     isActioning,
     actionMessage,

@@ -4,6 +4,8 @@
 name: quality_value
 display_name: 稳健价值
 description: 估值合理、流动性充足、波动不过热，并要求有温和活跃度确认的稳健候选
+display_name_zh_tw: 穩健價值
+description_zh_tw: 估值合理、流動性充足、波動不過熱，並有溫和活躍度確認
 version: "1.1"
 category: value
 tags: [value, quality, stability, dynamic_signal]
@@ -17,7 +19,7 @@ style:
 
 screening:
   enabled: true
-  market_scope: [cn]
+  market_scope: [cn, tw, us]
   hard_filters:
     exclude_st: true
     amount_min: 80000000
@@ -71,3 +73,28 @@ screening:
     2. 成交额足够、涨跌幅不过热，适合后续深度分析
     3. 兼顾行业地位、现金流质量、分红或经营稳定性线索
   max_output: 5
+  # 門檻依幣別另設，整組取代上面的人民幣門檻；exclude_st 比對名稱裡的 ST／退，只對 A 股有意義。
+  market_overrides:
+    tw:
+      hard_filters:
+        exclude_st: false
+        amount_min: 50000000
+        pe_ttm_min: 0
+        pe_ttm_max: 25
+        pb_min: 0
+        pb_max: 4.0
+        change_pct_min: -3.5
+        change_pct_max: 5.0
+        price_min: 10
+    us:
+      hard_filters:
+        exclude_st: false
+        amount_min: 20000000
+        market_cap_min: 2000000000
+        pe_ttm_min: 0
+        pe_ttm_max: 25
+        pb_min: 0
+        pb_max: 6.0
+        change_pct_min: -3.5
+        change_pct_max: 5.0
+        price_min: 5

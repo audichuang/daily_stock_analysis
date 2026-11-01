@@ -219,6 +219,109 @@ class DecisionSignalRepository:
             ).scalars().all()
             return list(rows), int(total)
 
+    def list_latest_per_stock(
+        self,
+        *,
+        stock_codes: Optional[List[str]] = None,
+        stock_identities: Optional[List[Tuple[str, str]]] = None,
+        market: Optional[str] = None,
+        action: Optional[str] = None,
+        market_phase: Optional[str] = None,
+        decision_profile_filter: DecisionProfileFilter = DECISION_PROFILE_FILTER_ALL,
+        source_type: Optional[str] = None,
+        source_report_id: Optional[int] = None,
+        trace_id: Optional[str] = None,
+        trigger_source: Optional[str] = None,
+        status: Optional[str] = None,
+        created_from: Optional[datetime] = None,
+        created_to: Optional[datetime] = None,
+        expires_from: Optional[datetime] = None,
+        expires_to: Optional[datetime] = None,
+        page: Optional[int] = 1,
+        page_size: int = 20,
+    ) -> Tuple[List[DecisionSignalRecord], int, Dict[int, int]]:
+        """每檔（market + stock_code）只回符合條件的最新一筆，附同檔較舊筆數。
+
+        去重放在 SQL：同頁去重擋不住跨頁重複，total 也會不準。``page=None`` 回全部，
+        給要在記憶體排序的呼叫端用。回傳 (rows, 檔數, {signal_id: 同檔較舊筆數})。
+        """
+        self.expire_due_signals()
+        conditions = self._build_conditions(
+            stock_codes=stock_codes,
+            stock_identities=stock_identities,
+            market=market,
+            action=action,
+            market_phase=market_phase,
+            decision_profile_filter=decision_profile_filter,
+            source_type=source_type,
+            source_report_id=source_report_id,
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+            status=status,
+            created_from=self._normalize_optional_datetime(created_from),
+            created_to=self._normalize_optional_datetime(created_to),
+            expires_from=self._normalize_optional_datetime(expires_from),
+            expires_to=self._normalize_optional_datetime(expires_to),
+        )
+        where_clause = and_(*conditions) if conditions else True
+        partition = [DecisionSignalRecord.market, DecisionSignalRecord.stock_code]
+        ranked = (
+            select(
+                DecisionSignalRecord.id.label("signal_id"),
+                func.row_number()
+                .over(
+                    partition_by=partition,
+                    order_by=[desc(DecisionSignalRecord.created_at), desc(DecisionSignalRecord.id)],
+                )
+                .label("rn"),
+                func.count(DecisionSignalRecord.id).over(partition_by=partition).label("group_count"),
+            )
+            .where(where_clause)
+            .subquery()
+        )
+        with self.db.get_session() as session:
+            total = session.execute(
+                select(func.count()).select_from(ranked).where(ranked.c.rn == 1)
+            ).scalar() or 0
+            query = (
+                select(DecisionSignalRecord, ranked.c.group_count)
+                .join(ranked, DecisionSignalRecord.id == ranked.c.signal_id)
+                .where(ranked.c.rn == 1)
+                .order_by(desc(DecisionSignalRecord.created_at), desc(DecisionSignalRecord.id))
+            )
+            if page is not None:
+                safe_page_size = max(1, min(int(page_size), 100))
+                query = query.offset((max(1, int(page)) - 1) * safe_page_size).limit(safe_page_size)
+            pairs = session.execute(query).all()
+            rows = [row for row, _ in pairs]
+            older_counts = {row.id: int(group_count) - 1 for row, group_count in pairs}
+            return rows, int(total), older_counts
+
+    def previous_actions(self, rows: List[DecisionSignalRecord]) -> Dict[int, str]:
+        """每筆訊號同檔（market + stock_code）前一筆的 action，不套用清單篩選；沒有前一筆的不回。"""
+        result: Dict[int, str] = {}
+        with self.db.get_session() as session:
+            for row in rows:
+                previous = session.execute(
+                    select(DecisionSignalRecord.action)
+                    .where(
+                        DecisionSignalRecord.market == row.market,
+                        DecisionSignalRecord.stock_code == row.stock_code,
+                        or_(
+                            DecisionSignalRecord.created_at < row.created_at,
+                            and_(
+                                DecisionSignalRecord.created_at == row.created_at,
+                                DecisionSignalRecord.id < row.id,
+                            ),
+                        ),
+                    )
+                    .order_by(desc(DecisionSignalRecord.created_at), desc(DecisionSignalRecord.id))
+                    .limit(1)
+                ).scalar()
+                if previous:
+                    result[row.id] = previous
+        return result
+
     def get_latest_active(
         self,
         *,

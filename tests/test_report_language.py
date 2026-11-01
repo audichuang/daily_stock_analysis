@@ -21,7 +21,9 @@ from src.report_language import (
     localize_trend_prediction,
     localize_bias_status,
     normalize_report_language,
+    report_table_rows,
 )
+from src.utils.zh_s2t import localize_template, to_traditional
 
 
 class ReportLanguageTestCase(unittest.TestCase):
@@ -281,3 +283,72 @@ class KoreanReportLanguageTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestZhTwVocabulary(unittest.TestCase):
+    def test_new_labels_follow_glossary(self) -> None:
+        for canonical, label in (("买入", "買進"), ("持有", "續抱"), ("减仓", "減碼"), ("强烈买入", "強烈買進")):
+            self.assertEqual(localize_operation_advice(canonical, "zh-TW"), label)
+
+    def test_legacy_and_new_words_keep_resolving(self) -> None:
+        # 舊報告的詞與新詞都要解析得回來；移除別名這裡會紅。
+        cases = {
+            "減倉": "sell", "減碼": "sell", "买进": "buy", "買進": "buy", "買入": "buy",
+            "加碼": "buy", "加倉": "buy", "續抱": "hold", "觀望": "hold", "賣出": "sell",
+        }
+        for word, expected in cases.items():
+            self.assertEqual(infer_decision_type_from_advice(word, default="unknown"), expected, word)
+
+    def test_legacy_reduce_displays_as_new_label(self) -> None:
+        self.assertEqual(localize_operation_advice("減倉", "zh-TW"), "減碼")
+        self.assertEqual(localize_operation_advice("買入", "zh-TW"), "買進")
+        self.assertEqual(get_signal_level("減倉", 50, "zh-TW"), ("減碼", "🟠", "reduce"))
+
+    def test_other_languages_keep_their_labels(self) -> None:
+        self.assertEqual(localize_operation_advice("減碼", "zh"), "减仓")
+        self.assertEqual(localize_operation_advice("減碼", "en"), "Reduce")
+        self.assertEqual(localize_operation_advice("減碼", "ko"), "비중축소")
+
+    def test_table_headers_per_language(self) -> None:
+        expected = {
+            "zh-TW": ("項目", "數值", "點位", "價格"),
+            "zh": ("项目", "数值", "点位", "价格"),
+            "en": ("Item", "Value", "Level", "Price"),
+            "ko": ("항목", "수치", "가격대", "가격"),
+        }
+        for language, headers in expected.items():
+            labels = get_report_labels(language)
+            self.assertEqual(
+                (
+                    labels["table_item_label"], labels["table_value_label"],
+                    labels["table_level_label"], labels["table_price_label"],
+                ),
+                headers,
+            )
+
+    def test_report_table_rows_omits_only_missing_values(self) -> None:
+        rows = report_table_rows([
+            ("A", None), ("B", float("nan")), ("C", "N/A"), ("D", "nan"), ("E", 0), ("F", "12.5"),
+        ])
+        self.assertEqual(rows, ["| E | 0 |", "| F | 12.5 |"])
+
+
+class TestZhS2T(unittest.TestCase):
+    def test_converts_template_text_and_taiwan_terms(self) -> None:
+        self.assertEqual(to_traditional("空仓者的止损价位"), "空手者的停損價位")
+        self.assertEqual(to_traditional("买入后减仓，持仓数据"), "買進後減碼，持股資料")
+        self.assertEqual(to_traditional("10.00 亿新台币"), "10.00 億新台幣")
+
+    def test_one_to_many_chars_use_phrases(self) -> None:
+        self.assertEqual(to_traditional("大盘复盘与恢复"), "大盤複盤與恢復")
+        self.assertEqual(to_traditional("重复，回复，发布"), "重複，回覆，發布")
+
+    def test_already_traditional_text_and_ascii_are_untouched(self) -> None:
+        text = "### 台股短波段買入（60-69分，均線加權）：`action=buy` {market}"
+        self.assertEqual(to_traditional(text), text)
+        self.assertEqual(to_traditional(to_traditional("减仓")), "減碼")
+
+    def test_localize_template_only_touches_zh_tw(self) -> None:
+        self.assertEqual(localize_template("减仓", "zh-TW"), "減碼")
+        for language in ("zh", "en", "ko", ""):
+            self.assertEqual(localize_template("减仓", language), "减仓")

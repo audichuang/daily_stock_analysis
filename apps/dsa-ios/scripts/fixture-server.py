@@ -38,17 +38,19 @@ STOCKS = {
 def quote(code):
     name, price, change_pct, _ = STOCKS[code]
     previous = round(price / (1 + change_pct / 100), 2)
+    # 長榮貼近漲停、高股息報價過期：驗證清單只有例外才有色塊與警告。
+    limit_up = round(price * 1.002, 2) if code == "2603.TW" else round(previous * 1.1, 2)
     return {
         "stock_code": code, "stock_name": name, "current_price": price,
         "change": round(price - previous, 2), "change_percent": change_pct,
         "open": price - 2, "high": price + 5, "low": price - 4,
         "prev_close": previous, "volume": 12345678, "amount": 7410000000,
         "volume_ratio": 1.2, "average_price": price - 1,
-        "limit_up": round(previous * 1.1, 2), "limit_down": round(previous * 0.9, 2),
+        "limit_up": limit_up, "limit_down": round(previous * 0.9, 2),
         "best_bid": 0 if code == "2330.TW" else price - 1, "best_ask": price + 1,
         "best_bid_volume": 0 if code == "2330.TW" else 30, "best_ask_volume": 25,
-        "source": "fixture（合成資料）", "as_of": AS_OF, "update_time": AS_OF,
-        "is_stale": True,
+        "source": "fixture（合成資料）", "source_code": "fixture", "as_of": AS_OF, "update_time": AS_OF,
+        "is_stale": code == "00878.TW",
     }
 
 
@@ -88,11 +90,17 @@ def intraday(code):
     day = "2024-01-31" if market == "tw" else "2024-01-30"
     count = minutes // 5 + 1
     points = []
+    cum_value, cum_volume = 0.0, 0.0
     for index in range(count):
         minute = start + index * 5
         wave = math.sin(index / 9) * price * 0.006 + (index - count) * price * 0.00005
+        point_price = round(price + wave if index < count - 1 else price, 2)
+        volume = 200_000 + (index % 7) * 50_000
+        cum_value += point_price * volume
+        cum_volume += volume
         points.append({"t": f"{day}T{minute // 60:02d}:{minute % 60:02d}:00{tz}",
-                       "price": round(price + wave if index < count - 1 else price, 2)})
+                       "price": point_price, "volume": volume,
+                       "avg_price": round(cum_value / cum_volume, 4)})
     return points
 
 
@@ -107,11 +115,13 @@ def artifact(code, record_id=101):
             "action": "watch", "action_label": "觀望（測試）",
             "reasons": ["測試營收年增改善", "測試日 K 支撐尚未失守"],
             "risks": ["測試估值偏高", "測試法人資料尚未更新"],
+            "one_sentence": "【合成】先觀察支撐，不追價。",
+            "position_advice": {"has_position": "【合成】持股者守支撐續抱。", "no_position": "【合成】空手者等回測再評估。"},
         },
         "evidence": [
             {"id": "fixture-revenue", "source_type": "fundamental", "title": "月營收（測試）",
              "summary": "合成資料用來驗證來源與日期顯示，不能用於投資。", "source": "fixture",
-             "freshness": "stale", "quality_level": "limited", "as_of": AS_OF, "url": None},
+             "freshness": "stale", "quality_level": "limited", "as_of": AS_OF, "url": None, "group": "fundamental"},
             {"id": "fixture-price", "source_type": "technical", "title": "價格結構（測試）",
              "summary": "測試支撐附近仍需確認成交量。", "source": "fixture",
              "freshness": "stale", "quality_level": "limited", "as_of": AS_OF, "url": None},
@@ -119,12 +129,49 @@ def artifact(code, record_id=101):
         "invalidation_conditions": [
             {"id": "fixture-support", "category": "price", "description": "跌破測試支撐需重新判斷",
              "trigger": "測試日線收盤跌破支撐", "severity": "warning", "metric": "測試支撐價",
-             "threshold": str(STOCKS[code][1] - 30), "due_at": None},
+             "threshold": str(STOCKS[code][1] - 30), "due_at": None,
+             "direction": "below", "status": "pending"},
         ],
         "next_actions": [{"action": "watch", "label": "等待測試數據確認", "reason": "合成驗收資料，不是真實建議", "due_at": None}],
         "data_quality": {"level": "limited", "overall_score": None, "source_count": 2, "stale_count": 2,
                          "missing_blocks": ["institutional"], "limitations": ["全部為固定過去日期的合成 fixture，不能視為真行情或真 AI 分析。"]},
+        "source_status": {"insider": "timeout", "sec_finra": "no_data", "futu": "not_configured", "ratings": "ok"},
     }
+
+
+FULL_REPORT_MARKDOWN = """# 合成測試完整報告
+
+這不是即時行情，也不是模型實際生成結果。
+
+## 觀察重點
+
+- 驗證完整文字可閱讀。
+  - 巢狀項目要懸掛縮排，第二層也不能跑版。
+- 驗證來源與失效條件可追溯。
+- ✅ 站上合成月線
+- ⚠️ 合成量能不足
+- ❌ 合成法人賣超
+
+> 合成引用：引用要有色條。
+
+---
+
+這段有 *不該變斜體的字* 與 **粗體**。
+
+## 數據
+
+| 指標 | 數值 |
+| --- | --- |
+| 合成毛利率 | 50% |
+
+| 季度 | 營收 | 毛利率 |
+| --- | --- | --- |
+| 合成 Q1 | 100 億 | 48% |
+
+## 風險
+
+固定過去日期的測試資料，不能用於投資決策。
+"""
 
 
 def report_news(record_id):
@@ -160,6 +207,70 @@ def history_item(record_id, code, report_type="detailed", region=None):
         "action": "watch", "action_label": "觀望（測試）",
         "current_price": None if is_market else STOCKS[code][1], "change_pct": None if is_market else STOCKS[code][2],
         "model_used": "fixture-only", "created_at": AS_OF, "asset_type": "index" if is_market else "stock",
+        "one_sentence": None if is_market else "【合成】一句話結論：等待量能確認。",
+    }
+
+
+def legacy_action(item, action):
+    """重現舊報告：存檔標籤是「減倉」，畫面要依枚舉或別名顯示「減碼」。"""
+    item.update(action=action, action_label="減倉", operation_advice="減倉")
+    return item
+
+
+def profile_position(code):
+    # 與 portfolio() 的第一個帳戶一致；AAPL 刻意不給，走沒持股的畫面。
+    if code != "2330.TW":
+        return None
+    return {"quantity": 1000.0, "avg_cost": 580.0, "currency": "TWD", "last_price": 600.0, "market_value": 600000.0,
+            "unrealized_pnl": 20000.0, "unrealized_pnl_pct": 3.45, "weight_pct": 42.5, "account_count": 1}
+
+
+def profile_chips(code):
+    if STOCKS[code][3] != "tw":
+        return None
+    return {"institutional_date": "2024-01-31", "foreign_net": 1250000.0, "trust_net": -300000.0, "dealer_net": 15000.0,
+            "total_net": 965000.0, "margin_date": "2024-01-31", "margin_balance": 12000.0, "margin_chg_5": 150.0,
+            "margin_chg_20": -80.0, "short_balance": 900.0, "short_margin_ratio": 7.5}
+
+
+def report_strategy(item):
+    """#101 系列是結構化價位；#102、#111 是 legacy，只有原文。"""
+    price = STOCKS[item["stock_code"]][1]
+    legacy = {"ideal_buy": "等待測試支撐確認", "secondary_buy": None, "stop_loss": "跌破測試支撐再評估",
+              "take_profit": "測試壓力區分批觀察"}
+    if item["id"] in (102, 111):
+        return {**legacy, "sniper_prices": None, "sniper_prices_source": "legacy"}
+    return {**legacy, "sniper_prices": {"ideal_buy": round(price * 0.98, 2), "secondary_buy": round(price * 0.96, 2),
+                                        "stop_loss": round(price * 0.92, 2), "take_profit": round(price * 1.1, 2)},
+            "sniper_prices_source": "structured"}
+
+
+def financials_fixture(code):
+    """合成財報：AI 已標記毛利率，其他欄位不標；所有數字都是假的。"""
+    point = lambda period, value, yoy=None, pp=None: {
+        "period": period, "value": value, "yoy_pct": yoy, "qoq_pct": None, "yoy_pp": pp, "qoq_pp": None, "derived": False}
+    return {
+        "stock_code": code, "market": "tw", "status": "ok", "status_reason": None, "stock_name": None,
+        "template": "general", "currency": "TWD", "trading_currency": "TWD",
+        "source": {"id": "fixture", "label": "合成測試財報", "source_unit": "新台幣千元", "url": None},
+        "cross_check": None,
+        "periods": [{"key": "2099Q2", "label": "2099 Q2", "fiscal_year": 2099, "fiscal_quarter": 2,
+                     "period_end": "2099-06-30", "announce_date": "2099-08-14",
+                     "announce_date_kind": "statutory_deadline", "filing_form": ""}],
+        "metrics": [
+            {"key": "revenue", "label": "營收", "kind": "amount", "unit": "TWD", "definition": "合成：營收教學",
+             "points": [point("2099Q2", 1.27e12, yoy=36.0)]},
+            {"key": "gross_margin", "label": "毛利率", "kind": "ratio", "unit": "%", "definition": "合成：毛利率教學",
+             "points": [point("2099Q2", 67.7, pp=9.1)]},
+        ],
+        "not_applicable": [{"key": "contract_liabilities", "label": "合約負債", "reason": "合成：沒有揭露"}],
+        "monthly_revenue": [{"month": "2099-09", "revenue": 5e11, "yoy_pct": 54.6, "mom_pct": -0.6, "announce_date": "2099-10-10"}],
+        "ttm_revenue_yoy_pct": 36.2, "limitations": ["合成測試資料"], "is_stale": False,
+        "commentary": {"status": "ready", "period": "2099Q2", "generated_at": None, "model": "fixture",
+                       "headline": "合成導讀：毛利率大幅上升", "message": None,
+                       "highlights": [{"metric_key": "gross_margin", "period": "2099Q2", "importance": "high",
+                                       "what_happened": "合成：毛利率上升", "why_it_matters": "合成：定價能力變強",
+                                       "how_to_read": "合成：毛利除以營收"}]},
     }
 
 
@@ -194,15 +305,35 @@ def calendar_events(query):
 
 
 class State:
+    def watchlist_groups_payload(self):
+        # 與真 API 同語意：成員以自選為準、一檔只屬於一組。
+        assigned = set()
+        groups = []
+        for group in self.watchlist_groups:
+            codes = [code for code in group["codes"] if code in self.watchlist and code not in assigned]
+            assigned.update(codes)
+            groups.append({"name": group["name"], "codes": codes})
+        return {"groups": groups, "ungrouped": [code for code in self.watchlist if code not in assigned]}
+
     def __init__(self):
         self.lock = threading.RLock()
         self.calendar_failing = False
+        # UI 測試注入的自選載入失敗：watchlist（名單）、quotes（整批報價）、partial（單檔無報價）。
+        self.failing = set()
+        self.markdown_failing = False
         self.watchlist = ["2330.TW", "2317.TW", "00631L.TW", "2303.TW", "2603.TW", "0050.TW", "00878.TW", "AAPL"]
+        self.watchlist_groups = []
         self.records = [history_item(101, "2330.TW"), history_item(102, "AAPL"),
                         history_item(201, "TWII", "market_review", "tw"),
                         history_item(202, "SPX", "market_review", "us")]
         self.records += [history_item(110 + index, code) for index, code in enumerate(self.watchlist)
                          if code not in ("2330.TW", "AAPL")]
+        # 舊報告兩種形狀：#111 有枚舉、#102 沒枚舉，兩者都存「減倉」。
+        for item in self.records:
+            if item["id"] == 111:
+                legacy_action(item, "reduce")
+            if item["id"] == 102:
+                legacy_action(item, None)
         self.tasks = {}
         self.analysis_starts = 0
         self.next_record_id = 301
@@ -211,10 +342,17 @@ class State:
         code = item["stock_code"]
         is_market = item["report_type"] == "market_review"
         return {
-            "meta": {key: item.get(key) for key in ["id", "query_id", "stock_code", "stock_name", "report_type", "created_at", "current_price", "change_pct", "model_used", "asset_type"]},
-            "summary": {key: item.get(key) for key in ["analysis_summary", "operation_advice", "action", "action_label", "trend_prediction", "sentiment_score"]},
-            "strategy": None if is_market else {"ideal_buy": "等待測試支撐確認", "secondary_buy": None,
-                                                "stop_loss": "跌破測試支撐再評估", "take_profit": "測試壓力區分批觀察"},
+            "meta": {**{key: item.get(key) for key in ["id", "query_id", "stock_code", "stock_name", "report_type", "created_at", "current_price", "change_pct", "model_used", "asset_type"]},
+                     "price_date": None if is_market else "2024-01-31",
+                     "currency": None if is_market else ("TWD" if STOCKS[code][3] == "tw" else "USD"),
+                     "held": None if is_market else code == "2330.TW",
+                     "previous_report": None if is_market else {"id": 90, "action": "reduce", "score": 40, "created_at": "2024-01-20T13:30:00+08:00", "stop_loss": None}},
+            "summary": {**{key: item.get(key) for key in ["analysis_summary", "operation_advice", "action", "action_label", "trend_prediction", "sentiment_score", "one_sentence"]},
+                        "confidence_level": None if is_market else "medium", "time_sensitivity": None if is_market else "本週",
+                        "position_advice": None if is_market else {"has_position": "【合成】持股者守支撐續抱。", "no_position": "【合成】空手者等回測再評估。"},
+                        "phase_watch_conditions": None if is_market else ["【合成】觀察量能是否放大"],
+                        "exit_triggers": None if is_market else ["【合成】收盤跌破支撐就改判"]},
+            "strategy": None if is_market else report_strategy(item),
             "structured_report": None if is_market else artifact(code, item["id"]),
         }
 
@@ -288,6 +426,14 @@ class Handler(BaseHTTPRequestHandler):
                 # UI 測試注入行事曆失敗，驗證事件卡的失敗與恢復。
                 STATE.calendar_failing = query.get("on", ["0"])[0] == "1"
                 return self.reply(200, {"calendar_failing": STATE.calendar_failing})
+            if route == ["__fixture", "fail"]:
+                target = query.get("target", [""])[0]
+                (STATE.failing.add if query.get("on", ["0"])[0] == "1" else STATE.failing.discard)(target)
+                return self.reply(200, {"failing": sorted(STATE.failing)})
+            if route == ["__fixture", "markdown-failing"]:
+                # UI 測試注入全文讀取失敗，驗證不展開也看得到錯誤。
+                STATE.markdown_failing = query.get("on", ["0"])[0] == "1"
+                return self.reply(200, {"markdown_failing": STATE.markdown_failing})
             if route == ["health"]:
                 return self.reply(200, {"status": "fixture", "synthetic": True})
             if route == ["api", "v1", "auth", "status"]:
@@ -312,16 +458,24 @@ class Handler(BaseHTTPRequestHandler):
                     "last_stats": {"evaluated": 2}, "channels": ["telegram"], "enabled_rules": 2,
                 })
             if route == ["api", "v1", "stocks", "watchlist"]:
+                if "watchlist" in STATE.failing:
+                    return self.reply(503, {"error": "fixture", "message": "合成自選名單失敗"})
                 return self.reply(200, {"stock_codes": STATE.watchlist, "message": "合成測試自選股"})
+            if route == ["api", "v1", "stocks", "watchlist", "groups"]:
+                return self.reply(200, STATE.watchlist_groups_payload())
             if route == ["api", "v1", "stocks", "quotes"]:
+                if "quotes" in STATE.failing:
+                    return self.reply(503, {"error": "fixture", "message": "合成報價失敗"})
                 codes = query.get("codes", [""])[0].split(",")
-                return self.reply(200, {"items": [{"stock_code": code, "quote": quote(code) if code in STOCKS else None,
-                                                   "error": None if code in STOCKS else "no_data"} for code in codes]})
+                missing = {"2303.TW"} if "partial" in STATE.failing else set()
+                return self.reply(200, {"items": [{"stock_code": code, "quote": quote(code) if code in STOCKS and code not in missing else None,
+                                                   "error": None if code in STOCKS and code not in missing else "no_data"} for code in codes]})
             if route == ["api", "v1", "stocks", "indices"]:
                 region = query.get("region", ["tw"])[0]
                 data = [("TWII", "加權指數（測試）", 18000, 100, 0.56), ("TPEX", "櫃買指數（測試）", 230, -1, -0.43)] if region == "tw" else [
                     ("SPX", "S&P 500（測試）", 4800, 20, 0.42), ("IXIC", "NASDAQ（測試）", 15000, -50, -0.33)]
-                return self.reply(200, {"region": region, "items": [dict(zip(["code", "name", "current", "change", "change_pct"], row), source="fixture（合成資料）", as_of=AS_OF) for row in data]})
+                return self.reply(200, {"region": region, "items": [dict(zip(["code", "name", "current", "change", "change_pct"], row), source="fixture（合成資料）", as_of=AS_OF) for row in data],
+                                        "market_phase": "postmarket", "market_open": False})
             if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "trend":
                 code = route[3]
                 if code not in STOCKS:
@@ -345,7 +499,13 @@ class Handler(BaseHTTPRequestHandler):
                                    "recent_reports": records, "structured_report": artifact(code, records[0]["id"] if records else 101)}, "limitations": ["合成測試分析"]},
                     "evidence_quality": {"status": "partial", "blocks": {"quote": "partial", "research": "partial"},
                                          "limitations": ["全部是固定過去日期的 fixture，不能用於交易。", "no_symbol_intelligence"]},
+                    "position": profile_position(code), "chips": profile_chips(code), "news": [],
+                    "portfolio": {"status": "partial", "data": {"held": profile_position(code) is not None}, "limitations": []},
                 })
+            if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "financials":
+                if route[3] not in STOCKS:
+                    return self.reply(404, {"detail": {"error": "not_found", "message": "測試資料沒有此股票"}})
+                return self.reply(200, financials_fixture(route[3]))
             if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "dossier":
                 code = route[3]
                 if code not in STOCKS:
@@ -353,9 +513,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, f"<!doctype html><html lang='zh-Hant'><meta name='viewport' content='width=device-width'><body style='background:#101824;color:#fff;font:18px system-ui;padding:24px'><h1>四維度合成檔案 {code}</h1><p>受登入保護的 {code} 測試研究檔案，不能視為真實研究。</p></body></html>", content_type="text/html; charset=utf-8")
             if route == ["api", "v1", "history"]:
                 records = STATE.records
-                for key in ["stock_code", "report_type"]:
+                for key in ["stock_code", "report_type", "action"]:
                     if key in query:
                         records = [item for item in records if item.get(key) == query[key][0]]
+                if "market" in query:
+                    # 與真後端一致：大盤複盤不屬於任何市場。
+                    records = [item for item in records if item["report_type"] != "market_review"
+                               and STOCKS[item["stock_code"]][3].lower() == query["market"][0]]
+                if "q" in query:
+                    term = query["q"][0].lower()
+                    records = [item for item in records
+                               if term in item["stock_code"].lower() or term in (item["stock_name"] or "").lower()]
                 page = int(query.get("page", ["1"])[0])
                 limit = int(query.get("limit", ["20"])[0])
                 return self.reply(200, {"total": len(records), "page": page, "limit": limit,
@@ -370,7 +538,9 @@ class Handler(BaseHTTPRequestHandler):
                     items = report_news(record["id"])[:int(query.get("limit", ["20"])[0])]
                     return self.reply(200, {"total": len(items), "items": items})
                 if len(route) == 5 and route[4] == "markdown":
-                    return self.reply(200, {"content": "# 合成測試完整報告\n\n這不是即時行情，也不是模型實際生成結果。\n\n## 觀察重點\n\n- 驗證完整文字可閱讀。\n- 驗證來源與失效條件可追溯。\n\n## 風險\n\n固定過去日期的測試資料，不能用於投資決策。"})
+                    if STATE.markdown_failing:
+                        return self.reply(503, {"detail": {"error": "fixture", "message": "合成全文失敗"}})
+                    return self.reply(200, {"content": FULL_REPORT_MARKDOWN})
                 if len(route) == 4:
                     return self.reply(200, STATE.report(record))
             if len(route) == 5 and route[:4] == ["api", "v1", "analysis", "status"]:
@@ -383,6 +553,8 @@ class Handler(BaseHTTPRequestHandler):
                 if complete:
                     if not task.get("record"):
                         task["record"] = history_item(STATE.next_record_id, task["code"])
+                        # 與前一份不同，研究庫才有同日變化行可驗。
+                        task["record"].update(action="buy", action_label="買進", sentiment_score=72)
                         STATE.next_record_id += 1
                         STATE.records.insert(0, task["record"])
                     report = STATE.report(task["record"])
@@ -392,9 +564,12 @@ class Handler(BaseHTTPRequestHandler):
                                        "progress": 100 if complete else task["polls"] * 30,
                                        "result": result, "error": None, "stock_name": STOCKS[task["code"]][0]})
             if route == ["api", "v1", "portfolio", "snapshot"]:
-                return self.reply(200, portfolio())
+                return self.reply(200, portfolio(query.get("display_currency", [None])[0],
+                                                 query.get("include_funds") == ["true"]))
+            if route == ["api", "v1", "portfolio", "risk"]:
+                return self.reply(200, portfolio_risk())
             if route == [""] or (route and route[0] in ["chat", "screening", "portfolio", "alerts", "funds", "decision-signals", "backtest", "data", "settings", "usage"]):
-                html = tool_html("/" + "/".join(route))
+                html = tool_html("/" + "/".join(route), query.get("embed", ["無"])[0])
                 if self.access_required:
                     html = html.replace("</body>", "<p id='access-proof'>驗證 Access 子資源中</p><script src='/access-cookie-proof.js'></script><a href='/access-redirect'>測試 Access 失效轉址</a></body>")
                 return self.reply(200, html, content_type="text/html; charset=utf-8")
@@ -418,6 +593,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(401, {"error": "unauthorized", "message": "請登入測試服務"})
             if route == ["api", "v1", "auth", "logout"]:
                 return self.reply(204, headers={"Set-Cookie": "dsa_session=; Max-Age=0; Path=/; HttpOnly"})
+            # 要排在下面 add/remove 的分支之前，否則 groups 會被當成代號操作回 400。
+            if route == ["api", "v1", "stocks", "watchlist", "groups"]:
+                STATE.watchlist_groups = [
+                    {"name": group["name"], "codes": list(group.get("codes", []))}
+                    for group in body.get("groups", [])
+                ]
+                return self.reply(200, STATE.watchlist_groups_payload())
             if len(route) == 5 and route[:4] == ["api", "v1", "stocks", "watchlist"]:
                 code = body.get("stock_code")
                 if code not in STOCKS:
@@ -440,10 +622,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"detail": {"error": "fixture_route_missing", "message": "此路徑尚未加入 fixture"}})
 
 
-def tool_html(route_path="/chat"):
+def tool_html(route_path="/chat", embed="無"):
     return """<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width">
 <body style="background:#101824;color:#fff;font:18px system-ui;padding:24px">
-<h1>進階工具（合成驗收頁）</h1><p>頁面路徑：{{ROUTE}}</p>
+<h1>進階工具（合成驗收頁）</h1><p>頁面路徑：{{ROUTE}}</p><p>內嵌模式：{{EMBED}}</p>
 <p>此處只驗證登入 cookie、內嵌瀏覽器與本機匯出，不代表真實工具功能通過。</p>
 <button id="fixture-blob-export" style="padding:16px;font:18px system-ui">匯出合成設定 JSON</button>
 <p><a href="/api/v1/fixture/export" download="fixture-http-export.json" style="color:#80efcf">下載 HTTP 合成檔案</a></p>
@@ -457,45 +639,71 @@ document.getElementById('fixture-blob-export').addEventListener('click', () => {
   link.click();
   link.remove();
 });
-</script></body></html>""".replace("{{ROUTE}}", escape(route_path))
+</script></body></html>""".replace("{{ROUTE}}", escape(route_path)).replace("{{EMBED}}", escape(embed))
 
 
-def portfolio():
+def portfolio_risk():
+    """形狀照 PortfolioRiskService；權重是合成值。"""
+    return {"as_of": "2024-01-31", "cost_method": "fifo", "currency": "CNY", "thresholds": {},
+            "concentration": {"total_market_value": 216000.0, "top_weight_pct": 61.9, "alert": True,
+                              "top_positions": [{"symbol": "2330.TW", "market_value_base": 133000.0, "market_value_display": 600000.0,
+                                                 "weight_pct": 61.9, "is_alert": True}]},
+            "sector_concentration": {"total_market_value": 216000.0, "top_weight_pct": 70.0, "alert": False,
+                                     "top_sectors": [{"sector": "半導體（測試）", "market_value_base": 151000.0, "market_value_display": 680000.0,
+                                                      "weight_pct": 70.0, "symbol_count": 2, "is_alert": False}],
+                                     "coverage": {}, "errors": []},
+            "drawdown": {}, "stop_loss": {}, "display_currency": "TWD", "display_fx_rate": 4.5,
+            "display_fx_stale": False, "display_fx_missing": False, "fx_rate_used": []}
+
+
+def portfolio(display_currency=None, include_funds=False):
     limitations = ["realtime_quote_best_effort", "fx_and_cost_basis_partial", "sector_and_risk_metrics_limited"]
     position = {"symbol": "2330.TW", "name": STOCKS["2330.TW"][0], "market": "tw", "currency": "TWD",
                 "quantity": 1000.0, "avg_cost": 580.0, "total_cost": 580000.0, "last_price": 600.0,
                 "market_value_base": 600000.0, "unrealized_pnl_base": 20000.0, "unrealized_pnl_pct": 3.45,
                 "valuation_currency": "TWD", "price_source": "realtime_quote", "price_provider": "shioaji",
                 "price_date": "2024-01-31", "price_stale": False, "price_available": True,
+                "day_change_pct": 1.5, "day_pnl_base": 6000.0, "prev_close": 591.1,
                 "data_quality": "partial", "limitations": limitations}
     account = {"account_id": 1, "account_name": "合成測試帳戶", "market": "tw", "base_currency": "TWD",
                "total_cash": 400000.0, "total_market_value": 600000.0, "total_equity": 1000000.0,
-               "realized_pnl": 0.0, "unrealized_pnl": 20000.0, "data_quality": "partial",
+               "realized_pnl": 0.0, "unrealized_pnl": 20000.0, "day_pnl": 6000.0, "data_quality": "partial",
                "fx_stale": False, "fx_missing": False, "limitations": limitations, "positions": [position]}
     second = deepcopy(account)
     second.update(account_id=2, account_name="第二台幣帳戶（測試）", total_cash=80000.0,
-                  total_market_value=120000.0, total_equity=200000.0, unrealized_pnl=20000.0)
+                  total_market_value=120000.0, total_equity=200000.0, unrealized_pnl=20000.0, day_pnl=1200.0)
     second["positions"][0].update(symbol="00631L.TW", name=STOCKS["00631L.TW"][0],
                                   avg_cost=100.0, total_cost=100000.0, last_price=120.0,
                                   market_value_base=120000.0, unrealized_pnl_pct=20.0, price_stale=True)
     dollar = deepcopy(account)
     dollar.update(account_id=3, account_name="美元帳戶（測試）", market="us", base_currency="USD",
-                  total_cash=4700.0, total_market_value=7800.0, total_equity=12500.0, unrealized_pnl=300.0)
+                  total_cash=4700.0, total_market_value=7800.0, total_equity=12500.0, unrealized_pnl=300.0, day_pnl=50.0)
     dollar["positions"][0].update(symbol="AAPL", name=STOCKS["AAPL"][0], market="us", currency="USD",
                                   quantity=20.0, avg_cost=180.0, total_cost=3600.0, last_price=190.0,
                                   market_value_base=3800.0, unrealized_pnl_base=200.0,
-                                  unrealized_pnl_pct=5.56, valuation_currency="USD", price_provider="yfinance")
+                                  unrealized_pnl_pct=5.56, valuation_currency="USD", price_provider="yfinance",
+                                  day_change_pct=-0.5, day_pnl_base=-19.0)
     microsoft = deepcopy(dollar["positions"][0])
     microsoft.update(symbol="MSFT", name=STOCKS["MSFT"][0], quantity=10.0, avg_cost=390.0,
                      total_cost=3900.0, last_price=400.0, market_value_base=4000.0,
-                     unrealized_pnl_base=100.0, unrealized_pnl_pct=2.56, price_provider="fallback")
+                     unrealized_pnl_base=-100.0, unrealized_pnl_pct=-2.56, price_provider="fallback")
     dollar["positions"].append(microsoft)
     # 重現正式契約：頂層是跨幣別 CNY，原幣帳戶完整；CNY 換算缺漏不應污染台幣／美元分組。
-    return {"as_of": "2024-01-31", "cost_method": "fifo", "currency": "CNY", "account_count": 3,
-            "total_cash": 82345.67, "total_market_value": 200000.0, "total_equity": 282345.67,
-            "realized_pnl": 0.0, "unrealized_pnl": 10000.0, "fx_stale": True, "fx_missing": True,
-            "data_quality": "partial", "limitations": ["合成測試資料，不能視為實際帳戶餘額"] + limitations,
-            "accounts": [account, second, dollar]}
+    result = {"as_of": "2024-01-31", "cost_method": "fifo", "currency": "CNY", "account_count": 3,
+              "total_cash": 82345.67, "total_market_value": 200000.0, "total_equity": 282345.67,
+              "realized_pnl": 0.0, "unrealized_pnl": 10000.0, "fx_stale": True, "fx_missing": True,
+              "data_quality": "partial", "limitations": ["合成測試資料，不能視為實際帳戶餘額"] + limitations,
+              "accounts": [account, second, dollar]}
+    if display_currency:
+        # 台幣兩帳戶＋美元帳戶 × 32；頂層 CNY 換算缺漏不影響這組。
+        result.update(display_currency=display_currency, consolidated_equity_base=1600000.0,
+                      consolidated_market_value_base=969600.0, consolidated_cash_base=630400.0,
+                      consolidated_unrealized_pnl_base=49600.0, consolidated_realized_pnl_base=0.0,
+                      consolidated_day_pnl_base=8800.0, consolidated_fx_stale=False,
+                      consolidated_fx_missing=False, consolidated_fx_missing_pairs=[], fx_rate_used=[])
+        if include_funds:
+            result.update(consolidated_fund_value_base=200000.0, consolidated_fund_day_pnl_base=1000.0)
+    return result
 
 
 def main():

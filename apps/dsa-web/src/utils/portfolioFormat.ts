@@ -7,7 +7,15 @@ import type {
   PortfolioPositionItem,
   PortfolioSide,
 } from '../types/portfolio';
-import { formatMoneyValue, formatPrice, MINUS_SIGN, toDateInputValue } from './format';
+import type { UiLanguage } from '../i18n/uiText';
+import { formatUiText } from '../i18n/uiText';
+import {
+  PORTFOLIO_CASH_DIRECTION_LABELS,
+  PORTFOLIO_CORPORATE_ACTION_LABELS,
+  PORTFOLIO_FORMAT_TEXT,
+  PORTFOLIO_SIDE_LABELS,
+} from '../locales/featureText';
+import { formatMoneyValue, formatPrice, MINUS_SIGN, NO_VALUE, toDateInputValue } from './format';
 
 export type FxRefreshFeedback = {
   tone: 'neutral' | 'success' | 'warning';
@@ -20,14 +28,13 @@ export function getTodayIso(): string {
   return toDateInputValue(new Date());
 }
 
-// 缺值維持 '--'：持股頁其他欄位也是，F01 遷移到 Num／Money 時一起換。
 export function formatMoney(value: number | undefined | null, currency?: string): string {
-  if (value == null || !Number.isFinite(value)) return '--';
+  if (value == null || !Number.isFinite(value)) return NO_VALUE;
   return formatMoneyValue(value, currency);
 }
 
 export function formatPct(value: number | undefined | null): string {
-  if (value == null || Number.isNaN(value)) return '--';
+  if (value == null || Number.isNaN(value)) return NO_VALUE;
   return `${value < 0 ? MINUS_SIGN : ''}${Math.abs(value).toFixed(2)}%`;
 }
 
@@ -43,37 +50,38 @@ export function hasPositionPrice(row: PortfolioPositionItem): boolean {
 }
 
 export function formatPositionPrice(row: PortfolioPositionItem): string {
-  if (!hasPositionPrice(row)) return '--';
+  if (!hasPositionPrice(row)) return NO_VALUE;
   // lastPrice 是原幣報價；valuationCurrency 是帳戶基準幣別，不能拿來決定精度。
   return formatPrice(row.lastPrice, row.currency);
 }
 
 export function formatPositionMoney(value: number, row: PortfolioPositionItem): string {
-  if (!hasPositionPrice(row)) return '--';
+  if (!hasPositionPrice(row)) return NO_VALUE;
   return formatMoney(value, row.valuationCurrency);
 }
 
-export function getPositionPriceLabel(row: PortfolioPositionItem): string {
-  if (!hasPositionPrice(row)) return '缺价';
+export function getPositionPriceLabel(row: PortfolioPositionItem, language: UiLanguage = 'zh'): string {
+  const text = PORTFOLIO_FORMAT_TEXT[language];
+  if (!hasPositionPrice(row)) return text.priceMissing;
   if (row.priceSource === 'realtime_quote') {
-    return row.priceProvider ? `实时价 · ${row.priceProvider}` : '实时价';
+    return row.priceProvider ? `${text.priceRealtime} · ${row.priceProvider}` : text.priceRealtime;
   }
   if (row.priceSource === 'history_close') {
-    return row.priceStale && row.priceDate ? `收盘价 · ${row.priceDate}` : '收盘价';
+    return row.priceStale && row.priceDate ? `${text.priceClose} · ${row.priceDate}` : text.priceClose;
   }
-  return row.priceSource || '未知来源';
+  return row.priceSource || text.priceUnknown;
 }
 
-export function formatSideLabel(value: PortfolioSide): string {
-  return value === 'buy' ? '买入' : '卖出';
+export function formatSideLabel(value: PortfolioSide, language: UiLanguage = 'zh'): string {
+  return PORTFOLIO_SIDE_LABELS[language][value];
 }
 
-export function formatCashDirectionLabel(value: PortfolioCashDirection): string {
-  return value === 'in' ? '流入' : '流出';
+export function formatCashDirectionLabel(value: PortfolioCashDirection, language: UiLanguage = 'zh'): string {
+  return PORTFOLIO_CASH_DIRECTION_LABELS[language][value];
 }
 
-export function formatCorporateActionLabel(value: PortfolioCorporateActionType): string {
-  return value === 'cash_dividend' ? '现金分红' : '拆并股调整';
+export function formatCorporateActionLabel(value: PortfolioCorporateActionType, language: UiLanguage = 'zh'): string {
+  return PORTFOLIO_CORPORATE_ACTION_LABELS[language][value];
 }
 
 export function formatBrokerLabel(value: string, displayName?: string): string {
@@ -84,40 +92,30 @@ export function formatBrokerLabel(value: string, displayName?: string): string {
   return value;
 }
 
-export function buildFxRefreshFeedback(data: PortfolioFxRefreshResponse): FxRefreshFeedback {
+export function buildFxRefreshFeedback(data: PortfolioFxRefreshResponse, language: UiLanguage = 'zh'): FxRefreshFeedback {
+  const text = PORTFOLIO_FORMAT_TEXT[language];
   if (data.refreshEnabled === false) {
-    return {
-      tone: 'neutral',
-      text: '汇率在线刷新已被禁用。',
-    };
+    return { tone: 'neutral', text: text.fxDisabled };
   }
 
   if (data.pairCount === 0) {
-    return {
-      tone: 'neutral',
-      text: '当前范围无可刷新的汇率对。',
-    };
+    return { tone: 'neutral', text: text.fxNoPairs };
   }
 
   if (data.updatedCount > 0 && data.staleCount === 0 && data.errorCount === 0) {
-    return {
-      tone: 'success',
-      text: `汇率已刷新，共更新 ${data.updatedCount} 对。`,
-    };
+    return { tone: 'success', text: formatUiText(text.fxUpdated, { count: data.updatedCount }) };
   }
 
-  const summary = `更新 ${data.updatedCount} 对，仍过期 ${data.staleCount} 对，失败 ${data.errorCount} 对。`;
+  const summary = formatUiText(text.fxSummary, {
+    updated: data.updatedCount,
+    stale: data.staleCount,
+    errors: data.errorCount,
+  });
   if (data.staleCount > 0) {
-    return {
-      tone: 'warning',
-      text: `已尝试刷新，但仍有部分货币对使用 stale/fallback 汇率。${summary}`,
-    };
+    return { tone: 'warning', text: `${text.fxStillStale}${summary}` };
   }
 
-  return {
-    tone: 'warning',
-    text: `在线刷新未完全成功。${summary}`,
-  };
+  return { tone: 'warning', text: `${text.fxPartial}${summary}` };
 }
 
 export function getFxRefreshFeedbackVariant(tone: FxRefreshFeedback['tone']): PortfolioAlertVariant {

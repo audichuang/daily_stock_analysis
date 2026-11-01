@@ -430,7 +430,17 @@ class CircuitBreaker:
             state['state'] = self.CLOSED
             state['failures'] = 0
             state['half_open_calls'] = 0
-    
+            state['last_success_time'] = time.time()
+
+    def last_success_times(self) -> Dict[str, float]:
+        """各資料源最近一次成功的時間戳（本程序內，重啟後歸零）。"""
+        with self._lock:
+            return {
+                source: info['last_success_time']
+                for source, info in self._states.items()
+                if info.get('last_success_time')
+            }
+
     def record_failure(self, source: str, error: Optional[str] = None) -> None:
         """记录失败请求"""
         with self._lock:

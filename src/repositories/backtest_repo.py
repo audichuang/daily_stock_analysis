@@ -11,7 +11,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import List, Optional, Tuple
 
-from sqlalchemy import String, and_, delete, desc, func, or_, select
+from sqlalchemy import String, and_, case, delete, desc, false, func, not_, or_, select
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.functions import FunctionElement
 
@@ -67,6 +67,30 @@ BacktestResultContextRow = Tuple[
     Optional[str],
     Optional[int],
 ]
+
+
+STATUS_COMPLETED = "completed"
+STATUS_PENDING = "pending"
+STATUS_INSUFFICIENT = "insufficient_data"
+SORT_COMPLETED_FIRST = "completed_first"
+
+
+def maturity_status(
+    eval_status: Optional[str],
+    analysis_date: Optional[date],
+    eval_window_days: Optional[int],
+    today: Optional[date] = None,
+) -> str:
+    """把 ``insufficient_data`` 分成「窗口還沒走完」與「窗口走完仍湊不滿」。
+
+    引擎兩者都寫 ``insufficient_data``；只有後者才是資料有問題。判準與回測重試的冷卻
+    同一個（`forward_window_calendar_days`）。沒有分析日無從判斷窗口，算資料不足。
+    """
+    status = eval_status or ""
+    if status != STATUS_INSUFFICIENT or analysis_date is None or not eval_window_days:
+        return status
+    cutoff = (today or date.today()) - timedelta(days=forward_window_calendar_days(eval_window_days))
+    return STATUS_PENDING if analysis_date > cutoff else STATUS_INSUFFICIENT
 
 
 class BacktestRepository:
@@ -247,6 +271,9 @@ class BacktestRepository:
         offset: int,
         limit: int,
         code_candidates: Optional[Tuple[str, ...]] = None,
+        status: Optional[str] = None,
+        market: Optional[str] = None,
+        sort: Optional[str] = None,
     ) -> Tuple[List[BacktestResultContextRow], int]:
         with self.db.get_session() as session:
             conditions = self._build_result_conditions(
@@ -257,7 +284,10 @@ class BacktestRepository:
                 analysis_date_to=analysis_date_to,
                 days=days,
                 code_candidates=code_candidates,
+                market=market,
             )
+            if status:
+                conditions.append(self._status_condition(session, status))
 
             where_clause = and_(*conditions) if conditions else True
 
@@ -280,7 +310,7 @@ class BacktestRepository:
                 )
                 .join(AnalysisHistory, AnalysisHistory.id == BacktestResult.analysis_history_id)
                 .where(where_clause)
-                .order_by(desc(BacktestResult.analysis_date), desc(BacktestResult.evaluated_at))
+                .order_by(*self._result_order(sort))
                 .offset(offset)
                 .limit(limit)
             ).all()
@@ -297,6 +327,9 @@ class BacktestRepository:
         days: Optional[int],
         offset: int,
         limit: int,
+        status: Optional[str] = None,
+        market: Optional[str] = None,
+        sort: Optional[str] = None,
     ) -> List[BacktestResultContextRow]:
         """Return result rows plus AnalysisHistory.context_snapshot for dynamic filtering."""
         with self.db.get_session() as session:
@@ -307,7 +340,10 @@ class BacktestRepository:
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
                 days=days,
+                market=market,
             )
+            if status:
+                conditions.append(self._status_condition(session, status))
             where_clause = and_(*conditions) if conditions else True
             rows = session.execute(
                 select(
@@ -322,7 +358,7 @@ class BacktestRepository:
                 )
                 .join(AnalysisHistory, AnalysisHistory.id == BacktestResult.analysis_history_id)
                 .where(where_clause)
-                .order_by(desc(BacktestResult.analysis_date), desc(BacktestResult.evaluated_at))
+                .order_by(*self._result_order(sort))
                 .offset(offset)
                 .limit(limit)
             ).all()
@@ -397,6 +433,8 @@ class BacktestRepository:
         analysis_date_to: Optional[date] = None,
         days: Optional[int] = None,
         limit: Optional[int] = None,
+        eval_status: Optional[str] = None,
+        market: Optional[str] = None,
     ) -> List[BacktestResult]:
         with self.db.get_session() as session:
             conditions = self._build_result_conditions(
@@ -406,7 +444,10 @@ class BacktestRepository:
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,
                 days=days,
+                market=market,
             )
+            if eval_status:
+                conditions.append(BacktestResult.eval_status == eval_status)
             where_clause = and_(*conditions) if conditions else True
             query = (
                 select(BacktestResult)
@@ -417,6 +458,43 @@ class BacktestRepository:
                 query = query.limit(limit)
             rows = session.execute(query).scalars().all()
             return list(rows)
+
+    def count_by_status(
+        self,
+        *,
+        code: Optional[str],
+        eval_window_days: Optional[int] = None,
+        engine_version: Optional[str] = None,
+        analysis_date_from: Optional[date] = None,
+        analysis_date_to: Optional[date] = None,
+        market: Optional[str] = None,
+    ) -> dict:
+        """各分流的筆數（給分頁籤用），不受目前選的 status 影響。"""
+        with self.db.get_session() as session:
+            conditions = self._build_result_conditions(
+                code=code,
+                eval_window_days=eval_window_days,
+                engine_version=engine_version,
+                analysis_date_from=analysis_date_from,
+                analysis_date_to=analysis_date_to,
+                days=None,
+                market=market,
+            )
+            rows = session.execute(
+                select(
+                    BacktestResult.eval_status,
+                    BacktestResult.analysis_date,
+                    BacktestResult.eval_window_days,
+                    func.count(BacktestResult.id),
+                )
+                .where(and_(*conditions) if conditions else True)
+                .group_by(BacktestResult.eval_status, BacktestResult.analysis_date, BacktestResult.eval_window_days)
+            ).all()
+        counts: dict = {}
+        for eval_status, analysis_date, window, count in rows:
+            status = maturity_status(eval_status, analysis_date, window)
+            counts[status] = counts.get(status, 0) + int(count)
+        return counts
 
     def upsert_summary(self, summary: BacktestSummary) -> None:
         """Insert or replace summary row by unique key."""
@@ -569,8 +647,11 @@ class BacktestRepository:
         analysis_date_to: Optional[date],
         days: Optional[int],
         code_candidates: Optional[Tuple[str, ...]] = None,
+        market: Optional[str] = None,
     ) -> List[object]:
         conditions = []
+        if market:
+            conditions.append(BacktestRepository._market_condition(market))
         if code_candidates is not None:
             conditions.append(BacktestRepository._strict_result_code_condition(code_candidates))
         elif code:
@@ -587,6 +668,77 @@ class BacktestRepository:
             cutoff = datetime.now() - timedelta(days=int(days))
             conditions.append(BacktestResult.evaluated_at >= cutoff)
         return conditions
+
+    @staticmethod
+    def _market_condition(market: str):
+        """依代號形狀判市場：回測表沒有市場欄，context_snapshot 的 market 舊列也沒有。"""
+        code = func.upper(BacktestResult.code)
+        tw = or_(code.like("%.TW"), code.like("%.TWO"))
+        # 前綴後面要跟滿數字，否則 SHOP、SHEL、HKD 這些美股會被算成中港股。
+        def prefixed(prefix: str, digits: int):
+            return and_(
+                code.like(f"{prefix}%"),
+                func.length(code) == len(prefix) + digits,
+                func.substr(code, len(prefix) + 1) >= "0" * digits,
+                func.substr(code, len(prefix) + 1) <= "9" * digits,
+            )
+
+        hk = or_(code.like("%.HK"), prefixed("HK", 5))
+        cn = or_(
+            prefixed("SH", 6),
+            prefixed("SZ", 6),
+            prefixed("BJ", 6),
+            code.like("%.SH"),
+            code.like("%.SZ"),
+            code.like("%.BJ"),
+            and_(func.length(code) == 6, code >= "000000", code <= "999999", not_(code.like("%.%"))),
+        )
+        if market == "tw":
+            return tw
+        if market == "hk":
+            return hk
+        if market == "cn":
+            return cn
+        if market == "us":
+            # 日韓代號也不是美股；這張表沒有市場欄，只能靠後綴排除。
+            other = or_(code.like("%.T"), code.like("%.KS"), code.like("%.KQ"))
+            return not_(or_(tw, hk, cn, other))
+        raise ValueError(f"Unsupported backtest market: {market}")
+
+    @staticmethod
+    def _status_condition(session, status: str):
+        """``maturity_status`` 的 SQL 版；窗口天數因列而異，逐一展開。"""
+        if status not in (STATUS_PENDING, STATUS_INSUFFICIENT):
+            return BacktestResult.eval_status == status
+        windows = session.execute(select(BacktestResult.eval_window_days).distinct()).scalars().all()
+        today = date.today()
+        young_clauses = [
+            and_(
+                BacktestResult.eval_window_days == window,
+                BacktestResult.analysis_date > today - timedelta(days=forward_window_calendar_days(window)),
+            )
+            for window in windows
+            if window
+        ]
+        young = or_(*young_clauses) if young_clauses else false()
+        insufficient = BacktestResult.eval_status == STATUS_INSUFFICIENT
+        if status == STATUS_PENDING:
+            return and_(insufficient, young)
+        return and_(insufficient, or_(BacktestResult.analysis_date.is_(None), not_(young)))
+
+    @staticmethod
+    def _result_order(sort: Optional[str]) -> tuple:
+        """None 維持原本的最新優先（工具呼叫沿用）；API 預設已完成優先。"""
+        latest = (desc(BacktestResult.analysis_date), desc(BacktestResult.evaluated_at))
+        if sort == SORT_COMPLETED_FIRST:
+            return (case((BacktestResult.eval_status == STATUS_COMPLETED, 0), else_=1), *latest)
+        if sort == "date_asc":
+            return (BacktestResult.analysis_date, BacktestResult.evaluated_at)
+        if sort == "return_desc":
+            return (BacktestResult.simulated_return_pct.desc().nulls_last(), *latest)
+        if sort == "return_asc":
+            return (BacktestResult.simulated_return_pct.asc().nulls_last(), *latest)
+        return latest
 
     @staticmethod
     def _strict_result_code_condition(code_candidates: Tuple[str, ...]):

@@ -1,6 +1,7 @@
 import apiClient from './index';
 import { toCamelCase } from './utils';
 import { attachParsedApiError } from './error';
+import type { FinancialCommentary, StockFinancials } from '../types/financials';
 
 export type ExtractItem = {
   code?: string | null;
@@ -59,6 +60,13 @@ export type MarketIndex = {
   /** 後端取值路徑：`shioaji` 即時快照、`official_close` 本地官方收盤（前一場）；缺省是 yfinance 延遲。 */
   source: string | null;
   asOf: string | null;
+};
+
+export type MarketIndexSnapshot = {
+  items: MarketIndex[];
+  /** 後端 MarketPhase 值：premarket／intraday／lunch_break／closing_auction／postmarket／non_trading／unknown。 */
+  marketPhase: string | null;
+  marketOpen: boolean | null;
 };
 
 type RawIndex = {
@@ -132,7 +140,26 @@ function toQuote(raw: RawQuote): StockQuote {
   };
 }
 
+// 與後端 api/v1/endpoints/stocks.py 的 MAX_BATCH_CODES 相同。
+export const MAX_QUOTE_BATCH = 50;
+
 export const stocksApi = {
+  /** 個股季度財報；只讀 AI 導讀快取，不會觸發 LLM。 */
+  async getFinancials(code: string): Promise<StockFinancials> {
+    const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/financials`, { timeout: 45000 });
+    return toCamelCase<StockFinancials>(response.data);
+  },
+
+  /** 沒有快取時才會打 LLM，約 20~60 秒；同一份財報只生成一次。 */
+  async ensureFinancialCommentary(code: string): Promise<FinancialCommentary> {
+    const response = await apiClient.post(
+      `/api/v1/stocks/${encodeURIComponent(code)}/financials/commentary`,
+      undefined,
+      { timeout: 180000 },
+    );
+    return toCamelCase<FinancialCommentary>(response.data);
+  },
+
   async extractFromImage(file: File): Promise<ExtractFromImageResponse> {
     const formData = new FormData();
     formData.append('file', file);
@@ -185,6 +212,24 @@ export const stocksApi = {
     }));
   },
 
+  /**
+   * 批次行情不限檔數：後端一次最多 MAX_QUOTE_BATCH 檔，超過就分批。
+   * 單批失敗只影響那批（回 quote=null），不讓整張清單沒有現價。
+   */
+  async getQuotesBatched(codes: string[]): Promise<StockQuoteBatchItem[]> {
+    const unique = Array.from(new Set(codes.filter(Boolean)));
+    const chunks: string[][] = [];
+    for (let start = 0; start < unique.length; start += MAX_QUOTE_BATCH) {
+      chunks.push(unique.slice(start, start + MAX_QUOTE_BATCH));
+    }
+    const settled = await Promise.allSettled(chunks.map((chunk) => stocksApi.getQuotes(chunk)));
+    return settled.flatMap((result, index) => (
+      result.status === 'fulfilled'
+        ? result.value
+        : chunks[index].map((stockCode) => ({ stockCode, quote: null, error: 'request_failed' }))
+    ));
+  },
+
   /** 看板輪詢閘門：各市場是否在盤中（含前後緩衝）；後端依交易所日曆判斷休市，未知市場回 true。 */
   async getMarketStatus(markets: string[]): Promise<Record<string, boolean>> {
     const response = await apiClient.get('/api/v1/stocks/market-status', {
@@ -205,6 +250,25 @@ export const stocksApi = {
       source: r.source ?? null,
       asOf: r.as_of ?? null,
     }));
+  },
+
+  /** 全站狀態列用：指數之外連同後端判定的市場時段一起回傳（getIndices 只回列表）。 */
+  async getIndicesSnapshot(region: string): Promise<MarketIndexSnapshot> {
+    const response = await apiClient.get('/api/v1/stocks/indices', { params: { region } });
+    const data = response.data as { items?: RawIndex[]; market_phase?: string | null; market_open?: boolean | null };
+    return {
+      items: (data.items ?? []).map((r) => ({
+        code: r.code ?? '',
+        name: r.name ?? '',
+        current: r.current ?? null,
+        change: r.change ?? null,
+        changePct: r.change_pct ?? null,
+        source: r.source ?? null,
+        asOf: r.as_of ?? null,
+      })),
+      marketPhase: data.market_phase ?? null,
+      marketOpen: data.market_open ?? null,
+    };
   },
 
   /** 看板用台股四維度摘要（不查分點、不呼叫 LLM）；非台股或失敗的單檔回 summary=null。 */
@@ -248,6 +312,18 @@ export const stocksApi = {
     }
   },
 
+  /** 盯盤迷你分時：批次當日走勢；伺服器快取 3 分鐘，單檔失敗回空 points。單次上限 50 檔。 */
+  async getIntradayTrends(codes: string[]): Promise<IntradayTrendItem[]> {
+    if (codes.length === 0) return [];
+    const response = await apiClient.get('/api/v1/stocks/intraday-trends', { params: { codes: codes.join(',') } });
+    const data = response.data as { items?: Array<{ stock_code: string; points?: Array<{ t: string; price: number }>; error?: string | null }> };
+    return (data.items ?? []).map((item) => ({
+      stockCode: item.stock_code,
+      points: (item.points ?? []).map((p) => ({ t: p.t, price: p.price })),
+      error: item.error,
+    }));
+  },
+
   async getTrend(code: string, range: TrendRange): Promise<TrendPoint[]> {
     const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/trend`, {
       params: { range },
@@ -255,10 +331,31 @@ export const stocksApi = {
     const data = response.data as { points?: Array<{ t: string; price: number }> };
     return (data.points ?? []).map((p) => ({ t: p.t, price: p.price }));
   },
+
+  /** 日 K；後端週、月 K 會拋錯，days 上限 365（實際回溯約 days×2 日曆日）。 */
+  async getDailyHistory(code: string, days = 365): Promise<PriceBar[]> {
+    const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/history`, {
+      params: { period: 'daily', days },
+    });
+    return toCamelCase<{ data?: PriceBar[] }>(response.data).data ?? [];
+  },
+};
+
+export type PriceBar = {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number | null;
+  amount?: number | null;
+  changePercent?: number | null;
+  provisional?: boolean | null;
 };
 
 export type TrendRange = 'day' | 'month' | 'year';
 export type TrendPoint = { t: string; price: number };
+export type IntradayTrendItem = { stockCode: string; points: TrendPoint[]; error?: string | null };
 
 export type DossierBias = 'bull' | 'bear' | null;
 export type DossierLevel = {

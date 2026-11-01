@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider, useUiLanguage } from '../../contexts/UiLanguageContext';
+import { UI_LANGUAGE_STORAGE_KEY } from '../../utils/uiLanguage';
 import DataCenterPage from '../DataCenterPage';
 
 const { getOverview } = vi.hoisted(() => ({ getOverview: vi.fn() }));
@@ -10,93 +11,64 @@ vi.mock('../../api/dataCapability', () => ({
   dataCapabilityApi: { getOverview: () => getOverview() },
 }));
 
+// 日期是遠離真實資料的固定值：頁面只比對 API 給的欄位，不看掛鐘。
+const market = (status: string, source: string | null, fallback: string[] = []) => ({ status, source, fallback_from: fallback, warnings: [] });
+
+const baseDataset = {
+  stale: null,
+  lastSuccess: null,
+  lastError: null,
+  fallbackFrom: [],
+  coverage: null,
+  warnings: [],
+  source: null,
+  dataDate: null,
+  dataMarket: null,
+  expectedDate: null,
+  isCurrent: null,
+  reason: null,
+  fallbackActive: false,
+};
+
+const healthyKline = {
+  ...baseDataset,
+  dataset: 'kline.daily',
+  status: 'ok',
+  dataDate: '2099-03-02',
+  dataMarket: 'tw',
+  expectedDate: '2099-03-02',
+  isCurrent: true,
+  coverage: { markets: { hk: market('ok', 'yfinance'), tw: market('ok', 'marketdb'), us: market('ok', 'yfinance') } },
+};
+
 const overview = {
-  asOf: '2026-08-29T09:30:00+08:00',
+  asOf: '2099-03-02T09:30:00+08:00',
   providers: [
     {
-      name: 'akshare',
-      label: 'AkShare',
-      enabled: true,
-      configured: true,
-      status: 'partial',
-      priority: 0,
-      markets: ['CN'],
-      datasets: ['quote.snapshot', 'financial.snapshot'],
-      datasetMarkets: {
-        'quote.snapshot': ['CN'],
-        'financial.snapshot': ['CN'],
-      },
-      warnings: ['runtime_probe_unknown'],
-      lastError: null,
-      cooldown: false,
+      name: 'marketdb', label: 'MarketDB', enabled: true, configured: true, status: 'ok', priority: 0,
+      markets: ['tw'], datasets: ['kline.daily'], datasetMarkets: { 'kline.daily': ['tw'] }, warnings: [], lastError: null, cooldown: false,
+    },
+    {
+      name: 'tushare', label: 'Tushare', enabled: false, configured: false, status: 'unconfigured', priority: null,
+      markets: ['cn'], datasets: ['kline.daily'], datasetMarkets: { 'kline.daily': ['cn'] }, warnings: [], lastError: null, cooldown: null,
     },
   ],
   datasets: [
-    {
-      dataset: 'screening.snapshot',
-      status: 'unknown',
-      source: 'em_datacenter',
-      stale: null,
-      lastSuccess: null,
-      lastError: null,
-      fallbackFrom: [],
-      coverage: null,
-      warnings: ['screening_health_unknown'],
-    },
-    {
-      dataset: 'quote.snapshot',
-      status: 'ok',
-      source: 'akshare',
-      stale: false,
-      lastSuccess: '2026-08-29T09:29:00+08:00',
-      lastError: null,
-      fallbackFrom: [],
-      coverage: null,
-      warnings: [],
-    },
-    {
-      dataset: 'quote.realtime',
-      status: 'ok',
-      source: null,
-      stale: null,
-      lastSuccess: null,
-      lastError: null,
-      fallbackFrom: [],
-      coverage: {
-        markets: {
-          cn: { status: 'ok', source: 'tencent', fallback_from: [], warnings: [] },
-          us: { status: 'ok', source: 'yfinance', fallback_from: [], warnings: [] },
-        },
-      },
-      warnings: [],
-    },
-    {
-      dataset: 'daily.quality',
-      status: 'partial',
-      source: 'efinance',
-      stale: null,
-      lastSuccess: null,
-      lastError: null,
-      fallbackFrom: [],
-      coverage: {
-        markets: {
-          cn: { status: 'ok', source: 'efinance', fallback_from: [], warnings: [] },
-          hk: { status: 'unavailable', source: null, fallback_from: [], warnings: [] },
-          us: { status: 'unavailable', source: null, fallback_from: [], warnings: [] },
-        },
-      },
-      warnings: [],
-    },
+    healthyKline,
+    { ...baseDataset, dataset: 'news.events', status: 'unknown', warnings: ['runtime_probe_not_performed'] },
+    { ...baseDataset, dataset: 'strategy.screening', status: 'unconfigured', warnings: ['screening_disabled'], reason: 'screening_disabled' },
+    { ...baseDataset, dataset: 'portfolio.account', status: 'ok', source: 'portfolio' },
   ],
   priorities: [
-    { scenario: 'cn.quote', providers: ['tencent', 'akshare'], source: 'runtime', warnings: [] },
+    { scenario: 'tw.realtime', providers: ['shioaji', 'yfinance'], source: 'DataFetcherManager TW realtime route', warnings: [] },
+    { scenario: 'daily.generic', providers: ['a'.repeat(120)], source: 'runtime', warnings: [] },
   ],
-  warnings: ['screening_health_unknown'],
+  warnings: ['cn.realtime:unknown_source:foo', 'hk.realtime:unknown_source:foo', 'mystery_code'],
 };
 
 function LanguageSwitch() {
   const { language, setLanguage } = useUiLanguage();
-  return <button onClick={() => setLanguage(language === 'zh' ? 'en' : 'zh')}>switch language</button>;
+  return <button onClick={() => setLanguage(language === 'zh-TW' ? 'en' : 'zh-TW')}>switch language</button>;
 }
 
 function deferred<T>() {
@@ -109,49 +81,181 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+const renderPage = () => render(<UiLanguageProvider><MemoryRouter><DataCenterPage /></MemoryRouter></UiLanguageProvider>);
+
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
   getOverview.mockResolvedValue(overview);
 });
 
 describe('DataCenterPage', () => {
-  it('renders the canonical overview without requesting or exposing configuration values', async () => {
-    render(<MemoryRouter><DataCenterPage /></MemoryRouter>);
+  it('leads with the Taiwan and US conclusion and real data date', async () => {
+    renderPage();
+    const banner = await screen.findByTestId('data-center-conclusion');
+    expect(banner).toHaveTextContent('台股、美股資料正常');
+    expect(banner).toHaveTextContent('台股 日 K 資料到 2099-03-02');
+    expect(screen.getByRole('heading', { name: '資料中心' })).toBeInTheDocument();
+  });
 
-    expect(await screen.findByRole('heading', { name: '数据中心' })).toBeInTheDocument();
-    expect(getOverview).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('AkShare')).toBeInTheDocument();
-    expect(screen.getByText('screening.snapshot')).toBeInTheDocument();
-    expect(screen.getByText('cn: tencent / us: yfinance')).toBeInTheDocument();
-    expect(screen.getByText('cn: efinance')).toBeInTheDocument();
-    expect(screen.getAllByText('screening_health_unknown', { exact: false })).toHaveLength(2);
-    expect(screen.getByText('tencent → akshare')).toBeInTheDocument();
+  it('turns the banner to stale when the stored date is behind even if the source is ok', async () => {
+    getOverview.mockResolvedValue({
+      ...overview,
+      datasets: [{ ...healthyKline, dataDate: '2099-02-20', isCurrent: false }],
+    });
+    renderPage();
+    const banner = await screen.findByTestId('data-center-conclusion');
+    expect(banner).toHaveTextContent('台股或美股資料沒有更新');
+    expect(banner).toHaveTextContent('台股 日 K 停在 2099-02-20，最新應為 2099-03-02');
+    expect(banner).not.toHaveTextContent('資料正常');
+  });
+
+  it('does not let other markets turn the conclusion red', async () => {
+    getOverview.mockResolvedValue({
+      ...overview,
+      datasets: [{
+        ...healthyKline,
+        status: 'partial',
+        coverage: { markets: { hk: market('unavailable', null), tw: market('ok', 'marketdb'), us: market('ok', 'yfinance') } },
+      }],
+    });
+    renderPage();
+    expect(await screen.findByTestId('data-center-conclusion')).toHaveTextContent('台股、美股資料正常');
+  });
+
+  it('reports a Taiwan source that is down', async () => {
+    getOverview.mockResolvedValue({
+      ...overview,
+      datasets: [{
+        ...baseDataset,
+        dataset: 'quote.realtime',
+        status: 'partial',
+        coverage: { markets: { tw: market('unavailable', null, ['shioaji', 'yfinance']), us: market('ok', 'yfinance') } },
+      }],
+    });
+    renderPage();
+    const banner = await screen.findByTestId('data-center-conclusion');
+    expect(banner).toHaveTextContent('台股或美股有資料無法使用');
+    expect(banner).toHaveTextContent('台股 即時報價 無法使用');
+  });
+
+  it('shows a disabled realtime dataset instead of hiding it from the conclusion', async () => {
+    getOverview.mockResolvedValue({
+      ...overview,
+      datasets: [{ ...baseDataset, dataset: 'quote.realtime', status: 'unavailable', warnings: ['realtime_quote_disabled'], reason: 'realtime_quote_disabled' }],
+    });
+    renderPage();
+    const banner = await screen.findByTestId('data-center-conclusion');
+    expect(banner).toHaveTextContent('台股或美股需要留意');
+    expect(banner).toHaveTextContent('台股 即時報價 未啟用');
+  });
+
+  it('adds a row for a dated market the source routing does not list', async () => {
+    getOverview.mockResolvedValue({
+      ...overview,
+      datasets: [{
+        ...baseDataset,
+        dataset: 'index.daily',
+        status: 'ok',
+        dataDate: '2099-02-20',
+        dataMarket: 'tw',
+        expectedDate: '2099-03-02',
+        isCurrent: false,
+        coverage: { markets: { us: market('ok', 'yfinance') } },
+      }],
+    });
+    renderPage();
+    expect(await screen.findByTestId('data-center-conclusion')).toHaveTextContent('台股 指數日線 停在 2099-02-20');
+  });
+
+  it('counts ok, unchecked, off and issue separately', async () => {
+    renderPage();
+    await screen.findByTestId('data-center-conclusion');
+    const group = within(screen.getByTestId('metric-group'));
+    const value = (label: string) => group.getByText(label).parentElement;
+    // kline、portfolio 正常；news 未檢查；screening 未啟用。
+    expect(value('正常')).toHaveTextContent('2');
+    expect(value('尚未檢查')).toHaveTextContent('1');
+    expect(value('未啟用')).toHaveTextContent('1');
+    expect(value('異常')).toHaveTextContent('0');
+  });
+
+  it('puts Taiwan and US first and folds other markets away', async () => {
+    renderPage();
+    const table = await screen.findByRole('table', { name: '市場資料狀態' });
+    const rows = within(table).getAllByRole('row').slice(1).map((row) => row.textContent);
+    expect(rows[0]).toContain('台股 日 K');
+    expect(rows[0]).toContain('marketdb');
+    expect(rows[0]).toContain('2099-03-02');
+    expect(rows[1]).toContain('美股 日 K');
+    expect(within(table).queryByText('港股 日 K')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('data-center-other')).getAllByText('港股 日 K').length).toBeGreaterThan(0);
+  });
+
+  it('explains which sources were skipped on a fallback row', async () => {
+    getOverview.mockResolvedValue({
+      ...overview,
+      datasets: [{
+        ...baseDataset,
+        dataset: 'quote.realtime',
+        status: 'degraded',
+        coverage: { markets: { tw: market('degraded', 'yfinance', ['shioaji']), us: market('ok', 'yfinance') } },
+      }],
+    });
+    renderPage();
+    expect((await screen.findAllByText('已跳過 shioaji，目前走 yfinance')).length).toBeGreaterThan(0);
+  });
+
+  it('renders a mobile card for each row so phones do not need horizontal scroll', async () => {
+    renderPage();
+    expect(await screen.findByTestId('data-row-mobile-kline.daily:tw')).toHaveTextContent('台股 日 K');
+  });
+
+  it('translates and merges warnings, keeping raw codes only in technical details', async () => {
+    renderPage();
+    await screen.findByTestId('data-center-conclusion');
+    const hints = screen.getByTestId('data-center-hints');
+    expect(hints).toHaveTextContent('A 股即時報價、港股即時報價：順序內有不認得的來源 foo');
+    expect(hints).toHaveTextContent('另有 1 則未分類提示，見技術細節');
+    expect(hints).not.toHaveTextContent('mystery_code');
+    const technical = screen.getByTestId('data-center-technical');
+    expect(technical).not.toHaveAttribute('open');
+    expect(technical).toHaveTextContent('mystery_code');
+  });
+
+  it('never shows raw status or dataset codes as labels', async () => {
+    renderPage();
+    await screen.findByTestId('data-center-conclusion');
+    expect(screen.queryByText('unconfigured')).not.toBeInTheDocument();
+    expect(screen.queryByText('unknown')).not.toBeInTheDocument();
+    expect(screen.queryByText('kline.daily')).not.toBeInTheDocument();
     expect(screen.queryByText(/API[_ ]?KEY/i)).not.toBeInTheDocument();
   });
 
-  it('keeps cold-start quality unknown instead of presenting it as healthy', async () => {
-    render(<MemoryRouter><DataCenterPage /></MemoryRouter>);
-
-    const row = (await screen.findByText('screening.snapshot')).closest('tr');
-    expect(row).toHaveTextContent('unknown');
-    expect(row).not.toHaveTextContent('ok');
+  it('keeps sources and fallback order folded and grouped', async () => {
+    renderPage();
+    await screen.findByTestId('data-center-conclusion');
+    const providers = screen.getByTestId('data-center-providers');
+    expect(providers).not.toHaveAttribute('open');
+    expect(within(providers).getByText('可用（1）')).toBeInTheDocument();
+    expect(within(providers).getByText('未設定（1）')).toBeInTheDocument();
+    const priorities = screen.getByTestId('data-center-priorities');
+    expect(priorities).not.toHaveAttribute('open');
+    expect(within(priorities).getByText('台股即時報價')).toBeInTheDocument();
+    // 長來源名稱要能斷行，路由卡才不會破版。
+    expect(within(priorities).getByText('a'.repeat(120))).toHaveClass('break-all');
   });
 
   it('shows empty and error states and can retry the endpoint', async () => {
     getOverview.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({
-      asOf: '2026-08-29T09:30:00+08:00',
-      providers: [],
-      datasets: [],
-      priorities: [],
-      warnings: [],
+      asOf: '2099-03-02T09:30:00+08:00', providers: [], datasets: [], priorities: [], warnings: [],
     });
-
-    render(<MemoryRouter><DataCenterPage /></MemoryRouter>);
-
-    expect(await screen.findByText('数据概览加载失败')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '重试' }));
-    expect(await screen.findByText('暂无能力数据')).toBeInTheDocument();
+    renderPage();
+    expect(await screen.findByText('資料概覽載入失敗')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重試' }));
     await waitFor(() => expect(getOverview).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText('資料概覽載入失敗')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('data-center-conclusion')).not.toBeInTheDocument();
   });
 
   it('ignores an older request that finishes after a language-triggered reload', async () => {
@@ -171,10 +275,10 @@ describe('DataCenterPage', () => {
     await waitFor(() => expect(getOverview).toHaveBeenCalledTimes(2));
 
     second.resolve(overview);
-    expect(await screen.findByText('AkShare')).toBeInTheDocument();
+    expect(await screen.findByTestId('data-center-conclusion')).toBeInTheDocument();
     first.reject(new Error('stale failure'));
 
     await waitFor(() => expect(screen.queryByText('Failed to load data overview')).not.toBeInTheDocument());
-    expect(screen.getByText('AkShare')).toBeInTheDocument();
+    expect(screen.getByTestId('data-center-conclusion')).toBeInTheDocument();
   });
 });

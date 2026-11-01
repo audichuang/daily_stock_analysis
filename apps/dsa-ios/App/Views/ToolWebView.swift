@@ -10,54 +10,78 @@ struct ToolWebView: View {
     @State private var error: String?
     @State private var reloadID = UUID()
     @State private var exportedFile: WebExportFile?
+    @State private var progress = 0.0
+    @State private var exportError: String?
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "lock.shield")
-                Text("已連接你的分析服務 · 完整研究工具")
-                Spacer()
-            }
-            .font(.caption2).foregroundStyle(Theme.secondary).padding(12).background(Theme.surface)
-            if loading { ProgressView().tint(Theme.accent).padding(10).accessibilityIdentifier("tool-loading") }
+        Group {
             if let error {
-                ErrorStateView(message: error, retry: { self.error = nil; loading = true; reloadID = UUID() })
-                    .padding().accessibilityIdentifier("tool-error")
-            }
-            if let baseURL = store.baseURL, store.session != nil {
-                AuthenticatedWebContent(baseURL: baseURL, path: path, prepareCookies: { try await store.toolCookies() },
-                                        loading: $loading, error: $error, exportedFile: $exportedFile)
+                // 載入失敗時不留 WebView：重試會以新的 reloadID 重建。
+                ErrorStateView(message: error, retry: reload)
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("tool-error")
+            } else if let baseURL = store.baseURL, store.session != nil {
+                AuthenticatedWebContent(baseURL: baseURL, path: path, dataStore: store.toolWebDataStore,
+                                        prepareCookies: { try await store.toolCookies() },
+                                        loading: $loading, progress: $progress, error: $error,
+                                        exportError: $exportError, exportedFile: $exportedFile)
                     .id(reloadID)
+                    .overlay(alignment: .top) {
+                        if loading {
+                            ProgressView(value: max(progress, 0.05))
+                                .progressViewStyle(.linear)
+                                .tint(Theme.accent)
+                                .accessibilityIdentifier("tool-loading")
+                        }
+                    }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
         .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
+        .alert("匯出失敗", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+            Button("好", role: .cancel) { }
+        } message: {
+            Text(exportError ?? "")
+        }
         .sheet(item: $exportedFile) { file in
             WebExportShareSheet(fileURL: file.url)
                 .onDisappear { file.removeTemporaryCopy() }
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { error = nil; loading = true; reloadID = UUID() } label: { Image(systemName: "arrow.clockwise") }
+                Button(action: reload) { Image(systemName: "arrow.clockwise") }
                     .accessibilityLabel("重新載入工具")
             }
         }
+    }
+
+    private func reload() {
+        error = nil
+        loading = true
+        progress = 0
+        reloadID = UUID()
     }
 }
 
 private struct AuthenticatedWebContent: UIViewRepresentable {
     let baseURL: URL
     let path: String
+    let dataStore: WKWebsiteDataStore
     let prepareCookies: () async throws -> [HTTPCookie]
     @Binding var loading: Bool
+    @Binding var progress: Double
     @Binding var error: String?
+    @Binding var exportError: String?
     @Binding var exportedFile: WebExportFile?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()
+        config.websiteDataStore = dataStore
         config.userContentController.addUserScript(WKUserScript(
             source: "try { localStorage.setItem('dsa.uiLanguage', 'zh-TW'); } catch (_) {}",
             injectionTime: .atDocumentStart, forMainFrameOnly: true))
@@ -68,7 +92,8 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         web.navigationDelegate = context.coordinator
         web.uiDelegate = context.coordinator
         web.allowsBackForwardNavigationGestures = true
-        guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL,
+        context.coordinator.observeProgress(of: web)
+        guard let url = WebNavigationPolicy.embeddedToolURL(path: path, baseURL: baseURL),
               WebNavigationPolicy.sameOrigin(url, baseURL) else {
             error = "工具網址不屬於目前的分析服務。"
             loading = false
@@ -92,6 +117,7 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         coordinator.cancelDownloads()
+        coordinator.stopObservingProgress()
         uiView.stopLoading()
         uiView.navigationDelegate = nil
         uiView.uiDelegate = nil
@@ -102,7 +128,21 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         private var downloads: [ObjectIdentifier: WKDownload] = [:]
         private var destinations: [ObjectIdentifier: URL] = [:]
         private var blockedAccessRedirect = false
+        private var downloadStarting = false
+        private var progressObservation: NSKeyValueObservation?
         init(_ parent: AuthenticatedWebContent) { self.parent = parent }
+
+        func observeProgress(of web: WKWebView) {
+            progressObservation = web.observe(\.estimatedProgress, options: [.new]) { [weak self] _, change in
+                guard let value = change.newValue else { return }
+                Task { @MainActor in self?.parent.progress = value }
+            }
+        }
+
+        func stopObservingProgress() {
+            progressObservation?.invalidate()
+            progressObservation = nil
+        }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -121,16 +161,19 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
                                                userLink: navigationAction.navigationType == .linkActivated) {
             case .allow:
                 blockedAccessRedirect = false
+                downloadStarting = false
                 decisionHandler(.allow)
             case .download:
                 parent.error = nil
+                downloadStarting = true
                 decisionHandler(.download)
             case .external:
                 // 外部新聞只由使用者明確點擊交給系統瀏覽器，不把服務 cookie 帶往別站。
                 UIApplication.shared.open(url)
                 decisionHandler(.cancel)
             case .cancel:
-                if url.absoluteString != "about:blank" {
+                // 整頁錯誤會移除 WebView，只有主頁框被擋才算；子頁框（如 srcdoc iframe）被擋不能賠上整頁。
+                if url.absoluteString != "about:blank", navigationAction.targetFrame?.isMainFrame == true {
                     parent.error = "工具嘗試導向其他服務，已停止載入。"
                     parent.loading = false
                 }
@@ -145,7 +188,9 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
                 return
             }
             let disposition = (navigationResponse.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")?.lowercased() ?? ""
-            decisionHandler(!navigationResponse.canShowMIMEType || disposition.hasPrefix("attachment") ? .download : .allow)
+            let shouldDownload = !navigationResponse.canShowMIMEType || disposition.hasPrefix("attachment")
+            if shouldDownload { downloadStarting = true }
+            decisionHandler(shouldDownload ? .download : .allow)
         }
 
         func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
@@ -164,7 +209,7 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String,
                       completionHandler: @escaping (URL?) -> Void) {
             guard let url = response.url, WebNavigationPolicy.trustedDownload(url, baseURL: parent.baseURL) else {
-                parent.error = "下載來源不屬於目前的分析服務。"
+                parent.exportError = "下載來源不屬於目前的分析服務。"
                 completionHandler(nil)
                 return
             }
@@ -176,7 +221,7 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
                 destinations[ObjectIdentifier(download)] = destination
                 completionHandler(destination)
             } catch {
-                parent.error = "無法保存匯出檔案：\(error.localizedDescription)"
+                parent.exportError = "無法保存匯出檔案：\(error.localizedDescription)"
                 completionHandler(nil)
             }
         }
@@ -184,8 +229,11 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         func download(_ download: WKDownload, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                       decisionHandler: @escaping (WKDownload.RedirectPolicy) -> Void) {
             guard let url = request.url, WebNavigationPolicy.sameOrigin(url, parent.baseURL) else {
-                parent.error = request.url.map(CloudflareAccess.isLoginURL) == true
-                    ? DSAError.cloudflareAccess.localizedDescription : "下載嘗試轉送到其他服務，已取消。"
+                if request.url.map(CloudflareAccess.isLoginURL) == true {
+                    parent.error = DSAError.cloudflareAccess.localizedDescription
+                } else {
+                    parent.exportError = "下載嘗試轉送到其他服務，已取消。"
+                }
                 parent.loading = false
                 decisionHandler(.cancel)
                 return
@@ -196,6 +244,7 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         func downloadDidFinish(_ download: WKDownload) {
             let identifier = ObjectIdentifier(download)
             downloads.removeValue(forKey: identifier)
+            downloadStarting = false
             guard let destination = destinations.removeValue(forKey: identifier) else { return }
             parent.loading = false
             parent.exportedFile = WebExportFile(url: destination)
@@ -207,7 +256,12 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
             if let destination = destinations.removeValue(forKey: identifier) {
                 WebExportFile(url: destination).removeTemporaryCopy()
             }
-            fail(error)
+            // 匯出失敗不影響已載入的頁面，用提示框，不換成整頁錯誤。
+            downloadStarting = false
+            parent.loading = false
+            if (error as NSError).code != NSURLErrorCancelled {
+                parent.exportError = "檔案沒有下載完成，請重試。"
+            }
         }
 
         func cancelDownloads() {
@@ -217,6 +271,7 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            downloadStarting = false
             parent.loading = false
         }
 
@@ -226,8 +281,12 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         private func fail(_ error: Error) {
             if WebNavigationPolicy.preservesAccessError(error, blockedAccessRedirect: blockedAccessRedirect) { return }
             if (error as NSError).code == NSURLErrorCancelled { return }
+            if WebNavigationPolicy.isDownloadInterruption(error, downloadStarting: downloadStarting) {
+                downloadStarting = false
+                return
+            }
             parent.loading = false
-            parent.error = error.localizedDescription
+            parent.error = WebNavigationPolicy.pageLoadMessage(for: error)
         }
 
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,

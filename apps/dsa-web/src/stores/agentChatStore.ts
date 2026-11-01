@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { agentApi, decodeChatState, isAbortError } from '../api/agent';
-import type { ActiveStockContext, ChatSessionItem, ChatStateFields, ChatStreamRequest, DecodedChatState } from '../api/agent';
+import type { ActiveStockContext, ChatSessionItem, ChatStateFields, ChatStreamRequest, DecodedChatState, StructuredAnswer } from '../api/agent';
 import {
   createParsedApiError,
   getParsedApiError,
@@ -8,6 +8,7 @@ import {
   isParsedApiError,
   type ParsedApiError,
 } from '../api/error';
+import { isFromEarlierDay } from '../utils/chatSessions';
 import { generateUUID } from '../utils/uuid';
 
 const STORAGE_KEY_SESSION = 'dsa_chat_session_id';
@@ -45,6 +46,11 @@ export interface Message {
   skillName?: string;
   thinkingSteps?: ProgressStep[];
   backend?: string;
+  /** ISO 時間；舊資料可能沒有，畫面就不顯示時間。 */
+  createdAt?: string | null;
+  structured?: StructuredAnswer | null;
+  /** 這則回答在講哪一檔；舊資料沒有。 */
+  stockCode?: string | null;
 }
 
 export interface StreamMeta {
@@ -59,6 +65,7 @@ export interface StreamAcceptedEvent extends ChatStateFields {
   request_id: string;
   session_id: string;
   session_state?: { selected_skill_ids: string[] | null };
+  cancel_supported?: boolean;
 }
 
 type StreamTerminalStatus = 'cancelled' | 'timeout' | null;
@@ -71,6 +78,7 @@ type StreamFailureEvent = {
   message?: unknown;
   backend?: string;
   error_code?: string;
+  structured?: StructuredAnswer | null;
 };
 
 function streamFailureFallback(event: StreamFailureEvent, defaultMessage: string): string {
@@ -229,7 +237,9 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
         && current.sessionGeneration !== decoded.sessionGeneration;
       if (replacedInstance) current.abortController?.abort();
       set({ ...patch, ...(replacedInstance ? emptyStreamState : {}),
-        messages: detail.messages.map((m) => ({ id: m.id, role: m.role, content: m.content })), chatError: null });
+        // 還原的回答沒存股票身分，先記下載入當時的標的；之後換股失敗才不會掛到新標的上。
+        messages: detail.messages.map((m) => ({ id: m.id, role: m.role, content: m.content, createdAt: m.created_at,
+          stockCode: decoded.activeStockContext?.stock_code ?? null })), chatError: null });
     } catch (error) {
       if (ownsRead()) set({ chatError: getParsedApiError(error) });
     }
@@ -304,8 +314,8 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
       if (current.instanceBindingEpoch !== instanceBindingEpoch
         || current.sessionId !== sessionId || current.activeRequestId !== activeRequestId) return;
       if (savedId) {
-        const sessionExists = sessionList.some((s) => s.session_id === savedId);
-        if (sessionExists) {
+        const savedSession = sessionList.find((s) => s.session_id === savedId);
+        if (savedSession && !isFromEarlierDay(savedSession.last_active)) {
           if (get().sessionId !== savedId) resetSession(savedId);
           await readDetail();
         } else {
@@ -379,6 +389,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
       id: Date.now().toString(),
       role: 'user',
       content: payload.message,
+      createdAt: new Date().toISOString(),
       skills: payload.skills,
       skill: payload.skills?.[0],
       skillNames,
@@ -402,6 +413,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
       let buf = '';
       let finalContent: string | null = null;
       let finalBackend: string | undefined;
+      let finalStructured: StructuredAnswer | null = null;
       let receivedDoneEvent = false;
       let acceptedEvent: StreamAcceptedEvent | null = null;
       const currentProgressSteps: ProgressStep[] = [];
@@ -442,7 +454,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
           set((s) => ({
             ...statePatch,
             messages: [...s.messages, { ...userMessage, backend: acceptedEvent!.backend }],
-            serverCancellation: acceptedEvent!.backend === 'codex_app_server',
+            serverCancellation: acceptedEvent!.cancel_supported ?? acceptedEvent!.backend === 'codex_app_server',
             sessions: s.sessions.some((x) => x.session_id === streamSessionId)
               ? s.sessions
               : [
@@ -489,6 +501,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
             );
           }
           finalContent = doneEvent.content ?? '';
+          finalStructured = doneEvent.structured ?? null;
           return;
         }
 
@@ -554,6 +567,9 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
               skillName,
               thinkingSteps: [...currentProgressSteps],
               backend: finalBackend,
+              createdAt: new Date().toISOString(),
+              structured: finalStructured,
+              stockCode: get().activeStockContext?.stock_code ?? null,
             },
           ],
         }));

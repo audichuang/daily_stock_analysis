@@ -1,5 +1,5 @@
 import type React from 'react';
-import { Component, Suspense } from 'react';
+import { Component, Suspense, useEffect, useState } from 'react';
 import type { ErrorInfo } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
@@ -8,17 +8,34 @@ type PageLoadingFallbackProps = {
   fullPage?: boolean;
 };
 
-export const PageLoadingFallback: React.FC<PageLoadingFallbackProps> = ({ fullPage = true }) => (
-  <div
-    className={
-      fullPage
-        ? 'flex min-h-screen items-center justify-center bg-base'
-        : 'flex min-h-[60vh] items-center justify-center'
-    }
-  >
-    <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan/20 border-t-cyan" />
-  </div>
-);
+/** 載入不到這個時間就不顯示轉圈，換頁時畫面不會閃一下。 */
+const PAGE_LOADING_DELAY_MS = 200;
+
+export const PageLoadingFallback: React.FC<PageLoadingFallbackProps> = ({ fullPage = true }) => {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setVisible(true), PAGE_LOADING_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  return (
+    <div
+      className={
+        fullPage
+          ? 'flex min-h-screen items-center justify-center bg-base'
+          : 'flex min-h-[60vh] items-center justify-center'
+      }
+    >
+      {visible ? (
+        <div
+          data-testid="page-loading-spinner"
+          className="h-8 w-8 animate-spin rounded-full border-2 border-cyan/20 border-t-cyan"
+        />
+      ) : null}
+    </div>
+  );
+};
 
 type RouteErrorBoundaryProps = {
   children: React.ReactNode;

@@ -2,11 +2,14 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ChevronDown, SlidersHorizontal } from 'lucide-react';
+import { ArrowDown, ChevronDown, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, SlidersHorizontal } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { agentApi } from '../api/agent';
+import { portfolioApi } from '../api/portfolio';
+import { stocksApi, type StockQuote } from '../api/stocks';
 import { systemConfigApi } from '../api/systemConfig';
-import { ApiErrorAlert, Badge, Button, ConfirmDialog, EmptyState, InlineAlert, ScrollArea, Tooltip } from '../components/common';
+import { ApiErrorAlert, Badge, Button, ConfirmDialog, EmptyState, IconButton, InlineAlert, ScrollArea } from '../components/common';
+import { ChatStockSummaryCard } from '../components/chat/ChatStockSummaryCard';
 import { createParsedApiError, getParsedApiError } from '../api/error';
 import type { AgentStatusResponse, SkillInfo } from '../api/agent';
 import { DashboardStateBlock } from '../components/dashboard';
@@ -25,6 +28,8 @@ import {
   sanitizeFollowUpStockName,
 } from '../utils/chatFollowUp';
 import { isNearBottom } from '../utils/chatScroll';
+import { filterSessions, groupSessionsByRecency, isFromEarlierDay } from '../utils/chatSessions';
+import { searchStocks } from '../utils/searchStocks';
 import { getReportText } from '../utils/reportLanguage';
 import { getIntlLocale } from '../i18n/intlLocale';
 import {
@@ -34,26 +39,35 @@ import {
 } from '../utils/stockCode';
 import { useStockIndex } from '../hooks/useStockIndex';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
-import type { UiTextKey, UiTextParams } from '../i18n/uiText';
+import type { UiLanguage, UiTextKey, UiTextParams } from '../i18n/uiText';
 
-// Quick question examples shown on empty state
-type ActiveStockContext = Pick<ChatFollowUpContext, 'stock_code' | 'stock_name'>;
+type Translate = (key: UiTextKey, params?: UiTextParams) => string;
 
-const QUICK_QUESTIONS: Array<{
-  labelKey: UiTextKey;
-  skill: string;
-  stockContext?: ActiveStockContext;
-}> = [
-  { labelKey: 'chat.quick.chanMoutai', skill: 'chan_theory', stockContext: { stock_code: '600519', stock_name: '贵州茅台' } },
-  { labelKey: 'chat.quick.waveCatl', skill: 'wave_theory', stockContext: { stock_code: '300750', stock_name: '宁德时代' } },
-  { labelKey: 'chat.quick.trendByd', skill: 'bull_trend', stockContext: { stock_code: '002594', stock_name: '比亚迪' } },
-  { labelKey: 'chat.quick.boxSmic', skill: 'box_oscillation', stockContext: { stock_code: '688981', stock_name: '中芯国际' } },
-  { labelKey: 'chat.quick.trendTencent', skill: 'bull_trend', stockContext: { stock_code: 'HK00700', stock_name: '腾讯控股' } },
-  { labelKey: 'chat.quick.emotionEastmoney', skill: 'emotion_cycle', stockContext: { stock_code: '300059', stock_name: '东方财富' } },
-];
+// 空狀態的快捷問題：按下只填入輸入框，由使用者確認後才送出
+const MARKET_PROMPT_KEYS: UiTextKey[] = ['chat.empty.market1', 'chat.empty.market2', 'chat.empty.market3'];
+const MAX_EMPTY_STOCKS = 6;
+const MAX_INPUT_SUGGESTIONS = 6;
+const MIN_SUGGESTION_QUERY_LENGTH = 2;
+
+interface EmptyStockShortcut {
+  code: string;
+  name: string | null;
+}
+
+// 繁中介面用策略的繁中名；其他語系與未標註的策略用後端原名。
+const getSkillDisplayName = (skill: SkillInfo, language: UiLanguage): string =>
+  (language === 'zh-TW' ? skill.display_name_zh_tw : null) || skill.name;
+
+const formatDayLabel = (value: string, locale: string): string =>
+  new Date(value).toLocaleDateString(locale, { month: 'short', day: 'numeric', weekday: 'short' });
+
+const formatTimeLabel = (value: string, locale: string): string =>
+  new Date(value).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false });
+
+const isValidTimestamp = (value: string | null | undefined): value is string =>
+  Boolean(value) && !Number.isNaN(new Date(value as string).getTime());
 
 const MAX_SELECTED_SKILLS = 3;
-const CONTEXT_COMPRESSION_CONFIG_KEY = 'AGENT_CONTEXT_COMPRESSION_ENABLED';
 const getMessageSkillNames = (msg: Message): string[] => {
   if (msg.skillNames?.length) return msg.skillNames;
   if (msg.skillName) return [msg.skillName];
@@ -70,17 +84,19 @@ const isStageDoneSuccessful = (status?: string): boolean => {
   return ['completed', 'success', 'succeeded', 'done'].includes(normalized);
 };
 
-const getStageDoneLabel = (step: ProgressStep): string => {
-  const stage = step.stage || 'stage';
+const getStageName = (step: ProgressStep, t: Translate): string => step.stage || t('chat.stage.genericName');
+
+const getStageDoneLabel = (step: ProgressStep, t: Translate): string => {
   if (step.message) return step.message;
-  if (isStageDoneSuccessful(step.status)) return `${stage} completed`;
-  return `${stage} ${step.status || 'finished'}`;
+  const params = { stage: getStageName(step, t) };
+  return t(isStageDoneSuccessful(step.status) ? 'chat.stage.completed' : 'chat.stage.notCompleted', params);
 };
 
-const getPipelineBudgetSkippedLabel = (step: ProgressStep): string => {
-  if (step.message) return step.message;
-  return `${step.stage || 'pipeline'} skipped: insufficient budget`;
-};
+const getPipelineBudgetSkippedLabel = (step: ProgressStep, t: Translate): string =>
+  step.message || t('chat.stage.budgetSkipped', { stage: getStageName(step, t) });
+
+const getPipelineTimeoutLabel = (step: ProgressStep, t: Translate): string =>
+  step.message || t('chat.stage.timedOut', { stage: getStageName(step, t) });
 
 const ChatPage: React.FC = () => {
   const { language, t } = useUiLanguage();
@@ -90,7 +106,14 @@ const ChatPage: React.FC = () => {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [defaultSkillIds, setDefaultSkillIds] = useState<string[]>([]);
   const [showSkillDesc, setShowSkillDesc] = useState<string | null>(null);
-  const [mobileSkillPickerOpen, setMobileSkillPickerOpen] = useState(false);
+  const [skillPickerOpen, setSkillPickerOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [sendConfirmOpen, setSendConfirmOpen] = useState(false);
+  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [historyKeyword, setHistoryKeyword] = useState('');
+  const [inputFocused, setInputFocused] = useState(false);
+  const [holdings, setHoldings] = useState<EmptyStockShortcut[]>([]);
+  const [quoteState, setQuoteState] = useState<{ code: string; quote: StockQuote | null } | null>(null);
   const [expandedThinking, setExpandedThinking] = useState<Set<string>>(new Set());
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -100,13 +123,6 @@ const ChatPage: React.FC = () => {
     type: 'success' | 'error';
     message: string;
   } | null>(null);
-  const [contextCompressionEnabled, setContextCompressionEnabled] = useState(false);
-  const [contextCompressionLoaded, setContextCompressionLoaded] = useState(false);
-  const [contextCompressionSaving, setContextCompressionSaving] = useState(false);
-  const [contextCompressionConfigVersion, setContextCompressionConfigVersion] = useState('');
-  const [contextCompressionMaskToken, setContextCompressionMaskToken] = useState('******');
-  // 後端沒給訊息時才用 fallbackKey，渲染時再翻譯，切換語言能即時生效
-  const [contextCompressionError, setContextCompressionError] = useState<{ message: string | null; fallbackKey: UiTextKey } | null>(null);
   const [copiedMessages, setCopiedMessages] = useState<Set<string>>(new Set());
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [watchlistCodes, setWatchlistCodes] = useState<string[]>([]);
@@ -122,6 +138,7 @@ const ChatPage: React.FC = () => {
   const copyResetTimerRef = useRef<Partial<Record<string, number>>>({});
   const messagesViewportRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const isMountedRef = useRef(true);
   const sendToastTimerRef = useRef<number | null>(null);
   const followUpHydrationTokenRef = useRef(0);
@@ -349,81 +366,63 @@ const ChatPage: React.FC = () => {
     void loadAgentStatus();
   }, [loadAgentStatus]);
 
+  // 空狀態的「持股」捷徑；讀不到就不顯示這組，不影響問股。
   useEffect(() => {
     let active = true;
-
-    void systemConfigApi.getConfig(false)
-      .then((config) => {
-        if (!active) {
-          return;
+    void portfolioApi.getSnapshot()
+      .then((snapshot) => {
+        if (!active) return;
+        const seen = new Set<string>();
+        const shortcuts: EmptyStockShortcut[] = [];
+        for (const account of snapshot.accounts ?? []) {
+          for (const position of account.positions ?? []) {
+            if (seen.has(position.symbol)) continue;
+            seen.add(position.symbol);
+            shortcuts.push({ code: position.symbol, name: position.name ?? null });
+          }
         }
-        const enabledItem = config.items.find((item) => item.key === CONTEXT_COMPRESSION_CONFIG_KEY);
-        setContextCompressionEnabled(String(enabledItem?.value ?? '').trim().toLowerCase() === 'true');
-        setContextCompressionConfigVersion(config.configVersion);
-        setContextCompressionMaskToken(config.maskToken || '******');
-        setContextCompressionLoaded(true);
-        setContextCompressionError(null);
+        setHoldings(shortcuts.slice(0, MAX_EMPTY_STOCKS));
       })
-      .catch((error) => {
-        if (!active) {
-          return;
-        }
-        const parsed = getParsedApiError(error);
-        setContextCompressionLoaded(false);
-        setContextCompressionError({ message: parsed.message || null, fallbackKey: 'chat.compression.loadFailed' });
-        console.error('Failed to load context compression setting:', error);
+      .catch(() => {
+        // 空狀態捷徑是輔助資訊，失敗時只少一組按鈕
       });
-
     return () => {
       active = false;
     };
   }, []);
 
-  const updateContextCompressionEnabled = useCallback(
-    async (nextEnabled: boolean) => {
-      if (!contextCompressionLoaded || contextCompressionSaving) {
-        return;
-      }
+  // 摘要卡的現價與漲跌：換標的或回答結束時更新。
+  useEffect(() => {
+    if (!activeStockCode || loading) return undefined;
+    let active = true;
+    void stocksApi.getQuotes([activeStockCode])
+      .then((items) => {
+        if (active) setQuoteState({ code: activeStockCode, quote: items[0]?.quote ?? null });
+      })
+      .catch(() => {
+        if (active) setQuoteState({ code: activeStockCode, quote: null });
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeStockCode, loading]);
 
-      const previousEnabled = contextCompressionEnabled;
-      setContextCompressionEnabled(nextEnabled);
-      setContextCompressionSaving(true);
-      setContextCompressionError(null);
+  // 報價跟著代碼走：換標的後、新報價回來前不能顯示上一檔的價格。
+  const activeQuote = quoteState?.code === activeStockCode ? quoteState.quote : null;
 
-      try {
-        const result = await systemConfigApi.update({
-          configVersion: contextCompressionConfigVersion,
-          maskToken: contextCompressionMaskToken,
-          reloadNow: true,
-          items: [
-            {
-              key: CONTEXT_COMPRESSION_CONFIG_KEY,
-              value: nextEnabled ? 'true' : 'false',
-            },
-          ],
-        });
-        setContextCompressionConfigVersion(result.configVersion || contextCompressionConfigVersion);
-      } catch (error) {
-        const parsed = getParsedApiError(error);
-        setContextCompressionEnabled(previousEnabled);
-        setContextCompressionError({ message: parsed.message || null, fallbackKey: 'chat.compression.saveFailed' });
-      } finally {
-        setContextCompressionSaving(false);
-      }
-    },
-    [
-      contextCompressionConfigVersion,
-      contextCompressionEnabled,
-      contextCompressionLoaded,
-      contextCompressionMaskToken,
-      contextCompressionSaving,
-    ],
-  );
-
-  const availableSkillIds = new Set(skills.map((skill) => skill.id));
-  const quickQuestions = QUICK_QUESTIONS.filter((question) => availableSkillIds.size === 0 || availableSkillIds.has(question.skill));
+  const watchlistShortcuts: EmptyStockShortcut[] = watchlistCodes.slice(0, MAX_EMPTY_STOCKS).map((code) => {
+    const matched = stockIndex.find((item) => item.canonicalCode === code || item.displayCode === code);
+    return { code, name: matched?.nameZh ?? null };
+  });
   const selectedSkillIdSet = new Set(selectedSkillIds);
   const skillLimitReached = selectedSkillIds.length >= MAX_SELECTED_SKILLS;
+  const skillGroups: Array<{ id: string; name: string | null; items: SkillInfo[] }> = [];
+  for (const skill of skills) {
+    const groupId = skill.group || '';
+    const existingGroup = skillGroups.find((group) => group.id === groupId);
+    if (existingGroup) existingGroup.items.push(skill);
+    else skillGroups.push({ id: groupId, name: skill.group_name_zh_tw || null, items: [skill] });
+  }
   const agentConfirmedUnavailable = Boolean(agentStatus && !agentStatus.available);
   const agentAvailable = Boolean(agentStatus?.available) && !agentStatusChecking;
   const agentUnavailableMessage = agentStatus?.errorCode === 'agent_mode_disabled'
@@ -443,8 +442,11 @@ const ChatPage: React.FC = () => {
     : null;
 
   const getSkillNames = useCallback(
-    (skillIds: string[]) => skillIds.map((id) => skills.find((s) => s.id === id)?.name || id),
-    [skills],
+    (skillIds: string[]) => skillIds.map((id) => {
+      const skill = skills.find((s) => s.id === id);
+      return skill ? getSkillDisplayName(skill, language) : id;
+    }),
+    [language, skills],
   );
 
   const normalizeSelectedSkillIds = useCallback((skillIds: string[]) => {
@@ -566,24 +568,20 @@ const ChatPage: React.FC = () => {
   }, [searchParams, setSearchParams, stockIndex, stockIndexLoading, agentStatusChecking]);
 
   const handleSend = useCallback(
-    async (
-      overrideMessage?: string,
-      overrideSkillIds?: string[],
-      overrideStockContext?: ActiveStockContext,
-    ) => {
+    async (overrideMessage?: string) => {
       const msgText = (overrideMessage ?? input).trim();
       if (!msgText || loading || !agentAvailable || !agentStatus) return;
       if (overrideMessage !== undefined) {
         setInput(msgText);
       }
-      const requestedSkillIds = overrideSkillIds ?? sessionSelectedSkillIds;
+      const requestedSkillIds = sessionSelectedSkillIds;
       const usedSkillIds = normalizeSelectedSkillIds(
         requestedSkillIds ?? selectedSkillIds,
       );
       const usedSkillNames = usedSkillIds.length > 0 ? getSkillNames(usedSkillIds) : [t('chat.skillGeneral')];
       // Only report/shortcut hints accompany this request. Ordinary follow-ups
       // rely on the server's accepted state, not a replay or a client-selected fact.
-      const contextForSend = overrideStockContext ?? followUpContextRef.current ?? undefined;
+      const contextForSend = followUpContextRef.current ?? undefined;
 
       const payload = {
         message: msgText,
@@ -601,7 +599,7 @@ const ChatPage: React.FC = () => {
           followUpContextRef.current = null;
           setIsFollowUpContextLoading(false);
           setInput('');
-          setMobileSkillPickerOpen(false);
+          setSkillPickerOpen(false);
           requestScrollToBottom('smooth');
         },
       });
@@ -609,16 +607,40 @@ const ChatPage: React.FC = () => {
     [agentAvailable, agentStatus, getSkillNames, input, loading, normalizeSelectedSkillIds, requestScrollToBottom, selectedSkillIds, sessionId, sessionSelectedSkillIds, startStream, t],
   );
 
+  const suggestionQuery = input.match(/\S+$/)?.[0] ?? '';
+  const inputSuggestions = inputFocused && !loading && suggestionQuery.length >= MIN_SUGGESTION_QUERY_LENGTH
+    ? searchStocks(suggestionQuery, stockIndex, { limit: MAX_INPUT_SUGGESTIONS })
+    : [];
+
+  const fillInput = useCallback((value: string, context: ChatFollowUpContext | null) => {
+    followUpHydrationTokenRef.current += 1;
+    followUpContextRef.current = context;
+    setIsFollowUpContextLoading(false);
+    setInput(value);
+    inputRef.current?.focus();
+  }, []);
+
+  const handleSelectSuggestion = (code: string, name: string) => {
+    const prefix = input.slice(0, input.length - suggestionQuery.length);
+    fillInput(`${prefix}${name} ${code} `, { stock_code: code, stock_name: name });
+  };
+
+  const fillStockShortcut = (shortcut: EmptyStockShortcut) => {
+    fillInput(
+      t('chat.empty.analyzePrompt', { stock: shortcut.name ? `${shortcut.name} ${shortcut.code}` : shortcut.code }),
+      { stock_code: shortcut.code, stock_name: shortcut.name },
+    );
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // 中文輸入法選字的 Enter 不是送出。
+    if (e.nativeEvent.isComposing) return;
     if (e.key === 'Enter' && !e.shiftKey) {
+      // 手機鍵盤的 Enter 只換行，靠傳送鈕送出；桌機維持 Enter 傳送、Shift+Enter 換行。
+      if (window.matchMedia('(pointer: coarse)').matches) return;
       e.preventDefault();
       handleSend();
     }
-  };
-
-  const handleQuickQuestion = (q: (typeof QUICK_QUESTIONS)[0]) => {
-    setSelectedSkillIds([q.skill]);
-    handleSend(t(q.labelKey), [q.skill], q.stockContext);
   };
 
   const showSendFeedback = useCallback((nextToast: { type: 'success' | 'error'; message: string }, durationMs: number) => {
@@ -677,6 +699,23 @@ const ChatPage: React.FC = () => {
     URL.revokeObjectURL(url);
   }, [t]);
 
+  const handleConfirmSendToNotify = async () => {
+    setSendConfirmOpen(false);
+    if (sending) return;
+    setSending(true);
+    setSendToast(null);
+    try {
+      const content = formatSessionAsMarkdown(messages, getIntlLocale(language));
+      await agentApi.sendChat(content);
+      showSendFeedback({ type: 'success', message: t('chat.sendSuccessMessage') }, 3000);
+    } catch (err) {
+      const parsed = getParsedApiError(err);
+      showSendFeedback({ type: 'error', message: parsed.message || t('chat.sendFailed') }, 5000);
+    } finally {
+      setSending(false);
+    }
+  };
+
   const getCurrentStage = (steps: ProgressStep[]): string => {
     if (steps.length === 0) return t('chat.stage.connecting');
     const last = steps[steps.length - 1];
@@ -686,13 +725,13 @@ const ChatPage: React.FC = () => {
     if (last.type === 'tool_done')
       return t('chat.stage.toolDone', { tool: last.display_name || last.tool || '' });
     if (last.type === 'stage_start')
-      return last.message || `Starting ${last.stage || 'stage'}...`;
+      return last.message || t('chat.stage.starting', { stage: getStageName(last, t) });
     if (last.type === 'stage_done')
-      return getStageDoneLabel(last);
+      return getStageDoneLabel(last, t);
     if (last.type === 'pipeline_timeout')
-      return last.message || `${last.stage || 'pipeline'} timed out`;
+      return getPipelineTimeoutLabel(last, t);
     if (last.type === 'pipeline_budget_skipped')
-      return getPipelineBudgetSkippedLabel(last);
+      return getPipelineBudgetSkippedLabel(last, t);
     if (last.type === 'generating')
       return last.message || t('chat.stage.generating');
     return t('chat.stage.processing');
@@ -754,20 +793,20 @@ const ChatPage: React.FC = () => {
           statusClass = step.success ? 'chat-progress-item-success' : 'chat-progress-item-danger';
           iconClass = step.success ? 'chat-progress-dot-success' : 'chat-progress-dot-danger';
         } else if (step.type === 'stage_start') {
-          text = step.message || `Starting ${step.stage || 'stage'}...`;
+          text = step.message || t('chat.stage.starting', { stage: getStageName(step, t) });
           statusClass = 'chat-progress-item-thinking';
           iconClass = 'chat-progress-dot-thinking';
         } else if (step.type === 'stage_done') {
           const isSuccess = isStageDoneSuccessful(step.status);
-          text = getStageDoneLabel(step);
+          text = getStageDoneLabel(step, t);
           statusClass = isSuccess ? 'chat-progress-item-success' : 'chat-progress-item-danger';
           iconClass = isSuccess ? 'chat-progress-dot-success' : 'chat-progress-dot-danger';
         } else if (step.type === 'pipeline_timeout') {
-          text = step.message || `${step.stage || 'pipeline'} timed out`;
+          text = getPipelineTimeoutLabel(step, t);
           statusClass = 'chat-progress-item-danger';
           iconClass = 'chat-progress-dot-danger';
         } else if (step.type === 'pipeline_budget_skipped') {
-          text = getPipelineBudgetSkippedLabel(step);
+          text = getPipelineBudgetSkippedLabel(step, t);
           statusClass = 'chat-progress-item-muted';
           iconClass = 'chat-progress-dot-muted';
         } else if (step.type === 'generating') {
@@ -775,7 +814,7 @@ const ChatPage: React.FC = () => {
           statusClass = 'chat-progress-item-generating';
           iconClass = 'chat-progress-dot-generating';
         } else {
-          text = step.message || step.type;
+          text = step.message || t('chat.stage.processing');
         }
         return (
           <div
@@ -790,34 +829,38 @@ const ChatPage: React.FC = () => {
     </div>
   );
 
+  const visibleSessions = filterSessions(sessions, historyKeyword);
+  const sessionGroups = groupSessionsByRecency(visibleSessions);
+  const intlLocale = getIntlLocale(language);
+
   const sidebarContent = (
     <>
-      <div className="flex items-center justify-between border-b border-white/5 bg-white/2 p-3.5">
-        <h2 className="text-sm font-semibold text-cyan uppercase tracking-[0.2em] flex items-center gap-2">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          {t('chat.history.title')}
-        </h2>
-        <button
-          onClick={handleStartNewChat}
-          className="rounded-lg p-1.5 text-muted-text transition-all hover:bg-white/10 hover:text-foreground"
-          aria-label={t('chat.history.newChat')}
-        >
-          <svg
-            className="w-4 h-4"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
+      <div className="space-y-2 border-b border-border/50 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <Button
+            size="sm"
+            className="flex-1"
+            onClick={handleStartNewChat}
+            aria-label={t('chat.history.newChat')}
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 4v16m8-8H4"
-            />
-          </svg>
-        </button>
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            {t('chat.newChat')}
+          </Button>
+          <IconButton
+            className="hidden md:inline-flex"
+            aria-label={t('chat.history.collapse')}
+            icon={<PanelLeftClose className="h-4 w-4" aria-hidden="true" />}
+            onClick={() => setHistoryCollapsed(true)}
+          />
+        </div>
+        <input
+          type="search"
+          value={historyKeyword}
+          onChange={(event) => setHistoryKeyword(event.target.value)}
+          placeholder={t('chat.history.searchPlaceholder')}
+          aria-label={t('chat.history.searchPlaceholder')}
+          className="input-surface h-9 w-full rounded-lg border bg-transparent px-3 text-base focus:outline-none md:text-sm"
+        />
       </div>
       <ScrollArea testId="chat-session-list-scroll" viewportClassName="p-3">
         {sessionsLoading ? (
@@ -834,57 +877,69 @@ const ChatPage: React.FC = () => {
             description={t('chat.history.emptyDescription')}
             className="rounded-2xl border border-dashed border-border/50 bg-surface/30"
           />
+        ) : visibleSessions.length === 0 ? (
+          <p className="py-4 text-center text-xs text-secondary-text">{t('chat.history.noMatch')}</p>
         ) : (
-          <div className="space-y-2">
-            {sessions.map((s) => (
-              <div key={s.session_id} className="session-item-row">
-                <button
-                  type="button"
-                  onClick={() => handleSwitchSession(s.session_id)}
-                  className={`session-item ${s.session_id === sessionId ? 'active' : ''}`}
-                  aria-label={t('chat.history.switchTo', { title: s.title })}
-                  aria-current={s.session_id === sessionId ? 'page' : undefined}
-                >
-                  <div className="indicator" />
-                  <div className="content">
-                    <span className="title">{s.title}</span>
-                    <div className="mt-0.5 flex items-center gap-2">
-                      <span className="meta">
-                        {t('chat.history.messageCount', { count: s.message_count })}
-                      </span>
-                      {s.last_active && (
-                        <>
-                          <span className="separator" />
-                          <span className="meta">
-                            {new Date(s.last_active).toLocaleDateString(getIntlLocale(language), { month: 'short', day: 'numeric' })}
+          <div className="space-y-4">
+            {sessionGroups.map((group) => (
+              <div key={group.id} className="space-y-2">
+                <h3 className="text-xs font-medium text-muted-text">{t(`chat.history.group.${group.id}`)}</h3>
+                {group.sessions.map((s) => (
+                  <div key={s.session_id} className="session-item-row">
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchSession(s.session_id)}
+                      className={`session-item ${s.session_id === sessionId ? 'active' : ''}`}
+                      aria-label={t('chat.history.switchTo', { title: s.title })}
+                      aria-current={s.session_id === sessionId ? 'page' : undefined}
+                    >
+                      <div className="indicator" />
+                      <div className="content">
+                        <span className="title">{s.title}</span>
+                        {s.stock_code ? (
+                          <span className="mt-1 inline-flex w-fit max-w-full truncate rounded-full border border-border/60 px-2 py-0.5 text-[11px] text-secondary-text">
+                            {s.stock_name ? `${s.stock_name} · ` : ''}{s.stock_code}
                           </span>
-                        </>
-                      )}
-                    </div>
+                        ) : null}
+                        <div className="mt-0.5 flex items-center gap-2">
+                          <span className="meta">
+                            {t('chat.history.messageCount', { count: s.message_count })}
+                          </span>
+                          {s.last_active && (
+                            <>
+                              <span className="separator" />
+                              <span className="meta">
+                                {new Date(s.last_active).toLocaleDateString(intlLocale, { month: 'short', day: 'numeric' })}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="delete-btn"
+                      onClick={() => {
+                        setDeleteConfirmId(s.session_id);
+                      }}
+                      aria-label={t('chat.history.delete', { title: s.title })}
+                    >
+                      <svg
+                        className="w-3.5 h-3.5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                        />
+                      </svg>
+                    </button>
                   </div>
-                </button>
-                <button
-                  type="button"
-                  className="delete-btn"
-                  onClick={() => {
-                    setDeleteConfirmId(s.session_id);
-                  }}
-                  aria-label={t('chat.history.delete', { title: s.title })}
-                >
-                  <svg
-                    className="w-3.5 h-3.5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                    />
-                  </svg>
-                </button>
+                ))}
               </div>
             ))}
           </div>
@@ -895,17 +950,44 @@ const ChatPage: React.FC = () => {
 
   const selectedSkillSummary = selectedSkillIds.length > 0
     ? getSkillNames(selectedSkillIds).join('、')
-    : t('chat.generalAnalysis');
+    : t('chat.skillPicker.none');
+
+  const lastMessage = messages[messages.length - 1];
+  const lastAssistantId = [...messages].reverse().find((msg) => msg.role === 'assistant')?.id;
+  const lastUserMessage = [...messages].reverse().find((msg) => msg.role === 'user');
+  const staleSince = !loading && isValidTimestamp(lastMessage?.createdAt) && isFromEarlierDay(lastMessage.createdAt)
+    ? lastMessage.createdAt
+    : null;
+
+  const renderEmptyGroup = (title: string, children: React.ReactNode) => (
+    <div className="space-y-2">
+      <h3 className="text-xs font-medium text-muted-text">{title}</h3>
+      <div className="flex flex-wrap justify-center gap-2">{children}</div>
+    </div>
+  );
+
+  const renderStockShortcut = (shortcut: EmptyStockShortcut) => (
+    <button
+      key={shortcut.code}
+      type="button"
+      onClick={() => fillStockShortcut(shortcut)}
+      className="quick-question-btn"
+    >
+      {shortcut.name || shortcut.code}
+    </button>
+  );
 
   return (
     <div
       data-testid="chat-workspace"
-      className="flex h-[calc(100vh-5rem)] w-full min-w-0 gap-4 overflow-hidden sm:h-[calc(100vh-5.5rem)] lg:h-[calc(100vh-2rem)]"
+      className="flex h-[calc(100dvh-var(--shell-page-offset,2rem))] w-full min-w-0 gap-4 overflow-hidden"
     >
       {/* Desktop sidebar */}
-      <div className="hidden h-full w-64 flex-shrink-0 flex-col overflow-hidden rounded-[1.25rem] border border-white/8 bg-card/82 shadow-soft-card md:flex">
-        {sidebarContent}
-      </div>
+      {historyCollapsed ? null : (
+        <div className="hidden h-full w-64 flex-shrink-0 flex-col overflow-hidden rounded-[1.25rem] border border-white/8 bg-card/82 shadow-soft-card md:flex">
+          {sidebarContent}
+        </div>
+      )}
 
       {/* Mobile sidebar overlay */}
       {sidebarOpen && (
@@ -935,11 +1017,22 @@ const ChatPage: React.FC = () => {
         onCancel={() => setDeleteConfirmId(null)}
       />
 
+      {/* 推送會傳到外部通知管道，先確認 */}
+      <ConfirmDialog
+        isOpen={sendConfirmOpen}
+        title={t('chat.sendConfirm.title')}
+        message={t('chat.sendConfirm.message')}
+        confirmText={t('chat.sendConfirm.confirm')}
+        cancelText={t('chat.deleteDialog.cancel')}
+        onConfirm={() => void handleConfirmSendToNotify()}
+        onCancel={() => setSendConfirmOpen(false)}
+      />
+
       {/* Main chat area */}
       <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="mb-4 flex-shrink-0 space-y-3">
-          <div className="flex items-start justify-between gap-4">
-            <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
+        <header className="mb-2 flex-shrink-0 space-y-1 md:mb-3">
+          <div className="flex items-center justify-between gap-2">
+            <h1 className="flex min-w-0 items-center gap-2 text-lg font-bold text-foreground md:text-2xl">
               <button
                 onClick={() => setSidebarOpen(true)}
                 className="md:hidden p-1.5 -ml-1 rounded-lg hover:bg-hover transition-colors text-secondary-text hover:text-foreground"
@@ -959,127 +1052,76 @@ const ChatPage: React.FC = () => {
                   />
                 </svg>
               </button>
-              <svg
-                className="w-6 h-6 text-cyan"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+              {historyCollapsed ? (
+                <IconButton
+                  className="hidden md:inline-flex"
+                  aria-label={t('chat.history.expand')}
+                  icon={<PanelLeftOpen className="h-4 w-4" aria-hidden="true" />}
+                  onClick={() => setHistoryCollapsed(false)}
                 />
-              </svg>
-              {t('layout.route.chat.title')}
-              {agentStatus ? (
-                <Badge
-                  variant={agentStatus.backend === 'codex_app_server' ? 'warning' : 'history'}
-                  size="sm"
-                >
-                  {t(agentStatus.backend === 'codex_app_server' ? 'chat.codexBackendBadge' : 'chat.defaultBackendBadge')}
-                </Badge>
+              ) : null}
+              <span className="truncate">{t('layout.route.chat.title')}</span>
+              {agentStatus?.backend === 'codex_app_server' ? (
+                <Badge variant="warning" size="sm">{t('chat.codexBackendBadge')}</Badge>
               ) : null}
             </h1>
-            {messages.length > 0 && (
-              <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-2">
-                <Tooltip content={t('chat.exportSessionHint')}>
-                  <span className="inline-flex">
-                    <Button
-                      variant="action-primary"
-                      size="sm"
-                      onClick={() => downloadSession(messages, getIntlLocale(language))}
-                      aria-label={t('chat.exportSessionHint')}
+            <div className="relative flex flex-shrink-0 items-center gap-1">
+              <IconButton
+                className="md:hidden"
+                aria-label={t('chat.newChat')}
+                icon={<Plus className="h-4 w-4" aria-hidden="true" />}
+                onClick={handleStartNewChat}
+              />
+              {messages.length > 0 ? (
+                <>
+                  <IconButton
+                    aria-label={t('chat.moreActions')}
+                    aria-expanded={moreMenuOpen}
+                    aria-haspopup="menu"
+                    icon={<MoreHorizontal className="h-4 w-4" aria-hidden="true" />}
+                    onClick={() => setMoreMenuOpen((open) => !open)}
+                  />
+                  {moreMenuOpen ? (
+                    <div
+                      role="menu"
+                      className="absolute right-0 top-full z-30 mt-1 w-56 rounded-xl border border-border/70 bg-card p-1 shadow-soft-card"
                     >
-                      <svg
-                        className="w-4 h-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-hover"
+                        onClick={() => {
+                          setMoreMenuOpen(false);
+                          downloadSession(messages, intlLocale);
+                        }}
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                        />
-                      </svg>
-                      {t('chat.exportSession')}
-                    </Button>
-                  </span>
-                </Tooltip>
-                <Tooltip content={t('chat.sendToNotifyHint')}>
-                  <span className="inline-flex">
-                    <Button
-                      variant="action-primary"
-                      size="sm"
-                      disabled={sending}
-                      onClick={async () => {
-                        if (sending) return;
-                        setSending(true);
-                        setSendToast(null);
-                        try {
-                          const content = formatSessionAsMarkdown(messages, getIntlLocale(language));
-                          await agentApi.sendChat(content);
-                          showSendFeedback({ type: 'success', message: t('chat.sendSuccessMessage') }, 3000);
-                        } catch (err) {
-                          const parsed = getParsedApiError(err);
-                          showSendFeedback({
-                            type: 'error',
-                            message: parsed.message || t('chat.sendFailed'),
-                          }, 5000);
-                        } finally {
-                          setSending(false);
-                        }
-                      }}
-                      aria-label={t('chat.sendToNotifyHint')}
-                    >
-                      {sending ? (
-                        <svg
-                          className="w-4 h-4 animate-spin"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                        >
-                          <circle
-                            className="opacity-25"
-                            cx="12"
-                            cy="12"
-                            r="10"
-                            stroke="currentColor"
-                            strokeWidth="4"
-                          />
-                          <path
-                            className="opacity-75"
-                            fill="currentColor"
-                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                          />
-                        </svg>
-                      ) : (
-                        <svg
-                          className="w-4 h-4"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-                          />
-                        </svg>
-                      )}
-                      {t('chat.sendToNotify')}
-                    </Button>
-                  </span>
-                </Tooltip>
-              </div>
-            )}
+                        {t('chat.exportSessionHint')}
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={sending}
+                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60"
+                        onClick={() => {
+                          setMoreMenuOpen(false);
+                          setSendConfirmOpen(true);
+                        }}
+                      >
+                        {t('chat.sendToNotifyHint')}
+                      </button>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
           </div>
-          <p className="text-secondary-text text-sm">
+          <p className="hidden text-sm text-secondary-text md:block">
             {t(agentStatus?.backend === 'codex_app_server' ? 'chat.introCodex' : 'chat.introDefault')}
           </p>
+        </header>
+
+        {/* 狀態提示集中在訊息區上方，輸入卡只放輸入相關的東西 */}
+        <div data-testid="chat-status-region" className="mb-2 flex-shrink-0 space-y-2 empty:hidden">
           {agentStatus?.backend === 'codex_app_server' ? (
             <InlineAlert
               variant="warning"
@@ -1087,7 +1129,7 @@ const ChatPage: React.FC = () => {
               message={t('chat.codexLimitedMessage')}
               action={(
                 <Button
-                  variant="action-primary"
+                  variant="primary"
                   size="sm"
                   onClick={() => navigate('/settings?category=agent')}
                 >
@@ -1105,433 +1147,370 @@ const ChatPage: React.FC = () => {
               className="max-w-md rounded-xl px-3 py-2 text-xs shadow-none"
             />
           ) : null}
-        </header>
-
-        <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden border border-white/6 bg-card/78 glass-card">
-          {/* Messages */}
-          <ScrollArea
-            className="relative z-10 flex-1"
-            viewportRef={messagesViewportRef}
-            onScroll={handleMessagesScroll}
-            viewportClassName="space-y-6 p-4 md:p-6"
-            testId="chat-message-scroll"
-          >
-            {messages.length === 0 && !loading ? (
-              <div className="flex h-full items-center justify-center">
-                <EmptyState
-                  title={t('chat.emptyTitle')}
-                  description={t(
-                    agentStatus?.backend === 'codex_app_server'
-                      ? 'chat.emptyDescriptionCodex'
-                      : 'chat.emptyDescriptionDefault',
-                  )}
-                  className="max-w-2xl border-dashed bg-card/55"
-                  icon={(
-                    <svg
-                      className="h-8 w-8"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.5}
-                        d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
-                      />
-                    </svg>
-                  )}
-                  action={(
-                    <div className="flex max-w-lg flex-wrap justify-center gap-2">
-                      {quickQuestions.map((q, i) => (
-                        <button
-                          key={i}
-                          onClick={() => handleQuickQuestion(q)}
-                          disabled={!agentAvailable}
-                          className="quick-question-btn disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {t(q.labelKey)}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                />
-              </div>
-            ) : (
-              messages.map((msg) => {
-                const skillLabel = getMessageSkillLabel(msg);
-                return (
-                <div
-                  key={msg.id}
-                  className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
+          {staleSince && lastUserMessage ? (
+            <InlineAlert
+              variant="info"
+              message={t('chat.stale.message', { date: formatDayLabel(staleSince, intlLocale) })}
+              action={(
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={!agentAvailable}
+                  onClick={() => void handleSend(lastUserMessage.content)}
                 >
-                  <div
-                    className={cn(
-                      'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[10px] font-bold shadow-sm transition-all',
-                      msg.role === 'user' ? 'chat-avatar-user' : 'chat-avatar-ai'
-                    )}
-                  >
-                    {msg.role === 'user' ? 'U' : 'AI'}
-                  </div>
-                  <div
-                    className={cn(
-                      'group/message min-w-0 w-fit max-w-[min(100%,48rem)] overflow-hidden px-5 py-3.5 transition-colors',
-                      msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'
-                    )}
-                  >
-                    {msg.role === 'assistant' && (skillLabel || msg.backend) && (
-                      <div className="mb-2 flex flex-wrap gap-2">
-                        {skillLabel ? <Badge variant="info" className="chat-skill-badge shadow-none" aria-label={t('chat.skillBadge', { skill: skillLabel })}>
-                          <svg
-                            className="w-3 h-3"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M13 10V3L4 14h7v7l9-11h-7z"
-                            />
-                          </svg>
-                          {skillLabel}
-                        </Badge> : null}
-                        {msg.backend ? (
-                          <Badge variant={msg.backend === 'codex_app_server' ? 'warning' : 'history'} size="sm">
-                            {t(msg.backend === 'codex_app_server' ? 'chat.codexBackendBadge' : 'chat.defaultBackendBadge')}
-                          </Badge>
-                        ) : null}
-                      </div>
-                    )}
-                    {msg.role === 'assistant' && renderThinkingBlock(msg)}
-                    {msg.role === 'assistant' &&
-                      expandedThinking.has(msg.id) &&
-                      msg.thinkingSteps &&
-                      renderThinkingDetails(msg.thinkingSteps)}
-                    {msg.role === 'assistant' ? (
-                      <div className="relative">
-                        <div className="chat-message-actions">
-                          <button
-                            type="button"
-                            onClick={() => copyMessageToClipboard(msg.id, msg.content)}
-                            className="chat-copy-btn"
-                            aria-label={copiedMessages.has(msg.id) ? text.copied : text.copy}
-                          >
-                            {copiedMessages.has(msg.id) ? text.copied : text.copy}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => downloadMessageAsMarkdown(msg)}
-                            className="chat-copy-btn"
-                            aria-label={t('chat.exportMessageHint')}
-                          >
-                            {t('chat.exportMessage')}
-                          </button>
-                        </div>
-                        <div className="chat-prose pr-20 sm:pr-24">
-                          <Markdown remarkPlugins={[remarkGfm]}>
-                            {msg.content}
-                          </Markdown>
-                        </div>
-                      </div>
-                    ) : (
-                      msg.content
-                        .split('\n')
-                        .map((line, i) => (
-                          <p
-                            key={i}
-                            className="mb-1 last:mb-0 leading-relaxed"
-                          >
-                            {line || '\u00A0'}
-                          </p>
-                        ))
-                    )}
-                  </div>
-                </div>
-                );
-              })
-            )}
-
-            {loading && (
-              <div className="flex gap-4">
-                <div className="w-8 h-8 rounded-full bg-elevated text-foreground flex items-center justify-center flex-shrink-0 text-xs font-bold">
-                  AI
-                </div>
-                <div className="min-w-[200px] max-w-[min(100%,48rem)] overflow-hidden rounded-2xl rounded-tl-sm border border-white/6 bg-card/72 px-5 py-4">
-                  <div className="flex items-center gap-2.5 text-sm text-secondary-text">
-                    <div className="relative w-4 h-4 flex-shrink-0">
-                      <div className="absolute inset-0 rounded-full border-2 border-cyan/20" />
-                      <div className="absolute inset-0 rounded-full border-2 border-cyan border-t-transparent animate-spin" />
-                    </div>
-                    <span className="text-secondary-text">
-                      {getCurrentStage(progressSteps)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div ref={messagesEndRef} />
-          </ScrollArea>
-
-          {showJumpToBottom && (
-            <div className="pointer-events-none absolute bottom-[5.75rem] right-4 z-20 md:bottom-24 md:right-6">
-              <button
-                type="button"
-                className="pointer-events-auto chat-copy-btn shadow-soft-card"
-                onClick={() => {
-                  requestScrollToBottom('smooth');
-                  scrollToBottom('smooth');
-                }}
-                aria-label={t('chat.jumpToLatestHint')}
-              >
-                <svg
-                  className="h-3.5 w-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M19 14l-7 7m0 0l-7-7m7 7V3"
-                  />
-                </svg>
-                {t('chat.newMessages')}
-              </button>
-            </div>
-          )}
-
-          {/* Input area */}
-          <div className="border-t border-white/6 bg-card/88 p-4 md:p-6 relative z-20">
-            <div className="space-y-3">
-              {chatError ? <ApiErrorAlert error={chatError} /> : null}
-              {chatError?.code === 'session_state_conflict' && (
-                <Button variant="secondary" size="xsm" onClick={() => void refreshSession()}>
-                  {t('chat.refreshSession')}
+                  {t('chat.stale.rerun')}
                 </Button>
               )}
-              {terminalStatus === 'cancelled' ? (
-                <div role="status" className="rounded-xl border border-slate-500/20 bg-slate-500/5 px-4 py-3 text-sm">
-                  {t('chat.analysisStopped')}
-                </div>
-              ) : null}
-              {terminalStatus === 'timeout' ? (
-                <div role="status" className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm">
-                  {t('chat.analysisTimedOut')}
-                </div>
-              ) : null}
-              {stopError ? (
-                <div role="alert" className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm">
-                  {t('chat.stopRequestFailed')}
-                </div>
-              ) : null}
-              {agentUnavailableError ? (
-                <div className="space-y-2">
-                  <ApiErrorAlert
-                    error={agentUnavailableError}
-                    actionLabel={t('chat.openAgentSettings')}
-                    onAction={() => navigate('/settings?category=agent')}
-                  />
-                  <Button variant="secondary" size="sm" onClick={() => void loadAgentStatus()}>
-                    {t('chat.recheckAgentStatus')}
-                  </Button>
-                </div>
-              ) : null}
-              {agentStatusError ? (
-                <InlineAlert
-                  variant="warning"
-                  title={t('chat.statusUnavailableTitle')}
-                  message={t('chat.statusUnavailableMessage')}
-                  action={(
-                    <Button variant="secondary" size="sm" onClick={() => void loadAgentStatus()}>
-                      {t('chat.recheckAgentStatus')}
-                    </Button>
-                  )}
-                  className="rounded-xl px-3 py-2 text-xs shadow-none"
-                />
-              ) : null}
-              {agentStatusChecking ? (
-                <InlineAlert
-                  variant="info"
-                  title={t('chat.statusCheckingTitle')}
-                  message={t('chat.statusCheckingMessage')}
-                  className="rounded-xl px-3 py-2 text-xs shadow-none"
-                />
-              ) : null}
-              {isFollowUpContextLoading ? (
-                <InlineAlert
-                  variant="info"
-                  title={t('chat.followUpLoadingTitle')}
-                  message={t('chat.followUpLoadingMessage')}
-                  className="rounded-xl px-3 py-2 text-xs shadow-none"
-                />
-              ) : null}
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/6 bg-surface/25 px-3 py-2">
-                <label
-                  className={cn(
-                    'inline-flex items-center gap-2 text-sm',
-                    contextCompressionLoaded && !contextCompressionSaving
-                      ? 'cursor-pointer text-foreground'
-                      : 'cursor-not-allowed text-muted-text',
-                  )}
-                >
-                  <input
-                    type="checkbox"
-                    checked={contextCompressionEnabled}
-                    disabled={!contextCompressionLoaded || contextCompressionSaving}
-                    onChange={(event) => void updateContextCompressionEnabled(event.target.checked)}
-                    className="chat-skill-checkbox"
-                  />
-                  <span className="font-medium">{t('chat.compression.label')}</span>
-                  <span className="text-xs text-muted-text">{t('chat.compression.hint')}</span>
-                </label>
-                <span className="text-xs text-muted-text">
-                  {contextCompressionSaving
-                    ? t('chat.compression.saving')
-                    : contextCompressionEnabled
-                      ? t('chat.compression.enabled')
-                      : t('chat.compression.disabled')}
-                </span>
+              className="rounded-xl px-3 py-2 text-xs shadow-none"
+            />
+          ) : null}
+          {chatError ? <ApiErrorAlert error={chatError} /> : null}
+          {chatError?.code === 'session_state_conflict' && (
+            <Button variant="secondary" size="sm" onClick={() => void refreshSession()}>
+              {t('chat.refreshSession')}
+            </Button>
+          )}
+          {terminalStatus === 'cancelled' ? (
+            <div role="status" className="rounded-xl border border-slate-500/20 bg-slate-500/5 px-4 py-3 text-sm">
+              {t('chat.analysisStopped')}
+            </div>
+          ) : null}
+          {terminalStatus === 'timeout' ? (
+            <div role="status" className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm">
+              {t('chat.analysisTimedOut')}
+            </div>
+          ) : null}
+          {stopError ? (
+            <div role="alert" className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-sm">
+              {t('chat.stopRequestFailed')}
+            </div>
+          ) : null}
+          {agentUnavailableError ? (
+            <div className="space-y-2">
+              <ApiErrorAlert
+                error={agentUnavailableError}
+                actionLabel={t('chat.openAgentSettings')}
+                onAction={() => navigate('/settings?category=agent')}
+              />
+              <Button variant="secondary" size="sm" onClick={() => void loadAgentStatus()}>
+                {t('chat.recheckAgentStatus')}
+              </Button>
+            </div>
+          ) : null}
+          {agentStatusError ? (
+            <InlineAlert
+              variant="warning"
+              title={t('chat.statusUnavailableTitle')}
+              message={t('chat.statusUnavailableMessage')}
+              action={(
+                <Button variant="secondary" size="sm" onClick={() => void loadAgentStatus()}>
+                  {t('chat.recheckAgentStatus')}
+                </Button>
+              )}
+              className="rounded-xl px-3 py-2 text-xs shadow-none"
+            />
+          ) : null}
+          {agentStatusChecking ? (
+            <InlineAlert
+              variant="info"
+              title={t('chat.statusCheckingTitle')}
+              message={t('chat.statusCheckingMessage')}
+              className="rounded-xl px-3 py-2 text-xs shadow-none"
+            />
+          ) : null}
+          {isFollowUpContextLoading ? (
+            <InlineAlert
+              variant="info"
+              title={t('chat.followUpLoadingTitle')}
+              message={t('chat.followUpLoadingMessage')}
+              className="rounded-xl px-3 py-2 text-xs shadow-none"
+            />
+          ) : null}
+        </div>
+
+        <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
+          {/* Messages */}
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <ScrollArea
+              className="relative z-10 flex-1"
+              viewportRef={messagesViewportRef}
+              onScroll={handleMessagesScroll}
+              viewportClassName="px-1 py-3 md:px-4"
+              testId="chat-message-scroll"
+            >
+              <div data-testid="chat-message-column" className="mx-auto w-full max-w-[760px] space-y-5">
+                {messages.length === 0 && !loading ? (
+                  <div className="flex h-full items-center justify-center">
+                    <EmptyState
+                      title={t('chat.emptyTitle')}
+                      description={t(
+                        agentStatus?.backend === 'codex_app_server'
+                          ? 'chat.emptyDescriptionCodex'
+                          : 'chat.emptyDescriptionDefault',
+                      )}
+                      className="max-w-2xl border-dashed bg-card/55"
+                      action={(
+                        <div data-testid="chat-empty-shortcuts" className="max-w-lg space-y-3 text-center">
+                          {holdings.length > 0
+                            ? renderEmptyGroup(t('chat.empty.holdings'), holdings.map(renderStockShortcut))
+                            : null}
+                          {watchlistShortcuts.length > 0
+                            ? renderEmptyGroup(t('chat.empty.watchlist'), watchlistShortcuts.map(renderStockShortcut))
+                            : null}
+                          {renderEmptyGroup(t('chat.empty.market'), MARKET_PROMPT_KEYS.map((key) => (
+                            <button
+                              key={key}
+                              type="button"
+                              onClick={() => fillInput(t(key), null)}
+                              className="quick-question-btn"
+                            >
+                              {t(key)}
+                            </button>
+                          )))}
+                        </div>
+                      )}
+                    />
+                  </div>
+                ) : (
+                  messages.map((msg, index) => {
+                    const skillLabel = getMessageSkillLabel(msg);
+                    const previous = messages[index - 1];
+                    const hasTime = isValidTimestamp(msg.createdAt);
+                    const showDaySeparator = hasTime && (
+                      !isValidTimestamp(previous?.createdAt)
+                      || new Date(previous.createdAt as string).toDateString() !== new Date(msg.createdAt as string).toDateString()
+                    );
+                    const isLastAssistant = msg.id === lastAssistantId;
+                    const followUps = isLastAssistant && !loading ? msg.structured?.follow_ups ?? [] : [];
+                    return (
+                      <React.Fragment key={msg.id}>
+                        {showDaySeparator ? (
+                          <div data-testid="chat-day-separator" className="flex items-center gap-3 text-xs text-muted-text">
+                            <span className="h-px flex-1 bg-border/50" />
+                            {formatDayLabel(msg.createdAt as string, intlLocale)}
+                            <span className="h-px flex-1 bg-border/50" />
+                          </div>
+                        ) : null}
+                        {msg.role === 'user' ? (
+                          <div className="flex flex-col items-end gap-1">
+                            <div className="chat-bubble-user min-w-0 max-w-[85%] overflow-hidden px-4 py-2.5">
+                              {msg.content.split('\n').map((line, i) => (
+                                <p key={i} className="mb-1 last:mb-0 leading-relaxed">
+                                  {line || ' '}
+                                </p>
+                              ))}
+                            </div>
+                            {hasTime ? (
+                              <time className="text-[11px] text-muted-text">{formatTimeLabel(msg.createdAt as string, intlLocale)}</time>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <div data-testid="chat-assistant-message" className="group/message w-full min-w-0">
+                            {(skillLabel || msg.backend === 'codex_app_server') && (
+                              <div className="mb-2 flex flex-wrap gap-2">
+                                {skillLabel ? (
+                                  <Badge variant="info" className="chat-skill-badge shadow-none" aria-label={t('chat.skillBadge', { skill: skillLabel })}>
+                                    {skillLabel}
+                                  </Badge>
+                                ) : null}
+                                {msg.backend === 'codex_app_server' ? (
+                                  <Badge variant="warning" size="sm">{t('chat.codexBackendBadge')}</Badge>
+                                ) : null}
+                              </div>
+                            )}
+                            {/* 新問題失敗時，最後一則回答還是上一檔的；不能掛到目前標的上。 */}
+                            {isLastAssistant && activeStockContext && (!msg.stockCode || msg.stockCode === activeStockContext.stock_code) ? (
+                              <ChatStockSummaryCard stock={activeStockContext} quote={activeQuote} structured={msg.structured} />
+                            ) : null}
+                            {renderThinkingBlock(msg)}
+                            {expandedThinking.has(msg.id) && msg.thinkingSteps && renderThinkingDetails(msg.thinkingSteps)}
+                            <div className="chat-prose">
+                              <Markdown remarkPlugins={[remarkGfm]}>
+                                {msg.content}
+                              </Markdown>
+                            </div>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <div className="chat-message-actions">
+                                <button
+                                  type="button"
+                                  onClick={() => copyMessageToClipboard(msg.id, msg.content)}
+                                  className="chat-copy-btn"
+                                  aria-label={copiedMessages.has(msg.id) ? text.copied : text.copy}
+                                >
+                                  {copiedMessages.has(msg.id) ? text.copied : text.copy}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => downloadMessageAsMarkdown(msg)}
+                                  className="chat-copy-btn"
+                                  aria-label={t('chat.exportMessageHint')}
+                                >
+                                  {t('chat.exportMessage')}
+                                </button>
+                              </div>
+                              {hasTime ? (
+                                <time className="text-[11px] text-muted-text">{formatTimeLabel(msg.createdAt as string, intlLocale)}</time>
+                              ) : null}
+                            </div>
+                            {followUps.length > 0 ? (
+                              <div data-testid="chat-follow-ups" className="mt-3 flex flex-wrap gap-2">
+                                {followUps.map((question) => (
+                                  <button
+                                    key={question}
+                                    type="button"
+                                    className="quick-question-btn"
+                                    onClick={() => fillInput(question, null)}
+                                  >
+                                    {question}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        )}
+                      </React.Fragment>
+                    );
+                  })
+                )}
+
+                {loading && (
+                  <div data-testid="chat-loading-steps" className="w-full">
+                    <div className="flex items-center gap-2.5 text-sm text-secondary-text">
+                      <div className="relative w-4 h-4 flex-shrink-0">
+                        <div className="absolute inset-0 rounded-full border-2 border-cyan/20" />
+                        <div className="absolute inset-0 rounded-full border-2 border-cyan border-t-transparent animate-spin" />
+                      </div>
+                      <span className="text-secondary-text">
+                        {getCurrentStage(progressSteps)}
+                      </span>
+                    </div>
+                    {progressSteps.length > 1 ? (
+                      <div className="mt-2">{renderThinkingDetails(progressSteps.slice(0, -1))}</div>
+                    ) : null}
+                  </div>
+                )}
+
+                <div ref={messagesEndRef} />
               </div>
-              {contextCompressionError ? (
-                <InlineAlert
-                  variant="danger"
-                  title={t('chat.compression.notSavedTitle')}
-                  message={contextCompressionError.message || t(contextCompressionError.fallbackKey)}
-                  className="rounded-xl px-3 py-2 text-xs shadow-none"
-                />
+            </ScrollArea>
+
+            {showJumpToBottom && (
+              <div className="pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2">
+                <button
+                  type="button"
+                  className="pointer-events-auto chat-copy-btn rounded-full shadow-soft-card"
+                  onClick={() => {
+                    requestScrollToBottom('smooth');
+                    scrollToBottom('smooth');
+                  }}
+                  aria-label={t('chat.jumpToLatestHint')}
+                >
+                  <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+                  {t('chat.newMessages')}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Input card */}
+          <div className="relative z-20 flex-shrink-0 pb-[env(safe-area-inset-bottom)] pt-2">
+            <div
+              data-testid="chat-composer"
+              className="relative mx-auto w-full max-w-[760px] rounded-2xl border border-border/70 bg-card p-3 shadow-soft-card"
+            >
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-text">
+                <span
+                  aria-label={t('chat.currentObjectLabel')}
+                  className="inline-flex max-w-full truncate rounded-full border border-border/60 px-2.5 py-1"
+                >
+                  {activeStockContext
+                    ? t('chat.currentObject', { object: `${activeStockContext.stock_name ? `${activeStockContext.stock_name} · ` : ''}${activeStockContext.stock_code}` })
+                    : t(stateContract === 'legacy' ? 'chat.objectUnconfirmedLegacy' : 'chat.objectUnconfirmed')}
+                </span>
+                {activeStockCode && activeStockContext?.asset_type === 'stock' && (
+                  <>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      isLoading={isWatchlistActioning}
+                      onClick={() => void handleToggleWatchlist(activeStockCode)}
+                      className="text-[11px]"
+                    >
+                      {stockInWatchlist(activeStockCode) ? t('chat.watchlistRemove') : t('chat.watchlistAdd')}
+                    </Button>
+                    {watchlistMessage && (
+                      <span className="text-[11px] text-secondary-text animate-in fade-in">{t(watchlistMessage.key, watchlistMessage.params)}</span>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {inputSuggestions.length > 0 ? (
+                <ul
+                  role="listbox"
+                  aria-label={t('chat.suggestions.label')}
+                  className="absolute bottom-full left-0 right-0 z-30 mb-1 max-h-60 overflow-auto rounded-xl border border-border/70 bg-card p-1 shadow-soft-card"
+                >
+                  {inputSuggestions.map((suggestion) => (
+                    <li key={suggestion.canonicalCode} role="option" aria-selected={false}>
+                      <button
+                        type="button"
+                        className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-hover"
+                        // 用 mouseDown 搶在 textarea blur 之前選取，否則清單會先收掉。
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          handleSelectSuggestion(suggestion.canonicalCode, suggestion.nameZh);
+                        }}
+                      >
+                        <span className="truncate text-foreground">{suggestion.nameZh}</span>
+                        <span className="flex-shrink-0 text-xs text-secondary-text">{suggestion.displayCode}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               ) : null}
-              {skills.length > 0 && (
-                <div className="space-y-2">
+
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onFocus={() => setInputFocused(true)}
+                onBlur={() => setInputFocused(false)}
+                placeholder={t('chat.inputPlaceholder')}
+                aria-label={t('chat.inputPlaceholder')}
+                disabled={loading || !agentAvailable}
+                rows={1}
+                className="block max-h-[200px] min-h-[44px] w-full resize-none border-0 bg-transparent px-1 py-2 text-base focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 md:text-sm"
+                style={{ height: 'auto' }}
+                onInput={(e) => {
+                  const target = e.target as HTMLTextAreaElement;
+                  target.style.height = 'auto';
+                  target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
+                }}
+              />
+
+              <div className="mt-2 flex items-center justify-between gap-3">
+                {skills.length > 0 ? (
                   <button
                     type="button"
-                    className="home-surface-button flex h-10 w-full items-center justify-between gap-3 rounded-xl px-3 text-left text-sm text-foreground md:hidden"
-                    aria-label={mobileSkillPickerOpen ? t('chat.skillPicker.collapse') : t('chat.skillPicker.expand')}
-                    aria-expanded={mobileSkillPickerOpen}
+                    className="inline-flex h-9 min-w-0 items-center gap-2 rounded-full border border-border/70 px-3 text-sm text-foreground hover:bg-hover"
+                    aria-label={skillPickerOpen ? t('chat.skillPicker.collapse') : t('chat.skillPicker.expand')}
+                    aria-expanded={skillPickerOpen}
                     aria-controls="chat-skill-picker-panel"
-                    onClick={() => setMobileSkillPickerOpen((open) => !open)}
+                    onClick={() => setSkillPickerOpen((open) => !open)}
                   >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <SlidersHorizontal className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
-                      <span className="flex-shrink-0 font-medium">{t('chat.skillPicker.label')}</span>
-                      <span className="truncate text-xs text-muted-text">{selectedSkillSummary}</span>
-                    </span>
+                    <SlidersHorizontal className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+                    <span className="truncate text-xs">{selectedSkillSummary}</span>
                     <ChevronDown
-                      className={cn(
-                        'h-4 w-4 flex-shrink-0 text-muted-text transition-transform',
-                        mobileSkillPickerOpen ? 'rotate-180' : '',
-                      )}
+                      className={cn('h-4 w-4 flex-shrink-0 text-muted-text transition-transform', skillPickerOpen ? 'rotate-180' : '')}
                       aria-hidden="true"
                     />
                   </button>
-                  <div
-                    id="chat-skill-picker-panel"
-                    data-testid="chat-skill-picker-panel"
-                    className={cn(
-                      mobileSkillPickerOpen ? 'flex' : 'hidden',
-                      'max-h-40 flex-wrap items-start gap-x-5 gap-y-2 overflow-y-auto rounded-xl border border-white/6 bg-surface/25 px-3 py-2 md:flex md:max-h-none md:overflow-visible md:border-0 md:bg-transparent md:p-0',
-                    )}
-                  >
-                    <span className="text-xs text-muted-text font-medium uppercase tracking-wider flex-shrink-0 mt-1">
-                      {t('chat.skillPicker.label')}
-                    </span>
-                    <label className="flex items-center gap-1.5 text-sm cursor-pointer group mt-0.5">
-                      <input
-                        type="checkbox"
-                        name="general-analysis"
-                        value=""
-                        checked={selectedSkillIds.length === 0}
-                        onChange={() => setSelectedSkillIds([])}
-                        className="chat-skill-checkbox"
-                      />
-                      <span
-                        className={`transition-colors text-sm ${selectedSkillIds.length === 0 ? 'text-foreground font-medium' : 'text-secondary-text group-hover:text-foreground'}`}
-                      >
-                        {t('chat.generalAnalysis')}
-                      </span>
-                    </label>
-                    {skills.map((s) => {
-                      const checked = selectedSkillIdSet.has(s.id);
-                      const disabled = !checked && skillLimitReached;
-                      return (
-                        <label
-                          key={s.id}
-                          className={`flex items-center gap-1.5 cursor-pointer group relative mt-0.5 ${disabled ? 'opacity-60 cursor-not-allowed' : ''}`}
-                          onMouseEnter={() => setShowSkillDesc(s.id)}
-                          onMouseLeave={() => setShowSkillDesc(null)}
-                        >
-                          <input
-                            type="checkbox"
-                            name="skills"
-                            value={s.id}
-                            checked={checked}
-                            disabled={disabled}
-                            onChange={() => toggleSkillSelection(s.id)}
-                            className="chat-skill-checkbox"
-                          />
-                          <span
-                            className={`transition-colors text-sm ${checked ? 'text-foreground font-medium' : 'text-secondary-text group-hover:text-foreground'}`}
-                          >
-                            {s.name}
-                          </span>
-                          {showSkillDesc === s.id && s.description && (
-                            <div className="skill-desc-tooltip">
-                              <p className="skill-title">{s.name}</p>
-                              <p>{s.description}</p>
-                            </div>
-                          )}
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-            <div className="text-xs text-muted-text" aria-label={t('chat.currentObjectLabel')}>
-              {activeStockContext
-                ? t('chat.currentObject', { object: `${activeStockContext.stock_name ? `${activeStockContext.stock_name} · ` : ''}${activeStockContext.stock_code}` })
-                : t(stateContract === 'legacy' ? 'chat.objectUnconfirmedLegacy' : 'chat.objectUnconfirmed')}
-            </div>
-            {activeStockCode && activeStockContext?.asset_type === 'stock' && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-text font-mono">{activeStockCode}</span>
-                <Button
-                  variant="secondary"
-                  size="xsm"
-                  isLoading={isWatchlistActioning}
-                  onClick={() => void handleToggleWatchlist(activeStockCode)}
-                  className="text-[11px]"
-                >
-                  {stockInWatchlist(activeStockCode) ? t('chat.watchlistRemove') : t('chat.watchlistAdd')}
-                </Button>
-                {watchlistMessage && (
-                  <span className="text-[11px] text-secondary-text animate-in fade-in">{t(watchlistMessage.key, watchlistMessage.params)}</span>
-                )}
-              </div>
-            )}
-
-              <div className="flex items-end gap-3">
-                <textarea
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={t('chat.inputPlaceholder')}
-                  disabled={loading || !agentAvailable}
-                  rows={1}
-                  className="input-surface input-focus-glow flex-1 min-h-[44px] max-h-[200px] rounded-xl border bg-transparent px-4 py-2.5 text-sm transition-all focus:outline-none resize-none disabled:cursor-not-allowed disabled:opacity-60"
-                  style={{ height: 'auto' }}
-                  onInput={(e) => {
-                    const t = e.target as HTMLTextAreaElement;
-                    t.style.height = 'auto';
-                    t.style.height = `${Math.min(t.scrollHeight, 200)}px`;
-                  }}
-                />
+                ) : <span />}
                 {loading && agentStatus?.backend === 'codex_app_server' ? (
                   <Button
-                    variant="danger-subtle"
+                    variant="danger"
                     onClick={stopStream}
                     disabled={stopping}
                     className="flex-shrink-0"
@@ -1550,6 +1529,82 @@ const ChatPage: React.FC = () => {
                   </Button>
                 )}
               </div>
+
+              {skills.length > 0 ? (
+                <>
+                  {skillPickerOpen ? (
+                    <div
+                      data-testid="chat-skill-picker-backdrop"
+                      className="page-drawer-overlay fixed inset-0 z-40 md:bg-transparent"
+                      onClick={() => setSkillPickerOpen(false)}
+                    />
+                  ) : null}
+                  {/* 手機是底部抽屜，桌機是輸入卡上方的 popover */}
+                  <div
+                    id="chat-skill-picker-panel"
+                    data-testid="chat-skill-picker-panel"
+                    className={cn(
+                      skillPickerOpen ? 'flex' : 'hidden',
+                      'fixed inset-x-0 bottom-0 z-50 max-h-[70dvh] flex-col gap-3 overflow-y-auto rounded-t-2xl border border-border/70 bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-soft-card',
+                      'md:absolute md:inset-x-auto md:bottom-full md:left-0 md:mb-2 md:max-h-96 md:w-96 md:rounded-2xl md:p-3',
+                    )}
+                  >
+                    <p className="text-xs font-medium text-muted-text">{t('chat.skillPicker.label')}</p>
+                    <label className="flex cursor-pointer items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        name="general-analysis"
+                        value=""
+                        checked={selectedSkillIds.length === 0}
+                        onChange={() => setSelectedSkillIds([])}
+                        className="chat-skill-checkbox"
+                      />
+                      <span className={selectedSkillIds.length === 0 ? 'font-medium text-foreground' : 'text-secondary-text'}>
+                        {t('chat.skillPicker.none')}
+                      </span>
+                    </label>
+                    {skillGroups.map((group) => (
+                      <div key={group.id} className="space-y-1.5">
+                        {group.name ? <p className="text-xs text-muted-text">{group.name}</p> : null}
+                        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                          {group.items.map((s) => {
+                            const checked = selectedSkillIdSet.has(s.id);
+                            const disabled = !checked && skillLimitReached;
+                            const displayName = getSkillDisplayName(s, language);
+                            return (
+                              <label
+                                key={s.id}
+                                className={`group relative flex cursor-pointer items-center gap-1.5 ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
+                                onMouseEnter={() => setShowSkillDesc(s.id)}
+                                onMouseLeave={() => setShowSkillDesc(null)}
+                              >
+                                <input
+                                  type="checkbox"
+                                  name="skills"
+                                  value={s.id}
+                                  checked={checked}
+                                  disabled={disabled}
+                                  onChange={() => toggleSkillSelection(s.id)}
+                                  className="chat-skill-checkbox"
+                                />
+                                <span className={`text-sm transition-colors ${checked ? 'font-medium text-foreground' : 'text-secondary-text group-hover:text-foreground'}`}>
+                                  {displayName}
+                                </span>
+                                {showSkillDesc === s.id && s.description && (
+                                  <div className="skill-desc-tooltip">
+                                    <p className="skill-title">{displayName}</p>
+                                    <p>{s.description}</p>
+                                  </div>
+                                )}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null}
             </div>
           </div>
         </div>

@@ -49,7 +49,7 @@ export const Metric: React.FC<MetricProps> = ({
         <p className="label text-secondary-text">{label}</p>
         <div
           className={cn(
-            'mt-2 font-semibold tabular-nums',
+            'mt-2 font-semibold tabular-nums [overflow-wrap:anywhere]',
             hero ? 'type-display' : 'type-title',
             unavailable ? 'text-secondary-text' : 'text-foreground',
           )}

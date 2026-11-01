@@ -352,6 +352,11 @@ const settingsHelpZhCN: SettingsHelpMap = {
     impact: ['影响 Web 自动补全和后端股票名称解析使用的股票简称新鲜度。'],
     notes: ['远程下载失败时会继续使用已有缓存或随应用打包的内置索引。'],
   },
+  'settings.base.WATCHLIST_GROUPS': {
+    title: '自選分組',
+    summary: '自選股的分組與組內順序，以 JSON 儲存；成員仍以 STOCK_LIST 為準。',
+    usage: '請從自選清單的分組編輯調整，設定頁不顯示這個欄位。',
+  },
   'settings.base.SCREENING_ENABLED': {
     title: '选股',
     summary: '控制是否启用选股策略；实现参考 AlphaSift。',
@@ -1634,6 +1639,11 @@ const settingsHelpEnUS: SettingsHelpMap = {
     valueNotes: ['The system checks for updates every 48 hours to avoid frequent GitHub access.', 'Remote check failures do not block WebUI or analysis.'],
     impact: ['Affects stock-name freshness for Web autocomplete and backend stock-name resolution.'],
     notes: ['When remote download fails, the app keeps using an existing cache or the bundled index.'],
+  },
+  'settings.base.WATCHLIST_GROUPS': {
+    title: 'Watchlist groups',
+    summary: 'Watchlist groups and their order, stored as JSON. STOCK_LIST stays the source of truth for membership.',
+    usage: 'Edit groups from the watchlist; this field is not shown on the settings page.',
   },
   'settings.base.SCREENING_ENABLED': {
     title: 'Screening',

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from src.storage import DatabaseManager, PortfolioFundHolding
 
@@ -37,6 +38,7 @@ RETURN_PERIODS = (
 )
 # 歷史涵蓋最長報酬期間（近五年）就不必再補
 FULL_HISTORY_DAYS = max(days for _, days in RETURN_PERIODS)
+BENCHMARK_INDEX_ID = "TAIEX"
 
 
 class FundUnavailableError(RuntimeError):
@@ -57,6 +59,8 @@ class FundGateway:
     latest_navs: Callable[..., Any]
     backfill: Callable[..., Any]
     top_holdings: Callable[..., Any]
+    recent_navs: Optional[Callable[..., Any]] = None
+    index_history: Optional[Callable[..., Any]] = None
 
     @classmethod
     def default(cls) -> "FundGateway":
@@ -77,6 +81,9 @@ class FundGateway:
             latest_navs=lambda ids: market_repo.fund_latest_navs(ids, engine=engine()),
             backfill=lambda fund_id: funds.backfill_history(get_engine(), fund_id),
             top_holdings=top_holdings,
+            recent_navs=lambda ids: market_repo.fund_recent_navs(ids, engine=engine()),
+            index_history=lambda index_id, start=None, end=None: market_repo.market_index_history(
+                index_id, start=start, end=end, engine=engine()),
         )
 
 
@@ -107,6 +114,20 @@ def _records(df) -> List[Dict[str, Any]]:
     if df is None or getattr(df, "empty", True):
         return []
     return [_row(r) for r in df.to_dict("records")]
+
+
+def _holdings_month(portfolio_date: Any) -> Optional[str]:
+    """鉅亨 portfolioDate（epoch 秒）→ 台北時區的 ``YYYY-MM``；拿不到回 None。"""
+    if isinstance(portfolio_date, bool) or not isinstance(portfolio_date, numbers.Real):
+        return None
+    try:
+        return datetime.fromtimestamp(float(portfolio_date), ZoneInfo("Asia/Taipei")).strftime("%Y-%m")
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _match_key(name: Any) -> str:
+    return "".join(str(name or "").split()).casefold()
 
 
 def nav_on_or_before(series: List[Dict[str, Any]], target: date) -> Optional[Dict[str, Any]]:
@@ -261,7 +282,7 @@ class FundService:
         }
 
     def get_nav_history(self, fund_id: str, days: Optional[int] = None,
-                        period: Optional[str] = None) -> Dict[str, Any]:
+                        period: Optional[str] = None, benchmark: Optional[str] = None) -> Dict[str, Any]:
         """``period``（m1…y5、ytd）：從報酬卡同一個基準點（``period_base_target`` 當日或之前最後一筆）起算，
         首尾相除就等於 ``returns[period]``；歷史不足一個期間時回全部。``days`` 是舊參數（以今天回推、
         取之後的第一筆），兩者都給時以 ``period`` 為準。"""
@@ -275,8 +296,27 @@ class FundService:
         else:
             start = date.today() - timedelta(days=days) if days else None
             points = self._series(fund_id, start=start)
-        return {"fund_id": fund_id,
-                "points": [{"date": p["date"], "nav": p["nav"]} for p in points]}
+        out = {"fund_id": fund_id,
+               "points": [{"date": p["date"], "nav": p["nav"]} for p in points]}
+        if benchmark == "taiex":
+            out.update(self._benchmark_block(points))
+        return out
+
+    def _benchmark_block(self, points: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """與淨值同區間的加權指數收盤。指數查不到只影響比較線，不影響淨值本身。"""
+        if not points:
+            return {"benchmark": None, "benchmark_error": None}
+        try:
+            rows = _records(self.gateway.index_history(
+                BENCHMARK_INDEX_ID, start=points[0]["date"], end=points[-1]["date"]))
+        except Exception as exc:  # noqa: BLE001 - 比較線失敗不擋走勢圖
+            logger.warning("fund benchmark history failed: %s", exc)
+            return {"benchmark": None, "benchmark_error": "source_unavailable"}
+        series = [{"date": r["date"], "close": r["close"]}
+                  for r in rows if r.get("date") is not None and r.get("close") is not None]
+        if not series:
+            return {"benchmark": None, "benchmark_error": "no_data"}
+        return {"benchmark": {"index_id": BENCHMARK_INDEX_ID, "points": series}, "benchmark_error": None}
 
     def get_top_holdings(self, fund_id: str) -> Dict[str, Any]:
         self._info(fund_id)
@@ -287,7 +327,36 @@ class FundService:
             return {"fund_id": fund_id, "items": [], "error": "source_unavailable"}
         if items is None:
             return {"fund_id": fund_id, "items": [], "error": "not_mapped"}
-        return {"fund_id": fund_id, "items": [_row(i) for i in items], "error": None}
+        rows = [_row(i) for i in items]
+        month = _holdings_month(rows[0].get("portfolio_date")) if rows else None
+        ledger = self._ledger_symbols_by_name()
+        overlap = []
+        for row in rows:
+            symbol = ledger.get(_match_key(row.get("name")))
+            row["ledger_symbol"] = symbol
+            if symbol:
+                overlap.append({"symbol": symbol, "name": row.get("name"), "weight": row.get("weight")})
+        return {"fund_id": fund_id, "items": rows, "error": None, "as_of_month": month, "overlap": overlap}
+
+    def _ledger_symbols_by_name(self) -> Dict[str, str]:
+        """帳本持股的「名稱鍵 → 代號」。只收名稱唯一對到一檔的，比對不到或同名多檔都不標。
+
+        前十大持股只有名稱，沒有代號；海外持股的名稱多半對不上，寧可漏標也不猜。
+        帳本查不到只少標記，不影響持股清單。"""
+        from src.data.stock_index_loader import get_index_stock_name
+        from src.repositories.portfolio_repo import PortfolioRepository
+
+        try:
+            identities = PortfolioRepository(self.db).list_cached_position_identities()
+        except Exception as exc:  # noqa: BLE001 - 重疊標記是附加資訊
+            logger.warning("fund overlap ledger lookup failed: %s", exc)
+            return {}
+        found: Dict[str, set] = {}
+        for _, symbol in identities:
+            key = _match_key(get_index_stock_name(symbol))
+            if key:
+                found.setdefault(key, set()).add(symbol)
+        return {key: next(iter(symbols)) for key, symbols in found.items() if len(symbols) == 1}
 
     # ---- 持倉 ----
 
@@ -310,21 +379,31 @@ class FundService:
                 navs = self._market(self.gateway.latest_navs, sorted({r["fund_id"] for r in rows}))
             except FundUnavailableError as exc:
                 nav_error = str(exc)[:200]
+        recent = self._recent_navs(sorted({r["fund_id"] for r in rows})) if rows else {}
         today = today or date.today()
         totals: Dict[str, Dict[str, float]] = {}
         for r in rows:
             nav_info = navs.get(r["fund_id"])
             nav, nav_date = (nav_info if nav_info else (None, None))
             value = r["units"] * nav if nav is not None else None
+            is_stale = nav_date is None or (today - nav_date).days > STALE_AFTER_DAYS
+            nav_change_pct, day_pnl = self._day_change(r["units"], nav, nav_date, is_stale, recent.get(r["fund_id"]))
             r.update({
                 "nav": nav, "nav_date": nav_date,
-                "is_stale": nav_date is None or (today - nav_date).days > STALE_AFTER_DAYS,
+                "is_stale": is_stale,
+                "nav_change_pct": nav_change_pct,
+                "day_pnl": day_pnl,
                 "market_value": value,
                 "pnl": value - r["cost_total"] if value is not None else None,
                 "pnl_pct": (value / r["cost_total"] - 1) * 100 if value is not None and r["cost_total"] else None,
             })
-            bucket = totals.setdefault(r["currency"], {"market_value": 0.0, "cost_total": 0.0, "complete": True})
+            bucket = totals.setdefault(r["currency"], {"market_value": 0.0, "cost_total": 0.0, "complete": True,
+                                                       "day_pnl": 0.0, "day_complete": True})
             bucket["cost_total"] += r["cost_total"]
+            if day_pnl is None:
+                bucket["day_complete"] = False
+            else:
+                bucket["day_pnl"] += day_pnl
             if value is None:
                 bucket["complete"] = False
             else:
@@ -339,8 +418,29 @@ class FundService:
                 "pnl": t["market_value"] - t["cost_total"] if complete else None,
                 "pnl_pct": ((t["market_value"] / t["cost_total"] - 1) * 100
                             if complete and t["cost_total"] else None),
+                "day_pnl": t["day_pnl"] if t["day_complete"] else None,
             })
         return {"items": rows, "totals": summary, "nav_error": nav_error}
+
+    def _recent_navs(self, fund_ids: List[str]) -> Dict[str, Any]:
+        """各基金最新兩筆淨值；查不到時今日損益回 null，不影響市值（nav_error 已涵蓋連線失敗）。"""
+        if self.gateway.recent_navs is None:
+            return {}
+        try:
+            return self._market(self.gateway.recent_navs, fund_ids) or {}
+        except FundUnavailableError:
+            return {}
+
+    @staticmethod
+    def _day_change(units: float, nav: Optional[float], nav_date: Optional[date], is_stale: bool,
+                    recent: Optional[List[Any]]):
+        """最新淨值相對前一筆的漲跌與損益；過期淨值、只有一筆或兩邊日期對不上都回 (None, None)。"""
+        if nav is None or is_stale or not recent or len(recent) < 2:
+            return None, None
+        (latest_nav, latest_date), (prev_nav, _) = recent[0], recent[1]
+        if latest_date != nav_date or latest_nav != nav or not prev_nav:
+            return None, None
+        return (nav / prev_nav - 1) * 100, units * (nav - prev_nav)
 
     def create_holding(self, *, fund_id: str, units: float, cost_total: float, as_of: date,
                        platform: str = "", note: Optional[str] = None) -> Dict[str, Any]:

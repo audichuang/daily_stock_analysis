@@ -2,6 +2,9 @@
 
 name: growth_quality
 display_name: 成长质量
+display_name_zh_tw: 成長品質
+group: fundamental
+group_name_zh_tw: 基本面
 description: 结合收入利润增长、ROE、现金流和行业空间，识别高质量成长股与成长失速风险。
 category: framework
 core_rules: [2, 3, 5]

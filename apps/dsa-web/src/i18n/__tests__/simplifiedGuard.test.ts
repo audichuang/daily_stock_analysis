@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { UI_TEXT } from '../uiText';
 import * as featureText from '../../locales/featureText';
 
-// 簡體常見字（繁體不會用到的字形）；只抓高頻字，目的在攔新增，不求窮盡。
+// 簡體常見字（繁體不會用到的字形）；只抓高頻字，目的在攔新增，不求窮盡。「跌」繁簡同字，不列入。
 const SIMPLIFIED_CHARS =
-  /[买卖仓价涨跌设数图页报询议标务资产额点击显录请确认这个们为时间线开关变实钟态应级状况]/g;
+  /[买卖仓价涨设数图页报询议标务资产额点击显录请确认这个们为时间线开关变实钟态应级状况]/g;
 
 // 專案沒裝 @types/node，用 Vite 的 glob 讀原始碼（tsc 與 vitest 都認得）。
 const TSX_SOURCES = import.meta.glob<string>(['../../**/*.tsx', '!../../**/__tests__/**', '!../../**/*.test.tsx'], {
@@ -34,28 +34,6 @@ const countSimplified = (source: string): number => {
   return count;
 };
 
-// 現存簡體字的基線。各頁票清掉後要同步調低；新檔不得出現在這裡。
-const BASELINE: Record<string, number> = {
-  'components/alerts/AlertRuleForm.tsx': 17,
-  'components/history/HistoryList.tsx': 4,
-  'components/report/MarketReviewReportView.tsx': 6,
-  'components/report/ReportDetails.tsx': 1,
-  'components/report/ReportNews.tsx': 1,
-  'components/report/ReportOverview.tsx': 6,
-  'components/report/ReportSummary.tsx': 5,
-  'components/run-flow/RunFlowEventList.tsx': 1,
-  'components/settings/LLMChannelEditor.tsx': 148,
-  'components/settings/SettingsPanelErrorBoundary.tsx': 7,
-  'contexts/AuthContext.tsx': 3,
-  'pages/ChatPage.tsx': 1,
-  'pages/HomePage.tsx': 3,
-  'pages/NotFoundPage.tsx': 4,
-  'pages/PortfolioPage.tsx': 90,
-  'pages/RealtimeBoardPage.tsx': 3,
-  'pages/SettingsPage.tsx': 2,
-  'pages/StockScreeningPage.tsx': 175,
-};
-
 const collectStrings = (value: unknown, out: string[] = []): string[] => {
   if (typeof value === 'string') out.push(value);
   else if (Array.isArray(value)) value.forEach((item) => collectStrings(item, out));
@@ -71,13 +49,13 @@ const zhTwFeatureStrings = (): string[] =>
   );
 
 describe('繁中介面用語守門', () => {
-  it('tsx 內的簡體字數與基線一致（只能往下調）', () => {
+  it('tsx 不含簡體字（白名單已清空）', () => {
     const actual: Record<string, number> = {};
     for (const [file, source] of Object.entries(TSX_SOURCES)) {
       const count = countSimplified(source);
       if (count > 0) actual[file.replace('../../', '')] = count;
     }
-    expect(actual).toEqual(BASELINE);
+    expect(actual).toEqual({});
   });
 
   it('zh-TW 文案表不再用詞彙表淘汰的詞', () => {
@@ -100,5 +78,6 @@ describe('繁中介面用語守門', () => {
     expect(countSimplified("// 买入\nconst a = { zh: { x: '买入' }, en: { x: 'buy' } };")).toBe(1);
     expect(countSimplified("  zh: {\n    x: '买入',\n  },\n  'zh-TW': { x: '買進' },")).toBe(0);
     expect(countSimplified("<span>买入</span>")).toBe(1);
+    expect(countSimplified("<span>漲跌幅</span>")).toBe(0);
   });
 });

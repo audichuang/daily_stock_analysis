@@ -69,9 +69,16 @@ export interface FundNavPoint {
   nav: number;
 }
 
+export interface FundBenchmarkPoint {
+  date: string;
+  close: number;
+}
+
 export interface FundNavHistoryResponse {
   fundId: string;
   points: FundNavPoint[];
+  benchmark?: { indexId: string; points: FundBenchmarkPoint[] } | null;
+  benchmarkError?: string | null;
 }
 
 export interface FundTopHolding {
@@ -79,12 +86,23 @@ export interface FundTopHolding {
   sector: string | null;
   weight: number | null;
   country: string | null;
+  /** 名稱唯一對到帳本持股才有；對不到就不標。 */
+  ledgerSymbol?: string | null;
+}
+
+export interface FundOverlapItem {
+  symbol: string;
+  name?: string | null;
+  weight?: number | null;
 }
 
 export interface FundTopHoldingsResponse {
   fundId: string;
   items: FundTopHolding[];
   error: 'source_unavailable' | 'not_mapped' | null;
+  /** 持股資料月份 YYYY-MM；來源沒給為 null。 */
+  asOfMonth?: string | null;
+  overlap?: FundOverlapItem[];
 }
 
 export interface FundHoldingItem {
@@ -103,6 +121,8 @@ export interface FundHoldingItem {
   marketValue: number | null;
   pnl: number | null;
   pnlPct: number | null;
+  navChangePct?: number | null;
+  dayPnl?: number | null;
 }
 
 export interface FundHoldingTotal {
@@ -111,6 +131,8 @@ export interface FundHoldingTotal {
   marketValue: number | null;
   pnl: number | null;
   pnlPct: number | null;
+  /** 有一檔算不出就是 null。 */
+  dayPnl?: number | null;
 }
 
 export interface FundHoldingListResponse {

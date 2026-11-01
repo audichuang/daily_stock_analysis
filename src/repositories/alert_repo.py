@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from sqlalchemy import and_, delete, desc, func, select
+from sqlalchemy import and_, delete, desc, func, or_, select
 
 from src.storage import (
     AlertCooldownRecord,
@@ -121,8 +121,16 @@ class AlertRepository:
         source: Optional[str] = None,
         page: int = 1,
         page_size: int = 20,
+        q: Optional[str] = None,
     ) -> Tuple[List[AlertRuleRecord], int]:
         conditions = []
+        # 頁面搜尋：打 2330 或台積電就要找得到，target 維持完全相符給其他呼叫端。
+        keyword = (q or "").strip().lower()
+        if keyword:
+            conditions.append(or_(
+                func.lower(AlertRuleRecord.target).contains(keyword, autoescape=True),
+                func.lower(AlertRuleRecord.name).contains(keyword, autoescape=True),
+            ))
         if enabled is not None:
             conditions.append(AlertRuleRecord.enabled.is_(enabled))
         if alert_type:

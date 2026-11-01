@@ -46,7 +46,8 @@ const matchesFilter = (event: RunFlowEvent, filter: EventFilter): boolean => {
       || /failed|error|timeout/.test(text);
   }
   if (filter === 'fallback') {
-    return /fallback|retry|降级|重试/.test(text);
+    // 事件文字來自後端，是簡體，用跳脫保留比對能力。
+    return /fallback|retry|降\u7ea7|重试/.test(text);
   }
   return /cancel|取消/.test(text);
 };
@@ -87,8 +88,8 @@ export const RunFlowEventList: React.FC<RunFlowEventListProps> = ({
               <Button
                 key={item}
                 type="button"
-                variant={filter === item ? 'outline' : 'ghost'}
-                size="xsm"
+                variant={filter === item ? 'secondary' : 'ghost'}
+                size="sm"
                 onClick={() => setFilter(item)}
                 aria-pressed={filter === item}
                 className="h-7 px-2 text-xs"

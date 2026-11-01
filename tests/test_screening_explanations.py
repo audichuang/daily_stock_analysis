@@ -806,3 +806,19 @@ def test_failed_llm_ranking_does_not_invent_inferred_participation(monkeypatch):
     result = _attach_candidate_explanations(_normalize_candidate(ranked.picks[0], 1), factor_weights={"value": 1})
     assert not any(item["source"] == "llm" for item in result["why_selected"])
     assert result["explanation_quality"]["why_selected"] == "ok"
+
+
+def test_zh_tw_candidate_reason_is_traditional(monkeypatch) -> None:
+    """排序 prompt 是簡體，模型回簡體；zh-TW 畫面不能直接顯示。"""
+    monkeypatch.setenv("REPORT_LANGUAGE", "zh-TW")
+    candidate = _normalize_candidate(
+        {"code": "2330.TW", "reason": "估值适中", "llm_risks": ["成交额不足"]}, rank=1,
+    )
+    assert candidate["reason"] == "估值適中"
+    assert candidate["llm_risks"] == ["成交額不足"]
+
+
+def test_zh_candidate_reason_stays_simplified(monkeypatch) -> None:
+    monkeypatch.setenv("REPORT_LANGUAGE", "zh")
+    candidate = _normalize_candidate({"code": "600519", "reason": "估值适中"}, rank=1)
+    assert candidate["reason"] == "估值适中"

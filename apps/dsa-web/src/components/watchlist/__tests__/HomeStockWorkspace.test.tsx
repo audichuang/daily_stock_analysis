@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
+import { stockQuoteKey } from '../../../hooks/useStockQuotes';
 import { UI_LANGUAGE_STORAGE_KEY } from '../../../utils/uiLanguage';
 import { HomeStockWorkspace } from '../HomeStockWorkspace';
 import type { HomeWatchlistRow, HomeWorkspaceTab } from '../HomeStockWorkspace';
@@ -154,28 +155,15 @@ describe('HomeStockWorkspace', () => {
     });
 
     const analyzedRow = within(screen.getByTestId('watchlist-row-600519'));
-    expect(analyzedRow.getByText('变化')).toBeInTheDocument();
-    expect(analyzedRow.getByText('今日已更新')).toBeInTheDocument();
-    expect(analyzedRow.getByText('已完成')).toBeInTheDocument();
-    expect(analyzedRow.getByText('打开最新报告')).toBeInTheDocument();
     const analyzedButton = analyzedRow.getByRole('button', { name: '打开 600519 最新分析详情' });
     expect(analyzedButton).toHaveAccessibleDescription('变化：今日已更新；状态：已完成；下一步：打开最新报告');
-    const signalGrid = analyzedRow.getByText('变化').parentElement?.parentElement;
-    expect(signalGrid).toHaveClass('grid-cols-1');
-    expect(signalGrid).not.toHaveClass('sm:grid-cols-3');
 
     const staleRow = within(screen.getByTestId('watchlist-row-00700'));
-    expect(staleRow.getByText('有历史报告')).toBeInTheDocument();
-    expect(staleRow.getByText('待更新')).toBeInTheDocument();
-    expect(staleRow.getByText('运行今日分析')).toBeInTheDocument();
     expect(staleRow.getByRole('button', { name: '打开 00700 最新分析详情' })).toHaveAccessibleDescription(
       '变化：有历史报告；状态：待更新；下一步：运行今日分析',
     );
 
     const taskRow = within(screen.getByTestId('watchlist-row-AAPL'));
-    expect(taskRow.getByText('等待首次分析')).toBeInTheDocument();
-    expect(taskRow.getAllByText('任务分析中')).toHaveLength(2);
-    expect(taskRow.getByText('等待任务完成')).toBeInTheDocument();
     expect(taskRow.getByRole('button', { name: '暂无 AAPL 的分析详情，可先分析' })).toHaveAccessibleDescription(
       '变化：等待首次分析；状态：任务分析中；下一步：等待任务完成',
     );
@@ -252,7 +240,6 @@ describe('HomeStockWorkspace', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('正在查找最新分析详情，请稍候。');
     expect(onHistoryItemClick).not.toHaveBeenCalled();
-    expect(screen.getByText('正在查找详情...')).toBeInTheDocument();
   });
 
   it('shows retry feedback instead of no-detail copy when the latest detail lookup failed', async () => {
@@ -269,7 +256,6 @@ describe('HomeStockWorkspace', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('最新分析详情暂时无法确认，请稍后重试。');
     expect(screen.queryByText('暂无分析详情，可先分析。')).not.toBeInTheDocument();
-    expect(screen.getByText('详情暂不可用')).toBeInTheDocument();
     expect(onHistoryItemClick).not.toHaveBeenCalled();
   });
 
@@ -417,10 +403,98 @@ describe('HomeStockWorkspace', () => {
       }],
     });
 
+    expect(screen.queryByRole('button', { name: '从自选股移除 600519' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
     fireEvent.click(screen.getByRole('button', { name: '从自选股移除 600519' }));
+    // 確認前不能真的移除
+    expect(onRemoveFromWatchlist).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '删除' }));
 
     expect(onRemoveFromWatchlist).toHaveBeenCalledWith('600519');
     expect(onHistoryItemClick).not.toHaveBeenCalled();
+  });
+
+  it('shows the batch quote as the current price, never the analysis price', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh');
+    const row = {
+      code: '2330.TW',
+      analyzedToday: true,
+      latestItem: {
+        id: 1,
+        stockCode: '2330.TW',
+        stockName: '台積電',
+        sentimentScore: 70,
+        action: 'hold' as const,
+        analysisCount: 1,
+        analysisPrice: 900,
+      },
+    };
+    const quotes = new Map([[stockQuoteKey('2330.TW'), { stockCode: '2330.TW', currentPrice: 1234, changePercent: 1.5 }]]);
+    const baseProps = {
+      activeTab: 'watchlist' as const,
+      onTabChange: vi.fn(),
+      watchlistRows: [row],
+      watchlistLoading: false,
+      watchlistActioning: false,
+      watchlistMessage: null,
+      onAddToWatchlist: vi.fn().mockResolvedValue(undefined),
+      onRemoveFromWatchlist: vi.fn().mockResolvedValue(undefined),
+      onRefreshWatchlist: vi.fn().mockResolvedValue(undefined),
+      onAnalyzeWatchlist: vi.fn().mockResolvedValue(undefined),
+      isBatchAnalyzing: false,
+      batchStatus: null,
+      todayItems: [],
+      isLoadingTodayItems: false,
+      todayLoadError: false,
+      watchlistAnalyzedTodayCount: 1,
+      historyItems: [],
+      isLoadingHistory: false,
+      onHistoryItemClick: vi.fn(),
+    };
+
+    const view = render(
+      <UiLanguageProvider>
+        <HomeStockWorkspace {...baseProps} quotes={quotes} />
+      </UiLanguageProvider>,
+    );
+    const priced = within(screen.getByTestId('watchlist-row-2330.TW'));
+    expect(priced.getByTestId('stock-row-price')).toHaveTextContent('1,234');
+    expect(priced.queryByText(/分析时价/)).not.toBeInTheDocument();
+
+    // 沒有報價：現價是 —，分析時價要明確標示
+    view.rerender(
+      <UiLanguageProvider>
+        <HomeStockWorkspace {...baseProps} quotes={new Map()} />
+      </UiLanguageProvider>,
+    );
+    const unpriced = within(screen.getByTestId('watchlist-row-2330.TW'));
+    expect(unpriced.getByTestId('stock-row-price')).toHaveTextContent('—');
+    expect(unpriced.getByText(/分析时价/)).toBeInTheDocument();
+  });
+
+  it('filters rows by market and sorts missing readings last', () => {
+    const makeRow = (code: string, score?: number) => ({
+      code,
+      analyzedToday: false,
+      latestItem: { id: code.length, stockCode: code, stockName: code, sentimentScore: score, analysisCount: 1 },
+    });
+    renderWorkspace({ watchlistRows: [makeRow('2330.TW', 40), makeRow('AAPL'), makeRow('NVDA', 90)] });
+
+    fireEvent.change(screen.getByRole('combobox', { name: '排序' }), { target: { value: 'score' } });
+    const order = screen.getAllByTestId(/^watchlist-row-/).map((node) => node.getAttribute('data-testid'));
+    expect(order).toEqual(['watchlist-row-NVDA', 'watchlist-row-2330.TW', 'watchlist-row-AAPL']);
+
+    fireEvent.click(screen.getByRole('radio', { name: '台股' }));
+    expect(screen.getAllByTestId(/^watchlist-row-/)).toHaveLength(1);
+    expect(screen.getByTestId('watchlist-row-2330.TW')).toBeInTheDocument();
+  });
+
+  it('orders the tabs watchlist, today, all', () => {
+    renderWorkspace({ watchlistRows: [] });
+    const labels = within(screen.getByTestId('home-stock-workspace')).getAllByRole('button')
+      .map((button) => button.textContent)
+      .filter((label) => ['自选', '今日', '全部'].includes(label ?? ''));
+    expect(labels).toEqual(['自选', '今日', '全部']);
   });
 
   it('keeps the watchlist row selected for equivalent stock-code formats', () => {
@@ -597,5 +671,75 @@ describe('HomeStockWorkspace', () => {
     // swallowed by the stock row (which HAS a detail).
     expect(await screen.findByRole('alert')).toHaveTextContent('暂无分析详情，可先分析。');
     expect(onHistoryItemClick).not.toHaveBeenCalled();
+  });
+});
+
+describe('HomeStockWorkspace watchlist groups', () => {
+  const rows: HomeWatchlistRow[] = ['2330.TW', '2317.TW', 'AAPL'].map((code) => ({ code, analyzedToday: false }));
+
+  function renderGroups(watchlistGroups: Array<{ name: string; codes: string[] }>) {
+    const onSaveWatchlistGroups = vi.fn().mockResolvedValue(undefined);
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    render(
+      <UiLanguageProvider>
+        <HomeStockWorkspace
+          activeTab="watchlist"
+          onTabChange={vi.fn()}
+          watchlistRows={rows}
+          watchlistLoading={false}
+          watchlistActioning={false}
+          watchlistMessage={null}
+          onAddToWatchlist={vi.fn().mockResolvedValue(undefined)}
+          onRemoveFromWatchlist={vi.fn().mockResolvedValue(undefined)}
+          onRefreshWatchlist={vi.fn().mockResolvedValue(undefined)}
+          onAnalyzeWatchlist={vi.fn().mockResolvedValue(undefined)}
+          isBatchAnalyzing={false}
+          batchStatus={null}
+          todayItems={[]}
+          isLoadingTodayItems={false}
+          todayLoadError={false}
+          watchlistAnalyzedTodayCount={0}
+          historyItems={[]}
+          isLoadingHistory={false}
+          onHistoryItemClick={vi.fn()}
+          watchlistGroups={watchlistGroups}
+          onSaveWatchlistGroups={onSaveWatchlistGroups}
+        />
+      </UiLanguageProvider>,
+    );
+    return { onSaveWatchlistGroups };
+  }
+
+  it('shows no group filter when there are no groups', () => {
+    renderGroups([]);
+    expect(screen.queryByTestId('watchlist-group-filter')).not.toBeInTheDocument();
+    expect(screen.getByTestId('watchlist-row-AAPL')).toBeInTheDocument();
+  });
+
+  it('filters rows by the selected group and by ungrouped', () => {
+    renderGroups([{ name: 'Tech', codes: ['2330.TW'] }]);
+
+    fireEvent.change(screen.getByTestId('watchlist-group-filter'), { target: { value: 'group:Tech' } });
+    expect(screen.getByTestId('watchlist-row-2330.TW')).toBeInTheDocument();
+    expect(screen.queryByTestId('watchlist-row-AAPL')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('watchlist-group-filter'), { target: { value: 'ungrouped' } });
+    expect(screen.queryByTestId('watchlist-row-2330.TW')).not.toBeInTheDocument();
+    expect(screen.getByTestId('watchlist-row-AAPL')).toBeInTheDocument();
+  });
+
+  it('creates a group from edit mode and moves a code into it', () => {
+    const { onSaveWatchlistGroups } = renderGroups([{ name: 'Tech', codes: [] }]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('New group name'), { target: { value: ' Cash ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add group' }));
+    expect(onSaveWatchlistGroups).toHaveBeenLastCalledWith([
+      { name: 'Tech', codes: [] },
+      { name: 'Cash', codes: [] },
+    ]);
+
+    fireEvent.change(screen.getByLabelText('Move AAPL to a group'), { target: { value: 'Tech' } });
+    expect(onSaveWatchlistGroups).toHaveBeenLastCalledWith([{ name: 'Tech', codes: ['AAPL'] }]);
   });
 });

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
@@ -102,12 +102,13 @@ beforeEach(() => {
 });
 
 describe('App routing behavior', () => {
-  it('shows loading fallback while auth status is initializing', () => {
+  it('shows loading fallback while auth status is initializing', async () => {
     vi.mocked(AuthContext.useAuth).mockReturnValue(makeAuthState({ isLoading: true }));
 
     const { container } = render(<App />);
 
-    expect(container.querySelector('.border-t-cyan')).toBeInTheDocument();
+    // N01：轉圈延遲 200ms 才顯示，避免快速載入時閃一下。
+    await waitFor(() => expect(container.querySelector('.border-t-cyan')).toBeInTheDocument());
   });
 
   it('redirects protected routes to login when auth is enabled but user is not logged in', async () => {

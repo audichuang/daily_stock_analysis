@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { historyApi } from '../../../api/history';
 import type { AnalysisReport, MarketReviewPayload } from '../../../types/analysis';
 import { MarketReviewReportView } from '../MarketReviewReportView';
 
@@ -8,6 +9,46 @@ vi.mock('../../../api/history', () => ({
     getMarkdown: vi.fn(),
   },
 }));
+
+const twUsPayload: MarketReviewPayload = {
+  version: 1,
+  kind: 'market_review',
+  region: 'tw,us',
+  language: 'zh-TW',
+  rootTitle: '大盤複盤',
+  markets: {
+    us: {
+      title: '美股',
+      date: '2026-10-29',
+      indices: [{ code: 'VIX', name: 'VIX', current: 18.2, changePct: 5.1 }, { code: 'SPX', name: 'S&P', current: 7000, changePct: -0.5 }],
+    },
+    tw: {
+      title: '台股',
+      date: '2026-10-30',
+      indices: [{ code: 'TAIEX', name: '加權指數', current: 23456.78, changePct: 1.2 }],
+      // toCamelCase 後鍵變小寫
+      indexTrends: { taiex: { series: [{ date: '2026-10-29', close: 23000 }, { date: '2026-10-30', close: 23456 }] } },
+      breadth: {
+        upCount: 600,
+        downCount: 300,
+        flatCount: 100,
+        turnoverUnit: '新台幣億元',
+        institutionalNet: { foreignNet: 120.5, trustNet: -30.25, dealerNet: 10, totalNet: 100.25 },
+      },
+      marketLight: {
+        status: 'red',
+        score: 30,
+        label: '偏空',
+        dimensions: { breadth: { score: 40, available: true }, index: { score: 0, available: false } },
+      },
+      nextDayPlan: { stance: 'defensive', summary: '減碼為主', focus: ['半導體'], risks: ['匯率'], keyLevels: [{ label: '支撐', price: 23000 }] },
+      sectorRank: { items: [{ name: '半導體業', changePct: 2.5 }] },
+      sections: [
+        { key: 'market_summary', title: '盤面總覽', markdown: '長文內容' },
+      ],
+    },
+  },
+};
 
 const englishMarketReviewReport: AnalysisReport = {
   meta: {
@@ -106,7 +147,112 @@ const noBreadthMarketReviewPayload: MarketReviewPayload = {
 };
 
 describe('MarketReviewReportView', () => {
-  it('uses localized summary card labels and fallbacks for English reports', () => {
+  it('shows one market at a time, labelled with its session date and defaulting to Taiwan', () => {
+    render(<MarketReviewReportView payload={twUsPayload} content="# 大盤複盤" reportLanguage="zh-TW" />);
+
+    expect(screen.getByRole('radio', { name: '台股 10/30' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: '美股 10/29' })).toBeInTheDocument();
+    expect(screen.getByText('加權指數')).toBeInTheDocument();
+    expect(screen.queryByText('標普500指數')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: '美股 10/29' }));
+    expect(screen.getByText('標普500指數')).toBeInTheDocument();
+    expect(screen.queryByText('加權指數')).not.toBeInTheDocument();
+  });
+
+  it('formats index cards with thousands separators, sparkline, and a neutral VIX', () => {
+    render(<MarketReviewReportView payload={twUsPayload} content="# 大盤複盤" reportLanguage="zh-TW" />);
+
+    const cards = within(screen.getByTestId('market-index-cards'));
+    expect(cards.getByText('23,456.78')).toBeInTheDocument();
+    expect(cards.getByText('+1.20%')).toHaveClass('text-market-up');
+    // 鍵被 toCamelCase 改成小寫時仍要對到 TAIEX
+    expect(cards.getByTestId('index-sparkline')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: '美股 10/29' }));
+    const usCards = within(screen.getByTestId('market-index-cards'));
+    expect(usCards.getByText('+5.10%')).not.toHaveClass('text-market-up');
+    expect(usCards.getByText(/0\.50%/)).toHaveClass('text-market-down');
+  });
+
+  it('shows the four institutional cells exactly as the API numbers', () => {
+    render(<MarketReviewReportView payload={twUsPayload} content="# 大盤複盤" reportLanguage="zh-TW" />);
+
+    const cells = within(screen.getByTestId('institutional-net'));
+    expect(cells.getByText('外資').nextElementSibling).toHaveTextContent('+120.50');
+    expect(cells.getByText('投信').nextElementSibling).toHaveTextContent('−30.25');
+    expect(cells.getByText('自營商').nextElementSibling).toHaveTextContent('+10.00');
+    expect(cells.getByText('合計').nextElementSibling).toHaveTextContent('+100.25');
+  });
+
+  it('shows light dimensions, marks unavailable ones with a dash instead of 0', () => {
+    render(<MarketReviewReportView payload={twUsPayload} content="# 大盤複盤" reportLanguage="zh-TW" />);
+
+    const light = screen.getByTestId('market-light');
+    expect(light).toHaveTextContent('紅燈 30');
+    expect(light).toHaveTextContent('廣度 40');
+    expect(light).toHaveTextContent('指數 —');
+  });
+
+  it('collapses long text when structured data exists but opens it for markdown-only reports', () => {
+    const { rerender } = render(<MarketReviewReportView payload={twUsPayload} content="# 大盤複盤" reportLanguage="zh-TW" />);
+    expect(screen.getByText('長文內容').closest('details')).not.toHaveAttribute('open');
+
+    rerender(<MarketReviewReportView content={'## 段落\n\n只有文字'} reportLanguage="zh-TW" />);
+    expect(screen.getByText('只有文字').closest('details')).toHaveAttribute('open');
+  });
+
+  it('promotes the structured plan, and falls back to the legacy section by key', () => {
+    const { rerender } = render(<MarketReviewReportView payload={twUsPayload} content="# 大盤複盤" reportLanguage="zh-TW" />);
+    const plan = within(screen.getByTestId('next-day-plan'));
+    expect(plan.getByText('減碼為主')).toBeInTheDocument();
+    expect(plan.getByText('偏防守')).toBeInTheDocument();
+    expect(plan.getByText('23,000.00')).toBeInTheDocument();
+
+    rerender(
+      <MarketReviewReportView
+        payload={{
+          kind: 'market_review',
+          region: 'tw',
+          indices: [{ code: 'TAIEX', name: '加權指數', current: 1 }],
+          sections: [
+            { key: 'market_summary', title: '總覽', markdown: '總覽內容' },
+            { key: 'news_catalysts', title: '後市展望', markdown: '展望內容' },
+          ],
+        }}
+        content="# x"
+        reportLanguage="zh-TW"
+      />,
+    );
+    expect(within(screen.getByTestId('next-day-plan')).getByText('展望內容')).toBeInTheDocument();
+    expect(within(screen.getByTestId('market-review-report')).queryByText('展望內容')).not.toBeInTheDocument();
+  });
+
+  it('explains missing sector data in one line', () => {
+    render(
+      <MarketReviewReportView
+        payload={{ kind: 'market_review', region: 'tw', indices: [{ code: 'TAIEX', name: '加權指數', current: 1 }] }}
+        content="# x"
+        reportLanguage="zh-TW"
+      />,
+    );
+    expect(screen.getByText('這個場次沒有類股資料')).toBeInTheDocument();
+  });
+
+  it('hides the MARKET code and offers a retry when the report fails to load', async () => {
+    vi.mocked(historyApi.getMarkdown).mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce('## 段落\n\n救回來了');
+
+    render(<MarketReviewReportView report={englishMarketReviewReport} recordId={9} reportLanguage="en" />);
+
+    expect(screen.getByTestId('market-review-skeleton')).toBeInTheDocument();
+    expect(await screen.findByText('boom')).toBeInTheDocument();
+    expect(screen.queryByText('MARKET')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.getByText('救回來了')).toBeInTheDocument());
+  });
+
+  it('merges the insight cards into one conclusion card with localized fallbacks', () => {
     render(
       <MarketReviewReportView
         report={englishMarketReviewReport}
@@ -115,7 +261,7 @@ describe('MarketReviewReportView', () => {
       />,
     );
 
-    expect(screen.getByText('Review Summary')).toBeInTheDocument();
+    expect(screen.getByText("Today's Takeaway")).toBeInTheDocument();
     expect(screen.getByText('No review summary yet')).toBeInTheDocument();
     expect(screen.getByText('Market Sentiment')).toBeInTheDocument();
     expect(screen.getByText('No score yet')).toBeInTheDocument();
@@ -123,11 +269,10 @@ describe('MarketReviewReportView', () => {
     expect(screen.getByText('No rotation view yet')).toBeInTheDocument();
     expect(screen.getByText('Risks & Watchlist')).toBeInTheDocument();
     expect(screen.getByText('No key observations yet')).toBeInTheDocument();
-    expect(screen.queryByText('复盘摘要')).not.toBeInTheDocument();
     expect(screen.queryByText('暂无摘要')).not.toBeInTheDocument();
   });
 
-  it('renders structured data for every market in a combined market review payload', () => {
+  it('renders legacy rankings when the session has no sector rank', () => {
     render(
       <MarketReviewReportView
         payload={combinedMarketReviewPayload}
@@ -136,52 +281,10 @@ describe('MarketReviewReportView', () => {
       />,
     );
 
-    expect(screen.getByText('A股市场')).toBeInTheDocument();
-    expect(screen.getByText('港股市场')).toBeInTheDocument();
-    expect(screen.getByText('沪深300')).toBeInTheDocument();
-    expect(screen.getByText('恒生指数')).toBeInTheDocument();
-    expect(screen.getByText('3120')).toBeInTheDocument();
-    expect(screen.getByText('680')).toBeInTheDocument();
-  });
-
-  it('renders industry and concept rankings from structured market review payloads', () => {
-    render(
-      <MarketReviewReportView
-        payload={combinedMarketReviewPayload}
-        content="# 大盘复盘"
-        reportLanguage="zh"
-      />,
-    );
-
-    expect(screen.getAllByText('行业板块')).toHaveLength(2);
-    expect(screen.getAllByText('概念板块')).toHaveLength(2);
+    expect(screen.getAllByText('行业板块').length).toBeGreaterThan(0);
     expect(screen.getByText('半导体')).toBeInTheDocument();
-    expect(screen.getByText('机器人概念')).toBeInTheDocument();
     expect(screen.getByText('+4.20%')).toBeInTheDocument();
-    expect(screen.getByText('-2.05%')).toBeInTheDocument();
-  });
-
-  it('localizes structured market data labels for Chinese reports', () => {
-    render(
-      <MarketReviewReportView
-        payload={combinedMarketReviewPayload}
-        content="# 大盘复盘"
-        reportLanguage="zh"
-      />,
-    );
-
-    expect(screen.getByText('结构化大盘数据')).toBeInTheDocument();
-    expect(screen.getAllByText('上涨家数')).toHaveLength(2);
-    expect(screen.getAllByText('下跌家数')).toHaveLength(2);
-    expect(screen.getAllByText('涨停/跌停')).toHaveLength(2);
-    expect(screen.getAllByText('成交额')).toHaveLength(2);
-    expect(screen.getAllByText('指数')).toHaveLength(2);
-    expect(screen.getAllByText('最新')).toHaveLength(2);
-    expect(screen.getAllByText('涨跌幅')).toHaveLength(2);
-    expect(screen.getAllByText('高/低')).toHaveLength(2);
-    expect(screen.queryByText('Structured Market Data')).not.toBeInTheDocument();
-    expect(screen.queryByText('Advancers')).not.toBeInTheDocument();
-    expect(screen.queryByText('Index')).not.toBeInTheDocument();
+    expect(screen.getByText('−2.05%')).toBeInTheDocument();
   });
 
   it('shows "No data" when breadth is not available for a market review payload', () => {
@@ -193,56 +296,10 @@ describe('MarketReviewReportView', () => {
       />,
     );
 
-    expect(screen.getByText('Structured Market Data')).toBeInTheDocument();
     expect(screen.getByText('No data')).toBeInTheDocument();
     expect(screen.getByText('S&P 500')).toBeInTheDocument();
-    expect(screen.getAllByText('Industry Sectors').length).toBeGreaterThan(0);
     expect(screen.getByText('Technology')).toBeInTheDocument();
-    expect(screen.getByText('Energy')).toBeInTheDocument();
     expect(screen.queryByText('Advancers')).not.toBeInTheDocument();
-    expect(screen.queryByText('Decliners')).not.toBeInTheDocument();
-  });
-
-  it('formats structured market numbers to two decimal places', () => {
-    const payload: MarketReviewPayload = {
-      version: 1,
-      kind: 'market_review',
-      region: 'cn',
-      language: 'en',
-      title: 'Market Review',
-      rootTitle: 'Market Review',
-      breadth: {
-        upCount: 4327,
-        downCount: 1145,
-        limitUpCount: 222,
-        limitDownCount: 12,
-        totalAmount: 36822.49698199988,
-        turnoverUnit: 'bn',
-      },
-      indices: [{
-        code: '000001',
-        name: 'Shanghai Composite',
-        current: 4112.446,
-        changePct: 0.44079750937683315,
-        high: 4143.314,
-        low: 4087.536,
-      }],
-    };
-
-    render(
-      <MarketReviewReportView
-        payload={payload}
-        content="# Market Review"
-        reportLanguage="en"
-      />,
-    );
-
-    expect(screen.getByText('36822.50 bn')).toBeInTheDocument();
-    expect(screen.getByText('4112.45')).toBeInTheDocument();
-    expect(screen.getByText('0.44%')).toBeInTheDocument();
-    expect(screen.getByText('4143.31 / 4087.54')).toBeInTheDocument();
-    expect(screen.queryByText(/36822\.496/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/0\.440797/)).not.toBeInTheDocument();
   });
 
   it('shows traditional Chinese US index names for zh-TW reports only', () => {
@@ -275,7 +332,7 @@ describe('MarketReviewReportView', () => {
     expect(screen.queryByText('標普500指數')).not.toBeInTheDocument();
   });
 
-  it('formats string-backed market numbers and hides missing high/low zeros', () => {
+  it('coerces string-backed numbers and never prints unrounded values', () => {
     const payload = {
       version: 1,
       kind: 'market_review',
@@ -296,8 +353,6 @@ describe('MarketReviewReportView', () => {
         name: 'Shanghai Composite',
         current: '4,112.446',
         changePct: '0.44079750937683315%',
-        high: 0,
-        low: '0',
       }],
     } as unknown as MarketReviewPayload;
 
@@ -309,15 +364,14 @@ describe('MarketReviewReportView', () => {
       />,
     );
 
-    expect(screen.getByText('4327')).toBeInTheDocument();
-    expect(screen.getByText('36822.50 bn')).toBeInTheDocument();
-    expect(screen.getByText('4112.45')).toBeInTheDocument();
-    expect(screen.getByText('0.44%')).toBeInTheDocument();
-    expect(screen.queryByText('0.00 / 0.00')).not.toBeInTheDocument();
+    expect(screen.getByText('4,327')).toBeInTheDocument();
+    expect(screen.getByText('36,822.50 bn')).toBeInTheDocument();
+    expect(screen.getByText('4,112.45')).toBeInTheDocument();
+    expect(screen.getByText('+0.44%')).toBeInTheDocument();
     expect(screen.queryByText(/0\.440797/)).not.toBeInTheDocument();
   });
 
-  it('opens run flow for historical market review records', () => {
+  it('keeps actions in the more menu and opens run flow from it', () => {
     const onOpenRunFlow = vi.fn();
 
     render(
@@ -330,7 +384,9 @@ describe('MarketReviewReportView', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '查看历史记录 7 运行流' }));
+    expect(screen.queryByRole('menuitem', { name: '查看历史记录 7 运行流' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '查看历史记录 7 运行流' }));
 
     expect(onOpenRunFlow).toHaveBeenCalledWith(7);
   });

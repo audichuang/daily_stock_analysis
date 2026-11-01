@@ -207,6 +207,54 @@ final class DSACoreTests: XCTestCase {
         XCTAssertEqual(report.strategy?.idealBuy, "900–920")
     }
 
+    func testHistorySearchFiltersGoToServerAndDecodeOneSentence() async throws {
+        StubURLProtocol.handler = { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertTrue(query.contains(URLQueryItem(name: "q", value: "台積")))
+            XCTAssertTrue(query.contains(URLQueryItem(name: "market", value: "tw")))
+            XCTAssertTrue(query.contains(URLQueryItem(name: "action", value: "buy")))
+            XCTAssertTrue(query.contains(URLQueryItem(name: "page", value: "3")))
+            return (200, #"{"total":1,"page":3,"limit":20,"items":[{"id":1,"query_id":"q","stock_code":"2330.TW","one_sentence":"結論"}]}"#)
+        }
+        let page = try await client.historyList(q: "台積", market: "tw", action: "buy", page: 3)
+        XCTAssertEqual(page.items.first?.oneSentence, "結論")
+    }
+
+    func testHistoryWithoutFiltersDoesNotSendFilterParameters() async throws {
+        StubURLProtocol.handler = { request in
+            let names = (URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []).map(\.name)
+            XCTAssertEqual(Set(names), ["page", "limit"])
+            return (200, #"{"total":0,"page":1,"limit":20,"items":[]}"#)
+        }
+        _ = try await client.historyList()
+    }
+
+    func testPortfolioSnapshotAsksForConsolidatedTotalsWithFunds() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/api/v1/portfolio/snapshot")
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertTrue(query.contains(URLQueryItem(name: "display_currency", value: "TWD")))
+            XCTAssertTrue(query.contains(URLQueryItem(name: "include_funds", value: "true")))
+            return (200, #"{"as_of":"2000-01-01","cost_method":"fifo","currency":"CNY","account_count":0,"total_cash":1,"total_market_value":1,"total_equity":2,"realized_pnl":0,"unrealized_pnl":0,"fx_stale":false,"data_quality":"ok","limitations":[],"accounts":[],"display_currency":"TWD","consolidated_equity_base":100,"consolidated_fund_value_base":50}"#)
+        }
+        let snapshot = try await client.portfolioSnapshot()
+        XCTAssertEqual(snapshot.displayCurrency, "TWD")
+        XCTAssertEqual(snapshot.overview?.totalAssets, 150)
+    }
+
+    func testPortfolioRiskIsTolerantOfMissingBlocks() async throws {
+        StubURLProtocol.handler = { request in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            XCTAssertTrue(query.contains(URLQueryItem(name: "display_currency", value: "TWD")))
+            XCTAssertEqual(request.url?.path, "/api/v1/portfolio/risk")
+            // 形狀抄自 PortfolioRiskService；多的欄位略過，缺的欄位不能讓解碼失敗。
+            return (200, #"{"as_of":"2000-01-01","cost_method":"fifo","currency":"CNY","concentration":{"top_weight_pct":61.9,"alert":true,"top_positions":[{"symbol":"2330.TW","market_value_base":1.0,"weight_pct":61.9,"is_alert":true}]},"sector_concentration":{},"drawdown":{},"stop_loss":{}}"#)
+        }
+        let risk = try await client.portfolioRisk()
+        XCTAssertEqual(risk.concentration?.topPositions?.first?.weightPct, 61.9)
+        XCTAssertNil(risk.sectorConcentration?.topSectors)
+    }
+
     func testStockIndexDecodesBothPublishedFormatsAndSuffixes() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/stocks.index.json")

@@ -164,6 +164,7 @@ class AlertService:
         source: Optional[str] = None,
         page: int = 1,
         page_size: int = 20,
+        q: Optional[str] = None,
     ) -> Dict[str, Any]:
         rows, total = self.repo.list_rules(
             enabled=enabled,
@@ -173,6 +174,7 @@ class AlertService:
             source=source,
             page=page,
             page_size=page_size,
+            q=q,
         )
         # 批量预取冷却摘要：一次查询替代逐条 N+1（每条规则原本一次 cooldown 查询 + 各自 session）。
         # None = 预取失败（回退逐条）；{} = 预取成功但无冷却记录（不应回退，否则又变 N+1）。

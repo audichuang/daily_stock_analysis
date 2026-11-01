@@ -4,6 +4,8 @@
 name: low_volatility_quality
 display_name: 低波质量
 description: 偏防守的质量型候选，优先选择波动较低、回撤浅、估值不过热且数据质量可靠的股票
+display_name_zh_tw: 低波品質
+description_zh_tw: 偏防守的品質型候選，波動低、回撤淺、估值不過熱且資料可靠
 version: "1.0"
 category: quality
 tags: [quality, defensive, low_volatility, daily_k]

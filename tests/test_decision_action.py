@@ -32,6 +32,8 @@ from src.schemas.decision_scale import action_for_score, decision_type_for_score
         ("买入", "buy"), ("加仓", "add"), ("持有", "hold"), ("减仓", "reduce"),
         ("卖出", "sell"), ("观望", "watch"), ("回避", "avoid"), ("预警", "alert"),
         ("買入", "buy"), ("加倉", "add"), ("減倉", "reduce"), ("賣出", "sell"),
+        # 詞彙表的新標籤
+        ("買進", "buy"), ("續抱", "hold"), ("迴避", "avoid"), ("警報", "alert"), ("強烈買進", "buy"),
         ("觀望", "watch"), ("預警", "alert"), ("  減倉  ", "reduce"),
         ("매수", "buy"), ("추가 매수", "add"), ("보유", "hold"), ("비중축소", "reduce"),
         ("매도", "sell"), ("관망", "watch"), ("회피", "avoid"), ("경고", "alert"),
@@ -88,7 +90,7 @@ def test_build_action_fields_free_sentence_without_structured_action_is_none() -
 def test_build_action_fields_bare_label_without_structured_action() -> None:
     assert build_action_fields(operation_advice="減倉", report_language="zh-TW") == {
         "action": "reduce",
-        "action_label": "減倉",
+        "action_label": "減碼",
     }
 
 
@@ -281,3 +283,13 @@ def test_chinese_negated_advice_preserves_structured_action_and_legacy_fallback(
     })()
     assert display_action_fields_for_result(result)["action"] == explicit_action
     assert display_decision_type_for_result(result) == ("sell" if explicit_action == "reduce" else "hold")
+
+
+def test_zh_tw_labels_follow_glossary() -> None:
+    expected = {
+        "buy": "買進", "add": "加碼", "hold": "續抱", "reduce": "減碼",
+        "sell": "賣出", "watch": "觀望", "avoid": "迴避", "alert": "警報",
+    }
+    for action, label in expected.items():
+        assert localize_action_label(action, "zh-TW") == label
+        assert normalize_decision_action(label) == action

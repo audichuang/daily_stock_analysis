@@ -194,6 +194,8 @@ export interface AlertRuleListQuery {
   source?: string;
   page?: number;
   pageSize?: number;
+  /** 代號或規則名稱的部分比對；target 是完全相符。 */
+  q?: string;
 }
 
 export interface AlertTriggerListQuery {

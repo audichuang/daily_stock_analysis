@@ -4887,7 +4887,7 @@ class RegisteredIndexAliasReachesTheRestEntryTestCase(unittest.TestCase):
 @pytest.mark.parametrize("reason_source", ["calibration", "stability", "absent", "inactive_stability"])
 @pytest.mark.parametrize(
     "decision_type, advice, action, label",
-    [("sell", "觀望", "watch", "觀望"), ("hold", "洗盤觀察", "hold", "持有")],
+    [("sell", "觀望", "watch", "觀望"), ("hold", "洗盤觀察", "hold", "續抱")],
     ids=["contradiction", "shakeout"],
 )
 def test_response_serializers_preserve_dashboard_guardrail_actions(
@@ -4960,7 +4960,7 @@ def test_response_serializers_preserve_dashboard_guardrail_actions(
     # 反向：沒有已套用的原因時，仍按既有分數口徑對齊成買入。
     has_reason = reason_source in {"calibration", "stability"}
     assert summary["action"] == (action if has_reason else "buy")
-    assert summary["action_label"] == (label if has_reason else "買入")
+    assert summary["action_label"] == (label if has_reason else "買進")
 
 
 if __name__ == "__main__":

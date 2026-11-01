@@ -51,17 +51,15 @@ const SEMANTIC_COLOR_BUDGET: Record<string, number> = {
   'pages/BacktestPage.tsx': 0,
   'pages/FundsPage.tsx': 0,
   'pages/RealtimeBoardPage.tsx': 0,
-  // 重點洞察前的打勾圖示，是系統狀態。
-  'components/report/ReportOverview.tsx': 1,
+  'components/report/ReportOverview.tsx': 0,
   'components/history/StockHistoryTrendDrawer.tsx': 0,
 };
 const RAW_DIRECTION_BUDGET: Record<string, number> = {
-  // 刪除帳戶按鈕。
-  'pages/PortfolioPage.tsx': 1,
+  'pages/PortfolioPage.tsx': 0,
   'pages/BacktestPage.tsx': 0,
   'pages/FundsPage.tsx': 0,
-  // 行情來源的「即時」徽章與不可當沖徽章，不是漲跌。
-  'pages/RealtimeBoardPage.tsx': 2,
+  // 不可當沖徽章，不是漲跌。
+  'pages/RealtimeBoardPage.tsx': 1,
   'components/report/ReportOverview.tsx': 0,
   'components/history/StockHistoryTrendDrawer.tsx': 0,
 };

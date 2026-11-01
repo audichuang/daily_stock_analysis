@@ -31,7 +31,7 @@ class ScreeningScreenRequest(BaseModel):
 
 
 class ScreeningCheckRequest(BaseModel):
-    market: Literal["cn", "us"] = "cn"
+    market: Literal["cn", "us", "tw"] = "cn"
     strategy: str = Field("dual_low", min_length=1, max_length=64)
     snapshot: Dict[str, Any] = Field(description="One supplied row; no live data is fetched")
 
@@ -58,7 +58,7 @@ class ScreeningConditionCheck(BaseModel):
 class ScreeningCheckResponse(BaseModel):
     strategy: str
     strategy_version: str
-    market: Literal["cn", "us"]
+    market: Literal["cn", "us", "tw"]
     provenance: Literal["supplied_snapshot"] = "supplied_snapshot"
     passed: bool
     checks: List[ScreeningConditionCheck]
@@ -75,6 +75,10 @@ class ScreeningStrategyResponse(BaseModel):
     market_scope: List[str] = Field(default_factory=list)
     market: str = ""
     analysis_skills: List[str] = Field(default_factory=list)
+    name_zh_tw: str = ""
+    description_zh_tw: str = ""
+    market_conditions: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
+    conditions: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ScreeningScreenAccepted(BaseModel):
@@ -118,9 +122,11 @@ def screening_status(config: Config = Depends(get_config_dep)) -> Dict[str, Any]
 @router.get("/strategies")
 def screening_strategies(
     request: Request,
+    market: str = Query("", max_length=16, description="只回支援此市場的策略，並附該市場條件"),
     config: Config = Depends(get_config_dep),
 ) -> Dict[str, Any]:
-    return _service(config).strategies()
+    market_value = market if isinstance(market, str) else ""
+    return _service(config).strategies(market=market_value)
 
 
 @router.get("/hotspots")
@@ -129,6 +135,7 @@ def screening_hotspots(
     top: int = Query(12, ge=1, le=50),
     refresh: bool = Query(False),
     include_details: bool = Query(False),
+    market: str = Query("", max_length=16, description="非 cn 市場沒有熱點來源，回空"),
     config: Config = Depends(get_config_dep),
 ) -> Dict[str, Any]:
     refresh_value = refresh if isinstance(refresh, bool) else bool(getattr(refresh, "default", False))
@@ -142,6 +149,7 @@ def screening_hotspots(
         top=top,
         refresh=refresh_value,
         include_details=include_details_value,
+        market=market if isinstance(market, str) else "",
     )
 
 
@@ -181,7 +189,7 @@ def screening_check(
         raise api_error(422, "screening_invalid_strategy", "Unknown or disabled screening strategy.")
     if request.market not in strategy.screening.market_scope:
         raise api_error(422, "screening_invalid_market", "Strategy does not support this market.")
-    checks = check_hard_filters(request.snapshot, strategy.screening.hard_filters)
+    checks = check_hard_filters(request.snapshot, strategy.screening.hard_filters_for(request.market))
     return ScreeningCheckResponse(
         strategy=strategy.name,
         strategy_version=strategy.version,

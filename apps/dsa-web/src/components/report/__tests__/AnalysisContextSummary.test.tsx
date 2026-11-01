@@ -17,6 +17,13 @@ vi.mock('../../../api/history', () => ({
   },
 }));
 
+vi.mock('../../../api/stocks', () => ({
+  stocksApi: {
+    getDailyHistory: vi.fn().mockResolvedValue([]),
+    getFinancials: vi.fn().mockRejectedValue(new Error('no financials in this test')),
+  },
+}));
+
 const overview: AnalysisContextPackOverview = {
   packVersion: '1.0',
   createdAt: '2026-04-10T08:30:00+00:00',
@@ -467,16 +474,22 @@ describe('ReportSummary analysis context placement', () => {
       expect(screen.getByText('暂无相关资讯')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('市场阶段: CN · 盘中')).toBeInTheDocument();
+    expect(screen.getByText('CN · 盘中')).toBeInTheDocument();
     expect(screen.getByText('日线未完成')).toBeInTheDocument();
     expect(screen.getAllByText('质量分 82/100 可用')[0]).toBeInTheDocument();
 
-    const strategy = screen.getByText('狙击点位');
+    const strategy = screen.getByText('关键价位');
     const news = screen.getByText('相关资讯');
     const diagnostics = screen.getByTestId('run-diagnostics');
     const contextSummary = screen.getByTestId('analysis-context-summary');
     expect(contextSummary).not.toHaveAttribute('open');
     expect(diagnostics).not.toHaveAttribute('open');
+    // 三塊合併進同一個預設收合的區塊。
+    const dataQuality = screen.getByTestId('report-data-quality');
+    expect(dataQuality).not.toHaveAttribute('open');
+    expect(dataQuality).toContainElement(contextSummary);
+    expect(dataQuality).toContainElement(diagnostics);
+    expect(dataQuality).toContainElement(screen.getByText('数据追溯'));
     const traceability = screen.getByText('数据追溯');
 
     expect(strategy.compareDocumentPosition(news) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

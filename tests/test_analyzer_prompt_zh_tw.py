@@ -11,6 +11,8 @@ import re
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 try:
     import litellm  # noqa: F401
 except ModuleNotFoundError:
@@ -86,7 +88,7 @@ def test_zh_tw_audit_markers_match_the_prompt_headers():
 def test_tw_stock_amounts_follow_market_currency_and_language():
     # zh-TW 台股：币别跟着市场走（新台币）；en：英文量级、无中文。
     zh_tw = _prompt("zh-TW", code="2330.TW")
-    assert "9.88 亿新台币" in zh_tw
+    assert "9.88 億新台幣" in zh_tw
     assert "### 台股交易成本（給價位前必須扣除）" in zh_tw
     assert "正常波動（ATR14）約 2.50%" in zh_tw
     en = _prompt("en", code="2330.TW")
@@ -99,7 +101,7 @@ def test_tw_stock_amounts_follow_market_currency_and_language():
 def test_format_amount_takes_market_before_language():
     analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
     assert analyzer._format_amount(1e9, "tw") == "10.00 亿新台币"
-    assert analyzer._format_amount(1e9, "tw", "zh-TW") == "10.00 亿新台币"
+    assert analyzer._format_amount(1e9, "tw", "zh-TW") == "10.00 億新台幣"
     assert analyzer._format_amount(1e9, "us", "en") == "1.00B"
 
 
@@ -139,7 +141,7 @@ def test_sell_sniper_and_cost_rules_route_waiting_price_to_watch_conditions():
     # 減倉／賣出或條件未成立時買點寫「暫不設定」，等待價位改寫進 watch_conditions，停利只給一個價
     zh_tw = _prompt("zh-TW", code="2330.TW")
     assert "`ideal_buy`、`secondary_buy` 只寫「暫不設定」、不得寫任何價位" in zh_tw
-    assert "`take_profit` 只寫一個價位（減倉／賣出時是持股者的反彈減碼價）" in zh_tw
+    assert "`take_profit` 只寫一個價位（減倉／賣出時是仍有部位的反彈減碼價）" in zh_tw
     assert "要等的更低買點寫進 `dashboard.phase_decision.watch_conditions`" in zh_tw
     assert "說明要等哪個更低的買點" not in zh_tw
     assert "暂不设定" not in zh_tw  # zh-TW 本體不得混入簡體
@@ -153,3 +155,88 @@ def test_sell_sniper_and_cost_rules_route_waiting_price_to_watch_conditions():
     assert "put the lower entry to wait for in `dashboard.phase_decision.watch_conditions`" in en
     assert "name the lower entry to wait for" not in en
     assert _cjk_chars(en) == ""
+
+
+# 模板本體常見的簡體字；任何一個出現在 zh-TW 系統提示詞都表示語言分流失效。
+_SIMPLIFIED_SAMPLE = "决仪盘数据买卖减仓观风险资讯评级预设处层总结"
+
+
+def _system_prompt(language: str, *, legacy: bool) -> str:
+    return _make_analyzer(legacy=legacy)._get_analysis_system_prompt(language, stock_code="2330.TW")
+
+
+def test_zh_tw_system_prompt_body_is_traditional():
+    for legacy in (True, False):
+        prompt = _system_prompt("zh-TW", legacy=legacy)
+        leftovers = sorted(set(prompt) & set(_SIMPLIFIED_SAMPLE))
+        assert leftovers == [], leftovers
+        assert "決策儀表盤" in prompt
+        assert "減碼" in prompt and "停損" in prompt
+        assert "買進、加碼、續抱" in prompt  # 詞彙表
+        assert "買入、加倉、持有、減倉" in prompt  # 詞彙表的「不要寫」
+
+
+def test_other_language_system_prompts_are_not_converted():
+    for legacy in (True, False):
+        zh = _system_prompt("zh", legacy=legacy)
+        assert "决策仪表盘" in zh and "決策儀表盤" not in zh
+        assert "用語（繁體中文報告必須遵守）" not in zh
+        for language in ("en", "ko"):
+            other = _system_prompt(language, legacy=legacy)
+            assert "Decision Dashboard" in other
+            assert "用語（繁體中文報告必須遵守）" not in other
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_system_prompt_scopes_summary_and_splits_watch_conditions(legacy):
+    zh_tw = _system_prompt("zh-TW", legacy=legacy)
+    for key in ("entry_conditions", "exit_triggers", "pending_events", "watch_conditions"):
+        assert f'"{key}"' in zh_tw
+    assert "不得出現“依規則”“判定為”" in zh_tw
+    assert "不引用任何評分數字" in zh_tw
+    assert "100字綜合分析摘要" not in zh_tw
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+@pytest.mark.parametrize("language", ["zh", "en", "ko"])
+def test_other_languages_do_not_get_zh_tw_report_contract(language, legacy):
+    prompt = _system_prompt(language, legacy=legacy)
+    assert '"watch_conditions"' in prompt
+    for key in ("entry_conditions", "exit_triggers", "pending_events"):
+        assert f'"{key}"' not in prompt
+    assert "不得出现“依规则”" not in prompt and "per the rules" not in prompt
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+@pytest.mark.parametrize("language,has_contract", [("zh-TW", True), ("zh", False), ("en", False), ("ko", False)])
+def test_agent_system_prompt_applies_report_contract_only_to_zh_tw(language, has_contract, legacy):
+    from unittest.mock import Mock
+
+    from src.agent.executor import AgentExecutor
+
+    executor = AgentExecutor.__new__(AgentExecutor)
+    executor.skill_instructions = ""
+    executor.default_skill_policy = ""
+    executor.use_legacy_default_prompt = legacy
+    executor.tool_registry = Mock()
+    executor.tool_registry.to_openai_tools.return_value = []
+    executor._run_loop = Mock()
+    executor.run("Analyze", {"stock_code": "2330.TW", "report_language": language})
+    system = executor._run_loop.call_args.args[0][0]["content"]
+    assert ('"entry_conditions"' in system) is has_contract
+    assert ("不引用任何評分數字" in system) is has_contract
+
+
+def test_prompts_do_not_teach_role_prefixes() -> None:
+    """範例寫「空仓者建议：」時模型會照抄，轉繁體後整份報告都是「空手者」「持股者」。"""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("src/analyzer.py", "src/agent/executor.py"):
+        text = (root / rel).read_text(encoding="utf-8")
+        assert '"no_position": "空仓者' not in text, rel
+        assert '"has_position": "持仓者' not in text, rel
+        assert "时为持仓者" not in text and "時是持股者" not in text, rel
+        assert not re.search(r"空仓者和持仓者给", text), rel
+        assert text.count("都不用“空仓者”“持仓者”这类身份称呼") == text.count("**分持仓建议**"), rel

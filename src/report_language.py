@@ -67,14 +67,33 @@ _OPERATION_ADVICE_CANONICAL_MAP = {
     "비중축소": "reduce",
     "매도": "sell",
     "적극 매도": "strong_sell",
+    # 繁體與台灣用語：新標籤與舊報告已存的詞都要解析得回來（查表不折疊繁簡）。
+    "強烈買進": "strong_buy",
+    "強烈買入": "strong_buy",
+    "买进": "buy",
+    "買進": "buy",
+    "買入": "buy",
+    "加码": "buy",
+    "加碼": "buy",
+    "加倉": "buy",
+    "续抱": "hold",
+    "續抱": "hold",
+    "洗盤觀察": "hold",
+    "觀察": "hold",
+    "觀望": "watch",
+    "减码": "reduce",
+    "減碼": "reduce",
+    "減倉": "reduce",
+    "賣出": "sell",
+    "強烈賣出": "strong_sell",
 }
 
 _OPERATION_ADVICE_TRANSLATIONS = {
-    "strong_buy": {"zh": "强烈买入", "zh-TW": "強烈買入", "en": "Strong Buy", "ko": "적극 매수"},
-    "buy": {"zh": "买入", "zh-TW": "買入", "en": "Buy", "ko": "매수"},
-    "hold": {"zh": "持有", "zh-TW": "持有", "en": "Hold", "ko": "보유"},
+    "strong_buy": {"zh": "强烈买入", "zh-TW": "強烈買進", "en": "Strong Buy", "ko": "적극 매수"},
+    "buy": {"zh": "买入", "zh-TW": "買進", "en": "Buy", "ko": "매수"},
+    "hold": {"zh": "持有", "zh-TW": "續抱", "en": "Hold", "ko": "보유"},
     "watch": {"zh": "观望", "zh-TW": "觀望", "en": "Watch", "ko": "관망"},
-    "reduce": {"zh": "减仓", "zh-TW": "減倉", "en": "Reduce", "ko": "비중축소"},
+    "reduce": {"zh": "减仓", "zh-TW": "減碼", "en": "Reduce", "ko": "비중축소"},
     "sell": {"zh": "卖出", "zh-TW": "賣出", "en": "Sell", "ko": "매도"},
     "strong_sell": {"zh": "强烈卖出", "zh-TW": "強烈賣出", "en": "Strong Sell", "ko": "적극 매도"},
 }
@@ -455,6 +474,11 @@ _REPORT_LABELS: Dict[str, Dict[str, str]] = {
         "avg_score_label": "均分",
         "score_unverified_note": "未验证，不代表胜率",
         "action_points_heading": "操作点位",
+        "language_code": "zh",
+        "table_item_label": "项目",
+        "table_value_label": "数值",
+        "table_level_label": "点位",
+        "table_price_label": "价格",
         "position_advice_heading": "持仓建议",
         "analysis_model_label": "分析模型",
         "not_investment_advice": "AI生成，仅供参考，不构成投资建议",
@@ -513,7 +537,7 @@ _REPORT_LABELS: Dict[str, Dict[str, str]] = {
         "analyzed_prefix": "共分析",
         "stock_unit": "檔股票",
         "stock_unit_compact": "檔",
-        "buy_label": "買入",
+        "buy_label": "買進",
         "watch_label": "觀望",
         "sell_label": "賣出",
         "summary_heading": "分析結果摘要",
@@ -592,6 +616,11 @@ _REPORT_LABELS: Dict[str, Dict[str, str]] = {
         "avg_score_label": "均分",
         "score_unverified_note": "未驗證，不代表勝率",
         "action_points_heading": "操作點位",
+        "language_code": "zh-TW",
+        "table_item_label": "項目",
+        "table_value_label": "數值",
+        "table_level_label": "點位",
+        "table_price_label": "價格",
         "position_advice_heading": "持倉建議",
         "analysis_model_label": "分析模型",
         "not_investment_advice": "AI生成，僅供參考，不構成投資建議",
@@ -729,6 +758,11 @@ _REPORT_LABELS: Dict[str, Dict[str, str]] = {
         "avg_score_label": "Avg Score",
         "score_unverified_note": "unverified, not a win rate",
         "action_points_heading": "Action Levels",
+        "language_code": "en",
+        "table_item_label": "Item",
+        "table_value_label": "Value",
+        "table_level_label": "Level",
+        "table_price_label": "Price",
         "position_advice_heading": "Position Advice",
         "analysis_model_label": "Model",
         "not_investment_advice": "AI-generated content for reference only. Not investment advice.",
@@ -866,6 +900,11 @@ _REPORT_LABELS: Dict[str, Dict[str, str]] = {
         "avg_score_label": "평균 점수",
         "score_unverified_note": "미검증, 승률 아님",
         "action_points_heading": "대응 가격대",
+        "language_code": "ko",
+        "table_item_label": "항목",
+        "table_value_label": "수치",
+        "table_level_label": "가격대",
+        "table_price_label": "가격",
         "position_advice_heading": "보유 전략",
         "analysis_model_label": "분석 모델",
         "not_investment_advice": "AI 생성 참고용이며 투자 권유가 아닙니다.",
@@ -935,6 +974,55 @@ def is_supported_report_language_value(value: Optional[str]) -> bool:
     if not candidate:
         return False
     return candidate in SUPPORTED_REPORT_LANGUAGES or candidate in _REPORT_LANGUAGE_ALIASES
+
+
+# zh-TW 提示詞共用的詞彙表，正本是 docs/glossary-zh-tw.md。
+_ZH_TW_SPLIT_CONDITION_FIELDS = """            "watch_conditions": ["观察条件1", "观察条件2"],
+            "entry_conditions": ["还没有部位时的进场条件，含价位；没有就给空数组"],
+            "exit_triggers": ["已有部位时的出场或改判条件，含价位；没有就给空数组"],
+            "pending_events": ["待确认的事件与日期；没有就给空数组"],
+"""
+_ZH_TW_SCOPED_SUMMARY = (
+    '"analysis_summary": "100字摘要，只写发生什么、为何发生、与前次的差异；'
+    "操作建议写在 one_sentence 与 position_advice，这里不重复；"
+    '不得出现“依规则”“判定为”“持股者”“空手者”，不引用任何评分数字"'
+)
+
+
+def apply_zh_tw_report_contract(prompt: str) -> str:
+    """只給 zh-TW 的輸出欄位契約；zh、en、ko 的提示詞必須逐字不變（基準見 tests/fixtures/event_gap_baseline.json）。
+
+    傳入的是轉繁體之前的簡體模板。
+    """
+    return prompt.replace(
+        '            "watch_conditions": ["观察条件1", "观察条件2"],\n',
+        _ZH_TW_SPLIT_CONDITION_FIELDS,
+    ).replace('"analysis_summary": "100字综合分析摘要"', _ZH_TW_SCOPED_SUMMARY)
+
+
+ZH_TW_PROMPT_GLOSSARY = """
+## 用語（繁體中文報告必須遵守）
+
+- 動作用語：買進、加碼、續抱、觀望、迴避、減碼、賣出、警報；不要寫買入、加倉、持有、減倉、回避、預警。
+- 持股（不寫持倉）、空手（不寫空倉）、部位（不寫倉位）、停損（不寫止損）、停利（不寫止盈）。
+- 資料（不寫數據）、資訊（不寫信息）、股票代號（不寫股票代碼）、設定（不寫配置）、管道（不寫渠道）。
+"""
+
+
+def is_missing_report_value(value: Any) -> bool:
+    """報告表格的「沒有讀數」：None、NaN 與各種佔位字串；0 是真實讀數，不算缺。"""
+    if value is None:
+        return True
+    if isinstance(value, float):
+        return value != value
+    if isinstance(value, str):
+        return value.strip().lower() in {"", "-", "—", "n/a", "none", "nan"}
+    return False
+
+
+def report_table_rows(rows: Any) -> list[str]:
+    """把 (標籤, 值) 組成 Markdown 表格列，沒有讀數的整列省略。"""
+    return [f"| {label} | {value} |" for label, value in rows if not is_missing_report_value(value)]
 
 
 def get_report_labels(language: Optional[str]) -> Dict[str, str]:

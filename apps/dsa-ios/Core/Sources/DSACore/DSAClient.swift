@@ -88,6 +88,14 @@ public struct DSAClient: Sendable {
         return response.stockCodes
     }
 
+    public func watchlistGroups() async throws -> WatchlistGroupsResponse {
+        try await get(["stocks", "watchlist", "groups"])
+    }
+
+    public func saveWatchlistGroups(_ groups: [WatchlistGroup]) async throws -> WatchlistGroupsResponse {
+        try await post(["stocks", "watchlist", "groups"], body: WatchlistGroupsBody(groups: groups))
+    }
+
     public func removeFromWatchlist(_ code: String) async throws -> [String] {
         let response: Watchlist = try await post(["stocks", "watchlist", "remove"], body: StockBody(stockCode: code))
         return response.stockCodes
@@ -110,6 +118,16 @@ public struct DSAClient: Sendable {
         return response.items
     }
 
+    /// 同 `indices`，多帶市場狀態（盤前、盤中、盤後）。
+    public func indicesSnapshot(region: String = "tw") async throws -> MarketIndicesSnapshot {
+        try await get(["stocks", "indices"], query: [URLQueryItem(name: "region", value: region)])
+    }
+
+    /// 個股頁首的開收盤狀態；與指數共用同一支端點，舊的 `indices()` 不動。
+    public func marketSession(region: String) async throws -> MarketSessionStatus {
+        try await get(["stocks", "indices"], query: [URLQueryItem(name: "region", value: region)])
+    }
+
     public func alertMonitorStatus() async throws -> AlertMonitorStatus {
         try await get(["alerts", "monitor", "status"])
     }
@@ -125,15 +143,29 @@ public struct DSAClient: Sendable {
         try await get(["stocks", code, "profile"], query: [URLQueryItem(name: "history_days", value: String(historyDays))])
     }
 
+    /// 個股季度財報；只讀 AI 導讀快取，不會觸發 LLM。
+    public func stockFinancials(_ code: String) async throws -> StockFinancials {
+        try await get(["stocks", code, "financials"])
+    }
+
+    /// 沒有快取時才會打 LLM（約 20~60 秒），所以放寬逾時；同一份財報只生成一次。
+    public func financialCommentary(_ code: String) async throws -> FinancialCommentary {
+        try await post(["stocks", code, "financials", "commentary"], body: EmptyBody(), timeout: 180)
+    }
+
     /// 分時走勢（`range=day`）：台股走 Shioaji 分鐘線、其他市場走 yfinance 5 分鐘線；只有價沒有量。
     public func stockTrend(_ code: String, range: String = "day") async throws -> StockTrend {
         try await get(["stocks", code, "trend"], query: [URLQueryItem(name: "range", value: range)])
     }
 
-    public func historyList(stockCode: String? = nil, reportType: String? = nil, page: Int = 1, limit: Int = 20) async throws -> HistoryPage {
+    /// `q`、`market`、`action` 由伺服器篩選，查的是全部報告，不只已載入的分頁。
+    public func historyList(stockCode: String? = nil, reportType: String? = nil, q: String? = nil, market: String? = nil, action: String? = nil, page: Int = 1, limit: Int = 20) async throws -> HistoryPage {
         var query = [URLQueryItem(name: "page", value: String(page)), URLQueryItem(name: "limit", value: String(limit))]
         if let stockCode { query.append(URLQueryItem(name: "stock_code", value: stockCode)) }
         if let reportType { query.append(URLQueryItem(name: "report_type", value: reportType)) }
+        if let q { query.append(URLQueryItem(name: "q", value: q)) }
+        if let market { query.append(URLQueryItem(name: "market", value: market)) }
+        if let action { query.append(URLQueryItem(name: "action", value: action)) }
         return try await get(["history"], query: query)
     }
 
@@ -166,8 +198,17 @@ public struct DSAClient: Sendable {
         return try await perform(URLRequest(url: url))
     }
 
-    public func portfolioSnapshot() async throws -> PortfolioSnapshot {
-        try await get(["portfolio", "snapshot"], query: [URLQueryItem(name: "include_realtime", value: "true")])
+    /// 帶顯示幣別才有 consolidated_* 折合欄位；基金算進總資產，與 Web 持股頁同一個口徑。
+    public func portfolioSnapshot(displayCurrency: String = "TWD") async throws -> PortfolioSnapshot {
+        try await get(["portfolio", "snapshot"], query: [
+            URLQueryItem(name: "include_realtime", value: "true"),
+            URLQueryItem(name: "display_currency", value: displayCurrency),
+            URLQueryItem(name: "include_funds", value: "true")
+        ])
+    }
+
+    public func portfolioRisk(displayCurrency: String = "TWD") async throws -> PortfolioRiskReport {
+        try await get(["portfolio", "risk"], query: [URLQueryItem(name: "display_currency", value: displayCurrency)])
     }
 
     private func get<T: Decodable>(_ path: [String], query: [URLQueryItem] = []) async throws -> T {
@@ -175,9 +216,12 @@ public struct DSAClient: Sendable {
         return try await perform(URLRequest(url: url))
     }
 
-    private func post<T: Decodable, Body: Encodable>(_ path: [String], body: Body) async throws -> T {
+    private struct EmptyBody: Encodable {}
+
+    private func post<T: Decodable, Body: Encodable>(_ path: [String], body: Body, timeout: TimeInterval = 60) async throws -> T {
         let url = try makeURL(path: path)
         var request = URLRequest(url: url)
+        request.timeoutInterval = timeout
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let encoder = JSONEncoder()
@@ -217,7 +261,7 @@ public struct DSAClient: Sendable {
 
     private func responseData(_ original: URLRequest) async throws -> Data {
         var request = original
-        request.timeoutInterval = 60
+        request.timeoutInterval = max(60, original.timeoutInterval)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.cachePolicy = .reloadIgnoringLocalCacheData
         // 阻止 307/308 把登入密碼或寫入內容轉送到不同伺服器。
@@ -276,6 +320,7 @@ private struct Acknowledgement: Decodable { let ok: Bool }
 private struct Markdown: Decodable { let content: String }
 private struct PasswordBody: Encodable { let password: String }
 private struct StockBody: Encodable { let stockCode: String }
+private struct WatchlistGroupsBody: Encodable { let groups: [WatchlistGroup] }
 private struct AnalysisBody: Encodable {
     let stockCode: String
     let asyncMode = true

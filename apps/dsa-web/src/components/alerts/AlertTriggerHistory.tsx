@@ -65,7 +65,7 @@ export const AlertTriggerHistory: React.FC<AlertTriggerHistoryProps> = ({
   ];
 
   return (
-    <Card title={text.activityTitle} variant="bordered" padding="md" className={className}>
+    <Card title={text.activityTitle} variant="surface" padding="md" className={className}>
       <div role="tablist" className="mb-3 flex gap-2">
         {tabs.map((item) => (
           <button

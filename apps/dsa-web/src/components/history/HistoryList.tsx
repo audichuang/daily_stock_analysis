@@ -11,10 +11,10 @@ interface HistoryListProps {
   isLoading: boolean;
   isLoadingMore: boolean;
   hasMore: boolean;
-  selectedId?: number;  // 当前选中的历史记录 ID
+  selectedId?: number;  // 目前選取的歷史紀錄 ID
   selectedIds: Set<number>;
   isDeleting?: boolean;
-  onItemClick: (recordId: number) => void;  // 点击记录的回调
+  onItemClick: (recordId: number) => void;
   onLoadMore: () => void;
   onToggleItemSelection: (recordId: number) => void;
   onToggleSelectAll: () => void;
@@ -138,8 +138,8 @@ export const HistoryList: React.FC<HistoryListProps> = ({
                 <span className="text-[11px] text-muted-text select-none">{t('common.selectAllCurrent')}</span>
               </label>
               <Button
-                variant="danger-subtle"
-                size="xsm"
+                variant="danger"
+                size="sm"
                 onClick={onDeleteSelected}
                 disabled={selectedCount === 0 || isDeleting}
                 isLoading={isDeleting}

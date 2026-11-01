@@ -4,6 +4,7 @@ import { Check, ChevronDown, Globe2, RotateCcw } from 'lucide-react';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { cn } from '../../utils/cn';
 import {
+  formatMarketReviewRegion,
   MARKET_REVIEW_REGION_ORDER,
   type MarketReviewRegion,
 } from '../../utils/marketReviewRegion';
@@ -12,12 +13,18 @@ type MarketReviewRegionSelectorProps = {
   value?: readonly MarketReviewRegion[];
   disabled?: boolean;
   onChange: (value: MarketReviewRegion[] | undefined) => void;
+  /** 伺服器實際預設市場（default-region 端點）；還沒取到時顯示「伺服器預設」。 */
+  defaultRegion?: string;
+  /** 面板底部的額外設定，例如完成通知。 */
+  footer?: React.ReactNode;
 };
 
 export const MarketReviewRegionSelector: React.FC<MarketReviewRegionSelectorProps> = ({
   value,
   disabled = false,
   onChange,
+  defaultRegion,
+  footer,
 }) => {
   const { t } = useUiLanguage();
   const [open, setOpen] = useState(false);
@@ -40,8 +47,9 @@ export const MarketReviewRegionSelector: React.FC<MarketReviewRegionSelectorProp
   const formatRegions = (regions: MarketReviewRegion[]) => (
     regions.map((region) => regionLabels[region]).join(' + ')
   );
+  const defaultRegionLabel = formatMarketReviewRegion(defaultRegion, regionLabels);
   const triggerLabel = value === undefined
-    ? t('home.marketRegionServerDefault')
+    ? defaultRegionLabel || t('home.marketRegionServerDefault')
     : formatRegions([...displayedRegions]);
 
   const close = useCallback((restoreFocus = false) => {
@@ -153,7 +161,7 @@ export const MarketReviewRegionSelector: React.FC<MarketReviewRegionSelectorProp
               <span className="min-w-0 flex-1">
                 <span className="block font-medium">{t('home.marketRegionServerDefault')}</span>
                 <span className="mt-0.5 block truncate text-xs text-muted-text">
-                  {t('home.marketRegionDefaultUnavailable')}
+                  {defaultRegionLabel || t('home.marketRegionDefaultUnavailable')}
                 </span>
               </span>
               <Check className={cn('h-4 w-4', value === undefined ? 'opacity-100' : 'opacity-0')} aria-hidden="true" />
@@ -197,6 +205,8 @@ export const MarketReviewRegionSelector: React.FC<MarketReviewRegionSelectorProp
               })}
             </div>
           </div>
+
+          {footer ? <div className="border-t border-subtle px-2.5 py-2">{footer}</div> : null}
 
           <p className="px-2.5 pb-1 text-[11px] leading-4 text-muted-text">
             {t('home.marketRegionOneTimeHint')}

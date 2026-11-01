@@ -108,6 +108,7 @@ def list_rules(
     source: Optional[str] = Query(None, description="Optional source filter"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    q: Optional[str] = Query(None, max_length=64, description="Keyword matched against target and rule name"),
 ) -> AlertRuleListResponse:
     service = AlertService()
     try:
@@ -121,6 +122,7 @@ def list_rules(
                 source=source,
                 page=page,
                 page_size=page_size,
+                q=q,
             )
         )
     except Exception as exc:

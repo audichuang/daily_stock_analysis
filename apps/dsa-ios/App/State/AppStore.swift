@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import WebKit
 import DSACore
 
 @MainActor
@@ -9,9 +10,10 @@ final class AppStore: ObservableObject {
     @Published var startingUp = true
     @Published var needsPassword = false
     @Published var accessExpanded = false
-    @Published var connectionError: String?
+    @Published var connectionIssue: ConnectionIssue?
     @Published var serverAddress: String
     @Published var watchlist: [String] = []
+    @Published var watchlistGroups: [WatchlistGroup] = []
     @Published var quotes: [QuoteItem] = []
     @Published var indices: [MarketIndex] = []
     @Published var reports: [HistoryItem] = []
@@ -22,6 +24,17 @@ final class AppStore: ObservableObject {
     @Published var selectedMarket = "tw"
     @Published var selectedTab = 0
     @Published var stockIndex: [StockIndexItem] = []
+    /// 指數回應帶的市場狀態；舊後端或判斷失敗時為 nil。
+    @Published var marketPhase: String?
+    @Published var marketOpen: Bool?
+    /// 切換市場時指數正在重抓；與 refreshing 分開，否則切換瞬間會閃「暫無指數」。
+    @Published var indicesLoading = false
+    /// 今日頁資產卡與持股字標共用；資產分頁自己抓完整快照。
+    @Published var portfolioSummary: PortfolioSnapshot? {
+        didSet { heldKeys = portfolioSummary?.heldKeys ?? [] }
+    }
+    @Published var portfolioSummaryFailed = false
+    @Published private(set) var heldKeys: Set<String> = []
     @Published var alertMonitor: AlertMonitorStatus?
     @Published var alertMonitorFailed = false
     @Published var colorConvention: MarketColorConvention {
@@ -30,11 +43,16 @@ final class AppStore: ObservableObject {
     private(set) var client: DSAClient?
     private(set) var session: URLSession?
     private(set) var baseURL: URL?
+    /// 所有工具頁共用的記憶體資料（cookie、localStorage），不落地；換連線或登出就換一個。
+    private(set) var toolWebDataStore: WKWebsiteDataStore
     private var generation = UUID()
+    private var portfolioSummaryLoading = false
+    private var connectTask: Task<Void, Never>?
     private let configurationFactory: () -> URLSessionConfiguration
 
     init(configurationFactory: @escaping () -> URLSessionConfiguration = { .ephemeral }) {
         self.configurationFactory = configurationFactory
+        toolWebDataStore = .nonPersistent()
         colorConvention = MarketColorConvention(rawValue: UserDefaults.standard.string(forKey: "marketColors") ?? "") ?? .taiwan
         let preferences = UserDefaults.standard
         let savedAddress = preferences.string(forKey: "serverAddress")
@@ -58,15 +76,30 @@ final class AppStore: ObservableObject {
         #endif
     }
 
+    var connectionError: String? { connectionIssue?.message }
+
+    /// 連線畫面用：由 store 持有 task，「取消」才取消得到進行中的請求。
+    func submitConnection(password: String? = nil) async {
+        let task = Task { await connect(password: password) }
+        connectTask = task
+        await task.value
+        if connectTask == task { connectTask = nil }
+    }
+
+    func cancelConnecting() {
+        connectTask?.cancel()
+        connectTask = nil
+        startingUp = false
+    }
+
     func connect(password: String? = nil) async {
         guard !connecting else { return }
         connecting = true
-        connectionError = nil
+        connectionIssue = nil
         defer { connecting = false }
         do {
-            guard let url = URL(string: serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                throw LocalError("請輸入完整的 HTTPS 服務網址。")
-            }
+            guard let url = ServerAddress.normalized(serverAddress) else { throw DSAError.invalidServerURL }
+            if serverAddress != url.absoluteString { serverAddress = url.absoluteString }
             if baseURL != url || client == nil {
                 let config = configurationFactory()
                 config.timeoutIntervalForRequest = 60
@@ -82,6 +115,8 @@ final class AppStore: ObservableObject {
                 session?.invalidateAndCancel()
                 generation = UUID()
                 clearData()
+                // 換伺服器或更換／移除 Access Token 都走這裡，舊 cookie 不能留給下一個工具頁。
+                toolWebDataStore = .nonPersistent()
                 session = candidateSession
                 client = candidateClient
                 baseURL = url
@@ -90,6 +125,7 @@ final class AppStore: ObservableObject {
             guard let client else { return }
             if let password { try await client.login(password: password) }
             let status = try await client.authStatus()
+            try Task.checkCancellation()
             needsPassword = status.authEnabled && status.passwordSet && !status.loggedIn
             if status.authEnabled && !status.passwordSet {
                 throw LocalError("請先在網頁完成管理員密碼設定，再連接 App。")
@@ -101,18 +137,20 @@ final class AppStore: ObservableObject {
             catch { errors["session"] = error.localizedDescription }
             await refresh()
         } catch {
-            connectionError = error.localizedDescription
+            // 使用者按了取消，不是連線失敗，不顯示錯誤。
+            if Task.isCancelled { return }
+            connectionIssue = ConnectionIssue.from(error)
             handleAuthenticationError(error)
         }
     }
 
     func hasAccessCredentials() -> Bool {
-        guard let url = URL(string: serverAddress) else { return false }
+        guard let url = ServerAddress.normalized(serverAddress) else { return false }
         return (try? AccessVault.load(for: url)) != nil
     }
 
     func saveAccessCredentials(clientID: String, secret: String) throws {
-        guard let url = URL(string: serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        guard let url = ServerAddress.normalized(serverAddress) else {
             throw DSAError.invalidServerURL
         }
         // 沿用 client 的網址驗證，避免把憑證存進含帳密或 query 的網址。
@@ -126,17 +164,17 @@ final class AppStore: ObservableObject {
         try AccessVault.save(AccessCredentials(clientID: id, clientSecret: value), for: url)
         client = nil
         needsPassword = false
-        connectionError = nil
+        connectionIssue = nil
     }
 
     func removeAccessCredentials() throws {
-        guard let url = URL(string: serverAddress) else { throw DSAError.invalidServerURL }
+        guard let url = ServerAddress.normalized(serverAddress) else { throw DSAError.invalidServerURL }
         try AccessVault.remove(for: url)
         session?.configuration.httpCookieStorage?.cookies?.filter { $0.name == "CF_Authorization" }
             .forEach { session?.configuration.httpCookieStorage?.deleteCookie($0) }
         client = nil
         needsPassword = false
-        connectionError = nil
+        connectionIssue = nil
     }
 
     /// 工具頁捷徑的狀態值。由 store 自己的 Task 執行：`.onAppear` 離頁時不該把還在等的請求取消成「已取消」。
@@ -181,7 +219,7 @@ final class AppStore: ObservableObject {
             needsPassword = false
         } else if error.requiresLogin { needsPassword = true }
         else { return }
-        connectionError = error.localizedDescription
+        connectionIssue = ConnectionIssue.from(error)
         connected = false
     }
 
@@ -198,6 +236,8 @@ final class AppStore: ObservableObject {
         async let watch: Void = loadWatchlist(client, generation: currentGeneration)
         async let market: Void = loadIndices(client, generation: currentGeneration)
         async let history: Void = loadReports(client, generation: currentGeneration)
+        // 帶即時價的持股快照比其他請求慢很多，不併入這輪等待：下拉更新與事件卡都等 refreshedAt。
+        Task { await loadPortfolioSummary(client, generation: currentGeneration) }
         _ = await (watch, market, history)
         guard generation == currentGeneration else { return }
         refreshing = false
@@ -208,6 +248,11 @@ final class AppStore: ObservableObject {
         selectedMarket = market
         guard let client, connected else { return }
         indices = []
+        marketPhase = nil
+        marketOpen = nil
+        // 上一個市場的錯誤不能留到這個市場。
+        errors["indices"] = nil
+        indicesLoading = true
         await loadIndices(client, generation: generation)
     }
 
@@ -220,6 +265,30 @@ final class AppStore: ObservableObject {
         guard let client else { return }
         watchlist = try await (watchlist.contains(code) ? client.removeFromWatchlist(code) : client.addToWatchlist(code))
         await loadWatchlist(client, generation: generation)
+    }
+
+    /// 清單的左滑移除與搜尋面板的加入用明確方向：連按兩次 toggle 會把剛移除的又加回去。
+    func addToWatchlist(_ code: String) async throws {
+        guard let client, !watchlist.contains(code) else { return }
+        watchlist = try await client.addToWatchlist(code)
+        await loadWatchlist(client, generation: generation)
+    }
+
+    func removeFromWatchlist(_ code: String) async throws {
+        guard let client, watchlist.contains(code) else { return }
+        watchlist = try await client.removeFromWatchlist(code)
+        await loadWatchlist(client, generation: generation)
+    }
+
+    func retryPortfolioSummary() {
+        guard let client, connected else { return }
+        let current = generation
+        Task { await loadPortfolioSummary(client, generation: current) }
+    }
+
+    func saveWatchlistGroups(_ groups: [WatchlistGroup]) async throws {
+        guard let client else { return }
+        watchlistGroups = try await client.saveWatchlistGroups(groups).groups
     }
 
     func logout() async {
@@ -235,10 +304,18 @@ final class AppStore: ObservableObject {
         needsPassword = false
         refreshing = false
         clearData()
+        toolWebDataStore = .nonPersistent()
     }
 
     func quote(for code: String) -> StockQuote? { quotes.first { $0.stockCode == code }?.quote }
     func latestReport(for code: String) -> HistoryItem? { reports.first { $0.stockCode == code } }
+    func isHeld(_ code: String) -> Bool { heldKeys.contains(StockHoldings.key(code)) }
+    func listEntry(for code: String) -> StockListEntry {
+        let quote = quote(for: code)
+        return StockListEntry(code: code, name: quote?.stockName ?? latestReport(for: code)?.stockName,
+                              price: quote?.currentPrice, changePercent: quote?.changePercent,
+                              amount: quote?.amount, volumeRatio: quote?.volumeRatio)
+    }
     func isInMarket(_ code: String) -> Bool {
         switch selectedMarket {
         case "tw": return code.range(of: #"^[0-9]{4,6}[A-Za-z]?\.[Tt][Ww](?:[Oo])?$"#, options: .regularExpression) != nil
@@ -250,25 +327,60 @@ final class AppStore: ObservableObject {
     private func loadWatchlist(_ client: DSAClient, generation expected: UUID) async {
         do {
             let codes = try await client.watchlist()
-            var results: [QuoteItem] = []
-            for start in stride(from: 0, to: codes.count, by: 50) {
-                results += try await client.quotes(Array(codes[start..<min(start + 50, codes.count)]))
-            }
+            // 分組是附加資訊：讀不到（舊伺服器 404、暫時失敗）時保留現有分組，不算自選載入失敗。
+            let groups = try? await client.watchlistGroups()
+            // 報價失敗不能連名單一起丟：名單照常更新，舊報價保留，畫面另外標示。
+            var results: [QuoteItem]?
+            var quoteError: Error?
+            do {
+                var fetched: [QuoteItem] = []
+                for start in stride(from: 0, to: codes.count, by: 50) {
+                    fetched += try await client.quotes(Array(codes[start..<min(start + 50, codes.count)]))
+                }
+                results = fetched
+            } catch { quoteError = error }
             guard generation == expected else { return }
             watchlist = codes
-            quotes = results
+            if let groups { watchlistGroups = groups.groups }
+            if let results { quotes = results }
             errors["watchlist"] = nil
+            errors["quotes"] = quoteError?.localizedDescription
+            if let quoteError { handleAuthenticationError(quoteError) }
         } catch { if generation == expected { errors["watchlist"] = error.localizedDescription; handleAuthenticationError(error) } }
     }
 
     private func loadIndices(_ client: DSAClient, generation expected: UUID) async {
         let region = selectedMarket
         do {
-            let values = try await client.indices(region: region)
+            let snapshot = try await client.indicesSnapshot(region: region)
             guard generation == expected, region == selectedMarket else { return }
-            indices = values
+            indices = snapshot.items
+            marketPhase = snapshot.marketPhase
+            marketOpen = snapshot.marketOpen
             errors["indices"] = nil
-        } catch { if generation == expected, region == selectedMarket { errors["indices"] = error.localizedDescription; handleAuthenticationError(error) } }
+            indicesLoading = false
+        } catch {
+            if generation == expected, region == selectedMarket {
+                errors["indices"] = error.localizedDescription
+                indicesLoading = false
+                handleAuthenticationError(error)
+            }
+        }
+    }
+
+    /// 失敗只影響資產卡與持股字標，不寫進 errors、不登出：這張卡不該拖垮今日頁。
+    private func loadPortfolioSummary(_ client: DSAClient, generation expected: UUID) async {
+        guard !portfolioSummaryLoading else { return }
+        portfolioSummaryLoading = true
+        defer { portfolioSummaryLoading = false }
+        do {
+            let snapshot = try await client.portfolioSnapshot(displayCurrency: "TWD")
+            guard generation == expected else { return }
+            portfolioSummary = snapshot
+            portfolioSummaryFailed = false
+        } catch {
+            if generation == expected { portfolioSummaryFailed = true }
+        }
     }
 
     private func loadReports(_ client: DSAClient, generation expected: UUID) async {
@@ -284,8 +396,10 @@ final class AppStore: ObservableObject {
     }
 
     private func clearData() {
-        watchlist = []; quotes = []; indices = []; reports = []; marketReviews = []
+        watchlist = []; watchlistGroups = []; quotes = []; indices = []; reports = []; marketReviews = []
         stockIndex = []; errors = [:]; refreshedAt = nil
+        marketPhase = nil; marketOpen = nil; indicesLoading = false
+        portfolioSummary = nil; portfolioSummaryFailed = false
     }
 }
 

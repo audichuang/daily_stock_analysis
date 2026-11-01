@@ -211,6 +211,19 @@ def latest_market_index(index_id, engine=None):
     return None if df.empty else df.iloc[0].to_dict()
 
 
+def market_index_history(index_id, start=None, end=None, engine=None):
+    """單一指數的官方收盤序列（升序）：date, close。"""
+    sql = "SELECT date, close FROM market.market_index WHERE index_id = :iid AND close IS NOT NULL"
+    params = {"iid": index_id}
+    if start:
+        sql += " AND date >= :start"
+        params["start"] = str(start)[:10]
+    if end:
+        sql += " AND date <= :end"
+        params["end"] = str(end)[:10]
+    return _q(sql + " ORDER BY date", params, engine)
+
+
 def latest_price_date(engine=None):
     """`market.price` 最新一個場次的日期；查無回 None。
 
@@ -257,6 +270,20 @@ def fund_nav_history(fund_id, start=None, end=None, engine=None):
         sql += " AND date <= :end"
         params["end"] = end
     return _q(sql + " ORDER BY date", params, engine)
+
+
+def fund_recent_navs(fund_ids, engine=None):
+    """多檔基金各自最新兩筆淨值：``{fund_id: [(nav, date), ...]}``（新到舊），查無的不列。"""
+    if not fund_ids:
+        return {}
+    df = _q("SELECT fund_id, date, nav FROM ("
+            "SELECT fund_id, date, nav, ROW_NUMBER() OVER (PARTITION BY fund_id ORDER BY date DESC) AS rn "
+            "FROM market.fund_nav WHERE fund_id = ANY(:ids) AND nav IS NOT NULL) ranked "
+            "WHERE rn <= 2 ORDER BY fund_id, date DESC", {"ids": list(fund_ids)}, engine)
+    out = {}
+    for r in df.itertuples():
+        out.setdefault(r.fund_id, []).append((float(r.nav), pd.Timestamp(r.date).date()))
+    return out
 
 
 def fund_latest_navs(fund_ids, engine=None):

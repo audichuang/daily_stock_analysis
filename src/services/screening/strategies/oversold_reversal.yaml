@@ -4,6 +4,8 @@
 name: oversold_reversal
 display_name: 超跌反转
 description: 跌幅可控、流动性仍在、具备修复观察价值的反转候选
+display_name_zh_tw: 超跌反轉
+description_zh_tw: 跌幅可控、流動性仍在、值得觀察修復的反轉候選
 version: "1.1"
 category: reversal
 tags: [reversal, oversold, repair]

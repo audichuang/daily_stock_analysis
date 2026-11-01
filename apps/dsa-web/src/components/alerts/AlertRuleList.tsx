@@ -18,7 +18,7 @@ import type {
   AlertType,
   MarketRegion,
 } from '../../types/alerts';
-import { formatDateTime } from '../../utils/format';
+import { formatDateTime, formatNumber, formatPercent } from '../../utils/format';
 import { ruleCondition, summarizeDryRun, type AlertPageText } from './alertRuleText';
 
 export type AlertRuleEnabledFilter = 'all' | 'enabled' | 'disabled';
@@ -131,11 +131,11 @@ const RuleCard: React.FC<RuleCardProps> = ({
 
   const threshold = rule.alertType === 'price_cross' ? rule.parameters.price : undefined;
   const distance = quote && quote.price > 0 && threshold
-    ? `${((threshold / quote.price - 1) * 100).toFixed(1)}%`
+    ? formatPercent((threshold / quote.price - 1) * 100, 1)
     : null;
   const facts: string[] = [];
   if (rule.alertType === 'price_cross' && rule.targetScope === 'single_symbol') {
-    facts.push(quote ? formatUiText(text.current, { price: quote.price.toLocaleString() }) : text.noQuote);
+    facts.push(quote ? formatUiText(text.current, { price: formatNumber(quote.price) }) : text.noQuote);
     if (distance) facts.push(formatUiText(text.distance, { pct: distance }));
   }
   facts.push(rule.lastTriggeredAt ? formatUiText(text.lastTriggered, { time: formatDateTime(rule.lastTriggeredAt) }) : text.neverTriggered);
@@ -263,7 +263,7 @@ export const AlertRuleList: React.FC<AlertRuleListProps> = ({
   ];
 
   return (
-    <Card variant="bordered" padding="md" className={className}>
+    <Card variant="surface" padding="md" className={className}>
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Input
           label={text.search}

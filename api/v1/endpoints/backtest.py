@@ -15,9 +15,12 @@ from api.v1.schemas.backtest import (
     BacktestRunResponse,
     BacktestResultItem,
     BacktestResultsResponse,
+    BacktestSeriesResponse,
     PerformanceMetrics,
 )
 from api.v1.schemas.common import ErrorResponse
+from src.repositories.backtest_repo import SORT_COMPLETED_FIRST
+from src.schemas.decision_action import DecisionAction
 from src.services.backtest_service import BacktestService
 from src.storage import DatabaseManager
 
@@ -26,6 +29,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 BacktestAnalysisPhaseQuery = Literal["premarket", "intraday", "postmarket", "unknown"]
+BacktestStatusQuery = Literal["completed", "pending", "insufficient_data", "error", "unable"]
+BacktestMarketQuery = Literal["tw", "us", "cn", "hk"]
+BacktestSortQuery = Literal["completed_first", "date_desc", "date_asc", "return_desc", "return_asc"]
 
 
 def _validate_analysis_date_range(
@@ -104,6 +110,10 @@ def get_backtest_results(
     analysis_phase: Optional[BacktestAnalysisPhaseQuery] = Query(None, description="分析阶段过滤：premarket/intraday/postmarket/unknown"),
     page: int = Query(1, ge=1, description="页码"),
     limit: int = Query(20, ge=1, le=200, description="每页数量"),
+    status: Optional[BacktestStatusQuery] = Query(None, description="分流：已完成／未到期／資料不足等"),
+    market: Optional[BacktestMarketQuery] = Query(None, description="市場"),
+    advice: Optional[DecisionAction] = Query(None, description="結構化動作（action 枚舉）"),
+    sort: BacktestSortQuery = Query(SORT_COMPLETED_FIRST, description="排序，預設已完成優先"),
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> BacktestResultsResponse:
     try:
@@ -117,6 +127,11 @@ def get_backtest_results(
             analysis_date_from=analysis_date_from,
             analysis_date_to=analysis_date_to,
             analysis_phase=analysis_phase,
+            status=status,
+            market=market,
+            advice=advice,
+            sort=sort,
+            include_status_counts=True,
         )
         items = [BacktestResultItem(**item) for item in data.get("items", [])]
         return BacktestResultsResponse(
@@ -124,6 +139,7 @@ def get_backtest_results(
             page=page,
             limit=limit,
             items=items,
+            status_counts=data.get("status_counts") or {},
         )
     except ValueError as exc:
         raise HTTPException(
@@ -137,6 +153,50 @@ def get_backtest_results(
         raise HTTPException(
             status_code=500,
             detail={"error": "internal_error", "message": f"查询回测结果失败: {str(exc)}"},
+        )
+
+
+@router.get(
+    "/series",
+    response_model=BacktestSeriesResponse,
+    response_model_by_alias=True,
+    responses={
+        200: {"description": "逐筆累計與月勝率"},
+        400: {"description": "请求参数错误", "model": ErrorResponse},
+        500: {"description": "服务器错误", "model": ErrorResponse},
+    },
+    summary="取得逐筆累計報酬與月勝率",
+    description="只含已完成的回測；累計是逐筆相加，不是資金曲線",
+)
+def get_backtest_series(
+    code: Optional[str] = Query(None, max_length=32, description="股票代碼篩選"),
+    eval_window_days: Optional[int] = Query(None, ge=1, le=120, description="評估窗口過濾"),
+    analysis_date_from: Optional[date] = Query(None, description="分析日期起始（含）"),
+    analysis_date_to: Optional[date] = Query(None, description="分析日期結束（含）"),
+    market: Optional[BacktestMarketQuery] = Query(None, description="市場"),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> BacktestSeriesResponse:
+    try:
+        _validate_analysis_date_range(analysis_date_from, analysis_date_to)
+        return BacktestSeriesResponse(**BacktestService(db_manager).get_series(
+            code=code,
+            eval_window_days=eval_window_days,
+            analysis_date_from=analysis_date_from,
+            analysis_date_to=analysis_date_to,
+            market=market,
+        ))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_params", "message": str(exc)},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"查詢回測序列失敗: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"查詢回測序列失敗: {str(exc)}"},
         )
 
 

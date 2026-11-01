@@ -49,7 +49,7 @@ describe('BoardDossier', () => {
     const cell = render(<BoardDossierCell summary={adjusted} price={1400} />);
     expect(cell.container.textContent).not.toMatch(/%/);
     expect(cell.container.textContent).toMatch(/ex-div|除權息|除权息/);
-    expect(cell.container.textContent).toContain('BOS'); // 結構方向不受影響
+    expect(cell.container.textContent).toContain('结构突破'); // 結構方向不受影響；沒有 Provider 時預設 zh
     cell.unmount();
     render(<BoardDossierPanel code="1516.TW" summary={adjusted} price={24.73} levelAlertsEnabled />);
     expect(screen.getByRole('note')).toBeInTheDocument();
@@ -72,40 +72,57 @@ describe('BoardDossier', () => {
     expect(screen.getByText('—')).toBeInTheDocument();
   });
 
+  const dialogButton = (name: RegExp) => screen.getByRole('button', { name });
+  const CONFIRM = /^(OK|确定|確定)$/;
+  const CANCEL = /^(Cancel|取消)$/;
+
   it('creates alerts at the displayed nearest levels only after confirmation', async () => {
+    createLevelAlerts.mockReset();
     createLevelAlerts.mockResolvedValue(2);
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const nativeConfirm = vi.spyOn(window, 'confirm');
     render(<BoardDossierPanel code="3324.TWO" summary={summary} price={1375} levelAlertsEnabled />);
     const button = screen.getByRole('button', { name: /Create level alerts|建立价位警报|建立價位警報/ });
     fireEvent.click(button);
     expect(createLevelAlerts).not.toHaveBeenCalled();
+    fireEvent.click(dialogButton(CANCEL));
+    expect(createLevelAlerts).not.toHaveBeenCalled();
     fireEvent.click(button);
+    fireEvent.click(dialogButton(CONFIRM));
     expect(createLevelAlerts).toHaveBeenCalledWith('3324.TWO', {
       support: summary.levels[0],
       resistance: summary.levels[1],
     });
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/2/));
-    confirm.mockRestore();
+    // 不再走瀏覽器原生對話框
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    nativeConfirm.mockRestore();
   });
 
   it('locks the alert button while the request is in flight, then unlocks it', async () => {
     let finish!: (n: number) => void;
     createLevelAlerts.mockReset();
     createLevelAlerts.mockReturnValueOnce(new Promise<number>((res) => { finish = res; })).mockRejectedValueOnce(new Error('boom'));
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
     render(<BoardDossierPanel code="3324.TWO" summary={summary} price={1375} levelAlertsEnabled />);
     const button = screen.getByRole('button', { name: /Create level alerts|建立价位警报|建立價位警報/ });
     fireEvent.click(button);
+    fireEvent.click(dialogButton(CONFIRM));
     expect(button).toBeDisabled();
     fireEvent.click(button);
     expect(createLevelAlerts).toHaveBeenCalledTimes(1);
-    finish(2);
+    finish(1);
     await waitFor(() => expect(button).toBeEnabled());
-    // 失敗後也要解鎖
     fireEvent.click(button);
+    fireEvent.click(dialogButton(CONFIRM));
     expect(createLevelAlerts).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/boom/));
     expect(button).toBeEnabled();
-    confirm.mockRestore();
+  });
+
+  it('shows the structure kind in plain words only under Chinese UI, keeping unknown kinds', () => {
+    const { container, rerender } = render(<BoardDossierCell summary={summary} price={1400} />);
+    expect(container.textContent).toContain('结构突破'); // 沒有 Provider 時預設 zh
+    expect(container.textContent).not.toContain('BOS');
+    rerender(<BoardDossierCell summary={{ ...summary, structure: { ...summary.structure!, kind: 'SWEEP' } }} price={1400} />);
+    expect(container.textContent).toContain('SWEEP');
   });
 });
