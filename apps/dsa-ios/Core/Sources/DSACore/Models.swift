@@ -31,6 +31,8 @@ public struct StockQuote: Codable, Sendable, Identifiable {
     public let bestAskVolume: Int?
     public let updateTime: String?
     public let source: String?
+    /// 穩定的來源代碼（shioaji／yfinance）；舊後端沒有。
+    public let sourceCode: String?
     public let asOf: String?
     public let isStale: Bool?
 }
@@ -50,7 +52,15 @@ public struct MarketIndex: Codable, Sendable, Identifiable {
     public let change: Double?
     public let changePct: Double?
     public let source: String?
+    public let sourceCode: String?
     public let asOf: String?
+}
+
+/// `GET /stocks/indices` 的完整回應；市場狀態在頂層，舊後端沒有這兩欄。
+public struct MarketIndicesSnapshot: Codable, Sendable {
+    public let items: [MarketIndex]
+    public let marketPhase: String?
+    public let marketOpen: Bool?
 }
 
 public struct KLineBar: Codable, Sendable, Identifiable {
@@ -359,6 +369,13 @@ public struct PortfolioSnapshot: Codable, Sendable {
     public let dataQuality: String
     public let limitations: [String]
     public let accounts: [PortfolioAccount]
+    // 追加欄位：只有帶 display_currency 才有 consolidated_*，舊後端全部沒有。
+    public let dayPnl: Double?
+    public let displayCurrency: String?
+    public let consolidatedEquityBase: Double?
+    public let consolidatedDayPnlBase: Double?
+    public let consolidatedFxStale: Bool?
+    public let consolidatedFxMissing: Bool?
 }
 
 public struct PortfolioAccount: Codable, Sendable, Identifiable {

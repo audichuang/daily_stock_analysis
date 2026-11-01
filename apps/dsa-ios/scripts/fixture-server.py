@@ -38,17 +38,19 @@ STOCKS = {
 def quote(code):
     name, price, change_pct, _ = STOCKS[code]
     previous = round(price / (1 + change_pct / 100), 2)
+    # 長榮貼近漲停、高股息報價過期：驗證清單只有例外才有色塊與警告。
+    limit_up = round(price * 1.002, 2) if code == "2603.TW" else round(previous * 1.1, 2)
     return {
         "stock_code": code, "stock_name": name, "current_price": price,
         "change": round(price - previous, 2), "change_percent": change_pct,
         "open": price - 2, "high": price + 5, "low": price - 4,
         "prev_close": previous, "volume": 12345678, "amount": 7410000000,
         "volume_ratio": 1.2, "average_price": price - 1,
-        "limit_up": round(previous * 1.1, 2), "limit_down": round(previous * 0.9, 2),
+        "limit_up": limit_up, "limit_down": round(previous * 0.9, 2),
         "best_bid": 0 if code == "2330.TW" else price - 1, "best_ask": price + 1,
         "best_bid_volume": 0 if code == "2330.TW" else 30, "best_ask_volume": 25,
-        "source": "fixture（合成資料）", "as_of": AS_OF, "update_time": AS_OF,
-        "is_stale": True,
+        "source": "fixture（合成資料）", "source_code": "fixture", "as_of": AS_OF, "update_time": AS_OF,
+        "is_stale": code == "00878.TW",
     }
 
 
@@ -226,6 +228,8 @@ class State:
     def __init__(self):
         self.lock = threading.RLock()
         self.calendar_failing = False
+        # UI 測試注入的自選載入失敗：watchlist（名單）、quotes（整批報價）、partial（單檔無報價）。
+        self.failing = set()
         self.watchlist = ["2330.TW", "2317.TW", "00631L.TW", "2303.TW", "2603.TW", "0050.TW", "00878.TW", "AAPL"]
         self.records = [history_item(101, "2330.TW"), history_item(102, "AAPL"),
                         history_item(201, "TWII", "market_review", "tw"),
@@ -317,6 +321,10 @@ class Handler(BaseHTTPRequestHandler):
                 # UI 測試注入行事曆失敗，驗證事件卡的失敗與恢復。
                 STATE.calendar_failing = query.get("on", ["0"])[0] == "1"
                 return self.reply(200, {"calendar_failing": STATE.calendar_failing})
+            if route == ["__fixture", "fail"]:
+                target = query.get("target", [""])[0]
+                (STATE.failing.add if query.get("on", ["0"])[0] == "1" else STATE.failing.discard)(target)
+                return self.reply(200, {"failing": sorted(STATE.failing)})
             if route == ["health"]:
                 return self.reply(200, {"status": "fixture", "synthetic": True})
             if route == ["api", "v1", "auth", "status"]:
@@ -341,16 +349,22 @@ class Handler(BaseHTTPRequestHandler):
                     "last_stats": {"evaluated": 2}, "channels": ["telegram"], "enabled_rules": 2,
                 })
             if route == ["api", "v1", "stocks", "watchlist"]:
+                if "watchlist" in STATE.failing:
+                    return self.reply(503, {"error": "fixture", "message": "合成自選名單失敗"})
                 return self.reply(200, {"stock_codes": STATE.watchlist, "message": "合成測試自選股"})
             if route == ["api", "v1", "stocks", "quotes"]:
+                if "quotes" in STATE.failing:
+                    return self.reply(503, {"error": "fixture", "message": "合成報價失敗"})
                 codes = query.get("codes", [""])[0].split(",")
-                return self.reply(200, {"items": [{"stock_code": code, "quote": quote(code) if code in STOCKS else None,
-                                                   "error": None if code in STOCKS else "no_data"} for code in codes]})
+                missing = {"2303.TW"} if "partial" in STATE.failing else set()
+                return self.reply(200, {"items": [{"stock_code": code, "quote": quote(code) if code in STOCKS and code not in missing else None,
+                                                   "error": None if code in STOCKS and code not in missing else "no_data"} for code in codes]})
             if route == ["api", "v1", "stocks", "indices"]:
                 region = query.get("region", ["tw"])[0]
                 data = [("TWII", "加權指數（測試）", 18000, 100, 0.56), ("TPEX", "櫃買指數（測試）", 230, -1, -0.43)] if region == "tw" else [
                     ("SPX", "S&P 500（測試）", 4800, 20, 0.42), ("IXIC", "NASDAQ（測試）", 15000, -50, -0.33)]
-                return self.reply(200, {"region": region, "items": [dict(zip(["code", "name", "current", "change", "change_pct"], row), source="fixture（合成資料）", as_of=AS_OF) for row in data]})
+                return self.reply(200, {"region": region, "items": [dict(zip(["code", "name", "current", "change", "change_pct"], row), source="fixture（合成資料）", as_of=AS_OF) for row in data],
+                                        "market_phase": "postmarket", "market_open": False})
             if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "trend":
                 code = route[3]
                 if code not in STOCKS:
@@ -425,7 +439,7 @@ class Handler(BaseHTTPRequestHandler):
                                        "progress": 100 if complete else task["polls"] * 30,
                                        "result": result, "error": None, "stock_name": STOCKS[task["code"]][0]})
             if route == ["api", "v1", "portfolio", "snapshot"]:
-                return self.reply(200, portfolio())
+                return self.reply(200, portfolio(query.get("display_currency", [None])[0]))
             if route == [""] or (route and route[0] in ["chat", "screening", "portfolio", "alerts", "funds", "decision-signals", "backtest", "data", "settings", "usage"]):
                 html = tool_html("/" + "/".join(route), query.get("embed", ["無"])[0])
                 if self.access_required:
@@ -493,7 +507,7 @@ document.getElementById('fixture-blob-export').addEventListener('click', () => {
 </script></body></html>""".replace("{{ROUTE}}", escape(route_path)).replace("{{EMBED}}", escape(embed))
 
 
-def portfolio():
+def portfolio(display_currency=None):
     limitations = ["realtime_quote_best_effort", "fx_and_cost_basis_partial", "sector_and_risk_metrics_limited"]
     position = {"symbol": "2330.TW", "name": STOCKS["2330.TW"][0], "market": "tw", "currency": "TWD",
                 "quantity": 1000.0, "avg_cost": 580.0, "total_cost": 580000.0, "last_price": 600.0,
@@ -524,7 +538,10 @@ def portfolio():
                      unrealized_pnl_base=100.0, unrealized_pnl_pct=2.56, price_provider="fallback")
     dollar["positions"].append(microsoft)
     # 重現正式契約：頂層是跨幣別 CNY，原幣帳戶完整；CNY 換算缺漏不應污染台幣／美元分組。
-    return {"as_of": "2024-01-31", "cost_method": "fifo", "currency": "CNY", "account_count": 3,
+    consolidated = {"display_currency": display_currency, "consolidated_equity_base": 1575000.0,
+                    "consolidated_day_pnl_base": -12500.0, "consolidated_fx_stale": False,
+                    "consolidated_fx_missing": False} if display_currency else {}
+    return {**consolidated, "as_of": "2024-01-31", "cost_method": "fifo", "currency": "CNY", "account_count": 3,
             "total_cash": 82345.67, "total_market_value": 200000.0, "total_equity": 282345.67,
             "realized_pnl": 0.0, "unrealized_pnl": 10000.0, "fx_stale": True, "fx_missing": True,
             "data_quality": "partial", "limitations": ["合成測試資料，不能視為實際帳戶餘額"] + limitations,

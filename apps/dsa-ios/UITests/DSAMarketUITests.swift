@@ -185,12 +185,12 @@ final class DSAMarketUITests: XCTestCase {
         }
         XCTAssertGreaterThanOrEqual(visibleRows.count, 6, "標準字級應同屏完整顯示至少六筆自選")
         for row in visibleRows {
-            XCTAssertLessThanOrEqual(row.frame.height, 104, "自選列不應恢復成大卡片")
-            XCTAssertGreaterThanOrEqual(row.frame.height, 64, "縮小版面仍需保留可讀文字與點擊空間")
+            XCTAssertLessThanOrEqual(row.frame.height, 57, "自選列高度 52～56pt，留一點 cell 取整誤差")
+            XCTAssertGreaterThanOrEqual(row.frame.height, 52, "縮小版面仍需保留可讀文字與點擊空間")
         }
         capture("02b-緊湊自選列表")
-        let taiwanStock = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "2330.TW")).firstMatch
-        tap(taiwanStock)
+        XCTAssertFalse(app.buttons["stock-row.2330.TW"].label.contains("2330.TW"), "代號顯示去後綴，路由仍用完整代號")
+        tap(app.buttons["stock-row.2330.TW"])
         XCTAssertTrue(app.buttons["watchlist-toggle"].waitForExistence(timeout: 15))
         XCTAssertTrue(text(containing: "資料參考時間").waitForExistence(timeout: 10))
         XCTAssertFalse(text(containing: "報價時間 ·").exists)
@@ -432,7 +432,7 @@ final class DSAMarketUITests: XCTestCase {
         tap(undated)
         XCTAssertTrue(text(containing: "Microsoft（測試）").waitForExistence(timeout: 5))
         capture("17-下次財報未定")
-        goBack(from: "事件行事曆", to: "Daily Stock AI")
+        goBack(from: "事件行事曆", to: "今日")
         tap(app.tabBars.buttons["自選"])
         tap(app.segmentedControls["market-picker"].buttons["美股 US"])
         tap(app.buttons["stock-row.AAPL"])
@@ -582,7 +582,7 @@ final class DSAMarketUITests: XCTestCase {
         capture("新聞-完整報告空狀態")
         tap(app.tabBars.buttons["今日"])
         goBack(from: "AI 研究", to: "鴻海（測試）")
-        goBack(from: "鴻海（測試）", to: "Daily Stock AI")
+        goBack(from: "鴻海（測試）", to: "今日")
         tap(app.segmentedControls["market-picker"].buttons["美股 US"])
         tap(app.buttons["stock-row.AAPL"])
         scrollTo(text(containing: "這次分析沒有可顯示的新聞或官方公告。"))
@@ -591,6 +591,195 @@ final class DSAMarketUITests: XCTestCase {
         tap(app.tabBars.buttons["工具"])
         logoutFromTools()
         XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
+    }
+
+    func testTodayCardsAndExclusiveStates() throws {
+        try setFixtureFailure("watchlist", true)
+        addTeardownBlock { [self] in try? setFixtureFailure("watchlist", false) }
+        login()
+        XCTAssertTrue(app.navigationBars["今日"].waitForExistence(timeout: 10))
+        XCTAssertTrue(text(containing: "合成自選名單失敗").waitForExistence(timeout: 15))
+        XCTAssertFalse(text(containing: "建立你的觀察名單").exists, "錯誤與空狀態互斥")
+        capture("今日-名單失敗")
+
+        try setFixtureFailure("watchlist", false)
+        tap(app.buttons["重新載入"])
+        XCTAssertTrue(app.buttons["stock-row.2330.TW"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["新增自選股"].exists, "今日頁不再有重複的＋")
+        XCTAssertTrue(app.descendants(matching: .any)["today.market-status"].firstMatch.label.contains("盤後"))
+        XCTAssertTrue(app.buttons["today.review"].label.contains("AI 盤勢"))
+
+        let twii = text(containing: "加權指數（測試）")
+        let tpex = text(containing: "櫃買指數（測試）")
+        XCTAssertEqual(twii.frame.width, tpex.frame.width, accuracy: 1, "指數卡等寬")
+
+        let assets = app.buttons["today.assets"]
+        XCTAssertTrue(assets.waitForExistence(timeout: 15))
+        XCTAssertTrue(assets.label.contains("1,575,000"), "資產卡讀換算後的台幣合計")
+        XCTAssertFalse(assets.label.contains("282,345"), "不能重標頂層 CNY")
+        capture("今日-總覽")
+
+        // 異動大：正 2 漲 2%，長榮不到 1%，正 2 要排前面。列在 LazyVStack 裡，先捲到後面那列。
+        let strong = app.buttons["stock-row.00631L.TW"]
+        let weak = app.buttons["stock-row.2603.TW"]
+        scrollTo(weak)
+        XCTAssertLessThan(strong.frame.minY, weak.frame.minY)
+        tap(app.segmentedControls["today.sort"].buttons["自訂"])
+        XCTAssertLessThan(app.buttons["stock-row.2330.TW"].frame.minY, strong.frame.minY, "自訂回到伺服器順序")
+        tap(app.segmentedControls["today.sort"].buttons["異動大"])
+        logoutFromToolsAfterLogin()
+    }
+
+    func testWatchlistSortMetricSwipeAndSearchAdd() throws {
+        login()
+        tap(app.tabBars.buttons["自選"])
+        let expensive = app.buttons["stock-row.2330.TW"]
+        let cheap = app.buttons["stock-row.00878.TW"]
+        XCTAssertTrue(cheap.waitForExistence(timeout: 15))
+        XCTAssertTrue(cheap.label.contains("價格過期"), "過期是例外，要標")
+        XCTAssertFalse(expensive.label.contains("價格過期"), "正常報價不警告")
+        XCTAssertTrue(expensive.label.contains("持股"), "持股字標")
+
+        tap(app.buttons["watchlist.sort.price"])
+        tap(app.buttons["watchlist.sort.price"])
+        XCTAssertLessThan(cheap.frame.minY, expensive.frame.minY, "現價遞增")
+        capture("自選-現價遞增")
+        tap(app.buttons["watchlist.metric-menu"])
+        tap(app.buttons["成交值"])
+        XCTAssertTrue(expensive.label.contains("74.1 億"))
+        capture("自選-右欄成交值")
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["自選"].waitForExistence(timeout: 20))
+        tap(app.tabBars.buttons["自選"])
+        XCTAssertTrue(cheap.waitForExistence(timeout: 15))
+        XCTAssertLessThan(cheap.frame.minY, expensive.frame.minY, "排序重開仍記得")
+        XCTAssertTrue(expensive.label.contains("74.1 億"), "右欄重開仍記得")
+        // 還原，不影響其他案例。
+        tap(app.buttons["watchlist.sort.price"])
+        tap(app.buttons["watchlist.metric-menu"])
+        tap(app.buttons["漲跌幅"])
+
+        tap(app.buttons["watchlist.filter"])
+        let filter = app.textFields["watchlist.filter-field"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 5))
+        filter.tap()
+        filter.typeText("長榮")
+        XCTAssertFalse(expensive.exists)
+        tap(app.buttons["watchlist.filter"])
+        XCTAssertTrue(expensive.waitForExistence(timeout: 5), "收合篩選要清掉條件")
+
+        tap(app.segmentedControls["watchlist.group"].buttons["持股"])
+        XCTAssertTrue(expensive.waitForExistence(timeout: 5))
+        XCTAssertFalse(cheap.exists, "持股籤只留手上有的")
+        capture("自選-持股")
+        tap(app.segmentedControls["watchlist.group"].buttons["全部"])
+
+        tap(app.segmentedControls["market-picker"].buttons["美股 US"])
+        tap(app.buttons["新增自選股"])
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10))
+        search.tap()
+        search.typeText("MSFT")
+        tap(app.buttons["search.add.MSFT"])
+        let added = app.buttons.matching(NSPredicate(format: "identifier == %@ AND label == %@", "search.add.MSFT", "已在自選")).firstMatch
+        XCTAssertTrue(added.waitForExistence(timeout: 10), "搜尋面板直接加入")
+        capture("自選-搜尋直接加入")
+        tap(app.buttons["關閉"])
+        tap(app.buttons["search-dismiss"])
+
+        let microsoft = app.buttons["stock-row.MSFT"]
+        XCTAssertTrue(microsoft.waitForExistence(timeout: 10))
+        microsoft.swipeLeft()
+        tap(app.buttons["移除"])
+        let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: microsoft)
+        wait(for: [gone], timeout: 10)
+        capture("自選-左滑移除")
+        tap(app.segmentedControls["market-picker"].buttons["台股 TAIWAN"])
+        logoutFromToolsAfterLogin()
+    }
+
+    func testWatchlistLoadStates() throws {
+        addTeardownBlock { [self] in
+            for target in ["watchlist", "quotes", "partial"] { try? setFixtureFailure(target, false) }
+        }
+        try setFixtureFailure("watchlist", true)
+        login()
+        tap(app.tabBars.buttons["自選"])
+        let errorView = text(containing: "合成自選名單失敗")
+        XCTAssertTrue(errorView.waitForExistence(timeout: 15), "沒有資料時整頁顯示錯誤")
+        XCTAssertFalse(text(containing: "這個市場還沒有自選股").exists, "失敗不能顯示成沒有自選")
+        capture("自選四態-載入失敗")
+
+        try setFixtureFailure("watchlist", false)
+        tap(app.buttons["重新載入"])
+        let row = app.buttons["stock-row.2330.TW"]
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        let banner = app.descendants(matching: .any)["stock-list.banner"].firstMatch
+        XCTAssertFalse(banner.exists)
+        sleep(4) // 等這輪 refresh 結束，避免下拉被 refreshing guard 略過。
+
+        try setFixtureFailure("quotes", true)
+        row.press(forDuration: 0.1, thenDragTo: app.tabBars.firstMatch)
+        XCTAssertTrue(banner.waitForExistence(timeout: 15))
+        XCTAssertTrue(text(containing: "報價暫時無法取得").exists)
+        XCTAssertTrue(row.exists, "報價失敗不能連名單一起丟")
+        capture("自選四態-報價失敗")
+        try setFixtureFailure("quotes", false)
+        sleep(4)
+
+        try setFixtureFailure("partial", true)
+        row.press(forDuration: 0.1, thenDragTo: app.tabBars.firstMatch)
+        XCTAssertTrue(text(containing: "1 檔沒有報價").waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["stock-row.2303.TW"].label.contains("尚無報價"))
+        capture("自選四態-部分無報價")
+        try setFixtureFailure("partial", false)
+        sleep(4)
+
+        try setFixtureFailure("watchlist", true)
+        row.press(forDuration: 0.1, thenDragTo: app.tabBars.firstMatch)
+        XCTAssertTrue(text(containing: "更新失敗，顯示上次的資料").waitForExistence(timeout: 15))
+        XCTAssertTrue(row.exists, "更新失敗保留舊清單")
+        capture("自選四態-更新失敗")
+        try setFixtureFailure("watchlist", false)
+        tap(app.buttons["stock-list.retry"])
+        let cleared = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: banner)
+        wait(for: [cleared], timeout: 15)
+        logoutFromToolsAfterLogin()
+    }
+
+    private func login() {
+        let password = app.secureTextFields["server-password"]
+        if password.waitForExistence(timeout: 10) {
+            password.tap()
+            password.typeText("fixture-password")
+            tap(app.buttons["connect-button"])
+        }
+        XCTAssertTrue(app.tabBars.buttons["今日"].waitForExistence(timeout: 20))
+    }
+
+    /// Keychain 跨案例保留；登出才不會讓下一個案例看不到登入畫面。
+    private func logoutFromToolsAfterLogin() {
+        tap(app.tabBars.buttons["工具"])
+        logoutFromTools()
+        XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
+    }
+
+    private func setFixtureFailure(_ target: String, _ failing: Bool) throws {
+        let environment = ProcessInfo.processInfo.environment
+        let server = try XCTUnwrap(
+            environment["DSA_TEST_SERVER"] ?? environment["DSA_FIXTURE_PORT"].map { "http://127.0.0.1:\($0)" }
+        )
+        let url = try XCTUnwrap(URL(string: "\(server)/__fixture/fail?target=\(target)&on=\(failing ? 1 : 0)"))
+        let done = expectation(description: "fixture 切換 \(target)")
+        var status: Int?
+        URLSession.shared.dataTask(with: url) { _, response, _ in
+            status = (response as? HTTPURLResponse)?.statusCode
+            done.fulfill()
+        }.resume()
+        wait(for: [done], timeout: 10)
+        XCTAssertEqual(status, 200)
     }
 
     private var eventsCard: XCUIElement { app.descendants(matching: .any)["today.events"].firstMatch }

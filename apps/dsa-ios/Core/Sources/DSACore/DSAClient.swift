@@ -110,6 +110,11 @@ public struct DSAClient: Sendable {
         return response.items
     }
 
+    /// 同 `indices`，多帶市場狀態（盤前、盤中、盤後）。
+    public func indicesSnapshot(region: String = "tw") async throws -> MarketIndicesSnapshot {
+        try await get(["stocks", "indices"], query: [URLQueryItem(name: "region", value: region)])
+    }
+
     public func alertMonitorStatus() async throws -> AlertMonitorStatus {
         try await get(["alerts", "monitor", "status"])
     }
@@ -176,8 +181,10 @@ public struct DSAClient: Sendable {
         return try await perform(URLRequest(url: url))
     }
 
-    public func portfolioSnapshot() async throws -> PortfolioSnapshot {
-        try await get(["portfolio", "snapshot"], query: [URLQueryItem(name: "include_realtime", value: "true")])
+    public func portfolioSnapshot(displayCurrency: String? = nil) async throws -> PortfolioSnapshot {
+        var query = [URLQueryItem(name: "include_realtime", value: "true")]
+        if let displayCurrency { query.append(URLQueryItem(name: "display_currency", value: displayCurrency)) }
+        return try await get(["portfolio", "snapshot"], query: query)
     }
 
     private func get<T: Decodable>(_ path: [String], query: [URLQueryItem] = []) async throws -> T {
