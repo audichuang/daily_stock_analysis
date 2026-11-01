@@ -79,6 +79,9 @@ ADJUSTMENT_COLUMNS = [
 # `refresh_recent` 的前後視窗（曆日）。**`health` 檢查除權息是否都有因子時要用同一個數字**，
 # 否則會檢查到 daily 根本沒刷到的區間。
 ADJUSTMENT_WINDOW_DAYS = 90
+# `infer_rows` 往 start 之前多讀的曆日。重建視窗的 known 也要往前讀同樣天數，否則起點前的事件解釋不了
+# 起點後第一根 K 的跳空，同一事件會多推一筆（0.5 變 0.25）。
+INFER_LOOKBACK_DAYS = 60
 
 # 只有「受 ±10% 漲跌幅限制的普通股」能用價格推導。ETF／ETN／TDR 等依官方規則
 # 不受漲跌幅限制（部分海外 ETF、槓反產品、第二上市外國證券），推導必然誤判——
@@ -373,7 +376,7 @@ def infer_rows(conn, known, start, is_session=None):
     # 多讀 60 天再往前算 seq/gap：查詢先截在 `start` 的話，任何**既有**股票在起點後的
     # 前 6 根 K 都會被 MIN_BARS_BEFORE 當成「新上市」排除，那幾天的公司行動就永久漏記。
     # 事件本身仍只收 >= start（rebuild 只刪這段，寫回更早的列會與既有資料不一致）。
-    lookback = (pd.Timestamp(start) - pd.Timedelta(days=60)).date()
+    lookback = (pd.Timestamp(start) - pd.Timedelta(days=INFER_LOOKBACK_DAYS)).date()
     px = pd.read_sql(text(
         "select stock_id, date, open, high, low, close, change from market.price "
         "where date >= :s and close > 0 and open > 0"
@@ -547,7 +550,7 @@ def refresh_recent(engine=None, start=None, end=None):
         existing = existing_official_rows(conn, start_d)
         # infer_rows reads a 60-day lookback, so events before start_d still explain the first bar
         # inside the window; without them the same event is restored twice (0.5 becomes 0.25).
-        lookback_known = existing_official_rows(conn, start_d - datetime.timedelta(days=60))
+        lookback_known = existing_official_rows(conn, start_d - datetime.timedelta(days=INFER_LOOKBACK_DAYS))
     pre_known = set(zip(off["stock_id"], off["date"])) if len(off) else set()
     if len(off):
         dates = pd.to_datetime(off["date"], errors="coerce")
@@ -659,6 +662,8 @@ def _rebuild_frames(eng, start_d, with_reductions=True):
          "kind": "split", "source": "verified_manual",
          "close_before": None, "reference_price": None}
         for (sid, d), f in VERIFIED_ACTIONS.items()
+        # 起點前的列重建不動；不過濾的話 --start 會拿備援把起點前的官方列蓋掉。
+        if datetime.date.fromisoformat(d) >= start_d
     ])
     if len(verified):
         parts.append(verified)
@@ -668,6 +673,9 @@ def _rebuild_frames(eng, start_d, with_reductions=True):
     known = set(zip(merged["stock_id"], merged["date"]))
 
     with eng.connect() as conn:
+        # 只加進 known、不寫回：起點前的列重建不會刪，事件日無成交而復牌跨越 start 時，沒有這段會多推一筆。
+        lookback = existing_official_rows(conn, start_d - datetime.timedelta(days=INFER_LOOKBACK_DAYS))
+        known |= set(zip(lookback["stock_id"], pd.to_datetime(lookback["date"])))
         inf = infer_rows(conn, known, start_d)
 
     final = pd.concat([merged, inf.reindex(columns=cols)], ignore_index=True)
@@ -743,18 +751,21 @@ def classify_changes(current, final, start):
             "unchanged": pick(matched[~factor_diff & ~meta_diff])}
 
 
-def restored_returns(px, old_adj, new_adj, events):
+def restored_returns(px, old_adj, new_adj, events, sessions):
     """每個事件的事件日還原報酬與全期還原報酬（修正前後），回 DataFrame。
 
     ``px`` 長格式 ``stock_id, date, close``；``old_adj``／``new_adj`` 長格式因子表（欄位同 ``factors_to_panel``）。
     事件日報酬是事件日（或之後第一根 K）收盤對前一根 K 收盤；全期是該檔第一根到最後一根。
+    ``sessions`` 要是全市場交易日，與 ``load_factors`` 的面板同一把尺：只用單檔的 K 棒會把事件日無成交的事件
+    搬到下一根，再和那裡的推導列撞日去重，實際面板卻是兩筆都乘，重複還原就看不出來。
     """
     out = []
     panels = {}
     for sid, bars in px.sort_values(["stock_id", "date"]).groupby("stock_id"):
         close = bars.set_index("date")["close"].astype(float)
+        calendar = pd.DatetimeIndex(sessions).union(close.index)
         panels[sid] = (close, *[
-            close * factors_to_panel(adj, close.index, pd.Index([sid]))[sid]
+            close * factors_to_panel(adj, calendar, pd.Index([sid]))[sid].reindex(close.index)
             for adj in (old_adj, new_adj)])
     for sid, day in zip(events["stock_id"], events["date"]):
         row = {"stock_id": sid, "date": pd.Timestamp(day)}
@@ -769,6 +780,21 @@ def restored_returns(px, old_adj, new_adj, events):
         out.append(row)
     columns = ["stock_id", "date", "event_ret_old", "event_ret_new", "total_ret_old", "total_ret_new"]
     return pd.DataFrame(out).reindex(columns=columns)
+
+
+def duplicate_inferred_events(adj, px):
+    """推導列與官方／人工列解釋同一個跳空的清單：該檔前一根 K 之後、推導日（含）之前已有非推導事件。"""
+    inferred = adj[adj["source"] == "inferred_price"]
+    out = []
+    for sid, day in zip(inferred["stock_id"], pd.to_datetime(inferred["date"])):
+        bars = pd.DatetimeIndex(px.loc[px["stock_id"] == sid, "date"]).sort_values()
+        before = bars[bars < day]
+        prev = before[-1] if len(before) else pd.Timestamp.min
+        rows = adj[(adj["stock_id"] == sid) & (adj["source"] != "inferred_price")]
+        dates = pd.to_datetime(rows["date"])
+        if ((dates > prev) & (dates <= day)).any():
+            out.append({"stock_id": sid, "date": day})
+    return pd.DataFrame(out, columns=["stock_id", "date"])
 
 
 def official_same_day_overlap(parts):
@@ -800,17 +826,16 @@ def dry_run(engine=None, start="2013-01-01", with_reductions=True):
     applied = final.assign(date=pd.to_datetime(final["date"]))
     after = pd.concat([applied, current[current["date"] < pd.Timestamp(start_d)]], ignore_index=True)
     after = after.drop_duplicates(["stock_id", "date"], keep="first")
-    ids = sorted(set(moved["stock_id"]))
-    if ids:
-        with eng.connect() as conn:
-            px = pd.read_sql(text(
-                "select stock_id, date, close from market.price "
-                "where stock_id = any(:ids) and close > 0"), conn, params={"ids": ids}, parse_dates=["date"])
-    else:
-        px = pd.DataFrame(columns=["stock_id", "date", "close"])
+    ids = sorted(set(moved["stock_id"]) | set(after.loc[after["source"] == "inferred_price", "stock_id"]))
+    with eng.connect() as conn:
+        sessions = pd.read_sql(text("select distinct date from market.price"), conn, parse_dates=["date"])["date"]
+        px = pd.read_sql(text(
+            "select stock_id, date, close from market.price "
+            "where stock_id = any(:ids) and close > 0"), conn, params={"ids": ids}, parse_dates=["date"])
     cols = ["stock_id", "date", "factor", "source"]
-    returns = restored_returns(px, current[cols].copy(), after[cols].copy(), moved)
-    return {**diff, "returns": returns, "overlap": official_same_day_overlap(parts), "start": start_d}
+    returns = restored_returns(px, current[cols].copy(), after[cols].copy(), moved, sessions)
+    return {**diff, "returns": returns, "overlap": official_same_day_overlap(parts), "start": start_d,
+            "after": after[ADJUSTMENT_COLUMNS], "duplicates": duplicate_inferred_events(after, px)}
 
 
 def _pct(value):
@@ -851,6 +876,10 @@ def print_dry_run(result, show_unchanged=False):
     if show_unchanged:
         for _, r in unchanged.iterrows():
             print(f"  {r['stock_id']:<7} {r['date']:%Y-%m-%d} {r['factor']:.6f} {r['source']}")
+    duplicates = result["duplicates"]
+    print(f"推導列與官方事件重複 {len(duplicates)}")
+    for _, r in duplicates.iterrows():
+        print(f"  {r['stock_id']:<7} {r['date']:%Y-%m-%d}")
     overlap = result["overlap"]
     print(f"官方來源同日交集 {len(overlap)}")
     for _, r in overlap.iterrows():

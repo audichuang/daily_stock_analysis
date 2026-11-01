@@ -8,6 +8,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 import pytest
+from sqlalchemy import text
 
 from market_data import adjust, cli, db, sources
 
@@ -333,6 +334,13 @@ def test_rebuild_accepts_empty_split_source(monkeypatch):
     assert "1111" in set(final["stock_id"])
 
 
+def test_rebuild_keeps_verified_on_or_after_start(monkeypatch):
+    # 反向：過濾只擋起點前，起點後的備援仍要進來（ETF 不會被推導補回）
+    _rebuild_mocks(monkeypatch, lambda source, s, e: _split_frame())
+    final, _ = adjust._rebuild_frames(_Eng(), date(2026, 3, 31))
+    assert ("00631L" in set(final["stock_id"])) and ("00632R" not in set(final["stock_id"]))
+
+
 def test_rebuild_raises_on_split_failure_before_writing(monkeypatch):
     def fail(source, s, e):
         raise RuntimeError("down")
@@ -416,10 +424,104 @@ def test_restored_returns_00631l_matches_official_change():
     old = pd.DataFrame([_row("00631L", "2026-03-31", 1 / 23, "verified_manual")])
     new = pd.DataFrame([_row("00631L", "2026-03-31", 20.14 / 443.15, "twse_twtcau")])
     events = pd.DataFrame({"stock_id": ["00631L"], "date": [pd.Timestamp("2026-03-31")]})
-    row = adjust.restored_returns(px, old, new, events).iloc[0]
+    row = adjust.restored_returns(px, old, new, events, px["date"]).iloc[0]
     assert row["event_ret_old"] == pytest.approx(19.26 / (443.15 / 23) - 1)
     assert row["event_ret_new"] == pytest.approx(19.26 / 20.14 - 1)
     assert abs(row["event_ret_old"]) < 0.001
+
+
+def test_restored_returns_uses_market_sessions_so_double_count_shows():
+    # 事件日 01-07 該檔無成交、01-08 又有一筆推導：全市場面板兩筆都乘（0.25）；單檔 K 棒會撞日去重成 0.5
+    px = pd.DataFrame({"stock_id": "1234", "date": pd.to_datetime(["2099-01-06", "2099-01-08"]),
+                       "close": [100.0, 50.0]})
+    double = pd.DataFrame([_row("1234", "2099-01-07", 0.5, "tpex_pvchg"), _row("1234", "2099-01-08", 0.5, "inferred_price")])
+    single = double.iloc[[0]]
+    events = pd.DataFrame({"stock_id": ["1234"], "date": [pd.Timestamp("2099-01-08")]})
+    row = adjust.restored_returns(px, double, single, events, pd.to_datetime(["2099-01-06", "2099-01-07", "2099-01-08"])).iloc[0]
+    assert row["event_ret_old"] == pytest.approx(1.0)  # 50 / (100 × 0.25) - 1
+    assert row["event_ret_new"] == pytest.approx(0.0)
+
+
+def test_duplicate_inferred_events_only_flags_same_gap():
+    px = pd.DataFrame({"stock_id": ["1", "1", "2", "2"],
+                       "date": pd.to_datetime(["2099-01-06", "2099-01-08", "2099-01-06", "2099-01-08"])})
+    adj = pd.DataFrame([
+        _row("1", "2099-01-07", 0.5, "tpex_pvchg"), _row("1", "2099-01-08", 0.5, "inferred_price"),
+        _row("2", "2099-01-06", 0.5, "tpex_pvchg"), _row("2", "2099-01-08", 0.5, "inferred_price")])
+    assert list(adj.columns)[:2] == ["stock_id", "date"]
+    assert list(adjust.duplicate_inferred_events(adj, px)["stock_id"]) == ["1"]
+
+
+def _seed_cross_start(conn):
+    """1101 事件日無成交、復牌跨越 start；1102 在 start 後有無關跳空；1103 當天有成交，證明那天是交易日。"""
+    days = pd.bdate_range("2099-01-05", "2099-03-20")
+    event, unrelated = pd.Timestamp("2099-03-02"), pd.Timestamp("2099-03-10")
+    rows = []
+    for d in days:
+        if d != event:
+            rows.append(("1101", d, 100.0 if d < event else 50.0))
+        rows.append(("1102", d, 100.0 if d < unrelated else 50.0))
+        rows.append(("1103", d, 100.0))
+    for sid, d, px in rows:
+        conn.execute(text(
+            "insert into market.price (stock_id, date, open, high, low, close, change) "
+            "values (:s, :d, :p, :p, :p, :p, 0)"), {"s": sid, "d": d.date(), "p": px})
+    conn.execute(text(
+        "insert into market.price_adjustment (stock_id, date, factor, kind, source, close_before, reference_price) "
+        "values ('1101', '2099-03-02', 0.5, 'split', 'tpex_pvchg', 100, 50)"))
+    return days
+
+
+class _ConnEngine:
+    """把 pg_conn 包成 engine 介面：全部走同一個會 rollback 的交易。"""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    @contextlib.contextmanager
+    def connect(self):
+        yield self.conn
+
+    @contextlib.contextmanager
+    def begin(self):
+        yield self.conn
+
+
+def _offline_rebuild_mocks(monkeypatch):
+    # 只留 2099 種子：正式資料不進來，也不連外
+    monkeypatch.setattr(adjust, "VERIFIED_ACTIONS", {})
+    monkeypatch.setattr(adjust, "official_rows", lambda conn: pd.DataFrame(columns=adjust.ADJUSTMENT_COLUMNS))
+
+
+def test_rebuild_across_start_does_not_double_count(pg_conn, monkeypatch, capsys):
+    _offline_rebuild_mocks(monkeypatch)
+    # 起點前的備援不可蓋掉起點前的官方列
+    monkeypatch.setattr(adjust, "VERIFIED_ACTIONS", {("1101", "2099-03-02"): 1 / 23})
+    days = _seed_cross_start(pg_conn)
+    eng = _ConnEngine(pg_conn)
+    start = date(2099, 3, 3)
+    preview = adjust.dry_run(eng, start=start, with_reductions=False)
+    assert preview["duplicates"].empty
+    assert list(preview["added"]["stock_id"]) == ["1102"]  # 無關跳空仍要推導
+    final, _ = adjust._rebuild_frames(eng, start, False)
+    assert "1101" not in set(final["stock_id"])  # 起點前的事件只進 known，不寫回
+
+    adjust.rebuild(eng, start=start, with_reductions=False)
+    stored = pd.read_sql(text("select stock_id, date, factor, source from market.price_adjustment "
+                              "where date >= '2099-01-01' order by stock_id, date"), pg_conn, parse_dates=["date"])
+    assert stored[stored["stock_id"] == "1101"]["source"].tolist() == ["tpex_pvchg"]
+    assert stored[stored["stock_id"] == "1102"]["source"].tolist() == ["inferred_price"]
+
+    # 全市場交易日的面板：1101 只還原一次；dry-run 預告的因子表等於實際寫入的
+    panel = adjust.load_factors(pg_conn, days, pd.Index(["1101", "1102"]), start=date(2099, 1, 1))
+    assert panel["1101"].iloc[0] == pytest.approx(0.5)
+    assert panel["1102"].iloc[0] == pytest.approx(0.5)
+    predicted = preview["after"]
+    predicted = predicted[predicted["date"] >= pd.Timestamp("2099-01-01")].sort_values(["stock_id", "date"])
+    assert predicted["stock_id"].tolist() == stored["stock_id"].tolist()
+    assert predicted["date"].tolist() == stored["date"].tolist()
+    assert predicted["source"].tolist() == stored["source"].tolist()
+    assert predicted["factor"].astype(float).tolist() == pytest.approx(stored["factor"].astype(float).tolist())
 
 
 def test_official_same_day_overlap_ignores_manual_and_inferred():
@@ -439,7 +541,7 @@ def test_dry_run_never_opens_write_transaction_and_prints_buckets(monkeypatch, c
                        "close": [443.15, 19.26]})
     monkeypatch.setattr(adjust, "_rebuild_frames", lambda eng, s, w: (final, [final]))
     monkeypatch.setattr(adjust.pd, "read_sql",
-                        lambda sql, conn, **k: px if "market.price " in str(sql) + " " and "adjustment" not in str(sql) else current)
+                        lambda sql, conn, **k: px if "adjustment" not in str(sql) else current)
     adjust.print_dry_run(adjust.dry_run(_NoWriteEng()))
     out = capsys.readouterr().out
     assert "修改（因子變動）1" in out and "00631L" in out and "-4.37%" in out
