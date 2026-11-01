@@ -42,6 +42,12 @@ def _no_outbound_network(monkeypatch):
     monkeypatch.setattr(_socket.socket, "connect", guard)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_screening_data_dir(monkeypatch, tmp_path):
+    """熱點路徑在呼叫來源前就算好，不讓測試在 repo 底下建目錄。"""
+    monkeypatch.setenv("SCREENING_DATA_DIR", str(tmp_path))
+
+
 def _strategies():
     return load_all_strategies(STRATEGIES_DIR)
 

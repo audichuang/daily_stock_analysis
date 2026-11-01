@@ -10,10 +10,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.app import create_app
+from src.services import data_capability_service as capability_module
 from src.services.data_capability_service import DataCapabilityService
+
+
+@pytest.fixture(autouse=True)
+def _no_market_freshness(monkeypatch):
+    """conftest 不中和 DATABASE_URL：沒注入 loader 的測試不能連到真的 market schema。"""
+    monkeypatch.setattr(capability_module, "_load_market_freshness", lambda: {})
+    monkeypatch.setattr(capability_module, "_realtime_last_success", lambda: None)
 
 
 class _Fetcher:
@@ -1180,7 +1189,6 @@ def test_screening_last_success_uses_source_health_timestamp():
 
 
 def test_freshness_loader_without_database_url_skips_db(monkeypatch):
-    from src.services.data_capability_service import _load_market_freshness
-
+    monkeypatch.undo()  # 拿回 autouse fixture 換掉的真函式
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    assert _load_market_freshness() == {}
+    assert capability_module._load_market_freshness() == {}
