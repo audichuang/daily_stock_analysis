@@ -89,6 +89,47 @@ final class SessionStateTests: XCTestCase {
         await store.logout()
     }
 
+    /// 刷新進行中更換 Access 憑證並重連，refreshing 不可卡在 true，之後的刷新必須真的送出請求。
+    func testReconnectDuringRefreshDoesNotLeaveRefreshingStuck() async throws {
+        let url = URL(string: "https://stuck-\(UUID().uuidString.lowercased()).example.test")!
+        let previous = UserDefaults.standard.object(forKey: "serverAddress")
+        defer {
+            try? AccessVault.remove(for: url)
+            SessionVault.clear(for: url)
+            SessionStateURLProtocol.handler = nil
+            UserDefaults.standard.set(previous, forKey: "serverAddress")
+        }
+        let watchlistHits = LockedCounter()
+        let slow = LockedFlag(true)
+        SessionStateURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/auth/status") {
+                return (200, #"{"authEnabled":false,"loggedIn":false,"passwordSet":false}"#)
+            }
+            if path.hasSuffix("/stocks/watchlist") {
+                watchlistHits.increment()
+                if slow.value { Thread.sleep(forTimeInterval: 1.0) }
+                return (200, #"{"stocks":[]}"#)
+            }
+            return (200, "{}")
+        }
+        let store = AppStore(configurationFactory: stubConfiguration)
+        store.serverAddress = url.absoluteString
+        await store.connect()
+        XCTAssertTrue(store.connected)
+        let inFlight = Task { await store.refresh() }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(store.refreshing, "precondition: refresh must be in flight")
+        try store.saveAccessCredentials(clientID: "id", secret: "secret")
+        slow.value = false
+        await store.submitConnection()
+        await inFlight.value
+        XCTAssertFalse(store.refreshing)
+        let before = watchlistHits.value
+        await store.refresh()
+        XCTAssertGreaterThan(watchlistHits.value, before)
+    }
+
     func testTimestampWithExplicitZoneUsesDeviceTimeForBothISOFormats() {
         let taipei = TimeZone(secondsFromGMT: 8 * 3600)!
         let utc = TimeZone(secondsFromGMT: 0)!
@@ -351,4 +392,21 @@ private final class SessionStateURLProtocol: URLProtocol {
     }
 
     override func stopLoading() { }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    func increment() { lock.lock(); count += 1; lock.unlock() }
+}
+
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var flag: Bool
+    init(_ initial: Bool) { flag = initial }
+    var value: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return flag }
+        set { lock.lock(); flag = newValue; lock.unlock() }
+    }
 }

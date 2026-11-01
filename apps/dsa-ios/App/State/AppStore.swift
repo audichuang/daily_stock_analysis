@@ -123,6 +123,8 @@ final class AppStore: ObservableObject {
                 catch { candidateSession.invalidateAndCancel(); throw error }
                 session?.invalidateAndCancel()
                 generation = UUID()
+                // 舊 generation 的刷新收尾時會因對不上而提前 return，旗標要在這裡清，與 logout() 一致。
+                refreshing = false
                 clearData()
                 // 換伺服器或更換／移除 Access Token 都走這裡，舊 cookie 不能留給下一個工具頁。
                 toolWebDataStore = .nonPersistent()
