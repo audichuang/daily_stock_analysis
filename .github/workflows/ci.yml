@@ -282,6 +282,12 @@ jobs:
         env:
           DSA_WEB_SMOKE_PASSWORD: ''
         run: npm run test:smoke
+      # fork：runner 是 host 網路，兩個 run 的 web-gate 同時跑會搶固定的 4173
+      #（`127.0.0.1:4173 is already used`），由這一步挑一個空 port。
+      - name: 🔌 Pick a free fixture port
+        run: >-
+          node -e "const s=require('net').createServer().listen(0,'127.0.0.1',()=>{console.log('PLAYWRIGHT_FIXTURE_PORT='+s.address().port);s.close()})"
+          >> "$GITHUB_ENV"
       - name: 📸 Verify deterministic UI fixtures
         run: npx playwright test --config playwright.fixture.config.ts
       - name: 📎 Upload UI evidence

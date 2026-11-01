@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改進] 問股辨識股名時先以子字串過濾再做 regex，不再每則訊息替數萬個名稱各編一次 regex（每則省約 1 秒）；後端離線測試總耗時約減半，CI 分片耗時表同步重算。
+- [修復] CI 的 web-gate 改用每次挑選的空 port 跑 Playwright fixture，修正自架 runner 上兩個 run 同時跑時 `4173 is already used` 的假紅。
 - [改進] iOS 今日頁新增近期事件總覽，行事曆從工具頁移到這裡；工具頁只留警報與連線捷徑、常用四項，其餘收進「進階」，移除與原生畫面重複的完整分析入口。
 - [新功能] 新增 `AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE`（預設關閉）：API 程序以獨立執行緒只跑警報監控，不需開 `SCHEDULE_ENABLED`、不跑每日分析；即時價規則只在開盤時段評估且報價須屬於今天這一場（確認不了就不通知、不進冷卻；報價不帶時間時，將要觸發才另查最後一筆成交，並用該筆價格重新評估與通知），排程器同時開啟時不重複註冊。
 - [新功能] 新增 `GET /api/v1/alerts/monitor/status` 回報監控實際狀態、上次執行與通知管道；資料中心的 `alert.monitor` 同步認得獨立執行緒。
