@@ -8538,6 +8538,18 @@
             ],
             "title": "Older Count"
           },
+          "previous_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Action",
+            "description": "同檔前一筆的 action；只有 group_latest=true 且有較舊筆才填"
+          },
           "is_held": {
             "anyOf": [
               {

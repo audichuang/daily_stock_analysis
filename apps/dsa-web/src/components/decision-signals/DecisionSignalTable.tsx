@@ -46,7 +46,7 @@ export const DecisionSignalTable: React.FC<DecisionSignalTableProps> = ({ items,
     return (
       <span className="inline-flex flex-col items-end leading-tight">
         <span>{formatPrice(level, signalCurrency(item.market))}</span>
-        {/* 距離不是漲跌，用中性色。 */}
+        {/* 距離不是行情方向，用中性色。 */}
         <span className="text-xs text-secondary-text">{formatPercent(distance, 1)}</span>
       </span>
     );

@@ -153,10 +153,10 @@ describe('MarketReviewReportView', () => {
     expect(screen.getByRole('radio', { name: '台股 10/30' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('radio', { name: '美股 10/29' })).toBeInTheDocument();
     expect(screen.getByText('加權指數')).toBeInTheDocument();
-    expect(screen.queryByText('S&P')).not.toBeInTheDocument();
+    expect(screen.queryByText('標普500指數')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('radio', { name: '美股 10/29' }));
-    expect(screen.getByText('S&P')).toBeInTheDocument();
+    expect(screen.getByText('標普500指數')).toBeInTheDocument();
     expect(screen.queryByText('加權指數')).not.toBeInTheDocument();
   });
 

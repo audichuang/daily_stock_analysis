@@ -200,7 +200,6 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({ collapsed = false, onNav
               onClick={onToggleCollapsed}
               className={TOOLBAR_BUTTON_CLASS}
               aria-label={collapsed ? t('layout.expandSidebar') : t('layout.collapseSidebar')}
-              title={collapsed ? t('layout.expandSidebar') : t('layout.collapseSidebar')}
             >
               {collapsed ? <PanelLeftOpen className="h-[18px] w-[18px]" /> : <PanelLeftClose className="h-[18px] w-[18px]" />}
             </button>

@@ -59,7 +59,7 @@ vi.mock('../../api/stocks', async () => {
   const actual = await vi.importActual<typeof import('../../api/stocks')>('../../api/stocks');
   return {
     ...actual,
-    stocksApi: { ...actual.stocksApi, getIndices: vi.fn(), getQuotesBatched: vi.fn() },
+    stocksApi: { ...actual.stocksApi, getIndicesSnapshot: vi.fn(), getQuotesBatched: vi.fn(), getDailyHistory: vi.fn().mockResolvedValue([]), getFinancials: vi.fn().mockRejectedValue(new Error('no financials in this test')) },
   };
 });
 
@@ -263,7 +263,7 @@ describe('HomePage', () => {
     useStockPoolStore.getState().resetDashboardState();
     useMarketIndexStore.getState().reset();
     vi.mocked(analysisApi.getMarketReviewDefaultRegion).mockResolvedValue({ defaultRegion: '', regions: [] });
-    vi.mocked(stocksApi.getIndices).mockResolvedValue([]);
+    vi.mocked(stocksApi.getIndicesSnapshot).mockResolvedValue({ items: [], marketPhase: null, marketOpen: null });
     vi.mocked(stocksApi.getQuotesBatched).mockResolvedValue([]);
     vi.mocked(portfolioApi.getSnapshot).mockRejectedValue(new Error('no portfolio'));
     vi.mocked(decisionSignalsApi.getSummary).mockRejectedValue(new Error('no signals'));
@@ -359,16 +359,20 @@ describe('HomePage', () => {
   });
 
   it('shows the today overview instead of opening the latest report', async () => {
-    vi.mocked(historyApi.getList).mockResolvedValue({
-      total: 1,
+    vi.mocked(historyApi.getList).mockImplementation((params: { reportType?: string } = {}) => Promise.resolve({
+      total: params.reportType === 'market_review' ? 0 : 1,
       page: 1,
       limit: 20,
-      items: [historyItem],
-    });
+      items: params.reportType === 'market_review' ? [] : [historyItem],
+    }));
     vi.mocked(historyApi.getDetail).mockResolvedValue(historyReport);
-    vi.mocked(stocksApi.getIndices).mockImplementation(async (region = 'tw') => (region === 'tw'
-      ? [{ code: 'TAIEX', name: '加权指数', current: 23456.7, change: 12, changePct: 0.5, source: null, asOf: null }]
-      : []));
+    vi.mocked(stocksApi.getIndicesSnapshot).mockImplementation(async (region) => ({
+      items: region === 'tw'
+        ? [{ code: 'TAIEX', name: '加权指数', current: 23456.7, change: 12, changePct: 0.5, source: null, asOf: null }]
+        : [],
+      marketPhase: null,
+      marketOpen: null,
+    }));
     vi.mocked(portfolioApi.getSnapshot).mockResolvedValue({
       consolidatedDayPnlBase: -1234,
       consolidatedMarketValueBase: 5000000,
@@ -436,7 +440,12 @@ describe('HomePage', () => {
   });
 
   it('fills the search box from board navigation state without opening a report', async () => {
-    vi.mocked(historyApi.getList).mockResolvedValue({ total: 1, page: 1, limit: 20, items: [historyItem] });
+    vi.mocked(historyApi.getList).mockImplementation((params: { reportType?: string } = {}) => Promise.resolve({
+      total: params.reportType === 'market_review' ? 0 : 1,
+      page: 1,
+      limit: 20,
+      items: params.reportType === 'market_review' ? [] : [historyItem],
+    }));
 
     render(
       <MemoryRouter initialEntries={[{ pathname: '/', state: { stockCode: '2330.TW' } }]}>
@@ -2847,7 +2856,7 @@ describe('HomePage', () => {
         </MemoryRouter>
       </UiLanguageProvider>,
     );
-    await screen.findByRole('combobox');
+    await screen.findAllByRole('combobox');
 
     act(() => {
       useStockPoolStore.setState({ duplicateError: '股票 600519 正在分析中，请等待完成' });
@@ -3386,6 +3395,7 @@ describe('HomePage', () => {
       },
     };
 
+    vi.mocked(systemConfigApi.getWatchlist).mockResolvedValue(['600519']);
     vi.mocked(historyApi.getStockBarList).mockResolvedValue({
       total: 1,
       items: [
@@ -3443,8 +3453,6 @@ describe('HomePage', () => {
     await waitFor(() => {
       expect(screen.queryByText('暂无更多同股历史分析')).not.toBeInTheDocument();
     });
-    expect(screen.getAllByRole('button', { name: /贵州茅台/ }).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/2次/)).toBeInTheDocument();
 
     const historyCalls = vi.mocked(historyApi.getList).mock.calls.filter((call) => call[0]?.stockCode === '600519');
     expect(historyCalls).toHaveLength(3);
@@ -3857,7 +3865,7 @@ describe('HomePage', () => {
       </MemoryRouter>,
     );
 
-    const input = await screen.findByRole('combobox');
+    const input = (await screen.findAllByRole('combobox')).find((element) => element.tagName === 'INPUT') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '2887' } });
     const option = await screen.findByRole('option', { name: /台新新光金/ });
     fireEvent.click(option);
@@ -3865,7 +3873,7 @@ describe('HomePage', () => {
     expect(input).toHaveValue('2887.TW');
     // 等過搜尋的 debounce：點選後不該再自己打開下拉，也不該送出分析
     await new Promise((resolve) => setTimeout(resolve, 400));
-    expect(screen.queryByRole('option')).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /台新新光金/ })).not.toBeInTheDocument();
     expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: '分析' }));

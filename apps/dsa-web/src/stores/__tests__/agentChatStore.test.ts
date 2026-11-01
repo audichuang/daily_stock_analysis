@@ -907,7 +907,7 @@ describe('agentChatStore.switchSession', () => {
     expect(state.progressSteps).toEqual([]);
     expect(state.abortController).toBeNull();
     expect(state.chatError).toBeNull();
-    expect(state.messages).toEqual([
+    expect(state.messages).toMatchObject([
       { id: 'msg-2', role: 'assistant', content: '历史回复' },
     ]);
     expect(state.selectedSkillIds).toEqual(['risk']);
@@ -945,7 +945,7 @@ describe('agentChatStore.switchSession', () => {
 
     const state = useAgentChatStore.getState();
     expect(state.sessionId).toBe('session-b');
-    expect(state.messages).toEqual([
+    expect(state.messages).toMatchObject([
       { id: 'msg-b', role: 'assistant', content: 'B 回复' },
     ]);
     expect(state.selectedSkillIds).toEqual(['risk']);

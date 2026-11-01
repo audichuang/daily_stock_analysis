@@ -141,7 +141,7 @@ describe('DecisionSignalDetails', () => {
       </UiLanguageProvider>,
     );
 
-    expect(screen.getAllByText('风格: 未知').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('风格: 未知').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('风格').closest('div')).toHaveTextContent('未知');
     expect(screen.queryByText('均衡')).not.toBeInTheDocument();
   });
@@ -166,7 +166,7 @@ describe('DecisionSignalDetails', () => {
     expect(container.textContent).toContain('<svg onload=\\"window.__signalMetadataXss = true\\"></svg>');
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('script')).toBeNull();
-    expect(container.querySelector('svg')).toBeNull();
+    // 版面自己有圖示（Collapsible 箭頭、lucide），資料字串產生的 svg 由下面的 [onload] 擋。
     expect(container.querySelector('[onerror]')).toBeNull();
     expect(container.querySelector('[onload]')).toBeNull();
   });

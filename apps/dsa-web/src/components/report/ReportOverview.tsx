@@ -17,7 +17,7 @@ import { formatDateTime, formatPercent, formatPrice } from '../../utils/format';
 import { getMarketPhaseShortLabel, getPartialBarLabel } from '../../utils/marketPhase';
 import { marketToneClass } from '../../utils/marketTone';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
-import { Badge, Card, IconButton, ScoreBar } from '../common';
+import { Badge, Card, IconButton, ScoreBar, Tooltip } from '../common';
 import { ShareImageButton } from './ShareImageButton';
 
 interface ReportOverviewProps {
@@ -234,10 +234,11 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
 
   const noPositionAdvice = summary.positionAdvice?.noPosition?.trim() || null;
   const hasPositionAdvice = summary.positionAdvice?.hasPosition?.trim() || null;
-  const adviceColumns = [
+  type AdviceColumn = { key: string; title: string; body: string; pinned: boolean };
+  const adviceColumns = ([
     noPositionAdvice ? { key: 'no-position', title: text.ifNoPosition, body: noPositionAdvice, pinned: false } : null,
     hasPositionAdvice ? { key: 'has-position', title: text.ifHasPosition, body: hasPositionAdvice, pinned: meta.held === true } : null,
-  ].filter((column): column is { key: string; title: string; body: string; pinned: boolean } => column !== null);
+  ] as Array<AdviceColumn | null>).filter((column): column is AdviceColumn => column !== null);
   // held 為 null 是無法判定，維持原順序、不標記；只有確定持有才把「手上有」置頂。
   adviceColumns.sort((a, b) => Number(b.pinned) - Number(a.pinned));
 
@@ -252,6 +253,11 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   const canToggleWatchlist = Boolean(watchlist) && meta.reportType !== 'market_review' && meta.assetType !== 'index';
   const inWatchlist = watchlist?.isInWatchlist(meta.stockCode) ?? false;
   const trendPrediction = summary.trendPrediction?.trim() || null;
+  const confidenceText = (
+    <>
+      {text.confidenceLabel} <span className="font-semibold text-foreground">{summary.confidenceLevel?.trim()}</span>
+    </>
+  );
 
   return (
     <div className="space-y-4">
@@ -329,9 +335,11 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
           <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-secondary-text">
             {summary.timeSensitivity?.trim() ? <span data-testid="report-time-sensitivity">{summary.timeSensitivity.trim()}</span> : null}
             {summary.confidenceLevel?.trim() ? (
-              <span title={summary.confidenceReason?.trim() || undefined}>
-                {text.confidenceLabel} <span className="font-semibold text-foreground">{summary.confidenceLevel.trim()}</span>
-              </span>
+              summary.confidenceReason?.trim() ? (
+                <Tooltip content={summary.confidenceReason.trim()}>
+                  <span>{confidenceText}</span>
+                </Tooltip>
+              ) : <span>{confidenceText}</span>
             ) : null}
             {score !== null ? <ScoreBar score={score} label={text.modelScore} className="w-56 max-w-full" /> : null}
             {comparisonParts.length > 0 ? (

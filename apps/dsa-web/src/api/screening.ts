@@ -444,7 +444,7 @@ export const screeningApi = {
 
   async getStrategies(market?: string): Promise<ScreeningStrategiesResponse> {
     const response = await apiClient.get<Record<string, unknown>>('/api/v1/screening/strategies', {
-      params: { market: market || undefined },
+      ...(market ? { params: { market } } : {}),
       timeout: SCREENING_REQUEST_TIMEOUT_MS,
     });
     return toCamelCase<ScreeningStrategiesResponse>(response.data);

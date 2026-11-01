@@ -20,6 +20,7 @@ vi.mock('../../../api/history', () => ({
 vi.mock('../../../api/stocks', () => ({
   stocksApi: {
     getDailyHistory: vi.fn().mockResolvedValue([]),
+    getFinancials: vi.fn().mockRejectedValue(new Error('no financials in this test')),
   },
 }));
 

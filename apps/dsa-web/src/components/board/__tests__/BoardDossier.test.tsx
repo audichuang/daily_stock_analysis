@@ -49,7 +49,7 @@ describe('BoardDossier', () => {
     const cell = render(<BoardDossierCell summary={adjusted} price={1400} />);
     expect(cell.container.textContent).not.toMatch(/%/);
     expect(cell.container.textContent).toMatch(/ex-div|除權息|除权息/);
-    expect(cell.container.textContent).toContain('BOS'); // 結構方向不受影響
+    expect(cell.container.textContent).toContain('结构突破'); // 結構方向不受影響；沒有 Provider 時預設 zh
     cell.unmount();
     render(<BoardDossierPanel code="1516.TW" summary={adjusted} price={24.73} levelAlertsEnabled />);
     expect(screen.getByRole('note')).toBeInTheDocument();
@@ -120,7 +120,8 @@ describe('BoardDossier', () => {
 
   it('shows the structure kind in plain words only under Chinese UI, keeping unknown kinds', () => {
     const { container, rerender } = render(<BoardDossierCell summary={summary} price={1400} />);
-    expect(container.textContent).toContain('BOS'); // 測試環境是英文
+    expect(container.textContent).toContain('结构突破'); // 沒有 Provider 時預設 zh
+    expect(container.textContent).not.toContain('BOS');
     rerender(<BoardDossierCell summary={{ ...summary, structure: { ...summary.structure!, kind: 'SWEEP' } }} price={1400} />);
     expect(container.textContent).toContain('SWEEP');
   });

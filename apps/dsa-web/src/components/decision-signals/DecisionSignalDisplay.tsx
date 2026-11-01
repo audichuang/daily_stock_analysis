@@ -1,7 +1,7 @@
 import type React from 'react';
 import { PanelRightOpen } from 'lucide-react';
 import type { StockQuote } from '../../api/stocks';
-import { Badge, Card, Collapsible, JsonViewer } from '../common';
+import { Badge, Card, Collapsible, JsonViewer, Tooltip } from '../common';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import type { UiLanguage, UiTextKey } from '../../i18n/uiText';
 import type {
@@ -83,6 +83,7 @@ function formatDateTime(value: string | null | undefined, language: UiLanguage):
   }).format(date);
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- 訊號表與抽屜共用的格式化，留在同檔
 export const formatSignalDateTime = formatDateTime;
 
 function formatNumber(value: number | null | undefined): string {
@@ -90,6 +91,7 @@ function formatNumber(value: number | null | undefined): string {
   return Number(value).toFixed(2).replace(/\.?0+$/, '');
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- 訊號表與抽屜共用的格式化，留在同檔
 export function formatConfidence(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '-';
   const normalized = Math.abs(value) <= 1 ? value * 100 : value;
@@ -626,11 +628,12 @@ export const PortfolioSignalBadge: React.FC<{ item?: DecisionSignalItem; loading
   }
   // 手機沒有 hover，不放 title。
   const hint = showHint ? (formatSignalText(item.riskSummary) || formatSignalText(item.watchConditions) || undefined) : undefined;
-  return (
-    <span title={hint} className="inline-flex">
-      <Badge variant={getActionVariant(item)}>{getActionLabel(item, t)}</Badge>
-    </span>
-  );
+  const badge = <Badge variant={getActionVariant(item)}>{getActionLabel(item, t)}</Badge>;
+  return hint ? (
+    <Tooltip content={hint}>
+      <span aria-label={hint} className="inline-flex">{badge}</span>
+    </Tooltip>
+  ) : badge;
 };
 
 type PortfolioSignalSummaryProps = {

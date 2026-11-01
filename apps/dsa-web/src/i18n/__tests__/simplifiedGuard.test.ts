@@ -38,19 +38,16 @@ const countSimplified = (source: string): number => {
 const BASELINE: Record<string, number> = {
   'components/alerts/AlertRuleForm.tsx': 17,
   'components/history/HistoryList.tsx': 4,
-  'components/report/MarketReviewReportView.tsx': 6,
+  // 含 zh-TW 的「跌」（繁簡同字，字表誤判）：下跌、漲停/跌停、漲跌幅、領跌、漲跌停。
+  'components/report/MarketReviewReportView.tsx': 7,
   'components/report/ReportDetails.tsx': 1,
   'components/run-flow/RunFlowEventList.tsx': 1,
-  'components/settings/LLMChannelEditor.tsx': 148,
   'components/settings/SettingsPanelErrorBoundary.tsx': 7,
   'contexts/AuthContext.tsx': 3,
-  'pages/ChatPage.tsx': 1,
   'pages/HomePage.tsx': 3,
-  'pages/NotFoundPage.tsx': 4,
-  'pages/PortfolioPage.tsx': 90,
   'pages/RealtimeBoardPage.tsx': 3,
   'pages/SettingsPage.tsx': 2,
-  'pages/StockScreeningPage.tsx': 175,
+  'pages/StockScreeningPage.tsx': 1,
 };
 
 const collectStrings = (value: unknown, out: string[] = []): string[] => {

@@ -208,8 +208,8 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({
                       return (
                         <div className="rounded-lg border border-border/70 bg-card px-3 py-2 text-xs tabular-nums text-foreground shadow-soft-card">
                           <p className="mb-1 text-secondary-text">{String(bar.date).slice(0, 10)}</p>
-                          <p>{text.open} {asPrice(bar.open)}　{text.close} {asPrice(bar.close)}</p>
-                          <p>{text.high} {asPrice(bar.high)}　{text.low} {asPrice(bar.low)}</p>
+                          <p>{text.open} {asPrice(bar.open)}{' '}{text.close} {asPrice(bar.close)}</p>
+                          <p>{text.high} {asPrice(bar.high)}{' '}{text.low} {asPrice(bar.low)}</p>
                           {bar.ma20 !== null ? <p>MA20 {asPrice(bar.ma20)}</p> : null}
                           {bar.ma60 !== null ? <p>MA60 {asPrice(bar.ma60)}</p> : null}
                         </div>

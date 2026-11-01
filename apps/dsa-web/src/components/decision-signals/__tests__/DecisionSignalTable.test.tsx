@@ -30,13 +30,13 @@ const signal: DecisionSignalItem = {
 
 const quote: StockQuote = { stockCode: '2330.TW', currentPrice: 1000, changePercent: -1.5 };
 
-function renderTable(item: DecisionSignalItem = signal, currentQuote: StockQuote | undefined = quote) {
+function renderTable(item: DecisionSignalItem = signal, currentQuote: StockQuote | null = quote) {
   window.localStorage.setItem('dsa.uiLanguage', 'zh');
   const onSelect = vi.fn();
   const onShowOlder = vi.fn();
   render(
     <UiLanguageProvider>
-      <DecisionSignalTable items={[item]} quoteFor={() => currentQuote} onSelect={onSelect} onShowOlder={onShowOlder} />
+      <DecisionSignalTable items={[item]} quoteFor={() => currentQuote ?? undefined} onSelect={onSelect} onShowOlder={onShowOlder} />
     </UiLanguageProvider>,
   );
   return { onSelect, onShowOlder };
@@ -73,7 +73,7 @@ describe('DecisionSignalTable', () => {
   });
 
   it('shows no reading on a phone row when the quote is missing', () => {
-    renderTable(signal, undefined);
+    renderTable(signal, null);
 
     const row = screen.getByTestId('signal-mobile-row-7');
     expect(row).toHaveTextContent('—');

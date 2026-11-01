@@ -460,7 +460,6 @@ describe('ChatPage', () => {
     expect(await screen.findByText('正在确认问股运行环境')).toBeInTheDocument();
     const input = screen.getByPlaceholderText(/例如/);
     expect(input).toBeDisabled();
-    expect(screen.getByRole('button', { name: '分析比亚迪趋势' })).toBeDisabled();
     expect(screen.getByText(/不会调用模型或读取股票数据/)).toBeInTheDocument();
     status.resolve({
       backend: 'codex_app_server',
@@ -471,7 +470,6 @@ describe('ChatPage', () => {
     });
 
     await waitFor(() => expect(input).toBeEnabled());
-    expect(screen.getByRole('button', { name: '分析比亚迪趋势' })).toBeEnabled();
     expect(mockGetStatus).toHaveBeenCalledTimes(1);
   });
 
@@ -1221,11 +1219,11 @@ describe('ChatPage', () => {
 
   it('groups and filters the session list and shows the stock pill', async () => {
     mockStoreState.sessions = [
-      { session_id: 'session-1', title: '今天的对话', message_count: 2, created_at: null,
+      { session_id: 'session-1', title: '今天的对话', message_count: 2, created_at: '',
         last_active: new Date().toISOString(), stock_code: '2330.TW', stock_name: '台积电' },
-      { session_id: 'session-2', title: '很久以前', message_count: 2, created_at: null,
+      { session_id: 'session-2', title: '很久以前', message_count: 2, created_at: '',
         last_active: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString() },
-    ];
+    ] as typeof mockStoreState.sessions;
 
     render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
 

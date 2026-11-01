@@ -154,7 +154,6 @@ const DailyBars: React.FC<{ days: UsageDayBreakdown[]; selected: string | null; 
             <button
               key={day.date}
               type="button"
-              title={label}
               aria-label={label}
               aria-pressed={isSelected}
               onClick={() => onSelect(isSelected ? null : day.date)}

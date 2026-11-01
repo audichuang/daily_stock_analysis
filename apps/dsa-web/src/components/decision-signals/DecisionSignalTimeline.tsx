@@ -69,6 +69,7 @@ function formatDateTime(value: string | null | undefined, language: UiLanguage):
 }
 
 /** 橫軸短日期：只到月日，時間留給 tooltip。 */
+// eslint-disable-next-line react-refresh/only-export-components -- 時間線與其測試共用，留在同檔
 export function formatTimelineAxisDate(value: number, language: UiLanguage): string {
   if (!Number.isFinite(value)) return '';
   return new Intl.DateTimeFormat(LOCALE_BY_LANGUAGE[language], { month: 'numeric', day: 'numeric' }).format(new Date(value));

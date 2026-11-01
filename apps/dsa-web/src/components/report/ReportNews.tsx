@@ -2,7 +2,7 @@ import type React from 'react';
 import { useState, useEffect, useCallback } from 'react';
 import type { ParsedApiError } from '../../api/error';
 import { getParsedApiError } from '../../api/error';
-import { ApiErrorAlert, Card } from '../common';
+import { ApiErrorAlert, Card, Tooltip } from '../common';
 import { DashboardPanelHeader, DashboardStateBlock } from '../dashboard';
 import { historyApi } from '../../api/history';
 import type { NewsIntelItem, ReportLanguage } from '../../types/analysis';
@@ -124,7 +124,7 @@ export const ReportNews: React.FC<ReportNewsProps> = ({ recordId, limit = 8, lan
               const meta = [item.source?.trim(), date].filter(Boolean).join(' · ');
               const row = (
                 <>
-                  <span className="min-w-0 flex-1 truncate text-sm text-foreground" title={item.keyPoint || title}>{title}</span>
+                  <Tooltip content={item.keyPoint || title} className="min-w-0 flex-1"><span className="block truncate text-sm text-foreground">{title}</span></Tooltip>
                   {meta ? <span className="max-w-[45%] shrink-0 truncate text-xs tabular-nums text-muted-text">{meta}</span> : null}
                 </>
               );

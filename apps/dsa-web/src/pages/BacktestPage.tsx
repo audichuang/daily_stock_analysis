@@ -241,7 +241,7 @@ const RunSummary: React.FC<{ data: BacktestRunResponse; language: UiLanguage }> 
       <span>{text.saved} <span className="tabular-nums text-foreground">{data.saved}</span></span>
       <span>{text.completed} <span className="tabular-nums text-foreground">{data.completed}</span></span>
       <span>{text.insufficient} <span className="tabular-nums text-foreground">{data.insufficient}</span></span>
-      {data.errors > 0 ? <span>{text.errors} <span className="tabular-nums text-danger">{data.errors}</span></span> : null}
+      {data.errors > 0 ? <span>{text.errors} <span className="tabular-nums text-warning">{data.errors}</span></span> : null}
       {data.message ? <span className="w-full">{data.message}</span> : null}
     </div>
   );

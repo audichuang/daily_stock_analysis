@@ -21,7 +21,7 @@ vi.mock('../../api/systemConfig', () => ({ systemConfigApi: { getWatchlist } }))
 vi.mock('../../api/portfolio', () => ({ portfolioApi: { getSnapshot } }));
 vi.mock('../../api/funds', () => ({ fundsApi: { listHoldings } }));
 vi.mock('../../api/stocks', () => ({
-  stocksApi: { getQuotes, getIndices, getMarketStatus, getDossierSummaries, getIntradayTrends, getTrend: vi.fn().mockResolvedValue([]) },
+  stocksApi: { getQuotes, getIndices, getIndicesSnapshot: (region: string) => Promise.resolve(getIndices(region)).then((items: unknown) => ({ items, marketPhase: null, marketOpen: null })), getFinancials: vi.fn().mockRejectedValue(new Error('no financials in this test')), getMarketStatus, getDossierSummaries, getIntradayTrends, getTrend: vi.fn().mockResolvedValue([]) },
 }));
 vi.mock('../../api/history', () => ({ historyApi: { getList: getHistoryList } }));
 vi.mock('../../hooks/useStockIndex', () => ({ useStockIndex: () => ({ index: [] }) }));
@@ -398,9 +398,9 @@ describe('RealtimeBoardPage scope', () => {
   it('groups rows into TW holdings, US holdings and watchlist sections', async () => {
     renderPage();
     const tw = await screen.findByRole('table', { name: 'Holdings (TW)' });
-    expect(within(tw).getByText('2887.TW')).toBeInTheDocument();
-    expect(within(screen.getByRole('table', { name: 'Holdings (US)' })).getByText('NVDA')).toBeInTheDocument();
-    expect(within(screen.getByRole('table', { name: 'Watchlist' })).getByText('2454.TW')).toBeInTheDocument();
+    expect(within(tw).getAllByText('2887.TW').length).toBeGreaterThan(0);
+    expect(within(screen.getByRole('table', { name: 'Holdings (US)' })).getAllByText('NVDA').length).toBeGreaterThan(0);
+    expect(within(screen.getByRole('table', { name: 'Watchlist' })).getAllByText('2454.TW').length).toBeGreaterThan(0);
   });
 
   it('has no status or time column', async () => {

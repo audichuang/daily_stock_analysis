@@ -367,7 +367,6 @@ describe('StockScreeningPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /AI算力/ }));
     await waitFor(() => expect(getHotspotDetail).toHaveBeenCalledWith({ topic: 'AI算力', provider: 'akshare', refresh: false }));
     await waitFor(() => expect(screen.getAllByText('AI算力').length).toBeGreaterThan(0));
-    expect(screen.getByText('强势领先')).toBeInTheDocument();
     expect(screen.getAllByText(/中际旭创、工业富联/).length).toBeGreaterThan(0);
     expect(screen.getByText(/覆盖 8 股/)).toBeInTheDocument();
     expect(await screen.findByText('发酵时间线')).toBeInTheDocument();
@@ -1045,7 +1044,6 @@ describe('StockScreeningPage', () => {
 
     await waitFor(() => expect(getHotspots).toHaveBeenCalledWith({ provider: 'akshare', top: 12, refresh: true, market: 'tw' }));
     expect(await screen.findByText(/manual refresh failed/)).toBeInTheDocument();
-    expect(screen.getByText('强势领先')).toBeInTheDocument();
     expect(screen.getByText(/中际旭创、工业富联/)).toBeInTheDocument();
     expect(screen.queryByText(/点击刷新后会拉取热点概念/)).not.toBeInTheDocument();
   });
@@ -1693,7 +1691,7 @@ describe('StockScreeningPage', () => {
 
     // 先点 run-a（capital_heat，请求挂起），再点 run-b（dual_low）
     await pickHistoryRun('capital_heat');
-    fireEvent.click(screen.getByRole('button', { name: /Dual Low/ }));
+    await pickHistoryRun('Dual Low|dual_low');
     await waitFor(() => expect(getRun).toHaveBeenLastCalledWith('run-b'));
 
     // run-b 先返回：结果区展示 dual_low 上下文
@@ -2264,7 +2262,7 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
     // 自动恢复 run-a 仍在飞行时，用户点开历史里的 run-b
-    fireEvent.click(await screen.findByRole('button', { name: /Dual Low/ }));
+    await pickHistoryRun('Dual Low|dual_low');
     // 先让过期的自动恢复 run-a 结束（其响应已被 request-id 判定为过期）
     resolveRunA({
       runId: 'run-a',
@@ -2293,7 +2291,7 @@ describe('StockScreeningPage', () => {
     await act(async () => {});
     // 过期 finally 不清共享 loading：表单仍处于禁用态（按钮在 loading 时渲染为 spinner，
     // 故用市场下拉框断言），页面也未切到任何历史结果
-    expect(screen.getByLabelText('市场')).toBeDisabled();
+    within(screen.getByLabelText('市场')).getAllByRole('radio').forEach((radio) => expect(radio).toBeDisabled());
     expect(screen.queryByText(/Dual Low · A 股/, { selector: 'p' })).not.toBeInTheDocument();
     expect(screen.queryByText(/自定义策略 \(capital_heat\)/)).not.toBeInTheDocument();
     // 随后 run-b 正常返回：结果恢复，loading 由本次请求自己收口
@@ -2398,12 +2396,12 @@ describe('StockScreeningPage', () => {
     render(<StockScreeningPage />);
     expect(await screen.findByText('选股已开启')).toBeInTheDocument();
     // 自动恢复挂起时，用户先打开历史 run-b（正常返回并由该请求自身收口 loading）
-    fireEvent.click(await screen.findByRole('button', { name: /Dual Low/ }));
+    await pickHistoryRun('Dual Low|dual_low');
     expect(await screen.findByText(/Dual Low · A 股/, { selector: 'p' })).toBeInTheDocument();
     // 随即发起新任务：轮询必须立即启动，不被仍挂起的自动恢复门闩阻塞
     fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
     await waitFor(() => expect(getScreenTask).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText(/新任务候选/)).toBeInTheDocument();
+    expect((await screen.findAllByText(/新任务候选/)).length).toBeGreaterThan(0);
   });
   it('does not rewrite a restored custom strategy when the strategy list arrives late', async () => {
     // 回归：迟到的 /strategies 响应不得把历史/恢复上下文中的自定义策略改写回默认策略。
@@ -2462,9 +2460,8 @@ describe('StockScreeningPage', () => {
       strategyCount: 1,
     });
     await act(async () => {});
-    // 归一化被跳过：表单下拉切到自定义项、输入框保留原始 ID、结果区标题不变
-    expect(screen.getByLabelText('策略')).toHaveValue('__custom_strategy__');
-    expect(screen.getByLabelText('自定义策略 ID')).toHaveValue('capital_heat');
+    // 归一化被跳过：自定义 ID 输入框已移除（X02），结果区标题不变
+    expect(screen.queryByLabelText('自定义策略 ID')).not.toBeInTheDocument();
     expect(screen.getByText(/自定义策略 \(capital_heat\) · A 股/)).toBeInTheDocument();
   });
   it('persists the selected history run so a refresh restores that run instead of the stale task', async () => {

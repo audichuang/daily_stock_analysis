@@ -968,12 +968,15 @@ const HomePage: React.FC = () => {
     [pickedSuggestion, query, selectedAnalysisSkills, submitAnalysis],
   );
 
+  // 同一份導覽狀態只處理一次：setQuery 會換掉 handleSubmitAnalysis，導覽清掉 state 前 effect 可能重跑而重複送出分析。
+  const handledNavigationStateRef = useRef<unknown>(null);
   useEffect(() => {
     const state = location.state as StockAnalysisNavigationState | null;
     const stockCode = typeof state?.stockCode === 'string' ? state.stockCode.trim() : '';
-    if (!stockCode) {
+    if (!stockCode || handledNavigationStateRef.current === location.state) {
       return;
     }
+    handledNavigationStateRef.current = location.state;
     const stockName = typeof state?.stockName === 'string' ? state.stockName.trim() : '';
     setQuery(stockCode);
     navigate(location.pathname, { replace: true, state: null });

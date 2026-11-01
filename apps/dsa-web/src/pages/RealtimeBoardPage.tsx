@@ -60,7 +60,7 @@ const SPARK_REFRESH_MS = 3 * 60_000; // 與後端分時快取 TTL 相同，再�
 const SCOPE_STORAGE_KEY = 'dsa.board.scope';
 const SORT_STORAGE_KEY = 'dsa.board.sort';
 const SPARK_STORAGE_KEY = 'dsa.board.spark';
-const ATTENTION_MOVE_PCT = 5; // 單日漲跌超過這個幅度才進「需注意」，常態波動是噪音
+const ATTENTION_MOVE_PCT = 5; // 單日變動超過這個幅度才進「需注意」，常態波動是噪音
 const DESKTOP_MEDIA_QUERY = '(min-width: 768px)'; // 與 DataTable 的 md 斷點一致
 
 type Scope = 'all' | 'watch' | 'holdings';
@@ -917,7 +917,7 @@ const RealtimeBoardPage: React.FC = () => {
             ),
           }
         : null;
-    const cells = [
+    const cells = ([
       priceCell(t('board.detail.open'), q?.open),
       priceCell(t('board.detail.high'), q?.high),
       priceCell(t('board.detail.low'), q?.low),
@@ -930,7 +930,7 @@ const RealtimeBoardPage: React.FC = () => {
       q?.limitDown != null ? { label: t('board.detail.limitDown'), value: <span className="text-market-down">{formatPrice(q.limitDown, row.currency)}</span> } : null,
       q?.volumeRatio != null ? { label: t('board.detail.volumeRatio'), value: formatNumber(q.volumeRatio, 2) } : null,
       q?.amplitude != null ? { label: t('board.detail.amplitude'), value: `${formatNumber(q.amplitude, 2)}%` } : null,
-    ].filter((c): c is { label: string; value: React.ReactNode } => c !== null);
+    ] as Array<{ label: string; value: React.ReactNode } | null>).filter((c): c is { label: string; value: React.ReactNode } => c !== null);
     return (
       // 寬表橫捲時展開內容黏在左邊，不用橫滑整張表才找得到按鈕
       <div data-testid="board-expanded" className="sticky left-0 w-[min(100%,calc(100vw-4rem))] bg-base/40">
