@@ -66,6 +66,10 @@ def object_mentions(text: str, registry: IndexRegistry, lookup: dict) -> tuple[O
         folded += part
         positions.extend([offset] * len(part))
     for name, rows in lookup["names"].items():
+        # fork：lookup 有數萬個名稱，每個都編一次 regex 會擠爆 re 的快取、每則訊息約 1 秒；
+        # 先用子字串過濾，沒出現就不可能有 match，結果不變。
+        if name not in folded:
+            continue
         for occurrence in re.finditer(re.escape(name), folded):
             start, end = positions[occurrence.start()], positions[occurrence.end() - 1] + 1
             if (not _has_ascii_token_boundaries(text, start, end)
