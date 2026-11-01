@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import calendar
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date as date_type, datetime, time, timedelta, timezone
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -131,15 +131,19 @@ def get_usage_dashboard(
     offset: int = Query(0, ge=0, description="Call records to skip"),
     call_type: Optional[str] = Query(None, max_length=32, description="Only list this call type"),
     sort: UsageRecordSort = Query("newest", description="'newest' | 'oldest' | 'tokens'"),
+    day: Optional[date_type] = Query(None, description="Only list records of this day; totals keep the period"),
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> UsageDashboardResponse:
     normalized_period = _normalize_period(period)
     from_dt, to_dt = _date_range(normalized_period)
     data = db_manager.get_llm_usage_summary(from_dt, to_dt)
+    # 每日長條的篩選只收窄明細，上方彙總仍是整段期間；超出期間的日子查無資料，不放寬範圍。
+    records_from = max(from_dt, datetime.combine(day, time.min)) if day else from_dt
+    records_to = min(to_dt, datetime.combine(day, time.max)) if day else to_dt
     records = db_manager.get_llm_usage_records(
-        from_dt, to_dt, limit=limit, offset=offset, call_type=call_type, sort=sort,
+        records_from, records_to, limit=limit, offset=offset, call_type=call_type, sort=sort,
     )
     payload = _build_summary_payload(normalized_period, from_dt, to_dt, data, db_manager)
     payload["recent_calls"] = [_enrich_call_record(row) for row in records]
-    payload["recent_total"] = db_manager.count_llm_usage_records(from_dt, to_dt, call_type=call_type)
+    payload["recent_total"] = db_manager.count_llm_usage_records(records_from, records_to, call_type=call_type)
     return UsageDashboardResponse(**payload)

@@ -61,9 +61,14 @@ describe('AlertRuleList', () => {
   it('renders a price rule as a sentence with price and distance', () => {
     renderList([priceRule], { quotes: { '2330.TW': { price: 1000, name: '台積電' } } });
     expect(screen.getByText('當 台積電 2330.TW 站上 1,100 時提醒')).toBeInTheDocument();
-    expect(screen.getByText(/現價 1,000 · 距離 10\.0%/)).toBeInTheDocument();
+    expect(screen.getByText(/現價 1,000 · 距離 \+10\.0%/)).toBeInTheDocument();
     expect(screen.getByText(/尚未觸發/)).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('uses the unified minus sign when the target is below the current price', () => {
+    renderList([priceRule], { quotes: { '2330.TW': { price: 1250, name: '台積電' } } });
+    expect(screen.getByText(/距離 \u221212\.0%/)).toBeInTheDocument();
   });
 
   it('does not show machine values for portfolio or market rules', () => {

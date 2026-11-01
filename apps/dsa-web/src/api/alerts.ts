@@ -59,6 +59,7 @@ function toRuleListParams(query: AlertRuleListQuery = {}): Record<string, string
   if (query.targetScope) params.target_scope = query.targetScope;
   if (query.target) params.target = query.target;
   if (query.source) params.source = query.source;
+  if (query.q) params.q = query.q;
   if (query.page !== undefined) params.page = query.page;
   if (query.pageSize !== undefined) params.page_size = query.pageSize;
   return params;

@@ -17,7 +17,7 @@ import {
 } from '../components/alerts/AlertRuleList';
 import { ruleCondition } from '../components/alerts/alertRuleText';
 import { AlertTriggerHistory, type AlertActivityTab } from '../components/alerts/AlertTriggerHistory';
-import { ApiErrorAlert, AppPage, Button, Card, Drawer, EmptyState, InlineAlert, Loading, PageHeader } from '../components/common';
+import { ApiErrorAlert, AppPage, Button, Drawer, EmptyState, InlineAlert, Loading, PageHeader } from '../components/common';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText } from '../i18n/uiText';
 import { ALERT_PAGE_TEXT } from '../locales/featureText';
@@ -31,7 +31,7 @@ import type {
   AlertTriggerItem,
   AlertTriggerSummary,
 } from '../types/alerts';
-import { formatDateTime } from '../utils/format';
+import { formatDateTime, formatNumber } from '../utils/format';
 
 const PAGE_SIZE = 20;
 const ISSUE_STATUSES = 'degraded,failed,skipped';
@@ -91,6 +91,8 @@ const AlertsPage: React.FC = () => {
   // 每條規則的修改次數：編輯前發出、編輯後才回來的試算是舊條件的結果，不能套用。
   const ruleRevisionsRef = useRef<Record<number, number>>({});
   const [mobileTab, setMobileTab] = useState<MobileTab>('rules');
+  // 通知診斷平常收在頁尾；手機切到這個分頁時直接展開，不用再點一次。
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
 
   const reloadRulesFromFirstPage = useCallback(() => {
     setRulesLoadedPage(0);
@@ -126,7 +128,7 @@ const AlertsPage: React.FC = () => {
           enabled: enabledFilter === 'all' ? undefined : enabledFilter === 'enabled',
           alertType: alertTypeFilter === 'all' ? undefined : alertTypeFilter,
           targetScope: scopeFilter === 'all' ? undefined : scopeFilter,
-          target: searchTarget.trim().toUpperCase() || undefined,
+          q: searchTarget.trim() || undefined,
           page: rulesRequest.page,
           pageSize: PAGE_SIZE,
         });
@@ -351,7 +353,7 @@ const AlertsPage: React.FC = () => {
       <dl className="grid grid-cols-4 gap-2">
         {stats.map((stat) => (
           <div key={stat.label} className="rounded-xl border border-border/60 px-2 py-2 text-center sm:px-3">
-            <dd className="text-lg font-semibold tabular-nums text-foreground">{stat.value ?? '--'}</dd>
+            <dd className="text-lg font-semibold tabular-nums text-foreground">{formatNumber(stat.value)}</dd>
             <dt className="text-xs text-secondary-text">{stat.label}</dt>
           </div>
         ))}
@@ -385,7 +387,10 @@ const AlertsPage: React.FC = () => {
             role="tab"
             aria-selected={mobileTab === tab.id}
             className={`flex-1 rounded-lg border px-2 py-2 text-sm ${mobileTab === tab.id ? 'border-primary text-foreground' : 'border-border/60 text-secondary-text'}`}
-            onClick={() => setMobileTab(tab.id)}
+            onClick={() => {
+              setMobileTab(tab.id);
+              if (tab.id === 'diagnostics') setDiagnosticsOpen(true);
+            }}
           >
             {tab.label}
           </button>
@@ -482,7 +487,16 @@ const AlertsPage: React.FC = () => {
 
       <div className={paneClass('diagnostics')}>
         {notificationsError ? <ApiErrorAlert error={notificationsError} onDismiss={() => setNotificationsError(null)} /> : null}
-        <Card title={text.diagnostics} subtitle={text.diagnosticsHint} variant="bordered" padding="md">
+        <details
+          open={diagnosticsOpen}
+          onToggle={(event) => setDiagnosticsOpen(event.currentTarget.open)}
+          className="rounded-xl border border-border/60 p-3 sm:p-4"
+          data-testid="alert-diagnostics"
+        >
+          <summary className="cursor-pointer text-sm font-medium text-foreground">
+            {text.diagnostics}
+            <span className="ml-2 text-xs font-normal text-secondary-text">{text.diagnosticsHint}</span>
+          </summary>
           {notificationsLoading ? <Loading /> : null}
           {!notificationsLoading && notifications.length === 0 ? (
             <EmptyState icon={<BellRing className="h-6 w-6" />} title={text.noNotifications} />
@@ -497,7 +511,7 @@ const AlertsPage: React.FC = () => {
               </li>
             ))}
           </ul>
-        </Card>
+        </details>
       </div>
 
       <Drawer

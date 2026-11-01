@@ -32,6 +32,7 @@ import {
   ALERT_TARGET_SCOPE_OPTIONS,
   ALERT_THRESHOLD_DIRECTION_OPTIONS,
 } from '../../locales/featureText';
+import { formatNumber, formatPercent } from '../../utils/format';
 import { validateStockCode } from '../../utils/validation';
 import { Button, Checkbox, Input, Select } from '../common';
 
@@ -221,12 +222,17 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
   }, [quoteCode]);
   const currentPrice = fetchedQuote?.code === quoteCode ? fetchedQuote.price : null;
   const priceTarget = Number(price);
-  const priceHint = currentPrice != null && currentPrice > 0 && price !== '' && Number.isFinite(priceTarget) && priceTarget > 0
-    ? formatUiText(pageText.currentPrice, {
-      price: currentPrice.toLocaleString(),
-      pct: `${((priceTarget / currentPrice - 1) * 100).toFixed(1)}%`,
-    })
-    : null;
+  // 還沒填價位也先給現價，填價位時才有依據。
+  const hasPriceTarget = price !== '' && Number.isFinite(priceTarget) && priceTarget > 0;
+  let priceHint: string | null = null;
+  if (currentPrice != null && currentPrice > 0) {
+    priceHint = hasPriceTarget
+      ? formatUiText(pageText.currentPrice, {
+        price: formatNumber(currentPrice),
+        pct: formatPercent((priceTarget / currentPrice - 1) * 100, 1),
+      })
+      : formatUiText(pageText.current, { price: formatNumber(currentPrice) });
+  }
 
   const alertTypeOptions = useMemo(() => optionsForScope(targetScope, language), [language, targetScope]);
   const portfolioTargetOptions = useMemo(() => [
@@ -426,7 +432,8 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
     if (targetScope === 'single_symbol') {
       const targetValidation = validateStockCode(target);
       if (!targetValidation.valid) {
-        setFormError(language === 'en' ? text.invalidStockCode : (targetValidation.message ?? text.invalidStockCode));
+        // validateStockCode 的訊息是寫死的簡體，只有簡體介面能用。
+        setFormError(language === 'zh' ? (targetValidation.message ?? text.invalidStockCode) : text.invalidStockCode);
         return;
       }
       resolvedTarget = targetValidation.normalized;
@@ -495,7 +502,7 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
       return (
         <Input
           label={text.target}
-          value="default"
+          value={pageText.watchlist}
           onChange={() => undefined}
           disabled
         />

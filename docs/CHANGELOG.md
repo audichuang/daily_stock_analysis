@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改進] 警報頁通知診斷收到頁尾、手機分頁才展開；搜尋改部分比對（`GET /alerts/rules` 追加 `q`，比對代號與規則名稱，`target` 仍完全相符）；距離用統一正負號；表單拿掉 `default` 這類機器值與 zh-TW 下的簡體錯誤訊息，未填價位也先顯示現價。
+- [改進] 資料中心改版：一行頁首、台股美股結論橫幅（依實際資料日期判斷）、正常／尚未檢查／未啟用／異常計數、台股美股置頂的市場狀態表與手機列表；狀態與資料集改中文，警告碼翻譯合併、原文收進技術細節；來源明細與備援順序收合分組。
+- [改進] 用量頁改版：摘要帶（總量、估算費用、較上期、結論句）、每日堆疊長條可點選只看當天、用途實際佔比、模型表合併路由前綴、明細分日與多輪摺疊、股票連結、篩選排序與載入更多、手機兩行且合計常駐；Prompt／Completion 改輸入／輸出。`GET /usage/dashboard` 追加 `day`，只收窄明細。
 - [新功能] `/history/{id}` 回傳 `structured_report`（舊報告建構失敗維持 null），報告追加一句話結論、分持股建議、信心度、護欄、進出場條件、前次報告摘要、幣別、資料日與是否持有；ResearchArtifact 追加事件、各來源狀態與美股證據，失效條件的句子跟著報告語言走。
 - [新功能] `/history` 追加 `q`、`market`、`action` 查詢與 `stock_total`、`market_review_total`；個股清單追加 `analysis_price`、`change_pct`、`last_analyzed_at`（評分沿用既有的 `sentiment_score`）；新聞追加 `published_at` 與繁中 `key_point`，摘要去掉免責與行情樣板句。
 - [改進] zh-TW 動作用語改為買進、加碼、續抱、減碼、迴避、警報（舊報告的買入、減倉等仍可解析），系統提示詞本體改送繁體並帶詞彙表，報告表頭改為「項目｜數值」「點位｜價格」，沒有讀數的列省略，金額單位改「億」。

@@ -69,6 +69,16 @@ describe('usageApi', () => {
     expect(result.recentCalls[0].stockCode).toBe('600519');
   });
 
+  it('sends list filters with their API names only when set', async () => {
+    get.mockResolvedValueOnce({ data: {} });
+
+    await usageApi.getDashboard({ period: 'month', limit: 50, offset: 50, callType: 'agent', sort: 'tokens', day: '2099-01-02' });
+
+    expect(get).toHaveBeenCalledWith('/api/v1/usage/dashboard', {
+      params: { period: 'month', limit: 50, offset: 50, call_type: 'agent', sort: 'tokens', day: '2099-01-02' },
+    });
+  });
+
   it('uses month and 50 as default dashboard query params', async () => {
     get.mockResolvedValueOnce({
       data: {
