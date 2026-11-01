@@ -5047,8 +5047,9 @@ class SearchService:
         # 市場時鐘只讀一次，窗口都由它往下算。
         market = get_market_for_stock(stock_code) if stock_code else None
         today = get_market_now(market).date() if market else datetime.now().date()
-        # 美股盤中台北已是隔天，窗口上界不能卡掉當地日期較新的報導。
-        open_end = max(today, datetime.now().date())
+        # 美股盤中台北已是隔天；DeepSeek 日級日期是 UTC+8，主機跑 UTC 時也會比本機多一天。
+        local_today = max(today, datetime.now().date())
+        open_end = local_today + timedelta(days=self.FUTURE_TOLERANCE_DAYS)
         sessions_start = recent_sessions_start(market, today, search_days) if market else None
         if sessions_start is None:
             sessions_start = today - timedelta(days=max(0, search_days - 1))
@@ -5214,7 +5215,7 @@ class SearchService:
             dim_window = _dimension_window(dim)
             if dim_window is not None:
                 # 只支援天數的來源也要涵蓋窗口下界（週日分析時要回看到週三）。
-                request_days = max(1, (open_end - dim_window[0][0]).days + 1)
+                request_days = max(1, (local_today - dim_window[0][0]).days + 1)
             elif dim['name'] in self.ANALYTICAL_INTEL_DIMENSIONS:
                 request_days = self.ANALYTICAL_INTEL_LOOKBACK_DAYS
             else:

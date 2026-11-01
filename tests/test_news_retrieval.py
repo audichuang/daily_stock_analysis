@@ -107,6 +107,12 @@ def test_anchored_earnings_request_uses_explicit_dates_not_180_days():
     assert window == (TODAY - timedelta(days=21), TODAY - timedelta(days=13))
 
 
+def test_open_window_tolerates_one_day_ahead_but_not_two():
+    ahead = [_item("Intel INTC tomorrow", TODAY + timedelta(days=1)), _item("Intel INTC later", TODAY + timedelta(days=2))]
+    result = _run(_service(_Provider(DeepSeekSearchProvider, "DeepSeek", lambda q, k: ahead)))
+    assert _titles(result["latest_news"]) == ["Intel INTC tomorrow"]
+
+
 def test_earnings_older_than_30_days_is_not_anchored():
     titles = _earnings_titles([29, 41], earnings_date=TODAY - timedelta(days=40))
     assert titles == ["Intel INTC earnings d29"]
