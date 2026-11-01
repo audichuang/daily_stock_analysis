@@ -63,7 +63,7 @@ enum PresentationText {
         case "storage.get_analysis_context": return "歷史行情資料庫"
         case "realtime_quote": return "行情報價"
         case "fallback": return "備援報價 · 可能延遲"
-        case "shioaji": return "Shioaji"
+        case "shioaji": return "永豐即時"
         case "yfinance": return "Yahoo Finance · 可能延遲"
         case "official_close": return "官方收盤"
         case "marketdb": return "歷史行情資料庫"

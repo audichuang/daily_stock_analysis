@@ -268,6 +268,158 @@ public struct AnalysisReport: Codable, Sendable {
     public let strategy: ReportStrategy?
     public let structuredReport: ResearchArtifact?
     public let eventOutlook: EventOutlook?
+    /// 大盤複盤的結構化內容，位於 `details.context_snapshot.market_review_payload`；個股報告與舊後端為 nil。
+    public let marketReviewPayload: MarketReviewPayload?
+
+    private enum CodingKeys: String, CodingKey {
+        case meta, summary, strategy, structuredReport, eventOutlook, details
+    }
+
+    private enum NestedKeys: String, CodingKey {
+        case contextSnapshot, marketReviewPayload
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        meta = try container.decode(ReportMeta.self, forKey: .meta)
+        summary = try container.decode(ReportSummary.self, forKey: .summary)
+        strategy = try container.decodeIfPresent(ReportStrategy.self, forKey: .strategy)
+        structuredReport = try container.decodeIfPresent(ResearchArtifact.self, forKey: .structuredReport)
+        eventOutlook = try container.decodeIfPresent(EventOutlook.self, forKey: .eventOutlook)
+        // context_snapshot is untyped on the backend (may be a plain string); a bad shape must not fail the whole report.
+        let details = try? container.nestedContainer(keyedBy: NestedKeys.self, forKey: .details)
+        let snapshot = try? details?.nestedContainer(keyedBy: NestedKeys.self, forKey: .contextSnapshot)
+        marketReviewPayload = try? snapshot?.decodeIfPresent(MarketReviewPayload.self, forKey: .marketReviewPayload)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(meta, forKey: .meta)
+        try container.encode(summary, forKey: .summary)
+        try container.encodeIfPresent(strategy, forKey: .strategy)
+        try container.encodeIfPresent(structuredReport, forKey: .structuredReport)
+        try container.encodeIfPresent(eventOutlook, forKey: .eventOutlook)
+        if let marketReviewPayload {
+            var details = container.nestedContainer(keyedBy: NestedKeys.self, forKey: .details)
+            var snapshot = details.nestedContainer(keyedBy: NestedKeys.self, forKey: .contextSnapshot)
+            try snapshot.encode(marketReviewPayload, forKey: .marketReviewPayload)
+        }
+    }
+}
+
+/// 只鏡像今日頁盤勢卡要用的欄位：market_light 與 next_day_plan；多市場複盤放在 markets[region]。
+public struct MarketReviewPayload: Codable, Sendable, Equatable {
+    public let marketLight: MarketReviewLight?
+    public let nextDayPlan: MarketReviewNextDayPlan?
+    public let markets: [String: MarketReviewPayload]?
+
+    public init(marketLight: MarketReviewLight? = nil, nextDayPlan: MarketReviewNextDayPlan? = nil, markets: [String: MarketReviewPayload]? = nil) {
+        self.marketLight = marketLight
+        self.nextDayPlan = nextDayPlan
+        self.markets = markets
+    }
+
+    /// 合併複盤（region = "tw,us"）時取該市場的子 payload；單一市場直接用自己。
+    public func resolved(for region: String) -> MarketReviewPayload {
+        markets?[region] ?? self
+    }
+}
+
+public struct MarketReviewLight: Codable, Sendable, Equatable {
+    public let status: String?
+    public let label: String?
+    public let guidance: String?
+
+    public init(status: String?, label: String? = nil, guidance: String? = nil) {
+        self.status = status
+        self.label = label
+        self.guidance = guidance
+    }
+}
+
+public struct MarketReviewKeyLevel: Codable, Sendable, Equatable {
+    public let label: String
+    public let price: Double
+}
+
+public struct MarketReviewNextDayPlan: Codable, Sendable, Equatable {
+    public let stance: String?
+    public let summary: String?
+    public let keyLevels: [MarketReviewKeyLevel]?
+
+    public init(stance: String?, summary: String? = nil, keyLevels: [MarketReviewKeyLevel]? = nil) {
+        self.stance = stance
+        self.summary = summary
+        self.keyLevels = keyLevels
+    }
+}
+
+/// 今日頁盤勢卡的三行文字；沒有 payload 時退回列表摘要。
+public struct MarketReviewCardText: Equatable, Sendable {
+    public enum Light: String, Sendable { case green, yellow, red }
+    public enum Stance: String, Sendable { case offensive, balanced, defensive }
+
+    public let light: Light?
+    public let stance: Stance?
+    public let date: String?
+    public let line: String
+    public let keyLevels: String?
+
+    public var lightText: String? {
+        switch light {
+        case .green: return "綠燈"
+        case .yellow: return "黃燈"
+        case .red: return "紅燈"
+        case nil: return nil
+        }
+    }
+
+    public var stanceText: String? {
+        switch stance {
+        case .offensive: return "進攻"
+        case .balanced: return "平衡"
+        case .defensive: return "防守"
+        case nil: return nil
+        }
+    }
+
+    public static let placeholder = "今日複盤已產生，點開查看"
+
+    public static func make(payload: MarketReviewPayload?, title: String?, summary: String?, oneSentence: String?, createdAt: String?) -> MarketReviewCardText {
+        let light = payload?.marketLight?.status.flatMap { Light(rawValue: $0.lowercased()) }
+        let stance = payload?.nextDayPlan?.stance.flatMap { Stance(rawValue: $0.lowercased()) }
+        let structured = [payload?.marketLight?.guidance, payload?.nextDayPlan?.summary]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        let levels = (payload?.nextDayPlan?.keyLevels ?? []).map(\.price).filter(\.isFinite)
+        let levelText = levels.isEmpty ? nil : "關鍵價 " + levels.map(formatLevel).joined(separator: " / ")
+        return MarketReviewCardText(light: light, stance: stance, date: shortDate(createdAt),
+                                    line: structured ?? fallbackLine(title: title, summary: summary, oneSentence: oneSentence),
+                                    keyLevels: levelText)
+    }
+
+    /// 摘要只是標題、或太短且沒有標點（像「台股大盤複盤」）時，不當作一句話。
+    static func fallbackLine(title: String?, summary: String?, oneSentence: String?) -> String {
+        let text = summary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let heading = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let hasPunctuation = text.unicodeScalars.contains { CharacterSet.punctuationCharacters.contains($0) }
+        let usable = !text.isEmpty && text != heading && !(text.count < 12 && !hasPunctuation)
+        if usable { return text }
+        let sentence = oneSentence?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return sentence.isEmpty ? placeholder : sentence
+    }
+
+    /// "2026-10-30T18:00:00" → "10/30"; keeps the backend's own date, no timezone conversion.
+    static func shortDate(_ value: String?) -> String? {
+        guard let value, value.count >= 10 else { return nil }
+        let parts = value.prefix(10).split(whereSeparator: { $0 == "-" || $0 == "/" })
+        guard parts.count == 3, let month = Int(parts[1]), let day = Int(parts[2]) else { return nil }
+        return "\(month)/\(day)"
+    }
+
+    private static func formatLevel(_ price: Double) -> String {
+        price.formatted(.number.locale(Locale(identifier: "zh_TW")).precision(.fractionLength(0...2)))
+    }
 }
 
 public struct EventConsensus: Codable, Sendable {
@@ -595,7 +747,24 @@ public struct CalendarEvent: Codable, Sendable, Identifiable {
     public var isStatutoryDeadline: Bool { dateKind == "statutory_deadline" }
     public var isCompanyEvent: Bool { type == "earnings" || type == "investor_conference" }
     public var statusLabel: String { isStatutoryDeadline ? "法定期限" : status == "estimated" ? "推估" : "已確認" }
-    public var timezoneLabel: String { timezone == "America/New_York" ? "美東 ET" : "台北" }
+    /// 只有美股要註明日期以美東為準；台股就是使用者的當地日期，不標地點。
+    public var timezoneLabel: String { timezone == "America/New_York" ? "美東" : "" }
+
+    /// Date block labels from the source-market date: ("11/3", "週二").
+    public var dayBlock: (day: String, weekday: String)? {
+        guard let parsed = EventCalendarDate.parse(date) else { return nil }
+        let parts = EventCalendarDate.calendar.dateComponents([.month, .day, .weekday], from: parsed)
+        let names = ["日", "一", "二", "三", "四", "五", "六"]
+        guard let month = parts.month, let day = parts.day, let weekday = parts.weekday else { return nil }
+        return ("\(month)/\(day)", "週\(names[(weekday - 1) % 7])")
+    }
+
+    /// 「今天」「明天」「3 天後」；與 daysAway 相同，今天以事件自己的時區計算。
+    public func relativeDayText(now: Date = Date()) -> String? {
+        guard let day = EventCalendarDate.parse(date),
+              let today = EventCalendarDate.parse(EventCalendarDate.key(now, timezone: timezone)) else { return nil }
+        return DisplayFormatting.relativeDays(from: today, to: day, timeZone: EventCalendarDate.calendar.timeZone)
+    }
 
     public func daysAway(now: Date = Date()) -> Int? {
         guard let day = EventCalendarDate.parse(date),

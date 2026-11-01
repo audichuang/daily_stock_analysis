@@ -108,6 +108,33 @@ final class StockListPresentationTests: XCTestCase {
         XCTAssertEqual(summary.latestQuoteAt, "2026-01-02T05:40:00+00:00", "13:40 台北比 13:30 台北新，不是字串比大小")
     }
 
+    func testAIAdviceFilterKeepsOnlyTradeActionsAndCountExcludesWatch() {
+        let rows: [(code: String, action: DecisionAction?)] = [
+            ("A", .buy), ("B", .watch), ("C", .hold), ("D", .add), ("E", nil),
+            ("F", .reduce), ("G", .sell), ("H", .avoid), ("I", .alert),
+        ]
+        let kept = AIAdviceFilter.apply(rows, enabled: true) { $0.action }.map(\.code)
+        XCTAssertEqual(kept, ["A", "D", "F", "G"], "只留買進、加碼、減碼、賣出，順序不變")
+        XCTAssertEqual(AIAdviceFilter.apply(rows, enabled: false) { $0.action }.map(\.code), rows.map(\.code), "再點一次恢復全部")
+
+        // Mutation guard: counting 觀望 or 續抱 would make this 5 or more.
+        XCTAssertEqual(AIAdviceFilter.count(rows.map(\.action)), 4)
+        XCTAssertFalse(AIAdviceFilter.qualifies(.watch), "觀望不算 AI 建議")
+        XCTAssertFalse(AIAdviceFilter.qualifies(.hold), "續抱不算 AI 建議")
+        for action in [DecisionAction.buy, .add, .reduce, .sell] {
+            XCTAssertTrue(AIAdviceFilter.qualifies(action), "\(action) 要算")
+        }
+
+        let summary = StockListSummary(entries: [], actions: [.buy, .watch, .watch, .hold, .sell], quoteTimes: [])
+        XCTAssertEqual(summary.adviceCount, 2, "摘要的 AI 建議檔數與篩選後列數一致")
+        XCTAssertEqual(summary.adviceCount, AIAdviceFilter.apply([DecisionAction?.some(.buy), .watch, .watch, .hold, .sell], enabled: true) { $0 }.count)
+    }
+
+    func testBreadthAccessibilityLabelSpellsOutCounts() {
+        let summary = StockListSummary(entries: [entry("A", change: -1), entry("B", change: -2)], actions: [], quoteTimes: [])
+        XCTAssertEqual(summary.breadthAccessibilityLabel, "上漲 0 檔，下跌 2 檔，平盤 0 檔")
+    }
+
     func testContentStatesAreMutuallyExclusive() {
         XCTAssertEqual(state(codes: 0, loaded: false), .loading)
         XCTAssertEqual(state(codes: 0, loaded: true), .empty)

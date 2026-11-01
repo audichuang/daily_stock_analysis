@@ -79,7 +79,7 @@ struct MarketHomeView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12).padding(.vertical, 10)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: DSARadius.card, style: .continuous))
             }
         }
         .redacted(reason: .placeholder)
@@ -87,62 +87,119 @@ struct MarketHomeView: View {
         .accessibilityLabel("正在讀取市場行情")
     }
 
-    /// 開收盤用品牌色與灰，紅綠只留給行情方向。
+    /// 開收盤用品牌色與灰，紅綠只留給行情方向。狀態與報價時間併成一行：「休市 · 10/30 13:33」。
     @ViewBuilder private var marketStatusRow: some View {
         let phase = MarketPhaseLabel.text(store.marketPhase)
-        let quotedAt = store.indices.compactMap(\.asOf).max()
-        if phase != nil || quotedAt != nil {
+        let quotedAt = store.indices.compactMap(\.asOf).max().map(Self.shortQuoteTime)
+        let line = [phase, quotedAt].compactMap { $0 }.joined(separator: " · ")
+        if !line.isEmpty {
             HStack(spacing: 6) {
-                if let phase {
+                if phase != nil {
                     Circle()
                         .fill(store.marketOpen == true ? Theme.accent : Theme.secondary)
                         .frame(width: 6, height: 6)
                         .accessibilityHidden(true)
-                    Text(phase).font(.caption.weight(.semibold)).foregroundStyle(Theme.text)
                 }
-                Spacer(minLength: 8)
-                if let quotedAt {
-                    Text(DisplayFormat.time(quotedAt))
-                        .font(.caption2.monospacedDigit()).foregroundStyle(Theme.secondary)
-                        .lineLimit(1).minimumScaleFactor(0.8)
-                }
+                Text(line)
+                    .font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                Spacer(minLength: 0)
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("today.market-status")
         }
     }
 
+    /// ISO 時間轉「10/30 13:33」；解析不了的字串照舊顯示原值。
+    private static func shortQuoteTime(_ value: String) -> String {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime]
+        if value.contains(".") { parser.formatOptions.insert(.withFractionalSeconds) }
+        guard let date = parser.date(from: value) else { return DisplayFormat.time(value) }
+        return DisplayFormatting.shortStamp(date)
+    }
+
     // MARK: - 卡片
 
-    /// 只讀列表的 analysisSummary；沒有摘要就整張不顯示，不放空標題。
+    /// 燈號＋立場＋一句話＋關鍵價；詳情還沒讀到或舊報告沒有 payload 時退回列表摘要。
     @ViewBuilder private var reviewCard: some View {
-        if let review = matchingReview, let id = review.id,
-           let summary = review.analysisSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+        if let review = matchingReview, let id = review.id {
+            let payload = store.marketReviewPayloads[id]?.resolved(for: store.selectedMarket)
+            let card = MarketReviewCardText.make(payload: payload, title: review.stockName, summary: review.analysisSummary,
+                                                 oneSentence: review.oneSentence, createdAt: review.createdAt)
             NavigationLink { ResearchReportView(reportID: id) } label: {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("AI 盤勢").font(.caption.weight(.bold)).foregroundStyle(Theme.accent)
-                        Spacer()
-                        Text(String(DisplayFormat.time(review.createdAt).prefix(10)))
-                            .font(.caption2.monospacedDigit()).foregroundStyle(Theme.secondary)
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
-                            .accessibilityHidden(true)
+                DSACard(style: .tinted(Theme.accent)) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            if let light = card.light {
+                                Circle().fill(Self.lightColor(light)).frame(width: 8, height: 8)
+                                    .accessibilityHidden(true)
+                            }
+                            if let lightText = card.lightText {
+                                Text(lightText).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                            }
+                            if card.lightText != nil, card.stanceText != nil {
+                                Text("·").font(.subheadline).foregroundStyle(Theme.secondary).accessibilityHidden(true)
+                            }
+                            if let stance = card.stance, let stanceText = card.stanceText {
+                                Text(stanceText).font(.subheadline.weight(.semibold)).foregroundStyle(Self.stanceColor(stance))
+                            }
+                            if card.light == nil, card.stance == nil {
+                                Text("AI 盤勢").font(.caption.weight(.bold)).foregroundStyle(Theme.accent)
+                            }
+                            Spacer(minLength: 8)
+                            if let date = card.date {
+                                Text(date).font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+                                .accessibilityHidden(true)
+                        }
+                        Text(card.line)
+                            .font(.subheadline).foregroundStyle(Theme.text)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if let keyLevels = card.keyLevels {
+                            Text(keyLevels)
+                                .font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+                                .lineLimit(1).minimumScaleFactor(0.8)
+                        }
                     }
-                    Text(summary)
-                        .font(.subheadline).foregroundStyle(Theme.text)
-                        .lineLimit(3)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(12)
-                .background(Theme.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-                .accessibilityElement(children: .combine)
+                .contentShape(Rectangle())
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Self.reviewAccessibilityLabel(card))
                 .accessibilityValue("分析時間 \(DisplayFormat.time(review.createdAt))")
+                .accessibilityHint("點開查看完整複盤")
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("today.review")
         }
+    }
+
+    /// 燈號點用固定紅黃綠，不跟漲跌配色互換。
+    private static func lightColor(_ light: MarketReviewCardText.Light) -> Color {
+        switch light {
+        case .green: return Theme.down
+        case .yellow: return Theme.warning
+        case .red: return Theme.danger
+        }
+    }
+
+    /// 立場用品牌色、灰、琥珀，紅綠只留給行情方向。
+    private static func stanceColor(_ stance: MarketReviewCardText.Stance) -> Color {
+        switch stance {
+        case .offensive: return Theme.accent
+        case .balanced: return Theme.secondary
+        case .defensive: return Theme.warning
+        }
+    }
+
+    private static func reviewAccessibilityLabel(_ card: MarketReviewCardText) -> String {
+        let heading = [card.lightText, card.stanceText].compactMap { $0 }.joined(separator: " · ")
+        return (["AI 盤勢", heading.isEmpty ? nil : heading, card.line, card.keyLevels] as [String?])
+            .compactMap { $0 }.joined(separator: "，")
     }
 
     @ViewBuilder private var assetCard: some View {
@@ -152,7 +209,7 @@ struct MarketHomeView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(summary.consolidated ? "資產（\(summary.currency)）" : "\(summary.currency) 帳戶資產")
                             .font(.caption).foregroundStyle(Theme.secondary)
-                        Text(DisplayFormat.moneyWhole(summary.equity))
+                        Text(DisplayFormatting.summaryMoney(summary.equity, currency: summary.currency))
                             .font(.title3.weight(.bold).monospacedDigit()).foregroundStyle(Theme.text)
                             .lineLimit(1).minimumScaleFactor(0.7)
                     }
@@ -165,9 +222,7 @@ struct MarketHomeView: View {
                             .lineLimit(1).minimumScaleFactor(0.7)
                     }
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+                .modifier(FlatCardModifier())
                 .contentShape(Rectangle())
                 .accessibilityElement(children: .combine)
             }
@@ -205,7 +260,10 @@ struct MarketHomeView: View {
         VStack(spacing: 0) {
             HStack(alignment: .center) {
                 Text("我的關注").font(.headline).foregroundStyle(Theme.text)
-                Text("\(visibleCodes.count)").font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+                // Cold start: the list is still empty, so a count here would read "0".
+                if !watchlistLoading {
+                    Text("\(visibleCodes.count)").font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+                }
                 Spacer()
                 Picker("排序", selection: sortSelection) {
                     Text("異動大").tag(StockSort.biggestMove)
@@ -213,6 +271,7 @@ struct MarketHomeView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 150)
+                .disabled(watchlistLoading)
                 .accessibilityIdentifier("today.sort")
             }
             .frame(minHeight: 44)
@@ -250,6 +309,11 @@ struct MarketHomeView: View {
         }
     }
 
+    private var watchlistLoading: Bool {
+        if case .loading = contentState { return true }
+        return false
+    }
+
     private var remainingCount: Int { max(visibleCodes.count - Self.visibleLimit, 0) }
 
     private var marketListHeader: some View {
@@ -276,8 +340,8 @@ struct MarketPicker: View {
         Picker("市場", selection: Binding(get: { store.selectedMarket }, set: { value in
             Task { await store.changeMarket(value) }
         })) {
-            Text("台股 TAIWAN").tag("tw")
-            Text("美股 US").tag("us")
+            Text("台股").tag("tw")
+            Text("美股").tag("us")
         }
         .pickerStyle(.segmented).accessibilityIdentifier("market-picker")
     }
@@ -300,20 +364,26 @@ struct IndexCard: View {
                 .font(.subheadline.weight(.semibold).monospacedDigit())
                 .foregroundStyle(Theme.changeColor(index.changePct, convention: store.colorConvention))
                 .lineLimit(1).minimumScaleFactor(0.7)
-            if let source {
-                Text(PresentationText.source(source))
-                    .font(.caption2).foregroundStyle(Theme.secondary)
+            if delayed {
+                Text("延遲報價")
+                    .font(.caption2.weight(.semibold)).foregroundStyle(Theme.warning)
                     .lineLimit(1)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
+        .modifier(FlatCardModifier())
         .accessibilityElement(children: .combine)
     }
 
-    private var source: String? {
-        let value = (index.sourceCode ?? index.source)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value?.isEmpty == false ? value : nil
+    /// 只有備援或延遲來源才提示；正常的即時來源不印名字。
+    private var delayed: Bool {
+        let value = (index.sourceCode ?? index.source)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return ["fallback", "yfinance"].contains(value)
+    }
+}
+
+/// DSACard(.flat) as a modifier, for views that already build their own content stack.
+private struct FlatCardModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        DSACard(style: .flat) { content }
     }
 }
