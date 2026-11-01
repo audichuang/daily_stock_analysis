@@ -6,7 +6,7 @@
 
 - 台股波段的每日决策日志在 `journal/`（append-only、**进版控**，见 `journal/README.md`）；`data/`、`reports/`、`logs/` 是 gitignore 的运行期目录，长期记录不要放那里。
 - `git commit`，以及 push 到自己的 `origin`（`audichuang/daily_stock_analysis`）的工作分支或 `develop`，不用再问，做完就提交推送；开 PR、CI 绿后合进 `develop` 也直接做（§9）。只有三件会公开或难以撤回的事要先确认：推到别人的上游（`upstream` = ZhuLinsen）、`git tag`、发版（push `main` 与`docs/nas-deploy.md` 的发版流程）。排程照旧自动 commit＋push 自己写的 `journal/*.jsonl` 到 `develop`；推哪些檔、何時推見 `docs/daily-report-ops.md`。
-- 同样要先确认：安装或升级依赖（`uv pip install`、`npm install <pkg>`、改 `requirements.txt`）、删除文件或目录、改 infra 与部署配置、跑全量离线测试。读代码、跑 §6 快速门槛、生成分析文档可自主。
+- 同样要先确认：安装或升级依赖（含改 manifest）、删除文件或目录、改 infra 与部署配置、跑全量离线测试。读代码、跑 §6 快速门槛、生成分析文档可自主。
 - commit message 用英文，不加 `Co-Authored-By`；與全域規則衝突時以本檔為準（例：本 repo commit message 用英文）。
 - 不写死密钥、账号、路径、模型名、端口或环境差异逻辑。
 - 新增文件后确认 `git status` 看得到它：`.gitignore` 有 `verify_*.py`、`local/`、`run.sh` 这类宽 pattern，命中就**静默消失**，要保留就补 `!` 例外并注明理由（踩过：`scripts/verify_swing_decisions.py`）。
@@ -37,7 +37,7 @@
 
 - 使用者路徑驗收用專案 skill `verify`（`.claude/skills/verify/SKILL.md`）；真實服務、fixture 與單測分開回報。
 - Python 后端（`main.py`、`src/`、`data_provider/`、`api/`、`bot/`、`tests/`）开发中跑 `uv run ./scripts/ci_gate.sh syntax` + `uv run ./scripts/ci_gate.sh flake8`；交付前完整门槛是 `uv run ./scripts/ci_gate.sh`（含全量，§1 要先确认），最低要求 `uv run python -m py_compile <changed_files>`。
-  - 全量应该全绿；跑的时候不改档（pytest 收集期就 import 完模组）、不和 vitest 全量并行；红了先照 `docs/test-triage.md` 排除假红再判回归。缺 `pytest-timeout` plugin 时 pytest 直接中止、讯息看不出原因，测试工具相依在 `.github/requirements-ci.txt`。
+  - 全量应该全绿；跑的时候不改档（pytest 收集期就 import 完模组）、不和其他全量测试并行；红了先照 `docs/test-triage.md` 排除假红再判回归。缺 `pytest-timeout` plugin 时 pytest 直接中止、讯息看不出原因，测试工具相依在 `.github/requirements-ci.txt`。
   - **本机必须带 `uv run`**：脚本内部调用裸 `python`，全域 python 没有项目相依，不带 `uv run` 会跑错环境或缺套件。
   - **本机 `ci_gate.sh` 与 CI 不等价**：相依安装只有 CI 装得起来才算数；CI 的 backend-tests 跑 **Python 3.11**、本机 venv 是 3.12，3.12-only 语法（PEP 701 同引号巢状 f-string）本机永远剖析得过。`tests/test_python_version_compat.py` 挡这个，但本机借不到 CI 版本时它是 **skip 不是 fail**。
 - 工作流／脚本／Docker：跑最接近的本地验证，说明影响哪条流水线或部署路径。
@@ -48,7 +48,7 @@
 
 - 新配置要做到"不配置也可运行"（预设关闭或沿用旧行为）。
 - 单一数据源或通知渠道失败不拖垮整个分析流程（除非需求要求 fail-fast）。
-- 改 API／报告载荷优先追加字段、保留旧字段（Web、iOS 都是手動同步，見 `api/AGENTS.md`）。
+- 改 API／报告载荷优先追加字段、保留旧字段（客戶端是手動同步，舊版還會留在使用者手上）。
 
 ## 9. 合入与发布
 
