@@ -97,6 +97,10 @@ from src.services.agent_backend_status_service import AgentBackendStatusService
 logger = logging.getLogger(__name__)
 
 
+# 應用資料庫 backend 的顯示名；未列入的直接用方言名（不含連線資訊）。
+_APP_DB_BACKEND_LABELS = {"postgresql": "PostgreSQL", "mysql": "MySQL", "sqlite": "SQLite"}
+
+
 class ConfigValidationError(Exception):
     """Raised when one or more submitted fields fail validation."""
 
@@ -3246,6 +3250,10 @@ class SystemConfigService:
         status: str,
         message: str,
         next_step: Optional[str] = None,
+        *,
+        message_code: Optional[str] = None,
+        message_params: Optional[Dict[str, str]] = None,
+        diagnostic: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         return {
             "key": key,
@@ -3255,6 +3263,9 @@ class SystemConfigService:
             "status": status,
             "message": message,
             "next_step": next_step,
+            "message_code": message_code,
+            "message_params": message_params or {},
+            "diagnostic": diagnostic or {},
         }
 
     @staticmethod
@@ -3899,6 +3910,9 @@ class SystemConfigService:
         會在 Postgres 掛掉時照樣亮綠燈，而那個 SQLite 檔根本沒人在寫。
         """
         title = "数据库 / 本地存储"
+        # 設定檢查會回給瀏覽器與手機：engine.url 含帳號、內網位址與資料庫名，即使遮了密碼也不能外送。
+        # message 只放固定句（舊客戶端的 fallback），可變內容只走 code＋參數與 diagnostic 白名單。
+        backend = "unknown"
         try:
             from sqlalchemy import text
 
@@ -3907,29 +3921,38 @@ class SystemConfigService:
             engine = getattr(DatabaseManager.get_instance(), "_engine", None)
             if engine is None:
                 raise RuntimeError("database engine not initialized")
-            label = engine.url.render_as_string(hide_password=True)
-            if engine.url.get_backend_name() == "sqlite":
+            backend = str(engine.url.get_backend_name())
+            backend_label = _APP_DB_BACKEND_LABELS.get(backend, backend)
+            if backend == "sqlite":
                 return self._setup_check(
                     "storage",
                     title,
                     "system",
                     True,
                     "needs_action",
-                    f"已設定 STORAGE_DATABASE_URL，但執行中的應用庫仍是 SQLite: {label}",
+                    "已設定 STORAGE_DATABASE_URL，但執行中的應用資料庫仍是 SQLite",
                     "重新啟動服務讓 STORAGE_DATABASE_URL 生效。",
+                    message_code="storage.app_db.running_sqlite",
+                    message_params={"backend": backend_label},
+                    diagnostic={"backend": backend},
                 )
             with engine.connect() as connection:
                 connection.execute(text("SELECT 1"))
         except Exception as exc:  # noqa: BLE001 - 狀態檢查不得拋錯
-            logger.warning("Setup storage check failed to reach app database: %s", type(exc).__name__)
+            error_type = type(exc).__name__
+            logger.warning("Setup storage check failed to reach app database: %s", error_type)
+            # 例外訊息可能夾帶連線字串，只取類別名稱。
             return self._setup_check(
                 "storage",
                 title,
                 "system",
                 True,
                 "needs_action",
-                f"應用庫（STORAGE_DATABASE_URL）連線失敗: {type(exc).__name__}",
+                "應用資料庫連線失敗",
                 "請檢查 STORAGE_DATABASE_URL 與資料庫服務是否可用。",
+                message_code="storage.app_db.unreachable",
+                message_params={"error_type": error_type},
+                diagnostic={"backend": backend, "error_type": error_type},
             )
         return self._setup_check(
             "storage",
@@ -3937,7 +3960,10 @@ class SystemConfigService:
             "system",
             True,
             "configured",
-            f"應用庫（STORAGE_DATABASE_URL）連線正常: {label}",
+            f"應用資料庫連線正常（{backend_label}）",
+            message_code="storage.app_db.connected",
+            message_params={"backend": backend_label},
+            diagnostic={"backend": backend},
         )
 
     def _build_setup_storage_check(self, effective_map: Dict[str, str]) -> Dict[str, Any]:

@@ -1,3 +1,4 @@
+import DSACore
 import SwiftUI
 
 enum MarketColorConvention: String, CaseIterable, Identifiable {
@@ -28,6 +29,76 @@ enum Theme {
     }
 }
 
+enum DSARadius {
+    static let control: CGFloat = 8
+    static let card: CGFloat = 12
+    static let pill: CGFloat = 999
+}
+
+enum DSASpacing {
+    static let xs: CGFloat = 4
+    static let sm: CGFloat = 8
+    static let md: CGFloat = 12
+    static let lg: CGFloat = 16
+    static let xl: CGFloat = 24
+    /// 捲動頁底部保留的距離，確保最後一列完整露出、不被分頁列蓋住。
+    static let tabBarClearance: CGFloat = 56
+}
+
+enum DSAType {
+    static let display = Font.system(size: 28, weight: .bold)
+    static let title = Font.title3.weight(.bold)
+    static let section = Font.headline
+    static let body = Font.subheadline
+    static let caption = Font.caption
+    static let micro = Font.caption2
+}
+
+/// 動作語意色：買進類主色、持有觀望灰、減碼賣出與警示琥珀。紅綠只留給行情方向。
+enum ActionTone {
+    case brand, neutral, caution
+
+    init(_ action: DecisionAction) {
+        switch action {
+        case .buy, .add: self = .brand
+        case .hold, .watch: self = .neutral
+        case .avoid, .reduce, .sell, .alert: self = .caution
+        }
+    }
+
+    var statusTone: StatusTone {
+        switch self {
+        case .brand: return .ai
+        case .neutral: return .neutral
+        case .caution: return .warning
+        }
+    }
+
+    var color: Color { statusTone.color }
+
+    /// 認不得的動作用灰色，不猜語意。
+    static func of(action: String?, label: String?) -> ActionTone {
+        DecisionAction.resolve(action: action, label: label).map(ActionTone.init) ?? .neutral
+    }
+}
+
+extension View {
+    /// 全 App 捲動頁共用的底部內距；PageScroll 已內建，自己開 ScrollView 的頁面要加這個。
+    func dsaPageBottomInset() -> some View {
+        contentMargins(.bottom, DSASpacing.tabBarClearance, for: .scrollContent)
+    }
+}
+
+/// 頁面內容的最底端標記，UI 測試用它確認最後一列沒有被分頁列蓋住。
+struct PageBottomAnchor: View {
+    var body: some View {
+        Color.clear
+            .frame(height: 1)
+            .accessibilityElement()
+            .accessibilityIdentifier("page-bottom-anchor")
+    }
+}
+
 struct DSACard<Content: View>: View {
     private let content: Content
 
@@ -53,24 +124,17 @@ struct DSACard<Content: View>: View {
 struct SectionHeading: View {
     let title: String
     let subtitle: String?
-    let eyebrow: String?
     let systemImage: String?
 
+    // 眉標已全 App 移除。參數暫留給 feat/tools-today-overview 上的 ToolsView，該分支合併後刪掉。
     init(_ title: String, subtitle: String? = nil, eyebrow: String? = nil, systemImage: String? = nil) {
         self.title = title
         self.subtitle = subtitle
-        self.eyebrow = eyebrow
         self.systemImage = systemImage
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let eyebrow {
-                Text(eyebrow)
-                    .font(.caption.weight(.semibold))
-                    .tracking(1.5)
-                    .foregroundStyle(Theme.accent)
-            }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if let systemImage {
                     Image(systemName: systemImage)
@@ -264,13 +328,13 @@ struct PressableButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(Theme.background)
+            .foregroundStyle(Theme.background.opacity(isEnabled ? 1 : 0.6))
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
             .frame(minHeight: 44)
             .background(tint.opacity(isEnabled ? 1 : 0.4), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .opacity(configuration.isPressed ? 0.84 : 1)
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .opacity(configuration.isPressed && isEnabled ? 0.84 : 1)
+            .scaleEffect(configuration.isPressed && isEnabled && !reduceMotion ? 0.98 : 1)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
     }
 }

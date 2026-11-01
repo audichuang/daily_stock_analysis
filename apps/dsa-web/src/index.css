@@ -43,6 +43,15 @@
   --input: 217 28% 84%;
   --ring: 193 100% 43%;
   --radius: 1rem;
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-pill: 999px;
+  --text-display: 28px;
+  --text-title: 20px;
+  --text-section: 16px;
+  --text-body: 14px;
+  --text-caption: 12px;
+  --text-micro: 11px;
   --elevated: 0 0% 100%;
   --hover: 214 29% 90%;
   --secondary-text: 224 18% 28%;
@@ -155,8 +164,8 @@
   --home-accent-text: hsl(var(--primary));
   --home-secondary-accent-text: hsl(247 84% 66%);
   --home-title-accent: hsl(247 84% 66%);
-  --home-price-up: hsl(0 88% 62%);
-  --home-price-down: hsl(149 100% 42%);
+  --market-up: hsl(0 88% 62%);
+  --market-down: hsl(149 100% 42%);
   --home-strategy-buy: hsl(149 100% 42%);
   --home-strategy-secondary: hsl(var(--primary));
   --home-strategy-stop: hsl(346 100% 63%);
@@ -430,8 +439,8 @@
   --home-accent-text: hsl(var(--primary));
   --home-secondary-accent-text: hsl(247 84% 72%);
   --home-title-accent: hsl(247 84% 72%);
-  --home-price-up: hsl(0 88% 64%);
-  --home-price-down: hsl(149 100% 44%);
+  --market-up: hsl(0 88% 64%);
+  --market-down: hsl(149 100% 44%);
   --home-strategy-buy: hsl(149 100% 44%);
   --home-strategy-secondary: hsl(var(--primary));
   --home-strategy-stop: hsl(346 100% 66%);
@@ -1958,6 +1967,8 @@ textarea {
   padding: 0.5rem 1rem;
   color: var(--text-secondary-text);
 }
+/* .label-uppercase 是舊 class 的相容別名，Y01 刪除 */
+.label,
 .label-uppercase {
   display: inline-flex;
   align-items: center;
@@ -1965,11 +1976,12 @@ textarea {
   font-size: 11px;
   font-weight: 700;
   line-height: 1;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--text-secondary-text);
 }
 
+/* .btn-* 轉接到 Button md 的尺寸與圓角；不換行才不會把「新建帳戶」斷成兩行 */
 .btn-primary,
 .btn-secondary {
   display: inline-flex;
@@ -1977,9 +1989,12 @@ textarea {
   justify-content: center;
   cursor: pointer;
   gap: 0.5rem;
-  border-radius: 0.9rem;
-  padding: 0.7rem 1.1rem;
-  font-weight: 600;
+  min-height: 36px;
+  white-space: nowrap;
+  border-radius: var(--radius-control);
+  padding: 0 0.875rem;
+  font-size: var(--text-body);
+  font-weight: 500;
   transition:
     transform 0.2s ease,
     box-shadow 0.2s ease,
@@ -1996,13 +2011,10 @@ textarea {
     rgba(0, 168, 204, 0.96)
   );
   color: #041118;
-  box-shadow: 0 12px 28px rgba(0, 212, 255, 0.2);
 }
 
 .btn-primary:hover {
-  transform: translateY(-1px);
   filter: brightness(1.04);
-  box-shadow: 0 18px 34px rgba(0, 212, 255, 0.22);
 }
 
 .btn-secondary {
@@ -2012,7 +2024,6 @@ textarea {
 }
 
 .btn-secondary:hover {
-  transform: translateY(-1px);
   border-color: var(--border-accent);
   background: var(--bg-subtle-hover);
   color: var(--text-primary);
@@ -2641,7 +2652,7 @@ textarea {
 .backtest-metric-row:last-child {
   border-bottom: none;
 }
-.backtest-metric-row .label {
+.backtest-metric-row .backtest-label {
   font-size: 0.75rem;
   color: var(--text-secondary-text);
 }
@@ -2676,10 +2687,10 @@ textarea {
   font-size: 0.75rem;
   font-family: monospace;
 }
-.backtest-summary .label {
+.backtest-summary .backtest-label {
   color: var(--text-secondary-text);
 }
-.backtest-summary .label.message {
+.backtest-summary .backtest-label.message {
   flex-basis: 100%;
   line-height: 1.4;
   white-space: normal;
@@ -2921,4 +2932,60 @@ textarea {
   .backtest-table-scroll-hint {
     text-align: left;
   }
+}
+
+/* 行情方向與損益（紅漲綠跌）的唯一著色 class，由 utils/marketTone.ts 使用 */
+.text-market-up {
+  color: var(--market-up);
+}
+
+.text-market-down {
+  color: var(--market-down);
+}
+
+/* 卡片層級：surface 一般、inset 次層；漸層只留給 highlight（.terminal-card） */
+.card-surface {
+  /* 與 .terminal-card 相同：長字串不撐破卡片，也不把手機頁面撐寬 */
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  background: hsl(var(--card) / 0.96);
+  box-shadow: var(--shadow-soft-card);
+}
+
+.card-inset {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
+}
+
+.type-display {
+  font-size: var(--text-display);
+  line-height: 1.25;
+}
+
+.type-title {
+  font-size: var(--text-title);
+  line-height: 1.35;
+}
+
+.type-section {
+  font-size: var(--text-section);
+  line-height: 1.45;
+}
+
+.type-body {
+  font-size: var(--text-body);
+  line-height: 1.5;
+}
+
+.type-caption {
+  font-size: var(--text-caption);
+  line-height: 1.4;
+}
+
+.type-micro {
+  font-size: var(--text-micro);
+  line-height: 1.35;
 }

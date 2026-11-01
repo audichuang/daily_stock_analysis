@@ -139,7 +139,9 @@ export const Input = ({
           style={inputStyle}
           data-appearance={appearance}
           className={cn(
-            'input-surface input-focus-glow h-11 w-full rounded-xl border bg-transparent px-4 text-sm transition-all',
+            'input-surface input-focus-glow w-full rounded-[var(--radius-control)] border bg-transparent px-3 text-sm transition-all',
+            // 與 Button md、Select 同高；登入頁的大輸入框由 N05 處理。
+            isLoginAppearance ? 'h-11' : 'h-9',
             'focus:outline-none',
             isLoginAppearance ? 'input-appearance-login' : '',
             error ? 'border-danger/30' : '',

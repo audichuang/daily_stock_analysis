@@ -29,10 +29,12 @@ struct WatchlistView: View {
                     }
                 }
             }
+            .overlay(alignment: .bottom) { PageBottomAnchor() }
             .padding(.horizontal, 16).padding(.vertical, 12)
             .frame(maxWidth: 900, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+        .dsaPageBottomInset()
         .background(Theme.background)
         .navigationTitle("自選股").navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, prompt: "篩選代碼或名稱")

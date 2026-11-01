@@ -1,7 +1,13 @@
+import DSACore
 import Foundation
 
 /// 只翻譯後端已定義的顯示代碼；自由文字與未知值保留原文。
 enum PresentationText {
+    /// 動作一律依結構化枚舉查詞彙表（docs/glossary-zh-tw.md），舊報告的「減倉」也顯示「減碼」。
+    static func action(_ action: String?, label: String?, advice: String? = nil) -> String? {
+        DecisionAction.displayText(action: action, label: label, advice: advice)
+    }
+
     static func quoteWarning(available: Bool, stale: Bool, source: String?) -> String? {
         if !available { return "尚無報價" }
         if stale { return "價格過期" }

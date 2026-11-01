@@ -79,11 +79,13 @@ struct MarketHomeView: View {
                 Text("下拉更新 · \(store.refreshedAt.map { $0.formatted(date: .omitted, time: .shortened) } ?? "尚未更新")　AI 評分不是勝率")
                     .font(.caption2).foregroundStyle(Theme.secondary)
             }
+            .overlay(alignment: .bottom) { PageBottomAnchor() }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .frame(maxWidth: 900, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+        .dsaPageBottomInset()
         .background(Theme.background)
         .navigationTitle("Daily Stock AI").navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -238,10 +240,11 @@ struct StockRow: View {
             HStack(spacing: 7) {
                 Text(code).font(.caption.monospaced()).foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: true, vertical: false)
-                if let advice = report?.actionLabel ?? report?.operationAdvice {
+                if let advice = PresentationText.action(report?.action, label: report?.actionLabel, advice: report?.operationAdvice) {
                     HStack(spacing: 4) {
                         Text("AI \(advice)")
-                            .font(.caption2.weight(.medium)).foregroundStyle(Theme.accent)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(ActionTone.of(action: report?.action, label: report?.actionLabel ?? report?.operationAdvice).color)
                             .lineLimit(1)
                         Text(String(DisplayFormat.time(report?.createdAt).prefix(10)))
                             .font(.caption2).foregroundStyle(Theme.secondary)

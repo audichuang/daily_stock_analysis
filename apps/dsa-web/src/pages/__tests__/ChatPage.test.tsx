@@ -672,7 +672,7 @@ describe('ChatPage', () => {
     expect(screen.getByText('開始問股')).toBeInTheDocument();
     expect(screen.getByText('上下文壓縮')).toBeInTheDocument();
     expect(screen.getByText('節省長對話 token')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('例如：分析 2330.TW / 台積電現在適合買入嗎？（Enter 傳送，Shift+Enter 換行）')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('例如：分析 2330.TW / 台積電現在適合買進嗎？（Enter 傳送，Shift+Enter 換行）')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '傳送' })).toBeInTheDocument();
     expect(document.title).toBe('問股 - DSA');
 

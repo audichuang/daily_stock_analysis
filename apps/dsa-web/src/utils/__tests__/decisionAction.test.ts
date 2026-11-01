@@ -22,8 +22,11 @@ describe('decisionAction helpers', () => {
   it('uses structured action taxonomy before server label and legacy advice text', () => {
     expect(getDecisionActionLabel('avoid', '回避', '买入', '建议')).toBe('回避');
     expect(getDecisionActionLabel('sell', '买入', null, 'Advice', englishLabels)).toBe('Sell');
-    expect(getDecisionActionTone('sell', '买入', null)).toBe('danger');
-    expect(getDecisionActionLabel(null, '买入', null, 'Advice', englishLabels)).toBe('买入');
+    expect(getDecisionActionTone('sell', '买入', null)).toBe('caution');
+    // 存檔的已知動作詞視同枚舉，英文介面也不會露出中文標籤。
+    expect(getDecisionActionLabel(null, '买入', null, 'Advice', englishLabels)).toBe('Buy');
+    // 未知標籤才保留原文。
+    expect(getDecisionActionLabel(null, '分批布局', null, 'Advice', englishLabels)).toBe('分批布局');
   });
 
   it('falls back to the action taxonomy label when actionLabel is absent', () => {
@@ -77,7 +80,7 @@ describe('decisionAction helpers', () => {
     expect(getLegacyDecisionActionLabel('avoid selling into weakness', englishLabels)).toBe('Hold');
     expect(getLegacyDecisionActionLabel('avoid trimming before earnings', englishLabels)).toBe('Hold');
     expect(getLegacyDecisionActionLabel('avoid reducing exposure before earnings', englishLabels)).toBe('Hold');
-    expect(getDecisionActionTone(null, null, '不建议卖出，继续观察')).toBe('success');
+    expect(getDecisionActionTone(null, null, '不建议卖出，继续观察')).toBe('neutral');
   });
 
   it('does not turn ambiguous English advice into a badge action', () => {
@@ -126,11 +129,31 @@ describe('decisionAction helpers', () => {
   });
 
   it('maps action tone without reading legacy text when action is present', () => {
-    expect(getDecisionActionTone('buy', null, '卖出')).toBe('success');
-    expect(getDecisionActionTone('reduce', null, '买入')).toBe('danger');
-    expect(getDecisionActionTone('alert', null, '买入')).toBe('warning');
-    expect(getDecisionActionTone(null, '观望', '买入')).toBe('warning');
-    expect(getDecisionActionTone(null, 'Sell', '买入')).toBe('danger');
-    expect(getDecisionActionTone(null, null, 'avoid buying')).toBe('warning');
+    expect(getDecisionActionTone('buy', null, '卖出')).toBe('brand');
+    expect(getDecisionActionTone('reduce', null, '买入')).toBe('caution');
+    expect(getDecisionActionTone('alert', null, '买入')).toBe('caution');
+    expect(getDecisionActionTone(null, '观望', '买入')).toBe('neutral');
+    expect(getDecisionActionTone(null, 'Sell', '买入')).toBe('caution');
+    expect(getDecisionActionTone(null, null, 'avoid buying')).toBe('caution');
+  });
+
+  it('認得詞彙表新詞與舊標籤，顯示一律走詞彙表', () => {
+    const labels = { reduce: '減碼', buy: '買進', hold: '續抱' };
+    // 舊報告存「減倉」、沒有枚舉：畫面仍要顯示「減碼」。
+    expect(getDecisionActionLabel(null, '減倉', null, null, labels)).toBe('減碼');
+    expect(getDecisionActionLabel(null, '减仓', null, null, labels)).toBe('減碼');
+    expect(getDecisionActionLabel('reduce', '減倉', null, null, labels)).toBe('減碼');
+    expect(getDecisionActionLabel(null, '買入', null, null, labels)).toBe('買進');
+    // 第 2 批 B04 開始存新詞。
+    expect(getDecisionActionTone(null, '減碼', null)).toBe('caution');
+    expect(getDecisionActionTone(null, '買進', null)).toBe('brand');
+    expect(getDecisionActionTone(null, '續抱', null)).toBe('neutral');
+    expect(getLegacyDecisionAction('減碼')).toBe('reduce');
+    expect(getLegacyDecisionAction('買進')).toBe('buy');
+  });
+
+  it('別名只比對整個標籤，不把否定句當成動作', () => {
+    expect(getLegacyDecisionAction('不建議買進')).toBeNull();
+    expect(getDecisionActionLabel(null, '暫不減碼', null, null, { reduce: '減碼' })).toBe('暫不減碼');
   });
 });

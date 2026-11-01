@@ -31,3 +31,8 @@ export * from '../layout/ShellHeader';
 export * from '../theme/ThemeProvider';
 export * from '../theme/ThemeToggle';
 export * from './ParticleBackground';
+export { Change } from './Change';
+export { Money, Num } from './Num';
+export { Metric, MetricGroup } from './Metric';
+export * from './DataTable';
+export * from './Segmented';

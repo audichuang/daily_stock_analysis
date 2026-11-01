@@ -282,12 +282,16 @@ struct LocalError: LocalizedError {
 
 enum DisplayFormat {
     static func number(_ value: Double?, digits: Int = 2) -> String {
-        guard let value, value.isFinite else { return "—" }
-        return value.formatted(.number.precision(.fractionLength(0...digits)))
+        DisplayNumber.number(value, digits: digits)
     }
     static func percent(_ value: Double?) -> String {
-        guard let value, value.isFinite else { return "—" }
-        return (value > 0 ? "+" : "") + value.formatted(.number.precision(.fractionLength(2))) + "%"
+        DisplayNumber.percent(value)
+    }
+    static func price(_ value: Double?, currency: String? = nil) -> String {
+        DisplayNumber.price(value, currency: currency)
+    }
+    static func moneyWhole(_ value: Double?, currency: String? = nil) -> String {
+        DisplayNumber.moneyWhole(value, currency: currency)
     }
     static func source(_ value: String?) -> String {
         switch value?.lowercased() {

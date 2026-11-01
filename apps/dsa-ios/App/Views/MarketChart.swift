@@ -487,7 +487,7 @@ struct MarketChart: View {
                 readout("低", candle.low)
                 readout("收", candle.close, tint: tint)
                 if let change {
-                    Text("\(change >= 0 ? "+" : "")\(change.formatted(.number.precision(.fractionLength(2))))%")
+                    Text(DisplayFormat.percent(change))
                         .foregroundStyle(tint)
                 }
             }

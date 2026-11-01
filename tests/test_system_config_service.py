@@ -13,11 +13,13 @@ from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, Mock, patch
 
 import requests
+from sqlalchemy.engine import make_url
 
 from tests.litellm_stub import ensure_litellm_stub
 
 ensure_litellm_stub()
 
+from api.v1.schemas.system_config import SetupStatusCheck
 from src.config import ANSPIRE_LLM_MODEL_DEFAULT, Config
 from src.core.config_manager import ConfigManager
 from src.llm.backend_registry import GENERATION_ONLY_BACKEND_IDS
@@ -1687,45 +1689,72 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             status = self.service.get_setup_status()
         return next(check for check in status["checks"] if check["key"] == "storage")
 
+    # 用真的 URL 物件：MagicMock 的 url 不會有 render_as_string 的實際輸出，洩漏形狀測不出來。
+    _APP_DB_URL = "postgresql+psycopg://dsa_admin:s3cret@10.20.30.40:5433/dsa_prod"
+    _APP_DB_SENSITIVE = ("dsa_admin", "s3cret", "10.20.30.40", "5433", "dsa_prod", "://", "***")
+
+    def _assert_no_connection_info(self, check: dict) -> None:
+        # 整包序列化再比對，連 next_step、diagnostic、message_params 一起守住。
+        payload = json.dumps(SetupStatusCheck(**check).model_dump(), ensure_ascii=False)
+        for fragment in self._APP_DB_SENSITIVE:
+            self.assertNotIn(fragment, payload)
+
+    def _app_engine(self, url: str = _APP_DB_URL) -> MagicMock:
+        engine = MagicMock()
+        engine.url = make_url(url)
+        return engine
+
     def test_get_setup_status_storage_check_probes_app_database_when_storage_url_set(self) -> None:
         # 設了 STORAGE_DATABASE_URL 時應用庫是它，不是 DATABASE_PATH 的 SQLite（已凍結）。
-        engine = MagicMock()
-        engine.url.render_as_string.return_value = "postgresql://u:***@db/dsa"
-        engine.url.get_backend_name.return_value = "postgresql"
+        engine = self._app_engine()
 
         check = self._storage_check_with_app_engine(engine)
 
         self.assertEqual(check["status"], "configured")
-        self.assertIn("postgresql://u:***@db/dsa", check["message"])
-        self.assertNotIn("stock_analysis.db", check["message"])
-        self.assertNotIn("pw", check["message"])
+        self.assertEqual(check["message"], "應用資料庫連線正常（PostgreSQL）")
+        self.assertEqual(check["message_code"], "storage.app_db.connected")
+        self.assertEqual(check["message_params"], {"backend": "PostgreSQL"})
+        self.assertEqual(check["diagnostic"], {"backend": "postgresql"})
+        self._assert_no_connection_info(check)
         engine.connect.assert_called_once()
 
     def test_get_setup_status_storage_check_flags_unreachable_app_database(self) -> None:
         # 正式 Postgres 掛掉而 SQLite 父目錄可寫：舊邏輯在這裡亮綠燈。
-        engine = MagicMock()
-        engine.url.render_as_string.return_value = "postgresql://u:***@db/dsa"
-        engine.url.get_backend_name.return_value = "postgresql"
-        engine.connect.side_effect = ConnectionRefusedError("db down")
+        # 例外訊息真的夾連線字串（驅動常見形狀），不能原樣外送。
+        engine = self._app_engine()
+        engine.connect.side_effect = ConnectionRefusedError(f"cannot reach {self._APP_DB_URL}")
 
         check = self._storage_check_with_app_engine(engine)
 
         self.assertEqual(check["status"], "needs_action")
-        self.assertIn("ConnectionRefusedError", check["message"])
+        self.assertEqual(check["message"], "應用資料庫連線失敗")
+        self.assertEqual(check["message_code"], "storage.app_db.unreachable")
+        self.assertEqual(check["message_params"], {"error_type": "ConnectionRefusedError"})
+        self.assertEqual(check["diagnostic"]["error_type"], "ConnectionRefusedError")
+        self._assert_no_connection_info(check)
 
     def test_get_setup_status_storage_check_flags_running_sqlite_despite_storage_url(self) -> None:
         # 設了 STORAGE_DATABASE_URL 但執行中的引擎仍是 SQLite（改了設定沒重啟）：要標需處理，
         # 而且不能拿 SQLite 的 SELECT 1 成功當成應用庫正常。
-        engine = MagicMock()
-        engine.url.render_as_string.return_value = "sqlite:///data/stock_analysis.db"
-        engine.url.get_backend_name.return_value = "sqlite"
+        engine = self._app_engine("sqlite:////srv/secret-dir/stock_analysis.db")
 
         check = self._storage_check_with_app_engine(engine)
 
         self.assertEqual(check["status"], "needs_action")
         self.assertIn("SQLite", check["message"])
+        self.assertEqual(check["message_code"], "storage.app_db.running_sqlite")
         self.assertIn("重新啟動", check["next_step"])
+        self.assertNotIn("secret-dir", json.dumps(check, ensure_ascii=False))
         engine.connect.assert_not_called()
+
+    def test_setup_status_schema_keeps_code_params_and_legacy_message(self) -> None:
+        # schema 少宣告欄位時 pydantic 會靜默丟掉：要走過 response model 後仍在，舊客戶端的 message 也要在。
+        check = self._storage_check_with_app_engine(self._app_engine())
+        dumped = SetupStatusCheck(**check).model_dump()
+        self.assertEqual(dumped["message"], "應用資料庫連線正常（PostgreSQL）")
+        self.assertEqual(dumped["message_code"], "storage.app_db.connected")
+        self.assertEqual(dumped["message_params"], {"backend": "PostgreSQL"})
+        self.assertEqual(dumped["diagnostic"], {"backend": "postgresql"})
 
     def test_get_setup_status_storage_check_keeps_sqlite_path_without_storage_url(self) -> None:
         # 反向：沒設 STORAGE_DATABASE_URL 時仍走 SQLite 路徑檢查，不去碰應用庫連線。

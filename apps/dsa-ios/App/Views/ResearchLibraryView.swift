@@ -31,7 +31,7 @@ struct ResearchLibraryView: View {
 
     var body: some View {
         PageScroll {
-            SectionHeading("從結論追到證據", subtitle: "論點、資料來源與失效條件，一起讀。", eyebrow: "RESEARCH LIBRARY")
+            SectionHeading("從結論追到證據", subtitle: "論點、資料來源與失效條件，一起讀。")
             Picker("研究類型", selection: $kind) {
                 ForEach(ReportKind.allCases) { category in
                     Text(category.rawValue).tag(category)
@@ -193,8 +193,9 @@ private struct LibraryReportRow: View {
                             .accessibilityHidden(true)
                     }
                 }
-                if let label = report.actionLabel, !label.isEmpty {
-                    StatusBadge(label, tone: .ai)
+                if report.action != nil || !(report.actionLabel ?? "").isEmpty,
+                   let label = PresentationText.action(report.action, label: report.actionLabel) {
+                    StatusBadge(label, tone: ActionTone.of(action: report.action, label: report.actionLabel).statusTone)
                 } else if let advice = report.operationAdvice, !advice.isEmpty {
                     Text(advice)
                         .font(.subheadline.weight(.medium))

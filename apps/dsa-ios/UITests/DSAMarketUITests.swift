@@ -424,6 +424,35 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
     }
 
+    func testLastRowIsNotCoveredByTabBar() throws {
+        let password = app.secureTextFields["server-password"]
+        XCTAssertTrue(password.waitForExistence(timeout: 15), "應顯示測試伺服器的登入畫面")
+        password.tap()
+        password.typeText("fixture-password")
+        tap(app.buttons["connect-button"])
+        XCTAssertTrue(app.tabBars.buttons["今日"].waitForExistence(timeout: 20))
+
+        for tab in ["今日", "自選", "AI 研究", "資產", "工具"] {
+            tap(app.tabBars.buttons[tab])
+            let anchor = app.otherElements["page-bottom-anchor"].firstMatch
+            XCTAssertTrue(anchor.waitForExistence(timeout: 15), "\(tab) 應有頁面底部標記")
+            for _ in 0..<6 where anchor.frame.maxY > app.tabBars.firstMatch.frame.minY {
+                app.swipeUp()
+            }
+            XCTAssertLessThanOrEqual(
+                anchor.frame.maxY,
+                app.tabBars.firstMatch.frame.minY,
+                "\(tab) 捲到底時最後一列要完整露出，不被分頁列蓋住"
+            )
+            capture("底部內距-\(tab)")
+        }
+
+        // Keychain 跨案例保留；登出才不會讓下一個案例看不到登入畫面。
+        tap(app.tabBars.buttons["工具"])
+        tap(app.buttons["tools.logout"])
+        XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
+    }
+
     func testPullToRefreshWithSlowQuotesShowsNoError() throws {
         let password = app.secureTextFields["server-password"]
         XCTAssertTrue(password.waitForExistence(timeout: 15), "應顯示測試伺服器的登入畫面")

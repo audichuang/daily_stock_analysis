@@ -50,7 +50,7 @@ export const Select: React.FC<SelectProps> = ({
           onChange={(e) => onChange(e.target.value)}
           disabled={disabled}
           className={cn(
-            'input-surface input-focus-glow h-11 w-full appearance-none rounded-xl border bg-transparent px-4 py-2.5 pr-10 text-sm text-foreground',
+            'input-surface input-focus-glow h-9 w-full appearance-none rounded-[var(--radius-control)] border bg-transparent px-3 py-1 pr-9 text-sm text-foreground',
             '[color-scheme:light] dark:[color-scheme:dark]',
             'transition-all duration-200 focus:outline-none',
             disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',

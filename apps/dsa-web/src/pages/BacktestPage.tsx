@@ -24,6 +24,7 @@ import type {
 } from '../types/backtest';
 import { buildDecisionActionLabelMap, getDecisionActionLabel } from '../utils/decisionAction';
 import { getMarketPhaseSummaryLabel } from '../utils/marketPhase';
+import { marketToneClass } from '../utils/marketTone';
 
 const BACKTEST_INPUT_CLASS =
   'input-surface input-focus-glow h-11 w-full rounded-xl border bg-transparent px-4 text-sm transition-all focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
@@ -108,9 +109,9 @@ function actualMovementBadge(movement: string | null | undefined, language: UiLa
   const labels = BACKTEST_MOVEMENT_LABELS[language];
   switch (movement) {
     case 'up':
-      return <Badge variant="success">{labels.up}</Badge>;
+      return <Badge variant="neutral" className="text-market-up">{labels.up}</Badge>;
     case 'down':
-      return <Badge variant="danger">{labels.down}</Badge>;
+      return <Badge variant="neutral" className="text-market-down">{labels.down}</Badge>;
     case 'flat':
       return <Badge variant="warning">{labels.flat}</Badge>;
     default:
@@ -158,7 +159,7 @@ function boolIcon(value: boolean | null | undefined, text: BacktestText) {
 
 const MetricRow: React.FC<{ label: string; value: string; accent?: boolean }> = ({ label, value, accent }) => (
   <div className="backtest-metric-row">
-    <span className="label">{label}</span>
+    <span className="backtest-label">{label}</span>
     <span className={`value ${accent ? 'accent' : ''}`}>{value}</span>
   </div>
 );
@@ -205,9 +206,9 @@ const PerformanceCard: React.FC<{ metrics: PerformanceMetrics; title: string; la
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-text">{text.outcomeSummary}</span>
         <span className="text-xs font-mono">
-          <span className="text-success">{metrics.winCount}</span>
+          <span className="text-market-up">{metrics.winCount}</span>
           {' / '}
-          <span className="text-danger">{metrics.lossCount}</span>
+          <span className="text-market-down">{metrics.lossCount}</span>
           {' / '}
           <span className="text-warning">{metrics.neutralCount}</span>
         </span>
@@ -227,15 +228,15 @@ const RunSummary: React.FC<{ data: BacktestRunResponse; language: UiLanguage }> 
   const text = BACKTEST_TEXT[language];
   return (
   <div className="backtest-summary animate-fade-in">
-    <span className="label">{text.processed} <span className="value">{data.processed}</span></span>
-    <span className="label">{text.saved} <span className="value primary">{data.saved}</span></span>
-    <span className="label">{text.completed} <span className="value success">{data.completed}</span></span>
-    <span className="label">{text.insufficient} <span className="value warning">{data.insufficient}</span></span>
+    <span className="backtest-label">{text.processed} <span className="value">{data.processed}</span></span>
+    <span className="backtest-label">{text.saved} <span className="value primary">{data.saved}</span></span>
+    <span className="backtest-label">{text.completed} <span className="value success">{data.completed}</span></span>
+    <span className="backtest-label">{text.insufficient} <span className="value warning">{data.insufficient}</span></span>
     {data.errors > 0 && (
-      <span className="label">{text.errors} <span className="value danger">{data.errors}</span></span>
+      <span className="backtest-label">{text.errors} <span className="value danger">{data.errors}</span></span>
     )}
     {data.message && (
-      <span className="label message">{data.message}</span>
+      <span className="backtest-label message">{data.message}</span>
     )}
   </div>
   );
@@ -679,11 +680,7 @@ const BacktestPage: React.FC = () => {
                           <td className="backtest-table-cell">
                             <div className="flex items-center gap-2">
                               {actualMovementBadge(row.actualMovement, language)}
-                              <span className={
-                                row.actualReturnPct != null
-                                  ? row.actualReturnPct > 0 ? 'text-success' : row.actualReturnPct < 0 ? 'text-danger' : 'text-secondary-text'
-                                  : 'text-muted-text'
-                              }>
+                              <span className={marketToneClass(row.actualReturnPct, 'text-muted-text')}>
                                 {pct(row.actualReturnPct)}
                               </span>
                             </div>

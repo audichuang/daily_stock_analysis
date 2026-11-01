@@ -33,14 +33,20 @@ describe('portfolioFormat', () => {
   it('formats money and signed percentages consistently', () => {
     expect(formatMoney(1234.5, 'USD')).toBe('USD 1,234.50');
     expect(formatMoney(null)).toBe('--');
+    // 不再預設 CNY：快照沒帶幣別時只顯示數字，不亂標幣別。
+    expect(formatMoney(1234.5)).toBe('1,234.50');
     expect(formatSignedPct(3.456)).toBe('+3.46%');
-    expect(formatSignedPct(-1.2)).toBe('-1.20%');
+    expect(formatSignedPct(-1.2)).toBe('\u22121.20%');
   });
 
   it('formats position price fields based on price availability', () => {
-    expect(formatPositionPrice(pricedPosition)).toBe('321.1234');
+    expect(formatPositionPrice(pricedPosition)).toBe('321.1235');
     expect(formatPositionMoney(123, pricedPosition)).toBe('CNY 123.00');
     expect(getPositionPriceLabel(pricedPosition)).toBe('实时价 · longbridge');
+
+    // 報價幣別決定精度，帳戶基準幣別不影響。
+    const usdInTwdAccount = { ...pricedPosition, currency: 'USD', lastPrice: 1264.5, valuationCurrency: 'TWD' };
+    expect(formatPositionPrice(usdInTwdAccount)).toBe('1,264.50');
 
     const missingPosition = { ...pricedPosition, priceAvailable: false, priceSource: 'missing' };
     expect(formatPositionPrice(missingPosition)).toBe('--');

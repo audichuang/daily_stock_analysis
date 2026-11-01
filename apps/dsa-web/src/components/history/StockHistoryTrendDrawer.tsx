@@ -59,7 +59,7 @@ const getPriceChangeStyle = (value?: number): React.CSSProperties | undefined =>
   if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) {
     return undefined;
   }
-  return { color: value > 0 ? 'var(--home-price-up)' : 'var(--home-price-down)' };
+  return { color: value > 0 ? 'var(--market-up)' : 'var(--market-down)' };
 };
 
 const formatModelName = (value: string | undefined, t: (key: UiTextKey, params?: Record<string, string | number>) => string): string => {

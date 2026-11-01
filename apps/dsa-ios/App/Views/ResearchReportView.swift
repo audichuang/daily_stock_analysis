@@ -54,6 +54,7 @@ struct ResearchReportView: View {
             .frame(maxWidth: 760)
             .frame(maxWidth: .infinity)
         }
+        .dsaPageBottomInset()
         .background(Theme.background)
         .navigationTitle("AI 研究")
         .navigationBarTitleDisplayMode(.inline)
@@ -100,14 +101,14 @@ struct ResearchReportView: View {
     private func summaryCard(_ report: AnalysisReport) -> some View {
         DSACard {
             VStack(alignment: .leading, spacing: 16) {
-                SectionHeading("這份分析怎麼看", eyebrow: "AI PERSPECTIVE")
+                SectionHeading("這份分析怎麼看")
                 if let summary = report.summary.analysisSummary, !summary.isEmpty {
                     NativeMarkdownText(text: summary)
                 } else {
                     Text("這份報告沒有摘要，可閱讀下方的研究論點或完整報告。")
                         .font(.subheadline).foregroundStyle(Theme.secondary)
                 }
-                if let advice = report.summary.actionLabel ?? report.summary.operationAdvice, !advice.isEmpty {
+                if let advice = PresentationText.action(report.summary.action, label: report.summary.actionLabel, advice: report.summary.operationAdvice) {
                     Divider().overlay(Theme.border)
                     MetricView("模型判讀", value: advice)
                 }
@@ -227,12 +228,12 @@ struct ResearchArtifactView: View {
     private var thesisCard: some View {
         DSACard {
             VStack(alignment: .leading, spacing: 16) {
-                SectionHeading("論點與反面證據", eyebrow: "THE INVESTMENT THESIS", systemImage: "point.3.connected.trianglepath.dotted")
+                SectionHeading("論點與反面證據", systemImage: "point.3.connected.trianglepath.dotted")
                 NativeMarkdownText(text: artifact.thesis.summary)
                 if let horizon = artifact.thesis.horizon, !horizon.isEmpty {
                     MetricView("觀察期間", value: horizon)
                 }
-                if let label = artifact.thesis.actionLabel ?? artifact.thesis.action, !label.isEmpty {
+                if let label = PresentationText.action(artifact.thesis.action, label: artifact.thesis.actionLabel) {
                     MetricView("結構化判讀", value: label)
                 }
                 if !artifact.thesis.reasons.isEmpty {

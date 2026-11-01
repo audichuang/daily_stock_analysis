@@ -51,11 +51,15 @@ struct PageScroll<Content: View>: View {
     @ViewBuilder let content: Content
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) { content }
+            VStack(alignment: .leading, spacing: 16) {
+                content
+                PageBottomAnchor()
+            }
                 .padding(16)
                 .frame(maxWidth: 900, alignment: .leading)
                 .frame(maxWidth: .infinity)
         }
+        .dsaPageBottomInset()
         .background(Theme.background)
     }
 }

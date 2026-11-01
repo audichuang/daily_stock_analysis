@@ -130,6 +130,26 @@ describe('BacktestPage', () => {
     expect(screen.getByText('平均模拟收益')).toBeInTheDocument();
   });
 
+  it.each([
+    ['up', 3.8, '上涨', 'text-market-up'],
+    ['down', -3.8, '下跌', 'text-market-down'],
+  ])('colors the %s movement badge the same way as its return', async (actualMovement, actualReturnPct, label, tone) => {
+    mockGetResults.mockResolvedValueOnce({
+      total: 1,
+      page: 1,
+      limit: 20,
+      items: [{ ...baseResultItem, actualMovement, actualReturnPct }],
+    });
+
+    render(<BacktestPage />);
+
+    const badge = await screen.findByText(label);
+    expect(badge).toHaveClass(tone);
+    expect(badge).not.toHaveClass('text-success');
+    expect(badge).not.toHaveClass('text-danger');
+    expect(within(badge.parentElement as HTMLElement).getByText(/3\.80?%/)).toHaveClass(tone);
+  });
+
   it('falls back to the taxonomy label when backtest actionLabel is missing', async () => {
     mockGetResults.mockResolvedValueOnce({
       total: 1,

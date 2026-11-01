@@ -96,7 +96,7 @@ const DataCenterPage: React.FC = () => {
 
   return (
     <AppPage className="space-y-5">
-      <PageHeader eyebrow="Data Center" title={t('dataCenter.title')} description={t('dataCenter.description')} />
+      <PageHeader title={t('dataCenter.title')} description={t('dataCenter.description')} />
 
       <div className="flex justify-end gap-2">
         <Link

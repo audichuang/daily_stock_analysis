@@ -1,19 +1,45 @@
 import type React from 'react';
 import { cn } from '../../utils/cn';
 
+// 三層語意；default／bordered／gradient 是舊呼叫點的相容別名，由頁面票逐步換掉（Y01 刪除）。
+type CardLevel = 'surface' | 'inset' | 'highlight';
+type CardVariant = CardLevel | 'default' | 'bordered' | 'gradient';
+
 interface CardProps {
   title?: string;
   subtitle?: string;
   children: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
-  variant?: 'default' | 'bordered' | 'gradient';
+  variant?: CardVariant;
   hoverable?: boolean;
   padding?: 'none' | 'sm' | 'md' | 'lg';
 }
 
+const LEVEL_BY_VARIANT: Record<CardVariant, CardLevel> = {
+  surface: 'surface',
+  inset: 'inset',
+  highlight: 'highlight',
+  default: 'surface',
+  bordered: 'surface',
+  gradient: 'highlight',
+};
+
+const PADDING_STYLES = {
+  none: '',
+  sm: 'p-3',
+  md: 'p-4',
+  lg: 'p-5',
+} as const;
+
+const LEVEL_STYLES: Record<CardLevel, string> = {
+  surface: 'card-surface',
+  inset: 'card-inset',
+  highlight: 'terminal-card',
+};
+
 /**
- * Card component with terminal-inspired variants and optional hover styling.
+ * 卡片分三層：surface 一般內容、inset 卡片內的次層、highlight 單頁唯一的重點（只有它有漸層）。
  */
 export const Card: React.FC<CardProps> = ({
   title,
@@ -21,50 +47,23 @@ export const Card: React.FC<CardProps> = ({
   children,
   className = '',
   style,
-  variant = 'default',
+  variant = 'surface',
   hoverable = false,
   padding = 'md',
 }) => {
-  const paddingStyles = {
-    none: '',
-    sm: 'p-4',
-    md: 'p-5',
-    lg: 'p-6',
-  };
-
-  const variantStyles = {
-    default: 'terminal-card',
-    bordered: 'terminal-card',
-    gradient: 'gradient-border-card',
-  };
-
+  const level = LEVEL_BY_VARIANT[variant];
   const hoverStyles = hoverable ? 'terminal-card-hover cursor-pointer' : '';
-
-  if (variant === 'gradient') {
-    return (
-      <div className={cn(variantStyles.gradient, className)} style={style}>
-        <div className={cn('gradient-border-card-inner', paddingStyles[padding])}>
-          {(title || subtitle) && (
-            <div className="mb-3">
-              {subtitle ? <span className="label-uppercase">{subtitle}</span> : null}
-              {title ? <h3 className="mt-1 text-lg font-semibold text-foreground">{title}</h3> : null}
-            </div>
-          )}
-          {children}
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div
       style={style}
-      className={cn('rounded-2xl', variantStyles[variant], hoverStyles, paddingStyles[padding], className)}
+      data-card-level={level}
+      className={cn('rounded-[var(--radius-card)]', LEVEL_STYLES[level], hoverStyles, PADDING_STYLES[padding], className)}
     >
       {(title || subtitle) && (
         <div className="mb-3">
-          {subtitle ? <span className="label-uppercase">{subtitle}</span> : null}
-          {title ? <h3 className="mt-1 text-lg font-semibold text-foreground">{title}</h3> : null}
+          {subtitle ? <span className="label">{subtitle}</span> : null}
+          {title ? <h3 className="mt-1 text-base font-semibold text-foreground">{title}</h3> : null}
         </div>
       )}
       {children}

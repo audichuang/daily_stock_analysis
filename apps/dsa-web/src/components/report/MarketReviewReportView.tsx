@@ -533,10 +533,6 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
         {/* 手機寬時按鈕列換到下一行：中文標題在 flex 裡可被壓到一字寬，會變成一字一行 */}
         <div className="flex flex-wrap items-start justify-between gap-3" data-testid="market-review-hero-header">
           <div className="min-w-[12rem] flex-1">
-            <div className="mb-2 inline-flex items-center gap-2 text-xs font-semibold text-secondary-text">
-              <BarChart3 className="h-4 w-4" aria-hidden="true" />
-              <span>MARKET REVIEW</span>
-            </div>
             <h2 className="text-[26px] font-bold leading-tight text-foreground sm:text-[30px]">
               {displayTitle}
             </h2>
