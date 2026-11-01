@@ -60,7 +60,7 @@ export const DecisionSignalProfileCalibration: React.FC<Props> = ({ calibration 
     {
       label: t('decisionSignals.profileCalibrationHitRate'),
       value: formatPercent(bucket.hitRatePct),
-      tone: 'text-success',
+      tone: 'text-foreground',
     },
     {
       label: t('decisionSignals.profileCalibrationAverageReturn'),
@@ -70,17 +70,17 @@ export const DecisionSignalProfileCalibration: React.FC<Props> = ({ calibration 
     {
       label: t('decisionSignals.profileCalibrationMissRate'),
       value: formatPercent(bucket.missRatePct),
-      tone: 'text-danger',
+      tone: 'text-foreground',
     },
     {
       label: t('decisionSignals.profileCalibrationUnableRate'),
       value: formatPercent(bucket.unableRatePct),
-      tone: 'text-warning',
+      tone: 'text-foreground',
     },
     {
       label: t('decisionSignals.profileCalibrationMae'),
       value: formatPercent(bucket.maxAdverseExcursionPct),
-      tone: 'text-warning',
+      tone: 'text-foreground',
     },
   ];
 

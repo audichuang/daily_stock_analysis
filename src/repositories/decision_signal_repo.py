@@ -297,6 +297,31 @@ class DecisionSignalRepository:
             older_counts = {row.id: int(group_count) - 1 for row, group_count in pairs}
             return rows, int(total), older_counts
 
+    def previous_actions(self, rows: List[DecisionSignalRecord]) -> Dict[int, str]:
+        """每筆訊號同檔（market + stock_code）前一筆的 action，不套用清單篩選；沒有前一筆的不回。"""
+        result: Dict[int, str] = {}
+        with self.db.get_session() as session:
+            for row in rows:
+                previous = session.execute(
+                    select(DecisionSignalRecord.action)
+                    .where(
+                        DecisionSignalRecord.market == row.market,
+                        DecisionSignalRecord.stock_code == row.stock_code,
+                        or_(
+                            DecisionSignalRecord.created_at < row.created_at,
+                            and_(
+                                DecisionSignalRecord.created_at == row.created_at,
+                                DecisionSignalRecord.id < row.id,
+                            ),
+                        ),
+                    )
+                    .order_by(desc(DecisionSignalRecord.created_at), desc(DecisionSignalRecord.id))
+                    .limit(1)
+                ).scalar()
+                if previous:
+                    result[row.id] = previous
+        return result
+
     def get_latest_active(
         self,
         *,

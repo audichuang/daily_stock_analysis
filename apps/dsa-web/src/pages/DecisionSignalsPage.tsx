@@ -1,19 +1,23 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, BarChart3, RefreshCw, Search, ShieldCheck } from 'lucide-react';
+import { Activity, BarChart3, MoreHorizontal, RefreshCw, Search, ShieldCheck, SlidersHorizontal } from 'lucide-react';
 import {
   decisionSignalsApi,
   getDecisionSignalReassessBlockedError,
 } from '../api/decisionSignals';
 import { getParsedApiError, type ParsedApiError } from '../api/error';
 import { historyApi } from '../api/history';
+import { stocksApi, type StockQuote } from '../api/stocks';
 import {
   ApiErrorAlert,
   AppPage,
+  Button,
   Card,
+  Collapsible,
   ConfirmDialog,
   Drawer,
   EmptyState,
+  IconButton,
   InlineAlert,
   PageHeader,
   Pagination,
@@ -23,6 +27,7 @@ import {
   DecisionSignalDetails,
 } from '../components/decision-signals/DecisionSignalDisplay';
 import { DecisionSignalProfileCalibration } from '../components/decision-signals/DecisionSignalProfileCalibration';
+import { DecisionSignalTable, DecisionSignalTableSkeleton } from '../components/decision-signals/DecisionSignalTable';
 import { DecisionSignalTimeline } from '../components/decision-signals/DecisionSignalTimeline';
 import { StockAutocomplete } from '../components/StockAutocomplete';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
@@ -41,11 +46,13 @@ import type {
   DecisionSignalReassessBlockedError,
   DecisionSignalSourceType,
   DecisionSignalStatus,
+  DecisionSignalSummaryResponse,
   DecisionProfile,
   DecisionProfileDisplay,
 } from '../types/decisionSignals';
 import type { Market, StockIndexItem } from '../types/stockIndex';
 import { cn } from '../utils/cn';
+import { formatNumber } from '../utils/format';
 import { formatSignalText } from '../utils/signalText';
 import { buildDecisionActionLabelMap } from '../utils/decisionAction';
 import {
@@ -55,7 +62,7 @@ import {
 } from '../utils/decisionSignalLabels';
 import { getDecisionProfile } from '../utils/decisionSignalProfile';
 import { parseDecisionSignalDate } from '../utils/decisionSignalTime';
-import { areStockCodesEquivalent } from '../utils/stockCode';
+import { areStockCodesEquivalent, stockCodeMatchKey } from '../utils/stockCode';
 
 const PAGE_SIZE = 20;
 const TIMELINE_PAGE_SIZE = 100;
@@ -64,7 +71,6 @@ const DAY_MS = 86400_000;
 
 type ListFilters = {
   market: '' | DecisionSignalMarket;
-  stockCode: string;
   action: '' | DecisionAction;
   marketPhase: '' | MarketPhaseValue;
   sourceType: '' | DecisionSignalSourceType;
@@ -150,7 +156,6 @@ const STATUS_ACTION_CONFIRM_KEYS: Record<PendingStatusChange['status'], UiTextKe
 
 const DEFAULT_LIST_FILTERS: ListFilters = {
   market: '',
-  stockCode: '',
   action: '',
   marketPhase: '',
   sourceType: '',
@@ -188,7 +193,11 @@ function getInitialFilters(search = typeof window === 'undefined' ? '' : window.
   };
 }
 
-function toListParams(filters: ListFilters, page: number): DecisionSignalListParams {
+function toListParams(
+  filters: ListFilters,
+  stock: Pick<StockContext, 'code' | 'market'> | null,
+  page: number,
+): DecisionSignalListParams {
   const sourceReportId = parseSourceReportId(filters.sourceReportId);
   if (sourceReportId !== undefined) {
     return {
@@ -200,12 +209,15 @@ function toListParams(filters: ListFilters, page: number): DecisionSignalListPar
   }
 
   return {
-    market: filters.market || undefined,
-    stockCode: filters.stockCode.trim() || undefined,
+    market: filters.market || stock?.market || undefined,
+    stockCode: stock?.code.trim() || undefined,
     action: filters.action || undefined,
     marketPhase: filters.marketPhase || undefined,
     sourceType: filters.sourceType || undefined,
     status: filters.status || undefined,
+    // 每檔只留最新一筆，已觸停損與持股排最前；去重在後端做，跨頁才不會重複。
+    groupLatest: true,
+    sort: 'priority',
     page,
     pageSize: PAGE_SIZE,
   };
@@ -386,13 +398,23 @@ function formatStatPercent(value: number | null | undefined): string {
   return formatted === '-' ? formatted : `${formatted}%`;
 }
 
+function mergeSignalPages(current: DecisionSignalItem[], next: DecisionSignalItem[]): DecisionSignalItem[] {
+  const seen = new Set(current.map((item) => item.id));
+  return [...current, ...next.filter((item) => !seen.has(item.id))];
+}
+
 const DecisionSignalsPage: React.FC = () => {
   const { t } = useUiLanguage();
   const actionLabels = useMemo(() => buildDecisionActionLabelMap(t), [t]);
   const { index: stockIndex } = useStockIndex();
   const [filters, setFilters] = useState<ListFilters>(() => getInitialFilters());
-  const [appliedFilters, setAppliedFilters] = useState<ListFilters>(() => getInitialFilters());
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [page, setPage] = useState(1);
+  const [extraItems, setExtraItems] = useState<DecisionSignalItem[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [quotes, setQuotes] = useState<Map<string, StockQuote>>(() => new Map());
+  const [summary, setSummary] = useState<DecisionSignalSummaryResponse | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [items, setItems] = useState<DecisionSignalItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -441,6 +463,10 @@ const DecisionSignalsPage: React.FC = () => {
   const selectedSignalIdRef = useRef<number | null>(null);
   const statusUpdateInFlightRef = useRef(false);
   const timelineMarketSourceRef = useRef<TimelineMarketSource>(null);
+  const quoteRequestIdRef = useRef(0);
+  const loadMoreRequestIdRef = useRef(0);
+  const listStockCode = activeStockContext?.code ?? null;
+  const listStockMarket = activeStockContext?.market;
 
   const popularCandidates = useMemo(
     () => toPopularCandidates(stockIndex, STOCK_CANDIDATE_LIMIT),
@@ -491,13 +517,20 @@ const DecisionSignalsPage: React.FC = () => {
     requestIdRef.current = requestId;
     setLoading(true);
     try {
-      const response = await decisionSignalsApi.list(toListParams(appliedFilters, nextPage));
+      const response = await decisionSignalsApi.list(toListParams(
+        filters,
+        listStockCode ? { code: listStockCode, market: listStockMarket } : null,
+        nextPage,
+      ));
       if (requestIdRef.current !== requestId) return;
       const lastPage = Math.max(1, Math.ceil(response.total / PAGE_SIZE));
       if (response.total > 0 && nextPage > lastPage) {
         setPage(lastPage);
         return;
       }
+      loadMoreRequestIdRef.current += 1;
+      setExtraItems([]);
+      setLoadingMore(false);
       setItems(response.items);
       setTotal(response.total);
       setError(null);
@@ -510,6 +543,9 @@ const DecisionSignalsPage: React.FC = () => {
     } catch (err) {
       if (requestIdRef.current !== requestId) return;
       setError(getParsedApiError(err));
+      loadMoreRequestIdRef.current += 1;
+      setExtraItems([]);
+      setLoadingMore(false);
       setItems([]);
       setTotal(0);
       setSelected((current) => (current?.source === 'list' ? null : current));
@@ -518,7 +554,7 @@ const DecisionSignalsPage: React.FC = () => {
         setLoading(false);
       }
     }
-  }, [appliedFilters]);
+  }, [filters, listStockCode, listStockMarket]);
 
   const loadSignals = useCallback(async () => {
     await loadSignalsForPage(page);
@@ -543,6 +579,19 @@ const DecisionSignalsPage: React.FC = () => {
       }
     }
   }, []);
+
+  // 摘要只是輔助資訊，失敗就不顯示，不擋清單。
+  const loadSummary = useCallback(async () => {
+    try {
+      setSummary(await decisionSignalsApi.getSummary());
+    } catch {
+      setSummary(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSummary();
+  }, [loadSummary]);
 
   useEffect(() => {
     void loadSignals();
@@ -619,7 +668,47 @@ const DecisionSignalsPage: React.FC = () => {
       });
   }, [selected]);
 
-  const appliedSourceReportId = parseSourceReportId(appliedFilters.sourceReportId);
+  const tableItems = useMemo(() => mergeSignalPages(items, extraItems), [items, extraItems]);
+  const selectedStockCode = selected?.item.stockCode;
+  // 現價一律來自批次行情（含抽屜裡不在清單上的訊號），訊號當時價只當對照，不拿來算距離。
+  const quoteCodesKey = useMemo(() => {
+    const codes = new Set(tableItems.map((item) => item.stockCode));
+    if (selectedStockCode) codes.add(selectedStockCode);
+    return Array.from(codes).sort().join(',');
+  }, [tableItems, selectedStockCode]);
+
+  useEffect(() => {
+    if (!quoteCodesKey) return undefined;
+    const requestId = quoteRequestIdRef.current + 1;
+    quoteRequestIdRef.current = requestId;
+    void stocksApi.getQuotesBatched(quoteCodesKey.split(','))
+      .then((rows) => {
+        if (quoteRequestIdRef.current !== requestId) return;
+        const next = new Map<string, StockQuote>();
+        for (const row of rows) {
+          if (row.quote) next.set(stockCodeMatchKey(row.stockCode), row.quote);
+        }
+        setQuotes(next);
+      })
+      .catch(() => {
+        // 行情拿不到時現價顯示 —，清單照常可用。
+        if (quoteRequestIdRef.current === requestId) setQuotes(new Map());
+      });
+    return () => {
+      quoteRequestIdRef.current += 1;
+    };
+  }, [quoteCodesKey]);
+
+  const quoteFor = useCallback(
+    (stockCode: string) => quotes.get(stockCodeMatchKey(stockCode)),
+    [quotes],
+  );
+
+  useEffect(() => {
+    if (!selected) setMoreOpen(false);
+  }, [selected]);
+
+  const appliedSourceReportId = parseSourceReportId(filters.sourceReportId);
   const selectedSourceReportId = selected?.item.sourceReportId ?? undefined;
   const reassessSourceReportId = selected ? selectedSourceReportId : appliedSourceReportId;
   const reassessContextKey = [
@@ -663,10 +752,30 @@ const DecisionSignalsPage: React.FC = () => {
     }
   }, [reassessProfile, reassessSourceReportId]);
 
-  const handleApplyFilters = (event: React.FormEvent) => {
-    event.preventDefault();
-    setAppliedFilters(filters);
+  // 篩選改動即查。
+  const updateFilters = (patch: Partial<ListFilters>) => {
+    setFilters((current) => ({ ...current, ...patch }));
     setPage(1);
+  };
+
+  const handleLoadMore = async () => {
+    const nextPage = page + 1 + Math.ceil(extraItems.length / PAGE_SIZE);
+    const requestId = loadMoreRequestIdRef.current + 1;
+    loadMoreRequestIdRef.current = requestId;
+    setLoadingMore(true);
+    try {
+      const response = await decisionSignalsApi.list(toListParams(
+        filters,
+        listStockCode ? { code: listStockCode, market: listStockMarket } : null,
+        nextPage,
+      ));
+      if (loadMoreRequestIdRef.current !== requestId) return;
+      setExtraItems((current) => [...current, ...response.items]);
+    } catch (err) {
+      if (loadMoreRequestIdRef.current === requestId) setError(getParsedApiError(err));
+    } finally {
+      if (loadMoreRequestIdRef.current === requestId) setLoadingMore(false);
+    }
   };
 
   const resetLatestView = useCallback(() => {
@@ -849,6 +958,7 @@ const DecisionSignalsPage: React.FC = () => {
       timelineMarketSourceRef.current,
     );
     timelineMarketSourceRef.current = nextTimeline.marketSource;
+    if (!isSameStockContext(activeStockContext, nextContext)) setPage(1);
     setActiveStockContext(nextContext);
     setStockDraft(nextContext.displayCode ?? nextContext.code);
     setTimelineFilters(nextTimeline.filters);
@@ -887,6 +997,7 @@ const DecisionSignalsPage: React.FC = () => {
   const handleClearStockContext = useCallback(() => {
     setStockDraft('');
     setActiveStockContext(null);
+    setPage(1);
     timelineMarketSourceRef.current = null;
     setTimelineFilters((current) => ({ ...current, market: '' }));
     resetLatestView();
@@ -929,12 +1040,13 @@ const DecisionSignalsPage: React.FC = () => {
         if (current.source === 'persisted') {
           return { source: 'persisted', item: updated };
         }
-        if (!parseSourceReportId(appliedFilters.sourceReportId) && appliedFilters.status && updated.status !== appliedFilters.status) return null;
+        if (!parseSourceReportId(filters.sourceReportId) && filters.status && updated.status !== filters.status) return null;
         return { source: 'list', item: updated };
       });
       setError(null);
       await loadSignalsForPage(page);
       await loadOutcomeStats();
+      void loadSummary();
     } catch (err) {
       setError(getParsedApiError(err));
       setPendingStatus(null);
@@ -993,6 +1105,10 @@ const DecisionSignalsPage: React.FC = () => {
     const rawAction = typeof guardrail?.raw_action === 'string' ? guardrail.raw_action : null;
     const finalAction = typeof guardrail?.final_action === 'string' ? guardrail.final_action : null;
     const passed = typeof guardrail?.passed === 'boolean' ? guardrail.passed : null;
+    // 風控回傳的是 action 枚舉：依詞彙表顯示；未知值保留原文，不猜語意。
+    const actionNameOf = (value: string | null): string => (
+      value ? (actionLabels[value as DecisionAction] ?? value) : '-'
+    );
     return (
       <div className="rounded-xl border border-border/60 bg-elevated/30 p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -1118,7 +1234,7 @@ const DecisionSignalsPage: React.FC = () => {
               </div>
               <div className="rounded-lg border border-border/50 bg-background/40 p-3">
                 <p className="text-xs text-secondary-text">{t('decisionSignals.reassessRawFinal')}</p>
-                <p className="mt-1 text-sm text-foreground">{rawAction ?? '-'} {'->'} {finalAction ?? '-'}</p>
+                <p className="mt-1 text-sm text-foreground">{actionNameOf(rawAction)} → {actionNameOf(finalAction)}</p>
               </div>
             </div>
             <div className="space-y-2 text-sm text-secondary-text">
@@ -1179,13 +1295,22 @@ const DecisionSignalsPage: React.FC = () => {
     ].filter(Boolean).join(' / ')
     : null;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const hasMorePages = page + Math.ceil(extraItems.length / PAGE_SIZE) < totalPages;
+  const activeFilterCount = [filters.market, filters.action, filters.marketPhase, filters.sourceType]
+    .filter(Boolean).length + (filters.status === DEFAULT_LIST_FILTERS.status ? 0 : 1);
+  const summaryActions = summary
+    ? ACTION_OPTIONS.flatMap((action) => {
+      const count = summary.actions[action] ?? 0;
+      return count > 0 ? [{ action, count }] : [];
+    })
+    : [];
+  const statsDecidable = outcomeStats ? outcomeStats.hit + outcomeStats.miss : 0;
 
   return (
     <AppPage>
-      <div className="space-y-5">
+      <div className="space-y-4">
         <PageHeader
           title={t('decisionSignals.title')}
-          description={t('decisionSignals.description')}
           actions={(
             <button
               type="button"
@@ -1193,6 +1318,7 @@ const DecisionSignalsPage: React.FC = () => {
               onClick={() => {
                 void loadSignals();
                 void loadOutcomeStats();
+                void loadSummary();
               }}
               disabled={loading}
             >
@@ -1202,15 +1328,55 @@ const DecisionSignalsPage: React.FC = () => {
           )}
         />
 
-        <Card title={t('decisionSignals.stockContextTitle')} subtitle={t('decisionSignals.stockContextDescription')} padding="md">
+        {summary && summary.total > 0 ? (
+          <div
+            data-testid="signal-action-summary"
+            role="group"
+            aria-label={t('decisionSignals.actionSummaryLabel')}
+            className="flex flex-wrap items-center gap-2 text-sm"
+          >
+            <span className="text-secondary-text">{t('decisionSignals.summaryStocks', { count: summary.total })}</span>
+            {summary.heldCount > 0 ? (
+              <span className="text-secondary-text">{t('decisionSignals.summaryHeld', { count: summary.heldCount })}</span>
+            ) : null}
+            {summary.stopTriggeredCount > 0 ? (
+              <span className="rounded-md bg-warning px-2 py-0.5 text-xs font-semibold text-slate-950">
+                {t('decisionSignals.summaryStopTriggered', { count: summary.stopTriggeredCount })}
+              </span>
+            ) : null}
+            {summaryActions.map(({ action, count }) => (
+              <button
+                key={action}
+                type="button"
+                aria-pressed={filters.action === action}
+                onClick={() => updateFilters({ action: filters.action === action ? '' : action })}
+                className={cn(
+                  'cursor-pointer rounded-full border px-2.5 py-0.5 text-xs transition-colors',
+                  filters.action === action
+                    ? 'border-cyan/60 bg-cyan/10 text-foreground'
+                    : 'border-border/70 text-secondary-text hover:text-foreground',
+                )}
+              >
+                {actionLabels[action]} <span className="tabular-nums">{count}</span>
+              </button>
+            ))}
+            {summary.stopPriceUnavailableCount > 0 ? (
+              <span className="text-xs text-muted-text">
+                {t('decisionSignals.summaryStopUnavailable', { count: summary.stopPriceUnavailableCount })}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="space-y-2">
           <form
-            className="flex flex-col gap-3 md:flex-row"
+            className="flex flex-wrap items-center gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               handleStockFormSubmit(stockDraft);
             }}
           >
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-[1_1_16rem]">
               <StockAutocomplete
                 value={stockDraft}
                 onChange={setStockDraft}
@@ -1235,292 +1401,112 @@ const DecisionSignalsPage: React.FC = () => {
             >
               {t('decisionSignals.stockContextClear')}
             </button>
+            <button
+              type="button"
+              aria-expanded={filtersOpen}
+              className="btn-secondary inline-flex h-11 items-center justify-center gap-2"
+              onClick={() => setFiltersOpen((current) => !current)}
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              {t('decisionSignals.filter')}
+              {activeFilterCount > 0 ? <span className="tabular-nums text-cyan">{activeFilterCount}</span> : null}
+            </button>
           </form>
 
-          {activeStockLabel ? (
-            <p className="mt-3 text-sm text-secondary-text">
-              {t('decisionSignals.stockContextCurrent', { stock: activeStockLabel })}
-            </p>
-          ) : (
-            <p className="mt-3 text-sm text-secondary-text">{t('decisionSignals.stockContextEmpty')}</p>
-          )}
-
           {historyCandidatesLoaded && stockCandidates.length > 0 ? (
-            <div className="mt-4">
-              <p className="text-xs font-medium uppercase text-muted-text">
+            <div className="flex items-center gap-2 overflow-x-auto pb-1">
+              <span className="shrink-0 text-xs text-muted-text">
                 {stockCandidateMode === 'history'
                   ? t('decisionSignals.stockContextRecent')
                   : t('decisionSignals.stockContextPopular')}
-              </p>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {stockCandidates.map((candidate) => (
-                  <button
-                    key={`${candidate.source}:${getCandidateKey(candidate)}`}
-                    type="button"
-                    className="rounded-full border border-border/70 bg-elevated/40 px-3 py-1.5 text-sm text-foreground transition-colors hover:border-primary/60 hover:text-primary"
-                    onClick={() => handleCandidateSelect(candidate)}
-                  >
-                    <span className="font-mono">{candidate.displayCode ?? candidate.code}</span>
-                    {candidate.name ? <span className="ml-1 text-secondary-text">{candidate.name}</span> : null}
-                    {candidate.market ? <span className="ml-1 text-muted-text">/ {candidate.market}</span> : null}
-                  </button>
-                ))}
-              </div>
+              </span>
+              {stockCandidates.map((candidate) => (
+                <button
+                  key={`${candidate.source}:${getCandidateKey(candidate)}`}
+                  type="button"
+                  className="shrink-0 cursor-pointer rounded-full border border-border/70 bg-elevated/40 px-2.5 py-1 text-xs text-foreground transition-colors hover:border-primary/60 hover:text-primary"
+                  onClick={() => handleCandidateSelect(candidate)}
+                >
+                  <span className="font-mono">{candidate.displayCode ?? candidate.code}</span>
+                  {candidate.name ? <span className="ml-1 text-secondary-text">{candidate.name}</span> : null}
+                  {candidate.market ? <span className="ml-1 text-muted-text">/ {candidate.market}</span> : null}
+                </button>
+              ))}
             </div>
           ) : historyCandidatesLoaded ? (
-            <p className="mt-4 text-sm text-secondary-text">{t('decisionSignals.stockContextNoCandidates')}</p>
+            <p className="text-xs text-secondary-text">{t('decisionSignals.stockContextNoCandidates')}</p>
           ) : null}
-        </Card>
 
-        <Card padding="md">
-          <form className="grid gap-3 md:grid-cols-3 xl:grid-cols-7" onSubmit={handleApplyFilters}>
-            <select
-              className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
-              value={filters.market}
-              onChange={(event) => setFilters((current) => ({ ...current, market: event.target.value as ListFilters['market'] }))}
-              aria-label={t('decisionSignals.market')}
-            >
-              <option value="">{t('decisionSignals.allMarkets')}</option>
-              {MARKET_OPTIONS.map((market) => (
-                <option key={market} value={market}>{getDecisionSignalMarketLabel(market, t)}</option>
-              ))}
-            </select>
-            <input
-              className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
-              value={filters.stockCode}
-              onChange={(event) => setFilters((current) => ({ ...current, stockCode: event.target.value }))}
-              placeholder={t('decisionSignals.stockCode')}
-              aria-label={t('decisionSignals.stockCode')}
-            />
-            <select
-              className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
-              value={filters.action}
-              onChange={(event) => setFilters((current) => ({ ...current, action: event.target.value as ListFilters['action'] }))}
-              aria-label={t('decisionSignals.action')}
-            >
-              <option value="">{t('decisionSignals.allActions')}</option>
-              {ACTION_OPTIONS.map((action) => (
-                <option key={action} value={action}>{actionLabels[action]}</option>
-              ))}
-            </select>
-            <select
-              className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
-              value={filters.marketPhase}
-              onChange={(event) => setFilters((current) => ({ ...current, marketPhase: event.target.value as ListFilters['marketPhase'] }))}
-              aria-label={t('decisionSignals.marketPhase')}
-            >
-              <option value="">{t('decisionSignals.allPhases')}</option>
-              {PHASE_OPTIONS.map((phase) => (
-                <option key={phase} value={phase}>{getDecisionSignalMarketPhaseLabel(phase, t)}</option>
-              ))}
-            </select>
-            <select
-              className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
-              value={filters.sourceType}
-              onChange={(event) => setFilters((current) => ({ ...current, sourceType: event.target.value as ListFilters['sourceType'] }))}
-              aria-label={t('decisionSignals.source')}
-            >
-              <option value="">{t('decisionSignals.allSources')}</option>
-              {SOURCE_OPTIONS.map((source) => (
-                <option key={source} value={source}>{getDecisionSignalSourceTypeLabel(source, t)}</option>
-              ))}
-            </select>
-            <input
-              className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
-              value={filters.sourceReportId}
-              onChange={(event) => setFilters((current) => ({ ...current, sourceReportId: event.target.value }))}
-              placeholder={t('decisionSignals.sourceReportId')}
-              aria-label={t('decisionSignals.sourceReportId')}
-              inputMode="numeric"
-              min={1}
-              step={1}
-              type="number"
-            />
-            <select
-              className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
-              value={filters.status}
-              onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value as ListFilters['status'] }))}
-              aria-label={t('decisionSignals.status')}
-            >
-              <option value="">{t('decisionSignals.allStatuses')}</option>
-              {STATUS_OPTIONS.map((status) => <option key={status} value={status}>{t(STATUS_LABEL_KEYS[status])}</option>)}
-            </select>
-            <button type="submit" className="btn-primary inline-flex h-11 items-center justify-center gap-2">
-              <Search className="h-4 w-4" />
-              {t('decisionSignals.filter')}
-            </button>
-          </form>
-        </Card>
+          {activeStockLabel ? (
+            <p className="text-sm text-secondary-text">
+              {t('decisionSignals.stockContextCurrent', { stock: activeStockLabel })}
+            </p>
+          ) : null}
+
+          {filtersOpen ? (
+            <div data-testid="signal-filter-panel" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+              <select
+                className="input-surface input-focus-glow h-10 rounded-xl border bg-transparent px-3 text-sm"
+                value={filters.market}
+                onChange={(event) => updateFilters({ market: event.target.value as ListFilters['market'] })}
+                aria-label={t('decisionSignals.market')}
+              >
+                <option value="">{t('decisionSignals.allMarkets')}</option>
+                {MARKET_OPTIONS.map((market) => (
+                  <option key={market} value={market}>{getDecisionSignalMarketLabel(market, t)}</option>
+                ))}
+              </select>
+              <select
+                className="input-surface input-focus-glow h-10 rounded-xl border bg-transparent px-3 text-sm"
+                value={filters.action}
+                onChange={(event) => updateFilters({ action: event.target.value as ListFilters['action'] })}
+                aria-label={t('decisionSignals.action')}
+              >
+                <option value="">{t('decisionSignals.allActions')}</option>
+                {ACTION_OPTIONS.map((action) => (
+                  <option key={action} value={action}>{actionLabels[action]}</option>
+                ))}
+              </select>
+              <select
+                className="input-surface input-focus-glow h-10 rounded-xl border bg-transparent px-3 text-sm"
+                value={filters.marketPhase}
+                onChange={(event) => updateFilters({ marketPhase: event.target.value as ListFilters['marketPhase'] })}
+                aria-label={t('decisionSignals.marketPhase')}
+              >
+                <option value="">{t('decisionSignals.allPhases')}</option>
+                {PHASE_OPTIONS.map((phase) => (
+                  <option key={phase} value={phase}>{getDecisionSignalMarketPhaseLabel(phase, t)}</option>
+                ))}
+              </select>
+              <select
+                className="input-surface input-focus-glow h-10 rounded-xl border bg-transparent px-3 text-sm"
+                value={filters.sourceType}
+                onChange={(event) => updateFilters({ sourceType: event.target.value as ListFilters['sourceType'] })}
+                aria-label={t('decisionSignals.source')}
+              >
+                <option value="">{t('decisionSignals.allSources')}</option>
+                {SOURCE_OPTIONS.map((source) => (
+                  <option key={source} value={source}>{getDecisionSignalSourceTypeLabel(source, t)}</option>
+                ))}
+              </select>
+              <select
+                className="input-surface input-focus-glow h-10 rounded-xl border bg-transparent px-3 text-sm"
+                value={filters.status}
+                onChange={(event) => updateFilters({ status: event.target.value as ListFilters['status'] })}
+                aria-label={t('decisionSignals.status')}
+              >
+                <option value="">{t('decisionSignals.allStatuses')}</option>
+                {STATUS_OPTIONS.map((status) => <option key={status} value={status}>{t(STATUS_LABEL_KEYS[status])}</option>)}
+              </select>
+            </div>
+          ) : null}
+        </div>
 
         {!selected && appliedSourceReportId ? (
           <Card padding="md">
             {renderReassessPanel()}
           </Card>
         ) : null}
-
-        <Card title={t('decisionSignals.statsTitle')} subtitle={t('decisionSignals.statsDescription')} padding="md">
-          <p className="mb-3 text-sm text-secondary-text">{t('decisionSignals.statsGlobalScope')}</p>
-          {statsError ? (
-            <ApiErrorAlert
-              error={{ ...statsError, title: t('decisionSignals.statsErrorTitle') }}
-              actionLabel={t('common.retry')}
-              onAction={() => void loadOutcomeStats()}
-            />
-          ) : statsLoading ? (
-            <p className="text-sm text-secondary-text">{t('common.loading')}...</p>
-          ) : outcomeStats && outcomeStats.total > 0 ? (
-            <div>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                <div className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3">
-                  <p className="text-xs text-secondary-text">{t('decisionSignals.statsTotal')}</p>
-                  <p className="mt-1 text-2xl font-semibold text-foreground">{outcomeStats.total}</p>
-                </div>
-                <div className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3">
-                  <p className="text-xs text-secondary-text">{t('decisionSignals.statsHitRate')}</p>
-                  <p className="mt-1 text-2xl font-semibold text-success">{formatStatPercent(outcomeStats.hitRatePct)}</p>
-                </div>
-                <div className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3">
-                  <p className="text-xs text-secondary-text">{t('decisionSignals.outcome.hit')}</p>
-                  <p className="mt-1 text-2xl font-semibold text-success">{outcomeStats.hit}</p>
-                </div>
-                <div className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3">
-                  <p className="text-xs text-secondary-text">{t('decisionSignals.outcome.miss')}</p>
-                  <p className="mt-1 text-2xl font-semibold text-danger">{outcomeStats.miss}</p>
-                </div>
-                <div className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3">
-                  <p className="text-xs text-secondary-text">{t('decisionSignals.outcome.unable')}</p>
-                  <p className="mt-1 text-2xl font-semibold text-warning">{outcomeStats.unable}</p>
-                </div>
-              </div>
-              {outcomeStats.profileCalibration ? (
-                <DecisionSignalProfileCalibration calibration={outcomeStats.profileCalibration} />
-              ) : null}
-            </div>
-          ) : (
-            <EmptyState
-              className="border-none bg-transparent py-6 shadow-none"
-              title={t('decisionSignals.noReviewedStatsTitle')}
-              description={t('decisionSignals.noReviewedStatsDescription')}
-              icon={<BarChart3 className="h-6 w-6" />}
-            />
-          )}
-        </Card>
-
-        <Card title={t('decisionSignals.latestTitle')} subtitle={t('decisionSignals.latestDescription')} padding="md">
-          {!activeStockContext ? (
-            <EmptyState
-              className="border-none bg-transparent py-6 shadow-none"
-              title={t('decisionSignals.stockContextGuideTitle')}
-              description={t('decisionSignals.stockContextGuideDescription')}
-              icon={<Activity className="h-6 w-6" />}
-            />
-          ) : null}
-          {latestError ? <ApiErrorAlert className="mt-3" error={latestError} /> : null}
-          {latestSearched && !latestLoading && !latestError && latestItems.length === 0 ? (
-            <EmptyState
-              className="mt-4 border-none bg-transparent py-6 shadow-none"
-              title={t('decisionSignals.noLatestTitle')}
-              description={t('decisionSignals.noLatestDescription')}
-              icon={<Activity className="h-6 w-6" />}
-            />
-          ) : null}
-          {latestLoading ? <p className="mt-3 text-sm text-secondary-text">{t('common.loading')}...</p> : null}
-          {latestItems.length > 0 ? (
-            <div className="mt-4 grid gap-3 lg:grid-cols-2">
-              {latestItems.map((item) => (
-                <DecisionSignalCard
-                  key={item.id}
-                  item={item}
-                  onSelect={(selectedItem) => setSelected({ source: 'latest', item: selectedItem })}
-                  selected={selected?.item.id === item.id}
-                />
-              ))}
-            </div>
-          ) : null}
-        </Card>
-
-        <Card title={t('decisionSignals.timelineTitle')} subtitle={t('decisionSignals.timelineDescription')} padding="md">
-          <form className="grid gap-3 md:grid-cols-5" onSubmit={handleTimelineSearch}>
-            <select
-              className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
-              value={timelineFilters.market}
-              onChange={(event) => {
-                const market = event.target.value as TimelineFilters['market'];
-                timelineMarketSourceRef.current = market ? 'user' : null;
-                setTimelineFilters((current) => ({ ...current, market }));
-              }}
-              aria-label={t('decisionSignals.timelineMarket')}
-            >
-              <option value="">{t('decisionSignals.allMarkets')}</option>
-              {MARKET_OPTIONS.map((market) => (
-                <option key={market} value={market}>{getDecisionSignalMarketLabel(market, t)}</option>
-              ))}
-            </select>
-            <select
-              className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
-              value={timelineFilters.range}
-              onChange={(event) => setTimelineFilters((current) => ({ ...current, range: event.target.value as TimelineRange }))}
-              aria-label={t('decisionSignals.timelineRange')}
-            >
-              <option value="30d">{t('decisionSignals.timelineRange.30d')}</option>
-              <option value="90d">{t('decisionSignals.timelineRange.90d')}</option>
-              <option value="180d">{t('decisionSignals.timelineRange.180d')}</option>
-            </select>
-            <select
-              className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
-              value={timelineFilters.status}
-              onChange={(event) => setTimelineFilters((current) => ({ ...current, status: event.target.value as TimelineStatusFilter }))}
-              aria-label={t('decisionSignals.timelineStatus')}
-            >
-              <option value="all">{t('decisionSignals.timelineStatus.all')}</option>
-              <option value="active">{t('decisionSignals.timelineStatus.active')}</option>
-            </select>
-            <select
-              className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
-              value={timelineFilters.decisionProfile}
-              onChange={(event) => setTimelineFilters((current) => ({
-                ...current,
-                decisionProfile: event.target.value as TimelineFilters['decisionProfile'],
-              }))}
-              aria-label={t('decisionSignals.timelineProfile')}
-            >
-              <option value="">{t('decisionSignals.allProfiles')}</option>
-              {REASSESS_PROFILES.map((profile) => (
-                <option key={profile} value={profile}>
-                  {t(`decisionSignals.profile.${profile}` as UiTextKey)}
-                </option>
-              ))}
-              <option value="unknown">{t('decisionSignals.profile.unknown')}</option>
-            </select>
-            <button
-              type="submit"
-              className="btn-secondary inline-flex h-11 items-center justify-center gap-2"
-              disabled={timelineLoading || !activeStockContext?.code}
-            >
-              <Search className="h-4 w-4" />
-              {t('decisionSignals.timelineSearch')}
-            </button>
-          </form>
-          <div className="mt-4">
-            {!timelineSearched ? (
-              <EmptyState
-                className="border-none bg-transparent py-6 shadow-none"
-                title={activeStockContext ? t('decisionSignals.timelineGuideTitle') : t('decisionSignals.stockContextGuideTitle')}
-                description={activeStockContext ? t('decisionSignals.timelineGuideDescription') : t('decisionSignals.stockContextGuideDescription')}
-                icon={<Activity className="h-6 w-6" />}
-              />
-            ) : (
-              <DecisionSignalTimeline
-                items={timelineItems}
-                selectedId={selected?.item.id ?? null}
-                loading={timelineLoading}
-                error={timelineError?.message ?? null}
-                truncated={timelineTruncated}
-                onSelect={(selectedItem) => setSelected({ source: 'timeline', item: selectedItem })}
-              />
-            )}
-          </div>
-        </Card>
 
         {error ? (
           <ApiErrorAlert
@@ -1530,31 +1516,222 @@ const DecisionSignalsPage: React.FC = () => {
           />
         ) : null}
 
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-secondary-text">{t('decisionSignals.total', { total })}</p>
-          {loading ? <span className="text-xs text-secondary-text">{t('common.loading')}...</span> : null}
+          {loading && items.length > 0 ? <span className="text-xs text-secondary-text">{t('common.loading')}...</span> : null}
+          {totalPages > 1 ? (
+            <div data-testid="signal-pagination-top" className="hidden md:block">
+              <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
+            </div>
+          ) : null}
         </div>
 
-        {!loading && items.length === 0 ? (
+        {loading && tableItems.length === 0 ? (
+          <DecisionSignalTableSkeleton />
+        ) : tableItems.length === 0 ? (
           <EmptyState
             title={t('decisionSignals.emptyTitle')}
             description={t('decisionSignals.emptyDescription')}
             icon={<Activity className="h-7 w-7" />}
           />
         ) : (
-          <div className="grid gap-3 xl:grid-cols-2">
-            {items.map((item) => (
-              <DecisionSignalCard
-                key={item.id}
-                item={item}
-                onSelect={(selectedItem) => setSelected({ source: 'list', item: selectedItem })}
-                selected={selected?.item.id === item.id}
-              />
-            ))}
-          </div>
+          <DecisionSignalTable
+            items={tableItems}
+            quoteFor={quoteFor}
+            onSelect={(selectedItem) => setSelected({ source: 'list', item: selectedItem })}
+            onShowOlder={(item) => applyStockContext({
+              code: item.stockCode,
+              displayCode: item.stockCode,
+              name: item.stockName ?? undefined,
+              market: item.market,
+            })}
+          />
         )}
 
-        <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
+        <div data-testid="signal-pagination-bottom" className="hidden md:block">
+          <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
+        </div>
+        {hasMorePages && tableItems.length > 0 ? (
+          <div className="md:hidden">
+            <Button
+              variant="secondary"
+              className="w-full"
+              isLoading={loadingMore}
+              onClick={() => void handleLoadMore()}
+            >
+              {t('decisionSignals.loadMore')}
+            </Button>
+          </div>
+        ) : null}
+
+        {activeStockContext ? (
+          <>
+            <Card title={t('decisionSignals.latestTitle')} subtitle={t('decisionSignals.latestDescription')} padding="md">
+              {latestError ? <ApiErrorAlert className="mt-3" error={latestError} /> : null}
+              {latestSearched && !latestLoading && !latestError && latestItems.length === 0 ? (
+                <EmptyState
+                  className="mt-4 border-none bg-transparent py-6 shadow-none"
+                  title={t('decisionSignals.noLatestTitle')}
+                  description={t('decisionSignals.noLatestDescription')}
+                  icon={<Activity className="h-6 w-6" />}
+                />
+              ) : null}
+              {latestLoading ? <p className="mt-3 text-sm text-secondary-text">{t('common.loading')}...</p> : null}
+              {latestItems.length > 0 ? (
+                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                  {latestItems.map((item) => (
+                    <DecisionSignalCard
+                      key={item.id}
+                      item={item}
+                      onSelect={(selectedItem) => setSelected({ source: 'latest', item: selectedItem })}
+                      selected={selected?.item.id === item.id}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </Card>
+
+            <Card title={t('decisionSignals.timelineTitle')} subtitle={t('decisionSignals.timelineDescription')} padding="md">
+              <form className="grid gap-3 md:grid-cols-5" onSubmit={handleTimelineSearch}>
+                <select
+                  className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
+                  value={timelineFilters.market}
+                  onChange={(event) => {
+                    const market = event.target.value as TimelineFilters['market'];
+                    timelineMarketSourceRef.current = market ? 'user' : null;
+                    setTimelineFilters((current) => ({ ...current, market }));
+                  }}
+                  aria-label={t('decisionSignals.timelineMarket')}
+                >
+                  <option value="">{t('decisionSignals.allMarkets')}</option>
+                  {MARKET_OPTIONS.map((market) => (
+                    <option key={market} value={market}>{getDecisionSignalMarketLabel(market, t)}</option>
+                  ))}
+                </select>
+                <select
+                  className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
+                  value={timelineFilters.range}
+                  onChange={(event) => setTimelineFilters((current) => ({ ...current, range: event.target.value as TimelineRange }))}
+                  aria-label={t('decisionSignals.timelineRange')}
+                >
+                  <option value="30d">{t('decisionSignals.timelineRange.30d')}</option>
+                  <option value="90d">{t('decisionSignals.timelineRange.90d')}</option>
+                  <option value="180d">{t('decisionSignals.timelineRange.180d')}</option>
+                </select>
+                <select
+                  className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
+                  value={timelineFilters.status}
+                  onChange={(event) => setTimelineFilters((current) => ({ ...current, status: event.target.value as TimelineStatusFilter }))}
+                  aria-label={t('decisionSignals.timelineStatus')}
+                >
+                  <option value="all">{t('decisionSignals.timelineStatus.all')}</option>
+                  <option value="active">{t('decisionSignals.timelineStatus.active')}</option>
+                </select>
+                <select
+                  className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
+                  value={timelineFilters.decisionProfile}
+                  onChange={(event) => setTimelineFilters((current) => ({
+                    ...current,
+                    decisionProfile: event.target.value as TimelineFilters['decisionProfile'],
+                  }))}
+                  aria-label={t('decisionSignals.timelineProfile')}
+                >
+                  <option value="">{t('decisionSignals.allProfiles')}</option>
+                  {REASSESS_PROFILES.map((profile) => (
+                    <option key={profile} value={profile}>
+                      {t(`decisionSignals.profile.${profile}` as UiTextKey)}
+                    </option>
+                  ))}
+                  <option value="unknown">{t('decisionSignals.profile.unknown')}</option>
+                </select>
+                <button
+                  type="submit"
+                  className="btn-secondary inline-flex h-11 items-center justify-center gap-2"
+                  disabled={timelineLoading}
+                >
+                  <Search className="h-4 w-4" />
+                  {t('decisionSignals.timelineSearch')}
+                </button>
+              </form>
+              <div className="mt-4">
+                {!timelineSearched ? (
+                  <EmptyState
+                    className="border-none bg-transparent py-6 shadow-none"
+                    title={t('decisionSignals.timelineGuideTitle')}
+                    description={t('decisionSignals.timelineGuideDescription')}
+                    icon={<Activity className="h-6 w-6" />}
+                  />
+                ) : (
+                  <DecisionSignalTimeline
+                    items={timelineItems}
+                    selectedId={selected?.item.id ?? null}
+                    loading={timelineLoading}
+                    error={timelineError?.message ?? null}
+                    truncated={timelineTruncated}
+                    onSelect={(selectedItem) => setSelected({ source: 'timeline', item: selectedItem })}
+                  />
+                )}
+              </div>
+            </Card>
+          </>
+        ) : null}
+
+        <section data-testid="signal-stats" className="space-y-2">
+          {outcomeStats && outcomeStats.total > 0 ? (
+            <p data-testid="signal-stats-sentence" className="text-sm tabular-nums text-secondary-text">
+              {t('decisionSignals.statsSentence', {
+                rate: typeof outcomeStats.hitRatePct === 'number' ? `${formatNumber(outcomeStats.hitRatePct, 1)}%` : '—',
+                hit: formatNumber(outcomeStats.hit),
+                decidable: formatNumber(statsDecidable),
+                total: formatNumber(outcomeStats.total),
+                unable: formatNumber(outcomeStats.unable),
+              })}
+              {outcomeStats.neutral > 0 ? `｜${t('decisionSignals.statsNeutral', { count: formatNumber(outcomeStats.neutral) })}` : ''}
+            </p>
+          ) : null}
+          <Collapsible title={t('decisionSignals.statsTitle')}>
+            <p className="mb-1 text-sm text-secondary-text">{t('decisionSignals.statsDescription')}</p>
+            <p className="mb-3 text-sm text-secondary-text">{t('decisionSignals.statsGlobalScope')}</p>
+            {statsError ? (
+              <ApiErrorAlert
+                error={{ ...statsError, title: t('decisionSignals.statsErrorTitle') }}
+                actionLabel={t('common.retry')}
+                onAction={() => void loadOutcomeStats()}
+              />
+            ) : statsLoading ? (
+              <p className="text-sm text-secondary-text">{t('common.loading')}...</p>
+            ) : outcomeStats && outcomeStats.total > 0 ? (
+              <div>
+                <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
+                  {[
+                    { label: t('decisionSignals.statsTotal'), value: String(outcomeStats.total) },
+                    { label: t('decisionSignals.statsHitRate'), value: formatStatPercent(outcomeStats.hitRatePct) },
+                    { label: t('decisionSignals.outcome.hit'), value: String(outcomeStats.hit) },
+                    { label: t('decisionSignals.outcome.miss'), value: String(outcomeStats.miss) },
+                    { label: t('decisionSignals.outcome.neutral'), value: String(outcomeStats.neutral) },
+                    { label: t('decisionSignals.outcome.unable'), value: String(outcomeStats.unable) },
+                  ].map((metric) => (
+                    <div key={metric.label} className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3">
+                      <p className="text-xs text-secondary-text">{metric.label}</p>
+                      {/* 統計不是行情也不是系統狀態，一律中性色。 */}
+                      <p className="mt-1 text-2xl font-semibold tabular-nums text-foreground">{metric.value}</p>
+                    </div>
+                  ))}
+                </div>
+                {outcomeStats.profileCalibration ? (
+                  <DecisionSignalProfileCalibration calibration={outcomeStats.profileCalibration} />
+                ) : null}
+              </div>
+            ) : (
+              <EmptyState
+                className="border-none bg-transparent py-6 shadow-none"
+                title={t('decisionSignals.noReviewedStatsTitle')}
+                description={t('decisionSignals.noReviewedStatsDescription')}
+                icon={<BarChart3 className="h-6 w-6" />}
+              />
+            )}
+          </Collapsible>
+        </section>
       </div>
 
       <Drawer
@@ -1564,35 +1741,49 @@ const DecisionSignalsPage: React.FC = () => {
         width="max-w-3xl"
       >
         {selected ? (
-          <div className="space-y-4">
-            {renderReassessPanel()}
-            <DecisionSignalDetails
-              item={selected.item}
-              outcomes={selectedOutcomes}
-              outcomesLoading={selectedOutcomesLoading}
-              outcomesError={selectedOutcomesError?.message ?? null}
-              feedback={selectedFeedback}
-              feedbackLoading={selectedFeedbackLoading}
-              feedbackSaving={feedbackSaving}
-              feedbackError={selectedFeedbackError?.message ?? null}
-              onFeedbackSubmit={handleFeedbackSubmit}
-              actions={STATUS_ACTIONS.map((status) => (
-                <button
-                  key={status}
-                  type="button"
-                  className="btn-secondary !px-3 !py-1.5 !text-xs"
-                  onClick={() => setPendingStatus({
-                    item: selected.item,
-                    status,
-                    message: t(STATUS_ACTION_CONFIRM_KEYS[status]),
-                  })}
-                  disabled={statusUpdating || selected.item.status === status}
-                >
-                  {t(STATUS_ACTION_LABEL_KEYS[status])}
-                </button>
-              ))}
-            />
-          </div>
+          <DecisionSignalDetails
+            item={selected.item}
+            quote={quoteFor(selected.item.stockCode)}
+            outcomes={selectedOutcomes}
+            outcomesLoading={selectedOutcomesLoading}
+            outcomesError={selectedOutcomesError?.message ?? null}
+            feedback={selectedFeedback}
+            feedbackLoading={selectedFeedbackLoading}
+            feedbackSaving={feedbackSaving}
+            feedbackError={selectedFeedbackError?.message ?? null}
+            onFeedbackSubmit={handleFeedbackSubmit}
+            actions={(
+              <IconButton
+                aria-label={t('decisionSignals.moreActions')}
+                aria-expanded={moreOpen}
+                variant="secondary"
+                icon={<MoreHorizontal className="h-4 w-4" />}
+                onClick={() => setMoreOpen((current) => !current)}
+              />
+            )}
+            actionsPanel={moreOpen ? (
+              <div data-testid="signal-more-panel" className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  {STATUS_ACTIONS.map((status) => (
+                    <button
+                      key={status}
+                      type="button"
+                      className="btn-secondary !px-3 !py-1.5 !text-xs"
+                      onClick={() => setPendingStatus({
+                        item: selected.item,
+                        status,
+                        message: t(STATUS_ACTION_CONFIRM_KEYS[status]),
+                      })}
+                      disabled={statusUpdating || selected.item.status === status}
+                    >
+                      {t(STATUS_ACTION_LABEL_KEYS[status])}
+                    </button>
+                  ))}
+                </div>
+                {renderReassessPanel()}
+              </div>
+            ) : null}
+          />
         ) : null}
       </Drawer>
 

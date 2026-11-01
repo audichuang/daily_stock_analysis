@@ -132,6 +132,9 @@ function toQuote(raw: RawQuote): StockQuote {
   };
 }
 
+// 與後端 api/v1/endpoints/stocks.py 的 MAX_BATCH_CODES 相同。
+export const MAX_QUOTE_BATCH = 50;
+
 export const stocksApi = {
   async extractFromImage(file: File): Promise<ExtractFromImageResponse> {
     const formData = new FormData();
@@ -183,6 +186,24 @@ export const stocksApi = {
       quote: item.quote ? toQuote(item.quote) : null,
       error: item.error,
     }));
+  },
+
+  /**
+   * 批次行情不限檔數：後端一次最多 MAX_QUOTE_BATCH 檔，超過就分批。
+   * 單批失敗只影響那批（回 quote=null），不讓整張清單沒有現價。
+   */
+  async getQuotesBatched(codes: string[]): Promise<StockQuoteBatchItem[]> {
+    const unique = Array.from(new Set(codes.filter(Boolean)));
+    const chunks: string[][] = [];
+    for (let start = 0; start < unique.length; start += MAX_QUOTE_BATCH) {
+      chunks.push(unique.slice(start, start + MAX_QUOTE_BATCH));
+    }
+    const settled = await Promise.allSettled(chunks.map((chunk) => stocksApi.getQuotes(chunk)));
+    return settled.flatMap((result, index) => (
+      result.status === 'fulfilled'
+        ? result.value
+        : chunks[index].map((stockCode) => ({ stockCode, quote: null, error: 'request_failed' }))
+    ));
   },
 
   /** 看板輪詢閘門：各市場是否在盤中（含前後緩衝）；後端依交易所日曆判斷休市，未知市場回 true。 */

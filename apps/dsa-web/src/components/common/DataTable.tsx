@@ -35,6 +35,9 @@ interface DataTableProps<T> {
   /** 整列沒有資料（例如報價失敗）：淡化並停用點擊。 */
   isRowUnavailable?: (row: T) => boolean;
   onRowClick?: (row: T) => void;
+  /** 桌機列展開：expandedRowKey 符合的列下方多渲染一列，內容由 renderExpandedRow 給。 */
+  expandedRowKey?: string | null;
+  renderExpandedRow?: (row: T) => React.ReactNode;
   /** 手機自訂卡片列，給了就取代 primary 欄＋詳情的預設呈現。 */
   renderMobileCard?: (row: T) => React.ReactNode;
   emptyState?: React.ReactNode;
@@ -76,6 +79,8 @@ export function DataTable<T>({
   onSortChange,
   isRowUnavailable,
   onRowClick,
+  expandedRowKey,
+  renderExpandedRow,
   renderMobileCard,
   emptyState,
   maxHeight,
@@ -142,9 +147,11 @@ export function DataTable<T>({
             {rows.map((row) => {
               const unavailable = isRowUnavailable?.(row) ?? false;
               const clickable = Boolean(onRowClick) && !unavailable;
+              const key = rowKey(row);
+              const expandedContent = renderExpandedRow && expandedRowKey === key ? renderExpandedRow(row) : null;
               return (
+                <React.Fragment key={key}>
                 <tr
-                  key={rowKey(row)}
                   data-row-state={unavailable ? 'unavailable' : 'available'}
                   onClick={clickable ? () => onRowClick?.(row) : undefined}
                   className={cn(
@@ -168,6 +175,12 @@ export function DataTable<T>({
                     </td>
                   ))}
                 </tr>
+                {expandedContent ? (
+                  <tr data-testid="data-table-expanded-row" className="border-b border-border/40 bg-elevated/30">
+                    <td colSpan={columns.length} className="px-3 py-3">{expandedContent}</td>
+                  </tr>
+                ) : null}
+                </React.Fragment>
               );
             })}
           </tbody>

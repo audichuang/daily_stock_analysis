@@ -1,43 +1,94 @@
 import type React from 'react';
-import { useState, useEffect, useCallback } from 'react';
-import { Check, Minus, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { backtestApi } from '../api/backtest';
 import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
-import { ApiErrorAlert, Card, Badge, EmptyState, Pagination, StatusDot, Tooltip } from '../components/common';
+import { BacktestTrendCharts } from '../components/backtest/BacktestTrendCharts';
+import {
+  ApiErrorAlert,
+  AppPage,
+  Badge,
+  Button,
+  Card,
+  DataTable,
+  Drawer,
+  EmptyState,
+  Metric,
+  MetricGroup,
+  PageHeader,
+  Pagination,
+  Segmented,
+  Tooltip,
+  type DataTableColumn,
+} from '../components/common';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText, type UiLanguage } from '../i18n/uiText';
 import {
   BACKTEST_DIRECTION_EXPECTED_LABELS,
+  BACKTEST_EXIT_REASON_LABELS,
   BACKTEST_MOVEMENT_LABELS,
   BACKTEST_OUTCOME_LABELS,
+  BACKTEST_OVERVIEW_TEXT,
   BACKTEST_PHASE_FILTER_OPTIONS,
   BACKTEST_PHASE_LABELS,
   BACKTEST_STATUS_LABELS,
   BACKTEST_TEXT,
 } from '../locales/featureText';
 import type {
+  BacktestPhaseFilter,
   BacktestResultItem,
   BacktestRunResponse,
+  BacktestSeriesResponse,
+  BacktestStatusFilter,
   PerformanceMetrics,
-  BacktestPhaseFilter,
 } from '../types/backtest';
+import { cn } from '../utils/cn';
 import { buildDecisionActionLabelMap, getDecisionActionLabel } from '../utils/decisionAction';
+import { formatNumber, formatPercent, formatPrice, NO_VALUE } from '../utils/format';
 import { getMarketPhaseSummaryLabel } from '../utils/marketPhase';
 import { marketToneClass } from '../utils/marketTone';
 
 const BACKTEST_INPUT_CLASS =
-  'input-surface input-focus-glow h-11 w-full rounded-xl border bg-transparent px-4 text-sm transition-all focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
+  'input-surface input-focus-glow h-10 w-full rounded-xl border bg-transparent px-3 text-sm transition-all focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
 const BACKTEST_COMPACT_INPUT_CLASS =
   'input-surface input-focus-glow h-10 rounded-xl border bg-transparent px-3 py-2 text-xs transition-all focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
+const PAGE_SIZE = 20;
+const INPUT_DEBOUNCE_MS = 300;
+// 少於這個筆數的勝率與平均報酬不下結論（研究類結論的底線：樣本不足一律 inconclusive）。
+const MIN_CONCLUSION_SAMPLE = 30;
+
+type ResultTab = 'completed' | 'pending' | 'all';
+const TAB_STATUS: Record<ResultTab, BacktestStatusFilter | undefined> = {
+  completed: 'completed',
+  pending: 'pending',
+  all: undefined,
+};
+
 type BacktestText = (typeof BACKTEST_TEXT)[UiLanguage];
 
-// ============ Helpers ============
-
-function pct(value?: number | null): string {
-  if (value == null) return '--';
-  return `${value.toFixed(1)}%`;
+/** 實際用來查資料的條件；輸入框的值在 draft，確定後才寫進來，兩者分開顯示。 */
+interface AppliedFilters {
+  code?: string;
+  windowDays?: number;
+  dateFrom?: string;
+  dateTo?: string;
+  phase: BacktestPhaseFilter;
 }
+
+const sameFilters = (left: AppliedFilters | null, right: AppliedFilters): boolean => (
+  left !== null
+  && left.code === right.code
+  && left.windowDays === right.windowDays
+  && left.dateFrom === right.dateFrom
+  && left.dateTo === right.dateTo
+  && left.phase === right.phase
+);
+
+const hasNarrowingFilter = (filters: AppliedFilters | null): boolean => Boolean(
+  filters && (filters.code || filters.dateFrom || filters.dateTo || filters.phase !== 'all'),
+);
+
+// ============ Helpers ============
 
 function phaseLabel(row: BacktestResultItem, language: UiLanguage): string {
   const label = getMarketPhaseSummaryLabel(row.marketPhaseSummary, language);
@@ -45,49 +96,52 @@ function phaseLabel(row: BacktestResultItem, language: UiLanguage): string {
     return label
       .replace('市场阶段: ', '')
       .replace('市场阶段：', '')
+      .replace('市場階段：', '')
       .replace('Market phase: ', '');
   }
-  return (row.marketPhase ? BACKTEST_PHASE_LABELS[language][row.marketPhase] : undefined) || row.marketPhase || '--';
+  return (row.marketPhase ? BACKTEST_PHASE_LABELS[language][row.marketPhase] : undefined) || row.marketPhase || NO_VALUE;
 }
 
 function normalizeBacktestCode(value: string): string | undefined {
   const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  return trimmed.toUpperCase();
+  return trimmed ? trimmed.toUpperCase() : undefined;
 }
 
 function parseEvalWindowDays(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const parsed = parseInt(trimmed, 10);
-  if (Number.isNaN(parsed) || parsed < 1) {
-    return undefined;
-  }
-
-  return parsed;
+  const parsed = parseInt(value.trim(), 10);
+  return Number.isNaN(parsed) || parsed < 1 ? undefined : parsed;
 }
 
 function labelFromMap(value: string | null | undefined, labels: Record<string, string>): string {
-  if (!value) return '--';
+  if (!value) return NO_VALUE;
   return labels[value] ?? value;
 }
 
-function outcomeBadge(outcome: string | undefined, language: UiLanguage) {
+/** 報酬是損益：紅賺綠賠、帶正負號；沒有讀數顯示 —。 */
+const ReturnValue: React.FC<{ value?: number | null; className?: string }> = ({ value, className }) => (
+  <span className={cn('tabular-nums', marketToneClass(value), className)}>{formatPercent(value)}</span>
+);
+
+function outcomeBadge(outcome: string | null | undefined, language: UiLanguage) {
   const labels = BACKTEST_OUTCOME_LABELS[language];
-  if (!outcome) return <Badge variant="default">--</Badge>;
   switch (outcome) {
     case 'win':
-      return <Badge variant="success" glow>{labels.win}</Badge>;
+      return <Badge variant="neutral" className="text-market-up">{labels.win}</Badge>;
     case 'loss':
-      return <Badge variant="danger" glow>{labels.loss}</Badge>;
+      return <Badge variant="neutral" className="text-market-down">{labels.loss}</Badge>;
     case 'neutral':
-      return <Badge variant="warning">{labels.neutral}</Badge>;
+      return <Badge variant="neutral">{labels.neutral}</Badge>;
+    case undefined:
+    case null:
+    case '':
+      return <span className="text-secondary-text">{NO_VALUE}</span>;
     default:
       return <Badge variant="default">{outcome}</Badge>;
   }
+}
+
+function rowStatus(row: BacktestResultItem): string {
+  return row.maturityStatus || row.evalStatus;
 }
 
 function statusBadge(status: string, language: UiLanguage) {
@@ -95,9 +149,13 @@ function statusBadge(status: string, language: UiLanguage) {
   switch (status) {
     case 'completed':
       return <Badge variant="success">{labels.completed}</Badge>;
+    case 'pending':
+      return <Badge variant="neutral">{labels.pending}</Badge>;
     case 'insufficient':
     case 'insufficient_data':
       return <Badge variant="warning">{labels.insufficient}</Badge>;
+    case 'unable':
+      return <Badge variant="warning">{labels.unable}</Badge>;
     case 'error':
       return <Badge variant="danger">{labels.error}</Badge>;
     default:
@@ -113,132 +171,79 @@ function actualMovementBadge(movement: string | null | undefined, language: UiLa
     case 'down':
       return <Badge variant="neutral" className="text-market-down">{labels.down}</Badge>;
     case 'flat':
-      return <Badge variant="warning">{labels.flat}</Badge>;
+      return <Badge variant="neutral">{labels.flat}</Badge>;
     default:
-      return <Badge variant="default">--</Badge>;
+      return null;
   }
 }
 
-function boolIcon(value: boolean | null | undefined, text: BacktestText) {
-  if (value === true) {
-    return (
-      <span
-        className="backtest-status-chip backtest-status-chip-success"
-        aria-label={text.yes}
-      >
-        <StatusDot tone="success" className="backtest-status-chip-dot" />
-        <Check className="h-3.5 w-3.5" />
-      </span>
-    );
-  }
-
-  if (value === false) {
-    return (
-      <span
-        className="backtest-status-chip backtest-status-chip-danger"
-        aria-label={text.no}
-      >
-        <StatusDot tone="danger" className="backtest-status-chip-dot" />
-        <X className="h-3.5 w-3.5" />
-      </span>
-    );
-  }
-
-  return (
-    <span
-      className="backtest-status-chip backtest-status-chip-neutral"
-      aria-label={text.unknown}
-    >
-      <StatusDot tone="neutral" className="backtest-status-chip-dot" />
-      <Minus className="h-3.5 w-3.5" />
-    </span>
-  );
+/** 對錯用中性色：這是判斷準不準，不是損益方向。 */
+function directionMark(value: boolean | null | undefined, text: BacktestText) {
+  if (value === true) return <span aria-label={text.yes} className="text-foreground">✓</span>;
+  if (value === false) return <span aria-label={text.no} className="text-foreground">✕</span>;
+  return <span aria-label={text.unknown} className="text-secondary-text">{NO_VALUE}</span>;
 }
 
-// ============ Metric Row ============
-
-const MetricRow: React.FC<{ label: string; value: string; accent?: boolean }> = ({ label, value, accent }) => (
-  <div className="backtest-metric-row">
-    <span className="backtest-label">{label}</span>
-    <span className={`value ${accent ? 'accent' : ''}`}>{value}</span>
-  </div>
-);
-
-function phaseBreakdownText(metrics: PerformanceMetrics, language: UiLanguage): string | null {
-  const breakdown = metrics.diagnostics?.phaseBreakdown;
-  if (!breakdown || typeof breakdown !== 'object') return null;
-  const item = breakdown as Record<string, unknown>;
-  const phaseLabels = BACKTEST_PHASE_LABELS[language];
-  const parts = [
-    [phaseLabels.premarket, item.premarket],
-    [phaseLabels.intraday, item.intraday],
-    [phaseLabels.postmarket, item.postmarket],
-    [phaseLabels.unknown, item.unknown],
-  ]
-    .map(([label, value]) => `${label} ${Number(value || 0)}`)
-    .join(' / ');
-  return parts;
+interface AdviceRow {
+  advice: string;
+  total: number;
+  win: number;
+  loss: number;
+  neutral: number;
+  winRatePct: number | null;
 }
 
-// ============ Performance Card ============
+/** adviceBreakdown 的 key 是存檔的建議原文；內層數字缺值當 0 只影響這張拆解表。 */
+function toAdviceRows(breakdown: Record<string, unknown> | undefined): AdviceRow[] {
+  if (!breakdown) return [];
+  return Object.entries(breakdown)
+    .flatMap(([advice, raw]) => {
+      if (!raw || typeof raw !== 'object') return [];
+      const bucket = raw as Record<string, unknown>;
+      const rate = bucket.winRatePct ?? bucket.win_rate_pct;
+      return [{
+        advice,
+        total: Number(bucket.total ?? 0),
+        win: Number(bucket.win ?? 0),
+        loss: Number(bucket.loss ?? 0),
+        neutral: Number(bucket.neutral ?? 0),
+        winRatePct: typeof rate === 'number' ? rate : null,
+      }];
+    })
+    .sort((left, right) => right.total - left.total);
+}
 
-const PerformanceCard: React.FC<{ metrics: PerformanceMetrics; title: string; language: UiLanguage }> = ({ metrics, title, language }) => {
-  const text = BACKTEST_TEXT[language];
-  const phaseText = phaseBreakdownText(metrics, language);
-  return (
-    <Card variant="gradient" padding="md" className="animate-fade-in">
-      <div className="mb-3">
-        <span className="label-uppercase">{title}</span>
-      </div>
-      <MetricRow label={text.directionAccuracy} value={pct(metrics.directionAccuracyPct)} accent />
-      <MetricRow label={text.winRate} value={pct(metrics.winRatePct)} accent />
-      <MetricRow label={text.avgSimulatedReturn} value={pct(metrics.avgSimulatedReturnPct)} />
-      <MetricRow label={text.avgStockReturn} value={pct(metrics.avgStockReturnPct)} />
-      <MetricRow label={text.stopLossTriggerRate} value={pct(metrics.stopLossTriggerRate)} />
-      <MetricRow label={text.takeProfitTriggerRate} value={pct(metrics.takeProfitTriggerRate)} />
-      <MetricRow label={text.avgDaysToFirstHit} value={metrics.avgDaysToFirstHit != null ? metrics.avgDaysToFirstHit.toFixed(1) : '--'} />
-      <div className="backtest-metric-footer">
-        <span className="text-xs text-muted-text">{text.evaluationCount}</span>
-        <span className="text-xs text-secondary-text font-mono">
-          {Number(metrics.completedCount)} / {Number(metrics.totalEvaluations)}
-        </span>
-      </div>
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-muted-text">{text.outcomeSummary}</span>
-        <span className="text-xs font-mono">
-          <span className="text-market-up">{metrics.winCount}</span>
-          {' / '}
-          <span className="text-market-down">{metrics.lossCount}</span>
-          {' / '}
-          <span className="text-warning">{metrics.neutralCount}</span>
-        </span>
-      </div>
-      {phaseText ? (
-        <div className="mt-3 border-t border-white/10 pt-2 text-xs text-muted-text">
-          {formatUiText(text.phaseDistribution, { text: phaseText })}
-        </div>
-      ) : null}
-    </Card>
-  );
-};
+function buildConclusion(metrics: PerformanceMetrics, language: UiLanguage): string {
+  const text = BACKTEST_OVERVIEW_TEXT[language];
+  if (metrics.completedCount < MIN_CONCLUSION_SAMPLE) {
+    return formatUiText(text.conclusionInsufficient, {
+      count: metrics.completedCount,
+      min: MIN_CONCLUSION_SAMPLE,
+    });
+  }
+  return formatUiText(text.conclusion, {
+    count: formatNumber(metrics.completedCount),
+    winRate: metrics.winRatePct != null ? `${formatNumber(metrics.winRatePct, 1)}%` : NO_VALUE,
+    win: metrics.winCount,
+    loss: metrics.lossCount,
+    simulated: formatPercent(metrics.avgSimulatedReturnPct),
+    stock: formatPercent(metrics.avgStockReturnPct),
+  });
+}
 
 // ============ Run Summary ============
 
 const RunSummary: React.FC<{ data: BacktestRunResponse; language: UiLanguage }> = ({ data, language }) => {
   const text = BACKTEST_TEXT[language];
   return (
-  <div className="backtest-summary animate-fade-in">
-    <span className="backtest-label">{text.processed} <span className="value">{data.processed}</span></span>
-    <span className="backtest-label">{text.saved} <span className="value primary">{data.saved}</span></span>
-    <span className="backtest-label">{text.completed} <span className="value success">{data.completed}</span></span>
-    <span className="backtest-label">{text.insufficient} <span className="value warning">{data.insufficient}</span></span>
-    {data.errors > 0 && (
-      <span className="backtest-label">{text.errors} <span className="value danger">{data.errors}</span></span>
-    )}
-    {data.message && (
-      <span className="backtest-label message">{data.message}</span>
-    )}
-  </div>
+    <div data-testid="backtest-run-summary" className="flex flex-wrap gap-x-4 gap-y-1 rounded-xl border border-border/60 p-3 text-xs text-secondary-text">
+      <span>{text.processed} <span className="tabular-nums text-foreground">{data.processed}</span></span>
+      <span>{text.saved} <span className="tabular-nums text-foreground">{data.saved}</span></span>
+      <span>{text.completed} <span className="tabular-nums text-foreground">{data.completed}</span></span>
+      <span>{text.insufficient} <span className="tabular-nums text-foreground">{data.insufficient}</span></span>
+      {data.errors > 0 ? <span>{text.errors} <span className="tabular-nums text-danger">{data.errors}</span></span> : null}
+      {data.message ? <span className="w-full">{data.message}</span> : null}
+    </div>
   );
 };
 
@@ -247,157 +252,209 @@ const RunSummary: React.FC<{ data: BacktestRunResponse; language: UiLanguage }> 
 const BacktestPage: React.FC = () => {
   const { language, t } = useUiLanguage();
   const text = BACKTEST_TEXT[language];
+  const overview = BACKTEST_OVERVIEW_TEXT[language];
   const phaseFilterOptions = BACKTEST_PHASE_FILTER_OPTIONS[language];
-  const actionLabels = buildDecisionActionLabelMap(t);
+  const actionLabels = useMemo(() => buildDecisionActionLabelMap(t), [t]);
 
-  // Set page title
   useEffect(() => {
     document.title = text.documentTitle;
   }, [text.documentTitle]);
 
-  // Input state
+  // 輸入值（draft）
   const [codeFilter, setCodeFilter] = useState('');
   const [analysisDateFrom, setAnalysisDateFrom] = useState('');
   const [analysisDateTo, setAnalysisDateTo] = useState('');
   const [phaseFilter, setPhaseFilter] = useState<BacktestPhaseFilter>('all');
   const [evalDays, setEvalDays] = useState('');
+  // 已套用條件；null 表示初始化還沒結束，不查資料。
+  const [applied, setApplied] = useState<AppliedFilters | null>(null);
+  const [tab, setTab] = useState<ResultTab>('completed');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [reloadToken, setReloadToken] = useState(0);
+
+  // 重新計算
+  const [runOpen, setRunOpen] = useState(false);
   const [forceRerun, setForceRerun] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [runResult, setRunResult] = useState<BacktestRunResponse | null>(null);
   const [runError, setRunError] = useState<ParsedApiError | null>(null);
-  const [pageError, setPageError] = useState<ParsedApiError | null>(null);
 
-  // Results state
+  const [resultsError, setResultsError] = useState<ParsedApiError | null>(null);
+  const [perfError, setPerfError] = useState<ParsedApiError | null>(null);
   const [results, setResults] = useState<BacktestResultItem[]>([]);
   const [totalResults, setTotalResults] = useState(0);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [isLoadingResults, setIsLoadingResults] = useState(false);
-  const pageSize = 20;
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
+  const [isLoadingResults, setIsLoadingResults] = useState(true);
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
-  // Performance state
   const [overallPerf, setOverallPerf] = useState<PerformanceMetrics | null>(null);
   const [stockPerf, setStockPerf] = useState<PerformanceMetrics | null>(null);
-  const [isLoadingPerf, setIsLoadingPerf] = useState(false);
-  const effectiveWindowDays = parseEvalWindowDays(evalDays) ?? overallPerf?.evalWindowDays;
-  const isNextDayValidation = effectiveWindowDays === 1;
-  const showNextDayActualColumns = isNextDayValidation;
+  const [series, setSeries] = useState<BacktestSeriesResponse | null>(null);
 
-  // Fetch results
-  const fetchResults = useCallback(async (
-    page = 1,
-    code?: string,
-    windowDays?: number,
-    startDate?: string,
-    endDate?: string,
-    phase?: BacktestPhaseFilter,
-  ) => {
-    setIsLoadingResults(true);
-    try {
-      const response = await backtestApi.getResults({
-        code: code || undefined,
-        evalWindowDays: windowDays,
-        analysisDateFrom: startDate || undefined,
-        analysisDateTo: endDate || undefined,
-        analysisPhase: phase && phase !== 'all' ? phase : undefined,
-        page,
-        limit: pageSize,
-      });
-      setResults(response.items);
-      setTotalResults(response.total);
-      setCurrentPage(response.page);
-      setPageError(null);
-    } catch (err) {
-      console.error('Failed to fetch backtest results:', err);
-      setPageError(getParsedApiError(err));
-    } finally {
-      setIsLoadingResults(false);
-    }
+  const resultsRequestRef = useRef(0);
+  const perfRequestRef = useRef(0);
+  const seriesRequestRef = useRef(0);
+
+  const applyFilters = useCallback((next: AppliedFilters) => {
+    setApplied((current) => {
+      if (sameFilters(current, next)) return current;
+      setCurrentPage(1);
+      return next;
+    });
   }, []);
 
-  // Fetch performance
-  const fetchPerformance = useCallback(async (
-    code?: string,
-    windowDays?: number,
-    startDate?: string,
-    endDate?: string,
-    phase?: BacktestPhaseFilter,
-  ) => {
-    setIsLoadingPerf(true);
-    try {
-      const overall = await backtestApi.getOverallPerformance({
-        evalWindowDays: windowDays,
-        analysisDateFrom: startDate || undefined,
-        analysisDateTo: endDate || undefined,
-        analysisPhase: phase && phase !== 'all' ? phase : undefined,
-      });
-      setOverallPerf(overall);
+  const buildDraftFilters = useCallback((): AppliedFilters => ({
+    code: normalizeBacktestCode(codeFilter),
+    windowDays: parseEvalWindowDays(evalDays),
+    dateFrom: analysisDateFrom || undefined,
+    dateTo: analysisDateTo || undefined,
+    phase: phaseFilter,
+  }), [analysisDateFrom, analysisDateTo, codeFilter, evalDays, phaseFilter]);
 
-      if (code) {
-        const stock = await backtestApi.getStockPerformance(code, {
-          evalWindowDays: windowDays,
-          analysisDateFrom: startDate || undefined,
-          analysisDateTo: endDate || undefined,
-          analysisPhase: phase && phase !== 'all' ? phase : undefined,
-        });
-        setStockPerf(stock);
-      } else {
-        setStockPerf(null);
-      }
-      setPageError(null);
-    } catch (err) {
-      console.error('Failed to fetch performance:', err);
-      setPageError(getParsedApiError(err));
-    } finally {
-      setIsLoadingPerf(false);
-    }
-  }, []);
-
-  // Initial load — fetch performance first, then filter results by its window
+  // 初始化：先問最新一批的窗口，清單和績效才會用同一個窗口。績效讀不到也要往下走，頁面不能卡在空白。
   useEffect(() => {
+    let cancelled = false;
     const init = async () => {
-      // Get latest performance (unfiltered returns most recent summary)
-      const overall = await backtestApi.getOverallPerformance();
-      setOverallPerf(overall);
-      // Use the summary's eval_window_days to filter results consistently
-      const windowDays = overall?.evalWindowDays;
-      if (windowDays && !evalDays) {
-        setEvalDays(String(windowDays));
+      let windowDays: number | undefined;
+      try {
+        const overall = await backtestApi.getOverallPerformance();
+        if (cancelled) return;
+        windowDays = overall?.evalWindowDays;
+        if (windowDays) setEvalDays(String(windowDays));
+      } catch (err) {
+        if (cancelled) return;
+        console.error('Failed to initialize backtest page:', err);
+        setPerfError(getParsedApiError(err));
       }
-      fetchResults(1, undefined, windowDays, undefined, undefined, 'all');
+      setApplied({ windowDays, phase: 'all' });
     };
-    init();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    void init();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  // Run backtest
+  // 篩選列改動即查：打字防抖，其餘同一條路徑。
+  const initialized = applied !== null;
+  useEffect(() => {
+    if (!initialized) return undefined;
+    const timer = window.setTimeout(() => applyFilters(buildDraftFilters()), INPUT_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [applyFilters, buildDraftFilters, initialized]);
+
+  // 清單
+  useEffect(() => {
+    if (!applied) return undefined;
+    const requestId = resultsRequestRef.current + 1;
+    resultsRequestRef.current = requestId;
+    setIsLoadingResults(true);
+    setExpandedKey(null);
+    void backtestApi.getResults({
+      code: applied.code,
+      evalWindowDays: applied.windowDays,
+      analysisDateFrom: applied.dateFrom,
+      analysisDateTo: applied.dateTo,
+      analysisPhase: applied.phase !== 'all' ? applied.phase : undefined,
+      status: TAB_STATUS[tab],
+      page: currentPage,
+      limit: PAGE_SIZE,
+    })
+      .then((response) => {
+        if (resultsRequestRef.current !== requestId) return;
+        setResults(response.items);
+        setTotalResults(response.total);
+        setStatusCounts(response.statusCounts ?? {});
+        setResultsError(null);
+      })
+      .catch((err) => {
+        if (resultsRequestRef.current !== requestId) return;
+        console.error('Failed to fetch backtest results:', err);
+        setResults([]);
+        setTotalResults(0);
+        setResultsError(getParsedApiError(err));
+      })
+      .finally(() => {
+        if (resultsRequestRef.current === requestId) setIsLoadingResults(false);
+      });
+    return () => {
+      resultsRequestRef.current += 1;
+    };
+  }, [applied, currentPage, reloadToken, tab]);
+
+  // 績效彙總
+  useEffect(() => {
+    if (!applied) return undefined;
+    const requestId = perfRequestRef.current + 1;
+    perfRequestRef.current = requestId;
+    const params = {
+      evalWindowDays: applied.windowDays,
+      analysisDateFrom: applied.dateFrom,
+      analysisDateTo: applied.dateTo,
+      analysisPhase: applied.phase !== 'all' ? applied.phase : undefined,
+    };
+    const load = async () => {
+      try {
+        const overall = await backtestApi.getOverallPerformance(params);
+        const stock = applied.code ? await backtestApi.getStockPerformance(applied.code, params) : null;
+        if (perfRequestRef.current !== requestId) return;
+        setOverallPerf(overall);
+        setStockPerf(stock);
+        setPerfError(null);
+      } catch (err) {
+        if (perfRequestRef.current !== requestId) return;
+        console.error('Failed to fetch performance:', err);
+        setPerfError(getParsedApiError(err));
+      }
+    };
+    void load();
+    return () => {
+      perfRequestRef.current += 1;
+    };
+  }, [applied, reloadToken]);
+
+  // 趨勢圖只是補充：失敗就隱藏，不擋清單與績效。
+  useEffect(() => {
+    if (!applied) return undefined;
+    const requestId = seriesRequestRef.current + 1;
+    seriesRequestRef.current = requestId;
+    void backtestApi.getSeries({
+      code: applied.code,
+      evalWindowDays: applied.windowDays,
+      analysisDateFrom: applied.dateFrom,
+      analysisDateTo: applied.dateTo,
+    })
+      .then((response) => {
+        if (seriesRequestRef.current === requestId) setSeries(response);
+      })
+      .catch((err) => {
+        if (seriesRequestRef.current !== requestId) return;
+        console.error('Failed to fetch backtest series:', err);
+        setSeries(null);
+      });
+    return () => {
+      seriesRequestRef.current += 1;
+    };
+  }, [applied, reloadToken]);
+
   const handleRun = async () => {
     setIsRunning(true);
     setRunResult(null);
     setRunError(null);
     try {
-      const code = normalizeBacktestCode(codeFilter);
-      const requestedEvalWindowDays = parseEvalWindowDays(evalDays);
-      const dateFrom = analysisDateFrom || undefined;
-      const dateTo = analysisDateTo || undefined;
+      const draft = buildDraftFilters();
       const response = await backtestApi.run({
-        code,
+        code: draft.code,
         force: forceRerun || undefined,
         minAgeDays: forceRerun ? 0 : undefined,
-        evalWindowDays: requestedEvalWindowDays,
-        analysisDateFrom: dateFrom,
-        analysisDateTo: dateTo,
+        evalWindowDays: draft.windowDays,
+        analysisDateFrom: draft.dateFrom,
+        analysisDateTo: draft.dateTo,
       });
       setRunResult(response);
-      const effectiveEvalWindowDays =
-        response.appliedEvalWindowDays
-        ?? requestedEvalWindowDays
-        ?? parseEvalWindowDays(evalDays)
-        ?? overallPerf?.evalWindowDays;
-      if (effectiveEvalWindowDays != null) {
-        setEvalDays(String(effectiveEvalWindowDays));
-      }
-      // Refresh data with same eval_window_days
-      fetchResults(1, code, effectiveEvalWindowDays, dateFrom, dateTo, phaseFilter);
-      fetchPerformance(code, effectiveEvalWindowDays, dateFrom, dateTo, phaseFilter);
+      const effectiveWindow = response.appliedEvalWindowDays ?? draft.windowDays ?? overallPerf?.evalWindowDays;
+      if (effectiveWindow != null) setEvalDays(String(effectiveWindow));
+      applyFilters({ ...draft, windowDays: effectiveWindow });
+      setReloadToken((current) => current + 1);
     } catch (err) {
       setRunError(getParsedApiError(err));
     } finally {
@@ -405,320 +462,391 @@ const BacktestPage: React.FC = () => {
     }
   };
 
-  // Filter by code
-  const handleFilter = () => {
-    const code = normalizeBacktestCode(codeFilter);
-    const windowDays = parseEvalWindowDays(evalDays);
-    setCurrentPage(1);
-    fetchResults(1, code, windowDays, analysisDateFrom, analysisDateTo, phaseFilter);
-    fetchPerformance(code, windowDays, analysisDateFrom, analysisDateTo, phaseFilter);
-  };
-
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      handleFilter();
-    }
+    if (e.key === 'Enter') applyFilters(buildDraftFilters());
   };
 
-  const handleShowNextDay = () => {
-    const code = normalizeBacktestCode(codeFilter);
-    setEvalDays('1');
+  const handleClearFilters = () => {
+    setCodeFilter('');
+    setAnalysisDateFrom('');
+    setAnalysisDateTo('');
+    setPhaseFilter('all');
+    applyFilters({ windowDays: parseEvalWindowDays(evalDays), phase: 'all' });
+  };
+
+  const handleTabChange = (next: ResultTab) => {
+    setTab(next);
     setCurrentPage(1);
-    fetchResults(1, code, 1, analysisDateFrom, analysisDateTo, phaseFilter);
-    fetchPerformance(code, 1, analysisDateFrom, analysisDateTo, phaseFilter);
   };
 
-  // Pagination
-  const totalPages = Math.ceil(totalResults / pageSize);
-  const handlePageChange = (page: number) => {
-    const windowDays = parseEvalWindowDays(evalDays);
-    fetchResults(page, normalizeBacktestCode(codeFilter), windowDays, analysisDateFrom, analysisDateTo, phaseFilter);
+  const metrics = stockPerf ?? overallPerf;
+  const windowDays = applied?.windowDays ?? metrics?.evalWindowDays;
+  const isNextDay = windowDays === 1;
+  const totalPages = Math.ceil(totalResults / PAGE_SIZE);
+  const adviceRows = useMemo(() => toAdviceRows(metrics?.adviceBreakdown), [metrics?.adviceBreakdown]);
+
+  const appliedChips = applied ? [
+    applied.code ? formatUiText(text.filteredStock, { code: applied.code }) : text.allStocks,
+    windowDays ? formatUiText(text.dayWindow, { days: windowDays }) : null,
+    applied.phase !== 'all' ? (phaseFilterOptions.find((item) => item.value === applied.phase)?.label ?? applied.phase) : null,
+    applied.dateFrom ? formatUiText(text.fromDate, { date: applied.dateFrom }) : null,
+    applied.dateTo ? formatUiText(text.toDate, { date: applied.dateTo }) : null,
+  ].filter((chip): chip is string => Boolean(chip)) : [];
+
+  const tabCount = (status: string): string => {
+    const count = statusCounts[status];
+    return typeof count === 'number' ? ` ${count}` : '';
+  };
+
+  const renderPrediction = (row: BacktestResultItem) => {
+    const actionLabel = getDecisionActionLabel(row.action, row.actionLabel, null, null, actionLabels);
+    const parts = [actionLabel, row.trendPrediction, row.operationAdvice].filter((part): part is string => Boolean(part));
+    if (parts.length === 0) return NO_VALUE;
+    return (
+      <Tooltip content={parts.join(' / ')} focusable>
+        <span className="flex max-w-[16rem] items-baseline gap-1.5">
+          <span className="shrink-0 text-foreground">{parts[0]}</span>
+          {parts.slice(1).map((part) => (
+            <span key={part} className="min-w-0 truncate text-xs text-secondary-text">{part}</span>
+          ))}
+        </span>
+      </Tooltip>
+    );
+  };
+
+  const renderReturn = (row: BacktestResultItem) => (
+    <span className="inline-flex items-center gap-2">
+      {actualMovementBadge(row.actualMovement, language)}
+      <ReturnValue value={row.actualReturnPct} />
+    </span>
+  );
+
+  const renderStatus = (row: BacktestResultItem) => (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+      {statusBadge(rowStatus(row), language)}
+      {rowStatus(row) === 'pending' && row.maturesBy ? (
+        <span className="text-xs text-secondary-text">{formatUiText(overview.maturesBy, { date: row.maturesBy })}</span>
+      ) : null}
+    </span>
+  );
+
+  const renderExpanded = (row: BacktestResultItem) => {
+    const entries: Array<[string, React.ReactNode]> = [
+      [overview.entryDate, row.entryDate || NO_VALUE],
+      [overview.entryPrice, formatPrice(row.simulatedEntryPrice)],
+      [overview.exitPrice, formatPrice(row.simulatedExitPrice)],
+      [overview.exitReason, labelFromMap(row.simulatedExitReason, BACKTEST_EXIT_REASON_LABELS[language])],
+      [overview.simulatedReturn, <ReturnValue key="simulated" value={row.simulatedNetReturnPct ?? row.simulatedReturnPct} />],
+      [overview.stopLoss, formatPrice(row.stopLoss)],
+      [overview.takeProfit, formatPrice(row.takeProfit)],
+      [overview.firstHit, labelFromMap(row.firstHit, BACKTEST_EXIT_REASON_LABELS[language])],
+    ];
+    return (
+      <dl data-testid={`backtest-row-detail-${row.analysisHistoryId}`} className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs md:grid-cols-4">
+        {entries.map(([label, value]) => (
+          <div key={label} className="min-w-0">
+            <dt className="text-secondary-text">{label}</dt>
+            <dd className="mt-0.5 tabular-nums text-foreground">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    );
+  };
+
+  const toggleExpanded = (row: BacktestResultItem) => {
+    const key = String(row.analysisHistoryId);
+    setExpandedKey((current) => (current === key ? null : key));
+  };
+
+  const columns: DataTableColumn<BacktestResultItem>[] = [
+    {
+      key: 'stock',
+      header: text.stock,
+      render: (row) => (
+        <span className="flex flex-col leading-tight">
+          <span className="font-mono text-foreground">{row.code}</span>
+          <span className="text-xs text-secondary-text">{row.stockName || NO_VALUE}</span>
+        </span>
+      ),
+    },
+    { key: 'analysisDate', header: text.analysisDate, render: (row) => <span className="tabular-nums text-secondary-text">{row.analysisDate || NO_VALUE}</span> },
+    { key: 'phase', header: text.phase, render: (row) => <span className="text-secondary-text">{phaseLabel(row, language)}</span> },
+    { key: 'prediction', header: text.aiPrediction, render: renderPrediction },
+    { key: 'return', header: isNextDay ? text.actualPerformance : text.windowReturn, render: renderReturn },
+    {
+      key: 'direction',
+      header: isNextDay ? text.accuracy : text.directionMatch,
+      render: (row) => (
+        <span className="inline-flex items-center gap-2">
+          {directionMark(row.directionCorrect, text)}
+          <span className="text-secondary-text">
+            {row.directionExpected ? labelFromMap(row.directionExpected, BACKTEST_DIRECTION_EXPECTED_LABELS[language]) : ''}
+          </span>
+        </span>
+      ),
+    },
+    { key: 'result', header: text.result, render: (row) => outcomeBadge(row.outcome, language) },
+    { key: 'status', header: text.status, render: renderStatus },
+  ];
+
+  const renderMobileCard = (row: BacktestResultItem) => {
+    const key = String(row.analysisHistoryId);
+    const expanded = expandedKey === key;
+    const actionLabel = getDecisionActionLabel(row.action, row.actionLabel, null, null, actionLabels);
+    return (
+      <div>
+        <button
+          type="button"
+          data-testid={`backtest-mobile-row-${row.analysisHistoryId}`}
+          aria-expanded={expanded}
+          onClick={() => toggleExpanded(row)}
+          className="flex w-full cursor-pointer flex-col gap-1 px-3 py-2 text-left"
+        >
+          <span className="flex items-center justify-between gap-2">
+            <span className="min-w-0 truncate font-medium text-foreground">{row.stockName || row.code}</span>
+            <ReturnValue value={row.actualReturnPct} />
+          </span>
+          <span className="flex items-center justify-between gap-2 text-xs text-secondary-text">
+            <span className="min-w-0 truncate tabular-nums">{row.analysisDate || NO_VALUE}・{actionLabel || NO_VALUE}</span>
+            <span className="inline-flex shrink-0 items-center gap-1.5">
+              {directionMark(row.directionCorrect, text)}
+              {statusBadge(rowStatus(row), language)}
+            </span>
+          </span>
+        </button>
+        {expanded ? <div className="px-3 pb-3">{renderExpanded(row)}</div> : null}
+      </div>
+    );
+  };
+
+  const adviceColumns: DataTableColumn<AdviceRow>[] = [
+    {
+      key: 'advice',
+      header: overview.adviceColumn,
+      priority: 'primary',
+      render: (row) => (row.advice === '(unknown)' ? overview.adviceUnclassified : row.advice),
+    },
+    { key: 'total', header: overview.countColumn, numeric: true, render: (row) => formatNumber(row.total) },
+    {
+      key: 'outcomes',
+      header: text.outcomeSummary,
+      numeric: true,
+      render: (row) => `${row.win}／${row.loss}／${row.neutral}`,
+    },
+    {
+      key: 'winRate',
+      header: text.winRate,
+      numeric: true,
+      priority: 'primary',
+      render: (row) => (row.winRatePct != null ? `${formatNumber(row.winRatePct, 1)}%` : NO_VALUE),
+    },
+  ];
+
+  const renderEmptyState = () => {
+    if (hasNarrowingFilter(applied)) {
+      return (
+        <EmptyState
+          title={overview.emptyFilteredTitle}
+          description={overview.emptyFilteredDescription}
+          action={<Button variant="secondary" onClick={handleClearFilters}>{overview.clearFilters}</Button>}
+        />
+      );
+    }
+    if (tab === 'pending') {
+      return <EmptyState title={overview.emptyPendingTitle} description={overview.emptyPendingDescription} />;
+    }
+    return (
+      <EmptyState
+        title={text.noResultsTitle}
+        description={text.noResultsDescription}
+        action={<Button variant="secondary" onClick={() => setRunOpen(true)}>{overview.recalculate}</Button>}
+      />
+    );
   };
 
   return (
-    <div className="min-h-full flex flex-col rounded-[1.5rem] bg-transparent">
-      {/* Header */}
-      <header className="flex-shrink-0 border-b border-white/5 px-3 py-3 sm:px-4">
-        <div className="flex max-w-5xl flex-wrap items-center gap-2">
-          <div className="relative min-w-0 flex-[1_1_220px]">
-            <input
-              type="text"
-              value={codeFilter}
-              onChange={(e) => setCodeFilter(e.target.value.toUpperCase())}
-              onKeyDown={handleKeyDown}
-              placeholder={text.codePlaceholder}
-              disabled={isRunning}
-              className={BACKTEST_INPUT_CLASS}
-            />
-          </div>
-          <button
-            type="button"
-            onClick={handleFilter}
-            disabled={isLoadingResults}
-            className="btn-secondary flex items-center gap-1.5 whitespace-nowrap"
-          >
-            {text.filter}
-          </button>
-          <div className="flex items-center gap-2 whitespace-nowrap lg:w-40 lg:justify-between">
-            <span className="text-xs text-muted-text">{text.evalWindow}</span>
-            <input
-              type="number"
-              min={1}
-              max={120}
-              value={evalDays}
-              onChange={(e) => setEvalDays(e.target.value)}
-              placeholder="10"
-              disabled={isRunning}
-              className={`${BACKTEST_COMPACT_INPUT_CLASS} w-24 text-center tabular-nums`}
-            />
-          </div>
-          <div className="flex items-center gap-2 whitespace-nowrap">
-            <span className="text-xs text-muted-text">{text.phase}</span>
-            <select
-              value={phaseFilter}
-              onChange={(e) => setPhaseFilter(e.target.value as BacktestPhaseFilter)}
-              disabled={isRunning}
-              className={`${BACKTEST_COMPACT_INPUT_CLASS} w-28`}
+    <AppPage>
+      <div className="space-y-4">
+        <PageHeader
+          title={overview.pageTitle}
+          actions={<Button variant="secondary" onClick={() => setRunOpen(true)}>{overview.recalculate}</Button>}
+        />
+
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="min-w-0 flex-[1_1_220px]">
+              <input
+                type="text"
+                value={codeFilter}
+                onChange={(e) => setCodeFilter(e.target.value.toUpperCase())}
+                onKeyDown={handleKeyDown}
+                placeholder={text.codePlaceholder}
+                className={BACKTEST_INPUT_CLASS}
+              />
+            </div>
+            <label className="flex items-center gap-2 whitespace-nowrap">
+              <span className="text-xs text-secondary-text">{text.evalWindow}</span>
+              <input
+                type="number"
+                min={1}
+                max={120}
+                value={evalDays}
+                onChange={(e) => setEvalDays(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="10"
+                className={`${BACKTEST_COMPACT_INPUT_CLASS} w-20 text-center tabular-nums`}
+              />
+            </label>
+            <button
+              type="button"
+              aria-pressed={isNextDay}
+              onClick={() => setEvalDays('1')}
+              className={cn(
+                'h-10 cursor-pointer whitespace-nowrap rounded-xl border px-3 text-xs transition-colors',
+                isNextDay ? 'border-cyan/60 bg-cyan/10 text-foreground' : 'border-border/70 text-secondary-text hover:text-foreground',
+              )}
             >
-              {phaseFilterOptions.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </div>
-          <div className="flex items-center gap-2 whitespace-nowrap">
-            <span className="text-xs text-muted-text">{text.startDate}</span>
+              {text.oneDayValidation}
+            </button>
+            <label className="flex items-center gap-2 whitespace-nowrap">
+              <span className="text-xs text-secondary-text">{text.phase}</span>
+              <select
+                value={phaseFilter}
+                onChange={(e) => setPhaseFilter(e.target.value as BacktestPhaseFilter)}
+                className={`${BACKTEST_COMPACT_INPUT_CLASS} w-28`}
+              >
+                {phaseFilterOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
             <input
               type="date"
               aria-label={text.startDateAria}
               value={analysisDateFrom}
               onChange={(e) => setAnalysisDateFrom(e.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={isRunning}
-              className={`${BACKTEST_COMPACT_INPUT_CLASS} w-40 text-center tabular-nums`}
+              className={`${BACKTEST_COMPACT_INPUT_CLASS} w-36 text-center tabular-nums`}
             />
-          </div>
-          <div className="flex items-center gap-2 whitespace-nowrap">
-            <span className="text-xs text-muted-text">{text.endDate}</span>
             <input
               type="date"
               aria-label={text.endDateAria}
               value={analysisDateTo}
               onChange={(e) => setAnalysisDateTo(e.target.value)}
               onKeyDown={handleKeyDown}
-              disabled={isRunning}
-              className={`${BACKTEST_COMPACT_INPUT_CLASS} w-40 text-center tabular-nums`}
+              className={`${BACKTEST_COMPACT_INPUT_CLASS} w-36 text-center tabular-nums`}
             />
           </div>
-          <button
-            type="button"
-            onClick={handleShowNextDay}
-            disabled={isLoadingResults || isLoadingPerf}
-            className={`backtest-force-btn ${isNextDayValidation ? 'active' : ''}`}
-          >
-            <span className="dot" />
-            {text.oneDayValidation}
-          </button>
-          <button
-            type="button"
-            onClick={() => setForceRerun(!forceRerun)}
-            disabled={isRunning}
-            className={`backtest-force-btn ${forceRerun ? 'active' : ''}`}
-          >
-            <span className="dot" />
-            {text.forceRerun}
-          </button>
-          <button
-            type="button"
-            onClick={handleRun}
-            disabled={isRunning}
-            className="btn-primary flex items-center gap-1.5 whitespace-nowrap"
-          >
-            {isRunning ? (
-              <>
-                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                {text.running}
-              </>
-            ) : (
-              text.runBacktest
-            )}
-          </button>
-        </div>
-        {runResult && (
-          <div className="mt-2 max-w-4xl">
-            <RunSummary data={runResult} language={language} />
-          </div>
-        )}
-        {runError && (
-          <ApiErrorAlert error={runError} className="mt-2 max-w-4xl" />
-        )}
-        <p className="mt-2 text-xs text-muted-text">
-          {isNextDayValidation
-            ? text.oneDayModeDescription
-            : text.windowModeDescription}
-        </p>
-      </header>
-
-      {/* Main content */}
-      <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3 lg:flex-row">
-        {/* Left sidebar - Performance */}
-        <div className="flex max-h-[38vh] flex-col gap-3 overflow-y-auto lg:max-h-none lg:w-60 lg:flex-shrink-0">
-          {isLoadingPerf ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="backtest-spinner sm" />
-            </div>
-          ) : overallPerf ? (
-            <PerformanceCard metrics={overallPerf} title={text.overallPerformance} language={language} />
-          ) : (
-            <EmptyState
-              title={text.noMetricsTitle}
-              description={text.noMetricsDescription}
-              className="h-full min-h-[12rem] border-dashed bg-card/45 shadow-none"
-            />
-          )}
-
-          {stockPerf && (
-            <PerformanceCard metrics={stockPerf} title={`${stockPerf.code || codeFilter}`} language={language} />
-          )}
-        </div>
-
-        {/* Right content - Results table */}
-        <section className="min-h-0 flex-1 overflow-y-auto">
-          {pageError ? (
-            <ApiErrorAlert error={pageError} className="mb-3" />
+          {appliedChips.length > 0 ? (
+            <p data-testid="backtest-applied" className="text-xs text-secondary-text">
+              {overview.appliedLabel}{appliedChips.join('・')}
+            </p>
           ) : null}
-          {isLoadingResults ? (
-            <div className="flex flex-col items-center justify-center h-64">
-              <div className="backtest-spinner md" />
-              <p className="mt-3 text-secondary-text text-sm">{text.loadingResults}</p>
-            </div>
-          ) : results.length === 0 ? (
-            <EmptyState
-              title={text.noResultsTitle}
-              description={text.noResultsDescription}
-              className="backtest-empty-state border-dashed"
-              icon={(
-                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                </svg>
-              )}
+          <p className="text-xs text-muted-text">{isNextDay ? text.oneDayModeDescription : text.windowModeDescription}</p>
+        </div>
+
+        {perfError ? <ApiErrorAlert error={perfError} /> : null}
+
+        {metrics ? (
+          <section aria-label={text.overallPerformance} className="space-y-3">
+            <p data-testid="backtest-conclusion" className="text-sm text-foreground">
+              {buildConclusion(metrics, language)}
+            </p>
+            <MetricGroup>
+              <Metric
+                label={text.winRate}
+                value={metrics.winRatePct != null ? `${formatNumber(metrics.winRatePct, 1)}%` : undefined}
+                hint={`${metrics.winCount}／${metrics.lossCount}／${metrics.neutralCount}`}
+              />
+              <Metric label={text.avgSimulatedReturn} value={<ReturnValue value={metrics.avgSimulatedReturnPct} />} />
+              <Metric label={text.avgStockReturn} value={<ReturnValue value={metrics.avgStockReturnPct} />} />
+              <Metric
+                label={text.directionAccuracy}
+                value={metrics.directionAccuracyPct != null ? `${formatNumber(metrics.directionAccuracyPct, 1)}%` : undefined}
+                hint={`${text.evaluationCount} ${Number(metrics.completedCount)} / ${Number(metrics.totalEvaluations)}`}
+              />
+            </MetricGroup>
+          </section>
+        ) : null}
+
+        <BacktestTrendCharts
+          series={series}
+          phaseFiltered={applied?.phase !== undefined && applied.phase !== 'all'}
+          fallbackUpdatedAt={metrics?.computedAt}
+        />
+
+        {adviceRows.length > 0 ? (
+          <Card title={overview.adviceTitle} padding="sm">
+            <DataTable
+              aria-label={overview.adviceTitle}
+              columns={adviceColumns}
+              rows={adviceRows}
+              rowKey={(row) => row.advice}
+              density="compact"
             />
+          </Card>
+        ) : null}
+
+        <section aria-label={isNextDay ? text.nextDayValidation : text.resultSet} className="space-y-3">
+          <Segmented<ResultTab>
+            aria-label={text.status}
+            value={tab}
+            onChange={handleTabChange}
+            options={[
+              { value: 'completed', label: `${overview.tabCompleted}${tabCount('completed')}` },
+              { value: 'pending', label: `${overview.tabPending}${tabCount('pending')}` },
+              { value: 'all', label: overview.tabAll },
+            ]}
+          />
+
+          {resultsError ? <ApiErrorAlert error={resultsError} /> : null}
+
+          {isLoadingResults && results.length === 0 ? (
+            <p role="status" className="py-8 text-center text-sm text-secondary-text">{text.loadingResults}</p>
+          ) : results.length === 0 ? (
+            resultsError ? null : renderEmptyState()
           ) : (
-            <div className="animate-fade-in">
-              <div className="backtest-table-toolbar">
-                <div className="backtest-table-toolbar-meta">
-                  <span className="label-uppercase">{isNextDayValidation ? text.nextDayValidation : text.resultSet}</span>
-                  <span className="text-xs text-secondary-text">
-                    {codeFilter.trim() ? formatUiText(text.filteredStock, { code: codeFilter.trim() }) : text.allStocks}
-                    {evalDays ? ` · ${formatUiText(text.dayWindow, { days: evalDays })}` : ''}
-                    {phaseFilter !== 'all' ? ` · ${phaseFilterOptions.find((item) => item.value === phaseFilter)?.label ?? phaseFilter}` : ''}
-                    {analysisDateFrom ? ` · ${formatUiText(text.fromDate, { date: analysisDateFrom })}` : ''}
-                    {analysisDateTo ? ` · ${formatUiText(text.toDate, { date: analysisDateTo })}` : ''}
-                  </span>
-                </div>
-                <span className="backtest-table-scroll-hint">{text.scrollHint}</span>
-              </div>
-              <div className="backtest-table-wrapper">
-                <table className="backtest-table min-w-[900px] w-full text-sm">
-                  <thead className="backtest-table-head">
-                    <tr className="text-left">
-                      <th className="backtest-table-head-cell">{text.stock}</th>
-                      <th className="backtest-table-head-cell">{text.analysisDate}</th>
-                      <th className="backtest-table-head-cell">{text.phase}</th>
-                      <th className="backtest-table-head-cell">{text.aiPrediction}</th>
-                      <th className="backtest-table-head-cell">
-                        {showNextDayActualColumns ? text.actualPerformance : text.windowReturn}
-                      </th>
-                      <th className="backtest-table-head-cell">
-                        {showNextDayActualColumns ? text.accuracy : text.directionMatch}
-                      </th>
-                      <th className="backtest-table-head-cell">{text.result}</th>
-                      <th className="backtest-table-head-cell">{text.status}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {results.map((row) => {
-                      const actionLabel = getDecisionActionLabel(row.action, row.actionLabel, null, null, actionLabels);
-                      const predictionParts = [actionLabel, row.trendPrediction, row.operationAdvice]
-                        .filter((part): part is string => Boolean(part));
-
-                      return (
-                        <tr
-                          key={row.analysisHistoryId}
-                          className="backtest-table-row"
-                        >
-                          <td className="backtest-table-cell backtest-table-code">
-                            <div className="flex flex-col">
-                              <span>{row.code}</span>
-                              <span className="text-xs text-muted-text">{row.stockName || '--'}</span>
-                            </div>
-                          </td>
-                          <td className="backtest-table-cell text-secondary-text">{row.analysisDate || '--'}</td>
-                          <td className="backtest-table-cell text-secondary-text">{phaseLabel(row, language)}</td>
-                          <td className="backtest-table-cell max-w-[220px] text-foreground">
-                            {predictionParts.length ? (
-                              <Tooltip
-                                content={predictionParts.join(' / ')}
-                                focusable
-                              >
-                                <div className="flex flex-col gap-1">
-                                  <span className="block truncate">{actionLabel || row.trendPrediction || '--'}</span>
-                                  {actionLabel && row.trendPrediction && (
-                                    <span className="block truncate text-xs text-secondary-text">{row.trendPrediction}</span>
-                                  )}
-                                  {row.operationAdvice && (
-                                    <span className="block truncate text-xs text-secondary-text">{row.operationAdvice}</span>
-                                  )}
-                                </div>
-                              </Tooltip>
-                            ) : (
-                              '--'
-                            )}
-                          </td>
-                          <td className="backtest-table-cell">
-                            <div className="flex items-center gap-2">
-                              {actualMovementBadge(row.actualMovement, language)}
-                              <span className={marketToneClass(row.actualReturnPct, 'text-muted-text')}>
-                                {pct(row.actualReturnPct)}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="backtest-table-cell">
-                            <span className="flex items-center gap-2">
-                              {boolIcon(row.directionCorrect, text)}
-                              <span className="text-muted-text">
-                                {row.directionExpected ? labelFromMap(row.directionExpected, BACKTEST_DIRECTION_EXPECTED_LABELS[language]) : ''}
-                              </span>
-                            </span>
-                          </td>
-                          <td className="backtest-table-cell">{outcomeBadge(row.outcome, language)}</td>
-                          <td className="backtest-table-cell">{statusBadge(row.evalStatus, language)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Pagination */}
-              <div className="mt-4">
-                <Pagination
-                  currentPage={currentPage}
-                  totalPages={totalPages}
-                  onPageChange={handlePageChange}
-                />
-              </div>
-
-              <p className="text-xs text-muted-text text-center mt-2">
+            <>
+              <DataTable
+                aria-label={isNextDay ? text.nextDayValidation : text.resultSet}
+                columns={columns}
+                rows={results}
+                rowKey={(row) => String(row.analysisHistoryId)}
+                onRowClick={toggleExpanded}
+                expandedRowKey={expandedKey}
+                renderExpandedRow={renderExpanded}
+                renderMobileCard={renderMobileCard}
+              />
+              <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={setCurrentPage} />
+              <p className="text-center text-xs text-muted-text">
                 {formatUiText(text.totalPage, { total: totalResults, page: currentPage, pages: Math.max(totalPages, 1) })}
               </p>
-            </div>
+            </>
           )}
         </section>
-      </main>
-    </div>
+      </div>
+
+      <Drawer isOpen={runOpen} onClose={() => setRunOpen(false)} title={overview.recalculate}>
+        <div className="space-y-4">
+          <p className="text-sm text-secondary-text">{overview.recalculateDescription}</p>
+          {appliedChips.length > 0 ? <p className="text-xs text-secondary-text">{overview.appliedLabel}{appliedChips.join('・')}</p> : null}
+          <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={forceRerun}
+              onChange={(e) => setForceRerun(e.target.checked)}
+              disabled={isRunning}
+            />
+            {text.forceRerun}
+          </label>
+          <Button variant="primary" isLoading={isRunning} disabled={isRunning} onClick={() => void handleRun()}>
+            {isRunning ? text.running : text.runBacktest}
+          </Button>
+          {runResult ? <RunSummary data={runResult} language={language} /> : null}
+          {runError ? <ApiErrorAlert error={runError} /> : null}
+        </div>
+      </Drawer>
+    </AppPage>
   );
 };
 

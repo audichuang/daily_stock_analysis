@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改進] AI 建議頁改為列表優先：精簡標題、動作摘要、單一股票搜尋同時篩列表；統計收合到最後並改寫成「63.7%（130／204 筆可判定）｜934 筆中 705 筆無法評估」的中性句子；未選股不再顯示兩張空卡，來源報告 ID 只留 URL。
+- [新功能] AI 建議列表改為高密度列：實心動作標籤、持股與已觸停損標記、批次行情現價與漲跌、停損／目標距離、剩餘時效、同檔「另有 N 筆」與動作變化；手機 88px 兩行列與載入更多；來源報告連到 `/?report=<id>`。API 追加 `previous_action`。
+- [改進] AI 建議抽屜依現價→價位尺→理由→催化與風險→條件→事後結果→回饋→技術資料排序，重評估與狀態操作收進「⋯」；時間線縱軸改中文、橫軸短日期、手機改清單，動作色不再用紅綠。
+- [改進] 回測頁拿掉左窄欄，篩選改動即查且已套用條件獨立顯示，新增結論句（樣本不足明說）、四大數字、依建議拆解、已完成／未到期／全部分流、列展開進出場與三種空狀態；重新計算與強制重跑移到對話框。
+- [新功能] 回測頁新增「逐筆累計（非資金曲線）」與月勝率小圖並標註資料更新時間；`/backtest/series` 追加 `stock_return_pct`、`cumulative_stock_return_pct`、`updated_at`。
 - [新功能] `/history/{id}` 回傳 `structured_report`（舊報告建構失敗維持 null），報告追加一句話結論、分持股建議、信心度、護欄、進出場條件、前次報告摘要、幣別、資料日與是否持有；ResearchArtifact 追加事件、各來源狀態與美股證據，失效條件的句子跟著報告語言走。
 - [新功能] `/history` 追加 `q`、`market`、`action` 查詢與 `stock_total`、`market_review_total`；個股清單追加 `analysis_price`、`change_pct`、`last_analyzed_at`（評分沿用既有的 `sentiment_score`）；新聞追加 `published_at` 與繁中 `key_point`，摘要去掉免責與行情樣板句。
 - [改進] zh-TW 動作用語改為買進、加碼、續抱、減碼、迴避、警報（舊報告的買入、減倉等仍可解析），系統提示詞本體改送繁體並帶詞彙表，報告表頭改為「項目｜數值」「點位｜價格」，沒有讀數的列省略，金額單位改「億」。

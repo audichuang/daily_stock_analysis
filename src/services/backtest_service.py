@@ -751,7 +751,12 @@ class BacktestService:
         points: List[Dict[str, Any]] = []
         months: Dict[str, Dict[str, Any]] = {}
         cumulative = 0.0
+        cumulative_stock = 0.0
+        updated_at = None
         for row in rows:
+            evaluated_at = getattr(row, "evaluated_at", None)
+            if evaluated_at is not None and (updated_at is None or evaluated_at > updated_at):
+                updated_at = evaluated_at
             if row.analysis_date is None:
                 continue
             bucket = months.setdefault(
@@ -766,12 +771,19 @@ class BacktestService:
             if value is None or not math.isfinite(value):
                 continue
             cumulative += value
+            stock_value = getattr(row, "stock_return_pct", None)
+            if not isinstance(stock_value, (int, float)) or not math.isfinite(stock_value):
+                stock_value = None
+            else:
+                cumulative_stock += stock_value
             points.append({
                 "date": row.analysis_date.isoformat(),
                 "analysis_history_id": row.analysis_history_id,
                 "code": row.code,
                 "return_pct": round(value, 4),
                 "cumulative_return_pct": round(cumulative, 4),
+                "stock_return_pct": round(stock_value, 4) if stock_value is not None else None,
+                "cumulative_stock_return_pct": round(cumulative_stock, 4),
             })
         monthly = []
         for key in sorted(months):
@@ -780,7 +792,11 @@ class BacktestService:
             denominator = bucket["win"] + bucket["loss"]
             bucket["win_rate_pct"] = round(bucket["win"] / denominator * 100, 2) if denominator else None
             monthly.append(bucket)
-        return {"points": points, "monthly": monthly}
+        return {
+            "points": points,
+            "monthly": monthly,
+            "updated_at": updated_at.isoformat() if updated_at is not None else None,
+        }
 
     def get_summary(
         self,

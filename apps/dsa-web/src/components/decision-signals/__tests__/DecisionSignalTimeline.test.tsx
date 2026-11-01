@@ -1,5 +1,5 @@
 import type React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
 import type { DecisionSignalItem } from '../../../types/decisionSignals';
@@ -147,6 +147,26 @@ describe('DecisionSignalTimeline', () => {
     fireEvent.click(screen.getByTestId('timeline-click-1'));
 
     expect(onSelect).toHaveBeenCalledWith(baseSignal);
+  });
+
+  it('colors points by action tone without market red or green', () => {
+    const colors = (['buy', 'add', 'hold', 'watch', 'avoid', 'reduce', 'sell', 'alert'] as const).map(
+      (action) => getTimelinePointStyle(makeSignal({ action })).fill,
+    );
+
+    expect(colors).not.toContain('#16a34a');
+    expect(colors).not.toContain('#dc2626');
+    expect(getTimelinePointStyle(makeSignal({ action: 'hold' })).fill).toBe(getTimelinePointStyle(makeSignal({ action: 'watch' })).fill);
+    expect(getTimelinePointStyle(makeSignal({ action: 'buy' })).fill).not.toBe(getTimelinePointStyle(makeSignal({ action: 'sell' })).fill);
+  });
+
+  it('lists points newest first for phones and opens the selected one', () => {
+    const { onSelect } = renderTimeline();
+
+    const list = screen.getByTestId('timeline-mobile-list');
+    expect(list).toHaveClass('md:hidden');
+    fireEvent.click(within(list).getAllByRole('button')[0]);
+    expect(onSelect).toHaveBeenCalled();
   });
 
   it('renders empty and error states', () => {
