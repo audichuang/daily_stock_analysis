@@ -157,7 +157,9 @@ final class DSACoreTests: XCTestCase {
         let result = try await client.calendarEvents(from: today, to: today)
         XCTAssertEqual(result.events.first?.sourceUrl, "https://example.test/source")
         XCTAssertEqual(result.events.first?.date, today)
-        XCTAssertEqual(result.events.first?.timezoneLabel, "美東 ET")
+        XCTAssertEqual(result.events.first?.timezoneLabel, "美東")
+        // Taiwan dates are the user's local dates; no place label is printed.
+        XCTAssertEqual(result.events.last?.timezoneLabel, "")
         XCTAssertEqual(result.events.last?.statusLabel, "法定期限")
         XCTAssertNil(result.events.last?.code)
     }

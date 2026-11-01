@@ -9,6 +9,8 @@ struct MarketChart: View {
     let convention: MarketColorConvention
     let market: String
     let loadIntraday: IntradayLoaders?
+    /// Quote change % from the page header; the readout uses it for the latest daily bar so both show the same number.
+    let latestChangePercent: Double?
 
     let isFullScreen: Bool
     let extraPriceHeight: CGFloat
@@ -34,12 +36,18 @@ struct MarketChart: View {
     @State private var visibleLength: Double = 63
     @State private var pinchBase: ChartViewport?
     @ScaledMetric(relativeTo: .caption2) private var axisLabelWidth: CGFloat = 54
+    @ScaledMetric(relativeTo: .caption2) private var markerFontSize: CGFloat = 11
+    @ScaledMetric(relativeTo: .caption2) private var chevronFontSize: CGFloat = 9
+
+    /// Empty bars kept to the right of the latest candle so it does not sit under the price tag.
+    private static let trailingEmptyBars: Double = 2
 
     init(
         candles: [ChartCandle],
         convention: MarketColorConvention = .taiwan,
         market: String = "tw",
         loadIntraday: IntradayLoaders? = nil,
+        latestChangePercent: Double? = nil,
         isFullScreen: Bool = false,
         initialPeriod: CandlePeriod = .day,
         initialShowsIntraday: Bool = false,
@@ -49,6 +57,7 @@ struct MarketChart: View {
         self.convention = convention
         self.market = market
         self.loadIntraday = loadIntraday
+        self.latestChangePercent = latestChangePercent
         self.isFullScreen = isFullScreen
         self.extraPriceHeight = extraPriceHeight
         _showsIntraday = State(initialValue: initialShowsIntraday)
@@ -60,7 +69,7 @@ struct MarketChart: View {
     private enum ChartInterval: Int, CaseIterable, Identifiable {
         case oneMonth = 1, threeMonths = 3, sixMonths = 6, oneYear = 12, threeYears = 36, fiveYears = 60, all = 1_200
         var id: Int { rawValue }
-        var label: String { self == .all ? "全部" : rawValue < 12 ? "\(rawValue)月" : "\(rawValue / 12)年" }
+        var label: String { self == .all ? "全部" : rawValue < 12 ? "\(rawValue)個月" : "\(rawValue / 12)年" }
         var accessibilityLabel: String { self == .all ? "全部資料" : rawValue < 12 ? "\(rawValue) 個月" : "\(rawValue / 12) 年" }
 
         /// 每種 K 棒的預設視窗：一年塞兩百多根日 K 會擠成細線。
@@ -243,12 +252,15 @@ struct MarketChart: View {
     }
 
     private var fullDomain: ClosedRange<Double>? {
-        prepared.full.isEmpty ? nil : ChartViewport.domain(barCount: prepared.full.count)
+        guard !prepared.full.isEmpty else { return nil }
+        let domain = ChartViewport.domain(barCount: prepared.full.count)
+        return domain.lowerBound...(domain.upperBound + Self.trailingEmptyBars)
     }
 
     private func resetViewport() {
         guard let domain = fullDomain else { return }
-        let bars = ChartViewport.preferredBars(dates: prepared.full.map(\.date), months: interval.rawValue)
+        // Widen by the empty bars so the preset window still shows all of its candles.
+        let bars = ChartViewport.preferredBars(dates: prepared.full.map(\.date), months: interval.rawValue) + Self.trailingEmptyBars
         apply(ChartViewport.initial(domain: domain, preferredBars: bars))
         selectedX = nil
     }
@@ -373,7 +385,7 @@ struct MarketChart: View {
         }
         .fullScreenCover(isPresented: $showingFullScreen) {
             MarketChartFullScreen(candles: candles, convention: convention, market: market, loadIntraday: loadIntraday,
-                                  period: period, showsIntraday: showsIntraday)
+                                  latestChangePercent: latestChangePercent, period: period, showsIntraday: showsIntraday)
         }
         .environment(\.calendar, TradingDay.calendar)
         .environment(\.timeZone, TradingDay.timeZone)
@@ -414,7 +426,7 @@ struct MarketChart: View {
                 } label: {
                     HStack(spacing: 3) {
                         Text(interval.label)
-                        Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+                        Image(systemName: "chevron.down").font(.system(size: chevronFontSize, weight: .bold))
                     }
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Theme.text)
@@ -436,13 +448,6 @@ struct MarketChart: View {
                 } label: {
                     Label("看懂 K 線", systemImage: "questionmark.circle")
                 }
-                if !isFullScreen {
-                    Button {
-                        showingFullScreen = true
-                    } label: {
-                        Label("全螢幕", systemImage: "arrow.up.left.and.arrow.down.right")
-                    }
-                }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.body)
@@ -451,6 +456,20 @@ struct MarketChart: View {
             }
             .accessibilityLabel("更多圖表設定")
             .accessibilityIdentifier("chart.more")
+            // The only full-screen entry: the menu and indicator rows no longer repeat it.
+            if !isFullScreen {
+                Button {
+                    showingFullScreen = true
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.body)
+                        .foregroundStyle(Theme.secondary)
+                        .frame(width: 36, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("全螢幕")
+                .accessibilityIdentifier("chart.fullscreen")
+            }
         }
     }
 
@@ -473,30 +492,17 @@ struct MarketChart: View {
         .accessibilityIdentifier(id)
     }
 
-    /// 指標直接按：不用先開選單再選。每列右邊的問號開到看懂 K 線的對應段落。
+    /// 指標直接按：不用先開選單再選。三列共用一顆問號，選單裡挑要看的段落。
     private var indicatorRows: some View {
         VStack(alignment: .leading, spacing: 6) {
-            optionRow("主圖", options: Overlay.allCases, selection: $overlay, label: \.rawValue, id: "chart.overlay", guide: .movingAverage)
-            optionRow("副圖", options: Oscillator.allCases, selection: $oscillator, label: \.rawValue, id: "chart.oscillator", guide: .oscillator)
+            optionRow("主圖", options: Overlay.allCases, selection: $overlay, label: \.rawValue, id: "chart.overlay")
+            optionRow("副圖", options: Oscillator.allCases, selection: $oscillator, label: \.rawValue, id: "chart.oscillator")
             HStack(spacing: 6) {
                 rowTitle("標記")
                 toggleChip("重點標記", isOn: $showsMarkers, id: "chart.markers")
                 toggleChip("缺口交叉", isOn: $showsEvents, id: "chart.events")
                 Spacer(minLength: 0)
-                guideButton(.markers)
-                if !isFullScreen {
-                    Button {
-                        showingFullScreen = true
-                    } label: {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                            .font(.caption)
-                            .foregroundStyle(Theme.secondary)
-                            .frame(width: 32, height: 34)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("全螢幕")
-                    .accessibilityIdentifier("chart.fullscreen")
-                }
+                guideMenu
             }
         }
         .onChange(of: overlay) { _, _ in hiddenLines = [] }
@@ -514,8 +520,7 @@ struct MarketChart: View {
         options: [Option],
         selection: Binding<Option>,
         label: @escaping (Option) -> String,
-        id: String,
-        guide: KLineGuideSection
+        id: String
     ) -> some View {
         HStack(spacing: 6) {
             rowTitle(title)
@@ -531,7 +536,6 @@ struct MarketChart: View {
                 .accessibilityIdentifier("\(id).\(label(option))")
             }
             Spacer(minLength: 0)
-            guideButton(guide)
         }
     }
 
@@ -546,18 +550,25 @@ struct MarketChart: View {
         .accessibilityIdentifier(id)
     }
 
-    private func guideButton(_ section: KLineGuideSection) -> some View {
-        Button {
-            guideSection = section
+    /// One question mark for the three indicator rows; items keep the old per-row identifiers.
+    private var guideMenu: some View {
+        Menu {
+            ForEach([KLineGuideSection.movingAverage, .oscillator, .markers], id: \.self) { section in
+                Button {
+                    guideSection = section
+                } label: {
+                    Text("看懂\(section.title)")
+                }
+                .accessibilityIdentifier("chart.guide.\(section.rawValue)")
+            }
         } label: {
             Image(systemName: "questionmark.circle")
                 .font(.caption)
                 .foregroundStyle(Theme.secondary)
                 .frame(width: 32, height: 34)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("看懂\(section.title)")
-        .accessibilityIdentifier("chart.guide.\(section.rawValue)")
+        .accessibilityLabel("指標說明")
+        .accessibilityIdentifier("chart.guide")
     }
 
     private func chip(_ title: String, active: Bool) -> some View {
@@ -578,7 +589,9 @@ struct MarketChart: View {
     /// 圖上方兩行小字（富途／TradingView 的寫法）：日期與開高低收、漲跌；下一行是可點的指標線數值。
     private func infoHeader(_ candle: ChartCandle) -> some View {
         let previous = prepared.full.last { $0.date < candle.periodStart }?.close
-        let change = previous.map { (candle.close / $0 - 1) * 100 }
+        // Latest daily bar: show the header's quote change % (weekly / monthly bars keep their own period change).
+        let usesQuoteChange = period == .day && candle.date == prepared.full.last?.date && latestChangePercent?.isFinite == true
+        let change = usesQuoteChange ? latestChangePercent : previous.map { (candle.close / $0 - 1) * 100 }
         let tint = Theme.changeColor(change ?? (candle.close - candle.open), convention: convention)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
@@ -632,15 +645,15 @@ struct MarketChart: View {
             if let point {
                 switch oscillator {
                 case .macd:
-                    Text("DIF \(price(point.first))").foregroundStyle(Theme.warning)
-                    Text("DEA \(point.second.map(price) ?? "—")").foregroundStyle(Theme.information)
-                    Text("柱 \(point.histogram.map(price) ?? "—")")
+                    Text("DIF \(indicatorValue(point.first))").foregroundStyle(Theme.warning)
+                    Text("DEA \(point.second.map(indicatorValue) ?? "—")").foregroundStyle(Theme.information)
+                    Text("柱 \(point.histogram.map(indicatorValue) ?? "—")")
                         .foregroundStyle(Theme.changeColor(point.histogram, convention: convention))
                 case .kd:
-                    Text("K \(price(point.first))").foregroundStyle(Theme.warning)
-                    Text("D \(point.second.map(price) ?? "—")").foregroundStyle(Theme.information)
+                    Text("K \(indicatorValue(point.first))").foregroundStyle(Theme.warning)
+                    Text("D \(point.second.map(indicatorValue) ?? "—")").foregroundStyle(Theme.information)
                 case .rsi:
-                    Text(price(point.first)).foregroundStyle(Theme.warning)
+                    Text(indicatorValue(point.first)).foregroundStyle(Theme.warning)
                 case .none:
                     EmptyView()
                 }
@@ -698,7 +711,7 @@ struct MarketChart: View {
         let yDomain = priceDomain(data)
         let extremes = KeyPoints.extremes(Array(data))
         let latest = prepared.full.last
-        let latestColor = Theme.changeColor(prepared.latestChange, convention: convention)
+        let latestColor = Theme.changeColor(latestChangePercent ?? prepared.latestChange, convention: convention)
         let ticks = ChartViewport.axisTicks(barCount: prepared.full.count, visibleLength: visibleLength)
         // 跨年的視窗才標年／月，只寫月日會看不出是哪一年。
         let spansYear = (data.first?.date).flatMap { first in data.last.map { $0.date.timeIntervalSince(first) > 300 * 86_400 } } ?? false
@@ -720,7 +733,7 @@ struct MarketChart: View {
                     .foregroundStyle((gap.up ? Theme.changeColor(1, convention: convention) : Theme.changeColor(-1, convention: convention)).opacity(0.12))
                     .annotation(position: .topLeading, alignment: .leading, spacing: 2) {
                         if gap.date == prepared.gaps.last?.date {
-                            Text("未補缺口").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.secondary)
+                            Text("未補缺口").font(.system(size: markerFontSize, weight: .semibold)).foregroundStyle(Theme.secondary)
                         }
                     }
                 }
@@ -760,7 +773,7 @@ struct MarketChart: View {
                 }
             }
             if showsMarkers {
-                extremeMarks(extremes)
+                extremeMarks(extremes, latestClose: latest?.close)
             }
             if showsEvents {
                 crossMarks()
@@ -801,7 +814,7 @@ struct MarketChart: View {
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Theme.border)
                 AxisValueLabel {
                     if let number = value.as(Double.self) {
-                        axisLabel(number.formatted(.number.precision(.fractionLength(0...2))))
+                        axisLabel(axisPrice(number))
                     }
                 }
             }
@@ -811,7 +824,7 @@ struct MarketChart: View {
             GeometryReader { geometry in
                 if let latest, yDomain.contains(latest.close), let plot = proxy.plotFrame, let y = proxy.position(forY: latest.close) {
                     Text(price(latest.close))
-                        .font(.system(size: 11, weight: .bold).monospacedDigit())
+                        .font(.system(size: markerFontSize, weight: .bold).monospacedDigit())
                         .foregroundStyle(Theme.background)
                         .padding(.horizontal, 3)
                         .background(latestColor, in: RoundedRectangle(cornerRadius: 3))
@@ -827,7 +840,7 @@ struct MarketChart: View {
     }
 
     @ChartContentBuilder
-    private func extremeMarks(_ extremes: (high: ChartCandle, low: ChartCandle)?) -> some ChartContent {
+    private func extremeMarks(_ extremes: (high: ChartCandle, low: ChartCandle)?, latestClose: Double?) -> some ChartContent {
         if let extremes {
             let highX = Double(prepared.indexByDate[extremes.high.date] ?? 0)
             let lowX = Double(prepared.indexByDate[extremes.low.date] ?? 0)
@@ -836,11 +849,14 @@ struct MarketChart: View {
                 .annotation(position: .top, alignment: labelAlignment(highX), spacing: 2) {
                     markerLabel("高 \(price(extremes.high.high))")
                 }
-            PointMark(x: .value("區間低", lowX), y: .value("低", extremes.low.low))
-                .symbolSize(0)
-                .annotation(position: .bottom, alignment: labelAlignment(lowX), spacing: 2) {
-                    markerLabel("低 \(price(extremes.low.low))")
-                }
+            // The latest-price tag already marks that level; a「低」label would just overlap it.
+            if latestClose.map({ price($0) }) != price(extremes.low.low) {
+                PointMark(x: .value("區間低", lowX), y: .value("低", extremes.low.low))
+                    .symbolSize(0)
+                    .annotation(position: .bottom, alignment: labelAlignment(lowX), spacing: 2) {
+                        markerLabel("低 \(price(extremes.low.low))")
+                    }
+            }
         }
     }
 
@@ -857,7 +873,7 @@ struct MarketChart: View {
                 .annotation(position: cross.golden ? .bottom : .top, spacing: 2,
                             overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
                     if cross.date == recent.last?.date {
-                        Text(cross.golden ? "黃金交叉" : "死亡交叉").font(.system(size: 11, weight: .semibold))
+                        Text(cross.golden ? "黃金交叉" : "死亡交叉").font(.system(size: markerFontSize, weight: .semibold))
                             .foregroundStyle(cross.golden ? Theme.warning : Theme.information)
                     }
                 }
@@ -872,7 +888,7 @@ struct MarketChart: View {
 
     private func markerLabel(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+            .font(.system(size: markerFontSize, weight: .semibold).monospacedDigit())
             .foregroundStyle(Theme.text)
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
@@ -948,7 +964,7 @@ struct MarketChart: View {
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Theme.border)
                 AxisValueLabel {
                     if let number = value.as(Double.self) {
-                        axisLabel(price(number))
+                        axisLabel(indicatorValue(number))
                     }
                 }
             }
@@ -966,8 +982,24 @@ struct MarketChart: View {
         }
     }
 
-    /// 負號依詞彙表用 U+2212（MACD 讀數與軸標會是負值）。
+    /// Price-band decimals (`DisplayFormatting.priceDecimals`) taken from the latest close, so every price
+    /// on the chart shares one precision.
+    private var priceDigits: Int { DisplayFormatting.priceDecimals(prepared.full.last?.close) }
+
+    /// Prices on readouts and markers: at least the band's decimals, up to 2 so off-ladder ticks
+    /// (ETF 0.05 steps such as 443.15) are not rounded away.
     private func price(_ value: Double) -> String {
+        let digits = priceDigits
+        return value.formatted(.number.precision(.fractionLength(digits...max(digits, 2)))).replacingOccurrences(of: "-", with: "−")
+    }
+
+    /// Axis ticks use exactly the band's decimals.
+    private func axisPrice(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(priceDigits))).replacingOccurrences(of: "-", with: "−")
+    }
+
+    /// Oscillator values (MACD / KD / RSI) are not prices; 負號依詞彙表用 U+2212。
+    private func indicatorValue(_ value: Double) -> String {
         value.formatted(.number.precision(.fractionLength(0...2))).replacingOccurrences(of: "-", with: "−")
     }
 
@@ -984,6 +1016,7 @@ private struct MarketChartFullScreen: View {
     let convention: MarketColorConvention
     let market: String
     let loadIntraday: IntradayLoaders?
+    let latestChangePercent: Double?
     let period: CandlePeriod
     let showsIntraday: Bool
     @Environment(\.dismiss) private var dismiss
@@ -996,7 +1029,7 @@ private struct MarketChartFullScreen: View {
             GeometryReader { geometry in
                 ScrollView {
                     MarketChart(candles: candles, convention: convention, market: market, loadIntraday: loadIntraday,
-                                isFullScreen: true, initialPeriod: period, initialShowsIntraday: showsIntraday,
+                                latestChangePercent: latestChangePercent, isFullScreen: true, initialPeriod: period, initialShowsIntraday: showsIntraday,
                                 extraPriceHeight: max(geometry.size.height - Self.reservedHeight, 0))
                         .padding(.horizontal, 12)
                 }

@@ -9,16 +9,24 @@ struct EventOutlookCard: View {
         DSACard {
             VStack(alignment: .leading, spacing: 14) {
                 SectionHeading("事件展望", subtitle: subtitle, systemImage: "calendar.badge.exclamationmark")
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(outlook.expectationLabel)
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(expectationColor)
-                    if let confidence = outlook.confidenceLabel {
-                        Text(confidence).font(.caption).foregroundStyle(Theme.secondary)
+                if hasJudgement {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(outlook.expectationLabel)
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(expectationColor)
+                        if let confidence = outlook.confidenceLabel {
+                            Text(confidence).font(.caption).foregroundStyle(Theme.secondary)
+                        }
                     }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("event-outlook.expectation")
+                } else {
+                    // No judgement: one quiet line instead of a bold headline.
+                    Text(outlook.expectationLabel)
+                        .font(.subheadline).foregroundStyle(Theme.secondary)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("event-outlook.expectation")
                 }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("event-outlook.expectation")
                 if let reasoning = outlook.reasoning {
                     Text(reasoning).font(.subheadline).foregroundStyle(Theme.text)
                 }
@@ -29,7 +37,7 @@ struct EventOutlookCard: View {
                             Text(reaction).font(.subheadline).foregroundStyle(Theme.secondary)
                         }
                         if let holding = scenario.actionIfHolding {
-                            Text("持有：\(holding)").font(.subheadline).foregroundStyle(Theme.text)
+                            Text("持股：\(holding)").font(.subheadline).foregroundStyle(Theme.text)
                         }
                         if let flat = scenario.actionIfFlat {
                             Text("空手：\(flat)").font(.subheadline).foregroundStyle(Theme.text)
@@ -57,11 +65,15 @@ struct EventOutlookCard: View {
         "\(outlook.event ?? "近期事件") · \(outlook.eventDate ?? "日期未定")"
     }
 
+    private var hasJudgement: Bool {
+        ["beat", "inline", "miss"].contains(outlook.expectation ?? "")
+    }
+
+    /// Red / green stay reserved for price direction; the judgement uses accent / grey / amber.
     private var expectationColor: Color {
         switch outlook.expectation {
-        case "beat": return StatusTone.positive.color
-        case "miss": return StatusTone.negative.color
-        case "inline": return Theme.accent
+        case "beat": return Theme.accent
+        case "miss": return Theme.warning
         default: return Theme.secondary
         }
     }

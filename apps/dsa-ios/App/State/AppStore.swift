@@ -18,6 +18,8 @@ final class AppStore: ObservableObject {
     @Published var indices: [MarketIndex] = []
     @Published var reports: [HistoryItem] = []
     @Published var marketReviews: [HistoryItem] = []
+    /// 盤勢卡的結構化內容，依複盤報告 id 快取；沒有 payload 的報告不放進來。
+    @Published private(set) var marketReviewPayloads: [Int: MarketReviewPayload] = [:]
     @Published var refreshing = false
     @Published var errors: [String: String] = [:]
     @Published var refreshedAt: Date?
@@ -35,6 +37,9 @@ final class AppStore: ObservableObject {
     }
     @Published var portfolioSummaryFailed = false
     @Published private(set) var heldKeys: Set<String> = []
+    /// 今日頁持股待辦卡；nil 代表還沒讀到。失敗另記旗標，不能當成沒有待辦。
+    @Published var holdingTodos: HoldingTodoList?
+    @Published var holdingTodosFailed = false
     @Published var alertMonitor: AlertMonitorStatus?
     @Published var alertMonitorFailed = false
     @Published var colorConvention: MarketColorConvention {
@@ -47,6 +52,10 @@ final class AppStore: ObservableObject {
     private(set) var toolWebDataStore: WKWebsiteDataStore
     private var generation = UUID()
     private var portfolioSummaryLoading = false
+    private var holdingTodosLoading = false
+    /// 已讀過詳情的複盤 id（含沒有 payload 的），避免每次下拉都重抓；失敗的不記，下輪再試。
+    private var loadedReviewIDs: Set<Int> = []
+    private var loadingReviewIDs: Set<Int> = []
     private var connectTask: Task<Void, Never>?
     private let configurationFactory: () -> URLSessionConfiguration
 
@@ -114,6 +123,8 @@ final class AppStore: ObservableObject {
                 catch { candidateSession.invalidateAndCancel(); throw error }
                 session?.invalidateAndCancel()
                 generation = UUID()
+                // 舊 generation 的刷新收尾時會因對不上而提前 return，旗標要在這裡清，與 logout() 一致。
+                refreshing = false
                 clearData()
                 // 換伺服器或更換／移除 Access Token 都走這裡，舊 cookie 不能留給下一個工具頁。
                 toolWebDataStore = .nonPersistent()
@@ -143,6 +154,9 @@ final class AppStore: ObservableObject {
             handleAuthenticationError(error)
         }
     }
+
+    /// 畫面顯示已連線但 client 已被清掉（Access 憑證變更後）。
+    var needsReconnect: Bool { connected && client == nil }
 
     func hasAccessCredentials() -> Bool {
         guard let url = ServerAddress.normalized(serverAddress) else { return false }
@@ -238,6 +252,8 @@ final class AppStore: ObservableObject {
         async let history: Void = loadReports(client, generation: currentGeneration)
         // 帶即時價的持股快照比其他請求慢很多，不併入這輪等待：下拉更新與事件卡都等 refreshedAt。
         Task { await loadPortfolioSummary(client, generation: currentGeneration) }
+        // 同上：由 store 自己的 Task 載入，不讓 .refreshable 取消，也不拖慢 refreshedAt。
+        Task { await loadHoldingTodos(client, generation: currentGeneration) }
         _ = await (watch, market, history)
         guard generation == currentGeneration else { return }
         refreshing = false
@@ -286,6 +302,12 @@ final class AppStore: ObservableObject {
         Task { await loadPortfolioSummary(client, generation: current) }
     }
 
+    func retryHoldingTodos() {
+        guard let client, connected else { return }
+        let current = generation
+        Task { await loadHoldingTodos(client, generation: current) }
+    }
+
     func saveWatchlistGroups(_ groups: [WatchlistGroup]) async throws {
         guard let client else { return }
         watchlistGroups = try await client.saveWatchlistGroups(groups).groups
@@ -325,10 +347,12 @@ final class AppStore: ObservableObject {
     }
 
     private func loadWatchlist(_ client: DSAClient, generation expected: UUID) async {
+        // Groups load in parallel with the list; they are not needed for the quote request.
+        async let pendingGroups = client.watchlistGroups()
         do {
             let codes = try await client.watchlist()
             // 分組是附加資訊：讀不到（舊伺服器 404、暫時失敗）時保留現有分組，不算自選載入失敗。
-            let groups = try? await client.watchlistGroups()
+            let groups = try? await pendingGroups
             // 報價失敗不能連名單一起丟：名單照常更新，舊報價保留，畫面另外標示。
             var results: [QuoteItem]?
             var quoteError: Error?
@@ -383,6 +407,22 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// 失敗只影響持股待辦卡，不寫進 errors、不登出。
+    private func loadHoldingTodos(_ client: DSAClient, generation expected: UUID) async {
+        guard !holdingTodosLoading else { return }
+        holdingTodosLoading = true
+        defer { holdingTodosLoading = false }
+        do {
+            let response = try await client.decisionSignals(holdingOnly: true, groupLatest: true, sort: "priority",
+                                                         status: "active")
+            guard generation == expected else { return }
+            holdingTodos = HoldingTodo.build(items: response.items, signalTotal: response.total)
+            holdingTodosFailed = false
+        } catch {
+            if generation == expected { holdingTodosFailed = true }
+        }
+    }
+
     private func loadReports(_ client: DSAClient, generation expected: UUID) async {
         do {
             async let stocks = client.historyList(limit: 50)
@@ -392,7 +432,34 @@ final class AppStore: ObservableObject {
             reports = stockPage.items.filter { $0.reportType != "market_review" }
             marketReviews = marketPage.items
             errors["reports"] = nil
+            // 由 store 自己的 Task 抓詳情：放在 refresh 的等待裡會被 .refreshable 取消。
+            Task { await loadMarketReviewPayloads(client, generation: expected) }
         } catch { if generation == expected { errors["reports"] = error.localizedDescription; handleAuthenticationError(error) } }
+    }
+
+    /// 每個市場最新一篇複盤各讀一次詳情；失敗只讓盤勢卡退回摘要，不寫 errors、不登出。
+    private func loadMarketReviewPayloads(_ client: DSAClient, generation expected: UUID) async {
+        let latest = ["tw", "us"].compactMap { market in
+            marketReviews.first { ($0.region ?? "").split(separator: ",").contains(Substring(market)) }?.id
+        }
+        let ids = Array(Set(latest)).filter { !loadedReviewIDs.contains($0) && !loadingReviewIDs.contains($0) }
+        guard !ids.isEmpty else { return }
+        loadingReviewIDs.formUnion(ids)
+        await withTaskGroup(of: (Int, MarketReviewPayload??).self) { group in
+            for id in ids {
+                group.addTask {
+                    do { return (id, .some(try await client.report(id).marketReviewPayload)) }
+                    catch { return (id, nil) }
+                }
+            }
+            for await (id, result) in group {
+                guard generation == expected else { continue }
+                loadingReviewIDs.remove(id)
+                guard let result else { continue }
+                loadedReviewIDs.insert(id)
+                if let payload = result { marketReviewPayloads[id] = payload }
+            }
+        }
     }
 
     private func clearData() {
@@ -400,6 +467,8 @@ final class AppStore: ObservableObject {
         stockIndex = []; errors = [:]; refreshedAt = nil
         marketPhase = nil; marketOpen = nil; indicesLoading = false
         portfolioSummary = nil; portfolioSummaryFailed = false
+        holdingTodos = nil; holdingTodosFailed = false
+        marketReviewPayloads = [:]; loadedReviewIDs = []; loadingReviewIDs = []
     }
 }
 

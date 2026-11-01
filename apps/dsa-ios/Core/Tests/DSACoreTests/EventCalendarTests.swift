@@ -64,7 +64,24 @@ final class EventCalendarTests: XCTestCase {
         XCTAssertEqual(cells.count, calendar.range(of: .day, in: .month, for: now)?.count)
         let snapshot = try event(day: day)
         XCTAssertEqual(snapshot.date, day)
-        XCTAssertEqual(snapshot.timezoneLabel, "美東 ET")
+        XCTAssertEqual(snapshot.timezoneLabel, "美東")
+        XCTAssertEqual(try event(day: day, timezone: "Asia/Taipei").timezoneLabel, "")
+    }
+
+    func testRelativeDayTextAndDayBlockUseSourceMarketDate() throws {
+        let now = Date()
+        let today = try XCTUnwrap(EventCalendarDate.parse(EventCalendarDate.key(now, timezone: "Asia/Taipei")))
+        for (offset, expected) in [(0, "今天"), (1, "明天"), (3, "3 天後"), (-2, "2 天前")] {
+            let date = try XCTUnwrap(EventCalendarDate.calendar.date(byAdding: .day, value: offset, to: today))
+            let snapshot = try event(day: EventCalendarDate.key(date), timezone: "Asia/Taipei")
+            XCTAssertEqual(snapshot.relativeDayText(now: now), expected)
+        }
+        let target = try XCTUnwrap(EventCalendarDate.calendar.date(byAdding: .day, value: 3, to: today))
+        let parts = EventCalendarDate.calendar.dateComponents([.month, .day, .weekday], from: target)
+        let block = try XCTUnwrap(try event(day: EventCalendarDate.key(target), timezone: "Asia/Taipei").dayBlock)
+        XCTAssertEqual(block.day, "\(parts.month!)/\(parts.day!)")
+        XCTAssertEqual(block.weekday, "週" + ["日", "一", "二", "三", "四", "五", "六"][parts.weekday! - 1])
+        XCTAssertNil(try event(day: "not-a-date").dayBlock)
     }
 
     func testSevenDayWarningUsesSourceMarketAndIncludesOnlyZeroThroughSeven() throws {

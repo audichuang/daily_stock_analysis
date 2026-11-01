@@ -26,20 +26,13 @@ struct UpcomingEventsCard: View {
         DSACard {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("近期事件").font(.headline).foregroundStyle(Theme.text)
+                    SectionHeading("近期事件", level: .card)
                     Spacer()
                     NavigationLink("全部") { EventCalendarView() }
                         .font(.subheadline)
                         .accessibilityIdentifier("today.calendar")
                 }
-                ForEach(visible) { event in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(event.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                        Text("\(event.type == "investor_conference" ? "法說會" : "財報") · \(event.date) · \(event.timezoneLabel) · \(event.statusLabel)")
-                            .font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
-                    }
-                    .accessibilityElement(children: .combine)
-                }
+                ForEach(visible) { event in eventRow(event) }
                 switch state {
                 case .failed:
                     HStack {
@@ -63,6 +56,39 @@ struct UpcomingEventsCard: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("today.events")
         .task(id: loadKey) { await load() }
+    }
+
+    /// 左側 44pt 日期塊，右側名稱與「法說會 · 3 天後」；只有推估才掛琥珀字標。
+    private func eventRow(_ event: CalendarEvent) -> some View {
+        let block = event.dayBlock
+        let detail = [event.type == "investor_conference" ? "法說會" : "財報", event.relativeDayText(), event.timezoneLabel]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        return HStack(alignment: .center, spacing: 12) {
+            VStack(spacing: 1) {
+                Text(block?.day ?? event.date)
+                    .font(.subheadline.weight(.semibold).monospacedDigit()).foregroundStyle(Theme.text)
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                if let weekday = block?.weekday {
+                    Text(weekday).font(.caption2).foregroundStyle(Theme.secondary)
+                }
+            }
+            .frame(width: 44)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(event.name).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                        .lineLimit(1)
+                    if let code = event.code, store.isHeld(code) {
+                        Text("持股").font(.caption2.weight(.semibold)).foregroundStyle(Theme.accent)
+                    }
+                }
+                Text(detail).font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+            }
+            Spacer(minLength: 8)
+            if event.status == "estimated" && !event.isStatutoryDeadline {
+                StatusBadge("推估", tone: .warning)
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private func load() async {

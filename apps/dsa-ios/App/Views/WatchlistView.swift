@@ -21,6 +21,7 @@ struct WatchlistView: View {
     @State private var filterExpanded = false
     @State private var group = WatchlistScope.all
     @State private var groupFilter = WatchlistGroupFilter.all
+    @State private var adviceOnly = false
     @State private var editingGroups = false
     @State private var route: WatchlistRoute?
     @State private var actionError: String?
@@ -29,17 +30,22 @@ struct WatchlistView: View {
 
     var body: some View {
         List {
-            MarketPicker().plainRow(top: 12)
-            indexLine
-            content
-            PageBottomAnchor().plainRow(horizontal: 0)
+            // Group forwards the separator / background modifiers to every row inside.
+            Group {
+                MarketPicker().dsaListRow(.control)
+                indexLine
+                content
+                PageBottomAnchor().dsaListRow(.content)
+            }
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .environment(\.defaultMinListRowHeight, 1)
         .dsaPageBottomInset()
         .background(Theme.background)
-        .navigationTitle("自選股").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("自選").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { editingGroups = true } label: { Image(systemName: "folder") }
@@ -77,19 +83,19 @@ struct WatchlistView: View {
     @ViewBuilder private var content: some View {
         switch contentState {
         case .loading:
-            ForEach(0..<6, id: \.self) { _ in StockRowSkeleton().plainRow() }
+            ForEach(0..<6, id: \.self) { _ in StockRowSkeleton().dsaListRow(.content) }
         case let .failed(message):
             ErrorStateView(message: message) { Task { await store.refresh() } }
                 .accessibilityIdentifier("watchlist.error")
-                .plainRow()
+                .dsaListRow(.block)
         case .empty:
             EmptyStateView(title: "這個市場還沒有自選股", message: "點右上角加入股票，隨時查看行情與 AI 觀點。")
                 .accessibilityIdentifier("watchlist.empty")
-                .plainRow()
+                .dsaListRow(.block)
         case let .ready(banner):
             controls(banner: banner)
             if visible.isEmpty {
-                filteredEmpty.plainRow()
+                filteredEmpty.dsaListRow(.block)
             } else {
                 ForEach(visible, id: \.self) { code in row(code) }
             }
@@ -98,39 +104,32 @@ struct WatchlistView: View {
 
     @ViewBuilder private func controls(banner: StockListBanner?) -> some View {
         if let banner {
-            StockListBannerView(banner: banner) { Task { await store.refresh() } }.plainRow(top: 8)
+            StockListBannerView(banner: banner) { Task { await store.refresh() } }.dsaListRow(.meta)
         }
         if let actionError {
             Text(actionError)
                 .font(.caption).foregroundStyle(Theme.warning)
                 .accessibilityIdentifier("watchlist.action-error")
-                .plainRow(top: 8)
+                .dsaListRow(.meta)
         }
-        // 沒有分組時整列不出現，畫面與未分組前相同。
-        if !store.watchlistGroups.isEmpty { groupTabs.plainRow(top: 10) }
-        // 與今日頁「我的關注」同一種標題列：小型切換靠右，不再和上方市場切換疊成兩條全寬控制項。
-        HStack(alignment: .center) {
-            Text("自選").font(.headline).foregroundStyle(Theme.text)
-            Text("\(visible.count)").font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
-            Spacer()
-            Picker("持股範圍", selection: $group) {
-                ForEach(WatchlistScope.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 150)
-            .accessibilityIdentifier("watchlist.group")
-        }
-        .plainRow(top: 14)
+        // Scope and group chips share one scrolling row so the market picker stays the only segmented control.
+        filterChips.dsaListRow(.control)
         if filterExpanded {
             TextField("篩選代號或名稱", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .accessibilityIdentifier("watchlist.filter-field")
-                .plainRow(top: 8)
+                .dsaListRow(.meta)
         }
-        summaryLine.plainRow(top: 12)
-        columnHeader.plainRow(top: 10, bottom: 4)
+        // Only the .ready state reaches here, so the count never shows while loading.
+        Text("\(visible.count) 檔")
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(Theme.secondary)
+            .accessibilityIdentifier("watchlist.count")
+            .dsaListRow(.meta)
+        summaryLine.dsaListRow(.meta)
+        columnHeader.dsaListRow(.columnHeader)
     }
 
     private func row(_ code: String) -> some View {
@@ -150,7 +149,7 @@ struct WatchlistView: View {
                 }
                 Button(role: .destructive) { remove(code) } label: { Label("移除自選", systemImage: "trash") }
             }
-            .plainRow()
+            .dsaListRow(.content)
     }
 
     @ViewBuilder private var filteredEmpty: some View {
@@ -162,6 +161,8 @@ struct WatchlistView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 24)
+        } else if adviceOnly && query.isEmpty {
+            EmptyStateView(title: "這個範圍沒有 AI 建議", message: "再點一次「AI 建議」可查看所有自選。")
         } else {
             EmptyStateView(title: !query.isEmpty ? "沒有符合的自選股"
                                 : group == .held ? "這個範圍的自選沒有持股" : "這個分組在此市場沒有自選股",
@@ -187,7 +188,7 @@ struct WatchlistView: View {
                 }
             }
             .accessibilityIdentifier("watchlist.indices")
-            .plainRow(top: 10, bottom: 2)
+            .dsaListRow(.meta)
         }
     }
 
@@ -206,20 +207,24 @@ struct WatchlistView: View {
 
     private var summaryLine: some View {
         // 統計目前顯示的清單：切到「持股」或分組時，漲跌家數要和上面的檔數對得起來。
+        // With the AI filter on, every visible row qualifies, so the advice count stays the same as before filtering.
         let codes = visible
         let summary = StockListSummary(
             entries: codes.map { store.listEntry(for: $0) },
-            actions: codes.map { code in
-                let report = store.latestReport(for: code)
-                return DecisionAction.resolve(action: report?.action, label: report?.actionLabel)
-            },
+            actions: codes.map(action(for:)),
             quoteTimes: codes.map { store.quote(for: $0)?.asOf }
         )
         return HStack(spacing: 8) {
-            Text("漲 \(summary.up)").foregroundStyle(Theme.changeColor(1, convention: store.colorConvention))
-            Text("跌 \(summary.down)").foregroundStyle(Theme.changeColor(-1, convention: store.colorConvention))
-            Text("平 \(summary.flat)").foregroundStyle(Theme.secondary)
-            Text("動作 \(summary.actionCount)").foregroundStyle(Theme.accent)
+            HStack(spacing: 6) {
+                Text("▲\(summary.up)").foregroundStyle(Theme.changeColor(1, convention: store.colorConvention))
+                Text("▼\(summary.down)").foregroundStyle(Theme.changeColor(-1, convention: store.colorConvention))
+                Text("─\(summary.flat)").foregroundStyle(Theme.secondary)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(summary.breadthAccessibilityLabel)
+            if summary.adviceCount > 0 || adviceOnly {
+                adviceFilterButton(count: summary.adviceCount)
+            }
             Spacer(minLength: 4)
             if let quotedAt = summary.latestQuoteAt {
                 Text(DisplayFormat.time(quotedAt))
@@ -227,9 +232,32 @@ struct WatchlistView: View {
                     .lineLimit(1).minimumScaleFactor(0.7)
             }
         }
-        .font(.caption2.monospacedDigit())
-        .accessibilityElement(children: .combine)
+        .font(.caption.monospacedDigit())
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("watchlist.summary")
+    }
+
+    /// Tap to show only rows with a trade action; tap again to restore the full list.
+    private func adviceFilterButton(count: Int) -> some View {
+        Button { adviceOnly.toggle() } label: {
+            Text("AI 建議 \(count) 檔")
+                .fontWeight(adviceOnly ? .semibold : .regular)
+                .foregroundStyle(Theme.accent)
+                .lineLimit(1)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(adviceOnly ? Theme.accent.opacity(0.12) : Color.clear, in: Capsule())
+                .frame(minHeight: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint(adviceOnly ? "再點一次恢復全部" : "只顯示有買進、加碼、減碼或賣出建議的股票")
+        .accessibilityAddTraits(adviceOnly ? .isSelected : [])
+        .accessibilityIdentifier("watchlist.advice-filter")
+    }
+
+    private func action(for code: String) -> DecisionAction? {
+        let report = store.latestReport(for: code)
+        return DecisionAction.resolve(action: report?.action, label: report?.actionLabel)
     }
 
     private var columnHeader: some View {
@@ -288,31 +316,39 @@ struct WatchlistView: View {
                         missingQuotes: codes.filter { store.quote(for: $0) == nil }.count)
     }
 
-    private var groupTabs: some View {
+    /// 全部／持股 plus the user's groups in one horizontally scrolling row.
+    /// 「全部」clears both the scope and the group; 持股 and a group intersect.
+    private var filterChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                groupTab("全部", filter: .all)
-                ForEach(store.watchlistGroups) { group in
-                    groupTab(group.name, filter: .group(group.name))
+                DSAChip(title: WatchlistScope.all.rawValue,
+                        selected: group == .all && activeFilter == .all) {
+                    group = .all
+                    groupFilter = .all
                 }
-                groupTab("未分組", filter: .ungrouped)
+                // Keeps the old group-tab identifier while groups exist (it used to be the group row's 全部).
+                .accessibilityIdentifier(store.watchlistGroups.isEmpty ? "watchlist.scope.all" : "watchlist-group-tab.全部")
+                DSAChip(title: WatchlistScope.held.rawValue, selected: group == .held) {
+                    group = group == .held ? .all : .held
+                }
+                .accessibilityIdentifier("watchlist.scope.held")
+                // Without groups only the two scope chips show, as before groups existed.
+                if !store.watchlistGroups.isEmpty {
+                    ForEach(store.watchlistGroups) { group in
+                        groupTab(group.name, filter: .group(group.name))
+                    }
+                    groupTab("未分組", filter: .ungrouped)
+                }
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("watchlist.group")
     }
 
     private func groupTab(_ title: String, filter: WatchlistGroupFilter) -> some View {
         let selected = activeFilter == filter
-        return Button { groupFilter = filter } label: {
-            Text(title)
-                .font(.subheadline.weight(selected ? .semibold : .regular))
-                .foregroundStyle(selected ? Theme.accent : Theme.secondary)
-                .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(selected ? Theme.accent.opacity(0.12) : Color.clear, in: Capsule())
-                .overlay(Capsule().stroke(selected ? Theme.accent.opacity(0.4) : Theme.secondary.opacity(0.25)))
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("watchlist-group-tab.\(title)")
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        return DSAChip(title: title, selected: selected) { groupFilter = filter }
+            .accessibilityIdentifier("watchlist-group-tab.\(title)")
     }
 
     /// 選中的分組被刪掉（別台改的也算）時退回「全部」，不留空畫面。
@@ -327,7 +363,8 @@ struct WatchlistView: View {
                 && (query.isEmpty || entry.code.localizedCaseInsensitiveContains(query)
                     || (entry.name ?? "").localizedCaseInsensitiveContains(query))
         }
-        return sort.apply(to: entries).map(\.code)
+        let advised = AIAdviceFilter.apply(entries, enabled: adviceOnly) { action(for: $0.code) }
+        return sort.apply(to: advised).map(\.code)
     }
 
     private func select(_ option: StockRowMetric) {
@@ -340,15 +377,6 @@ struct WatchlistView: View {
             do { try await store.removeFromWatchlist(code); actionError = nil }
             catch { actionError = error.localizedDescription }
         }
-    }
-}
-
-private extension View {
-    /// 自選頁的 List 只當捲動容器用：背景與分隔線都自己畫，列距貼齊其他分頁。
-    func plainRow(horizontal: CGFloat = 16, top: CGFloat = 0, bottom: CGFloat = 0) -> some View {
-        listRowInsets(EdgeInsets(top: top, leading: horizontal, bottom: bottom, trailing: horizontal))
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
     }
 }
 

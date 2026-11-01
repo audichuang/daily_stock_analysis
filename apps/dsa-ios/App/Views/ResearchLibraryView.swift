@@ -52,7 +52,7 @@ struct ResearchLibraryView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                 filterBar.padding(.bottom, 12)
 
                 if let errorMessage {
@@ -65,14 +65,20 @@ struct ResearchLibraryView: View {
                 if items.isEmpty && !loading && errorMessage == nil { emptyState }
 
                 ForEach(days) { day in
-                    Text(day.title)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.secondary)
-                        .padding(.top, 14).padding(.bottom, 4)
-                        .accessibilityAddTraits(.isHeader)
-                    ForEach(day.entries) { entry in
-                        entryView(entry)
-                        Divider().overlay(Theme.border)
+                    Section {
+                        ForEach(day.entries) { entry in
+                            entryView(entry)
+                            Divider().overlay(Theme.border)
+                        }
+                    } header: {
+                        Text(Self.dayHeader(day))
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Theme.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 14).padding(.bottom, 6)
+                            // Opaque so rows do not show through while pinned.
+                            .background(Theme.background)
+                            .accessibilityAddTraits(.isHeader)
                     }
                 }
 
@@ -116,39 +122,89 @@ struct ResearchLibraryView: View {
         .accessibilityIdentifier("research-library")
     }
 
+    /// One row, no horizontal scrolling: scope chips, then the action menu at the trailing edge.
+    /// Narrow widths shorten the menu label before falling back to two rows.
     private var filterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(Scope.allCases) { item in
-                    capsule(item.title, selected: scope == item, id: "research.scope.\(item.rawValue)") { scope = item }
-                }
-                if scope != .market {
-                    Divider().frame(height: 20).overlay(Theme.border)
-                    ForEach(Self.actionFilters, id: \.rawValue) { item in
-                        capsule(item.displayLabel, selected: action == item, id: "research.action.\(item.rawValue)") {
-                            action = action == item ? nil : item
-                        }
-                    }
-                }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) {
+                scopeChips
+                Spacer(minLength: 0)
+                if scope != .market { actionMenu(short: false) }
+            }
+            HStack(spacing: 6) {
+                scopeChips
+                Spacer(minLength: 0)
+                if scope != .market { actionMenu(short: true) }
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 6) { scopeChips }
+                if scope != .market { actionMenu(short: false) }
             }
         }
     }
 
-    private func capsule(_ title: String, selected: Bool, id: String, perform: @escaping () -> Void) -> some View {
-        Button(action: perform) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(selected ? Theme.background : Theme.secondary)
-                .padding(.horizontal, 12)
-                .frame(minHeight: 32)
-                .background(selected ? Theme.accent : Theme.surface, in: Capsule())
-                .overlay(Capsule().strokeBorder(Theme.border, lineWidth: 1))
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
+    @ViewBuilder
+    private var scopeChips: some View {
+        ForEach(Scope.allCases) { item in
+            DSAChip(title: item.title, selected: scope == item) { scope = item }
+                .fixedSize()
+                .accessibilityIdentifier("research.scope.\(item.rawValue)")
         }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier(id)
+    }
+
+    private func actionMenu(short: Bool) -> some View {
+        let current = action?.displayLabel ?? "全部"
+        return Menu {
+            Button {
+                action = nil
+            } label: {
+                if action == nil { Label("全部動作", systemImage: "checkmark") } else { Text("全部動作") }
+            }
+            .accessibilityIdentifier("research.action.all")
+            ForEach(Self.actionFilters, id: \.rawValue) { item in
+                Button {
+                    action = item
+                } label: {
+                    if action == item { Label(item.displayLabel, systemImage: "checkmark") } else { Text(item.displayLabel) }
+                }
+                .accessibilityIdentifier("research.action.\(item.rawValue)")
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(short ? current : "動作：\(current)")
+                Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).accessibilityHidden(true)
+            }
+            .font(DSAType.body.weight(action == nil ? .regular : .semibold))
+            .foregroundStyle(action == nil ? Theme.secondary : Theme.accent)
+            .lineLimit(1)
+            .padding(.horizontal, DSASpacing.md)
+            .frame(height: 32)
+            .background(action == nil ? Theme.surface : Theme.accent.opacity(0.14), in: Capsule())
+            .overlay(Capsule().strokeBorder(action == nil ? Theme.border : Theme.accent.opacity(0.4), lineWidth: 1))
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+            .fixedSize()
+        }
+        .accessibilityLabel("動作篩選：\(action?.displayLabel ?? "全部動作")")
+        .accessibilityIdentifier("research.action.menu")
+    }
+
+    private static let weekdays = ["日", "一", "二", "三", "四", "五", "六"]
+
+    /// 「今天 · 11/1 週日」; older days show「10/30 週四」, other years add the year.
+    static func dayHeader(_ day: ResearchLibraryDay, now: Date = Date()) -> String {
+        let pieces = day.key.split(separator: "-")
+        guard pieces.count == 3, let year = Int(pieces[0]), let month = Int(pieces[1]), let dayOfMonth = Int(pieces[2]) else {
+            return day.title
+        }
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC") ?? .current
+        guard let date = utc.date(from: DateComponents(year: year, month: month, day: dayOfMonth)) else { return day.title }
+        let weekday = weekdays[(utc.component(.weekday, from: date) - 1) % 7]
+        let currentYear = Calendar.current.component(.year, from: now)
+        let monthDay = year == currentYear ? "\(month)/\(dayOfMonth)" : "\(year)/\(month)/\(dayOfMonth)"
+        let dated = "\(monthDay) 週\(weekday)"
+        return day.title == "今天" || day.title == "昨天" ? "\(day.title) · \(dated)" : dated
     }
 
     private var emptyState: some View {
@@ -269,7 +325,7 @@ struct ResearchLibraryView: View {
     }
 }
 
-/// 緊湊三行：名稱與分析時價、動作與評分、兩行結論。日期在分組標題，列內不再重複。
+/// 緊湊三行：名稱與報告時價、動作徽章與評分、兩行結論。日期在分組標題，列內不再重複。
 private struct LibraryReportRow: View {
     let report: HistoryItem
     let change: String?
@@ -351,22 +407,23 @@ private struct LibraryReportRow: View {
                 .lineLimit(1)
             Spacer(minLength: 6)
             if report.currentPrice != nil {
-                Text(DisplayFormat.price(report.currentPrice))
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(Theme.text)
-                Text(DisplayFormat.percent(report.changePct))
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(Theme.changeColor(report.changePct, convention: convention))
+                // Report-time price, not a live quote: no up/down colour.
+                Text(verbatim: "報告時 \(DisplayFormat.price(report.currentPrice))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(1)
             }
         }
     }
 
     private var actionLine: some View {
         HStack(spacing: 8) {
-            if let actionLabel {
+            if let badge = ActionBadge(action: report.action, label: report.actionLabel, size: .compact) {
+                badge
+            } else if let actionLabel {
                 Text(actionLabel)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(ActionTone.of(action: report.action, label: report.actionLabel).color)
+                    .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
             }
             if let score = report.sentimentScore {

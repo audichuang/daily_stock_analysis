@@ -35,6 +35,9 @@ private struct StockDetailContent: View {
     @State private var headerScrolledAway = false
     @State private var adviceHeld: Bool?
     @State private var showsReasons = false
+    @State private var strategy: ReportStrategy?
+    @State private var route: StockRoute?
+    @State private var confirmsReanalysis = false
 
     /// 頁首底邊滑過導覽列（約 106pt）後，標題改帶現價。
     private let headerThreshold: CGFloat = 110
@@ -57,7 +60,8 @@ private struct StockDetailContent: View {
                                     loadIntraday: store.client.map { client in
                                         IntradayLoaders(day: { try await client.stockTrend(code, range: "day") },
                                                         daily: { try await client.stockTrend(code, range: "month") })
-                                    })
+                                    },
+                                    latestChangePercent: profile.quote.data?.changePercent)
                         if let quote = profile.quote.data { tradingMetrics(quote) }
                         contentTabs(profile)
                         dataStatusFooter(profile)
@@ -89,7 +93,26 @@ private struct StockDetailContent: View {
                 } label: { Image(systemName: store.watchlist.contains(code) ? "star.fill" : "star") }
                     .disabled(changingWatchlist).accessibilityIdentifier("watchlist-toggle")
                     .accessibilityLabel(store.watchlist.contains(code) ? "移除自選股" : "加入自選股")
+                moreMenu
             }
+        }
+        .navigationDestination(item: $route) { route in
+            switch route {
+            case .askAI(let path):
+                ToolWebView(path: path, title: "AI 問股")
+            case .alert(let path):
+                ToolWebView(path: path, title: "價格警報")
+            case .dossier:
+                // Title kept: UI tests navigate back from「四維度個股檔案」.
+                ToolWebView(path: dossierPath, title: "四維度個股檔案")
+            }
+        }
+        .confirmationDialog("重新分析這檔股票？", isPresented: $confirmsReanalysis, titleVisibility: .visible) {
+            Button("開始重新分析") { Task { await startAnalysis() } }
+                .accessibilityIdentifier("stock.reanalyze.confirm")
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("會重新抓取行情與新聞並產生新報告，約需數分鐘；舊報告仍保留在研究紀錄。")
         }
         .refreshable { await load() }
         .task {
@@ -100,6 +123,53 @@ private struct StockDetailContent: View {
     }
 
     private var displayName: String { profile?.quote.data?.stockName ?? code }
+
+    private var dossierPath: String { "/api/v1/stocks/\(code)/dossier?theme=dark" }
+
+    // MARK: 情境捷徑
+
+    /// Pushed from the toolbar menu and the price-level capsules; NavigationLink inside a Menu does not push reliably.
+    private enum StockRoute: Hashable, Identifiable {
+        case askAI(path: String)
+        case alert(path: String)
+        case dossier
+
+        var id: String {
+            switch self {
+            case .askAI(let path), .alert(let path): return path
+            case .dossier: return "dossier"
+            }
+        }
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            Button {
+                let name = profile?.quote.data?.stockName
+                route = .askAI(path: ToolLinks.chatPath(code: code, name: name, recordID: profile?.research.data.latestReport?.id))
+            } label: {
+                Label("問 AI 這檔", systemImage: "sparkles")
+            }
+            .accessibilityIdentifier("stock.askAI")
+            Button {
+                route = .alert(path: ToolLinks.alertPath(code: code, direction: .above, price: nil))
+            } label: {
+                Label("設價格警報", systemImage: "bell")
+            }
+            .accessibilityIdentifier("stock.setAlert")
+            if profile?.market == "tw" {
+                Button {
+                    route = .dossier
+                } label: {
+                    Label("完整個股檔案", systemImage: "doc.text.magnifyingglass")
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .accessibilityLabel("更多動作")
+        .accessibilityIdentifier("stock.more")
+    }
 
     // MARK: 標題與狀態
 
@@ -179,7 +249,8 @@ private struct StockDetailContent: View {
         let tint = Theme.changeColor(quote?.changePercent, convention: store.colorConvention)
         return VStack(alignment: .leading, spacing: 4) {
             Text(priceText(quote?.currentPrice))
-                .font(.system(.largeTitle, design: .rounded, weight: .bold).monospacedDigit()).foregroundStyle(Theme.text)
+                // One step below largeTitle: the price should not outweigh the AI conclusion, and the chart needs the room.
+                .font(.system(.title, design: .rounded, weight: .bold).monospacedDigit()).foregroundStyle(Theme.text)
                 .accessibilityIdentifier("stock.price")
             HStack(spacing: 8) {
                 Text(signed(quote?.change)).monospacedDigit()
@@ -254,6 +325,9 @@ private struct StockDetailContent: View {
         let action: String?
         let tone: ActionTone
         let text: String?
+        /// Stored enum and label, fed to ActionBadge.
+        let rawAction: String?
+        let rawLabel: String?
     }
 
     /// 結構化報告優先；只有歷史列時讀列表欄位。動作一律走枚舉，不顯示存檔標籤。
@@ -263,68 +337,157 @@ private struct StockDetailContent: View {
             return Conclusion(
                 action: PresentationText.action(thesis.action, label: thesis.actionLabel),
                 tone: ActionTone.of(action: thesis.action, label: thesis.actionLabel),
-                text: ReportText.firstNonEmpty(thesis.oneSentence, latest?.oneSentence, thesis.summary, latest?.analysisSummary)
+                text: ReportText.firstNonEmpty(thesis.oneSentence, latest?.oneSentence, thesis.summary, latest?.analysisSummary),
+                rawAction: thesis.action, rawLabel: thesis.actionLabel
             )
         }
         guard let latest else { return nil }
         return Conclusion(
             action: PresentationText.action(latest.action, label: latest.actionLabel, advice: latest.operationAdvice),
             tone: ActionTone.of(action: latest.action, label: latest.actionLabel ?? latest.operationAdvice),
-            text: ReportText.firstNonEmpty(latest.oneSentence, latest.analysisSummary)
+            text: ReportText.firstNonEmpty(latest.oneSentence, latest.analysisSummary),
+            rawAction: latest.action, rawLabel: latest.actionLabel ?? latest.operationAdvice
         )
     }
 
+    /// 兩行結論＋動作膠囊；有結構化價位時，下方接停損與目標價，可直接設警報。
     @ViewBuilder private func aiSummaryRow(_ profile: StockProfile, proxy: ScrollViewProxy) -> some View {
         if let conclusion = conclusion(profile) {
-            Button {
-                selectedTab = .ai
-                withAnimation { proxy.scrollTo("stock.tabs", anchor: .top) }
-            } label: {
-                HStack(spacing: 10) {
-                    StatusBadge(conclusion.action ?? "AI", tone: conclusion.tone.statusTone)
-                    Text(conclusion.text ?? "完整分析已保存，點開查看。")
-                        .font(.subheadline).foregroundStyle(Theme.text).lineLimit(1)
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.down").font(.caption).foregroundStyle(Theme.secondary).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    selectedTab = .ai
+                    withAnimation { proxy.scrollTo("stock.tabs", anchor: .top) }
+                } label: {
+                    HStack(alignment: .top, spacing: 10) {
+                        if let badge = ActionBadge(action: conclusion.rawAction, label: conclusion.rawLabel, size: .regular) {
+                            badge
+                        } else {
+                            StatusBadge(conclusion.action ?? "AI", tone: conclusion.tone.statusTone)
+                        }
+                        Text(conclusion.text ?? "完整分析已保存，點開查看。")
+                            .font(.subheadline).foregroundStyle(Theme.text)
+                            .lineLimit(2).multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.secondary)
+                            .padding(.top, 3).accessibilityHidden(true)
+                    }
+                    .frame(minHeight: 44, alignment: .top)
+                    .contentShape(Rectangle())
                 }
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("stock.aiSummary")
+                priceLevelRow(profile, tone: conclusion.tone)
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("stock.aiSummary")
+            .padding(12)
+            .background(conclusion.tone.color.opacity(0.08), in: RoundedRectangle(cornerRadius: DSARadius.card, style: .continuous))
         }
+    }
+
+    /// 停損與目標（減碼類動作叫「反彈減碼」）；只用結構化數字，legacy 原文不解析。
+    @ViewBuilder private func priceLevelRow(_ profile: StockProfile, tone: ActionTone) -> some View {
+        let levels = strategy.map(PriceLevel.levels(from:))?
+            .filter { ($0.kind == .stopLoss || $0.kind == .takeProfit) && $0.value != nil } ?? []
+        if !levels.isEmpty {
+            let current = profile.quote.data?.currentPrice
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 16) { priceLevelItems(levels, current: current, tone: tone) }
+                VStack(alignment: .leading, spacing: 8) { priceLevelItems(levels, current: current, tone: tone) }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("stock.priceLevels")
+        }
+    }
+
+    @ViewBuilder private func priceLevelItems(_ levels: [PriceLevel], current: Double?, tone: ActionTone) -> some View {
+        ForEach(levels) { level in
+            if let value = level.value {
+                HStack(spacing: 6) {
+                    Text(levelTitle(level.kind, tone: tone))
+                        .font(.caption).foregroundStyle(Theme.secondary)
+                    Text(priceText(value)).font(.subheadline.weight(.semibold).monospacedDigit()).foregroundStyle(Theme.text)
+                    Button {
+                        route = .alert(path: ToolLinks.alertPath(code: code, direction: alertDirection(level.kind, value: value, current: current), price: value))
+                    } label: {
+                        Label("設警報", systemImage: "bell")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 8)
+                            .frame(minHeight: 28)
+                            .background(Theme.accent.opacity(0.12), in: Capsule())
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(levelTitle(level.kind, tone: tone)) \(priceText(value)) 設警報")
+                    .accessibilityIdentifier("stock.setAlert.\(level.kind.rawValue)")
+                }
+                .fixedSize()
+            }
+        }
+    }
+
+    private func levelTitle(_ kind: PriceLevel.Kind, tone: ActionTone) -> String {
+        kind == .takeProfit ? (tone == .caution ? "反彈減碼" : "目標") : kind.title
+    }
+
+    /// 停損一律跌破；其他價位依與現價的相對位置決定（現價未知時當跌破）。
+    private func alertDirection(_ kind: PriceLevel.Kind, value: Double, current: Double?) -> ToolLinks.AlertDirection {
+        if kind == .stopLoss { return .below }
+        guard let current, current.isFinite else { return .below }
+        return value > current ? .above : .below
     }
 
     private var nextEarnings: CalendarEvent? {
         earningsCalendar?.events.nextCompanyEvent()
     }
 
-    private var nextEarningsSection: some View {
-        DSACard {
-            VStack(alignment: .leading, spacing: 10) {
-                SectionHeading(nextEarnings?.type == "investor_conference" ? "下次法說會" : "下次財報", systemImage: "calendar")
-                if let event = nextEarnings {
-                    HStack {
-                        Text("\(event.date) · \(event.timezoneLabel)").font(.headline.monospacedDigit())
-                        StatusBadge(event.statusLabel, tone: event.status == "estimated" ? .warning : .neutral)
+    /// 44pt 提示條：只在有已排定的公司事件時出現；7 天內改琥珀色。
+    @ViewBuilder private var nextEarningsSection: some View {
+        if let event = nextEarnings {
+            let soon = event.isWithinSevenDays()
+            let label = earningsLabel(event)
+            // Container keeps `stock.nextEarnings`; the link itself carries `stock.earnings.soon` within 7 days.
+            VStack(spacing: 0) {
+                NavigationLink { EventCalendarView() } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "calendar").accessibilityHidden(true)
+                        Text(label).font(.subheadline.weight(soon ? .semibold : .regular).monospacedDigit())
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                        if event.status == "estimated" { StatusBadge(event.statusLabel, tone: .warning) }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right").font(.caption).accessibilityHidden(true)
                     }
-                    if event.isWithinSevenDays() {
-                        Label(nextEarnings?.type == "investor_conference" ? "7 天內召開法說會" : "7 天內發布財報", systemImage: "exclamationmark.circle.fill")
-                            .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.warning)
-                            .accessibilityIdentifier("stock.earnings.soon")
-                    }
-                    Text(event.detail).font(.caption).foregroundStyle(Theme.secondary)
-                } else {
-                    Text(calendarError == nil ? "未定" : "暫時無法讀取財報快取")
-                        .font(.headline).foregroundStyle(Theme.secondary)
-                    Text(calendarError ?? earningsCalendar?.undated.first?.detail ?? "尚無已排定財報日；法定期限不等於實際發布日。")
-                        .font(.caption).foregroundStyle(Theme.secondary)
+                    .foregroundStyle(soon ? Theme.warning : Theme.secondary)
+                    .padding(.horizontal, 12)
+                    .frame(height: 44)
+                    .background((soon ? Theme.warning.opacity(0.10) : Theme.surface),
+                                in: RoundedRectangle(cornerRadius: DSARadius.card, style: .continuous))
+                    .contentShape(Rectangle())
                 }
-                NavigationLink("查看事件行事曆") { EventCalendarView() }
+                .buttonStyle(.plain)
+                .accessibilityLabel(event.status == "estimated" ? "\(label)，\(event.statusLabel)" : label)
+                .accessibilityHint("開啟事件行事曆")
+                .accessibilityIdentifier(soon ? "stock.earnings.soon" : "stock.earnings.link")
             }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("stock.nextEarnings")
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("stock.nextEarnings")
+    }
+
+    /// 「法說會 11/3（3 天後）」；非台北時區的事件補上時區，美股財報日跟台灣日曆差一天。
+    private func earningsLabel(_ event: CalendarEvent) -> String {
+        let kind = event.type == "investor_conference" ? "法說會" : "財報"
+        var date = event.date
+        if let day = EventCalendarDate.parse(event.date) {
+            let parts = EventCalendarDate.calendar.dateComponents([.month, .day], from: day)
+            if let month = parts.month, let dayOfMonth = parts.day { date = "\(month)/\(dayOfMonth)" }
+        }
+        var text = "\(kind) \(date)"
+        if let days = event.daysAway() {
+            text += "（\(days == 0 ? "今天" : days == 1 ? "明天" : "\(days) 天後")）"
+        }
+        if event.timezone == "America/New_York" { text += " · \(event.timezoneLabel)" }
+        return text
     }
 
     private var taskKey: String { "analysisTask.\(store.baseURL?.absoluteString ?? "").\(code)" }
@@ -401,8 +564,11 @@ private struct StockDetailContent: View {
     @ViewBuilder private func aiTab(_ profile: StockProfile) -> some View {
         let research = profile.research.data
         let artifact = research.structuredReport
+        let hasReport = research.latestReport?.id != nil
+        // With a report and no running task,「重新分析」is a text button beside the analysis time.
+        let inlineReanalysis = hasReport && taskID == nil
         if let conclusion = conclusion(profile) {
-            actionBlock(conclusion, createdAt: artifact?.createdAt ?? research.latestReport?.createdAt)
+            actionBlock(conclusion, createdAt: artifact?.createdAt ?? research.latestReport?.createdAt, showsReanalysis: inlineReanalysis)
         } else {
             EmptyStateView(title: "這檔股票還沒有 AI 研究", message: "產生分析後，這裡會顯示核心論點、證據與需要持續追蹤的風險。", systemImage: "text.magnifyingglass")
         }
@@ -430,19 +596,35 @@ private struct StockDetailContent: View {
                 }
             }
         }
-        analysisButton(hasReport: research.latestReport?.id != nil)
+        if !(inlineReanalysis && conclusion(profile) != nil) {
+            analysisButton(hasReport: hasReport)
+        }
         Text("分析在伺服器執行，會保存至研究紀錄。這次操作不發送 Telegram 通知。")
             .font(.caption2).foregroundStyle(Theme.secondary)
         if profile.market == "tw" {
             NavigationLink {
-                ToolWebView(path: "/api/v1/stocks/\(code)/dossier?theme=dark", title: "四維度個股檔案")
+                ToolWebView(path: dossierPath, title: "四維度個股檔案")
             } label: {
-                Label("四維度個股檔案", systemImage: "arrow.up.right.square").frame(maxWidth: .infinity)
-            }.buttonStyle(SecondaryButtonStyle()).accessibilityIdentifier("stock-dossier-link")
+                HStack(spacing: 12) {
+                    Image(systemName: "doc.text.magnifyingglass").foregroundStyle(Theme.accent).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("完整個股檔案").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                        Text("基本面・籌碼・估值・技術").font(.caption).foregroundStyle(Theme.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.secondary).accessibilityHidden(true)
+                }
+                .padding(.horizontal, 12)
+                .frame(minHeight: 56)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: DSARadius.card, style: .continuous))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("stock-dossier-link")
         }
     }
 
-    private func actionBlock(_ conclusion: Conclusion, createdAt: String?) -> some View {
+    private func actionBlock(_ conclusion: Conclusion, createdAt: String?, showsReanalysis: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(conclusion.action ?? "AI 觀點")
                 .font(DSAType.title).foregroundStyle(conclusion.tone.color)
@@ -450,7 +632,27 @@ private struct StockDetailContent: View {
             Text(conclusion.text ?? "完整分析已保存，點下方閱讀報告。")
                 .font(.body).foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("分析 · \(DisplayFormat.time(createdAt))").font(.caption).foregroundStyle(Theme.secondary)
+            HStack(spacing: 8) {
+                Text("分析 · \(DisplayFormat.time(createdAt))").font(.caption).foregroundStyle(Theme.secondary)
+                if showsReanalysis {
+                    Button {
+                        confirmsReanalysis = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            if starting { ProgressView().controlSize(.mini).tint(Theme.accent) }
+                            Text("重新分析")
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(starting || polling)
+                    .accessibilityIdentifier("analysis-start")
+                }
+                Spacer(minLength: 0)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -531,10 +733,16 @@ private struct StockDetailContent: View {
         }
     }
 
-    /// 已有報告時「重新分析」降成次要按鈕，主按鈕讓給閱讀報告。
+    /// 已有報告時「重新分析」降成次要按鈕，主按鈕讓給閱讀報告；重新分析一律先確認。
     @ViewBuilder private func analysisButton(hasReport: Bool) -> some View {
         let button = Button {
-            Task { if let taskID { await followTask(taskID) } else { await startAnalysis() } }
+            if let taskID {
+                Task { await followTask(taskID) }
+            } else if hasReport {
+                confirmsReanalysis = true
+            } else {
+                Task { await startAnalysis() }
+            }
         } label: {
             HStack {
                 if starting || polling { ProgressView().tint(hasReport ? Theme.accent : Theme.background) }
@@ -626,6 +834,15 @@ private struct StockDetailContent: View {
         // 開收盤狀態只是標示，取不到就不顯示，不影響報價。
         if let market = profile?.market {
             session = (try? await client.marketSession(region: market)) ?? session
+        }
+        // Price levels live only in the full report; a failure just hides the price row.
+        if let reportID = profile?.research.data.latestReport?.id {
+            do { strategy = try await client.report(reportID).strategy }
+            catch is CancellationError { }
+            catch let error as URLError where error.code == .cancelled { }
+            catch { strategy = nil }
+        } else {
+            strategy = nil
         }
         // 財報快取失敗不遮住已取得的行情與研究。
         let today = EventCalendarDate.parse(EventCalendarDate.key(Date(), timezone: "America/New_York"))!

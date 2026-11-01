@@ -8,11 +8,16 @@ struct ReportNewsView: View {
     @State private var loading = true
     @State private var error: String?
     @State private var referencesExpanded = false
+    @State private var disclaimerShown = false
 
     var body: some View {
         DSACard {
             VStack(alignment: .leading, spacing: 14) {
-                SectionHeading("相關新聞", subtitle: "報告 #\(reportID) · 新聞與官方公告", systemImage: "newspaper")
+                HStack(alignment: .top, spacing: 8) {
+                    SectionHeading("相關新聞", subtitle: "分析當下蒐集的新聞與公告", systemImage: "newspaper")
+                    Spacer(minLength: 0)
+                    disclaimerButton
+                }
                 if loading {
                     LoadingStateView("正在讀取本次分析的新聞…")
                 } else if let error {
@@ -36,8 +41,6 @@ struct ReportNewsView: View {
                         .accessibilityIdentifier("report.news.references")
                         .tint(Theme.accent)
                     }
-                    Text("依分析編號保存的搜尋資料，可能包含分析完成後補查、模型未讀過的內容；舊報告可能未完整保留。日期為來源提供，未逐篇核實。")
-                        .font(.caption2).foregroundStyle(Theme.secondary)
                 }
             }
         }
@@ -50,14 +53,37 @@ struct ReportNewsView: View {
         .accessibilityIdentifier("report.news")
     }
 
+    private var disclaimerButton: some View {
+        Button {
+            disclaimerShown = true
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.subheadline)
+                .foregroundStyle(Theme.secondary)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("新聞資料說明")
+        .accessibilityIdentifier("report.news.info")
+        .popover(isPresented: $disclaimerShown) {
+            Text("依分析編號保存的搜尋資料，可能包含分析完成後補查、模型未讀過的內容；舊報告可能未完整保留。日期為來源提供，未逐篇核實。")
+                .font(.footnote).foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(idealWidth: 300)
+                .padding(16)
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
     private func newsRows(_ rows: [ReportNewsItem]) -> some View {
         ForEach(Array(rows.enumerated()), id: \.offset) { index, item in
             VStack(alignment: .leading, spacing: 6) {
                 if let url = item.externalURL {
                     Link(destination: url) {
                         HStack(alignment: .top, spacing: 8) {
-                            Text(item.displayTitle).multilineTextAlignment(.leading)
-                            Image(systemName: "arrow.up.right").font(.caption)
+                            Text(item.displayTitle).foregroundStyle(Theme.text).multilineTextAlignment(.leading)
+                            Image(systemName: "arrow.up.right").font(.caption).foregroundStyle(Theme.secondary)
                         }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     }
                     .accessibilityIdentifier("report.news.link.\(index)")
