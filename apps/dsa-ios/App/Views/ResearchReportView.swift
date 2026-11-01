@@ -13,6 +13,13 @@ struct ResearchReportView: View {
     @State private var markdownError: String?
     @State private var fullReportExpanded = false
     @State private var summaryExpanded = false
+    @State private var guardrailExpanded = false
+    @State private var alertRoute: AlertRoute?
+
+    private struct AlertRoute: Hashable, Identifiable {
+        let path: String
+        var id: String { path }
+    }
 
     var body: some View {
         ScrollView {
@@ -33,7 +40,7 @@ struct ResearchReportView: View {
                         positionAdviceCard(report)
                         if let strategy = report.strategy { priceCard(strategy, report: report) }
                         eventCard(report)
-                        conditionsCard(report)
+                        nextStepsCard(report)
                         if let artifact = report.structuredReport {
                             ResearchArtifactView(artifact: artifact)
                         } else {
@@ -60,9 +67,27 @@ struct ResearchReportView: View {
         }
         .dsaPageBottomInset()
         .background(Theme.background)
-        .navigationTitle("AI 研究")
+        .navigationTitle(navigationTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $alertRoute) { route in
+            ToolWebView(path: route.path, title: "價格警報")
+        }
         .toolbar {
+            if let report, !isMarketReview(report) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        ToolWebView(
+                            path: ToolLinks.chatPath(code: report.meta.stockCode, name: report.meta.stockName, recordID: reportID),
+                            title: "AI 問股"
+                        )
+                    } label: {
+                        Image(systemName: "bubble.left.and.text.bubble.right")
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                    .accessibilityLabel("問 AI")
+                    .accessibilityIdentifier("report.askAI")
+                }
+            }
             if let report {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -82,6 +107,17 @@ struct ResearchReportView: View {
         .task(id: reportID) { await load() }
         .refreshable { await load() }
         .accessibilityIdentifier("report.screen")
+    }
+
+    /// Stock name once loaded; market reviews get a fixed title.
+    private var navigationTitle: String {
+        guard let report else { return "AI 研究" }
+        if isMarketReview(report) { return ReportText.marketReviewTitle(stockName: report.meta.stockName) }
+        return ReportText.firstNonEmpty(report.meta.stockName) ?? report.meta.stockCode
+    }
+
+    private func guardrail(_ report: AnalysisReport) -> ReportGuardrailDisplay? {
+        ReportGuardrailDisplay.of(report.summary, actionText: actionText(report))
     }
 
     private func isMarketReview(_ report: AnalysisReport) -> Bool {
@@ -140,77 +176,180 @@ struct ResearchReportView: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("report.company")
 
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(DisplayFormat.price(meta.currentPrice, currency: meta.currency))
-                        .font(.system(.largeTitle, design: .rounded, weight: .bold).monospacedDigit())
-                        .foregroundStyle(Theme.text)
-                    Text(DisplayFormat.percent(meta.changePct))
-                        .font(.headline.monospacedDigit())
-                        .foregroundStyle(Theme.changeColor(meta.changePct, convention: store.colorConvention))
-                    Spacer(minLength: 0)
-                    if let action = actionText(report) {
-                        Text(action)
-                            .font(.headline).foregroundStyle(tone.color)
-                            .padding(.horizontal, 12).padding(.vertical, 6)
-                            .background(tone.color.opacity(0.12), in: RoundedRectangle(cornerRadius: DSARadius.control))
-                            .accessibilityIdentifier("report.action")
-                    }
-                }
-                Text("報告當時價格\(meta.priceDate.map { " · \($0)" } ?? "")").font(.caption).foregroundStyle(Theme.secondary)
+                priceHeadline(report, tone: tone)
                 sinceReportLine(report)
-                if let sentence = oneSentence(report) {
+                if let sentence = guardrail(report)?.headline ?? oneSentence(report) {
                     Text(sentence).font(.body.weight(.semibold)).foregroundStyle(Theme.text)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("report.oneSentence")
                 }
+                if let display = guardrail(report) { guardrailRow(display) }
+                keyLevelsBar(report)
                 HStack(alignment: .top, spacing: 12) {
-                    MetricView("模型評分", value: summary.sentimentScore.map { "\($0)/100" } ?? DisplayNumber.noValue, detail: "不是勝率")
+                    MetricView("模型評分（非勝率）", value: summary.sentimentScore.map { "\($0)/100" } ?? DisplayNumber.noValue)
                     MetricView("信心度", value: summary.confidenceLevel.map(PresentationText.quality) ?? DisplayNumber.noValue)
                     MetricView("時效", value: summary.timeSensitivity ?? DisplayNumber.noValue)
                 }
-                if summary.guardrailApplied == true {
-                    Label(summary.guardrailReason ?? "這份結論已套用系統護欄。", systemImage: "shield.lefthalf.filled")
-                        .font(.caption).foregroundStyle(Theme.warning)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let previous = meta.previousReport { previousLine(previous) }
+                if let previous = meta.previousReport { previousLine(previous, current: report) }
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("report.conclusion")
     }
 
-    /// 現價取不到就整行不顯示，不用報告價冒充。
-    @ViewBuilder private func sinceReportLine(_ report: AnalysisReport) -> some View {
-        if let quote = latestQuote,
-           let change = ReportMath.changePercent(from: report.meta.currentPrice, to: quote.currentPrice) {
-            HStack(spacing: 8) {
-                Text("現價 \(DisplayFormat.price(quote.currentPrice, currency: report.meta.currency))")
-                    .foregroundStyle(Theme.text)
-                Text("報告後 \(DisplayFormat.percent(change))")
+    /// The big number is the live price; without a live quote it falls back to the report price and says so.
+    private func priceHeadline(_ report: AnalysisReport, tone: ActionTone) -> some View {
+        let meta = report.meta
+        let live = latestQuote
+        let change = live == nil ? meta.changePct : live?.changePercent
+        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(DisplayFormat.price(live?.currentPrice ?? meta.currentPrice, currency: meta.currency))
+                .font(.system(.largeTitle, design: .rounded, weight: .bold).monospacedDigit())
+                .foregroundStyle(Theme.text)
+                .accessibilityIdentifier("report.price")
+            if change != nil {
+                Text(DisplayFormat.percent(change))
+                    .font(.headline.monospacedDigit())
                     .foregroundStyle(Theme.changeColor(change, convention: store.colorConvention))
             }
-            .font(.subheadline.monospacedDigit())
+            if live == nil { StatusBadge("報告時價") }
+            Spacer(minLength: 0)
+            if let action = actionText(report) {
+                Text(action)
+                    .font(.headline).foregroundStyle(tone.color)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(tone.color.opacity(0.12), in: RoundedRectangle(cornerRadius: DSARadius.control))
+                    .accessibilityIdentifier("report.action")
+            }
+        }
+    }
+
+    /// 「報告時 279.84（10/30）· 報告後 +0.00%」; only with a live quote, so the price never shows twice.
+    @ViewBuilder private func sinceReportLine(_ report: AnalysisReport) -> some View {
+        if let quote = latestQuote {
+            let meta = report.meta
+            let change = ReportMath.changePercent(from: meta.currentPrice, to: quote.currentPrice)
+            let date = ReportDisplayDate.monthDay(meta.priceDate ?? meta.createdAt).map { "（\($0)）" } ?? ""
+            HStack(spacing: 0) {
+                Text(verbatim: "報告時 \(DisplayFormat.price(meta.currentPrice, currency: meta.currency))\(date)")
+                    .foregroundStyle(Theme.secondary)
+                if let change {
+                    Text(verbatim: " · 報告後 ").foregroundStyle(Theme.secondary)
+                    Text(verbatim: DisplayFormat.percent(change))
+                        .foregroundStyle(Theme.changeColor(change, convention: store.colorConvention))
+                }
+            }
+            .font(.caption.monospacedDigit())
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("report.sinceReport")
         }
     }
 
-    private func previousLine(_ previous: ReportPreviousSummary) -> some View {
-        let action = PresentationText.action(previous.action, label: nil) ?? DisplayNumber.noValue
-        let score = previous.score.map { " · 評分 \($0)" } ?? ""
-        return Text("前次判斷：\(action)\(score) · \(DisplayFormat.time(previous.createdAt))")
-            .font(.caption).foregroundStyle(Theme.secondary)
+    /// One collapsed line; the reason and the other wording only show when expanded.
+    private func guardrailRow(_ display: ReportGuardrailDisplay) -> some View {
+        let color = display.tone == .warning ? Theme.warning : Theme.secondary
+        return DisclosureGroup(isExpanded: $guardrailExpanded) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(display.details.enumerated()), id: \.offset) { _, line in
+                    Text(line).font(.caption).foregroundStyle(Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+        } label: {
+            Label(display.label, systemImage: "shield.lefthalf.filled")
+                .font(.caption.weight(.semibold)).foregroundStyle(color)
+                .lineLimit(1)
+                .frame(minHeight: 44)
+        }
+        .tint(color)
+        .accessibilityIdentifier("report.guardrail")
+    }
+
+    /// Structured sniper prices only (legacy text is never parsed): stop loss and take profit with distance and an alert shortcut.
+    @ViewBuilder private func keyLevelsBar(_ report: AnalysisReport) -> some View {
+        let levels = report.strategy.map(PriceLevel.levels(from:)) ?? []
+        let stop = levels.first { $0.kind == .stopLoss }?.value
+        let target = levels.first { $0.kind == .takeProfit }?.value
+        if stop != nil || target != nil {
+            let meta = report.meta
+            let current = latestQuote?.currentPrice ?? meta.currentPrice
+            // take_profit is the rebound-reduce price when the decision is reduce/sell (analyzer prompt).
+            let resolved = DecisionAction.resolve(action: report.summary.action, label: report.summary.actionLabel)
+            let targetTitle = resolved == .reduce || resolved == .sell ? "反彈減碼" : "停利"
+            let parts = [
+                stop.map { keyLevelText("停損", value: $0, current: current, currency: meta.currency) },
+                target.map { keyLevelText(targetTitle, value: $0, current: current, currency: meta.currency) },
+            ].compactMap { $0 }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(verbatim: parts.joined(separator: "｜"))
+                    .font(.caption.monospacedDigit()).foregroundStyle(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Menu {
+                    if let stop {
+                        Button("跌破停損 \(DisplayFormat.price(stop, currency: meta.currency)) 提醒") {
+                            alertRoute = AlertRoute(path: ToolLinks.alertPath(code: meta.stockCode, direction: .below, price: stop))
+                        }
+                    }
+                    if let target {
+                        Button("漲到\(targetTitle) \(DisplayFormat.price(target, currency: meta.currency)) 提醒") {
+                            alertRoute = AlertRoute(path: ToolLinks.alertPath(code: meta.stockCode, direction: .above, price: target))
+                        }
+                    }
+                } label: {
+                    Label("設警報", systemImage: "bell")
+                        .font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 10).frame(height: 28)
+                        .background(Theme.accent.opacity(0.12), in: Capsule())
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                        .fixedSize()
+                }
+                .accessibilityIdentifier("report.setAlert")
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("report.keyLevels")
+        }
+    }
+
+    private func keyLevelText(_ title: String, value: Double, current: Double?, currency: String?) -> String {
+        let distance = ReportMath.changePercent(from: current, to: value).map { "（\(DisplayFormat.percent($0))）" } ?? ""
+        return "\(title) \(DisplayFormat.price(value, currency: currency))\(distance)"
+    }
+
+    private func previousLine(_ previous: ReportPreviousSummary, current report: AnalysisReport) -> some View {
+        let date = ReportDisplayDate.monthDay(previous.createdAt)
+        let before = DecisionAction.resolve(action: previous.action, label: nil)
+        let now = DecisionAction.resolve(action: report.summary.action, label: report.summary.actionLabel)
+        let text: String
+        if let before, before == now {
+            text = date.map { "與前次（\($0)）相同" } ?? "與前次相同"
+        } else {
+            let action = PresentationText.action(previous.action, label: nil) ?? DisplayNumber.noValue
+            let score = previous.score.map { " · 評分 \($0)" } ?? ""
+            text = "前次判斷：\(action)\(score)\(date.map { " · \($0)" } ?? "")"
+        }
+        return Text(verbatim: text).font(.caption).foregroundStyle(Theme.secondary)
     }
 
     private func summaryCard(_ report: AnalysisReport) -> some View {
         DSACard {
             VStack(alignment: .leading, spacing: 12) {
-                SectionHeading("這份分析怎麼看")
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    SectionHeading("這份分析怎麼看")
+                    Spacer(minLength: 0)
+                    if let trend = ReportText.firstNonEmpty(report.summary.trendPrediction) {
+                        StatusBadge(trend, tone: .information)
+                            .lineLimit(1)
+                            .accessibilityLabel("趨勢：\(trend)")
+                    }
+                }
                 if let summary = report.summary.analysisSummary, !summary.isEmpty {
                     Text(MarkdownParser.inline(summary))
                         .font(.subheadline).foregroundStyle(Theme.text.opacity(0.9))
-                        .lineLimit(summaryExpanded ? nil : 3)
+                        .lineLimit(summaryExpanded ? nil : 4)
                         .accessibilityIdentifier("report.summary")
                     Button(summaryExpanded ? "收起" : "展開摘要") { summaryExpanded.toggle() }
                         .font(.caption.weight(.semibold)).tint(Theme.accent)
@@ -219,14 +358,11 @@ struct ResearchReportView: View {
                     Text("這份報告沒有摘要，可閱讀下方的研究論點或完整報告。")
                         .font(.subheadline).foregroundStyle(Theme.secondary)
                 }
-                if let trend = report.summary.trendPrediction, !trend.isEmpty {
-                    MetricView("趨勢描述", value: trend)
-                }
                 if let bullish = ReportText.firstNonEmpty(report.summary.strongestBullishSignal) {
-                    MetricView("最強看多信號", value: bullish)
+                    ReportLabeledLine("最強看多信號", value: bullish)
                 }
                 if let bearish = ReportText.firstNonEmpty(report.summary.strongestBearishSignal) {
-                    MetricView("最強看空信號", value: bearish)
+                    ReportLabeledLine("最強看空信號", value: bearish)
                 }
             }
         }
@@ -234,7 +370,8 @@ struct ResearchReportView: View {
 
     /// meta.held 為 nil 代表無法判定：兩邊都列，不標「你目前」。
     @ViewBuilder private func positionAdviceCard(_ report: AnalysisReport) -> some View {
-        let advice = report.summary.positionAdvice ?? report.structuredReport?.thesis.positionAdvice
+        // data_unavailable guardrail: show the model's own advice; the guarded one stays in the disclosure.
+        let advice = guardrail(report)?.positionAdvice ?? report.summary.positionAdvice ?? report.structuredReport?.thesis.positionAdvice
         let holding = ReportText.firstNonEmpty(advice?.hasPosition)
         let flat = ReportText.firstNonEmpty(advice?.noPosition)
         if holding != nil || flat != nil {
@@ -339,28 +476,79 @@ struct ResearchReportView: View {
         }
     }
 
-    /// 報告的進出場與觀察條件；結構化的失效條件接在下面的 ResearchArtifactView。
-    @ViewBuilder private func conditionsCard(_ report: AnalysisReport) -> some View {
+    /// One「接下來怎麼做」card: the summary's conditions plus the artifact's invalidation conditions and
+    /// next actions, grouped and de-duplicated (the same sentence is listed once).
+    @ViewBuilder private func nextStepsCard(_ report: AnalysisReport) -> some View {
         let summary = report.summary
-        let exits = summary.exitTriggers ?? []
-        let watches = summary.phaseWatchConditions ?? []
-        let entries = summary.entryConditions ?? []
-        let pending = summary.pendingEvents ?? []
-        if !(exits.isEmpty && watches.isEmpty && entries.isEmpty && pending.isEmpty) || summary.nextCheckTime != nil {
+        let artifact = report.structuredReport
+        let invalidations = artifact?.invalidationConditions ?? []
+        let exits = ReportNextSteps.unique(summary.exitTriggers, excluding: invalidations.map(\.description))
+        let entries = ReportNextSteps.unique(summary.entryConditions, summary.phaseWatchConditions,
+                                             excluding: exits + invalidations.map(\.description))
+        let actions = (artifact?.nextActions ?? []).filter {
+            !(entries + exits).contains($0.label.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        let pending = ReportNextSteps.unique(summary.pendingEvents,
+                                             excluding: exits + entries + invalidations.map(\.description) + actions.map(\.label))
+        let nextCheck = ReportText.firstNonEmpty(summary.nextCheckTime)
+        let hasRevision = !exits.isEmpty || !invalidations.isEmpty
+        let hasEntry = !entries.isEmpty || !actions.isEmpty
+        if hasRevision || hasEntry || !pending.isEmpty || nextCheck != nil || artifact != nil {
             DSACard {
-                VStack(alignment: .leading, spacing: 14) {
-                    SectionHeading("接下來看什麼條件", systemImage: "scope")
-                    if !exits.isEmpty { ReportBulletList(title: "改判條件", items: exits, symbol: "arrow.triangle.branch", color: Theme.warning) }
-                    if !watches.isEmpty { ReportBulletList(title: "觀察條件", items: watches, symbol: "eye", color: Theme.secondary) }
-                    if !entries.isEmpty { ReportBulletList(title: "進場條件", items: entries, symbol: "arrow.down.to.line", color: Theme.accent) }
-                    if !pending.isEmpty { ReportBulletList(title: "待確認事件", items: pending, symbol: "calendar", color: Theme.secondary) }
-                    if let next = ReportText.firstNonEmpty(summary.nextCheckTime) {
-                        Text("下次檢查：\(next)").font(.caption).foregroundStyle(Theme.secondary)
+                VStack(alignment: .leading, spacing: 16) {
+                    SectionHeading("接下來怎麼做", systemImage: "scope")
+                    if hasRevision {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if exits.isEmpty {
+                                Text("改判條件").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.warning)
+                            } else {
+                                ReportBulletList(title: "改判條件", items: exits, symbol: "arrow.triangle.branch", color: Theme.warning)
+                            }
+                            ForEach(invalidations) { InvalidationRow(condition: $0) }
+                        }
+                    } else if artifact != nil {
+                        Text("模型未提供明確失效條件。")
+                            .font(.subheadline).foregroundStyle(Theme.secondary)
+                    }
+                    if hasEntry {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if entries.isEmpty {
+                                Text("進場或觀察條件").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.accent)
+                            } else {
+                                ReportBulletList(title: "進場或觀察條件", items: entries, symbol: "eye", color: Theme.accent)
+                            }
+                            ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
+                                nextActionRow(action)
+                            }
+                        }
+                    }
+                    if !pending.isEmpty {
+                        ReportBulletList(title: "待確認事件", items: pending, symbol: "calendar", color: Theme.secondary)
+                    }
+                    if let nextCheck {
+                        Text("下次檢查：\(nextCheck)").font(.caption).foregroundStyle(Theme.secondary)
                     }
                 }
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("report.conditions")
+        }
+    }
+
+    private func nextActionRow(_ action: ResearchNextAction) -> some View {
+        HStack(alignment: .top, spacing: 9) {
+            Image(systemName: "checklist")
+                .font(.caption).foregroundStyle(Theme.accent)
+                .padding(.top, 3)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(action.label).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let reason = ReportText.firstNonEmpty(action.reason) { NativeMarkdownText(text: reason) }
+                if let dueAt = action.dueAt {
+                    Text("時間：\(DisplayFormat.time(dueAt))").font(.caption).foregroundStyle(Theme.secondary)
+                }
+            }
         }
     }
 
@@ -526,11 +714,10 @@ struct ResearchArtifactView: View {
     @State private var expandedEvidence: Set<String> = []
 
     var body: some View {
+        // Invalidation conditions and next actions live in ResearchReportView's「接下來怎麼做」card.
         VStack(alignment: .leading, spacing: 20) {
-            invalidationCard
             thesisCard
             evidenceCard
-            nextActionsCard
             qualityCard
         }
     }
@@ -629,47 +816,6 @@ struct ResearchArtifactView: View {
         return parts.joined(separator: " · ")
     }
 
-    private var invalidationCard: some View {
-        DSACard {
-            VStack(alignment: .leading, spacing: 16) {
-                SectionHeading("何時需要重新判斷", subtitle: "論點失效條件", systemImage: "arrow.triangle.branch")
-                if artifact.invalidationConditions.isEmpty {
-                    Text("模型未提供明確失效條件。")
-                        .font(.subheadline).foregroundStyle(Theme.secondary)
-                }
-                ForEach(artifact.invalidationConditions) { InvalidationRow(condition: $0) }
-            }
-        }
-    }
-
-    private var nextActionsCard: some View {
-        DSACard {
-            VStack(alignment: .leading, spacing: 16) {
-                SectionHeading("接下來觀察什麼", systemImage: "checklist")
-                if artifact.nextActions.isEmpty {
-                    Text("這份研究沒有列出後續觀察事項。")
-                        .font(.subheadline).foregroundStyle(Theme.secondary)
-                }
-                ForEach(Array(artifact.nextActions.enumerated()), id: \.offset) { index, action in
-                    HStack(alignment: .top, spacing: 12) {
-                        Text(String(index + 1))
-                            .font(.caption.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(Theme.accent)
-                            .padding(8)
-                            .background(Theme.accent.opacity(0.1), in: Circle())
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(action.label).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
-                            if let reason = action.reason { NativeMarkdownText(text: reason) }
-                            if let dueAt = action.dueAt {
-                                Text("時間：\(DisplayFormat.time(dueAt))").font(.caption).foregroundStyle(Theme.secondary)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     private var qualityCard: some View {
         let gaps = ReportGaps.of(artifact)
         return DSACard {
@@ -724,22 +870,27 @@ struct InvalidationRow: View {
     let condition: InvalidationCondition
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let triggered = condition.status == "triggered"
+        let lines = InvalidationDisplay.lines(
+            description: condition.description,
+            trigger: condition.trigger.map(PresentationText.limitation),
+            threshold: condition.threshold,
+            metric: condition.metric
+        )
+        VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(condition.description)
+                Text(lines.primary)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                if condition.status == "triggered" { StatusBadge("已觸發", tone: .warning) }
+                if triggered { StatusBadge("已觸發", tone: .warning) }
             }
-            if let trigger = condition.trigger, !trigger.isEmpty {
-                Text("觸發：\(PresentationText.limitation(trigger))")
-                    .font(.subheadline).foregroundStyle(Theme.warning)
-            }
-            if let threshold = condition.threshold, !threshold.isEmpty {
-                Text("\(condition.metric ?? "門檻")：\(threshold)")
-                    .font(.caption).foregroundStyle(Theme.secondary)
+            if let detail = lines.detail {
+                // Amber is reserved for conditions that have already triggered.
+                Text(detail)
+                    .font(.caption).foregroundStyle(triggered ? Theme.warning : Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let dueAt = condition.dueAt {
                 Text("觀察期限：\(DisplayFormat.time(dueAt))")
@@ -747,11 +898,32 @@ struct InvalidationRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(12)
         .background(Theme.warning.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
         .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 2).fill(Theme.warning.opacity(0.7)).frame(width: 3).padding(.vertical, 14)
+            RoundedRectangle(cornerRadius: 2).fill(Theme.warning.opacity(0.7)).frame(width: 3).padding(.vertical, 12)
         }
+    }
+}
+
+/// Caption label over a subheadline value (summary signals).
+private struct ReportLabeledLine: View {
+    let label: String
+    let value: String
+
+    init(_ label: String, value: String) {
+        self.label = label
+        self.value = value
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label).font(.caption).foregroundStyle(Theme.secondary)
+            Text(value).font(.subheadline).foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 

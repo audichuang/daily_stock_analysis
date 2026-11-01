@@ -248,12 +248,34 @@ public extension DecisionAction {
     }
 }
 
+/// Watchlist "AI 建議" filter: only buy / add / reduce / sell qualify; watch, hold, avoid and alert do not.
+public enum AIAdviceFilter {
+    public static func qualifies(_ action: DecisionAction?) -> Bool {
+        switch action {
+        case .buy, .add, .reduce, .sell: return true
+        case .hold, .watch, .avoid, .alert, nil: return false
+        }
+    }
+
+    public static func count(_ actions: [DecisionAction?]) -> Int {
+        actions.filter(qualifies).count
+    }
+
+    /// Keeps the original order; returns `items` unchanged when `enabled` is false.
+    public static func apply<Item>(_ items: [Item], enabled: Bool, action: (Item) -> DecisionAction?) -> [Item] {
+        guard enabled else { return items }
+        return items.filter { qualifies(action($0)) }
+    }
+}
+
 /// 自選頁摘要列：漲跌家數、動作數、最新報價時間。
 public struct StockListSummary: Equatable, Sendable {
     public let up: Int
     public let down: Int
     public let flat: Int
     public let actionCount: Int
+    /// N in "AI 建議 N 檔"; see `AIAdviceFilter` for which actions count.
+    public let adviceCount: Int
     public let latestQuoteAt: String?
 
     public init(entries: [StockListEntry], actions: [DecisionAction?], quoteTimes: [String?]) {
@@ -262,10 +284,16 @@ public struct StockListSummary: Equatable, Sendable {
         down = changes.filter { $0 < 0 }.count
         flat = changes.filter { $0 == 0 }.count
         actionCount = actions.compactMap { $0 }.filter(\.isActionable).count
+        adviceCount = AIAdviceFilter.count(actions)
         latestQuoteAt = quoteTimes.compactMap { $0 }.max { lhs, rhs in
             // 時區不同的字串不能直接比，解析不了的排最前（最不新）。
             (Self.parse(lhs) ?? .distantPast) < (Self.parse(rhs) ?? .distantPast)
         }
+    }
+
+    /// Spoken form of "▲3 ▼2 ─1"; VoiceOver cannot read the symbols meaningfully.
+    public var breadthAccessibilityLabel: String {
+        "上漲 \(up) 檔，下跌 \(down) 檔，平盤 \(flat) 檔"
     }
 
     private static func parse(_ value: String) -> Date? {

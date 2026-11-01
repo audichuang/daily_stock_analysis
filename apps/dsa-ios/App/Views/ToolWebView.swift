@@ -12,6 +12,8 @@ struct ToolWebView: View {
     @State private var exportedFile: WebExportFile?
     @State private var progress = 0.0
     @State private var exportError: String?
+    /// Live `document.title` of the embedded page; falls back to `title` while empty.
+    @State private var pageTitle = ""
 
     var body: some View {
         Group {
@@ -25,8 +27,10 @@ struct ToolWebView: View {
                 AuthenticatedWebContent(baseURL: baseURL, path: path, dataStore: store.toolWebDataStore,
                                         prepareCookies: { try await store.toolCookies() },
                                         loading: $loading, progress: $progress, error: $error,
-                                        exportError: $exportError, exportedFile: $exportedFile)
+                                        exportError: $exportError, exportedFile: $exportedFile,
+                                        pageTitle: $pageTitle)
                     .id(reloadID)
+                    .ignoresSafeArea(.container, edges: .bottom)
                     .overlay(alignment: .top) {
                         if loading {
                             ProgressView(value: max(progress, 0.05))
@@ -39,7 +43,7 @@ struct ToolWebView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
-        .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(pageTitle.isEmpty ? title : pageTitle).navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
         .alert("匯出失敗", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
             Button("好", role: .cancel) { }
@@ -49,12 +53,6 @@ struct ToolWebView: View {
         .sheet(item: $exportedFile) { file in
             WebExportShareSheet(fileURL: file.url)
                 .onDisappear { file.removeTemporaryCopy() }
-        }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: reload) { Image(systemName: "arrow.clockwise") }
-                    .accessibilityLabel("重新載入工具")
-            }
         }
     }
 
@@ -76,6 +74,7 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
     @Binding var error: String?
     @Binding var exportError: String?
     @Binding var exportedFile: WebExportFile?
+    @Binding var pageTitle: String
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -93,6 +92,7 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         web.uiDelegate = context.coordinator
         web.allowsBackForwardNavigationGestures = true
         context.coordinator.observeProgress(of: web)
+        context.coordinator.attachRefreshControl(to: web)
         guard let url = WebNavigationPolicy.embeddedToolURL(path: path, baseURL: baseURL),
               WebNavigationPolicy.sameOrigin(url, baseURL) else {
             error = "工具網址不屬於目前的分析服務。"
@@ -130,6 +130,9 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         private var blockedAccessRedirect = false
         private var downloadStarting = false
         private var progressObservation: NSKeyValueObservation?
+        private var titleObservation: NSKeyValueObservation?
+        private weak var webView: WKWebView?
+        private var refreshControl: UIRefreshControl?
         init(_ parent: AuthenticatedWebContent) { self.parent = parent }
 
         func observeProgress(of web: WKWebView) {
@@ -137,11 +140,40 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
                 guard let value = change.newValue else { return }
                 Task { @MainActor in self?.parent.progress = value }
             }
+            titleObservation = web.observe(\.title, options: [.new]) { [weak self] _, change in
+                // Keep the last non-empty title so the nav bar never flashes blank between navigations.
+                guard let value = change.newValue??.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return }
+                Task { @MainActor in self?.parent.pageTitle = value }
+            }
         }
 
         func stopObservingProgress() {
             progressObservation?.invalidate()
             progressObservation = nil
+            titleObservation?.invalidate()
+            titleObservation = nil
+        }
+
+        /// Pull-to-refresh replaces the old toolbar reload button.
+        func attachRefreshControl(to web: WKWebView) {
+            webView = web
+            let control = UIRefreshControl()
+            control.tintColor = UIColor(Theme.accent)
+            control.addTarget(self, action: #selector(handleRefresh), for: .valueChanged)
+            web.scrollView.refreshControl = control
+            // Short tool pages must still bounce, otherwise the pull gesture never fires.
+            web.scrollView.alwaysBounceVertical = true
+            refreshControl = control
+        }
+
+        @objc private func handleRefresh() {
+            guard let webView else { endRefreshing(); return }
+            if webView.url == nil { endRefreshing(); return }
+            webView.reload()
+        }
+
+        private func endRefreshing() {
+            if refreshControl?.isRefreshing == true { refreshControl?.endRefreshing() }
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -273,12 +305,14 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             downloadStarting = false
             parent.loading = false
+            endRefreshing()
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { fail(error) }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { fail(error) }
 
         private func fail(_ error: Error) {
+            endRefreshing()
             if WebNavigationPolicy.preservesAccessError(error, blockedAccessRedirect: blockedAccessRedirect) { return }
             if (error as NSError).code == NSURLErrorCancelled { return }
             if WebNavigationPolicy.isDownloadInterruption(error, downloadStarting: downloadStarting) {

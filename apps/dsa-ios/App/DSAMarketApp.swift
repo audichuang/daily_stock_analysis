@@ -43,8 +43,6 @@ struct MainTabView: View {
             NavigationStack { ToolsView() }
                 .tabItem { Label("工具", systemImage: "slider.horizontal.3") }.tag(4)
         }
-        .toolbarBackground(Theme.background, for: .tabBar)
-        .toolbarBackground(.visible, for: .tabBar)
     }
 }
 

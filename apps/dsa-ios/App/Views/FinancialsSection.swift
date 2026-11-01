@@ -18,7 +18,10 @@ struct FinancialsSection: View {
             if data?.status != "unsupported" {
                 DSACard {
                     VStack(alignment: .leading, spacing: 12) {
-                        SectionHeading("財報", subtitle: subtitle, systemImage: "doc.text.magnifyingglass")
+                        // The tab is already named「財報」; keep only the period line.
+                        if let subtitle {
+                            Text(subtitle).font(.caption).foregroundStyle(Theme.secondary)
+                        }
                         content
                     }
                 }

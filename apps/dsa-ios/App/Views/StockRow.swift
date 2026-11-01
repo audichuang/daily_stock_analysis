@@ -85,9 +85,10 @@ struct StockRow: View {
                     .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                     .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
                 if store.isHeld(code) {
-                    Text("持")
-                        .font(.caption2.weight(.bold)).foregroundStyle(Theme.accent)
-                        .accessibilityLabel("持股")
+                    Text("持股")
+                        .font(.caption2.weight(.semibold)).foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Theme.accent.opacity(0.14), in: Capsule())
                         .fixedSize()
                 }
             }
@@ -100,14 +101,12 @@ struct StockRow: View {
         HStack(spacing: 5) {
             if let secondary = titles.secondary {
                 Text(secondary)
-                    .font(.caption2.monospacedDigit()).foregroundStyle(Theme.secondary)
+                    .font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
                     .lineLimit(1).layoutPriority(-1)
             }
-            if let advice = PresentationText.action(report?.action, label: report?.actionLabel, advice: report?.operationAdvice) {
-                Text("AI \(advice)")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(ActionTone.of(action: report?.action, label: report?.actionLabel ?? report?.operationAdvice).color)
-                    .lineLimit(1)
+            // Neutral actions (觀望、續抱) render as grey text only; ActionBadge handles that.
+            if let badge = ActionBadge(action: report?.action, label: actionLabel, size: .compact) {
+                badge
             }
             if let warning {
                 Label(warning, systemImage: quote == nil ? "exclamationmark.circle" : "clock")
@@ -131,7 +130,7 @@ struct StockRow: View {
                 .accessibilityIdentifier("stock-price.\(code)")
             if let change = quote?.change {
                 Text(StockListFormat.signedNumber(change))
-                    .font(.caption2.monospacedDigit())
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(changeColor)
                     .lineLimit(1).minimumScaleFactor(0.7)
             }
@@ -156,7 +155,7 @@ struct StockRow: View {
                 .foregroundStyle(Theme.text)
                 .lineLimit(1).minimumScaleFactor(0.7)
             Text(DisplayFormat.percent(quote?.changePercent))
-                .font(.caption2.monospacedDigit())
+                .font(.caption.monospacedDigit())
                 .foregroundStyle(changeColor)
                 .lineLimit(1).minimumScaleFactor(0.7)
         }
@@ -179,6 +178,12 @@ struct StockRow: View {
         }
     }
 
+    /// Stored label first, then free-text advice from old reports; empty strings fall through.
+    private var actionLabel: String? {
+        [report?.actionLabel, report?.operationAdvice].compactMap { $0 }
+            .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
     private var changeColor: Color {
         Theme.changeColor(quote?.changePercent, convention: store.colorConvention)
     }
@@ -190,7 +195,7 @@ struct StockRowSkeleton: View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("股票名稱").font(.subheadline)
-                Text("代號").font(.caption2)
+                Text("代號").font(.caption)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Text("000.00").font(.subheadline).stockRowPriceColumn()

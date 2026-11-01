@@ -17,8 +17,11 @@ enum Theme {
     static let text = Color(red: 0.94, green: 0.96, blue: 0.99)
     static let secondary = Color(red: 0.64, green: 0.70, blue: 0.79)
     static let border = Color.white.opacity(0.09)
-    static let up = Color(red: 1.0, green: 0.43, blue: 0.48)
-    static let down = Color(red: 0.28, green: 0.83, blue: 0.61)
+    // Market direction colours live in DSACore (shared with Web W01); changeColor still swaps them per convention.
+    static let up = Color(MarketPalette.up)
+    static let down = Color(MarketPalette.down)
+    /// Destructive / error red. Fixed: never swapped by the red-up / green-up convention.
+    static let danger = Color(red: 1.0, green: 0.38, blue: 0.38)
     static let warning = Color(red: 1.0, green: 0.76, blue: 0.39)
     static let information = Color(red: 0.48, green: 0.69, blue: 1.0)
 
@@ -26,6 +29,12 @@ enum Theme {
         guard let change, change.isFinite, change != 0 else { return secondary }
         let positive = change > 0
         return (positive == (convention == .taiwan)) ? up : down
+    }
+}
+
+private extension Color {
+    init(_ rgb: PaletteRGB) {
+        self.init(red: rgb.red, green: rgb.green, blue: rgb.blue)
     }
 }
 
@@ -52,6 +61,8 @@ enum DSAType {
     static let body = Font.subheadline
     static let caption = Font.caption
     static let micro = Font.caption2
+    /// Group label shown outside cards (SectionHeading .group).
+    static let groupLabel = Font.footnote.weight(.semibold)
 }
 
 /// 動作語意色：買進類主色、持有觀望灰、減碼賣出與警示琥珀。紅綠只留給行情方向。
@@ -84,8 +95,61 @@ enum ActionTone {
 
 extension View {
     /// 全 App 捲動頁共用的底部內距；PageScroll 已內建，自己開 ScrollView 的頁面要加這個。
+    @ViewBuilder
     func dsaPageBottomInset() -> some View {
-        contentMargins(.bottom, DSASpacing.tabBarClearance, for: .scrollContent)
+        let inset = contentMargins(.bottom, DSASpacing.tabBarClearance, for: .scrollContent)
+        if #available(iOS 26, *) {
+            inset.scrollEdgeEffectStyle(.hard, for: .bottom)
+        } else {
+            inset
+        }
+    }
+
+    /// Shared list row insets: 16pt leading / trailing, top and bottom by role.
+    func dsaListRow(_ role: DSAListRowRole) -> some View {
+        listRowInsets(EdgeInsets(top: role.top, leading: DSASpacing.lg, bottom: role.bottom, trailing: DSASpacing.lg))
+    }
+
+    /// Fades the trailing edge (default 24pt) so a horizontally scrolling chip row hints at more content.
+    func dsaTrailingFade(width: CGFloat = 24) -> some View {
+        mask {
+            HStack(spacing: 0) {
+                Rectangle()
+                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: width)
+            }
+        }
+    }
+}
+
+enum DSAListRowRole {
+    /// Controls (pickers, segmented filters) at the top of a section.
+    case control
+    /// Meta lines such as "updated at" under a control.
+    case meta
+    /// Column header above a data list.
+    case columnHeader
+    /// Plain content rows that manage their own padding.
+    case content
+    /// Standalone blocks (cards, banners) inside a list.
+    case block
+
+    var top: CGFloat {
+        switch self {
+        case .control: return 12
+        case .meta: return 8
+        case .columnHeader: return 10
+        case .content: return 0
+        case .block: return 6
+        }
+    }
+
+    var bottom: CGFloat {
+        switch self {
+        case .control, .meta, .content: return 0
+        case .columnHeader: return 4
+        case .block: return 6
+        }
     }
 }
 
@@ -99,55 +163,92 @@ struct PageBottomAnchor: View {
     }
 }
 
+enum DSACardStyle {
+    /// Surface fill with a hairline border (default).
+    case bordered
+    /// Surface fill, no border.
+    case flat
+    /// Light tint fill and border in the given colour.
+    case tinted(Color)
+}
+
 struct DSACard<Content: View>: View {
+    private let style: DSACardStyle
     private let content: Content
 
-    init(@ViewBuilder content: () -> Content) {
+    init(style: DSACardStyle = .bordered, @ViewBuilder content: () -> Content) {
+        self.style = style
         self.content = content()
     }
 
+    private var fill: Color {
+        switch style {
+        case .bordered, .flat: return Theme.surface
+        case .tinted(let tint): return tint.opacity(0.08)
+        }
+    }
+
+    private var stroke: Color? {
+        switch style {
+        case .bordered: return Theme.border.opacity(0.6)
+        case .flat: return nil
+        case .tinted(let tint): return tint.opacity(0.22)
+        }
+    }
+
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: DSARadius.card, style: .continuous)
         content
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .background {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Theme.surface)
-            }
+            .padding(DSASpacing.md)
+            .background { shape.fill(fill) }
             .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Theme.border, lineWidth: 1)
+                if let stroke {
+                    shape.strokeBorder(stroke, lineWidth: 0.5)
+                }
             }
     }
 }
 
 struct SectionHeading: View {
+    enum Level {
+        /// Group label outside cards: footnote semibold, secondary colour.
+        case group
+        /// Title inside a card: headline, primary text colour.
+        case card
+    }
+
     let title: String
     let subtitle: String?
     let systemImage: String?
+    let level: Level
 
     // 眉標已全 App 移除。參數暫留給 feat/tools-today-overview 上的 ToolsView，該分支合併後刪掉。
-    init(_ title: String, subtitle: String? = nil, eyebrow: String? = nil, systemImage: String? = nil) {
+    init(_ title: String, subtitle: String? = nil, eyebrow: String? = nil, systemImage: String? = nil, level: Level = .card) {
         self.title = title
         self.subtitle = subtitle
         self.systemImage = systemImage
+        self.level = level
     }
 
+    private var titleFont: Font { level == .group ? DSAType.groupLabel : DSAType.section }
+    private var titleColor: Color { level == .group ? Theme.secondary : Theme.text }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: level == .group ? 2 : 6) {
+            HStack(alignment: .firstTextBaseline, spacing: level == .group ? 6 : 8) {
                 if let systemImage {
                     Image(systemName: systemImage)
-                        .foregroundStyle(Theme.accent)
+                        .foregroundStyle(level == .group ? Theme.secondary : Theme.accent)
                         .accessibilityHidden(true)
                 }
                 Text(title)
-                    .foregroundStyle(Theme.text)
+                    .foregroundStyle(titleColor)
             }
-            .font(.title3.weight(.bold))
+            .font(titleFont)
             if let subtitle {
                 Text(subtitle)
-                    .font(.subheadline)
+                    .font(level == .group ? DSAType.caption : DSAType.body)
                     .foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -192,10 +293,11 @@ struct MetricView: View {
 }
 
 enum StatusTone {
-    case neutral, positive, warning, negative, information, ai
+    case neutral, positive, warning, negative, information, ai, danger
 
     var color: Color {
         switch self {
+        case .danger: return Theme.danger
         case .neutral: return Theme.secondary
         case .positive: return Theme.down
         case .warning: return Theme.warning
@@ -252,7 +354,7 @@ struct EmptyStateView: View {
                 .font(.system(size: 30, weight: .light))
                 .foregroundStyle(Theme.accent)
                 .frame(width: 72, height: 72)
-                .background(Theme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 24))
+                .background(Theme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: DSARadius.card, style: .continuous))
                 .accessibilityHidden(true)
             Text(title).font(.headline).foregroundStyle(Theme.text)
             Text(message)
@@ -317,8 +419,143 @@ struct ErrorStateView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(Theme.warning.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.warning.opacity(0.18), lineWidth: 1))
+        .background(Theme.warning.opacity(0.06), in: RoundedRectangle(cornerRadius: DSARadius.card, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: DSARadius.card, style: .continuous).strokeBorder(Theme.warning.opacity(0.18), lineWidth: 1))
+    }
+}
+
+/// Compact one-line status (stale data, partial failure) with an optional「重試」button.
+struct InlineStatusRow: View {
+    let message: String
+    let tone: StatusTone
+    let retry: (() -> Void)?
+
+    init(message: String, tone: StatusTone = .warning, retry: (() -> Void)? = nil) {
+        self.message = message
+        self.tone = tone
+        self.retry = retry
+    }
+
+    var body: some View {
+        HStack(spacing: DSASpacing.sm) {
+            Circle()
+                .fill(tone.color)
+                .frame(width: 6, height: 6)
+                .accessibilityHidden(true)
+            Text(message)
+                .foregroundStyle(Theme.secondary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let retry {
+                Button("重試", action: retry)
+                    .font(DSAType.caption.weight(.semibold))
+                    .foregroundStyle(Theme.accent)
+                    .frame(minWidth: 44, minHeight: 36)
+                    .contentShape(Rectangle())
+            }
+        }
+        .font(DSAType.caption)
+        .padding(.horizontal, DSASpacing.md)
+        .frame(minHeight: 36)
+        .background(tone.color.opacity(0.06), in: RoundedRectangle(cornerRadius: DSARadius.control, style: .continuous))
+    }
+}
+
+/// Decision action pill. Neutral actions（觀望、續抱）are secondary text only, no fill.
+struct ActionBadge: View {
+    enum Size {
+        case compact, regular, large
+
+        var font: Font {
+            switch self {
+            case .compact: return DSAType.micro.weight(.semibold)
+            case .regular: return DSAType.caption.weight(.semibold)
+            case .large: return DSAType.body.weight(.semibold)
+            }
+        }
+
+        var horizontal: CGFloat {
+            switch self {
+            case .compact: return 6
+            case .regular: return 8
+            case .large: return 12
+            }
+        }
+
+        var vertical: CGFloat {
+            switch self {
+            case .compact: return 2
+            case .regular: return 4
+            case .large: return 6
+            }
+        }
+    }
+
+    let text: String
+    let tone: ActionTone
+    let size: Size
+
+    init(action: DecisionAction, size: Size = .regular) {
+        self.text = action.displayLabel
+        self.tone = ActionTone(action)
+        self.size = size
+    }
+
+    /// Stored enum + legacy label; unknown actions stay neutral and show the label as-is.
+    init?(action: String?, label: String?, size: Size = .regular) {
+        guard let text = DecisionAction.displayText(action: action, label: label) else { return nil }
+        self.text = text
+        self.tone = ActionTone.of(action: action, label: label)
+        self.size = size
+    }
+
+    var body: some View {
+        let isNeutral = tone == .neutral
+        Text(text)
+            .font(size.font)
+            .foregroundStyle(isNeutral ? Theme.secondary : tone.color)
+            .lineLimit(1)
+            .padding(.horizontal, isNeutral ? 0 : size.horizontal)
+            .padding(.vertical, size.vertical)
+            .background(isNeutral ? Color.clear : tone.color.opacity(0.14), in: Capsule())
+    }
+}
+
+/// Filter chip: 32pt visual height inside a 44pt touch target.
+struct DSAChip: View {
+    let title: String
+    let selected: Bool
+    let action: (() -> Void)?
+
+    init(title: String, selected: Bool, action: (() -> Void)? = nil) {
+        self.title = title
+        self.selected = selected
+        self.action = action
+    }
+
+    private var label: some View {
+        Text(title)
+            .font(DSAType.body.weight(selected ? .semibold : .regular))
+            .foregroundStyle(selected ? Theme.accent : Theme.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, DSASpacing.md)
+            .frame(height: 32)
+            .background(selected ? Theme.accent.opacity(0.14) : Theme.surface, in: Capsule())
+            .overlay(Capsule().strokeBorder(selected ? Theme.accent.opacity(0.4) : Theme.border, lineWidth: 1))
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+    }
+
+    var body: some View {
+        Group {
+            if let action {
+                Button(action: action) { label }
+                    .buttonStyle(.plain)
+            } else {
+                label
+            }
+        }
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 

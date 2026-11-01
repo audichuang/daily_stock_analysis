@@ -29,9 +29,11 @@ struct AccessSettingsView: View {
                 if !configured || replacing {
                     TextField("Client ID", text: $clientID)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .padding(14).background(Theme.background, in: RoundedRectangle(cornerRadius: 12))
                         .accessibilityIdentifier("access-client-id")
                     SecureField("Client Secret", text: $secret)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .padding(14).background(Theme.background, in: RoundedRectangle(cornerRadius: 12))
                         .accessibilityIdentifier("access-client-secret")
                     Button("儲存憑證") {
                         do {
@@ -42,7 +44,12 @@ struct AccessSettingsView: View {
                     .disabled(clientID.isEmpty || secret.isEmpty || store.connecting)
                     .accessibilityIdentifier("access-save")
                 }
-                if let error { Text(error).font(.caption).foregroundStyle(Theme.secondary) }
+                if let error {
+                    Label(error, systemImage: "exclamationmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }.padding(.top, 10)
         } label: {
             Text("Cloudflare Access（選填）").accessibilityIdentifier("access-section")

@@ -16,7 +16,7 @@ struct EventCalendarView: View {
 
     var body: some View {
         PageScroll {
-            SectionHeading("持股與自選的重要日期", subtitle: "美股以美東 ET 日期、台股以台北日期顯示；法定期限不代表實際發布日。")
+            SectionHeading("持股與自選的重要日期", subtitle: "美股以美東日期顯示；法定期限不代表實際發布日。")
             DSACard {
                 VStack(spacing: 15) {
                     HStack {
@@ -124,7 +124,7 @@ struct EventCalendarView: View {
                     Spacer()
                     StatusBadge(event.statusLabel, tone: event.isStatutoryDeadline || event.status == "estimated" ? .warning : .neutral)
                 }
-                Text("\(event.date) · \(event.timezoneLabel)").font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
+                Text(event.timezoneLabel.isEmpty ? event.date : "\(event.date) · \(event.timezoneLabel)").font(.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
                 Text(event.detail).font(.subheadline).foregroundStyle(Theme.secondary)
                 if let url = URL(string: event.sourceUrl), ["http", "https"].contains(url.scheme) {
                     Link("查看來源", destination: url).font(.caption)

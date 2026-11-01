@@ -128,6 +128,11 @@ public enum ReportMath {
 }
 
 public enum ReportText {
+    /// 大盤複盤標題跟著報告自己的名稱（台股／美股），沒有名稱才用不分市場的通稱。
+    public static func marketReviewTitle(stockName: String?) -> String {
+        firstNonEmpty(stockName) ?? "大盤複盤"
+    }
+
     /// 依序取第一個非空字串；結論列的「一句話 → 摘要」都走這裡。
     public static func firstNonEmpty(_ candidates: String?...) -> String? {
         for candidate in candidates {
@@ -189,5 +194,36 @@ public struct ReportGaps: Equatable, Sendable {
             .map { sourceLabels[$0.replacingOccurrences(of: "_", with: "").lowercased()] ?? $0 }
         let level = artifact.dataQuality.level
         return ReportGaps(items: blocks + sources, incomplete: level == "limited" || level == "poor")
+    }
+}
+
+/// Display lines for one invalidation card: at most one condition line plus one detail line.
+/// Trigger and threshold are dropped when they only repeat the description (models often fill all three alike).
+public enum InvalidationDisplay {
+    /// Known metric keys; unknown keys are never shown raw.
+    public static let metricLabels = ["price": "價位", "volume": "成交量", "pe": "本益比", "rsi": "RSI"]
+
+    public static func metricLabel(_ metric: String?) -> String? {
+        guard let key = metric?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !key.isEmpty else { return nil }
+        return metricLabels[key]
+    }
+
+    public static func lines(description: String, trigger: String?, threshold: String?, metric: String?) -> (primary: String, detail: String?) {
+        let desc = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawTrigger = trigger?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rawThreshold = threshold?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        // An empty description promotes the trigger to the condition line.
+        let primary = desc.isEmpty ? rawTrigger : desc
+        let keptTrigger = (rawTrigger.isEmpty || primary.contains(rawTrigger)) ? nil : rawTrigger
+        let keptThreshold = (rawThreshold.isEmpty || primary.contains(rawThreshold) || (!rawTrigger.isEmpty && rawTrigger.contains(rawThreshold)))
+            ? nil : rawThreshold
+
+        var parts: [String] = []
+        if let keptTrigger { parts.append("觸發：\(keptTrigger)") }
+        if let keptThreshold {
+            if let label = metricLabel(metric) { parts.append("\(label)：\(keptThreshold)") } else { parts.append(keptThreshold) }
+        }
+        return (primary, parts.isEmpty ? nil : parts.joined(separator: " · "))
     }
 }
