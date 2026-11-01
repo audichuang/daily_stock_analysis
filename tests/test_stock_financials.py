@@ -97,6 +97,18 @@ def test_tw_financial_net_income_never_reads_comprehensive_parent_row():
     assert raw["net_revenue"] == 106_000 and raw["revenue"] is None
 
 
+def test_tw_minority_note_only_when_net_income_falls_back():
+    d = date(2099, 8, 14)
+    fallback = [_row(d, "income_sheet", "本期淨利（淨損）", 64), _row(d, "income_sheet", "基本每股盈餘合計", 1)]
+    parent = fallback + [_row(d, "income_sheet", "母公司業主（淨利／損）", 60)]
+    note = "含非控制權益"
+    for rows, expected in ((fallback, True), (parent, False)):
+        payload = sf._base_payload("TEST.TW", "tw")
+        payload["currency"] = "TWD"
+        sf._assemble(payload, sf.tw_periods_from_rows(rows, financial=False), financial=False)
+        assert any(note in text for text in payload["limitations"]) is expected
+
+
 def test_tw_contract_liabilities_exclude_insurance_accounts():
     d = date(2099, 8, 14)
     rows = [_row(d, "balance_sheet", "合約負債－流動", 7), _row(d, "balance_sheet", "合約負債－非流動", 3),

@@ -104,6 +104,9 @@ def _token_table(payload: dict) -> Dict[str, Optional[str]]:
         for point in metric["points"]:
             base = f"{metric['key']}@{point['period']}"
             table[base] = _format_value(point["value"], metric["kind"], payload.get("currency"))
+            # ADR 的 EPS 和原股不同基準，文字裡也要帶口徑，和欄位顯示一致。
+            if table[base] and str(metric.get("unit", "")).endswith("/ADR"):
+                table[base] += "／ADR"
             table[f"{base}:yoy"] = _format_change(point.get("yoy_pp") if points else point.get("yoy_pct"), points=points)
             table[f"{base}:qoq"] = _format_change(point.get("qoq_pp") if points else point.get("qoq_pct"), points=points)
     for month in payload.get("monthly_revenue") or []:

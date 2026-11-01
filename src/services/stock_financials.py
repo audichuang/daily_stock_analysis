@@ -208,7 +208,10 @@ def tw_periods_from_rows(rows: Iterable[tuple], *, financial: bool) -> List[dict
         raw["equity"] = None if equity is None else equity * TW_UNIT_MULTIPLIER
         contract_parts = [balance[name] for name in _CONTRACT_ACCOUNTS if name in balance]
         raw["contract"] = sum(contract_parts) * TW_UNIT_MULTIPLIER if contract_parts else None
+        net_includes_minority = raw["net_income"] is not None and _pick(income, _NET_INCOME_ACCOUNTS[:1]) is None \
+            and _pick(cumulate, _NET_INCOME_ACCOUNTS[:1], "累計") is None
         periods.append({
+            "net_includes_minority": net_includes_minority,
             "key": f"{year}Q{quarter}", "label": f"{year} Q{quarter}", "fiscal_year": year,
             "fiscal_quarter": quarter, "period_end": slot["info"]["end"].isoformat(),
             "announce_date": _tw_deadline(year, quarter, financial).isoformat(),
@@ -483,8 +486,8 @@ def _assemble(payload: dict, rows: List[dict], *, financial: bool) -> None:
     payload["status"] = "ok" if metrics else "no_data"
     if not metrics:
         payload["status_reason"] = "查得到申報，但沒有可用的季度欄位。"
-    if any(row["raw"].get("net_income") is not None for row in display_rows) and financial and payload["market"] == "tw":
-        payload["limitations"].append("金融業淨利含非控制權益（本期淨利）；每股盈餘已扣特別股與非控制權益，兩者無法直接相除。")
+    if any(row.get("net_includes_minority") for row in display_rows):
+        payload["limitations"].append("這裡的淨利含非控制權益（本期淨利）；每股盈餘已扣特別股與非控制權益，兩者無法直接相除。")
     if any(point["derived"] for metric in metrics for point in metric["points"]
            if metric["key"] == "eps"):
         payload["limitations"].append("標「推算」的單季 EPS 是累計 EPS 相減，股數變動時與公司公布值略有差距。")

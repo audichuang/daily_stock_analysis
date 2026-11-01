@@ -57,6 +57,13 @@ def test_amount_keeps_source_currency_in_token():
     assert "美元" in result["highlights"][0]["what_happened"]
 
 
+def test_adr_eps_token_carries_the_adr_basis():
+    payload = _payload()
+    payload["metrics"].append({"key": "eps", "label": "EPS", "kind": "per_share", "unit": "TWD/ADR", "definition": "d", "points": [
+        {"period": "2099Q2", "value": 136.25, "yoy_pct": None, "qoq_pct": None, "yoy_pp": None, "qoq_pp": None}]})
+    assert fc._token_table(payload)["eps@2099Q2"] == "136.25 元／ADR"
+
+
 def test_unknown_metric_key_is_dropped():
     parsed = {"highlights": [_item(metric_key="ebitda"), _item()]}
     result = fc.normalize_commentary(parsed, _payload())
