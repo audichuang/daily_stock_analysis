@@ -86,7 +86,9 @@ for (const state of ['complete', 'missing-price', 'snapshot-error', 'invalid-top
     if (state === 'empty') {
       await expect(dashboard.getByText('总市值: CNY 0.00')).toBeVisible();
       await expect(dashboard.getByText('持仓: 0')).toBeVisible();
-      await expect(dashboard.getByText('暂无暴露数据')).toHaveCount(2);
+      // 兩個曝險分解都空時不畫兩個空框，改成一行灰字。
+      await expect(dashboard.getByTestId('portfolio-exposure-empty')).toHaveText('暂无暴露数据');
+      await expect(dashboard.getByText('暂无暴露数据')).toHaveCount(1);
       await expect(page.getByText('当前无持仓数据', { exact: true })).toBeVisible();
     }
     if (state === 'rounded-tail') {
@@ -109,7 +111,11 @@ for (const state of ['complete', 'missing-price', 'snapshot-error', 'invalid-top
       await expect(dashboard.getByText('Top1: 600519')).toBeVisible();
       await expect(page.getByText('行业数据暂不可用，当前展示个股集中度', { exact: true })).toBeVisible();
     }
-    if (state === 'missing-price') await expect(dashboard.getByText('暴露不可用')).toHaveCount(2);
+    if (state === 'missing-price') {
+      // 曝險不可用時併進「不可用：」那行灰字，不再畫兩個寫著「暴露不可用」的框。
+      await expect(dashboard.locator('[data-exposure-state="unavailable"]')).toHaveCount(2);
+      await expect(dashboard.getByText('暴露不可用')).toHaveCount(0);
+    }
     for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport);
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
