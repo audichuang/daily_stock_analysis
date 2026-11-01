@@ -72,6 +72,10 @@ jobs:
             backend_non_web:
               - '**'
               - '!apps/dsa-web/**'
+              # fork：排程自動 commit 的決策日誌與 iOS App 沒有後端測試讀它們（iOS 不在 CI），
+              # 只改這兩處時不跑 4 片後端測試；測試若開始讀它們要把這兩行拿掉。
+              - '!journal/**'
+              - '!apps/dsa-ios/**'
               - '!docs/**'
               - '!**/*.md'
               - '!LICENSE'
