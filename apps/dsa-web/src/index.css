@@ -1794,6 +1794,22 @@
   color: var(--text-secondary-text);
 }
 
+/* No @tailwindcss/typography here: Preflight zeroes block margins, so report Markdown sets its own block rhythm.
+   Tables sit inside a scroll wrapper div, so the wrapper carries the table's spacing. */
+.home-markdown-prose :where(p, ul, ol, blockquote, pre, div:has(> table)) {
+  margin: 0 0 0.75rem;
+}
+
+.home-markdown-prose > :where(:last-child),
+.home-markdown-prose :where(blockquote) > :where(:last-child) {
+  margin-bottom: 0;
+}
+
+/* Nested lists hug their parent item instead of taking a paragraph gap. */
+.home-markdown-prose :where(li > ul, li > ol) {
+  margin: 0.25rem 0 0;
+}
+
 /* No @tailwindcss/typography here and Preflight strips list markers, so restore them for report Markdown. */
 .home-markdown-prose :where(ul) {
   list-style: disc;
@@ -1809,7 +1825,8 @@
   margin: 0;
 }
 
-.home-markdown-prose :where(li + li) {
+/* Not wrapped in :where — the chat `.prose :where(li) { margin: 2px 0 }` below has the same (0,1,0) weight and would win. */
+.home-markdown-prose li + li {
   margin-top: 0.25rem;
 }
 /* .label-uppercase 是舊 class 的相容別名，Y01 刪除 */

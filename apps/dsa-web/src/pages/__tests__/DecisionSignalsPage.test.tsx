@@ -739,6 +739,33 @@ describe('DecisionSignalsPage', () => {
     });
   });
 
+  it('offers load more on desktop too when every loaded stop=triggered row is a stop hit and more pages exist', async () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'en');
+    window.history.pushState({}, '', '/decision-signals?stop=triggered');
+    vi.mocked(decisionSignalsApi.list).mockResolvedValue(listResponse(
+      Array.from({ length: 20 }, (_, index) => makeSignal({
+        id: 200 + index,
+        stockCode: `6001${String(index).padStart(2, '0')}`,
+        stockName: `Stop ${index}`,
+        isHeld: true,
+        stopTriggered: true,
+      })),
+      44,
+    ));
+
+    renderPage();
+
+    expect(await screen.findByText('20 signals')).toBeInTheDocument();
+    // Pagination is hidden in this mode, so load more is the only way to reach row 21+ on any width.
+    expect(screen.queryByTestId('signal-pagination-bottom')).not.toBeInTheDocument();
+    const loadMore = screen.getByRole('button', { name: 'Load more' });
+    let node: HTMLElement | null = loadMore;
+    while (node) {
+      expect(node.className).not.toMatch(/(^|\s)(md:hidden|hidden)(\s|$)/);
+      node = node.parentElement;
+    }
+  });
+
   it('keeps the backend total, pagination and default empty copy without URL filters', async () => {
     window.localStorage.setItem('dsa.uiLanguage', 'en');
     vi.mocked(decisionSignalsApi.list).mockResolvedValue(listResponse([], 44));

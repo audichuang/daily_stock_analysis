@@ -1684,7 +1684,8 @@ const DecisionSignalsPage: React.FC = () => {
           </div>
         ) : null}
         {showLoadMore ? (
-          <div className="md:hidden">
+          // Desktop normally pages; the client-side stop filter has no pagination, so load more is its only way on.
+          <div className={clientStopFilter ? undefined : 'md:hidden'}>
             <Button
               variant="secondary"
               className="w-full"

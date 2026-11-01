@@ -203,6 +203,9 @@ const FundsPage: React.FC = () => {
   // 沒帶 ?fund= 時自動選第一檔只放在 state，不寫網址；使用者點選或外部帶參數才寫網址。
   const [autoFundId, setAutoFundId] = useState<string | null>(null);
   const selectedId = urlFundId ?? autoFundId;
+  // The fund the user chose (tap, search or ?fund= link), as opposed to the auto-pick; on phones only this one
+  // stays highlighted after Back, since Back moves the choice into autoFundId.
+  const [pickedFundId, setPickedFundId] = useState<string | null>(urlFundId);
 
   const [holdings, setHoldings] = useState<FundHoldingListResponse | null>(null);
   const [holdingsError, setHoldingsError] = useState<ParsedApiError | null>(null);
@@ -240,6 +243,7 @@ const FundsPage: React.FC = () => {
 
   const selectFund = useCallback(
     (fundId: string) => {
+      setPickedFundId(fundId);
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
         next.set('fund', fundId);
@@ -617,8 +621,8 @@ const FundsPage: React.FC = () => {
             sort={sort}
             onSortChange={setSort}
             onRowClick={(h) => selectFund(h.fundId)}
-            // On phones the row only lights up while its detail layer is open; the auto-selection stays unmarked.
-            isRowHighlighted={(h) => h.fundId === selectedId && (!narrow || mobileDetailOpen)}
+            // On phones the auto-selection stays unmarked; a fund the user picked stays lit after Back.
+            isRowHighlighted={(h) => h.fundId === selectedId && (!narrow || mobileDetailOpen || h.fundId === pickedFundId)}
             renderMobileCard={renderMobileCard}
           />
         </div>

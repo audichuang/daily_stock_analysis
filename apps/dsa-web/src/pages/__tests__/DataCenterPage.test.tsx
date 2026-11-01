@@ -198,6 +198,23 @@ describe('DataCenterPage', () => {
     expect(within(conclusion).queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('uses the stat card unchecked count in the muted line, including system rows', async () => {
+    getOverview.mockResolvedValue({
+      ...overview,
+      datasets: [
+        { ...healthyKline, coverage: { markets: { tw: market('ok', 'marketdb'), us: market('unknown', null) } } },
+        { ...baseDataset, dataset: 'news.events', status: 'unknown', warnings: ['runtime_probe_not_performed'] },
+      ],
+    });
+    renderPage();
+    const conclusion = await screen.findByTestId('data-center-conclusion');
+    const group = within(screen.getByTestId('metric-group'));
+    const unchecked = Number(group.getByText('尚未檢查').parentElement?.querySelector('[data-metric-value]')?.textContent);
+    // US daily K (Taiwan/US table) plus news events (system table): the card counts both.
+    expect(unchecked).toBe(2);
+    expect(conclusion).toHaveTextContent(`${unchecked} 項尚未被呼叫過`);
+  });
+
   it('puts Taiwan and US first and folds other markets away', async () => {
     renderPage();
     const table = await screen.findByRole('table', { name: '市場資料狀態' });

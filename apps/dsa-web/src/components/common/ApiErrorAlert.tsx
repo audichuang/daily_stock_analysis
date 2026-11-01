@@ -3,6 +3,7 @@ import type { ParsedApiError } from '../../api/error';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 
 const LONG_MESSAGE_THRESHOLD = 200;
+const CLAMP_LINES = 3;
 
 interface ApiErrorAlertProps {
   error: ParsedApiError;
@@ -24,9 +25,10 @@ export const ApiErrorAlert: React.FC<ApiErrorAlertProps> = ({
   const { t } = useUiLanguage();
   const trimmedMessage = error.message.trim();
   const trimmedRaw = error.rawMessage.trim();
-  // The message is clamped to three lines, so a long one always gets its full text in the details,
-  // even when it is identical to rawMessage (the generic path uses rawMessage as the message).
-  const isLongMessage = trimmedMessage.length > LONG_MESSAGE_THRESHOLD;
+  // Only a long message (over 200 chars or more than three lines) is clamped, and then it always gets its
+  // full text in the details, even when identical to rawMessage (the generic path uses rawMessage as the message).
+  const isLongMessage = trimmedMessage.length > LONG_MESSAGE_THRESHOLD
+    || trimmedMessage.split('\n').length > CLAMP_LINES;
   const showRaw = Boolean(trimmedRaw) && trimmedRaw !== trimmedMessage;
   const detailTexts = [isLongMessage ? error.message : null, showRaw ? error.rawMessage : null].filter(
     (text): text is string => Boolean(text),
@@ -41,7 +43,7 @@ export const ApiErrorAlert: React.FC<ApiErrorAlertProps> = ({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-semibold">{error.title}</p>
-          <p className="mt-1 line-clamp-3 whitespace-pre-line break-words text-xs opacity-90 [overflow-wrap:anywhere]">{error.message}</p>
+          <p className={`mt-1 ${isLongMessage ? 'line-clamp-3 ' : ''}whitespace-pre-line break-words text-xs opacity-90 [overflow-wrap:anywhere]`}>{error.message}</p>
         </div>
         {onDismiss ? (
           <button

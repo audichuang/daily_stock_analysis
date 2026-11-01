@@ -1634,6 +1634,10 @@ const HomePage: React.FC = () => {
       active = false;
     };
   }, [latestMarketReviewId]);
+  // A payload fetched for an older review must not label a newer one (its fetch may fail or still be pending).
+  const latestMarketReviewPayload = marketLightSource && marketLightSource.id === latestMarketReviewId
+    ? marketLightSource.payload
+    : null;
 
   // Same light wording as the market review page (警戒／中性／順風), not the generic 紅燈／黃燈／綠燈.
   const marketLightLabel = useMemo(() => {
@@ -1643,17 +1647,17 @@ const HomePage: React.FC = () => {
       yellow: reviewText.lightNeutral,
       red: reviewText.lightCaution,
     };
-    return getMarketReviewLights(marketLightSource?.payload)
+    return getMarketReviewLights(latestMarketReviewPayload)
       .map(({ region, light }) => {
         const market = formatMarketReviewRegion(region, marketRegionLabels);
         return `${market} ${lightLabels[light.status ?? ''] ?? ''}`.trim();
       })
       .join('｜');
-  }, [marketLightSource, marketRegionLabels, uiLanguage]);
+  }, [latestMarketReviewPayload, marketRegionLabels, uiLanguage]);
 
   // Trade-date label for the pinned review row, e.g. 「美股 10/30」; same date rule as TodayOverview's VerdictCard.
   const marketReviewSessionLabel = useMemo(() => {
-    const payload = marketLightSource?.payload;
+    const payload = latestMarketReviewPayload;
     if (!payload) return '';
     const entries: Array<[string, MarketReviewPayload]> = payload.markets
       ? Object.entries(payload.markets)
@@ -1666,7 +1670,7 @@ const HomePage: React.FC = () => {
       })
       .filter(Boolean)
       .join('｜');
-  }, [marketLightSource, marketRegionLabels]);
+  }, [latestMarketReviewPayload, marketRegionLabels]);
 
   // 現價走批次行情（自選＋清單），指數與大盤複盤不查。
   const quoteCodes = useMemo(() => {

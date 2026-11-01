@@ -32,8 +32,24 @@ describe('ApiErrorAlert', () => {
   it('keeps short messages identical to rawMessage without details', () => {
     const { container } = render(<ApiErrorAlert error={makeError()} />);
 
-    expect(screen.getByText('Short message', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getByText('Short message', { selector: 'p' })).not.toHaveClass('line-clamp-3');
     expect(container.querySelector('details')).toBeNull();
+  });
+
+  it('gives a short message with more than three lines its full text instead of silently clamping line 4', () => {
+    // Shape of a validation_failed error: message === rawMessage, ~120 chars, one header plus three issues.
+    const message = [
+      '请修正以下配置后重试：',
+      'LLM_MODELFLARE_API_KEY：请填写此渠道的 API Key。',
+      'LITELLM_FALLBACK_MODELS：请选择当前启用渠道中的模型',
+      'LITELLM_MODEL：请选择一个已启用的模型',
+    ].join('\n');
+    expect(message.length).toBeLessThan(200);
+    const { container } = render(<ApiErrorAlert error={makeError({ title: '配置需要调整', message, rawMessage: message })} />);
+
+    const details = container.querySelector('details');
+    expect(details).not.toBeNull();
+    expect(details?.querySelector('pre')?.textContent).toBe(message);
   });
 
   it('still shows rawMessage in the details when it differs from a short message', () => {

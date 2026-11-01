@@ -353,6 +353,31 @@ describe('TokenUsagePage', () => {
     expect(screen.queryByText(/claude-sonnet-5-5/)).not.toBeInTheDocument();
   });
 
+  it('wraps a model name in a keyboard-reachable tooltip only when the display name differs from the raw id (en)', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    get.mockResolvedValue({
+      data: makeDashboardResponse({
+        by_model: [
+          { model: 'claude-sonnet-5-5', calls: 2, prompt_tokens: 100, completion_tokens: 200, total_tokens: 300, max_total_tokens: 240 },
+          { model: 'gpt-test', calls: 1, prompt_tokens: 20, completion_tokens: 80, total_tokens: 100, max_total_tokens: 100 },
+        ],
+        cost: { ...dashboardResponse.cost, by_model: [] },
+      }),
+    });
+    renderPage();
+    const modelTable = await screen.findByRole('table', { name: 'Models' });
+    // Same name as the raw id: no tooltip trigger wrapping it, so hovering shows nothing.
+    const plain = within(modelTable).getByText('gpt-test');
+    expect(plain.parentElement).not.toHaveAttribute('tabindex');
+    fireEvent.mouseEnter(plain);
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    // Renamed Claude id: the trigger is focusable so keyboard users can read the raw id too.
+    const trigger = within(modelTable).getByText('Claude Sonnet 5.5').parentElement;
+    expect(trigger).toHaveAttribute('tabindex', '0');
+    fireEvent.focus(trigger as HTMLElement);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('claude-sonnet-5-5');
+  });
+
   it('abbreviates the input / output KPI so it stays on one line (en)', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
     get.mockResolvedValue({

@@ -433,6 +433,43 @@ describe('HomePage', () => {
     expect(title).not.toHaveTextContent('03/18');
   });
 
+  it('drops the previous review payload when a newer review replaces it and its detail fails', async () => {
+    vi.mocked(historyApi.getList).mockImplementation((params: { reportType?: string } = {}) => (
+      Promise.resolve(params.reportType === 'market_review'
+        ? { total: 1, page: 1, limit: 10, items: [marketReviewHistoryItem] }
+        : { total: 0, page: 1, limit: 20, items: [] })
+    ));
+    vi.mocked(historyApi.getDetail).mockImplementation((id: number) => (id === marketReviewHistoryItem.id
+      ? Promise.resolve({
+        ...marketReviewHistoryReport,
+        details: {
+          contextSnapshot: {
+            marketReviewPayload: { region: 'tw', date: '2026-03-18', marketLight: { status: 'red', tradeDate: '2026-03-17' } },
+          },
+        },
+      } as unknown as Awaited<ReturnType<typeof historyApi.getDetail>>)
+      : Promise.reject(new Error('detail unavailable'))));
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('market-review-title')).toHaveTextContent('03/17'));
+
+    const newerReview = { ...marketReviewHistoryItem, id: 3, queryId: 'market-review-q-2', createdAt: '2026-03-20T08:00:00Z' };
+    act(() => {
+      useStockPoolStore.setState({ marketReviewHistoryItems: [newerReview, marketReviewHistoryItem] });
+    });
+    await waitFor(() => expect(historyApi.getDetail).toHaveBeenCalledWith(3));
+
+    // The newer record's own creation date, not the old payload's trade date, and no stale light.
+    await waitFor(() => expect(screen.getByTestId('market-review-title')).toHaveTextContent('03/20'));
+    expect(screen.getByTestId('market-review-title')).not.toHaveTextContent('03/17');
+    expect(screen.getByTestId('market-review-light')).not.toHaveTextContent('警戒');
+  });
+
   it('loads markdown only after opening the full report drawer', async () => {
     vi.mocked(historyApi.getList).mockResolvedValue({
       total: 1,

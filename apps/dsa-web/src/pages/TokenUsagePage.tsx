@@ -175,7 +175,9 @@ const UsageSummaryBand: React.FC<{ dashboard: UsageDashboard; period: UsagePerio
           ) : null}
           <p className="mt-2 text-sm text-secondary-text">{sentence}</p>
         </div>
-        <dl className="grid grid-cols-3 gap-2 self-start">
+        {/* Columns never shrink below their nowrap value (equal thirds left 77px for ~91px of "12.5M / 953K" at 390px);
+            labels may wrap instead, and leftover width is still shared evenly. */}
+        <dl className="grid grid-cols-[repeat(3,minmax(min-content,1fr))] gap-2 self-start">
           {stats.map((stat) => (
             // Column layout pushes values to the bottom so they share a baseline when one label wraps.
             <div key={stat.label} className="flex min-w-0 flex-col rounded-lg border border-border/60 px-2 py-2 sm:px-3">
@@ -318,7 +320,11 @@ const ModelTable: React.FC<{ dashboard: UsageDashboard; text: UsageText }> = ({ 
   const hasCost = rows.some((row) => row.costState !== 'unpriced' && row.costState !== 'unknown');
   const costColumn: DataTableColumn<MergedModel> = { key: 'cost', header: text.cost, numeric: true, render: costCell };
   const columns: DataTableColumn<MergedModel>[] = [
-    { key: 'name', header: text.model, priority: 'primary', render: (row) => <Tooltip content={row.name}><span className="break-all text-foreground">{displayModelName(row.name, text)}</span></Tooltip> },
+    { key: 'name', header: text.model, priority: 'primary', render: (row) => {
+      const shown = displayModelName(row.name, text);
+      // The raw id only adds information when it was renamed; Tooltip renders bare children without content.
+      return <Tooltip content={shown !== row.name ? row.name : undefined} focusable><span className="break-all text-foreground">{shown}</span></Tooltip>;
+    } },
     { key: 'calls', header: text.calls, numeric: true, render: (row) => formatNumber(row.calls) },
     { key: 'input', header: text.input, numeric: true, render: (row) => formatNumber(row.promptTokens) },
     { key: 'output', header: text.output, numeric: true, render: (row) => formatNumber(row.completionTokens) },
