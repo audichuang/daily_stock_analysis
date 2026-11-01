@@ -233,7 +233,7 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertFalse(text(containing: "已顯示全部").exists, "fixture 有六年資料，5Y 不應提示資料不足")
         capture("03c-5Y月K與均線")
         tap(app.buttons["chart.range"])
-        tap(app.buttons["1月"])
+        tap(app.buttons["1個月"])
         XCTAssertTrue(app.buttons["chart.range"].label.contains("1 個月"))
         XCTAssertTrue(text(containing: "最新").exists, "1M 視窗在月 K 下仍要看得到最新一根")
         // 指標改成直接按的列，不再經過選單。
@@ -318,6 +318,8 @@ final class DSAMarketUITests: XCTestCase {
         goBackFromReport(to: "台積電（測試）")
 
         tap(app.buttons["analysis-start"])
+        // 已有報告時重新分析一律先過確認框（第一次也是）。
+        tap(app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@", "stock.reanalyze.confirm", "開始重新分析")).firstMatch)
         XCTAssertTrue(text(containing: "原分析任務已不存在，請重新產生分析。").waitForExistence(timeout: 15))
         capture("06a-原任務404後可重新分析")
         tap(app.buttons["analysis-start"])
@@ -451,9 +453,10 @@ final class DSAMarketUITests: XCTestCase {
         goBack(from: "AI 問股", to: "工具與設定")
         XCTAssertFalse(app.buttons["tools.calendar"].exists, "行事曆只從今日頁進")
         XCTAssertFalse(app.buttons["tools.route."].exists, "完整分析與原生畫面重複，已移除")
-        XCTAssertFalse(app.buttons["tools.route.backtest"].exists, "進階預設收合")
-        for (route, title) in [("screening", "條件選股"), ("portfolio", "帳本管理"), ("settings", "服務設定"),
-                               ("alerts", "價格警報"), ("decision-signals", "決策訊號"), ("backtest", "歷史回測"),
+        XCTAssertEqual(app.buttons["tools.advanced"].value as? String, "已展開", "分析與系統（原進階）區改為預設展開")
+        XCTAssertTrue(app.buttons["tools.route.backtest"].exists, "預設展開時回測入口要在")
+        for (route, title) in [("screening", "選股"), ("portfolio", "資產帳本"), ("settings", "設定"),
+                               ("alerts", "警報"), ("decision-signals", "AI 建議"), ("backtest", "回測"),
                                ("funds", "基金"), ("data", "資料中心"), ("usage", "AI 用量")] {
             if !app.buttons["tools.route.\(route)"].exists { tap(app.buttons["tools.advanced"]) }
             tap(app.buttons["tools.route.\(route)"])
@@ -680,7 +683,13 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(eventsCardText("暫時無法讀取行事曆").waitForExistence(timeout: 15))
         try setCalendarFailing(false)
         sleep(4) // 等連線後的首輪 refresh 跑完，避免下拉被 refreshing guard 略過。
-        eventsCard.press(forDuration: 0.1, thenDragTo: app.tabBars.firstMatch)
+        // 今日頁加了待辦與複盤卡後事件卡離頂端更遠：先捲回頂端，從頂端的市場切換列往下拉才會觸發 refreshable。
+        let marketPicker = app.segmentedControls["market-picker"]
+        for _ in 0..<8 where !marketPicker.isHittable { app.swipeDown() }
+        XCTAssertTrue(marketPicker.isHittable, "下拉前要先捲回頂端")
+        // 不能從市場切換列起拖：拖過分段控制項會改選市場，事件卡就換成另一個市場。從資產卡的空白處往下拉。
+        let pullStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        pullStart.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)))
         XCTAssertTrue(eventsCardText("Apple（測試）").waitForExistence(timeout: 20), "下拉更新要恢復")
 
         tap(app.tabBars.buttons["工具"])
