@@ -61,6 +61,13 @@ export type MarketIndex = {
   asOf: string | null;
 };
 
+export type MarketIndexSnapshot = {
+  items: MarketIndex[];
+  /** 後端 MarketPhase 值：premarket／intraday／lunch_break／closing_auction／postmarket／non_trading／unknown。 */
+  marketPhase: string | null;
+  marketOpen: boolean | null;
+};
+
 type RawIndex = {
   code?: string;
   name?: string;
@@ -205,6 +212,25 @@ export const stocksApi = {
       source: r.source ?? null,
       asOf: r.as_of ?? null,
     }));
+  },
+
+  /** 全站狀態列用：指數之外連同後端判定的市場時段一起回傳（getIndices 只回列表）。 */
+  async getIndicesSnapshot(region: string): Promise<MarketIndexSnapshot> {
+    const response = await apiClient.get('/api/v1/stocks/indices', { params: { region } });
+    const data = response.data as { items?: RawIndex[]; market_phase?: string | null; market_open?: boolean | null };
+    return {
+      items: (data.items ?? []).map((r) => ({
+        code: r.code ?? '',
+        name: r.name ?? '',
+        current: r.current ?? null,
+        change: r.change ?? null,
+        changePct: r.change_pct ?? null,
+        source: r.source ?? null,
+        asOf: r.as_of ?? null,
+      })),
+      marketPhase: data.market_phase ?? null,
+      marketOpen: data.market_open ?? null,
+    };
   },
 
   /** 看板用台股四維度摘要（不查分點、不呼叫 LLM）；非台股或失敗的單檔回 summary=null。 */

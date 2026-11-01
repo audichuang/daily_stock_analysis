@@ -1598,7 +1598,7 @@ const DecisionSignalsPage: React.FC = () => {
 
       {statusUpdating ? (
         <InlineAlert
-          className="fixed bottom-5 right-5 z-[60] max-w-sm"
+          className="fixed bottom-[calc(1.25rem+var(--shell-bottom-inset,0px))] right-5 z-[60] max-w-sm"
           variant="info"
           title={t('common.processing')}
           message={t('decisionSignals.confirmStatusTitle')}

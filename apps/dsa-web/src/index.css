@@ -2989,3 +2989,44 @@ textarea {
   font-size: var(--text-micro);
   line-height: 1.35;
 }
+
+/* 全站外框高度：頁面的滿版高度與固定元素都從這裡算，不各自寫死 */
+.shell-root {
+  --shell-safe-top: env(safe-area-inset-top, 0px);
+  --shell-header-height: calc(3rem + var(--shell-safe-top));
+  --shell-status-height: 2rem;
+  --shell-tabbar-height: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+  --shell-page-padding-y: 0.75rem;
+  --shell-page-offset: calc(
+    var(--shell-header-height) + var(--shell-status-height) + var(--shell-tabbar-height) + var(--shell-page-padding-y) * 2
+  );
+}
+
+@media (min-width: 640px) {
+  .shell-root {
+    --shell-page-padding-y: 1rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .shell-root {
+    --shell-header-height: 0px;
+    --shell-tabbar-height: 0px;
+  }
+}
+
+.shell-root[data-embedded='true'] {
+  --shell-header-height: 0px;
+  --shell-status-height: 0px;
+  --shell-tabbar-height: 0px;
+}
+
+.shell-status-bar {
+  top: var(--shell-header-height);
+  height: var(--shell-status-height);
+}
+
+/* 底部分頁存在時才墊高；portal 到 body 的元素也吃得到，所以掛在 :root */
+:root:has([data-shell-tabbar]) {
+  --shell-bottom-inset: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+}

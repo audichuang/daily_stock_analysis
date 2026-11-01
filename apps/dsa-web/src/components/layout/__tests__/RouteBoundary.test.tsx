@@ -1,9 +1,9 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { lazy } from 'react';
 import type React from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
-import { RouteOutletBoundary } from '../RouteBoundary';
+import { PageLoadingFallback, RouteOutletBoundary } from '../RouteBoundary';
 import { Shell } from '../Shell';
 
 vi.mock('../../../contexts/AuthContext', () => ({
@@ -21,6 +21,25 @@ vi.mock('../../../stores/agentChatStore', () => {
       selector ? selector(state) : state
     ),
   };
+});
+
+describe('PageLoadingFallback', () => {
+  it('shows the spinner only after the delay', () => {
+    vi.useFakeTimers();
+    try {
+      render(<PageLoadingFallback fullPage={false} />);
+      act(() => {
+        vi.advanceTimersByTime(199);
+      });
+      expect(screen.queryByTestId('page-loading-spinner')).not.toBeInTheDocument();
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.getByTestId('page-loading-spinner')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('RouteOutletBoundary', () => {

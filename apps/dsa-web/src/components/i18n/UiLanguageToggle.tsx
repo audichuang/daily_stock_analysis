@@ -1,9 +1,18 @@
 import type React from 'react';
-import { Languages } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Check, Languages } from 'lucide-react';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import type { UiLanguage } from '../../i18n/uiText';
 import { cn } from '../../utils/cn';
 
 type UiLanguageToggleVariant = 'default' | 'nav' | 'rail';
+
+// 語言名稱一律用該語言自己的寫法，切到看不懂的語言時才找得回來。
+const LANGUAGE_OPTIONS: Array<{ value: UiLanguage; label: string }> = [
+  { value: 'zh-TW', label: '繁體中文' },
+  { value: 'zh', label: '简体中文' },
+  { value: 'en', label: 'English' },
+];
 
 interface UiLanguageToggleProps {
   variant?: UiLanguageToggleVariant;
@@ -25,16 +34,30 @@ export const UiLanguageToggle: React.FC<UiLanguageToggleProps> = ({
   labelClassName,
 }) => {
   const { language, setLanguage, t } = useUiLanguage();
-  const nextLanguage = language === 'zh' ? 'zh-TW' : language === 'zh-TW' ? 'en' : 'zh';
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const isNavVariant = variant === 'nav';
   const isRailVariant = variant === 'rail';
-  const label = language === 'zh' ? t('language.uiLanguage') : language === 'zh-TW' ? t('language.traditional') : t('language.current');
+  const label = LANGUAGE_OPTIONS.find((option) => option.value === language)?.label ?? language;
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [open]);
 
   return (
-    <div className={cn('relative', isRailVariant ? 'w-full' : '', wrapperClassName)}>
+    <div className={cn('relative', isRailVariant ? 'w-full' : '', wrapperClassName)} ref={containerRef}>
       <button
         type="button"
-        onClick={() => setLanguage(nextLanguage)}
+        onClick={() => setOpen((value) => !value)}
         className={cn(
           triggerClassName
             ? triggerClassName
@@ -43,9 +66,11 @@ export const UiLanguageToggle: React.FC<UiLanguageToggleProps> = ({
               : isNavVariant
                 ? 'group relative flex h-12 w-full select-none items-center gap-3 rounded-[1.35rem] border border-transparent px-4 text-sm text-secondary-text transition-all duration-300 hover:bg-hover hover:text-foreground'
                 : 'inline-flex h-10 items-center gap-2 rounded-xl border border-border/70 bg-card/80 px-3 text-sm text-secondary-text shadow-soft-card transition-colors hover:bg-hover hover:text-foreground',
-          triggerActiveClassName,
+          triggerClassName && open ? triggerActiveClassName : '',
           isNavVariant && collapsed ? 'justify-center px-2' : ''
         )}
+        aria-haspopup="menu"
+        aria-expanded={open}
         aria-label={t('language.toggle')}
         title={t('language.toggle')}
       >
@@ -58,6 +83,40 @@ export const UiLanguageToggle: React.FC<UiLanguageToggleProps> = ({
           <span className="hidden sm:inline">{label}</span>
         )}
       </button>
+
+      {open ? (
+        <div
+          role="menu"
+          aria-label={t('language.uiLanguage')}
+          className={cn(
+            'z-[100] min-w-[8rem] overflow-hidden rounded-2xl border border-border/70 bg-elevated p-1.5 shadow-[0_24px_48px_rgba(3,8,20,0.32)] backdrop-blur-xl',
+            isNavVariant || isRailVariant ? 'absolute bottom-full left-0 mb-2 w-max min-w-[9rem]' : 'absolute right-0 mt-2'
+          )}
+        >
+          {LANGUAGE_OPTIONS.map((option) => {
+            const isActive = option.value === language;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="menuitemradio"
+                aria-checked={isActive}
+                onClick={() => {
+                  setLanguage(option.value);
+                  setOpen(false);
+                }}
+                className={cn(
+                  'flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-sm transition-colors',
+                  isActive ? 'bg-cyan/10 text-foreground' : 'text-secondary-text hover:bg-hover hover:text-foreground'
+                )}
+              >
+                <span>{option.label}</span>
+                {isActive ? <Check className="h-4 w-4 text-cyan" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 };

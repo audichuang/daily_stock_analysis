@@ -26,8 +26,8 @@ async function login(page: Page) {
   await page.waitForLoadState('domcontentloaded');
 
   const passwordInput = page.locator('#password');
-  const submitButton = page.getByRole('button', { name: /授权进入工作台|完成设置并登录/ });
-  const homeLink = page.getByRole('link', { name: '首页' });
+  const submitButton = page.getByRole('button', { name: /^(登录|设置并登录)$/ });
+  const homeLink = page.getByRole('link', { name: '分析' });
 
   const isAlreadyAuthenticated =
     page.url().endsWith('/') ||
@@ -63,14 +63,13 @@ test.describe('web smoke', () => {
     await page.waitForLoadState('domcontentloaded');
 
     // Check for branding
-    await expect(page.getByText('DAILY STOCK').first()).toBeVisible();
-    await expect(page.getByText('Analysis Engine')).toBeVisible();
+    await expect(page.getByTestId('login-card').getByText('DSA', { exact: true })).toBeVisible();
 
     // Check for password input
     await expect(page.locator('#password')).toBeVisible();
 
     // Check for submit button
-    await expect(page.getByRole('button', { name: /授权进入工作台|完成设置并登录/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^(登录|设置并登录)$/ })).toBeVisible();
 
     await captureSmokeScreenshot(page, testInfo, 'smoke-login-page-zh');
   });
@@ -80,7 +79,7 @@ test.describe('web smoke', () => {
 
     const stockInput = page.getByPlaceholder('输入股票代码或名称，如 600519、贵州茅台、AAPL');
     await expect(stockInput).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByRole('link', { name: '首页' })).toBeVisible();
+    await expect(page.getByRole('link', { name: '分析' })).toBeVisible();
     await expect(page.getByRole('link', { name: '问股' })).toBeVisible();
     await expect(page.getByText('历史分析')).toBeVisible();
 
@@ -135,13 +134,9 @@ test.describe('web smoke', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await login(page);
 
-    // Try to open navigation menu
-    const menuButton = page.getByRole('button', { name: /打开导航|菜单/i });
-    if (await menuButton.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await menuButton.click();
-    }
+    // 手機導覽：底部分頁的「更多」開抽屜
+    await page.getByRole('button', { name: '更多', exact: true }).click();
 
-    // Check if navigation is visible
     await expect(page.getByRole('link', { name: '回测' })).toBeVisible({ timeout: 5000 });
 
     await captureSmokeScreenshot(page, testInfo, 'smoke-mobile-shell-nav');
@@ -169,14 +164,14 @@ test.describe('web smoke', () => {
     const languageToggle = page.getByRole('button', { name: '切换界面语言' });
     await expect(languageToggle).toBeVisible();
     await expect(page.getByRole('link', { name: '设置' })).toBeVisible();
-    await expect(page.getByRole('link', { name: '首页' })).toBeVisible();
+    await expect(page.getByRole('link', { name: '分析' })).toBeVisible();
 
     await languageToggle.click();
 
     const englishLanguageToggle = page.getByRole('button', { name: 'Switch UI language' });
     await expect(englishLanguageToggle).toBeVisible();
     await expect(page.getByRole('link', { name: 'Settings' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Home' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Analyze' })).toBeVisible();
     await captureSmokeScreenshot(page, testInfo, 'smoke-home-page-en');
 
     expect(await page.evaluate(() => localStorage.getItem('dsa.uiLanguage'))).toBe('en');
@@ -186,7 +181,7 @@ test.describe('web smoke', () => {
 
     await expect(englishLanguageToggle).toBeVisible();
     await expect(page.getByRole('link', { name: 'Settings' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Home' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Analyze' })).toBeVisible();
 
     await page.getByRole('link', { name: 'Settings' }).click();
     await page.waitForLoadState('domcontentloaded');

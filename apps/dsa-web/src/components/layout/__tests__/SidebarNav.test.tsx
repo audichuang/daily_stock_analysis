@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { SidebarNav } from '../SidebarNav';
@@ -27,12 +27,48 @@ vi.mock('../../theme/ThemeToggle', () => ({
 }));
 
 describe('SidebarNav', () => {
-  it('keeps screening directly after chat without requiring configuration', () => {
+  it('groups navigation into watch, research and system with the board first', () => {
     render(<MemoryRouter initialEntries={['/']}><SidebarNav /></MemoryRouter>);
 
-    expect(screen.getByRole('link', { name: '选股' })).toHaveAttribute('href', '/screening');
-    const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
-    expect(hrefs.slice(0, 6)).toEqual(['/', '/chat', '/screening', '/portfolio', '/funds', '/board']);
+    const hrefsIn = (name: string) =>
+      within(screen.getByRole('group', { name })).getAllByRole('link').map((link) => link.getAttribute('href'));
+    expect(hrefsIn('看盘')).toEqual(['/board', '/', '/portfolio', '/funds', '/calendar', '/alerts']);
+    expect(hrefsIn('研究')).toEqual(['/chat', '/screening', '/decision-signals', '/backtest']);
+    expect(hrefsIn('系统')).toEqual(['/data', '/usage', '/settings']);
+    expect(screen.getAllByRole('link')[0]).toHaveAttribute('href', '/board');
+  });
+
+  it('shows a short label under the icon only in the collapsed rail', () => {
+    const { unmount } = render(
+      <MemoryRouter><SidebarNav variant="rail" collapsed onToggleCollapsed={vi.fn()} /></MemoryRouter>,
+    );
+    expect(screen.getByRole('link', { name: 'AI 建议' })).toHaveTextContent('建议');
+    expect(screen.getByRole('link', { name: 'AI 建议' })).not.toHaveTextContent('AI 建议');
+    expect(screen.getByRole('button', { name: '展开侧边栏' })).toBeInTheDocument();
+    unmount();
+
+    render(<MemoryRouter><SidebarNav variant="rail" onToggleCollapsed={vi.fn()} /></MemoryRouter>);
+    expect(screen.getByRole('link', { name: 'AI 建议' })).toHaveTextContent('AI 建议');
+    expect(screen.getByRole('button', { name: '折叠侧边栏' })).toBeInTheDocument();
+  });
+
+  it('keeps the language control out of the active style until its menu opens', () => {
+    render(<MemoryRouter><SidebarNav variant="rail" /></MemoryRouter>);
+
+    const language = screen.getByRole('button', { name: '切换界面语言' });
+    expect(language).not.toHaveClass('font-medium');
+    fireEvent.click(language);
+    expect(language).toHaveClass('font-medium');
+    expect(screen.getByRole('menu', { name: '界面语言' })).toBeInTheDocument();
+  });
+
+  it('collects theme, language and logout into the rail toolbar', () => {
+    render(<MemoryRouter><SidebarNav variant="rail" /></MemoryRouter>);
+
+    const toolbar = within(screen.getByTestId('sidebar-toolbar'));
+    expect(toolbar.getByRole('button', { name: /切换主题/ })).toBeInTheDocument();
+    expect(toolbar.getByRole('button', { name: '切换界面语言' })).toBeInTheDocument();
+    expect(toolbar.getByRole('button', { name: '退出' })).toBeInTheDocument();
   });
 
   it('shows the shared completion badge only when chat completion is pending', () => {
@@ -119,7 +155,7 @@ describe('SidebarNav', () => {
     const nav = screen.getByRole('navigation', { name: '主导航' });
     expect(nav).toHaveClass('min-h-0', 'overflow-y-auto');
     expect(nav).not.toContainElement(screen.getByRole('button', { name: '退出' }));
-    expect(nav).not.toContainElement(screen.getByRole('button', { name: '切换主题' }));
+    expect(nav).not.toContainElement(screen.getByRole('button', { name: /切换主题/ }));
     expect(screen.getByRole('link', { name: '设置' })).toHaveClass('shrink-0');
   });
 

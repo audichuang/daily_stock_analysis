@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改進] Web 導覽分成看盤、研究、系統三組，盯盤排第一，「首頁」改稱「分析」；語言鈕改成明確選單、不再常駐高亮；主題、語言、登出併入底部工具列；404 頁接上多語文案並修掉滿版破版；換頁載入 200 毫秒內不閃轉圈。
+- [新功能] Web 手機版（<1024px）改用 48px 標題列與固定底部分頁（盯盤、分析、問股、資產、更多），移除頂部漢堡，固定元素與滿版高度避開分頁列。**部署前 iOS 內嵌收斂版本須已在 TestFlight**；內嵌模式不顯示。
+- [新功能] Web 全站大盤狀態列（加權、櫃買、S&P 500、那斯達克、交易狀態、更新時間，60 秒輪詢、分頁隱藏時暫停，美股失敗只放台股）與桌機 ⌘K 全站搜尋；桌機導覽改為可收合 rail（72px／172px，記住選擇，≥1680px 預設展開）。
+- [改進] Web 登入頁改為單張置中卡片，移除版本與 TLS 宣告、粒子與視差；密碼錯誤與連線錯誤分開顯示，設定密碼時常駐規則，空值不能送出，錯誤出現時版面不跳。
 - [新功能] `/history/{id}` 回傳 `structured_report`（舊報告建構失敗維持 null），報告追加一句話結論、分持股建議、信心度、護欄、進出場條件、前次報告摘要、幣別、資料日與是否持有；ResearchArtifact 追加事件、各來源狀態與美股證據，失效條件的句子跟著報告語言走。
 - [新功能] `/history` 追加 `q`、`market`、`action` 查詢與 `stock_total`、`market_review_total`；個股清單追加 `analysis_price`、`change_pct`、`last_analyzed_at`（評分沿用既有的 `sentiment_score`）；新聞追加 `published_at` 與繁中 `key_point`，摘要去掉免責與行情樣板句。
 - [改進] zh-TW 動作用語改為買進、加碼、續抱、減碼、迴避、警報（舊報告的買入、減倉等仍可解析），系統提示詞本體改送繁體並帶詞彙表，報告表頭改為「項目｜數值」「點位｜價格」，沒有讀數的列省略，金額單位改「億」。

@@ -28,7 +28,7 @@ async function login(page: Page) {
   await page.locator('#password').fill(smokePassword!);
 
   // Wait for and click the submit button
-  const submitButton = page.getByRole('button', { name: /授权进入工作台|完成设置并登录/ });
+  const submitButton = page.getByRole('button', { name: /^(登录|设置并登录)$/ });
   await expect(submitButton).toBeVisible();
 
   await Promise.all([
@@ -55,7 +55,7 @@ test.describe('ReportMarkdown component', () => {
     await login(page);
 
     // Navigate to history page
-    await page.getByRole('link', { name: '首页' }).click();
+    await page.getByRole('link', { name: '分析' }).click();
     await page.waitForLoadState('domcontentloaded');
     // Wait for history panel to load
     await expect(page.getByText('历史分析')).toBeVisible({ timeout: 10_000 });
@@ -100,7 +100,7 @@ test.describe('ReportMarkdown component', () => {
     await login(page);
 
     // Navigate to history page
-    await page.getByRole('link', { name: '首页' }).click();
+    await page.getByRole('link', { name: '分析' }).click();
     await page.waitForLoadState('domcontentloaded');
     // Wait for history panel to load
     await expect(page.getByText('历史分析')).toBeVisible({ timeout: 10_000 });
@@ -182,7 +182,7 @@ test.describe('ReportMarkdown component', () => {
     await login(page);
 
     // Navigate to history page
-    await page.getByRole('link', { name: '首页' }).click();
+    await page.getByRole('link', { name: '分析' }).click();
     await page.waitForLoadState('domcontentloaded');
     // Wait for history panel to load
     await expect(page.getByText('历史分析')).toBeVisible({ timeout: 10_000 });
