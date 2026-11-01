@@ -71,6 +71,11 @@ enum PresentationText {
         }
     }
 
+    /// 失效條件的 metric 鍵（price／volume／pe／rsi）轉中文；查不到回 nil，不露英文鍵名。
+    static func metric(_ value: String?) -> String? {
+        InvalidationDisplay.metricLabel(value)
+    }
+
     static func evidenceTitle(_ value: String) -> String {
         switch value {
         case "日线": return "日線行情"

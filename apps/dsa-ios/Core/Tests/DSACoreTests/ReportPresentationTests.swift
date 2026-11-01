@@ -154,4 +154,44 @@ final class ReportPresentationTests: XCTestCase {
         XCTAssertEqual(session.marketPhase, "postmarket")
         XCTAssertEqual(session.marketOpen, false)
     }
+
+    // MARK: 失效條件卡
+
+    func testInvalidationIdenticalFieldsCollapseToOneLine() {
+        // Mutation guard: printing trigger/threshold verbatim makes detail non-nil.
+        let lines = InvalidationDisplay.lines(description: "跌破 120 元", trigger: " 跌破 120 元 ", threshold: "跌破 120 元", metric: "price")
+        XCTAssertEqual(lines.primary, "跌破 120 元")
+        XCTAssertNil(lines.detail)
+    }
+
+    func testInvalidationDropsFieldsContainedInDescriptionOrTrigger() {
+        let lines = InvalidationDisplay.lines(description: "收盤跌破 120 元且量縮", trigger: "跌破 120 元", threshold: "120", metric: "price")
+        XCTAssertEqual(lines.primary, "收盤跌破 120 元且量縮")
+        XCTAssertNil(lines.detail)
+
+        let viaTrigger = InvalidationDisplay.lines(description: "支撐失守", trigger: "收盤低於 120", threshold: "120", metric: "price")
+        XCTAssertEqual(viaTrigger.detail, "觸發：收盤低於 120")
+    }
+
+    func testInvalidationNeverShowsRawMetricKey() {
+        let known = InvalidationDisplay.lines(description: "支撐失守", trigger: nil, threshold: "118.5", metric: "price")
+        XCTAssertEqual(known.detail, "價位：118.5")
+        XCTAssertFalse(known.detail?.contains("price") ?? false)
+
+        let unknown = InvalidationDisplay.lines(description: "支撐失守", trigger: nil, threshold: "3 天", metric: "days_below_ma")
+        XCTAssertEqual(unknown.detail, "3 天")
+    }
+
+    func testInvalidationKeepsAllThreeWhenDistinct() {
+        // Reverse guard: over-eager dedup must not drop distinct fields.
+        let lines = InvalidationDisplay.lines(description: "法說會下修展望", trigger: "營收年減", threshold: "-10%", metric: "volume")
+        XCTAssertEqual(lines.primary, "法說會下修展望")
+        XCTAssertEqual(lines.detail, "觸發：營收年減 · 成交量：-10%")
+    }
+
+    func testInvalidationEmptyDescriptionPromotesTrigger() {
+        let lines = InvalidationDisplay.lines(description: "  ", trigger: "跌破季線", threshold: nil, metric: nil)
+        XCTAssertEqual(lines.primary, "跌破季線")
+        XCTAssertNil(lines.detail)
+    }
 }

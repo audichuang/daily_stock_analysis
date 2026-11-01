@@ -636,20 +636,27 @@ struct ResearchArtifactView: View {
                 if artifact.invalidationConditions.isEmpty {
                     Text("模型未提供明確失效條件。")
                         .font(.subheadline).foregroundStyle(Theme.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(artifact.invalidationConditions) { InvalidationRow(condition: $0) }
+                    }
                 }
-                ForEach(artifact.invalidationConditions) { InvalidationRow(condition: $0) }
             }
         }
     }
 
+    /// Hidden entirely when the research lists no follow-ups (no empty card).
+    @ViewBuilder
     private var nextActionsCard: some View {
+        if !artifact.nextActions.isEmpty {
+            nextActionsContent
+        }
+    }
+
+    private var nextActionsContent: some View {
         DSACard {
             VStack(alignment: .leading, spacing: 16) {
                 SectionHeading("接下來觀察什麼", systemImage: "checklist")
-                if artifact.nextActions.isEmpty {
-                    Text("這份研究沒有列出後續觀察事項。")
-                        .font(.subheadline).foregroundStyle(Theme.secondary)
-                }
                 ForEach(Array(artifact.nextActions.enumerated()), id: \.offset) { index, action in
                     HStack(alignment: .top, spacing: 12) {
                         Text(String(index + 1))
@@ -724,22 +731,27 @@ struct InvalidationRow: View {
     let condition: InvalidationCondition
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let triggered = condition.status == "triggered"
+        let lines = InvalidationDisplay.lines(
+            description: condition.description,
+            trigger: condition.trigger.map(PresentationText.limitation),
+            threshold: condition.threshold,
+            metric: condition.metric
+        )
+        VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(condition.description)
+                Text(lines.primary)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.text)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
-                if condition.status == "triggered" { StatusBadge("已觸發", tone: .warning) }
+                if triggered { StatusBadge("已觸發", tone: .warning) }
             }
-            if let trigger = condition.trigger, !trigger.isEmpty {
-                Text("觸發：\(PresentationText.limitation(trigger))")
-                    .font(.subheadline).foregroundStyle(Theme.warning)
-            }
-            if let threshold = condition.threshold, !threshold.isEmpty {
-                Text("\(condition.metric ?? "門檻")：\(threshold)")
-                    .font(.caption).foregroundStyle(Theme.secondary)
+            if let detail = lines.detail {
+                // Amber is reserved for conditions that have already triggered.
+                Text(detail)
+                    .font(.caption).foregroundStyle(triggered ? Theme.warning : Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let dueAt = condition.dueAt {
                 Text("觀察期限：\(DisplayFormat.time(dueAt))")
@@ -747,10 +759,10 @@ struct InvalidationRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(12)
         .background(Theme.warning.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
         .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 2).fill(Theme.warning.opacity(0.7)).frame(width: 3).padding(.vertical, 14)
+            RoundedRectangle(cornerRadius: 2).fill(Theme.warning.opacity(0.7)).frame(width: 3).padding(.vertical, 12)
         }
     }
 }
