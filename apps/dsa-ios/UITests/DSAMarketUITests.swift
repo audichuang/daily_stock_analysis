@@ -450,7 +450,7 @@ final class DSAMarketUITests: XCTestCase {
 
         // Keychain 跨案例保留；登出才不會讓下一個案例看不到登入畫面。
         tap(app.tabBars.buttons["工具"])
-        tap(app.buttons["tools.logout"])
+        logoutFromTools()
         XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
     }
 
