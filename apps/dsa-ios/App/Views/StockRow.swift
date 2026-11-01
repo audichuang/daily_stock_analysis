@@ -4,7 +4,7 @@ import SwiftUI
 /// 右兩欄的固定寬度；欄頭與列共用，數字才對得齊。
 private struct StockRowColumnWidth: ViewModifier {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @ScaledMetric(relativeTo: .subheadline) private var width: CGFloat
+    @ScaledMetric private var width: CGFloat
     private let alignment: Alignment
 
     init(width: CGFloat, alignment: Alignment) {

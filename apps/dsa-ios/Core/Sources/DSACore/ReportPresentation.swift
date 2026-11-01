@@ -35,7 +35,7 @@ public enum StockNeighbors {
     }
 }
 
-public enum MarketPhaseLabel {
+public enum StockSessionLabel {
     /// 未知值不顯示，不猜開收盤。
     public static func text(_ phase: String?) -> String? {
         switch phase {

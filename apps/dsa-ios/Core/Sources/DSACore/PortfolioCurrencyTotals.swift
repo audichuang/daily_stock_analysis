@@ -33,7 +33,7 @@ public extension Array where Element == PortfolioAccount {
                     unrealizedPnl: missing ? nil : members.reduce(0) { $0 + $1.unrealizedPnl },
                     realizedPnl: missing ? nil : members.reduce(0) { $0 + $1.realizedPnl },
                     fxMissing: missing, fxStale: members.contains { $0.fxStale == true },
-                    limitations: Array(Set(members.flatMap(\.limitations))).sorted()
+                    limitations: Set(members.flatMap(\.limitations)).sorted()
                 )
             }
             .sorted { lhs, rhs in

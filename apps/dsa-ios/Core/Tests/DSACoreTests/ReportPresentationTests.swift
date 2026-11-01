@@ -144,9 +144,9 @@ final class ReportPresentationTests: XCTestCase {
     }
 
     func testMarketPhaseUnknownShowsNothing() {
-        XCTAssertEqual(MarketPhaseLabel.text("postmarket"), "已收盤")
-        XCTAssertNil(MarketPhaseLabel.text("unknown"))
-        XCTAssertNil(MarketPhaseLabel.text(nil))
+        XCTAssertEqual(StockSessionLabel.text("postmarket"), "已收盤")
+        XCTAssertNil(StockSessionLabel.text("unknown"))
+        XCTAssertNil(StockSessionLabel.text(nil))
     }
 
     func testMarketSessionDecodesFromIndicesPayload() throws {

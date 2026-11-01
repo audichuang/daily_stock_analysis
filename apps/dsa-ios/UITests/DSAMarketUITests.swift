@@ -22,6 +22,17 @@ final class DSAMarketUITests: XCTestCase {
         app.launchEnvironment["DSA_TEST_SERVER"] = server
         app.launchArguments = ["-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW"]
         app.launch()
+        // Keychain 跨案例保留：前一個案例沒登出或中途失敗時，先清掉，否則後面全部看不到登入畫面。
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.app.tabBars.buttons["今日"].exists || self.app.buttons["connect-button"].exists
+        }, object: nil)
+        _ = XCTWaiter.wait(for: [ready], timeout: 20)
+        if app.tabBars.buttons["今日"].exists {
+            logoutFromToolsAfterLogin()
+            // 登出後畫面還沒探測 auth，沒有密碼欄；重開才是案例預期的登入畫面。
+            app.terminate()
+            app.launch()
+        }
     }
 
     override func tearDown() {
@@ -566,10 +577,7 @@ final class DSAMarketUITests: XCTestCase {
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [onlyApple], timeout: 10), .completed, "搜尋由伺服器篩選")
         capture("研究庫-搜尋")
-
-        tap(app.tabBars.buttons["工具"])
-        logoutFromTools()
-        XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
+        // 搜尋鍵盤蓋住分頁列，登入狀態交給下一個案例的 setUp 清掉。
     }
 
     func testWatchlistGroupsCreateMoveAndSwitch() throws {
@@ -994,6 +1002,8 @@ final class DSAMarketUITests: XCTestCase {
     private func selectStockTab(_ tab: String, file: StaticString = #filePath, line: UInt = #line) {
         let button = app.buttons["stock.tab.\(tab)"]
         XCTAssertTrue(button.waitForExistence(timeout: 15), file: file, line: line)
+        // 從報告頁退回時頁面停在原捲動位置；籤被捲到導覽列底下時 isHittable 仍為真，點了卻落在導覽列。
+        for _ in 0..<6 where button.frame.minY < app.navigationBars.firstMatch.frame.maxY { app.swipeDown() }
         tap(button, file: file, line: line)
     }
 

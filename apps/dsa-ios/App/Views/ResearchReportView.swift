@@ -395,9 +395,10 @@ struct ResearchReportView: View {
                         .font(.headline)
                         .foregroundStyle(Theme.text)
                         .frame(minHeight: 44)
+                        // 掛在標題：掛在 DisclosureGroup 會蓋掉內容裡的識別子（report.table）。
+                        .accessibilityIdentifier("report.fullText")
                 }
                 .tint(Theme.accent)
-                .accessibilityIdentifier("report.fullText")
             }
         }
     }

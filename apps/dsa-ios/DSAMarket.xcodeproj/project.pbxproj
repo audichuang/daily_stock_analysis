@@ -10,8 +10,8 @@
 		045C0C7F57F42F2403CE7E8D /* PresentationText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 898E74B4A88AB8F16170069C /* PresentationText.swift */; };
 		1047BE207CEE3B45F93A0566 /* WebNavigationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A90420C0C660A69F667DBD8 /* WebNavigationPolicyTests.swift */; };
 		18826AF952BF350D64B19435 /* ResearchLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A0205D8374A116CBAA60341 /* ResearchLibraryView.swift */; };
-		20C7AD8A210E65179CE35C30 /* UpcomingEventsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = D57E7D19AECF46F08C91E4F1 /* UpcomingEventsCard.swift */; };
 		20B48D617683574E1BA71639 /* FinancialsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C33CAA7480CED8A8255CBA8 /* FinancialsSection.swift */; };
+		20C7AD8A210E65179CE35C30 /* UpcomingEventsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = D57E7D19AECF46F08C91E4F1 /* UpcomingEventsCard.swift */; };
 		2503549958E32E6AFE0311E4 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41F77F1E6281EAAD05ECA914 /* DesignSystem.swift */; };
 		2CDDAA6900BC849B274FCC40 /* PortfolioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA2F732D2D6F5033EC4EDD48 /* PortfolioView.swift */; };
 		300CE0BB7D3E27F6CAE414CA /* ResearchReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A12209C085640B76671514 /* ResearchReportView.swift */; };
@@ -25,6 +25,7 @@
 		5B59A513AA262C02CDC79124 /* EventOutlookCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FB6AFC397EC4A8F9D7FDC0E /* EventOutlookCard.swift */; };
 		60C474C6848947B0D23179C7 /* AccessSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4030393948BDF82362F80BD4 /* AccessSettingsView.swift */; };
 		6FB91CA6810A5A28A88F2EBE /* IntradayChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAECFB4E29DF95942691D916 /* IntradayChart.swift */; };
+		79563249FA52575644F666BF /* StockRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FC30D89EFE01930BC2CEA34 /* StockRow.swift */; };
 		80476294C1DBDF9463CDE2B8 /* AccessVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA3CC7C2F5ABFEB3D34709B6 /* AccessVault.swift */; };
 		854E9008679E193DEE730F6C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8F241A34DEBEED7B543B2CA0 /* Assets.xcassets */; };
 		8CB6976D65A1E878486BFF35 /* KLineGuideView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A33ADED79F42BE8BD3CCD8F /* KLineGuideView.swift */; };
@@ -39,6 +40,7 @@
 		B913EB3F0D478700BA168490 /* ReportNewsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C8BF59631307C55F598920C /* ReportNewsView.swift */; };
 		C4838C0697BFFEE4A4700837 /* MarketDataPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B87C2EC4C05E0C55BED4614A /* MarketDataPresentation.swift */; };
 		D7E5F6284141315FCEB56408 /* SessionVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7BD24F91BF09858789EF66F /* SessionVault.swift */; };
+		D84F9C1419CC99372A274036 /* WatchlistGroupsEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EA90F7E480888DA97E031CD /* WatchlistGroupsEditView.swift */; };
 		DD68106E73E9E7558887CE2B /* EventCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D4A5B1ACFCAAA755B263829 /* EventCalendarView.swift */; };
 		E0E1A8DD336B4C5D0BC6C188 /* SessionStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE77BD8988C593A4B2890BDD /* SessionStateTests.swift */; };
 		EDA41396FC0D5E96406D2B9F /* MarketDataPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3FBA665C8D01DE1C9433DBC /* MarketDataPresentationTests.swift */; };
@@ -69,6 +71,7 @@
 		0CC7B9A49220885578C8A580 /* MarketChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketChart.swift; sourceTree = "<group>"; };
 		0FB6AFC397EC4A8F9D7FDC0E /* EventOutlookCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventOutlookCard.swift; sourceTree = "<group>"; };
 		1A90420C0C660A69F667DBD8 /* WebNavigationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebNavigationPolicyTests.swift; sourceTree = "<group>"; };
+		2FC30D89EFE01930BC2CEA34 /* StockRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockRow.swift; sourceTree = "<group>"; };
 		315AF11B09EB565EC7C26BE3 /* DSAMarket.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = DSAMarket.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		32E03FEBDA0AEE618E70985D /* StockDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockDetailView.swift; sourceTree = "<group>"; };
 		38B140A8C9397DC14F900292 /* MarketHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketHomeView.swift; sourceTree = "<group>"; };
@@ -76,6 +79,7 @@
 		4030393948BDF82362F80BD4 /* AccessSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessSettingsView.swift; sourceTree = "<group>"; };
 		41F77F1E6281EAAD05ECA914 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 		4A6621197BBA76CEAA9D3C2D /* ConnectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionView.swift; sourceTree = "<group>"; };
+		4EA90F7E480888DA97E031CD /* WatchlistGroupsEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistGroupsEditView.swift; sourceTree = "<group>"; };
 		53023E587011259DF46F3CF4 /* WatchlistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistView.swift; sourceTree = "<group>"; };
 		5A1FF3FFBA58CDA8AAE6BC7A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		5A33ADED79F42BE8BD3CCD8F /* KLineGuideView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KLineGuideView.swift; sourceTree = "<group>"; };
@@ -168,9 +172,11 @@
 				0A0205D8374A116CBAA60341 /* ResearchLibraryView.swift */,
 				B3A12209C085640B76671514 /* ResearchReportView.swift */,
 				32E03FEBDA0AEE618E70985D /* StockDetailView.swift */,
+				2FC30D89EFE01930BC2CEA34 /* StockRow.swift */,
 				CF1DB8DFF481B78126C3E72E /* ToolsView.swift */,
 				FC3E68F2FDA242DCAA280AE4 /* ToolWebView.swift */,
 				D57E7D19AECF46F08C91E4F1 /* UpcomingEventsCard.swift */,
+				4EA90F7E480888DA97E031CD /* WatchlistGroupsEditView.swift */,
 				53023E587011259DF46F3CF4 /* WatchlistView.swift */,
 			);
 			path = Views;
@@ -370,9 +376,11 @@
 				300CE0BB7D3E27F6CAE414CA /* ResearchReportView.swift in Sources */,
 				D7E5F6284141315FCEB56408 /* SessionVault.swift in Sources */,
 				33E856389ECEE45AC617E6DD /* StockDetailView.swift in Sources */,
+				79563249FA52575644F666BF /* StockRow.swift in Sources */,
 				545FFD1B5F0CAD3C0FA1955A /* ToolWebView.swift in Sources */,
 				A92032EEDB621B4809DC9C12 /* ToolsView.swift in Sources */,
 				20C7AD8A210E65179CE35C30 /* UpcomingEventsCard.swift in Sources */,
+				D84F9C1419CC99372A274036 /* WatchlistGroupsEditView.swift in Sources */,
 				32FBB2D4824A2264A795807D /* WatchlistView.swift in Sources */,
 				97B12146F06F13EC9AC63EC8 /* WebNavigationPolicy.swift in Sources */,
 			);

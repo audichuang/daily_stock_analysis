@@ -35,8 +35,6 @@ public struct StockQuote: Codable, Sendable, Identifiable {
     public let sourceCode: String?
     public let asOf: String?
     public let isStale: Bool?
-    /// 穩定的來源代碼（B17a）；source 字串維持舊值。
-    public let sourceCode: String?
 }
 
 public struct QuoteItem: Codable, Sendable, Identifiable {

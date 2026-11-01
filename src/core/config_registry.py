@@ -143,6 +143,16 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "options": [],
         "validation": {},
         "display_order": 11,
+        "help_key": "settings.base.WATCHLIST_GROUPS",
+        "examples": [
+            'WATCHLIST_GROUPS={"半導體":["2330.TW","2303.TW"]}',
+        ],
+        "docs": [
+            {
+                "label": "iOS App：自選分組",
+                "href": "https://github.com/audichuang/daily_stock_analysis/blob/develop/docs/ios-app.md",
+            },
+        ],
         "warning_codes": [],
     },
     # ------------------------------------------------------------------

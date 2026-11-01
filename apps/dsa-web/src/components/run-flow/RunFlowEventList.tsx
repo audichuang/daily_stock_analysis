@@ -88,7 +88,7 @@ export const RunFlowEventList: React.FC<RunFlowEventListProps> = ({
               <Button
                 key={item}
                 type="button"
-                variant={filter === item ? 'outline' : 'ghost'}
+                variant={filter === item ? 'secondary' : 'ghost'}
                 size="sm"
                 onClick={() => setFilter(item)}
                 aria-pressed={filter === item}

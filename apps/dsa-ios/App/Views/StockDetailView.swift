@@ -219,7 +219,7 @@ private struct StockDetailContent: View {
 
     private func referenceLine(_ quote: StockQuote?) -> String {
         var parts: [String] = []
-        if let phase = MarketPhaseLabel.text(session?.marketPhase) { parts.append(phase) }
+        if let phase = StockSessionLabel.text(session?.marketPhase) { parts.append(phase) }
         parts.append(DisplayFormat.source(quote?.sourceCode ?? quote?.source))
         parts.append("資料參考時間 \(DisplayFormat.time(quote?.asOf ?? quote?.updateTime))")
         return parts.joined(separator: " · ")
