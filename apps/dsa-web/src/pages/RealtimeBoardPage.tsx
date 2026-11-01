@@ -127,7 +127,7 @@ function writeSparkEnabled(enabled: boolean) {
 const isDesktopViewport = () =>
   typeof window.matchMedia === 'function' ? window.matchMedia(DESKTOP_MEDIA_QUERY).matches : true;
 
-const CHUNK = 8; // 每批并发请求的代码数：分批并发刷新，慢的股票不挡快的
+const CHUNK = 8; // 每批並發請求的代號數：分批更新，慢的股票不擋快的
 
 const changeClass = (value?: number | null): string => marketToneClass(value);
 
@@ -418,7 +418,7 @@ const RealtimeBoardPage: React.FC = () => {
         .getQuotes(chunk)
         .then((items) => {
           const fresh = items.filter((it) => codeSeqRef.current.get(stockCodeMatchKey(it.stockCode)) === seq);
-          if (!fresh.length) return; // 这些代码已有更新的刷新发起，丢弃迟到结果
+          if (!fresh.length) return; // 這些代號已有更新的請求，丟棄遲到結果
           const changed: Record<string, { dir: 'up' | 'down'; seq: number }> = {};
           for (const it of fresh) {
             const before = quotesRef.current[it.stockCode]?.quote?.currentPrice;
@@ -1087,7 +1087,7 @@ const RealtimeBoardPage: React.FC = () => {
 
   const fundsCard =
     scope !== 'watch' && funds.length > 0 ? (
-      <Card variant="bordered" padding="md">
+      <Card variant="surface" padding="md">
         <div className="mb-2 flex items-center justify-between gap-2">
           <span className="text-sm font-medium">{t('board.funds.title')}</span>
           <button type="button" className="text-xs text-[hsl(var(--primary))] hover:underline" onClick={() => navigate('/funds')}>
@@ -1154,7 +1154,7 @@ const RealtimeBoardPage: React.FC = () => {
       {holdingsFailed ? <div className="text-xs text-warning">{t('board.holdingsError')}</div> : null}
       {error ? <ApiErrorAlert error={error} onDismiss={() => setError(null)} /> : null}
       {indexRegionsWithData.length > 0 ? (
-        <Card variant="bordered" padding="md">
+        <Card variant="surface" padding="md">
           <div className="mb-2 text-sm font-medium">{t('board.indices.title')}</div>
           <div className="space-y-2">{indexRegionsWithData.map((region) => indexRow(region, indexRegionStates[region]?.items ?? []))}</div>
         </Card>
@@ -1231,20 +1231,20 @@ const RealtimeBoardPage: React.FC = () => {
         }
       />
       {loading ? (
-        <Card variant="bordered" padding="md">
+        <Card variant="surface" padding="md">
           <Loading label={t('board.title')} />
         </Card>
       ) : codes && codes.length === 0 ? (
-        <Card variant="bordered" padding="md">
+        <Card variant="surface" padding="md">
           <EmptyState title={scope === 'holdings' ? t('board.emptyHoldings') : t('board.empty')} />
         </Card>
       ) : visibleSections.length === 0 ? (
-        <Card variant="bordered" padding="md">
+        <Card variant="surface" padding="md">
           <EmptyState title={t('board.filter.empty')} />
         </Card>
       ) : (
         visibleSections.map((section) => (
-          <Card key={section} variant="bordered" padding="md">
+          <Card key={section} variant="surface" padding="md">
             <div className="mb-2 text-sm font-medium">
               {t(`board.section.${section}`)}
               <span className="ml-1.5 text-xs font-normal text-secondary-text">{sectionRows[section].length}</span>

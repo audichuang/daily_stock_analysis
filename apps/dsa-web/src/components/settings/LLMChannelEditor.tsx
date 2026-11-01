@@ -695,7 +695,7 @@ const ChannelRow: React.FC<ChannelRowProps> = ({
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
-                variant="settings-secondary"
+                variant="secondary"
                 size="sm"
                 className="px-3 text-[11px] shadow-none"
                 disabled={busy}
@@ -783,7 +783,7 @@ const ChannelRow: React.FC<ChannelRowProps> = ({
           <div className="flex items-center gap-2 pt-1">
             <Button
               type="button"
-              variant="settings-secondary"
+              variant="secondary"
               size="sm"
               className="px-3 text-[11px] shadow-none"
               disabled={busy}
@@ -836,7 +836,7 @@ const ChannelRow: React.FC<ChannelRowProps> = ({
               </div>
               <Button
                 type="button"
-                variant="settings-secondary"
+                variant="secondary"
                 size="sm"
                 className="px-3 text-[11px] shadow-none"
                 disabled={busy || capabilityBusy || selectedCapabilities.length === 0}
@@ -2429,7 +2429,7 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
               <Badge variant="default" className="border-[var(--settings-border)] bg-[var(--settings-surface-hover)] text-muted-text">{t('settings.llm.channelCount', { count: channels.length })}</Badge>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="settings-primary" className="whitespace-nowrap" disabled={busy} onClick={addChannel}>
+              <Button type="button" variant="primary" className="whitespace-nowrap" disabled={busy} onClick={addChannel}>
                 {t('settings.llm.addChannel')}
               </Button>
               <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto sm:flex-1">
@@ -2646,7 +2646,7 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
           <div className="flex flex-wrap items-center gap-3">
             <Button
               type="button"
-              variant="settings-primary"
+              variant="primary"
               glow
               disabled={busy || !hasChanges}
               onClick={() => void handleSave()}

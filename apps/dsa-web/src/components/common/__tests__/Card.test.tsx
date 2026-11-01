@@ -9,9 +9,6 @@ describe('Card', () => {
     ['surface', 'surface', 'card-surface'],
     ['inset', 'inset', 'card-inset'],
     ['highlight', 'highlight', 'terminal-card'],
-    ['default', 'surface', 'card-surface'],
-    ['bordered', 'surface', 'card-surface'],
-    ['gradient', 'highlight', 'terminal-card'],
   ] as const)('%s 對應 %s 層', (variant, level, className) => {
     render(<Card variant={variant}>內容</Card>);
     expect(cardOf('內容')).toHaveAttribute('data-card-level', level);

@@ -117,7 +117,7 @@ export const StockBar: React.FC<StockBarProps> = ({
                 {items.length > 0 && onDeleteStock ? (
                   <Button
                     variant="ghost"
-                    size="xsm"
+                    size="sm"
                     aria-pressed={editMode}
                     onClick={() => {
                       setEditMode((current) => !current);
@@ -152,8 +152,8 @@ export const StockBar: React.FC<StockBarProps> = ({
                 <span className="text-[11px] text-muted-text select-none">{t('common.selectAllCurrent')}</span>
               </label>
               <Button
-                variant="danger-subtle"
-                size="xsm"
+                variant="danger"
+                size="sm"
                 onClick={() => setConfirmOpen(true)}
                 disabled={selectedCount === 0 || isDeleting}
                 isLoading={isDeleting}

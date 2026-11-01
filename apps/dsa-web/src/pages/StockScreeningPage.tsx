@@ -26,7 +26,7 @@ import {
   type ScreeningScreenTaskStatus,
   type ScreeningStrategy,
 } from '../api/screening';
-import { formatParsedApiError, getParsedApiError, toApiErrorMessage, type ParsedApiError } from '../api/error';
+import { formatParsedApiError, getParsedApiError, SCREENING_TASK_UNRECOVERABLE_TITLE, toApiErrorMessage, type ParsedApiError } from '../api/error';
 import { systemConfigApi } from '../api/systemConfig';
 import {
   AppPage,
@@ -190,8 +190,7 @@ const clearPersistedScreenTask = () => {
 };
 
 const isUnrecoverableScreenTaskError = (error: ParsedApiError) =>
-  // 這個標題是 api/error.ts 產生的分類結果，不是畫面文案。
-  error.title === '选股任务不可恢复';
+  error.title === SCREENING_TASK_UNRECOVERABLE_TITLE;
 
 const formatRecoverableScreenTaskPollingError = (error: ParsedApiError, t: Translate) => {
   if (error.category === 'upstream_timeout') {
@@ -1610,7 +1609,7 @@ const StockScreeningPage: React.FC = () => {
     return (
       <span className="inline-flex items-center justify-end gap-1">
         <Button
-          size="xsm"
+          size="sm"
           variant="secondary"
           onClick={(event: React.MouseEvent) => {
             event.stopPropagation();
@@ -2149,13 +2148,13 @@ const StockScreeningPage: React.FC = () => {
               {selectedCodes.length > 0 ? (
                 <div data-testid="screening-batch-bar" className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-surface/60 px-3 py-2 text-xs text-secondary-text">
                   <span>{t('screeningPage.batch.selected', { count: selectedCodes.length })}</span>
-                  <Button size="xsm" variant="secondary" disabled={batchBusy} onClick={() => void handleBatchAnalyze()}>
+                  <Button size="sm" variant="secondary" disabled={batchBusy} onClick={() => void handleBatchAnalyze()}>
                     {t('screeningPage.batch.analyze')}
                   </Button>
-                  <Button size="xsm" variant="secondary" disabled={batchBusy} onClick={() => void handleBatchWatch()}>
+                  <Button size="sm" variant="secondary" disabled={batchBusy} onClick={() => void handleBatchWatch()}>
                     {t('screeningPage.batch.watch')}
                   </Button>
-                  <Button size="xsm" variant="ghost" disabled={batchBusy} onClick={() => setSelectedCodes([])}>
+                  <Button size="sm" variant="ghost" disabled={batchBusy} onClick={() => setSelectedCodes([])}>
                     {t('screeningPage.batch.clear')}
                   </Button>
                 </div>

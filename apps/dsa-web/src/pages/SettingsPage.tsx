@@ -271,7 +271,7 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <Button
             type="button"
-            variant="settings-secondary"
+            variant="secondary"
             size="sm"
             disabled={isLoading}
             isLoading={isLoading}
@@ -283,7 +283,7 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
           </Button>
           <Button
             type="button"
-            variant="settings-secondary"
+            variant="secondary"
             size="sm"
             aria-expanded={isExpanded}
             onClick={() => setExpandedByUser(!isExpanded)}
@@ -322,18 +322,18 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
           ) : null}
 
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="settings-secondary" size="sm" onClick={() => onSelectCategory('ai_model')}>
+            <Button type="button" variant="secondary" size="sm" onClick={() => onSelectCategory('ai_model')}>
               {t('settings.setupGuideConfigureLlm')}
             </Button>
-            <Button type="button" variant="settings-secondary" size="sm" onClick={() => onEditStockList()}>
+            <Button type="button" variant="secondary" size="sm" onClick={() => onEditStockList()}>
               {t('settings.setupGuideAddStocks')}
             </Button>
-            <Button type="button" variant="settings-secondary" size="sm" onClick={() => onSelectCategory('notification')}>
+            <Button type="button" variant="secondary" size="sm" onClick={() => onSelectCategory('notification')}>
               {t('settings.setupGuideConfigureNotification')}
             </Button>
             <Button
               type="button"
-              variant="settings-secondary"
+              variant="secondary"
               size="sm"
               disabled={!canRunSmoke || isSaving || isRunningSmoke}
               isLoading={isRunningSmoke}
@@ -582,7 +582,7 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
                     {scheduleTimes.length > 1 ? (
                       <Button
                         type="button"
-                        variant="settings-secondary"
+                        variant="secondary"
                         size="sm"
                         className="h-8 w-8 rounded-lg px-0"
                         aria-label={t('settings.schedulerRemoveTime')}
@@ -599,7 +599,7 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
                 ))}
                 <Button
                   type="button"
-                  variant="settings-secondary"
+                  variant="secondary"
                   size="sm"
                   className="h-11 shrink-0"
                   data-testid="scheduler-add-time-button"
@@ -651,7 +651,7 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
-                variant="settings-secondary"
+                variant="secondary"
                 size="sm"
                 data-testid="scheduler-refresh-status-button"
                 disabled={disabled || isRefreshingStatus}
@@ -664,7 +664,7 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
               </Button>
               <Button
                 type="button"
-                variant="settings-primary"
+                variant="primary"
                 size="sm"
                 data-testid="scheduler-run-now-button"
                 disabled={disabled || isRunningNow}
@@ -1224,7 +1224,7 @@ const SettingsPage: React.FC = () => {
   const settingsPanelDiagnosticHint = isDesktopRuntime
     ? uiLanguage === 'en'
       ? <>Check and provide the desktop log <code>desktop.log</code>, plus the release version, Windows version, and trigger path.</>
-      : <>请查看并提供桌面端日志 <code>desktop.log</code>，同时补充 release 版本、Windows 版本和触发入口。</>
+      : <>請查看並提供桌面端日誌 <code>desktop.log</code>，同時補充 release 版本、Windows 版本與觸發入口。</>
     : t('settings.diagnosticHintWeb');
   const activeCategoryTitle = getCategoryTitle(activeCategory as SystemConfigCategory, t('settings.activePanelTitle'), uiLanguage);
   const activeCategoryDescription = getCategoryDescription(activeCategory as SystemConfigCategory, '', uiLanguage);
@@ -1549,7 +1549,7 @@ const SettingsPage: React.FC = () => {
                       </div>
                       <Button
                         type="button"
-                        variant="settings-secondary"
+                        variant="secondary"
                         onClick={() => void handleDesktopUpdateCheck()}
                         disabled={isDesktopUpdateBusy}
                         isLoading={isCheckingDesktopUpdate}
@@ -1601,7 +1601,7 @@ const SettingsPage: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-3">
                     <Button
                       type="button"
-                      variant="settings-secondary"
+                      variant="secondary"
                       onClick={() => void downloadEnvBackup()}
                       disabled={envBackupActionDisabled}
                       isLoading={isExportingEnv}
@@ -1611,7 +1611,7 @@ const SettingsPage: React.FC = () => {
                     </Button>
                     <Button
                       type="button"
-                      variant="settings-primary"
+                      variant="primary"
                       onClick={beginEnvBackupImport}
                       disabled={envBackupActionDisabled || hasPendingSave}
                       isLoading={isImportingEnv}
@@ -1656,7 +1656,7 @@ const SettingsPage: React.FC = () => {
                 </div>
                 <Button
                   type="button"
-                  variant="settings-secondary"
+                  variant="secondary"
                   size="sm"
                   className="shrink-0 self-start sm:self-auto"
                   disabled={isSaving || isLoading || isImportingEnv}
@@ -1753,7 +1753,7 @@ const SettingsPage: React.FC = () => {
         </p>
         <Button
           type="button"
-          variant="settings-secondary"
+          variant="secondary"
           size="sm"
           className="px-2.5"
           onClick={resetAllDrafts}
@@ -1764,7 +1764,7 @@ const SettingsPage: React.FC = () => {
         </Button>
         <Button
           type="button"
-          variant="settings-primary"
+          variant="primary"
           size="sm"
           className="px-2.5"
           onClick={() => void handleSaveConfig()}

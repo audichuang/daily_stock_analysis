@@ -215,7 +215,7 @@ export const RunFlowNodeDetails: React.FC<RunFlowNodeDetailsProps> = ({
             <Button
               type="button"
               variant="secondary"
-              size="xsm"
+              size="sm"
               onClick={() => onToggleExpanded?.(node.id)}
               aria-expanded={isExpanded}
               className="h-7 px-2"
@@ -236,7 +236,7 @@ export const RunFlowNodeDetails: React.FC<RunFlowNodeDetailsProps> = ({
             <Button
               type="button"
               variant="ghost"
-              size="xsm"
+              size="sm"
               onClick={onClose}
               aria-label={t('runFlow.nodeDetails.close')}
               className="h-7 w-7 px-0"

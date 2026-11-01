@@ -299,7 +299,7 @@ const WatchlistRowItem: React.FC<{
         <Button
           type="button"
           variant="ghost"
-          size="xsm"
+          size="sm"
           className="h-7 w-7 shrink-0 px-0"
           disabled={disabled}
           aria-label={t('watchlist.removeAria', { code: row.code })}
@@ -543,7 +543,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
             <Button
               type="button"
               variant="ghost"
-              size="xsm"
+              size="sm"
               className="h-7 w-7 shrink-0 px-0"
               disabled={watchlistActioning}
               aria-label={t('watchlist.groupMoveUpAria', { code })}
@@ -554,7 +554,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
             <Button
               type="button"
               variant="ghost"
-              size="xsm"
+              size="sm"
               className="h-7 w-7 shrink-0 px-0"
               disabled={watchlistActioning}
               aria-label={t('watchlist.groupMoveDownAria', { code })}
@@ -705,7 +705,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="xsm"
+                      size="sm"
                       aria-pressed={editMode}
                       onClick={() => setEditMode((current) => !current)}
                     >
@@ -715,7 +715,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
                   <Button
                     type="button"
                     variant="ghost"
-                    size="xsm"
+                    size="sm"
                     className="h-7 w-7 px-0"
                     disabled={watchlistLoading}
                     onClick={() => {
@@ -741,7 +741,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
               <Button
                 type="button"
                 size="sm"
-                variant="home-action-ai"
+                variant="primary"
                 className="h-8 flex-1 whitespace-nowrap px-2 text-xs sm:flex-none"
                 disabled={watchlistLoading || watchlistRows.length === 0 || isBatchAnalyzing}
                 isLoading={isBatchAnalyzing}
@@ -754,7 +754,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
               <Button
                 type="button"
                 size="sm"
-                variant="home-action-report"
+                variant="secondary"
                 className="h-8 flex-1 whitespace-nowrap px-2 text-xs sm:flex-none"
                 disabled={watchlistLoading || pendingWatchlistCount === 0 || isTodayStatusUnavailable || isBatchAnalyzing}
                 onClick={() => void onAnalyzeWatchlist('pending')}

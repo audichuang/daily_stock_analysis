@@ -227,7 +227,7 @@ export const FinancialsPanel: React.FC<{ stockCode: string }> = ({ stockCode }) 
   const showCommentary = commentary?.status === 'ready' && commentary.headline;
 
   return (
-    <Card variant="bordered" padding="md" className="home-panel-card min-w-0" data-testid="financials-panel">
+    <Card variant="surface" padding="md" className="home-panel-card min-w-0" data-testid="financials-panel">
       <DashboardPanelHeader
         eyebrow={t('financials.title')}
         title={latest ? t('financials.latest', { period: latest.label, end: latest.periodEnd }) : t('financials.title')}

@@ -1126,7 +1126,7 @@ const ChatPage: React.FC = () => {
               message={t('chat.codexLimitedMessage')}
               action={(
                 <Button
-                  variant="action-primary"
+                  variant="primary"
                   size="sm"
                   onClick={() => navigate('/settings?category=agent')}
                 >
@@ -1163,7 +1163,7 @@ const ChatPage: React.FC = () => {
           ) : null}
           {chatError ? <ApiErrorAlert error={chatError} /> : null}
           {chatError?.code === 'session_state_conflict' && (
-            <Button variant="secondary" size="xsm" onClick={() => void refreshSession()}>
+            <Button variant="secondary" size="sm" onClick={() => void refreshSession()}>
               {t('chat.refreshSession')}
             </Button>
           )}
@@ -1427,7 +1427,7 @@ const ChatPage: React.FC = () => {
                   <>
                     <Button
                       variant="secondary"
-                      size="xsm"
+                      size="sm"
                       isLoading={isWatchlistActioning}
                       onClick={() => void handleToggleWatchlist(activeStockCode)}
                       className="text-[11px]"
@@ -1506,7 +1506,7 @@ const ChatPage: React.FC = () => {
                 ) : <span />}
                 {loading && agentStatus?.backend === 'codex_app_server' ? (
                   <Button
-                    variant="danger-subtle"
+                    variant="danger"
                     onClick={stopStream}
                     disabled={stopping}
                     className="flex-shrink-0"

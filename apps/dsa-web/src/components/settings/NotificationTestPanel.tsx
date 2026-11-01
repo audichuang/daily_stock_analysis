@@ -105,7 +105,7 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
   const sendButton = (
     <Button
       type="button"
-      variant={fixedChannel ? 'settings-secondary' : 'settings-primary'}
+      variant={fixedChannel ? 'secondary' : 'primary'}
       size="sm"
       onClick={() => void runTest()}
       disabled={disabled || isTesting}

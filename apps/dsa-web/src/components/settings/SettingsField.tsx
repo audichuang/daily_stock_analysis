@@ -166,7 +166,7 @@ function renderFieldControl(
               </div>
               <Button
                 type="button"
-                variant="settings-secondary"
+                variant="secondary"
                 size="lg"
                 className="px-3 text-xs text-muted-text shadow-none hover:text-danger"
                 disabled={disabled || !schema?.isEditable || values.length <= 1}
@@ -183,7 +183,7 @@ function renderFieldControl(
           <div className="flex items-center gap-2">
             <Button
               type="button"
-              variant="settings-secondary"
+              variant="secondary"
               size="sm"
               className="text-xs shadow-none"
               disabled={disabled || !schema?.isEditable}

@@ -115,7 +115,7 @@ export function AgentBackendStatusPanel({
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           <Button
             type="button"
-            variant="settings-secondary"
+            variant="secondary"
             size="sm"
             disabled={disabled || isLoading || hasArchitectureConflict}
             isLoading={isLoading}

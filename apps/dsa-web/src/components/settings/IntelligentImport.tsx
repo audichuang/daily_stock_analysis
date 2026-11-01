@@ -310,7 +310,7 @@ export const IntelligentImport: React.FC<IntelligentImportProps> = ({
         <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
-            variant="settings-secondary"
+            variant="secondary"
             disabled={disabled || isLoading}
             onClick={() => openFilePicker(imageInputRef)}
           >
@@ -326,7 +326,7 @@ export const IntelligentImport: React.FC<IntelligentImportProps> = ({
           />
           <Button
             type="button"
-            variant="settings-secondary"
+            variant="secondary"
             disabled={disabled || isLoading}
             onClick={() => openFilePicker(dataFileInputRef)}
           >
@@ -351,7 +351,7 @@ export const IntelligentImport: React.FC<IntelligentImportProps> = ({
           />
           <Button
             type="button"
-            variant="settings-secondary"
+            variant="secondary"
             className="shrink-0 sm:self-start"
             onClick={handlePasteParse}
             disabled={disabled || isLoading || !pasteText.trim()}

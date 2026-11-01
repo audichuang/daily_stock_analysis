@@ -69,7 +69,7 @@ const TaskItem: React.FC<TaskItemProps> = ({ task, onOpenRunFlow }) => {
                 <Button
                   type="button"
                   variant="ghost"
-                  size="xsm"
+                  size="sm"
                   className="h-8 w-8 px-0"
                   onClick={(event) => {
                     event.stopPropagation();
@@ -213,7 +213,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({
 
   return (
     <Card
-      variant="bordered"
+      variant="surface"
       padding="none"
       className={`home-panel-card shrink-0 overflow-hidden ${className}`}
     >
@@ -245,7 +245,7 @@ export const TaskPanel: React.FC<TaskPanelProps> = ({
               <Button
                 type="button"
                 variant="ghost"
-                size="xsm"
+                size="sm"
                 className="h-7 w-7 px-0"
                 aria-expanded={!isCollapsed}
                 aria-controls={contentId}

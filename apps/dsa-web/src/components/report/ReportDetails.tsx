@@ -7,7 +7,7 @@ import { getReportText, normalizeReportLanguage } from '../../utils/reportLangua
 
 interface ReportDetailsProps {
   details?: ReportDetailsType;
-  recordId?: number;  // 分析历史记录主键 ID
+  recordId?: number;  // 分析歷史紀錄主鍵 ID
   language?: ReportLanguage;
 }
 
@@ -92,7 +92,7 @@ export const ReportDetails: React.FC<ReportDetailsProps> = ({
   };
 
   return (
-    <Card variant="bordered" padding="md" className="home-panel-card text-left">
+    <Card variant="surface" padding="md" className="home-panel-card text-left">
       <DashboardPanelHeader
         eyebrow={text.transparency}
         title={text.traceability}

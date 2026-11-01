@@ -76,7 +76,7 @@ export const StockListEditor: React.FC<StockListEditorProps> = ({ id, value, dis
               <span className="min-w-0 flex-1 truncate font-mono text-sm text-foreground">{code}</span>
               <Button
                 type="button"
-                variant="settings-secondary"
+                variant="secondary"
                 size="sm"
                 className="h-8 w-8 px-0"
                 aria-label={t('settings.stockList.moveUp', { code })}
@@ -87,7 +87,7 @@ export const StockListEditor: React.FC<StockListEditorProps> = ({ id, value, dis
               </Button>
               <Button
                 type="button"
-                variant="settings-secondary"
+                variant="secondary"
                 size="sm"
                 className="h-8 w-8 px-0"
                 aria-label={t('settings.stockList.moveDown', { code })}
@@ -98,7 +98,7 @@ export const StockListEditor: React.FC<StockListEditorProps> = ({ id, value, dis
               </Button>
               <Button
                 type="button"
-                variant="settings-secondary"
+                variant="secondary"
                 size="sm"
                 className="h-8 w-8 px-0"
                 aria-label={t('settings.stockList.remove', { code })}

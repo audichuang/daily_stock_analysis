@@ -254,7 +254,7 @@ const DataCenterPage: React.FC = () => {
             <Metric label={text.countIssue} value={view.counts.issue} tone={view.counts.issue > 0 ? 'warning' : 'default'} />
           </MetricGroup>
 
-          <Card title={text.tableTitle} subtitle={formatDateTime(overview.asOf)} variant="bordered" padding="md">
+          <Card title={text.tableTitle} subtitle={formatDateTime(overview.asOf)} variant="surface" padding="md">
             <RowsTable rows={view.focusRows} text={text} ariaLabel={text.tableTitle} />
           </Card>
 
@@ -265,7 +265,7 @@ const DataCenterPage: React.FC = () => {
           ) : null}
 
           {view.systemRows.length > 0 ? (
-            <Card title={text.systemTitle} variant="bordered" padding="md">
+            <Card title={text.systemTitle} variant="surface" padding="md">
               <RowsTable rows={view.systemRows} text={text} ariaLabel={text.systemTitle} />
             </Card>
           ) : null}
