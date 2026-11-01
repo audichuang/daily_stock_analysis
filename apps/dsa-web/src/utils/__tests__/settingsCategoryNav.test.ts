@@ -51,6 +51,13 @@ describe('getSettingsCategoryStatus', () => {
     expect(getSettingsCategoryStatus('notification', [item('TELEGRAM_BOT_TOKEN', '')], t)).toBe('未設定');
   });
 
+  it('does not report the model category as not set when it runs without a channel list', () => {
+    expect(getSettingsCategoryStatus('ai_model', [item('LLM_CHANNELS', 'a,b')], t)).toBe('2 個管道');
+    expect(getSettingsCategoryStatus('ai_model', [item('GENERATION_BACKEND', 'claude_code_cli')], t)).toBe('已設定');
+    expect(getSettingsCategoryStatus('ai_model', [item('ANTHROPIC_API_KEY', '******')], t)).toBe('已設定');
+    expect(getSettingsCategoryStatus('ai_model', [item('GENERATION_BACKEND', 'litellm')], t)).toBe('未設定');
+  });
+
   it('reads switches', () => {
     expect(getSettingsCategoryStatus('agent', [item('AGENT_MODE', 'true')], t)).toBe(t('common.enabled'));
     expect(getSettingsCategoryStatus('backtest', [item('BACKTEST_ENABLED', 'false')], t)).toBe(t('common.disabled'));

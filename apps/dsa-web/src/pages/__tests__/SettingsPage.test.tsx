@@ -227,8 +227,8 @@ vi.mock('../../components/settings', async () => {
       <button type="button" onClick={onUseSingleAgent}>切换为单 Agent</button>
     </div>
   ),
-  NotificationTestPanel: ({ items }: { items: Array<{ key: string; value: string }> }) => (
-    <div>通知测试面板:{items.map((item) => item.key).join(',')}</div>
+  NotificationChannelList: ({ items }: { items: Array<{ key: string; value: string }> }) => (
+    <div data-testid="notification-channel-list">{items.map((item) => item.key).join(',')}</div>
   ),
   SettingsAlert: ({
     title,
@@ -863,6 +863,7 @@ describe('SettingsPage', () => {
     expect(await screen.findByText('初始状态')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '刷新检查' }));
+    fireEvent.click(screen.getByRole('button', { name: '打开智能导入' }));
     fireEvent.click(screen.getByRole('button', { name: 'merge stock list' }));
 
     await waitFor(() => expect(getSetupStatus).toHaveBeenCalledTimes(3));
@@ -1450,6 +1451,8 @@ describe('SettingsPage', () => {
 
     renderSettingsPage();
 
+    expect(screen.queryByRole('button', { name: 'merge stock list' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '打开智能导入' }));
     fireEvent.click(screen.getByRole('button', { name: 'merge stock list' }));
 
     expect(refreshAfterExternalSave).toHaveBeenCalledWith(['STOCK_LIST']);
@@ -2645,14 +2648,14 @@ describe('SettingsPage', () => {
     expect(screen.queryByTestId('settings-field-LLM_MY_PROXY_MODELS')).not.toBeInTheDocument();
   });
 
-  it('renders notification test panel before notification fields', () => {
+  it('renders notification settings as channel cards with no standalone test panel', () => {
     useSystemConfigMock.mockReturnValue(buildSystemConfigState({ activeCategory: 'notification' }));
 
     renderSettingsPage();
 
-    expect(screen.getByText('通知测试面板:WECHAT_WEBHOOK_URL')).toBeInTheDocument();
-    expect(screen.getByText('WECHAT_WEBHOOK_URL')).toBeInTheDocument();
-    expect(settingsPanelErrorBoundary).toHaveBeenCalledWith('通知测试');
+    expect(screen.getByTestId('notification-channel-list')).toHaveTextContent('WECHAT_WEBHOOK_URL');
+    expect(screen.queryByTestId('settings-field-WECHAT_WEBHOOK_URL')).not.toBeInTheDocument();
+    expect(settingsPanelErrorBoundary).not.toHaveBeenCalledWith('通知测试');
     expect(settingsPanelErrorBoundary).toHaveBeenCalledWith('通知设置');
   });
 
@@ -2661,7 +2664,7 @@ describe('SettingsPage', () => {
 
     renderSettingsPage();
 
-    expect(screen.getAllByText(/浏览器开发者工具控制台与后端日志/)).toHaveLength(2);
+    expect(screen.getAllByText(/浏览器开发者工具控制台与后端日志/)).toHaveLength(1);
     expect(screen.queryByText('desktop.log')).not.toBeInTheDocument();
   });
 
@@ -2671,7 +2674,7 @@ describe('SettingsPage', () => {
 
     renderSettingsPage();
 
-    expect(screen.getAllByText('desktop.log')).toHaveLength(2);
+    expect(screen.getAllByText('desktop.log')).toHaveLength(1);
     expect(screen.queryByText(/浏览器开发者工具控制台与后端日志/)).not.toBeInTheDocument();
   });
 

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改進] Web 自選編輯器：STOCK_LIST 改為搜尋新增、一列一檔、上下移與刪除，原文收合，儲存格式仍是逗號分隔；智慧匯入改按鈕開抽屜；通知設定改管道卡片、Telegram 排第一、測試併入各管道
 - [改進] Web 設定頁版面：首次設定卡收成狀態列、缺項才展開；儲存與捨棄改為底部常駐列；手機先看分類清單再進全螢幕內容；分類改單行並顯示狀態值、順序重排；新增設定搜尋；選股改單列開關；試跑改次要按鈕並需確認
 - [改進] Web 設定頁繁中補齊：全部欄位名、說明與選項不再顯示英文或簡體，模型管道編輯器文案進 uiText，資料庫檢查訊息依 message_code 組句
 - [新功能] `/history/{id}` 回傳 `structured_report`（舊報告建構失敗維持 null），報告追加一句話結論、分持股建議、信心度、護欄、進出場條件、前次報告摘要、幣別、資料日與是否持有；ResearchArtifact 追加事件、各來源狀態與美股證據，失效條件的句子跟著報告語言走。

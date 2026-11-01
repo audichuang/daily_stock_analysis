@@ -36,7 +36,13 @@ export function getSettingsCategoryStatus(category: string, items: SystemConfigI
     }
     case 'ai_model': {
       const count = configValue(items, 'LLM_CHANNELS').split(',').filter((name) => name.trim()).length;
-      return count > 0 ? t('settings.categoryStatusChannels', { count }) : t('settings.categoryStatusNotSet');
+      if (count > 0) return t('settings.categoryStatusChannels', { count });
+      // 本機 CLI、單一金鑰或舊式 provider 設定都不經管道清單，不能因此顯示未設定。
+      const backend = configValue(items, 'GENERATION_BACKEND');
+      const hasOtherSource = (backend !== '' && backend !== 'litellm')
+        || ['LITELLM_MODEL', 'LITELLM_CONFIG'].some((key) => configValue(items, key) !== '')
+        || items.some((item) => /_KEYS?$/.test(item.key) && String(item.value ?? '').trim() !== '');
+      return hasOtherSource ? t('settings.setupStatusConfigured') : t('settings.categoryStatusNotSet');
     }
     case 'agent':
       return switchStatus(items, 'AGENT_MODE', t);

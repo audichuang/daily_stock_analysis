@@ -39,6 +39,8 @@ interface NotificationTestPanelProps {
   items: SystemConfigUpdateItem[];
   maskToken: string;
   disabled?: boolean;
+  /** 給了就只測這個管道、不顯示管道選單，內嵌在管道卡片裡。 */
+  fixedChannel?: NotificationTestChannel;
 }
 
 function clampTimeout(value: string): number {
@@ -51,9 +53,10 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
   items,
   maskToken,
   disabled = false,
+  fixedChannel,
 }) => {
   const { language, t } = useUiLanguage();
-  const [channel, setChannel] = useState<NotificationTestChannel>('wechat');
+  const [selectedChannel, setChannel] = useState<NotificationTestChannel>('wechat');
   const [title, setTitle] = useState(t('settings.notificationTestTitleValue'));
   const [content, setContent] = useState(t('settings.notificationTestContent'));
   const [timeoutSeconds, setTimeoutSeconds] = useState('20');
@@ -62,6 +65,7 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
   const [isTesting, setIsTesting] = useState(false);
   const [isTitleEdited, setIsTitleEdited] = useState(false);
   const [isContentEdited, setIsContentEdited] = useState(false);
+  const channel = fixedChannel ?? selectedChannel;
 
   const normalizedItems = useMemo(
     () => items.map((item) => ({ key: item.key, value: String(item.value ?? '') })),
@@ -98,33 +102,33 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
     }
   };
 
-  return (
-    <SettingsSectionCard
-      title={t('settings.notificationTest')}
-      description={t('settings.notificationTestDescription')}
-      actions={(
-        <Button
-          type="button"
-          variant="settings-primary"
-          size="sm"
-          onClick={() => void runTest()}
-          disabled={disabled || isTesting}
-          isLoading={isTesting}
-          loadingText={t('settings.notificationTesting')}
-        >
-          <Send className="h-4 w-4" />
-          {t('settings.notificationTestSend')}
-        </Button>
-      )}
+  const sendButton = (
+    <Button
+      type="button"
+      variant={fixedChannel ? 'settings-secondary' : 'settings-primary'}
+      size="sm"
+      onClick={() => void runTest()}
+      disabled={disabled || isTesting}
+      isLoading={isTesting}
+      loadingText={t('settings.notificationTesting')}
     >
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_120px]">
-        <Select
-          label={t('settings.notificationTestChannel')}
-          value={channel}
-          options={getChannelOptions(language)}
-          disabled={disabled || isTesting}
-          onChange={(value) => setChannel(value as NotificationTestChannel)}
-        />
+      <Send className="h-4 w-4" />
+      {t('settings.notificationTestSend')}
+    </Button>
+  );
+
+  const messageFields = (
+    <>
+      <div className={fixedChannel ? 'grid grid-cols-1 gap-3 md:grid-cols-[1fr_120px]' : 'grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_120px]'}>
+        {fixedChannel ? null : (
+          <Select
+            label={t('settings.notificationTestChannel')}
+            value={selectedChannel}
+            options={getChannelOptions(language)}
+            disabled={disabled || isTesting}
+            onChange={(value) => setChannel(value as NotificationTestChannel)}
+          />
+        )}
         <Input
           label={t('settings.notificationTestTitle')}
           value={title}
@@ -161,7 +165,11 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
           className="input-surface input-focus-glow min-h-[112px] w-full resize-y rounded-xl border bg-transparent px-4 py-3 text-sm leading-6 text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-50"
         />
       </label>
+    </>
+  );
 
+  const outcome = (
+    <>
       {error ? <ApiErrorAlert error={error} /> : null}
 
       {result ? (
@@ -192,7 +200,7 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
                           {attempt.success ? t('common.success') : t('common.failure')}
                         </Badge>
                         <span className="text-sm font-medium text-foreground">
-                          Attempt {index + 1}
+                          {t('settings.notificationTestAttempt', { index: index + 1 })}
                         </span>
                         {typeof attempt.httpStatus === 'number' ? (
                           <span className="text-xs text-muted-text">HTTP {attempt.httpStatus}</span>
@@ -218,6 +226,33 @@ export const NotificationTestPanel: React.FC<NotificationTestPanelProps> = ({
           ) : null}
         </div>
       ) : null}
+    </>
+  );
+
+  if (fixedChannel) {
+    return (
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {sendButton}
+          <p className="min-w-0 flex-1 text-xs leading-5 text-muted-text">{t('settings.notificationTestDescription')}</p>
+        </div>
+        <details>
+          <summary className="cursor-pointer text-xs font-medium text-secondary-text">{t('settings.notificationTestCustomize')}</summary>
+          <div className="mt-3 space-y-3">{messageFields}</div>
+        </details>
+        {outcome}
+      </div>
+    );
+  }
+
+  return (
+    <SettingsSectionCard
+      title={t('settings.notificationTest')}
+      description={t('settings.notificationTestDescription')}
+      actions={sendButton}
+    >
+      {messageFields}
+      {outcome}
     </SettingsSectionCard>
   );
 };

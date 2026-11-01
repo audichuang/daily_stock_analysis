@@ -1118,7 +1118,7 @@ export const fieldI18nTablesForTest = {
   zhTwDescriptions: fieldDescriptionMapZhTw,
   zhTwOptionLabels: fieldOptionLabelMapZhTw,
   zhTwCategoryTitles: categoryTitleMap['zh-TW'],
-  zhTwCategoryDescriptions: categoryDescriptionMap['zh-TW'],
+  zhTwCategoryDescriptions: categoryDescriptionMap['zh-TW'] as Record<string, string>,
 };
 
 /** zh／zh-TW 介面的欄位名：zh-TW 先查繁中表，沒有再退回簡中表。 */

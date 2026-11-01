@@ -9,7 +9,7 @@ import { createParsedApiError, getParsedApiError, type ParsedApiError } from '..
 import { analysisApi } from '../api/analysis';
 import { screeningApi, notifyScreeningConfigChanged, notifySystemConfigChanged } from '../api/screening';
 import { systemConfigApi } from '../api/systemConfig';
-import { ApiErrorAlert, Button, ConfirmDialog, EmptyState, StickyActionBar } from '../components/common';
+import { ApiErrorAlert, Button, ConfirmDialog, Drawer, EmptyState, StickyActionBar } from '../components/common';
 import {
   AgentBackendStatusPanel,
   AuthSettingsCard,
@@ -17,7 +17,7 @@ import {
   GenerationBackendStatusPanel,
   IntelligentImport,
   LLMChannelEditor,
-  NotificationTestPanel,
+  NotificationChannelList,
   SettingsCategoryNav,
   SettingsAlert,
   SettingsField,
@@ -721,6 +721,7 @@ const SettingsPage: React.FC = () => {
   // 手機先看分類清單，選了分類才進全螢幕內容；桌機兩欄並列不受影響。
   const [mobileShowContent, setMobileShowContent] = useState(false);
   const [settingsSearch, setSettingsSearch] = useState('');
+  const [isImportDrawerOpen, setIsImportDrawerOpen] = useState(false);
   const [llmChannelHasDirty, setLlmChannelHasDirty] = useState(false);
   const [llmChannelIsSaving, setLlmChannelIsSaving] = useState(false);
   const [llmChannelDraftItems, setLlmChannelDraftItems] = useState<SystemConfigUpdateItem[]>([]);
@@ -1286,7 +1287,15 @@ const SettingsPage: React.FC = () => {
       )}
     </SettingsSectionCard>
   ) : null;
-  const activeConfigPanel = hasActiveConfigItems ? (
+  const activeConfigPanel = activeCategory === 'notification' && hasActiveConfigItems ? (
+    <NotificationChannelList
+      items={rawActiveItems}
+      maskToken={maskToken}
+      disabled={isSaving || isLoading || isImportingEnv}
+      issueByKey={issueByKey}
+      onChange={setDraftValue}
+    />
+  ) : hasActiveConfigItems ? (
     <SettingsSectionCard
       title={activeCategoryTitle}
       description={activeCategoryDescription || t('settings.activePanelDescription')}
@@ -1638,23 +1647,22 @@ const SettingsPage: React.FC = () => {
               </SettingsSectionCard>
             ) : null}
             {activeCategory === 'base' ? (
-              <SettingsSectionCard
-                title={t('settings.intelligentImport')}
-                description={t('settings.intelligentImportDescription')}
-              >
-                <IntelligentImport
-                  stockListValue={
-                    (activeItems.find((i) => i.key === 'STOCK_LIST')?.value as string) ?? ''
-                  }
-                  configVersion={configVersion}
-                  maskToken={maskToken}
-                  onMerged={async () => {
-                    await refreshAfterExternalSave(['STOCK_LIST']);
-                    void refreshSetupStatus();
-                  }}
+              <section className="flex min-w-0 flex-col gap-3 rounded-lg border settings-border bg-card/90 px-4 py-3 shadow-soft-card backdrop-blur-sm sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <h2 className="text-sm font-semibold text-foreground">{t('settings.intelligentImport')}</h2>
+                  <p className="mt-0.5 text-xs leading-5 text-muted-text">{t('settings.intelligentImportDescription')}</p>
+                </div>
+                <Button
+                  type="button"
+                  variant="settings-secondary"
+                  size="sm"
+                  className="shrink-0 self-start sm:self-auto"
                   disabled={isSaving || isLoading || isImportingEnv}
-                />
-              </SettingsSectionCard>
+                  onClick={() => setIsImportDrawerOpen(true)}
+                >
+                  {t('settings.intelligentImportOpen')}
+                </Button>
+              </section>
             ) : null}
             {activeCategory === 'ai_model' || llmChannelHasDirty || llmChannelIsSaving ? (
               <div hidden={activeCategory !== 'ai_model'}>
@@ -1688,19 +1696,6 @@ const SettingsPage: React.FC = () => {
             ) : null}
             {activeCategory === 'system' && passwordChangeable ? (
               <ChangePasswordCard />
-            ) : null}
-            {activeCategory === 'notification' ? (
-              <SettingsPanelErrorBoundary
-                title={t('settings.notificationTest')}
-                resetKey={`notification-test:${configVersion}`}
-                diagnosticHint={settingsPanelDiagnosticHint}
-              >
-                <NotificationTestPanel
-                  items={rawActiveItems.map((item) => ({ key: item.key, value: String(item.value ?? '') }))}
-                  maskToken={maskToken}
-                  disabled={isSaving || isLoading || isImportingEnv}
-                />
-              </SettingsPanelErrorBoundary>
             ) : null}
             {activeCategory === 'agent' ? (
               <SettingsPanelErrorBoundary
@@ -1798,6 +1793,23 @@ const SettingsPage: React.FC = () => {
             : <ApiErrorAlert error={toast.error} />}
         </div>
       ) : null}
+      <Drawer
+        isOpen={isImportDrawerOpen}
+        onClose={() => setIsImportDrawerOpen(false)}
+        title={t('settings.intelligentImport')}
+      >
+        <IntelligentImport
+          stockListValue={String(getConfigItem(itemsByCategory.base || [], 'STOCK_LIST')?.value ?? '')}
+          configVersion={configVersion}
+          maskToken={maskToken}
+          onMerged={async () => {
+            await refreshAfterExternalSave(['STOCK_LIST']);
+            void refreshSetupStatus();
+            setIsImportDrawerOpen(false);
+          }}
+          disabled={isSaving || isLoading || isImportingEnv}
+        />
+      </Drawer>
       <ConfirmDialog
         isOpen={showImportConfirm}
         title={t('settings.importConfirmTitle')}

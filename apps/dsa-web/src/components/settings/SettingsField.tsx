@@ -8,6 +8,7 @@ import { getFieldDescriptionForLocale, getFieldOptionLabel, getFieldTitleForLoca
 import type { UiLanguage, UiTextKey } from '../../i18n/uiText';
 import { cn } from '../../utils/cn';
 import { SettingsHelpButton } from './SettingsHelpButton';
+import { StockListEditor } from './StockListEditor';
 
 function normalizeSelectOptions(key: string, options: SystemConfigFieldSchema['options'] = [], locale: UiLanguage) {
   return options.map((option) => {
@@ -83,6 +84,17 @@ function renderFieldControl(
   const commonClass = 'input-surface input-focus-glow h-11 w-full rounded-xl border bg-transparent px-4 text-sm transition-all focus:outline-none disabled:cursor-not-allowed disabled:opacity-60';
   const controlType = schema?.uiControl ?? 'text';
   const isMultiValue = isMultiValueField(item);
+
+  if (item.key === 'STOCK_LIST') {
+    return (
+      <StockListEditor
+        id={controlId}
+        value={value}
+        disabled={disabled || !schema?.isEditable}
+        onChange={onChange}
+      />
+    );
+  }
 
   if (controlType === 'textarea') {
     return (
