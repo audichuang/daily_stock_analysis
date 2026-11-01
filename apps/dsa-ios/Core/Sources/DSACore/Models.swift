@@ -33,6 +33,8 @@ public struct StockQuote: Codable, Sendable, Identifiable {
     public let source: String?
     public let asOf: String?
     public let isStale: Bool?
+    /// 穩定的來源代碼（B17a）；source 字串維持舊值。
+    public let sourceCode: String?
 }
 
 public struct QuoteItem: Codable, Sendable, Identifiable {
@@ -76,6 +78,10 @@ public struct StockProfile: Codable, Sendable {
     public let history: HistoryBlock
     public let research: ResearchBlock
     public let evidenceQuality: EvidenceQuality
+    // I09／I10：B17c 追加區塊，沒持有、美股或舊後端都是 nil。
+    public let position: StockProfilePosition?
+    public let chips: StockProfileChips?
+    public let news: [StockProfileNewsItem]?
 }
 
 public struct QuoteBlock: Codable, Sendable {
@@ -123,6 +129,9 @@ public struct ResearchArtifact: Codable, Sendable, Identifiable {
     public let invalidationConditions: [InvalidationCondition]
     public let nextActions: [ResearchNextAction]
     public let dataQuality: ResearchQuality
+    public let eventGap: ResearchEventGap?
+    /// 鍵會被 convertFromSnakeCase 轉成駝峰（sec_finra → secFinra），查表前要走 ReportGaps。
+    public let sourceStatus: [String: String]?
 }
 
 public struct ResearchSubject: Codable, Sendable {
@@ -141,6 +150,21 @@ public struct ResearchThesis: Codable, Sendable {
     public let actionLabel: String?
     public let reasons: [String]
     public let risks: [String]
+    // B03：決策欄位，舊報告為 nil。
+    public let oneSentence: String?
+    public let timeSensitivity: String?
+    public let positionAdvice: ReportPositionAdvice?
+    public let confidenceLevel: String?
+    public let confidenceReason: String?
+    public let guardrailApplied: Bool?
+    public let guardrailReason: String?
+    public let strongestBullishSignal: String?
+    public let strongestBearishSignal: String?
+    public let watchConditions: [String]?
+    public let entryConditions: [String]?
+    public let exitTriggers: [String]?
+    public let pendingEvents: [String]?
+    public let nextCheckTime: String?
 }
 
 public struct ResearchEvidence: Codable, Sendable, Identifiable {
@@ -153,6 +177,14 @@ public struct ResearchEvidence: Codable, Sendable, Identifiable {
     public let qualityLevel: String
     public let asOf: String?
     public let url: String?
+    // B03：畫面分組與時間語意，舊報告為 nil。
+    public let group: String?
+    public let observedAt: String?
+    public let fetchedAt: String?
+    public let windowDays: Int?
+    public let complete: Bool?
+    public let countsTowardScore: Bool?
+    public let excerpt: String?
 }
 
 public struct InvalidationCondition: Codable, Sendable, Identifiable {
@@ -164,6 +196,9 @@ public struct InvalidationCondition: Codable, Sendable, Identifiable {
     public let metric: String?
     public let threshold: String?
     public let dueAt: String?
+    public let direction: String?
+    /// triggered 只由分析當下的事實設定；其餘為 pending 或 review。
+    public let status: String?
 }
 
 public struct ResearchNextAction: Codable, Sendable {
@@ -207,6 +242,8 @@ public struct HistoryItem: Codable, Sendable, Identifiable {
     public let modelUsed: String?
     public let createdAt: String?
     public let assetType: String?
+    /// 一句話結論（B06）；大盤複盤與舊報告為 nil。
+    public let oneSentence: String?
 }
 
 public struct AnalysisReport: Codable, Sendable {
@@ -299,6 +336,14 @@ public struct ReportMeta: Codable, Sendable {
     public let changePct: Double?
     public let modelUsed: String?
     public let assetType: String?
+    // B02：查不到都是 nil。
+    public let priceDate: String?
+    public let priceFetchedAt: String?
+    public let currency: String?
+    public let changeAmount: Double?
+    public let previousReport: ReportPreviousSummary?
+    /// nil 代表無法判定，不得當成未持有。
+    public let held: Bool?
 }
 
 public struct ReportSummary: Codable, Sendable {
@@ -309,6 +354,21 @@ public struct ReportSummary: Codable, Sendable {
     public let trendPrediction: String?
     public let sentimentScore: Int?
     public let sentimentLabel: String?
+    // B02：決策欄位，舊報告為 nil。觀察條件讀 phaseWatchConditions。
+    public let oneSentence: String?
+    public let timeSensitivity: String?
+    public let positionAdvice: ReportPositionAdvice?
+    public let confidenceLevel: String?
+    public let confidenceReason: String?
+    public let guardrailApplied: Bool?
+    public let guardrailReason: String?
+    public let strongestBullishSignal: String?
+    public let strongestBearishSignal: String?
+    public let phaseWatchConditions: [String]?
+    public let entryConditions: [String]?
+    public let exitTriggers: [String]?
+    public let pendingEvents: [String]?
+    public let nextCheckTime: String?
 }
 
 public struct ReportStrategy: Codable, Sendable {
@@ -316,6 +376,10 @@ public struct ReportStrategy: Codable, Sendable {
     public let secondaryBuy: String?
     public let stopLoss: String?
     public let takeProfit: String?
+    /// 模型給的結構化價位；只有 sniperPricesSource 為 structured 才可當數字用。
+    public let sniperPrices: SniperPrices?
+    /// structured 或 legacy；legacy 與舊後端一律顯示上面四個原文欄位。
+    public let sniperPricesSource: String?
 }
 
 public struct AcceptedTask: Codable, Sendable {
@@ -523,4 +587,98 @@ public struct EventCalendarResponse: Codable, Sendable {
     public let events: [CalendarEvent]
     public let undated: [UndatedCalendarStock]
     public let cacheUpdatedAt: String?
+}
+
+// MARK: - I09～I11 個股與報告追加型別
+
+public struct StockProfilePosition: Codable, Sendable {
+    public let quantity: Double
+    public let avgCost: Double?
+    public let currency: String?
+    public let lastPrice: Double?
+    public let marketValue: Double?
+    public let unrealizedPnl: Double?
+    public let unrealizedPnlPct: Double?
+    public let weightPct: Double?
+    public let accountCount: Int?
+}
+
+/// 法人單位是股、融資融券單位是張，兩者不可相比。
+public struct StockProfileChips: Codable, Sendable {
+    public let institutionalDate: String?
+    public let foreignNet: Double?
+    public let trustNet: Double?
+    public let dealerNet: Double?
+    public let totalNet: Double?
+    public let marginDate: String?
+    public let marginBalance: Double?
+    public let marginChg5: Double?
+    public let marginChg20: Double?
+    public let shortBalance: Double?
+    public let shortMarginRatio: Double?
+}
+
+public struct StockProfileNewsItem: Codable, Sendable {
+    public let title: String?
+    public let url: String?
+    public let source: String?
+    public let publishedDate: String?
+}
+
+public struct ReportPositionAdvice: Codable, Sendable {
+    public let noPosition: String?
+    public let hasPosition: String?
+
+    public init(noPosition: String? = nil, hasPosition: String? = nil) {
+        self.noPosition = noPosition
+        self.hasPosition = hasPosition
+    }
+}
+
+public struct ReportPreviousSummary: Codable, Sendable {
+    public let id: Int?
+    public let action: String?
+    public let score: Int?
+    public let createdAt: String?
+    public let stopLoss: Double?
+}
+
+public struct SniperPrices: Codable, Sendable {
+    public let idealBuy: Double?
+    public let secondaryBuy: Double?
+    public let stopLoss: Double?
+    public let takeProfit: Double?
+
+    public init(idealBuy: Double? = nil, secondaryBuy: Double? = nil, stopLoss: Double? = nil, takeProfit: Double? = nil) {
+        self.idealBuy = idealBuy
+        self.secondaryBuy = secondaryBuy
+        self.stopLoss = stopLoss
+        self.takeProfit = takeProfit
+    }
+}
+
+public struct ResearchEventGap: Codable, Sendable {
+    public let triggered: Bool?
+    public let eventDate: String?
+    public let changePct: Double?
+    public let eventLow: Double?
+    public let sessionsSinceEvent: Int?
+    public let thresholdPct: Double?
+    public let latestClose: Double?
+    public let postEventMinClose: Double?
+    public let eventLowBroken: Bool?
+    public let newsEvidencePresent: Bool?
+    public let blockedWithoutNews: Bool?
+    public let reason: String?
+}
+
+/// `GET /stocks/indices` 順帶回的市場狀態；舊後端沒有這些欄位時都是 nil。
+public struct MarketSessionStatus: Codable, Sendable {
+    public let marketPhase: String?
+    public let marketOpen: Bool?
+
+    public init(marketPhase: String? = nil, marketOpen: Bool? = nil) {
+        self.marketPhase = marketPhase
+        self.marketOpen = marketOpen
+    }
 }

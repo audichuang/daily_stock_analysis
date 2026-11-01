@@ -107,11 +107,13 @@ def artifact(code, record_id=101):
             "action": "watch", "action_label": "觀望（測試）",
             "reasons": ["測試營收年增改善", "測試日 K 支撐尚未失守"],
             "risks": ["測試估值偏高", "測試法人資料尚未更新"],
+            "one_sentence": "【合成】先觀察支撐，不追價。",
+            "position_advice": {"has_position": "【合成】持股者守支撐續抱。", "no_position": "【合成】空手者等回測再評估。"},
         },
         "evidence": [
             {"id": "fixture-revenue", "source_type": "fundamental", "title": "月營收（測試）",
              "summary": "合成資料用來驗證來源與日期顯示，不能用於投資。", "source": "fixture",
-             "freshness": "stale", "quality_level": "limited", "as_of": AS_OF, "url": None},
+             "freshness": "stale", "quality_level": "limited", "as_of": AS_OF, "url": None, "group": "fundamental"},
             {"id": "fixture-price", "source_type": "technical", "title": "價格結構（測試）",
              "summary": "測試支撐附近仍需確認成交量。", "source": "fixture",
              "freshness": "stale", "quality_level": "limited", "as_of": AS_OF, "url": None},
@@ -119,12 +121,49 @@ def artifact(code, record_id=101):
         "invalidation_conditions": [
             {"id": "fixture-support", "category": "price", "description": "跌破測試支撐需重新判斷",
              "trigger": "測試日線收盤跌破支撐", "severity": "warning", "metric": "測試支撐價",
-             "threshold": str(STOCKS[code][1] - 30), "due_at": None},
+             "threshold": str(STOCKS[code][1] - 30), "due_at": None,
+             "direction": "below", "status": "pending"},
         ],
         "next_actions": [{"action": "watch", "label": "等待測試數據確認", "reason": "合成驗收資料，不是真實建議", "due_at": None}],
         "data_quality": {"level": "limited", "overall_score": None, "source_count": 2, "stale_count": 2,
                          "missing_blocks": ["institutional"], "limitations": ["全部為固定過去日期的合成 fixture，不能視為真行情或真 AI 分析。"]},
+        "source_status": {"insider": "timeout", "sec_finra": "no_data", "futu": "not_configured", "ratings": "ok"},
     }
+
+
+FULL_REPORT_MARKDOWN = """# 合成測試完整報告
+
+這不是即時行情，也不是模型實際生成結果。
+
+## 觀察重點
+
+- 驗證完整文字可閱讀。
+  - 巢狀項目要懸掛縮排，第二層也不能跑版。
+- 驗證來源與失效條件可追溯。
+- ✅ 站上合成月線
+- ⚠️ 合成量能不足
+- ❌ 合成法人賣超
+
+> 合成引用：引用要有色條。
+
+---
+
+這段有 *不該變斜體的字* 與 **粗體**。
+
+## 數據
+
+| 指標 | 數值 |
+| --- | --- |
+| 合成毛利率 | 50% |
+
+| 季度 | 營收 | 毛利率 |
+| --- | --- | --- |
+| 合成 Q1 | 100 億 | 48% |
+
+## 風險
+
+固定過去日期的測試資料，不能用於投資決策。
+"""
 
 
 def report_news(record_id):
@@ -160,7 +199,42 @@ def history_item(record_id, code, report_type="detailed", region=None):
         "action": "watch", "action_label": "觀望（測試）",
         "current_price": None if is_market else STOCKS[code][1], "change_pct": None if is_market else STOCKS[code][2],
         "model_used": "fixture-only", "created_at": AS_OF, "asset_type": "index" if is_market else "stock",
+        "one_sentence": None if is_market else "【合成】先觀察支撐，不追價。",
     }
+
+
+def legacy_action(item, action):
+    """重現舊報告：存檔標籤是「減倉」，畫面要依枚舉或別名顯示「減碼」。"""
+    item.update(action=action, action_label="減倉", operation_advice="減倉")
+    return item
+
+
+def profile_position(code):
+    # 與 portfolio() 的第一個帳戶一致；AAPL 刻意不給，走沒持股的畫面。
+    if code != "2330.TW":
+        return None
+    return {"quantity": 1000.0, "avg_cost": 580.0, "currency": "TWD", "last_price": 600.0, "market_value": 600000.0,
+            "unrealized_pnl": 20000.0, "unrealized_pnl_pct": 3.45, "weight_pct": 42.5, "account_count": 1}
+
+
+def profile_chips(code):
+    if STOCKS[code][3] != "tw":
+        return None
+    return {"institutional_date": "2024-01-31", "foreign_net": 1250000.0, "trust_net": -300000.0, "dealer_net": 15000.0,
+            "total_net": 965000.0, "margin_date": "2024-01-31", "margin_balance": 12000.0, "margin_chg_5": 150.0,
+            "margin_chg_20": -80.0, "short_balance": 900.0, "short_margin_ratio": 7.5}
+
+
+def report_strategy(item):
+    """#101 系列是結構化價位；#102、#111 是 legacy，只有原文。"""
+    price = STOCKS[item["stock_code"]][1]
+    legacy = {"ideal_buy": "等待測試支撐確認", "secondary_buy": None, "stop_loss": "跌破測試支撐再評估",
+              "take_profit": "測試壓力區分批觀察"}
+    if item["id"] in (102, 111):
+        return {**legacy, "sniper_prices": None, "sniper_prices_source": "legacy"}
+    return {**legacy, "sniper_prices": {"ideal_buy": round(price * 0.98, 2), "secondary_buy": round(price * 0.96, 2),
+                                        "stop_loss": round(price * 0.92, 2), "take_profit": round(price * 1.1, 2)},
+            "sniper_prices_source": "structured"}
 
 
 def financials_fixture(code):
@@ -226,12 +300,19 @@ class State:
     def __init__(self):
         self.lock = threading.RLock()
         self.calendar_failing = False
+        self.markdown_failing = False
         self.watchlist = ["2330.TW", "2317.TW", "00631L.TW", "2303.TW", "2603.TW", "0050.TW", "00878.TW", "AAPL"]
         self.records = [history_item(101, "2330.TW"), history_item(102, "AAPL"),
                         history_item(201, "TWII", "market_review", "tw"),
                         history_item(202, "SPX", "market_review", "us")]
         self.records += [history_item(110 + index, code) for index, code in enumerate(self.watchlist)
                          if code not in ("2330.TW", "AAPL")]
+        # 舊報告兩種形狀：#111 有枚舉、#102 沒枚舉，兩者都存「減倉」。
+        for item in self.records:
+            if item["id"] == 111:
+                legacy_action(item, "reduce")
+            if item["id"] == 102:
+                legacy_action(item, None)
         self.tasks = {}
         self.analysis_starts = 0
         self.next_record_id = 301
@@ -240,10 +321,17 @@ class State:
         code = item["stock_code"]
         is_market = item["report_type"] == "market_review"
         return {
-            "meta": {key: item.get(key) for key in ["id", "query_id", "stock_code", "stock_name", "report_type", "created_at", "current_price", "change_pct", "model_used", "asset_type"]},
-            "summary": {key: item.get(key) for key in ["analysis_summary", "operation_advice", "action", "action_label", "trend_prediction", "sentiment_score"]},
-            "strategy": None if is_market else {"ideal_buy": "等待測試支撐確認", "secondary_buy": None,
-                                                "stop_loss": "跌破測試支撐再評估", "take_profit": "測試壓力區分批觀察"},
+            "meta": {**{key: item.get(key) for key in ["id", "query_id", "stock_code", "stock_name", "report_type", "created_at", "current_price", "change_pct", "model_used", "asset_type"]},
+                     "price_date": None if is_market else "2024-01-31",
+                     "currency": None if is_market else ("TWD" if STOCKS[code][3] == "tw" else "USD"),
+                     "held": None if is_market else code == "2330.TW",
+                     "previous_report": None if is_market else {"id": 90, "action": "reduce", "score": 40, "created_at": "2024-01-20T13:30:00+08:00", "stop_loss": None}},
+            "summary": {**{key: item.get(key) for key in ["analysis_summary", "operation_advice", "action", "action_label", "trend_prediction", "sentiment_score", "one_sentence"]},
+                        "confidence_level": None if is_market else "medium", "time_sensitivity": None if is_market else "本週",
+                        "position_advice": None if is_market else {"has_position": "【合成】持股者守支撐續抱。", "no_position": "【合成】空手者等回測再評估。"},
+                        "phase_watch_conditions": None if is_market else ["【合成】觀察量能是否放大"],
+                        "exit_triggers": None if is_market else ["【合成】收盤跌破支撐就改判"]},
+            "strategy": None if is_market else report_strategy(item),
             "structured_report": None if is_market else artifact(code, item["id"]),
         }
 
@@ -317,6 +405,10 @@ class Handler(BaseHTTPRequestHandler):
                 # UI 測試注入行事曆失敗，驗證事件卡的失敗與恢復。
                 STATE.calendar_failing = query.get("on", ["0"])[0] == "1"
                 return self.reply(200, {"calendar_failing": STATE.calendar_failing})
+            if route == ["__fixture", "markdown-failing"]:
+                # UI 測試注入全文讀取失敗，驗證不展開也看得到錯誤。
+                STATE.markdown_failing = query.get("on", ["0"])[0] == "1"
+                return self.reply(200, {"markdown_failing": STATE.markdown_failing})
             if route == ["health"]:
                 return self.reply(200, {"status": "fixture", "synthetic": True})
             if route == ["api", "v1", "auth", "status"]:
@@ -350,7 +442,8 @@ class Handler(BaseHTTPRequestHandler):
                 region = query.get("region", ["tw"])[0]
                 data = [("TWII", "加權指數（測試）", 18000, 100, 0.56), ("TPEX", "櫃買指數（測試）", 230, -1, -0.43)] if region == "tw" else [
                     ("SPX", "S&P 500（測試）", 4800, 20, 0.42), ("IXIC", "NASDAQ（測試）", 15000, -50, -0.33)]
-                return self.reply(200, {"region": region, "items": [dict(zip(["code", "name", "current", "change", "change_pct"], row), source="fixture（合成資料）", as_of=AS_OF) for row in data]})
+                return self.reply(200, {"region": region, "market_phase": "postmarket", "market_open": False,
+                                        "items": [dict(zip(["code", "name", "current", "change", "change_pct"], row), source="fixture（合成資料）", as_of=AS_OF) for row in data]})
             if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "trend":
                 code = route[3]
                 if code not in STOCKS:
@@ -374,6 +467,7 @@ class Handler(BaseHTTPRequestHandler):
                                    "recent_reports": records, "structured_report": artifact(code, records[0]["id"] if records else 101)}, "limitations": ["合成測試分析"]},
                     "evidence_quality": {"status": "partial", "blocks": {"quote": "partial", "research": "partial"},
                                          "limitations": ["全部是固定過去日期的 fixture，不能用於交易。", "no_symbol_intelligence"]},
+                    "position": profile_position(code), "chips": profile_chips(code), "news": [],
                 })
             if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "financials":
                 if route[3] not in STOCKS:
@@ -403,7 +497,9 @@ class Handler(BaseHTTPRequestHandler):
                     items = report_news(record["id"])[:int(query.get("limit", ["20"])[0])]
                     return self.reply(200, {"total": len(items), "items": items})
                 if len(route) == 5 and route[4] == "markdown":
-                    return self.reply(200, {"content": "# 合成測試完整報告\n\n這不是即時行情，也不是模型實際生成結果。\n\n## 觀察重點\n\n- 驗證完整文字可閱讀。\n- 驗證來源與失效條件可追溯。\n\n## 風險\n\n固定過去日期的測試資料，不能用於投資決策。"})
+                    if STATE.markdown_failing:
+                        return self.reply(503, {"detail": {"error": "fixture", "message": "合成全文失敗"}})
+                    return self.reply(200, {"content": FULL_REPORT_MARKDOWN})
                 if len(route) == 4:
                     return self.reply(200, STATE.report(record))
             if len(route) == 5 and route[:4] == ["api", "v1", "analysis", "status"]:
