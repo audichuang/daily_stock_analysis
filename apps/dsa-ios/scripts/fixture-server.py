@@ -394,7 +394,7 @@ class Handler(BaseHTTPRequestHandler):
             if route == ["api", "v1", "portfolio", "snapshot"]:
                 return self.reply(200, portfolio())
             if route == [""] or (route and route[0] in ["chat", "screening", "portfolio", "alerts", "funds", "decision-signals", "backtest", "data", "settings", "usage"]):
-                html = tool_html("/" + "/".join(route))
+                html = tool_html("/" + "/".join(route), query.get("embed", ["無"])[0])
                 if self.access_required:
                     html = html.replace("</body>", "<p id='access-proof'>驗證 Access 子資源中</p><script src='/access-cookie-proof.js'></script><a href='/access-redirect'>測試 Access 失效轉址</a></body>")
                 return self.reply(200, html, content_type="text/html; charset=utf-8")
@@ -440,10 +440,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"detail": {"error": "fixture_route_missing", "message": "此路徑尚未加入 fixture"}})
 
 
-def tool_html(route_path="/chat"):
+def tool_html(route_path="/chat", embed="無"):
     return """<!doctype html><html lang="zh-Hant"><meta name="viewport" content="width=device-width">
 <body style="background:#101824;color:#fff;font:18px system-ui;padding:24px">
-<h1>進階工具（合成驗收頁）</h1><p>頁面路徑：{{ROUTE}}</p>
+<h1>進階工具（合成驗收頁）</h1><p>頁面路徑：{{ROUTE}}</p><p>內嵌模式：{{EMBED}}</p>
 <p>此處只驗證登入 cookie、內嵌瀏覽器與本機匯出，不代表真實工具功能通過。</p>
 <button id="fixture-blob-export" style="padding:16px;font:18px system-ui">匯出合成設定 JSON</button>
 <p><a href="/api/v1/fixture/export" download="fixture-http-export.json" style="color:#80efcf">下載 HTTP 合成檔案</a></p>
@@ -457,7 +457,7 @@ document.getElementById('fixture-blob-export').addEventListener('click', () => {
   link.click();
   link.remove();
 });
-</script></body></html>""".replace("{{ROUTE}}", escape(route_path))
+</script></body></html>""".replace("{{ROUTE}}", escape(route_path)).replace("{{EMBED}}", escape(embed))
 
 
 def portfolio():

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import WebKit
 import DSACore
 
 @MainActor
@@ -30,11 +31,14 @@ final class AppStore: ObservableObject {
     private(set) var client: DSAClient?
     private(set) var session: URLSession?
     private(set) var baseURL: URL?
+    /// 所有工具頁共用的記憶體資料（cookie、localStorage），不落地；換連線或登出就換一個。
+    private(set) var toolWebDataStore: WKWebsiteDataStore
     private var generation = UUID()
     private let configurationFactory: () -> URLSessionConfiguration
 
     init(configurationFactory: @escaping () -> URLSessionConfiguration = { .ephemeral }) {
         self.configurationFactory = configurationFactory
+        toolWebDataStore = .nonPersistent()
         colorConvention = MarketColorConvention(rawValue: UserDefaults.standard.string(forKey: "marketColors") ?? "") ?? .taiwan
         let preferences = UserDefaults.standard
         let savedAddress = preferences.string(forKey: "serverAddress")
@@ -82,6 +86,8 @@ final class AppStore: ObservableObject {
                 session?.invalidateAndCancel()
                 generation = UUID()
                 clearData()
+                // 換伺服器或更換／移除 Access Token 都走這裡，舊 cookie 不能留給下一個工具頁。
+                toolWebDataStore = .nonPersistent()
                 session = candidateSession
                 client = candidateClient
                 baseURL = url
@@ -235,6 +241,7 @@ final class AppStore: ObservableObject {
         needsPassword = false
         refreshing = false
         clearData()
+        toolWebDataStore = .nonPersistent()
     }
 
     func quote(for code: String) -> StockQuote? { quotes.first { $0.stockCode == code }?.quote }
