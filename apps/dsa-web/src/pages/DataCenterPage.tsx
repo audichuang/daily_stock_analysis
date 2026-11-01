@@ -15,7 +15,7 @@ import {
   buildConclusion,
   buildMarketRows,
   buildSystemRows,
-  countBuckets,
+  countRows,
   FOCUS_MARKETS,
   rowLabel,
   translateWarnings,
@@ -191,11 +191,16 @@ const DataCenterPage: React.FC = () => {
   const view = useMemo(() => {
     if (!overview) return null;
     const marketRows = buildMarketRows(overview.datasets);
+    const focusRows = marketRows.filter((row) => row.root && FOCUS_MARKETS.includes(row.root));
+    const systemRows = buildSystemRows(overview.datasets);
+    // Cards count the rows of the two visible tables, so their sum always equals what the tables list.
+    const countedRows = [...focusRows, ...systemRows];
     return {
-      focusRows: marketRows.filter((row) => row.root && FOCUS_MARKETS.includes(row.root)),
+      focusRows,
       otherRows: marketRows.filter((row) => !row.root || !FOCUS_MARKETS.includes(row.root)),
-      systemRows: buildSystemRows(overview.datasets),
-      counts: countBuckets(overview.datasets),
+      systemRows,
+      counts: countRows(countedRows),
+      countedTotal: countedRows.length,
       conclusion: buildConclusion(marketRows, formatDateTime(overview.asOf), text),
       hints: translateWarnings(overview.warnings, text),
       technical: technicalLines(overview),
@@ -244,11 +249,15 @@ const DataCenterPage: React.FC = () => {
       {overview && view && !isEmpty ? (
         <>
           <div data-testid="data-center-conclusion">
-            <InlineAlert variant={view.conclusion.variant} title={view.conclusion.title} message={view.conclusion.message} />
+            {view.conclusion.variant === 'note' ? (
+              <p className="text-xs text-muted-text">{view.conclusion.message}</p>
+            ) : (
+              <InlineAlert variant={view.conclusion.variant} title={view.conclusion.title} message={view.conclusion.message} />
+            )}
           </div>
 
           <MetricGroup>
-            <Metric label={text.countOk} value={view.counts.ok} hint={formatUiText(text.countNote, { total: overview.datasets.length })} />
+            <Metric label={text.countOk} value={view.counts.ok} hint={formatUiText(text.countNote, { total: view.countedTotal })} />
             <Metric label={text.countUnchecked} value={view.counts.unchecked} />
             <Metric label={text.countOff} value={view.counts.off} />
             <Metric label={text.countIssue} value={view.counts.issue} tone={view.counts.issue > 0 ? 'warning' : 'default'} />

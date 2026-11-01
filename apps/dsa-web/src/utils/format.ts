@@ -48,10 +48,56 @@ export const formatPrice = (value?: number | null, currency?: string): string =>
   return groupDigits(value, minDigits, maxDigits);
 };
 
-export const formatMoneyValue = (value?: number | null, currency?: string, digits = 2): string => {
+export interface MoneyFormatOptions {
+  /** 萬／億縮寫（與 iOS DisplayNumber.compact 同規則），給窄格放大數字。 */
+  compact?: boolean;
+}
+
+// Currencies whose aggregate amounts carry no minor unit in summaries (mirrors iOS summaryMoney).
+const ZERO_DECIMAL_CURRENCIES = new Set(['TWD', 'JPY', 'KRW']);
+
+const moneyDigits = (currency?: string): number =>
+  currency && ZERO_DECIMAL_CURRENCIES.has(currency.toUpperCase()) ? 0 : 2;
+
+const compactMoney = (value: number): string => {
+  const abs = Math.abs(value);
+  if (abs >= 100_000_000) return `${groupDigits(value / 100_000_000, 0, 2)} 億`;
+  if (abs >= 10_000) return `${groupDigits(value / 10_000, 0, 2)} 萬`;
+  return groupDigits(value, 0, 0);
+};
+
+/**
+ * 金額格式，兩種呼叫方式：
+ * - 第三參數給數字（舊用法）：固定小數位，前面帶幣別代碼，例如 `USD 1,234.50`。
+ * - 第三參數給選項物件：彙總金額，小數依幣別（TWD／JPY／KRW 0 位、其他 2 位），
+ *   只回數字本身；幣別前綴由呼叫端用 currencyUnitLabel 另外渲染（Metric 的 unit）。
+ */
+export function formatMoneyValue(value?: number | null, currency?: string, digits?: number): string;
+export function formatMoneyValue(value: number | null | undefined, currency: string | undefined, options: MoneyFormatOptions): string;
+export function formatMoneyValue(
+  value?: number | null,
+  currency?: string,
+  digitsOrOptions: number | MoneyFormatOptions = 2,
+): string {
   if (!isReading(value)) return NO_VALUE;
-  const text = groupDigits(value, digits, digits);
+  if (typeof digitsOrOptions === 'object') {
+    if (digitsOrOptions.compact) return compactMoney(value);
+    const digits = moneyDigits(currency);
+    return groupDigits(value, digits, digits);
+  }
+  const text = groupDigits(value, digitsOrOptions, digitsOrOptions);
   return currency ? `${currency} ${text}` : text;
+}
+
+const CURRENCY_UNIT_LABELS: Record<string, string> = {
+  TWD: 'NT$',
+  USD: 'US$',
+};
+
+/** 金額前綴：TWD→NT$、USD→US$，其他回原代碼；與 iOS summaryMoney 同一套。 */
+export const currencyUnitLabel = (code?: string | null): string => {
+  if (!code) return '';
+  return CURRENCY_UNIT_LABELS[code.toUpperCase()] ?? code;
 };
 
 export const formatDateTime = (value?: string | null): string => {

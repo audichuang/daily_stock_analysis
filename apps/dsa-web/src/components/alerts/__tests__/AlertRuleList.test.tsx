@@ -208,6 +208,28 @@ describe('AlertRuleList', () => {
     expect(card.queryByText('無法評估目前條件')).not.toBeInTheDocument();
   });
 
+  it('dims disabled rules and puts the switch with a touch target next to the menu', () => {
+    renderList([priceRule, { ...priceRule, id: 2, name: 'rule-two', enabled: false }], { quotes: { '2330.TW': { price: 1000, name: '台積電' } } });
+    expect(screen.getByTestId('alert-rule-1')).not.toHaveClass('opacity-60');
+    expect(screen.getByTestId('alert-rule-2')).toHaveClass('opacity-60');
+    const toggle = screen.getByRole('switch', { name: '啟用 rule-one' });
+    expect(toggle.closest('label')).toHaveClass('min-h-11');
+    const menu = screen.getByRole('button', { name: 'rule-one 的更多操作' });
+    expect(menu).toHaveClass('h-9', 'w-9');
+    // Switch sits immediately before the menu, on the right of the sentence.
+    expect(toggle.compareDocumentPosition(menu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(screen.getByTestId('alert-rule-1')).getByText('當 台積電 2330.TW 站上 1,100 時提醒').compareDocumentPosition(toggle)
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('hides the filter row for an empty account but keeps it while filters are set', () => {
+    renderList([], { guide: <div>guide</div> });
+    expect(screen.queryByLabelText('搜尋股票')).not.toBeInTheDocument();
+    cleanup();
+    renderList([], { guide: <div>guide</div>, hasFilters: true });
+    expect(screen.getByLabelText('搜尋股票')).toBeInTheDocument();
+  });
+
   it('confirms deletion before calling onDelete', () => {
     renderList([priceRule]);
     fireEvent.click(screen.getByRole('button', { name: 'rule-one 的更多操作' }));

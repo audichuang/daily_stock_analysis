@@ -708,7 +708,7 @@ describe('SettingsPage', () => {
   it('renders category navigation and auth settings modules', async () => {
     renderSettingsPage();
 
-    expect(await screen.findByRole('heading', { name: '系统设置' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '设置' })).toBeInTheDocument();
     expect(screen.getByText('认证与登录保护')).toBeInTheDocument();
     expect(screen.getByText('修改密码')).toBeInTheDocument();
     expect(load).toHaveBeenCalled();
@@ -1035,13 +1035,36 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('button', { name: '保存配置 (2)' })).toBeEnabled();
   });
 
-  it('keeps the bottom bar when nothing is dirty, with save disabled', () => {
+  it('renders no save bar while nothing is dirty and shows it once a draft exists', () => {
     useSystemConfigMock.mockReturnValue(buildSystemConfigState({ hasDirty: false, dirtyCount: 0 }));
+
+    const page = renderSettingsPage();
+
+    expect(screen.queryByText('没有未保存的修改')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /保存配置/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重置' })).not.toBeInTheDocument();
+
+    useSystemConfigMock.mockReturnValue(buildSystemConfigState({ hasDirty: true, dirtyCount: 1 }));
+    page.rerenderSettingsPage();
+
+    expect(screen.getByText('有 1 项未保存的修改')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存配置 (1)' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '重置' })).toBeEnabled();
+  });
+
+  it('asks for confirmation before importing .env even without local drafts', async () => {
+    (window as { dsaDesktop?: unknown }).dsaDesktop = { version: '3.12.0' };
+    const clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => undefined);
 
     renderSettingsPage();
 
-    expect(screen.getByText('没有未保存的修改')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /保存配置/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '导入 .env' }));
+
+    expect(await screen.findByText('导入 .env 会覆盖已保存的配置')).toBeInTheDocument();
+    expect(clickSpy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '继续导入' }));
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(importEnv).not.toHaveBeenCalled();
   });
 
   it('shows categories first on mobile and enters content after selecting one', () => {
@@ -2209,14 +2232,14 @@ describe('SettingsPage', () => {
 
     renderSettingsPage();
 
-    const saveButton = screen.getByRole('button', { name: /保存配置/ });
-    expect(saveButton).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /保存配置/ })).not.toBeInTheDocument();
 
     const enabledCheckbox = await screen.findByTestId('scheduler-enabled-checkbox');
     expect(enabledCheckbox).toBeChecked();
     fireEvent.click(enabledCheckbox);
 
     await waitFor(() => expect(enabledCheckbox).not.toBeChecked());
+    const saveButton = await screen.findByRole('button', { name: /保存配置/ });
     await waitFor(() => expect(saveButton).toBeEnabled());
     await waitFor(() => expect(saveButton).toHaveTextContent('保存配置 (1)'));
 
@@ -2287,14 +2310,14 @@ describe('SettingsPage', () => {
 
     const { router, rerenderSettingsPage } = renderSettingsPage();
 
-    const saveButton = screen.getByRole('button', { name: /保存配置/ });
-    expect(saveButton).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /保存配置/ })).not.toBeInTheDocument();
 
     const enabledCheckbox = await screen.findByTestId('scheduler-enabled-checkbox');
     expect(enabledCheckbox).toBeChecked();
     fireEvent.click(enabledCheckbox);
 
     await waitFor(() => expect(enabledCheckbox).not.toBeChecked());
+    const saveButton = await screen.findByRole('button', { name: /保存配置/ });
     await waitFor(() => expect(saveButton).toBeEnabled());
     await waitFor(() => expect(saveButton).toHaveTextContent('保存配置 (1)'));
     const schedulerState = useSystemConfigMock.mock.results.at(-1)?.value;
@@ -2310,7 +2333,7 @@ describe('SettingsPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: '取消' }));
     fireEvent.click(screen.getByRole('button', { name: '重置' }));
     await waitFor(() => expect(screen.getByTestId('scheduler-enabled-checkbox')).toBeChecked());
-    expect(saveButton).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /保存配置/ })).not.toBeInTheDocument();
     act(() => { void router.navigate('/chat'); });
     await waitFor(() => expect(router.state.location.pathname).toBe('/chat'));
   });
@@ -2378,14 +2401,14 @@ describe('SettingsPage', () => {
 
     renderSettingsPage();
 
-    const saveButton = screen.getByRole('button', { name: /保存配置/ });
-    expect(saveButton).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /保存配置/ })).not.toBeInTheDocument();
 
     const enabledCheckbox = await screen.findByTestId('scheduler-enabled-checkbox');
     expect(enabledCheckbox).not.toBeChecked();
     fireEvent.click(enabledCheckbox);
 
     await waitFor(() => expect(enabledCheckbox).toBeChecked());
+    const saveButton = await screen.findByRole('button', { name: /保存配置/ });
     await waitFor(() => expect(saveButton).toBeEnabled());
     await waitFor(() => expect(saveButton).toHaveTextContent('保存配置 (1)'));
 
@@ -3161,7 +3184,7 @@ describe('SettingsPage', () => {
 
       await act(async () => pendingRefresh.resolve());
       expect(await screen.findByText('配置已保存，可以继续离开此页面。')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: '重置' })).toBeEnabled();
+      expect(screen.queryByRole('button', { name: '重置' })).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: '导入 .env' })).toBeEnabled();
       expect(beforeUnloadListeners).toHaveLength(0);
       expect(screen.queryByText('当前没有未保存的改动')).not.toBeInTheDocument();
@@ -3247,7 +3270,7 @@ describe('SettingsPage', () => {
           await waitFor(() => expect(resetDraft).toHaveBeenCalledTimes(1));
           await waitFor(() => expect(beforeUnloadListeners).toHaveLength(0));
           expect(screen.getByTestId('scheduler-enabled-checkbox')).toBeChecked();
-          expect(screen.getByRole('button', { name: /保存配置/ })).toBeDisabled();
+          expect(screen.queryByRole('button', { name: /保存配置/ })).not.toBeInTheDocument();
           if (outcome === 'reload-failed') {
             expect(screen.getByText('配置已导入但刷新失败')).toBeInTheDocument();
           }

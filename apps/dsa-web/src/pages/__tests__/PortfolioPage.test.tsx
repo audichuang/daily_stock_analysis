@@ -5,6 +5,7 @@ import { createApiError, createParsedApiError } from '../../api/error';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import type { DecisionSignalItem } from '../../types/decisionSignals';
 import { UI_LANGUAGE_STORAGE_KEY } from '../../utils/uiLanguage';
+import { toDateInputValue } from '../../utils/format';
 import PortfolioPage from '../PortfolioPage';
 
 const {
@@ -300,13 +301,26 @@ async function desktopHoldings() {
   return within(within(holdings).getByTestId('data-table-desktop'));
 }
 
+// Same local-date formatting the page uses for "today" (getTodayIso).
+const getTodayIsoFor = (date: Date) => toDateInputValue(date);
+
 const selectAccount = (name: string) => fireEvent.click(screen.getByRole('radio', { name }));
 const openPageMenu = () => fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
+
+// Risk flags: available ones render as chips, unavailable ones as names in one grey line; both carry data-flag-*.
+const riskFlag = (label: string) => screen.getByText(label, { exact: true }).closest('[data-flag-key]') as HTMLElement;
+const expectFlagUnavailable = (label: string) => expect(riskFlag(label)).toHaveAttribute('data-flag-state', 'unavailable');
+// FX limitations and missing-pair hints sit in the Info tooltip; hover the trigger to read them.
+const hoverFxInfo = () => {
+  fireEvent.mouseEnter(screen.getByLabelText('汇率与估值说明').closest('[tabindex="0"]') as HTMLElement);
+  return screen.getByRole('tooltip');
+};
 
 describe('PortfolioPage FX refresh', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
+    window.history.replaceState({}, '', '/');
 
     getAccounts.mockResolvedValue(makeAccounts());
     getSnapshot.mockImplementation(async ({ accountId }: { accountId?: number } = {}) => makeSnapshot({ accountId, fxStale: true }));
@@ -353,6 +367,8 @@ describe('PortfolioPage FX refresh', () => {
       analysisPhase: 'auto',
     });
     getLatestDecisionSignals.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 1 });
+    // Default: the grouped list hits nothing, so lookups fall back to the per-stock endpoint.
+    listDecisionSignals.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 100 });
   });
 
   function renderEnglishPage() {
@@ -397,7 +413,7 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
 
-    expect(await screen.findByText('过期')).toBeInTheDocument();
+    expect(await screen.findByText('汇率 过期')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '刷新汇率' })).toBeInTheDocument();
   });
 
@@ -412,7 +428,7 @@ describe('PortfolioPage FX refresh', () => {
     await waitForInitialLoad();
 
     expect(await screen.findByText('缺汇率')).toBeInTheDocument();
-    expect(screen.getByText(/缺少 USD\/CNY 汇率/)).toBeInTheDocument();
+    expect(hoverFxInfo()).toHaveTextContent(/缺少 USD\/CNY 汇率/);
     expect(screen.queryByText(/3,000/)).not.toBeInTheDocument();
   });
 
@@ -423,7 +439,7 @@ describe('PortfolioPage FX refresh', () => {
     await waitForInitialLoad();
 
     expect(await screen.findByText(/3,000/)).toBeInTheDocument();
-    expect(screen.getByText('过期')).toBeInTheDocument();
+    expect(screen.getByText('汇率 过期')).toBeInTheDocument();
     expect(screen.queryByText('缺汇率')).not.toBeInTheDocument();
   });
 
@@ -493,13 +509,16 @@ describe('PortfolioPage FX refresh', () => {
     const dashboardScope = within(dashboard as HTMLElement);
 
     expect(dashboardScope.getByText('风险旗标')).toBeInTheDocument();
-    expect(dashboardScope.getAllByText('需处理').length).toBeGreaterThanOrEqual(5);
+    // Concentration, sector, drawdown and price quality need action; stop loss and AI live in the pending list.
+    expect(dashboardScope.getAllByText('需处理')).toHaveLength(4);
     expect(dashboardScope.getByText('个股集中')).toBeInTheDocument();
     expect(dashboardScope.getByText('Top1: 600519')).toBeInTheDocument();
     expect(dashboardScope.getByText('行业集中')).toBeInTheDocument();
     expect(dashboardScope.getByText('Top1: 白酒')).toBeInTheDocument();
     expect(dashboardScope.getByText('最大回撤: 18.50%')).toBeInTheDocument();
-    expect(dashboardScope.getByText('触发: 1 · 接近: 2')).toBeInTheDocument();
+    expect(dashboardScope.queryByText('止损')).not.toBeInTheDocument();
+    expect(dashboardScope.queryByText('AI 信号')).not.toBeInTheDocument();
+    expect(dashboardScope.queryByTestId('portfolio-risk-unavailable')).not.toBeInTheDocument();
     expect(dashboardScope.getByText('缺价: 0 · 过期价: 1')).toBeInTheDocument();
     expect(dashboardScope.getAllByText('市场暴露').length).toBeGreaterThan(0);
     expect(dashboardScope.getAllByText('币种暴露').length).toBeGreaterThan(0);
@@ -744,7 +763,7 @@ describe('PortfolioPage FX refresh', () => {
     expect(dashboard.getByText('持仓: 0')).toBeInTheDocument();
     expect(screen.getByText('共 0 项')).toBeInTheDocument();
     expect(screen.getByText('当前无持仓数据')).toBeInTheDocument();
-    expect(screen.getByText('最新')).toBeInTheDocument();
+    expect(screen.getByText('汇率 今日')).toBeInTheDocument();
     expect(dashboard.queryByText('暴露不可用')).not.toBeInTheDocument();
   });
 
@@ -931,8 +950,11 @@ describe('PortfolioPage FX refresh', () => {
     const dashboard = screen.getByText('风险与暴露看板').closest('section');
     expect(dashboard).not.toBeNull();
     const dashboardScope = within(dashboard as HTMLElement);
-    expect(dashboardScope.getAllByText('不可用').length).toBeGreaterThanOrEqual(5);
-    expect(dashboardScope.getAllByText('—').length).toBeGreaterThanOrEqual(5);
+    for (const label of ['个股集中', '行业集中', '回撤']) {
+      expectFlagUnavailable(label);
+    }
+    expect(dashboardScope.getByTestId('portfolio-risk-unavailable')).toHaveTextContent('不可用：个股集中、行业集中、回撤');
+    expect(dashboardScope.queryByText('止损')).not.toBeInTheDocument();
   });
 
   it('treats zero-point drawdown as unavailable even when numeric fields are zero', async () => {
@@ -949,10 +971,7 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const drawdownFlag = screen.getByText('回撤').closest('div.rounded-xl');
-    expect(drawdownFlag).not.toBeNull();
-    expect(within(drawdownFlag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(within(drawdownFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
+    expectFlagUnavailable('回撤');
   });
 
   it('treats one-point drawdown as unavailable because no decline can be measured', async () => {
@@ -969,10 +988,7 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const drawdownFlag = screen.getByText('回撤').closest('div.rounded-xl');
-    expect(drawdownFlag).not.toBeNull();
-    expect(within(drawdownFlag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(within(drawdownFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
+    expectFlagUnavailable('回撤');
   });
 
   it('treats stale-FX drawdown as unavailable instead of normal', async () => {
@@ -989,10 +1005,7 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const drawdownFlag = screen.getByText('回撤').closest('div.rounded-xl');
-    expect(drawdownFlag).not.toBeNull();
-    expect(within(drawdownFlag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(within(drawdownFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
+    expectFlagUnavailable('回撤');
   });
 
   it('treats stale-FX concentration summaries as unavailable instead of authoritative', async () => {
@@ -1018,10 +1031,7 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
     for (const label of ['个股集中', '行业集中']) {
-      const flag = screen.getByText(label).closest('div.rounded-xl');
-      expect(flag).not.toBeNull();
-      expect(within(flag as HTMLElement).getByText('—')).toBeInTheDocument();
-      expect(within(flag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
+      expectFlagUnavailable(label);
     }
     expect(screen.queryByText('Top1: 白酒')).not.toBeInTheDocument();
     expect(screen.queryByText('60.00%')).not.toBeInTheDocument();
@@ -1108,27 +1118,19 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
     for (const label of ['个股集中', '行业集中']) {
-      const flag = screen.getByText(label).closest('div.rounded-xl');
-      expect(flag).not.toBeNull();
-      expect(within(flag as HTMLElement).getByText('—')).toBeInTheDocument();
-      expect(within(flag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
+      expectFlagUnavailable(label);
     }
     expect(screen.getAllByText('暴露不可用')).toHaveLength(2);
     expect(screen.queryByText('美股')).not.toBeInTheDocument();
     expect(screen.queryByText('100.00%')).not.toBeInTheDocument();
-    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('[data-card-level]');
-    expect(concentrationCard).not.toBeNull();
-    const concentrationScope = within(concentrationCard as HTMLElement);
-    expect(concentrationScope.getByText('暂无集中度数据')).toBeInTheDocument();
-    expect(concentrationScope.getByText('板块集中度告警: 不可用')).toBeInTheDocument();
-    expect(concentrationScope.getByText('Top1 权重: —')).toBeInTheDocument();
-    const priceFlag = screen.getByText('价格质量').closest('div.rounded-xl');
-    expect(priceFlag).not.toBeNull();
-    expect(within(priceFlag as HTMLElement).getByText('缺价: 1 · 过期价: 0')).toBeInTheDocument();
-    expect(within(priceFlag as HTMLElement).getByText('需处理')).toBeInTheDocument();
-    const stopLossFlag = screen.getByText('止损', { exact: true }).closest('div.rounded-xl');
-    expect(stopLossFlag).not.toBeNull();
-    expect(within(stopLossFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
+    // No concentration evidence: the card is not rendered at all instead of an empty box.
+    expect(screen.queryByText('行业数据暂不可用，当前展示个股集中度')).not.toBeInTheDocument();
+    expect(screen.queryByText('暂无集中度数据')).not.toBeInTheDocument();
+    const priceFlag = riskFlag('价格质量');
+    expect(priceFlag).toHaveAttribute('data-flag-state', 'danger');
+    expect(within(priceFlag).getByText('缺价: 1 · 过期价: 0')).toBeInTheDocument();
+    expect(within(priceFlag).getByText('需处理')).toBeInTheDocument();
+    expect(screen.queryByText('止损', { exact: true })).not.toBeInTheDocument();
   });
 
   it.each([false, true])('keeps genuine 100%% concentration available with a usable quote (stale: %s)', async (priceStale) => {
@@ -1151,9 +1153,9 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const flag = screen.getByText('个股集中').closest('div.rounded-xl');
+    const flag = riskFlag('个股集中');
     expect(flag).not.toBeNull();
-    const flagScope = within(flag as HTMLElement);
+    const flagScope = within(flag);
     expect(flagScope.getByText('100.00%')).toBeInTheDocument();
     expect(flagScope.getByText('Top1: 600519')).toBeInTheDocument();
     expect(flagScope.getByText('需处理')).toBeInTheDocument();
@@ -1180,10 +1182,7 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const concentrationFlag = screen.getByText('个股集中').closest('div.rounded-xl');
-    expect(concentrationFlag).not.toBeNull();
-    expect(within(concentrationFlag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(within(concentrationFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
+    expectFlagUnavailable('个股集中');
     expect(screen.getAllByText('暴露不可用')).toHaveLength(2);
   });
 
@@ -1201,7 +1200,7 @@ describe('PortfolioPage FX refresh', () => {
     expect(screen.getByText('共 — 项')).toBeInTheDocument();
     expect(screen.getAllByText('持仓快照不可用').length).toBeGreaterThan(0);
     expect(screen.queryByText('当前无持仓数据')).not.toBeInTheDocument();
-    expect(screen.queryByText('最新')).not.toBeInTheDocument();
+    expect(screen.queryByText('汇率 今日')).not.toBeInTheDocument();
   });
 
   it('treats partial server risk blocks as unavailable instead of normal', async () => {
@@ -1241,20 +1240,16 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
 
-    for (const label of ['个股集中', '行业集中', '回撤', '止损', 'AI 信号']) {
-      const card = screen.getByText(label).closest('div.rounded-xl');
-      expect(card).not.toBeNull();
-      const cardScope = within(card as HTMLElement);
-      expect(cardScope.getAllByText('不可用').length).toBeGreaterThanOrEqual(1);
-      expect(cardScope.getByText('—')).toBeInTheDocument();
+    for (const label of ['个股集中', '行业集中', '回撤']) {
+      expectFlagUnavailable(label);
     }
+    expect(screen.queryByText('止损')).not.toBeInTheDocument();
+    expect(screen.queryByText('AI 信号')).not.toBeInTheDocument();
+    // Partial stop-loss / signal blocks never reach the pending list either.
+    expect(screen.queryByTestId('portfolio-pending')).not.toBeInTheDocument();
 
-    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('[data-card-level]');
-    expect(concentrationCard).not.toBeNull();
-    const concentrationScope = within(concentrationCard as HTMLElement);
-    expect(concentrationScope.getByText('板块集中度告警: 不可用')).toBeInTheDocument();
-    expect(concentrationScope.getByText('Top1 权重: —')).toBeInTheDocument();
-    expect(concentrationScope.queryByText('600519')).not.toBeInTheDocument();
+    expect(screen.queryByText('行业数据暂不可用，当前展示个股集中度')).not.toBeInTheDocument();
+    expect(screen.queryByText('600519')).not.toBeInTheDocument();
 
   });
 
@@ -1287,10 +1282,7 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
 
-    const sectorFlag = screen.getByText('行业集中').closest('div.rounded-xl');
-    expect(sectorFlag).not.toBeNull();
-    expect(within(sectorFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
-    expect(within(sectorFlag as HTMLElement).getByText('—')).toBeInTheDocument();
+    expectFlagUnavailable('行业集中');
 
     const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('[data-card-level]');
     expect(concentrationCard).not.toBeNull();
@@ -1334,11 +1326,9 @@ describe('PortfolioPage FX refresh', () => {
 
     expect(screen.queryByText('Top1: Technology')).not.toBeInTheDocument();
     expect(screen.queryByText('40.00%')).not.toBeInTheDocument();
-    const concentrationCard = screen.getByText('行业数据暂不可用，当前展示个股集中度').closest('[data-card-level]');
-    expect(concentrationCard).not.toBeNull();
-    const concentrationScope = within(concentrationCard as HTMLElement);
-    expect(concentrationScope.getByText('板块集中度告警: 不可用')).toBeInTheDocument();
-    expect(concentrationScope.getByText('Top1 权重: —')).toBeInTheDocument();
+    // Neither sector nor position concentration is usable, so the concentration card stays hidden.
+    expect(screen.queryByText('行业数据暂不可用，当前展示个股集中度')).not.toBeInTheDocument();
+    expect(screen.queryByText('板块集中度告警: 不可用')).not.toBeInTheDocument();
     expect(screen.queryByText('UNCLASSIFIED')).not.toBeInTheDocument();
   });
 
@@ -1363,10 +1353,8 @@ describe('PortfolioPage FX refresh', () => {
 
     render(<PortfolioPage />);
     await waitForInitialLoad();
-    const flag = screen.getByText('行业集中').closest('div.rounded-xl');
-    expect(within(flag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(within(flag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
-    expect(screen.getByText('板块集中度告警: 不可用')).toBeInTheDocument();
+    expectFlagUnavailable('行业集中');
+    expect(screen.queryByText('板块集中度告警: 不可用')).not.toBeInTheDocument();
     expect(screen.queryByText('Top1: Technology')).not.toBeInTheDocument();
   });
 
@@ -1386,10 +1374,7 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const sectorFlag = screen.getByText('行业集中').closest('div.rounded-xl');
-    expect(sectorFlag).not.toBeNull();
-    expect(within(sectorFlag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(within(sectorFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
+    expectFlagUnavailable('行业集中');
     expect(screen.queryByText('Top1: 白酒')).not.toBeInTheDocument();
   });
 
@@ -1408,9 +1393,7 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const sectorFlag = screen.getByText('行业集中').closest('div.rounded-xl');
-    expect(sectorFlag).not.toBeNull();
-    expect(within(sectorFlag as HTMLElement).getByText('—')).toBeInTheDocument();
+    expectFlagUnavailable('行业集中');
     expect(screen.queryByText('Top1: 白酒')).not.toBeInTheDocument();
   });
 
@@ -1436,10 +1419,8 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const sectorFlag = screen.getByText('行业集中').closest('div.rounded-xl');
-    expect(sectorFlag).not.toBeNull();
-    expect(within(sectorFlag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(screen.getByText('行业数据暂不可用，当前展示个股集中度')).toBeInTheDocument();
+    expectFlagUnavailable('行业集中');
+    expect(screen.queryByText('行业数据暂不可用，当前展示个股集中度')).not.toBeInTheDocument();
   });
 
   it('treats malformed sector rows as unavailable instead of crashing the page', async () => {
@@ -1464,10 +1445,8 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const sectorFlag = screen.getByText('行业集中').closest('div.rounded-xl');
-    expect(sectorFlag).not.toBeNull();
-    expect(within(sectorFlag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(screen.getByText('行业数据暂不可用，当前展示个股集中度')).toBeInTheDocument();
+    expectFlagUnavailable('行业集中');
+    expect(screen.queryByText('行业数据暂不可用，当前展示个股集中度')).not.toBeInTheDocument();
   });
 
   it('treats a malformed sector row collection as unavailable', async () => {
@@ -1486,10 +1465,8 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const sectorFlag = screen.getByText('行业集中').closest('div.rounded-xl');
-    expect(sectorFlag).not.toBeNull();
-    expect(within(sectorFlag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(screen.getByText('行业数据暂不可用，当前展示个股集中度')).toBeInTheDocument();
+    expectFlagUnavailable('行业集中');
+    expect(screen.queryByText('行业数据暂不可用，当前展示个股集中度')).not.toBeInTheDocument();
   });
 
   it('requires a valid top-position row before showing concentration status', async () => {
@@ -1506,10 +1483,7 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const concentrationFlag = screen.getByText('个股集中').closest('div.rounded-xl');
-    expect(concentrationFlag).not.toBeNull();
-    expect(within(concentrationFlag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(within(concentrationFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
+    expectFlagUnavailable('个股集中');
   });
 
   it.each([
@@ -1532,11 +1506,9 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const concentrationFlag = screen.getByText('个股集中').closest('div.rounded-xl');
-    expect(within(concentrationFlag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(within(concentrationFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
+    expectFlagUnavailable('个股集中');
     expect(screen.queryByText('Top1: AAPL')).not.toBeInTheDocument();
-    expect(screen.getByText('暂无集中度数据')).toBeInTheDocument();
+    expect(screen.queryByText('暂无集中度数据')).not.toBeInTheDocument();
   });
 
   it.each([
@@ -1562,9 +1534,7 @@ describe('PortfolioPage FX refresh', () => {
     }));
     render(<PortfolioPage />);
     await waitForInitialLoad();
-    const sectorFlag = screen.getByText('行业集中').closest('div.rounded-xl');
-    expect(within(sectorFlag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(within(sectorFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
+    expectFlagUnavailable('行业集中');
     expect(screen.queryByText('Top1: 白酒')).not.toBeInTheDocument();
     expect(screen.getByText('行业数据暂不可用，当前展示个股集中度')).toBeInTheDocument();
     expect(screen.getByText('Top1: 600519')).toBeInTheDocument();
@@ -1589,15 +1559,15 @@ describe('PortfolioPage FX refresh', () => {
     }));
     render(<PortfolioPage />);
     await waitForInitialLoad();
-    const flag = screen.getByText(kind === 'sector' ? '行业集中' : '个股集中').closest('div.rounded-xl');
-    expect(within(flag as HTMLElement).getByText('100.00%')).toBeInTheDocument();
-    expect(within(flag as HTMLElement).getByText('需处理')).toBeInTheDocument();
-    expect(within(flag as HTMLElement).getByText(kind === 'sector' ? 'Top1: 白酒' : 'Top1: 600519')).toBeInTheDocument();
+    const flag = riskFlag(kind === 'sector' ? '行业集中' : '个股集中');
+    expect(within(flag).getByText('100.00%')).toBeInTheDocument();
+    expect(within(flag).getByText('需处理')).toBeInTheDocument();
+    expect(within(flag).getByText(kind === 'sector' ? 'Top1: 白酒' : 'Top1: 600519')).toBeInTheDocument();
     expect(screen.queryByText('暂无集中度数据')).not.toBeInTheDocument();
     expect(screen.getByText(kind === 'sector' ? '行业集中度分布' : '行业数据暂不可用，当前展示个股集中度')).toBeInTheDocument();
   });
 
-  it('marks stop-loss risk unavailable when any holding lacks a usable quote', async () => {
+  it('keeps stop-loss items out of the pending list when any holding lacks a usable quote', async () => {
     getSnapshot.mockResolvedValueOnce(makeSnapshot({
       fxStale: false,
       positions: [makePosition({
@@ -1618,10 +1588,10 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const stopLossFlag = screen.getByText('止损').closest('div.rounded-xl');
-    expect(stopLossFlag).not.toBeNull();
-    expect(within(stopLossFlag as HTMLElement).getByText('—')).toBeInTheDocument();
-    expect(within(stopLossFlag as HTMLElement).getAllByText('不可用')).toHaveLength(2);
+    const pending = within(await screen.findByTestId('portfolio-pending'));
+    expect(pending.getByText('600519 · 缺报价')).toBeInTheDocument();
+    expect(pending.queryByText(/止损/)).not.toBeInTheDocument();
+    expect(screen.queryByText('止损', { exact: true })).not.toBeInTheDocument();
   });
 
   it('uses the validated sector block alert when a top row disagrees', async () => {
@@ -1640,10 +1610,9 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
 
     await waitForInitialLoad();
-    const sectorFlag = screen.getByText('行业集中').closest('div.rounded-xl');
-    expect(sectorFlag).not.toBeNull();
-    expect(within(sectorFlag as HTMLElement).getByText('需处理')).toBeInTheDocument();
-    expect(within(sectorFlag as HTMLElement).getByText('70.00%')).toBeInTheDocument();
+    const sectorFlag = riskFlag('行业集中');
+    expect(within(sectorFlag).getByText('需处理')).toBeInTheDocument();
+    expect(within(sectorFlag).getByText('70.00%')).toBeInTheDocument();
     expect(screen.getByText('板块集中度告警: 是')).toBeInTheDocument();
   });
 
@@ -1678,9 +1647,9 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
 
-    const card = screen.getByText('价格质量').closest('div.rounded-xl');
+    const card = riskFlag('价格质量');
     expect(card).not.toBeNull();
-    const cardScope = within(card as HTMLElement);
+    const cardScope = within(card);
     expect(cardScope.getByText('2')).toBeInTheDocument();
     expect(cardScope.getByText('缺价: 1 · 过期价: 1')).toBeInTheDocument();
   });
@@ -1707,9 +1676,9 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
 
-    const card = screen.getByText('价格质量').closest('div.rounded-xl');
+    const card = riskFlag('价格质量');
     expect(card).not.toBeNull();
-    const cardScope = within(card as HTMLElement);
+    const cardScope = within(card);
     expect(cardScope.getByText('1')).toBeInTheDocument();
     expect(cardScope.getByText('缺价: 1 · 过期价: 0')).toBeInTheDocument();
   });
@@ -1724,9 +1693,11 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
 
-    expect(await screen.findByText('组合估值限制')).toBeInTheDocument();
-    expect(screen.getByText(/实时行情为尽力获取/)).toBeInTheDocument();
-    expect(screen.getByText(/汇率与成本基础为部分口径/)).toBeInTheDocument();
+    await screen.findByLabelText('汇率与估值说明');
+    const tooltip = hoverFxInfo();
+    expect(tooltip).toHaveTextContent('组合估值限制');
+    expect(tooltip).toHaveTextContent(/实时行情为尽力获取/);
+    expect(tooltip).toHaveTextContent(/汇率与成本基础为部分口径/);
   });
 
   it('renders portfolio risk drawdown labels in English UI mode', async () => {
@@ -1734,11 +1705,11 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
 
-    expect(await screen.findByText('Portfolio management')).toBeInTheDocument();
+    expect(await screen.findByText('Assets')).toBeInTheDocument();
     const dashboard = within(screen.getByTestId('portfolio-risk'));
     expect(dashboard.getByText('Drawdown')).toBeInTheDocument();
-    expect(dashboard.getByText('Stop loss')).toBeInTheDocument();
-    expect(dashboard.getByText('AI signals')).toBeInTheDocument();
+    expect(dashboard.queryByText('Stop loss')).not.toBeInTheDocument();
+    expect(dashboard.queryByText('AI signals')).not.toBeInTheDocument();
     expect(screen.queryByText('回撤')).not.toBeInTheDocument();
   });
 
@@ -1770,8 +1741,8 @@ describe('PortfolioPage FX refresh', () => {
     await waitForInitialLoad();
 
     const pending = within(screen.getByTestId('portfolio-pending'));
-    expect(pending.getByText('600519 · 卖出')).toBeInTheDocument();
-    expect(pending.getByText('300750 · 预警')).toBeInTheDocument();
+    expect(pending.getByText('600519 · AI 卖出')).toBeInTheDocument();
+    expect(pending.getByText('300750 · AI 预警')).toBeInTheDocument();
     expect(screen.queryByText('600519 · sell')).not.toBeInTheDocument();
     expect(screen.queryByText('300750 · alert')).not.toBeInTheDocument();
   });
@@ -1797,7 +1768,7 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
 
-    expect(screen.getByText('600519 · Sell')).toBeInTheDocument();
+    expect(screen.getByText('600519 · AI Sell')).toBeInTheDocument();
     expect(screen.queryByText('600519 · 卖出')).not.toBeInTheDocument();
     expect(screen.queryByText('600519 · sell')).not.toBeInTheDocument();
   });
@@ -1816,8 +1787,7 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
 
-    const flag = screen.getByText('AI 信号').closest('div.rounded-xl');
-    expect(within(flag as HTMLElement).getByText('—')).toBeInTheDocument();
+    expect(screen.queryByText('AI 信号')).not.toBeInTheDocument();
     expect(screen.queryByTestId('portfolio-pending')).not.toBeInTheDocument();
   });
 
@@ -1850,7 +1820,7 @@ describe('PortfolioPage FX refresh', () => {
     expect(listTrades).toHaveBeenCalledTimes(tradeCallsBeforeRefresh);
     expect(listCashLedger).not.toHaveBeenCalled();
     expect(listCorporateActions).not.toHaveBeenCalled();
-    expect(screen.getByText('最新')).toBeInTheDocument();
+    expect(screen.getByText('汇率 今日')).toBeInTheDocument();
   });
 
   it('refreshes FX for the full portfolio without sending accountId and shows neutral feedback when no pair exists', async () => {
@@ -1908,8 +1878,10 @@ describe('PortfolioPage FX refresh', () => {
     const table = await desktopHoldings();
     expect(table.getByText('HK00700')).toBeInTheDocument();
     expect(table.getByText('420.00')).toBeInTheDocument();
-    expect(table.getByText('HKD 4,200.00')).toBeInTheDocument();
-    expect(table.getByText('+5.00%')).toBeInTheDocument();
+    // The HKD group subtotal row now repeats value and P&L (W09), so scope to the holding row.
+    const hkHoldingRow = within(table.getByText('HK00700').closest('tr') as HTMLTableRowElement);
+    expect(hkHoldingRow.getByText('HKD 4,200.00')).toBeInTheDocument();
+    expect(hkHoldingRow.getByText('+5.00%')).toBeInTheDocument();
     expect(table.getByText('收盘价 · 2026-03-18')).toBeInTheDocument();
     expect(table.getByText('缺价')).toBeInTheDocument();
     expect(table.getAllByText('—').length).toBeGreaterThanOrEqual(2);
@@ -1943,7 +1915,8 @@ describe('PortfolioPage FX refresh', () => {
       market: 'cn',
       limit: 1,
     });
-    expect(decisionSignalsApi.list).not.toHaveBeenCalled();
+    // The grouped list missed this holding, so it fell back to the per-stock endpoint.
+    expect(decisionSignalsApi.list).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes holding signals when manually refreshing unchanged portfolio data', async () => {
@@ -2161,7 +2134,7 @@ describe('PortfolioPage FX refresh', () => {
     // 同一檔已合併成一列。
     expect(await screen.findAllByLabelText('唯一 latest 风险')).toHaveLength(1);
     expect(getLatestDecisionSignals).toHaveBeenCalledTimes(1);
-    expect(decisionSignalsApi.list).not.toHaveBeenCalled();
+    expect(decisionSignalsApi.list).toHaveBeenCalledTimes(1);
   });
 
   it('limits concurrent latest lookups for large portfolios', async () => {
@@ -2505,10 +2478,13 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
     await waitForInitialLoad();
 
-    expect(await screen.findByText('TWD 700,000.00')).toBeInTheDocument();
-    expect(screen.getByText('含基金 TWD 200,000.00')).toBeInTheDocument();
-    expect(screen.getByText('TWD +2,000.00')).toBeInTheDocument();
+    // Summary amounts: NT$ unit prefix rendered separately, TWD without decimals.
+    expect(await screen.findByText('700,000')).toBeInTheDocument();
+    expect(screen.getByText('含基金 NT$ 200,000')).toBeInTheDocument();
+    expect(screen.getByText('+2,000')).toBeInTheDocument();
+    expect(screen.getAllByText('NT$').length).toBeGreaterThan(0);
     expect(screen.queryByText('CNY 3,000.00')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^3,000$/)).not.toBeInTheDocument();
   });
 
   it('keeps today P&L unknown when funds have value but no day P&L', async () => {
@@ -2521,8 +2497,8 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
     await waitForInitialLoad();
 
-    await screen.findByText('TWD 520,000.00');
-    expect(screen.queryByText('TWD +777.00')).not.toBeInTheDocument();
+    await screen.findByText('520,000');
+    expect(screen.queryByText('+777')).not.toBeInTheDocument();
   });
 
   it('does not count missing fund value as zero and says the total excludes funds', async () => {
@@ -2535,7 +2511,7 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
     await waitForInitialLoad();
 
-    expect(await screen.findByText('TWD 500,000.00')).toBeInTheDocument();
+    expect(await screen.findByText('500,000')).toBeInTheDocument();
     expect(screen.getByText('不含基金（基金资料暂时无法取得）')).toBeInTheDocument();
   });
 
@@ -2555,7 +2531,7 @@ describe('PortfolioPage FX refresh', () => {
     await waitForInitialLoad();
 
     expect(await screen.findByText('缺汇率')).toBeInTheDocument();
-    expect(screen.getByText(/缺少 USD\/TWD 汇率/)).toBeInTheDocument();
+    expect(hoverFxInfo()).toHaveTextContent(/缺少 USD\/TWD 汇率/);
     expect(screen.queryByText(/3,000/)).not.toBeInTheDocument();
   });
 
@@ -2577,6 +2553,54 @@ describe('PortfolioPage FX refresh', () => {
     expect(dashboard.getAllByText('TWD 9,000.00').length).toBeGreaterThan(0);
     expect(dashboard.queryByText('CNY 2,000.00')).not.toBeInTheDocument();
     expect(dashboard.getAllByText('100.00%').length).toBeGreaterThan(0);
+  });
+
+  it('labels trade price and amount with the market currency, not the account base currency', async () => {
+    window.history.replaceState({}, '', '/portfolio?entry=trade');
+    getAccounts.mockResolvedValue(makeAccounts([{ id: 1, name: 'Main', market: 'us', baseCurrency: 'TWD' }]));
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    fireEvent.change(screen.getByLabelText('数量（股）'), { target: { value: '10' } });
+    fireEvent.change(await screen.findByLabelText('成交价（USD）'), { target: { value: '40' } });
+    expect(screen.queryByLabelText('成交价（TWD）')).not.toBeInTheDocument();
+    expect(screen.getByTestId('portfolio-trade-amount')).toHaveTextContent('USD 400.00');
+    expect(screen.getByTestId('portfolio-trade-amount')).not.toHaveTextContent('TWD');
+  });
+
+  it('does not show a 1:1 fallback account total as a real value when the account has missing FX', async () => {
+    getAccounts.mockResolvedValue(makeAccounts([{ id: 1, name: 'Main', market: 'us', baseCurrency: 'USD' }]));
+    const base = makeConsolidatedSnapshot({
+      consolidatedEquityBase: null,
+      consolidatedMarketValueBase: null,
+      consolidatedCashBase: null,
+      consolidatedUnrealizedPnlBase: null,
+      consolidatedRealizedPnlBase: null,
+      consolidatedDayPnlBase: null,
+      consolidatedFundValueBase: null,
+      consolidatedFundDayPnlBase: null,
+      fxMissing: true,
+      consolidatedFxMissing: true,
+      accounts: [{
+        ...makeSnapshot({ fxStale: false }).accounts[0],
+        baseCurrency: 'USD',
+        totalEquity: 1234.5,
+        totalMarketValue: 1234.5,
+        totalCash: 0,
+        fxMissing: true,
+      }],
+    });
+    getSnapshot.mockResolvedValue(base);
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+    fireEvent.click(await screen.findByRole('radio', { name: 'Main' }));
+    await waitFor(() => expect(getSnapshot).toHaveBeenLastCalledWith(snapshotQuery(1)));
+
+    expect(await screen.findAllByText('缺汇率')).not.toHaveLength(0);
+    expect(screen.queryByText('1,234.50')).not.toBeInTheDocument();
+    expect(screen.queryByText(/1,234\.5/)).not.toBeInTheDocument();
   });
 
   it('lists only anomalies in the pending section and jumps to the row', async () => {
@@ -2755,7 +2779,8 @@ describe('PortfolioPage FX refresh', () => {
     await waitForInitialLoad();
 
     fireEvent.click(await screen.findByRole('button', { name: '記一筆' }));
-    expect(screen.getByPlaceholderText('股票代號（例如 2330.TW）')).toBeInTheDocument();
+    expect(screen.getByLabelText('代號')).toHaveAttribute('placeholder', '例如 2330.TW');
+    expect(screen.getByLabelText('交易稅')).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/[账户录仓导资币种税]/);
   });
 
@@ -2792,5 +2817,272 @@ describe('PortfolioPage FX refresh', () => {
     selectAccount('Main');
     fireEvent.click(await desktop.findByRole('button', { name: '删除这笔' }));
     expect(await screen.findByText('删除错误流水')).toBeInTheDocument();
+  });
+
+  it('loads signals for 22 holdings with one grouped list request and no per-stock lookups', async () => {
+    const positions = Array.from({ length: 22 }, (_, index) => makePosition({
+      symbol: `${2300 + index}.TW`,
+      market: 'tw',
+      currency: 'TWD',
+      valuationCurrency: 'TWD',
+      marketValueBase: 1000 + index,
+    }));
+    getSnapshot.mockResolvedValueOnce(makeSnapshot({ fxStale: false, positions }));
+    listDecisionSignals.mockResolvedValue({
+      items: positions.map((position, index) => makeDecisionSignal({
+        id: 500 + index,
+        stockCode: String(position.symbol),
+        market: 'tw',
+        riskSummary: `訊號 ${index}`,
+      })),
+      total: 22,
+      page: 1,
+      pageSize: 100,
+    });
+
+    render(<PortfolioPage />);
+
+    expect((await screen.findAllByLabelText('訊號 0')).length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('訊號 21').length).toBeGreaterThan(0);
+    expect(listDecisionSignals).toHaveBeenCalledTimes(1);
+    expect(listDecisionSignals).toHaveBeenCalledWith(expect.objectContaining({
+      holdingOnly: true,
+      groupLatest: true,
+      status: 'active',
+    }));
+    expect(getLatestDecisionSignals).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the per-stock endpoint only for the holding the grouped list missed', async () => {
+    getSnapshot.mockResolvedValueOnce(makeSnapshot({ fxStale: false, positions: [
+      makePosition({ symbol: '2330.TW', market: 'tw', valuationCurrency: 'TWD', marketValueBase: 300 }),
+      makePosition({ symbol: '2303.TW', market: 'tw', valuationCurrency: 'TWD', marketValueBase: 200 }),
+      makePosition({ symbol: '2454.TW', market: 'tw', valuationCurrency: 'TWD', marketValueBase: 100 }),
+    ] }));
+    listDecisionSignals.mockResolvedValue({
+      items: [
+        makeDecisionSignal({ id: 1, stockCode: '2330.TW', market: 'tw', riskSummary: '台積電風險' }),
+        makeDecisionSignal({ id: 2, stockCode: '2303.TW', market: 'tw', riskSummary: '聯電風險' }),
+      ],
+      total: 2,
+      page: 1,
+      pageSize: 100,
+    });
+    getLatestDecisionSignals.mockResolvedValue({
+      items: [makeDecisionSignal({ id: 3, stockCode: '2454.TW', market: 'tw', riskSummary: '聯發科風險' })],
+      total: 1,
+      page: 1,
+      pageSize: 1,
+    });
+
+    render(<PortfolioPage />);
+
+    expect((await screen.findAllByLabelText('聯發科風險')).length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('台積電風險').length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('聯電風險').length).toBeGreaterThan(0);
+    expect(getLatestDecisionSignals).toHaveBeenCalledTimes(1);
+    expect(getLatestDecisionSignals).toHaveBeenCalledWith('2454.TW', { market: 'tw', limit: 1 });
+  });
+
+  it('scopes the grouped signal request to the selected account', async () => {
+    getSnapshot.mockResolvedValue(makeSnapshot({ fxStale: false, positions: [makePosition()] }));
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+    await waitFor(() => expect(listDecisionSignals).toHaveBeenCalled());
+
+    selectAccount('Main');
+
+    await waitFor(() => expect(listDecisionSignals).toHaveBeenLastCalledWith(expect.objectContaining({
+      holdingOnly: true,
+      groupLatest: true,
+      accountId: 1,
+    })));
+  });
+
+  it('keeps cross-currency weights and the Taiwan subtotal when FX is stale, flagging the weight header', async () => {
+    getAccounts.mockResolvedValueOnce(makeAccounts([{ id: 1, name: 'Main' }, { id: 8, name: 'US' }]));
+    const base = makeSnapshot({ fxStale: true, accountCount: 2 });
+    const account = base.accounts[0];
+    getSnapshot.mockResolvedValueOnce({
+      ...base,
+      totalMarketValue: 297_000,
+      fxMissing: false,
+      displayCurrency: 'TWD',
+      consolidatedMarketValueBase: 1_320_000,
+      consolidatedFxStale: true,
+      consolidatedFxMissing: false,
+      accounts: [
+        {
+          ...account,
+          accountId: 1,
+          accountName: 'Main',
+          baseCurrency: 'TWD',
+          totalMarketValue: 1_000_000,
+          totalMarketValueAggregate: 225_000,
+          positions: [
+            makePosition({ symbol: '2330.TW', market: 'tw', currency: 'TWD', valuationCurrency: 'TWD', marketValueBase: 600_000, unrealizedPnlBase: 100_000 }),
+            makePosition({ symbol: '2303.TW', market: 'tw', currency: 'TWD', valuationCurrency: 'TWD', marketValueBase: 400_000, unrealizedPnlBase: -50_000 }),
+          ],
+        },
+        {
+          ...account,
+          accountId: 8,
+          accountName: 'US',
+          baseCurrency: 'USD',
+          totalMarketValue: 10_000,
+          totalMarketValueAggregate: 72_000,
+          positions: [
+            makePosition({ symbol: 'AAPL', market: 'us', currency: 'USD', valuationCurrency: 'USD', marketValueBase: 10_000, unrealizedPnlBase: 1_000 }),
+          ],
+        },
+      ],
+    });
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    const table = await desktopHoldings();
+    expect(table.getByText('汇率过期')).toBeInTheDocument();
+    // 600,000 / 1,320,000 (TWD-equivalent total, same source as the summary cards).
+    expect(table.getByText('45.45%')).toBeInTheDocument();
+    const taiwan = table.getByText('台股（2 档）').closest('tr') as HTMLElement;
+    expect(within(taiwan).getByText('TWD 1,000,000.00')).toBeInTheDocument();
+    expect(within(taiwan).getByText('75.76%')).toBeInTheDocument();
+  });
+
+  it('labels the day P&L with the quote date when quotes are not from today', async () => {
+    const past = new Date();
+    past.setDate(past.getDate() - 3);
+    const pastIso = getTodayIsoFor(past);
+    getSnapshot.mockResolvedValueOnce(makeSnapshot({ fxStale: false, positions: [makePosition({ priceDate: pastIso })] }));
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    const label = `${pastIso.slice(5, 7)}/${pastIso.slice(8, 10)} 损益`;
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    expect(screen.getByText('台美股休市')).toBeInTheDocument();
+    expect(screen.queryByText('今日')).not.toBeInTheDocument();
+  });
+
+  it('keeps the plain today label when quotes are from today', async () => {
+    getSnapshot.mockResolvedValueOnce(makeSnapshot({ fxStale: false, positions: [makePosition({ priceDate: getTodayIsoFor(new Date()) })] }));
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    expect(await screen.findByText('今日')).toBeInTheDocument();
+    expect(screen.queryByText('台美股休市')).not.toBeInTheDocument();
+  });
+
+  it('shows side, price and quantity on the mobile trade card', async () => {
+    listTrades.mockResolvedValue({
+      items: [
+        { id: 7, accountId: 1, symbol: '2330.TW', market: 'tw', currency: 'TWD', tradeDate: '2026-10-01', side: 'buy', quantity: 10, price: 1000, fee: 1, tax: 2 },
+        { id: 8, accountId: 1, symbol: '2303.TW', market: 'tw', currency: 'TWD', tradeDate: '2026-10-02', side: 'sell', quantity: 5, price: 50, fee: 1, tax: 2 },
+      ],
+      total: 2, page: 1, pageSize: 20,
+    });
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    const records = within(await screen.findByTestId('portfolio-records'));
+    const mobile = within(await records.findByTestId('data-table-mobile'));
+    expect(await mobile.findByText('买入')).toBeInTheDocument();
+    expect(mobile.getByText('卖出')).toBeInTheDocument();
+    expect(mobile.getByText('TWD 1,000.00')).toBeInTheDocument();
+    expect(mobile.getByText('10 股')).toBeInTheDocument();
+    expect(mobile.getByText('2026-10-02')).toBeInTheDocument();
+  });
+
+  it('merges a stop loss and an AI signal on the same holding into one pending row', async () => {
+    getSnapshot.mockResolvedValueOnce(makeSnapshot({
+      fxStale: false,
+      positions: [
+        makePosition({ symbol: '2303.TW', market: 'tw', name: '聯電' }),
+        makePosition({ symbol: '2330.TW', market: 'tw', name: '台積電' }),
+      ],
+    }));
+    getRisk.mockResolvedValueOnce(makeRisk({
+      stopLoss: {
+        nearAlert: true,
+        triggeredCount: 1,
+        nearCount: 1,
+        items: [{ accountId: 1, symbol: '2303.TW', avgCost: 100, lastPrice: 64.58, lossPct: 35.42, nearThresholdPct: 12, isTriggered: true }],
+      },
+      decisionSignalRisk: {
+        available: true,
+        total: 1,
+        actions: { sell: 1, reduce: 0, alert: 0 },
+        items: [{
+          accountId: 1,
+          symbol: '2303.TW',
+          market: 'tw',
+          signal: makeDecisionSignal({ id: 301, stockCode: '2303.TW', market: 'tw', action: 'sell', actionLabel: null }),
+        }],
+      },
+    }));
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    const pending = within(await screen.findByTestId('portfolio-pending'));
+    expect(pending.getAllByRole('listitem')).toHaveLength(1);
+    expect(pending.getByRole('button', { name: '聯電 2303.TW · 止损已触发 \u221235.4% · AI 卖出' })).toBeInTheDocument();
+  });
+
+  it('opens the record drawer from ?entry=trade and drops the parameter once it closes', async () => {
+    window.history.replaceState({}, '', '/portfolio?entry=trade');
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    expect(screen.getByRole('button', { name: '提交交易' })).toBeInTheDocument();
+    expect(window.location.search).toBe('?entry=trade');
+    fireEvent.change(screen.getByLabelText('数量（股）'), { target: { value: '1000' } });
+    // makeAccounts() defaults to a US-market account with CNY base: ledger rows follow the market currency (USD).
+    fireEvent.change(await screen.findByLabelText('成交价（USD）'), { target: { value: '52.5' } });
+    expect(screen.getByTestId('portfolio-trade-amount')).toHaveTextContent('成交金额 USD 52,500.00');
+
+    fireEvent.click(screen.getByRole('button', { name: '关闭抽屉' }));
+
+    expect(screen.queryByRole('button', { name: '提交交易' })).not.toBeInTheDocument();
+    await waitFor(() => expect(window.location.search).toBe(''));
+    expect(window.location.pathname).toBe('/portfolio');
+  });
+
+  it('opens the import drawer from ?entry=import with both sections set to dry run', async () => {
+    window.history.replaceState({}, '', '/portfolio?entry=import');
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    const dryRuns = screen.getAllByLabelText('仅预演（不写入）') as HTMLInputElement[];
+    expect(dryRuns).toHaveLength(2);
+    expect(dryRuns.every((checkbox) => checkbox.checked)).toBe(true);
+    expect(screen.getAllByRole('button', { name: '预演导入' })).toHaveLength(2);
+    expect(screen.getByRole('button', { name: '券商 CSV（中国券商）' })).toBeInTheDocument();
+    expect(screen.getByLabelText('默认建仓日期')).toHaveAttribute('type', 'date');
+
+    // Unticking the paste dry run turns its submit button into an explicit write.
+    fireEvent.click(dryRuns[0]);
+    expect(screen.getByRole('button', { name: '确认写入' })).toBeInTheDocument();
+    expect(commitTextImport).not.toHaveBeenCalled();
+  });
+
+  it('labels known brokers in Traditional Chinese even when the API sends simplified names', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+    render(
+      <UiLanguageProvider>
+        <PortfolioPage />
+      </UiLanguageProvider>,
+    );
+    await waitForInitialLoad();
+
+    fireEvent.click(await screen.findByRole('button', { name: '匯入' }));
+    expect(screen.getByRole('option', { name: '華泰' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog').textContent).not.toContain('华泰');
   });
 });

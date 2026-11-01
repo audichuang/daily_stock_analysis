@@ -9,6 +9,13 @@ import { cn } from '../../utils/cn';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import type { UiTextKey } from '../../i18n/uiText';
 
+// Taiwan and US listings first (this fork's markets); the rest keep their relevance order.
+const PRIORITY_MARKETS = ['TW', 'US'];
+const marketRank = (market: string): number => {
+  const index = PRIORITY_MARKETS.indexOf(market);
+  return index === -1 ? PRIORITY_MARKETS.length : index;
+};
+
 export interface SuggestionsListProps {
   /** Suggestion list */
   suggestions: StockSuggestion[];
@@ -33,19 +40,25 @@ export function SuggestionsList({
     return null;
   }
 
+  // Reorder for display only. The parent's highlightedIndex, hover and Enter all index the
+  // original array, so every rendered row keeps its original index.
+  const ordered = suggestions
+    .map((suggestion, index) => ({ suggestion, index }))
+    .sort((a, b) => marketRank(a.suggestion.market) - marketRank(b.suggestion.market) || a.index - b.index);
+
   return (
     <ul
       id="suggestions-list"
       className="z-[100] border-x border-b rounded-b-lg rounded-t-none max-h-60 overflow-auto"
       style={{
         ...style,
-        backgroundColor: 'hsl(var(--card) / 0.85)',
+        backgroundColor: 'hsl(var(--card))',
         borderColor: 'var(--border-accent)',
         boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3), -4px 0 15px -3px rgba(0, 0, 0, 0.2), 4px 0 15px -3px rgba(0, 0, 0, 0.2)',
       }}
       role="listbox"
     >
-      {suggestions.map((suggestion, index) => (
+      {ordered.map(({ suggestion, index }) => (
         <li
           key={suggestion.canonicalCode}
           role="option"
@@ -70,8 +83,6 @@ export function SuggestionsList({
               </span>
             </div>
           </div>
-
-          <MatchTypeBadge matchType={suggestion.matchType} />
         </li>
       ))}
     </ul>
@@ -101,24 +112,6 @@ function MarketBadge({ market }: { market: string }) {
   return (
     <Badge variant="default" size="sm" className={cn('min-w-[3rem] justify-center shadow-none', config.className)}>
       {t(config.labelKey)}
-    </Badge>
-  );
-}
-
-function MatchTypeBadge({ matchType }: { matchType: string }) {
-  const { t } = useUiLanguage();
-  const configMap = {
-    exact: { labelKey: 'autocomplete.match.exact', className: 'border-cyan/25 bg-cyan/10 text-cyan' },
-    prefix: { labelKey: 'autocomplete.match.prefix', className: 'border-purple/25 bg-purple/10 text-purple' },
-    contains: { labelKey: 'autocomplete.match.contains', className: 'border-warning/25 bg-warning/10 text-warning' },
-    fuzzy: { labelKey: 'autocomplete.match.fuzzy', className: 'border-border/55 bg-elevated/75 text-muted-text' },
-  };
-
-  const config = configMap[matchType as keyof typeof configMap] || configMap.fuzzy;
-
-  return (
-    <Badge variant="default" size="sm" className={cn('shrink-0 shadow-none', config.className)}>
-      {t(config.labelKey as UiTextKey)}
     </Badge>
   );
 }

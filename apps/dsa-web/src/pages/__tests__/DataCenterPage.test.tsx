@@ -168,16 +168,34 @@ describe('DataCenterPage', () => {
     expect(await screen.findByTestId('data-center-conclusion')).toHaveTextContent('台股 指數日線 停在 2099-02-20');
   });
 
-  it('counts ok, unchecked, off and issue separately', async () => {
+  it('counts the same rows the tables list, so the cards add up to the row count', async () => {
     renderPage();
     await screen.findByTestId('data-center-conclusion');
     const group = within(screen.getByTestId('metric-group'));
-    const value = (label: string) => group.getByText(label).parentElement;
-    // kline、portfolio 正常；news 未檢查；screening 未啟用。
-    expect(value('正常')).toHaveTextContent('2');
-    expect(value('尚未檢查')).toHaveTextContent('1');
-    expect(value('未啟用')).toHaveTextContent('1');
-    expect(value('異常')).toHaveTextContent('0');
+    const value = (label: string) => Number(group.getByText(label).parentElement?.querySelector('[data-metric-value]')?.textContent);
+    // 台股、美股日 K 與持股帳本正常；news 未檢查；screening 未啟用（港股收在其他市場，不計）。
+    expect(value('正常')).toBe(3);
+    expect(value('尚未檢查')).toBe(1);
+    expect(value('未啟用')).toBe(1);
+    expect(value('異常')).toBe(0);
+    const tableRows = within(screen.getByRole('table', { name: '市場資料狀態' })).getAllByRole('row').length - 1
+      + within(screen.getByRole('table', { name: '其他資料' })).getAllByRole('row').length - 1;
+    expect(value('正常') + value('尚未檢查') + value('未啟用') + value('異常')).toBe(tableRows);
+    expect(group.getByText('共 5 項（台股、美股與系統）')).toBeInTheDocument();
+  });
+
+  it('shows a muted line instead of a banner when the only gap is unchecked data', async () => {
+    getOverview.mockResolvedValue({
+      ...overview,
+      datasets: [{
+        ...healthyKline,
+        coverage: { markets: { tw: market('ok', 'marketdb'), us: market('unknown', null) } },
+      }],
+    });
+    renderPage();
+    const conclusion = await screen.findByTestId('data-center-conclusion');
+    expect(conclusion).toHaveTextContent('1 項尚未被呼叫過，休市或首次啟動時屬正常');
+    expect(within(conclusion).queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('puts Taiwan and US first and folds other markets away', async () => {

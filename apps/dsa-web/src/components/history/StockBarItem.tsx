@@ -6,6 +6,7 @@ import { buildDecisionActionLabelMap, getDecisionActionLabel, getDecisionActionT
 import { formatPercent, formatPrice } from '../../utils/format';
 import { getStockRowLabels } from '../../utils/stockName';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import { HOME_TEXT, formatMonthDay } from '../../locales/homeText';
 
 interface StockBarItemProps {
   item: StockBarItemType;
@@ -16,13 +17,16 @@ interface StockBarItemProps {
   quote?: StockQuote;
   /** 大盤複盤列的燈號，例如「台股 紅燈」。 */
   marketLightLabel?: string;
+  /** 大盤複盤列標題裡的市場，例如「美股」；沒給就只寫日期。 */
+  marketReviewRegionLabel?: string;
 }
 
-const ACTION_TAG_CLASS: Record<DecisionActionTone, string> = {
-  brand: 'border-primary/30 bg-primary/10 text-primary',
-  neutral: 'border-subtle bg-base/40 text-secondary-text',
-  caution: 'border-warning/30 bg-warning/10 text-warning',
-  default: 'border-subtle bg-base/40 text-secondary-text',
+// Only buy/add (brand) and reduce/sell (caution) get a fill; neutral and unknown actions are muted text.
+const ACTION_TAG_VARIANT: Record<DecisionActionTone, 'brand' | 'neutral' | 'caution'> = {
+  brand: 'brand',
+  neutral: 'neutral',
+  caution: 'caution',
+  default: 'neutral',
 };
 
 /** 動作＋分數小標；動作一律依結構化枚舉查表。 */
@@ -41,16 +45,19 @@ export const StockActionTag: React.FC<{ item?: StockBarItemType }> = ({ item }) 
   );
   return (
     <Badge
-      variant="default"
+      variant={ACTION_TAG_VARIANT[getDecisionActionTone(item?.action, item?.actionLabel, item?.operationAdvice)]}
       size="sm"
-      className={`shrink-0 shadow-none text-[11px] font-semibold leading-none ${ACTION_TAG_CLASS[getDecisionActionTone(item?.action, item?.actionLabel, item?.operationAdvice)]}`}
+      className="shrink-0 shadow-none text-[11px] font-semibold leading-none"
     >
       {label} {score}
     </Badge>
   );
 };
 
-/** 52px 清單列的兩行：股名與現價／代號、漲跌％與動作分數。三個頁籤共用。 */
+/**
+ * 52px 清單列的兩行：股名與現價／代號、漲跌％與動作分數。三個頁籤共用。
+ * 沒有行情時第一行價格位置改放分析時價（muted，標「分析時」），第二行只剩代號與動作。
+ */
 export const StockRowLines: React.FC<{
   code: string;
   name?: string | null;
@@ -59,16 +66,24 @@ export const StockRowLines: React.FC<{
   item?: StockBarItemType;
   trailing?: React.ReactNode;
 }> = ({ code, name, quote, analysisPrice, item, trailing }) => {
-  const { t } = useUiLanguage();
+  const { language } = useUiLanguage();
+  const homeText = HOME_TEXT[language];
   const { primary, secondary } = getStockRowLabels(code, name);
   const hasQuote = typeof quote?.currentPrice === 'number';
+  const showAnalysisPrice = !hasQuote && typeof analysisPrice === 'number';
   return (
     <div className="min-w-0 flex-1">
       <div className="flex min-w-0 items-baseline justify-between gap-2">
         <span className="min-w-0 truncate text-sm font-semibold text-foreground tracking-tight">{primary}</span>
-        <span className="shrink-0 text-sm font-semibold tabular-nums text-foreground" data-testid="stock-row-price">
-          {formatPrice(hasQuote ? quote?.currentPrice : null)}
-        </span>
+        {showAnalysisPrice ? (
+          <span className="shrink-0 text-xs tabular-nums text-muted-text" data-testid="stock-row-price">
+            {formatPrice(analysisPrice)} · {homeText.analysisPriceSuffix}
+          </span>
+        ) : (
+          <span className="shrink-0 text-sm font-semibold tabular-nums text-foreground" data-testid="stock-row-price">
+            {formatPrice(hasQuote ? quote?.currentPrice : null)}
+          </span>
+        )}
       </div>
       <div className="mt-0.5 flex min-w-0 items-center justify-between gap-2" data-testid="history-card-meta">
         <span className="min-w-0 truncate text-[11px] text-secondary-text">{secondary}</span>
@@ -77,10 +92,6 @@ export const StockRowLines: React.FC<{
             <Change value={quote?.changePercent} className="text-[11px] font-medium">
               {formatPercent(quote?.changePercent)}
             </Change>
-          ) : typeof analysisPrice === 'number' ? (
-            <span className="text-[11px] tabular-nums text-muted-text">
-              {t('stockBar.analysisPriceTag', { price: formatPrice(analysisPrice) })}
-            </span>
           ) : null}
           <StockActionTag item={item} />
           {trailing}
@@ -97,9 +108,14 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
   isMarketReview = false,
   quote,
   marketLightLabel,
+  marketReviewRegionLabel,
 }) => {
-  const { t } = useUiLanguage();
+  const { t, language } = useUiLanguage();
   const stockName = item.stockName || item.stockCode;
+  const marketReviewTitle = [
+    HOME_TEXT[language].latestReview,
+    [marketReviewRegionLabel, formatMonthDay(item.lastAnalysisTime)].filter(Boolean).join(' '),
+  ].filter(Boolean).join(' · ');
 
   return (
     <button
@@ -116,7 +132,9 @@ export const StockBarItemComponent: React.FC<StockBarItemProps> = ({
         {isMarketReview ? (
           <>
             <div className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-semibold text-foreground tracking-tight">{stockName}</span>
+              <span className="block truncate text-sm font-semibold text-foreground tracking-tight" data-testid="market-review-title">
+                {marketReviewTitle}
+              </span>
               <span className="mt-0.5 block truncate text-[11px] text-secondary-text" data-testid="market-review-light">
                 {marketLightLabel || t('stockBar.market')}
               </span>

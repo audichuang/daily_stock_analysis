@@ -58,6 +58,21 @@ const ACTION_LABEL_ALIASES: Record<string, DecisionAction> = {
 const actionFromLabel = (label?: string | null): DecisionAction | null =>
   ACTION_LABEL_ALIASES[label?.trim() ?? ''] ?? null;
 
+const DECISION_ACTION_ENUM_VALUES: readonly DecisionAction[] = ['buy', 'add', 'hold', 'reduce', 'sell', 'watch', 'avoid', 'alert'];
+
+/**
+ * Exact-match normalization of a stored action label (any script) or enum name to the action enum.
+ * No substring scanning: free-form advice returns null so callers can bucket it as unclassified.
+ */
+export const normalizeDecisionActionAlias = (raw?: string | null): DecisionAction | null => {
+  const trimmed = raw?.trim() ?? '';
+  if (!trimmed) return null;
+  const aliased = actionFromLabel(trimmed);
+  if (aliased) return aliased;
+  const lower = trimmed.toLowerCase();
+  return DECISION_ACTION_ENUM_VALUES.find((action) => action === lower) ?? null;
+};
+
 const includesAny = (value: string, phrases: readonly string[]): boolean =>
   phrases.some((phrase) => value.includes(phrase));
 

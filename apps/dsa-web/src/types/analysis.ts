@@ -155,6 +155,12 @@ export interface ReportSummary {
   confidenceReason?: string | null;
   guardrailApplied?: boolean | null;
   guardrailReason?: string | null;
+  /** 護欄介入前模型原本的一句話（後端 B02）。 */
+  modelOneSentence?: string | null;
+  /** 護欄介入前模型原本的分持股建議（後端 B02）。 */
+  modelPositionAdvice?: { noPosition?: string | null; hasPosition?: string | null } | null;
+  /** 護欄類型：資料缺而降級，或市場邏輯調整（後端 B02）。 */
+  guardrailKind?: 'data_unavailable' | 'market_logic' | null;
   strongestBullishSignal?: string | null;
   strongestBearishSignal?: string | null;
   phaseWatchConditions?: string[] | null;

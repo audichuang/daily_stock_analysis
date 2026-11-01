@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [改進] 介面全面打磨（10 個 agent 實看畫面＋6 個 agent 提案後整理成 29 張票）：
+  - Web：修正全域 CSS 蓋掉按鈕字級與連結色；行情紅綠亮度拉平、深色次要字對比提到 AA；金額不再從中間斷行並加 NT$／US$ 前綴；手機與 iOS 內嵌頁只留一個標題、全站頁名統一；大盤複盤的明日計畫置頂、只留一組動作列，產生新複盤前先確認；首頁清單表頭壓縮、待處理事項置頂；盯盤、報告、資產、基金、AI 建議、回測、問股、警報、資料中心、AI 用量、設定各頁版面整理；從報告價位一鍵建價格警報（`/alerts?new=1&type=price_cross&direction=&price=`）；持股頁決策訊號由逐檔請求改成一次
+  - iOS：共用設計層（卡片、列距、動作徽章、chip）；失效條件不再重複三次、不露英文欄位名；今日頁盤勢卡顯示燈號與結論、新增「持股待辦」；自選、個股、AI 研究、報告、資產、工具頁版面整理；個股頁與報告頁可直接「設警報」「問 AI 這檔」；護欄改寫結論時保留模型原句並以可展開標籤標示；Access 憑證改在 sheet 編輯、不再踢出 App
+- [改進] 後端回應開啟 gzip（SSE 串流除外），帶 hash 的靜態檔改長期快取、股票索引快取一小時；報告新增選填欄位保留護欄改寫前的模型建議（舊欄位不變）；失效條件的價位寫成數字並去重；完整報告「週轉率 None%」改顯示暫無
 - [修復] 問股問「今天台股大盤怎麼看」時抓不到加權指數：`get_market_indices` 工具補上 `tw` 地區，模型不必再拿指數代號呼叫受討論對象限制的個股工具（先前一律回 `stock_scope_violation`）
 - [修復] 手機報告的「完整分析報告／追問 AI」操作列不再被底部分頁蓋住；手機開 `/funds?fund=` 直接顯示基金詳情；`?stock=` 查無報告或查詢失敗時不再顯示上一檔報告
 - [修復] 問股切換標的後，摘要卡不再顯示上一檔的結論、價位與報價

@@ -160,7 +160,8 @@ function hasDisplayValue(value: string): boolean {
 
 const SOLID_TONE_CLASS: Record<DecisionActionTone, string> = {
   brand: 'bg-cyan text-slate-950',
-  neutral: 'bg-secondary-text text-background',
+  // Same look as Badge variant="neutral": muted text only, no fill.
+  neutral: 'bg-transparent text-muted-text',
   caution: 'bg-warning text-slate-950',
   default: 'bg-elevated text-secondary-text',
 };
@@ -172,7 +173,7 @@ export const SignalActionTag: React.FC<{ item: DecisionSignalItem }> = ({ item }
     <span
       data-tone={getDecisionActionTone(item.action, item.actionLabel, null)}
       className={cn(
-        'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-semibold',
+        'inline-flex shrink-0 items-center whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-semibold leading-none',
         SOLID_TONE_CLASS[getDecisionActionTone(item.action, item.actionLabel, null)],
       )}
     >

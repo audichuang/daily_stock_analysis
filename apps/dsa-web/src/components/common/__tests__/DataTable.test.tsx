@@ -66,9 +66,46 @@ describe('DataTable 桌機', () => {
 
   it('表頭與 sticky 欄固定，minWidth 生效', () => {
     setup();
-    expect(desktop().getAllByRole('rowgroup')[0]).toHaveClass('sticky', 'top-0');
+    expect(desktop().getAllByRole('rowgroup')[0]).toHaveClass('sticky', 'top-[calc(var(--shell-header-height)+var(--shell-status-height))]');
     expect(desktop().getByRole('columnheader', { name: '代號' })).toHaveClass('sticky', 'left-0');
     expect(desktop().getByRole('columnheader', { name: '產業' })).toHaveStyle({ minWidth: '120px' });
+  });
+
+  it('沒給 maxHeight 時不建立內層垂直捲動，表頭貼在狀態列下方', () => {
+    setup();
+    const container = screen.getByTestId('data-table-desktop');
+    expect(container).toHaveClass('overflow-x-clip');
+    expect(container).not.toHaveClass('overflow-y-auto');
+    expect(container).not.toHaveClass('overflow-auto');
+    expect(container).not.toHaveClass('overflow-x-auto');
+    expect(container.style.maxHeight).toBe('');
+    expect(container.querySelector('thead')?.className).toContain('--shell-status-height');
+  });
+
+  it('表格比容器寬時改成可橫向捲動，才拿得到右側欄位', () => {
+    const widthSpy = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(1029);
+    const clientSpy = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(702);
+    try {
+      setup();
+      const container = screen.getByTestId('data-table-desktop');
+      expect(container).toHaveClass('overflow-x-auto');
+      expect(container).not.toHaveClass('overflow-x-clip');
+      // 容器自己變成捲動容器，sticky 以它為基準，不能再套 shell 位移，否則表頭蓋住資料列
+      const thead = container.querySelector('thead');
+      expect(thead).toHaveClass('top-0');
+      expect(thead?.className).not.toContain('--shell-');
+    } finally {
+      widthSpy.mockRestore();
+      clientSpy.mockRestore();
+    }
+  });
+
+  it('有給 maxHeight 時維持內層捲動、表頭貼容器頂端', () => {
+    setup({ maxHeight: 320 });
+    const container = screen.getByTestId('data-table-desktop');
+    expect(container).toHaveClass('overflow-auto');
+    expect(container).toHaveStyle({ maxHeight: '320px' });
+    expect(desktop().getAllByRole('rowgroup')[0]).toHaveClass('sticky', 'top-0');
   });
 
   it('整列 unavailable 淡化且不能點', () => {

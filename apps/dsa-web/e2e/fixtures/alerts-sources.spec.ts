@@ -13,12 +13,17 @@ test('alerts disclose legacy sources with an empty database list', async ({ page
       ? { authEnabled: false, loggedIn: true, setupState: 'no_password' }
       : path === '/api/v1/portfolio/accounts'
         ? { accounts: [] }
-        : {
-          items: [], total: 0, page: 1, page_size: 20,
-          ...(path === '/api/v1/alerts/rules'
-            ? { rule_sources: { legacy_configured: 2, legacy_effective: 1 } }
-            : {}),
-        };
+        : path === '/api/v1/alerts/monitor/status'
+          ? {
+            enabled: true, without_schedule: false, running: true, mode: 'scheduler', reason: null,
+            interval_seconds: 300, channels: [], enabled_rules: 0,
+          }
+          : {
+            items: [], total: 0, page: 1, page_size: 20,
+            ...(path === '/api/v1/alerts/rules'
+              ? { rule_sources: { legacy_configured: 2, legacy_effective: 1 } }
+              : {}),
+          };
     await route.fulfill({ json });
   });
   await page.goto('/alerts');

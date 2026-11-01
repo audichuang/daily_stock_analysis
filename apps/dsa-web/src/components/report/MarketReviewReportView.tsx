@@ -1,8 +1,9 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BarChart3, Clipboard, FileText, Gauge, RotateCcw, ShieldAlert, TrendingUp, WalletCards, Workflow } from 'lucide-react';
+import { BarChart3, ChevronDown, Clipboard, FileText, Gauge, RotateCcw, ShieldAlert, Target, TrendingUp, WalletCards, Workflow } from 'lucide-react';
 import { historyApi } from '../../api/history';
 import { formatUiText, UI_TEXT } from '../../i18n/uiText';
+import { getMarketReviewUiText } from '../../locales/marketReviewText';
 import type {
   AnalysisReport,
   MarketReviewIndexTrend,
@@ -11,9 +12,10 @@ import type {
   MarketReviewRegion,
   ReportLanguage,
 } from '../../types/analysis';
-import { formatNumber, formatPercent } from '../../utils/format';
+import { formatDateTime, formatNumber, formatPercent } from '../../utils/format';
 import { markdownToPlainText } from '../../utils/markdown';
 import { marketToneClass } from '../../utils/marketTone';
+import { splitLeadingEmoji } from '../../utils/reportMarkdown';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
 import { Button, Card, Change, Segmented } from '../common';
 import { ActionMenu, type ActionMenuItem } from '../common/ActionMenu';
@@ -28,6 +30,10 @@ interface MarketReviewReportViewProps {
   reportLanguage?: ReportLanguage;
   className?: string;
   onOpenRunFlow?: (recordId: number) => void;
+  /** Shows a "full report" button in the hero (history view opens the markdown drawer). */
+  onOpenFullReport?: () => void;
+  /** Page-level actions merged into the hero's single ⋯ menu. */
+  extraActionItems?: ActionMenuItem[];
 }
 
 type CopyType = 'markdown' | 'text';
@@ -80,8 +86,14 @@ const stripTopHeading = (markdown: string, title?: string): string => {
   return markdown.trim();
 };
 
+// 舊報告沒有 next_day_plan 時，用來找出該提前的計畫段落。
+const PLAN_TITLE_PATTERN = /明日|交易計畫|交易计划|next.?day|plan/i;
+
 const getSectionIcon = (title: string): typeof FileText => {
   const normalized = normalizeHeading(title);
+  if (PLAN_TITLE_PATTERN.test(normalized)) {
+    return Target;
+  }
   // 比對 LLM 標題，舊報告可能是簡體，用跳脫保留比對能力。
   if (/指\u6570|指數|index|overview|大盘|大盤/.test(normalized)) {
     return BarChart3;
@@ -99,6 +111,13 @@ const getSectionIcon = (title: string): typeof FileText => {
     return ShieldAlert;
   }
   return FileText;
+};
+
+// LLM 標題可能帶 🎯 等 emoji：顯示時拿掉，改用 lucide icon；Overview 一律顯示成「摘要」。
+const cleanSectionTitle = (title: string, overviewLabel: string): string => {
+  const { emoji, rest } = splitLeadingEmoji(title.trim());
+  const stripped = (emoji ? rest : title).trim();
+  return /^(overview|复盘概览|復盤概覽)$/i.test(stripped) ? overviewLabel : stripped;
 };
 
 const splitMarketReviewSections = (markdown: string): MarketReviewSection[] => {
@@ -187,8 +206,17 @@ const coerceFiniteNumber = (value: unknown): number | null => {
   return null;
 };
 
-// 舊報告沒有 next_day_plan：這個 key 的段落（消息催化／後市展望）提前到計畫卡的位置。
-const LEGACY_PLAN_SECTION_KEY = 'news_catalysts';
+// 舊報告沒有 next_day_plan：這些 key 的段落（消息催化／後市展望／明日交易計畫）提前到計畫卡的位置，
+// key 都對不到時再用標題兜底。
+const LEGACY_PLAN_SECTION_KEYS = ['news_catalysts', '四_明日交易計畫'];
+
+const findLegacyPlanSection = (sections: MarketReviewSection[]): MarketReviewSection | undefined => {
+  for (const key of LEGACY_PLAN_SECTION_KEYS) {
+    const matched = sections.find((section) => section.key === key);
+    if (matched) return matched;
+  }
+  return sections.find((section) => PLAN_TITLE_PATTERN.test(section.title));
+};
 const MARKET_TAB_PRIORITY = ['tw', 'us'];
 
 const orderMarketKeys = (markets: Record<string, MarketReviewPayload>): string[] => {
@@ -277,13 +305,8 @@ const getLocalizedIndexName = (
 const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
   reviewSummary: string;
   noReviewSummary: string;
-  noSentimentScore: string;
   rotationAndFunds: string;
-  noRotationView: string;
   riskAndWatch: string;
-  noRiskWatch: string;
-  structuredMarketData: string;
-  noBreadthData: string;
   advancers: string;
   decliners: string;
   limitUpDown: string;
@@ -313,11 +336,7 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
   risks: string;
   keyLevels: string;
   sectorBoard: string;
-  noSectorData: string;
   fullText: string;
-  lightGreen: string;
-  lightYellow: string;
-  lightRed: string;
   dimBreadth: string;
   dimIndex: string;
   dimLimit: string;
@@ -332,13 +351,8 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
   zh: {
     reviewSummary: '复盘摘要',
     noReviewSummary: '暂无摘要',
-    noSentimentScore: '暂无评分',
     rotationAndFunds: '轮动与资金',
-    noRotationView: '暂无轮动观点',
     riskAndWatch: '风险与观察',
-    noRiskWatch: '暂无观察重点',
-    structuredMarketData: '结构化大盘数据',
-    noBreadthData: '暂无数据',
     advancers: '上涨家数',
     decliners: '下跌家数',
     limitUpDown: '涨停/跌停',
@@ -368,11 +382,7 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
     risks: '风险',
     keyLevels: '关键价位',
     sectorBoard: '类股排行',
-    noSectorData: '这个场次没有类股资料',
     fullText: '完整内容',
-    lightGreen: '绿灯',
-    lightYellow: '黄灯',
-    lightRed: '红灯',
     dimBreadth: '广度',
     dimIndex: '指数',
     dimLimit: '涨跌停',
@@ -387,13 +397,8 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
   en: {
     reviewSummary: 'Review Summary',
     noReviewSummary: 'No review summary yet',
-    noSentimentScore: 'No score yet',
     rotationAndFunds: 'Rotation & Funds',
-    noRotationView: 'No rotation view yet',
     riskAndWatch: 'Risks & Watchlist',
-    noRiskWatch: 'No key observations yet',
-    structuredMarketData: 'Structured Market Data',
-    noBreadthData: 'No data',
     advancers: 'Advancers',
     decliners: 'Decliners',
     limitUpDown: 'Limit Up/Down',
@@ -423,11 +428,7 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
     risks: 'Risks',
     keyLevels: 'Key Levels',
     sectorBoard: 'Sector Ranking',
-    noSectorData: 'No sector data for this session',
     fullText: 'Full Text',
-    lightGreen: 'Green',
-    lightYellow: 'Yellow',
-    lightRed: 'Red',
     dimBreadth: 'Breadth',
     dimIndex: 'Index',
     dimLimit: 'Limits',
@@ -442,13 +443,8 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
   'zh-TW': {
     reviewSummary: '復盤摘要',
     noReviewSummary: '暫無摘要',
-    noSentimentScore: '暫無評分',
     rotationAndFunds: '輪動與資金',
-    noRotationView: '暫無輪動觀點',
     riskAndWatch: '風險與觀察',
-    noRiskWatch: '暫無觀察重點',
-    structuredMarketData: '結構化大盤資料',
-    noBreadthData: '暫無資料',
     advancers: '上漲家數',
     decliners: '下跌家數',
     limitUpDown: '漲停/跌停',
@@ -478,11 +474,7 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
     risks: '風險',
     keyLevels: '關鍵價位',
     sectorBoard: '類股排行',
-    noSectorData: '這個場次沒有類股資料',
     fullText: '完整內容',
-    lightGreen: '綠燈',
-    lightYellow: '黃燈',
-    lightRed: '紅燈',
     dimBreadth: '廣度',
     dimIndex: '指數',
     dimLimit: '漲跌停',
@@ -497,13 +489,8 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
   ko: {
     reviewSummary: '리뷰 요약',
     noReviewSummary: '요약 없음',
-    noSentimentScore: '점수 없음',
     rotationAndFunds: '순환과 자금',
-    noRotationView: '순환 관점 없음',
     riskAndWatch: '리스크와 관찰',
-    noRiskWatch: '관찰 포인트 없음',
-    structuredMarketData: '구조화 시장 데이터',
-    noBreadthData: '데이터 없음',
     advancers: '상승 종목 수',
     decliners: '하락 종목 수',
     limitUpDown: '상한가/하한가',
@@ -533,11 +520,7 @@ const MARKET_REVIEW_TEXT: Record<ReportLanguage, {
     risks: '리스크',
     keyLevels: '주요 가격대',
     sectorBoard: '업종 순위',
-    noSectorData: '이 회차의 업종 데이터 없음',
     fullText: '전체 내용',
-    lightGreen: '녹색',
-    lightYellow: '노란색',
-    lightRed: '빨간색',
     dimBreadth: '시장 폭',
     dimIndex: '지수',
     dimLimit: '상하한가',
@@ -559,8 +542,11 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
   reportLanguage = 'zh',
   className = '',
   onOpenRunFlow,
+  onOpenFullReport,
+  extraActionItems = [],
 }) => {
   const normalizedReportLanguage = normalizeReportLanguage(reportLanguage);
+  const uiText = getMarketReviewUiText(normalizedReportLanguage);
   const text = getReportText(normalizedReportLanguage);
   const runFlowText = UI_TEXT[normalizedReportLanguage === 'ko' ? 'en' : normalizedReportLanguage];
   const marketReviewText = MARKET_REVIEW_TEXT[normalizedReportLanguage];
@@ -608,14 +594,19 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
   const sessionDateOf = (market?: MarketReviewPayload | null): string =>
     formatSessionDate(market?.date ?? market?.marketLight?.tradeDate);
 
+  const overviewLabel = uiText.overviewSection;
   const allSections = useMemo(() => {
     const payloadSections = getPayloadSections(activeMarket);
-    return payloadSections.length > 0 ? payloadSections : splitMarketReviewSections(structuredContent);
-  }, [activeMarket, structuredContent]);
+    const rawSections = payloadSections.length > 0 ? payloadSections : splitMarketReviewSections(structuredContent);
+    return rawSections.map((section) => {
+      const title = cleanSectionTitle(section.title, overviewLabel);
+      return { ...section, title, icon: section.icon === FileText ? getSectionIcon(title) : section.icon };
+    });
+  }, [activeMarket, overviewLabel, structuredContent]);
 
   const nextDayPlan = activeMarket?.nextDayPlan;
   // 有結構化計畫時段落留在長文裡；沒有才把舊段落提前。
-  const legacyPlanSection = nextDayPlan ? undefined : allSections.find((section) => section.key === LEGACY_PLAN_SECTION_KEY);
+  const legacyPlanSection = nextDayPlan ? undefined : findLegacyPlanSection(allSections);
   const sections = legacyPlanSection ? allSections.filter((section) => section !== legacyPlanSection) : allSections;
 
   const indices = useMemo(
@@ -677,7 +668,9 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
     }
   }, [content]);
 
+  // One ⋯ menu: page-level actions first, then copy and run flow.
   const actionItems: ActionMenuItem[] = [
+    ...extraActionItems,
     {
       key: 'copy-markdown',
       label: text.copyMarkdownSource,
@@ -700,10 +693,11 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
     }] : []),
   ];
 
+  // Amber / grey semantic tones with words, never red-green fills (those read as price direction).
   const lightText: Record<string, { label: string; className: string }> = {
-    green: { label: marketReviewText.lightGreen, className: 'border-success/30 bg-success/10 text-success' },
-    yellow: { label: marketReviewText.lightYellow, className: 'border-warning/30 bg-warning/10 text-warning' },
-    red: { label: marketReviewText.lightRed, className: 'border-danger/30 bg-danger/10 text-danger' },
+    green: { label: uiText.lightTailwind, className: 'border-subtle bg-subtle text-foreground' },
+    yellow: { label: uiText.lightNeutral, className: 'border-subtle bg-subtle text-secondary-text' },
+    red: { label: uiText.lightCaution, className: 'border-warning/30 bg-warning/10 text-warning' },
   };
   const lightStyle = lightHasReading ? lightText[light?.status ?? ''] : undefined;
   const dimensionRows = [
@@ -718,6 +712,16 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
   const breadthTotal = (upCount ?? 0) + (downCount ?? 0) + (flatCount ?? 0);
   const percentOf = (value: number | null) => `${((value ?? 0) / breadthTotal) * 100}%`;
 
+  const sentimentScore = typeof summary?.sentimentScore === 'number' && Number.isFinite(summary.sentimentScore)
+    ? summary.sentimentScore
+    : null;
+  const rotationView = summary?.operationAdvice?.trim() || null;
+  const riskView = summary?.trendPrediction?.trim() || null;
+  const conclusionFields = [
+    rotationView ? { key: 'rotation', label: marketReviewText.rotationAndFunds, value: rotationView } : null,
+    riskView ? { key: 'risk', label: marketReviewText.riskAndWatch, value: riskView } : null,
+  ].filter((field): field is { key: string; label: string; value: string } => field !== null);
+
   const planStance = nextDayPlan?.stance
     ? {
         offensive: marketReviewText.stanceOffensive,
@@ -725,6 +729,10 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
         defensive: marketReviewText.stanceDefensive,
       }[nextDayPlan.stance]
     : null;
+  const conclusionHeadline = [
+    planStance,
+    sentimentScore !== null ? `${uiText.sentimentShort} ${sentimentScore}/100` : null,
+  ].filter(Boolean).join(' · ');
 
   const sessionTitle = activeMarket && activeMarketKey === null
     ? [marketLabel(activeMarket.region, activeMarket), sessionDateOf(activeMarket)].filter(Boolean).join(' ')
@@ -741,11 +749,17 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
             </h2>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-text">
               {sessionTitle ? <span data-testid="market-review-session" className="font-medium text-secondary-text">{sessionTitle}</span> : null}
-              {meta?.createdAt ? <span>{new Date(meta.createdAt).toLocaleString()}</span> : null}
+              {meta?.createdAt ? <span>{formatDateTime(meta.createdAt)}</span> : null}
             </div>
           </div>
 
           <div className="ml-auto flex shrink-0 items-center gap-2">
+            {onOpenFullReport ? (
+              <Button variant="primary" size="sm" onClick={onOpenFullReport} disabled={recordId === undefined}>
+                <FileText className="h-4 w-4" aria-hidden="true" />
+                {uiText.fullReport}
+              </Button>
+            ) : null}
             <ShareImageButton
               recordId={recordId}
               reportTitle={displayTitle}
@@ -797,86 +811,127 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
 
       {summary || lightHasReading ? (
         <Card variant="surface" padding="md" className="text-left" title={marketReviewText.todayConclusion}>
-          {lightStyle ? (
-            <div className="mb-3 flex flex-wrap items-center gap-2" data-testid="market-light">
-              <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${lightStyle.className}`}>
-                {lightStyle.label}{typeof light?.score === 'number' ? ` ${light.score}` : ''}
-              </span>
-              {light?.label ? <span className="text-sm text-foreground">{light.label}</span> : null}
-              {dimensionRows.map(({ key, label }) => {
-                const dimension = light?.dimensions?.[key];
-                return (
-                  <span key={key} className="text-xs tabular-nums text-secondary-text">
-                    {label} {dimension?.available ? formatNumber(dimension.score, 0) : formatNumber(null)}
+          <div data-testid="market-review-conclusion">
+            {lightStyle || conclusionHeadline ? (
+              <div className="mb-3 flex flex-wrap items-center gap-2" data-testid="market-light">
+                {lightStyle ? (
+                  <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${lightStyle.className}`}>
+                    {lightStyle.label}{typeof light?.score === 'number' ? ` ${light.score}` : ''}
                   </span>
-                );
-              })}
-            </div>
-          ) : null}
-          <p className="text-sm leading-6 text-foreground">
-            {summary?.analysisSummary || light?.guidance || marketReviewText.noReviewSummary}
-          </p>
-          {summary ? (
-            <dl className="mt-3 grid grid-cols-1 gap-2 text-sm md:grid-cols-3">
-              <div className="min-w-0">
-                <dt className="text-xs text-secondary-text">{text.marketSentiment}</dt>
-                <dd className="mt-0.5 text-foreground">
-                  {summary.sentimentScore !== undefined ? `${summary.sentimentScore} / 100` : marketReviewText.noSentimentScore}
-                </dd>
+                ) : null}
+                {conclusionHeadline ? (
+                  <span data-testid="market-review-headline" className="text-sm font-semibold text-foreground">{conclusionHeadline}</span>
+                ) : null}
+                {lightStyle && light?.label ? <span className="text-sm text-secondary-text">{light.label}</span> : null}
+                {lightStyle ? dimensionRows.map(({ key, label }) => {
+                  const dimension = light?.dimensions?.[key];
+                  // Unavailable dimensions would only print a dash; leave them out.
+                  if (!dimension?.available) return null;
+                  return (
+                    <span key={key} className="text-xs tabular-nums text-secondary-text">
+                      {label} {formatNumber(dimension.score, 0)}
+                    </span>
+                  );
+                }) : null}
               </div>
-              <div className="min-w-0">
-                <dt className="text-xs text-secondary-text">{marketReviewText.rotationAndFunds}</dt>
-                <dd className="mt-0.5 text-foreground">{summary.operationAdvice || marketReviewText.noRotationView}</dd>
-              </div>
-              <div className="min-w-0">
-                <dt className="text-xs text-secondary-text">{marketReviewText.riskAndWatch}</dt>
-                <dd className="mt-0.5 text-foreground">{summary.trendPrediction || marketReviewText.noRiskWatch}</dd>
-              </div>
-            </dl>
-          ) : null}
+            ) : null}
+            <p className="text-sm leading-6 text-foreground">
+              {summary?.analysisSummary || light?.guidance || marketReviewText.noReviewSummary}
+            </p>
+            {conclusionFields.length > 0 ? (
+              <dl className="mt-3 grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
+                {conclusionFields.map((field) => (
+                  <div key={field.key} className="min-w-0">
+                    <dt className="text-xs text-secondary-text">{field.label}</dt>
+                    <dd className="mt-0.5 text-foreground">{field.value}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+          </div>
         </Card>
       ) : null}
 
-      {hasStructuredView ? (
-        <Card variant="surface" padding="md" className="space-y-3 text-left">
-          {breadth ? (
-            <>
-              {breadthTotal > 0 ? (
-                <div data-testid="breadth-bar">
-                  <div className="flex h-2 overflow-hidden rounded-full bg-subtle" aria-hidden="true">
-                    <div style={{ width: percentOf(upCount), backgroundColor: 'var(--market-up)' }} />
-                    <div className="bg-border" style={{ width: percentOf(flatCount) }} />
-                    <div style={{ width: percentOf(downCount), backgroundColor: 'var(--market-down)' }} />
+      {nextDayPlan || legacyPlanSection ? (
+        <Card variant="surface" padding="md" className="text-left">
+          <details open data-testid="next-day-plan-card" className="group">
+            <summary className="flex cursor-pointer list-none items-center gap-2">
+              <Target className="h-4 w-4 text-primary" aria-hidden="true" />
+              <h3 className="text-sm font-semibold text-foreground">{marketReviewText.nextDayPlan}</h3>
+              <ChevronDown className="ml-auto h-4 w-4 text-secondary-text transition-transform group-open:rotate-180" aria-hidden="true" />
+            </summary>
+            {nextDayPlan ? (
+              <div data-testid="next-day-plan" className="mt-3 space-y-2 text-sm">
+                {planStance ? <span className="inline-block rounded-full border border-subtle px-2 py-0.5 text-xs text-secondary-text">{planStance}</span> : null}
+                {nextDayPlan.summary ? <p className="leading-6 text-foreground">{nextDayPlan.summary}</p> : null}
+                {([
+                  [marketReviewText.focus, nextDayPlan.focus],
+                  [marketReviewText.risks, nextDayPlan.risks],
+                ] as const).map(([label, entries]) => (entries?.length ? (
+                  <div key={label}>
+                    <p className="text-xs text-secondary-text">{label}</p>
+                    <ul className="mt-0.5 list-disc pl-5 text-foreground">
+                      {entries.map((entry) => <li key={entry}>{entry}</li>)}
+                    </ul>
                   </div>
-                  <div className="mt-1.5 flex flex-wrap justify-between gap-2 text-xs tabular-nums text-secondary-text">
-                    <span>{marketReviewText.advancers} <span className="text-market-up">{formatNumber(upCount, 0)}</span></span>
-                    <span>{marketReviewText.flat} {formatNumber(flatCount, 0)}</span>
-                    <span>{marketReviewText.decliners} <span className="text-market-down">{formatNumber(downCount, 0)}</span></span>
+                ) : null))}
+                {nextDayPlan.keyLevels?.length ? (
+                  <div>
+                    <p className="text-xs text-secondary-text">{marketReviewText.keyLevels}</p>
+                    <div className="mt-0.5 flex flex-wrap gap-x-4 gap-y-1">
+                      {nextDayPlan.keyLevels.map((level) => (
+                        <span key={level.label} className="text-foreground">
+                          {level.label} <span className="tabular-nums">{formatNumber(level.price, 2)}</span>
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ) : null}
-              <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
-                <span className="text-secondary-text">
-                  {marketReviewText.limitUpDown}{' '}
-                  <span className="tabular-nums text-foreground">
-                    {formatNumber(coerceFiniteNumber(breadth.limitUpCount), 0)} / {formatNumber(coerceFiniteNumber(breadth.limitDownCount), 0)}
-                  </span>
-                </span>
-                <span className="text-secondary-text">
-                  {marketReviewText.turnover}{' '}
-                  <span className="tabular-nums text-foreground">
-                    {formatNumber(coerceFiniteNumber(breadth.totalAmount), 2)}{breadth.turnoverUnit ? ` ${breadth.turnoverUnit}` : ''}
-                  </span>
-                </span>
+                ) : null}
               </div>
-            </>
-          ) : (
-            <p className="text-sm text-secondary-text">{marketReviewText.noBreadthData}</p>
-          )}
+            ) : legacyPlanSection ? (
+              <div data-testid="next-day-plan" className="mt-3">
+                <ReportMarkdownBody content={legacyPlanSection.content} className="market-review-markdown" />
+              </div>
+            ) : null}
+          </details>
+        </Card>
+      ) : null}
+
+      {/* breadth 與法人都來自 breadth；整包沒有就不出空卡 */}
+      {breadth ? (
+        <Card variant="surface" padding="md" className="space-y-3 text-left">
+          {breadthTotal > 0 ? (
+            <div data-testid="breadth-bar">
+              <div className="flex h-2 overflow-hidden rounded-full bg-subtle" aria-hidden="true">
+                <div style={{ width: percentOf(upCount), backgroundColor: 'var(--market-up)' }} />
+                <div className="bg-border" style={{ width: percentOf(flatCount) }} />
+                <div style={{ width: percentOf(downCount), backgroundColor: 'var(--market-down)' }} />
+              </div>
+              <div className="mt-1.5 flex flex-wrap justify-between gap-2 text-xs tabular-nums text-secondary-text">
+                <span>{marketReviewText.advancers} <span className="text-market-up">{formatNumber(upCount, 0)}</span></span>
+                <span>{marketReviewText.flat} {formatNumber(flatCount, 0)}</span>
+                <span>{marketReviewText.decliners} <span className="text-market-down">{formatNumber(downCount, 0)}</span></span>
+              </div>
+            </div>
+          ) : null}
+          <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+            <span className="text-secondary-text">
+              {marketReviewText.limitUpDown}{' '}
+              <span className="tabular-nums text-foreground">
+                {formatNumber(coerceFiniteNumber(breadth.limitUpCount), 0)} / {formatNumber(coerceFiniteNumber(breadth.limitDownCount), 0)}
+              </span>
+            </span>
+            <span className="text-secondary-text">
+              {marketReviewText.turnover}{' '}
+              <span className="tabular-nums text-foreground">
+                {formatNumber(coerceFiniteNumber(breadth.totalAmount), 2)}{breadth.turnoverUnit ? ` ${breadth.turnoverUnit}` : ''}
+              </span>
+            </span>
+          </div>
           {institutional ? (
             <div data-testid="institutional-net">
               <p className="mb-1.5 text-xs text-secondary-text">
-                {marketReviewText.institutional}{breadth?.turnoverUnit ? `（${breadth.turnoverUnit}）` : ''}
+                {marketReviewText.institutional}{breadth.turnoverUnit ? `（${breadth.turnoverUnit}）` : ''}
               </p>
               <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
                 {([
@@ -898,45 +953,7 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
         </Card>
       ) : null}
 
-      {nextDayPlan ? (
-        <Card variant="surface" padding="md" className="text-left" title={marketReviewText.nextDayPlan} >
-          <div data-testid="next-day-plan" className="space-y-2 text-sm">
-            {planStance ? <span className="inline-block rounded-full border border-subtle px-2 py-0.5 text-xs text-secondary-text">{planStance}</span> : null}
-            {nextDayPlan.summary ? <p className="leading-6 text-foreground">{nextDayPlan.summary}</p> : null}
-            {([
-              [marketReviewText.focus, nextDayPlan.focus],
-              [marketReviewText.risks, nextDayPlan.risks],
-            ] as const).map(([label, entries]) => (entries?.length ? (
-              <div key={label}>
-                <p className="text-xs text-secondary-text">{label}</p>
-                <ul className="mt-0.5 list-disc pl-5 text-foreground">
-                  {entries.map((entry) => <li key={entry}>{entry}</li>)}
-                </ul>
-              </div>
-            ) : null))}
-            {nextDayPlan.keyLevels?.length ? (
-              <div>
-                <p className="text-xs text-secondary-text">{marketReviewText.keyLevels}</p>
-                <div className="mt-0.5 flex flex-wrap gap-x-4 gap-y-1">
-                  {nextDayPlan.keyLevels.map((level) => (
-                    <span key={level.label} className="text-foreground">
-                      {level.label} <span className="tabular-nums">{formatNumber(level.price, 2)}</span>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </Card>
-      ) : legacyPlanSection ? (
-        <Card variant="surface" padding="md" className="text-left" title={legacyPlanSection.title}>
-          <div data-testid="next-day-plan">
-            <ReportMarkdownBody content={legacyPlanSection.content} className="market-review-markdown" />
-          </div>
-        </Card>
-      ) : null}
-
-      {hasStructuredView ? (
+      {sectorItems.length > 0 || legacySectorRankings.length > 0 ? (
         <Card variant="surface" padding="md" className="text-left" title={sectorItems.length > 0 ? marketReviewText.sectorBoard : undefined}>
           {sectorItems.length > 0 ? (
             <div data-testid="sector-rank" className="grid grid-cols-1 gap-x-6 gap-y-1 md:grid-cols-2">
@@ -947,7 +964,7 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
                 </div>
               ))}
             </div>
-          ) : legacySectorRankings.length > 0 ? (
+          ) : (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {legacySectorRankings.flatMap((rankings, rankingIndex) => (['top', 'bottom'] as const).map((side) => {
                 const rows = rankings?.[side] ?? [];
@@ -976,8 +993,6 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
                 );
               }))}
             </div>
-          ) : (
-            <p className="text-sm text-secondary-text">{marketReviewText.noSectorData}</p>
           )}
         </Card>
       ) : null}

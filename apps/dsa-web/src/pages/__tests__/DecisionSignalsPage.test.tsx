@@ -1,5 +1,6 @@
 import type React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { BrowserRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   decisionSignalsApi,
@@ -386,11 +387,14 @@ const persistedReassessResponse: DecisionSignalReassessResponse = {
   blockedReason: null,
 };
 
+// BrowserRouter 讀寫 window.location，測試用 pushState 設網址即可。
 function renderPage() {
   return render(
-    <UiLanguageProvider>
-      <DecisionSignalsPage />
-    </UiLanguageProvider>,
+    <BrowserRouter>
+      <UiLanguageProvider>
+        <DecisionSignalsPage />
+      </UiLanguageProvider>
+    </BrowserRouter>,
   );
 }
 
@@ -611,6 +615,117 @@ describe('DecisionSignalsPage', () => {
     });
   });
 
+  it('applies holding and action filters from the URL', async () => {
+    window.history.pushState({}, '', '/decision-signals?holding=1&action=reduce');
+    vi.mocked(decisionSignalsApi.getSummary).mockResolvedValue({
+      total: 3,
+      heldCount: 2,
+      actions: { reduce: 2, hold: 1 },
+      stopTriggeredCount: 0,
+      stopTriggered: [],
+      stopPriceUnavailableCount: 0,
+    });
+    vi.mocked(decisionSignalsApi.list).mockResolvedValue(listResponse([makeSignal({ action: 'reduce', isHeld: true })]));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(decisionSignalsApi.list).toHaveBeenCalledWith(expect.objectContaining({
+        holdingOnly: true,
+        action: 'reduce',
+        groupLatest: true,
+        page: 1,
+      }));
+    });
+    // 第一次請求就帶上篩選，不會先查一次全部
+    expect(vi.mocked(decisionSignalsApi.list).mock.calls[0][0]).toEqual(expect.objectContaining({ holdingOnly: true, action: 'reduce' }));
+    const summary = await screen.findByTestId('signal-action-summary');
+    expect(within(summary).getByRole('button', { name: /减仓/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(summary).getByRole('button', { name: /持有/ })).toHaveAttribute('aria-pressed', 'false');
+    const chips = screen.getByTestId('signal-url-filters');
+    expect(within(chips).getByRole('button', { name: '移除筛选：持股' })).toHaveClass('h-8');
+    expect(within(chips).getByRole('button', { name: '移除筛选：减仓' })).toBeInTheDocument();
+    expect(await screen.findByText('持股中待减仓 1 档')).toBeInTheDocument();
+  });
+
+  it('writes filter changes back to the URL with replace and removes a chip filter', async () => {
+    window.history.pushState({}, '', '/decision-signals?holding=1&action=reduce&foo=bar');
+
+    renderPage();
+    await screen.findByText('贵州茅台');
+    const pushSpy = vi.spyOn(window.history, 'pushState');
+
+    fireEvent.click(within(screen.getByTestId('signal-url-filters')).getByRole('button', { name: '移除筛选：减仓' }));
+
+    await waitFor(() => expect(window.location.search).toBe('?holding=1&foo=bar'));
+    expect(pushSpy).not.toHaveBeenCalled();
+    pushSpy.mockRestore();
+    await waitFor(() => {
+      const lastParams = vi.mocked(decisionSignalsApi.list).mock.calls.at(-1)?.[0];
+      expect(lastParams).toEqual(expect.objectContaining({ holdingOnly: true }));
+      expect(lastParams?.action).toBeUndefined();
+    });
+
+    fireEvent.click(within(screen.getByTestId('signal-url-filters')).getByRole('button', { name: '移除筛选：持股' }));
+    await waitFor(() => expect(window.location.search).toBe('?foo=bar'));
+    expect(screen.queryByTestId('signal-url-filters')).not.toBeInTheDocument();
+    await waitFor(() => expect(vi.mocked(decisionSignalsApi.list).mock.calls.at(-1)?.[0]?.holdingOnly).toBeUndefined());
+
+    openFilters();
+    fireEvent.change(screen.getByLabelText('动作'), { target: { value: 'sell' } });
+    await waitFor(() => expect(window.location.search).toBe('?foo=bar&action=sell'));
+  });
+
+  it('lists only stop-triggered rows for stop=triggered', async () => {
+    window.history.pushState({}, '', '/decision-signals?stop=triggered');
+    vi.mocked(decisionSignalsApi.list).mockResolvedValue(listResponse([
+      makeSignal({ id: 7, stockName: '贵州茅台', stopTriggered: true, isHeld: true }),
+      makeSignal({ id: 9, stockCode: '000001', stockName: '平安银行', stopTriggered: false, isHeld: true }),
+      makeSignal({ id: 10, stockCode: '000002', stockName: '万科A', stopTriggered: null }),
+    ], 3));
+
+    renderPage();
+
+    expect(await screen.findByText('贵州茅台')).toBeInTheDocument();
+    expect(screen.queryByText('平安银行')).not.toBeInTheDocument();
+    expect(screen.queryByText('万科A')).not.toBeInTheDocument();
+    expect(screen.getByText('已触停损 1 档')).toBeInTheDocument();
+    expect(vi.mocked(decisionSignalsApi.list).mock.calls[0][0]?.holdingOnly).toBeUndefined();
+  });
+
+  it('falls back to held stocks in priority order when the backend has no stop field', async () => {
+    window.history.pushState({}, '', '/decision-signals?stop=triggered');
+    // 舊後端：列上沒有 stopTriggered／isHeld 欄位（基底 fixture 本來就沒有）
+    vi.mocked(decisionSignalsApi.list).mockResolvedValue(listResponse([makeSignal()]));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(decisionSignalsApi.list).toHaveBeenLastCalledWith(expect.objectContaining({ holdingOnly: true, sort: 'priority' }));
+    });
+    expect(await screen.findByText('贵州茅台')).toBeInTheDocument();
+    expect(await screen.findByText('持股中 1 档')).toBeInTheDocument();
+    expect(screen.queryByText('已触停损 1 档')).not.toBeInTheDocument();
+  });
+
+  it('replaces the clear-stock button with an in-field ✕ and labels recent chips by market name', async () => {
+    renderPage();
+    await screen.findByText('贵州茅台');
+
+    expect(screen.queryByRole('button', { name: '清空当前股票' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('当前股票'), { target: { value: '600' } });
+    const clear = screen.getByRole('button', { name: '清空当前股票' });
+    expect(clear).toHaveClass('absolute');
+    expect(clear.parentElement).toContainElement(screen.getByLabelText('当前股票'));
+    fireEvent.click(clear);
+    expect(screen.getByLabelText('当前股票')).toHaveValue('');
+    expect(screen.getByLabelText('当前股票')).toHaveAttribute('placeholder', '代码或名称');
+
+    const chip = await screen.findByRole('button', { name: /600519.*A 股/ });
+    expect(chip).toHaveClass('h-8');
+    expect(chip).not.toHaveTextContent('/ cn');
+  });
+
   it('does not render the latest and timeline cards before a stock is selected', async () => {
     renderPage();
     await screen.findByText('贵州茅台');
@@ -642,7 +757,7 @@ describe('DecisionSignalsPage', () => {
     renderPage();
 
     const sentence = await screen.findByTestId('signal-stats-sentence');
-    expect(sentence).toHaveTextContent('63.7%（130／204 笔可判定）｜934 笔中 705 笔无法评估｜另有中性 25 笔，不计入命中率');
+    expect(sentence).toHaveTextContent('过去信号命中率 63.7%（可判定 204 笔中命中 130 笔）・另有 705 笔尚无法评估・另有中性 25 笔，不计入命中率');
     expect(sentence).not.toHaveClass('text-success');
     // 統計排在清單之後：DOM 順序守「列表在首屏」
     const list = await screen.findByRole('table', { name: 'AI 建议' });
@@ -1343,7 +1458,7 @@ describe('DecisionSignalsPage', () => {
     const { unmount } = renderPage();
 
     expect(await screen.findByText('热门候选')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /AAPL.*Apple.*us/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /AAPL.*Apple.*美股/ })).toBeInTheDocument();
     expect(decisionSignalsApi.getLatest).not.toHaveBeenCalled();
 
     unmount();
@@ -1356,7 +1471,7 @@ describe('DecisionSignalsPage', () => {
     renderPage();
 
     expect(await screen.findByText('热门候选')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /AAPL.*Apple.*us/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /AAPL.*Apple.*美股/ })).toBeInTheDocument();
   });
 
   it('renders no candidate fallback without crashing when history and stock index are unavailable', async () => {
@@ -1512,7 +1627,7 @@ describe('DecisionSignalsPage', () => {
     await screen.findByText('贵州茅台');
 
     const getHistoryCandidateButton = () => screen.getAllByRole('button').find((button) => (
-      button.textContent?.includes('600519') && button.textContent.includes('/ cn')
+      button.textContent?.includes('600519') && button.textContent.includes('A 股')
     ));
     fireEvent.click(await waitFor(() => {
       const button = getHistoryCandidateButton();
@@ -1548,7 +1663,7 @@ describe('DecisionSignalsPage', () => {
 
     const historyCandidateButton = await waitFor(() => {
       const button = screen.getAllByRole('button').find((candidateButton) => (
-        candidateButton.textContent?.includes('600519') && candidateButton.textContent.includes('/ cn')
+        candidateButton.textContent?.includes('600519') && candidateButton.textContent.includes('A 股')
       ));
       expect(button).toBeTruthy();
       return button as HTMLButtonElement;

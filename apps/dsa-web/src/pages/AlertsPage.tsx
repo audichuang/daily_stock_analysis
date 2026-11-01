@@ -1,7 +1,7 @@
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { BellRing, Plus } from 'lucide-react';
-import { useSearchParams } from 'react-router-dom';
+import { Gauge, Plus, Target, TrendingDown } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { alertsApi } from '../api/alerts';
 import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
@@ -17,9 +17,10 @@ import {
 } from '../components/alerts/AlertRuleList';
 import { ruleCondition } from '../components/alerts/alertRuleText';
 import { AlertTriggerHistory, type AlertActivityTab } from '../components/alerts/AlertTriggerHistory';
-import { ApiErrorAlert, AppPage, Button, Drawer, EmptyState, InlineAlert, Loading, PageHeader } from '../components/common';
+import { ApiErrorAlert, AppPage, Button, Drawer, InlineAlert, Loading, Metric, MetricGroup, PageHeader } from '../components/common';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText } from '../i18n/uiText';
+import { ALERTS_TEXT } from '../locales/alertsText';
 import { ALERT_PAGE_TEXT } from '../locales/featureText';
 import type {
   AlertMonitorStatus,
@@ -36,10 +37,30 @@ import { formatDateTime, formatNumber } from '../utils/format';
 const PAGE_SIZE = 20;
 const ISSUE_STATUSES = 'degraded,failed,skipped';
 type MobileTab = 'rules' | 'activity' | 'diagnostics';
+// Query keys the create link may carry (price card bell, iOS, AlertBellLink); cleared when the drawer closes.
+const CREATE_PARAM_KEYS = ['new', 'target', 'type', 'direction', 'price'];
+
+/**
+ * Builds the create-drawer prefill from `?new=1&target=…&type=price_cross&direction=…&price=…`.
+ * Only a complete, valid price_cross condition is carried over; otherwise just the target,
+ * so a malformed link never prefills a half-valid rule. Saving still needs the user's click.
+ */
+function createInitialFromParams(params: URLSearchParams): AlertRuleFormInitial {
+  const target = params.get('target') ?? '';
+  const type = params.get('type');
+  const direction = params.get('direction');
+  const priceText = params.get('price')?.trim() ?? '';
+  const price = priceText === '' ? Number.NaN : Number(priceText);
+  if (type === 'price_cross' && (direction === 'above' || direction === 'below') && Number.isFinite(price) && price > 0) {
+    return { target, alertType: 'price_cross', parameters: { direction, price } };
+  }
+  return { target };
+}
 
 const AlertsPage: React.FC = () => {
   const { language } = useUiLanguage();
   const text = ALERT_PAGE_TEXT[language];
+  const alertsText = ALERTS_TEXT[language];
   const [searchParams, setSearchParams] = useSearchParams();
   useEffect(() => {
     document.title = `${text.title} - DSA`;
@@ -80,7 +101,7 @@ const AlertsPage: React.FC = () => {
   const [notificationsError, setNotificationsError] = useState<ParsedApiError | null>(null);
 
   const [drawerInitial, setDrawerInitial] = useState<AlertRuleFormInitial | null>(
-    searchParams.get('new') ? { target: queryTarget } : null,
+    () => (searchParams.get('new') ? createInitialFromParams(searchParams) : null),
   );
   const [drawerOpen, setDrawerOpen] = useState(Boolean(searchParams.get('new')));
   const [saving, setSaving] = useState(false);
@@ -91,8 +112,6 @@ const AlertsPage: React.FC = () => {
   // 每條規則的修改次數：編輯前發出、編輯後才回來的試算是舊條件的結果，不能套用。
   const ruleRevisionsRef = useRef<Record<number, number>>({});
   const [mobileTab, setMobileTab] = useState<MobileTab>('rules');
-  // 通知診斷平常收在頁尾；手機切到這個分頁時直接展開，不用再點一次。
-  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
 
   const reloadRulesFromFirstPage = useCallback(() => {
     setRulesLoadedPage(0);
@@ -217,8 +236,7 @@ const AlertsPage: React.FC = () => {
     setDrawerOpen(false);
     if (searchParams.get('new')) {
       const next = new URLSearchParams(searchParams);
-      next.delete('new');
-      next.delete('target');
+      for (const key of CREATE_PARAM_KEYS) next.delete(key);
       setSearchParams(next, { replace: true });
     }
   };
@@ -298,10 +316,12 @@ const AlertsPage: React.FC = () => {
       ? text.reasonThread
       : text.reasonSchedule;
 
+  // One formula for the stat card and the activity tab: skipped rows are not issues and are shown on their own.
+  const issueCount = summary ? summary.degraded + summary.failed : undefined;
   const stats = [
     { label: text.statRules, value: monitor?.enabledRules },
     { label: text.statTriggered, value: summary?.triggered },
-    { label: text.statIssues, value: summary ? summary.degraded + summary.failed : undefined },
+    { label: text.statIssues, value: issueCount },
     { label: text.statSkipped, value: summary?.skipped },
   ];
 
@@ -313,11 +333,44 @@ const AlertsPage: React.FC = () => {
   const paneClass = (tab: MobileTab) => (mobileTab === tab ? '' : 'hidden lg:block');
 
   const hasFilters = Boolean(searchTarget.trim()) || scopeFilter !== 'all' || enabledFilter !== 'all' || alertTypeFilter !== 'all';
-  const templates: Array<{ label: string; initial: AlertRuleFormInitial }> = [
-    { label: text.tplPrice, initial: { alertType: 'price_cross' } },
-    { label: text.tplChange, initial: { alertType: 'price_change_percent', parameters: { direction: 'down', changePct: 3 } } },
-    { label: text.tplMarket, initial: { targetScope: 'market', target: 'tw', alertType: 'market_light_status', parameters: { statuses: ['red'] } } },
+  // Nothing created yet: stats and filters would only show zeros, so the templates take the first screen.
+  const emptyAccount = rulesLoadedPage > 0 && rulesTotal === 0 && !hasFilters && !rulesLoading;
+  const templates: Array<{ key: string; label: string; hint: string; icon: React.ReactNode; initial: AlertRuleFormInitial }> = [
+    { key: 'price', label: text.tplPrice, hint: alertsText.tplPriceHint, icon: <Target className="h-5 w-5" />, initial: { alertType: 'price_cross' } },
+    {
+      key: 'change',
+      label: text.tplChange,
+      hint: alertsText.tplChangeHint,
+      icon: <TrendingDown className="h-5 w-5" />,
+      initial: { alertType: 'price_change_percent', parameters: { direction: 'down', changePct: 3 } },
+    },
+    {
+      key: 'market',
+      label: text.tplMarket,
+      hint: alertsText.tplMarketHint,
+      icon: <Gauge className="h-5 w-5" />,
+      initial: { targetScope: 'market', target: 'tw', alertType: 'market_light_status', parameters: { statuses: ['red'] } },
+    },
   ];
+
+  const renderNotifications = () => (
+    <>
+      {notificationsLoading ? <Loading /> : null}
+      {!notificationsLoading && notifications.length === 0 ? (
+        <p className="py-6 text-center text-sm text-secondary-text">{text.noNotifications}</p>
+      ) : null}
+      <ul className="divide-y divide-border/40">
+        {notifications.map((item) => (
+          <li key={item.id} className="py-2 text-xs text-secondary-text">
+            <span className="text-foreground">{channelLabel(item.channel)}</span>
+            {` · ${resultLabel(item)} · ${formatDateTime(item.createdAt)}`}
+            {item.latencyMs == null ? '' : ` · ${item.latencyMs}ms`}
+            {item.diagnostics ? <div className="break-words text-muted-text">{item.diagnostics}</div> : null}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
 
   return (
     <AppPage className="space-y-4">
@@ -342,22 +395,31 @@ const AlertsPage: React.FC = () => {
           <span>
             {monitor.lastRunAt ? formatUiText(text.monitorLastRun, { time: formatDateTime(monitor.lastRunAt) }) : text.monitorNotYet}
           </span>
-          <span className={monitor.channels.length ? '' : 'text-warning'}>
-            {monitor.channels.length ? formatUiText(text.monitorChannels, { channels: monitor.channels.join('、') }) : text.monitorNoChannel}
-          </span>
+          {monitor.channels.length ? <span>{formatUiText(text.monitorChannels, { channels: monitor.channels.join('、') })}</span> : null}
           {monitor.lastError ? <span className="text-danger">{formatUiText(text.monitorError, { error: monitor.lastError })}</span> : null}
         </p>
       ) : null}
       {monitorFailed ? <p className="text-xs text-warning">{text.monitorUnknown}</p> : null}
+      {monitor && monitor.channels.length === 0 ? (
+        <InlineAlert
+          variant="warning"
+          title={alertsText.noChannelTitle}
+          message={alertsText.noChannelBody}
+          action={(
+            <Link to="/settings?category=notification" className="text-sm font-medium underline">
+              {alertsText.goSettings}
+            </Link>
+          )}
+        />
+      ) : null}
 
-      <dl className="grid grid-cols-4 gap-2">
-        {stats.map((stat) => (
-          <div key={stat.label} className="rounded-xl border border-border/60 px-2 py-2 text-center sm:px-3">
-            <dd className="text-lg font-semibold tabular-nums text-foreground">{formatNumber(stat.value)}</dd>
-            <dt className="text-xs text-secondary-text">{stat.label}</dt>
-          </div>
-        ))}
-      </dl>
+      {emptyAccount ? null : (
+        <MetricGroup>
+          {stats.map((stat) => (
+            <Metric key={stat.label} label={stat.label} value={stat.value == null ? undefined : formatNumber(stat.value)} />
+          ))}
+        </MetricGroup>
+      )}
 
       {saveMessage ? (
         <InlineAlert
@@ -387,10 +449,7 @@ const AlertsPage: React.FC = () => {
             role="tab"
             aria-selected={mobileTab === tab.id}
             className={`flex-1 rounded-lg border px-2 py-2 text-sm ${mobileTab === tab.id ? 'border-primary text-foreground' : 'border-border/60 text-secondary-text'}`}
-            onClick={() => {
-              setMobileTab(tab.id);
-              if (tab.id === 'diagnostics') setDiagnosticsOpen(true);
-            }}
+            onClick={() => setMobileTab(tab.id)}
           >
             {tab.label}
           </button>
@@ -449,14 +508,23 @@ const AlertsPage: React.FC = () => {
               return next;
             })}
             guide={(
-              <div className="py-6 text-center">
+              <div className="py-4">
                 <p className="text-sm font-medium text-foreground">{text.guideTitle}</p>
                 <p className="mt-1 text-xs text-secondary-text">{text.guideBody}</p>
-                <div className="mx-auto mt-4 grid max-w-md gap-2">
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
                   {templates.map((template) => (
-                    <Button key={template.label} variant="secondary" size="sm" onClick={() => openDrawer(template.initial)}>
-                      {template.label}
-                    </Button>
+                    <button
+                      key={template.key}
+                      type="button"
+                      aria-label={template.label}
+                      data-testid={`alert-template-${template.key}`}
+                      className="flex min-h-11 flex-col items-start gap-2 rounded-xl border border-border/60 p-3 text-left transition-colors hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan/40"
+                      onClick={() => openDrawer(template.initial)}
+                    >
+                      <span className="text-cyan" aria-hidden="true">{template.icon}</span>
+                      <span className="text-sm font-medium text-foreground">{template.label}</span>
+                      <span className="text-xs text-secondary-text">{template.hint}</span>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -471,7 +539,8 @@ const AlertsPage: React.FC = () => {
             isLoading={triggersLoading}
             tab={activityTab}
             triggeredCount={summary?.triggered}
-            issueCount={summary ? summary.degraded + summary.failed + summary.skipped : undefined}
+            issueCount={issueCount}
+            skippedCount={summary?.skipped}
             onTabChange={(tab) => {
               // 同一分頁不會重新請求，清空就回不來了
               if (tab === activityTab) return;
@@ -487,30 +556,16 @@ const AlertsPage: React.FC = () => {
 
       <div className={paneClass('diagnostics')}>
         {notificationsError ? <ApiErrorAlert error={notificationsError} onDismiss={() => setNotificationsError(null)} /> : null}
-        <details
-          open={diagnosticsOpen}
-          onToggle={(event) => setDiagnosticsOpen(event.currentTarget.open)}
-          className="rounded-xl border border-border/60 p-3 sm:p-4"
-          data-testid="alert-diagnostics"
-        >
+        {/* Phones reach diagnostics through their own tab, so the list renders directly there without a fold. */}
+        <section className="lg:hidden" data-testid="alert-diagnostics-mobile">
+          {renderNotifications()}
+        </section>
+        <details className="hidden rounded-xl border border-border/60 p-3 sm:p-4 lg:block" data-testid="alert-diagnostics">
           <summary className="cursor-pointer text-sm font-medium text-foreground">
             {text.diagnostics}
             <span className="ml-2 text-xs font-normal text-secondary-text">{text.diagnosticsHint}</span>
           </summary>
-          {notificationsLoading ? <Loading /> : null}
-          {!notificationsLoading && notifications.length === 0 ? (
-            <EmptyState icon={<BellRing className="h-6 w-6" />} title={text.noNotifications} />
-          ) : null}
-          <ul className="divide-y divide-border/40">
-            {notifications.map((item) => (
-              <li key={item.id} className="py-2 text-xs text-secondary-text">
-                <span className="text-foreground">{channelLabel(item.channel)}</span>
-                {` · ${resultLabel(item)} · ${formatDateTime(item.createdAt)}`}
-                {item.latencyMs == null ? '' : ` · ${item.latencyMs}ms`}
-                {item.diagnostics ? <div className="break-words text-muted-text">{item.diagnostics}</div> : null}
-              </li>
-            ))}
-          </ul>
+          {renderNotifications()}
         </details>
       </div>
 

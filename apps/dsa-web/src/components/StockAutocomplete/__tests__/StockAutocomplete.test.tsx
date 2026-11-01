@@ -525,7 +525,8 @@ describe('StockAutocomplete', () => {
           </UiLanguageProvider>,
         );
         expect(await screen.findByText('韓股')).toBeInTheDocument();
-        expect(screen.getByText('包含')).toBeInTheDocument();
+        // Match-type badges were removed from suggestions (W14).
+        expect(screen.queryByText('包含')).not.toBeInTheDocument();
         expect(screen.queryByText('韩股')).not.toBeInTheDocument();
       } finally {
         window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY);

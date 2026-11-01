@@ -6,6 +6,8 @@ type CardLevel = 'surface' | 'inset' | 'highlight';
 interface CardProps {
   title?: string;
   subtitle?: string;
+  /** 標題列右側的附加內容（例如時間、狀態、動作）。 */
+  meta?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
@@ -33,6 +35,7 @@ const LEVEL_STYLES: Record<CardLevel, string> = {
 export const Card: React.FC<CardProps> = ({
   title,
   subtitle,
+  meta,
   children,
   className = '',
   style,
@@ -48,10 +51,13 @@ export const Card: React.FC<CardProps> = ({
       data-card-level={level}
       className={cn('rounded-[var(--radius-card)]', LEVEL_STYLES[level], hoverStyles, PADDING_STYLES[padding], className)}
     >
-      {(title || subtitle) && (
-        <div className="mb-3">
-          {subtitle ? <span className="label">{subtitle}</span> : null}
-          {title ? <h3 className="mt-1 text-base font-semibold text-foreground">{title}</h3> : null}
+      {(title || subtitle || meta) && (
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            {title ? <h3 className="text-base font-semibold text-foreground">{title}</h3> : null}
+            {subtitle ? <p className="mt-0.5 text-xs text-secondary-text">{subtitle}</p> : null}
+          </div>
+          {meta ? <div className="shrink-0">{meta}</div> : null}
         </div>
       )}
       {children}

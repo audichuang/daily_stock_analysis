@@ -34,6 +34,8 @@ import {
   BACKTEST_STATUS_LABELS,
   BACKTEST_TEXT,
 } from '../locales/featureText';
+import { SIGNALS_TEXT } from '../locales/signalsText';
+import type { DecisionAction } from '../types/analysis';
 import type {
   BacktestPhaseFilter,
   BacktestResultItem,
@@ -43,7 +45,12 @@ import type {
   PerformanceMetrics,
 } from '../types/backtest';
 import { cn } from '../utils/cn';
-import { buildDecisionActionLabelMap, getDecisionActionLabel } from '../utils/decisionAction';
+import {
+  buildDecisionActionLabelMap,
+  getDecisionActionLabel,
+  getLegacyDecisionAction,
+  normalizeDecisionActionAlias,
+} from '../utils/decisionAction';
 import { formatNumber, formatPercent, formatPrice, NO_VALUE } from '../utils/format';
 import { getMarketPhaseSummaryLabel } from '../utils/marketPhase';
 import { marketToneClass } from '../utils/marketTone';
@@ -56,6 +63,10 @@ const PAGE_SIZE = 20;
 const INPUT_DEBOUNCE_MS = 300;
 // 少於這個筆數的勝率與平均報酬不下結論（研究類結論的底線：樣本不足一律 inconclusive）。
 const MIN_CONCLUSION_SAMPLE = 30;
+// 拆解表單列少於這個筆數時勝率灰掉並註「樣本少」。
+const MIN_ADVICE_ROW_SAMPLE = 10;
+// 各語言的階段前綴（含全形冒號）；欄名已是「階段」，值不再重複。
+const PHASE_PREFIX_RE = /^(市场阶段|市場階段|Market phase)\s*[:：]\s*/;
 
 type ResultTab = 'completed' | 'pending' | 'all';
 const TAB_STATUS: Record<ResultTab, BacktestStatusFilter | undefined> = {
@@ -93,11 +104,7 @@ const hasNarrowingFilter = (filters: AppliedFilters | null): boolean => Boolean(
 function phaseLabel(row: BacktestResultItem, language: UiLanguage): string {
   const label = getMarketPhaseSummaryLabel(row.marketPhaseSummary, language);
   if (label) {
-    return label
-      .replace('市场阶段: ', '')
-      .replace('市场阶段：', '')
-      .replace('市場階段：', '')
-      .replace('Market phase: ', '');
+    return label.replace(PHASE_PREFIX_RE, '');
   }
   return (row.marketPhase ? BACKTEST_PHASE_LABELS[language][row.marketPhase] : undefined) || row.marketPhase || NO_VALUE;
 }
@@ -184,8 +191,10 @@ function directionMark(value: boolean | null | undefined, text: BacktestText) {
   return <span aria-label={text.unknown} className="text-secondary-text">{NO_VALUE}</span>;
 }
 
+type AdviceKey = DecisionAction | 'unclassified';
+
 interface AdviceRow {
-  advice: string;
+  advice: AdviceKey;
   total: number;
   win: number;
   loss: number;
@@ -193,24 +202,42 @@ interface AdviceRow {
   winRatePct: number | null;
 }
 
-/** adviceBreakdown 的 key 是存檔的建議原文；內層數字缺值當 0 只影響這張拆解表。 */
+/** 原文先查別名表（觀望／观望／watch…），再退回既有的建議文字判讀；都對不上歸「未分類」。 */
+function adviceKeyOf(advice: string): AdviceKey {
+  if (advice === '(unknown)') return 'unclassified';
+  return normalizeDecisionActionAlias(advice) ?? getLegacyDecisionAction(advice) ?? 'unclassified';
+}
+
+/**
+ * adviceBreakdown 的 key 是存檔的建議原文，同一動作會有繁簡英多種寫法；依動作合併後重算勝率
+ * （與後端同口徑：勝／(勝＋負)）。內層數字缺值當 0 只影響這張拆解表。
+ */
 function toAdviceRows(breakdown: Record<string, unknown> | undefined): AdviceRow[] {
   if (!breakdown) return [];
-  return Object.entries(breakdown)
-    .flatMap(([advice, raw]) => {
-      if (!raw || typeof raw !== 'object') return [];
-      const bucket = raw as Record<string, unknown>;
-      const rate = bucket.winRatePct ?? bucket.win_rate_pct;
-      return [{
-        advice,
-        total: Number(bucket.total ?? 0),
-        win: Number(bucket.win ?? 0),
-        loss: Number(bucket.loss ?? 0),
-        neutral: Number(bucket.neutral ?? 0),
-        winRatePct: typeof rate === 'number' ? rate : null,
-      }];
+  const merged = new Map<AdviceKey, AdviceRow>();
+  for (const [advice, raw] of Object.entries(breakdown)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const bucket = raw as Record<string, unknown>;
+    const key = adviceKeyOf(advice);
+    const row = merged.get(key) ?? { advice: key, total: 0, win: 0, loss: 0, neutral: 0, winRatePct: null };
+    row.total += Number(bucket.total ?? 0);
+    row.win += Number(bucket.win ?? 0);
+    row.loss += Number(bucket.loss ?? 0);
+    row.neutral += Number(bucket.neutral ?? 0);
+    merged.set(key, row);
+  }
+  return Array.from(merged.values())
+    .map((row) => {
+      const decided = row.win + row.loss;
+      return { ...row, winRatePct: decided > 0 ? (row.win / decided) * 100 : null };
     })
-    .sort((left, right) => right.total - left.total);
+    .sort((left, right) => {
+      // 未分類永遠排最後。
+      if (left.advice === 'unclassified' || right.advice === 'unclassified') {
+        return Number(left.advice === 'unclassified') - Number(right.advice === 'unclassified');
+      }
+      return right.total - left.total;
+    });
 }
 
 function buildConclusion(metrics: PerformanceMetrics, language: UiLanguage): string {
@@ -253,6 +280,7 @@ const BacktestPage: React.FC = () => {
   const { language, t } = useUiLanguage();
   const text = BACKTEST_TEXT[language];
   const overview = BACKTEST_OVERVIEW_TEXT[language];
+  const signalsText = SIGNALS_TEXT[language];
   const phaseFilterOptions = BACKTEST_PHASE_FILTER_OPTIONS[language];
   const actionLabels = useMemo(() => buildDecisionActionLabelMap(t), [t]);
 
@@ -498,18 +526,26 @@ const BacktestPage: React.FC = () => {
     return typeof count === 'number' ? ` ${count}` : '';
   };
 
+  // 格子裡只放動作枚舉與趨勢；操作建議原文放 Tooltip。
   const renderPrediction = (row: BacktestResultItem) => {
     const actionLabel = getDecisionActionLabel(row.action, row.actionLabel, null, null, actionLabels);
-    const parts = [actionLabel, row.trendPrediction, row.operationAdvice].filter((part): part is string => Boolean(part));
-    if (parts.length === 0) return NO_VALUE;
+    const visible = [actionLabel, row.trendPrediction].filter((part): part is string => Boolean(part));
+    const advice = row.operationAdvice?.trim() || null;
+    if (visible.length === 0 && !advice) return NO_VALUE;
+    const cell = visible.length > 0 ? (
+      <span className="flex max-w-[16rem] items-baseline gap-1.5">
+        <span className="shrink-0 text-foreground">{visible[0]}</span>
+        {visible.slice(1).map((part) => (
+          <span key={part} className="min-w-0 truncate text-xs text-secondary-text">{part}</span>
+        ))}
+      </span>
+    ) : (
+      <span className="max-w-[16rem] truncate text-secondary-text">{advice}</span>
+    );
+    if (!advice || visible.length === 0) return cell;
     return (
-      <Tooltip content={parts.join(' / ')} focusable>
-        <span className="flex max-w-[16rem] items-baseline gap-1.5">
-          <span className="shrink-0 text-foreground">{parts[0]}</span>
-          {parts.slice(1).map((part) => (
-            <span key={part} className="min-w-0 truncate text-xs text-secondary-text">{part}</span>
-          ))}
-        </span>
+      <Tooltip content={advice} focusable>
+        {cell}
       </Tooltip>
     );
   };
@@ -586,7 +622,8 @@ const BacktestPage: React.FC = () => {
       ),
     },
     { key: 'result', header: text.result, render: (row) => outcomeBadge(row.outcome, language) },
-    { key: 'status', header: text.status, render: renderStatus },
+    // 「已完成」分頁每列都是已完成，狀態欄沒有資訊。
+    ...(tab === 'completed' ? [] : [{ key: 'status', header: text.status, render: renderStatus }]),
   ];
 
   const renderMobileCard = (row: BacktestResultItem) => {
@@ -610,7 +647,7 @@ const BacktestPage: React.FC = () => {
             <span className="min-w-0 truncate tabular-nums">{row.analysisDate || NO_VALUE}・{actionLabel || NO_VALUE}</span>
             <span className="inline-flex shrink-0 items-center gap-1.5">
               {directionMark(row.directionCorrect, text)}
-              {statusBadge(rowStatus(row), language)}
+              {tab === 'completed' ? null : statusBadge(rowStatus(row), language)}
             </span>
           </span>
         </button>
@@ -624,9 +661,11 @@ const BacktestPage: React.FC = () => {
       key: 'advice',
       header: overview.adviceColumn,
       priority: 'primary',
-      render: (row) => (row.advice === '(unknown)' ? overview.adviceUnclassified : row.advice),
+      render: (row) => (row.advice === 'unclassified'
+        ? overview.adviceUnclassified
+        : getDecisionActionLabel(row.advice, null, null, overview.adviceUnclassified, actionLabels)),
     },
-    { key: 'total', header: overview.countColumn, numeric: true, render: (row) => formatNumber(row.total) },
+    { key: 'total', header: overview.countColumn, numeric: true, priority: 'primary', render: (row) => formatNumber(row.total) },
     {
       key: 'outcomes',
       header: text.outcomeSummary,
@@ -638,7 +677,16 @@ const BacktestPage: React.FC = () => {
       header: text.winRate,
       numeric: true,
       priority: 'primary',
-      render: (row) => (row.winRatePct != null ? `${formatNumber(row.winRatePct, 1)}%` : NO_VALUE),
+      render: (row) => {
+        const rate = row.winRatePct != null ? `${formatNumber(row.winRatePct, 1)}%` : NO_VALUE;
+        if (row.total >= MIN_ADVICE_ROW_SAMPLE) return rate;
+        return (
+          <span data-testid={`advice-small-sample-${row.advice}`} className="whitespace-nowrap text-muted-text">
+            {rate}
+            <span className="ml-1 text-xs">{signalsText.smallSample}</span>
+          </span>
+        );
+      },
     },
   ];
 
@@ -720,22 +768,28 @@ const BacktestPage: React.FC = () => {
                 ))}
               </select>
             </label>
-            <input
-              type="date"
-              aria-label={text.startDateAria}
-              value={analysisDateFrom}
-              onChange={(e) => setAnalysisDateFrom(e.target.value)}
-              onKeyDown={handleKeyDown}
-              className={`${BACKTEST_COMPACT_INPUT_CLASS} w-36 text-center tabular-nums`}
-            />
-            <input
-              type="date"
-              aria-label={text.endDateAria}
-              value={analysisDateTo}
-              onChange={(e) => setAnalysisDateTo(e.target.value)}
-              onKeyDown={handleKeyDown}
-              className={`${BACKTEST_COMPACT_INPUT_CLASS} w-36 text-center tabular-nums`}
-            />
+            <label className="flex items-center gap-2 whitespace-nowrap">
+              <span className="text-xs text-secondary-text">{signalsText.dateFrom}</span>
+              <input
+                type="date"
+                aria-label={text.startDateAria}
+                value={analysisDateFrom}
+                onChange={(e) => setAnalysisDateFrom(e.target.value)}
+                onKeyDown={handleKeyDown}
+                className={`${BACKTEST_COMPACT_INPUT_CLASS} w-36 text-center tabular-nums`}
+              />
+            </label>
+            <label className="flex items-center gap-2 whitespace-nowrap">
+              <span className="text-xs text-secondary-text">{signalsText.dateTo}</span>
+              <input
+                type="date"
+                aria-label={text.endDateAria}
+                value={analysisDateTo}
+                onChange={(e) => setAnalysisDateTo(e.target.value)}
+                onKeyDown={handleKeyDown}
+                className={`${BACKTEST_COMPACT_INPUT_CLASS} w-36 text-center tabular-nums`}
+              />
+            </label>
           </div>
           {appliedChips.length > 0 ? (
             <p data-testid="backtest-applied" className="text-xs text-secondary-text">
@@ -756,7 +810,7 @@ const BacktestPage: React.FC = () => {
               <Metric
                 label={text.winRate}
                 value={metrics.winRatePct != null ? `${formatNumber(metrics.winRatePct, 1)}%` : undefined}
-                hint={`${metrics.winCount}／${metrics.lossCount}／${metrics.neutralCount}`}
+                hint={formatUiText(signalsText.winLossHint, { win: metrics.winCount, loss: metrics.lossCount, neutral: metrics.neutralCount })}
               />
               <Metric label={text.avgSimulatedReturn} value={<ReturnValue value={metrics.avgSimulatedReturnPct} />} />
               <Metric label={text.avgStockReturn} value={<ReturnValue value={metrics.avgStockReturnPct} />} />

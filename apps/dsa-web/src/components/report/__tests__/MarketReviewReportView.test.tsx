@@ -185,13 +185,38 @@ describe('MarketReviewReportView', () => {
     expect(cells.getByText('合計').nextElementSibling).toHaveTextContent('+100.25');
   });
 
-  it('shows light dimensions, marks unavailable ones with a dash instead of 0', () => {
+  it('labels the light in words with amber/grey tones and hides unavailable dimensions', () => {
     render(<MarketReviewReportView payload={twUsPayload} content="# 大盤複盤" reportLanguage="zh-TW" />);
 
     const light = screen.getByTestId('market-light');
-    expect(light).toHaveTextContent('紅燈 30');
+    expect(light).toHaveTextContent('警戒 30');
+    expect(within(light).getByText('警戒 30')).toHaveClass('text-warning');
+    expect(within(light).getByText('警戒 30')).not.toHaveClass('bg-danger/10');
     expect(light).toHaveTextContent('廣度 40');
-    expect(light).toHaveTextContent('指數 —');
+    // An unavailable dimension would only show a dash, so it is left out.
+    expect(light).not.toHaveTextContent('指數');
+    expect(light).not.toHaveTextContent('—');
+  });
+
+  it('puts stance and sentiment in one headline and drops empty fields', () => {
+    render(
+      <MarketReviewReportView
+        report={{
+          ...englishMarketReviewReport,
+          meta: { ...englishMarketReviewReport.meta, reportLanguage: 'zh-TW' },
+          summary: { analysisSummary: '偏空整理', operationAdvice: '', trendPrediction: '留意匯率', sentimentScore: 26 },
+        }}
+        payload={twUsPayload}
+        content="# 大盤複盤"
+        reportLanguage="zh-TW"
+      />,
+    );
+
+    expect(screen.getByTestId('market-review-headline')).toHaveTextContent('偏防守 · 情緒 26/100');
+    const conclusion = screen.getByTestId('market-review-conclusion');
+    expect(conclusion).toHaveTextContent('留意匯率');
+    expect(conclusion).not.toHaveTextContent('輪動與資金');
+    expect(conclusion).not.toHaveTextContent('暫無');
   });
 
   it('collapses long text when structured data exists but opens it for markdown-only reports', () => {
@@ -200,6 +225,57 @@ describe('MarketReviewReportView', () => {
 
     rerender(<MarketReviewReportView content={'## 段落\n\n只有文字'} reportLanguage="zh-TW" />);
     expect(screen.getByText('只有文字').closest('details')).toHaveAttribute('open');
+  });
+
+  it('renders the legacy 四_明日交易計畫 section as an open plan card right below the conclusion', () => {
+    render(
+      <MarketReviewReportView
+        report={{ ...englishMarketReviewReport, summary: { ...englishMarketReviewReport.summary, analysisSummary: '結論' } }}
+        payload={{
+          kind: 'market_review',
+          region: 'tw',
+          indices: [{ code: 'TAIEX', name: '加權指數', current: 1 }],
+          sections: [
+            { key: 'market_summary', title: '總覽', markdown: '總覽內容' },
+            // Title deliberately avoids the plan regex so only the key list can match it.
+            { key: '四_明日交易計畫', title: '第四節', markdown: '計畫內容' },
+          ],
+        }}
+        content="# x"
+        reportLanguage="zh-TW"
+      />,
+    );
+
+    const planCard = screen.getByTestId('next-day-plan-card');
+    expect(planCard).toHaveAttribute('open');
+    expect(within(planCard).getByText('明日計畫')).toBeInTheDocument();
+    expect(within(screen.getByTestId('next-day-plan')).getByText('計畫內容')).toBeInTheDocument();
+    expect(within(screen.getByTestId('market-review-report')).queryByText('計畫內容')).not.toBeInTheDocument();
+    const conclusion = screen.getByTestId('market-review-conclusion');
+    expect(conclusion.compareDocumentPosition(planCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(planCard.compareDocumentPosition(screen.getByTestId('market-index-cards')) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+  });
+
+  it('falls back to the plan title when no legacy key matches, stripping the emoji', () => {
+    render(
+      <MarketReviewReportView
+        payload={{
+          kind: 'market_review',
+          region: 'tw',
+          indices: [{ code: 'TAIEX', name: '加權指數', current: 1 }],
+          sections: [
+            { key: 'overview', title: 'Overview', markdown: '總覽內容' },
+            { key: 'other', title: '🎯 明日操作', markdown: '計畫內容' },
+          ],
+        }}
+        content="# x"
+        reportLanguage="zh-TW"
+      />,
+    );
+
+    expect(within(screen.getByTestId('next-day-plan')).getByText('計畫內容')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '摘要' })).toBeInTheDocument();
+    expect(screen.queryByText(/🎯/)).not.toBeInTheDocument();
   });
 
   it('promotes the structured plan, and falls back to the legacy section by key', () => {
@@ -228,7 +304,7 @@ describe('MarketReviewReportView', () => {
     expect(within(screen.getByTestId('market-review-report')).queryByText('展望內容')).not.toBeInTheDocument();
   });
 
-  it('explains missing sector data in one line', () => {
+  it('skips the sector and breadth cards entirely when the session has no such data', () => {
     render(
       <MarketReviewReportView
         payload={{ kind: 'market_review', region: 'tw', indices: [{ code: 'TAIEX', name: '加權指數', current: 1 }] }}
@@ -236,7 +312,10 @@ describe('MarketReviewReportView', () => {
         reportLanguage="zh-TW"
       />,
     );
-    expect(screen.getByText('這個場次沒有類股資料')).toBeInTheDocument();
+    expect(screen.queryByText('這個場次沒有類股資料')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sector-rank')).not.toBeInTheDocument();
+    expect(screen.queryByText('暫無資料')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('institutional-net')).not.toBeInTheDocument();
   });
 
   it('hides the MARKET code and offers a retry when the report fails to load', async () => {
@@ -263,12 +342,10 @@ describe('MarketReviewReportView', () => {
 
     expect(screen.getByText("Today's Takeaway")).toBeInTheDocument();
     expect(screen.getByText('No review summary yet')).toBeInTheDocument();
-    expect(screen.getByText('Market Sentiment')).toBeInTheDocument();
-    expect(screen.getByText('No score yet')).toBeInTheDocument();
-    expect(screen.getByText('Rotation & Funds')).toBeInTheDocument();
-    expect(screen.getByText('No rotation view yet')).toBeInTheDocument();
-    expect(screen.getByText('Risks & Watchlist')).toBeInTheDocument();
-    expect(screen.getByText('No key observations yet')).toBeInTheDocument();
+    // Empty fields are hidden instead of printing placeholders.
+    expect(screen.queryByText('Rotation & Funds')).not.toBeInTheDocument();
+    expect(screen.queryByText('Risks & Watchlist')).not.toBeInTheDocument();
+    expect(screen.queryByText('No score yet')).not.toBeInTheDocument();
     expect(screen.queryByText('暂无摘要')).not.toBeInTheDocument();
   });
 
@@ -287,7 +364,7 @@ describe('MarketReviewReportView', () => {
     expect(screen.getByText('−2.05%')).toBeInTheDocument();
   });
 
-  it('shows "No data" when breadth is not available for a market review payload', () => {
+  it('omits the breadth card when breadth is not available for a market review payload', () => {
     render(
       <MarketReviewReportView
         payload={noBreadthMarketReviewPayload}
@@ -296,7 +373,7 @@ describe('MarketReviewReportView', () => {
       />,
     );
 
-    expect(screen.getByText('No data')).toBeInTheDocument();
+    expect(screen.queryByText('No data')).not.toBeInTheDocument();
     expect(screen.getByText('S&P 500')).toBeInTheDocument();
     expect(screen.getByText('Technology')).toBeInTheDocument();
     expect(screen.queryByText('Advancers')).not.toBeInTheDocument();
@@ -389,5 +466,29 @@ describe('MarketReviewReportView', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: '查看历史记录 7 运行流' }));
 
     expect(onOpenRunFlow).toHaveBeenCalledWith(7);
+  });
+
+  it('adds a full-report button and merges page actions into the single more menu', () => {
+    const onOpenFullReport = vi.fn();
+    const onHistory = vi.fn();
+
+    render(
+      <MarketReviewReportView
+        payload={combinedMarketReviewPayload}
+        content="# 大盘复盘"
+        recordId={7}
+        reportLanguage="zh"
+        onOpenFullReport={onOpenFullReport}
+        extraActionItems={[{ key: 'history', label: '历次分析', onSelect: onHistory }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /完整报告/ }));
+    expect(onOpenFullReport).toHaveBeenCalled();
+    expect(screen.getAllByRole('button', { name: '更多操作' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    expect(screen.getByRole('menuitem', { name: '复制 Markdown 源码' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: '历次分析' }));
+    expect(onHistory).toHaveBeenCalled();
   });
 });

@@ -47,6 +47,8 @@ import { isTwStockCode, stockCodeMatchKey } from '../utils/stockCode';
 import { BoardDossierCell, BoardDossierPanel } from '../components/board/BoardDossier';
 import { FinancialsPanel } from '../components/report/FinancialsPanel';
 import { marketToneClass } from '../utils/marketTone';
+import { formatUiText } from '../i18n/uiText';
+import { BOARD_TEXT } from '../locales/boardText';
 
 const POLL_INTERVAL_MS = 30_000;
 // 看板代碼分市場：只有明確的台股／美股格式才參與閘門，其餘（.T、.HK、.KS、A 股…）歸 other 照常輪詢
@@ -61,6 +63,8 @@ const SCOPE_STORAGE_KEY = 'dsa.board.scope';
 const SORT_STORAGE_KEY = 'dsa.board.sort';
 const SPARK_STORAGE_KEY = 'dsa.board.spark';
 const ATTENTION_MOVE_PCT = 5; // 單日變動超過這個幅度才進「需注意」，常態波動是噪音
+const ATTENTION_MAX = 5; // 膠囊最多顯示幾個，其餘收成「還有 N 檔」
+const HIGHLIGHT_MS = 1500; // 從需注意跳過去後高亮多久
 const DESKTOP_MEDIA_QUERY = '(min-width: 768px)'; // 與 DataTable 的 md 斷點一致
 
 type Scope = 'all' | 'watch' | 'holdings';
@@ -130,6 +134,8 @@ const isDesktopViewport = () =>
 const CHUNK = 8; // 每批並發請求的代號數：分批更新，慢的股票不擋快的
 
 const changeClass = (value?: number | null): string => marketToneClass(value);
+// Small pill for the limit-distance and VWAP-deviation readings under a price.
+const PILL_CLASS = 'mt-0.5 inline-flex whitespace-nowrap rounded-full bg-hover px-1.5 text-[11px] font-medium leading-4';
 
 const signedNumber = (value?: number | null, digits?: number): string => {
   const text = formatNumber(value, digits);
@@ -173,6 +179,31 @@ const formatTrendLabel = (raw: string, range: TrendRange): string => {
   return range === 'day' ? `${date} ${_pad(d.getHours())}:${_pad(d.getMinutes())}` : date;
 };
 
+const TREND_TICK_COUNT = 5;
+const TREND_PAD_RATIO = 0.05; // headroom so the line and the prev-close label do not sit on the frame
+
+/**
+ * Y-axis bounds for the trend chart: always include the baseline (prev close) so its dashed line is on screen,
+ * then pad a little. A flat series gets a band around its single value instead of a zero-height axis.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- pure helper exported for unit tests
+export function trendAxisBounds(dataMin: number, dataMax: number, baseline: number | null | undefined): [number, number] {
+  const lo = baseline != null && Number.isFinite(baseline) ? Math.min(dataMin, baseline) : dataMin;
+  const hi = baseline != null && Number.isFinite(baseline) ? Math.max(dataMax, baseline) : dataMax;
+  const span = hi - lo;
+  const pad = span > 0 ? span * TREND_PAD_RATIO : Math.abs(hi) * 0.005 || 1;
+  return [lo - pad, hi + pad];
+}
+
+/** Decimal places for price ticks, following the TW tick-size bands (≥500 whole, ≥50 one decimal, else two). */
+// eslint-disable-next-line react-refresh/only-export-components -- pure helper exported for unit tests
+export function trendPriceDigits(reference: number | null | undefined): number {
+  const ref = Math.abs(reference ?? 0);
+  if (ref >= 500) return 0;
+  if (ref >= 50) return 1;
+  return 2;
+}
+
 // 展開區左欄：預設當日走勢，有昨收就畫基準線，線色也以昨收為準
 const TrendChart: React.FC<{ code: string; prevClose?: number | null }> = ({ code, prevClose }) => {
   const { t } = useUiLanguage();
@@ -201,6 +232,10 @@ const TrendChart: React.FC<{ code: string; prevClose?: number | null }> = ({ cod
   const ranges: TrendRange[] = ['day', 'month', 'year'];
   const baseline = range === 'day' && prevClose ? prevClose : null;
   const up = points.length >= 1 && points[points.length - 1].price >= (baseline ?? points[0].price);
+  const digits = trendPriceDigits(baseline ?? points[points.length - 1]?.price);
+  // 'auto' would fit the prices only and recharts then discards the prev-close line once it falls outside
+  const prices = points.map((p) => p.price);
+  const domain = prices.length > 0 ? trendAxisBounds(Math.min(...prices), Math.max(...prices), baseline) : undefined;
 
   return (
     <div className="min-w-0 space-y-2 px-3 py-3">
@@ -241,14 +276,15 @@ const TrendChart: React.FC<{ code: string; prevClose?: number | null }> = ({ cod
               tickFormatter={(v) => formatTrendTick(String(v), range)}
             />
             <YAxis
-              domain={['auto', 'auto']}
+              domain={domain}
+              tickCount={TREND_TICK_COUNT}
               width={52}
               tick={{ fontSize: 11 }}
-              tickFormatter={(v) => Number(v).toFixed(1)}
+              tickFormatter={(v) => Number(v).toFixed(digits)}
             />
             <Tooltip
               labelFormatter={(label) => formatTrendLabel(String(label), range)}
-              formatter={(v) => [Number(v).toFixed(2), t('board.col.price')]}
+              formatter={(v) => [Number(v).toFixed(Math.max(digits, 2)), t('board.col.price')]}
               contentStyle={{
                 background: 'hsl(var(--popover))',
                 border: '1px solid hsl(var(--border))',
@@ -323,6 +359,8 @@ const SECTION_ORDER: SectionId[] = ['holdingsTw', 'holdingsUs', 'watch'];
 
 const unrealizedPnl = (row: BoardRow): number | null =>
   row.holding && hasPrice(row.q) ? (row.q.currentPrice - row.holding.avgCost) * row.holding.quantity : null;
+const holdingPct = (row: BoardRow): number | null =>
+  row.holding?.avgCost && hasPrice(row.q) ? (row.q.currentPrice / row.holding.avgCost - 1) * 100 : null;
 const avgDeviationPct = (q?: StockQuote | null): number | null =>
   hasPrice(q) && q.averagePrice ? (q.currentPrice / q.averagePrice - 1) * 100 : null;
 
@@ -369,8 +407,42 @@ function totalsByCurrency(accounts: PortfolioAccountSnapshot[]): CurrencyTotal[]
 
 const CURRENCY_LABEL: Record<string, string> = { TWD: 'NT$', USD: 'US$' };
 
+// 跨帳戶合併同一代碼的持股；股數 0（已出清）不算
+function mergeHoldings(accounts: PortfolioAccountSnapshot[]): Record<string, Holding> {
+  const merged: Record<string, Holding> = {};
+  for (const acc of accounts) {
+    for (const p of acc.positions) {
+      if (!(p.quantity > 0)) continue;
+      const key = stockCodeMatchKey(p.symbol);
+      const h = merged[key];
+      if (h) {
+        const qty = h.quantity + p.quantity;
+        h.avgCost = (h.avgCost * h.quantity + p.avgCost * p.quantity) / qty;
+        h.quantity = qty;
+        h.name = h.name ?? p.name;
+        if (!h.accounts.includes(acc.accountName)) h.accounts.push(acc.accountName);
+      } else {
+        merged[key] = { quantity: p.quantity, avgCost: p.avgCost, currency: p.currency, accounts: [acc.accountName], name: p.name };
+      }
+    }
+  }
+  return merged;
+}
+
+// 2026-10-30 → 10/30; anything else passes through untouched
+const shortMonthDay = (date: string): string => {
+  const m = /^\d{4}-(\d{2})-(\d{2})/.exec(date);
+  return m ? `${Number(m[1])}/${Number(m[2])}` : date;
+};
+
+const formatClock = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : `${_pad(d.getHours())}:${_pad(d.getMinutes())}`;
+};
+
 const RealtimeBoardPage: React.FC = () => {
-  const { t } = useUiLanguage();
+  const { t, language } = useUiLanguage();
+  const bt = BOARD_TEXT[language] ?? BOARD_TEXT.zh;
   const navigate = useNavigate();
   const [watchCodes, setWatchCodes] = useState<string[]>([]);
   const [holdings, setHoldings] = useState<Record<string, Holding>>({});
@@ -382,11 +454,19 @@ const RealtimeBoardPage: React.FC = () => {
   const [sparkEnabled, setSparkEnabled] = useState(readSparkEnabled);
   const [sparks, setSparks] = useState<Record<string, TrendPoint[]>>({});
   const [quotes, setQuotes] = useState<Record<string, StockQuoteBatchItem>>({});
+  // 報價請求失敗的代碼：漲跌家數的「載入中 N/M」要把它們算成已回來，否則會一直卡在載入中
+  const [quoteFailed, setQuoteFailed] = useState<Record<string, true>>({});
   const [flashes, setFlashes] = useState<Record<string, { dir: 'up' | 'down'; seq: number }>>({});
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [marketOpen, setMarketOpen] = useState<Record<string, boolean>>({});
   const [overview, setOverview] = useState<CurrencyTotal[]>([]);
-  const [loading, setLoading] = useState(true);
+  // 自選與帳本各自回來就先畫：自選一到就打報價，持股等帳本快照回來再補一批
+  const [watchSettled, setWatchSettled] = useState(false);
+  const [holdingsSettled, setHoldingsSettled] = useState(false);
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  const highlightTimerRef = useRef<number | null>(null);
+  const holdingsLoadedRef = useRef(false);
+  const aliveRef = useRef(true);
   const [error, setError] = useState<ParsedApiError | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [dossier, setDossier] = useState<Record<string, DossierSummary | null>>({});
@@ -437,67 +517,84 @@ const RealtimeBoardPage: React.FC = () => {
           setUpdatedAt(new Date().toISOString());
           setError(null);
         })
-        .catch((err) => setError(getParsedApiError(err))); // 保留旧值，只提示错误
+        .catch((err) => {
+          setError(getParsedApiError(err)); // 保留旧值，只提示错误
+          const stale = chunk.filter((c) => codeSeqRef.current.get(stockCodeMatchKey(c)) === seq);
+          if (stale.length) {
+            setQuoteFailed((prev) => {
+              const next = { ...prev };
+              for (const c of stale) next[c] = true;
+              return next;
+            });
+          }
+        });
     }
   }, [loadIndices]);
 
-  // 自選清單（STOCK_LIST）＋帳本持股（全部帳戶，含美股複委託）＋基金持倉；任一來源失敗不擋其他兩個
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+    };
+  }, []);
+
+  // 自選清單（STOCK_LIST）與基金持倉各自載入，任一失敗不擋其他來源，也不等帳本
   useEffect(() => {
     let active = true;
-    void (async () => {
-      const [watch, snap, fundList] = await Promise.allSettled([
-        systemConfigApi.getWatchlist(),
-        portfolioApi.getSnapshot({ includeRealtime: false }),
-        fundsApi.listHoldings(),
-      ]);
-      if (!active) return;
-      if (watch.status === 'fulfilled') setWatchCodes(watch.value);
-      else setError(getParsedApiError(watch.reason));
-      if (snap.status === 'fulfilled') {
-        const merged: Record<string, Holding> = {};
-        for (const acc of snap.value.accounts) {
-          for (const p of acc.positions) {
-            if (!(p.quantity > 0)) continue;
-            const key = stockCodeMatchKey(p.symbol);
-            const h = merged[key];
-            if (h) {
-              const qty = h.quantity + p.quantity;
-              h.avgCost = (h.avgCost * h.quantity + p.avgCost * p.quantity) / qty;
-              h.quantity = qty;
-              h.name = h.name ?? p.name;
-              if (!h.accounts.includes(acc.accountName)) h.accounts.push(acc.accountName);
-            } else {
-              merged[key] = { quantity: p.quantity, avgCost: p.avgCost, currency: p.currency, accounts: [acc.accountName], name: p.name };
-            }
-          }
-        }
-        setHoldings(merged);
-      } else {
-        setHoldingsFailed(true);
-      }
-      if (fundList.status === 'fulfilled') setFunds(fundList.value.items);
-      setLoading(false);
-    })();
+    systemConfigApi
+      .getWatchlist()
+      .then((codes) => {
+        if (active) setWatchCodes(codes);
+      })
+      .catch((err) => {
+        if (active) setError(getParsedApiError(err));
+      })
+      .finally(() => {
+        if (active) setWatchSettled(true);
+      });
+    fundsApi
+      .listHoldings()
+      .then((list) => {
+        if (active) setFunds(list.items);
+      })
+      .catch(() => {
+        /* 基金卡是輔助資料，失敗就不顯示 */
+      });
     return () => {
       active = false;
     };
   }, []);
 
-  // 帳戶總覽帶即時價，比上面建清單用的帳本查詢重，所以另外查、失敗只讓總覽不顯示
+  // 帳本快照只打一支帶即時價的：同時給帳戶總覽與持股清單（全部帳戶，含美股複委託）。
+  // 持股清單只在第一次成功時建立，之後的 5 分鐘重抓只更新總覽，避免整頁報價跟著重打
   useEffect(() => {
     let active = true;
     portfolioApi
       .getSnapshot({ includeRealtime: true })
       .then((snap) => {
-        if (active) setOverview(totalsByCurrency(snap.accounts));
+        if (!active) return;
+        setOverview(totalsByCurrency(snap.accounts));
+        if (!holdingsLoadedRef.current) {
+          holdingsLoadedRef.current = true;
+          setHoldings(mergeHoldings(snap.accounts));
+          setHoldingsFailed(false);
+        }
       })
       .catch(() => {
-        /* 總覽是輔助資料，保留舊值 */
+        // 總覽保留舊值；持股從沒成功過才提示只剩自選
+        if (active && !holdingsLoadedRef.current) setHoldingsFailed(true);
+      })
+      .finally(() => {
+        if (active) setHoldingsSettled(true);
       });
     return () => {
       active = false;
     };
   }, [overviewTick]);
+
+  // 自選回來就能先畫；持股範圍、或自選是空的時候要等帳本，否則會閃一下「沒有股票」
+  const loading = !watchSettled || (!holdingsSettled && (scope === 'holdings' || watchCodes.length === 0));
 
   // 顯示清單隨範圍切換；輪詢只抓畫面上的代碼
   const codes = useMemo<string[] | null>(() => {
@@ -510,22 +607,38 @@ const RealtimeBoardPage: React.FC = () => {
     return [...watchCodes, ...held.filter((c) => !watchSet.has(c))];
   }, [loading, scope, watchCodes, holdings]);
 
+  // 清單變動時只補抓還沒問過報價的代碼（自選先一批、持股回來再一批）；已抓過的交給輪詢與手動刷新。
+  // 第一次一定呼叫一次，即使清單是空的也要載入大盤指數
+  const quoteRequestedRef = useRef<Set<string> | null>(null);
   useEffect(() => {
     if (!codes) return;
     codesRef.current = codes;
-    refresh();
+    const first = quoteRequestedRef.current === null;
+    const requested = quoteRequestedRef.current ?? new Set<string>();
+    quoteRequestedRef.current = requested;
+    const added = codes.filter((c) => !requested.has(c));
+    for (const c of added) requested.add(c);
+    if (first || added.length > 0) refresh(added, first ? INDEX_REGIONS : []);
   }, [codes, refresh]);
 
   // 四維度摘要在清單改變、手動刷新、每 15 分鐘時重抓（日資料，不跟 30 秒報價輪詢）；只送台股、失敗不影響報價
   // key 一律正規化：後端回大寫代碼，自選清單可能是小寫
+  // 清單只是多了代碼時只補新的那批；tick 變了（手動刷新／15 分鐘）才整份重抓。
+  // 不用 effect 的 cleanup 作廢在途請求：清單分兩批到時，第一批的結果不能被第二批丟掉
+  const dossierRequestedRef = useRef<{ tick: number; codes: Set<string> } | null>(null);
   useEffect(() => {
-    const tw = (codes ?? []).filter(isTwStockCode);
-    let active = true;
+    const allTw = (codes ?? []).filter(isTwStockCode);
+    const prev = dossierRequestedRef.current;
+    const fresh = !prev || prev.tick !== dossierTick;
+    const requested = fresh ? new Set<string>() : prev.codes;
+    dossierRequestedRef.current = { tick: dossierTick, codes: requested };
+    const tw = allTw.filter((c) => !requested.has(stockCodeMatchKey(c)));
+    for (const c of tw) requested.add(stockCodeMatchKey(c));
     for (let i = 0; i < tw.length; i += DOSSIER_CHUNK) {
       stocksApi
         .getDossierSummaries(tw.slice(i, i + DOSSIER_CHUNK))
         .then(({ items, levelAlertsEnabled: enabled }) => {
-          if (!active) return;
+          if (!aliveRef.current) return;
           setLevelAlertsEnabled(enabled);
           setDossier((prev) => {
             const next = { ...prev };
@@ -537,9 +650,6 @@ const RealtimeBoardPage: React.FC = () => {
           /* 摘要是輔助資料，失敗只是該欄顯示「—」 */
         });
     }
-    return () => {
-      active = false;
-    };
   }, [codes, dossierTick]);
 
   // 迷你分時只查持股；關閉或手機就完全不發請求
@@ -652,12 +762,13 @@ const RealtimeBoardPage: React.FC = () => {
       : rows;
     const groups: Record<SectionId, BoardRow[]> = { holdingsTw: [], holdingsUs: [], watch: [] };
     for (const row of visible) {
-      if (!row.holding) groups.watch.push(row);
+      // 自選範圍只有一段「自選」，持股列靠列上的「持股」小標辨識；只有「全部」才把持股拆出去
+      if (scope === 'watch' || !row.holding) groups.watch.push(row);
       else if (isTwStockCode(row.code)) groups.holdingsTw.push(row);
       else groups.holdingsUs.push(row);
     }
     return groups;
-  }, [rows, filter]);
+  }, [rows, filter, scope]);
 
   // 距涨跌停板：触及板 → 实心标注；未触及 → 显示距较近一侧板的百分比（台股 ±10% 当沖最先看的盘口）
   const limitInfo = (q?: StockQuote | null): { text: string; cls: string } | null => {
@@ -796,7 +907,7 @@ const RealtimeBoardPage: React.FC = () => {
             <>
               <div>{priceValue(row)}</div>
               {quoteStateNote(row)}
-              {li ? <div className={cn('text-[10px]', li.cls)}>{li.text}</div> : null}
+              {li ? <div><span className={cn(PILL_CLASS, li.cls)}>{li.text}</span></div> : null}
             </>
           );
         },
@@ -825,7 +936,7 @@ const RealtimeBoardPage: React.FC = () => {
           return (
             <>
               <div>{row.q?.averagePrice != null ? formatPrice(row.q.averagePrice, row.currency) : NO_VALUE}</div>
-              {deviation != null ? <div className={cn('text-[10px]', changeClass(deviation))}>{formatPercent(deviation)}</div> : null}
+              {deviation != null ? <div><span className={cn(PILL_CLASS, changeClass(deviation))}>{formatPercent(deviation)}</span></div> : null}
             </>
           );
         },
@@ -855,7 +966,7 @@ const RealtimeBoardPage: React.FC = () => {
           sortable: true,
           render: (row) => {
             const pnl = unrealizedPnl(row);
-            const pct = row.holding?.avgCost && hasPrice(row.q) ? (row.q.currentPrice / row.holding.avgCost - 1) * 100 : null;
+            const pct = holdingPct(row);
             return (
               <div className={changeClass(pnl)}>
                 <div>{pnl != null ? `${signedNumber(pnl, 0)} ${row.holding?.currency ?? ''}`.trim() : NO_VALUE}</div>
@@ -887,7 +998,8 @@ const RealtimeBoardPage: React.FC = () => {
         header: t('board.col.structure'),
         render: (row) => <BoardDossierCell summary={row.dossier} price={hasPrice(row.q) ? row.q.currentPrice : null} />,
       },
-      { key: 'action', header: '', align: 'right', render: analyzeButton },
+      // The expanded area has its own action row; the row-tail button would be a duplicate there.
+      { key: 'action', header: '', align: 'right', render: (row) => (expanded === row.code ? null : analyzeButton(row)) },
     );
     return columns;
   };
@@ -933,13 +1045,15 @@ const RealtimeBoardPage: React.FC = () => {
     ] as Array<{ label: string; value: React.ReactNode } | null>).filter((c): c is { label: string; value: React.ReactNode } => c !== null);
     return (
       // 寬表橫捲時展開內容黏在左邊，不用橫滑整張表才找得到按鈕
-      <div data-testid="board-expanded" className="sticky left-0 w-[min(100%,calc(100vw-4rem))] bg-base/40">
+      <div data-testid="board-expanded" className="sticky left-0 w-[min(100%,calc(100vw-4rem))] border-y border-border/60 bg-elevated/30">
         <BoardDossierPanel
           code={row.code}
           name={row.name}
           summary={row.dossier}
           price={hasPrice(q) ? q.currentPrice : null}
           levelAlertsEnabled={levelAlertsEnabled}
+          onOpenReport={() => openAnalysis(row.code)}
+          onCreateAlert={() => navigate(`/alerts?new=1&target=${encodeURIComponent(row.code)}`)}
         />
         <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
           <TrendChart code={row.code} prevClose={q?.prevClose} />
@@ -955,40 +1069,31 @@ const RealtimeBoardPage: React.FC = () => {
               </dl>
             ) : null}
             {q?.volumeRatio != null ? <div className="mt-2 text-[10px] text-secondary-text">{t('board.detail.volumeRatioHint')}</div> : null}
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigate(`/alerts?new=1&target=${encodeURIComponent(row.code)}`);
-                }}
-              >
-                {t('board.action.createAlert')}
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openAnalysis(row.code);
-                }}
-              >
-                {t('board.action.fullAnalysis')}
-              </Button>
-            </div>
           </div>
         </div>
         <div className="px-3 pb-3">
-          <FinancialsPanel stockCode={row.code} />
+          <FinancialsPanel stockCode={row.code} embedded />
         </div>
+        <button
+          type="button"
+          data-testid="board-expanded-collapse"
+          className="sticky bottom-0 h-10 w-full border-t border-border/60 bg-elevated/90 text-sm text-secondary-text backdrop-blur hover:text-foreground"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded(null);
+          }}
+        >
+          {bt.collapseRow} ▲
+        </button>
       </div>
     );
   };
 
-  // 手機三段式列：名稱代號｜現價｜漲跌幅，點開才看其餘
+  // 手機三段式列：名稱代號｜現價｜漲跌幅，點開才看其餘；持股多一行股數與未實現損益
   const mobileCard = (row: BoardRow) => {
     const isOpen = expanded === row.code;
+    const pnl = unrealizedPnl(row);
+    const pct = holdingPct(row);
     return (
       <div>
         <div
@@ -1002,11 +1107,18 @@ const RealtimeBoardPage: React.FC = () => {
               setExpanded(isOpen ? null : row.code);
             }
           }}
-          className="grid min-h-11 cursor-pointer grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-2 text-sm"
+          className="grid min-h-11 cursor-pointer grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-3 gap-y-0.5 px-3 py-2 text-sm"
         >
           <div className="min-w-0">
             <div className="truncate font-medium">{row.name ?? NO_VALUE}</div>
-            <div className="truncate font-mono text-xs text-secondary-text">{row.code}</div>
+            <div className="truncate font-mono text-xs text-secondary-text">
+              {row.code}
+              {row.holding ? (
+                <span className="ml-1.5 inline-flex rounded border border-[hsl(var(--primary))]/30 px-1 align-middle font-sans text-[10px] text-[hsl(var(--primary))]">
+                  {t('board.tag.holding')}
+                </span>
+              ) : null}
+            </div>
           </div>
           <div className="text-right tabular-nums">
             <div>{priceValue(row)}</div>
@@ -1015,6 +1127,21 @@ const RealtimeBoardPage: React.FC = () => {
           <div className={cn('min-w-16 text-right font-semibold tabular-nums', changeClass(row.q?.changePercent))}>
             {formatPercent(row.q?.changePercent)}
           </div>
+          <ChevronRight
+            aria-hidden="true"
+            className={cn('h-4 w-4 shrink-0 text-secondary-text transition-transform', isOpen && 'rotate-90')}
+          />
+          {row.holding ? (
+            <div data-testid="board-mobile-holding" className={cn('col-span-4 text-xs tabular-nums', changeClass(pnl))}>
+              {pnl != null
+                ? formatUiText(bt.mobileHolding, {
+                    qty: formatNumber(row.holding.quantity),
+                    pnl: signedNumber(pnl, 0),
+                    pct: formatPercent(pct, 1),
+                  })
+                : formatUiText(bt.mobileHoldingQty, { qty: formatNumber(row.holding.quantity) })}
+            </div>
+          ) : null}
         </div>
         {isOpen && !isDesktopViewport() ? expandedContent(row) : null}
       </div>
@@ -1032,20 +1159,70 @@ const RealtimeBoardPage: React.FC = () => {
     }
     return counts;
   }, [rows]);
+  const quotesDone = rows.filter((row) => row.item || quoteFailed[row.code]).length;
+  const breadthValue =
+    quotesDone < rows.length
+      ? formatUiText(bt.breadthLoading, { done: quotesDone, total: rows.length })
+      : t('board.overview.breadthValue', { up: breadth.up, down: breadth.down, flat: breadth.flat });
 
-  // 需注意只放結構化的事實（板位、單日大動、持股沒有報價），不從文字猜
-  const attention = rows.flatMap((row) => {
-    if (row.holding && row.item && !hasPrice(row.q)) {
-      return [{ row, text: t('board.quote.none'), cls: 'text-warning' }];
+  // 兩市都休市：今日損益其實是上一交易日的，需注意也不能寫「今日」
+  const bothClosed = marketOpen.tw === false && marketOpen.us === false;
+
+  // 需注意只放結構化的事實（板位、單日大動、持股沒有報價），不從文字猜。
+  // 只看篩選後畫面上的列：篩掉的股票不該還掛在膠囊上
+  const attention = (() => {
+    const visible = SECTION_ORDER.flatMap((section) => sectionRows[section]);
+    const items = visible.flatMap((row) => {
+      const q = row.q;
+      const pct = q?.changePercent;
+      const magnitude = pct != null ? Math.abs(pct) : 0;
+      if (row.holding && row.item && !hasPrice(q)) {
+        return [{ row, text: t('board.quote.none'), cls: 'text-warning', hit: false, magnitude }];
+      }
+      const li = limitInfo(q);
+      const hit = Boolean(q && q.currentPrice && ((q.limitUp != null && q.currentPrice >= q.limitUp) || (q.limitDown != null && q.currentPrice <= q.limitDown)));
+      if (li) return [{ row, text: li.text, cls: li.cls, hit, magnitude }];
+      if (pct != null && Math.abs(pct) >= ATTENTION_MOVE_PCT) {
+        const text = bothClosed
+          ? formatUiText(bt.attentionMoveClosed, { pct: formatPercent(pct, 1) })
+          : t('board.attention.bigMove', { pct: formatPercent(pct, 1) });
+        return [{ row, text, cls: changeClass(pct), hit: false, magnitude }];
+      }
+      return [];
+    });
+    // 觸板優先，其餘依 |漲跌幅| 由大到小
+    return items.sort((a, b) => Number(b.hit) - Number(a.hit) || b.magnitude - a.magnitude);
+  })();
+  const attentionShown = attention.slice(0, ATTENTION_MAX);
+  const attentionHidden = attention.length - attentionShown.length;
+
+  // 點膠囊：清篩選 → 切到含該檔的範圍 → 展開 → 下一格畫面捲到那列置中並短暫高亮
+  const jumpToRow = (row: BoardRow) => {
+    setFilter('');
+    const inScope =
+      scope === 'all' ||
+      (scope === 'holdings' ? Boolean(row.holding) : watchCodes.some((c) => stockCodeMatchKey(c) === row.key));
+    if (!inScope) {
+      setScope('all');
+      writeScope('all');
     }
-    const li = limitInfo(row.q);
-    if (li) return [{ row, text: li.text, cls: li.cls }];
-    const pct = row.q?.changePercent;
-    if (pct != null && Math.abs(pct) >= ATTENTION_MOVE_PCT) {
-      return [{ row, text: t('board.attention.bigMove', { pct: formatPercent(pct, 1) }), cls: changeClass(pct) }];
-    }
-    return [];
-  });
+    setExpanded(row.code);
+    setHighlighted(row.code);
+    if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = window.setTimeout(() => {
+      if (aliveRef.current) setHighlighted(null);
+      highlightTimerRef.current = null;
+    }, HIGHLIGHT_MS);
+    const selector = `${isDesktopViewport() ? 'tr' : 'li'}[data-row-key="${row.code.replace(/["\\]/g, '\\$&')}"]`;
+    window.requestAnimationFrame(() => {
+      document.querySelector(selector)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  };
+
+  // 帳戶按基準幣別加總，標籤只能寫幣別（帳戶不限定市場）；兩市都休市時改叫上一交易日損益
+  const dayPnlLabel = (currency: string): string => (
+    formatUiText(bothClosed ? bt.prevPnlOther : bt.dayPnlOther, { currency: CURRENCY_LABEL[currency] ?? currency })
+  );
 
   const marketStatusText = (market: 'tw' | 'us') => {
     const open = marketOpen[market];
@@ -1066,19 +1243,22 @@ const RealtimeBoardPage: React.FC = () => {
             : t('board.source.delayed');
     const hint = t(INDEX_HINT_KEY[tag.kind]);
     return (
-      <div key={region} className="flex flex-wrap items-baseline gap-x-8 gap-y-2">
+      <div key={region} className="flex flex-col gap-1 md:flex-row md:flex-wrap md:items-baseline md:gap-x-8 md:gap-y-2">
         <HintTooltip content={hint}>
           <span className="whitespace-nowrap text-xs text-secondary-text" aria-label={hint}>
             {label}
           </span>
         </HintTooltip>
-        {indices.map((idx) => (
-          <div key={idx.code} className="inline-flex items-baseline gap-2 tabular-nums">
-            <span className="text-sm text-secondary-text">{idx.name}</span>
-            <span className="text-base font-medium">{formatNumber(idx.current, 2)}</span>
-            <span className={cn('text-sm', changeClass(idx.changePct))}>{formatPercent(idx.changePct)}</span>
-          </div>
-        ))}
+        {/* Phones: two indices per row instead of one per line, so the first stock row stays above the fold. */}
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 md:flex md:flex-wrap md:items-baseline md:gap-x-8 md:gap-y-2">
+          {indices.map((idx) => (
+            <div key={idx.code} className="flex min-w-0 flex-wrap items-baseline gap-x-2 tabular-nums">
+              <span className="truncate text-sm text-secondary-text">{idx.name}</span>
+              <span className="text-base font-medium">{formatNumber(idx.current, 2)}</span>
+              <span className={cn('text-sm', changeClass(idx.changePct))}>{formatPercent(idx.changePct)}</span>
+            </div>
+          ))}
+        </div>
       </div>
     );
   };
@@ -1105,8 +1285,13 @@ const RealtimeBoardPage: React.FC = () => {
             >
               <span className="text-sm">{f.fundName}</span>
               <span className="text-base font-medium">{f.nav != null ? f.nav.toFixed(2) : '—'}</span>
-              <span className={cn('whitespace-nowrap text-xs', f.isStale ? 'text-warning' : 'text-secondary-text')}>{f.navDate ?? t('funds.noNav')}</span>
-              <span className={cn('text-sm', changeClass(f.pnlPct))}>{formatPercent(f.pnlPct)}</span>
+              <span className={cn('whitespace-nowrap text-xs', f.isStale ? 'text-warning' : 'text-secondary-text')}>
+                {f.navDate ? formatUiText(bt.fundNavDate, { date: shortMonthDay(f.navDate) }) : t('funds.noNav')}
+              </span>
+              {/* Holding return is cumulative, not today's move: plain text, no up/down colour */}
+              {f.pnlPct != null ? (
+                <span className="whitespace-nowrap text-xs text-secondary-text">{formatUiText(bt.fundHolding, { pct: formatPercent(f.pnlPct) })}</span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -1116,7 +1301,8 @@ const RealtimeBoardPage: React.FC = () => {
   const refreshButton = (
     <button
       type="button"
-      className="btn-secondary inline-flex items-center gap-2 text-sm"
+      aria-label={t('board.refresh')}
+      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border text-secondary-text hover:bg-hover hover:text-foreground"
       onClick={() => {
         refresh(undefined, INDEX_REGIONS, true);
         setDossierTick((n) => n + 1);
@@ -1124,8 +1310,7 @@ const RealtimeBoardPage: React.FC = () => {
         setSparkTick((n) => n + 1);
       }}
     >
-      <RefreshCw className="h-4 w-4" />
-      {t('board.refresh')}
+      <RefreshCw aria-hidden="true" className="h-4 w-4" />
     </button>
   );
 
@@ -1145,7 +1330,7 @@ const RealtimeBoardPage: React.FC = () => {
                   {t(`board.market.${market}`)} {marketStatusText(market)}
                 </span>
               ))}
-              {updatedAt ? <span className="whitespace-nowrap">{t('board.updatedAt', { time: formatDateTime(updatedAt) })}</span> : null}
+              {updatedAt ? <span className="whitespace-nowrap">{formatUiText(bt.quoteFetchedAt, { time: formatClock(updatedAt) })}</span> : null}
             </div>
             {refreshButton}
           </div>
@@ -1164,7 +1349,7 @@ const RealtimeBoardPage: React.FC = () => {
           {overview.map((total) => (
             <Metric
               key={total.currency}
-              label={`${t('board.overview.dayPnl')} ${CURRENCY_LABEL[total.currency] ?? total.currency}`}
+              label={dayPnlLabel(total.currency)}
               unavailable={total.dayPnl == null}
               value={total.dayPnl != null ? <span className={changeClass(total.dayPnl)}>{signedNumber(total.dayPnl, 0)}</span> : undefined}
               hint={
@@ -1176,24 +1361,28 @@ const RealtimeBoardPage: React.FC = () => {
           ))}
           <Metric
             label={t('board.overview.breadth')}
-            value={t('board.overview.breadthValue', { up: breadth.up, down: breadth.down, flat: breadth.flat })}
+            value={<span className="whitespace-nowrap">{breadthValue}</span>}
           />
         </MetricGroup>
       ) : null}
-      {attention.length > 0 ? (
+      {attentionShown.length > 0 ? (
         <div className="flex flex-wrap items-center gap-2" data-testid="board-attention">
           <span className="text-xs font-medium text-secondary-text">{t('board.attention.title')}</span>
-          {attention.map(({ row, text, cls }) => (
+          {attentionShown.map(({ row, text, cls }) => (
             <button
               key={row.code}
               type="button"
-              onClick={() => setExpanded(row.code)}
+              onClick={() => jumpToRow(row)}
               className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-xs hover:bg-hover"
             >
-              <span>{row.name ?? row.code}</span>
-              <span className={cn('tabular-nums', cls)}>{text}</span>
+              {/* US names are long English company names; the ticker is what traders recognise */}
+              <span className="max-w-[10rem] truncate">{boardMarketOf(row.code) === 'us' ? row.code : row.name ?? row.code}</span>
+              <span className={cn('whitespace-nowrap tabular-nums', cls)}>{text}</span>
             </button>
           ))}
+          {attentionHidden > 0 ? (
+            <span className="text-xs text-secondary-text">{formatUiText(bt.attentionMore, { count: attentionHidden })}</span>
+          ) : null}
         </div>
       ) : null}
       <FilterBar
@@ -1255,7 +1444,7 @@ const RealtimeBoardPage: React.FC = () => {
               rows={sortRows(sectionRows[section], sort)}
               rowKey={(row) => row.code}
               density="compact"
-              maxHeight="70vh"
+              isRowHighlighted={(row) => row.code === highlighted}
               sort={sort}
               onSortChange={(next) => {
                 setSort(next);

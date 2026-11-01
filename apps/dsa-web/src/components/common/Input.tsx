@@ -57,7 +57,7 @@ export const Input = ({
         <Lock
           className={cn(
             'h-4 w-4',
-            isLoginAppearance ? 'text-[var(--login-input-icon)]' : 'text-muted-text/55'
+            isLoginAppearance ? 'text-[var(--login-input-icon)]' : 'text-muted-text'
           )}
         />
       );
@@ -67,7 +67,7 @@ export const Input = ({
         <Key
           className={cn(
             'h-4 w-4',
-            isLoginAppearance ? 'text-[var(--login-input-icon)]' : 'text-muted-text/55'
+            isLoginAppearance ? 'text-[var(--login-input-icon)]' : 'text-muted-text'
           )}
         />
       );

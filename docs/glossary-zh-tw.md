@@ -14,6 +14,28 @@ Web 與 iOS 手動同步的正本。Web 在 `apps/dsa-web/src/i18n/uiText.ts`、
 | 股票代號 | 股票代碼 | `錯誤代碼` 這類非股票的代碼不改 |
 | 自選 | 自選股（僅標題可用） | |
 
+## 導覽命名表
+
+每個頁面在四處用同一個名字：Web 側欄（`layout.nav.*`）、Web 頁名（手機殼層標題列、`layout.route.*.title`、`document.title`；桌機 H1 也用這個）、iOS 工具列表的名字（`ToolsView` 的 `title`）、iOS 原生頁或工具頁的導覽標題。`document.title` 只放頁名、不加站名後綴，iOS 讀它當工具頁標題。iOS 沒有入口的頁面寫 `—`。
+
+| 路由 | Web 側欄 | Web H1 | iOS 工具列名 | iOS 原生標題 |
+|---|---|---|---|---|
+| `/board` | 盯盤 | 盯盤 | — | — |
+| `/` | 分析 | 分析 | — | — |
+| `/chat` | AI 問股 | AI 問股 | AI 問股 | AI 問股 |
+| `/screening` | 選股 | 選股 | 選股 | 選股 |
+| `/decision-signals` | AI 建議 | AI 建議 | AI 建議 | AI 建議 |
+| `/backtest` | 回測 | 回測 | 回測 | 回測 |
+| `/portfolio` | 資產 | 資產 | 資產 | 資產 |
+| `/funds` | 基金 | 基金 | 基金 | 基金 |
+| `/alerts` | 警報 | 警報 | 警報 | 警報 |
+| `/calendar` | 行事曆 | 行事曆 | — | 行事曆 |
+| `/data` | 資料中心 | 資料中心 | 資料中心 | 資料中心 |
+| `/usage` | AI 用量 | AI 用量 | AI 用量 | AI 用量 |
+| `/settings` | 設定 | 設定 | 設定 | 設定 |
+
+設定頁裡的「系統設定」分類改叫「排程與系統」，避免和頁名「設定」重複。
+
 ## 範例值
 
 輸入框與說明的範例用 `2330.TW`、`台積電`、`AAPL`，不用 A 股代號。不放英文眉標（如 `Data Center`、`DETAIL VIEW`）。

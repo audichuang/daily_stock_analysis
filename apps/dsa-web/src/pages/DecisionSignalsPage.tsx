@@ -1,6 +1,7 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, BarChart3, MoreHorizontal, RefreshCw, Search, ShieldCheck, SlidersHorizontal } from 'lucide-react';
+import { Activity, BarChart3, MoreHorizontal, RefreshCw, Search, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import {
   decisionSignalsApi,
   getDecisionSignalReassessBlockedError,
@@ -32,7 +33,8 @@ import { DecisionSignalTimeline } from '../components/decision-signals/DecisionS
 import { StockAutocomplete } from '../components/StockAutocomplete';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { useStockIndex } from '../hooks/useStockIndex';
-import type { UiTextKey } from '../i18n/uiText';
+import { formatUiText, type UiTextKey } from '../i18n/uiText';
+import { SIGNALS_TEXT } from '../locales/signalsText';
 import type { DecisionAction, MarketPhaseValue, StockBarItem } from '../types/analysis';
 import type {
   DecisionSignalItem,
@@ -54,7 +56,7 @@ import type { Market, StockIndexItem } from '../types/stockIndex';
 import { cn } from '../utils/cn';
 import { formatNumber } from '../utils/format';
 import { formatSignalText } from '../utils/signalText';
-import { buildDecisionActionLabelMap } from '../utils/decisionAction';
+import { buildDecisionActionLabelMap, normalizeDecisionActionAlias } from '../utils/decisionAction';
 import {
   getDecisionSignalMarketLabel,
   getDecisionSignalMarketPhaseLabel,
@@ -69,14 +71,22 @@ const TIMELINE_PAGE_SIZE = 100;
 const STOCK_CANDIDATE_LIMIT = 8;
 const DAY_MS = 86400_000;
 
-type ListFilters = {
+type BaseListFilters = {
   market: '' | DecisionSignalMarket;
-  action: '' | DecisionAction;
   marketPhase: '' | MarketPhaseValue;
   sourceType: '' | DecisionSignalSourceType;
   sourceReportId: string;
   status: '' | DecisionSignalStatus;
 };
+
+/** Filters that live in the URL (?holding=1&action=reduce&stop=triggered) so other pages can deep-link them. */
+type UrlListFilters = {
+  action: '' | DecisionAction;
+  holdingOnly: boolean;
+  stopTriggered: boolean;
+};
+
+type ListFilters = BaseListFilters & UrlListFilters;
 
 type TimelineRange = '30d' | '90d' | '180d';
 type TimelineStatusFilter = 'all' | 'active';
@@ -154,9 +164,8 @@ const STATUS_ACTION_CONFIRM_KEYS: Record<PendingStatusChange['status'], UiTextKe
   archived: 'decisionSignals.archiveConfirm',
 };
 
-const DEFAULT_LIST_FILTERS: ListFilters = {
+const DEFAULT_LIST_FILTERS: BaseListFilters = {
   market: '',
-  action: '',
   marketPhase: '',
   sourceType: '',
   sourceReportId: '',
@@ -183,7 +192,17 @@ function parseSourceReportId(value: string): number | undefined {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function getInitialFilters(search = typeof window === 'undefined' ? '' : window.location.search): ListFilters {
+function parseUrlFilters(search: string): UrlListFilters {
+  const params = new URLSearchParams(search);
+  return {
+    holdingOnly: params.get('holding') === '1',
+    // Accepts enum names and stored labels (reduce, 減碼, 减仓); anything else is ignored.
+    action: normalizeDecisionActionAlias(params.get('action')) ?? '',
+    stopTriggered: params.get('stop') === 'triggered',
+  };
+}
+
+function getInitialFilters(search = typeof window === 'undefined' ? '' : window.location.search): BaseListFilters {
   const params = new URLSearchParams(search);
   const sourceReportId = parseSourceReportId(params.get('sourceReportId') ?? params.get('source_report_id') ?? '');
   if (sourceReportId === undefined) return DEFAULT_LIST_FILTERS;
@@ -215,6 +234,7 @@ function toListParams(
     marketPhase: filters.marketPhase || undefined,
     sourceType: filters.sourceType || undefined,
     status: filters.status || undefined,
+    holdingOnly: filters.holdingOnly || undefined,
     // 每檔只留最新一筆，已觸停損與持股排最前；去重在後端做，跨頁才不會重複。
     groupLatest: true,
     sort: 'priority',
@@ -404,10 +424,21 @@ function mergeSignalPages(current: DecisionSignalItem[], next: DecisionSignalIte
 }
 
 const DecisionSignalsPage: React.FC = () => {
-  const { t } = useUiLanguage();
+  const { language, t } = useUiLanguage();
   const actionLabels = useMemo(() => buildDecisionActionLabelMap(t), [t]);
   const { index: stockIndex } = useStockIndex();
-  const [filters, setFilters] = useState<ListFilters>(() => getInitialFilters());
+  const signalsText = SIGNALS_TEXT[language];
+  const [searchParams, setSearchParams] = useSearchParams();
+  const searchKey = searchParams.toString();
+  const urlFilters = useMemo(() => parseUrlFilters(searchKey), [searchKey]);
+  const [baseFilters, setBaseFilters] = useState<BaseListFilters>(() => getInitialFilters());
+  // Older backends omit stopTriggered; then stop=triggered falls back to held stocks in priority order.
+  const [stopFieldMissing, setStopFieldMissing] = useState(false);
+  const filters = useMemo<ListFilters>(() => ({
+    ...baseFilters,
+    ...urlFilters,
+    holdingOnly: urlFilters.holdingOnly || (urlFilters.stopTriggered && stopFieldMissing),
+  }), [baseFilters, stopFieldMissing, urlFilters]);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [extraItems, setExtraItems] = useState<DecisionSignalItem[]>([]);
@@ -531,6 +562,13 @@ const DecisionSignalsPage: React.FC = () => {
       loadMoreRequestIdRef.current += 1;
       setExtraItems([]);
       setLoadingMore(false);
+      if (
+        filters.stopTriggered
+        && response.items.length > 0
+        && response.items.every((item) => item.stopTriggered === undefined)
+      ) {
+        setStopFieldMissing(true);
+      }
       setItems(response.items);
       setTotal(response.total);
       setError(null);
@@ -668,7 +706,13 @@ const DecisionSignalsPage: React.FC = () => {
       });
   }, [selected]);
 
-  const tableItems = useMemo(() => mergeSignalPages(items, extraItems), [items, extraItems]);
+  const loadedItems = useMemo(() => mergeSignalPages(items, extraItems), [items, extraItems]);
+  // stop=triggered 在前端過濾已載入的列（後端依優先序把已觸停損排最前）；欄位缺席時改由 holdingOnly 請求代替。
+  const clientStopFilter = filters.stopTriggered && !stopFieldMissing;
+  const tableItems = useMemo(
+    () => (clientStopFilter ? loadedItems.filter((item) => item.stopTriggered === true) : loadedItems),
+    [clientStopFilter, loadedItems],
+  );
   const selectedStockCode = selected?.item.stockCode;
   // 現價一律來自批次行情（含抽屜裡不在清單上的訊號），訊號當時價只當對照，不拿來算距離。
   const quoteCodesKey = useMemo(() => {
@@ -752,9 +796,28 @@ const DecisionSignalsPage: React.FC = () => {
     }
   }, [reassessProfile, reassessSourceReportId]);
 
-  // 篩選改動即查。
+  // 篩選改動即查；動作、持股、停損三項寫回網址（replace，不多一筆歷史）。
   const updateFilters = (patch: Partial<ListFilters>) => {
-    setFilters((current) => ({ ...current, ...patch }));
+    const { action, holdingOnly, stopTriggered, ...base } = patch;
+    if (Object.keys(base).length > 0) setBaseFilters((current) => ({ ...current, ...base }));
+    if (action !== undefined || holdingOnly !== undefined || stopTriggered !== undefined) {
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        if (action !== undefined) {
+          if (action) next.set('action', action);
+          else next.delete('action');
+        }
+        if (holdingOnly !== undefined) {
+          if (holdingOnly) next.set('holding', '1');
+          else next.delete('holding');
+        }
+        if (stopTriggered !== undefined) {
+          if (stopTriggered) next.set('stop', 'triggered');
+          else next.delete('stop');
+        }
+        return next;
+      }, { replace: true });
+    }
     setPage(1);
   };
 
@@ -1305,12 +1368,36 @@ const DecisionSignalsPage: React.FC = () => {
     })
     : [];
   const statsDecidable = outcomeStats ? outcomeStats.hit + outcomeStats.miss : 0;
+  const filteredCount = clientStopFilter ? tableItems.length : total;
+  const filterHeadline = appliedSourceReportId || loading
+    ? undefined
+    : urlFilters.stopTriggered && !stopFieldMissing
+      ? formatUiText(signalsText.headerStopTriggered, { count: filteredCount })
+      : urlFilters.stopTriggered
+        ? formatUiText(signalsText.headerHolding, { count: filteredCount })
+      : urlFilters.holdingOnly && urlFilters.action
+        ? formatUiText(signalsText.headerHoldingAction, { action: actionLabels[urlFilters.action], count: filteredCount })
+        : urlFilters.holdingOnly
+          ? formatUiText(signalsText.headerHolding, { count: filteredCount })
+          : undefined;
+  const urlFilterChips: Array<{ key: string; label: string; onRemove: () => void }> = [
+    ...(urlFilters.holdingOnly
+      ? [{ key: 'holding', label: signalsText.holdingChip, onRemove: () => updateFilters({ holdingOnly: false }) }]
+      : []),
+    ...(urlFilters.action
+      ? [{ key: 'action', label: actionLabels[urlFilters.action], onRemove: () => updateFilters({ action: '' }) }]
+      : []),
+    ...(urlFilters.stopTriggered
+      ? [{ key: 'stop', label: signalsText.stopTriggeredChip, onRemove: () => updateFilters({ stopTriggered: false }) }]
+      : []),
+  ];
 
   return (
     <AppPage>
       <div className="space-y-4">
         <PageHeader
           title={t('decisionSignals.title')}
+          description={filterHeadline}
           actions={(
             <button
               type="button"
@@ -1351,7 +1438,7 @@ const DecisionSignalsPage: React.FC = () => {
                 aria-pressed={filters.action === action}
                 onClick={() => updateFilters({ action: filters.action === action ? '' : action })}
                 className={cn(
-                  'cursor-pointer rounded-full border px-2.5 py-0.5 text-xs transition-colors',
+                  'inline-flex h-8 cursor-pointer items-center gap-1 rounded-full border px-3 text-xs transition-colors',
                   filters.action === action
                     ? 'border-cyan/60 bg-cyan/10 text-foreground'
                     : 'border-border/70 text-secondary-text hover:text-foreground',
@@ -1376,14 +1463,25 @@ const DecisionSignalsPage: React.FC = () => {
               handleStockFormSubmit(stockDraft);
             }}
           >
-            <div className="min-w-0 flex-[1_1_16rem]">
+            <div className="relative min-w-0 flex-[1_1_16rem]">
               <StockAutocomplete
                 value={stockDraft}
                 onChange={setStockDraft}
                 onSubmit={handleStockSubmit}
-                placeholder={t('decisionSignals.stockContextPlaceholder')}
+                placeholder={signalsText.stockPlaceholder}
                 ariaLabel={t('decisionSignals.stockContextInput')}
+                className="pr-9"
               />
+              {activeStockContext || stockDraft ? (
+                <button
+                  type="button"
+                  aria-label={t('decisionSignals.stockContextClear')}
+                  className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full text-muted-text transition-colors hover:bg-elevated hover:text-foreground"
+                  onClick={handleClearStockContext}
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              ) : null}
             </div>
             <button
               type="submit"
@@ -1392,14 +1490,6 @@ const DecisionSignalsPage: React.FC = () => {
             >
               <Search className="h-4 w-4" />
               {t('decisionSignals.stockContextApply')}
-            </button>
-            <button
-              type="button"
-              className="btn-secondary inline-flex h-11 items-center justify-center gap-2"
-              onClick={handleClearStockContext}
-              disabled={!activeStockContext && !stockDraft}
-            >
-              {t('decisionSignals.stockContextClear')}
             </button>
             <button
               type="button"
@@ -1413,23 +1503,42 @@ const DecisionSignalsPage: React.FC = () => {
             </button>
           </form>
 
+          {urlFilterChips.length > 0 ? (
+            <div data-testid="signal-url-filters" className="flex flex-wrap items-center gap-2">
+              {urlFilterChips.map((chip) => (
+                <button
+                  key={chip.key}
+                  type="button"
+                  aria-label={formatUiText(signalsText.removeFilter, { label: chip.label })}
+                  onClick={chip.onRemove}
+                  className="inline-flex h-8 cursor-pointer items-center gap-1 rounded-full border border-cyan/60 bg-cyan/10 px-3 text-xs text-foreground transition-colors hover:border-cyan"
+                >
+                  {chip.label}
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              ))}
+            </div>
+          ) : null}
+
           {historyCandidatesLoaded && stockCandidates.length > 0 ? (
-            <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <span className="shrink-0 text-xs text-muted-text">
                 {stockCandidateMode === 'history'
                   ? t('decisionSignals.stockContextRecent')
                   : t('decisionSignals.stockContextPopular')}
               </span>
-              {stockCandidates.map((candidate) => (
+              {stockCandidates.slice(0, STOCK_CANDIDATE_LIMIT).map((candidate) => (
                 <button
                   key={`${candidate.source}:${getCandidateKey(candidate)}`}
                   type="button"
-                  className="shrink-0 cursor-pointer rounded-full border border-border/70 bg-elevated/40 px-2.5 py-1 text-xs text-foreground transition-colors hover:border-primary/60 hover:text-primary"
+                  className="inline-flex h-8 shrink-0 cursor-pointer items-center rounded-full border border-border/70 bg-elevated/40 px-3 text-xs text-foreground transition-colors hover:border-primary/60 hover:text-primary"
                   onClick={() => handleCandidateSelect(candidate)}
                 >
                   <span className="font-mono">{candidate.displayCode ?? candidate.code}</span>
-                  {candidate.name ? <span className="ml-1 text-secondary-text">{candidate.name}</span> : null}
-                  {candidate.market ? <span className="ml-1 text-muted-text">/ {candidate.market}</span> : null}
+                  {candidate.name ? <span className="ml-1 max-w-[6rem] truncate text-secondary-text">{candidate.name}</span> : null}
+                  {candidate.market ? (
+                    <span className="ml-1 text-muted-text">{getDecisionSignalMarketLabel(candidate.market, t)}</span>
+                  ) : null}
                 </button>
               ))}
             </div>
@@ -1679,14 +1788,14 @@ const DecisionSignalsPage: React.FC = () => {
         <section data-testid="signal-stats" className="space-y-2">
           {outcomeStats && outcomeStats.total > 0 ? (
             <p data-testid="signal-stats-sentence" className="text-sm tabular-nums text-secondary-text">
-              {t('decisionSignals.statsSentence', {
+              {formatUiText(signalsText.statsSentence, {
                 rate: typeof outcomeStats.hitRatePct === 'number' ? `${formatNumber(outcomeStats.hitRatePct, 1)}%` : '—',
                 hit: formatNumber(outcomeStats.hit),
                 decidable: formatNumber(statsDecidable),
                 total: formatNumber(outcomeStats.total),
                 unable: formatNumber(outcomeStats.unable),
               })}
-              {outcomeStats.neutral > 0 ? `｜${t('decisionSignals.statsNeutral', { count: formatNumber(outcomeStats.neutral) })}` : ''}
+              {outcomeStats.neutral > 0 ? `・${t('decisionSignals.statsNeutral', { count: formatNumber(outcomeStats.neutral) })}` : ''}
             </p>
           ) : null}
           <Collapsible title={t('decisionSignals.statsTitle')}>

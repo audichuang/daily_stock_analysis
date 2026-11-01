@@ -1,5 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
+import { UI_LANGUAGE_STORAGE_KEY } from '../../../utils/uiLanguage';
 import { StockBarItemComponent } from '../StockBarItem';
 import type { StockBarItem } from '../../../types/analysis';
 
@@ -241,5 +243,86 @@ describe('StockBarItemComponent', () => {
     expect(within(actions).queryByText('回避 28')).not.toBeInTheDocument();
     expect(within(actions).queryByText('预警 28')).not.toBeInTheDocument();
     expect(within(actions).getByText(/28/)).toBeInTheDocument();
+  });
+
+  it('renders neutral actions as muted text without a fill, and only buy/reduce with a fill', () => {
+    const { rerender } = render(
+      <StockBarItemComponent
+        item={{ ...issue1600Item, action: 'watch', actionLabel: '观望', sentimentScore: 55 }}
+        isViewing={false}
+        onClick={vi.fn()}
+      />,
+    );
+    const neutral = within(screen.getByTestId('history-card-actions')).getByText('观望 55');
+    expect(neutral).toHaveClass('bg-transparent', 'border-transparent', 'text-muted-text');
+    expect(neutral.className).not.toMatch(/\bbg-(?!transparent\b)\S+/);
+
+    rerender(
+      <StockBarItemComponent
+        item={{ ...issue1600Item, action: 'buy', actionLabel: '买入', sentimentScore: 80 }}
+        isViewing={false}
+        onClick={vi.fn()}
+      />,
+    );
+    const brand = within(screen.getByTestId('history-card-actions')).getByText('买入 80');
+    expect(brand).not.toHaveClass('bg-transparent');
+    expect(brand.className).toMatch(/\bbg-cyan\//);
+
+    rerender(
+      <StockBarItemComponent
+        item={{ ...issue1600Item, action: 'reduce', actionLabel: '减仓', sentimentScore: 30 }}
+        isViewing={false}
+        onClick={vi.fn()}
+      />,
+    );
+    const caution = within(screen.getByTestId('history-card-actions')).getByText(/30/);
+    expect(caution.className).toMatch(/\bbg-warning\//);
+  });
+
+  it('moves the analysis price into the first-line price slot when there is no quote', () => {
+    render(
+      <StockBarItemComponent
+        item={{ ...issue1600Item, analysisPrice: 2370 }}
+        isViewing={false}
+        onClick={vi.fn()}
+      />,
+    );
+
+    const price = screen.getByTestId('stock-row-price');
+    expect(price).toHaveTextContent(/^2,370(\.\d+)? · 分析时$/);
+    expect(price).toHaveClass('text-muted-text');
+    expect(screen.getByTestId('history-card-meta')).not.toHaveTextContent('分析时');
+  });
+
+  it('labels the analysis price in English as "at analysis"', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    render(
+      <UiLanguageProvider>
+        <StockBarItemComponent
+          item={{ ...issue1600Item, analysisPrice: 2370 }}
+          isViewing={false}
+          onClick={vi.fn()}
+        />
+      </UiLanguageProvider>,
+    );
+
+    expect(screen.getByTestId('stock-row-price')).toHaveTextContent(/^2,370(\.\d+)? · at analysis$/);
+    window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY);
+  });
+
+  it('titles the pinned market review row with the latest-review label, region and date', () => {
+    render(
+      <StockBarItemComponent
+        item={{ ...issue1600Item, stockCode: 'MARKET', stockName: '大盘复盘', lastAnalysisTime: '2026-10-30T15:00:00' }}
+        isViewing={false}
+        onClick={vi.fn()}
+        isMarketReview
+        marketLightLabel="美股 绿灯"
+        marketReviewRegionLabel="美股"
+      />,
+    );
+
+    expect(screen.getByTestId('market-review-title')).toHaveTextContent('最新复盘 · 美股 10/30');
+    expect(screen.getByTestId('market-review-light')).toHaveTextContent('美股 绿灯');
   });
 });

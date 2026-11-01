@@ -9,7 +9,7 @@ import { createParsedApiError, getParsedApiError, type ParsedApiError } from '..
 import { analysisApi } from '../api/analysis';
 import { screeningApi, notifyScreeningConfigChanged, notifySystemConfigChanged } from '../api/screening';
 import { systemConfigApi } from '../api/systemConfig';
-import { ApiErrorAlert, Button, ConfirmDialog, Drawer, EmptyState, StickyActionBar } from '../components/common';
+import { ApiErrorAlert, AppPage, Button, ConfirmDialog, Drawer, EmptyState, PageHeader, StickyActionBar } from '../components/common';
 import {
   AgentBackendStatusPanel,
   AuthSettingsCard,
@@ -32,6 +32,7 @@ import { searchSettingsItems } from '../utils/settingsCategoryNav';
 import { cn } from '../utils/cn';
 import { getSetupCheckMessage, getSetupCheckTitle } from '../utils/setupCheckText';
 import { getIntlLocale } from '../i18n/intlLocale';
+import { SETTINGS_TEXT } from '../locales/settingsText';
 import type {
   ConfigValidationIssue,
   SchedulerStatusResponse,
@@ -700,6 +701,7 @@ const SettingsPage: React.FC = () => {
   const { authEnabled, passwordChangeable } = useAuth();
   const location = useLocation();
   const { language: uiLanguage, t } = useUiLanguage();
+  const settingsText = SETTINGS_TEXT[uiLanguage];
   const [envBackupActionError, setEnvBackupActionError] = useState<ParsedApiError | null>(null);
   const [envBackupActionSuccess, setEnvBackupActionSuccess] = useState<string>('');
   const [screeningActionError, setScreeningActionError] = useState<ParsedApiError | null>(null);
@@ -885,6 +887,9 @@ const SettingsPage: React.FC = () => {
   const hasUnsavedEdits = effectiveHasDirty || llmChannelHasDirty;
   const hasPendingSave = isSaving || llmChannelIsSaving || isImportingEnv;
   const shouldGuardDeparture = hasUnsavedEdits || hasPendingSave;
+  // The save bar only appears once there is something to save (or a save is in flight),
+  // so a clean page does not keep a sticky bar over the bottom of the content.
+  const showActionBar = hasUnsavedEdits || hasPendingSave;
   const clearAllDrafts = () => {
     resetDraft();
     setSchedulerOverrideFromUi(null);
@@ -1034,11 +1039,8 @@ const SettingsPage: React.FC = () => {
     }
     setEnvBackupActionError(null);
     setEnvBackupActionSuccess('');
-    if (hasUnsavedEdits) {
-      setShowImportConfirm(true);
-      return;
-    }
-    envBackupImportRef.current?.click();
+    // Importing replaces saved configuration, so always confirm first.
+    setShowImportConfirm(true);
   };
 
   const handleEnvBackupImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1358,20 +1360,14 @@ const SettingsPage: React.FC = () => {
   );
 
   return (
-    <div className="settings-page min-h-full px-4 pb-6 pt-4 md:px-6">
-      <div className="mb-4 min-w-0">
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">{t('settings.pageTitle')}</h1>
-        <p className="max-w-3xl text-xs leading-5 text-muted-text sm:text-sm sm:leading-6">
-          {t('settings.pageDescription')}
-        </p>
-      </div>
+    <AppPage className="settings-page">
+      <PageHeader title={t('settings.pageTitle')} description={t('settings.pageDescription')} />
 
       {loadError ? (
         <ApiErrorAlert
           error={loadError}
           actionLabel={retryAction === 'load' ? t('common.retry') : t('settings.reload')}
           onAction={() => void retry()}
-          className="mb-4"
         />
       ) : null}
 
@@ -1611,7 +1607,8 @@ const SettingsPage: React.FC = () => {
                     </Button>
                     <Button
                       type="button"
-                      variant="primary"
+                      variant="secondary"
+                      className="text-danger"
                       onClick={beginEnvBackupImport}
                       disabled={envBackupActionDisabled || hasPendingSave}
                       isLoading={isImportingEnv}
@@ -1735,51 +1732,55 @@ const SettingsPage: React.FC = () => {
         </div>
       )}
 
-      <StickyActionBar className="mt-4">
-        {saveError ? (
-          <ApiErrorAlert
-            className="w-full"
-            error={saveError}
-            actionLabel={retryAction === 'save' ? t('settings.saveRetry') : undefined}
-            onAction={retryAction === 'save' ? () => void retry() : undefined}
-          />
-        ) : null}
-        <p className="mr-auto min-w-0 text-sm text-secondary-text" role="status">
-          {effectiveDirtyCount
-            ? t('settings.unsavedBarDirtyCount', { count: effectiveDirtyCount })
-            : hasUnsavedEdits
-              ? t('settings.unsavedBarDirty')
-              : t('settings.unsavedBarClean')}
-        </p>
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          className="px-2.5"
-          onClick={resetAllDrafts}
-          disabled={isLoading || hasPendingSave}
+      {showActionBar ? (
+        <StickyActionBar
+          singleRow
+          notice={saveError ? (
+            <ApiErrorAlert
+              className="w-full"
+              error={saveError}
+              actionLabel={retryAction === 'save' ? t('settings.saveRetry') : undefined}
+              onAction={retryAction === 'save' ? () => void retry() : undefined}
+            />
+          ) : null}
         >
-          <RefreshCw className="h-4 w-4" aria-hidden="true" />
-          {t('settings.reset')}
-        </Button>
-        <Button
-          type="button"
-          variant="primary"
-          size="sm"
-          className="px-2.5"
-          onClick={() => void handleSaveConfig()}
-          disabled={!effectiveHasDirty || isSaving || isLoading || isImportingEnv}
-          isLoading={isSaving}
-          loadingText={t('settings.saving')}
-        >
-          <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-          {isSaving
-            ? t('settings.saving')
-            : effectiveDirtyCount
-              ? t('settings.saveConfigWithCount', { count: effectiveDirtyCount })
-              : t('settings.saveConfig')}
-        </Button>
-      </StickyActionBar>
+          <p className="mr-auto min-w-0 truncate text-sm text-secondary-text" role="status">
+            {effectiveDirtyCount
+              ? t('settings.unsavedBarDirtyCount', { count: effectiveDirtyCount })
+              : hasUnsavedEdits
+                ? t('settings.unsavedBarDirty')
+                : t('settings.unsavedBarClean')}
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            size="md"
+            className="h-9 shrink-0 px-2.5"
+            onClick={resetAllDrafts}
+            disabled={!hasUnsavedEdits || isLoading || hasPendingSave}
+          >
+            <RefreshCw className="h-4 w-4" aria-hidden="true" />
+            {t('settings.reset')}
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            size="md"
+            className="h-9 shrink-0 px-2.5"
+            onClick={() => void handleSaveConfig()}
+            disabled={!effectiveHasDirty || isSaving || isLoading || isImportingEnv}
+            isLoading={isSaving}
+            loadingText={t('settings.saving')}
+          >
+            <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+            {isSaving
+              ? t('settings.saving')
+              : effectiveDirtyCount
+                ? t('settings.saveConfigWithCount', { count: effectiveDirtyCount })
+                : t('settings.saveConfig')}
+          </Button>
+        </StickyActionBar>
+      ) : null}
 
       {toast ? (
         <div className="fixed bottom-[calc(6rem+var(--shell-bottom-inset,0px))] right-5 z-50 w-[320px] max-w-[calc(100vw-24px)]">
@@ -1814,11 +1815,12 @@ const SettingsPage: React.FC = () => {
       </Drawer>
       <ConfirmDialog
         isOpen={showImportConfirm}
-        title={t('settings.importConfirmTitle')}
-        message={t('settings.importConfirmMessage')}
+        title={hasUnsavedEdits ? t('settings.importConfirmTitle') : settingsText.importConfirmCleanTitle}
+        message={hasUnsavedEdits ? t('settings.importConfirmMessage') : settingsText.importConfirmCleanMessage}
         confirmText={t('settings.importConfirmContinue')}
         cancelText={t('common.cancel')}
         confirmDisabled={hasPendingSave}
+        isDanger
         onConfirm={() => {
           if (hasPendingSave) {
             return;
@@ -1848,7 +1850,7 @@ const SettingsPage: React.FC = () => {
           settingsBlocker.reset?.();
         }}
       />
-    </div>
+    </AppPage>
   );
 };
 

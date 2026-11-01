@@ -1,7 +1,7 @@
 import React from 'react';
 import { cn } from '../../utils/cn';
 
-type BadgeVariant = 'default' | 'success' | 'warning' | 'danger' | 'info' | 'history' | 'brand' | 'neutral' | 'caution';
+type BadgeVariant = 'default' | 'success' | 'warning' | 'danger' | 'critical' | 'info' | 'history' | 'brand' | 'neutral' | 'caution';
 
 interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   children: React.ReactNode;
@@ -12,24 +12,31 @@ interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   style?: React.CSSProperties;
 }
 
+// System states avoid red/green (reserved for price moves, use Change for those):
+// success is brand cyan, danger and critical share the orange-red tone.
+const CRITICAL_STYLE = 'border-[hsl(14_90%_55%/0.25)] bg-[hsl(14_90%_55%/0.1)] text-[hsl(14_90%_55%)]';
+
 const variantStyles: Record<BadgeVariant, string> = {
   default: 'border-border/55 bg-elevated/75 text-secondary-text',
-  success: 'border-success/20 bg-success/10 text-success',
+  success: 'border-cyan/30 bg-cyan/12 text-cyan',
   warning: 'border-warning/20 bg-warning/10 text-warning',
-  danger: 'border-danger/20 bg-danger/10 text-danger',
+  danger: CRITICAL_STYLE,
+  critical: CRITICAL_STYLE,
   info: 'border-cyan/30 bg-cyan/12 text-cyan',
   history: 'border-purple/20 bg-purple/10 text-purple',
   // 動作語意色：不用紅綠，見 utils/marketTone.ts
   brand: 'border-cyan/30 bg-cyan/12 text-cyan',
-  neutral: 'border-border/55 bg-elevated/75 text-secondary-text',
+  // Neutral actions (watch, hold) render as muted text only, no border or fill.
+  neutral: 'border-transparent bg-transparent text-muted-text backdrop-blur-none',
   caution: 'border-warning/20 bg-warning/10 text-warning',
 };
 
 const glowStyles: Record<BadgeVariant, string> = {
   default: '',
-  success: 'shadow-success/20',
+  success: 'shadow-cyan/20',
   warning: 'shadow-warning/20',
-  danger: 'shadow-danger/20',
+  danger: 'shadow-[hsl(14_90%_55%/0.2)]',
+  critical: 'shadow-[hsl(14_90%_55%/0.2)]',
   info: 'shadow-cyan/20',
   history: 'shadow-purple/20',
   brand: 'shadow-cyan/20',

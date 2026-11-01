@@ -512,8 +512,123 @@ describe('ReportOverview conclusion', () => {
       />,
     );
 
-    expect(screen.getByTestId('report-guardrail')).toHaveTextContent('系統護欄調整');
-    expect(screen.getByTestId('report-guardrail')).toHaveTextContent('重大波動沒有新聞');
+    const guardrail = screen.getByTestId('report-guardrail');
+    expect(guardrail).toHaveTextContent('系統護欄調整');
+    // Legacy reports (no guardrailKind) keep the badge but fold the reason behind it.
+    expect(guardrail).not.toHaveTextContent('重大波動沒有新聞');
+    const toggle = within(guardrail).getByRole('button', { name: /系統護欄調整/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(guardrail).toHaveTextContent('重大波動沒有新聞');
+  });
+
+  it('leads with the model intent when the guardrail fired for missing data', () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'zh-TW');
+    render(
+      <UiLanguageProvider>
+        <ReportOverview
+          meta={{ ...baseMeta, reportLanguage: 'zh-TW' }}
+          summary={{
+            ...baseSummary,
+            action: 'watch',
+            oneSentence: '資金流資料缺，先觀望',
+            positionAdvice: { noPosition: '護欄版空手', hasPosition: '護欄版持股' },
+            guardrailApplied: true,
+            guardrailKind: 'data_unavailable',
+            guardrailReason: '法人資金流抓不到',
+            modelOneSentence: '突破前高，可小量試單',
+            modelPositionAdvice: { noPosition: '模型版空手', hasPosition: '模型版持股' },
+          }}
+        />
+      </UiLanguageProvider>,
+    );
+
+    expect(screen.getByTestId('report-sentence')).toHaveTextContent('模型原意：突破前高，可小量試單');
+    expect(screen.getByTestId('report-action')).toHaveTextContent('觀望');
+    expect(screen.getByTestId('advice-no-position')).toHaveTextContent('模型版空手');
+    expect(screen.getByTestId('advice-has-position')).toHaveTextContent('模型版持股');
+
+    const guardrail = screen.getByTestId('report-guardrail');
+    const toggle = within(guardrail).getByRole('button', { name: /護欄：資料缺，動作降為觀望/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(guardrail).not.toHaveTextContent('法人資金流抓不到');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(guardrail).toHaveTextContent('法人資金流抓不到');
+    expect(guardrail).toHaveTextContent('資金流資料缺，先觀望');
+  });
+
+  it('keeps the guardrailed sentence for market-logic adjustments', () => {
+    render(
+      <ReportOverview
+        meta={{ ...baseMeta, reportLanguage: 'zh-TW' }}
+        summary={{
+          ...baseSummary,
+          action: 'watch',
+          oneSentence: '大盤轉弱，先觀望',
+          guardrailApplied: true,
+          guardrailKind: 'market_logic',
+          guardrailReason: '大盤紅燈',
+          modelOneSentence: '突破前高，可小量試單',
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId('report-sentence')).toHaveTextContent('大盤轉弱，先觀望');
+    expect(screen.getByTestId('report-sentence')).not.toHaveTextContent('模型原意');
+    const guardrail = screen.getByTestId('report-guardrail');
+    fireEvent.click(within(guardrail).getByRole('button', { name: /護欄已調整/ }));
+    expect(guardrail).toHaveTextContent('大盤紅燈');
+    expect(guardrail).toHaveTextContent('模型原本建議：突破前高，可小量試單');
+  });
+
+  it('shows the structured key-level strip by action and compares the stop with the previous report', () => {
+    render(
+      <ReportOverview
+        meta={{
+          ...baseMeta,
+          reportLanguage: 'zh-TW',
+          currentPrice: 100,
+          previousReport: { stopLoss: 106.5 },
+        }}
+        summary={{ ...baseSummary, action: 'reduce' }}
+        strategy={{ sniperPricesSource: 'structured', sniperPrices: { idealBuy: 95, stopLoss: 94.2, takeProfit: 108.2 } }}
+      />,
+    );
+
+    const strip = screen.getByTestId('report-key-levels');
+    expect(strip).toHaveTextContent(/停損 94\.2\d*（−5\.8%）｜反彈減碼 108\.2\d*（\+8\.2%）/);
+    expect(strip).not.toHaveTextContent('進場');
+    expect(screen.getByTestId('report-comparison')).toHaveTextContent(/停損 106\.5\d* → 94\.2/);
+  });
+
+  it('does not render the key-level strip for legacy sniper prices', () => {
+    render(
+      <ReportOverview
+        meta={{ ...baseMeta, reportLanguage: 'zh-TW', currentPrice: 100, previousReport: { stopLoss: 106.5 } }}
+        summary={{ ...baseSummary, action: 'buy' }}
+        strategy={{ sniperPricesSource: 'legacy', sniperPrices: { idealBuy: 95, stopLoss: 90 } }}
+      />,
+    );
+
+    expect(screen.queryByTestId('report-key-levels')).not.toBeInTheDocument();
+    expect(screen.getByTestId('report-comparison')).toHaveTextContent(/前份停損 106\.5/);
+  });
+
+  it('keeps the price neutral and tones only the change', () => {
+    render(
+      <ReportOverview
+        meta={{ ...baseMeta, reportLanguage: 'zh-TW', currentPrice: 100, changePct: 2, changeAmount: 2 }}
+        summary={baseSummary}
+      />,
+    );
+
+    const price = screen.getByTestId('report-price');
+    const [current, change] = Array.from(price.children);
+    expect(current).toHaveClass('text-foreground', 'text-3xl');
+    expect(current).not.toHaveClass('text-market-up');
+    expect(change).toHaveClass('text-market-up');
   });
 
   it('does not flag when the guardrail was not applied', () => {

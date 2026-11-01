@@ -14,6 +14,12 @@ vi.mock('../../../api/portfolio', () => ({
   },
 }));
 
+const { getQuotes } = vi.hoisted(() => ({ getQuotes: vi.fn() }));
+
+vi.mock('../../../api/stocks', () => ({
+  stocksApi: { getQuotes },
+}));
+
 describe('AlertRuleForm', () => {
   const onSubmit = vi.fn();
 
@@ -23,6 +29,41 @@ describe('AlertRuleForm', () => {
     getAccounts.mockReset();
     window.localStorage.clear();
     getAccounts.mockResolvedValue({ accounts: [{ id: 9, name: 'Main', market: 'us', baseCurrency: 'USD', isActive: true }] });
+    getQuotes.mockReset();
+    getQuotes.mockResolvedValue([]);
+  });
+
+  it('puts the live price in the threshold hint and fills a quick-pick chip', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+    getQuotes.mockResolvedValue([{ stockCode: '2330.TW', quote: { currentPrice: 1000, stockName: '台積電' } }]);
+    render(
+      <UiLanguageProvider>
+        <AlertRuleForm onSubmit={onSubmit} initial={{ target: '2330.TW' }} />
+      </UiLanguageProvider>,
+    );
+    const priceInput = screen.getByLabelText('價格閾值');
+    expect(priceInput).toHaveAttribute('placeholder', '例如 2,500');
+    expect(screen.getByText('NT$')).toBeInTheDocument();
+    expect(await screen.findByText('現價 1,000')).toHaveAttribute('id', priceInput.getAttribute('aria-describedby'));
+    expect(screen.getByText('已選：台積電')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '+5% 1,050' }));
+    expect(priceInput).toHaveValue(1050);
+    fireEvent.click(screen.getByRole('button', { name: '−5% 950' }));
+    expect(priceInput).toHaveValue(950);
+    fireEvent.click(screen.getByRole('button', { name: '現價' }));
+    expect(priceInput).toHaveValue(1000);
+  });
+
+  it('keeps the price and direction initialised from the parameters', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+    render(
+      <UiLanguageProvider>
+        <AlertRuleForm onSubmit={onSubmit} initial={{ target: '2330.TW', alertType: 'price_cross', parameters: { direction: 'below', price: 820 } }} />
+      </UiLanguageProvider>,
+    );
+    expect(screen.getByLabelText('方向')).toHaveValue('below');
+    expect(screen.getByLabelText('價格閾值')).toHaveValue(820);
   });
 
   function renderEnglishForm() {

@@ -1,12 +1,16 @@
-import { Star } from 'lucide-react';
+import { ChevronDown, Star } from 'lucide-react';
 import type React from 'react';
+import { useId, useState } from 'react';
 import { AlertBellLink } from '../alerts/AlertBellLink';
 import type {
   ReportDetails as ReportDetailsType,
   ReportMeta,
+  ReportStrategy as ReportStrategyType,
   ReportSummary as ReportSummaryType,
 } from '../../types/analysis';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import { formatUiText } from '../../i18n/uiText';
+import { getMarketReviewUiText } from '../../locales/marketReviewText';
 import { cn } from '../../utils/cn';
 import {
   buildDecisionActionLabelMap,
@@ -24,6 +28,8 @@ interface ReportOverviewProps {
   meta: ReportMeta;
   summary: ReportSummaryType;
   details?: ReportDetailsType;
+  /** Structured sniper prices feed the key-level strip; omitted means no strip. */
+  strategy?: ReportStrategyType;
   isHistory?: boolean;
   /** 缺資料影響判斷時的提示，放在結論下面。 */
   notice?: string | null;
@@ -187,6 +193,19 @@ const shortDate = (value?: string | null): string | null => {
   return matched ? `${matched[1]}/${matched[2]}` : null;
 };
 
+type KeyLevelCell = { key: string; label: string; price: number };
+
+// Which sniper prices the strip shows depends on the (post-guardrail) action.
+const KEY_LEVEL_LAYOUT: Partial<Record<NonNullable<ReportSummaryType['action']>, Array<'entry' | 'stop' | 'rebound'>>> = {
+  buy: ['entry', 'stop'],
+  add: ['entry', 'stop'],
+  reduce: ['stop', 'rebound'],
+  watch: ['stop', 'rebound'],
+};
+
+const finiteOrNull = (value?: number | null): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
+
 /**
  * 報告首屏：股名與價格、結論列、分持股建議。單欄全寬，動作一律依枚舉查詞彙表，不用存檔的標籤。
  */
@@ -194,6 +213,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   meta,
   summary,
   details,
+  strategy,
   notice,
   watchlist,
   headerActions,
@@ -201,6 +221,9 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   const { t } = useUiLanguage();
   const reportLanguage = normalizeReportLanguage(meta.reportLanguage);
   const text = getReportText(reportLanguage);
+  const uiText = getMarketReviewUiText(reportLanguage);
+  const guardrailDetailId = useId();
+  const [guardrailOpen, setGuardrailOpen] = useState(false);
   const marketPhaseLabel = getMarketPhaseShortLabel(meta.marketPhaseSummary, reportLanguage);
   const partialBarLabel = meta.marketPhaseSummary?.isPartialBar === true
     ? getPartialBarLabel(reportLanguage)
@@ -220,20 +243,33 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   const actionToneClass = ACTION_TONE_CLASS[getDecisionActionTone(summary.action, summary.actionLabel, summary.operationAdvice)];
   const oneSentence = summary.oneSentence?.trim() || null;
   const analysisSummary = summary.analysisSummary?.trim() || null;
-  const sentence = oneSentence || analysisSummary || text.noAnalysisSummary;
+  const guardrailSentence = oneSentence || analysisSummary || text.noAnalysisSummary;
+
+  // Guardrail presentation only; the action label above always stays post-guardrail.
+  const guardrailApplied = summary.guardrailApplied === true;
+  const guardrailKind = summary.guardrailKind ?? null;
+  const guardrailReason = summary.guardrailReason?.trim() || null;
+  const modelSentence = summary.modelOneSentence?.trim() || null;
+  // Rule 1: data was missing, so lead with what the model meant and tuck the guardrail into a tag.
+  const showModelIntent = guardrailApplied && guardrailKind === 'data_unavailable' && modelSentence !== null;
+  const sentence = showModelIntent
+    ? formatUiText(uiText.modelIntent, { sentence: modelSentence ?? '' })
+    : guardrailSentence;
   const extraSummary = oneSentence && analysisSummary && analysisSummary !== oneSentence ? analysisSummary : null;
   const score = typeof summary.sentimentScore === 'number' && Number.isFinite(summary.sentimentScore)
     ? summary.sentimentScore
     : null;
 
   const currency = meta.currency ?? undefined;
+  // Only the change amount and percent carry the market tone; the price itself stays neutral.
   const priceToneClass = marketToneClass(meta.changePct, 'text-foreground');
   const priceDateText = shortDate(meta.priceDate);
   const pricePhaseText = INTRADAY_PHASES.has(meta.marketPhaseSummary?.phase ?? '') ? text.priceIntraday : text.priceAtClose;
   const changeAmount = typeof meta.changeAmount === 'number' ? meta.changeAmount : null;
 
-  const noPositionAdvice = summary.positionAdvice?.noPosition?.trim() || null;
-  const hasPositionAdvice = summary.positionAdvice?.hasPosition?.trim() || null;
+  const adviceSource = showModelIntent && summary.modelPositionAdvice ? summary.modelPositionAdvice : summary.positionAdvice;
+  const noPositionAdvice = adviceSource?.noPosition?.trim() || null;
+  const hasPositionAdvice = adviceSource?.hasPosition?.trim() || null;
   type AdviceColumn = { key: string; title: string; body: string; pinned: boolean };
   const adviceColumns = ([
     noPositionAdvice ? { key: 'no-position', title: text.ifNoPosition, body: noPositionAdvice, pinned: false } : null,
@@ -242,13 +278,52 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   // held 為 null 是無法判定，維持原順序、不標記；只有確定持有才把「手上有」置頂。
   adviceColumns.sort((a, b) => Number(b.pinned) - Number(a.pinned));
 
+  // Only model-given numbers count; legacy prices parsed from prose are never shown here.
+  const structuredSniper = strategy?.sniperPricesSource === 'structured' ? strategy.sniperPrices ?? null : null;
+  const currentStop = finiteOrNull(structuredSniper?.stopLoss);
+  const currentPrice = finiteOrNull(meta.currentPrice);
+  const keyLevelCells: KeyLevelCell[] = structuredSniper && summary.action
+    ? (KEY_LEVEL_LAYOUT[summary.action] ?? []).flatMap((slot) => {
+        const cell = slot === 'entry'
+          ? { key: slot, label: uiText.levelEntry, price: finiteOrNull(structuredSniper.idealBuy) }
+          : slot === 'stop'
+            ? { key: slot, label: uiText.levelStop, price: currentStop }
+            : { key: slot, label: uiText.levelRebound, price: finiteOrNull(structuredSniper.takeProfit) };
+        return cell.price === null ? [] : [{ ...cell, price: cell.price }];
+      })
+    : [];
+  const formatKeyLevel = ({ label, price }: KeyLevelCell): string => {
+    const distance = currentPrice ? formatPercent(((price - currentPrice) / currentPrice) * 100, 1) : null;
+    return `${label} ${formatPrice(price, currency)}${distance ? `（${distance}）` : ''}`;
+  };
+
   const previous = meta.previousReport;
   const previousDate = shortDate(previous?.createdAt);
+  const previousStop = finiteOrNull(previous?.stopLoss);
   const comparisonParts = previous ? [
     previous.action ? `${actionLabels[previous.action]} → ${actionLabel}` : null,
     typeof previous.score === 'number' && score !== null ? `${text.modelScore} ${previous.score} → ${score}` : null,
-    typeof previous.stopLoss === 'number' ? `${text.levelStopLoss} ${formatPrice(previous.stopLoss, currency)}` : null,
+    previousStop !== null
+      ? currentStop !== null
+        ? formatUiText(uiText.stopChange, { from: formatPrice(previousStop, currency), to: formatPrice(currentStop, currency) })
+        : formatUiText(uiText.previousStop, { value: formatPrice(previousStop, currency) })
+      : null,
   ].filter((part): part is string => part !== null) : [];
+
+  const boardNames = reportLanguage === 'zh' || reportLanguage === 'zh-TW' ? uiText.boardNames : {};
+  const guardrailTag = !guardrailApplied
+    ? null
+    : showModelIntent
+      ? { label: formatUiText(uiText.guardrailDataTag, { action: actionLabel ?? '' }), className: 'border-subtle bg-subtle text-secondary-text' }
+      : guardrailKind === 'market_logic'
+        ? { label: uiText.guardrailMarketTag, className: 'border-warning/30 bg-warning/10 text-warning' }
+        : null;
+  const guardrailDetail = showModelIntent
+    ? [guardrailReason, formatUiText(uiText.guardrailVersion, { sentence: guardrailSentence })]
+    : guardrailKind === 'market_logic'
+      ? [guardrailReason, modelSentence ? formatUiText(uiText.modelOriginal, { sentence: modelSentence }) : null]
+      : [guardrailReason];
+  const guardrailDetailLines = guardrailDetail.filter((line): line is string => Boolean(line));
 
   const canToggleWatchlist = Boolean(watchlist) && meta.reportType !== 'market_review' && meta.assetType !== 'index';
   const inWatchlist = watchlist?.isInWatchlist(meta.stockCode) ?? false;
@@ -269,25 +344,27 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
               <h2 className="text-[28px] font-bold leading-tight text-foreground">
                 {meta.stockName || meta.stockCode}
               </h2>
-              <span className="home-accent-chip px-2 py-0.5 font-mono text-xs">{meta.stockCode}</span>
-              {canToggleWatchlist && watchlist ? (
-                <IconButton
-                  size="sm"
-                  aria-label={inWatchlist ? t('report.removeFromWatchlist') : t('report.addToWatchlist')}
-                  aria-pressed={inWatchlist}
-                  disabled={watchlist.isActioning}
-                  onClick={() => watchlist.onToggle(meta.stockCode)}
-                  icon={<Star className={cn('h-4 w-4', inWatchlist && 'fill-current text-warning')} aria-hidden="true" />}
-                />
-              ) : null}
-              <AlertBellLink code={meta.stockCode} />
+              <span className="inline-flex shrink-0 items-center gap-1">
+                <span className="home-accent-chip px-2 py-0.5 font-mono text-xs">{meta.stockCode}</span>
+                {canToggleWatchlist && watchlist ? (
+                  <IconButton
+                    size="sm"
+                    aria-label={inWatchlist ? t('report.removeFromWatchlist') : t('report.addToWatchlist')}
+                    aria-pressed={inWatchlist}
+                    disabled={watchlist.isActioning}
+                    onClick={() => watchlist.onToggle(meta.stockCode)}
+                    icon={<Star className={cn('h-4 w-4', inWatchlist && 'fill-current text-warning')} aria-hidden="true" />}
+                  />
+                ) : null}
+                <AlertBellLink code={meta.stockCode} />
+              </span>
             </div>
             {watchlist?.actionMessage && canToggleWatchlist ? (
               <p className="mt-1 text-[11px] text-secondary-text">{watchlist.actionMessage}</p>
             ) : null}
             {typeof meta.currentPrice === 'number' ? (
               <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1" data-testid="report-price">
-                <span className={cn('text-4xl font-bold tabular-nums', priceToneClass)}>
+                <span className="text-3xl font-bold tabular-nums text-foreground">
                   {formatPrice(meta.currentPrice, currency)}
                 </span>
                 <span className={cn('text-base font-semibold tabular-nums', priceToneClass)}>
@@ -319,19 +396,29 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
               recordId={meta.id}
               reportTitle={`${meta.stockName || meta.stockCode}-${meta.stockCode}`}
               reportLanguage={reportLanguage}
+              iconOnlyBelowMd
             />
           </div>
         </div>
 
         <div className="home-divider mt-3 border-t pt-3" data-testid="report-conclusion">
-          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-            <span data-testid="report-action" className={cn('text-3xl font-bold leading-tight', actionToneClass)}>
+          <div className="flex flex-col gap-x-4 gap-y-1 md:flex-row md:items-baseline">
+            <span data-testid="report-action" className={cn('shrink-0 text-3xl font-bold leading-tight', actionToneClass)}>
               {actionLabel}
             </span>
-            <p className="min-w-[14rem] flex-1 whitespace-pre-wrap text-left text-base font-medium leading-7 text-foreground">
+            <p data-testid="report-sentence" className="min-w-0 flex-1 whitespace-pre-wrap text-left text-lg font-semibold leading-7 text-foreground">
               {sentence}
             </p>
           </div>
+          {keyLevelCells.length > 0 ? (
+            <p
+              data-testid="report-key-levels"
+              aria-label={uiText.keyLevels}
+              className="mt-2 text-left text-sm tabular-nums text-secondary-text"
+            >
+              {keyLevelCells.map(formatKeyLevel).join('｜')}
+            </p>
+          ) : null}
           <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-secondary-text">
             {summary.timeSensitivity?.trim() ? <span data-testid="report-time-sensitivity">{summary.timeSensitivity.trim()}</span> : null}
             {summary.confidenceLevel?.trim() ? (
@@ -347,10 +434,38 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                 {text.previousReport}{previousDate ? ` ${previousDate}` : ''}：{comparisonParts.join('，')}
               </span>
             ) : null}
-            {summary.guardrailApplied === true ? (
-              <span className="inline-flex flex-wrap items-center gap-1.5" data-testid="report-guardrail">
-                <Badge variant="warning" className="shadow-none">{text.guardrailAdjusted}</Badge>
-                {summary.guardrailReason?.trim() ? <span>{summary.guardrailReason.trim()}</span> : null}
+            {guardrailApplied ? (
+              <span
+                className={cn('inline-flex flex-wrap items-center gap-1.5', guardrailOpen && 'w-full')}
+                data-testid="report-guardrail"
+                data-guardrail-kind={guardrailTag ? (showModelIntent ? 'data_unavailable' : 'market_logic') : 'legacy'}
+              >
+                {guardrailDetailLines.length > 0 ? (
+                  <button
+                    type="button"
+                    aria-expanded={guardrailOpen}
+                    aria-controls={guardrailDetailId}
+                    onClick={() => setGuardrailOpen((open) => !open)}
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium',
+                      guardrailTag ? guardrailTag.className : 'border-warning/30 bg-warning/10 text-warning',
+                    )}
+                  >
+                    {guardrailTag ? guardrailTag.label : text.guardrailAdjusted}
+                    <ChevronDown className={cn('h-3 w-3 transition-transform', guardrailOpen && 'rotate-180')} aria-hidden="true" />
+                  </button>
+                ) : guardrailTag ? (
+                  <span className={cn('inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium', guardrailTag.className)}>
+                    {guardrailTag.label}
+                  </span>
+                ) : (
+                  <Badge variant="warning" className="shadow-none">{text.guardrailAdjusted}</Badge>
+                )}
+                {guardrailOpen && guardrailDetailLines.length > 0 ? (
+                  <span id={guardrailDetailId} data-testid="report-guardrail-detail" className="block w-full space-y-0.5 text-left leading-5">
+                    {guardrailDetailLines.map((line) => <span key={line} className="block">{line}</span>)}
+                  </span>
+                ) : null}
               </span>
             ) : null}
           </div>
@@ -407,7 +522,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
               <div className="home-related-board-list flex min-h-6 w-full min-w-0 max-w-full flex-nowrap items-center gap-2 overflow-x-auto overscroll-x-contain touch-pan-x pb-1">
                 {preparedRelatedBoards.map((board) => (
                   <div key={board.key} className="inline-flex shrink-0 items-center gap-1.5 text-xs">
-                    <span className="home-accent-chip px-2 py-0.5 font-medium">{board.name}</span>
+                    <span className="home-accent-chip px-2 py-0.5 font-medium">{boardNames[board.name] ?? board.name}</span>
                     {board.signal ? (
                       <span className="text-secondary-text">
                         {board.signal.status === 'leading' ? text.leadingBoard : text.laggingBoard}

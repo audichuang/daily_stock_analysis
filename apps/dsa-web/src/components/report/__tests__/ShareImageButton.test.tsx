@@ -86,6 +86,33 @@ describe('ShareImageButton', () => {
     expect(mockedGetShareImage).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps a fixed compact label and announces readiness with a toast', async () => {
+    mockedGetShareImage.mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
+    Object.defineProperty(navigator, 'share', { configurable: true, value: vi.fn().mockResolvedValue(undefined) });
+    Object.defineProperty(navigator, 'canShare', { configurable: true, value: () => true });
+
+    render(<ShareImageButton recordId={30} reportTitle="報告" reportLanguage="zh-TW" />);
+
+    const button = screen.getByRole('button', { name: '分享' });
+    expect(button).toHaveClass('h-8', 'min-w-[5.5rem]');
+    expect(button).not.toHaveClass('h-10');
+    expect(screen.queryByTestId('share-ready-toast')).not.toBeInTheDocument();
+
+    fireEvent.click(button);
+    const readyButton = await screen.findByRole('button', { name: '再點一次分享' });
+    // Only the icon and accessible name change; the visible label stays put.
+    expect(readyButton).toHaveTextContent(/^分享$/);
+    expect(screen.getByTestId('share-ready-toast')).toHaveAttribute('role', 'status');
+  });
+
+  it('collapses to an icon below md when asked', () => {
+    render(<ShareImageButton recordId={31} reportTitle="報告" reportLanguage="zh-TW" iconOnlyBelowMd />);
+
+    const button = screen.getByRole('button', { name: '分享' });
+    expect(button).toHaveClass('h-8', 'w-8', 'md:min-w-[5.5rem]');
+    expect(button).not.toHaveClass('min-w-[5.5rem]');
+  });
+
   it('downloads the PNG when native file sharing rejects', async () => {
     const nativeShare = vi.fn().mockRejectedValue(new Error('activation expired'));
     mockedGetShareImage.mockResolvedValue(new Blob(['png'], { type: 'image/png' }));

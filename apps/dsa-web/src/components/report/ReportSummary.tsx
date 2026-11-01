@@ -32,7 +32,8 @@ interface ReportSummaryProps {
 }
 
 /**
- * 完整報告：結論與價位在前，證據居中，資料品質與來源收合在最後。
+ * 完整報告：結論 → 事件 → 關鍵價位與 K 線 → 改判條件 → 事件展望 → 財報 → 證據與新聞，
+ * 資料品質與來源收合在最後。先看價位再看財報。
  */
 export const ReportSummary: React.FC<ReportSummaryProps> = ({
   data,
@@ -86,11 +87,6 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
 
       <EventGapCard eventGap={eventGap} currency={meta.currency} language={reportLanguage} />
 
-      {/* 事件展望：判斷與各情境動作 */}
-      <ReportEventOutlook outlook={report.eventOutlook} language={reportLanguage} />
-
-      {meta.stockCode ? <FinancialsPanel stockCode={meta.stockCode} /> : null}
-
       {levelsBlocked ? null : (
         <ReportStrategy
           strategy={strategy}
@@ -98,6 +94,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
           action={summary.action}
           currentPrice={meta.currentPrice}
           currency={meta.currency}
+          stockCode={meta.stockCode}
         />
       )}
 
@@ -108,9 +105,15 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
         currency={meta.currency}
         language={reportLanguage}
         hideLevels={levelsBlocked}
+        action={summary.action}
       />
 
       <ReportChangeConditions summary={summary} language={reportLanguage} />
+
+      {/* 事件展望：判斷與各情境動作；資料不足時收成一行 */}
+      <ReportEventOutlook outlook={report.eventOutlook} language={reportLanguage} />
+
+      {meta.stockCode ? <FinancialsPanel stockCode={meta.stockCode} /> : null}
 
       <EvidenceSection evidence={structuredReport?.evidence} gapSummary={gaps.summary} language={reportLanguage} />
 

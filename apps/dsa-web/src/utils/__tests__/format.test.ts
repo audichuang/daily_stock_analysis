@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { formatDateTime, formatMoneyValue, formatNumber, formatPercent, formatPrice, MINUS_SIGN, NO_VALUE } from '../format';
+import {
+  currencyUnitLabel,
+  formatDateTime,
+  formatMoneyValue,
+  formatNumber,
+  formatPercent,
+  formatPrice,
+  MINUS_SIGN,
+  NO_VALUE,
+} from '../format';
 
 describe('數字格式', () => {
   it('負號統一用 U+2212', () => {
@@ -43,6 +52,28 @@ describe('數字格式', () => {
   it('金額沒給幣別時不補任何幣別', () => {
     expect(formatMoneyValue(1234.5)).toBe('1,234.50');
     expect(formatMoneyValue(1234.5, 'USD')).toBe('USD 1,234.50');
+  });
+
+  it('彙總金額小數依幣別：TWD／JPY／KRW 0 位、USD 2 位，只回數字', () => {
+    expect(formatMoneyValue(1234567.89, 'TWD', {})).toBe('1,234,568');
+    expect(formatMoneyValue(1234567.4, 'JPY', {})).toBe('1,234,567');
+    expect(formatMoneyValue(98765.4, 'KRW', {})).toBe('98,765');
+    expect(formatMoneyValue(1234.5, 'USD', {})).toBe('1,234.50');
+    expect(formatMoneyValue(-1000.4, 'TWD', {})).toBe('−1,000');
+    expect(formatMoneyValue(null, 'TWD', {})).toBe(NO_VALUE);
+  });
+
+  it('彙總金額 compact 用萬／億', () => {
+    expect(formatMoneyValue(12_345_678, 'TWD', { compact: true })).toBe('1,234.57 萬');
+    expect(formatMoneyValue(250_000_000, 'TWD', { compact: true })).toBe('2.5 億');
+    expect(formatMoneyValue(9_876, 'TWD', { compact: true })).toBe('9,876');
+  });
+
+  it('幣別前綴：TWD→NT$、USD→US$，其他回原代碼', () => {
+    expect(currencyUnitLabel('TWD')).toBe('NT$');
+    expect(currencyUnitLabel('USD')).toBe('US$');
+    expect(currencyUnitLabel('JPY')).toBe('JPY');
+    expect(currencyUnitLabel(undefined)).toBe('');
   });
 
   it('日期時間用 zh-TW 與 24 小時制', () => {

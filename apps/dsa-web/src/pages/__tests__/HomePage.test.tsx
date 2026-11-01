@@ -141,6 +141,21 @@ const historyReport = {
   },
 };
 
+// W08 merged "analyze all / pending only" into one split button: the main half runs pending,
+// "analyze all" sits in the chevron menu (whose toggle shares analyze-all's disabled rule).
+function getAnalyzePendingButton(): HTMLElement {
+  return within(screen.getByTestId('watchlist-analyze-split')).getByRole('button', { name: /^分析未完成/ });
+}
+
+function analyzeAllMenuToggle(): HTMLElement {
+  return screen.getByRole('button', { name: '更多分析选项' });
+}
+
+async function clickAnalyzeAll(): Promise<void> {
+  fireEvent.click(await screen.findByRole('button', { name: '更多分析选项' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: '分析全部' }));
+}
+
 function configureWatchlistBatch(count: number): string[] {
   const codes = Array.from({ length: count }, (_, index) => `T${String(index + 1).padStart(3, '0')}`);
   vi.mocked(systemConfigApi.getWatchlist).mockResolvedValue(codes);
@@ -247,6 +262,20 @@ const runFlowSnapshot: RunFlowSnapshot = {
       title: '任务开始',
     },
   ],
+};
+
+// 送出複盤改在市場選單裡「产生复盘…」，按下後要先過確認框。
+const submitMarketReviewFromMenu = async ({
+  selectorName = '选择大盘复盘市场',
+  generateName = '产生复盘…',
+  confirmName = '产生',
+}: { selectorName?: string; generateName?: string; confirmName?: string } = {}) => {
+  const selector = await screen.findByRole('button', { name: selectorName });
+  if (selector.getAttribute('aria-expanded') !== 'true') {
+    fireEvent.click(selector);
+  }
+  fireEvent.click(await screen.findByRole('button', { name: generateName }));
+  fireEvent.click(await screen.findByRole('button', { name: confirmName }));
 };
 
 describe('HomePage', () => {
@@ -381,8 +410,9 @@ describe('HomePage', () => {
     }));
     vi.mocked(historyApi.getDetail).mockResolvedValue(historyReport);
     vi.mocked(stocksApi.getIndicesSnapshot).mockImplementation(async (region) => ({
-      items: region === 'tw'
-        ? [{ code: 'TAIEX', name: '加权指数', current: 23456.7, change: 12, changePct: 0.5, source: null, asOf: null }]
+      // W08: the overview only keeps indices the status bar lacks (DJI, VIX from the US region).
+      items: region === 'us'
+        ? [{ code: 'DJI', name: '道琼斯', current: 23456.7, change: 12, changePct: 0.5, source: null, asOf: null }]
         : [],
       marketPhase: null,
       marketOpen: null,
@@ -409,10 +439,10 @@ describe('HomePage', () => {
     const overview = within(await screen.findByTestId('today-overview'));
     expect(await overview.findByText('23,456.70')).toBeInTheDocument();
     expect(portfolioApi.getSnapshot).toHaveBeenCalledWith({ displayCurrency: 'TWD' });
-    fireEvent.click(await overview.findByRole('button', { name: /持股今日损益/ }));
+    fireEvent.click(await overview.findByRole('button', { name: /股票今日损益/ }));
     expect(navigateMock).toHaveBeenCalledWith('/portfolio');
     fireEvent.click(await overview.findByRole('button', { name: /待减码\s*2/ }));
-    expect(navigateMock).toHaveBeenCalledWith('/decision-signals');
+    expect(navigateMock).toHaveBeenCalledWith('/decision-signals?holding=1&action=reduce');
     expect(await overview.findByRole('button', { name: /触及停损\s*1/ })).toBeInTheDocument();
     expect(historyApi.getDetail).not.toHaveBeenCalled();
     expect(screen.queryByText('趋势维持强势')).not.toBeInTheDocument();
@@ -573,10 +603,59 @@ describe('HomePage', () => {
 
     await screen.findByTestId('today-overview');
     const toolbar = within(screen.getByRole('banner'));
-    expect(toolbar.queryByRole('button', { name: '大盘复盘' })).not.toBeInTheDocument();
+    expect(toolbar.queryByRole('button', { name: '看复盘' })).not.toBeInTheDocument();
     expect(toolbar.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(toolbar.getByRole('button', { name: '分析' })).toBeInTheDocument();
-    expect(within(screen.getByTestId('market-review-split-button')).getByRole('button', { name: '大盘复盘' })).toBeInTheDocument();
+    expect(within(screen.getByTestId('market-review-split-button')).getByRole('button', { name: '看复盘' })).toBeInTheDocument();
+  });
+
+  it('asks for confirmation before generating a market review and sends nothing on cancel', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({ total: 0, page: 1, limit: 20, items: [] });
+    vi.mocked(analysisApi.getMarketReviewDefaultRegion).mockResolvedValue({ defaultRegion: 'tw,us', regions: ['tw', 'us'] });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    const selector = await screen.findByRole('button', { name: '选择大盘复盘市场' });
+    await waitFor(() => expect(selector).not.toHaveTextContent('服务器默认'));
+    fireEvent.click(selector);
+    fireEvent.click(screen.getByRole('button', { name: '产生复盘…' }));
+
+    expect(screen.getByText('产生大盘复盘')).toBeInTheDocument();
+    expect(screen.getByText(/将产生 .*＋.* 复盘，约 \d+ 分钟/)).toBeInTheDocument();
+    expect(analysisApi.triggerMarketReview).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(screen.queryByText('产生大盘复盘')).not.toBeInTheDocument();
+    expect(analysisApi.triggerMarketReview).not.toHaveBeenCalled();
+  });
+
+  it('opens the latest market review from the view button instead of submitting', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 1,
+      page: 1,
+      limit: 20,
+      items: [marketReviewHistoryItem],
+    });
+    vi.mocked(historyApi.getDetail).mockResolvedValue(marketReviewHistoryReport);
+    vi.mocked(historyApi.getMarkdown).mockResolvedValue('## 段落\n\n内容');
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    const viewButton = await screen.findByRole('button', { name: '看复盘' });
+    await waitFor(() => expect(viewButton).toBeEnabled());
+    fireEvent.click(viewButton);
+
+    await waitFor(() => expect(historyApi.getDetail).toHaveBeenCalledWith(marketReviewHistoryItem.id));
+    expect(await screen.findByText('大盘复盘摘要')).toBeInTheDocument();
+    expect(analysisApi.triggerMarketReview).not.toHaveBeenCalled();
   });
 
   it('shows the actual default scope and translates the submitted region', async () => {
@@ -601,7 +680,7 @@ describe('HomePage', () => {
     fireEvent.click(selector);
     expect(screen.getByRole('checkbox', { name: '推送通知' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: '大盘复盘' }));
+    await submitMarketReviewFromMenu();
     await waitFor(() => expect(analysisApi.triggerMarketReview).toHaveBeenCalled());
     const notice = await screen.findByText(/ok/);
     expect(notice.textContent).toContain('＋');
@@ -761,7 +840,7 @@ describe('HomePage', () => {
 
     // 預設自選頁籤就看得到釘頂的大盤複盤
     expect(await screen.findByRole('button', { name: '大盘复盘 历史记录' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '全部' }));
+    fireEvent.click(screen.getByRole('button', { name: '记录' }));
     const newerStockButton = await screen.findByRole('button', { name: /AAPL/ });
     const marketButton = await screen.findByRole('button', { name: '大盘复盘 历史记录' });
     // 即使個股比較新，大盤複盤仍釘在最上面
@@ -811,7 +890,7 @@ describe('HomePage', () => {
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
 
     expect(await screen.findByLabelText('今日已分析')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '仅未分析' })).toBeDisabled();
+    expect(getAnalyzePendingButton()).toBeDisabled();
     expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
   });
 
@@ -992,7 +1071,7 @@ describe('HomePage', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('watchlist-row-000016.SH')).not.toBeInTheDocument();
     });
-    const analyzeAllButton = screen.getByRole('button', { name: '分析全部' });
+    const analyzeAllButton = analyzeAllMenuToggle();
     expect(analyzeAllButton).toBeDisabled();
     fireEvent.click(analyzeAllButton);
     expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
@@ -1053,7 +1132,7 @@ describe('HomePage', () => {
 
     const row = await screen.findByTestId('watchlist-row-000016.SH');
     expect(row).toHaveTextContent('深康佳A');
-    expect(screen.getByRole('button', { name: '分析全部' })).toBeEnabled();
+    expect(analyzeAllMenuToggle()).toBeEnabled();
   });
 
   it('does not open details when removing a watchlist row', async () => {
@@ -1180,7 +1259,7 @@ describe('HomePage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
     expect(await screen.findByLabelText('今日未分析')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '仅未分析' })).toBeEnabled();
+    expect(getAnalyzePendingButton()).toBeEnabled();
 
     const taskStreamOptions = vi.mocked(useTaskStream).mock.calls.at(-1)?.[0];
     act(() => {
@@ -1196,7 +1275,7 @@ describe('HomePage', () => {
     });
 
     expect(await screen.findByLabelText('今日状态未知')).toBeInTheDocument();
-    const analyzePendingButton = screen.getByRole('button', { name: '仅未分析' });
+    const analyzePendingButton = getAnalyzePendingButton();
     expect(analyzePendingButton).toBeDisabled();
     fireEvent.click(analyzePendingButton);
     expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
@@ -1262,7 +1341,7 @@ describe('HomePage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
     expect(await screen.findByLabelText('今日未分析')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '仅未分析' })).toBeEnabled();
+    expect(getAnalyzePendingButton()).toBeEnabled();
 
     const taskStreamOptions = vi.mocked(useTaskStream).mock.calls.at(-1)?.[0];
     act(() => {
@@ -1294,7 +1373,7 @@ describe('HomePage', () => {
     fireEvent.click(unavailableDetailButton);
     expect(await screen.findByRole('alert')).toHaveTextContent('最新分析详情暂时无法确认，请稍后重试。');
     expect(historyApi.getDetail).not.toHaveBeenCalled();
-    const analyzePendingButton = screen.getByRole('button', { name: '仅未分析' });
+    const analyzePendingButton = getAnalyzePendingButton();
     expect(analyzePendingButton).toBeDisabled();
     fireEvent.click(analyzePendingButton);
     expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
@@ -1516,7 +1595,7 @@ describe('HomePage', () => {
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
 
     expect(await screen.findByLabelText('今日已分析')).toBeInTheDocument();
-    const analyzePendingButton = screen.getByRole('button', { name: '仅未分析' });
+    const analyzePendingButton = getAnalyzePendingButton();
     expect(analyzePendingButton).toBeDisabled();
     fireEvent.click(analyzePendingButton);
     expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
@@ -1648,7 +1727,7 @@ describe('HomePage', () => {
     });
     expect(await screen.findByLabelText('确认今日状态中')).toBeInTheDocument();
 
-    const analyzePendingButton = screen.getByRole('button', { name: '仅未分析' });
+    const analyzePendingButton = getAnalyzePendingButton();
     expect(analyzePendingButton).toBeDisabled();
     fireEvent.click(analyzePendingButton);
     expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
@@ -1814,7 +1893,7 @@ describe('HomePage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('正在查找最新分析详情，请稍候。');
     expect(screen.queryByText('暂无分析详情，可先分析。')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '仅未分析' })).toBeDisabled();
+    expect(getAnalyzePendingButton()).toBeDisabled();
 
     await act(async () => {
       resolveAaplHistory({
@@ -2050,7 +2129,7 @@ describe('HomePage', () => {
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
 
     expect(await screen.findByLabelText('今日状态未知')).toBeInTheDocument();
-    const analyzePendingButton = screen.getByRole('button', { name: '仅未分析' });
+    const analyzePendingButton = getAnalyzePendingButton();
     expect(analyzePendingButton).toBeDisabled();
     fireEvent.click(analyzePendingButton);
     expect(analysisApi.analyzeAsync).not.toHaveBeenCalled();
@@ -2538,7 +2617,7 @@ describe('HomePage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
     const taskRefreshCallsBeforeSubmit = vi.mocked(analysisApi.getTasks).mock.calls.length;
-    fireEvent.click(screen.getByRole('button', { name: '分析全部' }));
+    await clickAnalyzeAll();
 
     expect(await screen.findByText('已提交 51 个任务，0 个正在运行')).toBeInTheDocument();
     expect(analysisApi.analyzeAsync).toHaveBeenCalledTimes(2);
@@ -2602,7 +2681,7 @@ describe('HomePage', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
-    fireEvent.click(await screen.findByRole('button', { name: '分析全部' }));
+    await clickAnalyzeAll();
 
     await waitFor(() => expect(analysisApi.analyzeAsync).toHaveBeenCalledTimes(1));
     expect(vi.mocked(analysisApi.analyzeAsync).mock.calls[0]?.[0].stockCodes).toEqual([
@@ -2637,7 +2716,7 @@ describe('HomePage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
     const taskRefreshCallsBeforeSubmit = vi.mocked(analysisApi.getTasks).mock.calls.length;
-    fireEvent.click(screen.getByRole('button', { name: '分析全部' }));
+    await clickAnalyzeAll();
 
     const status = await screen.findByText(/已确认提交 45 个任务，5 个正在运行；另有 1 只未确认/);
     expect(status).toHaveTextContent('已停止后续提交并刷新任务列表');
@@ -2666,7 +2745,7 @@ describe('HomePage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
     const taskRefreshCallsBeforeSubmit = vi.mocked(analysisApi.getTasks).mock.calls.length;
-    fireEvent.click(screen.getByRole('button', { name: '分析全部' }));
+    await clickAnalyzeAll();
 
     const status = await screen.findByText(/已确认提交 40 个任务，0 个正在运行；另有 11 只未确认/);
     expect(status).toHaveTextContent('本组请求 50 只，仅确认 40 只');
@@ -2686,7 +2765,7 @@ describe('HomePage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
     const taskRefreshCallsBeforeSubmit = vi.mocked(analysisApi.getTasks).mock.calls.length;
-    fireEvent.click(screen.getByRole('button', { name: '分析全部' }));
+    await clickAnalyzeAll();
 
     expect(await screen.findByText(/服务端访问外部依赖时超时/)).toBeInTheDocument();
     expect(screen.queryByText(/已确认提交/)).not.toBeInTheDocument();
@@ -2707,7 +2786,7 @@ describe('HomePage', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
-    fireEvent.click(screen.getByRole('button', { name: '分析全部' }));
+    await clickAnalyzeAll();
 
     expect(await screen.findByText('已提交 0 个任务，1 个正在运行')).toBeInTheDocument();
     expect(analysisApi.analyzeAsync).toHaveBeenCalledTimes(1);
@@ -2751,7 +2830,7 @@ describe('HomePage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
     const taskRefreshCallsBeforeSubmit = vi.mocked(analysisApi.getTasks).mock.calls.length;
-    fireEvent.click(screen.getByRole('button', { name: '分析全部' }));
+    await clickAnalyzeAll();
 
     // 40 accepted + 5 duplicates + 5 rejected = 50 = full chunk, so the next
     // chunk is submitted (2 analyzeAsync calls), not reported as incomplete.
@@ -2794,7 +2873,7 @@ describe('HomePage', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '全部' }));
+    fireEvent.click(await screen.findByRole('button', { name: '记录' }));
     expect(await screen.findByRole('button', { name: '大盘复盘 历史记录' })).toBeInTheDocument();
 
     // 核取框只在編輯模式出現，刪除前要確認
@@ -2825,7 +2904,7 @@ describe('HomePage', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '全部' }));
+    fireEvent.click(await screen.findByRole('button', { name: '记录' }));
     await screen.findByRole('button', { name: /AAPL/ });
     fireEvent.click(screen.getByRole('button', { name: '编辑' }));
     fireEvent.click(screen.getByRole('checkbox', { name: '删除 Apple 历史记录' }));
@@ -3040,7 +3119,7 @@ describe('HomePage', () => {
     expect(regionSelector).not.toHaveTextContent('A 股');
     expect(systemConfigApi.getConfig).not.toHaveBeenCalled();
 
-    fireEvent.click(await screen.findByRole('button', { name: '大盘复盘' }));
+    await submitMarketReviewFromMenu();
 
     await waitFor(() => {
       expect(analysisApi.triggerMarketReview).toHaveBeenCalledWith({
@@ -3083,7 +3162,8 @@ describe('HomePage', () => {
     fireEvent.click(await screen.findByRole('button', { name: '选择大盘复盘市场' }));
     fireEvent.click(screen.getByRole('checkbox', { name: /A 股/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /美股/ }));
-    fireEvent.click(screen.getByRole('button', { name: '大盘复盘' }));
+    expect(screen.getByRole('button', { name: '产生复盘…' })).toBeInTheDocument();
+    await submitMarketReviewFromMenu();
 
     await waitFor(() => {
       expect(analysisApi.triggerMarketReview).toHaveBeenCalledWith({
@@ -3137,7 +3217,11 @@ describe('HomePage', () => {
       target: { value: 'AAPL' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Analyze' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Market review' }));
+    await submitMarketReviewFromMenu({
+      selectorName: 'Select market review regions',
+      generateName: 'Generate review…',
+      confirmName: 'Generate',
+    });
 
     await waitFor(() => {
       expect(analysisApi.analyzeAsync).toHaveBeenCalled();
@@ -3188,7 +3272,7 @@ describe('HomePage', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '大盘复盘' }));
+    await submitMarketReviewFromMenu();
 
     fireEvent.click(await screen.findByRole('button', { name: 'More actions' }));
     expect(screen.getByRole('menuitem', { name: 'Copy Markdown Source' })).toBeInTheDocument();
@@ -3223,7 +3307,7 @@ describe('HomePage', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByRole('button', { name: '大盘复盘' });
+    await screen.findByRole('button', { name: '看复盘' });
     const dashboardScroll = screen.getByTestId('home-dashboard-scroll');
     const scrollToMock = vi.fn(function scrollTo(this: HTMLElement, options?: ScrollToOptions) {
       if (typeof options?.top === 'number') {
@@ -3236,7 +3320,7 @@ describe('HomePage', () => {
     });
     dashboardScroll.scrollTop = 480;
 
-    fireEvent.click(screen.getByRole('button', { name: '大盘复盘' }));
+    await submitMarketReviewFromMenu();
 
     await waitFor(() => {
       expect(scrollToMock).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
@@ -3320,7 +3404,7 @@ describe('HomePage', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '大盘复盘' }));
+    await submitMarketReviewFromMenu();
 
     const dashboardScroll = screen.getByTestId('home-dashboard-scroll');
     const marketReviewReport = await screen.findByTestId('market-review-report');
@@ -3608,7 +3692,7 @@ describe('HomePage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '自选' }));
 
-    const analyzePendingButton = screen.getByRole('button', { name: '仅未分析' });
+    const analyzePendingButton = getAnalyzePendingButton();
     expect(analyzePendingButton).toBeEnabled();
     fireEvent.click(analyzePendingButton);
 
@@ -3781,9 +3865,13 @@ describe('HomePage', () => {
     expect(screen.getByText('赚钱效应')).toBeInTheDocument();
     expect(screen.getByRole('table')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '追问 AI' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '大盘复盘' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '看复盘' })).toBeInTheDocument();
+    // History actions live in the hero now: one full-report button and one merged ⋯ menu.
+    expect(screen.getAllByRole('button', { name: /完整报告/ })).toHaveLength(1);
     const moreButtons = screen.getAllByRole('button', { name: '更多操作' });
+    expect(moreButtons).toHaveLength(1);
     fireEvent.click(moreButtons[0]);
+    expect(screen.getByRole('menuitem', { name: '复制 Markdown 源码' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: '历次分析' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: '重新分析' })).not.toBeInTheDocument();
     expect(historyApi.getMarkdown).toHaveBeenCalledWith(marketReviewHistoryReport.meta.id);
@@ -3862,9 +3950,7 @@ describe('HomePage', () => {
       </MemoryRouter>,
     );
 
-    await screen.findByRole('button', { name: '大盘复盘' });
-
-    fireEvent.click(screen.getByRole('button', { name: '大盘复盘' }));
+    await submitMarketReviewFromMenu();
 
     await waitFor(() => {
       expect(screen.getByText('大盘复盘已完成')).toBeInTheDocument();

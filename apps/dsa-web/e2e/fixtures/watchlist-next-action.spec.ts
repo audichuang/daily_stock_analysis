@@ -37,11 +37,12 @@ test('watchlist signals stay readable and accessible at sidebar widths', async (
     `,
   }));
   await page.goto('/');
-  await expect(page.getByText('今日待分析 1')).toBeVisible();
+  await expect(page.getByRole('button', { name: '分析未完成 1', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '暂无 AAPL 的分析详情，可先分析' })).toHaveAccessibleDescription(
     '变化：等待首次分析；状态：任务分析中；下一步：等待任务完成',
   );
-  await page.getByRole('button', { name: '仅未分析', exact: true }).click();
+  await page.getByRole('button', { name: '更多分析选项', exact: true }).click();
+  await page.getByRole('menuitem', { name: '仅分析未完成', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-analysis-mode', 'pending');
   for (const width of [900, 1280, 390]) {
     await page.setViewportSize({ width, height: 1200 });

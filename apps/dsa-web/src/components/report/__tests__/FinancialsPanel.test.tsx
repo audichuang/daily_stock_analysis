@@ -91,6 +91,76 @@ describe('FinancialsPanel', () => {
     expect(screen.queryByTestId('financials-headline')).not.toBeInTheDocument();
   });
 
+  it('shows the four headline metrics first and tucks the rest behind "show all"', async () => {
+    const point = { period: '2099Q2', value: 10, yoyPct: null, qoqPct: null, yoyPp: null, qoqPp: null, derived: false };
+    const base = payload();
+    vi.mocked(stocksApi.getFinancials).mockResolvedValue(payload({
+      metrics: [
+        ...base.metrics,
+        { key: 'operating_margin', label: '營業利益率', kind: 'ratio', unit: '%', definition: '營益教學', points: [point] },
+        { key: 'eps', label: '每股盈餘 EPS', kind: 'per_share', unit: 'TWD/股', definition: 'EPS 教學', points: [point] },
+        { key: 'free_cash_flow', label: '自由現金流', kind: 'amount', unit: 'TWD', definition: 'FCF 教學', points: [point] },
+        { key: 'debt_ratio', label: '負債比', kind: 'ratio', unit: '%', definition: '負債教學', points: [point] },
+      ],
+    }));
+    render(<FinancialsPanel stockCode="2330.TW" />);
+    const primary = await screen.findByTestId('financials-primary');
+    for (const key of ['revenue', 'gross_margin', 'eps', 'free_cash_flow']) {
+      expect(primary).toContainElement(screen.getByTestId(`financials-metric-${key}`));
+    }
+    const more = screen.getByTestId('financials-more');
+    expect(more).toHaveTextContent('看全部指标');
+    expect(primary).not.toContainElement(screen.getByTestId('financials-metric-operating_margin'));
+    expect(more).toContainElement(screen.getByTestId('financials-metric-operating_margin'));
+    expect(more).toContainElement(screen.getByTestId('financials-metric-debt_ratio'));
+  });
+
+  it('drops the card frame when embedded and keeps it otherwise', async () => {
+    vi.mocked(stocksApi.getFinancials).mockResolvedValue(payload());
+    const { unmount } = render(<FinancialsPanel stockCode="2330.TW" embedded />);
+    const flat = await screen.findByTestId('financials-panel');
+    const flatClasses = flat.className.split(/\s+/);
+    expect(flatClasses).not.toContain('card-surface');
+    expect(flatClasses).not.toContain('home-panel-card');
+    expect(flatClasses).not.toContain('border'); // only md:border, so phones get no frame
+    expect(flat.getAttribute('data-card-level')).toBeNull();
+    unmount();
+    // reverse: the report page (not embedded) still gets the card
+    // Card does not forward data-testid, so locate the report-page card by its level marker.
+    const { container } = render(<FinancialsPanel stockCode="2330.TW" />);
+    await waitFor(() => expect(container.querySelector('[data-card-level="surface"]')).not.toBeNull());
+    const card = container.querySelector('[data-card-level="surface"]') as HTMLElement;
+    expect(card.className.split(/\s+/)).toContain('card-surface');
+    expect(card.className.split(/\s+/)).toContain('home-panel-card');
+  });
+
+  it('starts collapsed when embedded, showing the period title and one AI line only', async () => {
+    vi.mocked(stocksApi.getFinancials).mockResolvedValue(payload({ commentary: commentary('ready') }));
+    render(<FinancialsPanel stockCode="2330.TW" embedded />);
+    const toggle = await screen.findByRole('button', { name: '财报与月营收（2099 Q2）' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId('financials-teaser')).toHaveTextContent('這季重點');
+    expect(screen.queryByText('1.27 兆元')).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('1.27 兆元')).toBeInTheDocument();
+    expect(screen.queryByTestId('financials-teaser')).not.toBeInTheDocument();
+  });
+
+  it('fits the monthly revenue table on a phone: fixed layout, YoY and MoM merged below sm', async () => {
+    vi.mocked(stocksApi.getFinancials).mockResolvedValue(payload({
+      monthlyRevenue: [{ month: '2099-09', revenue: 3.3e11, yoyPct: 25.4, momPct: -4.2 }],
+    }));
+    render(<FinancialsPanel stockCode="2330.TW" />);
+    const table = await screen.findByTestId('financials-monthly-table');
+    expect(table.className).toContain('table-fixed');
+    expect(table.className).not.toContain('min-w-[17rem]');
+    const merged = screen.getByText('同比／环比');
+    expect(merged.className).toContain('sm:hidden');
+    const mergedCell = table.querySelector('tbody td.sm\\:hidden')!;
+    expect(mergedCell.textContent).toBe('+25.4%−4.2%');
+  });
+
   it('explains ETFs and hides unsupported markets', async () => {
     vi.mocked(stocksApi.getFinancials).mockResolvedValue(payload({ status: 'not_applicable', statusReason: 'ETF 是基金', metrics: [], periods: [] }));
     const { unmount } = render(<FinancialsPanel stockCode="00631L.TW" />);

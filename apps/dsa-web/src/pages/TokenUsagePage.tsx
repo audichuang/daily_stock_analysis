@@ -10,7 +10,7 @@ import {
   type UsageSort,
 } from '../api/usage';
 import type { ParsedApiError } from '../api/error';
-import { ApiErrorAlert, AppPage, Button, Card, DataTable, EmptyState, PageHeader, Segmented, Select, type DataTableColumn } from '../components/common';
+import { ApiErrorAlert, AppPage, Button, Card, DataTable, EmptyState, Loading, PageHeader, Segmented, Select, Tooltip, type DataTableColumn } from '../components/common';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText, type UiTextKey, type UiTextParams } from '../i18n/uiText';
 import { USAGE_TEXT, type UsageText } from '../locales/usageText';
@@ -22,6 +22,8 @@ type Translate = (key: UiTextKey, params?: UiTextParams) => string;
 
 const PAGE_SIZE = 50;
 const MAX_DAY_BARS = 60;
+// Below this many days with data a bar chart is mostly empty space, so show text instead.
+const MIN_DAYS_FOR_BARS = 3;
 const ALL_TYPES = 'all';
 const PERIOD_OPTIONS: UsagePeriod[] = ['today', 'month', 'all'];
 
@@ -41,7 +43,50 @@ const CALL_TYPE_LABEL_KEYS: Record<string, UiTextKey> = {
 function getCallTypeLabel(callType: string, t: Translate, text: UsageText): string {
   const key = CALL_TYPE_LABEL_KEYS[callType];
   if (key) return t(key);
-  return text.callTypes[callType] ?? t('usage.callType.unknown', { type: callType || NO_VALUE });
+  const known = text.callTypes[callType];
+  if (known) return known;
+  return callType ? formatUiText(text.callTypeOther, { type: callType }) : text.callTypeOtherBare;
+}
+
+/** The Claude Code CLI backend logs its preset id instead of a model; real model ids (claude-opus-4-7) stay as logged. */
+const CLAUDE_MODEL_PATTERN = /^claude[-_]code[-_]cli$/i;
+const displayModelName = (model: string, text: UsageText): string => {
+  const name = modelDisplayName(model);
+  return CLAUDE_MODEL_PATTERN.test(name) ? text.claudeModel : name;
+};
+
+/** Compact token count for one-line summaries: 953412 -> 953K, 1234 -> 1.2K, 2500000 -> 2.5M. */
+const compactTokens = (value: number): string => {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${formatNumber(value / 1_000_000, 1)}M`;
+  if (abs >= 10_000) return `${formatNumber(Math.round(value / 1000))}K`;
+  if (abs >= 1000) return `${formatNumber(value / 1000, 1)}K`;
+  return formatNumber(value);
+};
+
+const shortDate = (date: string): string => date.slice(5).replace('-', '/');
+
+const DAY_MS = 86_400_000;
+const parseIsoDay = (value: string): number | null => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const time = Date.parse(`${value}T00:00:00Z`);
+  return Number.isNaN(time) ? null : time;
+};
+
+/** Every calendar day in [fromDate, toDate] (last MAX_DAY_BARS), zero-filled where there is no data. */
+function fillDays(days: UsageDayBreakdown[], fromDate: string, toDate: string): Array<UsageDayBreakdown | { date: string; empty: true }> {
+  const start = parseIsoDay(fromDate);
+  const end = parseIsoDay(toDate);
+  if (start == null || end == null || end < start) return days.slice(-MAX_DAY_BARS);
+  const byDate = new Map(days.map((day) => [day.date, day]));
+  const first = Math.max(start, end - (MAX_DAY_BARS - 1) * DAY_MS);
+  const filled: Array<UsageDayBreakdown | { date: string; empty: true }> = [];
+  for (let time = first; time <= end; time += DAY_MS) {
+    const date = new Date(time).toISOString().slice(0, 10);
+    filled.push(byDate.get(date) ?? { date, empty: true });
+  }
+  // A long 'all' range whose last call is older than the window would render only empty slots.
+  return filled.some((day) => !('empty' in day)) ? filled : days.slice(-MAX_DAY_BARS);
 }
 
 function buildParsedError(error: unknown, t: Translate): ParsedApiError {
@@ -83,19 +128,25 @@ const UsageSummaryBand: React.FC<{ dashboard: UsageDashboard; period: UsagePerio
     })
     : formatUiText(text.conclusionPlain, { period: periodLabel, calls: formatNumber(dashboard.totalCalls) });
 
-  let costLine: string;
+  // No unit price at all means there is nothing to estimate; hide the line instead of saying so.
+  let costLine: string | null = null;
   if (cost.estimatedTotal != null) {
     costLine = formatCost(cost.estimatedTotal, cost.currency);
     if (!cost.complete) costLine += `（${text.costPartial}）`;
-  } else {
-    costLine = cost.subscriptionTokens > 0 && cost.complete ? text.costSubscription : text.costUnpriced;
+  } else if (cost.subscriptionTokens > 0 && cost.complete) {
+    costLine = text.costSubscription;
   }
 
   const changeLabel = period === 'today' ? text.changeToday : text.changeMonth;
   const stats = [
     { label: text.metricCalls, value: formatNumber(dashboard.totalCalls) },
     { label: text.metricInOut, value: `${formatNumber(dashboard.totalPromptTokens)} / ${formatNumber(dashboard.totalCompletionTokens)}` },
-    { label: text.metricCache, value: cache.hitRatio == null ? NO_VALUE : `${formatNumber(cache.hitRatio * 100, 1)}%` },
+    {
+      label: text.metricCache,
+      value: cache.hitRatio == null
+        ? <Tooltip content={text.cacheUnreported} focusable><span aria-label={text.cacheUnreported}>{NO_VALUE}</span></Tooltip>
+        : `${formatNumber(cache.hitRatio * 100, 1)}%`,
+    },
   ];
 
   return (
@@ -104,17 +155,19 @@ const UsageSummaryBand: React.FC<{ dashboard: UsageDashboard; period: UsagePerio
         <div className="min-w-0">
           <p className="text-xs text-secondary-text">{text.totalLabel}</p>
           <p className="mt-1 text-3xl font-semibold tabular-nums text-foreground" data-testid="usage-total">{formatNumber(dashboard.totalTokens)}</p>
-          <p className="mt-2 text-sm text-foreground">
-            <span className="text-secondary-text">{`${text.costLabel} `}</span>
-            <span className="tabular-nums" data-testid="usage-cost">{costLine}</span>
-          </p>
+          {costLine ? (
+            <p className="mt-2 text-sm text-foreground">
+              <span className="text-secondary-text">{`${text.costLabel} `}</span>
+              <span className="tabular-nums" data-testid="usage-cost">{costLine}</span>
+            </p>
+          ) : null}
           {cost.estimatedTotal != null && cost.subscriptionTokens > 0 ? (
             <p className="mt-1 text-xs text-secondary-text">{formatUiText(text.subscriptionNote, { tokens: formatNumber(cost.subscriptionTokens) })}</p>
           ) : null}
-          {previous ? (
+          {previous && previous.tokensChangePct != null ? (
             <p className="mt-1 text-xs text-secondary-text" data-testid="usage-change">
               {`${changeLabel} `}
-              <span className="tabular-nums">{previous.tokensChangePct == null ? text.noPrevious : formatPercent(previous.tokensChangePct, 1)}</span>
+              <span className="tabular-nums">{formatPercent(previous.tokensChangePct, 1)}</span>
             </p>
           ) : null}
           <p className="mt-2 text-sm text-secondary-text">{sentence}</p>
@@ -132,9 +185,56 @@ const UsageSummaryBand: React.FC<{ dashboard: UsageDashboard; period: UsagePerio
   );
 };
 
-const DailyBars: React.FC<{ days: UsageDayBreakdown[]; selected: string | null; onSelect: (day: string | null) => void; text: UsageText }> = ({ days, selected, onSelect, text }) => {
-  const shown = days.slice(-MAX_DAY_BARS);
-  const max = Math.max(...shown.map((day) => day.totalTokens), 1);
+interface DailyBarsProps {
+  days: UsageDayBreakdown[];
+  fromDate: string;
+  toDate: string;
+  selected: string | null;
+  onSelect: (day: string | null) => void;
+  text: UsageText;
+}
+
+const DailyBars: React.FC<DailyBarsProps> = ({ days, fromDate, toDate, selected, onSelect, text }) => {
+  const dayLabel = (day: UsageDayBreakdown) => formatUiText(text.dayBar, {
+    date: day.date,
+    total: formatNumber(day.totalTokens),
+    input: formatNumber(day.promptTokens),
+    output: formatNumber(day.completionTokens),
+  });
+
+  if (days.length < MIN_DAYS_FOR_BARS) {
+    return (
+      <Card title={text.dailyTitle} variant="surface" padding="md">
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm" data-testid="usage-daily-summary">
+          {days.map((day) => {
+            const isSelected = selected === day.date;
+            return (
+              <button
+                key={day.date}
+                type="button"
+                aria-label={dayLabel(day)}
+                aria-pressed={isSelected}
+                onClick={() => onSelect(isSelected ? null : day.date)}
+                className={cn(
+                  'cursor-pointer rounded px-1 text-left tabular-nums text-foreground hover:bg-hover',
+                  isSelected && 'text-cyan',
+                )}
+              >
+                {formatUiText(text.daySummary, {
+                  date: shortDate(day.date),
+                  input: compactTokens(day.promptTokens),
+                  output: compactTokens(day.completionTokens),
+                })}
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+    );
+  }
+
+  const shown = fillDays(days, fromDate, toDate);
+  const max = Math.max(...shown.map((day) => ('empty' in day ? 0 : day.totalTokens)), 1);
   return (
     <Card title={text.dailyTitle} subtitle={text.dailyHint} variant="surface" padding="md">
       <div className="mb-2 flex items-center gap-3 text-xs text-secondary-text">
@@ -143,22 +243,20 @@ const DailyBars: React.FC<{ days: UsageDayBreakdown[]; selected: string | null; 
       </div>
       <div className="flex h-32 items-end gap-[2px]" data-testid="usage-daily-bars">
         {shown.map((day) => {
-          const label = formatUiText(text.dayBar, {
-            date: day.date,
-            total: formatNumber(day.totalTokens),
-            input: formatNumber(day.promptTokens),
-            output: formatNumber(day.completionTokens),
-          });
+          if ('empty' in day) {
+            // Days without calls keep their slot so the axis reads as real calendar time.
+            return <span key={day.date} className="h-full min-w-0 max-w-8 flex-1" aria-hidden="true" />;
+          }
           const isSelected = selected === day.date;
           return (
             <button
               key={day.date}
               type="button"
-              aria-label={label}
+              aria-label={dayLabel(day)}
               aria-pressed={isSelected}
               onClick={() => onSelect(isSelected ? null : day.date)}
               className={cn(
-                'flex h-full min-w-0 max-w-12 flex-1 cursor-pointer flex-col justify-end gap-[2px] rounded-t hover:bg-hover',
+                'flex h-full min-w-0 max-w-8 flex-1 cursor-pointer flex-col justify-end gap-[2px] rounded-t hover:bg-hover',
                 selected && !isSelected && 'opacity-40',
               )}
             >
@@ -171,12 +269,10 @@ const DailyBars: React.FC<{ days: UsageDayBreakdown[]; selected: string | null; 
           );
         })}
       </div>
-      {shown.length > 1 ? (
-        <div className="mt-1 flex justify-between text-xs tabular-nums text-muted-text">
-          <span>{shown[0].date.slice(5)}</span>
-          <span>{shown[shown.length - 1].date.slice(5)}</span>
-        </div>
-      ) : null}
+      <div className="mt-1 flex justify-between text-xs tabular-nums text-muted-text">
+        <span>{shortDate(shown[0].date)}</span>
+        <span>{shortDate(shown[shown.length - 1].date)}</span>
+      </div>
     </Card>
   );
 };
@@ -214,14 +310,17 @@ const ModelTable: React.FC<{ dashboard: UsageDashboard; text: UsageText }> = ({ 
     const value = formatCost(row.cost, dashboard.cost.currency);
     return row.costState === 'partial' ? `${value}（${text.costPartial}）` : value;
   };
+  // Without any unit price every cell would just say "unpriced"; drop the column instead.
+  const hasCost = rows.some((row) => row.costState !== 'unpriced' && row.costState !== 'unknown');
+  const costColumn: DataTableColumn<MergedModel> = { key: 'cost', header: text.cost, numeric: true, render: costCell };
   const columns: DataTableColumn<MergedModel>[] = [
-    { key: 'name', header: text.model, priority: 'primary', render: (row) => <span className="break-all text-foreground">{row.name}</span> },
+    { key: 'name', header: text.model, priority: 'primary', render: (row) => <span className="break-all text-foreground">{displayModelName(row.name, text)}</span> },
     { key: 'calls', header: text.calls, numeric: true, render: (row) => formatNumber(row.calls) },
     { key: 'input', header: text.input, numeric: true, render: (row) => formatNumber(row.promptTokens) },
     { key: 'output', header: text.output, numeric: true, render: (row) => formatNumber(row.completionTokens) },
     { key: 'total', header: text.total, numeric: true, priority: 'primary', render: (row) => <span className="font-medium text-foreground">{formatNumber(row.totalTokens)}</span> },
     { key: 'peak', header: text.peak, numeric: true, render: (row) => formatNumber(row.maxTotalTokens) },
-    { key: 'cost', header: text.cost, numeric: true, render: costCell },
+    ...(hasCost ? [costColumn] : []),
   ];
   return (
     <Card title={text.modelTitle} variant="surface" padding="md">
@@ -256,7 +355,7 @@ const DesktopRecordCells: React.FC<{ record: UsageCallRecord; flat: boolean; tex
     <td className={cn('whitespace-nowrap px-3 py-2 tabular-nums text-secondary-text', nested && 'pl-6')}>{timeText(record.calledAt, flat)}</td>
     <td className="whitespace-nowrap px-3 py-2 text-foreground">{getCallTypeLabel(record.callType, t, text)}</td>
     <td className="px-3 py-2"><StockLink code={record.stockCode} /></td>
-    <td className="max-w-[18rem] truncate px-3 py-2 text-secondary-text" title={record.model}>{modelDisplayName(record.model)}</td>
+    <td className="max-w-[18rem] truncate px-3 py-2 text-secondary-text" title={record.model}>{displayModelName(record.model, text)}</td>
     <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{formatNumber(record.promptTokens)}</td>
     <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{formatNumber(record.completionTokens)}</td>
     <td className="px-3 py-2 text-right font-medium tabular-nums text-foreground">{formatNumber(record.totalTokens)}</td>
@@ -283,7 +382,7 @@ const DesktopEntry: React.FC<RecordRowsProps> = ({ entry, flat, expanded, onTogg
           </button>
         </td>
         <td className="px-3 py-2"><StockLink code={first.stockCode} /></td>
-        <td className="max-w-[18rem] truncate px-3 py-2 text-secondary-text" title={first.model}>{modelDisplayName(first.model)}</td>
+        <td className="max-w-[18rem] truncate px-3 py-2 text-secondary-text" title={first.model}>{displayModelName(first.model, text)}</td>
         <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{formatNumber(entry.promptTokens)}</td>
         <td className="px-3 py-2 text-right tabular-nums text-secondary-text">{formatNumber(entry.completionTokens)}</td>
         <td className="px-3 py-2 text-right font-medium tabular-nums text-foreground">{formatNumber(entry.totalTokens)}</td>
@@ -305,7 +404,7 @@ const MobileRecord: React.FC<{ record: UsageCallRecord; flat: boolean; text: Usa
       <span className="shrink-0 font-medium tabular-nums text-foreground" data-testid={`usage-mobile-total-${record.id}`}>{formatNumber(record.totalTokens)}</span>
     </div>
     <p className="mt-0.5 break-all text-xs text-secondary-text">
-      {`${modelDisplayName(record.model)} · ${text.input} ${formatNumber(record.promptTokens)} · ${text.output} ${formatNumber(record.completionTokens)}`}
+      {`${displayModelName(record.model, text)} · ${text.input} ${formatNumber(record.promptTokens)} · ${text.output} ${formatNumber(record.completionTokens)}`}
     </p>
   </li>
 );
@@ -326,7 +425,7 @@ const MobileEntry: React.FC<RecordRowsProps> = ({ entry, flat, expanded, onToggl
           <span className="shrink-0 font-medium tabular-nums text-foreground">{formatNumber(entry.totalTokens)}</span>
         </div>
         <p className="mt-0.5 break-all text-xs text-secondary-text">
-          {`${modelDisplayName(first.model)} · ${text.input} ${formatNumber(entry.promptTokens)} · ${text.output} ${formatNumber(entry.completionTokens)}`}
+          {`${displayModelName(first.model, text)} · ${text.input} ${formatNumber(entry.promptTokens)} · ${text.output} ${formatNumber(entry.completionTokens)}`}
         </p>
         <button type="button" aria-expanded={expanded} className="mt-0.5 cursor-pointer text-xs text-cyan" onClick={() => onToggle(entry.id)}>
           {formatUiText(expanded ? text.collapseRounds : text.expandRounds, { count })}
@@ -464,7 +563,7 @@ const TokenUsagePage: React.FC = () => {
         {error ? <ApiErrorAlert error={error} actionLabel={t('common.retry')} onAction={() => void loadDashboard()} /> : null}
 
         {loading && !dashboard ? (
-          <div className="h-40 animate-pulse rounded-2xl border border-border/70 bg-card/60" data-testid="usage-loading" />
+          <div data-testid="usage-loading"><Loading label={text.loading} /></div>
         ) : null}
 
         {dashboard && dashboard.totalCalls === 0 ? (
@@ -476,7 +575,7 @@ const TokenUsagePage: React.FC = () => {
             <UsageSummaryBand dashboard={dashboard} period={dashboard.period} text={text} t={t} />
 
             <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
-              <DailyBars days={dashboard.byDay} selected={day} onSelect={setDay} text={text} />
+              <DailyBars days={dashboard.byDay} fromDate={dashboard.fromDate} toDate={dashboard.toDate} selected={day} onSelect={setDay} text={text} />
               <CallTypeShare dashboard={dashboard} text={text} t={t} />
             </div>
 

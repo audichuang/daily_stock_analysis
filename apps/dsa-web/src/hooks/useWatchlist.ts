@@ -47,15 +47,18 @@ export function useWatchlist(): UseWatchlistReturn {
   }, []);
 
   const refresh = useCallback(async () => {
-    try {
-      const result = await systemConfigApi.getWatchlist();
-      if (mountedRef.current) {
-        setCodes(result);
+    // Codes and groups are independent reads: fire both at once instead of waiting on the codes first.
+    const loadCodes = async () => {
+      try {
+        const result = await systemConfigApi.getWatchlist();
+        if (mountedRef.current) {
+          setCodes(result);
+        }
+      } catch {
+        // keep existing codes
       }
-    } catch {
-      // keep existing codes
-    }
-    await loadGroups();
+    };
+    await Promise.all([loadCodes(), loadGroups()]);
   }, [loadGroups]);
 
   useEffect(() => {

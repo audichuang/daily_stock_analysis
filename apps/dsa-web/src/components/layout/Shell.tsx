@@ -1,11 +1,12 @@
 import type React from 'react';
-import { useCallback, useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
 import { Drawer } from '../common/Drawer';
 import { BottomTabs } from './BottomTabs';
 import { GlobalStockSearch } from './GlobalStockSearch';
 import { MarketStatusBar } from './MarketStatusBar';
-import { ShellHeader } from './ShellHeader';
+import { ShellHeader, resolveShellTitleKey } from './ShellHeader';
+import { ShellHeaderProvider, useShellHeaderContext } from './ShellHeaderActions';
 import { SidebarNav } from './SidebarNav';
 import { DesktopUpdateIndicator } from './DesktopUpdateIndicator';
 import { cn } from '../../utils/cn';
@@ -32,7 +33,27 @@ function readRailExpanded(): boolean {
   return window.innerWidth >= RAIL_DEFAULT_EXPANDED_MIN_WIDTH;
 }
 
-export const Shell: React.FC<ShellProps> = ({ children }) => {
+/**
+ * Sets document.title to the plain page name (no site suffix); iOS reads it via KVO.
+ * Routes outside the navigation (404) keep whatever the page sets.
+ */
+const ShellDocumentTitle: React.FC = () => {
+  const { pathname } = useLocation();
+  const { t } = useUiLanguage();
+  const titleDetail = useShellHeaderContext()?.titleDetail ?? null;
+  const titleKey = resolveShellTitleKey(pathname);
+  const title = titleKey ? (titleDetail || t(titleKey)) : null;
+
+  useEffect(() => {
+    if (title && typeof document !== 'undefined') {
+      document.title = title;
+    }
+  }, [title]);
+
+  return null;
+};
+
+const ShellFrame: React.FC<ShellProps> = ({ children }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [railExpanded, setRailExpanded] = useState(readRailExpanded);
   const { t } = useUiLanguage();
@@ -58,7 +79,10 @@ export const Shell: React.FC<ShellProps> = ({ children }) => {
     // iOS 工具頁內嵌：外框由原生 App 提供，這裡只留頁面內容。
     return (
       <div className="shell-root min-h-[100dvh] bg-background text-foreground" data-embedded="true">
-        <div className="mx-auto flex w-full max-w-[1680px] px-3 py-3 sm:px-4 sm:py-4 lg:px-5">
+        <div
+          className="mx-auto flex w-full max-w-[1680px] px-0 pt-2 pb-[calc(env(safe-area-inset-bottom)+1.5rem)]"
+          data-testid="shell-embed-frame"
+        >
           <main className="min-h-0 min-w-0 flex-1 touch-pan-y">
             {children ?? <Outlet />}
           </main>
@@ -112,3 +136,11 @@ export const Shell: React.FC<ShellProps> = ({ children }) => {
     </div>
   );
 };
+
+export const Shell: React.FC<ShellProps> = (props) => (
+  <ShellHeaderProvider>
+    <ShellFrame {...props} />
+    {/* After the frame so its effect runs after page effects in the same commit. */}
+    <ShellDocumentTitle />
+  </ShellHeaderProvider>
+);
