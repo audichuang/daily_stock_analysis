@@ -146,7 +146,7 @@ export function DataTable<T>({
         className={cn('hidden md:block', maxHeight ? 'overflow-auto' : wide ? 'overflow-x-auto' : 'overflow-x-clip')}
       >
         <table className="w-full border-collapse text-sm" aria-label={ariaLabel}>
-          <thead className={cn('sticky z-10 bg-card', maxHeight ? 'top-0' : 'top-[calc(var(--shell-header-height)+var(--shell-status-height))]')}>
+          <thead className={cn('sticky z-10 bg-card', maxHeight || wide ? 'top-0' : 'top-[calc(var(--shell-header-height)+var(--shell-status-height))]')}>
             <tr className="border-b border-border/60 text-xs text-secondary-text">
               {columns.map((column) => {
                 const isActive = sort?.key === column.key;

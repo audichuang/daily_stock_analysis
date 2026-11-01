@@ -79,6 +79,7 @@ describe('DataTable 桌機', () => {
     expect(container).not.toHaveClass('overflow-auto');
     expect(container).not.toHaveClass('overflow-x-auto');
     expect(container.style.maxHeight).toBe('');
+    expect(container.querySelector('thead')?.className).toContain('--shell-status-height');
   });
 
   it('表格比容器寬時改成可橫向捲動，才拿得到右側欄位', () => {
@@ -89,6 +90,10 @@ describe('DataTable 桌機', () => {
       const container = screen.getByTestId('data-table-desktop');
       expect(container).toHaveClass('overflow-x-auto');
       expect(container).not.toHaveClass('overflow-x-clip');
+      // 容器自己變成捲動容器，sticky 以它為基準，不能再套 shell 位移，否則表頭蓋住資料列
+      const thead = container.querySelector('thead');
+      expect(thead).toHaveClass('top-0');
+      expect(thead?.className).not.toContain('--shell-');
     } finally {
       widthSpy.mockRestore();
       clientSpy.mockRestore();
