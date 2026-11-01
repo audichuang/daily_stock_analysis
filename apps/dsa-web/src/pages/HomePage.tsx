@@ -1,14 +1,16 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BarChart3, Check, SlidersHorizontal, X } from 'lucide-react';
+import { BarChart3, Check, ChevronLeft, RefreshCw, SlidersHorizontal, X } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getParsedApiError, type ParsedApiError } from '../api/error';
 import { analysisApi, DuplicateTaskError } from '../api/analysis';
 import { historyApi } from '../api/history';
 import { agentApi, type SkillInfo } from '../api/agent';
 import { systemConfigApi } from '../api/systemConfig';
-import { ApiErrorAlert, Button, Drawer, EmptyState, InlineAlert } from '../components/common';
+import { ApiErrorAlert, Button, ConfirmDialog, Drawer, EmptyState, InlineAlert } from '../components/common';
+import { ActionMenu, type ActionMenuItem } from '../components/common/ActionMenu';
 import { DashboardStateBlock } from '../components/dashboard';
+import { TodayOverview } from '../components/dashboard/TodayOverview';
 import { StockAutocomplete } from '../components/StockAutocomplete';
 import { StockHistoryTrendDrawer } from '../components/history';
 import { ReportMarkdownDrawer } from '../components/report/ReportMarkdownDrawer';
@@ -26,6 +28,7 @@ import {
 } from '../components/watchlist/HomeStockWorkspace';
 import { isWatchlistRowPendingAnalysis } from '../components/watchlist/watchlistRowState';
 import { useDashboardLifecycle, useHomeDashboardState } from '../hooks';
+import { useStockQuotes } from '../hooks/useStockQuotes';
 import { useWatchlist } from '../hooks/useWatchlist';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import type { SetupStatusResponse } from '../types/systemConfig';
@@ -40,6 +43,7 @@ import type {
 } from '../types/analysis';
 import type { RunFlowSnapshotSource } from '../types/runFlow';
 import { getTodayInShanghai } from '../utils/format';
+import { formatMarketReviewRegion, getMarketReviewLights } from '../utils/marketReviewRegion';
 import { useStockIndex } from '../hooks/useStockIndex';
 import { isTwStockCode, resolveRegisteredIndexCanonical, toAssetAwareCodeKey, type AssetAwareAssetType } from '../utils/stockCode';
 
@@ -66,6 +70,7 @@ const BATCH_ANALYSIS_CHUNK_SIZE = 50;
 const TODAY_ANALYSIS_PAGE_SIZE = 100;
 const WATCHLIST_HISTORY_LOOKUP_CONCURRENCY = 4;
 const TASK_PANEL_COLLAPSED_STORAGE_KEY = 'dsa.home.taskPanelCollapsed';
+const MOBILE_MEDIA_QUERY = '(max-width: 767px)';
 const SERVER_LOCAL_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
 
 type BatchAnalyzeStatus = {
@@ -195,6 +200,18 @@ function countBatchAccepted(result: AnalyzeAsyncResponse): { accepted: number; d
   return { accepted: 1, duplicates: 0, rejected: 0 };
 }
 
+function matchesMobileViewport(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+}
+
+/** /?report=<id>：只接受正整數，其他值視同沒帶。 */
+function parseReportParam(value: string | null): number | null {
+  if (!value || !/^\d+$/.test(value)) return null;
+  const id = Number(value);
+  return id > 0 && Number.isSafeInteger(id) ? id : null;
+}
+
 function toStockBarItemFromHistoryItem(item: HistoryItem): StockBarItem {
   return {
     id: item.id,
@@ -210,6 +227,8 @@ function toStockBarItemFromHistoryItem(item: HistoryItem): StockBarItem {
     modelUsed: item.modelUsed,
     marketPhaseSummary: item.marketPhaseSummary ?? null,
     assetType: item.assetType,
+    // HistoryItem.currentPrice 是分析當時的價格，只能標「分析時價」。
+    analysisPrice: item.currentPrice ?? null,
   };
 }
 
@@ -289,6 +308,10 @@ const HomePage: React.FC = () => {
   );
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(matchesMobileViewport);
+  const [reanalyzeConfirmOpen, setReanalyzeConfirmOpen] = useState(false);
+  const [marketReviewDefaultRegion, setMarketReviewDefaultRegion] = useState('');
+  const [marketLightSource, setMarketLightSource] = useState<{ id: number; payload: MarketReviewPayload | null } | null>(null);
   const [dossierOpen, setDossierOpen] = useState(false);
   const [isSubmittingMarketReview, setIsSubmittingMarketReview] = useState(false);
   const [marketReviewNotice, setMarketReviewNotice] = useState<MarketReviewNotice>(null);
@@ -301,7 +324,7 @@ const HomePage: React.FC = () => {
   const [strategyMenuOpen, setStrategyMenuOpen] = useState(false);
   const [runFlowDrawer, setRunFlowDrawer] = useState<RunFlowDrawerState>({ open: false });
   const [duplicateBannerVisible, setDuplicateBannerVisible] = useState(false);
-  const [sidebarWorkspaceTab, setSidebarWorkspaceTab] = useState<HomeWorkspaceTab>('history');
+  const [sidebarWorkspaceTab, setSidebarWorkspaceTab] = useState<HomeWorkspaceTab>('watchlist');
   const [isTaskPanelCollapsed, setIsTaskPanelCollapsed] = useState<boolean>(() => (
     readTaskPanelCollapsedPreference() ?? false
   ));
@@ -383,6 +406,7 @@ const HomePage: React.FC = () => {
     loadMarketReviewHistory,
     refreshMarketReviewHistory,
     selectHistoryItem,
+    clearSelectedReport,
     submitAnalysis,
     notify,
     setNotify,
@@ -452,6 +476,29 @@ const HomePage: React.FC = () => {
   useEffect(() => {
     document.title = t('home.pageTitle');
   }, [t]);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+    const media = window.matchMedia(MOBILE_MEDIA_QUERY);
+    const handleChange = () => setIsMobile(media.matches);
+    media.addEventListener?.('change', handleChange);
+    return () => media.removeEventListener?.('change', handleChange);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    analysisApi.getMarketReviewDefaultRegion()
+      .then((response) => {
+        if (active) setMarketReviewDefaultRegion(response?.defaultRegion ?? '');
+      })
+      // 取不到就顯示「伺服器預設」，送出行為不受影響。
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -870,8 +917,6 @@ const HomePage: React.FC = () => {
       if (stockCode === 'MARKET') {
         await refreshMarketReviewHistory(false);
       }
-    } catch {
-      // error silently ignored
     } finally {
       setIsDeletingStock(false);
     }
@@ -936,6 +981,72 @@ const HomePage: React.FC = () => {
       handleSubmitAnalysis(stockCode, stockName || undefined, 'import', state.skills);
     }
   }, [handleSubmitAnalysis, location.pathname, location.state, navigate, setQuery]);
+
+  // URL 與選中報告的雙向同步：/?report=<id>、/?stock=<code> 帶參數時開報告，沒帶參數回總覽。
+  const urlParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const reportParam = parseReportParam(urlParams.get('report'));
+  const stockParam = urlParams.get('stock')?.trim() || null;
+  const selectedReportId = selectedReport?.meta.id ?? null;
+  const selectedReportIdRef = useRef(selectedReportId);
+  useEffect(() => {
+    selectedReportIdRef.current = selectedReportId;
+  }, [selectedReportId]);
+
+  // 只在 URL 變動（含掛載）時反應；否則選中報告後、寫回 URL 前的空檔會被當成「沒帶參數」而清掉。
+  useEffect(() => {
+    if (reportParam !== null) {
+      if (selectedReportIdRef.current !== reportParam) {
+        clearMarketReviewState();
+        void selectHistoryItem(reportParam);
+      }
+      return undefined;
+    }
+    if (stockParam) {
+      let active = true;
+      setQuery(stockParam);
+      historyApi.getList({ stockCode: stockParam, limit: 1 })
+        .then((response) => {
+          const latest = response.items[0];
+          if (active && latest) {
+            clearMarketReviewState();
+            void selectHistoryItem(latest.id);
+          }
+        })
+        // 查不到就留在輸入框帶好代號的狀態，讓使用者自己按分析。
+        .catch(() => undefined);
+      return () => {
+        active = false;
+      };
+    }
+    if (selectedReportIdRef.current !== null) {
+      clearSelectedReport();
+    }
+    return undefined;
+  }, [clearMarketReviewState, clearSelectedReport, location.search, reportParam, selectHistoryItem, setQuery, stockParam]);
+
+  // 選中報告變動時寫回 URL：從總覽進報告用 push，上一頁能回總覽；換報告用 replace。
+  const lastSyncedReportIdRef = useRef(selectedReportId);
+  useEffect(() => {
+    if (lastSyncedReportIdRef.current === selectedReportId) {
+      return;
+    }
+    const previous = lastSyncedReportIdRef.current;
+    lastSyncedReportIdRef.current = selectedReportId;
+    if (selectedReportId !== null) {
+      if (selectedReportId !== reportParam) {
+        navigate(`${location.pathname}?report=${selectedReportId}`, { replace: previous !== null || stockParam !== null });
+      }
+    } else if (reportParam !== null) {
+      // 目前報告被刪掉了，網址不能還指著它。
+      navigate(location.pathname, { replace: true });
+    }
+  }, [location.pathname, navigate, reportParam, selectedReportId, stockParam]);
+
+  const handleBackToOverview = useCallback(() => {
+    clearMarketReviewState();
+    clearSelectedReport();
+    navigate('/');
+  }, [clearMarketReviewState, clearSelectedReport, navigate]);
 
   const handleAskFollowUp = useCallback(() => {
     if (selectedReport?.meta.id === undefined || selectedReport.meta.reportType === 'market_review') {
@@ -1106,6 +1217,15 @@ const HomePage: React.FC = () => {
     [refreshMarketReviewHistory, scrollMarketReviewFeedbackIntoView, stopMarketReviewPolling, t],
   );
 
+  const marketRegionLabels = useMemo<Record<MarketReviewRegion, string>>(() => ({
+    cn: t('home.marketRegionCn'),
+    hk: t('home.marketRegionHk'),
+    us: t('home.marketRegionUs'),
+    tw: t('home.marketRegionTw'),
+    jp: t('home.marketRegionJp'),
+    kr: t('home.marketRegionKr'),
+  }), [t]);
+
   const handleTriggerMarketReview = useCallback(async () => {
     setIsSubmittingMarketReview(true);
     setMarketReviewNotice(null);
@@ -1123,7 +1243,7 @@ const HomePage: React.FC = () => {
         title: t('home.marketReviewSubmitted'),
         message: t('home.marketReviewSubmittedWithRegion', {
           message: result.message,
-          region: result.region,
+          region: formatMarketReviewRegion(result.region, marketRegionLabels) || result.region,
         }),
       });
       scrollMarketReviewFeedbackIntoView();
@@ -1138,7 +1258,7 @@ const HomePage: React.FC = () => {
     } finally {
       setIsSubmittingMarketReview(false);
     }
-  }, [marketReviewRegionOverride, notify, pollMarketReviewStatus, scrollMarketReviewFeedbackIntoView, t]);
+  }, [marketRegionLabels, marketReviewRegionOverride, notify, pollMarketReviewStatus, scrollMarketReviewFeedbackIntoView, t]);
 
   const todayDateKey = getTodayInShanghai();
   useEffect(() => {
@@ -1454,14 +1574,12 @@ const HomePage: React.FC = () => {
     watchlistState.watchlistCodes,
   ]);
 
-  const mergedStockBarItems = useMemo<StockBarItem[]>(() => {
-    const latestMarketReview = marketReviewHistoryItems[0];
-    const stockItems = stockBarItems.filter((item) => item.stockCode !== 'MARKET');
+  const latestMarketReview = marketReviewHistoryItems[0];
+  const marketReviewItem = useMemo<StockBarItem | undefined>(() => {
     if (!latestMarketReview) {
-      return stockItems;
+      return undefined;
     }
-
-    const marketReviewItem: StockBarItem = {
+    return {
       id: latestMarketReview.id,
       stockCode: 'MARKET',
       stockName: latestMarketReview.stockName || t('home.marketReview'),
@@ -1473,13 +1591,68 @@ const HomePage: React.FC = () => {
       modelUsed: latestMarketReview.modelUsed,
       marketPhaseSummary: latestMarketReview.marketPhaseSummary,
     };
+  }, [latestMarketReview, marketReviewHistoryItems.length, t]);
 
-    return [marketReviewItem, ...stockItems].sort((left, right) => {
-      const leftTime = left.lastAnalysisTime ? Date.parse(left.lastAnalysisTime) : 0;
-      const rightTime = right.lastAnalysisTime ? Date.parse(right.lastAnalysisTime) : 0;
-      return rightTime - leftTime;
-    });
-  }, [marketReviewHistoryItems, stockBarItems, t]);
+  const mergedStockBarItems = useMemo<StockBarItem[]>(() => {
+    const stockItems = stockBarItems.filter((item) => item.stockCode !== 'MARKET');
+    return marketReviewItem ? [marketReviewItem, ...stockItems] : stockItems;
+  }, [marketReviewItem, stockBarItems]);
+
+  // 清單列表 API 不帶燈號，取最新一份複盤的 payload 來標；取不到只是少一行字。
+  const latestMarketReviewId = latestMarketReview?.id;
+  useEffect(() => {
+    if (latestMarketReviewId === undefined) {
+      setMarketLightSource(null);
+      return undefined;
+    }
+    let active = true;
+    historyApi.getDetail(latestMarketReviewId)
+      .then((report) => {
+        if (active) {
+          setMarketLightSource({
+            id: latestMarketReviewId,
+            payload: report?.details?.contextSnapshot?.marketReviewPayload ?? null,
+          });
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [latestMarketReviewId]);
+
+  const marketLightLabel = useMemo(() => {
+    const lightLabels: Record<string, string> = {
+      green: t('marketLight.green'),
+      yellow: t('marketLight.yellow'),
+      red: t('marketLight.red'),
+    };
+    return getMarketReviewLights(marketLightSource?.payload)
+      .map(({ region, light }) => {
+        const market = formatMarketReviewRegion(region, marketRegionLabels);
+        return `${market} ${lightLabels[light.status ?? ''] ?? ''}`.trim();
+      })
+      .join('｜');
+  }, [marketLightSource, marketRegionLabels, t]);
+
+  // 現價走批次行情（自選＋清單），指數與大盤複盤不查。
+  const quoteCodes = useMemo(() => {
+    const codes: string[] = [];
+    for (const row of watchlistRows) {
+      if (row.assetType !== 'index') codes.push(row.code);
+    }
+    for (const item of [...stockBarItems, ...todayAnalysisItems]) {
+      if (item.stockCode !== 'MARKET' && item.assetType !== 'index') codes.push(item.stockCode);
+    }
+    return codes;
+  }, [stockBarItems, todayAnalysisItems, watchlistRows]);
+  const quotes = useStockQuotes(quoteCodes, todayAnalysisRefreshVersion);
+
+  const listCount = sidebarWorkspaceTab === 'watchlist'
+    ? watchlistRows.length
+    : sidebarWorkspaceTab === 'today'
+      ? todayAnalysisItems.length
+      : stockBarItems.length;
 
   const sidebarContent = useMemo(
     () => (
@@ -1516,6 +1689,9 @@ const HomePage: React.FC = () => {
           onDeleteStock={handleDeleteStock}
           isDeleting={isDeletingStock}
           className="flex-1"
+          quotes={quotes}
+          marketReviewItem={marketReviewItem}
+          marketLightLabel={marketLightLabel}
         />
       </div>
     ),
@@ -1534,8 +1710,11 @@ const HomePage: React.FC = () => {
       isStockIndexReady,
       isTaskPanelCollapsed,
       todayAnalysisLoadFailed,
+      marketLightLabel,
+      marketReviewItem,
       mergedStockBarItems,
       openTaskRunFlow,
+      quotes,
       selectedReport?.meta.id,
       selectedReport?.meta.assetType,
       selectedReport?.meta.stockCode,
@@ -1551,23 +1730,131 @@ const HomePage: React.FC = () => {
     ],
   );
 
+  const isStockReportOpen = Boolean(selectedReport) && !isMarketReviewHistoryReport && !marketReviewReport;
+  const hasDeepLink = reportParam !== null || stockParam !== null;
+
+  const secondaryReportActions: ActionMenuItem[] = selectedReport ? [
+    ...(isMarketReviewHistoryReport ? [] : [{
+      key: 'reanalyze',
+      label: t('home.reanalyze'),
+      icon: <RefreshCw className="h-4 w-4" aria-hidden="true" />,
+      disabled: isAnalyzing || selectedReport.meta.id === undefined,
+      onSelect: () => setReanalyzeConfirmOpen(true),
+    }]),
+    {
+      key: 'history',
+      label: t('home.historyTrend'),
+      icon: <BarChart3 className="h-4 w-4" aria-hidden="true" />,
+      disabled: selectedReport.meta.id === undefined || isHistoryTrendUnavailable,
+      onSelect: () => {
+        if (isHistoryTrendOpen) {
+          closeHistoryTrend();
+          return;
+        }
+        void openHistoryTrend();
+      },
+    },
+    ...(isTwStockCode(selectedReport.meta.stockCode) ? [{
+      key: 'dossier',
+      label: t('home.dossier'),
+      icon: <BarChart3 className="h-4 w-4" aria-hidden="true" />,
+      onSelect: () => setDossierOpen(true),
+    }] : []),
+    {
+      key: 'overview',
+      label: t('home.backToOverview'),
+      icon: <ChevronLeft className="h-4 w-4" aria-hidden="true" />,
+      onSelect: handleBackToOverview,
+    },
+  ] : [];
+
+  const primaryReportActions = selectedReport ? (
+    <>
+      <Button
+        variant="home-action-ai"
+        size="sm"
+        disabled={selectedReport.meta.id === undefined}
+        onClick={openMarkdownDrawer}
+        className="flex-1 md:flex-none"
+      >
+        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+        {t('home.fullReport')}
+      </Button>
+      {isMarketReviewHistoryReport ? null : (
+        <Button
+          variant="home-action-ai"
+          size="sm"
+          disabled={selectedReport.meta.id === undefined}
+          onClick={handleAskFollowUp}
+          className="flex-1 md:flex-none"
+        >
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          </svg>
+          {t('home.askAi')}
+        </Button>
+      )}
+      <ActionMenu
+        label={t('home.moreActions')}
+        items={secondaryReportActions}
+        placement={isMobile ? 'up' : 'down'}
+      />
+    </>
+  ) : null;
+
+  // 大盤複盤分裂按鈕：左邊送出，右邊看實際範圍並調整市場、完成通知。
+  const marketReviewSplitButton = (
+    <div className="flex min-w-0 items-center gap-1" data-testid="market-review-split-button">
+      <Button
+        type="button"
+        variant="secondary"
+        size="md"
+        isLoading={isSubmittingMarketReview}
+        loadingText={t('home.submitMarketReview')}
+        onClick={() => void handleTriggerMarketReview()}
+        className="h-10 shrink-0 whitespace-nowrap"
+      >
+        <BarChart3 className="h-4 w-4" aria-hidden="true" />
+        {t('home.marketReview')}
+      </Button>
+      <MarketReviewRegionSelector
+        value={marketReviewRegionOverride}
+        disabled={isSubmittingMarketReview}
+        onChange={setMarketReviewRegionOverride}
+        defaultRegion={marketReviewDefaultRegion}
+        footer={(
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-secondary-text select-none">
+            <input
+              type="checkbox"
+              checked={notify}
+              disabled={isSubmittingMarketReview}
+              onChange={(e) => setNotify(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-border accent-primary"
+            />
+            {t('home.notify')}
+          </label>
+        )}
+      />
+    </div>
+  );
+
   return (
     <div
       data-testid="home-dashboard"
       className="flex h-[calc(100vh-5rem)] w-full flex-col overflow-hidden md:flex-row sm:h-[calc(100vh-5.5rem)] lg:h-[calc(100vh-2rem)]"
     >
       <div className="flex-1 flex flex-col min-h-0 min-w-0 max-w-full lg:max-w-6xl mx-auto w-full">
-        <header className="relative z-30 flex min-w-0 flex-shrink-0 items-center overflow-visible px-3 py-3 md:px-4 md:py-4">
-          <div className="flex min-w-0 flex-1 flex-col gap-2.5 md:flex-row md:items-center">
-            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+        <header className="relative z-30 flex min-w-0 flex-shrink-0 items-center overflow-visible px-3 py-2 md:px-4 md:py-4">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
               <button
+                type="button"
                 onClick={() => setSidebarOpen(true)}
-                className="md:hidden -ml-1 flex-shrink-0 rounded-lg p-1.5 text-secondary-text transition-colors hover:bg-hover hover:text-foreground"
-                aria-label={t('home.historyButton')}
+                className="home-surface-button h-10 flex-shrink-0 whitespace-nowrap rounded-xl px-2.5 text-xs text-foreground md:hidden"
               >
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
+                {t('home.listButton', { count: listCount })}
               </button>
               <div className="relative min-w-0 flex-1">
                 <StockAutocomplete
@@ -1599,7 +1886,7 @@ const HomePage: React.FC = () => {
                     className="home-surface-button flex h-10 max-w-[8.5rem] items-center gap-1.5 rounded-xl px-3 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-60 sm:max-w-[11rem]"
                   >
                     <SlidersHorizontal className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
-                    <span className="truncate">{selectedStrategy?.name || t('home.strategy')}</span>
+                    <span className="hidden truncate sm:inline">{selectedStrategy?.name || t('home.strategy')}</span>
                   </button>
                   {strategyMenuOpen ? (
                     <div
@@ -1637,39 +1924,11 @@ const HomePage: React.FC = () => {
                 </div>
               ) : null}
             </div>
-            <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-              <MarketReviewRegionSelector
-                value={marketReviewRegionOverride}
-                disabled={isSubmittingMarketReview}
-                onChange={setMarketReviewRegionOverride}
-              />
-              <label className="flex h-10 flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-xl border border-subtle bg-surface/60 px-3 text-xs text-secondary-text select-none transition-colors hover:border-subtle-hover hover:text-foreground has-disabled:cursor-not-allowed has-disabled:opacity-50">
-                <input
-                  type="checkbox"
-                  checked={notify}
-                  disabled={isSubmittingMarketReview}
-                  onChange={(e) => setNotify(e.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-border accent-primary"
-                />
-                {t('home.notify')}
-              </label>
-              <Button
-                type="button"
-                variant="secondary"
-                size="md"
-                isLoading={isSubmittingMarketReview}
-                loadingText={t('home.submitMarketReview')}
-                onClick={() => void handleTriggerMarketReview()}
-                className="h-10 flex-1 whitespace-nowrap md:flex-none"
-              >
-                <BarChart3 className="h-4 w-4" aria-hidden="true" />
-                {t('home.marketReview')}
-              </Button>
               <button
                 type="button"
                 onClick={() => handleSubmitAnalysis()}
                 disabled={!query || isAnalyzing}
-                className="btn-primary flex h-10 flex-1 items-center justify-center gap-1.5 whitespace-nowrap md:flex-none"
+                className="btn-primary flex h-10 flex-shrink-0 items-center justify-center gap-1.5 whitespace-nowrap"
               >
                 {isAnalyzing ? (
                   <>
@@ -1683,7 +1942,6 @@ const HomePage: React.FC = () => {
                   t('home.analyze')
                 )}
               </button>
-            </div>
           </div>
         </header>
 
@@ -1763,8 +2021,15 @@ const HomePage: React.FC = () => {
           <section
             ref={dashboardScrollRef}
             data-testid="home-dashboard-scroll"
-            className="flex-1 min-w-0 min-h-0 overflow-x-auto overflow-y-auto px-3 pb-4 md:px-6 touch-pan-y"
+            className={`flex-1 min-w-0 min-h-0 overflow-x-auto overflow-y-auto px-3 md:px-6 md:pb-4 touch-pan-y ${isStockReportOpen ? 'pb-20' : 'pb-4'}`}
           >
+            {!isStockReportOpen ? (
+              <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+                {isMarketReviewHistoryReport && !marketReviewReport ? primaryReportActions : null}
+                {marketReviewSplitButton}
+              </div>
+            ) : null}
+
             {marketReviewNotice ? (
               <div className="mb-3">
                 <InlineAlert
@@ -1808,83 +2073,10 @@ const HomePage: React.FC = () => {
               </div>
             ) : !marketReviewReport && selectedReport ? (
               <div className={isHistoryTrendOpen ? 'max-w-6xl space-y-4 pb-8' : 'max-w-4xl space-y-4 pb-8'}>
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  {!isMarketReviewHistoryReport ? (
-                    <>
-                      <Button
-                        variant="home-action-ai"
-                        size="sm"
-                        disabled={isAnalyzing || selectedReport.meta.id === undefined}
-                        onClick={handleReanalyze}
-                      >
-                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                        {t('home.reanalyze')}
-                      </Button>
-                      <Button
-                        variant="home-action-ai"
-                        size="sm"
-                        disabled={selectedReport.meta.id === undefined}
-                        onClick={handleAskFollowUp}
-                      >
-                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                        </svg>
-                        {t('home.askAi')}
-                      </Button>
-                    </>
-                  ) : (
-                    <Button
-                      variant="home-action-ai"
-                      size="sm"
-                      disabled={isSubmittingMarketReview}
-                      isLoading={isSubmittingMarketReview}
-                      loadingText={t('home.submitMarketReview')}
-                      onClick={() => void handleTriggerMarketReview()}
-                    >
-                      <BarChart3 className="h-4 w-4" />
-                      {t('home.rerunMarketReview')}
-                    </Button>
-                  )}
-                  <Button
-                    variant="home-action-ai"
-                    size="sm"
-                    disabled={selectedReport.meta.id === undefined || isHistoryTrendUnavailable}
-                    className={isHistoryTrendOpen ? 'border-primary/70 bg-primary/15 text-primary shadow-glow-cyan' : undefined}
-                    onClick={() => {
-                      if (isHistoryTrendOpen) {
-                        closeHistoryTrend();
-                        return;
-                      }
-                      void openHistoryTrend();
-                    }}
-                  >
-                    <BarChart3 className="h-4 w-4" />
-                    {t('home.historyTrend')}
-                  </Button>
-                  <Button
-                    variant="home-action-ai"
-                    size="sm"
-                    disabled={selectedReport.meta.id === undefined}
-                    onClick={openMarkdownDrawer}
-                  >
-                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    {t('home.fullReport')}
-                  </Button>
-                  {isTwStockCode(selectedReport.meta.stockCode) ? (
-                    <Button
-                      variant="home-action-ai"
-                      size="sm"
-                      onClick={() => setDossierOpen(true)}
-                    >
-                      <BarChart3 className="h-4 w-4" />
-                      {t('home.dossier')}
-                    </Button>
-                  ) : null}
-                </div>
+                {/* 趨勢檢視沒有標題列，動作留在這裡；手機一律走底部操作列 */}
+                {!isMobile && isHistoryTrendOpen && !isMarketReviewHistoryReport ? (
+                  <div className="flex flex-wrap items-center justify-end gap-2">{primaryReportActions}</div>
+                ) : null}
                 {isHistoryTrendOpen ? (
                   <StockHistoryTrendDrawer
                     key={`stock-history-${selectedReport.meta.id}`}
@@ -1907,6 +2099,7 @@ const HomePage: React.FC = () => {
                     data={selectedReport}
                     isHistory
                     onOpenRunFlow={openHistoryRunFlow}
+                    headerActions={isMobile ? undefined : primaryReportActions}
                     watchlist={{
                       isInWatchlist: watchlistState.isInWatchlist,
                       onToggle: watchlistState.toggleWatchlist,
@@ -1916,6 +2109,12 @@ const HomePage: React.FC = () => {
                   />
                 )}
               </div>
+            ) : !marketReviewReport && !hasDeepLink ? (
+              <TodayOverview
+                watchlistRows={watchlistRows}
+                quotes={quotes}
+                onOpenReport={handleHistoryItemClick}
+              />
             ) : !marketReviewReport ? (
               <div className="flex h-full items-center justify-center">
                 <EmptyState
@@ -1933,6 +2132,27 @@ const HomePage: React.FC = () => {
           </section>
         </div>
       </div>
+
+      {isMobile && isStockReportOpen ? (
+        <div
+          data-testid="home-mobile-action-bar"
+          className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-2 border-t border-subtle bg-elevated px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+        >
+          {primaryReportActions}
+        </div>
+      ) : null}
+
+      <ConfirmDialog
+        isOpen={reanalyzeConfirmOpen}
+        title={t('home.reanalyzeConfirmTitle')}
+        message={t('home.reanalyzeConfirmMessage')}
+        confirmText={t('home.reanalyze')}
+        onConfirm={() => {
+          setReanalyzeConfirmOpen(false);
+          handleReanalyze();
+        }}
+        onCancel={() => setReanalyzeConfirmOpen(false)}
+      />
 
       {markdownDrawerOpen && selectedReport?.meta.id ? (
         <ReportMarkdownDrawer

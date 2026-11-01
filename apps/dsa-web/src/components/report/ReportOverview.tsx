@@ -23,6 +23,7 @@ interface ReportOverviewProps {
     isActioning: boolean;
     actionMessage: string | null;
   };
+  headerActions?: React.ReactNode;
 }
 
 type BoardStatus = 'leading' | 'lagging';
@@ -168,6 +169,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   summary,
   details,
   watchlist,
+  headerActions,
 }) => {
   const { t } = useUiLanguage();
   const reportLanguage = normalizeReportLanguage(meta.reportLanguage);
@@ -294,11 +296,14 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                   </span>
                 </div>
               </div>
-              <ShareImageButton
-                recordId={meta.id}
-                reportTitle={`${meta.stockName || meta.stockCode}-${meta.stockCode}`}
-                reportLanguage={reportLanguage}
-              />
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {headerActions}
+                <ShareImageButton
+                  recordId={meta.id}
+                  reportTitle={`${meta.stockName || meta.stockCode}-${meta.stockCode}`}
+                  reportLanguage={reportLanguage}
+                />
+              </div>
             </div>
 
             {/* 关键结论 */}

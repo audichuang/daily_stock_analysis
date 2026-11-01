@@ -21,6 +21,8 @@ interface ReportSummaryProps {
     actionMessage: string | null;
   };
   onOpenRunFlow?: (recordId: number) => void;
+  /** 併入個股標題列的動作（完整報告、追問 AI、⋯）。 */
+  headerActions?: React.ReactNode;
 }
 
 /**
@@ -32,6 +34,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
   isHistory = false,
   watchlist,
   onOpenRunFlow,
+  headerActions,
 }) => {
   // 兼容 AnalysisResult 和 AnalysisReport 两种数据格式
   const report: AnalysisReport = 'report' in data ? data.report : data;
@@ -67,6 +70,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
         details={details}
         isHistory={isHistory}
         watchlist={watchlist}
+        headerActions={headerActions}
       />
 
       {/* 事件展望：判斷與各情境動作 */}

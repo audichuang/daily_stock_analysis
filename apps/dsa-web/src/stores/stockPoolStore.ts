@@ -16,7 +16,6 @@ const MARKET_REVIEW_HISTORY_CODE = 'MARKET';
 type SelectionSource = 'manual' | 'autocomplete' | 'import' | 'image';
 
 type FetchHistoryOptions = {
-  autoSelectFirst?: boolean;
   reset?: boolean;
   silent?: boolean;
   selectLatestForStockCode?: string;
@@ -107,6 +106,8 @@ export interface StockPoolState {
   refreshMarketReviewHistory: (silent?: boolean) => Promise<void>;
   loadMoreMarketReviewHistory: () => Promise<void>;
   selectHistoryItem: (recordId: number, isUserInitiated?: boolean) => Promise<void>;
+  /** 回到未選股狀態（今日總覽）；進行中的報告請求一併作廢。 */
+  clearSelectedReport: () => void;
   toggleHistorySelection: (recordId: number) => void;
   toggleSelectAllVisible: () => void;
   deleteSelectedHistory: () => Promise<void>;
@@ -479,7 +480,6 @@ async function fetchHistory(
   options: FetchHistoryOptions = {},
 ): Promise<HistoryListResponse | null> {
   const {
-    autoSelectFirst = false,
     reset = true,
     silent = false,
     selectLatestForStockCode,
@@ -543,8 +543,6 @@ async function fetchHistory(
       const selectedReport = get().selectedReport;
       if (latestCompletedTaskItem && latestCompletedTaskItem.id !== selectedReport?.meta.id) {
         await get().selectHistoryItem(latestCompletedTaskItem.id, false);
-      } else if (autoSelectFirst && response.items.length > 0 && !selectedReport) {
-        await get().selectHistoryItem(response.items[0].id, false);
       }
     }
 
@@ -694,7 +692,8 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
   },
 
   loadInitialHistory: async () => {
-    await fetchHistory(get, set, { autoSelectFirst: true, reset: true });
+    // 首頁未選股時顯示今日總覽，不自動開最新一份；選股由清單或 URL 決定。
+    await fetchHistory(get, set, { reset: true });
   },
 
   refreshHistory: async (silent = false) => {
@@ -782,6 +781,18 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
         manualSelectionRequestId = 0;
       }
     }
+  },
+
+  clearSelectedReport: () => {
+    reportRequestSeq += 1;
+    stockHistoryRequestSeq += 1;
+    resetStockHistoryState(set);
+    set({
+      selectedReport: null,
+      isLoadingReport: false,
+      isHistoryTrendOpen: false,
+      markdownDrawerOpen: false,
+    });
   },
 
   toggleHistorySelection: (recordId) => {
