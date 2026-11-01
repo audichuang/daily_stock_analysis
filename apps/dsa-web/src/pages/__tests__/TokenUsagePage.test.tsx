@@ -321,14 +321,49 @@ describe('TokenUsagePage', () => {
     expect(await screen.findByTestId('usage-share-mystery_job')).toHaveTextContent('其他（mystery_job）');
   });
 
-  it('keeps the real model name for dated or provider-prefixed claude ids', async () => {
+  it('turns dated or provider-prefixed claude ids into their own product name, not the CLI preset', async () => {
     get.mockResolvedValue({
-      data: makeDashboardResponse({ recent_calls: [record(1, '2099-06-11T09:30:00', { model: 'anthropic/claude-opus-4-7' })] }),
+      data: makeDashboardResponse({ recent_calls: [record(1, '2099-06-11T09:30:00', { model: 'anthropic/claude-opus-4-7-20260101' })] }),
     });
     renderPage();
     const table = await screen.findByRole('table', { name: '呼叫明細' });
-    expect(within(table).getByText('claude-opus-4-7')).toBeInTheDocument();
+    expect(within(table).getByText('Claude Opus 4.7')).toHaveAttribute('title', 'anthropic/claude-opus-4-7-20260101');
     expect(within(table).queryByText('Claude Sonnet 5.5')).not.toBeInTheDocument();
+  });
+
+  it('shows claude model ids as display names in the model table and records (en)', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    get.mockResolvedValue({
+      data: makeDashboardResponse({
+        by_model: [{ model: 'claude-sonnet-5-5', calls: 3, prompt_tokens: 120, completion_tokens: 280, total_tokens: 400, max_total_tokens: 240 }],
+        cost: { ...dashboardResponse.cost, by_model: [] },
+        recent_calls: [record(1, '2099-06-11T09:30:00', { model: 'claude-sonnet-5-5' })],
+      }),
+    });
+    renderPage();
+    const modelTable = await screen.findByRole('table', { name: 'Models' });
+    // The model table keeps the raw id in the shared Tooltip (native title is banned on spans).
+    fireEvent.mouseEnter(within(modelTable).getByText('Claude Sonnet 5.5'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('claude-sonnet-5-5');
+    fireEvent.mouseLeave(within(modelTable).getByText('Claude Sonnet 5.5'));
+    const records = screen.getByTestId('usage-records-desktop');
+    expect(within(records).getByText('Claude Sonnet 5.5')).toHaveAttribute('title', 'claude-sonnet-5-5');
+    // The raw id may live in title attributes only, never as visible text.
+    expect(screen.queryByText('claude-sonnet-5-5')).not.toBeInTheDocument();
+    expect(screen.queryByText(/claude-sonnet-5-5/)).not.toBeInTheDocument();
+  });
+
+  it('abbreviates the input / output KPI so it stays on one line (en)', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    get.mockResolvedValue({
+      data: makeDashboardResponse({ total_prompt_tokens: 1_220_000, total_completion_tokens: 273_000, total_tokens: 1_493_000 }),
+    });
+    renderPage();
+    const summary = await screen.findByTestId('usage-summary');
+    const value = within(summary).getByText('Input / output').nextElementSibling;
+    expect(value).toHaveTextContent(/^[\d.,]+[MK] \/ [\d.,]+[MK]$/);
+    expect(value).toHaveTextContent('1.2M / 273K');
+    expect(value).toHaveClass('whitespace-nowrap');
   });
 
   it('shows claude models under one readable name and keeps the raw id as the title', async () => {

@@ -71,6 +71,15 @@ describe('設計 token 預算', () => {
     expect(unlayered).not.toMatch(/^\s*a\s*\{[^}]*color:\s*inherit/m);
   });
 
+  it('報告 Markdown 清單有項目符號、li 內段落不留外距', () => {
+    const css = readIndexCss();
+    const ruleOf = (selector: string): string =>
+      new RegExp(`\\.home-markdown-prose :where\\(${selector}\\) \\{[^}]*\\}`).exec(css)?.[0] ?? '';
+    expect(ruleOf('ul')).toContain('list-style: disc;');
+    expect(ruleOf('ol')).toContain('list-style: decimal;');
+    expect(ruleOf('li > p')).toContain('margin: 0;');
+  });
+
   it('亮度、透明度與 layer 輔助函式算得對', () => {
     expect(relativeLuminance('#ffffff')).toBeCloseTo(1, 3);
     expect(relativeLuminance('#000')).toBeCloseTo(0, 3);

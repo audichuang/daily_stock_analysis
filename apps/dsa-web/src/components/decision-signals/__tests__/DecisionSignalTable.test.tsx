@@ -30,8 +30,8 @@ const signal: DecisionSignalItem = {
 
 const quote: StockQuote = { stockCode: '2330.TW', currentPrice: 1000, changePercent: -1.5 };
 
-function renderTable(item: DecisionSignalItem = signal, currentQuote: StockQuote | null = quote) {
-  window.localStorage.setItem('dsa.uiLanguage', 'zh');
+function renderTable(item: DecisionSignalItem = signal, currentQuote: StockQuote | null = quote, language = 'zh') {
+  window.localStorage.setItem('dsa.uiLanguage', language);
   const onSelect = vi.fn();
   const onShowOlder = vi.fn();
   render(
@@ -112,6 +112,15 @@ describe('DecisionSignalTable', () => {
     expect(row.queryByText(/82／/)).not.toBeInTheDocument();
     fireEvent.mouseEnter(score.parentElement as HTMLElement);
     expect(screen.getByRole('tooltip')).toHaveTextContent('72%');
+  });
+
+  it('heads the score column with just "Score" and leaves confidence to the tooltip', () => {
+    renderTable(signal, quote, 'en');
+
+    const table = within(screen.getByTestId('data-table-desktop'));
+    const header = table.getByRole('columnheader', { name: 'Score' });
+    expect(header).toHaveTextContent(/^Score$/);
+    expect(header.textContent ?? '').not.toMatch(/confidence/i);
   });
 
   it('leads US rows with the ticker and other markets with the name', () => {

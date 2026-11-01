@@ -17,7 +17,7 @@ import { markdownToPlainText } from '../../utils/markdown';
 import { marketToneClass } from '../../utils/marketTone';
 import { splitLeadingEmoji } from '../../utils/reportMarkdown';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
-import { Button, Card, Change, Segmented } from '../common';
+import { Button, Card, Change, Segmented, Tooltip } from '../common';
 import { ActionMenu, type ActionMenuItem } from '../common/ActionMenu';
 import { ReportMarkdownBody } from './ReportMarkdownBody';
 import { ShareImageButton } from './ShareImageButton';
@@ -565,6 +565,8 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
   const hasStructuredContent = Boolean(marketReviewPayload?.sections?.length || marketReviewPayload?.markets);
   const isLoading = Boolean(recordId && !providedContent && !hasStructuredContent && loadedMarkdown?.recordId !== recordId && !error);
   const displayTitle = marketReviewPayload?.rootTitle || marketReviewPayload?.title || meta?.stockName || 'Market Review';
+  // Payload titles often lead with an emoji (e.g. 🎯); the hero shows a lucide icon instead.
+  const heroTitle = splitLeadingEmoji(displayTitle.trim()).rest.trim() || displayTitle;
   const structuredContent = useMemo(
     () => stripTopHeading(content, displayTitle),
     [content, displayTitle],
@@ -706,6 +708,14 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
     { key: 'limit' as const, label: marketReviewText.dimLimit },
   ];
 
+  // Dimension scores live in the badge tooltip only; unavailable dimensions are left out.
+  const lightDimensionTooltip = lightStyle
+    ? dimensionRows
+        .filter(({ key }) => light?.dimensions?.[key]?.available)
+        .map(({ key, label }) => `${label} ${formatNumber(light?.dimensions?.[key]?.score, 0)}`)
+        .join(' · ')
+    : '';
+
   const upCount = coerceFiniteNumber(breadth?.upCount);
   const downCount = coerceFiniteNumber(breadth?.downCount);
   const flatCount = coerceFiniteNumber(breadth?.flatCount);
@@ -729,8 +739,9 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
         defensive: marketReviewText.stanceDefensive,
       }[nextDayPlan.stance]
     : null;
+  // Badge carries only the light word; stance falls back to the light's own label so the score is shown once.
   const conclusionHeadline = [
-    planStance,
+    planStance ?? (lightHasReading ? light?.label?.trim() || null : null),
     sentimentScore !== null ? `${uiText.sentimentShort} ${sentimentScore}/100` : null,
   ].filter(Boolean).join(' · ');
 
@@ -744,8 +755,9 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
         {/* 手機寬時按鈕列換到下一行：中文標題在 flex 裡可被壓到一字寬，會變成一字一行 */}
         <div className="flex flex-wrap items-start justify-between gap-3" data-testid="market-review-hero-header">
           <div className="min-w-[12rem] flex-1">
-            <h2 className="text-[26px] font-bold leading-tight text-foreground sm:text-[30px]">
-              {displayTitle}
+            <h2 className="flex items-center gap-2 text-[26px] font-bold leading-tight text-foreground sm:text-[30px]">
+              <BarChart3 className="h-6 w-6 shrink-0 text-primary" aria-hidden="true" />
+              <span className="min-w-0">{heroTitle}</span>
             </h2>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-text">
               {sessionTitle ? <span data-testid="market-review-session" className="font-medium text-secondary-text">{sessionTitle}</span> : null}
@@ -815,24 +827,18 @@ export const MarketReviewReportView: React.FC<MarketReviewReportViewProps> = ({
             {lightStyle || conclusionHeadline ? (
               <div className="mb-3 flex flex-wrap items-center gap-2" data-testid="market-light">
                 {lightStyle ? (
-                  <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${lightStyle.className}`}>
-                    {lightStyle.label}{typeof light?.score === 'number' ? ` ${light.score}` : ''}
-                  </span>
+                  <Tooltip content={lightDimensionTooltip} focusable={Boolean(lightDimensionTooltip)}>
+                    <span
+                      data-testid="market-light-badge"
+                      className={`rounded-full border px-2 py-0.5 text-xs font-semibold ${lightStyle.className}`}
+                    >
+                      {lightStyle.label}
+                    </span>
+                  </Tooltip>
                 ) : null}
                 {conclusionHeadline ? (
                   <span data-testid="market-review-headline" className="text-sm font-semibold text-foreground">{conclusionHeadline}</span>
                 ) : null}
-                {lightStyle && light?.label ? <span className="text-sm text-secondary-text">{light.label}</span> : null}
-                {lightStyle ? dimensionRows.map(({ key, label }) => {
-                  const dimension = light?.dimensions?.[key];
-                  // Unavailable dimensions would only print a dash; leave them out.
-                  if (!dimension?.available) return null;
-                  return (
-                    <span key={key} className="text-xs tabular-nums text-secondary-text">
-                      {label} {formatNumber(dimension.score, 0)}
-                    </span>
-                  );
-                }) : null}
               </div>
             ) : null}
             <p className="text-sm leading-6 text-foreground">

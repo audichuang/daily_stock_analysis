@@ -62,9 +62,6 @@ const AlertsPage: React.FC = () => {
   const text = ALERT_PAGE_TEXT[language];
   const alertsText = ALERTS_TEXT[language];
   const [searchParams, setSearchParams] = useSearchParams();
-  useEffect(() => {
-    document.title = `${text.title} - DSA`;
-  }, [text.title]);
 
   const queryTarget = searchParams.get('target') ?? '';
   const [monitor, setMonitor] = useState<AlertMonitorStatus | null>(null);
@@ -389,7 +386,8 @@ const AlertsPage: React.FC = () => {
       ) : null}
       {monitor?.running ? (
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-secondary-text" data-testid="alert-monitor-bar">
-          <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" />
+          {/* Brand cyan, matching the data center "OK" dot; green/red are reserved for price moves. */}
+          <span className="h-2 w-2 rounded-full bg-cyan" aria-hidden="true" data-testid="alert-monitor-dot" />
           <span className="font-medium text-foreground">{text.monitorRunning}</span>
           <span>{formatUiText(text.monitorEvery, { minutes: Math.round(monitor.intervalSeconds / 60) })}</span>
           <span>

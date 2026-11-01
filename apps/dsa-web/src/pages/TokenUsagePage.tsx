@@ -16,7 +16,7 @@ import { formatUiText, type UiTextKey, type UiTextParams } from '../i18n/uiText'
 import { USAGE_TEXT, type UsageText } from '../locales/usageText';
 import { cn } from '../utils/cn';
 import { formatMoneyValue, formatNumber, formatPercent, NO_VALUE } from '../utils/format';
-import { groupRecords, mergeModels, modelDisplayName, sharePercents, type MergedModel, type RecordEntry } from '../utils/usageSummary';
+import { groupRecords, mergeModels, modelDisplayName, prettyModelName, sharePercents, type MergedModel, type RecordEntry } from '../utils/usageSummary';
 
 type Translate = (key: UiTextKey, params?: UiTextParams) => string;
 
@@ -48,11 +48,14 @@ function getCallTypeLabel(callType: string, t: Translate, text: UsageText): stri
   return callType ? formatUiText(text.callTypeOther, { type: callType }) : text.callTypeOtherBare;
 }
 
-/** The Claude Code CLI backend logs its preset id instead of a model; real model ids (claude-opus-4-7) stay as logged. */
+/**
+ * The Claude Code CLI backend logs its preset id instead of a model; real Claude ids
+ * (claude-opus-4-7) become product names. Callers keep the raw id in a title attribute.
+ */
 const CLAUDE_MODEL_PATTERN = /^claude[-_]code[-_]cli$/i;
 const displayModelName = (model: string, text: UsageText): string => {
   const name = modelDisplayName(model);
-  return CLAUDE_MODEL_PATTERN.test(name) ? text.claudeModel : name;
+  return CLAUDE_MODEL_PATTERN.test(name) ? text.claudeModel : prettyModelName(name);
 };
 
 /** Compact token count for one-line summaries: 953412 -> 953K, 1234 -> 1.2K, 2500000 -> 2.5M. */
@@ -140,7 +143,7 @@ const UsageSummaryBand: React.FC<{ dashboard: UsageDashboard; period: UsagePerio
   const changeLabel = period === 'today' ? text.changeToday : text.changeMonth;
   const stats = [
     { label: text.metricCalls, value: formatNumber(dashboard.totalCalls) },
-    { label: text.metricInOut, value: `${formatNumber(dashboard.totalPromptTokens)} / ${formatNumber(dashboard.totalCompletionTokens)}` },
+    { label: text.metricInOut, value: `${compactTokens(dashboard.totalPromptTokens)} / ${compactTokens(dashboard.totalCompletionTokens)}` },
     {
       label: text.metricCache,
       value: cache.hitRatio == null
@@ -174,9 +177,10 @@ const UsageSummaryBand: React.FC<{ dashboard: UsageDashboard; period: UsagePerio
         </div>
         <dl className="grid grid-cols-3 gap-2 self-start">
           {stats.map((stat) => (
-            <div key={stat.label} className="min-w-0 rounded-lg border border-border/60 px-2 py-2 sm:px-3">
+            // Column layout pushes values to the bottom so they share a baseline when one label wraps.
+            <div key={stat.label} className="flex min-w-0 flex-col rounded-lg border border-border/60 px-2 py-2 sm:px-3">
               <dt className="text-xs text-secondary-text">{stat.label}</dt>
-              <dd className="mt-1 break-words text-sm font-medium tabular-nums text-foreground">{stat.value}</dd>
+              <dd className="mt-auto whitespace-nowrap pt-1 text-sm font-medium tabular-nums text-foreground">{stat.value}</dd>
             </div>
           ))}
         </dl>
@@ -314,7 +318,7 @@ const ModelTable: React.FC<{ dashboard: UsageDashboard; text: UsageText }> = ({ 
   const hasCost = rows.some((row) => row.costState !== 'unpriced' && row.costState !== 'unknown');
   const costColumn: DataTableColumn<MergedModel> = { key: 'cost', header: text.cost, numeric: true, render: costCell };
   const columns: DataTableColumn<MergedModel>[] = [
-    { key: 'name', header: text.model, priority: 'primary', render: (row) => <span className="break-all text-foreground">{displayModelName(row.name, text)}</span> },
+    { key: 'name', header: text.model, priority: 'primary', render: (row) => <Tooltip content={row.name}><span className="break-all text-foreground">{displayModelName(row.name, text)}</span></Tooltip> },
     { key: 'calls', header: text.calls, numeric: true, render: (row) => formatNumber(row.calls) },
     { key: 'input', header: text.input, numeric: true, render: (row) => formatNumber(row.promptTokens) },
     { key: 'output', header: text.output, numeric: true, render: (row) => formatNumber(row.completionTokens) },

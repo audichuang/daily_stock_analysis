@@ -691,7 +691,8 @@ describe('ChatPage', () => {
     expect(screen.getByText('開始問股')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('問個股，例如 2330.TW')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '傳送' })).toBeInTheDocument();
-    expect(document.title).toBe('AI 問股 - DSA');
+    // document.title is owned by Shell now; the page must not write its own ' - DSA' suffix.
+    expect(document.title).not.toContain(' - DSA');
 
     const bodyText = document.body.textContent ?? '';
     for (const simplified of ['历史对话', '开始问股', '条对话', '发送']) {

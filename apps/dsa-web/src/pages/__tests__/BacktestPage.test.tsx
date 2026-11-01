@@ -412,6 +412,24 @@ describe('BacktestPage layout', () => {
     fireEvent.click(card);
     expect(await screen.findAllByTestId('backtest-row-detail-101')).not.toHaveLength(0);
   });
+
+  it('leads the phone card with the ticker for US stocks and keeps the name first for Taiwan stocks', async () => {
+    dataTableMode.keepMobile = true;
+    mockGetResults.mockResolvedValue(resultsResponse([
+      { ...baseResultItem, analysisHistoryId: 201, code: 'SPCE', stockName: 'Space Exploration Technologies' },
+      { ...baseResultItem, analysisHistoryId: 202, code: '2330.TW', stockName: '台積電' },
+    ]));
+    renderEnglishPage();
+
+    const usCard = await screen.findByTestId('backtest-mobile-row-201');
+    const usPrimary = usCard.firstElementChild?.firstElementChild as HTMLElement;
+    expect(usPrimary.firstElementChild).toHaveTextContent(/^SPCE$/);
+    expect(within(usPrimary).getByText('Space Exploration Technologies')).toHaveClass('text-muted-text', 'truncate');
+
+    const twCard = screen.getByTestId('backtest-mobile-row-202');
+    const twPrimary = twCard.firstElementChild?.firstElementChild as HTMLElement;
+    expect(twPrimary).toHaveTextContent(/^台積電$/);
+  });
 });
 
 describe('BacktestPage filters', () => {

@@ -1793,6 +1793,25 @@
   padding: 0.5rem 1rem;
   color: var(--text-secondary-text);
 }
+
+/* No @tailwindcss/typography here and Preflight strips list markers, so restore them for report Markdown. */
+.home-markdown-prose :where(ul) {
+  list-style: disc;
+  padding-left: 1.25rem;
+}
+
+.home-markdown-prose :where(ol) {
+  list-style: decimal;
+  padding-left: 1.5rem;
+}
+
+.home-markdown-prose :where(li > p) {
+  margin: 0;
+}
+
+.home-markdown-prose :where(li + li) {
+  margin-top: 0.25rem;
+}
 /* .label-uppercase 是舊 class 的相容別名，Y01 刪除 */
 .label,
 .label-uppercase {

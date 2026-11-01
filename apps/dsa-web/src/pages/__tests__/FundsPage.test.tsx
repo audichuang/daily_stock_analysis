@@ -148,9 +148,37 @@ describe('FundsPage', () => {
     expect(screen.getByTestId('funds-mobile-row').closest('li')).toHaveAttribute('data-row-highlighted', 'true');
     expect(screen.getByTestId('location-search')).toHaveTextContent('fund=18480065');
 
+    const detailCalls = () => get.mock.calls.filter(([url]) => url === '/api/v1/funds/18480065').length;
+    const callsBeforeBack = detailCalls();
     fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
     expect(screen.queryByTestId('funds-detail')).not.toBeInTheDocument();
     expect(document.body).not.toHaveClass('overflow-hidden');
+    // Back drops ?fund= so a refresh or shared link does not reopen the layer.
+    expect(screen.getByTestId('location-search').textContent).not.toContain('fund=');
+    // The selection survives in state: the same fund stays selected, so its detail is not refetched.
+    await waitFor(() => expect(screen.getByTestId('funds-mobile-row')).toBeInTheDocument());
+    expect(detailCalls()).toBe(callsBeforeBack);
+  });
+
+  it('clears ?fund= on Back after a deep link, while the deep link itself still opens the layer', async () => {
+    viewport.narrow = true;
+    renderPage('/funds?fund=18480065');
+    const detail = await screen.findByTestId('funds-detail');
+    expect(screen.getByTestId('location-search')).toHaveTextContent('fund=18480065');
+    // The sticky header carries the safe-area padding; the scroll container no longer leaves a top gap.
+    expect(detail.className).toContain('pt-0');
+    expect(detail.className).not.toContain('safe-area-inset-top');
+    expect(screen.getByTestId('funds-detail-header').className).toContain('pt-[env(safe-area-inset-top)]');
+
+    await screen.findByText('+157.99%');
+    const detailCalls = () => get.mock.calls.filter(([url]) => url === '/api/v1/funds/18480065').length;
+    const callsBeforeBack = detailCalls();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
+    expect(screen.queryByTestId('funds-detail')).not.toBeInTheDocument();
+    expect(screen.getByTestId('location-search').textContent).not.toContain('fund=');
+    // The deep-linked fund stays selected in state after ?fund= is dropped, so nothing is refetched.
+    await waitFor(() => expect(screen.getByTestId('funds-mobile-row')).toBeInTheDocument());
+    expect(detailCalls()).toBe(callsBeforeBack);
   });
 
   it('shows day P/L and total return on mobile rows and keeps edit/delete in the row menu', async () => {
@@ -165,6 +193,10 @@ describe('FundsPage', () => {
     renderPage();
     const row = await screen.findByTestId('funds-mobile-row');
     expect(row).toHaveTextContent('Day P/L \u221218,928（\u22124.28%）');
+    // Only the label may be cut off; the value and % never sit inside a truncating node.
+    const dayValue = within(row).getByText('\u221218,928（\u22124.28%）');
+    expect(dayValue).toHaveClass('shrink-0', 'whitespace-nowrap');
+    expect(dayValue.closest('.truncate')).toBeNull();
     expect(row).toHaveTextContent('Total +94.36%');
     expect(within(row).queryByRole('button', { name: 'Edit holding' })).not.toBeInTheDocument();
     fireEvent.click(within(row).getByRole('button', { name: 'More actions' }));

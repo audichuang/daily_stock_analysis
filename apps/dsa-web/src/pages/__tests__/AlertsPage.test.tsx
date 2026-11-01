@@ -103,6 +103,15 @@ afterEach(() => {
 });
 
 describe('AlertsPage', () => {
+  it('leaves document.title to the shell (no " - DSA" suffix)', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    document.title = 'shell title';
+    renderPage();
+    await waitFor(() => expect(api.listRules).toHaveBeenCalled());
+    expect(document.title).not.toContain(' - DSA');
+    expect(document.title).toBe('shell title');
+  });
+
   it('shows a red banner when the monitor is not running', async () => {
     api.getMonitorStatus.mockResolvedValue({ ...runningMonitor, running: false, mode: 'off', reason: 'schedule_not_running' });
     renderPage();
@@ -121,6 +130,14 @@ describe('AlertsPage', () => {
     renderPage();
     expect(await screen.findByText('通知還沒設定')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '去設定' })).toHaveAttribute('href', '/settings?category=notification');
+  });
+
+  it('marks the running monitor with the brand cyan dot, not the green one', async () => {
+    renderPage();
+    await screen.findByTestId('alert-monitor-bar');
+    const dot = screen.getByTestId('alert-monitor-dot');
+    expect(dot.className).toContain('bg-cyan');
+    expect(dot.className).not.toContain('bg-success');
   });
 
   it('does not claim the monitor is down when the status request fails', async () => {

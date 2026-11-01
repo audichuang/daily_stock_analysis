@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { UI_TEXT } from '../../i18n/uiText';
-import { fieldI18nTablesForTest, getFieldOptionLabel, getFieldTitleForLocale } from '../systemConfigI18n';
+import { fieldI18nTablesForTest, getCategoryTitle, getFieldOptionLabel, getFieldTitleForLocale } from '../systemConfigI18n';
 
 declare const __dirname: string;
 
@@ -38,6 +38,10 @@ describe('systemConfigI18n zh-TW coverage', () => {
   it('prefers the zh-TW table and leaves the zh UI alone', () => {
     expect(getFieldTitleForLocale('LLM_CHANNELS', 'fallback', 'zh-TW')).toBe('模型管道清單');
     expect(getFieldTitleForLocale('LLM_CHANNELS', 'fallback', 'zh')).toBe('LLM 渠道列表');
+  });
+
+  it('names the system category for scheduling in zh-TW', () => {
+    expect(getCategoryTitle('system', undefined, 'zh-TW')).toBe('排程與系統');
   });
 
   it('localizes backend option labels', () => {

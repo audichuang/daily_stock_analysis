@@ -189,13 +189,62 @@ describe('MarketReviewReportView', () => {
     render(<MarketReviewReportView payload={twUsPayload} content="# 大盤複盤" reportLanguage="zh-TW" />);
 
     const light = screen.getByTestId('market-light');
-    expect(light).toHaveTextContent('警戒 30');
-    expect(within(light).getByText('警戒 30')).toHaveClass('text-warning');
-    expect(within(light).getByText('警戒 30')).not.toHaveClass('bg-danger/10');
-    expect(light).toHaveTextContent('廣度 40');
+    const badge = within(light).getByTestId('market-light-badge');
+    // Badge shows the word only; the score is not repeated next to it.
+    expect(badge).toHaveTextContent(/^警戒$/);
+    expect(badge).toHaveClass('text-warning');
+    expect(badge).not.toHaveClass('bg-danger/10');
+    // Dimension scores move into the badge tooltip instead of inline spans.
+    expect(light).not.toHaveTextContent('廣度');
+    fireEvent.mouseEnter(badge);
+    const tooltip = screen.getByRole('tooltip');
+    expect(tooltip).toHaveTextContent(/^廣度 40$/);
     // An unavailable dimension would only show a dash, so it is left out.
-    expect(light).not.toHaveTextContent('指數');
+    expect(tooltip).not.toHaveTextContent('指數');
     expect(light).not.toHaveTextContent('—');
+  });
+
+  it('strips the leading emoji from the hero title', () => {
+    render(
+      <MarketReviewReportView
+        payload={{ ...noBreadthMarketReviewPayload, title: '🎯 Market Review', rootTitle: undefined }}
+        content="# Market Review"
+        reportLanguage="en"
+      />,
+    );
+
+    const heading = screen.getByRole('heading', { level: 2 });
+    expect(heading).toHaveTextContent('Market Review');
+    expect(heading.textContent).not.toContain('🎯');
+  });
+
+  it('shows the light score once: word-only badge plus a stance · sentiment line', () => {
+    const payload: MarketReviewPayload = {
+      ...noBreadthMarketReviewPayload,
+      marketLight: {
+        status: 'red',
+        score: 26,
+        label: 'Defensive',
+        dimensions: { index: { available: true, score: 26 } },
+      },
+    };
+    render(
+      <MarketReviewReportView
+        report={{
+          ...englishMarketReviewReport,
+          summary: { analysisSummary: 'Choppy session', operationAdvice: '', trendPrediction: '', sentimentScore: 26 },
+        }}
+        payload={payload}
+        content="# Market Review"
+        reportLanguage="en"
+      />,
+    );
+
+    const conclusion = screen.getByTestId('market-review-conclusion');
+    expect(conclusion.textContent?.match(/26/g)).toHaveLength(1);
+    expect(screen.getByTestId('market-light-badge')).toHaveTextContent(/^Caution$/);
+    // No plan stance here, so the light's own label stands in for it.
+    expect(screen.getByTestId('market-review-headline')).toHaveTextContent('Defensive · Sentiment 26/100');
   });
 
   it('puts stance and sentiment in one headline and drops empty fields', () => {

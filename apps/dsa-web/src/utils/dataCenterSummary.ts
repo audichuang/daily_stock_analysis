@@ -141,8 +141,12 @@ export interface Conclusion {
 
 const MAX_LISTED = 3;
 
-/** 結論只看台股、美股；其他市場的缺口不該讓首屏變紅。 */
-export const buildConclusion = (rows: DataRow[], asOfText: string, text: Text): Conclusion => {
+/**
+ * 結論只看台股、美股；其他市場的缺口不該讓首屏變紅。
+ * countedUnchecked: the "not checked" stat card's count. The muted note quotes it so the two numbers
+ * agree (the card also counts system rows such as news events); defaults to the Taiwan/US count.
+ */
+export const buildConclusion = (rows: DataRow[], asOfText: string, text: Text, countedUnchecked?: number): Conclusion => {
   const focus = rows.filter((row) => row.root && FOCUS_MARKETS.includes(row.root));
   const checked = formatUiText(text.bannerChecked, { time: asOfText });
   if (focus.length === 0) return { variant: 'info', title: text.bannerEmpty, message: checked };
@@ -173,7 +177,7 @@ export const buildConclusion = (rows: DataRow[], asOfText: string, text: Text): 
   if (stale.length > 0) return { variant: 'warning', title: text.bannerStale, message };
   if (off.length > 0 || fallback.length > 0) return { variant: 'warning', title: text.bannerAttention, message };
   if (unchecked.length > 0) {
-    return { variant: 'note', title: text.bannerUnchecked, message: formatUiText(text.uncheckedNote, { count: unchecked.length }) };
+    return { variant: 'note', title: text.bannerUnchecked, message: formatUiText(text.uncheckedNote, { count: countedUnchecked ?? unchecked.length }) };
   }
 
   const dated = focus.find((row) => row.dataDate);

@@ -249,6 +249,18 @@ const FundsPage: React.FC = () => {
     [setSearchParams],
   );
 
+  // 手機詳情層的返回：選取改存回 state（列表仍選這檔），再把 ?fund= 從網址拿掉，
+  // 這樣重新整理或分享網址不會又直接打開詳情層。
+  const closeMobileDetail = useCallback(() => {
+    if (selectedId) setAutoFundId(selectedId);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('fund');
+      return next;
+    }, { replace: true });
+    setMobileDetailOpen(false);
+  }, [selectedId, setSearchParams]);
+
   const items = useMemo(() => holdings?.items ?? [], [holdings]);
   const sortedItems = useMemo(() => {
     const sign = sort.direction === 'asc' ? 1 : -1;
@@ -530,9 +542,10 @@ const FundsPage: React.FC = () => {
           <span className="shrink-0 tabular-nums">{formatNumber(h.marketValue, 0)}</span>
         </div>
         <div className="mt-0.5 flex justify-between gap-2 text-xs tabular-nums">
-          <span className="min-w-0 truncate">
-            <span className="text-secondary-text">{text.dayPnl} </span>
-            <span className={marketToneClass(h.dayPnl)}>{signedNumber(h.dayPnl)}（{formatPercent(h.navChangePct)}）</span>
+          {/* 空間不夠時只截標籤，日損益數值與 % 一律完整顯示。 */}
+          <span className="flex min-w-0 items-baseline">
+            <span className="min-w-0 truncate text-secondary-text">{text.dayPnl}&nbsp;</span>
+            <span className={cn('shrink-0 whitespace-nowrap', marketToneClass(h.dayPnl))}>{signedNumber(h.dayPnl)}（{formatPercent(h.navChangePct)}）</span>
           </span>
           <span className="shrink-0">
             <span className="text-secondary-text">{text.totalReturn} </span>
@@ -881,10 +894,14 @@ const FundsPage: React.FC = () => {
       {mobileLayerOpen ? createPortal(
         <div
           data-testid="funds-detail"
-          className="fixed inset-0 z-[45] overflow-y-auto bg-background px-4 pt-[max(env(safe-area-inset-top),12px)] pb-[calc(56px+env(safe-area-inset-bottom))]"
+          className="fixed inset-0 z-[45] overflow-y-auto bg-background px-4 pt-0 pb-[calc(56px+env(safe-area-inset-bottom))]"
         >
-          <div className="sticky top-0 z-10 -mx-4 mb-3 flex h-12 items-center gap-2 border-b border-border/60 bg-background px-2">
-            <Button className="shrink-0" size="sm" variant="ghost" onClick={() => setMobileDetailOpen(false)}>
+          {/* safe-area 放在 sticky 標題自己身上，背景蓋到最頂，捲動內容不會從上方縫隙露出。 */}
+          <div
+            data-testid="funds-detail-header"
+            className="sticky top-0 z-10 -mx-4 mb-3 flex min-h-[calc(3rem+env(safe-area-inset-top))] items-center gap-2 border-b border-border/60 bg-background px-2 pt-[env(safe-area-inset-top)]"
+          >
+            <Button className="shrink-0" size="sm" variant="ghost" onClick={closeMobileDetail}>
               <ArrowLeft className="h-4 w-4" />
               {t('funds.detail.back')}
             </Button>

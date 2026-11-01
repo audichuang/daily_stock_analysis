@@ -708,6 +708,64 @@ describe('DecisionSignalsPage', () => {
     expect(screen.queryByText('已触停损 1 档')).not.toBeInTheDocument();
   });
 
+  it('counts and pages only the client-filtered rows for stop=triggered and offers to clear filters', async () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'en');
+    window.history.pushState({}, '', '/decision-signals?holding=1&stop=triggered');
+    vi.mocked(decisionSignalsApi.list).mockResolvedValue(listResponse(
+      Array.from({ length: 20 }, (_, index) => makeSignal({
+        id: 100 + index,
+        stockCode: `6000${String(index).padStart(2, '0')}`,
+        stockName: `Stock ${index}`,
+        isHeld: true,
+        stopTriggered: false,
+      })),
+      44,
+    ));
+
+    renderPage();
+
+    expect(await screen.findByText('No holdings have hit their stop')).toBeInTheDocument();
+    expect(screen.getByText('0 signals')).toBeInTheDocument();
+    expect(screen.queryByText('44 signals')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('signal-pagination-top')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('signal-pagination-bottom')).not.toBeInTheDocument();
+    expect(screen.queryByText('No decision signals')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => {
+      const params = new URLSearchParams(window.location.search);
+      expect(params.has('stop')).toBe(false);
+      expect(params.has('holding')).toBe(false);
+    });
+  });
+
+  it('keeps the backend total, pagination and default empty copy without URL filters', async () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'en');
+    vi.mocked(decisionSignalsApi.list).mockResolvedValue(listResponse([], 44));
+
+    renderPage();
+
+    expect(await screen.findByText('No decision signals')).toBeInTheDocument();
+    expect(screen.getByText('44 signals')).toBeInTheDocument();
+    expect(screen.getByTestId('signal-pagination-top')).toBeInTheDocument();
+    expect(screen.getByTestId('signal-pagination-bottom')).toBeInTheDocument();
+    expect(screen.queryByText('No holdings have hit their stop')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
+  });
+
+  it('uses the filtered empty copy for holding/action URL filters', async () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'en');
+    window.history.pushState({}, '', '/decision-signals?holding=1&action=reduce');
+    vi.mocked(decisionSignalsApi.list).mockResolvedValue(listResponse([], 0));
+
+    renderPage();
+
+    expect(await screen.findByText('No signals match these filters')).toBeInTheDocument();
+    expect(screen.queryByText('No decision signals')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => expect(window.location.search).toBe(''));
+  });
+
   it('replaces the clear-stock button with an in-field ✕ and labels recent chips by market name', async () => {
     renderPage();
     await screen.findByText('贵州茅台');
@@ -2012,7 +2070,8 @@ describe('DecisionSignalsPage', () => {
     fireEvent.change(screen.getByLabelText('动作'), { target: { value: 'buy' } });
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    expect(screen.getByText('暂无决策信号')).toBeInTheDocument();
+    // The action filter lives in the URL, so the empty state uses the filtered copy.
+    expect(screen.getByText('没有符合筛选的信号')).toBeInTheDocument();
   });
 
   it('keeps a latest-sourced drawer open when the main list refreshes', async () => {

@@ -10,7 +10,7 @@ import { portfolioApi } from '../api/portfolio';
 import { stocksApi, type StockQuote } from '../api/stocks';
 import { systemConfigApi } from '../api/systemConfig';
 import { ApiErrorAlert, Badge, Button, ConfirmDialog, EmptyState, IconButton, InlineAlert, ScrollArea, ToastViewport } from '../components/common';
-import { ShellHeaderActions, useShellHeaderActionsAvailable } from '../components/layout/ShellHeaderActions';
+import { ShellHeaderActions, useShellDocumentTitle, useShellHeaderActionsAvailable } from '../components/layout/ShellHeaderActions';
 import { ChatStockSummaryCard } from '../components/chat/ChatStockSummaryCard';
 import { createParsedApiError, getParsedApiError } from '../api/error';
 import type { AgentStatusResponse, SkillInfo } from '../api/agent';
@@ -179,11 +179,6 @@ const ChatPage: React.FC = () => {
     };
   }, []);
 
-  // Set page title
-  useEffect(() => {
-    document.title = `${t('layout.route.chat.title')} - DSA`;
-  }, [t]);
-
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
@@ -308,6 +303,8 @@ const ChatPage: React.FC = () => {
     clearCompletionBadge,
   } = useAgentChatStore();
   const selectedSkillIds = sessionSelectedSkillIds ?? defaultSkillIds;
+  // Open conversation title goes to document.title via Shell; no conversation falls back to the page name.
+  useShellDocumentTitle(sessions.find((s) => s.session_id === sessionId)?.title);
 
   const activeStockCode = activeStockContext?.stock_code ?? null;
 

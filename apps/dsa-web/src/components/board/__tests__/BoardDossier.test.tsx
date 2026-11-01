@@ -28,10 +28,10 @@ describe('BoardDossier', () => {
 
   it('measures distances from the live quote, falling back to the as-of close', () => {
     const { rerender } = render(<BoardDossierCell summary={summary} price={1400} />);
-    expect(screen.getByText(/-2\.5%/)).toBeInTheDocument(); // 1365 vs 1400 live
+    expect(screen.getByText(/−2\.5%/)).toBeInTheDocument(); // 1365 vs 1400 live
     expect(screen.getByText(/0\.0%/)).toBeInTheDocument(); // inside the bearish OB
     rerender(<BoardDossierCell summary={summary} price={null} />);
-    expect(screen.getByText(/-0\.7%/)).toBeInTheDocument(); // 1365 vs 1375 close
+    expect(screen.getByText(/−0\.7%/)).toBeInTheDocument(); // 1365 vs 1375 close
     expect(screen.getByText(/\+1\.5%/)).toBeInTheDocument();
   });
 
@@ -59,12 +59,25 @@ describe('BoardDossier', () => {
 
   it('keeps distances and the alert button when there was no adjustment', () => {
     const cell = render(<BoardDossierCell summary={{ ...summary, adjustedAfter: false }} price={1400} />);
-    expect(cell.container.textContent).toMatch(/-2\.5%/);
+    expect(cell.container.textContent).toMatch(/−2\.5%/);
     expect(cell.container.textContent).not.toMatch(/ex-div|除權息|除权息/);
     cell.unmount();
     render(<BoardDossierPanel code="3324.TWO" summary={{ ...summary, adjustedAfter: false }} price={1375} levelAlertsEnabled />);
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Create level alerts|建立价位警报|建立價位警報/ })).toBeInTheDocument();
+  });
+
+  it('writes negative distances with U+2212 in the cell and the expanded summary', () => {
+    // 1300 vs live 1415 → −8.1%; only a support level, so no resistance percentage to confuse the check
+    const lone: DossierSummary = { ...summary, levels: [{ label: '多頭 OB', low: 1240, high: 1300, kind: 'ob', bias: 'bull' }] };
+    const cell = render(<BoardDossierCell summary={lone} price={1415} />);
+    expect(cell.container.textContent).toContain('\u22128.1%');
+    expect(cell.container.textContent).not.toContain('-8.1%');
+    cell.unmount();
+    render(<BoardDossierPanel code="3324.TWO" summary={lone} price={1415} />);
+    const numbers = screen.getByTestId('board-dossier-summary');
+    expect(numbers.textContent).toContain('\u22128.1%');
+    expect(numbers.textContent).not.toContain('-8.1%');
   });
 
   it('renders a dash without a summary', () => {
@@ -130,7 +143,7 @@ describe('BoardDossier', () => {
     render(<BoardDossierCell summary={summary} price={1375} />);
     const cell = screen.getByTestId('board-dossier-cell');
     expect(cell).toHaveClass('whitespace-nowrap');
-    expect(cell.textContent).toBe('▼突破 · 撑 -0.7% · 压 +1.5%');
+    expect(cell.textContent).toBe('▼突破 · 撑 −0.7% · 压 +1.5%');
     // no stacked block rows inside
     expect(cell.querySelectorAll('div')).toHaveLength(0);
   });
@@ -162,7 +175,7 @@ describe('BoardDossier', () => {
     render(<BoardDossierPanel code="3324.TWO" summary={summary} price={1375} />);
     const [numbers, meta] = Array.from(screen.getByTestId('board-dossier-summary').children);
     expect(numbers).toHaveClass('text-sm');
-    expect(numbers.textContent).toContain('-0.7%');
+    expect(numbers.textContent).toContain('−0.7%');
     expect(meta).toHaveClass('text-xs', 'text-secondary-text');
     expect(meta.textContent).toContain('2026-10-21');
     expect(meta.textContent).toContain('10-19');

@@ -160,10 +160,6 @@ const DataCenterPage: React.FC = () => {
   const [error, setError] = useState('');
   const requestGeneration = useRef(0);
 
-  useEffect(() => {
-    document.title = `${t('dataCenter.title')} - DSA`;
-  }, [t]);
-
   const load = useCallback(async () => {
     const generation = ++requestGeneration.current;
     setLoading(true);
@@ -195,13 +191,14 @@ const DataCenterPage: React.FC = () => {
     const systemRows = buildSystemRows(overview.datasets);
     // Cards count the rows of the two visible tables, so their sum always equals what the tables list.
     const countedRows = [...focusRows, ...systemRows];
+    const counts = countRows(countedRows);
     return {
       focusRows,
       otherRows: marketRows.filter((row) => !row.root || !FOCUS_MARKETS.includes(row.root)),
       systemRows,
-      counts: countRows(countedRows),
+      counts,
       countedTotal: countedRows.length,
-      conclusion: buildConclusion(marketRows, formatDateTime(overview.asOf), text),
+      conclusion: buildConclusion(marketRows, formatDateTime(overview.asOf), text, counts.unchecked),
       hints: translateWarnings(overview.warnings, text),
       technical: technicalLines(overview),
     };

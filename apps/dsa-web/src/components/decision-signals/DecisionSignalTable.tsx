@@ -151,7 +151,7 @@ export const DecisionSignalTable: React.FC<DecisionSignalTableProps> = ({ items,
     },
     {
       key: 'score',
-      header: t('decisionSignals.colScore'),
+      header: signalsText.colScore,
       numeric: true,
       render: (item) => {
         const score = <span className="whitespace-nowrap tabular-nums">{formatNumber(item.score, 0)}</span>;

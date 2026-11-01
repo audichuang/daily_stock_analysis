@@ -30,6 +30,14 @@ beforeEach(() => {
 function renderPage() { return render(<UiLanguageProvider><CalendarPage /></UiLanguageProvider>); }
 
 describe('CalendarPage', () => {
+  it('leaves document.title to the shell (no " - DSA" suffix)', async () => {
+    document.title = 'shell title';
+    renderPage();
+    expect(await screen.findByText('Berkshire Hathaway')).toBeInTheDocument();
+    expect(document.title).not.toContain(' - DSA');
+    expect(document.title).toBe('shell title');
+  });
+
   it('groups dates without converting ET, distinguishes estimates and deadlines, and keeps undated companies separate', async () => {
     renderPage();
     expect(await screen.findByText('Berkshire Hathaway')).toBeInTheDocument();

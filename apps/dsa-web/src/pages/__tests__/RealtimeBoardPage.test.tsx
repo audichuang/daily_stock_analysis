@@ -256,7 +256,7 @@ describe('RealtimeBoardPage scope', () => {
     const row = rowFor('2330.TW');
     await waitFor(() => expect(row.textContent).toContain('▲BOS'));
     // 距離用即時價 1000 算：960 / 1000 − 1
-    expect(row.textContent).toContain('-4.0%');
+    expect(row.textContent).toContain('−4.0%');
   });
 
   const summaryFor = (code: string) => ({
@@ -678,6 +678,62 @@ describe('RealtimeBoardPage scope', () => {
     } finally {
       Element.prototype.scrollIntoView = original;
     }
+  });
+
+  it('on a phone, scrolls the attention row to the top and keeps it highlighted until 2s after the scroll ends', async () => {
+    const scrollIntoView = vi.fn();
+    const originalScroll = Element.prototype.scrollIntoView;
+    const originalMatchMedia = window.matchMedia;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    window.matchMedia = vi.fn().mockReturnValue({ matches: false }) as unknown as typeof window.matchMedia;
+    // Run the scroll frame synchronously so only setTimeout drives the highlight timing below.
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+    const mobileRow = () => document.querySelector('li[data-row-key="2454.TW"]');
+    try {
+      getQuotes.mockImplementation(bigMoveQuotes);
+      renderPage();
+      const chip = within(await screen.findByTestId('board-attention')).getByRole('button', { name: /2454\.TW/ });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      act(() => {
+        fireEvent.click(chip);
+      });
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start', behavior: 'smooth' });
+      expect(scrollIntoView).not.toHaveBeenCalledWith(expect.objectContaining({ block: 'center' }));
+      // Past the old 1500ms-from-click window: still highlighted while the page is (maybe) scrolling.
+      act(() => {
+        vi.advanceTimersByTime(1600);
+      });
+      expect(mobileRow()).toHaveAttribute('data-row-highlighted', 'true');
+      act(() => {
+        document.dispatchEvent(new Event('scrollend'));
+      });
+      // The countdown restarts at scrollend: still on 1.5s later, gone after 2s.
+      act(() => {
+        vi.advanceTimersByTime(1500);
+      });
+      expect(mobileRow()).toHaveAttribute('data-row-highlighted', 'true');
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      expect(mobileRow()).not.toHaveAttribute('data-row-highlighted');
+    } finally {
+      vi.useRealTimers();
+      rafSpy.mockRestore();
+      Element.prototype.scrollIntoView = originalScroll;
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
+  it('lets the section cards clip without becoming a scroll box, so the table header can stick to the page', async () => {
+    renderPage();
+    const table = await screen.findByRole('table', { name: 'Holdings (TW)' });
+    const card = table.closest('[data-card-level]');
+    expect(card?.className).toMatch(/overflow:clip|overflow-visible/);
+    // Phone cards stop below the shell header and status bar when scrolled to the top.
+    expect(card?.className).toContain('scroll-mt-[calc(var(--shell-header-height)+var(--shell-status-height)+0.5rem)]');
   });
 
   it('caps the attention chips at five and folds the rest', async () => {

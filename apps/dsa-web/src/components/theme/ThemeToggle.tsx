@@ -102,7 +102,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
         {isRailVariant ? (
           <span className={labelClassName}>{t('theme.theme')}</span>
         ) : isNavVariant ? (
-          collapsed ? null : <span className="truncate text-[1.02rem] font-medium">{t('theme.theme')}</span>
+          collapsed ? null : <span className={labelClassName ?? 'truncate text-[1.02rem] font-medium'}>{t('theme.theme')}</span>
         ) : (
           <span className="hidden sm:inline">{resolveThemeLabel(activeTheme, t)}</span>
         )}

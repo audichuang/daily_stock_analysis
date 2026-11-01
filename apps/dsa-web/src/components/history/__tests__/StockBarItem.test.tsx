@@ -325,4 +325,44 @@ describe('StockBarItemComponent', () => {
     expect(screen.getByTestId('market-review-title')).toHaveTextContent('最新复盘 · 美股 10/30');
     expect(screen.getByTestId('market-review-light')).toHaveTextContent('美股 绿灯');
   });
+
+  it('titles the pinned market review row with the trade-date session label instead of the creation date', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    render(
+      <UiLanguageProvider>
+        <StockBarItemComponent
+          item={{ ...issue1600Item, stockCode: 'MARKET', stockName: 'Market review', lastAnalysisTime: '2026-10-31T09:00:00' }}
+          isViewing={false}
+          onClick={vi.fn()}
+          isMarketReview
+          marketReviewRegionLabel="US"
+          marketReviewSessionLabel="US 10/30"
+        />
+      </UiLanguageProvider>,
+    );
+
+    const title = screen.getByTestId('market-review-title');
+    expect(title).toHaveTextContent('Latest review · US 10/30');
+    expect(title).toHaveTextContent('10/30');
+    expect(title).not.toHaveTextContent('10/31');
+    window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY);
+  });
+
+  it('falls back to the creation date when no session label is given', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    render(
+      <UiLanguageProvider>
+        <StockBarItemComponent
+          item={{ ...issue1600Item, stockCode: 'MARKET', stockName: 'Market review', lastAnalysisTime: '2026-10-31T09:00:00' }}
+          isViewing={false}
+          onClick={vi.fn()}
+          isMarketReview
+          marketReviewRegionLabel="US"
+        />
+      </UiLanguageProvider>,
+    );
+
+    expect(screen.getByTestId('market-review-title')).toHaveTextContent('Latest review · US 10/31');
+    window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY);
+  });
 });

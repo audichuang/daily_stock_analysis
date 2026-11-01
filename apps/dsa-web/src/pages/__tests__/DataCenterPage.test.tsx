@@ -176,11 +176,11 @@ describe('DataCenterPage', () => {
     // 台股、美股日 K 與持股帳本正常；news 未檢查；screening 未啟用（港股收在其他市場，不計）。
     expect(value('正常')).toBe(3);
     expect(value('尚未檢查')).toBe(1);
-    expect(value('未啟用')).toBe(1);
+    expect(value('未設定／未開啟')).toBe(1);
     expect(value('異常')).toBe(0);
     const tableRows = within(screen.getByRole('table', { name: '市場資料狀態' })).getAllByRole('row').length - 1
       + within(screen.getByRole('table', { name: '其他資料' })).getAllByRole('row').length - 1;
-    expect(value('正常') + value('尚未檢查') + value('未啟用') + value('異常')).toBe(tableRows);
+    expect(value('正常') + value('尚未檢查') + value('未設定／未開啟') + value('異常')).toBe(tableRows);
     expect(group.getByText('共 5 項（台股、美股與系統）')).toBeInTheDocument();
   });
 

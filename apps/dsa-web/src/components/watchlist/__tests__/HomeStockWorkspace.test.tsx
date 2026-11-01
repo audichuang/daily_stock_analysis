@@ -13,6 +13,8 @@ function renderWorkspace({
   selectedAssetType,
   activeTab = 'watchlist',
   language = 'zh',
+  framed,
+  onClose,
 }: {
   watchlistRows: HomeWatchlistRow[];
   selectedRecordId?: number;
@@ -20,6 +22,8 @@ function renderWorkspace({
   selectedAssetType?: 'stock' | 'index' | null;
   activeTab?: HomeWorkspaceTab;
   language?: 'zh' | 'en';
+  framed?: boolean;
+  onClose?: () => void;
 }) {
   const onHistoryItemClick = vi.fn();
   const onRemoveFromWatchlist = vi.fn().mockResolvedValue(undefined);
@@ -50,6 +54,8 @@ function renderWorkspace({
         selectedAssetType={selectedAssetType ?? null}
         selectedRecordId={selectedRecordId}
         onHistoryItemClick={onHistoryItemClick}
+        framed={framed}
+        onClose={onClose}
       />
     </UiLanguageProvider>
   );
@@ -805,5 +811,25 @@ describe('HomeStockWorkspace watchlist groups', () => {
 
     fireEvent.change(screen.getByLabelText('Move AAPL to a group'), { target: { value: 'Tech' } });
     expect(onSaveWatchlistGroups).toHaveBeenLastCalledWith([{ name: 'Tech', codes: ['AAPL'] }]);
+  });
+
+  it('drops the glass-card frame and shows the drawer header with a working close button in drawer mode', () => {
+    const onClose = vi.fn();
+    renderWorkspace({ watchlistRows: [], framed: false, onClose });
+
+    const workspace = screen.getByTestId('home-stock-workspace');
+    expect(workspace).not.toHaveClass('glass-card');
+    expect(workspace).toHaveClass('home-stock-scroll-shell');
+    const header = screen.getByTestId('home-list-drawer-header');
+    expect(within(header).getByText('清单')).toBeInTheDocument();
+    fireEvent.click(within(header).getByRole('button', { name: '关闭清单' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the glass-card frame and no drawer header by default', () => {
+    renderWorkspace({ watchlistRows: [] });
+
+    expect(screen.getByTestId('home-stock-workspace')).toHaveClass('glass-card');
+    expect(screen.queryByTestId('home-list-drawer-header')).not.toBeInTheDocument();
   });
 });
