@@ -460,20 +460,31 @@ private struct StockDetailContent: View {
     }
 
     @ViewBuilder private func adviceSwitch(_ advice: ReportPositionAdvice, profile: StockProfile) -> some View {
-        let held = adviceHeld ?? (profile.position != nil)
-        let text = ReportText.firstNonEmpty(held ? advice.hasPosition : advice.noPosition)
+        let held = adviceHeld ?? profile.holdingKnown
+        let text = held.flatMap { ReportText.firstNonEmpty($0 ? advice.hasPosition : advice.noPosition) }
         if ReportText.firstNonEmpty(advice.hasPosition, advice.noPosition) != nil {
             VStack(alignment: .leading, spacing: 10) {
                 Picker("持股狀態", selection: Binding(get: { held }, set: { adviceHeld = $0 })) {
-                    Text("持股").tag(true)
-                    Text("空手").tag(false)
+                    Text("持股").tag(Bool?.some(true))
+                    Text("空手").tag(Bool?.some(false))
                 }
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("stock.advice.picker")
-                Text(text ?? "這份報告沒有給這個狀態的建議。")
-                    .font(.subheadline).foregroundStyle(text == nil ? Theme.secondary : Theme.text)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("stock.advice.text")
+                if held == nil {
+                    // 持股查不到時不替使用者選，兩邊都列出來。
+                    Text("讀不到持股資料，兩種情況都列出來。").font(.caption).foregroundStyle(Theme.secondary)
+                    ForEach([("持股", advice.hasPosition), ("空手", advice.noPosition)], id: \.0) { label, value in
+                        if let value = ReportText.firstNonEmpty(value) {
+                            Text("\(label)：\(value)").font(.subheadline).foregroundStyle(Theme.text)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                } else {
+                    Text(text ?? "這份報告沒有給這個狀態的建議。")
+                        .font(.subheadline).foregroundStyle(text == nil ? Theme.secondary : Theme.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("stock.advice.text")
+                }
             }
         }
     }

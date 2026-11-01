@@ -20,12 +20,22 @@ public struct PortfolioOverview: Equatable, Sendable {
 }
 
 public extension PortfolioSnapshot {
+    /// 基金持倉獨立於股票帳戶，只有基金時仍算有資產。
+    var hasAnyAssets: Bool { !accounts.isEmpty || (consolidatedFundValueBase ?? 0) > 0 }
+
+    /// 帳本加基金的今日損益。基金有市值卻讀不到當日損益時整體未知，不把缺值當 0。
+    var combinedDayPnl: Double? {
+        if (consolidatedFundValueBase ?? 0) > 0, consolidatedFundDayPnlBase == nil { return nil }
+        let stock = consolidatedDayPnlBase ?? (accounts.isEmpty ? 0 : nil)
+        return stock.map { $0 + (consolidatedFundDayPnlBase ?? 0) }
+    }
+
     /// 舊服務沒有 display_currency 時是 nil，由畫面改顯示各幣別原幣合計，不退回 CNY 彙總。
     var overview: PortfolioOverview? {
         guard let displayCurrency, !displayCurrency.isEmpty else { return nil }
         let fund = consolidatedFundValueBase
-        let total = consolidatedEquityBase.map { $0 + (fund ?? 0) }
-        let day = consolidatedDayPnlBase.map { $0 + (consolidatedFundDayPnlBase ?? 0) }
+        let total = (consolidatedEquityBase ?? (accounts.isEmpty ? 0 : nil)).map { $0 + (fund ?? 0) }
+        let day = combinedDayPnl
         var percent: Double?
         if let unrealized = consolidatedUnrealizedPnlBase, let value = consolidatedMarketValueBase, value - unrealized > 0 {
             percent = unrealized / (value - unrealized) * 100

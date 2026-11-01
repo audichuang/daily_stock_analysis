@@ -2136,6 +2136,8 @@ const HomePage: React.FC = () => {
                 />
               </div>
             ) : null}
+            {/* 手機報告的操作列固定在底部，留出高度才看得到報告最後一段。 */}
+            {isMobile && isStockReportOpen ? <div aria-hidden="true" className="h-16 shrink-0" /> : null}
           </section>
         </div>
       </div>
@@ -2143,7 +2145,7 @@ const HomePage: React.FC = () => {
       {isMobile && isStockReportOpen ? (
         <div
           data-testid="home-mobile-action-bar"
-          className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-2 border-t border-subtle bg-elevated px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+          className="fixed inset-x-0 bottom-[var(--shell-bottom-inset,0px)] z-30 flex items-center gap-2 border-t border-subtle bg-elevated px-3 py-2"
         >
           {primaryReportActions}
         </div>

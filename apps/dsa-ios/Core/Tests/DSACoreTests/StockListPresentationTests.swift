@@ -146,6 +146,38 @@ final class StockListPresentationTests: XCTestCase {
         XCTAssertNil(try snapshot(extra: nil, accounts: "[]").todayAssetSummary, "沒有帳戶不顯示資產卡")
     }
 
+    func testFundDayUnknownIsNotReportedAsTotal() throws {
+        let unknown = try snapshot(extra: #""display_currency":"TWD","consolidated_equity_base":1000,"consolidated_day_pnl_base":100,"consolidated_fund_value_base":20000,"consolidated_fund_day_pnl_base":null"#)
+        XCTAssertNil(unknown.todayAssetSummary?.dayPnl)
+        XCTAssertNil(unknown.overview?.dayPnl)
+        let noFunds = try snapshot(extra: #""display_currency":"TWD","consolidated_equity_base":1000,"consolidated_day_pnl_base":100"#)
+        XCTAssertEqual(noFunds.overview?.dayPnl, 100)
+    }
+
+    func testFundOnlyPortfolioStillHasAssets() throws {
+        let fundOnly = try snapshot(extra: #""display_currency":"TWD","consolidated_equity_base":0,"consolidated_day_pnl_base":0,"consolidated_fund_value_base":20000,"consolidated_fund_day_pnl_base":50"#, accounts: "[]")
+        XCTAssertTrue(fundOnly.hasAnyAssets)
+        XCTAssertEqual(fundOnly.todayAssetSummary?.equity, 20_000)
+        XCTAssertEqual(fundOnly.overview?.dayPnl, 50)
+        XCTAssertFalse(try snapshot(extra: nil, accounts: "[]").hasAnyAssets)
+    }
+
+    func testHoldingUnknownIsNotTreatedAsFlat() throws {
+        func profile(_ portfolio: String?, position: Bool = false) throws -> StockProfile {
+            let positionField = position ? #","position":{"quantity":1}"# : ""
+            let portfolioField = portfolio.map { #","portfolio":"# + $0 } ?? ""
+            let json = #"{"requested_code":"2330","canonical_code":"2330.TW","market":"tw","as_of":"x","quote":{"status":"unavailable","data":null,"limitations":[]},"history":{"status":"fresh","period":"daily","data":[],"limitations":[]},"research":{"status":"partial","limitations":[],"data":{"latest_report":null,"recent_reports":[]}},"evidence_quality":{"status":"partial","blocks":{},"limitations":[]}\#(positionField)\#(portfolioField)}"#
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            return try decoder.decode(StockProfile.self, from: Data(json.utf8))
+        }
+        XCTAssertNil(try profile(nil).holdingKnown, "舊後端")
+        XCTAssertNil(try profile(#"{"status":"unavailable","data":{"held":false}}"#).holdingKnown, "持股查詢失敗")
+        XCTAssertEqual(try profile(#"{"status":"partial","data":{"held":false}}"#).holdingKnown, false)
+        XCTAssertEqual(try profile(#"{"status":"partial","data":{"held":true}}"#).holdingKnown, true, "重播失敗但確定持有")
+        XCTAssertEqual(try profile(#"{"status":"unavailable"}"#, position: true).holdingKnown, true)
+    }
+
     func testHeldKeysMatchWithOrWithoutMarketSuffixAndSkipClosedPositions() throws {
         let value = try snapshot(extra: nil)
         XCTAssertTrue(value.heldKeys.contains(StockHoldings.key("2330.TW")))

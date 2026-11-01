@@ -346,11 +346,11 @@ public struct TodayAssetSummary: Equatable, Sendable {
 public extension PortfolioSnapshot {
     /// 優先用後端依 display_currency 換算的合計；換算不了就退回單一原幣分組，絕不把頂層 CNY 數字重標幣別。
     var todayAssetSummary: TodayAssetSummary? {
-        guard !accounts.isEmpty else { return nil }
-        if let displayCurrency, let consolidatedEquityBase, consolidatedFxMissing != true {
+        guard hasAnyAssets else { return nil }
+        if let displayCurrency, let equity = consolidatedEquityBase ?? (accounts.isEmpty ? 0 : nil), consolidatedFxMissing != true {
             // 與資產頁 `overview` 同口徑：基金加進總資產與今日損益，讀不到基金時只算帳本。
-            return TodayAssetSummary(currency: displayCurrency, equity: consolidatedEquityBase + (consolidatedFundValueBase ?? 0),
-                                     dayPnl: consolidatedDayPnlBase.map { $0 + (consolidatedFundDayPnlBase ?? 0) },
+            return TodayAssetSummary(currency: displayCurrency, equity: equity + (consolidatedFundValueBase ?? 0),
+                                     dayPnl: combinedDayPnl,
                                      consolidated: true)
         }
         guard let first = currencyTotals.first else { return nil }

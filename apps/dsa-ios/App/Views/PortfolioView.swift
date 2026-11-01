@@ -84,7 +84,7 @@ struct PortfolioView: View {
 
     @ViewBuilder
     private func content(_ value: PortfolioSnapshot) -> some View {
-        if value.accounts.isEmpty {
+        if !value.hasAnyAssets {
             emptyPortfolio.plainRow()
         } else {
             summary(value).plainRow()

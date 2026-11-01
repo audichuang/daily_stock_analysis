@@ -1727,7 +1727,10 @@ const PortfolioPage: React.FC = () => {
   const fundsUnavailable = hasConsolidated && selectedAccount === 'all' && fundValue === null;
   // 總資產＝帳本權益＋基金；基金讀不到時只算帳本並明講，不把缺值當 0。
   const totalAssets = equityAmount !== null && fundValue !== null ? equityAmount + fundValue : equityAmount;
-  const dayAmount = stockDayAmount !== null && fundDay !== null ? stockDayAmount + fundDay : stockDayAmount;
+  // 基金有市值卻讀不到當日損益時整體未知，不能只顯示帳本那一半當作總損益。
+  const dayAmount = hasFunds && fundDay === null
+    ? null
+    : (stockDayAmount !== null && fundDay !== null ? stockDayAmount + fundDay : stockDayAmount);
   const amountText = (value: number | null): string => {
     if (value !== null) return formatMoney(value, summaryCurrency);
     return fxMissing ? text.fxMissingTotal : NO_VALUE;

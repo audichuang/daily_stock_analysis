@@ -590,7 +590,11 @@ describe('HomePage', () => {
         </MemoryRouter>,
       );
 
-      const bar = within(await screen.findByTestId('home-mobile-action-bar'));
+      const barElement = await screen.findByTestId('home-mobile-action-bar');
+      // BottomTabs 也釘在 bottom-0；操作列要讓開，否則按鈕點不到。
+      expect(barElement.className).toContain('bottom-[var(--shell-bottom-inset,0px)]');
+      expect(barElement.className).not.toMatch(/(^|\s)bottom-0(\s|$)/);
+      const bar = within(barElement);
       expect(bar.getByRole('button', { name: '追问 AI' })).toBeInTheDocument();
       expect(within(screen.getByTestId('report-hero-header')).queryByRole('button', { name: '追问 AI' })).not.toBeInTheDocument();
     } finally {

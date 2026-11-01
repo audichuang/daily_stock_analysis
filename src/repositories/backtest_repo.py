@@ -674,11 +674,20 @@ class BacktestRepository:
         """依代號形狀判市場：回測表沒有市場欄，context_snapshot 的 market 舊列也沒有。"""
         code = func.upper(BacktestResult.code)
         tw = or_(code.like("%.TW"), code.like("%.TWO"))
-        hk = or_(code.like("%.HK"), code.like("HK%"))
+        # 前綴後面要跟滿數字，否則 SHOP、SHEL、HKD 這些美股會被算成中港股。
+        def prefixed(prefix: str, digits: int):
+            return and_(
+                code.like(f"{prefix}%"),
+                func.length(code) == len(prefix) + digits,
+                func.substr(code, len(prefix) + 1) >= "0" * digits,
+                func.substr(code, len(prefix) + 1) <= "9" * digits,
+            )
+
+        hk = or_(code.like("%.HK"), prefixed("HK", 5))
         cn = or_(
-            code.like("SH%"),
-            code.like("SZ%"),
-            code.like("BJ%"),
+            prefixed("SH", 6),
+            prefixed("SZ", 6),
+            prefixed("BJ", 6),
             code.like("%.SH"),
             code.like("%.SZ"),
             code.like("%.BJ"),

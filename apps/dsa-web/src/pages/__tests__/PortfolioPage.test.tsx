@@ -2511,6 +2511,20 @@ describe('PortfolioPage FX refresh', () => {
     expect(screen.queryByText('CNY 3,000.00')).not.toBeInTheDocument();
   });
 
+  it('keeps today P&L unknown when funds have value but no day P&L', async () => {
+    getSnapshot.mockResolvedValueOnce(makeConsolidatedSnapshot({
+      consolidatedDayPnlBase: 777,
+      consolidatedFundValueBase: 20000,
+      consolidatedFundDayPnlBase: null,
+    }));
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    await screen.findByText('TWD 520,000.00');
+    expect(screen.queryByText('TWD +777.00')).not.toBeInTheDocument();
+  });
+
   it('does not count missing fund value as zero and says the total excludes funds', async () => {
     getSnapshot.mockResolvedValueOnce(makeConsolidatedSnapshot({
       consolidatedFundValueBase: null,

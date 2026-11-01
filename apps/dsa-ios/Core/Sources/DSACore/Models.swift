@@ -90,6 +90,14 @@ public struct StockProfile: Codable, Sendable {
     public let position: StockProfilePosition?
     public let chips: StockProfileChips?
     public let news: [StockProfileNewsItem]?
+    public let portfolio: StockProfilePortfolioBlock?
+
+    /// true＝持有、false＝確定沒持有、nil＝查不到或舊後端；持股重播失敗時 position 也是 nil，不能當成空手。
+    public var holdingKnown: Bool? {
+        if position != nil { return true }
+        guard let portfolio, portfolio.status != "unavailable" else { return nil }
+        return portfolio.data?.held
+    }
 }
 
 public struct QuoteBlock: Codable, Sendable {
@@ -651,6 +659,15 @@ public struct EventCalendarResponse: Codable, Sendable {
 }
 
 // MARK: - I09～I11 個股與報告追加型別
+
+public struct StockProfilePortfolioBlock: Codable, Sendable {
+    public struct Relation: Codable, Sendable {
+        public let held: Bool?
+    }
+
+    public let status: String
+    public let data: Relation?
+}
 
 public struct StockProfilePosition: Codable, Sendable {
     public let quantity: Double

@@ -500,6 +500,7 @@ class Handler(BaseHTTPRequestHandler):
                     "evidence_quality": {"status": "partial", "blocks": {"quote": "partial", "research": "partial"},
                                          "limitations": ["全部是固定過去日期的 fixture，不能用於交易。", "no_symbol_intelligence"]},
                     "position": profile_position(code), "chips": profile_chips(code), "news": [],
+                    "portfolio": {"status": "partial", "data": {"held": profile_position(code) is not None}, "limitations": []},
                 })
             if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "financials":
                 if route[3] not in STOCKS:
