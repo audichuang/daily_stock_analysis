@@ -52,6 +52,32 @@ from src.services.history_service import HistoryService
 import src.auth as auth
 
 
+class TestHistoryStructuredReportHelper(unittest.TestCase):
+    """B01：/history/{id} 的 structured_report 建構得出來才給，失敗維持 null。"""
+
+    def test_market_review_has_no_structured_report(self):
+        from api.v1.endpoints.history import _structured_report_for_detail
+
+        self.assertIsNone(_structured_report_for_detail({"report_type": "market_review", "id": 1}, None))
+
+    def test_builds_artifact_for_stock_report(self):
+        from api.v1.endpoints.history import _structured_report_for_detail
+
+        artifact = _structured_report_for_detail(
+            {"id": 9, "query_id": "q", "stock_code": "AAPL", "report_type": "simple", "analysis_summary": "s"},
+            None,
+        )
+        self.assertEqual(artifact["artifact_id"], "report:9")
+
+    def test_build_failure_stays_null(self):
+        from api.v1.endpoints import history as history_endpoint
+
+        with patch.object(history_endpoint, "build_research_artifact", side_effect=ValueError("old report")):
+            self.assertIsNone(
+                history_endpoint._structured_report_for_detail({"id": 9, "stock_code": "AAPL"}, None)
+            )
+
+
 class TestHistoryCsiCandidateConvergence(unittest.TestCase):
     """PR #2267 review remediation: registered CSI explicit identities must
     converge in history filter candidates so a record saved under any

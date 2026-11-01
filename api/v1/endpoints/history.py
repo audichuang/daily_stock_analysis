@@ -47,6 +47,7 @@ from src.data.us_stock_name import display_stock_name
 from src.services.history_service import HistoryService, MarkdownReportGenerationError
 from src.services.analysis_service import asset_type_from_canonical_code
 from src.services.event_outlook import extract_event_outlook
+from src.services.research_artifact_service import artifact_input_from_detail, build_research_artifact
 from src.schemas.decision_action import build_action_fields
 from src.utils.data_processing import (
     normalize_model_used,
@@ -131,6 +132,22 @@ def _history_share_image_input(
 
 def _history_share_image_branding(config: object) -> ShareImageBranding:
     return share_image_branding_from_config(config)
+
+
+def _structured_report_for_detail(
+    result: Mapping[str, Any],
+    persisted_fundamental: Any,
+) -> Optional[Dict[str, Any]]:
+    """舊報告缺欄位時建構可能失敗；失敗維持 null，不讓整份詳情變 500。"""
+    if result.get("report_type") == "market_review":
+        return None
+    try:
+        return build_research_artifact(
+            artifact_input_from_detail(result, persisted_fundamental=persisted_fundamental)
+        )
+    except Exception as exc:
+        logger.warning("建構 structured_report 失敗 id=%s: %s", result.get("id"), exc)
+        return None
 
 
 def _stock_bar_group_key(record_code: str, display_code: str) -> str:
@@ -676,6 +693,7 @@ def get_history_detail(
             summary=summary,
             strategy=strategy,
             details=details,
+            structured_report=_structured_report_for_detail(result, fallback_fundamental),
             event_outlook=extract_event_outlook(result.get("raw_result")),
         )
         

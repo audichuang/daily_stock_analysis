@@ -9,7 +9,7 @@ from pydantic import ValidationError
 import pytest
 
 from api.v1.schemas.research_artifact import ResearchArtifact
-from src.services.research_artifact_service import build_research_artifact
+from src.services.research_artifact_service import artifact_input_from_detail, build_research_artifact
 
 
 def test_build_research_artifact_from_report_with_evidence_and_invalidation() -> None:
@@ -229,3 +229,58 @@ def test_invalid_evidence_timestamps_are_omitted() -> None:
     assert "context_timestamp" not in evidence["metadata"]
     assert "fetched_at" not in evidence["metadata"]
     assert evidence["freshness"] == "unknown"
+
+
+def _stop_loss_description(language) -> str:
+    report = {
+        "meta": {"stock_code": "AAPL", "report_language": language},
+        "strategy": {"stop_loss": "180"},
+    }
+    conditions = build_research_artifact(report)["invalidation_conditions"]
+    return next(item["description"] for item in conditions if item["id"] == "price:stop_loss")
+
+
+@pytest.mark.parametrize(
+    "language,expected",
+    [
+        ("zh-TW", "股價跌破報告的停損區：180"),
+        ("zh", "价格跌破报告停损区：180"),
+        ("en", "Price breaks the report stop-loss area: 180"),
+        ("ko", "가격이 보고서의 손절 구간을 이탈: 180"),
+    ],
+)
+def test_invalidation_text_follows_report_language(language, expected) -> None:
+    assert _stop_loss_description(language) == expected
+
+
+def test_invalidation_text_without_language_stays_english() -> None:
+    # 舊報告沒存語言：維持既有英文，iOS 的對照表才接得住。
+    assert _stop_loss_description(None).startswith("Price breaks")
+
+
+def test_zh_tw_artifact_has_no_english_template_sentences() -> None:
+    artifact = build_research_artifact({
+        "meta": {"stock_code": "2330.TW", "report_language": "zh-TW"},
+        "summary": {"analysis_summary": "論點", "action": "reduce", "action_label": "減碼"},
+        "strategy": {"stop_loss": "900", "take_profit": "1100"},
+        "details": {
+            "news_content": "新聞",
+            "financial_report": {"revenue": 1},
+            "dividend_metrics": {"ttm": 1},
+            "market_structure": {"status": "ok"},
+        },
+    })
+    rendered = [item["description"] for item in artifact["invalidation_conditions"]]
+    rendered += [item["title"] for item in artifact["evidence"]]
+    rendered += [item["label"] for item in artifact["next_actions"]]
+    for text in rendered:
+        assert not any("a" <= ch.lower() <= "z" for ch in text), text
+
+
+def test_artifact_input_from_detail_reads_language_from_raw_result() -> None:
+    artifact_input = artifact_input_from_detail({
+        "id": 7,
+        "stock_code": "2330.TW",
+        "raw_result": {"report_language": "zh-TW"},
+    })
+    assert artifact_input["meta"]["report_language"] == "zh-TW"
