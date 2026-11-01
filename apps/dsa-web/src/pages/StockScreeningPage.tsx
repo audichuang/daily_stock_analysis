@@ -1383,8 +1383,8 @@ const StockScreeningPage: React.FC = () => {
           historyContextStrategyRef.current = true;
           // 同步恢复该历史 run 的上下文（与 handleHistoryRunSelect 一致）
           setResultContext({
-            market: detail.market || restoredTask.market,
-            strategy: detail.strategy || restoredTask.strategy,
+            market: detail.market || (restoredTask?.market ?? DEFAULT_MARKET),
+            strategy: detail.strategy || (restoredTask?.strategy ?? DEFAULT_STRATEGY),
           });
           if (isFormMarket(detail.market)) {
             setMarket(detail.market);

@@ -869,7 +869,7 @@ describe('ChatPage', () => {
     const thinkingToggle = container.querySelector('button[class*="mb-2"][class*="w-full"]') as HTMLButtonElement;
     fireEvent.click(thinkingToggle);
 
-    const failedStage = screen.getAllByText('risk failed').find((node) =>
+    const failedStage = screen.getAllByText('risk 未完成').find((node) =>
       node.closest('.chat-progress-item'),
     );
     expect(failedStage).toBeDefined();
