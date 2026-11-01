@@ -82,6 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [新功能] 用量 API 追加每日彙總、前期比較、估算費用（單價設於 `LLM_USAGE_PRICES`，未設顯示空值，本機 CLI 標示訂閱不計費）、快取命中率與管道，呼叫列表支援 `offset`、`call_type`、`sort`。
 - [改進] Web 支援 `?embed=ios` 內嵌模式：隱藏導覽與外框，旗標存在 sessionStorage，站內換頁不會遺失；判斷集中在 `utils/embedMode.ts`，不帶參數時畫面不變。
 - [改進] iOS 工具頁收斂外框：以 `?embed=ios` 載入，移除說明橫條、隱藏底部分頁、改用細進度條；載入失敗整頁顯示繁中錯誤且不留 WebView，匯出失敗用提示框不影響頁面；登出或更換連線時清掉工具頁的 cookie。
+- [改進] 問股辨識股名時先以子字串過濾再做 regex，不再每則訊息替數萬個名稱各編一次 regex（每則省約 1 秒）；後端離線測試總耗時約減半，CI 分片耗時表同步重算。
+- [修復] CI 的 web-gate 改用每次挑選的空 port 跑 Playwright fixture，修正自架 runner 上兩個 run 同時跑時 `4173 is already used` 的假紅。
 - [改進] iOS 今日頁新增近期事件總覽，行事曆從工具頁移到這裡；工具頁只留警報與連線捷徑、常用四項，其餘收進「進階」，移除與原生畫面重複的完整分析入口。
 - [新功能] 個股財報：Web 報告頁、看板展開列與 iOS 個股頁新增「財報」區塊，顯示季度營收、毛利率、營益率、淨利、EPS、現金流、資本支出、負債比、合約負債與台股月營收的趨勢與年增；金融業與 ETF 改顯示適用欄位或說明。新增 `GET /api/v1/stocks/{code}/financials`，台股讀本地 `market.financial_statement`，美股即時讀 SEC companyfacts、備援 yfinance 並交叉比對；金額、幣別、期間、公告日語意與來源都明確標示，見 `docs/stock-financials.md`。
 - [新功能] 財報 AI 導讀（`FINANCIAL_COMMENTARY_ENABLED`，預設關閉）：LLM 標記重點欄位並用白話說明發生什麼事、為什麼重要、這個指標怎麼看；文字裡的數字由程式填入，對不到實際欄位的條目直接丟棄；每份財報只生成一次，存應用庫 `financial_commentary`；失敗時數字照常顯示。不做買賣建議。
