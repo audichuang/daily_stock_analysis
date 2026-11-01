@@ -2466,11 +2466,12 @@ class SearchService:
     ANALYTICAL_INTEL_DIMENSIONS = {"market_analysis", "earnings"}
     # 這些面向本來就在找分析與產業資料，資料頁可留作參考；其餘面向要的是事件報導。
     REFERENCE_INTEL_DIMENSIONS = {"market_analysis", "industry"}
-    # 實測近 3 天入庫的樣本：這些網域回的是個股資料頁或影片，沒有發布日期，也不是事件報導。
+    # 實測近 3 天入庫的樣本：這些網域多半回無發布日期的個股資料頁。
     DATA_PAGE_DOMAINS = (
         "simplywall.st", "tipranks.com", "marketscreener.com", "ibisworld.com", "csimarket.com",
-        "macrotrends.net", "stockanalysis.com", "tradingview.com", "youtube.com",
+        "macrotrends.net", "stockanalysis.com", "tradingview.com",
     )
+    VIDEO_DOMAINS = ("youtube.com",)
     _CHINESE_TEXT_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
     # 类别股的点与连字号都要认（`BRK.B` / `BRK-B`）。只认一种会让另一种判不出美股，
     # 於是新闻检索整组走中文／境内路径去查一档美股。
@@ -3697,9 +3698,14 @@ class SearchService:
         )
 
     @classmethod
-    def _is_data_page_domain(cls, url: Optional[str]) -> bool:
-        host = (urlparse(url or "").hostname or "").lower()
-        return any(host == domain or host.endswith("." + domain) for domain in cls.DATA_PAGE_DOMAINS)
+    def _is_dropped_data_page(cls, item: SearchResult) -> bool:
+        """資料站也會轉載有日期的正式公告（TradingView 的新聞稿），所以只濾沒有日期的頁面；影片一律濾掉。"""
+        host = (urlparse(item.url or "").hostname or "").lower()
+        def matches(domain):
+            return host == domain or host.endswith("." + domain)
+        if any(matches(domain) for domain in cls.VIDEO_DOMAINS):
+            return True
+        return not item.published_date and any(matches(domain) for domain in cls.DATA_PAGE_DOMAINS)
 
     @classmethod
     def _filter_ranked_news_for_context(
@@ -3720,7 +3726,7 @@ class SearchService:
 
         for item in response.results:
             is_official_source = cls._is_trusted_official_news_source(item)
-            if not allow_data_pages and cls._is_data_page_domain(item.url):
+            if not allow_data_pages and cls._is_dropped_data_page(item):
                 dropped_low_quality += 1
                 continue
             if (
