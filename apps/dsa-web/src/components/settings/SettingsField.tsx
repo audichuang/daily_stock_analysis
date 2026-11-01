@@ -246,7 +246,7 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
     >
       <div className="min-w-0 space-y-2">
         <div className="flex flex-wrap items-center gap-2">
-          <label className="text-sm font-semibold text-foreground" htmlFor={controlId}>
+          <label className="min-w-0 text-sm font-semibold text-foreground [overflow-wrap:anywhere]" htmlFor={controlId}>
             {title}
           </label>
           <SettingsHelpButton
@@ -268,7 +268,7 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
         </div>
 
         {description ? (
-          <p className="text-xs leading-5 text-muted-text">
+          <p className="text-xs leading-5 text-muted-text [overflow-wrap:anywhere]">
             {description}
           </p>
         ) : null}
@@ -299,7 +299,7 @@ export const SettingsField: React.FC<SettingsFieldProps> = ({
             {issues.map((issue, index) => (
               <p
                 key={`${issue.code}-${issue.key}-${index}`}
-                className={issue.severity === 'error' ? 'text-xs text-danger' : 'text-xs text-warning'}
+                className={issue.severity === 'error' ? 'text-xs text-danger [overflow-wrap:anywhere]' : 'text-xs text-warning [overflow-wrap:anywhere]'}
               >
                 {issue.message}
               </p>

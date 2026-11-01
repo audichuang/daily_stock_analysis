@@ -1,6 +1,6 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, ChevronDown, CircleAlert, CircleDashed, Clock, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ChevronDown, CircleAlert, CircleDashed, Clock, Play, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { useBlocker, useLocation } from 'react-router-dom';
 import type { Location } from 'react-router-dom';
 import { useAuth, useDesktopUpdate, useSystemConfig } from '../hooks';
@@ -9,7 +9,7 @@ import { createParsedApiError, getParsedApiError, type ParsedApiError } from '..
 import { analysisApi } from '../api/analysis';
 import { screeningApi, notifyScreeningConfigChanged, notifySystemConfigChanged } from '../api/screening';
 import { systemConfigApi } from '../api/systemConfig';
-import { ApiErrorAlert, Button, ConfirmDialog, EmptyState } from '../components/common';
+import { ApiErrorAlert, Button, ConfirmDialog, EmptyState, StickyActionBar } from '../components/common';
 import {
   AgentBackendStatusPanel,
   AuthSettingsCard,
@@ -27,7 +27,9 @@ import {
 } from '../components/settings';
 import { WEB_BUILD_INFO } from '../utils/constants';
 import { parseStockListValue } from '../utils/stockList';
-import { getCategoryDescription, getCategoryTitle } from '../utils/systemConfigI18n';
+import { getCategoryDescription, getCategoryTitle, getFieldTitleForLocale } from '../utils/systemConfigI18n';
+import { searchSettingsItems } from '../utils/settingsCategoryNav';
+import { cn } from '../utils/cn';
 import { getSetupCheckMessage, getSetupCheckTitle } from '../utils/setupCheckText';
 import { getIntlLocale } from '../i18n/intlLocale';
 import type {
@@ -224,7 +226,9 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
   language,
   t,
 }) => {
-  const [isHidden, setIsHidden] = useState(false);
+  // null 表示跟隨預設：缺必要項才展開；使用者按過之後以他的選擇為準。
+  const [expandedByUser, setExpandedByUser] = useState<boolean | null>(null);
+  const [showSmokeConfirm, setShowSmokeConfirm] = useState(false);
   const requiredMissing = status?.checks.filter((check) => check.required && check.status === 'needs_action') || [];
   const isComplete = Boolean(status?.isComplete);
   const canRunSmoke = Boolean(status?.readyForSmoke && firstStockCode);
@@ -246,125 +250,128 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
       })
       : t('settings.setupGuideReadySummary');
 
-  if (isHidden) {
-    return (
-      <div className="rounded-2xl border settings-border bg-card/90 px-4 py-3 shadow-soft-card">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold text-foreground">{t('settings.setupGuideHiddenTitle')}</p>
-            <p className="mt-1 text-xs leading-5 text-muted-text">{t('settings.setupGuideHiddenDescription')}</p>
+  const isExpanded = expandedByUser ?? requiredMissing.length > 0;
+
+  return (
+    <section
+      data-testid="first-run-setup-card"
+      className="min-w-0 rounded-lg border settings-border bg-card/90 px-4 py-3 shadow-soft-card backdrop-blur-sm"
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          {requiredMissing.length || error
+            ? <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+            : <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden="true" />}
+          <div className="min-w-0">
+            <h2 className="text-xs font-medium text-muted-text">{t('settings.setupGuideTitle')}</h2>
+            <p className="text-sm font-semibold text-foreground">{summaryTitle}</p>
+            <p className="text-xs leading-5 text-muted-text [overflow-wrap:anywhere]">{summaryMessage}</p>
           </div>
-          <Button type="button" variant="settings-secondary" size="sm" onClick={() => setIsHidden(false)}>
-            {t('settings.setupGuideOpen')}
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="settings-secondary"
+            size="sm"
+            disabled={isLoading}
+            isLoading={isLoading}
+            loadingText={t('settings.setupGuideRefreshing')}
+            onClick={() => void onRefresh()}
+          >
+            <RefreshCw className="h-4 w-4" aria-hidden="true" />
+            {t('settings.setupGuideRefresh')}
+          </Button>
+          <Button
+            type="button"
+            variant="settings-secondary"
+            size="sm"
+            aria-expanded={isExpanded}
+            onClick={() => setExpandedByUser(!isExpanded)}
+          >
+            {isExpanded ? t('settings.setupGuideCollapse') : t('settings.setupGuideOpen')}
           </Button>
         </div>
       </div>
-    );
-  }
 
-  return (
-    <SettingsSectionCard
-      title={t('settings.setupGuideTitle')}
-      description={t('settings.setupGuideDescription')}
-    >
-      <div data-testid="first-run-setup-card" className="space-y-4">
-        <div className="flex flex-col gap-3 rounded-2xl border settings-border bg-background/35 px-4 py-4 md:flex-row md:items-start md:justify-between">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground">
-              {summaryTitle}
-            </p>
-            <p className="mt-1 text-xs leading-6 text-muted-text">
-              {summaryMessage}
-            </p>
-          </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
+      {error ? <ApiErrorAlert className="mt-3" error={error} /> : null}
+
+      {isExpanded ? (
+        <div className="mt-3 space-y-3 border-t border-[var(--settings-border-soft)] pt-3">
+          {isLoading && !status ? (
+            <p className="text-sm text-muted-text">{t('common.loading')}</p>
+          ) : null}
+
+          {status ? (
+            <ul className="divide-y divide-[var(--settings-border-soft)]">
+              {status.checks.map((check) => (
+                <li key={check.key} className="flex items-start gap-3 py-2">
+                  {getSetupCheckIcon(check)}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-foreground">{getSetupCheckTitle(check, language)}</p>
+                      <span className="text-xs text-muted-text">{getSetupCheckStatusLabel(check, t)}</span>
+                    </div>
+                    <p className="mt-0.5 text-xs leading-5 text-muted-text [overflow-wrap:anywhere]">{getSetupCheckMessage(check, t)}</p>
+                    {check.nextStep ? (
+                      <p className="mt-1 text-xs leading-5 text-secondary-text [overflow-wrap:anywhere]">{check.nextStep}</p>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="settings-secondary" size="sm" onClick={() => onSelectCategory('ai_model')}>
+              {t('settings.setupGuideConfigureLlm')}
+            </Button>
+            <Button type="button" variant="settings-secondary" size="sm" onClick={() => onEditStockList()}>
+              {t('settings.setupGuideAddStocks')}
+            </Button>
+            <Button type="button" variant="settings-secondary" size="sm" onClick={() => onSelectCategory('notification')}>
+              {t('settings.setupGuideConfigureNotification')}
+            </Button>
             <Button
               type="button"
               variant="settings-secondary"
               size="sm"
-              disabled={isLoading}
-              isLoading={isLoading}
-              loadingText={t('settings.setupGuideRefreshing')}
-              onClick={() => void onRefresh()}
+              disabled={!canRunSmoke || isSaving || isRunningSmoke}
+              isLoading={isRunningSmoke}
+              loadingText={t('settings.setupGuideSmokeRunning')}
+              title={!firstStockCode ? t('settings.setupGuideSmokeNeedsStock') : undefined}
+              onClick={() => setShowSmokeConfirm(true)}
             >
-              <RefreshCw className="h-4 w-4" aria-hidden="true" />
-              {t('settings.setupGuideRefresh')}
-            </Button>
-            <Button type="button" variant="settings-secondary" size="sm" onClick={() => setIsHidden(true)}>
-              {t('settings.setupGuideHide')}
+              <Play className="h-4 w-4" aria-hidden="true" />
+              {t('settings.setupGuideRunSmoke')}
             </Button>
           </div>
+
+          {!canRunSmoke && status ? (
+            <p className="text-xs leading-6 text-muted-text">
+              {firstStockCode ? t('settings.setupGuideSmokeNotReady') : t('settings.setupGuideSmokeNeedsStock')}
+            </p>
+          ) : null}
         </div>
-
-        {error ? <ApiErrorAlert error={error} /> : null}
-
-        {isLoading && !status ? (
-          <p className="text-sm text-muted-text">{t('common.loading')}</p>
-        ) : null}
-
-        {status ? (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            {status.checks.map((check) => (
-              <div
-                key={check.key}
-                className="rounded-2xl border settings-border bg-card/65 px-4 py-3"
-              >
-                <div className="flex items-start gap-3">
-                  {getSetupCheckIcon(check)}
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm font-semibold text-foreground">{getSetupCheckTitle(check, language)}</p>
-                      <span className="rounded-full border settings-border bg-background/60 px-2 py-0.5 text-[11px] font-medium text-muted-text">
-                        {getSetupCheckStatusLabel(check, t)}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-xs leading-5 text-muted-text">{getSetupCheckMessage(check, t)}</p>
-                    {check.nextStep ? (
-                      <p className="mt-2 text-xs leading-5 text-secondary-text">{check.nextStep}</p>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : null}
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="settings-secondary" size="sm" onClick={() => onSelectCategory('ai_model')}>
-            {t('settings.setupGuideConfigureLlm')}
-          </Button>
-          <Button type="button" variant="settings-secondary" size="sm" onClick={() => onEditStockList()}>
-            {t('settings.setupGuideAddStocks')}
-          </Button>
-          <Button type="button" variant="settings-secondary" size="sm" onClick={() => onSelectCategory('notification')}>
-            {t('settings.setupGuideConfigureNotification')}
-          </Button>
-          <Button
-            type="button"
-            variant="settings-primary"
-            size="sm"
-            disabled={!canRunSmoke || isSaving || isRunningSmoke}
-            isLoading={isRunningSmoke}
-            loadingText={t('settings.setupGuideSmokeRunning')}
-            title={!firstStockCode ? t('settings.setupGuideSmokeNeedsStock') : undefined}
-            onClick={() => void onRunSmoke()}
-          >
-            <Play className="h-4 w-4" aria-hidden="true" />
-            {t('settings.setupGuideRunSmoke')}
-          </Button>
-        </div>
-
-        {!canRunSmoke && status ? (
-          <p className="text-xs leading-6 text-muted-text">
-            {firstStockCode ? t('settings.setupGuideSmokeNotReady') : t('settings.setupGuideSmokeNeedsStock')}
-          </p>
-        ) : null}
-        {smokeError ? <ApiErrorAlert error={smokeError} /> : null}
-        {!smokeError && smokeSuccess ? (
+      ) : null}
+      {smokeError ? <ApiErrorAlert className="mt-3" error={smokeError} /> : null}
+      {!smokeError && smokeSuccess ? (
+        <div className="mt-3">
           <SettingsAlert title={t('settings.actionSuccess')} message={smokeSuccess} variant="success" />
-        ) : null}
-      </div>
-    </SettingsSectionCard>
+        </div>
+      ) : null}
+      <ConfirmDialog
+        isOpen={showSmokeConfirm}
+        title={t('settings.setupGuideSmokeConfirmTitle')}
+        message={t('settings.setupGuideSmokeConfirmMessage', { stock: firstStockCode })}
+        confirmText={t('settings.setupGuideSmokeConfirm')}
+        cancelText={t('common.cancel')}
+        onConfirm={() => {
+          setShowSmokeConfirm(false);
+          void onRunSmoke();
+        }}
+        onCancel={() => setShowSmokeConfirm(false)}
+      />
+    </section>
   );
 };
 
@@ -527,7 +534,7 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
     >
       <div data-testid="scheduler-settings-card" className="space-y-4">
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
-          <div className="space-y-4 rounded-2xl border settings-border bg-background/35 px-4 py-4">
+          <div className="min-w-0 space-y-4">
                 <label className="flex items-start gap-3">
                   <input
                     type="checkbox"
@@ -606,7 +613,7 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
             </div>
           </div>
 
-          <div className="space-y-3 rounded-2xl border settings-border bg-background/35 px-4 py-4">
+          <div className="min-w-0 space-y-3 border-t border-[var(--settings-border-soft)] pt-4 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
             <div>
               <p className="text-sm font-semibold text-foreground">{t('settings.schedulerStatus')}</p>
               <p className="mt-1 text-xs leading-6 text-muted-text">
@@ -617,27 +624,27 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
                     : t('settings.schedulerDisabled')}
               </p>
             </div>
-            <dl className="grid grid-cols-1 gap-2 text-xs">
-              <div className="rounded-xl border settings-border bg-card/60 px-3 py-2">
+            <dl className="divide-y divide-[var(--settings-border-soft)] text-xs">
+              <div className="flex items-baseline justify-between gap-3 py-2">
                 <dt className="text-muted-text">{t('settings.schedulerEffectiveTimes')}</dt>
-                <dd className="mt-1 font-medium text-foreground">{effectiveStatusTimes.join(', ') || '-'}</dd>
+                <dd className="min-w-0 text-right font-medium text-foreground [overflow-wrap:anywhere]">{effectiveStatusTimes.join(', ') || '-'}</dd>
               </div>
-              <div className="rounded-xl border settings-border bg-card/60 px-3 py-2">
+              <div className="flex items-baseline justify-between gap-3 py-2">
                 <dt className="text-muted-text">{t('settings.schedulerNextRun')}</dt>
-                <dd className="mt-1 font-medium text-foreground">
+                <dd className="min-w-0 text-right font-medium text-foreground">
                   {formatSchedulerTimestamp(status?.nextRunAt, language)}
                 </dd>
               </div>
-              <div className="rounded-xl border settings-border bg-card/60 px-3 py-2">
+              <div className="flex items-baseline justify-between gap-3 py-2">
                 <dt className="text-muted-text">{t('settings.schedulerLastSuccess')}</dt>
-                <dd data-testid="scheduler-last-success" className="mt-1 font-medium text-foreground">
+                <dd data-testid="scheduler-last-success" className="min-w-0 text-right font-medium text-foreground">
                   {formatSchedulerTimestamp(status?.lastSuccessAt, language)}
                 </dd>
               </div>
               {status?.lastError ? (
-                <div className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2">
+                <div className="py-2">
                   <dt className="text-danger">{t('settings.schedulerLastError')}</dt>
-                  <dd data-testid="scheduler-last-error" className="mt-1 break-words text-danger">{status.lastError}</dd>
+                  <dd data-testid="scheduler-last-error" className="mt-1 text-danger [overflow-wrap:anywhere]">{status.lastError}</dd>
                 </div>
               ) : null}
             </dl>
@@ -711,6 +718,9 @@ const SettingsPage: React.FC = () => {
   const [setupSmokeError, setSetupSmokeError] = useState<ParsedApiError | null>(null);
   const [setupSmokeSuccess, setSetupSmokeSuccess] = useState('');
   const [localDraftResetToken, setLocalDraftResetToken] = useState(0);
+  // 手機先看分類清單，選了分類才進全螢幕內容；桌機兩欄並列不受影響。
+  const [mobileShowContent, setMobileShowContent] = useState(false);
+  const [settingsSearch, setSettingsSearch] = useState('');
   const [llmChannelHasDirty, setLlmChannelHasDirty] = useState(false);
   const [llmChannelIsSaving, setLlmChannelIsSaving] = useState(false);
   const [llmChannelDraftItems, setLlmChannelDraftItems] = useState<SystemConfigUpdateItem[]>([]);
@@ -822,6 +832,7 @@ const SettingsPage: React.FC = () => {
     const requestedCategory = new URLSearchParams(location.search).get('category');
     if (requestedCategory && categories.some((category) => category.category === requestedCategory)) {
       setActiveCategory(requestedCategory);
+      setMobileShowContent(true);
     }
   }, [categories, location.search, setActiveCategory]);
 
@@ -859,9 +870,10 @@ const SettingsPage: React.FC = () => {
   const screeningEnabled = String(screeningItem?.value ?? '').trim().toLowerCase() === 'true';
   const shouldShowFirstRunSetup = activeCategory === 'base';
   const shouldShowScreeningSettings = activeCategory === 'base' && Boolean(screeningItem);
-  const hasConfiguredChannels = Boolean((rawActiveItemMap.get('LLM_CHANNELS') || '').trim()
-    || (rawActiveItemMap.get('MODELFLARE_KEY') || '').trim());
-  const hasLitellmConfig = Boolean((rawActiveItemMap.get('LITELLM_CONFIG') || '').trim());
+  const aiModelItems = itemsByCategory.ai_model || [];
+  const aiModelValue = (key: string) => String(getConfigItem(aiModelItems, key)?.value ?? '').trim();
+  const hasConfiguredChannels = Boolean(aiModelValue('LLM_CHANNELS') || aiModelValue('MODELFLARE_KEY'));
+  const hasLitellmConfig = Boolean(aiModelValue('LITELLM_CONFIG'));
   const hasRuntimeSchedulerMismatch =
     schedulerRuntimeEnabled !== null
     && schedulerOverrideFromUi !== null
@@ -968,24 +980,18 @@ const SettingsPage: React.FC = () => {
     'SCREENING_ENABLED',
   ]);
   const AGENT_HIDDEN_KEYS = new Set(['AGENT_GENERATION_BACKEND']);
-  const activeItems =
-    activeCategory === 'base'
-      ? rawActiveItems.filter((item) => !BASE_HIDDEN_KEYS.has(item.key))
-    : activeCategory === 'ai_model'
-      ? rawActiveItems.filter((item) => {
-        if (hasConfiguredChannels && LLM_CHANNEL_KEY_RE.test(item.key)) {
-          return false;
-        }
-        if (hasConfiguredChannels && !hasLitellmConfig && AI_MODEL_HIDDEN_KEYS.has(item.key)) {
-          return false;
-        }
-        return true;
-      })
-      : activeCategory === 'system'
-        ? rawActiveItems.filter((item) => !SYSTEM_HIDDEN_KEYS.has(item.key))
-      : activeCategory === 'agent'
-        ? rawActiveItems.filter((item) => !AGENT_HIDDEN_KEYS.has(item.key))
-      : rawActiveItems;
+  // 欄位是否由通用表單編輯；其餘由各自的專屬面板（排程、模型管道、選股）管理。
+  const isGenericFieldItem = (category: string, item: SystemConfigItem) => {
+    if (category === 'base') return !BASE_HIDDEN_KEYS.has(item.key);
+    if (category === 'system') return !SYSTEM_HIDDEN_KEYS.has(item.key);
+    if (category === 'agent') return !AGENT_HIDDEN_KEYS.has(item.key);
+    if (category === 'ai_model') {
+      if (hasConfiguredChannels && LLM_CHANNEL_KEY_RE.test(item.key)) return false;
+      if (hasConfiguredChannels && !hasLitellmConfig && AI_MODEL_HIDDEN_KEYS.has(item.key)) return false;
+    }
+    return true;
+  };
+  const activeItems = rawActiveItems.filter((item) => isGenericFieldItem(activeCategory, item));
   const promptCacheAdvancedItems = activeCategory === 'ai_model'
     ? activeItems.filter(isPromptCacheAdvancedSetting)
     : [];
@@ -1230,13 +1236,63 @@ const SettingsPage: React.FC = () => {
     expected: 'single',
     actual: selectedAgentArch,
   };
+  const isSearching = settingsSearch.trim().length > 0;
+  const searchHits = isSearching ? searchSettingsItems(itemsByCategory, settingsSearch, uiLanguage) : [];
+  const selectCategory = (category: string) => {
+    setActiveCategory(category);
+    setSettingsSearch('');
+    setMobileShowContent(true);
+  };
+  const searchResultsPanel = isSearching ? (
+    <SettingsSectionCard title={t('settings.searchResultsTitle', { count: searchHits.length })}>
+      {searchHits.length ? (
+        <div className="-mx-4 divide-y divide-[var(--settings-border-soft)] md:-mx-5" data-testid="settings-search-results">
+          {searchHits.map(({ category, item }) => {
+            const categoryTitle = getCategoryTitle(category as SystemConfigCategory, category, uiLanguage);
+            if (isGenericFieldItem(category, item)) {
+              return (
+                <div key={item.key}>
+                  <p className="px-4 pt-3 text-[11px] text-muted-text">{categoryTitle}</p>
+                  <SettingsField
+                    item={item}
+                    value={item.value}
+                    disabled={isSaving || isImportingEnv}
+                    onChange={setDraftValue}
+                    issues={issueByKey[item.key] || []}
+                  />
+                </div>
+              );
+            }
+            const fieldKey = item.schema?.key ?? item.key;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                className="block w-full px-4 py-3 text-left hover:bg-[var(--settings-surface-hover)]"
+                onClick={() => selectCategory(category)}
+              >
+                <span className="block text-sm font-semibold text-foreground [overflow-wrap:anywhere]">
+                  {uiLanguage === 'en' ? (item.schema?.title ?? item.key) : getFieldTitleForLocale(fieldKey, item.schema?.title, uiLanguage)}
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-text">
+                  {t('settings.searchOpenCategory', { category: categoryTitle })}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-sm text-muted-text">{t('settings.searchResultsEmpty')}</p>
+      )}
+    </SettingsSectionCard>
+  ) : null;
   const activeConfigPanel = hasActiveConfigItems ? (
     <SettingsSectionCard
       title={activeCategoryTitle}
       description={activeCategoryDescription || t('settings.activePanelDescription')}
     >
       {visibleActiveItems.length ? (
-        <div className="divide-y divide-[var(--settings-border-soft)] overflow-hidden rounded-lg border border-[var(--settings-border)] bg-[var(--settings-surface)]">
+        <div className="-mx-4 divide-y divide-[var(--settings-border-soft)] md:-mx-5">
           {visibleActiveItems.map((item) => {
             const fieldIssues = item.key === 'AGENT_ARCH' && hasCodexArchitectureConflict
               ? [...(issueByKey[item.key] || []), codexArchitectureIssue]
@@ -1255,7 +1311,7 @@ const SettingsPage: React.FC = () => {
         </div>
       ) : null}
       {promptCacheAdvancedItems.length ? (
-        <details className="group/prompt-cache overflow-hidden rounded-lg border border-[var(--settings-border)] bg-[var(--settings-surface)] transition-colors duration-200 hover:bg-[var(--settings-surface-hover)]">
+        <details className="group/prompt-cache -mx-4 border-t border-[var(--settings-border-soft)] md:-mx-5">
           <summary className="flex cursor-pointer list-none items-start justify-between gap-3 px-4 py-4 [&::-webkit-details-marker]:hidden">
             <div className="min-w-0 space-y-1">
               <p className="text-sm font-semibold text-foreground">
@@ -1292,55 +1348,11 @@ const SettingsPage: React.FC = () => {
 
   return (
     <div className="settings-page min-h-full px-4 pb-6 pt-4 md:px-6">
-      <div className="mb-4 rounded-lg border settings-border bg-card/90 px-4 py-4 shadow-soft-card backdrop-blur-sm">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="min-w-0">
-            <h1 className="text-xl font-semibold tracking-tight text-foreground">{t('settings.pageTitle')}</h1>
-            <p className="max-w-3xl text-xs leading-5 text-muted-text sm:text-sm sm:leading-6">
-              {t('settings.pageDescription')}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="settings-secondary"
-              size="sm"
-              className="px-2.5"
-              onClick={resetAllDrafts}
-              disabled={isLoading || hasPendingSave}
-            >
-              <RefreshCw className="h-4 w-4" aria-hidden="true" />
-              {t('settings.reset')}
-            </Button>
-            <Button
-              type="button"
-              variant="settings-primary"
-              size="sm"
-              className="px-2.5"
-              onClick={() => void handleSaveConfig()}
-              disabled={!effectiveHasDirty || isSaving || isLoading || isImportingEnv}
-              isLoading={isSaving}
-              loadingText={t('settings.saving')}
-            >
-              <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-              {isSaving
-                ? t('settings.saving')
-                : effectiveDirtyCount
-                  ? t('settings.saveConfigWithCount', { count: effectiveDirtyCount })
-                  : t('settings.saveConfig')}
-            </Button>
-          </div>
-        </div>
-
-        {saveError ? (
-          <ApiErrorAlert
-            className="mt-3"
-            error={saveError}
-            actionLabel={retryAction === 'save' ? t('settings.saveRetry') : undefined}
-            onAction={retryAction === 'save' ? () => void retry() : undefined}
-          />
-        ) : null}
+      <div className="mb-4 min-w-0">
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">{t('settings.pageTitle')}</h1>
+        <p className="max-w-3xl text-xs leading-5 text-muted-text sm:text-sm sm:leading-6">
+          {t('settings.pageDescription')}
+        </p>
       </div>
 
       {loadError ? (
@@ -1356,16 +1368,44 @@ const SettingsPage: React.FC = () => {
         <SettingsLoading />
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-          <aside className="lg:sticky lg:top-4 lg:self-start">
-            <SettingsCategoryNav
-              categories={categories}
-              itemsByCategory={itemsByCategory}
-              activeCategory={activeCategory}
-              onSelect={setActiveCategory}
-            />
+          <aside className={cn('space-y-3 lg:sticky lg:top-4 lg:self-start', mobileShowContent && !isSearching && 'hidden lg:block')}>
+            <label className="relative block">
+              <span className="sr-only">{t('settings.searchPlaceholder')}</span>
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-text" aria-hidden="true" />
+              <input
+                type="search"
+                value={settingsSearch}
+                placeholder={t('settings.searchPlaceholder')}
+                onChange={(event) => setSettingsSearch(event.target.value)}
+                className="input-surface input-focus-glow h-10 w-full rounded-lg border bg-transparent pl-9 pr-3 text-sm transition-all focus:outline-none"
+              />
+            </label>
+            <div className={cn(isSearching && 'hidden lg:block')}>
+              <SettingsCategoryNav
+                categories={categories}
+                itemsByCategory={itemsByCategory}
+                activeCategory={activeCategory}
+                onSelect={selectCategory}
+              />
+            </div>
           </aside>
 
-          <section className="space-y-4">
+          <section
+            data-testid="settings-content"
+            className={cn('min-w-0 space-y-4', !mobileShowContent && !isSearching && 'hidden lg:block')}
+          >
+            {!isSearching ? (
+              <button
+                type="button"
+                className="inline-flex min-h-11 items-center gap-1 text-sm font-medium text-secondary-text lg:hidden"
+                onClick={() => setMobileShowContent(false)}
+              >
+                <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                {t('settings.backToCategories')}
+              </button>
+            ) : null}
+            {searchResultsPanel}
+            <div hidden={isSearching} className="space-y-4">
             {shouldShowFirstRunSetup ? (
               <FirstRunSetupCard
                 status={setupStatus}
@@ -1377,7 +1417,7 @@ const SettingsPage: React.FC = () => {
                 smokeError={setupSmokeError}
                 smokeSuccess={setupSmokeSuccess}
                 onRefresh={refreshSetupStatus}
-                onSelectCategory={setActiveCategory}
+                onSelectCategory={selectCategory}
                 onEditStockList={handleEditSetupStockList}
                 onRunSmoke={handleRunSetupSmoke}
                 listSeparator={uiLanguage === 'en' ? ', ' : '、'}
@@ -1386,35 +1426,32 @@ const SettingsPage: React.FC = () => {
               />
             ) : null}
             {shouldShowScreeningSettings ? (
-              <SettingsSectionCard
-                title={t('settings.screening')}
-                description={t('settings.screeningDescription')}
+              <section
+                data-testid="screening-settings-row"
+                className="min-w-0 rounded-lg border settings-border bg-card/90 px-4 py-3 shadow-soft-card backdrop-blur-sm"
               >
-                <div className="flex flex-col gap-4 rounded-2xl border settings-border bg-background/35 px-4 py-4 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">
-                      {screeningEnabled ? t('settings.screeningEnabled') : t('settings.screeningDisabled')}
-                    </p>
-                    <p className="mt-1 text-xs leading-6 text-muted-text">
-                      {t('settings.screeningSummary')}
-                    </p>
-                    <p className="mt-2 text-xs leading-6 text-amber-700 dark:text-amber-300">
-                      {t('settings.screeningRisk')}
-                    </p>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-semibold text-foreground">{t('settings.screening')}</h2>
+                    <p className="mt-0.5 text-xs leading-5 text-muted-text">{t('settings.screeningSummary')}</p>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      type="button"
-                      variant={screeningEnabled ? 'settings-secondary' : 'settings-primary'}
-                      onClick={() => void updateScreeningEnabled(!screeningEnabled)}
+                  <label className="inline-flex shrink-0 cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      aria-label={t('settings.screening')}
+                      checked={screeningEnabled}
                       disabled={isSaving || isLoading || isImportingEnv || isUpdatingScreening}
-                      isLoading={isUpdatingScreening}
-                      loadingText={screeningEnabled ? t('settings.disablingScreening') : t('settings.enablingScreening')}
-                    >
-                      {screeningEnabled ? t('settings.disableScreening') : t('settings.enableScreening')}
-                    </Button>
-                  </div>
+                      onChange={(event) => void updateScreeningEnabled(event.target.checked)}
+                    />
+                    <span className="text-sm text-secondary-text">
+                      {isUpdatingScreening
+                        ? (screeningEnabled ? t('settings.disablingScreening') : t('settings.enablingScreening'))
+                        : (screeningEnabled ? t('common.enabled') : t('common.disabled'))}
+                    </span>
+                  </label>
                 </div>
+                <p className="mt-2 text-xs leading-5 text-muted-text">{t('settings.screeningRisk')}</p>
                 {screeningActionError ? (
                   <div className="mt-3">
                     <ApiErrorAlert error={screeningActionError} />
@@ -1425,7 +1462,7 @@ const SettingsPage: React.FC = () => {
                     <SettingsAlert title={t('settings.actionSuccess')} message={screeningActionSuccess} variant="success" />
                   </div>
                 ) : null}
-              </SettingsSectionCard>
+              </section>
             ) : null}
             {activeCategory === 'system' ? <AuthSettingsCard /> : null}
             {activeCategory === 'system' || schedulerOverrideFromUi !== null ? (
@@ -1452,36 +1489,36 @@ const SettingsPage: React.FC = () => {
                 <div
                   className={`grid grid-cols-1 gap-3 ${shouldShowDesktopVersionCard ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}
                 >
-                  <div className="rounded-2xl border settings-border bg-background/40 px-4 py-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-text">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-medium text-muted-text">
                       {t('settings.versionWebui')}
                     </p>
-                    <p className="mt-2 break-all font-mono text-sm text-foreground">
+                    <p className="mt-1 break-all font-mono text-sm text-foreground">
                       {WEB_BUILD_INFO.version}
                     </p>
                   </div>
-                  <div className="rounded-2xl border settings-border bg-background/40 px-4 py-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-text">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-medium text-muted-text">
                       {t('settings.versionRevision')}
                     </p>
-                    <p className="mt-2 break-all font-mono text-sm text-foreground">
+                    <p className="mt-1 break-all font-mono text-sm text-foreground">
                       {WEB_BUILD_INFO.revision}
                     </p>
                   </div>
-                  <div className="rounded-2xl border settings-border bg-background/40 px-4 py-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-text">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-medium text-muted-text">
                       {t('settings.versionBuildTime')}
                     </p>
-                    <p className="mt-2 break-all font-mono text-sm text-foreground">
+                    <p className="mt-1 break-all font-mono text-sm text-foreground">
                       {WEB_BUILD_INFO.buildTime}
                     </p>
                   </div>
                   {shouldShowDesktopVersionCard ? (
-                    <div className="rounded-2xl border settings-border bg-background/40 px-4 py-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-text">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-medium text-muted-text">
                         {t('settings.versionDesktop')}
                       </p>
-                      <p className="mt-2 break-all font-mono text-sm text-foreground">
+                      <p className="mt-1 break-all font-mono text-sm text-foreground">
                         {desktopAppVersion}
                       </p>
                     </div>
@@ -1491,7 +1528,7 @@ const SettingsPage: React.FC = () => {
                   {t('settings.updateBuildDescription')}
                 </p>
                 {canCheckDesktopUpdate ? (
-                  <div className="mt-4 space-y-3 rounded-2xl border settings-border bg-background/30 px-4 py-4">
+                  <div className="mt-4 space-y-3 border-t border-[var(--settings-border-soft)] pt-4">
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                       <div>
                         <p className="text-sm font-medium text-foreground">{t('settings.desktopUpdate')}</p>
@@ -1687,7 +1724,7 @@ const SettingsPage: React.FC = () => {
                 </SettingsSectionCard>
               </SettingsPanelErrorBoundary>
             ) : null}
-            {shouldGuardActiveConfigPanel && hasActiveConfigItems ? (
+            {shouldGuardActiveConfigPanel && hasActiveConfigItems && !isSearching ? (
               <SettingsPanelErrorBoundary
                 title={activeConfigPanelErrorTitle}
                 resetKey={`${activeCategory}:${configVersion}`}
@@ -1695,13 +1732,60 @@ const SettingsPage: React.FC = () => {
               >
                 {activeConfigPanel}
               </SettingsPanelErrorBoundary>
-            ) : activeConfigPanel}
+            ) : (!isSearching ? activeConfigPanel : null)}
+            </div>
           </section>
         </div>
       )}
 
+      <StickyActionBar className="mt-4">
+        {saveError ? (
+          <ApiErrorAlert
+            className="w-full"
+            error={saveError}
+            actionLabel={retryAction === 'save' ? t('settings.saveRetry') : undefined}
+            onAction={retryAction === 'save' ? () => void retry() : undefined}
+          />
+        ) : null}
+        <p className="mr-auto min-w-0 text-sm text-secondary-text" role="status">
+          {effectiveDirtyCount
+            ? t('settings.unsavedBarDirtyCount', { count: effectiveDirtyCount })
+            : hasUnsavedEdits
+              ? t('settings.unsavedBarDirty')
+              : t('settings.unsavedBarClean')}
+        </p>
+        <Button
+          type="button"
+          variant="settings-secondary"
+          size="sm"
+          className="px-2.5"
+          onClick={resetAllDrafts}
+          disabled={isLoading || hasPendingSave}
+        >
+          <RefreshCw className="h-4 w-4" aria-hidden="true" />
+          {t('settings.reset')}
+        </Button>
+        <Button
+          type="button"
+          variant="settings-primary"
+          size="sm"
+          className="px-2.5"
+          onClick={() => void handleSaveConfig()}
+          disabled={!effectiveHasDirty || isSaving || isLoading || isImportingEnv}
+          isLoading={isSaving}
+          loadingText={t('settings.saving')}
+        >
+          <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+          {isSaving
+            ? t('settings.saving')
+            : effectiveDirtyCount
+              ? t('settings.saveConfigWithCount', { count: effectiveDirtyCount })
+              : t('settings.saveConfig')}
+        </Button>
+      </StickyActionBar>
+
       {toast ? (
-        <div className="fixed bottom-5 right-5 z-50 w-[320px] max-w-[calc(100vw-24px)]">
+        <div className="fixed bottom-24 right-5 z-50 w-[320px] max-w-[calc(100vw-24px)]">
           {toast.type === 'success'
             ? (
                 <SettingsAlert
