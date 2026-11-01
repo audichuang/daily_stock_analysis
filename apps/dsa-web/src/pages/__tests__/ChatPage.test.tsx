@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode, useState } from 'react';
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -36,6 +36,8 @@ const {
   mockFormatSessionAsMarkdown,
   mockStockIndex,
   mockStockIndexState,
+  mockGetQuotes,
+  mockGetSnapshot,
 } = vi.hoisted(() => {
   const mockStockIndex = [
     { canonicalCode: '600519.SH', displayCode: '600519', nameZh: '贵州茅台', aliases: ['茅台'], market: 'CN', assetType: 'stock', active: true },
@@ -61,6 +63,8 @@ const {
     mockRemoveFromWatchlist: vi.fn(),
     mockDownloadSession: vi.fn(),
     mockFormatSessionAsMarkdown: vi.fn(),
+    mockGetQuotes: vi.fn(),
+    mockGetSnapshot: vi.fn(),
     mockStockIndex,
     // Mutable registry-load state for the async window shared by every backend.
     mockStockIndexState: {
@@ -141,6 +145,14 @@ vi.mock('../../api/history', () => ({
   historyApi: {
     getDetail: vi.fn().mockResolvedValue({}),
   },
+}));
+
+vi.mock('../../api/stocks', () => ({
+  stocksApi: { getQuotes: mockGetQuotes },
+}));
+
+vi.mock('../../api/portfolio', () => ({
+  portfolioApi: { getSnapshot: mockGetSnapshot },
 }));
 
 vi.mock('../../hooks/useStockIndex', () => ({
@@ -260,6 +272,8 @@ beforeEach(() => {
   mockDeleteChatSession.mockResolvedValue(undefined);
   mockSendChat.mockResolvedValue({ success: true });
   mockGetWatchlist.mockResolvedValue([]);
+  mockGetQuotes.mockResolvedValue([]);
+  mockGetSnapshot.mockResolvedValue({ accounts: [] });
   mockGetSystemConfig.mockResolvedValue({
     configVersion: 'cfg-v1',
     maskToken: 'mask-token',
@@ -289,6 +303,12 @@ beforeEach(() => {
   mockStockIndexState.fallback = false;
   mockStockIndexState.loaded = true;
 });
+
+async function confirmSendToNotify() {
+  fireEvent.click(await screen.findByRole('button', { name: '更多操作' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: '发送到已配置的通知机器人/邮箱' }));
+  fireEvent.click(await screen.findByRole('button', { name: '推送' }));
+}
 
 describe('ChatPage', () => {
   it('lets the user stop an active Codex analysis from the existing Chat composer', async () => {
@@ -405,7 +425,7 @@ describe('ChatPage', () => {
     expect(screen.queryByText(/AI 将调用实时数据工具/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '切换问股方式' })).toBeInTheDocument();
     expect(mockGetStatus).toHaveBeenCalledTimes(1);
-    expect(screen.getByPlaceholderText(/分析 600519/)).toBeEnabled();
+    expect(screen.getByPlaceholderText(/例如/)).toBeEnabled();
   });
 
   it('finishes the compatibility check when React Strict Mode remounts effects', async () => {
@@ -417,7 +437,7 @@ describe('ChatPage', () => {
       </StrictMode>,
     );
 
-    expect(await screen.findByPlaceholderText(/分析 600519/)).toBeEnabled();
+    expect(await screen.findByPlaceholderText(/例如/)).toBeEnabled();
     expect(screen.queryByText('正在确认问股运行环境')).not.toBeInTheDocument();
   });
 
@@ -438,7 +458,7 @@ describe('ChatPage', () => {
     );
 
     expect(await screen.findByText('正在确认问股运行环境')).toBeInTheDocument();
-    const input = screen.getByPlaceholderText(/分析 600519/);
+    const input = screen.getByPlaceholderText(/例如/);
     expect(input).toBeDisabled();
     expect(screen.getByRole('button', { name: '分析比亚迪趋势' })).toBeDisabled();
     expect(screen.getByText(/不会调用模型或读取股票数据/)).toBeInTheDocument();
@@ -472,7 +492,7 @@ describe('ChatPage', () => {
     );
     render(<RouterProvider router={router} />);
 
-    const input = await screen.findByPlaceholderText(/分析 600519/);
+    const input = await screen.findByPlaceholderText(/例如/);
     expect(input).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: '前往 Agent 设置' }));
     expect(await screen.findByText('Agent settings destination')).toBeInTheDocument();
@@ -492,11 +512,11 @@ describe('ChatPage', () => {
     );
 
     expect(await screen.findByText('暂时无法读取问股运行状态')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/分析 600519/)).toBeDisabled();
+    expect(screen.getByPlaceholderText(/例如/)).toBeDisabled();
     expect(mockGetStatus).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole('button', { name: '重新检查' }));
-    await waitFor(() => expect(screen.getByPlaceholderText(/分析 600519/)).toBeEnabled());
+    await waitFor(() => expect(screen.getByPlaceholderText(/例如/)).toBeEnabled());
     expect(mockGetStatus).toHaveBeenCalledTimes(2);
   });
 
@@ -519,7 +539,7 @@ describe('ChatPage', () => {
       </MemoryRouter>,
     );
 
-    const input = await screen.findByPlaceholderText(/分析 600519/);
+    const input = await screen.findByPlaceholderText(/例如/);
     fireEvent.change(input, { target: { value: '分析 AAPL' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(mockStartStream).toHaveBeenCalledTimes(1));
@@ -549,7 +569,7 @@ describe('ChatPage', () => {
       mockStockIndexState.index = [];
       mockStockIndexState.loading = true;
       render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
-      const input = await screen.findByPlaceholderText(/分析 600519/);
+      const input = await screen.findByPlaceholderText(/例如/);
       for (const message of ['分析上证指数', '分析 005930.KS', '换成 000001', '比较 sh000001 和 000001']) {
         fireEvent.change(input, { target: { value: message } });
         fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -575,7 +595,7 @@ describe('ChatPage', () => {
     expect(await screen.findByLabelText('当前讨论对象')).toHaveTextContent(name);
     if (type === 'index') expect(screen.queryByText('加入自选')).not.toBeInTheDocument();
     else expect(await screen.findByText('加入自选')).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), { target: { value: '风险呢' } });
+    fireEvent.change(screen.getByPlaceholderText(/例如/), { target: { value: '风险呢' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(mockStartStream).toHaveBeenLastCalledWith(
       expect.objectContaining({ message: '风险呢', context: undefined }), expect.anything()));
@@ -587,7 +607,7 @@ describe('ChatPage', () => {
     });
     mockStartStream.mockImplementationOnce(async () => undefined);
     render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
-    const input = await screen.findByPlaceholderText(/分析 600519/);
+    const input = await screen.findByPlaceholderText(/例如/);
     fireEvent.change(input, { target: { value: '风险呢' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(mockStartStream).toHaveBeenCalledTimes(1));
@@ -660,9 +680,7 @@ describe('ChatPage', () => {
       </UiLanguageProvider>,
     );
 
-    expect(await screen.findByRole('checkbox', { name: '通用分析' })).toBeInTheDocument();
-    expect(await screen.findByText('未啟用')).toBeInTheDocument();
-    expect(screen.getAllByText('歷史對話').length).toBeGreaterThan(0);
+    expect(await screen.findByRole('checkbox', { name: '不指定' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '開啟新對話' })).toBeInTheDocument();
     // 會話標題與技能名稱是後端資料，不能被翻譯
     expect(screen.getByRole('button', { name: '切換到對話 请简要分析 600519' })).toBeInTheDocument();
@@ -670,24 +688,14 @@ describe('ChatPage', () => {
     expect(screen.getByText('2 則對話')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '刪除對話 请简要分析 600519' })).toBeInTheDocument();
     expect(screen.getByText('開始問股')).toBeInTheDocument();
-    expect(screen.getByText('上下文壓縮')).toBeInTheDocument();
-    expect(screen.getByText('節省長對話 token')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('例如：分析 2330.TW / 台積電現在適合買進嗎？（Enter 傳送，Shift+Enter 換行）')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('問個股，例如 2330.TW')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '傳送' })).toBeInTheDocument();
     expect(document.title).toBe('問股 - DSA');
 
     const bodyText = document.body.textContent ?? '';
-    for (const simplified of ['历史对话', '开始问股', '上下文压缩', '未启用', '条对话', '发送', '节省长会话']) {
+    for (const simplified of ['历史对话', '开始问股', '条对话', '发送']) {
       expect(bodyText).not.toContain(simplified);
     }
-
-    fireEvent.click(screen.getByRole('button', { name: '分析比亞迪趨勢' }));
-    await waitFor(() => {
-      expect(mockStartStream).toHaveBeenCalledWith(
-        expect.objectContaining({ message: '分析比亞迪趨勢', skills: ['bull_trend'] }),
-        expect.anything(),
-      );
-    });
   });
 
   it('renders the chat chrome in English', async () => {
@@ -701,13 +709,19 @@ describe('ChatPage', () => {
       </UiLanguageProvider>,
     );
 
-    expect(await screen.findByRole('checkbox', { name: 'General analysis' })).toBeInTheDocument();
-    expect(await screen.findByText('Disabled')).toBeInTheDocument();
+    expect(await screen.findByRole('checkbox', { name: 'Not specified' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start a new chat' })).toBeInTheDocument();
     expect(screen.getByText('2 messages')).toBeInTheDocument();
-    expect(screen.getByText('Context compression')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/^e\.g\. Analyze AAPL/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/^Ask about a stock/)).toBeInTheDocument();
+  });
+
+  it('no longer offers context compression in the chat page', async () => {
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    await screen.findByTestId('chat-composer');
+    expect(screen.queryByRole('checkbox', { name: /上下文压缩/ })).not.toBeInTheDocument();
+    expect(mockGetSystemConfig).not.toHaveBeenCalled();
   });
 
   it('renders a fixed workspace shell with independent session and message viewports', async () => {
@@ -722,91 +736,6 @@ describe('ChatPage', () => {
     expect(screen.getByTestId('chat-message-scroll')).toBeInTheDocument();
     expect(mockLoadInitialSession).toHaveBeenCalled();
     expect(mockClearCompletionBadge).toHaveBeenCalled();
-  });
-
-  it('loads and saves the global context compression setting from the chat input area', async () => {
-    render(
-      <MemoryRouter initialEntries={['/chat']}>
-        <ChatPage />
-      </MemoryRouter>
-    );
-
-    const compressionToggle = await screen.findByRole('checkbox', { name: /上下文压缩/ });
-
-    await waitFor(() => {
-      expect(compressionToggle).not.toBeDisabled();
-    });
-
-    expect(compressionToggle).not.toBeChecked();
-
-    fireEvent.click(compressionToggle);
-
-    await waitFor(() => {
-      expect(mockUpdateSystemConfig).toHaveBeenCalledWith({
-        configVersion: 'cfg-v1',
-        maskToken: 'mask-token',
-        reloadNow: true,
-        items: [
-          {
-            key: 'AGENT_CONTEXT_COMPRESSION_ENABLED',
-            value: 'true',
-          },
-        ],
-      });
-    });
-
-    expect(compressionToggle).toBeChecked();
-    expect(screen.getByText('已启用')).toBeInTheDocument();
-  });
-
-  it('rolls back the context compression switch when saving fails', async () => {
-    mockGetSystemConfig.mockResolvedValue({
-      configVersion: 'cfg-v1',
-      maskToken: 'mask-token',
-      items: [
-        {
-          key: 'AGENT_CONTEXT_COMPRESSION_ENABLED',
-          value: 'true',
-          rawValueExists: true,
-          isMasked: false,
-        },
-      ],
-    });
-    mockUpdateSystemConfig.mockRejectedValue(
-      createParsedApiError({
-        title: '保存失败',
-        message: '配置服务不可用',
-        category: 'unknown',
-      }),
-    );
-
-    render(
-      <MemoryRouter initialEntries={['/chat']}>
-        <ChatPage />
-      </MemoryRouter>
-    );
-
-    const compressionToggle = await screen.findByRole('checkbox', { name: /上下文压缩/ });
-
-    await waitFor(() => {
-      expect(compressionToggle).toBeChecked();
-      expect(compressionToggle).not.toBeDisabled();
-    });
-
-    fireEvent.click(compressionToggle);
-
-    await waitFor(() => {
-      expect(mockUpdateSystemConfig).toHaveBeenCalledWith(expect.objectContaining({
-        items: [
-          {
-            key: 'AGENT_CONTEXT_COMPRESSION_ENABLED',
-            value: 'false',
-          },
-        ],
-      }));
-      expect(compressionToggle).toBeChecked();
-    });
-    expect(screen.getByText('配置服务不可用')).toBeInTheDocument();
   });
 
   it('does not switch when clicking the current session card', async () => {
@@ -867,7 +796,8 @@ describe('ChatPage', () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '导出会话为 Markdown 文件' }));
+    fireEvent.click(await screen.findByRole('button', { name: '更多操作' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: '导出会话为 Markdown 文件' }));
 
     // 本 fork 的导出带 locale 第二参（getIntlLocale(language)，供繁体/英文本地化导出）
     expect(mockDownloadSession).toHaveBeenCalledWith(mockStoreState.messages, expect.anything());
@@ -934,12 +864,12 @@ describe('ChatPage', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findAllByText('risk failed')).toHaveLength(1);
+    expect(await screen.findAllByText('risk 未完成')).toHaveLength(1);
 
     const thinkingToggle = container.querySelector('button[class*="mb-2"][class*="w-full"]') as HTMLButtonElement;
     fireEvent.click(thinkingToggle);
 
-    const failedStage = screen.getAllByText('risk failed').find((node) =>
+    const failedStage = screen.getAllByText('risk 未完成').find((node) =>
       node.closest('.chat-progress-item'),
     );
     expect(failedStage).toBeDefined();
@@ -969,13 +899,13 @@ describe('ChatPage', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findAllByText('decision skipped: insufficient budget')).toHaveLength(1);
-    expect(screen.queryByText('decision timed out')).not.toBeInTheDocument();
+    expect(await screen.findAllByText('decision 已跳过：预算不足')).toHaveLength(1);
+    expect(screen.queryByText('decision 已超时')).not.toBeInTheDocument();
 
     const thinkingToggle = container.querySelector('button[class*="mb-2"][class*="w-full"]') as HTMLButtonElement;
     fireEvent.click(thinkingToggle);
 
-    const budgetSkipped = screen.getAllByText('decision skipped: insufficient budget').find((node) =>
+    const budgetSkipped = screen.getAllByText('decision 已跳过：预算不足').find((node) =>
       node.closest('.chat-progress-item'),
     );
     expect(budgetSkipped).toBeDefined();
@@ -991,7 +921,7 @@ describe('ChatPage', () => {
     );
 
     expect(await screen.findByRole('checkbox', { name: '趋势分析' })).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: '通用分析' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '不指定' })).not.toBeChecked();
   });
 
   it('keeps the restored session skills when the Skill catalog finishes loading', async () => {
@@ -1013,7 +943,7 @@ describe('ChatPage', () => {
     expect(await screen.findByRole('checkbox', { name: '均线金叉' })).toBeChecked();
     expect(screen.getByRole('checkbox', { name: '趋势分析' })).not.toBeChecked();
 
-    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), {
+    fireEvent.change(screen.getByPlaceholderText(/例如/), {
       target: { value: '继续分析' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1034,7 +964,7 @@ describe('ChatPage', () => {
     );
 
     expect(await screen.findByRole('checkbox', { name: '趋势分析' })).toBeChecked();
-    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), {
+    fireEvent.change(screen.getByPlaceholderText(/例如/), {
       target: { value: '分析 AAPL' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1057,7 +987,7 @@ describe('ChatPage', () => {
     );
 
     expect(await screen.findByRole('checkbox', { name: '趋势分析' })).toBeChecked();
-    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), {
+    fireEvent.change(screen.getByPlaceholderText(/例如/), {
       target: { value: '继续分析' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1088,7 +1018,7 @@ describe('ChatPage', () => {
     );
 
     fireEvent.click(await screen.findByRole('checkbox', { name: '均线金叉' }));
-    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), {
+    fireEvent.change(screen.getByPlaceholderText(/例如/), {
       target: { value: '分析 600519' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1107,34 +1037,240 @@ describe('ChatPage', () => {
     });
   });
 
-  it('sends shortcut hints without treating them as confirmed state', async () => {
-    mockGetStatus.mockResolvedValueOnce({
-      backend: 'codex_app_server',
-      available: true,
-      experimental: true,
-      errorCode: null,
-      message: null,
+  it('fills an empty-state stock shortcut with its context and does not send until the user does', async () => {
+    mockGetSnapshot.mockResolvedValue({
+      accounts: [{ positions: [{ symbol: '2330.TW', name: '台积电' }] }],
     });
-    mockGetSkills.mockResolvedValue({
-      skills: [{ id: 'chan_theory', name: '缠论', description: '结构分析' }],
-      default_skill_id: 'chan_theory',
-    });
+    mockGetWatchlist.mockResolvedValue(['AAPL']);
 
-    render(
-      <MemoryRouter initialEntries={['/chat']}>
-        <ChatPage />
-      </MemoryRouter>
-    );
-    fireEvent.click(await screen.findByRole('button', { name: '用缠论分析茅台' }));
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
 
+    fireEvent.click(await screen.findByRole('button', { name: '台积电' }));
+
+    const input = screen.getByPlaceholderText(/例如/);
+    expect(input).toHaveValue('分析 台积电 2330.TW');
+    expect(mockStartStream).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: 'AAPL' })).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => {
       expect(mockStartStream).toHaveBeenCalledWith(
         expect.objectContaining({
-          context: { stock_code: '600519', stock_name: '贵州茅台' },
+          message: '分析 台积电 2330.TW',
+          context: { stock_code: '2330.TW', stock_name: '台积电' },
         }),
         expect.any(Object),
       );
     });
+  });
+
+  it('fills a market prompt without a stock context and without sending', async () => {
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: '今天台股大盘怎么看' }));
+
+    expect(screen.getByPlaceholderText(/例如/)).toHaveValue('今天台股大盘怎么看');
+    expect(mockStartStream).not.toHaveBeenCalled();
+  });
+
+  it('shows no empty-state holdings group when the portfolio cannot be read', async () => {
+    mockGetSnapshot.mockRejectedValue(new Error('portfolio down'));
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    await screen.findByTestId('chat-empty-shortcuts');
+    expect(screen.queryByText('持股')).not.toBeInTheDocument();
+    expect(screen.getByText('大盘')).toBeInTheDocument();
+  });
+
+  it('suggests stocks from the index while typing and binds the picked one', async () => {
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    const input = await screen.findByPlaceholderText(/例如/);
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '宁德' } });
+
+    const option = await screen.findByRole('option', { name: /宁德时代/ });
+    fireEvent.mouseDown(option.querySelector('button') as HTMLButtonElement);
+
+    expect(input).toHaveValue('宁德时代 300750.SZ ');
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => {
+      expect(mockStartStream).toHaveBeenCalledWith(
+        expect.objectContaining({ context: { stock_code: '300750.SZ', stock_name: '宁德时代' } }),
+        expect.any(Object),
+      );
+    });
+  });
+
+  it('treats Enter as a newline on touch devices and as send elsewhere', async () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query === '(pointer: coarse)',
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+    try {
+      render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+      const input = await screen.findByPlaceholderText(/例如/);
+      await waitFor(() => expect(input).toBeEnabled());
+      fireEvent.change(input, { target: { value: '分析 2330.TW' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(mockStartStream).not.toHaveBeenCalled();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
+  it('does not send when Enter only confirms an input method composition', async () => {
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+    const input = await screen.findByPlaceholderText(/例如/);
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: '台积电' } });
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    expect(mockStartStream).not.toHaveBeenCalled();
+  });
+
+  it('shows the time, a day separator and the follow-ups of the latest answer', async () => {
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    mockStoreState.messages = [
+      { id: 'u-1', role: 'user', content: '昨天的问题', createdAt: yesterday.toISOString() },
+      { id: 'u-2', role: 'user', content: '今天的问题', createdAt: now.toISOString() },
+      { id: 'a-2', role: 'assistant', content: '今天的回答', createdAt: now.toISOString(),
+        structured: { follow_ups: ['压力怎么看'] } },
+    ];
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    expect(await screen.findAllByTestId('chat-day-separator')).toHaveLength(2);
+    fireEvent.click(within(screen.getByTestId('chat-follow-ups')).getByRole('button', { name: '压力怎么看' }));
+    expect(screen.getByPlaceholderText(/例如/)).toHaveValue('压力怎么看');
+    expect(mockStartStream).not.toHaveBeenCalled();
+  });
+
+  it('flags an answer from an earlier day and re-asks the last question on request', async () => {
+    const earlier = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    mockStoreState.messages = [
+      { id: 'u-1', role: 'user', content: '分析 2330.TW', createdAt: earlier },
+      { id: 'a-1', role: 'assistant', content: '当时偏多', createdAt: earlier },
+    ];
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    const rerun = await screen.findByRole('button', { name: '以最新资料重新分析' });
+    await waitFor(() => expect(rerun).toBeEnabled());
+    fireEvent.click(rerun);
+    await waitFor(() => {
+      expect(mockStartStream).toHaveBeenCalledWith(
+        expect.objectContaining({ message: '分析 2330.TW' }),
+        expect.any(Object),
+      );
+    });
+  });
+
+  it('does not flag an answer from today as stale', async () => {
+    const now = new Date().toISOString();
+    mockStoreState.messages = [
+      { id: 'u-1', role: 'user', content: '分析 2330.TW', createdAt: now },
+      { id: 'a-1', role: 'assistant', content: '偏多', createdAt: now },
+    ];
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    await screen.findByText('偏多');
+    expect(screen.queryByRole('button', { name: '以最新资料重新分析' })).not.toBeInTheDocument();
+  });
+
+  it('renders the stock summary only above the latest answer from quote and structured values', async () => {
+    mockStoreState.activeStockContext = { stock_code: '2330.TW', canonical_id: '2330.TW', stock_name: '台积电', asset_type: 'stock' };
+    mockStoreState.messages = [
+      { id: 'a-1', role: 'assistant', content: '较早的回答' },
+      { id: 'a-2', role: 'assistant', content: '最新的回答',
+        structured: { conclusion: '逢回分批', resistance: 1100, support: 980, invalidation: '跌破季线', follow_ups: [] } },
+    ];
+    mockGetQuotes.mockResolvedValue([{ stockCode: '2330.TW', quote: { stockCode: '2330.TW', currentPrice: 1050, changePercent: 1.5 } }]);
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    const cards = await screen.findAllByTestId('chat-stock-summary');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveTextContent('逢回分批');
+    expect(cards[0]).toHaveTextContent('跌破季线');
+    expect(cards[0]).toHaveTextContent('1,100');
+    expect(cards[0]).toHaveTextContent('980');
+    await waitFor(() => expect(cards[0]).toHaveTextContent('1,050'));
+    expect(mockGetQuotes).toHaveBeenCalledWith(['2330.TW']);
+  });
+
+  it('keeps the summary card and shows no-value marks when the quote fails', async () => {
+    mockStoreState.activeStockContext = { stock_code: '2330.TW', canonical_id: '2330.TW', stock_name: '台积电', asset_type: 'stock' };
+    mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '回答' }];
+    mockGetQuotes.mockRejectedValue(new Error('quote down'));
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    expect(await screen.findByTestId('chat-stock-summary')).toHaveTextContent('—');
+    expect(screen.getByTestId('chat-stock-summary')).not.toHaveTextContent('0.00');
+  });
+
+  it('groups and filters the session list and shows the stock pill', async () => {
+    mockStoreState.sessions = [
+      { session_id: 'session-1', title: '今天的对话', message_count: 2, created_at: null,
+        last_active: new Date().toISOString(), stock_code: '2330.TW', stock_name: '台积电' },
+      { session_id: 'session-2', title: '很久以前', message_count: 2, created_at: null,
+        last_active: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString() },
+    ];
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    expect(await screen.findByText('台积电 · 2330.TW')).toBeInTheDocument();
+    expect(screen.getByText('今天')).toBeInTheDocument();
+    expect(screen.getByText('更早')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('searchbox', { name: '搜索对话或股票' }), { target: { value: '2330' } });
+    expect(screen.queryByText('很久以前')).not.toBeInTheDocument();
+    expect(screen.getByText('今天的对话')).toBeInTheDocument();
+  });
+
+  it('collapses the desktop history list and brings it back', async () => {
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    fireEvent.click(await screen.findByRole('button', { name: '收起历史对话' }));
+    expect(screen.queryByTestId('chat-session-list-scroll')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '展开历史对话' }));
+    expect(screen.getByTestId('chat-session-list-scroll')).toBeInTheDocument();
+  });
+
+  it('does not show the constant default-model badge', async () => {
+    mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '回答', backend: 'litellm' }];
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    await screen.findByText('回答');
+    expect(screen.queryByText('默认模型')).not.toBeInTheDocument();
+  });
+
+  it('groups strategies and uses the Traditional Chinese name only in zh-TW', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+    mockGetSkills.mockResolvedValue({
+      skills: [{ id: 'chan_theory', name: '缠论', description: '结构', display_name_zh_tw: '纏論', group: 'theory', group_name_zh_tw: '理論框架' }],
+      default_skill_id: '',
+    });
+
+    render(
+      <UiLanguageProvider>
+        <MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>
+      </UiLanguageProvider>,
+    );
+
+    expect(await screen.findByRole('checkbox', { name: '纏論' })).toBeInTheDocument();
+    expect(screen.getByText('理論框架')).toBeInTheDocument();
   });
 
   it('collapses the mobile skill picker by default and keeps selected skills when sending', async () => {
@@ -1164,7 +1300,7 @@ describe('ChatPage', () => {
     expect(skillPanel).toHaveClass('flex');
 
     fireEvent.click(screen.getByRole('checkbox', { name: '均线金叉' }));
-    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), {
+    fireEvent.change(screen.getByPlaceholderText(/例如/), {
       target: { value: '分析 600519' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1193,9 +1329,9 @@ describe('ChatPage', () => {
     );
 
     fireEvent.click(await screen.findByRole('checkbox', { name: '趋势分析' }));
-    expect(screen.getByRole('checkbox', { name: '通用分析' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '不指定' })).toBeChecked();
 
-    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), {
+    fireEvent.change(screen.getByPlaceholderText(/例如/), {
       target: { value: '分析 AAPL' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1241,105 +1377,10 @@ describe('ChatPage', () => {
     expect(wave).not.toBeDisabled();
   });
 
-  it('quick questions override the current multi-skill selection', async () => {
-    mockGetSkills.mockResolvedValue({
-      skills: [
-        { id: 'bull_trend', name: '趋势分析', description: '默认趋势' },
-        { id: 'ma_golden_cross', name: '均线金叉', description: '均线交叉' },
-        { id: 'chan_theory', name: '缠论', description: '结构分析' },
-      ],
-      default_skill_id: 'bull_trend',
-    });
-
-    render(
-      <MemoryRouter initialEntries={['/chat']}>
-        <ChatPage />
-      </MemoryRouter>
-    );
-
-    fireEvent.click(await screen.findByRole('checkbox', { name: '均线金叉' }));
-    fireEvent.click(screen.getByRole('button', { name: '用缠论分析茅台' }));
-
-    await waitFor(() => {
-      expect(mockStartStream).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: '用缠论分析茅台',
-          skills: ['chan_theory'],
-        }),
-        expect.objectContaining({
-          skillNames: ['缠论'],
-          skillName: '缠论',
-        }),
-      );
-    });
-    expect(mockStartStream.mock.calls.at(-1)?.[0]?.context).toEqual({ stock_code: '600519', stock_name: '贵州茅台' });
-  });
-
-  it('keeps a quick question in the input until the server accepts it', async () => {
-    mockGetSkills.mockResolvedValue({
-      skills: [{ id: 'chan_theory', name: '缠论', description: '结构分析' }],
-      default_skill_id: 'chan_theory',
-    });
-    mockStartStream.mockResolvedValueOnce(undefined);
-
-    render(
-      <MemoryRouter initialEntries={['/chat']}>
-        <ChatPage />
-      </MemoryRouter>,
-    );
-
-    const quickQuestion = await screen.findByRole('button', { name: '用缠论分析茅台' });
-    await waitFor(() => expect(quickQuestion).toBeEnabled());
-    fireEvent.click(quickQuestion);
-
-    await waitFor(() => expect(mockStartStream).toHaveBeenCalledTimes(1));
-    expect(screen.getByPlaceholderText(/分析 600519/)).toHaveValue('用缠论分析茅台');
-  });
-
-  it('submits the A-share SMIC quick question with an unambiguous stock context', async () => {
-    mockGetStatus.mockResolvedValueOnce({
-      backend: 'codex_app_server',
-      available: true,
-      experimental: true,
-      errorCode: null,
-      message: null,
-    });
-    mockGetSkills.mockResolvedValue({
-      skills: [{ id: 'box_oscillation', name: '箱体震荡', description: '震荡区间' }],
-      default_skill_id: 'box_oscillation',
-    });
-
-    render(
-      <MemoryRouter initialEntries={['/chat']}>
-        <ChatPage />
-      </MemoryRouter>,
-    );
-
-    await screen.findByText('Codex Agent · 实验');
-    fireEvent.click(await screen.findByRole('button', { name: '用箱体震荡分析 A 股中芯国际 688981' }));
-
-    await waitFor(() => {
-      expect(mockStartStream).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: '用箱体震荡分析 A 股中芯国际 688981',
-          skills: ['box_oscillation'],
-          context: {
-            stock_code: '688981',
-            stock_name: '中芯国际',
-          },
-        }),
-        expect.objectContaining({
-          skillNames: ['箱体震荡'],
-          skillName: '箱体震荡',
-        }),
-      );
-    });
-  });
-
   it('does not send a client-selected identity for a name-only question', async () => {
     mockGetStatus.mockResolvedValueOnce({ backend: 'codex_app_server', available: true, experimental: true, errorCode: null, message: null });
     render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
-    const input = await screen.findByPlaceholderText(/分析 600519/);
+    const input = await screen.findByPlaceholderText(/例如/);
     fireEvent.change(input, { target: { value: '分析茅台' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(mockStartStream).toHaveBeenCalledWith(
@@ -1360,7 +1401,7 @@ describe('ChatPage', () => {
       </MemoryRouter>
     );
 
-    fireEvent.change(await screen.findByPlaceholderText(/分析 600519/), {
+    fireEvent.change(await screen.findByPlaceholderText(/例如/), {
       target: { value: '分析阿里巴巴' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1411,7 +1452,7 @@ describe('ChatPage', () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '发送到已配置的通知机器人/邮箱' }));
+    await confirmSendToNotify();
 
     await waitFor(() => {
       expect(mockFormatSessionAsMarkdown).toHaveBeenCalledWith(mockStoreState.messages, expect.anything());
@@ -1440,7 +1481,7 @@ describe('ChatPage', () => {
       </MemoryRouter>
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: '发送到已配置的通知机器人/邮箱' }));
+    await confirmSendToNotify();
 
     expect(await screen.findByText('通知渠道不可用')).toBeInTheDocument();
   });
@@ -1459,22 +1500,28 @@ describe('ChatPage', () => {
       </MemoryRouter>
     );
 
-    const sendButton = await screen.findByRole('button', { name: '发送到已配置的通知机器人/邮箱' });
-    fireEvent.click(sendButton);
+    await confirmSendToNotify();
+    await waitFor(() => expect(mockSendChat).toHaveBeenCalledTimes(1));
 
-    await waitFor(() => {
-      expect(mockSendChat).toHaveBeenCalledTimes(1);
-      expect(sendButton).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    expect(screen.getByRole('menuitem', { name: '发送到已配置的通知机器人/邮箱' })).toBeDisabled();
+
+    await act(async () => {
+      deferred.resolve({ success: true });
     });
+    expect(screen.getByRole('menuitem', { name: '发送到已配置的通知机器人/邮箱' })).not.toBeDisabled();
+  });
 
-    fireEvent.click(sendButton);
-    expect(mockSendChat).toHaveBeenCalledTimes(1);
+  it('does not push to the notification channel until the user confirms', async () => {
+    mockStoreState.messages = [{ id: 'assistant-1', role: 'assistant', content: '回答' }];
 
-    deferred.resolve({ success: true });
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
 
-    await waitFor(() => {
-      expect(sendButton).not.toBeDisabled();
-    });
+    fireEvent.click(await screen.findByRole('button', { name: '更多操作' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: '发送到已配置的通知机器人/邮箱' }));
+    expect(mockSendChat).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: '取消' }));
+    expect(mockSendChat).not.toHaveBeenCalled();
   });
 
   it('allows sending with base follow-up context before report hydration completes', async () => {
@@ -1537,7 +1584,7 @@ describe('ChatPage', () => {
       expect(screen.queryByText('正在加载历史分析上下文；现在可直接发送追问。')).not.toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), {
+    fireEvent.change(screen.getByPlaceholderText(/例如/), {
       target: { value: '继续分析成交量' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1554,7 +1601,7 @@ describe('ChatPage', () => {
       );
     });
 
-    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), {
+    fireEvent.change(screen.getByPlaceholderText(/例如/), {
       target: { value: '如果不考虑 TTM 呢' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1657,7 +1704,7 @@ describe('ChatPage', () => {
     });
     expect(historyApi.getDetail).not.toHaveBeenCalled();
 
-    fireEvent.change(screen.getByPlaceholderText(/分析 600519/), {
+    fireEvent.change(screen.getByPlaceholderText(/例如/), {
       target: { value: '继续看估值' },
     });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
@@ -1701,7 +1748,7 @@ describe('ChatPage', () => {
         stock_name: '贵州茅台', asset_type: 'stock' };
       mockStoreState.stateContract = 'authoritative';
       render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
-      const input = await screen.findByPlaceholderText(/分析 600519/);
+      const input = await screen.findByPlaceholderText(/例如/);
       fireEvent.change(input, { target: { value: message } });
       fireEvent.click(screen.getByRole('button', { name: '发送' }));
       await waitFor(() => expect(mockStartStream).toHaveBeenCalledWith(
@@ -1718,7 +1765,7 @@ describe('ChatPage', () => {
     );
 
     expect(await screen.findByRole('heading', { name: '问股' })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/分析 600519/)).toHaveValue('');
+    expect(screen.getByPlaceholderText(/例如/)).toHaveValue('');
     expect(historyApi.getDetail).not.toHaveBeenCalled();
   });
 
@@ -1940,7 +1987,7 @@ describe('ChatPage', () => {
       mockStoreState.stateContract = contract;
       mockStoreState.messages = [{ id: 'm-1', role: 'user', content: '分析 sh000016' }];
       render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
-      const input = await screen.findByPlaceholderText(/分析 600519/);
+      const input = await screen.findByPlaceholderText(/例如/);
       expect(screen.getByLabelText('当前讨论对象')).toHaveTextContent('未确认');
       expect(screen.queryByText('加入自选')).not.toBeInTheDocument();
       fireEvent.change(input, { target: { value: '继续看支撑位' } });

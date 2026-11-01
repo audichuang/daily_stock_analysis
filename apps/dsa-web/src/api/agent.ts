@@ -113,6 +113,19 @@ export interface SkillInfo {
   id: string;
   name: string;
   description: string;
+  /** 策略的繁中名稱與分組；舊後端或未標註的策略沒有這些欄位。 */
+  display_name_zh_tw?: string | null;
+  group?: string | null;
+  group_name_zh_tw?: string | null;
+}
+
+/** 回答的結構化摘要，由模型給值；只在串流 done 事件帶，歷史對話讀回時沒有。 */
+export interface StructuredAnswer {
+  conclusion?: string | null;
+  resistance?: number | null;
+  support?: number | null;
+  invalidation?: string | null;
+  follow_ups?: string[];
 }
 
 export interface SkillsResponse {
@@ -126,6 +139,8 @@ export interface ChatSessionItem {
   message_count: number;
   created_at: string | null;
   last_active: string | null;
+  stock_code?: string | null;
+  stock_name?: string | null;
 }
 
 export interface ChatSessionMessage {

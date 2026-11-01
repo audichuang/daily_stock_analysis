@@ -114,6 +114,24 @@ export type ScreeningStrategy = {
   analysisSkills?: string[];
   marketScope?: string[];
   market?: string;
+  nameZhTw?: string;
+  descriptionZhTw?: string;
+  /** 帶 market 查詢時回該市場生效的條件；門檻依幣別不同。 */
+  conditions?: ScreeningCondition[];
+  marketConditions?: Record<string, ScreeningCondition[]>;
+};
+
+export type ScreeningCondition = {
+  key: string;
+  label: string;
+  value: unknown;
+  unit?: string;
+};
+
+export type ScreeningFunnelStage = {
+  stage: string;
+  label: string;
+  count: number;
 };
 
 export type ScreeningStrategiesResponse = {
@@ -255,6 +273,11 @@ export type ScreeningScreenResponse = {
   resultVariantApplied?: boolean;
   resultVariantPoolSize?: number;
   resultVariantRotatedSlots?: number;
+  /** 實際母體來源；美股可能靜默退回內建清單，畫面要照實顯示。 */
+  universeSource?: string;
+  universeSize?: number | null;
+  snapshotDate?: string;
+  funnel?: ScreeningFunnelStage[];
 };
 
 export type ScreeningScreenAccepted = {
@@ -419,18 +442,22 @@ export const screeningApi = {
     return toCamelCase<ScreeningSourceHistory>(response.data);
   },
 
-  async getStrategies(): Promise<ScreeningStrategiesResponse> {
-    const response = await apiClient.get<Record<string, unknown>>('/api/v1/screening/strategies', { timeout: SCREENING_REQUEST_TIMEOUT_MS });
+  async getStrategies(market?: string): Promise<ScreeningStrategiesResponse> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/screening/strategies', {
+      params: { market: market || undefined },
+      timeout: SCREENING_REQUEST_TIMEOUT_MS,
+    });
     return toCamelCase<ScreeningStrategiesResponse>(response.data);
   },
 
-  async getHotspots(payload: { provider?: string; top?: number; refresh?: boolean; includeDetails?: boolean } = {}): Promise<ScreeningHotspotsResponse> {
+  async getHotspots(payload: { provider?: string; top?: number; refresh?: boolean; includeDetails?: boolean; market?: string } = {}): Promise<ScreeningHotspotsResponse> {
     const response = await apiClient.get<Record<string, unknown>>('/api/v1/screening/hotspots', {
       params: {
         provider: payload.provider || 'akshare',
         top: payload.top ?? 12,
         refresh: payload.refresh ?? false,
         include_details: payload.includeDetails ?? false,
+        market: payload.market || undefined,
       },
       timeout: SCREENING_REQUEST_TIMEOUT_MS,
     });

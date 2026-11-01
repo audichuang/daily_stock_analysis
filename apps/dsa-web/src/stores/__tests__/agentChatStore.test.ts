@@ -143,6 +143,30 @@ describe('agentChatStore authoritative session owner', () => {
     expect(localStorage.getItem('dsa_chat_session_id')).toBe(id);
   });
 
+  it('starts a new chat instead of reopening a session last active on an earlier day', async () => {
+    localStorage.setItem('dsa_chat_session_id', 'session-test');
+    useAgentChatStore.setState({ hasInitialLoad: false });
+    vi.mocked(agentApi.getChatSessions).mockResolvedValue([{ session_id: 'session-test', title: 't', message_count: 2,
+      created_at: null, last_active: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() }]);
+    await useAgentChatStore.getState().loadInitialSession();
+    expect(useAgentChatStore.getState().sessionId).not.toBe('session-test');
+    expect(agentApi.getChatSessionMessages).not.toHaveBeenCalled();
+  });
+
+  it('reopens a session last active today and keeps message times', async () => {
+    const createdAt = new Date().toISOString();
+    localStorage.setItem('dsa_chat_session_id', 'session-today');
+    useAgentChatStore.setState({ hasInitialLoad: false });
+    vi.mocked(agentApi.getChatSessions).mockResolvedValue([{ session_id: 'session-today', title: 't', message_count: 1,
+      created_at: null, last_active: createdAt }]);
+    vi.mocked(agentApi.getChatSessionMessages).mockResolvedValue({ session_id: 'session-today',
+      messages: [{ id: 'm', role: 'user', content: 'q', created_at: createdAt }],
+      session_state: { selected_skill_ids: null } });
+    await useAgentChatStore.getState().loadInitialSession();
+    expect(useAgentChatStore.getState().sessionId).toBe('session-today');
+    expect(useAgentChatStore.getState().messages[0]).toMatchObject({ createdAt });
+  });
+
   it('replaces a genuinely missing saved session with no newer request', async () => {
     localStorage.setItem('dsa_chat_session_id', 'session-test');
     useAgentChatStore.setState({ hasInitialLoad: false });
