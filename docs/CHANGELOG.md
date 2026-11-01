@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改進] 情報報告不再把摘要截成 150 字；Tavily 摘要上限 500 改 1500 並清掉導覽列。情報段落實測由約 5 千字增為 2～3 萬字（有事件時）。
 - [改進] 台股 `earnings`、`risk_check`、`announcements` 不走 Tavily news，優先 DeepSeek；一般個股公告直連公開資訊觀測站 `ajax_t05st01`，失敗改試下一來源。
 - [新功能] 財報後 7 天內或重大波動（美股沿用 `EVENT_GAP_THRESHOLD_PCT`，台股新聞查詢另用未回測的 7%；都不受 `EVENT_GAP_DECISION_ENABLED` 影響，也不改決策層門檻）時，加查「為何變動」並以 Tavily Extract 取前 3 篇全文，失敗退回摘要；僅傳統分析路徑，agent 路徑尚未帶事件訊號。
+- [修復] 傳統分析 prompt 改用各面向實際的新聞日期窗口，不再要求模型丟棄窗口內但超過 3 日的財報與交易日報導；財報當天未確認已發布不算事件；即時大幅波動計入當日場次。
 - [改進] iOS 報告新聞區顯示「為何變動」查詢的結果（`event_anchor`），與其他新聞同等級。
 - [改進] DeepSeek 結果後處理：美股濾中日韓文標題、台股濾 CMoney 論壇與爆料，濾除數記 log；美股 `latest_news` 主要來源回空時才打 `yf.Search`。
 - [改進] 新聞品質：台股查詢改用繁中與公開資訊觀測站（原本帶簡體與上交所、cninfo）；財報面向走新聞模式；事件面向濾掉無日期的資料頁與影片。

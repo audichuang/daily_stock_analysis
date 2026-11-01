@@ -5619,6 +5619,15 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 news_max_age_days=getattr(prompt_config, "news_max_age_days", 3),
                 news_strategy_profile=getattr(prompt_config, "news_strategy_profile", "short"),
             )
+        # 檢索端各面向窗口不同（財報可到 30 天前）；有實際上下界就照它，不再套單一的近 N 日。
+        news_date_windows = [
+            item for item in (context.get("news_date_windows") or []) if isinstance(item, dict)
+        ]
+        dated_windows = [item for item in news_date_windows if item.get("start") and item.get("end")]
+        undated_labels = [str(item.get("label")) for item in news_date_windows if not item.get("start")]
+        window_lines = "\n".join(
+            f"     - {item.get('label')}: {item.get('start')} ~ {item.get('end')}" for item in dated_windows
+        )
         if english:
             prompt += """
 ---
@@ -5631,7 +5640,51 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 
 ## 📰 {L("輿情情報", "舆情情报")}
 """
-        if news_context and english:
+        if news_context and english and dated_windows:
+            background_rule = (
+                f"\n   - Sections without a date window ({', '.join(undated_labels)}) are background only; "
+                "do not write them to those fields" if undated_labels else ""
+            )
+            prompt += f"""
+Below are the news search results for **{stock_name}({code})**. Each section has its own publication date window. Focus on extracting:
+1. 🚨 **Risk alerts**: shareholder reductions, penalties, negative news
+2. 🎯 **Positive catalysts**: earnings, contracts, policy
+3. 📊 **Earnings expectations**: annual report previews, earnings flash reports
+4. 🕒 **Time rules (mandatory)**:
+   - Every item written to `risk_alerts` / `positive_catalysts` / `latest_news` must include a specific date (YYYY-MM-DD)
+   - Use a dated article only if it falls inside the window of its section (bounds inclusive), even when it is older than {news_window_days} days:
+{window_lines}
+   - Other text in this block (local news pool, social sentiment) keeps the last {news_window_days} days rule{background_rule}
+   - Ignore all news whose publication date is unknown or cannot be determined
+
+```
+{news_context}
+```
+"""
+        elif news_context and dated_windows:
+            background_rule = (
+                "\n   - " + L(
+                    f"未標日期窗口的段落（{'、'.join(undated_labels)}）僅供背景，不得寫入上述欄位",
+                    f"未标日期窗口的段落（{'、'.join(undated_labels)}）仅供背景，不得写入上述字段",
+                ) if undated_labels else ""
+            )
+            prompt += f"""
+{L("以下是", "以下是")} **{stock_name}({code})** {L("的新聞搜尋結果，各段落有各自的發布日期窗口，請重點提取", "的新闻搜索结果，各段落有各自的发布日期窗口，请重点提取")}：
+1. 🚨 **{L("風險警報", "风险警报")}**：{L("減持、處罰、利空", "减持、处罚、利空")}
+2. 🎯 **{L("利多催化", "利好催化")}**：{L("業績、合約、政策", "业绩、合同、政策")}
+3. 📊 **{L("業績預期", "业绩预期")}**：{L("年報預告、業績快報", "年报预告、业绩快报")}
+4. 🕒 **{L("時間規則（強制）", "时间规则（强制）")}**：
+   - {L("輸出到", "输出到")} `risk_alerts` / `positive_catalysts` / `latest_news` {L("的每一條都必須帶具體日期（YYYY-MM-DD）", "的每一条都必须带具体日期（YYYY-MM-DD）")}
+   - {L(f"有日期的新聞只要落在所屬段落的窗口內（含上下界）就可使用，即使早於近{news_window_days}日", f"有日期的新闻只要落在所属段落的窗口内（含上下界）就可使用，即使早于近{news_window_days}日")}：
+{window_lines}
+   - {L(f"此區塊其他內容（本地資訊池、社群情緒）維持近{news_window_days}日規則", f"此区块其他内容（本地资讯池、社交情绪）维持近{news_window_days}日规则")}{background_rule}
+   - {L("時間未知、無法確定發布日期的新聞一律忽略", "时间未知、无法确定发布日期的新闻一律忽略")}
+
+```
+{news_context}
+```
+"""
+        elif news_context and english:
             prompt += f"""
 Below are the news search results for **{stock_name}({code})** from the last {news_window_days} days. Focus on extracting:
 1. 🚨 **Risk alerts**: shareholder reductions, penalties, negative news
@@ -5782,7 +5835,7 @@ If the stock name shown above is "Stock {code}" or incorrect, **state the correc
 - **Position-specific advice**: what to do without a position vs. what to do as a holder
 - **Concrete sniper levels**: buy price, stop-loss price, target price (to two decimals); when `decision_type` is `sell` (Reduce/Sell), or a condition must be met first (e.g. close back above MA5) before a buy is re-evaluated, `ideal_buy` and `secondary_buy` must be exactly "N/A" with no price, and re-entry conditions and prices go in `dashboard.phase_decision.watch_conditions`; `take_profit` holds exactly one price (for Reduce/Sell, the holder's rebound-reduce price); also write the same levels as plain numbers in `dashboard.battle_plan.sniper_prices` (`null` when a slot has no actionable price), which is the only place the system reads prices from
 - **Checklist**: mark each item with ✅/⚠️/❌
-- **News time compliance**: `latest_news`, `risk_alerts` and `positive_catalysts` must not contain information older than the last {news_window_days} days or with an unknown date
+- **News time compliance**: {"`latest_news`, `risk_alerts` and `positive_catalysts` must not contain information outside the date window of its news section or with an unknown date" if dated_windows else f"`latest_news`, `risk_alerts` and `positive_catalysts` must not contain information older than the last {news_window_days} days or with an unknown date"}
 - **Technical consistency**: never use mutually exclusive conclusions such as "bearish alignment" and "bullish alignment" as valid evidence at the same time; if fundamentals/events conflict with technicals, state explicitly "event-led, technicals not yet confirmed" or "fundamentals lean positive, but technicals are not yet confirmed"
 
 Output the complete Decision Dashboard in JSON format."""
@@ -5795,7 +5848,7 @@ Output the complete Decision Dashboard in JSON format."""
 - **{L("持倉分類建議", "持仓分类建议")}**：{L("空倉者怎麼做 vs 持倉者怎麼做", "空仓者怎么做 vs 持仓者怎么做")}
 - **{L("具體狙擊點位", "具体狙击点位")}**：{L("買入價、停損價、目標價（精確到分）；`decision_type` 為 `sell`（減倉／賣出），或須先滿足條件（如收盤站回 MA5）才重新評估買進時，`ideal_buy`、`secondary_buy` 只寫「暫不設定」、不得寫任何價位，重新進場的條件與價位寫進 `dashboard.phase_decision.watch_conditions`；`take_profit` 只寫一個價位（減倉／賣出時是持股者的反彈減碼價）；同一組價位另外以純數字寫進 `dashboard.battle_plan.sniper_prices`（沒有可執行價位的格子填 `null`），系統只從這裡讀價位", "买入价、止损价、目标价（精确到分）；`decision_type` 为 `sell`（减仓/卖出），或须先满足条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”、不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；`take_profit` 只写一个价位（减仓/卖出时是持仓者的反弹减码价）；同一组价位另外以纯数字写进 `dashboard.battle_plan.sniper_prices`（没有可执行价位的格子填 `null`），系统只从这里读价位")}
 - **{L("檢查清單", "检查清单")}**：{L("每項用 ✅/⚠️/❌ 標記", "每项用 ✅/⚠️/❌ 标记")}
-- **{L("消息面時間合規", "消息面时间合规")}**：{L(f"`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或時間未知的資訊", f"`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或时间未知的信息")}
+- **{L("消息面時間合規", "消息面时间合规")}**：{L("`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出所屬新聞段落日期窗口或時間未知的資訊", "`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出所属新闻段落日期窗口或时间未知的信息") if dated_windows else L(f"`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或時間未知的資訊", f"`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或时间未知的信息")}
 - **{L("技術面一致性", "技术面一致性")}**：{L("嚴禁把「空頭排列」和「多頭排列」等互斥結論同時當作有效依據；若基本面/事件面與技術面衝突，必須明確寫「事件先行、技術待確認」或「基本面偏多，但技術面尚未確認」", "严禁把“空头排列”和“多头排列”等互斥结论同时当作有效依据；若基本面/事件面与技术面冲突，必须明确写“事件先行、技术待确认”或“基本面偏多，但技术面尚未确认”")}
 
 {L("請輸出完整的 JSON 格式決策儀表盤。", "请输出完整的 JSON 格式决策仪表盘。")}"""

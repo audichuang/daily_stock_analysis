@@ -1902,6 +1902,7 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
                 self.assertEqual(params["country"], expected_country)
 
     @patch("src.search_service.recent_sessions_start", _three_calendar_days)
+    @patch("src.search_service.latest_opened_session", lambda market, now: None)
     def test_search_comprehensive_intel_splits_strict_and_non_strict_filters(self) -> None:
         """Latest news stays strict while market analysis keeps undated results."""
         today = datetime.now().date()
@@ -1942,6 +1943,7 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
         self.assertEqual(intel["market_analysis"].results[1].published_date, expected_analysis_date)
 
     @patch("src.search_service.recent_sessions_start", _three_calendar_days)
+    @patch("src.search_service.latest_opened_session", lambda market, now: None)
     def test_search_comprehensive_intel_widens_analytical_provider_windows(self) -> None:
         """Market analysis and earnings should request a longer provider lookback."""
         fresh_dt = datetime.now(timezone.utc).replace(microsecond=0)
@@ -1979,6 +1981,7 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
         )
 
     @patch("src.search_service.recent_sessions_start", _three_calendar_days)
+    @patch("src.search_service.latest_opened_session", lambda market, now: None)
     def test_search_comprehensive_intel_analytical_keeps_unknown_dates_and_crops_by_window(self) -> None:
         """Analytical dimensions keep unknown-date results while clipping known results to 180 days."""
         today = datetime.now().date()

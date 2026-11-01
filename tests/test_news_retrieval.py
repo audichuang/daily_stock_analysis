@@ -22,6 +22,7 @@ from src.search_service import (  # noqa: E402
     TavilySearchProvider,
     YFinanceNewsProvider,
     clean_page_navigation,
+    intel_date_windows,
 )
 from src.services.event_gap import detect_event_gap, event_gap_context  # noqa: E402
 from src.services.news_event_signals import resolve_news_event_signals  # noqa: E402
@@ -152,6 +153,27 @@ def test_sunday_analysis_keeps_thursday_and_friday_articles_in_latest_and_risk()
         result = _service(deepseek).search_comprehensive_intel("INTC", "Intel", max_searches=5)
     for dim in ("latest_news", "risk_check"):
         assert set(_titles(result[dim])) == {"Intel INTC fri", "Intel INTC thu"}
+
+
+def test_premarket_today_does_not_use_up_a_session():
+    next_monday = _open_week("us") + timedelta(days=7)
+    if not is_market_open("us", next_monday) or next_monday > TODAY + timedelta(days=300):
+        pytest.skip("next Monday is a holiday")
+    deepseek = _Provider(DeepSeekSearchProvider, "DeepSeek", lambda q, k: [])
+    now = _at(next_monday, 8)
+    with patch("src.search_service.time.sleep"), patch("src.search_service.get_market_now", return_value=now):
+        result = _service(deepseek).search_comprehensive_intel("INTC", "Intel", max_searches=5)
+    assert result["latest_news"].date_window[0] == (next_monday - timedelta(days=5)).isoformat()
+
+
+def test_intraday_today_counts_as_a_session():
+    monday = _open_week("us")
+    deepseek = _Provider(DeepSeekSearchProvider, "DeepSeek", lambda q, k: [])
+    with patch("src.search_service.time.sleep"), patch("src.search_service.get_market_now", return_value=_at(monday, 11)):
+        result = _service(deepseek).search_comprehensive_intel("INTC", "Intel", max_searches=5)
+    # 週一盤中：週一、上週五、上週四，只有上週四、五都開市時才斷言確切日期。
+    if is_market_open("us", monday - timedelta(days=3)) and is_market_open("us", monday - timedelta(days=4)):
+        assert result["latest_news"].date_window[0] == (monday - timedelta(days=4)).isoformat()
 
 
 def test_rank_prefers_post_event_articles():
@@ -368,6 +390,33 @@ def test_price_signal_reuses_event_gap_threshold(change, expected):
     assert bool(signals["price_event"]) is expected
 
 
+def test_todays_live_move_wins_over_older_event_when_todays_bar_is_missing():
+    monday = _open_week()
+    thursday_bars = _week_bars(monday, 0.5)[:3]
+    thursday_bars[-1]["pct_chg"] = -20.0  # 週三跌 20%，週四日線未入庫
+    event = _signal("INTC", "us", _at(monday + timedelta(days=3), 11), daily_bars=thursday_bars,
+                    realtime_quote=_quote(15.0))["price_event"]
+    assert event["event_date"] == (monday + timedelta(days=3)).isoformat()
+    assert event["change_pct"] == 15.0
+
+
+def test_small_live_move_keeps_older_event():
+    monday = _open_week()
+    bars = _week_bars(monday, 0.5)[:3]
+    bars[-1]["pct_chg"] = -20.0
+    event = _signal("INTC", "us", _at(monday + timedelta(days=3), 11), daily_bars=bars,
+                    realtime_quote=_quote(1.0))["price_event"]
+    assert event["event_date"] == (monday + timedelta(days=2)).isoformat()
+
+
+def test_actual_bar_beats_live_quote_on_the_same_session():
+    monday = _open_week()
+    friday = monday + timedelta(days=4)
+    event = _signal("INTC", "us", _at(friday, 17), daily_bars=_week_bars(monday, 0.5),
+                    realtime_quote=_quote(15.0))["price_event"]
+    assert event is None
+
+
 def test_friday_and_sunday_see_the_same_event_from_the_same_bars():
     monday = _open_week()
     bars = _week_bars(monday, -20.0)
@@ -449,12 +498,65 @@ def test_earnings_signal_reads_item_202_only():
     assert signals["earnings_date"] == TODAY - timedelta(days=3)
 
 
-def test_earnings_signal_uses_calendar_only_on_the_day_itself():
-    with patch("src.services.calendar_service.earnings_evidence", return_value={"date": TODAY.isoformat()}):
-        assert resolve_news_event_signals("2330.TW", "tw", _at(TODAY, 12), config=_signals_config())["earnings_date"] == TODAY
+def _calendar_signal(now, **row):
+    with patch("src.services.calendar_service.earnings_evidence", return_value=row):
+        return resolve_news_event_signals("2330.TW", "tw", now, config=_signals_config())["earnings_date"]
+
+
+def test_after_close_earnings_later_today_is_not_published_yet():
+    assert _calendar_signal(_at(TODAY, 9), date=TODAY.isoformat(), status="confirmed", detail="14:00，台北") is None
+
+
+def test_confirmed_conference_after_its_time_counts_as_published():
+    assert _calendar_signal(_at(TODAY, 15), date=TODAY.isoformat(), status="confirmed", detail="14:00，台北") == TODAY
+
+
+@pytest.mark.parametrize("row", [
+    {"status": "estimated", "detail": "14:00"},  # 推估
+    {"status": "confirmed", "detail": "Yahoo 標示公司已確認"},  # 沒有時間
+    {"status": "estimated", "detail": "盤前，財季 Sep/2026"},  # Nasdaq 只是推估
+])
+def test_scheduled_or_estimated_calendar_day_is_not_published(row):
+    assert _calendar_signal(_at(TODAY, 23), date=TODAY.isoformat(), **row) is None
+
+
+def test_future_calendar_day_is_not_published():
     future = (TODAY + timedelta(days=1)).isoformat()
-    with patch("src.services.calendar_service.earnings_evidence", return_value={"date": future}):
-        assert resolve_news_event_signals("2330.TW", "tw", _at(TODAY, 12), config=_signals_config())["earnings_date"] is None
+    assert _calendar_signal(_at(TODAY, 23), date=future, status="confirmed", detail="14:00") is None
+
+
+def test_unpublished_earnings_keeps_30_day_window_and_no_anchor():
+    result = _run(_service(_Provider(DeepSeekSearchProvider, "DeepSeek", lambda q, k: _dated_items(20))),
+                  earnings_date=None)
+    assert "event_anchor" not in result
+    assert _titles(result["earnings"]) == ["Intel INTC earnings d20"]
+
+
+def test_anchor_uses_the_later_of_earnings_and_older_move():
+    deepseek = _Provider(DeepSeekSearchProvider, "DeepSeek")
+    earnings = TODAY - timedelta(days=1)
+    _run(_service(deepseek), earnings_date=earnings,
+         price_event={"event_date": (TODAY - timedelta(days=4)).isoformat(), "change_pct": -20.0})
+    assert f"{earnings:%b} {earnings.day} {earnings.year}" in deepseek.calls[0][0]
+
+
+def test_tw_anchor_on_earnings_day_does_not_state_old_move_direction():
+    deepseek = _Provider(DeepSeekSearchProvider, "DeepSeek")
+    earnings = TODAY - timedelta(days=1)
+    _run(_service(deepseek), code="3481.TW", name="群創", earnings_date=earnings,
+         price_event={"event_date": (TODAY - timedelta(days=4)).isoformat(), "change_pct": -20.0})
+    assert "股價 變動 原因" in deepseek.calls[0][0]
+
+
+def test_each_dimension_records_its_actual_window():
+    earnings = TODAY - timedelta(days=12)
+    result = _run(_service(_Provider(DeepSeekSearchProvider, "DeepSeek")), earnings_date=earnings)
+    assert result["earnings"].date_window == (
+        (earnings - timedelta(days=1)).isoformat(), (earnings + timedelta(days=7)).isoformat())
+    assert result["industry"].date_window is None
+    windows = {item["dimension"]: item for item in intel_date_windows(result)}
+    assert windows["earnings"]["start"] == (earnings - timedelta(days=1)).isoformat()
+    assert windows["industry"]["start"] is None
 
 
 def test_signals_fail_open():

@@ -61,7 +61,7 @@ from src.report_language import (
     localize_trend_prediction,
     normalize_report_language,
 )
-from src.search_service import SearchService
+from src.search_service import SearchService, intel_date_windows
 from src.analysis_context_pack_prompt import format_analysis_context_pack_prompt_section
 from src.analysis_context_pack_overview import render_analysis_context_pack_overview
 from src.market_phase_summary import MARKET_PHASE_SUMMARY_KEY, render_market_phase_summary
@@ -873,6 +873,7 @@ class StockAnalysisPipeline:
                 market=market or "cn",
             )
             news_result_count: Optional[int] = None
+            news_date_windows: List[Dict[str, Optional[str]]] = []
             self._emit_progress(46, f"{stock_name}：正在检索新闻与舆情")
             if self.search_service is not None and self.search_service.is_available_for_stock(code):
                 news_signals = {}
@@ -907,6 +908,7 @@ class StockAnalysisPipeline:
 
                 # 格式化情报报告
                 if intel_results:
+                    news_date_windows = intel_date_windows(intel_results)
                     news_context = self.search_service.format_intel_report(intel_results, stock_name)
                     total_results = sum(
                         len(r.results) for r in intel_results.values() if r.success
@@ -988,6 +990,8 @@ class StockAnalysisPipeline:
             )
             if event_gap_daily_bars is not None:
                 enhanced_context["event_gap_daily_bars"] = event_gap_daily_bars
+            if news_date_windows:
+                enhanced_context["news_date_windows"] = news_date_windows
             from src.services.event_gap import event_gap_context
             event = event_gap_context(code, enhanced_context, self.config)
             if event:

@@ -36,7 +36,12 @@ from tenacity import (
 
 from data_provider.us_index_mapping import is_us_index_code
 from src.data.stock_index_loader import get_us_asset_type
-from src.core.trading_calendar import get_market_for_stock, get_market_now, recent_sessions_start
+from src.core.trading_calendar import (
+    get_market_for_stock,
+    get_market_now,
+    latest_opened_session,
+    recent_sessions_start,
+)
 from src.services.market_symbol_utils import is_tw_suffix_symbol
 from src.config import (
     NEWS_STRATEGY_WINDOWS,
@@ -306,6 +311,7 @@ class SearchResponse:
     success: bool = True
     error_message: Optional[str] = None
     search_time: float = 0.0  # 搜索耗时（秒）
+    date_window: Optional[Tuple[str, str]] = None  # 此面向實際採用的發布日期上下界（含）
     
     def mark_retrieved(self) -> None:
         """Record actual acquisition once; preserve timestamps on cached/copied results."""
@@ -324,6 +330,31 @@ class SearchResponse:
             lines.append(f"\n{i}. {result.to_text()}")
         
         return "\n".join(lines)
+
+
+INTEL_DIMENSION_LABELS = {
+    'event_anchor': '🎯 事件原因',
+    'latest_news': '📰 最新消息',
+    'announcements': '📋 公司公告',
+    'market_analysis': '📈 机构分析',
+    'risk_check': '⚠️ 风险排查',
+    'earnings': '📊 业绩预期',
+    'industry': '🏭 行业分析',
+}
+
+
+def intel_date_windows(intel_results: Dict[str, SearchResponse]) -> List[Dict[str, Optional[str]]]:
+    """各面向實際的發布日期上下界，給 prompt 的時間規則用；沒有窗口的面向 start/end 為 None。"""
+    windows: List[Dict[str, Optional[str]]] = []
+    for name, label in INTEL_DIMENSION_LABELS.items():
+        response = intel_results.get(name)
+        if response is None:
+            continue
+        # 窗口只是給 prompt 的時間規則，不能因為缺它讓整檔分析失敗。
+        window = getattr(response, "date_window", None)
+        start, end = window if isinstance(window, tuple) else (None, None)
+        windows.append({"dimension": name, "label": label, "start": start, "end": end})
+    return windows
 
 
 class BaseSearchProvider(ABC):
@@ -5046,11 +5077,14 @@ class SearchService:
 
         # 市場時鐘只讀一次，窗口都由它往下算。
         market = get_market_for_stock(stock_code) if stock_code else None
-        today = get_market_now(market).date() if market else datetime.now().date()
+        market_now = get_market_now(market) if market else datetime.now()
+        today = market_now.date()
         # 美股盤中台北已是隔天；DeepSeek 日級日期是 UTC+8，主機跑 UTC 時也會比本機多一天。
         local_today = max(today, datetime.now().date())
         open_end = local_today + timedelta(days=self.FUTURE_TOLERANCE_DAYS)
-        sessions_start = recent_sessions_start(market, today, search_days) if market else None
+        # 從最近已開盤的場次往回數：盤前的今天還沒交易，不能佔掉一個場次。
+        last_session = (latest_opened_session(market, market_now) or today) if market else today
+        sessions_start = recent_sessions_start(market, last_session, search_days) if market else None
         if sessions_start is None:
             sessions_start = today - timedelta(days=max(0, search_days - 1))
         anchor_date = self._news_event_date(today, earnings_date, price_event, is_index_etf)
@@ -5248,6 +5282,13 @@ class SearchService:
                         filtered_response.error_message or "empty",
                         candidates[idx + 1].name,
                     )
+            if dim_window is not None:
+                filtered_response.date_window = (dim_window[0][0].isoformat(), dim_window[0][1].isoformat())
+            elif dim['name'] in self.ANALYTICAL_INTEL_DIMENSIONS:
+                filtered_response.date_window = (
+                    (today - timedelta(days=self.ANALYTICAL_INTEL_LOOKBACK_DAYS - 1)).isoformat(),
+                    open_end.isoformat(),
+                )
             results[dim['name']] = filtered_response
             if not is_anchor:
                 search_count += 1
@@ -5277,15 +5318,15 @@ class SearchService:
         price_event: Optional[Dict[str, Any]],
         is_index_etf: bool,
     ) -> Optional[date]:
-        """有事件才回傳事件日：重大波動優先，其次是 7 天內的財報。"""
+        """有事件才回傳事件日；財報與波動都有時取較新的，舊事件不該蓋掉後來的財報。"""
         if is_index_etf:
             return None
+        candidates = []
         if price_event:
-            parsed = self._normalize_news_publish_date(price_event.get("event_date"))
-            return parsed or today
+            candidates.append(self._normalize_news_publish_date(price_event.get("event_date")) or today)
         if earnings_date is not None and 0 <= (today - earnings_date).days <= self.EARNINGS_ANCHOR_DAYS_AFTER:
-            return earnings_date
-        return None
+            candidates.append(earnings_date)
+        return max(candidates) if candidates else None
 
     @staticmethod
     def _event_anchor_dimension(
@@ -5296,7 +5337,9 @@ class SearchService:
         is_foreign: bool,
         english_aliases: Tuple[str, ...],
     ) -> Dict[str, Any]:
-        change = (price_event or {}).get("change_pct")
+        # 只有錨點就是波動日才講方向；財報日的走勢還不知道。
+        is_move_day = bool(price_event) and str(price_event.get("event_date"))[:10] == event_date.isoformat()
+        change = price_event.get("change_pct") if is_move_day else None
         if is_foreign:
             name = english_aliases[0] if english_aliases else stock_name
             query = f"why {name} {stock_code} stock moved {event_date:%b} {event_date.day} {event_date.year}"
@@ -5379,15 +5422,7 @@ class SearchService:
         # 维度展示顺序
         display_order = ['event_anchor', 'latest_news', 'announcements', 'market_analysis', 'risk_check', 'earnings', 'industry']
 
-        dim_labels = {
-            'event_anchor': '🎯 事件原因',
-            'latest_news': '📰 最新消息',
-            'announcements': '📋 公司公告',
-            'market_analysis': '📈 机构分析',
-            'risk_check': '⚠️ 风险排查',
-            'earnings': '📊 业绩预期',
-            'industry': '🏭 行业分析',
-        }
+        dim_labels = INTEL_DIMENSION_LABELS
 
         for dim_name in display_order:
             if dim_name not in intel_results:
@@ -5398,7 +5433,9 @@ class SearchService:
             # 获取维度描述
             dim_desc = dim_labels.get(dim_name, dim_name)
             
-            lines.append(f"\n{dim_desc} (来源: {resp.provider}):")
+            window = getattr(resp, "date_window", None)
+            window_note = f", 日期窗口: {window[0]} ~ {window[1]}" if window else ""
+            lines.append(f"\n{dim_desc} (来源: {resp.provider}{window_note}):")
             if resp.success and resp.results:
                 # 增加显示条数
                 for i, r in enumerate(resp.results[:4], 1):

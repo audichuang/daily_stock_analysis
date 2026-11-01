@@ -223,7 +223,10 @@ def test_disabled_search_prompt_agent_and_result_byte_for_byte(monkeypatch, code
         r.search_time=0
         for item in r.results:
             item.retrieved_at="fixture-retrieval"
-    normalized = json.loads(json.dumps({k:asdict(v) for k,v in result.items()}, ensure_ascii=False).replace(date.today().isoformat(), "<today>"))
+    # 日期窗口隨當天的交易日曆變動，獨立由 test_news_retrieval 驗；基準只鎖其餘內容。
+    for r in result.values():
+        r.date_window = None
+    normalized = json.loads(json.dumps({k:{f:x for f,x in asdict(v).items() if f != "date_window"} for k,v in result.items()}, ensure_ascii=False).replace(date.today().isoformat(), "<today>"))
     assert normalized == baseline["results"]
     text = service.format_intel_report(result, name).replace(date.today().isoformat(), "<today>")
     assert text == baseline["text"]

@@ -1,5 +1,6 @@
 """新聞檢索用的事件訊號：上次財報日與重大波動，只讀既有資料、不打外部來源。"""
 import logging
+import re
 from datetime import date, timedelta
 from types import SimpleNamespace
 
@@ -13,6 +14,9 @@ EARNINGS_ANCHOR_MAX_AGE_DAYS = 30
 # 只決定要不要多查「為何變動」與抓全文，不影響決策層的 event_gap_threshold_pct。
 # 台股單日漲跌幅上限 10%，共用的 12% 碰不到。7% 取自 3481 −7.5% 這個實例，沒有回測。
 NEWS_EVENT_THRESHOLD_PCT_BY_MARKET = {"tw": 7.0}
+
+
+_RELEASE_TIME_RE = re.compile(r"(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?!\d)")
 
 
 def _parse_day(value):
@@ -35,12 +39,17 @@ def _latest_sec_earnings_day(fundamental_context, today):
     return max(days) if days else None
 
 
-def _calendar_earnings_day(code, today):
-    """行事曆的下一次財報／法說若就在今天，當成已發生的財報日。"""
+def _calendar_published_day(code, now):
+    """行事曆只有已確認且標了時間（法說會）、該時間已過，才算已發布；預定或推估都不算。"""
     from src.services.calendar_service import earnings_evidence
 
-    day = _parse_day((earnings_evidence(code) or {}).get("date"))
-    return day if day == today else None
+    row = earnings_evidence(code) or {}
+    if _parse_day(row.get("date")) != now.date() or row.get("status") != "confirmed":
+        return None
+    match = _RELEASE_TIME_RE.search(str(row.get("detail") or ""))
+    if match is None or (now.hour, now.minute) < (int(match[1]), int(match[2])):
+        return None
+    return now.date()
 
 
 def resolve_news_event_signals(
@@ -51,7 +60,7 @@ def resolve_news_event_signals(
     signals = {"earnings_date": None, "price_event": None}
     try:
         earliest = today - timedelta(days=EARNINGS_ANCHOR_MAX_AGE_DAYS)
-        day = _latest_sec_earnings_day(fundamental_context, today) or _calendar_earnings_day(code, today)
+        day = _latest_sec_earnings_day(fundamental_context, today) or _calendar_published_day(code, now)
         if day is not None and day >= earliest:
             signals["earnings_date"] = day
     except Exception as exc:
@@ -61,10 +70,12 @@ def resolve_news_event_signals(
         # 用掛鐘日會在休市日多算一個空場次，也會把週一盤前的週五報價標成週一事件。
         session = _parse_day(getattr(realtime_quote, "provider_timestamp", None))
         session = session or latest_opened_session(market, now)
-        context = {"event_gap_daily_bars": daily_bars or [],
-                   "today": {"date": session.isoformat()} if session else {}}
         change = getattr(realtime_quote, "change_pct", None)
-        if change is not None:
+        context = {"event_gap_daily_bars": daily_bars or []}
+        if session is not None:
+            # 即時幅度掛在報價所屬場次：當天日線已入庫時由日線覆蓋，未入庫時才不會漏掉今天。
+            context["today"] = {"date": session.isoformat(), "pct_chg": change}
+        elif change is not None:
             context["realtime"] = {"change_pct": change}
         thresholds = SimpleNamespace(
             event_gap_threshold_pct=NEWS_EVENT_THRESHOLD_PCT_BY_MARKET.get(

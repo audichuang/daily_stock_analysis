@@ -30,7 +30,7 @@
 | 處置／注意股、未來 10 交易日法說會與除權息 | `market_data/risk_flags.py`、`events.py` 即時抓官方 | 是（`TW_LIVE_EVENTS_ENABLED`） | 回應日期不新鮮就寫「未確認」，不寫「否」 |
 | 賣方共識（EPS 修正方向、分歧、評級、目標價） | yfinance（`data_provider/analyst_consensus.py`） | 是（`ANALYST_CONSENSUS_ENABLED`，預設關） | 目標價系統性偏多；明寫不得據此提高信心或放寬門檻；共識隨每份報告落在 `context_snapshot.fundamental_context.consensus`（as_of＝報告時間），研究直接從那裡讀 |
 | 每日大盤脈絡（紅綠燈、複盤摘要、風險標籤） | 當日大盤複盤 | 是 | 黃燈不再自動標 conservative（§3） |
-| 新聞 | FinMind 台股新聞（Doppler 注入）→ 通用搜尋 | 是 | 18:00 每日報告的情報搜尋在台股也先走 FinMind；任一維度的來源失敗會換下一個來源；`make analyze` 不含 Doppler，會退回通用搜尋。`earnings`、`risk_check`、`announcements` 優先 DeepSeek、不走 Tavily news，一般個股公告先查 MOPS 重大訊息。窗口與事件查詢見 `src/search_service.py::search_comprehensive_intel` |
+| 新聞 | FinMind 台股新聞（Doppler 注入）→ 通用搜尋 | 是 | 18:00 每日報告的情報搜尋在台股也先走 FinMind；任一維度的來源失敗會換下一個來源；`make analyze` 不含 Doppler，會退回通用搜尋。`earnings`、`risk_check`、`announcements` 優先 DeepSeek、不走 Tavily news，一般個股公告先查 MOPS 重大訊息。窗口與事件查詢見 `src/search_service.py::search_comprehensive_intel`；各面向實際日期上下界經 `news_date_windows` 傳到 prompt 的時間規則，沒有上下界的路徑才沿用近 N 日 |
 | 財報（營收、淨利、現金流、ROE） | yfinance 季報 | 是 | 逐欄標 `quarter`／`ttm` 口徑 |
 | 估值歷史百分位、集保大戶、券商分點、SMC 結構、合約負債 | #39：`market.valuation`、`market.holding_dist`、`tw_broker_branch.py`、`smc_structure.py` | **否**（只在個股檔案：邏輯在 `src/services/tw_stock_dossier.py`，`scripts/tw_stock_dossier.py` 與 Web `/stocks` 都用它） | 集保與上櫃回補 2026-10-22 起跑 |
 | A 股主力資金流、龍虎榜 | — | 台股固定 `not_supported` | 這是零買進的主因之一（§4） |
