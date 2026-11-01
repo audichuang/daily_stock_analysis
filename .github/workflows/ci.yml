@@ -50,7 +50,9 @@ jobs:
             backend_contract_assets:
               # These docs and fixtures are executable contracts consumed by
               # offline backend tests, so Markdown/docs-only changes still run them.
-              - '{THIRD_PARTY_NOTICES.md,docs/CHANGELOG.md,docs/INDEX.md,docs/INDEX_EN.md,docs/DEPLOY.md,docs/DEPLOY_EN.md,docs/alerts.md,docs/analysis-context-pack.md,docs/decision-signals.md,docs/full-guide.md,docs/full-guide_EN.md,docs/notifications.md,docs/architecture/**,docs/docker/zeabur-deployment.md,tests/fixtures/**}'
+              # fork：清單尾端追加本 fork 測試會讀的 md（PR 範本、兩份台股文件、兩個 skill）；
+              # 漏列會被 tests/test_fork_infra_docs_contracts.py 的掃描測試擋下。
+              - '{THIRD_PARTY_NOTICES.md,docs/CHANGELOG.md,docs/INDEX.md,docs/INDEX_EN.md,docs/DEPLOY.md,docs/DEPLOY_EN.md,docs/alerts.md,docs/analysis-context-pack.md,docs/decision-signals.md,docs/full-guide.md,docs/full-guide_EN.md,docs/notifications.md,docs/architecture/**,docs/docker/zeabur-deployment.md,tests/fixtures/**,.github/PULL_REQUEST_TEMPLATE.md,docs/realtime-board.md,docs/tw-level-alerts.md,.claude/skills/dsa-upstream-sync/SKILL.md,.claude/skills/tw-morning-call/SKILL.md}'
             backend_web_contract:
               # Public assets are shared runtime inputs: Python loaders and
               # packaged deployments may consume them outside the Web app.
