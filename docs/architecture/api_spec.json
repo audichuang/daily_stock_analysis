@@ -274,63 +274,164 @@
           "History"
         ],
         "summary": "获取历史分析列表",
-        "description": "分页获取历史分析记录摘要，支持按股票代码、报告类型和日期范围筛选",
-        "operationId": "getHistoryList",
+        "description": "分页获取历史分析记录摘要，支持按股票代码和日期范围筛选",
+        "operationId": "get_history_list_api_v1_history_get",
         "parameters": [
           {
             "name": "stock_code",
             "in": "query",
-            "description": "股票代码筛选",
+            "required": false,
             "schema": {
-              "type": "string"
-            }
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "股票代码筛选",
+              "title": "Stock Code"
+            },
+            "description": "股票代码筛选"
           },
           {
             "name": "report_type",
             "in": "query",
-            "description": "报告类型筛选（如 market_review）；不传则返回所有类型历史。",
+            "required": false,
             "schema": {
-              "type": "string"
-            }
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "报告类型筛选，如 market_review",
+              "title": "Report Type"
+            },
+            "description": "报告类型筛选，如 market_review"
           },
           {
             "name": "start_date",
             "in": "query",
-            "description": "开始日期 (YYYY-MM-DD)",
+            "required": false,
             "schema": {
-              "type": "string",
-              "format": "date"
-            }
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "开始日期 (YYYY-MM-DD)",
+              "title": "Start Date"
+            },
+            "description": "开始日期 (YYYY-MM-DD)"
           },
           {
             "name": "end_date",
             "in": "query",
-            "description": "结束日期 (YYYY-MM-DD)",
+            "required": false,
             "schema": {
-              "type": "string",
-              "format": "date"
-            }
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "结束日期 (YYYY-MM-DD)",
+              "title": "End Date"
+            },
+            "description": "结束日期 (YYYY-MM-DD)"
           },
           {
             "name": "page",
             "in": "query",
-            "description": "页码（从 1 开始）",
+            "required": false,
             "schema": {
               "type": "integer",
+              "minimum": 1,
+              "description": "页码（从 1 开始）",
               "default": 1,
-              "minimum": 1
-            }
+              "title": "Page"
+            },
+            "description": "页码（从 1 开始）"
           },
           {
             "name": "limit",
             "in": "query",
-            "description": "每页数量",
+            "required": false,
             "schema": {
               "type": "integer",
-              "default": 20,
+              "maximum": 100,
               "minimum": 1,
-              "maximum": 100
-            }
+              "description": "每页数量",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "每页数量"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "代號或名稱關鍵字",
+              "title": "Q"
+            },
+            "description": "代號或名稱關鍵字"
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 8
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "市場（tw/us/hk/cn/jp/kr）；大盤複盤不屬於任何市場",
+              "title": "Market"
+            },
+            "description": "市場（tw/us/hk/cn/jp/kr）；大盤複盤不屬於任何市場"
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 16
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "顯示動作枚舉（buy/add/hold/reduce/sell/watch/avoid/alert）",
+              "title": "Action"
+            },
+            "description": "顯示動作枚舉（buy/add/hold/reduce/sell/watch/avoid/alert）"
           }
         ],
         "responses": {
@@ -340,6 +441,86 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HistoryListResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "History"
+        ],
+        "summary": "删除历史分析记录",
+        "description": "按历史记录主键 ID 批量删除分析历史",
+        "operationId": "delete_history_records_api_v1_history_delete",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteHistoryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "删除成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteHistoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1719,6 +1900,55 @@
               "title": "Limit"
             },
             "description": "Recent call records to include"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Call records to skip",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Call records to skip"
+          },
+          {
+            "name": "call_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 32
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only list this call type",
+              "title": "Call Type"
+            },
+            "description": "Only list this call type"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "newest",
+                "oldest",
+                "tokens"
+              ],
+              "type": "string",
+              "description": "'newest' | 'oldest' | 'tokens'",
+              "default": "newest",
+              "title": "Sort"
+            },
+            "description": "'newest' | 'oldest' | 'tokens'"
           }
         ],
         "responses": {
@@ -2674,16 +2904,16 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "maxLength": 8,
                   "minLength": 3,
+                  "maxLength": 8,
                   "pattern": "^[A-Za-z]+$"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "title": "Display Currency",
-              "description": "追加 *_display 換算金額的幣別（如 TWD）；權重與回撤不變"
+              "description": "追加 *_display 換算金額的幣別（如 TWD）；權重與回撤不變",
+              "title": "Display Currency"
             },
             "description": "追加 *_display 換算金額的幣別（如 TWD）；權重與回撤不變"
           }
@@ -3741,8 +3971,8 @@
                   "type": "null"
                 }
               ],
-              "title": "Market",
-              "description": "Optional market filter: cn/hk/us/jp/kr/tw"
+              "description": "Optional market filter: cn/hk/us/jp/kr/tw",
+              "title": "Market"
             },
             "description": "Optional market filter: cn/hk/us/jp/kr/tw"
           },
@@ -3759,9 +3989,9 @@
                   "type": "null"
                 }
               ],
-              "title": "Status",
               "description": "Status filter, default active",
-              "default": "active"
+              "default": "active",
+              "title": "Status"
             },
             "description": "Status filter, default active"
           },
@@ -3790,8 +4020,8 @@
                   "type": "null"
                 }
               ],
-              "title": "Account Id",
-              "description": "Optional active portfolio account id"
+              "description": "Optional active portfolio account id",
+              "title": "Account Id"
             },
             "description": "Optional active portfolio account id"
           }
@@ -3843,6 +4073,876 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/analysis/market-review/default-region": {
+      "get": {
+        "tags": [
+          "Analysis"
+        ],
+        "summary": "取得大盤複盤的預設市場",
+        "description": "唯讀。回傳不帶 region 觸發複盤時實際會跑的市場，順序與 MARKET_REVIEW_REGION 相同。",
+        "operationId": "get_market_review_default_region_api_v1_analysis_market_review_default_region_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketReviewDefaultRegion"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backtest/results": {
+      "get": {
+        "tags": [
+          "Backtest"
+        ],
+        "summary": "获取回测结果",
+        "description": "分页获取回测结果，支持按股票代码过滤",
+        "operationId": "get_backtest_results_api_v1_backtest_results_get",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "股票代码筛选",
+              "title": "Code"
+            },
+            "description": "股票代码筛选"
+          },
+          {
+            "name": "eval_window_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 120,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "评估窗口过滤",
+              "title": "Eval Window Days"
+            },
+            "description": "评估窗口过滤"
+          },
+          {
+            "name": "analysis_date_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "分析日期起始（含）",
+              "title": "Analysis Date From"
+            },
+            "description": "分析日期起始（含）"
+          },
+          {
+            "name": "analysis_date_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "分析日期结束（含）",
+              "title": "Analysis Date To"
+            },
+            "description": "分析日期结束（含）"
+          },
+          {
+            "name": "analysis_phase",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "premarket",
+                    "intraday",
+                    "postmarket",
+                    "unknown"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "分析阶段过滤：premarket/intraday/postmarket/unknown",
+              "title": "Analysis Phase"
+            },
+            "description": "分析阶段过滤：premarket/intraday/postmarket/unknown"
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "页码",
+              "default": 1,
+              "title": "Page"
+            },
+            "description": "页码"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "每页数量",
+              "default": 20,
+              "title": "Limit"
+            },
+            "description": "每页数量"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "completed",
+                    "pending",
+                    "insufficient_data",
+                    "error",
+                    "unable"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "分流：已完成／未到期／資料不足等",
+              "title": "Status"
+            },
+            "description": "分流：已完成／未到期／資料不足等"
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "tw",
+                    "us",
+                    "cn",
+                    "hk"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "市場",
+              "title": "Market"
+            },
+            "description": "市場"
+          },
+          {
+            "name": "advice",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "buy",
+                    "add",
+                    "hold",
+                    "reduce",
+                    "sell",
+                    "watch",
+                    "avoid",
+                    "alert"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "結構化動作（action 枚舉）",
+              "title": "Advice"
+            },
+            "description": "結構化動作（action 枚舉）"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "completed_first",
+                "date_desc",
+                "date_asc",
+                "return_desc",
+                "return_asc"
+              ],
+              "type": "string",
+              "description": "排序，預設已完成優先",
+              "default": "completed_first",
+              "title": "Sort"
+            },
+            "description": "排序，預設已完成優先"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "回测结果列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestResultsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/backtest/series": {
+      "get": {
+        "tags": [
+          "Backtest"
+        ],
+        "summary": "取得逐筆累計報酬與月勝率",
+        "description": "只含已完成的回測；累計是逐筆相加，不是資金曲線",
+        "operationId": "get_backtest_series_api_v1_backtest_series_get",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 32
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "股票代碼篩選",
+              "title": "Code"
+            },
+            "description": "股票代碼篩選"
+          },
+          {
+            "name": "eval_window_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 120,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "評估窗口過濾",
+              "title": "Eval Window Days"
+            },
+            "description": "評估窗口過濾"
+          },
+          {
+            "name": "analysis_date_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "分析日期起始（含）",
+              "title": "Analysis Date From"
+            },
+            "description": "分析日期起始（含）"
+          },
+          {
+            "name": "analysis_date_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "分析日期結束（含）",
+              "title": "Analysis Date To"
+            },
+            "description": "分析日期結束（含）"
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "tw",
+                    "us",
+                    "cn",
+                    "hk"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "市場",
+              "title": "Market"
+            },
+            "description": "市場"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "逐筆累計與月勝率",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacktestSeriesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求参数错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/funds/{fund_id}/nav": {
+      "get": {
+        "tags": [
+          "Funds"
+        ],
+        "summary": "淨值歷史",
+        "operationId": "get_fund_nav_api_v1_funds__fund_id__nav_get",
+        "parameters": [
+          {
+            "name": "fund_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16,
+              "pattern": "^[0-9A-Za-z]+$",
+              "title": "Fund Id"
+            }
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 10980,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Days"
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "w1",
+                    "m1",
+                    "m3",
+                    "m6",
+                    "y1",
+                    "y3",
+                    "y5",
+                    "ytd"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "與報酬卡同一個基準點起算的區間；給了就忽略 days",
+              "title": "Period"
+            },
+            "description": "與報酬卡同一個基準點起算的區間；給了就忽略 days"
+          },
+          {
+            "name": "benchmark",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "taiex",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "附帶同區間的比較指數收盤",
+              "title": "Benchmark"
+            },
+            "description": "附帶同區間的比較指數收盤"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FundNavHistoryResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/portfolio/snapshot": {
+      "get": {
+        "tags": [
+          "Portfolio"
+        ],
+        "summary": "Get portfolio snapshot",
+        "operationId": "get_snapshot_api_v1_portfolio_snapshot_get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional account id, default returns all accounts",
+              "title": "Account Id"
+            },
+            "description": "Optional account id, default returns all accounts"
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Snapshot date, default today",
+              "title": "As Of"
+            },
+            "description": "Snapshot date, default today"
+          },
+          {
+            "name": "cost_method",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Cost method: fifo or avg",
+              "default": "fifo",
+              "title": "Cost Method"
+            },
+            "description": "Cost method: fifo or avg"
+          },
+          {
+            "name": "include_realtime",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Whether today's snapshot should try realtime quotes before historical close fallback",
+              "default": true,
+              "title": "Include Realtime"
+            },
+            "description": "Whether today's snapshot should try realtime quotes before historical close fallback"
+          },
+          {
+            "name": "display_currency",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 3,
+                  "maxLength": 8,
+                  "pattern": "^[A-Za-z]+$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "追加 consolidated_* 換算欄位的幣別（如 TWD）；不影響既有 CNY 彙總",
+              "title": "Display Currency"
+            },
+            "description": "追加 consolidated_* 換算欄位的幣別（如 TWD）；不影響既有 CNY 彙總"
+          },
+          {
+            "name": "include_funds",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "是否附帶帳本外的基金分項",
+              "default": false,
+              "title": "Include Funds"
+            },
+            "description": "是否附帶帳本外的基金分項"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioSnapshotResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/screening/hotspots": {
+      "get": {
+        "tags": [
+          "Screening"
+        ],
+        "summary": "Screening Hotspots",
+        "operationId": "screening_hotspots_api_v1_screening_hotspots_get",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 32,
+              "default": "",
+              "title": "Provider"
+            }
+          },
+          {
+            "name": "top",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 12,
+              "title": "Top"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Refresh"
+            }
+          },
+          {
+            "name": "include_details",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Details"
+            }
+          },
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 16,
+              "description": "非 cn 市場沒有熱點來源，回空",
+              "default": "",
+              "title": "Market"
+            },
+            "description": "非 cn 市場沒有熱點來源，回空"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Screening Hotspots Api V1 Screening Hotspots Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/screening/strategies": {
+      "get": {
+        "tags": [
+          "Screening"
+        ],
+        "summary": "Screening Strategies",
+        "operationId": "screening_strategies_api_v1_screening_strategies_get",
+        "parameters": [
+          {
+            "name": "market",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 16,
+              "description": "只回支援此市場的策略，並附該市場條件",
+              "default": "",
+              "title": "Market"
+            },
+            "description": "只回支援此市場的策略，並附該市場條件"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Screening Strategies Api V1 Screening Strategies Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -4278,53 +5378,161 @@
         ]
       },
       "HistoryListResponse": {
-        "type": "object",
         "properties": {
           "total": {
             "type": "integer",
+            "title": "Total",
             "description": "总记录数"
           },
           "page": {
-            "type": "integer"
+            "type": "integer",
+            "title": "Page",
+            "description": "当前页码"
           },
           "limit": {
-            "type": "integer"
+            "type": "integer",
+            "title": "Limit",
+            "description": "每页数量"
           },
           "items": {
-            "type": "array",
             "items": {
               "$ref": "#/components/schemas/HistoryItem"
-            }
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "记录列表"
+          },
+          "stock_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Total",
+            "description": "相同篩選條件下的個股報告數"
+          },
+          "market_review_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Review Total",
+            "description": "相同篩選條件下的大盤複盤數"
           }
         },
+        "type": "object",
         "required": [
           "total",
           "page",
-          "limit",
-          "items"
-        ]
+          "limit"
+        ],
+        "title": "HistoryListResponse",
+        "description": "历史记录列表响应",
+        "example": {
+          "items": [],
+          "limit": 20,
+          "page": 1,
+          "total": 100
+        }
       },
       "NewsIntelItem": {
-        "type": "object",
-        "description": "新闻情报条目",
         "properties": {
           "title": {
             "type": "string",
+            "title": "Title",
             "description": "新闻标题"
           },
           "snippet": {
             "type": "string",
-            "description": "新闻摘要（最多50字）"
+            "title": "Snippet",
+            "description": "新闻摘要（最多200字）",
+            "default": ""
           },
           "url": {
             "type": "string",
+            "title": "Url",
             "description": "新闻链接"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "原始來源名稱"
+          },
+          "published_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Date",
+            "description": "來源提供的發布日期；未知為 null"
+          },
+          "dimension": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimension",
+            "description": "搜尋面向；用於區分新聞、公告與參考資料"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At",
+            "description": "來源提供的發布時間（ISO）；未知為 null，不以抓取時間代替"
+          },
+          "key_point": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Point",
+            "description": "繁中一句重點，取自清理後的摘要；外文來源為 null"
           }
         },
+        "type": "object",
         "required": [
           "title",
           "url"
-        ]
+        ],
+        "title": "NewsIntelItem",
+        "description": "新闻情报条目",
+        "example": {
+          "snippet": "公司公告显示，季度营收同比增长 20%...",
+          "title": "公司发布业绩快报，营收同比增长 20%",
+          "url": "https://example.com/news/123"
+        }
       },
       "NewsIntelResponse": {
         "type": "object",
@@ -4348,63 +5556,276 @@
         ]
       },
       "HistoryItem": {
-        "type": "object",
-        "description": "历史记录摘要（列表展示用）",
         "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id",
+            "description": "分析历史记录主键 ID"
+          },
           "query_id": {
-            "type": "string"
+            "type": "string",
+            "title": "Query Id",
+            "description": "分析记录关联 query_id（批量分析时重复）"
           },
           "stock_code": {
-            "type": "string"
+            "type": "string",
+            "title": "Stock Code",
+            "description": "股票代码"
           },
           "stock_name": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Name",
+            "description": "股票名称"
           },
           "report_type": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Type",
+            "description": "报告类型"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region",
+            "description": "大盘复盘实际执行的 canonical 市场范围"
+          },
+          "trend_prediction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trend Prediction",
+            "description": "趋势预测"
+          },
+          "analysis_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Summary",
+            "description": "分析摘要"
           },
           "sentiment_score": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 100
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentiment Score",
+            "description": "情绪评分（历史数据可能超出 0-100 范围，读取时不做约束）"
           },
           "operation_advice": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Advice",
+            "description": "操作建议"
           },
           "action": {
-            "type": "string",
-            "description": "结构化建议动作 taxonomy",
-            "nullable": true,
-            "enum": [
-              "buy",
-              "add",
-              "hold",
-              "reduce",
-              "sell",
-              "watch",
-              "avoid",
-              "alert"
-            ]
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "buy",
+                  "add",
+                  "hold",
+                  "reduce",
+                  "sell",
+                  "watch",
+                  "avoid",
+                  "alert"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action",
+            "description": "结构化建议动作 taxonomy"
           },
           "action_label": {
-            "type": "string",
-            "description": "建议动作展示标签",
-            "nullable": true
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Label",
+            "description": "建议动作展示标签"
+          },
+          "current_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Price",
+            "description": "分析时股价"
+          },
+          "change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Pct",
+            "description": "分析时涨跌幅(%)"
+          },
+          "volume_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume Ratio",
+            "description": "分析时量比"
+          },
+          "turnover_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turnover Rate",
+            "description": "分析时换手率"
           },
           "model_used": {
-            "type": "string",
-            "description": "历史记录中展示的模型快照，仅用于展示与排障，不影响 provider/model/base URL 运行时路由"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Used",
+            "description": "分析历史记录中的模型快照，仅用于展示历史元数据；不参与模型配置或运行时路由决策"
+          },
+          "market_phase_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MarketPhaseSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "本次分析市场阶段低敏摘要"
           },
           "created_at": {
-            "type": "string",
-            "format": "date-time"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At",
+            "description": "创建时间"
+          },
+          "asset_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "stock",
+                  "index"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Type",
+            "description": "后端权威资产类型（stock/index）；由持久化代码经 parser 生成。旧客户端与 market review 可缺省。"
+          },
+          "one_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "One Sentence",
+            "description": "一句話結論；大盤複盤沒有此欄，為 null"
           }
         },
+        "type": "object",
         "required": [
           "query_id",
-          "stock_code",
-          "created_at"
-        ]
+          "stock_code"
+        ],
+        "title": "HistoryItem",
+        "description": "历史记录摘要（列表展示用）",
+        "example": {
+          "created_at": "2024-01-01T12:00:00",
+          "id": 1234,
+          "operation_advice": "持有",
+          "query_id": "abc123",
+          "report_type": "detailed",
+          "sentiment_score": 75,
+          "stock_code": "600519",
+          "stock_name": "贵州茅台"
+        }
       },
       "AnalysisReport": {
         "type": "object",
@@ -4642,6 +6063,32 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Metadata"
+          },
+          "event_gap": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchEventGap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_status": {
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "no_data",
+                "fetch_failed",
+                "timeout",
+                "not_configured",
+                "not_supported"
+              ]
+            },
+            "type": "object",
+            "title": "Source Status",
+            "description": "各補充來源的取得結果；舊報告為空"
           }
         },
         "type": "object",
@@ -4799,6 +6246,119 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Metadata"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group",
+            "description": "畫面分組鍵"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At",
+            "description": "資料本身的觀測日"
+          },
+          "fetched_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fetched At",
+            "description": "抓取時間，不代表觀測日"
+          },
+          "window_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Days",
+            "description": "統計窗口天數"
+          },
+          "complete": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Complete",
+            "description": "false 表示只涵蓋部分資料"
+          },
+          "counts_toward_score": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counts Toward Score",
+            "description": "是否計入評分；純資訊為 false"
+          },
+          "facts": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Facts",
+            "description": "結構化數值；鍵名不含「數字接字母」"
+          },
+          "excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Excerpt",
+            "description": "原文摘錄"
+          },
+          "series": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series",
+            "description": "逐期資料"
           }
         },
         "type": "object",
@@ -4893,6 +6453,33 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Metadata"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "below",
+                  "above"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction",
+            "description": "價格往哪個方向穿越才成立"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "triggered",
+              "review"
+            ],
+            "title": "Status",
+            "description": "triggered 只由分析當下的事實設定；其餘為 pending（等價格）或 review（等人判斷）",
+            "default": "review"
           }
         },
         "type": "object",
@@ -5101,6 +6688,182 @@
             },
             "type": "array",
             "title": "Risks"
+          },
+          "one_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "One Sentence"
+          },
+          "time_sensitivity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Sensitivity"
+          },
+          "position_advice": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position Advice"
+          },
+          "confidence_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Level"
+          },
+          "confidence_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Reason"
+          },
+          "guardrail_applied": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guardrail Applied"
+          },
+          "guardrail_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guardrail Reason"
+          },
+          "strongest_bullish_signal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strongest Bullish Signal"
+          },
+          "strongest_bearish_signal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strongest Bearish Signal"
+          },
+          "watch_conditions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watch Conditions"
+          },
+          "entry_conditions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Conditions"
+          },
+          "exit_triggers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Triggers"
+          },
+          "pending_events": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Events"
+          },
+          "next_check_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Check Time"
           }
         },
         "type": "object",
@@ -5108,55 +6871,342 @@
         "description": "Structured investment thesis extracted from a report."
       },
       "StockQuote": {
-        "type": "object",
-        "description": "股票实时行情",
         "properties": {
           "stock_code": {
-            "type": "string"
+            "type": "string",
+            "title": "Stock Code",
+            "description": "股票代码"
           },
           "stock_name": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Name",
+            "description": "股票名称"
           },
           "current_price": {
-            "type": "number"
+            "type": "number",
+            "title": "Current Price",
+            "description": "当前价格"
           },
           "change": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change",
             "description": "涨跌额"
           },
           "change_percent": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Percent",
             "description": "涨跌幅 (%)"
           },
           "open": {
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open",
+            "description": "开盘价"
           },
           "high": {
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "High",
+            "description": "最高价"
           },
           "low": {
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Low",
+            "description": "最低价"
           },
           "prev_close": {
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prev Close",
+            "description": "昨收价"
           },
           "volume": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume",
             "description": "成交量（股）"
           },
           "amount": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount",
             "description": "成交额（元）"
           },
+          "volume_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume Ratio",
+            "description": "量比（台股开盘初段约 ~10:30 前偏低失真）"
+          },
+          "amplitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amplitude",
+            "description": "振幅 (%)：(最高-最低)/昨收"
+          },
+          "average_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Average Price",
+            "description": "当日成交均价(VWAP)：站上偏多/跌破偏空的多空分界"
+          },
+          "limit_up": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Up",
+            "description": "涨停价（±10%，开盘即定全时段可靠）"
+          },
+          "limit_down": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Down",
+            "description": "跌停价"
+          },
+          "best_bid": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Bid",
+            "description": "最佳一档委买价（top-of-book，非五档）"
+          },
+          "best_bid_volume": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Bid Volume",
+            "description": "最佳一档委买量（张/单位）"
+          },
+          "best_ask": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Ask",
+            "description": "最佳一档委卖价"
+          },
+          "best_ask_volume": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Best Ask Volume",
+            "description": "最佳一档委卖量"
+          },
+          "day_trade": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Trade",
+            "description": "现股当沖资格：Yes 可当沖 / OnlyBuy 仅可先买 / No 不可当沖"
+          },
+          "last_tick_type": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Tick Type",
+            "description": "最后一笔成交方向(0中性/1外盘主买/2内盘主卖)，非累计内外盘比"
+          },
           "update_time": {
-            "type": "string",
-            "format": "date-time"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Update Time",
+            "description": "更新时间"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "行情来源 (shioaji/fallback/efinance/akshare...)"
+          },
+          "source_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Code",
+            "description": "穩定的來源代碼（shioaji／yfinance…）；source 字串維持舊值"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of",
+            "description": "行情对应时间 (provider_timestamp 优先, 否则 fetched_at), ISO8601"
+          },
+          "is_stale": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Stale",
+            "description": "是否延迟/陈旧 (台股 yfinance 约延迟 15-20 分钟)"
           }
         },
+        "type": "object",
         "required": [
           "stock_code",
           "current_price"
-        ]
+        ],
+        "title": "StockQuote",
+        "description": "股票实时行情",
+        "example": {
+          "amount": 18000000000,
+          "as_of": "2024-01-01T15:00:00+08:00",
+          "change": 15.0,
+          "change_percent": 0.84,
+          "current_price": 1800.0,
+          "high": 1810.0,
+          "is_stale": false,
+          "low": 1780.0,
+          "open": 1785.0,
+          "prev_close": 1785.0,
+          "source": "shioaji",
+          "stock_code": "600519",
+          "stock_name": "贵州茅台",
+          "update_time": "2024-01-01T15:00:00",
+          "volume": 10000000
+        }
       },
       "SystemConfigFieldSchema": {
         "type": "object",
@@ -6947,12 +8997,49 @@
             "type": "array",
             "title": "By Model"
           },
+          "by_day": {
+            "items": {
+              "$ref": "#/components/schemas/UsageDayBreakdown"
+            },
+            "type": "array",
+            "title": "By Day"
+          },
+          "by_channel": {
+            "items": {
+              "$ref": "#/components/schemas/UsageChannelBreakdown"
+            },
+            "type": "array",
+            "title": "By Channel"
+          },
+          "cache": {
+            "$ref": "#/components/schemas/UsageCacheSummary"
+          },
+          "cost": {
+            "$ref": "#/components/schemas/UsageCostSummary"
+          },
+          "previous": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UsagePreviousPeriod"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Same span one period earlier; null for 'all'"
+          },
           "recent_calls": {
             "items": {
               "$ref": "#/components/schemas/UsageCallRecord"
             },
             "type": "array",
             "title": "Recent Calls"
+          },
+          "recent_total": {
+            "type": "integer",
+            "title": "Recent Total",
+            "description": "Records matching the list filter, for pagination",
+            "default": 0
           }
         },
         "type": "object",
@@ -7009,6 +9096,42 @@
           "total_tokens": {
             "type": "integer",
             "title": "Total Tokens"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel",
+            "description": "LLM channel, transport first, then provider"
+          },
+          "billing": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing",
+            "description": "'metered' | 'subscription'"
+          },
+          "cache_read_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Read Tokens",
+            "description": "null when the provider did not report cache usage"
           }
         },
         "type": "object",
@@ -7143,6 +9266,37 @@
             },
             "type": "array",
             "title": "By Model"
+          },
+          "by_day": {
+            "items": {
+              "$ref": "#/components/schemas/UsageDayBreakdown"
+            },
+            "type": "array",
+            "title": "By Day"
+          },
+          "by_channel": {
+            "items": {
+              "$ref": "#/components/schemas/UsageChannelBreakdown"
+            },
+            "type": "array",
+            "title": "By Channel"
+          },
+          "cache": {
+            "$ref": "#/components/schemas/UsageCacheSummary"
+          },
+          "cost": {
+            "$ref": "#/components/schemas/UsageCostSummary"
+          },
+          "previous": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UsagePreviousPeriod"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Same span one period earlier; null for 'all'"
           }
         },
         "type": "object",
@@ -9584,6 +11738,72 @@
             "type": "array",
             "title": "Warnings",
             "description": "Stable warning codes"
+          },
+          "data_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Date",
+            "description": "Latest data date actually stored (ISO date)"
+          },
+          "data_market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Market",
+            "description": "Market data_date refers to"
+          },
+          "expected_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Date",
+            "description": "Latest session that should be present (ISO date)"
+          },
+          "is_current": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Current",
+            "description": "data_date covers expected_date; null when unknown"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "Stable code explaining why the dataset is off"
+          },
+          "fallback_active": {
+            "type": "boolean",
+            "title": "Fallback Active",
+            "description": "An earlier priority source was skipped",
+            "default": false
           }
         },
         "type": "object",
@@ -10346,6 +12566,41 @@
           },
           "evidence_quality": {
             "$ref": "#/components/schemas/StockProfileEvidenceQuality"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StockProfilePosition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "chips": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StockProfileChips"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "news": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/StockProfileNewsItem"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "News",
+            "description": "最新一份報告讀過的新聞；沒有報告或查詢失敗為 null"
           }
         },
         "type": "object",
@@ -11728,6 +13983,3939 @@
           "source"
         ],
         "title": "PortfolioFxRateUsed"
+      },
+      "BacktestMonthlyWinRate": {
+        "properties": {
+          "month": {
+            "type": "string",
+            "title": "Month",
+            "description": "YYYY-MM"
+          },
+          "completed": {
+            "type": "integer",
+            "title": "Completed"
+          },
+          "win": {
+            "type": "integer",
+            "title": "Win"
+          },
+          "loss": {
+            "type": "integer",
+            "title": "Loss"
+          },
+          "neutral": {
+            "type": "integer",
+            "title": "Neutral"
+          },
+          "win_rate_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Win Rate Pct",
+            "description": "勝／(勝＋負)；沒有勝負時為 null"
+          }
+        },
+        "type": "object",
+        "required": [
+          "month",
+          "completed",
+          "win",
+          "loss",
+          "neutral"
+        ],
+        "title": "BacktestMonthlyWinRate"
+      },
+      "BacktestResultItem": {
+        "properties": {
+          "analysis_history_id": {
+            "type": "integer",
+            "title": "Analysis History Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "stock_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Name"
+          },
+          "analysis_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Date"
+          },
+          "eval_window_days": {
+            "type": "integer",
+            "title": "Eval Window Days"
+          },
+          "engine_version": {
+            "type": "string",
+            "title": "Engine Version"
+          },
+          "eval_status": {
+            "type": "string",
+            "title": "Eval Status"
+          },
+          "evaluated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evaluated At"
+          },
+          "operation_advice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Advice"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "buy",
+                  "add",
+                  "hold",
+                  "reduce",
+                  "sell",
+                  "watch",
+                  "avoid",
+                  "alert"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "action_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Label"
+          },
+          "trend_prediction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trend Prediction"
+          },
+          "market_phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Phase"
+          },
+          "market_phase_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MarketPhaseSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "position_recommendation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position Recommendation"
+          },
+          "start_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Price"
+          },
+          "end_close": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Close"
+          },
+          "max_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max High"
+          },
+          "min_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Low"
+          },
+          "stock_return_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Return Pct"
+          },
+          "actual_return_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Return Pct"
+          },
+          "actual_movement": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Movement"
+          },
+          "direction_expected": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction Expected"
+          },
+          "direction_correct": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction Correct"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "stop_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Loss"
+          },
+          "take_profit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Take Profit"
+          },
+          "hit_stop_loss": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hit Stop Loss"
+          },
+          "hit_take_profit": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hit Take Profit"
+          },
+          "first_hit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Hit"
+          },
+          "first_hit_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Hit Date"
+          },
+          "first_hit_trading_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Hit Trading Days"
+          },
+          "simulated_entry_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Simulated Entry Price"
+          },
+          "simulated_exit_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Simulated Exit Price"
+          },
+          "simulated_exit_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Simulated Exit Reason"
+          },
+          "simulated_return_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Simulated Return Pct"
+          },
+          "simulated_net_return_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Simulated Net Return Pct"
+          },
+          "entry_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Date"
+          },
+          "price_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Basis"
+          },
+          "adjustment_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adjustment Reason"
+          },
+          "maturity_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maturity Status",
+            "description": "completed/pending/insufficient_data 等分流狀態"
+          },
+          "matures_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matures By",
+            "description": "未到期時，窗口最晚走完的日期"
+          },
+          "market": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market"
+          }
+        },
+        "type": "object",
+        "required": [
+          "analysis_history_id",
+          "code",
+          "eval_window_days",
+          "engine_version",
+          "eval_status"
+        ],
+        "title": "BacktestResultItem"
+      },
+      "BacktestResultsResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BacktestResultItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "status_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Status Counts",
+            "description": "各分流的筆數，不受 status 參數影響"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "page",
+          "limit"
+        ],
+        "title": "BacktestResultsResponse"
+      },
+      "BacktestSeriesPoint": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "title": "Date"
+          },
+          "analysis_history_id": {
+            "type": "integer",
+            "title": "Analysis History Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "return_pct": {
+            "type": "number",
+            "title": "Return Pct"
+          },
+          "cumulative_return_pct": {
+            "type": "number",
+            "title": "Cumulative Return Pct"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "analysis_history_id",
+          "code",
+          "return_pct",
+          "cumulative_return_pct"
+        ],
+        "title": "BacktestSeriesPoint"
+      },
+      "BacktestSeriesResponse": {
+        "properties": {
+          "chart_title": {
+            "type": "string",
+            "title": "Chart Title",
+            "default": "逐筆累計（非資金曲線）"
+          },
+          "eval_window_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eval Window Days"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "description": "超過上限時只含最新的列，累計值不含更早的部分",
+            "default": false
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/BacktestSeriesPoint"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "monthly": {
+            "items": {
+              "$ref": "#/components/schemas/BacktestMonthlyWinRate"
+            },
+            "type": "array",
+            "title": "Monthly"
+          }
+        },
+        "type": "object",
+        "title": "BacktestSeriesResponse"
+      },
+      "ChatResponse": {
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "title": "Success"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "active_stock_context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActiveStockContextResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_state_version": {
+            "type": "integer",
+            "title": "Session State Version"
+          },
+          "session_generation": {
+            "type": "string",
+            "title": "Session Generation"
+          },
+          "session_state": {
+            "$ref": "#/components/schemas/SessionStateResponse"
+          },
+          "structured": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StructuredAnswerResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "success",
+          "content",
+          "session_id",
+          "active_stock_context",
+          "session_state_version",
+          "session_generation",
+          "session_state"
+        ],
+        "title": "ChatResponse"
+      },
+      "FundBenchmark": {
+        "properties": {
+          "index_id": {
+            "type": "string",
+            "title": "Index Id"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/FundBenchmarkPoint"
+            },
+            "type": "array",
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "index_id"
+        ],
+        "title": "FundBenchmark"
+      },
+      "FundBenchmarkPoint": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "close": {
+            "type": "number",
+            "title": "Close"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "close"
+        ],
+        "title": "FundBenchmarkPoint"
+      },
+      "FundHoldingItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "platform": {
+            "type": "string",
+            "title": "Platform"
+          },
+          "fund_id": {
+            "type": "string",
+            "title": "Fund Id"
+          },
+          "fund_name": {
+            "type": "string",
+            "title": "Fund Name"
+          },
+          "units": {
+            "type": "number",
+            "title": "Units"
+          },
+          "cost_total": {
+            "type": "number",
+            "title": "Cost Total"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date",
+            "title": "As Of"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "nav": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav"
+          },
+          "nav_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Date"
+          },
+          "is_stale": {
+            "type": "boolean",
+            "title": "Is Stale",
+            "default": true
+          },
+          "market_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Value"
+          },
+          "pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl"
+          },
+          "pnl_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl Pct"
+          },
+          "nav_change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Change Pct"
+          },
+          "day_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Pnl"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "platform",
+          "fund_id",
+          "fund_name",
+          "units",
+          "cost_total",
+          "currency",
+          "as_of"
+        ],
+        "title": "FundHoldingItem"
+      },
+      "FundHoldingTotal": {
+        "properties": {
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "cost_total": {
+            "type": "number",
+            "title": "Cost Total"
+          },
+          "market_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Value"
+          },
+          "pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl"
+          },
+          "pnl_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pnl Pct"
+          },
+          "day_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Pnl"
+          }
+        },
+        "type": "object",
+        "required": [
+          "currency",
+          "cost_total"
+        ],
+        "title": "FundHoldingTotal"
+      },
+      "FundNavHistoryResponse": {
+        "properties": {
+          "fund_id": {
+            "type": "string",
+            "title": "Fund Id"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/FundNavPoint"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "benchmark": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FundBenchmark"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "benchmark_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Benchmark Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fund_id"
+        ],
+        "title": "FundNavHistoryResponse"
+      },
+      "FundOverlapItem": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weight"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbol"
+        ],
+        "title": "FundOverlapItem"
+      },
+      "FundTopHolding": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "sector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sector"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weight"
+          },
+          "country": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Country"
+          },
+          "ledger_symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ledger Symbol"
+          }
+        },
+        "type": "object",
+        "title": "FundTopHolding"
+      },
+      "FundTopHoldingsResponse": {
+        "properties": {
+          "fund_id": {
+            "type": "string",
+            "title": "Fund Id"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FundTopHolding"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "as_of_month": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of Month"
+          },
+          "overlap": {
+            "items": {
+              "$ref": "#/components/schemas/FundOverlapItem"
+            },
+            "type": "array",
+            "title": "Overlap"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fund_id"
+        ],
+        "title": "FundTopHoldingsResponse"
+      },
+      "MarketReviewDefaultRegion": {
+        "properties": {
+          "default_region": {
+            "type": "string",
+            "title": "Default Region",
+            "description": "正規化後的市場範圍，例如 tw,us",
+            "examples": [
+              "tw,us"
+            ]
+          },
+          "regions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Regions",
+            "description": "拆開的市場清單，順序與設定相同"
+          }
+        },
+        "type": "object",
+        "required": [
+          "default_region"
+        ],
+        "title": "MarketReviewDefaultRegion",
+        "description": "不帶 region 觸發複盤時實際會跑的市場。"
+      },
+      "PortfolioAccountSnapshot": {
+        "properties": {
+          "account_id": {
+            "type": "integer",
+            "title": "Account Id"
+          },
+          "account_name": {
+            "type": "string",
+            "title": "Account Name"
+          },
+          "owner_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Id"
+          },
+          "broker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broker"
+          },
+          "market": {
+            "type": "string",
+            "title": "Market"
+          },
+          "base_currency": {
+            "type": "string",
+            "title": "Base Currency"
+          },
+          "as_of": {
+            "type": "string",
+            "title": "As Of"
+          },
+          "cost_method": {
+            "type": "string",
+            "title": "Cost Method"
+          },
+          "total_cash": {
+            "type": "number",
+            "title": "Total Cash"
+          },
+          "total_market_value": {
+            "type": "number",
+            "title": "Total Market Value"
+          },
+          "total_market_value_aggregate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Market Value Aggregate",
+            "description": "Account market value converted into the parent snapshot currency"
+          },
+          "total_equity": {
+            "type": "number",
+            "title": "Total Equity"
+          },
+          "realized_pnl": {
+            "type": "number",
+            "title": "Realized Pnl"
+          },
+          "unrealized_pnl": {
+            "type": "number",
+            "title": "Unrealized Pnl"
+          },
+          "fee_total": {
+            "type": "number",
+            "title": "Fee Total"
+          },
+          "tax_total": {
+            "type": "number",
+            "title": "Tax Total"
+          },
+          "fx_stale": {
+            "type": "boolean",
+            "title": "Fx Stale"
+          },
+          "fx_missing": {
+            "type": "boolean",
+            "title": "Fx Missing",
+            "description": "True when some FX pair had no cached rate and amounts were not converted (1:1 fallback)",
+            "default": false
+          },
+          "fx_missing_pairs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fx Missing Pairs",
+            "description": "Missing FX pairs as FROM/TO"
+          },
+          "data_quality": {
+            "type": "string",
+            "title": "Data Quality",
+            "default": "ok"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Limitations"
+          },
+          "positions": {
+            "items": {
+              "$ref": "#/components/schemas/PortfolioPositionItem"
+            },
+            "type": "array",
+            "title": "Positions"
+          },
+          "day_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Pnl",
+            "description": "今日損益（帳戶幣別）；有一檔算不出就是 null"
+          }
+        },
+        "type": "object",
+        "required": [
+          "account_id",
+          "account_name",
+          "market",
+          "base_currency",
+          "as_of",
+          "cost_method",
+          "total_cash",
+          "total_market_value",
+          "total_equity",
+          "realized_pnl",
+          "unrealized_pnl",
+          "fee_total",
+          "tax_total",
+          "fx_stale"
+        ],
+        "title": "PortfolioAccountSnapshot"
+      },
+      "PortfolioPositionItem": {
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "title": "Symbol"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "Display name from the local stock index; None when unknown"
+          },
+          "market": {
+            "type": "string",
+            "title": "Market"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "quantity": {
+            "type": "number",
+            "title": "Quantity"
+          },
+          "avg_cost": {
+            "type": "number",
+            "title": "Avg Cost"
+          },
+          "total_cost": {
+            "type": "number",
+            "title": "Total Cost"
+          },
+          "last_price": {
+            "type": "number",
+            "title": "Last Price"
+          },
+          "market_value_base": {
+            "type": "number",
+            "title": "Market Value Base"
+          },
+          "unrealized_pnl_base": {
+            "type": "number",
+            "title": "Unrealized Pnl Base"
+          },
+          "unrealized_pnl_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unrealized Pnl Pct"
+          },
+          "valuation_currency": {
+            "type": "string",
+            "title": "Valuation Currency"
+          },
+          "price_source": {
+            "type": "string",
+            "title": "Price Source",
+            "default": "unknown"
+          },
+          "price_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Provider"
+          },
+          "price_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Date"
+          },
+          "price_stale": {
+            "type": "boolean",
+            "title": "Price Stale",
+            "default": false
+          },
+          "price_available": {
+            "type": "boolean",
+            "title": "Price Available",
+            "default": true
+          },
+          "quote_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote At",
+            "description": "報價實際時間（ISO 8601）；price_date 維持日期語意，收盤價回退時為 null"
+          },
+          "prev_close": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prev Close",
+            "description": "報價所屬場次的前一場收盤；查無為 null"
+          },
+          "day_change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Change Pct"
+          },
+          "day_pnl_base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Pnl Base",
+            "description": "今日損益（帳戶幣別）；查無前一場收盤為 null"
+          },
+          "data_quality": {
+            "type": "string",
+            "title": "Data Quality",
+            "default": "ok"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Limitations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "symbol",
+          "market",
+          "currency",
+          "quantity",
+          "avg_cost",
+          "total_cost",
+          "last_price",
+          "market_value_base",
+          "unrealized_pnl_base",
+          "valuation_currency"
+        ],
+        "title": "PortfolioPositionItem"
+      },
+      "PortfolioSnapshotResponse": {
+        "properties": {
+          "as_of": {
+            "type": "string",
+            "title": "As Of"
+          },
+          "cost_method": {
+            "type": "string",
+            "title": "Cost Method"
+          },
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          },
+          "account_count": {
+            "type": "integer",
+            "title": "Account Count"
+          },
+          "total_cash": {
+            "type": "number",
+            "title": "Total Cash"
+          },
+          "total_market_value": {
+            "type": "number",
+            "title": "Total Market Value"
+          },
+          "total_equity": {
+            "type": "number",
+            "title": "Total Equity"
+          },
+          "realized_pnl": {
+            "type": "number",
+            "title": "Realized Pnl"
+          },
+          "unrealized_pnl": {
+            "type": "number",
+            "title": "Unrealized Pnl"
+          },
+          "fee_total": {
+            "type": "number",
+            "title": "Fee Total"
+          },
+          "tax_total": {
+            "type": "number",
+            "title": "Tax Total"
+          },
+          "fx_stale": {
+            "type": "boolean",
+            "title": "Fx Stale"
+          },
+          "fx_missing": {
+            "type": "boolean",
+            "title": "Fx Missing",
+            "description": "True when some FX pair had no cached rate and amounts were not converted (1:1 fallback)",
+            "default": false
+          },
+          "fx_missing_pairs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fx Missing Pairs",
+            "description": "Missing FX pairs as FROM/TO"
+          },
+          "data_quality": {
+            "type": "string",
+            "title": "Data Quality",
+            "default": "ok"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Limitations"
+          },
+          "accounts": {
+            "items": {
+              "$ref": "#/components/schemas/PortfolioAccountSnapshot"
+            },
+            "type": "array",
+            "title": "Accounts"
+          },
+          "day_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Day Pnl",
+            "description": "今日損益（currency 幣別）；有一檔算不出就是 null"
+          },
+          "display_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Currency"
+          },
+          "consolidated_equity_base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consolidated Equity Base"
+          },
+          "consolidated_market_value_base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consolidated Market Value Base"
+          },
+          "consolidated_cash_base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consolidated Cash Base"
+          },
+          "consolidated_unrealized_pnl_base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consolidated Unrealized Pnl Base"
+          },
+          "consolidated_realized_pnl_base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consolidated Realized Pnl Base"
+          },
+          "consolidated_day_pnl_base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consolidated Day Pnl Base"
+          },
+          "consolidated_fund_value_base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consolidated Fund Value Base"
+          },
+          "consolidated_fund_day_pnl_base": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consolidated Fund Day Pnl Base"
+          },
+          "consolidated_fx_stale": {
+            "type": "boolean",
+            "title": "Consolidated Fx Stale",
+            "default": false
+          },
+          "consolidated_fx_missing": {
+            "type": "boolean",
+            "title": "Consolidated Fx Missing",
+            "default": false
+          },
+          "consolidated_fx_missing_pairs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Consolidated Fx Missing Pairs"
+          },
+          "fx_rate_used": {
+            "items": {
+              "$ref": "#/components/schemas/PortfolioFxRateUsed"
+            },
+            "type": "array",
+            "title": "Fx Rate Used"
+          },
+          "funds": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FundHoldingListResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "funds_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Funds Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "as_of",
+          "cost_method",
+          "currency",
+          "account_count",
+          "total_cash",
+          "total_market_value",
+          "total_equity",
+          "realized_pnl",
+          "unrealized_pnl",
+          "fee_total",
+          "tax_total",
+          "fx_stale"
+        ],
+        "title": "PortfolioSnapshotResponse"
+      },
+      "ReportMeta": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id",
+            "description": "分析历史记录主键 ID（仅历史报告有此字段）"
+          },
+          "query_id": {
+            "type": "string",
+            "title": "Query Id",
+            "description": "分析记录关联 query_id（批量分析时重复）"
+          },
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code",
+            "description": "股票代码"
+          },
+          "stock_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Name",
+            "description": "股票名称"
+          },
+          "report_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Type",
+            "description": "报告类型"
+          },
+          "report_language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Language",
+            "description": "报告输出语言（zh/zh-TW/en/ko）"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At",
+            "description": "创建时间"
+          },
+          "current_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Price",
+            "description": "分析时股价"
+          },
+          "change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Pct",
+            "description": "分析时涨跌幅(%)"
+          },
+          "model_used": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Used",
+            "description": "历史报告元数据中的模型快照，仅用于展示；不参与运行时模型调用路径或配置路由"
+          },
+          "market_phase_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MarketPhaseSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "本次分析市场阶段低敏摘要"
+          },
+          "asset_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "stock",
+                  "index"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Type",
+            "description": "后端权威资产类型（stock/index）；指数报告用于隐藏 stock-only 自选操作。market review 与旧客户端可缺省。"
+          },
+          "price_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Date",
+            "description": "現價所屬場次（YYYY-MM-DD）；查不到為 null"
+          },
+          "price_fetched_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price Fetched At",
+            "description": "報價抓取時間；不代表資料日"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency",
+            "description": "交易幣別，由代號後綴推導；指數、大盤複盤為 null"
+          },
+          "change_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Amount",
+            "description": "漲跌額，由現價與漲跌幅推算；缺一個為 null"
+          },
+          "previous_report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReportPreviousSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "同一檔的前一份報告摘要"
+          },
+          "held": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Held",
+            "description": "目前是否持有；無法判定為 null，客戶端不得當成未持有"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query_id",
+          "stock_code"
+        ],
+        "title": "ReportMeta",
+        "description": "报告元信息"
+      },
+      "ReportPositionAdvice": {
+        "properties": {
+          "no_position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Position",
+            "description": "空手者建議"
+          },
+          "has_position": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Position",
+            "description": "持股者建議"
+          }
+        },
+        "type": "object",
+        "title": "ReportPositionAdvice",
+        "description": "分持股狀態的建議"
+      },
+      "ReportPreviousSummary": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id",
+            "description": "前一份報告的主鍵 ID"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "buy",
+                  "add",
+                  "hold",
+                  "reduce",
+                  "sell",
+                  "watch",
+                  "avoid",
+                  "alert"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action",
+            "description": "前一份報告的動作枚舉"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score",
+            "description": "前一份報告的評分"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At",
+            "description": "前一份報告的建立時間"
+          },
+          "stop_loss": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Loss",
+            "description": "前一份報告的停損價；沒有為 null"
+          }
+        },
+        "type": "object",
+        "title": "ReportPreviousSummary",
+        "description": "同一檔的前一份報告摘要；只放結構化值，動作標籤由客戶端依枚舉查表。"
+      },
+      "ReportStrategy": {
+        "properties": {
+          "sniper_prices": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SniperPrices"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ideal_buy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ideal Buy",
+            "description": "理想买入价"
+          },
+          "secondary_buy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secondary Buy",
+            "description": "第二买入价"
+          },
+          "stop_loss": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Loss",
+            "description": "止损价"
+          },
+          "take_profit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Take Profit",
+            "description": "止盈价"
+          },
+          "sniper_prices_source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "structured",
+                  "legacy"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sniper Prices Source",
+            "description": "sniper_prices 來源：structured＝模型給的數字；legacy＝舊報告由文字解析"
+          }
+        },
+        "type": "object",
+        "title": "ReportStrategy",
+        "description": "策略点位区"
+      },
+      "ReportSummary": {
+        "properties": {
+          "analysis_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Summary",
+            "description": "关键结论"
+          },
+          "operation_advice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Advice",
+            "description": "操作建议"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "buy",
+                  "add",
+                  "hold",
+                  "reduce",
+                  "sell",
+                  "watch",
+                  "avoid",
+                  "alert"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action",
+            "description": "结构化建议动作 taxonomy"
+          },
+          "action_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Label",
+            "description": "建议动作展示标签"
+          },
+          "trend_prediction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trend Prediction",
+            "description": "趋势预测"
+          },
+          "sentiment_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentiment Score",
+            "description": "情绪评分（历史数据可能超出 0-100 范围，读取时不做约束）"
+          },
+          "sentiment_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentiment Label",
+            "description": "情绪标签"
+          },
+          "one_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "One Sentence",
+            "description": "一句話結論"
+          },
+          "time_sensitivity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Sensitivity",
+            "description": "時效性"
+          },
+          "position_advice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReportPositionAdvice"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "分持股狀態的建議"
+          },
+          "confidence_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Level",
+            "description": "信心度"
+          },
+          "confidence_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Reason",
+            "description": "信心度理由"
+          },
+          "guardrail_applied": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guardrail Applied",
+            "description": "是否套用護欄；大盤複盤為 null"
+          },
+          "guardrail_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guardrail Reason",
+            "description": "護欄原因"
+          },
+          "strongest_bullish_signal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strongest Bullish Signal",
+            "description": "最強看多信號"
+          },
+          "strongest_bearish_signal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strongest Bearish Signal",
+            "description": "最強看空信號"
+          },
+          "phase_watch_conditions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase Watch Conditions",
+            "description": "報告 phase_decision 的觀察條件"
+          },
+          "entry_conditions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Conditions",
+            "description": "進場條件；舊報告為 null"
+          },
+          "exit_triggers": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Triggers",
+            "description": "出場或改判觸發條件；舊報告為 null"
+          },
+          "pending_events": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending Events",
+            "description": "待確認事件；舊報告為 null"
+          },
+          "next_check_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Check Time",
+            "description": "下一次檢查點"
+          }
+        },
+        "type": "object",
+        "title": "ReportSummary",
+        "description": "报告概览区"
+      },
+      "ResearchEventGap": {
+        "properties": {
+          "triggered": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggered"
+          },
+          "event_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Date"
+          },
+          "change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Pct"
+          },
+          "event_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Low"
+          },
+          "sessions_since_event": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sessions Since Event"
+          },
+          "threshold_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold Pct"
+          },
+          "latest_close": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Close"
+          },
+          "post_event_min_close": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Post Event Min Close"
+          },
+          "event_low_broken": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Low Broken"
+          },
+          "news_evidence_present": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "News Evidence Present"
+          },
+          "blocked_without_news": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Without News"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "title": "ResearchEventGap",
+        "description": "重大波動事件的事實；鍵名與 dashboard.event_gap 相同。"
+      },
+      "ScreeningCheckRequest": {
+        "properties": {
+          "market": {
+            "type": "string",
+            "enum": [
+              "cn",
+              "us",
+              "tw"
+            ],
+            "title": "Market",
+            "default": "cn"
+          },
+          "strategy": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Strategy",
+            "default": "dual_low"
+          },
+          "snapshot": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Snapshot",
+            "description": "One supplied row; no live data is fetched"
+          }
+        },
+        "type": "object",
+        "required": [
+          "snapshot"
+        ],
+        "title": "ScreeningCheckRequest"
+      },
+      "ScreeningCheckResponse": {
+        "properties": {
+          "strategy": {
+            "type": "string",
+            "title": "Strategy"
+          },
+          "strategy_version": {
+            "type": "string",
+            "title": "Strategy Version"
+          },
+          "market": {
+            "type": "string",
+            "enum": [
+              "cn",
+              "us",
+              "tw"
+            ],
+            "title": "Market"
+          },
+          "provenance": {
+            "type": "string",
+            "const": "supplied_snapshot",
+            "title": "Provenance",
+            "default": "supplied_snapshot"
+          },
+          "passed": {
+            "type": "boolean",
+            "title": "Passed"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ScreeningConditionCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "strategy",
+          "strategy_version",
+          "market",
+          "passed",
+          "checks"
+        ],
+        "title": "ScreeningCheckResponse"
+      },
+      "SessionItem": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "message_count": {
+            "type": "integer",
+            "title": "Message Count"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "last_active": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Active"
+          },
+          "stock_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "title",
+          "message_count"
+        ],
+        "title": "SessionItem"
+      },
+      "SkillInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "display_name_zh_tw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name Zh Tw"
+          },
+          "group": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "group_name_zh_tw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Name Zh Tw"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description"
+        ],
+        "title": "SkillInfo"
+      },
+      "StockBarItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id",
+            "description": "该股最新一次分析的历史记录主键 ID"
+          },
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code",
+            "description": "股票代码"
+          },
+          "stock_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Name",
+            "description": "股票名称"
+          },
+          "report_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Type",
+            "description": "报告类型"
+          },
+          "sentiment_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sentiment Score",
+            "description": "最新情绪评分"
+          },
+          "operation_advice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Advice",
+            "description": "最新操作建议"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "buy",
+                  "add",
+                  "hold",
+                  "reduce",
+                  "sell",
+                  "watch",
+                  "avoid",
+                  "alert"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action",
+            "description": "结构化建议动作 taxonomy"
+          },
+          "action_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Label",
+            "description": "建议动作展示标签"
+          },
+          "analysis_count": {
+            "type": "integer",
+            "title": "Analysis Count",
+            "description": "该股票的历史分析总次数"
+          },
+          "last_analysis_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Analysis Time",
+            "description": "最近一次分析时间"
+          },
+          "model_used": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Used",
+            "description": "最新分析使用的模型快照，仅用于列表展示；不改动运行时调用与配置路径"
+          },
+          "market_phase_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MarketPhaseSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "最新分析市场阶段低敏摘要"
+          },
+          "asset_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "stock",
+                  "index"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Type",
+            "description": "后端权威资产类型（stock/index）；由持久化代码经 parser 生成。旧客户端可缺省。"
+          },
+          "analysis_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Analysis Price",
+            "description": "分析當時的價格，不是現價"
+          },
+          "change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Pct",
+            "description": "分析當時的漲跌幅(%)"
+          },
+          "last_analyzed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Analyzed At",
+            "description": "最近一次分析時間；與 last_analysis_time 相同"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "stock_code",
+          "analysis_count"
+        ],
+        "title": "StockBarItem",
+        "description": "个股栏条目（去重后的股票维度摘要）",
+        "example": {
+          "analysis_count": 18,
+          "id": 1234,
+          "last_analysis_time": "2024-01-01T12:00:00",
+          "model_used": "Gemini 2.5 Pro",
+          "operation_advice": "持有",
+          "report_type": "detailed",
+          "sentiment_score": 75,
+          "stock_code": "600519",
+          "stock_name": "贵州茅台"
+        }
+      },
+      "StockProfileChips": {
+        "properties": {
+          "institutional_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Institutional Date"
+          },
+          "foreign_net": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Foreign Net"
+          },
+          "trust_net": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trust Net"
+          },
+          "dealer_net": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dealer Net"
+          },
+          "total_net": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Net"
+          },
+          "margin_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Date"
+          },
+          "margin_balance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Balance"
+          },
+          "margin_chg_5": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Chg 5"
+          },
+          "margin_chg_20": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margin Chg 20"
+          },
+          "short_balance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Balance"
+          },
+          "short_margin_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Margin Ratio"
+          }
+        },
+        "type": "object",
+        "title": "StockProfileChips",
+        "description": "台股籌碼（本地 DB）。法人單位是股、融資融券單位是張，兩者不可相比。"
+      },
+      "StockProfileNewsItem": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "published_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Date"
+          }
+        },
+        "type": "object",
+        "title": "StockProfileNewsItem"
+      },
+      "StockProfilePosition": {
+        "properties": {
+          "quantity": {
+            "type": "number",
+            "title": "Quantity"
+          },
+          "avg_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Cost",
+            "description": "平均成本（currency 計價）；跨幣別持有時為 null"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "last_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Price",
+            "description": "算損益用的價格：即時報價優先"
+          },
+          "market_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Value"
+          },
+          "unrealized_pnl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unrealized Pnl"
+          },
+          "unrealized_pnl_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unrealized Pnl Pct"
+          },
+          "weight_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weight Pct",
+            "description": "占全部持股市值 %；缺匯率時為 null"
+          },
+          "account_count": {
+            "type": "integer",
+            "title": "Account Count",
+            "default": 1
+          }
+        },
+        "type": "object",
+        "required": [
+          "quantity"
+        ],
+        "title": "StockProfilePosition",
+        "description": "使用者對這檔的持股（跨帳戶合計）。沒持有時整塊為 null。"
+      },
+      "StockTrendResponse": {
+        "properties": {
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code",
+            "description": "股票代码"
+          },
+          "range": {
+            "type": "string",
+            "title": "Range",
+            "description": "day / month / year"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source",
+            "description": "数据来源说明（如 intraday 来自 yfinance，可能延迟）"
+          },
+          "source_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Code",
+            "description": "穩定的來源代碼（shioaji／yfinance）"
+          },
+          "degraded_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded Reason",
+            "description": "台股沒走 Shioaji 的原因：no_session／no_contract／kbars_failed:*／no_bars／range_unsupported／sdk_missing"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/TrendPoint"
+            },
+            "type": "array",
+            "title": "Points",
+            "description": "按时间升序的走势点"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stock_code",
+          "range"
+        ],
+        "title": "StockTrendResponse",
+        "description": "股票价格走势（折线）：range=day 今日分时 / month 近一月日线 / year 近一年日线"
+      },
+      "StructuredAnswerResponse": {
+        "properties": {
+          "conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion"
+          },
+          "resistance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resistance"
+          },
+          "support": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support"
+          },
+          "invalidation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invalidation"
+          },
+          "follow_ups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Follow Ups"
+          }
+        },
+        "type": "object",
+        "title": "StructuredAnswerResponse",
+        "description": "LLM 給的回答摘要；舊對話與沒給的回答整個是 null，前端顯示本文。"
+      },
+      "TrendPoint": {
+        "properties": {
+          "t": {
+            "type": "string",
+            "title": "T",
+            "description": "时间点 (ISO8601)"
+          },
+          "price": {
+            "type": "number",
+            "title": "Price",
+            "description": "价格（日/月/年为收盘价，分时为最新价）"
+          },
+          "volume": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume",
+            "description": "該點成交量（股）；沒有讀數為 null"
+          },
+          "avg_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Price",
+            "description": "當日累計均價（Close×量的近似 VWAP），僅分時"
+          }
+        },
+        "type": "object",
+        "required": [
+          "t",
+          "price"
+        ],
+        "title": "TrendPoint",
+        "description": "走势图单点（折线用，非 K 线）"
+      },
+      "UsageCacheSummary": {
+        "properties": {
+          "read_tokens": {
+            "type": "integer",
+            "title": "Read Tokens",
+            "default": 0
+          },
+          "known_prompt_tokens": {
+            "type": "integer",
+            "title": "Known Prompt Tokens",
+            "description": "Prompt tokens of calls that reported cache usage",
+            "default": 0
+          },
+          "hit_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hit Ratio",
+            "description": "0-1; null when no call reported cache usage"
+          }
+        },
+        "type": "object",
+        "title": "UsageCacheSummary"
+      },
+      "UsageChannelBreakdown": {
+        "properties": {
+          "channel": {
+            "type": "string",
+            "title": "Channel"
+          },
+          "billing": {
+            "type": "string",
+            "title": "Billing",
+            "description": "'metered' | 'subscription'"
+          },
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "total_tokens": {
+            "type": "integer",
+            "title": "Total Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "channel",
+          "billing",
+          "calls",
+          "total_tokens"
+        ],
+        "title": "UsageChannelBreakdown"
+      },
+      "UsageCostSummary": {
+        "properties": {
+          "currency": {
+            "type": "string",
+            "title": "Currency",
+            "default": "USD"
+          },
+          "estimated_total": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Total",
+            "description": "null when no model has a configured price"
+          },
+          "complete": {
+            "type": "boolean",
+            "title": "Complete",
+            "description": "False when a metered model has no configured price",
+            "default": true
+          },
+          "unpriced_models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unpriced Models"
+          },
+          "subscription_tokens": {
+            "type": "integer",
+            "title": "Subscription Tokens",
+            "description": "Tokens on subscription paths, not billed",
+            "default": 0
+          },
+          "by_model": {
+            "items": {
+              "$ref": "#/components/schemas/UsageModelCost"
+            },
+            "type": "array",
+            "title": "By Model"
+          }
+        },
+        "type": "object",
+        "title": "UsageCostSummary"
+      },
+      "UsageDayBreakdown": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "title": "Date",
+            "description": "ISO date string"
+          },
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "title": "Prompt Tokens",
+            "default": 0
+          },
+          "completion_tokens": {
+            "type": "integer",
+            "title": "Completion Tokens",
+            "default": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "title": "Total Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "calls",
+          "total_tokens"
+        ],
+        "title": "UsageDayBreakdown"
+      },
+      "UsageModelCost": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel"
+          },
+          "billing": {
+            "type": "string",
+            "title": "Billing"
+          },
+          "total_tokens": {
+            "type": "integer",
+            "title": "Total Tokens"
+          },
+          "estimated_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost",
+            "description": "null when not priced or not metered"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "channel",
+          "billing",
+          "total_tokens"
+        ],
+        "title": "UsageModelCost"
+      },
+      "UsagePreviousPeriod": {
+        "properties": {
+          "from_date": {
+            "type": "string",
+            "title": "From Date"
+          },
+          "to_date": {
+            "type": "string",
+            "title": "To Date"
+          },
+          "total_calls": {
+            "type": "integer",
+            "title": "Total Calls"
+          },
+          "total_tokens": {
+            "type": "integer",
+            "title": "Total Tokens"
+          },
+          "estimated_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost"
+          },
+          "calls_change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calls Change Pct",
+            "description": "null when the previous period has no calls"
+          },
+          "tokens_change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Change Pct"
+          },
+          "cost_change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Change Pct"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from_date",
+          "to_date",
+          "total_calls",
+          "total_tokens"
+        ],
+        "title": "UsagePreviousPeriod"
+      },
+      "ActiveStockContextResponse": {
+        "properties": {
+          "stock_code": {
+            "type": "string",
+            "title": "Stock Code"
+          },
+          "stock_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stock Name"
+          },
+          "canonical_id": {
+            "type": "string",
+            "title": "Canonical Id"
+          },
+          "asset_type": {
+            "type": "string",
+            "title": "Asset Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stock_code",
+          "stock_name",
+          "canonical_id",
+          "asset_type"
+        ],
+        "title": "ActiveStockContextResponse"
+      },
+      "DeleteHistoryRequest": {
+        "properties": {
+          "record_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Record Ids",
+            "description": "要删除的历史记录主键 ID 列表"
+          }
+        },
+        "type": "object",
+        "title": "DeleteHistoryRequest",
+        "description": "删除历史记录请求"
+      },
+      "DeleteHistoryResponse": {
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "title": "Deleted",
+            "description": "实际删除的历史记录数量"
+          }
+        },
+        "type": "object",
+        "required": [
+          "deleted"
+        ],
+        "title": "DeleteHistoryResponse",
+        "description": "删除历史记录响应"
+      },
+      "FundHoldingListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FundHoldingItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "totals": {
+            "items": {
+              "$ref": "#/components/schemas/FundHoldingTotal"
+            },
+            "type": "array",
+            "title": "Totals"
+          },
+          "nav_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Error"
+          }
+        },
+        "type": "object",
+        "title": "FundHoldingListResponse"
+      },
+      "FundNavPoint": {
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "nav": {
+            "type": "number",
+            "title": "Nav"
+          }
+        },
+        "type": "object",
+        "required": [
+          "date",
+          "nav"
+        ],
+        "title": "FundNavPoint"
+      },
+      "ScreeningConditionCheck": {
+        "properties": {
+          "filter": {
+            "type": "string",
+            "title": "Filter"
+          },
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "source_field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Field"
+          },
+          "threshold": {
+            "title": "Threshold"
+          },
+          "current_value": {
+            "title": "Current Value"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "missing"
+            ],
+            "title": "Status"
+          },
+          "passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passed"
+          },
+          "missing_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Missing Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "filter",
+          "field",
+          "source_field",
+          "threshold",
+          "current_value",
+          "status",
+          "passed",
+          "missing_reason"
+        ],
+        "title": "ScreeningConditionCheck"
+      },
+      "SessionStateResponse": {
+        "properties": {
+          "selected_skill_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Skill Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "selected_skill_ids"
+        ],
+        "title": "SessionStateResponse"
+      },
+      "SniperPrices": {
+        "properties": {
+          "ideal_buy": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ideal Buy"
+          },
+          "secondary_buy": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secondary Buy"
+          },
+          "stop_loss": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Loss"
+          },
+          "take_profit": {
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Take Profit"
+          }
+        },
+        "type": "object",
+        "title": "SniperPrices",
+        "description": "模型判斷的狙擊點位數字；每格是價位或 null（null = 模型判斷沒有可執行價位）。\n\n與 ``SniperPoints`` 同一組價位，``SniperPoints`` 是給人看的文字，系統只讀這裡的數字。"
       }
     },
     "securitySchemes": {

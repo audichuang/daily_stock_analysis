@@ -223,7 +223,8 @@ class ReportSummary(BaseModel):
     guardrail_reason: Optional[str] = Field(None, description="護欄原因")
     strongest_bullish_signal: Optional[str] = Field(None, description="最強看多信號")
     strongest_bearish_signal: Optional[str] = Field(None, description="最強看空信號")
-    watch_conditions: Optional[List[str]] = Field(None, description="觀察條件（舊欄位，新報告仍會有）")
+    # 不叫 watch_conditions：那是 DecisionSignal 的欄位，主要契約不得同名（test_decision_signal_contract_isolation）。
+    phase_watch_conditions: Optional[List[str]] = Field(None, description="報告 phase_decision 的觀察條件")
     entry_conditions: Optional[List[str]] = Field(None, description="進場條件；舊報告為 null")
     exit_triggers: Optional[List[str]] = Field(None, description="出場或改判觸發條件；舊報告為 null")
     pending_events: Optional[List[str]] = Field(None, description="待確認事件；舊報告為 null")
@@ -451,7 +452,6 @@ class StockBarItem(BaseModel):
     )
     analysis_price: Optional[float] = Field(None, description="分析當時的價格，不是現價")
     change_pct: Optional[float] = Field(None, description="分析當時的漲跌幅(%)")
-    score: Optional[int] = Field(None, description="最新評分；與 sentiment_score 相同")
     last_analyzed_at: Optional[str] = Field(None, description="最近一次分析時間；與 last_analysis_time 相同")
     model_config = ConfigDict(json_schema_extra={
         "example": {

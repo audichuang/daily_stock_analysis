@@ -167,7 +167,7 @@ def test_financial_rows_non_numeric_prints_na_and_missing_basis_leaves_note_empt
     fr = {"revenue": "N/A", "net_profit_parent": "-5000", "operating_cash_flow": 1.5e8, "roe": "N/A"}
     p = _fr_prompt("2330.TW", fr)
     assert "| 營業收入 | N/A |  |" in p
-    assert "| 歸母淨利 | -5000 新台币 |  |" in p
+    assert "| 歸母淨利 | -5000 新台幣 |  |" in p
     assert "| 營運現金流 | 1.50 億新台幣 |  |" in p
     assert "| ROE | N/A |" in p
 
@@ -176,7 +176,7 @@ def test_financial_rows_ttm_label_and_follow_report_currency_not_trade_market():
     # 港股 ADR 常以人民幣報表：金額單位跟財報幣別走，不跟交易市場走
     fr = {"revenue": 9.5e11, "currency": "CNY", "basis": {"revenue": "ttm"}}
     p = _fr_prompt("HK09988", fr)
-    assert "| 營業收入 | 9500.00 亿元 | 近四季 |" in p
+    assert "| 營業收入 | 9500.00 億元 | 近四季 |" in p
 
 
 def test_format_amount_sign_and_non_numeric():
@@ -193,7 +193,7 @@ def test_format_amount_sign_and_non_numeric():
 
 
 @pytest.mark.parametrize("language,label,values", [
-    ("zh-TW", "營業收入", ["100.00 亿EUR", "-5.00 万EUR", "30 EUR"]),
+    ("zh-TW", "營業收入", ["100.00 億EUR", "-5.00 萬EUR", "30 EUR"]),
     ("zh", "营业收入", ["100.00 亿EUR", "-5.00 万EUR", "30 EUR"]),
     ("en", "Revenue", ["10.00B EUR", "-50.00K EUR", "30 EUR"]),
     ("ko", "Revenue", ["10.00B EUR", "-50.00K EUR", "30 EUR"]),

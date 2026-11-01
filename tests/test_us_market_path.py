@@ -257,7 +257,9 @@ class TestVixNeverEntersTheDirectionalAverage:
         en = " ".join(MarketAnalyzer._build_market_light_reasons_en(ma, overview, 24))
 
         # 三檔方向性指數平均 -2.25%；把 VIX 的 +25% 算進去會變成 +6.83%
-        assert "主要指数平均涨跌幅 -2.25%" in zh, zh
+        assert "主要指數平均漲跌幅 -2.25%" in zh, zh
+        simplified = " ".join(MarketAnalyzer._build_market_light_reasons_zh(_analyzer("us", "zh"), overview, 24))
+        assert "主要指数平均涨跌幅 -2.25%" in simplified, simplified
         assert "average major-index change -2.25%" in en, en
 
 

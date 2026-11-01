@@ -977,6 +977,29 @@ def is_supported_report_language_value(value: Optional[str]) -> bool:
 
 
 # zh-TW 提示詞共用的詞彙表，正本是 docs/glossary-zh-tw.md。
+_ZH_TW_SPLIT_CONDITION_FIELDS = """            "watch_conditions": ["观察条件1", "观察条件2"],
+            "entry_conditions": ["空手者的进场条件，含价位；没有就给空数组"],
+            "exit_triggers": ["持股者的出场或改判条件，含价位；没有就给空数组"],
+            "pending_events": ["待确认的事件与日期；没有就给空数组"],
+"""
+_ZH_TW_SCOPED_SUMMARY = (
+    '"analysis_summary": "100字摘要，只写发生什么、为何发生、与前次的差异；'
+    "操作建议写在 one_sentence 与 position_advice，这里不重复；"
+    '不得出现“依规则”“判定为”“持股者”“空手者”，不引用任何评分数字"'
+)
+
+
+def apply_zh_tw_report_contract(prompt: str) -> str:
+    """只給 zh-TW 的輸出欄位契約；zh、en、ko 的提示詞必須逐字不變（基準見 tests/fixtures/event_gap_baseline.json）。
+
+    傳入的是轉繁體之前的簡體模板。
+    """
+    return prompt.replace(
+        '            "watch_conditions": ["观察条件1", "观察条件2"],\n',
+        _ZH_TW_SPLIT_CONDITION_FIELDS,
+    ).replace('"analysis_summary": "100字综合分析摘要"', _ZH_TW_SCOPED_SUMMARY)
+
+
 ZH_TW_PROMPT_GLOSSARY = """
 ## 用語（繁體中文報告必須遵守）
 

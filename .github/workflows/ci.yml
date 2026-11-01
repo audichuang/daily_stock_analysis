@@ -246,7 +246,7 @@ jobs:
           from bot.dispatcher import CommandDispatcher; print('✅ bot')
           from api.app import app; print('✅ api')
           import futu; print('✅ futu')
-          import market_data.db, market_data.closures, market_data.market_repo, market_data.adjust, market_data.events, market_data.funds, market_data.health, market_data.risk_flags, market_data.sources, market_data.financial_statement, market_data.revenue_deadline, market_data.macro; print('✅ market_data')
+          import market_data.sector_rank, market_data.tw_prescreen, market_data.db, market_data.closures, market_data.market_repo, market_data.adjust, market_data.events, market_data.funds, market_data.health, market_data.risk_flags, market_data.sources, market_data.financial_statement, market_data.revenue_deadline, market_data.macro; print('✅ market_data')
           print('✅ All Docker imports OK')
           "
 

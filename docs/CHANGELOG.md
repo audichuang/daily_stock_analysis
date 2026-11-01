@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 - [新功能] `/history/{id}` 回傳 `structured_report`（舊報告建構失敗維持 null），報告追加一句話結論、分持股建議、信心度、護欄、進出場條件、前次報告摘要、幣別、資料日與是否持有；ResearchArtifact 追加事件、各來源狀態與美股證據，失效條件的句子跟著報告語言走。
-- [新功能] `/history` 追加 `q`、`market`、`action` 查詢與 `stock_total`、`market_review_total`；個股清單追加 `analysis_price`、`change_pct`、`score`、`last_analyzed_at`；新聞追加 `published_at` 與繁中 `key_point`，摘要去掉免責與行情樣板句。
+- [新功能] `/history` 追加 `q`、`market`、`action` 查詢與 `stock_total`、`market_review_total`；個股清單追加 `analysis_price`、`change_pct`、`last_analyzed_at`（評分沿用既有的 `sentiment_score`）；新聞追加 `published_at` 與繁中 `key_point`，摘要去掉免責與行情樣板句。
 - [改進] zh-TW 動作用語改為買進、加碼、續抱、減碼、迴避、警報（舊報告的買入、減倉等仍可解析），系統提示詞本體改送繁體並帶詞彙表，報告表頭改為「項目｜數值」「點位｜價格」，沒有讀數的列省略，金額單位改「億」。
-- [改進] 分析提示詞：`analysis_summary` 只寫發生什麼、為何、與前次差異，不寫建議也不引用評分數字；`watch_conditions` 另拆 `entry_conditions`、`exit_triggers`、`pending_events`，舊欄位保留。
+- [改進] zh-TW 分析提示詞：`analysis_summary` 只寫發生什麼、為何、與前次差異，不寫建議也不引用評分數字；`watch_conditions` 另拆 `entry_conditions`、`exit_triggers`、`pending_events`，舊欄位保留；zh、en、ko 提示詞不變，這些欄位為 null。報告摘要的觀察條件欄位叫 `phase_watch_conditions`，避開 DecisionSignal 的 `watch_conditions`。
 - [修復] 盤前護欄認得「立即減碼」「馬上買進」等繁體寫法，分享圖的動作色認得繁體用語。
 - [新功能] 大盤複盤 payload 追加 `next_day_plan`（LLM 結構化計畫）、`index_trends`（近 20 場與距 MA20／MA60）、`sector_rank`（台股上市類股、美股 GICS ETF）；列表摘要改取報告標題下的一句話結論，`zh-TW` 的燈號理由改繁體。
 - [新功能] 新增 `GET /api/v1/analysis/market-review/default-region` 回傳伺服器實際的複盤預設市場。

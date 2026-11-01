@@ -70,7 +70,7 @@ def test_news_http_contract_is_additive_and_forwards_analysis_only():
         response = client.get("/api/v1/history/7/news?analysis_only=true&limit=100")
         assert response.status_code == 200
         item = response.json()["items"][0]
-        assert set(item) == {"title", "snippet", "url", "source", "published_date", "dimension"}
+        assert set(item) == {"title", "snippet", "url", "source", "published_date", "dimension", "published_at", "key_point"}
         assert item["dimension"] == "announcements"
         assert response.json()["total"] == 1
         db.get_news_intel_by_query_id.assert_called_once_with(query_id="analysis-7", limit=100, code="AAPL")

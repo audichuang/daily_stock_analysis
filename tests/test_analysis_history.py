@@ -1413,6 +1413,24 @@ class AnalysisHistoryTestCase(unittest.TestCase):
         self.assertEqual(response.summary.action, "watch")
         self.assertEqual(response.summary.action_label, "观望")
 
+    def test_history_detail_exposes_report_watch_conditions_under_phase_name(self) -> None:
+        try:
+            from api.v1.endpoints.history import get_history_detail
+        except ImportError:
+            self.skipTest("fastapi is not installed in this test environment")
+
+        service = MagicMock()
+        service.resolve_and_get_detail.return_value = {
+            "id": 1, "query_id": "q", "stock_code": "600519", "report_type": "detailed",
+            "report_language": "zh-TW", "created_at": "2026-05-21T17:40:00",
+            "raw_result": {"dashboard": {"phase_decision": {"watch_conditions": ["站回 70"]}}},
+        }
+        with patch("api.v1.endpoints.history.HistoryService", return_value=service):
+            summary = get_history_detail("q", db_manager=self.db).summary
+
+        self.assertEqual(summary.phase_watch_conditions, ["站回 70"])
+        self.assertNotIn("watch_conditions", type(summary).model_fields)
+
     def test_history_list_matches_equivalent_suffixed_stock_codes(self) -> None:
         """Same-stock history should include rows saved with supported suffixed codes."""
 

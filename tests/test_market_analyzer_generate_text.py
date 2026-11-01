@@ -3428,7 +3428,7 @@ class TestMarketAnalyzerBypassFix:
         assert result == "渲染后复盘"
         assert ma.analyzer.calls == [
             {
-                "prompt": "legacy prompt",
+                "prompt": "legacy prompt" + ma._next_day_plan_instruction(),
                 "max_tokens": 8192,
                 "temperature": 0.7,
             }
@@ -3471,7 +3471,7 @@ class TestMarketAnalyzerBypassFix:
         assert result == "渲染后复盘"
         assert ma.analyzer.calls == [
             {
-                "prompt": "legacy prompt",
+                "prompt": "legacy prompt" + ma._next_day_plan_instruction(),
                 "max_tokens": 8192,
                 "temperature": 0.7,
             }

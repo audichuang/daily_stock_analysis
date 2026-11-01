@@ -11,6 +11,8 @@ import re
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 try:
     import litellm  # noqa: F401
 except ModuleNotFoundError:
@@ -185,11 +187,41 @@ def test_other_language_system_prompts_are_not_converted():
             assert "用語（繁體中文報告必須遵守）" not in other
 
 
-def test_system_prompt_scopes_summary_and_splits_watch_conditions():
-    zh_tw = _system_prompt("zh-TW", legacy=False)
+@pytest.mark.parametrize("legacy", [True, False])
+def test_system_prompt_scopes_summary_and_splits_watch_conditions(legacy):
+    zh_tw = _system_prompt("zh-TW", legacy=legacy)
     for key in ("entry_conditions", "exit_triggers", "pending_events", "watch_conditions"):
         assert f'"{key}"' in zh_tw
-        assert f'"{key}"' in _system_prompt("en", legacy=False)
     assert "不得出現“依規則”“判定為”" in zh_tw
     assert "不引用任何評分數字" in zh_tw
     assert "100字綜合分析摘要" not in zh_tw
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+@pytest.mark.parametrize("language", ["zh", "en", "ko"])
+def test_other_languages_do_not_get_zh_tw_report_contract(language, legacy):
+    prompt = _system_prompt(language, legacy=legacy)
+    assert '"watch_conditions"' in prompt
+    for key in ("entry_conditions", "exit_triggers", "pending_events"):
+        assert f'"{key}"' not in prompt
+    assert "不得出现“依规则”" not in prompt and "per the rules" not in prompt
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+@pytest.mark.parametrize("language,has_contract", [("zh-TW", True), ("zh", False), ("en", False), ("ko", False)])
+def test_agent_system_prompt_applies_report_contract_only_to_zh_tw(language, has_contract, legacy):
+    from unittest.mock import Mock
+
+    from src.agent.executor import AgentExecutor
+
+    executor = AgentExecutor.__new__(AgentExecutor)
+    executor.skill_instructions = ""
+    executor.default_skill_policy = ""
+    executor.use_legacy_default_prompt = legacy
+    executor.tool_registry = Mock()
+    executor.tool_registry.to_openai_tools.return_value = []
+    executor._run_loop = Mock()
+    executor.run("Analyze", {"stock_code": "2330.TW", "report_language": language})
+    system = executor._run_loop.call_args.args[0][0]["content"]
+    assert ('"entry_conditions"' in system) is has_contract
+    assert ("不引用任何評分數字" in system) is has_contract

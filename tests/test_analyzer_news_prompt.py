@@ -19,6 +19,7 @@ from src.analyzer import (
     _infer_trend_direction,
     _sanitize_trend_analysis_for_prompt,
 )
+from src.utils.zh_s2t import to_traditional
 
 
 class AnalyzerNewsPromptTestCase(unittest.TestCase):
@@ -160,7 +161,7 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
                             use_legacy_default_prompt=legacy,
                         )
                     prompt = analyzer._get_analysis_system_prompt(lang, stock_code="2408.TW")
-                    self.assertNotIn(old_holder_rule, prompt)
+                    self.assertNotIn(to_traditional(old_holder_rule) if lang == "zh-TW" else old_holder_rule, prompt)
                     if lang == "en":
                         self.assertIn('`ideal_buy` and `secondary_buy` must be exactly "N/A"', prompt)
                         self.assertIn("go in `dashboard.phase_decision.watch_conditions`", prompt)
@@ -180,21 +181,23 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
                             self.assertNotIn("Weakening trend or break below key moving averages", prompt)
                             self.assertNotIn("❌ Bearish alignment or clearly deteriorating trend", prompt)
                     else:
-                        self.assertIn("`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位", prompt)
-                        self.assertIn("写进 `dashboard.phase_decision.watch_conditions`", prompt)
-                        self.assertIn("`take_profit` 只写一个价位", prompt)
-                        self.assertIn("照常写该价位", prompt)
-                        self.assertIn("只写“暂不设定”\",", prompt)  # JSON template line
-                        self.assertIn("收盘跌破 MA20，且至少符合以下一项：空头排列", prompt)
-                        self.assertIn("放量跌破前低/关键支撑或止损位", prompt)
-                        self.assertIn("仅有空头排列、未放量跌破前低/关键支撑时属于减仓，不是卖出", prompt)
-                        self.assertNotIn("主要结论转弱", prompt)
-                        self.assertNotIn("趋势或风险显著恶化", prompt)
+                        # zh-TW 模板本體轉繁體（B04），斷言內容相同；NotIn 也要轉，否則恆真。
+                        expected = to_traditional if lang == "zh-TW" else str
+                        self.assertIn(expected("`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位"), prompt)
+                        self.assertIn(expected("写进 `dashboard.phase_decision.watch_conditions`"), prompt)
+                        self.assertIn(expected("`take_profit` 只写一个价位"), prompt)
+                        self.assertIn(expected("照常写该价位"), prompt)
+                        self.assertIn(expected("只写“暂不设定”\","), prompt)  # JSON template line
+                        self.assertIn(expected("收盘跌破 MA20，且至少符合以下一项：空头排列"), prompt)
+                        self.assertIn(expected("放量跌破前低/关键支撑或止损位"), prompt)
+                        self.assertIn(expected("仅有空头排列、未放量跌破前低/关键支撑时属于减仓，不是卖出"), prompt)
+                        self.assertNotIn(expected("主要结论转弱"), prompt)
+                        self.assertNotIn(expected("趋势或风险显著恶化"), prompt)
                         if legacy:
-                            self.assertNotIn("趋势走弱或跌破关键均线", prompt)
-                            self.assertNotIn("❌ 空头排列或趋势显著恶化", prompt)
+                            self.assertNotIn(expected("趋势走弱或跌破关键均线"), prompt)
+                            self.assertNotIn(expected("❌ 空头排列或趋势显著恶化"), prompt)
                         else:
-                            self.assertIn("仅有空头排列、未放量跌破前低/关键支撑或止损位时，最多减仓，不给卖出", prompt)
+                            self.assertIn(expected("仅有空头排列、未放量跌破前低/关键支撑或止损位时，最多减仓，不给卖出"), prompt)
 
     def test_analysis_prompt_score_scale_splits_reduce_and_sell_bands(self) -> None:
         for legacy in (False, True):

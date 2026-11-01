@@ -595,7 +595,6 @@ def get_stock_bar(
                     asset_type=asset_type_from_canonical_code(record.code),
                     analysis_price=market_fields.get("current_price"),
                     change_pct=market_fields.get("change_pct"),
-                    score=sentiment_score,
                     last_analyzed_at=last_analysis_time,
                 )
             )
@@ -701,6 +700,7 @@ def get_history_detail(
             change_pct=change_pct,
         )
         decision_fields = extract_report_decision_fields(raw_result, report_language)
+        decision_fields["phase_watch_conditions"] = decision_fields.pop("watch_conditions")
 
         # 构建响应模型
         meta = ReportMeta(
