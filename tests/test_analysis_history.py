@@ -1426,8 +1426,10 @@ class AnalysisHistoryTestCase(unittest.TestCase):
             "raw_result": {"dashboard": {"phase_decision": {"watch_conditions": ["站回 70"]}}},
         }
         with patch("api.v1.endpoints.history.HistoryService", return_value=service):
-            summary = get_history_detail("q", db_manager=self.db).summary
+            report = get_history_detail("q", db_manager=self.db)
+        summary = report.summary
 
+        self.assertEqual(report.structured_report.artifact_id, "report:1")
         self.assertEqual(summary.phase_watch_conditions, ["站回 70"])
         self.assertNotIn("watch_conditions", type(summary).model_fields)
 

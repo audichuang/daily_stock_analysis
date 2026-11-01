@@ -262,3 +262,25 @@ def test_screen_tw_keeps_its_names_as_a_thin_shell():
     assert screen_tw.compute_factors is tw_prescreen.compute_factors
     assert screen_tw.REVENUE_STALE_DAYS == tw_prescreen.REVENUE_STALE_DAYS
 
+
+
+class _PastMarketGate(Exception):
+    """走過市場檢查才會碰到的下一步；用來停在這裡，不跑後面的母體與篩選。"""
+
+
+@pytest.mark.parametrize("market", ["cn", "tw", "us"])
+def test_pipeline_accepts_opened_markets(market):
+    from src.services.screening import pipeline
+
+    with patch.object(pipeline, "load_all_strategies", side_effect=_PastMarketGate):
+        with pytest.raises(_PastMarketGate):
+            pipeline.screen("momentum_quality", market=market, config=SimpleNamespace(strategies_dir="unused"))
+
+
+@pytest.mark.parametrize("market", ["jp", "hk", "kr", ""])
+def test_pipeline_rejects_markets_not_opened(market):
+    from src.services.screening import pipeline
+
+    with patch.object(pipeline, "load_all_strategies", side_effect=_PastMarketGate):
+        with pytest.raises(ValueError, match="Unsupported market"):
+            pipeline.screen("momentum_quality", market=market, config=SimpleNamespace(strategies_dir="unused"))
