@@ -1005,11 +1005,14 @@ const PortfolioPage: React.FC = () => {
   const loadSnapshotAndRisk = useCallback(async () => {
     setIsLoading(true);
     setRiskWarning(null);
-    // Fetch both in parallel but keep their failures independent: a risk error only degrades the risk card.
-    const [snapshotResult, riskResult] = await Promise.allSettled([
+    // Run sequentially: both GETs rewrite portfolio_positions server-side, so concurrent calls hit a unique-key violation.
+    // Failures stay independent: a risk error only degrades the risk card.
+    const snapshotResult = await Promise.allSettled([
       portfolioApi.getSnapshot(buildSnapshotQuery(queryAccountId, costMethod)),
+    ]).then(([result]) => result);
+    const riskResult = await Promise.allSettled([
       portfolioApi.getRisk(buildRiskQuery(queryAccountId, costMethod)),
-    ]);
+    ]).then(([result]) => result);
     if (snapshotResult.status === 'fulfilled') {
       setSnapshot(snapshotResult.value);
       setError(null);
