@@ -755,7 +755,7 @@ def _crawl_twse_resume(path, code, label, start, end):
 
 
 def _crawl_tpex_resume(action, label, start, end):
-    """要用 GET：實測 POST 配 2010 起點時 ``stat ok``、日期回顯吻合卻回 0 列。"""
+    """呼叫端要逐年切段：實測 ``2010/01/01~2026/11/01`` 一次查 ``stat ok``、日期回顯吻合卻回 0 列，起點 2011 則有 14 列。"""
     return _crawl_resume(
         f"https://www.tpex.org.tw/www/zh-tw/bulletin/{action}",
         {"startDate": f"{start:%Y/%m/%d}", "endDate": f"{end:%Y/%m/%d}", "response": "json"},
