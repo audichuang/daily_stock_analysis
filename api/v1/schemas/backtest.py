@@ -98,6 +98,9 @@ class BacktestSeriesPoint(BaseModel):
     code: str
     return_pct: float
     cumulative_return_pct: float
+    # 同一批列的個股報酬逐筆累計，與模擬累計同母體才能並排比較；舊資料缺值的列不加。
+    stock_return_pct: Optional[float] = None
+    cumulative_stock_return_pct: Optional[float] = None
 
 
 class BacktestMonthlyWinRate(BaseModel):
@@ -113,6 +116,7 @@ class BacktestSeriesResponse(BaseModel):
     chart_title: str = "逐筆累計（非資金曲線）"
     eval_window_days: Optional[int] = None
     truncated: bool = Field(False, description="超過上限時只含最新的列，累計值不含更早的部分")
+    updated_at: Optional[str] = Field(None, description="這批回測最近一次評估的時間")
     points: List[BacktestSeriesPoint] = Field(default_factory=list)
     monthly: List[BacktestMonthlyWinRate] = Field(default_factory=list)
 

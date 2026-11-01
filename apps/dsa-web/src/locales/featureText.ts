@@ -12,7 +12,7 @@ const marketAlertTypes = alertTypes.slice(12);
 export const BACKTEST_TEXT = {
   zh: { documentTitle: '策略回测 - DSA', codePlaceholder: '按股票代码筛选（留空表示全部）', filter: '筛选', evalWindow: '评估窗口', phase: '阶段', startDate: '开始日期', startDateAria: '分析开始日期', endDate: '结束日期', endDateAria: '分析结束日期', oneDayValidation: '1 日验证', forceRerun: '强制重跑', running: '回测中...', runBacktest: '运行回测', oneDayModeDescription: '1 日验证模式会用下一个可进场交易日的开盘至收盘收益校验 AI 预测，不含隔夜跳空。', windowModeDescription: '将评估窗口设为 1，可比较 AI 预测与下一个可进场交易日的开盘至收盘收益，不含隔夜跳空。', overallPerformance: '整体表现', noMetricsTitle: '暂无指标', noMetricsDescription: '运行回测后会生成组合级表现指标。', loadingResults: '正在加载结果...', noResultsTitle: '暂无结果', noResultsDescription: '运行回测后可评估历史分析准确性。', nextDayValidation: '次日验证', resultSet: '结果集', allStocks: '全部股票', filteredStock: '筛选 {code}', dayWindow: '{days} 日窗口', fromDate: '自 {date}', toDate: '至 {date}', scrollHint: '小屏幕可横向滚动', stock: '股票', analysisDate: '分析日期', aiPrediction: 'AI 预测', actualPerformance: '实际表现', windowReturn: '窗口收益', accuracy: '准确性', directionMatch: '方向匹配', result: '结果', status: '状态', totalPage: '共 {total} 条结果 · 第 {page} / {pages} 页', directionAccuracy: '方向准确率', winRate: '胜率', avgSimulatedReturn: '平均模拟收益', avgStockReturn: '平均个股收益', stopLossTriggerRate: '止损触发率', takeProfitTriggerRate: '止盈触发率', avgDaysToFirstHit: '平均命中天数', evaluationCount: '评估数', outcomeSummary: '盈 / 亏 / 中', phaseDistribution: '阶段分布：{text}', processed: '已处理:', saved: '已保存:', completed: '已完成:', insufficient: '数据不足:', errors: '错误:', yes: '是', no: '否', unknown: '未知' },
   en: { documentTitle: 'Strategy Backtest - DSA', codePlaceholder: 'Filter by stock code (leave empty for all)', filter: 'Filter', evalWindow: 'Evaluation window', phase: 'Phase', startDate: 'Start date', startDateAria: 'Analysis start date', endDate: 'End date', endDateAria: 'Analysis end date', oneDayValidation: '1D validation', forceRerun: 'Force rerun', running: 'Backtesting...', runBacktest: 'Run backtest', oneDayModeDescription: '1D validation checks AI predictions against the open-to-close return of the next eligible trading day, excluding the overnight gap.', windowModeDescription: 'Set the evaluation window to 1 to compare AI predictions with the open-to-close return of the next eligible trading day, excluding the overnight gap.', overallPerformance: 'Overall performance', noMetricsTitle: 'No metrics', noMetricsDescription: 'Portfolio-level performance metrics appear after a backtest runs.', loadingResults: 'Loading results...', noResultsTitle: 'No results', noResultsDescription: 'Run a backtest to evaluate historical analysis accuracy.', nextDayValidation: 'Next-day validation', resultSet: 'Result set', allStocks: 'All stocks', filteredStock: 'Filtered {code}', dayWindow: '{days}-day window', fromDate: 'from {date}', toDate: 'to {date}', scrollHint: 'Scroll horizontally on small screens', stock: 'Stock', analysisDate: 'Analysis date', aiPrediction: 'AI prediction', actualPerformance: 'Actual performance', windowReturn: 'Window return', accuracy: 'Accuracy', directionMatch: 'Direction match', result: 'Result', status: 'Status', totalPage: '{total} results · Page {page} / {pages}', directionAccuracy: 'Direction accuracy', winRate: 'Win rate', avgSimulatedReturn: 'Avg simulated return', avgStockReturn: 'Avg stock return', stopLossTriggerRate: 'Stop-loss trigger rate', takeProfitTriggerRate: 'Take-profit trigger rate', avgDaysToFirstHit: 'Avg days to first hit', evaluationCount: 'Evaluations', outcomeSummary: 'Win / Loss / Neutral', phaseDistribution: 'Phase breakdown: {text}', processed: 'Processed:', saved: 'Saved:', completed: 'Completed:', insufficient: 'Insufficient:', errors: 'Errors:', yes: 'Yes', no: 'No', unknown: 'Unknown' },
-  'zh-TW': { documentTitle: '策略回測 - DSA', codePlaceholder: '依股票代號篩選（留空表示全部）', filter: '篩選', evalWindow: '評估視窗', phase: '階段', startDate: '開始日期', startDateAria: '分析開始日期', endDate: '結束日期', endDateAria: '分析結束日期', oneDayValidation: '1 日驗證', forceRerun: '強制重跑', running: '回測中...', runBacktest: '執行回測', oneDayModeDescription: '1 日驗證模式會用下一個可進場交易日的開盤至收盤報酬校驗 AI 預測，不含隔夜跳空。', windowModeDescription: '將評估視窗設為 1，可比較 AI 預測與下一個可進場交易日的開盤至收盤報酬，不含隔夜跳空。', overallPerformance: '整體表現', noMetricsTitle: '暫無指標', noMetricsDescription: '執行回測後會產生組合級表現指標。', loadingResults: '正在載入結果...', noResultsTitle: '暫無結果', noResultsDescription: '執行回測後可評估歷史分析準確性。', nextDayValidation: '次日驗證', resultSet: '結果集', allStocks: '全部股票', filteredStock: '篩選 {code}', dayWindow: '{days} 日視窗', fromDate: '自 {date}', toDate: '至 {date}', scrollHint: '小螢幕可橫向捲動', stock: '股票', analysisDate: '分析日期', aiPrediction: 'AI 預測', actualPerformance: '實際表現', windowReturn: '視窗收益', accuracy: '準確性', directionMatch: '方向匹配', result: '結果', status: '狀態', totalPage: '共 {total} 筆結果・第 {page} / {pages} 頁', directionAccuracy: '方向準確率', winRate: '勝率', avgSimulatedReturn: '平均模擬收益', avgStockReturn: '平均個股收益', stopLossTriggerRate: '停損觸發率', takeProfitTriggerRate: '停利觸發率', avgDaysToFirstHit: '平均命中天數', evaluationCount: '評估數', outcomeSummary: '盈／虧／中', phaseDistribution: '階段分布：{text}', processed: '已處理：', saved: '已儲存：', completed: '已完成：', insufficient: '資料不足：', errors: '錯誤：', yes: '是', no: '否', unknown: '未知' },
+  'zh-TW': { documentTitle: '策略回測 - DSA', codePlaceholder: '依股票代號篩選（留空表示全部）', filter: '篩選', evalWindow: '評估天數', phase: '階段', startDate: '開始日期', startDateAria: '分析開始日期', endDate: '結束日期', endDateAria: '分析結束日期', oneDayValidation: '1 日驗證', forceRerun: '強制重跑', running: '回測中...', runBacktest: '執行回測', oneDayModeDescription: '1 日驗證模式會用下一個可進場交易日的開盤至收盤報酬檢驗 AI 預測，不含隔夜跳空。', windowModeDescription: '將評估天數設為 1，可比較 AI 預測與下一個可進場交易日的開盤至收盤報酬，不含隔夜跳空。', overallPerformance: '整體表現', noMetricsTitle: '暫無指標', noMetricsDescription: '執行回測後會產生組合級表現指標。', loadingResults: '正在載入結果...', noResultsTitle: '暫無結果', noResultsDescription: '按「重新計算」評估歷史分析準不準。', nextDayValidation: '次日驗證', resultSet: '結果集', allStocks: '全部股票', filteredStock: '篩選 {code}', dayWindow: '{days} 日', fromDate: '自 {date}', toDate: '至 {date}', scrollHint: '小螢幕可橫向捲動', stock: '股票', analysisDate: '分析日期', aiPrediction: 'AI 預測', actualPerformance: '實際表現', windowReturn: '區間報酬', accuracy: '準確性', directionMatch: '方向對錯', result: '結果', status: '狀態', totalPage: '共 {total} 筆結果・第 {page} / {pages} 頁', directionAccuracy: '方向準確率', winRate: '勝率', avgSimulatedReturn: '平均模擬報酬', avgStockReturn: '同期個股平均', stopLossTriggerRate: '停損觸發率', takeProfitTriggerRate: '停利觸發率', avgDaysToFirstHit: '平均命中天數', evaluationCount: '評估數', outcomeSummary: '勝／負／平', phaseDistribution: '階段分布：{text}', processed: '已處理：', saved: '已儲存：', completed: '已完成：', insufficient: '資料不足：', errors: '錯誤：', yes: '是', no: '否', unknown: '未知' },
 } as const;
 
 export const BACKTEST_PHASE_FILTER_OPTIONS: Record<UiLanguage, Array<Option<BacktestPhaseFilter>>> = {
@@ -22,9 +22,9 @@ export const BACKTEST_PHASE_FILTER_OPTIONS: Record<UiLanguage, Array<Option<Back
 };
 export const BACKTEST_PHASE_LABELS: Record<UiLanguage, Record<string, string>> = { zh: { premarket: '盘前', intraday: '盘中', postmarket: '盘后', unknown: '未知' }, en: { premarket: 'Pre-market', intraday: 'Intraday', postmarket: 'Post-market', unknown: 'Unknown' }, 'zh-TW': { premarket: '盤前', intraday: '盤中', postmarket: '盤後', unknown: '未知' } };
 export const BACKTEST_OUTCOME_LABELS: Record<UiLanguage, Record<string, string>> = { zh: { win: '盈利', loss: '亏损', neutral: '中性' }, en: { win: 'Win', loss: 'Loss', neutral: 'Neutral' }, 'zh-TW': { win: '獲利', loss: '虧損', neutral: '中性' } };
-export const BACKTEST_STATUS_LABELS: Record<UiLanguage, Record<string, string>> = { zh: { completed: '已完成', insufficient: '数据不足', insufficient_data: '数据不足', error: '错误' }, en: { completed: 'Completed', insufficient: 'Insufficient data', insufficient_data: 'Insufficient data', error: 'Error' }, 'zh-TW': { completed: '已完成', insufficient: '資料不足', insufficient_data: '資料不足', error: '錯誤' } };
+export const BACKTEST_STATUS_LABELS: Record<UiLanguage, Record<string, string>> = { zh: { completed: '已完成', insufficient: '数据不足', insufficient_data: '数据不足', pending: '未到期', unable: '无法评估', error: '错误' }, en: { completed: 'Completed', insufficient: 'Insufficient data', insufficient_data: 'Insufficient data', pending: 'Not matured', unable: 'Unable', error: 'Error' }, 'zh-TW': { completed: '已完成', insufficient: '資料不足', insufficient_data: '資料不足', pending: '未到期', unable: '無法評估', error: '錯誤' } };
 export const BACKTEST_MOVEMENT_LABELS: Record<UiLanguage, Record<string, string>> = { zh: { up: '上涨', down: '下跌', flat: '持平' }, en: { up: 'Up', down: 'Down', flat: 'Flat' }, 'zh-TW': { up: '上漲', down: '下跌', flat: '持平' } };
-export const BACKTEST_DIRECTION_EXPECTED_LABELS: Record<UiLanguage, Record<string, string>> = { zh: { long: '做多', cash: '空仓', up: '看涨', down: '看跌', not_down: '不看跌', flat: '持平' }, en: { long: 'Long', cash: 'Cash', up: 'Bullish', down: 'Bearish', not_down: 'Not bearish', flat: 'Flat' }, 'zh-TW': { long: '做多', cash: '空倉', up: '看漲', down: '看跌', not_down: '不看跌', flat: '持平' } };
+export const BACKTEST_DIRECTION_EXPECTED_LABELS: Record<UiLanguage, Record<string, string>> = { zh: { long: '做多', cash: '空仓', up: '看涨', down: '看跌', not_down: '不看跌', flat: '持平' }, en: { long: 'Long', cash: 'Cash', up: 'Bullish', down: 'Bearish', not_down: 'Not bearish', flat: 'Flat' }, 'zh-TW': { long: '做多', cash: '空手', up: '看漲', down: '看跌', not_down: '不看跌', flat: '持平' } };
 
 export const ALERT_TYPE_LABELS: Record<UiLanguage, Record<AlertType, string>> = {
   zh: { price_cross: '价格突破', price_change_percent: '涨跌幅', volume_spike: '成交量放大', ma_price_cross: '价格均线穿越', rsi_threshold: 'RSI 阈值', macd_cross: 'MACD 金叉/死叉', kdj_cross: 'KDJ 金叉/死叉', cci_threshold: 'CCI 阈值', portfolio_stop_loss: '组合止损', portfolio_concentration: '组合集中度', portfolio_drawdown: '组合回撤', portfolio_price_stale: '组合价格状态', market_light_status: '大盘红绿灯状态', market_light_score_drop: '大盘红绿灯分数下降' },
@@ -188,3 +188,121 @@ export const ALERT_PAGE_TEXT = {
     bell: 'Set a price alert for {code}',
   },
 } as const;
+
+// 回測頁改版後的文案；欄位多，獨立一張表，不和上面的舊文案混。
+export const BACKTEST_OVERVIEW_TEXT = {
+  zh: {
+    pageTitle: '回测',
+    recalculate: '重新计算',
+    recalculateDescription: '依下方条件重新评估历史分析。强制重跑会连同未满最小天龄的记录一起算。',
+    appliedLabel: '已套用：',
+    clearFilters: '清除条件',
+    conclusion: '已完成 {count} 笔：胜率 {winRate}（{win} 胜 {loss} 负），平均模拟收益 {simulated}，同期个股平均 {stock}。',
+    conclusionInsufficient: '样本不足：只有 {count} 笔已完成（少于 {min} 笔），以下数字仅供观察，不下结论。',
+    tabCompleted: '已完成',
+    tabPending: '未到期',
+    tabAll: '全部',
+    maturesBy: '{date} 前到期',
+    adviceTitle: '依建议拆解',
+    adviceColumn: '建议',
+    countColumn: '笔数',
+    adviceUnclassified: '未分类',
+    emptyFilteredTitle: '没有符合条件的结果',
+    emptyFilteredDescription: '换个条件，或清除条件看全部。',
+    emptyPendingTitle: '没有未到期的回测',
+    emptyPendingDescription: '评估窗口还没走完的分析会列在这里。',
+    entryDate: '进场日',
+    entryPrice: '进场价',
+    exitPrice: '出场价',
+    exitReason: '出场原因',
+    simulatedReturn: '模拟收益',
+    stopLoss: '停损价',
+    takeProfit: '停利价',
+    firstHit: '先触及',
+    chartTitle: '逐笔累计（非资金曲线）',
+    chartSimulated: '累计模拟收益',
+    chartStock: '同期个股累计',
+    monthlyWinRate: '月胜率',
+    updatedAt: '资料更新：{time}',
+    chartTruncated: '笔数超过上限，只含最新的部分，累计值不含更早的回测。',
+    chartPhaseIgnored: '趋势图不受阶段条件影响。',
+  },
+  en: {
+    pageTitle: 'Backtest',
+    recalculate: 'Recalculate',
+    recalculateDescription: 'Re-evaluate past analyses with the conditions below. Force rerun also includes records younger than the minimum age.',
+    appliedLabel: 'Applied: ',
+    clearFilters: 'Clear filters',
+    conclusion: '{count} completed: win rate {winRate} ({win}W {loss}L), avg simulated return {simulated}, same-period stock avg {stock}.',
+    conclusionInsufficient: 'Not enough samples: only {count} completed (under {min}). These numbers are for observation only.',
+    tabCompleted: 'Completed',
+    tabPending: 'Not matured',
+    tabAll: 'All',
+    maturesBy: 'matures by {date}',
+    adviceTitle: 'By advice',
+    adviceColumn: 'Advice',
+    countColumn: 'Count',
+    adviceUnclassified: 'Unclassified',
+    emptyFilteredTitle: 'No matching results',
+    emptyFilteredDescription: 'Try other conditions, or clear them to see everything.',
+    emptyPendingTitle: 'Nothing waiting to mature',
+    emptyPendingDescription: 'Analyses whose evaluation window has not finished appear here.',
+    entryDate: 'Entry date',
+    entryPrice: 'Entry price',
+    exitPrice: 'Exit price',
+    exitReason: 'Exit reason',
+    simulatedReturn: 'Simulated return',
+    stopLoss: 'Stop loss',
+    takeProfit: 'Take profit',
+    firstHit: 'Hit first',
+    chartTitle: 'Per-trade cumulative (not an equity curve)',
+    chartSimulated: 'Cumulative simulated return',
+    chartStock: 'Same-period stock cumulative',
+    monthlyWinRate: 'Monthly win rate',
+    updatedAt: 'Data updated: {time}',
+    chartTruncated: 'Over the row limit: only the newest rows are included, so the cumulative excludes older backtests.',
+    chartPhaseIgnored: 'The phase condition does not apply to these charts.',
+  },
+  'zh-TW': {
+    pageTitle: '回測',
+    recalculate: '重新計算',
+    recalculateDescription: '依下方條件重新評估歷史分析。強制重跑會連同未滿最小天數的紀錄一起算。',
+    appliedLabel: '已套用：',
+    clearFilters: '清除條件',
+    conclusion: '已完成 {count} 筆：勝率 {winRate}（{win} 勝 {loss} 負），平均模擬報酬 {simulated}，同期個股平均 {stock}。',
+    conclusionInsufficient: '樣本不足：只有 {count} 筆已完成（少於 {min} 筆），以下數字僅供觀察，不下結論。',
+    tabCompleted: '已完成',
+    tabPending: '未到期',
+    tabAll: '全部',
+    maturesBy: '{date} 前到期',
+    adviceTitle: '依建議拆解',
+    adviceColumn: '建議',
+    countColumn: '筆數',
+    adviceUnclassified: '未分類',
+    emptyFilteredTitle: '沒有符合條件的結果',
+    emptyFilteredDescription: '換個條件，或清除條件看全部。',
+    emptyPendingTitle: '沒有未到期的回測',
+    emptyPendingDescription: '評估天數還沒走完的分析會列在這裡。',
+    entryDate: '進場日',
+    entryPrice: '進場價',
+    exitPrice: '出場價',
+    exitReason: '出場原因',
+    simulatedReturn: '模擬報酬',
+    stopLoss: '停損價',
+    takeProfit: '停利價',
+    firstHit: '先觸及',
+    chartTitle: '逐筆累計（非資金曲線）',
+    chartSimulated: '累計模擬報酬',
+    chartStock: '同期個股累計',
+    monthlyWinRate: '月勝率',
+    updatedAt: '資料更新：{time}',
+    chartTruncated: '筆數超過上限，只含最新的部分，累計值不含更早的回測。',
+    chartPhaseIgnored: '趨勢圖不受階段條件影響。',
+  },
+} as const;
+
+export const BACKTEST_EXIT_REASON_LABELS: Record<UiLanguage, Record<string, string>> = {
+  zh: { stop_loss: '触及停损', take_profit: '触及停利', ambiguous: '同日触及', ambiguous_stop_loss: '同日触及（按停损算）', window_end: '窗口结束', cash: '未进场', neither: '都未触及', none: '都未触及' },
+  en: { stop_loss: 'Stop loss', take_profit: 'Take profit', ambiguous: 'Both on one day', ambiguous_stop_loss: 'Both on one day (as stop loss)', window_end: 'Window end', cash: 'No entry', neither: 'Neither', none: 'Neither' },
+  'zh-TW': { stop_loss: '觸及停損', take_profit: '觸及停利', ambiguous: '同日觸及', ambiguous_stop_loss: '同日觸及（按停損算）', window_end: '期滿', cash: '未進場', neither: '都未觸及', none: '都未觸及' },
+};

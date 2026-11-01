@@ -393,10 +393,12 @@ class DecisionSignalService:
             rows = rows[start:start + page_size]
         else:
             rows, total, older_counts = self.repo.list_latest_per_stock(**filters, page=page, page_size=page_size)
+        previous_actions = self.repo.previous_actions([row for row in rows if older_counts.get(row.id, 0) > 0])
         items = []
         for row in rows:
             item = self._serialize(row)
             item["older_count"] = older_counts.get(row.id, 0)
+            item["previous_action"] = previous_actions.get(row.id)
             item["is_held"] = (row.market, row.stock_code) in held
             item.update(self._stop_state(row, closes))
             items.append(item)

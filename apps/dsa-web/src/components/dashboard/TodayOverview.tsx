@@ -7,7 +7,7 @@ import type { StockQuote } from '../../api/stocks';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { stockQuoteKey } from '../../hooks/useStockQuotes';
 import { useMarketIndexStore } from '../../stores/marketIndexStore';
-import type { DecisionSignalSummary } from '../../types/decisionSignals';
+import type { DecisionSignalSummaryResponse } from '../../types/decisionSignals';
 import type { PortfolioSnapshotResponse } from '../../types/portfolio';
 import { formatMoneyValue, formatNumber, formatPercent, NO_VALUE } from '../../utils/format';
 import { Card, Change } from '../common';
@@ -49,7 +49,7 @@ export const TodayOverview: React.FC<TodayOverviewProps> = ({ watchlistRows, quo
   const regions = useMarketIndexStore((state) => state.regions);
   const loadIndices = useMarketIndexStore((state) => state.load);
   const [snapshot, setSnapshot] = useState<PortfolioSnapshotResponse | null>(null);
-  const [signalSummary, setSignalSummary] = useState<DecisionSignalSummary | null>(null);
+  const [signalSummary, setSignalSummary] = useState<DecisionSignalSummaryResponse | null>(null);
 
   useEffect(() => {
     OVERVIEW_REGIONS.forEach((region) => void loadIndices(region));

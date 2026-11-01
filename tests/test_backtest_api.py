@@ -220,6 +220,22 @@ class BuildSeriesTestCase(unittest.TestCase):
         self.assertEqual([p["cumulative_return_pct"] for p in result["points"]], [1.5, 2.5])
         self.assertEqual(result["monthly"][0]["completed"], 4)
 
+    def test_stock_cumulative_shares_the_simulated_population_and_skips_missing(self):
+        rows = [_Row(date(2099, 1, 2), "win", 1.0), _Row(date(2099, 1, 3), "win", 1.0), _Row(date(2099, 1, 4), "win", None)]
+        rows[0].stock_return_pct = 3.0
+        rows[1].stock_return_pct = None
+        rows[2].stock_return_pct = 100.0  # 這列沒有模擬報酬，個股報酬也不能單獨進累計
+        result = BacktestService._build_series(rows)
+        self.assertEqual([p["cumulative_stock_return_pct"] for p in result["points"]], [3.0, 3.0])
+        self.assertEqual([p["stock_return_pct"] for p in result["points"]], [3.0, None])
+
+    def test_updated_at_is_the_latest_evaluation(self):
+        rows = [_Row(date(2099, 1, 2), "win", 1.0), _Row(date(2099, 1, 3), "win", 1.0)]
+        rows[0].evaluated_at = datetime(2099, 2, 2, 8, 0)
+        rows[1].evaluated_at = datetime(2099, 2, 1, 8, 0)
+        self.assertEqual(BacktestService._build_series(rows)["updated_at"], "2099-02-02T08:00:00")
+        self.assertIsNone(BacktestService._build_series([])["updated_at"])
+
 
 if __name__ == "__main__":
     unittest.main()

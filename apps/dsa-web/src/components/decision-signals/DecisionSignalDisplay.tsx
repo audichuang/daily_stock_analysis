@@ -1,6 +1,7 @@
 import type React from 'react';
 import { PanelRightOpen } from 'lucide-react';
-import { Badge, Card, JsonViewer } from '../common';
+import type { StockQuote } from '../../api/stocks';
+import { Badge, Card, Collapsible, JsonViewer } from '../common';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import type { UiLanguage, UiTextKey } from '../../i18n/uiText';
 import type {
@@ -21,6 +22,10 @@ import { cn } from '../../utils/cn';
 import { formatSignalText, parseSignalList } from '../../utils/signalText';
 import { parseDecisionSignalDate } from '../../utils/decisionSignalTime';
 import { getDecisionSignalProfileLabel } from '../../utils/decisionSignalProfile';
+import { signalCurrency, sourceReportHref } from '../../utils/decisionSignalRow';
+import { formatPercent as formatSignedPercent, formatPrice } from '../../utils/format';
+import { marketToneClass } from '../../utils/marketTone';
+import { BACKTEST_DIRECTION_EXPECTED_LABELS } from '../../locales/featureText';
 import {
   getDecisionSignalHorizonLabel,
   getDecisionSignalMarketLabel,
@@ -54,9 +59,10 @@ const ACTION_VARIANTS: Record<DecisionActionTone, BadgeVariant> = {
 };
 
 const OUTCOME_VARIANTS: Record<DecisionSignalOutcomeValue, BadgeVariant> = {
-  hit: 'success',
-  miss: 'danger',
-  neutral: 'warning',
+  // 命中與否不是系統狀態也不是損益，不用紅綠。
+  hit: 'brand',
+  miss: 'caution',
+  neutral: 'neutral',
 };
 
 const LOCALE_BY_LANGUAGE: Record<UiLanguage, string> = {
@@ -73,20 +79,18 @@ function formatDateTime(value: string | null | undefined, language: UiLanguage):
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+    hourCycle: 'h23',
   }).format(date);
 }
+
+export const formatSignalDateTime = formatDateTime;
 
 function formatNumber(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '-';
   return Number(value).toFixed(2).replace(/\.?0+$/, '');
 }
 
-function formatPercent(value: number | null | undefined): string {
-  const number = formatNumber(value);
-  return number === '-' ? number : `${number}%`;
-}
-
-function formatConfidence(value: number | null | undefined): string {
+export function formatConfidence(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '-';
   const normalized = Math.abs(value) <= 1 ? value * 100 : value;
   return `${formatNumber(normalized)}%`;
@@ -151,6 +155,29 @@ function getFeedbackLabel(value: DecisionSignalFeedbackValue | null | undefined,
 function hasDisplayValue(value: string): boolean {
   return value !== '-';
 }
+
+const SOLID_TONE_CLASS: Record<DecisionActionTone, string> = {
+  brand: 'bg-cyan text-slate-950',
+  neutral: 'bg-secondary-text text-background',
+  caution: 'bg-warning text-slate-950',
+  default: 'bg-elevated text-secondary-text',
+};
+
+/** 實心動作標籤：顯示依 action 枚舉查表，顏色依 ACTION_TONE，不用紅綠。 */
+export const SignalActionTag: React.FC<{ item: DecisionSignalItem }> = ({ item }) => {
+  const { t } = useUiLanguage();
+  return (
+    <span
+      data-tone={getDecisionActionTone(item.action, item.actionLabel, null)}
+      className={cn(
+        'inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-semibold',
+        SOLID_TONE_CLASS[getDecisionActionTone(item.action, item.actionLabel, null)],
+      )}
+    >
+      {getActionLabel(item, t)}
+    </span>
+  );
+};
 
 type SignalMetricTone = 'default' | 'success' | 'warning' | 'danger';
 
@@ -327,9 +354,86 @@ const DetailRow: React.FC<DetailRowProps> = ({ label, value }) => (
   </div>
 );
 
+const CurrentPriceBlock: React.FC<{ item: DecisionSignalItem; quote?: StockQuote }> = ({ item, quote }) => {
+  const { t } = useUiLanguage();
+  const currency = signalCurrency(item.market);
+  return (
+    <div data-testid="signal-current-price">
+      <p className="text-xs text-secondary-text">{t('decisionSignals.currentPrice')}</p>
+      <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="text-2xl font-semibold tabular-nums text-foreground">{formatPrice(quote?.currentPrice, currency)}</span>
+        <span className={cn('text-sm tabular-nums', marketToneClass(quote?.changePercent))}>{formatSignedPercent(quote?.changePercent)}</span>
+        {typeof item.signalPrice === 'number' ? (
+          <span className="text-xs text-secondary-text">
+            {t('decisionSignals.signalPriceAt', { price: formatPrice(item.signalPrice, currency) })}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+};
+
+type RulerMark = { key: string; label: string; value: number; text: string; tone: string };
+
+/** 價位尺：把停損、進場、現價、目標放在同一條軸上。可比較的價位不到兩個就不畫。 */
+export const PriceRuler: React.FC<{ item: DecisionSignalItem; currentPrice?: number | null }> = ({ item, currentPrice }) => {
+  const { t } = useUiLanguage();
+  const currency = signalCurrency(item.market);
+  const candidates: Array<[string, string, number | null | undefined, string]> = [
+    ['stop', t('decisionSignals.stopLoss'), item.stopLoss, 'bg-warning'],
+    ['entryLow', t('decisionSignals.entryRange'), item.entryLow, 'bg-secondary-text'],
+    ['entryHigh', t('decisionSignals.entryRange'), item.entryHigh, 'bg-secondary-text'],
+    ['current', t('decisionSignals.currentPrice'), currentPrice, 'bg-foreground'],
+    ['target', t('decisionSignals.targetPrice'), item.targetPrice, 'bg-cyan'],
+  ];
+  const marks: RulerMark[] = candidates.flatMap(([key, label, value, tone]) => (
+    typeof value === 'number' && Number.isFinite(value)
+      ? [{ key, label, value, text: formatPrice(value, currency), tone }]
+      : []
+  ));
+  const values = marks.map((mark) => mark.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (marks.length < 2 || max <= min) return null;
+  const position = (value: number) => ((value - min) / (max - min)) * 100;
+  const legend = [...marks]
+    .sort((left, right) => left.value - right.value)
+    .filter((mark) => mark.key !== 'entryHigh' || item.entryLow === null || item.entryLow === undefined);
+
+  return (
+    <div data-testid="signal-price-ruler" role="group" aria-label={t('decisionSignals.priceRuler')}>
+      <div className="relative mx-1 my-2 h-1.5 rounded-full bg-elevated">
+        {marks.map((mark) => (
+          <span
+            key={mark.key}
+            data-mark={mark.key}
+            className={cn('absolute top-1/2 h-3.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full', mark.tone)}
+            style={{ left: `${position(mark.value)}%` }}
+          />
+        ))}
+      </div>
+      <dl className="mt-2 flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs">
+        {legend.map((mark) => (
+          <div key={mark.key} className="min-w-0">
+            <dt className="text-secondary-text">{mark.label}</dt>
+            <dd className="tabular-nums text-foreground">
+              {mark.key.startsWith('entry') ? formatEntryRange(item) : mark.text}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+};
+
 type DecisionSignalDetailsProps = {
   item: DecisionSignalItem;
+  /** 批次行情；沒有讀數時現價顯示 —，不退回訊號當時價。 */
+  quote?: StockQuote;
+  /** 頁首右側的「⋯」鈕。 */
   actions?: React.ReactNode;
+  /** 「⋯」展開的內容：重評估與狀態操作。 */
+  actionsPanel?: React.ReactNode;
   outcomes?: DecisionSignalOutcomeItem[];
   outcomesLoading?: boolean;
   outcomesError?: string | null;
@@ -342,7 +446,9 @@ type DecisionSignalDetailsProps = {
 
 export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
   item,
+  quote,
   actions,
+  actionsPanel,
   outcomes = [],
   outcomesLoading = false,
   outcomesError = null,
@@ -353,9 +459,7 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
   onFeedbackSubmit,
 }) => {
   const { language, t } = useUiLanguage();
-  const actionLabel = getActionLabel(item, t);
   const profileLabel = getDecisionSignalProfileLabel(item, t);
-  const entryRange = formatEntryRange(item);
   const evidenceData = asJsonViewerData(item.evidence);
   const qualityData = asJsonViewerData(item.dataQualitySummary);
   const metadataData = asJsonViewerData(item.metadata);
@@ -365,9 +469,8 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={getActionVariant(item)} size="md">{actionLabel}</Badge>
+            <SignalActionTag item={item} />
             <Badge variant={STATUS_VARIANTS[item.status]} size="md">{t(STATUS_LABEL_KEYS[item.status])}</Badge>
-            <Badge variant="info" size="md">{t('decisionSignals.profile')}: {profileLabel}</Badge>
           </div>
           <h3 className="mt-3 text-xl font-semibold text-foreground">{item.stockName || item.stockCode}</h3>
           <p className="mt-1 font-mono text-sm text-secondary-text">{item.stockCode} · {getDecisionSignalMarketLabel(item.market, t)}</p>
@@ -375,35 +478,29 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
         {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <DetailRow label={t('decisionSignals.score')} value={formatNumber(item.score)} />
-        <DetailRow label={t('decisionSignals.confidence')} value={formatConfidence(item.confidence)} />
-        <DetailRow label={t('decisionSignals.horizon')} value={getDecisionSignalHorizonLabel(item.horizon, t)} />
-        <DetailRow label={t('decisionSignals.profile')} value={profileLabel} />
-        <DetailRow label={t('decisionSignals.planQuality')} value={getDecisionSignalPlanQualityLabel(item.planQuality, t)} />
-        <DetailRow label={t('decisionSignals.marketPhase')} value={getDecisionSignalMarketPhaseLabel(item.marketPhase, t)} />
-        <DetailRow label={t('decisionSignals.sourceReport')} value={item.sourceReportId ? `#${item.sourceReportId}` : '-'} />
-        <DetailRow label={t('decisionSignals.createdAt')} value={formatDateTime(item.createdAt, language)} />
-        <DetailRow label={t('decisionSignals.expiresAt')} value={formatDateTime(item.expiresAt, language)} />
+      {actionsPanel}
+
+      <CurrentPriceBlock item={item} quote={quote} />
+
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-secondary-text">
+        <span>{t('decisionSignals.score')} <span className="tabular-nums text-foreground">{formatNumber(item.score)}</span></span>
+        <span>{t('decisionSignals.confidence')} <span className="tabular-nums text-foreground">{formatConfidence(item.confidence)}</span></span>
+        <span>{t('decisionSignals.horizon')} <span className="text-foreground">{getDecisionSignalHorizonLabel(item.horizon, t)}</span></span>
       </div>
 
-      <Card title={t('decisionSignals.pricePlan')} padding="sm" className="rounded-xl">
-        <div className="grid gap-3 sm:grid-cols-3">
-          <DetailRow label={t('decisionSignals.entryRange')} value={entryRange} />
-          <DetailRow label={t('decisionSignals.stopLoss')} value={formatNumber(item.stopLoss)} />
-          <DetailRow label={t('decisionSignals.targetPrice')} value={formatNumber(item.targetPrice)} />
-        </div>
-      </Card>
+      <PriceRuler item={item} currentPrice={quote?.currentPrice} />
 
-      <Card padding="sm" className="rounded-xl">
-        <div className="grid gap-3">
-          <SignalTextBlock label={t('decisionSignals.reason')} value={formatJsonish(item.reason)} clamp={false} />
-          <SignalTextBlock label={t('decisionSignals.catalystSummary')} value={formatJsonish(item.catalystSummary)} tone="info" clamp={false} />
-          <SignalTextBlock label={t('decisionSignals.watchConditions')} value={formatJsonish(item.watchConditions)} clamp={false} />
-          <SignalTextBlock label={t('decisionSignals.riskSummary')} value={formatJsonish(item.riskSummary)} tone="warning" clamp={false} />
-          <SignalTextBlock label={t('decisionSignals.invalidation')} value={formatJsonish(item.invalidation)} tone="danger" clamp={false} />
-        </div>
-      </Card>
+      <SignalTextBlock label={t('decisionSignals.reason')} value={formatJsonish(item.reason)} clamp={false} />
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <SignalTextBlock label={t('decisionSignals.catalystSummary')} value={formatJsonish(item.catalystSummary)} tone="info" clamp={false} />
+        <SignalTextBlock label={t('decisionSignals.riskSummary')} value={formatJsonish(item.riskSummary)} tone="warning" clamp={false} />
+      </div>
+
+      <div className="grid gap-3">
+        <SignalTextBlock label={t('decisionSignals.watchConditions')} value={formatJsonish(item.watchConditions)} clamp={false} />
+        <SignalTextBlock label={t('decisionSignals.invalidation')} value={formatJsonish(item.invalidation)} tone="warning" clamp={false} />
+      </div>
 
       <Card title={t('decisionSignals.outcomes')} padding="sm" className="rounded-xl">
         {outcomesLoading ? (
@@ -427,11 +524,16 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
                       <Badge variant="warning">{t('decisionSignals.outcome.unable')}</Badge>
                     )}
                   </div>
-                  <span className="text-xs text-secondary-text">{outcome.engineVersion}</span>
                 </div>
                 <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                  <DetailRow label={t('decisionSignals.returnPct')} value={formatPercent(outcome.stockReturnPct)} />
-                  <DetailRow label={t('decisionSignals.directionExpected')} value={outcome.directionExpected || '-'} />
+                  <DetailRow
+                    label={t('decisionSignals.returnPct')}
+                    value={<span className={cn('tabular-nums', marketToneClass(outcome.stockReturnPct))}>{formatSignedPercent(outcome.stockReturnPct)}</span>}
+                  />
+                  <DetailRow
+                    label={t('decisionSignals.directionExpected')}
+                    value={outcome.directionExpected ? (BACKTEST_DIRECTION_EXPECTED_LABELS[language][outcome.directionExpected] ?? outcome.directionExpected) : '-'}
+                  />
                   <DetailRow label={t('decisionSignals.unableReason')} value={outcome.unableReason || '-'} />
                 </div>
               </div>
@@ -474,21 +576,41 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
         </div>
       </Card>
 
-      {evidenceData ? (
-        <Card title={t('decisionSignals.evidence')} padding="sm" className="rounded-xl">
-          <JsonViewer data={evidenceData} maxHeight="240px" />
-        </Card>
-      ) : null}
-      {qualityData ? (
-        <Card title={t('decisionSignals.dataQuality')} padding="sm" className="rounded-xl">
-          <JsonViewer data={qualityData} maxHeight="240px" />
-        </Card>
-      ) : null}
-      {metadataData ? (
-        <Card title={t('decisionSignals.metadata')} padding="sm" className="rounded-xl">
-          <JsonViewer data={metadataData} maxHeight="240px" />
-        </Card>
-      ) : null}
+      <Collapsible title={t('decisionSignals.technicalData')}>
+        <div className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <DetailRow label={t('decisionSignals.profile')} value={profileLabel} />
+            <DetailRow label={t('decisionSignals.planQuality')} value={getDecisionSignalPlanQualityLabel(item.planQuality, t)} />
+            <DetailRow label={t('decisionSignals.marketPhase')} value={getDecisionSignalMarketPhaseLabel(item.marketPhase, t)} />
+            <DetailRow
+              label={t('decisionSignals.sourceReport')}
+              value={item.sourceReportId ? (
+                <a href={sourceReportHref(item.sourceReportId)} className="text-cyan hover:underline">#{item.sourceReportId}</a>
+              ) : '-'}
+            />
+            <DetailRow label={t('decisionSignals.createdAt')} value={formatDateTime(item.createdAt, language)} />
+            <DetailRow label={t('decisionSignals.expiresAt')} value={formatDateTime(item.expiresAt, language)} />
+          </div>
+          {evidenceData ? (
+            <div>
+              <p className="mb-1 text-xs text-secondary-text">{t('decisionSignals.evidence')}</p>
+              <JsonViewer data={evidenceData} maxHeight="240px" />
+            </div>
+          ) : null}
+          {qualityData ? (
+            <div>
+              <p className="mb-1 text-xs text-secondary-text">{t('decisionSignals.dataQuality')}</p>
+              <JsonViewer data={qualityData} maxHeight="240px" />
+            </div>
+          ) : null}
+          {metadataData ? (
+            <div>
+              <p className="mb-1 text-xs text-secondary-text">{t('decisionSignals.metadata')}</p>
+              <JsonViewer data={metadataData} maxHeight="240px" />
+            </div>
+          ) : null}
+        </div>
+      </Collapsible>
     </div>
   );
 };

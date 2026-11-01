@@ -136,6 +136,22 @@ def test_group_latest_returns_one_row_per_stock_with_older_count(client_and_db) 
     assert by_code["MSFT"]["older_count"] == 0
 
 
+def test_group_latest_reports_the_previous_action_only_when_older_rows_exist(client_and_db) -> None:
+    client, _ = client_and_db
+    _create(client, code="AAPL", action="watch")
+    _create(client, code="AAPL", action="hold")
+    _create(client, code="AAPL", action="add")
+    _create(client, code="MSFT", action="watch")
+
+    by_code = {
+        item["stock_code"]: item
+        for item in client.get(LIST_URL, params={"group_latest": "true"}).json()["items"]
+    }
+    # 是緊鄰的前一筆（hold），不是最舊的一筆（watch）
+    assert by_code["AAPL"]["previous_action"] == "hold"
+    assert by_code["MSFT"]["previous_action"] is None
+
+
 def test_group_latest_dedupes_across_pages(client_and_db) -> None:
     client, _ = client_and_db
     for code in ("AAPL", "MSFT", "NVDA"):

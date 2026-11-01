@@ -1258,7 +1258,8 @@ const RealtimeBoardPage: React.FC = () => {
                 writeSort(next);
               }}
               onRowClick={(row) => setExpanded(expanded === row.code ? null : row.code)}
-              renderExpandedRow={(row) => (desktop && expanded === row.code ? expandedContent(row) : null)}
+              expandedRowKey={desktop ? expanded : null}
+              renderExpandedRow={expandedContent}
               renderMobileCard={mobileCard}
             />
           </Card>

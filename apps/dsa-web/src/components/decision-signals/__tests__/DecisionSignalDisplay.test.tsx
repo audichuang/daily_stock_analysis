@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
 import type { DecisionSignalItem } from '../../../types/decisionSignals';
-import { DecisionSignalCard, DecisionSignalDetails, PortfolioSignalSummary } from '../DecisionSignalDisplay';
+import { DecisionSignalCard, DecisionSignalDetails, PortfolioSignalSummary, PriceRuler } from '../DecisionSignalDisplay';
 
 const signal: DecisionSignalItem = {
   id: 7,
@@ -215,7 +215,11 @@ describe('DecisionSignalDetails', () => {
     expect(screen.getByText('后验结果')).toBeInTheDocument();
     expect(screen.getAllByText('3 日').length).toBeGreaterThan(1);
     expect(screen.getByText('命中')).toBeInTheDocument();
-    expect(screen.getByText('5%')).toBeInTheDocument();
+    expect(screen.getByText('+5.00%')).toHaveClass('text-market-up');
+    // 預期方向顯示中文，不露機器值
+    expect(screen.getByText('不看跌')).toBeInTheDocument();
+    expect(screen.queryByText('not_down')).not.toBeInTheDocument();
+    expect(screen.queryByText('decision-signal-v1')).not.toBeInTheDocument();
     expect(screen.getByText('催化')).toBeInTheDocument();
     expect(screen.getByText('业绩窗口')).toBeInTheDocument();
     expect(screen.getByText('失效条件')).toBeInTheDocument();
@@ -286,5 +290,73 @@ describe('DecisionSignalDetails', () => {
 
     expect(screen.getByText('10 days')).toBeInTheDocument();
     expect(screen.queryByText('10d')).not.toBeInTheDocument();
+  });
+});
+
+describe('DecisionSignalDetails order', () => {
+  it('orders the drawer: price, ruler, reason, catalyst and risk, conditions, outcomes, feedback, technical data', () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'zh');
+    render(
+      <UiLanguageProvider>
+        <DecisionSignalDetails
+          item={signal}
+          quote={{ stockCode: signal.stockCode, currentPrice: 1650, changePercent: -1 }}
+        />
+      </UiLanguageProvider>,
+    );
+
+    const ordered = [
+      screen.getByTestId('signal-current-price'),
+      screen.getByTestId('signal-price-ruler'),
+      screen.getByText('趋势保持'),
+      screen.getByText('业绩窗口'),
+      screen.getByText('放量下跌风险'),
+      screen.getByText('观察成交量'),
+      screen.getByText('后验结果'),
+      screen.getByText('用户反馈'),
+      screen.getByText('技术资料'),
+    ];
+    ordered.slice(1).forEach((node, index) => {
+      expect(ordered[index].compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+  });
+
+  it('shows no reading for the current price instead of the signal price', () => {
+    window.localStorage.setItem('dsa.uiLanguage', 'zh');
+    render(
+      <UiLanguageProvider>
+        <DecisionSignalDetails item={{ ...signal, signalPrice: 1234 }} />
+      </UiLanguageProvider>,
+    );
+
+    const block = screen.getByTestId('signal-current-price');
+    expect(block).toHaveTextContent('—');
+    // 訊號當時價只當對照，有標明
+    expect(block).toHaveTextContent('讯号当时 1,234');
+  });
+});
+
+describe('PriceRuler', () => {
+  const renderRuler = (item: DecisionSignalItem, currentPrice?: number) => {
+    window.localStorage.setItem('dsa.uiLanguage', 'zh');
+    return render(
+      <UiLanguageProvider>
+        <PriceRuler item={item} currentPrice={currentPrice} />
+      </UiLanguageProvider>,
+    );
+  };
+
+  it('places marks on one scale from the lowest to the highest level', () => {
+    const { container } = renderRuler({ ...signal, entryLow: null, entryHigh: null, stopLoss: 100, targetPrice: 200 }, 150);
+
+    expect(container.querySelector('[data-mark="stop"]')).toHaveStyle({ left: '0%' });
+    expect(container.querySelector('[data-mark="current"]')).toHaveStyle({ left: '50%' });
+    expect(container.querySelector('[data-mark="target"]')).toHaveStyle({ left: '100%' });
+  });
+
+  it('renders nothing when fewer than two levels can be compared', () => {
+    renderRuler({ ...signal, entryLow: null, entryHigh: null, stopLoss: null, targetPrice: 200 });
+
+    expect(screen.queryByTestId('signal-price-ruler')).not.toBeInTheDocument();
   });
 });

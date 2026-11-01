@@ -13,23 +13,25 @@ import { EmptyState, InlineAlert } from '../common';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import type { UiLanguage, UiTextKey } from '../../i18n/uiText';
 import type { DecisionSignalItem, DecisionSignalStatus } from '../../types/decisionSignals';
-import { buildDecisionActionLabelMap, getDecisionActionLabel } from '../../utils/decisionAction';
+import { buildDecisionActionLabelMap, getDecisionActionLabel, type DecisionActionLabelMap } from '../../utils/decisionAction';
 import { getDecisionSignalProfileLabel } from '../../utils/decisionSignalProfile';
 import {
   getDecisionSignalHorizonLabel,
 } from '../../utils/decisionSignalLabels';
+import { cn } from '../../utils/cn';
 import { parseDecisionSignalDate } from '../../utils/decisionSignalTime';
-import { buildTimelineData, type TimelineDatum } from '../../utils/decisionSignalTimeline';
+import { buildTimelineData, TIMELINE_TONE_COLOR, type TimelineDatum } from '../../utils/decisionSignalTimeline';
 
-const RANK_LABELS: Record<number, string> = {
-  [-3]: 'sell',
-  [-2]: 'reduce',
-  [-1]: 'avoid',
-  0: 'watch / alert',
-  1: 'hold',
-  2: 'add',
-  3: 'buy',
-};
+// 縱軸依 action 枚舉查表，不顯示機器值。觀望與警報同一階，一起列。
+const buildRankLabels = (labels: DecisionActionLabelMap): Record<number, string> => ({
+  [-3]: labels.sell,
+  [-2]: labels.reduce,
+  [-1]: labels.avoid,
+  0: `${labels.watch}／${labels.alert}`,
+  1: labels.hold,
+  2: labels.add,
+  3: labels.buy,
+});
 
 const STATUS_LABEL_KEYS: Record<DecisionSignalStatus, UiTextKey> = {
   active: 'decisionSignals.active',
@@ -62,7 +64,14 @@ function formatDateTime(value: string | null | undefined, language: UiLanguage):
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
+    hourCycle: 'h23',
   }).format(date);
+}
+
+/** 橫軸短日期：只到月日，時間留給 tooltip。 */
+export function formatTimelineAxisDate(value: number, language: UiLanguage): string {
+  if (!Number.isFinite(value)) return '';
+  return new Intl.DateTimeFormat(LOCALE_BY_LANGUAGE[language], { month: 'numeric', day: 'numeric' }).format(new Date(value));
 }
 
 function formatNumber(value: number | null | undefined): string {
@@ -197,6 +206,8 @@ export const DecisionSignalTimeline: React.FC<DecisionSignalTimelineProps> = ({
   const data = buildTimelineData(items);
   const selectedDatum = selectedId === null ? null : data.find((datum) => datum.item.id === selectedId);
   const selectedIndex = selectedDatum?.index ?? null;
+  const actionLabels = buildDecisionActionLabelMap(t);
+  const rankLabels = buildRankLabels(actionLabels);
 
   if (loading) {
     return <p className="text-sm text-secondary-text">{t('common.loading')}...</p>;
@@ -226,7 +237,29 @@ export const DecisionSignalTimeline: React.FC<DecisionSignalTimelineProps> = ({
           message={t('decisionSignals.timelineTruncatedDescription')}
         />
       ) : null}
-      <div className="h-[320px] min-h-[320px] w-full">
+      {/* 手機放不下散點圖的中文軸，改成由新到舊的清單；兩者靠 CSS 斷點切換。 */}
+      <ul data-testid="timeline-mobile-list" className="divide-y divide-border/40 md:hidden">
+        {[...data].reverse().map((datum) => (
+          <li key={datum.item.id}>
+            <button
+              type="button"
+              data-testid={`timeline-list-item-${datum.item.id}`}
+              onClick={() => onSelect(datum.item)}
+              className={cn(
+                'flex min-h-11 w-full items-center justify-between gap-3 py-2 text-left text-sm',
+                selectedId === datum.item.id && 'font-semibold',
+              )}
+            >
+              <span className="tabular-nums text-secondary-text">{formatDateTime(datum.item.createdAt, language)}</span>
+              <span className="min-w-0 flex-1 truncate text-foreground">
+                {getDecisionActionLabel(datum.item.action, datum.item.actionLabel, null, null, actionLabels)}
+              </span>
+              <span className="shrink-0 text-xs text-secondary-text">{t(STATUS_LABEL_KEYS[datum.item.status])}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="hidden h-[320px] min-h-[320px] w-full md:block">
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 18, right: 18, bottom: 20, left: 4 }}>
             <CartesianGrid stroke="rgba(148, 163, 184, 0.18)" vertical={false} />
@@ -234,7 +267,7 @@ export const DecisionSignalTimeline: React.FC<DecisionSignalTimelineProps> = ({
               dataKey="x"
               type="number"
               domain={['dataMin', 'dataMax']}
-              tickFormatter={(value) => formatDateTime(new Date(Number(value)).toISOString(), language)}
+              tickFormatter={(value) => formatTimelineAxisDate(Number(value), language)}
               tick={{ fontSize: 11, fill: 'currentColor' }}
               stroke="rgba(148, 163, 184, 0.5)"
             />
@@ -243,7 +276,7 @@ export const DecisionSignalTimeline: React.FC<DecisionSignalTimelineProps> = ({
               type="number"
               domain={[-3.5, 3.5]}
               ticks={[-3, -2, -1, 0, 1, 2, 3]}
-              tickFormatter={(value) => RANK_LABELS[Number(value)] ?? String(value)}
+              tickFormatter={(value) => rankLabels[Number(value)] ?? ''}
               tick={{ fontSize: 11, fill: 'currentColor' }}
               stroke="rgba(148, 163, 184, 0.5)"
               width={76}
@@ -266,9 +299,9 @@ export const DecisionSignalTimeline: React.FC<DecisionSignalTimelineProps> = ({
         </ResponsiveContainer>
       </div>
       <div className="flex flex-wrap gap-3 text-xs text-secondary-text">
-        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#16a34a]" />{t('decisionSignals.timelineFamilyBullish')}</span>
-        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#dc2626]" />{t('decisionSignals.timelineFamilyDefensive')}</span>
-        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#0891b2]" />{t('decisionSignals.timelineFamilyNeutral')}</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: TIMELINE_TONE_COLOR.brand }} />{t('decisionSignals.timelineFamilyBullish')}</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: TIMELINE_TONE_COLOR.caution }} />{t('decisionSignals.timelineFamilyDefensive')}</span>
+        <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: TIMELINE_TONE_COLOR.neutral }} />{t('decisionSignals.timelineFamilyNeutral')}</span>
         <span>{t('decisionSignals.timelineAlertShape')}</span>
         {selectedIndex !== null ? <span>{t('decisionSignals.timelineSelected', { index: selectedIndex + 1 })}</span> : null}
       </div>

@@ -18,26 +18,6 @@ export type DecisionSignalFeedbackSource = 'web' | 'api';
 export type DecisionProfile = 'conservative' | 'balanced' | 'aggressive';
 export type DecisionProfileDisplay = DecisionProfile | 'unknown';
 
-export interface DecisionSignalSummary {
-  total: number;
-  heldCount: number;
-  actions: Record<string, number>;
-  stopTriggeredCount: number;
-  stopTriggered: Array<{
-    id: number;
-    stockCode: string;
-    stockName?: string | null;
-    market: string;
-    action: string;
-    stopLoss: number;
-    lastClose: number;
-    lastCloseDate: string;
-    isHeld: boolean;
-  }>;
-  /** 有停損價但查不到收盤、無法判定的檔數。 */
-  stopPriceUnavailableCount: number;
-}
-
 export interface DecisionSignalItem {
   id: number;
   stockCode: string;
@@ -72,6 +52,16 @@ export interface DecisionSignalItem {
   createdAt?: string | null;
   updatedAt?: string | null;
   metadata?: DecisionSignalOpaqueJson;
+  /** 來源報告產出當下的現價；不是目前行情。 */
+  signalPrice?: number | null;
+  // 以下只有 groupLatest 才有值。
+  olderCount?: number | null;
+  previousAction?: DecisionAction | null;
+  isHeld?: boolean | null;
+  /** 最新收盤是否已觸停損；無停損價或無讀數為 null，不等於未觸及。 */
+  stopTriggered?: boolean | null;
+  lastClose?: number | null;
+  lastCloseDate?: string | null;
 }
 
 export interface DecisionSignalCreateRequest {
@@ -126,6 +116,8 @@ export interface DecisionSignalListParams {
   expiresTo?: string;
   holdingOnly?: boolean;
   accountId?: number;
+  groupLatest?: boolean;
+  sort?: 'created_at' | 'priority';
   page?: number;
   pageSize?: number;
 }
@@ -350,4 +342,25 @@ export interface DecisionSignalFeedbackRequest {
   reasonCode?: string | null;
   note?: string | null;
   source?: DecisionSignalFeedbackSource;
+}
+
+export interface DecisionSignalStopTriggeredItem {
+  id: number;
+  stockCode: string;
+  stockName?: string | null;
+  market: DecisionSignalMarket;
+  action: DecisionAction;
+  stopLoss: number;
+  lastClose: number;
+  lastCloseDate: string;
+  isHeld: boolean;
+}
+
+export interface DecisionSignalSummaryResponse {
+  total: number;
+  heldCount: number;
+  actions: Partial<Record<DecisionAction, number>>;
+  stopTriggeredCount: number;
+  stopTriggered: DecisionSignalStopTriggeredItem[];
+  stopPriceUnavailableCount: number;
 }

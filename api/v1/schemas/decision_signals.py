@@ -314,6 +314,7 @@ class DecisionSignalItem(BaseModel):
     # 追加欄位。signal_price 是來源報告產出當下的現價；其餘只有 group_latest=true 才填。
     signal_price: Optional[float] = None
     older_count: Optional[int] = None
+    previous_action: Optional[str] = Field(None, description="同檔前一筆的 action；只有 group_latest=true 且有較舊筆才填")
     is_held: Optional[bool] = None
     stop_triggered: Optional[bool] = Field(None, description="最新收盤是否已觸停損；無停損價或無讀數為 null")
     last_close: Optional[float] = None
