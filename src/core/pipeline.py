@@ -61,6 +61,11 @@ from src.report_language import (
     localize_trend_prediction,
     normalize_report_language,
 )
+from src.core.quote_session import (
+    coerce_to_date as _coerce_to_date,
+    premarket_session_unknown as _premarket_session_unknown,
+    resolve_quote_session,
+)
 from src.search_service import SearchService, intel_date_windows
 from src.analysis_context_pack_prompt import format_analysis_context_pack_prompt_section
 from src.analysis_context_pack_overview import render_analysis_context_pack_overview
@@ -162,33 +167,6 @@ def _cumulative_max(existing: Any, realtime: Any) -> Any:
     if _valid(existing) and _valid(realtime):
         return max(existing, realtime)
     return realtime
-
-
-def _coerce_to_date(value: Any) -> Optional[date]:
-    """date／datetime（含 pandas.Timestamp）／ISO 字串（取前 10 碼）統一成 date；無法解析回 None。"""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    try:
-        return date.fromisoformat(str(value)[:10])
-    except ValueError:
-        return None
-
-
-# 不帶報價日期、又可能落後一場的兜底來源：Stooq 的 CSV 日期在建報價時就丟了，DB 缺 T-1 時
-# 它也可能同樣停在 T-2（實測 2026-10-22 紐約盤前），盤前不能憑日曆把它當成上一場收盤。
-_UNDATED_LAGGING_SOURCES = frozenset({RealtimeSource.STOOQ.value})
-
-
-def _premarket_session_unknown(quote: Any) -> bool:
-    """盤前報價沒有自帶日期、來源又可能落後一場時，它屬於哪一場無從得知。"""
-    if _coerce_to_date(getattr(quote, 'provider_timestamp', None)) is not None:
-        return False
-    source = getattr(quote, 'source', None)
-    return str(getattr(source, 'value', source)) in _UNDATED_LAGGING_SOURCES
 
 
 def _share_image_payload(result: Any) -> Optional[Dict[str, Any]]:
@@ -1299,12 +1277,12 @@ class StockAnalysisPipeline:
                 )
                 # orig_today['date'] 可能是 date／Timestamp／ISO 字串；先正規化成 date 再比較。
                 orig_date_norm = _coerce_to_date(orig_today.get('date'))
-                # provider 時間優先；抓取時間可能是休市日，不能直接當作報價場次。
-                quote_session = _coerce_to_date(getattr(realtime_quote, 'provider_timestamp', None))
-                if quote_session is None:
-                    quote_session = market_today_date if quote_is_today else get_effective_trading_date(
-                        market, current_time=market_now
-                    )
+                quote_session = resolve_quote_session(
+                    realtime_quote,
+                    market_today=market_today_date,
+                    quote_is_today=quote_is_today,
+                    previous_session=lambda: get_effective_trading_date(market, current_time=market_now),
+                )
                 # DB 最新列早於報價場次（報價那一場的 K 還沒進庫）：原 today 才是真正的「昨日」，
                 # 不平移的話即時價會拿去比前天收盤（實測 3008：-5.67% 被算成 -9.45%）。
                 # 不能只在「報價屬於今天」時平移：開盤前的報價是 T-1 收盤，而 DB 也可能缺 T-1

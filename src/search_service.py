@@ -2598,7 +2598,10 @@ class MopsAnnouncementProvider(BaseSearchProvider):
         started = time.time()
         end = window[1] if window else datetime.now().date()
         start = window[0] if window else end - timedelta(days=max(1, days))
-        months = sorted({(start.year, start.month), (end.year, end.month)})
+        months = [
+            (index // 12, index % 12 + 1)
+            for index in range(start.year * 12 + start.month - 1, end.year * 12 + end.month)
+        ]
         try:
             rows = [row for year, month in months for row in self._fetch_month(stock_id, year, month)]
         except Exception as exc:
@@ -5243,8 +5246,9 @@ class SearchService:
                 and FinMindNewsProvider.stock_id_for(stock_code)
             ):
                 candidates = [self._finmind_provider, *candidates]
+            # 這個面向沒有來源（例如只有 FinMind 時的事件查詢），後面的面向可能還有。
             if not candidates:
-                break
+                continue
 
             dim_window = _dimension_window(dim)
             if dim_window is not None:

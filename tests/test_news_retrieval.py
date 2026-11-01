@@ -15,6 +15,7 @@ if "newspaper" not in sys.modules:
 from src.core.trading_calendar import is_market_open, recent_sessions_start  # noqa: E402
 from src.search_service import (  # noqa: E402
     DeepSeekSearchProvider,
+    FinMindNewsProvider,
     MopsAnnouncementProvider,
     SearchResponse,
     SearchResult,
@@ -283,6 +284,35 @@ def test_mops_parse_converts_roc_date_and_keeps_only_target_company():
     assert "seq_no=1" in rows[0].url
 
 
+def test_mops_queries_middle_months_across_year_end():
+    provider = MopsAnnouncementProvider()
+    with patch.object(MopsAnnouncementProvider, "_fetch_month", return_value=[]) as fetch:
+        provider.search("q", stock_code="3481.TW", window=(date(2026, 11, 30), date(2027, 2, 1)))
+    assert [call.args[1:] for call in fetch.call_args_list] == [(2026, 11), (2026, 12), (2027, 1), (2027, 2)]
+
+
+def _finmind_only(handler):
+    service = _service()
+    service._finmind_provider = _Provider(FinMindNewsProvider, "FinMind", handler)
+    return service
+
+
+def test_finmind_only_with_event_still_runs_latest_news():
+    service = _finmind_only(lambda q, k: [_item("群創 3481 重挫", TODAY)])
+    result = _run(service, code="3481.TW", name="群創",
+                  price_event={"event_date": TODAY.isoformat(), "change_pct": -7.5})
+    assert list(result) == ["latest_news"]
+    assert result["latest_news"].provider == "FinMind"
+    assert len(service._finmind_provider.calls) == 1
+
+
+def test_finmind_only_without_event_matches_with_event():
+    service = _finmind_only(lambda q, k: [_item("群創 3481 重挫", TODAY)])
+    result = _run(service, code="3481.TW", name="群創")
+    assert list(result) == ["latest_news"]
+    assert len(service._finmind_provider.calls) == 1
+
+
 def test_mops_http_failure_returns_unsuccessful_response():
     with patch("src.search_service.requests.post", side_effect=OSError("boom")):
         result = MopsAnnouncementProvider().search("q", stock_code="3481.TW")
@@ -426,8 +456,68 @@ def test_friday_and_sunday_see_the_same_event_from_the_same_bars():
     assert sunday == friday
 
 
-def _quote(change, provider_timestamp=None):
-    return SimpleNamespace(change_pct=change, provider_timestamp=provider_timestamp)
+def _quote(change, provider_timestamp=None, source="yfinance", is_stale=None):
+    return SimpleNamespace(change_pct=change, provider_timestamp=provider_timestamp, source=source, is_stale=is_stale)
+
+
+def test_older_stale_quote_does_not_hide_newer_bar():
+    monday = _open_week("tw")
+    friday = monday + timedelta(days=4)
+    bars = _week_bars(monday, 0.5)
+    bars[-1]["pct_chg"] = -7.5
+    quote = _quote(0.1, f"{friday - timedelta(days=1)}T13:30:00", is_stale=True)
+    event = _signal("3481.TW", "tw", _at(friday, 15), daily_bars=bars, realtime_quote=quote)["price_event"]
+    assert event["event_date"] == friday.isoformat()
+    assert event["change_pct"] == -7.5
+
+
+def test_dated_quote_adds_its_session_when_bar_is_missing():
+    monday = _open_week()
+    thursday = monday + timedelta(days=3)
+    bars = _week_bars(monday, 0.5)[:3]
+    quote = _quote(-20.0, f"{thursday}T16:00:00", is_stale=True)
+    event = _signal("INTC", "us", _at(monday + timedelta(days=4), 17), daily_bars=bars, realtime_quote=quote)["price_event"]
+    assert event["event_date"] == thursday.isoformat()
+
+
+def test_undated_stooq_before_open_is_not_injected():
+    next_monday = _open_week() + timedelta(days=7)
+    if not is_market_open("us", next_monday):
+        pytest.skip("next Monday is a holiday")
+    quote = _quote(-20.0, source="stooq")
+    assert _signal("INTC", "us", _at(next_monday, 8), realtime_quote=quote)["price_event"] is None
+
+
+def test_undated_stooq_on_closed_day_is_not_injected_but_bars_still_decide():
+    monday = _open_week()
+    sunday = monday + timedelta(days=6)
+    assert _signal("INTC", "us", _at(sunday, 10), realtime_quote=_quote(-20.0, source="stooq"))["price_event"] is None
+    event = _signal("INTC", "us", _at(sunday, 10), daily_bars=_week_bars(monday, -20.0),
+                    realtime_quote=_quote(1.0, source="stooq"))["price_event"]
+    assert event["event_date"] == monday.isoformat()
+
+
+def test_undated_stooq_during_session_still_counts_as_today():
+    monday = _open_week()
+    event = _signal("INTC", "us", _at(monday, 11), realtime_quote=_quote(-20.0, source="stooq"))["price_event"]
+    assert event["event_date"] == monday.isoformat()
+
+
+def test_dated_stooq_before_open_uses_its_own_date():
+    next_monday = _open_week() + timedelta(days=7)
+    if not is_market_open("us", next_monday):
+        pytest.skip("next Monday is a holiday")
+    stamp = f"{next_monday - timedelta(days=3)}T16:00:00"
+    event = _signal("INTC", "us", _at(next_monday, 8), realtime_quote=_quote(-20.0, stamp, "stooq"))["price_event"]
+    assert event["event_date"] == (next_monday - timedelta(days=3)).isoformat()
+
+
+def test_bar_after_latest_opened_session_is_ignored():
+    next_monday = _open_week() + timedelta(days=7)
+    if not is_market_open("us", next_monday):
+        pytest.skip("next Monday is a holiday")
+    bars = [{"date": next_monday.isoformat(), "close": 100.0, "low": 95.0, "pct_chg": -20.0}]
+    assert _signal("INTC", "us", _at(next_monday, 8), daily_bars=bars)["price_event"] is None
 
 
 def test_premarket_quote_without_bars_belongs_to_previous_session():

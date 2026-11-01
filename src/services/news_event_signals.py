@@ -4,7 +4,14 @@ import re
 from datetime import date, timedelta
 from types import SimpleNamespace
 
-from src.core.trading_calendar import latest_opened_session
+from src.core.quote_session import coerce_to_date, premarket_session_unknown, resolve_quote_session
+from src.core.trading_calendar import (
+    MarketPhase,
+    get_effective_trading_date,
+    infer_market_phase,
+    is_market_open,
+    latest_opened_session,
+)
 from src.services.event_gap import detect_event_gap
 
 logger = logging.getLogger(__name__)
@@ -52,6 +59,38 @@ def _calendar_published_day(code, now):
     return now.date()
 
 
+def _known_quote_session(market, now, quote):
+    """報價確定屬於哪一場才回傳，判定與分析上下文相同；無日期又可能落後的盤前／休市報價回 None。"""
+    quote_is_today = bool(
+        market and is_market_open(market, now.date()) and infer_market_phase(market, now) != MarketPhase.PREMARKET
+    )
+    if not quote_is_today and premarket_session_unknown(quote):
+        return None
+    return resolve_quote_session(
+        quote,
+        market_today=now.date(),
+        quote_is_today=quote_is_today,
+        previous_session=lambda: get_effective_trading_date(market, current_time=now),
+    )
+
+
+def _session_rows(market, now, daily_bars, quote):
+    """事件場次以帶日期的日線為主；報價只補它確定所屬、且不晚於最近已開盤場次的那一場。"""
+    cutoff = latest_opened_session(market, now) or now.date()
+    rows = []
+    change = getattr(quote, "change_pct", None)
+    if change is not None:
+        session = _known_quote_session(market, now, quote)
+        if session is not None and session <= cutoff:
+            # 排在日線前面：同一場有實際日線時由日線覆蓋。
+            rows.append({"date": session.isoformat(), "pct_chg": change})
+    for bar in daily_bars or []:
+        day = coerce_to_date(bar.get("date"))
+        if day is not None and day <= cutoff:
+            rows.append(bar)
+    return rows
+
+
 def resolve_news_event_signals(
     code, market, now, *, config, fundamental_context=None, daily_bars=None, realtime_quote=None,
 ):
@@ -66,17 +105,8 @@ def resolve_news_event_signals(
     except Exception as exc:
         logger.warning("財報日訊號讀取失敗 %s: %s", code, type(exc).__name__)
     try:
-        # 報價屬於哪一場：provider 時間優先，否則最近已開盤的場次（盤前與休市日是前一場）。
-        # 用掛鐘日會在休市日多算一個空場次，也會把週一盤前的週五報價標成週一事件。
-        session = _parse_day(getattr(realtime_quote, "provider_timestamp", None))
-        session = session or latest_opened_session(market, now)
-        change = getattr(realtime_quote, "change_pct", None)
-        context = {"event_gap_daily_bars": daily_bars or []}
-        if session is not None:
-            # 即時幅度掛在報價所屬場次：當天日線已入庫時由日線覆蓋，未入庫時才不會漏掉今天。
-            context["today"] = {"date": session.isoformat(), "pct_chg": change}
-        elif change is not None:
-            context["realtime"] = {"change_pct": change}
+        rows = _session_rows(market, now, daily_bars, realtime_quote)
+        context = {"event_gap_daily_bars": rows}
         thresholds = SimpleNamespace(
             event_gap_threshold_pct=NEWS_EVENT_THRESHOLD_PCT_BY_MARKET.get(
                 market, getattr(config, "event_gap_threshold_pct", 12.0)),
