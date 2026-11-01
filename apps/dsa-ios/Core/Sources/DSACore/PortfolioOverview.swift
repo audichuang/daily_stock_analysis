@@ -32,7 +32,7 @@ public extension PortfolioSnapshot {
     var combinedDayPnl: Double? {
         if fundOnlyValueUnknown { return nil }
         if (consolidatedFundValueBase ?? 0) > 0, consolidatedFundDayPnlBase == nil { return nil }
-        let stock = consolidatedDayPnlBase ?? (accounts.isEmpty ? 0 : nil)
+        let stock = consolidatedDayPnlBase ?? (accounts.isEmpty && consolidatedFxMissing != true ? 0 : nil)
         return stock.map { $0 + (consolidatedFundDayPnlBase ?? 0) }
     }
 
@@ -40,7 +40,7 @@ public extension PortfolioSnapshot {
     var overview: PortfolioOverview? {
         guard let displayCurrency, !displayCurrency.isEmpty else { return nil }
         let fund = consolidatedFundValueBase
-        let total = fundOnlyValueUnknown ? nil : (consolidatedEquityBase ?? (accounts.isEmpty ? 0 : nil)).map { $0 + (fund ?? 0) }
+        let total = fundOnlyValueUnknown ? nil : (consolidatedEquityBase ?? (accounts.isEmpty && consolidatedFxMissing != true ? 0 : nil)).map { $0 + (fund ?? 0) }
         let day = combinedDayPnl
         var percent: Double?
         if let unrealized = consolidatedUnrealizedPnlBase, let value = consolidatedMarketValueBase, value - unrealized > 0 {
