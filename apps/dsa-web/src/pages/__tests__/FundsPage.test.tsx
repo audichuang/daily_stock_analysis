@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createApiError, createParsedApiError } from '../../api/error';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import FundsPage from '../FundsPage';
 
@@ -17,7 +18,17 @@ vi.mock('../../api/index', () => ({
 
 vi.mock('recharts', () => {
   const Stub = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
-  return { LineChart: Stub, Line: Stub, ResponsiveContainer: Stub, Tooltip: Stub, XAxis: Stub, YAxis: Stub };
+  return {
+    LineChart: Stub,
+    Line: Stub,
+    ResponsiveContainer: Stub,
+    Tooltip: Stub,
+    XAxis: Stub,
+    YAxis: ({ tickFormatter }: { tickFormatter?: (value: number) => string }) => (
+      <div data-testid="y-axis">{tickFormatter?.(766.5)}</div>
+    ),
+    ReferenceLine: ({ y }: { y: number }) => <div data-testid="cost-line">{y}</div>,
+  };
 });
 
 const iso = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000).toISOString().slice(0, 10);
@@ -107,15 +118,147 @@ describe('FundsPage', () => {
     expect(get.mock.calls.some(([, cfg]) => cfg?.params?.days !== undefined)).toBe(false);
   });
 
-  it('searches funds by keyword', async () => {
+  it('searches funds from the header dropdown and marks held funds without truncating names', async () => {
     renderPage();
-    fireEvent.change(screen.getByPlaceholderText('Fund or company'), { target: { value: '奔腾' } });
-    fireEvent.click(screen.getByRole('button', { name: /Search/ }));
-    expect(await screen.findByText('统一奔腾基金')).toBeInTheDocument();
+    const header = within(screen.getByTestId('funds-header-search'));
+    fireEvent.change(header.getByPlaceholderText('Fund or company'), { target: { value: '奔腾' } });
+    fireEvent.click(header.getByRole('button', { name: /Search/ }));
+    expect(await screen.findByText('统一奔腾基金')).not.toHaveClass('truncate');
     expect(get).toHaveBeenCalledWith('/api/v1/funds/search', { params: { q: '奔腾', limit: 20 } });
   });
 
-  describe('holding form picks up the selected fund', () => {
+  it('marks a search result that is already held', async () => {
+    get.mockImplementation((url: string) => (
+      url === '/api/v1/funds/search'
+        ? Promise.resolve({ data: { items: [{ fund_id: '18480065', name: '安联台湾科技基金', nav: 783.21, nav_date: iso(0) }] } })
+        : route(url)
+    ));
+    renderPage();
+    await screen.findAllByText('安联台湾科技基金');
+    const header = within(screen.getByTestId('funds-header-search'));
+    fireEvent.change(header.getByPlaceholderText('Fund or company'), { target: { value: '安联' } });
+    fireEvent.click(header.getByRole('button', { name: /Search/ }));
+    expect(await header.findByText('Held')).toBeInTheDocument();
+  });
+
+  it('selects the first holding by default and highlights its row', async () => {
+    renderPage();
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/funds/18480065'));
+    expect(await screen.findByRole('heading', { name: '安联台湾科技基金' })).toBeInTheDocument();
+    const desktop = within(screen.getByTestId('data-table-desktop'));
+    expect(desktop.getByText('安联台湾科技基金').closest('tr')).toHaveAttribute('data-row-highlighted', 'true');
+  });
+
+  it('keeps the mobile detail layer closed on the default selection and opens it on tap', async () => {
+    renderPage();
+    await screen.findByRole('heading', { name: '安联台湾科技基金' });
+    expect(screen.getByTestId('funds-detail').className).toContain('hidden md:block');
+    fireEvent.click(within(screen.getByTestId('data-table-mobile')).getByText('安联台湾科技基金'));
+    expect(screen.getByTestId('funds-detail').className).toContain('fixed inset-0');
+    fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
+    expect(screen.getByTestId('funds-detail').className).toContain('hidden md:block');
+  });
+
+  it('shows the overview totals with signed P/L and an uncoloured market value', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/api/v1/funds/holdings') {
+        return Promise.resolve({
+          data: {
+            ...holdingsResponse(450906),
+            totals: [{ currency: 'TWD', cost_total: 232000, market_value: 450906, pnl: 218906, pnl_pct: 94.36, day_pnl: -1200 }],
+          },
+        });
+      }
+      return route(url);
+    });
+    renderPage();
+    const overview = (await screen.findByText('Total P/L')).closest('[data-testid="metric-group"]') as HTMLElement;
+    const scope = within(overview);
+    expect(scope.getByText('+218,906')).toHaveClass('text-market-up');
+    expect(scope.getByText('\u22121,200')).toHaveClass('text-market-down');
+    const marketValue = scope.getByText('450,906');
+    expect(marketValue.className).not.toContain('text-market');
+    expect(marketValue.closest('span')).toBeNull();
+    expect(scope.getByText('232,000')).toBeInTheDocument();
+  });
+
+  it('draws the cost line at the unit cost and uses decimals that keep axis ticks distinct', async () => {
+    renderPage('/funds?fund=18480065');
+    const line = await screen.findByTestId('cost-line');
+    expect(Number(line.textContent)).toBeCloseTo(232000 / 588.2, 4);
+    // 走勢振幅 16.62 → 一位小數，不再全取整。
+    expect(screen.getByTestId('y-axis')).toHaveTextContent('766.5');
+    expect(screen.getByTestId('funds-range-row')).toHaveTextContent('+2.17%');
+  });
+
+  it('marks top holdings that overlap the ledger and shows the data month', async () => {
+    get.mockImplementation((url: string) => (
+      url === '/api/v1/funds/18480065/holdings'
+        ? Promise.resolve({
+            data: {
+              fund_id: '18480065',
+              items: [
+                { name: '台积电', sector: '半导体', weight: 9.1, country: '台湾', ledger_symbol: '2330.TW' },
+                { name: '创意', sector: '科技', weight: 7.65, country: '台湾' },
+              ],
+              error: null,
+              as_of_month: '2026-09',
+              overlap: [{ symbol: '2330.TW', name: '台积电', weight: 9.1 }],
+            },
+          })
+        : route(url)
+    ));
+    renderPage('/funds?fund=18480065');
+    const held = await screen.findByText('Also in ledger');
+    expect(held.closest('tr')).toHaveTextContent('台积电');
+    expect(screen.getAllByText('Also in ledger')).toHaveLength(1);
+    expect(screen.getByText(/Holdings as of 2026-09/)).toBeInTheDocument();
+  });
+
+  it('keeps errors local: a failed chart does not hide detail or holdings', async () => {
+    get.mockImplementation((url: string) => (
+      url === '/api/v1/funds/18480065/nav' ? Promise.reject(new Error('nav down')) : route(url)
+    ));
+    renderPage('/funds?fund=18480065');
+    expect(await screen.findByText('NAV chart is unavailable right now')).toBeInTheDocument();
+    expect(screen.getByText('+157.99%')).toBeInTheDocument();
+    expect(screen.getAllByText('安联台湾科技基金').length).toBeGreaterThan(0);
+  });
+
+  it('keeps holdings visible when the detail fails and retries only the detail', async () => {
+    let fail = true;
+    get.mockImplementation((url: string) => {
+      if (url === '/api/v1/funds/18480065' && fail) return Promise.reject(new Error('detail down'));
+      return route(url);
+    });
+    renderPage('/funds?fund=18480065');
+    expect(await screen.findByText('detail down')).toBeInTheDocument();
+    expect(screen.getAllByText('安联台湾科技基金').length).toBeGreaterThan(0);
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('+157.99%')).toBeInTheDocument();
+  });
+
+  it('shows a skeleton instead of the previous fund while switching', async () => {
+    let resolveDetail: (value: unknown) => void = () => undefined;
+    get.mockImplementation((url: string) => {
+      if (url === '/api/v1/funds/73990253') return new Promise((resolve) => { resolveDetail = resolve; });
+      if (url === '/api/v1/funds/73990253/holdings') return Promise.resolve({ data: { fund_id: '73990253', items: [], error: 'not_mapped' } });
+      return route(url);
+    });
+    renderPage('/funds?fund=18480065');
+    await screen.findByText('+157.99%');
+    const header = within(screen.getByTestId('funds-header-search'));
+    fireEvent.change(header.getByPlaceholderText('Fund or company'), { target: { value: '奔腾' } });
+    fireEvent.click(header.getByRole('button', { name: /Search/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /统一奔腾基金/ }));
+    expect(await screen.findByTestId('funds-detail-skeleton')).toBeInTheDocument();
+    expect(screen.queryByText('+157.99%')).not.toBeInTheDocument();
+    resolveDetail({ data: { ...detailResponse, fund_id: '73990253', name: '统一奔腾基金' } });
+    await screen.findByRole('heading', { name: '统一奔腾基金' });
+  });
+
+  describe('holding form', () => {
     // 搜尋結果 73990253 的詳情／走勢／持股，沿用 18480065 的形狀換掉代號與名稱
     const routeWithSecondFund = (url: string) => {
       if (url === '/api/v1/funds/73990253') {
@@ -128,38 +271,45 @@ describe('FundsPage', () => {
       return route(url);
     };
 
-    const pickSearchResult = async () => {
-      fireEvent.change(screen.getByPlaceholderText('Fund or company'), { target: { value: '奔腾' } });
-      fireEvent.click(screen.getByRole('button', { name: /Search/ }));
-      fireEvent.click(await screen.findByRole('button', { name: /统一奔腾基金/ }));
-      await screen.findByRole('heading', { name: '统一奔腾基金' });
+    const pickFrom = async (scope: ReturnType<typeof within>) => {
+      fireEvent.change(scope.getByPlaceholderText('Fund or company'), { target: { value: '奔腾' } });
+      fireEvent.click(scope.getByRole('button', { name: /Search/ }));
+      fireEvent.click(await scope.findByRole('button', { name: /统一奔腾基金/ }));
     };
 
     beforeEach(() => {
       get.mockImplementation(routeWithSecondFund);
+      post.mockReset();
     });
 
-    it('fills an empty add form once a fund is searched and selected', async () => {
+    it('fills an empty add form once a fund is picked in the dialog', async () => {
+      get.mockImplementation((url: string) => (
+        url === '/api/v1/funds/holdings'
+          ? Promise.resolve({ data: { items: [], totals: [], nav_error: null } })
+          : routeWithSecondFund(url)
+      ));
       renderPage();
-      await screen.findAllByText('安联台湾科技基金');
+      await screen.findByText('No fund holdings yet');
       fireEvent.click(screen.getByRole('button', { name: 'Add holding' }));
-      expect(screen.getByText('Search and select a fund below first')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+      const dialog = within(await screen.findByRole('dialog'));
+      expect(dialog.getByText('Search and select a fund below first')).toBeInTheDocument();
+      expect(dialog.getByRole('button', { name: 'Save' })).toBeDisabled();
 
-      await pickSearchResult();
+      await pickFrom(dialog);
 
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled());
-      expect(screen.queryByText('Search and select a fund below first')).not.toBeInTheDocument();
-      expect(screen.getByText('Add holding：统一奔腾基金')).toBeInTheDocument();
+      await waitFor(() => expect(dialog.getByRole('button', { name: 'Save' })).toBeEnabled());
+      expect(dialog.queryByText('Search and select a fund below first')).not.toBeInTheDocument();
+      expect(dialog.getByText('Add holding：统一奔腾基金')).toBeInTheDocument();
     });
 
-    it('keeps the fund of an add form that already has one', async () => {
+    it('keeps the fund of an add form that already has one when the page selection changes', async () => {
       renderPage('/funds?fund=18480065');
       await screen.findByText('+157.99%');
       fireEvent.click(screen.getByRole('button', { name: 'Add holding' }));
       expect(screen.getByText('Add holding：安联台湾科技基金')).toBeInTheDocument();
 
-      await pickSearchResult();
+      await pickFrom(within(screen.getByTestId('funds-header-search')));
+      await screen.findByRole('heading', { name: '统一奔腾基金' });
 
       expect(screen.getByText('Add holding：安联台湾科技基金')).toBeInTheDocument();
       expect(screen.queryByText('Add holding：统一奔腾基金')).not.toBeInTheDocument();
@@ -171,10 +321,35 @@ describe('FundsPage', () => {
       fireEvent.click(screen.getAllByRole('button', { name: 'Edit holding' })[0]);
       expect(screen.getByText('Edit holding：安联台湾科技基金')).toBeInTheDocument();
 
-      await pickSearchResult();
+      await pickFrom(within(screen.getByTestId('funds-header-search')));
+      await screen.findByRole('heading', { name: '统一奔腾基金' });
 
       expect(screen.getByText('Edit holding：安联台湾科技基金')).toBeInTheDocument();
       expect(screen.queryByText('Edit holding：统一奔腾基金')).not.toBeInTheDocument();
+    });
+
+    it('shows field errors instead of silently refusing to save', async () => {
+      renderPage('/funds?fund=18480065');
+      await screen.findByText('+157.99%');
+      fireEvent.click(screen.getByRole('button', { name: 'Add holding' }));
+      const dialog = within(await screen.findByRole('dialog'));
+      fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+      expect(await dialog.findByText('Units must be above 0')).toBeInTheDocument();
+      expect(dialog.getByText('Enter a total cost of 0 or more')).toBeInTheDocument();
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it('puts a duplicate-platform conflict on the platform field and keeps the form open', async () => {
+      post.mockRejectedValueOnce(createApiError(createParsedApiError({ title: 'Conflict', message: 'Platform already recorded', status: 409 })));
+      renderPage('/funds?fund=18480065');
+      await screen.findByText('+157.99%');
+      fireEvent.click(screen.getByRole('button', { name: 'Add holding' }));
+      const dialog = within(await screen.findByRole('dialog'));
+      fireEvent.change(dialog.getByLabelText('Units'), { target: { value: '10' } });
+      fireEvent.change(dialog.getByLabelText('Total cost'), { target: { value: '1000' } });
+      fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+      expect(await dialog.findByText('Platform already recorded')).toBeInTheDocument();
+      expect(dialog.getByLabelText('Platform')).toHaveAttribute('aria-invalid', 'true');
     });
   });
 });

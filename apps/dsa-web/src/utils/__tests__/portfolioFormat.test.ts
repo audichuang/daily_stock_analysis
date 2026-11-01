@@ -32,7 +32,7 @@ const pricedPosition: PortfolioPositionItem = {
 describe('portfolioFormat', () => {
   it('formats money and signed percentages consistently', () => {
     expect(formatMoney(1234.5, 'USD')).toBe('USD 1,234.50');
-    expect(formatMoney(null)).toBe('--');
+    expect(formatMoney(null)).toBe('—');
     // 不再預設 CNY：快照沒帶幣別時只顯示數字，不亂標幣別。
     expect(formatMoney(1234.5)).toBe('1,234.50');
     expect(formatSignedPct(3.456)).toBe('+3.46%');
@@ -49,8 +49,8 @@ describe('portfolioFormat', () => {
     expect(formatPositionPrice(usdInTwdAccount)).toBe('1,264.50');
 
     const missingPosition = { ...pricedPosition, priceAvailable: false, priceSource: 'missing' };
-    expect(formatPositionPrice(missingPosition)).toBe('--');
-    expect(formatPositionMoney(123, missingPosition)).toBe('--');
+    expect(formatPositionPrice(missingPosition)).toBe('—');
+    expect(formatPositionMoney(123, missingPosition)).toBe('—');
     expect(getPositionPriceLabel(missingPosition)).toBe('缺价');
   });
 

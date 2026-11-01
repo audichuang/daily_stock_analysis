@@ -1,26 +1,31 @@
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pencil, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { ArrowLeft, Pencil, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
-import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { fundsApi } from '../api/funds';
 import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
 import {
   ApiErrorAlert,
   AppPage,
+  Badge,
   Button,
   Card,
   ConfirmDialog,
+  DataTable,
   EmptyState,
+  IconButton,
   InlineAlert,
   Input,
-  Loading,
+  Metric,
+  MetricGroup,
   PageHeader,
 } from '../components/common';
+import type { DataTableColumn, SortState } from '../components/common';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import type { UiTextKey } from '../i18n/uiText';
-import { getIntlLocale } from '../i18n/intlLocale';
 import type {
   FundDetail,
   FundHoldingItem,
@@ -31,11 +36,11 @@ import type {
   FundSearchItem,
   FundTopHoldingsResponse,
 } from '../types/funds';
-import { formatSignedPct, getTodayIso } from '../utils/portfolioFormat';
+import { formatNumber, formatPercent, NO_VALUE } from '../utils/format';
+import { fundUnitCost, navAxisDigits } from '../utils/fundChart';
+import { getTodayIso } from '../utils/portfolioFormat';
 import { cn } from '../utils/cn';
 import { marketToneClass } from '../utils/marketTone';
-
-const changeClass = (value?: number | null): string => marketToneClass(value);
 
 type RangeKey = 'm1' | 'm3' | 'm6' | 'y1' | 'y3' | 'y5' | 'all';
 // 區間走勢交給後端用報酬卡同一個基準點切（period），首尾相除才會等於同頁的「近N」報酬；all 不切
@@ -56,6 +61,8 @@ type HoldingForm = {
   note: string;
 };
 
+type FormErrors = Partial<Record<'units' | 'costTotal' | 'asOf' | 'platform', string>>;
+
 const emptyForm = (fund?: { fundId: string; name: string }): HoldingForm => ({
   fundId: fund?.fundId ?? '',
   fundName: fund?.name ?? '',
@@ -66,40 +73,151 @@ const emptyForm = (fund?: { fundId: string; name: string }): HoldingForm => ({
   note: '',
 });
 
-const FundsPage: React.FC = () => {
-  const { t, language } = useUiLanguage();
-  const locale = getIntlLocale(language);
-  const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get('fund');
+/** 金額帶正負號；市值與成本不用這個，也不染色。 */
+const signedNumber = (value: number | null | undefined, digits = 0): string => {
+  if (value == null || !Number.isFinite(value)) return NO_VALUE;
+  return `${value > 0 ? '+' : ''}${formatNumber(value, digits)}`;
+};
 
+const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <h3 className="mb-2 text-sm font-semibold text-foreground">{children}</h3>
+);
+
+const SkeletonBlock: React.FC<{ className?: string }> = ({ className }) => (
+  <div className={cn('animate-pulse rounded-lg bg-border/40', className)} />
+);
+
+interface FundSearchBoxProps {
+  heldIds: Set<string>;
+  onPick: (item: FundSearchItem) => void;
+  className?: string;
+}
+
+/** 搜尋下拉：頁首與表單共用。名稱完整換行不截尾，已持有的標記出來。 */
+const FundSearchBox: React.FC<FundSearchBoxProps> = ({ heldIds, onPick, className }) => {
+  const { t } = useUiLanguage();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<FundSearchItem[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [error, setError] = useState<ParsedApiError | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!results) return undefined;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!boxRef.current?.contains(event.target as Node)) setResults(null);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [results]);
+
+  const runSearch = async (event: React.FormEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const q = query.trim();
+    if (!q) return;
+    setSearching(true);
+    setError(null);
+    try {
+      setResults((await fundsApi.search(q)).items);
+    } catch (err) {
+      setResults(null);
+      setError(getParsedApiError(err));
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  return (
+    <div ref={boxRef} className={cn('relative', className)}>
+      <form className="flex gap-2" onSubmit={(event) => void runSearch(event)}>
+        <div className="min-w-0 flex-1">
+          <Input
+            aria-label={t('funds.search.placeholder')}
+            placeholder={t('funds.search.placeholder')}
+            title={t('funds.search.hint')}
+            maxLength={64}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <Button type="submit" variant="secondary" disabled={searching || !query.trim()}>
+          <Search className="h-4 w-4" />
+          {t('funds.search.submit')}
+        </Button>
+      </form>
+      {error ? <div className="mt-2"><ApiErrorAlert error={error} onDismiss={() => setError(null)} /></div> : null}
+      {results ? (
+        <div className="absolute left-0 right-0 z-30 mt-1 max-h-96 overflow-y-auto rounded-[var(--radius-control)] border border-border/70 bg-card p-1 shadow-soft-card md:min-w-[28rem]">
+          {results.length === 0 ? (
+            <div className="px-2 py-3 text-sm text-secondary-text">{t('funds.search.empty')}</div>
+          ) : (
+            <ul>
+              {results.map((item) => (
+                <li key={item.fundId}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResults(null);
+                      setQuery('');
+                      onPick(item);
+                    }}
+                    className="flex w-full cursor-pointer items-start justify-between gap-3 rounded-[6px] px-2 py-2 text-left text-sm hover:bg-hover"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block break-words font-medium">
+                        {item.name}
+                        {heldIds.has(item.fundId) ? <Badge variant="info" className="ml-2 align-middle">{t('funds.search.held')}</Badge> : null}
+                      </span>
+                      <span className="block text-xs text-secondary-text">
+                        {[item.company, item.typeName, item.currency, item.fundId].filter(Boolean).join(' · ')}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-right tabular-nums">
+                      {formatNumber(item.nav, 2)}
+                      <span className="block text-xs text-secondary-text">{item.navDate ?? t('funds.noNav')}</span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+const FundsPage: React.FC = () => {
+  const { t } = useUiLanguage();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedId = searchParams.get('fund');
+
   const [holdings, setHoldings] = useState<FundHoldingListResponse | null>(null);
+  const [holdingsError, setHoldingsError] = useState<ParsedApiError | null>(null);
   const [detail, setDetail] = useState<FundDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<ParsedApiError | null>(null);
+  const [detailReload, setDetailReload] = useState(0);
   const [points, setPoints] = useState<FundNavPoint[]>([]);
+  const [navError, setNavError] = useState<ParsedApiError | null>(null);
   const [range, setRange] = useState<RangeKey>('y1');
   const [top, setTop] = useState<FundTopHoldingsResponse | null>(null);
-  const [error, setError] = useState<ParsedApiError | null>(null);
   const [form, setForm] = useState<HoldingForm | null>(null);
+  const [formErrors, setFormErrors] = useState<FormErrors>({});
+  const [formError, setFormError] = useState<ParsedApiError | null>(null);
   const [saving, setSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<FundHoldingItem | null>(null);
-
-  const num = useCallback(
-    (value: number | null | undefined, digits = 2) =>
-      value == null || Number.isNaN(value)
-        ? '—'
-        : value.toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits }),
-    [locale],
-  );
-  const pct = (value: number | null | undefined) => (value == null ? '—' : formatSignedPct(value));
+  const [sort, setSort] = useState<SortState>({ key: 'marketValue', direction: 'desc' });
+  // 手機的全螢幕詳情層：預設選第一檔不開，使用者點了才開。
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const loadHoldings = useCallback(async () => {
+    setHoldingsError(null);
     try {
       setHoldings(await fundsApi.listHoldings());
     } catch (err) {
-      setError(getParsedApiError(err));
+      setHoldingsError(getParsedApiError(err));
     }
   }, []);
 
@@ -108,24 +226,48 @@ const FundsPage: React.FC = () => {
   }, [loadHoldings]);
 
   const selectFund = useCallback(
-    (fundId: string) => {
+    (fundId: string, options: { replace?: boolean } = {}) => {
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
         next.set('fund', fundId);
         return next;
-      });
+      }, options);
     },
     [setSearchParams],
   );
 
+  const items = useMemo(() => holdings?.items ?? [], [holdings]);
+  const sortedItems = useMemo(() => {
+    const sign = sort.direction === 'asc' ? 1 : -1;
+    const numeric = (value: number | null | undefined) => (typeof value === 'number' && Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY);
+    const metric = (item: FundHoldingItem): number => {
+      if (sort.key === 'pnl') return numeric(item.pnl);
+      if (sort.key === 'dayPnl') return numeric(item.dayPnl);
+      if (sort.key === 'cost') return numeric(item.costTotal);
+      return numeric(item.marketValue);
+    };
+    return [...items].sort((a, b) => (
+      sort.key === 'name'
+        ? sign * a.fundName.localeCompare(b.fundName, 'zh-Hant')
+        : sign * (metric(a) === metric(b) ? 0 : metric(a) < metric(b) ? -1 : 1)
+    ));
+  }, [items, sort]);
+  const heldIds = useMemo(() => new Set(items.map((h) => h.fundId)), [items]);
+  const firstFundId = sortedItems[0]?.fundId;
+
+  // 沒指定基金就選第一檔，第一次打開就有內容。
   useEffect(() => {
+    if (!selectedId && firstFundId) selectFund(firstFundId, { replace: true });
+  }, [firstFundId, selectFund, selectedId]);
+
+  useEffect(() => {
+    setDetailError(null);
     if (!selectedId) {
       setDetail(null);
       setTop(null);
       return;
     }
     let cancelled = false;
-    setDetailLoading(true);
     setTop(null);
     fundsApi
       .getDetail(selectedId)
@@ -135,11 +277,8 @@ const FundsPage: React.FC = () => {
       .catch((err) => {
         if (!cancelled) {
           setDetail(null);
-          setError(getParsedApiError(err));
+          setDetailError(getParsedApiError(err));
         }
-      })
-      .finally(() => {
-        if (!cancelled) setDetailLoading(false);
       });
     fundsApi
       .getTopHoldings(selectedId)
@@ -152,9 +291,19 @@ const FundsPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [selectedId]);
+  }, [detailReload, selectedId]);
 
-  // 「新增持倉」表單開著但還沒選基金時，選定的基金載完就帶入；已有基金的表單（含編輯中）不動
+  // 選中列反白並捲到看得見；桌機與手機版都在 DOM 裡，jsdom 沒有 scrollIntoView。
+  useEffect(() => {
+    const selected = items.find((item) => item.fundId === selectedId);
+    if (!selected) return;
+    const candidates = Array.from(listRef.current?.querySelectorAll<HTMLElement>('[data-row-key]') ?? [])
+      .filter((element) => element.getAttribute('data-row-key') === String(selected.id));
+    const target = candidates.find((element) => element.offsetParent !== null) ?? candidates[0];
+    target?.scrollIntoView?.({ block: 'nearest' });
+  }, [items, selectedId]);
+
+  // 「新增持股」表單開著但還沒選基金時，選定的基金載完就帶入；已有基金的表單（含編輯中）不動
   useEffect(() => {
     if (!detail) return;
     setForm((prev) => (prev && !prev.fundId ? { ...prev, fundId: detail.fundId, fundName: detail.name } : prev));
@@ -167,38 +316,46 @@ const FundsPage: React.FC = () => {
       return;
     }
     let cancelled = false;
+    setNavError(null);
     fundsApi
       .getNavHistory(detail.fundId, { period: RANGE_PERIOD[range] })
       .then((data) => {
         if (!cancelled) setPoints(data.points);
       })
       .catch((err) => {
-        if (!cancelled) setError(getParsedApiError(err));
+        if (!cancelled) {
+          setPoints([]);
+          setNavError(getParsedApiError(err));
+        }
       });
     return () => {
       cancelled = true;
     };
   }, [detail, range]);
 
-  const runSearch = async (event?: React.FormEvent) => {
-    event?.preventDefault();
-    const q = query.trim();
-    if (!q) return;
-    setSearching(true);
-    try {
-      setResults((await fundsApi.search(q)).items);
-    } catch (err) {
-      setError(getParsedApiError(err));
-    } finally {
-      setSearching(false);
-    }
+  const closeForm = () => {
+    setForm(null);
+    setFormErrors({});
+    setFormError(null);
+  };
+
+  const openForm = (next: HoldingForm) => {
+    setFormErrors({});
+    setFormError(null);
+    setForm(next);
   };
 
   const saveForm = async () => {
-    if (!form) return;
+    if (!form || !form.fundId) return;
     const units = Number(form.units);
     const costTotal = Number(form.costTotal);
-    if (!form.fundId || !(units > 0) || !(costTotal >= 0) || !form.asOf) return;
+    const errors: FormErrors = {};
+    if (!(units > 0)) errors.units = t('funds.form.unitsInvalid');
+    if (form.costTotal.trim() === '' || !(costTotal >= 0)) errors.costTotal = t('funds.form.costInvalid');
+    if (!form.asOf) errors.asOf = t('funds.form.required');
+    setFormErrors(errors);
+    setFormError(null);
+    if (Object.keys(errors).length > 0) return;
     setSaving(true);
     try {
       if (form.id != null) {
@@ -210,10 +367,16 @@ const FundsPage: React.FC = () => {
           fundId: form.fundId, units, costTotal, asOf: form.asOf, platform: form.platform, note: form.note || undefined,
         });
       }
-      setForm(null);
+      closeForm();
       await loadHoldings();
     } catch (err) {
-      setError(getParsedApiError(err));
+      const parsed = getParsedApiError(err);
+      // 409 是同基金同通路重複，錯誤放在通路欄。
+      if (parsed.status === 409) {
+        setFormErrors({ platform: parsed.message });
+      } else {
+        setFormError(parsed);
+      }
     } finally {
       setSaving(false);
     }
@@ -225,290 +388,274 @@ const FundsPage: React.FC = () => {
       await fundsApi.deleteHolding(pendingDelete.id);
       await loadHoldings();
     } catch (err) {
-      setError(getParsedApiError(err));
+      setHoldingsError(getParsedApiError(err));
     } finally {
       setPendingDelete(null);
     }
   };
 
-  const chartUp = points.length > 1 && points[points.length - 1].nav >= points[0].nav;
-  const rangeChange = points.length > 1 ? (points[points.length - 1].nav / points[0].nav - 1) * 100 : null;
-  const heldIds = useMemo(() => new Set(holdings?.items.map((h) => h.fundId) ?? []), [holdings]);
+  useEffect(() => {
+    if (!form) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setForm(null);
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [form]);
+
+  const totalValueByCurrency = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const total of holdings?.totals ?? []) {
+      if (total.marketValue != null && total.marketValue > 0) map.set(total.currency, total.marketValue);
+    }
+    return map;
+  }, [holdings]);
+
+  const weightOf = (h: FundHoldingItem): number | null => {
+    const total = totalValueByCurrency.get(h.currency);
+    return total && h.marketValue != null ? (h.marketValue / total) * 100 : null;
+  };
 
   const editHolding = (h: FundHoldingItem) =>
-    setForm({
+    openForm({
       id: h.id, fundId: h.fundId, fundName: h.fundName, units: String(h.units),
       costTotal: String(h.costTotal), asOf: h.asOf, platform: h.platform, note: h.note ?? '',
     });
 
   const rowActions = (h: FundHoldingItem) => (
-    <>
-      <Button variant="ghost" size="xsm" aria-label={t('funds.holdings.edit')} onClick={() => editHolding(h)}>
-        <Pencil className="h-4 w-4" />
-      </Button>
-      <Button variant="ghost" size="xsm" aria-label={t('funds.holdings.delete')} onClick={() => setPendingDelete(h)}>
-        <Trash2 className="h-4 w-4" />
-      </Button>
-    </>
+    <span className="inline-flex" onClick={(event) => event.stopPropagation()}>
+      <IconButton size="sm" aria-label={t('funds.holdings.edit')} icon={<Pencil className="h-4 w-4" />} onClick={() => editHolding(h)} />
+      <IconButton size="sm" aria-label={t('funds.holdings.delete')} icon={<Trash2 className="h-4 w-4" />} onClick={() => setPendingDelete(h)} />
+    </span>
   );
 
-  const holdingsCard = (
-    <Card variant="bordered" padding="md">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-base font-semibold">{t('funds.holdings.title')}</h2>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => void loadHoldings()} aria-label={t('funds.refresh')}>
-            <RefreshCw className="h-4 w-4" />
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => setForm(emptyForm(detail ?? undefined))}>
-            <Plus className="mr-1 h-4 w-4" />
-            {t('funds.holdings.add')}
-          </Button>
+  const columns: DataTableColumn<FundHoldingItem>[] = [
+    {
+      key: 'name',
+      header: t('funds.col.fund'),
+      sortable: true,
+      minWidth: 220,
+      render: (h) => (
+        <div className="min-w-0">
+          <button type="button" className="cursor-pointer text-left font-medium" onClick={() => selectFund(h.fundId)}>{h.fundName}</button>
+          <div className="text-xs text-secondary-text">
+            {[h.platform, t('funds.holdings.asOf', { date: h.asOf })].filter(Boolean).join(' · ')}
+          </div>
+        </div>
+      ),
+    },
+    { key: 'marketValue', header: t('funds.col.marketValue'), numeric: true, sortable: true, render: (h) => formatNumber(h.marketValue, 0) },
+    {
+      key: 'weight',
+      header: t('funds.col.weight'),
+      numeric: true,
+      render: (h) => {
+        const weight = weightOf(h);
+        return weight === null ? NO_VALUE : `${formatNumber(weight, 1)}%`;
+      },
+    },
+    {
+      key: 'nav',
+      header: t('funds.col.nav'),
+      numeric: true,
+      render: (h) => (
+        <div>
+          {formatNumber(h.nav, 2)}
+          <div className={cn('text-xs', h.isStale ? 'text-warning' : 'text-secondary-text')}>{h.navDate ?? t('funds.noNav')}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'dayPnl',
+      header: t('funds.col.dayPnl'),
+      numeric: true,
+      sortable: true,
+      render: (h) => (
+        <div className={marketToneClass(h.dayPnl)}>
+          {signedNumber(h.dayPnl)}
+          <div className="text-xs">{formatPercent(h.navChangePct)}</div>
+        </div>
+      ),
+    },
+    {
+      key: 'pnl',
+      header: t('funds.col.pnl'),
+      numeric: true,
+      sortable: true,
+      render: (h) => (
+        <div className={marketToneClass(h.pnl)}>
+          {signedNumber(h.pnl)}
+          <div className="text-xs">{formatPercent(h.pnlPct)}</div>
+        </div>
+      ),
+    },
+    { key: 'cost', header: t('funds.col.cost'), numeric: true, sortable: true, render: (h) => formatNumber(h.costTotal, 0) },
+    { key: 'actions', header: '', align: 'right', render: rowActions },
+  ];
+
+  const renderMobileCard = (h: FundHoldingItem) => (
+    <div
+      className={cn('flex cursor-pointer items-center gap-2 px-1 py-2', h.fundId === selectedId && 'bg-cyan/10')}
+      onClick={() => {
+        selectFund(h.fundId);
+        setMobileDetailOpen(true);
+      }}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-2 text-sm">
+          <span className="min-w-0 break-words font-medium">{h.fundName}</span>
+          <span className="shrink-0 tabular-nums">{formatNumber(h.marketValue, 0)}</span>
+        </div>
+        <div className="mt-0.5 flex justify-between gap-2 text-xs tabular-nums">
+          <span className={cn(h.isStale ? 'text-warning' : 'text-secondary-text')}>{h.navDate ?? t('funds.noNav')}</span>
+          <span className={marketToneClass(h.pnl)}>{signedNumber(h.pnl)} · {formatPercent(h.pnlPct)}</span>
         </div>
       </div>
-      {holdings?.navError ? <InlineAlert variant="warning" message={t('funds.holdings.navError')} /> : null}
-      {!holdings ? (
-        <Loading label={t('funds.holdings.title')} />
-      ) : holdings.items.length === 0 ? (
-        <EmptyState title={t('funds.holdings.empty')} description={t('funds.holdings.emptyHint')} />
-      ) : (
-        <>
-        <ul className="divide-y divide-border/60 text-sm tabular-nums md:hidden">
-          {holdings.items.map((h) => (
-            <li key={h.id} className="py-2">
-              <div className="flex items-start justify-between gap-2">
-                <button type="button" className="min-w-0 text-left font-medium" onClick={() => selectFund(h.fundId)}>
-                  {h.fundName}
-                </button>
-                <span className={cn('shrink-0 text-right', changeClass(h.pnl))}>{pct(h.pnlPct)}</span>
-              </div>
-              <div className="mt-1 flex justify-between text-xs text-secondary-text">
-                <span>{t('funds.col.marketValue')} <span className="text-foreground">{num(h.marketValue, 0)}</span></span>
-                <span className={changeClass(h.pnl)}>{num(h.pnl, 0)}</span>
-              </div>
-              <div className="mt-0.5 flex items-center justify-between gap-2">
-                <span className={cn('text-xs', h.isStale ? 'text-warning' : 'text-secondary-text')}>
-                  {t('funds.col.nav')} {num(h.nav, 2)} · {h.navDate ?? t('funds.noNav')} · {h.platform || '—'}
-                </span>
-                <span className="shrink-0">{rowActions(h)}</span>
-              </div>
-            </li>
-          ))}
-          {holdings.totals.map((total) => (
-            <li key={total.currency} className="flex justify-between py-2 font-medium">
-              <span>{t('funds.holdings.total', { currency: total.currency })}</span>
-              <span className={changeClass(total.pnl)}>{num(total.marketValue, 0)} · {pct(total.pnlPct)}</span>
-            </li>
-          ))}
-        </ul>
-        <div className="hidden overflow-x-auto md:block">
-          <table className="w-full min-w-[720px] text-sm tabular-nums">
-            <thead className="text-left text-xs text-secondary-text">
-              <tr>
-                <th className="py-2 pr-3 font-medium">{t('funds.col.fund')}</th>
-                <th className="py-2 pr-3 font-medium">{t('funds.col.platform')}</th>
-                <th className="py-2 pr-3 text-right font-medium">{t('funds.col.units')}</th>
-                <th className="py-2 pr-3 text-right font-medium">{t('funds.col.nav')}</th>
-                <th className="py-2 pr-3 text-right font-medium">{t('funds.col.marketValue')}</th>
-                <th className="py-2 pr-3 text-right font-medium">{t('funds.col.cost')}</th>
-                <th className="py-2 pr-3 text-right font-medium">{t('funds.col.pnl')}</th>
-                <th className="py-2 font-medium" />
-              </tr>
-            </thead>
-            <tbody>
-              {holdings.items.map((h) => (
-                <tr key={h.id} className="border-t border-border/60">
-                  <td className="py-2 pr-3">
-                    <button type="button" className="text-left hover:text-[hsl(var(--primary))]" onClick={() => selectFund(h.fundId)}>
-                      {h.fundName}
-                    </button>
-                    <div className="text-xs text-secondary-text">{t('funds.holdings.asOf', { date: h.asOf })}</div>
-                  </td>
-                  <td className="py-2 pr-3 text-secondary-text">{h.platform || '—'}</td>
-                  <td className="py-2 pr-3 text-right">{num(h.units, 2)}</td>
-                  <td className="py-2 pr-3 text-right">
-                    {num(h.nav, 2)}
-                    <div className={cn('text-xs', h.isStale ? 'text-warning' : 'text-secondary-text')}>
-                      {h.navDate ?? t('funds.noNav')}
-                    </div>
-                  </td>
-                  <td className="py-2 pr-3 text-right">{num(h.marketValue, 0)}</td>
-                  <td className="py-2 pr-3 text-right">{num(h.costTotal, 0)}</td>
-                  <td className={cn('py-2 pr-3 text-right', changeClass(h.pnl))}>
-                    {num(h.pnl, 0)}
-                    <div className="text-xs">{pct(h.pnlPct)}</div>
-                  </td>
-                  <td className="py-2 text-right whitespace-nowrap">{rowActions(h)}</td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              {holdings.totals.map((total) => (
-                <tr key={total.currency} className="border-t border-border font-medium">
-                  <td className="py-2 pr-3" colSpan={4}>
-                    {t('funds.holdings.total', { currency: total.currency })}
-                  </td>
-                  <td className="py-2 pr-3 text-right">{num(total.marketValue, 0)}</td>
-                  <td className="py-2 pr-3 text-right">{num(total.costTotal, 0)}</td>
-                  <td className={cn('py-2 pr-3 text-right', changeClass(total.pnl))}>
-                    {num(total.pnl, 0)}
-                    <div className="text-xs">{pct(total.pnlPct)}</div>
-                  </td>
-                  <td />
-                </tr>
-              ))}
-            </tfoot>
-          </table>
-        </div>
-        </>
-      )}
-      {form ? (
-        <div className="mt-4 space-y-3 rounded-xl border border-border p-3">
-          <div className="text-sm font-medium">
-            {form.id != null ? t('funds.holdings.edit') : t('funds.holdings.add')}
-            {form.fundName ? `：${form.fundName}` : ''}
-          </div>
-          {!form.fundId ? <InlineAlert variant="info" message={t('funds.holdings.pickFund')} /> : null}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <Input label={t('funds.col.units')} type="number" min="0" step="any" value={form.units}
-              onChange={(e) => setForm({ ...form, units: e.target.value })} />
-            <Input label={t('funds.form.costTotal')} type="number" min="0" step="any" value={form.costTotal}
-              onChange={(e) => setForm({ ...form, costTotal: e.target.value })} />
-            <Input label={t('funds.form.asOf')} type="date" value={form.asOf}
-              onChange={(e) => setForm({ ...form, asOf: e.target.value })} />
-            <Input label={t('funds.col.platform')} maxLength={64} value={form.platform}
-              onChange={(e) => setForm({ ...form, platform: e.target.value })} />
-            <Input label={t('funds.form.note')} maxLength={255} value={form.note}
-              onChange={(e) => setForm({ ...form, note: e.target.value })} />
-          </div>
-          <div className="flex gap-2">
-            <Button size="sm" onClick={() => void saveForm()} disabled={saving || !form.fundId}>
-              {t('funds.form.save')}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setForm(null)}>
-              {t('funds.form.cancel')}
-            </Button>
-          </div>
+      {rowActions(h)}
+    </div>
+  );
+
+  const overview = holdings && items.length > 0 ? (
+    <div className="space-y-2">
+      {holdings.totals.map((total) => (
+        <MetricGroup key={total.currency} columns={4}>
+          <Metric
+            label={t('funds.overview.marketValue', { currency: total.currency })}
+            value={formatNumber(total.marketValue, 0)}
+          />
+          <Metric
+            label={t('funds.overview.pnl')}
+            value={<span className={marketToneClass(total.pnl)}>{signedNumber(total.pnl)}</span>}
+            hint={formatPercent(total.pnlPct)}
+          />
+          <Metric
+            label={t('funds.overview.dayPnl')}
+            value={<span className={marketToneClass(total.dayPnl)}>{signedNumber(total.dayPnl)}</span>}
+          />
+          <Metric label={t('funds.overview.cost')} value={formatNumber(total.costTotal, 0)} />
+        </MetricGroup>
+      ))}
+      <p className="text-xs text-secondary-text">{t('funds.returns.note')}</p>
+    </div>
+  ) : null;
+
+  const holdingsCard = (
+    <Card variant="surface" padding="md">
+      <h2 className="mb-3 text-base font-semibold">{t('funds.holdings.title')}</h2>
+      {holdingsError ? (
+        <div className="mb-3 space-y-2">
+          <ApiErrorAlert error={holdingsError} onDismiss={() => setHoldingsError(null)} />
+          <Button size="sm" variant="secondary" onClick={() => void loadHoldings()}>{t('funds.retry')}</Button>
         </div>
       ) : null}
-    </Card>
-  );
-
-  const searchCard = (
-    <Card variant="bordered" padding="md">
-      <form className="flex gap-2" onSubmit={(e) => void runSearch(e)}>
-        <div className="flex-1">
-          <Input
-            aria-label={t('funds.search.placeholder')}
-            placeholder={t('funds.search.placeholder')}
-            maxLength={64}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+      {holdings?.navError ? <InlineAlert className="mb-3" variant="warning" message={t('funds.holdings.navError')} /> : null}
+      {!holdings ? (
+        holdingsError ? null : (
+          <div data-testid="funds-holdings-skeleton" className="space-y-2" aria-hidden="true">
+            <SkeletonBlock className="h-10" />
+            <SkeletonBlock className="h-10" />
+          </div>
+        )
+      ) : items.length === 0 ? (
+        <EmptyState title={t('funds.holdings.empty')} description={t('funds.holdings.emptyHint')} />
+      ) : (
+        <div ref={listRef}>
+          <DataTable
+            aria-label={t('funds.holdings.title')}
+            density="regular"
+            columns={columns}
+            rows={sortedItems}
+            rowKey={(h) => String(h.id)}
+            sort={sort}
+            onSortChange={setSort}
+            onRowClick={(h) => selectFund(h.fundId)}
+            isRowHighlighted={(h) => h.fundId === selectedId}
+            renderMobileCard={renderMobileCard}
           />
         </div>
-        <Button type="submit" size="md" disabled={searching || !query.trim()}>
-          <Search className="mr-1 h-4 w-4" />
-          {t('funds.search.submit')}
-        </Button>
-      </form>
-      {results ? (
-        results.length === 0 ? (
-          <div className="mt-3 text-sm text-secondary-text">{t('funds.search.empty')}</div>
-        ) : (
-          <ul className="mt-3 divide-y divide-border/60">
-            {results.map((item) => (
-              <li key={item.fundId}>
-                <button
-                  type="button"
-                  onClick={() => selectFund(item.fundId)}
-                  className={cn(
-                    'flex w-full items-center justify-between gap-3 py-2 text-left text-sm hover:bg-hover',
-                    item.fundId === selectedId && 'text-[hsl(var(--primary))]',
-                  )}
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate font-medium">{item.name}</span>
-                    <span className="block truncate text-xs text-secondary-text">
-                      {[item.company, item.typeName, item.currency, item.fundId].filter(Boolean).join(' · ')}
-                    </span>
-                  </span>
-                  <span className="shrink-0 text-right tabular-nums">
-                    {num(item.nav, 2)}
-                    <span className="block text-xs text-secondary-text">{item.navDate ?? t('funds.noNav')}</span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )
-      ) : (
-        <div className="mt-3 text-xs text-secondary-text">{t('funds.search.hint')}</div>
       )}
     </Card>
   );
 
-  const infoRows: [UiTextKey, React.ReactNode][] = detail
+  const shownDetail = detail && detail.fundId === selectedId ? detail : null;
+  const navValues = points.map((point) => point.nav);
+  const axisDigits = navAxisDigits(navValues);
+  const unitCost = shownDetail ? fundUnitCost(items, shownDetail.fundId) : null;
+  const chartUp = points.length > 1 && points[points.length - 1].nav >= points[0].nav;
+  const rangeChange = points.length > 1 ? (points[points.length - 1].nav / points[0].nav - 1) * 100 : null;
+
+  const infoRows: [UiTextKey, React.ReactNode][] = shownDetail
     ? [
-        ['funds.info.company', detail.company],
-        ['funds.info.type', detail.typeName ?? detail.typeCode],
-        ['funds.info.area', detail.investArea],
-        ['funds.info.currency', detail.currency],
-        ['funds.info.inception', detail.inceptionDate],
-        ['funds.info.aum', detail.aum != null ? `${num(detail.aum / 1e8, 1)} ${t('funds.info.hundredMillion')} ${detail.aumCurrency ?? ''}（${detail.aumDate ?? '—'}）` : null],
-        ['funds.info.dividend', detail.dividendPolicy],
-        ['funds.info.isin', detail.isin],
-        ['funds.info.fundId', detail.fundId],
+        ['funds.info.company', shownDetail.company],
+        ['funds.info.type', shownDetail.typeName ?? shownDetail.typeCode],
+        ['funds.info.area', shownDetail.investArea],
+        ['funds.info.currency', shownDetail.currency],
+        ['funds.info.inception', shownDetail.inceptionDate],
+        ['funds.info.aum', shownDetail.aum != null ? `${formatNumber(shownDetail.aum / 1e8, 1)} ${t('funds.info.hundredMillion')} ${shownDetail.aumCurrency ?? ''}（${shownDetail.aumDate ?? NO_VALUE}）` : null],
+        ['funds.info.dividend', shownDetail.dividendPolicy],
+        ['funds.info.isin', shownDetail.isin],
+        ['funds.info.fundId', shownDetail.fundId],
       ]
     : [];
 
-  const detailCard = !selectedId ? null : detailLoading && !detail ? (
-    <Card variant="bordered" padding="md">
-      <Loading label={t('funds.detail.loading')} />
-    </Card>
-  ) : detail ? (
-    <Card variant="bordered" padding="md">
+  const detailBody = detailError ? (
+    <div className="space-y-2">
+      <ApiErrorAlert error={detailError} onDismiss={() => setDetailError(null)} />
+      <Button size="sm" variant="secondary" onClick={() => setDetailReload((value) => value + 1)}>{t('funds.retry')}</Button>
+    </div>
+  ) : !shownDetail ? (
+    <div data-testid="funds-detail-skeleton" className="space-y-3" aria-hidden="true">
+      <SkeletonBlock className="h-8 w-2/3" />
+      <SkeletonBlock className="h-16" />
+      <SkeletonBlock className="h-60" />
+    </div>
+  ) : (
+    <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-lg font-semibold">{detail.name}</h2>
-          <div className="text-xs text-secondary-text">{[detail.company, detail.typeName].filter(Boolean).join(' · ')}</div>
-        </div>
-        <div className="text-right tabular-nums">
-          <div className="text-2xl font-semibold">{num(detail.nav, 2)}</div>
-          <div className={cn('text-sm', changeClass(detail.navChangePct))}>
-            {detail.navChange != null ? `${detail.navChange > 0 ? '+' : ''}${num(detail.navChange, 2)}` : '—'}{' '}
-            ({pct(detail.navChangePct)})
-          </div>
-          <div className={cn('text-xs', detail.isStale ? 'text-warning' : 'text-secondary-text')}>
-            {t('funds.detail.navDate', { date: detail.navDate ?? '—' })}
-          </div>
+          <h2 className="break-words text-lg font-semibold">{shownDetail.name}</h2>
+          <div className="text-xs text-secondary-text">{[shownDetail.company, shownDetail.typeName].filter(Boolean).join(' · ')}</div>
+          {!heldIds.has(shownDetail.fundId) ? (
+            <Button className="mt-2" size="sm" variant="secondary" onClick={() => openForm(emptyForm(shownDetail))}>
+              <Plus className="h-4 w-4" />
+              {t('funds.detail.addHolding')}
+            </Button>
+          ) : null}
         </div>
       </div>
-      {detail.isStale ? <InlineAlert className="mt-3" variant="warning" message={t('funds.detail.stale')} /> : null}
-      {detail.historyError ? <InlineAlert className="mt-3" variant="warning" message={t('funds.detail.historyError')} /> : null}
-      {!heldIds.has(detail.fundId) ? (
-        <div className="mt-3">
-          <Button size="sm" variant="secondary" onClick={() => setForm(emptyForm(detail))}>
-            <Plus className="mr-1 h-4 w-4" />
-            {t('funds.detail.addHolding')}
-          </Button>
-        </div>
-      ) : null}
+      {shownDetail.isStale ? <InlineAlert variant="warning" message={t('funds.detail.stale')} /> : null}
+      {shownDetail.historyError ? <InlineAlert variant="warning" message={t('funds.detail.historyError')} /> : null}
 
-      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
-        {RETURN_KEYS.map((key) => (
-          <div key={key} className="rounded-lg border border-border/60 p-2 text-center">
-            <div className="text-xs text-secondary-text">{t(`funds.return.${key}` as UiTextKey)}</div>
-            <div className={cn('text-sm font-medium tabular-nums', changeClass(detail.returns[key]))}>{pct(detail.returns[key])}</div>
-          </div>
-        ))}
-      </div>
-      <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xs text-secondary-text">
-        <span>{t('funds.risk.drawdown')}：<span className="tabular-nums text-foreground">{pct(detail.risk.maxDrawdown)}</span></span>
-        <span>{t('funds.risk.volatility')}：<span className="tabular-nums text-foreground">{detail.risk.volatility == null ? '—' : `${num(detail.risk.volatility, 1)}%`}</span></span>
-        <span>{t('funds.returns.note')}</span>
-      </div>
+      <section>
+        <SectionTitle>{t('funds.section.nav')}</SectionTitle>
+        <div className="mb-3 tabular-nums">
+          <span className="text-2xl font-semibold">{formatNumber(shownDetail.nav, 2)}</span>
+          <span className={cn('ml-3 text-sm', marketToneClass(shownDetail.navChangePct))}>
+            {signedNumber(shownDetail.navChange, 2)} ({formatPercent(shownDetail.navChangePct)})
+          </span>
+          <span className={cn('ml-3 text-xs', shownDetail.isStale ? 'text-warning' : 'text-secondary-text')}>
+            {t('funds.detail.navDate', { date: shownDetail.navDate ?? NO_VALUE })}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
+          {RETURN_KEYS.map((key) => (
+            <div key={key} className="rounded-lg border border-border/60 p-2 text-center">
+              <div className="text-xs text-secondary-text">{t(`funds.return.${key}` as UiTextKey)}</div>
+              <div className={cn('text-sm font-medium tabular-nums', marketToneClass(shownDetail.returns[key]))}>{formatPercent(shownDetail.returns[key])}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-x-6 gap-y-1 text-xs text-secondary-text">
+          <span>{t('funds.risk.drawdown')}：<span className="tabular-nums text-foreground">{formatPercent(shownDetail.risk.maxDrawdown)}</span></span>
+          <span>{t('funds.risk.volatility')}：<span className="tabular-nums text-foreground">{shownDetail.risk.volatility == null ? NO_VALUE : `${formatNumber(shownDetail.risk.volatility, 1)}%`}</span></span>
+          <span>{t('funds.returns.note')}</span>
+        </div>
+      </section>
 
-      <div className="mt-4">
+      <section>
+        <SectionTitle>{t('funds.section.chart')}</SectionTitle>
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           {RANGES.map((r) => (
             <button
@@ -516,7 +663,7 @@ const FundsPage: React.FC = () => {
               type="button"
               onClick={() => setRange(r)}
               className={cn(
-                'rounded-md border px-2.5 py-0.5 text-xs',
+                'cursor-pointer rounded-md border px-2.5 py-0.5 text-xs',
                 r === range
                   ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]'
                   : 'border-border text-secondary-text hover:bg-hover',
@@ -525,17 +672,25 @@ const FundsPage: React.FC = () => {
               {t(`funds.range.${r}` as UiTextKey)}
             </button>
           ))}
-          {rangeChange != null ? (
-            <span className={cn('ml-2 text-xs tabular-nums', changeClass(rangeChange))}>{formatSignedPct(rangeChange)}</span>
-          ) : null}
         </div>
-        {points.length === 0 ? (
+        {points.length > 1 ? (
+          <div data-testid="funds-range-row" className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-secondary-text">
+            <span>{points[0].date} ~ {points[points.length - 1].date}</span>
+            <span className={marketToneClass(rangeChange)}>{formatPercent(rangeChange)}</span>
+            <span>{t('funds.chart.high')} {formatNumber(Math.max(...navValues), axisDigits)}</span>
+            <span>{t('funds.chart.low')} {formatNumber(Math.min(...navValues), axisDigits)}</span>
+            {unitCost !== null ? <span>{t('funds.chart.costLine', { value: formatNumber(unitCost, 2) })}</span> : null}
+          </div>
+        ) : null}
+        {navError ? (
+          <InlineAlert variant="warning" message={t('funds.chart.error')} />
+        ) : points.length === 0 ? (
           <div className="py-10 text-center text-xs text-secondary-text">{t('funds.chart.empty')}</div>
         ) : (
           <ResponsiveContainer width="100%" height={240}>
             <LineChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
               <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'hsl(var(--secondary-text))' }} axisLine={false} tickLine={false} height={18} minTickGap={48} />
-              <YAxis domain={['auto', 'auto']} width={56} tick={{ fontSize: 11 }} tickFormatter={(v) => Number(v).toFixed(0)} />
+              <YAxis domain={['auto', 'auto']} width={56} tick={{ fontSize: 11 }} tickFormatter={(v) => Number(v).toFixed(axisDigits)} />
               <Tooltip
                 formatter={(v) => [Number(v).toFixed(2), t('funds.col.nav')]}
                 contentStyle={{
@@ -548,60 +703,150 @@ const FundsPage: React.FC = () => {
                 labelStyle={{ color: 'hsl(var(--foreground))', fontWeight: 600, marginBottom: 2 }}
                 itemStyle={{ color: 'hsl(var(--foreground))' }}
               />
+              {unitCost !== null ? (
+                <ReferenceLine y={unitCost} stroke="hsl(var(--secondary-text))" strokeDasharray="4 4" ifOverflow="extendDomain" />
+              ) : null}
               <Line type="monotone" dataKey="nav" dot={false} strokeWidth={1.5} stroke={chartUp ? '#ef4444' : '#10b981'} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer>
         )}
-      </div>
+      </section>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <section>
+        <SectionTitle>{t('funds.top.title')}</SectionTitle>
+        {!top ? (
+          <SkeletonBlock className="h-24" />
+        ) : top.items.length === 0 ? (
+          <div className="text-xs text-secondary-text">{t(top.error === 'not_mapped' ? 'funds.top.notMapped' : 'funds.top.unavailable')}</div>
+        ) : (
+          <table className="w-full text-sm tabular-nums">
+            <tbody>
+              {top.items.map((item, idx) => (
+                <tr key={`${item.name}-${idx}`} className="border-t border-border/60">
+                  <td className="py-1 pr-2">
+                    {item.name ?? NO_VALUE}
+                    {item.ledgerSymbol ? <Badge variant="info" className="ml-2 align-middle">{t('funds.top.held')}</Badge> : null}
+                  </td>
+                  <td className="py-1 pr-2 text-xs text-secondary-text">{item.sector ?? ''}</td>
+                  <td className="py-1 text-right">{item.weight == null ? NO_VALUE : `${formatNumber(item.weight, 2)}%`}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <div className="mt-1 text-xs text-secondary-text">
+          {t('funds.top.source')}
+          {top?.asOfMonth ? ` · ${t('funds.top.month', { month: top.asOfMonth })}` : ''}
+        </div>
+      </section>
+
+      <section>
+        <SectionTitle>{t('funds.section.info')}</SectionTitle>
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
           {infoRows.map(([key, value]) => (
             <div key={key} className="contents">
               <dt className="text-secondary-text">{t(key)}</dt>
-              <dd className="min-w-0 break-words">{value || '—'}</dd>
+              <dd className="min-w-0 break-words">{value || NO_VALUE}</dd>
             </div>
           ))}
         </dl>
-        <div>
-          <div className="mb-1 text-sm font-medium">{t('funds.top.title')}</div>
-          {!top ? (
-            <div className="text-xs text-secondary-text">{t('funds.detail.loading')}</div>
-          ) : top.items.length === 0 ? (
-            <div className="text-xs text-secondary-text">{t(top.error === 'not_mapped' ? 'funds.top.notMapped' : 'funds.top.unavailable')}</div>
-          ) : (
-            <table className="w-full text-sm tabular-nums">
-              <tbody>
-                {top.items.map((item, idx) => (
-                  <tr key={`${item.name}-${idx}`} className="border-t border-border/60">
-                    <td className="py-1 pr-2">{item.name ?? '—'}</td>
-                    <td className="py-1 pr-2 text-xs text-secondary-text">{item.sector ?? ''}</td>
-                    <td className="py-1 text-right">{item.weight == null ? '—' : `${num(item.weight, 2)}%`}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          <div className="mt-1 text-xs text-secondary-text">{t('funds.top.source')}</div>
+        <div className="mt-3 text-xs text-secondary-text">{t('funds.detail.source', { points: String(shownDetail.historyPoints), start: shownDetail.historyStart ?? NO_VALUE })}</div>
+      </section>
+    </div>
+  );
+
+  const formDialog = form ? createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm" role="presentation">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={form.id != null ? t('funds.holdings.edit') : t('funds.holdings.add')}
+        className="max-h-full w-full max-w-lg space-y-3 overflow-y-auto rounded-[var(--radius-card)] border border-border/70 bg-card p-5"
+      >
+        <h2 className="text-base font-semibold">
+          {form.id != null ? t('funds.holdings.edit') : t('funds.holdings.add')}
+          {form.fundName ? `：${form.fundName}` : ''}
+        </h2>
+        {form.id == null ? (
+          <FundSearchBox
+            heldIds={heldIds}
+            onPick={(item) => setForm((prev) => (prev ? { ...prev, fundId: item.fundId, fundName: item.name } : prev))}
+          />
+        ) : null}
+        {!form.fundId ? <InlineAlert variant="info" message={t('funds.holdings.pickFund')} /> : null}
+        {formError ? <ApiErrorAlert error={formError} onDismiss={() => setFormError(null)} /> : null}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Input label={t('funds.col.units')} type="number" min="0" step="any" value={form.units} error={formErrors.units}
+            onChange={(e) => setForm({ ...form, units: e.target.value })} />
+          <Input label={t('funds.form.costTotal')} type="number" min="0" step="any" value={form.costTotal} error={formErrors.costTotal}
+            onChange={(e) => setForm({ ...form, costTotal: e.target.value })} />
+          <Input label={t('funds.form.asOf')} type="date" value={form.asOf} error={formErrors.asOf}
+            onChange={(e) => setForm({ ...form, asOf: e.target.value })} />
+          <Input label={t('funds.col.platform')} maxLength={64} value={form.platform} error={formErrors.platform}
+            onChange={(e) => setForm({ ...form, platform: e.target.value })} />
+          <div className="sm:col-span-2">
+            <Input label={t('funds.form.note')} maxLength={255} value={form.note}
+              onChange={(e) => setForm({ ...form, note: e.target.value })} />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="ghost" onClick={closeForm}>{t('funds.form.cancel')}</Button>
+          <Button size="sm" onClick={() => void saveForm()} disabled={saving || !form.fundId}>{t('funds.form.save')}</Button>
         </div>
       </div>
-      <div className="mt-3 text-xs text-secondary-text">{t('funds.detail.source', { points: String(detail.historyPoints), start: detail.historyStart ?? '—' })}</div>
-    </Card>
+    </div>,
+    document.body,
   ) : null;
 
   return (
     <AppPage className="space-y-5">
-      <PageHeader title={t('funds.title')} description={t('funds.description')} />
-      {error ? <ApiErrorAlert error={error} onDismiss={() => setError(null)} /> : null}
+      <PageHeader
+        title={t('funds.title')}
+        actions={(
+          <>
+            <div data-testid="funds-header-search" className="w-full md:w-96">
+              <FundSearchBox
+                heldIds={heldIds}
+                onPick={(item) => {
+                  selectFund(item.fundId);
+                  setMobileDetailOpen(true);
+                }}
+              />
+            </div>
+            <IconButton aria-label={t('funds.refresh')} icon={<RefreshCw className="h-4 w-4" />} onClick={() => void loadHoldings()} />
+            <Button variant="secondary" onClick={() => openForm(emptyForm(shownDetail ?? undefined))}>
+              <Plus className="h-4 w-4" />
+              {t('funds.holdings.add')}
+            </Button>
+          </>
+        )}
+      />
+      {overview}
       {holdingsCard}
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-        {searchCard}
-        {detailCard ?? (
-          <Card variant="bordered" padding="md">
+      {selectedId ? (
+        <div
+          data-testid="funds-detail"
+          className={cn(
+            mobileDetailOpen
+              ? 'fixed inset-0 z-40 overflow-y-auto bg-background p-4 md:static md:z-auto md:overflow-visible md:bg-transparent md:p-0'
+              : 'hidden md:block',
+          )}
+        >
+          <Button className="mb-3 md:hidden" size="sm" variant="ghost" onClick={() => setMobileDetailOpen(false)}>
+            <ArrowLeft className="h-4 w-4" />
+            {t('funds.detail.back')}
+          </Button>
+          <Card variant="surface" padding="md">{detailBody}</Card>
+        </div>
+      ) : holdings && items.length === 0 ? (
+        <div className="hidden md:block">
+          <Card variant="surface" padding="md">
             <EmptyState title={t('funds.detail.none')} description={t('funds.search.hint')} />
           </Card>
-        )}
-      </div>
+        </div>
+      ) : null}
+      <p className="text-xs text-secondary-text">{t('funds.description')}</p>
+      {formDialog}
       <ConfirmDialog
         isOpen={pendingDelete != null}
         title={t('funds.holdings.delete')}

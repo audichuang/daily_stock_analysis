@@ -493,6 +493,24 @@ export const DecisionSignalDetails: React.FC<DecisionSignalDetailsProps> = ({
   );
 };
 
+/** 持股表的 AI 短標籤：只放動作，風險或觀察條件收進 title。 */
+export const PortfolioSignalBadge: React.FC<{ item?: DecisionSignalItem; loading?: boolean; showHint?: boolean }> = ({ item, loading = false, showHint = true }) => {
+  const { t } = useUiLanguage();
+  if (loading && !item) {
+    return <span className="text-xs text-secondary-text">{t('decisionSignals.portfolioLoading')}</span>;
+  }
+  if (!item) {
+    return <span className="text-xs text-muted-text">{t('decisionSignals.portfolioEmpty')}</span>;
+  }
+  // 手機沒有 hover，不放 title。
+  const hint = showHint ? (formatSignalText(item.riskSummary) || formatSignalText(item.watchConditions) || undefined) : undefined;
+  return (
+    <span title={hint} className="inline-flex">
+      <Badge variant={getActionVariant(item)}>{getActionLabel(item, t)}</Badge>
+    </span>
+  );
+};
+
 type PortfolioSignalSummaryProps = {
   item?: DecisionSignalItem;
   loading?: boolean;

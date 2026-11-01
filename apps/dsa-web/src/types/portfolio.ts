@@ -1,4 +1,5 @@
 import type { DecisionSignalItem } from './decisionSignals';
+import type { FundHoldingListResponse } from './funds';
 
 export type PortfolioCostMethod = 'fifo' | 'avg';
 export type PortfolioSide = 'buy' | 'sell';
@@ -49,6 +50,11 @@ export interface PortfolioPositionItem {
   priceAvailable?: boolean;
   dataQuality?: 'ok' | 'partial' | string;
   limitations?: string[];
+  /** 報價實際時間；priceDate 維持日期語意。 */
+  quoteAt?: string | null;
+  prevClose?: number | null;
+  dayChangePct?: number | null;
+  dayPnlBase?: number | null;
 }
 
 export interface PortfolioPositionAnalysisRequest {
@@ -82,6 +88,15 @@ export interface PortfolioAccountSnapshot {
   dataQuality?: 'ok' | 'partial' | string;
   limitations?: string[];
   positions: PortfolioPositionItem[];
+  dayPnl?: number | null;
+}
+
+export interface PortfolioFxRateUsed {
+  fromCurrency: string;
+  toCurrency: string;
+  rate?: number | null;
+  stale: boolean;
+  source: string;
 }
 
 export interface PortfolioSnapshotResponse {
@@ -103,6 +118,23 @@ export interface PortfolioSnapshotResponse {
   dataQuality?: 'ok' | 'partial' | string;
   limitations?: string[];
   accounts: PortfolioAccountSnapshot[];
+  // 以下帶 displayCurrency 才有；total* 仍是 CNY 彙總。
+  dayPnl?: number | null;
+  displayCurrency?: string | null;
+  consolidatedEquityBase?: number | null;
+  consolidatedMarketValueBase?: number | null;
+  consolidatedCashBase?: number | null;
+  consolidatedUnrealizedPnlBase?: number | null;
+  consolidatedRealizedPnlBase?: number | null;
+  consolidatedDayPnlBase?: number | null;
+  consolidatedFundValueBase?: number | null;
+  consolidatedFundDayPnlBase?: number | null;
+  consolidatedFxStale?: boolean;
+  consolidatedFxMissing?: boolean;
+  consolidatedFxMissingPairs?: string[];
+  fxRateUsed?: PortfolioFxRateUsed[];
+  funds?: FundHoldingListResponse | null;
+  fundsError?: string | null;
 }
 
 export interface PortfolioConcentrationItem {
@@ -187,6 +219,11 @@ export interface PortfolioRiskResponse {
     items: PortfolioStopLossItem[];
   };
   decisionSignalRisk?: PortfolioDecisionSignalRiskBlock;
+  displayCurrency?: string | null;
+  displayFxRate?: number | null;
+  displayFxStale?: boolean;
+  displayFxMissing?: boolean;
+  fxRateUsed?: PortfolioFxRateUsed[];
 }
 
 export interface PortfolioTradeCreateRequest {
