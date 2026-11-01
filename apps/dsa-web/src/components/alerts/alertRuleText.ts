@@ -1,6 +1,6 @@
 import { formatUiText, type UiLanguage } from '../../i18n/uiText';
 import { ALERT_MARKET_LIGHT_STATUS_LABELS, ALERT_PAGE_TEXT } from '../../locales/featureText';
-import type { AlertRuleItem } from '../../types/alerts';
+import type { AlertRuleItem, AlertRuleTargetResult, AlertRuleTestResponse } from '../../types/alerts';
 
 export type AlertPageText = (typeof ALERT_PAGE_TEXT)[UiLanguage];
 
@@ -38,4 +38,31 @@ export function ruleCondition(rule: Pick<AlertRuleItem, 'alertType' | 'parameter
     default:
       return rule.name;
   }
+}
+
+export type DryRunOutcome = 'hit' | 'miss' | 'unable' | 'partial' | 'error';
+
+export interface DryRunSummary {
+  outcome: DryRunOutcome;
+  unableCount: number;
+  unableTargets: AlertRuleTargetResult[];
+}
+
+function isUnableTarget(item: AlertRuleTargetResult): boolean {
+  return item.status === 'evaluation_error'
+    || item.recordStatus === 'skipped'
+    || item.recordStatus === 'degraded'
+    || item.recordStatus === 'failed';
+}
+
+/** status=not_triggered 也可能是沒報價：略過與降級的標的沒有被評估，不能說成條件未達成。 */
+export function summarizeDryRun(result: AlertRuleTestResponse): DryRunSummary {
+  const unableTargets = (result.targetResults ?? []).filter(isUnableTarget);
+  // targetResults 有筆數上限，計數欄位才是全量；failed 沒有獨立計數，只能從明細數。
+  const unableCount = Math.max(unableTargets.length, (result.skippedCount ?? 0) + (result.degradedCount ?? 0));
+  if (result.status === 'evaluation_error') return { outcome: 'error', unableCount, unableTargets };
+  if (result.triggered) return { outcome: 'hit', unableCount, unableTargets };
+  if (unableCount === 0) return { outcome: 'miss', unableCount, unableTargets };
+  const allUnable = unableCount >= Math.max(result.evaluatedCount ?? 1, 1);
+  return { outcome: allUnable ? 'unable' : 'partial', unableCount, unableTargets };
 }

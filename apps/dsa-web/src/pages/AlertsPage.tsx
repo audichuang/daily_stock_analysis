@@ -52,7 +52,9 @@ const AlertsPage: React.FC = () => {
   const [rules, setRules] = useState<AlertRuleItem[]>([]);
   const [rulesTotal, setRulesTotal] = useState(0);
   const [ruleSources, setRuleSources] = useState<AlertRuleListResponse['ruleSources']>(null);
-  const [rulesPage, setRulesPage] = useState(1);
+  // 要求的頁與已成功的頁分開：載入更多失敗後重試同一頁，不能跳頁。nonce 讓重試同一頁也會重新請求。
+  const [rulesRequest, setRulesRequest] = useState({ page: 1, nonce: 0 });
+  const [rulesLoadedPage, setRulesLoadedPage] = useState(0);
   const [searchTarget, setSearchTarget] = useState(searchParams.get('new') ? '' : queryTarget);
   const [scopeFilter, setScopeFilter] = useState<AlertScopeFilter>('all');
   const [enabledFilter, setEnabledFilter] = useState<AlertRuleEnabledFilter>('all');
@@ -66,7 +68,8 @@ const AlertsPage: React.FC = () => {
   const [activityTab, setActivityTab] = useState<AlertActivityTab>('triggered');
   const [triggers, setTriggers] = useState<AlertTriggerItem[]>([]);
   const [triggersTotal, setTriggersTotal] = useState(0);
-  const [triggersPage, setTriggersPage] = useState(1);
+  const [triggersRequest, setTriggersRequest] = useState({ page: 1, nonce: 0 });
+  const [triggersLoadedPage, setTriggersLoadedPage] = useState(0);
   const [summary, setSummary] = useState<AlertTriggerSummary | null>(null);
   const [triggersLoading, setTriggersLoading] = useState(false);
   const [triggersError, setTriggersError] = useState<ParsedApiError | null>(null);
@@ -87,10 +90,15 @@ const AlertsPage: React.FC = () => {
   const [testResults, setTestResults] = useState<Record<number, AlertRuleTestResponse>>({});
   const [mobileTab, setMobileTab] = useState<MobileTab>('rules');
 
-  const refreshRules = useCallback(() => {
-    setRulesPage(1);
-    setRulesRefreshKey((value) => value + 1);
+  const reloadRulesFromFirstPage = useCallback(() => {
+    setRulesLoadedPage(0);
+    setRulesRequest((current) => ({ page: 1, nonce: current.nonce + 1 }));
   }, []);
+
+  const refreshRules = useCallback(() => {
+    reloadRulesFromFirstPage();
+    setRulesRefreshKey((value) => value + 1);
+  }, [reloadRulesFromFirstPage]);
 
   const loadMonitor = useCallback(async () => {
     try {
@@ -117,11 +125,12 @@ const AlertsPage: React.FC = () => {
           alertType: alertTypeFilter === 'all' ? undefined : alertTypeFilter,
           targetScope: scopeFilter === 'all' ? undefined : scopeFilter,
           target: searchTarget.trim().toUpperCase() || undefined,
-          page: rulesPage,
+          page: rulesRequest.page,
           pageSize: PAGE_SIZE,
         });
         if (!isLatest()) return;
-        setRules((current) => (rulesPage === 1 ? response.items : [...current, ...response.items]));
+        setRules((current) => (rulesRequest.page === 1 ? response.items : [...current, ...response.items]));
+        setRulesLoadedPage(rulesRequest.page);
         setRulesTotal(response.total);
         setRuleSources(response.ruleSources ?? null);
         setRulesError(null);
@@ -131,7 +140,7 @@ const AlertsPage: React.FC = () => {
         if (isLatest()) setRulesLoading(false);
       }
     })();
-  }, [alertTypeFilter, enabledFilter, rulesPage, rulesRefreshKey, scopeFilter, searchTarget]);
+  }, [alertTypeFilter, enabledFilter, rulesRequest, scopeFilter, searchTarget]);
 
   // 現價只補單檔價格規則；抓不到就顯示「暫無報價」，不影響規則列表。
   const quoteCodes = Array.from(new Set(
@@ -166,11 +175,12 @@ const AlertsPage: React.FC = () => {
       try {
         const response = await alertsApi.listTriggers({
           status: activityTab === 'triggered' ? 'triggered' : ISSUE_STATUSES,
-          page: triggersPage,
+          page: triggersRequest.page,
           pageSize: PAGE_SIZE,
         });
         if (!isLatest()) return;
-        setTriggers((current) => (triggersPage === 1 ? response.items : [...current, ...response.items]));
+        setTriggers((current) => (triggersRequest.page === 1 ? response.items : [...current, ...response.items]));
+        setTriggersLoadedPage(triggersRequest.page);
         setTriggersTotal(response.total);
         setSummary(response.summary ?? null);
         setTriggersError(null);
@@ -180,7 +190,7 @@ const AlertsPage: React.FC = () => {
         if (isLatest()) setTriggersLoading(false);
       }
     })();
-  }, [activityTab, triggersPage]);
+  }, [activityTab, triggersRequest]);
 
   useEffect(() => {
     setNotificationsLoading(true);
@@ -390,21 +400,21 @@ const AlertsPage: React.FC = () => {
             busyRule={busyRule}
             onSearchTargetChange={(value) => {
               setSearchTarget(value);
-              setRulesPage(1);
+              reloadRulesFromFirstPage();
             }}
             onScopeFilterChange={(value) => {
               setScopeFilter(value);
-              setRulesPage(1);
+              reloadRulesFromFirstPage();
             }}
             onEnabledFilterChange={(value) => {
               setEnabledFilter(value);
-              setRulesPage(1);
+              reloadRulesFromFirstPage();
             }}
             onAlertTypeFilterChange={(value) => {
               setAlertTypeFilter(value);
-              setRulesPage(1);
+              reloadRulesFromFirstPage();
             }}
-            onLoadMore={() => setRulesPage((page) => page + 1)}
+            onLoadMore={() => setRulesRequest((current) => ({ page: rulesLoadedPage + 1, nonce: current.nonce + 1 }))}
             onEdit={(rule) => openDrawer(rule)}
             onToggleEnabled={(rule) => void runBusy(rule, 'toggle', async () => {
               await (rule.enabled ? alertsApi.disableRule(rule.id) : alertsApi.enableRule(rule.id));
@@ -448,11 +458,14 @@ const AlertsPage: React.FC = () => {
             triggeredCount={summary?.triggered}
             issueCount={summary ? summary.degraded + summary.failed + summary.skipped : undefined}
             onTabChange={(tab) => {
+              // 同一分頁不會重新請求，清空就回不來了
+              if (tab === activityTab) return;
               setActivityTab(tab);
               setTriggers([]);
-              setTriggersPage(1);
+              setTriggersLoadedPage(0);
+              setTriggersRequest((current) => ({ page: 1, nonce: current.nonce + 1 }));
             }}
-            onLoadMore={() => setTriggersPage((page) => page + 1)}
+            onLoadMore={() => setTriggersRequest((current) => ({ page: triggersLoadedPage + 1, nonce: current.nonce + 1 }))}
           />
         </div>
       </div>

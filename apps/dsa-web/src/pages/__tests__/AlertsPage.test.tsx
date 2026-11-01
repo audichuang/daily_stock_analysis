@@ -246,6 +246,107 @@ describe('AlertsPage', () => {
     expect(api.listRules).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1 }));
   });
 
+  it('retries the same rules page after load more fails and never skips it', async () => {
+    const row = (id: number) => ({ ...rule, id, name: `rule-${id}`, target: `T${id}` });
+    let failSecond = true;
+    api.listRules.mockImplementation(async (query: { page: number }) => {
+      if (query.page === 2 && failSecond) {
+        failSecond = false;
+        throw { parsedError };
+      }
+      return { items: [row(query.page)], total: 3, page: query.page, pageSize: 20 };
+    });
+    renderPage();
+    await screen.findByTestId('alert-rule-1');
+    fireEvent.click(screen.getByRole('button', { name: '載入更多' }));
+    expect(await screen.findByText('警報 API 不可用')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '載入更多' }));
+    expect(await screen.findByTestId('alert-rule-2')).toBeInTheDocument();
+    expect(api.listRules.mock.calls.map(([query]) => query.page)).toEqual([1, 2, 2]);
+
+    fireEvent.click(screen.getByRole('button', { name: '載入更多' }));
+    expect(await screen.findByTestId('alert-rule-3')).toBeInTheDocument();
+    expect(screen.getByTestId('alert-rule-1')).toBeInTheDocument();
+    expect(screen.queryByText('警報 API 不可用')).not.toBeInTheDocument();
+    expect(api.listRules.mock.calls.map(([query]) => query.page)).toEqual([1, 2, 2, 3]);
+  });
+
+  it('retries the same activity page after load more fails and never skips it', async () => {
+    const row = (id: number) => ({ id, target: `T${id}`, status: 'triggered', triggeredAt: new Date().toISOString() });
+    let failSecond = true;
+    api.listTriggers.mockImplementation(async (query: { page: number }) => {
+      if (query.page === 2 && failSecond) {
+        failSecond = false;
+        throw { parsedError };
+      }
+      return { items: [row(query.page)], total: 3, page: query.page, pageSize: 20 };
+    });
+    renderPage();
+    await screen.findByTestId('alert-trigger-1');
+    fireEvent.click(screen.getByRole('button', { name: '載入更多' }));
+    expect(await screen.findByText('警報 API 不可用')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '載入更多' }));
+    expect(await screen.findByTestId('alert-trigger-2')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '載入更多' }));
+    expect(await screen.findByTestId('alert-trigger-3')).toBeInTheDocument();
+    expect(api.listTriggers.mock.calls.map(([query]) => query.page)).toEqual([1, 2, 2, 3]);
+  });
+
+  it('keeps activity rows when the current tab is clicked again, and clears them only on a real switch', async () => {
+    const issues = deferred<unknown>();
+    renderPage();
+    await screen.findByTestId('alert-trigger-10');
+    const calls = api.listTriggers.mock.calls.length;
+    fireEvent.click(screen.getByRole('tab', { name: /^已觸發/ }));
+    expect(screen.getByTestId('alert-trigger-10')).toBeInTheDocument();
+    expect(api.listTriggers).toHaveBeenCalledTimes(calls);
+
+    api.listTriggers.mockReturnValueOnce(issues.promise);
+    fireEvent.click(screen.getByRole('tab', { name: /^異常/ }));
+    expect(screen.queryByTestId('alert-trigger-10')).not.toBeInTheDocument();
+    await act(async () => {
+      issues.resolve({ items: [], total: 0, page: 1, pageSize: 20 });
+    });
+  });
+
+  it('starts from page one again after a filter change even if more pages were loaded', async () => {
+    const second = { ...rule, id: 2, name: 'rule-two', target: 'AAPL' };
+    api.listRules.mockImplementation(async (query: { page: number }) => (
+      query.page === 2
+        ? { items: [second], total: 2, page: 2, pageSize: 20 }
+        : { items: [rule], total: 2, page: 1, pageSize: 20 }
+    ));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: '載入更多' }));
+    await screen.findByTestId('alert-rule-2');
+    fireEvent.change(screen.getByLabelText('狀態'), { target: { value: 'disabled' } });
+    await waitFor(() => expect(api.listRules).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, enabled: false })));
+    await waitFor(() => expect(screen.queryByTestId('alert-rule-2')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '載入更多' }));
+    await waitFor(() => expect(api.listRules).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2, enabled: false })));
+  });
+
+  it('asks for page one again when a filter change failed after more pages were loaded', async () => {
+    const second = { ...rule, id: 2, name: 'rule-two', target: 'AAPL' };
+    api.listRules.mockImplementation(async (query: { page: number }) => (
+      query.page === 2
+        ? { items: [second], total: 3, page: 2, pageSize: 20 }
+        : { items: [rule], total: 3, page: 1, pageSize: 20 }
+    ));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: '載入更多' }));
+    await screen.findByTestId('alert-rule-2');
+
+    api.listRules.mockRejectedValueOnce({ parsedError });
+    fireEvent.change(screen.getByLabelText('狀態'), { target: { value: 'disabled' } });
+    expect(await screen.findByText('警報 API 不可用')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '載入更多' }));
+    await waitFor(() => expect(api.listRules).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, enabled: false })));
+  });
+
   it('keeps the latest rules response when filter requests resolve out of order', async () => {
     const first = deferred<unknown>();
     const second = deferred<unknown>();

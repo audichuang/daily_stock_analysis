@@ -109,6 +109,89 @@ describe('AlertRuleList', () => {
     expect(card.getByText(/目前數值 1200/)).toBeInTheDocument();
   });
 
+  it('does not call a skipped single target an unmet condition', () => {
+    renderList([priceRule], {
+      testResults: {
+        1: {
+          ruleId: 1, status: 'not_triggered', triggered: false, message: 'No realtime quote available',
+          evaluatedCount: 1, skippedCount: 1, triggeredCount: 0, degradedCount: 0,
+          targetResults: [{ target: '2330.TW', status: 'not_triggered', recordStatus: 'skipped', triggered: false, message: 'No realtime quote available' }],
+        },
+      },
+    });
+    const card = within(screen.getByTestId('alert-rule-1'));
+    expect(card.getByText('無法評估目前條件')).toBeInTheDocument();
+    expect(card.queryByText('目前條件未達成')).not.toBeInTheDocument();
+    expect(card.getByText('No realtime quote available')).toBeInTheDocument();
+  });
+
+  it('shows the target reason instead of the aggregate count text', () => {
+    renderList([priceRule], {
+      testResults: {
+        1: {
+          ruleId: 1, status: 'not_triggered', triggered: false, evaluatedCount: 1, skippedCount: 1,
+          message: 'Evaluated 1 targets: 0 triggered, 0 degraded, 1 skipped, 0 failed',
+          targetResults: [{ target: 'tw', status: 'not_triggered', recordStatus: 'skipped', triggered: false, message: 'tw market is not a trading day' }],
+        },
+      },
+    });
+    const card = within(screen.getByTestId('alert-rule-1'));
+    expect(card.getByText('tw market is not a trading day')).toBeInTheDocument();
+    expect(card.queryByText(/Evaluated 1 targets/)).not.toBeInTheDocument();
+  });
+
+  it('treats a target failure without counters as not evaluated', () => {
+    renderList([priceRule], {
+      testResults: {
+        1: {
+          ruleId: 1, status: 'not_triggered', triggered: false, message: 'x', evaluatedCount: 2,
+          targetResults: [
+            { target: 'A', status: 'not_triggered', recordStatus: 'failed', triggered: false, message: 'boom' },
+            { target: 'B', status: 'not_triggered', triggered: false, message: 'below' },
+          ],
+        },
+      },
+    });
+    const card = within(screen.getByTestId('alert-rule-1'));
+    expect(card.getByText('部分標的無法評估')).toBeInTheDocument();
+    expect(card.getByText('A：boom')).toBeInTheDocument();
+    expect(card.queryByText('B：below')).not.toBeInTheDocument();
+  });
+
+  it('keeps partial batch failures visible even when a target triggered', () => {
+    renderList([priceRule], {
+      testResults: {
+        1: {
+          ruleId: 1, status: 'triggered', triggered: true, message: 'x',
+          evaluatedCount: 3, triggeredCount: 1, degradedCount: 1, skippedCount: 0,
+          targetResults: [
+            { target: 'A', status: 'triggered', recordStatus: 'triggered', triggered: true, message: 'ok' },
+            { target: 'B', displayTarget: '自選 B', status: 'not_triggered', recordStatus: 'degraded', triggered: false, message: 'snapshot gone' },
+            { target: 'C', status: 'not_triggered', triggered: false, message: 'below' },
+          ],
+        },
+      },
+    });
+    const card = within(screen.getByTestId('alert-rule-1'));
+    expect(card.getByText('目前條件已達成')).toBeInTheDocument();
+    expect(card.getByText(/1 檔無法評估/)).toBeInTheDocument();
+    expect(card.getByText('自選 B：snapshot gone')).toBeInTheDocument();
+  });
+
+  it('still reports a real miss when every target was evaluated', () => {
+    renderList([priceRule], {
+      testResults: {
+        1: {
+          ruleId: 1, status: 'not_triggered', triggered: false, message: 'below', evaluatedCount: 1, skippedCount: 0, degradedCount: 0,
+          targetResults: [{ target: '2330.TW', status: 'not_triggered', triggered: false, message: 'below' }],
+        },
+      },
+    });
+    const card = within(screen.getByTestId('alert-rule-1'));
+    expect(card.getByText('目前條件未達成')).toBeInTheDocument();
+    expect(card.queryByText('無法評估目前條件')).not.toBeInTheDocument();
+  });
+
   it('confirms deletion before calling onDelete', () => {
     renderList([priceRule]);
     fireEvent.click(screen.getByRole('button', { name: 'rule-one 的更多操作' }));

@@ -19,7 +19,7 @@ import type {
   MarketRegion,
 } from '../../types/alerts';
 import { formatDateTime } from '../../utils/format';
-import { ruleCondition, type AlertPageText } from './alertRuleText';
+import { ruleCondition, summarizeDryRun, type AlertPageText } from './alertRuleText';
 
 export type AlertRuleEnabledFilter = 'all' | 'enabled' | 'disabled';
 export type AlertTypeFilter = 'all' | AlertType;
@@ -60,20 +60,36 @@ function hasChildTargets(rule: AlertRuleItem): boolean {
 }
 
 const DryRunResult: React.FC<{ result: AlertRuleTestResponse; text: PageText; onClose: () => void }> = ({ result, text, onClose }) => {
-  const failed = result.status === 'evaluation_error';
-  const headline = failed ? text.dryRunError : result.triggered ? text.dryRunHit : text.dryRunMiss;
+  const { outcome, unableCount, unableTargets } = summarizeDryRun(result);
+  const headline = {
+    hit: text.dryRunHit,
+    miss: text.dryRunMiss,
+    unable: text.dryRunUnable,
+    partial: text.dryRunPartial,
+    error: text.dryRunError,
+  }[outcome];
+  const variant = { hit: 'success', miss: 'info', unable: 'warning', partial: 'warning', error: 'danger' } as const;
   const details: string[] = [text.dryRunNote];
   if (result.observedValue != null) details.push(formatUiText(text.dryRunObserved, { value: String(result.observedValue) }));
   if ((result.evaluatedCount ?? 0) > 1) {
     details.push(formatUiText(text.dryRunSummary, { evaluated: result.evaluatedCount ?? 0, triggered: result.triggeredCount ?? 0 }));
+    if (unableCount > 0) details.push(formatUiText(text.dryRunUnableCount, { count: unableCount }));
   }
-  if (failed) details.push(result.message);
+  // 聚合回應的 message 只是筆數摘要，真正原因在各標的。
+  const reasons = unableTargets.length > 0
+    ? unableTargets.map((item) => ((result.evaluatedCount ?? 0) > 1 ? `${item.displayTarget ?? item.target}：${item.message}` : item.message))
+    : (outcome === 'unable' || outcome === 'error') ? [result.message] : [];
   return (
     <InlineAlert
       className="mt-3"
       title={headline}
-      message={details.join(' · ')}
-      variant={failed ? 'danger' : result.triggered ? 'success' : 'info'}
+      message={(
+        <>
+          <div>{details.join(' · ')}</div>
+          {reasons.map((reason) => <div key={reason} className="break-words text-xs">{reason}</div>)}
+        </>
+      )}
+      variant={variant[outcome]}
       action={(
         <button type="button" className="text-sm underline" onClick={onClose}>
           {text.dryRunClose}
