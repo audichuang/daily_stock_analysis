@@ -60,6 +60,7 @@ test('back/forward and cancel/discard preserve drafts and exact destinations', a
     await page.screenshot({ path, fullPage: true, animations: 'disabled' });
     await testInfo.attach(`settings-guard-${name}`, { path, contentType: 'image/png' });
   }
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await expect(page).toHaveURL(/\/settings$/);
   await expect(input).toHaveValue('unsaved');

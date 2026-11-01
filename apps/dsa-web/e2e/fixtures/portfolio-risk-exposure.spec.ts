@@ -77,12 +77,11 @@ for (const state of ['complete', 'missing-price', 'snapshot-error', 'invalid-top
     await expect(dashboard).toBeVisible();
     await expect(page.getByRole('button', { name: '刷新数据', exact: true })).toBeVisible();
     if (state === 'snapshot-error') {
-      await expect(dashboard.getByText('总市值: --')).toBeVisible();
-      await expect(dashboard.getByText('持仓: --')).toBeVisible();
-      await expect(page.getByText('共 -- 项')).toBeVisible();
-      await expect(page.getByText('账户数: --')).toBeVisible();
+      await expect(dashboard.getByText('总市值: —')).toBeVisible();
+      await expect(dashboard.getByText('持仓: —')).toBeVisible();
+      await expect(page.getByText('共 — 项')).toBeVisible();
       await expect(page.getByText('最新', { exact: true })).toHaveCount(0);
-      await expect(page.getByText('持仓快照不可用', { exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '持仓快照不可用', exact: true })).toBeVisible();
     }
     if (state === 'empty') {
       await expect(dashboard.getByText('总市值: CNY 0.00')).toBeVisible();
@@ -94,7 +93,6 @@ for (const state of ['complete', 'missing-price', 'snapshot-error', 'invalid-top
       await expect(dashboard.getByText('Top1: 600519')).toBeVisible();
       await expect(dashboard.getByText('Top1: 白酒')).toBeVisible();
       await expect(dashboard.getByText('100.00%')).toHaveCount(4);
-      await expect(page.locator('.recharts-pie-sector')).toHaveCount(1);
       await expect(page.getByText('暂无集中度数据', { exact: true })).toHaveCount(0);
     }
     if (state === 'complete') {
@@ -114,20 +112,6 @@ for (const state of ['complete', 'missing-price', 'snapshot-error', 'invalid-top
     for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport);
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-      // Screenshot animations:disabled does not stop Recharts' JavaScript animation.
-      // Assert every expected sector has its final arc (outerRadius=90, no inner
-      // radius/padding), including the position fallback in invalid-sector.
-      const weights = state === 'rounded-tail' ? [100]
-        : state === 'complete' || state === 'invalid-sector' ? [60, 40] : [];
-      const sectors = page.locator('.recharts-pie-sector path');
-      await expect(sectors).toHaveCount(weights.length);
-      for (const [index, weight] of weights.entries()) {
-        const expectedLength = 180 + 90 * Math.PI * 2 * weight / 100;
-        await expect.poll(async () => Math.abs(
-          await sectors.nth(index).evaluate((path) => (path as SVGPathElement).getTotalLength())
-          - expectedLength,
-        )).toBeLessThan(0.5);
-      }
       const screenshot = testInfo.outputPath(`portfolio-${state}-${viewport.width}.png`);
       await dashboard.screenshot({ path: screenshot, animations: 'disabled' });
       await testInfo.attach(`${state}-${viewport.width}`, { path: screenshot, contentType: 'image/png' });

@@ -25,7 +25,8 @@ for (const state of ['disabled', 'error', 'unavailable'] as const) {
     const nav = page.getByRole('complementary', { name: '桌面侧边导航' });
     await nav.getByRole('link', { name: '选股', exact: true }).click();
     await expect(page).toHaveURL(/\/screening$/);
-    await expect(page.getByRole('button', { name: /运行选股/ })).toBeDisabled();
+    // 改版後選股未就緒時不顯示表單，改由狀態卡說明（開啟或重試）。
+    await expect(page.getByRole('button', { name: /运行选股/ })).toHaveCount(0);
     if (state === 'disabled') {
       await expect(page.getByRole('button', { name: '开启选股', exact: true })).toBeVisible();
     } else {

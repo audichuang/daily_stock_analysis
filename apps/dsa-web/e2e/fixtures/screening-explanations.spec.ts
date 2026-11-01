@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
 
+// 畫面把來源與品質代碼翻成中文，查不到的來源顯示原值。
+const SOURCE_LABELS: Record<string, string> = { screening: '选股引擎', llm: '模型', realtime_quote: '即时行情', legacy_result: '旧纪录' };
+const QUALITY_LABELS: Record<string, string> = { observed: '实际观测', inferred: '推论', unknown: '未知', ok: '完整', partial: '部分' };
+
 const explanation = (code: string, text: string, source: string, quality: string, value?: number) => ({
   code, text, source, quality, ...(value == null ? {} : { value }),
 });
@@ -77,8 +81,9 @@ for (const state of ['complete', 'local-only', 'inferred', 'awaiting-evidence'] 
     const run = page.getByRole('button', { name: '运行选股', exact: true });
     await expect(run).toBeEnabled();
     await run.click();
-    // The first candidate is expanded automatically when a task completes.
-    await expect(page.getByRole('button', { name: '收起', exact: true })).toBeVisible();
+    // 改版後候選詳情改成點列開抽屜。
+    const candidateRow = page.getByRole('row').filter({ hasText: '演示候选' });
+    await candidateRow.click();
     const selected = page.getByText('为什么入选', { exact: true }).locator('..');
     const now = page.getByText('为什么现在', { exact: true }).locator('..');
     await expect(selected).toBeVisible();
@@ -89,16 +94,16 @@ for (const state of ['complete', 'local-only', 'inferred', 'awaiting-evidence'] 
       await expect(card.getByRole('listitem')).toHaveCount(items.length);
       for (const item of items) {
         const row = card.getByRole('listitem').filter({ has: page.getByText(item.text, { exact: true }) })
-          .filter({ has: page.getByText(`来源：${item.source} · 质量：${item.quality}`, { exact: true }) });
+          .filter({ has: page.getByText(`来源：${SOURCE_LABELS[item.source] ?? item.source} · 质量：${QUALITY_LABELS[item.quality]}`, { exact: true }) });
         await expect(row).toHaveCount(1);
         await expect(row).toBeVisible();
       }
     }
-    await expect(selected.getByText(`综合质量：${candidate.explanation_quality.why_selected}`, { exact: true })).toBeVisible();
-    await expect(now.getByText(`综合质量：${candidate.explanation_quality.why_now}`, { exact: true })).toBeVisible();
+    await expect(selected.getByText(`综合质量：${QUALITY_LABELS[candidate.explanation_quality.why_selected]}`, { exact: true })).toBeVisible();
+    await expect(now.getByText(`综合质量：${QUALITY_LABELS[candidate.explanation_quality.why_now]}`, { exact: true })).toBeVisible();
     if (state === 'complete' || state === 'inferred') {
       await expect(selected).toContainText('post_analyzer:dsa');
-      await expect(selected).toContainText('llm');
+      await expect(selected).toContainText('模型');
     } else {
       await expect(now).not.toContainText('涨跌幅：');
     }
@@ -106,9 +111,9 @@ for (const state of ['complete', 'local-only', 'inferred', 'awaiting-evidence'] 
     const screenshot = testInfo.outputPath(`screening-${state}-1440.png`);
     await section.screenshot({ path: screenshot, animations: 'disabled' });
     await testInfo.attach(state, { path: screenshot, contentType: 'image/png' });
-    await page.getByRole('button', { name: '收起', exact: true }).click();
+    await page.keyboard.press('Escape');
     await expect(selected).toHaveCount(0);
-    await page.getByRole('button', { name: '展开查看', exact: true }).click();
+    await candidateRow.click();
     await expect(selected).toContainText(whySelected[0].text);
   });
 }
@@ -145,10 +150,11 @@ test('legacy history restores a summary without inventing provenance', async ({ 
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/screening');
+  await page.getByRole('row').filter({ hasText: '旧版候选' }).click();
   const selected = page.getByText('为什么入选', { exact: true }).locator('..');
   const now = page.getByText('为什么现在', { exact: true }).locator('..');
   await expect(selected).toContainText('历史摘要（来源未记录）：旧版保存的估值理由');
-  await expect(selected).toContainText('来源：legacy_result · 质量：unknown');
+  await expect(selected).toContainText('来源：旧纪录 · 质量：未知');
   await expect(selected).not.toContainText('核心因子');
   await expect(now).toContainText('暂无带来源的价格、消息或事件证据');
   await expect(now).not.toContainText('涨跌幅：');

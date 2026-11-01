@@ -339,6 +339,10 @@ class AgentSkillsEndpointTestCase(unittest.TestCase):
                     "id": "bull_trend",
                     "name": "多头趋势",
                     "description": "趋势跟随",
+                    # 舊欄位不變；以下是 UI 改版追加、自訂策略沒填時的 null。
+                    "display_name_zh_tw": None,
+                    "group": None,
+                    "group_name_zh_tw": None,
                 }
             ],
         )

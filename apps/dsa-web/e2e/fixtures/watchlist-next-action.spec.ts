@@ -49,7 +49,8 @@ test('watchlist signals stay readable and accessible at sidebar widths', async (
     for (const code of ['600519', '00700', 'AAPL']) {
       const row = page.getByTestId(`watchlist-row-${code}`);
       await expect(row).toBeVisible();
-      await expect(row.getByText('下一步', { exact: true })).toBeVisible();
+      // 下一步改成無障礙描述，不佔列寬。
+      await expect(row).toContainText('下一步');
       expect(await row.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
