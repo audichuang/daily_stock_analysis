@@ -348,8 +348,10 @@ public extension PortfolioSnapshot {
     var todayAssetSummary: TodayAssetSummary? {
         guard !accounts.isEmpty else { return nil }
         if let displayCurrency, let consolidatedEquityBase, consolidatedFxMissing != true {
-            return TodayAssetSummary(currency: displayCurrency, equity: consolidatedEquityBase,
-                                     dayPnl: consolidatedDayPnlBase, consolidated: true)
+            // 與資產頁 `overview` 同口徑：基金加進總資產與今日損益，讀不到基金時只算帳本。
+            return TodayAssetSummary(currency: displayCurrency, equity: consolidatedEquityBase + (consolidatedFundValueBase ?? 0),
+                                     dayPnl: consolidatedDayPnlBase.map { $0 + (consolidatedFundDayPnlBase ?? 0) },
+                                     consolidated: true)
         }
         guard let first = currencyTotals.first else { return nil }
         return TodayAssetSummary(currency: first.currency, equity: first.totalEquity, dayPnl: nil,

@@ -433,11 +433,17 @@ public struct PortfolioSnapshot: Codable, Sendable {
     public let dataQuality: String
     public let limitations: [String]
     public let accounts: [PortfolioAccount]
-    // 追加欄位：只有帶 display_currency 才有 consolidated_*，舊後端全部沒有。
+    // 以下皆為追加欄位；頂層 total_* 仍是 CNY 彙總，帶 display_currency 才有 consolidated_*。
     public let dayPnl: Double?
     public let displayCurrency: String?
     public let consolidatedEquityBase: Double?
+    public let consolidatedMarketValueBase: Double?
+    public let consolidatedCashBase: Double?
+    public let consolidatedUnrealizedPnlBase: Double?
+    public let consolidatedRealizedPnlBase: Double?
     public let consolidatedDayPnlBase: Double?
+    public let consolidatedFundValueBase: Double?
+    public let consolidatedFundDayPnlBase: Double?
     public let consolidatedFxStale: Bool?
     public let consolidatedFxMissing: Bool?
 }
@@ -458,6 +464,8 @@ public struct PortfolioAccount: Codable, Sendable, Identifiable {
     public let dataQuality: String
     public let limitations: [String]
     public let positions: [PortfolioPosition]
+    /// 今日損益（帳戶幣別，追加欄位）；有一檔算不出就是 null。
+    public let dayPnl: Double?
 }
 
 public struct PortfolioPosition: Codable, Sendable, Identifiable {
@@ -481,6 +489,44 @@ public struct PortfolioPosition: Codable, Sendable, Identifiable {
     public let priceAvailable: Bool
     public let dataQuality: String
     public let limitations: [String]
+    // 追加欄位；查無前一場收盤時為 null。
+    public let quoteAt: String?
+    public let prevClose: Double?
+    public let dayChangePct: Double?
+    public let dayPnlBase: Double?
+}
+
+/// `GET /portfolio/risk`；後端這兩個區塊是自由字典，全部可空，缺欄位不能讓整份解碼失敗。
+public struct PortfolioRiskReport: Codable, Sendable {
+    public let currency: String?
+    public let concentration: PortfolioConcentration?
+    public let sectorConcentration: PortfolioSectorConcentration?
+    public let displayCurrency: String?
+}
+
+public struct PortfolioConcentration: Codable, Sendable {
+    public let topWeightPct: Double?
+    public let alert: Bool?
+    public let topPositions: [PortfolioRiskPosition]?
+}
+
+public struct PortfolioRiskPosition: Codable, Sendable {
+    public let symbol: String
+    public let weightPct: Double?
+    public let isAlert: Bool?
+}
+
+public struct PortfolioSectorConcentration: Codable, Sendable {
+    public let topWeightPct: Double?
+    public let alert: Bool?
+    public let topSectors: [PortfolioRiskSector]?
+}
+
+public struct PortfolioRiskSector: Codable, Sendable {
+    public let sector: String
+    public let weightPct: Double?
+    public let symbolCount: Int?
+    public let isAlert: Bool?
 }
 
 public struct StockIndexItem: Codable, Sendable, Identifiable {

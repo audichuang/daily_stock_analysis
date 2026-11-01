@@ -131,6 +131,10 @@ final class StockListPresentationTests: XCTestCase {
         XCTAssertEqual(consolidated.todayAssetSummary,
                        TodayAssetSummary(currency: "TWD", equity: 1_575_000, dayPnl: -1_500, consolidated: true))
 
+        let withFunds = try snapshot(extra: #""display_currency":"TWD","consolidated_equity_base":1575000,"consolidated_day_pnl_base":-1500,"consolidated_fund_value_base":200000,"consolidated_fund_day_pnl_base":500,"consolidated_fx_missing":false"#)
+        XCTAssertEqual(withFunds.todayAssetSummary,
+                       TodayAssetSummary(currency: "TWD", equity: 1_775_000, dayPnl: -1_000, consolidated: true), "基金口徑要與資產頁相同")
+
         let missingFx = try snapshot(extra: #""display_currency":"TWD","consolidated_equity_base":null,"consolidated_fx_missing":true"#)
         XCTAssertEqual(missingFx.todayAssetSummary,
                        TodayAssetSummary(currency: "TWD", equity: 1_000, dayPnl: nil, consolidated: true), "換算失敗不給今日損益")

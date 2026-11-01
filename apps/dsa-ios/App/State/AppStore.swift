@@ -10,7 +10,7 @@ final class AppStore: ObservableObject {
     @Published var startingUp = true
     @Published var needsPassword = false
     @Published var accessExpanded = false
-    @Published var connectionError: String?
+    @Published var connectionIssue: ConnectionIssue?
     @Published var serverAddress: String
     @Published var watchlist: [String] = []
     @Published var quotes: [QuoteItem] = []
@@ -46,6 +46,7 @@ final class AppStore: ObservableObject {
     private(set) var toolWebDataStore: WKWebsiteDataStore
     private var generation = UUID()
     private var portfolioSummaryLoading = false
+    private var connectTask: Task<Void, Never>?
     private let configurationFactory: () -> URLSessionConfiguration
 
     init(configurationFactory: @escaping () -> URLSessionConfiguration = { .ephemeral }) {
@@ -74,15 +75,30 @@ final class AppStore: ObservableObject {
         #endif
     }
 
+    var connectionError: String? { connectionIssue?.message }
+
+    /// 連線畫面用：由 store 持有 task，「取消」才取消得到進行中的請求。
+    func submitConnection(password: String? = nil) async {
+        let task = Task { await connect(password: password) }
+        connectTask = task
+        await task.value
+        if connectTask == task { connectTask = nil }
+    }
+
+    func cancelConnecting() {
+        connectTask?.cancel()
+        connectTask = nil
+        startingUp = false
+    }
+
     func connect(password: String? = nil) async {
         guard !connecting else { return }
         connecting = true
-        connectionError = nil
+        connectionIssue = nil
         defer { connecting = false }
         do {
-            guard let url = URL(string: serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-                throw LocalError("請輸入完整的 HTTPS 服務網址。")
-            }
+            guard let url = ServerAddress.normalized(serverAddress) else { throw DSAError.invalidServerURL }
+            if serverAddress != url.absoluteString { serverAddress = url.absoluteString }
             if baseURL != url || client == nil {
                 let config = configurationFactory()
                 config.timeoutIntervalForRequest = 60
@@ -108,6 +124,7 @@ final class AppStore: ObservableObject {
             guard let client else { return }
             if let password { try await client.login(password: password) }
             let status = try await client.authStatus()
+            try Task.checkCancellation()
             needsPassword = status.authEnabled && status.passwordSet && !status.loggedIn
             if status.authEnabled && !status.passwordSet {
                 throw LocalError("請先在網頁完成管理員密碼設定，再連接 App。")
@@ -119,18 +136,20 @@ final class AppStore: ObservableObject {
             catch { errors["session"] = error.localizedDescription }
             await refresh()
         } catch {
-            connectionError = error.localizedDescription
+            // 使用者按了取消，不是連線失敗，不顯示錯誤。
+            if Task.isCancelled { return }
+            connectionIssue = ConnectionIssue.from(error)
             handleAuthenticationError(error)
         }
     }
 
     func hasAccessCredentials() -> Bool {
-        guard let url = URL(string: serverAddress) else { return false }
+        guard let url = ServerAddress.normalized(serverAddress) else { return false }
         return (try? AccessVault.load(for: url)) != nil
     }
 
     func saveAccessCredentials(clientID: String, secret: String) throws {
-        guard let url = URL(string: serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+        guard let url = ServerAddress.normalized(serverAddress) else {
             throw DSAError.invalidServerURL
         }
         // 沿用 client 的網址驗證，避免把憑證存進含帳密或 query 的網址。
@@ -144,17 +163,17 @@ final class AppStore: ObservableObject {
         try AccessVault.save(AccessCredentials(clientID: id, clientSecret: value), for: url)
         client = nil
         needsPassword = false
-        connectionError = nil
+        connectionIssue = nil
     }
 
     func removeAccessCredentials() throws {
-        guard let url = URL(string: serverAddress) else { throw DSAError.invalidServerURL }
+        guard let url = ServerAddress.normalized(serverAddress) else { throw DSAError.invalidServerURL }
         try AccessVault.remove(for: url)
         session?.configuration.httpCookieStorage?.cookies?.filter { $0.name == "CF_Authorization" }
             .forEach { session?.configuration.httpCookieStorage?.deleteCookie($0) }
         client = nil
         needsPassword = false
-        connectionError = nil
+        connectionIssue = nil
     }
 
     /// 工具頁捷徑的狀態值。由 store 自己的 Task 執行：`.onAppear` 離頁時不該把還在等的請求取消成「已取消」。
@@ -199,7 +218,7 @@ final class AppStore: ObservableObject {
             needsPassword = false
         } else if error.requiresLogin { needsPassword = true }
         else { return }
-        connectionError = error.localizedDescription
+        connectionIssue = ConnectionIssue.from(error)
         connected = false
     }
 

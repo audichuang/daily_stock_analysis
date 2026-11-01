@@ -8,15 +8,16 @@ struct DSAMarketApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if store.startingUp { ProgressView("正在連接分析服務…") }
-                else if store.connected { MainTabView() }
+                // 已連上就進主畫面，不等首輪資料載完；冷啟動只顯示連接中，不閃登入表單。
+                if store.connected { MainTabView() }
+                else if store.startingUp { StartupConnectingView() }
                 else { ConnectionView() }
             }
             .environmentObject(store)
             .tint(Theme.accent)
             .preferredColorScheme(.dark)
             .task {
-                if !store.serverAddress.isEmpty { await store.connect() }
+                if !store.serverAddress.isEmpty { await store.submitConnection() }
                 store.startingUp = false
             }
             .onChange(of: scenePhase) { _, phase in
