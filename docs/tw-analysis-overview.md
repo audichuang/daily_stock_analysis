@@ -117,7 +117,7 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
 ## 7. 還沒做的
 
 - 台股沒有「上次法說／財報日」來源：`calendar_events` 只留今天起的法說會，財報當天以外 `earnings` 窗口都是 30 天、不會觸發財報後事件查詢；美股靠 SEC 8-K Item 2.02（要設 `SEC_EDGAR_USER_AGENT`，只回看 14 天）。
-- 事件門檻 12%（`EVENT_GAP_THRESHOLD_PCT`）高於台股單日漲跌幅限制 10%，台股單日波動幾乎碰不到；要不要分市場設門檻尚未決定。
+- 決策層事件門檻 12%（`EVENT_GAP_THRESHOLD_PCT`）高於台股單日漲跌幅限制 10%，台股單日波動幾乎碰不到；決策層要不要分市場尚未決定。新聞的「為何變動」查詢與全文另用台股 7%（`news_event_signals.py` 的 `NEWS_EVENT_THRESHOLD_PCT_BY_MARKET`），只影響多查一次新聞，**這個門檻沒有回測**，取自 3481 −7.5% 一例。
 - agent 路徑（`search_tools.py`）還沒帶財報日與波動訊號。
 
 - **2～5 天短波段專用契約與新訊號**：不要把現有突破訊號直接縮短持有期，已證實為負。

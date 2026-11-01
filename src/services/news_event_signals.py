@@ -1,13 +1,18 @@
 """新聞檢索用的事件訊號：上次財報日與重大波動，只讀既有資料、不打外部來源。"""
 import logging
 from datetime import date, timedelta
+from types import SimpleNamespace
 
+from src.core.trading_calendar import latest_opened_session
 from src.services.event_gap import detect_event_gap
 
 logger = logging.getLogger(__name__)
 
 # 超過這個天數的財報不再錨定 earnings 窗口。
 EARNINGS_ANCHOR_MAX_AGE_DAYS = 30
+# 只決定要不要多查「為何變動」與抓全文，不影響決策層的 event_gap_threshold_pct。
+# 台股單日漲跌幅上限 10%，共用的 12% 碰不到。7% 取自 3481 −7.5% 這個實例，沒有回測。
+NEWS_EVENT_THRESHOLD_PCT_BY_MARKET = {"tw": 7.0}
 
 
 def _parse_day(value):
@@ -38,8 +43,11 @@ def _calendar_earnings_day(code, today):
     return day if day == today else None
 
 
-def resolve_news_event_signals(code, today, *, config, fundamental_context=None, daily_bars=None, realtime_quote=None):
-    """回傳 search_comprehensive_intel 的事件參數；任一來源失敗都不影響分析。"""
+def resolve_news_event_signals(
+    code, market, now, *, config, fundamental_context=None, daily_bars=None, realtime_quote=None,
+):
+    """回傳 search_comprehensive_intel 的事件參數；now 是市場當地時間，任一來源失敗都不影響分析。"""
+    today = now.date()
     signals = {"earnings_date": None, "price_event": None}
     try:
         earliest = today - timedelta(days=EARNINGS_ANCHOR_MAX_AGE_DAYS)
@@ -49,11 +57,21 @@ def resolve_news_event_signals(code, today, *, config, fundamental_context=None,
     except Exception as exc:
         logger.warning("財報日訊號讀取失敗 %s: %s", code, type(exc).__name__)
     try:
-        context = {"event_gap_daily_bars": daily_bars or [], "today": {"date": today.isoformat()}}
+        # 報價屬於哪一場：provider 時間優先，否則最近已開盤的場次（盤前與休市日是前一場）。
+        # 用掛鐘日會在休市日多算一個空場次，也會把週一盤前的週五報價標成週一事件。
+        session = _parse_day(getattr(realtime_quote, "provider_timestamp", None))
+        session = session or latest_opened_session(market, now)
+        context = {"event_gap_daily_bars": daily_bars or [],
+                   "today": {"date": session.isoformat()} if session else {}}
         change = getattr(realtime_quote, "change_pct", None)
         if change is not None:
             context["realtime"] = {"change_pct": change}
-        signals["price_event"] = detect_event_gap(code, context, config)
+        thresholds = SimpleNamespace(
+            event_gap_threshold_pct=NEWS_EVENT_THRESHOLD_PCT_BY_MARKET.get(
+                market, getattr(config, "event_gap_threshold_pct", 12.0)),
+            event_gap_lookback_sessions=getattr(config, "event_gap_lookback_sessions", 5),
+        )
+        signals["price_event"] = detect_event_gap(code, context, thresholds)
     except Exception as exc:
         logger.warning("重大波動訊號判讀失敗 %s: %s", code, type(exc).__name__)
     return signals

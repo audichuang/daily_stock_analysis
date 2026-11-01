@@ -17,7 +17,7 @@ public struct ReportNewsItem: Decodable, Sendable {
     /// 財報面向有發布日期才是報導，沒有日期的多半是資料頁。
     public var isNews: Bool {
         if dimension == "earnings" { return publishedDate != nil }
-        return ["latest_news", "announcements", "risk_check"].contains(dimension ?? "")
+        return ["event_anchor", "latest_news", "announcements", "risk_check"].contains(dimension ?? "")
     }
 
     public var externalURL: URL? {

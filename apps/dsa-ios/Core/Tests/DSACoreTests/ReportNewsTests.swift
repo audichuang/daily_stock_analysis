@@ -11,6 +11,11 @@ final class ReportNewsTests: XCTestCase {
         return try decoder.decode(ReportNewsItem.self, from: JSONSerialization.data(withJSONObject: values))
     }
 
+    func testEventAnchorIsNewsNotReference() throws {
+        XCTAssertTrue(try item(["dimension": "event_anchor", "title": "Why Intel stock moved"]).isNews)
+        XCTAssertFalse(try item(["dimension": "event_anchor_x", "title": "未知面向"]).isNews)
+    }
+
     func testClassificationUsesOnlyDimensionIncludingUnknownAndOldAPI() throws {
         for dimension in ["latest_news", "announcements", "risk_check"] {
             XCTAssertTrue(try item(["dimension": dimension, "title": "IBISWorld 資料頁"]).isNews)

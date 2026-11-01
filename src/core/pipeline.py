@@ -878,9 +878,11 @@ class StockAnalysisPipeline:
                 news_signals = {}
                 if not is_index:
                     from src.services.news_event_signals import resolve_news_event_signals
+                    news_market = get_market_for_stock(normalize_stock_code(code))
                     news_signals = resolve_news_event_signals(
                         code,
-                        get_market_now(get_market_for_stock(normalize_stock_code(code))).date(),
+                        news_market,
+                        get_market_now(news_market),
                         config=self.config,
                         fundamental_context=fundamental_context,
                         daily_bars=news_signal_daily_bars,

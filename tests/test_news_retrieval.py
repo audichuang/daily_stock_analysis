@@ -335,25 +335,103 @@ def test_anchor_query_for_tw_uses_direction_and_local_date():
     assert deepseek.calls[0][0] == f"群創 3481 股價 下跌 原因 {event_day.month}月{event_day.day}日"
 
 
-def _bars(change):
-    day = TODAY - timedelta(days=1)
-    return [{"date": day.isoformat(), "close": 100.0, "pct_chg": change, "low": 95.0}]
+def _open_week(market="us"):
+    """最近一個週一到週五都開市的週一；不寫死日曆日。"""
+    monday = TODAY - timedelta(days=TODAY.weekday() + 7)
+    while not all(is_market_open(market, monday + timedelta(days=n)) for n in range(5)):
+        monday -= timedelta(days=7)
+    return monday
+
+
+def _at(day, hour):
+    return datetime.combine(day, datetime.min.time()).replace(hour=hour)
+
+
+def _week_bars(monday, monday_change):
+    return [{"date": (monday + timedelta(days=n)).isoformat(), "close": 100.0, "low": 95.0,
+             "pct_chg": monday_change if n == 0 else 0.5} for n in range(5)]
+
+
+_THRESHOLD_CONFIG = SimpleNamespace(event_gap_decision_enabled=False, event_gap_threshold_pct=12.0,
+                                    event_gap_lookback_sessions=5)
+
+
+def _signal(code, market, now, **kwargs):
+    with patch("src.services.calendar_service.earnings_evidence", return_value={"date": None}):
+        return resolve_news_event_signals(code, market, now, config=_THRESHOLD_CONFIG, **kwargs)
 
 
 @pytest.mark.parametrize("change,expected", [(-12.0, True), (-11.9, False), (13.0, True)])
 def test_price_signal_reuses_event_gap_threshold(change, expected):
-    config = SimpleNamespace(event_gap_decision_enabled=False, event_gap_threshold_pct=12.0,
-                             event_gap_lookback_sessions=5)
-    signals = resolve_news_event_signals("INTC", TODAY, config=config, daily_bars=_bars(change))
+    monday = _open_week()
+    signals = _signal("INTC", "us", _at(monday + timedelta(days=4), 17), daily_bars=_week_bars(monday, change))
     assert bool(signals["price_event"]) is expected
 
 
+def test_friday_and_sunday_see_the_same_event_from_the_same_bars():
+    monday = _open_week()
+    bars = _week_bars(monday, -20.0)
+    friday = _signal("INTC", "us", _at(monday + timedelta(days=4), 17), daily_bars=bars)["price_event"]
+    sunday = _signal("INTC", "us", _at(monday + timedelta(days=6), 10), daily_bars=bars)["price_event"]
+    assert friday["event_date"] == monday.isoformat()
+    assert sunday == friday
+
+
+def _quote(change, provider_timestamp=None):
+    return SimpleNamespace(change_pct=change, provider_timestamp=provider_timestamp)
+
+
+def test_premarket_quote_without_bars_belongs_to_previous_session():
+    next_monday = _open_week() + timedelta(days=7)
+    if not is_market_open("us", next_monday):
+        pytest.skip("next Monday is a holiday")
+    event = _signal("INTC", "us", _at(next_monday, 8), realtime_quote=_quote(-20.0))["price_event"]
+    assert event["event_date"] == (next_monday - timedelta(days=3)).isoformat()
+
+
+def test_intraday_quote_without_bars_belongs_to_today():
+    monday = _open_week()
+    event = _signal("INTC", "us", _at(monday, 11), realtime_quote=_quote(-20.0))["price_event"]
+    assert event["event_date"] == monday.isoformat()
+
+
+def test_provider_timestamp_overrides_clock_for_quote_session():
+    monday = _open_week()
+    stamp = f"{monday - timedelta(days=3)}T16:00:00"
+    event = _signal("INTC", "us", _at(monday, 11), realtime_quote=_quote(-20.0, stamp))["price_event"]
+    assert event["event_date"] == (monday - timedelta(days=3)).isoformat()
+
+
+@pytest.mark.parametrize("change,expected", [(-7.5, True), (-7.0, True), (-6.9, False)])
+def test_tw_news_query_uses_seven_percent(change, expected):
+    monday = _open_week("tw")
+    signals = _signal("3481.TW", "tw", _at(monday + timedelta(days=4), 15), daily_bars=_week_bars(monday, change))
+    assert bool(signals["price_event"]) is expected
+
+
+def test_us_news_query_stays_on_shared_threshold():
+    monday = _open_week()
+    assert _signal("INTC", "us", _at(monday + timedelta(days=4), 17),
+                   daily_bars=_week_bars(monday, -7.5))["price_event"] is None
+
+
+def test_tw_decision_layer_threshold_unchanged():
+    monday = _open_week("tw")
+    friday = monday + timedelta(days=4)
+    context = {"event_gap_daily_bars": _week_bars(monday, -7.5), "today": {"date": friday.isoformat()}}
+    enabled = SimpleNamespace(event_gap_decision_enabled=True, event_gap_threshold_pct=12.0,
+                              event_gap_lookback_sessions=5)
+    assert event_gap_context("3481.TW", context, enabled) is None
+    context["event_gap_daily_bars"] = _week_bars(monday, -12.5)
+    assert event_gap_context("3481.TW", context, enabled)["threshold_pct"] == 12.0
+
+
 def test_event_gap_switch_still_gates_only_the_decision_path():
-    config = SimpleNamespace(event_gap_decision_enabled=False, event_gap_threshold_pct=12.0,
-                             event_gap_lookback_sessions=5)
-    context = {"event_gap_daily_bars": _bars(-20.0), "today": {"date": TODAY.isoformat()}}
-    assert event_gap_context("INTC", context, config) is None
-    assert detect_event_gap("INTC", context, config)["change_pct"] == -20.0
+    monday = _open_week()
+    context = {"event_gap_daily_bars": _week_bars(monday, -20.0),
+               "today": {"date": (monday + timedelta(days=4)).isoformat()}}
+    assert event_gap_context("INTC", context, _THRESHOLD_CONFIG) is None
+    assert detect_event_gap("INTC", context, _THRESHOLD_CONFIG)["change_pct"] == -20.0
 
 
 def _signals_config():
@@ -367,21 +445,21 @@ def test_earnings_signal_reads_item_202_only():
         {"date": other, "items": "8.01"}, {"date": good, "items": "2.02,9.01"},
     ]}}}
     with patch("src.services.calendar_service.earnings_evidence", return_value={"date": None}):
-        signals = resolve_news_event_signals("INTC", TODAY, config=_signals_config(), fundamental_context=context)
+        signals = resolve_news_event_signals("INTC", "us", _at(TODAY, 12), config=_signals_config(), fundamental_context=context)
     assert signals["earnings_date"] == TODAY - timedelta(days=3)
 
 
 def test_earnings_signal_uses_calendar_only_on_the_day_itself():
     with patch("src.services.calendar_service.earnings_evidence", return_value={"date": TODAY.isoformat()}):
-        assert resolve_news_event_signals("2330.TW", TODAY, config=_signals_config())["earnings_date"] == TODAY
+        assert resolve_news_event_signals("2330.TW", "tw", _at(TODAY, 12), config=_signals_config())["earnings_date"] == TODAY
     future = (TODAY + timedelta(days=1)).isoformat()
     with patch("src.services.calendar_service.earnings_evidence", return_value={"date": future}):
-        assert resolve_news_event_signals("2330.TW", TODAY, config=_signals_config())["earnings_date"] is None
+        assert resolve_news_event_signals("2330.TW", "tw", _at(TODAY, 12), config=_signals_config())["earnings_date"] is None
 
 
 def test_signals_fail_open():
     with patch("src.services.calendar_service.earnings_evidence", side_effect=RuntimeError("db")):
-        signals = resolve_news_event_signals("INTC", TODAY, config=_signals_config())
+        signals = resolve_news_event_signals("INTC", "us", _at(TODAY, 12), config=_signals_config())
     assert signals == {"earnings_date": None, "price_event": None}
 
 
