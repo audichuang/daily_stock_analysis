@@ -6,6 +6,7 @@ struct ToolsView: View {
     @State private var loggingOut = false
     @State private var confirmingLogout = false
     @State private var showingGuide = false
+    @State private var advancedExpanded = false
 
     var body: some View {
         PageScroll {
@@ -14,14 +15,6 @@ struct ToolsView: View {
                     shortcut("價格警報", value: alertValue, icon: "bell.badge")
                 }
                 .accessibilityIdentifier("tools.route.alerts")
-                NavigationLink { EventCalendarView() } label: {
-                    shortcut("事件行事曆", value: calendarValue, icon: "calendar.badge.clock")
-                }
-                .accessibilityIdentifier("tools.calendar")
-                NavigationLink { ToolWebView(path: "/", title: "完整分析") } label: {
-                    shortcut("完整分析", value: "\(store.reports.count) 份報告", icon: "doc.text.magnifyingglass")
-                }
-                .accessibilityIdentifier("tools.route.")
                 NavigationLink { ConnectionDetailView() } label: {
                     shortcut("連線", value: store.connected ? "已連線" : "未連線", icon: "network")
                 }
@@ -29,21 +22,38 @@ struct ToolsView: View {
             }
             .buttonStyle(.plain)
 
-            toolGroup("研究", items: [
+            toolGroup("常用", items: [
                 ToolLink(path: "/chat", title: "AI 問股", icon: "bubble.left.and.text.bubble.right"),
                 ToolLink(path: "/screening", title: "條件選股", icon: "line.3.horizontal.decrease.circle"),
-                ToolLink(path: "/decision-signals", title: "決策訊號", icon: "waveform.path.ecg"),
-                ToolLink(path: "/backtest", title: "歷史回測", icon: "clock.arrow.circlepath")
-            ])
-            toolGroup("帳本", items: [
                 ToolLink(path: "/portfolio", title: "帳本管理", icon: "books.vertical"),
-                ToolLink(path: "/funds", title: "基金", icon: "chart.bar.doc.horizontal")
-            ])
-            toolGroup("服務", items: [
-                ToolLink(path: "/data", title: "資料中心", icon: "externaldrive"),
-                ToolLink(path: "/usage", title: "AI 用量", icon: "chart.bar.xaxis"),
                 ToolLink(path: "/settings", title: "服務設定", icon: "gearshape")
             ])
+
+            VStack(alignment: .leading, spacing: 12) {
+                Button { advancedExpanded.toggle() } label: {
+                    HStack {
+                        SectionHeading("進階")
+                        Spacer(minLength: 4)
+                        Image(systemName: advancedExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.secondary)
+                            .accessibilityHidden(true)
+                    }
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(advancedExpanded ? "已展開" : "已收合")
+                .accessibilityIdentifier("tools.advanced")
+                if advancedExpanded {
+                    toolRows([
+                        ToolLink(path: "/decision-signals", title: "決策訊號", icon: "waveform.path.ecg"),
+                        ToolLink(path: "/backtest", title: "歷史回測", icon: "clock.arrow.circlepath"),
+                        ToolLink(path: "/funds", title: "基金", icon: "chart.bar.doc.horizontal"),
+                        ToolLink(path: "/data", title: "資料中心", icon: "externaldrive"),
+                        ToolLink(path: "/usage", title: "AI 用量", icon: "chart.bar.xaxis")
+                    ])
+                }
+            }
 
             VStack(alignment: .leading, spacing: 12) {
                 SectionHeading("這部裝置")
@@ -109,11 +119,6 @@ struct ToolsView: View {
         return store.alertMonitor?.summaryLabel ?? "讀取中"
     }
 
-    private var calendarValue: String {
-        if store.calendarStatusFailed { return "無法取得" }
-        return store.upcomingEventCount.map { "7 天內 \($0) 件" } ?? "讀取中"
-    }
-
     private func shortcut(_ title: String, value: String, icon: String) -> some View {
         DSACard {
             VStack(alignment: .leading, spacing: 8) {
@@ -148,18 +153,22 @@ struct ToolsView: View {
     private func toolGroup(_ title: String, items: [ToolLink]) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionHeading(title)
-            DSACard {
-                VStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.path) { index, item in
-                        if index > 0 { Divider().overlay(Theme.border) }
-                        NavigationLink {
-                            ToolWebView(path: item.path, title: item.title)
-                        } label: {
-                            row(title: item.title, icon: item.icon)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("tools.route.\(String(item.path.dropFirst()))")
+            toolRows(items)
+        }
+    }
+
+    private func toolRows(_ items: [ToolLink]) -> some View {
+        DSACard {
+            VStack(spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.path) { index, item in
+                    if index > 0 { Divider().overlay(Theme.border) }
+                    NavigationLink {
+                        ToolWebView(path: item.path, title: item.title)
+                    } label: {
+                        row(title: item.title, icon: item.icon)
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("tools.route.\(String(item.path.dropFirst()))")
                 }
             }
         }
