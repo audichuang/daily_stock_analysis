@@ -1,6 +1,10 @@
 import { defineConfig, devices } from '@playwright/test';
 
 // Deterministic browser fixtures intercept every API request; no backend or secrets.
+// fork：自架 runner 用 host 網路，多個 web-gate 同時跑會搶同一個 port；CI 由 workflow 挑空 port 傳進來。
+const port = Number(process.env.PLAYWRIGHT_FIXTURE_PORT || 4173);
+const origin = `http://127.0.0.1:${port}`;
+
 export default defineConfig({
   testDir: './e2e/fixtures',
   outputDir: './test-results/fixtures',
@@ -11,14 +15,14 @@ export default defineConfig({
   workers: process.env.CI ? 2 : undefined,
   reporter: 'list',
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: origin,
     locale: 'zh-CN',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: 'npm run dev -- --host 127.0.0.1 --port 4173 --strictPort',
-    url: 'http://127.0.0.1:4173',
+    command: `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
+    url: origin,
     reuseExistingServer: !process.env.CI,
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
