@@ -161,7 +161,7 @@ describe('AlertsPage', () => {
 
   it('opens the create drawer from ?new=1&target= and creates the rule', async () => {
     renderPage('/alerts?new=1&target=2330.TW');
-    expect(await screen.findByLabelText('標的代碼')).toHaveValue('2330.TW');
+    expect(await screen.findByLabelText('標的代號')).toHaveValue('2330.TW');
     fireEvent.change(screen.getByLabelText('價格閾值'), { target: { value: '1100' } });
     fireEvent.click(screen.getByRole('button', { name: '建立規則' }));
     await waitFor(() => expect(api.createRule).toHaveBeenCalledWith(expect.objectContaining({
@@ -171,7 +171,7 @@ describe('AlertsPage', () => {
       name: '2330.TW 站上 1,100',
     })));
     expect(await screen.findByText(/已建立規則/)).toBeInTheDocument();
-    expect(screen.queryByLabelText('標的代碼')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('標的代號')).not.toBeInTheDocument();
   });
 
   it('applies ?target= as a filter when not creating', async () => {
