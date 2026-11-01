@@ -104,6 +104,17 @@ describe('AlertRuleList', () => {
     expect(handlers.onTest).toHaveBeenCalledWith(priceRule);
   });
 
+  it('renders the rule menu outside the clipped card so 刪除 stays reachable', () => {
+    // 規則卡外層 .card-surface 是 overflow:hidden；選單留在卡片裡時，只有一條規則就會被裁掉。
+    renderList([priceRule]);
+    fireEvent.click(screen.getByRole('button', { name: 'rule-one 的更多操作' }));
+    const menu = screen.getByRole('menu');
+    expect(menu.closest('li')).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: '刪除' }));
+    fireEvent.click(screen.getByRole('button', { name: '刪除' }));
+    expect(handlers.onDelete).toHaveBeenCalledWith(priceRule);
+  });
+
   it('expands the dry-run result in place and says no notification is sent', () => {
     renderList([priceRule], {
       testResults: { 1: { ruleId: 1, status: 'triggered', triggered: true, observedValue: 1200, message: 'raw' } },

@@ -1,7 +1,7 @@
 import type React from 'react';
-import { useEffect, useRef, useState } from 'react';
-import { MoreHorizontal } from 'lucide-react';
+import { useState } from 'react';
 import { Button, Card, ConfirmDialog, InlineAlert, Input, Select } from '../common';
+import { ActionMenu } from '../common/ActionMenu';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { formatUiText, type UiLanguage } from '../../i18n/uiText';
 import {
@@ -116,18 +116,7 @@ const RuleCard: React.FC<RuleCardProps> = ({
 }) => {
   const { language } = useUiLanguage();
   const text = ALERT_PAGE_TEXT[language];
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
   const isBusy = busy?.id === rule.id;
-
-  useEffect(() => {
-    if (!menuOpen) return undefined;
-    const close = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [menuOpen]);
 
   const threshold = rule.alertType === 'price_cross' ? rule.parameters.price : undefined;
   const distance = quote && quote.price > 0 && threshold
@@ -163,40 +152,22 @@ const RuleCard: React.FC<RuleCardProps> = ({
           <p className="mt-1 break-words text-xs text-secondary-text">{facts.join(' · ')}</p>
           <p className="mt-0.5 truncate text-xs text-muted-text">{rule.name}</p>
         </div>
-        <div className="relative shrink-0" ref={menuRef}>
-          <button
-            type="button"
-            aria-label={formatUiText(text.menu, { name: rule.name })}
-            aria-expanded={menuOpen}
-            className="rounded p-1 text-secondary-text hover:bg-hover"
-            onClick={() => setMenuOpen((open) => !open)}
-          >
-            <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-          </button>
-          {menuOpen ? (
-            <div role="menu" className="absolute right-0 z-20 mt-1 w-44 rounded-lg border border-border/60 bg-card p-1 shadow-lg">
-              {[
-                { label: text.edit, run: () => onEdit(rule) },
-                { label: busy?.id === rule.id && busy.action === 'test' ? text.dryRunning : text.dryRun, run: () => onTest(rule) },
-                { label: text.delete, run: () => onRequestDelete(rule), danger: true },
-              ].map((item) => (
-                <button
-                  key={item.label}
-                  type="button"
-                  role="menuitem"
-                  disabled={isBusy}
-                  className={`block w-full rounded px-3 py-2 text-left text-sm hover:bg-hover ${item.danger ? 'text-danger' : 'text-foreground'}`}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    item.run();
-                  }}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
+        {/* 渲染到 body：規則卡外層 .card-surface 是 overflow:hidden，只有一條規則時選單會被裁掉、刪除點不到。 */}
+        <ActionMenu
+          className="shrink-0"
+          size="sm"
+          label={formatUiText(text.menu, { name: rule.name })}
+          items={[
+            { key: 'edit', label: text.edit, disabled: isBusy, onSelect: () => onEdit(rule) },
+            {
+              key: 'test',
+              label: busy?.id === rule.id && busy.action === 'test' ? text.dryRunning : text.dryRun,
+              disabled: isBusy,
+              onSelect: () => onTest(rule),
+            },
+            { key: 'delete', label: text.delete, disabled: isBusy, danger: true, onSelect: () => onRequestDelete(rule) },
+          ]}
+        />
       </div>
       {testResult ? <DryRunResult result={testResult} text={text} onClose={() => onDismissTest(rule)} /> : null}
     </li>

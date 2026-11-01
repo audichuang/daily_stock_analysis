@@ -329,6 +329,20 @@ describe('HomePage', () => {
     expect(historyApi.getMarkdown).not.toHaveBeenCalled();
   });
 
+  it('pins the mobile list drawer to the viewport so the list can scroll', async () => {
+    // .dashboard-card 是未分層 CSS 的 position: relative，會蓋掉 Tailwind 的 absolute；
+    // 抽屜失去 top/bottom 就被內容撐高，手機上整條清單捲不動。jsdom 不算層疊，只能守 class。
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <HomePage />
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /^清单 \d+/ }));
+    const drawer = document.querySelector('.fixed.inset-0 .dashboard-card');
+    expect(drawer).not.toBeNull();
+    expect(drawer?.classList.contains('!absolute')).toBe(true);
+  });
+
   it('loads markdown only after opening the full report drawer', async () => {
     vi.mocked(historyApi.getList).mockResolvedValue({
       total: 1,
