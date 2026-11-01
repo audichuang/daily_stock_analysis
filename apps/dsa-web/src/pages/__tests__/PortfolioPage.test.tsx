@@ -933,6 +933,23 @@ describe('PortfolioPage FX refresh', () => {
     await waitFor(() => expect(screen.queryByTestId('portfolio-risk-skeleton')).not.toBeInTheDocument());
   });
 
+  it('does not request risk until the snapshot request has settled', async () => {
+    const pendingSnapshot = deferredPromise<ReturnType<typeof makeSnapshot>>();
+    getSnapshot.mockReturnValueOnce(pendingSnapshot.promise);
+
+    render(<PortfolioPage />);
+
+    await waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(getRisk).not.toHaveBeenCalled();
+
+    await act(async () => {
+      pendingSnapshot.resolve(makeSnapshot({ fxStale: false }));
+      await pendingSnapshot.promise;
+    });
+    await waitFor(() => expect(getRisk).toHaveBeenCalledTimes(1));
+  });
+
   it('treats empty server risk blocks as unavailable instead of normal', async () => {
     getRisk.mockResolvedValueOnce({
       ...makeRisk(),
