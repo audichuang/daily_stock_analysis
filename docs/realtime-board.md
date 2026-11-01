@@ -96,6 +96,7 @@ Web `/board` 页面：以表格展示自选队列（watchlist）的实时报价�
   - 单次最多 50 个代码（超出 400），代码去重保序。
 - `GET /api/v1/stocks/market-status?markets=tw,us`：各市場是否在輪詢時段（交易所日曆，含假日、颱風假與前後緩衝），回 `{ markets: {tw: bool, us: bool}, open }`；未知市場或日曆異常回 true，看板只讀 `markets`。
 - `GET /api/v1/stocks/dossier-summary?codes=2330.TW,3324.TWO`：台股四維度摘要（批次），返回 `{ items: [{ stock_code, summary|null, error }] }`；非台股 `unsupported_market`、查無資料 `no_data`、讀取失敗 `unavailable`，整批仍 200；上限 50 個，用原始輸入計算。見上方「四維度摘要」。
+- `GET /api/v1/stocks/intraday-trends?codes=2330.TW,AAPL`：盯盤迷你分時（批次當日走勢），返回 `{ items: [{ stock_code, points, source_code, error }] }`。伺服器端逐檔快取 3 分鐘（含取不到的結果），每檔抽樣到最多 48 點；單檔失敗回空 `points` 與 `error`（`no_data`／`unavailable`），整批仍 200；上限 50 個，用原始輸入計算。前端只查持股、只在桌機查，可關閉。
 - `GET /api/v1/stocks/{code}/quote`：单股行情，响应追加 `source` / `as_of` / `is_stale`（与批次一致）。
 - `GET /api/v1/stocks/indices?region=tw`：盯盤上方的大盤指數條（加權 `TWII`、櫃買 `TPEX`），失敗回空列表。台股依序：
   1. **Shioaji 指數快照**（合約 `Indexs.TSE["IX0001"]`／`Indexs.OTC["IX0043"]`，不是 `001`／`101`）：盤中即時，收盤後仍是最近場次的正式收盤；兩檔都有，回應多帶 `as_of` 與 `source: "shioaji"`。

@@ -10,6 +10,8 @@
 """
 
 import logging
+import threading
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -68,6 +70,23 @@ def _map_quote_to_dict(quote: Any, fallback_code: str) -> Dict[str, Any]:
         "source_code": normalize_source_code(src.value) if src is not None else None,
         "is_stale": getattr(quote, "is_stale", None),
     }
+
+
+# 盯盤迷你分時的伺服器端快取：看板 30 秒輪詢、持股數十檔，每檔一次 kbars 會撞 Shioaji 配額。
+# 迷你圖 3 分鐘更新一次就夠；取不到（含配額錯誤）也快取，否則失敗時反而每輪都重打。
+_INTRADAY_TREND_TTL_S = 180.0
+_INTRADAY_TREND_MAX_POINTS = 48  # 80px 寬的迷你圖，再多點也畫不出差別
+_INTRADAY_TREND_MAX_WORKERS = 4
+_INTRADAY_TREND_CACHE: Dict[str, tuple] = {}
+_INTRADAY_TREND_LOCK = threading.Lock()
+
+
+def _sample_trend_points(points: List[Dict[str, Any]], limit: int = _INTRADAY_TREND_MAX_POINTS) -> List[Dict[str, Any]]:
+    """等距抽樣，一定保留最後一點（迷你圖的終點要對得上現價）。"""
+    if len(points) <= limit:
+        return points
+    step = (len(points) - 1) / (limit - 1)
+    return [points[round(i * step)] for i in range(limit)]
 
 
 def _opt_float(value):
@@ -229,6 +248,46 @@ class StockService:
             if close:
                 points.append({"t": str(d.get("date")), "price": float(close)})
         return points, "yfinance(daily)"
+
+    def get_intraday_trends(self, codes: List[str]) -> List[Dict[str, Any]]:
+        """批次當日走勢（盯盤迷你分時）。回傳與 codes 同序；單檔失敗回空 points＋error。"""
+        from concurrent.futures import ThreadPoolExecutor
+
+        now = time.monotonic()
+        cached: Dict[str, Dict[str, Any]] = {}
+        with _INTRADAY_TREND_LOCK:
+            for code in codes:
+                hit = _INTRADAY_TREND_CACHE.get(code.upper())
+                if hit and hit[0] > now:
+                    cached[code] = hit[1]
+        missing = [code for code in codes if code not in cached]
+
+        def _fetch(code: str) -> Dict[str, Any]:
+            try:
+                points, source = self.get_price_trend(code, "day")
+            except Exception as e:  # 單檔失敗不影響其餘
+                logger.warning("批次分時: %s 失敗: %s", code, type(e).__name__)
+                return {"points": [], "source_code": None, "error": "unavailable"}
+            return {
+                "points": _sample_trend_points(points),
+                "source_code": normalize_source_code(source),
+                "error": None if points else "no_data",
+            }
+
+        if missing:
+            with ThreadPoolExecutor(
+                max_workers=min(_INTRADAY_TREND_MAX_WORKERS, len(missing)),
+                thread_name_prefix="intraday-trends",
+            ) as ex:
+                fetched = list(ex.map(_fetch, missing))
+            expires_at = time.monotonic() + _INTRADAY_TREND_TTL_S
+            with _INTRADAY_TREND_LOCK:
+                for key in [k for k, v in _INTRADAY_TREND_CACHE.items() if v[0] <= now]:
+                    del _INTRADAY_TREND_CACHE[key]
+                for code, row in zip(missing, fetched):
+                    _INTRADAY_TREND_CACHE[code.upper()] = (expires_at, row)
+                    cached[code] = row
+        return [{"stock_code": code, **cached[code]} for code in codes]
 
     @staticmethod
     def _intraday_trend(stock_code: str) -> List[Dict[str, Any]]:

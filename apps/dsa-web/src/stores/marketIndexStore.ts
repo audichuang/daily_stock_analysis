@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import { stocksApi, type MarketIndex } from '../api/stocks';
 
-/** 60 秒內重複載入直接用快取：總覽、盯盤、狀態列共用同一份，不各打一次。 */
+export type MarketIndexRegion = 'tw' | 'us';
+
+/** 60 秒內重複載入直接用快取：總覽、盯盤、狀態列共用同一份，不各打一次。與後端 /stocks/indices 的快取對齊。 */
 export const MARKET_INDEX_TTL_MS = 60_000;
 
 interface RegionState {
@@ -12,21 +14,20 @@ interface RegionState {
 }
 
 interface MarketIndexState {
-  regions: Record<string, RegionState>;
-  load: (region: string) => Promise<void>;
+  regions: Partial<Record<MarketIndexRegion, RegionState>>;
+  /** force 給輪詢與手動重新整理用，略過 TTL。失敗保留上一次讀數。 */
+  load: (target?: MarketIndexRegion | MarketIndexRegion[], options?: { force?: boolean }) => Promise<void>;
   reset: () => void;
 }
 
-const inFlight = new Map<string, Promise<void>>();
+const inFlight = new Map<MarketIndexRegion, Promise<void>>();
 
 const EMPTY_REGION: RegionState = { items: [], fetchedAt: 0, isLoading: false, failed: false };
 
-export const useMarketIndexStore = create<MarketIndexState>((set, get) => ({
-  regions: {},
-
-  load: (region) => {
+export const useMarketIndexStore = create<MarketIndexState>((set, get) => {
+  const loadRegion = (region: MarketIndexRegion, force: boolean): Promise<void> => {
     const current = get().regions[region];
-    if (current && current.fetchedAt > 0 && !current.failed && Date.now() - current.fetchedAt < MARKET_INDEX_TTL_MS) {
+    if (!force && current && current.fetchedAt > 0 && !current.failed && Date.now() - current.fetchedAt < MARKET_INDEX_TTL_MS) {
       return Promise.resolve();
     }
     const running = inFlight.get(region);
@@ -47,10 +48,19 @@ export const useMarketIndexStore = create<MarketIndexState>((set, get) => ({
       });
     inFlight.set(region, request);
     return request;
-  },
+  };
 
-  reset: () => {
-    inFlight.clear();
-    set({ regions: {} });
-  },
-}));
+  return {
+    regions: {},
+
+    load: async (target = ['tw', 'us'], { force = false } = {}) => {
+      const regions = Array.isArray(target) ? target : [target];
+      await Promise.all(regions.map((region) => loadRegion(region, force)));
+    },
+
+    reset: () => {
+      inFlight.clear();
+      set({ regions: {} });
+    },
+  };
+});
