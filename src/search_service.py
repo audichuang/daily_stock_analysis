@@ -18,7 +18,7 @@ import re
 import threading
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclass_replace
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import List, Dict, Any, Optional, Tuple
@@ -36,6 +36,12 @@ from tenacity import (
 
 from data_provider.us_index_mapping import is_us_index_code
 from src.data.stock_index_loader import get_us_asset_type
+from src.core.trading_calendar import (
+    get_market_for_stock,
+    get_market_now,
+    latest_opened_session,
+    recent_sessions_start,
+)
 from src.services.market_symbol_utils import is_tw_suffix_symbol
 from src.config import (
     NEWS_STRATEGY_WINDOWS,
@@ -234,6 +240,41 @@ def fetch_url_content(url: str, timeout: int = 5) -> str:
     return ""
 
 
+_NAV_LINE_RE = re.compile(
+    r"^\s*(?:skip to (?:main )?content|latest news|terms\s+and\s+privacy policy|privacy dashboard|more info|"
+    r"recommended stories|\d*\.?\s*\[[^\]]*\]\([^)]*\)?)\s*$",
+    re.IGNORECASE,
+)
+_NAV_MENU_ITEM_RE = re.compile(r"^\s*\d+\.\s+\S.{0,40}$")
+
+
+def clean_page_navigation(text: str) -> str:
+    """去掉網頁擷取帶進來的導覽列：固定字樣、純連結行、連續 3 行以上的短編號選單。"""
+    kept: List[str] = []
+    menu_run: List[str] = []
+    seen_lines: set = set()
+
+    def flush_menu() -> None:
+        # 少於 3 行多半是內文的條列，保留。
+        if len(menu_run) < 3:
+            kept.extend(menu_run)
+        menu_run.clear()
+
+    for line in (text or "").replace(" [...] ", "\n").splitlines():
+        if _NAV_MENU_ITEM_RE.match(line):
+            menu_run.append(line)
+            continue
+        flush_menu()
+        stripped = line.strip()
+        # 網站名在頁首會連續重複；只留第一次。
+        if not stripped or _NAV_LINE_RE.match(line) or (len(stripped) <= 40 and stripped in seen_lines):
+            continue
+        seen_lines.add(stripped)
+        kept.append(stripped)
+    flush_menu()
+    return "\n".join(kept).strip()
+
+
 @dataclass
 class SearchResult:
     """搜索结果数据类"""
@@ -270,6 +311,7 @@ class SearchResponse:
     success: bool = True
     error_message: Optional[str] = None
     search_time: float = 0.0  # 搜索耗时（秒）
+    date_window: Optional[Tuple[str, str]] = None  # 此面向實際採用的發布日期上下界（含）
     
     def mark_retrieved(self) -> None:
         """Record actual acquisition once; preserve timestamps on cached/copied results."""
@@ -288,6 +330,31 @@ class SearchResponse:
             lines.append(f"\n{i}. {result.to_text()}")
         
         return "\n".join(lines)
+
+
+INTEL_DIMENSION_LABELS = {
+    'event_anchor': '🎯 事件原因',
+    'latest_news': '📰 最新消息',
+    'announcements': '📋 公司公告',
+    'market_analysis': '📈 机构分析',
+    'risk_check': '⚠️ 风险排查',
+    'earnings': '📊 业绩预期',
+    'industry': '🏭 行业分析',
+}
+
+
+def intel_date_windows(intel_results: Dict[str, SearchResponse]) -> List[Dict[str, Optional[str]]]:
+    """各面向實際的發布日期上下界，給 prompt 的時間規則用；沒有窗口的面向 start/end 為 None。"""
+    windows: List[Dict[str, Optional[str]]] = []
+    for name, label in INTEL_DIMENSION_LABELS.items():
+        response = intel_results.get(name)
+        if response is None:
+            continue
+        # 窗口只是給 prompt 的時間規則，不能因為缺它讓整檔分析失敗。
+        window = getattr(response, "date_window", None)
+        start, end = window if isinstance(window, tuple) else (None, None)
+        windows.append({"dimension": name, "label": label, "start": start, "end": end})
+    return windows
 
 
 class BaseSearchProvider(ABC):
@@ -470,6 +537,7 @@ class DeepSeekSearchProvider(RotatingKeySearchProvider):
 
     SUMMARY_LIMIT = 1500
     API_URL = "https://api.deepseek.com/v1/tools/search"
+    DATE_NOTE = "【DeepSeek 搜尋日期未經原文核實；日級日期非精確發布時間】"
 
     def __init__(self, api_keys: List[str]):
         super().__init__(api_keys, "DeepSeek")
@@ -496,25 +564,30 @@ class DeepSeekSearchProvider(RotatingKeySearchProvider):
         response.raise_for_status()
         return response.json()
 
-    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+    def _do_search(
+        self, query: str, api_key: str, max_results: int, days: int = 7,
+        window: Optional[Tuple[date, date]] = None,
+    ) -> SearchResponse:
         query = query.strip()
         if not query:
             return SearchResponse(query=query, results=[], provider=self.name, success=False,
                                   error_message="搜尋字串不可空白")
         today = datetime.now().date()
         # after 為開區間，亦涵蓋已觀察到的前日 16:00 UTC 日級編碼；本機仍嚴格過濾。
+        after = window[0] - timedelta(days=1) if window else today - timedelta(days=max(1, days))
+        before = window[1] + timedelta(days=1) if window else today + timedelta(days=1)
         bounds = ""
         if not re.search(r"\bafter:", query):
-            bounds += f" after:{today - timedelta(days=max(1, days))}"
+            bounds += f" after:{after}"
         if not re.search(r"\bbefore:", query):
-            bounds += f" before:{today + timedelta(days=1)}"
+            bounds += f" before:{before}"
         wire_query = query[:128 - len(bounds)] + bounds
         count = max(1, min(50, max_results))
         payload = self._request_search(wire_query, api_key, count)
         results = []
         for item in payload.get("results", [])[:count]:
             summary = item.get("summary") or item.get("snippet") or ""
-            note = "【DeepSeek 搜尋日期未經原文核實；日級日期非精確發布時間】"
+            note = self.DATE_NOTE
             results.append(SearchResult(
                 title=item.get("title", ""), url=item.get("url", ""),
                 source=item.get("site_name") or urlparse(item.get("url", "")).netloc,
@@ -536,6 +609,9 @@ class TavilySearchProvider(RotatingKeySearchProvider):
     文档：https://docs.tavily.com/
     """
     
+    SNIPPET_LIMIT = 1500
+    EXTRACT_TIMEOUT_SECONDS = 15
+
     def __init__(self, api_keys: List[str]):
         super().__init__(api_keys, "Tavily")
     
@@ -546,6 +622,7 @@ class TavilySearchProvider(RotatingKeySearchProvider):
         max_results: int,
         days: int = 7,
         topic: Optional[str] = None,
+        window: Optional[Tuple[date, date]] = None,
     ) -> SearchResponse:
         """执行 Tavily 搜索"""
         try:
@@ -569,8 +646,12 @@ class TavilySearchProvider(RotatingKeySearchProvider):
                 "max_results": max_results,
                 "include_answer": False,
                 "include_raw_content": False,
-                "days": days,  # 搜索最近天数的内容
             }
+            if window is not None:
+                search_kwargs["start_date"] = window[0].isoformat()
+                search_kwargs["end_date"] = window[1].isoformat()
+            else:
+                search_kwargs["days"] = days  # 搜索最近天数的内容
             if topic is not None:
                 search_kwargs["topic"] = topic
 
@@ -586,7 +667,7 @@ class TavilySearchProvider(RotatingKeySearchProvider):
             for item in response.get('results', []):
                 results.append(SearchResult(
                     title=item.get('title', ''),
-                    snippet=item.get('content', '')[:500],  # 截取前500字
+                    snippet=clean_page_navigation(item.get('content', ''))[:self.SNIPPET_LIMIT],
                     url=item.get('url', ''),
                     source=self._extract_domain(item.get('url', '')),
                     published_date=item.get('published_date') or item.get('publishedDate'),
@@ -617,9 +698,32 @@ class TavilySearchProvider(RotatingKeySearchProvider):
     def search(
         self, query: str, max_results: int = 5, days: int = 7,
         topic: Optional[str] = None,
+        window: Optional[Tuple[date, date]] = None,
     ) -> SearchResponse:
-        kwargs = {"topic": topic} if topic is not None else {}
+        kwargs: Dict[str, Any] = {"topic": topic} if topic is not None else {}
+        if window is not None:
+            kwargs["window"] = window
         return super().search(query, max_results=max_results, days=days, **kwargs)
+
+    def extract(self, urls: List[str]) -> Dict[str, str]:
+        """取全文；失敗回空字典，呼叫端沿用摘要。"""
+        from tavily import TavilyClient
+
+        with self._state_lock:
+            keys = [next(self._key_cycle) for _ in self._api_keys] if self._key_cycle else []
+        for key in keys:
+            try:
+                response = TavilyClient(api_key=key).extract(
+                    urls, extract_depth="basic", timeout=self.EXTRACT_TIMEOUT_SECONDS,
+                )
+                self._record_success(key)
+                return {item.get("url", ""): item.get("raw_content") or "" for item in response.get("results", [])}
+            except Exception as exc:
+                self._record_error(key)
+                logger.warning("[Tavily] Extract 失敗: %s", type(exc).__name__)
+                if not self._is_key_failure(exc):
+                    break
+        return {}
 
     @staticmethod
     def _extract_domain(url: str) -> str:
@@ -2430,6 +2534,126 @@ class FinMindNewsProvider(BaseSearchProvider):
                               search_time=time.time() - started)
 
 
+class MopsAnnouncementProvider(BaseSearchProvider):
+    """台股重大訊息（公開資訊觀測站 ajax_t05st01），以股票代號查當月；失敗交給下一來源。"""
+
+    API_URL = "https://mopsov.twse.com.tw/mops/web/ajax_t05st01"
+    PAGE_URL = "https://mopsov.twse.com.tw/mops/web/t05st01"
+    TIMEOUT_SECONDS = 10
+    _ROW_RE = re.compile(r"<tr class='(?:even|odd)'>(.*?)</tr>", re.DOTALL | re.IGNORECASE)
+    _CELL_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.DOTALL | re.IGNORECASE)
+    _SEQ_RE = re.compile(r"seq_no\.value='(\d+)'")
+
+    def __init__(self):
+        super().__init__(["public"], "MOPS")
+
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+        raise NotImplementedError("MopsAnnouncementProvider 只接受 stock_code 查询")
+
+    @staticmethod
+    def _cell_text(raw: str) -> str:
+        text = re.sub(r"<[^>]+>", "", raw).replace("&nbsp;", " ")
+        return re.sub(r"\s+", " ", text).strip()
+
+    @classmethod
+    def parse(cls, html_text: str, stock_id: str) -> List[SearchResult]:
+        results: List[SearchResult] = []
+        for row in cls._ROW_RE.findall(html_text):
+            cells = [cls._cell_text(cell) for cell in cls._CELL_RE.findall(row)]
+            if len(cells) < 5 or cells[0] != stock_id:
+                continue
+            match = re.fullmatch(r"(\d{2,3})/(\d{1,2})/(\d{1,2})", cells[2])
+            if not match:
+                continue
+            year, month, day = (int(part) for part in match.groups())
+            published = date(year + 1911, month, day)
+            seq = cls._SEQ_RE.search(row)
+            # news_intel 的 url 有唯一鍵，同頁多則要能區分。
+            url = (f"{cls.PAGE_URL}?co_id={stock_id}&spoke_date={published:%Y%m%d}"
+                   f"&seq_no={seq.group(1) if seq else cells[3]}")
+            results.append(SearchResult(
+                title=f"{cells[1]} {cells[4]}", snippet=f"公開資訊觀測站重大訊息（{cells[2]} {cells[3]}）：{cells[4]}",
+                url=url, source="公開資訊觀測站", published_date=published.isoformat(),
+            ))
+        return results
+
+    def _fetch_month(self, stock_id: str, year: int, month: int) -> List[SearchResult]:
+        response = requests.post(self.API_URL, data={
+            "encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "keyword4": "", "code1": "",
+            "TYPEK2": "", "checkbtn": "", "queryName": "co_id", "inpuType": "co_id", "TYPEK": "all",
+            "isnew": "false", "co_id": stock_id, "year": year - 1911, "month": month,
+        }, headers={"User-Agent": "Mozilla/5.0"}, timeout=self.TIMEOUT_SECONDS)
+        response.raise_for_status()
+        response.encoding = "utf-8"
+        return self.parse(response.text, stock_id)
+
+    def search(
+        self, query: str, max_results: int = 5, days: int = 7, stock_code: Optional[str] = None,
+        window: Optional[Tuple[date, date]] = None,
+    ) -> SearchResponse:
+        stock_id = FinMindNewsProvider.stock_id_for(stock_code)
+        if stock_id is None:
+            return SearchResponse(query=query, results=[], provider=self.name, success=False,
+                                  error_message="MOPS 只支持台股代码")
+        started = time.time()
+        end = window[1] if window else datetime.now().date()
+        start = window[0] if window else end - timedelta(days=max(1, days))
+        months = [
+            (index // 12, index % 12 + 1)
+            for index in range(start.year * 12 + start.month - 1, end.year * 12 + end.month)
+        ]
+        try:
+            rows = [row for year, month in months for row in self._fetch_month(stock_id, year, month)]
+        except Exception as exc:
+            logger.warning("[MOPS] %s 重大訊息查詢失敗: %s", stock_code, type(exc).__name__)
+            return SearchResponse(query=query, results=[], provider=self.name, success=False,
+                                  error_message=type(exc).__name__, search_time=time.time() - started)
+        rows.sort(key=lambda item: item.published_date or "", reverse=True)
+        response = SearchResponse(query=query, results=rows[:max_results], provider=self.name,
+                                  search_time=time.time() - started)
+        response.mark_retrieved()
+        return response
+
+
+class YFinanceNewsProvider(BaseSearchProvider):
+    """美股備援：yf.Search 只有標題與發布時間（Ticker.news 實測回 0，不用）。"""
+
+    TIMEOUT_SECONDS = 10
+
+    def __init__(self):
+        super().__init__(["public"], "yfinance")
+
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+        raise NotImplementedError("YFinanceNewsProvider 只接受 stock_code 查询")
+
+    def search(
+        self, query: str, max_results: int = 5, days: int = 7, stock_code: Optional[str] = None,
+    ) -> SearchResponse:
+        started = time.time()
+        try:
+            import yfinance as yf
+
+            news = yf.Search(stock_code, news_count=max_results, max_results=1,
+                             timeout=self.TIMEOUT_SECONDS).news
+        except Exception as exc:
+            logger.warning("[yfinance] %s 新聞備援失敗: %s", stock_code, type(exc).__name__)
+            return SearchResponse(query=query, results=[], provider=self.name, success=False,
+                                  error_message=type(exc).__name__, search_time=time.time() - started)
+        results = []
+        for item in news or []:
+            published = item.get("providerPublishTime")
+            publisher = str(item.get("publisher") or "Yahoo Finance")
+            results.append(SearchResult(
+                title=str(item.get("title") or ""), snippet=f"{publisher} 報導", url=str(item.get("link") or ""),
+                source=publisher,
+                published_date=datetime.fromtimestamp(published, timezone.utc).isoformat() if published else None,
+            ))
+        response = SearchResponse(query=query, results=results, provider=self.name,
+                                  search_time=time.time() - started)
+        response.mark_retrieved()
+        return response
+
+
 class SearchService:
     """
     搜索服务
@@ -2464,6 +2688,15 @@ class SearchService:
     FUTURE_TOLERANCE_DAYS = 1
     ANALYTICAL_INTEL_LOOKBACK_DAYS = 180
     ANALYTICAL_INTEL_DIMENSIONS = {"market_analysis", "earnings"}
+    # 沒有錨定財報日時的 earnings 窗口。
+    EARNINGS_FALLBACK_DAYS = 30
+    EARNINGS_ANCHOR_DAYS_BEFORE = 1
+    EARNINGS_ANCHOR_DAYS_AFTER = 7
+    ANALYST_NEWS_DAYS = 7
+    FULLTEXT_MAX_ARTICLES = 3
+    FULLTEXT_CHAR_LIMIT = 3000
+    INTEL_REPORT_SNIPPET_LIMIT = 3000
+    _NON_LATIN_TITLE_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
     # 這些面向本來就在找分析與產業資料，資料頁可留作參考；其餘面向要的是事件報導。
     REFERENCE_INTEL_DIMENSIONS = {"market_analysis", "industry"}
     # 實測近 3 天入庫的樣本：這些網域多半回無發布日期的個股資料頁。
@@ -2615,6 +2848,7 @@ class SearchService:
         news_strategy_profile: str = "short",
         finmind_tokens: Optional[List[str]] = None,
         deepseek_keys: Optional[List[str]] = None,
+        public_news_sources_enabled: bool = False,
     ):
         """
         初始化搜索服务
@@ -2630,7 +2864,11 @@ class SearchService:
             searxng_public_instances_enabled: 未配置自建实例时，是否自动使用公共 SearXNG 实例
             news_max_age_days: 新闻最大时效（天）
             news_strategy_profile: 新闻窗口策略档位（ultra_short/short/medium/long）
+            public_news_sources_enabled: 啟用免金鑰來源（MOPS 重大訊息、yf.Search 備援）；
+                正式路徑才開，直接建構的測試不會連外
         """
+        self._mops_provider = MopsAnnouncementProvider() if public_news_sources_enabled else None
+        self._yfinance_news_provider = YFinanceNewsProvider() if public_news_sources_enabled else None
         self._constructor_kwargs: Dict[str, Any] = {
             "bocha_keys": list(bocha_keys or []),
             "tavily_keys": list(tavily_keys or []),
@@ -2742,24 +2980,25 @@ class SearchService:
     
     @staticmethod
     def _tw_search_dimensions(stock_code: str, stock_name: str, is_index_etf: bool) -> List[Dict[str, Any]]:
-        def dimension(name, query, desc, topic, strict):
-            return {'name': name, 'query': query, 'desc': desc, 'tavily_topic': topic, 'strict_freshness': strict}
+        def dimension(name, query, desc, topic, strict, prefer_deepseek=False, analyst_news=False):
+            return {'name': name, 'query': query, 'desc': desc, 'tavily_topic': topic, 'strict_freshness': strict,
+                    'prefer_deepseek': prefer_deepseek, 'analyst_news': analyst_news}
 
         if is_index_etf:
             return [
                 dimension('latest_news', f"{stock_name} {stock_code} 最新 新聞", '最新消息', 'news', True),
                 dimension('market_analysis', f"{stock_name} ETF 分析 配息 溢價", '机构分析', None, False),
-                dimension('risk_check', f"{stock_name} 追蹤誤差 淨值 折溢價", '风险排查', None, False),
-                dimension('announcements', f"{stock_name} {stock_code} 公告 成分股調整", '公司公告', 'news', True),
-                dimension('earnings', f"{stock_name} 淨值 績效 配息", '业绩预期', None, False),
+                dimension('risk_check', f"{stock_name} 追蹤誤差 淨值 折溢價", '风险排查', None, False, True),
+                dimension('announcements', f"{stock_name} {stock_code} 公告 成分股調整", '公司公告', None, True, True),
+                dimension('earnings', f"{stock_name} 淨值 績效 配息", '业绩预期', None, False, True),
                 dimension('industry', f"{stock_name} 成分股 產業配置 權重", '行业分析', None, False),
             ]
         return [
             dimension('latest_news', f"{stock_name} {stock_code} 最新 新聞 重大事件", '最新消息', 'news', True),
-            dimension('market_analysis', f"{stock_name} 法人 目標價 評等 分析", '机构分析', None, False),
-            dimension('risk_check', f"{stock_name} 處分 違約 訴訟 減資 利空", '风险排查', 'news', True),
-            dimension('announcements', f"{stock_name} {stock_code} 重大訊息 公告 公開資訊觀測站", '公司公告', 'news', True),
-            dimension('earnings', f"{stock_name} 法說會 財報 營收 EPS 展望", '业绩预期', 'news', False),
+            dimension('market_analysis', f"{stock_name} 法人 目標價 評等 升評 降評", '机构分析', None, False, True, True),
+            dimension('risk_check', f"{stock_name} 處分 違約 訴訟 減資 利空", '风险排查', None, True, True),
+            dimension('announcements', f"{stock_name} {stock_code} 重大訊息 公告 公開資訊觀測站", '公司公告', None, True, True),
+            dimension('earnings', f"{stock_name} 法說會 財報 營收 EPS 展望", '业绩预期', None, False, True),
             dimension('industry', f"{stock_name} 產業 競爭對手 市占 展望", '行业分析', None, False),
         ]
 
@@ -3643,6 +3882,7 @@ class SearchService:
         prefer_chinese: bool,
         max_results: int,
         log_scope: str,
+        post_event_date: Optional[date] = None,
     ) -> SearchResponse:
         """Score and sort news so direct company items are not crowded out."""
         if not response.success or not response.results:
@@ -3655,7 +3895,11 @@ class SearchService:
 
         indexed_results = list(enumerate(scored_results))
 
-        def sort_key(entry: Tuple[int, SearchResult]) -> Tuple[int, int, int, int]:
+        def is_post_event(result: SearchResult) -> bool:
+            published = cls._normalize_news_publish_date(result.published_date)
+            return post_event_date is not None and published is not None and published >= post_event_date
+
+        def sort_key(entry: Tuple[int, SearchResult]) -> Tuple[int, int, int, int, int]:
             index, result = entry
             category = result.relevance_category or cls._SECTOR_NEWS_CATEGORY
             category_rank = cls._NEWS_CATEGORY_PRIORITY.get(category, 9)
@@ -3663,7 +3907,7 @@ class SearchService:
             if not prefer_chinese:
                 language_rank = 0
             score = result.relevance_score or 0
-            return (category_rank, language_rank, -score, index)
+            return (category_rank, 0 if is_post_event(result) else 1, language_rank, -score, index)
 
         ranked_results = [result for _, result in sorted(indexed_results, key=sort_key)]
         limited_results = ranked_results[:max_results]
@@ -3979,14 +4223,20 @@ class SearchService:
         max_results: int,
         log_scope: str,
         keep_unknown: bool = False,
+        window: Optional[Tuple[date, date]] = None,
     ) -> SearchResponse:
-        """Hard-filter results by published_date recency and normalize date strings."""
+        """Hard-filter results by published_date recency and normalize date strings.
+
+        window 給定時以它為準（交易日窗口、財報錨定窗口），search_days 不再參與。
+        """
         if not response.success or not response.results:
             return response
 
         today = datetime.now().date()
         earliest = today - timedelta(days=max(0, int(search_days) - 1))
         latest = today + timedelta(days=self.FUTURE_TOLERANCE_DAYS)
+        if window is not None:
+            earliest, latest = window
 
         filtered: List[SearchResult] = []
         dropped_unknown = 0
@@ -4674,7 +4924,9 @@ class SearchService:
         self,
         stock_code: str,
         stock_name: str,
-        max_searches: int = 3
+        max_searches: int = 3,
+        earnings_date: Optional[date] = None,
+        price_event: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, SearchResponse]:
         """
         多维度情报搜索（同时使用多个引擎、多个维度）
@@ -4688,7 +4940,10 @@ class SearchService:
             stock_code: 股票代码
             stock_name: 股票名称
             max_searches: 最大搜索次数
-            
+            earnings_date: 最近一次已發布的財報日；有值時 earnings 窗口錨定它
+            price_event: event_gap 判定的重大波動；與財報後 7 天同為「有事件」條件，
+                有事件才加查詢與抓全文（不計入 max_searches）
+
         Returns:
             {维度名称: SearchResponse} 字典
         """
@@ -4717,10 +4972,14 @@ class SearchService:
                 },
                 {
                     'name': 'market_analysis',
-                    'query': f"{effective_name} analyst rating target price report",
+                    'query': (
+                        f"{effective_name} analyst rating target price report" if is_index_etf
+                        else f"{effective_name} {stock_code} analyst downgrade upgrade price target"
+                    ),
                     'desc': '机构分析',
-                    'tavily_topic': None,
+                    'tavily_topic': None if is_index_etf else 'news',
                     'strict_freshness': False,
+                    'analyst_news': not is_index_etf,
                 },
                 {
                     'name': 'risk_check',
@@ -4819,6 +5078,44 @@ class SearchService:
         target_per_dimension = 3
         provider_max_results = self._provider_request_size(target_per_dimension)
 
+        # 市場時鐘只讀一次，窗口都由它往下算。
+        market = get_market_for_stock(stock_code) if stock_code else None
+        market_now = get_market_now(market) if market else datetime.now()
+        today = market_now.date()
+        # 美股盤中台北已是隔天；DeepSeek 日級日期是 UTC+8，主機跑 UTC 時也會比本機多一天。
+        local_today = max(today, datetime.now().date())
+        open_end = local_today + timedelta(days=self.FUTURE_TOLERANCE_DAYS)
+        # 從最近已開盤的場次往回數：盤前的今天還沒交易，不能佔掉一個場次。
+        last_session = (latest_opened_session(market, market_now) or today) if market else today
+        sessions_start = recent_sessions_start(market, last_session, search_days) if market else None
+        if sessions_start is None:
+            sessions_start = today - timedelta(days=max(0, search_days - 1))
+        anchor_date = self._news_event_date(today, earnings_date, price_event, is_index_etf)
+        if anchor_date is not None:
+            search_dimensions.insert(0, self._event_anchor_dimension(
+                stock_code, stock_name, anchor_date, price_event, is_foreign,
+                self._foreign_english_query_terms(stock_code, stock_name) if is_foreign else (),
+            ))
+
+        def _dimension_window(dim) -> Optional[Tuple[Tuple[date, date], bool]]:
+            """回傳 (窗口, 是否保留無日期)；None 表示沿用舊規則。"""
+            name = dim['name']
+            if name == 'event_anchor':
+                return (anchor_date - timedelta(days=self.EARNINGS_ANCHOR_DAYS_BEFORE), open_end), False
+            if dim.get('analyst_news'):
+                return (today - timedelta(days=self.ANALYST_NEWS_DAYS - 1), open_end), False
+            if name == 'earnings' and not is_index_etf:
+                recent = earnings_date is not None and (
+                    today - earnings_date).days <= self.EARNINGS_FALLBACK_DAYS
+                if recent:
+                    end = earnings_date + timedelta(days=self.EARNINGS_ANCHOR_DAYS_AFTER)
+                    return (earnings_date - timedelta(days=self.EARNINGS_ANCHOR_DAYS_BEFORE),
+                            min(end, open_end)), False
+                return (today - timedelta(days=self.EARNINGS_FALLBACK_DAYS - 1), open_end), True
+            if dim['strict_freshness']:
+                return (sessions_start, open_end), False
+            return None
+
         logger.info(
             (
                 "开始多维度情报搜索: %s(%s), 时间范围: 近%s天 "
@@ -4836,29 +5133,40 @@ class SearchService:
         # 轮流使用不同的搜索引擎；某个引擎失败或结果为空时依序改试下一个
         provider_index = 0
 
-        def _run_provider(provider, dim, request_days):
+        def _run_provider(provider, dim, request_days, dim_window):
             """Search one dimension with one provider; return (raw, filtered)."""
-            if isinstance(provider, FinMindNewsProvider):
-                response = provider.search(
-                    dim['query'],
+            window = dim_window[0] if dim_window else None
+            search_kwargs: Dict[str, Any] = {}
+            if isinstance(provider, (FinMindNewsProvider, YFinanceNewsProvider)):
+                search_kwargs["stock_code"] = stock_code
+            elif isinstance(provider, MopsAnnouncementProvider):
+                search_kwargs["stock_code"] = stock_code
+                search_kwargs["window"] = window
+            elif isinstance(provider, TavilySearchProvider):
+                if dim.get('tavily_topic'):
+                    search_kwargs["topic"] = dim['tavily_topic']
+                if window is not None:
+                    search_kwargs["window"] = window
+            elif isinstance(provider, DeepSeekSearchProvider) and window is not None:
+                search_kwargs["window"] = window
+            response = provider.search(
+                dim['query'],
+                max_results=provider_max_results,
+                days=request_days,
+                **search_kwargs,
+            )
+            if isinstance(provider, DeepSeekSearchProvider):
+                response = self._filter_deepseek_noise(response, stock_code)
+            if dim_window is not None:
+                filtered = self._filter_news_response(
+                    response,
+                    search_days=search_days,
                     max_results=provider_max_results,
-                    days=request_days,
-                    stock_code=stock_code,
+                    keep_unknown=dim_window[1],
+                    log_scope=f"{stock_code}:{provider.name}:{dim['name']}",
+                    window=window,
                 )
-            elif isinstance(provider, TavilySearchProvider) and dim.get('tavily_topic'):
-                response = provider.search(
-                    dim['query'],
-                    max_results=provider_max_results,
-                    days=request_days,
-                    topic=dim['tavily_topic'],
-                )
-            else:
-                response = provider.search(
-                    dim['query'],
-                    max_results=provider_max_results,
-                    days=request_days,
-                )
-            if dim['strict_freshness']:
+            elif dim['strict_freshness']:
                 filtered = self._filter_news_response(
                     response,
                     search_days=search_days,
@@ -4885,11 +5193,14 @@ class SearchService:
                 prefer_chinese=self._should_prefer_chinese_news(stock_code, stock_name),
                 max_results=provider_max_results,
                 log_scope=f"{stock_code}:{provider.name}:{dim['name']}:rank",
+                post_event_date=anchor_date,
             )
             filtered = self._filter_ranked_news_for_context(
                 filtered,
                 log_scope=f"{stock_code}:{provider.name}:{dim['name']}:admission",
-                allow_data_pages=dim['name'] in self.REFERENCE_INTEL_DIMENSIONS,
+                allow_data_pages=(
+                    dim['name'] in self.REFERENCE_INTEL_DIMENSIONS and not dim.get('analyst_news')
+                ),
             )
             filtered = self._limit_search_response(
                 filtered,
@@ -4898,7 +5209,8 @@ class SearchService:
             return response, filtered
 
         for dim in search_dimensions:
-            if search_count >= max_searches:
+            is_anchor = dim['name'] == 'event_anchor'
+            if search_count >= max_searches and not is_anchor:
                 break
 
             available_providers = [p for p in self._providers if p.is_available]
@@ -4907,7 +5219,25 @@ class SearchService:
                 candidates = available_providers[start:] + available_providers[:start]
             else:
                 candidates = []
-            provider_index += 1
+            # 事件查詢是額外的一次，不影響其他面向的輪替與次數。
+            if not is_anchor:
+                provider_index += 1
+            if dim.get('prefer_deepseek'):
+                candidates.sort(key=lambda p: 0 if isinstance(p, DeepSeekSearchProvider) else 1)
+            if (
+                dim['name'] == 'announcements'
+                and not is_index_etf
+                and self._mops_provider is not None
+                and FinMindNewsProvider.stock_id_for(stock_code)
+            ):
+                candidates = [self._mops_provider, *candidates]
+            if (
+                dim['name'] == 'latest_news'
+                and self._yfinance_news_provider is not None
+                and stock_code
+                and self._is_us_stock(stock_code)
+            ):
+                candidates = [*candidates, self._yfinance_news_provider]
             # Taiwan tickers: latest news goes through FinMind first (same order as search_stock_news)
             if (
                 dim['name'] == 'latest_news'
@@ -4916,14 +5246,18 @@ class SearchService:
                 and FinMindNewsProvider.stock_id_for(stock_code)
             ):
                 candidates = [self._finmind_provider, *candidates]
+            # 這個面向沒有來源（例如只有 FinMind 時的事件查詢），後面的面向可能還有。
             if not candidates:
-                break
+                continue
 
-            request_days = (
-                self.ANALYTICAL_INTEL_LOOKBACK_DAYS
-                if dim['name'] in self.ANALYTICAL_INTEL_DIMENSIONS
-                else search_days
-            )
+            dim_window = _dimension_window(dim)
+            if dim_window is not None:
+                # 只支援天數的來源也要涵蓋窗口下界（週日分析時要回看到週三）。
+                request_days = max(1, (local_today - dim_window[0][0]).days + 1)
+            elif dim['name'] in self.ANALYTICAL_INTEL_DIMENSIONS:
+                request_days = self.ANALYTICAL_INTEL_LOOKBACK_DAYS
+            else:
+                request_days = search_days
 
             response = filtered_response = provider = None
             for idx, provider in enumerate(candidates):
@@ -4934,7 +5268,7 @@ class SearchService:
                     request_days,
                 )
                 try:
-                    response, filtered_response = _run_provider(provider, dim, request_days)
+                    response, filtered_response = _run_provider(provider, dim, request_days, dim_window)
                 except Exception as exc:
                     logger.warning("[情报搜索] %s: %s 例外 - %s", dim['desc'], provider.name, exc)
                     response = SearchResponse(
@@ -4952,8 +5286,16 @@ class SearchService:
                         filtered_response.error_message or "empty",
                         candidates[idx + 1].name,
                     )
+            if dim_window is not None:
+                filtered_response.date_window = (dim_window[0][0].isoformat(), dim_window[0][1].isoformat())
+            elif dim['name'] in self.ANALYTICAL_INTEL_DIMENSIONS:
+                filtered_response.date_window = (
+                    (today - timedelta(days=self.ANALYTICAL_INTEL_LOOKBACK_DAYS - 1)).isoformat(),
+                    open_end.isoformat(),
+                )
             results[dim['name']] = filtered_response
-            search_count += 1
+            if not is_anchor:
+                search_count += 1
             
             if response.success:
                 logger.info(
@@ -4967,9 +5309,107 @@ class SearchService:
             
             # 短暂延迟避免请求过快
             time.sleep(0.5)
-        
+
+        if anchor_date is not None:
+            self._attach_full_text(results, stock_name)
+
         return results
-    
+
+    def _news_event_date(
+        self,
+        today: date,
+        earnings_date: Optional[date],
+        price_event: Optional[Dict[str, Any]],
+        is_index_etf: bool,
+    ) -> Optional[date]:
+        """有事件才回傳事件日；財報與波動都有時取較新的，舊事件不該蓋掉後來的財報。"""
+        if is_index_etf:
+            return None
+        candidates = []
+        if price_event:
+            candidates.append(self._normalize_news_publish_date(price_event.get("event_date")) or today)
+        if earnings_date is not None and 0 <= (today - earnings_date).days <= self.EARNINGS_ANCHOR_DAYS_AFTER:
+            candidates.append(earnings_date)
+        return max(candidates) if candidates else None
+
+    @staticmethod
+    def _event_anchor_dimension(
+        stock_code: str,
+        stock_name: str,
+        event_date: date,
+        price_event: Optional[Dict[str, Any]],
+        is_foreign: bool,
+        english_aliases: Tuple[str, ...],
+    ) -> Dict[str, Any]:
+        # 只有錨點就是波動日才講方向；財報日的走勢還不知道。
+        is_move_day = bool(price_event) and str(price_event.get("event_date"))[:10] == event_date.isoformat()
+        change = price_event.get("change_pct") if is_move_day else None
+        if is_foreign:
+            name = english_aliases[0] if english_aliases else stock_name
+            query = f"why {name} {stock_code} stock moved {event_date:%b} {event_date.day} {event_date.year}"
+        else:
+            verb = "變動" if change is None else ("下跌" if change < 0 else "上漲")
+            code = FinMindNewsProvider.stock_id_for(stock_code) or stock_code
+            query = f"{stock_name} {code} 股價 {verb} 原因 {event_date.month}月{event_date.day}日"
+        return {'name': 'event_anchor', 'query': query, 'desc': '事件原因', 'tavily_topic': 'news',
+                'strict_freshness': True, 'prefer_deepseek': True}
+
+    @classmethod
+    def _filter_deepseek_noise(cls, response: SearchResponse, stock_code: str) -> SearchResponse:
+        """美股濾非拉丁標題、台股濾論壇爆料；濾光時由既有迴圈改試下一來源。"""
+        if not response.success or not response.results:
+            return response
+        if cls._is_us_stock(stock_code):
+            def is_noise(item):
+                return bool(cls._NON_LATIN_TITLE_RE.search(item.title or ""))
+        elif FinMindNewsProvider.stock_id_for(stock_code):
+            def is_noise(item):
+                parsed = urlparse(item.url or "")
+                is_forum = (parsed.hostname or "").endswith("cmoney.tw") and parsed.path.startswith("/forum/")
+                return is_forum or bool(FinMindNewsProvider._NOISE_PATTERN.search(item.title or ""))
+        else:
+            return response
+        kept = [item for item in response.results if not is_noise(item)]
+        dropped = len(response.results) - len(kept)
+        if dropped:
+            logger.info("[DeepSeek 後處理] %s: total=%s, dropped=%s", stock_code, len(response.results), dropped)
+        return dataclass_replace(response, results=kept)
+
+    def _attach_full_text(self, results: Dict[str, SearchResponse], stock_name: str) -> None:
+        """有事件時替排序最前的幾篇換上全文；Tavily 沒設或失敗就維持摘要。"""
+        tavily = next((p for p in self._providers if isinstance(p, TavilySearchProvider) and p.is_available), None)
+        if tavily is None:
+            return
+        targets: Dict[str, List[Tuple[SearchResponse, int]]] = {}
+        for name in ('event_anchor', 'earnings', 'latest_news'):
+            response = results.get(name)
+            if response is None or not response.success:
+                continue
+            for index, item in enumerate(response.results):
+                # MOPS 的網址是查詢頁，沒有全文可抓。
+                if not item.url or item.url.startswith(MopsAnnouncementProvider.PAGE_URL):
+                    continue
+                if item.url in targets or len(targets) < self.FULLTEXT_MAX_ARTICLES:
+                    targets.setdefault(item.url, []).append((response, index))
+        if not targets:
+            return
+        pages = tavily.extract(list(targets))
+        for url, slots in targets.items():
+            text = self._trim_full_text(pages.get(url) or "", stock_name)
+            for response, index in slots:
+                item = response.results[index]
+                # 比原摘要短的多半是擋爬頁面。
+                if len(text) > len(item.snippet or ""):
+                    note = DeepSeekSearchProvider.DATE_NOTE if response.provider == "DeepSeek" else ""
+                    response.results[index] = dataclass_replace(item, snippet=note + text)
+
+    def _trim_full_text(self, raw: str, stock_name: str) -> str:
+        text = clean_page_navigation(raw)
+        # 頁首常是相關文章，從第一次提到公司的段落開始。
+        position = text.find(stock_name) if stock_name else -1
+        start = max(0, text.rfind("\n", 0, position) + 1) if position > 0 else 0
+        return text[start:start + self.FULLTEXT_CHAR_LIMIT]
+
     def format_intel_report(self, intel_results: Dict[str, SearchResponse], stock_name: str) -> str:
         """
         格式化情报搜索结果为报告
@@ -4984,16 +5424,9 @@ class SearchService:
         lines = [f"【{stock_name} 情报搜索结果】"]
         
         # 维度展示顺序
-        display_order = ['latest_news', 'announcements', 'market_analysis', 'risk_check', 'earnings', 'industry']
+        display_order = ['event_anchor', 'latest_news', 'announcements', 'market_analysis', 'risk_check', 'earnings', 'industry']
 
-        dim_labels = {
-            'latest_news': '📰 最新消息',
-            'announcements': '📋 公司公告',
-            'market_analysis': '📈 机构分析',
-            'risk_check': '⚠️ 风险排查',
-            'earnings': '📊 业绩预期',
-            'industry': '🏭 行业分析',
-        }
+        dim_labels = INTEL_DIMENSION_LABELS
 
         for dim_name in display_order:
             if dim_name not in intel_results:
@@ -5004,14 +5437,16 @@ class SearchService:
             # 获取维度描述
             dim_desc = dim_labels.get(dim_name, dim_name)
             
-            lines.append(f"\n{dim_desc} (来源: {resp.provider}):")
+            window = getattr(resp, "date_window", None)
+            window_note = f", 日期窗口: {window[0]} ~ {window[1]}" if window else ""
+            lines.append(f"\n{dim_desc} (来源: {resp.provider}{window_note}):")
             if resp.success and resp.results:
                 # 增加显示条数
                 for i, r in enumerate(resp.results[:4], 1):
                     date_str = f" [{r.published_date}]" if r.published_date else ""
                     lines.append(f"  {i}. {r.title}{date_str}")
-                    # 如果摘要太短，可能信息量不足
-                    snippet = r.snippet[:150] if len(r.snippet) > 20 else r.snippet
+                    # 摘要與全文的長度由來源層決定；舊的 150 字上限會讓它們進不了 prompt。
+                    snippet = r.snippet[:self.INTEL_REPORT_SNIPPET_LIMIT]
                     lines.append(f"     {snippet}...")
                     if r.relevance_category or r.relevance_reasons:
                         relevance_parts = []
@@ -5264,6 +5699,7 @@ def get_search_service() -> SearchService:
                     news_max_age_days=config.news_max_age_days,
                     news_strategy_profile=getattr(config, "news_strategy_profile", "short"),
                     finmind_tokens=getattr(config, "finmind_tokens", None),
+                    public_news_sources_enabled=True,
                 )
     
     return _search_service

@@ -120,7 +120,7 @@
 
 傳統 system／user 與 agent system 的真組裝邊界均確認帶入這些事實與「事件後新低重新計算／不得假設事件日低點仍守住」規則；外部模型 mock，不宣稱真模型已遵守。
 
-`tests/fixtures/deepseek_disabled_baseline.json` 在改碼前由 `96761715` 擷取，鎖住 INTC／2330.TW 搜尋結果、完整情報文字、四語傳統 prompt 雜湊、agent 使用者訊息與結果；日期以相對當天替換成占位值，測試不會隨日曆失效。未設獨立搜尋金鑰維持這些內容逐字一致。事件新事實是本輪另一項已授權行為改動：前次 SEC 快照保留原檔，只在比較結果前逐值驗證新加的 `latest_close` 再比對其餘內容，不以重新生成舊快照掩蓋變化。
+`tests/fixtures/deepseek_disabled_baseline.json` 在改碼前由 `96761715` 擷取，鎖住 INTC／2330.TW 搜尋結果、完整情報文字、四語傳統 prompt 雜湊、agent 使用者訊息與結果；日期以相對當天替換成占位值，測試不會隨日曆失效。未設獨立搜尋金鑰維持這些內容逐字一致。事件新事實是本輪另一項已授權行為改動：前次 SEC 快照保留原檔，只在比較結果前逐值驗證新加的 `latest_close` 再比對其餘內容，不以重新生成舊快照掩蓋變化。2026-11-01 新聞抓取優化刻意改了 `market_analysis` 查詢字串（未設 DeepSeek 也適用），基準檔只更新該兩個查詢欄位與隨之而變的 prompt 雜湊，搜尋結果與情報文字逐字未變。
 
 `tests/fixtures/deepseek_search_dates.json` 是實際回應各取三則、summary 截短的縮本，保留 title／URL／date／site_name／authority／rerank_score；其餘為隔離的 HTTP、key、內容長度、日期窗口與事件 fixture。摘要含日期提醒每則最多 500 字元，採 summary、缺才退 snippet，與 Tavily 既有上限一致。
 

@@ -28,7 +28,7 @@
           "search_time": 0
         },
         "market_analysis": {
-          "query": "Intel analyst rating target price report",
+          "query": "Intel INTC analyst downgrade upgrade price target",
           "results": [
             {
               "title": "Intel INTC earnings revenue outlook",
@@ -217,7 +217,7 @@
           "search_time": 0
         },
         "market_analysis": {
-          "query": "台積電 法人 目標價 評等 分析",
+          "query": "台積電 法人 目標價 評等 升評 降評",
           "results": [
             {
               "title": "台積電 2330 營收 財報 目標價",

@@ -61,7 +61,12 @@ from src.report_language import (
     localize_trend_prediction,
     normalize_report_language,
 )
-from src.search_service import SearchService
+from src.core.quote_session import (
+    coerce_to_date as _coerce_to_date,
+    premarket_session_unknown as _premarket_session_unknown,
+    resolve_quote_session,
+)
+from src.search_service import SearchService, intel_date_windows
 from src.analysis_context_pack_prompt import format_analysis_context_pack_prompt_section
 from src.analysis_context_pack_overview import render_analysis_context_pack_overview
 from src.market_phase_summary import MARKET_PHASE_SUMMARY_KEY, render_market_phase_summary
@@ -162,33 +167,6 @@ def _cumulative_max(existing: Any, realtime: Any) -> Any:
     if _valid(existing) and _valid(realtime):
         return max(existing, realtime)
     return realtime
-
-
-def _coerce_to_date(value: Any) -> Optional[date]:
-    """date／datetime（含 pandas.Timestamp）／ISO 字串（取前 10 碼）統一成 date；無法解析回 None。"""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    try:
-        return date.fromisoformat(str(value)[:10])
-    except ValueError:
-        return None
-
-
-# 不帶報價日期、又可能落後一場的兜底來源：Stooq 的 CSV 日期在建報價時就丟了，DB 缺 T-1 時
-# 它也可能同樣停在 T-2（實測 2026-10-22 紐約盤前），盤前不能憑日曆把它當成上一場收盤。
-_UNDATED_LAGGING_SOURCES = frozenset({RealtimeSource.STOOQ.value})
-
-
-def _premarket_session_unknown(quote: Any) -> bool:
-    """盤前報價沒有自帶日期、來源又可能落後一場時，它屬於哪一場無從得知。"""
-    if _coerce_to_date(getattr(quote, 'provider_timestamp', None)) is not None:
-        return False
-    source = getattr(quote, 'source', None)
-    return str(getattr(source, 'value', source)) in _UNDATED_LAGGING_SOURCES
 
 
 def _share_image_payload(result: Any) -> Optional[Dict[str, Any]]:
@@ -476,6 +454,7 @@ class StockAnalysisPipeline:
                 news_max_age_days=self.config.news_max_age_days,
                 news_strategy_profile=getattr(self.config, "news_strategy_profile", "short"),
                 finmind_tokens=getattr(self.config, "finmind_tokens", None),
+                public_news_sources_enabled=True,
             )
         except Exception as exc:
             logger.warning("搜索服务初始化失败，将以无搜索模式运行: %s", exc, exc_info=True)
@@ -819,6 +798,7 @@ class StockAnalysisPipeline:
             # Step 3: 趋势分析（基于交易理念）— 在 Agent 分支之前执行，供两条路径共用
             trend_result: Optional[TrendAnalysisResult] = None
             event_gap_daily_bars = None
+            news_signal_daily_bars = None
             try:
                 from src.services.history_loader import get_frozen_target_date
                 _mkt = get_market_for_stock(normalize_stock_code(code))
@@ -828,6 +808,10 @@ class StockAnalysisPipeline:
                 historical_bars = self.db.get_data_range(code, start_date, end_date)
                 if historical_bars:
                     df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
+                    # 新聞檢索不看決策開關，與 event_gap_daily_bars 分開。
+                    news_signal_daily_bars = df.tail(
+                        getattr(self.config, "event_gap_lookback_sessions", 5) + 1
+                    ).to_dict(orient="records")
                     if getattr(self.config, "event_gap_decision_enabled", False) is True:
                         lookback = getattr(self.config, "event_gap_lookback_sessions", 5)
                         event_gap_daily_bars = df.tail(lookback + 1).to_dict(orient="records")
@@ -867,8 +851,22 @@ class StockAnalysisPipeline:
                 market=market or "cn",
             )
             news_result_count: Optional[int] = None
+            news_date_windows: List[Dict[str, Optional[str]]] = []
             self._emit_progress(46, f"{stock_name}：正在检索新闻与舆情")
             if self.search_service is not None and self.search_service.is_available_for_stock(code):
+                news_signals = {}
+                if not is_index:
+                    from src.services.news_event_signals import resolve_news_event_signals
+                    news_market = get_market_for_stock(normalize_stock_code(code))
+                    news_signals = resolve_news_event_signals(
+                        code,
+                        news_market,
+                        get_market_now(news_market),
+                        config=self.config,
+                        fundamental_context=fundamental_context,
+                        daily_bars=news_signal_daily_bars,
+                        realtime_quote=realtime_quote,
+                    )
                 logger.info(f"{stock_name}({code}) 开始多维度情报搜索...")
 
                 # 检索已发起：此后即使一条都没拿到，也是「执行了但零命中」而非
@@ -882,11 +880,13 @@ class StockAnalysisPipeline:
                 intel_results = self.search_service.search_comprehensive_intel(
                     stock_code=("" if is_index else code),
                     stock_name=stock_name,
-                    max_searches=5
+                    max_searches=5,
+                    **news_signals,
                 )
 
                 # 格式化情报报告
                 if intel_results:
+                    news_date_windows = intel_date_windows(intel_results)
                     news_context = self.search_service.format_intel_report(intel_results, stock_name)
                     total_results = sum(
                         len(r.results) for r in intel_results.values() if r.success
@@ -968,6 +968,8 @@ class StockAnalysisPipeline:
             )
             if event_gap_daily_bars is not None:
                 enhanced_context["event_gap_daily_bars"] = event_gap_daily_bars
+            if news_date_windows:
+                enhanced_context["news_date_windows"] = news_date_windows
             from src.services.event_gap import event_gap_context
             event = event_gap_context(code, enhanced_context, self.config)
             if event:
@@ -1275,12 +1277,12 @@ class StockAnalysisPipeline:
                 )
                 # orig_today['date'] 可能是 date／Timestamp／ISO 字串；先正規化成 date 再比較。
                 orig_date_norm = _coerce_to_date(orig_today.get('date'))
-                # provider 時間優先；抓取時間可能是休市日，不能直接當作報價場次。
-                quote_session = _coerce_to_date(getattr(realtime_quote, 'provider_timestamp', None))
-                if quote_session is None:
-                    quote_session = market_today_date if quote_is_today else get_effective_trading_date(
-                        market, current_time=market_now
-                    )
+                quote_session = resolve_quote_session(
+                    realtime_quote,
+                    market_today=market_today_date,
+                    quote_is_today=quote_is_today,
+                    previous_session=lambda: get_effective_trading_date(market, current_time=market_now),
+                )
                 # DB 最新列早於報價場次（報價那一場的 K 還沒進庫）：原 today 才是真正的「昨日」，
                 # 不平移的話即時價會拿去比前天收盤（實測 3008：-5.67% 被算成 -9.45%）。
                 # 不能只在「報價屬於今天」時平移：開盤前的報價是 T-1 收盤，而 DB 也可能缺 T-1

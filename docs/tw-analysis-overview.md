@@ -30,7 +30,7 @@
 | 處置／注意股、未來 10 交易日法說會與除權息 | `market_data/risk_flags.py`、`events.py` 即時抓官方 | 是（`TW_LIVE_EVENTS_ENABLED`） | 回應日期不新鮮就寫「未確認」，不寫「否」 |
 | 賣方共識（EPS 修正方向、分歧、評級、目標價） | yfinance（`data_provider/analyst_consensus.py`） | 是（`ANALYST_CONSENSUS_ENABLED`，預設關） | 目標價系統性偏多；明寫不得據此提高信心或放寬門檻；共識隨每份報告落在 `context_snapshot.fundamental_context.consensus`（as_of＝報告時間），研究直接從那裡讀 |
 | 每日大盤脈絡（紅綠燈、複盤摘要、風險標籤） | 當日大盤複盤 | 是 | 黃燈不再自動標 conservative（§3） |
-| 新聞 | FinMind 台股新聞（Doppler 注入）→ 通用搜尋 | 是 | 18:00 每日報告的情報搜尋在台股也先走 FinMind；任一維度的來源失敗會換下一個來源；`make analyze` 不含 Doppler，會退回通用搜尋 |
+| 新聞 | FinMind 台股新聞（Doppler 注入）→ 通用搜尋 | 是 | 18:00 每日報告的情報搜尋在台股也先走 FinMind；任一維度的來源失敗會換下一個來源；`make analyze` 不含 Doppler，會退回通用搜尋。`earnings`、`risk_check`、`announcements` 優先 DeepSeek、不走 Tavily news，一般個股公告先查 MOPS 重大訊息。窗口與事件查詢見 `src/search_service.py::search_comprehensive_intel`；各面向實際日期上下界經 `news_date_windows` 傳到 prompt 的時間規則，沒有上下界的路徑才沿用近 N 日 |
 | 財報（營收、淨利、現金流、ROE） | yfinance 季報 | 是 | 逐欄標 `quarter`／`ttm` 口徑 |
 | 估值歷史百分位、集保大戶、券商分點、SMC 結構、合約負債 | #39：`market.valuation`、`market.holding_dist`、`tw_broker_branch.py`、`smc_structure.py` | **否**（只在個股檔案：邏輯在 `src/services/tw_stock_dossier.py`，`scripts/tw_stock_dossier.py` 與 Web `/stocks` 都用它） | 集保與上櫃回補 2026-10-22 起跑 |
 | A 股主力資金流、龍虎榜 | — | 台股固定 `not_supported` | 這是零買進的主因之一（§4） |
@@ -115,6 +115,10 @@ LLM 端還有提示詞的評分規則（`src/analyzer.py` 評分標準、`src/ag
 判讀規則：95% CI 跨零一律 inconclusive；樣本內、重疊窗口要標；結論寫進 docs 前要過對抗審查（`AGENTS.md` §1.2）。
 
 ## 7. 還沒做的
+
+- 台股沒有「上次法說／財報日」來源：`calendar_events` 只留今天起的法說會，財報當天以外 `earnings` 窗口都是 30 天、不會觸發財報後事件查詢；美股靠 SEC 8-K Item 2.02（要設 `SEC_EDGAR_USER_AGENT`，只回看 14 天）。
+- 決策層事件門檻 12%（`EVENT_GAP_THRESHOLD_PCT`）高於台股單日漲跌幅限制 10%，台股單日波動幾乎碰不到；決策層要不要分市場尚未決定。新聞的「為何變動」查詢與全文另用台股 7%（`news_event_signals.py` 的 `NEWS_EVENT_THRESHOLD_PCT_BY_MARKET`），只影響多查一次新聞，**這個門檻沒有回測**，取自 3481 −7.5% 一例。
+- agent 路徑（`search_tools.py`）還沒帶財報日與波動訊號。
 
 - **2～5 天短波段專用契約與新訊號**：不要把現有突破訊號直接縮短持有期，已證實為負。
 - 影子評估累積 2～3 個月後，再決定 `CAPITAL_FLOW_NOT_SUPPORTED_DOWNGRADE` 與 `TW_MA_ALIGNMENT_WEIGHTED`。

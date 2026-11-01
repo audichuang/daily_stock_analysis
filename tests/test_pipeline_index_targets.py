@@ -21,16 +21,16 @@ from __future__ import annotations
 
 import re
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from src.analyzer import AnalysisResult
+from src.analyzer import AnalysisResult, GeminiAnalyzer
 from src.config import Config
 from src.core.pipeline import StockAnalysisPipeline, INDEX_SKIP_MODULES
 from src.services.analysis_context_builder import PipelineAnalysisArtifacts
 from src.enums import ReportType
 from src.notification import NotificationService
-from src.search_service import SearchResponse, SearchService
+from src.search_service import SearchResponse, SearchResult, SearchService
 from src.services.stock_list_parser import (
     AnalysisTarget,
     ParseStatus,
@@ -662,6 +662,74 @@ class PipelineSearchSemanticsTestCase(unittest.TestCase):
 
         call_kwargs = pipeline.search_service.search_comprehensive_intel.call_args.kwargs
         self.assertEqual(call_kwargs["stock_code"], "600519")
+
+    def test_news_event_signals_reach_search(self) -> None:
+        pipeline = _analysis_pipeline("600519", "贵州茅台", enable_search=True)
+        signals = {"earnings_date": "sentinel-day", "price_event": {"event_date": "sentinel"}}
+
+        with patch("src.services.news_event_signals.resolve_news_event_signals", return_value=signals):
+            pipeline.analyze_stock("600519", MagicMock(), "q1")
+
+        call_kwargs = pipeline.search_service.search_comprehensive_intel.call_args.kwargs
+        self.assertEqual(call_kwargs["earnings_date"], "sentinel-day")
+        self.assertEqual(call_kwargs["price_event"], {"event_date": "sentinel"})
+
+    def _prompt_through_pipeline(self, report_language: str) -> tuple:
+        """真 SearchService → 真 pipeline → 真 _format_prompt，只有來源是假的。"""
+        today = date.today()
+        earnings = today - timedelta(days=12)
+        article = SearchResult(
+            title="贵州茅台 600519 财报 超预期", snippet="贵州茅台 业绩 营收 财报 目标价",
+            url="https://news.example.com/earnings", source="news.example.com",
+            published_date=(earnings + timedelta(days=2)).isoformat(),
+        )
+        provider = MagicMock()
+        provider.name = "Fake"
+        provider.is_available = True
+        provider.search.side_effect = lambda *a, **k: SearchResponse(
+            query="q", results=[article], provider="Fake")
+        service = SearchService(searxng_public_instances_enabled=False)
+        service._providers = [provider]
+
+        pipeline = _analysis_pipeline("600519", "贵州茅台", enable_search=True)
+        pipeline.search_service = service
+        pipeline.fetcher_manager.get_stock_name.return_value = "贵州茅台"
+        signals = {"earnings_date": earnings, "price_event": None}
+        with patch("src.services.news_event_signals.resolve_news_event_signals", return_value=signals), \
+                patch("src.search_service.time.sleep"):
+            pipeline.analyze_stock("600519", MagicMock(), "q1")
+        call = pipeline.analyzer.analyze.call_args
+        context = {**call.args[0], "date": today.isoformat(), "today": {}}
+        news_context = call.kwargs.get("news_context")
+        with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
+            analyzer = GeminiAnalyzer()
+        prompt = analyzer._format_prompt(context, "贵州茅台", news_context=news_context, report_language=report_language)
+        return prompt, earnings
+
+    def test_retrieved_older_earnings_are_allowed_by_the_real_prompt(self) -> None:
+        for language, old_rule, compliance in (
+            ("zh", "超出近3日窗口的新闻一律忽略", "超出所属新闻段落日期窗口"),
+            ("zh-TW", "超出近3日視窗的新聞一律忽略", "超出所屬新聞段落日期窗口"),
+            ("en", "Ignore all news older than the last 3 days", "outside the date window of its news section"),
+        ):
+            with self.subTest(language=language):
+                prompt, earnings = self._prompt_through_pipeline(language)
+                start = (earnings - timedelta(days=1)).isoformat()
+                end = (earnings + timedelta(days=7)).isoformat()
+                self.assertIn("贵州茅台 600519 财报 超预期", prompt)
+                self.assertIn(f"📊 业绩预期: {start} ~ {end}", prompt)
+                self.assertIn(f"日期窗口: {start} ~ {end}", prompt)
+                self.assertNotIn(old_rule, prompt)
+                self.assertIn(compliance, prompt)
+
+    def test_news_event_signals_skipped_for_index(self) -> None:
+        pipeline = _analysis_pipeline("sh000016", "上证50", enable_search=True)
+
+        with patch("src.services.news_event_signals.resolve_news_event_signals") as resolve:
+            pipeline.analyze_stock("sh000016", MagicMock(), "q1", analysis_target=_index_target("sh000016"))
+
+        resolve.assert_not_called()
+        self.assertNotIn("earnings_date", pipeline.search_service.search_comprehensive_intel.call_args.kwargs)
 
     def test_v7_provider_queries_contain_only_chinese_index_name(self) -> None:
         service = SearchService(

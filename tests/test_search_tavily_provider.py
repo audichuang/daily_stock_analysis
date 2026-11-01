@@ -204,7 +204,9 @@ class TestTavilySearchProvider(unittest.TestCase):
         self.assertIn("market_analysis", intel)
         self.assertGreaterEqual(len(_FakeTavilyClient.search_calls), 2)
         self.assertEqual(_FakeTavilyClient.search_calls[0]["topic"], "news")
-        self.assertNotIn("topic", _FakeTavilyClient.search_calls[1])
+        # market_analysis 改為近 7 天的分析師新聞查詢。
+        self.assertEqual(_FakeTavilyClient.search_calls[1]["topic"], "news")
+        self.assertIn("downgrade", _FakeTavilyClient.search_calls[1]["query"])
 
     def test_search_comprehensive_intel_etf_risk_check_does_not_force_news_topic(self) -> None:
         published_dt = datetime.now(timezone.utc).replace(microsecond=0)
@@ -284,7 +286,10 @@ class TestIntelQueryQuality:
         assert "公開資訊觀測站" in joined and "法說會" in joined
         for banned in ("上交所", "深交所", "cninfo", "研报", "业绩", "新闻"):
             assert banned not in joined
-        assert {d["name"]: d["tavily_topic"] for d in dims}["earnings"] == "news"
+        by_name = {d["name"]: d for d in dims}
+        for name in ("earnings", "risk_check", "announcements"):
+            assert by_name[name]["tavily_topic"] is None
+            assert by_name[name]["prefer_deepseek"] is True
         etf = SearchService._tw_search_dimensions("0050.TW", "元大台灣50", True)
         assert "法說會" not in " ".join(d["query"] for d in etf)
 

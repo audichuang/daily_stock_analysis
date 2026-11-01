@@ -203,7 +203,7 @@ def test_round_robin_is_preserved_with_finmind_only_for_latest(monkeypatch, code
         monkeypatch.setattr(provider, "search", Mock(side_effect=lambda *a, provider=provider, **kw: _ok(provider.name, code, name)))
     with patch("src.search_service.time.sleep"):
         result = service.search_comprehensive_intel(code, name, max_searches=5)
-    assert [r.provider for r in result.values()] == (["FinMind", "Tavily", "DeepSeek", "Tavily", "DeepSeek"] if code.endswith("TW") else ["DeepSeek", "Tavily", "DeepSeek", "Tavily", "DeepSeek"])
+    assert [r.provider for r in result.values()] == (["FinMind", "DeepSeek", "DeepSeek", "DeepSeek", "DeepSeek"] if code.endswith("TW") else ["DeepSeek", "Tavily", "DeepSeek", "Tavily", "DeepSeek"])
     assert service._finmind_provider.search.call_count == (1 if code.endswith("TW") else 0)
 
 
@@ -223,7 +223,10 @@ def test_disabled_search_prompt_agent_and_result_byte_for_byte(monkeypatch, code
         r.search_time=0
         for item in r.results:
             item.retrieved_at="fixture-retrieval"
-    normalized = json.loads(json.dumps({k:asdict(v) for k,v in result.items()}, ensure_ascii=False).replace(date.today().isoformat(), "<today>"))
+    # 日期窗口隨當天的交易日曆變動，獨立由 test_news_retrieval 驗；基準只鎖其餘內容。
+    for r in result.values():
+        r.date_window = None
+    normalized = json.loads(json.dumps({k:{f:x for f,x in asdict(v).items() if f != "date_window"} for k,v in result.items()}, ensure_ascii=False).replace(date.today().isoformat(), "<today>"))
     assert normalized == baseline["results"]
     text = service.format_intel_report(result, name).replace(date.today().isoformat(), "<today>")
     assert text == baseline["text"]
