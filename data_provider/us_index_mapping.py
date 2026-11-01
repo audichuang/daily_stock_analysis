@@ -54,6 +54,24 @@ US_INDEX_MAPPING = {
 }
 
 
+# 介面顯示用的繁中名（以 Yahoo 符號為鍵）。上面那張表的名稱進報告與提示詞，不改。
+US_INDEX_ZH_TW_NAMES = {
+    '^GSPC': '標普 500',
+    '^DJI': '道瓊工業',
+    '^IXIC': '那斯達克綜合',
+    '^NDX': '那斯達克 100',
+    '^VIX': 'VIX 恐慌指數',
+    '^RUT': '羅素 2000',
+    '^SOX': '費城半導體',
+}
+
+
+def us_index_zh_tw_name(code: str) -> str | None:
+    """美股指數的繁中顯示名；不是已知指數回 None。"""
+    yf_symbol, _ = get_us_index_yf_symbol(code)
+    return US_INDEX_ZH_TW_NAMES.get(yf_symbol) if yf_symbol else None
+
+
 def is_us_index_code(code: str) -> bool:
     """
     判断代码是否为美股指数符号。

@@ -15,6 +15,9 @@
 """
 
 import logging
+import math
+import threading
+import time
 from typing import Optional
 import re
 
@@ -52,13 +55,14 @@ from src.services.import_parser import (
     parse_import_from_bytes,
     parse_import_from_text,
 )
-from src.services.stock_service import StockService
+from src.services.stock_service import StockService, normalize_source_code
 from src.services.stock_profile_service import InvalidStockProfileCode, StockProfileService
 from src.services.stock_list_parser import ParseStatus, parse_analysis_target
 from src.services.run_diagnostics import sanitize_diagnostic_text
 from src.services.stock_list_parser import split_stock_list
 from src.services.system_config_service import SystemConfigService
 from data_provider.base import normalize_stock_code
+from data_provider.us_index_mapping import us_index_zh_tw_name
 
 logger = logging.getLogger(__name__)
 
@@ -656,6 +660,44 @@ def get_market_status(
     return {"markets": result, "open": any(result.values()) if result else True}
 
 
+_INDICES_CACHE_TTL_S = 60.0
+_INDICES_CACHEABLE_REGIONS = frozenset({"cn", "hk", "us", "tw", "jp", "kr"})
+_INDICES_CACHE: dict = {}
+_INDICES_CACHE_LOCK = threading.Lock()
+
+
+def _decorate_indices(rows: list, region: str) -> list:
+    """追加 source_code、美股繁中名；非有限值改 null（yfinance 缺前一場時漲跌是 NaN，JSON 會 500）。"""
+    items = []
+    for row in rows:
+        item = {
+            key: None if isinstance(value, float) and not math.isfinite(value) else value
+            for key, value in row.items()
+        }
+        item.setdefault("as_of", None)
+        item.setdefault("source", None)
+        item["source_code"] = normalize_source_code(item["source"])
+        if region == "us":
+            item["name"] = us_index_zh_tw_name(str(item.get("code") or "")) or item.get("name")
+        items.append(item)
+    return items
+
+
+def _index_market_status(region: str) -> dict:
+    """市場狀態每次現算，不進快取：開收盤的邊界不該晚 60 秒。"""
+    try:
+        from src.core.trading_calendar import MarketPhase, infer_market_phase
+
+        phase = infer_market_phase(region)
+    except Exception as e:
+        logger.warning(f"判斷市場狀態失敗 region={region}: {e}")
+        return {"market_phase": "unknown", "market_open": None}
+    if phase == MarketPhase.UNKNOWN:
+        return {"market_phase": phase.value, "market_open": None}
+    open_phases = {MarketPhase.INTRADAY, MarketPhase.LUNCH_BREAK, MarketPhase.CLOSING_AUCTION}
+    return {"market_phase": phase.value, "market_open": phase in open_phases}
+
+
 @router.get(
     "/indices",
     responses={200: {"description": "大盘指数列表"}},
@@ -670,11 +712,21 @@ def get_main_indices(
         # 与 StockService.get_realtime_quotes 同款：每请求自建 manager 可接受
         from data_provider.base import DataFetcherManager
 
-        data = DataFetcherManager().get_main_indices(region)
-        return {"items": data or [], "region": region}
+        now = time.monotonic()
+        with _INDICES_CACHE_LOCK:
+            cached = _INDICES_CACHE.get(region)
+        if cached is not None and cached[0] > now:
+            items = cached[1]
+        else:
+            items = _decorate_indices(DataFetcherManager().get_main_indices(region) or [], region)
+            # 空結果不快取：來源恢復後下一次輪詢就要拿得到。只快取已知市場，鍵不會無限長。
+            if items and region in _INDICES_CACHEABLE_REGIONS:
+                with _INDICES_CACHE_LOCK:
+                    _INDICES_CACHE[region] = (now + _INDICES_CACHE_TTL_S, items)
+        return {"items": [dict(item) for item in items], "region": region, **_index_market_status(region)}
     except Exception as e:
         logger.warning(f"获取大盘指数失败 region={region}: {e}")
-        return {"items": [], "region": region}
+        return {"items": [], "region": region, **_index_market_status(region)}
 
 
 @router.get(
@@ -839,6 +891,8 @@ def get_stock_trend(
             stock_code=stock_code,
             range=range,
             source=source,
+            source_code=normalize_source_code(source),
+            degraded_reason=service.last_trend_degraded_reason,
             points=[TrendPoint(**p) for p in points],
         )
     except Exception as e:

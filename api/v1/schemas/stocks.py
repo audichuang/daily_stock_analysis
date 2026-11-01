@@ -50,6 +50,7 @@ class StockQuote(BaseModel):
     update_time: Optional[str] = Field(None, description="更新时间")
     # 行情来源与时效（additive，旧客户端忽略即可）
     source: Optional[str] = Field(None, description="行情来源 (shioaji/fallback/efinance/akshare...)")
+    source_code: Optional[str] = Field(None, description="穩定的來源代碼（shioaji／yfinance…）；source 字串維持舊值")
     as_of: Optional[str] = Field(None, description="行情对应时间 (provider_timestamp 优先, 否则 fetched_at), ISO8601")
     is_stale: Optional[bool] = Field(None, description="是否延迟/陈旧 (台股 yfinance 约延迟 15-20 分钟)")
 
@@ -132,6 +133,8 @@ class TrendPoint(BaseModel):
 
     t: str = Field(..., description="时间点 (ISO8601)")
     price: float = Field(..., description="价格（日/月/年为收盘价，分时为最新价）")
+    volume: Optional[float] = Field(None, description="該點成交量（股）；沒有讀數為 null")
+    avg_price: Optional[float] = Field(None, description="當日累計均價（Close×量的近似 VWAP），僅分時")
 
 
 class StockTrendResponse(BaseModel):
@@ -140,6 +143,11 @@ class StockTrendResponse(BaseModel):
     stock_code: str = Field(..., description="股票代码")
     range: str = Field(..., description="day / month / year")
     source: Optional[str] = Field(None, description="数据来源说明（如 intraday 来自 yfinance，可能延迟）")
+    source_code: Optional[str] = Field(None, description="穩定的來源代碼（shioaji／yfinance）")
+    degraded_reason: Optional[str] = Field(
+        None,
+        description="台股沒走 Shioaji 的原因：no_session／no_contract／kbars_failed:*／no_bars／range_unsupported／sdk_missing",
+    )
     points: List[TrendPoint] = Field(default_factory=list, description="按时间升序的走势点")
 
 
@@ -259,6 +267,43 @@ class StockProfileMonitorBlock(BaseModel):
     limitations: List[str] = Field(default_factory=list)
 
 
+class StockProfilePosition(BaseModel):
+    """使用者對這檔的持股（跨帳戶合計）。沒持有時整塊為 null。"""
+
+    quantity: float
+    avg_cost: Optional[float] = Field(None, description="平均成本（currency 計價）；跨幣別持有時為 null")
+    currency: Optional[str] = None
+    last_price: Optional[float] = Field(None, description="算損益用的價格：即時報價優先")
+    market_value: Optional[float] = None
+    unrealized_pnl: Optional[float] = None
+    unrealized_pnl_pct: Optional[float] = None
+    weight_pct: Optional[float] = Field(None, description="占全部持股市值 %；缺匯率時為 null")
+    account_count: int = 1
+
+
+class StockProfileChips(BaseModel):
+    """台股籌碼（本地 DB）。法人單位是股、融資融券單位是張，兩者不可相比。"""
+
+    institutional_date: Optional[str] = None
+    foreign_net: Optional[float] = None
+    trust_net: Optional[float] = None
+    dealer_net: Optional[float] = None
+    total_net: Optional[float] = None
+    margin_date: Optional[str] = None
+    margin_balance: Optional[float] = None
+    margin_chg_5: Optional[float] = None
+    margin_chg_20: Optional[float] = None
+    short_balance: Optional[float] = None
+    short_margin_ratio: Optional[float] = None
+
+
+class StockProfileNewsItem(BaseModel):
+    title: Optional[str] = None
+    url: Optional[str] = None
+    source: Optional[str] = None
+    published_date: Optional[str] = None
+
+
 class StockProfileEvidenceQuality(BaseModel):
     status: StockProfileStatus
     blocks: Dict[str, StockProfileStatus] = Field(default_factory=dict)
@@ -277,3 +322,6 @@ class StockProfileResponse(BaseModel):
     portfolio: StockProfilePortfolioBlock
     monitors: StockProfileMonitorBlock
     evidence_quality: StockProfileEvidenceQuality
+    position: Optional[StockProfilePosition] = None
+    chips: Optional[StockProfileChips] = None
+    news: Optional[List[StockProfileNewsItem]] = Field(None, description="最新一份報告讀過的新聞；沒有報告或查詢失敗為 null")

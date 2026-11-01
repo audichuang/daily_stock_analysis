@@ -45,6 +45,7 @@ from api.v1.schemas.analysis import (
     DuplicateTaskErrorResponse,
     MarketReviewRequest,
     MarketReviewAccepted,
+    MarketReviewDefaultRegion,
 )
 from api.v1.schemas.common import ErrorResponse
 from api.v1.schemas.history import (
@@ -626,6 +627,26 @@ def _handle_sync_analysis(
     except Exception as e:
         logger.error(f"分析失败: {e}", exc_info=True)
         raise api_error(500, "internal_error", f"分析过程发生错误: {str(e)}")
+
+
+# ============================================================
+# GET /market-review/default-region - 伺服器實際的預設市場
+# ============================================================
+
+@router.get(
+    "/market-review/default-region",
+    response_model=MarketReviewDefaultRegion,
+    summary="取得大盤複盤的預設市場",
+    description="唯讀。回傳不帶 region 觸發複盤時實際會跑的市場，順序與 MARKET_REVIEW_REGION 相同。",
+)
+def get_market_review_default_region(
+    config: Config = Depends(get_config_dep),
+) -> MarketReviewDefaultRegion:
+    default_region = normalize_market_review_region_lenient(config.market_review_region) or "cn"
+    return MarketReviewDefaultRegion(
+        default_region=default_region,
+        regions=default_region.split(","),
+    )
 
 
 # ============================================================

@@ -14,8 +14,20 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 from src.repositories.stock_repo import StockRepository
+from src.services.market_symbol_utils import get_suffix_market
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_source_code(source: Optional[str]) -> Optional[str]:
+    """把給人看的 source 字串收成穩定代碼：`yfinance(intraday,可能延迟)`、`fallback` → `yfinance`。
+
+    舊的 source 字串不動（iOS 靠完整值比對判斷延遲），客戶端新程式讀這個代碼。
+    """
+    if not source:
+        return None
+    code = str(source).split("(", 1)[0].strip().lower()
+    return "yfinance" if code == "fallback" else (code or None)
 
 
 def _map_quote_to_dict(quote: Any, fallback_code: str) -> Dict[str, Any]:
@@ -53,6 +65,7 @@ def _map_quote_to_dict(quote: Any, fallback_code: str) -> Dict[str, Any]:
         # provider_timestamp 优先（真实行情时间），否则退回 fetched_at（本系统获取时间）
         "as_of": getattr(quote, "provider_timestamp", None) or getattr(quote, "fetched_at", None),
         "source": src.value if src is not None else None,
+        "source_code": normalize_source_code(src.value) if src is not None else None,
         "is_stale": getattr(quote, "is_stale", None),
     }
 
@@ -72,10 +85,13 @@ def _opt_float(value):
 class StockService:
     """
     股票数据服务
-    
+
     封装股票数据获取的业务逻辑
     """
-    
+
+    # get_price_trend 最近一次為何沒走 Shioaji（service 每請求一個實例）；只記台股。
+    last_trend_degraded_reason: Optional[str] = None
+
     def __init__(self):
         """初始化股票数据服务"""
         self.repo = StockRepository()
@@ -180,14 +196,22 @@ class StockService:
         （day=5m 分时约延迟，month/year=日线）。失败回 ([], source)。
         """
         # 1) 台股优先 Shioaji（真即时/真交易所历史）
+        self.last_trend_degraded_reason = None
+        reason = None
         try:
-            from data_provider.shioaji_fetcher import shioaji_trend
+            from data_provider.shioaji_fetcher import last_trend_skip_reason, shioaji_trend
 
             pts = shioaji_trend(stock_code, range_)
             if pts:
                 return pts, "shioaji"
+            reason = last_trend_skip_reason() or "no_bars"
         except Exception as e:
-            logger.debug(f"Shioaji 走势({range_}) {stock_code} 降级: {e}")
+            reason = f"exception:{type(e).__name__}"
+        if get_suffix_market(stock_code) == "tw":
+            self.last_trend_degraded_reason = reason
+            # 預期內的降級（年線超過 kbars 上限、盤前與休市無分 K）不算異常。
+            if reason not in {"range_unsupported", "no_bars"}:
+                logger.warning("Shioaji 走势(%s) %s 降级: %s", range_, stock_code, reason)
 
         # 2) yfinance 兜底
         if range_ == "day":
@@ -220,6 +244,8 @@ class StockService:
             if df is None or df.empty:
                 return []
             points: List[Dict[str, Any]] = []
+            cum_volume = 0.0
+            cum_value = 0.0
             for idx, row in df.iterrows():
                 try:
                     val = float(row.get("Close"))
@@ -228,7 +254,15 @@ class StockService:
                 if val != val:  # NaN
                     continue
                 ts = idx.isoformat() if hasattr(idx, "isoformat") else str(idx)
-                points.append({"t": ts, "price": val})
+                point: Dict[str, Any] = {"t": ts, "price": val}
+                volume = _opt_float(row.get("Volume"))
+                if volume is not None:
+                    cum_volume += volume
+                    cum_value += val * volume
+                    point["volume"] = volume
+                    if cum_volume:
+                        point["avg_price"] = round(cum_value / cum_volume, 4)
+                points.append(point)
             return points
         except Exception as e:
             logger.warning(f"分时走势 {stock_code} 失败: {e}")

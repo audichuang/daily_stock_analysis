@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改進] zh-TW 動作用語改為買進、加碼、續抱、減碼、迴避、警報（舊報告的買入、減倉等仍可解析），系統提示詞本體改送繁體並帶詞彙表，報告表頭改為「項目｜數值」「點位｜價格」，沒有讀數的列省略，金額單位改「億」。
 - [改進] 分析提示詞：`analysis_summary` 只寫發生什麼、為何、與前次差異，不寫建議也不引用評分數字；`watch_conditions` 另拆 `entry_conditions`、`exit_triggers`、`pending_events`，舊欄位保留。
 - [修復] 盤前護欄認得「立即減碼」「馬上買進」等繁體寫法，分享圖的動作色認得繁體用語。
+- [新功能] 大盤複盤 payload 追加 `next_day_plan`（LLM 結構化計畫）、`index_trends`（近 20 場與距 MA20／MA60）、`sector_rank`（台股上市類股、美股 GICS ETF）；列表摘要改取報告標題下的一句話結論，`zh-TW` 的燈號理由改繁體。
+- [新功能] 新增 `GET /api/v1/analysis/market-review/default-region` 回傳伺服器實際的複盤預設市場。
+- [改進] `/stocks/indices` 加 60 秒伺服器快取，追加 `source_code`、`market_phase`、`market_open`，美股指數名改繁中並帶 `as_of`、`source`；報價與走勢追加 `source_code`，舊 `source` 字串不變。
+- [改進] `/stocks/{code}/trend` 的點追加 `volume`、`avg_price`，回應追加 `degraded_reason`；Shioaji 非預期降級改記 warning。
+- [新功能] 個股 profile 追加 `position`、`chips`、`news`；台股收盤後頁首成交量與額對齊同場次日 K。
 - [改進] iOS 今日頁新增近期事件總覽，行事曆從工具頁移到這裡；工具頁只留警報與連線捷徑、常用四項，其餘收進「進階」，移除與原生畫面重複的完整分析入口。
 - [新功能] 新增 `AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE`（預設關閉）：API 程序以獨立執行緒只跑警報監控，不需開 `SCHEDULE_ENABLED`、不跑每日分析；即時價規則只在開盤時段評估且報價須屬於今天這一場（確認不了就不通知、不進冷卻；報價不帶時間時，將要觸發才另查最後一筆成交，並用該筆價格重新評估與通知），排程器同時開啟時不重複註冊。
 - [新功能] 新增 `GET /api/v1/alerts/monitor/status` 回報監控實際狀態、上次執行與通知管道；資料中心的 `alert.monitor` 同步認得獨立執行緒。

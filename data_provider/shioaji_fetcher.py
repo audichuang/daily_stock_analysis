@@ -294,21 +294,41 @@ def _normalize_day_trade(val: Any) -> Optional[str]:
 _KBARS_MAX_DAYS = 30
 
 
+_trend_status = threading.local()
+
+
+def last_trend_skip_reason() -> Optional[str]:
+    """這條執行緒上一次 shioaji_trend 回 None 的原因；有資料時為 None。"""
+    return getattr(_trend_status, "reason", None)
+
+
+def _trend_skip(reason: str) -> None:
+    _trend_status.reason = reason
+
+
 def shioaji_trend(stock_code: str, range_: str):
     """台股走势点（真资料，经 Shioaji kbars）。
 
     range_: "day" 今日分钟线 / "month" 近 30 天分钟线 resample 成日线。
     "year" 超过 kbars 30 天上限 -> 返回 None（调用方用 yfinance 日线兜底）。
-    非台股 / 未登入 / 失败 -> None（调用方降级）。返回 [{"t","price"}] 升序或 None。
+    非台股 / 未登入 / 失败 -> None（调用方降级），原因由 last_trend_skip_reason() 取得。
+    返回升序的 [{"t","price"}]；kbars 帶 Volume 時加上 volume（股），day 另加累計均價 avg_price。
     """
-    if range_ not in ("day", "month") or not _HAS_SHIOAJI:
+    _trend_skip("")
+    if range_ not in ("day", "month"):
+        _trend_skip("range_unsupported")
+        return None
+    if not _HAS_SHIOAJI:
+        _trend_skip("sdk_missing")
         return None
     api = _ensure_session()
     if api is None:
+        _trend_skip("no_session")
         return None
     code = ShioajiFetcher._tw_code(stock_code)
     contract = _lookup_contract(api, lambda a: a.Contracts.Stocks[code])
     if contract is None:
+        _trend_skip("no_contract")
         return None
 
     # 以台北日期为准（server 可能跑在 UTC，date.today() 在台北午夜附近会抓错「今天」）
@@ -321,31 +341,58 @@ def shioaji_trend(stock_code: str, range_: str):
         data = {**kb}
     except Exception as e:
         logger.warning("[ShioajiFetcher] kbars %s 失败: %s", code, type(e).__name__)
+        _trend_skip(f"kbars_failed:{type(e).__name__}")
         return None
 
     ts_list = data.get("ts") or []
     close_list = data.get("Close") or []
     if not ts_list:
+        # 開盤前與休市日 kbars 就是空的，這時退回 yfinance 不是故障。
+        _trend_skip("no_bars")
         return None
+    # kbars 的 Volume 單位是張。長度對不上就當沒有讀數，不對位猜。
+    volume_list = data.get("Volume") or []
+    if len(volume_list) != len(ts_list):
+        volume_list = [None] * len(ts_list)
 
     # 按 ts 升序（不假设 SDK 已排序：day 折线需有序、month「当日末根=收盘」需正确）
-    pairs = sorted(zip(ts_list, close_list), key=lambda x: x[0])
+    rows = sorted(zip(ts_list, close_list, volume_list), key=lambda x: x[0])
 
     if range_ == "day":
         points = []
-        for t, c in pairs:
+        cum_shares = 0
+        cum_value = 0.0
+        for t, c, lots in rows:
             iso = _ns_to_iso(t)
-            if iso is not None:
-                points.append({"t": iso, "price": float(c)})
+            if iso is None:
+                continue
+            point = {"t": iso, "price": float(c)}
+            shares = _lots_to_shares(lots)
+            if shares is not None:
+                # 均價用各分鐘 Close×量累計，是近似 VWAP；Amount 的單位 SDK 文件沒有保證，不依賴它。
+                cum_shares += shares
+                cum_value += float(c) * shares
+                point["volume"] = shares
+                if cum_shares:
+                    point["avg_price"] = round(cum_value / cum_shares, 4)
+            points.append(point)
         return points
 
     # month：分钟线 resample 成日线（按台北日期分桶，每日最后一根 Close 即当日收盘）
     by_day: dict = {}
-    for t, c in pairs:
+    volume_by_day: dict = {}
+    for t, c, lots in rows:
         iso = _ns_to_iso(t)
-        if iso is not None:
-            by_day[iso[:10]] = float(c)  # pairs 已升序 -> 同日末值即收盘
-    return [{"t": d, "price": p} for d, p in sorted(by_day.items())]
+        if iso is None:
+            continue
+        by_day[iso[:10]] = float(c)  # rows 已升序 -> 同日末值即收盘
+        shares = _lots_to_shares(lots)
+        if shares is not None:
+            volume_by_day[iso[:10]] = volume_by_day.get(iso[:10], 0) + shares
+    return [
+        {"t": d, "price": p, **({"volume": volume_by_day[d]} if d in volume_by_day else {})}
+        for d, p in sorted(by_day.items())
+    ]
 
 
 # 盯盤指數條：(Shioaji 指數合約 exchange, code, 回傳 code, 名稱)。合約代碼是 IX 編號，不是 001／101。
