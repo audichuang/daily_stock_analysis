@@ -446,6 +446,11 @@ final class DSAMarketUITests: XCTestCase {
             )
             capture("底部內距-\(tab)")
         }
+
+        // Keychain 跨案例保留；登出才不會讓下一個案例看不到登入畫面。
+        tap(app.tabBars.buttons["工具"])
+        tap(app.buttons["tools.logout"])
+        XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
     }
 
     func testPullToRefreshWithSlowQuotesShowsNoError() throws {
