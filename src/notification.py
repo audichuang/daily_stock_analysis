@@ -642,8 +642,8 @@ class NotificationService:
         `fail_count` 沒有任何消費者),報告寫「共分析 13 檔」、整份不含 `2308` 字樣,
         Bark 推送成功——持有台達電的人完全沒有訊號。
 
-        這裡只補「說出來」那一半;LLM 那一半的槓桿是 `LITELLM_MODEL`(見 AGENTS.md §10,
-        `analyze()` 把 `max_output_tokens` 寫死 8192,加預算不是可用的槓桿)。
+        這裡只補「說出來」那一半;LLM 那一半的槓桿是 `LITELLM_MODEL`(見 AGENTS.md §10;
+        個股分析的輸出上限是 `analyzer.ANALYSIS_MAX_OUTPUT_TOKENS`,推理模型回空時加預算不是可用的槓桿)。
         """
         codes = [str(code).strip() for code in (failed_codes or []) if str(code).strip()]
         if not codes:
