@@ -321,6 +321,16 @@ describe('TokenUsagePage', () => {
     expect(await screen.findByTestId('usage-share-mystery_job')).toHaveTextContent('其他（mystery_job）');
   });
 
+  it('keeps the real model name for dated or provider-prefixed claude ids', async () => {
+    get.mockResolvedValue({
+      data: makeDashboardResponse({ recent_calls: [record(1, '2099-06-11T09:30:00', { model: 'anthropic/claude-opus-4-7' })] }),
+    });
+    renderPage();
+    const table = await screen.findByRole('table', { name: '呼叫明細' });
+    expect(within(table).getByText('claude-opus-4-7')).toBeInTheDocument();
+    expect(within(table).queryByText('Claude Sonnet 5.5')).not.toBeInTheDocument();
+  });
+
   it('shows claude models under one readable name and keeps the raw id as the title', async () => {
     get.mockResolvedValue({
       data: makeDashboardResponse({ recent_calls: [record(1, '2099-06-11T09:30:00', { model: 'claude_code_cli' })] }),

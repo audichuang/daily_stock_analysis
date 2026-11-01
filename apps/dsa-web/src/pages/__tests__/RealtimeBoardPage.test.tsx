@@ -508,11 +508,13 @@ describe('RealtimeBoardPage scope', () => {
         : snapshot),
     );
     renderPage();
-    const twd = (await screen.findByText('Day P/L (TW)')).closest('[data-metric-state]')!;
+    const twd = (await screen.findByText('Day P/L NT$')).closest('[data-metric-state]')!;
     expect(twd.textContent).toContain('+1,500');
     expect(twd.textContent).toContain('+6,000');
     // 有一個帳戶算不出就是沒有讀數，不是 0
-    const usd = screen.getByText('Day P/L (US)').closest('[data-metric-state]')!;
+    // 標籤只說幣別範圍：同一基準幣別的帳戶可能持有別的市場，不能推定成台股或美股
+    expect(screen.queryByText(/Day P\/L \((TW|US)\)/)).not.toBeInTheDocument();
+    const usd = screen.getByText('Day P/L US$').closest('[data-metric-state]')!;
     expect(usd).toHaveAttribute('data-metric-state', 'unavailable');
   });
 
@@ -718,8 +720,8 @@ describe('RealtimeBoardPage scope', () => {
       { accountName: 'a', baseCurrency: 'TWD', dayPnl: 1200, unrealizedPnl: 5000, positions: [] },
     ] });
     renderPage();
-    expect(await screen.findByText('Previous session P&L (TW)')).toBeInTheDocument();
-    expect(screen.queryByText('Day P/L (TW)')).not.toBeInTheDocument();
+    expect(await screen.findByText('Previous session P&L NT$')).toBeInTheDocument();
+    expect(screen.queryByText('Day P/L NT$')).not.toBeInTheDocument();
   });
 
   it('keeps the day P/L label while one market is still open', async () => {
@@ -730,8 +732,8 @@ describe('RealtimeBoardPage scope', () => {
     ] });
     renderPage();
     await waitFor(() => expect(screen.getByTestId('board-market-status').textContent).toContain('TW Closed'));
-    expect(await screen.findByText('Day P/L (TW)')).toBeInTheDocument();
-    expect(screen.queryByText('Previous session P&L (TW)')).not.toBeInTheDocument();
+    expect(await screen.findByText('Day P/L NT$')).toBeInTheDocument();
+    expect(screen.queryByText('Previous session P&L NT$')).not.toBeInTheDocument();
   });
 
   it('shows shares and unrealized P/L on the phone card of a holding', async () => {

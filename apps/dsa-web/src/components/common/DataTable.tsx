@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { cn } from '../../utils/cn';
 import { NO_VALUE } from '../../utils/format';
 
@@ -102,6 +102,22 @@ export function DataTable<T>({
   'aria-label': ariaLabel,
 }: DataTableProps<T>): React.ReactElement {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const desktopRef = useRef<HTMLDivElement>(null);
+  const [wide, setWide] = useState(false);
+
+  // overflow-x-clip keeps the header sticky to the page, but a table wider than its box would lose its
+  // right-hand columns. Measure and fall back to a horizontal scroller only when it really overflows.
+  useEffect(() => {
+    const el = desktopRef.current;
+    if (!el) return undefined;
+    const measure = () => setWide(el.scrollWidth > el.clientWidth + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => observer.disconnect();
+  }, [rows.length, columns.length]);
 
   if (rows.length === 0 && emptyState) {
     return <div className={className}>{emptyState}</div>;
@@ -124,12 +140,13 @@ export function DataTable<T>({
       {/* With maxHeight the header sticks inside this scroll box. Without it, overflow-x-clip avoids
           creating a scroll container, so the header sticks to the page below the shell status bar. */}
       <div
+        ref={desktopRef}
         data-testid="data-table-desktop"
         style={maxHeight ? { maxHeight } : undefined}
-        className={cn('hidden md:block', maxHeight ? 'overflow-auto' : 'overflow-x-clip')}
+        className={cn('hidden md:block', maxHeight ? 'overflow-auto' : wide ? 'overflow-x-auto' : 'overflow-x-clip')}
       >
         <table className="w-full border-collapse text-sm" aria-label={ariaLabel}>
-          <thead className={cn('sticky z-10 bg-card', maxHeight ? 'top-0' : 'top-[var(--shell-status-bar-h,0px)]')}>
+          <thead className={cn('sticky z-10 bg-card', maxHeight ? 'top-0' : 'top-[calc(var(--shell-header-height)+var(--shell-status-height))]')}>
             <tr className="border-b border-border/60 text-xs text-secondary-text">
               {columns.map((column) => {
                 const isActive = sort?.key === column.key;

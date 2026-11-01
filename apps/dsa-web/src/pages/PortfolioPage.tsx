@@ -941,6 +941,10 @@ const PortfolioPage: React.FC = () => {
   // 記一筆與匯入在抽屜裡自己選帳戶；刪除紀錄仍只在單一帳戶視圖。
   const writableAccount = accounts.find((item) => item.id === entryAccountId) ?? selectedAccountItem ?? accounts[0];
   const writableAccountId = writableAccount?.id;
+  // 後端 record_trade 未帶 currency 時依帳戶市場決定幣別（portfolio_service._default_currency_for_market），這裡照同一張表標價。
+  const tradeCurrency = writableAccount
+    ? ({ hk: 'HKD', us: 'USD', tw: 'TWD' } as Record<string, string>)[String(writableAccount.market).toLowerCase()] ?? 'CNY'
+    : undefined;
   const canDeleteSelectedAccount = Boolean(selectedAccountItem) && !isLoading && !fxRefreshing && !accountDeleteLoading;
   const totalEventPages = Math.max(1, Math.ceil(eventTotal / DEFAULT_PAGE_SIZE));
   const currentEventCount = eventType === 'trade'
@@ -1869,18 +1873,21 @@ const PortfolioPage: React.FC = () => {
       ? formatUiText(w09Text.approx, { amount: moneyLabel(consolidated, summaryCurrency) })
       : undefined
   );
+  // 帳戶自己缺匯率時，原幣 total* 已含 1:1 冒充的數字，不能當真值顯示。
+  const accountFxMissing = useAccountCurrency && singleAccount?.fxMissing === true;
   const pickMetric = (accountValue: number | null | undefined, consolidated: number | null): number | null => (
     useAccountCurrency
-      ? (typeof accountValue === 'number' && Number.isFinite(accountValue) ? accountValue : null)
+      ? (!accountFxMissing && typeof accountValue === 'number' && Number.isFinite(accountValue) ? accountValue : null)
       : consolidated
   );
+  const showFxMissingText = fxMissing && (!useAccountCurrency || accountFxMissing);
   const amountText = (value: number | null): string => {
     if (value !== null) return moneyDigits(value, metricCurrency);
-    return fxMissing && !useAccountCurrency ? text.fxMissingTotal : NO_VALUE;
+    return showFxMissingText ? text.fxMissingTotal : NO_VALUE;
   };
   const signedNode = (value: number | null): React.ReactNode => (
     value === null
-      ? (fxMissing && !useAccountCurrency ? text.fxMissingTotal : NO_VALUE)
+      ? (showFxMissingText ? text.fxMissingTotal : NO_VALUE)
       : <span className={marketToneClass(value)}>{moneyDigits(value, metricCurrency, true)}</span>
   );
   const metricUnitFor = (value: number | null): string | undefined => (value === null ? undefined : metricUnit);
@@ -2924,8 +2931,8 @@ const PortfolioPage: React.FC = () => {
                   required
                 />
                 <Input
-                  label={writableAccount?.baseCurrency
-                    ? formatUiText(w10Text.tradePrice, { currency: writableAccount.baseCurrency })
+                  label={tradeCurrency
+                    ? formatUiText(w10Text.tradePrice, { currency: tradeCurrency })
                     : w10Text.tradePriceBare}
                   type="number"
                   min="0"
@@ -2956,7 +2963,7 @@ const PortfolioPage: React.FC = () => {
               <p className="text-xs text-secondary">{pageText.feeHint}</p>
               {tradeAmount !== null ? (
                 <p data-testid="portfolio-trade-amount" className="text-sm font-medium tabular-nums text-foreground">
-                  {formatUiText(w10Text.tradeAmount, { amount: formatMoney(tradeAmount, writableAccount?.baseCurrency) })}
+                  {formatUiText(w10Text.tradeAmount, { amount: formatMoney(tradeAmount, tradeCurrency) })}
                 </p>
               ) : null}
               <Button type="submit" className="w-full" disabled={!writableAccountId}>{pageText.submitTrade}</Button>

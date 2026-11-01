@@ -101,7 +101,7 @@ test('board expanded row fits the visible table box at 390px', async ({ page }) 
   expect(box).not.toBeNull();
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.x + box!.width).toBeLessThanOrEqual(390 + 1);
-  const button = expanded.getByRole('button', { name: /Four-pillar|四維度|四维度/ }).last();
+  const button = expanded.getByRole('button', { name: /Four pillars|四維度|四维度/ }).last();
   const b = await button.boundingBox();
   expect(b).not.toBeNull();
   expect(b!.x + b!.width).toBeLessThanOrEqual(390 + 1);

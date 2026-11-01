@@ -45,6 +45,10 @@ export const ChatStockSummaryCard: React.FC<ChatStockSummaryCardProps> = ({
   const showResistance = hasLevel(structured?.resistance);
   const showSupport = hasLevel(structured?.support);
   const cellCount = 2 + (showResistance ? 1 : 0) + (showSupport ? 1 : 0);
+  // 降級來源（fallback）或標記過期的行情不能標「即時」。
+  const quoteBadge = !quote
+    ? null
+    : quote.isStale === true || quote.source === 'fallback' ? chatText.delayed : chatText.live;
   const watchlistLabel = inWatchlist ? chatText.watchlistRemove : chatText.watchlistAdd;
   return (
     <section
@@ -84,7 +88,7 @@ export const ChatStockSummaryCard: React.FC<ChatStockSummaryCardProps> = ({
           label={(
             <>
               {t('chat.summary.price')}
-              <span className="ml-1 text-[10px] text-muted-text">{chatText.live}</span>
+              {quoteBadge ? <span className="ml-1 text-[10px] text-muted-text">{quoteBadge}</span> : null}
             </>
           )}
         >

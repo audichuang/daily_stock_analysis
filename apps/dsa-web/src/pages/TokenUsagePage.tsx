@@ -48,8 +48,8 @@ function getCallTypeLabel(callType: string, t: Translate, text: UsageText): stri
   return callType ? formatUiText(text.callTypeOther, { type: callType }) : text.callTypeOtherBare;
 }
 
-/** Claude backends log a CLI preset id or a dated model id; show one readable name instead. */
-const CLAUDE_MODEL_PATTERN = /^claude[-_]/i;
+/** The Claude Code CLI backend logs its preset id instead of a model; real model ids (claude-opus-4-7) stay as logged. */
+const CLAUDE_MODEL_PATTERN = /^claude[-_]code[-_]cli$/i;
 const displayModelName = (model: string, text: UsageText): string => {
   const name = modelDisplayName(model);
   return CLAUDE_MODEL_PATTERN.test(name) ? text.claudeModel : name;

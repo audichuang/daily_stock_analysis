@@ -108,12 +108,18 @@ test('short desktop rail keeps settings and controls reachable', async ({ page }
   await nav.evaluate((element) => { element.scrollTop = element.scrollHeight; });
   const settings = rail.getByRole('link', { name: '设置', exact: true });
   await expect(settings).toBeInViewport();
-  await expect(rail.getByRole('button', { name: '退出', exact: true })).toBeInViewport();
-  await rail.getByRole('button', { name: '切换主题', exact: true }).click();
-  const themeMenu = rail.getByRole('menu', { name: '主题模式' });
+  // 主題與退出收在「更多」面板；面板的開關鈕本身要在短視窗內碰得到。
+  const more = rail.getByRole('button', { name: '更多', exact: true });
+  await expect(more).toBeInViewport();
+  await more.click();
+  const panel = page.getByTestId('sidebar-more-panel');
+  await expect(panel.getByRole('button', { name: '退出', exact: true })).toBeInViewport();
+  await panel.getByRole('button', { name: '切换主题', exact: true }).click();
+  const themeMenu = page.getByRole('menu', { name: '主题模式' });
   await expect(themeMenu).toBeInViewport();
   await themeMenu.getByRole('menuitemradio', { name: '深色', exact: true }).click();
-  await rail.getByRole('button', { name: '退出', exact: true }).click();
+  if (!(await panel.isVisible())) await more.click();
+  await panel.getByRole('button', { name: '退出', exact: true }).click();
   await expect(page.getByRole('heading', { name: '退出登录', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await expect(page.getByRole('heading', { name: '退出登录', exact: true })).toHaveCount(0);

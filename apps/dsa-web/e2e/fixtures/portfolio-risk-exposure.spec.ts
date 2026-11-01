@@ -101,7 +101,8 @@ for (const state of ['complete', 'missing-price', 'snapshot-error', 'invalid-top
     }
     if (state === 'invalid-top') {
       await expect(dashboard.getByText('Top1: AAPL')).toHaveCount(0);
-      await expect(page.getByText('暂无集中度数据', { exact: true })).toBeVisible();
+      // 沒有可用的集中度列時整張卡不渲染，不再顯示「暂无集中度数据」。
+      await expect(page.getByText('暂无集中度数据', { exact: true })).toHaveCount(0);
     }
     if (state === 'invalid-sector') {
       await expect(dashboard.getByText('Top1: 白酒')).toHaveCount(0);

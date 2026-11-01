@@ -100,7 +100,7 @@ test('invalid LLM drafts and scheduler overrides survive category changes and re
   await page.getByRole('button', { name: /primary/i }).click();
   await page.getByLabel('渠道名称', { exact: true }).fill('');
   await categories.getByRole('button', { name: /基础设置/ }).click();
-  await page.getByRole('link', { name: '告警', exact: true }).click();
+  await page.getByRole('link', { name: '警报', exact: true }).click();
   await expect(page.getByRole('heading', { name: '存在未保存的修改' })).toContainText('存在未保存的修改');
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await categories.getByRole('button', { name: /AI 模型/ }).click();
@@ -111,14 +111,14 @@ test('invalid LLM drafts and scheduler overrides survive category changes and re
   await expect(enabled).toBeChecked();
   await enabled.uncheck(); // Saved=false/runtime=true makes this a local override only.
   await categories.getByRole('button', { name: /基础设置/ }).click();
-  await page.getByRole('link', { name: '告警', exact: true }).click();
+  await page.getByRole('link', { name: '警报', exact: true }).click();
   await expect(page.getByRole('heading', { name: '存在未保存的修改' })).toContainText('存在未保存的修改');
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await categories.getByRole('button', { name: /系统设置/ }).click();
   await expect(enabled).not.toBeChecked();
   await page.getByRole('button', { name: '重置', exact: true }).click();
   await expect(enabled).toBeChecked();
-  await page.getByRole('link', { name: '告警', exact: true }).click();
+  await page.getByRole('link', { name: '警报', exact: true }).click();
   await expect(page).toHaveURL(/\/alerts$/);
 });
 
@@ -157,7 +157,7 @@ test('accepted backup import discards hidden model drafts and scheduler override
   await expect(page.getByLabel('渠道名称', { exact: true })).toHaveValue('primary');
   await categories.getByRole('button', { name: /基础设置/ }).click();
   await expect(page.getByRole('textbox', { name: 'Fixture value' })).toHaveValue('imported');
-  await page.getByRole('link', { name: '告警', exact: true }).click();
+  await page.getByRole('link', { name: '警报', exact: true }).click();
   await expect(page).toHaveURL(/\/alerts$/);
 });
 
@@ -172,7 +172,14 @@ test('logout explicitly confirms draft loss and Cancel preserves the session', a
   await page.getByRole('button', { name: '登录', exact: true }).click();
   const input = page.getByRole('textbox', { name: 'Fixture value' });
   await input.fill('keep-until-confirmed');
-  await page.getByRole('button', { name: '退出', exact: true }).click();
+  // 退出收在側欄「更多」面板裡，點完會收起，所以每次都先打開。
+  const rail = page.getByRole('complementary', { name: '桌面侧边导航' });
+  const openMore = async () => {
+    await rail.getByRole('button', { name: '更多', exact: true }).click();
+    await expect(page.getByTestId('sidebar-more-panel')).toBeVisible();
+  };
+  await openMore();
+  await page.getByTestId('sidebar-more-panel').getByRole('button', { name: '退出', exact: true }).click();
   await expect(page.getByText(/退出会丢弃本页未保存的设置/)).toBeVisible();
   const path = testInfo.outputPath('settings-logout-confirm.png');
   await page.screenshot({ path, fullPage: true, animations: 'disabled' });
@@ -180,7 +187,8 @@ test('logout explicitly confirms draft loss and Cancel preserves the session', a
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await expect(input).toHaveValue('keep-until-confirmed');
   expect(logoutRequests).toBe(0);
-  await page.getByRole('button', { name: '退出', exact: true }).click();
+  await openMore();
+  await page.getByTestId('sidebar-more-panel').getByRole('button', { name: '退出', exact: true }).click();
   await page.getByRole('button', { name: '确认退出', exact: true }).click();
   await expect(page).toHaveURL(/\/login\?redirect=/);
   expect(logoutRequests).toBe(1);

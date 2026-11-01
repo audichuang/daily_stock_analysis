@@ -1219,12 +1219,10 @@ const RealtimeBoardPage: React.FC = () => {
     });
   };
 
-  // 今日損益標籤寫清範圍；兩市都休市時改叫上一交易日損益
-  const dayPnlLabel = (currency: string): string => {
-    if (currency === 'TWD') return bothClosed ? bt.prevPnlTw : bt.dayPnlTw;
-    if (currency === 'USD') return bothClosed ? bt.prevPnlUs : bt.dayPnlUs;
-    return formatUiText(bothClosed ? bt.prevPnlOther : bt.dayPnlOther, { currency: CURRENCY_LABEL[currency] ?? currency });
-  };
+  // 帳戶按基準幣別加總，標籤只能寫幣別（帳戶不限定市場）；兩市都休市時改叫上一交易日損益
+  const dayPnlLabel = (currency: string): string => (
+    formatUiText(bothClosed ? bt.prevPnlOther : bt.dayPnlOther, { currency: CURRENCY_LABEL[currency] ?? currency })
+  );
 
   const marketStatusText = (market: 'tw' | 'us') => {
     const open = marketOpen[market];

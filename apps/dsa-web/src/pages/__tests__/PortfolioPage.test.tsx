@@ -2555,6 +2555,54 @@ describe('PortfolioPage FX refresh', () => {
     expect(dashboard.getAllByText('100.00%').length).toBeGreaterThan(0);
   });
 
+  it('labels trade price and amount with the market currency, not the account base currency', async () => {
+    window.history.replaceState({}, '', '/portfolio?entry=trade');
+    getAccounts.mockResolvedValue(makeAccounts([{ id: 1, name: 'Main', market: 'us', baseCurrency: 'TWD' }]));
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    fireEvent.change(screen.getByLabelText('数量（股）'), { target: { value: '10' } });
+    fireEvent.change(await screen.findByLabelText('成交价（USD）'), { target: { value: '40' } });
+    expect(screen.queryByLabelText('成交价（TWD）')).not.toBeInTheDocument();
+    expect(screen.getByTestId('portfolio-trade-amount')).toHaveTextContent('USD 400.00');
+    expect(screen.getByTestId('portfolio-trade-amount')).not.toHaveTextContent('TWD');
+  });
+
+  it('does not show a 1:1 fallback account total as a real value when the account has missing FX', async () => {
+    getAccounts.mockResolvedValue(makeAccounts([{ id: 1, name: 'Main', market: 'us', baseCurrency: 'USD' }]));
+    const base = makeConsolidatedSnapshot({
+      consolidatedEquityBase: null,
+      consolidatedMarketValueBase: null,
+      consolidatedCashBase: null,
+      consolidatedUnrealizedPnlBase: null,
+      consolidatedRealizedPnlBase: null,
+      consolidatedDayPnlBase: null,
+      consolidatedFundValueBase: null,
+      consolidatedFundDayPnlBase: null,
+      fxMissing: true,
+      consolidatedFxMissing: true,
+      accounts: [{
+        ...makeSnapshot({ fxStale: false }).accounts[0],
+        baseCurrency: 'USD',
+        totalEquity: 1234.5,
+        totalMarketValue: 1234.5,
+        totalCash: 0,
+        fxMissing: true,
+      }],
+    });
+    getSnapshot.mockResolvedValue(base);
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+    fireEvent.click(await screen.findByRole('radio', { name: 'Main' }));
+    await waitFor(() => expect(getSnapshot).toHaveBeenLastCalledWith(snapshotQuery(1)));
+
+    expect(await screen.findAllByText('缺汇率')).not.toHaveLength(0);
+    expect(screen.queryByText('1,234.50')).not.toBeInTheDocument();
+    expect(screen.queryByText(/1,234\.5/)).not.toBeInTheDocument();
+  });
+
   it('lists only anomalies in the pending section and jumps to the row', async () => {
     const scrollIntoView = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoView;
@@ -2994,8 +3042,9 @@ describe('PortfolioPage FX refresh', () => {
     expect(screen.getByRole('button', { name: '提交交易' })).toBeInTheDocument();
     expect(window.location.search).toBe('?entry=trade');
     fireEvent.change(screen.getByLabelText('数量（股）'), { target: { value: '1000' } });
-    fireEvent.change(await screen.findByLabelText('成交价（CNY）'), { target: { value: '52.5' } });
-    expect(screen.getByTestId('portfolio-trade-amount')).toHaveTextContent('成交金额 CNY 52,500.00');
+    // makeAccounts() defaults to a US-market account with CNY base: ledger rows follow the market currency (USD).
+    fireEvent.change(await screen.findByLabelText('成交价（USD）'), { target: { value: '52.5' } });
+    expect(screen.getByTestId('portfolio-trade-amount')).toHaveTextContent('成交金额 USD 52,500.00');
 
     fireEvent.click(screen.getByRole('button', { name: '关闭抽屉' }));
 

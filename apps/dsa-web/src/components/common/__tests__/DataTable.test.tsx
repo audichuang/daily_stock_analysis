@@ -66,7 +66,7 @@ describe('DataTable 桌機', () => {
 
   it('表頭與 sticky 欄固定，minWidth 生效', () => {
     setup();
-    expect(desktop().getAllByRole('rowgroup')[0]).toHaveClass('sticky', 'top-[var(--shell-status-bar-h,0px)]');
+    expect(desktop().getAllByRole('rowgroup')[0]).toHaveClass('sticky', 'top-[calc(var(--shell-header-height)+var(--shell-status-height))]');
     expect(desktop().getByRole('columnheader', { name: '代號' })).toHaveClass('sticky', 'left-0');
     expect(desktop().getByRole('columnheader', { name: '產業' })).toHaveStyle({ minWidth: '120px' });
   });
@@ -79,6 +79,20 @@ describe('DataTable 桌機', () => {
     expect(container).not.toHaveClass('overflow-auto');
     expect(container).not.toHaveClass('overflow-x-auto');
     expect(container.style.maxHeight).toBe('');
+  });
+
+  it('表格比容器寬時改成可橫向捲動，才拿得到右側欄位', () => {
+    const widthSpy = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(1029);
+    const clientSpy = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(702);
+    try {
+      setup();
+      const container = screen.getByTestId('data-table-desktop');
+      expect(container).toHaveClass('overflow-x-auto');
+      expect(container).not.toHaveClass('overflow-x-clip');
+    } finally {
+      widthSpy.mockRestore();
+      clientSpy.mockRestore();
+    }
   });
 
   it('有給 maxHeight 時維持內層捲動、表頭貼容器頂端', () => {
