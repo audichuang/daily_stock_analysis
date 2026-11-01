@@ -876,6 +876,10 @@ class ScreeningStrategyResponse(BaseModel):
     market_scope: List[str] = Field(default_factory=list)
     market: str = ""
     analysis_skills: List[str] = Field(default_factory=list)
+    name_zh_tw: str = ""
+    description_zh_tw: str = ""
+    market_conditions: Dict[str, List[Dict[str, Any]]] = Field(default_factory=dict)
+    conditions: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ScreeningService:
@@ -904,10 +908,18 @@ class ScreeningService:
             payload["diagnostics"] = diagnostics
         return payload
 
-    def strategies(self) -> Dict[str, Any]:
+    def strategies(self, *, market: str = "") -> Dict[str, Any]:
         _ensure_screening_enabled(self.config)
         _ensure_screening_available_for_use()
         strategies = _list_strategies()
+        market_key = _env_text(market).lower()
+        if market_key:
+            # 門檻有幣別語意，沒開放給該市場的策略不回傳，畫面就不會選到。
+            strategies = [
+                {**item, "conditions": item["market_conditions"].get(market_key, [])}
+                for item in strategies
+                if market_key in item["market_scope"]
+            ]
         return {
             "enabled": True,
             "strategies": strategies,
@@ -972,10 +984,17 @@ class ScreeningService:
         top: int = 12,
         refresh: bool = False,
         include_details: bool = False,
+        market: str = "",
     ) -> Dict[str, Any]:
         _ensure_screening_enabled(self.config)
         _ensure_screening_available_for_use()
         provider_name, provider_arg = _resolve_hotspot_provider(provider)
+        if _env_text(market).lower() not in {"", "cn"}:
+            # 熱點來源都是 A 股板塊，不把 A 股題材當成台股、美股的熱點。
+            return _empty_screening_hotspot_payload(
+                provider=provider_name,
+                message="熱點來源目前只有 A 股，此市場沒有熱點資料。",
+            )
         top_count = max(1, min(int(top or 12), 50))
         cache_top_count = max(top_count, DSA_SCREENING_MIN_HOTSPOT_CACHE_COUNT)
         if not refresh:
@@ -1293,6 +1312,10 @@ class ScreeningService:
             "snapshot_count": raw_data.get("snapshot_count"),
             "snapshot_source": raw_data.get("snapshot_source") or "",
             "after_filter_count": raw_data.get("after_filter_count"),
+            "universe_source": raw_data.get("universe_source") or "",
+            "universe_size": raw_data.get("universe_size"),
+            "snapshot_date": raw_data.get("snapshot_date") or "",
+            "funnel": _build_screening_funnel(raw_data, candidate_count=len(selected)),
             "llm_ranked": raw_data.get("llm_ranked"),
             "llm_market_view": raw_data.get("llm_market_view") or "",
             "llm_selection_logic": raw_data.get("llm_selection_logic") or "",
@@ -1323,6 +1346,21 @@ class ScreeningService:
         if self.db_manager is not None:
             self.db_manager.save_screening_run(response)
         return response
+
+
+def _build_screening_funnel(raw_data: Dict[str, Any], *, candidate_count: int) -> List[Dict[str, Any]]:
+    """選股漏斗：每一層剩幾檔。缺的層不列，不用 0 頂替（0 是「全被篩掉」）。"""
+    snapshot_filter_count = raw_data.get("snapshot_filter_count")
+    after_filter_count = raw_data.get("after_filter_count")
+    stages = [("snapshot", "母體", raw_data.get("snapshot_count"))]
+    if snapshot_filter_count is None:
+        stages.append(("hard_filter", "條件篩選後", after_filter_count))
+    else:
+        stages.append(("hard_filter", "條件篩選後", snapshot_filter_count))
+        if raw_data.get("daily_enriched"):
+            stages.append(("daily_filter", "日線條件後", after_filter_count))
+    stages.append(("selected", "入選", candidate_count))
+    return [{"stage": stage, "label": label, "count": count} for stage, label, count in stages if count is not None]
 
 
 def _emit_screening_progress(
@@ -1664,6 +1702,11 @@ def _normalize_strategy(raw: Any) -> Dict[str, Any]:
         tag=str(item.get("tag") or category),
         tags=[str(tag) for tag in tags],
         market_scope=[str(market) for market in market_scope],
+        name_zh_tw=str(item.get("display_name_zh_tw") or name),
+        description_zh_tw=str(item.get("description_zh_tw") or item.get("description") or ""),
+        market_conditions=(
+            item["market_conditions"] if isinstance(item.get("market_conditions"), dict) else {}
+        ),
         market=str(item.get("market") or item.get("market_id") or ""),
         analysis_skills=_list_text_values(
             item.get("analysis_skills") or item.get("analysisSkills")

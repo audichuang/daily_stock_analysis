@@ -1532,6 +1532,32 @@ class TestGetLLMUsageSummary(unittest.TestCase):
         self.assertEqual(by_model["gemini/gemini-2.5-flash"]["completion_tokens"], 600)
         self.assertEqual(by_model["gemini/gemini-2.5-flash"]["max_total_tokens"], 300)
 
+    def test_records_filter_by_call_type_and_page_with_offset(self):
+        from_dt, to_dt = self._today_range()
+        agent = self.db.get_llm_usage_records(from_dt, to_dt, limit=10, call_type="agent")
+        self.assertEqual(len(agent), 2)
+        self.assertEqual({row["call_type"] for row in agent}, {"agent"})
+        self.assertEqual(self.db.count_llm_usage_records(from_dt, to_dt, call_type="agent"), 2)
+        self.assertEqual(self.db.count_llm_usage_records(from_dt, to_dt), 5)
+        first = self.db.get_llm_usage_records(from_dt, to_dt, limit=2)
+        second = self.db.get_llm_usage_records(from_dt, to_dt, limit=2, offset=2)
+        self.assertFalse({row["id"] for row in first} & {row["id"] for row in second})
+
+    def test_records_sort_by_tokens(self):
+        from_dt, to_dt = self._today_range()
+        rows = self.db.get_llm_usage_records(from_dt, to_dt, limit=5, sort="tokens")
+        self.assertEqual(rows[0]["total_tokens"], 300)
+        self.assertEqual(rows[-1]["total_tokens"], 150)
+
+    def test_breakdown_groups_by_day_and_model(self):
+        from_dt, to_dt = self._today_range()
+        rows = self.db.get_llm_usage_breakdown(from_dt, to_dt)
+        by_model = {row["model"]: row for row in rows}
+        self.assertEqual(by_model["gemini/gemini-2.5-flash"]["calls"], 3)
+        self.assertEqual(by_model["openai/gpt-4o"]["total_tokens"], 300)
+        self.assertEqual(by_model["openai/gpt-4o"]["cache_known_prompt_tokens"], 0)
+        self.assertEqual(by_model["openai/gpt-4o"]["day"], from_dt.date().isoformat())
+
     def test_get_llm_usage_records_returns_recent_rows_with_limit(self):
         from_dt, to_dt = self._today_range()
         rows = self.db.get_llm_usage_records(from_dt, to_dt, limit=2)

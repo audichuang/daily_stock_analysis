@@ -41,6 +41,7 @@ from sqlalchemy import (
     text,
     select,
     and_,
+    case,
     or_,
     delete,
     desc,
@@ -4992,14 +4993,22 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
         from_dt: datetime,
         to_dt: datetime,
         limit: int = 50,
+        offset: int = 0,
+        call_type: Optional[str] = None,
+        sort: str = "newest",
     ) -> List[Dict[str, Any]]:
-        """Return recent LLM usage audit rows between from_dt and to_dt.
+        """Return LLM usage audit rows between from_dt and to_dt.
 
         Each row contains id, call_type, model, stock_code, prompt_tokens,
-        completion_tokens, total_tokens, and called_at. Results are ordered by
-        newest call first, and limit is clamped to the public API range.
+        completion_tokens, total_tokens, and called_at, plus provider, transport
+        and cache_read_tokens. Newest call first unless ``sort`` is ``oldest``
+        or ``tokens``; limit is clamped to the public API range.
         """
         normalized_limit = max(1, min(int(limit or 50), 200))
+        order_by = {
+            "oldest": (LLMUsage.called_at, LLMUsage.id),
+            "tokens": (desc(LLMUsage.total_tokens), desc(LLMUsage.called_at), desc(LLMUsage.id)),
+        }.get(sort, (desc(LLMUsage.called_at), desc(LLMUsage.id)))
         with self.session_scope() as session:
             rows = session.execute(
                 select(
@@ -5011,14 +5020,13 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     LLMUsage.completion_tokens,
                     LLMUsage.total_tokens,
                     LLMUsage.called_at,
+                    LLMUsage.provider,
+                    LLMUsage.transport,
+                    LLMUsage.normalized_cache_read_tokens,
                 )
-                .where(
-                    and_(
-                        LLMUsage.called_at >= from_dt,
-                        LLMUsage.called_at <= to_dt,
-                    )
-                )
-                .order_by(desc(LLMUsage.called_at), desc(LLMUsage.id))
+                .where(self._llm_usage_filter(from_dt, to_dt, call_type))
+                .order_by(*order_by)
+                .offset(max(int(offset or 0), 0))
                 .limit(normalized_limit)
             ).all()
 
@@ -5032,6 +5040,70 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 "completion_tokens": r.completion_tokens,
                 "total_tokens": r.total_tokens,
                 "called_at": r.called_at,
+                "provider": r.provider,
+                "transport": r.transport,
+                "cache_read_tokens": r.normalized_cache_read_tokens,
+            }
+            for r in rows
+        ]
+
+    @staticmethod
+    def _llm_usage_filter(from_dt: datetime, to_dt: datetime, call_type: Optional[str] = None):
+        conditions = [LLMUsage.called_at >= from_dt, LLMUsage.called_at <= to_dt]
+        if call_type:
+            conditions.append(LLMUsage.call_type == call_type)
+        return and_(*conditions)
+
+    def count_llm_usage_records(
+        self,
+        from_dt: datetime,
+        to_dt: datetime,
+        call_type: Optional[str] = None,
+    ) -> int:
+        """Return how many audit rows match, for paginating the record list."""
+        with self.session_scope() as session:
+            count = session.execute(
+                select(func.count(LLMUsage.id)).where(self._llm_usage_filter(from_dt, to_dt, call_type))
+            ).scalar()
+        return int(count or 0)
+
+    def get_llm_usage_breakdown(self, from_dt: datetime, to_dt: datetime) -> List[Dict[str, Any]]:
+        """Return token totals grouped by day, model and channel; see llm_usage_analytics."""
+        day = func.date(LLMUsage.called_at)
+        # 只算有回報快取讀數的呼叫：沒回報是不知道，不能算成沒命中而拉低命中率。
+        cache_known_prompt = func.sum(
+            case((LLMUsage.normalized_cache_read_tokens.is_not(None), LLMUsage.prompt_tokens), else_=0)
+        )
+        with self.session_scope() as session:
+            rows = session.execute(
+                select(
+                    day.label("day"),
+                    LLMUsage.model,
+                    LLMUsage.provider,
+                    LLMUsage.transport,
+                    func.count(LLMUsage.id).label("calls"),
+                    func.coalesce(func.sum(LLMUsage.prompt_tokens), 0).label("prompt_tokens"),
+                    func.coalesce(func.sum(LLMUsage.completion_tokens), 0).label("completion_tokens"),
+                    func.coalesce(func.sum(LLMUsage.total_tokens), 0).label("total_tokens"),
+                    func.coalesce(func.sum(LLMUsage.normalized_cache_read_tokens), 0).label("cache_read_tokens"),
+                    func.coalesce(cache_known_prompt, 0).label("cache_known_prompt_tokens"),
+                )
+                .where(self._llm_usage_filter(from_dt, to_dt))
+                .group_by(day, LLMUsage.model, LLMUsage.provider, LLMUsage.transport)
+                .order_by(day)
+            ).all()
+        return [
+            {
+                "day": str(r.day),
+                "model": r.model,
+                "provider": r.provider,
+                "transport": r.transport,
+                "calls": int(r.calls),
+                "prompt_tokens": int(r.prompt_tokens),
+                "completion_tokens": int(r.completion_tokens),
+                "total_tokens": int(r.total_tokens),
+                "cache_read_tokens": int(r.cache_read_tokens),
+                "cache_known_prompt_tokens": int(r.cache_known_prompt_tokens),
             }
             for r in rows
         ]

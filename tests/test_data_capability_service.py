@@ -5,14 +5,24 @@ from __future__ import annotations
 
 import json
 import tempfile
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.app import create_app
+from src.services import data_capability_service as capability_module
 from src.services.data_capability_service import DataCapabilityService
+
+
+@pytest.fixture(autouse=True)
+def _no_market_freshness(monkeypatch):
+    """conftest 不中和 DATABASE_URL：沒注入 loader 的測試不能連到真的 market schema。"""
+    monkeypatch.setattr(capability_module, "_load_market_freshness", lambda: {})
+    monkeypatch.setattr(capability_module, "_realtime_last_success", lambda: None)
 
 
 class _Fetcher:
@@ -1081,3 +1091,104 @@ def test_marketdb_without_database_url_is_unconfigured() -> None:
     tw_daily = _dataset(overview, "kline.daily")["coverage"]["markets"]["tw"]
     assert tw_daily["source"] == "yfinance"
     assert tw_daily["fallback_from"] == ["marketdb"]
+
+
+def _freshness_service(loader, realtime=lambda: None, **config_kwargs):
+    return DataCapabilityService(
+        config=_config(**config_kwargs),
+        fetcher_manager=SimpleNamespace(_fetchers=[]),
+        market_freshness_loader=loader,
+        realtime_last_success_loader=realtime,
+    )
+
+
+def _dataset(service, name):
+    return next(item for item in service.get_overview()["datasets"] if item["dataset"] == name)
+
+
+def test_market_dataset_reports_real_date_and_is_current():
+    session = date(2099, 1, 5)
+    item = _dataset(
+        _freshness_service(lambda: {"latest": {"kline.daily": session}, "expected": session}), "kline.daily",
+    )
+    assert item["data_date"] == "2099-01-05"
+    assert item["data_market"] == "tw"
+    assert item["last_success"] == "2099-01-05"
+    assert item["is_current"] is True
+    assert item["stale"] is False
+
+
+def test_market_dataset_behind_expected_session_is_stale_without_changing_status():
+    fresh = _dataset(
+        _freshness_service(lambda: {"latest": {"kline.daily": date(2099, 1, 5)}, "expected": date(2099, 1, 5)}),
+        "kline.daily",
+    )
+    behind = _dataset(
+        _freshness_service(lambda: {"latest": {"kline.daily": date(2099, 1, 2)}, "expected": date(2099, 1, 5)}),
+        "kline.daily",
+    )
+    assert behind["is_current"] is False
+    assert behind["stale"] is True
+    assert behind["status"] == fresh["status"]
+
+
+def test_unknown_freshness_is_null_not_current():
+    item = _dataset(_freshness_service(lambda: {}), "kline.daily")
+    assert item["data_date"] is None
+    assert item["is_current"] is None
+    assert item["last_success"] is None
+    no_calendar = _dataset(
+        _freshness_service(lambda: {"latest": {"kline.daily": date(2099, 1, 5)}, "expected": None}), "kline.daily",
+    )
+    assert no_calendar["data_date"] == "2099-01-05"
+    assert no_calendar["is_current"] is None
+
+
+def test_disabled_dataset_returns_reason_code():
+    item = _dataset(_freshness_service(lambda: {}, enable_realtime_quote=False), "quote.realtime")
+    assert item["status"] == "unavailable"
+    assert item["reason"] == "realtime_quote_disabled"
+    assert _dataset(_freshness_service(lambda: {}), "alert.monitor")["reason"] == "agent_event_monitor_disabled"
+    # 反向：開著的資料集沒有 reason。
+    assert _dataset(_freshness_service(lambda: {}), "quote.realtime")["reason"] is None
+
+
+def test_fallback_active_follows_fallback_from():
+    service = _freshness_service(lambda: {})
+    annotated = service._annotate_datasets([
+        {"dataset": "x", "fallback_from": ["a"], "warnings": []},
+        {"dataset": "y", "fallback_from": [], "warnings": []},
+    ])
+    assert annotated[0]["fallback_active"] is True
+    assert annotated[1]["fallback_active"] is False
+
+
+def test_realtime_last_success_comes_from_memory_state():
+    stamp = "2099-01-05T09:30:00+08:00"
+    assert _dataset(_freshness_service(lambda: {}, realtime=lambda: stamp), "quote.realtime")["last_success"] == stamp
+    disabled = _dataset(
+        _freshness_service(lambda: {}, realtime=lambda: stamp, enable_realtime_quote=False), "quote.realtime",
+    )
+    assert disabled["last_success"] is None
+
+
+def test_circuit_breaker_records_last_success_only_on_success():
+    from data_provider.realtime_types import CircuitBreaker
+
+    breaker = CircuitBreaker()
+    breaker.record_failure("a")
+    assert breaker.last_success_times() == {}
+    breaker.record_success("a")
+    assert breaker.last_success_times()["a"] > 0
+
+
+def test_screening_last_success_uses_source_health_timestamp():
+    assert DataCapabilityService._screening_last_success({}) is None
+    assert DataCapabilityService._screening_last_success({"snapshot": {"sina": {"last_success_at": 0}}}) is None
+    assert DataCapabilityService._screening_last_success({"snapshot": {"sina": {"last_success_at": 100.0}}})
+
+
+def test_freshness_loader_without_database_url_skips_db(monkeypatch):
+    monkeypatch.undo()  # 拿回 autouse fixture 換掉的真函式
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    assert capability_module._load_market_freshness() == {}

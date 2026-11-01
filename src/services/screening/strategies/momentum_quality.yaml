@@ -4,6 +4,8 @@
 name: momentum_quality
 display_name: 趋势质量
 description: 兼顾趋势确认和基本面质量的中线候选发现
+display_name_zh_tw: 趨勢品質
+description_zh_tw: 兼顧趨勢確認與基本面品質的中線候選
 version: "1.1"
 category: framework
 tags: [momentum, quality, trend, llm_friendly]
@@ -18,7 +20,7 @@ style:
 
 screening:
   enabled: true
-  market_scope: [cn]
+  market_scope: [cn, tw, us]
   hard_filters:
     exclude_st: true
     amount_min: 200000000
@@ -73,3 +75,26 @@ screening:
     2. 基本面质量（估值、资金活跃、稳定性）能为趋势提供支撑
     3. 避免单一题材过度集中，兼顾不同风格的趋势机会
   max_output: 5
+  # 門檻依幣別另設，整組取代上面的人民幣門檻；exclude_st 比對名稱裡的 ST／退，只對 A 股有意義。
+  market_overrides:
+    tw:
+      hard_filters:
+        exclude_st: false
+        amount_min: 200000000
+        pe_ttm_min: 0
+        pe_ttm_max: 60
+        pb_min: 0
+        pb_max: 8.0
+        change_pct_min: -3.5
+        change_pct_max: 7.5
+        price_min: 10
+    us:
+      hard_filters:
+        exclude_st: false
+        amount_min: 50000000
+        market_cap_min: 2000000000
+        pe_ttm_min: 0
+        pe_ttm_max: 60
+        change_pct_min: -3.5
+        change_pct_max: 7.5
+        price_min: 5

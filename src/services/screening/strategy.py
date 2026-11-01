@@ -29,6 +29,8 @@ _TOP_LEVEL_KEYS = {
     "analysis_skills",
     "style",
     "screening",
+    "display_name_zh_tw",
+    "description_zh_tw",
 }
 _SCREENING_KEYS = {
     "enabled",
@@ -43,7 +45,9 @@ _SCREENING_KEYS = {
     "event_profile",
     "ranking_hints",
     "max_output",
+    "market_overrides",
 }
+_MARKET_OVERRIDE_KEYS = {"hard_filters"}
 _HARD_FILTER_KEYS = set(HardFilterConfig.__dataclass_fields__.keys())
 _SCORING_PROFILE_KEYS = {
     "momentum_base",
@@ -231,6 +235,7 @@ def load_strategy(filepath: Path) -> Strategy:
         ),
         ranking_hints=screening_data.get("ranking_hints", ""),
         max_output=screening_data.get("max_output", 5),
+        market_hard_filters=_market_hard_filters(screening_data, filepath),
     )
 
     return Strategy(
@@ -243,7 +248,27 @@ def load_strategy(filepath: Path) -> Strategy:
         analysis_skills=_string_list(data.get("analysis_skills")),
         style=_strategy_style(data, filepath),
         screening=screening,
+        display_name_zh_tw=str(data.get("display_name_zh_tw") or ""),
+        description_zh_tw=str(data.get("description_zh_tw") or ""),
     )
+
+
+def _market_hard_filters(screening_data: dict, filepath: Path) -> dict[str, HardFilterConfig]:
+    """解析 ``market_overrides``；門檻整組取代，鍵與 hard_filters 同一份白名單。"""
+    overrides = screening_data.get("market_overrides") or {}
+    if not isinstance(overrides, dict):
+        raise ValueError(f"Invalid market_overrides section in strategy file: {filepath}")
+    result: dict[str, HardFilterConfig] = {}
+    for market, section in overrides.items():
+        if not isinstance(section, dict):
+            raise ValueError(f"Invalid market_overrides.{market} in strategy file: {filepath}")
+        _raise_unknown_keys(section, _MARKET_OVERRIDE_KEYS, f"market_overrides.{market} of {filepath.name}")
+        filters = section.get("hard_filters")
+        if not isinstance(filters, dict):
+            raise ValueError(f"Missing market_overrides.{market}.hard_filters in strategy file: {filepath}")
+        _raise_unknown_keys(filters, _HARD_FILTER_KEYS, f"market_overrides.{market}.hard_filters of {filepath.name}")
+        result[str(market)] = HardFilterConfig(**filters)
+    return result
 
 
 def load_all_strategies(strategies_dir: Path) -> dict[str, Strategy]:
@@ -313,6 +338,12 @@ def list_strategies(strategies_dir: Path | None = None) -> list[StrategyInfo]:
             factor_weights={key: float(value) for key, value in s.screening.factor_weights.items()},
             profile_keys=_strategy_profile_keys(s.screening),
             style=_style_to_dict(s.style),
+            display_name_zh_tw=s.display_name_zh_tw or s.display_name,
+            description_zh_tw=s.description_zh_tw or s.description,
+            market_conditions={
+                market: hard_filter_conditions(s.screening.hard_filters_for(market), market)
+                for market in s.screening.market_scope
+            },
         ))
     return infos
 
@@ -709,6 +740,67 @@ def _diff_has_changes(value: object) -> bool:
         if isinstance(item, dict) and _diff_has_changes(item):
             return True
     return False
+
+
+_MARKET_CURRENCY = {"cn": "CNY", "tw": "TWD", "us": "USD"}
+# (繁中條件名, 單位)；currency 依市場換成幣別。順序就是畫面的條件順序。
+_CONDITION_LABELS: dict[str, tuple[str, str]] = {
+    "exclude_st": ("排除風險警示股", ""),
+    "amount_min": ("成交金額下限", "currency"),
+    "price_min": ("股價下限", "currency"),
+    "price_max": ("股價上限", "currency"),
+    "market_cap_min": ("市值下限", "currency"),
+    "market_cap_max": ("市值上限", "currency"),
+    "pe_ttm_min": ("本益比下限", "倍"),
+    "pe_ttm_max": ("本益比上限", "倍"),
+    "pb_min": ("股價淨值比下限", "倍"),
+    "pb_max": ("股價淨值比上限", "倍"),
+    "volume_ratio_min": ("量比下限", "倍"),
+    "turnover_rate_min": ("週轉率下限", "%"),
+    "change_pct_min": ("當日漲跌幅下限", "%"),
+    "change_pct_max": ("當日漲跌幅上限", "%"),
+    "change_60d_min": ("60 日漲跌幅下限", "%"),
+    "change_60d_max": ("60 日漲跌幅上限", "%"),
+    "require_ma_bullish": ("均線多頭排列", ""),
+    "require_price_above_ma20": ("收盤站上 20 日線", ""),
+    "signal_score_min": ("技術訊號分數下限", "分"),
+    "macd_status_whitelist": ("MACD 狀態", ""),
+    "rsi_status_whitelist": ("RSI 狀態", ""),
+    "breakout_20d_pct_min": ("距 20 日高點下限", "%"),
+    "breakout_20d_pct_max": ("距 20 日高點上限", "%"),
+    "range_20d_pct_max": ("20 日振幅上限", "%"),
+    "volume_ratio_20d_min": ("相對 20 日均量下限", "倍"),
+    "volume_ratio_20d_max": ("相對 20 日均量上限", "倍"),
+    "body_pct_min": ("K 棒實體下限", "%"),
+    "body_pct_max": ("K 棒實體上限", "%"),
+    "pullback_to_ma20_pct_min": ("距 20 日線下限", "%"),
+    "pullback_to_ma20_pct_max": ("距 20 日線上限", "%"),
+    "consolidation_days_20d_min": ("20 日內整理天數下限", "天"),
+    "consolidation_days_20d_max": ("20 日內整理天數上限", "天"),
+    "volatility_20d_pct_min": ("20 日波動率下限", "%"),
+    "volatility_20d_pct_max": ("20 日波動率上限", "%"),
+    "max_drawdown_20d_pct_min": ("20 日最大回撤下限", "%"),
+    "max_drawdown_20d_pct_max": ("20 日最大回撤上限", "%"),
+    "atr_20_pct_min": ("20 日 ATR 下限", "%"),
+    "atr_20_pct_max": ("20 日 ATR 上限", "%"),
+}
+
+
+def hard_filter_conditions(filters: HardFilterConfig, market: str) -> list[dict[str, object]]:
+    """把生效中的門檻轉成畫面用的條件清單（key、繁中名稱、值、單位）。"""
+    currency = _MARKET_CURRENCY.get(market, "")
+    conditions: list[dict[str, object]] = []
+    for key, (label, unit) in _CONDITION_LABELS.items():
+        value = getattr(filters, key)
+        if value is None or value is False or value == []:
+            continue
+        conditions.append({
+            "key": key,
+            "label": label,
+            "value": value,
+            "unit": currency if unit == "currency" else unit,
+        })
+    return conditions
 
 
 def _active_filter_values(filters_config: HardFilterConfig) -> dict[str, object]:

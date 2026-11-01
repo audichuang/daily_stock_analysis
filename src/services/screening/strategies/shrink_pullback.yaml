@@ -4,6 +4,8 @@
 name: shrink_pullback
 display_name: 缩量回踩
 description: 上升趋势中缩量回踩均线支撑，趋势延续的入场机会
+display_name_zh_tw: 量縮回檔
+description_zh_tw: 上升趨勢中量縮回檔至均線支撐，趨勢延續的進場機會
 version: "1.1"
 category: trend
 tags: [trend, pullback, daily_k]
@@ -18,7 +20,7 @@ style:
 
 screening:
   enabled: true
-  market_scope: [cn]
+  market_scope: [cn, tw, us]
   hard_filters:
     exclude_st: true
     amount_min: 80000000
@@ -73,3 +75,31 @@ screening:
     2. 缩量明显，洗盘而非出货
     3. 近期无重大利空
   max_output: 5
+  # 門檻依幣別另設，整組取代上面的人民幣門檻；exclude_st 比對名稱裡的 ST／退，只對 A 股有意義。
+  market_overrides:
+    tw:
+      hard_filters:
+        exclude_st: false
+        amount_min: 50000000
+        require_ma_bullish: true
+        require_price_above_ma20: true
+        signal_score_min: 65
+        volume_ratio_20d_max: 1.5
+        pullback_to_ma20_pct_min: -2.0
+        pullback_to_ma20_pct_max: 8.0
+        volatility_20d_pct_max: 45.0
+        max_drawdown_20d_pct_min: -12.0
+        atr_20_pct_max: 6.5
+    us:
+      hard_filters:
+        exclude_st: false
+        amount_min: 20000000
+        require_ma_bullish: true
+        require_price_above_ma20: true
+        signal_score_min: 65
+        volume_ratio_20d_max: 1.5
+        pullback_to_ma20_pct_min: -2.0
+        pullback_to_ma20_pct_max: 8.0
+        volatility_20d_pct_max: 45.0
+        max_drawdown_20d_pct_min: -12.0
+        atr_20_pct_max: 6.5
