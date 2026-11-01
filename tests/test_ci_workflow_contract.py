@@ -123,7 +123,7 @@ def test_heavy_ci_jobs_are_path_filtered_and_backend_tests_are_sharded() -> None
     assert backend_tests_job["needs"] == ["changes", "ai-governance"]
     assert backend_tests_job["if"] == "needs.changes.outputs.backend == 'true'"
     assert backend_tests_job["strategy"]["fail-fast"] == "false"
-    # fork：ttnas 自架 runner 上 4 片最佳（6 片會滿載），見 ci.yml 開頭註解
+    # fork：自架 runner 上 4 片最佳（最慢那片被單一大檔卡住），見 ci.yml 開頭註解
     assert backend_tests_job["strategy"]["matrix"]["shard"] == ["1", "2", "3", "4"]
     assert backend_gate_job["needs"] == [
         "changes",
