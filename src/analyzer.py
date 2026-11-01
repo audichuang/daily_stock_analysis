@@ -4871,6 +4871,26 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                 return quote_value
             fallback = _fund_valuation.get(field)
             return fallback if fallback is not None else 'N/A'
+
+        # Realtime table display helpers: a missing/None value must not leak into the
+        # template as "None%" / "N/A%"; prices use thousands separators.
+        _missing_text = 'N/A' if english else L('暫無', '暂无')
+
+        def _rt_number(value: Any) -> Optional[float]:
+            if value is None or isinstance(value, bool):
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _rt_pct_text(value: Any) -> str:
+            number = _rt_number(value)
+            return f"{number:.2f}%" if number is not None else _missing_text
+
+        def _rt_price_text(value: Any) -> str:
+            number = _rt_number(value)
+            return f"{number:,.2f}" if number is not None else 'N/A'
         # 台股估值（交易所快照）：PE 是近四季口径、各有资料日期，标签明讲，别让模型当成「动态」本益比；
         # 另附交易所公告殖利率一列（其他市场的列与标签维持原样）。
         _tw_val = prompt_market == "tw"
@@ -5039,9 +5059,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 ### Realtime Quote Details
 | Indicator | Value | Interpretation |
 |------|------|------|
-| Current Price | {rt.get('price', 'N/A')} | |
+| Current Price | {_rt_price_text(rt.get('price'))} | |
 | **Volume Ratio{_vr_basis_en}** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
-{_vr_prev_row_en}| **Turnover Rate** | **{rt.get('turnover_rate', 'N/A')}%** | |
+{_vr_prev_row_en}| **Turnover Rate** | **{_rt_pct_text(rt.get('turnover_rate'))}** | |
 {pe_pb_rows_en}| Total Market Cap | {self._format_amount(rt.get('total_mv'), prompt_market, report_language)} | |
 | Float Market Cap | {self._format_amount(rt.get('circ_mv'), prompt_market, report_language)} | |
 | 60-Day Change | {rt.get('change_60d', 'N/A')}% | Medium-term performance |
@@ -5064,9 +5084,9 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
 ### {L("即時行情增強資料", "实时行情增强数据")}
 | {L("指標", "指标")} | {L("數值", "数值")} | {L("解讀", "解读")} |
 |------|------|------|
-| {L("目前價格", "当前价格")} | {rt.get('price', 'N/A')} {ccy} | |
+| {L("目前價格", "当前价格")} | {_rt_price_text(rt.get('price'))} {ccy} | |
 | **{L("量比", "量比")}{_vr_basis_zh}** | **{rt.get('volume_ratio', 'N/A')}** | {rt.get('volume_ratio_desc', '')} |
-{_vr_prev_row_zh}| **{L("週轉率", "换手率")}** | **{rt.get('turnover_rate', 'N/A')}%** | |
+{_vr_prev_row_zh}| **{L("週轉率", "换手率")}** | **{_rt_pct_text(rt.get('turnover_rate'))}** | |
 {pe_pb_rows_zh}| {L("總市值", "总市值")} | {self._format_amount(rt.get('total_mv'), prompt_market, report_language)} | |
 | {L("流通市值", "流通市值")} | {self._format_amount(rt.get('circ_mv'), prompt_market, report_language)} | |
 | {L("60日漲跌幅", "60日涨跌幅")} | {rt.get('change_60d', 'N/A')}% | {L("中期表現", "中期表现")} |

@@ -2,67 +2,67 @@
   "baseline_commit": "dbf8f519ec65c8bcaad56b82cb9be811adfb5315",
   "prompts": {
     "INTC/zh/-28.58": {
-      "user": "95e01eccbe87d12b277b6c63865c0aa3d773e13a2ea8fe41cf4d418746f6d391",
+      "user": "87f468346f4a100ce563a0894cfe4e58365027998db25dff7b7493baddb0cdf0",
       "system": "a34bb1fa63f45838eb811f1a181e085da1c70a7d9b02cc1ea0134a96fda57f30"
     },
     "INTC/zh/-11.99": {
-      "user": "413329c2ceb6b0a38aae33f6fdda7dd6e917108fe5390b08922583aaf6dbfcdb",
+      "user": "92997b3e0aa2ecee32f60c1f7c8f46baf5926108272d98550366cb4b0f97527f",
       "system": "a34bb1fa63f45838eb811f1a181e085da1c70a7d9b02cc1ea0134a96fda57f30"
     },
     "INTC/zh-TW/-28.58": {
-      "user": "cfbf3476993785c4f32879b3312dc2628dc27b9b5a26589f402bb8bbf6037549",
+      "user": "0472e5036b550e517de1e1d269fd5bebe4b070ec08b2df341566d5a7d76af491",
       "system": "998eccc9675807324be3c191db4f6d2d9728df4f0a13a53d12ee7e13a7f71798"
     },
     "INTC/zh-TW/-11.99": {
-      "user": "78fd9e476993eb601e4843d04febd9cfc4896252ff937da2c1e0dc9a798690d9",
+      "user": "0eec9c9b5ffaf74c8ba4264c778febf9ee6fd0c8ca2ee1846dba33931f465ffc",
       "system": "998eccc9675807324be3c191db4f6d2d9728df4f0a13a53d12ee7e13a7f71798"
     },
     "INTC/en/-28.58": {
-      "user": "2a8f09b12801013a52261b61d0cd5b149c1d393f09a7215aaf45de7c6d955eca",
+      "user": "08ab0b181726c3b9c05c893d5357c002d599ac516372c582b1c444c0031682a4",
       "system": "e3513e09b58689bc50ead764094367963aebdda1e9e45838043483580117294c"
     },
     "INTC/en/-11.99": {
-      "user": "fcdb15630eb33c7cfd9d22d117818e6f8326be9b92046596920e676d60dbeb87",
+      "user": "b2631ea3b8642d207f7276de76ecc47bb60565049f5ae0f2e3191b61a93f8768",
       "system": "e3513e09b58689bc50ead764094367963aebdda1e9e45838043483580117294c"
     },
     "INTC/ko/-28.58": {
-      "user": "c83ed32de527cd7d52ec30ce8a8e0b1d8bb3b39bfc379ed947f214d7dcce2be0",
+      "user": "9216b3741f27acc090b49fc1270a1f30846c4d25230a49465c4f70359b129ea3",
       "system": "772438b9ba504bbf40099faa72b3772ce3df09a95ac830eb42ccd9443a9474bf"
     },
     "INTC/ko/-11.99": {
-      "user": "2b7264b31f63fefe85a4c4a025a8675762d47311001ccf43333fc030d71669b6",
+      "user": "2c6f43c483e26a4f5e633dff18c6b24c9b2699c1e79f7e7f047af1a9d254eddf",
       "system": "772438b9ba504bbf40099faa72b3772ce3df09a95ac830eb42ccd9443a9474bf"
     },
     "2330.TW/zh/-28.58": {
-      "user": "853009238726b356ee45564b85aa179762a7d03bd3ca0b5565e322f93db184c9",
+      "user": "a66758412dd8a5db7497d22516565fafdcea31db1ce5f475d5aa3010f4507584",
       "system": "8601bd6a1c03e25096b3160690538628cfcbf08af02a77ecc394ce3870a4cfa5"
     },
     "2330.TW/zh/-11.99": {
-      "user": "f7899255f63420e591d8f2fb7cceb4818fa63acc3c01bb0035620dcab6962882",
+      "user": "dea373f631e6b908d267feaed847bace8dfb6b0f8f1453c45126d159fff56060",
       "system": "8601bd6a1c03e25096b3160690538628cfcbf08af02a77ecc394ce3870a4cfa5"
     },
     "2330.TW/zh-TW/-28.58": {
-      "user": "c1a807b9dfe9155a356be2595a2f114339711914c5939d56c84b75cbfb737b7f",
+      "user": "0732dbfd73b3492aa719fdd8d36444c9314c2a9d02705d6193439535f08981e6",
       "system": "c6fb9ef7ee15945d4f2c40a14e668a8f92419e9ade2b18152662ad1808ffe4aa"
     },
     "2330.TW/zh-TW/-11.99": {
-      "user": "5789512520446c5f03df900c8da1c04b8ed17c128de24f7c4370c690da9bedba",
+      "user": "3b48e39f4735345ecb1b705db632ae30b402d2761d90b30d8134377b92e4d89f",
       "system": "c6fb9ef7ee15945d4f2c40a14e668a8f92419e9ade2b18152662ad1808ffe4aa"
     },
     "2330.TW/en/-28.58": {
-      "user": "b15cec18670f2bc437e54a5b2455af1342d9ad261969909e95f4125979702aae",
+      "user": "71dfc948494899cc9eb2fdac06167d54f9a85dd95fab77e47e88fe8a8bded3d5",
       "system": "0aa6faa37e04c93e498cb89d4cb1f888e5e0946185cf2141d5dd532fe9482e44"
     },
     "2330.TW/en/-11.99": {
-      "user": "10cff6500398b13bac1fa6b3372ba205a1f8f772be3cc2f1eeb9516cc58337ec",
+      "user": "566b82562762f1630cf9feb056967c1a195de474ae037cda8c0c6a5ab5ba08f2",
       "system": "0aa6faa37e04c93e498cb89d4cb1f888e5e0946185cf2141d5dd532fe9482e44"
     },
     "2330.TW/ko/-28.58": {
-      "user": "063504a2c08d879b981c89aa4fa78e121345c3f1b8e333de56dadb24c80b37c2",
+      "user": "e320e3080706021a5172e5f676f2c354704db21e1fd820fbf9ef9a33ebfdedca",
       "system": "b0682a4fdb1b6cdcbbebab2a5eccbfed31880d0c5627423386a105c00b422949"
     },
     "2330.TW/ko/-11.99": {
-      "user": "41443e223004d7c4f9462128598e8e1e2467947be2d8abf917d2a1251473aa2a",
+      "user": "9a94f06a9679e2b421ed076478e98a2c26f7685c20656de70e5547d5fdf49744",
       "system": "b0682a4fdb1b6cdcbbebab2a5eccbfed31880d0c5627423386a105c00b422949"
     }
   },
