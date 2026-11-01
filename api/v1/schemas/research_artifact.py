@@ -23,6 +23,9 @@ ResearchInvalidationCategory = Literal[
     "manual",
 ]
 ResearchInvalidationSeverity = Literal["watch", "warning", "critical"]
+ResearchInvalidationDirection = Literal["below", "above"]
+ResearchInvalidationStatus = Literal["pending", "triggered", "review"]
+ResearchSourceStatus = Literal["ok", "no_data", "fetch_failed", "timeout", "not_configured", "not_supported"]
 
 
 class ResearchSubject(BaseModel):
@@ -46,6 +49,20 @@ class ResearchThesis(BaseModel):
     action_label: Optional[str] = None
     reasons: List[str] = Field(default_factory=list)
     risks: List[str] = Field(default_factory=list)
+    one_sentence: Optional[str] = None
+    time_sensitivity: Optional[str] = None
+    position_advice: Optional[Dict[str, Optional[str]]] = None
+    confidence_level: Optional[str] = None
+    confidence_reason: Optional[str] = None
+    guardrail_applied: Optional[bool] = None
+    guardrail_reason: Optional[str] = None
+    strongest_bullish_signal: Optional[str] = None
+    strongest_bearish_signal: Optional[str] = None
+    watch_conditions: Optional[List[str]] = None
+    entry_conditions: Optional[List[str]] = None
+    exit_triggers: Optional[List[str]] = None
+    pending_events: Optional[List[str]] = None
+    next_check_time: Optional[str] = None
 
 
 class ResearchEvidenceItem(BaseModel):
@@ -61,6 +78,15 @@ class ResearchEvidenceItem(BaseModel):
     as_of: Optional[str] = None
     url: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    group: Optional[str] = Field(None, description="畫面分組鍵")
+    observed_at: Optional[str] = Field(None, description="資料本身的觀測日")
+    fetched_at: Optional[str] = Field(None, description="抓取時間，不代表觀測日")
+    window_days: Optional[int] = Field(None, description="統計窗口天數")
+    complete: Optional[bool] = Field(None, description="false 表示只涵蓋部分資料")
+    counts_toward_score: Optional[bool] = Field(None, description="是否計入評分；純資訊為 false")
+    facts: Optional[Dict[str, Any]] = Field(None, description="結構化數值；鍵名不含「數字接字母」")
+    excerpt: Optional[str] = Field(None, description="原文摘錄")
+    series: Optional[List[Dict[str, Any]]] = Field(None, description="逐期資料")
 
 
 class ResearchInvalidationCondition(BaseModel):
@@ -75,6 +101,11 @@ class ResearchInvalidationCondition(BaseModel):
     threshold: Optional[str] = None
     due_at: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    direction: Optional[ResearchInvalidationDirection] = Field(None, description="價格往哪個方向穿越才成立")
+    status: ResearchInvalidationStatus = Field(
+        "review",
+        description="triggered 只由分析當下的事實設定；其餘為 pending（等價格）或 review（等人判斷）",
+    )
 
 
 class ResearchNextAction(BaseModel):
@@ -98,6 +129,23 @@ class ResearchDataQuality(BaseModel):
     limitations: List[str] = Field(default_factory=list)
 
 
+class ResearchEventGap(BaseModel):
+    """重大波動事件的事實；鍵名與 dashboard.event_gap 相同。"""
+
+    triggered: Optional[bool] = None
+    event_date: Optional[str] = None
+    change_pct: Optional[float] = None
+    event_low: Optional[float] = None
+    sessions_since_event: Optional[int] = None
+    threshold_pct: Optional[float] = None
+    latest_close: Optional[float] = None
+    post_event_min_close: Optional[float] = None
+    event_low_broken: Optional[bool] = None
+    news_evidence_present: Optional[bool] = None
+    blocked_without_news: Optional[bool] = None
+    reason: Optional[str] = None
+
+
 class ResearchArtifact(BaseModel):
     """Structured report artifact for dashboard, stock detail, monitor and copilot reuse."""
 
@@ -113,3 +161,8 @@ class ResearchArtifact(BaseModel):
     next_actions: List[ResearchNextAction] = Field(default_factory=list)
     data_quality: ResearchDataQuality = Field(default_factory=ResearchDataQuality)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    event_gap: Optional[ResearchEventGap] = None
+    source_status: Dict[str, ResearchSourceStatus] = Field(
+        default_factory=dict,
+        description="各補充來源的取得結果；舊報告為空",
+    )

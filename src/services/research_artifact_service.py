@@ -6,13 +6,21 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional
+from urllib.parse import urlsplit
 
 from api.v1.schemas.research_artifact import ResearchArtifact
 from src.analysis_context_pack_overview import extract_analysis_context_pack_overview
 from src.report_language import normalize_report_language
+from src.services.report_decision_fields import (
+    DECISION_FIELD_KEYS,
+    extract_report_decision_fields,
+    finite_float,
+)
 from src.utils.data_processing import (
     extract_fundamental_detail_fields,
     extract_market_structure_detail_field,
+    extract_realtime_detail_fields,
+    parse_json_field,
 )
 
 
@@ -62,7 +70,25 @@ _ARTIFACT_TEXT: Dict[str, Dict[str, str]] = {
     "financial_title": {"en": "Financial report", "zh": "财务报表", "zh-TW": "財務報表", "ko": "재무제표"},
     "dividend_title": {"en": "Dividend metrics", "zh": "股利指标", "zh-TW": "股利指標", "ko": "배당 지표"},
     "market_title": {"en": "Market structure", "zh": "市场结构", "zh-TW": "市場結構", "ko": "시장 구조"},
+    "event_low": {
+        "en": "Close breaks the event-day low: {value}",
+        "zh": "收盘跌破事件日低点：{value}",
+        "zh-TW": "收盤跌破事件日低點：{value}",
+        "ko": "종가가 이벤트일 저점을 이탈: {value}",
+    },
+    "short_title": {"en": "Short interest", "zh": "放空部位", "zh-TW": "放空部位", "ko": "공매도 잔고"},
+    "filing_8k_title": {"en": "SEC 8-K filing", "zh": "SEC 8-K 申报", "zh-TW": "SEC 8-K 申報", "ko": "SEC 8-K 공시"},
+    "filing_10q_title": {"en": "SEC 10-Q filing", "zh": "SEC 10-Q 申报", "zh-TW": "SEC 10-Q 申報", "ko": "SEC 10-Q 공시"},
+    "insider_title": {"en": "Insider transactions", "zh": "内部人交易", "zh-TW": "內部人交易", "ko": "내부자 거래"},
+    "ratings_title": {"en": "Analyst rating changes", "zh": "评等调整", "zh-TW": "評等調整", "ko": "투자의견 변경"},
+    "estimates_title": {"en": "Analyst estimates", "zh": "法人预估", "zh-TW": "法人預估", "ko": "애널리스트 추정치"},
+    "ownership_title": {"en": "Ownership", "zh": "持股结构", "zh-TW": "持股結構", "ko": "보유 구조"},
+    "futu_title": {"en": "Capital flow", "zh": "资金流", "zh-TW": "資金流", "ko": "자금 흐름"},
 }
+
+# 前端 camelcase 會把「數字接字母」的鍵轉壞（max_drawdown_1y → maxDrawdown1Y），投影時直接擋掉。
+_UNSAFE_FACT_KEY_RE = re.compile(r"[0-9][a-zA-Z]", re.ASCII)
+_SOURCE_STATUS_VALUES = {"ok", "no_data", "fetch_failed", "timeout", "not_configured", "not_supported"}
 
 
 def _text(language: str, key: str, **values: Any) -> str:
@@ -97,6 +123,8 @@ def build_research_artifact(
     if evidence_items is not None:
         evidence.extend(dict(item) for item in evidence_items)
 
+    evidence.extend(_build_us_evidence(details, language))
+
     invalidations = _build_invalidation_conditions(summary, strategy, details, context_overview, language)
     if invalidation_conditions is not None:
         invalidations.extend(dict(item) for item in invalidation_conditions)
@@ -122,6 +150,8 @@ def build_research_artifact(
             "source": "analysis_report",
             **dict(metadata or {}),
         },
+        "event_gap": _event_gap(details),
+        "source_status": _source_status(details),
     }
     return ResearchArtifact.model_validate(payload).model_dump(exclude_none=True)
 
@@ -149,6 +179,12 @@ def artifact_input_from_detail(
     context_overview = extract_analysis_context_pack_overview(context_snapshot)
     market_structure = extract_market_structure_detail_field(context_snapshot, raw_result)
     report_language = raw_result.get("report_language") if isinstance(raw_result, dict) else None
+    snapshot = parse_json_field(context_snapshot)
+    enhanced = snapshot.get("enhanced_context") if isinstance(snapshot, dict) else None
+    fundamental = enhanced.get("fundamental_context") if isinstance(enhanced, dict) else None
+    fundamental = fundamental if isinstance(fundamental, dict) else {}
+    dashboard = raw_result.get("dashboard") if isinstance(raw_result, dict) else None
+    sniper_prices = detail.get("sniper_prices")
     return {
         "meta": {
             "id": detail.get("id"),
@@ -165,8 +201,11 @@ def artifact_input_from_detail(
             "action_label": detail.get("action_label"),
             "trend_prediction": detail.get("trend_prediction"),
             "sentiment_score": detail.get("sentiment_score"),
+            **extract_report_decision_fields(raw_result, report_language),
         },
         "strategy": {
+            "stop_loss_price": sniper_prices.get("stop_loss") if isinstance(sniper_prices, Mapping) else None,
+            "take_profit_price": sniper_prices.get("take_profit") if isinstance(sniper_prices, Mapping) else None,
             "ideal_buy": detail.get("ideal_buy"),
             "secondary_buy": detail.get("secondary_buy"),
             "stop_loss": detail.get("stop_loss"),
@@ -183,6 +222,11 @@ def artifact_input_from_detail(
             or extracted_fundamental.get("dividend_metrics")
             or persisted_fields.get("dividend_metrics"),
             "market_structure": detail.get("market_structure") or market_structure,
+            "us_evidence": fundamental.get("us_evidence"),
+            "us_evidence_status": fundamental.get("us_evidence_status"),
+            "evidence_fetched_at": fundamental.get("as_of"),
+            "event_gap": dashboard.get("event_gap") if isinstance(dashboard, dict) else None,
+            "analysis_price": extract_realtime_detail_fields(snapshot).get("current_price"),
         },
     }
 
@@ -207,6 +251,7 @@ def _build_thesis(summary: Any) -> Dict[str, Any]:
         "action_label": action_label,
         "reasons": reasons,
         "risks": risks,
+        **{key: _value(summary, key) for key in DECISION_FIELD_KEYS},
     }
 
 
@@ -224,6 +269,9 @@ def _build_evidence(details: Any, context_overview: Any, language: str = "en") -
             "as_of": _as_timestamp(_value(block, "provider_timestamp")),
             "freshness": _freshness_from_status(status),
             "quality_level": _quality_from_status(status),
+            "group": "context",
+            "observed_at": _as_timestamp(_value(block, "provider_timestamp")),
+            "fetched_at": _as_timestamp(_value(block, "fetched_at")),
             "metadata": {
                 "status": status,
                 **_evidence_timestamps(block),
@@ -237,6 +285,7 @@ def _build_evidence(details: Any, context_overview: Any, language: str = "en") -
         evidence.append({
             "id": "news:summary",
             "source_type": "news",
+            "group": "news",
             "title": _text(language, "news_title"),
             "summary": _as_text(_value(details, "empty_news_disclosure"))
             or _compact(_as_text(_value(details, "news_content"))),
@@ -249,6 +298,7 @@ def _build_evidence(details: Any, context_overview: Any, language: str = "en") -
         evidence.append({
             "id": "fundamental:financial_report",
             "source_type": "fundamental",
+            "group": "fundamental",
             "title": _text(language, "financial_title"),
             "freshness": "unknown",
             "quality_level": "usable",
@@ -258,6 +308,7 @@ def _build_evidence(details: Any, context_overview: Any, language: str = "en") -
         evidence.append({
             "id": "fundamental:dividend_metrics",
             "source_type": "fundamental",
+            "group": "fundamental",
             "title": _text(language, "dividend_title"),
             "freshness": "unknown",
             "quality_level": "usable",
@@ -269,6 +320,7 @@ def _build_evidence(details: Any, context_overview: Any, language: str = "en") -
         evidence.append({
             "id": "market:structure",
             "source_type": "market_structure",
+            "group": "market",
             "title": _text(language, "market_title"),
             "freshness": _freshness_from_status(status),
             "quality_level": _quality_from_status(status),
@@ -296,6 +348,8 @@ def _build_invalidation_conditions(
             "severity": "critical",
             "metric": "price",
             "threshold": stop_loss,
+            "direction": "below",
+            "status": _price_condition_status(details, _value(strategy, "stop_loss_price"), "below"),
         })
 
     take_profit = _as_text(_value(strategy, "take_profit"))
@@ -308,7 +362,13 @@ def _build_invalidation_conditions(
             "severity": "watch",
             "metric": "price",
             "threshold": take_profit,
+            "direction": "above",
+            "status": _price_condition_status(details, _value(strategy, "take_profit_price"), "above"),
         })
+
+    event_condition = _event_low_condition(details, language)
+    if event_condition:
+        conditions.append(event_condition)
 
     limitations = _quality_limitations(context_overview)
     if limitations:
@@ -336,6 +396,209 @@ def _build_invalidation_conditions(
         conditions.append(_manual_reassessment_condition(language))
 
     return conditions
+
+
+def _price_condition_status(details: Any, threshold: Any, direction: str) -> str:
+    """只有分析當下的價格與結構化價位都是有限數才判 triggered；缺一個維持 pending。"""
+    price = finite_float(_value(details, "analysis_price"))
+    level = finite_float(threshold)
+    if price is None or level is None:
+        return "pending"
+    crossed = price <= level if direction == "below" else price >= level
+    return "triggered" if crossed else "pending"
+
+
+def _event_low_condition(details: Any, language: str) -> Optional[Dict[str, Any]]:
+    event = _value(details, "event_gap")
+    if not isinstance(event, Mapping):
+        return None
+    low = finite_float(event.get("event_low"))
+    if low is None:
+        return None
+    broken = event.get("event_low_broken")
+    return {
+        "id": "event:low_break",
+        "category": "price",
+        "description": _text(language, "event_low", value=f"{low:g}"),
+        "trigger": f"{low:g}",
+        "severity": "critical",
+        "metric": "close",
+        "threshold": f"{low:g}",
+        "direction": "below",
+        # 布林才算事實；缺值（事件後還沒有收盤）維持 pending。
+        "status": "triggered" if broken is True else "pending",
+    }
+
+
+def _event_gap(details: Any) -> Optional[Dict[str, Any]]:
+    event = _value(details, "event_gap")
+    return dict(event) if isinstance(event, Mapping) else None
+
+
+def _source_status(details: Any) -> Dict[str, str]:
+    status = _value(details, "us_evidence_status")
+    if not isinstance(status, Mapping):
+        return {}
+    return {str(key): str(value) for key, value in status.items() if value in _SOURCE_STATUS_VALUES}
+
+
+def _safe_sec_url(value: Any) -> Optional[str]:
+    """只放行 https＋sec.gov；來源字串可能被投毒，不能直接變成可點連結。"""
+    if not isinstance(value, str):
+        return None
+    try:
+        parts = urlsplit(value.strip())
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return None
+    if parts.scheme != "https" or not (host == "sec.gov" or host.endswith(".sec.gov")):
+        return None
+    return value.strip()
+
+
+def _scalar_facts(source: Any, *keys: str) -> Dict[str, Any]:
+    """取純量欄位；bool 與字串保留，鍵名含「數字接字母」的丟掉。"""
+    if not isinstance(source, Mapping):
+        return {}
+    names = keys or tuple(str(key) for key in source)
+    facts: Dict[str, Any] = {}
+    for key in names:
+        value = source.get(key)
+        if _UNSAFE_FACT_KEY_RE.search(key) or value is None or isinstance(value, (Mapping, list, tuple)):
+            continue
+        facts[key] = value
+    return facts
+
+
+def _us_evidence_item(
+    item_id: str,
+    group: str,
+    title: str,
+    fetched_at: Optional[str],
+    **fields: Any,
+) -> Dict[str, Any]:
+    # 美股補充證據純資訊，不參與評分（data_provider/us_evidence.py）。
+    return {
+        "id": item_id,
+        "source_type": "us_evidence",
+        "title": title,
+        "group": group,
+        "fetched_at": fetched_at,
+        "counts_toward_score": False,
+        "metadata": {"status": "available"},
+        **fields,
+    }
+
+
+def _build_us_evidence(details: Any, language: str) -> List[Dict[str, Any]]:
+    evidence = _value(details, "us_evidence")
+    if not isinstance(evidence, Mapping):
+        return []
+    fetched = _as_text(_value(details, "evidence_fetched_at")) or None
+    items: List[Dict[str, Any]] = []
+
+    finra = evidence.get("finra_short")
+    short = finra if isinstance(finra, Mapping) and finra else evidence.get("short_interest")
+    if isinstance(short, Mapping) and short:
+        items.append(_us_evidence_item(
+            "us:short_interest", "short_interest", _text(language, "short_title"), fetched,
+            source="FINRA" if short is finra else "yfinance",
+            observed_at=_as_text(short.get("as_of")) or None,
+            facts=_scalar_facts(short, "shares_short", "days_to_cover", "float_pct"),
+        ))
+
+    sec = evidence.get("sec_filings")
+    if isinstance(sec, Mapping):
+        filings = sec.get("recent_8k")
+        for index, filing in enumerate(filings if isinstance(filings, list) else []):
+            if not isinstance(filing, Mapping):
+                continue
+            excerpt_url = _safe_sec_url(filing.get("excerpt_url"))
+            items.append(_us_evidence_item(
+                f"sec:8k:{index + 1}", "sec_filing", _text(language, "filing_8k_title"), fetched,
+                source="SEC EDGAR",
+                observed_at=_as_text(filing.get("date")) or None,
+                url=_safe_sec_url(filing.get("url")),
+                excerpt=_as_text(filing.get("excerpt")) or None,
+                facts={
+                    **_scalar_facts(filing, "items", "accepted_at"),
+                    **({"excerpt_url": excerpt_url} if excerpt_url else {}),
+                },
+            ))
+        quarter = _as_text(sec.get("latest_10q_date"))
+        if quarter:
+            items.append(_us_evidence_item(
+                "sec:10q", "sec_filing", _text(language, "filing_10q_title"), fetched,
+                source="SEC EDGAR", observed_at=quarter,
+            ))
+
+    form4 = evidence.get("insider_form4")
+    # 鍵名 insider_90d 會被 camelcase 轉壞，這裡一律投影成 insider:recent＋window_days。
+    insider = form4 if isinstance(form4, Mapping) and form4 else evidence.get("insider_90d")
+    if isinstance(insider, Mapping) and insider:
+        items.append(_us_evidence_item(
+            "insider:recent", "insider", _text(language, "insider_title"), fetched,
+            source="SEC Form 4" if insider is form4 else "yfinance",
+            observed_at=_as_text(insider.get("as_of")) or None,
+            window_days=_as_int(insider.get("window_days")),
+            complete=insider.get("complete") if isinstance(insider.get("complete"), bool) else None,
+            facts=_scalar_facts(
+                insider, "buy_shares", "sell_shares", "net_shares", "classified_count",
+                "excluded_count", "filings_read", "filings_available",
+            ),
+        ))
+
+    ratings = evidence.get("ratings_30d")
+    if isinstance(ratings, Mapping) and ratings:
+        entries = ratings.get("entries")
+        items.append(_us_evidence_item(
+            "ratings:recent", "ratings", _text(language, "ratings_title"), fetched,
+            source="yfinance",
+            observed_at=_as_text(ratings.get("as_of")) or None,
+            window_days=_as_int(ratings.get("window_days")),
+            facts=_scalar_facts(ratings, "count"),
+            series=[dict(entry) for entry in entries if isinstance(entry, Mapping)] if isinstance(entries, list) else None,
+        ))
+
+    estimates = evidence.get("estimates")
+    if isinstance(estimates, Mapping) and estimates:
+        revisions = estimates.get("revisions")
+        revisions = revisions if isinstance(revisions, Mapping) else {}
+        track = estimates.get("track_record")
+        facts = {
+            "eps": _scalar_facts(estimates.get("eps")),
+            "revenue": _scalar_facts(estimates.get("revenue")),
+            # 來源鍵 up_7d 會被 camelcase 轉壞，改成不含數字接字母的鍵。
+            "revisions": {
+                target: revisions[source]
+                for source, target in (
+                    ("up_7d", "up_week"), ("up_30d", "up_month"),
+                    ("down_7d", "down_week"), ("down_30d", "down_month"),
+                )
+                if source in revisions
+            },
+        }
+        items.append(_us_evidence_item(
+            "estimates:next_quarter", "estimates", _text(language, "estimates_title"), fetched,
+            source="yfinance",
+            facts=facts,
+            series=[dict(row) for row in track if isinstance(row, Mapping)] if isinstance(track, list) else None,
+        ))
+
+    ownership = _scalar_facts(evidence, "institutions_pct", "insiders_pct")
+    if ownership:
+        items.append(_us_evidence_item(
+            "ownership:holders", "ownership", _text(language, "ownership_title"), fetched,
+            source="yfinance", facts=ownership,
+        ))
+
+    futu = evidence.get("futu")
+    if isinstance(futu, Mapping) and futu:
+        items.append(_us_evidence_item(
+            "futu:capital_flow", "capital_flow", _text(language, "futu_title"), fetched,
+            source="Futu", facts=_scalar_facts(futu),
+        ))
+    return items
 
 
 def _manual_reassessment_condition(language: str = "en") -> Dict[str, Any]:
