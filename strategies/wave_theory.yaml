@@ -3,6 +3,9 @@
 
 name: wave_theory
 display_name: 波浪理论
+display_name_zh_tw: 波浪理論
+group: theory
+group_name_zh_tw: 理論框架
 description: 基于艾略特波浪理论的推动浪与调整浪结构，判断当前所处浪型与潜在目标价。
 category: framework
 core_rules: [1, 2, 3, 4]

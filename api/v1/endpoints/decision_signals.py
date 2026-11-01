@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Security
 from fastapi.security import APIKeyCookie
@@ -26,6 +26,7 @@ from api.v1.schemas.decision_signals import (
     DecisionSignalReassessResponse,
     DecisionSignalReviewMemory,
     DecisionSignalStatusUpdateRequest,
+    DecisionSignalSummaryResponse,
 )
 from src.auth import COOKIE_NAME
 from src.services.decision_signal_service import (
@@ -173,6 +174,11 @@ def list_signals(
         None,
         description="Optional active portfolio account id for holding_only",
     ),
+    group_latest: bool = Query(False, description="每檔只回最新一筆，並附 older_count、is_held、停損狀態"),
+    sort: Literal["created_at", "priority"] = Query(
+        "created_at",
+        description="priority：已觸停損→持股→動作順位→新到舊；需搭配 group_latest=true",
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> DecisionSignalListResponse:
@@ -196,6 +202,8 @@ def list_signals(
                 expires_to=expires_to,
                 holding_only=holding_only,
                 account_id=account_id,
+                group_latest=group_latest,
+                sort=sort,
                 page=page,
                 page_size=page_size,
             )
@@ -206,6 +214,41 @@ def list_signals(
         raise _bad_request(exc)
     except Exception as exc:
         raise _internal_error("List decision signals failed", exc)
+
+
+@router.get(
+    "/summary",
+    response_model=DecisionSignalSummaryResponse,
+    responses={
+        **AUTH_RESPONSE,
+        400: {"model": ErrorResponse, "description": "查询参数非法"},
+        422: {"model": ErrorResponse, "description": "查询参数校验失败"},
+        500: {"model": ErrorResponse, "description": "查询失败"},
+    },
+    summary="決策訊號摘要",
+    description="每檔最新一筆的各動作檔數與已觸停損（以最新收盤比對），預設只看 active。",
+    operation_id="getDecisionSignalSummary",
+)
+def get_signal_summary(
+    market: Optional[str] = Query(None, description="Optional market filter: cn/hk/us/jp/kr/tw"),
+    status: Optional[str] = Query("active", description="Status filter, default active"),
+    holding_only: bool = Query(False, description="Filter to active cached portfolio holdings only"),
+    account_id: Optional[int] = Query(None, description="Optional active portfolio account id"),
+) -> DecisionSignalSummaryResponse:
+    service = DecisionSignalService()
+    try:
+        return DecisionSignalSummaryResponse(
+            **service.summarize_latest(
+                market=market,
+                status=status,
+                holding_only=holding_only,
+                account_id=account_id,
+            )
+        )
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Get decision signal summary failed", exc)
 
 
 @router.post(

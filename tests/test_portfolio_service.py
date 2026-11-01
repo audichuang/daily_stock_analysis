@@ -240,11 +240,12 @@ class PortfolioServiceTestCase(unittest.TestCase):
         )
         self._save_close("600519", today - timedelta(days=1), 118.0)
 
+        # 過期判定比對市場最近交易日：釘成今天，測試才不會隨週末與開盤前的牆鐘改變。
         with patch.object(
             PortfolioService,
             "_fetch_realtime_position_price",
             side_effect=AssertionError("fast portfolio snapshot should not fetch realtime quote"),
-        ):
+        ), patch("src.services.portfolio_service.latest_opened_session", return_value=today):
             snapshot = self.service.get_portfolio_snapshot(
                 account_id=aid,
                 as_of=today,
@@ -664,7 +665,8 @@ class PortfolioServiceTestCase(unittest.TestCase):
         )
         self._save_close("600519", date(2026, 1, 2), 110)
 
-        snapshot = self.service.get_portfolio_snapshot(account_id=aid, as_of=date(2026, 1, 3), cost_method="fifo")
+        # 1/8 是交易日且遠離元旦休市：1/2 的收盤對它才算過期（過期判定比對市場最近交易日）。
+        snapshot = self.service.get_portfolio_snapshot(account_id=aid, as_of=date(2026, 1, 8), cost_method="fifo")
         positions = {item["symbol"]: item for item in snapshot["accounts"][0]["positions"]}
 
         stale_close = positions["600519"]

@@ -2,6 +2,9 @@
 
 name: expectation_repricing
 display_name: 预期重估
+display_name_zh_tw: 預期重估
+group: catalyst
+group_name_zh_tw: 事件與題材
 description: 分析业绩预期、政策预期和估值预期的变化，寻找预期差修复或预期过热后的回落风险。
 category: framework
 core_rules: [3, 5, 6]

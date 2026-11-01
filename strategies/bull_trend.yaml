@@ -2,6 +2,9 @@
 
 name: bull_trend
 display_name: 默认多头趋势
+display_name_zh_tw: 預設多頭趨勢
+group: trend
+group_name_zh_tw: 趨勢
 description: 默认个股分析优先策略，识别多头排列、趋势延续与回踩低吸机会。
 category: trend
 core_rules: [1, 2, 3]

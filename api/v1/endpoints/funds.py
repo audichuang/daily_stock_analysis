@@ -102,9 +102,12 @@ def get_fund(fund_id: str = _FUND_ID) -> FundDetailResponse:
 def get_fund_nav(fund_id: str = _FUND_ID,
                  days: Optional[int] = Query(None, ge=1, le=366 * 30),
                  period: Optional[Literal["w1", "m1", "m3", "m6", "y1", "y3", "y5", "ytd"]] = Query(
-                     None, description="與報酬卡同一個基準點起算的區間；給了就忽略 days")) -> FundNavHistoryResponse:
+                     None, description="與報酬卡同一個基準點起算的區間；給了就忽略 days"),
+                 benchmark: Optional[Literal["taiex"]] = Query(
+                     None, description="附帶同區間的比較指數收盤")) -> FundNavHistoryResponse:
     try:
-        return FundNavHistoryResponse(**FundService().get_nav_history(fund_id, days=days, period=period))
+        return FundNavHistoryResponse(**FundService().get_nav_history(
+            fund_id, days=days, period=period, benchmark=benchmark))
     except FundNotFoundError:
         raise _not_found(fund_id)
     except FundUnavailableError as exc:

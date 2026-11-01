@@ -291,10 +291,14 @@ def store_history(conn, rows):
 def fetch_top_holdings(cnyes_id):
     """鉅亨前十大持股（即時抓、不入庫）：``[{name, sector, weight, country}]``。"""
     data = _cnyes_json(f"{CNYES_FUND_API}/{cnyes_id}/holdings", f"鉅亨 {cnyes_id} 持股")
+    items = data.get("items") or {}
+    # portfolioDate 是持股資料日（epoch 秒、台北午夜）；每列都帶，呼叫端不必多一層容器。
+    portfolio_date = items.get("portfolioDate")
     out = []
-    for item in ((data.get("items") or {}).get("data") or []):
+    for item in (items.get("data") or []):
         out.append({"name": item.get("name"), "sector": item.get("sector"),
-                    "weight": item.get("value"), "country": item.get("country")})
+                    "weight": item.get("value"), "country": item.get("country"),
+                    "portfolio_date": portfolio_date})
     return out
 
 

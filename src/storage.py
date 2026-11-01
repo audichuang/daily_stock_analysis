@@ -4777,6 +4777,17 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 .limit(limit)
             )
             rows = session.execute(stmt).all()
+            # 會話目前對準的個股；沒有狀態列或還沒對準個股就是 None。
+            active_stocks = {
+                state_row.session_id: state_row
+                for state_row in session.execute(
+                    select(
+                        ConversationSessionState.session_id,
+                        ConversationSessionState.active_stock_code,
+                        ConversationSessionState.active_stock_name,
+                    ).where(ConversationSessionState.session_id.in_([row.session_id for row in rows]))
+                ).all()
+            }
 
             results = []
             for row in rows:
@@ -4801,6 +4812,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     "message_count": row.message_count,
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                     "last_active": row.last_active.isoformat() if row.last_active else None,
+                    "stock_code": active_stocks[sid].active_stock_code if sid in active_stocks else None,
+                    "stock_name": active_stocks[sid].active_stock_name if sid in active_stocks else None,
                 })
             return results
 

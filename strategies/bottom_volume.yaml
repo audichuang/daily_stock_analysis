@@ -3,6 +3,9 @@
 
 name: bottom_volume
 display_name: 底部放量
+display_name_zh_tw: 底部放量
+group: pattern
+group_name_zh_tw: 型態
 description: 检测长期下跌后底部放量信号，潜在趋势反转信号。
 category: reversal
 core_rules: [2, 5]

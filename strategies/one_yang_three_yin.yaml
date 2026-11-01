@@ -3,6 +3,9 @@
 
 name: one_yang_three_yin
 display_name: 一阳夹三阴
+display_name_zh_tw: 一陽夾三陰
+group: pattern
+group_name_zh_tw: 型態
 description: 检测一阳夹三阴K线整理形态，趋势延续入场信号。
 category: pattern
 core_rules: [2, 4]
