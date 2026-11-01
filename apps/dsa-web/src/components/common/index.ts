@@ -36,3 +36,4 @@ export { Money, Num } from './Num';
 export { Metric, MetricGroup } from './Metric';
 export * from './DataTable';
 export * from './Segmented';
+export * from './Skeleton';

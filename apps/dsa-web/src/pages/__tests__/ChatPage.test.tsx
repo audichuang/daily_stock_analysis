@@ -688,7 +688,7 @@ describe('ChatPage', () => {
     expect(screen.getByText('開始問股')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('問個股，例如 2330.TW')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '傳送' })).toBeInTheDocument();
-    expect(document.title).toBe('問股 - DSA');
+    expect(document.title).toBe('AI 問股 - DSA');
 
     const bodyText = document.body.textContent ?? '';
     for (const simplified of ['历史对话', '开始问股', '条对话', '发送']) {
@@ -776,7 +776,7 @@ describe('ChatPage', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByRole('heading', { name: '问股' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'AI 问股' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '导出会话' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '发送到已配置的通知机器人/邮箱' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '历史对话' })).toBeInTheDocument();
@@ -1802,7 +1802,7 @@ describe('ChatPage', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByRole('heading', { name: '问股' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'AI 问股' })).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/例如/)).toHaveValue('');
     expect(historyApi.getDetail).not.toHaveBeenCalled();
   });

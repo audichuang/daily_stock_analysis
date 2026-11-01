@@ -29,9 +29,25 @@ describe('Card', () => {
     expect(cardOf('內容')).toHaveClass(className);
   });
 
-  it('副標用 .label，不再轉大寫', () => {
+  it('副標是次要小字，不轉大寫', () => {
     render(<Card subtitle="副標">內容</Card>);
-    expect(screen.getByText('副標')).toHaveClass('label');
+    expect(screen.getByText('副標')).toHaveClass('text-xs', 'text-secondary-text');
     expect(screen.getByText('副標')).not.toHaveClass('label-uppercase');
+  });
+
+  it('標題在上、副標在下', () => {
+    render(<Card title="標題" subtitle="副標">內容</Card>);
+    const title = screen.getByRole('heading', { name: '標題' });
+    const subtitle = screen.getByText('副標');
+    // DOCUMENT_POSITION_FOLLOWING: subtitle comes after the title in document order.
+    expect(title.compareDocumentPosition(subtitle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('meta 放在標題列右側', () => {
+    render(<Card title="標題" meta={<span>10:30 更新</span>}>內容</Card>);
+    const meta = screen.getByText('10:30 更新');
+    const header = screen.getByRole('heading', { name: '標題' }).parentElement?.parentElement;
+    expect(header).toHaveClass('justify-between');
+    expect(header).toContainElement(meta);
   });
 });

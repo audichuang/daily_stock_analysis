@@ -1734,7 +1734,7 @@ describe('PortfolioPage FX refresh', () => {
 
     await waitForInitialLoad();
 
-    expect(await screen.findByText('Portfolio management')).toBeInTheDocument();
+    expect(await screen.findByText('Assets')).toBeInTheDocument();
     const dashboard = within(screen.getByTestId('portfolio-risk'));
     expect(dashboard.getByText('Drawdown')).toBeInTheDocument();
     expect(dashboard.getByText('Stop loss')).toBeInTheDocument();

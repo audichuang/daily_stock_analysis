@@ -53,7 +53,7 @@ interface DataTableProps<T> {
   /** 手機自訂卡片列，給了就取代 primary 欄＋詳情的預設呈現。 */
   renderMobileCard?: (row: T) => React.ReactNode;
   emptyState?: React.ReactNode;
-  /** 桌機表格的高度上限，超過時表格內部捲動、表頭固定。 */
+  /** 桌機表格的高度上限，超過時表格內部捲動、表頭固定；不給就隨整頁捲動，表頭貼在狀態列下方。 */
   maxHeight?: number | string;
   className?: string;
   'aria-label'?: string;
@@ -121,14 +121,15 @@ export function DataTable<T>({
 
   return (
     <div className={className}>
-      {/* 表頭只在這個捲動容器內 sticky；要隨內容固定就給 maxHeight，否則整頁捲動時會跟著捲走。 */}
+      {/* With maxHeight the header sticks inside this scroll box. Without it, overflow-x-clip avoids
+          creating a scroll container, so the header sticks to the page below the shell status bar. */}
       <div
         data-testid="data-table-desktop"
         style={maxHeight ? { maxHeight } : undefined}
-        className={cn('hidden md:block', maxHeight ? 'overflow-auto' : 'overflow-x-auto')}
+        className={cn('hidden md:block', maxHeight ? 'overflow-auto' : 'overflow-x-clip')}
       >
         <table className="w-full border-collapse text-sm" aria-label={ariaLabel}>
-          <thead className="sticky top-0 z-10 bg-card">
+          <thead className={cn('sticky z-10 bg-card', maxHeight ? 'top-0' : 'top-[var(--shell-status-bar-h,0px)]')}>
             <tr className="border-b border-border/60 text-xs text-secondary-text">
               {columns.map((column) => {
                 const isActive = sort?.key === column.key;

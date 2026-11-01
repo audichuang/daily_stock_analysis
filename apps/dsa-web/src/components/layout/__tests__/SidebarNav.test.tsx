@@ -113,7 +113,7 @@ describe('SidebarNav', () => {
       </MemoryRouter>,
     );
 
-    const alertsLink = screen.getByRole('link', { name: '告警' });
+    const alertsLink = screen.getByRole('link', { name: '警报' });
     expect(alertsLink).toHaveAttribute('href', '/alerts');
     expect(alertsLink).toHaveClass('font-medium');
   });
@@ -144,7 +144,7 @@ describe('SidebarNav', () => {
 
   it('renders the calendar navigation item and marks it active', () => {
     render(<MemoryRouter initialEntries={['/calendar']}><SidebarNav /></MemoryRouter>);
-    const link = screen.getByRole('link', { name: '事件日历' });
+    const link = screen.getByRole('link', { name: '日历' });
     expect(link).toHaveAttribute('href', '/calendar');
     expect(link).toHaveClass('font-medium');
   });

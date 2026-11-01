@@ -259,7 +259,7 @@ describe('TokenUsagePage', () => {
   it('renders English copy when the UI language is English', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
     renderPage();
-    expect(await screen.findByRole('heading', { name: 'Token usage' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'AI usage' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Today' })).toBeInTheDocument();
     expect(await screen.findByTestId('usage-summary')).toHaveTextContent('mostly Stock analysis');
   });

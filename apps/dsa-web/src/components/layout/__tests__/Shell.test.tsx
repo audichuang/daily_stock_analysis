@@ -2,9 +2,12 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { Link, MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMarketIndexStore } from '../../../stores/marketIndexStore';
+import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
+import { UI_LANGUAGE_STORAGE_KEY } from '../../../utils/uiLanguage';
 import { ThemeProvider } from '../../theme/ThemeProvider';
 import { Shell } from '../Shell';
 import { ShellHeader } from '../ShellHeader';
+import { ShellHeaderActions, useShellDocumentTitle } from '../ShellHeaderActions';
 
 const mockLogout = vi.fn().mockResolvedValue(undefined);
 const { getIndicesSnapshot } = vi.hoisted(() => ({ getIndicesSnapshot: vi.fn() }));
@@ -328,6 +331,81 @@ describe('Shell', () => {
 
     render(header('/portfolio?embed=ios'));
     expect(screen.queryByRole('banner')).not.toBeInTheDocument();
+  });
+
+  it('drops side padding and reserves the bottom safe area in embed mode', () => {
+    renderShellAt('/alerts?embed=ios');
+    const frame = screen.getByTestId('shell-embed-frame');
+    expect(frame).toHaveClass('px-0', 'pt-2', 'pb-[calc(env(safe-area-inset-bottom)+1.5rem)]');
+    expect(frame).not.toHaveClass('px-3');
+  });
+
+  it('sets document.title to the plain page name, in embed mode too', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    document.title = 'stale';
+    const renderEn = (entry: string) =>
+      render(
+        <MemoryRouter initialEntries={[entry]}>
+          <UiLanguageProvider>
+            <ThemeProvider>
+              <Shell>
+                <Link to="/usage">go to usage</Link>
+              </Shell>
+            </ThemeProvider>
+          </UiLanguageProvider>
+        </MemoryRouter>
+      );
+
+    const { unmount } = renderEn('/alerts');
+    expect(document.title).toBe('Alerts');
+    fireEvent.click(screen.getByRole('link', { name: 'go to usage' }));
+    expect(document.title).toBe('AI usage');
+    unmount();
+
+    renderEn('/portfolio?embed=ios');
+    expect(document.title).toBe('Assets');
+  });
+
+  it('lets a page put a detail title (e.g. a chat conversation) into document.title', () => {
+    const ChatTitle = () => {
+      useShellDocumentTitle('Q3 outlook');
+      return null;
+    };
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ThemeProvider>
+          <Shell>
+            <ChatTitle />
+          </Shell>
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+    expect(document.title).toBe('Q3 outlook');
+  });
+
+  it('portals page actions into the mobile shell header only', () => {
+    const page = <ShellHeaderActions><button type="button">new rule</button></ShellHeaderActions>;
+    viewport.mobile = true;
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <ThemeProvider>
+          <Shell>{page}</Shell>
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+    expect(within(screen.getByRole('banner')).getByRole('button', { name: 'new rule' })).toBeInTheDocument();
+    expect(screen.getByTestId('shell-header-title')).toHaveClass('text-base');
+    unmount();
+
+    viewport.mobile = false;
+    render(
+      <MemoryRouter initialEntries={['/alerts']}>
+        <ThemeProvider>
+          <Shell>{page}</Shell>
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+    expect(screen.queryByRole('button', { name: 'new rule' })).not.toBeInTheDocument();
   });
 
   it('shows a confirmation dialog before logout', async () => {

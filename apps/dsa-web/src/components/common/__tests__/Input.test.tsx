@@ -80,4 +80,11 @@ describe('Input', () => {
     fireEvent.click(screen.getByRole('button', { name: '显示内容' }));
     expect(input).toHaveAttribute('type', 'text');
   });
+
+  it.each(['password', 'key'] as const)('%s 前置圖示用完整的 muted 色，不再半透明', (iconType) => {
+    const { container } = render(<Input label="金鑰" iconType={iconType} />);
+    const icon = container.querySelector('svg');
+    expect(icon).toHaveClass('text-muted-text');
+    expect(icon?.getAttribute('class')).not.toContain('text-muted-text/55');
+  });
 });
