@@ -3,7 +3,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Loader2, Share2, TriangleAlert } from 'lucide-react';
 import { historyApi } from '../../api/history';
 import type { ReportLanguage } from '../../types/analysis';
+import { getMarketReviewUiText } from '../../locales/marketReviewText';
+import { cn } from '../../utils/cn';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
+import { ToastViewport } from '../common/ToastViewport';
 import { Tooltip } from '../common/Tooltip';
 
 type DesktopWindow = Window & {
@@ -19,6 +22,8 @@ interface ShareImageButtonProps {
   reportTitle: string;
   reportLanguage?: ReportLanguage;
   className?: string;
+  /** Below md the button collapses to an h-8 w-8 icon (report title row on phones). */
+  iconOnlyBelowMd?: boolean;
 }
 
 const safeFilenamePart = (value: string): string => {
@@ -40,11 +45,14 @@ export const ShareImageButton: React.FC<ShareImageButtonProps> = ({
   reportTitle,
   reportLanguage = 'zh',
   className = '',
+  iconOnlyBelowMd = false,
 }) => {
   const desktopRuntime = typeof window !== 'undefined' ? (window as DesktopWindow).dsaDesktop : undefined;
   const renderDesktopShareImage = desktopRuntime?.renderShareImage;
   const activeRecordId = desktopRuntime && !renderDesktopShareImage ? undefined : recordId;
-  const text = getReportText(normalizeReportLanguage(reportLanguage));
+  const normalizedLanguage = normalizeReportLanguage(reportLanguage);
+  const text = getReportText(normalizedLanguage);
+  const uiText = getMarketReviewUiText(normalizedLanguage);
   const [stateSnapshot, setStateSnapshot] = useState<{
     recordId?: number;
     state: ShareState;
@@ -174,23 +182,42 @@ export const ShareImageButton: React.FC<ShareImageButtonProps> = ({
         ? text.shareImageFailed
         : text.generateShareImage;
 
+  // The visible label never changes so neighbouring buttons keep their x position;
+  // the state lives in the icon, the tooltip and the accessible name.
   return (
-    <Tooltip content={tooltipText}>
-      <span className="inline-flex shrink-0">
-        <button
-          type="button"
-          onClick={() => void handleShare()}
-          disabled={state === 'loading'}
-          className={`home-surface-button flex h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-3 text-sm font-medium text-secondary-text hover:text-foreground disabled:opacity-50 ${className}`}
-          aria-label={tooltipText}
-        >
-          {state === 'loading' ? <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" /> : null}
-          {state === 'success' ? <Check className="h-5 w-5 text-success" aria-hidden="true" /> : null}
-          {state === 'error' ? <TriangleAlert className="h-5 w-5 text-danger" aria-hidden="true" /> : null}
-          {state === 'idle' || state === 'ready' ? <Share2 className="h-5 w-5" aria-hidden="true" /> : null}
-          <span>{tooltipText}</span>
-        </button>
-      </span>
-    </Tooltip>
+    <>
+      <Tooltip content={tooltipText}>
+        <span className="inline-flex shrink-0">
+          <button
+            type="button"
+            onClick={() => void handleShare()}
+            disabled={state === 'loading'}
+            className={cn(
+              'home-surface-button flex h-8 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg text-sm font-medium text-secondary-text hover:text-foreground disabled:opacity-50',
+              iconOnlyBelowMd ? 'w-8 px-0 md:w-auto md:min-w-[5.5rem] md:px-3' : 'min-w-[5.5rem] px-3',
+              className,
+            )}
+            aria-label={tooltipText}
+          >
+            {state === 'loading' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : null}
+            {state === 'success' ? <Check className="h-4 w-4 text-success" aria-hidden="true" /> : null}
+            {state === 'error' ? <TriangleAlert className="h-4 w-4 text-danger" aria-hidden="true" /> : null}
+            {state === 'idle' || state === 'ready' ? <Share2 className="h-4 w-4" aria-hidden="true" /> : null}
+            <span className={iconOnlyBelowMd ? 'hidden md:inline' : undefined} aria-hidden="true">{text.generateShareImage}</span>
+          </button>
+        </span>
+      </Tooltip>
+      {state === 'ready' ? (
+        <ToastViewport>
+          <div
+            role="status"
+            data-testid="share-ready-toast"
+            className="pointer-events-auto rounded-xl border border-subtle bg-elevated px-4 py-3 text-sm text-foreground shadow-2xl"
+          >
+            {uiText.shareReadyToast}
+          </div>
+        </ToastViewport>
+      ) : null}
+    </>
   );
 };

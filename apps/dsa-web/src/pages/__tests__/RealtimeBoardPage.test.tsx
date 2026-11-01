@@ -94,7 +94,26 @@ describe('RealtimeBoardPage scope', () => {
   it('shows watchlist plus every account holding by default, without duplicates', async () => {
     renderPage();
     await waitFor(() => expect(rowCodes()).toEqual(['2330.TW', '2887.TW', 'NVDA', '2454.TW']));
-    expect(getSnapshot).toHaveBeenCalledWith({ includeRealtime: false });
+    // 只打一支帶即時價的帳本快照，同時給持股清單與總覽，不再先打一支 include_realtime=false
+    expect(getSnapshot).toHaveBeenCalledWith({ includeRealtime: true });
+    expect(getSnapshot).not.toHaveBeenCalledWith({ includeRealtime: false });
+  });
+
+  it('asks quotes for the watchlist before the ledger snapshot comes back', async () => {
+    let releaseSnapshot: (value: unknown) => void = () => {};
+    getSnapshot.mockImplementation(() => new Promise((resolve) => {
+      releaseSnapshot = resolve;
+    }));
+    renderPage();
+    await waitFor(() => expect(getQuotes).toHaveBeenCalled());
+    const firstBatch = getQuotes.mock.calls.flatMap((c) => c[0] as string[]);
+    expect(new Set(firstBatch)).toEqual(new Set(['2330.TW', '2454.TW']));
+    getQuotes.mockClear();
+    await act(async () => releaseSnapshot(snapshot));
+    // 帳本回來只補抓新出現的持股代碼，已抓過的自選不重打
+    await waitFor(() => expect(getQuotes).toHaveBeenCalled());
+    expect(new Set(getQuotes.mock.calls.flatMap((c) => c[0] as string[]))).toEqual(new Set(['2887.TW', 'NVDA']));
+    await waitFor(() => expect(rowCodes()).toEqual(['2330.TW', '2887.TW', 'NVDA', '2454.TW']));
   });
 
   it('treats a lowercase watchlist code and the ledger symbol as one row', async () => {
@@ -252,15 +271,20 @@ describe('RealtimeBoardPage scope', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       renderPage();
-      await waitFor(() => expect(getDossierSummaries).toHaveBeenCalledTimes(1));
+      // 自選與持股可能分兩批到，初次載入可能是一到兩支；之後的次數以它為基準
+      await waitFor(() => expect(rowCodes()).toHaveLength(4));
+      const asked = () => getDossierSummaries.mock.calls.flatMap((c) => c[0] as string[]);
+      await waitFor(() => expect(new Set(asked())).toEqual(new Set(['2330.TW', '2887.TW', '2454.TW'])));
+      expect(asked()).toHaveLength(3); // 分批也不重複問同一檔
+      const base = getDossierSummaries.mock.calls.length;
       fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-      await waitFor(() => expect(getDossierSummaries).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(getDossierSummaries).toHaveBeenCalledTimes(base + 1));
       await vi.advanceTimersByTimeAsync(15 * 60_000);
-      await waitFor(() => expect(getDossierSummaries).toHaveBeenCalledTimes(3));
+      await waitFor(() => expect(getDossierSummaries).toHaveBeenCalledTimes(base + 2));
       // 分頁在背景時不抓
       Object.defineProperty(document, 'hidden', { configurable: true, value: true });
       await act(() => vi.advanceTimersByTimeAsync(15 * 60_000));
-      expect(getDossierSummaries).toHaveBeenCalledTimes(3);
+      expect(getDossierSummaries).toHaveBeenCalledTimes(base + 2);
     } finally {
       Object.defineProperty(document, 'hidden', { configurable: true, value: false });
       vi.useRealTimers();
@@ -474,11 +498,11 @@ describe('RealtimeBoardPage scope', () => {
         : snapshot),
     );
     renderPage();
-    const twd = (await screen.findByText('Day P/L NT$')).closest('[data-metric-state]')!;
+    const twd = (await screen.findByText('Day P/L (TW)')).closest('[data-metric-state]')!;
     expect(twd.textContent).toContain('+1,500');
     expect(twd.textContent).toContain('+6,000');
     // 有一個帳戶算不出就是沒有讀數，不是 0
-    const usd = screen.getByText('Day P/L US$').closest('[data-metric-state]')!;
+    const usd = screen.getByText('Day P/L (US)').closest('[data-metric-state]')!;
     expect(usd).toHaveAttribute('data-metric-state', 'unavailable');
   });
 
@@ -607,5 +631,119 @@ describe('RealtimeBoardPage scope', () => {
     } finally {
       window.matchMedia = original;
     }
+  });
+
+  const bigMoveQuotes = (codes: string[]) =>
+    Promise.resolve(codes.map((c) => (c === '2454.TW'
+      ? { stockCode: c, quote: { ...quote(c, 200).quote, changePercent: 7 } }
+      : quote(c, c === '2330.TW' ? 1000 : c === '2887.TW' ? 40 : 200))));
+
+  it('builds the attention chips from the filtered rows only', async () => {
+    getQuotes.mockImplementation(bigMoveQuotes);
+    renderPage();
+    const chips = await screen.findByTestId('board-attention');
+    expect(within(chips).getByRole('button', { name: /2454\.TW/ })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Filter by name or code' }), { target: { value: 'zzzz' } });
+    await screen.findByText('No stocks match the filter');
+    expect(screen.queryByTestId('board-attention')).not.toBeInTheDocument();
+  });
+
+  it('jumps to the attention row: clears the filter, expands, scrolls it to the centre and highlights it', async () => {
+    const scrollIntoView = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      getQuotes.mockImplementation(bigMoveQuotes);
+      renderPage();
+      fireEvent.change(await screen.findByRole('textbox', { name: 'Filter by name or code' }), { target: { value: '2454' } });
+      const chip = within(await screen.findByTestId('board-attention')).getByRole('button', { name: /2454\.TW/ });
+      fireEvent.click(chip);
+      expect(screen.getByRole('textbox', { name: 'Filter by name or code' })).toHaveValue('');
+      await waitFor(() => expect(rowCodes()).toContain('2330.TW'));
+      expect(rowFor('2454.TW')).toHaveAttribute('data-row-highlighted', 'true');
+      expect(await screen.findByTestId('board-expanded')).toBeInTheDocument();
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center', behavior: 'smooth' }));
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it('caps the attention chips at five and folds the rest', async () => {
+    const codes = ['A', 'B', 'C', 'D', 'E', 'F', 'G'];
+    getWatchlist.mockResolvedValue(codes);
+    getSnapshot.mockResolvedValue({ accounts: [] });
+    getQuotes.mockImplementation((cs: string[]) =>
+      Promise.resolve(cs.map((c) => ({ stockCode: c, quote: { ...quote(c, 10).quote, changePercent: 5 + codes.indexOf(c) } }))),
+    );
+    renderPage();
+    const chips = await screen.findByTestId('board-attention');
+    await waitFor(() => expect(within(chips).getAllByRole('button')).toHaveLength(5));
+    // 依 |漲跌幅| 由大到小：G 最大排第一，A、B 被收起來
+    expect(within(chips).getAllByRole('button')[0]).toHaveTextContent('G');
+    expect(within(chips).getByText('+2 more')).toBeInTheDocument();
+  });
+
+  it('renders a single watchlist section in the watchlist scope, with held rows tagged', async () => {
+    renderPage();
+    await screen.findByRole('table', { name: 'Holdings (TW)' });
+    fireEvent.click(screen.getByRole('radio', { name: 'Watchlist' }));
+    const watch = await screen.findByRole('table', { name: 'Watchlist' });
+    await waitFor(() => expect(screen.getAllByRole('table')).toHaveLength(1));
+    expect(screen.queryByRole('table', { name: 'Holdings (TW)' })).not.toBeInTheDocument();
+    const held = within(watch).getAllByTestId('board-code').find((el) => el.textContent === '2330.TW')!.closest('tr')!;
+    expect(within(held).getByText('Held')).toBeInTheDocument();
+  });
+
+  it('keeps TW and US holdings apart in the holdings scope', async () => {
+    window.localStorage.setItem('dsa.board.scope', 'holdings');
+    renderPage();
+    expect(await screen.findByRole('table', { name: 'Holdings (TW)' })).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: 'Holdings (US)' })).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: 'Watchlist' })).not.toBeInTheDocument();
+  });
+
+  it('labels the day P/L as the previous session when both markets are closed', async () => {
+    getMarketStatus.mockResolvedValue({ tw: false, us: false });
+    getSnapshot.mockResolvedValue({ accounts: [
+      { accountName: 'a', baseCurrency: 'TWD', dayPnl: 1200, unrealizedPnl: 5000, positions: [] },
+    ] });
+    renderPage();
+    expect(await screen.findByText('Previous session P&L (TW)')).toBeInTheDocument();
+    expect(screen.queryByText('Day P/L (TW)')).not.toBeInTheDocument();
+  });
+
+  it('keeps the day P/L label while one market is still open', async () => {
+    // 反向：只有一邊休市不能改叫上一交易日
+    getMarketStatus.mockResolvedValue({ tw: false, us: true });
+    getSnapshot.mockResolvedValue({ accounts: [
+      { accountName: 'a', baseCurrency: 'TWD', dayPnl: 1200, unrealizedPnl: 5000, positions: [] },
+    ] });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('board-market-status').textContent).toContain('TW Closed'));
+    expect(await screen.findByText('Day P/L (TW)')).toBeInTheDocument();
+    expect(screen.queryByText('Previous session P&L (TW)')).not.toBeInTheDocument();
+  });
+
+  it('shows shares and unrealized P/L on the phone card of a holding', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getAllByTestId('board-mobile-holding').length).toBe(3));
+    // 40 股 @1050，現價 1000 → −2,000（−4.8%）
+    await waitFor(() =>
+      expect(screen.getAllByTestId('board-mobile-holding').map((el) => el.textContent)).toContainEqual(
+        expect.stringMatching(/^40 sh · [−-]2,000 \([−-]4\.8%\)$/),
+      ),
+    );
+  });
+
+  it('says how many quotes are back while the breadth is still loading', async () => {
+    const pending: Array<() => void> = [];
+    getQuotes.mockImplementation((codes: string[]) => new Promise((resolve) => {
+      pending.push(() => resolve(codes.map((c) => quote(c, 100))));
+    }));
+    renderPage();
+    await waitFor(() => expect(rowCodes()).toHaveLength(4));
+    expect(await screen.findByText('Loading 0/4')).toBeInTheDocument();
+    await act(async () => pending.splice(0).forEach((f) => f()));
+    await waitFor(() => expect(screen.getByText('Up 4 / Down 0 / Flat 0')).toBeInTheDocument());
   });
 });

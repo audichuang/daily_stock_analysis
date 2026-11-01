@@ -29,7 +29,8 @@ import { PortfolioSignalBadge } from '../components/decision-signals/DecisionSig
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText } from '../i18n/uiText';
 import { PORTFOLIO_PAGE_TEXT, PORTFOLIO_TEXT } from '../locales/featureText';
-import { formatNumber, formatPercent, NO_VALUE } from '../utils/format';
+import { PORTFOLIO_W09_TEXT } from '../locales/portfolioText';
+import { currencyUnitLabel, formatMoneyValue, formatNumber, formatPercent, NO_VALUE } from '../utils/format';
 import type { FxRefreshFeedback } from '../utils/portfolioFormat';
 import {
   buildFxRefreshFeedback,
@@ -52,6 +53,7 @@ import type { HoldingGroup, HoldingRow, HoldingSortKey } from '../utils/portfoli
 import {
   buildHoldingRows,
   getCommonScales,
+  getConsolidatedFactor,
   getSharedPriceDate,
   groupHoldingRows,
   sortHoldingRows,
@@ -203,7 +205,7 @@ const PORTFOLIO_RISK_DASHBOARD_TEXT = {
     maxDrawdown: '最大回撤',
     topPosition: 'Top1',
     topSector: 'Top1',
-    triggered: '触发',
+    triggered: '已触发',
     near: '接近',
     missingPrice: '缺价',
     stalePrice: '过期价',
@@ -259,7 +261,7 @@ const PORTFOLIO_RISK_DASHBOARD_TEXT = {
     maxDrawdown: '最大回撤',
     topPosition: 'Top1',
     topSector: 'Top1',
-    triggered: '觸發',
+    triggered: '已觸發',
     near: '接近',
     missingPrice: '缺價',
     stalePrice: '過期價',
@@ -606,7 +608,10 @@ function buildPortfolioRiskFlags(
       key: 'stop-loss',
       label: text.stopLoss,
       value: availability.stopLoss ? String(stopLoss?.triggeredCount ?? 0) : NO_VALUE,
-      detail: availability.stopLoss ? `${text.triggered}: ${stopLoss?.triggeredCount ?? 0} · ${text.near}: ${stopLoss?.nearCount ?? 0}` : text.unavailable,
+      // The backend's nearCount includes triggered holdings; show only the not-yet-triggered remainder.
+      detail: availability.stopLoss
+        ? `${text.triggered} ${stopLoss?.triggeredCount ?? 0} · ${text.near} ${Math.max(0, (stopLoss?.nearCount ?? 0) - (stopLoss?.triggeredCount ?? 0))}`
+        : text.unavailable,
       tone: availability.stopLoss ? (stopLoss?.nearAlert ? 'danger' : 'success') : 'neutral',
     },
     {
@@ -728,6 +733,54 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+// Server cap for page_size on the decision-signals list endpoint.
+const PORTFOLIO_SIGNAL_LIST_PAGE_SIZE = 100;
+
+function signalMatchesLookup(signal: DecisionSignalItem, lookup: PortfolioSignalLookup): boolean {
+  const signalMarket = String(signal.market || '').toLowerCase();
+  if (lookup.market && signalMarket && lookup.market !== signalMarket) return false;
+  return areStockCodesEquivalent(lookup.stockCode, signal.stockCode);
+}
+
+/**
+ * One grouped list request covers every holding (latest active signal per stock);
+ * only holdings it misses fall back to the per-stock latest endpoint. The server's
+ * holding filter reads a cached positions table that can lag the snapshot, hence the fallback.
+ */
+async function fetchPortfolioSignals(
+  lookups: PortfolioSignalLookup[],
+  accountId: number | undefined,
+): Promise<PortfolioSignalLookupResult[]> {
+  let listed: DecisionSignalItem[] | null = null;
+  try {
+    const response = await decisionSignalsApi.list({
+      holdingOnly: true,
+      groupLatest: true,
+      status: 'active',
+      accountId,
+      pageSize: PORTFOLIO_SIGNAL_LIST_PAGE_SIZE,
+    });
+    listed = response.items ?? [];
+  } catch {
+    // The per-stock fallback below reports its own errors.
+    listed = null;
+  }
+  const hits: PortfolioSignalLookupResult[] = [];
+  const misses: PortfolioSignalLookup[] = [];
+  for (const lookup of lookups) {
+    const matched = listed?.filter((signal) => signalMatchesLookup(signal, lookup)) ?? [];
+    if (matched.length > 0) {
+      hits.push({ items: matched, error: null });
+    } else {
+      misses.push(lookup);
+    }
+  }
+  const fallback = misses.length > 0
+    ? await mapWithConcurrency(misses, PORTFOLIO_SIGNAL_LOOKUP_CONCURRENCY, loadPortfolioSignalLookup)
+    : [];
+  return [...hits, ...fallback];
+}
+
 async function loadPortfolioSignalLookup(lookup: PortfolioSignalLookup): Promise<PortfolioSignalLookupResult> {
   try {
     const response = await decisionSignalsApi.getLatest(lookup.stockCode, {
@@ -745,6 +798,7 @@ const PortfolioPage: React.FC = () => {
   const text = PORTFOLIO_TEXT[language];
   const pageText = PORTFOLIO_PAGE_TEXT[language];
   const riskDashboardText = PORTFOLIO_RISK_DASHBOARD_TEXT[language];
+  const w09Text = PORTFOLIO_W09_TEXT[language];
   const decisionActionLabels = useMemo(() => buildDecisionActionLabelMap(t), [t]);
 
   // Set page title
@@ -920,26 +974,27 @@ const PortfolioPage: React.FC = () => {
   const loadSnapshotAndRisk = useCallback(async () => {
     setIsLoading(true);
     setRiskWarning(null);
-    try {
-      const snapshotData = await portfolioApi.getSnapshot(buildSnapshotQuery(queryAccountId, costMethod));
-      setSnapshot(snapshotData);
+    // Fetch both in parallel but keep their failures independent: a risk error only degrades the risk card.
+    const [snapshotResult, riskResult] = await Promise.allSettled([
+      portfolioApi.getSnapshot(buildSnapshotQuery(queryAccountId, costMethod)),
+      portfolioApi.getRisk(buildRiskQuery(queryAccountId, costMethod)),
+    ]);
+    if (snapshotResult.status === 'fulfilled') {
+      setSnapshot(snapshotResult.value);
       setError(null);
-
-      try {
-        const riskData = await portfolioApi.getRisk(buildRiskQuery(queryAccountId, costMethod));
-        setRisk(riskData);
-      } catch (riskErr) {
+      if (riskResult.status === 'fulfilled') {
+        setRisk(riskResult.value);
+      } else {
         setRisk(null);
-        const parsed = getParsedApiError(riskErr);
+        const parsed = getParsedApiError(riskResult.reason);
         setRiskWarning(parsed.message || pageText.loadError);
       }
-    } catch (err) {
+    } else {
       setSnapshot(null);
       setRisk(null);
-      setError(getParsedApiError(err));
-    } finally {
-      setIsLoading(false);
+      setError(getParsedApiError(snapshotResult.reason));
     }
+    setIsLoading(false);
   }, [queryAccountId, costMethod, pageText.loadError]);
 
   const loadEventsPage = useCallback(async (page: number) => {
@@ -1055,13 +1110,7 @@ const PortfolioPage: React.FC = () => {
   // A missing snapshot is unknown, not a successfully loaded empty portfolio.
   const positionCount = snapshot === null ? NO_VALUE : positionRows.length;
   // 只換曝險金額；比例不受幣別影響。缺換算值就維持快照幣別，不混用。
-  const displayFactor = useMemo(() => {
-    const consolidated = snapshot?.consolidatedMarketValueBase;
-    const total = snapshot?.totalMarketValue;
-    if (!snapshot?.displayCurrency || snapshot.consolidatedFxMissing) return null;
-    if (typeof consolidated !== 'number' || !Number.isFinite(consolidated)) return null;
-    return typeof total === 'number' && total > 0 ? consolidated / total : null;
-  }, [snapshot]);
+  const displayFactor = useMemo(() => getConsolidatedFactor(snapshot), [snapshot]);
   const exposureCurrency = displayFactor !== null ? (snapshot?.displayCurrency ?? undefined) : snapshot?.currency;
   const exposureTotal = displayFactor !== null ? snapshot?.consolidatedMarketValueBase : snapshot?.totalMarketValue;
   const marketLabel = useCallback((market: string): string => {
@@ -1094,9 +1143,14 @@ const PortfolioPage: React.FC = () => {
     const key = (holdingSort.key === 'weight' ? 'marketValue' : holdingSort.key) as HoldingSortKey;
     return sortHoldingRows(holdingRows, key, holdingSort.direction);
   }, [holdingRows, holdingSort]);
-  const holdingGroups = useMemo(() => groupHoldingRows(sortedHoldingRows), [sortedHoldingRows]);
+  const holdingScales = useMemo(() => getCommonScales(snapshot), [snapshot]);
+  const holdingGroups = useMemo(
+    () => groupHoldingRows(sortedHoldingRows, holdingScales?.currency),
+    [holdingScales, sortedHoldingRows],
+  );
   const sharedPriceDate = useMemo(() => getSharedPriceDate(holdingRows), [holdingRows]);
-  const holdingCurrency = useMemo(() => getCommonScales(snapshot)?.currency, [snapshot]);
+  // Weights were computed with a stale cross-currency rate: still shown, but flagged in the header.
+  const weightFxStale = holdingScales?.fxStale === true && holdingRows.some((row) => row.weightPct !== null);
   const portfolioRiskFlags = useMemo(
     () => buildPortfolioRiskFlags(risk, positionRows, snapshot, riskDashboardText),
     [positionRows, risk, riskDashboardText, snapshot],
@@ -1151,11 +1205,7 @@ const PortfolioPage: React.FC = () => {
     const loadPortfolioSignals = async () => {
       setPortfolioSignalsLoading(true);
       setPortfolioSignalsWarning(null);
-      const results = await mapWithConcurrency(
-        positionSignalLookups,
-        PORTFOLIO_SIGNAL_LOOKUP_CONCURRENCY,
-        loadPortfolioSignalLookup,
-      );
+      const results = await fetchPortfolioSignals(positionSignalLookups, queryAccountId);
       if (!isActiveRequest()) return;
       const collected = results.flatMap((result) => result.items);
       const failures = results.flatMap((result) => (result.error ? [result.error] : []));
@@ -1179,7 +1229,7 @@ const PortfolioPage: React.FC = () => {
     return () => {
       portfolioSignalsRequestRef.current += 1;
     };
-  }, [portfolioSignalsRefreshKey, positionSignalLookups, snapshotMatchesAccountScope, t]);
+  }, [portfolioSignalsRefreshKey, positionSignalLookups, queryAccountId, snapshotMatchesAccountScope, t]);
 
   const signalByRowKey = useMemo(() => {
     const mapped = new Map<string, DecisionSignalItem>();
@@ -1731,15 +1781,66 @@ const PortfolioPage: React.FC = () => {
   const dayAmount = hasFunds && fundDay === null
     ? null
     : (stockDayAmount !== null && fundDay !== null ? stockDayAmount + fundDay : stockDayAmount);
+  // 單一帳戶且帳戶幣別不是顯示幣別（例如 USD 複委託）：主值用帳戶原幣，hint 附換算後的約當值。
+  const singleAccount = selectedAccount !== 'all' && snapshot?.accounts?.length === 1 ? snapshot.accounts[0] : null;
+  const accountCurrency = singleAccount ? String(singleAccount.baseCurrency).toUpperCase() : null;
+  const useAccountCurrency = Boolean(
+    singleAccount && hasConsolidated && accountCurrency && accountCurrency !== String(summaryCurrency ?? '').toUpperCase(),
+  );
+  const metricCurrency = useAccountCurrency ? (accountCurrency ?? undefined) : summaryCurrency;
+  const metricUnit = currencyUnitLabel(metricCurrency) || undefined;
+  /** Summary money without the currency prefix (Metric renders it as `unit`); TWD has no decimals. */
+  const moneyDigits = (value: number, currency: string | undefined, signed = false): string => (
+    `${signed && value > 0 ? '+' : ''}${formatMoneyValue(value, currency, {})}`
+  );
+  /** Full summary money with the unit prefix, for hints. */
+  const moneyLabel = (value: number, currency: string | undefined, signed = false): string => {
+    const unit = currencyUnitLabel(currency);
+    return `${unit ? `${unit} ` : ''}${moneyDigits(value, currency, signed)}`;
+  };
+  const approxHint = (consolidated: number | null): string | undefined => (
+    useAccountCurrency && consolidated !== null
+      ? formatUiText(w09Text.approx, { amount: moneyLabel(consolidated, summaryCurrency) })
+      : undefined
+  );
+  const pickMetric = (accountValue: number | null | undefined, consolidated: number | null): number | null => (
+    useAccountCurrency
+      ? (typeof accountValue === 'number' && Number.isFinite(accountValue) ? accountValue : null)
+      : consolidated
+  );
   const amountText = (value: number | null): string => {
-    if (value !== null) return formatMoney(value, summaryCurrency);
-    return fxMissing ? text.fxMissingTotal : NO_VALUE;
+    if (value !== null) return moneyDigits(value, metricCurrency);
+    return fxMissing && !useAccountCurrency ? text.fxMissingTotal : NO_VALUE;
   };
   const signedNode = (value: number | null): React.ReactNode => (
     value === null
-      ? (fxMissing ? text.fxMissingTotal : NO_VALUE)
-      : <span className={marketToneClass(value)}>{formatSignedMoney(value, summaryCurrency)}</span>
+      ? (fxMissing && !useAccountCurrency ? text.fxMissingTotal : NO_VALUE)
+      : <span className={marketToneClass(value)}>{moneyDigits(value, metricCurrency, true)}</span>
   );
+  const metricUnitFor = (value: number | null): string | undefined => (value === null ? undefined : metricUnit);
+  const joinHints = (parts: Array<string | undefined | false | null>): string | undefined => {
+    const kept = parts.filter((part): part is string => Boolean(part));
+    return kept.length > 0 ? kept.join(' · ') : undefined;
+  };
+
+  const metricTotal = pickMetric(singleAccount?.totalEquity, totalAssets);
+  const metricDayValue = pickMetric(singleAccount?.dayPnl, dayAmount);
+  const metricUnrealizedValue = pickMetric(singleAccount?.unrealizedPnl, unrealizedAmount);
+  const metricRealizedValue = pickMetric(singleAccount?.realizedPnl, realizedAmount);
+  const metricMarketValue = pickMetric(singleAccount?.totalMarketValue, marketValueAmount);
+  const metricCashValue = pickMetric(singleAccount?.totalCash, cashAmount);
+  // 報價日不是今天（假日、盤前）就把「今日」改成報價日，避免把前一交易日損益當成今天的。
+  const quoteDateIsToday = !sharedPriceDate || sharedPriceDate === getTodayIso();
+  const dayLabel = quoteDateIsToday
+    ? pageText.metricDay
+    : formatUiText(w09Text.dayPnlOn, { date: (sharedPriceDate ?? '').slice(5).replace('-', '/') });
+  const dayBreakdown = selectedAccount === 'all' && hasFunds && stockDayAmount !== null && fundDay !== null
+    ? formatUiText(w09Text.dayBreakdown, {
+        stock: moneyDigits(stockDayAmount, summaryCurrency, true),
+        fund: moneyDigits(fundDay, summaryCurrency, true),
+      })
+    : undefined;
+  const showFundCard = hasFunds || fundsUnavailable;
 
   const snapshotQualityMessage = snapshot?.dataQuality === 'partial' && snapshot.limitations?.length
     ? snapshot.limitations
@@ -1752,13 +1853,13 @@ const PortfolioPage: React.FC = () => {
   const riskLoading = isLoading && risk === null && !riskFailed;
   const showAccountNames = (snapshot?.accounts?.length ?? 0) > 1;
 
-  // 小計是跨帳戶加總：同幣就是原幣，跨幣別要換到顯示幣別才可讀。
-  const subtotalAmount = (value: number | null): { value: number | null; currency?: string } => {
-    if (value === null) return { value: null };
-    if (displayFactor !== null && holdingCurrency === snapshot?.currency) {
+  // 小計依組內幣別：同幣就是原幣；只剩快照彙總幣別時才換到顯示幣別。
+  const subtotalAmount = (value: number | null, currency: string | null): { value: number | null; currency?: string } => {
+    if (value === null || currency === null) return { value: null };
+    if (displayFactor !== null && currency === String(snapshot?.currency ?? '').toUpperCase()) {
       return { value: value * displayFactor, currency: snapshot?.displayCurrency ?? undefined };
     }
-    return { value, currency: holdingCurrency };
+    return { value, currency };
   };
 
   const rowMenuItems = (row: HoldingRow) => [
@@ -1813,7 +1914,12 @@ const PortfolioPage: React.FC = () => {
     },
     {
       key: 'weight',
-      header: pageText.colWeight,
+      header: weightFxStale ? (
+        <span className="inline-flex items-center gap-1">
+          {pageText.colWeight}
+          <Badge variant="warning">{w09Text.weightFxStale}</Badge>
+        </span>
+      ) : pageText.colWeight,
       numeric: true,
       sortable: true,
       render: (row) => (row.weightPct === null ? NO_VALUE : formatPct(row.weightPct)),
@@ -1856,8 +1962,8 @@ const PortfolioPage: React.FC = () => {
   ];
 
   const holdingRowGroups: DataTableRowGroup<HoldingRow>[] = holdingGroups.map((group: HoldingGroup) => {
-    const value = subtotalAmount(group.value);
-    const pnl = subtotalAmount(group.pnl);
+    const value = subtotalAmount(group.value, group.currency);
+    const pnl = subtotalAmount(group.pnl, group.currency);
     const label = formatUiText(pageText.groupSummary, { label: marketLabel(group.market), count: group.rows.length });
     return {
       key: group.market,
@@ -1884,18 +1990,24 @@ const PortfolioPage: React.FC = () => {
 
   const holdingMobileSort = (holdingSort.key === 'weight' ? 'marketValue' : holdingSort.key) as HoldingSortKey;
 
+  // 手機兩行：名稱＋AI 標籤 …… 市值；代號 · 佔比 …… 損益 · ％。AI 標籤不跟名稱一起被截斷。
   const renderHoldingMobileCard = (row: HoldingRow) => (
     <div className="flex items-center gap-2 px-3 py-2">
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2 text-sm">
-          <span className="truncate text-foreground">{row.name || row.symbol}</span>
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-foreground">{row.name || row.symbol}</span>
+            <span className="shrink-0">
+              <PortfolioSignalBadge item={signalByRowKey.get(row.key)} loading={portfolioSignalsLoading} showHint={false} />
+            </span>
+          </span>
           <span className="shrink-0 tabular-nums">{formatPositionMoney(row.marketValueBase, row)}</span>
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-secondary">
-          <span className="flex min-w-0 items-center gap-1.5 truncate">
+          <span className="min-w-0 truncate">
             {row.name ? <span className="font-mono">{row.symbol}</span> : null}
+            {row.name ? ' · ' : null}
             <span>{row.weightPct === null ? NO_VALUE : formatPct(row.weightPct)}</span>
-            <PortfolioSignalBadge item={signalByRowKey.get(row.key)} loading={portfolioSignalsLoading} showHint={false} />
           </span>
           <span className={cn('shrink-0 tabular-nums', hasPositionPrice(row) ? marketToneClass(row.unrealizedPnlBase) : 'text-secondary')}>
             {hasPositionPrice(row)
@@ -1990,6 +2102,78 @@ const PortfolioPage: React.FC = () => {
       })),
     },
   ];
+
+  // Trade/corporate records carry no name; borrow it from the matching holding when there is one.
+  const holdingNameFor = (symbol: string): string | null => (
+    holdingRows.find((row) => areStockCodesEquivalent(row.symbol, symbol))?.name || null
+  );
+
+  // 手機紀錄卡兩行：代號＋名稱 …… 金額；日期 · 類型 Badge …… 數量或幣別。
+  const recordMobileCard = (
+    title: React.ReactNode,
+    amount: React.ReactNode,
+    date: string,
+    badge: React.ReactNode,
+    detail: React.ReactNode,
+    action: React.ReactNode,
+  ) => (
+    <div className="flex items-center gap-2 px-3 py-2">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-2 text-sm">
+          <span className="min-w-0 truncate text-foreground">{title}</span>
+          <span className="shrink-0 tabular-nums">{amount}</span>
+        </div>
+        <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-secondary">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="tabular-nums">{date}</span>
+            <span aria-hidden="true">·</span>
+            {badge}
+          </span>
+          <span className="shrink-0 tabular-nums">{detail}</span>
+        </div>
+      </div>
+      {action}
+    </div>
+  );
+
+  const symbolTitle = (symbol: string) => {
+    const name = holdingNameFor(symbol);
+    return (
+      <>
+        <span className="font-mono">{symbol}</span>
+        {name ? <span className="ml-1.5">{name}</span> : null}
+      </>
+    );
+  };
+
+  const renderTradeMobileCard = (item: PortfolioTradeListItem) => recordMobileCard(
+    symbolTitle(item.symbol),
+    formatMoney(item.price, item.currency),
+    item.tradeDate,
+    <Badge variant={item.side === 'buy' ? 'info' : 'default'}>{formatSideLabel(item.side, language)}</Badge>,
+    formatUiText(w09Text.shares, { quantity: formatNumber(item.quantity) }),
+    tradeColumns.find((column) => column.key === 'delete')?.render?.(item),
+  );
+
+  const renderCashMobileCard = (item: PortfolioCashLedgerListItem) => recordMobileCard(
+    item.note || item.currency,
+    formatMoney(item.amount, item.currency),
+    item.eventDate,
+    <Badge variant={item.direction === 'in' ? 'info' : 'default'}>{formatCashDirectionLabel(item.direction, language)}</Badge>,
+    null,
+    cashColumns.find((column) => column.key === 'delete')?.render?.(item),
+  );
+
+  const renderCorporateMobileCard = (item: PortfolioCorporateActionListItem) => recordMobileCard(
+    symbolTitle(item.symbol),
+    item.actionType === 'cash_dividend'
+      ? formatUiText(w09Text.dividendPerShare, { amount: formatNumber(item.cashDividendPerShare) })
+      : formatUiText(w09Text.splitRatio, { ratio: formatNumber(item.splitRatio) }),
+    item.effectiveDate,
+    <Badge variant="default">{formatCorporateActionLabel(item.actionType, language)}</Badge>,
+    item.currency,
+    corporateColumns.find((column) => column.key === 'delete')?.render?.(item),
+  );
 
   const recordsEmpty = (
     <EmptyState
@@ -2168,26 +2352,59 @@ const PortfolioPage: React.FC = () => {
           <Metric
             hero
             label={pageText.metricTotalAssets}
-            value={amountText(totalAssets)}
-            hint={hasFunds
-              ? formatUiText(pageText.includesFunds, { amount: formatMoney(fundValue, summaryCurrency) })
-              : fundsUnavailable && equityAmount !== null ? pageText.excludesFunds : undefined}
+            unit={metricUnitFor(metricTotal)}
+            value={amountText(metricTotal)}
+            hint={joinHints([
+              hasFunds && fundValue !== null
+                ? formatUiText(pageText.includesFunds, { amount: moneyLabel(fundValue, summaryCurrency) })
+                : fundsUnavailable && equityAmount !== null ? pageText.excludesFunds : undefined,
+              approxHint(totalAssets),
+            ])}
           />
           <Metric
-            label={pageText.metricDay}
-            value={signedNode(dayAmount)}
-            hint={fundsUnavailable && dayAmount !== null ? pageText.stocksOnly : undefined}
+            label={dayLabel}
+            unit={metricUnitFor(metricDayValue)}
+            value={signedNode(metricDayValue)}
+            hint={joinHints([
+              quoteDateIsToday ? undefined : w09Text.marketClosed,
+              dayBreakdown,
+              fundsUnavailable && dayAmount !== null ? pageText.stocksOnly : undefined,
+              approxHint(dayAmount),
+            ])}
           />
-          <Metric label={pageText.metricUnrealized} value={signedNode(unrealizedAmount)} />
-          <Metric label={pageText.metricRealized} value={signedNode(realizedAmount)} />
-          <Metric label={pageText.metricMarketValue} value={amountText(marketValueAmount)} />
-          <Metric label={pageText.metricCash} value={amountText(cashAmount)} />
-          {hasFunds || fundsUnavailable ? (
+          <Metric
+            label={pageText.metricUnrealized}
+            unit={metricUnitFor(metricUnrealizedValue)}
+            value={signedNode(metricUnrealizedValue)}
+            hint={approxHint(unrealizedAmount)}
+          />
+          <Metric
+            label={pageText.metricRealized}
+            unit={metricUnitFor(metricRealizedValue)}
+            value={signedNode(metricRealizedValue)}
+            hint={approxHint(realizedAmount)}
+          />
+          <Metric
+            label={pageText.metricMarketValue}
+            unit={metricUnitFor(metricMarketValue)}
+            value={amountText(metricMarketValue)}
+            hint={approxHint(marketValueAmount)}
+          />
+          <Metric
+            label={pageText.metricCash}
+            unit={metricUnitFor(metricCashValue)}
+            value={amountText(metricCashValue)}
+            hint={approxHint(cashAmount)}
+            // Hero takes two slots, so without the funds card the last row has one gap: let cash fill it.
+            className={showFundCard ? undefined : 'md:col-span-2'}
+          />
+          {showFundCard ? (
             <Metric
               label={pageText.metricFunds}
-              value={fundValue === null ? NO_VALUE : formatMoney(fundValue, summaryCurrency)}
+              unit={fundValue === null ? undefined : currencyUnitLabel(summaryCurrency) || undefined}
+              value={fundValue === null ? NO_VALUE : moneyDigits(fundValue, summaryCurrency)}
               hint={fundDay === null ? undefined : (
-                <span className={marketToneClass(fundDay)}>{formatSignedMoney(fundDay, summaryCurrency)}</span>
+                <span className={marketToneClass(fundDay)}>{moneyLabel(fundDay, summaryCurrency, true)}</span>
               )}
             />
           ) : null}
@@ -2479,11 +2696,11 @@ const PortfolioPage: React.FC = () => {
           </div>
           {writeBlocked ? <p className="mb-2 text-[11px] text-secondary">{pageText.deleteHintBlocked}</p> : null}
           {eventType === 'trade' ? (
-            <DataTable columns={tradeColumns} rows={tradeEvents} rowKey={(item) => `t-${item.id}`} density="compact" emptyState={eventLoading ? undefined : recordsEmpty} aria-label={pageText.typeTrade} />
+            <DataTable columns={tradeColumns} renderMobileCard={renderTradeMobileCard} rows={tradeEvents} rowKey={(item) => `t-${item.id}`} density="compact" emptyState={eventLoading ? undefined : recordsEmpty} aria-label={pageText.typeTrade} />
           ) : eventType === 'cash' ? (
-            <DataTable columns={cashColumns} rows={cashEvents} rowKey={(item) => `c-${item.id}`} density="compact" emptyState={eventLoading ? undefined : recordsEmpty} aria-label={pageText.typeCash} />
+            <DataTable columns={cashColumns} renderMobileCard={renderCashMobileCard} rows={cashEvents} rowKey={(item) => `c-${item.id}`} density="compact" emptyState={eventLoading ? undefined : recordsEmpty} aria-label={pageText.typeCash} />
           ) : (
-            <DataTable columns={corporateColumns} rows={corporateEvents} rowKey={(item) => `ca-${item.id}`} density="compact" emptyState={eventLoading ? undefined : recordsEmpty} aria-label={pageText.typeCorporate} />
+            <DataTable columns={corporateColumns} renderMobileCard={renderCorporateMobileCard} rows={corporateEvents} rowKey={(item) => `ca-${item.id}`} density="compact" emptyState={eventLoading ? undefined : recordsEmpty} aria-label={pageText.typeCorporate} />
           )}
           <div className="mt-3 flex items-center justify-between text-xs text-secondary">
             <span>{formatUiText(pageText.pageOf, { page: eventPage, total: totalEventPages })}</span>

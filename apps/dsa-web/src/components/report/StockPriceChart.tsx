@@ -12,7 +12,8 @@ import {
   YAxis,
 } from 'recharts';
 import { stocksApi, type PriceBar } from '../../api/stocks';
-import type { ReportLanguage, ReportStrategy } from '../../types/analysis';
+import { getReportPolishText, reducesOnBounce, type ReportPolishText } from '../../locales/reportText';
+import type { DecisionAction, ReportLanguage, ReportStrategy } from '../../types/analysis';
 import { formatNumber, formatPrice } from '../../utils/format';
 import { marketToneClass } from '../../utils/marketTone';
 import { priceDomain, sliceByRange, withMovingAverages, type ChartBar, type ChartRange } from '../../utils/priceChart';
@@ -28,6 +29,8 @@ interface StockPriceChartProps {
   language?: ReportLanguage;
   /** 無新聞護欄擋下時不畫停損目標線。 */
   hideLevels?: boolean;
+  /** 減碼／觀望類動作時，目標線改叫「反彈減碼」。 */
+  action?: DecisionAction | null;
 }
 
 const TEXT = {
@@ -66,28 +69,83 @@ type CandleShapeProps = {
   width: number;
   height: number;
   payload: ChartBar;
+  /** Plot-area band recharts passes to each bar; used to keep candles inside the chart. */
+  background?: { y?: number; height?: number };
 };
 
 // recharts 的 range bar 給的是 low～high 的矩形，開收盤的位置由這段比例換算。
 const renderCandle = (raw: unknown): React.ReactElement => {
-  const { x, y, width, height, payload } = raw as CandleShapeProps;
+  const { x, y, width, height, payload, background } = raw as CandleShapeProps;
   const { open, high, low, close } = payload;
   const unit = high > low ? height / (high - low) : 0;
   const yOf = (value: number) => y + (high - value) * unit;
   const color = close > open ? 'var(--market-up)' : close < open ? 'var(--market-down)' : 'var(--text-muted-text)';
   const center = x + width / 2;
+  // Clamp to the plot area so a bar outside the price domain never floats above or below the chart.
+  const top = typeof background?.y === 'number' ? background.y : -Infinity;
+  const bottom = typeof background?.y === 'number' && typeof background.height === 'number'
+    ? background.y + background.height
+    : Infinity;
+  const clamp = (value: number) => Math.min(Math.max(value, top), bottom);
+  const wickTop = clamp(y);
+  const wickBottom = clamp(y + height);
+  const bodyTop = clamp(yOf(Math.max(open, close)));
+  const bodyBottom = clamp(yOf(Math.max(open, close)) + Math.max(Math.abs(open - close) * unit, 1));
   return (
     <g>
-      <line x1={center} x2={center} y1={y} y2={y + height} stroke={color} strokeWidth={1} />
-      <rect
-        x={x}
-        y={yOf(Math.max(open, close))}
-        width={Math.max(width, 1)}
-        height={Math.max(Math.abs(open - close) * unit, 1)}
-        fill={color}
-      />
+      {wickBottom > wickTop ? <line x1={center} x2={center} y1={wickTop} y2={wickBottom} stroke={color} strokeWidth={1} /> : null}
+      {bodyBottom > bodyTop ? (
+        <rect x={x} y={bodyTop} width={Math.max(width, 1)} height={bodyBottom - bodyTop} fill={color} />
+      ) : null}
     </g>
   );
+};
+
+type LabelViewBox = { x?: number; y?: number; width?: number; height?: number };
+
+// Rough glyph widths at 11px: CJK is about one em, Latin about 0.6 em.
+const estimateLabelWidth = (value: string): number =>
+  Array.from(value).reduce((sum, char) => sum + (char.charCodeAt(0) > 0x2e7f ? 11 : 6.6), 0);
+
+/** Reference-line label pinned inside the right edge, on a translucent plate so candles stay readable. */
+const levelLabel = (value: string, color: string) => {
+  // recharts passes a cartesian viewBox for reference lines; typed loosely to match its union.
+  const renderLabel = (props: { viewBox?: unknown }) => {
+    const { x = 0, y = 0, width = 0 } = (props.viewBox ?? {}) as LabelViewBox;
+    const textWidth = estimateLabelWidth(value);
+    const right = x + width - 4;
+    return (
+      <g>
+        <rect x={right - textWidth - 8} y={y - 9} width={textWidth + 8} height={18} rx={4} fill="hsl(var(--card))" fillOpacity={0.85} />
+        <text x={right - 4} y={y} dy={4} textAnchor="end" fontSize={11} fill={color}>{value}</text>
+      </g>
+    );
+  };
+  return renderLabel;
+};
+
+const TW_CODE = /\.(TW|TWO)$/i;
+
+/**
+ * Compact a count for a narrow cell. CJK: 萬 / 億 with about three significant digits, unit glued on
+ * ("3.66 萬張"). English: K/M/B. Small values stay grouped integers ("−8,633 張").
+ */
+const compactWithUnit = (value: number, unit: string, polish: ReportPolishText, cjk: boolean): string => {
+  const abs = Math.abs(value);
+  const tail = unit ? ` ${unit}` : '';
+  if (cjk) {
+    if (abs >= 1e8) return `${formatNumber(value / 1e8, abs >= 1e9 ? 1 : 2)} ${polish.unitYi}${unit}`;
+    if (abs >= 1e4) {
+      // Keep about three significant digits: 3.66 萬, 36.6 萬, 366 萬, 3,660 萬.
+      const digits = abs >= 1e6 ? 0 : abs >= 1e5 ? 1 : 2;
+      return `${formatNumber(value / 1e4, digits)} ${polish.unitWan}${unit}`;
+    }
+    return `${formatNumber(value, 0)}${tail}`;
+  }
+  if (abs >= 1e9) return `${formatNumber(value / 1e9, 2)}B${tail}`;
+  if (abs >= 1e6) return `${formatNumber(value / 1e6, 2)}M${tail}`;
+  if (abs >= 1e4) return `${formatNumber(value / 1e3, 1)}K${tail}`;
+  return `${formatNumber(value, 0)}${tail}`;
 };
 
 const candleRange = (bar: ChartBar): [number, number] => [bar.low, bar.high];
@@ -107,8 +165,14 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({
   currency,
   language = 'zh',
   hideLevels = false,
+  action,
 }) => {
-  const text = TEXT[normalizeReportLanguage(language)];
+  const reportLanguage = normalizeReportLanguage(language);
+  const text = TEXT[reportLanguage];
+  const polish = getReportPolishText(reportLanguage);
+  const cjk = reportLanguage === 'zh' || reportLanguage === 'zh-TW';
+  const isTw = TW_CODE.test(stockCode.trim());
+  const targetName = reducesOnBounce(action) ? polish.chartReboundReduce : text.target;
   const [loaded, setLoaded] = useState<{ code: string; bars: PriceBar[] } | null>(null);
   const [range, setRange] = useState<ChartRange>('3m');
 
@@ -144,24 +208,36 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({
   const realtime = asRecord(enhanced.realtime);
   const institutionBlock = asRecord(asRecord(enhanced.fundamentalContext).institution);
   const institution = institutionBlock.status === 'ok' ? asRecord(institutionBlock.data) : {};
-  const metrics: Array<{ key: string; label: string; value: string; toneClass?: string }> = [];
-  const pushMetric = (key: string, label: string, value: number | null, format: (reading: number) => string, toneClass?: string) => {
-    if (value !== null) metrics.push({ key, label, value: format(value), toneClass });
+  const metrics: Array<{ key: string; label: string; unit?: string; value: string; toneClass?: string }> = [];
+  const pushMetric = (
+    key: string,
+    label: string,
+    value: number | null,
+    format: (reading: number) => string,
+    unit?: string,
+    toneClass?: string,
+  ) => {
+    if (value !== null) metrics.push({ key, label, unit, value: format(value), toneClass });
   };
   const asPrice = (reading: number) => formatPrice(reading, currencyCode);
-  const asInteger = (reading: number) => formatNumber(reading, 0);
   const asDecimal = (reading: number) => formatNumber(reading, 2);
-  pushMetric('open', text.open, readNumber(today, 'open'), asPrice);
-  pushMetric('high', text.high, readNumber(today, 'high'), asPrice);
-  pushMetric('low', text.low, readNumber(today, 'low'), asPrice);
-  pushMetric('volume', text.volume, readNumber(today, 'volume'), asInteger);
-  pushMetric('amount', text.amount, readNumber(today, 'amount'), asInteger);
-  pushMetric('volumeRatio', text.volumeRatio, readNumber(realtime, 'volumeRatio'), asDecimal);
-  pushMetric('pe', text.pe, readNumber(realtime, 'peRatio'), asDecimal);
+  // Snapshot volume and institutional nets are in shares; Taiwan quotes them in lots of 1,000.
+  const shareUnit = isTw ? polish.unitLots : polish.unitShares;
+  const toShareUnit = (shares: number) => (isTw ? shares / 1000 : shares);
+  const asVolume = (shares: number) => compactWithUnit(toShareUnit(shares), shareUnit, polish, cjk);
+  const asAmount = (amount: number) => compactWithUnit(amount, '', polish, cjk);
+  const asNet = (shares: number) => `${formatNumber(toShareUnit(shares), 0)} ${shareUnit}`;
+  pushMetric('open', text.open, readNumber(today, 'open'), asPrice, currencyCode);
+  pushMetric('high', text.high, readNumber(today, 'high'), asPrice, currencyCode);
+  pushMetric('low', text.low, readNumber(today, 'low'), asPrice, currencyCode);
+  pushMetric('volume', text.volume, readNumber(today, 'volume'), asVolume, shareUnit);
+  pushMetric('amount', text.amount, readNumber(today, 'amount'), asAmount, currencyCode);
+  pushMetric('volumeRatio', text.volumeRatio, readNumber(realtime, 'volumeRatio'), asDecimal, polish.unitTimes);
+  pushMetric('pe', text.pe, readNumber(realtime, 'peRatio'), asDecimal, polish.unitTimes);
   const foreignNet = readNumber(institution, 'foreignNet');
   const trustNet = readNumber(institution, 'trustNet');
-  pushMetric('foreign', text.foreign, foreignNet, asInteger, marketToneClass(foreignNet));
-  pushMetric('trust', text.trust, trustNet, asInteger, marketToneClass(trustNet));
+  pushMetric('foreign', text.foreign, foreignNet, asNet, shareUnit, marketToneClass(foreignNet));
+  pushMetric('trust', text.trust, trustNet, asNet, shareUnit, marketToneClass(trustNet));
 
   if (visibleBars.length === 0 && metrics.length === 0) {
     return null;
@@ -191,6 +267,7 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({
             />
             <div className="h-64 w-full min-w-0">
               <ResponsiveContainer width="100%" height="100%">
+                {/* recharts clips bars and lines to the plot area via YAxis allowDataOverflow; renderCandle also clamps */}
                 <ComposedChart data={visibleBars} syncId="report-price" margin={CHART_MARGIN}>
                   <XAxis dataKey="date" hide />
                   <YAxis
@@ -224,7 +301,7 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({
                       y={stop}
                       stroke="hsl(var(--warning))"
                       strokeDasharray="4 3"
-                      label={{ value: `${text.stop} ${asPrice(stop)}`, position: 'insideBottomLeft', fontSize: 11, fill: 'hsl(var(--warning))' }}
+                      label={levelLabel(`${text.stop} ${asPrice(stop)}`, 'hsl(var(--warning))')}
                     />
                   ) : null}
                   {target !== null ? (
@@ -232,7 +309,7 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({
                       y={target}
                       stroke="hsl(var(--muted-text))"
                       strokeDasharray="4 3"
-                      label={{ value: `${text.target} ${asPrice(target)}`, position: 'insideTopLeft', fontSize: 11, fill: 'hsl(var(--muted-text))' }}
+                      label={levelLabel(`${targetName} ${asPrice(target)}`, 'hsl(var(--muted-text))')}
                     />
                   ) : null}
                 </ComposedChart>
@@ -250,11 +327,19 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({
           </>
         ) : null}
         {metrics.length > 0 ? (
-          <dl data-testid="stock-key-numbers" className="mt-3 grid grid-cols-3 gap-x-4 gap-y-2 text-sm md:grid-cols-5 xl:grid-cols-9">
+          <dl data-testid="stock-key-numbers" className="mt-3 grid grid-cols-3 gap-x-4 gap-y-2 text-sm md:grid-cols-4 xl:grid-cols-5">
             {metrics.map((metric) => (
               <div key={metric.key} className="min-w-0">
-                <dt className="text-xs text-muted-text">{metric.label}</dt>
-                <dd className={`break-words font-medium tabular-nums ${metric.toneClass ?? 'text-foreground'}`}>{metric.value}</dd>
+                <dt className="text-xs text-muted-text">
+                  {metric.label}
+                  {metric.unit ? <span className="block text-[11px] leading-4 text-muted-text/80">{metric.unit}</span> : null}
+                </dt>
+                <dd
+                  data-testid={`key-number-${metric.key}`}
+                  className={`whitespace-nowrap font-medium tabular-nums ${metric.toneClass ?? 'text-foreground'}`}
+                >
+                  {metric.value}
+                </dd>
               </div>
             ))}
           </dl>

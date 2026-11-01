@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter, useLocation } from 'react-router-dom';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApiError, createParsedApiError } from '../../api/error';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import FundsPage from '../FundsPage';
@@ -67,25 +67,118 @@ function route(url: string) {
   return Promise.reject(new Error(`unexpected ${url}`));
 }
 
+// Exposes the router's current query string so tests can assert what was (not) written to the URL.
+const LocationProbe = () => <div data-testid="location-search">{useLocation().search}</div>;
+
 function renderPage(path = '/funds') {
   return render(
     <UiLanguageProvider>
       <MemoryRouter initialEntries={[path]}>
         <FundsPage />
+        <LocationProbe />
       </MemoryRouter>
     </UiLanguageProvider>,
   );
 }
 
+// Only the "below md" query is width-dependent; set viewport.narrow before render.
+const viewport = { narrow: false };
+const originalMatchMedia = window.matchMedia;
+
 describe('FundsPage', () => {
+  beforeAll(() => {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: viewport.narrow && query.includes('max-width: 767'),
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+  });
+
+  afterAll(() => {
+    Object.defineProperty(window, 'matchMedia', { writable: true, value: originalMatchMedia });
+  });
+
   beforeEach(() => {
+    viewport.narrow = false;
+    document.body.classList.remove('overflow-hidden');
     get.mockReset();
     get.mockImplementation(route);
   });
 
   it('opens the mobile detail layer for an explicit ?fund= deep link', async () => {
+    viewport.narrow = true;
     renderPage('/funds?fund=18480065');
-    expect((await screen.findByTestId('funds-detail')).className).not.toContain('hidden md:block');
+    expect((await screen.findByTestId('funds-detail')).parentElement).toBe(document.body);
+  });
+
+  it('auto-selects the first holding without writing ?fund= to the URL', async () => {
+    renderPage();
+    // The detail request proves the auto-selection happened before checking the URL.
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/funds/18480065'));
+    expect(await screen.findByRole('heading', { name: '安联台湾科技基金' })).toBeInTheDocument();
+    expect(screen.getByTestId('location-search').textContent).not.toContain('fund=');
+    // A deliberate pick still writes the URL.
+    const desktop = within(screen.getByTestId('data-table-desktop'));
+    fireEvent.click(desktop.getByRole('button', { name: '安联台湾科技基金' }));
+    expect(screen.getByTestId('location-search')).toHaveTextContent('fund=18480065');
+  });
+
+  it('renders the tapped mobile detail layer into document.body and closes it on Back', async () => {
+    viewport.narrow = true;
+    const { container } = renderPage();
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/funds/18480065'));
+    // Auto-selection keeps the phone on the list.
+    expect(screen.queryByTestId('funds-detail')).not.toBeInTheDocument();
+    expect(screen.getByTestId('funds-mobile-row').closest('li')).not.toHaveAttribute('data-row-highlighted');
+
+    fireEvent.click(within(screen.getByTestId('data-table-mobile')).getByText('安联台湾科技基金'));
+    const detail = await screen.findByTestId('funds-detail');
+    expect(detail.parentElement).toBe(document.body);
+    expect(container.contains(detail)).toBe(false);
+    expect(detail.className).toContain('fixed inset-0 z-[45]');
+    expect(document.body).toHaveClass('overflow-hidden');
+    expect(screen.getByTestId('funds-mobile-row').closest('li')).toHaveAttribute('data-row-highlighted', 'true');
+    expect(screen.getByTestId('location-search')).toHaveTextContent('fund=18480065');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
+    expect(screen.queryByTestId('funds-detail')).not.toBeInTheDocument();
+    expect(document.body).not.toHaveClass('overflow-hidden');
+  });
+
+  it('shows day P/L and total return on mobile rows and keeps edit/delete in the row menu', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/api/v1/funds/holdings') {
+        const data = holdingsResponse(450906);
+        return Promise.resolve({ data: { ...data, items: [{ ...data.items[0], day_pnl: -18928, nav_change_pct: -4.28 }] } });
+      }
+      return route(url);
+    });
+    viewport.narrow = true;
+    renderPage();
+    const row = await screen.findByTestId('funds-mobile-row');
+    expect(row).toHaveTextContent('Day P/L \u221218,928（\u22124.28%）');
+    expect(row).toHaveTextContent('Total +94.36%');
+    expect(within(row).queryByRole('button', { name: 'Edit holding' })).not.toBeInTheDocument();
+    fireEvent.click(within(row).getByRole('button', { name: 'More actions' }));
+    const remove = await screen.findByRole('menuitem', { name: 'Delete holding' });
+    expect(remove).toHaveClass('text-danger');
+    fireEvent.click(remove);
+    expect(screen.getByText('Delete the holding of "安联台湾科技基金"?')).toBeInTheDocument();
+    expect(screen.queryByTestId('funds-detail')).not.toBeInTheDocument();
+  });
+
+  it('shows my aggregated holding in the detail', async () => {
+    renderPage('/funds?fund=18480065');
+    const mine = await screen.findByTestId('funds-my-holding');
+    expect(mine).toHaveTextContent('My holding：588.2 units · Cost 232,000 · P/L +218,906（+94.36%）');
   });
 
   it('lists fund holdings with market value from the latest NAV', async () => {
@@ -116,9 +209,9 @@ describe('FundsPage', () => {
   it('asks the chart for the same period basis as the return cards, and the full history for All', async () => {
     renderPage('/funds?fund=18480065');
     await screen.findByText('+157.99%');
-    fireEvent.click(screen.getByRole('button', { name: '5Y' }));
+    fireEvent.click(screen.getByRole('radio', { name: '5Y' }));
     await waitFor(() => expect(get).toHaveBeenCalledWith('/api/v1/funds/18480065/nav', { params: { period: 'y5' } }));
-    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'All' }));
     await waitFor(() => expect(get).toHaveBeenLastCalledWith('/api/v1/funds/18480065/nav', { params: {} }));
     expect(get.mock.calls.some(([, cfg]) => cfg?.params?.days !== undefined)).toBe(false);
   });
@@ -152,16 +245,6 @@ describe('FundsPage', () => {
     expect(await screen.findByRole('heading', { name: '安联台湾科技基金' })).toBeInTheDocument();
     const desktop = within(screen.getByTestId('data-table-desktop'));
     expect(desktop.getByText('安联台湾科技基金').closest('tr')).toHaveAttribute('data-row-highlighted', 'true');
-  });
-
-  it('keeps the mobile detail layer closed on the default selection and opens it on tap', async () => {
-    renderPage();
-    await screen.findByRole('heading', { name: '安联台湾科技基金' });
-    expect(screen.getByTestId('funds-detail').className).toContain('hidden md:block');
-    fireEvent.click(within(screen.getByTestId('data-table-mobile')).getByText('安联台湾科技基金'));
-    expect(screen.getByTestId('funds-detail').className).toContain('fixed inset-0');
-    fireEvent.click(screen.getByRole('button', { name: 'Back to list' }));
-    expect(screen.getByTestId('funds-detail').className).toContain('hidden md:block');
   });
 
   it('shows the overview totals with signed P/L and an uncoloured market value', async () => {
@@ -295,7 +378,7 @@ describe('FundsPage', () => {
       ));
       renderPage();
       await screen.findByText('No fund holdings yet');
-      fireEvent.click(screen.getByRole('button', { name: 'Add holding' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add fund' }));
       const dialog = within(await screen.findByRole('dialog'));
       expect(dialog.getByText('Search and select a fund below first')).toBeInTheDocument();
       expect(dialog.getByRole('button', { name: 'Save' })).toBeDisabled();
@@ -310,7 +393,7 @@ describe('FundsPage', () => {
     it('keeps the fund of an add form that already has one when the page selection changes', async () => {
       renderPage('/funds?fund=18480065');
       await screen.findByText('+157.99%');
-      fireEvent.click(screen.getByRole('button', { name: 'Add holding' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add fund' }));
       expect(screen.getByText('Add holding：安联台湾科技基金')).toBeInTheDocument();
 
       await pickFrom(within(screen.getByTestId('funds-header-search')));
@@ -336,7 +419,7 @@ describe('FundsPage', () => {
     it('shows field errors instead of silently refusing to save', async () => {
       renderPage('/funds?fund=18480065');
       await screen.findByText('+157.99%');
-      fireEvent.click(screen.getByRole('button', { name: 'Add holding' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add fund' }));
       const dialog = within(await screen.findByRole('dialog'));
       fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
       expect(await dialog.findByText('Units must be above 0')).toBeInTheDocument();
@@ -348,7 +431,7 @@ describe('FundsPage', () => {
       post.mockRejectedValueOnce(createApiError(createParsedApiError({ title: 'Conflict', message: 'Platform already recorded', status: 409 })));
       renderPage('/funds?fund=18480065');
       await screen.findByText('+157.99%');
-      fireEvent.click(screen.getByRole('button', { name: 'Add holding' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add fund' }));
       const dialog = within(await screen.findByRole('dialog'));
       fireEvent.change(dialog.getByLabelText('Units'), { target: { value: '10' } });
       fireEvent.change(dialog.getByLabelText('Total cost'), { target: { value: '1000' } });

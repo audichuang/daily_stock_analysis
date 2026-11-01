@@ -295,6 +295,97 @@ describe('TokenUsagePage', () => {
     expect(screen.getByTestId('usage-total')).toHaveTextContent('900');
   });
 
+  it('labels financial_commentary in English and never shows the raw call type', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'en');
+    get.mockResolvedValue({
+      data: makeDashboardResponse({
+        by_call_type: [
+          { call_type: 'financial_commentary', calls: 1, prompt_tokens: 20, completion_tokens: 80, total_tokens: 100 },
+        ],
+        recent_calls: [record(1, '2099-06-11T09:30:00', { call_type: 'financial_commentary' })],
+      }),
+    });
+    renderPage();
+    const share = await screen.findByTestId('usage-share-financial_commentary');
+    expect(within(share).getByText('Financial commentary')).toBeInTheDocument();
+    expect(screen.queryByText('financial_commentary')).not.toBeInTheDocument();
+  });
+
+  it('shows an unknown call type as other with the raw type in brackets', async () => {
+    get.mockResolvedValue({
+      data: makeDashboardResponse({
+        by_call_type: [{ call_type: 'mystery_job', calls: 1, prompt_tokens: 20, completion_tokens: 80, total_tokens: 100 }],
+      }),
+    });
+    renderPage();
+    expect(await screen.findByTestId('usage-share-mystery_job')).toHaveTextContent('其他（mystery_job）');
+  });
+
+  it('shows claude models under one readable name and keeps the raw id as the title', async () => {
+    get.mockResolvedValue({
+      data: makeDashboardResponse({ recent_calls: [record(1, '2099-06-11T09:30:00', { model: 'claude_code_cli' })] }),
+    });
+    renderPage();
+    const table = await screen.findByRole('table', { name: '呼叫明細' });
+    const cell = within(table).getByText('Claude Sonnet 5.5');
+    expect(cell).toHaveAttribute('title', 'claude_code_cli');
+    expect(within(table).queryByText('claude_code_cli')).not.toBeInTheDocument();
+  });
+
+  it('renders a one-line text summary instead of bars when there is only one day', async () => {
+    get.mockResolvedValue({
+      data: makeDashboardResponse({
+        by_day: [{ date: '2099-11-01', calls: 3, prompt_tokens: 953_412, completion_tokens: 251_300, total_tokens: 1_204_712 }],
+      }),
+    });
+    renderPage();
+    expect(await screen.findByTestId('usage-daily-summary')).toHaveTextContent('11/01：輸入 953K／輸出 251K');
+    expect(screen.queryByTestId('usage-daily-bars')).not.toBeInTheDocument();
+  });
+
+  it('fills every day of the period with bars and labels the first and last date', async () => {
+    get.mockResolvedValue({
+      data: makeDashboardResponse({
+        by_day: [
+          { date: '2099-06-02', calls: 1, prompt_tokens: 20, completion_tokens: 80, total_tokens: 100 },
+          { date: '2099-06-05', calls: 1, prompt_tokens: 20, completion_tokens: 80, total_tokens: 100 },
+          { date: '2099-06-11', calls: 2, prompt_tokens: 100, completion_tokens: 200, total_tokens: 300 },
+        ],
+      }),
+    });
+    renderPage();
+    const bars = await screen.findByTestId('usage-daily-bars');
+    // 2099-06-01..2099-06-11 is 11 calendar days; only 3 have data and are clickable.
+    expect(bars.children).toHaveLength(11);
+    expect(within(bars).getAllByRole('button')).toHaveLength(3);
+    expect(bars.nextElementSibling).toHaveTextContent('06/01');
+    expect(bars.nextElementSibling).toHaveTextContent('06/11');
+    expect(screen.queryByTestId('usage-daily-summary')).not.toBeInTheDocument();
+  });
+
+  it('hides the cost without any unit price and the comparison without a previous reading', async () => {
+    get.mockResolvedValue({
+      data: makeDashboardResponse({
+        cost: { currency: 'USD', estimated_total: null, complete: false, unpriced_models: ['gpt-test'], subscription_tokens: 0, by_model: [
+          { model: 'openai/gpt-test', channel: 'litellm', billing: 'metered', total_tokens: 300, estimated_cost: null },
+        ] },
+        previous: { ...dashboardResponse.previous, tokens_change_pct: null },
+      }),
+    });
+    renderPage();
+    await screen.findByTestId('usage-summary');
+    expect(screen.queryByTestId('usage-cost')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('usage-change')).not.toBeInTheDocument();
+    expect(screen.queryByText('未設定單價')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('table', { name: '模型' })).queryByText('估算費用')).not.toBeInTheDocument();
+  });
+
+  it('shows a labelled spinner while the first request is loading', async () => {
+    get.mockReturnValue(new Promise(() => undefined));
+    renderPage();
+    expect(await screen.findByText('載入用量中…')).toBeInTheDocument();
+  });
+
   it('clears the day and type filters when the period changes', async () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: /^2099-06-10 合計/ }));

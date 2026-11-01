@@ -2,8 +2,9 @@ import type React from 'react';
 import { useEffect } from 'react';
 import type { MarketIndex, MarketIndexSnapshot } from '../../api/stocks';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
-import type { UiTextKey } from '../../i18n/uiText';
 import { MARKET_INDEX_TTL_MS, useMarketIndexStore, type MarketIndexRegionState } from '../../stores/marketIndexStore';
+import { formatUiText, type UiTextKey } from '../../i18n/uiText';
+import { BOARD_TEXT } from '../../locales/boardText';
 import { formatNumber, formatPercent } from '../../utils/format';
 import { Change } from '../common/Change';
 
@@ -27,8 +28,8 @@ const PHASE_KEYS: Record<string, UiTextKey> = {
   non_trading: 'layout.statusBar.phase.non_trading',
 };
 
-/** 取各指數裡最新的 as_of；只有日期的官方收盤值就顯示日期，不假裝成當下時間。 */
-function formatLatestAsOf(indices: MarketIndex[]): string | null {
+/** 取各指數裡最新的 as_of；只有日期的官方收盤值就顯示日期，不假裝成當下時間；不是今天的時間帶上月/日。 */
+function formatLatestAsOf(indices: MarketIndex[], now: Date = new Date()): string | null {
   const latest = indices
     .flatMap((idx) => (idx.asOf ? [{ asOf: idx.asOf, time: new Date(idx.asOf).getTime() }] : []))
     .filter((row) => !Number.isNaN(row.time))
@@ -36,13 +37,21 @@ function formatLatestAsOf(indices: MarketIndex[]): string | null {
   if (!latest) {
     return null;
   }
+  const pad = (value: number) => String(value).padStart(2, '0');
   if (!latest.asOf.includes('T')) {
-    return latest.asOf;
+    // Date-only official close (YYYY-MM-DD): read the calendar date as written, no timezone shift.
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(latest.asOf);
+    return match ? `${Number(match[2])}/${Number(match[3])}` : latest.asOf;
   }
   const date = new Date(latest.time);
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const hm = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const sameDay =
+    date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+  return sameDay ? hm : `${date.getMonth() + 1}/${date.getDate()} ${hm}`;
 }
+
+// 休市（non_trading）與已收盤（postmarket）共用同一組文字，跟盯盤頁的「已收盤」一致
+const CLOSED_PHASES = new Set(['postmarket', 'non_trading']);
 
 const MarketGroup: React.FC<{
   snapshot: MarketIndexSnapshot | null;
@@ -57,7 +66,12 @@ const MarketGroup: React.FC<{
   if (rows.length === 0) {
     return null;
   }
-  const phaseKey = snapshot?.marketPhase ? PHASE_KEYS[snapshot.marketPhase] : undefined;
+  const phase = snapshot?.marketPhase ?? null;
+  const phaseKey: UiTextKey | undefined = phase
+    ? CLOSED_PHASES.has(phase)
+      ? 'board.market.closed'
+      : PHASE_KEYS[phase]
+    : undefined;
 
   return (
     <div className="flex shrink-0 items-center gap-3">
@@ -80,7 +94,8 @@ const MarketGroup: React.FC<{
 const loadedRegion = (region: MarketIndexRegionState | undefined) => (region && region.fetchedAt > 0 ? region : null);
 
 export const MarketStatusBar: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
-  const { t } = useUiLanguage();
+  const { t, language } = useUiLanguage();
+  const bt = BOARD_TEXT[language] ?? BOARD_TEXT.zh;
   const tw = useMarketIndexStore((state) => loadedRegion(state.regions.tw));
   const us = useMarketIndexStore((state) => loadedRegion(state.regions.us));
   const load = useMarketIndexStore((state) => state.load);
@@ -126,11 +141,12 @@ export const MarketStatusBar: React.FC<{ children?: React.ReactNode }> = ({ chil
       className="shell-status-bar sticky z-30 border-b border-border/60 bg-background text-xs"
     >
       <div className="mx-auto flex h-full w-full max-w-[1680px] items-center gap-4 px-3 sm:px-4 lg:px-5">
-        <div className="flex min-w-0 flex-1 items-center gap-4 overflow-x-auto whitespace-nowrap [scrollbar-width:none]">
+        {/* Phones: fade the right edge so the ticker reads as scrollable instead of cut off. */}
+        <div className="flex min-w-0 flex-1 items-center gap-4 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [mask-image:linear-gradient(to_right,#000_calc(100%-1.5rem),transparent)] sm:[mask-image:none]">
           <MarketGroup snapshot={tw} specs={TW_INDICES} marketKey="layout.statusBar.tw" />
           <MarketGroup snapshot={us} specs={US_INDICES} marketKey="layout.statusBar.us" />
           {updatedAt ? (
-            <span className="shrink-0 text-muted-text">{t('layout.statusBar.updated', { time: updatedAt })}</span>
+            <span className="shrink-0 text-muted-text">{formatUiText(bt.statusBarAsOf, { time: updatedAt })}</span>
           ) : null}
         </div>
         {children}

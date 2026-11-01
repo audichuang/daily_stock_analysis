@@ -39,6 +39,17 @@ const coverageOf = (dataset: DataDatasetQuality): Array<[string, CoverageEntry]>
   return Object.entries(markets as Record<string, CoverageEntry>);
 };
 
+/**
+ * Status of a row that carries the dataset's stored date. A source being reachable does not mean
+ * the data is fresh (isCurrent false → stale); conversely, data already current means the row is
+ * fine even if no source has been probed yet (unknown → ok).
+ */
+const datedStatus = (dataset: DataDatasetQuality, status: string): string => {
+  if (dataset.isCurrent === false) return 'stale';
+  if (dataset.isCurrent === true && dataset.dataDate && status === 'unknown') return 'ok';
+  return status;
+};
+
 const marketRowsOf = (dataset: DataDatasetQuality): DataRow[] => {
   const entries = coverageOf(dataset);
   // 整個資料集被關掉時沒有 coverage；展開到台股美股，結論才看得到。
@@ -54,13 +65,13 @@ const marketRowsOf = (dataset: DataDatasetQuality): DataRow[] => {
   }
   return expanded.map(([key, entry]) => {
     const dated = key === dataset.dataMarket;
+    const status = dated ? datedStatus(dataset, entry.status ?? 'unknown') : entry.status ?? 'unknown';
     return {
       id: `${dataset.dataset}:${key}`,
       marketKey: key,
       root: key.split('.')[0],
       dataset: dataset.dataset,
-      // 來源可用不等於資料是新的。
-      status: dated && dataset.isCurrent === false ? 'stale' : entry.status ?? 'unknown',
+      status,
       source: entry.source ?? null,
       fallbackFrom: entry.fallback_from ?? [],
       dataDate: dated ? dataset.dataDate ?? null : null,
@@ -95,7 +106,7 @@ export const buildSystemRows = (datasets: DataDatasetQuality[]): DataRow[] => da
     marketKey: null,
     root: null,
     dataset: dataset.dataset,
-    status: dataset.stale === true ? 'stale' : dataset.status,
+    status: dataset.stale === true ? 'stale' : datedStatus(dataset, dataset.status),
     source: dataset.source ?? null,
     fallbackFrom: dataset.fallbackFrom,
     dataDate: dataset.dataDate ?? null,
@@ -106,25 +117,29 @@ export const buildSystemRows = (datasets: DataDatasetQuality[]): DataRow[] => da
 
 export type DatasetBucket = 'ok' | 'unchecked' | 'off' | 'issue';
 
-export const datasetBucket = (dataset: DataDatasetQuality): DatasetBucket => {
-  if (dataset.reason || dataset.status === 'unconfigured') return 'off';
-  if (dataset.isCurrent === false || dataset.stale === true) return 'issue';
-  if (dataset.status === 'ok') return 'ok';
-  if (dataset.status === 'unknown') return 'unchecked';
+/** Bucket of one table row; the stat cards count these same rows so the numbers add up to the table. */
+export const rowBucket = (row: DataRow): DatasetBucket => {
+  if (row.reason || row.status === 'unconfigured') return 'off';
+  // partial still serves data, so it is not an issue.
+  if (row.status === 'ok' || row.status === 'partial') return 'ok';
+  if (row.status === 'unknown') return 'unchecked';
   return 'issue';
 };
 
-export const countBuckets = (datasets: DataDatasetQuality[]): Record<DatasetBucket, number> => {
+export const countRows = (rows: DataRow[]): Record<DatasetBucket, number> => {
   const counts: Record<DatasetBucket, number> = { ok: 0, unchecked: 0, off: 0, issue: 0 };
-  for (const dataset of datasets) counts[datasetBucket(dataset)] += 1;
+  for (const row of rows) counts[rowBucket(row)] += 1;
   return counts;
 };
 
 export interface Conclusion {
-  variant: 'success' | 'warning' | 'danger' | 'info';
+  /** 'note' is a one-line muted remark, not a banner (only unchecked rows, normal after a holiday or restart). */
+  variant: 'success' | 'warning' | 'danger' | 'info' | 'note';
   title: string;
   message: string;
 }
+
+const MAX_LISTED = 3;
 
 /** 結論只看台股、美股；其他市場的缺口不該讓首屏變紅。 */
 export const buildConclusion = (rows: DataRow[], asOfText: string, text: Text): Conclusion => {
@@ -139,7 +154,7 @@ export const buildConclusion = (rows: DataRow[], asOfText: string, text: Text): 
   const fallback = active.filter((row) => row.status === 'degraded' || row.status === 'partial');
   const unchecked = active.filter((row) => row.status === 'unknown');
   const label = (template: string, row: DataRow) => formatUiText(template, { label: rowLabel(row, text) });
-  const message = [
+  const items = [
     ...down.map((row) => label(text.isDown, row)),
     ...stale.map((row) => formatUiText(text.stoppedAt, {
       label: rowLabel(row, text),
@@ -149,12 +164,17 @@ export const buildConclusion = (rows: DataRow[], asOfText: string, text: Text): 
     ...off.map((row) => label(text.isOff, row)),
     ...fallback.map((row) => label(text.viaFallback, row)),
     ...unchecked.map((row) => label(text.isUnchecked, row)),
-  ].join('、');
+  ];
+  // Most severe first; past three the rest collapse into a total ("A、B、C 等 5 項") so the banner stays short.
+  const listed = items.slice(0, MAX_LISTED).join('、');
+  const message = items.length > MAX_LISTED ? `${listed} ${formatUiText(text.andMore, { count: items.length })}` : listed;
 
   if (down.length > 0) return { variant: 'danger', title: text.bannerDown, message };
   if (stale.length > 0) return { variant: 'warning', title: text.bannerStale, message };
   if (off.length > 0 || fallback.length > 0) return { variant: 'warning', title: text.bannerAttention, message };
-  if (unchecked.length > 0) return { variant: 'info', title: text.bannerUnchecked, message };
+  if (unchecked.length > 0) {
+    return { variant: 'note', title: text.bannerUnchecked, message: formatUiText(text.uncheckedNote, { count: unchecked.length }) };
+  }
 
   const dated = focus.find((row) => row.dataDate);
   return {

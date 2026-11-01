@@ -1,21 +1,23 @@
 import type React from 'react';
-import { useCallback, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
-  CalendarDays,
+  Check,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   Clock3,
   Loader2,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
-  Star,
   Trash2,
+  X,
 } from 'lucide-react';
-import { Badge, Button, ConfirmDialog, InlineAlert, Input, ScrollArea, Segmented, StatusDot } from '../common';
-import { DashboardPanelHeader, DashboardStateBlock } from '../dashboard';
+import { Button, ConfirmDialog, InlineAlert, Input, ScrollArea, StatusDot } from '../common';
+import { DashboardStateBlock } from '../dashboard';
 import { StockBar } from '../history';
 import { StockBarItemComponent, StockRowLines } from '../history/StockBarItem';
 import type { StockQuote } from '../../api/stocks';
@@ -26,6 +28,7 @@ import { areAssetAwareCodesEquivalent, toAssetAwareCodeKey, type AssetAwareAsset
 import { getStockMarketBucket } from '../../utils/stockName';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import type { UiTextKey, UiTextParams } from '../../i18n/uiText';
+import { HOME_TEXT, formatHomeText } from '../../locales/homeText';
 import { isWatchlistRowPendingAnalysis } from './watchlistRowState';
 import {
   assignCodeToGroup,
@@ -123,6 +126,10 @@ interface HomeStockWorkspaceProps {
   /** 自選分組；空陣列時畫面與未分組前相同（編輯模式才看得到新增分組）。 */
   watchlistGroups?: WatchlistGroup[];
   onSaveWatchlistGroups?: (groups: WatchlistGroup[]) => Promise<void>;
+  /** 釘頂複盤列標題裡的市場，例如「美股」；沒給就只寫日期。 */
+  marketReviewRegionLabel?: string;
+  /** 手機抽屜用：有給就在頁籤上方顯示「清單」標題與關閉鈕。 */
+  onClose?: () => void;
 }
 
 const NO_WATCHLIST_GROUPS: WatchlistGroup[] = [];
@@ -395,8 +402,13 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
   marketLightLabel,
   watchlistGroups = NO_WATCHLIST_GROUPS,
   onSaveWatchlistGroups,
+  marketReviewRegionLabel,
+  onClose,
 }) => {
-  const { t } = useUiLanguage();
+  const { t, language } = useUiLanguage();
+  const homeText = HOME_TEXT[language];
+  const [analyzeMenuOpen, setAnalyzeMenuOpen] = useState(false);
+  const analyzeMenuRef = useRef<HTMLDivElement>(null);
   const [draftCode, setDraftCode] = useState('');
   const [groupFilter, setGroupFilter] = useState<WatchlistGroupFilter>('all');
   const [draftGroupName, setDraftGroupName] = useState('');
@@ -416,7 +428,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
   const tabs: Array<{ key: HomeWorkspaceTab; label: string }> = [
     { key: 'watchlist', label: t('watchlist.tabWatchlist') },
     { key: 'today', label: t('watchlist.tabToday') },
-    { key: 'history', label: t('watchlist.tabHistory') },
+    { key: 'history', label: homeText.tabHistory },
   ];
 
   const matchesMarket = useCallback(
@@ -449,30 +461,49 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
     quotes,
   ), [historyItems, listSort, matchesMarket, quotes]);
 
-  const listControls = (
+  const marketOptions: Array<{ value: MarketFilter; label: string }> = [
+    { value: 'all', label: t('watchlist.filterAll') },
+    { value: 'tw', label: t('watchlist.filterTw') },
+    { value: 'us', label: t('watchlist.filterUs') },
+  ];
+
+  const renderListControls = (extra?: React.ReactNode) => (
     <div className="flex flex-wrap items-center justify-between gap-1.5" data-testid="home-list-controls">
-      <Segmented<MarketFilter>
-        size="sm"
-        aria-label={t('watchlist.marketFilterAria')}
-        value={marketFilter}
-        onChange={setMarketFilter}
-        options={[
-          { value: 'all', label: t('watchlist.filterAll') },
-          { value: 'tw', label: t('watchlist.filterTw') },
-          { value: 'us', label: t('watchlist.filterUs') },
-        ]}
-      />
-      <select
-        aria-label={t('watchlist.sortAria')}
-        value={listSort}
-        onChange={(event) => setListSort(event.target.value as ListSort)}
-        className="h-7 rounded-lg border border-subtle bg-base/40 px-1.5 text-xs text-secondary-text"
-      >
-        <option value="default">{t('watchlist.sortDefault')}</option>
-        <option value="change">{t('watchlist.sortChange')}</option>
-        <option value="score">{t('watchlist.sortScore')}</option>
-        <option value="time">{t('watchlist.sortTime')}</option>
-      </select>
+      <div role="group" aria-label={t('watchlist.marketFilterAria')} className="flex items-center gap-1">
+        {marketOptions.map((option) => {
+          const selected = marketFilter === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={selected}
+              data-testid={`market-chip-${option.value}`}
+              onClick={() => setMarketFilter(option.value)}
+              className={`h-6 rounded-full border px-2.5 text-[11px] font-medium transition-colors ${
+                selected
+                  ? 'border-primary/35 bg-primary/12 text-primary'
+                  : 'border-subtle text-secondary-text hover:bg-hover hover:text-foreground'
+              }`}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex min-w-0 items-center gap-1.5">
+        {extra}
+        <select
+          aria-label={t('watchlist.sortAria')}
+          value={listSort}
+          onChange={(event) => setListSort(event.target.value as ListSort)}
+          className="h-8 rounded-lg border border-subtle bg-base/40 px-1.5 text-xs text-secondary-text"
+        >
+          <option value="default">{t('watchlist.sortDefault')}</option>
+          <option value="change">{t('watchlist.sortChange')}</option>
+          <option value="score">{t('watchlist.sortScore')}</option>
+          <option value="time">{t('watchlist.sortTime')}</option>
+        </select>
+      </div>
     </div>
   );
 
@@ -494,7 +525,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
       data-testid="watchlist-group-filter"
       value={activeGroupFilter}
       onChange={(event) => setGroupFilter(event.target.value as WatchlistGroupFilter)}
-      className="h-7 max-w-[10rem] rounded-lg border border-subtle bg-base/40 px-1.5 text-xs text-secondary-text"
+      className="h-8 max-w-[6.5rem] rounded-lg border border-subtle bg-base/40 px-1.5 text-xs text-secondary-text"
     >
       <option value="all">{t('watchlist.groupAll')}</option>
       {watchlistGroups.map((group) => (
@@ -587,6 +618,7 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
       onClick={onHistoryItemClick}
       isMarketReview
       marketLightLabel={marketLightLabel}
+      marketReviewRegionLabel={marketReviewRegionLabel}
     />
   ) : null;
 
@@ -635,8 +667,36 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
     setWorkspaceNotice({ code: row.code, assetType: row.assetType ?? 'stock' });
   };
 
+  useEffect(() => {
+    if (!analyzeMenuOpen) return undefined;
+    const onPointerDown = (event: MouseEvent) => {
+      if (analyzeMenuRef.current?.contains(event.target as Node)) return;
+      setAnalyzeMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAnalyzeMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [analyzeMenuOpen]);
+
+  const analyzeAllDisabled = watchlistLoading || watchlistRows.length === 0 || isBatchAnalyzing;
+  const analyzePendingDisabled = watchlistLoading
+    || pendingWatchlistCount === 0
+    || isTodayStatusUnavailable
+    || isBatchAnalyzing;
+
+  const runAnalyze = (mode: WatchlistAnalyzeMode) => {
+    setAnalyzeMenuOpen(false);
+    void onAnalyzeWatchlist(mode);
+  };
+
   const renderTabs = (
-    <div className="grid grid-cols-3 gap-1 rounded-xl border border-subtle bg-base/40 p-1">
+    <div className="grid grid-cols-3 gap-1 rounded-xl border border-subtle bg-base/40 p-0.5">
       {tabs.map((tab) => {
         const selected = activeTab === tab.key;
         return (
@@ -644,11 +704,12 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
             key={tab.key}
             type="button"
             aria-pressed={selected}
-            className={`h-8 rounded-lg px-2 text-xs font-medium transition-colors ${
+            className={`h-7 rounded-lg px-2 text-xs font-medium transition-colors ${
               selected ? 'bg-primary/15 text-primary shadow-inner' : 'text-secondary-text hover:bg-hover hover:text-foreground'
             }`}
             onClick={() => {
               setWorkspaceNotice(null);
+              setAnalyzeMenuOpen(false);
               onTabChange(tab.key);
             }}
           >
@@ -659,14 +720,199 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
     </div>
   );
 
-  if (activeTab === 'history') {
-    return (
-      <div
-        data-testid="home-stock-workspace"
-        className={`home-stock-scroll-shell flex min-h-0 flex-1 flex-col gap-2 ${className}`}
+  const drawerHeader = onClose ? (
+    <div className="flex items-center justify-between px-3 pt-3 sm:px-4" data-testid="home-list-drawer-header">
+      <h2 className="text-sm font-semibold text-foreground">{homeText.listTitle}</h2>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-8 w-8 px-0"
+        aria-label={homeText.closeList}
+        onClick={onClose}
       >
-        {renderTabs}
+        <X className="h-4 w-4" aria-hidden="true" />
+      </Button>
+    </div>
+  ) : null;
+
+  const watchlistIconActions = (
+    <div className="flex shrink-0 items-center gap-0.5">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 w-7 px-0"
+        aria-pressed={editMode}
+        aria-label={editMode ? t('watchlist.editDone') : t('watchlist.edit')}
+        onClick={() => setEditMode((current) => !current)}
+      >
+        {editMode
+          ? <Check className="h-3.5 w-3.5" aria-hidden="true" />
+          : <Pencil className="h-3.5 w-3.5" aria-hidden="true" />}
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="h-7 w-7 px-0"
+        disabled={watchlistLoading}
+        onClick={() => {
+          setWorkspaceNotice(null);
+          void onRefreshWatchlist();
+        }}
+        aria-label={t('watchlist.refreshAria')}
+      >
+        <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+      </Button>
+    </div>
+  );
+
+  const analyzeSplitButton = (
+    <div ref={analyzeMenuRef} className="relative flex min-w-0" data-testid="watchlist-analyze-split">
+      <Button
+        type="button"
+        size="sm"
+        variant="primary"
+        className="h-8 min-w-0 flex-1 whitespace-nowrap rounded-r-none px-2 text-xs"
+        disabled={analyzePendingDisabled}
+        isLoading={isBatchAnalyzing}
+        loadingText={t('watchlist.submitting')}
+        onClick={() => runAnalyze('pending')}
+      >
+        <Play className="h-4 w-4" aria-hidden="true" />
+        {formatHomeText(homeText.analyzePendingSplit, { count: pendingWatchlistCount })}
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="primary"
+        className="h-8 w-8 rounded-l-none border-l border-l-primary-foreground/25 px-0"
+        disabled={analyzeAllDisabled}
+        aria-label={homeText.analyzeMenuAria}
+        aria-haspopup="menu"
+        aria-expanded={analyzeMenuOpen}
+        onClick={() => setAnalyzeMenuOpen((current) => !current)}
+      >
+        <ChevronDown className="h-4 w-4" aria-hidden="true" />
+      </Button>
+      {analyzeMenuOpen ? (
+        <div
+          role="menu"
+          aria-label={homeText.analyzeMenuAria}
+          className="absolute right-0 top-full z-30 mt-1 min-w-40 rounded-[var(--radius-control)] border border-border/70 bg-card p-1 shadow-soft-card"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            disabled={analyzeAllDisabled}
+            onClick={() => runAnalyze('all')}
+            className="flex w-full items-center gap-2 rounded-[6px] px-2.5 py-2 text-left text-sm text-foreground hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Play className="h-4 w-4" aria-hidden="true" />
+            {homeText.analyzeMenuAll}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={analyzePendingDisabled}
+            onClick={() => runAnalyze('pending')}
+            className="flex w-full items-center gap-2 rounded-[6px] px-2.5 py-2 text-left text-sm text-foreground hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+            {homeText.analyzeMenuPending}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  // The add form lives in edit mode; an empty watchlist shows it directly so a first code can be added.
+  const showAddForm = editMode || watchlistRows.length === 0;
+
+  const header = activeTab === 'watchlist' ? (
+    <>
+      <div className="flex h-7 items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-[11px] text-muted-text" data-testid="watchlist-subline">
+          {formatHomeText(homeText.watchlistSubline, {
+            count: watchlistRows.length,
+            done: watchlistAnalyzedTodayCount,
+          })}
+        </span>
+        {watchlistIconActions}
+      </div>
+      {analyzeSplitButton}
+      {showAddForm ? (
+        <form className="grid grid-cols-[minmax(0,1fr)_auto] gap-2" onSubmit={handleAddSubmit}>
+          <Input
+            value={draftCode}
+            onChange={(event) => setDraftCode(event.target.value)}
+            placeholder={t('watchlist.addPlaceholder')}
+            className="h-8 rounded-lg px-3 text-xs"
+            disabled={watchlistActioning}
+            aria-label={t('watchlist.addPlaceholder')}
+          />
+          <Button
+            type="submit"
+            size="sm"
+            variant="secondary"
+            className="h-8 w-8 px-0"
+            disabled={!draftCode.trim() || watchlistActioning}
+            isLoading={watchlistActioning}
+            aria-label={t('watchlist.add')}
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </form>
+      ) : null}
+      {batchStatus ? (
+        <div className={`rounded-xl border px-3 py-2 text-xs ${statusClassName}`}>
+          {batchStatus.message}
+        </div>
+      ) : null}
+      {watchlistMessage ? (
+        <div className="rounded-xl border border-subtle bg-base/35 px-3 py-2 text-xs text-secondary-text">
+          {watchlistMessage}
+        </div>
+      ) : null}
+      {groupEditor}
+      {visibleWorkspaceNotice ? (
+        <InlineAlert
+          variant="warning"
+          message={visibleWorkspaceNotice.message}
+          className="rounded-xl px-3 py-2 text-xs shadow-none"
+        />
+      ) : null}
+      {renderListControls(groupSelect)}
+    </>
+  ) : (
+    <>
+      <div className="flex h-7 items-center">
+        <span className="min-w-0 truncate text-[11px] text-muted-text" data-testid="today-subline">
+          {formatHomeText(homeText.todaySubline, {
+            count: todayItems.length,
+            done: watchlistAnalyzedTodayCount,
+            total: watchlistRows.length,
+            score: topTodayItem?.sentimentScore ?? '-',
+          })}
+        </span>
+      </div>
+      {renderListControls()}
+    </>
+  );
+
+  return (
+    <aside
+      data-testid="home-stock-workspace"
+      className={`glass-card home-stock-scroll-shell flex min-h-0 flex-1 flex-col ${className}`}
+    >
+      {drawerHeader}
+      {/* Tabs stay pinned at the top of one shared shell so switching tabs never moves the frame. */}
+      <div className="shrink-0 px-3 pt-2.5 sm:px-4">{renderTabs}</div>
+
+      {activeTab === 'history' ? (
         <StockBar
+          variant="list"
           items={visibleHistoryItems}
           isLoading={isLoadingHistory}
           selectedStockCode={selectedStockCode}
@@ -677,242 +923,102 @@ export const HomeStockWorkspace: React.FC<HomeStockWorkspaceProps> = ({
           className="flex-1"
           quotes={quotes}
           marketLightLabel={marketLightLabel}
-          controls={listControls}
+          marketReviewRegionLabel={marketReviewRegionLabel}
+          controls={renderListControls()}
         />
-      </div>
-    );
-  }
-
-  return (
-    <aside
-      data-testid="home-stock-workspace"
-      className={`glass-card home-stock-scroll-shell flex min-h-0 flex-1 flex-col ${className}`}
-    >
-      <div className="space-y-2.5 border-b border-subtle px-3 py-3 sm:px-4">
-        {renderTabs}
-
-        {activeTab === 'watchlist' ? (
-          <>
-            <DashboardPanelHeader
-              className="mb-0"
-              title={t('watchlist.title')}
-              titleClassName="text-sm font-medium"
-              leading={<Star className="h-4 w-4 text-primary" aria-hidden="true" />}
-              actions={(
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] text-muted-text">{t('common.itemsCount', { count: watchlistRows.length })}</span>
-                  {watchlistRows.length > 0 ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      aria-pressed={editMode}
-                      onClick={() => setEditMode((current) => !current)}
-                    >
-                      {editMode ? t('watchlist.editDone') : t('watchlist.edit')}
-                    </Button>
-                  ) : null}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 px-0"
-                    disabled={watchlistLoading}
-                    onClick={() => {
-                      setWorkspaceNotice(null);
-                      void onRefreshWatchlist();
-                    }}
-                    aria-label={t('watchlist.refreshAria')}
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-                  </Button>
-                </div>
-              )}
-            />
-            <div className="flex flex-wrap gap-1.5">
-              <Badge variant="default" className="gap-1 shadow-none text-[11px]">
-                {t('watchlist.todayCoverage')} {watchlistAnalyzedTodayCount}/{watchlistRows.length}
-              </Badge>
-              <Badge variant="default" className="gap-1 shadow-none text-[11px]">
-                {t('watchlist.pendingToday')} {pendingWatchlistCount}
-              </Badge>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="primary"
-                className="h-8 flex-1 whitespace-nowrap px-2 text-xs sm:flex-none"
-                disabled={watchlistLoading || watchlistRows.length === 0 || isBatchAnalyzing}
-                isLoading={isBatchAnalyzing}
-                loadingText={t('watchlist.submitting')}
-                onClick={() => void onAnalyzeWatchlist('all')}
-              >
-                <Play className="h-4 w-4" aria-hidden="true" />
-                {t('watchlist.analyzeAll')}
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                className="h-8 flex-1 whitespace-nowrap px-2 text-xs sm:flex-none"
-                disabled={watchlistLoading || pendingWatchlistCount === 0 || isTodayStatusUnavailable || isBatchAnalyzing}
-                onClick={() => void onAnalyzeWatchlist('pending')}
-              >
-                <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-                {t('watchlist.analyzePending')}
-              </Button>
-            </div>
-            <form className="grid grid-cols-[minmax(0,1fr)_auto] gap-2" onSubmit={handleAddSubmit}>
-              <Input
-                value={draftCode}
-                onChange={(event) => setDraftCode(event.target.value)}
-                placeholder={t('watchlist.addPlaceholder')}
-                className="h-8 rounded-lg px-3 text-xs"
-                disabled={watchlistActioning}
-                aria-label={t('watchlist.addPlaceholder')}
-              />
-              <Button
-                type="submit"
-                size="sm"
-                variant="secondary"
-                className="h-8 w-8 px-0"
-                disabled={!draftCode.trim() || watchlistActioning}
-                isLoading={watchlistActioning}
-                aria-label={t('watchlist.add')}
-              >
-                <Plus className="h-4 w-4" aria-hidden="true" />
-              </Button>
-            </form>
-            {batchStatus ? (
-              <div className={`rounded-xl border px-3 py-2 text-xs ${statusClassName}`}>
-                {batchStatus.message}
-              </div>
-            ) : null}
-            {watchlistMessage ? (
-              <div className="rounded-xl border border-subtle bg-base/35 px-3 py-2 text-xs text-secondary-text">
-                {watchlistMessage}
-              </div>
-            ) : null}
-            {groupEditor}
-            {visibleWorkspaceNotice ? (
-              <InlineAlert
-                variant="warning"
-                message={visibleWorkspaceNotice.message}
-                className="rounded-xl px-3 py-2 text-xs shadow-none"
-              />
-            ) : null}
-          </>
-        ) : (
-          <>
-            <DashboardPanelHeader
-              className="mb-0"
-              title={t('watchlist.todayTitle')}
-              titleClassName="text-sm font-medium"
-              leading={<CalendarDays className="h-4 w-4 text-cyan" aria-hidden="true" />}
-              actions={<span className="text-[11px] text-muted-text">{t('common.itemsCount', { count: todayItems.length })}</span>}
-            />
-            <div className="flex flex-wrap gap-1.5">
-              <Badge variant="default" className="gap-1 shadow-none text-[11px]">
-                {t('watchlist.watchlistCoverage')} {watchlistAnalyzedTodayCount}/{watchlistRows.length}
-              </Badge>
-              <Badge variant="default" className="gap-1 shadow-none text-[11px]">
-                {t('watchlist.topScore')} {topTodayItem?.sentimentScore ?? '-'}
-              </Badge>
-            </div>
-          </>
-        )}
-        {activeTab === 'watchlist' && groupSelect ? (
-          <div className="flex items-center gap-1.5">{groupSelect}</div>
-        ) : null}
-        {listControls}
-      </div>
-
-      <ScrollArea
-        viewportClassName="px-3 py-3 sm:px-4 overscroll-y-contain touch-pan-y"
-        className="min-h-0 flex-1"
-        testId="home-stock-workspace-scroll"
-      >
-        {pinnedMarketReview ? <div className="mb-1.5">{pinnedMarketReview}</div> : null}
-        {activeTab === 'watchlist' ? (
-          watchlistLoading ? (
-            <DashboardStateBlock loading compact title={t('watchlist.loading')} />
-          ) : watchlistRows.length === 0 ? (
-            <DashboardStateBlock
-              compact
-              title={t('watchlist.emptyTitle')}
-              description={t('watchlist.emptyDescription')}
-            />
-          ) : (
-            <div className="space-y-1.5">
-              {visibleWatchlistRows.map((row) => (
-                <WatchlistRowItem
-                  key={row.code}
-                  row={row}
-                  onRequestRemove={(code) => {
-                    setWorkspaceNotice(null);
-                    setPendingRemoveCode(code);
-                  }}
-                  onOpenDetail={handleWatchlistRowOpen}
-                  disabled={watchlistActioning}
-                  editMode={editMode}
-                  groupControls={renderGroupControls(row.code)}
-                  quote={row.assetType === 'index' ? undefined : quotes?.get(stockQuoteKey(row.code))}
-                  selected={
-                    (typeof selectedRecordId === 'number' && selectedRecordId === row.latestItem?.id)
-                    || (
-                      Boolean(selectedStockCode)
-                      && (
-                        rowHasSelectedIdentity(row, selectedStockCode, selectedAssetType)
-                        || areAssetAwareCodesEquivalent(selectedStockCode ?? '', selectedAssetType, row.latestItem?.stockCode ?? '', row.latestItem?.assetType)
-                      )
-                    )
-                  }
-                />
-              ))}
-            </div>
-          )
-        ) : isLoadingTodayItems ? (
-          <DashboardStateBlock loading compact title={t('watchlist.loading')} />
-        ) : todayLoadError ? (
-          <DashboardStateBlock
-            compact
-            title={t('watchlist.todayLoadErrorTitle')}
-            description={t('watchlist.todayLoadErrorDescription')}
-          />
-        ) : todayItems.length === 0 ? (
-          <DashboardStateBlock
-            compact
-            title={t('watchlist.todayEmptyTitle')}
-            description={t('watchlist.todayEmptyDescription')}
-          />
-        ) : (
-          <div className="space-y-1.5">
-            {visibleTodayItems.map((item) => (
-              <TodayItem
-                key={`${item.stockCode}-${item.id}`}
-                item={item}
-                onClick={onHistoryItemClick}
-                quote={quotes?.get(stockQuoteKey(item.stockCode))}
-              />
-            ))}
+      ) : (
+        <>
+          <div className="shrink-0 space-y-1.5 border-b border-subtle px-3 pb-2 pt-1.5 sm:px-4">
+            {header}
           </div>
-        )}
-      </ScrollArea>
-      <ConfirmDialog
-        isOpen={pendingRemoveCode !== null}
-        title={t('watchlist.removeConfirmTitle')}
-        message={t('watchlist.removeConfirmMessage', { code: pendingRemoveCode ?? '' })}
-        confirmText={t('common.delete')}
-        isDanger
-        onConfirm={() => {
-          const code = pendingRemoveCode;
-          setPendingRemoveCode(null);
-          // 失敗由 useWatchlist 的 actionMessage（操作失敗）顯示在面板上方。
-          if (code) void onRemoveFromWatchlist(code);
-        }}
-        onCancel={() => setPendingRemoveCode(null)}
-      />
+
+          <ScrollArea
+            viewportClassName="px-3 py-3 sm:px-4 overscroll-y-contain touch-pan-y"
+            className="min-h-0 flex-1"
+            testId="home-stock-workspace-scroll"
+          >
+            {pinnedMarketReview ? <div className="mb-1.5">{pinnedMarketReview}</div> : null}
+            {activeTab === 'watchlist' ? (
+              watchlistLoading ? (
+                <DashboardStateBlock loading compact title={t('watchlist.loading')} />
+              ) : watchlistRows.length === 0 ? (
+                <DashboardStateBlock
+                  compact
+                  title={t('watchlist.emptyTitle')}
+                  description={t('watchlist.emptyDescription')}
+                />
+              ) : (
+                <div className="space-y-1.5">
+                  {visibleWatchlistRows.map((row) => (
+                    <WatchlistRowItem
+                      key={row.code}
+                      row={row}
+                      onRequestRemove={(code) => {
+                        setWorkspaceNotice(null);
+                        setPendingRemoveCode(code);
+                      }}
+                      onOpenDetail={handleWatchlistRowOpen}
+                      disabled={watchlistActioning}
+                      editMode={editMode}
+                      groupControls={renderGroupControls(row.code)}
+                      quote={row.assetType === 'index' ? undefined : quotes?.get(stockQuoteKey(row.code))}
+                      selected={
+                        (typeof selectedRecordId === 'number' && selectedRecordId === row.latestItem?.id)
+                        || (
+                          Boolean(selectedStockCode)
+                          && (
+                            rowHasSelectedIdentity(row, selectedStockCode, selectedAssetType)
+                            || areAssetAwareCodesEquivalent(selectedStockCode ?? '', selectedAssetType, row.latestItem?.stockCode ?? '', row.latestItem?.assetType)
+                          )
+                        )
+                      }
+                    />
+                  ))}
+                </div>
+              )
+            ) : isLoadingTodayItems ? (
+              <DashboardStateBlock loading compact title={t('watchlist.loading')} />
+            ) : todayLoadError ? (
+              <DashboardStateBlock
+                compact
+                title={t('watchlist.todayLoadErrorTitle')}
+                description={t('watchlist.todayLoadErrorDescription')}
+              />
+            ) : todayItems.length === 0 ? (
+              <DashboardStateBlock
+                compact
+                title={t('watchlist.todayEmptyTitle')}
+                description={t('watchlist.todayEmptyDescription')}
+              />
+            ) : (
+              <div className="space-y-1.5">
+                {visibleTodayItems.map((item) => (
+                  <TodayItem
+                    key={`${item.stockCode}-${item.id}`}
+                    item={item}
+                    onClick={onHistoryItemClick}
+                    quote={quotes?.get(stockQuoteKey(item.stockCode))}
+                  />
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+          <ConfirmDialog
+            isOpen={pendingRemoveCode !== null}
+            title={t('watchlist.removeConfirmTitle')}
+            message={t('watchlist.removeConfirmMessage', { code: pendingRemoveCode ?? '' })}
+            confirmText={t('common.delete')}
+            isDanger
+            onConfirm={() => {
+              const code = pendingRemoveCode;
+              setPendingRemoveCode(null);
+              // 失敗由 useWatchlist 的 actionMessage（操作失敗）顯示在面板上方。
+              if (code) void onRemoveFromWatchlist(code);
+            }}
+            onCancel={() => setPendingRemoveCode(null)}
+          />
+        </>
+      )}
     </aside>
   );
 };

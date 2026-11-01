@@ -22,9 +22,13 @@ import {
   Metric,
   MetricGroup,
   PageHeader,
+  Segmented,
 } from '../components/common';
+import { ActionMenu } from '../components/common/ActionMenu';
 import type { DataTableColumn, SortState } from '../components/common';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import { FUNDS_TEXT } from '../locales/fundsText';
 import type { UiTextKey } from '../i18n/uiText';
 import type {
   FundDetail,
@@ -49,6 +53,8 @@ const RANGE_PERIOD: Record<RangeKey, FundNavPeriod | undefined> = {
 };
 const RANGES: RangeKey[] = ['m1', 'm3', 'm6', 'y1', 'y3', 'y5', 'all'];
 const RETURN_KEYS: (keyof FundReturns)[] = ['w1', 'm1', 'm3', 'm6', 'ytd', 'y1', 'y3', 'y5'];
+// Below Tailwind's md breakpoint, same as PageHeader's compact query: the detail becomes a full-screen layer.
+const NARROW_QUERY = '(max-width: 767.98px)';
 
 type HoldingForm = {
   id?: number;
@@ -189,9 +195,14 @@ const FundSearchBox: React.FC<FundSearchBoxProps> = ({ heldIds, onPick, classNam
 };
 
 const FundsPage: React.FC = () => {
-  const { t } = useUiLanguage();
+  const { t, language } = useUiLanguage();
+  const text = FUNDS_TEXT[language];
+  const narrow = useMediaQuery(NARROW_QUERY);
   const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get('fund');
+  const urlFundId = searchParams.get('fund');
+  // 沒帶 ?fund= 時自動選第一檔只放在 state，不寫網址；使用者點選或外部帶參數才寫網址。
+  const [autoFundId, setAutoFundId] = useState<string | null>(null);
+  const selectedId = urlFundId ?? autoFundId;
 
   const [holdings, setHoldings] = useState<FundHoldingListResponse | null>(null);
   const [holdingsError, setHoldingsError] = useState<ParsedApiError | null>(null);
@@ -210,7 +221,8 @@ const FundsPage: React.FC = () => {
   const [sort, setSort] = useState<SortState>({ key: 'marketValue', direction: 'desc' });
   // 手機的全螢幕詳情層：預設選第一檔不開，使用者點了才開。
   // 帶 ?fund= 進來是明確要看這檔（盯盤基金卡、重新整理）；自動選取發生在掛載之後，不受影響。
-  const [mobileDetailOpen, setMobileDetailOpen] = useState(() => selectedId !== null);
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(() => urlFundId !== null);
+  const mobileLayerOpen = narrow && mobileDetailOpen && selectedId !== null;
   const listRef = useRef<HTMLDivElement>(null);
 
   const loadHoldings = useCallback(async () => {
@@ -227,12 +239,12 @@ const FundsPage: React.FC = () => {
   }, [loadHoldings]);
 
   const selectFund = useCallback(
-    (fundId: string, options: { replace?: boolean } = {}) => {
+    (fundId: string) => {
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
         next.set('fund', fundId);
         return next;
-      }, options);
+      });
     },
     [setSearchParams],
   );
@@ -256,10 +268,17 @@ const FundsPage: React.FC = () => {
   const heldIds = useMemo(() => new Set(items.map((h) => h.fundId)), [items]);
   const firstFundId = sortedItems[0]?.fundId;
 
-  // 沒指定基金就選第一檔，第一次打開就有內容。
+  // 沒指定基金就選第一檔，第一次打開就有內容；只寫 state，網址維持沒有 ?fund=。
   useEffect(() => {
-    if (!selectedId && firstFundId) selectFund(firstFundId, { replace: true });
-  }, [firstFundId, selectFund, selectedId]);
+    if (!selectedId && firstFundId) setAutoFundId(firstFundId);
+  }, [firstFundId, selectedId]);
+
+  // 手機詳情層蓋滿畫面時鎖住底下頁面的捲動。
+  useEffect(() => {
+    if (!mobileLayerOpen) return undefined;
+    document.body.classList.add('overflow-hidden');
+    return () => document.body.classList.remove('overflow-hidden');
+  }, [mobileLayerOpen]);
 
   useEffect(() => {
     setDetailError(null);
@@ -464,7 +483,7 @@ const FundsPage: React.FC = () => {
       render: (h) => (
         <div>
           {formatNumber(h.nav, 2)}
-          <div className={cn('text-xs', h.isStale ? 'text-warning' : 'text-secondary-text')}>{h.navDate ?? t('funds.noNav')}</div>
+          <div className={cn('whitespace-nowrap text-xs', h.isStale ? 'text-warning' : 'text-secondary-text')}>{h.navDate ?? t('funds.noNav')}</div>
         </div>
       ),
     },
@@ -498,7 +517,8 @@ const FundsPage: React.FC = () => {
 
   const renderMobileCard = (h: FundHoldingItem) => (
     <div
-      className={cn('flex cursor-pointer items-center gap-2 px-1 py-2', h.fundId === selectedId && 'bg-cyan/10')}
+      data-testid="funds-mobile-row"
+      className="flex cursor-pointer items-center gap-2 px-3 py-2"
       onClick={() => {
         selectFund(h.fundId);
         setMobileDetailOpen(true);
@@ -510,11 +530,24 @@ const FundsPage: React.FC = () => {
           <span className="shrink-0 tabular-nums">{formatNumber(h.marketValue, 0)}</span>
         </div>
         <div className="mt-0.5 flex justify-between gap-2 text-xs tabular-nums">
-          <span className={cn(h.isStale ? 'text-warning' : 'text-secondary-text')}>{h.navDate ?? t('funds.noNav')}</span>
-          <span className={marketToneClass(h.pnl)}>{signedNumber(h.pnl)} · {formatPercent(h.pnlPct)}</span>
+          <span className="min-w-0 truncate">
+            <span className="text-secondary-text">{text.dayPnl} </span>
+            <span className={marketToneClass(h.dayPnl)}>{signedNumber(h.dayPnl)}（{formatPercent(h.navChangePct)}）</span>
+          </span>
+          <span className="shrink-0">
+            <span className="text-secondary-text">{text.totalReturn} </span>
+            <span className={marketToneClass(h.pnlPct)}>{formatPercent(h.pnlPct)}</span>
+          </span>
         </div>
       </div>
-      {rowActions(h)}
+      <ActionMenu
+        size="sm"
+        label={text.rowActions}
+        items={[
+          { key: 'edit', label: t('funds.holdings.edit'), icon: <Pencil className="h-4 w-4" />, onSelect: () => editHolding(h) },
+          { key: 'delete', label: t('funds.holdings.delete'), icon: <Trash2 className="h-4 w-4" />, danger: true, onSelect: () => setPendingDelete(h) },
+        ]}
+      />
     </div>
   );
 
@@ -538,7 +571,6 @@ const FundsPage: React.FC = () => {
           <Metric label={t('funds.overview.cost')} value={formatNumber(total.costTotal, 0)} />
         </MetricGroup>
       ))}
-      <p className="text-xs text-secondary-text">{t('funds.returns.note')}</p>
     </div>
   ) : null;
 
@@ -572,7 +604,8 @@ const FundsPage: React.FC = () => {
             sort={sort}
             onSortChange={setSort}
             onRowClick={(h) => selectFund(h.fundId)}
-            isRowHighlighted={(h) => h.fundId === selectedId}
+            // On phones the row only lights up while its detail layer is open; the auto-selection stays unmarked.
+            isRowHighlighted={(h) => h.fundId === selectedId && (!narrow || mobileDetailOpen)}
             renderMobileCard={renderMobileCard}
           />
         </div>
@@ -581,11 +614,20 @@ const FundsPage: React.FC = () => {
   );
 
   const shownDetail = detail && detail.fundId === selectedId ? detail : null;
+  const layerTitle = items.find((item) => item.fundId === selectedId)?.fundName ?? shownDetail?.name ?? '';
   const navValues = points.map((point) => point.nav);
   const axisDigits = navAxisDigits(navValues);
   const unitCost = shownDetail ? fundUnitCost(items, shownDetail.fundId) : null;
   const chartUp = points.length > 1 && points[points.length - 1].nav >= points[0].nav;
   const rangeChange = points.length > 1 ? (points[points.length - 1].nav / points[0].nav - 1) * 100 : null;
+  // 同一檔可能在多個通路持有，合計成一行；任何一筆算不出損益就整體顯示「—」。
+  const myLots = shownDetail ? items.filter((item) => item.fundId === shownDetail.fundId) : [];
+  const myUnits = myLots.reduce((sum, item) => sum + item.units, 0);
+  const myCost = myLots.reduce((sum, item) => sum + item.costTotal, 0);
+  const myPnl = myLots.length > 0 && myLots.every((item) => item.pnl != null)
+    ? myLots.reduce((sum, item) => sum + (item.pnl ?? 0), 0)
+    : null;
+  const myPnlPct = myPnl != null && myCost > 0 ? (myPnl / myCost) * 100 : null;
 
   const infoRows: [UiTextKey, React.ReactNode][] = shownDetail
     ? [
@@ -626,6 +668,18 @@ const FundsPage: React.FC = () => {
           ) : null}
         </div>
       </div>
+      {myLots.length > 0 ? (
+        <div data-testid="funds-my-holding" className="text-sm tabular-nums">
+          <span className="text-secondary-text">{text.myHolding}：</span>
+          {formatNumber(myUnits)} {text.units}
+          <span className="text-secondary-text"> · {text.cost} </span>
+          {formatNumber(myCost, 0)}
+          <span className="text-secondary-text"> · {text.pnl} </span>
+          <span className={marketToneClass(myPnl)}>
+            {signedNumber(myPnl)}{myPnlPct != null ? `（${formatPercent(myPnlPct)}）` : ''}
+          </span>
+        </div>
+      ) : null}
       {shownDetail.isStale ? <InlineAlert variant="warning" message={t('funds.detail.stale')} /> : null}
       {shownDetail.historyError ? <InlineAlert variant="warning" message={t('funds.detail.historyError')} /> : null}
 
@@ -636,7 +690,7 @@ const FundsPage: React.FC = () => {
           <span className={cn('ml-3 text-sm', marketToneClass(shownDetail.navChangePct))}>
             {signedNumber(shownDetail.navChange, 2)} ({formatPercent(shownDetail.navChangePct)})
           </span>
-          <span className={cn('ml-3 text-xs', shownDetail.isStale ? 'text-warning' : 'text-secondary-text')}>
+          <span className={cn('ml-3 whitespace-nowrap text-xs', shownDetail.isStale ? 'text-warning' : 'text-secondary-text')}>
             {t('funds.detail.navDate', { date: shownDetail.navDate ?? NO_VALUE })}
           </span>
         </div>
@@ -657,23 +711,15 @@ const FundsPage: React.FC = () => {
 
       <section>
         <SectionTitle>{t('funds.section.chart')}</SectionTitle>
-        <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          {RANGES.map((r) => (
-            <button
-              key={r}
-              type="button"
-              onClick={() => setRange(r)}
-              className={cn(
-                'cursor-pointer rounded-md border px-2.5 py-0.5 text-xs',
-                r === range
-                  ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]'
-                  : 'border-border text-secondary-text hover:bg-hover',
-              )}
-            >
-              {t(`funds.range.${r}` as UiTextKey)}
-            </button>
-          ))}
-        </div>
+        {/* Equal-width single row: children grow evenly instead of keeping their intrinsic width. */}
+        <Segmented
+          size="sm"
+          aria-label={text.rangeLabel}
+          value={range}
+          onChange={setRange}
+          options={RANGES.map((r) => ({ value: r, label: t(`funds.range.${r}` as UiTextKey) }))}
+          className="mb-2 flex w-full [&>button]:flex-1 [&>button]:px-0"
+        />
         {points.length > 1 ? (
           <div data-testid="funds-range-row" className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-secondary-text">
             <span>{points[0].date} ~ {points[points.length - 1].date}</span>
@@ -815,31 +861,43 @@ const FundsPage: React.FC = () => {
               />
             </div>
             <IconButton aria-label={t('funds.refresh')} icon={<RefreshCw className="h-4 w-4" />} onClick={() => void loadHoldings()} />
-            <Button variant="secondary" onClick={() => openForm(emptyForm(shownDetail ?? undefined))}>
-              <Plus className="h-4 w-4" />
-              {t('funds.holdings.add')}
-            </Button>
+            {narrow ? (
+              <IconButton
+                aria-label={text.addFund}
+                icon={<Plus className="h-4 w-4" />}
+                onClick={() => openForm(emptyForm(shownDetail ?? undefined))}
+              />
+            ) : (
+              <Button variant="secondary" onClick={() => openForm(emptyForm(shownDetail ?? undefined))}>
+                <Plus className="h-4 w-4" />
+                {text.addFund}
+              </Button>
+            )}
           </>
         )}
       />
       {overview}
       {holdingsCard}
-      {selectedId ? (
+      {mobileLayerOpen ? createPortal(
         <div
           data-testid="funds-detail"
-          className={cn(
-            mobileDetailOpen
-              ? 'fixed inset-0 z-40 overflow-y-auto bg-background p-4 md:static md:z-auto md:overflow-visible md:bg-transparent md:p-0'
-              : 'hidden md:block',
-          )}
+          className="fixed inset-0 z-[45] overflow-y-auto bg-background px-4 pt-[max(env(safe-area-inset-top),12px)] pb-[calc(56px+env(safe-area-inset-bottom))]"
         >
-          <Button className="mb-3 md:hidden" size="sm" variant="ghost" onClick={() => setMobileDetailOpen(false)}>
-            <ArrowLeft className="h-4 w-4" />
-            {t('funds.detail.back')}
-          </Button>
+          <div className="sticky top-0 z-10 -mx-4 mb-3 flex h-12 items-center gap-2 border-b border-border/60 bg-background px-2">
+            <Button className="shrink-0" size="sm" variant="ghost" onClick={() => setMobileDetailOpen(false)}>
+              <ArrowLeft className="h-4 w-4" />
+              {t('funds.detail.back')}
+            </Button>
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">{layerTitle}</span>
+          </div>
+          <Card variant="surface" padding="md">{detailBody}</Card>
+        </div>,
+        document.body,
+      ) : selectedId && !narrow ? (
+        <div data-testid="funds-detail">
           <Card variant="surface" padding="md">{detailBody}</Card>
         </div>
-      ) : holdings && items.length === 0 ? (
+      ) : !selectedId && holdings && items.length === 0 ? (
         <div className="hidden md:block">
           <Card variant="surface" padding="md">
             <EmptyState title={t('funds.detail.none')} description={t('funds.search.hint')} />

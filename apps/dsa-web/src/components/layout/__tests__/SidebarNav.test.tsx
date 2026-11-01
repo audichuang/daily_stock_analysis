@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { BOTTOM_TAB_PATHS } from '../BottomTabs';
 import { SidebarNav } from '../SidebarNav';
 
 const mockLogout = vi.fn().mockResolvedValue(undefined);
@@ -26,9 +27,23 @@ vi.mock('../../theme/ThemeToggle', () => ({
   ThemeToggle: (props: { collapsed?: boolean }) => mockThemeToggle(props),
 }));
 
+// jsdom has no Element.prototype.scrollIntoView; install a spy so the rail's auto-scroll is observable.
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+const scrollIntoViewMock = vi.fn();
+
+beforeAll(() => {
+  Element.prototype.scrollIntoView = scrollIntoViewMock;
+});
+
+afterAll(() => {
+  Element.prototype.scrollIntoView = originalScrollIntoView;
+});
+
+const openRailMore = () => fireEvent.click(screen.getByRole('button', { name: '更多' }));
+
 describe('SidebarNav', () => {
   it('groups navigation into watch, research and system with the board first', () => {
-    render(<MemoryRouter initialEntries={['/']}><SidebarNav /></MemoryRouter>);
+    render(<MemoryRouter initialEntries={['/']}><SidebarNav variant="rail" /></MemoryRouter>);
 
     const hrefsIn = (name: string) =>
       within(screen.getByRole('group', { name })).getAllByRole('link').map((link) => link.getAttribute('href'));
@@ -42,18 +57,32 @@ describe('SidebarNav', () => {
     const { unmount } = render(
       <MemoryRouter><SidebarNav variant="rail" collapsed onToggleCollapsed={vi.fn()} /></MemoryRouter>,
     );
-    expect(screen.getByRole('link', { name: 'AI 建议' })).toHaveTextContent('建议');
-    expect(screen.getByRole('link', { name: 'AI 建议' })).not.toHaveTextContent('AI 建议');
+    const signals = screen.getByRole('link', { name: 'AI 建议' });
+    const shortLabel = within(signals).getByTestId('rail-short-label');
+    // Rail short name keeps the "AI" prefix and may wrap to two 10px lines inside the 44px item.
+    expect(shortLabel).toHaveTextContent('AI 建议');
+    expect(shortLabel).toHaveClass('text-[10px]', 'line-clamp-2');
+    expect(signals).toHaveClass('h-11');
     expect(screen.getByRole('button', { name: '展开侧边栏' })).toBeInTheDocument();
     unmount();
 
     render(<MemoryRouter><SidebarNav variant="rail" onToggleCollapsed={vi.fn()} /></MemoryRouter>);
+    expect(screen.queryByTestId('rail-short-label')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'AI 建议' })).toHaveTextContent('AI 建议');
     expect(screen.getByRole('button', { name: '折叠侧边栏' })).toBeInTheDocument();
   });
 
+  it('puts the collapse toggle next to the logo instead of in the bottom toolbar', () => {
+    render(<MemoryRouter><SidebarNav variant="rail" collapsed onToggleCollapsed={vi.fn()} /></MemoryRouter>);
+
+    const toggle = screen.getByRole('button', { name: '展开侧边栏' });
+    expect(screen.getByTestId('sidebar-toolbar')).not.toContainElement(toggle);
+    expect(screen.getByRole('navigation', { name: '主导航' })).not.toContainElement(toggle);
+  });
+
   it('keeps the language control out of the active style until its menu opens', () => {
     render(<MemoryRouter><SidebarNav variant="rail" /></MemoryRouter>);
+    openRailMore();
 
     const language = screen.getByRole('button', { name: '切换界面语言' });
     expect(language).not.toHaveClass('font-medium');
@@ -62,21 +91,76 @@ describe('SidebarNav', () => {
     expect(screen.getByRole('menu', { name: '界面语言' })).toBeInTheDocument();
   });
 
-  it('collects theme, language and logout into the rail toolbar', () => {
+  it('collects theme, language and logout behind a single rail ⋯ popover', () => {
     render(<MemoryRouter><SidebarNav variant="rail" /></MemoryRouter>);
 
     const toolbar = within(screen.getByTestId('sidebar-toolbar'));
-    expect(toolbar.getByRole('button', { name: /切换主题/ })).toBeInTheDocument();
-    expect(toolbar.getByRole('button', { name: '切换界面语言' })).toBeInTheDocument();
-    expect(toolbar.getByRole('button', { name: '退出' })).toBeInTheDocument();
+    const more = toolbar.getByRole('button', { name: '更多' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: '退出' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '切换界面语言' })).not.toBeInTheDocument();
+
+    fireEvent.click(more);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    const panel = within(screen.getByTestId('sidebar-more-panel'));
+    expect(panel.getByRole('button', { name: /切换主题/ })).toBeInTheDocument();
+    expect(panel.getByRole('button', { name: '切换界面语言' })).toBeInTheDocument();
+    expect(panel.getByRole('button', { name: '退出' })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByTestId('sidebar-more-panel')).not.toBeInTheDocument();
+  });
+
+  it('opens the logout confirmation from the rail ⋯ popover', async () => {
+    mockLogout.mockClear();
+    render(<MemoryRouter initialEntries={['/chat']}><SidebarNav variant="rail" /></MemoryRouter>);
+
+    openRailMore();
+    fireEvent.click(screen.getByRole('button', { name: '退出' }));
+    expect(await screen.findByRole('heading', { name: '退出登录' })).toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar-more-panel')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '确认退出' }));
+    expect(mockLogout).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops pages the bottom tabs already cover from the mobile drawer', () => {
+    render(<MemoryRouter initialEntries={['/funds']}><SidebarNav /></MemoryRouter>);
+
+    const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+    for (const path of BOTTOM_TAB_PATHS) {
+      expect(hrefs).not.toContain(path);
+    }
+    const hrefsIn = (name: string) =>
+      within(screen.getByRole('group', { name })).getAllByRole('link').map((link) => link.getAttribute('href'));
+    expect(hrefsIn('看盘')).toEqual(['/funds', '/calendar', '/alerts']);
+    expect(hrefsIn('研究')).toEqual(['/screening', '/decision-signals', '/backtest']);
+    expect(hrefsIn('系统')).toEqual(['/data', '/usage', '/settings']);
+    // No logo row in the drawer; the drawer header carries the title.
+    expect(screen.queryByText('DSA')).not.toBeInTheDocument();
+  });
+
+  it('scrolls the current rail item into view on mount and after navigation', () => {
+    scrollIntoViewMock.mockClear();
+    render(<MemoryRouter initialEntries={['/backtest']}><SidebarNav variant="rail" collapsed /></MemoryRouter>);
+
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' });
+    expect(scrollIntoViewMock.mock.contexts.at(-1)).toHaveAttribute('href', '/backtest');
+
+    scrollIntoViewMock.mockClear();
+    fireEvent.click(screen.getByRole('link', { name: '数据中心' }));
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ block: 'nearest' });
+    const target = scrollIntoViewMock.mock.contexts.at(-1) as Element;
+    expect(target).toHaveAttribute('href', '/data');
+    expect(target).toHaveAttribute('aria-current', 'page');
   });
 
   it('shows the shared completion badge only when chat completion is pending', () => {
     completionBadgeState.value = true;
 
+    // Chat lives in the bottom tabs on mobile, so the badge is checked on the desktop rail.
     const { rerender } = render(
       <MemoryRouter initialEntries={['/chat']}>
-        <SidebarNav />
+        <SidebarNav variant="rail" />
       </MemoryRouter>,
     );
 
@@ -86,7 +170,7 @@ describe('SidebarNav', () => {
     completionBadgeState.value = false;
     rerender(
       <MemoryRouter initialEntries={['/chat']}>
-        <SidebarNav />
+        <SidebarNav variant="rail" />
       </MemoryRouter>,
     );
 
@@ -152,8 +236,10 @@ describe('SidebarNav', () => {
   it('keeps rail controls outside the scrollable navigation links', () => {
     render(<MemoryRouter><SidebarNav variant="rail" /></MemoryRouter>);
 
+    openRailMore();
     const nav = screen.getByRole('navigation', { name: '主导航' });
     expect(nav).toHaveClass('min-h-0', 'overflow-y-auto');
+    expect(nav).not.toContainElement(screen.getByRole('button', { name: '更多' }));
     expect(nav).not.toContainElement(screen.getByRole('button', { name: '退出' }));
     expect(nav).not.toContainElement(screen.getByRole('button', { name: /切换主题/ }));
     expect(screen.getByRole('link', { name: '设置' })).toHaveClass('shrink-0');

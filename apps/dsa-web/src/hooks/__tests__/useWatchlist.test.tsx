@@ -36,6 +36,36 @@ describe('useWatchlist', () => {
     mockSaveWatchlistGroups.mockResolvedValue({ groups: [], ungrouped: [] });
   });
 
+  it('requests the codes and the groups at the same time', async () => {
+    // Groups must not wait for the codes: while getWatchlist is still pending, getWatchlistGroups is already called.
+    let releaseCodes: (codes: string[]) => void = () => {};
+    mockGetWatchlist.mockImplementation(() => new Promise<string[]>((resolve) => {
+      releaseCodes = resolve;
+    }));
+    let releaseGroups: (value: { groups: unknown[]; ungrouped: string[] }) => void = () => {};
+    mockGetWatchlistGroups.mockImplementation(() => new Promise((resolve) => {
+      releaseGroups = resolve;
+    }));
+
+    const { result } = renderHook(() => useWatchlist());
+
+    await waitFor(() => expect(mockGetWatchlist).toHaveBeenCalledTimes(1));
+    expect(mockGetWatchlistGroups).toHaveBeenCalledTimes(1);
+    expect(result.current.isLoading).toBe(true);
+
+    await act(async () => {
+      releaseGroups({ groups: [{ name: 'Tech', codes: ['2330.TW'] }], ungrouped: [] });
+    });
+    // Still loading until both reads settle.
+    expect(result.current.isLoading).toBe(true);
+    await act(async () => {
+      releaseCodes(['2330.TW']);
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.watchlistCodes).toEqual(['2330.TW']);
+    expect(result.current.watchlistGroups).toEqual([{ name: 'Tech', codes: ['2330.TW'] }]);
+  });
+
   it('keeps the watchlist usable when groups cannot be loaded', async () => {
     mockGetWatchlist.mockResolvedValue(['2330.TW']);
     mockGetWatchlistGroups.mockRejectedValue(new Error('404'));

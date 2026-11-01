@@ -1,6 +1,6 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BarChart3, Check, ChevronLeft, RefreshCw, SlidersHorizontal, X } from 'lucide-react';
+import { BarChart3, Check, ChevronLeft, Play, Radar, RefreshCw, SlidersHorizontal, X } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getParsedApiError, type ParsedApiError } from '../api/error';
 import { analysisApi, DuplicateTaskError } from '../api/analysis';
@@ -31,6 +31,8 @@ import { useDashboardLifecycle, useHomeDashboardState } from '../hooks';
 import { useStockQuotes } from '../hooks/useStockQuotes';
 import { useWatchlist } from '../hooks/useWatchlist';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
+import { formatUiText } from '../i18n/uiText';
+import { getMarketReviewUiText } from '../locales/marketReviewText';
 import type { SetupStatusResponse } from '../types/systemConfig';
 import { normalizeReportLanguage } from '../utils/reportLanguage';
 import type {
@@ -67,6 +69,8 @@ type StockAnalysisNavigationState = {
 
 const DUPLICATE_BANNER_AUTO_DISMISS_MS = 5000;
 const BATCH_ANALYSIS_CHUNK_SIZE = 50;
+// Rough per-market duration for the "generate review" confirm dialog; an estimate, not measured.
+const MARKET_REVIEW_MINUTES_PER_REGION = 2;
 const TODAY_ANALYSIS_PAGE_SIZE = 100;
 const WATCHLIST_HISTORY_LOOKUP_CONCURRENCY = 4;
 const TASK_PANEL_COLLAPSED_STORAGE_KEY = 'dsa.home.taskPanelCollapsed';
@@ -310,6 +314,7 @@ const HomePage: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(matchesMobileViewport);
   const [reanalyzeConfirmOpen, setReanalyzeConfirmOpen] = useState(false);
+  const [marketReviewConfirmOpen, setMarketReviewConfirmOpen] = useState(false);
   const [marketReviewDefaultRegion, setMarketReviewDefaultRegion] = useState('');
   const [marketLightSource, setMarketLightSource] = useState<{ id: number; payload: MarketReviewPayload | null } | null>(null);
   const [dossierOpen, setDossierOpen] = useState(false);
@@ -1769,7 +1774,7 @@ const HomePage: React.FC = () => {
     ...(isTwStockCode(selectedReport.meta.stockCode) ? [{
       key: 'dossier',
       label: t('home.dossier'),
-      icon: <BarChart3 className="h-4 w-4" aria-hidden="true" />,
+      icon: <Radar className="h-4 w-4" aria-hidden="true" />,
       onSelect: () => setDossierOpen(true),
     }] : []),
     {
@@ -1796,7 +1801,7 @@ const HomePage: React.FC = () => {
       </Button>
       {isMarketReviewHistoryReport ? null : (
         <Button
-          variant="primary"
+          variant="secondary"
           size="sm"
           disabled={selectedReport.meta.id === undefined}
           onClick={handleAskFollowUp}
@@ -1816,20 +1821,33 @@ const HomePage: React.FC = () => {
     </>
   ) : null;
 
-  // 大盤複盤分裂按鈕：左邊送出，右邊看實際範圍並調整市場、完成通知。
+  // 大盤複盤分裂按鈕：左邊看最新一份複盤；右邊選單調整市場、完成通知，並從那裡「產生複盤…」（先確認）。
+  const marketReviewUiText = getMarketReviewUiText(uiLanguage);
+  const marketReviewScopeRegion = marketReviewRegionOverride?.join(',') ?? marketReviewDefaultRegion;
+  const marketReviewScopeRegions = formatMarketReviewRegion(marketReviewScopeRegion, marketRegionLabels);
+  const marketReviewScopeLabel = marketReviewScopeRegions || t('home.marketRegionServerDefault');
+  // formatMarketReviewRegion expands "both" and joins with ＋, so its parts are the market count.
+  const marketReviewRegionCount = marketReviewScopeRegions ? marketReviewScopeRegions.split('＋').length : 1;
+  const marketReviewConfirmMessage = formatUiText(marketReviewUiText.generateConfirmMessage, {
+    region: marketReviewScopeLabel,
+    minutes: marketReviewRegionCount * MARKET_REVIEW_MINUTES_PER_REGION,
+  });
   const marketReviewSplitButton = (
     <div className="flex min-w-0 items-center gap-1" data-testid="market-review-split-button">
       <Button
         type="button"
         variant="secondary"
         size="md"
-        isLoading={isSubmittingMarketReview}
-        loadingText={t('home.submitMarketReview')}
-        onClick={() => void handleTriggerMarketReview()}
+        disabled={!latestMarketReview}
+        onClick={() => {
+          if (latestMarketReview) {
+            handleHistoryItemClick(latestMarketReview.id);
+          }
+        }}
         className="h-10 shrink-0 whitespace-nowrap"
       >
         <BarChart3 className="h-4 w-4" aria-hidden="true" />
-        {t('home.marketReview')}
+        {marketReviewUiText.viewReview}
       </Button>
       <MarketReviewRegionSelector
         value={marketReviewRegionOverride}
@@ -1837,16 +1855,30 @@ const HomePage: React.FC = () => {
         onChange={setMarketReviewRegionOverride}
         defaultRegion={marketReviewDefaultRegion}
         footer={(
-          <label className="flex cursor-pointer items-center gap-2 text-xs text-secondary-text select-none">
-            <input
-              type="checkbox"
-              checked={notify}
-              disabled={isSubmittingMarketReview}
-              onChange={(e) => setNotify(e.target.checked)}
-              className="h-3.5 w-3.5 rounded border-border accent-primary"
-            />
-            {t('home.notify')}
-          </label>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-secondary-text select-none">
+              <input
+                type="checkbox"
+                checked={notify}
+                disabled={isSubmittingMarketReview}
+                onChange={(e) => setNotify(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-border accent-primary"
+              />
+              {t('home.notify')}
+            </label>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              isLoading={isSubmittingMarketReview}
+              loadingText={t('home.submitMarketReview')}
+              onClick={() => setMarketReviewConfirmOpen(true)}
+              className="shrink-0 whitespace-nowrap"
+            >
+              <Play className="h-4 w-4" aria-hidden="true" />
+              {marketReviewUiText.generateReview}
+            </Button>
+          </div>
         )}
       />
     </div>
@@ -2037,7 +2069,6 @@ const HomePage: React.FC = () => {
           >
             {!isStockReportOpen ? (
               <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
-                {isMarketReviewHistoryReport && !marketReviewReport ? primaryReportActions : null}
                 {marketReviewSplitButton}
               </div>
             ) : null}
@@ -2106,6 +2137,16 @@ const HomePage: React.FC = () => {
                     onSelectRecord={(recordId) => void selectHistoryItem(recordId)}
                     onRetry={() => void openHistoryTrend()}
                   />
+                ) : isMarketReviewHistoryReport ? (
+                  // 複盤歷史的動作都在 hero：「完整報告」加一份合併的 ⋯ 選單，頁面不再另放一排。
+                  <MarketReviewReportView
+                    report={selectedReport}
+                    recordId={selectedReport.meta.id}
+                    reportLanguage={reportLanguage}
+                    onOpenRunFlow={openHistoryRunFlow}
+                    onOpenFullReport={openMarkdownDrawer}
+                    extraActionItems={secondaryReportActions}
+                  />
                 ) : (
                   <ReportSummary
                     data={selectedReport}
@@ -2166,6 +2207,18 @@ const HomePage: React.FC = () => {
           handleReanalyze();
         }}
         onCancel={() => setReanalyzeConfirmOpen(false)}
+      />
+
+      <ConfirmDialog
+        isOpen={marketReviewConfirmOpen}
+        title={marketReviewUiText.generateConfirmTitle}
+        message={marketReviewConfirmMessage}
+        confirmText={marketReviewUiText.generateConfirmAction}
+        onConfirm={() => {
+          setMarketReviewConfirmOpen(false);
+          void handleTriggerMarketReview();
+        }}
+        onCancel={() => setMarketReviewConfirmOpen(false)}
       />
 
       {markdownDrawerOpen && selectedReport?.meta.id ? (

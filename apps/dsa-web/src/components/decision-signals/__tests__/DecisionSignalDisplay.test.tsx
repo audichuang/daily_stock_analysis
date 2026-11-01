@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { UiLanguageProvider } from '../../../contexts/UiLanguageContext';
 import type { DecisionSignalItem } from '../../../types/decisionSignals';
-import { DecisionSignalCard, DecisionSignalDetails, PortfolioSignalSummary, PriceRuler } from '../DecisionSignalDisplay';
+import { DecisionSignalCard, DecisionSignalDetails, PortfolioSignalSummary, PriceRuler, SignalActionTag } from '../DecisionSignalDisplay';
 
 const signal: DecisionSignalItem = {
   id: 7,
@@ -46,6 +46,34 @@ function renderCard(onSelect?: (item: DecisionSignalItem) => void) {
     </UiLanguageProvider>,
   );
 }
+
+describe('SignalActionTag', () => {
+  function renderTag(item: DecisionSignalItem) {
+    window.localStorage.setItem('dsa.uiLanguage', 'zh');
+    render(
+      <UiLanguageProvider>
+        <SignalActionTag item={item} />
+      </UiLanguageProvider>,
+    );
+  }
+
+  it('stays on one line with a fixed line height so it never stacks vertically', () => {
+    renderTag({ ...signal, action: 'reduce' });
+
+    const tag = screen.getByText('减仓');
+    expect(tag).toHaveClass('whitespace-nowrap', 'leading-none', 'px-2.5', 'py-1');
+    expect(tag).toHaveClass('bg-warning');
+  });
+
+  it('renders neutral actions like the neutral badge: muted text, no fill', () => {
+    renderTag({ ...signal, action: 'watch' });
+
+    const tag = screen.getByText('观望');
+    expect(tag).toHaveAttribute('data-tone', 'neutral');
+    expect(tag).toHaveClass('bg-transparent', 'text-muted-text');
+    expect(tag).not.toHaveClass('bg-secondary-text');
+  });
+});
 
 describe('DecisionSignalCard', () => {
   it('uses a dedicated details button for interactive cards', () => {

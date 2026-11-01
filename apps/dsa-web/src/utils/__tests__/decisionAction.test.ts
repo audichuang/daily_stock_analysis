@@ -5,6 +5,7 @@ import {
   getLegacyDecisionAction,
   getDecisionActionTone,
   getLegacyDecisionActionLabel,
+  normalizeDecisionActionAlias,
 } from '../decisionAction';
 
 const englishLabels: DecisionActionLabelMap = {
@@ -155,5 +156,23 @@ describe('decisionAction helpers', () => {
   it('別名只比對整個標籤，不把否定句當成動作', () => {
     expect(getLegacyDecisionAction('不建議買進')).toBeNull();
     expect(getDecisionActionLabel(null, '暫不減碼', null, null, { reduce: '減碼' })).toBe('暫不減碼');
+  });
+});
+
+describe('normalizeDecisionActionAlias', () => {
+  it('把各時期存檔的動作標籤正規化成枚舉', () => {
+    expect(['觀望', '观望', '減倉'].map((label) => normalizeDecisionActionAlias(label))).toEqual(['watch', 'watch', 'reduce']);
+    expect(normalizeDecisionActionAlias(' 減碼 ')).toBe('reduce');
+    expect(normalizeDecisionActionAlias('减仓')).toBe('reduce');
+    expect(normalizeDecisionActionAlias('watch')).toBe('watch');
+    expect(normalizeDecisionActionAlias('Watch')).toBe('watch');
+  });
+
+  it('對不上的原文回 null，不做子字串猜測', () => {
+    expect(normalizeDecisionActionAlias('不建議買進')).toBeNull();
+    expect(normalizeDecisionActionAlias('逢低买入')).toBeNull();
+    expect(normalizeDecisionActionAlias('watching')).toBeNull();
+    expect(normalizeDecisionActionAlias('')).toBeNull();
+    expect(normalizeDecisionActionAlias(null)).toBeNull();
   });
 });

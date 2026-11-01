@@ -32,7 +32,8 @@ import {
   ALERT_TARGET_SCOPE_OPTIONS,
   ALERT_THRESHOLD_DIRECTION_OPTIONS,
 } from '../../locales/featureText';
-import { formatNumber, formatPercent } from '../../utils/format';
+import { ALERTS_TEXT } from '../../locales/alertsText';
+import { currencyUnitLabel, formatNumber, formatPercent } from '../../utils/format';
 import { validateStockCode } from '../../utils/validation';
 import { Button, Checkbox, Input, Select } from '../common';
 
@@ -59,6 +60,18 @@ function textOf(value: number | undefined | null, fallback = ''): string {
   return value === undefined || value === null ? fallback : String(value);
 }
 
+// Currency prefix for the price field; only the two markets this fork trades get one.
+function priceCurrency(code: string): string {
+  if (/\.(TW|TWO)$/i.test(code)) return currencyUnitLabel('TWD');
+  if (/^[A-Z][A-Z.-]{0,9}$/i.test(code)) return currencyUnitLabel('USD');
+  return '';
+}
+
+// Quick-fill values keep two decimals at most so the number input's step accepts them.
+function roundPrice(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function isPortfolioScope(scope: AlertTargetScope): boolean {
   return scope === 'portfolio_holdings' || scope === 'portfolio_account';
 }
@@ -77,6 +90,7 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
   const { language } = useUiLanguage();
   const text = ALERT_FORM_TEXT[language];
   const pageText = ALERT_PAGE_TEXT[language];
+  const alertsText = ALERTS_TEXT[language];
   const isEdit = initial?.id != null;
   // tw_levels 的價位來自看板的 SMC 清單，改價會和訊息裡的區間對不上（docs/tw-level-alerts.md）。
   const levelLocked = initial?.source === 'tw_levels';
@@ -88,7 +102,9 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
   const [portfolioTarget, setPortfolioTarget] = useState(isPortfolioScope(initialScope) ? initial?.target ?? 'all' : 'all');
   const [marketRegion, setMarketRegion] = useState<MarketRegion>(initialScope === 'market' ? (initial?.target as MarketRegion) ?? 'tw' : 'tw');
   const [cooldownSeconds, setCooldownSeconds] = useState(initialCooldown(initial));
-  const [fetchedQuote, setFetchedQuote] = useState<{ code: string; price: number | null } | null>(null);
+  const [fetchedQuote, setFetchedQuote] = useState<{ code: string; price: number | null; name: string | null } | null>(null);
+  // Name from the autocomplete pick, keyed by code so typing a different code drops it.
+  const [pickedName, setPickedName] = useState<{ code: string; name: string } | null>(null);
   const [accounts, setAccounts] = useState<PortfolioAccountItem[]>([]);
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [alertType, setAlertType] = useState<AlertType>(initial?.alertType ?? 'price_cross');
@@ -141,7 +157,10 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
     let cancelled = false;
     void stocksApi.getQuotes([quoteCode])
       .then((items) => {
-        if (!cancelled) setFetchedQuote({ code: quoteCode, price: items?.[0]?.quote?.currentPrice ?? null });
+        if (!cancelled) {
+          const quote = items?.[0]?.quote;
+          setFetchedQuote({ code: quoteCode, price: quote?.currentPrice ?? null, name: quote?.stockName ?? null });
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -149,6 +168,17 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
     };
   }, [quoteCode]);
   const currentPrice = fetchedQuote?.code === quoteCode ? fetchedQuote.price : null;
+  const targetCode = targetScope === 'single_symbol' ? validateStockCode(target).normalized : '';
+  const targetName = (pickedName && pickedName.code.toUpperCase() === targetCode ? pickedName.name : null)
+    ?? (quoteCode && fetchedQuote?.code === quoteCode ? fetchedQuote.name : null);
+  const currency = targetScope === 'single_symbol' ? priceCurrency(targetCode) : '';
+  const priceChips = currentPrice != null && currentPrice > 0 && !levelLocked
+    ? [
+      { key: 'current', label: alertsText.chipCurrent, value: roundPrice(currentPrice) },
+      { key: 'up', label: formatUiText(alertsText.chipUp, { price: formatNumber(roundPrice(currentPrice * 1.05)) }), value: roundPrice(currentPrice * 1.05) },
+      { key: 'down', label: formatUiText(alertsText.chipDown, { price: formatNumber(roundPrice(currentPrice * 0.95)) }), value: roundPrice(currentPrice * 0.95) },
+    ]
+    : [];
   const priceTarget = Number(price);
   // 還沒填價位也先給現價，填價位時才有依據。
   const hasPriceTarget = price !== '' && Number.isFinite(priceTarget) && priceTarget > 0;
@@ -417,12 +447,24 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
           <StockAutocomplete
             value={target}
             onChange={setTarget}
-            onSubmit={(code) => setTarget(code)}
-            onPick={(code) => setTarget(code)}
+            onSubmit={(code, stockName) => {
+              setTarget(code);
+              if (stockName) setPickedName({ code, name: stockName });
+            }}
+            onPick={(code, stockName) => {
+              setTarget(code);
+              if (stockName) setPickedName({ code, name: stockName });
+            }}
             ariaLabel={text.targetCode}
             placeholder={pageText.stockPlaceholder}
             disabled={isSubmitting || levelLocked}
+            className="h-9 rounded-[var(--radius-control)] px-3"
           />
+          {targetName ? (
+            <p className="text-xs text-secondary-text" data-testid="alert-form-stock-name">
+              {formatUiText(alertsText.pickedName, { name: targetName })}
+            </p>
+          ) : null}
         </div>
       );
     }
@@ -501,16 +543,35 @@ export const AlertRuleForm: React.FC<AlertRuleFormProps> = ({ onSubmit, isSubmit
               disabled={isSubmitting || levelLocked}
               onChange={(value) => setPriceDirection(value as 'above' | 'below')}
             />
-            <Input
-              label={text.priceThreshold}
-              type="number"
-              min="0"
-              step="0.0001"
-              value={price}
-              onChange={(event) => setPrice(event.target.value)}
-              disabled={isSubmitting || levelLocked}
-            />
-            {priceHint ? <p className="text-xs text-secondary-text md:col-span-2">{priceHint}</p> : null}
+            <div className="space-y-2">
+              <Input
+                label={text.priceThreshold}
+                type="number"
+                min="0"
+                step="0.0001"
+                value={price}
+                placeholder={alertsText.pricePlaceholder}
+                hint={priceHint ?? undefined}
+                trailingAction={currency ? <span className="pr-1 text-xs text-secondary-text">{currency}</span> : undefined}
+                onChange={(event) => setPrice(event.target.value)}
+                disabled={isSubmitting || levelLocked}
+              />
+              {priceChips.length ? (
+                <div role="group" aria-label={alertsText.chipGroup} className="flex flex-wrap gap-1.5">
+                  {priceChips.map((chip) => (
+                    <button
+                      key={chip.key}
+                      type="button"
+                      className="inline-flex h-7 items-center rounded-full border border-border/60 px-2.5 text-xs tabular-nums text-secondary-text transition-colors hover:border-primary hover:text-foreground disabled:opacity-50"
+                      disabled={isSubmitting}
+                      onClick={() => setPrice(String(chip.value))}
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           </div>
         ) : null}
 

@@ -89,4 +89,46 @@ describe('DecisionSignalTable', () => {
     expect(onShowOlder).toHaveBeenCalledTimes(1);
     expect(onSelect).not.toHaveBeenCalled();
   });
+
+  it('marks a held stock with a dot before the name instead of a word badge', () => {
+    renderTable();
+
+    const row = within(screen.getByTestId('data-table-desktop'));
+    const dot = row.getByTestId('signal-held-dot-7');
+    expect(dot).toHaveClass('h-1.5', 'w-1.5', 'rounded-full', 'bg-cyan');
+    // 圓點在名稱前面
+    const name = row.getByRole('button', { name: /台積電/ });
+    expect(dot.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.getByText('持股')).toHaveClass('sr-only');
+  });
+
+  it('shows only the score in the score column and keeps the confidence for the tooltip', () => {
+    renderTable();
+
+    const row = within(screen.getByTestId('data-table-desktop'));
+    const score = row.getByText('82');
+    expect(score).toHaveClass('whitespace-nowrap');
+    expect(row.queryByText(/72%/)).not.toBeInTheDocument();
+    expect(row.queryByText(/82／/)).not.toBeInTheDocument();
+    fireEvent.mouseEnter(score.parentElement as HTMLElement);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('72%');
+  });
+
+  it('leads US rows with the ticker and other markets with the name', () => {
+    renderTable({ ...signal, id: 8, stockCode: 'AAPL', stockName: 'Apple', market: 'us', isHeld: false });
+
+    const button = within(screen.getByTestId('data-table-desktop')).getByRole('button', { name: /Apple/ });
+    expect(button).toHaveTextContent('AAPL');
+    expect(button).not.toHaveTextContent('Apple');
+    expect(within(screen.getByTestId('signal-mobile-row-8')).getByText('AAPL')).toBeInTheDocument();
+  });
+
+  it('lays the phone row out as tag, name and a right-aligned price', () => {
+    renderTable();
+
+    const firstLine = screen.getByTestId('signal-mobile-row-7').firstElementChild as HTMLElement;
+    expect(firstLine).toHaveClass('grid', 'grid-cols-[auto_1fr_auto]');
+    expect(firstLine.children).toHaveLength(3);
+    expect(firstLine.lastElementChild).toHaveClass('justify-self-end', 'text-right');
+  });
 });

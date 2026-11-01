@@ -121,6 +121,9 @@ interface ReportChangeConditionsProps {
   language?: ReportLanguage;
 }
 
+// Column count follows how many condition groups exist, so one group is not squeezed into a third.
+const CONDITION_GRID_COLS: Record<number, string> = { 1: '', 2: 'md:grid-cols-2', 3: 'md:grid-cols-3' };
+
 /** 「什麼時候改變看法」三組條件與下次檢查；舊報告全空就不顯示。 */
 export const ReportChangeConditions: React.FC<ReportChangeConditionsProps> = ({ summary, language = 'zh' }) => {
   const text = TEXT[normalizeReportLanguage(language)];
@@ -142,7 +145,10 @@ export const ReportChangeConditions: React.FC<ReportChangeConditionsProps> = ({ 
       <section data-testid="report-change-conditions">
         <DashboardPanelHeader title={text.changeMind} className="mb-2" />
         {groups.length > 0 ? (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div
+            data-testid="report-change-conditions-grid"
+            className={`grid grid-cols-1 gap-3 ${CONDITION_GRID_COLS[groups.length] ?? ''} ${groups.length === 1 ? 'max-w-[72ch]' : ''}`.trim()}
+          >
             {groups.map(([title, items]) => (
               <div key={title} className="min-w-0">
                 <h4 className="text-xs font-medium text-muted-text">{title}</h4>

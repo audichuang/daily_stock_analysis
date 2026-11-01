@@ -45,6 +45,24 @@ vi.mock('recharts', () => {
   };
 });
 
+// 階段標籤可被測試覆寫，用來餵各種前綴；null 時走真的實作。
+const phaseLabelOverride = vi.hoisted(() => ({ value: null as string | null }));
+vi.mock('../../utils/marketPhase', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/marketPhase')>();
+  return {
+    ...actual,
+    getMarketPhaseSummaryLabel: (...args: Parameters<typeof actual.getMarketPhaseSummaryLabel>) => (
+      phaseLabelOverride.value ?? actual.getMarketPhaseSummaryLabel(...args)
+    ),
+  };
+});
+
+// 操作建議原文收在 Tooltip：hover 觸發點後才進 DOM。
+function hoverTooltipOf(element: HTMLElement) {
+  fireEvent.mouseEnter(element.closest('[tabindex="0"]') as HTMLElement);
+  return screen.getByRole('tooltip');
+}
+
 // 桌機與手機兩種版面都在 DOM；這裡只留桌機，手機列在專門的測試用 realMobile 驗。
 const dataTableMode = vi.hoisted(() => ({ keepMobile: false }));
 vi.mock('../../components/common/DataTable', async (importOriginal) => {
@@ -135,6 +153,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
   dataTableMode.keepMobile = false;
+  phaseLabelOverride.value = null;
   mockGetOverallPerformance.mockResolvedValue(basePerformance);
   mockGetStockPerformance.mockResolvedValue(null);
   mockGetSeries.mockResolvedValue(baseSeries);
@@ -177,7 +196,9 @@ describe('BacktestPage layout', () => {
     const row = within(resultRow);
     expect(row.getByText('观望')).toBeInTheDocument();
     expect(row.getByText('震荡偏多')).toBeInTheDocument();
-    expect(row.getByText('继续持有')).toBeInTheDocument();
+    // 格子只放動作與趨勢，操作建議原文在 Tooltip
+    expect(row.queryByText('继续持有')).not.toBeInTheDocument();
+    expect(hoverTooltipOf(row.getByText('观望'))).toHaveTextContent('继续持有');
     expect(row.getByText('盈利')).toBeInTheDocument();
     expect(row.getByText('做多')).toBeInTheDocument();
   });
@@ -232,14 +253,138 @@ describe('BacktestPage layout', () => {
     expect(within(badge.parentElement as HTMLElement).getByText(/3\.80?%/)).toHaveClass(tone);
   });
 
-  it('breaks results down by advice, largest group first', async () => {
+  it('breaks results down by action label, largest group first', async () => {
     render(<BacktestPage />);
 
     const table = await screen.findByRole('table', { name: '依建议拆解' });
     const rows = within(table).getAllByRole('row');
-    expect(rows[1]).toHaveTextContent('逢低买入');
-    expect(rows[2]).toHaveTextContent('继续持有');
+    // 原文「逢低买入」「继续持有」對不上別名，退回既有的建議文字判讀
+    expect(rows[1]).toHaveTextContent('买入');
+    expect(rows[1]).not.toHaveTextContent('逢低买入');
+    expect(rows[2]).toHaveTextContent('持有');
+    expect(rows[2]).not.toHaveTextContent('继续持有');
     expect(rows[1]).toHaveTextContent('6／3／0');
+  });
+
+  it('merges spelling variants of the same action into one row', async () => {
+    mockGetOverallPerformance.mockResolvedValue({
+      ...basePerformance,
+      adviceBreakdown: {
+        '观望': { total: 5, win: 2, loss: 2, neutral: 1, win_rate_pct: 50 },
+        '觀望': { total: 3, win: 1, loss: 1, neutral: 1, win_rate_pct: 50 },
+        watch: { total: 4, win: 3, loss: 0, neutral: 1, win_rate_pct: 100 },
+        '減倉': { total: 6, win: 1, loss: 5, neutral: 0, win_rate_pct: 16.67 },
+        '减仓': { total: 5, win: 1, loss: 4, neutral: 0, win_rate_pct: 20 },
+      },
+    });
+
+    render(<BacktestPage />);
+
+    const table = await screen.findByRole('table', { name: '依建议拆解' });
+    const rows = within(table).getAllByRole('row');
+    expect(rows).toHaveLength(3);
+    expect(rows[1]).toHaveTextContent('观望');
+    expect(rows[1]).toHaveTextContent('12');
+    expect(rows[1]).toHaveTextContent('6／3／3');
+    // 勝率依合併後的勝負重算：6／(6+3)
+    expect(rows[1]).toHaveTextContent('66.7%');
+    expect(rows[2]).toHaveTextContent('减仓');
+    expect(rows[2]).toHaveTextContent('11');
+    expect(rows[2]).toHaveTextContent('2／9／0');
+    expect(within(table).queryByText('觀望')).not.toBeInTheDocument();
+    expect(within(table).queryByText('減倉')).not.toBeInTheDocument();
+  });
+
+  it('puts unclassified advice last even when it is the largest group, and greys out small samples', async () => {
+    mockGetOverallPerformance.mockResolvedValue({
+      ...basePerformance,
+      adviceBreakdown: {
+        '(unknown)': { total: 40, win: 10, loss: 10, neutral: 20 },
+        '減碼': { total: 10, win: 4, loss: 6, neutral: 0 },
+        '買進': { total: 5, win: 3, loss: 2, neutral: 0 },
+      },
+    });
+
+    render(<BacktestPage />);
+
+    const table = await screen.findByRole('table', { name: '依建议拆解' });
+    const rows = within(table).getAllByRole('row');
+    expect(rows).toHaveLength(4);
+    expect(rows[1]).toHaveTextContent('减仓');
+    expect(rows[2]).toHaveTextContent('买入');
+    expect(rows[3]).toHaveTextContent('未分类');
+    expect(within(table).getByTestId('advice-small-sample-buy')).toHaveClass('text-muted-text');
+    expect(within(table).getByTestId('advice-small-sample-buy')).toHaveTextContent('样本少');
+    expect(within(table).queryByTestId('advice-small-sample-reduce')).not.toBeInTheDocument();
+  });
+
+  it('writes the win rate hint as wins, losses and flats', async () => {
+    render(<BacktestPage />);
+
+    expect(await screen.findByText('30 胜／15 负／5 平')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['市场阶段: 盘中', '盘中'],
+    ['市场阶段：盘中', '盘中'],
+    ['市場階段：盤中', '盤中'],
+    ['市場階段: 盤中', '盤中'],
+    ['Market phase: Intraday', 'Intraday'],
+  ])('drops the phase prefix from %s', async (label, expected) => {
+    phaseLabelOverride.value = label;
+    mockGetResults.mockResolvedValue(resultsResponse([{ ...baseResultItem, marketPhaseSummary: { market: '', phase: 'intraday', warnings: [] } }]));
+
+    render(<BacktestPage />);
+
+    const row = (await screen.findByText('600519')).closest('tr') as HTMLElement;
+    expect(within(row).getAllByRole('cell')[2]).toHaveTextContent(new RegExp(`^${expected}$`));
+  });
+
+  it.each([
+    ['盘中（市场阶段: 未知）'],
+    ['市场阶段说明'],
+  ])('keeps %s intact when the prefix is not at the start', async (label) => {
+    phaseLabelOverride.value = label;
+    mockGetResults.mockResolvedValue(resultsResponse([{ ...baseResultItem, marketPhaseSummary: { market: '', phase: 'intraday', warnings: [] } }]));
+
+    render(<BacktestPage />);
+
+    const row = (await screen.findByText('600519')).closest('tr') as HTMLElement;
+    expect(within(row).getAllByRole('cell')[2]).toHaveTextContent(label);
+  });
+
+  it('shows no phase prefix in Traditional Chinese', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+    mockGetResults.mockResolvedValue(resultsResponse([{ ...baseResultItem, marketPhaseSummary: { market: 'TW', phase: 'intraday', warnings: [] } }]));
+
+    render(
+      <UiLanguageProvider>
+        <BacktestPage />
+      </UiLanguageProvider>,
+    );
+
+    const row = (await screen.findByText('600519')).closest('tr') as HTMLElement;
+    const cell = within(row).getAllByRole('cell')[2];
+    expect(cell).toHaveTextContent('TW · 盤中');
+    expect(cell).not.toHaveTextContent('市場階段');
+  });
+
+  it('labels the two date inputs as start and end', async () => {
+    render(<BacktestPage />);
+
+    const start = await screen.findByLabelText('分析开始日期');
+    expect(start.closest('label')).toHaveTextContent('起');
+    expect(screen.getByLabelText('分析结束日期').closest('label')).toHaveTextContent('止');
+  });
+
+  it('hides the status column on the completed tab only', async () => {
+    render(<BacktestPage />);
+
+    const table = await screen.findByRole('table', { name: '结果集' });
+    expect(within(table).queryByRole('columnheader', { name: '状态' })).not.toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: '状态' })).getByRole('radio', { name: '全部' }));
+    await waitFor(() => expect(within(screen.getByRole('table', { name: '结果集' })).getByRole('columnheader', { name: '状态' })).toBeInTheDocument());
   });
 
   it('expands a row to show entry and exit, and collapses it again', async () => {
@@ -382,7 +527,7 @@ describe('BacktestPage filters', () => {
 
     const row = within((await screen.findByText('600519')).closest('tr') as HTMLElement);
     expect(row.getByText('Watch')).toBeInTheDocument();
-    expect(row.getByText('continue holding')).toBeInTheDocument();
+    expect(hoverTooltipOf(row.getByText('Watch'))).toHaveTextContent('continue holding');
     expect(row.queryByText('观望')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Recalculate' })).toBeInTheDocument();
     expect(screen.queryByText('运行回测')).not.toBeInTheDocument();
@@ -400,7 +545,7 @@ describe('BacktestPage filters', () => {
 
     const row = within((await screen.findByText('600519')).closest('tr') as HTMLElement);
     expect(row.getByText('震荡偏多')).toBeInTheDocument();
-    expect(row.getByText('risk alert, avoid buying')).toBeInTheDocument();
+    expect(hoverTooltipOf(row.getByText('震荡偏多'))).toHaveTextContent('risk alert, avoid buying');
     expect(row.queryByText('回避')).not.toBeInTheDocument();
   });
 });
@@ -522,8 +667,23 @@ describe('BacktestPage trend charts', () => {
     expect(await screen.findByText('逐笔累计（非资金曲线）')).toBeInTheDocument();
     expect(await screen.findByTestId('backtest-trend-updated')).toHaveTextContent('资料更新');
     expect(screen.getByTestId('line-cumulativeReturnPct')).toBeInTheDocument();
-    expect(screen.getByTestId('line-cumulativeStockReturnPct')).toBeInTheDocument();
     expect(screen.getByTestId('bar-winRatePct')).toBeInTheDocument();
+  });
+
+  it('draws only the simulated line by default and adds the stock line on demand', async () => {
+    render(<BacktestPage />);
+
+    expect(await screen.findByTestId('line-cumulativeReturnPct')).toBeInTheDocument();
+    expect(screen.queryByTestId('line-cumulativeStockReturnPct')).not.toBeInTheDocument();
+    // 圖例在圖上方
+    const legend = screen.getByTestId('backtest-trend-legend');
+    expect(legend).not.toHaveTextContent('同期个股累计');
+    expect(legend.compareDocumentPosition(screen.getByTestId('line-cumulativeReturnPct')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: '对比线' })).getByRole('radio', { name: '加上个股' }));
+
+    expect(await screen.findByTestId('line-cumulativeStockReturnPct')).toBeInTheDocument();
+    expect(legend).toHaveTextContent('同期个股累计');
   });
 
   it('hides the charts without data', async () => {
@@ -557,6 +717,8 @@ describe('BacktestPage trend charts', () => {
 
     expect(await screen.findByTestId('line-cumulativeReturnPct')).toBeInTheDocument();
     expect(screen.queryByTestId('line-cumulativeStockReturnPct')).not.toBeInTheDocument();
+    // 沒有個股線可切時不出現切換
+    expect(screen.queryByRole('radiogroup', { name: '对比线' })).not.toBeInTheDocument();
   });
 
   it('does not plot months without a win or loss as 0%', async () => {

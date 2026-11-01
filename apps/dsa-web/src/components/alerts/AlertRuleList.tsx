@@ -99,6 +99,30 @@ const DryRunResult: React.FC<{ result: AlertRuleTestResponse; text: PageText; on
   );
 };
 
+// No shared Switch component exists yet; this keeps the native checkbox (role="switch") for a11y
+// and draws a track/thumb over it. The label wrapper gives a 44px touch target.
+const RuleSwitch: React.FC<{ label: string; checked: boolean; disabled?: boolean; onChange: () => void }> = ({
+  label, checked, disabled = false, onChange,
+}) => (
+  <label className={`relative inline-flex min-h-11 min-w-11 items-center justify-center ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+    <input
+      type="checkbox"
+      role="switch"
+      className="peer absolute h-px w-px opacity-0"
+      aria-label={label}
+      checked={checked}
+      disabled={disabled}
+      onChange={onChange}
+    />
+    <span
+      aria-hidden="true"
+      className={`relative inline-block h-5 w-9 rounded-full transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-cyan/40 peer-disabled:opacity-50 ${checked ? 'bg-primary' : 'bg-border'}`}
+    >
+      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-4' : 'translate-x-0.5'}`} />
+    </span>
+  </label>
+);
+
 interface RuleCardProps {
   rule: AlertRuleItem;
   quote?: AlertQuoteView;
@@ -134,17 +158,11 @@ const RuleCard: React.FC<RuleCardProps> = ({
   if (rule.source === 'tw_levels') facts.push(text.levelSource);
 
   return (
-    <li className="rounded-xl border border-border/60 p-3 sm:p-4" data-testid={`alert-rule-${rule.id}`}>
+    <li
+      className={`rounded-xl border border-border/60 p-3 transition-opacity sm:p-4 ${rule.enabled ? '' : 'opacity-60'}`}
+      data-testid={`alert-rule-${rule.id}`}
+    >
       <div className="flex items-start gap-3">
-        <input
-          type="checkbox"
-          role="switch"
-          className="mt-1 h-4 w-4 shrink-0"
-          aria-label={formatUiText(text.switchOn, { name: rule.name })}
-          checked={rule.enabled}
-          disabled={isBusy}
-          onChange={() => onToggleEnabled(rule)}
-        />
         <div className="min-w-0 flex-1">
           <p className={rule.enabled ? 'text-sm font-medium text-foreground' : 'text-sm font-medium text-muted-text'}>
             {`${text.whenPrefix} ${ruleTarget(rule, language, text, quote)} ${ruleCondition(rule, language, text)} ${text.remind}`.trim()}
@@ -152,22 +170,30 @@ const RuleCard: React.FC<RuleCardProps> = ({
           <p className="mt-1 break-words text-xs text-secondary-text">{facts.join(' · ')}</p>
           <p className="mt-0.5 truncate text-xs text-muted-text">{rule.name}</p>
         </div>
-        {/* 渲染到 body：規則卡外層 .card-surface 是 overflow:hidden，只有一條規則時選單會被裁掉、刪除點不到。 */}
-        <ActionMenu
-          className="shrink-0"
-          size="sm"
-          label={formatUiText(text.menu, { name: rule.name })}
-          items={[
-            { key: 'edit', label: text.edit, disabled: isBusy, onSelect: () => onEdit(rule) },
-            {
-              key: 'test',
-              label: busy?.id === rule.id && busy.action === 'test' ? text.dryRunning : text.dryRun,
-              disabled: isBusy,
-              onSelect: () => onTest(rule),
-            },
-            { key: 'delete', label: text.delete, disabled: isBusy, danger: true, onSelect: () => onRequestDelete(rule) },
-          ]}
-        />
+        <div className="flex shrink-0 items-center gap-1">
+          <RuleSwitch
+            label={formatUiText(text.switchOn, { name: rule.name })}
+            checked={rule.enabled}
+            disabled={isBusy}
+            onChange={() => onToggleEnabled(rule)}
+          />
+          {/* 渲染到 body：規則卡外層 .card-surface 是 overflow:hidden，只有一條規則時選單會被裁掉、刪除點不到。 */}
+          <ActionMenu
+            className="shrink-0"
+            size="md"
+            label={formatUiText(text.menu, { name: rule.name })}
+            items={[
+              { key: 'edit', label: text.edit, disabled: isBusy, onSelect: () => onEdit(rule) },
+              {
+                key: 'test',
+                label: busy?.id === rule.id && busy.action === 'test' ? text.dryRunning : text.dryRun,
+                disabled: isBusy,
+                onSelect: () => onTest(rule),
+              },
+              { key: 'delete', label: text.delete, disabled: isBusy, danger: true, onSelect: () => onRequestDelete(rule) },
+            ]}
+          />
+        </div>
       </div>
       {testResult ? <DryRunResult result={testResult} text={text} onClose={() => onDismissTest(rule)} /> : null}
     </li>
@@ -228,6 +254,7 @@ export const AlertRuleList: React.FC<AlertRuleListProps> = ({
   const { language } = useUiLanguage();
   const text = ALERT_PAGE_TEXT[language];
   const [pendingDelete, setPendingDelete] = useState<AlertRuleItem | null>(null);
+  const emptyAccount = total === 0 && rules.length === 0 && !hasFilters && !isLoading;
   const scopeOptions = [
     { value: 'all', label: text.allGroups },
     ...Object.entries(ALERT_SCOPE_LABELS[language]).map(([value, label]) => ({ value, label })),
@@ -235,32 +262,35 @@ export const AlertRuleList: React.FC<AlertRuleListProps> = ({
 
   return (
     <Card variant="surface" padding="md" className={className}>
-      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Input
-          label={text.search}
-          value={searchTarget}
-          placeholder={text.searchPlaceholder}
-          onChange={(event) => onSearchTargetChange(event.target.value)}
-        />
-        <Select
-          label={text.group}
-          value={scopeFilter}
-          options={scopeOptions}
-          onChange={(value) => onScopeFilterChange(value as AlertScopeFilter)}
-        />
-        <Select
-          label={text.status}
-          value={enabledFilter}
-          options={ALERT_ENABLED_FILTER_OPTIONS[language]}
-          onChange={(value) => onEnabledFilterChange(value as AlertRuleEnabledFilter)}
-        />
-        <Select
-          label={text.type}
-          value={alertTypeFilter}
-          options={ALERT_TYPE_FILTER_OPTIONS[language]}
-          onChange={(value) => onAlertTypeFilterChange(value as AlertTypeFilter)}
-        />
-      </div>
+      {/* A brand-new account has nothing to filter; the guide alone reads better than four empty controls. */}
+      {emptyAccount ? null : (
+        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Input
+            label={text.search}
+            value={searchTarget}
+            placeholder={text.searchPlaceholder}
+            onChange={(event) => onSearchTargetChange(event.target.value)}
+          />
+          <Select
+            label={text.group}
+            value={scopeFilter}
+            options={scopeOptions}
+            onChange={(value) => onScopeFilterChange(value as AlertScopeFilter)}
+          />
+          <Select
+            label={text.status}
+            value={enabledFilter}
+            options={ALERT_ENABLED_FILTER_OPTIONS[language]}
+            onChange={(value) => onEnabledFilterChange(value as AlertRuleEnabledFilter)}
+          />
+          <Select
+            label={text.type}
+            value={alertTypeFilter}
+            options={ALERT_TYPE_FILTER_OPTIONS[language]}
+            onChange={(value) => onAlertTypeFilterChange(value as AlertTypeFilter)}
+          />
+        </div>
+      )}
 
       {rules.length === 0 && !isLoading ? (
         hasFilters ? <p className="py-8 text-center text-sm text-secondary-text">{text.noMatch}</p> : guide

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AlertsPage from '../AlertsPage';
@@ -119,7 +119,8 @@ describe('AlertsPage', () => {
     cleanup();
     api.getMonitorStatus.mockResolvedValue({ ...runningMonitor, channels: [] });
     renderPage();
-    expect(await screen.findByText(/尚未設定通知管道/)).toBeInTheDocument();
+    expect(await screen.findByText('通知還沒設定')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '去設定' })).toHaveAttribute('href', '/settings?category=notification');
   });
 
   it('does not claim the monitor is down when the status request fails', async () => {
@@ -135,8 +136,11 @@ describe('AlertsPage', () => {
     expect(await screen.findByTestId('alert-trigger-10')).toHaveTextContent('台積電');
     expect(screen.getByTestId('alert-trigger-10')).toHaveTextContent('來源 yfinance（可能延遲）');
     expect(screen.getByTestId('alert-trigger-10').querySelector('.bg-danger')).not.toBeNull();
-    expect(screen.getByText('啟用規則').previousSibling).toHaveTextContent('3');
-    expect(screen.getByText('異常').previousSibling).toHaveTextContent('7');
+    const metric = (label: string) => screen.getByText(label).parentElement?.querySelector('[data-metric-value]');
+    expect(metric('啟用規則')).toHaveTextContent('3');
+    expect(metric('異常')).toHaveTextContent('7');
+    // The activity tab uses the same formula (degraded + failed); skipped is shown on its own.
+    expect(screen.getByRole('tab', { name: /^異常/ })).toHaveTextContent(/^異常 7· 略過 2$/);
     expect(api.listTriggers).toHaveBeenCalledWith({ status: 'triggered', page: 1, pageSize: 20 });
   });
 
@@ -152,7 +156,13 @@ describe('AlertsPage', () => {
   it('guides an empty account through templates into the shared drawer', async () => {
     api.listRules.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 20 });
     renderPage();
-    fireEvent.click(await screen.findByRole('button', { name: '台股大盤轉紅燈' }));
+    expect(await screen.findByTestId('alert-template-market')).toBeInTheDocument();
+    expect(screen.getByTestId('alert-template-price')).toHaveTextContent('指定價位，站上或跌破時提醒');
+    expect(screen.getByTestId('alert-template-change')).toBeInTheDocument();
+    // Nothing to filter or count yet: the stat cards and the filter row stay out of the way.
+    expect(screen.queryByTestId('metric-group')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('搜尋股票')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '台股大盤轉紅燈' }));
     expect(await screen.findByLabelText('市場區域')).toHaveValue('tw');
     expect(screen.getByText('1. 監控誰')).toBeInTheDocument();
     expect(screen.getByText('2. 何時提醒')).toBeInTheDocument();
@@ -172,6 +182,29 @@ describe('AlertsPage', () => {
     })));
     expect(await screen.findByText(/已建立規則/)).toBeInTheDocument();
     expect(screen.queryByLabelText('標的代號')).not.toBeInTheDocument();
+  });
+
+  it('prefills a price condition from ?type=price_cross&direction=&price= without saving', async () => {
+    renderPage('/alerts?new=1&target=2330.TW&type=price_cross&direction=below&price=820');
+    expect(await screen.findByLabelText('標的代號')).toHaveValue('2330.TW');
+    expect(screen.getByLabelText('規則類型')).toHaveValue('price_cross');
+    expect(screen.getByLabelText('方向')).toHaveValue('below');
+    expect(screen.getByLabelText('價格閾值')).toHaveValue(820);
+    expect(api.createRule).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a negative price', 'type=price_cross&direction=below&price=-1'],
+    ['a non-numeric price', 'type=price_cross&direction=below&price=abc'],
+    ['an unknown direction', 'type=price_cross&direction=sideways&price=820'],
+    ['an unsupported type', 'type=volume_spike&direction=below&price=820'],
+  ])('ignores the condition parameters when the link has %s', async (_case, query) => {
+    renderPage(`/alerts?new=1&target=2330.TW&${query}`);
+    expect(await screen.findByLabelText('標的代號')).toHaveValue('2330.TW');
+    expect(screen.getByLabelText('規則類型')).toHaveValue('price_cross');
+    expect(screen.getByLabelText('方向')).toHaveValue('above');
+    expect(screen.getByLabelText('價格閾值')).toHaveValue(null);
+    expect(api.createRule).not.toHaveBeenCalled();
   });
 
   it('applies ?target= as a filter when not creating', async () => {
@@ -455,12 +488,24 @@ describe('AlertsPage', () => {
     expect(screen.getByTestId('alert-rule-1').closest('.hidden')).not.toBeNull();
   });
 
-  it('keeps diagnostics collapsed until the mobile tab opens them', async () => {
+  it('renders diagnostics directly in the mobile tab and folds them only on desktop', async () => {
     renderPage();
     await screen.findByTestId('alert-rule-1');
-    const diagnostics = screen.getByTestId('alert-diagnostics');
-    expect(diagnostics).not.toHaveAttribute('open');
-    fireEvent.click(screen.getByRole('tab', { name: '通知診斷' }));
-    expect(diagnostics).toHaveAttribute('open');
+    const desktop = screen.getByTestId('alert-diagnostics');
+    expect(desktop).not.toHaveAttribute('open');
+    expect(desktop).toHaveClass('hidden', 'lg:block');
+    const mobile = screen.getByTestId('alert-diagnostics-mobile');
+    expect(mobile).toHaveClass('lg:hidden');
+    expect(mobile.closest('details')).toBeNull();
+    expect(await within(mobile).findByText('還沒有通知紀錄')).toBeInTheDocument();
+  });
+
+  it('hides the duplicate 動態 heading on phones and uses small underline sub-tabs', async () => {
+    renderPage();
+    await screen.findByTestId('alert-trigger-10');
+    expect(screen.getByRole('heading', { name: '動態' })).toHaveClass('hidden', 'lg:block');
+    const subTab = screen.getByRole('tab', { name: /^已觸發/ });
+    expect(subTab).toHaveClass('h-7', 'text-xs', 'border-b-2');
+    expect(subTab).not.toHaveClass('rounded-full');
   });
 });

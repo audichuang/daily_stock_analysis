@@ -91,6 +91,30 @@ describe('FinancialsPanel', () => {
     expect(screen.queryByTestId('financials-headline')).not.toBeInTheDocument();
   });
 
+  it('shows the four headline metrics first and tucks the rest behind "show all"', async () => {
+    const point = { period: '2099Q2', value: 10, yoyPct: null, qoqPct: null, yoyPp: null, qoqPp: null, derived: false };
+    const base = payload();
+    vi.mocked(stocksApi.getFinancials).mockResolvedValue(payload({
+      metrics: [
+        ...base.metrics,
+        { key: 'operating_margin', label: '營業利益率', kind: 'ratio', unit: '%', definition: '營益教學', points: [point] },
+        { key: 'eps', label: '每股盈餘 EPS', kind: 'per_share', unit: 'TWD/股', definition: 'EPS 教學', points: [point] },
+        { key: 'free_cash_flow', label: '自由現金流', kind: 'amount', unit: 'TWD', definition: 'FCF 教學', points: [point] },
+        { key: 'debt_ratio', label: '負債比', kind: 'ratio', unit: '%', definition: '負債教學', points: [point] },
+      ],
+    }));
+    render(<FinancialsPanel stockCode="2330.TW" />);
+    const primary = await screen.findByTestId('financials-primary');
+    for (const key of ['revenue', 'gross_margin', 'eps', 'free_cash_flow']) {
+      expect(primary).toContainElement(screen.getByTestId(`financials-metric-${key}`));
+    }
+    const more = screen.getByTestId('financials-more');
+    expect(more).toHaveTextContent('看全部指标');
+    expect(primary).not.toContainElement(screen.getByTestId('financials-metric-operating_margin'));
+    expect(more).toContainElement(screen.getByTestId('financials-metric-operating_margin'));
+    expect(more).toContainElement(screen.getByTestId('financials-metric-debt_ratio'));
+  });
+
   it('explains ETFs and hides unsupported markets', async () => {
     vi.mocked(stocksApi.getFinancials).mockResolvedValue(payload({ status: 'not_applicable', statusReason: 'ETF 是基金', metrics: [], periods: [] }));
     const { unmount } = render(<FinancialsPanel stockCode="00631L.TW" />);

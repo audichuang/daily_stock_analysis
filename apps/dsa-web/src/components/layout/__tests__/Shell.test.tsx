@@ -419,6 +419,8 @@ describe('Shell', () => {
       </MemoryRouter>
     );
 
+    // Logout now lives in the rail's "more" popover (W15).
+    fireEvent.click(within(screen.getByTestId('sidebar-toolbar')).getByRole('button', { name: '更多' }));
     fireEvent.click(screen.getByRole('button', { name: '退出' }));
 
     expect(await screen.findByRole('heading', { name: '退出登录' })).toBeInTheDocument();

@@ -75,6 +75,17 @@ describe('AlertTriggerHistory', () => {
     expect(screen.queryByText('查看診斷')).not.toBeInTheDocument();
   });
 
+  it('counts skipped rows separately from issues on the sub-tab', () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh-TW');
+    render(
+      <UiLanguageProvider>
+        <AlertTriggerHistory triggers={[]} triggeredCount={1} issueCount={7} skippedCount={2} />
+      </UiLanguageProvider>,
+    );
+    expect(screen.getByRole('tab', { name: /^異常/ })).toHaveTextContent(/^異常 7· 略過 2$/);
+    expect(screen.getByRole('tab', { name: /^已觸發/ })).toHaveTextContent(/^已觸發 1$/);
+  });
+
   it('colours triggered rows by severity and shows the real quote source', () => {
     const base = { ...trigger, status: 'triggered', quoteSource: 'yfinance' };
     const { container, unmount } = renderIn('zh-TW', [{ ...base, severity: 'critical' }]);

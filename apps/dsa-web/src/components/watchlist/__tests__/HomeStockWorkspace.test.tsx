@@ -72,14 +72,15 @@ describe('HomeStockWorkspace', () => {
     expect(screen.getByTestId('home-stock-workspace-scroll')).toHaveClass('overscroll-y-contain', 'touch-pan-y');
   });
 
-  it('uses the same mobile scroll-shell contract around history and StockBar', () => {
+  it('keeps all three tabs in one shared glass-card shell with a frameless StockBar list', () => {
     renderWorkspace({ watchlistRows: [], activeTab: 'history' });
 
     const workspace = screen.getByTestId('home-stock-workspace');
     const stockBar = screen.getByTestId('home-stock-bar');
-    expect(workspace).toHaveClass('home-stock-scroll-shell');
+    expect(workspace).toHaveClass('glass-card', 'home-stock-scroll-shell');
     expect(workspace).not.toHaveClass('overflow-hidden');
-    expect(stockBar).toHaveClass('glass-card', 'home-stock-scroll-shell', 'min-h-0');
+    expect(stockBar).toHaveClass('min-h-0');
+    expect(stockBar).not.toHaveClass('glass-card');
     expect(stockBar).not.toHaveClass('overflow-hidden');
     expect(screen.getByTestId('home-stock-bar-scroll')).toHaveClass('touch-pan-y');
   });
@@ -180,7 +181,7 @@ describe('HomeStockWorkspace', () => {
             reportType: 'simple', createdAt: '2026-10-01T09:20:00+08:00' } },
       ],
     });
-    expect(screen.getByText('今日待分析 1')).toBeInTheDocument();
+    expect(screen.getByTestId('watchlist-analyze-split')).toHaveTextContent('分析未完成 1');
     expect(screen.getByRole('button', { name: '暂无 000016 的分析详情，可先分析' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: '暂无 000016.SH 的分析详情，可先分析' })).toHaveAttribute('aria-pressed', 'false');
     expect(screen.getByRole('button', { name: '暂无 000016.SH 的分析详情，可先分析' })).toHaveAccessibleDescription(
@@ -459,7 +460,7 @@ describe('HomeStockWorkspace', () => {
     );
     const priced = within(screen.getByTestId('watchlist-row-2330.TW'));
     expect(priced.getByTestId('stock-row-price')).toHaveTextContent('1,234');
-    expect(priced.queryByText(/分析时价/)).not.toBeInTheDocument();
+    expect(priced.queryByText(/分析时/)).not.toBeInTheDocument();
 
     // 沒有報價：現價是 —，分析時價要明確標示
     view.rerender(
@@ -468,8 +469,8 @@ describe('HomeStockWorkspace', () => {
       </UiLanguageProvider>,
     );
     const unpriced = within(screen.getByTestId('watchlist-row-2330.TW'));
-    expect(unpriced.getByTestId('stock-row-price')).toHaveTextContent('—');
-    expect(unpriced.getByText(/分析时价/)).toBeInTheDocument();
+    expect(unpriced.getByTestId('stock-row-price')).toHaveTextContent(/^900.* · 分析时$/);
+    expect(unpriced.getByTestId('stock-row-price')).toHaveClass('text-muted-text');
   });
 
   it('filters rows by market and sorts missing readings last', () => {
@@ -484,17 +485,80 @@ describe('HomeStockWorkspace', () => {
     const order = screen.getAllByTestId(/^watchlist-row-/).map((node) => node.getAttribute('data-testid'));
     expect(order).toEqual(['watchlist-row-NVDA', 'watchlist-row-2330.TW', 'watchlist-row-AAPL']);
 
-    fireEvent.click(screen.getByRole('radio', { name: '台股' }));
+    fireEvent.click(screen.getByRole('button', { name: '台股' }));
     expect(screen.getAllByTestId(/^watchlist-row-/)).toHaveLength(1);
     expect(screen.getByTestId('watchlist-row-2330.TW')).toBeInTheDocument();
   });
 
-  it('orders the tabs watchlist, today, all', () => {
+  it('renders the market filter as small chips, not a Segmented radiogroup', () => {
+    renderWorkspace({ watchlistRows: [] });
+
+    const controls = screen.getByTestId('home-list-controls');
+    expect(within(controls).queryByRole('radiogroup')).not.toBeInTheDocument();
+    expect(within(controls).queryAllByRole('radio')).toHaveLength(0);
+    const twChip = within(controls).getByRole('button', { name: '台股' });
+    expect(twChip).toHaveClass('h-6', 'text-[11px]', 'rounded-full');
+    expect(twChip).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(twChip);
+    expect(twChip).toHaveAttribute('aria-pressed', 'true');
+    // Sort shares the same row as the chips.
+    expect(within(controls).getByRole('combobox', { name: '排序' })).toHaveClass('h-8');
+  });
+
+  it('orders the tabs watchlist, today, history', () => {
     renderWorkspace({ watchlistRows: [] });
     const labels = within(screen.getByTestId('home-stock-workspace')).getAllByRole('button')
       .map((button) => button.textContent)
-      .filter((label) => ['自选', '今日', '全部'].includes(label ?? ''));
-    expect(labels).toEqual(['自选', '今日', '全部']);
+      .filter((label) => ['自选', '今日', '记录'].includes(label ?? ''));
+    expect(labels).toEqual(['自选', '今日', '记录']);
+  });
+
+  it('folds analyze-all and analyze-pending into one split button and keeps the add form in edit mode', () => {
+    const onAnalyzeWatchlist = vi.fn().mockResolvedValue(undefined);
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'zh');
+    render(
+      <UiLanguageProvider>
+        <HomeStockWorkspace
+          activeTab="watchlist"
+          onTabChange={vi.fn()}
+          watchlistRows={[
+            { code: 'AAPL', analyzedToday: false },
+            { code: 'NVDA', analyzedToday: true },
+          ]}
+          watchlistLoading={false}
+          watchlistActioning={false}
+          watchlistMessage={null}
+          onAddToWatchlist={vi.fn().mockResolvedValue(undefined)}
+          onRemoveFromWatchlist={vi.fn().mockResolvedValue(undefined)}
+          onRefreshWatchlist={vi.fn().mockResolvedValue(undefined)}
+          onAnalyzeWatchlist={onAnalyzeWatchlist}
+          isBatchAnalyzing={false}
+          batchStatus={null}
+          todayItems={[]}
+          isLoadingTodayItems={false}
+          todayLoadError={false}
+          watchlistAnalyzedTodayCount={1}
+          historyItems={[]}
+          isLoadingHistory={false}
+          onHistoryItemClick={vi.fn()}
+        />
+      </UiLanguageProvider>,
+    );
+
+    expect(screen.queryByText('自选股')).not.toBeInTheDocument();
+    expect(screen.getByTestId('watchlist-subline')).toHaveTextContent('2 只 · 今日 1/2 已分析');
+    expect(screen.queryByRole('button', { name: '分析全部' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /分析未完成 1/ }));
+    expect(onAnalyzeWatchlist).toHaveBeenLastCalledWith('pending');
+
+    fireEvent.click(screen.getByRole('button', { name: '更多分析选项' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '分析全部' }));
+    expect(onAnalyzeWatchlist).toHaveBeenLastCalledWith('all');
+
+    expect(screen.queryByLabelText('添加代码，如 600519')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+    expect(screen.getByLabelText('添加代码，如 600519')).toBeInTheDocument();
   });
 
   it('keeps the watchlist row selected for equivalent stock-code formats', () => {

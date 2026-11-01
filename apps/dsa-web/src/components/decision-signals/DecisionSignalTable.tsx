@@ -2,6 +2,8 @@ import type React from 'react';
 import { useMemo } from 'react';
 import type { StockQuote } from '../../api/stocks';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import { formatUiText } from '../../i18n/uiText';
+import { SIGNALS_TEXT } from '../../locales/signalsText';
 import type { DecisionSignalItem } from '../../types/decisionSignals';
 import { cn } from '../../utils/cn';
 import { buildDecisionActionLabelMap } from '../../utils/decisionAction';
@@ -16,7 +18,7 @@ import {
 import { formatNumber, formatPercent, formatPrice } from '../../utils/format';
 import { marketToneClass } from '../../utils/marketTone';
 import { formatSignalText } from '../../utils/signalText';
-import { Badge, DataTable, type DataTableColumn } from '../common';
+import { Badge, DataTable, Tooltip, type DataTableColumn } from '../common';
 import { formatConfidence, formatSignalDateTime, SignalActionTag } from './DecisionSignalDisplay';
 
 type DecisionSignalTableProps = {
@@ -29,15 +31,26 @@ type DecisionSignalTableProps = {
 
 const stopRowEvent = (event: React.SyntheticEvent) => event.stopPropagation();
 
+/** US tickers are recognised by symbol, so the code leads; other markets lead with the name. */
+const stockPrimaryAndSecondary = (item: DecisionSignalItem): { primary: string; secondary: string | null } => {
+  if (item.market === 'us') {
+    const name = item.stockName && item.stockName !== item.stockCode ? item.stockName : null;
+    return { primary: item.stockCode, secondary: name };
+  }
+  return { primary: item.stockName || item.stockCode, secondary: item.stockCode };
+};
+
 export const DecisionSignalTable: React.FC<DecisionSignalTableProps> = ({ items, quoteFor, onSelect, onShowOlder }) => {
   const { language, t } = useUiLanguage();
+  const signalsText = SIGNALS_TEXT[language];
   const actionLabels = useMemo(() => buildDecisionActionLabelMap(t), [t]);
 
   const remainingLabel = (item: DecisionSignalItem): string | null => {
     const remaining = signalRemaining(item.expiresAt);
     if (!remaining) return null;
     if (remaining.kind === 'expired') return t('decisionSignals.remainingExpired');
-    return t(remaining.kind === 'days' ? 'decisionSignals.remainingDays' : 'decisionSignals.remainingHours', { count: remaining.count });
+    if (remaining.kind === 'days') return formatUiText(signalsText.remainingDays, { count: remaining.count });
+    return t('decisionSignals.remainingHours', { count: remaining.count });
   };
 
   const renderLevel = (item: DecisionSignalItem, level: number | null | undefined) => {
@@ -72,38 +85,55 @@ export const DecisionSignalTable: React.FC<DecisionSignalTableProps> = ({ items,
     );
   };
 
-  const renderFlags = (item: DecisionSignalItem) => (
-    <>
-      {item.stopTriggered ? <Badge variant="caution">{t('decisionSignals.stopTriggered')}</Badge> : null}
-      {item.isHeld ? <Badge variant="neutral">{t('decisionSignals.held')}</Badge> : null}
-    </>
+  const renderStopFlag = (item: DecisionSignalItem) => (
+    item.stopTriggered ? <Badge variant="caution" className="shrink-0">{t('decisionSignals.stopTriggered')}</Badge> : null
+  );
+
+  // Held marker: a 6px cyan dot before the name; the word stays for screen readers and in the tooltip.
+  const renderHeldDot = (item: DecisionSignalItem) => (
+    item.isHeld ? (
+      <Tooltip content={signalsText.heldHint} className="shrink-0 items-center">
+        <span data-testid={`signal-held-dot-${item.id}`} aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-cyan" />
+        <span className="sr-only">{t('decisionSignals.held')}</span>
+      </Tooltip>
+    ) : null
   );
 
   const columns: DataTableColumn<DecisionSignalItem>[] = [
     {
       key: 'action',
       header: t('decisionSignals.colAction'),
+      minWidth: 64,
       render: (item) => <SignalActionTag item={item} />,
     },
     {
       key: 'stock',
       header: t('decisionSignals.colStock'),
       minWidth: 170,
-      render: (item) => (
-        <div className="min-w-0 py-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button
-              type="button"
-              className="cursor-pointer truncate text-left font-medium text-foreground hover:text-cyan"
-              aria-label={t('decisionSignals.viewDetailsFor', { stock: item.stockName || item.stockCode })}
-            >
-              {item.stockName || item.stockCode}
-            </button>
-            {renderFlags(item)}
+      render: (item) => {
+        const { primary, secondary } = stockPrimaryAndSecondary(item);
+        return (
+          <div className="min-w-0 py-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {renderHeldDot(item)}
+              <button
+                type="button"
+                className={cn(
+                  'cursor-pointer truncate text-left font-medium text-foreground hover:text-cyan',
+                  item.market === 'us' && 'font-mono',
+                )}
+                aria-label={t('decisionSignals.viewDetailsFor', { stock: item.stockName || item.stockCode })}
+              >
+                {primary}
+              </button>
+              {renderStopFlag(item)}
+            </div>
+            {secondary ? (
+              <div className={cn('text-xs text-secondary-text', item.market !== 'us' && 'font-mono')}>{secondary}</div>
+            ) : null}
           </div>
-          <div className="font-mono text-xs text-secondary-text">{item.stockCode}</div>
-        </div>
-      ),
+        );
+      },
     },
     {
       key: 'price',
@@ -123,7 +153,15 @@ export const DecisionSignalTable: React.FC<DecisionSignalTableProps> = ({ items,
       key: 'score',
       header: t('decisionSignals.colScore'),
       numeric: true,
-      render: (item) => `${formatNumber(item.score, 0)}／${item.confidence === null || item.confidence === undefined ? '—' : formatConfidence(item.confidence)}`,
+      render: (item) => {
+        const score = <span className="whitespace-nowrap tabular-nums">{formatNumber(item.score, 0)}</span>;
+        if (item.confidence === null || item.confidence === undefined) return score;
+        return (
+          <Tooltip content={`${t('decisionSignals.confidence')} ${formatConfidence(item.confidence)}`}>
+            {score}
+          </Tooltip>
+        );
+      },
     },
     {
       key: 'stop',
@@ -190,11 +228,16 @@ export const DecisionSignalTable: React.FC<DecisionSignalTableProps> = ({ items,
         onClick={() => onSelect(item)}
         className="flex min-h-[88px] w-full cursor-pointer flex-col justify-center gap-2 px-3 py-2 text-left"
       >
-        <span className="flex items-center gap-2">
+        <span className="grid grid-cols-[auto_1fr_auto] items-center gap-2">
           <SignalActionTag item={item} />
-          <span className="min-w-0 flex-1 truncate font-medium text-foreground">{item.stockName || item.stockCode}</span>
-          {renderFlags(item)}
-          <span className="shrink-0 text-right tabular-nums">
+          <span className="flex min-w-0 items-center gap-1.5">
+            {renderHeldDot(item)}
+            <span className={cn('min-w-0 truncate font-medium text-foreground', item.market === 'us' && 'font-mono')}>
+              {stockPrimaryAndSecondary(item).primary}
+            </span>
+            {renderStopFlag(item)}
+          </span>
+          <span className="shrink-0 justify-self-end text-right tabular-nums">
             <span className="text-foreground">{formatPrice(quote?.currentPrice, currency)}</span>{' '}
             <span className={cn('text-xs', marketToneClass(quote?.changePercent))}>{formatPercent(quote?.changePercent)}</span>
           </span>

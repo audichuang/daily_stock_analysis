@@ -12,8 +12,12 @@ import type {
 } from '../../types/financials';
 import { cn } from '../../utils/cn';
 import { formatFinancialAmount, formatChange, formatMetricValue, qoqOf, yoyOf } from '../../utils/financialFormat';
-import { Card } from '../common';
+import { REPORT_POLISH_TEXT } from '../../locales/reportText';
+import { Card, Collapsible } from '../common';
 import { DashboardPanelHeader } from '../dashboard';
+
+// Metrics shown before "show all"; the rest move into the collapsible section.
+const PRIMARY_METRIC_KEYS = ['revenue', 'gross_margin', 'eps', 'free_cash_flow'];
 
 const AI_BADGE = 'inline-flex shrink-0 items-center rounded-full border border-cyan/40 bg-cyan/10 px-2 py-0.5 text-xs font-medium text-cyan';
 
@@ -178,7 +182,8 @@ const MonthlyRevenue: React.FC<{ data: StockFinancials; highlights: FinancialHig
  * 個股財報：數字先出，AI 導讀到了再補上。導讀失敗或關閉時，數字與固定教學照常顯示。
  */
 export const FinancialsPanel: React.FC<{ stockCode: string }> = ({ stockCode }) => {
-  const { t } = useUiLanguage();
+  const { t, language } = useUiLanguage();
+  const polish = REPORT_POLISH_TEXT[language] ?? REPORT_POLISH_TEXT['zh-TW'];
   // 狀態全部綁請求的代號：切股後不符的舊值一律不顯示，A 的數字不會留在 B 的報告下。
   const [loaded, setLoaded] = useState<{ code: string; data: StockFinancials | null; error: string | null } | null>(null);
   const [commentaryState, setCommentaryState] = useState<{ code: string; value: FinancialCommentary } | null>(null);
@@ -225,6 +230,20 @@ export const FinancialsPanel: React.FC<{ stockCode: string }> = ({ stockCode }) 
   if (current?.status === 'unsupported') return null;
   const latest = current?.periods[current.periods.length - 1];
   const showCommentary = commentary?.status === 'ready' && commentary.headline;
+  const metrics = current?.status === 'ok' ? current.metrics : [];
+  const primaryMetrics = metrics.filter((metric) => PRIMARY_METRIC_KEYS.includes(metric.key));
+  const otherMetrics = metrics.filter((metric) => !PRIMARY_METRIC_KEYS.includes(metric.key));
+  const hasMore = current?.status === 'ok'
+    && (otherMetrics.length > 0 || current.monthlyRevenue.length > 0 || current.notApplicable.length > 0);
+  const renderMetric = (metric: FinancialMetric) => (
+    <MetricRow
+      key={`${stockCode}-${metric.key}`}
+      metric={metric}
+      periods={current?.periods ?? []}
+      currency={current?.currency}
+      highlights={highlightsByMetric.get(metric.key) ?? []}
+    />
+  );
 
   return (
     <Card variant="surface" padding="md" className="home-panel-card min-w-0" data-testid="financials-panel">
@@ -258,27 +277,34 @@ export const FinancialsPanel: React.FC<{ stockCode: string }> = ({ stockCode }) 
           {commentary?.status === 'failed' ? (
             <p className="text-xs text-secondary-text" role="note">{commentary.message ?? t('financials.commentaryFailed')}</p>
           ) : null}
-          <div className="grid min-w-0 gap-2 md:grid-cols-2">
-            {current.metrics.map((metric) => (
-              <MetricRow
-                key={`${stockCode}-${metric.key}`}
-                metric={metric}
-                periods={current.periods}
-                currency={current.currency}
-                highlights={highlightsByMetric.get(metric.key) ?? []}
-              />
-            ))}
-          </div>
-          <MonthlyRevenue data={current} highlights={highlightsByMetric.get('monthly_revenue') ?? []} />
-          {current.notApplicable.length > 0 ? (
-            <details className="text-xs leading-5 text-secondary-text">
-              <summary className="cursor-pointer">{t('financials.hidden', { count: current.notApplicable.length })}</summary>
-              <ul className="mt-1 list-disc space-y-1 pl-4">
-                {current.notApplicable.map((item) => (
-                  <li key={item.key}>{item.label}：{item.reason}</li>
-                ))}
-              </ul>
-            </details>
+          {primaryMetrics.length > 0 ? (
+            <div className="grid min-w-0 gap-2 md:grid-cols-2" data-testid="financials-primary">
+              {primaryMetrics.map(renderMetric)}
+            </div>
+          ) : null}
+          {hasMore ? (
+            <div data-testid="financials-more">
+              <Collapsible title={polish.financialsShowAll}>
+                <div className="min-w-0 space-y-3">
+                  {otherMetrics.length > 0 ? (
+                    <div className="grid min-w-0 gap-2 md:grid-cols-2">
+                      {otherMetrics.map(renderMetric)}
+                    </div>
+                  ) : null}
+                  <MonthlyRevenue data={current} highlights={highlightsByMetric.get('monthly_revenue') ?? []} />
+                  {current.notApplicable.length > 0 ? (
+                    <details className="text-xs leading-5 text-secondary-text">
+                      <summary className="cursor-pointer">{t('financials.hidden', { count: current.notApplicable.length })}</summary>
+                      <ul className="mt-1 list-disc space-y-1 pl-4">
+                        {current.notApplicable.map((item) => (
+                          <li key={item.key}>{item.label}：{item.reason}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
+                </div>
+              </Collapsible>
+            </div>
           ) : null}
           {current.limitations.length > 0 ? (
             <ul className={cn('space-y-1 text-xs leading-5', current.isStale ? 'text-warning' : 'text-secondary-text')} data-testid="financials-limitations">

@@ -2,6 +2,7 @@ import type React from 'react';
 import { Button, Card, Loading } from '../common';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import { formatUiText, type UiLanguage } from '../../i18n/uiText';
+import { ALERTS_TEXT } from '../../locales/alertsText';
 import { ALERT_PAGE_TEXT, ALERT_SEVERITY_LABELS } from '../../locales/featureText';
 import type { AlertTriggerItem } from '../../types/alerts';
 import { formatDateTime } from '../../utils/format';
@@ -41,6 +42,8 @@ interface AlertTriggerHistoryProps {
   tab?: AlertActivityTab;
   triggeredCount?: number;
   issueCount?: number;
+  /** Skipped rows are listed under issues but not counted as issues; shown as a separate muted count. */
+  skippedCount?: number;
   onTabChange?: (tab: AlertActivityTab) => void;
   onLoadMore?: () => void;
   className?: string;
@@ -53,30 +56,40 @@ export const AlertTriggerHistory: React.FC<AlertTriggerHistoryProps> = ({
   tab = 'triggered',
   triggeredCount,
   issueCount,
+  skippedCount,
   onTabChange,
   onLoadMore,
   className,
 }) => {
   const { language } = useUiLanguage();
   const text = ALERT_PAGE_TEXT[language];
-  const tabs: Array<{ id: AlertActivityTab; label: string; count?: number }> = [
+  const alertsText = ALERTS_TEXT[language];
+  const tabs: Array<{ id: AlertActivityTab; label: string; count?: number; extra?: string }> = [
     { id: 'triggered', label: text.tabTriggered, count: triggeredCount },
-    { id: 'issues', label: text.tabIssues, count: issueCount },
+    {
+      id: 'issues',
+      label: text.tabIssues,
+      count: issueCount,
+      extra: skippedCount ? formatUiText(alertsText.skippedHint, { count: skippedCount }) : undefined,
+    },
   ];
 
   return (
-    <Card title={text.activityTitle} variant="surface" padding="md" className={className}>
-      <div role="tablist" className="mb-3 flex gap-2">
+    <Card variant="surface" padding="md" className={className}>
+      {/* Phones already show 動態 as the page tab; repeating it as a heading would stack two titles. */}
+      <h2 className="mb-3 hidden text-base font-semibold text-foreground lg:block">{text.activityTitle}</h2>
+      <div role="tablist" aria-label={alertsText.activityTabs} className="mb-3 flex gap-4 border-b border-border/50">
         {tabs.map((item) => (
           <button
             key={item.id}
             type="button"
             role="tab"
             aria-selected={tab === item.id}
-            className={`rounded-full border px-3 py-1 text-xs ${tab === item.id ? 'border-primary text-foreground' : 'border-border/60 text-secondary-text'}`}
+            className={`-mb-px inline-flex h-7 items-center gap-1 border-b-2 text-xs ${tab === item.id ? 'border-primary font-medium text-foreground' : 'border-transparent text-secondary-text hover:text-foreground'}`}
             onClick={() => onTabChange?.(item.id)}
           >
             {item.count == null ? item.label : `${item.label} ${item.count}`}
+            {item.extra ? <span className="text-muted-text">{`· ${item.extra}`}</span> : null}
           </button>
         ))}
       </div>

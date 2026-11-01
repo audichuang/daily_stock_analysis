@@ -65,6 +65,25 @@ describe('ReportChangeConditions', () => {
     expect(screen.getByText(/明日收盤/)).toBeInTheDocument();
   });
 
+  it('sizes the grid to the number of groups and caps a single group width', () => {
+    const { unmount } = render(
+      <ReportChangeConditions summary={{ ...summary, entryConditions: ['站回月線'], exitTriggers: [], phaseWatchConditions: [] }} language="zh-TW" />,
+    );
+    const single = screen.getByTestId('report-change-conditions-grid');
+    expect(single.className).toContain('max-w-[72ch]');
+    expect(single.className).not.toContain('md:grid-cols-3');
+    expect(single.className).not.toContain('md:grid-cols-2');
+    unmount();
+
+    render(
+      <ReportChangeConditions summary={{ ...summary, entryConditions: ['站回月線'], exitTriggers: ['跌破季線'], phaseWatchConditions: [] }} language="zh-TW" />,
+    );
+    const pair = screen.getByTestId('report-change-conditions-grid');
+    expect(pair.className).toContain('md:grid-cols-2');
+    expect(pair.className).not.toContain('md:grid-cols-3');
+    expect(pair.className).not.toContain('max-w-[72ch]');
+  });
+
   it('hides when an old report has no conditions', () => {
     const { container } = render(<ReportChangeConditions summary={{ ...summary, entryConditions: null, exitTriggers: [] }} />);
     expect(container).toBeEmptyDOMElement();

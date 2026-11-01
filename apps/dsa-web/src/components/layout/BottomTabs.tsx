@@ -19,6 +19,9 @@ const TABS: Array<{
   { to: '/portfolio', labelKey: 'layout.nav.portfolio', icon: BriefcaseBusiness },
 ];
 
+/** Paths shown as bottom tabs; the mobile "more" drawer (SidebarNav) filters these out. */
+export const BOTTOM_TAB_PATHS: readonly string[] = TABS.map((tab) => tab.to);
+
 const TAB_CLASS = 'relative flex h-14 flex-col items-center justify-center gap-1 text-[11px] leading-none transition-colors';
 
 /** 手機底部分頁；其他頁面放在「更多」開啟的導覽抽屜。 */

@@ -1,14 +1,16 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ArrowDown, ChevronDown, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, SlidersHorizontal } from 'lucide-react';
+import { ArrowDown, ChevronDown, History, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, SlidersHorizontal, X } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { agentApi } from '../api/agent';
 import { portfolioApi } from '../api/portfolio';
 import { stocksApi, type StockQuote } from '../api/stocks';
 import { systemConfigApi } from '../api/systemConfig';
-import { ApiErrorAlert, Badge, Button, ConfirmDialog, EmptyState, IconButton, InlineAlert, ScrollArea } from '../components/common';
+import { ApiErrorAlert, Badge, Button, ConfirmDialog, EmptyState, IconButton, InlineAlert, ScrollArea, ToastViewport } from '../components/common';
+import { ShellHeaderActions, useShellHeaderActionsAvailable } from '../components/layout/ShellHeaderActions';
 import { ChatStockSummaryCard } from '../components/chat/ChatStockSummaryCard';
 import { createParsedApiError, getParsedApiError } from '../api/error';
 import type { AgentStatusResponse, SkillInfo } from '../api/agent';
@@ -39,13 +41,16 @@ import {
 } from '../utils/stockCode';
 import { useStockIndex } from '../hooks/useStockIndex';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
+import { CHAT_TEXT } from '../locales/chatText';
+import { useEmbedMode } from '../utils/embedMode';
 import type { UiLanguage, UiTextKey, UiTextParams } from '../i18n/uiText';
 
 type Translate = (key: UiTextKey, params?: UiTextParams) => string;
 
 // 空狀態的快捷問題：按下只填入輸入框，由使用者確認後才送出
 const MARKET_PROMPT_KEYS: UiTextKey[] = ['chat.empty.market1', 'chat.empty.market2', 'chat.empty.market3'];
-const MAX_EMPTY_STOCKS = 6;
+// 空狀態每組捷徑最多幾顆，手機一屏放得下。
+const MAX_EMPTY_STOCKS = 4;
 const MAX_INPUT_SUGGESTIONS = 6;
 const MIN_SUGGESTION_QUERY_LENGTH = 2;
 
@@ -100,6 +105,11 @@ const getPipelineTimeoutLabel = (step: ProgressStep, t: Translate): string =>
 
 const ChatPage: React.FC = () => {
   const { language, t } = useUiLanguage();
+  const chatText = CHAT_TEXT[language];
+  const embedded = useEmbedMode();
+  const shellActionsAvailable = useShellHeaderActionsAvailable();
+  // 手機殼層有標題列、或 iOS 內嵌時，頁首只留 icon 列，h1 交給殼層。
+  const compactHeader = shellActionsAvailable || embedded;
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [input, setInput] = useState('');
@@ -107,6 +117,8 @@ const ChatPage: React.FC = () => {
   const [defaultSkillIds, setDefaultSkillIds] = useState<string[]>([]);
   const [showSkillDesc, setShowSkillDesc] = useState<string | null>(null);
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
+  // Desktop popover anchor (viewport px), captured from the trigger when the picker opens.
+  const [skillAnchor, setSkillAnchor] = useState<{ left: number; bottom: number } | null>(null);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [sendConfirmOpen, setSendConfirmOpen] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
@@ -127,7 +139,8 @@ const ChatPage: React.FC = () => {
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [watchlistCodes, setWatchlistCodes] = useState<string[]>([]);
   const [isWatchlistActioning, setIsWatchlistActioning] = useState(false);
-  const [watchlistMessage, setWatchlistMessage] = useState<{ key: UiTextKey; params?: UiTextParams } | null>(null);
+  // undoCode: the exact watchlist entry just removed, so 復原 can add it back unchanged.
+  const [watchlistMessage, setWatchlistMessage] = useState<{ key: UiTextKey; params?: UiTextParams; undoCode?: string } | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentStatusResponse | null>(null);
   const [agentStatusError, setAgentStatusError] = useState<string | null>(null);
   const [agentStatusChecking, setAgentStatusChecking] = useState(true);
@@ -139,6 +152,7 @@ const ChatPage: React.FC = () => {
   const messagesViewportRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const skillTriggerRef = useRef<HTMLButtonElement>(null);
   const isMountedRef = useRef(true);
   const sendToastTimerRef = useRef<number | null>(null);
   const followUpHydrationTokenRef = useRef(0);
@@ -197,6 +211,24 @@ const ChatPage: React.FC = () => {
     [watchlistCodes],
   );
 
+  const showWatchlistMessage = useCallback((message: { key: UiTextKey; params?: UiTextParams; undoCode?: string }) => {
+    setWatchlistMessage(message);
+    if (watchlistMessageTimerRef.current !== null) {
+      window.clearTimeout(watchlistMessageTimerRef.current);
+    }
+    watchlistMessageTimerRef.current = window.setTimeout(() => {
+      if (isMountedRef.current) {
+        setWatchlistMessage(null);
+      }
+    }, message.undoCode ? 6000 : 3000);
+  }, []);
+
+  useEffect(() => () => {
+    if (watchlistMessageTimerRef.current !== null) {
+      window.clearTimeout(watchlistMessageTimerRef.current);
+    }
+  }, []);
+
   const handleToggleWatchlist = useCallback(
     async (stockCode: string) => {
       if (!stockCode || isWatchlistActioning) return;
@@ -208,35 +240,49 @@ const ChatPage: React.FC = () => {
           const codes = await systemConfigApi.removeFromWatchlist(existingStockCode);
           if (isMountedRef.current) {
             setWatchlistCodes(codes);
-            setWatchlistMessage({ key: 'chat.watchlistRemoved', params: { code: stockCode } });
+            showWatchlistMessage({ key: 'chat.watchlistRemoved', params: { code: stockCode }, undoCode: existingStockCode });
           }
         } else {
           const codes = await systemConfigApi.addToWatchlist(stockCode);
           if (isMountedRef.current) {
             setWatchlistCodes(codes);
-            setWatchlistMessage({ key: 'chat.watchlistAdded', params: { code: stockCode } });
+            showWatchlistMessage({ key: 'chat.watchlistAdded', params: { code: stockCode } });
           }
         }
       } catch {
         if (isMountedRef.current) {
-          setWatchlistMessage({ key: 'chat.watchlistFailed' });
+          showWatchlistMessage({ key: 'chat.watchlistFailed' });
         }
       } finally {
         if (isMountedRef.current) {
           setIsWatchlistActioning(false);
-          if (watchlistMessageTimerRef.current !== null) {
-            window.clearTimeout(watchlistMessageTimerRef.current);
-          }
-          watchlistMessageTimerRef.current = window.setTimeout(() => {
-            if (isMountedRef.current) {
-              setWatchlistMessage(null);
-            }
-          }, 3000);
         }
       }
     },
-    [isWatchlistActioning, watchlistCodes],
+    [isWatchlistActioning, showWatchlistMessage, watchlistCodes],
   );
+
+  // 移出自選的復原：把剛移掉的那筆原樣加回去。
+  const handleUndoWatchlistRemoval = useCallback(async (code: string) => {
+    if (isWatchlistActioning) return;
+    setIsWatchlistActioning(true);
+    setWatchlistMessage(null);
+    try {
+      const codes = await systemConfigApi.addToWatchlist(code);
+      if (isMountedRef.current) {
+        setWatchlistCodes(codes);
+        showWatchlistMessage({ key: 'chat.watchlistAdded', params: { code } });
+      }
+    } catch {
+      if (isMountedRef.current) {
+        showWatchlistMessage({ key: 'chat.watchlistFailed' });
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsWatchlistActioning(false);
+      }
+    }
+  }, [isWatchlistActioning, showWatchlistMessage]);
 
   const {
     messages,
@@ -381,7 +427,7 @@ const ChatPage: React.FC = () => {
             shortcuts.push({ code: position.symbol, name: position.name ?? null });
           }
         }
-        setHoldings(shortcuts.slice(0, MAX_EMPTY_STOCKS));
+        setHoldings(shortcuts);
       })
       .catch(() => {
         // 空狀態捷徑是輔助資訊，失敗時只少一組按鈕
@@ -410,10 +456,16 @@ const ChatPage: React.FC = () => {
   // 報價跟著代碼走：換標的後、新報價回來前不能顯示上一檔的價格。
   const activeQuote = quoteState?.code === activeStockCode ? quoteState.quote : null;
 
-  const watchlistShortcuts: EmptyStockShortcut[] = watchlistCodes.slice(0, MAX_EMPTY_STOCKS).map((code) => {
-    const matched = stockIndex.find((item) => item.canonicalCode === code || item.displayCode === code);
-    return { code, name: matched?.nameZh ?? null };
-  });
+  // 持股與自選重複的代號只留在持股那組；每組最多 MAX_EMPTY_STOCKS 顆。
+  const holdingCodes = holdings.map((holding) => holding.code);
+  const holdingShortcuts = holdings.slice(0, MAX_EMPTY_STOCKS);
+  const watchlistShortcuts: EmptyStockShortcut[] = watchlistCodes
+    .filter((code) => !includesStockCode(holdingCodes, code))
+    .slice(0, MAX_EMPTY_STOCKS)
+    .map((code) => {
+      const matched = stockIndex.find((item) => item.canonicalCode === code || item.displayCode === code);
+      return { code, name: matched?.nameZh ?? null };
+    });
   const selectedSkillIdSet = new Set(selectedSkillIds);
   const skillLimitReached = selectedSkillIds.length >= MAX_SELECTED_SKILLS;
   const skillGroups: Array<{ id: string; name: string | null; items: SkillInfo[] }> = [];
@@ -469,6 +521,34 @@ const ChatPage: React.FC = () => {
       setSelectedSkillIds([...selectedSkillIds, skillId]);
     }
   }, [selectedSkillIds, setSelectedSkillIds]);
+
+  const closeSkillPicker = useCallback(() => {
+    setSkillPickerOpen(false);
+    skillTriggerRef.current?.focus();
+  }, []);
+
+  // 策略面板開著時 Esc 關閉，焦點還給觸發鈕。
+  useEffect(() => {
+    if (!skillPickerOpen) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeSkillPicker();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [skillPickerOpen, closeSkillPicker]);
+
+  const toggleSkillPicker = () => {
+    if (skillPickerOpen) {
+      setSkillPickerOpen(false);
+      return;
+    }
+    // The panel is portaled to body, so the desktop popover is positioned from the trigger rect.
+    const rect = skillTriggerRef.current?.getBoundingClientRect();
+    setSkillAnchor(rect ? { left: rect.left, bottom: window.innerHeight - rect.top + 8 } : null);
+    setSkillPickerOpen(true);
+  };
 
   const handleStartNewChat = useCallback(() => {
     followUpContextRef.current = null;
@@ -766,9 +846,9 @@ const ChatPage: React.FC = () => {
           />
         </svg>
         <span className="flex items-center gap-1.5">
-          <span className="opacity-60">{t('chat.thinking.title')}</span>
-          <span className="text-muted-text/50">·</span>
-          <span className="opacity-50">{summary}</span>
+          <span className="text-secondary-text">{t('chat.thinking.title')}</span>
+          <span className="text-muted-text">·</span>
+          <span className="text-secondary-text">{summary}</span>
         </span>
       </button>
     );
@@ -973,8 +1053,69 @@ const ChatPage: React.FC = () => {
       onClick={() => fillStockShortcut(shortcut)}
       className="quick-question-btn"
     >
-      {shortcut.name || shortcut.code}
+      <span className="text-secondary-text">{shortcut.code}</span>
+      {shortcut.name ? ` ${shortcut.name}` : null}
     </button>
+  );
+
+  // 歷史、＋、⋯：手機殼層放進標題列，內嵌時單獨一列，桌機放在 h1 右側（歷史與＋只在窄螢幕出現）。
+  const narrowOnlyClass = compactHeader ? '' : 'md:hidden';
+  const headerIconRow = (
+    <div data-testid="chat-header-actions" className="relative flex flex-shrink-0 items-center gap-1">
+      <IconButton
+        className={narrowOnlyClass}
+        aria-label={t('chat.history.title')}
+        icon={<History className="h-4 w-4" aria-hidden="true" />}
+        onClick={() => setSidebarOpen(true)}
+      />
+      <IconButton
+        className={narrowOnlyClass}
+        aria-label={t('chat.newChat')}
+        icon={<Plus className="h-4 w-4" aria-hidden="true" />}
+        onClick={handleStartNewChat}
+      />
+      {messages.length > 0 ? (
+        <>
+          <IconButton
+            aria-label={t('chat.moreActions')}
+            aria-expanded={moreMenuOpen}
+            aria-haspopup="menu"
+            icon={<MoreHorizontal className="h-4 w-4" aria-hidden="true" />}
+            onClick={() => setMoreMenuOpen((open) => !open)}
+          />
+          {moreMenuOpen ? (
+            <div
+              role="menu"
+              className="absolute right-0 top-full z-30 mt-1 min-w-64 whitespace-nowrap rounded-xl border border-border/70 bg-card p-1 shadow-soft-card"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="block w-full rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-hover"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  downloadSession(messages, intlLocale);
+                }}
+              >
+                {chatText.exportMarkdown}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={sending}
+                className="block w-full rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  setSendConfirmOpen(true);
+                }}
+              >
+                {chatText.pushToNotify}
+              </button>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </div>
   );
 
   return (
@@ -992,14 +1133,28 @@ const ChatPage: React.FC = () => {
       {/* Mobile sidebar overlay */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 z-40 md:hidden"
+          className={cn('fixed inset-0 z-40', compactHeader ? '' : 'md:hidden')}
           onClick={() => setSidebarOpen(false)}
         >
           <div className="page-drawer-overlay absolute inset-0" />
           <div
-            className="absolute left-0 top-0 bottom-0 w-72 flex flex-col glass-card overflow-hidden border-r border-white/10 bg-card/90 shadow-2xl"
+            data-testid="chat-history-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="chat-history-drawer-title"
+            className="absolute bottom-0 left-0 top-0 flex w-[85vw] max-w-80 flex-col overflow-hidden border-r border-border/70 bg-card pt-[env(safe-area-inset-top,0px)] shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
+            <div className="flex h-12 flex-shrink-0 items-center justify-between gap-2 border-b border-border/50 px-3">
+              <h2 id="chat-history-drawer-title" className="text-base font-semibold text-foreground">
+                {t('chat.history.title')}
+              </h2>
+              <IconButton
+                aria-label={chatText.historyClose}
+                icon={<X className="h-4 w-4" aria-hidden="true" />}
+                onClick={() => setSidebarOpen(false)}
+              />
+            </div>
             {sidebarContent}
           </div>
         </div>
@@ -1028,97 +1183,59 @@ const ChatPage: React.FC = () => {
         onCancel={() => setSendConfirmOpen(false)}
       />
 
+      {watchlistMessage ? (
+        <ToastViewport>
+          <div
+            role="status"
+            data-testid="chat-watchlist-toast"
+            className="pointer-events-auto flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-card px-4 py-3 text-sm text-foreground shadow-soft-card"
+          >
+            <span className="min-w-0">{t(watchlistMessage.key, watchlistMessage.params)}</span>
+            {watchlistMessage.undoCode ? (
+              <button
+                type="button"
+                className="flex-shrink-0 rounded-lg px-2 py-1 text-sm font-medium text-cyan hover:bg-hover"
+                disabled={isWatchlistActioning}
+                onClick={() => void handleUndoWatchlistRemoval(watchlistMessage.undoCode as string)}
+              >
+                {chatText.undo}
+              </button>
+            ) : null}
+          </div>
+        </ToastViewport>
+      ) : null}
+
       {/* Main chat area */}
       <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="mb-2 flex-shrink-0 space-y-1 md:mb-3">
-          <div className="flex items-center justify-between gap-2">
-            <h1 className="flex min-w-0 items-center gap-2 text-lg font-bold text-foreground md:text-2xl">
-              <button
-                onClick={() => setSidebarOpen(true)}
-                className="md:hidden p-1.5 -ml-1 rounded-lg hover:bg-hover transition-colors text-secondary-text hover:text-foreground"
-                aria-label={t('chat.history.title')}
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 6h16M4 12h16M4 18h16"
-                  />
-                </svg>
-              </button>
-              {historyCollapsed ? (
-                <IconButton
-                  className="hidden md:inline-flex"
-                  aria-label={t('chat.history.expand')}
-                  icon={<PanelLeftOpen className="h-4 w-4" aria-hidden="true" />}
-                  onClick={() => setHistoryCollapsed(false)}
-                />
-              ) : null}
-              <span className="truncate">{t('layout.route.chat.title')}</span>
-              {agentStatus?.backend === 'codex_app_server' ? (
-                <Badge variant="warning" size="sm">{t('chat.codexBackendBadge')}</Badge>
-              ) : null}
-            </h1>
-            <div className="relative flex flex-shrink-0 items-center gap-1">
-              <IconButton
-                className="md:hidden"
-                aria-label={t('chat.newChat')}
-                icon={<Plus className="h-4 w-4" aria-hidden="true" />}
-                onClick={handleStartNewChat}
-              />
-              {messages.length > 0 ? (
-                <>
+        {shellActionsAvailable ? <ShellHeaderActions>{headerIconRow}</ShellHeaderActions> : null}
+        {shellActionsAvailable ? null : embedded ? (
+          <header className="mb-2 flex flex-shrink-0 items-center justify-end border-b border-border/50 pb-2">
+            {headerIconRow}
+          </header>
+        ) : (
+          <header className="mb-2 flex-shrink-0 space-y-1 border-b border-border/50 pb-2 md:mb-3 md:pb-3">
+            <div className="flex items-center justify-between gap-2">
+              <h1 className="flex min-w-0 items-center gap-2 text-lg font-bold text-foreground md:text-2xl">
+                {historyCollapsed ? (
                   <IconButton
-                    aria-label={t('chat.moreActions')}
-                    aria-expanded={moreMenuOpen}
-                    aria-haspopup="menu"
-                    icon={<MoreHorizontal className="h-4 w-4" aria-hidden="true" />}
-                    onClick={() => setMoreMenuOpen((open) => !open)}
+                    className="hidden md:inline-flex"
+                    aria-label={t('chat.history.expand')}
+                    icon={<PanelLeftOpen className="h-4 w-4" aria-hidden="true" />}
+                    onClick={() => setHistoryCollapsed(false)}
                   />
-                  {moreMenuOpen ? (
-                    <div
-                      role="menu"
-                      className="absolute right-0 top-full z-30 mt-1 w-56 rounded-xl border border-border/70 bg-card p-1 shadow-soft-card"
-                    >
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-hover"
-                        onClick={() => {
-                          setMoreMenuOpen(false);
-                          downloadSession(messages, intlLocale);
-                        }}
-                      >
-                        {t('chat.exportSessionHint')}
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        disabled={sending}
-                        className="block w-full rounded-lg px-3 py-2 text-left text-sm text-foreground hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60"
-                        onClick={() => {
-                          setMoreMenuOpen(false);
-                          setSendConfirmOpen(true);
-                        }}
-                      >
-                        {t('chat.sendToNotifyHint')}
-                      </button>
-                    </div>
-                  ) : null}
-                </>
-              ) : null}
+                ) : null}
+                <span className="truncate">{t('layout.route.chat.title')}</span>
+                {agentStatus?.backend === 'codex_app_server' ? (
+                  <Badge variant="warning" size="sm">{t('chat.codexBackendBadge')}</Badge>
+                ) : null}
+              </h1>
+              {headerIconRow}
             </div>
-          </div>
-          <p className="hidden text-sm text-secondary-text md:block">
-            {t(agentStatus?.backend === 'codex_app_server' ? 'chat.introCodex' : 'chat.introDefault')}
-          </p>
-        </header>
+            <p className="hidden text-sm text-secondary-text md:block">
+              {t(agentStatus?.backend === 'codex_app_server' ? 'chat.introCodex' : 'chat.introDefault')}
+            </p>
+          </header>
+        )}
 
         {/* 狀態提示集中在訊息區上方，輸入卡只放輸入相關的東西 */}
         <div data-testid="chat-status-region" className="mb-2 flex-shrink-0 space-y-2 empty:hidden">
@@ -1232,7 +1349,7 @@ const ChatPage: React.FC = () => {
           {/* Messages */}
           <div className="relative flex min-h-0 flex-1 flex-col">
             <ScrollArea
-              className="relative z-10 flex-1"
+              className="relative z-10 flex-1 [mask-image:linear-gradient(to_bottom,transparent_0,black_1rem)]"
               viewportRef={messagesViewportRef}
               onScroll={handleMessagesScroll}
               viewportClassName="px-1 py-3 md:px-4"
@@ -1251,8 +1368,8 @@ const ChatPage: React.FC = () => {
                       className="max-w-2xl border-dashed bg-card/55"
                       action={(
                         <div data-testid="chat-empty-shortcuts" className="max-w-lg space-y-3 text-center">
-                          {holdings.length > 0
-                            ? renderEmptyGroup(t('chat.empty.holdings'), holdings.map(renderStockShortcut))
+                          {holdingShortcuts.length > 0
+                            ? renderEmptyGroup(t('chat.empty.holdings'), holdingShortcuts.map(renderStockShortcut))
                             : null}
                           {watchlistShortcuts.length > 0
                             ? renderEmptyGroup(t('chat.empty.watchlist'), watchlistShortcuts.map(renderStockShortcut))
@@ -1320,7 +1437,18 @@ const ChatPage: React.FC = () => {
                             )}
                             {/* 新問題失敗時，最後一則回答還是上一檔的；不能掛到目前標的上。 */}
                             {isLastAssistant && activeStockContext && (!msg.stockCode || msg.stockCode === activeStockContext.stock_code) ? (
-                              <ChatStockSummaryCard stock={activeStockContext} quote={activeQuote} structured={msg.structured} />
+                              <ChatStockSummaryCard
+                                stock={activeStockContext}
+                                quote={activeQuote}
+                                structured={msg.structured}
+                                {...(activeStockContext.asset_type === 'stock'
+                                  ? {
+                                      inWatchlist: stockInWatchlist(activeStockContext.stock_code),
+                                      watchlistPending: isWatchlistActioning,
+                                      onToggleWatchlist: () => void handleToggleWatchlist(activeStockContext.stock_code),
+                                    }
+                                  : {})}
+                              />
                             ) : null}
                             {renderThinkingBlock(msg)}
                             {expandedThinking.has(msg.id) && msg.thinkingSteps && renderThinkingDetails(msg.thinkingSteps)}
@@ -1418,32 +1546,19 @@ const ChatPage: React.FC = () => {
               data-testid="chat-composer"
               className="relative mx-auto w-full max-w-[760px] rounded-2xl border border-border/70 bg-card p-3 shadow-soft-card"
             >
-              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-text">
-                <span
-                  aria-label={t('chat.currentObjectLabel')}
-                  className="inline-flex max-w-full truncate rounded-full border border-border/60 px-2.5 py-1"
-                >
-                  {activeStockContext
-                    ? t('chat.currentObject', { object: `${activeStockContext.stock_name ? `${activeStockContext.stock_name} · ` : ''}${activeStockContext.stock_code}` })
-                    : t(stateContract === 'legacy' ? 'chat.objectUnconfirmedLegacy' : 'chat.objectUnconfirmed')}
-                </span>
-                {activeStockCode && activeStockContext?.asset_type === 'stock' && (
-                  <>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      isLoading={isWatchlistActioning}
-                      onClick={() => void handleToggleWatchlist(activeStockCode)}
-                      className="text-[11px]"
-                    >
-                      {stockInWatchlist(activeStockCode) ? t('chat.watchlistRemove') : t('chat.watchlistAdd')}
-                    </Button>
-                    {watchlistMessage && (
-                      <span className="text-[11px] text-secondary-text animate-in fade-in">{t(watchlistMessage.key, watchlistMessage.params)}</span>
-                    )}
-                  </>
-                )}
-              </div>
+              {/* 有標的才顯示「名稱 代號」；有對話但沒標的才提示未確認，空白頁不顯示。 */}
+              {activeStockContext || messages.length > 0 ? (
+                <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-text">
+                  <span
+                    aria-label={t('chat.currentObjectLabel')}
+                    className="inline-flex max-w-full truncate rounded-full border border-border/60 px-2.5 py-1"
+                  >
+                    {activeStockContext
+                      ? `${activeStockContext.stock_name ? `${activeStockContext.stock_name} ` : ''}${activeStockContext.stock_code}`
+                      : t(stateContract === 'legacy' ? 'chat.objectUnconfirmedLegacy' : 'chat.objectUnconfirmed')}
+                  </span>
+                </div>
+              ) : null}
 
               {inputSuggestions.length > 0 ? (
                 <ul
@@ -1493,12 +1608,13 @@ const ChatPage: React.FC = () => {
               <div className="mt-2 flex items-center justify-between gap-3">
                 {skills.length > 0 ? (
                   <button
+                    ref={skillTriggerRef}
                     type="button"
                     className="inline-flex h-9 min-w-0 items-center gap-2 rounded-full border border-border/70 px-3 text-sm text-foreground hover:bg-hover"
                     aria-label={skillPickerOpen ? t('chat.skillPicker.collapse') : t('chat.skillPicker.expand')}
                     aria-expanded={skillPickerOpen}
                     aria-controls="chat-skill-picker-panel"
-                    onClick={() => setSkillPickerOpen((open) => !open)}
+                    onClick={toggleSkillPicker}
                   >
                     <SlidersHorizontal className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
                     <span className="truncate text-xs">{selectedSkillSummary}</span>
@@ -1530,80 +1646,96 @@ const ChatPage: React.FC = () => {
                 )}
               </div>
 
-              {skills.length > 0 ? (
+              {skills.length > 0 ? createPortal(
                 <>
                   {skillPickerOpen ? (
                     <div
                       data-testid="chat-skill-picker-backdrop"
-                      className="page-drawer-overlay fixed inset-0 z-40 md:bg-transparent"
+                      className="page-drawer-overlay fixed inset-0 z-[60] md:bg-transparent"
                       onClick={() => setSkillPickerOpen(false)}
                     />
                   ) : null}
-                  {/* 手機是底部抽屜，桌機是輸入卡上方的 popover */}
+                  {/* 掛在 body 上避免被底部分頁列蓋住：手機是底部抽屜，桌機是觸發鈕上方的 popover。 */}
                   <div
                     id="chat-skill-picker-panel"
                     data-testid="chat-skill-picker-panel"
+                    role="dialog"
+                    aria-labelledby="chat-skill-picker-title"
+                    style={skillAnchor ? ({
+                      '--chat-skill-left': `${skillAnchor.left}px`,
+                      '--chat-skill-bottom': `${skillAnchor.bottom}px`,
+                    } as React.CSSProperties) : undefined}
                     className={cn(
                       skillPickerOpen ? 'flex' : 'hidden',
-                      'fixed inset-x-0 bottom-0 z-50 max-h-[70dvh] flex-col gap-3 overflow-y-auto rounded-t-2xl border border-border/70 bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-soft-card',
-                      'md:absolute md:inset-x-auto md:bottom-full md:left-0 md:mb-2 md:max-h-96 md:w-96 md:rounded-2xl md:p-3',
+                      'fixed inset-x-0 bottom-0 z-[60] max-h-[80dvh] flex-col rounded-t-2xl border border-border/70 bg-card shadow-soft-card',
+                      'md:inset-x-auto md:bottom-[var(--chat-skill-bottom,6rem)] md:left-[var(--chat-skill-left,1rem)] md:max-h-96 md:w-96 md:rounded-2xl',
                     )}
                   >
-                    <p className="text-xs font-medium text-muted-text">{t('chat.skillPicker.label')}</p>
-                    <label className="flex cursor-pointer items-center gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        name="general-analysis"
-                        value=""
-                        checked={selectedSkillIds.length === 0}
-                        onChange={() => setSelectedSkillIds([])}
-                        className="chat-skill-checkbox"
-                      />
-                      <span className={selectedSkillIds.length === 0 ? 'font-medium text-foreground' : 'text-secondary-text'}>
-                        {t('chat.skillPicker.none')}
-                      </span>
-                    </label>
-                    {skillGroups.map((group) => (
-                      <div key={group.id} className="space-y-1.5">
-                        {group.name ? <p className="text-xs text-muted-text">{group.name}</p> : null}
-                        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                          {group.items.map((s) => {
-                            const checked = selectedSkillIdSet.has(s.id);
-                            const disabled = !checked && skillLimitReached;
-                            const displayName = getSkillDisplayName(s, language);
-                            return (
-                              <label
-                                key={s.id}
-                                className={`group relative flex cursor-pointer items-center gap-1.5 ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
-                                onMouseEnter={() => setShowSkillDesc(s.id)}
-                                onMouseLeave={() => setShowSkillDesc(null)}
-                              >
-                                <input
-                                  type="checkbox"
-                                  name="skills"
-                                  value={s.id}
-                                  checked={checked}
-                                  disabled={disabled}
-                                  onChange={() => toggleSkillSelection(s.id)}
-                                  className="chat-skill-checkbox"
-                                />
-                                <span className={`text-sm transition-colors ${checked ? 'font-medium text-foreground' : 'text-secondary-text group-hover:text-foreground'}`}>
-                                  {displayName}
-                                </span>
-                                {showSkillDesc === s.id && s.description && (
-                                  <div className="skill-desc-tooltip">
-                                    <p className="skill-title">{displayName}</p>
-                                    <p>{s.description}</p>
-                                  </div>
-                                )}
-                              </label>
-                            );
-                          })}
+                    <div className="flex-shrink-0 px-4 pt-2 md:px-3 md:pt-3">
+                      <div aria-hidden="true" className="mx-auto mb-2 h-1 w-10 rounded-full bg-border md:hidden" />
+                      <div className="flex items-center justify-between gap-2">
+                        <h2 id="chat-skill-picker-title" className="text-sm font-semibold text-foreground">
+                          {chatText.skillSheetTitle}
+                        </h2>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            className="rounded-lg px-2 py-1 text-xs text-secondary-text hover:bg-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                            disabled={selectedSkillIds.length === 0}
+                            onClick={() => setSelectedSkillIds([])}
+                          >
+                            {chatText.skillClear}
+                          </button>
+                          <Button variant="primary" size="sm" onClick={closeSkillPicker}>
+                            {chatText.skillDone}
+                          </Button>
                         </div>
                       </div>
-                    ))}
+                    </div>
+                    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-[calc(1rem+56px+env(safe-area-inset-bottom))] pt-3 md:px-3 md:pb-3">
+                      {skillGroups.map((group) => (
+                        <div key={group.id} className="space-y-1.5">
+                          {group.name ? <p className="text-xs text-muted-text">{group.name}</p> : null}
+                          <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                            {group.items.map((s) => {
+                              const checked = selectedSkillIdSet.has(s.id);
+                              const disabled = !checked && skillLimitReached;
+                              const displayName = getSkillDisplayName(s, language);
+                              return (
+                                <label
+                                  key={s.id}
+                                  className={`group relative flex cursor-pointer items-center gap-1.5 ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
+                                  onMouseEnter={() => setShowSkillDesc(s.id)}
+                                  onMouseLeave={() => setShowSkillDesc(null)}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    name="skills"
+                                    value={s.id}
+                                    checked={checked}
+                                    disabled={disabled}
+                                    onChange={() => toggleSkillSelection(s.id)}
+                                    className="chat-skill-checkbox"
+                                  />
+                                  <span className={`text-sm transition-colors ${checked ? 'font-medium text-foreground' : 'text-secondary-text group-hover:text-foreground'}`}>
+                                    {displayName}
+                                  </span>
+                                  {showSkillDesc === s.id && s.description && (
+                                    <div className="skill-desc-tooltip">
+                                      <p className="skill-title">{displayName}</p>
+                                      <p>{s.description}</p>
+                                    </div>
+                                  )}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </>
+                </>,
+                document.body,
               ) : null}
             </div>
           </div>

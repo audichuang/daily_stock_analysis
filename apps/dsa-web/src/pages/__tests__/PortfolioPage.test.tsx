@@ -5,6 +5,7 @@ import { createApiError, createParsedApiError } from '../../api/error';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import type { DecisionSignalItem } from '../../types/decisionSignals';
 import { UI_LANGUAGE_STORAGE_KEY } from '../../utils/uiLanguage';
+import { toDateInputValue } from '../../utils/format';
 import PortfolioPage from '../PortfolioPage';
 
 const {
@@ -300,6 +301,9 @@ async function desktopHoldings() {
   return within(within(holdings).getByTestId('data-table-desktop'));
 }
 
+// Same local-date formatting the page uses for "today" (getTodayIso).
+const getTodayIsoFor = (date: Date) => toDateInputValue(date);
+
 const selectAccount = (name: string) => fireEvent.click(screen.getByRole('radio', { name }));
 const openPageMenu = () => fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
 
@@ -353,6 +357,8 @@ describe('PortfolioPage FX refresh', () => {
       analysisPhase: 'auto',
     });
     getLatestDecisionSignals.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 1 });
+    // Default: the grouped list hits nothing, so lookups fall back to the per-stock endpoint.
+    listDecisionSignals.mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 100 });
   });
 
   function renderEnglishPage() {
@@ -499,7 +505,8 @@ describe('PortfolioPage FX refresh', () => {
     expect(dashboardScope.getByText('行业集中')).toBeInTheDocument();
     expect(dashboardScope.getByText('Top1: 白酒')).toBeInTheDocument();
     expect(dashboardScope.getByText('最大回撤: 18.50%')).toBeInTheDocument();
-    expect(dashboardScope.getByText('触发: 1 · 接近: 2')).toBeInTheDocument();
+    // The backend's nearCount (2) includes the triggered holding, so only one is merely near.
+    expect(dashboardScope.getByText('已触发 1 · 接近 1')).toBeInTheDocument();
     expect(dashboardScope.getByText('缺价: 0 · 过期价: 1')).toBeInTheDocument();
     expect(dashboardScope.getAllByText('市场暴露').length).toBeGreaterThan(0);
     expect(dashboardScope.getAllByText('币种暴露').length).toBeGreaterThan(0);
@@ -1908,8 +1915,10 @@ describe('PortfolioPage FX refresh', () => {
     const table = await desktopHoldings();
     expect(table.getByText('HK00700')).toBeInTheDocument();
     expect(table.getByText('420.00')).toBeInTheDocument();
-    expect(table.getByText('HKD 4,200.00')).toBeInTheDocument();
-    expect(table.getByText('+5.00%')).toBeInTheDocument();
+    // The HKD group subtotal row now repeats value and P&L (W09), so scope to the holding row.
+    const hkHoldingRow = within(table.getByText('HK00700').closest('tr') as HTMLTableRowElement);
+    expect(hkHoldingRow.getByText('HKD 4,200.00')).toBeInTheDocument();
+    expect(hkHoldingRow.getByText('+5.00%')).toBeInTheDocument();
     expect(table.getByText('收盘价 · 2026-03-18')).toBeInTheDocument();
     expect(table.getByText('缺价')).toBeInTheDocument();
     expect(table.getAllByText('—').length).toBeGreaterThanOrEqual(2);
@@ -1943,7 +1952,8 @@ describe('PortfolioPage FX refresh', () => {
       market: 'cn',
       limit: 1,
     });
-    expect(decisionSignalsApi.list).not.toHaveBeenCalled();
+    // The grouped list missed this holding, so it fell back to the per-stock endpoint.
+    expect(decisionSignalsApi.list).toHaveBeenCalledTimes(1);
   });
 
   it('refreshes holding signals when manually refreshing unchanged portfolio data', async () => {
@@ -2161,7 +2171,7 @@ describe('PortfolioPage FX refresh', () => {
     // 同一檔已合併成一列。
     expect(await screen.findAllByLabelText('唯一 latest 风险')).toHaveLength(1);
     expect(getLatestDecisionSignals).toHaveBeenCalledTimes(1);
-    expect(decisionSignalsApi.list).not.toHaveBeenCalled();
+    expect(decisionSignalsApi.list).toHaveBeenCalledTimes(1);
   });
 
   it('limits concurrent latest lookups for large portfolios', async () => {
@@ -2505,10 +2515,13 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
     await waitForInitialLoad();
 
-    expect(await screen.findByText('TWD 700,000.00')).toBeInTheDocument();
-    expect(screen.getByText('含基金 TWD 200,000.00')).toBeInTheDocument();
-    expect(screen.getByText('TWD +2,000.00')).toBeInTheDocument();
+    // Summary amounts: NT$ unit prefix rendered separately, TWD without decimals.
+    expect(await screen.findByText('700,000')).toBeInTheDocument();
+    expect(screen.getByText('含基金 NT$ 200,000')).toBeInTheDocument();
+    expect(screen.getByText('+2,000')).toBeInTheDocument();
+    expect(screen.getAllByText('NT$').length).toBeGreaterThan(0);
     expect(screen.queryByText('CNY 3,000.00')).not.toBeInTheDocument();
+    expect(screen.queryByText(/^3,000$/)).not.toBeInTheDocument();
   });
 
   it('keeps today P&L unknown when funds have value but no day P&L', async () => {
@@ -2521,8 +2534,8 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
     await waitForInitialLoad();
 
-    await screen.findByText('TWD 520,000.00');
-    expect(screen.queryByText('TWD +777.00')).not.toBeInTheDocument();
+    await screen.findByText('520,000');
+    expect(screen.queryByText('+777')).not.toBeInTheDocument();
   });
 
   it('does not count missing fund value as zero and says the total excludes funds', async () => {
@@ -2535,7 +2548,7 @@ describe('PortfolioPage FX refresh', () => {
     render(<PortfolioPage />);
     await waitForInitialLoad();
 
-    expect(await screen.findByText('TWD 500,000.00')).toBeInTheDocument();
+    expect(await screen.findByText('500,000')).toBeInTheDocument();
     expect(screen.getByText('不含基金（基金资料暂时无法取得）')).toBeInTheDocument();
   });
 
@@ -2792,5 +2805,183 @@ describe('PortfolioPage FX refresh', () => {
     selectAccount('Main');
     fireEvent.click(await desktop.findByRole('button', { name: '删除这笔' }));
     expect(await screen.findByText('删除错误流水')).toBeInTheDocument();
+  });
+
+  it('loads signals for 22 holdings with one grouped list request and no per-stock lookups', async () => {
+    const positions = Array.from({ length: 22 }, (_, index) => makePosition({
+      symbol: `${2300 + index}.TW`,
+      market: 'tw',
+      currency: 'TWD',
+      valuationCurrency: 'TWD',
+      marketValueBase: 1000 + index,
+    }));
+    getSnapshot.mockResolvedValueOnce(makeSnapshot({ fxStale: false, positions }));
+    listDecisionSignals.mockResolvedValue({
+      items: positions.map((position, index) => makeDecisionSignal({
+        id: 500 + index,
+        stockCode: String(position.symbol),
+        market: 'tw',
+        riskSummary: `訊號 ${index}`,
+      })),
+      total: 22,
+      page: 1,
+      pageSize: 100,
+    });
+
+    render(<PortfolioPage />);
+
+    expect((await screen.findAllByLabelText('訊號 0')).length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('訊號 21').length).toBeGreaterThan(0);
+    expect(listDecisionSignals).toHaveBeenCalledTimes(1);
+    expect(listDecisionSignals).toHaveBeenCalledWith(expect.objectContaining({
+      holdingOnly: true,
+      groupLatest: true,
+      status: 'active',
+    }));
+    expect(getLatestDecisionSignals).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the per-stock endpoint only for the holding the grouped list missed', async () => {
+    getSnapshot.mockResolvedValueOnce(makeSnapshot({ fxStale: false, positions: [
+      makePosition({ symbol: '2330.TW', market: 'tw', valuationCurrency: 'TWD', marketValueBase: 300 }),
+      makePosition({ symbol: '2303.TW', market: 'tw', valuationCurrency: 'TWD', marketValueBase: 200 }),
+      makePosition({ symbol: '2454.TW', market: 'tw', valuationCurrency: 'TWD', marketValueBase: 100 }),
+    ] }));
+    listDecisionSignals.mockResolvedValue({
+      items: [
+        makeDecisionSignal({ id: 1, stockCode: '2330.TW', market: 'tw', riskSummary: '台積電風險' }),
+        makeDecisionSignal({ id: 2, stockCode: '2303.TW', market: 'tw', riskSummary: '聯電風險' }),
+      ],
+      total: 2,
+      page: 1,
+      pageSize: 100,
+    });
+    getLatestDecisionSignals.mockResolvedValue({
+      items: [makeDecisionSignal({ id: 3, stockCode: '2454.TW', market: 'tw', riskSummary: '聯發科風險' })],
+      total: 1,
+      page: 1,
+      pageSize: 1,
+    });
+
+    render(<PortfolioPage />);
+
+    expect((await screen.findAllByLabelText('聯發科風險')).length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('台積電風險').length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('聯電風險').length).toBeGreaterThan(0);
+    expect(getLatestDecisionSignals).toHaveBeenCalledTimes(1);
+    expect(getLatestDecisionSignals).toHaveBeenCalledWith('2454.TW', { market: 'tw', limit: 1 });
+  });
+
+  it('scopes the grouped signal request to the selected account', async () => {
+    getSnapshot.mockResolvedValue(makeSnapshot({ fxStale: false, positions: [makePosition()] }));
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+    await waitFor(() => expect(listDecisionSignals).toHaveBeenCalled());
+
+    selectAccount('Main');
+
+    await waitFor(() => expect(listDecisionSignals).toHaveBeenLastCalledWith(expect.objectContaining({
+      holdingOnly: true,
+      groupLatest: true,
+      accountId: 1,
+    })));
+  });
+
+  it('keeps cross-currency weights and the Taiwan subtotal when FX is stale, flagging the weight header', async () => {
+    getAccounts.mockResolvedValueOnce(makeAccounts([{ id: 1, name: 'Main' }, { id: 8, name: 'US' }]));
+    const base = makeSnapshot({ fxStale: true, accountCount: 2 });
+    const account = base.accounts[0];
+    getSnapshot.mockResolvedValueOnce({
+      ...base,
+      totalMarketValue: 297_000,
+      fxMissing: false,
+      displayCurrency: 'TWD',
+      consolidatedMarketValueBase: 1_320_000,
+      consolidatedFxStale: true,
+      consolidatedFxMissing: false,
+      accounts: [
+        {
+          ...account,
+          accountId: 1,
+          accountName: 'Main',
+          baseCurrency: 'TWD',
+          totalMarketValue: 1_000_000,
+          totalMarketValueAggregate: 225_000,
+          positions: [
+            makePosition({ symbol: '2330.TW', market: 'tw', currency: 'TWD', valuationCurrency: 'TWD', marketValueBase: 600_000, unrealizedPnlBase: 100_000 }),
+            makePosition({ symbol: '2303.TW', market: 'tw', currency: 'TWD', valuationCurrency: 'TWD', marketValueBase: 400_000, unrealizedPnlBase: -50_000 }),
+          ],
+        },
+        {
+          ...account,
+          accountId: 8,
+          accountName: 'US',
+          baseCurrency: 'USD',
+          totalMarketValue: 10_000,
+          totalMarketValueAggregate: 72_000,
+          positions: [
+            makePosition({ symbol: 'AAPL', market: 'us', currency: 'USD', valuationCurrency: 'USD', marketValueBase: 10_000, unrealizedPnlBase: 1_000 }),
+          ],
+        },
+      ],
+    });
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    const table = await desktopHoldings();
+    expect(table.getByText('汇率过期')).toBeInTheDocument();
+    // 600,000 / 1,320,000 (TWD-equivalent total, same source as the summary cards).
+    expect(table.getByText('45.45%')).toBeInTheDocument();
+    const taiwan = table.getByText('台股（2 档）').closest('tr') as HTMLElement;
+    expect(within(taiwan).getByText('TWD 1,000,000.00')).toBeInTheDocument();
+    expect(within(taiwan).getByText('75.76%')).toBeInTheDocument();
+  });
+
+  it('labels the day P&L with the quote date when quotes are not from today', async () => {
+    const past = new Date();
+    past.setDate(past.getDate() - 3);
+    const pastIso = getTodayIsoFor(past);
+    getSnapshot.mockResolvedValueOnce(makeSnapshot({ fxStale: false, positions: [makePosition({ priceDate: pastIso })] }));
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    const label = `${pastIso.slice(5, 7)}/${pastIso.slice(8, 10)} 损益`;
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    expect(screen.getByText('台美股休市')).toBeInTheDocument();
+    expect(screen.queryByText('今日')).not.toBeInTheDocument();
+  });
+
+  it('keeps the plain today label when quotes are from today', async () => {
+    getSnapshot.mockResolvedValueOnce(makeSnapshot({ fxStale: false, positions: [makePosition({ priceDate: getTodayIsoFor(new Date()) })] }));
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    expect(await screen.findByText('今日')).toBeInTheDocument();
+    expect(screen.queryByText('台美股休市')).not.toBeInTheDocument();
+  });
+
+  it('shows side, price and quantity on the mobile trade card', async () => {
+    listTrades.mockResolvedValue({
+      items: [
+        { id: 7, accountId: 1, symbol: '2330.TW', market: 'tw', currency: 'TWD', tradeDate: '2026-10-01', side: 'buy', quantity: 10, price: 1000, fee: 1, tax: 2 },
+        { id: 8, accountId: 1, symbol: '2303.TW', market: 'tw', currency: 'TWD', tradeDate: '2026-10-02', side: 'sell', quantity: 5, price: 50, fee: 1, tax: 2 },
+      ],
+      total: 2, page: 1, pageSize: 20,
+    });
+
+    render(<PortfolioPage />);
+    await waitForInitialLoad();
+
+    const records = within(await screen.findByTestId('portfolio-records'));
+    const mobile = within(await records.findByTestId('data-table-mobile'));
+    expect(await mobile.findByText('买入')).toBeInTheDocument();
+    expect(mobile.getByText('卖出')).toBeInTheDocument();
+    expect(mobile.getByText('TWD 1,000.00')).toBeInTheDocument();
+    expect(mobile.getByText('10 股')).toBeInTheDocument();
+    expect(mobile.getByText('2026-10-02')).toBeInTheDocument();
   });
 });

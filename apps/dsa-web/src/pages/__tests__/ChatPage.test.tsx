@@ -306,7 +306,7 @@ beforeEach(() => {
 
 async function confirmSendToNotify() {
   fireEvent.click(await screen.findByRole('button', { name: '更多操作' }));
-  fireEvent.click(await screen.findByRole('menuitem', { name: '发送到已配置的通知机器人/邮箱' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: '推送到通知' }));
   fireEvent.click(await screen.findByRole('button', { name: '推送' }));
 }
 
@@ -574,7 +574,8 @@ describe('ChatPage', () => {
         await waitFor(() => expect(mockStartStream).toHaveBeenLastCalledWith(
           expect.objectContaining({ message, context: undefined }), expect.anything()));
       }
-      expect(screen.getByLabelText('当前讨论对象')).toHaveTextContent('未确认');
+      // No conversation and no confirmed stock: the status chip stays hidden.
+      expect(screen.queryByLabelText('当前讨论对象')).not.toBeInTheDocument();
     },
   );
 
@@ -587,12 +588,14 @@ describe('ChatPage', () => {
     mockStoreState.activeStockContext = {
       stock_code: code, canonical_id: code, stock_name: name, asset_type: type,
     };
+    mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '回答' }];
     mockStockIndexState.index = [];
     mockStockIndexState.loading = true;
     render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
     expect(await screen.findByLabelText('当前讨论对象')).toHaveTextContent(name);
-    if (type === 'index') expect(screen.queryByText('加入自选')).not.toBeInTheDocument();
-    else expect(await screen.findByText('加入自选')).toBeInTheDocument();
+    await screen.findByTestId('chat-stock-summary');
+    if (type === 'index') expect(screen.queryByRole('button', { name: '加入自选' })).not.toBeInTheDocument();
+    else expect(await screen.findByRole('button', { name: '加入自选' })).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText(/例如/), { target: { value: '风险呢' } });
     fireEvent.click(screen.getByRole('button', { name: '发送' }));
     await waitFor(() => expect(mockStartStream).toHaveBeenLastCalledWith(
@@ -623,7 +626,7 @@ describe('ChatPage', () => {
     mockStoreState.chatError = createParsedApiError({ title: 'Session changed', message: 'Refresh',
       code: 'session_state_conflict', category: 'http_error' });
     render(<UiLanguageProvider><MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter></UiLanguageProvider>);
-    expect(await screen.findByLabelText('Current discussion object')).toHaveTextContent('Discussing: Samsung · 005930.KS');
+    expect(await screen.findByLabelText('Current discussion object')).toHaveTextContent('Samsung 005930.KS');
     expect(screen.getByRole('button', { name: 'Refresh session (keep your draft and retry)' })).toBeInTheDocument();
   });
 
@@ -678,7 +681,7 @@ describe('ChatPage', () => {
       </UiLanguageProvider>,
     );
 
-    expect(await screen.findByRole('checkbox', { name: '不指定' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '清除選擇' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '開啟新對話' })).toBeInTheDocument();
     // 會話標題與技能名稱是後端資料，不能被翻譯
     expect(screen.getByRole('button', { name: '切換到對話 请简要分析 600519' })).toBeInTheDocument();
@@ -707,7 +710,7 @@ describe('ChatPage', () => {
       </UiLanguageProvider>,
     );
 
-    expect(await screen.findByRole('checkbox', { name: 'Not specified' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Clear selection' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Start a new chat' })).toBeInTheDocument();
     expect(screen.getByText('2 messages')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
@@ -777,8 +780,9 @@ describe('ChatPage', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'AI 问股' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '导出会话' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '发送到已配置的通知机器人/邮箱' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '更多操作' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: '导出 Markdown' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: '推送到通知' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '历史对话' })).toBeInTheDocument();
   });
 
@@ -795,7 +799,7 @@ describe('ChatPage', () => {
     );
 
     fireEvent.click(await screen.findByRole('button', { name: '更多操作' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: '导出会话为 Markdown 文件' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: '导出 Markdown' }));
 
     // 本 fork 的导出带 locale 第二参（getIntlLocale(language)，供繁体/英文本地化导出）
     expect(mockDownloadSession).toHaveBeenCalledWith(mockStoreState.messages, expect.anything());
@@ -919,7 +923,7 @@ describe('ChatPage', () => {
     );
 
     expect(await screen.findByRole('checkbox', { name: '趋势分析' })).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: '不指定' })).not.toBeChecked();
+    expect(screen.getByRole('button', { name: '清除选择' })).toBeEnabled();
   });
 
   it('keeps the restored session skills when the Skill catalog finishes loading', async () => {
@@ -1043,7 +1047,7 @@ describe('ChatPage', () => {
 
     render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
 
-    fireEvent.click(await screen.findByRole('button', { name: '台积电' }));
+    fireEvent.click(await screen.findByRole('button', { name: '2330.TW 台积电' }));
 
     const input = screen.getByPlaceholderText(/例如/);
     expect(input).toHaveValue('分析 台积电 2330.TW');
@@ -1257,6 +1261,112 @@ describe('ChatPage', () => {
     expect(screen.getByTestId('chat-stock-summary')).not.toHaveTextContent('0.00');
   });
 
+  it('omits the resistance and support cells instead of showing dashes when the answer has no levels', async () => {
+    mockStoreState.activeStockContext = { stock_code: '2330.TW', canonical_id: '2330.TW', stock_name: '台积电', asset_type: 'stock' };
+    mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '回答',
+      structured: { conclusion: '观望', resistance: null, support: null, invalidation: null, follow_ups: [] } }];
+    mockGetQuotes.mockResolvedValue([{ stockCode: '2330.TW', quote: { stockCode: '2330.TW', currentPrice: 1050, changePercent: 1.5 } }]);
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    const card = await screen.findByTestId('chat-stock-summary');
+    await waitFor(() => expect(card).toHaveTextContent('1,050'));
+    expect(card).not.toHaveTextContent('—');
+    expect(within(card).queryByText('压力')).not.toBeInTheDocument();
+    expect(within(card).queryByText('支撑')).not.toBeInTheDocument();
+    expect(within(card).getByText('实时')).toBeInTheDocument();
+  });
+
+  it('shows only the level that has a value in the summary card', async () => {
+    mockStoreState.activeStockContext = { stock_code: '2330.TW', canonical_id: '2330.TW', stock_name: '台积电', asset_type: 'stock' };
+    mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '回答',
+      structured: { conclusion: null, resistance: 1100, support: null, invalidation: null, follow_ups: [] } }];
+    mockGetQuotes.mockResolvedValue([{ stockCode: '2330.TW', quote: { stockCode: '2330.TW', currentPrice: 1050, changePercent: 1.5 } }]);
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    const card = await screen.findByTestId('chat-stock-summary');
+    await waitFor(() => expect(card).toHaveTextContent('1,050'));
+    expect(within(card).getByText('压力')).toBeInTheDocument();
+    expect(card).toHaveTextContent('1,100');
+    expect(within(card).queryByText('支撑')).not.toBeInTheDocument();
+    expect(card).not.toHaveTextContent('—');
+  });
+
+  it('closes the strategy sheet on Escape and returns focus to its trigger', async () => {
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    // Grab the trigger before opening: its accessible name flips to "collapse" while open.
+    const trigger = await screen.findByRole('button', { name: '展开策略选择' });
+    const panel = screen.getByTestId('chat-skill-picker-panel');
+    // Portaled to body so the bottom tab bar cannot cover it.
+    expect(panel.parentElement).toBe(document.body);
+
+    fireEvent.click(trigger);
+    expect(panel).toHaveClass('flex');
+    expect(document.activeElement).not.toBe(trigger);
+
+    // Other keys must not close the sheet.
+    fireEvent.keyDown(document, { key: 'a' });
+    expect(panel).toHaveClass('flex');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(panel).toHaveClass('hidden');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('closes the strategy sheet from its Done button and clears picks from the top text button', async () => {
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    const trigger = await screen.findByRole('button', { name: '展开策略选择' });
+    const panel = screen.getByTestId('chat-skill-picker-panel');
+    fireEvent.click(trigger);
+    expect(within(panel).getByRole('heading', { name: '策略' })).toBeInTheDocument();
+
+    const checkbox = await within(panel).findByRole('checkbox', { name: '趋势分析' });
+    expect(checkbox).toBeChecked();
+    fireEvent.click(within(panel).getByRole('button', { name: '清除选择' }));
+    expect(checkbox).not.toBeChecked();
+
+    fireEvent.click(within(panel).getByRole('button', { name: '完成' }));
+    expect(panel).toHaveClass('hidden');
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('keeps empty-state watchlist chips distinct from holdings, capped at four, with the code shown', async () => {
+    mockGetSnapshot.mockResolvedValue({
+      accounts: [{ positions: [{ symbol: '2330.TW', name: '台积电' }] }],
+    });
+    mockGetWatchlist.mockResolvedValue(['2330.TW', 'AAPL', 'MSFT', 'NVDA', 'TSLA', 'GOOG']);
+
+    render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
+
+    expect(await screen.findByRole('button', { name: '2330.TW 台积电' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'TSLA' })).toBeInTheDocument();
+    // 2330.TW already sits in holdings, so the watchlist group starts at AAPL and stops at four.
+    expect(screen.getAllByRole('button', { name: /2330\.TW/ })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'GOOG' })).not.toBeInTheDocument();
+  });
+
+  it('prefills the discussion object from ?stock=2330.TW&name=台積電 and clears the query', async () => {
+    const router = createMemoryRouter(
+      [{ path: '/chat', element: <ChatPage /> }],
+      { initialEntries: ['/chat?stock=2330.TW&name=%E5%8F%B0%E7%A9%8D%E9%9B%BB'] },
+    );
+    render(<RouterProvider router={router} />);
+
+    expect(await screen.findByDisplayValue('请深入分析 台積電(2330.TW)')).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: '发送' }));
+    await waitFor(() => expect(mockStartStream).toHaveBeenCalledTimes(1));
+    expect(mockStartStream.mock.calls[0][0].context).toEqual(
+      expect.objectContaining({ stock_code: '2330.TW', stock_name: '台積電' }),
+    );
+  });
+
   it('groups and filters the session list and shows the stock pill', async () => {
     mockStoreState.sessions = [
       { session_id: 'session-1', title: '今天的对话', message_count: 2, created_at: '',
@@ -1367,7 +1477,7 @@ describe('ChatPage', () => {
     );
 
     fireEvent.click(await screen.findByRole('checkbox', { name: '趋势分析' }));
-    expect(screen.getByRole('checkbox', { name: '不指定' })).toBeChecked();
+    expect(screen.getByRole('button', { name: '清除选择' })).toBeDisabled();
 
     fireEvent.change(screen.getByPlaceholderText(/例如/), {
       target: { value: '分析 AAPL' },
@@ -1542,12 +1652,12 @@ describe('ChatPage', () => {
     await waitFor(() => expect(mockSendChat).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
-    expect(screen.getByRole('menuitem', { name: '发送到已配置的通知机器人/邮箱' })).toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: '推送到通知' })).toBeDisabled();
 
     await act(async () => {
       deferred.resolve({ success: true });
     });
-    expect(screen.getByRole('menuitem', { name: '发送到已配置的通知机器人/邮箱' })).not.toBeDisabled();
+    expect(screen.getByRole('menuitem', { name: '推送到通知' })).not.toBeDisabled();
   });
 
   it('does not push to the notification channel until the user confirms', async () => {
@@ -1556,7 +1666,7 @@ describe('ChatPage', () => {
     render(<MemoryRouter initialEntries={['/chat']}><ChatPage /></MemoryRouter>);
 
     fireEvent.click(await screen.findByRole('button', { name: '更多操作' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: '发送到已配置的通知机器人/邮箱' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: '推送到通知' }));
     expect(mockSendChat).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole('button', { name: '取消' }));
     expect(mockSendChat).not.toHaveBeenCalled();
@@ -1934,8 +2044,8 @@ describe('ChatPage', () => {
     });
 
     // The index canonical hides the stock-only watchlist action immediately.
-    expect(screen.queryByText('加入自选')).not.toBeInTheDocument();
-    expect(screen.queryByText('从自选删除')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '加入自选' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '移出自选' })).not.toBeInTheDocument();
   });
 
   it('defers a default-backend index follow-up until the registry settles', async () => {
@@ -2266,9 +2376,10 @@ describe('extractStockCodesFromMessage with index registry', () => {
 });
 
 describe('watchlist button with code variants', () => {
-  it('shows "从自选删除" when canonical code is in watchlist and user inputs variant', async () => {
+  it('shows the remove-from-watchlist star when canonical code is in watchlist and user inputs variant', async () => {
     mockStoreState.activeStockContext = { stock_code: '600519', canonical_id: 'sh600519', stock_name: null, asset_type: 'stock' };
     mockGetWatchlist.mockResolvedValue(['600519', 'HK01810']);
+    mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '回答' }];
 
     render(
       <MemoryRouter>
@@ -2280,12 +2391,13 @@ describe('watchlist button with code variants', () => {
     fireEvent.change(textarea, { target: { value: '分析 600519.SH' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
-    expect(await screen.findByText('从自选删除')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '移出自选' })).toBeInTheDocument();
   });
 
-  it('shows "从自选删除" for HK variant codes', async () => {
+  it('shows the remove-from-watchlist star for HK variant codes', async () => {
     mockStoreState.activeStockContext = { stock_code: 'HK01810', canonical_id: 'hk01810', stock_name: null, asset_type: 'stock' };
     mockGetWatchlist.mockResolvedValue(['HK01810']);
+    mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '回答' }];
 
     render(
       <MemoryRouter>
@@ -2297,12 +2409,13 @@ describe('watchlist button with code variants', () => {
     fireEvent.change(textarea, { target: { value: '分析 1810.HK' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
-    expect(await screen.findByText('从自选删除')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '移出自选' })).toBeInTheDocument();
   });
 
   it('matches raw HK watchlist entries before rendering the watchlist action', async () => {
     mockStoreState.activeStockContext = { stock_code: 'HK01810', canonical_id: 'hk01810', stock_name: null, asset_type: 'stock' };
     mockGetWatchlist.mockResolvedValue(['01810']);
+    mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '回答' }];
 
     render(
       <MemoryRouter>
@@ -2314,12 +2427,13 @@ describe('watchlist button with code variants', () => {
     fireEvent.change(textarea, { target: { value: '分析 1810.HK' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
-    expect(await screen.findByText('从自选删除')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '移出自选' })).toBeInTheDocument();
   });
 
   it('removes the matched raw HK watchlist entry instead of adding a duplicate variant', async () => {
     mockStoreState.activeStockContext = { stock_code: 'HK00700', canonical_id: 'hk00700', stock_name: null, asset_type: 'stock' };
     mockGetWatchlist.mockResolvedValue(['00700']);
+    mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '回答' }];
     mockRemoveFromWatchlist.mockResolvedValue([]);
 
     render(
@@ -2331,11 +2445,34 @@ describe('watchlist button with code variants', () => {
     const textarea = await screen.findByPlaceholderText(/例如/);
     fireEvent.change(textarea, { target: { value: '分析 00700.HK' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
-    fireEvent.click(await screen.findByText('从自选删除'));
+    fireEvent.click(await screen.findByRole('button', { name: '移出自选' }));
 
     await waitFor(() => {
       expect(mockRemoveFromWatchlist).toHaveBeenCalledWith('00700');
     });
     expect(mockAddToWatchlist).not.toHaveBeenCalled();
+  });
+
+  it('offers an undo toast after removing from the watchlist and re-adds the same entry', async () => {
+    mockStoreState.activeStockContext = { stock_code: 'HK00700', canonical_id: 'hk00700', stock_name: null, asset_type: 'stock' };
+    mockGetWatchlist.mockResolvedValue(['00700']);
+    mockStoreState.messages = [{ id: 'a-1', role: 'assistant', content: '回答' }];
+    mockRemoveFromWatchlist.mockResolvedValue([]);
+    mockAddToWatchlist.mockResolvedValue(['00700']);
+
+    render(
+      <MemoryRouter>
+        <ChatPage />
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '移出自选' }));
+    const toast = await screen.findByTestId('chat-watchlist-toast');
+    fireEvent.click(within(toast).getByRole('button', { name: '撤销' }));
+
+    await waitFor(() => {
+      expect(mockAddToWatchlist).toHaveBeenCalledWith('00700');
+    });
+    expect(await screen.findByRole('button', { name: '移出自选' })).toBeInTheDocument();
   });
 });
