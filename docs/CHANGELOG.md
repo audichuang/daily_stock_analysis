@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [新功能] 個股財報：Web 報告頁、看板展開列與 iOS 個股頁新增「財報」區塊，顯示季度營收、毛利率、營益率、淨利、EPS、現金流、資本支出、負債比、合約負債與台股月營收的趨勢與年增；金融業與 ETF 改顯示適用欄位或說明。新增 `GET /api/v1/stocks/{code}/financials`，台股讀本地 `market.financial_statement`，美股即時讀 SEC companyfacts、備援 yfinance 並交叉比對；金額、幣別、期間、公告日語意與來源都明確標示，見 `docs/stock-financials.md`。
+- [新功能] 財報 AI 導讀（`FINANCIAL_COMMENTARY_ENABLED`，預設關閉）：LLM 標記重點欄位並用白話說明發生什麼事、為什麼重要、這個指標怎麼看；文字裡的數字由程式填入，對不到實際欄位的條目直接丟棄；每份財報只生成一次，存應用庫 `financial_commentary`；失敗時數字照常顯示。不做買賣建議。
 - [新功能] 新增 `AGENT_EVENT_MONITOR_WITHOUT_SCHEDULE`（預設關閉）：API 程序以獨立執行緒只跑警報監控，不需開 `SCHEDULE_ENABLED`、不跑每日分析；即時價規則只在開盤時段評估且報價須屬於今天這一場（確認不了就不通知、不進冷卻；報價不帶時間時，將要觸發才另查最後一筆成交，並用該筆價格重新評估與通知），排程器同時開啟時不重複註冊。
 - [新功能] 新增 `GET /api/v1/alerts/monitor/status` 回報監控實際狀態、上次執行與通知管道；資料中心的 `alert.monitor` 同步認得獨立執行緒。
 - [改進] 警報 API 追加 `rule_name`、`stock_name`、`direction`、`severity`、`quote_source` 與各狀態彙總 `summary`，舊欄位不變；大盤紅綠燈警報支援 `tw`。

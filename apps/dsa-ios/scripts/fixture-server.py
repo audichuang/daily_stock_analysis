@@ -163,6 +163,35 @@ def history_item(record_id, code, report_type="detailed", region=None):
     }
 
 
+def financials_fixture(code):
+    """合成財報：AI 已標記毛利率，其他欄位不標；所有數字都是假的。"""
+    point = lambda period, value, yoy=None, pp=None: {
+        "period": period, "value": value, "yoy_pct": yoy, "qoq_pct": None, "yoy_pp": pp, "qoq_pp": None, "derived": False}
+    return {
+        "stock_code": code, "market": "tw", "status": "ok", "status_reason": None, "stock_name": None,
+        "template": "general", "currency": "TWD", "trading_currency": "TWD",
+        "source": {"id": "fixture", "label": "合成測試財報", "source_unit": "新台幣千元", "url": None},
+        "cross_check": None,
+        "periods": [{"key": "2099Q2", "label": "2099 Q2", "fiscal_year": 2099, "fiscal_quarter": 2,
+                     "period_end": "2099-06-30", "announce_date": "2099-08-14",
+                     "announce_date_kind": "statutory_deadline", "filing_form": ""}],
+        "metrics": [
+            {"key": "revenue", "label": "營收", "kind": "amount", "unit": "TWD", "definition": "合成：營收教學",
+             "points": [point("2099Q2", 1.27e12, yoy=36.0)]},
+            {"key": "gross_margin", "label": "毛利率", "kind": "ratio", "unit": "%", "definition": "合成：毛利率教學",
+             "points": [point("2099Q2", 67.7, pp=9.1)]},
+        ],
+        "not_applicable": [{"key": "contract_liabilities", "label": "合約負債", "reason": "合成：沒有揭露"}],
+        "monthly_revenue": [{"month": "2099-09", "revenue": 5e11, "yoy_pct": 54.6, "mom_pct": -0.6, "announce_date": "2099-10-10"}],
+        "ttm_revenue_yoy_pct": 36.2, "limitations": ["合成測試資料"], "is_stale": False,
+        "commentary": {"status": "ready", "period": "2099Q2", "generated_at": None, "model": "fixture",
+                       "headline": "合成導讀：毛利率大幅上升", "message": None,
+                       "highlights": [{"metric_key": "gross_margin", "period": "2099Q2", "importance": "high",
+                                       "what_happened": "合成：毛利率上升", "why_it_matters": "合成：定價能力變強",
+                                       "how_to_read": "合成：毛利除以營收"}]},
+    }
+
+
 def calendar_events(query):
     """行事曆獨立使用相對日期，讓 7 天警示與換月驗收不會過期。"""
     # App 預設開裝置當天；fixture 與模擬器同機，用本機日期才不會在跨日時段對不上。
@@ -339,6 +368,10 @@ class Handler(BaseHTTPRequestHandler):
                     "evidence_quality": {"status": "partial", "blocks": {"quote": "partial", "research": "partial"},
                                          "limitations": ["全部是固定過去日期的 fixture，不能用於交易。", "no_symbol_intelligence"]},
                 })
+            if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "financials":
+                if route[3] not in STOCKS:
+                    return self.reply(404, {"detail": {"error": "not_found", "message": "測試資料沒有此股票"}})
+                return self.reply(200, financials_fixture(route[3]))
             if len(route) == 5 and route[:3] == ["api", "v1", "stocks"] and route[4] == "dossier":
                 code = route[3]
                 if code not in STOCKS:

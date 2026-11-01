@@ -36,6 +36,7 @@ struct StockDetailView: View {
                             })
                 if !profile.history.limitations.isEmpty { limitation(profile.history.limitations) }
                 if let quote = profile.quote.data { tradingMetrics(quote) }
+                FinancialsSection(code: code)
                 analysisSection(profile)
                 if !profile.evidenceQuality.limitations.isEmpty {
                     DSACard {

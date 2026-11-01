@@ -1,6 +1,7 @@
 import apiClient from './index';
 import { toCamelCase } from './utils';
 import { attachParsedApiError } from './error';
+import type { FinancialCommentary, StockFinancials } from '../types/financials';
 
 export type ExtractItem = {
   code?: string | null;
@@ -133,6 +134,22 @@ function toQuote(raw: RawQuote): StockQuote {
 }
 
 export const stocksApi = {
+  /** 個股季度財報；只讀 AI 導讀快取，不會觸發 LLM。 */
+  async getFinancials(code: string): Promise<StockFinancials> {
+    const response = await apiClient.get(`/api/v1/stocks/${encodeURIComponent(code)}/financials`, { timeout: 45000 });
+    return toCamelCase<StockFinancials>(response.data);
+  },
+
+  /** 沒有快取時才會打 LLM，約 20~60 秒；同一份財報只生成一次。 */
+  async ensureFinancialCommentary(code: string): Promise<FinancialCommentary> {
+    const response = await apiClient.post(
+      `/api/v1/stocks/${encodeURIComponent(code)}/financials/commentary`,
+      undefined,
+      { timeout: 180000 },
+    );
+    return toCamelCase<FinancialCommentary>(response.data);
+  },
+
   async extractFromImage(file: File): Promise<ExtractFromImageResponse> {
     const formData = new FormData();
     formData.append('file', file);

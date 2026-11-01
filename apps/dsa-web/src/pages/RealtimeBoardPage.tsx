@@ -26,6 +26,7 @@ import { formatDateTime } from '../utils/format';
 import { cn } from '../utils/cn';
 import { isTwStockCode, stockCodeMatchKey } from '../utils/stockCode';
 import { BoardDossierCell, BoardDossierPanel } from '../components/board/BoardDossier';
+import { FinancialsPanel } from '../components/report/FinancialsPanel';
 import { marketToneClass } from '../utils/marketTone';
 
 const POLL_INTERVAL_MS = 30_000;
@@ -748,6 +749,9 @@ const RealtimeBoardPage: React.FC = () => {
                               />
                               {quoteDetail(q)}
                               <TrendChart code={code} />
+                              <div className="px-4 pb-4">
+                                <FinancialsPanel stockCode={code} />
+                              </div>
                             </div>
                           </td>
                         </tr>

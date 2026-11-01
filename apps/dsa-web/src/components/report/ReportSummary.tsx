@@ -2,6 +2,7 @@ import React from 'react';
 import type { AnalysisResult, AnalysisReport } from '../../types/analysis';
 import { ReportOverview } from './ReportOverview';
 import { ReportEventOutlook } from './ReportEventOutlook';
+import { FinancialsPanel } from './FinancialsPanel';
 import { ReportStrategy } from './ReportStrategy';
 import { ReportNews } from './ReportNews';
 import { ReportDetails } from './ReportDetails';
@@ -71,6 +72,9 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
 
       {/* 事件展望：判斷與各情境動作 */}
       <ReportEventOutlook outlook={report.eventOutlook} language={reportLanguage} />
+
+      {/* 個股財報與 AI 導讀 */}
+      {meta.stockCode ? <FinancialsPanel stockCode={meta.stockCode} /> : null}
 
       {/* 策略点位区 */}
       <ReportStrategy strategy={strategy} language={reportLanguage} />

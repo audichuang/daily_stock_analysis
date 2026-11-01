@@ -274,6 +274,16 @@ final class DSAMarketUITests: XCTestCase {
         scrollTo(text(containing: "這次分析沒有可顯示的新聞或官方公告。"))
         capture("新聞-完整報告空狀態")
         goBack(from: "AI 研究", to: "台積電（測試）")
+        // 財報區塊：AI 標記的欄位點開要看到說明，固定教學也在
+        let marginRow = app.buttons["financials.metric.gross_margin"]
+        scrollTo(marginRow)
+        XCTAssertTrue(marginRow.label.contains("AI 重點"), "AI 標記的欄位要有視覺標示")
+        XCTAssertFalse(app.buttons["financials.metric.revenue"].label.contains("AI 重點"), "沒被標記的欄位不能有標示")
+        tap(marginRow)
+        XCTAssertTrue(text(containing: "合成：毛利率上升").waitForExistence(timeout: 10))
+        XCTAssertTrue(text(containing: "合成：毛利率教學").exists)
+        capture("06a-財報AI導讀")
+        tap(app.buttons["完成"])
         tap(app.buttons["stock-dossier-link"])
         XCTAssertTrue(text(containing: "四維度合成檔案 2330.TW").waitForExistence(timeout: 15))
         XCTAssertFalse(text(containing: "四維度合成檔案 AAPL").exists)

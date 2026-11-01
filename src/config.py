@@ -1135,6 +1135,7 @@ class Config:
     # 個股 prompt 附賣方共識（yfinance：目標價、EPS 修正、評級；台股＋美股）；純資訊、預設關
     analyst_consensus_enabled: bool = False
     event_outlook_enabled: bool = False
+    financial_commentary_enabled: bool = False
     # 重大波動事件判讀；預設維持原有決策流程。
     event_gap_decision_enabled: bool = False
     event_gap_threshold_pct: float = 12.0
@@ -2111,6 +2112,7 @@ class Config:
             tw_level_alerts_enabled=parse_env_bool(os.getenv('TW_LEVEL_ALERTS_ENABLED'), default=False),
             analyst_consensus_enabled=parse_env_bool(os.getenv('ANALYST_CONSENSUS_ENABLED'), default=False),
             event_outlook_enabled=parse_env_bool(os.getenv('EVENT_OUTLOOK_ENABLED'), default=False),
+            financial_commentary_enabled=parse_env_bool(os.getenv('FINANCIAL_COMMENTARY_ENABLED'), default=False),
             event_gap_decision_enabled=parse_env_bool(os.getenv('EVENT_GAP_DECISION_ENABLED'), default=False),
             event_gap_threshold_pct=parse_env_float(
                 os.getenv('EVENT_GAP_THRESHOLD_PCT'), 12.0, field_name='EVENT_GAP_THRESHOLD_PCT', minimum=0.01,

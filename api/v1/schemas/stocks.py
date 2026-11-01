@@ -265,6 +265,119 @@ class StockProfileEvidenceQuality(BaseModel):
     limitations: List[str] = Field(default_factory=list)
 
 
+FinancialsStatus = Literal["ok", "no_data", "not_applicable", "unsupported", "unavailable"]
+CommentaryStatus = Literal["ready", "missing", "disabled", "failed", "not_applicable"]
+
+
+class FinancialPeriod(BaseModel):
+    key: str = Field(..., description="期間鍵，如 2026Q2；美股是公司自己的會計年度")
+    label: str
+    fiscal_year: Optional[int] = None
+    fiscal_quarter: Optional[int] = None
+    period_end: str = Field(..., description="期末日 YYYY-MM-DD")
+    announce_date: Optional[str] = Field(None, description="公告或申報日，語意見 announce_date_kind")
+    announce_date_kind: Literal["filed", "statutory_deadline", "unknown"] = Field(
+        ..., description="filed＝實際申報日；statutory_deadline＝法定期限（實際可能更早）；unknown＝來源沒有"
+    )
+    filing_form: Optional[str] = None
+
+
+class FinancialMetricPoint(BaseModel):
+    period: str
+    value: Optional[float] = Field(None, description="金額是 1 元財報幣別，比率是百分比；沒有讀數是 null")
+    yoy_pct: Optional[float] = Field(None, description="年增率（%）；比率欄或基期 ≤0 時為 null")
+    qoq_pct: Optional[float] = Field(None, description="季增率（%）；比率欄或基期 ≤0 時為 null")
+    yoy_pp: Optional[float] = Field(None, description="比率欄的年變化（百分點）")
+    qoq_pp: Optional[float] = Field(None, description="比率欄的季變化（百分點）")
+    derived: bool = Field(False, description="由累計值差分而來，不是來源直接揭露的單季值")
+
+
+class FinancialMetric(BaseModel):
+    key: str
+    label: str
+    kind: Literal["amount", "ratio", "per_share"]
+    unit: str = Field(..., description="TWD、USD、%、TWD/股、TWD/ADR")
+    definition: str = Field(..., description="這個指標怎麼看（固定教學，與 AI 無關）")
+    points: List[FinancialMetricPoint]
+
+
+class FinancialNotApplicable(BaseModel):
+    key: str
+    label: str
+    reason: str
+
+
+class MonthlyRevenuePoint(BaseModel):
+    month: str = Field(..., description="YYYY-MM")
+    revenue: Optional[float] = Field(None, description="1 元（來源是千元，已換算）")
+    yoy_pct: Optional[float] = None
+    mom_pct: Optional[float] = None
+    announce_date: Optional[str] = None
+
+
+class FinancialSource(BaseModel):
+    id: Optional[str] = None
+    label: str
+    source_unit: str = Field(..., description="來源原始單位；回應的金額已統一換算成 1 元")
+    url: Optional[str] = None
+
+
+class FinancialCrossCheckMismatch(BaseModel):
+    field: str
+    period: str
+    primary: float
+    secondary: float
+
+
+class FinancialCrossCheck(BaseModel):
+    source: str
+    status: Literal["matched", "mismatch", "unavailable"]
+    compared: int
+    mismatches: List[FinancialCrossCheckMismatch] = Field(default_factory=list)
+
+
+class FinancialHighlight(BaseModel):
+    metric_key: str = Field(..., description="對應 metrics[].key 或 monthly_revenue")
+    period: str = Field(..., description="對應 periods[].key；月營收是 YYYY-MM")
+    importance: Literal["high", "medium", "low"]
+    what_happened: str
+    why_it_matters: str
+    how_to_read: str
+
+
+class FinancialCommentary(BaseModel):
+    status: CommentaryStatus = Field(
+        ..., description="missing＝還沒生成（客戶端可 POST commentary）；disabled＝開關未開"
+    )
+    period: Optional[str] = None
+    generated_at: Optional[str] = None
+    model: Optional[str] = None
+    headline: Optional[str] = None
+    highlights: List[FinancialHighlight] = Field(default_factory=list)
+    message: Optional[str] = None
+
+
+class StockFinancialsResponse(BaseModel):
+    stock_code: str
+    market: Optional[Literal["tw", "us"]] = None
+    status: FinancialsStatus
+    status_reason: Optional[str] = None
+    stock_name: Optional[str] = None
+    template: Literal["general", "financial"] = "general"
+    currency: Optional[str] = Field(None, description="財報幣別；ADR 可能與交易幣別不同（TSM 是 TWD）")
+    trading_currency: Optional[str] = None
+    source: Optional[FinancialSource] = None
+    cross_check: Optional[FinancialCrossCheck] = None
+    periods: List[FinancialPeriod] = Field(default_factory=list)
+    metrics: List[FinancialMetric] = Field(default_factory=list)
+    not_applicable: List[FinancialNotApplicable] = Field(default_factory=list)
+    monthly_revenue: List[MonthlyRevenuePoint] = Field(default_factory=list)
+    ttm_revenue_yoy_pct: Optional[float] = None
+    limitations: List[str] = Field(default_factory=list)
+    is_stale: bool = False
+    commentary: FinancialCommentary
+
+
 class StockProfileResponse(BaseModel):
     requested_code: str
     canonical_code: str
