@@ -194,6 +194,22 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(app.buttons["watchlist-toggle"].waitForExistence(timeout: 15))
         XCTAssertTrue(text(containing: "資料參考時間").waitForExistence(timeout: 10))
         XCTAssertFalse(text(containing: "報價時間 ·").exists)
+        // 三行報價與持股條都要在首屏，分頁列隱藏且內容不被遮。
+        let quotePosition = app.descendants(matching: .any)["stock.position"].firstMatch
+        XCTAssertTrue(quotePosition.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.frame.contains(quotePosition.frame), "持股條要在首屏")
+        XCTAssertTrue(text(containing: "已收盤").waitForExistence(timeout: 10), "postmarket 要顯示已收盤")
+        XCTAssertTrue(app.descendants(matching: .any)["stock.change"].firstMatch.label.contains("+1.69%"))
+        XCTAssertFalse(app.tabBars.buttons["今日"].exists && app.tabBars.buttons["今日"].isHittable, "個股頁要隱藏底部分頁")
+        let stockTitle = app.descendants(matching: .any)["stock.title"].firstMatch
+        XCTAssertTrue(stockTitle.label.contains("2330.TW"), "標題第二行是代號")
+        app.swipeUp()
+        app.swipeUp()
+        let titleHasPrice = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "600"), object: stockTitle)
+        XCTAssertEqual(XCTWaiter.wait(for: [titleHasPrice], timeout: 5), .completed, "捲動後標題要含現價")
+        capture("03a-捲動後標題含現價")
+        app.swipeDown()
+        app.swipeDown()
         let priceChart = app.descendants(matching: .any)["chart.price"].firstMatch
         scrollTo(priceChart)
         XCTAssertTrue(priceChart.exists, "個股必須有實際繪製的測試 K 線")
@@ -240,14 +256,27 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(emptyBid.exists, "空委買應為無報價，不是零元可買")
         capture("03b-空委買與來源成交量")
 
+        selectStockTab("news")
         scrollTo(text(containing: "相關新聞"))
         capture("新聞-個股頁預設分類")
         XCTAssertFalse(text(containing: "產業資料頁（合成）").exists)
         XCTAssertFalse(text(containing: "EX-99.1").exists)
 
+        selectStockTab("chips")
+        XCTAssertTrue(text(containing: "三大法人").waitForExistence(timeout: 5))
+        capture("03g-籌碼分頁")
+        selectStockTab("ai")
+        XCTAssertTrue(app.descendants(matching: .any)["stock.ai.block"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["stock.advice.text"].firstMatch.label.contains("持股者"), "有持股時預設看持股建議")
+        capture("03h-AI分頁")
         let reportLink = app.buttons["stock-report-link"]
         tap(reportLink)
         XCTAssertTrue(app.descendants(matching: .any)["report.screen"].firstMatch.waitForExistence(timeout: 15))
+        let conclusion = app.descendants(matching: .any)["report.conclusion"].firstMatch
+        XCTAssertTrue(conclusion.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.frame.intersects(conclusion.frame), "結論卡在首屏")
+        XCTAssertTrue(app.descendants(matching: .any)["report.sinceReport"].firstMatch.waitForExistence(timeout: 10), "現價與報告後漲跌")
+        capture("04a-報告結論卡")
         scrollTo(text(containing: "相關新聞"))
         scrollTo(text(containing: "SEC 8-K 公告"))
         capture("新聞-完整報告新聞與公告")
@@ -267,6 +296,13 @@ final class DSAMarketUITests: XCTestCase {
         scrollTo(text(containing: "何時需要重新判斷"))
         XCTAssertTrue(text(containing: "跌破測試支撐需重新判斷").exists)
         capture("05-論點失效條件")
+        // 全文：段落可收合、跳轉膠囊、表格原生列。
+        tap(app.descendants(matching: .any)["report.fullText"].firstMatch)
+        tap(app.buttons["report.jump.2"])
+        let table = app.descendants(matching: .any)["report.table"].firstMatch
+        XCTAssertTrue(table.waitForExistence(timeout: 5), "跳轉要展開目標段落")
+        XCTAssertLessThanOrEqual(table.frame.maxX, app.frame.maxX, "表格不能溢出螢幕")
+        capture("05a-完整報告表格與分段")
         goBack(from: "AI 研究", to: "台積電（測試）")
 
         tap(app.buttons["analysis-start"])
@@ -275,13 +311,16 @@ final class DSAMarketUITests: XCTestCase {
         tap(app.buttons["analysis-start"])
         XCTAssertTrue(text(containing: "分析已完成，報告已更新。").waitForExistence(timeout: 25), "fixture 需經兩次 processing 再 completed")
         capture("06-新分析完成")
+        selectStockTab("news")
         scrollTo(text(containing: "這次分析沒有可顯示的新聞或官方公告。"))
         capture("新聞-新分析個股空狀態")
+        selectStockTab("ai")
         tap(app.buttons["stock-report-link"])
         scrollTo(text(containing: "這次分析沒有可顯示的新聞或官方公告。"))
         capture("新聞-完整報告空狀態")
         goBack(from: "AI 研究", to: "台積電（測試）")
         // 財報區塊：AI 標記的欄位點開要看到說明，固定教學也在
+        selectStockTab("financials")
         let marginRow = app.buttons["financials.metric.gross_margin"]
         scrollTo(marginRow)
         XCTAssertTrue(marginRow.label.contains("AI 重點"), "AI 標記的欄位要有視覺標示")
@@ -291,6 +330,7 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(text(containing: "合成：毛利率教學").exists)
         capture("06a-財報AI導讀")
         tap(app.buttons["完成"])
+        selectStockTab("ai")
         tap(app.buttons["stock-dossier-link"])
         XCTAssertTrue(text(containing: "四維度合成檔案 2330.TW").waitForExistence(timeout: 15))
         XCTAssertFalse(text(containing: "四維度合成檔案 AAPL").exists)
@@ -544,6 +584,30 @@ final class DSAMarketUITests: XCTestCase {
         }
     }
 
+    func testFullReportFailureIsVisibleWithoutExpanding() throws {
+        try setFixtureSwitch("markdown-failing", on: true)
+        addTeardownBlock { [self] in try? setFixtureSwitch("markdown-failing", on: false) }
+        let password = app.secureTextFields["server-password"]
+        if password.waitForExistence(timeout: 5) {
+            password.tap()
+            password.typeText("fixture-password")
+            tap(app.buttons["connect-button"])
+        }
+        XCTAssertTrue(app.tabBars.buttons["AI 研究"].waitForExistence(timeout: 20))
+        tap(app.tabBars.buttons["AI 研究"])
+        tap(app.buttons["research.report.101"])
+        let failure = text(containing: "完整報告讀取失敗")
+        scrollTo(failure)
+        capture("完整報告失敗狀態")
+        try setFixtureSwitch("markdown-failing", on: false)
+        tap(app.buttons["重新載入"].firstMatch)
+        let recovered = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: failure)
+        XCTAssertEqual(XCTWaiter.wait(for: [recovered], timeout: 10), .completed, "重試成功後失敗狀態要消失")
+        tap(app.tabBars.buttons["工具"])
+        logoutFromTools()
+        XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 15))
+    }
+
     func testReportNewsOpensInSystemBrowser() throws {
         let password = app.secureTextFields["server-password"]
         if password.waitForExistence(timeout: 5) {
@@ -555,12 +619,19 @@ final class DSAMarketUITests: XCTestCase {
         tap(app.tabBars.buttons["今日"])
         // 主要旅程會更新台積電報告；鴻海保留固定有新聞的 #111，不依賴案例順序。
         tap(app.buttons["stock-row.2317.TW"])
+        selectStockTab("news")
         let references = app.descendants(matching: .any)["report.news.references"].firstMatch
         scrollTo(references)
         XCTAssertTrue(text(containing: "SEC 8-K 公告").exists)
         XCTAssertFalse(text(containing: "產業資料頁（合成）").exists)
         capture("新聞-個股頁預設分類")
+        selectStockTab("ai")
         tap(app.buttons["stock-report-link"])
+        // 舊報告存「減倉」：有枚舉時依枚舉顯示詞彙表用語。
+        let storedAction = app.descendants(matching: .any)["report.action"].firstMatch
+        XCTAssertTrue(storedAction.waitForExistence(timeout: 10))
+        XCTAssertEqual(storedAction.label, "減碼")
+        XCTAssertFalse(text(containing: "減倉").exists)
         scrollTo(references)
         XCTAssertTrue(app.links["report.news.link.0"].label.contains("最新新聞（合成）"))
         XCTAssertFalse(text(containing: "EX-99.1").exists)
@@ -582,17 +653,28 @@ final class DSAMarketUITests: XCTestCase {
         app.activate()
         XCTAssertTrue(app.descendants(matching: .any)["report.screen"].firstMatch.waitForExistence(timeout: 10))
         capture("新聞-由外部瀏覽器返回報告")
+        // 個股頁隱藏分頁列，先退回今日再切分頁。
+        goBack(from: "AI 研究", to: "鴻海（測試）")
+        goBack(from: "鴻海（測試）", to: "今日")
         tap(app.tabBars.buttons["AI 研究"])
         tap(app.buttons["research.report.102"])
+        // 舊報告沒有枚舉也只存「減倉」：別名仍顯示減碼；legacy 價位顯示原文。
+        let aliasAction = app.descendants(matching: .any)["report.action"].firstMatch
+        XCTAssertTrue(aliasAction.waitForExistence(timeout: 10))
+        XCTAssertEqual(aliasAction.label, "減碼")
+        XCTAssertTrue(text(containing: "等待測試支撐確認").exists, "legacy 價位顯示原文")
+        XCTAssertFalse(app.descendants(matching: .any)["report.price.ruler"].firstMatch.exists, "legacy 不畫價位尺")
         scrollTo(text(containing: "這次分析沒有可顯示的新聞或官方公告。"))
         capture("新聞-完整報告空狀態")
         tap(app.tabBars.buttons["今日"])
-        goBack(from: "AI 研究", to: "鴻海（測試）")
-        goBack(from: "鴻海（測試）", to: "今日")
         tap(app.segmentedControls["market-picker"].buttons["美股 US"])
         tap(app.buttons["stock-row.AAPL"])
+        XCTAssertTrue(app.buttons["stock.tab.news"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["stock.tab.chips"].exists, "美股沒有籌碼資料，分頁要隱藏")
+        selectStockTab("news")
         scrollTo(text(containing: "這次分析沒有可顯示的新聞或官方公告。"))
         capture("新聞-個股頁空狀態")
+        goBack(from: "Apple（測試）", to: "今日")
         // Keychain 跨案例保留；登出才不會讓下一個案例看不到登入畫面。
         tap(app.tabBars.buttons["工具"])
         logoutFromTools()
@@ -795,12 +877,23 @@ final class DSAMarketUITests: XCTestCase {
         eventsCard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", value)).firstMatch
     }
 
+    /// 內容分頁可能捲出畫面，tap 內建捲動。
+    private func selectStockTab(_ tab: String, file: StaticString = #filePath, line: UInt = #line) {
+        let button = app.buttons["stock.tab.\(tab)"]
+        XCTAssertTrue(button.waitForExistence(timeout: 15), file: file, line: line)
+        tap(button, file: file, line: line)
+    }
+
     private func setCalendarFailing(_ failing: Bool) throws {
+        try setFixtureSwitch("calendar-failing", on: failing)
+    }
+
+    private func setFixtureSwitch(_ name: String, on: Bool) throws {
         let environment = ProcessInfo.processInfo.environment
         let server = try XCTUnwrap(
             environment["DSA_TEST_SERVER"] ?? environment["DSA_FIXTURE_PORT"].map { "http://127.0.0.1:\($0)" }
         )
-        let url = try XCTUnwrap(URL(string: "\(server)/__fixture/calendar-failing?on=\(failing ? 1 : 0)"))
+        let url = try XCTUnwrap(URL(string: "\(server)/__fixture/\(name)?on=\(on ? 1 : 0)"))
         let done = expectation(description: "fixture 切換")
         var status: Int?
         URLSession.shared.dataTask(with: url) { _, response, _ in

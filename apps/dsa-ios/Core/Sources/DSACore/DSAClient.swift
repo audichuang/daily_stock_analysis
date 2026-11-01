@@ -115,6 +115,11 @@ public struct DSAClient: Sendable {
         try await get(["stocks", "indices"], query: [URLQueryItem(name: "region", value: region)])
     }
 
+    /// 個股頁首的開收盤狀態；與指數共用同一支端點，舊的 `indices()` 不動。
+    public func marketSession(region: String) async throws -> MarketSessionStatus {
+        try await get(["stocks", "indices"], query: [URLQueryItem(name: "region", value: region)])
+    }
+
     public func alertMonitorStatus() async throws -> AlertMonitorStatus {
         try await get(["alerts", "monitor", "status"])
     }
