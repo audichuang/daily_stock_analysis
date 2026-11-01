@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -42,6 +43,33 @@ def fail(message: str) -> None:
 def ensure_file_exists(path: Path, description: str) -> None:
     if not path.exists():
         fail(f"{description} is missing: {path.relative_to(ROOT)}")
+
+
+# Client details belong in apps/*/AGENTS.md, not in the root file loaded on every task.
+ROOT_LAYERING_RE = re.compile(r"apps/dsa-|\bios\b|\bswift\b|xcodebuild|xcodegen|\bnpm\b|\bvitest\b|\bvite\b", re.IGNORECASE)
+POINTER_RE = re.compile(r"`((?:docs|scripts)/[A-Za-z0-9_./-]+\.(?:md|py|sh))`")
+
+
+def root_layering_violations(text: str) -> list[str]:
+    return [line for line in text.splitlines() if ROOT_LAYERING_RE.search(line)]
+
+
+def broken_pointers(text: str, tracked: set[str], base: str = "") -> list[str]:
+    """Paths may be repo-relative or relative to the AGENTS.md's own directory."""
+    prefix = f"{base}/" if base else ""
+    return sorted({p for p in POINTER_RE.findall(text) if p not in tracked and prefix + p not in tracked})
+
+
+def ensure_agents_layering() -> None:
+    violations = root_layering_violations(AGENTS.read_text(encoding="utf-8"))
+    if violations:
+        fail(f"root AGENTS.md must not carry client details, move them to apps/*/AGENTS.md: {violations[0][:80]!r}")
+    result = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True, check=True)
+    tracked = {p for p in result.stdout.split("\0") if p}
+    for rel in sorted(p for p in tracked if p == "AGENTS.md" or p.endswith("/AGENTS.md")):
+        broken = broken_pointers((ROOT / rel).read_text(encoding="utf-8"), tracked, rel.rpartition("/")[0])
+        if broken:
+            fail(f"{rel} points at untracked paths: {', '.join(broken)}")
 
 
 def ensure_claude_import() -> None:
@@ -146,6 +174,7 @@ def ensure_no_tracked_claude_artifacts() -> None:
 
 def main() -> None:
     ensure_claude_import()
+    ensure_agents_layering()
     ensure_copilot_entry()
     ensure_instruction_files()
     ensure_skill_files()
