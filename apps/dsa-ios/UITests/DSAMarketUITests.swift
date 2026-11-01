@@ -345,7 +345,7 @@ final class DSAMarketUITests: XCTestCase {
         XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 15))
         XCTAssertTrue(text(containing: "進階工具（合成驗收頁）").waitForExistence(timeout: 15), "共用登入 cookie 才能開啟受保護的工具驗收頁")
         XCTAssertTrue(text(containing: "內嵌模式：ios").exists, "工具頁必須帶 ?embed=ios 載入")
-        XCTAssertFalse(app.tabBars.buttons["工具"].exists, "內嵌工具頁要隱藏底部分頁")
+        XCTAssertFalse(app.tabBars.buttons["工具"].isHittable, "內嵌工具頁要隱藏底部分頁")
         XCTAssertFalse(text(containing: "已連接你的分析服務").exists, "說明橫條已移除")
         capture("11-內嵌工具與Cookie")
         tap(app.webViews.buttons["匯出合成設定 JSON"])

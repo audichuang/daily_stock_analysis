@@ -244,6 +244,7 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
         func downloadDidFinish(_ download: WKDownload) {
             let identifier = ObjectIdentifier(download)
             downloads.removeValue(forKey: identifier)
+            downloadStarting = false
             guard let destination = destinations.removeValue(forKey: identifier) else { return }
             parent.loading = false
             parent.exportedFile = WebExportFile(url: destination)
@@ -256,9 +257,10 @@ private struct AuthenticatedWebContent: UIViewRepresentable {
                 WebExportFile(url: destination).removeTemporaryCopy()
             }
             // 匯出失敗不影響已載入的頁面，用提示框，不換成整頁錯誤。
+            downloadStarting = false
             parent.loading = false
             if (error as NSError).code != NSURLErrorCancelled {
-                parent.exportError = WebNavigationPolicy.pageLoadMessage(for: error)
+                parent.exportError = "檔案沒有下載完成，請重試。"
             }
         }
 
