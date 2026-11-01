@@ -436,7 +436,9 @@ describe('AlertsPage', () => {
     });
     const { container } = renderPage();
     expect(await screen.findByText('另有環境變數規則')).toBeInTheDocument();
-    expect(screen.getByText(/環境變數設定了 2 條規則，其中 1 條/)).toBeInTheDocument();
+    expect(screen.getByText(/環境變數設定了 2 條有效規則，依目前啟用的頁面規則去重後有 1 條/)).toBeInTheDocument();
+    expect(screen.getByText(/刪除或停用頁面規則不會停用環境規則/)).toBeInTheDocument();
+    expect(screen.getByText(/不代表背景輪詢已啟動/)).toBeInTheDocument();
     expect(container.textContent).not.toMatch(/告警|规则|触发|监控|环境变量/);
     cleanup();
     api.listRules.mockRejectedValueOnce({ parsedError });
