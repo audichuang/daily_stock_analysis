@@ -174,7 +174,7 @@ class TestCallLitellmVision:
             mock_comp.assert_called_once()
             kwargs = mock_comp.call_args[1]
             assert kwargs["timeout"] == VISION_API_TIMEOUT
-            assert kwargs["max_tokens"] == 1024
+            assert kwargs["max_tokens"] == 4096
 
     def test_openai_model_uses_api_base_and_aihubmix_headers(self):
         cfg = _cfg(

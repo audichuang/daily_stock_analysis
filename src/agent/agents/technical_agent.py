@@ -62,7 +62,7 @@ Return **only** a JSON object (no markdown fences):
 {{
   "signal": "strong_buy|buy|hold|sell|strong_sell",
   "confidence": 0.0-1.0,
-  "reasoning": "2-3 sentence summary",
+  "summary": "2-3 sentence summary",
   "key_levels": {{
     "support": <float>,
     "resistance": <float>,
@@ -93,7 +93,7 @@ Return **only** a JSON object (no markdown fences):
             agent_name=self.agent_name,
             signal=parsed.get("signal", "hold"),
             confidence=float(parsed.get("confidence", 0.5)),
-            reasoning=parsed.get("reasoning", ""),
+            reasoning=parsed.setdefault("reasoning", parsed.pop("summary", "")),
             key_levels={
                 k: float(v) for k, v in parsed.get("key_levels", {}).items()
                 if isinstance(v, (int, float))

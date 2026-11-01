@@ -160,7 +160,10 @@ get_skill_backtest_summary_tool = ToolDefinition(
 get_strategy_backtest_summary_tool = ToolDefinition(
     name="get_strategy_backtest_summary",
     description=(
-        "Legacy alias returning the overall backtest performance summary without triggering new backtests."
+        "Return the overall backtest performance summary from saved results; it never triggers a new backtest. "
+        "Use it for questions about the system's overall track record. "
+        "For one skill use get_skill_backtest_summary; for one stock use get_stock_backtest_summary. "
+        "Legacy alias kept for existing callers."
     ),
     parameters=[
         ToolParameter(
