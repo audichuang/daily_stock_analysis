@@ -31,6 +31,8 @@ from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
 from src.config import Config, get_configured_llm_models, normalize_llm_channel_api_surface
+from src.report_language import normalize_report_language
+from src.utils.zh_s2t import to_traditional
 from src.services.screening import REFERENCE_PROJECT, REFERENCE_REVISION, __version__ as SCREENING_VERSION
 from src.services.screening import hotspot as screening_hotspot
 from src.services.screening.config import Config as ScreeningPipelineConfig
@@ -3409,7 +3411,9 @@ def _get_dsa_search_service() -> Any:
 def get_dsa_daily_history(stock_code: str, *, lookback_days: int = 120) -> Tuple[Any, str]:
     from src.services.history_loader import load_history_df
 
-    normalized_code = _env_text(stock_code).zfill(6)
+    # 只有純數字代碼要補零；美股代碼補零會變成 000LLY，所有資料源都查無。
+    code_text = _env_text(stock_code)
+    normalized_code = code_text.zfill(6) if code_text.isdigit() else code_text
     days = max(int(lookback_days or 0), 30)
     return load_history_df(normalized_code, days=days)
 
@@ -3981,7 +3985,21 @@ def _normalize_candidate(
             factor_weights=factor_weights,
         )
         normalized.update(reason=reason, reason_source=reason_source, reason_quality=reason_quality)
-    return normalized
+    return _localize_candidate_text(normalized)
+
+
+def _localize_candidate_text(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """zh-TW 時把選股理由轉繁體：排序 prompt 與模板理由的正本都是簡體，模型會照著回簡體。"""
+    if normalize_report_language(os.getenv("REPORT_LANGUAGE")) != "zh-TW":
+        return candidate
+    for key, value in candidate.items():
+        if key not in {"reason", "ranking_reason"} and not key.startswith("llm_"):
+            continue
+        if isinstance(value, str):
+            candidate[key] = to_traditional(value)
+        elif isinstance(value, list):
+            candidate[key] = [to_traditional(item) if isinstance(item, str) else item for item in value]
+    return candidate
 
 
 def _strategy_factor_weights(

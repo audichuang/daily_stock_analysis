@@ -2480,8 +2480,8 @@ class GeminiAnalyzer(LLMClient):
             "signal_type": "🟢买入信号/🟡持有观望/🔴卖出信号/⚠️风险警告",
             "time_sensitivity": "立即行动/今日内/本周内/不急",
             "position_advice": {
-                "no_position": "空仓者建议：具体操作指引",
-                "has_position": "持仓者建议：具体操作指引"
+                "no_position": "没有部位时的具体操作指引（直接写动作，不写身份称呼）",
+                "has_position": "持有部位时的具体操作指引（直接写动作，不写身份称呼）"
             }
         },
 
@@ -2628,8 +2628,8 @@ class GeminiAnalyzer(LLMClient):
 ## 决策仪表盘核心原则
 
 1. **核心结论先行**：一句话说清该买该卖
-2. **分持仓建议**：空仓者和持仓者给不同建议
-3. **精确狙击点**：必须给出具体价格，不说模糊的话。例外：`decision_type` 为 `sell`（减仓/卖出），或必须先满足某个条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；观望但有明确回测挂单价（如回测 X 元可试单）时照常写该价位。`take_profit` 只写一个价位（减仓/卖出时为持仓者的反弹减码价），不得写“X元进场者看Y元”这类多价位句。`sniper_points` 是给人看的文字；同一组价位必须另外以纯数字写进 `dashboard.battle_plan.sniper_prices`（不带“元”、不写区间；区间进场时写你实际会挂单的那一个价位，区间与条件留在文字里），某一格没有可执行价位（如“暂不设定”）就填 `null`。两边必须一致，系统只读取 `sniper_prices` 的数字，不会从文字推断价位
+2. **分持仓建议**：空仓与持有部位给不同建议；`no_position`、`has_position` 栏位已标明身份，整份 JSON 的文字都不用“空仓者”“持仓者”这类身份称呼，直接写动作
+3. **精确狙击点**：必须给出具体价格，不说模糊的话。例外：`decision_type` 为 `sell`（减仓/卖出），或必须先满足某个条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；观望但有明确回测挂单价（如回测 X 元可试单）时照常写该价位。`take_profit` 只写一个价位（减仓/卖出时为仍有部位的反弹减码价），不得写“X元进场者看Y元”这类多价位句。`sniper_points` 是给人看的文字；同一组价位必须另外以纯数字写进 `dashboard.battle_plan.sniper_prices`（不带“元”、不写区间；区间进场时写你实际会挂单的那一个价位，区间与条件留在文字里），某一格没有可执行价位（如“暂不设定”）就填 `null`。两边必须一致，系统只读取 `sniper_prices` 的数字，不会从文字推断价位
 4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
 5. **风险优先级**：舆情中的风险点要醒目标出
 
@@ -2674,8 +2674,8 @@ class GeminiAnalyzer(LLMClient):
             "signal_type": "🟢买入信号/🟡持有观望/🔴卖出信号/⚠️风险警告",
             "time_sensitivity": "立即行动/今日内/本周内/不急",
             "position_advice": {
-                "no_position": "空仓者建议：具体操作指引",
-                "has_position": "持仓者建议：具体操作指引"
+                "no_position": "没有部位时的具体操作指引（直接写动作，不写身份称呼）",
+                "has_position": "持有部位时的具体操作指引（直接写动作，不写身份称呼）"
             }
         },
 
@@ -2820,8 +2820,8 @@ class GeminiAnalyzer(LLMClient):
 ## 决策仪表盘核心原则
 
 1. **核心结论先行**：一句话说清该买该卖
-2. **分持仓建议**：空仓者和持仓者给不同建议
-3. **精确狙击点**：必须给出具体价格，不说模糊的话。例外：`decision_type` 为 `sell`（减仓/卖出），或必须先满足某个条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；观望但有明确回测挂单价（如回测 X 元可试单）时照常写该价位。`take_profit` 只写一个价位（减仓/卖出时为持仓者的反弹减码价），不得写“X元进场者看Y元”这类多价位句。`sniper_points` 是给人看的文字；同一组价位必须另外以纯数字写进 `dashboard.battle_plan.sniper_prices`（不带“元”、不写区间；区间进场时写你实际会挂单的那一个价位，区间与条件留在文字里），某一格没有可执行价位（如“暂不设定”）就填 `null`。两边必须一致，系统只读取 `sniper_prices` 的数字，不会从文字推断价位
+2. **分持仓建议**：空仓与持有部位给不同建议；`no_position`、`has_position` 栏位已标明身份，整份 JSON 的文字都不用“空仓者”“持仓者”这类身份称呼，直接写动作
+3. **精确狙击点**：必须给出具体价格，不说模糊的话。例外：`decision_type` 为 `sell`（减仓/卖出），或必须先满足某个条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”，不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；观望但有明确回测挂单价（如回测 X 元可试单）时照常写该价位。`take_profit` 只写一个价位（减仓/卖出时为仍有部位的反弹减码价），不得写“X元进场者看Y元”这类多价位句。`sniper_points` 是给人看的文字；同一组价位必须另外以纯数字写进 `dashboard.battle_plan.sniper_prices`（不带“元”、不写区间；区间进场时写你实际会挂单的那一个价位，区间与条件留在文字里），某一格没有可执行价位（如“暂不设定”）就填 `null`。两边必须一致，系统只读取 `sniper_prices` 的数字，不会从文字推断价位
 4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
 5. **风险优先级**：舆情中的风险点要醒目标出
 
@@ -5851,8 +5851,8 @@ Output the complete Decision Dashboard in JSON format."""
 ### {L("決策儀表盤要求", "决策仪表盘要求")}：
 - **{L("股票名稱", "股票名称")}**：{L('必須輸出正確的中文全稱（如"貴州茅台"而非"股票600519"）', '必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）')}
 - **{L("核心結論", "核心结论")}**：{L("一句話說清該買/該賣/該等", "一句话说清该买/该卖/该等")}
-- **{L("持倉分類建議", "持仓分类建议")}**：{L("空倉者怎麼做 vs 持倉者怎麼做", "空仓者怎么做 vs 持仓者怎么做")}
-- **{L("具體狙擊點位", "具体狙击点位")}**：{L("買入價、停損價、目標價（精確到分）；`decision_type` 為 `sell`（減倉／賣出），或須先滿足條件（如收盤站回 MA5）才重新評估買進時，`ideal_buy`、`secondary_buy` 只寫「暫不設定」、不得寫任何價位，重新進場的條件與價位寫進 `dashboard.phase_decision.watch_conditions`；`take_profit` 只寫一個價位（減倉／賣出時是持股者的反彈減碼價）；同一組價位另外以純數字寫進 `dashboard.battle_plan.sniper_prices`（沒有可執行價位的格子填 `null`），系統只從這裡讀價位", "买入价、止损价、目标价（精确到分）；`decision_type` 为 `sell`（减仓/卖出），或须先满足条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”、不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；`take_profit` 只写一个价位（减仓/卖出时是持仓者的反弹减码价）；同一组价位另外以纯数字写进 `dashboard.battle_plan.sniper_prices`（没有可执行价位的格子填 `null`），系统只从这里读价位")}
+- **{L("持倉分類建議", "持仓分类建议")}**：{L("沒有部位怎麼做 vs 持有部位怎麼做，內文不寫身份稱呼", "没有部位怎么做 vs 持有部位怎么做，内文不写身份称呼")}
+- **{L("具體狙擊點位", "具体狙击点位")}**：{L("買入價、停損價、目標價（精確到分）；`decision_type` 為 `sell`（減倉／賣出），或須先滿足條件（如收盤站回 MA5）才重新評估買進時，`ideal_buy`、`secondary_buy` 只寫「暫不設定」、不得寫任何價位，重新進場的條件與價位寫進 `dashboard.phase_decision.watch_conditions`；`take_profit` 只寫一個價位（減倉／賣出時是仍有部位的反彈減碼價）；同一組價位另外以純數字寫進 `dashboard.battle_plan.sniper_prices`（沒有可執行價位的格子填 `null`），系統只從這裡讀價位", "买入价、止损价、目标价（精确到分）；`decision_type` 为 `sell`（减仓/卖出），或须先满足条件（如收盘站回 MA5）才重新评估买进时，`ideal_buy`、`secondary_buy` 只写“暂不设定”、不得写任何价位，重新进场的条件与价位写进 `dashboard.phase_decision.watch_conditions`；`take_profit` 只写一个价位（减仓/卖出时是仍有部位的反弹减码价）；同一组价位另外以纯数字写进 `dashboard.battle_plan.sniper_prices`（没有可执行价位的格子填 `null`），系统只从这里读价位")}
 - **{L("檢查清單", "检查清单")}**：{L("每項用 ✅/⚠️/❌ 標記", "每项用 ✅/⚠️/❌ 标记")}
 - **{L("消息面時間合規", "消息面时间合规")}**：{L("`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出所屬新聞段落日期窗口或時間未知的資訊", "`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出所属新闻段落日期窗口或时间未知的信息") if dated_windows else L(f"`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或時間未知的資訊", f"`latest_news`、`risk_alerts`、`positive_catalysts` 不得包含超出近{news_window_days}日或时间未知的信息")}
 - **{L("技術面一致性", "技术面一致性")}**：{L("嚴禁把「空頭排列」和「多頭排列」等互斥結論同時當作有效依據；若基本面/事件面與技術面衝突，必須明確寫「事件先行、技術待確認」或「基本面偏多，但技術面尚未確認」", "严禁把“空头排列”和“多头排列”等互斥结论同时当作有效依据；若基本面/事件面与技术面冲突，必须明确写“事件先行、技术待确认”或“基本面偏多，但技术面尚未确认”")}

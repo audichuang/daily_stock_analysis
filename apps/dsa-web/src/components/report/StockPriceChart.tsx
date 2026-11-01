@@ -254,7 +254,7 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({
             {metrics.map((metric) => (
               <div key={metric.key} className="min-w-0">
                 <dt className="text-xs text-muted-text">{metric.label}</dt>
-                <dd className={`truncate font-medium tabular-nums ${metric.toneClass ?? 'text-foreground'}`}>{metric.value}</dd>
+                <dd className={`break-words font-medium tabular-nums ${metric.toneClass ?? 'text-foreground'}`}>{metric.value}</dd>
               </div>
             ))}
           </dl>

@@ -14,13 +14,16 @@ rather than silently screening the US pool.
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from io import StringIO
 import pandas as pd
+import requests
 
 from src.core.trading_calendar import MARKET_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
 _SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+_SP500_USER_AGENT = "daily-stock-analysis/1.0 (+https://github.com/audichuang/daily_stock_analysis)"
 
 _DEFAULT_US_UNIVERSE = [
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B",
@@ -72,7 +75,10 @@ def resolve_us_universe(source: str = "auto") -> tuple[list[str], str]:
 
 
 def _fetch_sp500_tickers() -> list[str]:
-    tables = pd.read_html(_SP500_WIKI_URL)
+    # 維基百科會以 403 擋 Python 預設 User-Agent，靜默退回內建清單後母體只剩約 50 檔。
+    response = requests.get(_SP500_WIKI_URL, headers={"User-Agent": _SP500_USER_AGENT}, timeout=20)
+    response.raise_for_status()
+    tables = pd.read_html(StringIO(response.text))
     for tbl in tables:
         if "Symbol" in tbl.columns:
             return sorted(tbl["Symbol"].dropna().str.strip().str.replace(".", "-", regex=False).tolist())

@@ -141,7 +141,7 @@ def test_sell_sniper_and_cost_rules_route_waiting_price_to_watch_conditions():
     # 減倉／賣出或條件未成立時買點寫「暫不設定」，等待價位改寫進 watch_conditions，停利只給一個價
     zh_tw = _prompt("zh-TW", code="2330.TW")
     assert "`ideal_buy`、`secondary_buy` 只寫「暫不設定」、不得寫任何價位" in zh_tw
-    assert "`take_profit` 只寫一個價位（減倉／賣出時是持股者的反彈減碼價）" in zh_tw
+    assert "`take_profit` 只寫一個價位（減倉／賣出時是仍有部位的反彈減碼價）" in zh_tw
     assert "要等的更低買點寫進 `dashboard.phase_decision.watch_conditions`" in zh_tw
     assert "說明要等哪個更低的買點" not in zh_tw
     assert "暂不设定" not in zh_tw  # zh-TW 本體不得混入簡體
@@ -225,3 +225,18 @@ def test_agent_system_prompt_applies_report_contract_only_to_zh_tw(language, has
     system = executor._run_loop.call_args.args[0][0]["content"]
     assert ('"entry_conditions"' in system) is has_contract
     assert ("不引用任何評分數字" in system) is has_contract
+
+
+def test_prompts_do_not_teach_role_prefixes() -> None:
+    """範例寫「空仓者建议：」時模型會照抄，轉繁體後整份報告都是「空手者」「持股者」。"""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("src/analyzer.py", "src/agent/executor.py"):
+        text = (root / rel).read_text(encoding="utf-8")
+        assert '"no_position": "空仓者' not in text, rel
+        assert '"has_position": "持仓者' not in text, rel
+        assert "时为持仓者" not in text and "時是持股者" not in text, rel
+        assert not re.search(r"空仓者和持仓者给", text), rel
+        assert text.count("都不用“空仓者”“持仓者”这类身份称呼") == text.count("**分持仓建议**"), rel

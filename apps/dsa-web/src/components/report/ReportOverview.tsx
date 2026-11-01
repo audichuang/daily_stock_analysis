@@ -291,7 +291,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                   {formatPrice(meta.currentPrice, currency)}
                 </span>
                 <span className={cn('text-base font-semibold tabular-nums', priceToneClass)}>
-                  {changeAmount !== null ? `${changeAmount > 0 ? '+' : ''}${formatPrice(changeAmount, currency)} ` : ''}
+                  {changeAmount !== null ? `${changeAmount > 0 ? '+' : ''}${formatPrice(Math.round(changeAmount * 100) / 100, currency)} ` : ''}
                   {formatPercent(meta.changePct)}
                 </span>
                 {priceDateText ? (

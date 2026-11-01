@@ -69,6 +69,7 @@ const categoryDescriptionMap: Record<UiLanguage, Partial<Record<SystemConfigCate
 
 const fieldTitleMap: Record<string, string> = {
   STOCK_LIST: '自选股列表',
+  WATCHLIST_GROUPS: '自选股分组',
   TUSHARE_TOKEN: 'Tushare Token',
   BOCHA_API_KEYS: 'Bocha API Keys',
   TAVILY_API_KEYS: 'Tavily API Keys',
@@ -239,6 +240,7 @@ const fieldTitleMap: Record<string, string> = {
 
 const fieldDescriptionMap: Record<string, string> = {
   STOCK_LIST: '推荐使用英文逗号分隔股票代码；中文逗号、顿号、分号、空格和换行会在保存后规范为英文逗号。',
+  WATCHLIST_GROUPS: '自选股的分组与组内顺序，以 JSON 保存；成员仍以 STOCK_LIST 为准。',
   TUSHARE_TOKEN: '用于接入 Tushare Pro 数据服务的凭据。',
   BOCHA_API_KEYS: '用于新闻检索的 Bocha 密钥，支持逗号分隔多个（最高优先级）。',
   TAVILY_API_KEYS: '用于新闻检索的 Tavily 密钥，支持逗号分隔多个。',
@@ -724,6 +726,7 @@ export function getFieldDescriptionZh(key: string, fallback?: string): string {
 // 繁中介面的欄位名與說明：與 registry 全部欄位對齊，缺鍵由 systemConfigI18n.test.ts 擋下。
 const fieldTitleMapZhTw: Record<string, string> = {
   STOCK_LIST: '自選股清單',
+  WATCHLIST_GROUPS: '自選股分組',
   TUSHARE_TOKEN: 'Tushare 權杖',
   BOCHA_API_KEYS: 'Bocha API 金鑰',
   TAVILY_API_KEYS: 'Tavily API 金鑰',
@@ -918,6 +921,7 @@ const fieldTitleMapZhTw: Record<string, string> = {
 
 const fieldDescriptionMapZhTw: Record<string, string> = {
   STOCK_LIST: '建議用英文逗號分隔股票代號；中文逗號、頓號、分號、空格和換行會在儲存後統一成英文逗號。',
+  WATCHLIST_GROUPS: '自選股的分組與組內順序，以 JSON 儲存；成員仍以 STOCK_LIST 為準。',
   TUSHARE_TOKEN: '用於接入 Tushare Pro 資料服務的憑證。',
   BOCHA_API_KEYS: '用於新聞檢索的 Bocha 金鑰，可用逗號分隔多組（最高優先）。',
   TAVILY_API_KEYS: '用於新聞檢索的 Tavily 金鑰，可用逗號分隔多組。',

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [修復] 美股選股的日線把代碼補零成 `000LLY`，所有資料源都查無，`volume_breakout`、`shrink_pullback` 永遠 0 檔；只有純數字代碼才補零
+- [修復] 美股選股母體抓 S&P 500 時被維基百科以 403 擋下，靜默退回內建 50 檔；請求改帶 User-Agent
+- [修復] 選股 LLM 排序的預設上限 `LLM_MAX_TOKENS` 由 2048 調成 16000：Sonnet 5.5 的 adaptive thinking 算在額度內，原上限回空後靜默退回 `screen_score`
+- [修復] 個股提示詞的範例與規則不再教模型寫「空手者」「持股者」，報告改為直接寫動作
+- [修復] zh-TW 下選股理由與報告證據區塊標籤（如「籌碼」）不再出現簡體；報告頁漲跌金額最多兩位小數；行情小卡的數字不再被省略號截斷
 - [改進] iOS 今日與自選共用 54pt 三欄股票列：台股名稱優先、美股 ticker 優先，代號去後綴；AI 日期只在過舊時顯示，只有無報價、過期、台股降級才警告，色塊只留給近漲跌停。
 - [改進] iOS 今日頁：標題改「今日」，等寬指數卡、市場狀態列、AI 盤勢結論卡、資產摘要卡、異動大／自訂排序與「查看其餘 N 檔」；錯誤與空狀態互斥並有骨架，移除重複的＋。
 - [改進] iOS 自選頁：欄頭排序並記住、右欄切換成交值／量比、左滑移除與長按選單、持股字標、全部／持股分組、可收合篩選、單行指數與摘要列；報價失敗不再連名單一起丟，載入錯誤分四種狀態，搜尋面板可直接加入。

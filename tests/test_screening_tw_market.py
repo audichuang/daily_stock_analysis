@@ -284,3 +284,51 @@ def test_pipeline_rejects_markets_not_opened(market):
     with patch.object(pipeline, "load_all_strategies", side_effect=_PastMarketGate):
         with pytest.raises(ValueError, match="Unsupported market"):
             pipeline.screen("momentum_quality", market=market, config=SimpleNamespace(strategies_dir="unused"))
+
+
+def test_sp500_list_is_fetched_with_user_agent(monkeypatch) -> None:
+    """維基百科擋 Python 預設 UA；少了 UA 會靜默退回內建 50 檔。"""
+    from src.services.screening import snapshot_us
+
+    seen = {}
+
+    class _Resp:
+        text = "<table><tr><th>Symbol</th></tr><tr><td>BRK.B</td></tr></table>"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_get(url, headers=None, timeout=None):
+        seen["ua"] = (headers or {}).get("User-Agent")
+        return _Resp()
+
+    monkeypatch.setattr(snapshot_us.requests, "get", fake_get)
+    assert snapshot_us._fetch_sp500_tickers() == ["BRK-B"]
+    assert seen["ua"]
+
+
+def test_dsa_daily_history_pads_only_numeric_codes(monkeypatch) -> None:
+    """美股代碼補零會變成 000LLY，所有資料源都查無。"""
+    from src.services import history_loader
+    from src.services.screening_service import get_dsa_daily_history
+
+    seen = []
+    monkeypatch.setattr(history_loader, "load_history_df", lambda code, days: (seen.append(code), (None, "x"))[1])
+    get_dsa_daily_history("LLY")
+    get_dsa_daily_history("519")
+    assert seen == ["LLY", "000519"]
+
+
+def test_ranker_default_budget_survives_adaptive_thinking(monkeypatch) -> None:
+    """Sonnet 5.5 的 thinking 算在額度內，2048 會回空、靜默退回 screen_score。"""
+    from src.services.screening.config import Config
+
+    monkeypatch.delenv("LLM_MAX_TOKENS", raising=False)
+    assert Config.from_env().llm_max_tokens >= 16000
+
+
+def test_ranker_budget_still_honours_env(monkeypatch) -> None:
+    from src.services.screening.config import Config
+
+    monkeypatch.setenv("LLM_MAX_TOKENS", "4096")
+    assert Config.from_env().llm_max_tokens == 4096

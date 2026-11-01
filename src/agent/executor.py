@@ -110,8 +110,8 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
             "signal_type": "🟢买入信号/🟡持有观望/🔴卖出信号/⚠️风险警告",
             "time_sensitivity": "立即行动/今日内/本周内/不急",
             "position_advice": {{
-                "no_position": "空仓者建议",
-                "has_position": "持仓者建议"
+                "no_position": "没有部位时的操作（直接写动作，不写身份称呼）",
+                "has_position": "持有部位时的操作（直接写动作，不写身份称呼）"
             }}
         }},
         "data_perspective": {{
@@ -200,7 +200,7 @@ LEGACY_DEFAULT_AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的{mar
 ## 决策仪表盘核心原则
 
 1. **核心结论先行**：一句话说清该买该卖
-2. **分持仓建议**：空仓者和持仓者给不同建议
+2. **分持仓建议**：空仓与持有部位给不同建议；`no_position`、`has_position` 栏位已标明身份，整份 JSON 的文字都不用“空仓者”“持仓者”这类身份称呼，直接写动作
 3. **精确狙击点**：必须给出具体价格，不说模糊的话；`sniper_points` 写给人看的文字，同一组价位另外以纯数字写进 `battle_plan.sniper_prices`（不带“元”、不写区间，区间进场写实际会挂单的那一个价位），没有可执行价位的格子填 null，系统只读取 `sniper_prices` 的数字
 4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
 5. **风险优先级**：舆情中的风险点要醒目标出
@@ -258,8 +258,8 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
             "signal_type": "🟢买入信号/🟡持有观望/🔴卖出信号/⚠️风险警告",
             "time_sensitivity": "立即行动/今日内/本周内/不急",
             "position_advice": {{
-                "no_position": "空仓者建议",
-                "has_position": "持仓者建议"
+                "no_position": "没有部位时的操作（直接写动作，不写身份称呼）",
+                "has_position": "持有部位时的操作（直接写动作，不写身份称呼）"
             }}
         }},
         "data_perspective": {{
@@ -345,7 +345,7 @@ AGENT_SYSTEM_PROMPT = """你是一位{market_role}投资分析 Agent，拥有数
 ## 决策仪表盘核心原则
 
 1. **核心结论先行**：一句话说清该买该卖
-2. **分持仓建议**：空仓者和持仓者给不同建议
+2. **分持仓建议**：空仓与持有部位给不同建议；`no_position`、`has_position` 栏位已标明身份，整份 JSON 的文字都不用“空仓者”“持仓者”这类身份称呼，直接写动作
 3. **精确狙击点**：必须给出具体价格，不说模糊的话；`sniper_points` 写给人看的文字，同一组价位另外以纯数字写进 `battle_plan.sniper_prices`（不带“元”、不写区间，区间进场写实际会挂单的那一个价位），没有可执行价位的格子填 null，系统只读取 `sniper_prices` 的数字
 4. **检查清单可视化**：用 ✅⚠️❌ 明确显示每项检查结果
 5. **风险优先级**：舆情中的风险点要醒目标出

@@ -407,3 +407,12 @@ def test_artifact_input_reads_evidence_status_from_snapshot() -> None:
     assert artifact_input["details"]["analysis_price"] == 170.0
     assert artifact_input["details"]["event_gap"] == {"event_low": 1.0}
     assert artifact_input["strategy"]["stop_loss_price"] == 180.0
+
+
+def test_block_titles_follow_report_language() -> None:
+    """區塊標籤的正本是簡體；zh-TW 畫面的「這份報告缺：筹码」就是直接讀這個 title。"""
+    from src.services.research_artifact_service import _build_evidence
+
+    overview = {"blocks": [{"key": "chip", "label": "筹码", "status": "missing"}]}
+    assert _build_evidence({}, overview, "zh-TW")[0]["title"] == "籌碼"
+    assert _build_evidence({}, overview, "zh")[0]["title"] == "筹码"

@@ -978,8 +978,8 @@ def is_supported_report_language_value(value: Optional[str]) -> bool:
 
 # zh-TW 提示詞共用的詞彙表，正本是 docs/glossary-zh-tw.md。
 _ZH_TW_SPLIT_CONDITION_FIELDS = """            "watch_conditions": ["观察条件1", "观察条件2"],
-            "entry_conditions": ["空手者的进场条件，含价位；没有就给空数组"],
-            "exit_triggers": ["持股者的出场或改判条件，含价位；没有就给空数组"],
+            "entry_conditions": ["还没有部位时的进场条件，含价位；没有就给空数组"],
+            "exit_triggers": ["已有部位时的出场或改判条件，含价位；没有就给空数组"],
             "pending_events": ["待确认的事件与日期；没有就给空数组"],
 """
 _ZH_TW_SCOPED_SUMMARY = (

@@ -444,6 +444,19 @@ describe('ReportOverview conclusion', () => {
     expect(screen.queryByText('恐惧贪婪指数')).not.toBeInTheDocument();
   });
 
+  it('rounds the change amount to at most two decimals', () => {
+    render(
+      <ReportOverview
+        meta={{ ...baseMeta, reportLanguage: 'zh-TW', currentPrice: 2370, changePct: -1.86, changeAmount: -44.9175 }}
+        summary={baseSummary}
+      />,
+    );
+
+    const price = screen.getByTestId('report-price');
+    expect(price).toHaveTextContent('\u221244.92');
+    expect(price).not.toHaveTextContent('44.9175');
+  });
+
   it('labels the price with its session date and close or intraday', () => {
     const { rerender } = render(
       <ReportOverview

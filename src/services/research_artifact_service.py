@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 from api.v1.schemas.research_artifact import ResearchArtifact
 from src.analysis_context_pack_overview import extract_analysis_context_pack_overview
+from src.utils.zh_s2t import to_traditional
 from src.report_language import normalize_report_language
 from src.services.report_decision_fields import (
     DECISION_FIELD_KEYS,
@@ -255,6 +256,11 @@ def _build_thesis(summary: Any) -> Dict[str, Any]:
     }
 
 
+def _localized_block_label(label: str, language: str) -> str:
+    # 區塊標籤的正本是簡體（analysis_context_pack_prompt.BLOCK_LABELS_ZH），舊報告落庫的也是。
+    return to_traditional(label) if language == "zh-TW" else label
+
+
 def _build_evidence(details: Any, context_overview: Any, language: str = "en") -> List[Dict[str, Any]]:
     evidence: List[Dict[str, Any]] = []
     blocks = _value(context_overview, "blocks") or []
@@ -264,7 +270,7 @@ def _build_evidence(details: Any, context_overview: Any, language: str = "en") -
         evidence.append({
             "id": f"context:{key}",
             "source_type": "analysis_context",
-            "title": _as_text(_value(block, "label")) or key,
+            "title": _localized_block_label(_as_text(_value(block, "label")) or key, language),
             "source": _as_text(_value(block, "source")) or None,
             "as_of": _as_timestamp(_value(block, "provider_timestamp")),
             "freshness": _freshness_from_status(status),
