@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 > For user-friendly release highlights, see the [GitHub Releases](https://github.com/ZhuLinsen/daily_stock_analysis/releases) page.
 
 ## [Unreleased]
+- [chore] CI 從 ttnas 搬到 ubuntu 工作站的 10 個自架 runner（label `ubuntu-desktop`，綁 P 核、`/tmp` 用 tmpfs）；3 個 run 同時跑時整輪約從 10–14 分降到 6–8 分。runner 文件改名為 `docs/ci-self-hosted-runner.md`，補上主機實測比較。
 - [改進] 問股辨識股名時先以子字串過濾再做 regex，不再每則訊息替數萬個名稱各編一次 regex（每則省約 1 秒）；後端離線測試總耗時約減半，CI 分片耗時表同步重算。
 - [修復] CI 的 web-gate 改用每次挑選的空 port 跑 Playwright fixture，修正自架 runner 上兩個 run 同時跑時 `4173 is already used` 的假紅。
 - [改進] iOS 今日頁新增近期事件總覽，行事曆從工具頁移到這裡；工具頁只留警報與連線捷徑、常用四項，其餘收進「進階」，移除與原生畫面重複的完整分析入口。

@@ -122,7 +122,7 @@
 | 文件 | 內容 |
 | --- | --- |
 | [本機排程與每日報告維運](daily-report-ops.md) | Orca 排程一覽（盤前、上游同步、每日報告、持股檢查）、每日報告的逾時／鎖／完成標記與卡住時的診斷 |
-| [CI 自架 runner（ttnas）](ci-ttnas-runner.md) | CI 跑在 ttnas 自架 runner 的設定由來（4 片、本機快取、tmpfs）、各種紅的症狀對照與排障指令 |
+| [CI 自架 runner](ci-self-hosted-runner.md) | CI 跑在 ubuntu 工作站自架 runner 的設定由來（4 片、P 核、tmpfs、本機快取）、與 ttnas／GitHub 託管的實測比較、各種紅的症狀對照與排障指令 |
 | [NAS 上的 Web 服務與發版](nas-deploy.md) | 本 fork Web 服務跑在 NAS：不在本機再起一份的理由、釘 digest 經 Komodo 的手動發版流程、NAS 問股後端、唯讀查看線上狀態與直接查 DB、第二台開發機的分工 |
 
 ## 部署与打包
