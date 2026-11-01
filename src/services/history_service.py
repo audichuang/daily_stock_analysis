@@ -57,7 +57,7 @@ from src.schemas.decision_action import (
     display_operation_advice_for_result,
 )
 from src.schemas.decision_scale import extract_decision_guardrail_reason
-from src.utils.sniper_points import find_sniper_points, resolve_sniper_prices
+from src.utils.sniper_points import find_sniper_points, find_sniper_prices, resolve_sniper_prices
 from src.utils.data_processing import (
     extract_realtime_detail_fields,
     normalize_model_used,
@@ -802,6 +802,7 @@ class HistoryService:
             "sentiment_score": record.sentiment_score,
             "sentiment_label": self._get_sentiment_label(record.sentiment_score or 50),
             "sniper_prices": resolve_sniper_prices(raw_result, record),
+            "sniper_prices_source": "structured" if find_sniper_prices(raw_result) is not None else "legacy",
             "ideal_buy": sniper_points.get("ideal_buy"),
             "secondary_buy": sniper_points.get("secondary_buy"),
             "stop_loss": sniper_points.get("stop_loss"),
@@ -811,6 +812,30 @@ class HistoryService:
             "raw_result": raw_result,
             "context_snapshot": context_snapshot,
             "market_phase_summary": market_phase_summary,
+        }
+
+    def get_previous_report_summary(self, detail: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """同一檔前一份報告的結構化摘要；大盤複盤或查不到回 None。"""
+        record_id = detail.get("id")
+        if record_id is None or detail.get("report_type") == "market_review":
+            return None
+        record = self.db.get_analysis_history_by_id(int(record_id))
+        created_at = getattr(record, "created_at", None)
+        if not isinstance(created_at, datetime):
+            return None
+        codes = self._history_code_filter_candidates(
+            detail.get("storage_stock_code") or detail.get("stock_code") or ""
+        )
+        previous = self.db.get_previous_analysis_history(codes, before_created_at=created_at)
+        if previous is None:
+            return None
+        raw_result = parse_json_field(previous.raw_result)
+        return {
+            "id": previous.id,
+            "action": self._decision_action_fields_for_record(previous, raw_result)["action"],
+            "score": previous.sentiment_score,
+            "created_at": self._serialize_created_at(previous.created_at),
+            "stop_loss": resolve_sniper_prices(raw_result, previous).get("stop_loss"),
         }
 
     def _decision_action_fields_for_record(self, record, raw_result: Any) -> Dict[str, Any]:

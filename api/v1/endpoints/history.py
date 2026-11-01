@@ -26,6 +26,7 @@ from api.v1.schemas.history import (
     AnalysisReport,
     ReportMeta,
     ReportSummary,
+    ReportPreviousSummary,
     ReportStrategy,
     ReportDetails,
     MarkdownReportResponse,
@@ -47,6 +48,11 @@ from src.data.us_stock_name import display_stock_name
 from src.services.history_service import HistoryService, MarkdownReportGenerationError
 from src.services.analysis_service import asset_type_from_canonical_code
 from src.services.event_outlook import extract_event_outlook
+from src.services.market_symbol_utils import currency_for_stock_code
+from src.services.report_decision_fields import (
+    extract_report_decision_fields,
+    extract_report_price_fields,
+)
 from src.services.research_artifact_service import artifact_input_from_detail, build_research_artifact
 from src.schemas.decision_action import build_action_fields
 from src.utils.data_processing import (
@@ -132,6 +138,40 @@ def _history_share_image_input(
 
 def _history_share_image_branding(config: object) -> ShareImageBranding:
     return share_image_branding_from_config(config)
+
+
+def _held_for_report(result: Mapping[str, Any], db_manager: DatabaseManager) -> Optional[bool]:
+    """重用個股頁的持股判定；無法判定回 None，不當成未持有。"""
+    if result.get("report_type") == "market_review":
+        return None
+    try:
+        from src.repositories.portfolio_repo import PortfolioRepository
+        from src.services.stock_profile_service import StockProfileService
+
+        code = StockProfileService.canonicalize_code(
+            result.get("storage_stock_code") or result.get("stock_code") or ""
+        )
+        block = StockProfileService(
+            portfolio_repository=PortfolioRepository(db_manager)
+        )._portfolio_block(code, market=StockProfileService.market_for_code(code))
+    except Exception as exc:
+        logger.debug("判定持股失敗 id=%s: %s", result.get("id"), exc)
+        return None
+    if block.get("status") == "unavailable":
+        return None
+    return bool(block["data"]["held"])
+
+
+def _previous_report_for_detail(
+    service: HistoryService,
+    result: Mapping[str, Any],
+) -> Optional[ReportPreviousSummary]:
+    try:
+        summary = service.get_previous_report_summary(dict(result))
+        return ReportPreviousSummary.model_validate(summary) if summary else None
+    except Exception as exc:
+        logger.warning("查詢前一份報告失敗 id=%s: %s", result.get("id"), exc)
+        return None
 
 
 def _structured_report_for_detail(
@@ -611,6 +651,17 @@ def get_history_detail(
             report_language,
         )
 
+        asset_type = asset_type_from_canonical_code(
+            result.get("storage_stock_code") or result.get("stock_code")
+        )
+        price_fields = extract_report_price_fields(
+            context_snapshot,
+            raw_result,
+            current_price=current_price,
+            change_pct=change_pct,
+        )
+        decision_fields = extract_report_decision_fields(raw_result, report_language)
+
         # 构建响应模型
         meta = ReportMeta(
             id=result.get("id"),
@@ -620,13 +671,21 @@ def get_history_detail(
             report_type=result.get("report_type"),
             report_language=report_language,
             created_at=result.get("created_at"),
-            current_price=current_price,
+            current_price=current_price if current_price is not None else price_fields["current_price"],
             change_pct=change_pct,
             model_used=normalize_model_used(result.get("model_used")),
             market_phase_summary=market_phase_summary,
-            asset_type=asset_type_from_canonical_code(
-                result.get("storage_stock_code") or result.get("stock_code")
+            asset_type=asset_type,
+            price_date=price_fields["price_date"],
+            price_fetched_at=price_fields["price_fetched_at"],
+            currency=(
+                currency_for_stock_code(result.get("storage_stock_code") or result.get("stock_code"))
+                if asset_type == "stock"
+                else None
             ),
+            change_amount=price_fields["change_amount"],
+            previous_report=_previous_report_for_detail(service, result),
+            held=_held_for_report(result, db_manager),
         )
         
         summary = ReportSummary(
@@ -646,7 +705,8 @@ def get_history_detail(
                 get_sentiment_label(result.get("sentiment_score"), report_language)
                 if result.get("sentiment_score") is not None
                 else result.get("sentiment_label")
-            )
+            ),
+            **decision_fields,
         )
         
         strategy = ReportStrategy(
@@ -654,7 +714,8 @@ def get_history_detail(
             ideal_buy=result.get("ideal_buy"),
             secondary_buy=result.get("secondary_buy"),
             stop_loss=result.get("stop_loss"),
-            take_profit=result.get("take_profit")
+            take_profit=result.get("take_profit"),
+            sniper_prices_source=result.get("sniper_prices_source"),
         )
         
         fallback_fundamental = db_manager.get_latest_fundamental_snapshot(

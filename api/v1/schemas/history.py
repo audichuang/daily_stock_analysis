@@ -136,6 +136,23 @@ class NewsIntelResponse(BaseModel):
     })
 
 
+class ReportPreviousSummary(BaseModel):
+    """同一檔的前一份報告摘要；只放結構化值，動作標籤由客戶端依枚舉查表。"""
+
+    id: Optional[int] = Field(None, description="前一份報告的主鍵 ID")
+    action: Optional[DecisionAction] = Field(None, description="前一份報告的動作枚舉")
+    score: Optional[int] = Field(None, description="前一份報告的評分")
+    created_at: Optional[str] = Field(None, description="前一份報告的建立時間")
+    stop_loss: Optional[float] = Field(None, description="前一份報告的停損價；沒有為 null")
+
+
+class ReportPositionAdvice(BaseModel):
+    """分持股狀態的建議"""
+
+    no_position: Optional[str] = Field(None, description="空手者建議")
+    has_position: Optional[str] = Field(None, description="持股者建議")
+
+
 class ReportMeta(BaseModel):
     """报告元信息"""
 
@@ -167,6 +184,12 @@ class ReportMeta(BaseModel):
         None,
         description="后端权威资产类型（stock/index）；指数报告用于隐藏 stock-only 自选操作。market review 与旧客户端可缺省。",
     )
+    price_date: Optional[str] = Field(None, description="現價所屬場次（YYYY-MM-DD）；查不到為 null")
+    price_fetched_at: Optional[str] = Field(None, description="報價抓取時間；不代表資料日")
+    currency: Optional[str] = Field(None, description="交易幣別，由代號後綴推導；指數、大盤複盤為 null")
+    change_amount: Optional[float] = Field(None, description="漲跌額，由現價與漲跌幅推算；缺一個為 null")
+    previous_report: Optional[ReportPreviousSummary] = Field(None, description="同一檔的前一份報告摘要")
+    held: Optional[bool] = Field(None, description="目前是否持有；無法判定為 null，客戶端不得當成未持有")
 
 
 class ReportSummary(BaseModel):
@@ -182,6 +205,20 @@ class ReportSummary(BaseModel):
         description="情绪评分（历史数据可能超出 0-100 范围，读取时不做约束）",
     )
     sentiment_label: Optional[str] = Field(None, description="情绪标签")
+    one_sentence: Optional[str] = Field(None, description="一句話結論")
+    time_sensitivity: Optional[str] = Field(None, description="時效性")
+    position_advice: Optional[ReportPositionAdvice] = Field(None, description="分持股狀態的建議")
+    confidence_level: Optional[str] = Field(None, description="信心度")
+    confidence_reason: Optional[str] = Field(None, description="信心度理由")
+    guardrail_applied: Optional[bool] = Field(None, description="是否套用護欄；大盤複盤為 null")
+    guardrail_reason: Optional[str] = Field(None, description="護欄原因")
+    strongest_bullish_signal: Optional[str] = Field(None, description="最強看多信號")
+    strongest_bearish_signal: Optional[str] = Field(None, description="最強看空信號")
+    watch_conditions: Optional[List[str]] = Field(None, description="觀察條件（舊欄位，新報告仍會有）")
+    entry_conditions: Optional[List[str]] = Field(None, description="進場條件；舊報告為 null")
+    exit_triggers: Optional[List[str]] = Field(None, description="出場或改判觸發條件；舊報告為 null")
+    pending_events: Optional[List[str]] = Field(None, description="待確認事件；舊報告為 null")
+    next_check_time: Optional[str] = Field(None, description="下一次檢查點")
 
 
 class ReportStrategy(BaseModel):
@@ -193,6 +230,10 @@ class ReportStrategy(BaseModel):
     secondary_buy: Optional[str] = Field(None, description="第二买入价")
     stop_loss: Optional[str] = Field(None, description="止损价")
     take_profit: Optional[str] = Field(None, description="止盈价")
+    sniper_prices_source: Optional[Literal["structured", "legacy"]] = Field(
+        None,
+        description="sniper_prices 來源：structured＝模型給的數字；legacy＝舊報告由文字解析",
+    )
 
 
 class AnalysisContextPackOverviewSubject(BaseModel):

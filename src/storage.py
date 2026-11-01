@@ -3408,6 +3408,28 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
 
             return list(results), total
 
+    def get_previous_analysis_history(
+        self,
+        codes: List[str],
+        *,
+        before_created_at: datetime,
+    ) -> Optional[AnalysisHistory]:
+        """取同一組代號在指定時間之前最新的一筆；沒有回 None。"""
+        codes = [code for code in codes if code]
+        if not codes:
+            return None
+        with self.get_session() as session:
+            query = (
+                select(AnalysisHistory)
+                .where(and_(
+                    AnalysisHistory.code.in_(codes),
+                    AnalysisHistory.created_at < before_created_at,
+                ))
+                .order_by(desc(AnalysisHistory.created_at), desc(AnalysisHistory.id))
+                .limit(1)
+            )
+            return session.execute(query).scalars().first()
+
     def get_analysis_counts_by_code(
         self, codes: Optional[List[str]] = None
     ) -> Dict[str, int]:
